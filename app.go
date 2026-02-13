@@ -19,6 +19,7 @@ type App struct {
 	tagService       *services.TagService
 	settingsService  *services.SettingsService
 	directoryService *services.DirectoryService
+	logFile          *os.File // 保持日志文件句柄引用，防止泄漏
 }
 
 // NewApp creates a new App application struct
@@ -40,23 +41,29 @@ func (a *App) startup(ctx context.Context) {
 	}
 }
 
+// closeLogFile 关闭当前日志文件句柄（如果有）
+func (a *App) closeLogFile() {
+	if a.logFile != nil {
+		a.logFile.Close()
+		a.logFile = nil
+	}
+}
+
 func (a *App) setLogEnabled(enabled bool) {
 	if !enabled {
 		log.SetOutput(io.Discard)
+		a.closeLogFile()
 		return
 	}
 	if homeDir, err := os.UserHomeDir(); err == nil {
 		dataDir := filepath.Join(homeDir, ".video-master")
-		legacyDir := filepath.Join(homeDir, ".video-master")
 		if _, err := os.Stat(dataDir); err != nil {
-			if _, legacyErr := os.Stat(legacyDir); legacyErr == nil {
-				dataDir = legacyDir
-			} else {
-				_ = os.MkdirAll(dataDir, 0755)
-			}
+			_ = os.MkdirAll(dataDir, 0755)
 		}
 		logPath := filepath.Join(dataDir, "app.log")
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
+			a.closeLogFile() // 先关闭旧句柄
+			a.logFile = f
 			log.SetOutput(f)
 		}
 	}
@@ -220,10 +227,10 @@ func (a *App) GetSettings() (*models.Settings, error) {
 }
 
 // UpdateSettings 更新设置
-func (a *App) UpdateSettings(confirmDelete, deleteOriginal bool, videoExts string, playWeight float64, autoScan bool, logEnabled bool) error {
-	err := a.settingsService.UpdateSettings(confirmDelete, deleteOriginal, videoExts, playWeight, autoScan, logEnabled)
+func (a *App) UpdateSettings(input models.Settings) error {
+	err := a.settingsService.UpdateSettings(input)
 	if err == nil {
-		a.setLogEnabled(logEnabled)
+		a.setLogEnabled(input.LogEnabled)
 	}
 	return err
 }

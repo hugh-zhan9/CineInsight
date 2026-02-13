@@ -15,18 +15,18 @@ func (s *SettingsService) GetSettings() (*models.Settings, error) {
 }
 
 // UpdateSettings 更新设置
-func (s *SettingsService) UpdateSettings(confirmDelete, deleteOriginal bool, videoExts string, playWeight float64, autoScan bool, logEnabled bool) error {
+func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	var settings models.Settings
 	if err := database.DB.First(&settings).Error; err != nil {
 		return err
 	}
 
-	settings.ConfirmBeforeDelete = confirmDelete
-	settings.DeleteOriginalFile = deleteOriginal
-	settings.VideoExtensions = videoExts
-	settings.PlayWeight = playWeight
-	settings.AutoScanOnStartup = autoScan
-	settings.LogEnabled = logEnabled
+	settings.ConfirmBeforeDelete = input.ConfirmBeforeDelete
+	settings.DeleteOriginalFile = input.DeleteOriginalFile
+	settings.VideoExtensions = input.VideoExtensions
+	settings.PlayWeight = input.PlayWeight
+	settings.AutoScanOnStartup = input.AutoScanOnStartup
+	settings.LogEnabled = input.LogEnabled
 
 	return database.DB.Save(&settings).Error
 }

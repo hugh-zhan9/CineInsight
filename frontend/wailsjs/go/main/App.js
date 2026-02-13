@@ -94,8 +94,8 @@ export function UpdateDirectory(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateDirectory'](arg1, arg2, arg3);
 }
 
-export function UpdateSettings(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['UpdateSettings'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function UpdateSettings(arg1) {
+  return window['go']['main']['App']['UpdateSettings'](arg1);
 }
 
 export function UpdateTag(arg1, arg2, arg3) {

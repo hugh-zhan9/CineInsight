@@ -20,25 +20,14 @@ func Init() error {
 		return fmt.Errorf("获取用户目录失败: %w", err)
 	}
 
-	// 创建应用数据目录（兼容旧目录）
+	// 创建应用数据目录
 	dataDir := filepath.Join(homeDir, ".video-master")
-	legacyDir := filepath.Join(homeDir, ".video-master")
-	if _, err := os.Stat(dataDir); err != nil {
-		if _, legacyErr := os.Stat(legacyDir); legacyErr == nil {
-			dataDir = legacyDir
-		} else {
-			if err := os.MkdirAll(dataDir, 0755); err != nil {
-				return fmt.Errorf("创建数据目录失败: %w", err)
-			}
-		}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
 	// 数据库文件路径
-	dbName := "video-master.db"
-	if dataDir == legacyDir {
-		dbName = "video-master.db"
-	}
-	dbPath := filepath.Join(dataDir, dbName)
+	dbPath := filepath.Join(dataDir, "video-master.db")
 
 	// 连接数据库
 	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})

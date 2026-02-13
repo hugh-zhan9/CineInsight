@@ -1,7 +1,6 @@
 package services
 
 import (
-	"errors"
 	"log"
 	"strings"
 	"video-master/database"
@@ -21,7 +20,7 @@ func (s *TagService) GetAllTags() ([]models.Tag, error) {
 func (s *TagService) CreateTag(name, color string) (*models.Tag, error) {
 	var existing models.Tag
 	if err := database.DB.Where("name = ?", name).First(&existing).Error; err == nil {
-		return &existing, errors.New("TAG_EXISTS")
+		return &existing, ErrTagExists
 	}
 
 	tag := &models.Tag{
@@ -30,7 +29,7 @@ func (s *TagService) CreateTag(name, color string) (*models.Tag, error) {
 	}
 	err := database.DB.Create(tag).Error
 	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
-		return tag, errors.New("TAG_EXISTS")
+		return tag, ErrTagExists
 	}
 	return tag, err
 }

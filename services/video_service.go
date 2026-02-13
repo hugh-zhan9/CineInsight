@@ -1,7 +1,6 @@
 package services
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -14,6 +13,7 @@ import (
 	"video-master/database"
 	"video-master/models"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -26,33 +26,58 @@ func (s *VideoService) GetAllVideos() ([]models.Video, error) {
 	return videos, err
 }
 
-// GetVideosPaginated 游标分页获取视频（按概率优先排序）
-func (s *VideoService) GetVideosPaginated(cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+// getPlayWeight 获取播放权重配置
+func (s *VideoService) getPlayWeight() (float64, error) {
 	var settings models.Settings
 	if err := database.DB.First(&settings).Error; err != nil {
-		return nil, fmt.Errorf("获取设置失败: %w", err)
+		return 0, fmt.Errorf("获取设置失败: %w", err)
 	}
-	playWeight := settings.PlayWeight
-	if playWeight < 0.1 {
-		playWeight = 0.1
+	w := settings.PlayWeight
+	if w < 0.1 {
+		w = 0.1
+	}
+	return w, nil
+}
+
+// scoreExpr 返回播放分数的 SQL 表达式片段，使用 fmt.Sprintf 将权重直接嵌入 SQL，
+// 避免在复合 WHERE 条件中反复传递 ? 占位符导致参数计数出错。
+func scoreExpr(playWeight float64) string {
+	return fmt.Sprintf("(play_count * %g + random_play_count)", playWeight)
+}
+
+// applyCursorCondition 为查询添加游标分页的 WHERE 条件
+// 排序规则：score ASC, size DESC, id DESC
+func applyCursorCondition(query *gorm.DB, scoreSql string, cursorScore float64, cursorSize int64, cursorID uint, tablePrefix string) *gorm.DB {
+	if cursorID == 0 {
+		return query
+	}
+	sizeCol := tablePrefix + "size"
+	idCol := tablePrefix + "id"
+	// 三元组游标条件：(score > ?) OR (score = ? AND size < ?) OR (score = ? AND size = ? AND id < ?)
+	cond := fmt.Sprintf(
+		"(%s > ?) OR (%s = ? AND %s < ?) OR (%s = ? AND %s = ? AND %s < ?)",
+		scoreSql, scoreSql, sizeCol, scoreSql, sizeCol, idCol,
+	)
+	return query.Where(cond, cursorScore, cursorScore, cursorSize, cursorScore, cursorSize, cursorID)
+}
+
+// GetVideosPaginated 游标分页获取视频（按概率优先排序）
+func (s *VideoService) GetVideosPaginated(cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+	playWeight, err := s.getPlayWeight()
+	if err != nil {
+		return nil, err
 	}
 
 	var videos []models.Video
-	scoreSQL := "play_count * ? + random_play_count"
+	scoreSql := scoreExpr(playWeight)
 	query := database.DB.Preload("Tags").
-		Order(clause.Expr{SQL: scoreSQL + " ASC", Vars: []interface{}{playWeight}}).
+		Order(clause.Expr{SQL: scoreSql + " ASC"}).
 		Order("size desc").
 		Order("id desc")
 
-	if cursorID > 0 {
-		query = query.Where("("+scoreSQL+" > ?) OR ("+scoreSQL+" = ? AND size < ?) OR ("+scoreSQL+" = ? AND size = ? AND id < ?)",
-			playWeight, cursorScore,
-			playWeight, cursorScore, cursorSize,
-			playWeight, cursorScore, cursorSize, cursorID,
-		)
-	}
+	query = applyCursorCondition(query, scoreSql, cursorScore, cursorSize, cursorID, "")
 
-	err := query.Limit(limit).Find(&videos).Error
+	err = query.Limit(limit).Find(&videos).Error
 	return videos, err
 }
 
@@ -69,18 +94,14 @@ func (s *VideoService) SearchVideosByTags(tagIDs []uint, cursorScore float64, cu
 // SearchVideosWithFilters 组合搜索（关键词 + 标签 AND）- 支持分页（按概率优先排序）
 func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	var videos []models.Video
-	var settings models.Settings
-	if err := database.DB.First(&settings).Error; err != nil {
-		return nil, fmt.Errorf("获取设置失败: %w", err)
-	}
-	playWeight := settings.PlayWeight
-	if playWeight < 0.1 {
-		playWeight = 0.1
+	playWeight, err := s.getPlayWeight()
+	if err != nil {
+		return nil, err
 	}
 
-	scoreSQL := "play_count * ? + random_play_count"
+	scoreSql := scoreExpr(playWeight)
 	query := database.DB.Model(&models.Video{}).Preload("Tags").
-		Order(clause.Expr{SQL: scoreSQL + " ASC", Vars: []interface{}{playWeight}}).
+		Order(clause.Expr{SQL: scoreSql + " ASC"}).
 		Order("videos.size desc").
 		Order("videos.id desc")
 
@@ -94,15 +115,9 @@ func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, cu
 			Having("COUNT(DISTINCT video_tags.tag_id) = ?", len(tagIDs))
 	}
 
-	if cursorID > 0 {
-		query = query.Where("("+scoreSQL+" > ?) OR ("+scoreSQL+" = ? AND videos.size < ?) OR ("+scoreSQL+" = ? AND videos.size = ? AND videos.id < ?)",
-			playWeight, cursorScore,
-			playWeight, cursorScore, cursorSize,
-			playWeight, cursorScore, cursorSize, cursorID,
-		)
-	}
+	query = applyCursorCondition(query, scoreSql, cursorScore, cursorSize, cursorID, "videos.")
 
-	err := query.Limit(limit).Find(&videos).Error
+	err = query.Limit(limit).Find(&videos).Error
 	return videos, err
 }
 
@@ -120,7 +135,7 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 	var existingVideo models.Video
 	if err := database.DB.Where("path = ?", path).First(&existingVideo).Error; err == nil {
 		log.Printf("跳过已存在视频 path=%s", path)
-		return &existingVideo, errors.New("视频已存在")
+		return &existingVideo, ErrVideoExists
 	}
 
 	video := &models.Video{
@@ -136,15 +151,13 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "unique") || strings.Contains(errMsg, "constraint") {
 			if findErr := database.DB.Where("path = ?", path).First(&existingVideo).Error; findErr == nil {
-				return &existingVideo, errors.New("视频已存在")
+				return &existingVideo, ErrVideoExists
 			}
 		}
 		return nil, err
 	}
-	if err == nil {
-		log.Printf("新增视频 path=%s", path)
-	}
-	return video, err
+	log.Printf("新增视频 path=%s", path)
+	return video, nil
 }
 
 // DeleteVideo 删除视频
@@ -279,7 +292,7 @@ func (s *VideoService) OpenDirectory(videoID uint) error {
 		return err
 	}
 
-	return openFileManager(video.Directory)
+	return openPath(video.Directory, true)
 }
 
 // PlayVideo 使用系统默认播放器播放视频
@@ -289,14 +302,14 @@ func (s *VideoService) PlayVideo(videoID uint) error {
 		return err
 	}
 
-	// 更新播放次数和最后播放时间
+	// 使用数据库原子操作更新播放次数和最后播放时间
 	now := time.Now()
 	database.DB.Model(&video).Updates(map[string]interface{}{
-		"play_count":     video.PlayCount + 1,
+		"play_count":     gorm.Expr("play_count + 1"),
 		"last_played_at": now,
 	})
 
-	return openWithDefaultFn(video.Path)
+	return openWithDefaultFn(video.Path, false)
 }
 
 // PlayRandomVideo 智能加权随机播放视频
@@ -311,125 +324,95 @@ func (s *VideoService) PlayRandomVideo() (*models.Video, error) {
 		playWeight = 0.1
 	}
 
-	// 获取所有视频
-	var videos []models.Video
-	if err := database.DB.Preload("Tags").Find(&videos).Error; err != nil {
+	// 仅查询计算权重所需的最少字段，避免全量加载
+	type videoScoreRow struct {
+		ID              uint
+		PlayCount       int
+		RandomPlayCount int
+	}
+	var rows []videoScoreRow
+	if err := database.DB.Model(&models.Video{}).
+		Select("id, play_count, random_play_count").
+		Find(&rows).Error; err != nil {
 		return nil, err
 	}
 
-	if len(videos) == 0 {
-		return nil, errors.New("没有可播放的视频")
+	if len(rows) == 0 {
+		return nil, ErrNoVideos
 	}
 
-	// 计算每个视频的播放分数
-	type VideoScore struct {
-		Video *models.Video
-		Score float64
-	}
-
-	videoScores := make([]VideoScore, len(videos))
+	// 计算每个视频的播放分数和最大分数
+	scores := make([]float64, len(rows))
 	maxScore := 0.0
-
-	for i := range videos {
-		// 播放分数 = 普通播放次数 × 权重 + 随机播放次数
-		score := float64(videos[i].PlayCount)*playWeight + float64(videos[i].RandomPlayCount)
-		videoScores[i] = VideoScore{
-			Video: &videos[i],
-			Score: score,
-		}
-		if score > maxScore {
-			maxScore = score
+	for i, r := range rows {
+		scores[i] = float64(r.PlayCount)*playWeight + float64(r.RandomPlayCount)
+		if scores[i] > maxScore {
+			maxScore = scores[i]
 		}
 	}
 
-	// 计算每个视频的选择权重（分数越低，权重越高）
-	type WeightedVideo struct {
-		Video  *models.Video
-		Weight float64
-	}
-
-	weightedVideos := make([]WeightedVideo, len(videoScores))
+	// 计算选择权重并做加权随机选择
 	totalWeight := 0.0
-
-	for i, vs := range videoScores {
-		// 选择权重 = max_score - score + 1
-		// 每个视频独立计算权重，数量会自然影响整体概率
-		weight := maxScore - vs.Score + 1.0
-		weightedVideos[i] = WeightedVideo{
-			Video:  vs.Video,
-			Weight: weight,
-		}
-		totalWeight += weight
+	weights := make([]float64, len(rows))
+	for i, score := range scores {
+		weights[i] = maxScore - score + 1.0
+		totalWeight += weights[i]
 	}
 
-	// 使用加权随机选择
-	rand.Seed(time.Now().UnixNano())
+	// 使用加权随机选择（Go 1.20+ 全局 rand 已自动 seed，无需手动调用）
 	randomValue := rand.Float64() * totalWeight
-
+	selectedIdx := len(rows) - 1 // 默认最后一个（防御浮点精度）
 	cumulative := 0.0
-	var selectedVideo *models.Video
-
-	for _, wv := range weightedVideos {
-		cumulative += wv.Weight
+	for i, w := range weights {
+		cumulative += w
 		if randomValue <= cumulative {
-			selectedVideo = wv.Video
+			selectedIdx = i
 			break
 		}
 	}
 
-	// 防御性编程：如果没选中（浮点数精度问题），选最后一个
-	if selectedVideo == nil {
-		selectedVideo = weightedVideos[len(weightedVideos)-1].Video
+	// 仅对选中的视频查询完整记录（含 Tags）
+	var selectedVideo models.Video
+	if err := database.DB.Preload("Tags").First(&selectedVideo, rows[selectedIdx].ID).Error; err != nil {
+		return nil, fmt.Errorf("查询选中视频失败: %w", err)
 	}
 
-	// 更新随机播放次数和最后播放时间
+	// 使用数据库原子操作更新随机播放次数和最后播放时间
 	now := time.Now()
-	database.DB.Model(selectedVideo).Updates(map[string]interface{}{
-		"random_play_count": selectedVideo.RandomPlayCount + 1,
+	database.DB.Model(&selectedVideo).Updates(map[string]interface{}{
+		"random_play_count": gorm.Expr("random_play_count + 1"),
 		"last_played_at":    now,
 	})
+	selectedVideo.RandomPlayCount++ // 同步内存中的值
 
 	// 播放视频
-	if err := openWithDefaultFn(selectedVideo.Path); err != nil {
-		return selectedVideo, fmt.Errorf("播放失败: %s (%s): %w", selectedVideo.Name, selectedVideo.Path, err)
+	if err := openWithDefaultFn(selectedVideo.Path, false); err != nil {
+		return &selectedVideo, fmt.Errorf("播放失败: %s (%s): %w", selectedVideo.Name, selectedVideo.Path, err)
 	}
 
-	return selectedVideo, nil
+	return &selectedVideo, nil
 }
 
-var openWithDefaultFn = openWithDefault
+var openWithDefaultFn = openPath
 
-// 打开文件管理器
-func openFileManager(path string) error {
+// openPath 使用系统默认方式打开路径（文件或目录）
+// Windows 下目录用 explorer，文件用 cmd /c start；其他平台统一用 open/xdg-open
+func openPath(path string, isDir bool) error {
 	var cmd *exec.Cmd
 
 	switch runtime.GOOS {
-	case "darwin": // macOS
+	case "darwin":
 		cmd = exec.Command("open", path)
 	case "windows":
-		cmd = exec.Command("explorer", path)
+		if isDir {
+			cmd = exec.Command("explorer", path)
+		} else {
+			cmd = exec.Command("cmd", "/c", "start", "", path)
+		}
 	case "linux":
 		cmd = exec.Command("xdg-open", path)
 	default:
-		return errors.New("不支持的操作系统")
-	}
-
-	return cmd.Start()
-}
-
-// 使用默认程序打开文件
-func openWithDefault(path string) error {
-	var cmd *exec.Cmd
-
-	switch runtime.GOOS {
-	case "darwin": // macOS
-		cmd = exec.Command("open", path)
-	case "windows":
-		cmd = exec.Command("cmd", "/c", "start", "", path)
-	case "linux":
-		cmd = exec.Command("xdg-open", path)
-	default:
-		return errors.New("不支持的操作系统")
+		return ErrUnsupportedOS
 	}
 
 	return cmd.Start()

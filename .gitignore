@@ -1,3 +1,25 @@
-build/bin
-node_modules
-frontend/dist
+# macOS
+.DS_Store
+
+# Build artifacts
+build/bin/
+
+# Frontend dependencies
+node_modules/
+frontend/dist/
+
+# Wails generated bindings
+frontend/wailsjs/
+
+# Go binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo

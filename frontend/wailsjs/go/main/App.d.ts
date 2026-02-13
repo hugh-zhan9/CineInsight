@@ -48,6 +48,6 @@ export function SelectDirectory():Promise<string>;
 
 export function UpdateDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
 
-export function UpdateSettings(arg1:boolean,arg2:boolean,arg3:string,arg4:number,arg5:boolean,arg6:boolean):Promise<void>;
+export function UpdateSettings(arg1:models.Settings):Promise<void>;
 
 export function UpdateTag(arg1:number,arg2:string,arg3:string):Promise<void>;

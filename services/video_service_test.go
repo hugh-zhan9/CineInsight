@@ -121,7 +121,7 @@ func TestPlayRandomVideoErrorContainsVideoInfo(t *testing.T) {
 	}
 
 	oldOpen := openWithDefaultFn
-	openWithDefaultFn = func(path string) error {
+	openWithDefaultFn = func(path string, isDir bool) error {
 		return errors.New("open failed")
 	}
 	defer func() { openWithDefaultFn = oldOpen }()

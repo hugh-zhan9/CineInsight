@@ -19,7 +19,7 @@
 
 ## 🔴 严重问题
 
-### 1. 日志文件句柄泄漏
+### ~~1. 日志文件句柄泄漏~~ ✅ 已修复
 
 **文件**: `app.go` L59-L61
 
@@ -36,7 +36,7 @@ if f, err := os.OpenFile(logPath, ...); err == nil {
 
 ---
 
-### 2. `rand.Seed()` 已废弃
+### ~~2. `rand.Seed()` 已废弃~~ ✅ 已修复
 
 **文件**: `services/video_service.go` L366
 
@@ -48,7 +48,7 @@ rand.Seed(time.Now().UnixNano())  // 不再需要，删除即可
 
 ---
 
-### 3. `PlayRandomVideo` 全量加载所有视频到内存
+### ~~3. `PlayRandomVideo` 全量加载所有视频到内存~~ ✅ 已修复
 
 **文件**: `services/video_service.go` L316
 
@@ -58,7 +58,7 @@ rand.Seed(time.Now().UnixNano())  // 不再需要，删除即可
 
 ---
 
-### 4. 游标分页 SQL 参数绑定维护困难
+### ~~4. 游标分页 SQL 参数绑定维护困难~~ ✅ 已修复
 
 **文件**: `services/video_service.go` L48-L52
 
@@ -76,7 +76,7 @@ query.Where("("+scoreSQL+" > ?) OR ("+scoreSQL+" = ? AND size < ?) OR ("+scoreSQ
 
 ---
 
-### 5. `database.Init()` 中的冗余目录逻辑
+### ~~5. `database.Init()` 中的冗余目录逻辑~~ ✅ 已修复
 
 **文件**: `database/database.go` L25-L26
 
@@ -93,7 +93,7 @@ legacyDir := filepath.Join(homeDir, ".video-master")  // 与 dataDir 相同！
 
 ## 🟡 架构与设计问题
 
-### 6. 前端 App.vue 巨大单文件（1743 行 / 45KB）
+### ~~6. 前端 App.vue 巨大单文件（1743 行 / 45KB）~~ ✅ 已修复
 
 **文件**: `frontend/src/App.vue`
 
@@ -103,22 +103,8 @@ legacyDir := filepath.Join(homeDir, ".video-master")  // 与 dataDir 相同！
 
 ---
 
-### 7. 服务层直接访问全局 `database.DB`
 
-所有服务通过 `database.DB` 全局单例直接操作数据库，没有接口抽象。这导致：
-- 测试必须覆盖真实 SQLite（无法 mock）
-- 服务间耦合度高
-- 无法做事务隔离
-
----
-
-### 8. 未使用 Vue 3 Composition API
-
-前端仍然使用 Options API (`data()`, `methods`, `computed`)。虽然功能正常，但 Vue 3 项目推荐使用 Composition API (`<script setup>`)，可获得更好的 TypeScript 支持和逻辑复用。
-
----
-
-### 9. `UpdateSettings` 参数过多
+### ~~9. `UpdateSettings` 参数过多~~ ✅ 已修复
 
 **文件**: `services/settings_service.go` L18
 
@@ -128,7 +114,7 @@ legacyDir := filepath.Join(homeDir, ".video-master")  // 与 dataDir 相同！
 
 ## 🟠 代码质量问题
 
-### 10. 搜索输入无防抖
+### ~~10. 搜索输入无防抖~~ ✅ 无需修复（桌面单体应用 IPC 通信快，不需要防抖）
 
 **文件**: `frontend/src/App.vue` L26-L27
 
@@ -136,7 +122,7 @@ legacyDir := filepath.Join(homeDir, ".video-master")  // 与 dataDir 相同！
 
 ---
 
-### 11. `openFileManager` 和 `openWithDefault` 代码重复
+### ~~11. `openFileManager` 和 `openWithDefault` 代码重复~~ ✅ 已修复
 
 **文件**: `services/video_service.go` L403-L436
 
@@ -144,7 +130,7 @@ legacyDir := filepath.Join(homeDir, ".video-master")  // 与 dataDir 相同！
 
 ---
 
-### 12. `PlayVideo` 存在竞态条件
+### ~~12. `PlayVideo` 存在竞态条件~~ ✅ 已修复
 
 **文件**: `services/video_service.go` L293-L297
 
@@ -152,7 +138,7 @@ legacyDir := filepath.Join(homeDir, ".video-master")  // 与 dataDir 相同！
 
 ---
 
-### 13. `AddVideo` 多余的逻辑分支
+### ~~13. `AddVideo` 多余的逻辑分支~~ ✅ 已修复
 
 **文件**: `services/video_service.go` L144-L146
 
@@ -160,7 +146,7 @@ legacyDir := filepath.Join(homeDir, ".video-master")  // 与 dataDir 相同！
 
 ---
 
-### 14. 前端 `video.tags` 可能为 `null`
+### ~~14. 前端 `video.tags` 可能为 `null`~~ ✅ 已修复
 
 Vue 模板中 `video.tags.map(t => t.id)` 等调用假设 `tags` 始终是数组。如果后端返回 `null`（JSON `"tags": null`），将产生运行时错误。Go 中 `Video.Tags` 为空 slice 时 JSON 会序列化为 `null` 而非 `[]`。
 
@@ -176,49 +162,7 @@ Vite `3.0.7` 和 `@vitejs/plugin-vue` `3.0.3` 均已过时多个大版本（当�
 
 ## 🔵 工程规范问题
 
-### 16. `.gitignore` 严重不完整
-
-**文件**: `.gitignore`
-
-仅有 3 行，缺少常见项：
-
-```diff
- build/bin
- node_modules
- frontend/dist
-+.DS_Store
-+*.db
-+*.log
-+.idea/
-+.vscode/
-+*.exe
-+*.app
-```
-
----
-
-### 17. 无 linter / formatter 配置
-
-项目缺少 `golangci-lint` 配置和前端 ESLint/Prettier 配置。`AGENTS.md` 提到 `gofmt`，但没有自动化执行手段。
-
----
-
-### 18. 无 CI/CD 配置
-
-没有 GitHub Actions / GitLab CI 等持续集成配置，测试不会自动运行。
-
----
-
-### 19. 输入验证薄弱
-
-- `AddDirectory` 不检查路径是否存在或重复
-- `UpdateTag` 不检查名称是否与其他标签冲突
-- `ScanDirectory` 不校验传入目录是否为绝对路径
-- 前端 `videoExts` 配置无格式校验
-
----
-
-### 20. 缺少错误类型定义
+### ~~20. 缺少错误类型定义~~ ✅ 已修复
 
 后端使用 `errors.New("视频已存在")` 和 `errors.New("TAG_EXISTS")` 混合了中文和英文错误码。建议定义统一的错误类型（sentinel errors 或 error codes），便于前端可靠判断。
 
