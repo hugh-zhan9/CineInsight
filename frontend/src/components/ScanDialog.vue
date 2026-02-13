@@ -83,8 +83,8 @@ export default {
       this.scanProgress.total = 0;
 
       try {
-        const files = await ScanDirectory(this.scanDirectory);
-        const existingVideos = await GetVideosByDirectory(this.scanDirectory);
+        const files = await ScanDirectory(this.scanDirectory) || [];
+        const existingVideos = await GetVideosByDirectory(this.scanDirectory) || [];
         const scannedSet = new Set(files);
         const keptByPath = new Map();
         const duplicateVideos = [];
