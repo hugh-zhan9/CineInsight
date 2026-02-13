@@ -130,7 +130,7 @@ export default {
         }
 
         // 自动加入目录配置
-        const exists = this.directories.some(d => d.path === this.scanDirectory);
+        const exists = (this.directories || []).some(d => d.path === this.scanDirectory);
         if (!exists) {
           const alias = this.scanDirectory.split(/[/\\]/).filter(Boolean).pop() || this.scanDirectory;
           try {
@@ -139,6 +139,12 @@ export default {
             console.warn('保存扫描目录失败:', err);
             alert('保存扫描目录失败: ' + err);
           }
+        }
+
+        if (this.scanProgress.total === 0) {
+          alert('扫描完成：未发现新视频或变动。');
+        } else {
+          alert(`扫描完成：新增 ${this.scanProgress.imported} 个，删除 ${this.scanProgress.deleted} 个。`);
         }
 
         this.$emit('scan-complete');
