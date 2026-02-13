@@ -6,16 +6,22 @@
         <button @click="selectDir" class="btn-primary">选择目录</button>
         <p v-if="scanDirectory" class="selected-dir">{{ scanDirectory }}</p>
       </div>
+
       <div v-if="scanProgress.scanning" class="scan-progress">
         <p>正在扫描... 已发现 {{ scanProgress.found }} 个视频</p>
         <p>正在处理 {{ scanProgress.processed }}/{{ scanProgress.total }}</p>
         <p>新增 {{ scanProgress.imported }} 个，删除 {{ scanProgress.deleted }} 个，跳过 {{ scanProgress.skipped }} 个</p>
       </div>
+      <div v-if="!scanProgress.scanning && scanProgress.statusMessage" class="scan-result" style="margin-top: 15px; color: #4caf50; font-weight: bold;">
+        <p>{{ scanProgress.statusMessage }}</p>
+      </div>
       <div class="modal-actions">
         <button @click="startScan" :disabled="!scanDirectory || scanProgress.scanning" class="btn-primary">
-          开始扫描
+          {{ scanProgress.statusMessage ? '重新扫描' : '开始扫描' }}
         </button>
-        <button @click="$emit('close')" class="btn-secondary">取消</button>
+        <button @click="$emit('close')" class="btn-secondary">
+          {{ scanProgress.statusMessage ? '关闭' : '取消' }}
+        </button>
       </div>
     </div>
   </div>
@@ -41,7 +47,8 @@ export default {
         imported: 0,
         deleted: 0,
         skipped: 0,
-        total: 0
+        total: 0,
+        statusMessage: ''
       }
     };
   },
@@ -57,7 +64,8 @@ export default {
     resetProgress() {
       this.scanProgress = {
         scanning: false, found: 0, processed: 0,
-        imported: 0, deleted: 0, skipped: 0, total: 0
+        imported: 0, deleted: 0, skipped: 0, total: 0,
+        statusMessage: ''
       };
     },
     async selectDir() {
@@ -142,16 +150,15 @@ export default {
         }
 
         if (this.scanProgress.total === 0) {
-          alert('扫描完成：未发现新视频或变动。');
+          this.scanProgress.statusMessage = '扫描完成：未发现新视频或变动。';
         } else {
-          alert(`扫描完成：新增 ${this.scanProgress.imported} 个，删除 ${this.scanProgress.deleted} 个。`);
+          this.scanProgress.statusMessage = `扫描完成：新增 ${this.scanProgress.imported} 个，删除 ${this.scanProgress.deleted} 个。`;
         }
-
         this.$emit('scan-complete');
-        this.$emit('close');
+        // 不自动关闭，让用户确认结果
       } catch (err) {
+        this.scanProgress.statusMessage = '扫描失败: ' + err;
         console.error('扫描失败:', err);
-        alert('扫描失败: ' + err);
       } finally {
         this.scanProgress.scanning = false;
       }
