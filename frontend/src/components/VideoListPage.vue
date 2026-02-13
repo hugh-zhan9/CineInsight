@@ -227,9 +227,29 @@ export default {
       this.resetAndLoadVideos();
     },
     getDirectoryLabel(video) {
-      const match = this.directories.find(d => d.path === video.directory);
-      if (match && match.alias) {
-        return `${match.alias}（${video.directory}）`;
+      if (!this.directories || this.directories.length === 0) return video.directory;
+
+      // 按路径长度降序排序，优先匹配最长（最深）的目录
+      const sortedDirs = [...this.directories]
+        .filter(d => d.alias)
+        .sort((a, b) => b.path.length - a.path.length);
+
+      for (const dir of sortedDirs) {
+        // 1. 精确匹配
+        if (dir.path === video.directory) {
+          return dir.alias;
+        }
+
+        // 2. 子目录匹配 (确保路径分隔符正确，避免 /data 匹配 /database)
+        // 检测系统分隔符（Windows用\, 其他用/）
+        const isWindows = video.directory.includes('\\');
+        const sep = isWindows ? '\\' : '/';
+        const prefix = dir.path.endsWith(sep) ? dir.path : dir.path + sep;
+
+        if (video.directory.startsWith(prefix)) {
+          const suffix = video.directory.substring(prefix.length);
+          return `${dir.alias}${sep}${suffix}`;
+        }
       }
       return video.directory;
     },
