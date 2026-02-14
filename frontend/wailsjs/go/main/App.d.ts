@@ -8,6 +8,8 @@ export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddVideo(arg1:string):Promise<models.Video>;
 
+export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
+
 export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
 
 export function DeleteDirectory(arg1:number):Promise<void>;
@@ -15,6 +17,10 @@ export function DeleteDirectory(arg1:number):Promise<void>;
 export function DeleteTag(arg1:number):Promise<void>;
 
 export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
+
+export function DownloadSubtitleDependencies():Promise<void>;
+
+export function GenerateSubtitle(arg1:number):Promise<void>;
 
 export function GetAllDirectories():Promise<Array<models.ScanDirectory>>;
 

@@ -14,6 +14,10 @@ export function AddVideo(arg1) {
   return window['go']['main']['App']['AddVideo'](arg1);
 }
 
+export function CheckSubtitleDependencies() {
+  return window['go']['main']['App']['CheckSubtitleDependencies']();
+}
+
 export function CreateTag(arg1, arg2) {
   return window['go']['main']['App']['CreateTag'](arg1, arg2);
 }
@@ -28,6 +32,14 @@ export function DeleteTag(arg1) {
 
 export function DeleteVideo(arg1, arg2) {
   return window['go']['main']['App']['DeleteVideo'](arg1, arg2);
+}
+
+export function DownloadSubtitleDependencies() {
+  return window['go']['main']['App']['DownloadSubtitleDependencies']();
+}
+
+export function GenerateSubtitle(arg1) {
+  return window['go']['main']['App']['GenerateSubtitle'](arg1);
 }
 
 export function GetAllDirectories() {

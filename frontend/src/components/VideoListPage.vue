@@ -64,6 +64,14 @@
         <div class="video-actions">
           <button @click="playVideo(video.id)" class="btn-action">播放</button>
           <button @click="openDirectory(video.id)" class="btn-action">打开目录</button>
+          <button 
+            @click="generateSubtitle(video)" 
+            class="btn-action" 
+            :class="{ 'btn-processing': generatingSubtitleIds.includes(video.id) }"
+            :disabled="generatingSubtitleIds.includes(video.id)"
+          >
+            {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
+          </button>
         <button @click="confirmDelete(video)" class="btn-danger" :disabled="deletingIds.includes(video.id)">删除</button>
         </div>
       </div>
@@ -127,11 +135,69 @@
       @close="tagDeleteDialog.show = false"
       @confirm-delete="confirmDeleteTag"
     />
+    
+    <!-- 字幕操作弹窗（确认/进度/结果） -->
+    <div v-if="subtitleDialog.show" class="modal-overlay">
+      <div class="modal download-modal">
+        <h3>{{ subtitleDialog.title }}</h3>
+        <p>{{ subtitleDialog.msg }}</p>
+        
+        <!-- 下载进度条 -->
+        <template v-if="subtitleDialog.mode === 'progress'">
+          <div class="progress-bar-container">
+            <div class="progress-bar" :style="{ width: subtitleDialog.percent + '%' }"></div>
+          </div>
+          <p class="progress-text">{{ subtitleDialog.percent }}%</p>
+        </template>
+        
+        <!-- 确认按钮 -->
+        <div v-if="subtitleDialog.mode === 'confirm'" class="modal-actions">
+          <button @click="subtitleDialog.show = false" class="btn-secondary">取消</button>
+          <button @click="onSubtitleConfirm" class="btn-primary">确认下载</button>
+        </div>
+        
+        <!-- 结果关闭按钮 -->
+        <div v-if="subtitleDialog.mode === 'result'" class="modal-actions">
+          <button @click="subtitleDialog.show = false" class="btn-primary">确定</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
+<style scoped>
+.download-modal {
+  width: 400px;
+  text-align: center;
+  padding: 30px;
+}
+.progress-bar-container {
+  width: 100%;
+  height: 10px;
+  background-color: #f0f0f0;
+  border-radius: 5px;
+  margin: 20px 0;
+  overflow: hidden;
+}
+.progress-bar {
+  height: 100%;
+  background-color: #4caf50;
+  transition: width 0.3s ease;
+}
+.progress-text {
+  font-size: 0.9em;
+  color: #666;
+  margin: 0;
+}
+.btn-processing {
+  opacity: 0.7;
+  cursor: wait;
+  background-color: #aaa !important;
+}
+</style>
+
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings, CheckSubtitleDependencies, DownloadSubtitleDependencies, GenerateSubtitle } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -164,17 +230,107 @@ export default {
       addTagDialog: { show: false, video: null },
       deleteDialog: { show: false, video: null },
       deletingIds: [],
-      tagDeleteDialog: { show: false, tag: null }
+      tagDeleteDialog: { show: false, tag: null },
+      // Subtitle states
+      generatingSubtitleIds: [],
+      subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0 },
+      pendingSubtitleVideo: null,
     };
   },
   mounted() {
     this.loadVideos();
     document.addEventListener('click', this.hideContextMenu);
+    
+    // 使用 window.runtime 直接注册事件（避免 import 问题）
+    if (window.runtime) {
+      window.runtime.EventsOn('download-progress', (data) => {
+        this.subtitleDialog.show = true;
+        this.subtitleDialog.mode = 'progress';
+        this.subtitleDialog.title = '正在下载组件';
+        this.subtitleDialog.percent = data.percent;
+        this.subtitleDialog.msg = data.msg;
+      });
+      
+      window.runtime.EventsOn('subtitle-success', (data) => {
+        const idx = this.generatingSubtitleIds.indexOf(data.videoID);
+        if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+        this.subtitleDialog.show = true;
+        this.subtitleDialog.mode = 'result';
+        this.subtitleDialog.title = '✅ 字幕生成成功';
+        this.subtitleDialog.msg = '文件: ' + data.path;
+      });
+    }
   },
   beforeUnmount() {
     document.removeEventListener('click', this.hideContextMenu);
   },
   methods: {
+    async generateSubtitle(video) {
+      console.log('[Subtitle] generateSubtitle called for video:', video.id);
+      if (this.generatingSubtitleIds.includes(video.id)) return;
+
+      try {
+        const status = await CheckSubtitleDependencies();
+        console.log('[Subtitle] Dependencies status:', status);
+        if (!status.ffmpeg || !status.whisper || !status.model) {
+          // 显示确认弹窗（不用 confirm()，WKWebView 不支持）
+          this.pendingSubtitleVideo = video;
+          this.subtitleDialog.show = true;
+          this.subtitleDialog.mode = 'confirm';
+          this.subtitleDialog.title = '需要下载组件';
+          this.subtitleDialog.msg = '初次使用需下载字幕生成组件 (FFmpeg/Whisper/Model)，约 200MB。是否立即下载？';
+          return; // 用户确认后在 onSubtitleConfirm 中继续
+        }
+        
+        // 依赖已就绪，直接生成
+        await this.doGenerateSubtitle(video);
+      } catch (err) {
+        console.error('[Subtitle] Error:', err);
+        this.subtitleDialog.show = true;
+        this.subtitleDialog.mode = 'result';
+        this.subtitleDialog.title = '❌ 检查依赖失败';
+        this.subtitleDialog.msg = String(err);
+      }
+    },
+    async onSubtitleConfirm() {
+      // 用户确认下载依赖
+      this.subtitleDialog.mode = 'progress';
+      this.subtitleDialog.title = '正在下载组件';
+      this.subtitleDialog.percent = 0;
+      this.subtitleDialog.msg = '准备下载...';
+      try {
+        await DownloadSubtitleDependencies();
+        this.subtitleDialog.mode = 'result';
+        this.subtitleDialog.title = '✅ 组件下载完成';
+        this.subtitleDialog.msg = '现在可以点击字幕按钮生成字幕了。';
+      } catch (err) {
+        this.subtitleDialog.mode = 'result';
+        this.subtitleDialog.title = '❌ 下载失败';
+        this.subtitleDialog.msg = String(err);
+      }
+      this.pendingSubtitleVideo = null;
+    },
+    async doGenerateSubtitle(video) {
+      this.generatingSubtitleIds.push(video.id);
+      try {
+        await GenerateSubtitle(video.id);
+        // 成功后移除 ID（event 也会移除，双重保障）
+        const idx = this.generatingSubtitleIds.indexOf(video.id);
+        if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+        this.subtitleDialog.show = true;
+        this.subtitleDialog.mode = 'result';
+        this.subtitleDialog.title = '✅ 字幕生成完成';
+        this.subtitleDialog.msg = '字幕文件已保存到视频同目录下。';
+      } catch (err) {
+        console.error('[Subtitle] Generate error:', err);
+        const idx = this.generatingSubtitleIds.indexOf(video.id);
+        if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+        this.subtitleDialog.show = true;
+        this.subtitleDialog.mode = 'result';
+        this.subtitleDialog.title = '❌ 生成字幕失败';
+        this.subtitleDialog.msg = String(err);
+      }
+    },
     hideContextMenu() {
       this.contextMenu.show = false;
     },

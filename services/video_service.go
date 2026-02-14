@@ -160,6 +160,15 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 	return video, nil
 }
 
+// GetVideo 获取单个视频详情
+func (s *VideoService) GetVideo(id uint) (*models.Video, error) {
+	var video models.Video
+	if err := database.DB.First(&video, id).Error; err != nil {
+		return nil, err
+	}
+	return &video, nil
+}
+
 // DeleteVideo 删除视频
 func (s *VideoService) DeleteVideo(id uint, deleteFile bool) error {
 	var video models.Video

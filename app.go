@@ -19,16 +19,22 @@ type App struct {
 	tagService       *services.TagService
 	settingsService  *services.SettingsService
 	directoryService *services.DirectoryService
+	subtitleService  *services.SubtitleService
 	logFile          *os.File // 保持日志文件句柄引用，防止泄漏
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
+	// 获取用户目录作为数据根目录
+	homeDir, _ := os.UserHomeDir()
+	dataDir := filepath.Join(homeDir, ".video-master")
+
 	return &App{
 		videoService:     &services.VideoService{},
 		tagService:       &services.TagService{},
 		settingsService:  &services.SettingsService{},
 		directoryService: &services.DirectoryService{},
+		subtitleService:  services.NewSubtitleService(dataDir),
 	}
 }
 
@@ -36,6 +42,7 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	a.subtitleService.SetContext(ctx) // Inject context
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		a.setLogEnabled(settings.LogEnabled)
 	}
@@ -55,6 +62,7 @@ func (a *App) setLogEnabled(enabled bool) {
 		a.closeLogFile()
 		return
 	}
+	// dataDir 已经在 NewApp 中计算过，但这里再次获取也没问题
 	if homeDir, err := os.UserHomeDir(); err == nil {
 		dataDir := filepath.Join(homeDir, ".video-master")
 		if _, err := os.Stat(dataDir); err != nil {
@@ -255,4 +263,27 @@ func (a *App) UpdateDirectory(id uint, path, alias string) error {
 // DeleteDirectory 删除扫描目录
 func (a *App) DeleteDirectory(id uint) error {
 	return a.directoryService.DeleteDirectory(id)
+}
+
+// ===== Subtitle Methods =====
+
+// CheckSubtitleDependencies 检查字幕生成依赖
+func (a *App) CheckSubtitleDependencies() (map[string]bool, error) {
+	return a.subtitleService.CheckDependencies()
+}
+
+// DownloadSubtitleDependencies 下载字幕生成依赖
+func (a *App) DownloadSubtitleDependencies() error {
+	return a.subtitleService.DownloadDependencies()
+}
+
+// GenerateSubtitle 生成字幕
+func (a *App) GenerateSubtitle(videoID uint) error {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		log.Printf("API GenerateSubtitle id=%d failed to get video: %v", videoID, err)
+		return err
+	}
+	log.Printf("API GenerateSubtitle id=%d path=%s", videoID, video.Path)
+	return a.subtitleService.GenerateSubtitle(videoID, video.Path)
 }
