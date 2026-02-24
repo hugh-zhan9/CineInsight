@@ -1,19 +1,18 @@
-# 视频管理器
+# Video Master (视频管理器)
 
-一个用 Golang 和 Wails 开发的现代化桌面视频管理应用。
+A cross-platform desktop video manager featuring smart random playback, tag management, and offline bilingual subtitle generation.
+(一款跨平台本地视频管理应用，支持智能随机播放、多维度标签库及离线双语字幕生成。)
 
 ## 功能特性
 
-- **视频扫描**: 扫描指定目录下的所有视频文件（支持 mp4, avi, mkv, mov, wmv, flv, webm, m4v）
-- **搜索功能**: 支持按文件名关键词模糊搜索
-- **标签管理**: 为视频添加彩色标签，支持按标签筛选
-- **右键菜单**: 支持右键快捷操作
-  - 打开文件所在目录
-  - 使用系统默认播放器播放
-  - 删除视频
-- **删除确认**: 可选择是否删除原始文件，支持"不再提醒"选项
-- **轻量数据库**: 使用内嵌 SQLite 数据库，开箱即用
-- **跨平台**: 支持 macOS, Windows, Linux
+- **视频扫描**: 支持自定义视频格式，支持启动后台增量扫描自动追平目录变更。
+- **智能播放**: 内置加权随机播放算法，平衡内容分发，支持配置基础权重。
+- **AI 字幕生成**: 内置 Whisper 模型与 DeepL 翻译，离线生成高精度原文+翻译双语字幕。
+- **多维检索**: 支持输入即搜的名称过滤与多重标签组合过滤。
+- **标签管理**: 支持软删除恢复与 12 色智能自动分配颜色。
+- **轻量可靠**: 内置 SQLite 单文件数据库，支持海量视频百万级游标秒查。
+- **现代化 UI**: 基于 Vue 3 的响应式瀑布流列表，支持无限下拉加载。
+- **右键菜单**: 快速调用系统默认播放器、定位文件或安全删除记录。
 
 ## 技术栈
 
@@ -99,7 +98,9 @@ video-master/
 │   └── database.go
 ├── services/             # 业务逻辑层
 │   ├── video_service.go
+│   ├── subtitle_service.go
 │   ├── tag_service.go
+│   ├── directory_service.go
 │   └── settings_service.go
 └── frontend/             # Vue 前端
     └── src/
