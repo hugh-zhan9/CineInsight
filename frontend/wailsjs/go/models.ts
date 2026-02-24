@@ -86,6 +86,9 @@ export namespace models {
 	    play_weight: number;
 	    auto_scan_on_startup: boolean;
 	    log_enabled: boolean;
+	    bilingual_enabled: boolean;
+	    bilingual_lang: string;
+	    deepl_api_key: string;
 	    // Go type: time
 	    updated_at: any;
 	
@@ -102,6 +105,9 @@ export namespace models {
 	        this.play_weight = source["play_weight"];
 	        this.auto_scan_on_startup = source["auto_scan_on_startup"];
 	        this.log_enabled = source["log_enabled"];
+	        this.bilingual_enabled = source["bilingual_enabled"];
+	        this.bilingual_lang = source["bilingual_lang"];
+	        this.deepl_api_key = source["deepl_api_key"];
 	        this.updated_at = this.convertValues(source["updated_at"], null);
 	    }
 	

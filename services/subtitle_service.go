@@ -2,7 +2,10 @@ package services
 
 import (
 	"archive/zip"
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -10,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 
@@ -44,8 +48,8 @@ func (s *SubtitleService) CheckDependencies() (map[string]bool, error) {
 	// Check Whisper (brew installs as whisper-cli, not whisper-cpp)
 	result["whisper"] = s.findBinary("whisper-cli") != "" || s.findBinary("whisper-cpp") != "" || s.findBinary("main") != ""
 
-	// Check Model
-	modelPath := filepath.Join(s.ModelDir, "ggml-base.en.bin")
+	// Check Model (多语言 medium 模型)
+	modelPath := filepath.Join(s.ModelDir, "ggml-medium.bin")
 	if _, err := os.Stat(modelPath); err == nil {
 		result["model"] = true
 	} else {
@@ -121,7 +125,8 @@ func (s *SubtitleService) DownloadDependencies() error {
 	return nil
 }
 
-func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) error {
+func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
+	bilingualEnabled bool, bilingualLang string, deeplApiKey string) error {
 	s.emitProgress("process", 0, "Initializing...")
 
 	status, err := s.CheckDependencies()
@@ -144,20 +149,55 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string) error
 	defer os.Remove(tempWav)
 
 	if err := s.extractAudio(videoPath, tempWav); err != nil {
-		return err // already user-friendly
+		return err
 	}
 
-	// Transcribe
-	s.emitProgress("process", 30, "Transcribing (this may take a while)...")
-
+	// Transcribe (原文识别)
+	s.emitProgress("process", 20, "Transcribing (this may take a while)...")
 	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
 
-	if err := s.transcribeCLI(tempWav, outputPrefix); err != nil {
-		return err // already user-friendly
+	detectedLang, err := s.transcribeCLIWithLang(tempWav, outputPrefix)
+	if err != nil {
+		return err
 	}
 
 	srtPath := outputPrefix + ".srt"
 
+	// 后处理：检测幻觉输出
+	s.emitProgress("process", 50, "Validating output...")
+	if err := s.validateSRT(srtPath); err != nil {
+		return err
+	}
+
+	// 双语字幕处理
+	if bilingualEnabled && deeplApiKey != "" && bilingualLang != "" {
+		log.Printf("[Subtitle] bilingual: detected=%s target=%s", detectedLang, bilingualLang)
+
+		// 如果检测到的语言已经是目标语言，跳过翻译
+		if s.isSameLanguage(detectedLang, bilingualLang) {
+			log.Printf("[Subtitle] detected language matches target, skipping translation")
+		} else {
+			// 直接用 DeepL 翻译原文 SRT（DeepL 支持任意语言对，自动检测源语言）
+			s.emitProgress("process", 60, "Translating via DeepL...")
+
+			translatedSrtPath := outputPrefix + "_translated_temp.srt"
+			defer os.Remove(translatedSrtPath)
+
+			// sourceLang 传空，让 DeepL 自动检测源语言
+			if err := s.translateSRT(srtPath, translatedSrtPath, "", bilingualLang, deeplApiKey); err != nil {
+				log.Printf("[Subtitle] DeepL translate failed: %v, keeping original SRT", err)
+				goto done
+			}
+
+			// 合并双语 SRT（原文上行、翻译下行）
+			s.emitProgress("process", 85, "Merging bilingual subtitles...")
+			if err := s.mergeBilingualSRT(srtPath, translatedSrtPath, srtPath); err != nil {
+				log.Printf("[Subtitle] merge failed: %v", err)
+			}
+		}
+	}
+
+done:
 	s.emitProgress("process", 100, "Completed")
 
 	if s.ctx != nil {
@@ -196,7 +236,8 @@ func (s *SubtitleService) extractAudio(videoPath, outputPath string) error {
 	return nil
 }
 
-func (s *SubtitleService) transcribeCLI(wavPath, outputPrefix string) error {
+// findWhisperBin 查找 whisper 可执行文件
+func (s *SubtitleService) findWhisperBin() string {
 	whisperBin := s.findBinary("whisper-cli")
 	if whisperBin == "" {
 		whisperBin = s.findBinary("whisper-cpp")
@@ -204,25 +245,350 @@ func (s *SubtitleService) transcribeCLI(wavPath, outputPrefix string) error {
 	if whisperBin == "" {
 		whisperBin = s.findBinary("main")
 	}
+	return whisperBin
+}
+
+// transcribeCLIWithLang 转录音频并返回检测到的语言代码
+func (s *SubtitleService) transcribeCLIWithLang(wavPath, outputPrefix string) (string, error) {
+	whisperBin := s.findWhisperBin()
 	if whisperBin == "" {
-		return fmt.Errorf("未找到 Whisper，请重新安装依赖")
+		return "", fmt.Errorf("未找到 Whisper，请重新安装依赖")
 	}
 
-	modelPath := filepath.Join(s.ModelDir, "ggml-base.en.bin")
+	modelPath := filepath.Join(s.ModelDir, "ggml-medium.bin")
 
-	log.Printf("[Subtitle] transcribeCLI: whisper=%s model=%s input=%s output=%s\n", whisperBin, modelPath, wavPath, outputPrefix)
-	cmd := exec.Command(whisperBin, "-m", modelPath, "-f", wavPath, "-osrt", "-of", outputPrefix)
+	log.Printf("[Subtitle] transcribeCLIWithLang: whisper=%s model=%s input=%s output=%s\n", whisperBin, modelPath, wavPath, outputPrefix)
+
+	cmd := exec.Command(whisperBin,
+		"-m", modelPath,
+		"-f", wavPath,
+		"-osrt",
+		"-of", outputPrefix,
+		"-l", "auto",
+		"--no-fallback",
+		"-et", "2.4",
+		"-lpt", "-1.0",
+		"-bo", "5",
+		"-bs", "5",
+	)
 
 	output, err := cmd.CombinedOutput()
-	if err != nil {
-		detail := string(output)
-		log.Printf("[Subtitle] whisper error: %s\n%s\n", err, detail)
-		if strings.Contains(detail, "failed to open") || strings.Contains(detail, "no such file") {
-			return fmt.Errorf("模型文件缺失，请重新安装依赖")
-		}
-		return fmt.Errorf("语音识别失败，请确保视频包含有效音频")
+	outputStr := string(output)
+
+	// 从输出中提取检测到的语言
+	detectedLang := "en" // 默认英文
+	langRe := regexp.MustCompile(`auto-detected language:\s*(\w+)`)
+	if matches := langRe.FindStringSubmatch(outputStr); len(matches) > 1 {
+		detectedLang = strings.ToLower(matches[1])
+		log.Printf("[Subtitle] detected language: %s", detectedLang)
 	}
+
+	if err != nil {
+		log.Printf("[Subtitle] whisper error: %s\n%s\n", err, outputStr)
+		if strings.Contains(outputStr, "failed to open") || strings.Contains(outputStr, "no such file") {
+			return "", fmt.Errorf("模型文件缺失，请重新安装依赖")
+		}
+		return "", fmt.Errorf("语音识别失败，请确保视频包含有效音频")
+	}
+	return detectedLang, nil
+}
+
+// validateSRT 检测 SRT 文件是否存在幻觉输出（大量重复文本）
+func (s *SubtitleService) validateSRT(srtPath string) error {
+	f, err := os.Open(srtPath)
+	if err != nil {
+		return fmt.Errorf("字幕文件生成失败")
+	}
+	defer f.Close()
+
+	lineCounts := make(map[string]int)
+	totalLines := 0
+	scanner := bufio.NewScanner(f)
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.Contains(line, "-->") {
+			continue
+		}
+		isNum := true
+		for _, c := range line {
+			if c < '0' || c > '9' {
+				isNum = false
+				break
+			}
+		}
+		if isNum {
+			continue
+		}
+		totalLines++
+		lineCounts[line]++
+	}
+
+	if totalLines == 0 {
+		log.Printf("[Subtitle] validateSRT: 字幕文件无有效文本行")
+		return fmt.Errorf("语音识别未产生有效字幕，视频可能没有清晰的语音内容")
+	}
+
+	maxCount := 0
+	maxLine := ""
+	for line, count := range lineCounts {
+		if count > maxCount {
+			maxCount = count
+			maxLine = line
+		}
+	}
+
+	repeatRatio := float64(maxCount) / float64(totalLines)
+	log.Printf("[Subtitle] validateSRT: totalLines=%d maxCount=%d ratio=%.2f maxLine=%q", totalLines, maxCount, repeatRatio, maxLine)
+
+	if repeatRatio > 0.7 {
+		os.Remove(srtPath)
+		return fmt.Errorf("检测到异常输出（模型幻觉），字幕内容大量重复。请尝试使用更短的视频片段或检查音频质量")
+	}
+
 	return nil
+}
+
+// isSameLanguage 判断 whisper 检测到的语言与用户目标语言是否相同
+func (s *SubtitleService) isSameLanguage(detected, target string) bool {
+	// whisper 输出格式如 "chinese", "english", "japanese"
+	// 用户设定格式如 "zh", "en", "ja"
+	langMap := map[string]string{
+		"chinese":    "zh",
+		"english":    "en",
+		"japanese":   "ja",
+		"korean":     "ko",
+		"french":     "fr",
+		"german":     "de",
+		"spanish":    "es",
+		"portuguese": "pt",
+		"russian":    "ru",
+		"italian":    "it",
+	}
+
+	detectedCode := strings.ToLower(detected)
+	targetCode := strings.ToLower(target)
+
+	// 先尝试映射 whisper 输出的全名
+	if code, ok := langMap[detectedCode]; ok {
+		detectedCode = code
+	}
+
+	return detectedCode == targetCode
+}
+
+// SRTEntry 表示一条 SRT 字幕
+type SRTEntry struct {
+	Index string
+	Time  string
+	Text  string
+}
+
+// parseSRTEntries 解析 SRT 文件为条目列表
+func parseSRTEntries(srtPath string) ([]SRTEntry, error) {
+	data, err := os.ReadFile(srtPath)
+	if err != nil {
+		return nil, err
+	}
+
+	var entries []SRTEntry
+	blocks := regexp.MustCompile(`\r?\n\r?\n`).Split(strings.TrimSpace(string(data)), -1)
+
+	for _, block := range blocks {
+		lines := strings.Split(strings.TrimSpace(block), "\n")
+		if len(lines) < 3 {
+			continue
+		}
+		entry := SRTEntry{
+			Index: strings.TrimSpace(lines[0]),
+			Time:  strings.TrimSpace(lines[1]),
+			Text:  strings.TrimSpace(strings.Join(lines[2:], "\n")),
+		}
+		entries = append(entries, entry)
+	}
+
+	return entries, nil
+}
+
+// translateDeepL 调用 DeepL API 翻译文本
+func (s *SubtitleService) translateDeepL(texts []string, sourceLang, targetLang, apiKey string) ([]string, error) {
+	// DeepL 目标语言代码需要大写
+	targetUpper := strings.ToUpper(targetLang)
+	// 中文需要特殊处理：DeepL 使用 ZH-HANS
+	if targetUpper == "ZH" {
+		targetUpper = "ZH-HANS"
+	}
+
+	// 构建请求体
+	type DeepLRequest struct {
+		Text       []string `json:"text"`
+		TargetLang string   `json:"target_lang"`
+		SourceLang string   `json:"source_lang,omitempty"`
+	}
+
+	reqBody := DeepLRequest{
+		Text:       texts,
+		TargetLang: targetUpper,
+	}
+	if sourceLang != "" {
+		reqBody.SourceLang = strings.ToUpper(sourceLang)
+	}
+
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("构建翻译请求失败: %v", err)
+	}
+
+	// 判断是免费版还是付费版 API
+	apiURL := "https://api-free.deepl.com/v2/translate"
+	if !strings.HasSuffix(apiKey, ":fx") {
+		apiURL = "https://api.deepl.com/v2/translate"
+	}
+
+	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(bodyBytes))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "DeepL-Auth-Key "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("翻译请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == 403 {
+			return nil, fmt.Errorf("DeepL API Key 无效或已过期")
+		}
+		if resp.StatusCode == 456 {
+			return nil, fmt.Errorf("DeepL 翻译额度已用完")
+		}
+		return nil, fmt.Errorf("DeepL API 返回 %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	type DeepLTranslation struct {
+		Text string `json:"text"`
+	}
+	type DeepLResponse struct {
+		Translations []DeepLTranslation `json:"translations"`
+	}
+
+	var deeplResp DeepLResponse
+	if err := json.NewDecoder(resp.Body).Decode(&deeplResp); err != nil {
+		return nil, fmt.Errorf("解析翻译响应失败: %v", err)
+	}
+
+	results := make([]string, len(deeplResp.Translations))
+	for i, t := range deeplResp.Translations {
+		results[i] = t.Text
+	}
+	return results, nil
+}
+
+// translateSRT 翻译 SRT 文件中的所有文本行
+func (s *SubtitleService) translateSRT(inputPath, outputPath, sourceLang, targetLang, apiKey string) error {
+	entries, err := parseSRTEntries(inputPath)
+	if err != nil {
+		return fmt.Errorf("读取字幕文件失败: %v", err)
+	}
+	if len(entries) == 0 {
+		return fmt.Errorf("字幕文件为空")
+	}
+
+	// 收集文本行（DeepL 一次最多翻译 50 条）
+	batchSize := 50
+	var translatedEntries []SRTEntry
+
+	for i := 0; i < len(entries); i += batchSize {
+		end := i + batchSize
+		if end > len(entries) {
+			end = len(entries)
+		}
+		batch := entries[i:end]
+
+		texts := make([]string, len(batch))
+		for j, e := range batch {
+			texts[j] = e.Text
+		}
+
+		translated, err := s.translateDeepL(texts, sourceLang, targetLang, apiKey)
+		if err != nil {
+			return err
+		}
+
+		for j, e := range batch {
+			translatedText := e.Text
+			if j < len(translated) {
+				translatedText = translated[j]
+			}
+			translatedEntries = append(translatedEntries, SRTEntry{
+				Index: e.Index,
+				Time:  e.Time,
+				Text:  translatedText,
+			})
+		}
+	}
+
+	// 写入翻译后的 SRT
+	var buf strings.Builder
+	for _, e := range translatedEntries {
+		buf.WriteString(e.Index + "\n")
+		buf.WriteString(e.Time + "\n")
+		buf.WriteString(e.Text + "\n\n")
+	}
+
+	return os.WriteFile(outputPath, []byte(buf.String()), 0644)
+}
+
+// mergeBilingualSRT 合并两个 SRT 文件为双语 SRT（每条字幕上行原文、下行翻译）
+func (s *SubtitleService) mergeBilingualSRT(originalPath, translatedPath, outputPath string) error {
+	origEntries, err := parseSRTEntries(originalPath)
+	if err != nil {
+		return fmt.Errorf("读取原文字幕失败: %v", err)
+	}
+	transEntries, err := parseSRTEntries(translatedPath)
+	if err != nil {
+		return fmt.Errorf("读取翻译字幕失败: %v", err)
+	}
+
+	var buf strings.Builder
+	maxLen := len(origEntries)
+	if len(transEntries) > maxLen {
+		maxLen = len(transEntries)
+	}
+
+	for i := 0; i < maxLen; i++ {
+		idx := fmt.Sprintf("%d", i+1)
+		var timeLine, origText, transText string
+
+		if i < len(origEntries) {
+			timeLine = origEntries[i].Time
+			origText = origEntries[i].Text
+		}
+		if i < len(transEntries) {
+			if timeLine == "" {
+				timeLine = transEntries[i].Time
+			}
+			transText = transEntries[i].Text
+		}
+
+		buf.WriteString(idx + "\n")
+		buf.WriteString(timeLine + "\n")
+		// 原文在上，翻译在下
+		if origText != "" && transText != "" {
+			buf.WriteString(origText + "\n" + transText + "\n\n")
+		} else if origText != "" {
+			buf.WriteString(origText + "\n\n")
+		} else {
+			buf.WriteString(transText + "\n\n")
+		}
+	}
+
+	log.Printf("[Subtitle] mergeBilingualSRT: merged %d entries", maxLen)
+	return os.WriteFile(outputPath, []byte(buf.String()), 0644)
 }
 
 // Download helpers
@@ -276,9 +642,10 @@ func (s *SubtitleService) downloadModel() error {
 	if err := os.MkdirAll(s.ModelDir, 0755); err != nil {
 		return err
 	}
-	url := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin"
-	dest := filepath.Join(s.ModelDir, "ggml-base.en.bin")
-	s.emitProgress("model", 0, "Downloading Model...")
+	// 多语言 medium 模型（~1.5GB），支持自动语言检测
+	url := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+	dest := filepath.Join(s.ModelDir, "ggml-medium.bin")
+	s.emitProgress("model", 0, "Downloading Model (~1.5GB)...")
 	return s.downloadFile(url, dest, "model")
 }
 

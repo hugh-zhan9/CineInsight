@@ -278,7 +278,7 @@ export default {
           this.subtitleDialog.show = true;
           this.subtitleDialog.mode = 'confirm';
           this.subtitleDialog.title = '需要下载组件';
-          this.subtitleDialog.msg = '初次使用需下载字幕生成组件 (FFmpeg/Whisper/Model)，约 200MB。是否立即下载？';
+          this.subtitleDialog.msg = '初次使用需下载字幕生成组件 (FFmpeg/Whisper/Model)，约 1.7GB。是否立即下载？';
           return; // 用户确认后在 onSubtitleConfirm 中继续
         }
         

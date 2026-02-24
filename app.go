@@ -284,6 +284,16 @@ func (a *App) GenerateSubtitle(videoID uint) error {
 		log.Printf("API GenerateSubtitle id=%d failed to get video: %v", videoID, err)
 		return err
 	}
-	log.Printf("API GenerateSubtitle id=%d path=%s", videoID, video.Path)
-	return a.subtitleService.GenerateSubtitle(videoID, video.Path)
+	// 获取双语字幕配置
+	settings, _ := a.settingsService.GetSettings()
+	bilingualEnabled := false
+	bilingualLang := "zh"
+	deeplApiKey := ""
+	if settings != nil {
+		bilingualEnabled = settings.BilingualEnabled
+		bilingualLang = settings.BilingualLang
+		deeplApiKey = settings.DeepLApiKey
+	}
+	log.Printf("API GenerateSubtitle id=%d path=%s bilingual=%v lang=%s", videoID, video.Path, bilingualEnabled, bilingualLang)
+	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey)
 }

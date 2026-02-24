@@ -68,6 +68,48 @@
       </div>
     </div>
 
+    <!-- 字幕设置 -->
+    <div class="settings-section">
+      <h3>字幕翻译</h3>
+      <div class="setting-item">
+        <label>
+          <input type="checkbox" v-model="settingsForm.bilingual_enabled" />
+          启用双语字幕翻译
+        </label>
+      </div>
+      <template v-if="settingsForm.bilingual_enabled">
+        <div class="setting-item">
+          <label>目标翻译语言</label>
+          <select v-model="settingsForm.bilingual_lang" class="select-input">
+            <option value="zh">中文</option>
+            <option value="en">英语</option>
+            <option value="ja">日语</option>
+            <option value="ko">韩语</option>
+            <option value="fr">法语</option>
+            <option value="de">德语</option>
+            <option value="es">西班牙语</option>
+            <option value="pt">葡萄牙语</option>
+            <option value="ru">俄语</option>
+            <option value="it">意大利语</option>
+          </select>
+          <p class="hint-text">字幕识别后会自动检测语言，若与目标语言相同则跳过翻译</p>
+        </div>
+        <div class="setting-item">
+          <label>DeepL API Key</label>
+          <input 
+            type="password" 
+            v-model="settingsForm.deepl_api_key" 
+            placeholder="填入 DeepL API Key (免费版即可)" 
+            class="text-input"
+            autocomplete="off"
+          />
+          <p class="hint-text">
+            免费注册 <a href="https://www.deepl.com/pro-api" target="_blank">deepl.com/pro-api</a>，每月 50 万字符免费额度
+          </p>
+        </div>
+      </template>
+    </div>
+
     <!-- 扫描目录管理 -->
     <div class="settings-section">
       <h3>扫描目录管理</h3>
@@ -165,7 +207,10 @@ export default {
           video_extensions: this.settingsForm.video_extensions,
           play_weight: this.settingsForm.play_weight,
           auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
-          log_enabled: this.settingsForm.log_enabled
+          log_enabled: this.settingsForm.log_enabled,
+          bilingual_enabled: this.settingsForm.bilingual_enabled || false,
+          bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
+          deepl_api_key: this.settingsForm.deepl_api_key || ''
         });
         this.$emit('settings-saved', { ...this.settingsForm });
         alert('设置保存成功！智能随机播放已更新。');

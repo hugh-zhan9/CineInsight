@@ -27,6 +27,9 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.PlayWeight = input.PlayWeight
 	settings.AutoScanOnStartup = input.AutoScanOnStartup
 	settings.LogEnabled = input.LogEnabled
+	settings.BilingualEnabled = input.BilingualEnabled
+	settings.BilingualLang = input.BilingualLang
+	settings.DeepLApiKey = input.DeepLApiKey
 
 	return database.DB.Save(&settings).Error
 }

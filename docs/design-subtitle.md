@@ -1,7 +1,7 @@
 # 字幕生成功能技术设计文档
 
-**版本**: 1.0
-**状态**: 拟定中
+**版本**: 2.0
+**状态**: 已实现
 
 ## 1. 架构概览
 
@@ -9,8 +9,9 @@
 
 ### 核心组件
 1.  **DependencyManager**: 负责检测、下载和校验外部依赖。
-2.  **SubtitleService**: 负责编排音频提取和字幕生成流程。
-3.  **Whisper Binding**: 通过 CGO 调用 `whisper.cpp` 进行推理。
+2.  **SubtitleService**: 负责编排音频提取、字幕生成和双语翻译流程。
+3.  **Whisper CLI**: 通过命令行调用 `whisper-cpp` 进行语音识别。
+4.  **DeepL API**: 可选的翻译服务，用于生成双语字幕。
 
 ## 2. 详细设计
 
@@ -23,13 +24,14 @@
 ├── bin/
 │   └── ffmpeg          # 可执行文件 (Windows下为 ffmpeg.exe)
 └── models/
-    └── ggml-base.en.bin # Whisper模型文件
+    └── ggml-medium.bin  # Whisper 多语言模型 (~1.5GB)
 ```
 
 #### 下载源 (Hardcoded for MVC)
 为简化实现，初期硬编码常用稳定源：
-- **FFmpeg (macOS)**: `https://evermeet.cx/ffmpeg/getrelease/zip` -> 解压取 `ffmpeg`
-- **Model**: `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en.bin` (约 148MB)
+- **FFmpeg (macOS)**: 通过 Homebrew 安装 (`brew install ffmpeg`)
+- **Whisper (macOS)**: 通过 Homebrew 安装 (`brew install whisper-cpp`)
+- **Model**: `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin` (约 1.5GB，多语言)
 
 ### 2.2 后端接口 (Go)
 
@@ -75,13 +77,28 @@ type SubtitleService struct {
     *   命令: `ffmpeg -i input.mp4 -ar 16000 -ac 1 -c:a pcm_s16le output.wav -y`
     *   输出临时文件 `temp/video_id.wav`。
 4.  **模型推理 (Whisper)**:
-    *   加载 `models/ggml-base.en.bin`。
-    *   调用 `whisper.Context.Process` 处理 wav 数据。
-5.  **结果转换**:
-    *   遍历 Segment，格式化为 SRT 时间轴格式。
+    *   调用 `whisper-cli` 处理 wav 数据。
+    *   使用多语言 medium 模型 (`ggml-medium.bin`)。
+    *   包含抗幻觉参数：`-l auto --no-fallback -et 2.4 -lpt -1.0 -bo 5 -bs 5`。
+    *   自动检测音频语言。
+5.  **后处理校验**:
+    *   检测 SRT 中文本重复率，超过 70% 判定为模型幻觉，报错删除文件。
+6.  **双语翻译 (可选)**:
+    *   若用户开启双语字幕且检测语言 ≠ 目标语言：
+    *   调用 DeepL API 翻译原文 SRT（支持任意语言对，自动检测源语言）。
+    *   合并为双语 SRT（每条字幕：上行原文，下行翻译）。
+7.  **结果转换**:
     *   写入 `video_path.srt` (与视频同名)。
-6.  清理临时 WAV 文件。
-7.  推送 `subtitle-success`。
+8.  清理临时 WAV 文件。
+9.  推送 `subtitle-success`。
+
+### 2.4 Settings 字段
+
+| 字段 | 类型 | 默认值 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `bilingual_enabled` | bool | false | 是否开启双语字幕 |
+| `bilingual_lang` | string | "zh" | 目标翻译语言代码 |
+| `deepl_api_key` | string | "" | DeepL API Key |
 
 ### 2.4 事件定义 (Events)
 
@@ -94,9 +111,11 @@ type SubtitleService struct {
 | `subtitle-error` | `{ "videoID": 123, "error": "file not found" }` | 失败 |
 
 ### 2.5 异常处理
-- **网络超时**: 下载设置超时重试。
-- **权限问题**: macOS 首次运行 ffmpeg 可能触发安全警告（需处理或提示用户在设置中允许）。
-- **CGO 崩溃**: Whisper CGO 调用需做好 Panic 捕获 (Recover)。
+- **网络超时**: 下载和 DeepL API 调用设置超时重试。
+- **权限问题**: macOS 首次运行 ffmpeg 可能触发安全警告。
+- **模型幻觉**: 后处理检测重复输出，超阈值自动报错。
+- **DeepL 错误**: API Key 无效(403)、额度用完(456) 等均有友好提示。
+- **翻译失败降级**: 双语翻译失败时保留原文 SRT，不影响基本功能。
 
 ## 3. 前端交互设计
 

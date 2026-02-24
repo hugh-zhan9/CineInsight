@@ -15,7 +15,8 @@
   - **通信:** 通过 `wailsjs/go` 自动生成的绑定调用后端方法，使用 `wailsjs/runtime` 进行事件监听。
 - **外部依赖 (Sidecars):**
   - **FFmpeg:** 用于提取视频音频流（16kHz, mono, WAV）。
-  - **Whisper.cpp:** 用于本地离线语音识别生成字幕。
+  - **Whisper.cpp:** 用于本地离线语音识别生成字幕（多语言 medium 模型）。
+  - **DeepL API (可选):** 用于双语字幕翻译（用户在设置页配置 API Key）。
 
 ## 2. 核心功能与实现原理 (Core Features)
 
@@ -27,7 +28,10 @@
 
 ### 2.2 离线字幕生成 (Offline Subtitle Generation)
 集成 AI 能力实现全本地化字幕制作：
-- **流程:** 视频 -> FFmpeg (提取 16kHz WAV) -> Whisper.cpp (推理识别) -> .srt 文件。
+- **模型:** `ggml-medium.bin`（多语言，~1.5GB），自动检测音频语言。
+- **流程:** 视频 -> FFmpeg (提取 16kHz WAV) -> Whisper.cpp (推理识别) -> 后处理校验 -> .srt 文件。
+- **抗幻觉:** `--no-fallback -et 2.4 -lpt -1.0 -bo 5 -bs 5`，后处理检测重复率 >70% 判定幻觉。
+- **双语字幕 (可选):** 开启后调用 DeepL API 翻译原文 -> 合并为双语 SRT（原文上行、翻译下行）。
 - **依赖管理:** `SubtitleService` 负责自动检测系统路径及 Homebrew 路径下的依赖。
 
 ### 2.3 稳定分页机制 (Cursor-based Pagination)
