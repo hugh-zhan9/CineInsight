@@ -12,10 +12,9 @@
             placeholder="输入新标签名称..."
             @keyup.enter="addNewTag"
           />
-          <input v-model="newTagColor" type="color" />
           <button @click="addNewTag" class="btn-primary">创建并添加</button>
         </div>
-        <p class="hint-text">输入新标签名称，选择颜色，点击创建并添加</p>
+        <p class="hint-text">输入标签名称，颜色将自动分配</p>
       </div>
 
       <div class="divider">或选择已有标签</div>
@@ -53,8 +52,7 @@ export default {
   emits: ['close', 'tag-added'],
   data() {
     return {
-      newTagName: '',
-      newTagColor: '#3b82f6'
+      newTagName: ''
     };
   },
   computed: {
@@ -68,7 +66,6 @@ export default {
     visible(val) {
       if (val) {
         this.newTagName = '';
-        this.newTagColor = '#3b82f6';
       }
     }
   },
@@ -88,7 +85,7 @@ export default {
       try {
         let newTag = null;
         try {
-          newTag = await CreateTag(tagName, this.newTagColor);
+          newTag = await CreateTag(tagName, '');
         } catch (err) {
           if (this.isDuplicateError(err)) {
             newTag = this.tags.find(t => t.name === tagName) || null;
@@ -104,7 +101,6 @@ export default {
 
         await AddTagToVideo(this.video.id, newTag.id);
         this.newTagName = '';
-        this.newTagColor = '#3b82f6';
         this.$emit('tag-added');
         this.$emit('close');
       } catch (err) {

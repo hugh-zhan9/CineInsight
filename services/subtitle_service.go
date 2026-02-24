@@ -16,9 +16,22 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+// 预编译正则表达式（避免每次调用重复编译）
+var (
+	srtBlockSplitter     = regexp.MustCompile(`\r?\n\r?\n`)
+	langDetectRe         = regexp.MustCompile(`auto-detected language:\s*(\w+)`)
+	langDetectReFallback = regexp.MustCompile(`language:\s*(\w+)`)
+)
+
+// DeepL HTTP 客户端（带超时控制）
+var deeplHTTPClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
 
 type SubtitleService struct {
 	ctx      context.Context
@@ -275,12 +288,16 @@ func (s *SubtitleService) transcribeCLIWithLang(wavPath, outputPrefix string) (s
 	output, err := cmd.CombinedOutput()
 	outputStr := string(output)
 
-	// 从输出中提取检测到的语言
+	// 从输出中提取检测到的语言（支持多种 whisper 输出格式）
 	detectedLang := "en" // 默认英文
-	langRe := regexp.MustCompile(`auto-detected language:\s*(\w+)`)
-	if matches := langRe.FindStringSubmatch(outputStr); len(matches) > 1 {
+	if matches := langDetectRe.FindStringSubmatch(outputStr); len(matches) > 1 {
 		detectedLang = strings.ToLower(matches[1])
 		log.Printf("[Subtitle] detected language: %s", detectedLang)
+	} else if matches := langDetectReFallback.FindStringSubmatch(outputStr); len(matches) > 1 {
+		detectedLang = strings.ToLower(matches[1])
+		log.Printf("[Subtitle] detected language (fallback): %s", detectedLang)
+	} else {
+		log.Printf("[Subtitle] WARNING: could not detect language from whisper output, defaulting to 'en'")
 	}
 
 	if err != nil {
@@ -392,7 +409,7 @@ func parseSRTEntries(srtPath string) ([]SRTEntry, error) {
 	}
 
 	var entries []SRTEntry
-	blocks := regexp.MustCompile(`\r?\n\r?\n`).Split(strings.TrimSpace(string(data)), -1)
+	blocks := srtBlockSplitter.Split(strings.TrimSpace(string(data)), -1)
 
 	for _, block := range blocks {
 		lines := strings.Split(strings.TrimSpace(block), "\n")
@@ -452,7 +469,7 @@ func (s *SubtitleService) translateDeepL(texts []string, sourceLang, targetLang,
 	req.Header.Set("Authorization", "DeepL-Auth-Key "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := deeplHTTPClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("翻译请求失败: %v", err)
 	}

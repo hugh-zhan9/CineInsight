@@ -3,8 +3,7 @@
     <div class="modal" @click.stop>
       <h2>标签管理</h2>
       <div class="form-group">
-        <input v-model="newTag.name" type="text" placeholder="标签名称" />
-        <input v-model="newTag.color" type="color" />
+        <input v-model="newTag.name" type="text" placeholder="标签名称" @keyup.enter="handleCreateTag" />
         <button @click="handleCreateTag" class="btn-primary" :disabled="createTagLoading">添加标签</button>
         <p v-if="tagCreateError" class="error-text">{{ tagCreateError }}</p>
       </div>
@@ -34,7 +33,7 @@ export default {
   emits: ['close', 'tags-changed', 'request-delete-tag'],
   data() {
     return {
-      newTag: { name: '', color: '#3b82f6' },
+      newTag: { name: '' },
       createTagLoading: false,
       tagCreateError: '',
       localTags: []
@@ -73,9 +72,8 @@ export default {
       this.createTagLoading = true;
 
       try {
-        await CreateTag(name, this.newTag.color);
+        await CreateTag(name, '');
         this.newTag.name = '';
-        this.newTag.color = '#3b82f6';
         this.$emit('tags-changed');
       } catch (err) {
         if (this.isDuplicateError(err)) {

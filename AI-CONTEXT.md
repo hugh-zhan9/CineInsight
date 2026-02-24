@@ -34,17 +34,22 @@
 - **双语字幕 (可选):** 开启后调用 DeepL API 翻译原文 -> 合并为双语 SRT（原文上行、翻译下行）。
 - **依赖管理:** `SubtitleService` 负责自动检测系统路径及 Homebrew 路径下的依赖。
 
-### 2.3 稳定分页机制 (Cursor-based Pagination)
+### 2.3 标签管理 (Tag Management)
+- **自动配色:** 创建标签时自动从 12 色预设调色板中轮换分配颜色，用户无需手动选色。
+- **软删除恢复:** 创建同名已删除标签时自动恢复（清除 `deleted_at`），避免唯一约束冲突。
+- **改名防冲突:** 改名时检查活跃标签和软删除标签，自动清理废弃记录。
+
+### 2.4 稳定分页机制 (Cursor-based Pagination)
 针对大规模视频列表设计了基于游标的稳定分页：
 - **排序规则:** `score ASC, size DESC, id DESC`。
 
-### 2.4 视频扫描与路径管理
+### 2.5 视频扫描与路径管理
 - **扫描机制:** 递归遍历目录，基于 `Settings` 中的 `VideoExtensions` 过滤。
 - **唯一性:** 在数据库层面通过 `idx_videos_path_active` 唯一索引（结合 `deleted_at IS NULL`）保证路径唯一。
 
 ## 3. 关键目录说明 (Directory Structure)
 
-- `/services`: **核心业务层**（Video, Subtitle, Tag, Directory 服务）。
+- `/services`: **核心业务层**（Video, Subtitle, Tag, Settings, Directory 服务）。
 - `/models`: **数据模型层**（GORM 结构体定义）。
 - `/database`: **持久化层**（SQLite 连接与迁移）。
 - `/frontend/src/components`: **UI 组件**（Vue 组件）。
