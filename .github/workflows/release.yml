@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            platform: darwin/universal
+            artifact: video-master-macOS.zip
+            package_cmd: cd build/bin && zip -r ../../video-master-macOS.zip video-master.app
+          - os: windows-latest
+            platform: windows/amd64
+            artifact: video-master-Windows-amd64.zip
+            package_cmd: Compress-Archive -Path build/bin/video-master.exe -DestinationPath video-master-Windows-amd64.zip
+          - os: ubuntu-latest
+            platform: linux/amd64
+            artifact: video-master-Linux-amd64.tar.gz
+            package_cmd: cd build/bin && tar -czf ../../video-master-Linux-amd64.tar.gz video-master
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # Linux 依赖（GTK + WebKit2GTK）
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
+      # 安装 Wails CLI
+      - name: Install Wails
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@latest
+
+      # 构建
+      - name: Build
+        run: wails build -platform ${{ matrix.platform }}
+
+      # 打包
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: ${{ matrix.package_cmd }}
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ${{ matrix.package_cmd }}
+
+      # 上传产物
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ matrix.artifact }}
+          draft: false
