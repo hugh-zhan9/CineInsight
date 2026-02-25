@@ -101,15 +101,21 @@ export default {
       this.directories = newDirectories;
     },
     async incrementalScanAll() {
-      const { ScanDirectory, AddVideo, DeleteVideo, GetVideosByDirectory } = await import('../wailsjs/go/main/App');
+      const { ScanDirectoryWithInfo, AddVideo, DeleteVideo, RelocateVideo, GetVideosByDirectory } = await import('../wailsjs/go/main/App');
       for (const dir of this.directories) {
         try {
-          const files = await ScanDirectory(dir.path);
+          const scannedFiles = await ScanDirectoryWithInfo(dir.path);
           const existingVideos = await GetVideosByDirectory(dir.path);
-          const scannedSet = new Set(files);
+
+          // 构建磁盘文件索引 (path → {path, size})
+          const scannedMap = new Map();
+          for (const f of scannedFiles) {
+            scannedMap.set(f.path, f);
+          }
+
+          // 去重数据库记录
           const keptByPath = new Map();
           const duplicateVideos = [];
-
           for (const video of existingVideos) {
             if (!keptByPath.has(video.path)) {
               keptByPath.set(video.path, video);
@@ -118,13 +124,47 @@ export default {
             }
           }
 
-          const duplicateIDSet = new Set(duplicateVideos.map(video => video.id));
-          const staleVideos = existingVideos.filter(video => !duplicateIDSet.has(video.id) && !scannedSet.has(video.path));
-          const toDelete = [...duplicateVideos, ...staleVideos];
-          const toAdd = files.filter(file => !keptByPath.has(file));
+          const duplicateIDSet = new Set(duplicateVideos.map(v => v.id));
+          // stale: 数据库有但磁盘没有
+          const staleVideos = existingVideos.filter(v => !duplicateIDSet.has(v.id) && !scannedMap.has(v.path));
+          // new: 磁盘有但数据库没有
+          let newFiles = scannedFiles.filter(f => !keptByPath.has(f.path));
 
-          for (const file of toAdd) {
-            try { await AddVideo(file); } catch (err) { /* skip */ }
+          // 迁移配对：用 name + size 匹配 stale 记录和新文件
+          const staleIndex = new Map(); // key: "name|size" → video
+          for (const video of staleVideos) {
+            const key = `${video.name}|${video.size}`;
+            if (!staleIndex.has(key)) {
+              staleIndex.set(key, video);
+            }
+          }
+
+          const relocatedIDs = new Set();
+          const relocatedPaths = new Set();
+          for (const file of newFiles) {
+            const basename = file.path.split('/').pop().split('\\').pop();
+            const key = `${basename}|${file.size}`;
+            const match = staleIndex.get(key);
+            if (match && !relocatedIDs.has(match.id)) {
+              try {
+                await RelocateVideo(match.id, file.path);
+                relocatedIDs.add(match.id);
+                relocatedPaths.add(file.path);
+                staleIndex.delete(key);
+                console.log(`文件迁移: ${match.path} → ${file.path}`);
+              } catch (err) {
+                console.error('迁移失败:', err);
+              }
+            }
+          }
+
+          // 过滤掉已配对的
+          const remainingNew = newFiles.filter(f => !relocatedPaths.has(f.path));
+          const remainingStale = staleVideos.filter(v => !relocatedIDs.has(v.id));
+          const toDelete = [...duplicateVideos, ...remainingStale];
+
+          for (const file of remainingNew) {
+            try { await AddVideo(file.path); } catch (err) { /* skip */ }
           }
           for (const video of toDelete) {
             try { await DeleteVideo(video.id, false); } catch (err) { /* skip */ }

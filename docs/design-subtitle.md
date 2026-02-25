@@ -59,6 +59,15 @@ type SubtitleService struct {
     *   前置检查依赖，若缺失返回特定错误。
     *   通过事件 `subtitle-progress` 推送进度。
     *   成功后生成 SRT 文件到视频同级目录。
+    *   检测到幻觉时返回 `HALLUCINATION_DETECTED` 错误前缀。
+
+4.  **ForceGenerateSubtitle(videoID uint) error**
+    *   强制生成字幕，跳过幻觉检测（`validateSRT`）。
+    *   用户在幻觉警告弹窗中确认后调用。
+
+5.  **CancelSubtitle()**
+    *   取消正在进行的字幕生成任务。
+    *   通过 `context.WithCancel` + `exec.CommandContext` 终止 ffmpeg/whisper 子进程。
 
 ### 2.3 业务流程
 
@@ -82,7 +91,9 @@ type SubtitleService struct {
     *   包含抗幻觉参数：`-l auto --no-fallback -et 2.4 -lpt -1.0 -bo 5 -bs 5`。
     *   自动检测音频语言。
 5.  **后处理校验**:
-    *   检测 SRT 中文本重复率，超过 70% 判定为模型幻觉，报错删除文件。
+    *   检测 SRT 中文本重复率，超过 85% 判定为模型幻觉。
+    *   幻觉时返回 `HALLUCINATION_DETECTED` 错误，前端弹窗询问用户是否强制生成。
+    *   `ForceGenerateSubtitle` 跳过此步直接保留结果。
 6.  **双语翻译 (可选)**:
     *   若用户开启双语字幕且检测语言 ≠ 目标语言：
     *   调用 DeepL API 翻译原文 SRT（支持任意语言对，自动检测源语言）。
@@ -113,7 +124,8 @@ type SubtitleService struct {
 ### 2.5 异常处理
 - **网络超时**: 下载和 DeepL API 调用设置超时重试。
 - **权限问题**: macOS 首次运行 ffmpeg 可能触发安全警告。
-- **模型幻觉**: 后处理检测重复输出，超阈值自动报错。
+- **模型幻觉**: 后处理检测重复输出，超 85% 阈值弹窗确认，用户可强制生成或放弃。
+- **任务取消**: 用户可在生成过程中点击“取消生成”按钮，通过 context 取消终止子进程。
 - **DeepL 错误**: API Key 无效(403)、额度用完(456) 等均有友好提示。
 - **翻译失败降级**: 双语翻译失败时保留原文 SRT，不影响基本功能。
 - **标签软删除冲突**: 创建同名已删除标签时自动恢复，改名时自动清理废弃记录。

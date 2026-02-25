@@ -227,3 +227,22 @@ export namespace models {
 
 }
 
+export namespace services {
+	
+	export class ScannedFile {
+	    path: string;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScannedFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.size = source["size"];
+	    }
+	}
+
+}
+

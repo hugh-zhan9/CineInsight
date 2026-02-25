@@ -14,6 +14,10 @@ export function AddVideo(arg1) {
   return window['go']['main']['App']['AddVideo'](arg1);
 }
 
+export function CancelSubtitle() {
+  return window['go']['main']['App']['CancelSubtitle']();
+}
+
 export function CheckSubtitleDependencies() {
   return window['go']['main']['App']['CheckSubtitleDependencies']();
 }
@@ -36,6 +40,10 @@ export function DeleteVideo(arg1, arg2) {
 
 export function DownloadSubtitleDependencies() {
   return window['go']['main']['App']['DownloadSubtitleDependencies']();
+}
+
+export function ForceGenerateSubtitle(arg1) {
+  return window['go']['main']['App']['ForceGenerateSubtitle'](arg1);
 }
 
 export function GenerateSubtitle(arg1) {
@@ -78,12 +86,24 @@ export function PlayVideo(arg1) {
   return window['go']['main']['App']['PlayVideo'](arg1);
 }
 
+export function RelocateVideo(arg1, arg2) {
+  return window['go']['main']['App']['RelocateVideo'](arg1, arg2);
+}
+
 export function RemoveTagFromVideo(arg1, arg2) {
   return window['go']['main']['App']['RemoveTagFromVideo'](arg1, arg2);
 }
 
+export function RenameVideo(arg1, arg2) {
+  return window['go']['main']['App']['RenameVideo'](arg1, arg2);
+}
+
 export function ScanDirectory(arg1) {
   return window['go']['main']['App']['ScanDirectory'](arg1);
+}
+
+export function ScanDirectoryWithInfo(arg1) {
+  return window['go']['main']['App']['ScanDirectoryWithInfo'](arg1);
 }
 
 export function SearchVideos(arg1, arg2, arg3, arg4, arg5) {

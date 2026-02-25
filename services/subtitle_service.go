@@ -34,10 +34,11 @@ var deeplHTTPClient = &http.Client{
 }
 
 type SubtitleService struct {
-	ctx      context.Context
-	BaseDir  string
-	BinDir   string
-	ModelDir string
+	ctx        context.Context
+	cancelFunc context.CancelFunc // 取消当前生成任务
+	BaseDir    string
+	BinDir     string
+	ModelDir   string
 }
 
 func NewSubtitleService(baseDir string) *SubtitleService {
@@ -50,6 +51,14 @@ func NewSubtitleService(baseDir string) *SubtitleService {
 
 func (s *SubtitleService) SetContext(ctx context.Context) {
 	s.ctx = ctx
+}
+
+// CancelGeneration 取消正在进行的字幕生成任务
+func (s *SubtitleService) CancelGeneration() {
+	if s.cancelFunc != nil {
+		s.cancelFunc()
+		log.Printf("[Subtitle] generation cancelled by user")
+	}
 }
 
 func (s *SubtitleService) CheckDependencies() (map[string]bool, error) {
@@ -139,7 +148,17 @@ func (s *SubtitleService) DownloadDependencies() error {
 }
 
 func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
-	bilingualEnabled bool, bilingualLang string, deeplApiKey string) error {
+	bilingualEnabled bool, bilingualLang string, deeplApiKey string, forceGenerate bool) error {
+
+	// 创建可取消的子 context
+	ctx, cancel := context.WithCancel(s.ctx)
+	s.cancelFunc = cancel
+	defer func() {
+		cancel()
+		s.cancelFunc = nil
+	}()
+	_ = ctx // 后续传给 exec.CommandContext
+
 	s.emitProgress("process", 0, "Initializing...")
 
 	status, err := s.CheckDependencies()
@@ -161,7 +180,7 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 	tempWav := filepath.Join(s.BaseDir, fmt.Sprintf("temp_%d.wav", videoID))
 	defer os.Remove(tempWav)
 
-	if err := s.extractAudio(videoPath, tempWav); err != nil {
+	if err := s.extractAudio(ctx, videoPath, tempWav); err != nil {
 		return err
 	}
 
@@ -169,17 +188,19 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 	s.emitProgress("process", 20, "Transcribing (this may take a while)...")
 	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
 
-	detectedLang, err := s.transcribeCLIWithLang(tempWav, outputPrefix)
+	detectedLang, err := s.transcribeCLIWithLang(ctx, tempWav, outputPrefix)
 	if err != nil {
 		return err
 	}
 
 	srtPath := outputPrefix + ".srt"
 
-	// 后处理：检测幻觉输出
-	s.emitProgress("process", 50, "Validating output...")
-	if err := s.validateSRT(srtPath); err != nil {
-		return err
+	// 后处理：检测幻觉输出（forceGenerate 时跳过）
+	if !forceGenerate {
+		s.emitProgress("process", 50, "Validating output...")
+		if err := s.validateSRT(srtPath); err != nil {
+			return err
+		}
 	}
 
 	// 双语字幕处理
@@ -222,16 +243,19 @@ done:
 	return nil
 }
 
-func (s *SubtitleService) extractAudio(videoPath, outputPath string) error {
+func (s *SubtitleService) extractAudio(ctx context.Context, videoPath, outputPath string) error {
 	ffmpegBin := s.findBinary("ffmpeg")
 	if ffmpegBin == "" {
 		return fmt.Errorf("未找到 FFmpeg，请重新安装依赖")
 	}
 
 	log.Printf("[Subtitle] extractAudio: ffmpeg=%s input=%s output=%s\n", ffmpegBin, videoPath, outputPath)
-	cmd := exec.Command(ffmpegBin, "-i", videoPath, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", outputPath, "-y")
+	cmd := exec.CommandContext(ctx, ffmpegBin, "-i", videoPath, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", outputPath, "-y")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("字幕生成已取消")
+		}
 		detail := string(output)
 		log.Printf("[Subtitle] ffmpeg error: %s\n%s\n", err, detail)
 		// User-friendly error messages
@@ -262,7 +286,7 @@ func (s *SubtitleService) findWhisperBin() string {
 }
 
 // transcribeCLIWithLang 转录音频并返回检测到的语言代码
-func (s *SubtitleService) transcribeCLIWithLang(wavPath, outputPrefix string) (string, error) {
+func (s *SubtitleService) transcribeCLIWithLang(ctx context.Context, wavPath, outputPrefix string) (string, error) {
 	whisperBin := s.findWhisperBin()
 	if whisperBin == "" {
 		return "", fmt.Errorf("未找到 Whisper，请重新安装依赖")
@@ -272,7 +296,7 @@ func (s *SubtitleService) transcribeCLIWithLang(wavPath, outputPrefix string) (s
 
 	log.Printf("[Subtitle] transcribeCLIWithLang: whisper=%s model=%s input=%s output=%s\n", whisperBin, modelPath, wavPath, outputPrefix)
 
-	cmd := exec.Command(whisperBin,
+	cmd := exec.CommandContext(ctx, whisperBin,
 		"-m", modelPath,
 		"-f", wavPath,
 		"-osrt",
@@ -301,6 +325,9 @@ func (s *SubtitleService) transcribeCLIWithLang(wavPath, outputPrefix string) (s
 	}
 
 	if err != nil {
+		if ctx.Err() != nil {
+			return "", fmt.Errorf("字幕生成已取消")
+		}
 		log.Printf("[Subtitle] whisper error: %s\n%s\n", err, outputStr)
 		if strings.Contains(outputStr, "failed to open") || strings.Contains(outputStr, "no such file") {
 			return "", fmt.Errorf("模型文件缺失，请重新安装依赖")
@@ -358,9 +385,9 @@ func (s *SubtitleService) validateSRT(srtPath string) error {
 	repeatRatio := float64(maxCount) / float64(totalLines)
 	log.Printf("[Subtitle] validateSRT: totalLines=%d maxCount=%d ratio=%.2f maxLine=%q", totalLines, maxCount, repeatRatio, maxLine)
 
-	if repeatRatio > 0.7 {
+	if repeatRatio > 0.85 {
 		os.Remove(srtPath)
-		return fmt.Errorf("检测到异常输出（模型幻觉），字幕内容大量重复。请尝试使用更短的视频片段或检查音频质量")
+		return fmt.Errorf("HALLUCINATION_DETECTED: 检测到异常输出（疑似模型幻觉），字幕内容重复率 %.0f%%。可选择强制生成保留结果", repeatRatio*100)
 	}
 
 	return nil

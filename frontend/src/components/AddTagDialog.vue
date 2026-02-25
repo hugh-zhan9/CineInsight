@@ -3,26 +3,24 @@
     <div class="modal" @click.stop>
       <h2>为视频添加标签</h2>
 
-      <!-- 手动输入新标签 -->
+      <!-- 输入框：同时支持创建新标签和搜索已有标签 -->
       <div class="form-group">
         <div class="input-with-button">
           <input
             v-model="newTagName"
             type="text"
-            placeholder="输入新标签名称..."
+            placeholder="输入标签名称（搜索或创建）..."
             @keyup.enter="addNewTag"
           />
           <button @click="addNewTag" class="btn-primary">创建并添加</button>
         </div>
-        <p class="hint-text">输入标签名称，颜色将自动分配</p>
+        <p class="hint-text">输入名称实时过滤已有标签，也可直接创建新标签</p>
       </div>
 
-      <div class="divider">或选择已有标签</div>
-
-      <!-- 已有标签列表 -->
+      <!-- 已有标签列表（由输入框实时过滤） -->
       <div class="tag-list">
         <div
-          v-for="tag in availableTags"
+          v-for="tag in filteredTags"
           :key="tag.id"
           class="tag-item clickable"
           @click="addExistingTag(tag)"
@@ -30,7 +28,10 @@
           <span class="tag-color" :style="{ backgroundColor: tag.color }"></span>
           <span>{{ tag.name }}</span>
         </div>
-        <div v-if="availableTags.length === 0" class="empty-hint">
+        <div v-if="filteredTags.length === 0 && newTagName.trim()" class="empty-hint">
+          未找到匹配的标签，可点“创建并添加”
+        </div>
+        <div v-else-if="filteredTags.length === 0" class="empty-hint">
           所有标签都已添加
         </div>
       </div>
@@ -38,6 +39,8 @@
     </div>
   </div>
 </template>
+
+
 
 <script>
 import { CreateTag, AddTagToVideo } from '../../wailsjs/go/main/App';
@@ -60,6 +63,11 @@ export default {
       if (!this.video || !this.video.tags) return this.tags;
       const videoTagIds = this.video.tags.map(t => t.id);
       return this.tags.filter(t => !videoTagIds.includes(t.id));
+    },
+    filteredTags() {
+      const kw = this.newTagName.trim().toLowerCase();
+      if (!kw) return this.availableTags;
+      return this.availableTags.filter(t => t.name.toLowerCase().includes(kw));
     }
   },
   watch: {

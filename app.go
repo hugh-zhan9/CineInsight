@@ -127,6 +127,27 @@ func (a *App) ScanDirectory(dir string) ([]string, error) {
 	return files, err
 }
 
+// ScanDirectoryWithInfo 扫描目录（附带文件大小，用于迁移检测）
+func (a *App) ScanDirectoryWithInfo(dir string) ([]services.ScannedFile, error) {
+	files, err := a.videoService.ScanDirectoryWithInfo(dir)
+	log.Printf("API ScanDirectoryWithInfo dir=%s result=%d err=%v", dir, len(files), err)
+	return files, err
+}
+
+// RelocateVideo 更新视频路径（文件迁移，保留标签等元数据）
+func (a *App) RelocateVideo(id uint, newPath string) error {
+	err := a.videoService.RelocateVideo(id, newPath)
+	log.Printf("API RelocateVideo id=%d newPath=%s err=%v", id, newPath, err)
+	return err
+}
+
+// RenameVideo 重命名视频文件及数据库记录
+func (a *App) RenameVideo(id uint, newName string) error {
+	err := a.videoService.RenameVideo(id, newName)
+	log.Printf("API RenameVideo id=%d newName=%s err=%v", id, newName, err)
+	return err
+}
+
 // AddVideo 添加视频
 func (a *App) AddVideo(path string) (*models.Video, error) {
 	video, err := a.videoService.AddVideo(path)
@@ -295,5 +316,30 @@ func (a *App) GenerateSubtitle(videoID uint) error {
 		deeplApiKey = settings.DeepLApiKey
 	}
 	log.Printf("API GenerateSubtitle id=%d path=%s bilingual=%v lang=%s", videoID, video.Path, bilingualEnabled, bilingualLang)
-	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey)
+	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, false)
+}
+
+// ForceGenerateSubtitle 强制生成字幕（跳过幻觉检测）
+func (a *App) ForceGenerateSubtitle(videoID uint) error {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return err
+	}
+	settings, _ := a.settingsService.GetSettings()
+	bilingualEnabled := false
+	bilingualLang := "zh"
+	deeplApiKey := ""
+	if settings != nil {
+		bilingualEnabled = settings.BilingualEnabled
+		bilingualLang = settings.BilingualLang
+		deeplApiKey = settings.DeepLApiKey
+	}
+	log.Printf("API ForceGenerateSubtitle id=%d path=%s", videoID, video.Path)
+	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, true)
+}
+
+// CancelSubtitle 取消正在进行的字幕生成任务
+func (a *App) CancelSubtitle() {
+	a.subtitleService.CancelGeneration()
+	log.Printf("API CancelSubtitle")
 }

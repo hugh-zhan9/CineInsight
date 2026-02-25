@@ -25,7 +25,7 @@
         :key="tag.id"
         class="tag-chip tag-chip-wrap"
         :class="{ active: isTagSelected(tag.id) }"
-        :style="{ backgroundColor: tag.color }"
+        :style="{ backgroundColor: tagBgColor(tag.color) }"
         @click="toggleTagFilter(tag.id)"
       >
         <span class="tag-chip-name">{{ tag.name }}</span>
@@ -53,7 +53,7 @@
               v-for="tag in (video.tags || [])" 
               :key="tag.id"
               class="tag-badge"
-              :style="{ backgroundColor: tag.color }"
+              :style="{ backgroundColor: tagBgColor(tag.color) }"
             >
               {{ tag.name }}
               <button @click="removeTag(video, tag)" class="tag-remove">×</button>
@@ -72,6 +72,7 @@
           >
             {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
           </button>
+          <button @click="renameVideo(video)" class="btn-action">重命名</button>
         <button @click="confirmDelete(video)" class="btn-danger" :disabled="deletingIds.includes(video.id)">删除</button>
         </div>
       </div>
@@ -94,7 +95,29 @@
     >
       <div @click="playVideo(contextMenu.video.id)">播放</div>
       <div @click="openDirectory(contextMenu.video.id)">打开目录</div>
+      <div @click="renameVideo(contextMenu.video)">重命名</div>
       <div @click="confirmDelete(contextMenu.video)" class="danger">删除</div>
+    </div>
+
+    <!-- 重命名弹窗 -->
+    <div v-if="renameDialog.show" class="modal-overlay">
+      <div class="modal download-modal">
+        <h3>重命名视频</h3>
+        <input
+          v-model="renameDialog.newName"
+          type="text"
+          class="search-input"
+          style="margin: 15px 0; width: 100%;"
+          placeholder="输入新文件名"
+          @keyup.enter="executeRename"
+          ref="renameInput"
+        />
+        <p style="font-size: 0.8em; color: #999;">扩展名会自动保留（{{ renameDialog.ext }}）</p>
+        <div class="modal-actions">
+          <button @click="renameDialog.show = false" class="btn-secondary">取消</button>
+          <button @click="executeRename" class="btn-primary">确认</button>
+        </div>
+      </div>
     </div>
 
     <!-- 弹窗组件 -->
@@ -148,12 +171,15 @@
             <div class="progress-bar" :style="{ width: subtitleDialog.percent + '%' }"></div>
           </div>
           <p class="progress-text">{{ subtitleDialog.percent }}%</p>
+          <div class="modal-actions">
+            <button @click="cancelSubtitle" class="btn-danger">取消生成</button>
+          </div>
         </template>
         
         <!-- 确认按钮 -->
         <div v-if="subtitleDialog.mode === 'confirm'" class="modal-actions">
-          <button @click="subtitleDialog.show = false" class="btn-secondary">取消</button>
-          <button @click="onSubtitleConfirm" class="btn-primary">确认下载</button>
+          <button @click="subtitleDialog.show = false; pendingForceVideo = null;" class="btn-secondary">取消</button>
+          <button @click="onSubtitleConfirm" class="btn-primary">{{ pendingForceVideo ? '强制生成' : '确认下载' }}</button>
         </div>
         
         <!-- 结果关闭按钮 -->
@@ -197,7 +223,7 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings, CheckSubtitleDependencies, DownloadSubtitleDependencies, GenerateSubtitle } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings, CheckSubtitleDependencies, DownloadSubtitleDependencies, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -235,6 +261,9 @@ export default {
       generatingSubtitleIds: [],
       subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0 },
       pendingSubtitleVideo: null,
+      pendingForceVideo: null,
+      // 重命名弹窗
+      renameDialog: { show: false, video: null, newName: '', ext: '' },
     };
   },
   mounted() {
@@ -293,7 +322,33 @@ export default {
       }
     },
     async onSubtitleConfirm() {
-      // 用户确认下载依赖
+      // 场景一：用户确认强制生成字幕（跳过幻觉检测）
+      if (this.pendingForceVideo) {
+        const video = this.pendingForceVideo;
+        this.pendingForceVideo = null;
+        this.subtitleDialog.mode = 'progress';
+        this.subtitleDialog.title = '正在强制生成字幕';
+        this.subtitleDialog.percent = 0;
+        this.subtitleDialog.msg = '跳过质量检测，重新生成...';
+        this.generatingSubtitleIds.push(video.id);
+        try {
+          await ForceGenerateSubtitle(video.id);
+          const idx = this.generatingSubtitleIds.indexOf(video.id);
+          if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+          this.subtitleDialog.mode = 'result';
+          this.subtitleDialog.title = '✅ 字幕生成完成';
+          this.subtitleDialog.msg = '字幕文件已保存到视频同目录下（已跳过质量检测）。';
+        } catch (err) {
+          const idx = this.generatingSubtitleIds.indexOf(video.id);
+          if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+          this.subtitleDialog.mode = 'result';
+          this.subtitleDialog.title = '❌ 强制生成失败';
+          this.subtitleDialog.msg = String(err);
+        }
+        return;
+      }
+
+      // 场景二：用户确认下载依赖
       this.subtitleDialog.mode = 'progress';
       this.subtitleDialog.title = '正在下载组件';
       this.subtitleDialog.percent = 0;
@@ -325,10 +380,57 @@ export default {
         console.error('[Subtitle] Generate error:', err);
         const idx = this.generatingSubtitleIds.indexOf(video.id);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+        
+        // 检测幻觉警告：弹窗询问是否强制生成
+        const errMsg = String(err);
+        if (errMsg.includes('HALLUCINATION_DETECTED')) {
+          this.subtitleDialog.show = true;
+          this.subtitleDialog.mode = 'confirm';
+          this.subtitleDialog.title = '⚠️ 字幕质量警告';
+          this.subtitleDialog.msg = errMsg.replace('HALLUCINATION_DETECTED: ', '') + '\n\n是否强制生成，保留当前结果？';
+          this.pendingForceVideo = video;
+          return;
+        }
+
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'result';
         this.subtitleDialog.title = '❌ 生成字幕失败';
-        this.subtitleDialog.msg = String(err);
+        this.subtitleDialog.msg = errMsg;
+      }
+    },
+    async renameVideo(video) {
+      const ext = video.name.lastIndexOf('.') > 0 ? video.name.substring(video.name.lastIndexOf('.')) : '';
+      const baseName = ext ? video.name.slice(0, -ext.length) : video.name;
+      this.renameDialog = { show: true, video, newName: baseName, ext: ext || '(无)' };
+      this.$nextTick(() => {
+        if (this.$refs.renameInput) this.$refs.renameInput.focus();
+      });
+    },
+    async executeRename() {
+      const { video, newName, ext } = this.renameDialog;
+      if (!newName.trim()) return;
+      try {
+        await RenameVideo(video.id, newName.trim());
+        const idx = this.videos.findIndex(v => v.id === video.id);
+        if (idx !== -1) {
+          const finalName = newName.trim() + (ext !== '(无)' ? ext : '');
+          this.videos[idx].name = finalName;
+          this.videos[idx].path = video.path.replace(video.name, finalName);
+        }
+        this.renameDialog.show = false;
+      } catch (err) {
+        console.error('重命名失败:', err);
+        alert('重命名失败: ' + err);
+      }
+    },
+    async cancelSubtitle() {
+      try {
+        await CancelSubtitle();
+        this.subtitleDialog.show = false;
+        // 清理生成中状态
+        this.generatingSubtitleIds = [];
+      } catch (err) {
+        console.error('取消失败:', err);
       }
     },
     hideContextMenu() {
@@ -359,6 +461,13 @@ export default {
       } finally {
         this.loading = false;
       }
+    },
+    tagBgColor(hex) {
+      if (!hex || !hex.startsWith('#')) return hex;
+      const r = parseInt(hex.slice(1,3), 16);
+      const g = parseInt(hex.slice(3,5), 16);
+      const b = parseInt(hex.slice(5,7), 16);
+      return `rgba(${r},${g},${b},0.35)`;
     },
     resetAndLoadVideos() {
       this.videos = [];

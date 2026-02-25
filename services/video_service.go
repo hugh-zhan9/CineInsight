@@ -219,7 +219,26 @@ func (s *VideoService) RemoveTagFromVideo(videoID uint, tagID uint) error {
 
 // ScanDirectory 扫描目录获取视频文件
 func (s *VideoService) ScanDirectory(dir string) ([]string, error) {
-	var videoFiles []string
+	files, err := s.ScanDirectoryWithInfo(dir)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, len(files))
+	for i, f := range files {
+		paths[i] = f.Path
+	}
+	return paths, nil
+}
+
+// ScannedFile 扫描结果（附带文件大小，用于迁移检测）
+type ScannedFile struct {
+	Path string `json:"path"`
+	Size int64  `json:"size"`
+}
+
+// ScanDirectoryWithInfo 扫描目录获取视频文件（附带文件大小）
+func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) {
+	var videoFiles []ScannedFile
 
 	// 从设置中获取支持的视频格式
 	var settings models.Settings
@@ -261,7 +280,7 @@ func (s *VideoService) ScanDirectory(dir string) ([]string, error) {
 		ext := strings.ToLower(filepath.Ext(path))
 		for _, videoExt := range videoExts {
 			if ext == strings.ToLower(videoExt) {
-				videoFiles = append(videoFiles, path)
+				videoFiles = append(videoFiles, ScannedFile{Path: path, Size: info.Size()})
 				break
 			}
 		}
@@ -271,6 +290,87 @@ func (s *VideoService) ScanDirectory(dir string) ([]string, error) {
 	log.Printf("扫描目录完成 dir=%s files=%d", dir, len(videoFiles))
 
 	return videoFiles, err
+}
+
+// RelocateVideo 更新视频路径（文件迁移场景，保留标签等元数据）
+func (s *VideoService) RelocateVideo(id uint, newPath string) error {
+	newPath = filepath.Clean(strings.TrimSpace(newPath))
+
+	// 验证新路径文件存在
+	if _, err := os.Stat(newPath); err != nil {
+		return fmt.Errorf("目标文件不存在: %w", err)
+	}
+
+	// 检查新路径是否已被其他记录占用
+	var existing models.Video
+	if err := database.DB.Where("path = ? AND id != ?", newPath, id).First(&existing).Error; err == nil {
+		return fmt.Errorf("目标路径已被其他记录占用: %s", newPath)
+	}
+
+	result := database.DB.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
+		"path":      newPath,
+		"directory": filepath.Dir(newPath),
+		"name":      filepath.Base(newPath),
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	log.Printf("视频迁移 id=%d newPath=%s", id, newPath)
+	return nil
+}
+
+// RenameVideo 重命名视频文件及数据库记录
+func (s *VideoService) RenameVideo(id uint, newName string) error {
+	newName = strings.TrimSpace(newName)
+	if newName == "" {
+		return fmt.Errorf("文件名不能为空")
+	}
+	// 禁止路径分隔符
+	if strings.ContainsAny(newName, "/\\") {
+		return fmt.Errorf("文件名不能包含路径分隔符")
+	}
+
+	var video models.Video
+	if err := database.DB.First(&video, id).Error; err != nil {
+		return fmt.Errorf("视频不存在: %w", err)
+	}
+
+	// 保留原始扩展名（如果新名称没带扩展名）
+	oldExt := filepath.Ext(video.Name)
+	if filepath.Ext(newName) == "" {
+		newName = newName + oldExt
+	}
+
+	oldPath := video.Path
+	newPath := filepath.Join(video.Directory, newName)
+
+	// 新旧路径相同则跳过
+	if oldPath == newPath {
+		return nil
+	}
+
+	// 检查目标路径是否已存在
+	if _, err := os.Stat(newPath); err == nil {
+		return fmt.Errorf("目标文件已存在: %s", newName)
+	}
+
+	// 重命名磁盘文件
+	if err := os.Rename(oldPath, newPath); err != nil {
+		return fmt.Errorf("重命名文件失败: %w", err)
+	}
+
+	// 更新数据库记录
+	if err := database.DB.Model(&video).Updates(map[string]interface{}{
+		"name": newName,
+		"path": newPath,
+	}).Error; err != nil {
+		// 回滚：将文件名改回去
+		_ = os.Rename(newPath, oldPath)
+		return fmt.Errorf("更新数据库失败: %w", err)
+	}
+
+	log.Printf("视频重命名 id=%d oldName=%s newName=%s", id, video.Name, newName)
+	return nil
 }
 
 // GetVideosByDirectory 按目录获取视频记录
