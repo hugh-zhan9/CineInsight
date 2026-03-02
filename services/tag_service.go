@@ -18,6 +18,7 @@ func (s *TagService) GetAllTags() ([]models.Tag, error) {
 
 // 预设标签调色板（视觉和谐的 12 色）
 var tagColorPalette = []string{
+	"#0D9488", // 品牌青
 	"#3b82f6", // 蓝
 	"#ef4444", // 红
 	"#10b981", // 绿
