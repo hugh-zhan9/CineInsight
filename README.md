@@ -1,4 +1,4 @@
-# Video Master (视频管理器)
+# 析微影策
 
 A cross-platform desktop video manager featuring smart random playback, tag management, and offline bilingual subtitle generation.
 (一款跨平台本地视频管理应用，支持智能随机播放、多维度标签库及离线双语字幕生成。)

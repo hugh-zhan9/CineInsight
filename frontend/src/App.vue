@@ -1,7 +1,7 @@
 <template>
   <div id="app">
     <div class="header">
-      <h1>Video Master</h1>
+      <h1>析微影策</h1>
       <div class="header-actions">
         <button 
           @click="currentPage = 'videos'" 

@@ -1,10 +1,10 @@
-# AI-CONTEXT.md: 项目核心上下文 (Single Source of Truth)
+# AI-CONTEXT.md: 析微影策核心上下文 (Single Source of Truth)
 
-> 本文件是本项目所有 AI 助手（Gemini, Claude, GPT 等）的权威上下文来源。
+> 本文件是“析微影策 (Xī Wēi Yǐng Cè)”项目所有 AI 助手（Gemini, Claude, GPT 等）的权威上下文来源。
 
 ## 1. 项目架构与技术栈 (Architecture & Stack)
 
-本项目是一个基于 **Wails v2** 的跨平台桌面视频管理工具，结合了 Go 后端的高性能和 Vue 3 前端的高效开发体验。
+本项目是一个基于 **Wails v2** 的跨平台桌面视频管理系统，命名为“析微影策”，旨在通过 AI 分析与智能策略提供极致的本地影视管理体验。
 
 - **后端 (Go 1.23+):**
   - **框架:** Wails v2 (负责桥接 Go 方法到前端、窗口管理、事件分发)。
