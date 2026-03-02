@@ -235,8 +235,8 @@ html, body {
 }
 
 .nav-btn.active {
-  color: #3b82f6;
-  border-bottom-color: #3b82f6;
+  color: #0D9488;
+  border-bottom-color: #0D9488;
 }
 
 .page-content {
@@ -265,7 +265,7 @@ html, body {
 
 .btn-primary {
   padding: 8px 16px;
-  background: #3b82f6;
+  background: #0D9488;
   color: white;
   border: none;
   border-radius: 4px;
@@ -401,7 +401,7 @@ html, body {
 }
 
 .tag-chip:hover {
-  border-color: #3b82f6;
+  border-color: #0D9488;
 }
 
 .tag-chip.active {
