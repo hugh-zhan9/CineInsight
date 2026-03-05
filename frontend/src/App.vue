@@ -1,5 +1,5 @@
 <template>
-  <div id="app" :data-theme="settings.theme === 'system' ? systemTheme : settings.theme">
+  <div id="app">
     <div class="header">
       <div class="header-left">
         <h1>析微影策</h1>
@@ -74,15 +74,26 @@ export default {
     
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     this.systemTheme = mediaQuery.matches ? 'dark' : 'light';
+    this.applyTheme();
     mediaQuery.addEventListener('change', e => {
       this.systemTheme = e.matches ? 'dark' : 'light';
+      this.applyTheme();
     });
 
     if (this.settings.auto_scan_on_startup && this.directories.length > 0) {
       setTimeout(() => this.incrementalScanAll(), 0);
     }
   },
+  watch: {
+    'settings.theme'() {
+      this.applyTheme();
+    }
+  },
   methods: {
+    applyTheme() {
+      const theme = this.settings.theme === 'system' ? this.systemTheme : this.settings.theme;
+      document.documentElement.setAttribute('data-theme', theme);
+    },
     async loadSettings() {
       try { this.settings = await GetSettings(); } catch (err) {}
     },
@@ -238,7 +249,7 @@ html, body {
 
 .tag-badge, .btn-add-tag { height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
 .tag-badge { border: 1px solid rgba(0,0,0,0.1); color: var(--text-primary); }
-.tag-remove { background: transparent; border: none; cursor: pointer; opacity: 0.5; font-size: 14px; color: inherit; }
+.tag-remove, .tag-chip-delete { background: transparent; border: none; cursor: pointer; opacity: 0.5; font-size: 14px; color: inherit; padding: 0; outline: none; }
 .btn-add-tag { border: 1px dashed var(--text-muted); background: transparent; color: var(--text-secondary); cursor: pointer; }
 
 /* --- Switch --- */
