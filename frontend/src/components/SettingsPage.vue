@@ -75,6 +75,8 @@
         <textarea 
           v-model="settingsForm.video_extensions" 
           rows="3"
+          class="text-input"
+          style="height: auto; min-height: 80px; padding: 12px; resize: vertical;"
           placeholder=".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
         ></textarea>
         <p class="help-text">用逗号分隔，留空则使用默认配置。</p>
