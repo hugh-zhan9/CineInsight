@@ -105,10 +105,10 @@ func (a *App) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize 
 	return videos, err
 }
 
-// SearchVideosWithFilters 组合搜索视频（名称 + 标签，支持分页）
-func (a *App) SearchVideosWithFilters(keyword string, tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	videos, err := a.videoService.SearchVideosWithFilters(keyword, tagIDs, cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API SearchVideosWithFilters keyword=%q tags=%v cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v", keyword, tagIDs, cursorScore, cursorSize, cursorID, limit, len(videos), err)
+// SearchVideosWithFilters 组合搜索视频（名称 + 标签 + 体积 + 分辨率，支持分页）
+func (a *App) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+	videos, err := a.videoService.SearchVideosWithFilters(keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
+	log.Printf("API SearchVideosWithFilters keyword=%q tags=%v size=[%d,%d] height=[%d,%d] cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v", keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit, len(videos), err)
 	return videos, err
 }
 
@@ -139,6 +139,11 @@ func (a *App) RelocateVideo(id uint, newPath string) error {
 	err := a.videoService.RelocateVideo(id, newPath)
 	log.Printf("API RelocateVideo id=%d newPath=%s err=%v", id, newPath, err)
 	return err
+}
+
+// RefreshVideoMetadata 刷新并补全视频元数据 (时长/分辨率)
+func (a *App) RefreshVideoMetadata(id uint) error {
+	return a.videoService.RefreshVideoMetadata(id)
 }
 
 // RenameVideo 重命名视频文件及数据库记录
@@ -299,7 +304,7 @@ func (a *App) DownloadSubtitleDependencies() error {
 }
 
 // GenerateSubtitle 生成字幕
-func (a *App) GenerateSubtitle(videoID uint) error {
+func (a *App) GenerateSubtitle(videoID uint, sourceLang string) error {
 	video, err := a.videoService.GetVideo(videoID)
 	if err != nil {
 		log.Printf("API GenerateSubtitle id=%d failed to get video: %v", videoID, err)
@@ -315,12 +320,12 @@ func (a *App) GenerateSubtitle(videoID uint) error {
 		bilingualLang = settings.BilingualLang
 		deeplApiKey = settings.DeepLApiKey
 	}
-	log.Printf("API GenerateSubtitle id=%d path=%s bilingual=%v lang=%s", videoID, video.Path, bilingualEnabled, bilingualLang)
-	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, false)
+	log.Printf("API GenerateSubtitle id=%d path=%s bilingual=%v lang=%s source=%s", videoID, video.Path, bilingualEnabled, bilingualLang, sourceLang)
+	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, false, sourceLang)
 }
 
 // ForceGenerateSubtitle 强制生成字幕（跳过幻觉检测）
-func (a *App) ForceGenerateSubtitle(videoID uint) error {
+func (a *App) ForceGenerateSubtitle(videoID uint, sourceLang string) error {
 	video, err := a.videoService.GetVideo(videoID)
 	if err != nil {
 		return err
@@ -334,8 +339,8 @@ func (a *App) ForceGenerateSubtitle(videoID uint) error {
 		bilingualLang = settings.BilingualLang
 		deeplApiKey = settings.DeepLApiKey
 	}
-	log.Printf("API ForceGenerateSubtitle id=%d path=%s", videoID, video.Path)
-	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, true)
+	log.Printf("API ForceGenerateSubtitle id=%d path=%s source=%s", videoID, video.Path, sourceLang)
+	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, true, sourceLang)
 }
 
 // CancelSubtitle 取消正在进行的字幕生成任务

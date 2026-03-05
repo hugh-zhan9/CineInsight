@@ -23,9 +23,9 @@ export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
 
 export function DownloadSubtitleDependencies():Promise<void>;
 
-export function ForceGenerateSubtitle(arg1:number):Promise<void>;
+export function ForceGenerateSubtitle(arg1:number,arg2:string):Promise<void>;
 
-export function GenerateSubtitle(arg1:number):Promise<void>;
+export function GenerateSubtitle(arg1:number,arg2:string):Promise<void>;
 
 export function GetAllDirectories():Promise<Array<models.ScanDirectory>>;
 
@@ -45,6 +45,8 @@ export function PlayRandomVideo():Promise<models.Video>;
 
 export function PlayVideo(arg1:number):Promise<void>;
 
+export function RefreshVideoMetadata(arg1:number):Promise<void>;
+
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
 export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
@@ -59,7 +61,7 @@ export function SearchVideos(arg1:string,arg2:number,arg3:number,arg4:number,arg
 
 export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 
-export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number):Promise<Array<models.Video>>;
+export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
 
 export function SelectDirectory():Promise<string>;
 

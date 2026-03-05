@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"math/rand"
@@ -83,16 +84,16 @@ func (s *VideoService) GetVideosPaginated(cursorScore float64, cursorSize int64,
 
 // SearchVideos 搜索视频（按名称）- 支持分页（按概率优先排序）
 func (s *VideoService) SearchVideos(keyword string, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	return s.SearchVideosWithFilters(keyword, nil, cursorScore, cursorSize, cursorID, limit)
+	return s.SearchVideosWithFilters(keyword, nil, 0, 0, 0, 0, cursorScore, cursorSize, cursorID, limit)
 }
 
 // SearchVideosByTags 按标签搜索（多选 AND）- 支持分页（按概率优先排序）
 func (s *VideoService) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	return s.SearchVideosWithFilters("", tagIDs, cursorScore, cursorSize, cursorID, limit)
+	return s.SearchVideosWithFilters("", tagIDs, 0, 0, 0, 0, cursorScore, cursorSize, cursorID, limit)
 }
 
-// SearchVideosWithFilters 组合搜索（关键词 + 标签 AND）- 支持分页（按概率优先排序）
-func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+// SearchVideosWithFilters 组合搜索（关键词 + 标签 + 体积 + 分辨率 AND）- 支持分页（按概率优先排序）
+func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	var videos []models.Video
 	playWeight, err := s.getPlayWeight()
 	if err != nil {
@@ -106,12 +107,30 @@ func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, cu
 		Order("videos.id desc")
 
 	if strings.TrimSpace(keyword) != "" {
-		query = query.Where("videos.name LIKE ?", "%"+strings.TrimSpace(keyword)+"%")
+		kw := "%" + strings.TrimSpace(keyword) + "%"
+		query = query.Where("(videos.name LIKE ? OR videos.path LIKE ?)", kw, kw)
 	}
+
+	// 体积过滤 (左闭右开 [min, max) )
+	if minSize > 0 {
+		query = query.Where("videos.size >= ?", minSize)
+	}
+	if maxSize > 0 {
+		query = query.Where("videos.size < ?", maxSize)
+	}
+
+	// 分辨率过滤 (按高度判断)
+	if minHeight > 0 {
+		query = query.Where("videos.height >= ?", minHeight)
+	}
+	if maxHeight > 0 {
+		query = query.Where("videos.height <= ?", maxHeight)
+	}
+
 	if len(tagIDs) > 0 {
 		query = query.Joins("JOIN video_tags ON video_tags.video_id = videos.id").
-			Where("video_tags.tag_id IN ?", tagIDs).
-			Group("videos.id").
+			Where("video_tags.tag_id IN ?", tagIDs)
+		query = query.Group("videos.id").
 			Having("COUNT(DISTINCT video_tags.tag_id) = ?", len(tagIDs))
 	}
 
@@ -119,6 +138,64 @@ func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, cu
 
 	err = query.Limit(limit).Find(&videos).Error
 	return videos, err
+}
+
+// getVideoMetadata 使用 ffprobe 获取视频时长、分辨率、宽、高
+func (s *VideoService) getVideoMetadata(path string) (duration float64, resolution string, width, height int) {
+	ffprobeBin, err := exec.LookPath("ffprobe")
+	if err != nil {
+		// 尝试常见安装路径 (Homebrew)
+		if runtime.GOOS == "darwin" {
+			paths := []string{"/opt/homebrew/bin/ffprobe", "/usr/local/bin/ffprobe"}
+			for _, p := range paths {
+				if _, err := os.Stat(p); err == nil {
+					ffprobeBin = p
+					break
+				}
+			}
+		}
+	}
+
+	if ffprobeBin == "" {
+		log.Printf("[VideoService] ffprobe not found, skipping metadata extraction")
+		return 0, "", 0, 0
+	}
+
+	// 获取时长和分辨率 (JSON 格式)
+	cmd := exec.Command(ffprobeBin, "-v", "error", "-select_streams", "v:0",
+		"-show_entries", "stream=width,height,duration", "-of", "json", path)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("[VideoService] ffprobe failed for %s: %v", path, err)
+		return 0, "", 0, 0
+	}
+
+	var data struct {
+		Streams []struct {
+			Width    int    `json:"width"`
+			Height   int    `json:"height"`
+			Duration string `json:"duration"`
+		} `json:"streams"`
+	}
+
+	if err := json.Unmarshal(output, &data); err != nil {
+		log.Printf("[VideoService] failed to parse ffprobe output: %v", err)
+		return 0, "", 0, 0
+	}
+
+	if len(data.Streams) > 0 {
+		stream := data.Streams[0]
+		width = stream.Width
+		height = stream.Height
+		if stream.Width > 0 && stream.Height > 0 {
+			resolution = fmt.Sprintf("%dx%d", stream.Width, stream.Height)
+		}
+		if stream.Duration != "" {
+			fmt.Sscanf(stream.Duration, "%f", &duration)
+		}
+	}
+
+	return duration, resolution, width, height
 }
 
 // AddVideo 添加视频
@@ -138,12 +215,17 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 		return &existingVideo, ErrVideoExists
 	}
 
+	duration, resolution, width, height := s.getVideoMetadata(path)
+
 	video := &models.Video{
-		Name:      filepath.Base(path),
-		Path:      path,
-		Directory: filepath.Dir(path),
-		Size:      info.Size(),
-		Duration:  0, // TODO: 使用 ffmpeg 获取时长
+		Name:       filepath.Base(path),
+		Path:       path,
+		Directory:  filepath.Dir(path),
+		Size:       info.Size(),
+		Duration:   duration,
+		Resolution: resolution,
+		Width:      width,
+		Height:     height,
 	}
 
 	err = database.DB.Create(video).Error
@@ -307,16 +389,43 @@ func (s *VideoService) RelocateVideo(id uint, newPath string) error {
 		return fmt.Errorf("目标路径已被其他记录占用: %s", newPath)
 	}
 
+	// 迁移时也尝试重新提取元数据（可能之前的元数据是空的）
+	duration, resolution, width, height := s.getVideoMetadata(newPath)
+
 	result := database.DB.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"path":      newPath,
-		"directory": filepath.Dir(newPath),
-		"name":      filepath.Base(newPath),
+		"path":       newPath,
+		"directory":  filepath.Dir(newPath),
+		"name":       filepath.Base(newPath),
+		"duration":   duration,
+		"resolution": resolution,
+		"width":      width,
+		"height":     height,
 	})
 	if result.Error != nil {
 		return result.Error
 	}
-	log.Printf("视频迁移 id=%d newPath=%s", id, newPath)
+	log.Printf("视频迁移并更新元数据 id=%d newPath=%s duration=%.1f res=%s", id, newPath, duration, resolution)
 	return nil
+}
+
+// RefreshVideoMetadata 刷新并修复视频的元数据
+func (s *VideoService) RefreshVideoMetadata(id uint) error {
+	var video models.Video
+	if err := database.DB.First(&video, id).Error; err != nil {
+		return err
+	}
+
+	duration, resolution, width, height := s.getVideoMetadata(video.Path)
+	if duration == 0 && resolution == "" {
+		return fmt.Errorf("未能从文件中提取有效元数据: %s", video.Path)
+	}
+
+	return database.DB.Model(&video).Updates(map[string]interface{}{
+		"duration":   duration,
+		"resolution": resolution,
+		"width":      width,
+		"height":     height,
+	}).Error
 }
 
 // RenameVideo 重命名视频文件及数据库记录

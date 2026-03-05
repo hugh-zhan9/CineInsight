@@ -85,6 +85,7 @@ export namespace models {
 	    video_extensions: string;
 	    play_weight: number;
 	    auto_scan_on_startup: boolean;
+	    theme: string;
 	    log_enabled: boolean;
 	    bilingual_enabled: boolean;
 	    bilingual_lang: string;
@@ -104,6 +105,7 @@ export namespace models {
 	        this.video_extensions = source["video_extensions"];
 	        this.play_weight = source["play_weight"];
 	        this.auto_scan_on_startup = source["auto_scan_on_startup"];
+	        this.theme = source["theme"];
 	        this.log_enabled = source["log_enabled"];
 	        this.bilingual_enabled = source["bilingual_enabled"];
 	        this.bilingual_lang = source["bilingual_lang"];
@@ -176,6 +178,9 @@ export namespace models {
 	    directory: string;
 	    size: number;
 	    duration: number;
+	    resolution: string;
+	    width: number;
+	    height: number;
 	    play_count: number;
 	    random_play_count: number;
 	    // Go type: time
@@ -198,6 +203,9 @@ export namespace models {
 	        this.directory = source["directory"];
 	        this.size = source["size"];
 	        this.duration = source["duration"];
+	        this.resolution = source["resolution"];
+	        this.width = source["width"];
+	        this.height = source["height"];
 	        this.play_count = source["play_count"];
 	        this.random_play_count = source["random_play_count"];
 	        this.last_played_at = this.convertValues(source["last_played_at"], null);

@@ -42,12 +42,12 @@ export function DownloadSubtitleDependencies() {
   return window['go']['main']['App']['DownloadSubtitleDependencies']();
 }
 
-export function ForceGenerateSubtitle(arg1) {
-  return window['go']['main']['App']['ForceGenerateSubtitle'](arg1);
+export function ForceGenerateSubtitle(arg1, arg2) {
+  return window['go']['main']['App']['ForceGenerateSubtitle'](arg1, arg2);
 }
 
-export function GenerateSubtitle(arg1) {
-  return window['go']['main']['App']['GenerateSubtitle'](arg1);
+export function GenerateSubtitle(arg1, arg2) {
+  return window['go']['main']['App']['GenerateSubtitle'](arg1, arg2);
 }
 
 export function GetAllDirectories() {
@@ -86,6 +86,10 @@ export function PlayVideo(arg1) {
   return window['go']['main']['App']['PlayVideo'](arg1);
 }
 
+export function RefreshVideoMetadata(arg1) {
+  return window['go']['main']['App']['RefreshVideoMetadata'](arg1);
+}
+
 export function RelocateVideo(arg1, arg2) {
   return window['go']['main']['App']['RelocateVideo'](arg1, arg2);
 }
@@ -114,8 +118,8 @@ export function SearchVideosByTags(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SearchVideosByTags'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6) {
-  return window['go']['main']['App']['SearchVideosWithFilters'](arg1, arg2, arg3, arg4, arg5, arg6);
+export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
+  return window['go']['main']['App']['SearchVideosWithFilters'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
 }
 
 export function SelectDirectory() {

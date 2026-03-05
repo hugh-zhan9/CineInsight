@@ -9,6 +9,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/mac"
 )
 
 //go:embed all:frontend/dist
@@ -29,16 +30,26 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "析微影策",
-		Width:  1280,
-		Height: 800,
+		Title:         "析微影策",
+		Width:         1280,
+		Height:        800,
+		MinWidth:      1024,
+		MinHeight:     768,
+		DisableResize: false,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 255, G: 255, B: 255, A: 1},
+		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0}, // 设为透明
 		OnStartup:        app.startup,
 		Bind: []interface{}{
 			app,
+		},
+		Mac: &mac.Options{
+			TitleBar: mac.TitleBarHiddenInset(),
+			About: &mac.AboutInfo{
+				Title:   "析微影策",
+				Message: "智能视频管理系统",
+			},
 		},
 	})
 

@@ -26,6 +26,7 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.VideoExtensions = input.VideoExtensions
 	settings.PlayWeight = input.PlayWeight
 	settings.AutoScanOnStartup = input.AutoScanOnStartup
+	settings.Theme = input.Theme
 	settings.LogEnabled = input.LogEnabled
 	settings.BilingualEnabled = input.BilingualEnabled
 	settings.BilingualLang = input.BilingualLang

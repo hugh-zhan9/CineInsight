@@ -148,7 +148,7 @@ func (s *SubtitleService) DownloadDependencies() error {
 }
 
 func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
-	bilingualEnabled bool, bilingualLang string, deeplApiKey string, forceGenerate bool) error {
+	bilingualEnabled bool, bilingualLang string, deeplApiKey string, forceGenerate bool, sourceLang string) error {
 
 	// 创建可取消的子 context
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -188,7 +188,11 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 	s.emitProgress("process", 20, "Transcribing (this may take a while)...")
 	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
 
-	detectedLang, err := s.transcribeCLIWithLang(ctx, tempWav, outputPrefix)
+	if sourceLang == "" {
+		sourceLang = "auto"
+	}
+
+	detectedLang, err := s.transcribeCLIWithLang(ctx, tempWav, outputPrefix, sourceLang)
 	if err != nil {
 		return err
 	}
@@ -286,7 +290,7 @@ func (s *SubtitleService) findWhisperBin() string {
 }
 
 // transcribeCLIWithLang 转录音频并返回检测到的语言代码
-func (s *SubtitleService) transcribeCLIWithLang(ctx context.Context, wavPath, outputPrefix string) (string, error) {
+func (s *SubtitleService) transcribeCLIWithLang(ctx context.Context, wavPath, outputPrefix, sourceLang string) (string, error) {
 	whisperBin := s.findWhisperBin()
 	if whisperBin == "" {
 		return "", fmt.Errorf("未找到 Whisper，请重新安装依赖")
@@ -294,14 +298,14 @@ func (s *SubtitleService) transcribeCLIWithLang(ctx context.Context, wavPath, ou
 
 	modelPath := filepath.Join(s.ModelDir, "ggml-medium.bin")
 
-	log.Printf("[Subtitle] transcribeCLIWithLang: whisper=%s model=%s input=%s output=%s\n", whisperBin, modelPath, wavPath, outputPrefix)
+	log.Printf("[Subtitle] transcribeCLIWithLang: whisper=%s model=%s input=%s output=%s lang=%s\n", whisperBin, modelPath, wavPath, outputPrefix, sourceLang)
 
 	cmd := exec.CommandContext(ctx, whisperBin,
 		"-m", modelPath,
 		"-f", wavPath,
 		"-osrt",
 		"-of", outputPrefix,
-		"-l", "auto",
+		"-l", sourceLang,
 		"--no-fallback",
 		"-et", "2.4",
 		"-lpt", "-1.0",

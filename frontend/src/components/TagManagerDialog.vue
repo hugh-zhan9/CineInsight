@@ -1,28 +1,49 @@
 <template>
   <div v-if="visible" class="modal-overlay" @click="$emit('close')">
-    <div class="modal" @click.stop>
+    <div class="modal" @click.stop style="max-width: 520px;">
       <h2>标签管理</h2>
-      <div class="form-group">
-        <input v-model="newTag.name" type="text" placeholder="标签名称" @keyup.enter="handleCreateTag" />
-        <button @click="handleCreateTag" class="btn-primary" :disabled="createTagLoading">添加标签</button>
-        <p v-if="tagCreateError" class="error-text">{{ tagCreateError }}</p>
-      </div>
-      <div class="tag-list">
-        <div v-for="tag in localTags" :key="tag.id" class="tag-item tag-edit-item">
-          <span class="tag-color" :style="{ backgroundColor: tag.color }"></span>
-          <input v-model="tag.name" type="text" class="tag-name-input" />
-          <input v-model="tag.color" type="color" class="tag-color-input" />
-          <button @click="saveTag(tag)" class="btn-small">保存</button>
-          <button @click.stop="$emit('request-delete-tag', tag)" class="btn-danger">删除</button>
+      
+      <!-- 创建新标签 -->
+      <div class="setting-item">
+        <label>新建标签</label>
+        <div style="display: flex; gap: 8px; margin-top: 8px;">
+          <input 
+            v-model="newTag.name" 
+            type="text" 
+            placeholder="输入标签名称..." 
+            class="text-input" 
+            style="flex: 1;"
+            @keyup.enter="handleCreateTag" 
+          />
+          <button @click="handleCreateTag" class="btn-primary" :disabled="createTagLoading">添加</button>
         </div>
+        <p v-if="tagCreateError" class="help-text" style="color: var(--danger-color);">{{ tagCreateError }}</p>
       </div>
-      <button @click="$emit('close')" class="btn-secondary">关闭</button>
+
+      <div class="divider"></div>
+
+      <!-- 标签列表 -->
+      <div class="tag-list-container" style="max-height: 350px; overflow-y: auto; padding-right: 4px;">
+        <div v-for="tag in localTags" :key="tag.id" class="tag-edit-row">
+          <input v-model="tag.color" type="color" class="color-picker" style="width: 28px; height: 28px; border: none; padding: 0; background: none; cursor: pointer; border-radius: 4px;" />
+          <input v-model="tag.name" type="text" class="text-input" style="height: 32px; font-size: 13px;" />
+          <div style="display: flex; gap: 6px;">
+            <button @click="saveTag(tag)" class="btn-action">保存</button>
+            <button @click.stop="$emit('request-delete-tag', tag)" class="btn-action" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
+          </div>
+        </div>
+        <div v-if="localTags.length === 0" class="help-text" style="text-align: center; padding: 20px;">暂无标签</div>
+      </div>
+
+      <div class="modal-actions">
+        <button @click="$emit('close')" class="btn-secondary">完成</button>
+      </div>
     </div>
   </div>
 </template>
 
 <script>
-import { CreateTag, UpdateTag, GetAllTags } from '../../wailsjs/go/main/App';
+import { CreateTag, UpdateTag } from '../../wailsjs/go/main/App';
 
 export default {
   name: 'TagManagerDialog',
@@ -80,8 +101,7 @@ export default {
           this.tagCreateError = '标签已存在';
           return;
         }
-        console.error('创建标签失败:', err);
-        this.tagCreateError = '创建标签失败';
+        this.tagCreateError = '创建失败';
       } finally {
         this.createTagLoading = false;
       }
@@ -96,10 +116,16 @@ export default {
         await UpdateTag(tag.id, name, tag.color);
         this.$emit('tags-changed');
       } catch (err) {
-        console.error('更新标签失败:', err);
-        alert('更新标签失败: ' + err);
+        alert('更新失败: ' + err);
       }
     }
   }
 };
 </script>
+
+<style scoped>
+.tag-list-container::-webkit-scrollbar { width: 4px; }
+.tag-list-container::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
+.color-picker::-webkit-color-swatch-wrapper { padding: 0; }
+.color-picker::-webkit-color-swatch { border: 1px solid var(--border-color); border-radius: 4px; }
+</style>

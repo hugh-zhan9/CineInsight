@@ -1,36 +1,55 @@
 <template>
   <div class="page-content">
     <div class="toolbar">
-      <input 
-        v-model="searchKeyword" 
-        @input="handleSearch"
-        type="text" 
-        placeholder="搜索视频..." 
-        class="search-input"
-      />
-      <button @click="playRandom" class="btn-random">随机播放</button>
-      <button @click="showScanDialog = true" class="btn-primary">扫描目录</button>
-      <button @click="showTagManagerDialog = true" class="btn-secondary">管理标签</button>
+      <div class="search-group">
+        <input 
+          v-model="searchKeyword" 
+          @input="handleSearch"
+          type="text" 
+          placeholder="搜索视频文件名或路径..." 
+          class="search-input"
+        />
+      </div>
+      
+      <div class="filter-group">
+        <select v-model="selectedSizeRange" @change="handleSearch" class="select-input" style="width: 130px;">
+          <option value="all">📁 体积 (全部)</option>
+          <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
+        </select>
+        
+        <select v-model="selectedResRange" @change="handleSearch" class="select-input" style="width: 150px;">
+          <option value="all">📺 分辨率 (全部)</option>
+          <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </div>
+
+      <div class="action-group" style="margin-left: auto; display: flex; gap: 8px;">
+        <button @click="playRandom" class="btn-random">🎲 随机播放</button>
+        <button @click="showScanDialog = true" class="btn-primary">🔍 扫描目录</button>
+        <button @click="showTagManagerDialog = true" class="btn-secondary">🏷️ 标签管理</button>
+      </div>
     </div>
 
     <div class="tags-filter">
-      <button 
-        @click="clearTagFilter"
-        :class="['tag-chip', { active: selectedTags.length === 0 }]"
-      >
-        全部
-      </button>
-      <div
-        v-for="tag in tags"
-        :key="tag.id"
-        class="tag-chip tag-chip-wrap"
-        :class="{ active: isTagSelected(tag.id) }"
-        :style="{ backgroundColor: tagBgColor(tag.color) }"
-        @click="toggleTagFilter(tag.id)"
-      >
-        <span class="tag-chip-name">{{ tag.name }}</span>
-        <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
-        <button type="button" class="tag-chip-delete" @click.stop="requestDeleteTag(tag)">×</button>
+      <div class="tags-scroll-container">
+        <button 
+          @click="clearTagFilter"
+          :class="['tag-chip', { active: selectedTags.length === 0 }]"
+        >
+          全部
+        </button>
+        <div
+          v-for="tag in tags"
+          :key="tag.id"
+          class="tag-chip tag-chip-wrap"
+          :class="{ active: isTagSelected(tag.id) }"
+          :style="{ backgroundColor: tagBgColor(tag.color) }"
+          @click="toggleTagFilter(tag.id)"
+        >
+          <span class="tag-chip-name">{{ tag.name }}</span>
+          <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
+          <button type="button" class="tag-chip-delete" @click.stop="requestDeleteTag(tag)">×</button>
+        </div>
       </div>
     </div>
 
@@ -47,7 +66,13 @@
         <div class="video-info">
           <h3>{{ video.name }}</h3>
         <p class="video-path">{{ getDirectoryLabel(video) }}</p>
-        <p class="video-size">{{ formatSize(video.size) }}</p>
+        <div class="video-meta">
+          <span class="video-size">{{ formatSize(video.size) }}</span>
+          <span v-if="video.duration" class="meta-divider">|</span>
+          <span v-if="video.duration" class="video-duration">{{ formatDuration(video.duration) }}</span>
+          <span v-if="video.resolution" class="meta-divider">|</span>
+          <span v-if="video.resolution" class="video-resolution">{{ video.resolution }}</span>
+        </div>
           <div class="video-tags">
             <span 
               v-for="tag in (video.tags || [])" 
@@ -165,6 +190,15 @@
         <h3>{{ subtitleDialog.title }}</h3>
         <p>{{ subtitleDialog.msg }}</p>
         
+        <!-- 语言选择 (确认生成时显示) -->
+        <div v-if="subtitleDialog.mode === 'confirm'" class="lang-select-box" style="margin-top: 15px;">
+          <label style="display: block; font-size: 13px; margin-bottom: 8px; color: #666;">识别源语言 (Whisper):</label>
+          <select v-model="sourceLang" class="search-input" style="width: 100%; height: 36px; padding: 0 10px;">
+            <option v-for="opt in languageOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
+          </select>
+          <p style="font-size: 11px; color: #999; margin-top: 5px;">如果自动检测不准，请手动指定视频中的语言。</p>
+        </div>
+        
         <!-- 下载进度条 -->
         <template v-if="subtitleDialog.mode === 'progress'">
           <div class="progress-bar-container">
@@ -244,6 +278,25 @@ export default {
       videos: [],
       searchKeyword: '',
       selectedTags: [],
+      selectedSizeRange: 'all',
+      selectedResRange: 'all',
+      sizeOptions: [
+        { label: '0-10M', value: { min: 0, max: 10 * 1024 * 1024 } },
+        { label: '10M-100M', value: { min: 10 * 1024 * 1024, max: 100 * 1024 * 1024 } },
+        { label: '100M-1G', value: { min: 100 * 1024 * 1024, max: 1024 * 1024 * 1024 } },
+        { label: '1G-2G', value: { min: 1024 * 1024 * 1024, max: 2 * 1024 * 1024 * 1024 } },
+        { label: '2G-4G', value: { min: 2 * 1024 * 1024 * 1024, max: 4 * 1024 * 1024 * 1024 } },
+        { label: '4G-10G', value: { min: 4 * 1024 * 1024 * 1024, max: 10 * 1024 * 1024 * 1024 } },
+        { label: '>=10G', value: { min: 10 * 1024 * 1024 * 1024, max: 0 } }
+      ],
+      resOptions: [
+        { label: '480P以下', value: { min: 0, max: 479 } },
+        { label: '480P-720P', value: { min: 480, max: 719 } },
+        { label: '720P-1080P', value: { min: 720, max: 1079 } },
+        { label: '1080P-2k', value: { min: 1080, max: 1439 } },
+        { label: '2k-4k', value: { min: 1440, max: 2159 } },
+        { label: '4k以上', value: { min: 2160, max: 0 } }
+      ],
       cursorScore: 0,
       cursorSize: 0,
       cursorID: 0,
@@ -262,6 +315,17 @@ export default {
       subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0 },
       pendingSubtitleVideo: null,
       pendingForceVideo: null,
+      sourceLang: 'auto',
+      languageOptions: [
+        { label: '自动检测', value: 'auto' },
+        { label: '中文 (Chinese)', value: 'chinese' },
+        { label: '英语 (English)', value: 'english' },
+        { label: '日语 (Japanese)', value: 'japanese' },
+        { label: '韩语 (Korean)', value: 'korean' },
+        { label: '德语 (German)', value: 'german' },
+        { label: '法语 (French)', value: 'french' },
+        { label: '西班牙语 (Spanish)', value: 'spanish' }
+      ],
       // 重命名弹窗
       renameDialog: { show: false, video: null, newName: '', ext: '' },
     };
@@ -301,18 +365,20 @@ export default {
       try {
         const status = await CheckSubtitleDependencies();
         console.log('[Subtitle] Dependencies status:', status);
+        
+        this.pendingSubtitleVideo = video;
+        this.subtitleDialog.show = true;
+        this.subtitleDialog.mode = 'confirm';
+        
         if (!status.ffmpeg || !status.whisper || !status.model) {
-          // 显示确认弹窗（不用 confirm()，WKWebView 不支持）
-          this.pendingSubtitleVideo = video;
-          this.subtitleDialog.show = true;
-          this.subtitleDialog.mode = 'confirm';
           this.subtitleDialog.title = '需要下载组件';
           this.subtitleDialog.msg = '初次使用需下载字幕生成组件 (FFmpeg/Whisper/Model)，约 1.7GB。是否立即下载？';
-          return; // 用户确认后在 onSubtitleConfirm 中继续
+          this.subtitleDialog.requiresDownload = true;
+        } else {
+          this.subtitleDialog.title = '准备生成字幕';
+          this.subtitleDialog.msg = '我们将使用 AI 为您生成本地字幕，这可能需要几分钟。';
+          this.subtitleDialog.requiresDownload = false;
         }
-        
-        // 依赖已就绪，直接生成
-        await this.doGenerateSubtitle(video);
       } catch (err) {
         console.error('[Subtitle] Error:', err);
         this.subtitleDialog.show = true;
@@ -332,7 +398,7 @@ export default {
         this.subtitleDialog.msg = '跳过质量检测，重新生成...';
         this.generatingSubtitleIds.push(video.id);
         try {
-          await ForceGenerateSubtitle(video.id);
+          await ForceGenerateSubtitle(video.id, this.sourceLang);
           const idx = this.generatingSubtitleIds.indexOf(video.id);
           if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
           this.subtitleDialog.mode = 'result';
@@ -349,26 +415,37 @@ export default {
       }
 
       // 场景二：用户确认下载依赖
-      this.subtitleDialog.mode = 'progress';
-      this.subtitleDialog.title = '正在下载组件';
-      this.subtitleDialog.percent = 0;
-      this.subtitleDialog.msg = '准备下载...';
-      try {
-        await DownloadSubtitleDependencies();
-        this.subtitleDialog.mode = 'result';
-        this.subtitleDialog.title = '✅ 组件下载完成';
-        this.subtitleDialog.msg = '现在可以点击字幕按钮生成字幕了。';
-      } catch (err) {
-        this.subtitleDialog.mode = 'result';
-        this.subtitleDialog.title = '❌ 下载失败';
-        this.subtitleDialog.msg = String(err);
+      if (this.subtitleDialog.requiresDownload) {
+        this.subtitleDialog.mode = 'progress';
+        this.subtitleDialog.title = '正在下载组件';
+        this.subtitleDialog.percent = 0;
+        this.subtitleDialog.msg = '准备下载...';
+        try {
+          await DownloadSubtitleDependencies();
+          this.subtitleDialog.mode = 'result';
+          this.subtitleDialog.title = '✅ 组件下载完成';
+          this.subtitleDialog.msg = '现在可以点击字幕按钮生成字幕了。';
+        } catch (err) {
+          this.subtitleDialog.mode = 'result';
+          this.subtitleDialog.title = '❌ 下载失败';
+          this.subtitleDialog.msg = String(err);
+        }
+        this.pendingSubtitleVideo = null;
+        return;
       }
-      this.pendingSubtitleVideo = null;
+
+      // 场景三：依赖已就绪，开始生成
+      if (this.pendingSubtitleVideo) {
+        const video = this.pendingSubtitleVideo;
+        this.pendingSubtitleVideo = null;
+        this.subtitleDialog.show = false; // 先关掉弹窗，按钮会显示“生成中...”
+        await this.doGenerateSubtitle(video);
+      }
     },
     async doGenerateSubtitle(video) {
       this.generatingSubtitleIds.push(video.id);
       try {
-        await GenerateSubtitle(video.id);
+        await GenerateSubtitle(video.id, this.sourceLang);
         // 成功后移除 ID（event 也会移除，双重保障）
         const idx = this.generatingSubtitleIds.indexOf(video.id);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
@@ -479,9 +556,32 @@ export default {
     },
     async reloadCurrentView() {
       const keyword = this.searchKeyword.trim();
-      if (keyword || this.selectedTags.length > 0) {
+      const hasSizeFilter = this.selectedSizeRange !== 'all';
+      const hasResFilter = this.selectedResRange !== 'all';
+
+      if (keyword || this.selectedTags.length > 0 || hasSizeFilter || hasResFilter) {
         try {
-          this.videos = await SearchVideosWithFilters(keyword, this.selectedTags, 0, 0, 0, 200);
+          let minSize = 0, maxSize = 0;
+          if (hasSizeFilter) {
+            minSize = this.selectedSizeRange.min;
+            maxSize = this.selectedSizeRange.max;
+          }
+
+          let minHeight = 0, maxHeight = 0;
+          if (hasResFilter) {
+            minHeight = this.selectedResRange.min;
+            maxHeight = this.selectedResRange.max;
+          }
+
+          this.videos = await SearchVideosWithFilters(
+            keyword, 
+            this.selectedTags, 
+            minSize, 
+            maxSize, 
+            minHeight, 
+            maxHeight, 
+            0, 0, 0, 200
+          );
           this.hasMore = false;
         } catch (err) {
           console.error('组合搜索失败:', err);
@@ -525,6 +625,17 @@ export default {
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       const value = bytes / Math.pow(k, i);
       return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${sizes[i]}`;
+    },
+    formatDuration(seconds) {
+      if (!seconds) return '';
+      const h = Math.floor(seconds / 3600);
+      const m = Math.floor((seconds % 3600) / 60);
+      const s = Math.floor(seconds % 60);
+      const parts = [];
+      if (h > 0) parts.push(h.toString().padStart(2, '0'));
+      parts.push(m.toString().padStart(2, '0'));
+      parts.push(s.toString().padStart(2, '0'));
+      return parts.join(':');
     },
     isTagSelected(tagID) {
       return this.selectedTags.includes(Number(tagID));

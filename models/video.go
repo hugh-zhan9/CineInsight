@@ -14,6 +14,9 @@ type Video struct {
 	Directory       string         `json:"directory"`                                                               // 所在目录
 	Size            int64          `json:"size"`                                                                    // 文件大小（字节）
 	Duration        float64        `json:"duration"`                                                                // 时长（秒）
+	Resolution      string         `json:"resolution"`                                                              // 分辨率 (如 1920x1080)
+	Width           int            `json:"width"`                                                                   // 宽度
+	Height          int            `json:"height"`                                                                  // 高度
 	PlayCount       int            `gorm:"default:0" json:"play_count"`                                             // 播放次数
 	RandomPlayCount int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
 	LastPlayedAt    *time.Time     `json:"last_played_at"`                                                          // 最后播放时间
@@ -42,6 +45,7 @@ type Settings struct {
 	VideoExtensions     string    `json:"video_extensions"`                   // 支持的视频格式（逗号分隔）
 	PlayWeight          float64   `gorm:"default:2.0" json:"play_weight"`     // 播放权重（1次播放 = N次随机播放）
 	AutoScanOnStartup   bool      `json:"auto_scan_on_startup"`               // 启动时自动增量扫描
+	Theme               string    `gorm:"default:'system'" json:"theme"`      // 主题模式: light, dark, system
 	LogEnabled          bool      `json:"log_enabled"`                        // 是否启用日志
 	BilingualEnabled    bool      `json:"bilingual_enabled"`                  // 是否开启双语字幕
 	BilingualLang       string    `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
