@@ -38,3 +38,12 @@
 - `cmd/migrate_sqlite_to_pg/main.go`
 - `cmd/migrate_sqlite_to_pg/main_test.go`
 ----------------------------------------
+## [2026-03-11 11:29] [Bugfix]
+- **Change**: 为 bindings 构建添加无数据库初始化入口
+- **Risk Analysis**: 增加 bindings 构建主入口与共享 assets，风险在于绑定生成流程变化导致运行期未初始化数据库的路径被误用
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `main.go`
+- `main_bindings.go`
+- `assets.go`
+----------------------------------------
