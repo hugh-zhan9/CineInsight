@@ -96,7 +96,7 @@ func TestSearchVideosWithFiltersCombinesKeywordAndTags(t *testing.T) {
 		t.Fatalf("绑定标签失败: %v", err)
 	}
 
-	videos, err := svc.SearchVideosWithFilters("cat", []uint{tag.ID}, 0, 0, 0, 100)
+	videos, err := svc.SearchVideosWithFilters("cat", []uint{tag.ID}, 0, 0, 0, 100, 0, 0, 0, 100)
 	if err != nil {
 		t.Fatalf("组合搜索失败: %v", err)
 	}
