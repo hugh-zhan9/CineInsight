@@ -1,11 +1,10 @@
-//go:build !bindings
+//go:build bindings
 
 package main
 
 import (
 	"io"
 	"log"
-	"video-master/database"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -14,12 +13,6 @@ import (
 )
 
 func main() {
-	// 初始化数据库
-	if err := database.Init(); err != nil {
-		log.Fatal("数据库初始化失败:", err)
-	}
-	defer database.Close()
-
 	// 默认禁用日志，设置页开启后再写入
 	log.SetOutput(io.Discard)
 
@@ -37,7 +30,7 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0}, // 设为透明
+		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},
 		OnStartup:        app.startup,
 		Bind: []interface{}{
 			app,
