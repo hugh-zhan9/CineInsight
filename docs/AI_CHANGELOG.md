@@ -20,3 +20,13 @@
 - `.gitignore`
 - `services/video_service_test.go`
 ----------------------------------------
+## [2026-03-11 11:22] [Feature]
+- **Change**: 切换运行时数据库到 Postgres 并新增连接配置
+- **Risk Analysis**: 新增 .env 配置读取与 Postgres 连接；风险在于未配置环境变量时应用启动失败，需要文档提示
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `database/database.go`
+- `database/database_test.go`
+- `go.mod`
+- `go.sum`
+----------------------------------------

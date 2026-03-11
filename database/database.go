@@ -6,14 +6,50 @@ import (
 	"path/filepath"
 	"video-master/models"
 
-	"gorm.io/driver/sqlite"
+	"github.com/joho/godotenv"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
 var DB *gorm.DB
 
+func postgresDSNFromEnv() (string, error) {
+	host := os.Getenv("PG_HOST")
+	if host == "" {
+		return "", fmt.Errorf("PG_HOST 不能为空")
+	}
+	user := os.Getenv("PG_USER")
+	if user == "" {
+		return "", fmt.Errorf("PG_USER 不能为空")
+	}
+	db := os.Getenv("PG_DB")
+	if db == "" {
+		return "", fmt.Errorf("PG_DB 不能为空")
+	}
+	port := os.Getenv("PG_PORT")
+	if port == "" {
+		port = "5432"
+	}
+	password := os.Getenv("PG_PASSWORD")
+	sslmode := os.Getenv("PG_SSLMODE")
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+	timezone := os.Getenv("PG_TIMEZONE")
+
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
+		host, port, user, password, db, sslmode,
+	)
+	if timezone != "" {
+		dsn = fmt.Sprintf("%s TimeZone=%s", dsn, timezone)
+	}
+	return dsn, nil
+}
+
 // Init 初始化数据库
 func Init() error {
+	_ = godotenv.Load()
+
 	// 获取用户数据目录
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
@@ -26,11 +62,13 @@ func Init() error {
 		return fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
-	// 数据库文件路径
-	dbPath := filepath.Join(dataDir, "video-master.db")
+	dsn, err := postgresDSNFromEnv()
+	if err != nil {
+		return err
+	}
 
 	// 连接数据库
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
+	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
 	if err != nil {
 		return fmt.Errorf("打开数据库失败: %w", err)
 	}
@@ -98,8 +136,9 @@ func cleanupDuplicateVideos(db *gorm.DB) error {
 		}
 
 		if err := db.Exec(`
-			INSERT OR IGNORE INTO video_tags(video_id, tag_id)
+			INSERT INTO video_tags(video_id, tag_id)
 			SELECT ?, tag_id FROM video_tags WHERE video_id IN ?
+			ON CONFLICT DO NOTHING
 		`, d.KeepID, duplicateIDs).Error; err != nil {
 			return err
 		}
