@@ -12,22 +12,23 @@ A cross-platform desktop video manager featuring smart random playback, tag mana
 - **多维检索**: 支持输入即搜的名称过滤与多重标签组合过滤。
 - **标签管理**: 支持 12 色智能自动分配、透明度显示、输入即搜过滤、软删除恢复。
 - **视频重命名**: 支持同时重命名磁盘文件和数据库记录，自动保留扩展名。
-- **轻量可靠**: 内置 SQLite 单文件数据库，支持海量视频百万级游标秒查。
+- **轻量可靠**: 使用 Postgres 持久化存储，支持海量视频游标分页秒查。
 - **现代化 UI**: 基于 Vue 3 的响应式瀑布流列表，支持无限下拉加载。
 - **右键菜单**: 快速播放、定位文件、重命名或安全删除记录。
 
 ## 技术栈
 
-- **后端**: Go + GORM + SQLite
+- **后端**: Go + GORM + Postgres
 - **前端**: Vue 3 + Vite
 - **框架**: Wails v2
-- **数据库**: SQLite（内嵌，无需额外安装）
+- **数据库**: Postgres
 
 ## 开发环境要求
 
 - Go 1.18+
 - Node.js 16+
 - Wails CLI v2
+- Postgres 12+
 
 ## 安装依赖
 
@@ -84,9 +85,27 @@ wails build
 
 ## 数据存储
 
-应用数据存储在用户目录下的 `.video-master` 文件夹：
-- macOS/Linux: `~/.video-master/video-master.db`
-- Windows: `%USERPROFILE%\.video-master\video-master.db`
+应用数据存储在 Postgres 数据库中，连接信息通过 `.env` 提供。
+
+示例 `.env`：
+
+```bash
+PG_HOST=127.0.0.1
+PG_PORT=5432
+PG_USER=video
+PG_PASSWORD=your_password
+PG_DB=video_master
+PG_SSLMODE=disable
+PG_TIMEZONE=Asia/Shanghai
+```
+
+如果需要从旧版 SQLite 迁移数据，可运行迁移脚本：
+
+```bash
+go run ./cmd/migrate_sqlite_to_pg
+# 或指定 sqlite 路径
+go run ./cmd/migrate_sqlite_to_pg --sqlite ~/.video-master/video-master.db
+```
 
 ## 项目结构
 
