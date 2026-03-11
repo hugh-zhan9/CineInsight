@@ -30,3 +30,11 @@
 - `go.mod`
 - `go.sum`
 ----------------------------------------
+## [2026-03-11 11:25] [Feature]
+- **Change**: 新增 sqlite→postgres 迁移 CLI 与数据快照加载
+- **Risk Analysis**: 新增迁移工具与序列重置逻辑，风险在于迁移时 PG 非空或数据量大导致耗时，需要文档提醒
+- **Risk Level**: S2（中级: 局部功能异常、可绕过但影响效率）
+- **Changed Files**:
+- `cmd/migrate_sqlite_to_pg/main.go`
+- `cmd/migrate_sqlite_to_pg/main_test.go`
+----------------------------------------
