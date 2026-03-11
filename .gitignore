@@ -24,3 +24,4 @@ frontend/wailsjs/
 *.swp
 *.swo
 video-master
+\.worktrees/
