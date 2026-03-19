@@ -239,17 +239,29 @@ html, body {
 
 /* --- Tags --- */
 .tags-filter { padding: 12px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 24px; }
-.tags-scroll-container { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; }
+.tags-scroll-container {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  overflow: visible;
+  padding-bottom: 0;
+  align-items: flex-start;
+}
 .tag-chip {
   height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px;
   background: var(--border-color); color: var(--text-primary);
   display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; cursor: pointer;
+  appearance: none; -webkit-appearance: none; font: inherit; line-height: 1; white-space: nowrap;
+  flex: 0 0 auto; vertical-align: middle;
 }
 .tag-chip.active { border-color: var(--text-primary); font-weight: 600; }
+.tag-chip-wrap { max-width: 220px; }
+.tag-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tag-chip-check { flex: 0 0 auto; font-size: 11px; }
 
 .tag-badge, .btn-add-tag { height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
 .tag-badge { border: 1px solid rgba(0,0,0,0.1); color: var(--text-primary); }
-.tag-remove, .tag-chip-delete { background: transparent; border: none; cursor: pointer; opacity: 0.5; font-size: 14px; color: inherit; padding: 0; outline: none; }
+.tag-remove, .tag-chip-delete { background: transparent; border: none; cursor: pointer; opacity: 0.5; font-size: 14px; color: inherit; padding: 0; outline: none; appearance: none; -webkit-appearance: none; line-height: 1; flex: 0 0 auto; }
 .btn-add-tag { border: 1px dashed var(--text-muted); background: transparent; color: var(--text-secondary); cursor: pointer; }
 
 /* --- Switch --- */

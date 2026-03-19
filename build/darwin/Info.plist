@@ -21,6 +21,8 @@
         <string>10.13.0</string>
         <key>NSHighResolutionCapable</key>
         <string>true</string>
+        <key>NSLocalNetworkUsageDescription</key>
+        <string>析微影策需要访问您本地网络中的 Postgres 数据库以加载和管理视频数据。</string>
         <key>NSHumanReadableCopyright</key>
         <string>{{.Info.Copyright}}</string>
         {{if .Info.FileAssociations}}
