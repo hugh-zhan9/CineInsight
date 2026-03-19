@@ -13,6 +13,36 @@ import (
 
 var DB *gorm.DB
 
+func loadEnvConfig() {
+	paths := []string{".env"}
+
+	if exePath, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exePath)
+		paths = append(paths,
+			filepath.Join(exeDir, ".env"),
+			filepath.Join(exeDir, "..", "Resources", ".env"),
+		)
+	}
+
+	seen := make(map[string]struct{}, len(paths))
+	uniquePaths := make([]string, 0, len(paths))
+	for _, path := range paths {
+		clean := filepath.Clean(path)
+		if _, ok := seen[clean]; ok {
+			continue
+		}
+		seen[clean] = struct{}{}
+		uniquePaths = append(uniquePaths, clean)
+	}
+
+	for _, path := range uniquePaths {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		_ = godotenv.Load(path)
+	}
+}
+
 func postgresDSNFromEnv() (string, error) {
 	host := os.Getenv("PG_HOST")
 	if host == "" {
@@ -48,7 +78,7 @@ func postgresDSNFromEnv() (string, error) {
 
 // Init 初始化数据库
 func Init() error {
-	_ = godotenv.Load()
+	loadEnvConfig()
 
 	// 获取用户数据目录
 	homeDir, err := os.UserHomeDir()
@@ -73,13 +103,16 @@ func Init() error {
 		return fmt.Errorf("打开数据库失败: %w", err)
 	}
 
+	// 如果表存在，先清理重复数据，避免 AutoMigrate 创建唯一索引失败
+	if db.Migrator().HasTable(&models.Video{}) {
+		if err := cleanupDuplicateVideos(db); err != nil {
+			return fmt.Errorf("清理重复视频失败: %w", err)
+		}
+	}
+
 	// 自动迁移数据表
 	if err := db.AutoMigrate(&models.Video{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
-	}
-
-	if err := cleanupDuplicateVideos(db); err != nil {
-		return fmt.Errorf("清理重复视频失败: %w", err)
 	}
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
