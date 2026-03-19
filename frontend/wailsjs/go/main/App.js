@@ -66,6 +66,10 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetStartupError() {
+  return window['go']['main']['App']['GetStartupError']();
+}
+
 export function GetVideosByDirectory(arg1) {
   return window['go']['main']['App']['GetVideosByDirectory'](arg1);
 }

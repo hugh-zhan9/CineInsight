@@ -35,6 +35,8 @@ export function GetAllVideos():Promise<Array<models.Video>>;
 
 export function GetSettings():Promise<models.Settings>;
 
+export function GetStartupError():Promise<string>;
+
 export function GetVideosByDirectory(arg1:string):Promise<Array<models.Video>>;
 
 export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:number):Promise<Array<models.Video>>;

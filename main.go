@@ -14,17 +14,19 @@ import (
 )
 
 func main() {
+	// Create an instance of the app structure
+	app := NewApp()
+
 	// 初始化数据库
 	if err := database.Init(); err != nil {
-		log.Fatal("数据库初始化失败:", err)
+		log.Printf("数据库初始化失败: %v", err)
+		app.setStartupError(err)
+	} else {
+		defer database.Close()
 	}
-	defer database.Close()
 
 	// 默认禁用日志，设置页开启后再写入
 	log.SetOutput(io.Discard)
-
-	// Create an instance of the app structure
-	app := NewApp()
 
 	// Create application with options
 	err := wails.Run(&options.App{
