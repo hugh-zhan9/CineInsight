@@ -20,7 +20,17 @@
       </div>
     </div>
 
-    <div class="main-view">
+    <div v-if="startupError" class="startup-error-view">
+      <div class="startup-error-card">
+        <h2>应用已启动，但数据库连接失败</h2>
+        <p class="startup-error-text">{{ startupError }}</p>
+        <p class="startup-error-hint">
+          如果你是双击启动应用，请优先检查 macOS 是否已允许“析微影策”访问本地网络，并确认 Postgres 地址和端口可达。
+        </p>
+      </div>
+    </div>
+
+    <div v-else class="main-view">
       <VideoListPage
         v-if="currentPage === 'videos'"
         :tags="tags"
@@ -43,7 +53,7 @@
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 
@@ -55,6 +65,7 @@ export default {
       currentPage: 'videos',
       tags: [],
       directories: [],
+      startupError: '',
       systemTheme: 'light',
       settings: {
         confirm_before_delete: true,
@@ -68,6 +79,12 @@ export default {
     };
   },
   async mounted() {
+    this.startupError = await GetStartupError();
+    if (this.startupError) {
+      this.applyTheme();
+      return;
+    }
+
     await this.loadSettings();
     await this.loadDirectories();
     this.loadTags();
@@ -191,6 +208,39 @@ html, body {
 .nav-btn:hover:not(.active) { color: var(--text-primary); background: rgba(0,0,0,0.02); }
 
 .main-view { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.startup-error-view {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+.startup-error-card {
+  max-width: 720px;
+  width: 100%;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 16px;
+  padding: 28px 32px;
+  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.08);
+}
+.startup-error-card h2 {
+  font-size: 22px;
+  margin-bottom: 12px;
+  color: var(--danger-color);
+}
+.startup-error-text {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  word-break: break-word;
+}
+.startup-error-hint {
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
 
 /* --- Basic Controls --- */
 .search-input, .text-input, .select-input, .number-input {

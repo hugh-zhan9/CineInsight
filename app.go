@@ -20,6 +20,7 @@ type App struct {
 	settingsService  *services.SettingsService
 	directoryService *services.DirectoryService
 	subtitleService  *services.SubtitleService
+	startupError     string
 	logFile          *os.File // 保持日志文件句柄引用，防止泄漏
 }
 
@@ -42,10 +43,25 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	if a.startupError != "" {
+		return
+	}
 	a.subtitleService.SetContext(ctx) // Inject context
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		a.setLogEnabled(settings.LogEnabled)
 	}
+}
+
+func (a *App) setStartupError(err error) {
+	if err == nil {
+		a.startupError = ""
+		return
+	}
+	a.startupError = err.Error()
+}
+
+func (a *App) GetStartupError() string {
+	return a.startupError
 }
 
 // closeLogFile 关闭当前日志文件句柄（如果有）
