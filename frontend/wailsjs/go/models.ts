@@ -237,6 +237,75 @@ export namespace models {
 
 export namespace services {
 	
+	export class CleanupDuplicateGroup {
+	    original: models.Video;
+	    candidates: models.Video[];
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupDuplicateGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.original = this.convertValues(source["original"], models.Video);
+	        this.candidates = this.convertValues(source["candidates"], models.Video);
+	        this.reason = source["reason"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CleanupAnalysis {
+	    duplicate_groups: CleanupDuplicateGroup[];
+	    low_duration: models.Video[];
+	    low_resolution: models.Video[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupAnalysis(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.duplicate_groups = this.convertValues(source["duplicate_groups"], CleanupDuplicateGroup);
+	        this.low_duration = this.convertValues(source["low_duration"], models.Video);
+	        this.low_resolution = this.convertValues(source["low_resolution"], models.Video);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class ScannedFile {
 	    path: string;
 	    size: number;
@@ -249,6 +318,63 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
 	        this.size = source["size"];
+	    }
+	}
+	export class SubtitleSearchMatch {
+	    video: models.Video;
+	    segment: subtitleparser.Segment;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubtitleSearchMatch(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.segment = this.convertValues(source["segment"], subtitleparser.Segment);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+}
+
+export namespace subtitleparser {
+	
+	export class Segment {
+	    index: number;
+	    start_time_ms: number;
+	    end_time_ms: number;
+	    text: string;
+	    lines: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new Segment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.start_time_ms = source["start_time_ms"];
+	        this.end_time_ms = source["end_time_ms"];
+	        this.text = source["text"];
+	        this.lines = source["lines"];
 	    }
 	}
 

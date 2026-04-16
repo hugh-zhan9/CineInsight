@@ -20,13 +20,16 @@
             </feMerge>
         </filter>
     </defs>
-    <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#bg_grad)" />
-    <g filter="url(#shadow)" transform="translate(380, 312)">
-        <path d="M0 0 L320 200" stroke="white" stroke-width="60" stroke-linecap="round" opacity="0.9" />
-        <path d="M320 200 L0 400" stroke="white" stroke-width="60" stroke-linecap="round" opacity="0.9" />
-        <path d="M-30 100 L-30 300" stroke="white" stroke-width="60" stroke-linecap="round" opacity="0.9" />
-        <circle cx="80" cy="200" r="45" fill="url(#glow_grad)" opacity="0.8" />
-        <circle cx="80" cy="200" r="15" fill="#5EEAD4" />
+    <g transform="translate(102.4, 102.4) scale(0.8)">
+        <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#bg_grad)" />
+        <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#bg_grad)" />
+        <g filter="url(#shadow)" transform="translate(380, 312)">
+            <path d="M0 0 L320 200" stroke="white" stroke-width="60" stroke-linecap="round" opacity="0.9" />
+            <path d="M320 200 L0 400" stroke="white" stroke-width="60" stroke-linecap="round" opacity="0.9" />
+            <path d="M-30 100 L-30 300" stroke="white" stroke-width="60" stroke-linecap="round" opacity="0.9" />
+            <circle cx="80" cy="200" r="45" fill="url(#glow_grad)" opacity="0.8" />
+            <circle cx="80" cy="200" r="15" fill="#5EEAD4" />
+        </g>
+        <path d="M220 50 Q 512 30, 804 50 Q 974 50, 974 220 L 974 350 Q 512 400, 50 350 L 50 220 Q 50 50, 220 50" fill="white" opacity="0.05" />
     </g>
-    <path d="M220 50 Q 512 30, 804 50 Q 974 50, 974 220 L 974 350 Q 512 400, 50 350 L 50 220 Q 50 50, 220 50" fill="white" opacity="0.05" />
 </svg>
