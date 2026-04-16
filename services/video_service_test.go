@@ -42,6 +42,13 @@ func mustCreateFile(t *testing.T, path string) {
 	}
 }
 
+func mustSetFileModTime(t *testing.T, path string, modTime time.Time) {
+	t.Helper()
+	if err := os.Chtimes(path, modTime, modTime); err != nil {
+		t.Fatalf("设置文件时间失败: %v", err)
+	}
+}
+
 func TestScanDirectorySkipsHiddenFilesAndDirs(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
@@ -54,6 +61,7 @@ func TestScanDirectorySkipsHiddenFilesAndDirs(t *testing.T) {
 	mustCreateFile(t, visible)
 	mustCreateFile(t, hiddenFile)
 	mustCreateFile(t, hiddenDirFile)
+	mustSetFileModTime(t, visible, time.Now().Add(-10*time.Minute))
 
 	files, err := svc.ScanDirectory(root)
 	if err != nil {
@@ -64,6 +72,78 @@ func TestScanDirectorySkipsHiddenFilesAndDirs(t *testing.T) {
 	}
 	if files[0] != visible {
 		t.Fatalf("扫描结果不正确: got=%s want=%s", files[0], visible)
+	}
+}
+
+func TestScanDirectorySkipsTrashTempSuffixAndRecentlyActiveFiles(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+
+	stableVideo := filepath.Join(root, "stable.mp4")
+	trashVideo := filepath.Join(root, "trash", "trashed.mp4")
+	tempSuffixVideo := filepath.Join(root, "downloading.temp.mp4")
+	recentVideo := filepath.Join(root, "recent.mp4")
+
+	mustCreateFile(t, stableVideo)
+	mustCreateFile(t, trashVideo)
+	mustCreateFile(t, tempSuffixVideo)
+	mustCreateFile(t, recentVideo)
+
+	oldTime := time.Now().Add(-10 * time.Minute)
+	mustSetFileModTime(t, stableVideo, oldTime)
+	mustSetFileModTime(t, trashVideo, oldTime)
+	mustSetFileModTime(t, tempSuffixVideo, oldTime)
+
+	files, err := svc.ScanDirectory(root)
+	if err != nil {
+		t.Fatalf("扫描失败: %v", err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("期望仅扫描到1个稳定视频，实际: %d, files=%v", len(files), files)
+	}
+	if files[0] != stableVideo {
+		t.Fatalf("扫描结果不正确: got=%s want=%s", files[0], stableVideo)
+	}
+}
+
+func TestDeleteVideoMovesFileToTrashWhenDeleteFileEnabled(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+
+	videoPath := filepath.Join(root, "library", "movie.mp4")
+	mustCreateFile(t, videoPath)
+
+	video := models.Video{
+		Name:      "movie.mp4",
+		Path:      videoPath,
+		Directory: filepath.Dir(videoPath),
+		Size:      1,
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	if err := svc.DeleteVideo(video.ID, true); err != nil {
+		t.Fatalf("删除视频失败: %v", err)
+	}
+
+	if _, err := os.Stat(videoPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("期望原文件已移走, err=%v", err)
+	}
+
+	trashPath := filepath.Join(filepath.Dir(videoPath), DefaultTrashDirName, filepath.Base(videoPath))
+	if _, err := os.Stat(trashPath); err != nil {
+		t.Fatalf("期望文件已移动到回收站: %v", err)
+	}
+
+	var deleted models.Video
+	if err := database.DB.Unscoped().First(&deleted, video.ID).Error; err != nil {
+		t.Fatalf("期望数据库仍可查到软删除记录: %v", err)
+	}
+	if !deleted.DeletedAt.Valid {
+		t.Fatalf("期望视频记录已被软删除")
 	}
 }
 

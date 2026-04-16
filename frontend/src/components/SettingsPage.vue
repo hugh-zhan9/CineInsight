@@ -16,7 +16,7 @@
         <label class="switch">
           <input type="checkbox" v-model="settingsForm.delete_original_file" />
           <span class="slider"></span>
-          <span>默认删除原始文件</span>
+          <span>默认将原始文件移入回收站</span>
         </label>
       </div>
       <div class="setting-item">

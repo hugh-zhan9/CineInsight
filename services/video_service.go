@@ -20,6 +20,13 @@ import (
 
 type VideoService struct{}
 
+const recentActiveFileThreshold = 5 * time.Minute
+
+var tempVideoStemSuffixes = []string{
+	".temp", "_temp", "-temp",
+	".tmp", "_tmp", "-tmp",
+}
+
 // GetAllVideos 获取所有视频（已废弃，使用分页方式）
 func (s *VideoService) GetAllVideos() ([]models.Video, error) {
 	var videos []models.Video
@@ -258,10 +265,14 @@ func (s *VideoService) DeleteVideo(id uint, deleteFile bool) error {
 		return err
 	}
 
-	// 如果需要删除原始文件
+	// 如果需要删除原始文件，则先移动到回收站，为后续恢复能力留出基础。
 	if deleteFile {
-		if err := os.Remove(video.Path); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("删除文件失败: %w", err)
+		trashPath, err := NewTrashService().MoveToTrash(video.Path)
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("移动文件到回收站失败: %w", err)
+		}
+		if err == nil {
+			log.Printf("视频已移入回收站 src=%s dst=%s", video.Path, trashPath)
 		}
 	}
 
@@ -348,7 +359,7 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 			return nil // 跳过错误的文件
 		}
 
-		if info.Name() != "." && strings.HasPrefix(info.Name(), ".") {
+		if shouldSkipHiddenPath(info) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -356,6 +367,13 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 		}
 
 		if info.IsDir() {
+			if isTrashDirName(info.Name()) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if isTrashPath(path) || hasTempVideoSuffix(path) || isRecentlyActiveFile(info) {
 			return nil
 		}
 
@@ -372,6 +390,42 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 	log.Printf("扫描目录完成 dir=%s files=%d", dir, len(videoFiles))
 
 	return videoFiles, err
+}
+
+func shouldSkipHiddenPath(info os.FileInfo) bool {
+	return info.Name() != "." && strings.HasPrefix(info.Name(), ".")
+}
+
+func isTrashDirName(name string) bool {
+	return strings.EqualFold(strings.TrimSpace(name), DefaultTrashDirName)
+}
+
+func isTrashPath(path string) bool {
+	cleanPath := filepath.Clean(path)
+	volume := filepath.VolumeName(cleanPath)
+	trimmed := strings.TrimPrefix(cleanPath, volume)
+	for _, part := range strings.Split(trimmed, string(os.PathSeparator)) {
+		if isTrashDirName(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTempVideoSuffix(path string) bool {
+	baseName := strings.ToLower(filepath.Base(path))
+	ext := strings.ToLower(filepath.Ext(baseName))
+	stem := strings.TrimSuffix(baseName, ext)
+	for _, suffix := range tempVideoStemSuffixes {
+		if stem == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(stem, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isRecentlyActiveFile(info os.FileInfo) bool {
+	return time.Since(info.ModTime()) < recentActiveFileThreshold
 }
 
 // RelocateVideo 更新视频路径（文件迁移场景，保留标签等元数据）

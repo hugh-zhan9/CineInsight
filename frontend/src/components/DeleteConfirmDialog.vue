@@ -6,13 +6,14 @@
       <div class="form-group">
         <label>
           <input type="checkbox" v-model="deleteFile" />
-          同时删除原始文件
+          同时将原始文件移入回收站
         </label>
         <label v-if="settings.confirm_before_delete">
           <input type="checkbox" v-model="dontAskAgain" />
           不再提示
         </label>
       </div>
+      <p class="delete-hint">不勾选时仅移除数据库记录，原文件会保留在磁盘上。</p>
       <div class="modal-actions">
         <button @click="handleConfirm" class="btn-danger">确认删除</button>
         <button @click="$emit('close')" class="btn-secondary">取消</button>
@@ -55,3 +56,11 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.delete-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: #666;
+}
+</style>
