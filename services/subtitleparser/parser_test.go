@@ -3,6 +3,7 @@ package subtitleparser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,12 +67,48 @@ func TestParseFileReadsStructuredSegments(t *testing.T) {
 	}
 }
 
-func TestParseRejectsMalformedTimestamp(t *testing.T) {
-	content := "1\n00:00:01 --> 00:00:02,000\nbroken\n"
+func TestParseSkipsMalformedBlocks(t *testing.T) {
+	content := strings.Join([]string{
+		"1",
+		"00:00:00,000 --> 00:00:01,000",
+		"good first",
+		"",
+		"bad-index",
+		"00:00:01 --> 00:00:02,000",
+		"broken",
+		"",
+		"3",
+		"00:00:02,000 --> 00:00:03,000",
+		"good second",
+	}, "\n")
 
-	_, err := Parse(content)
-	if err == nil {
-		t.Fatalf("期望 malformed timestamp 返回错误")
+	segments, err := Parse(content)
+	if err != nil {
+		t.Fatalf("解析 SRT 失败: %v", err)
+	}
+	if len(segments) != 2 {
+		t.Fatalf("期望跳过坏块后剩余 2 个 segment，实际 %d", len(segments))
+	}
+	if segments[0].Text != "good first" || segments[1].Text != "good second" {
+		t.Fatalf("跳过坏块后的文本不符合预期: %#v", segments)
+	}
+}
+
+func TestParseAcceptsCueSettingsAndMissingIndex(t *testing.T) {
+	content := "00:00:01.000 --> 00:00:02.500 align:start position:0%\nhello world\n"
+
+	segments, err := Parse(content)
+	if err != nil {
+		t.Fatalf("解析带 cue settings 的 SRT 失败: %v", err)
+	}
+	if len(segments) != 1 {
+		t.Fatalf("期望 1 个 segment，实际 %d", len(segments))
+	}
+	if segments[0].Index != 1 {
+		t.Fatalf("缺失 index 时应回退到块序号: got=%d want=1", segments[0].Index)
+	}
+	if segments[0].StartTimeMs != 1000 || segments[0].EndTimeMs != 2500 {
+		t.Fatalf("时间解析错误: got=%d-%d want=1000-2500", segments[0].StartTimeMs, segments[0].EndTimeMs)
 	}
 }
 
