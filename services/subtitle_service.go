@@ -67,16 +67,11 @@ func (s *SubtitleService) CheckDependencies() (map[string]bool, error) {
 	// Check FFmpeg
 	result["ffmpeg"] = s.findBinary("ffmpeg") != ""
 
-	// Check Whisper (brew installs as whisper-cli, not whisper-cpp)
-	result["whisper"] = s.findBinary("whisper-cli") != "" || s.findBinary("whisper-cpp") != "" || s.findBinary("main") != ""
+	// WhisperX runtime lives in a private venv under ~/.video-master/whisperx_sidecar
+	result["whisper"] = s.isWhisperXInstalled()
 
-	// Check Model (多语言 medium 模型)
-	modelPath := filepath.Join(s.ModelDir, "ggml-medium.bin")
-	if _, err := os.Stat(modelPath); err == nil {
-		result["model"] = true
-	} else {
-		result["model"] = false
-	}
+	// WhisperX lazily downloads model weights on first transcription, so runtime-ready implies model-ready.
+	result["model"] = result["whisper"]
 
 	return result, nil
 }
@@ -123,24 +118,9 @@ func (s *SubtitleService) DownloadDependencies() error {
 		}
 	}
 
-	if !status["model"] {
-		if err := s.downloadModel(); err != nil {
-			return err
-		}
-	}
-
-	// Whisper: auto-install if not found
 	if !status["whisper"] {
-		if runtime.GOOS == "darwin" {
-			if err := s.installWhisperMac(); err != nil {
-				return err
-			}
-		} else if runtime.GOOS == "windows" {
-			if err := s.downloadWhisperWindows(); err != nil {
-				return err
-			}
-		} else {
-			return fmt.Errorf("请手动安装 whisper.cpp")
+		if err := s.installWhisperXRuntime(); err != nil {
+			return err
 		}
 	}
 
@@ -169,10 +149,10 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 		return fmt.Errorf("缺少 FFmpeg，请先点击下载依赖")
 	}
 	if !status["whisper"] {
-		return fmt.Errorf("缺少 Whisper，请先点击下载依赖")
+		return fmt.Errorf("缺少 WhisperX 运行时，请先点击下载依赖")
 	}
 	if !status["model"] {
-		return fmt.Errorf("缺少语音模型，请先点击下载依赖")
+		return fmt.Errorf("缺少 WhisperX 模型依赖，请先点击下载依赖")
 	}
 
 	// Extract Audio
@@ -185,19 +165,22 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 	}
 
 	// Transcribe (原文识别)
-	s.emitProgress("process", 20, "Transcribing (this may take a while)...")
+	s.emitProgress("process", 20, "Transcribing with WhisperX (this may take a while)...")
 	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
 
 	if sourceLang == "" {
 		sourceLang = "auto"
 	}
 
-	detectedLang, err := s.transcribeCLIWithLang(ctx, tempWav, outputPrefix, sourceLang)
+	detectedLang, segments, err := s.transcribeWhisperXWithLang(ctx, tempWav, sourceLang)
 	if err != nil {
 		return err
 	}
 
 	srtPath := outputPrefix + ".srt"
+	if err := writeSRT(srtPath, segments); err != nil {
+		return fmt.Errorf("写入 WhisperX 字幕失败: %w", err)
+	}
 
 	// 后处理：检测幻觉输出（forceGenerate 时跳过）
 	if !forceGenerate {

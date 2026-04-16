@@ -89,7 +89,7 @@ func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMissing(t *testing.T) {
 	}
 }
 
-func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMalformed(t *testing.T) {
+func TestGetSubtitleSegmentsReturnsEmptyWhenSubtitleMalformed(t *testing.T) {
 	setupAppTestDB(t)
 	root := t.TempDir()
 	videoPath := filepath.Join(root, "movie.mp4")
@@ -108,7 +108,11 @@ func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMalformed(t *testing.T) {
 	}
 
 	app := NewApp()
-	if _, err := app.GetSubtitleSegments(video.ID); err == nil {
-		t.Fatalf("期望损坏字幕文件时返回错误")
+	segments, err := app.GetSubtitleSegments(video.ID)
+	if err != nil {
+		t.Fatalf("容错解析下不应因损坏字幕整体失败: %v", err)
+	}
+	if len(segments) != 0 {
+		t.Fatalf("期望损坏字幕被跳过后返回 0 条，实际 %d", len(segments))
 	}
 }

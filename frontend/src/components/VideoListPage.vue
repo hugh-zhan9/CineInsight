@@ -325,7 +325,7 @@
         
         <!-- 语言选择 (确认生成时显示) -->
         <div v-if="subtitleDialog.mode === 'confirm'" class="lang-select-box" style="margin-top: 15px;">
-          <label style="display: block; font-size: 13px; margin-bottom: 8px; color: #666;">识别源语言 (Whisper):</label>
+          <label style="display: block; font-size: 13px; margin-bottom: 8px; color: #666;">识别源语言 (WhisperX):</label>
           <select v-model="sourceLang" class="search-input" style="width: 100%; height: 36px; padding: 0 10px;">
             <option v-for="opt in languageOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
@@ -360,6 +360,34 @@
 </template>
 
 <style scoped>
+.toolbar .search-group {
+  flex: 1 1 360px;
+  min-width: 280px;
+  display: flex;
+  align-items: center;
+}
+.toolbar .search-group .select-input {
+  flex: 0 0 120px;
+}
+.toolbar .search-group .search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+@media (max-width: 1280px) {
+  .toolbar {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+
+  .toolbar .search-group {
+    flex-basis: 100%;
+  }
+
+  .toolbar .action-group {
+    margin-left: 0 !important;
+    flex-wrap: wrap;
+  }
+}
 .download-modal {
   width: 400px;
   text-align: center;
@@ -712,7 +740,7 @@ export default {
         
         if (!status.ffmpeg || !status.whisper || !status.model) {
           this.subtitleDialog.title = '需要下载组件';
-          this.subtitleDialog.msg = '初次使用需下载字幕生成组件 (FFmpeg/Whisper/Model)，约 1.7GB。是否立即下载？';
+          this.subtitleDialog.msg = '初次使用需下载字幕生成组件 (FFmpeg/WhisperX Runtime/Model Cache)，体积较大。是否立即下载？';
           this.subtitleDialog.requiresDownload = true;
         } else {
           this.subtitleDialog.title = '准备生成字幕';

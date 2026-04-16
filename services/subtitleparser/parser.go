@@ -1,7 +1,6 @@
 package subtitleparser
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,7 +10,7 @@ import (
 
 var (
 	blockSeparator   = regexp.MustCompile(`\n\s*\n`)
-	timestampPattern = regexp.MustCompile(`^(\d{2}):(\d{2}):(\d{2})[,.](\d{3})$`)
+	timestampPattern = regexp.MustCompile(`(\d{2}):(\d{2}):(\d{2})[,.](\d{3})`)
 	unicodeBOM       = "\ufeff"
 )
 
@@ -47,9 +46,9 @@ func Parse(content string) ([]Segment, error) {
 	segments := make([]Segment, 0, len(blocks))
 
 	for blockIndex, block := range blocks {
-		segment, err := parseBlock(blockIndex+1, block)
-		if err != nil {
-			return nil, err
+		segment, ok := parseBlock(blockIndex+1, block)
+		if !ok {
+			continue
 		}
 		segments = append(segments, segment)
 	}
@@ -64,40 +63,55 @@ func normalizeContent(content string) string {
 	return normalized
 }
 
-func parseBlock(blockNumber int, block string) (Segment, error) {
+func parseBlock(blockNumber int, block string) (Segment, bool) {
 	lines := strings.Split(strings.TrimSpace(block), "\n")
-	if len(lines) < 3 {
-		return Segment{}, fmt.Errorf("invalid srt block %d: expected at least 3 lines", blockNumber)
+	if len(lines) < 2 {
+		return Segment{}, false
 	}
 
-	index, err := strconv.Atoi(strings.TrimSpace(lines[0]))
+	index := blockNumber
+	timeLineIndex := 0
+	if parsedIndex, err := strconv.Atoi(strings.TrimSpace(lines[0])); err == nil {
+		index = parsedIndex
+		timeLineIndex = 1
+	}
+
+	if len(lines) <= timeLineIndex+1 {
+		return Segment{}, false
+	}
+
+	startMs, endMs, err := parseTimeRange(strings.TrimSpace(lines[timeLineIndex]))
 	if err != nil {
-		return Segment{}, fmt.Errorf("invalid srt block %d index: %w", blockNumber, err)
+		return Segment{}, false
 	}
 
-	startMs, endMs, err := parseTimeRange(strings.TrimSpace(lines[1]))
-	if err != nil {
-		return Segment{}, fmt.Errorf("invalid srt block %d time range: %w", blockNumber, err)
+	if endMs < startMs {
+		endMs = startMs
 	}
 
-	textLines := make([]string, 0, len(lines)-2)
-	for _, line := range lines[2:] {
+	textLines := make([]string, 0, len(lines)-timeLineIndex-1)
+	for _, line := range lines[timeLineIndex+1:] {
 		textLines = append(textLines, strings.TrimSpace(line))
+	}
+
+	text := strings.TrimSpace(strings.Join(textLines, "\n"))
+	if text == "" {
+		return Segment{}, false
 	}
 
 	return Segment{
 		Index:       index,
 		StartTimeMs: startMs,
 		EndTimeMs:   endMs,
-		Text:        strings.Join(textLines, "\n"),
+		Text:        text,
 		Lines:       textLines,
-	}, nil
+	}, true
 }
 
 func parseTimeRange(line string) (int64, int64, error) {
 	parts := strings.Split(line, "-->")
 	if len(parts) != 2 {
-		return 0, 0, fmt.Errorf("expected start --> end format")
+		return 0, 0, strconv.ErrSyntax
 	}
 
 	startMs, err := parseTimestamp(strings.TrimSpace(parts[0]))
@@ -116,7 +130,7 @@ func parseTimeRange(line string) (int64, int64, error) {
 func parseTimestamp(value string) (int64, error) {
 	matches := timestampPattern.FindStringSubmatch(value)
 	if len(matches) != 5 {
-		return 0, fmt.Errorf("invalid timestamp %q", value)
+		return 0, strconv.ErrSyntax
 	}
 
 	hours, _ := strconv.Atoi(matches[1])
