@@ -62,6 +62,14 @@ export function GetAllVideos() {
   return window['go']['main']['App']['GetAllVideos']();
 }
 
+export function GetCleanupCandidates(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetCleanupCandidates'](arg1, arg2, arg3);
+}
+
+export function GetSubtitleSegments(arg1) {
+  return window['go']['main']['App']['GetSubtitleSegments'](arg1);
+}
+
 export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
@@ -116,6 +124,10 @@ export function ScanDirectoryWithInfo(arg1) {
 
 export function SearchVideos(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SearchVideos'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function SearchSubtitleMatches(arg1, arg2) {
+  return window['go']['main']['App']['SearchSubtitleMatches'](arg1, arg2);
 }
 
 export function SearchVideosByTags(arg1, arg2, arg3, arg4, arg5) {

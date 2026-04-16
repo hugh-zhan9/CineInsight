@@ -2,22 +2,26 @@
   <div class="page-content">
     <div class="toolbar">
       <div class="search-group">
+        <select v-model="searchMode" @change="handleSearch(true)" class="select-input" style="width: 120px; margin-right: 8px;">
+          <option value="file">文件搜索</option>
+          <option value="subtitle">字幕搜索</option>
+        </select>
         <input 
           v-model="searchKeyword" 
-          @input="handleSearch"
+          @input="handleSearch()"
           type="text" 
-          placeholder="搜索视频文件名或路径..." 
+          :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索视频文件名或路径...'" 
           class="search-input"
         />
       </div>
       
       <div class="filter-group">
-        <select v-model="selectedSizeRange" @change="handleSearch" class="select-input" style="width: 130px;">
+        <select v-model="selectedSizeRange" @change="handleSearch(true)" class="select-input" style="width: 130px;">
           <option value="all">📁 体积 (全部)</option>
           <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
         </select>
         
-        <select v-model="selectedResRange" @change="handleSearch" class="select-input" style="width: 150px;">
+        <select v-model="selectedResRange" @change="handleSearch(true)" class="select-input" style="width: 150px;">
           <option value="all">📺 分辨率 (全部)</option>
           <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
         </select>
@@ -25,6 +29,7 @@
 
       <div class="action-group" style="margin-left: auto; display: flex; gap: 8px;">
         <button @click="playRandom" class="btn-random">🎲 随机播放</button>
+        <button @click="openCleanupDialog" class="btn-secondary">🧹 清理候选</button>
         <button @click="showScanDialog = true" class="btn-primary">🔍 扫描目录</button>
         <button @click="showTagManagerDialog = true" class="btn-secondary">🏷️ 标签管理</button>
       </div>
@@ -73,6 +78,7 @@
           <span v-if="video.resolution" class="meta-divider">|</span>
           <span v-if="video.resolution" class="video-resolution">{{ video.resolution }}</span>
         </div>
+        <p v-if="video._subtitleMatchText" class="video-subtitle-hit">字幕命中: {{ video._subtitleMatchText }}</p>
           <div class="video-tags">
             <span 
               v-for="tag in (video.tags || [])" 
@@ -97,6 +103,7 @@
           >
             {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
           </button>
+          <button @click="openSubtitlePreview(video)" class="btn-action">字幕预览</button>
           <button @click="renameVideo(video)" class="btn-action">重命名</button>
         <button @click="confirmDelete(video)" class="btn-danger" :disabled="deletingIds.includes(video.id)">删除</button>
         </div>
@@ -183,6 +190,132 @@
       @close="tagDeleteDialog.show = false"
       @confirm-delete="confirmDeleteTag"
     />
+
+    <div v-if="cleanupDialog.show" class="modal-overlay">
+      <div class="modal cleanup-modal">
+        <h3>清理候选审阅</h3>
+        <p class="cleanup-intro">当前审阅基于轻量规则：重复文件（大小 + 采样哈希）、低时长、低分辨率。选中的视频会直接移入回收站并从库中移除。</p>
+
+        <div v-if="cleanupDialog.loading" class="cleanup-loading">正在分析视频库...</div>
+        <div v-else-if="cleanupDialog.error" class="cleanup-error">{{ cleanupDialog.error }}</div>
+        <div v-else-if="cleanupDialog.analysis" class="cleanup-body">
+          <div class="cleanup-summary">
+            <span>重复组 {{ cleanupDialog.analysis.duplicate_groups?.length || 0 }}</span>
+            <span>短视频 {{ cleanupDialog.analysis.low_duration?.length || 0 }}</span>
+            <span>低清视频 {{ cleanupDialog.analysis.low_resolution?.length || 0 }}</span>
+            <span>已选 {{ cleanupSelection.length }}</span>
+          </div>
+
+          <div v-if="cleanupCandidateCount" class="cleanup-toolbar">
+            <button @click="selectAllCleanupCandidates" class="btn-secondary">全选候选</button>
+            <button @click="clearCleanupSelection" class="btn-secondary" :disabled="cleanupSelection.length === 0">清空选择</button>
+            <button @click="openCleanupDialog" class="btn-secondary" :disabled="cleanupDialog.loading || cleanupDialog.processing">重新分析</button>
+          </div>
+
+          <div v-if="cleanupDialog.analysis.duplicate_groups?.length" class="cleanup-section">
+            <h4>重复候选</h4>
+            <div
+              v-for="group in cleanupDialog.analysis.duplicate_groups"
+              :key="`${group.original?.id}-${group.candidates?.length}`"
+              class="cleanup-card"
+            >
+              <p><strong>保留：</strong>{{ group.original?.name }} ({{ group.original?.resolution || '未知分辨率' }})</p>
+              <p><strong>原因：</strong>{{ group.reason }}</p>
+              <ul>
+                <li v-for="candidate in group.candidates || []" :key="candidate.id">
+                  <label class="cleanup-select-row">
+                    <input
+                      type="checkbox"
+                      :checked="isCleanupSelected(candidate.id)"
+                      @change="toggleCleanupSelection(candidate.id)"
+                    />
+                    <span>{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }}</span>
+                  </label>
+                </li>
+              </ul>
+            </div>
+          </div>
+
+          <div v-if="cleanupDialog.analysis.low_duration?.length" class="cleanup-section">
+            <h4>短视频</h4>
+            <ul>
+              <li v-for="video in cleanupDialog.analysis.low_duration" :key="`dur-${video.id}`">
+                <label class="cleanup-select-row">
+                  <input
+                    type="checkbox"
+                    :checked="isCleanupSelected(video.id)"
+                    @change="toggleCleanupSelection(video.id)"
+                  />
+                  <span>{{ video.name }} · {{ formatDuration(video.duration) || '00:00' }}</span>
+                </label>
+              </li>
+            </ul>
+          </div>
+
+          <div v-if="cleanupDialog.analysis.low_resolution?.length" class="cleanup-section">
+            <h4>低清视频</h4>
+            <ul>
+              <li v-for="video in cleanupDialog.analysis.low_resolution" :key="`res-${video.id}`">
+                <label class="cleanup-select-row">
+                  <input
+                    type="checkbox"
+                    :checked="isCleanupSelected(video.id)"
+                    @change="toggleCleanupSelection(video.id)"
+                  />
+                  <span>{{ video.name }} · {{ video.resolution || '未知分辨率' }}</span>
+                </label>
+              </li>
+            </ul>
+          </div>
+
+          <div
+            v-if="!(cleanupDialog.analysis.duplicate_groups?.length || cleanupDialog.analysis.low_duration?.length || cleanupDialog.analysis.low_resolution?.length)"
+            class="cleanup-empty"
+          >
+            当前没有命中轻量清理规则的候选项。
+          </div>
+        </div>
+
+        <div class="modal-actions">
+          <button
+            @click="trashSelectedCleanupCandidates"
+            class="btn-danger"
+            :disabled="cleanupSelection.length === 0 || cleanupDialog.loading || cleanupDialog.processing"
+          >
+            {{ cleanupDialog.processing ? '处理中...' : `将选中项移入回收站 (${cleanupSelection.length})` }}
+          </button>
+          <button @click="cleanupDialog.show = false" class="btn-primary">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="subtitlePreview.show" class="modal-overlay">
+      <div class="modal subtitle-preview-modal">
+        <h3>字幕预览</h3>
+        <p class="cleanup-intro" v-if="subtitlePreview.video">{{ subtitlePreview.video.name }}</p>
+
+        <div v-if="subtitlePreview.loading" class="cleanup-loading">正在读取字幕片段...</div>
+        <div v-else-if="subtitlePreview.error" class="cleanup-error">{{ subtitlePreview.error }}</div>
+        <div v-else-if="subtitlePreview.segments.length" class="subtitle-preview-list">
+          <div
+            v-for="segment in subtitlePreview.segments"
+            :key="`${segment.index}-${segment.start_time_ms}`"
+            :class="['subtitle-segment', { 'subtitle-segment-match': segmentMatchesKeyword(segment) }]"
+          >
+            <div class="subtitle-segment-time">
+              {{ formatTimestamp(segment.start_time_ms) }} - {{ formatTimestamp(segment.end_time_ms) }}
+              <span v-if="segmentMatchesKeyword(segment)" class="subtitle-match-badge">命中</span>
+            </div>
+            <div class="subtitle-segment-text">{{ segment.text }}</div>
+          </div>
+        </div>
+        <div v-else class="cleanup-empty">当前视频还没有可预览的字幕片段。</div>
+
+        <div class="modal-actions">
+          <button @click="subtitlePreview.show = false" class="btn-primary">关闭</button>
+        </div>
+      </div>
+    </div>
     
     <!-- 字幕操作弹窗（确认/进度/结果） -->
     <div v-if="subtitleDialog.show" class="modal-overlay">
@@ -206,7 +339,8 @@
           </div>
           <p class="progress-text">{{ subtitleDialog.percent }}%</p>
           <div class="modal-actions">
-            <button @click="cancelSubtitle" class="btn-danger">取消生成</button>
+            <button v-if="subtitleDialog.progressAction === 'generate'" @click="cancelSubtitle" class="btn-danger">取消生成</button>
+            <button v-else @click="subtitleDialog.show = false" class="btn-secondary">后台继续下载</button>
           </div>
         </template>
         
@@ -254,10 +388,103 @@
   cursor: wait;
   background-color: #aaa !important;
 }
+.cleanup-modal {
+  width: 680px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 28px;
+}
+.cleanup-intro,
+.cleanup-loading,
+.cleanup-error,
+.cleanup-empty {
+  color: #666;
+  font-size: 14px;
+}
+.cleanup-summary {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 16px 0;
+  font-size: 13px;
+  color: #444;
+}
+.cleanup-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.cleanup-section {
+  margin-top: 18px;
+}
+.cleanup-card {
+  padding: 12px 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  margin-top: 10px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.cleanup-card p,
+.cleanup-card ul,
+.cleanup-section ul {
+  margin: 6px 0;
+}
+.cleanup-select-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.subtitle-preview-modal {
+  width: 760px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100vh - 48px);
+  overflow-y: auto;
+  padding: 28px;
+}
+.subtitle-preview-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+.subtitle-segment {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 12px 14px;
+  background: #fff;
+}
+.subtitle-segment-match {
+  border-color: #0f766e;
+  background: rgba(15, 118, 110, 0.06);
+}
+.subtitle-segment-time {
+  font-size: 12px;
+  color: #666;
+  margin-bottom: 6px;
+}
+.subtitle-segment-text {
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+.subtitle-match-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(15, 118, 110, 0.12);
+  color: #0f766e;
+}
+.video-subtitle-hit {
+  margin: 8px 0 0;
+  color: #0f766e;
+  font-size: 13px;
+}
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings, CheckSubtitleDependencies, DownloadSubtitleDependencies, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings, CheckSubtitleDependencies, DownloadSubtitleDependencies, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupCandidates, GetSubtitleSegments } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -277,6 +504,7 @@ export default {
     return {
       videos: [],
       searchKeyword: '',
+      searchMode: 'file',
       selectedTags: [],
       selectedSizeRange: 'all',
       selectedResRange: 'all',
@@ -310,11 +538,15 @@ export default {
       deleteDialog: { show: false, video: null },
       deletingIds: [],
       tagDeleteDialog: { show: false, tag: null },
+      cleanupDialog: { show: false, loading: false, processing: false, analysis: null, error: '' },
+      cleanupSelection: [],
+      subtitlePreview: { show: false, loading: false, error: '', video: null, segments: [] },
       // Subtitle states
       generatingSubtitleIds: [],
       subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0 },
       pendingSubtitleVideo: null,
       pendingForceVideo: null,
+      searchDebounceTimer: null,
       sourceLang: 'auto',
       languageOptions: [
         { label: '自动检测', value: 'auto' },
@@ -339,6 +571,7 @@ export default {
       window.runtime.EventsOn('download-progress', (data) => {
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'progress';
+        this.subtitleDialog.progressAction = 'download';
         this.subtitleDialog.title = '正在下载组件';
         this.subtitleDialog.percent = data.percent;
         this.subtitleDialog.msg = data.msg;
@@ -356,8 +589,115 @@ export default {
   },
   beforeUnmount() {
     document.removeEventListener('click', this.hideContextMenu);
+    if (this.searchDebounceTimer) {
+      clearTimeout(this.searchDebounceTimer);
+    }
+  },
+  computed: {
+    cleanupCandidateCount() {
+      return this.getAllCleanupCandidates().length;
+    }
   },
   methods: {
+    async openCleanupDialog() {
+      this.cleanupSelection = [];
+      this.cleanupDialog = { show: true, loading: true, processing: false, analysis: null, error: '' };
+      try {
+        const analysis = await GetCleanupCandidates(5, 480, 320);
+        this.cleanupDialog.analysis = analysis;
+      } catch (err) {
+        console.error('获取清理候选失败:', err);
+        this.cleanupDialog.error = '获取清理候选失败: ' + err;
+      } finally {
+        this.cleanupDialog.loading = false;
+      }
+    },
+    getAllCleanupCandidates() {
+      const analysis = this.cleanupDialog.analysis || {};
+      const byID = new Map();
+      for (const group of analysis.duplicate_groups || []) {
+        for (const candidate of group.candidates || []) {
+          byID.set(candidate.id, candidate);
+        }
+      }
+      for (const video of analysis.low_duration || []) {
+        byID.set(video.id, video);
+      }
+      for (const video of analysis.low_resolution || []) {
+        byID.set(video.id, video);
+      }
+      return Array.from(byID.values());
+    },
+    isCleanupSelected(videoID) {
+      return this.cleanupSelection.includes(videoID);
+    },
+    toggleCleanupSelection(videoID) {
+      if (this.isCleanupSelected(videoID)) {
+        this.cleanupSelection = this.cleanupSelection.filter(id => id !== videoID);
+        return;
+      }
+      this.cleanupSelection = [...this.cleanupSelection, videoID];
+    },
+    selectAllCleanupCandidates() {
+      this.cleanupSelection = this.getAllCleanupCandidates().map(video => video.id);
+    },
+    clearCleanupSelection() {
+      this.cleanupSelection = [];
+    },
+    async trashSelectedCleanupCandidates() {
+      const selectedVideos = this.getAllCleanupCandidates().filter(video => this.cleanupSelection.includes(video.id));
+      if (selectedVideos.length === 0) {
+        return;
+      }
+      const selectedIDs = selectedVideos.map(video => video.id);
+
+      this.cleanupDialog.processing = true;
+      try {
+        for (const video of selectedVideos) {
+          if (!this.deletingIds.includes(video.id)) {
+            this.deletingIds.push(video.id);
+          }
+          await DeleteVideo(video.id, true);
+          this.videos = this.videos.filter(item => item.id !== video.id);
+        }
+        this.cleanupSelection = [];
+        await this.reloadCurrentView();
+        await this.openCleanupDialog();
+      } catch (err) {
+        console.error('批量清理失败:', err);
+        alert('批量清理失败: ' + err);
+      } finally {
+        this.cleanupDialog.processing = false;
+        this.deletingIds = this.deletingIds.filter(id => !selectedIDs.includes(id));
+      }
+    },
+    async openSubtitlePreview(video) {
+      this.subtitlePreview = { show: true, loading: true, error: '', video, segments: [] };
+      try {
+        const segments = await GetSubtitleSegments(video.id);
+        this.subtitlePreview.segments = segments || [];
+      } catch (err) {
+        console.error('读取字幕片段失败:', err);
+        this.subtitlePreview.error = '读取字幕片段失败: ' + err;
+      } finally {
+        this.subtitlePreview.loading = false;
+      }
+    },
+    segmentMatchesKeyword(segment) {
+      const keyword = this.searchKeyword.trim().toLowerCase();
+      if (!keyword || this.searchMode !== 'subtitle') {
+        return false;
+      }
+      return (segment?.text || '').toLowerCase().includes(keyword);
+    },
+    formatTimestamp(ms) {
+      if (ms === null || ms === undefined) return '00:00:00';
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      return [hours, minutes, seconds].map(value => String(value).padStart(2, '0')).join(':');
+    },
     async generateSubtitle(video) {
       console.log('[Subtitle] generateSubtitle called for video:', video.id);
       if (this.generatingSubtitleIds.includes(video.id)) return;
@@ -393,6 +733,7 @@ export default {
         const video = this.pendingForceVideo;
         this.pendingForceVideo = null;
         this.subtitleDialog.mode = 'progress';
+        this.subtitleDialog.progressAction = 'generate';
         this.subtitleDialog.title = '正在强制生成字幕';
         this.subtitleDialog.percent = 0;
         this.subtitleDialog.msg = '跳过质量检测，重新生成...';
@@ -417,9 +758,10 @@ export default {
       // 场景二：用户确认下载依赖
       if (this.subtitleDialog.requiresDownload) {
         this.subtitleDialog.mode = 'progress';
+        this.subtitleDialog.progressAction = 'download';
         this.subtitleDialog.title = '正在下载组件';
         this.subtitleDialog.percent = 0;
-        this.subtitleDialog.msg = '准备下载...';
+        this.subtitleDialog.msg = '准备下载... 可关闭此窗口，下载会继续。';
         try {
           await DownloadSubtitleDependencies();
           this.subtitleDialog.mode = 'result';
@@ -445,6 +787,7 @@ export default {
     async doGenerateSubtitle(video) {
       this.generatingSubtitleIds.push(video.id);
       try {
+        this.subtitleDialog.progressAction = 'generate';
         await GenerateSubtitle(video.id, this.sourceLang);
         // 成功后移除 ID（event 也会移除，双重保障）
         const idx = this.generatingSubtitleIds.indexOf(video.id);
@@ -554,10 +897,32 @@ export default {
       this.hasMore = true;
       this.loadVideos();
     },
+    isSubtitleSearchActive(keyword = this.searchKeyword.trim()) {
+      return this.searchMode === 'subtitle' && !!keyword;
+    },
     async reloadCurrentView() {
       const keyword = this.searchKeyword.trim();
       const hasSizeFilter = this.selectedSizeRange !== 'all';
       const hasResFilter = this.selectedResRange !== 'all';
+
+      if (this.isSubtitleSearchActive(keyword)) {
+        try {
+          const matches = await SearchSubtitleMatches(keyword, 200);
+          const deduped = new Map();
+          for (const match of matches || []) {
+            const video = match.video;
+            if (!video || deduped.has(video.id)) continue;
+            video._subtitleMatchText = match.segment?.text || '';
+            deduped.set(video.id, video);
+          }
+          this.videos = this.applyClientFilters(Array.from(deduped.values()));
+          this.hasMore = false;
+        } catch (err) {
+          console.error('字幕搜索失败:', err);
+          alert('字幕搜索失败: ' + err);
+        }
+        return;
+      }
 
       if (keyword || this.selectedTags.length > 0 || hasSizeFilter || hasResFilter) {
         try {
@@ -590,6 +955,20 @@ export default {
         return;
       }
       this.resetAndLoadVideos();
+    },
+    applyClientFilters(videos) {
+      return (videos || []).filter(video => {
+        const tagMatched = this.selectedTags.length === 0 ||
+          this.selectedTags.every(id => (video.tags || []).some(tag => tag.id === id));
+
+        const sizeMatched = this.selectedSizeRange === 'all' ||
+          (video.size >= this.selectedSizeRange.min && (this.selectedSizeRange.max === 0 || video.size < this.selectedSizeRange.max));
+
+        const resMatched = this.selectedResRange === 'all' ||
+          (video.height >= this.selectedResRange.min && (this.selectedResRange.max === 0 || video.height <= this.selectedResRange.max));
+
+        return tagMatched && sizeMatched && resMatched;
+      });
     },
     getDirectoryLabel(video) {
       if (!this.directories || this.directories.length === 0) return video.directory;
@@ -656,12 +1035,25 @@ export default {
     handleScroll(event) {
       const { scrollTop, scrollHeight, clientHeight } = event.target;
       if (scrollTop + clientHeight >= scrollHeight - 100) {
-        if (this.searchKeyword || this.selectedTags.length > 0) return;
+        if (this.searchKeyword || this.selectedTags.length > 0 || this.isSubtitleSearchActive()) return;
         this.loadVideos();
       }
     },
-    async handleSearch() {
-      await this.reloadCurrentView();
+    async handleSearch(immediate = false) {
+      if (this.searchDebounceTimer) {
+        clearTimeout(this.searchDebounceTimer);
+        this.searchDebounceTimer = null;
+      }
+
+      if (immediate) {
+        await this.reloadCurrentView();
+        return;
+      }
+
+      this.searchDebounceTimer = setTimeout(() => {
+        this.searchDebounceTimer = null;
+        this.reloadCurrentView();
+      }, 250);
     },
     async playRandom() {
       try {

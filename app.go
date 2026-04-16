@@ -6,22 +6,26 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"time"
 	"video-master/models"
 	"video-master/services"
+	"video-master/services/subtitleparser"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
 type App struct {
-	ctx              context.Context
-	videoService     *services.VideoService
-	tagService       *services.TagService
-	settingsService  *services.SettingsService
-	directoryService *services.DirectoryService
-	subtitleService  *services.SubtitleService
-	startupError     string
-	logFile          *os.File // 保持日志文件句柄引用，防止泄漏
+	ctx                   context.Context
+	videoService          *services.VideoService
+	tagService            *services.TagService
+	settingsService       *services.SettingsService
+	directoryService      *services.DirectoryService
+	subtitleService       *services.SubtitleService
+	cleanupService        *services.CleanupService
+	subtitleSearchService *services.SubtitleSearchService
+	startupError          string
+	logFile               *os.File // 保持日志文件句柄引用，防止泄漏
 }
 
 // NewApp creates a new App application struct
@@ -31,11 +35,13 @@ func NewApp() *App {
 	dataDir := filepath.Join(homeDir, ".video-master")
 
 	return &App{
-		videoService:     &services.VideoService{},
-		tagService:       &services.TagService{},
-		settingsService:  &services.SettingsService{},
-		directoryService: &services.DirectoryService{},
-		subtitleService:  services.NewSubtitleService(dataDir),
+		videoService:          &services.VideoService{},
+		tagService:            &services.TagService{},
+		settingsService:       &services.SettingsService{},
+		directoryService:      &services.DirectoryService{},
+		subtitleService:       services.NewSubtitleService(dataDir),
+		cleanupService:        &services.CleanupService{},
+		subtitleSearchService: &services.SubtitleSearchService{},
 	}
 }
 
@@ -112,6 +118,13 @@ func (a *App) SearchVideos(keyword string, cursorScore float64, cursorSize int64
 	videos, err := a.videoService.SearchVideos(keyword, cursorScore, cursorSize, cursorID, limit)
 	log.Printf("API SearchVideos keyword=%q cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v", keyword, cursorScore, cursorSize, cursorID, limit, len(videos), err)
 	return videos, err
+}
+
+// SearchSubtitleMatches 按字幕内容搜索视频片段
+func (a *App) SearchSubtitleMatches(keyword string, limit int) ([]services.SubtitleSearchMatch, error) {
+	matches, err := a.subtitleSearchService.SearchSubtitleMatches(keyword, limit)
+	log.Printf("API SearchSubtitleMatches keyword=%q limit=%d result=%d err=%v", keyword, limit, len(matches), err)
+	return matches, err
 }
 
 // SearchVideosByTags 按标签搜索视频（多选 AND，支持分页）
@@ -363,4 +376,42 @@ func (a *App) ForceGenerateSubtitle(videoID uint, sourceLang string) error {
 func (a *App) CancelSubtitle() {
 	a.subtitleService.CancelGeneration()
 	log.Printf("API CancelSubtitle")
+}
+
+// GetSubtitleSegments 获取已生成字幕的结构化片段
+func (a *App) GetSubtitleSegments(videoID uint) ([]subtitleparser.Segment, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	segments, err := subtitleparser.ParseFile(srtPath)
+	if err != nil {
+		log.Printf("API GetSubtitleSegments id=%d path=%s err=%v", videoID, srtPath, err)
+		return nil, err
+	}
+
+	log.Printf("API GetSubtitleSegments id=%d path=%s segments=%d", videoID, srtPath, len(segments))
+	return segments, nil
+}
+
+// GetCleanupCandidates 获取清理候选（轻量规则）
+func (a *App) GetCleanupCandidates(minDurationSeconds int, minWidth int, minHeight int) (*services.CleanupAnalysis, error) {
+	criteria := services.CleanupCriteria{
+		MinDuration: time.Duration(minDurationSeconds) * time.Second,
+		MinWidth:    minWidth,
+		MinHeight:   minHeight,
+	}
+	analysis, err := a.cleanupService.AnalyzeCleanupCandidates(criteria)
+	if err != nil {
+		log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d err=%v", minDurationSeconds, minWidth, minHeight, err)
+		return nil, err
+	}
+
+	log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d duplicate_groups=%d low_duration=%d low_resolution=%d",
+		minDurationSeconds, minWidth, minHeight,
+		len(analysis.DuplicateGroups), len(analysis.LowDuration), len(analysis.LowResolution),
+	)
+	return analysis, nil
 }

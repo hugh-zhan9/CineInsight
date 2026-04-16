@@ -33,6 +33,10 @@ export function GetAllTags():Promise<Array<models.Tag>>;
 
 export function GetAllVideos():Promise<Array<models.Video>>;
 
+export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promise<any>;
+
+export function GetSubtitleSegments(arg1:number):Promise<any>;
+
 export function GetSettings():Promise<models.Settings>;
 
 export function GetStartupError():Promise<string>;
@@ -60,6 +64,8 @@ export function ScanDirectory(arg1:string):Promise<Array<string>>;
 export function ScanDirectoryWithInfo(arg1:string):Promise<Array<services.ScannedFile>>;
 
 export function SearchVideos(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
+
+export function SearchSubtitleMatches(arg1:string,arg2:number):Promise<any>;
 
 export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 
