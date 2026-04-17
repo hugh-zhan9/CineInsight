@@ -338,6 +338,13 @@
             <div class="progress-bar" :style="{ width: subtitleDialog.percent + '%' }"></div>
           </div>
           <p class="progress-text">{{ subtitleDialog.percent }}%</p>
+          <p v-if="subtitleDialog.progressAction === 'generate'" class="progress-meta">
+            当前阶段：{{ subtitleProgressPhaseLabel }}
+            <span v-if="subtitleElapsedText"> · 已运行 {{ subtitleElapsedText }}</span>
+          </p>
+          <p v-if="subtitleDialog.progressAction === 'generate'" class="progress-hint">
+            {{ subtitleProgressHint }}
+          </p>
           <div class="modal-actions">
             <button v-if="subtitleDialog.progressAction === 'generate'" @click="cancelSubtitle" class="btn-danger">取消生成</button>
             <button v-else @click="subtitleDialog.show = false" class="btn-secondary">后台继续下载</button>
@@ -410,6 +417,17 @@
   font-size: 0.9em;
   color: #666;
   margin: 0;
+}
+.progress-meta {
+  font-size: 13px;
+  color: #374151;
+  margin: 10px 0 0;
+}
+.progress-hint {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #666;
+  margin: 8px 0 0;
 }
 .btn-processing {
   opacity: 0.7;
@@ -571,9 +589,12 @@ export default {
       subtitlePreview: { show: false, loading: false, error: '', video: null, segments: [] },
       // Subtitle states
       generatingSubtitleIds: [],
-      subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0 },
+      subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0, progressAction: '', requiresDownload: false },
       pendingSubtitleVideo: null,
       pendingForceVideo: null,
+      subtitleProgressStartedAt: 0,
+      subtitleProgressNow: Date.now(),
+      subtitleProgressTimer: null,
       searchDebounceTimer: null,
       sourceLang: 'auto',
       languageOptions: [
@@ -599,16 +620,24 @@ export default {
       window.runtime.EventsOn('download-progress', (data) => {
         const component = data?.component || '';
         const isGenerateProgress = component === 'process';
+        const nextAction = isGenerateProgress ? 'generate' : 'download';
+
+        if (nextAction === 'generate') {
+          this.startSubtitleProgressTracking();
+        } else {
+          this.resetSubtitleProgressTracking();
+        }
 
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'progress';
-        this.subtitleDialog.progressAction = isGenerateProgress ? 'generate' : 'download';
+        this.subtitleDialog.progressAction = nextAction;
         this.subtitleDialog.title = isGenerateProgress ? '正在生成字幕' : '正在下载组件';
         this.subtitleDialog.percent = data.percent;
         this.subtitleDialog.msg = data.msg;
       });
       
       window.runtime.EventsOn('subtitle-success', (data) => {
+        this.resetSubtitleProgressTracking();
         const idx = this.generatingSubtitleIds.indexOf(data.videoID);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
         this.subtitleDialog.show = true;
@@ -623,13 +652,82 @@ export default {
     if (this.searchDebounceTimer) {
       clearTimeout(this.searchDebounceTimer);
     }
+    this.resetSubtitleProgressTracking();
   },
   computed: {
     cleanupCandidateCount() {
       return this.getAllCleanupCandidates().length;
+    },
+    subtitleProgressPhaseLabel() {
+      const percent = Number(this.subtitleDialog.percent || 0);
+      const msg = String(this.subtitleDialog.msg || '').toLowerCase();
+
+      if (percent >= 100 || msg.includes('completed')) return '完成收尾';
+      if (percent >= 85 || msg.includes('merging')) return '双语字幕合并';
+      if (percent >= 60 || msg.includes('translating')) return '双语翻译';
+      if (percent >= 50 || msg.includes('validating')) return '字幕质量校验';
+      if (percent >= 20 || msg.includes('transcribing')) return 'WhisperX 音频转写';
+      if (percent >= 10 || msg.includes('extracting')) return '提取音频';
+      return '初始化任务';
+    },
+    subtitleElapsedText() {
+      if (!this.subtitleProgressStartedAt) return '';
+      return this.formatElapsedDuration(this.subtitleProgressNow - this.subtitleProgressStartedAt);
+    },
+    subtitleProgressHint() {
+      if (this.subtitleDialog.progressAction !== 'generate') {
+        return '';
+      }
+
+      const phase = this.subtitleProgressPhaseLabel;
+      if (phase === 'WhisperX 音频转写') {
+        return '当前正在进行 WhisperX 音频转写。长视频或 CPU 模式下会在 20% 停留较久，这是正常现象，不代表任务假死。';
+      }
+      if (phase === '提取音频' || phase === '初始化任务') {
+        return '字幕任务已经启动，完成音频准备后会自动进入转写阶段。';
+      }
+      if (phase === '字幕质量校验' || phase === '双语翻译' || phase === '双语字幕合并') {
+        return '转写已经完成，当前正在做结果校验或双语处理，通常会继续向后推进。';
+      }
+      return '任务仍在继续处理，请等待当前阶段完成。';
     }
   },
   methods: {
+    startSubtitleProgressTracking() {
+      if (!this.subtitleProgressStartedAt) {
+        this.subtitleProgressStartedAt = Date.now();
+      }
+      this.subtitleProgressNow = Date.now();
+      if (this.subtitleProgressTimer) {
+        return;
+      }
+      this.subtitleProgressTimer = window.setInterval(() => {
+        this.subtitleProgressNow = Date.now();
+      }, 1000);
+    },
+    resetSubtitleProgressTracking() {
+      if (this.subtitleProgressTimer) {
+        clearInterval(this.subtitleProgressTimer);
+        this.subtitleProgressTimer = null;
+      }
+      this.subtitleProgressStartedAt = 0;
+      this.subtitleProgressNow = Date.now();
+    },
+    formatElapsedDuration(ms) {
+      if (!ms || ms < 0) return '0s';
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+
+      if (hours > 0) {
+        return `${hours}h ${String(minutes).padStart(2, '0')}m ${String(seconds).padStart(2, '0')}s`;
+      }
+      if (minutes > 0) {
+        return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
+      }
+      return `${seconds}s`;
+    },
     async openCleanupDialog() {
       this.cleanupSelection = [];
       this.cleanupDialog = { show: true, loading: true, processing: false, analysis: null, error: '' };
@@ -768,15 +866,18 @@ export default {
         this.subtitleDialog.title = '正在强制生成字幕';
         this.subtitleDialog.percent = 0;
         this.subtitleDialog.msg = '跳过质量检测，重新生成...';
+        this.startSubtitleProgressTracking();
         this.generatingSubtitleIds.push(video.id);
         try {
           await ForceGenerateSubtitle(video.id, this.sourceLang);
+          this.resetSubtitleProgressTracking();
           const idx = this.generatingSubtitleIds.indexOf(video.id);
           if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
           this.subtitleDialog.mode = 'result';
           this.subtitleDialog.title = '✅ 字幕生成完成';
           this.subtitleDialog.msg = '字幕文件已保存到视频同目录下（已跳过质量检测）。';
         } catch (err) {
+          this.resetSubtitleProgressTracking();
           const idx = this.generatingSubtitleIds.indexOf(video.id);
           if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
           this.subtitleDialog.mode = 'result';
@@ -788,6 +889,7 @@ export default {
 
       // 场景二：用户确认下载依赖
       if (this.subtitleDialog.requiresDownload) {
+        this.resetSubtitleProgressTracking();
         this.subtitleDialog.mode = 'progress';
         this.subtitleDialog.progressAction = 'download';
         this.subtitleDialog.title = '正在下载组件';
@@ -811,7 +913,13 @@ export default {
       if (this.pendingSubtitleVideo) {
         const video = this.pendingSubtitleVideo;
         this.pendingSubtitleVideo = null;
-        this.subtitleDialog.show = false; // 先关掉弹窗，按钮会显示“生成中...”
+        this.subtitleDialog.show = true;
+        this.subtitleDialog.mode = 'progress';
+        this.subtitleDialog.progressAction = 'generate';
+        this.subtitleDialog.title = '正在生成字幕';
+        this.subtitleDialog.percent = 0;
+        this.subtitleDialog.msg = '任务已启动，正在准备 WhisperX...';
+        this.startSubtitleProgressTracking();
         await this.doGenerateSubtitle(video);
       }
     },
@@ -820,6 +928,7 @@ export default {
       try {
         this.subtitleDialog.progressAction = 'generate';
         await GenerateSubtitle(video.id, this.sourceLang);
+        this.resetSubtitleProgressTracking();
         // 成功后移除 ID（event 也会移除，双重保障）
         const idx = this.generatingSubtitleIds.indexOf(video.id);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
@@ -829,6 +938,7 @@ export default {
         this.subtitleDialog.msg = '字幕文件已保存到视频同目录下。';
       } catch (err) {
         console.error('[Subtitle] Generate error:', err);
+        this.resetSubtitleProgressTracking();
         const idx = this.generatingSubtitleIds.indexOf(video.id);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
         
@@ -877,6 +987,7 @@ export default {
     async cancelSubtitle() {
       try {
         await CancelSubtitle();
+        this.resetSubtitleProgressTracking();
         this.subtitleDialog.show = false;
         // 清理生成中状态
         this.generatingSubtitleIds = [];
