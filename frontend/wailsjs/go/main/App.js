@@ -70,6 +70,10 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetPreviewSession(arg1) {
+  return window['go']['main']['App']['GetPreviewSession'](arg1);
+}
+
 export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
 }
@@ -96,6 +100,10 @@ export function PlayRandomVideo() {
 
 export function PlayVideo(arg1) {
   return window['go']['main']['App']['PlayVideo'](arg1);
+}
+
+export function PreviewExternally(arg1) {
+  return window['go']['main']['App']['PreviewExternally'](arg1);
 }
 
 export function RefreshVideoMetadata(arg1) {

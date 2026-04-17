@@ -17,6 +17,7 @@ type Video struct {
 	Resolution      string         `json:"resolution"`                                                              // 分辨率 (如 1920x1080)
 	Width           int            `json:"width"`                                                                   // 宽度
 	Height          int            `json:"height"`                                                                  // 高度
+	IsStale         bool           `gorm:"default:false" json:"is_stale"`                                           // 当前路径是否失效/待纠偏
 	PlayCount       int            `gorm:"default:0" json:"play_count"`                                             // 播放次数
 	RandomPlayCount int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
 	LastPlayedAt    *time.Time     `json:"last_played_at"`                                                          // 最后播放时间

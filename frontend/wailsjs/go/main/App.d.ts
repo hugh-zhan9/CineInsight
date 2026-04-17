@@ -36,6 +36,8 @@ export function GetAllVideos():Promise<Array<models.Video>>;
 
 export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promise<services.CleanupAnalysis>;
 
+export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
+
 export function GetSettings():Promise<models.Settings>;
 
 export function GetStartupError():Promise<string>;
@@ -48,9 +50,11 @@ export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:numb
 
 export function OpenDirectory(arg1:number):Promise<void>;
 
-export function PlayRandomVideo():Promise<models.Video>;
+export function PlayRandomVideo():Promise<services.PlaybackAttemptResult>;
 
-export function PlayVideo(arg1:number):Promise<void>;
+export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
+
+export function PreviewExternally(arg1:number):Promise<void>;
 
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 

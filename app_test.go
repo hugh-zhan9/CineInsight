@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -114,5 +117,38 @@ func TestGetSubtitleSegmentsReturnsEmptyWhenSubtitleMalformed(t *testing.T) {
 	}
 	if len(segments) != 0 {
 		t.Fatalf("期望损坏字幕被跳过后返回 0 条，实际 %d", len(segments))
+	}
+}
+
+func TestPreviewMediaHandlerServesInlineMedia(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "clip.mp4")
+	content := []byte("fake-preview-bytes")
+
+	if err := os.WriteFile(videoPath, content, 0644); err != nil {
+		t.Fatalf("写入视频文件失败: %v", err)
+	}
+
+	video := models.Video{Name: "clip.mp4", Path: videoPath, Directory: root, Size: int64(len(content))}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	app := NewApp()
+	handler := newAssetHandler(app)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/preview/media/%d", video.ID), nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际 %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "video/mp4" {
+		t.Fatalf("content-type 错误: got=%s want=video/mp4", got)
+	}
+	if rec.Body.String() != string(content) {
+		t.Fatalf("响应体错误: got=%q want=%q", rec.Body.String(), string(content))
 	}
 }

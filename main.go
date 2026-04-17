@@ -37,7 +37,8 @@ func main() {
 		MinHeight:     768,
 		DisableResize: false,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:  assets,
+			Handler: newAssetHandler(app),
 		},
 		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0}, // 设为透明
 		OnStartup:        app.startup,
