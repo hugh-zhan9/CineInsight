@@ -597,10 +597,13 @@ export default {
     // 使用 window.runtime 直接注册事件（避免 import 问题）
     if (window.runtime) {
       window.runtime.EventsOn('download-progress', (data) => {
+        const component = data?.component || '';
+        const isGenerateProgress = component === 'process';
+
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'progress';
-        this.subtitleDialog.progressAction = 'download';
-        this.subtitleDialog.title = '正在下载组件';
+        this.subtitleDialog.progressAction = isGenerateProgress ? 'generate' : 'download';
+        this.subtitleDialog.title = isGenerateProgress ? '正在生成字幕' : '正在下载组件';
         this.subtitleDialog.percent = data.percent;
         this.subtitleDialog.msg = data.msg;
       });
