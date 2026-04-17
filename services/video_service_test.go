@@ -49,6 +49,15 @@ func mustSetFileModTime(t *testing.T, path string, modTime time.Time) {
 	}
 }
 
+func previewStatsSnapshot(t *testing.T, videoID uint) models.Video {
+	t.Helper()
+	var video models.Video
+	if err := database.DB.First(&video, videoID).Error; err != nil {
+		t.Fatalf("读取视频统计失败: %v", err)
+	}
+	return video
+}
+
 func TestScanDirectorySkipsHiddenFilesAndDirs(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
@@ -206,13 +215,286 @@ func TestPlayRandomVideoErrorContainsVideoInfo(t *testing.T) {
 	}
 	defer func() { openWithDefaultFn = oldOpen }()
 
-	_, err := svc.PlayRandomVideo()
-	if err == nil {
-		t.Fatalf("期望播放失败")
+	result, err := svc.PlayRandomVideo()
+	if err != nil {
+		t.Fatalf("随机播放不应返回系统错误: %v", err)
 	}
-	msg := err.Error()
+	if result == nil || result.DispatchSucceeded {
+		t.Fatalf("期望 dispatch 失败结果")
+	}
+	msg := result.UserMessage
 	if !strings.Contains(msg, "broken.mp4") || !strings.Contains(msg, videoPath) {
 		t.Fatalf("错误信息未包含视频信息: %s", msg)
+	}
+	if result.ReconcileResult != nil {
+		t.Fatalf("dispatch_failed 不应返回 reconcile result")
+	}
+}
+
+func TestGetPreviewSessionInlineMode(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "clip.mp4")
+	mustCreateFile(t, videoPath)
+
+	video := models.Video{Name: "clip.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	session, err := svc.GetPreviewSession(video.ID)
+	if err != nil {
+		t.Fatalf("获取预览 session 失败: %v", err)
+	}
+	if session.Mode != "inline" {
+		t.Fatalf("期望 inline 模式，实际 %s", session.Mode)
+	}
+	if session.InlineSource == nil {
+		t.Fatalf("期望返回 inline source")
+	}
+	if session.InlineSource.LocatorStrategy != "asset_route" {
+		t.Fatalf("locator strategy 错误: %s", session.InlineSource.LocatorStrategy)
+	}
+	if session.InlineSource.LocatorValue != previewMediaPath(video.ID) {
+		t.Fatalf("locator value 错误: got=%s want=%s", session.InlineSource.LocatorValue, previewMediaPath(video.ID))
+	}
+	if session.InlineSource.MIME != "video/mp4" {
+		t.Fatalf("mime 错误: %s", session.InlineSource.MIME)
+	}
+	if session.ExternalAction != nil {
+		t.Fatalf("inline 模式不应返回 external action")
+	}
+	if session.ReasonCode != "" || session.ReasonMessage != "" {
+		t.Fatalf("inline 模式不应返回 reason: %+v", session)
+	}
+}
+
+func TestGetPreviewSessionExternalPreviewMode(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "clip.mkv")
+	mustCreateFile(t, videoPath)
+
+	video := models.Video{Name: "clip.mkv", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	session, err := svc.GetPreviewSession(video.ID)
+	if err != nil {
+		t.Fatalf("获取预览 session 失败: %v", err)
+	}
+	if session.Mode != "external-preview" {
+		t.Fatalf("期望 external-preview 模式，实际 %s", session.Mode)
+	}
+	if session.InlineSource != nil {
+		t.Fatalf("external-preview 模式不应返回 inline source")
+	}
+	if session.ExternalAction == nil {
+		t.Fatalf("期望返回 external action")
+	}
+	if session.ExternalAction.ActionID != "preview_externally" {
+		t.Fatalf("action id 错误: %s", session.ExternalAction.ActionID)
+	}
+	if !strings.Contains(session.ExternalAction.Hint, "不计正式播放统计") {
+		t.Fatalf("hint 未说明统计隔离: %s", session.ExternalAction.Hint)
+	}
+	if session.ReasonCode == "" || session.ReasonMessage == "" {
+		t.Fatalf("external-preview 模式应返回 reason")
+	}
+}
+
+func TestGetPreviewSessionUnsupportedWhenFileMissing(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "missing.mp4")
+
+	video := models.Video{Name: "missing.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	session, err := svc.GetPreviewSession(video.ID)
+	if err != nil {
+		t.Fatalf("获取预览 session 失败: %v", err)
+	}
+	if session.Mode != "unsupported" {
+		t.Fatalf("期望 unsupported 模式，实际 %s", session.Mode)
+	}
+	if session.InlineSource != nil || session.ExternalAction != nil {
+		t.Fatalf("unsupported 模式不应返回 source/action")
+	}
+	if session.ReasonCode != "file_missing" {
+		t.Fatalf("reason code 错误: %s", session.ReasonCode)
+	}
+}
+
+func TestPreviewExternallyDoesNotMutateFormalPlayStats(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "preview.mp4")
+	mustCreateFile(t, videoPath)
+
+	video := models.Video{Name: "preview.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	openedPath := ""
+	oldOpen := openWithDefaultFn
+	openWithDefaultFn = func(path string, isDir bool) error {
+		openedPath = path
+		return nil
+	}
+	defer func() { openWithDefaultFn = oldOpen }()
+
+	before := previewStatsSnapshot(t, video.ID)
+
+	if err := svc.PreviewExternally(video.ID); err != nil {
+		t.Fatalf("外部预览失败: %v", err)
+	}
+	if openedPath != videoPath {
+		t.Fatalf("打开路径错误: got=%s want=%s", openedPath, videoPath)
+	}
+
+	after := previewStatsSnapshot(t, video.ID)
+	if after.PlayCount != before.PlayCount || after.RandomPlayCount != before.RandomPlayCount {
+		t.Fatalf("预览不应修改播放计数: before=%+v after=%+v", before, after)
+	}
+	if after.LastPlayedAt != nil {
+		t.Fatalf("预览不应更新 last_played_at")
+	}
+}
+
+func TestPlayVideoUpdatesFormalPlayStats(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "formal.mp4")
+	mustCreateFile(t, videoPath)
+
+	video := models.Video{Name: "formal.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	oldOpen := openWithDefaultFn
+	openWithDefaultFn = func(path string, isDir bool) error { return nil }
+	defer func() { openWithDefaultFn = oldOpen }()
+
+	result, err := svc.PlayVideo(video.ID)
+	if err != nil {
+		t.Fatalf("正式播放失败: %v", err)
+	}
+	if result == nil || !result.DispatchSucceeded {
+		t.Fatalf("期望 dispatch success result")
+	}
+
+	after := previewStatsSnapshot(t, video.ID)
+	if after.PlayCount != 1 {
+		t.Fatalf("正式播放应增加 play_count，实际 %d", after.PlayCount)
+	}
+	if after.LastPlayedAt == nil {
+		t.Fatalf("正式播放应更新 last_played_at")
+	}
+	if after.IsStale {
+		t.Fatalf("正式播放成功后不应保持 stale")
+	}
+}
+
+func TestPlayVideoMissingFileReturnsReconcileResultAndMarksStale(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "missing.mp4")
+
+	video := models.Video{Name: "missing.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	result, err := svc.PlayVideo(video.ID)
+	if err != nil {
+		t.Fatalf("期望领域失败走返回值而非 error: %v", err)
+	}
+	if result == nil || result.DispatchSucceeded {
+		t.Fatalf("期望 dispatch 失败")
+	}
+	if result.ReconcileResult == nil {
+		t.Fatalf("期望返回 reconcile result")
+	}
+	if !result.ReconcileResult.DidMarkStale {
+		t.Fatalf("期望标记 stale")
+	}
+	if !strings.Contains(result.UserMessage, "missing.mp4") || !strings.Contains(result.UserMessage, videoPath) {
+		t.Fatalf("错误信息未包含文件级上下文: %s", result.UserMessage)
+	}
+
+	after := previewStatsSnapshot(t, video.ID)
+	if after.PlayCount != 0 || after.LastPlayedAt != nil {
+		t.Fatalf("失败播放不应污染正式统计: %+v", after)
+	}
+	if !after.IsStale {
+		t.Fatalf("失败后记录应标记为 stale")
+	}
+}
+
+func TestPlayRandomVideoSuccessWritesStatsOnlyOnDispatchSuccess(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "random.mp4")
+	mustCreateFile(t, videoPath)
+
+	video := models.Video{Name: "random.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	oldOpen := openWithDefaultFn
+	openWithDefaultFn = func(path string, isDir bool) error { return nil }
+	defer func() { openWithDefaultFn = oldOpen }()
+
+	result, err := svc.PlayRandomVideo()
+	if err != nil {
+		t.Fatalf("随机播放失败: %v", err)
+	}
+	if result == nil || !result.DispatchSucceeded || result.Video == nil {
+		t.Fatalf("期望返回 dispatch success result")
+	}
+
+	after := previewStatsSnapshot(t, video.ID)
+	if after.RandomPlayCount != 1 {
+		t.Fatalf("随机播放成功后应增加 random_play_count，实际 %d", after.RandomPlayCount)
+	}
+	if after.LastPlayedAt == nil {
+		t.Fatalf("随机播放成功后应更新 last_played_at")
+	}
+}
+
+func TestPlayRandomVideoNoVideosReturnsDomainFailureResult(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	result, err := svc.PlayRandomVideo()
+	if err != nil {
+		t.Fatalf("无视频时不应返回系统错误: %v", err)
+	}
+	if result == nil {
+		t.Fatalf("期望返回结构化结果")
+	}
+	if result.DispatchSucceeded {
+		t.Fatalf("无视频时不应视为 dispatch success")
+	}
+	if result.ReasonCode != "no_videos" {
+		t.Fatalf("reason code 错误: %s", result.ReasonCode)
+	}
+	if !strings.Contains(result.UserMessage, "没有可播放的视频") {
+		t.Fatalf("user message 不明确: %s", result.UserMessage)
 	}
 }
 

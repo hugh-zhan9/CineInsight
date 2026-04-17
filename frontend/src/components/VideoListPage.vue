@@ -1,5 +1,5 @@
 <template>
-  <div class="page-content">
+  <div :class="['page-content', { 'page-content--with-preview': previewOpen }]">
     <div class="toolbar">
       <div class="search-group">
         <select v-model="searchMode" @change="handleSearch(true)" class="select-input" style="width: 120px; margin-right: 8px;">
@@ -58,56 +58,63 @@
       </div>
     </div>
 
-    <div class="video-list" @scroll="handleScroll" ref="videoList">
-      <div v-if="videos.length === 0" class="empty-state">
+    <div class="video-list" ref="videoList">
+      <div v-if="videos.length === 0 && !loading" class="empty-state">
         <p>暂无视频，点击"扫描目录"开始导入视频</p>
       </div>
-      <div 
-        v-for="video in videos" 
-        :key="video.id"
-        class="video-item"
-        @contextmenu.prevent="showContextMenu($event, video)"
+      <template v-else-if="isSubtitleSearchActive()">
+        <VideoListRow
+          v-for="video in videos"
+          :key="video.id"
+          :video="video"
+          :directories="directories"
+          :generating-subtitle-ids="generatingSubtitleIds"
+          :deleting-ids="deletingIds"
+          @preview="openPreview"
+          @play="playVideo"
+          @open-directory="openDirectory"
+          @generate-subtitle="generateSubtitle"
+          @subtitle-preview="openSubtitlePreview"
+          @rename="renameVideo"
+          @delete="confirmDelete"
+          @open-add-tag="openAddTagDialog"
+          @remove-tag="removeTag"
+          @contextmenu="showContextMenu"
+        />
+      </template>
+      <VirtualVideoList
+        v-else-if="videos.length > 0"
+        :items="videos"
+        :loading="loading"
+        :has-more="hasMore"
+        :virtualization-enabled="true"
+        :subtitle-mode="false"
+        :preview-open="previewOpen"
+        :query-key="virtualListQueryKey"
+        :estimate-height="estimateVideoHeight"
+        :item-version="videoVisualVersion"
+        :range-engine="rangeEngine"
+        @load-more="loadVideos"
       >
-        <div class="video-info">
-          <h3>{{ video.name }}</h3>
-        <p class="video-path">{{ getDirectoryLabel(video) }}</p>
-        <div class="video-meta">
-          <span class="video-size">{{ formatSize(video.size) }}</span>
-          <span v-if="video.duration" class="meta-divider">|</span>
-          <span v-if="video.duration" class="video-duration">{{ formatDuration(video.duration) }}</span>
-          <span v-if="video.resolution" class="meta-divider">|</span>
-          <span v-if="video.resolution" class="video-resolution">{{ video.resolution }}</span>
-        </div>
-        <p v-if="video._subtitleMatchText" class="video-subtitle-hit">字幕命中: {{ video._subtitleMatchText }}</p>
-          <div class="video-tags">
-            <span 
-              v-for="tag in (video.tags || [])" 
-              :key="tag.id"
-              class="tag-badge"
-              :style="{ backgroundColor: tagBgColor(tag.color) }"
-            >
-              {{ tag.name }}
-              <button @click="removeTag(video, tag)" class="tag-remove">×</button>
-            </span>
-            <button @click="openAddTagDialog(video)" class="btn-add-tag">+ 标签</button>
-          </div>
-        </div>
-        <div class="video-actions">
-          <button @click="playVideo(video.id)" class="btn-action">播放</button>
-          <button @click="openDirectory(video.id)" class="btn-action">打开目录</button>
-          <button 
-            @click="generateSubtitle(video)" 
-            class="btn-action" 
-            :class="{ 'btn-processing': generatingSubtitleIds.includes(video.id) }"
-            :disabled="generatingSubtitleIds.includes(video.id)"
-          >
-            {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
-          </button>
-          <button @click="openSubtitlePreview(video)" class="btn-action">字幕预览</button>
-          <button @click="renameVideo(video)" class="btn-action">重命名</button>
-        <button @click="confirmDelete(video)" class="btn-danger" :disabled="deletingIds.includes(video.id)">删除</button>
-        </div>
-      </div>
+        <template #default="{ item: video }">
+          <VideoListRow
+            :video="video"
+            :directories="directories"
+            :generating-subtitle-ids="generatingSubtitleIds"
+            :deleting-ids="deletingIds"
+            @preview="openPreview"
+            @play="playVideo"
+            @open-directory="openDirectory"
+            @generate-subtitle="generateSubtitle"
+            @subtitle-preview="openSubtitlePreview"
+            @rename="renameVideo"
+            @delete="confirmDelete"
+            @open-add-tag="openAddTagDialog"
+            @remove-tag="removeTag"
+            @contextmenu="showContextMenu"
+          />
+        </template>
+      </VirtualVideoList>
       
       <!-- 加载更多指示器 -->
       <div v-if="loading" class="loading-indicator">
@@ -117,6 +124,14 @@
         <p>没有更多视频了</p>
       </div>
     </div>
+
+    <PreviewDrawer
+      v-if="previewOpen && selectedPreviewVideo"
+      :video="selectedPreviewVideo"
+      :session="previewSession"
+      @close="closePreview"
+      @preview-externally="previewExternally"
+    />
 
     <!-- Context Menu -->
     <div 
@@ -527,19 +542,27 @@
   color: #0f766e;
   font-size: 13px;
 }
+.video-stale {
+  color: #b45309;
+  font-weight: 600;
+}
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings, CheckSubtitleDependencies, DownloadSubtitleDependencies, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupCandidates, GetSubtitleSegments } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, RemoveTagFromVideo, UpdateSettings, CheckSubtitleDependencies, DownloadSubtitleDependencies, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupCandidates, GetSubtitleSegments, GetPreviewSession, PreviewExternally } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
 import DeleteConfirmDialog from './DeleteConfirmDialog.vue';
 import TagDeleteDialog from './TagDeleteDialog.vue';
+import PreviewDrawer from './PreviewDrawer.vue';
+import VirtualVideoList from './VirtualVideoList.vue';
+import VideoListRow from './VideoListRow.vue';
+import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -587,6 +610,11 @@ export default {
       cleanupDialog: { show: false, loading: false, processing: false, analysis: null, error: '' },
       cleanupSelection: [],
       subtitlePreview: { show: false, loading: false, error: '', video: null, segments: [] },
+      selectedPreviewVideoId: null,
+      previewVideoSnapshot: null,
+      previewOpen: false,
+      previewSession: null,
+      rangeEngine: defaultRangeEngine,
       // Subtitle states
       generatingSubtitleIds: [],
       subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0, progressAction: '', requiresDownload: false },
@@ -655,6 +683,19 @@ export default {
     this.resetSubtitleProgressTracking();
   },
   computed: {
+    selectedPreviewVideo() {
+      if (!this.selectedPreviewVideoId) return null;
+      return this.videos.find(video => video.id === this.selectedPreviewVideoId) || this.previewVideoSnapshot;
+    },
+    virtualListQueryKey() {
+      return JSON.stringify({
+        mode: this.searchMode,
+        keyword: this.currentQueryKeyword(),
+        tags: [...this.selectedTags].sort((a, b) => a - b),
+        size: this.selectedSizeRange === 'all' ? 'all' : `${this.selectedSizeRange.min}:${this.selectedSizeRange.max}`,
+        res: this.selectedResRange === 'all' ? 'all' : `${this.selectedResRange.min}:${this.selectedResRange.max}`
+      });
+    },
     cleanupCandidateCount() {
       return this.getAllCleanupCandidates().length;
     },
@@ -727,6 +768,48 @@ export default {
         return `${minutes}m ${String(seconds).padStart(2, '0')}s`;
       }
       return `${seconds}s`;
+    },
+    async openPreview(video) {
+      const requestToken = Symbol('preview');
+      this._previewRequestToken = requestToken;
+      this.selectedPreviewVideoId = video.id;
+      this.previewVideoSnapshot = {
+        ...video,
+        tags: Array.isArray(video.tags) ? [...video.tags] : []
+      };
+      this.previewOpen = true;
+      this.previewSession = null;
+
+      try {
+        const session = await GetPreviewSession(video.id);
+        if (this._previewRequestToken !== requestToken) return;
+        this.previewSession = session;
+      } catch (err) {
+        if (this._previewRequestToken !== requestToken) return;
+        this.previewSession = {
+          video_id: video.id,
+          mode: 'unsupported',
+          display_name: video.name,
+          reason_code: 'preview_failed',
+          reason_message: '准备预览失败：' + err
+        };
+      }
+    },
+    closePreview() {
+      this._previewRequestToken = null;
+      this.previewOpen = false;
+      this.previewSession = null;
+      this.selectedPreviewVideoId = null;
+      this.previewVideoSnapshot = null;
+    },
+    async previewExternally(video) {
+      if (!video) return;
+      try {
+        await PreviewExternally(video.id);
+      } catch (err) {
+        console.error('外部预览失败:', err);
+        alert('外部预览失败: ' + err);
+      }
     },
     async openCleanupDialog() {
       this.cleanupSelection = [];
@@ -1002,11 +1085,69 @@ export default {
       const weight = this.settings.play_weight || 2.0;
       return video.play_count * weight + video.random_play_count;
     },
+    currentQueryKeyword() {
+      return this.searchKeyword.trim();
+    },
+    subtitleLengthBucket(text) {
+      const length = text ? text.length : 0;
+      if (length === 0) return 0;
+      if (length <= 40) return 1;
+      if (length <= 100) return 2;
+      return 3;
+    },
+    videoVisualVersion(video) {
+      return JSON.stringify({
+        tagCount: Array.isArray(video?.tags) ? video.tags.length : 0,
+        isStale: !!video?.is_stale,
+        subtitleBucket: this.subtitleLengthBucket(video?._subtitleMatchText)
+      });
+    },
+    estimateVideoHeight(video, widthBucket, subtitleMode) {
+      return estimateVideoRowHeight(video, widthBucket, subtitleMode);
+    },
+    hasStructuredFilters() {
+      return this.selectedTags.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all';
+    },
     async loadVideos() {
       if (this.loading || !this.hasMore) return;
       this.loading = true;
       try {
-        const newVideos = await GetVideosPaginated(this.cursorScore, this.cursorSize, this.cursorID, this.pageSize);
+        const keyword = this.currentQueryKeyword();
+        let newVideos = [];
+
+        if (this.isSubtitleSearchActive(keyword)) {
+          const matches = await SearchSubtitleMatches(keyword, 200);
+          const deduped = new Map();
+          for (const match of matches || []) {
+            const video = match.video;
+            if (!video || deduped.has(video.id)) continue;
+            video._subtitleMatchText = match.segment?.text || '';
+            deduped.set(video.id, video);
+          }
+          newVideos = this.applyClientFilters(Array.from(deduped.values()));
+          this.videos = newVideos;
+          this.hasMore = false;
+          return;
+        }
+
+        if (keyword || this.hasStructuredFilters()) {
+          const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
+          newVideos = await SearchVideosWithFilters(
+            keyword,
+            this.selectedTags,
+            minSize,
+            maxSize,
+            minHeight,
+            maxHeight,
+            this.cursorScore,
+            this.cursorSize,
+            this.cursorID,
+            this.pageSize
+          );
+        } else {
+          newVideos = await GetVideosPaginated(this.cursorScore, this.cursorSize, this.cursorID, this.pageSize);
+        }
+
         if (newVideos.length < this.pageSize) {
           this.hasMore = false;
         }
@@ -1024,13 +1165,6 @@ export default {
         this.loading = false;
       }
     },
-    tagBgColor(hex) {
-      if (!hex || !hex.startsWith('#')) return hex;
-      const r = parseInt(hex.slice(1,3), 16);
-      const g = parseInt(hex.slice(3,5), 16);
-      const b = parseInt(hex.slice(5,7), 16);
-      return `rgba(${r},${g},${b},0.35)`;
-    },
     resetAndLoadVideos() {
       this.videos = [];
       this.cursorScore = 0;
@@ -1042,60 +1176,20 @@ export default {
     isSubtitleSearchActive(keyword = this.searchKeyword.trim()) {
       return this.searchMode === 'subtitle' && !!keyword;
     },
+    currentFilterBounds() {
+      let minSize = 0, maxSize = 0;
+      let minHeight = 0, maxHeight = 0;
+      if (this.selectedSizeRange !== 'all') {
+        minSize = this.selectedSizeRange.min;
+        maxSize = this.selectedSizeRange.max;
+      }
+      if (this.selectedResRange !== 'all') {
+        minHeight = this.selectedResRange.min;
+        maxHeight = this.selectedResRange.max;
+      }
+      return { minSize, maxSize, minHeight, maxHeight };
+    },
     async reloadCurrentView() {
-      const keyword = this.searchKeyword.trim();
-      const hasSizeFilter = this.selectedSizeRange !== 'all';
-      const hasResFilter = this.selectedResRange !== 'all';
-
-      if (this.isSubtitleSearchActive(keyword)) {
-        try {
-          const matches = await SearchSubtitleMatches(keyword, 200);
-          const deduped = new Map();
-          for (const match of matches || []) {
-            const video = match.video;
-            if (!video || deduped.has(video.id)) continue;
-            video._subtitleMatchText = match.segment?.text || '';
-            deduped.set(video.id, video);
-          }
-          this.videos = this.applyClientFilters(Array.from(deduped.values()));
-          this.hasMore = false;
-        } catch (err) {
-          console.error('字幕搜索失败:', err);
-          alert('字幕搜索失败: ' + err);
-        }
-        return;
-      }
-
-      if (keyword || this.selectedTags.length > 0 || hasSizeFilter || hasResFilter) {
-        try {
-          let minSize = 0, maxSize = 0;
-          if (hasSizeFilter) {
-            minSize = this.selectedSizeRange.min;
-            maxSize = this.selectedSizeRange.max;
-          }
-
-          let minHeight = 0, maxHeight = 0;
-          if (hasResFilter) {
-            minHeight = this.selectedResRange.min;
-            maxHeight = this.selectedResRange.max;
-          }
-
-          this.videos = await SearchVideosWithFilters(
-            keyword, 
-            this.selectedTags, 
-            minSize, 
-            maxSize, 
-            minHeight, 
-            maxHeight, 
-            0, 0, 0, 200
-          );
-          this.hasMore = false;
-        } catch (err) {
-          console.error('组合搜索失败:', err);
-          alert('组合搜索失败: ' + err);
-        }
-        return;
-      }
       this.resetAndLoadVideos();
     },
     applyClientFilters(videos) {
@@ -1111,41 +1205,6 @@ export default {
 
         return tagMatched && sizeMatched && resMatched;
       });
-    },
-    getDirectoryLabel(video) {
-      if (!this.directories || this.directories.length === 0) return video.directory;
-
-      // 按路径长度降序排序，优先匹配最长（最深）的目录
-      const sortedDirs = [...this.directories]
-        .filter(d => d.alias)
-        .sort((a, b) => b.path.length - a.path.length);
-
-      for (const dir of sortedDirs) {
-        // 1. 精确匹配
-        if (dir.path === video.directory) {
-          return dir.alias;
-        }
-
-        // 2. 子目录匹配 (确保路径分隔符正确，避免 /data 匹配 /database)
-        // 检测系统分隔符（Windows用\, 其他用/）
-        const isWindows = video.directory.includes('\\');
-        const sep = isWindows ? '\\' : '/';
-        const prefix = dir.path.endsWith(sep) ? dir.path : dir.path + sep;
-
-        if (video.directory.startsWith(prefix)) {
-          const suffix = video.directory.substring(prefix.length);
-          return `${dir.alias}${sep}${suffix}`;
-        }
-      }
-      return video.directory;
-    },
-    formatSize(bytes) {
-      if (bytes === 0 || bytes === null || bytes === undefined) return '0 B';
-      const k = 1024;
-      const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const i = Math.floor(Math.log(bytes) / Math.log(k));
-      const value = bytes / Math.pow(k, i);
-      return `${value.toFixed(value >= 10 || i === 0 ? 0 : 1)} ${sizes[i]}`;
     },
     formatDuration(seconds) {
       if (!seconds) return '';
@@ -1174,11 +1233,52 @@ export default {
       this.selectedTags = [];
       this.reloadCurrentView();
     },
-    handleScroll(event) {
-      const { scrollTop, scrollHeight, clientHeight } = event.target;
-      if (scrollTop + clientHeight >= scrollHeight - 100) {
-        if (this.searchKeyword || this.selectedTags.length > 0 || this.isSubtitleSearchActive()) return;
-        this.loadVideos();
+    canVideoMatchCurrentView(video) {
+      const keyword = this.currentQueryKeyword().toLowerCase();
+      if (this.isSubtitleSearchActive(keyword)) {
+        return false;
+      }
+      const nameOrPathMatched = !keyword || `${video.name} ${video.path}`.toLowerCase().includes(keyword);
+      if (!nameOrPathMatched) return false;
+      return this.applyClientFilters([video]).length > 0;
+    },
+    async applyPlaybackAttemptResult(result) {
+      if (!result) return;
+
+      if (!result.dispatch_succeeded) {
+        alert(result.user_message || '播放失败');
+      }
+
+      const reconcile = result.reconcile_result;
+      if (!reconcile) {
+        return;
+      }
+
+      if (reconcile.needs_reload || !reconcile.updated_video) {
+        await this.reloadCurrentView();
+        return;
+      }
+
+      if (!this.canVideoMatchCurrentView(reconcile.updated_video)) {
+        await this.reloadCurrentView();
+        return;
+      }
+
+      const index = this.videos.findIndex(video => video.id === reconcile.video_id);
+      if (index === -1) {
+        return;
+      }
+
+      const merged = {
+        ...this.videos[index],
+        ...reconcile.updated_video
+      };
+      this.videos.splice(index, 1, merged);
+      if (this.selectedPreviewVideoId === reconcile.video_id) {
+        this.previewVideoSnapshot = {
+          ...merged,
+          tags: Array.isArray(merged.tags) ? [...merged.tags] : []
+        };
       }
     },
     async handleSearch(immediate = false) {
@@ -1199,8 +1299,12 @@ export default {
     },
     async playRandom() {
       try {
-        const video = await PlayRandomVideo();
-        alert(`正在随机播放: ${video.name}\n播放次数: ${video.play_count}\n随机播放次数: ${video.random_play_count}`);
+        const result = await PlayRandomVideo();
+        if (result.dispatch_succeeded && result.video) {
+          alert(`正在随机播放: ${result.video.name}\n播放次数: ${result.video.play_count}\n随机播放次数: ${result.video.random_play_count}`);
+          return;
+        }
+        await this.applyPlaybackAttemptResult(result);
       } catch (err) {
         console.error('随机播放失败:', err);
         alert('随机播放失败: ' + err);
@@ -1208,7 +1312,8 @@ export default {
     },
     async playVideo(id) {
       try {
-        await PlayVideo(id);
+        const result = await PlayVideo(id);
+        await this.applyPlaybackAttemptResult(result);
       } catch (err) {
         console.error('播放失败:', err);
         alert('播放失败: ' + err);
@@ -1254,6 +1359,9 @@ export default {
           this.deletingIds.push(video.id);
         }
         await DeleteVideo(video.id, deleteFile);
+      if (this.selectedPreviewVideoId === video.id) {
+        this.closePreview();
+      }
         this.videos = this.videos.filter(v => v.id !== video.id);
         await this.reloadCurrentView();
       } catch (err) {

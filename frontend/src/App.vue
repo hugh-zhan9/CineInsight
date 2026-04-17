@@ -260,7 +260,8 @@ html, body {
 .btn-random { background: #f59e0b; color: white; }
 
 /* --- Video Card & List --- */
-.page-content { padding: 24px; max-width: 1440px; margin: 0 auto; width: 100%; }
+.page-content { padding: 24px; max-width: 1440px; margin: 0 auto; width: 100%; transition: padding-right 0.2s ease; }
+.page-content--with-preview { padding-right: calc(24px + min(420px, 38vw)); }
 .toolbar { display: flex; gap: 12px; align-items: center; margin-bottom: 24px; flex-wrap: nowrap; }
 .toolbar .search-group { flex: 1; }
 .toolbar .filter-group, .toolbar .action-group { display: flex; gap: 8px; flex-shrink: 0; }
@@ -279,13 +280,21 @@ html, body {
 
 /* --- Video Actions --- */
 .video-actions { display: flex; gap: 8px; margin-left: 20px; }
-.video-actions .btn-action, .video-actions .btn-danger {
+.video-actions .btn-action, .video-actions .btn-danger, .video-actions .btn-secondary {
   height: 32px; padding: 0 12px; font-size: 12px; background: transparent;
   border: 1px solid var(--accent-color); color: var(--accent-color);
 }
 .video-actions .btn-danger { border-color: var(--danger-color); color: var(--danger-color); }
-.video-actions .btn-action:hover { background: var(--accent-color); color: white; }
+.video-actions .btn-action:hover, .video-actions .btn-secondary:hover { background: var(--accent-color); color: white; }
 .video-actions .btn-danger:hover { background: var(--danger-color); color: white; }
+
+@media (max-width: 1180px) {
+  .page-content--with-preview { padding-right: calc(24px + min(460px, 52vw)); }
+}
+
+@media (max-width: 860px) {
+  .page-content--with-preview { padding-right: 24px; }
+}
 
 /* --- Tags --- */
 .tags-filter { padding: 12px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 24px; }

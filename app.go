@@ -212,22 +212,44 @@ func (a *App) OpenDirectory(videoID uint) error {
 	return a.videoService.OpenDirectory(videoID)
 }
 
-// PlayVideo 播放视频
-func (a *App) PlayVideo(videoID uint) error {
-	err := a.videoService.PlayVideo(videoID)
-	log.Printf("API PlayVideo id=%d err=%v", videoID, err)
+// GetPreviewSession 获取视频预览 session
+func (a *App) GetPreviewSession(videoID uint) (*services.PreviewSession, error) {
+	session, err := a.videoService.GetPreviewSession(videoID)
+	if err != nil {
+		log.Printf("API GetPreviewSession id=%d err=%v", videoID, err)
+		return nil, err
+	}
+	log.Printf("API GetPreviewSession id=%d mode=%s", videoID, session.Mode)
+	return session, nil
+}
+
+// PreviewExternally 使用系统播放器执行统计中立的外部预览
+func (a *App) PreviewExternally(videoID uint) error {
+	err := a.videoService.PreviewExternally(videoID)
+	log.Printf("API PreviewExternally id=%d err=%v", videoID, err)
 	return err
 }
 
-// PlayRandomVideo 随机播放视频
-func (a *App) PlayRandomVideo() (*models.Video, error) {
-	video, err := a.videoService.PlayRandomVideo()
-	if video != nil {
-		log.Printf("API PlayRandomVideo id=%d err=%v", video.ID, err)
+// PlayVideo 发起正式播放
+func (a *App) PlayVideo(videoID uint) (*services.PlaybackAttemptResult, error) {
+	result, err := a.videoService.PlayVideo(videoID)
+	if result != nil {
+		log.Printf("API PlayVideo id=%d dispatch=%v reason=%s err=%v", videoID, result.DispatchSucceeded, result.ReasonCode, err)
 	} else {
-		log.Printf("API PlayRandomVideo id=0 err=%v", err)
+		log.Printf("API PlayVideo id=%d dispatch=false reason=<nil> err=%v", videoID, err)
 	}
-	return video, err
+	return result, err
+}
+
+// PlayRandomVideo 随机发起正式播放
+func (a *App) PlayRandomVideo() (*services.PlaybackAttemptResult, error) {
+	result, err := a.videoService.PlayRandomVideo()
+	if result != nil && result.Video != nil {
+		log.Printf("API PlayRandomVideo id=%d dispatch=%v reason=%s err=%v", result.Video.ID, result.DispatchSucceeded, result.ReasonCode, err)
+	} else {
+		log.Printf("API PlayRandomVideo id=0 dispatch=false err=%v", err)
+	}
+	return result, err
 }
 
 // AddTagToVideo 为视频添加标签

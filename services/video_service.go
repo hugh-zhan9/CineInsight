@@ -567,25 +567,18 @@ func (s *VideoService) OpenDirectory(videoID uint) error {
 	return openPath(video.Directory, true)
 }
 
-// PlayVideo 使用系统默认播放器播放视频
-func (s *VideoService) PlayVideo(videoID uint) error {
+// PlayVideo 使用系统默认播放器发起正式播放
+func (s *VideoService) PlayVideo(videoID uint) (*PlaybackAttemptResult, error) {
 	var video models.Video
 	if err := database.DB.First(&video, videoID).Error; err != nil {
-		return err
+		return nil, err
 	}
 
-	// 使用数据库原子操作更新播放次数和最后播放时间
-	now := time.Now()
-	database.DB.Model(&video).Updates(map[string]interface{}{
-		"play_count":     gorm.Expr("play_count + 1"),
-		"last_played_at": now,
-	})
-
-	return openWithDefaultFn(video.Path, false)
+	return s.dispatchFormalPlayback(&video, false)
 }
 
-// PlayRandomVideo 智能加权随机播放视频
-func (s *VideoService) PlayRandomVideo() (*models.Video, error) {
+// PlayRandomVideo 智能加权随机发起播放
+func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 	// 获取播放权重配置
 	var settings models.Settings
 	if err := database.DB.First(&settings).Error; err != nil {
@@ -610,7 +603,11 @@ func (s *VideoService) PlayRandomVideo() (*models.Video, error) {
 	}
 
 	if len(rows) == 0 {
-		return nil, ErrNoVideos
+		return &PlaybackAttemptResult{
+			DispatchSucceeded: false,
+			ReasonCode:        "no_videos",
+			UserMessage:       "随机播放失败：当前没有可播放的视频记录。",
+		}, nil
 	}
 
 	// 计算每个视频的播放分数和最大分数
@@ -650,19 +647,7 @@ func (s *VideoService) PlayRandomVideo() (*models.Video, error) {
 	}
 
 	// 使用数据库原子操作更新随机播放次数和最后播放时间
-	now := time.Now()
-	database.DB.Model(&selectedVideo).Updates(map[string]interface{}{
-		"random_play_count": gorm.Expr("random_play_count + 1"),
-		"last_played_at":    now,
-	})
-	selectedVideo.RandomPlayCount++ // 同步内存中的值
-
-	// 播放视频
-	if err := openWithDefaultFn(selectedVideo.Path, false); err != nil {
-		return &selectedVideo, fmt.Errorf("播放失败: %s (%s): %w", selectedVideo.Name, selectedVideo.Path, err)
-	}
-
-	return &selectedVideo, nil
+	return s.dispatchFormalPlayback(&selectedVideo, true)
 }
 
 var openWithDefaultFn = openPath
@@ -688,4 +673,161 @@ func openPath(path string, isDir bool) error {
 	}
 
 	return cmd.Start()
+}
+
+func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) (*PlaybackAttemptResult, error) {
+	info, err := os.Stat(video.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return s.buildPlaybackFailureResult(video, "file_missing", "源文件不存在或已被移动。", true), nil
+		}
+		return s.buildPlaybackFailureResult(video, "path_unreadable", err.Error(), false), nil
+	}
+	if info.IsDir() {
+		return s.buildPlaybackFailureResult(video, "path_is_directory", "当前路径不是可播放文件。", true), nil
+	}
+
+	if err := openWithDefaultFn(video.Path, false); err != nil {
+		return s.buildPlaybackFailureResult(video, "dispatch_failed", err.Error(), false), nil
+	}
+
+	now := time.Now()
+	updates := map[string]interface{}{
+		"last_played_at": now,
+		"is_stale":       false,
+	}
+	if random {
+		updates["random_play_count"] = gorm.Expr("random_play_count + 1")
+		video.RandomPlayCount++
+	} else {
+		updates["play_count"] = gorm.Expr("play_count + 1")
+		video.PlayCount++
+	}
+	if err := database.DB.Model(video).Updates(updates).Error; err != nil {
+		log.Printf("更新播放统计失败 id=%d err=%v", video.ID, err)
+	}
+	video.LastPlayedAt = &now
+	video.IsStale = false
+
+	return &PlaybackAttemptResult{
+		Video:             video,
+		DispatchSucceeded: true,
+	}, nil
+}
+
+func (s *VideoService) buildPlaybackFailureResult(video *models.Video, reasonCode string, detail string, shouldReconcile bool) *PlaybackAttemptResult {
+	result := &PlaybackAttemptResult{
+		Video:             video,
+		DispatchSucceeded: false,
+		ReasonCode:        reasonCode,
+		UserMessage:       fmt.Sprintf("播放失败: %s (%s)\n原因: %s", video.Name, video.Path, detail),
+	}
+	if shouldReconcile {
+		result.ReconcileResult = s.reconcileAfterPlaybackFailure(video, reasonCode)
+	}
+	return result
+}
+
+func (s *VideoService) reconcileAfterPlaybackFailure(video *models.Video, reasonCode string) *PlaybackReconcileResult {
+	result := &PlaybackReconcileResult{
+		VideoID:    video.ID,
+		ReasonCode: reasonCode,
+	}
+
+	if err := database.DB.Model(video).Update("is_stale", true).Error; err == nil {
+		video.IsStale = true
+		result.DidMarkStale = true
+	}
+
+	matchedPath, ambiguous, err := s.findRelocatedVideoCandidate(video)
+	if err != nil {
+		log.Printf("自动纠偏扫描失败 id=%d err=%v", video.ID, err)
+		result.NeedsReload = true
+		if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
+			updatedVideo.IsStale = true
+			result.UpdatedVideo = updatedVideo
+		}
+		return result
+	}
+
+	if ambiguous {
+		result.NeedsReload = true
+		if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
+			result.UpdatedVideo = updatedVideo
+		}
+		return result
+	}
+
+	if matchedPath != "" && matchedPath != video.Path {
+		if err := s.RelocateVideo(video.ID, matchedPath); err == nil {
+			_ = database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_stale", false).Error
+			if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
+				updatedVideo.IsStale = false
+				result.DidRelocate = true
+				result.UpdatedVideo = updatedVideo
+				return result
+			}
+		}
+		result.NeedsReload = true
+		return result
+	}
+
+	result.NeedsReload = true
+	if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
+		result.UpdatedVideo = updatedVideo
+	}
+	return result
+}
+
+func (s *VideoService) findRelocatedVideoCandidate(video *models.Video) (string, bool, error) {
+	var directories []models.ScanDirectory
+	if err := database.DB.Order("path asc").Find(&directories).Error; err != nil {
+		return "", false, err
+	}
+
+	if len(directories) == 0 {
+		return "", false, nil
+	}
+
+	primary := make([]string, 0, len(directories))
+	secondary := make([]string, 0, len(directories))
+	for _, dir := range directories {
+		cleanPath := filepath.Clean(dir.Path)
+		if cleanPath == "" {
+			continue
+		}
+		prefix := cleanPath + string(os.PathSeparator)
+		if video.Directory == cleanPath || strings.HasPrefix(video.Directory, prefix) {
+			primary = append(primary, cleanPath)
+		} else {
+			secondary = append(secondary, cleanPath)
+		}
+	}
+
+	roots := append(primary, secondary...)
+	seenCandidates := map[string]struct{}{}
+	for _, root := range roots {
+		scannedFiles, err := s.ScanDirectoryWithInfo(root)
+		if err != nil {
+			return "", false, err
+		}
+		for _, candidate := range scannedFiles {
+			if filepath.Base(candidate.Path) != video.Name {
+				continue
+			}
+			if candidate.Size != video.Size {
+				continue
+			}
+			seenCandidates[candidate.Path] = struct{}{}
+			if len(seenCandidates) > 1 {
+				return "", true, nil
+			}
+		}
+	}
+
+	for candidatePath := range seenCandidates {
+		return candidatePath, false, nil
+	}
+
+	return "", false, nil
 }
