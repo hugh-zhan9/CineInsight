@@ -18,6 +18,14 @@ export function CancelSubtitle() {
   return window['go']['main']['App']['CancelSubtitle']();
 }
 
+export function GetSubtitleEngineStatuses() {
+  return window['go']['main']['App']['GetSubtitleEngineStatuses']();
+}
+
+export function PrepareSubtitleEngine(arg1) {
+  return window['go']['main']['App']['PrepareSubtitleEngine'](arg1);
+}
+
 export function CheckSubtitleDependencies() {
   return window['go']['main']['App']['CheckSubtitleDependencies']();
 }
@@ -42,12 +50,12 @@ export function DownloadSubtitleDependencies() {
   return window['go']['main']['App']['DownloadSubtitleDependencies']();
 }
 
-export function ForceGenerateSubtitle(arg1, arg2) {
-  return window['go']['main']['App']['ForceGenerateSubtitle'](arg1, arg2);
+export function ForceGenerateSubtitle(arg1) {
+	return window['go']['main']['App']['ForceGenerateSubtitle'](arg1);
 }
 
-export function GenerateSubtitle(arg1, arg2) {
-  return window['go']['main']['App']['GenerateSubtitle'](arg1, arg2);
+export function GenerateSubtitle(arg1) {
+	return window['go']['main']['App']['GenerateSubtitle'](arg1);
 }
 
 export function GetAllDirectories() {

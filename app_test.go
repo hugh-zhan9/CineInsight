@@ -9,6 +9,7 @@ import (
 	"testing"
 	"video-master/database"
 	"video-master/models"
+	"video-master/services"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -150,5 +151,37 @@ func TestPreviewMediaHandlerServesInlineMedia(t *testing.T) {
 	}
 	if rec.Body.String() != string(content) {
 		t.Fatalf("响应体错误: got=%q want=%q", rec.Body.String(), string(content))
+	}
+}
+
+func TestSubtitleAPIContractsCompile(t *testing.T) {
+	app := NewApp()
+
+	var getStatuses func() ([]services.SubtitleEngineStatus, error) = app.GetSubtitleEngineStatuses
+	_ = getStatuses
+
+	var prepare func(services.SubtitleEngine) error = app.PrepareSubtitleEngine
+	_ = prepare
+
+	req := services.SubtitleGenerateRequest{
+		VideoID:    1,
+		Engine:     services.SubtitleEngineWhisperX,
+		SourceLang: "auto",
+	}
+
+	var generate func(services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) = app.GenerateSubtitle
+	_ = generate
+
+	var forceGenerate func(services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) = app.ForceGenerateSubtitle
+	_ = forceGenerate
+
+	result := &services.SubtitleGenerateResult{}
+	result.Status = services.SubtitleResultStatusValidationFailed
+	result.ValidationCode = services.SubtitleValidationCodeHallucinationDetected
+	result.ForceEligible = true
+	result.Engine = services.SubtitleEngineQwen
+	result.SourceLang = req.SourceLang
+	if result.Status != services.SubtitleResultStatusValidationFailed {
+		t.Fatalf("结果状态错误: got=%s", result.Status)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -16,7 +17,9 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
+	"video-master/services/subtitleparser"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
@@ -36,6 +39,7 @@ var deeplHTTPClient = &http.Client{
 type SubtitleService struct {
 	ctx        context.Context
 	cancelFunc context.CancelFunc // 取消当前生成任务
+	mu         sync.Mutex
 	BaseDir    string
 	BinDir     string
 	ModelDir   string
@@ -55,24 +59,198 @@ func (s *SubtitleService) SetContext(ctx context.Context) {
 
 // CancelGeneration 取消正在进行的字幕生成任务
 func (s *SubtitleService) CancelGeneration() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.cancelFunc != nil {
 		s.cancelFunc()
 		log.Printf("[Subtitle] generation cancelled by user")
 	}
 }
 
+func (s *SubtitleService) GetEngineStatuses() ([]SubtitleEngineStatus, error) {
+	statuses := []SubtitleEngineStatus{
+		s.getWhisperXStatus(),
+		s.getQwenStatus(),
+	}
+	return statuses, nil
+}
+
+func (s *SubtitleService) getWhisperXStatus() SubtitleEngineStatus {
+	ffmpegReady := s.findBinary("ffmpeg") != ""
+	installed := s.isWhisperXInstalled()
+	status := SubtitleEngineStatus{
+		Engine:         SubtitleEngineWhisperX,
+		DisplayName:    "WhisperX",
+		Supported:      true,
+		Available:      ffmpegReady && installed,
+		NeedsPrepare:   false,
+		PrepareMode:    SubtitlePrepareModeNone,
+		ReasonCode:     SubtitleReasonReady,
+		SourceLangMode: SubtitleSourceLangModeShared,
+		ReasonMessage:  "WhisperX 已就绪",
+		PrepareHint:    "",
+	}
+
+	if runtime.GOOS == "darwin" {
+		status.PrepareMode = SubtitlePrepareModeManaged
+		if !ffmpegReady {
+			status.Available = false
+			status.NeedsPrepare = true
+			status.ReasonCode = SubtitleReasonMissingFFmpeg
+			status.ReasonMessage = "缺少 FFmpeg，可通过应用自动准备。"
+			status.PrepareHint = "准备 WhisperX 时会同时检查并安装 FFmpeg。"
+			return status
+		}
+		if !installed {
+			status.Available = false
+			status.NeedsPrepare = true
+			status.ReasonCode = SubtitleReasonMissingRuntime
+			status.ReasonMessage = "缺少 WhisperX 运行时，可通过应用自动准备。"
+			status.PrepareHint = "应用会创建私有 WhisperX sidecar 与模型缓存。"
+			return status
+		}
+		return status
+	}
+
+	if !ffmpegReady {
+		status.Available = false
+		status.PrepareMode = SubtitlePrepareModeManualPrereq
+		status.ReasonCode = SubtitleReasonManualPrereq
+		status.ReasonMessage = "当前平台需要先手动安装 FFmpeg。"
+		status.PrepareHint = "安装 FFmpeg 后，应用仍可继续准备 WhisperX 私有运行时。"
+		return status
+	}
+	if !installed {
+		status.Available = false
+		status.NeedsPrepare = true
+		status.PrepareMode = SubtitlePrepareModeManaged
+		status.ReasonCode = SubtitleReasonMissingRuntime
+		status.ReasonMessage = "共享前置条件已满足，可继续准备 WhisperX 运行时。"
+		status.PrepareHint = "当前平台不会自动安装系统依赖，只会准备应用私有运行时。"
+		return status
+	}
+	return status
+}
+
+func (s *SubtitleService) getQwenStatus() SubtitleEngineStatus {
+	status := SubtitleEngineStatus{
+		Engine:         SubtitleEngineQwen,
+		DisplayName:    "Qwen3-ASR-1.7B",
+		Supported:      false,
+		Available:      false,
+		NeedsPrepare:   false,
+		PrepareMode:    SubtitlePrepareModeUnsupported,
+		ReasonCode:     SubtitleReasonUnsupportedPlatform,
+		SourceLangMode: SubtitleSourceLangModeIgnored,
+		ReasonMessage:  "Qwen v1 当前仅在 macOS 上提供。",
+		PrepareHint:    "",
+	}
+
+	if runtime.GOOS != "darwin" {
+		return status
+	}
+	if runtime.GOARCH != "arm64" {
+		status.ReasonMessage = "Qwen v1 当前仅默认启用 macOS arm64；amd64 需后续探测通过后再启用。"
+		return status
+	}
+
+	ffmpegReady := s.findBinary("ffmpeg") != ""
+	installed := s.isQwenInstalled()
+	status.Supported = true
+	status.PrepareMode = SubtitlePrepareModeManaged
+	status.ReasonCode = SubtitleReasonReady
+	status.ReasonMessage = "Qwen 已就绪"
+	status.PrepareHint = ""
+	status.Available = ffmpegReady && installed
+	if !ffmpegReady {
+		status.Available = false
+		status.NeedsPrepare = true
+		status.ReasonCode = SubtitleReasonMissingFFmpeg
+		status.ReasonMessage = "缺少 FFmpeg，可通过应用自动准备。"
+		status.PrepareHint = "准备 Qwen 时会同时检查并安装 FFmpeg。"
+		return status
+	}
+	if !installed {
+		status.Available = false
+		status.NeedsPrepare = true
+		status.ReasonCode = SubtitleReasonMissingRuntime
+		status.ReasonMessage = "缺少 Qwen 运行时，可通过应用自动准备。"
+		status.PrepareHint = "应用会创建独立的 Qwen ASR sidecar。"
+		return status
+	}
+	return status
+}
+
+func (s *SubtitleService) PrepareEngine(engine SubtitleEngine) error {
+	statusMap := map[SubtitleEngine]SubtitleEngineStatus{}
+	statuses, err := s.GetEngineStatuses()
+	if err != nil {
+		return err
+	}
+	for _, status := range statuses {
+		statusMap[status.Engine] = status
+	}
+	status, ok := statusMap[engine]
+	if !ok {
+		return fmt.Errorf("不支持的字幕引擎: %s", engine)
+	}
+	if !status.Supported {
+		return fmt.Errorf(status.ReasonMessage)
+	}
+	if !status.NeedsPrepare {
+		if s.ctx != nil {
+			wailsRuntime.EventsEmit(s.ctx, "subtitle-prepare-complete", map[string]interface{}{
+				"engine": string(engine),
+			})
+		}
+		return nil
+	}
+
+	if !status.Available && status.ReasonCode == SubtitleReasonMissingFFmpeg && runtime.GOOS == "darwin" {
+		if err := s.downloadFFmpeg(); err != nil {
+			return err
+		}
+	}
+
+	s.emitProgress("prepare", engine, "checking", 0, "准备运行时...")
+
+	switch engine {
+	case SubtitleEngineWhisperX:
+		if runtime.GOOS != "darwin" && s.findBinary("ffmpeg") == "" {
+			return fmt.Errorf("当前平台需先手动安装 FFmpeg，再准备 WhisperX 运行时")
+		}
+		if err := s.installWhisperXRuntime(); err != nil {
+			return err
+		}
+	case SubtitleEngineQwen:
+		if err := s.installQwenRuntime(); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("不支持的字幕引擎: %s", engine)
+	}
+
+	if s.ctx != nil {
+		wailsRuntime.EventsEmit(s.ctx, "subtitle-prepare-complete", map[string]interface{}{
+			"engine": string(engine),
+		})
+	}
+	return nil
+}
+
 func (s *SubtitleService) CheckDependencies() (map[string]bool, error) {
+	statuses, err := s.GetEngineStatuses()
+	if err != nil {
+		return nil, err
+	}
 	result := make(map[string]bool)
-
-	// Check FFmpeg
 	result["ffmpeg"] = s.findBinary("ffmpeg") != ""
-
-	// WhisperX runtime lives in a private venv under ~/.video-master/whisperx_sidecar
-	result["whisper"] = s.isWhisperXInstalled()
-
-	// WhisperX lazily downloads model weights on first transcription, so runtime-ready implies model-ready.
-	result["model"] = result["whisper"]
-
+	for _, status := range statuses {
+		if status.Engine == SubtitleEngineWhisperX {
+			result["whisper"] = status.Available
+			result["model"] = status.Available
+		}
+	}
 	return result, nil
 }
 
@@ -110,83 +288,109 @@ func (s *SubtitleService) findBinary(name string) string {
 }
 
 func (s *SubtitleService) DownloadDependencies() error {
-	status, _ := s.CheckDependencies()
-
-	if !status["ffmpeg"] {
-		if err := s.downloadFFmpeg(); err != nil {
-			return err
-		}
-	}
-
-	if !status["whisper"] {
-		if err := s.installWhisperXRuntime(); err != nil {
-			return err
-		}
-	}
-
-	return nil
+	return s.PrepareEngine(SubtitleEngineWhisperX)
 }
 
-func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
-	bilingualEnabled bool, bilingualLang string, deeplApiKey string, forceGenerate bool, sourceLang string) error {
+func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPath string,
+	bilingualEnabled bool, bilingualLang string, deeplApiKey string, forceGenerate bool) (*SubtitleGenerateResult, error) {
 
 	// 创建可取消的子 context
 	ctx, cancel := context.WithCancel(s.ctx)
+	s.mu.Lock()
 	s.cancelFunc = cancel
+	s.mu.Unlock()
 	defer func() {
 		cancel()
+		s.mu.Lock()
 		s.cancelFunc = nil
+		s.mu.Unlock()
 	}()
-	_ = ctx // 后续传给 exec.CommandContext
 
-	s.emitProgress("process", 0, "Initializing...")
+	s.emitProgress("generate", req.Engine, "checking", 0, "初始化任务...")
 
-	status, err := s.CheckDependencies()
+	statuses, err := s.GetEngineStatuses()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	if !status["ffmpeg"] {
-		return fmt.Errorf("缺少 FFmpeg，请先点击下载依赖")
+	var engineStatus *SubtitleEngineStatus
+	for idx := range statuses {
+		if statuses[idx].Engine == req.Engine {
+			engineStatus = &statuses[idx]
+			break
+		}
 	}
-	if !status["whisper"] {
-		return fmt.Errorf("缺少 WhisperX 运行时，请先点击下载依赖")
+	if engineStatus == nil {
+		return nil, fmt.Errorf("不支持的字幕引擎: %s", req.Engine)
 	}
-	if !status["model"] {
-		return fmt.Errorf("缺少 WhisperX 模型依赖，请先点击下载依赖")
+	if !engineStatus.Supported {
+		return nil, fmt.Errorf(engineStatus.ReasonMessage)
+	}
+	if !engineStatus.Available {
+		return nil, fmt.Errorf(engineStatus.ReasonMessage)
 	}
 
 	// Extract Audio
-	s.emitProgress("process", 10, "Extracting audio...")
-	tempWav := filepath.Join(s.BaseDir, fmt.Sprintf("temp_%d.wav", videoID))
+	s.emitProgress("generate", req.Engine, "extracting-audio", 10, "提取音频...")
+	tempWav := filepath.Join(s.BaseDir, fmt.Sprintf("temp_%d.wav", req.VideoID))
 	defer os.Remove(tempWav)
 
 	if err := s.extractAudio(ctx, videoPath, tempWav); err != nil {
-		return err
+		if ctx.Err() != nil {
+			s.emitCancelled(req.VideoID, req.Engine, "字幕生成已取消")
+			return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
+		}
+		return nil, err
 	}
 
 	// Transcribe (原文识别)
-	s.emitProgress("process", 20, "Transcribing with WhisperX (this may take a while)...")
+	s.emitProgress("generate", req.Engine, "transcribing", 20, fmt.Sprintf("使用 %s 转写音频...", engineStatus.DisplayName))
 	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
 
-	if sourceLang == "" {
-		sourceLang = "auto"
+	if req.SourceLang == "" {
+		req.SourceLang = "auto"
 	}
 
-	detectedLang, segments, err := s.transcribeWhisperXWithLang(ctx, tempWav, sourceLang)
+	var detectedLang string
+	var segments []subtitleparser.Segment
+	switch req.Engine {
+	case SubtitleEngineWhisperX:
+		detectedLang, segments, err = s.transcribeWhisperXWithLang(ctx, tempWav, req.SourceLang)
+	case SubtitleEngineQwen:
+		detectedLang, segments, err = s.transcribeQwenWithLang(ctx, tempWav, req.SourceLang)
+	default:
+		return nil, fmt.Errorf("不支持的字幕引擎: %s", req.Engine)
+	}
 	if err != nil {
-		return err
+		if ctx.Err() != nil {
+			s.emitCancelled(req.VideoID, req.Engine, "字幕生成已取消")
+			return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
+		}
+		return nil, err
 	}
 
+	s.emitProgress("generate", req.Engine, "normalizing", 35, "整理转写结果...")
 	srtPath := outputPrefix + ".srt"
 	if err := writeSRT(srtPath, segments); err != nil {
-		return fmt.Errorf("写入 WhisperX 字幕失败: %w", err)
+		return nil, fmt.Errorf("写入字幕失败: %w", err)
 	}
 
 	// 后处理：检测幻觉输出（forceGenerate 时跳过）
 	if !forceGenerate {
-		s.emitProgress("process", 50, "Validating output...")
+		s.emitProgress("generate", req.Engine, "validating", 50, "校验字幕输出...")
 		if err := s.validateSRT(srtPath); err != nil {
-			return err
+			var validationErr *SubtitleValidationError
+			if ok := errors.As(err, &validationErr); ok {
+				return &SubtitleGenerateResult{
+					Status:         SubtitleResultStatusValidationFailed,
+					VideoID:        req.VideoID,
+					Message:        validationErr.Message,
+					ValidationCode: validationErr.Code,
+					ForceEligible:  validationErr.ForceEligible,
+					Engine:         req.Engine,
+					SourceLang:     req.SourceLang,
+				}, nil
+			}
+			return nil, err
 		}
 	}
 
@@ -199,7 +403,7 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 			log.Printf("[Subtitle] detected language matches target, skipping translation")
 		} else {
 			// 直接用 DeepL 翻译原文 SRT（DeepL 支持任意语言对，自动检测源语言）
-			s.emitProgress("process", 60, "Translating via DeepL...")
+			s.emitProgress("generate", req.Engine, "translating", 60, "通过 DeepL 翻译字幕...")
 
 			translatedSrtPath := outputPrefix + "_translated_temp.srt"
 			defer os.Remove(translatedSrtPath)
@@ -211,7 +415,7 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 			}
 
 			// 合并双语 SRT（原文上行、翻译下行）
-			s.emitProgress("process", 85, "Merging bilingual subtitles...")
+			s.emitProgress("generate", req.Engine, "merging", 85, "合并双语字幕...")
 			if err := s.mergeBilingualSRT(srtPath, translatedSrtPath, srtPath); err != nil {
 				log.Printf("[Subtitle] merge failed: %v", err)
 			}
@@ -219,15 +423,16 @@ func (s *SubtitleService) GenerateSubtitle(videoID uint, videoPath string,
 	}
 
 done:
-	s.emitProgress("process", 100, "Completed")
+	s.emitProgress("generate", req.Engine, "finalizing", 100, "完成收尾")
 
 	if s.ctx != nil {
 		wailsRuntime.EventsEmit(s.ctx, "subtitle-success", map[string]interface{}{
-			"videoID": videoID,
+			"videoID": req.VideoID,
+			"engine":  string(req.Engine),
 			"path":    srtPath,
 		})
 	}
-	return nil
+	return &SubtitleGenerateResult{Status: SubtitleResultStatusSuccess, VideoID: req.VideoID, Path: srtPath}, nil
 }
 
 func (s *SubtitleService) extractAudio(ctx context.Context, videoPath, outputPath string) error {
@@ -374,7 +579,11 @@ func (s *SubtitleService) validateSRT(srtPath string) error {
 
 	if repeatRatio > 0.85 {
 		os.Remove(srtPath)
-		return fmt.Errorf("HALLUCINATION_DETECTED: 检测到异常输出（疑似模型幻觉），字幕内容重复率 %.0f%%。可选择强制生成保留结果", repeatRatio*100)
+		return &SubtitleValidationError{
+			Code:          SubtitleValidationCodeHallucinationDetected,
+			Message:       fmt.Sprintf("检测到异常输出（疑似模型幻觉），字幕内容重复率 %.0f%%。可选择强制生成保留结果", repeatRatio*100),
+			ForceEligible: true,
+		}
 	}
 
 	return nil
@@ -650,7 +859,7 @@ func (s *SubtitleService) installBrewPackage(pkg, displayName string) error {
 		}
 	}
 
-	s.emitProgress(pkg, 0, fmt.Sprintf("正在通过 Homebrew 安装 %s...", displayName))
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 0, fmt.Sprintf("正在通过 Homebrew 安装 %s...", displayName))
 
 	cmd := exec.Command(brewPath, "install", pkg)
 	cmd.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
@@ -660,7 +869,7 @@ func (s *SubtitleService) installBrewPackage(pkg, displayName string) error {
 		return fmt.Errorf("brew install %s 失败: %s\n%s", pkg, err, string(output))
 	}
 
-	s.emitProgress(pkg, 100, fmt.Sprintf("%s 安装完成", displayName))
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 100, fmt.Sprintf("%s 安装完成", displayName))
 	return nil
 }
 
@@ -676,7 +885,7 @@ func (s *SubtitleService) downloadModel() error {
 	// 多语言 medium 模型（~1.5GB），支持自动语言检测
 	url := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
 	dest := filepath.Join(s.ModelDir, "ggml-medium.bin")
-	s.emitProgress("model", 0, "Downloading Model (~1.5GB)...")
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "downloading-model", 0, "Downloading Model (~1.5GB)...")
 	return s.downloadFile(url, dest, "model")
 }
 
@@ -699,7 +908,7 @@ func (s *SubtitleService) downloadFile(url, dest, component string) error {
 		OnProgress: func(c int64) {
 			if size > 0 {
 				p := int(float64(c) / float64(size) * 100)
-				s.emitProgress(component, p, fmt.Sprintf("Downloading %d%%", p))
+				s.emitProgress("prepare", SubtitleEngineWhisperX, "downloading-model", p, fmt.Sprintf("Downloading %d%%", p))
 			}
 		},
 	}
@@ -707,10 +916,26 @@ func (s *SubtitleService) downloadFile(url, dest, component string) error {
 	return err
 }
 
-func (s *SubtitleService) emitProgress(comp string, pct int, msg string) {
+func (s *SubtitleService) emitProgress(action string, engine SubtitleEngine, phase string, pct int, msg string) {
 	if s.ctx != nil {
-		wailsRuntime.EventsEmit(s.ctx, "download-progress", map[string]interface{}{
-			"component": comp, "percent": pct, "msg": msg,
+		wailsRuntime.EventsEmit(s.ctx, "subtitle-progress", map[string]interface{}{
+			"action":      action,
+			"engine":      string(engine),
+			"phase":       phase,
+			"percent":     pct,
+			"message":     msg,
+			"cancellable": action == "generate",
+			"jobScope":    "single_active_v1",
+		})
+	}
+}
+
+func (s *SubtitleService) emitCancelled(videoID uint, engine SubtitleEngine, msg string) {
+	if s.ctx != nil {
+		wailsRuntime.EventsEmit(s.ctx, "subtitle-cancelled", map[string]interface{}{
+			"videoID": videoID,
+			"engine":  string(engine),
+			"message": msg,
 		})
 	}
 }
