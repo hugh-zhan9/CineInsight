@@ -238,6 +238,81 @@ export namespace models {
 }
 
 export namespace services {
+
+	export class SubtitleEngineStatus {
+	    engine: string;
+	    display_name: string;
+	    supported: boolean;
+	    available: boolean;
+	    needs_prepare: boolean;
+	    prepare_mode: string;
+	    reason_code: string;
+	    source_lang_mode: string;
+	    reason_message: string;
+	    prepare_hint: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SubtitleEngineStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.engine = source["engine"];
+	        this.display_name = source["display_name"];
+	        this.supported = source["supported"];
+	        this.available = source["available"];
+	        this.needs_prepare = source["needs_prepare"];
+	        this.prepare_mode = source["prepare_mode"];
+	        this.reason_code = source["reason_code"];
+	        this.source_lang_mode = source["source_lang_mode"];
+	        this.reason_message = source["reason_message"];
+	        this.prepare_hint = source["prepare_hint"];
+	    }
+	}
+
+	export class SubtitleGenerateRequest {
+	    video_id: number;
+	    engine: string;
+	    source_lang: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SubtitleGenerateRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.engine = source["engine"];
+	        this.source_lang = source["source_lang"];
+	    }
+	}
+
+	export class SubtitleGenerateResult {
+	    status: string;
+	    video_id: number;
+	    path?: string;
+	    message?: string;
+	    validation_code?: string;
+	    force_eligible?: boolean;
+	    engine?: string;
+	    source_lang?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SubtitleGenerateResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.video_id = source["video_id"];
+	        this.path = source["path"];
+	        this.message = source["message"];
+	        this.validation_code = source["validation_code"];
+	        this.force_eligible = source["force_eligible"];
+	        this.engine = source["engine"];
+	        this.source_lang = source["source_lang"];
+	    }
+	}
 	
 	export class CleanupDuplicateGroup {
 	    original: models.Video;

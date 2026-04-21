@@ -331,7 +331,7 @@ func (s *SubtitleService) installWhisperXRuntime() error {
 		return err
 	}
 
-	s.emitProgress("whisper", 10, "Preparing WhisperX runtime...")
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 10, "Preparing WhisperX runtime...")
 
 	upgradePip := exec.Command(venvPython, "-m", "pip", "install", "--upgrade", "pip")
 	upgradePip.Env = env
@@ -339,14 +339,14 @@ func (s *SubtitleService) installWhisperXRuntime() error {
 		return fmt.Errorf("升级 pip 失败: %s", strings.TrimSpace(string(output)))
 	}
 
-	s.emitProgress("whisper", 45, "Installing WhisperX dependencies...")
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 45, "Installing WhisperX dependencies...")
 	install := exec.Command(venvPython, "-m", "pip", "install", fmt.Sprintf("whisperx==%s", whisperXVersion), "numpy")
 	install.Env = env
 	if output, err := install.CombinedOutput(); err != nil {
 		return fmt.Errorf("安装 WhisperX 失败: %s", strings.TrimSpace(string(output)))
 	}
 
-	s.emitProgress("whisper", 100, "WhisperX runtime ready")
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 100, "WhisperX runtime ready")
 	return nil
 }
 

@@ -344,6 +344,16 @@ func (a *App) DeleteDirectory(id uint) error {
 
 // ===== Subtitle Methods =====
 
+// GetSubtitleEngineStatuses 获取字幕引擎可用性状态
+func (a *App) GetSubtitleEngineStatuses() ([]services.SubtitleEngineStatus, error) {
+	return a.subtitleService.GetEngineStatuses()
+}
+
+// PrepareSubtitleEngine 准备指定字幕引擎所需依赖
+func (a *App) PrepareSubtitleEngine(engine services.SubtitleEngine) error {
+	return a.subtitleService.PrepareEngine(engine)
+}
+
 // CheckSubtitleDependencies 检查字幕生成依赖
 func (a *App) CheckSubtitleDependencies() (map[string]bool, error) {
 	return a.subtitleService.CheckDependencies()
@@ -355,11 +365,11 @@ func (a *App) DownloadSubtitleDependencies() error {
 }
 
 // GenerateSubtitle 生成字幕
-func (a *App) GenerateSubtitle(videoID uint, sourceLang string) error {
-	video, err := a.videoService.GetVideo(videoID)
+func (a *App) GenerateSubtitle(req services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) {
+	video, err := a.videoService.GetVideo(req.VideoID)
 	if err != nil {
-		log.Printf("API GenerateSubtitle id=%d failed to get video: %v", videoID, err)
-		return err
+		log.Printf("API GenerateSubtitle id=%d failed to get video: %v", req.VideoID, err)
+		return nil, err
 	}
 	// 获取双语字幕配置
 	settings, _ := a.settingsService.GetSettings()
@@ -371,15 +381,15 @@ func (a *App) GenerateSubtitle(videoID uint, sourceLang string) error {
 		bilingualLang = settings.BilingualLang
 		deeplApiKey = settings.DeepLApiKey
 	}
-	log.Printf("API GenerateSubtitle id=%d path=%s bilingual=%v lang=%s source=%s", videoID, video.Path, bilingualEnabled, bilingualLang, sourceLang)
-	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, false, sourceLang)
+	log.Printf("API GenerateSubtitle id=%d path=%s engine=%s bilingual=%v lang=%s source=%s", req.VideoID, video.Path, req.Engine, bilingualEnabled, bilingualLang, req.SourceLang)
+	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, false)
 }
 
 // ForceGenerateSubtitle 强制生成字幕（跳过幻觉检测）
-func (a *App) ForceGenerateSubtitle(videoID uint, sourceLang string) error {
-	video, err := a.videoService.GetVideo(videoID)
+func (a *App) ForceGenerateSubtitle(req services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) {
+	video, err := a.videoService.GetVideo(req.VideoID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	settings, _ := a.settingsService.GetSettings()
 	bilingualEnabled := false
@@ -390,8 +400,8 @@ func (a *App) ForceGenerateSubtitle(videoID uint, sourceLang string) error {
 		bilingualLang = settings.BilingualLang
 		deeplApiKey = settings.DeepLApiKey
 	}
-	log.Printf("API ForceGenerateSubtitle id=%d path=%s source=%s", videoID, video.Path, sourceLang)
-	return a.subtitleService.GenerateSubtitle(videoID, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, true, sourceLang)
+	log.Printf("API ForceGenerateSubtitle id=%d path=%s engine=%s source=%s", req.VideoID, video.Path, req.Engine, req.SourceLang)
+	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, true)
 }
 
 // CancelSubtitle 取消正在进行的字幕生成任务
