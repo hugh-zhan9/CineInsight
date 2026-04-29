@@ -2,10 +2,13 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 	"video-master/models"
 	"video-master/services"
@@ -13,6 +16,17 @@ import (
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
+
+const (
+	maxAppLogSizeBytes = 20 * 1024 * 1024
+	maxAppLogBackups   = 3
+)
+
+var sensitiveLogPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)(deepl[_\-\s]*api[_\-\s]*key["'\s:=]+)([^"',}\s]+)`),
+	regexp.MustCompile(`(?i)(api[_\-\s]*key["'\s:=]+)([^"',}\s]+)`),
+	regexp.MustCompile(`(?i)(authorization["'\s:=]+bearer\s+)([^"',}\s]+)`),
+}
 
 // App struct
 type App struct {
@@ -49,12 +63,17 @@ func NewApp() *App {
 // so we can call the runtime methods
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
+	log.Printf("App startup begin startupError=%q", a.startupError)
 	if a.startupError != "" {
 		return
 	}
 	a.subtitleService.SetContext(ctx) // Inject context
+	a.cleanupService.SetContext(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
+		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
 		a.setLogEnabled(settings.LogEnabled)
+	} else {
+		log.Printf("App startup settings load failed err=%v", err)
 	}
 }
 
@@ -67,7 +86,25 @@ func (a *App) setStartupError(err error) {
 }
 
 func (a *App) GetStartupError() string {
+	log.Printf("API GetStartupError hasError=%v value=%q", a.startupError != "", a.startupError)
 	return a.startupError
+}
+
+func (a *App) LogFrontend(level string, source string, message string) {
+	level = strings.ToUpper(strings.TrimSpace(level))
+	if level == "" {
+		level = "INFO"
+	}
+	source = strings.TrimSpace(source)
+	if source == "" {
+		source = "frontend"
+	}
+	message = strings.TrimSpace(message)
+	if message == "" {
+		return
+	}
+	message = redactSensitiveLogMessage(message)
+	log.Printf("[Frontend][%s][%s] %s", level, source, message)
 }
 
 // closeLogFile 关闭当前日志文件句柄（如果有）
@@ -91,12 +128,38 @@ func (a *App) setLogEnabled(enabled bool) {
 			_ = os.MkdirAll(dataDir, 0755)
 		}
 		logPath := filepath.Join(dataDir, "app.log")
+		rotateLogIfNeeded(logPath)
 		if f, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
 			a.closeLogFile() // 先关闭旧句柄
 			a.logFile = f
 			log.SetOutput(f)
 		}
 	}
+}
+
+func redactSensitiveLogMessage(message string) string {
+	redacted := message
+	for _, pattern := range sensitiveLogPatterns {
+		redacted = pattern.ReplaceAllString(redacted, "${1}[REDACTED]")
+	}
+	return redacted
+}
+
+func rotateLogIfNeeded(logPath string) {
+	info, err := os.Stat(logPath)
+	if err != nil || info.Size() < maxAppLogSizeBytes {
+		return
+	}
+	oldest := fmt.Sprintf("%s.%d", logPath, maxAppLogBackups)
+	_ = os.Remove(oldest)
+	for index := maxAppLogBackups - 1; index >= 1; index-- {
+		src := fmt.Sprintf("%s.%d", logPath, index)
+		dst := fmt.Sprintf("%s.%d", logPath, index+1)
+		if _, err := os.Stat(src); err == nil {
+			_ = os.Rename(src, dst)
+		}
+	}
+	_ = os.Rename(logPath, logPath+".1")
 }
 
 // ===== Video Methods =====
@@ -109,14 +172,14 @@ func (a *App) GetAllVideos() ([]models.Video, error) {
 // GetVideosPaginated 分页获取视频
 func (a *App) GetVideosPaginated(cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	videos, err := a.videoService.GetVideosPaginated(cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API GetVideosPaginated cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v", cursorScore, cursorSize, cursorID, limit, len(videos), err)
+	log.Printf("API GetVideosPaginated cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
 	return videos, err
 }
 
 // SearchVideos 搜索视频（支持分页）
 func (a *App) SearchVideos(keyword string, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	videos, err := a.videoService.SearchVideos(keyword, cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API SearchVideos keyword=%q cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v", keyword, cursorScore, cursorSize, cursorID, limit, len(videos), err)
+	log.Printf("API SearchVideos keyword=%q cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", keyword, cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
 	return videos, err
 }
 
@@ -137,7 +200,7 @@ func (a *App) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize 
 // SearchVideosWithFilters 组合搜索视频（名称 + 标签 + 体积 + 分辨率，支持分页）
 func (a *App) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	videos, err := a.videoService.SearchVideosWithFilters(keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API SearchVideosWithFilters keyword=%q tags=%v size=[%d,%d] height=[%d,%d] cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v", keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit, len(videos), err)
+	log.Printf("API SearchVideosWithFilters keyword=%q tags=%v size=[%d,%d] height=[%d,%d] cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
 	return videos, err
 }
 
@@ -175,6 +238,12 @@ func (a *App) RefreshVideoMetadata(id uint) error {
 	return a.videoService.RefreshVideoMetadata(id)
 }
 
+func (a *App) BatchRefreshVideoMetadata(videoIDs []uint) *services.BatchVideoOperationResult {
+	result := a.videoService.BatchRefreshVideoMetadata(videoIDs)
+	log.Printf("API BatchRefreshVideoMetadata requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
+	return result
+}
+
 // RenameVideo 重命名视频文件及数据库记录
 func (a *App) RenameVideo(id uint, newName string) error {
 	err := a.videoService.RenameVideo(id, newName)
@@ -196,7 +265,7 @@ func (a *App) AddVideo(path string) (*models.Video, error) {
 // GetVideosByDirectory 按目录获取视频记录
 func (a *App) GetVideosByDirectory(dir string) ([]models.Video, error) {
 	videos, err := a.videoService.GetVideosByDirectory(dir)
-	log.Printf("API GetVideosByDirectory dir=%s result=%d err=%v", dir, len(videos), err)
+	log.Printf("API GetVideosByDirectory dir=%s result=%d err=%v sample=%s", dir, len(videos), err, summarizeVideos(videos, 3))
 	return videos, err
 }
 
@@ -205,6 +274,12 @@ func (a *App) DeleteVideo(id uint, deleteFile bool) error {
 	err := a.videoService.DeleteVideo(id, deleteFile)
 	log.Printf("API DeleteVideo id=%d deleteFile=%v err=%v", id, deleteFile, err)
 	return err
+}
+
+func (a *App) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *services.BatchVideoOperationResult {
+	result := a.videoService.BatchDeleteVideos(videoIDs, deleteFile)
+	log.Printf("API BatchDeleteVideos requested=%d succeeded=%d failed=%d deleteFile=%v", result.Requested, result.Succeeded, result.Failed, deleteFile)
+	return result
 }
 
 // OpenDirectory 打开文件所在目录
@@ -259,6 +334,12 @@ func (a *App) AddTagToVideo(videoID uint, tagID uint) error {
 	return err
 }
 
+func (a *App) BatchAddTagToVideos(videoIDs []uint, tagID uint) *services.BatchVideoOperationResult {
+	result := a.videoService.BatchAddTagToVideos(videoIDs, tagID)
+	log.Printf("API BatchAddTagToVideos requested=%d succeeded=%d failed=%d tagID=%d", result.Requested, result.Succeeded, result.Failed, tagID)
+	return result
+}
+
 // RemoveTagFromVideo 移除视频标签
 func (a *App) RemoveTagFromVideo(videoID uint, tagID uint) error {
 	err := a.videoService.RemoveTagFromVideo(videoID, tagID)
@@ -266,12 +347,18 @@ func (a *App) RemoveTagFromVideo(videoID uint, tagID uint) error {
 	return err
 }
 
+func (a *App) BatchRemoveTagFromVideos(videoIDs []uint, tagID uint) *services.BatchVideoOperationResult {
+	result := a.videoService.BatchRemoveTagFromVideos(videoIDs, tagID)
+	log.Printf("API BatchRemoveTagFromVideos requested=%d succeeded=%d failed=%d tagID=%d", result.Requested, result.Succeeded, result.Failed, tagID)
+	return result
+}
+
 // ===== Tag Methods =====
 
 // GetAllTags 获取所有标签
 func (a *App) GetAllTags() ([]models.Tag, error) {
 	tags, err := a.tagService.GetAllTags()
-	log.Printf("API GetAllTags result=%d err=%v", len(tags), err)
+	log.Printf("API GetAllTags result=%d err=%v sample=%s", len(tags), err, summarizeTags(tags, 5))
 	return tags, err
 }
 
@@ -308,6 +395,7 @@ func (a *App) GetSettings() (*models.Settings, error) {
 	if err == nil {
 		a.setLogEnabled(settings.LogEnabled)
 	}
+	log.Printf("API GetSettings err=%v value=%s", err, summarizeSettings(settings))
 	return settings, err
 }
 
@@ -324,7 +412,9 @@ func (a *App) UpdateSettings(input models.Settings) error {
 
 // GetAllDirectories 获取所有扫描目录
 func (a *App) GetAllDirectories() ([]models.ScanDirectory, error) {
-	return a.directoryService.GetAllDirectories()
+	dirs, err := a.directoryService.GetAllDirectories()
+	log.Printf("API GetAllDirectories result=%d err=%v sample=%s", len(dirs), err, summarizeDirectories(dirs, 5))
+	return dirs, err
 }
 
 // AddDirectory 添加扫描目录
@@ -435,15 +525,88 @@ func (a *App) GetCleanupCandidates(minDurationSeconds int, minWidth int, minHeig
 		MinWidth:    minWidth,
 		MinHeight:   minHeight,
 	}
+	startedAt := time.Now()
+	log.Printf("API GetCleanupCandidates begin duration=%d width=%d height=%d", minDurationSeconds, minWidth, minHeight)
 	analysis, err := a.cleanupService.AnalyzeCleanupCandidates(criteria)
 	if err != nil {
-		log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d err=%v", minDurationSeconds, minWidth, minHeight, err)
+		log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d elapsed=%s err=%v",
+			minDurationSeconds, minWidth, minHeight, time.Since(startedAt).Round(time.Millisecond), err)
 		return nil, err
 	}
 
-	log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d duplicate_groups=%d low_duration=%d low_resolution=%d",
+	log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d elapsed=%s duplicate_groups=%d low_duration=%d low_resolution=%d",
 		minDurationSeconds, minWidth, minHeight,
+		time.Since(startedAt).Round(time.Millisecond),
 		len(analysis.DuplicateGroups), len(analysis.LowDuration), len(analysis.LowResolution),
 	)
 	return analysis, nil
+}
+
+func summarizeVideos(videos []models.Video, limit int) string {
+	if len(videos) == 0 {
+		return "[]"
+	}
+	if limit <= 0 || limit > len(videos) {
+		limit = len(videos)
+	}
+	parts := make([]string, 0, limit+1)
+	for index := 0; index < limit; index++ {
+		video := videos[index]
+		parts = append(parts, fmt.Sprintf("{id:%d name:%q path:%q tags:%d}", video.ID, video.Name, video.Path, len(video.Tags)))
+	}
+	if len(videos) > limit {
+		parts = append(parts, fmt.Sprintf("...+%d more", len(videos)-limit))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func summarizeTags(tags []models.Tag, limit int) string {
+	if len(tags) == 0 {
+		return "[]"
+	}
+	if limit <= 0 || limit > len(tags) {
+		limit = len(tags)
+	}
+	parts := make([]string, 0, limit+1)
+	for index := 0; index < limit; index++ {
+		tag := tags[index]
+		parts = append(parts, fmt.Sprintf("{id:%d name:%q color:%q}", tag.ID, tag.Name, tag.Color))
+	}
+	if len(tags) > limit {
+		parts = append(parts, fmt.Sprintf("...+%d more", len(tags)-limit))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func summarizeDirectories(dirs []models.ScanDirectory, limit int) string {
+	if len(dirs) == 0 {
+		return "[]"
+	}
+	if limit <= 0 || limit > len(dirs) {
+		limit = len(dirs)
+	}
+	parts := make([]string, 0, limit+1)
+	for index := 0; index < limit; index++ {
+		dir := dirs[index]
+		parts = append(parts, fmt.Sprintf("{id:%d alias:%q path:%q}", dir.ID, dir.Alias, dir.Path))
+	}
+	if len(dirs) > limit {
+		parts = append(parts, fmt.Sprintf("...+%d more", len(dirs)-limit))
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func summarizeSettings(settings *models.Settings) string {
+	if settings == nil {
+		return "<nil>"
+	}
+	return fmt.Sprintf("{id:%d theme:%q log_enabled:%v auto_scan:%v play_weight:%.2f bilingual:%v lang:%q}",
+		settings.ID,
+		settings.Theme,
+		settings.LogEnabled,
+		settings.AutoScanOnStartup,
+		settings.PlayWeight,
+		settings.BilingualEnabled,
+		settings.BilingualLang,
+	)
 }

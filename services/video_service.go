@@ -1,7 +1,9 @@
 package services
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -15,7 +17,6 @@ import (
 	"video-master/models"
 
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 type VideoService struct{}
@@ -25,6 +26,18 @@ const recentActiveFileThreshold = 5 * time.Minute
 var tempVideoStemSuffixes = []string{
 	".temp", "_temp", "-temp",
 	".tmp", "_tmp", "-tmp",
+}
+
+type BatchVideoOperationError struct {
+	VideoID uint   `json:"video_id"`
+	Error   string `json:"error"`
+}
+
+type BatchVideoOperationResult struct {
+	Requested int                        `json:"requested"`
+	Succeeded int                        `json:"succeeded"`
+	Failed    int                        `json:"failed"`
+	Errors    []BatchVideoOperationError `json:"errors"`
 }
 
 // GetAllVideos 获取所有视频（已废弃，使用分页方式）
@@ -47,10 +60,10 @@ func (s *VideoService) getPlayWeight() (float64, error) {
 	return w, nil
 }
 
-// scoreExpr 返回播放分数的 SQL 表达式片段，使用 fmt.Sprintf 将权重直接嵌入 SQL，
+// scoreExprForTable 返回播放分数的 SQL 表达式片段，使用 fmt.Sprintf 将权重直接嵌入 SQL，
 // 避免在复合 WHERE 条件中反复传递 ? 占位符导致参数计数出错。
-func scoreExpr(playWeight float64) string {
-	return fmt.Sprintf("(play_count * %g + random_play_count)", playWeight)
+func scoreExprForTable(tablePrefix string, playWeight float64) string {
+	return fmt.Sprintf("(%splay_count * %g + %srandom_play_count)", tablePrefix, playWeight, tablePrefix)
 }
 
 // applyCursorCondition 为查询添加游标分页的 WHERE 条件
@@ -77,13 +90,13 @@ func (s *VideoService) GetVideosPaginated(cursorScore float64, cursorSize int64,
 	}
 
 	var videos []models.Video
-	scoreSql := scoreExpr(playWeight)
-	query := database.DB.Preload("Tags").
-		Order(clause.Expr{SQL: scoreSql + " ASC"}).
-		Order("size desc").
-		Order("id desc")
+	scoreSql := scoreExprForTable("videos.", playWeight)
+	query := database.DB.Model(&models.Video{}).Preload("Tags").
+		Order(scoreSql + " ASC").
+		Order("videos.size desc").
+		Order("videos.id desc")
 
-	query = applyCursorCondition(query, scoreSql, cursorScore, cursorSize, cursorID, "")
+	query = applyCursorCondition(query, scoreSql, cursorScore, cursorSize, cursorID, "videos.")
 
 	err = query.Limit(limit).Find(&videos).Error
 	return videos, err
@@ -99,6 +112,61 @@ func (s *VideoService) SearchVideosByTags(tagIDs []uint, cursorScore float64, cu
 	return s.SearchVideosWithFilters("", tagIDs, 0, 0, 0, 0, cursorScore, cursorSize, cursorID, limit)
 }
 
+type ffprobeStream struct {
+	Width    int    `json:"width"`
+	Height   int    `json:"height"`
+	Duration string `json:"duration"`
+}
+
+type ffprobePayload struct {
+	Streams []ffprobeStream `json:"streams"`
+	Format  struct {
+		Duration string `json:"duration"`
+	} `json:"format"`
+}
+
+func parseFFProbeOutput(output []byte) (duration float64, resolution string, width, height int, err error) {
+	trimmed := bytes.TrimSpace(output)
+	if len(trimmed) == 0 {
+		return 0, "", 0, 0, errors.New("empty ffprobe output")
+	}
+
+	var data ffprobePayload
+	if err := json.Unmarshal(trimmed, &data); err != nil {
+		return 0, "", 0, 0, err
+	}
+	if len(data.Streams) == 0 {
+		return 0, "", 0, 0, errors.New("ffprobe returned no video stream")
+	}
+
+	stream := data.Streams[0]
+	width = stream.Width
+	height = stream.Height
+	if width > 0 && height > 0 {
+		resolution = fmt.Sprintf("%dx%d", width, height)
+	}
+
+	durationText := strings.TrimSpace(stream.Duration)
+	if durationText == "" {
+		durationText = strings.TrimSpace(data.Format.Duration)
+	}
+	if durationText != "" {
+		if _, scanErr := fmt.Sscanf(durationText, "%f", &duration); scanErr != nil {
+			return 0, "", 0, 0, fmt.Errorf("invalid duration %q: %w", durationText, scanErr)
+		}
+	}
+
+	return duration, resolution, width, height, nil
+}
+
+func truncateLogSnippet(text string, limit int) string {
+	trimmed := strings.TrimSpace(text)
+	if limit <= 0 || len(trimmed) <= limit {
+		return trimmed
+	}
+	return trimmed[:limit] + "...(truncated)"
+}
+
 // SearchVideosWithFilters 组合搜索（关键词 + 标签 + 体积 + 分辨率 AND）- 支持分页（按概率优先排序）
 func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	var videos []models.Video
@@ -107,9 +175,9 @@ func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, mi
 		return nil, err
 	}
 
-	scoreSql := scoreExpr(playWeight)
+	scoreSql := scoreExprForTable("videos.", playWeight)
 	query := database.DB.Model(&models.Video{}).Preload("Tags").
-		Order(clause.Expr{SQL: scoreSql + " ASC"}).
+		Order(scoreSql + " ASC").
 		Order("videos.size desc").
 		Order("videos.id desc")
 
@@ -170,36 +238,26 @@ func (s *VideoService) getVideoMetadata(path string) (duration float64, resoluti
 
 	// 获取时长和分辨率 (JSON 格式)
 	cmd := exec.Command(ffprobeBin, "-v", "error", "-select_streams", "v:0",
-		"-show_entries", "stream=width,height,duration", "-of", "json", path)
-	output, err := cmd.CombinedOutput()
+		"-show_entries", "stream=width,height,duration:format=duration", "-of", "json", path)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		log.Printf("[VideoService] ffprobe failed for %s: %v stderr=%s", path, err, truncateLogSnippet(stderr.String(), 400))
+		return 0, "", 0, 0
+	}
+
+	duration, resolution, width, height, err = parseFFProbeOutput(stdout.Bytes())
 	if err != nil {
-		log.Printf("[VideoService] ffprobe failed for %s: %v", path, err)
+		log.Printf("[VideoService] failed to parse ffprobe output for %s: %v stdout=%s stderr=%s",
+			path,
+			err,
+			truncateLogSnippet(stdout.String(), 400),
+			truncateLogSnippet(stderr.String(), 400),
+		)
 		return 0, "", 0, 0
-	}
-
-	var data struct {
-		Streams []struct {
-			Width    int    `json:"width"`
-			Height   int    `json:"height"`
-			Duration string `json:"duration"`
-		} `json:"streams"`
-	}
-
-	if err := json.Unmarshal(output, &data); err != nil {
-		log.Printf("[VideoService] failed to parse ffprobe output: %v", err)
-		return 0, "", 0, 0
-	}
-
-	if len(data.Streams) > 0 {
-		stream := data.Streams[0]
-		width = stream.Width
-		height = stream.Height
-		if stream.Width > 0 && stream.Height > 0 {
-			resolution = fmt.Sprintf("%dx%d", stream.Width, stream.Height)
-		}
-		if stream.Duration != "" {
-			fmt.Sscanf(stream.Duration, "%f", &duration)
-		}
 	}
 
 	return duration, resolution, width, height
@@ -277,7 +335,61 @@ func (s *VideoService) DeleteVideo(id uint, deleteFile bool) error {
 	}
 
 	// 从数据库删除
+	if err := deleteSubtitleIndex(video.ID); err != nil {
+		log.Printf("删除字幕索引失败 videoID=%d err=%v", video.ID, err)
+	}
 	return database.DB.Delete(&video).Error
+}
+
+func newBatchVideoOperationResult(ids []uint) *BatchVideoOperationResult {
+	return &BatchVideoOperationResult{
+		Requested: len(ids),
+		Errors:    make([]BatchVideoOperationError, 0),
+	}
+}
+
+func (r *BatchVideoOperationResult) record(videoID uint, err error) {
+	if err == nil {
+		r.Succeeded++
+		return
+	}
+	r.Failed++
+	r.Errors = append(r.Errors, BatchVideoOperationError{
+		VideoID: videoID,
+		Error:   err.Error(),
+	})
+}
+
+func (s *VideoService) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *BatchVideoOperationResult {
+	result := newBatchVideoOperationResult(videoIDs)
+	for _, videoID := range videoIDs {
+		result.record(videoID, s.DeleteVideo(videoID, deleteFile))
+	}
+	return result
+}
+
+func (s *VideoService) BatchAddTagToVideos(videoIDs []uint, tagID uint) *BatchVideoOperationResult {
+	result := newBatchVideoOperationResult(videoIDs)
+	for _, videoID := range videoIDs {
+		result.record(videoID, s.AddTagToVideo(videoID, tagID))
+	}
+	return result
+}
+
+func (s *VideoService) BatchRemoveTagFromVideos(videoIDs []uint, tagID uint) *BatchVideoOperationResult {
+	result := newBatchVideoOperationResult(videoIDs)
+	for _, videoID := range videoIDs {
+		result.record(videoID, s.RemoveTagFromVideo(videoID, tagID))
+	}
+	return result
+}
+
+func (s *VideoService) BatchRefreshVideoMetadata(videoIDs []uint) *BatchVideoOperationResult {
+	result := newBatchVideoOperationResult(videoIDs)
+	for _, videoID := range videoIDs {
+		result.record(videoID, s.RefreshVideoMetadata(videoID))
+	}
+	return result
 }
 
 // AddTagToVideo 为视频添加标签

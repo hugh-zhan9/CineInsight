@@ -4,7 +4,7 @@ set -euo pipefail
 
 MODEL="${1:-Qwen/Qwen3-ASR-1.7B}"
 ALIGNER="${2:-Qwen/Qwen3-ForcedAligner-0.6B}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON_BIN="${PYTHON_BIN:-}"
 
 BASE_DIR="${HOME}/.video-master"
 SIDECAR_DIR="${BASE_DIR}/qwen_asr_sidecar"
@@ -23,9 +23,63 @@ if [[ "$(uname -m)" != "arm64" ]]; then
   echo "警告: 当前不是 macOS arm64，脚本仍会继续，但应用默认不会启用该运行时。" >&2
 fi
 
-if ! command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
-  echo "未找到 Python: ${PYTHON_BIN}" >&2
-  echo "可通过 PYTHON_BIN=/path/to/python3 指定解释器。" >&2
+detect_python_bin() {
+  local candidate=""
+  local -a candidates=()
+
+  if [[ -n "${PYTHON_BIN}" ]]; then
+    candidates+=("${PYTHON_BIN}")
+  fi
+
+  candidates+=(
+    python3.13
+    python3.12
+    python3.11
+    python3.10
+    /opt/homebrew/bin/python3.13
+    /opt/homebrew/bin/python3.12
+    /opt/homebrew/bin/python3.11
+    /opt/homebrew/bin/python3.10
+    /usr/local/bin/python3.13
+    /usr/local/bin/python3.12
+    /usr/local/bin/python3.11
+    /usr/local/bin/python3.10
+    "${HOME}/.pyenv/shims/python3.13"
+    "${HOME}/.pyenv/shims/python3.12"
+    "${HOME}/.pyenv/shims/python3.11"
+    "${HOME}/.pyenv/shims/python3.10"
+    "${HOME}/.pyenv/shims/python3"
+    python3
+  )
+
+  for candidate in "${candidates[@]}"; do
+    [[ -n "${candidate}" ]] || continue
+
+    if [[ "${candidate}" == */* ]]; then
+      [[ -x "${candidate}" ]] || continue
+    else
+      candidate="$(command -v "${candidate}" 2>/dev/null || true)"
+      [[ -n "${candidate}" ]] || continue
+    fi
+
+    if "${candidate}" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info[:2] >= (3, 10) else 1)
+PY
+    then
+      printf '%s\n' "${candidate}"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+if ! PYTHON_BIN="$(detect_python_bin)"; then
+  echo "未找到 Python 3.10+ 解释器。" >&2
+  echo "当前系统默认 /usr/bin/python3 通常只有 3.9，无法满足 Qwen 运行时。" >&2
+  echo "可先安装一个新版 Python，例如: brew install python@3.11" >&2
+  echo "安装后可显式执行: PYTHON_BIN=/opt/homebrew/bin/python3.11 ./scripts/prefetch_qwen_runtime.sh" >&2
   exit 1
 fi
 

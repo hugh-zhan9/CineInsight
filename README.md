@@ -65,6 +65,21 @@ wails build
 # 构建产物位于: build/bin/
 ```
 
+### macOS 一键打包并替换旧应用
+
+```bash
+# 构建并替换 /Applications/析微影策.app
+bash scripts/build_and_install_app.sh
+
+# 仅替换已构建好的产物
+bash scripts/build_and_install_app.sh --skip-build
+
+# 透传额外的 wails build 参数
+bash scripts/build_and_install_app.sh -clean
+```
+
+脚本会在安装前关闭正在运行的应用，并在必要时通过 `sudo` 写入 `/Applications`。
+
 ### macOS
 构建后的应用位于 `build/bin/析微影策.app`
 

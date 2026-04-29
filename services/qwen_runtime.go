@@ -6,6 +6,7 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"os/exec"
@@ -66,6 +67,28 @@ func (s *SubtitleService) qwenTorchHomeDir() string {
 	return filepath.Join(s.qwenRuntimeDir(), "torch")
 }
 
+func (s *SubtitleService) qwenHFHubCacheDir() string {
+	return filepath.Join(s.qwenHFHomeDir(), "hub")
+}
+
+func (s *SubtitleService) qwenModelCachePath(modelName string) string {
+	sanitized := strings.ReplaceAll(modelName, "/", "--")
+	return filepath.Join(s.qwenHFHubCacheDir(), "models--"+sanitized)
+}
+
+func (s *SubtitleService) qwenModelsCached() bool {
+	required := []string{
+		s.qwenModelCachePath(qwenModelName),
+		s.qwenModelCachePath(qwenAlignerName),
+	}
+	for _, path := range required {
+		if _, err := os.Stat(path); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *SubtitleService) ensureQwenWorkerScript() error {
 	if err := os.MkdirAll(s.qwenRuntimeDir(), 0755); err != nil {
 		return err
@@ -91,6 +114,25 @@ func (s *SubtitleService) qwenEnvironment() ([]string, error) {
 		"HF_HOME="+s.qwenHFHomeDir(),
 		"TORCH_HOME="+s.qwenTorchHomeDir(),
 	), nil
+}
+
+func (s *SubtitleService) qwenExecutionEnvironment() ([]string, bool, error) {
+	env, err := s.qwenEnvironment()
+	if err != nil {
+		return nil, false, err
+	}
+	env = append(env,
+		"TOKENIZERS_PARALLELISM=false",
+		"HF_HUB_DISABLE_TELEMETRY=1",
+	)
+	if s.qwenModelsCached() {
+		env = append(env,
+			"HF_HUB_OFFLINE=1",
+			"TRANSFORMERS_OFFLINE=1",
+		)
+		return env, true, nil
+	}
+	return env, false, nil
 }
 
 func (s *SubtitleService) ensureQwenVenv() (string, error) {
@@ -164,6 +206,29 @@ func (s *SubtitleService) transcribeQwenWithLang(ctx context.Context, wavPath, s
 	if !s.isQwenInstalled() {
 		return "", nil, fmt.Errorf("缺少 Qwen ASR 运行时，请先点击准备组件")
 	}
+	detectedLang, segments, detail, err := s.runQwenTranscription(ctx, wavPath, sourceLang, "auto")
+	if err == nil {
+		return detectedLang, segments, nil
+	}
+	if ctx.Err() != nil {
+		return "", nil, fmt.Errorf("字幕生成已取消")
+	}
+	if isQwenMPSOutOfMemory(detail) {
+		log.Printf("[Subtitle][Qwen] MPS out of memory, retrying on CPU")
+		s.emitProgress("generate", SubtitleEngineQwen, "transcribing", 22, "Qwen 占满 MPS 内存，正在切换 CPU 重试...")
+		detectedLang, segments, detail, err = s.runQwenTranscription(ctx, wavPath, sourceLang, "cpu")
+		if err == nil {
+			return detectedLang, segments, nil
+		}
+		if ctx.Err() != nil {
+			return "", nil, fmt.Errorf("字幕生成已取消")
+		}
+		return "", nil, fmt.Errorf("Qwen ASR 识别失败（MPS 内存不足，已回退 CPU 但仍失败）: %s", detail)
+	}
+	return "", nil, fmt.Errorf("Qwen ASR 识别失败: %s", detail)
+}
+
+func (s *SubtitleService) runQwenTranscription(ctx context.Context, wavPath, sourceLang, device string) (string, []subtitleparser.Segment, string, error) {
 	venvPython := s.qwenVenvPython()
 	args := []string{
 		s.qwenWorkerPath(),
@@ -171,29 +236,37 @@ func (s *SubtitleService) transcribeQwenWithLang(ctx context.Context, wavPath, s
 		"--model", qwenModelName,
 		"--aligner", qwenAlignerName,
 		"--language", sourceLang,
+		"--device", device,
 	}
 	cmd := exec.CommandContext(ctx, venvPython, args...)
-	env, err := s.qwenEnvironment()
+	env, offline, err := s.qwenExecutionEnvironment()
 	if err != nil {
-		return "", nil, err
+		return "", nil, "", err
 	}
 	cmd.Env = env
+	log.Printf("[Subtitle][Qwen] starting worker device=%s source_lang=%s offline_cache=%t", device, sourceLang, offline)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		if ctx.Err() != nil {
-			return "", nil, fmt.Errorf("字幕生成已取消")
-		}
 		detail := strings.TrimSpace(stderr.String())
 		if detail == "" {
 			detail = strings.TrimSpace(stdout.String())
 		}
-		return "", nil, fmt.Errorf("Qwen ASR 识别失败: %s", detail)
+		runErr := strings.TrimSpace(err.Error())
+		if runErr != "" && !strings.Contains(detail, runErr) {
+			if detail == "" {
+				detail = runErr
+			} else {
+				detail = runErr + "\n" + detail
+			}
+		}
+		return "", nil, detail, err
 	}
+
 	var payload qwenPayload
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		return "", nil, fmt.Errorf("Qwen ASR 输出解析失败")
+		return "", nil, "Qwen ASR 输出解析失败", fmt.Errorf("Qwen ASR 输出解析失败")
 	}
 	segments := make([]subtitleparser.Segment, 0, len(payload.Segments))
 	for _, raw := range payload.Segments {
@@ -216,7 +289,7 @@ func (s *SubtitleService) transcribeQwenWithLang(ctx context.Context, wavPath, s
 		})
 	}
 	if len(segments) == 0 {
-		return "", nil, fmt.Errorf("Qwen ASR 未产生有效字幕，视频可能没有清晰的语音内容")
+		return "", nil, "Qwen ASR 未产生有效字幕，视频可能没有清晰的语音内容", fmt.Errorf("Qwen ASR 未产生有效字幕，视频可能没有清晰的语音内容")
 	}
 	detectedLang := strings.TrimSpace(payload.Language)
 	if detectedLang == "" {
@@ -226,5 +299,14 @@ func (s *SubtitleService) transcribeQwenWithLang(ctx context.Context, wavPath, s
 			detectedLang = sourceLang
 		}
 	}
-	return detectedLang, segments, nil
+	return detectedLang, segments, "", nil
+}
+
+func isQwenMPSOutOfMemory(detail string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(detail))
+	if normalized == "" {
+		return false
+	}
+	return strings.Contains(normalized, "mps backend out of memory") ||
+		(strings.Contains(normalized, "out of memory") && strings.Contains(normalized, "mps"))
 }

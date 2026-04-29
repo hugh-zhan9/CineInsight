@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"video-master/database"
 	"video-master/models"
@@ -24,7 +25,7 @@ func setupAppTestDB(t *testing.T) {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 
-	if err := db.AutoMigrate(&models.Video{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
 		t.Fatalf("迁移测试数据库失败: %v", err)
 	}
 
@@ -183,5 +184,32 @@ func TestSubtitleAPIContractsCompile(t *testing.T) {
 	result.SourceLang = req.SourceLang
 	if result.Status != services.SubtitleResultStatusValidationFailed {
 		t.Fatalf("结果状态错误: got=%s", result.Status)
+	}
+}
+
+func TestBatchVideoAPIContractsCompile(t *testing.T) {
+	app := NewApp()
+
+	var batchDelete func([]uint, bool) *services.BatchVideoOperationResult = app.BatchDeleteVideos
+	_ = batchDelete
+
+	var batchAddTag func([]uint, uint) *services.BatchVideoOperationResult = app.BatchAddTagToVideos
+	_ = batchAddTag
+
+	var batchRemoveTag func([]uint, uint) *services.BatchVideoOperationResult = app.BatchRemoveTagFromVideos
+	_ = batchRemoveTag
+
+	var batchRefreshMetadata func([]uint) *services.BatchVideoOperationResult = app.BatchRefreshVideoMetadata
+	_ = batchRefreshMetadata
+}
+
+func TestRedactSensitiveLogMessage(t *testing.T) {
+	message := `{"deepl_api_key":"abc123:fx","nested":{"apiKey":"secret"},"Authorization":"Bearer token-value"}`
+	redacted := redactSensitiveLogMessage(message)
+	if strings.Contains(redacted, "abc123") || strings.Contains(redacted, "secret") || strings.Contains(redacted, "token-value") {
+		t.Fatalf("敏感信息未被脱敏: %s", redacted)
+	}
+	if !strings.Contains(redacted, "[REDACTED]") {
+		t.Fatalf("期望包含脱敏占位符: %s", redacted)
 	}
 }

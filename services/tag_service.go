@@ -53,7 +53,7 @@ func (s *TagService) CreateTag(name, color string) (*models.Tag, error) {
 	if err := database.DB.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).First(&softDeleted).Error; err == nil {
 		// 恢复软删除的标签
 		softDeleted.Color = color
-		softDeleted.DeletedAt.Valid = false
+		softDeleted.DeletedAt.Clear()
 		if err := database.DB.Unscoped().Save(&softDeleted).Error; err != nil {
 			log.Printf("恢复软删除标签失败: name=%s err=%v", name, err)
 			return nil, err

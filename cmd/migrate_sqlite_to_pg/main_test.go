@@ -15,7 +15,7 @@ func TestLoadSqliteDataIncludesSoftDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Video{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 
@@ -53,13 +53,13 @@ func TestLoadSqliteDataIncludesSoftDeleted(t *testing.T) {
 	if len(snapshot.Videos) != 1 {
 		t.Fatalf("expected 1 video, got %d", len(snapshot.Videos))
 	}
-	if !snapshot.Videos[0].DeletedAt.Valid {
+	if !snapshot.Videos[0].DeletedAt.IsValid() {
 		t.Fatalf("expected soft deleted video preserved")
 	}
 	if len(snapshot.Tags) != 1 {
 		t.Fatalf("expected 1 tag, got %d", len(snapshot.Tags))
 	}
-	if !snapshot.Tags[0].DeletedAt.Valid {
+	if !snapshot.Tags[0].DeletedAt.IsValid() {
 		t.Fatalf("expected soft deleted tag preserved")
 	}
 	if len(snapshot.Settings) != 1 {

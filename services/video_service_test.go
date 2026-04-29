@@ -22,7 +22,7 @@ func setupVideoServiceTestDB(t *testing.T) {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 
-	if err := db.AutoMigrate(&models.Video{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
 		t.Fatalf("迁移测试数据库失败: %v", err)
 	}
 
@@ -151,7 +151,7 @@ func TestDeleteVideoMovesFileToTrashWhenDeleteFileEnabled(t *testing.T) {
 	if err := database.DB.Unscoped().First(&deleted, video.ID).Error; err != nil {
 		t.Fatalf("期望数据库仍可查到软删除记录: %v", err)
 	}
-	if !deleted.DeletedAt.Valid {
+	if !deleted.DeletedAt.IsValid() {
 		t.Fatalf("期望视频记录已被软删除")
 	}
 }
@@ -194,6 +194,65 @@ func TestSearchVideosWithFiltersCombinesKeywordAndTags(t *testing.T) {
 	}
 	if videos[0].Name != "cat_run.mp4" {
 		t.Fatalf("返回了错误的视频: %s", videos[0].Name)
+	}
+}
+
+func TestBatchAddTagToVideosReportsPartialFailures(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	tag := models.Tag{Name: "batch", Color: "#fff"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	videoA := models.Video{Name: "a.mp4", Path: "/tmp/batch-a.mp4", Directory: "/tmp", Size: 1}
+	videoB := models.Video{Name: "b.mp4", Path: "/tmp/batch-b.mp4", Directory: "/tmp", Size: 1}
+	if err := database.DB.Create(&videoA).Error; err != nil {
+		t.Fatalf("创建视频A失败: %v", err)
+	}
+	if err := database.DB.Create(&videoB).Error; err != nil {
+		t.Fatalf("创建视频B失败: %v", err)
+	}
+
+	result := svc.BatchAddTagToVideos([]uint{videoA.ID, 999999, videoB.ID}, tag.ID)
+	if result.Requested != 3 || result.Succeeded != 2 || result.Failed != 1 {
+		t.Fatalf("批量结果错误: %#v", result)
+	}
+
+	var loaded models.Video
+	if err := database.DB.Preload("Tags").First(&loaded, videoA.ID).Error; err != nil {
+		t.Fatalf("读取视频标签失败: %v", err)
+	}
+	if len(loaded.Tags) != 1 || loaded.Tags[0].ID != tag.ID {
+		t.Fatalf("期望视频A已打标签，实际 %#v", loaded.Tags)
+	}
+}
+
+func TestGetVideosPaginatedPrioritizesLowerScoreBeforeLargerSize(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	videos := []models.Video{
+		{Name: "zero-small.mp4", Path: "/tmp/zero-small.mp4", Directory: "/tmp", Size: 10, PlayCount: 0, RandomPlayCount: 0},
+		{Name: "two-large.mp4", Path: "/tmp/two-large.mp4", Directory: "/tmp", Size: 1000, PlayCount: 1, RandomPlayCount: 0},
+		{Name: "zero-large.mp4", Path: "/tmp/zero-large.mp4", Directory: "/tmp", Size: 100, PlayCount: 0, RandomPlayCount: 0},
+	}
+	for _, video := range videos {
+		video := video
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建测试视频失败: %v", err)
+		}
+	}
+
+	result, err := svc.GetVideosPaginated(0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("分页查询失败: %v", err)
+	}
+	if len(result) != 3 {
+		t.Fatalf("期望返回3条结果，实际 %d", len(result))
+	}
+	if result[0].Name != "zero-large.mp4" || result[1].Name != "zero-small.mp4" || result[2].Name != "two-large.mp4" {
+		t.Fatalf("排序不符合 score ASC, size DESC 预期: %#v", []string{result[0].Name, result[1].Name, result[2].Name})
 	}
 }
 
@@ -539,5 +598,29 @@ func TestGetVideosByDirectoryIncludesSubdirectories(t *testing.T) {
 	}
 	if len(videos) != 2 {
 		t.Fatalf("期望返回根目录及子目录共2条，实际 %d 条", len(videos))
+	}
+}
+
+func TestParseFFProbeOutputFallsBackToFormatDuration(t *testing.T) {
+	output := []byte(`{
+		"streams": [{"width": 1920, "height": 1080}],
+		"format": {"duration": "12.34"}
+	}`)
+
+	duration, resolution, width, height, err := parseFFProbeOutput(output)
+	if err != nil {
+		t.Fatalf("解析 ffprobe 输出失败: %v", err)
+	}
+	if duration != 12.34 {
+		t.Fatalf("duration 错误: got=%v want=12.34", duration)
+	}
+	if resolution != "1920x1080" || width != 1920 || height != 1080 {
+		t.Fatalf("分辨率解析错误: resolution=%s width=%d height=%d", resolution, width, height)
+	}
+}
+
+func TestParseFFProbeOutputRejectsNonJSON(t *testing.T) {
+	if _, _, _, _, err := parseFFProbeOutput([]byte("ratecontrol warning")); err == nil {
+		t.Fatalf("期望非 JSON 输出返回错误")
 	}
 }
