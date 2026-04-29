@@ -120,7 +120,7 @@ func migrateSqliteToPostgres(sqlitePath string) error {
 		return fmt.Errorf("连接 postgres 失败: %w", err)
 	}
 
-	if err := pgDB.AutoMigrate(&models.Video{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := pgDB.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
 		return fmt.Errorf("postgres 迁移失败: %w", err)
 	}
 	if err := ensurePostgresEmpty(pgDB); err != nil {

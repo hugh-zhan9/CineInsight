@@ -14,16 +14,24 @@ export function AddVideo(arg1) {
   return window['go']['main']['App']['AddVideo'](arg1);
 }
 
+export function BatchAddTagToVideos(arg1, arg2) {
+  return window['go']['main']['App']['BatchAddTagToVideos'](arg1, arg2);
+}
+
+export function BatchDeleteVideos(arg1, arg2) {
+  return window['go']['main']['App']['BatchDeleteVideos'](arg1, arg2);
+}
+
+export function BatchRefreshVideoMetadata(arg1) {
+  return window['go']['main']['App']['BatchRefreshVideoMetadata'](arg1);
+}
+
+export function BatchRemoveTagFromVideos(arg1, arg2) {
+  return window['go']['main']['App']['BatchRemoveTagFromVideos'](arg1, arg2);
+}
+
 export function CancelSubtitle() {
   return window['go']['main']['App']['CancelSubtitle']();
-}
-
-export function GetSubtitleEngineStatuses() {
-  return window['go']['main']['App']['GetSubtitleEngineStatuses']();
-}
-
-export function PrepareSubtitleEngine(arg1) {
-  return window['go']['main']['App']['PrepareSubtitleEngine'](arg1);
 }
 
 export function CheckSubtitleDependencies() {
@@ -51,11 +59,11 @@ export function DownloadSubtitleDependencies() {
 }
 
 export function ForceGenerateSubtitle(arg1) {
-	return window['go']['main']['App']['ForceGenerateSubtitle'](arg1);
+  return window['go']['main']['App']['ForceGenerateSubtitle'](arg1);
 }
 
 export function GenerateSubtitle(arg1) {
-	return window['go']['main']['App']['GenerateSubtitle'](arg1);
+  return window['go']['main']['App']['GenerateSubtitle'](arg1);
 }
 
 export function GetAllDirectories() {
@@ -74,16 +82,20 @@ export function GetCleanupCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetCleanupCandidates'](arg1, arg2, arg3);
 }
 
-export function GetSettings() {
-  return window['go']['main']['App']['GetSettings']();
-}
-
 export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
 }
 
+export function GetSettings() {
+  return window['go']['main']['App']['GetSettings']();
+}
+
 export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
+}
+
+export function GetSubtitleEngineStatuses() {
+  return window['go']['main']['App']['GetSubtitleEngineStatuses']();
 }
 
 export function GetSubtitleSegments(arg1) {
@@ -98,6 +110,10 @@ export function GetVideosPaginated(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['GetVideosPaginated'](arg1, arg2, arg3, arg4);
 }
 
+export function LogFrontend(arg1, arg2, arg3) {
+  return window['go']['main']['App']['LogFrontend'](arg1, arg2, arg3);
+}
+
 export function OpenDirectory(arg1) {
   return window['go']['main']['App']['OpenDirectory'](arg1);
 }
@@ -108,6 +124,10 @@ export function PlayRandomVideo() {
 
 export function PlayVideo(arg1) {
   return window['go']['main']['App']['PlayVideo'](arg1);
+}
+
+export function PrepareSubtitleEngine(arg1) {
+  return window['go']['main']['App']['PrepareSubtitleEngine'](arg1);
 }
 
 export function PreviewExternally(arg1) {

@@ -10,9 +10,15 @@ export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddVideo(arg1:string):Promise<models.Video>;
 
-export function CancelSubtitle():Promise<void>;
+export function BatchAddTagToVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
 
-export function GetSubtitleEngineStatuses():Promise<Array<services.SubtitleEngineStatus>>;
+export function BatchDeleteVideos(arg1:Array<number>,arg2:boolean):Promise<services.BatchVideoOperationResult>;
+
+export function BatchRefreshVideoMetadata(arg1:Array<number>):Promise<services.BatchVideoOperationResult>;
+
+export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
+
+export function CancelSubtitle():Promise<void>;
 
 export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
 
@@ -44,11 +50,15 @@ export function GetSettings():Promise<models.Settings>;
 
 export function GetStartupError():Promise<string>;
 
+export function GetSubtitleEngineStatuses():Promise<Array<services.SubtitleEngineStatus>>;
+
 export function GetSubtitleSegments(arg1:number):Promise<Array<subtitleparser.Segment>>;
 
 export function GetVideosByDirectory(arg1:string):Promise<Array<models.Video>>;
 
 export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:number):Promise<Array<models.Video>>;
+
+export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function OpenDirectory(arg1:number):Promise<void>;
 
@@ -56,9 +66,9 @@ export function PlayRandomVideo():Promise<services.PlaybackAttemptResult>;
 
 export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
 
-export function PreviewExternally(arg1:number):Promise<void>;
-
 export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void>;
+
+export function PreviewExternally(arg1:number):Promise<void>;
 
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 

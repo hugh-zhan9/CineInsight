@@ -87,7 +87,7 @@
         :items="videos"
         :loading="loading"
         :has-more="hasMore"
-        :virtualization-enabled="true"
+        :virtualization-enabled="homeListVirtualizationEnabled"
         :subtitle-mode="false"
         :preview-open="previewOpen"
         :query-key="virtualListQueryKey"
@@ -211,7 +211,20 @@
         <h3>清理候选审阅</h3>
         <p class="cleanup-intro">当前审阅基于轻量规则：重复文件（大小 + 采样哈希）、低时长、低分辨率。选中的视频会直接移入回收站并从库中移除。</p>
 
-        <div v-if="cleanupDialog.loading" class="cleanup-loading">正在分析视频库...</div>
+        <div v-if="cleanupDialog.loading" class="cleanup-loading">
+          <div>正在分析视频库...</div>
+          <div class="cleanup-progress-meta">
+            当前阶段：{{ cleanupStageLabel }}
+            <span v-if="cleanupElapsedText"> · 已运行 {{ cleanupElapsedText }}</span>
+          </div>
+          <div v-if="cleanupDialog.progress.total > 0" class="cleanup-progress-meta">
+            已处理 {{ cleanupDialog.progress.current }} / {{ cleanupDialog.progress.total }}
+            <span v-if="cleanupProgressPercent !== null"> ({{ cleanupProgressPercent }}%)</span>
+          </div>
+          <div v-if="cleanupDialog.progress.message" class="cleanup-progress-hint">{{ cleanupDialog.progress.message }}</div>
+          <div v-if="cleanupDialog.progress.path" class="cleanup-progress-path">当前文件：{{ cleanupDialog.progress.path }}</div>
+          <div class="cleanup-progress-hint">该分析会逐个读取视频文件；外置硬盘、休眠磁盘或大库场景下耗时较长，长时间停留不代表已假死。</div>
+        </div>
         <div v-else-if="cleanupDialog.error" class="cleanup-error">{{ cleanupDialog.error }}</div>
         <div v-else-if="cleanupDialog.analysis" class="cleanup-body">
           <div class="cleanup-summary">
@@ -234,7 +247,13 @@
               :key="`${group.original?.id}-${group.candidates?.length}`"
               class="cleanup-card"
             >
-              <p><strong>保留：</strong>{{ group.original?.name }} ({{ group.original?.resolution || '未知分辨率' }})</p>
+              <div class="cleanup-keep-row">
+                <strong>保留：</strong>
+                <div class="cleanup-item-text">
+                  <span class="cleanup-item-main">{{ group.original?.name }} · {{ group.original?.resolution || '未知分辨率' }}</span>
+                  <span v-if="group.original?.path" class="cleanup-item-path" :title="group.original.path">{{ group.original.path }}</span>
+                </div>
+              </div>
               <p><strong>原因：</strong>{{ group.reason }}</p>
               <ul>
                 <li v-for="candidate in group.candidates || []" :key="candidate.id">
@@ -244,7 +263,10 @@
                       :checked="isCleanupSelected(candidate.id)"
                       @change="toggleCleanupSelection(candidate.id)"
                     />
-                    <span>{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }}</span>
+                    <span class="cleanup-item-text">
+                      <span class="cleanup-item-main">{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }}</span>
+                      <span v-if="candidate.path" class="cleanup-item-path" :title="candidate.path">{{ candidate.path }}</span>
+                    </span>
                   </label>
                 </li>
               </ul>
@@ -261,7 +283,10 @@
                     :checked="isCleanupSelected(video.id)"
                     @change="toggleCleanupSelection(video.id)"
                   />
-                  <span>{{ video.name }} · {{ formatDuration(video.duration) || '00:00' }}</span>
+                  <span class="cleanup-item-text">
+                    <span class="cleanup-item-main">{{ video.name }} · {{ formatDuration(video.duration) || '00:00' }}</span>
+                    <span v-if="video.path" class="cleanup-item-path" :title="video.path">{{ video.path }}</span>
+                  </span>
                 </label>
               </li>
             </ul>
@@ -277,7 +302,10 @@
                     :checked="isCleanupSelected(video.id)"
                     @change="toggleCleanupSelection(video.id)"
                   />
-                  <span>{{ video.name }} · {{ video.resolution || '未知分辨率' }}</span>
+                  <span class="cleanup-item-text">
+                    <span class="cleanup-item-main">{{ video.name }} · {{ video.resolution || '未知分辨率' }}</span>
+                    <span v-if="video.path" class="cleanup-item-path" :title="video.path">{{ video.path }}</span>
+                  </span>
                 </label>
               </li>
             </ul>
@@ -481,6 +509,16 @@
   font-size: 13px;
   color: #444;
 }
+.cleanup-progress-meta,
+.cleanup-progress-hint,
+.cleanup-progress-path {
+  margin-top: 8px;
+  font-size: 13px;
+  color: #4b5563;
+}
+.cleanup-progress-path {
+  word-break: break-all;
+}
 .cleanup-toolbar {
   display: flex;
   gap: 8px;
@@ -502,10 +540,29 @@
 .cleanup-section ul {
   margin: 6px 0;
 }
+.cleanup-keep-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
 .cleanup-select-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
+}
+.cleanup-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+.cleanup-item-main {
+  color: #111827;
+}
+.cleanup-item-path {
+  font-size: 12px;
+  color: #6b7280;
+  word-break: break-all;
 }
 .subtitle-preview-modal {
   width: 760px;
@@ -568,6 +625,7 @@ import TagDeleteDialog from './TagDeleteDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
 import VideoListRow from './VideoListRow.vue';
+import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 
 export default {
@@ -617,14 +675,25 @@ export default {
       deleteDialog: { show: false, video: null },
       deletingIds: [],
       tagDeleteDialog: { show: false, tag: null },
-      cleanupDialog: { show: false, loading: false, processing: false, analysis: null, error: '' },
+      cleanupDialog: {
+        show: false,
+        loading: false,
+        processing: false,
+        analysis: null,
+        error: '',
+        progress: { stage: '', message: '', current: 0, total: 0, path: '' }
+      },
       cleanupSelection: [],
+      cleanupStartedAt: 0,
+      cleanupNow: Date.now(),
+      cleanupTimer: null,
       subtitlePreview: { show: false, loading: false, error: '', video: null, segments: [] },
       selectedPreviewVideoId: null,
       previewVideoSnapshot: null,
       previewOpen: false,
       previewSession: null,
       rangeEngine: defaultRangeEngine,
+      homeListVirtualizationEnabled: true,
       // Subtitle states
       generatingSubtitleIds: [],
       subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0, progressAction: '', phase: '', requiresPrepare: false },
@@ -635,6 +704,7 @@ export default {
       subtitleProgressStartedAt: 0,
       subtitleProgressNow: Date.now(),
       subtitleProgressTimer: null,
+      runtimeOffHandlers: [],
       searchDebounceTimer: null,
       sourceLang: 'auto',
       languageOptions: [
@@ -652,12 +722,12 @@ export default {
     };
   },
   mounted() {
+    this.configureHomeListVirtualization();
     this.loadVideos();
     document.addEventListener('click', this.hideContextMenu);
     
-    // 使用 window.runtime 直接注册事件（避免 import 问题）
-    if (window.runtime) {
-      window.runtime.EventsOn('subtitle-progress', (data) => {
+    if (window.runtime?.EventsOn) {
+      this.registerRuntimeEvent('subtitle-progress', (data) => {
         const nextAction = data?.action || '';
         if (nextAction === 'generate') {
           this.startSubtitleProgressTracking();
@@ -674,7 +744,7 @@ export default {
         this.subtitleDialog.msg = data.message || '';
       });
 
-      window.runtime.EventsOn('subtitle-prepare-complete', async () => {
+      this.registerRuntimeEvent('subtitle-prepare-complete', async () => {
         await this.loadSubtitleEngineStatuses();
         if (this.subtitleDialog.show && this.subtitleDialog.progressAction === 'prepare') {
           this.subtitleDialog.mode = 'result';
@@ -683,7 +753,7 @@ export default {
         }
       });
       
-      window.runtime.EventsOn('subtitle-success', (data) => {
+      this.registerRuntimeEvent('subtitle-success', (data) => {
         this.resetSubtitleProgressTracking();
         const idx = this.generatingSubtitleIds.indexOf(data.videoID);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
@@ -693,7 +763,7 @@ export default {
         this.subtitleDialog.msg = '文件: ' + data.path;
       });
 
-      window.runtime.EventsOn('subtitle-cancelled', (data) => {
+      this.registerRuntimeEvent('subtitle-cancelled', (data) => {
         this.resetSubtitleProgressTracking();
         const idx = this.generatingSubtitleIds.indexOf(data.videoID);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
@@ -702,6 +772,21 @@ export default {
         this.subtitleDialog.title = '⏹️ 已取消字幕生成';
         this.subtitleDialog.msg = data.message || '当前字幕任务已取消。';
       });
+
+      this.registerRuntimeEvent('cleanup-progress', (data) => {
+        if (!this.cleanupDialog.show) {
+          return;
+        }
+        this.startCleanupProgressTracking();
+        this.cleanupDialog.loading = data?.stage !== 'done';
+        this.cleanupDialog.progress = {
+          stage: data?.stage || '',
+          message: data?.message || '',
+          current: Number(data?.current || 0),
+          total: Number(data?.total || 0),
+          path: data?.path || ''
+        };
+      });
     }
   },
   beforeUnmount() {
@@ -709,6 +794,8 @@ export default {
     if (this.searchDebounceTimer) {
       clearTimeout(this.searchDebounceTimer);
     }
+    this.teardownRuntimeEvents();
+    this.resetCleanupProgressTracking();
     this.resetSubtitleProgressTracking();
   },
   computed: {
@@ -745,6 +832,24 @@ export default {
       if (!status.supported) return true;
       if (!status.available && !status.needs_prepare) return true;
       return false;
+    },
+    cleanupStageLabel() {
+      const stage = this.cleanupDialog.progress.stage;
+      if (stage === 'load') return '读取候选记录';
+      if (stage === 'group') return '按文件大小整理候选';
+      if (stage === 'hash') return '计算疑似重复文件哈希';
+      if (stage === 'done') return '分析完成';
+      return '准备分析';
+    },
+    cleanupElapsedText() {
+      if (!this.cleanupStartedAt) return '';
+      return this.formatElapsedDuration(this.cleanupNow - this.cleanupStartedAt);
+    },
+    cleanupProgressPercent() {
+      const total = Number(this.cleanupDialog.progress.total || 0);
+      const current = Number(this.cleanupDialog.progress.current || 0);
+      if (total <= 0) return null;
+      return Math.min(100, Math.max(0, Math.round((current / total) * 100)));
     },
     subtitleProgressPhaseLabel() {
       const phase = this.subtitleDialog.phase || '';
@@ -785,6 +890,66 @@ export default {
     }
   },
   methods: {
+    registerRuntimeEvent(eventName, handler) {
+      if (!window.runtime?.EventsOn) {
+        return;
+      }
+      const off = window.runtime.EventsOn(eventName, handler);
+      if (typeof off === 'function') {
+        this.runtimeOffHandlers.push(off);
+      }
+    },
+    teardownRuntimeEvents() {
+      while (this.runtimeOffHandlers.length > 0) {
+        const off = this.runtimeOffHandlers.pop();
+        try {
+          off?.();
+        } catch (_err) {}
+      }
+    },
+    configureHomeListVirtualization() {
+      const userAgent = window.navigator?.userAgent || '';
+      const platform = window.navigator?.userAgentData?.platform || window.navigator?.platform || '';
+      const hasWailsRuntime = !!window.runtime;
+      const isMac = /mac/i.test(platform) || /Macintosh|Mac OS X/i.test(userAgent);
+      const isAppleWebKit = /AppleWebKit/i.test(userAgent);
+      const isChromium = /Chrome|Chromium|Edg\//i.test(userAgent);
+      const shouldDisable = hasWailsRuntime && isMac && isAppleWebKit && !isChromium;
+
+      this.homeListVirtualizationEnabled = !shouldDisable;
+      this.debugLog('configureHomeListVirtualization resolved', {
+        enabled: this.homeListVirtualizationEnabled,
+        hasWailsRuntime,
+        platform,
+        userAgent
+      });
+    },
+    debugLog(message, payload = null, isError = false) {
+      return logFrontend('VideoListPage', message, payload, isError);
+    },
+    startCleanupProgressTracking() {
+      if (!this.cleanupStartedAt) {
+        this.cleanupStartedAt = Date.now();
+      }
+      this.cleanupNow = Date.now();
+      if (this.cleanupTimer) {
+        return;
+      }
+      this.cleanupTimer = window.setInterval(() => {
+        this.cleanupNow = Date.now();
+      }, 1000);
+    },
+    resetCleanupProgressTracking() {
+      if (this.cleanupTimer) {
+        clearInterval(this.cleanupTimer);
+        this.cleanupTimer = null;
+      }
+      this.cleanupStartedAt = 0;
+      this.cleanupNow = Date.now();
+      if (this.cleanupDialog?.progress) {
+        this.cleanupDialog.progress = { stage: '', message: '', current: 0, total: 0, path: '' };
+      }
+    },
     async loadSubtitleEngineStatuses() {
       const statuses = await GetSubtitleEngineStatuses();
       this.subtitleEngineStatuses = Array.isArray(statuses) ? statuses : [];
@@ -934,7 +1099,16 @@ export default {
     },
     async openCleanupDialog() {
       this.cleanupSelection = [];
-      this.cleanupDialog = { show: true, loading: true, processing: false, analysis: null, error: '' };
+      this.resetCleanupProgressTracking();
+      this.cleanupDialog = {
+        show: true,
+        loading: true,
+        processing: false,
+        analysis: null,
+        error: '',
+        progress: { stage: 'load', message: '正在准备清理候选分析…', current: 0, total: 0, path: '' }
+      };
+      this.startCleanupProgressTracking();
       try {
         const analysis = await GetCleanupCandidates(5, 480, 320);
         this.cleanupDialog.analysis = analysis;
@@ -942,6 +1116,7 @@ export default {
         console.error('获取清理候选失败:', err);
         this.cleanupDialog.error = '获取清理候选失败: ' + err;
       } finally {
+        this.resetCleanupProgressTracking();
         this.cleanupDialog.loading = false;
       }
     },
@@ -1214,6 +1389,16 @@ export default {
       try {
         const keyword = this.currentQueryKeyword();
         let newVideos = [];
+        this.debugLog('loadVideos begin', {
+          keyword,
+          searchMode: this.searchMode,
+          hasStructuredFilters: this.hasStructuredFilters(),
+          cursorScore: this.cursorScore,
+          cursorSize: this.cursorSize,
+          cursorID: this.cursorID,
+          pageSize: this.pageSize,
+          existingVideos: this.videos.length
+        });
 
         if (this.isSubtitleSearchActive(keyword)) {
           const matches = await SearchSubtitleMatches(keyword, 200);
@@ -1227,6 +1412,10 @@ export default {
           newVideos = this.applyClientFilters(Array.from(deduped.values()));
           this.videos = newVideos;
           this.hasMore = false;
+          this.debugLog('loadVideos subtitle mode resolved', {
+            count: newVideos.length,
+            sample: newVideos.slice(0, 3).map(video => ({ id: video.id, name: video.name }))
+          });
           return;
         }
 
@@ -1248,6 +1437,12 @@ export default {
           newVideos = await GetVideosPaginated(this.cursorScore, this.cursorSize, this.cursorID, this.pageSize);
         }
 
+        this.debugLog('loadVideos query resolved', {
+          count: newVideos.length,
+          sample: newVideos.slice(0, 3).map(video => ({ id: video.id, name: video.name, path: video.path })),
+          mode: keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
+        });
+
         if (newVideos.length < this.pageSize) {
           this.hasMore = false;
         }
@@ -1258,11 +1453,21 @@ export default {
           this.cursorSize = last.size;
           this.cursorID = last.id;
         }
+        this.debugLog('loadVideos applied to state', {
+          totalVideos: this.videos.length,
+          hasMore: this.hasMore
+        });
       } catch (err) {
+        this.debugLog('loadVideos failed', { err: String(err) }, true);
         console.error('加载视频失败:', err);
         alert('加载视频失败: ' + err);
       } finally {
         this.loading = false;
+        this.debugLog('loadVideos finished', {
+          totalVideos: this.videos.length,
+          hasMore: this.hasMore,
+          loading: this.loading
+        });
       }
     },
     resetAndLoadVideos() {
@@ -1316,6 +1521,13 @@ export default {
       parts.push(m.toString().padStart(2, '0'));
       parts.push(s.toString().padStart(2, '0'));
       return parts.join(':');
+    },
+    tagBgColor(hex) {
+      if (!hex || !hex.startsWith('#')) return hex;
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r},${g},${b},0.35)`;
     },
     isTagSelected(tagID) {
       return this.selectedTags.includes(Number(tagID));

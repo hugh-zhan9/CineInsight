@@ -25,6 +25,9 @@
         <h2>应用已启动，但数据库连接失败</h2>
         <p class="startup-error-text">{{ startupError }}</p>
         <p class="startup-error-hint">
+          这通常只是当前没有连上数据库，已有数据不会因此被删除。
+        </p>
+        <p class="startup-error-hint">
           如果你是双击启动应用，请优先检查 macOS 是否已允许“析微影策”访问本地网络，并确认 Postgres 地址和端口可达。
         </p>
       </div>
@@ -56,6 +59,7 @@
 import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
+import { logFrontend } from './utils/frontendLog.js';
 
 export default {
   name: 'App',
@@ -107,18 +111,47 @@ export default {
     }
   },
   methods: {
+    debugLog(message, payload = null, isError = false) {
+      return logFrontend('App.vue', message, payload, isError);
+    },
     applyTheme() {
       const theme = this.settings.theme === 'system' ? this.systemTheme : this.settings.theme;
       document.documentElement.setAttribute('data-theme', theme);
     },
     async loadSettings() {
-      try { this.settings = await GetSettings(); } catch (err) {}
+      try {
+        this.settings = await GetSettings();
+        this.debugLog('loadSettings resolved', {
+          id: this.settings?.id,
+          theme: this.settings?.theme,
+          log_enabled: this.settings?.log_enabled,
+          auto_scan_on_startup: this.settings?.auto_scan_on_startup
+        });
+      } catch (err) {
+        this.debugLog('loadSettings failed', { err: String(err) }, true);
+      }
     },
     async loadTags() {
-      try { this.tags = await GetAllTags(); } catch (err) {}
+      try {
+        this.tags = await GetAllTags();
+        this.debugLog('loadTags resolved', {
+          count: this.tags.length,
+          sample: this.tags.slice(0, 5).map(tag => ({ id: tag.id, name: tag.name }))
+        });
+      } catch (err) {
+        this.debugLog('loadTags failed', { err: String(err) }, true);
+      }
     },
     async loadDirectories() {
-      try { this.directories = await GetAllDirectories(); } catch (err) {}
+      try {
+        this.directories = await GetAllDirectories();
+        this.debugLog('loadDirectories resolved', {
+          count: this.directories.length,
+          sample: this.directories.slice(0, 5).map(dir => ({ id: dir.id, alias: dir.alias, path: dir.path }))
+        });
+      } catch (err) {
+        this.debugLog('loadDirectories failed', { err: String(err) }, true);
+      }
     },
     handleSettingsUpdate(newSettings) {
       this.settings = { ...this.settings, ...newSettings };

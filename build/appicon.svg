@@ -20,7 +20,7 @@
             </feMerge>
         </filter>
     </defs>
-    <g transform="translate(102.4, 102.4) scale(0.8)">
+    <g transform="translate(112.64, 112.64) scale(0.78)">
         <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#bg_grad)" />
         <rect x="0" y="0" width="1024" height="1024" rx="220" fill="url(#bg_grad)" />
         <g filter="url(#shadow)" transform="translate(380, 312)">

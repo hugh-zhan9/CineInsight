@@ -13,6 +13,12 @@
     </template>
 
     <div v-if="virtualizationEnabled && bottomSpacer > 0" :style="{ height: `${bottomSpacer}px` }" aria-hidden="true"></div>
+    <div
+      v-if="showLoadMoreSentinel"
+      ref="loadMoreSentinel"
+      class="virtual-video-list__sentinel"
+      aria-hidden="true"
+    ></div>
   </div>
 </template>
 
@@ -54,7 +60,9 @@ export default {
       scrollOwnerMissing: false,
       heightCache: new Map(),
       itemVersionCache: new Map(),
-      measureRaf: 0
+      measureRaf: 0,
+      loadMoreObserver: null,
+      loadMoreQueued: false
     };
   },
   computed: {
@@ -63,22 +71,45 @@ export default {
         return this.items;
       }
       return this.items.slice(this.startIndex, this.endIndex);
+    },
+    showLoadMoreSentinel() {
+      return !this.virtualizationEnabled && this.hasMore;
     }
   },
   watch: {
     queryKey() {
       this.resetWindow();
     },
-    virtualizationEnabled() {
+    virtualizationEnabled(enabled) {
+      if (enabled) {
+        this.attachResizeObserver();
+      } else {
+        this.detachResizeObserver();
+      }
+      this.loadMoreQueued = false;
       this.resetWindow();
+      this.scheduleLoadMoreObserverRefresh();
     },
     previewOpen() {
       this.handleWidthChange();
+    },
+    loading(isLoading) {
+      if (!isLoading) {
+        this.loadMoreQueued = false;
+      }
+      this.scheduleLoadMoreObserverRefresh();
+    },
+    hasMore(nextHasMore) {
+      if (!nextHasMore) {
+        this.loadMoreQueued = false;
+      }
+      this.scheduleLoadMoreObserverRefresh();
     },
     items() {
       this.$nextTick(() => {
         this.syncWindow();
         this.scheduleMeasure();
+        this.scheduleLoadMoreObserverRefresh();
       });
     }
   },
@@ -86,23 +117,50 @@ export default {
     this.resolveScrollOwner();
     this.attachResizeObserver();
     this.resetWindow();
+    this.scheduleLoadMoreObserverRefresh();
   },
   beforeUnmount() {
     this.detachScrollOwner();
-    if (this.resizeObserver) {
-      this.resizeObserver.disconnect();
-      this.resizeObserver = null;
-    }
+    this.detachResizeObserver();
+    this.detachLoadMoreObserver();
     if (this.measureRaf) {
       cancelAnimationFrame(this.measureRaf);
       this.measureRaf = 0;
     }
   },
   methods: {
+    requestLoadMore() {
+      if (this.loadMoreQueued || this.loading || !this.hasMore) {
+        return;
+      }
+      this.loadMoreQueued = true;
+      this.$emit('load-more');
+    },
+    maybeEmitLoadMore(totalHeight) {
+      if (!this.hasMore || this.loading || !this.scrollOwnerEl) {
+        return;
+      }
+
+      const viewportBottom = this.scrollOwnerEl.scrollTop + this.scrollOwnerEl.clientHeight;
+      const listBottom = this.getListTop() + totalHeight;
+      if (viewportBottom >= listBottom - 400) {
+        this.requestLoadMore();
+      }
+    },
+    reconcileScrollOwnerListener() {
+      if (!this.scrollOwnerEl) {
+        return;
+      }
+      this.scrollOwnerEl.removeEventListener('scroll', this.handleOwnerScroll);
+      if (this.virtualizationEnabled) {
+        this.scrollOwnerEl.addEventListener('scroll', this.handleOwnerScroll, { passive: true });
+      }
+    },
     resolveScrollOwner() {
       const { nextOwner, sameOwner, missing } = resolveScrollOwnerDescriptor(this.$el, this.scrollOwnerEl);
       this.scrollOwnerMissing = missing;
       if (sameOwner) {
+        this.reconcileScrollOwnerListener();
         if (missing && this.virtualizationEnabled) {
           console.error('[VirtualVideoList] missing .main-view scroll owner; falling back to full list rendering');
         }
@@ -111,7 +169,7 @@ export default {
       this.detachScrollOwner();
       this.scrollOwnerEl = nextOwner;
       if (this.scrollOwnerEl) {
-        this.scrollOwnerEl.addEventListener('scroll', this.handleOwnerScroll, { passive: true });
+        this.reconcileScrollOwnerListener();
       } else if (this.virtualizationEnabled) {
         console.error('[VirtualVideoList] missing .main-view scroll owner; falling back to full list rendering');
       }
@@ -122,8 +180,20 @@ export default {
         this.scrollOwnerEl = null;
       }
     },
+    detachResizeObserver() {
+      if (this.resizeObserver) {
+        this.resizeObserver.disconnect();
+        this.resizeObserver = null;
+      }
+    },
+    detachLoadMoreObserver() {
+      if (this.loadMoreObserver) {
+        this.loadMoreObserver.disconnect();
+        this.loadMoreObserver = null;
+      }
+    },
     attachResizeObserver() {
-      if (typeof ResizeObserver === 'undefined' || !this.$el) {
+      if (!this.virtualizationEnabled || typeof ResizeObserver === 'undefined' || !this.$el || this.resizeObserver) {
         return;
       }
       this.resizeObserver = new ResizeObserver(() => {
@@ -131,11 +201,50 @@ export default {
       });
       this.resizeObserver.observe(this.$el);
     },
+    scheduleLoadMoreObserverRefresh() {
+      this.$nextTick(() => {
+        this.refreshLoadMoreObserver();
+      });
+    },
+    refreshLoadMoreObserver() {
+      this.detachLoadMoreObserver();
+      if (this.virtualizationEnabled || !this.hasMore) {
+        return;
+      }
+      if (typeof IntersectionObserver === 'undefined') {
+        if (!this.loading) {
+          this.requestLoadMore();
+        }
+        return;
+      }
+
+      this.resolveScrollOwner();
+      const sentinel = this.$refs.loadMoreSentinel;
+      if (!sentinel) {
+        return;
+      }
+
+      this.loadMoreObserver = new IntersectionObserver((entries) => {
+        const isVisible = entries.some((entry) => entry.isIntersecting);
+        if (!isVisible) {
+          return;
+        }
+        this.requestLoadMore();
+      }, {
+        root: this.scrollOwnerEl || null,
+        rootMargin: '0px 0px 600px 0px',
+        threshold: 0.01
+      });
+      this.loadMoreObserver.observe(sentinel);
+    },
     handleOwnerScroll() {
       this.syncWindow();
       this.scheduleMeasure();
     },
     handleWidthChange() {
+      if (!this.virtualizationEnabled) {
+        return;
+      }
       const nextBucket = this.rangeEngine.getWidthBucket(this.$el?.getBoundingClientRect().width || 0);
       if (nextBucket !== this.widthBucket) {
         this.widthBucket = nextBucket;
@@ -195,14 +304,7 @@ export default {
       this.endIndex = windowState.endIndex;
       this.topSpacer = windowState.topSpacer;
       this.bottomSpacer = windowState.bottomSpacer;
-
-      if (this.hasMore && !this.loading) {
-        const viewportBottom = this.scrollOwnerEl.scrollTop + this.scrollOwnerEl.clientHeight;
-        const listBottom = this.getListTop() + windowState.totalHeight;
-        if (viewportBottom >= listBottom - 400) {
-          this.$emit('load-more');
-        }
-      }
+      this.maybeEmitLoadMore(windowState.totalHeight)
     },
     scheduleMeasure() {
       if (!this.virtualizationEnabled) {
@@ -264,8 +366,10 @@ export default {
         anchorOffsetWithin,
         getItemHeight: (item) => this.getItemHeight(item)
       });
-      this.scrollOwnerEl.scrollTop = nextScrollTop;
-      this.syncWindow();
+      if (Math.abs(this.scrollOwnerEl.scrollTop - nextScrollTop) > 1) {
+        this.scrollOwnerEl.scrollTop = nextScrollTop;
+        this.syncWindow();
+      }
     }
   }
 };
@@ -280,5 +384,10 @@ export default {
 
 .virtual-video-list__row {
   display: block;
+}
+
+.virtual-video-list__sentinel {
+  width: 100%;
+  height: 1px;
 }
 </style>

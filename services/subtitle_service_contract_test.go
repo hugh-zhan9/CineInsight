@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -56,5 +57,39 @@ func TestValidateSRTReturnsTypedValidationError(t *testing.T) {
 	}
 	if !validationErr.ForceEligible {
 		t.Fatalf("期望当前校验失败可进入强制生成")
+	}
+}
+
+func TestValidateSRTRejectsTokenizedZeroDurationSubtitles(t *testing.T) {
+	svc := NewSubtitleService(t.TempDir())
+	srtPath := filepath.Join(t.TempDir(), "tokenized.srt")
+	content := ""
+	for i := 1; i <= 40; i++ {
+		content += fmt.Sprintf("%d\n00:02:16,160 --> 00:02:16,160\n%c\n\n", i, rune(0x4e00+i))
+	}
+	if err := os.WriteFile(srtPath, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试字幕失败: %v", err)
+	}
+
+	err := svc.validateSRT(srtPath)
+	if err == nil {
+		t.Fatalf("期望逐字零时长字幕校验失败")
+	}
+	var validationErr *SubtitleValidationError
+	if !errors.As(err, &validationErr) {
+		t.Fatalf("期望返回 SubtitleValidationError，实际 %T", err)
+	}
+	if validationErr.Code != SubtitleValidationCodeHallucinationDetected {
+		t.Fatalf("校验码错误: got=%s", validationErr.Code)
+	}
+}
+
+func TestIsQwenMPSOutOfMemory(t *testing.T) {
+	detail := "RuntimeError: MPS backend out of memory (MPS allocated: 13.51 GiB)"
+	if !isQwenMPSOutOfMemory(detail) {
+		t.Fatalf("期望识别为 MPS OOM")
+	}
+	if isQwenMPSOutOfMemory("RuntimeError: something else failed") {
+		t.Fatalf("非 MPS OOM 不应误判")
 	}
 }

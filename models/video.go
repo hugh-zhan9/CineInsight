@@ -2,8 +2,6 @@ package models
 
 import (
 	"time"
-
-	"gorm.io/gorm"
 )
 
 // Video 视频文件模型
@@ -20,11 +18,40 @@ type Video struct {
 	IsStale         bool           `gorm:"default:false" json:"is_stale"`                                           // 当前路径是否失效/待纠偏
 	PlayCount       int            `gorm:"default:0" json:"play_count"`                                             // 播放次数
 	RandomPlayCount int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
-	LastPlayedAt    *time.Time     `json:"last_played_at"`                                                          // 最后播放时间
+	LastPlayedAt    *time.Time     `json:"last_played_at" ts_type:"string"`                                         // 最后播放时间
 	Tags            []Tag          `gorm:"many2many:video_tags;" json:"tags"`                                       // 标签（多对多）
-	CreatedAt       time.Time      `json:"created_at"`
-	UpdatedAt       time.Time      `json:"updated_at"`
-	DeletedAt       gorm.DeletedAt `gorm:"index" json:"-"`
+	CreatedAt       time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt       time.Time      `json:"updated_at" ts_type:"string"`
+	DeletedAt       SoftDeleteTime `gorm:"index" json:"-"`
+}
+
+// SubtitleSegment stores searchable SRT segments for fast subtitle lookup.
+type SubtitleSegment struct {
+	ID              uint      `gorm:"primarykey" json:"id"`
+	VideoID         uint      `gorm:"index;uniqueIndex:idx_subtitle_segments_video_index" json:"video_id"`
+	Video           Video     `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
+	SegmentIndex    int       `gorm:"uniqueIndex:idx_subtitle_segments_video_index" json:"segment_index"`
+	StartTimeMs     int64     `json:"start_time_ms"`
+	EndTimeMs       int64     `json:"end_time_ms"`
+	Text            string    `gorm:"type:text" json:"text"`
+	SubtitlePath    string    `json:"subtitle_path"`
+	SubtitleModTime int64     `gorm:"index" json:"subtitle_mod_time"`
+	CreatedAt       time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt       time.Time `json:"updated_at" ts_type:"string"`
+}
+
+// SubtitleIndexState tracks whether a video's SRT file has been indexed.
+type SubtitleIndexState struct {
+	ID              uint      `gorm:"primarykey" json:"id"`
+	VideoID         uint      `gorm:"uniqueIndex" json:"video_id"`
+	Video           Video     `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
+	SubtitlePath    string    `json:"subtitle_path"`
+	SubtitleModTime int64     `gorm:"index" json:"subtitle_mod_time"`
+	SubtitleSize    int64     `json:"subtitle_size"`
+	SegmentCount    int       `json:"segment_count"`
+	LastCheckedAt   time.Time `json:"last_checked_at" ts_type:"string"`
+	CreatedAt       time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt       time.Time `json:"updated_at" ts_type:"string"`
 }
 
 // Tag 标签模型
@@ -33,9 +60,9 @@ type Tag struct {
 	Name      string         `gorm:"unique" json:"name"` // 标签名称
 	Color     string         `json:"color"`              // 标签颜色
 	Videos    []Video        `gorm:"many2many:video_tags;" json:"-"`
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	CreatedAt time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt time.Time      `json:"updated_at" ts_type:"string"`
+	DeletedAt SoftDeleteTime `gorm:"index" json:"-"`
 }
 
 // Settings 应用设置
@@ -51,7 +78,7 @@ type Settings struct {
 	BilingualEnabled    bool      `json:"bilingual_enabled"`                  // 是否开启双语字幕
 	BilingualLang       string    `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
 	DeepLApiKey         string    `json:"deepl_api_key"`                      // DeepL API Key
-	UpdatedAt           time.Time `json:"updated_at"`
+	UpdatedAt           time.Time `json:"updated_at" ts_type:"string"`
 }
 
 // ScanDirectory 扫描目录配置
@@ -59,7 +86,7 @@ type ScanDirectory struct {
 	ID        uint           `gorm:"primarykey" json:"id"`
 	Path      string         `json:"path"`  // 目录路径
 	Alias     string         `json:"alias"` // 目录别名
-	CreatedAt time.Time      `json:"created_at"`
-	UpdatedAt time.Time      `json:"updated_at"`
-	DeletedAt gorm.DeletedAt `gorm:"index" json:"-"`
+	CreatedAt time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt time.Time      `json:"updated_at" ts_type:"string"`
+	DeletedAt SoftDeleteTime `gorm:"index" json:"-"`
 }

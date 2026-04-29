@@ -19,6 +19,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 	"video-master/services/subtitleparser"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -423,6 +424,10 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 	}
 
 done:
+	if err := indexSubtitleFileForVideoID(req.VideoID, srtPath); err != nil {
+		log.Printf("[Subtitle] index subtitle failed videoID=%d path=%s err=%v", req.VideoID, srtPath, err)
+	}
+
 	s.emitProgress("generate", req.Engine, "finalizing", 100, "完成收尾")
 
 	if s.ctx != nil {
@@ -586,7 +591,48 @@ func (s *SubtitleService) validateSRT(srtPath string) error {
 		}
 	}
 
+	segments, err := subtitleparser.ParseFile(srtPath)
+	if err == nil && hasTokenizedTimingFailure(segments) {
+		os.Remove(srtPath)
+		return &SubtitleValidationError{
+			Code:          SubtitleValidationCodeHallucinationDetected,
+			Message:       "检测到异常逐字字幕（大量单字或零时长片段），可选择强制生成保留结果",
+			ForceEligible: true,
+		}
+	}
+	if err != nil {
+		log.Printf("[Subtitle] validateSRT: parse structured segments failed: %v", err)
+	}
+
 	return nil
+}
+
+func hasTokenizedTimingFailure(segments []subtitleparser.Segment) bool {
+	if len(segments) < 30 {
+		return false
+	}
+
+	zeroDurationCount := 0
+	shortTextCount := 0
+	startTimes := make(map[int64]struct{}, len(segments))
+	for _, segment := range segments {
+		if segment.EndTimeMs <= segment.StartTimeMs {
+			zeroDurationCount++
+		}
+		text := strings.TrimSpace(strings.ReplaceAll(segment.Text, "\n", ""))
+		if utf8.RuneCountInString(text) <= 2 {
+			shortTextCount++
+		}
+		startTimes[segment.StartTimeMs] = struct{}{}
+	}
+
+	total := float64(len(segments))
+	zeroRatio := float64(zeroDurationCount) / total
+	shortRatio := float64(shortTextCount) / total
+	uniqueStartRatio := float64(len(startTimes)) / total
+	log.Printf("[Subtitle] validateSRT timing: segments=%d zeroRatio=%.2f shortRatio=%.2f uniqueStartRatio=%.2f", len(segments), zeroRatio, shortRatio, uniqueStartRatio)
+
+	return shortRatio > 0.85 && (zeroRatio > 0.50 || uniqueStartRatio < 0.20)
 }
 
 // isSameLanguage 判断 whisper 检测到的语言与用户目标语言是否相同

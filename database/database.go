@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"video-master/models"
@@ -111,12 +112,14 @@ func Init() error {
 	}
 
 	// 自动迁移数据表
-	if err := db.AutoMigrate(&models.Video{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
 	}
+	ensureCoreQueryIndexes(db)
+	ensureSubtitleSearchIndexes(db)
 
 	// 初始化默认设置
 	var settings models.Settings
@@ -192,6 +195,37 @@ func ensureVideoPathUniqueIndex(db *gorm.DB) error {
 		ON videos(path)
 		WHERE deleted_at IS NULL AND path <> ''
 	`).Error
+}
+
+func ensureCoreQueryIndexes(db *gorm.DB) {
+	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_videos_directory_active ON videos(directory) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_videos_size_active ON videos(size) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_videos_height_active ON videos(height) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_videos_stale_active ON videos(is_stale) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_videos_score_inputs_active ON videos(play_count, random_play_count, size, id) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_video_tags_tag_video ON video_tags(tag_id, video_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_video_tags_video_tag ON video_tags(video_id, tag_id)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			log.Printf("创建查询索引失败: %v sql=%s", err, statement)
+		}
+	}
+}
+
+func ensureSubtitleSearchIndexes(db *gorm.DB) {
+	if err := db.Exec(`CREATE EXTENSION IF NOT EXISTS pg_trgm`).Error; err != nil {
+		log.Printf("创建 pg_trgm 扩展失败，字幕搜索仍可用但模糊搜索索引不可用: %v", err)
+		return
+	}
+	if err := db.Exec(`
+		CREATE INDEX IF NOT EXISTS idx_subtitle_segments_text_trgm
+		ON subtitle_segments
+		USING GIN (LOWER(text) gin_trgm_ops)
+	`).Error; err != nil {
+		log.Printf("创建字幕模糊搜索索引失败，字幕搜索仍可用但可能较慢: %v", err)
+	}
 }
 
 // Close 关闭数据库连接

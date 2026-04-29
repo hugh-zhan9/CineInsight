@@ -44,6 +44,14 @@ func TestSearchSubtitleMatchesFindsVideoBySegmentText(t *testing.T) {
 	if matches[0].Segment.Text != "hello world" {
 		t.Fatalf("命中字幕文本错误: %q", matches[0].Segment.Text)
 	}
+
+	var indexedCount int64
+	if err := database.DB.Model(&models.SubtitleSegment{}).Where("video_id = ?", video.ID).Count(&indexedCount).Error; err != nil {
+		t.Fatalf("统计字幕索引失败: %v", err)
+	}
+	if indexedCount != 1 {
+		t.Fatalf("期望首次搜索后建立 1 条字幕索引，实际 %d", indexedCount)
+	}
 }
 
 func TestSearchSubtitleMatchesSkipsVideosWithoutSRT(t *testing.T) {
@@ -115,6 +123,45 @@ func TestSearchSubtitleMatchesLimitsByUniqueVideos(t *testing.T) {
 	}
 }
 
+func TestSearchSubtitleMatchesRefreshesStaleIndex(t *testing.T) {
+	setupSubtitleSearchTestDB(t)
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "movie.mp4")
+	srtPath := filepath.Join(root, "movie.srt")
+
+	if err := os.WriteFile(videoPath, []byte("fake-video"), 0644); err != nil {
+		t.Fatalf("写入视频文件失败: %v", err)
+	}
+	if err := os.WriteFile(srtPath, []byte("1\n00:00:01,000 --> 00:00:03,000\nold keyword\n"), 0644); err != nil {
+		t.Fatalf("写入字幕文件失败: %v", err)
+	}
+
+	video := models.Video{Name: "movie.mp4", Path: videoPath, Directory: root, Size: 10}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	svc := &SubtitleSearchService{}
+	if matches, err := svc.SearchSubtitleMatches("old", 10); err != nil || len(matches) != 1 {
+		t.Fatalf("首次搜索失败 matches=%d err=%v", len(matches), err)
+	}
+
+	if err := os.WriteFile(srtPath, []byte("1\n00:00:02,000 --> 00:00:04,000\nnew keyword\n"), 0644); err != nil {
+		t.Fatalf("改写字幕文件失败: %v", err)
+	}
+
+	matches, err := svc.SearchSubtitleMatches("new", 10)
+	if err != nil {
+		t.Fatalf("刷新后搜索失败: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("期望刷新后命中新字幕，实际 %d", len(matches))
+	}
+	if matches[0].Segment.Text != "new keyword" {
+		t.Fatalf("期望命中新字幕文本，实际 %q", matches[0].Segment.Text)
+	}
+}
+
 func setupSubtitleSearchTestDB(t *testing.T) {
 	t.Helper()
 	dbPath := filepath.Join(t.TempDir(), "subtitle_search_test.db")
@@ -122,7 +169,7 @@ func setupSubtitleSearchTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Video{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
 		t.Fatalf("迁移测试数据库失败: %v", err)
 	}
 	database.DB = db

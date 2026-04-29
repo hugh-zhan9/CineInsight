@@ -1,4 +1,9 @@
-import {createApp} from 'vue'
-import App from './App.vue'
+import { createApp } from 'vue';
+import App from './App.vue';
+import { installGlobalFrontendLogBridge } from './utils/frontendLog.js';
 
-createApp(App).mount('#app')
+const app = createApp(App);
+
+installGlobalFrontendLogBridge(app);
+
+app.mount('#app');
