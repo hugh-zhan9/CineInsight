@@ -25,7 +25,7 @@ func setupAppTestDB(t *testing.T) {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
 
-	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		t.Fatalf("迁移测试数据库失败: %v", err)
 	}
 
@@ -91,6 +91,48 @@ func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMissing(t *testing.T) {
 	app := NewApp()
 	if _, err := app.GetSubtitleSegments(video.ID); err == nil {
 		t.Fatalf("期望缺失字幕文件时返回错误")
+	}
+}
+
+func TestAITaggingReviewAPIsApproveCandidate(t *testing.T) {
+	setupAppTestDB(t)
+	tag := models.Tag{Name: "动作", Color: "#fff"}
+	video := models.Video{Name: "fight.mp4", Path: "/tmp/fight.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	candidate := models.AITagCandidate{
+		VideoID:        video.ID,
+		SuggestedName:  "动作",
+		NormalizedName: "动作",
+		MatchedTagID:   &tag.ID,
+		Confidence:     models.AITagConfidenceHigh,
+		Status:         models.AITagCandidateStatusPending,
+	}
+	if err := database.DB.Create(&candidate).Error; err != nil {
+		t.Fatalf("创建候选失败: %v", err)
+	}
+
+	app := NewApp()
+	candidates, err := app.ListAITagCandidates(0, "", "pending")
+	if err != nil {
+		t.Fatalf("列出候选失败: %v", err)
+	}
+	if len(candidates) != 1 || candidates[0].ID != candidate.ID {
+		t.Fatalf("候选列表错误: %#v", candidates)
+	}
+	if _, err := app.ApproveAITagCandidate(candidate.ID); err != nil {
+		t.Fatalf("审批候选失败: %v", err)
+	}
+	var linkCount int64
+	if err := database.DB.Table("video_tags").Where("video_id = ? AND tag_id = ?", video.ID, tag.ID).Count(&linkCount).Error; err != nil {
+		t.Fatalf("统计正式关联失败: %v", err)
+	}
+	if linkCount != 1 {
+		t.Fatalf("审批后应写入正式关联，实际 %d", linkCount)
 	}
 }
 

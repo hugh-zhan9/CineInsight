@@ -99,7 +99,7 @@ func setupCleanupServiceTestDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("打开测试数据库失败: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		t.Fatalf("迁移测试数据库失败: %v", err)
 	}
 	database.DB = db

@@ -112,13 +112,15 @@ func Init() error {
 	}
 
 	// 自动迁移数据表
-	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
 	}
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
 	}
 	ensureCoreQueryIndexes(db)
+	ensureAITaggingIndexes(db)
+	ensureShortFeedIndexes(db)
 	ensureSubtitleSearchIndexes(db)
 
 	// 初始化默认设置
@@ -210,6 +212,37 @@ func ensureCoreQueryIndexes(db *gorm.DB) {
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
 			log.Printf("创建查询索引失败: %v sql=%s", err, statement)
+		}
+	}
+}
+
+func ensureAITaggingIndexes(db *gorm.DB) {
+	if err := db.Exec(`DROP INDEX IF EXISTS idx_ai_tag_candidate_unique_pending`).Error; err != nil {
+		log.Printf("删除旧 AI 标签唯一索引失败: %v", err)
+	}
+	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_ai_tag_candidates_video_status ON ai_tag_candidates(video_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_tag_candidates_matched_status ON ai_tag_candidates(matched_tag_id, status)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_tag_approval_video_tag ON ai_tag_approval_records(video_id, tag_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_tag_approval_records_candidate_id ON ai_tag_approval_records(candidate_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_tagging_states_status_processed ON ai_tagging_states(status, last_processed_at)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			log.Printf("创建 AI 标签索引失败: %v sql=%s", err, statement)
+		}
+	}
+}
+
+func ensureShortFeedIndexes(db *gorm.DB) {
+	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_short_feed_interactions_favorited_video ON short_feed_interactions(favorited, video_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_short_feed_interactions_liked_video ON short_feed_interactions(liked, video_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_short_feed_tag_preferences_score ON short_feed_tag_preferences(score)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			log.Printf("创建短视频 Feed 索引失败: %v sql=%s", err, statement)
 		}
 	}
 }

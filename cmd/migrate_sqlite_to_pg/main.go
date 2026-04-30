@@ -19,11 +19,13 @@ type videoTag struct {
 }
 
 type sqliteSnapshot struct {
-	Videos          []models.Video
-	Tags            []models.Tag
-	Settings        []models.Settings
-	ScanDirectories []models.ScanDirectory
-	VideoTags       []videoTag
+	Videos                  []models.Video
+	Tags                    []models.Tag
+	Settings                []models.Settings
+	ScanDirectories         []models.ScanDirectory
+	ShortFeedInteractions   []models.ShortFeedInteraction
+	ShortFeedTagPreferences []models.ShortFeedTagPreference
+	VideoTags               []videoTag
 }
 
 func defaultSqlitePath() (string, error) {
@@ -81,6 +83,16 @@ func loadSqliteData(db *gorm.DB) (sqliteSnapshot, error) {
 	if err := db.Unscoped().Find(&snapshot.ScanDirectories).Error; err != nil {
 		return snapshot, err
 	}
+	if db.Migrator().HasTable(&models.ShortFeedInteraction{}) {
+		if err := db.Find(&snapshot.ShortFeedInteractions).Error; err != nil {
+			return snapshot, err
+		}
+	}
+	if db.Migrator().HasTable(&models.ShortFeedTagPreference{}) {
+		if err := db.Find(&snapshot.ShortFeedTagPreferences).Error; err != nil {
+			return snapshot, err
+		}
+	}
 	if err := db.Table("video_tags").Find(&snapshot.VideoTags).Error; err != nil {
 		return snapshot, err
 	}
@@ -120,7 +132,7 @@ func migrateSqliteToPostgres(sqlitePath string) error {
 		return fmt.Errorf("连接 postgres 失败: %w", err)
 	}
 
-	if err := pgDB.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := pgDB.AutoMigrate(models.AllModels()...); err != nil {
 		return fmt.Errorf("postgres 迁移失败: %w", err)
 	}
 	if err := ensurePostgresEmpty(pgDB); err != nil {
@@ -152,6 +164,16 @@ func migrateSqliteToPostgres(sqlitePath string) error {
 			return err
 		}
 	}
+	if len(snapshot.ShortFeedInteractions) > 0 {
+		if err := pgDB.CreateInBatches(&snapshot.ShortFeedInteractions, 200).Error; err != nil {
+			return err
+		}
+	}
+	if len(snapshot.ShortFeedTagPreferences) > 0 {
+		if err := pgDB.CreateInBatches(&snapshot.ShortFeedTagPreferences, 200).Error; err != nil {
+			return err
+		}
+	}
 	if len(snapshot.VideoTags) > 0 {
 		if err := pgDB.Table("video_tags").CreateInBatches(&snapshot.VideoTags, 500).Error; err != nil {
 			return err
@@ -168,6 +190,12 @@ func migrateSqliteToPostgres(sqlitePath string) error {
 		return err
 	}
 	if err := resetSequence(pgDB, "scan_directories"); err != nil {
+		return err
+	}
+	if err := resetSequence(pgDB, "short_feed_interactions"); err != nil {
+		return err
+	}
+	if err := resetSequence(pgDB, "short_feed_tag_preferences"); err != nil {
 		return err
 	}
 
