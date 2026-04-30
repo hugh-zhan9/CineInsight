@@ -10,6 +10,8 @@ export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddVideo(arg1:string):Promise<models.Video>;
 
+export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
+
 export function BatchAddTagToVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
 
 export function BatchDeleteVideos(arg1:Array<number>,arg2:boolean):Promise<services.BatchVideoOperationResult>;
@@ -36,6 +38,8 @@ export function ForceGenerateSubtitle(arg1:services.SubtitleGenerateRequest):Pro
 
 export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<services.SubtitleGenerateResult>;
 
+export function GetAITaggingStatusSummary():Promise<services.AITaggingStatusSummary>;
+
 export function GetAllDirectories():Promise<Array<models.ScanDirectory>>;
 
 export function GetAllTags():Promise<Array<models.Tag>>;
@@ -48,6 +52,8 @@ export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
 
 export function GetSettings():Promise<models.Settings>;
 
+export function GetShortFeedServerStatus():Promise<services.ShortFeedServerStatus>;
+
 export function GetStartupError():Promise<string>;
 
 export function GetSubtitleEngineStatuses():Promise<Array<services.SubtitleEngineStatus>>;
@@ -57,6 +63,8 @@ export function GetSubtitleSegments(arg1:number):Promise<Array<subtitleparser.Se
 export function GetVideosByDirectory(arg1:string):Promise<Array<models.Video>>;
 
 export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:number):Promise<Array<models.Video>>;
+
+export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
 
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
@@ -72,11 +80,15 @@ export function PreviewExternally(arg1:number):Promise<void>;
 
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 
+export function RejectAITagCandidate(arg1:number):Promise<void>;
+
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
 export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
 
 export function RenameVideo(arg1:number,arg2:string):Promise<void>;
+
+export function RetryAITagging(arg1:number):Promise<void>;
 
 export function ScanDirectory(arg1:string):Promise<Array<string>>;
 

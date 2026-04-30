@@ -14,6 +14,10 @@ export function AddVideo(arg1) {
   return window['go']['main']['App']['AddVideo'](arg1);
 }
 
+export function ApproveAITagCandidate(arg1) {
+  return window['go']['main']['App']['ApproveAITagCandidate'](arg1);
+}
+
 export function BatchAddTagToVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchAddTagToVideos'](arg1, arg2);
 }
@@ -66,6 +70,10 @@ export function GenerateSubtitle(arg1) {
   return window['go']['main']['App']['GenerateSubtitle'](arg1);
 }
 
+export function GetAITaggingStatusSummary() {
+  return window['go']['main']['App']['GetAITaggingStatusSummary']();
+}
+
 export function GetAllDirectories() {
   return window['go']['main']['App']['GetAllDirectories']();
 }
@@ -90,6 +98,10 @@ export function GetSettings() {
   return window['go']['main']['App']['GetSettings']();
 }
 
+export function GetShortFeedServerStatus() {
+  return window['go']['main']['App']['GetShortFeedServerStatus']();
+}
+
 export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
 }
@@ -108,6 +120,10 @@ export function GetVideosByDirectory(arg1) {
 
 export function GetVideosPaginated(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['GetVideosPaginated'](arg1, arg2, arg3, arg4);
+}
+
+export function ListAITagCandidates(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListAITagCandidates'](arg1, arg2, arg3);
 }
 
 export function LogFrontend(arg1, arg2, arg3) {
@@ -138,6 +154,10 @@ export function RefreshVideoMetadata(arg1) {
   return window['go']['main']['App']['RefreshVideoMetadata'](arg1);
 }
 
+export function RejectAITagCandidate(arg1) {
+  return window['go']['main']['App']['RejectAITagCandidate'](arg1);
+}
+
 export function RelocateVideo(arg1, arg2) {
   return window['go']['main']['App']['RelocateVideo'](arg1, arg2);
 }
@@ -148,6 +168,10 @@ export function RemoveTagFromVideo(arg1, arg2) {
 
 export function RenameVideo(arg1, arg2) {
   return window['go']['main']['App']['RenameVideo'](arg1, arg2);
+}
+
+export function RetryAITagging(arg1) {
+  return window['go']['main']['App']['RetryAITagging'](arg1);
 }
 
 export function ScanDirectory(arg1) {

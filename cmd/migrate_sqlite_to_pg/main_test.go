@@ -15,7 +15,7 @@ func TestLoadSqliteDataIncludesSoftDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	if err := db.AutoMigrate(&models.Video{}, &models.SubtitleSegment{}, &models.SubtitleIndexState{}, &models.Tag{}, &models.Settings{}, &models.ScanDirectory{}); err != nil {
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		t.Fatalf("automigrate: %v", err)
 	}
 

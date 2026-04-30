@@ -8,3 +8,12 @@ This file is only a compatibility pointer for tools expecting "AGENTS.md".
 Do not maintain independent rules here unless explicitly required.
 
 Generated at: 20260224110626
+
+
+<claude-mem-context>
+# Memory Context
+
+# [CineInsight] recent context, 2026-04-30 7:28pm GMT+8
+
+No previous sessions found.
+</claude-mem-context>

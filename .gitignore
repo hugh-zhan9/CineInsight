@@ -26,3 +26,4 @@ frontend/wailsjs/
 *.swo
 video-master
 \.worktrees/
+.omx/

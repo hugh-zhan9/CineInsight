@@ -139,6 +139,82 @@ export namespace models {
 
 export namespace services {
 	
+	export class AITaggingReviewItem {
+	    id: number;
+	    video_id: number;
+	    video?: models.Video;
+	    suggested_name: string;
+	    normalized_name: string;
+	    matched_tag_id?: number;
+	    matched_tag?: models.Tag;
+	    confidence: string;
+	    reasoning: string;
+	    source_summary: string;
+	    status: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AITaggingReviewItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.suggested_name = source["suggested_name"];
+	        this.normalized_name = source["normalized_name"];
+	        this.matched_tag_id = source["matched_tag_id"];
+	        this.matched_tag = this.convertValues(source["matched_tag"], models.Tag);
+	        this.confidence = source["confidence"];
+	        this.reasoning = source["reasoning"];
+	        this.source_summary = source["source_summary"];
+	        this.status = source["status"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AITaggingStatusSummary {
+	    config_available: boolean;
+	    pending: number;
+	    processing: number;
+	    completed: number;
+	    skipped: number;
+	    failed: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AITaggingStatusSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.config_available = source["config_available"];
+	        this.pending = source["pending"];
+	        this.processing = source["processing"];
+	        this.completed = source["completed"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	    }
+	}
 	export class BatchVideoOperationError {
 	    video_id: number;
 	    error: string;
@@ -426,6 +502,32 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.path = source["path"];
 	        this.size = source["size"];
+	    }
+	}
+	export class ShortFeedServerStatus {
+	    running: boolean;
+	    bind_address: string;
+	    port: number;
+	    url: string;
+	    lan_urls: string[];
+	    startup_error: string;
+	    fallback_used: boolean;
+	    allowed_access: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ShortFeedServerStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.bind_address = source["bind_address"];
+	        this.port = source["port"];
+	        this.url = source["url"];
+	        this.lan_urls = source["lan_urls"];
+	        this.startup_error = source["startup_error"];
+	        this.fallback_used = source["fallback_used"];
+	        this.allowed_access = source["allowed_access"];
 	    }
 	}
 	export class SubtitleEngineStatus {

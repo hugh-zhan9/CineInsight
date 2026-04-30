@@ -49,6 +49,33 @@
       </div>
     </div>
 
+    <div class="settings-section">
+      <h3>手机短视频</h3>
+      <div class="short-feed-status">
+        <div class="short-feed-status-main">
+          <strong>{{ shortFeedStatusText }}</strong>
+          <span v-if="shortFeedStatus && shortFeedStatus.running">{{ shortFeedStatus.url }}</span>
+          <span v-else-if="shortFeedStatus && shortFeedStatus.startup_error">{{ shortFeedStatus.startup_error }}</span>
+          <span v-else>短视频服务状态未知</span>
+        </div>
+        <div class="short-feed-actions">
+          <button type="button" class="btn-secondary" @click="loadShortFeedStatus">刷新</button>
+          <button
+            v-if="shortFeedStatus && shortFeedStatus.running"
+            type="button"
+            class="btn-primary"
+            @click="openShortFeed"
+          >
+            打开
+          </button>
+        </div>
+      </div>
+      <div v-if="shortFeedStatus && shortFeedStatus.lan_urls && shortFeedStatus.lan_urls.length" class="short-feed-lan-list">
+        <div v-for="url in shortFeedStatus.lan_urls" :key="url" class="short-feed-url">{{ url }}</div>
+      </div>
+      <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
+    </div>
+
     <!-- 智能随机播放设置 -->
     <div class="settings-section">
       <h3>智能随机播放</h3>
@@ -171,7 +198,7 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus } from '../../wailsjs/go/main/App';
 
 export default {
   name: 'SettingsPage',
@@ -184,6 +211,7 @@ export default {
     return {
       settingsForm: { ...this.settings },
       localDirectories: [...this.directories],
+      shortFeedStatus: null,
       showAddDirectoryDialog: false,
       editingDirectory: null,
       directoryForm: { path: '', alias: '' }
@@ -208,7 +236,34 @@ export default {
       deep: true
     }
   },
+  computed: {
+    shortFeedStatusText() {
+      if (!this.shortFeedStatus) return '未加载';
+      if (this.shortFeedStatus.running) {
+        return this.shortFeedStatus.fallback_used ? '运行中（备用端口）' : '运行中';
+      }
+      return '未运行';
+    }
+  },
+  mounted() {
+    this.loadShortFeedStatus();
+  },
   methods: {
+    async loadShortFeedStatus() {
+      try {
+        this.shortFeedStatus = await GetShortFeedServerStatus();
+      } catch (err) {
+        this.shortFeedStatus = {
+          running: false,
+          startup_error: String(err)
+        };
+      }
+    },
+    openShortFeed() {
+      if (this.shortFeedStatus?.url) {
+        window.open(this.shortFeedStatus.url, '_blank', 'noopener,noreferrer');
+      }
+    },
     async saveSettings() {
       try {
         await UpdateSettings({
@@ -273,3 +328,49 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.short-feed-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-color);
+}
+
+.short-feed-status-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.short-feed-status-main span,
+.short-feed-url {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.short-feed-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.short-feed-lan-list {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.short-feed-url {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg-color);
+}
+</style>

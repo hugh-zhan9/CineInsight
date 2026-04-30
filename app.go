@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -38,6 +39,10 @@ type App struct {
 	subtitleService       *services.SubtitleService
 	cleanupService        *services.CleanupService
 	subtitleSearchService *services.SubtitleSearchService
+	aiTaggingService      *services.AITaggingService
+	shortFeedService      *services.ShortFeedService
+	shortFeedServer       *services.ShortFeedHTTPServer
+	shortFeedStartupError string
 	startupError          string
 	logFile               *os.File // 保持日志文件句柄引用，防止泄漏
 }
@@ -47,15 +52,18 @@ func NewApp() *App {
 	// 获取用户目录作为数据根目录
 	homeDir, _ := os.UserHomeDir()
 	dataDir := filepath.Join(homeDir, ".video-master")
+	videoService := &services.VideoService{}
 
 	return &App{
-		videoService:          &services.VideoService{},
+		videoService:          videoService,
 		tagService:            &services.TagService{},
 		settingsService:       &services.SettingsService{},
 		directoryService:      &services.DirectoryService{},
 		subtitleService:       services.NewSubtitleService(dataDir),
 		cleanupService:        &services.CleanupService{},
 		subtitleSearchService: &services.SubtitleSearchService{},
+		aiTaggingService:      services.NewAITaggingService(),
+		shortFeedService:      services.NewShortFeedService(videoService),
 	}
 }
 
@@ -69,12 +77,45 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.subtitleService.SetContext(ctx) // Inject context
 	a.cleanupService.SetContext(ctx)
+	a.aiTaggingService.Start(ctx)
+	a.startShortFeedServer(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
 		a.setLogEnabled(settings.LogEnabled)
 	} else {
 		log.Printf("App startup settings load failed err=%v", err)
 	}
+}
+
+func (a *App) shutdown(ctx context.Context) {
+	if a.aiTaggingService != nil {
+		a.aiTaggingService.Stop()
+	}
+	if a.shortFeedServer != nil {
+		if err := a.shortFeedServer.Stop(ctx); err != nil {
+			log.Printf("Short feed server shutdown failed: %v", err)
+		}
+	}
+	a.closeLogFile()
+}
+
+func (a *App) startShortFeedServer(ctx context.Context) {
+	distFS, err := fs.Sub(assets, "frontend/dist")
+	if err != nil {
+		a.shortFeedStartupError = fmt.Sprintf("短视频 Feed 前端资源不可用: %v", err)
+		log.Printf("Short feed server not started: %s", a.shortFeedStartupError)
+		return
+	}
+	a.shortFeedServer = services.NewShortFeedHTTPServer(a.shortFeedService, distFS, services.ShortFeedHTTPServerConfig{})
+	a.shortFeedServer.Start(ctx)
+	status := a.shortFeedServer.Status()
+	if status.StartupError != "" {
+		a.shortFeedStartupError = status.StartupError
+		log.Printf("Short feed server startup failed: %s", status.StartupError)
+		return
+	}
+	a.shortFeedStartupError = ""
+	log.Printf("Short feed server running url=%s lan=%v", status.URL, status.LANURLs)
 }
 
 func (a *App) setStartupError(err error) {
@@ -88,6 +129,22 @@ func (a *App) setStartupError(err error) {
 func (a *App) GetStartupError() string {
 	log.Printf("API GetStartupError hasError=%v value=%q", a.startupError != "", a.startupError)
 	return a.startupError
+}
+
+func (a *App) GetShortFeedServerStatus() services.ShortFeedServerStatus {
+	if a.shortFeedServer == nil {
+		return services.ShortFeedServerStatus{
+			Running:       false,
+			StartupError:  a.shortFeedStartupError,
+			AllowedAccess: "loopback/private-lan/link-local only, no login",
+		}
+	}
+	status := a.shortFeedServer.Status()
+	if status.StartupError == "" && a.shortFeedStartupError != "" {
+		status.StartupError = a.shortFeedStartupError
+	}
+	log.Printf("API GetShortFeedServerStatus running=%v port=%d err=%q", status.Running, status.Port, status.StartupError)
+	return status
 }
 
 func (a *App) LogFrontend(level string, source string, message string) {
@@ -385,6 +442,38 @@ func (a *App) DeleteTag(id uint) error {
 	err := a.tagService.DeleteTag(id)
 	log.Printf("API DeleteTag id=%d err=%v", id, err)
 	return err
+}
+
+// ===== AI Tagging Methods =====
+
+func (a *App) ListAITagCandidates(videoID uint, confidence string, status string) ([]services.AITaggingReviewItem, error) {
+	items, err := a.aiTaggingService.ListCandidates(videoID, confidence, status)
+	log.Printf("API ListAITagCandidates videoID=%d confidence=%s status=%s result=%d err=%v", videoID, confidence, status, len(items), err)
+	return items, err
+}
+
+func (a *App) ApproveAITagCandidate(candidateID uint) (*services.AITaggingReviewItem, error) {
+	item, err := a.aiTaggingService.ApproveCandidate(candidateID)
+	log.Printf("API ApproveAITagCandidate candidateID=%d err=%v", candidateID, err)
+	return item, err
+}
+
+func (a *App) RejectAITagCandidate(candidateID uint) error {
+	err := a.aiTaggingService.RejectCandidate(candidateID)
+	log.Printf("API RejectAITagCandidate candidateID=%d err=%v", candidateID, err)
+	return err
+}
+
+func (a *App) RetryAITagging(videoID uint) error {
+	err := a.aiTaggingService.RetryVideo(videoID)
+	log.Printf("API RetryAITagging videoID=%d err=%v", videoID, err)
+	return err
+}
+
+func (a *App) GetAITaggingStatusSummary() (*services.AITaggingStatusSummary, error) {
+	summary, err := a.aiTaggingService.StatusSummary()
+	log.Printf("API GetAITaggingStatusSummary err=%v summary=%+v", err, summary)
+	return summary, err
 }
 
 // ===== Settings Methods =====

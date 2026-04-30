@@ -29,6 +29,7 @@
 
       <div class="action-group" style="margin-left: auto; display: flex; gap: 8px;">
         <button @click="playRandom" class="btn-random">🎲 随机播放</button>
+        <button @click="openAITagReviewDialog" class="btn-secondary">AI 标签审阅</button>
         <button @click="openCleanupDialog" class="btn-secondary">🧹 清理候选</button>
         <button @click="showScanDialog = true" class="btn-primary">🔍 扫描目录</button>
         <button @click="showTagManagerDialog = true" class="btn-secondary">🏷️ 标签管理</button>
@@ -204,6 +205,12 @@
       :tag="tagDeleteDialog.tag"
       @close="tagDeleteDialog.show = false"
       @confirm-delete="confirmDeleteTag"
+    />
+
+    <AITagReviewDialog
+      :visible="aiTagReviewDialog.show"
+      @close="aiTagReviewDialog.show = false"
+      @changed="handleAITagCandidatesChanged"
     />
 
     <div v-if="cleanupDialog.show" class="modal-overlay">
@@ -625,12 +632,13 @@ import TagDeleteDialog from './TagDeleteDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
 import VideoListRow from './VideoListRow.vue';
+import AITagReviewDialog from './AITagReviewDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow, AITagReviewDialog },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -675,6 +683,7 @@ export default {
       deleteDialog: { show: false, video: null },
       deletingIds: [],
       tagDeleteDialog: { show: false, tag: null },
+      aiTagReviewDialog: { show: false },
       cleanupDialog: {
         show: false,
         loading: false,
@@ -1688,6 +1697,13 @@ export default {
     },
     openAddTagDialog(video) {
       this.addTagDialog = { show: true, video: video };
+    },
+    openAITagReviewDialog() {
+      this.aiTagReviewDialog.show = true;
+    },
+    async handleAITagCandidatesChanged() {
+      this.$emit('reload-tags');
+      await this.reloadCurrentView();
     },
     async removeTag(video, tag) {
       try {
