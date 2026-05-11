@@ -26,11 +26,25 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.VideoExtensions = input.VideoExtensions
 	settings.PlayWeight = input.PlayWeight
 	settings.AutoScanOnStartup = input.AutoScanOnStartup
+	settings.ShortFeedMaxDurationMinutes = positiveOrDefault(input.ShortFeedMaxDurationMinutes, DefaultShortFeedMaxDurationMinutes)
 	settings.Theme = input.Theme
 	settings.LogEnabled = input.LogEnabled
 	settings.BilingualEnabled = input.BilingualEnabled
 	settings.BilingualLang = input.BilingualLang
 	settings.DeepLApiKey = input.DeepLApiKey
+	settings.AITaggingBaseURL = input.AITaggingBaseURL
+	settings.AITaggingAPIKey = input.AITaggingAPIKey
+	settings.AITaggingModel = input.AITaggingModel
+	settings.AITaggingFrameCount = positiveOrDefault(input.AITaggingFrameCount, defaultAITaggingFrameCount)
+	settings.AITaggingSubtitleCharLimit = positiveOrDefault(input.AITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit)
+	settings.AITaggingStartupBatchSize = positiveOrDefault(input.AITaggingStartupBatchSize, defaultAITaggingStartupBatchSize)
 
 	return database.DB.Save(&settings).Error
+}
+
+func positiveOrDefault(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }

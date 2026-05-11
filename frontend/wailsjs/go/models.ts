@@ -27,11 +27,18 @@ export namespace models {
 	    video_extensions: string;
 	    play_weight: number;
 	    auto_scan_on_startup: boolean;
+	    short_feed_max_duration_minutes: number;
 	    theme: string;
 	    log_enabled: boolean;
 	    bilingual_enabled: boolean;
 	    bilingual_lang: string;
 	    deepl_api_key: string;
+	    ai_tagging_base_url: string;
+	    ai_tagging_api_key: string;
+	    ai_tagging_model: string;
+	    ai_tagging_frame_count: number;
+	    ai_tagging_subtitle_char_limit: number;
+	    ai_tagging_startup_batch_size: number;
 	    updated_at: string;
 	
 	    static createFrom(source: any = {}) {
@@ -46,11 +53,18 @@ export namespace models {
 	        this.video_extensions = source["video_extensions"];
 	        this.play_weight = source["play_weight"];
 	        this.auto_scan_on_startup = source["auto_scan_on_startup"];
+	        this.short_feed_max_duration_minutes = source["short_feed_max_duration_minutes"];
 	        this.theme = source["theme"];
 	        this.log_enabled = source["log_enabled"];
 	        this.bilingual_enabled = source["bilingual_enabled"];
 	        this.bilingual_lang = source["bilingual_lang"];
 	        this.deepl_api_key = source["deepl_api_key"];
+	        this.ai_tagging_base_url = source["ai_tagging_base_url"];
+	        this.ai_tagging_api_key = source["ai_tagging_api_key"];
+	        this.ai_tagging_model = source["ai_tagging_model"];
+	        this.ai_tagging_frame_count = source["ai_tagging_frame_count"];
+	        this.ai_tagging_subtitle_char_limit = source["ai_tagging_subtitle_char_limit"];
+	        this.ai_tagging_startup_batch_size = source["ai_tagging_startup_batch_size"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -334,6 +348,68 @@ export namespace services {
 		}
 	}
 	
+	export class CleanupProgress {
+	    stage: string;
+	    message: string;
+	    current: number;
+	    total: number;
+	    path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupProgress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stage = source["stage"];
+	        this.message = source["message"];
+	        this.current = source["current"];
+	        this.total = source["total"];
+	        this.path = source["path"];
+	    }
+	}
+	export class CleanupStatus {
+	    running: boolean;
+	    completed: boolean;
+	    error: string;
+	    progress: CleanupProgress;
+	    analysis?: CleanupAnalysis;
+	    started_at?: string;
+	    updated_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.completed = source["completed"];
+	        this.error = source["error"];
+	        this.progress = this.convertValues(source["progress"], CleanupProgress);
+	        this.analysis = this.convertValues(source["analysis"], CleanupAnalysis);
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class PlaybackReconcileResult {
 	    video_id: number;
 	    did_mark_stale: boolean;
@@ -490,6 +566,68 @@ export namespace services {
 		}
 	}
 	
+	export class ScanSyncError {
+	    operation: string;
+	    directory?: string;
+	    path?: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ScanSyncError(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation = source["operation"];
+	        this.directory = source["directory"];
+	        this.path = source["path"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ScanSyncResult {
+	    directories: number;
+	    scanned: number;
+	    added: number;
+	    deleted: number;
+	    relocated: number;
+	    metadata_refreshed: number;
+	    skipped: number;
+	    errors: ScanSyncError[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ScanSyncResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directories = source["directories"];
+	        this.scanned = source["scanned"];
+	        this.added = source["added"];
+	        this.deleted = source["deleted"];
+	        this.relocated = source["relocated"];
+	        this.metadata_refreshed = source["metadata_refreshed"];
+	        this.skipped = source["skipped"];
+	        this.errors = this.convertValues(source["errors"], ScanSyncError);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ScannedFile {
 	    path: string;
 	    size: number;

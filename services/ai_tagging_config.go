@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"video-master/database"
+	"video-master/models"
 )
 
 const (
@@ -16,7 +18,7 @@ const (
 	envAITaggingSubtitleCharLimit = "AI_TAGGING_SUBTITLE_CHAR_LIMIT"
 	envAITaggingStartupBatchSize  = "AI_TAGGING_STARTUP_BATCH_SIZE"
 
-	defaultAITaggingFrameCount        = 2
+	defaultAITaggingFrameCount        = 5
 	defaultAITaggingSubtitleCharLimit = 4000
 	defaultAITaggingStartupBatchSize  = 10
 )
@@ -45,7 +47,50 @@ func (EnvAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
 		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
 	}
-	if config.BaseURL == "" || config.APIKey == "" || config.Model == "" {
+	if config.BaseURL == "" || config.Model == "" {
+		return config, fmt.Errorf("AI tagging config unavailable")
+	}
+	return config, nil
+}
+
+type SettingsAITaggingConfigProvider struct{}
+
+func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
+	envConfig := AITaggingConfig{
+		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
+		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
+		Model:             strings.TrimSpace(os.Getenv(envAITaggingModel)),
+		FrameCount:        envInt(envAITaggingFrameCount, defaultAITaggingFrameCount),
+		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
+		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
+	}
+
+	config := envConfig
+	if database.DB != nil {
+		var settings models.Settings
+		if err := database.DB.First(&settings).Error; err == nil {
+			if value := strings.TrimSpace(settings.AITaggingBaseURL); value != "" {
+				config.BaseURL = value
+			}
+			if value := strings.TrimSpace(settings.AITaggingAPIKey); value != "" {
+				config.APIKey = value
+			}
+			if value := strings.TrimSpace(settings.AITaggingModel); value != "" {
+				config.Model = value
+			}
+			if settings.AITaggingFrameCount > 0 {
+				config.FrameCount = settings.AITaggingFrameCount
+			}
+			if settings.AITaggingSubtitleCharLimit > 0 {
+				config.SubtitleCharLimit = settings.AITaggingSubtitleCharLimit
+			}
+			if settings.AITaggingStartupBatchSize > 0 {
+				config.StartupBatchSize = settings.AITaggingStartupBatchSize
+			}
+		}
+	}
+
+	if config.BaseURL == "" || config.Model == "" {
 		return config, fmt.Errorf("AI tagging config unavailable")
 	}
 	return config, nil

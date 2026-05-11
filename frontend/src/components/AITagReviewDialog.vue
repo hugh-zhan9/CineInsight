@@ -21,7 +21,11 @@
         <section v-for="group in groups" :key="group.videoId" class="ai-video-group">
           <div class="ai-video-title">
             <span>{{ group.videoName }}</span>
-            <button type="button" class="btn-action" @click="retryVideo(group.videoId)" :disabled="processingIds.includes(group.videoId)">重新分析</button>
+            <div class="ai-video-actions">
+              <button type="button" class="btn-action" @click="previewVideo(group.videoId)" :disabled="processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
+              <button type="button" class="btn-secondary btn-small" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
+              <button type="button" class="btn-action" @click="retryVideo(group.videoId)" :disabled="processingIds.includes(group.videoId)">重新分析</button>
+            </div>
           </div>
           <div v-if="group.videoPath" class="ai-video-path">{{ group.videoPath }}</div>
 
@@ -50,13 +54,25 @@
           </div>
         </section>
       </div>
+
+      <div v-if="rejectConfirm.show" class="ai-confirm-overlay">
+        <div class="ai-confirm-dialog">
+          <h4>确认全部拒绝</h4>
+          <p>将拒绝这个视频下的 {{ rejectConfirm.count }} 个 AI 标签候选。</p>
+          <p class="ai-confirm-video">{{ rejectConfirm.videoName }}</p>
+          <div class="ai-confirm-actions">
+            <button type="button" class="btn-secondary" @click="cancelRejectVideoGroup">取消</button>
+            <button type="button" class="btn-danger" @click="confirmRejectVideoGroup" :disabled="processingIds.includes(`reject-video-${rejectConfirm.videoId}`)">全部拒绝</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script>
-import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, RejectAITagCandidate, RetryAITagging } from '../../wailsjs/go/main/App';
-import { confidenceMeta, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
+import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import { confidenceMeta, createRejectVideoConfirm, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
 
 export default {
   name: 'AITagReviewDialog',
@@ -71,6 +87,7 @@ export default {
       loading: false,
       error: '',
       processingIds: [],
+      rejectConfirm: { show: false, videoId: 0, videoName: '', count: 0, candidateIds: [] },
     };
   },
   computed: {
@@ -119,10 +136,35 @@ export default {
         this.candidates = removeCandidateById(this.candidates, candidate.id);
       });
     },
+    async rejectVideoGroup(group) {
+      const confirmState = createRejectVideoConfirm(group);
+      if (!confirmState) return;
+      this.rejectConfirm = confirmState;
+    },
+    cancelRejectVideoGroup() {
+      this.rejectConfirm = { show: false, videoId: 0, videoName: '', count: 0, candidateIds: [] };
+    },
+    async confirmRejectVideoGroup() {
+      const videoId = this.rejectConfirm.videoId;
+      if (!videoId) return;
+      const candidateIds = [...this.rejectConfirm.candidateIds];
+      await this.withProcessing(`reject-video-${videoId}`, async () => {
+        await RejectAITagCandidatesByVideo(videoId);
+        const rejectedIds = new Set(candidateIds);
+        this.candidates = this.candidates.filter(candidate => !rejectedIds.has(Number(candidate.id)));
+        this.cancelRejectVideoGroup();
+        this.$emit('changed');
+      });
+    },
     async retryVideo(videoId) {
       await this.withProcessing(videoId, async () => {
         await RetryAITagging(videoId);
         await this.loadCandidates();
+      });
+    },
+    async previewVideo(videoId) {
+      await this.withProcessing(`preview-${videoId}`, async () => {
+        await PreviewExternally(videoId);
       });
     },
     async withProcessing(id, action) {
@@ -132,10 +174,19 @@ export default {
       try {
         await action();
       } catch (err) {
-        this.error = String(err);
+        if (this.isStaleCandidateError(err)) {
+          await this.loadCandidates();
+          this.error = '这条候选已被处理或已过期，列表已刷新。';
+        } else {
+          this.error = String(err);
+        }
       } finally {
         this.processingIds = this.processingIds.filter(item => item !== id);
       }
+    },
+    isStaleCandidateError(err) {
+      const message = String(err?.message || err || '').toLowerCase();
+      return message.includes('candidate is not pending') || message.includes('candidate is no longer pending');
     },
   },
 };
@@ -143,6 +194,7 @@ export default {
 
 <style scoped>
 .ai-tag-review-modal {
+  position: relative;
   width: min(760px, calc(100vw - 40px));
   max-width: 760px;
   max-height: min(720px, calc(100vh - 48px));
@@ -183,6 +235,17 @@ export default {
   gap: 12px;
   font-weight: 700;
   color: var(--text-primary);
+}
+
+.ai-video-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.btn-small {
+  padding: 6px 10px;
+  font-size: 12px;
 }
 
 .ai-video-path {
@@ -267,5 +330,55 @@ export default {
   padding: 32px 0;
   text-align: center;
   color: var(--text-muted);
+}
+
+.ai-confirm-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.58);
+  backdrop-filter: blur(3px);
+}
+
+.ai-confirm-dialog {
+  width: min(420px, 100%);
+  padding: 22px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--panel-bg);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.28);
+}
+
+.ai-confirm-dialog h4 {
+  margin: 0 0 10px;
+  color: var(--text-primary);
+  font-size: 17px;
+}
+
+.ai-confirm-dialog p {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.ai-confirm-video {
+  max-height: 84px;
+  overflow: auto;
+  padding: 10px;
+  border-radius: 6px;
+  background: rgba(148, 163, 184, 0.12);
+  color: var(--text-primary) !important;
+  overflow-wrap: anywhere;
+}
+
+.ai-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 16px;
 }
 </style>

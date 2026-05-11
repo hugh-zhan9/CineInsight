@@ -2,7 +2,11 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 	"video-master/database"
@@ -78,6 +82,162 @@ func TestAITaggingSchemaCreatesTablesAndIndexes(t *testing.T) {
 	}
 }
 
+func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	t.Setenv(envAITaggingBaseURL, "http://env.example/v1")
+	t.Setenv(envAITaggingAPIKey, "env-key")
+	t.Setenv(envAITaggingModel, "env-model")
+
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_tagging_base_url":            "http://db.example/v1",
+		"ai_tagging_api_key":             "db-key",
+		"ai_tagging_model":               "db-model",
+		"ai_tagging_frame_count":         3,
+		"ai_tagging_subtitle_char_limit": 1200,
+		"ai_tagging_startup_batch_size":  5,
+	}).Error; err != nil {
+		t.Fatalf("更新设置失败: %v", err)
+	}
+
+	config, err := SettingsAITaggingConfigProvider{}.Load()
+	if err != nil {
+		t.Fatalf("读取 AI 配置失败: %v", err)
+	}
+	if config.BaseURL != "http://db.example/v1" || config.APIKey != "db-key" || config.Model != "db-model" {
+		t.Fatalf("期望优先读取数据库配置，实际: %+v", config)
+	}
+	if config.FrameCount != 3 || config.SubtitleCharLimit != 1200 || config.StartupBatchSize != 5 {
+		t.Fatalf("期望读取数据库数值配置，实际: %+v", config)
+	}
+}
+
+func TestSettingsAITaggingConfigProviderAllowsLocalEndpointWithoutAPIKey(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_tagging_base_url": "http://127.0.0.1:1234/v1",
+		"ai_tagging_api_key":  "",
+		"ai_tagging_model":    "local-model",
+	}).Error; err != nil {
+		t.Fatalf("更新设置失败: %v", err)
+	}
+
+	config, err := SettingsAITaggingConfigProvider{}.Load()
+	if err != nil {
+		t.Fatalf("本地兼容接口不应强制要求 API Key: %v", err)
+	}
+	if config.APIKey != "" || config.BaseURL == "" || config.Model == "" {
+		t.Fatalf("本地配置读取异常: %+v", config)
+	}
+}
+
+func TestOpenAICompatibleClientSkipsAuthorizationHeaderWhenAPIKeyEmpty(t *testing.T) {
+	var seenAuth string
+	var seenModel string
+	var hasResponseFormat bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		var body map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("解析请求体失败: %v", err)
+		}
+		if model, ok := body["model"].(string); ok {
+			seenModel = model
+		}
+		_, hasResponseFormat = body["response_format"]
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]string{"content": `{"suggestions":[]}`}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewOpenAICompatibleAITaggingClient(AITaggingConfig{
+		BaseURL: srv.URL + "/v1",
+		Model:   "demo-model",
+	})
+	_, err := client.AnalyzeTags(context.Background(), AITaggingRequest{
+		Video: models.Video{ID: 1, Name: "demo.mp4", Path: "/tmp/demo.mp4"},
+	})
+	if err != nil {
+		t.Fatalf("请求失败: %v", err)
+	}
+	if seenAuth != "" {
+		t.Fatalf("空 API Key 时不应发送 Authorization，实际 %q", seenAuth)
+	}
+	if seenModel != "demo-model" {
+		t.Fatalf("模型名不正确: %q", seenModel)
+	}
+	if hasResponseFormat {
+		t.Fatalf("不应发送 LM Studio 不兼容的 response_format 字段")
+	}
+}
+
+func TestOpenAICompatibleClientUsesLongTimeoutForLocalVisionModels(t *testing.T) {
+	client, ok := NewOpenAICompatibleAITaggingClient(AITaggingConfig{
+		BaseURL: "http://127.0.0.1:1234/v1",
+		Model:   "vision-model",
+	}).(*OpenAICompatibleAITaggingClient)
+	if !ok {
+		t.Fatalf("客户端类型不正确")
+	}
+	if client.client.Timeout < 5*time.Minute {
+		t.Fatalf("本地视觉模型请求超时时间过短: %s", client.client.Timeout)
+	}
+}
+
+func TestAITaggingFrameCountSupportsFiveFrameDefault(t *testing.T) {
+	if defaultAITaggingFrameCount != 5 {
+		t.Fatalf("默认抽帧数量应为 5，实际 %d", defaultAITaggingFrameCount)
+	}
+	if got := normalizedAITaggingFrameCount(5); got != 5 {
+		t.Fatalf("应支持一次抽取 5 帧，实际 %d", got)
+	}
+	if got := normalizedAITaggingFrameCount(99); got != aiTaggingFrameMaxCount {
+		t.Fatalf("抽帧数量应限制到上限 %d，实际 %d", aiTaggingFrameMaxCount, got)
+	}
+}
+
+func TestOpenAICompatibleClientPromptPrioritizesFramesAndExistingTags(t *testing.T) {
+	client := NewOpenAICompatibleAITaggingClient(AITaggingConfig{
+		BaseURL:           "http://127.0.0.1:1234/v1",
+		Model:             "vision-model",
+		SubtitleCharLimit: 1000,
+	}).(*OpenAICompatibleAITaggingClient)
+
+	body := client.buildRequest(AITaggingRequest{
+		Video: models.Video{ID: 1, Name: "4K超清舞蹈.mp4", Path: "/tmp/4K超清舞蹈.mp4"},
+		ExistingTags: []models.Tag{
+			{Name: "4K"},
+			{Name: "舞蹈"},
+		},
+		Evidence: AITaggingEvidence{
+			Frames: []AITaggingFrame{
+				{DataURL: "data:image/jpeg;base64,abc", Index: 1, Position: 12.3},
+			},
+		},
+	})
+	messages := body["messages"].([]map[string]interface{})
+	userContent := messages[1]["content"].([]map[string]interface{})
+	text := userContent[0]["text"].(string)
+	if !strings.Contains(text, "必须优先根据画面内容判断") || !strings.Contains(text, "label 必须使用已有标签的原始名称") {
+		t.Fatalf("prompt 未强调画面优先和已有标签优先: %s", text)
+	}
+	if len(userContent) != 3 {
+		t.Fatalf("期望文本、帧说明、图片三段内容，实际 %d", len(userContent))
+	}
+}
+
+func TestParseAITagSuggestionsAllowsMarkdownWrappedJSON(t *testing.T) {
+	suggestions, err := parseAITagSuggestions("这里是结果：\n```json\n{\"suggestions\":[{\"label\":\"动作\",\"confidence\":\"high\",\"match_type\":\"existing_exact\"}]}\n```")
+	if err != nil {
+		t.Fatalf("解析带代码块的 JSON 失败: %v", err)
+	}
+	if len(suggestions) != 1 || suggestions[0].Label != "动作" || suggestions[0].Confidence != "high" {
+		t.Fatalf("解析结果不正确: %+v", suggestions)
+	}
+}
+
 func TestAITaggingDropsLowConfidenceBeforePersistence(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	video := models.Video{Name: "quiet.mp4", Path: "/tmp/quiet.mp4", Directory: "/tmp"}
@@ -125,6 +285,34 @@ func TestAITaggingPersistsCandidateButDoesNotWriteOfficialTablesBeforeApproval(t
 	}
 	if got := countRows(t, "video_tags"); got != 0 {
 		t.Fatalf("审批前不应写 video_tags，实际 %d", got)
+	}
+}
+
+func TestAITaggingPersistsMatchedExistingTagNameInsteadOfModelSynonym(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tag := models.Tag{Name: "4K", Color: "#fff"}
+	video := models.Video{Name: "demo.mp4", Path: "/tmp/demo.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	client := &fakeAITaggingClient{suggestions: []AITagSuggestion{{Label: "4K超清", Confidence: "high", MatchedExistingName: "4K"}}}
+	svc := newTestAITaggingService(client, nil)
+
+	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
+		t.Fatalf("处理视频失败: %v", err)
+	}
+	var candidate models.AITagCandidate
+	if err := database.DB.First(&candidate).Error; err != nil {
+		t.Fatalf("读取候选失败: %v", err)
+	}
+	if candidate.SuggestedName != "4K" || candidate.NormalizedName != normalizeAITagName("4K") {
+		t.Fatalf("应使用已有标签原名落库，实际 %+v", candidate)
+	}
+	if candidate.MatchedTagID == nil || *candidate.MatchedTagID != tag.ID {
+		t.Fatalf("应关联已有标签，实际 %+v", candidate.MatchedTagID)
 	}
 }
 
@@ -226,6 +414,49 @@ func TestApproveAITagCandidateRollsBackWhenMatchedTagMissing(t *testing.T) {
 	}
 	if loaded.Status != models.AITagCandidateStatusPending {
 		t.Fatalf("审批失败应保留 pending 状态，实际 %s", loaded.Status)
+	}
+}
+
+func TestRejectPendingCandidatesByVideoRejectsOnlyThatVideosPendingCandidates(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	videoA := models.Video{Name: "a.mp4", Path: "/tmp/ai-reject-a.mp4", Directory: "/tmp"}
+	videoB := models.Video{Name: "b.mp4", Path: "/tmp/ai-reject-b.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&videoA).Error; err != nil {
+		t.Fatalf("创建视频A失败: %v", err)
+	}
+	if err := database.DB.Create(&videoB).Error; err != nil {
+		t.Fatalf("创建视频B失败: %v", err)
+	}
+	candidates := []models.AITagCandidate{
+		{VideoID: videoA.ID, SuggestedName: "动作", NormalizedName: "动作", Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending},
+		{VideoID: videoA.ID, SuggestedName: "剧情", NormalizedName: "剧情", Confidence: models.AITagConfidenceMedium, Status: models.AITagCandidateStatusPending},
+		{VideoID: videoA.ID, SuggestedName: "旧", NormalizedName: "旧", Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusRejected},
+		{VideoID: videoB.ID, SuggestedName: "保留", NormalizedName: "保留", Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending},
+	}
+	if err := database.DB.Create(&candidates).Error; err != nil {
+		t.Fatalf("创建候选失败: %v", err)
+	}
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
+	rejected, err := svc.RejectPendingCandidatesByVideo(videoA.ID)
+	if err != nil {
+		t.Fatalf("批量拒绝失败: %v", err)
+	}
+	if rejected != 2 {
+		t.Fatalf("应拒绝 2 条待审候选，实际 %d", rejected)
+	}
+	var videoAPending int64
+	if err := database.DB.Model(&models.AITagCandidate{}).Where("video_id = ? AND status = ?", videoA.ID, models.AITagCandidateStatusPending).Count(&videoAPending).Error; err != nil {
+		t.Fatalf("统计视频A待审失败: %v", err)
+	}
+	if videoAPending != 0 {
+		t.Fatalf("视频A不应再有待审候选，实际 %d", videoAPending)
+	}
+	var videoBPending int64
+	if err := database.DB.Model(&models.AITagCandidate{}).Where("video_id = ? AND status = ?", videoB.ID, models.AITagCandidateStatusPending).Count(&videoBPending).Error; err != nil {
+		t.Fatalf("统计视频B待审失败: %v", err)
+	}
+	if videoBPending != 1 {
+		t.Fatalf("视频B待审候选不应受影响，实际 %d", videoBPending)
 	}
 }
 
@@ -385,6 +616,43 @@ func TestAITaggingMissingConfigDoesNotCallAI(t *testing.T) {
 	}
 	if state.Status != models.AITaggingStateStatusSkipped || state.SkipReason != "config_unavailable" {
 		t.Fatalf("状态错误: %#v", state)
+	}
+}
+
+func TestFindUntaggedVideosSkipsPendingCandidatesAndCompletedStates(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
+
+	pendingVideo := models.Video{Name: "pending.mp4", Path: "/tmp/pending.mp4", Directory: "/tmp"}
+	completedVideo := models.Video{Name: "completed.mp4", Path: "/tmp/completed.mp4", Directory: "/tmp"}
+	nextVideo := models.Video{Name: "next.mp4", Path: "/tmp/next.mp4", Directory: "/tmp"}
+	for _, video := range []*models.Video{&pendingVideo, &completedVideo, &nextVideo} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatalf("创建视频失败: %v", err)
+		}
+	}
+	if err := database.DB.Create(&models.AITagCandidate{
+		VideoID:        pendingVideo.ID,
+		SuggestedName:  "剧情",
+		NormalizedName: "剧情",
+		Confidence:     models.AITagConfidenceHigh,
+		Status:         models.AITagCandidateStatusPending,
+	}).Error; err != nil {
+		t.Fatalf("创建待审候选失败: %v", err)
+	}
+	if err := database.DB.Create(&models.AITaggingState{
+		VideoID: completedVideo.ID,
+		Status:  models.AITaggingStateStatusCompleted,
+	}).Error; err != nil {
+		t.Fatalf("创建已完成状态失败: %v", err)
+	}
+
+	videos, err := svc.findUntaggedVideos(10)
+	if err != nil {
+		t.Fatalf("查询未打标签视频失败: %v", err)
+	}
+	if len(videos) != 1 || videos[0].ID != nextVideo.ID {
+		t.Fatalf("应只返回尚未分析的视频，实际: %#v", videos)
 	}
 }
 

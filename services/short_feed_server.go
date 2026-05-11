@@ -343,6 +343,7 @@ func (s *ShortFeedHTTPServer) handleMedia(w http.ResponseWriter, r *http.Request
 	if media.MIME != "" {
 		w.Header().Set("Content-Type", media.MIME)
 	}
+	w.Header().Set("Cache-Control", "private, max-age=300")
 	http.ServeContent(w, r, media.DisplayName, media.ModTime, file)
 }
 

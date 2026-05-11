@@ -116,6 +116,96 @@ func TestScanDirectorySkipsTrashTempSuffixAndRecentlyActiveFiles(t *testing.T) {
 	}
 }
 
+func TestScanDirectorySkipsTypeScriptSourceWhenTsExtensionEnabled(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("video_extensions", ".ts,.mp4").Error; err != nil {
+		t.Fatalf("更新扩展名设置失败: %v", err)
+	}
+	svc := &VideoService{}
+	root := t.TempDir()
+	oldTime := time.Now().Add(-10 * time.Minute)
+	sourcePath := filepath.Join(root, "node_modules", "pkg", "types.ts")
+	declarationPath := filepath.Join(root, "node_modules", "pkg", "index.d.ts")
+	mediaPath := filepath.Join(root, "capture.ts")
+	mustCreateFile(t, sourcePath)
+	mustCreateFile(t, declarationPath)
+	mustCreateFile(t, mediaPath)
+	mustSetFileModTime(t, sourcePath, oldTime)
+	mustSetFileModTime(t, declarationPath, oldTime)
+	mustSetFileModTime(t, mediaPath, oldTime)
+
+	files, err := svc.ScanDirectory(root)
+	if err != nil {
+		t.Fatalf("扫描失败: %v", err)
+	}
+	if len(files) != 1 || files[0] != mediaPath {
+		t.Fatalf("应跳过 TypeScript 源码，只保留视频 TS，实际 files=%v", files)
+	}
+}
+
+func TestScanDirectoryWithInfoReturnsErrorForMissingRoot(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	_, err := svc.ScanDirectoryWithInfo(filepath.Join(t.TempDir(), "missing"))
+	if err == nil {
+		t.Fatalf("缺失的扫描根目录不应被当作空目录处理")
+	}
+}
+
+func TestSyncScanDirectoriesAddsAndRelocatesPreservingTags(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	oldTime := time.Now().Add(-10 * time.Minute)
+
+	newVideoPath := filepath.Join(root, "incoming", "new.mp4")
+	movedOldPath := filepath.Join(root, "old", "movie.mp4")
+	movedNewPath := filepath.Join(root, "new", "movie.mp4")
+	mustCreateFile(t, newVideoPath)
+	mustCreateFile(t, movedNewPath)
+	mustSetFileModTime(t, newVideoPath, oldTime)
+	mustSetFileModTime(t, movedNewPath, oldTime)
+
+	tag := models.Tag{Name: "keep", Color: "#fff"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	movedVideo := models.Video{
+		Name:      "movie.mp4",
+		Path:      movedOldPath,
+		Directory: filepath.Dir(movedOldPath),
+		Size:      1,
+	}
+	if err := database.DB.Create(&movedVideo).Error; err != nil {
+		t.Fatalf("创建待迁移视频失败: %v", err)
+	}
+	if err := database.DB.Model(&movedVideo).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("绑定标签失败: %v", err)
+	}
+
+	result := svc.SyncScanDirectories([]models.ScanDirectory{{Path: root, Alias: "root"}})
+	if result.Relocated != 1 || result.Added != 1 || result.Deleted != 0 {
+		t.Fatalf("同步结果错误: %#v", result)
+	}
+
+	var loadedMoved models.Video
+	if err := database.DB.Preload("Tags").First(&loadedMoved, movedVideo.ID).Error; err != nil {
+		t.Fatalf("读取迁移后视频失败: %v", err)
+	}
+	if loadedMoved.Path != movedNewPath || loadedMoved.Directory != filepath.Dir(movedNewPath) {
+		t.Fatalf("迁移路径错误: got path=%s dir=%s", loadedMoved.Path, loadedMoved.Directory)
+	}
+	if len(loadedMoved.Tags) != 1 || loadedMoved.Tags[0].ID != tag.ID {
+		t.Fatalf("迁移后应保留标签，实际 %#v", loadedMoved.Tags)
+	}
+
+	var added models.Video
+	if err := database.DB.Where("path = ?", newVideoPath).First(&added).Error; err != nil {
+		t.Fatalf("新文件未入库: %v", err)
+	}
+}
+
 func TestDeleteVideoMovesFileToTrashWhenDeleteFileEnabled(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
@@ -153,6 +243,42 @@ func TestDeleteVideoMovesFileToTrashWhenDeleteFileEnabled(t *testing.T) {
 	}
 	if !deleted.DeletedAt.IsValid() {
 		t.Fatalf("期望视频记录已被软删除")
+	}
+}
+
+func TestBatchDeleteVideosReportsPartialFailures(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+
+	videoAPath := filepath.Join(root, "a.mp4")
+	videoBPath := filepath.Join(root, "b.mp4")
+	mustCreateFile(t, videoAPath)
+	mustCreateFile(t, videoBPath)
+
+	videoA := models.Video{Name: "a.mp4", Path: videoAPath, Directory: root, Size: 1}
+	videoB := models.Video{Name: "b.mp4", Path: videoBPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&videoA).Error; err != nil {
+		t.Fatalf("创建视频A失败: %v", err)
+	}
+	if err := database.DB.Create(&videoB).Error; err != nil {
+		t.Fatalf("创建视频B失败: %v", err)
+	}
+
+	result := svc.BatchDeleteVideos([]uint{videoA.ID, 999999, videoB.ID}, false)
+	if result.Requested != 3 || result.Succeeded != 2 || result.Failed != 1 {
+		t.Fatalf("批量删除结果错误: %#v", result)
+	}
+	if len(result.Errors) != 1 || result.Errors[0].VideoID != 999999 {
+		t.Fatalf("期望记录失败视频ID，实际 %#v", result.Errors)
+	}
+
+	var remaining int64
+	if err := database.DB.Model(&models.Video{}).Where("id IN ?", []uint{videoA.ID, videoB.ID}).Count(&remaining).Error; err != nil {
+		t.Fatalf("统计剩余视频失败: %v", err)
+	}
+	if remaining != 0 {
+		t.Fatalf("期望成功项已被软删除，剩余 %d", remaining)
 	}
 }
 
@@ -225,6 +351,74 @@ func TestBatchAddTagToVideosReportsPartialFailures(t *testing.T) {
 	}
 	if len(loaded.Tags) != 1 || loaded.Tags[0].ID != tag.ID {
 		t.Fatalf("期望视频A已打标签，实际 %#v", loaded.Tags)
+	}
+}
+
+func TestAddTagToVideoIsIdempotent(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	tag := models.Tag{Name: "idempotent", Color: "#fff"}
+	video := models.Video{Name: "idempotent.mp4", Path: "/tmp/idempotent.mp4", Directory: "/tmp", Size: 1}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	if err := svc.AddTagToVideo(video.ID, tag.ID); err != nil {
+		t.Fatalf("首次添加标签失败: %v", err)
+	}
+	if err := svc.AddTagToVideo(video.ID, tag.ID); err != nil {
+		t.Fatalf("重复添加标签应保持幂等，实际失败: %v", err)
+	}
+
+	var count int64
+	if err := database.DB.Table("video_tags").
+		Where("video_id = ? AND tag_id = ?", video.ID, tag.ID).
+		Count(&count).Error; err != nil {
+		t.Fatalf("统计视频标签失败: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("重复添加后应只有 1 条关联，实际 %d", count)
+	}
+}
+
+func TestBatchRemoveTagFromVideosReportsPartialFailures(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	tag := models.Tag{Name: "batch-remove", Color: "#fff"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	videoA := models.Video{Name: "a.mp4", Path: "/tmp/batch-remove-a.mp4", Directory: "/tmp", Size: 1}
+	videoB := models.Video{Name: "b.mp4", Path: "/tmp/batch-remove-b.mp4", Directory: "/tmp", Size: 1}
+	if err := database.DB.Create(&videoA).Error; err != nil {
+		t.Fatalf("创建视频A失败: %v", err)
+	}
+	if err := database.DB.Create(&videoB).Error; err != nil {
+		t.Fatalf("创建视频B失败: %v", err)
+	}
+	if err := database.DB.Model(&videoA).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("视频A添加标签失败: %v", err)
+	}
+	if err := database.DB.Model(&videoB).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("视频B添加标签失败: %v", err)
+	}
+
+	result := svc.BatchRemoveTagFromVideos([]uint{videoA.ID, 999999, videoB.ID}, tag.ID)
+	if result.Requested != 3 || result.Succeeded != 2 || result.Failed != 1 {
+		t.Fatalf("批量移除结果错误: %#v", result)
+	}
+
+	var loaded models.Video
+	if err := database.DB.Preload("Tags").First(&loaded, videoA.ID).Error; err != nil {
+		t.Fatalf("读取视频标签失败: %v", err)
+	}
+	if len(loaded.Tags) != 0 {
+		t.Fatalf("期望视频A标签已移除，实际 %#v", loaded.Tags)
 	}
 }
 
