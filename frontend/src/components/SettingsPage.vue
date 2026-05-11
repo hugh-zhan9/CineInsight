@@ -73,7 +73,87 @@
       <div v-if="shortFeedStatus && shortFeedStatus.lan_urls && shortFeedStatus.lan_urls.length" class="short-feed-lan-list">
         <div v-for="url in shortFeedStatus.lan_urls" :key="url" class="short-feed-url">{{ url }}</div>
       </div>
+      <div class="setting-item short-feed-duration-setting">
+        <label>短视频时长上限（分钟）</label>
+        <input
+          type="number"
+          v-model.number="settingsForm.short_feed_max_duration_minutes"
+          min="1"
+          max="180"
+          step="1"
+          class="number-input"
+        />
+        <p class="help-text">只有时长小于此上限的视频会进入手机短视频，默认 5 分钟。</p>
+      </div>
       <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
+    </div>
+
+    <div class="settings-section">
+      <h3>AI 标签</h3>
+      <div class="setting-item">
+        <label>接口地址</label>
+        <input
+          type="text"
+          v-model.trim="settingsForm.ai_tagging_base_url"
+          placeholder="https://api.openai.com/v1 或 http://127.0.0.1:1234/v1"
+          class="text-input"
+        />
+      </div>
+      <div class="setting-item">
+        <label>API Key</label>
+        <input
+          type="password"
+          v-model="settingsForm.ai_tagging_api_key"
+          placeholder="本地 LM Studio 可留空；云端接口填写 API Key"
+          class="text-input"
+          autocomplete="off"
+        />
+      </div>
+      <div class="setting-item">
+        <label>模型</label>
+        <input
+          type="text"
+          v-model.trim="settingsForm.ai_tagging_model"
+          placeholder="支持图像理解的模型"
+          class="text-input"
+        />
+      </div>
+      <div class="setting-grid">
+        <div class="setting-item">
+          <label>抽帧数量</label>
+          <input
+            type="number"
+            v-model.number="settingsForm.ai_tagging_frame_count"
+            min="1"
+            max="8"
+            step="1"
+            class="number-input"
+          />
+        </div>
+        <div class="setting-item">
+          <label>字幕字符上限</label>
+          <input
+            type="number"
+            v-model.number="settingsForm.ai_tagging_subtitle_char_limit"
+            min="200"
+            max="12000"
+            step="100"
+            class="number-input"
+          />
+        </div>
+        <div class="setting-item">
+          <label>后台批量数量</label>
+          <input
+            type="number"
+            v-model.number="settingsForm.ai_tagging_startup_batch_size"
+            min="1"
+            max="100"
+            step="1"
+            class="number-input"
+          />
+        </div>
+      </div>
+      <p class="help-text">保存后后台会自动使用新配置；本地 LM Studio 通常可用 http://127.0.0.1:1234/v1，API Key 可填任意非空值。</p>
     </div>
 
     <!-- 智能随机播放设置 -->
@@ -224,6 +304,10 @@ export default {
         if (!this.settingsForm.video_extensions || this.settingsForm.video_extensions.trim() === '') {
           this.settingsForm.video_extensions = '.mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt';
         }
+        this.settingsForm.ai_tagging_frame_count = this.settingsForm.ai_tagging_frame_count || 5;
+        this.settingsForm.ai_tagging_subtitle_char_limit = this.settingsForm.ai_tagging_subtitle_char_limit || 4000;
+        this.settingsForm.ai_tagging_startup_batch_size = this.settingsForm.ai_tagging_startup_batch_size || 10;
+        this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
       },
       immediate: true,
       deep: true
@@ -272,11 +356,18 @@ export default {
           video_extensions: this.settingsForm.video_extensions,
           play_weight: this.settingsForm.play_weight,
           auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
+          short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
           theme: this.settingsForm.theme,
           log_enabled: this.settingsForm.log_enabled,
           bilingual_enabled: this.settingsForm.bilingual_enabled || false,
           bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
-          deepl_api_key: this.settingsForm.deepl_api_key || ''
+          deepl_api_key: this.settingsForm.deepl_api_key || '',
+          ai_tagging_base_url: this.settingsForm.ai_tagging_base_url || '',
+          ai_tagging_api_key: this.settingsForm.ai_tagging_api_key || '',
+          ai_tagging_model: this.settingsForm.ai_tagging_model || '',
+          ai_tagging_frame_count: this.settingsForm.ai_tagging_frame_count || 5,
+          ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
+          ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10
         });
         this.$emit('settings-saved', { ...this.settingsForm });
         alert('设置保存成功！');

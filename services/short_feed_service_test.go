@@ -94,6 +94,54 @@ func TestShortFeedSelectionUsesCappedWeakRecommendation(t *testing.T) {
 	}
 }
 
+func TestShortFeedUsesConfiguredMaxDuration(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	inRange := createShortFeedVideo(t, root, "eight-minutes.mp4", 8*60, false)
+	createShortFeedVideo(t, root, "eleven-minutes.mp4", 11*60, false)
+
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").
+		Update("short_feed_max_duration_minutes", 10).Error; err != nil {
+		t.Fatalf("更新短视频时长设置失败: %v", err)
+	}
+
+	svc := NewShortFeedService(&VideoService{})
+	next, err := svc.NextVideo(nil)
+	if err != nil {
+		t.Fatalf("获取下一个视频失败: %v", err)
+	}
+	if next.ID != inRange.ID {
+		t.Fatalf("应只选中配置范围内的视频，got=%d want=%d", next.ID, inRange.ID)
+	}
+}
+
+func TestShortFeedSkipsMissingFilesBeforeReturningNextVideo(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	missing := createShortFeedVideo(t, root, "missing.mp4", 60, false)
+	existing := createShortFeedVideo(t, root, "existing.mp4", 70, false)
+	if err := os.Remove(missing.Path); err != nil {
+		t.Fatalf("删除测试视频失败: %v", err)
+	}
+
+	svc := NewShortFeedService(&VideoService{})
+	next, err := svc.NextVideo(nil)
+	if err != nil {
+		t.Fatalf("获取下一个视频失败: %v", err)
+	}
+	if next.ID != existing.ID {
+		t.Fatalf("应跳过缺失文件并返回存在的视频，got=%d want=%d", next.ID, existing.ID)
+	}
+
+	var reloaded models.Video
+	if err := database.DB.First(&reloaded, missing.ID).Error; err != nil {
+		t.Fatalf("读取缺失视频记录失败: %v", err)
+	}
+	if !reloaded.IsStale {
+		t.Fatalf("缺失文件应被标记为 stale")
+	}
+}
+
 func TestShortFeedLikeFavoriteDoNotPolluteCanonicalTags(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()

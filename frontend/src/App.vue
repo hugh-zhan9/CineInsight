@@ -56,7 +56,7 @@
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import { logFrontend } from './utils/frontendLog.js';
@@ -102,7 +102,7 @@ export default {
     });
 
     if (this.settings.auto_scan_on_startup && this.directories.length > 0) {
-      setTimeout(() => this.incrementalScanAll(), 0);
+      this.incrementalScanAll();
     }
   },
   watch: {
@@ -160,19 +160,14 @@ export default {
       this.directories = newDirectories;
     },
     async incrementalScanAll() {
-      const { ScanDirectoryWithInfo, AddVideo, DeleteVideo, RelocateVideo, GetVideosByDirectory, RefreshVideoMetadata } = await import('../wailsjs/go/main/App');
-      for (const dir of this.directories) {
-        try {
-          const scannedFiles = await ScanDirectoryWithInfo(dir.path);
-          const existingVideos = await GetVideosByDirectory(dir.path);
-          const scannedMap = new Map();
-          for (const f of scannedFiles) scannedMap.set(f.path, f);
-          for (const video of existingVideos) {
-            if (scannedMap.has(video.path) && (video.duration === 0 || !video.resolution || !video.height)) {
-              RefreshVideoMetadata(video.id).catch(() => {});
-            }
-          }
-        } catch (err) {}
+      try {
+        const result = await SyncScanDirectories();
+        this.debugLog('incrementalScanAll resolved', result);
+        if ((result?.added || 0) > 0 || (result?.deleted || 0) > 0 || (result?.relocated || 0) > 0 || (result?.metadata_refreshed || 0) > 0) {
+          await this.loadDirectories();
+        }
+      } catch (err) {
+        this.debugLog('incrementalScanAll failed', { err: String(err) }, true);
       }
     }
   }
@@ -220,7 +215,7 @@ html, body {
   overflow: hidden;
 }
 
-#app { height: 100vh; display: flex; flex-direction: column; }
+#app { height: 100vh; min-height: 0; display: flex; flex-direction: column; }
 
 /* --- Header --- */
 .header {
@@ -240,7 +235,7 @@ html, body {
 .nav-btn.active { color: var(--accent-color); border-bottom-color: var(--accent-color); }
 .nav-btn:hover:not(.active) { color: var(--text-primary); background: rgba(0,0,0,0.02); }
 
-.main-view { flex: 1; overflow-y: auto; display: flex; flex-direction: column; }
+.main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .startup-error-view {
   flex: 1;
   display: flex;
@@ -291,6 +286,12 @@ html, body {
 .btn-primary { background: var(--accent-color); color: #0f172a; }
 .btn-secondary { background: transparent; border: 1px solid var(--border-color); color: var(--text-primary); }
 .btn-random { background: #f59e0b; color: white; }
+.btn-danger { background: var(--danger-color); color: white; }
+.btn-danger:hover:not(:disabled) { background: var(--danger-hover); }
+.btn-primary:disabled, .btn-secondary:disabled, .btn-random:disabled, .btn-danger:disabled, .btn-action:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 /* --- Video Card & List --- */
 .page-content { padding: 24px; max-width: 1440px; margin: 0 auto; width: 100%; transition: padding-right 0.2s ease; }
@@ -305,6 +306,9 @@ html, body {
   display: flex; align-items: center; transition: var(--transition);
 }
 .video-item:hover { border-color: var(--accent-color); transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.05); }
+.video-item--selected { border-color: var(--accent-color); background: rgba(20, 184, 166, 0.08); }
+.video-select { width: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: flex-start; }
+.video-select input { width: 16px; height: 16px; accent-color: var(--accent-color); }
 .video-info { flex: 1; min-width: 0; }
 .video-info h3 { font-size: 15px; font-weight: 600; color: var(--text-primary); margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .video-path { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -330,26 +334,26 @@ html, body {
 }
 
 /* --- Tags --- */
-.tags-filter { padding: 12px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 24px; }
+.tags-filter { padding: 8px 0; border-bottom: 1px solid var(--border-color); margin-bottom: 16px; }
 .tags-scroll-container {
   display: flex;
-  gap: 8px;
+  gap: 5px;
   flex-wrap: wrap;
   overflow: visible;
   padding-bottom: 0;
   align-items: flex-start;
 }
 .tag-chip {
-  height: 28px; padding: 0 12px; border-radius: 14px; font-size: 12px;
+  height: 24px; padding: 0 8px; border-radius: 12px; font-size: 11px;
   background: var(--border-color); color: var(--text-primary);
   display: inline-flex; align-items: center; gap: 6px; border: 1px solid transparent; cursor: pointer;
-  appearance: none; -webkit-appearance: none; font: inherit; line-height: 1; white-space: nowrap;
+  appearance: none; -webkit-appearance: none; line-height: 1; white-space: nowrap;
   flex: 0 0 auto; vertical-align: middle;
 }
 .tag-chip.active { border-color: var(--text-primary); font-weight: 600; }
-.tag-chip-wrap { max-width: 220px; }
+.tag-chip-wrap { max-width: 160px; }
 .tag-chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tag-chip-check { flex: 0 0 auto; font-size: 11px; }
+.tag-chip-check { flex: 0 0 auto; font-size: 10px; }
 
 .tag-badge, .btn-add-tag { height: 24px; padding: 0 10px; border-radius: 6px; font-size: 11px; display: inline-flex; align-items: center; gap: 4px; font-weight: 600; }
 .tag-badge { border: 1px solid rgba(0,0,0,0.1); color: var(--text-primary); }
@@ -370,7 +374,13 @@ input:checked + .slider:before { transform: translateX(16px); }
 .setting-item { margin-bottom: 24px; }
 .setting-item label { display: block; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .setting-item label.switch { display: inline-flex; margin-bottom: 0; font-weight: 400; }
+.setting-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 16px; }
+.setting-grid .setting-item { margin-bottom: 0; }
 .help-text { font-size: 12px; color: var(--text-secondary); margin-top: 8px; line-height: 1.5; }
+
+@media (max-width: 760px) {
+  .setting-grid { grid-template-columns: 1fr; }
+}
 
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
 .modal { background: var(--panel-bg); padding: 32px; border-radius: 12px; width: 100%; max-width: 500px; border: 1px solid var(--border-color); box-shadow: 0 20px 25px -5px rgba(0,0,0,0.2); color: var(--text-primary); }

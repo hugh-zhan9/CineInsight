@@ -3,11 +3,12 @@ package services
 import "time"
 
 const (
-	ShortFeedMaxDurationSeconds = 300.0
-	ShortFeedPreferenceBoostCap = 0.5
-	ShortFeedPreferenceStep     = 0.25
-	DefaultShortFeedPortStart   = 18088
-	DefaultShortFeedPortEnd     = 18108
+	DefaultShortFeedMaxDurationMinutes = 5
+	defaultShortFeedMaxDurationSeconds = 300.0
+	ShortFeedPreferenceBoostCap        = 0.5
+	ShortFeedPreferenceStep            = 0.25
+	DefaultShortFeedPortStart          = 18088
+	DefaultShortFeedPortEnd            = 18108
 )
 
 type ShortFeedTagDTO struct {

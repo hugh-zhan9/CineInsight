@@ -129,12 +129,16 @@ func Init() error {
 		// 默认支持的视频格式
 		defaultExts := ".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
 		settings = models.Settings{
-			ConfirmBeforeDelete: true,
-			DeleteOriginalFile:  false,
-			VideoExtensions:     defaultExts,
-			PlayWeight:          2.0, // 默认 1次播放 = 2次随机播放
-			AutoScanOnStartup:   false,
-			LogEnabled:          false,
+			ConfirmBeforeDelete:         true,
+			DeleteOriginalFile:          false,
+			VideoExtensions:             defaultExts,
+			PlayWeight:                  2.0, // 默认 1次播放 = 2次随机播放
+			AutoScanOnStartup:           false,
+			ShortFeedMaxDurationMinutes: 5,
+			LogEnabled:                  false,
+			AITaggingFrameCount:         2,
+			AITaggingSubtitleCharLimit:  4000,
+			AITaggingStartupBatchSize:   10,
 		}
 		db.Create(&settings)
 	}

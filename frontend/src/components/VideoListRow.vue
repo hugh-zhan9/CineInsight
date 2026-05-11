@@ -1,8 +1,16 @@
 <template>
   <div
-    class="video-item"
+    :class="['video-item', { 'video-item--selected': selected }]"
     @contextmenu.prevent="$emit('contextmenu', $event, video)"
   >
+    <label class="video-select" @click.stop>
+      <input
+        type="checkbox"
+        :checked="selected"
+        :aria-label="`选择 ${video.name}`"
+        @change="$emit('toggle-select', video, $event.target.checked)"
+      />
+    </label>
     <div class="video-info">
       <h3>{{ video.name }}</h3>
       <p class="video-path">{{ getDirectoryLabel(video) }}</p>
@@ -56,9 +64,10 @@ export default {
     video: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
     generatingSubtitleIds: { type: Array, default: () => [] },
-    deletingIds: { type: Array, default: () => [] }
+    deletingIds: { type: Array, default: () => [] },
+    selected: { type: Boolean, default: false }
   },
-  emits: ['preview', 'play', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu'],
+  emits: ['preview', 'play', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
   methods: {
     tagBgColor(hex) {
       if (!hex || !hex.startsWith('#')) return hex;

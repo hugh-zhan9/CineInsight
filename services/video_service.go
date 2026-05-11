@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 	"video-master/database"
@@ -38,6 +39,34 @@ type BatchVideoOperationResult struct {
 	Succeeded int                        `json:"succeeded"`
 	Failed    int                        `json:"failed"`
 	Errors    []BatchVideoOperationError `json:"errors"`
+}
+
+type ScanSyncError struct {
+	Operation string `json:"operation"`
+	Directory string `json:"directory,omitempty"`
+	Path      string `json:"path,omitempty"`
+	Error     string `json:"error"`
+}
+
+type ScanSyncResult struct {
+	Directories       int             `json:"directories"`
+	Scanned           int             `json:"scanned"`
+	Added             int             `json:"added"`
+	Deleted           int             `json:"deleted"`
+	Relocated         int             `json:"relocated"`
+	MetadataRefreshed int             `json:"metadata_refreshed"`
+	Skipped           int             `json:"skipped"`
+	Errors            []ScanSyncError `json:"errors"`
+}
+
+func (r *ScanSyncResult) recordError(operation, directory, path string, err error) {
+	r.Skipped++
+	r.Errors = append(r.Errors, ScanSyncError{
+		Operation: operation,
+		Directory: directory,
+		Path:      path,
+		Error:     err.Error(),
+	})
 }
 
 // GetAllVideos 获取所有视频（已废弃，使用分页方式）
@@ -272,6 +301,9 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 	if err != nil {
 		return nil, fmt.Errorf("文件不存在: %w", err)
 	}
+	if isKnownNonVideoSourcePath(path) {
+		return nil, fmt.Errorf("不是视频文件: %s", path)
+	}
 
 	// 检查是否已存在
 	var existingVideo models.Video
@@ -444,6 +476,17 @@ type ScannedFile struct {
 // ScanDirectoryWithInfo 扫描目录获取视频文件（附带文件大小）
 func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) {
 	var videoFiles []ScannedFile
+	dir = filepath.Clean(strings.TrimSpace(dir))
+	if dir == "" || dir == "." {
+		return nil, fmt.Errorf("扫描根目录为空")
+	}
+	rootInfo, err := os.Stat(dir)
+	if err != nil {
+		return nil, fmt.Errorf("扫描根目录不可用: %w", err)
+	}
+	if !rootInfo.IsDir() {
+		return nil, fmt.Errorf("扫描根路径不是目录: %s", dir)
+	}
 
 	// 从设置中获取支持的视频格式
 	var settings models.Settings
@@ -466,7 +509,7 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 		}
 	}
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // 跳过错误的文件
 		}
@@ -485,7 +528,7 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 			return nil
 		}
 
-		if isTrashPath(path) || hasTempVideoSuffix(path) || isRecentlyActiveFile(info) {
+		if isTrashPath(path) || hasTempVideoSuffix(path) || isRecentlyActiveFile(info) || isKnownNonVideoSourcePath(path) {
 			return nil
 		}
 
@@ -502,6 +545,184 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 	log.Printf("扫描目录完成 dir=%s files=%d", dir, len(videoFiles))
 
 	return videoFiles, err
+}
+
+type scanFileFingerprint struct {
+	Name string
+	Size int64
+}
+
+func fingerprintScannedFile(file ScannedFile) scanFileFingerprint {
+	return scanFileFingerprint{Name: filepath.Base(file.Path), Size: file.Size}
+}
+
+func fingerprintVideo(video models.Video) scanFileFingerprint {
+	return scanFileFingerprint{Name: video.Name, Size: video.Size}
+}
+
+// SyncScanDirectories performs an incremental database sync for configured scan directories.
+func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyncResult {
+	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
+	scannedByPath := make(map[string]ScannedFile)
+	existingByPath := make(map[string]models.Video)
+	roots := make([]string, 0, len(dirs))
+	allExisting := make([]models.Video, 0)
+	duplicateVideos := make([]models.Video, 0)
+
+	for _, dir := range dirs {
+		root := filepath.Clean(strings.TrimSpace(dir.Path))
+		if root == "" || root == "." {
+			result.recordError("scan", dir.Path, "", fmt.Errorf("扫描目录为空"))
+			continue
+		}
+		result.Directories++
+
+		scannedFiles, err := s.ScanDirectoryWithInfo(root)
+		if err != nil {
+			result.recordError("scan", root, "", err)
+			continue
+		}
+		roots = append(roots, root)
+		result.Scanned += len(scannedFiles)
+		for _, file := range scannedFiles {
+			scannedByPath[file.Path] = file
+		}
+	}
+
+	loadedExisting, err := s.getActiveVideosUnderRoots(roots)
+	if err != nil {
+		result.recordError("load_existing", "", "", err)
+	} else {
+		for _, video := range loadedExisting {
+			if !videoBelongsToRoots(video, roots) {
+				continue
+			}
+			if kept, exists := existingByPath[video.Path]; exists {
+				if video.ID != kept.ID {
+					duplicateVideos = append(duplicateVideos, video)
+				}
+				continue
+			}
+			existingByPath[video.Path] = video
+			allExisting = append(allExisting, video)
+		}
+	}
+
+	missingVideos := make([]models.Video, 0)
+	for _, video := range allExisting {
+		if _, exists := scannedByPath[video.Path]; !exists {
+			missingVideos = append(missingVideos, video)
+			continue
+		}
+		if video.Duration == 0 || video.Resolution == "" || video.Height == 0 {
+			if err := s.RefreshVideoMetadata(video.ID); err != nil {
+				result.recordError("refresh_metadata", video.Directory, video.Path, err)
+			} else {
+				result.MetadataRefreshed++
+			}
+		}
+	}
+
+	newFiles := make([]ScannedFile, 0)
+	for _, file := range scannedByPath {
+		if _, exists := existingByPath[file.Path]; !exists {
+			newFiles = append(newFiles, file)
+		}
+	}
+
+	sortScannedFiles(newFiles)
+	relocatedVideoIDs := make(map[uint]struct{})
+	consumedNewPaths := make(map[string]struct{})
+	missingByFingerprint := make(map[scanFileFingerprint][]models.Video)
+	newFileCounts := make(map[scanFileFingerprint]int)
+	for _, video := range missingVideos {
+		missingByFingerprint[fingerprintVideo(video)] = append(missingByFingerprint[fingerprintVideo(video)], video)
+	}
+	for _, file := range newFiles {
+		newFileCounts[fingerprintScannedFile(file)]++
+	}
+
+	for _, file := range newFiles {
+		key := fingerprintScannedFile(file)
+		candidates := missingByFingerprint[key]
+		if len(candidates) != 1 || newFileCounts[key] != 1 {
+			continue
+		}
+		video := candidates[0]
+		if _, used := relocatedVideoIDs[video.ID]; used {
+			continue
+		}
+		if err := s.RelocateVideo(video.ID, file.Path); err != nil {
+			result.recordError("relocate", video.Directory, file.Path, err)
+			continue
+		}
+		result.Relocated++
+		relocatedVideoIDs[video.ID] = struct{}{}
+		consumedNewPaths[file.Path] = struct{}{}
+	}
+
+	for _, file := range newFiles {
+		if _, consumed := consumedNewPaths[file.Path]; consumed {
+			continue
+		}
+		if _, err := s.AddVideo(file.Path); err != nil {
+			if errors.Is(err, ErrVideoExists) {
+				result.Skipped++
+				continue
+			}
+			result.recordError("add", filepath.Dir(file.Path), file.Path, err)
+			continue
+		}
+		result.Added++
+	}
+
+	for _, video := range append(duplicateVideos, missingVideos...) {
+		if _, relocated := relocatedVideoIDs[video.ID]; relocated {
+			continue
+		}
+		if err := s.DeleteVideo(video.ID, false); err != nil {
+			result.recordError("delete", video.Directory, video.Path, err)
+			continue
+		}
+		result.Deleted++
+	}
+
+	log.Printf("增量扫描同步完成 dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d",
+		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors))
+	return result
+}
+
+func (s *VideoService) getActiveVideosUnderRoots(roots []string) ([]models.Video, error) {
+	if len(roots) == 0 {
+		return []models.Video{}, nil
+	}
+	var videos []models.Video
+	if err := database.DB.Preload("Tags").Find(&videos).Error; err != nil {
+		return nil, err
+	}
+	filtered := videos[:0]
+	for _, video := range videos {
+		if videoBelongsToRoots(video, roots) {
+			filtered = append(filtered, video)
+		}
+	}
+	return filtered, nil
+}
+
+func videoBelongsToRoots(video models.Video, roots []string) bool {
+	for _, root := range roots {
+		prefix := root + string(os.PathSeparator)
+		if video.Directory == root || strings.HasPrefix(video.Directory, prefix) || strings.HasPrefix(video.Path, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortScannedFiles(files []ScannedFile) {
+	sort.Slice(files, func(i, j int) bool {
+		return files[i].Path < files[j].Path
+	})
 }
 
 func shouldSkipHiddenPath(info os.FileInfo) bool {
@@ -530,6 +751,39 @@ func hasTempVideoSuffix(path string) bool {
 	stem := strings.TrimSuffix(baseName, ext)
 	for _, suffix := range tempVideoStemSuffixes {
 		if stem == strings.TrimPrefix(suffix, ".") || strings.HasSuffix(stem, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func isKnownNonVideoSourcePath(path string) bool {
+	baseName := strings.ToLower(filepath.Base(path))
+	if strings.HasSuffix(baseName, ".d.ts") || strings.HasSuffix(baseName, ".d.tsx") {
+		return true
+	}
+	ext := strings.ToLower(filepath.Ext(baseName))
+	if ext != ".ts" && ext != ".tsx" {
+		return false
+	}
+	for _, part := range strings.Split(filepath.ToSlash(path), "/") {
+		if part == "node_modules" {
+			return true
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	sample := strings.ToLower(string(bytes.TrimSpace(data)))
+	if sample == "" {
+		return false
+	}
+	sourceMarkers := []string{
+		"export ", "import ", "interface ", "type ", "declare ", "namespace ", "const ", "let ", "var ", "function ", "class ",
+	}
+	for _, marker := range sourceMarkers {
+		if strings.Contains(sample, marker) {
 			return true
 		}
 	}

@@ -90,6 +90,10 @@ export function GetCleanupCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetCleanupCandidates'](arg1, arg2, arg3);
 }
 
+export function GetCleanupStatus() {
+  return window['go']['main']['App']['GetCleanupStatus']();
+}
+
 export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
 }
@@ -158,6 +162,10 @@ export function RejectAITagCandidate(arg1) {
   return window['go']['main']['App']['RejectAITagCandidate'](arg1);
 }
 
+export function RejectAITagCandidatesByVideo(arg1) {
+  return window['go']['main']['App']['RejectAITagCandidatesByVideo'](arg1);
+}
+
 export function RelocateVideo(arg1, arg2) {
   return window['go']['main']['App']['RelocateVideo'](arg1, arg2);
 }
@@ -200,6 +208,14 @@ export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7
 
 export function SelectDirectory() {
   return window['go']['main']['App']['SelectDirectory']();
+}
+
+export function StartCleanupAnalysis(arg1, arg2, arg3) {
+  return window['go']['main']['App']['StartCleanupAnalysis'](arg1, arg2, arg3);
+}
+
+export function SyncScanDirectories() {
+  return window['go']['main']['App']['SyncScanDirectories']();
 }
 
 export function UpdateDirectory(arg1, arg2, arg3) {

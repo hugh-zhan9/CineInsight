@@ -2,7 +2,7 @@
   <div v-if="visible" class="modal-overlay" @click="$emit('close')">
     <div class="modal" @click.stop>
       <h2>确认删除</h2>
-      <p>确定要删除视频 "{{ video?.name }}" 吗？</p>
+      <p>{{ confirmMessage }}</p>
       <div class="form-group">
         <label>
           <input type="checkbox" v-model="deleteFile" />
@@ -28,6 +28,7 @@ export default {
   props: {
     visible: { type: Boolean, default: false },
     video: { type: Object, default: null },
+    videoCount: { type: Number, default: 0 },
     settings: { type: Object, required: true }
   },
   emits: ['close', 'confirm-delete'],
@@ -43,6 +44,14 @@ export default {
         this.deleteFile = this.settings.delete_original_file;
         this.dontAskAgain = false;
       }
+    }
+  },
+  computed: {
+    confirmMessage() {
+      if (this.videoCount > 0) {
+        return `确定要删除选中的 ${this.videoCount} 个视频吗？`;
+      }
+      return `确定要删除视频 "${this.video?.name || ''}" 吗？`;
     }
   },
   methods: {

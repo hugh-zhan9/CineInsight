@@ -464,6 +464,12 @@ func (a *App) RejectAITagCandidate(candidateID uint) error {
 	return err
 }
 
+func (a *App) RejectAITagCandidatesByVideo(videoID uint) (int64, error) {
+	count, err := a.aiTaggingService.RejectPendingCandidatesByVideo(videoID)
+	log.Printf("API RejectAITagCandidatesByVideo videoID=%d rejected=%d err=%v", videoID, count, err)
+	return count, err
+}
+
 func (a *App) RetryAITagging(videoID uint) error {
 	err := a.aiTaggingService.RetryVideo(videoID)
 	log.Printf("API RetryAITagging videoID=%d err=%v", videoID, err)
@@ -519,6 +525,18 @@ func (a *App) UpdateDirectory(id uint, path, alias string) error {
 // DeleteDirectory 删除扫描目录
 func (a *App) DeleteDirectory(id uint) error {
 	return a.directoryService.DeleteDirectory(id)
+}
+
+func (a *App) SyncScanDirectories() (*services.ScanSyncResult, error) {
+	dirs, err := a.directoryService.GetAllDirectories()
+	if err != nil {
+		log.Printf("API SyncScanDirectories load dirs err=%v", err)
+		return nil, err
+	}
+	result := a.videoService.SyncScanDirectories(dirs)
+	log.Printf("API SyncScanDirectories dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d",
+		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors))
+	return result, nil
 }
 
 // ===== Subtitle Methods =====
@@ -631,6 +649,25 @@ func (a *App) GetCleanupCandidates(minDurationSeconds int, minWidth int, minHeig
 	return analysis, nil
 }
 
+func (a *App) StartCleanupAnalysis(minDurationSeconds int, minWidth int, minHeight int) (*services.CleanupStatus, error) {
+	criteria := services.CleanupCriteria{
+		MinDuration: time.Duration(minDurationSeconds) * time.Second,
+		MinWidth:    minWidth,
+		MinHeight:   minHeight,
+	}
+	status, err := a.cleanupService.StartAnalysis(criteria)
+	log.Printf("API StartCleanupAnalysis duration=%d width=%d height=%d running=%v completed=%v err=%v",
+		minDurationSeconds, minWidth, minHeight, status != nil && status.Running, status != nil && status.Completed, err)
+	return status, err
+}
+
+func (a *App) GetCleanupStatus() *services.CleanupStatus {
+	status := a.cleanupService.Status()
+	log.Printf("API GetCleanupStatus running=%v completed=%v hasAnalysis=%v err=%q",
+		status.Running, status.Completed, status.Analysis != nil, status.Error)
+	return status
+}
+
 func summarizeVideos(videos []models.Video, limit int) string {
 	if len(videos) == 0 {
 		return "[]"
@@ -689,12 +726,13 @@ func summarizeSettings(settings *models.Settings) string {
 	if settings == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("{id:%d theme:%q log_enabled:%v auto_scan:%v play_weight:%.2f bilingual:%v lang:%q}",
+	return fmt.Sprintf("{id:%d theme:%q log_enabled:%v auto_scan:%v play_weight:%.2f short_feed_max_minutes:%d bilingual:%v lang:%q}",
 		settings.ID,
 		settings.Theme,
 		settings.LogEnabled,
 		settings.AutoScanOnStartup,
 		settings.PlayWeight,
+		settings.ShortFeedMaxDurationMinutes,
 		settings.BilingualEnabled,
 		settings.BilingualLang,
 	)

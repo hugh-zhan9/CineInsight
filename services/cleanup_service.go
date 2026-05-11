@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -44,12 +45,83 @@ type CleanupProgress struct {
 	Path    string `json:"path"`
 }
 
+type CleanupStatus struct {
+	Running   bool             `json:"running"`
+	Completed bool             `json:"completed"`
+	Error     string           `json:"error"`
+	Progress  CleanupProgress  `json:"progress"`
+	Analysis  *CleanupAnalysis `json:"analysis,omitempty"`
+	StartedAt *time.Time       `json:"started_at,omitempty" ts_type:"string"`
+	UpdatedAt *time.Time       `json:"updated_at,omitempty" ts_type:"string"`
+}
+
 type CleanupService struct {
-	ctx context.Context
+	ctx    context.Context
+	mu     sync.Mutex
+	status CleanupStatus
 }
 
 func (s *CleanupService) SetContext(ctx context.Context) {
 	s.ctx = ctx
+}
+
+func (s *CleanupService) StartAnalysis(criteria CleanupCriteria) (*CleanupStatus, error) {
+	s.mu.Lock()
+	if s.status.Running {
+		status := s.statusSnapshotLocked()
+		s.mu.Unlock()
+		return &status, nil
+	}
+	now := time.Now()
+	s.status = CleanupStatus{
+		Running:   true,
+		Completed: false,
+		StartedAt: &now,
+		UpdatedAt: &now,
+		Progress: CleanupProgress{
+			Stage:   "load",
+			Message: "正在准备清理候选分析…",
+			Current: 0,
+			Total:   0,
+		},
+	}
+	status := s.statusSnapshotLocked()
+	s.mu.Unlock()
+
+	go func() {
+		analysis, err := s.AnalyzeCleanupCandidates(criteria)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		now := time.Now()
+		s.status.Running = false
+		s.status.Completed = err == nil
+		s.status.UpdatedAt = &now
+		if err != nil {
+			s.status.Error = err.Error()
+			s.status.Analysis = nil
+			return
+		}
+		s.status.Error = ""
+		s.status.Analysis = analysis
+	}()
+
+	return &status, nil
+}
+
+func (s *CleanupService) Status() *CleanupStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	status := s.statusSnapshotLocked()
+	return &status
+}
+
+func (s *CleanupService) statusSnapshotLocked() CleanupStatus {
+	status := s.status
+	if status.Analysis != nil {
+		analysisCopy := *status.Analysis
+		status.Analysis = &analysisCopy
+	}
+	return status
 }
 
 func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*CleanupAnalysis, error) {
@@ -58,23 +130,51 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	if err := database.DB.Order("id asc").Find(&videos).Error; err != nil {
 		return nil, err
 	}
+	videoService := &VideoService{}
 
 	log.Printf("[Cleanup] analysis started total_videos=%d criteria={min_duration=%s min_width=%d min_height=%d}",
 		len(videos), criteria.MinDuration, criteria.MinWidth, criteria.MinHeight,
 	)
-	s.emitProgress("load", len(videos), len(videos), "", fmt.Sprintf("已读取 %d 条视频记录，正在整理候选…", len(videos)))
+	s.emitProgress("load", 0, len(videos), "", fmt.Sprintf("已读取 %d 条视频记录，正在整理候选…", len(videos)))
 
 	result := &CleanupAnalysis{}
 	sizeBuckets := make(map[int64][]models.Video)
 
 	for idx, video := range videos {
-		if criteria.MinDuration > 0 && time.Duration(video.Duration*float64(time.Second)) < criteria.MinDuration {
-			result.LowDuration = append(result.LowDuration, video)
+		info, err := os.Stat(video.Path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				log.Printf("[Cleanup] skip missing video id=%d path=%s", video.ID, video.Path)
+			} else {
+				log.Printf("[Cleanup] skip unreadable video id=%d path=%s err=%v", video.ID, video.Path, err)
+			}
+			continue
 		}
-		if criteria.MinWidth > 0 && criteria.MinHeight > 0 && (video.Width < criteria.MinWidth || video.Height < criteria.MinHeight) {
-			result.LowResolution = append(result.LowResolution, video)
+		if info.IsDir() {
+			log.Printf("[Cleanup] skip directory video id=%d path=%s", video.ID, video.Path)
+			continue
 		}
-		sizeBuckets[video.Size] = append(sizeBuckets[video.Size], video)
+
+		workingVideo := video
+		freshDuration, freshResolution, freshWidth, freshHeight := videoService.getVideoMetadata(video.Path)
+		hasFreshMetadata := freshDuration > 0 && freshResolution != "" && freshWidth > 0 && freshHeight > 0
+		if hasFreshMetadata {
+			workingVideo.Duration = freshDuration
+			workingVideo.Resolution = freshResolution
+			workingVideo.Width = freshWidth
+			workingVideo.Height = freshHeight
+		} else {
+			log.Printf("[Cleanup] metadata unavailable for candidate id=%d path=%s", video.ID, video.Path)
+			continue
+		}
+
+		if hasFreshMetadata && criteria.MinDuration > 0 && time.Duration(workingVideo.Duration*float64(time.Second)) < criteria.MinDuration {
+			result.LowDuration = append(result.LowDuration, workingVideo)
+		}
+		if hasFreshMetadata && criteria.MinWidth > 0 && criteria.MinHeight > 0 && (workingVideo.Width < criteria.MinWidth || workingVideo.Height < criteria.MinHeight) {
+			result.LowResolution = append(result.LowResolution, workingVideo)
+		}
+		sizeBuckets[workingVideo.Size] = append(sizeBuckets[workingVideo.Size], workingVideo)
 
 		if shouldEmitCleanupProgress(idx+1, len(videos), 400) {
 			s.emitProgress("group", idx+1, len(videos), video.Path, "正在按文件大小聚合候选…")
@@ -149,16 +249,23 @@ func shouldEmitCleanupProgress(current int, total int, every int) bool {
 }
 
 func (s *CleanupService) emitProgress(stage string, current int, total int, currentPath string, message string) {
-	if s.ctx == nil {
-		return
-	}
-	wailsRuntime.EventsEmit(s.ctx, "cleanup-progress", CleanupProgress{
+	progress := CleanupProgress{
 		Stage:   stage,
 		Message: message,
 		Current: current,
 		Total:   total,
 		Path:    currentPath,
-	})
+	}
+	s.mu.Lock()
+	now := time.Now()
+	s.status.Progress = progress
+	s.status.UpdatedAt = &now
+	s.mu.Unlock()
+
+	if s.ctx == nil {
+		return
+	}
+	wailsRuntime.EventsEmit(s.ctx, "cleanup-progress", progress)
 }
 
 func buildDuplicateBucketKey(size int64, hash string) string {

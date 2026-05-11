@@ -28,7 +28,7 @@ type AITaggingService struct {
 
 func NewAITaggingService() *AITaggingService {
 	return &AITaggingService{
-		configProvider: EnvAITaggingConfigProvider{},
+		configProvider: SettingsAITaggingConfigProvider{},
 		clientFactory:  NewOpenAICompatibleAITaggingClient,
 		extractor:      NewAITaggingExtractor(),
 		now:            time.Now,
@@ -78,9 +78,17 @@ func (s *AITaggingService) workerLoop(ctx context.Context) {
 func (s *AITaggingService) runWorkerOnce(ctx context.Context) {
 	config, err := s.configProvider.Load()
 	if err != nil {
-		log.Printf("[AITagging] config unavailable; background worker idle")
+		log.Printf("[AITagging] config unavailable; background worker idle err=%v", err)
 		return
 	}
+	log.Printf("[AITagging] worker config base_url=%q model=%q frame_count=%d subtitle_char_limit=%d startup_batch_size=%d api_key_empty=%v",
+		config.BaseURL,
+		config.Model,
+		config.FrameCount,
+		config.SubtitleCharLimit,
+		config.StartupBatchSize,
+		strings.TrimSpace(config.APIKey) == "",
+	)
 	batchSize := config.StartupBatchSize
 	if batchSize <= 0 {
 		batchSize = defaultAITaggingStartupBatchSize
@@ -113,7 +121,19 @@ func (s *AITaggingService) ProcessVideo(ctx context.Context, videoID uint) error
 }
 
 func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video models.Video, config AITaggingConfig) error {
+	log.Printf("[AITagging] start video_id=%d name=%q path=%q tags=%d config={base_url:%q model:%q frame_count:%d subtitle_char_limit:%d api_key_empty:%v}",
+		video.ID,
+		video.Name,
+		video.Path,
+		len(video.Tags),
+		config.BaseURL,
+		config.Model,
+		config.FrameCount,
+		config.SubtitleCharLimit,
+		strings.TrimSpace(config.APIKey) == "",
+	)
 	if len(video.Tags) > 0 {
+		log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
 		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
 	}
 	existingTags, err := s.loadActiveTags()
@@ -121,6 +141,12 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		return err
 	}
 	evidence := s.extractor.Collect(ctx, video, config)
+	log.Printf("[AITagging] evidence video_id=%d subtitle_len=%d frames=%d warnings=%q",
+		video.ID,
+		len([]rune(evidence.SubtitleText)),
+		len(evidence.Frames),
+		strings.Join(evidence.Warnings, "; "),
+	)
 	fingerprint := buildEvidenceFingerprint(video, existingTags, evidence)
 	if skip, err := s.shouldSkipForCurrentFingerprint(video.ID, fingerprint); err != nil {
 		return err
@@ -137,15 +163,20 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		Evidence:     evidence,
 	})
 	if err != nil {
+		log.Printf("[AITagging] analyze failed video_id=%d err=%v", video.ID, err)
 		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
 	}
+	log.Printf("[AITagging] analyze succeeded video_id=%d suggestions=%d", video.ID, len(suggestions))
 	created, err := s.persistSuggestions(video, existingTags, evidence, suggestions)
 	if err != nil {
+		log.Printf("[AITagging] persist failed video_id=%d err=%v", video.ID, err)
 		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
 	}
 	if created == 0 {
+		log.Printf("[AITagging] skipped no high/medium confidence video_id=%d", video.ID)
 		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "no_high_or_medium_confidence", fingerprint, "")
 	}
+	log.Printf("[AITagging] completed video_id=%d created=%d", video.ID, created)
 	return s.markState(video.ID, models.AITaggingStateStatusCompleted, "", fingerprint, "")
 }
 
@@ -155,6 +186,16 @@ func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error)
 		Preload("Tags").
 		Where("is_stale = ?", false).
 		Where("NOT EXISTS (SELECT 1 FROM video_tags WHERE video_tags.video_id = videos.id)").
+		Where("NOT EXISTS (SELECT 1 FROM ai_tag_candidates WHERE ai_tag_candidates.video_id = videos.id AND ai_tag_candidates.status = ?)", models.AITagCandidateStatusPending).
+		Where(`NOT EXISTS (
+			SELECT 1 FROM ai_tagging_states
+			WHERE ai_tagging_states.video_id = videos.id
+				AND ai_tagging_states.status IN ?
+		)`, []string{
+			models.AITaggingStateStatusProcessing,
+			models.AITaggingStateStatusCompleted,
+			models.AITaggingStateStatusSkipped,
+		}).
 		Order("id").
 		Limit(limit).
 		Find(&videos).Error
@@ -277,9 +318,13 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 		if matched, ok := tagsByName[normalizeAITagName(suggestion.MatchedExistingName)]; ok {
 			id := matched.ID
 			matchedTagID = &id
+			label = matched.Name
+			normalized = normalizeAITagName(label)
 		} else if matched, ok := tagsByName[normalized]; ok {
 			id := matched.ID
 			matchedTagID = &id
+			label = matched.Name
+			normalized = normalizeAITagName(label)
 		}
 		if matchedTagID == nil && confidence != models.AITagConfidenceHigh {
 			continue
@@ -496,6 +541,20 @@ func (s *AITaggingService) RejectCandidate(candidateID uint) error {
 		return fmt.Errorf("candidate is not pending")
 	}
 	return nil
+}
+
+func (s *AITaggingService) RejectPendingCandidatesByVideo(videoID uint) (int64, error) {
+	now := s.now()
+	result := database.DB.Model(&models.AITagCandidate{}).
+		Where("video_id = ? AND status = ?", videoID, models.AITagCandidateStatusPending).
+		Updates(map[string]interface{}{
+			"status":      models.AITagCandidateStatusRejected,
+			"rejected_at": &now,
+		})
+	if result.Error != nil {
+		return 0, result.Error
+	}
+	return result.RowsAffected, nil
 }
 
 func (s *AITaggingService) RetryVideo(videoID uint) error {

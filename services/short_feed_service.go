@@ -59,14 +59,19 @@ func (s *ShortFeedService) NextVideo(excludeIDs []uint) (*ShortFeedVideoDTO, err
 		}
 	}
 
-	supported := make([]models.Video, 0, len(filtered))
-	for _, video := range filtered {
+	existing := s.filterExistingVideos(filtered)
+	if len(existing) == 0 {
+		return nil, ErrShortFeedNoEligibleVideos
+	}
+
+	supported := make([]models.Video, 0, len(existing))
+	for _, video := range existing {
 		if _, ok := inlinePreviewMIME(video.Path); ok {
 			supported = append(supported, video)
 		}
 	}
 	if len(supported) == 0 {
-		return s.videoDTO(&filtered[0], "inline_not_supported", "当前文件格式不适合浏览器内播放。")
+		return s.videoDTO(&existing[0], "inline_not_supported", "当前文件格式不适合浏览器内播放。")
 	}
 
 	prefs, err := s.tagPreferenceMap()
@@ -79,12 +84,13 @@ func (s *ShortFeedService) NextVideo(excludeIDs []uint) (*ShortFeedVideoDTO, err
 
 func (s *ShortFeedService) FavoriteVideos() ([]ShortFeedVideoDTO, error) {
 	var videos []models.Video
+	maxDurationSeconds := s.maxDurationSeconds()
 	err := database.DB.Model(&models.Video{}).
 		Preload("Tags").
 		Joins("JOIN short_feed_interactions ON short_feed_interactions.video_id = videos.id").
 		Where("short_feed_interactions.favorited = ?", true).
 		Where("videos.is_stale = ?", false).
-		Where("videos.duration > ? AND videos.duration < ?", 0, ShortFeedMaxDurationSeconds).
+		Where("videos.duration > ? AND videos.duration < ?", 0, maxDurationSeconds).
 		Order("short_feed_interactions.updated_at DESC").
 		Find(&videos).Error
 	if err != nil {
@@ -92,8 +98,9 @@ func (s *ShortFeedService) FavoriteVideos() ([]ShortFeedVideoDTO, error) {
 	}
 
 	result := make([]ShortFeedVideoDTO, 0, len(videos))
-	for i := range videos {
-		dto, err := s.videoDTO(&videos[i], "", "")
+	existing := s.filterExistingVideos(videos)
+	for i := range existing {
+		dto, err := s.videoDTO(&existing[i], "", "")
 		if err != nil {
 			return nil, err
 		}
@@ -104,13 +111,14 @@ func (s *ShortFeedService) FavoriteVideos() ([]ShortFeedVideoDTO, error) {
 
 func (s *ShortFeedService) RecordShortFeedPlayback(videoID uint) (*ShortFeedInteractionDTO, error) {
 	now := s.now()
+	maxDurationSeconds := s.maxDurationSeconds()
 	var interaction models.ShortFeedInteraction
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.First(&video, videoID).Error; err != nil {
 			return err
 		}
-		if !shortFeedEligible(video) {
+		if !shortFeedEligible(video, maxDurationSeconds) {
 			return ErrShortFeedNoEligibleVideos
 		}
 		if err := tx.Model(&models.Video{}).Where("id = ?", videoID).Updates(map[string]interface{}{
@@ -135,6 +143,7 @@ func (s *ShortFeedService) RecordShortFeedPlayback(videoID uint) (*ShortFeedInte
 
 func (s *ShortFeedService) SetLiked(videoID uint, liked bool) (*ShortFeedInteractionDTO, error) {
 	now := s.now()
+	maxDurationSeconds := s.maxDurationSeconds()
 	var interaction models.ShortFeedInteraction
 	wasLiked := false
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
@@ -142,7 +151,7 @@ func (s *ShortFeedService) SetLiked(videoID uint, liked bool) (*ShortFeedInterac
 		if err := tx.Preload("Tags").First(&video, videoID).Error; err != nil {
 			return err
 		}
-		if !shortFeedEligible(video) {
+		if !shortFeedEligible(video, maxDurationSeconds) {
 			return ErrShortFeedNoEligibleVideos
 		}
 
@@ -176,13 +185,14 @@ func (s *ShortFeedService) SetLiked(videoID uint, liked bool) (*ShortFeedInterac
 
 func (s *ShortFeedService) SetFavorited(videoID uint, favorited bool) (*ShortFeedInteractionDTO, error) {
 	now := s.now()
+	maxDurationSeconds := s.maxDurationSeconds()
 	var interaction models.ShortFeedInteraction
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.First(&video, videoID).Error; err != nil {
 			return err
 		}
-		if !shortFeedEligible(video) {
+		if !shortFeedEligible(video, maxDurationSeconds) {
 			return ErrShortFeedNoEligibleVideos
 		}
 		return upsertShortFeedInteraction(tx, videoID, func(row *models.ShortFeedInteraction) {
@@ -210,14 +220,18 @@ func (s *ShortFeedService) ResolveMedia(videoID uint) (*ShortFeedMedia, error) {
 	if err := database.DB.First(&video, videoID).Error; err != nil {
 		return nil, err
 	}
-	if !shortFeedEligible(video) {
+	if !shortFeedEligible(video, s.maxDurationSeconds()) {
 		return nil, ErrShortFeedNoEligibleVideos
 	}
 	info, err := os.Stat(video.Path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			s.markStale(video.ID)
+		}
 		return nil, err
 	}
 	if info.IsDir() {
+		s.markStale(video.ID)
 		return nil, fmt.Errorf("short-feed media path is directory")
 	}
 	mimeType, ok := inlinePreviewMIME(video.Path)
@@ -234,10 +248,11 @@ func (s *ShortFeedService) ResolveMedia(videoID uint) (*ShortFeedMedia, error) {
 
 func (s *ShortFeedService) loadEligibleVideos(excludeIDs []uint) ([]models.Video, error) {
 	var videos []models.Video
+	maxDurationSeconds := s.maxDurationSeconds()
 	query := database.DB.Model(&models.Video{}).
 		Preload("Tags").
 		Where("is_stale = ?", false).
-		Where("duration > ? AND duration < ?", 0, ShortFeedMaxDurationSeconds).
+		Where("duration > ? AND duration < ?", 0, maxDurationSeconds).
 		Order("id ASC")
 	if len(excludeIDs) > 0 {
 		query = query.Where("id NOT IN ?", excludeIDs)
@@ -246,6 +261,35 @@ func (s *ShortFeedService) loadEligibleVideos(excludeIDs []uint) ([]models.Video
 		return nil, err
 	}
 	return videos, nil
+}
+
+func (s *ShortFeedService) filterExistingVideos(videos []models.Video) []models.Video {
+	existing := make([]models.Video, 0, len(videos))
+	for _, video := range videos {
+		if s.videoFileExists(video) {
+			existing = append(existing, video)
+		}
+	}
+	return existing
+}
+
+func (s *ShortFeedService) videoFileExists(video models.Video) bool {
+	info, err := os.Stat(video.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			s.markStale(video.ID)
+		}
+		return false
+	}
+	if info.IsDir() {
+		s.markStale(video.ID)
+		return false
+	}
+	return true
+}
+
+func (s *ShortFeedService) markStale(videoID uint) {
+	_ = database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("is_stale", true).Error
 }
 
 func (s *ShortFeedService) tagPreferenceMap() (map[uint]float64, error) {
@@ -333,8 +377,25 @@ func (s *ShortFeedService) videoDTO(video *models.Video, reasonCode string, reas
 	}, nil
 }
 
-func shortFeedEligible(video models.Video) bool {
-	return !video.IsStale && video.Duration > 0 && video.Duration < ShortFeedMaxDurationSeconds
+func (s *ShortFeedService) maxDurationSeconds() float64 {
+	if database.DB == nil {
+		return defaultShortFeedMaxDurationSeconds
+	}
+	var settings models.Settings
+	if err := database.DB.Select("short_feed_max_duration_minutes").First(&settings).Error; err != nil {
+		return defaultShortFeedMaxDurationSeconds
+	}
+	if settings.ShortFeedMaxDurationMinutes <= 0 {
+		return defaultShortFeedMaxDurationSeconds
+	}
+	return float64(settings.ShortFeedMaxDurationMinutes * 60)
+}
+
+func shortFeedEligible(video models.Video, maxDurationSeconds float64) bool {
+	if maxDurationSeconds <= 0 {
+		maxDurationSeconds = defaultShortFeedMaxDurationSeconds
+	}
+	return !video.IsStale && video.Duration > 0 && video.Duration < maxDurationSeconds
 }
 
 func interactionForVideo(videoID uint) (models.ShortFeedInteraction, error) {

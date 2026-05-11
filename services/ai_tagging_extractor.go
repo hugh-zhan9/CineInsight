@@ -19,7 +19,13 @@ import (
 	"video-master/services/subtitleparser"
 )
 
-const aiTaggingPromptSchemaVersion = "ai-tagging-v1"
+const aiTaggingPromptSchemaVersion = "ai-tagging-v2-visual-first"
+
+const (
+	aiTaggingFrameMaxWidth = 512
+	aiTaggingFrameQuality  = 8
+	aiTaggingFrameMaxCount = 8
+)
 
 type AITaggingEvidence struct {
 	FileName             string            `json:"file_name"`
@@ -37,8 +43,10 @@ type AITaggingEvidence struct {
 }
 
 type AITaggingFrame struct {
-	MimeType string `json:"mime_type"`
-	DataURL  string `json:"data_url"`
+	MimeType string  `json:"mime_type"`
+	DataURL  string  `json:"data_url"`
+	Index    int     `json:"index"`
+	Position float64 `json:"position"`
 }
 
 type AITaggingExtractor struct{}
@@ -52,7 +60,7 @@ func (e *AITaggingExtractor) Collect(ctx context.Context, video models.Video, co
 		FileName:            video.Name,
 		Path:                video.Path,
 		Directory:           video.Directory,
-		FrameSamplingConfig: fmt.Sprintf("count=%d", config.FrameCount),
+		FrameSamplingConfig: fmt.Sprintf("count=%d,max_width=%d,quality=%d", normalizedAITaggingFrameCount(config.FrameCount), aiTaggingFrameMaxWidth, aiTaggingFrameQuality),
 		PromptSchemaVersion: aiTaggingPromptSchemaVersion,
 	}
 	e.collectSubtitle(video, config, &evidence)
@@ -120,9 +128,7 @@ func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Vid
 	defer os.RemoveAll(tmpDir)
 
 	count := config.FrameCount
-	if count > 4 {
-		count = 4
-	}
+	count = normalizedAITaggingFrameCount(count)
 	duration := video.Duration
 	if duration <= 0 {
 		duration = float64(count + 1)
@@ -136,7 +142,15 @@ func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Vid
 		}
 		position := duration * float64(i+1) / float64(count+1)
 		outPath := filepath.Join(tmpDir, fmt.Sprintf("frame-%d.jpg", i))
-		cmd := exec.CommandContext(ctx, ffmpegBin, "-y", "-ss", strconv.FormatFloat(position, 'f', 2, 64), "-i", video.Path, "-frames:v", "1", "-q:v", "4", outPath)
+		cmd := exec.CommandContext(ctx, ffmpegBin,
+			"-y",
+			"-ss", strconv.FormatFloat(position, 'f', 2, 64),
+			"-i", video.Path,
+			"-frames:v", "1",
+			"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", aiTaggingFrameMaxWidth),
+			"-q:v", strconv.Itoa(aiTaggingFrameQuality),
+			outPath,
+		)
 		if output, err := cmd.CombinedOutput(); err != nil {
 			evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("frame sample %d failed: %v %s", i+1, err, truncateLogSnippet(string(output), 160)))
 			continue
@@ -149,8 +163,20 @@ func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Vid
 		evidence.Frames = append(evidence.Frames, AITaggingFrame{
 			MimeType: "image/jpeg",
 			DataURL:  "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
+			Index:    i + 1,
+			Position: position,
 		})
 	}
+}
+
+func normalizedAITaggingFrameCount(count int) int {
+	if count <= 0 {
+		return 0
+	}
+	if count > aiTaggingFrameMaxCount {
+		return aiTaggingFrameMaxCount
+	}
+	return count
 }
 
 func (e AITaggingEvidence) SummaryJSON() string {
@@ -158,7 +184,7 @@ func (e AITaggingEvidence) SummaryJSON() string {
 	if len(summary.Frames) > 0 {
 		summary.Frames = make([]AITaggingFrame, len(e.Frames))
 		for i, frame := range e.Frames {
-			summary.Frames[i] = AITaggingFrame{MimeType: frame.MimeType, DataURL: fmt.Sprintf("<%d bytes>", len(frame.DataURL))}
+			summary.Frames[i] = AITaggingFrame{MimeType: frame.MimeType, DataURL: fmt.Sprintf("<%d bytes>", len(frame.DataURL)), Index: frame.Index, Position: frame.Position}
 		}
 	}
 	data, err := json.Marshal(summary)

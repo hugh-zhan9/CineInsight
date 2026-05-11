@@ -7,6 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "test:add-tag-selection": "node scripts/add-tag-selection.test.mjs",
+    "test:ai-tag-review": "node scripts/ai-tag-review.test.mjs",
+    "test:video-list-ui": "node scripts/video-list-ui.test.mjs",
     "test:virtual-list": "node scripts/virtual-list.test.mjs",
     "test:short-feed": "node scripts/short-feed.test.mjs"
   },

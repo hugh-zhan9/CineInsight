@@ -48,6 +48,8 @@ export function GetAllVideos():Promise<Array<models.Video>>;
 
 export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promise<services.CleanupAnalysis>;
 
+export function GetCleanupStatus():Promise<services.CleanupStatus>;
+
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
 
 export function GetSettings():Promise<models.Settings>;
@@ -82,6 +84,8 @@ export function RefreshVideoMetadata(arg1:number):Promise<void>;
 
 export function RejectAITagCandidate(arg1:number):Promise<void>;
 
+export function RejectAITagCandidatesByVideo(arg1:number):Promise<number>;
+
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
 export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
@@ -103,6 +107,10 @@ export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,ar
 export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
 
 export function SelectDirectory():Promise<string>;
+
+export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
+
+export function SyncScanDirectories():Promise<services.ScanSyncResult>;
 
 export function UpdateDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
 

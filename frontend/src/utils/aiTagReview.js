@@ -47,3 +47,15 @@ export function removeCandidateById(candidates, candidateId) {
   return (Array.isArray(candidates) ? candidates : []).filter(candidate => Number(candidate.id) !== id);
 }
 
+export function createRejectVideoConfirm(group) {
+  if (!group?.videoId) return null;
+  const candidates = Array.isArray(group.candidates) ? group.candidates : [];
+  if (candidates.length === 0) return null;
+  return {
+    show: true,
+    videoId: group.videoId,
+    videoName: group.videoName || `视频 #${group.videoId}`,
+    count: candidates.length,
+    candidateIds: candidates.map(candidate => Number(candidate.id)),
+  };
+}
