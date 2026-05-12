@@ -17,6 +17,13 @@ struct ContentView: View {
     @State private var editingDirectory: ScanDirectoryRecord?
     @State private var videoPath = ""
     @State private var deleteFile = false
+    @State private var settingsVideoExtensions = ""
+    @State private var settingsPlayWeight = 2.0
+    @State private var settingsShortFeedMinutes = 5
+    @State private var settingsTheme = "system"
+    @State private var settingsAIFrameCount = 5
+    @State private var settingsAISubtitleLimit = 4000
+    @State private var settingsAIStartupBatch = 10
 
     private let client: NativeAPIClient
 
@@ -60,6 +67,15 @@ struct ContentView: View {
         }
         .onChange(of: library.query) {
             Task { await library.search() }
+        }
+        .onChange(of: library.sizeFilter) {
+            Task { await library.search() }
+        }
+        .onChange(of: library.resolutionFilter) {
+            Task { await library.search() }
+        }
+        .onChange(of: library.settings) {
+            syncSettingsForm()
         }
     }
 
@@ -107,6 +123,20 @@ struct ContentView: View {
                 .textFieldStyle(.roundedBorder)
                 .frame(minWidth: 280)
 
+            Picker("Size", selection: $library.sizeFilter) {
+                ForEach(VideoSizeFilter.allCases) { filter in
+                    Text(filter.label).tag(filter)
+                }
+            }
+            .pickerStyle(.menu)
+
+            Picker("Resolution", selection: $library.resolutionFilter) {
+                ForEach(VideoResolutionFilter.allCases) { filter in
+                    Text(filter.label).tag(filter)
+                }
+            }
+            .pickerStyle(.menu)
+
             Button {
                 Task { await library.loadAll() }
             } label: {
@@ -120,6 +150,20 @@ struct ContentView: View {
             }
 
             Spacer()
+
+            Button {
+                library.toggleSelectAllVisible()
+            } label: {
+                Label(library.allVisibleSelected ? "Clear Page" : "Select Page", systemImage: "checklist")
+            }
+            .disabled(library.filteredVideos.isEmpty)
+
+            Button(role: .destructive) {
+                Task { await library.deleteSelectedVideos(deleteFile: deleteFile) }
+            } label: {
+                Label("Delete Selected", systemImage: "trash")
+            }
+            .disabled(library.selectedVideoIDs.isEmpty)
 
             Button {
                 Task { await library.previewExternally() }
@@ -145,7 +189,70 @@ struct ContentView: View {
     }
 
     private var videoTable: some View {
+        VStack(spacing: 0) {
+            tagFilterBar
+            if !library.selectedVideoIDs.isEmpty {
+                HStack(spacing: 10) {
+                    Text("Selected \(library.selectedVideoIDs.count)")
+                        .font(.callout)
+                    Spacer()
+                    Toggle("Delete original files", isOn: $deleteFile)
+                    Button(role: .destructive) {
+                        Task { await library.deleteSelectedVideos(deleteFile: deleteFile) }
+                    } label: {
+                        Label("Delete Selected", systemImage: "trash")
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                Divider()
+            }
+            videoTableBody
+        }
+    }
+
+    private var tagFilterBar: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                Button {
+                    Task { await library.clearTagFilter() }
+                } label: {
+                    Label("All", systemImage: library.selectedTagIDs.isEmpty ? "checkmark.circle.fill" : "circle")
+                }
+                .buttonStyle(.bordered)
+                ForEach(library.tags) { tag in
+                    Button {
+                        Task { await library.toggleTagFilter(tag) }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Circle()
+                                .fill(Color(hex: tag.color) ?? .accentColor)
+                                .frame(width: 8, height: 8)
+                            Text(tag.name)
+                            if library.selectedTagIDs.contains(tag.id) {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+            .padding(12)
+        }
+    }
+
+    private var videoTableBody: some View {
         Table(library.filteredVideos, selection: $library.selectedVideoID) {
+            TableColumn("") { video in
+                Button {
+                    library.toggleSelection(video)
+                } label: {
+                    Image(systemName: library.selectedVideoIDs.contains(video.id) ? "checkmark.circle.fill" : "circle")
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Select \(video.name)")
+            }
+            .width(36)
             TableColumn("Name") { video in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
@@ -465,42 +572,92 @@ struct ContentView: View {
     }
 
     private var aiTagsPanel: some View {
-        List(library.aiCandidates) { candidate in
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(candidate.suggestedName)
-                        .font(.headline)
-                    Spacer()
-                    Text(candidate.status.rawValue)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+        VStack(spacing: 0) {
+            HStack {
+                Text("Pending review \(library.aiCandidates.filter { $0.status == .pending }.count)")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await library.loadAll() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
                 }
+            }
+            .padding(12)
+            Divider()
+            List(library.aiCandidateGroups) { group in
+                Section {
+                    ForEach(group.candidates) { candidate in
+                        aiCandidateRow(candidate)
+                    }
+                } header: {
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(group.videoName)
+                                .font(.headline)
+                            Spacer()
+                            Text("\(group.pendingCount) pending")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if !group.videoPath.isEmpty {
+                            Text(group.videoPath)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .overlay {
+                if library.aiCandidateGroups.isEmpty {
+                    ContentUnavailableView("No AI Tag Candidates", systemImage: "sparkles")
+                }
+            }
+        }
+    }
+
+    private func aiCandidateRow(_ candidate: AITagCandidateRecord) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Text(candidate.confidence.uppercased())
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .background(confidenceColor(candidate.confidence).opacity(0.18))
+                    .foregroundStyle(confidenceColor(candidate.confidence))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                Text(candidate.suggestedName)
+                    .font(.headline)
+                Spacer()
+                Text(candidate.status.rawValue)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if !candidate.reasoning.isEmpty {
                 Text(candidate.reasoning)
                     .font(.callout)
+            }
+            if !candidate.sourceSummary.isEmpty {
                 Text(candidate.sourceSummary)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
-                HStack {
-                    Button {
-                        Task { await library.approveCandidate(candidate) }
-                    } label: {
-                        Label("Approve", systemImage: "checkmark")
-                    }
-                    .disabled(candidate.status != .pending)
-
-                    Button(role: .destructive) {
-                        Task { await library.rejectCandidate(candidate) }
-                    } label: {
-                        Label("Reject", systemImage: "xmark")
-                    }
-                    .disabled(candidate.status != .pending)
-                }
             }
-        }
-        .overlay {
-            if library.aiCandidates.isEmpty {
-                ContentUnavailableView("No AI Tag Candidates", systemImage: "sparkles")
+            HStack {
+                Button {
+                    Task { await library.approveCandidate(candidate) }
+                } label: {
+                    Label("Approve", systemImage: "checkmark")
+                }
+                .disabled(candidate.status != .pending)
+
+                Button(role: .destructive) {
+                    Task { await library.rejectCandidate(candidate) }
+                } label: {
+                    Label("Reject", systemImage: "xmark")
+                }
+                .disabled(candidate.status != .pending)
             }
         }
     }
@@ -509,6 +666,15 @@ struct ContentView: View {
         ZStack(alignment: .bottomLeading) {
             RoundedRectangle(cornerRadius: 12)
                 .fill(.black)
+
+            if let preview = library.shortFeedPreview,
+               preview.mode == .inline,
+               let locator = preview.inlineSource?.locatorValue,
+               let url = client.absoluteURL(for: locator) {
+                VideoPlayer(player: AVPlayer(url: url))
+                    .aspectRatio(9 / 16, contentMode: .fill)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
 
             LinearGradient(
                 colors: [.clear, .black.opacity(0.72)],
@@ -558,24 +724,80 @@ struct ContentView: View {
     }
 
     private var cleanupPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Button {
-                Task { await library.analyzeCleanup() }
-            } label: {
-                Label("Analyze", systemImage: "wand.and.stars")
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Button {
+                    Task { await library.analyzeCleanup() }
+                } label: {
+                    Label("Analyze", systemImage: "wand.and.stars")
+                }
+                Spacer()
+                if let cleanup = library.cleanup {
+                    Text("Candidates \(cleanup.allCandidateIds.count)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
             if let cleanup = library.cleanup {
-                Text("Duplicate groups: \(cleanup.duplicateGroups.count)")
-                Text("Short videos: \(cleanup.lowDurationIds.count)")
-                Text("Low resolution: \(cleanup.lowResolutionIds.count)")
-                List(cleanup.duplicateGroups, id: \.originalId) { group in
-                    Text("\(group.reason): \(group.originalId) -> \(group.candidateIds.map(String.init).joined(separator: ", "))")
+                HStack(spacing: 8) {
+                    cleanupMetric("Duplicate Groups", cleanup.duplicateGroups.count)
+                    cleanupMetric("Short Videos", cleanup.lowDurationIds.count)
+                    cleanupMetric("Low Resolution", cleanup.lowResolutionIds.count)
+                }
+                List {
+                    if !cleanup.duplicateGroups.isEmpty {
+                        Section("Duplicate Candidates") {
+                            ForEach(cleanup.duplicateGroups, id: \.originalId) { group in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(group.reason)
+                                    Text("Keep #\(group.originalId), review \(group.candidateIds.map { "#\($0)" }.joined(separator: ", "))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    if !library.cleanupCandidateVideos.isEmpty {
+                        Section("Matched Videos In Current Page") {
+                            ForEach(library.cleanupCandidateVideos) { video in
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(video.name)
+                                        Text("\(formatDuration(video.duration)) · \(video.resolution.isEmpty ? "-" : video.resolution) · \(video.path)")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                    }
+                                    Spacer()
+                                    Button {
+                                        library.selectedVideoID = video.id
+                                        Task { await library.previewExternally() }
+                                    } label: {
+                                        Label("Preview", systemImage: "play.rectangle")
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             } else {
                 ContentUnavailableView("No Cleanup Analysis", systemImage: "trash")
             }
         }
         .padding(12)
+    }
+
+    private func cleanupMetric(_ label: String, _ value: Int) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("\(value)")
+                .font(.title3.monospacedDigit())
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
     }
 
     private var diagnosticsPanel: some View {
@@ -605,14 +827,47 @@ struct ContentView: View {
             Text("Settings")
                 .font(.headline)
             if let settings = library.settings {
-                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
-                    metricRow("Extensions", settings.videoExtensions)
-                    metricRow("Play Weight", String(format: "%.1f", settings.playWeight))
-                    metricRow("Theme", settings.theme)
-                    metricRow("DeepL", settings.deeplApiKeyConfigured ? "Configured" : "Not configured")
-                    metricRow("AI Tagging", settings.aiTaggingApiKeyConfigured ? "Configured" : "Not configured")
+                TextField("Video extensions", text: $settingsVideoExtensions)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Text("Play Weight")
+                    Slider(value: $settingsPlayWeight, in: 0.1...10, step: 0.1)
+                    Text(String(format: "%.1f", settingsPlayWeight))
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
                 }
-                .font(.callout)
+                Stepper("Short Feed \(settingsShortFeedMinutes) min", value: $settingsShortFeedMinutes, in: 1...180)
+                Picker("Theme", selection: $settingsTheme) {
+                    Text("System").tag("system")
+                    Text("Light").tag("light")
+                    Text("Dark").tag("dark")
+                }
+                .pickerStyle(.segmented)
+                Stepper("AI frames \(settingsAIFrameCount)", value: $settingsAIFrameCount, in: 1...8)
+                Stepper("AI subtitle limit \(settingsAISubtitleLimit)", value: $settingsAISubtitleLimit, in: 200...12_000, step: 100)
+                Stepper("AI startup batch \(settingsAIStartupBatch)", value: $settingsAIStartupBatch, in: 1...100)
+                HStack {
+                    Label(settings.deeplApiKeyConfigured ? "DeepL configured" : "DeepL not configured", systemImage: "key")
+                    Spacer()
+                    Label(settings.aiTaggingApiKeyConfigured ? "AI configured" : "AI not configured", systemImage: "sparkles")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Button {
+                    Task {
+                        await library.saveSettings(
+                            videoExtensions: settingsVideoExtensions,
+                            playWeight: settingsPlayWeight,
+                            shortFeedMaxDurationMinutes: settingsShortFeedMinutes,
+                            theme: settingsTheme,
+                            aiFrameCount: settingsAIFrameCount,
+                            aiSubtitleCharLimit: settingsAISubtitleLimit,
+                            aiStartupBatchSize: settingsAIStartupBatch
+                        )
+                    }
+                } label: {
+                    Label("Save Settings", systemImage: "checkmark")
+                }
             } else {
                 Text("Settings unavailable")
                     .foregroundStyle(.secondary)
@@ -686,6 +941,30 @@ struct ContentView: View {
             library.selectedVideo?.tags.contains { $0.id == tag.id } ?? false
         } set: { enabled in
             Task { await library.setTag(tag, enabled: enabled) }
+        }
+    }
+
+    private func syncSettingsForm() {
+        guard let settings = library.settings else { return }
+        settingsVideoExtensions = settings.videoExtensions
+        settingsPlayWeight = settings.playWeight
+        settingsShortFeedMinutes = settings.shortFeedMaxDurationMinutes
+        settingsTheme = settings.theme
+        settingsAIFrameCount = settings.aiTaggingFrameCount
+        settingsAISubtitleLimit = settings.aiTaggingSubtitleCharLimit
+        settingsAIStartupBatch = settings.aiTaggingStartupBatchSize
+    }
+
+    private func confidenceColor(_ confidence: String) -> Color {
+        switch confidence.lowercased() {
+        case "high":
+            return .green
+        case "medium":
+            return .orange
+        case "low":
+            return .red
+        default:
+            return .secondary
         }
     }
 

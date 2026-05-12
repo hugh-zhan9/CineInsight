@@ -158,6 +158,72 @@ public struct VideoFilterRequest: Encodable, Equatable, Sendable {
     }
 }
 
+public enum VideoSizeFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case small
+    case medium
+    case large
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .all: return "Size: All"
+        case .small: return "Under 300 MB"
+        case .medium: return "300 MB - 1 GB"
+        case .large: return "Over 1 GB"
+        }
+    }
+
+    public var requestBounds: (minSize: Int64?, maxSize: Int64?) {
+        switch self {
+        case .all:
+            return (nil, nil)
+        case .small:
+            return (nil, 300 * 1_024 * 1_024)
+        case .medium:
+            return (300 * 1_024 * 1_024, 1_073_741_823)
+        case .large:
+            return (1_073_741_824, nil)
+        }
+    }
+}
+
+public enum VideoResolutionFilter: String, CaseIterable, Identifiable, Sendable {
+    case all
+    case sd
+    case hd
+    case fullHD
+    case ultraHD
+
+    public var id: String { rawValue }
+
+    public var label: String {
+        switch self {
+        case .all: return "Resolution: All"
+        case .sd: return "Below 720p"
+        case .hd: return "720p"
+        case .fullHD: return "1080p"
+        case .ultraHD: return "4K+"
+        }
+    }
+
+    public var requestBounds: (minHeight: Int?, maxHeight: Int?) {
+        switch self {
+        case .all:
+            return (nil, nil)
+        case .sd:
+            return (nil, 719)
+        case .hd:
+            return (720, 1079)
+        case .fullHD:
+            return (1080, 2159)
+        case .ultraHD:
+            return (2160, nil)
+        }
+    }
+}
+
 public struct RenameVideoRequest: Encodable, Equatable, Sendable {
     public let name: String
 
@@ -241,6 +307,64 @@ public struct CleanupAnalyzeRequest: Encodable, Equatable, Sendable {
         self.maxDurationSeconds = maxDurationSeconds
         self.minWidth = minWidth
         self.minHeight = minHeight
+    }
+}
+
+public struct SettingsUpdateRequest: Encodable, Equatable, Sendable {
+    public let confirmBeforeDelete: Bool
+    public let deleteOriginalFile: Bool
+    public let videoExtensions: String
+    public let playWeight: Double
+    public let autoScanOnStartup: Bool
+    public let shortFeedMaxDurationMinutes: Int
+    public let theme: String
+    public let logEnabled: Bool
+    public let bilingualEnabled: Bool
+    public let bilingualLang: String
+    public let deeplApiKey: String
+    public let aiTaggingBaseUrl: String
+    public let aiTaggingApiKey: String
+    public let aiTaggingModel: String
+    public let aiTaggingFrameCount: Int
+    public let aiTaggingSubtitleCharLimit: Int
+    public let aiTaggingStartupBatchSize: Int
+
+    public init(
+        confirmBeforeDelete: Bool = true,
+        deleteOriginalFile: Bool = false,
+        videoExtensions: String,
+        playWeight: Double,
+        autoScanOnStartup: Bool = true,
+        shortFeedMaxDurationMinutes: Int,
+        theme: String,
+        logEnabled: Bool = false,
+        bilingualEnabled: Bool = false,
+        bilingualLang: String = "zh",
+        deeplApiKey: String = "",
+        aiTaggingBaseUrl: String = "",
+        aiTaggingApiKey: String = "",
+        aiTaggingModel: String = "",
+        aiTaggingFrameCount: Int,
+        aiTaggingSubtitleCharLimit: Int,
+        aiTaggingStartupBatchSize: Int
+    ) {
+        self.confirmBeforeDelete = confirmBeforeDelete
+        self.deleteOriginalFile = deleteOriginalFile
+        self.videoExtensions = videoExtensions
+        self.playWeight = playWeight
+        self.autoScanOnStartup = autoScanOnStartup
+        self.shortFeedMaxDurationMinutes = shortFeedMaxDurationMinutes
+        self.theme = theme
+        self.logEnabled = logEnabled
+        self.bilingualEnabled = bilingualEnabled
+        self.bilingualLang = bilingualLang
+        self.deeplApiKey = deeplApiKey
+        self.aiTaggingBaseUrl = aiTaggingBaseUrl
+        self.aiTaggingApiKey = aiTaggingApiKey
+        self.aiTaggingModel = aiTaggingModel
+        self.aiTaggingFrameCount = aiTaggingFrameCount
+        self.aiTaggingSubtitleCharLimit = aiTaggingSubtitleCharLimit
+        self.aiTaggingStartupBatchSize = aiTaggingStartupBatchSize
     }
 }
 
@@ -336,6 +460,10 @@ public final class NativeAPIClient: @unchecked Sendable {
 
     public func settings() async throws -> PublicSettings {
         try await get("/api/settings")
+    }
+
+    public func updateSettings(_ request: SettingsUpdateRequest) async throws -> PublicSettings {
+        try await post("/api/settings", body: request)
     }
 
     public func listScanDirectories() async throws -> ScanDirectoryListResponse {
@@ -713,6 +841,8 @@ public enum AITagCandidateStatus: String, Decodable, Equatable, Sendable {
 public struct AITagCandidateRecord: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let videoId: Int64
+    public let videoName: String?
+    public let videoPath: String?
     public let suggestedName: String
     public let normalizedName: String
     public let matchedTagId: Int64?
@@ -720,10 +850,56 @@ public struct AITagCandidateRecord: Decodable, Equatable, Identifiable, Sendable
     public let reasoning: String
     public let sourceSummary: String
     public let status: AITagCandidateStatus
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case videoId
+        case videoName
+        case videoPath
+        case suggestedName
+        case normalizedName
+        case matchedTagId
+        case confidence
+        case reasoning
+        case sourceSummary
+        case status
+        case video
+    }
+
+    private struct EmbeddedVideo: Decodable {
+        let name: String?
+        let path: String?
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(Int64.self, forKey: .id)
+        videoId = try container.decode(Int64.self, forKey: .videoId)
+        let embeddedVideo = try container.decodeIfPresent(EmbeddedVideo.self, forKey: .video)
+        videoName = try container.decodeIfPresent(String.self, forKey: .videoName) ?? embeddedVideo?.name
+        videoPath = try container.decodeIfPresent(String.self, forKey: .videoPath) ?? embeddedVideo?.path
+        suggestedName = try container.decode(String.self, forKey: .suggestedName)
+        normalizedName = try container.decode(String.self, forKey: .normalizedName)
+        matchedTagId = try container.decodeIfPresent(Int64.self, forKey: .matchedTagId)
+        confidence = try container.decode(String.self, forKey: .confidence)
+        reasoning = try container.decode(String.self, forKey: .reasoning)
+        sourceSummary = try container.decode(String.self, forKey: .sourceSummary)
+        status = try container.decode(AITagCandidateStatus.self, forKey: .status)
+    }
 }
 
 public struct AITagCandidateListResponse: Decodable, Equatable, Sendable {
     public let candidates: [AITagCandidateRecord]
+}
+
+public struct AITagCandidateGroup: Equatable, Identifiable, Sendable {
+    public let videoId: Int64
+    public let videoName: String
+    public let videoPath: String
+    public let candidates: [AITagCandidateRecord]
+
+    public var id: Int64 { videoId }
+    public var pendingCount: Int { candidates.filter { $0.status == .pending }.count }
 }
 
 public struct ShortFeedInteractionRecord: Decodable, Equatable, Sendable {
@@ -752,6 +928,23 @@ public struct CleanupAnalysisRecord: Decodable, Equatable, Sendable {
     public let duplicateGroups: [CleanupDuplicateGroup]
     public let lowDurationIds: [Int64]
     public let lowResolutionIds: [Int64]
+
+    public var allCandidateIds: [Int64] {
+        var ids = Set<Int64>()
+        for group in duplicateGroups {
+            ids.insert(group.originalId)
+            for candidateId in group.candidateIds {
+                ids.insert(candidateId)
+            }
+        }
+        for id in lowDurationIds {
+            ids.insert(id)
+        }
+        for id in lowResolutionIds {
+            ids.insert(id)
+        }
+        return ids.sorted()
+    }
 }
 
 public struct DiagnosticsSnapshot: Decodable, Equatable, Sendable {
@@ -761,6 +954,38 @@ public struct DiagnosticsSnapshot: Decodable, Equatable, Sendable {
     public let aiCandidateCount: Int64
     public let shortFeedInteractionCount: Int64
     public let redactedSettings: PublicSettings
+}
+
+public extension Array where Element == AITagCandidateRecord {
+    func groupedByVideo() -> [AITagCandidateGroup] {
+        let grouped = Dictionary(grouping: self) { $0.videoId }
+        return grouped.keys.sorted().map { videoId in
+            let candidates = grouped[videoId] ?? []
+            let first = candidates.first
+            return AITagCandidateGroup(
+                videoId: videoId,
+                videoName: first?.videoName ?? "Video #\(videoId)",
+                videoPath: first?.videoPath ?? "",
+                candidates: candidates.sorted { left, right in
+                    if left.status != right.status {
+                        return left.status.sortRank < right.status.sortRank
+                    }
+                    return left.id < right.id
+                }
+            )
+        }
+    }
+}
+
+private extension AITagCandidateStatus {
+    var sortRank: Int {
+        switch self {
+        case .pending: return 0
+        case .approved: return 1
+        case .rejected: return 2
+        case .superseded: return 3
+        }
+    }
 }
 
 public extension JSONDecoder {
