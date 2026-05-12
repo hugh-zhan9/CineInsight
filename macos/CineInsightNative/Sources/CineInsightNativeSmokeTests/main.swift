@@ -17,9 +17,43 @@ assertEqual(configuration.authorizationHeader, "Bearer secret-token", "authoriza
 
 let manager = DaemonLifecycleManager()
 assertEqual(manager.state, .stopped, "initial daemon state")
+assertEqual(manager.message, "Daemon stopped", "initial daemon message")
 if manager.health != nil {
     fatalError("initial health should be nil")
 }
+
+let client = NativeAPIClient(configuration: configuration)
+assertEqual(
+    client.absoluteURL(for: "/api/videos")?.absoluteString,
+    "http://127.0.0.1:18088/api/videos",
+    "client absolute URL"
+)
+
+let filterRequest = VideoFilterRequest(keyword: "clip", tagIds: [1], limit: 20)
+let encodedFilter = try JSONEncoder.cineInsight.encode(filterRequest)
+let filterObject = try JSONSerialization.jsonObject(with: encodedFilter) as? [String: Any]
+assertEqual(filterObject?["keyword"] as? String, "clip", "filter keyword encoding")
+assertEqual(filterObject?["tag_ids"] as? [Int], [1], "filter tag encoding")
+assertEqual(filterObject?["limit"] as? Int, 20, "filter limit encoding")
+
+let cleanupRequest = CleanupAnalyzeRequest(maxDurationSeconds: 30, minWidth: 800, minHeight: 480)
+let encodedCleanup = try JSONEncoder.cineInsight.encode(cleanupRequest)
+let cleanupObject = try JSONSerialization.jsonObject(with: encodedCleanup) as? [String: Any]
+assertEqual(cleanupObject?["max_duration_seconds"] as? Double, 30, "cleanup duration encoding")
+assertEqual(cleanupObject?["min_width"] as? Int, 800, "cleanup width encoding")
+assertEqual(cleanupObject?["min_height"] as? Int, 480, "cleanup height encoding")
+
+let addVideoRequest = AddVideoRequest(path: "/library/clip.mp4")
+let encodedAddVideo = try JSONEncoder.cineInsight.encode(addVideoRequest)
+let addVideoObject = try JSONSerialization.jsonObject(with: encodedAddVideo) as? [String: Any]
+assertEqual(addVideoObject?["path"] as? String, "/library/clip.mp4", "add video path encoding")
+
+let feedbackRequest = ShortFeedFeedbackRequest(liked: true, favorited: false, viewed: true)
+let encodedFeedback = try JSONEncoder.cineInsight.encode(feedbackRequest)
+let feedbackObject = try JSONSerialization.jsonObject(with: encodedFeedback) as? [String: Any]
+assertEqual(feedbackObject?["liked"] as? Bool, true, "short feed liked encoding")
+assertEqual(feedbackObject?["favorited"] as? Bool, false, "short feed favorited encoding")
+assertEqual(feedbackObject?["viewed"] as? Bool, true, "short feed viewed encoding")
 
 let data = """
 {
