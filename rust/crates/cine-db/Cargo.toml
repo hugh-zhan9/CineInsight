@@ -1,0 +1,20 @@
+[package]
+name = "cine-db"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+cine-api = { path = "../cine-api" }
+cine-domain = { path = "../cine-domain" }
+serde.workspace = true
+sqlx.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+rand.workspace = true
+
+[dev-dependencies]
+filetime = "0.2"
+serde_json.workspace = true
+tempfile = "3.23"
+tokio.workspace = true

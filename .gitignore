@@ -3,6 +3,11 @@
 
 # Build artifacts
 build/bin/
+target/
+rust/target/
+macos/CineInsightNative/.build/
+macos/CineInsightNative/.swiftpm/
+/dist/
 
 # Frontend dependencies
 node_modules/

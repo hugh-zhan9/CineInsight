@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "crates/cine-api",
+    "crates/cine-daemon",
+    "crates/cine-db",
+    "crates/cine-domain",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+license = "UNLICENSED"
+
+[workspace.dependencies]
+anyhow = "1.0"
+axum = "0.8"
+http = "1.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rand = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio-rustls", "postgres", "macros", "migrate", "chrono", "json"] }
+thiserror = "2.0"
+tokio = { version = "1.48", features = ["macros", "rt-multi-thread", "net"] }
+tower = "0.5"
+tracing = "0.1"
+uuid = { version = "1.18", features = ["v4"] }
