@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import {
   confidenceMeta,
   createRejectVideoConfirm,
+  filterCandidatesForReview,
   groupCandidatesByVideo,
   removeCandidateById
 } from '../src/utils/aiTagReview.js';
@@ -22,6 +23,16 @@ assert.equal(groups[0].candidates[0].confidence, 'high');
 
 const remaining = removeCandidateById([{ id: 1 }, { id: 2 }], 1);
 assert.deepEqual(remaining, [{ id: 2 }]);
+
+const reviewCandidates = [
+  { id: 1, suggested_name: '动作', reasoning: 'fast cuts', video: { name: 'fight.mp4', path: '/library/fight.mp4' } },
+  { id: 2, suggested_name: '舞蹈', reasoning: 'stage', video: { name: 'dance.mp4', path: '/library/dance.mp4' } },
+];
+assert.deepEqual(filterCandidatesForReview(reviewCandidates, ''), reviewCandidates);
+assert.deepEqual(filterCandidatesForReview(reviewCandidates, 'fight').map(candidate => candidate.id), [1]);
+assert.deepEqual(filterCandidatesForReview(reviewCandidates, '舞蹈').map(candidate => candidate.id), [2]);
+assert.deepEqual(filterCandidatesForReview(reviewCandidates, '/library/dance').map(candidate => candidate.id), [2]);
+assert.deepEqual(filterCandidatesForReview(reviewCandidates, 'missing'), []);
 
 const confirmState = createRejectVideoConfirm({
   videoId: 42,
@@ -46,5 +57,8 @@ assert.match(componentSource, /ai-confidence--high/);
 assert.match(componentSource, /ai-confidence--medium/);
 assert.match(componentSource, /ai-confirm-overlay/);
 assert.match(componentSource, /RejectAITagCandidatesByVideo/);
+assert.match(componentSource, /reviewSearch/);
+assert.match(componentSource, /RenameVideo/);
+assert.match(componentSource, /renameConfirm/);
 
 console.log('ai-tag-review tests passed');

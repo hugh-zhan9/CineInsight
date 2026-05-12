@@ -4,25 +4,32 @@
       <div class="ai-tag-review-header">
         <div>
           <h3>AI 标签审阅</h3>
-          <p class="help-text">待审 {{ candidates.length }} 条，高置信和中置信需人工确认后才会写入正式标签。</p>
+          <p class="help-text">待审 {{ candidates.length }} 条<span v-if="reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条</span>，高置信和中置信需人工确认后才会写入正式标签。</p>
           <p v-if="summary && !summary.config_available" class="ai-tag-warning">AI 配置不可用，后台分析已暂停。</p>
         </div>
         <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
       </div>
 
       <div class="ai-tag-review-actions">
+        <input
+          v-model="reviewSearch"
+          type="search"
+          class="ai-tag-review-search"
+          placeholder="搜索视频、路径、候选标签"
+        />
         <button type="button" class="btn-secondary" @click="loadCandidates" :disabled="loading">刷新</button>
       </div>
 
       <div v-if="loading" class="ai-tag-review-empty">加载中...</div>
       <div v-else-if="error" class="ai-tag-review-error">{{ error }}</div>
-      <div v-else-if="groups.length === 0" class="ai-tag-review-empty">暂无待审 AI 标签</div>
+      <div v-else-if="groups.length === 0" class="ai-tag-review-empty">{{ reviewSearch.trim() ? '没有匹配的待审 AI 标签' : '暂无待审 AI 标签' }}</div>
       <div v-else class="ai-tag-review-list">
         <section v-for="group in groups" :key="group.videoId" class="ai-video-group">
           <div class="ai-video-title">
             <span>{{ group.videoName }}</span>
             <div class="ai-video-actions">
               <button type="button" class="btn-action" @click="previewVideo(group.videoId)" :disabled="processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
+              <button type="button" class="btn-secondary btn-small" @click="openRenameDialog(group)" :disabled="processingIds.includes(`rename-${group.videoId}`)">重命名</button>
               <button type="button" class="btn-secondary btn-small" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
               <button type="button" class="btn-action" @click="retryVideo(group.videoId)" :disabled="processingIds.includes(group.videoId)">重新分析</button>
             </div>
@@ -66,13 +73,33 @@
           </div>
         </div>
       </div>
+
+      <div v-if="renameConfirm.show" class="ai-confirm-overlay">
+        <div class="ai-confirm-dialog">
+          <h4>重命名视频</h4>
+          <input
+            v-model="renameConfirm.newName"
+            type="text"
+            class="ai-tag-rename-input"
+            placeholder="输入新文件名"
+            @keyup.enter="renameConfirmVideo"
+            ref="renameInput"
+          />
+          <p>扩展名会自动保留（{{ renameConfirm.ext }}）</p>
+          <p class="ai-confirm-video">{{ renameConfirm.videoName }}</p>
+          <div class="ai-confirm-actions">
+            <button type="button" class="btn-secondary" @click="cancelRenameDialog">取消</button>
+            <button type="button" class="btn-primary" @click="renameConfirmVideo" :disabled="processingIds.includes(`rename-${renameConfirm.videoId}`)">确认</button>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 </template>
 
 <script>
-import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RetryAITagging } from '../../wailsjs/go/main/App';
-import { confidenceMeta, createRejectVideoConfirm, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
+import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
 
 export default {
   name: 'AITagReviewDialog',
@@ -86,13 +113,18 @@ export default {
       summary: null,
       loading: false,
       error: '',
+      reviewSearch: '',
       processingIds: [],
       rejectConfirm: { show: false, videoId: 0, videoName: '', count: 0, candidateIds: [] },
+      renameConfirm: { show: false, videoId: 0, videoName: '', videoPath: '', newName: '', ext: '(无)' },
     };
   },
   computed: {
+    filteredCandidates() {
+      return filterCandidatesForReview(this.candidates, this.reviewSearch);
+    },
     groups() {
-      return groupCandidatesByVideo(this.candidates);
+      return groupCandidatesByVideo(this.filteredCandidates);
     },
   },
   watch: {
@@ -167,6 +199,62 @@ export default {
         await PreviewExternally(videoId);
       });
     },
+    openRenameDialog(group) {
+      if (!group?.videoId) return;
+      const name = group.videoName || '';
+      const dotIndex = name.lastIndexOf('.');
+      const ext = dotIndex > 0 ? name.substring(dotIndex) : '';
+      const baseName = ext ? name.slice(0, -ext.length) : name;
+      this.renameConfirm = {
+        show: true,
+        videoId: group.videoId,
+        videoName: name,
+        videoPath: group.videoPath || '',
+        newName: baseName,
+        ext: ext || '(无)',
+      };
+      this.$nextTick(() => {
+        if (this.$refs.renameInput) this.$refs.renameInput.focus();
+      });
+    },
+    cancelRenameDialog() {
+      this.renameConfirm = { show: false, videoId: 0, videoName: '', videoPath: '', newName: '', ext: '(无)' };
+    },
+    async renameConfirmVideo() {
+      const { videoId, videoName, videoPath, newName, ext } = this.renameConfirm;
+      const trimmedName = String(newName || '').trim();
+      if (!videoId || !trimmedName) return;
+      await this.withProcessing(`rename-${videoId}`, async () => {
+        await RenameVideo(videoId, trimmedName);
+        const finalName = trimmedName + (ext !== '(无)' ? ext : '');
+        const finalPath = this.renamedPath(videoPath, videoName, finalName);
+        this.candidates = this.candidates.map(candidate => {
+          if (Number(candidate.video_id) !== Number(videoId)) return candidate;
+          return {
+            ...candidate,
+            video: {
+              ...(candidate.video || {}),
+              id: videoId,
+              name: finalName,
+              path: finalPath,
+            },
+          };
+        });
+        this.cancelRenameDialog();
+        this.$emit('changed');
+      });
+    },
+    renamedPath(path, oldName, newName) {
+      if (!path) return '';
+      if (oldName && path.endsWith(oldName)) {
+        return path.slice(0, -oldName.length) + newName;
+      }
+      const separatorIndex = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+      if (separatorIndex >= 0) {
+        return path.slice(0, separatorIndex + 1) + newName;
+      }
+      return newName;
+    },
     async withProcessing(id, action) {
       if (this.processingIds.includes(id)) return;
       this.processingIds = [...this.processingIds, id];
@@ -214,8 +302,20 @@ export default {
 
 .ai-tag-review-actions {
   display: flex;
-  justify-content: flex-end;
+  justify-content: space-between;
+  gap: 12px;
   padding: 12px 0;
+}
+
+.ai-tag-review-search {
+  flex: 1 1 auto;
+  min-width: 180px;
+  height: 36px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-primary);
 }
 
 .ai-tag-review-list {
@@ -363,6 +463,17 @@ export default {
   margin: 0 0 10px;
   color: var(--text-secondary);
   line-height: 1.5;
+}
+
+.ai-tag-rename-input {
+  width: 100%;
+  height: 38px;
+  margin: 8px 0 10px;
+  padding: 0 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-primary);
 }
 
 .ai-confirm-video {

@@ -460,6 +460,40 @@ func TestRejectPendingCandidatesByVideoRejectsOnlyThatVideosPendingCandidates(t 
 	}
 }
 
+func TestListAITagCandidatesExcludesSoftDeletedVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	activeVideo := models.Video{Name: "active.mp4", Path: "/tmp/ai-active.mp4", Directory: "/tmp"}
+	deletedVideo := models.Video{Name: "deleted.mp4", Path: "/tmp/ai-deleted.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&activeVideo).Error; err != nil {
+		t.Fatalf("创建有效视频失败: %v", err)
+	}
+	if err := database.DB.Create(&deletedVideo).Error; err != nil {
+		t.Fatalf("创建待删除视频失败: %v", err)
+	}
+	candidates := []models.AITagCandidate{
+		{VideoID: activeVideo.ID, SuggestedName: "保留", NormalizedName: "保留", Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending},
+		{VideoID: deletedVideo.ID, SuggestedName: "隐藏", NormalizedName: "隐藏", Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending},
+	}
+	if err := database.DB.Create(&candidates).Error; err != nil {
+		t.Fatalf("创建候选失败: %v", err)
+	}
+	if err := database.DB.Delete(&deletedVideo).Error; err != nil {
+		t.Fatalf("软删除视频失败: %v", err)
+	}
+
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
+	items, err := svc.ListCandidates(0, "", models.AITagCandidateStatusPending)
+	if err != nil {
+		t.Fatalf("读取候选失败: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("审阅列表应只包含有效视频候选，实际 %d: %+v", len(items), items)
+	}
+	if items[0].VideoID != activeVideo.ID || items[0].Video == nil || items[0].Video.Name != activeVideo.Name {
+		t.Fatalf("返回候选不正确: %+v", items[0])
+	}
+}
+
 func TestApproveAITagCandidateSupersedesWhenVideoWasManuallyTagged(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	existingTag := models.Tag{Name: "动作", Color: "#fff"}

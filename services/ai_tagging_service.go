@@ -366,7 +366,12 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 }
 
 func (s *AITaggingService) ListCandidates(videoID uint, confidence string, status string) ([]AITaggingReviewItem, error) {
-	query := database.DB.Model(&models.AITagCandidate{}).Preload("Video").Preload("Video.Tags").Preload("MatchedTag")
+	query := database.DB.
+		Model(&models.AITagCandidate{}).
+		Joins("INNER JOIN videos ON videos.id = ai_tag_candidates.video_id AND videos.deleted_at IS NULL").
+		Preload("Video").
+		Preload("Video.Tags").
+		Preload("MatchedTag")
 	if videoID > 0 {
 		query = query.Where("video_id = ?", videoID)
 	}
@@ -379,7 +384,7 @@ func (s *AITaggingService) ListCandidates(videoID uint, confidence string, statu
 	}
 	query = query.Where("status = ?", status)
 	var candidates []models.AITagCandidate
-	if err := query.Order("created_at desc, id desc").Find(&candidates).Error; err != nil {
+	if err := query.Order("ai_tag_candidates.created_at desc, ai_tag_candidates.id desc").Find(&candidates).Error; err != nil {
 		return nil, err
 	}
 	items := make([]AITaggingReviewItem, 0, len(candidates))

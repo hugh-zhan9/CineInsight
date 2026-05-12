@@ -42,6 +42,22 @@ export function groupCandidatesByVideo(candidates) {
   }));
 }
 
+export function filterCandidatesForReview(candidates, searchTerm) {
+  const keyword = String(searchTerm || '').trim().toLowerCase();
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!keyword) return list;
+  return list.filter(candidate => {
+    const video = candidate?.video || {};
+    return [
+      video.name,
+      video.path,
+      candidate?.suggested_name,
+      candidate?.matched_tag?.name,
+      candidate?.reasoning,
+    ].some(value => String(value || '').toLowerCase().includes(keyword));
+  });
+}
+
 export function removeCandidateById(candidates, candidateId) {
   const id = Number(candidateId);
   return (Array.isArray(candidates) ? candidates : []).filter(candidate => Number(candidate.id) !== id);
