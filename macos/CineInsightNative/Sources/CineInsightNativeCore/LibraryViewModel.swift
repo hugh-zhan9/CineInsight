@@ -13,11 +13,16 @@ public final class LibraryViewModel: ObservableObject {
     @Published public private(set) var cleanup: CleanupAnalysisRecord?
     @Published public private(set) var diagnostics: DiagnosticsSnapshot?
     @Published public private(set) var shortFeedVideo: ShortFeedVideoRecord?
+    @Published public private(set) var shortFeedPreview: PreviewSessionResponse?
     @Published public private(set) var isLoading: Bool
     @Published public private(set) var statusMessage: String
     @Published public var selectedVideoID: Int64?
+    @Published public var selectedVideoIDs: Set<Int64>
     @Published public var query: String
     @Published public var subtitleQuery: String
+    @Published public var selectedTagIDs: Set<Int64>
+    @Published public var sizeFilter: VideoSizeFilter
+    @Published public var resolutionFilter: VideoResolutionFilter
 
     private let client: NativeAPIClient
 
@@ -39,11 +44,16 @@ public final class LibraryViewModel: ObservableObject {
         self.cleanup = nil
         self.diagnostics = nil
         self.shortFeedVideo = nil
+        self.shortFeedPreview = nil
         self.isLoading = false
         self.statusMessage = "Ready"
         self.selectedVideoID = videos.first?.id
+        self.selectedVideoIDs = []
         self.query = ""
         self.subtitleQuery = ""
+        self.selectedTagIDs = []
+        self.sizeFilter = .all
+        self.resolutionFilter = .all
     }
 
     public var selectedVideo: VideoSummary? {
@@ -51,13 +61,37 @@ public final class LibraryViewModel: ObservableObject {
     }
 
     public var filteredVideos: [VideoSummary] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return videos }
-        return videos.filter { video in
-            video.name.localizedCaseInsensitiveContains(trimmed)
+        videos.filter { video in
+            let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+            let matchesKeyword = trimmed.isEmpty
+                || video.name.localizedCaseInsensitiveContains(trimmed)
                 || video.path.localizedCaseInsensitiveContains(trimmed)
                 || video.tags.contains { $0.name.localizedCaseInsensitiveContains(trimmed) }
+            let matchesTags = selectedTagIDs.isEmpty || selectedTagIDs.allSatisfy { tagId in
+                video.tags.contains { $0.id == tagId }
+            }
+            let sizeBounds = sizeFilter.requestBounds
+            let matchesSize = (sizeBounds.minSize.map { video.size >= $0 } ?? true)
+                && (sizeBounds.maxSize.map { video.size <= $0 } ?? true)
+            let resolutionBounds = resolutionFilter.requestBounds
+            let matchesResolution = (resolutionBounds.minHeight.map { video.height >= $0 } ?? true)
+                && (resolutionBounds.maxHeight.map { video.height <= $0 } ?? true)
+            return matchesKeyword && matchesTags && matchesSize && matchesResolution
         }
+    }
+
+    public var allVisibleSelected: Bool {
+        !filteredVideos.isEmpty && filteredVideos.allSatisfy { selectedVideoIDs.contains($0.id) }
+    }
+
+    public var aiCandidateGroups: [AITagCandidateGroup] {
+        aiCandidates.groupedByVideo()
+    }
+
+    public var cleanupCandidateVideos: [VideoSummary] {
+        guard let cleanup else { return [] }
+        let ids = Set(cleanup.allCandidateIds)
+        return videos.filter { ids.contains($0.id) }
     }
 
     public func loadAll() async {
@@ -85,6 +119,7 @@ public final class LibraryViewModel: ObservableObject {
             if selectedVideoID == nil || !videos.contains(where: { $0.id == selectedVideoID }) {
                 selectedVideoID = videos.first?.id
             }
+            selectedVideoIDs = selectedVideoIDs.intersection(Set(videos.map(\.id)))
             statusMessage = "Library loaded"
         }
     }
@@ -92,15 +127,62 @@ public final class LibraryViewModel: ObservableObject {
     public func search() async {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         await run(trimmed.isEmpty ? "Loading videos" : "Searching videos") {
+            let sizeBounds = sizeFilter.requestBounds
+            let resolutionBounds = resolutionFilter.requestBounds
             let page: VideoListResponse
-            if trimmed.isEmpty {
+            if trimmed.isEmpty && selectedTagIDs.isEmpty && sizeFilter == .all && resolutionFilter == .all {
                 page = try await client.listVideos()
             } else {
-                page = try await client.searchVideos(VideoFilterRequest(keyword: trimmed, limit: 80))
+                page = try await client.searchVideos(
+                    VideoFilterRequest(
+                        keyword: trimmed.isEmpty ? nil : trimmed,
+                        tagIds: Array(selectedTagIDs).sorted(),
+                        minSize: sizeBounds.minSize,
+                        maxSize: sizeBounds.maxSize,
+                        minHeight: resolutionBounds.minHeight,
+                        maxHeight: resolutionBounds.maxHeight,
+                        limit: 80
+                    )
+                )
             }
             videos = page.videos
             selectedVideoID = videos.first?.id
+            selectedVideoIDs = selectedVideoIDs.intersection(Set(videos.map(\.id)))
             statusMessage = trimmed.isEmpty ? "Videos loaded" : "Search updated"
+        }
+    }
+
+    public func toggleTagFilter(_ tag: TagRecord) async {
+        if selectedTagIDs.contains(tag.id) {
+            selectedTagIDs.remove(tag.id)
+        } else {
+            selectedTagIDs.insert(tag.id)
+        }
+        await search()
+    }
+
+    public func clearTagFilter() async {
+        selectedTagIDs.removeAll()
+        await search()
+    }
+
+    public func toggleSelection(_ video: VideoSummary) {
+        if selectedVideoIDs.contains(video.id) {
+            selectedVideoIDs.remove(video.id)
+        } else {
+            selectedVideoIDs.insert(video.id)
+        }
+    }
+
+    public func toggleSelectAllVisible() {
+        if allVisibleSelected {
+            for video in filteredVideos {
+                selectedVideoIDs.remove(video.id)
+            }
+        } else {
+            for video in filteredVideos {
+                selectedVideoIDs.insert(video.id)
+            }
         }
     }
 
@@ -159,10 +241,29 @@ public final class LibraryViewModel: ObservableObject {
         await run("Deleting video") {
             let response = try await client.deleteVideo(id: video.id, deleteFile: deleteFile)
             videos.removeAll { $0.id == video.id }
+            selectedVideoIDs.remove(video.id)
             if selectedVideoID == video.id {
                 selectedVideoID = videos.first?.id
             }
             statusMessage = response.userMessage ?? "Video deleted"
+        }
+    }
+
+    public func deleteSelectedVideos(deleteFile: Bool = false) async {
+        let ids = selectedVideoIDs
+        guard !ids.isEmpty else { return }
+        await run("Deleting selected videos") {
+            var deleted = 0
+            for id in ids.sorted() {
+                _ = try await client.deleteVideo(id: id, deleteFile: deleteFile)
+                deleted += 1
+            }
+            videos.removeAll { ids.contains($0.id) }
+            selectedVideoIDs.removeAll()
+            if selectedVideoID.map(ids.contains) == true {
+                selectedVideoID = videos.first?.id
+            }
+            statusMessage = "Deleted \(deleted) selected videos"
         }
     }
 
@@ -313,7 +414,9 @@ public final class LibraryViewModel: ObservableObject {
 
     public func loadShortFeedVideo() async {
         await run("Loading short feed") {
-            shortFeedVideo = try await client.nextShortFeedVideo()
+            let video = try await client.nextShortFeedVideo()
+            shortFeedVideo = video
+            shortFeedPreview = try await client.previewSession(videoId: video.id)
             statusMessage = "Short feed video loaded"
         }
     }
@@ -346,6 +449,31 @@ public final class LibraryViewModel: ObservableObject {
         await run("Analyzing cleanup") {
             cleanup = try await client.analyzeCleanup()
             statusMessage = "Cleanup analysis updated"
+        }
+    }
+
+    public func saveSettings(
+        videoExtensions: String,
+        playWeight: Double,
+        shortFeedMaxDurationMinutes: Int,
+        theme: String,
+        aiFrameCount: Int,
+        aiSubtitleCharLimit: Int,
+        aiStartupBatchSize: Int
+    ) async {
+        await run("Saving settings") {
+            settings = try await client.updateSettings(
+                SettingsUpdateRequest(
+                    videoExtensions: videoExtensions,
+                    playWeight: playWeight,
+                    shortFeedMaxDurationMinutes: shortFeedMaxDurationMinutes,
+                    theme: theme,
+                    aiTaggingFrameCount: aiFrameCount,
+                    aiTaggingSubtitleCharLimit: aiSubtitleCharLimit,
+                    aiTaggingStartupBatchSize: aiStartupBatchSize
+                )
+            )
+            statusMessage = "Settings saved"
         }
     }
 

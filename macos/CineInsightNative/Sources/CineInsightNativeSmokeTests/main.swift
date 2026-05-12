@@ -36,12 +36,36 @@ assertEqual(filterObject?["keyword"] as? String, "clip", "filter keyword encodin
 assertEqual(filterObject?["tag_ids"] as? [Int], [1], "filter tag encoding")
 assertEqual(filterObject?["limit"] as? Int, 20, "filter limit encoding")
 
+let largeSizeFilter = VideoSizeFilter.large.requestBounds
+assertEqual(largeSizeFilter.minSize, 1_073_741_824, "large size filter min")
+assertEqual(largeSizeFilter.maxSize, nil, "large size filter max")
+let hdResolutionFilter = VideoResolutionFilter.hd.requestBounds
+assertEqual(hdResolutionFilter.minHeight, 720, "hd resolution filter min")
+assertEqual(hdResolutionFilter.maxHeight, 1079, "hd resolution filter max")
+
 let cleanupRequest = CleanupAnalyzeRequest(maxDurationSeconds: 30, minWidth: 800, minHeight: 480)
 let encodedCleanup = try JSONEncoder.cineInsight.encode(cleanupRequest)
 let cleanupObject = try JSONSerialization.jsonObject(with: encodedCleanup) as? [String: Any]
 assertEqual(cleanupObject?["max_duration_seconds"] as? Double, 30, "cleanup duration encoding")
 assertEqual(cleanupObject?["min_width"] as? Int, 800, "cleanup width encoding")
 assertEqual(cleanupObject?["min_height"] as? Int, 480, "cleanup height encoding")
+
+let settingsUpdate = SettingsUpdateRequest(
+    videoExtensions: ".mp4,.mkv",
+    playWeight: 2.5,
+    shortFeedMaxDurationMinutes: 7,
+    theme: "dark",
+    aiTaggingFrameCount: 4,
+    aiTaggingSubtitleCharLimit: 3000,
+    aiTaggingStartupBatchSize: 12
+)
+let encodedSettingsUpdate = try JSONEncoder.cineInsight.encode(settingsUpdate)
+let settingsUpdateObject = try JSONSerialization.jsonObject(with: encodedSettingsUpdate) as? [String: Any]
+assertEqual(settingsUpdateObject?["video_extensions"] as? String, ".mp4,.mkv", "settings update extensions")
+assertEqual(settingsUpdateObject?["play_weight"] as? Double, 2.5, "settings update play weight")
+assertEqual(settingsUpdateObject?["short_feed_max_duration_minutes"] as? Int, 7, "settings update short feed")
+assertEqual(settingsUpdateObject?["ai_tagging_frame_count"] as? Int, 4, "settings update ai frames")
+assertEqual(settingsUpdateObject?["ai_tagging_base_url"] as? String, "", "settings update ai base URL")
 
 let addVideoRequest = AddVideoRequest(path: "/library/clip.mp4")
 let encodedAddVideo = try JSONEncoder.cineInsight.encode(addVideoRequest)
@@ -302,6 +326,10 @@ let aiCandidates = try JSONDecoder.cineInsight.decode(
     from: aiCandidatesData
 )
 assertEqual(aiCandidates.candidates[0].status, .approved, "ai candidate status")
+let groupedCandidates = aiCandidates.candidates.groupedByVideo()
+assertEqual(groupedCandidates.count, 1, "ai candidates grouped count")
+assertEqual(groupedCandidates[0].videoId, 3, "ai candidates grouped video")
+assertEqual(groupedCandidates[0].pendingCount, 0, "ai candidates grouped pending count")
 
 let shortFeedData = """
 {
@@ -329,6 +357,7 @@ let cleanupData = """
 
 let cleanup = try JSONDecoder.cineInsight.decode(CleanupAnalysisRecord.self, from: cleanupData)
 assertEqual(cleanup.duplicateGroups[0].candidateIds, [2], "cleanup candidates")
+assertEqual(cleanup.allCandidateIds, [1, 2], "cleanup all candidate ids")
 
 let diagnosticsData = """
 {
