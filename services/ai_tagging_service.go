@@ -394,11 +394,22 @@ func (s *AITaggingService) ListCandidates(videoID uint, confidence string, statu
 	return items, nil
 }
 
+func activeVideoExistsInTx(tx *gorm.DB, videoID uint) error {
+	if videoID == 0 {
+		return gorm.ErrRecordNotFound
+	}
+	var video models.Video
+	return tx.Select("id").First(&video, videoID).Error
+}
+
 func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewItem, error) {
 	var approved models.AITagCandidate
 	err := database.DB.Transaction(func(tx *gorm.DB) error {
 		var candidate models.AITagCandidate
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", candidateID).First(&candidate).Error; err != nil {
+			return err
+		}
+		if err := activeVideoExistsInTx(tx, candidate.VideoID); err != nil {
 			return err
 		}
 		if candidate.Status != models.AITagCandidateStatusPending {
@@ -550,20 +561,34 @@ func (s *AITaggingService) RejectCandidate(candidateID uint) error {
 
 func (s *AITaggingService) RejectPendingCandidatesByVideo(videoID uint) (int64, error) {
 	now := s.now()
-	result := database.DB.Model(&models.AITagCandidate{}).
-		Where("video_id = ? AND status = ?", videoID, models.AITagCandidateStatusPending).
-		Updates(map[string]interface{}{
-			"status":      models.AITagCandidateStatusRejected,
-			"rejected_at": &now,
-		})
-	if result.Error != nil {
-		return 0, result.Error
+	var rejected int64
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := activeVideoExistsInTx(tx, videoID); err != nil {
+			return err
+		}
+		result := tx.Model(&models.AITagCandidate{}).
+			Where("video_id = ? AND status = ?", videoID, models.AITagCandidateStatusPending).
+			Updates(map[string]interface{}{
+				"status":      models.AITagCandidateStatusRejected,
+				"rejected_at": &now,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		rejected = result.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, err
 	}
-	return result.RowsAffected, nil
+	return rejected, nil
 }
 
 func (s *AITaggingService) RetryVideo(videoID uint) error {
 	return database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := activeVideoExistsInTx(tx, videoID); err != nil {
+			return err
+		}
 		if err := tx.Model(&models.AITagCandidate{}).
 			Where("video_id = ? AND status = ?", videoID, models.AITagCandidateStatusPending).
 			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
@@ -590,11 +615,17 @@ func (s *AITaggingService) RetryVideo(videoID uint) error {
 func (s *AITaggingService) StatusSummary() (*AITaggingStatusSummary, error) {
 	_, configErr := s.configProvider.Load()
 	summary := &AITaggingStatusSummary{ConfigAvailable: configErr == nil}
-	if err := database.DB.Model(&models.AITagCandidate{}).Where("status = ?", models.AITagCandidateStatusPending).Count(&summary.Pending).Error; err != nil {
+	if err := database.DB.Model(&models.AITagCandidate{}).
+		Joins("INNER JOIN videos ON videos.id = ai_tag_candidates.video_id AND videos.deleted_at IS NULL").
+		Where("ai_tag_candidates.status = ?", models.AITagCandidateStatusPending).
+		Count(&summary.Pending).Error; err != nil {
 		return nil, err
 	}
 	countState := func(status string, target *int64) error {
-		return database.DB.Model(&models.AITaggingState{}).Where("status = ?", status).Count(target).Error
+		return database.DB.Model(&models.AITaggingState{}).
+			Joins("INNER JOIN videos ON videos.id = ai_tagging_states.video_id AND videos.deleted_at IS NULL").
+			Where("ai_tagging_states.status = ?", status).
+			Count(target).Error
 	}
 	if err := countState(models.AITaggingStateStatusProcessing, &summary.Processing); err != nil {
 		return nil, err

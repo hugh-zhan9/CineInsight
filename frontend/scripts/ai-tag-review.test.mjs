@@ -66,6 +66,11 @@ assert.match(componentSource, /class="ai-confirm-dialog glass-surface"/, 'AI rev
 assert.match(componentSource, /class="btn-action btn-compact" @click="previewVideo/, 'AI review preview action should use the shared compact button size');
 assert.match(componentSource, /class="btn-secondary btn-compact" @click="openRenameDialog/, 'AI review rename action should use the shared compact button size');
 assert.match(componentSource, /class="btn-action btn-compact" @click="retryVideo/, 'AI review retry action should use the shared compact button size');
+assert.match(componentSource, /\.ai-tag-review-modal\s*{[^}]*overflow-x:\s*hidden;/s, 'AI review modal should suppress horizontal overflow');
+assert.match(componentSource, /\.ai-tag-review-list\s*{[^}]*overflow-x:\s*hidden;/s, 'AI review list should not expose a horizontal scrollbar');
+assert.match(componentSource, /\.ai-video-actions\s*{[^}]*flex-wrap:\s*wrap;/s, 'AI review video actions should wrap inside the modal');
+assert.match(componentSource, /\.ai-candidate-row\s*{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto;/s, 'AI review candidate rows should constrain content before action buttons');
+assert.match(componentSource, /@media \(max-width: 640px\)/, 'AI review dialog should adapt candidate rows on narrow screens');
 assert.doesNotMatch(componentSource, /\.btn-small\b/, 'AI review dialog should not keep a local compact button class');
 assert.doesNotMatch(componentSource, /var\(--input-bg\)/, 'AI review dialog should not depend on legacy input background tokens');
 

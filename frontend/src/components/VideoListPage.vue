@@ -42,13 +42,9 @@
           {{ allVisibleSelected ? '取消全选' : '选择本页' }}
         </button>
         <button @click="showScanDialog = true" class="btn-primary">扫描目录</button>
-        <ActionMenu label="更多">
-          <template #default="{ close }">
-            <button type="button" class="btn-action" @click="openAITagReviewDialog(); close()">AI 标签审阅</button>
-            <button type="button" class="btn-action" @click="openCleanupDialog(); close()">清理候选</button>
-            <button type="button" class="btn-action" @click="showTagManagerDialog = true; close()">标签管理</button>
-          </template>
-        </ActionMenu>
+        <button type="button" class="btn-action" @click="openAITagReviewDialog()">AI 标签管理</button>
+        <button type="button" class="btn-action" @click="openCleanupDialog()">清理候选</button>
+        <button type="button" class="btn-action" @click="showTagManagerDialog = true">标签管理</button>
       </div>
     </div>
 
@@ -544,6 +540,7 @@
   justify-content: flex-end;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 
 .selection-toolbar {
@@ -868,13 +865,12 @@ import PreviewDrawer from './PreviewDrawer.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
 import VideoListRow from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
-import ActionMenu from './ui/ActionMenu.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow, AITagReviewDialog, ActionMenu },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow, AITagReviewDialog },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
