@@ -494,6 +494,47 @@ func TestListAITagCandidatesExcludesSoftDeletedVideos(t *testing.T) {
 	}
 }
 
+func TestAITaggingStatusSummaryExcludesSoftDeletedVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	activeVideo := models.Video{Name: "active-summary.mp4", Path: "/tmp/ai-active-summary.mp4", Directory: "/tmp"}
+	deletedVideo := models.Video{Name: "deleted-summary.mp4", Path: "/tmp/ai-deleted-summary.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&activeVideo).Error; err != nil {
+		t.Fatalf("创建有效视频失败: %v", err)
+	}
+	if err := database.DB.Create(&deletedVideo).Error; err != nil {
+		t.Fatalf("创建待删除视频失败: %v", err)
+	}
+	candidates := []models.AITagCandidate{
+		{VideoID: activeVideo.ID, SuggestedName: "保留", NormalizedName: "保留", Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending},
+		{VideoID: deletedVideo.ID, SuggestedName: "隐藏", NormalizedName: "隐藏", Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending},
+	}
+	if err := database.DB.Create(&candidates).Error; err != nil {
+		t.Fatalf("创建候选失败: %v", err)
+	}
+	states := []models.AITaggingState{
+		{VideoID: activeVideo.ID, Status: models.AITaggingStateStatusCompleted},
+		{VideoID: deletedVideo.ID, Status: models.AITaggingStateStatusCompleted},
+	}
+	if err := database.DB.Create(&states).Error; err != nil {
+		t.Fatalf("创建状态失败: %v", err)
+	}
+	if err := database.DB.Delete(&deletedVideo).Error; err != nil {
+		t.Fatalf("软删除视频失败: %v", err)
+	}
+
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
+	summary, err := svc.StatusSummary()
+	if err != nil {
+		t.Fatalf("读取状态汇总失败: %v", err)
+	}
+	if summary.Pending != 1 {
+		t.Fatalf("待审汇总应只统计有效视频候选，实际 %d", summary.Pending)
+	}
+	if summary.Completed != 1 {
+		t.Fatalf("完成汇总应只统计有效视频状态，实际 %d", summary.Completed)
+	}
+}
+
 func TestApproveAITagCandidateSupersedesWhenVideoWasManuallyTagged(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	existingTag := models.Tag{Name: "动作", Color: "#fff"}

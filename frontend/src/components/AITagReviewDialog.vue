@@ -3,7 +3,7 @@
     <div class="modal ai-tag-review-modal">
       <div class="ai-tag-review-header">
         <div>
-          <h3>AI 标签审阅</h3>
+          <h3>AI 标签管理</h3>
           <p class="help-text">待审 {{ candidates.length }} 条<span v-if="reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条</span>，高置信和中置信需人工确认后才会写入正式标签。</p>
           <p v-if="summary && !summary.config_available" class="ai-tag-warning">AI 配置不可用，后台分析已暂停。</p>
         </div>
@@ -287,6 +287,7 @@ export default {
   max-width: 760px;
   max-height: min(720px, calc(100vh - 48px));
   overflow: hidden;
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
 }
@@ -298,6 +299,11 @@ export default {
   align-items: flex-start;
   border-bottom: 1px solid var(--border-color);
   padding-bottom: 14px;
+  min-width: 0;
+}
+
+.ai-tag-review-header > div {
+  min-width: 0;
 }
 
 .ai-tag-review-actions {
@@ -305,6 +311,7 @@ export default {
   justify-content: space-between;
   gap: 12px;
   padding: 12px 0;
+  min-width: 0;
 }
 
 .ai-tag-review-search {
@@ -314,7 +321,9 @@ export default {
 
 .ai-tag-review-list {
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
+  min-width: 0;
 }
 
 .ai-video-group {
@@ -329,12 +338,21 @@ export default {
   gap: 12px;
   font-weight: 700;
   color: var(--text-primary);
+  min-width: 0;
+}
+
+.ai-video-title > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .ai-video-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   flex: 0 0 auto;
+  max-width: 320px;
 }
 
 .ai-video-path {
@@ -345,15 +363,18 @@ export default {
 }
 
 .ai-candidate-row {
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
   gap: 14px;
   padding: 12px 0;
   border-top: 1px solid rgba(148, 163, 184, 0.22);
+  min-width: 0;
 }
 
 .ai-candidate-main {
   min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .ai-confidence {
@@ -394,6 +415,7 @@ export default {
   margin-left: 8px;
   color: var(--text-muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
 }
 
 .ai-candidate-reason {
@@ -471,5 +493,31 @@ export default {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 16px;
+}
+
+@media (max-width: 640px) {
+  .ai-tag-review-modal {
+    width: calc(100vw - 24px);
+    padding: 18px;
+  }
+
+  .ai-tag-review-header,
+  .ai-tag-review-actions,
+  .ai-video-title {
+    flex-wrap: wrap;
+  }
+
+  .ai-video-actions {
+    justify-content: flex-start;
+    max-width: 100%;
+  }
+
+  .ai-candidate-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ai-candidate-actions {
+    justify-content: flex-start;
+  }
 }
 </style>

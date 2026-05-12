@@ -51,9 +51,11 @@
       </div>
 
       <div class="top-bar" :class="{ visible: controlsVisible || !isPlaying }" @click.stop>
-        <button class="icon-btn" type="button" title="收藏夹" aria-label="收藏夹" @click="openFavorites">Fav</button>
-        <button class="icon-btn" type="button" :title="muted ? '打开声音' : '静音'" @click="muted = !muted">
-          {{ muted ? 'Mute' : 'Sound' }}
+        <button class="icon-btn" type="button" title="收藏夹" aria-label="收藏夹" @click="openFavorites">
+          <span class="top-icon top-icon--stack" aria-hidden="true"></span>
+        </button>
+        <button class="icon-btn" type="button" :title="muted ? '打开声音' : '静音'" :aria-label="muted ? '打开声音' : '静音'" @click="muted = !muted">
+          <span class="top-icon" :class="muted ? 'top-icon--muted' : 'top-icon--sound'" aria-hidden="true"></span>
         </button>
       </div>
 
@@ -80,7 +82,8 @@
           :disabled="!currentVideo"
           @click="toggleLike"
         >
-          Like
+          <span class="action-icon action-icon--heart" aria-hidden="true"></span>
+          <span class="action-count">{{ currentVideo?.liked ? 1 : 0 }}</span>
         </button>
         <button
           class="round-action"
@@ -90,7 +93,8 @@
           :disabled="!currentVideo"
           @click="toggleFavorite"
         >
-          Save
+          <span class="action-icon action-icon--bookmark" aria-hidden="true"></span>
+          <span class="action-count">{{ currentVideo?.favorited ? 1 : 0 }}</span>
         </button>
         <button
           class="round-action danger"
@@ -99,7 +103,7 @@
           :disabled="!currentVideo"
           @click="deleteDialogOpen = true"
         >
-          Del
+          <span class="action-icon action-icon--trash" aria-hidden="true"></span>
         </button>
       </nav>
 
@@ -112,11 +116,6 @@
         @touchend.stop
         @wheel.stop
       >
-        <div class="progress-time">
-          <span>{{ formatTime(videoCurrentTime) }}</span>
-          <button class="speed-btn" type="button" title="切换倍速" @click="cyclePlaybackRate">{{ playbackRateLabel }}</button>
-          <span>{{ formatTime(videoDuration) }}</span>
-        </div>
         <div
           class="progress-scrubber"
           role="slider"
