@@ -285,141 +285,19 @@ button {
 
 .top-icon,
 .action-icon {
-  position: relative;
   display: block;
   width: 24px;
   height: 24px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
-.top-icon--stack::before,
-.top-icon--stack::after {
-  content: "";
-  position: absolute;
-  left: 5px;
-  width: 14px;
-  height: 8px;
-  border: 2px solid currentColor;
-  border-radius: 3px;
-}
-
-.top-icon--stack::before {
-  top: 5px;
-}
-
-.top-icon--stack::after {
-  top: 11px;
-}
-
-.top-icon--sound::before {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 7px;
-  width: 8px;
-  height: 10px;
-  border-radius: 2px;
-  background: currentColor;
-}
-
-.top-icon--sound::after {
-  content: "";
-  position: absolute;
-  right: 3px;
-  top: 5px;
-  width: 8px;
-  height: 14px;
-  border: 2px solid currentColor;
-  border-left: 0;
-  border-radius: 0 14px 14px 0;
-}
-
-.top-icon--muted::before {
-  content: "";
-  position: absolute;
-  left: 3px;
-  top: 7px;
-  width: 8px;
-  height: 10px;
-  border-radius: 2px;
-  background: currentColor;
-}
-
-.top-icon--muted::after {
-  content: "";
-  position: absolute;
-  left: 15px;
-  top: 4px;
-  width: 2px;
-  height: 17px;
-  border-radius: 2px;
-  background: currentColor;
-  transform: rotate(45deg);
-}
-
-.action-icon--heart::before,
-.action-icon--heart::after {
-  content: "";
-  position: absolute;
-  top: 5px;
-  width: 13px;
-  height: 19px;
-  border-radius: 13px 13px 0 0;
-  background: currentColor;
-}
-
-.action-icon--heart::before {
-  left: 12px;
-  transform: rotate(-45deg);
-  transform-origin: 0 100%;
-}
-
-.action-icon--heart::after {
-  left: 0;
-  transform: rotate(45deg);
-  transform-origin: 100% 100%;
-}
-
-.action-icon--bookmark {
-  width: 19px;
-  height: 24px;
-  border: 3px solid currentColor;
-  border-bottom: 0;
-  border-radius: 4px 4px 1px 1px;
-}
-
-.action-icon--bookmark::after {
-  content: "";
-  position: absolute;
-  left: 3px;
-  right: 3px;
-  bottom: -1px;
-  height: 11px;
-  background: #050505;
-  clip-path: polygon(0 100%, 50% 42%, 100% 100%, 100% 0, 0 0);
-}
-
-.action-icon--trash::before {
-  content: "";
-  position: absolute;
-  left: 5px;
-  top: 8px;
-  width: 14px;
-  height: 14px;
-  border: 2px solid currentColor;
-  border-top: 0;
-  border-radius: 0 0 3px 3px;
-}
-
-.action-icon--trash::after {
-  content: "";
-  position: absolute;
-  left: 4px;
-  top: 4px;
-  width: 16px;
-  height: 2px;
-  border-radius: 2px;
-  background: currentColor;
-  box-shadow: 5px -3px 0 -1px currentColor;
+.action-icon path:first-child {
+  fill: currentColor;
+  stroke: currentColor;
 }
 
 .action-count {

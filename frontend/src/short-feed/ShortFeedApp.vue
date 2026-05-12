@@ -21,8 +21,6 @@
         autoplay
         playsinline
         loop
-        @click="onStageClick"
-        @dblclick="togglePlayback"
         @pointerdown.prevent="startLongPress"
         @pointermove.prevent="trackLongPressMove"
         @pointerup.prevent="finishPointerPress"
@@ -46,16 +44,27 @@
         playsinline
       ></video>
 
-      <div v-else class="feed-empty" @click="onStageClick">
+      <div v-if="!currentVideo || !currentVideo.media_url" class="feed-empty" @click="handleStageTap">
         <div>{{ statusText }}</div>
       </div>
 
       <div class="top-bar" :class="{ visible: controlsVisible || !isPlaying }" @click.stop>
         <button class="icon-btn" type="button" title="收藏夹" aria-label="收藏夹" @click="openFavorites">
-          <span class="top-icon top-icon--stack" aria-hidden="true"></span>
+          <svg class="top-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 6.8C4 5.8 4.8 5 5.8 5h12.4C19.2 5 20 5.8 20 6.8v9.4c0 1-.8 1.8-1.8 1.8H5.8C4.8 18 4 17.2 4 16.2V6.8Z" />
+            <path d="M7 2.8h10M7 21.2h10" />
+          </svg>
         </button>
         <button class="icon-btn" type="button" :title="muted ? '打开声音' : '静音'" :aria-label="muted ? '打开声音' : '静音'" @click="muted = !muted">
-          <span class="top-icon" :class="muted ? 'top-icon--muted' : 'top-icon--sound'" aria-hidden="true"></span>
+          <svg v-if="muted" class="top-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 9.5h4l5-4v13l-5-4H4v-5Z" />
+            <path d="m17 9 4 4m0-4-4 4" />
+          </svg>
+          <svg v-else class="top-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M4 9.5h4l5-4v13l-5-4H4v-5Z" />
+            <path d="M17 8.5c1.2.9 2 2.2 2 3.5s-.8 2.6-2 3.5" />
+            <path d="M19.5 5.5A8.6 8.6 0 0 1 23 12a8.6 8.6 0 0 1-3.5 6.5" />
+          </svg>
         </button>
       </div>
 
@@ -82,7 +91,9 @@
           :disabled="!currentVideo"
           @click="toggleLike"
         >
-          <span class="action-icon action-icon--heart" aria-hidden="true"></span>
+          <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20.8 4.9c-2-2-5.2-1.9-7.1.2L12 6.9l-1.7-1.8C8.4 3 5.2 2.9 3.2 4.9c-2.1 2.1-2 5.5.2 7.6L12 21l8.6-8.5c2.2-2.1 2.3-5.5.2-7.6Z" />
+          </svg>
           <span class="action-count">{{ currentVideo?.liked ? 1 : 0 }}</span>
         </button>
         <button
@@ -93,7 +104,9 @@
           :disabled="!currentVideo"
           @click="toggleFavorite"
         >
-          <span class="action-icon action-icon--bookmark" aria-hidden="true"></span>
+          <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M6 4.8C6 3.8 6.8 3 7.8 3h8.4c1 0 1.8.8 1.8 1.8V21l-6-3.8L6 21V4.8Z" />
+          </svg>
           <span class="action-count">{{ currentVideo?.favorited ? 1 : 0 }}</span>
         </button>
         <button
@@ -103,7 +116,12 @@
           :disabled="!currentVideo"
           @click="deleteDialogOpen = true"
         >
-          <span class="action-icon action-icon--trash" aria-hidden="true"></span>
+          <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M5 7h14" />
+            <path d="M9 7V5.5C9 4.7 9.7 4 10.5 4h3c.8 0 1.5.7 1.5 1.5V7" />
+            <path d="M7 7l1 12c.1.8.8 1.5 1.6 1.5h4.8c.8 0 1.5-.7 1.6-1.5l1-12" />
+            <path d="M10.5 11v5.5M13.5 11v5.5" />
+          </svg>
         </button>
       </nav>
 
@@ -208,7 +226,10 @@ export default {
       longPressTimer: null,
       longPressStart: null,
       longPressTriggered: false,
-      longPressActionInFlight: false
+      longPressActionInFlight: false,
+      lastStageTapAt: 0,
+      lastStageTapPoint: null,
+      wakeLock: null
     };
   },
   computed: {
@@ -224,8 +245,11 @@ export default {
   beforeUnmount() {
     this.clearControlsHideTimer();
     this.clearLongPressTimer();
+    this.releaseWakeLock();
+    document.removeEventListener('visibilitychange', this.handleVisibilityChange);
   },
   async mounted() {
+    document.addEventListener('visibilitychange', this.handleVisibilityChange);
     await this.nextVideo();
     this.$el.focus();
   },
@@ -285,7 +309,28 @@ export default {
         this.prefetching = false;
       }
     },
-    onStageClick() {
+    handleStageTap(event) {
+      if (!this.currentVideo?.media_url) return;
+      const now = Date.now();
+      const point = this.eventPoint(event);
+      const previous = this.lastStageTapPoint;
+      const isDoubleTap = previous &&
+        now - this.lastStageTapAt <= 320 &&
+        Math.hypot(point.x - previous.x, point.y - previous.y) <= 28;
+      this.lastStageTapAt = now;
+      this.lastStageTapPoint = point;
+      if (isDoubleTap) {
+        this.togglePlayback();
+        return;
+      }
+      this.showPlaybackControls();
+    },
+    eventPoint(event) {
+      const touch = event?.changedTouches?.[0] || event?.touches?.[0];
+      if (touch) return { x: touch.clientX, y: touch.clientY };
+      return { x: event?.clientX || 0, y: event?.clientY || 0 };
+    },
+    showPlaybackControls() {
       if (!this.currentVideo?.media_url) return;
       this.showControls();
       if (this.isPlaying) {
@@ -295,11 +340,13 @@ export default {
     onVideoPlay() {
       this.isPlaying = true;
       this.scheduleControlsHide(600);
+      this.requestWakeLock();
     },
     onVideoPause() {
       this.isPlaying = false;
       this.showControls();
       this.clearControlsHideTimer();
+      this.releaseWakeLock();
     },
     togglePlayback() {
       const player = this.$refs.videoEl;
@@ -310,6 +357,30 @@ export default {
         player.pause();
       }
       this.showControls();
+      if (this.isPlaying) {
+        this.scheduleControlsHide();
+      }
+    },
+    async requestWakeLock() {
+      if (this.wakeLock || !navigator?.wakeLock?.request) return;
+      try {
+        this.wakeLock = await navigator.wakeLock.request('screen');
+        this.wakeLock.addEventListener?.('release', () => {
+          this.wakeLock = null;
+        });
+      } catch (err) {}
+    },
+    async releaseWakeLock() {
+      const lock = this.wakeLock;
+      this.wakeLock = null;
+      try {
+        await lock?.release?.();
+      } catch (err) {}
+    },
+    handleVisibilityChange() {
+      if (!document.hidden && this.isPlaying) {
+        this.requestWakeLock();
+      }
     },
     cyclePlaybackRate() {
       const index = this.playbackRates.indexOf(this.playbackRate);
@@ -355,8 +426,8 @@ export default {
     finishPointerPress(event) {
       const wasLongPress = this.longPressTriggered;
       this.cancelLongPress();
-      if (!wasLongPress && event.pointerType !== 'mouse') {
-        this.onStageClick();
+      if (!wasLongPress && event.pointerType !== 'touch') {
+        this.handleStageTap(event);
       }
     },
     clearLongPressTimer() {
@@ -574,7 +645,7 @@ export default {
       if (wasLongPress) return;
       const direction = swipeTracker.end(event);
       if (direction === 0) {
-        this.onStageClick();
+        this.handleStageTap(event);
         return;
       }
       this.nextVideo(direction);
