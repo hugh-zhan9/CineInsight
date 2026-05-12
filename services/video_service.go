@@ -307,7 +307,7 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 
 	// 检查是否已存在
 	var existingVideo models.Video
-	if err := database.DB.Where("path = ?", path).First(&existingVideo).Error; err == nil {
+	if err := database.DB.Unscoped().Where("path = ?", path).First(&existingVideo).Error; err == nil {
 		log.Printf("跳过已存在视频 path=%s", path)
 		return &existingVideo, ErrVideoExists
 	}

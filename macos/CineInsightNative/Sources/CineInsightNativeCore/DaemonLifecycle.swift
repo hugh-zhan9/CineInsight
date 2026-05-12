@@ -1,7 +1,7 @@
 import Combine
 import Foundation
 
-public struct DaemonLaunchConfiguration: Equatable {
+public struct DaemonLaunchConfiguration: Equatable, Sendable {
     public let executablePath: String
     public let port: Int
     public let token: String
@@ -21,7 +21,7 @@ public struct DaemonLaunchConfiguration: Equatable {
     }
 }
 
-public enum DaemonLifecycleState: String, Equatable {
+public enum DaemonLifecycleState: String, Equatable, Sendable {
     case stopped
     case starting
     case running
@@ -106,7 +106,7 @@ public final class DaemonLifecycleManager: ObservableObject {
     }
 }
 
-public enum NativeAPIError: LocalizedError, Equatable {
+public enum NativeAPIError: LocalizedError, Equatable, Sendable {
     case invalidURL(String)
     case httpStatus(Int)
     case emptyResponse
@@ -123,11 +123,11 @@ public enum NativeAPIError: LocalizedError, Equatable {
     }
 }
 
-public struct EmptyRequest: Encodable, Equatable {
+public struct EmptyRequest: Encodable, Equatable, Sendable {
     public init() {}
 }
 
-public struct VideoFilterRequest: Encodable, Equatable {
+public struct VideoFilterRequest: Encodable, Equatable, Sendable {
     public let keyword: String?
     public let tagIds: [Int64]
     public let minSize: Int64?
@@ -158,7 +158,7 @@ public struct VideoFilterRequest: Encodable, Equatable {
     }
 }
 
-public struct RenameVideoRequest: Encodable, Equatable {
+public struct RenameVideoRequest: Encodable, Equatable, Sendable {
     public let name: String
 
     public init(name: String) {
@@ -166,7 +166,7 @@ public struct RenameVideoRequest: Encodable, Equatable {
     }
 }
 
-public struct DeleteVideoRequest: Encodable, Equatable {
+public struct DeleteVideoRequest: Encodable, Equatable, Sendable {
     public let deleteFile: Bool
 
     public init(deleteFile: Bool = false) {
@@ -174,7 +174,7 @@ public struct DeleteVideoRequest: Encodable, Equatable {
     }
 }
 
-public struct TagMutationRequest: Encodable, Equatable {
+public struct TagMutationRequest: Encodable, Equatable, Sendable {
     public let name: String
     public let color: String
 
@@ -184,7 +184,7 @@ public struct TagMutationRequest: Encodable, Equatable {
     }
 }
 
-public struct VideoTagMutationRequest: Encodable, Equatable {
+public struct VideoTagMutationRequest: Encodable, Equatable, Sendable {
     public let tagId: Int64
 
     public init(tagId: Int64) {
@@ -192,7 +192,7 @@ public struct VideoTagMutationRequest: Encodable, Equatable {
     }
 }
 
-public struct ScanDirectoryMutationRequest: Encodable, Equatable {
+public struct ScanDirectoryMutationRequest: Encodable, Equatable, Sendable {
     public let path: String
     public let alias: String
 
@@ -202,7 +202,7 @@ public struct ScanDirectoryMutationRequest: Encodable, Equatable {
     }
 }
 
-public struct ScanDirectoryRequest: Encodable, Equatable {
+public struct ScanDirectoryRequest: Encodable, Equatable, Sendable {
     public let path: String
     public let extensions: String?
 
@@ -212,7 +212,7 @@ public struct ScanDirectoryRequest: Encodable, Equatable {
     }
 }
 
-public struct AddVideoRequest: Encodable, Equatable {
+public struct AddVideoRequest: Encodable, Equatable, Sendable {
     public let path: String
 
     public init(path: String) {
@@ -220,7 +220,7 @@ public struct AddVideoRequest: Encodable, Equatable {
     }
 }
 
-public struct ShortFeedFeedbackRequest: Encodable, Equatable {
+public struct ShortFeedFeedbackRequest: Encodable, Equatable, Sendable {
     public let liked: Bool?
     public let favorited: Bool?
     public let viewed: Bool
@@ -232,7 +232,7 @@ public struct ShortFeedFeedbackRequest: Encodable, Equatable {
     }
 }
 
-public struct CleanupAnalyzeRequest: Encodable, Equatable {
+public struct CleanupAnalyzeRequest: Encodable, Equatable, Sendable {
     public let maxDurationSeconds: Double
     public let minWidth: Int
     public let minHeight: Int
@@ -244,7 +244,7 @@ public struct CleanupAnalyzeRequest: Encodable, Equatable {
     }
 }
 
-public final class NativeAPIClient {
+public final class NativeAPIClient: @unchecked Sendable {
     public let configuration: DaemonLaunchConfiguration
     private let session: URLSession
     private let decoder: JSONDecoder
@@ -442,7 +442,7 @@ public final class NativeAPIClient {
     }
 }
 
-public struct DaemonHealth: Decodable, Equatable {
+public struct DaemonHealth: Decodable, Equatable, Sendable {
     public let service: String
     public let status: String
     public let version: String
@@ -451,13 +451,13 @@ public struct DaemonHealth: Decodable, Equatable {
     public let database: DatabaseHealth
 }
 
-public struct SchemaHealth: Decodable, Equatable {
+public struct SchemaHealth: Decodable, Equatable, Sendable {
     public let status: String
     public let requiredTables: [String]
     public let missingTables: [String]
 }
 
-public struct DatabaseHealth: Decodable, Equatable {
+public struct DatabaseHealth: Decodable, Equatable, Sendable {
     public let configured: Bool
     public let connected: Bool
     public let host: String?
@@ -465,7 +465,7 @@ public struct DatabaseHealth: Decodable, Equatable {
     public let error: String?
 }
 
-public struct VideoTagSummary: Decodable, Equatable, Identifiable {
+public struct VideoTagSummary: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let name: String
     public let color: String
@@ -477,7 +477,7 @@ public struct VideoTagSummary: Decodable, Equatable, Identifiable {
     }
 }
 
-public struct VideoSummary: Decodable, Equatable, Identifiable {
+public struct VideoSummary: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let name: String
     public let path: String
@@ -535,7 +535,7 @@ public struct VideoSummary: Decodable, Equatable, Identifiable {
     }
 }
 
-public struct VideoCursor: Codable, Equatable {
+public struct VideoCursor: Codable, Equatable, Sendable {
     public let score: Double
     public let size: Int64
     public let id: Int64
@@ -547,52 +547,52 @@ public struct VideoCursor: Codable, Equatable {
     }
 }
 
-public struct RandomCandidateResponse: Decodable, Equatable {
+public struct RandomCandidateResponse: Decodable, Equatable, Sendable {
     public let video: VideoSummary?
     public let reasonCode: String?
     public let userMessage: String?
 }
 
-public struct VideoListResponse: Decodable, Equatable {
+public struct VideoListResponse: Decodable, Equatable, Sendable {
     public let videos: [VideoSummary]
     public let nextCursor: VideoCursor?
 }
 
-public struct ScannedFileResponse: Decodable, Equatable {
+public struct ScannedFileResponse: Decodable, Equatable, Sendable {
     public let path: String
     public let size: Int64
 }
 
-public struct ScanDirectoryResponse: Decodable, Equatable {
+public struct ScanDirectoryResponse: Decodable, Equatable, Sendable {
     public let files: [ScannedFileResponse]
 }
 
-public struct VideoMutationResponse: Decodable, Equatable {
+public struct VideoMutationResponse: Decodable, Equatable, Sendable {
     public let video: VideoSummary?
     public let ok: Bool
     public let reasonCode: String?
     public let userMessage: String?
 }
 
-public enum PreviewMode: String, Decodable, Equatable {
+public enum PreviewMode: String, Decodable, Equatable, Sendable {
     case inline
     case externalPreview = "external-preview"
     case unsupported
 }
 
-public struct PreviewSourceDescriptor: Decodable, Equatable {
+public struct PreviewSourceDescriptor: Decodable, Equatable, Sendable {
     public let locatorStrategy: String
     public let locatorValue: String
     public let mime: String
 }
 
-public struct PreviewExternalAction: Decodable, Equatable {
+public struct PreviewExternalAction: Decodable, Equatable, Sendable {
     public let actionId: String
     public let buttonLabel: String
     public let hint: String
 }
 
-public struct PreviewSessionResponse: Decodable, Equatable {
+public struct PreviewSessionResponse: Decodable, Equatable, Sendable {
     public let videoId: Int64
     public let mode: PreviewMode
     public let displayName: String
@@ -602,7 +602,7 @@ public struct PreviewSessionResponse: Decodable, Equatable {
     public let reasonMessage: String?
 }
 
-public struct PlaybackReconcileResult: Decodable, Equatable {
+public struct PlaybackReconcileResult: Decodable, Equatable, Sendable {
     public let videoId: Int64
     public let didMarkStale: Bool
     public let didRelocate: Bool
@@ -612,7 +612,7 @@ public struct PlaybackReconcileResult: Decodable, Equatable {
     public let reasonCode: String?
 }
 
-public struct PlaybackAttemptResponse: Decodable, Equatable {
+public struct PlaybackAttemptResponse: Decodable, Equatable, Sendable {
     public let video: VideoSummary?
     public let dispatchSucceeded: Bool
     public let userMessage: String?
@@ -620,7 +620,7 @@ public struct PlaybackAttemptResponse: Decodable, Equatable {
     public let reconcileResult: PlaybackReconcileResult?
 }
 
-public struct TagRecord: Decodable, Equatable, Identifiable {
+public struct TagRecord: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let name: String
     public let color: String
@@ -632,11 +632,11 @@ public struct TagRecord: Decodable, Equatable, Identifiable {
     }
 }
 
-public struct TagListResponse: Decodable, Equatable {
+public struct TagListResponse: Decodable, Equatable, Sendable {
     public let tags: [TagRecord]
 }
 
-public struct ScanDirectoryRecord: Decodable, Equatable, Identifiable {
+public struct ScanDirectoryRecord: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let path: String
     public let alias: String
@@ -648,11 +648,11 @@ public struct ScanDirectoryRecord: Decodable, Equatable, Identifiable {
     }
 }
 
-public struct ScanDirectoryListResponse: Decodable, Equatable {
+public struct ScanDirectoryListResponse: Decodable, Equatable, Sendable {
     public let directories: [ScanDirectoryRecord]
 }
 
-public struct PublicSettings: Decodable, Equatable {
+public struct PublicSettings: Decodable, Equatable, Sendable {
     public let videoExtensions: String
     public let playWeight: Double
     public let shortFeedMaxDurationMinutes: Int
@@ -686,7 +686,7 @@ public struct PublicSettings: Decodable, Equatable {
     }
 }
 
-public struct SubtitleSegmentRecord: Decodable, Equatable {
+public struct SubtitleSegmentRecord: Decodable, Equatable, Sendable {
     public let index: Int
     public let startTimeMs: Int64
     public let endTimeMs: Int64
@@ -694,23 +694,23 @@ public struct SubtitleSegmentRecord: Decodable, Equatable {
     public let lines: [String]
 }
 
-public struct SubtitleSearchMatch: Decodable, Equatable {
+public struct SubtitleSearchMatch: Decodable, Equatable, Sendable {
     public let video: VideoSummary
     public let segment: SubtitleSegmentRecord
 }
 
-public struct SubtitleSearchResponse: Decodable, Equatable {
+public struct SubtitleSearchResponse: Decodable, Equatable, Sendable {
     public let matches: [SubtitleSearchMatch]
 }
 
-public enum AITagCandidateStatus: String, Decodable, Equatable {
+public enum AITagCandidateStatus: String, Decodable, Equatable, Sendable {
     case pending
     case approved
     case rejected
     case superseded
 }
 
-public struct AITagCandidateRecord: Decodable, Equatable, Identifiable {
+public struct AITagCandidateRecord: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let videoId: Int64
     public let suggestedName: String
@@ -722,18 +722,18 @@ public struct AITagCandidateRecord: Decodable, Equatable, Identifiable {
     public let status: AITagCandidateStatus
 }
 
-public struct AITagCandidateListResponse: Decodable, Equatable {
+public struct AITagCandidateListResponse: Decodable, Equatable, Sendable {
     public let candidates: [AITagCandidateRecord]
 }
 
-public struct ShortFeedInteractionRecord: Decodable, Equatable {
+public struct ShortFeedInteractionRecord: Decodable, Equatable, Sendable {
     public let videoId: Int64
     public let liked: Bool
     public let favorited: Bool
     public let viewCount: Int
 }
 
-public struct ShortFeedVideoRecord: Decodable, Equatable, Identifiable {
+public struct ShortFeedVideoRecord: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let name: String
     public let duration: Double
@@ -742,19 +742,19 @@ public struct ShortFeedVideoRecord: Decodable, Equatable, Identifiable {
     public let tags: [VideoTagSummary]
 }
 
-public struct CleanupDuplicateGroup: Decodable, Equatable {
+public struct CleanupDuplicateGroup: Decodable, Equatable, Sendable {
     public let originalId: Int64
     public let candidateIds: [Int64]
     public let reason: String
 }
 
-public struct CleanupAnalysisRecord: Decodable, Equatable {
+public struct CleanupAnalysisRecord: Decodable, Equatable, Sendable {
     public let duplicateGroups: [CleanupDuplicateGroup]
     public let lowDurationIds: [Int64]
     public let lowResolutionIds: [Int64]
 }
 
-public struct DiagnosticsSnapshot: Decodable, Equatable {
+public struct DiagnosticsSnapshot: Decodable, Equatable, Sendable {
     public let videoCount: Int64
     public let tagCount: Int64
     public let subtitleSegmentCount: Int64

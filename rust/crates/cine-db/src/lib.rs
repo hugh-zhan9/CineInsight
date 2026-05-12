@@ -625,7 +625,7 @@ pub async fn add_video(
     }
 
     let path_text = path_to_string(&path);
-    if active_video_id_by_path(pool, &path_text).await?.is_some() {
+    if any_video_id_by_path(pool, &path_text).await?.is_some() {
         return Err(VideoMutationError::VideoExists);
     }
 
@@ -2518,6 +2518,17 @@ async fn active_video_id_by_path(
     path: &str,
 ) -> Result<Option<i64>, VideoMutationError> {
     sqlx::query_scalar("SELECT id FROM videos WHERE path = $1 AND deleted_at IS NULL")
+        .bind(path)
+        .fetch_optional(pool)
+        .await
+        .map_err(|_| VideoMutationError::DatabaseWrite)
+}
+
+async fn any_video_id_by_path(
+    pool: &PgPool,
+    path: &str,
+) -> Result<Option<i64>, VideoMutationError> {
+    sqlx::query_scalar("SELECT id FROM videos WHERE path = $1")
         .bind(path)
         .fetch_optional(pool)
         .await

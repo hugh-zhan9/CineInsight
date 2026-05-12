@@ -206,6 +206,43 @@ func TestSyncScanDirectoriesAddsAndRelocatesPreservingTags(t *testing.T) {
 	}
 }
 
+func TestSyncScanDirectoriesDoesNotReimportSoftDeletedPath(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	oldTime := time.Now().Add(-10 * time.Minute)
+	videoPath := filepath.Join(root, "4006929f-356a-4e1f-bcc9-024590e9127c.mp4")
+
+	mustCreateFile(t, videoPath)
+	mustSetFileModTime(t, videoPath, oldTime)
+
+	video := models.Video{
+		Name:      filepath.Base(videoPath),
+		Path:      videoPath,
+		Directory: root,
+		Size:      1,
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := svc.DeleteVideo(video.ID, false); err != nil {
+		t.Fatalf("软删除视频失败: %v", err)
+	}
+
+	result := svc.SyncScanDirectories([]models.ScanDirectory{{Path: root, Alias: "root"}})
+	if result.Added != 0 || result.Skipped != 1 {
+		t.Fatalf("软删除同路径文件不应重新导入，实际结果: %#v", result)
+	}
+
+	var activeCount int64
+	if err := database.DB.Model(&models.Video{}).Where("path = ?", videoPath).Count(&activeCount).Error; err != nil {
+		t.Fatalf("统计 active 视频失败: %v", err)
+	}
+	if activeCount != 0 {
+		t.Fatalf("软删除同路径文件不应重新出现 active 记录，实际 %d", activeCount)
+	}
+}
+
 func TestDeleteVideoMovesFileToTrashWhenDeleteFileEnabled(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
