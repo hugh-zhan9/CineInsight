@@ -506,42 +506,54 @@ struct ContentView: View {
     }
 
     private var shortFeedPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Button {
-                    Task { await library.loadShortFeedVideo() }
-                } label: {
-                    Label("Next", systemImage: "forward.fill")
-                }
-                Button {
-                    Task { await library.recordShortFeed(viewed: true) }
-                } label: {
-                    Label("Viewed", systemImage: "eye")
-                }
-                Button {
-                    Task { await library.recordShortFeed(liked: true) }
-                } label: {
-                    Label("Like", systemImage: "hand.thumbsup")
-                }
-                Button {
-                    Task { await library.recordShortFeed(favorited: true) }
-                } label: {
-                    Label("Favorite", systemImage: "star")
-                }
-            }
+        ZStack(alignment: .bottomLeading) {
+            RoundedRectangle(cornerRadius: 12)
+                .fill(.black)
+
+            LinearGradient(
+                colors: [.clear, .black.opacity(0.72)],
+                startPoint: .center,
+                endPoint: .bottom
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 12))
 
             if let video = library.shortFeedVideo {
                 VStack(alignment: .leading, spacing: 8) {
                     Text(video.name)
-                        .font(.title3)
+                        .font(.title3.weight(.semibold))
+                        .lineLimit(2)
                     Text("\(formatDuration(video.duration)) · \(video.width)x\(video.height)")
-                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(0.72))
                     FlowTags(tags: video.tags)
                 }
+                .foregroundStyle(.white)
+                .padding(18)
+                .padding(.trailing, 74)
             } else {
                 ContentUnavailableView("No Short Feed Video", systemImage: "rectangle.portrait")
+                    .foregroundStyle(.white)
             }
+
+            VStack(spacing: 14) {
+                iconOnlyButton("Next", "forward.fill") {
+                    Task { await library.loadShortFeedVideo() }
+                }
+                iconOnlyButton("Viewed", "eye") {
+                    Task { await library.recordShortFeed(viewed: true) }
+                }
+                iconOnlyButton("Like", "heart.fill") {
+                    Task { await library.recordShortFeed(liked: true) }
+                }
+                iconOnlyButton("Favorite", "bookmark.fill") {
+                    Task { await library.recordShortFeed(favorited: true) }
+                }
+            }
+            .padding(.trailing, 18)
+            .padding(.bottom, 18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
         }
+        .aspectRatio(9 / 16, contentMode: .fit)
         .padding(12)
     }
 
@@ -655,6 +667,18 @@ struct ContentView: View {
         }
         .aspectRatio(16 / 9, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func iconOnlyButton(_ title: String, _ systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 18, weight: .semibold))
+                .frame(width: 44, height: 44)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.white)
+        .background(.black.opacity(0.34), in: Circle())
+        .accessibilityLabel(title)
     }
 
     private func tagBinding(_ tag: TagRecord) -> Binding<Bool> {

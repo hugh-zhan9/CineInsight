@@ -82,6 +82,11 @@ async fn adds_and_soft_deletes_video_records_without_touching_duplicate_paths() 
         path.exists(),
         "soft delete should not remove the original file"
     );
+
+    let reimport = add_video(&pool, &path)
+        .await
+        .expect_err("soft-deleted path should not be reimported");
+    assert_eq!(reimport, VideoMutationError::VideoExists);
 }
 
 #[tokio::test]
