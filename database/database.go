@@ -106,6 +106,9 @@ func Init() error {
 
 	// 如果表存在，先清理重复数据，避免 AutoMigrate 创建唯一索引失败
 	if db.Migrator().HasTable(&models.Video{}) {
+		if err := cleanupReimportedSoftDeletedVideos(db); err != nil {
+			return fmt.Errorf("清理软删除重导入视频失败: %w", err)
+		}
 		if err := cleanupDuplicateVideos(db); err != nil {
 			return fmt.Errorf("清理重复视频失败: %w", err)
 		}
@@ -192,6 +195,40 @@ func cleanupDuplicateVideos(db *gorm.DB) error {
 		}
 	}
 
+	return nil
+}
+
+func cleanupReimportedSoftDeletedVideos(db *gorm.DB) error {
+	type reimportedPath struct {
+		Path string
+	}
+
+	var paths []reimportedPath
+	if err := db.Raw(`
+		SELECT active.path
+		FROM videos active
+		WHERE active.deleted_at IS NULL AND active.path <> ''
+		  AND EXISTS (
+			SELECT 1
+			FROM videos deleted
+			WHERE deleted.path = active.path
+			  AND deleted.deleted_at IS NOT NULL
+		  )
+		GROUP BY active.path
+	`).Scan(&paths).Error; err != nil {
+		return err
+	}
+
+	for _, item := range paths {
+		if err := db.Exec(`
+			UPDATE videos
+			SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+			WHERE path = ? AND deleted_at IS NULL
+		`, item.Path).Error; err != nil {
+			return err
+		}
+		log.Printf("清理软删除后重导入的视频 path=%s", item.Path)
+	}
 	return nil
 }
 
