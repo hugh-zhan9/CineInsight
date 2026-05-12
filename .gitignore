@@ -27,3 +27,7 @@ frontend/wailsjs/
 video-master
 \.worktrees/
 .omx/
+.omc/
+.claude/
+.loopx/
+.superpowers/

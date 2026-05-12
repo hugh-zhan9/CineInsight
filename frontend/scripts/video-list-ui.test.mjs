@@ -3,14 +3,34 @@ import { readFileSync } from 'node:fs';
 
 const appSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
 const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
+const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
+const videoRowSource = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
+const shortFeedCss = readFileSync(new URL('../src/short-feed/short-feed.css', import.meta.url), 'utf8');
+const shortFeedSource = readFileSync(new URL('../src/short-feed/ShortFeedApp.vue', import.meta.url), 'utf8');
+const shortFeedMain = readFileSync(new URL('../src/short-feed/main.js', import.meta.url), 'utf8');
+const settingsSource = readFileSync(new URL('../src/components/SettingsPage.vue', import.meta.url), 'utf8');
+const componentCss = readFileSync(new URL('../src/styles/components.css', import.meta.url), 'utf8');
+
+assert.match(mainSource, /styles\/tokens\.css/, 'desktop entry should load shared design tokens');
+assert.match(appSource, /class="app-shell glass-app-shell"/, 'app shell should use the shared glass shell treatment');
+assert.match(videoListSource, /ui\/ActionMenu\.vue/, 'video list should use the shared action menu primitive');
+assert.match(videoListSource, /toolbar-primary/, 'video list should split primary toolbar controls from secondary actions');
+assert.match(videoListSource, /selection-toolbar/, 'batch actions should live in a contextual selection toolbar');
+assert.match(videoRowSource, /row-primary-actions/, 'video rows should keep only primary actions in the always-visible rail');
+assert.match(videoRowSource, /row-secondary-actions/, 'video rows should group secondary actions separately');
+assert.match(shortFeedCss, /--short-glass-bg:\s*var\(--glass-strong-bg\)/, 'short feed should consume shared glass tokens');
+assert.match(shortFeedMain, /styles\/tokens\.css/, 'short feed entry should load shared design tokens');
+assert.doesNotMatch(shortFeedSource, /🔇|🔊|🗑/, 'short feed controls should avoid emoji action labels');
+assert.match(settingsSource, /class="settings-grid-shell"/, 'settings page should use a compact grouped layout shell');
+assert.match(settingsSource, /class="directories-list"/, 'settings directories should use class-based layout instead of inline layout');
 
 assert.match(
-  appSource,
+  componentCss,
   /\.tag-chip\s*{[^}]*height:\s*24px;[^}]*padding:\s*0 8px;[^}]*font-size:\s*11px;/s,
   'tag filter chips should stay compact when tag count grows'
 );
 assert.match(
-  appSource,
+  componentCss,
   /\.tag-chip-wrap\s*{[^}]*max-width:\s*160px;/s,
   'tag filter chips should have a tighter max width'
 );

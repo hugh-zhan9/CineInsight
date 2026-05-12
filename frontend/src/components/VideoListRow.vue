@@ -39,20 +39,24 @@
     </div>
 
     <div class="video-actions">
-      <button @click="$emit('preview', video)" class="btn-secondary">预览</button>
-      <button @click="$emit('play', video.id)" class="btn-action">播放</button>
-      <button @click="$emit('open-directory', video.id)" class="btn-action">打开目录</button>
+      <div class="row-primary-actions">
+        <button @click="$emit('preview', video)" class="btn-secondary btn-compact">预览</button>
+        <button @click="$emit('play', video.id)" class="btn-action btn-compact">播放</button>
+      </div>
+      <div class="row-secondary-actions">
+      <button @click="$emit('open-directory', video.id)" class="btn-action btn-compact">目录</button>
       <button
         @click="$emit('generate-subtitle', video)"
-        class="btn-action"
+        class="btn-action btn-compact"
         :class="{ 'btn-processing': generatingSubtitleIds.includes(video.id) }"
         :disabled="generatingSubtitleIds.includes(video.id)"
       >
         {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
       </button>
-      <button @click="$emit('subtitle-preview', video)" class="btn-action">字幕预览</button>
-      <button @click="$emit('rename', video)" class="btn-action">重命名</button>
-      <button @click="$emit('delete', video)" class="btn-danger" :disabled="deletingIds.includes(video.id)">删除</button>
+      <button @click="$emit('subtitle-preview', video)" class="btn-action btn-compact">预览字幕</button>
+      <button @click="$emit('rename', video)" class="btn-action btn-compact">重命名</button>
+      <button @click="$emit('delete', video)" class="btn-danger btn-compact" :disabled="deletingIds.includes(video.id)">删除</button>
+      </div>
     </div>
   </div>
 </template>

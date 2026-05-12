@@ -51,9 +51,9 @@
       </div>
 
       <div class="top-bar" :class="{ visible: controlsVisible || !isPlaying }" @click.stop>
-        <button class="icon-btn" type="button" title="收藏夹" @click="openFavorites">★</button>
+        <button class="icon-btn" type="button" title="收藏夹" aria-label="收藏夹" @click="openFavorites">Fav</button>
         <button class="icon-btn" type="button" :title="muted ? '打开声音' : '静音'" @click="muted = !muted">
-          {{ muted ? '🔇' : '🔊' }}
+          {{ muted ? 'Mute' : 'Sound' }}
         </button>
       </div>
 
@@ -80,7 +80,7 @@
           :disabled="!currentVideo"
           @click="toggleLike"
         >
-          ♥
+          Like
         </button>
         <button
           class="round-action"
@@ -90,7 +90,7 @@
           :disabled="!currentVideo"
           @click="toggleFavorite"
         >
-          ★
+          Save
         </button>
         <button
           class="round-action danger"
@@ -99,7 +99,7 @@
           :disabled="!currentVideo"
           @click="deleteDialogOpen = true"
         >
-          🗑
+          Del
         </button>
       </nav>
 

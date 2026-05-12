@@ -1,11 +1,11 @@
 <template>
-  <aside class="preview-drawer" role="dialog" aria-label="视频预览抽屉">
-    <div class="preview-drawer__header">
+  <aside class="preview-drawer glass-surface" role="dialog" aria-label="视频预览抽屉">
+    <div class="preview-drawer__header glass-drawer-header">
       <div>
         <p class="preview-drawer__eyebrow">Preview</p>
         <h3>{{ video ? video.name : '视频预览' }}</h3>
       </div>
-      <button type="button" class="preview-drawer__close" @click="$emit('close')">关闭</button>
+      <button type="button" class="preview-drawer__close btn-secondary btn-compact" @click="$emit('close')">关闭</button>
     </div>
 
     <div class="preview-drawer__body">
@@ -110,17 +110,16 @@ export default {
 <style scoped>
 .preview-drawer {
   position: fixed;
-  top: 60px;
-  right: 0;
-  bottom: 0;
+  top: 74px;
+  right: 12px;
+  bottom: 12px;
   width: min(420px, 38vw);
   min-width: 320px;
-  background: var(--panel-bg);
-  border-left: 1px solid var(--border-color);
-  box-shadow: -16px 0 40px rgba(15, 23, 42, 0.16);
+  border-radius: 18px;
   display: flex;
   flex-direction: column;
   z-index: 140;
+  overflow: hidden;
 }
 
 .preview-drawer__header {
@@ -130,6 +129,7 @@ export default {
   gap: 16px;
   padding: 18px 20px;
   border-bottom: 1px solid var(--border-color);
+  background: var(--glass-strong-bg);
 }
 
 .preview-drawer__eyebrow {
@@ -143,15 +143,6 @@ export default {
 .preview-drawer__header h3 {
   font-size: 16px;
   line-height: 1.4;
-}
-
-.preview-drawer__close {
-  border: 1px solid var(--border-color);
-  background: transparent;
-  color: var(--text-primary);
-  border-radius: 999px;
-  padding: 6px 12px;
-  cursor: pointer;
 }
 
 .preview-drawer__body {
@@ -208,7 +199,11 @@ export default {
 @media (max-width: 860px) {
   .preview-drawer {
     width: 100vw;
+    right: 0;
+    bottom: 0;
+    top: 70px;
     min-width: 0;
+    border-radius: 18px 18px 0 0;
   }
 }
 </style>

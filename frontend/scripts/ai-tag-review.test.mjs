@@ -60,5 +60,13 @@ assert.match(componentSource, /RejectAITagCandidatesByVideo/);
 assert.match(componentSource, /reviewSearch/);
 assert.match(componentSource, /RenameVideo/);
 assert.match(componentSource, /renameConfirm/);
+assert.match(componentSource, /class="search-input ai-tag-review-search"/, 'AI review search should reuse shared search input styling');
+assert.match(componentSource, /class="text-input ai-tag-rename-input"/, 'AI review rename dialog should reuse shared text input styling');
+assert.match(componentSource, /class="ai-confirm-dialog glass-surface"/, 'AI review nested confirmations should use shared glass surfaces');
+assert.match(componentSource, /class="btn-action btn-compact" @click="previewVideo/, 'AI review preview action should use the shared compact button size');
+assert.match(componentSource, /class="btn-secondary btn-compact" @click="openRenameDialog/, 'AI review rename action should use the shared compact button size');
+assert.match(componentSource, /class="btn-action btn-compact" @click="retryVideo/, 'AI review retry action should use the shared compact button size');
+assert.doesNotMatch(componentSource, /\.btn-small\b/, 'AI review dialog should not keep a local compact button class');
+assert.doesNotMatch(componentSource, /var\(--input-bg\)/, 'AI review dialog should not depend on legacy input background tokens');
 
 console.log('ai-tag-review tests passed');

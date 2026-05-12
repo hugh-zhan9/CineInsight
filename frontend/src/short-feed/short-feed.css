@@ -3,6 +3,12 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+:root {
+  --short-glass-bg: var(--glass-strong-bg);
+  --short-glass-border: rgba(255, 255, 255, 0.2);
+  --short-glass-shadow: 0 14px 44px rgba(0, 0, 0, 0.36);
+}
+
 html,
 body,
 #short-feed-app {
@@ -94,17 +100,22 @@ button {
 .icon-btn,
 .round-action,
 .speed-btn {
-  border: 1px solid rgba(255, 255, 255, 0.22);
+  border: 1px solid var(--short-glass-border);
   color: #fff;
-  background: rgba(18, 18, 18, 0.58);
-  backdrop-filter: blur(12px);
+  background: var(--short-glass-bg);
+  box-shadow: var(--short-glass-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  backdrop-filter: blur(18px) saturate(1.25);
   pointer-events: auto;
 }
 
 .icon-btn {
-  width: 42px;
+  min-width: 42px;
   height: 42px;
+  padding: 0 11px;
   border-radius: 50%;
+  font-size: 12px;
+  font-weight: 720;
 }
 
 .speed-btn {
@@ -184,7 +195,8 @@ button {
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  font-size: 21px;
+  font-size: 12px;
+  font-weight: 760;
 }
 
 .round-action.active {
@@ -211,7 +223,13 @@ button {
   z-index: 3;
   display: grid;
   gap: 6px;
-  padding: 0 0 3px;
+  padding: 8px 10px 10px;
+  border: 1px solid var(--short-glass-border);
+  border-radius: 18px;
+  background: var(--short-glass-bg);
+  box-shadow: var(--short-glass-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  backdrop-filter: blur(18px) saturate(1.25);
   opacity: 0;
   pointer-events: none;
   transition: opacity 160ms ease, transform 160ms ease;
@@ -291,7 +309,10 @@ button {
   align-items: center;
   gap: 10px;
   padding: max(14px, env(safe-area-inset-top)) 14px 12px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  border-bottom: 1px solid var(--short-glass-border);
+  background: var(--short-glass-bg);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  backdrop-filter: blur(18px) saturate(1.25);
 }
 
 .favorites-header h1 {
@@ -350,9 +371,12 @@ button {
 .confirm-modal {
   width: min(360px, 100%);
   padding: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 8px;
-  background: #19191b;
+  border: 1px solid var(--short-glass-border);
+  border-radius: 16px;
+  background: var(--short-glass-bg);
+  box-shadow: var(--short-glass-shadow);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  backdrop-filter: blur(18px) saturate(1.25);
 }
 
 .confirm-modal h2 {

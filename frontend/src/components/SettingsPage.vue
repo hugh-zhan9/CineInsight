@@ -1,8 +1,8 @@
 <template>
   <div class="page-content settings-page">
     <h2>设置</h2>
-    
-    <!-- 基本设置 -->
+
+    <div class="settings-grid-shell">
     <div class="settings-section">
       <h3>基本设置</h3>
       <div class="setting-item">
@@ -161,7 +161,7 @@
       <h3>智能随机播放</h3>
       <div class="setting-item">
         <label>播放权重（1次普通播放 = N次随机播放）</label>
-        <div style="margin-top: 10px;">
+        <div class="setting-control-row">
           <input 
             type="number" 
             v-model.number="settingsForm.play_weight" 
@@ -182,8 +182,7 @@
         <textarea 
           v-model="settingsForm.video_extensions" 
           rows="3"
-          class="text-input"
-          style="height: auto; min-height: 80px; padding: 12px; resize: vertical;"
+          class="text-input settings-textarea"
           placeholder=".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
         ></textarea>
         <p class="help-text">用逗号分隔，留空则使用默认配置。</p>
@@ -233,24 +232,25 @@
     <!-- 扫描目录管理 -->
     <div class="settings-section">
       <h3>扫描目录管理</h3>
-      <div class="directories-list" style="display: flex; flex-direction: column; gap: 10px;">
-        <div v-for="dir in localDirectories" :key="dir.id" class="directory-item" style="background: var(--bg-color); padding: 12px; border-radius: var(--radius-md); display: flex; justify-content: space-between; align-items: center; border: 1px solid var(--border-color);">
-          <div style="flex: 1; min-width: 0; margin-right: 15px;">
-            <strong style="display: block; font-size: 14px; margin-bottom: 4px;">{{ dir.alias || '未命名' }}</strong>
-            <span style="font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block;">{{ dir.path }}</span>
+      <div class="directories-list">
+        <div v-for="dir in localDirectories" :key="dir.id" class="directory-item">
+          <div class="directory-main">
+            <strong>{{ dir.alias || '未命名' }}</strong>
+            <span>{{ dir.path }}</span>
           </div>
-          <div style="display: flex; gap: 8px;">
+          <div class="directory-actions">
             <button @click="editDirectory(dir)" class="btn-action">编辑</button>
-            <button @click="deleteDirectoryItem(dir.id)" class="btn-action" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
+            <button @click="deleteDirectoryItem(dir.id)" class="btn-action btn-action-danger">删除</button>
           </div>
         </div>
         <div v-if="localDirectories.length === 0" class="empty-hint">暂无扫描目录配置</div>
       </div>
-      <button @click="showAddDirectoryDialog = true" class="btn-primary" style="margin-top: 15px;">添加扫描目录</button>
+      <button @click="showAddDirectoryDialog = true" class="btn-primary settings-section-action">添加扫描目录</button>
+    </div>
     </div>
 
-    <div class="settings-actions" style="margin-top: 40px; text-align: right; padding-bottom: 40px;">
-      <button @click="saveSettings" class="btn-primary" style="padding: 0 32px;">保存所有设置</button>
+    <div class="settings-actions">
+      <button @click="saveSettings" class="btn-primary settings-save-button">保存所有设置</button>
     </div>
 
     <!-- Add/Edit Directory Dialog -->
@@ -259,14 +259,14 @@
         <h2>{{ editingDirectory ? '编辑' : '添加' }}扫描目录</h2>
         <div class="setting-item">
           <label>目录路径</label>
-          <div style="display: flex; gap: 8px; margin-top: 8px;">
-            <input type="text" v-model="directoryForm.path" placeholder="选择目录" class="text-input" readonly style="flex: 1;" />
+          <div class="directory-dialog-row">
+            <input type="text" v-model="directoryForm.path" placeholder="选择目录" class="text-input" readonly />
             <button @click="selectDirectoryForConfig" class="btn-secondary">选择</button>
           </div>
         </div>
         <div class="setting-item">
           <label>目录别名</label>
-          <input type="text" v-model="directoryForm.alias" placeholder="给这个目录起个名字" class="text-input" style="margin-top: 8px;" />
+          <input type="text" v-model="directoryForm.alias" placeholder="给这个目录起个名字" class="text-input directory-alias-input" />
         </div>
         <div class="modal-actions">
           <button @click="saveDirectoryConfig" class="btn-primary">保存</button>
@@ -421,6 +421,121 @@ export default {
 </script>
 
 <style scoped>
+.settings-page h2 {
+  margin: 0 0 14px;
+  font-size: 22px;
+  font-weight: 760;
+}
+
+.settings-grid-shell {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(320px, 1fr));
+  gap: 14px;
+  align-items: start;
+}
+
+.settings-section {
+  margin-bottom: 0;
+  padding: 18px;
+  border-radius: var(--radius-lg);
+  background: var(--panel-bg);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
+}
+
+.settings-section h3 {
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+}
+
+.setting-control-row {
+  margin-top: 10px;
+}
+
+.settings-textarea {
+  height: auto;
+  min-height: 80px;
+  padding: 12px;
+  resize: vertical;
+}
+
+.directories-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.directory-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.36);
+}
+
+.directory-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.directory-main strong,
+.directory-main span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.directory-main strong {
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+
+.directory-main span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.directory-actions,
+.directory-dialog-row {
+  display: flex;
+  gap: 8px;
+}
+
+.directory-dialog-row .text-input {
+  flex: 1;
+}
+
+.directory-alias-input {
+  margin-top: 8px;
+}
+
+.btn-action-danger {
+  border-color: var(--danger-color);
+  color: var(--danger-color);
+}
+
+.settings-section-action {
+  margin-top: 15px;
+}
+
+.settings-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  margin-top: 16px;
+  padding: 12px 0 6px;
+  text-align: right;
+  background: linear-gradient(180deg, transparent, var(--bg-color) 32%);
+}
+
+.settings-save-button {
+  padding: 0 32px;
+}
+
 .short-feed-status {
   display: flex;
   gap: 12px;
@@ -463,5 +578,20 @@ export default {
   padding: 8px 10px;
   border-radius: 6px;
   background: var(--bg-color);
+}
+
+@media (max-width: 980px) {
+  .settings-grid-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .directory-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .directory-actions {
+    justify-content: flex-end;
+  }
 }
 </style>

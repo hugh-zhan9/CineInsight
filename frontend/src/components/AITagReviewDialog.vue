@@ -14,7 +14,7 @@
         <input
           v-model="reviewSearch"
           type="search"
-          class="ai-tag-review-search"
+          class="search-input ai-tag-review-search"
           placeholder="搜索视频、路径、候选标签"
         />
         <button type="button" class="btn-secondary" @click="loadCandidates" :disabled="loading">刷新</button>
@@ -28,10 +28,10 @@
           <div class="ai-video-title">
             <span>{{ group.videoName }}</span>
             <div class="ai-video-actions">
-              <button type="button" class="btn-action" @click="previewVideo(group.videoId)" :disabled="processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
-              <button type="button" class="btn-secondary btn-small" @click="openRenameDialog(group)" :disabled="processingIds.includes(`rename-${group.videoId}`)">重命名</button>
-              <button type="button" class="btn-secondary btn-small" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
-              <button type="button" class="btn-action" @click="retryVideo(group.videoId)" :disabled="processingIds.includes(group.videoId)">重新分析</button>
+              <button type="button" class="btn-action btn-compact" @click="previewVideo(group.videoId)" :disabled="processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
+              <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="processingIds.includes(`rename-${group.videoId}`)">重命名</button>
+              <button type="button" class="btn-secondary btn-compact" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
+              <button type="button" class="btn-action btn-compact" @click="retryVideo(group.videoId)" :disabled="processingIds.includes(group.videoId)">重新分析</button>
             </div>
           </div>
           <div v-if="group.videoPath" class="ai-video-path">{{ group.videoPath }}</div>
@@ -63,7 +63,7 @@
       </div>
 
       <div v-if="rejectConfirm.show" class="ai-confirm-overlay">
-        <div class="ai-confirm-dialog">
+        <div class="ai-confirm-dialog glass-surface">
           <h4>确认全部拒绝</h4>
           <p>将拒绝这个视频下的 {{ rejectConfirm.count }} 个 AI 标签候选。</p>
           <p class="ai-confirm-video">{{ rejectConfirm.videoName }}</p>
@@ -75,12 +75,12 @@
       </div>
 
       <div v-if="renameConfirm.show" class="ai-confirm-overlay">
-        <div class="ai-confirm-dialog">
+        <div class="ai-confirm-dialog glass-surface">
           <h4>重命名视频</h4>
           <input
             v-model="renameConfirm.newName"
             type="text"
-            class="ai-tag-rename-input"
+            class="text-input ai-tag-rename-input"
             placeholder="输入新文件名"
             @keyup.enter="renameConfirmVideo"
             ref="renameInput"
@@ -310,12 +310,6 @@ export default {
 .ai-tag-review-search {
   flex: 1 1 auto;
   min-width: 180px;
-  height: 36px;
-  padding: 0 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--input-bg);
-  color: var(--text-primary);
 }
 
 .ai-tag-review-list {
@@ -341,11 +335,6 @@ export default {
   display: flex;
   gap: 8px;
   flex: 0 0 auto;
-}
-
-.btn-small {
-  padding: 6px 10px;
-  font-size: 12px;
 }
 
 .ai-video-path {
@@ -440,17 +429,15 @@ export default {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(15, 23, 42, 0.58);
-  backdrop-filter: blur(3px);
+  background: rgba(15, 23, 42, 0.34);
+  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(14px);
 }
 
 .ai-confirm-dialog {
   width: min(420px, 100%);
   padding: 22px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  background: var(--panel-bg);
-  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.28);
+  border-radius: var(--radius-lg);
 }
 
 .ai-confirm-dialog h4 {
@@ -466,14 +453,7 @@ export default {
 }
 
 .ai-tag-rename-input {
-  width: 100%;
-  height: 38px;
   margin: 8px 0 10px;
-  padding: 0 12px;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
-  background: var(--input-bg);
-  color: var(--text-primary);
 }
 
 .ai-confirm-video {

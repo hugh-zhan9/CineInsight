@@ -3,9 +3,10 @@
     :class="['page-content', { 'page-content--with-preview': previewOpen }]"
     @wheel="forwardWheelToScrollOwner"
   >
-    <div class="toolbar">
-      <div class="search-group">
-        <select v-model="searchMode" @change="handleSearch(true)" class="select-input" style="width: 120px; margin-right: 8px;">
+    <div class="toolbar glass-surface">
+      <div class="toolbar-primary">
+        <div class="search-group">
+        <select v-model="searchMode" @change="handleSearch(true)" class="select-input">
           <option value="file">文件搜索</option>
           <option value="subtitle">字幕搜索</option>
         </select>
@@ -16,22 +17,23 @@
           :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索视频文件名或路径...'" 
           class="search-input"
         />
-      </div>
-      
-      <div class="filter-group">
-        <select v-model="selectedSizeRange" @change="handleSearch(true)" class="select-input" style="width: 130px;">
-          <option value="all">📁 体积 (全部)</option>
-          <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
-        </select>
-        
-        <select v-model="selectedResRange" @change="handleSearch(true)" class="select-input" style="width: 150px;">
-          <option value="all">📺 分辨率 (全部)</option>
-          <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
-        </select>
+        </div>
+
+        <div class="filter-group">
+          <select v-model="selectedSizeRange" @change="handleSearch(true)" class="select-input">
+            <option value="all">体积：全部</option>
+            <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
+          </select>
+
+          <select v-model="selectedResRange" @change="handleSearch(true)" class="select-input">
+            <option value="all">分辨率：全部</option>
+            <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
+          </select>
+        </div>
       </div>
 
-      <div class="action-group" style="margin-left: auto; display: flex; gap: 8px;">
-        <button @click="playRandom" class="btn-random">🎲 随机播放</button>
+      <div class="action-group">
+        <button @click="playRandom" class="btn-random">随机播放</button>
         <button
           @click="toggleSelectAllVisible"
           class="btn-secondary"
@@ -39,24 +41,32 @@
         >
           {{ allVisibleSelected ? '取消全选' : '选择本页' }}
         </button>
+        <button @click="showScanDialog = true" class="btn-primary">扫描目录</button>
+        <ActionMenu label="更多">
+          <template #default="{ close }">
+            <button type="button" class="btn-action" @click="openAITagReviewDialog(); close()">AI 标签审阅</button>
+            <button type="button" class="btn-action" @click="openCleanupDialog(); close()">清理候选</button>
+            <button type="button" class="btn-action" @click="showTagManagerDialog = true; close()">标签管理</button>
+          </template>
+        </ActionMenu>
+      </div>
+    </div>
+
+    <div v-if="selectedVideoIds.length > 0" class="selection-toolbar glass-surface">
+      <span>已选 {{ selectedVideoIds.length }} 个视频</span>
+      <div class="selection-toolbar__actions">
         <button
           @click="openBatchAddTagDialog"
           class="btn-secondary"
-          :disabled="selectedVideoIds.length === 0"
         >
-          批量标签编辑 {{ selectedVideoIds.length || '' }}
+          批量标签编辑
         </button>
         <button
           @click="confirmBatchDelete"
           class="btn-danger"
-          :disabled="selectedVideoIds.length === 0"
         >
-          批量删除 {{ selectedVideoIds.length || '' }}
+          批量删除
         </button>
-        <button @click="openAITagReviewDialog" class="btn-secondary">AI 标签审阅</button>
-        <button @click="openCleanupDialog" class="btn-secondary">🧹 清理候选</button>
-        <button @click="showScanDialog = true" class="btn-primary">🔍 扫描目录</button>
-        <button @click="showTagManagerDialog = true" class="btn-secondary">🏷️ 标签管理</button>
       </div>
     </div>
 
@@ -182,13 +192,12 @@
         <input
           v-model="renameDialog.newName"
           type="text"
-          class="search-input"
-          style="margin: 15px 0; width: 100%;"
+          class="search-input rename-input"
           placeholder="输入新文件名"
           @keyup.enter="executeRename"
           ref="renameInput"
         />
-        <p style="font-size: 0.8em; color: #999;">扩展名会自动保留（{{ renameDialog.ext }}）</p>
+        <p class="rename-hint">扩展名会自动保留（{{ renameDialog.ext }}）</p>
         <div class="modal-actions">
           <button @click="renameDialog.show = false" class="btn-secondary">取消</button>
           <button @click="executeRename" class="btn-primary">确认</button>
@@ -433,21 +442,21 @@
         <p>{{ subtitleDialog.msg }}</p>
         
         <!-- 引擎与语言选择 (确认生成时显示) -->
-        <div v-if="subtitleDialog.mode === 'confirm'" class="lang-select-box" style="margin-top: 15px;">
-          <label style="display: block; font-size: 13px; margin-bottom: 8px; color: #666;">字幕引擎</label>
-          <select v-model="selectedSubtitleEngine" @change="refreshSubtitleConfirmCopy" class="search-input" style="width: 100%; height: 36px; padding: 0 10px;">
+        <div v-if="subtitleDialog.mode === 'confirm'" class="lang-select-box">
+          <label class="dialog-field-label">字幕引擎</label>
+          <select v-model="selectedSubtitleEngine" @change="refreshSubtitleConfirmCopy" class="search-input dialog-select">
             <option v-for="status in subtitleEngineStatuses" :key="status.engine" :value="status.engine" :disabled="!status.supported">
               {{ status.display_name }}{{ !status.supported ? '（当前平台不可用）' : '' }}
             </option>
           </select>
-          <p v-if="selectedSubtitleEngineStatus?.reason_message" style="font-size: 11px; color: #999; margin-top: 5px;">{{ selectedSubtitleEngineStatus.reason_message }}</p>
+          <p v-if="selectedSubtitleEngineStatus?.reason_message" class="dialog-field-hint">{{ selectedSubtitleEngineStatus.reason_message }}</p>
 
           <template v-if="subtitleSourceLangVisible">
-            <label style="display: block; font-size: 13px; margin: 12px 0 8px; color: #666;">识别源语言</label>
-            <select v-model="sourceLang" class="search-input" style="width: 100%; height: 36px; padding: 0 10px;">
+            <label class="dialog-field-label dialog-field-label--spaced">识别源语言</label>
+            <select v-model="sourceLang" class="search-input dialog-select">
               <option v-for="opt in languageOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
             </select>
-            <p style="font-size: 11px; color: #999; margin-top: 5px;">如果自动检测不准，请手动指定视频中的语言。</p>
+            <p class="dialog-field-hint">如果自动检测不准，请手动指定视频中的语言。</p>
           </template>
         </div>
         
@@ -491,6 +500,7 @@
   min-width: 280px;
   display: flex;
   align-items: center;
+  gap: 8px;
 }
 .toolbar .search-group .select-input {
   flex: 0 0 120px;
@@ -499,18 +509,82 @@
   flex: 1 1 auto;
   min-width: 0;
 }
-@media (max-width: 1280px) {
+.toolbar {
+  position: sticky;
+  top: 10px;
+  z-index: 90;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 10px;
+  padding: 9px;
+  border-radius: 16px;
+}
+
+.toolbar-primary {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.filter-group {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.filter-group .select-input {
+  width: 132px;
+}
+
+.action-group {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.selection-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.selection-toolbar__actions {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 1320px) {
   .toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .action-group {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 920px) {
+  .toolbar-primary {
     flex-wrap: wrap;
-    align-items: stretch;
   }
 
   .toolbar .search-group {
     flex-basis: 100%;
   }
 
-  .toolbar .action-group {
-    margin-left: 0 !important;
+  .filter-group,
+  .action-group,
+  .selection-toolbar {
     flex-wrap: wrap;
   }
 }
@@ -518,6 +592,34 @@
   width: 400px;
   text-align: center;
   padding: 30px;
+}
+.rename-input {
+  margin: 15px 0;
+}
+.rename-hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.lang-select-box {
+  margin-top: 15px;
+}
+.dialog-field-label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.dialog-field-label--spaced {
+  margin-top: 12px;
+}
+.dialog-select {
+  height: 36px;
+  padding: 0 10px;
+}
+.dialog-field-hint {
+  margin-top: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
 }
 .progress-bar-container {
   width: 100%;
@@ -766,12 +868,13 @@ import PreviewDrawer from './PreviewDrawer.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
 import VideoListRow from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
+import ActionMenu from './ui/ActionMenu.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow, AITagReviewDialog },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow, AITagReviewDialog, ActionMenu },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
