@@ -23,6 +23,20 @@ paths:
                 $ref: "#/components/schemas/HealthResponse"
         "401":
           description: Missing or invalid bearer token.
+  /api/logs/frontend:
+    post:
+      summary: Accept a redacted frontend log message from the native SwiftUI client.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FrontendLogRequest"
+      responses:
+        "204":
+          description: Log accepted.
+        "401":
+          description: Missing or invalid bearer token.
   /api/videos:
     get:
       summary: List active videos using legacy score cursor order.
@@ -47,6 +61,24 @@ paths:
       responses:
         "200":
           description: Video page.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoListResponse"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/videos/by-directory:
+    get:
+      summary: List active videos under a directory or its child directories using legacy directory matching.
+      parameters:
+        - name: path
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Videos under the directory.
           content:
             application/json:
               schema:
@@ -103,6 +135,78 @@ paths:
           description: Missing or invalid bearer token.
         "409":
           description: Active video path already exists.
+  /api/videos/batch/delete:
+    post:
+      summary: Batch soft-delete videos and optionally move files to trash.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchVideoRequest"
+      responses:
+        "200":
+          description: Per-video batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchVideoOperationResult"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/videos/batch/tags/add:
+    post:
+      summary: Batch add one tag to videos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchVideoTagRequest"
+      responses:
+        "200":
+          description: Per-video batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchVideoOperationResult"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/videos/batch/tags/remove:
+    post:
+      summary: Batch remove one tag from videos.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchVideoTagRequest"
+      responses:
+        "200":
+          description: Per-video batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchVideoOperationResult"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/videos/batch/refresh-metadata:
+    post:
+      summary: Batch refresh video metadata using ffprobe when available.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchVideoRequest"
+      responses:
+        "200":
+          description: Per-video batch result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchVideoOperationResult"
+        "401":
+          description: Missing or invalid bearer token.
   /api/videos/{id}/rename:
     post:
       summary: Rename a video file and update its PostgreSQL record.
@@ -129,6 +233,50 @@ paths:
           description: Missing or invalid bearer token.
         "409":
           description: Target file exists.
+  /api/videos/{id}/relocate:
+    post:
+      summary: Update a video record to a new existing file path while preserving metadata links such as tags.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RelocateVideoRequest"
+      responses:
+        "200":
+          description: Relocated video.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoMutationResponse"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/videos/{id}/refresh-metadata:
+    post:
+      summary: Refresh duration and resolution metadata using ffprobe when available.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Updated video.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoMutationResponse"
+        "401":
+          description: Missing or invalid bearer token.
+        "422":
+          description: Metadata unavailable.
   /api/videos/{id}/delete:
     post:
       summary: Soft-delete a video record and optionally move the file to trash.
@@ -151,6 +299,20 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/VideoMutationResponse"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/videos/{id}/open-directory:
+    post:
+      summary: Open the containing directory for a video using system dispatch.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Directory open dispatched.
         "401":
           description: Missing or invalid bearer token.
   /api/videos/{id}/preview-session:
@@ -329,6 +491,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ScanDirectoryListResponse"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/scan-directories/sync:
+    post:
+      summary: Sync configured scan directories, adding, deleting, relocating, and refreshing videos.
+      responses:
+        "200":
+          description: Scan sync result.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScanSyncResponse"
         "401":
           description: Missing or invalid bearer token.
     post:
@@ -522,6 +696,62 @@ paths:
                 $ref: "#/components/schemas/AITagCandidateRecord"
         "401":
           description: Missing or invalid bearer token.
+  /api/ai-tags/videos/{id}/reject-pending:
+    post:
+      summary: Reject all pending AI tag candidates for one video.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Rejected count.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RejectAITagCandidatesByVideoResponse"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/ai-tags/videos/{id}/retry:
+    post:
+      summary: Reset AI tagging state for one video and supersede pending candidates.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "204":
+          description: Retry state updated.
+        "401":
+          description: Missing or invalid bearer token.
+  /api/ai-tags/status-summary:
+    get:
+      summary: Return AI tagging status counters.
+      responses:
+        "200":
+          description: AI tagging status summary.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AITaggingStatusSummary"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/short-feed/status:
+    get:
+      summary: Return short-feed server status.
+      responses:
+        "200":
+          description: Short-feed server status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ShortFeedServerStatus"
+        "401":
+          description: Missing or invalid bearer token.
   /api/short-feed/next:
     get:
       summary: Return the next PostgreSQL-backed short-feed video.
@@ -574,6 +804,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/CleanupAnalysisRecord"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/cleanup/start:
+    post:
+      summary: Start cleanup analysis and return current status.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CleanupAnalyzeRequest"
+      responses:
+        "200":
+          description: Cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupStatus"
+        "401":
+          description: Missing or invalid bearer token.
+  /api/cleanup/status:
+    get:
+      summary: Return the latest cleanup analysis status.
+      responses:
+        "200":
+          description: Cleanup status.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CleanupStatus"
         "401":
           description: Missing or invalid bearer token.
   /api/diagnostics:
@@ -643,6 +903,16 @@ components:
               type: string
             error:
               type: string
+    FrontendLogRequest:
+      type: object
+      required: [level, source, message]
+      properties:
+        level:
+          type: string
+        source:
+          type: string
+        message:
+          type: string
     VideoTagSummary:
       type: object
       required: [id, name, color]
@@ -776,12 +1046,39 @@ components:
       properties:
         name:
           type: string
+    RelocateVideoRequest:
+      type: object
+      required: [path]
+      properties:
+        path:
+          type: string
     DeleteVideoRequest:
       type: object
       properties:
         delete_file:
           type: boolean
           default: false
+    BatchVideoRequest:
+      type: object
+      required: [video_ids]
+      properties:
+        video_ids:
+          type: array
+          items:
+            type: integer
+        delete_file:
+          type: boolean
+          default: false
+    BatchVideoTagRequest:
+      type: object
+      required: [video_ids, tag_id]
+      properties:
+        video_ids:
+          type: array
+          items:
+            type: integer
+        tag_id:
+          type: integer
     ScanDirectoryRequest:
       type: object
       required: [path]
@@ -820,6 +1117,70 @@ components:
           type: [string, "null"]
         user_message:
           type: [string, "null"]
+    BatchVideoOperationError:
+      type: object
+      required: [video_id, error]
+      properties:
+        video_id:
+          type: integer
+        error:
+          type: string
+    BatchVideoOperationResult:
+      type: object
+      required: [requested, succeeded, failed, errors]
+      properties:
+        requested:
+          type: integer
+        succeeded:
+          type: integer
+        failed:
+          type: integer
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchVideoOperationError"
+    ScanSyncErrorRecord:
+      type: object
+      required: [operation, error]
+      properties:
+        operation:
+          type: string
+        directory:
+          type: [string, "null"]
+        path:
+          type: [string, "null"]
+        error:
+          type: string
+    ScanSyncResponse:
+      type: object
+      required:
+        - directories
+        - scanned
+        - added
+        - deleted
+        - relocated
+        - metadata_refreshed
+        - skipped
+        - errors
+      properties:
+        directories:
+          type: integer
+        scanned:
+          type: integer
+        added:
+          type: integer
+        deleted:
+          type: integer
+        relocated:
+          type: integer
+        metadata_refreshed:
+          type: integer
+        skipped:
+          type: integer
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScanSyncErrorRecord"
     PreviewSourceDescriptor:
       type: object
       required: [locator_strategy, locator_value, mime]
@@ -963,28 +1324,52 @@ components:
     PublicSettings:
       type: object
       required:
+        - confirm_before_delete
+        - delete_original_file
         - video_extensions
         - play_weight
+        - auto_scan_on_startup
         - short_feed_max_duration_minutes
         - theme
+        - log_enabled
+        - bilingual_enabled
+        - bilingual_lang
         - deepl_api_key_configured
+        - ai_tagging_base_url
         - ai_tagging_api_key_configured
+        - ai_tagging_model
         - ai_tagging_frame_count
         - ai_tagging_subtitle_char_limit
         - ai_tagging_startup_batch_size
       properties:
+        confirm_before_delete:
+          type: boolean
+        delete_original_file:
+          type: boolean
         video_extensions:
           type: string
         play_weight:
           type: number
+        auto_scan_on_startup:
+          type: boolean
         short_feed_max_duration_minutes:
           type: integer
         theme:
           type: string
+        log_enabled:
+          type: boolean
+        bilingual_enabled:
+          type: boolean
+        bilingual_lang:
+          type: string
         deepl_api_key_configured:
           type: boolean
+        ai_tagging_base_url:
+          type: string
         ai_tagging_api_key_configured:
           type: boolean
+        ai_tagging_model:
+          type: string
         ai_tagging_frame_count:
           type: integer
         ai_tagging_subtitle_char_limit:
@@ -1155,6 +1540,50 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/AITagCandidateRecord"
+    RejectAITagCandidatesByVideoResponse:
+      type: object
+      required: [rejected]
+      properties:
+        rejected:
+          type: integer
+    AITaggingStatusSummary:
+      type: object
+      required: [config_available, pending, processing, completed, skipped, failed]
+      properties:
+        config_available:
+          type: boolean
+        pending:
+          type: integer
+        processing:
+          type: integer
+        completed:
+          type: integer
+        skipped:
+          type: integer
+        failed:
+          type: integer
+    ShortFeedServerStatus:
+      type: object
+      required: [running, bind_address, port, url, lan_urls, startup_error, fallback_used, allowed_access]
+      properties:
+        running:
+          type: boolean
+        bind_address:
+          type: string
+        port:
+          type: integer
+        url:
+          type: string
+        lan_urls:
+          type: array
+          items:
+            type: string
+        startup_error:
+          type: string
+        fallback_used:
+          type: boolean
+        allowed_access:
+          type: string
     ShortFeedFeedbackRequest:
       type: object
       properties:
@@ -1179,7 +1608,7 @@ components:
           type: integer
     ShortFeedVideoRecord:
       type: object
-      required: [id, name, duration, width, height, tags]
+      required: [id, name, duration, width, height, tags, media_url, media_mime, liked, favorited, reason_code, reason_message]
       properties:
         id:
           type: integer
@@ -1195,6 +1624,18 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/VideoTagSummary"
+        media_url:
+          type: string
+        media_mime:
+          type: string
+        liked:
+          type: boolean
+        favorited:
+          type: boolean
+        reason_code:
+          type: string
+        reason_message:
+          type: string
     CleanupDuplicateGroup:
       type: object
       required: [original_id, candidate_ids, reason]
@@ -1233,6 +1674,40 @@ components:
           type: array
           items:
             type: integer
+    CleanupProgressRecord:
+      type: object
+      required: [stage, message, current, total, path]
+      properties:
+        stage:
+          type: string
+        message:
+          type: string
+        current:
+          type: integer
+        total:
+          type: integer
+        path:
+          type: string
+    CleanupStatus:
+      type: object
+      required: [running, completed, error, progress]
+      properties:
+        running:
+          type: boolean
+        completed:
+          type: boolean
+        error:
+          type: string
+        progress:
+          $ref: "#/components/schemas/CleanupProgressRecord"
+        analysis:
+          anyOf:
+            - $ref: "#/components/schemas/CleanupAnalysisRecord"
+            - type: "null"
+        started_at:
+          type: [string, "null"]
+        updated_at:
+          type: [string, "null"]
     DiagnosticsSnapshot:
       type: object
       required:

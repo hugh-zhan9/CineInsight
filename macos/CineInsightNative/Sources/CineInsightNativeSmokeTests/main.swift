@@ -7,6 +7,35 @@ func assertEqual<T: Equatable>(_ actual: T, _ expected: T, _ message: String) {
     }
 }
 
+final class SmokeURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool {
+        true
+    }
+
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
+        request
+    }
+
+    override func startLoading() {
+        guard let handler = Self.handler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
 let configuration = DaemonLaunchConfiguration(
     executablePath: "/tmp/cine-daemon",
     port: 18088,
@@ -14,6 +43,30 @@ let configuration = DaemonLaunchConfiguration(
 )
 assertEqual(configuration.baseURL.absoluteString, "http://127.0.0.1:18088", "base URL")
 assertEqual(configuration.authorizationHeader, "Bearer secret-token", "authorization header")
+
+let bundleResourceURL = FileManager.default.temporaryDirectory
+    .appendingPathComponent("cineinsight-smoke-\(UUID().uuidString)")
+try FileManager.default.createDirectory(
+    at: bundleResourceURL.appendingPathComponent("bin"),
+    withIntermediateDirectories: true
+)
+try FileManager.default.createDirectory(
+    at: bundleResourceURL.appendingPathComponent("short-feed"),
+    withIntermediateDirectories: true
+)
+let bundledDaemonURL = bundleResourceURL.appendingPathComponent("bin/cine-daemon")
+FileManager.default.createFile(atPath: bundledDaemonURL.path, contents: Data())
+try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: bundledDaemonURL.path)
+let bundledConfiguration = DaemonLaunchConfiguration.defaultConfiguration(
+    environment: [
+        "CINE_DAEMON_PORT": "19090",
+        "CINE_DAEMON_TOKEN": "bundle-token"
+    ],
+    bundleResourceURL: bundleResourceURL
+)
+assertEqual(bundledConfiguration.executablePath, bundledDaemonURL.path, "bundled daemon path")
+assertEqual(bundledConfiguration.shortFeedAssetsPath, bundleResourceURL.appendingPathComponent("short-feed").path, "bundled short feed assets")
+assertEqual(bundledConfiguration.port, 19090, "bundled daemon port")
 
 let manager = DaemonLifecycleManager()
 assertEqual(manager.state, .stopped, "initial daemon state")
@@ -71,6 +124,29 @@ let addVideoRequest = AddVideoRequest(path: "/library/clip.mp4")
 let encodedAddVideo = try JSONEncoder.cineInsight.encode(addVideoRequest)
 let addVideoObject = try JSONSerialization.jsonObject(with: encodedAddVideo) as? [String: Any]
 assertEqual(addVideoObject?["path"] as? String, "/library/clip.mp4", "add video path encoding")
+
+let relocateRequest = RelocateVideoRequest(path: "/library/moved.mp4")
+let encodedRelocate = try JSONEncoder.cineInsight.encode(relocateRequest)
+let relocateObject = try JSONSerialization.jsonObject(with: encodedRelocate) as? [String: Any]
+assertEqual(relocateObject?["path"] as? String, "/library/moved.mp4", "relocate path encoding")
+
+let batchDeleteRequest = BatchVideoRequest(videoIds: [3, 4], deleteFile: false)
+let encodedBatchDelete = try JSONEncoder.cineInsight.encode(batchDeleteRequest)
+let batchDeleteObject = try JSONSerialization.jsonObject(with: encodedBatchDelete) as? [String: Any]
+assertEqual(batchDeleteObject?["video_ids"] as? [Int], [3, 4], "batch video ids encoding")
+assertEqual(batchDeleteObject?["delete_file"] as? Bool, false, "batch delete flag encoding")
+
+let batchTagRequest = BatchVideoTagRequest(videoIds: [3], tagId: 9)
+let encodedBatchTag = try JSONEncoder.cineInsight.encode(batchTagRequest)
+let batchTagObject = try JSONSerialization.jsonObject(with: encodedBatchTag) as? [String: Any]
+assertEqual(batchTagObject?["video_ids"] as? [Int], [3], "batch tag video ids encoding")
+assertEqual(batchTagObject?["tag_id"] as? Int, 9, "batch tag id encoding")
+
+assertEqual(
+    client.absoluteURL(for: "/api/videos/by-directory?path=%2Flibrary")?.absoluteString,
+    "http://127.0.0.1:18088/api/videos/by-directory?path=%2Flibrary",
+    "client by-directory URL"
+)
 
 let feedbackRequest = ShortFeedFeedbackRequest(liked: true, favorited: false, viewed: true)
 let encodedFeedback = try JSONEncoder.cineInsight.encode(feedbackRequest)
@@ -145,6 +221,78 @@ let scanData = """
 let scanResponse = try JSONDecoder.cineInsight.decode(ScanDirectoryResponse.self, from: scanData)
 assertEqual(scanResponse.files[0].path, "/library/clip.mp4", "scan path")
 assertEqual(scanResponse.files[0].size, 100, "scan size")
+
+let subtitlePrepareRequest = SubtitlePrepareRequest(engine: .whisperx)
+let encodedSubtitlePrepare = try JSONEncoder.cineInsight.encode(subtitlePrepareRequest)
+let subtitlePrepareObject = try JSONSerialization.jsonObject(with: encodedSubtitlePrepare) as? [String: Any]
+assertEqual(subtitlePrepareObject?["engine"] as? String, "whisperx", "subtitle prepare engine")
+
+let subtitleGenerateRequest = SubtitleGenerateRequest(videoId: 3, engine: .whisperx, sourceLang: "auto")
+let encodedSubtitleGenerate = try JSONEncoder.cineInsight.encode(subtitleGenerateRequest)
+let subtitleGenerateObject = try JSONSerialization.jsonObject(with: encodedSubtitleGenerate) as? [String: Any]
+assertEqual(subtitleGenerateObject?["video_id"] as? Int, 3, "subtitle generate video")
+assertEqual(subtitleGenerateObject?["engine"] as? String, "whisperx", "subtitle generate engine")
+
+let subtitleEngineData = """
+[
+  {
+    "engine": "whisperx",
+    "display_name": "WhisperX",
+    "supported": true,
+    "available": false,
+    "needs_prepare": true,
+    "prepare_mode": "managed",
+    "reason_code": "missing_runtime",
+    "source_lang_mode": "shared",
+    "reason_message": "Runtime missing",
+    "prepare_hint": "Install runtime"
+  }
+]
+""".data(using: .utf8)!
+
+let subtitleEngines = try JSONDecoder.cineInsight.decode([SubtitleEngineStatus].self, from: subtitleEngineData)
+assertEqual(subtitleEngines[0].engine, .whisperx, "subtitle engine decode")
+assertEqual(subtitleEngines[0].needsPrepare, true, "subtitle engine needs prepare")
+
+let subtitleResultData = """
+{
+  "status": "success",
+  "video_id": 3,
+  "path": "/library/clip.srt",
+  "message": null,
+  "validation_code": null,
+  "force_eligible": false,
+  "engine": "whisperx",
+  "source_lang": "auto"
+}
+""".data(using: .utf8)!
+
+let subtitleResult = try JSONDecoder.cineInsight.decode(SubtitleGenerateResult.self, from: subtitleResultData)
+assertEqual(subtitleResult.status, "success", "subtitle result status")
+assertEqual(subtitleResult.engine, .whisperx, "subtitle result engine")
+
+let subtitleStatusData = """
+{
+  "running": true,
+  "completed": false,
+  "cancelled": false,
+  "progress": {
+    "action": "generate",
+    "engine": "whisperx",
+    "phase": "transcribing",
+    "percent": 20,
+    "message": "Transcribing",
+    "cancellable": true
+  },
+  "result": null,
+  "error": null
+}
+""".data(using: .utf8)!
+
+let subtitleStatus = try JSONDecoder.cineInsight.decode(SubtitleJobStatus.self, from: subtitleStatusData)
+assertEqual(subtitleStatus.running, true, "subtitle status running")
+assertEqual(subtitleStatus.progress.phase, "transcribing", "subtitle progress phase")
+assertEqual(subtitleStatus.progress.engine, .whisperx, "subtitle progress engine")
 
 let mutationData = """
 {
@@ -246,12 +394,20 @@ assertEqual(directoryList.directories[0].alias, "Library", "scan directory alias
 
 let settingsData = """
 {
+  "confirm_before_delete": true,
+  "delete_original_file": false,
   "video_extensions": ".mp4,.mkv",
   "play_weight": 2.0,
+  "auto_scan_on_startup": true,
   "short_feed_max_duration_minutes": 5,
   "theme": "dark",
+  "log_enabled": true,
+  "bilingual_enabled": true,
+  "bilingual_lang": "zh",
   "deepl_api_key_configured": true,
+  "ai_tagging_base_url": "https://example.invalid/v1",
   "ai_tagging_api_key_configured": false,
+  "ai_tagging_model": "vision-model",
   "ai_tagging_frame_count": 5,
   "ai_tagging_subtitle_char_limit": 4000,
   "ai_tagging_startup_batch_size": 10
@@ -261,6 +417,50 @@ let settingsData = """
 let settings = try JSONDecoder.cineInsight.decode(PublicSettings.self, from: settingsData)
 assertEqual(settings.theme, "dark", "settings theme")
 assertEqual(settings.deeplApiKeyConfigured, true, "settings deepl configured")
+assertEqual(settings.confirmBeforeDelete, true, "settings confirm delete")
+assertEqual(settings.aiTaggingModel, "vision-model", "settings ai model")
+
+let settingsOnlySessionConfiguration = URLSessionConfiguration.ephemeral
+settingsOnlySessionConfiguration.protocolClasses = [SmokeURLProtocol.self]
+SmokeURLProtocol.handler = { request in
+    let path = request.url?.path ?? ""
+    let responseData: Data
+    let status: Int
+    if path == "/api/settings" {
+        responseData = settingsData
+        status = 200
+    } else if path == "/api/subtitles/engines" {
+        responseData = "[]".data(using: .utf8)!
+        status = 200
+    } else if path == "/api/subtitles/status" {
+        responseData = """
+        {"running":false,"video_id":null,"engine":null,"source_lang":null,"started_at_ms":null,"completed_at_ms":null,"progress":{"stage":"idle","message":"","current":0,"total":0,"path":null,"cancellable":false},"result":null,"error":null}
+        """.data(using: .utf8)!
+        status = 200
+    } else if path == "/api/short-feed/status" {
+        responseData = """
+        {"running":false,"url":"","lan_urls":[],"bind_address":"","port":0,"fallback_used":false,"startup_error":"","allowed_access":"local-network"}
+        """.data(using: .utf8)!
+        status = 200
+    } else if path == "/api/cleanup/status" {
+        responseData = """
+        {"running":false,"completed":false,"progress":{"stage":"idle","message":"","current":0,"total":0,"path":null,"cancellable":false},"analysis":null,"error":null}
+        """.data(using: .utf8)!
+        status = 200
+    } else {
+        responseData = Data()
+        status = 503
+    }
+    let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+    return (response, responseData)
+}
+let settingsOnlyClient = NativeAPIClient(
+    configuration: DaemonLaunchConfiguration(executablePath: "/tmp/cine-daemon", port: 18089, token: "secret-token"),
+    session: URLSession(configuration: settingsOnlySessionConfiguration)
+)
+let settingsOnlyViewModel = LibraryViewModel(client: settingsOnlyClient)
+await settingsOnlyViewModel.loadAll()
+assertEqual(settingsOnlyViewModel.settings?.theme, "dark", "loadAll keeps settings when library routes fail")
 
 let subtitleSearchData = """
 {
@@ -331,6 +531,30 @@ assertEqual(groupedCandidates.count, 1, "ai candidates grouped count")
 assertEqual(groupedCandidates[0].videoId, 3, "ai candidates grouped video")
 assertEqual(groupedCandidates[0].pendingCount, 0, "ai candidates grouped pending count")
 
+let aiSummaryData = """
+{
+  "config_available": true,
+  "pending": 1,
+  "processing": 2,
+  "completed": 3,
+  "skipped": 4,
+  "failed": 5
+}
+""".data(using: .utf8)!
+
+let aiSummary = try JSONDecoder.cineInsight.decode(AITaggingStatusSummary.self, from: aiSummaryData)
+assertEqual(aiSummary.configAvailable, true, "ai summary config")
+assertEqual(aiSummary.failed, 5, "ai summary failed")
+
+let rejectByVideoData = """
+{"rejected": 2}
+""".data(using: .utf8)!
+let rejectByVideo = try JSONDecoder.cineInsight.decode(
+    RejectAITagCandidatesByVideoResponse.self,
+    from: rejectByVideoData
+)
+assertEqual(rejectByVideo.rejected, 2, "reject pending by video")
+
 let shortFeedData = """
 {
   "id": 3,
@@ -338,12 +562,37 @@ let shortFeedData = """
   "duration": 30.0,
   "width": 1920,
   "height": 1080,
-  "tags": [{"id": 9, "name": "keep", "color": "#ffffff"}]
+  "tags": [{"id": 9, "name": "keep", "color": "#ffffff"}],
+  "media_url": "/short-media/3",
+  "media_mime": "video/mp4",
+  "liked": true,
+  "favorited": false,
+  "reason_code": "",
+  "reason_message": ""
 }
 """.data(using: .utf8)!
 
 let shortFeed = try JSONDecoder.cineInsight.decode(ShortFeedVideoRecord.self, from: shortFeedData)
 assertEqual(shortFeed.tags[0].name, "keep", "short feed tag")
+assertEqual(shortFeed.mediaUrl, "/short-media/3", "short feed media url")
+assertEqual(shortFeed.liked, true, "short feed liked")
+
+let shortFeedStatusData = """
+{
+  "running": true,
+  "bind_address": "127.0.0.1",
+  "port": 18088,
+  "url": "http://127.0.0.1:18088/short",
+  "lan_urls": [],
+  "startup_error": "",
+  "fallback_used": false,
+  "allowed_access": "loopback/private-lan/link-local only, no login"
+}
+""".data(using: .utf8)!
+
+let shortFeedStatus = try JSONDecoder.cineInsight.decode(ShortFeedServerStatus.self, from: shortFeedStatusData)
+assertEqual(shortFeedStatus.running, true, "short feed status running")
+assertEqual(shortFeedStatus.allowedAccess, "loopback/private-lan/link-local only, no login", "short feed allowed access")
 
 let cleanupData = """
 {
@@ -359,6 +608,32 @@ let cleanup = try JSONDecoder.cineInsight.decode(CleanupAnalysisRecord.self, fro
 assertEqual(cleanup.duplicateGroups[0].candidateIds, [2], "cleanup candidates")
 assertEqual(cleanup.allCandidateIds, [1, 2], "cleanup all candidate ids")
 
+let cleanupStatusData = """
+{
+  "running": false,
+  "completed": true,
+  "error": "",
+  "progress": {
+    "stage": "done",
+    "message": "Cleanup analysis completed",
+    "current": 1,
+    "total": 1,
+    "path": ""
+  },
+  "analysis": {
+    "duplicate_groups": [],
+    "low_duration_ids": [],
+    "low_resolution_ids": []
+  },
+  "started_at": "1",
+  "updated_at": "2"
+}
+""".data(using: .utf8)!
+
+let cleanupStatus = try JSONDecoder.cineInsight.decode(CleanupStatus.self, from: cleanupStatusData)
+assertEqual(cleanupStatus.completed, true, "cleanup status completed")
+assertEqual(cleanupStatus.progress.stage, "done", "cleanup status stage")
+
 let diagnosticsData = """
 {
   "video_count": 3,
@@ -367,12 +642,20 @@ let diagnosticsData = """
   "ai_candidate_count": 1,
   "short_feed_interaction_count": 1,
   "redacted_settings": {
+    "confirm_before_delete": true,
+    "delete_original_file": false,
     "video_extensions": ".mp4",
     "play_weight": 2.0,
+    "auto_scan_on_startup": true,
     "short_feed_max_duration_minutes": 5,
     "theme": "system",
+    "log_enabled": false,
+    "bilingual_enabled": true,
+    "bilingual_lang": "zh",
     "deepl_api_key_configured": true,
+    "ai_tagging_base_url": "https://example.invalid/v1",
     "ai_tagging_api_key_configured": true,
+    "ai_tagging_model": "vision-model",
     "ai_tagging_frame_count": 5,
     "ai_tagging_subtitle_char_limit": 4000,
     "ai_tagging_startup_batch_size": 10
@@ -383,5 +666,35 @@ let diagnosticsData = """
 let diagnostics = try JSONDecoder.cineInsight.decode(DiagnosticsSnapshot.self, from: diagnosticsData)
 assertEqual(diagnostics.videoCount, 3, "diagnostics video count")
 assertEqual(diagnostics.redactedSettings.aiTaggingApiKeyConfigured, true, "diagnostics redaction")
+
+let batchResultData = """
+{
+  "requested": 2,
+  "succeeded": 1,
+  "failed": 1,
+  "errors": [{"video_id": 4, "error": "video was not found"}]
+}
+""".data(using: .utf8)!
+
+let batchResult = try JSONDecoder.cineInsight.decode(BatchVideoOperationResult.self, from: batchResultData)
+assertEqual(batchResult.requested, 2, "batch requested")
+assertEqual(batchResult.errors[0].videoId, 4, "batch error video id")
+
+let scanSyncData = """
+{
+  "directories": 1,
+  "scanned": 3,
+  "added": 1,
+  "deleted": 1,
+  "relocated": 1,
+  "metadata_refreshed": 0,
+  "skipped": 0,
+  "errors": []
+}
+""".data(using: .utf8)!
+
+let scanSync = try JSONDecoder.cineInsight.decode(ScanSyncResponse.self, from: scanSyncData)
+assertEqual(scanSync.directories, 1, "scan sync directories")
+assertEqual(scanSync.relocated, 1, "scan sync relocated")
 
 print("CineInsightNative smoke tests passed")

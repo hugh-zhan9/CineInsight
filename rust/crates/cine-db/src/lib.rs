@@ -9,7 +9,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use cine_api::{RandomCandidateResponse, VideoListResponse};
+use cine_api::{AITaggingStatusSummary, RandomCandidateResponse, VideoListResponse};
 use cine_domain::{clamp_play_weight, video_score, VideoCursor, VideoSummary, VideoTagSummary};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,13 @@ const RECENT_ACTIVE_FILE_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 const TEMP_VIDEO_STEM_SUFFIXES: &[&str] = &[".temp", "_temp", "-temp", ".tmp", "_tmp", "-tmp"];
 
 const PREVIEW_MEDIA_ROUTE_PREFIX: &str = "/preview/media/";
+const SHORT_FEED_INLINE_MIMES: &[(&str, &str)] = &[
+    (".mp4", "video/mp4"),
+    (".m4v", "video/x-m4v"),
+    (".webm", "video/webm"),
+    (".ogv", "video/ogg"),
+    (".ogg", "video/ogg"),
+];
 const TAG_COLOR_PALETTE: &[&str] = &[
     "#0D9488", "#3b82f6", "#ef4444", "#10b981", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4",
     "#f97316", "#6366f1", "#14b8a6", "#e11d48", "#84cc16",
@@ -206,15 +213,30 @@ pub struct ScanDirectoryRecord {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PublicSettings {
+    pub confirm_before_delete: bool,
+    pub delete_original_file: bool,
     pub video_extensions: String,
     pub play_weight: f64,
+    pub auto_scan_on_startup: bool,
     pub short_feed_max_duration_minutes: i32,
     pub theme: String,
+    pub log_enabled: bool,
+    pub bilingual_enabled: bool,
+    pub bilingual_lang: String,
     pub deepl_api_key_configured: bool,
+    pub ai_tagging_base_url: String,
     pub ai_tagging_api_key_configured: bool,
+    pub ai_tagging_model: String,
     pub ai_tagging_frame_count: i32,
     pub ai_tagging_subtitle_char_limit: i32,
     pub ai_tagging_startup_batch_size: i32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SubtitleGenerationSettings {
+    pub bilingual_enabled: bool,
+    pub bilingual_lang: String,
+    pub deepl_api_key: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -292,10 +314,17 @@ pub struct ShortFeedInteractionRecord {
 pub struct ShortFeedVideoRecord {
     pub id: i64,
     pub name: String,
+    pub path: String,
     pub duration: f64,
     pub width: i32,
     pub height: i32,
     pub tags: Vec<VideoTagSummary>,
+    pub media_url: String,
+    pub media_mime: String,
+    pub liked: bool,
+    pub favorited: bool,
+    pub reason_code: String,
+    pub reason_message: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -784,6 +813,57 @@ pub async fn relocate_video(
     active_video_by_id(pool, id).await
 }
 
+pub async fn list_videos_by_directory(
+    pool: &PgPool,
+    directory: impl AsRef<Path>,
+) -> Result<Vec<VideoSummary>, VideoQueryError> {
+    let root = directory.as_ref().to_string_lossy().trim().to_string();
+    if root.is_empty() || root == "." {
+        return Ok(Vec::new());
+    }
+    let root = path_to_string(&PathBuf::from(root));
+    let prefix = format!("{root}{}", std::path::MAIN_SEPARATOR);
+    let play_weight = load_play_weight(pool).await?;
+    let rows = sqlx::query(
+        r#"
+        SELECT
+            v.id,
+            v.name,
+            v.path,
+            v.directory,
+            v.size,
+            COALESCE(v.duration, 0) AS duration,
+            COALESCE(v.resolution, '') AS resolution,
+            COALESCE(v.width, 0) AS width,
+            COALESCE(v.height, 0) AS height,
+            COALESCE(v.is_stale, false) AS is_stale,
+            COALESCE(v.play_count, 0) AS play_count,
+            COALESCE(v.random_play_count, 0) AS random_play_count,
+            v.last_played_at::text AS last_played_at,
+            v.created_at::text AS created_at,
+            v.updated_at::text AS updated_at,
+            (COALESCE(v.play_count, 0) * $1::float8 + COALESCE(v.random_play_count, 0)) AS score
+        FROM videos v
+        WHERE v.deleted_at IS NULL
+          AND (v.directory = $2 OR v.directory LIKE ($3 || '%'))
+        ORDER BY v.id DESC
+        "#,
+    )
+    .bind(play_weight)
+    .bind(&root)
+    .bind(&prefix)
+    .fetch_all(pool)
+    .await?;
+
+    let mut videos = Vec::new();
+    for row in rows {
+        let mut video = map_video_row(row, play_weight)?;
+        video.tags = load_video_tags(pool, video.id).await?;
+        videos.push(video);
+    }
+    Ok(videos)
+}
+
 pub async fn refresh_video_metadata_with_probe<F>(
     pool: &PgPool,
     id: i64,
@@ -800,6 +880,20 @@ where
 
     update_video_metadata(pool, id, &metadata).await?;
     active_video_by_id(pool, id).await
+}
+
+pub async fn open_video_directory_with_dispatch<D>(
+    pool: &PgPool,
+    id: i64,
+    dispatch: &mut D,
+) -> Result<(), VideoMutationError>
+where
+    D: PlaybackDispatch,
+{
+    let video = active_video_by_id(pool, id).await?;
+    dispatch
+        .dispatch(Path::new(&video.directory))
+        .map_err(|_| VideoMutationError::Filesystem)
 }
 
 pub async fn sync_scan_directories_with_probe<F>(
@@ -1342,9 +1436,9 @@ pub async fn update_settings(
             log_enabled = $8,
             bilingual_enabled = $9,
             bilingual_lang = $10,
-            deepl_api_key = $11,
+            deepl_api_key = COALESCE(NULLIF($11, ''), deepl_api_key),
             ai_tagging_base_url = $12,
-            ai_tagging_api_key = $13,
+            ai_tagging_api_key = COALESCE(NULLIF($13, ''), ai_tagging_api_key),
             ai_tagging_model = $14,
             ai_tagging_frame_count = $15,
             ai_tagging_subtitle_char_limit = $16,
@@ -1386,12 +1480,20 @@ pub async fn get_public_settings(pool: &PgPool) -> Result<PublicSettings, Librar
     let row = sqlx::query(
         r#"
         SELECT
+            COALESCE(confirm_before_delete, false) AS confirm_before_delete,
+            COALESCE(delete_original_file, false) AS delete_original_file,
             COALESCE(video_extensions, '') AS video_extensions,
             COALESCE(play_weight, 2.0) AS play_weight,
+            COALESCE(auto_scan_on_startup, false) AS auto_scan_on_startup,
             COALESCE(short_feed_max_duration_minutes, 5) AS short_feed_max_duration_minutes,
             COALESCE(theme, 'system') AS theme,
+            COALESCE(log_enabled, false) AS log_enabled,
+            COALESCE(bilingual_enabled, false) AS bilingual_enabled,
+            COALESCE(bilingual_lang, 'zh') AS bilingual_lang,
             COALESCE(deepl_api_key, '') AS deepl_api_key,
+            COALESCE(ai_tagging_base_url, '') AS ai_tagging_base_url,
             COALESCE(ai_tagging_api_key, '') AS ai_tagging_api_key,
+            COALESCE(ai_tagging_model, '') AS ai_tagging_model,
             COALESCE(ai_tagging_frame_count, 5) AS ai_tagging_frame_count,
             COALESCE(ai_tagging_subtitle_char_limit, 4000) AS ai_tagging_subtitle_char_limit,
             COALESCE(ai_tagging_startup_batch_size, 10) AS ai_tagging_startup_batch_size
@@ -1411,11 +1513,20 @@ pub async fn get_public_settings(pool: &PgPool) -> Result<PublicSettings, Librar
         .try_get("ai_tagging_api_key")
         .map_err(|_| LibraryManagementError::DatabaseWrite)?;
     Ok(PublicSettings {
+        confirm_before_delete: row
+            .try_get("confirm_before_delete")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        delete_original_file: row
+            .try_get("delete_original_file")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
         video_extensions: row
             .try_get("video_extensions")
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
         play_weight: row
             .try_get("play_weight")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        auto_scan_on_startup: row
+            .try_get("auto_scan_on_startup")
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
         short_feed_max_duration_minutes: row
             .try_get("short_feed_max_duration_minutes")
@@ -1423,8 +1534,23 @@ pub async fn get_public_settings(pool: &PgPool) -> Result<PublicSettings, Librar
         theme: row
             .try_get("theme")
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        log_enabled: row
+            .try_get("log_enabled")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        bilingual_enabled: row
+            .try_get("bilingual_enabled")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        bilingual_lang: row
+            .try_get("bilingual_lang")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
         deepl_api_key_configured: !deepl_api_key.trim().is_empty(),
+        ai_tagging_base_url: row
+            .try_get("ai_tagging_base_url")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
         ai_tagging_api_key_configured: !ai_tagging_api_key.trim().is_empty(),
+        ai_tagging_model: row
+            .try_get("ai_tagging_model")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
         ai_tagging_frame_count: row
             .try_get("ai_tagging_frame_count")
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
@@ -1433,6 +1559,36 @@ pub async fn get_public_settings(pool: &PgPool) -> Result<PublicSettings, Librar
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
         ai_tagging_startup_batch_size: row
             .try_get("ai_tagging_startup_batch_size")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+    })
+}
+
+pub async fn get_subtitle_generation_settings(
+    pool: &PgPool,
+) -> Result<SubtitleGenerationSettings, LibraryManagementError> {
+    let row = sqlx::query(
+        r#"
+        SELECT
+            COALESCE(bilingual_enabled, false) AS bilingual_enabled,
+            COALESCE(bilingual_lang, 'zh') AS bilingual_lang,
+            COALESCE(deepl_api_key, '') AS deepl_api_key
+        FROM settings
+        ORDER BY id ASC
+        LIMIT 1
+        "#,
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|_| LibraryManagementError::NotFound)?;
+    Ok(SubtitleGenerationSettings {
+        bilingual_enabled: row
+            .try_get("bilingual_enabled")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        bilingual_lang: row
+            .try_get("bilingual_lang")
+            .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        deepl_api_key: row
+            .try_get("deepl_api_key")
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
     })
 }
@@ -1619,6 +1775,29 @@ pub async fn get_subtitle_segments(
     rows.into_iter().map(subtitle_segment_from_row).collect()
 }
 
+pub async fn subtitle_path_for_video(
+    pool: &PgPool,
+    video_id: i64,
+) -> Result<PathBuf, NativeSliceError> {
+    let video = active_video_by_id(pool, video_id)
+        .await
+        .map_err(|_| NativeSliceError::NotFound)?;
+    let path = Path::new(&video.path);
+    Ok(path.with_extension("srt"))
+}
+
+pub async fn video_and_subtitle_paths_for_video(
+    pool: &PgPool,
+    video_id: i64,
+) -> Result<(PathBuf, PathBuf), NativeSliceError> {
+    let video = active_video_by_id(pool, video_id)
+        .await
+        .map_err(|_| NativeSliceError::NotFound)?;
+    let video_path = PathBuf::from(video.path);
+    let subtitle_path = video_path.with_extension("srt");
+    Ok((video_path, subtitle_path))
+}
+
 pub async fn search_subtitle_matches(
     pool: &PgPool,
     keyword: &str,
@@ -1776,6 +1955,78 @@ pub async fn reject_ai_tag_candidate(
     ai_tag_candidate_by_id(pool, id).await
 }
 
+pub async fn reject_pending_ai_tag_candidates_by_video(
+    pool: &PgPool,
+    video_id: i64,
+) -> Result<i64, NativeSliceError> {
+    let result = sqlx::query(
+        "UPDATE ai_tag_candidates SET status = 'rejected', rejected_at = now(), updated_at = now() WHERE video_id = $1 AND status = 'pending'",
+    )
+    .bind(video_id)
+    .execute(pool)
+    .await
+    .map_err(|_| NativeSliceError::DatabaseWrite)?;
+    Ok(result.rows_affected() as i64)
+}
+
+pub async fn retry_ai_tagging(pool: &PgPool, video_id: i64) -> Result<(), NativeSliceError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|_| NativeSliceError::DatabaseWrite)?;
+    sqlx::query(
+        "UPDATE ai_tag_candidates SET status = 'superseded', updated_at = now() WHERE video_id = $1 AND status = 'pending'",
+    )
+    .bind(video_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| NativeSliceError::DatabaseWrite)?;
+    sqlx::query(
+        r#"
+        INSERT INTO ai_tagging_states(video_id, status, skip_reason, evidence_fingerprint, last_error, updated_at)
+        VALUES ($1, 'pending', '', '', '', now())
+        ON CONFLICT (video_id) DO UPDATE SET
+            status = 'pending',
+            skip_reason = '',
+            evidence_fingerprint = '',
+            last_error = '',
+            updated_at = now()
+        "#,
+    )
+    .bind(video_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| NativeSliceError::DatabaseWrite)?;
+    tx.commit()
+        .await
+        .map_err(|_| NativeSliceError::DatabaseWrite)
+}
+
+pub async fn ai_tagging_status_summary(
+    pool: &PgPool,
+) -> Result<AITaggingStatusSummary, NativeSliceError> {
+    let pending =
+        sqlx::query_scalar("SELECT COUNT(*) FROM ai_tag_candidates WHERE status = 'pending'")
+            .fetch_one(pool)
+            .await
+            .map_err(|_| NativeSliceError::DatabaseWrite)?;
+    async fn count_state(pool: &PgPool, status: &str) -> Result<i64, NativeSliceError> {
+        sqlx::query_scalar("SELECT COUNT(*) FROM ai_tagging_states WHERE status = $1")
+            .bind(status)
+            .fetch_one(pool)
+            .await
+            .map_err(|_| NativeSliceError::DatabaseWrite)
+    }
+    Ok(AITaggingStatusSummary {
+        config_available: true,
+        pending,
+        processing: count_state(pool, "processing").await?,
+        completed: count_state(pool, "completed").await?,
+        skipped: count_state(pool, "skipped").await?,
+        failed: count_state(pool, "failed").await?,
+    })
+}
+
 pub async fn list_ai_tag_candidates(
     pool: &PgPool,
     status: Option<AITagCandidateStatus>,
@@ -1813,8 +2064,11 @@ pub async fn next_short_feed_video(
 ) -> Result<ShortFeedVideoRecord, NativeSliceError> {
     let row = sqlx::query(
         r#"
-        SELECT id, name, duration, width, height
+        SELECT videos.id, videos.name, videos.path, videos.duration, videos.width, videos.height,
+               COALESCE(short_feed_interactions.liked, false) AS liked,
+               COALESCE(short_feed_interactions.favorited, false) AS favorited
         FROM videos
+        LEFT JOIN short_feed_interactions ON short_feed_interactions.video_id = videos.id
         WHERE deleted_at IS NULL
           AND is_stale = false
           AND duration > 0
@@ -1832,11 +2086,15 @@ pub async fn next_short_feed_video(
     let id: i64 = row
         .try_get("id")
         .map_err(|_| NativeSliceError::DatabaseWrite)?;
+    let path: String = row
+        .try_get("path")
+        .map_err(|_| NativeSliceError::DatabaseWrite)?;
     Ok(ShortFeedVideoRecord {
         id,
         name: row
             .try_get("name")
             .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        path: path.clone(),
         duration: row
             .try_get("duration")
             .map_err(|_| NativeSliceError::DatabaseWrite)?,
@@ -1849,6 +2107,138 @@ pub async fn next_short_feed_video(
         tags: load_video_tags(pool, id)
             .await
             .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        media_url: format!("/short-media/{id}"),
+        media_mime: inline_video_mime(&path).unwrap_or_default().to_string(),
+        liked: row
+            .try_get("liked")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        favorited: row
+            .try_get("favorited")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        reason_code: String::new(),
+        reason_message: String::new(),
+    })
+}
+
+pub async fn short_feed_favorite_videos(
+    pool: &PgPool,
+) -> Result<Vec<ShortFeedVideoRecord>, NativeSliceError> {
+    let rows = sqlx::query(
+        r#"
+        SELECT videos.id, videos.name, videos.path, videos.duration, videos.width, videos.height,
+               COALESCE(short_feed_interactions.liked, false) AS liked,
+               COALESCE(short_feed_interactions.favorited, false) AS favorited
+        FROM videos
+        JOIN short_feed_interactions ON short_feed_interactions.video_id = videos.id
+        WHERE videos.deleted_at IS NULL
+          AND videos.is_stale = false
+          AND short_feed_interactions.favorited = true
+          AND videos.duration > 0
+          AND videos.duration < (SELECT COALESCE(short_feed_max_duration_minutes, 5) * 60.0 FROM settings ORDER BY id ASC LIMIT 1)
+        ORDER BY short_feed_interactions.updated_at DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(|_| NativeSliceError::DatabaseWrite)?;
+
+    let mut videos = Vec::with_capacity(rows.len());
+    for row in rows {
+        let id: i64 = row
+            .try_get("id")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?;
+        let path: String = row
+            .try_get("path")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?;
+        videos.push(ShortFeedVideoRecord {
+            id,
+            name: row
+                .try_get("name")
+                .map_err(|_| NativeSliceError::DatabaseWrite)?,
+            path: path.clone(),
+            duration: row
+                .try_get("duration")
+                .map_err(|_| NativeSliceError::DatabaseWrite)?,
+            width: row
+                .try_get("width")
+                .map_err(|_| NativeSliceError::DatabaseWrite)?,
+            height: row
+                .try_get("height")
+                .map_err(|_| NativeSliceError::DatabaseWrite)?,
+            tags: load_video_tags(pool, id)
+                .await
+                .map_err(|_| NativeSliceError::DatabaseWrite)?,
+            media_url: format!("/short-media/{id}"),
+            media_mime: inline_video_mime(&path).unwrap_or_default().to_string(),
+            liked: row
+                .try_get("liked")
+                .map_err(|_| NativeSliceError::DatabaseWrite)?,
+            favorited: row
+                .try_get("favorited")
+                .map_err(|_| NativeSliceError::DatabaseWrite)?,
+            reason_code: String::new(),
+            reason_message: String::new(),
+        });
+    }
+    Ok(videos)
+}
+
+pub async fn short_feed_media(
+    pool: &PgPool,
+    video_id: i64,
+) -> Result<ShortFeedVideoRecord, NativeSliceError> {
+    let row = sqlx::query(
+        r#"
+        SELECT videos.id, videos.name, videos.path, videos.duration, videos.width, videos.height,
+               COALESCE(short_feed_interactions.liked, false) AS liked,
+               COALESCE(short_feed_interactions.favorited, false) AS favorited
+        FROM videos
+        LEFT JOIN short_feed_interactions ON short_feed_interactions.video_id = videos.id
+        WHERE videos.id = $1
+          AND videos.deleted_at IS NULL
+          AND videos.is_stale = false
+          AND videos.duration > 0
+          AND videos.duration < (SELECT COALESCE(short_feed_max_duration_minutes, 5) * 60.0 FROM settings ORDER BY id ASC LIMIT 1)
+        "#,
+    )
+    .bind(video_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|_| NativeSliceError::DatabaseWrite)?
+    .ok_or(NativeSliceError::NotFound)?;
+    let path: String = row
+        .try_get("path")
+        .map_err(|_| NativeSliceError::DatabaseWrite)?;
+    Ok(ShortFeedVideoRecord {
+        id: video_id,
+        name: row
+            .try_get("name")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        path: path.clone(),
+        duration: row
+            .try_get("duration")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        width: row
+            .try_get("width")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        height: row
+            .try_get("height")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        tags: load_video_tags(pool, video_id)
+            .await
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        media_url: format!("/short-media/{video_id}"),
+        media_mime: inline_video_mime(&path)
+            .unwrap_or("application/octet-stream")
+            .to_string(),
+        liked: row
+            .try_get("liked")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        favorited: row
+            .try_get("favorited")
+            .map_err(|_| NativeSliceError::DatabaseWrite)?,
+        reason_code: String::new(),
+        reason_message: String::new(),
     })
 }
 
@@ -1917,6 +2307,16 @@ pub async fn record_short_feed_feedback(
         favorited,
         view_count,
     })
+}
+
+fn inline_video_mime(path: &str) -> Option<&'static str> {
+    let extension = Path::new(path)
+        .extension()
+        .and_then(OsStr::to_str)
+        .map(|value| format!(".{}", value.to_ascii_lowercase()))?;
+    SHORT_FEED_INLINE_MIMES
+        .iter()
+        .find_map(|(candidate, mime)| (*candidate == extension).then_some(*mime))
 }
 
 pub async fn start_cleanup_analysis(
@@ -3176,6 +3576,8 @@ pub async fn seed_remaining_slices_fixture(
             short_feed_max_duration_minutes INTEGER NOT NULL DEFAULT 5,
             video_extensions TEXT NOT NULL DEFAULT '',
             theme TEXT NOT NULL DEFAULT 'system',
+            bilingual_enabled BOOLEAN NOT NULL DEFAULT false,
+            bilingual_lang TEXT NOT NULL DEFAULT 'zh',
             deepl_api_key TEXT NOT NULL DEFAULT '',
             ai_tagging_api_key TEXT NOT NULL DEFAULT '',
             ai_tagging_frame_count INTEGER NOT NULL DEFAULT 5,
