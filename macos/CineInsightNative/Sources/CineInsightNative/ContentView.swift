@@ -6,7 +6,15 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var daemon: DaemonLifecycleManager
     @StateObject private var library: LibraryViewModel
-    @State private var selection: SidebarSection? = .library
+    @AppStorage("CineInsightNative.appLanguage") private var appLanguageRaw = AppLanguage.zh.rawValue
+    @State private var selection: SidebarSection = .library
+    @State private var searchMode: SearchMode = .files
+    @State private var activeLibraryTool: LibraryTool?
+    @State private var scanDialogOpen = false
+    @State private var scanDialogPath = ""
+    @State private var scanDialogSummary: ScanImportSummary?
+    @State private var previewDrawerOpen = false
+    @State private var activeRowVideoID: Int64?
     @State private var renameText = ""
     @State private var newTagName = ""
     @State private var tagName = ""
@@ -15,20 +23,43 @@ struct ContentView: View {
     @State private var directoryPath = ""
     @State private var directoryAlias = ""
     @State private var editingDirectory: ScanDirectoryRecord?
-    @State private var videoPath = ""
     @State private var deleteFile = false
+    @State private var settingsConfirmBeforeDelete = false
+    @State private var settingsDeleteOriginalFile = false
     @State private var settingsVideoExtensions = ""
     @State private var settingsPlayWeight = 2.0
     @State private var settingsShortFeedMinutes = 5
     @State private var settingsTheme = "system"
+    @State private var settingsDeeplApiKey = ""
+    @State private var settingsAIBaseURL = ""
+    @State private var settingsAIAPIKey = ""
+    @State private var settingsAIModel = ""
     @State private var settingsAIFrameCount = 5
     @State private var settingsAISubtitleLimit = 4000
     @State private var settingsAIStartupBatch = 10
+    @State private var settingsAutoScan = true
+    @State private var settingsLogEnabled = false
+    @State private var settingsBilingualEnabled = false
+    @State private var settingsBilingualLang = "zh"
+    @State private var subtitleEngine: SubtitleEngine = .whisperx
+    @State private var subtitleSourceLang = "auto"
 
     private let client: NativeAPIClient
 
+    private var appLanguage: AppLanguage {
+        AppLanguage(rawValue: appLanguageRaw) ?? .zh
+    }
+
+    private var isChinese: Bool {
+        appLanguage == .zh
+    }
+
+    private func t(_ zh: String, _ en: String) -> String {
+        isChinese ? zh : en
+    }
+
     init() {
-        let configuration = Self.defaultConfiguration()
+        let configuration = DaemonLaunchConfiguration.defaultConfiguration()
         let client = NativeAPIClient(configuration: configuration)
         self.client = client
         _daemon = StateObject(wrappedValue: DaemonLifecycleManager())
@@ -36,37 +67,38 @@ struct ContentView: View {
     }
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $selection) {
-                Section("Workspace") {
-                    sidebarItem(.library, "Library", "film.stack")
-                    sidebarItem(.tags, "Tags", "tag")
-                    sidebarItem(.directories, "Directories", "folder")
-                    sidebarItem(.subtitles, "Subtitles", "captions.bubble")
-                    sidebarItem(.aiTags, "AI Tags", "sparkles")
-                    sidebarItem(.shortFeed, "Short Feed", "rectangle.portrait")
-                    sidebarItem(.cleanup, "Cleanup", "trash")
-                    sidebarItem(.diagnostics, "Diagnostics", "waveform.path.ecg")
+        VStack(spacing: 0) {
+            appHeader
+            Divider()
+            HSplitView {
+                contentColumn
+                    .frame(minWidth: 720)
+
+                if previewDrawerOpen && selection == .library {
+                    Divider()
+                    previewDrawer
                 }
             }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 220)
-        } content: {
-            contentColumn
-        } detail: {
-            detailColumn
         }
         .frame(minWidth: 1120, minHeight: 720)
         .task {
+            NSApplication.shared.windows.first?.title = "析微影策"
             daemon.launch(client.configuration)
             await daemon.refreshHealth(using: client)
             await library.loadAll()
         }
         .onChange(of: library.selectedVideoID) {
             renameText = library.selectedVideo?.nameWithoutExtension ?? ""
-            Task { await library.refreshPreview() }
         }
         .onChange(of: library.query) {
-            Task { await library.search() }
+            if searchMode == .files {
+                Task { await library.search() }
+            }
+        }
+        .onChange(of: library.subtitleQuery) {
+            if searchMode == .subtitles {
+                Task { await library.searchSubtitles() }
+            }
         }
         .onChange(of: library.sizeFilter) {
             Task { await library.search() }
@@ -77,137 +109,268 @@ struct ContentView: View {
         .onChange(of: library.settings) {
             syncSettingsForm()
         }
+        .sheet(item: $activeLibraryTool) { tool in
+            libraryToolSheet(tool)
+        }
+        .sheet(isPresented: $scanDialogOpen) {
+            scanDialog
+        }
+    }
+
+    private var appHeader: some View {
+        HStack(spacing: 16) {
+            Spacer(minLength: 68)
+            Spacer()
+            Picker("", selection: $selection) {
+                Label(t("视频列表", "Library"), systemImage: "film.stack").tag(SidebarSection.library)
+                Label(t("设置", "Settings"), systemImage: "gearshape").tag(SidebarSection.settings)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 220)
+        }
+        .padding(.horizontal, 16)
+        .frame(height: 54)
     }
 
     private var contentColumn: some View {
         VStack(spacing: 0) {
-            toolbar
-            Divider()
-            switch selection ?? .library {
+            switch selection {
             case .library:
+                toolbar
+                Divider()
                 videoTable
-            case .tags:
-                tagsPanel
-            case .directories:
-                directoriesPanel
-            case .subtitles:
-                subtitlesPanel
-            case .aiTags:
-                aiTagsPanel
-            case .shortFeed:
-                shortFeedPanel
-            case .cleanup:
-                cleanupPanel
-            case .diagnostics:
-                diagnosticsPanel
+            case .settings:
+                settingsContent
             }
         }
+        .frame(minWidth: 640)
     }
 
-    private var detailColumn: some View {
+    private var previewDrawer: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                daemonBanner
-                selectedVideoPanel
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    Text("Preview")
+                        .font(.headline)
+                    Spacer()
+                    Button {
+                        previewDrawerOpen = false
+                    } label: {
+                        Image(systemName: "xmark")
+                    }
+                    .help("Close preview")
+                }
+                if let video = library.selectedVideo {
+                    Text(video.name)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(2)
+                    Text(video.path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                }
                 previewPanel
-                operationsPanel
-                settingsPanel
             }
             .padding(18)
         }
+        .frame(minWidth: 340, idealWidth: 420, maxWidth: 520)
     }
 
     private var toolbar: some View {
-        HStack(spacing: 10) {
-            TextField("Search videos, paths, or tags", text: $library.query)
-                .textFieldStyle(.roundedBorder)
-                .frame(minWidth: 280)
-
-            Picker("Size", selection: $library.sizeFilter) {
-                ForEach(VideoSizeFilter.allCases) { filter in
-                    Text(filter.label).tag(filter)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                Picker("Search Mode", selection: $searchMode) {
+                    ForEach(SearchMode.allCases) { mode in
+                        Text(mode.label(isChinese: isChinese)).tag(mode)
+                    }
                 }
-            }
-            .pickerStyle(.menu)
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .frame(width: 210)
 
-            Picker("Resolution", selection: $library.resolutionFilter) {
-                ForEach(VideoResolutionFilter.allCases) { filter in
-                    Text(filter.label).tag(filter)
+                searchField
+                    .frame(maxWidth: 520)
+
+                if searchMode == .files {
+                    Picker("Size", selection: $library.sizeFilter) {
+                        ForEach(VideoSizeFilter.allCases) { filter in
+                            Text(sizeFilterLabel(filter)).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 150)
+
+                    Picker("Resolution", selection: $library.resolutionFilter) {
+                        ForEach(VideoResolutionFilter.allCases) { filter in
+                            Text(resolutionFilterLabel(filter)).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .frame(width: 150)
                 }
-            }
-            .pickerStyle(.menu)
 
-            Button {
-                Task { await library.loadAll() }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
+                Spacer(minLength: 0)
             }
 
-            Button {
-                chooseVideoFile()
-            } label: {
-                Label("Add", systemImage: "plus")
-            }
+            HStack(spacing: 10) {
+                Button {
+                    if searchMode == .files {
+                        Task { await library.loadAll() }
+                    } else {
+                        Task { await library.searchSubtitles() }
+                    }
+                } label: {
+                    Label(t("刷新", "Refresh"), systemImage: "arrow.clockwise")
+                }
 
-            Spacer()
+                Button {
+                    Task { await library.playRandom() }
+                } label: {
+                    Label(t("随机播放", "Random"), systemImage: "shuffle")
+                }
 
-            Button {
-                library.toggleSelectAllVisible()
-            } label: {
-                Label(library.allVisibleSelected ? "Clear Page" : "Select Page", systemImage: "checklist")
-            }
-            .disabled(library.filteredVideos.isEmpty)
+                Button {
+                    library.toggleSelectAllVisible()
+                } label: {
+                    Label(library.allVisibleSelected ? t("取消全选", "Clear Page") : t("选择本页", "Select Page"), systemImage: "checklist")
+                }
+                .disabled(library.filteredVideos.isEmpty)
 
-            Button(role: .destructive) {
-                Task { await library.deleteSelectedVideos(deleteFile: deleteFile) }
-            } label: {
-                Label("Delete Selected", systemImage: "trash")
-            }
-            .disabled(library.selectedVideoIDs.isEmpty)
+                Button(role: .destructive) {
+                    Task { await library.deleteSelectedVideos(deleteFile: deleteFile) }
+                } label: {
+                    Label(t("批量删除", "Delete Selected"), systemImage: "trash")
+                }
+                .disabled(library.selectedVideoIDs.isEmpty)
 
-            Button {
-                Task { await library.previewExternally() }
-            } label: {
-                Label("Preview", systemImage: "play.rectangle")
-            }
-            .disabled(library.selectedVideo == nil)
+                Button {
+                    scanDialogPath = ""
+                    scanDialogSummary = nil
+                    scanDialogOpen = true
+                } label: {
+                    Label(t("扫描目录", "Scan Directories"), systemImage: "folder.badge.gearshape")
+                }
 
-            Button {
-                Task { await library.playSelected() }
-            } label: {
-                Label("Play", systemImage: "play.fill")
-            }
-            .disabled(library.selectedVideo == nil)
+                Button {
+                    activeLibraryTool = .aiTags
+                    Task { await library.refreshAITaggingStatus() }
+                } label: {
+                    Label(t("AI 标签审阅", "AI Tag Review"), systemImage: "sparkles")
+                }
 
-            Button {
-                Task { await library.playRandom() }
-            } label: {
-                Label("Random", systemImage: "shuffle")
+                Button {
+                    activeLibraryTool = .cleanup
+                    Task { await library.refreshCleanupStatus() }
+                } label: {
+                    Label(t("清理候选", "Cleanup"), systemImage: "trash")
+                }
+
+                Button {
+                    activeLibraryTool = .tags
+                } label: {
+                    Label(t("标签管理", "Tag Manager"), systemImage: "tag")
+                }
             }
         }
-        .padding(12)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(.secondary)
+            TextField(searchMode.placeholder(isChinese: isChinese), text: searchTextBinding)
+            .textFieldStyle(.plain)
+            .font(.callout)
+            .submitLabel(.search)
+            if !searchTextBinding.wrappedValue.isEmpty {
+                Button {
+                    searchTextBinding.wrappedValue = ""
+                    if searchMode == .files {
+                        Task { await library.search() }
+                    } else {
+                        library.clearSubtitleSearch()
+                    }
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(.separator, lineWidth: 0.5)
+        }
+    }
+
+    private func sizeFilterLabel(_ filter: VideoSizeFilter) -> String {
+        switch filter {
+        case .all: return t("体积：全部", "Size: All")
+        case .small: return t("小于 300 MB", "Under 300 MB")
+        case .medium: return "300 MB - 1 GB"
+        case .large: return t("大于 1 GB", "Over 1 GB")
+        }
+    }
+
+    private func resolutionFilterLabel(_ filter: VideoResolutionFilter) -> String {
+        switch filter {
+        case .all: return t("分辨率：全部", "Resolution: All")
+        case .sd: return t("低于 720p", "Below 720p")
+        case .hd: return "720p"
+        case .fullHD: return "1080p"
+        case .ultraHD: return "4K+"
+        }
+    }
+
+    private var searchTextBinding: Binding<String> {
+        Binding {
+            searchMode == .files ? library.query : library.subtitleQuery
+        } set: { value in
+            if searchMode == .files {
+                library.query = value
+            } else {
+                library.subtitleQuery = value
+            }
+        }
     }
 
     private var videoTable: some View {
         VStack(spacing: 0) {
-            tagFilterBar
-            if !library.selectedVideoIDs.isEmpty {
-                HStack(spacing: 10) {
-                    Text("Selected \(library.selectedVideoIDs.count)")
-                        .font(.callout)
-                    Spacer()
-                    Toggle("Delete original files", isOn: $deleteFile)
-                    Button(role: .destructive) {
-                        Task { await library.deleteSelectedVideos(deleteFile: deleteFile) }
-                    } label: {
-                        Label("Delete Selected", systemImage: "trash")
+            if searchMode == .files {
+                tagFilterBar
+                if !library.selectedVideoIDs.isEmpty {
+                    HStack(spacing: 10) {
+                        Text("Selected \(library.selectedVideoIDs.count)")
+                            .font(.callout)
+                        Spacer()
+                        Button {
+                            activeLibraryTool = .tags
+                        } label: {
+                            Label("Batch Tags", systemImage: "tag")
+                        }
+                        Toggle("Delete original files", isOn: $deleteFile)
+                        Button(role: .destructive) {
+                            Task { await library.deleteSelectedVideos(deleteFile: deleteFile) }
+                        } label: {
+                            Label("Delete Selected", systemImage: "trash")
+                        }
                     }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    Divider()
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                Divider()
+                videoTableBody
+            } else {
+                subtitleSearchResults
             }
-            videoTableBody
         }
     }
 
@@ -253,7 +416,7 @@ struct ContentView: View {
                 .accessibilityLabel("Select \(video.name)")
             }
             .width(36)
-            TableColumn("Name") { video in
+            TableColumn(t("名称", "Name")) { video in
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 6) {
                         Text(video.name)
@@ -269,20 +432,24 @@ struct ContentView: View {
                         .lineLimit(1)
                 }
             }
-            TableColumn("Tags") { video in
+            TableColumn(t("标签", "Tags")) { video in
                 FlowTags(tags: video.tags)
             }
-            TableColumn("Resolution") { video in
+            TableColumn(t("分辨率", "Resolution")) { video in
                 Text(video.resolution.isEmpty ? "-" : video.resolution)
             }
-            TableColumn("Duration") { video in
+            TableColumn(t("时长", "Duration")) { video in
                 Text(formatDuration(video.duration))
                     .monospacedDigit()
             }
-            TableColumn("Score") { video in
+            TableColumn(t("分数", "Score")) { video in
                 Text(video.score, format: .number.precision(.fractionLength(1)))
                     .monospacedDigit()
             }
+            TableColumn("") { video in
+                rowActions(video)
+            }
+            .width(180)
         }
         .overlay {
             if library.isLoading && library.videos.isEmpty {
@@ -293,33 +460,80 @@ struct ContentView: View {
         }
     }
 
-    private var selectedVideoPanel: some View {
-        Group {
-            if let video = library.selectedVideo {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(video.name)
-                            .font(.title3)
-                        Spacer()
-                        Text(video.score, format: .number.precision(.fractionLength(1)))
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                    Text(video.path)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                    Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
-                        metricRow("Duration", formatDuration(video.duration))
-                        metricRow("Size", ByteCountFormatter.string(fromByteCount: video.size, countStyle: .file))
-                        metricRow("Resolution", video.resolution.isEmpty ? "-" : video.resolution)
-                        metricRow("Plays", "\(video.playCount) formal / \(video.randomPlayCount) random")
-                    }
-                    .font(.callout)
-                    FlowTags(tags: video.tags)
+    private func rowActions(_ video: VideoSummary) -> some View {
+        HStack(spacing: 6) {
+            Button {
+                Task { await previewVideo(video) }
+            } label: {
+                Image(systemName: "play.rectangle")
+            }
+            .help("Preview")
+            Button {
+                Task { await library.play(video) }
+            } label: {
+                Image(systemName: "play.fill")
+            }
+            .help("Play")
+            Menu {
+                Button {
+                    Task { await library.openDirectory(video) }
+                } label: {
+                    Label("Open Directory", systemImage: "folder")
                 }
-            } else {
-                ContentUnavailableView("No Selection", systemImage: "film")
+                Button {
+                    beginRename(video)
+                } label: {
+                    Label("Rename", systemImage: "pencil")
+                }
+                Button {
+                    activeRowVideoID = video.id
+                    activeLibraryTool = .rowTags
+                } label: {
+                    Label("Edit Tags", systemImage: "tag")
+                }
+                Button {
+                    library.selectedVideoID = video.id
+                    activeLibraryTool = .rowSubtitles
+                } label: {
+                    Label("Generate Subtitles", systemImage: "captions.bubble")
+                }
+                Divider()
+                Button(role: .destructive) {
+                    Task { await library.delete(video, deleteFile: deleteFile) }
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+            }
+            .help("More actions")
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private var subtitleSearchResults: some View {
+        List(library.subtitleMatches, id: \.segment.index) { match in
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(match.video.name)
+                        .font(.headline)
+                    Spacer()
+                    Text("\(match.segment.startTimeMs)ms - \(match.segment.endTimeMs)ms")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Text(match.segment.text)
+                    .font(.callout)
+                Text(match.video.path)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .padding(.vertical, 3)
+        }
+        .overlay {
+            if library.subtitleMatches.isEmpty {
+                ContentUnavailableView("No Subtitle Matches", systemImage: "captions.bubble")
             }
         }
     }
@@ -345,69 +559,6 @@ struct ContentView: View {
                 }
             } else {
                 previewPlaceholder("Select a video to load preview metadata")
-            }
-        }
-    }
-
-    private var operationsPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Operations")
-                .font(.headline)
-            HStack(spacing: 8) {
-                TextField("Video path", text: $videoPath)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    chooseVideoFile()
-                } label: {
-                    Image(systemName: "folder")
-                }
-                Button {
-                    let path = videoPath
-                    videoPath = ""
-                    Task { await library.addVideo(path: path) }
-                } label: {
-                    Label("Add Video", systemImage: "plus")
-                }
-            }
-            HStack(spacing: 8) {
-                TextField("New filename", text: $renameText)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    Task { await library.renameSelected(to: renameText) }
-                } label: {
-                    Label("Rename", systemImage: "pencil")
-                }
-                .disabled(library.selectedVideo == nil)
-            }
-            Toggle("Delete original file", isOn: $deleteFile)
-            Button(role: .destructive) {
-                Task { await library.deleteSelected(deleteFile: deleteFile) }
-            } label: {
-                Label("Delete Video", systemImage: "trash")
-            }
-            .disabled(library.selectedVideo == nil)
-
-            Divider()
-
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], alignment: .leading, spacing: 8) {
-                ForEach(library.tags) { tag in
-                    Toggle(isOn: tagBinding(tag)) {
-                        Label(tag.name, systemImage: "tag")
-                    }
-                    .toggleStyle(.button)
-                }
-            }
-            HStack(spacing: 8) {
-                TextField("Create tag", text: $newTagName)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    let name = newTagName
-                    newTagName = ""
-                    Task { await library.createAndAssignTag(name: name) }
-                } label: {
-                    Label("Add Tag", systemImage: "plus")
-                }
-                .disabled(library.selectedVideo == nil)
             }
         }
     }
@@ -477,47 +628,139 @@ struct ContentView: View {
         }
     }
 
+    private func rowTagEditor(video: VideoSummary) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(video.name)
+                .font(.headline)
+                .lineLimit(2)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 132), spacing: 8)], alignment: .leading, spacing: 8) {
+                ForEach(library.tags) { tag in
+                    Toggle(isOn: tagBinding(tag, video: video)) {
+                        Label(tag.name, systemImage: "tag")
+                    }
+                    .toggleStyle(.button)
+                }
+            }
+            HStack(spacing: 8) {
+                TextField("Create tag", text: $newTagName)
+                    .textFieldStyle(.roundedBorder)
+                Button {
+                    let name = newTagName
+                    newTagName = ""
+                    Task { await library.createAndAssignTag(name: name, video: video) }
+                } label: {
+                    Label("Add Tag", systemImage: "plus")
+                }
+            }
+        }
+        .padding(18)
+        .frame(minWidth: 520, minHeight: 320)
+    }
+
+    private var scanDialog: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(t("扫描视频目录", "Scan Video Directory"))
+                .font(.headline)
+            HStack(spacing: 10) {
+                Button {
+                    chooseScanDialogDirectory()
+                } label: {
+                    Label(t("选择目录", "Choose Directory"), systemImage: "folder")
+                }
+                Text(scanDialogPath.isEmpty ? t("尚未选择目录", "No directory selected") : scanDialogPath)
+                    .font(.callout)
+                    .foregroundStyle(scanDialogPath.isEmpty ? .secondary : .primary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            if library.isLoading {
+                ProgressView(t("正在扫描...", "Scanning..."))
+            }
+            if let summary = scanDialogSummary {
+                Text(t("扫描完成：发现 \(summary.found) 个视频，新增 \(summary.imported) 个，删除 \(summary.deleted) 个，跳过 \(summary.skipped) 个。", "Scan complete: found \(summary.found), added \(summary.imported), deleted \(summary.deleted), skipped \(summary.skipped)."))
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.green)
+            }
+            Text(t("扫描完成后会自动把该目录加入扫描目录配置。", "After scanning, the directory is saved to scan directory settings."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            HStack {
+                Spacer()
+                Button(scanDialogSummary == nil ? t("取消", "Cancel") : t("关闭", "Close")) {
+                    scanDialogOpen = false
+                }
+                Button {
+                    Task {
+                        scanDialogSummary = await library.scanAndImportDirectory(path: scanDialogPath)
+                    }
+                } label: {
+                    Label(scanDialogSummary == nil ? t("开始扫描", "Start Scan") : t("重新扫描", "Scan Again"), systemImage: "magnifyingglass")
+                }
+                .disabled(scanDialogPath.isEmpty || library.isLoading)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 520)
+    }
+
     private var directoriesPanel: some View {
-        VStack(spacing: 0) {
-            List(library.directories) { directory in
-                HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(directory.alias.isEmpty ? directory.path : directory.alias)
-                        Text(directory.path)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                    Spacer()
-                    Button {
-                        editingDirectory = directory
-                        directoryPath = directory.path
-                        directoryAlias = directory.alias
-                    } label: {
-                        Image(systemName: "pencil")
-                    }
-                    Button {
-                        Task { await library.scanDirectory(directory) }
-                    } label: {
-                        Image(systemName: "magnifyingglass")
-                    }
-                    Button(role: .destructive) {
-                        Task { await library.deleteDirectory(directory) }
-                    } label: {
-                        Image(systemName: "trash")
+        VStack(alignment: .leading, spacing: 12) {
+            Text(t("扫描目录管理", "Scan Directories"))
+                .font(.headline)
+            VStack(spacing: 0) {
+                if library.directories.isEmpty {
+                    Text(t("暂无扫描目录配置", "No scan directories configured."))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.vertical, 12)
+                } else {
+                    ForEach(library.directories) { directory in
+                        HStack(spacing: 12) {
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(directory.alias.isEmpty ? directory.path : directory.alias)
+                                    .font(.callout.weight(.medium))
+                                Text(directory.path)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Button {
+                                editingDirectory = directory
+                                directoryPath = directory.path
+                                directoryAlias = directory.alias
+                            } label: {
+                                Image(systemName: "pencil")
+                            }
+                            Button {
+                                Task { await library.scanDirectory(directory) }
+                            } label: {
+                                Image(systemName: "magnifyingglass")
+                            }
+                            Button(role: .destructive) {
+                                Task { await library.deleteDirectory(directory) }
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                        }
+                        .padding(.vertical, 8)
+                        if directory.id != library.directories.last?.id {
+                            Divider()
+                        }
                     }
                 }
             }
             Divider()
             HStack(spacing: 8) {
-                TextField("Path", text: $directoryPath)
+                TextField(t("目录路径", "Path"), text: $directoryPath)
                     .textFieldStyle(.roundedBorder)
                 Button {
                     chooseDirectory()
                 } label: {
                     Image(systemName: "folder")
                 }
-                TextField("Alias", text: $directoryAlias)
+                TextField(t("目录别名", "Alias"), text: $directoryAlias)
                     .textFieldStyle(.roundedBorder)
                 Button {
                     Task {
@@ -531,41 +774,89 @@ struct ContentView: View {
                         directoryAlias = ""
                     }
                 } label: {
-                    Label(editingDirectory == nil ? "Add" : "Update", systemImage: editingDirectory == nil ? "plus" : "checkmark")
+                    Label(editingDirectory == nil ? t("添加", "Add") : t("更新", "Update"), systemImage: editingDirectory == nil ? "plus" : "checkmark")
                 }
                 Button {
                     editingDirectory = nil
                     directoryPath = ""
                     directoryAlias = ""
                 } label: {
-                    Label("Cancel", systemImage: "xmark")
+                    Label(t("取消", "Cancel"), systemImage: "xmark")
                 }
                 .disabled(editingDirectory == nil && directoryPath.isEmpty && directoryAlias.isEmpty)
             }
-            .padding(12)
         }
+        .settingsSectionStyle()
     }
 
     private var subtitlesPanel: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                TextField("Search subtitle text", text: $library.subtitleQuery)
-                    .textFieldStyle(.roundedBorder)
-                Button {
-                    Task { await library.searchSubtitles() }
-                } label: {
-                    Label("Search", systemImage: "magnifyingglass")
+            subtitleGenerationPanel
+                .padding(12)
+            Divider()
+            subtitleSearchResults
+        }
+    }
+
+    private var subtitleGenerationPanel: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Subtitles")
+                .font(.headline)
+            HStack(spacing: 10) {
+                Picker("Engine", selection: $subtitleEngine) {
+                    Text("WhisperX").tag(SubtitleEngine.whisperx)
+                    Text("Qwen").tag(SubtitleEngine.qwen)
                 }
+                .pickerStyle(.segmented)
+                TextField("Source language", text: $subtitleSourceLang)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 118)
             }
-            .padding(12)
-            List(library.subtitleMatches, id: \.segment.index) { match in
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(match.video.name)
-                        .font(.headline)
-                    Text(match.segment.text)
-                    Text("\(match.segment.startTimeMs)ms - \(match.segment.endTimeMs)ms")
+            HStack(spacing: 8) {
+                Button {
+                    Task { await library.prepareSubtitleEngine(subtitleEngine) }
+                } label: {
+                    Label("Prepare", systemImage: "arrow.down.circle")
+                }
+                Button {
+                    Task { await library.generateSubtitle(engine: subtitleEngine, sourceLang: subtitleSourceLang) }
+                } label: {
+                    Label("Generate", systemImage: "captions.bubble")
+                }
+                .disabled(library.selectedVideo == nil)
+                Button {
+                    Task { await library.forceGenerateSubtitle(engine: subtitleEngine, sourceLang: subtitleSourceLang) }
+                } label: {
+                    Label("Force", systemImage: "exclamationmark.triangle")
+                }
+                .disabled(library.selectedVideo == nil || library.lastSubtitleResult?.forceEligible != true)
+                Button {
+                    Task { await library.cancelSubtitle() }
+                } label: {
+                    Image(systemName: "xmark.circle")
+                }
+                .help("Cancel subtitle job")
+                .disabled(library.subtitleJobStatus?.progress.cancellable != true)
+            }
+            if let status = library.subtitleJobStatus {
+                HStack(spacing: 10) {
+                    ProgressView(value: Double(status.progress.percent), total: 100)
+                    Text(status.progress.phase)
+                        .font(.caption)
+                        .frame(width: 92, alignment: .leading)
+                    Text(status.progress.message)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            if !library.subtitleEngines.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(library.subtitleEngines, id: \.engine) { engine in
+                        Label(engine.available ? "\(engine.displayName) ready" : "\(engine.displayName): \(engine.reasonCode)", systemImage: engine.available ? "checkmark.circle" : "exclamationmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(engine.available ? .green : .secondary)
+                    }
                 }
             }
         }
@@ -576,9 +867,14 @@ struct ContentView: View {
             HStack {
                 Text("Pending review \(library.aiCandidates.filter { $0.status == .pending }.count)")
                     .font(.headline)
+                if let status = library.aiTaggingStatus {
+                    Text("Pending \(status.pending) · Done \(status.completed) · Failed \(status.failed)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 Button {
-                    Task { await library.loadAll() }
+                    Task { await library.refreshAITaggingStatus() }
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -599,6 +895,17 @@ struct ContentView: View {
                             Text("\(group.pendingCount) pending")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
+                            Button {
+                                Task { await library.retryAITagging(videoId: group.videoId) }
+                            } label: {
+                                Label("Retry", systemImage: "arrow.clockwise")
+                            }
+                            Button(role: .destructive) {
+                                Task { await library.rejectPendingCandidates(videoId: group.videoId) }
+                            } label: {
+                                Label("Reject Pending", systemImage: "xmark.circle")
+                            }
+                            .disabled(group.pendingCount == 0)
                         }
                         if !group.videoPath.isEmpty {
                             Text(group.videoPath)
@@ -662,95 +969,52 @@ struct ContentView: View {
         }
     }
 
-    private var shortFeedPanel: some View {
-        ZStack(alignment: .bottomLeading) {
-            RoundedRectangle(cornerRadius: 12)
-                .fill(.black)
-
-            if let preview = library.shortFeedPreview,
-               preview.mode == .inline,
-               let locator = preview.inlineSource?.locatorValue,
-               let url = client.absoluteURL(for: locator) {
-                VideoPlayer(player: AVPlayer(url: url))
-                    .aspectRatio(9 / 16, contentMode: .fill)
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
-            }
-
-            LinearGradient(
-                colors: [.clear, .black.opacity(0.72)],
-                startPoint: .center,
-                endPoint: .bottom
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
-
-            if let video = library.shortFeedVideo {
-                VStack(alignment: .leading, spacing: 8) {
-                    Text(video.name)
-                        .font(.title3.weight(.semibold))
-                        .lineLimit(2)
-                    Text("\(formatDuration(video.duration)) · \(video.width)x\(video.height)")
-                        .font(.caption)
-                        .foregroundStyle(.white.opacity(0.72))
-                    FlowTags(tags: video.tags)
-                }
-                .foregroundStyle(.white)
-                .padding(18)
-                .padding(.trailing, 74)
-            } else {
-                ContentUnavailableView("No Short Feed Video", systemImage: "rectangle.portrait")
-                    .foregroundStyle(.white)
-            }
-
-            VStack(spacing: 14) {
-                iconOnlyButton("Next", "forward.fill") {
-                    Task { await library.loadShortFeedVideo() }
-                }
-                iconOnlyButton("Viewed", "eye") {
-                    Task { await library.recordShortFeed(viewed: true) }
-                }
-                iconOnlyButton("Like", "heart.fill") {
-                    Task { await library.recordShortFeed(liked: true) }
-                }
-                iconOnlyButton("Favorite", "bookmark.fill") {
-                    Task { await library.recordShortFeed(favorited: true) }
-                }
-            }
-            .padding(.trailing, 18)
-            .padding(.bottom, 18)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-        }
-        .aspectRatio(9 / 16, contentMode: .fit)
-        .padding(12)
-    }
-
     private var cleanupPanel: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Button {
-                    Task { await library.analyzeCleanup() }
-                } label: {
-                    Label("Analyze", systemImage: "wand.and.stars")
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(t("清理候选审阅", "Cleanup Review"))
+                        .font(.headline)
+                    Text(t("基于重复、过短和低清规则生成候选。先分析，再预览候选，最后再决定是否删除。", "Analyze duplicate, short, and low-resolution candidates before deleting anything."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
                 }
                 Spacer()
-                if let cleanup = library.cleanup {
-                    Text("Candidates \(cleanup.allCandidateIds.count)")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
+                Button {
+                    activeLibraryTool = nil
+                } label: {
+                    Image(systemName: "xmark")
                 }
+                .help(t("关闭", "Close"))
+            }
+            HStack(spacing: 10) {
+                Button {
+                    Task { await library.startCleanup() }
+                } label: {
+                    Label(t("开始分析", "Analyze"), systemImage: "wand.and.stars")
+                }
+                Button {
+                    Task { await library.refreshCleanupStatus() }
+                } label: {
+                    Label(t("刷新状态", "Refresh"), systemImage: "arrow.clockwise")
+                }
+                Spacer()
+                cleanupStatusSummary
             }
             if let cleanup = library.cleanup {
                 HStack(spacing: 8) {
-                    cleanupMetric("Duplicate Groups", cleanup.duplicateGroups.count)
-                    cleanupMetric("Short Videos", cleanup.lowDurationIds.count)
-                    cleanupMetric("Low Resolution", cleanup.lowResolutionIds.count)
+                    cleanupMetric(t("重复组", "Duplicate Groups"), cleanup.duplicateGroups.count)
+                    cleanupMetric(t("短视频", "Short Videos"), cleanup.lowDurationIds.count)
+                    cleanupMetric(t("低清视频", "Low Resolution"), cleanup.lowResolutionIds.count)
                 }
                 List {
                     if !cleanup.duplicateGroups.isEmpty {
-                        Section("Duplicate Candidates") {
+                        Section(t("重复候选", "Duplicate Candidates")) {
                             ForEach(cleanup.duplicateGroups, id: \.originalId) { group in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(group.reason)
-                                    Text("Keep #\(group.originalId), review \(group.candidateIds.map { "#\($0)" }.joined(separator: ", "))")
+                                    Text(t("建议保留 #\(group.originalId)，审阅 \(group.candidateIds.map { "#\($0)" }.joined(separator: ", "))", "Keep #\(group.originalId), review \(group.candidateIds.map { "#\($0)" }.joined(separator: ", "))"))
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                 }
@@ -758,7 +1022,7 @@ struct ContentView: View {
                         }
                     }
                     if !library.cleanupCandidateVideos.isEmpty {
-                        Section("Matched Videos In Current Page") {
+                        Section(t("当前页匹配视频", "Matched Videos In Current Page")) {
                             ForEach(library.cleanupCandidateVideos) { video in
                                 HStack {
                                     VStack(alignment: .leading, spacing: 3) {
@@ -773,7 +1037,7 @@ struct ContentView: View {
                                         library.selectedVideoID = video.id
                                         Task { await library.previewExternally() }
                                     } label: {
-                                        Label("Preview", systemImage: "play.rectangle")
+                                        Label(t("预览", "Preview"), systemImage: "play.rectangle")
                                     }
                                 }
                             }
@@ -781,10 +1045,35 @@ struct ContentView: View {
                     }
                 }
             } else {
-                ContentUnavailableView("No Cleanup Analysis", systemImage: "trash")
+                VStack(spacing: 12) {
+                    Image(systemName: "trash")
+                        .font(.system(size: 34, weight: .regular))
+                        .foregroundStyle(.tertiary)
+                    Text(t("还没有清理分析", "No Cleanup Analysis"))
+                        .font(.title3.weight(.semibold))
+                    Text(t("点击“开始分析”后，会列出重复、过短和低清候选。", "Click Analyze to list duplicate, short, and low-resolution candidates."))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .padding(12)
+        .padding(18)
+    }
+
+    @ViewBuilder
+    private var cleanupStatusSummary: some View {
+        if let cleanup = library.cleanup {
+            Text(t("候选 \(cleanup.allCandidateIds.count)", "Candidates \(cleanup.allCandidateIds.count)"))
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else if let status = library.cleanupStatus, !status.progress.message.isEmpty {
+            Text(status.progress.message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
     }
 
     private func cleanupMetric(_ label: String, _ value: Int) -> some View {
@@ -822,60 +1111,236 @@ struct ContentView: View {
         .padding(12)
     }
 
-    private var settingsPanel: some View {
+    private var settingsContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text(t("设置", "Settings"))
+                    .font(.title2.weight(.semibold))
+                settingsPanel
+                directoriesPanel
+                shortFeedSettingsBlock
+                diagnosticsSummaryPanel
+            }
+            .padding(18)
+            .frame(maxWidth: 980, alignment: .leading)
+        }
+    }
+
+    private var diagnosticsSummaryPanel: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Settings")
-                .font(.headline)
+            HStack {
+                Text(t("诊断", "Diagnostics"))
+                    .font(.headline)
+                Spacer()
+                Button {
+                    Task { await library.refreshDiagnostics() }
+                } label: {
+                    Label(t("刷新", "Refresh"), systemImage: "arrow.clockwise")
+                }
+            }
+            if let diagnostics = library.diagnostics {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 8) {
+                    metricRow(t("视频", "Videos"), "\(diagnostics.videoCount)")
+                    metricRow(t("标签", "Tags"), "\(diagnostics.tagCount)")
+                    metricRow(t("字幕", "Subtitles"), "\(diagnostics.subtitleSegmentCount)")
+                    metricRow(t("AI 候选", "AI Candidates"), "\(diagnostics.aiCandidateCount)")
+                    metricRow(t("短视频", "Short Feed"), "\(diagnostics.shortFeedInteractionCount)")
+                }
+                .font(.callout)
+            } else {
+                Text(t("诊断不可用", "Diagnostics unavailable"))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .settingsSectionStyle()
+    }
+
+    private var settingsPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
             if let settings = library.settings {
-                TextField("Video extensions", text: $settingsVideoExtensions)
-                    .textFieldStyle(.roundedBorder)
-                HStack {
-                    Text("Play Weight")
-                    Slider(value: $settingsPlayWeight, in: 0.1...10, step: 0.1)
-                    Text(String(format: "%.1f", settingsPlayWeight))
-                        .monospacedDigit()
-                        .frame(width: 44, alignment: .trailing)
+                settingsGroup(t("基本设置", "General")) {
+                    Picker(t("界面语言", "Interface Language"), selection: $appLanguageRaw) {
+                        Text("中文").tag(AppLanguage.zh.rawValue)
+                        Text("English").tag(AppLanguage.en.rawValue)
+                    }
+                    .pickerStyle(.segmented)
+                    Toggle(t("删除前确认", "Confirm before delete"), isOn: $settingsConfirmBeforeDelete)
+                    Toggle(t("默认将原始文件移入回收站", "Move original file to Trash by default"), isOn: $settingsDeleteOriginalFile)
+                    Toggle(t("启用日志记录", "Enable frontend logging"), isOn: $settingsLogEnabled)
+                    Picker(t("主题模式", "Theme"), selection: $settingsTheme) {
+                        Text(t("跟随系统", "System")).tag("system")
+                        Text(t("浅色", "Light")).tag("light")
+                        Text(t("深色", "Dark")).tag("dark")
+                    }
+                    .pickerStyle(.segmented)
                 }
-                Stepper("Short Feed \(settingsShortFeedMinutes) min", value: $settingsShortFeedMinutes, in: 1...180)
-                Picker("Theme", selection: $settingsTheme) {
-                    Text("System").tag("system")
-                    Text("Light").tag("light")
-                    Text("Dark").tag("dark")
+
+                settingsGroup(t("自动化与扫描", "Automation & Scan")) {
+                    Toggle(t("启动时自动增量扫描", "Start incremental scan on launch"), isOn: $settingsAutoScan)
                 }
-                .pickerStyle(.segmented)
-                Stepper("AI frames \(settingsAIFrameCount)", value: $settingsAIFrameCount, in: 1...8)
-                Stepper("AI subtitle limit \(settingsAISubtitleLimit)", value: $settingsAISubtitleLimit, in: 200...12_000, step: 100)
-                Stepper("AI startup batch \(settingsAIStartupBatch)", value: $settingsAIStartupBatch, in: 1...100)
-                HStack {
-                    Label(settings.deeplApiKeyConfigured ? "DeepL configured" : "DeepL not configured", systemImage: "key")
-                    Spacer()
-                    Label(settings.aiTaggingApiKeyConfigured ? "AI configured" : "AI not configured", systemImage: "sparkles")
+
+                settingsGroup(t("手机短视频", "Mobile Short Feed")) {
+                    Stepper(t("短视频时长上限：\(settingsShortFeedMinutes) 分钟", "Max duration: \(settingsShortFeedMinutes) min"), value: $settingsShortFeedMinutes, in: 1...180)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
+
+                settingsGroup(t("AI 标签", "AI Tags")) {
+                    TextField("https://api.openai.com/v1", text: $settingsAIBaseURL)
+                        .textFieldStyle(.roundedBorder)
+                    SecureField(settings.aiTaggingApiKeyConfigured ? t("已配置 API Key，留空则保留", "API key configured, leave blank to keep") : "API Key", text: $settingsAIAPIKey)
+                        .textFieldStyle(.roundedBorder)
+                    TextField(t("模型", "Model"), text: $settingsAIModel)
+                        .textFieldStyle(.roundedBorder)
+                    Stepper(t("抽帧数量：\(settingsAIFrameCount)", "Frames: \(settingsAIFrameCount)"), value: $settingsAIFrameCount, in: 1...8)
+                    Stepper(t("字幕字符上限：\(settingsAISubtitleLimit)", "Subtitle limit: \(settingsAISubtitleLimit)"), value: $settingsAISubtitleLimit, in: 200...12_000, step: 100)
+                    Stepper(t("后台批量数量：\(settingsAIStartupBatch)", "Startup batch: \(settingsAIStartupBatch)"), value: $settingsAIStartupBatch, in: 1...100)
+                }
+
+                settingsGroup(t("智能随机播放", "Smart Random Play")) {
+                    HStack {
+                        Text(t("播放权重", "Play Weight"))
+                        Slider(value: $settingsPlayWeight, in: 0.1...10, step: 0.1)
+                        Text(String(format: "%.1f", settingsPlayWeight))
+                            .monospacedDigit()
+                            .frame(width: 44, alignment: .trailing)
+                    }
+                }
+
+                settingsGroup(t("支持的视频格式", "Video Extensions")) {
+                    TextField(".mp4,.mkv,.mov", text: $settingsVideoExtensions)
+                        .textFieldStyle(.roundedBorder)
+                }
+
+                settingsGroup(t("字幕翻译", "Subtitle Translation")) {
+                    Toggle(t("启用双语字幕翻译", "Enable bilingual subtitle translation"), isOn: $settingsBilingualEnabled)
+                    if settingsBilingualEnabled {
+                        Picker(t("目标翻译语言", "Target language"), selection: $settingsBilingualLang) {
+                            Text(t("中文", "Chinese")).tag("zh")
+                            Text(t("英语", "English")).tag("en")
+                            Text(t("日语", "Japanese")).tag("ja")
+                            Text(t("韩语", "Korean")).tag("ko")
+                            Text(t("法语", "French")).tag("fr")
+                            Text(t("德语", "German")).tag("de")
+                            Text(t("西班牙语", "Spanish")).tag("es")
+                            Text(t("葡萄牙语", "Portuguese")).tag("pt")
+                            Text(t("俄语", "Russian")).tag("ru")
+                            Text(t("意大利语", "Italian")).tag("it")
+                        }
+                        .pickerStyle(.menu)
+                        SecureField(settings.deeplApiKeyConfigured ? t("已配置 DeepL Key，留空则保留", "DeepL key configured, leave blank to keep") : "DeepL API Key", text: $settingsDeeplApiKey)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+
                 Button {
                     Task {
                         await library.saveSettings(
+                            confirmBeforeDelete: settingsConfirmBeforeDelete,
+                            deleteOriginalFile: settingsDeleteOriginalFile,
                             videoExtensions: settingsVideoExtensions,
                             playWeight: settingsPlayWeight,
                             shortFeedMaxDurationMinutes: settingsShortFeedMinutes,
                             theme: settingsTheme,
+                            autoScanOnStartup: settingsAutoScan,
+                            logEnabled: settingsLogEnabled,
+                            bilingualEnabled: settingsBilingualEnabled,
+                            bilingualLang: settingsBilingualLang,
+                            deeplApiKey: settingsDeeplApiKey,
+                            aiTaggingBaseUrl: settingsAIBaseURL,
+                            aiTaggingApiKey: settingsAIAPIKey,
+                            aiTaggingModel: settingsAIModel,
                             aiFrameCount: settingsAIFrameCount,
                             aiSubtitleCharLimit: settingsAISubtitleLimit,
                             aiStartupBatchSize: settingsAIStartupBatch
                         )
+                        settingsDeeplApiKey = ""
+                        settingsAIAPIKey = ""
                     }
                 } label: {
-                    Label("Save Settings", systemImage: "checkmark")
+                    Label(t("保存所有设置", "Save Settings"), systemImage: "checkmark")
                 }
             } else {
-                Text("Settings unavailable")
+                Text(t("无法连接服务器。", "Settings unavailable"))
                     .foregroundStyle(.secondary)
             }
             Text(library.statusMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
+        }
+        .settingsSectionStyle()
+    }
+
+    @ViewBuilder
+    private func settingsGroup<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+            content()
+        }
+    }
+
+    private var shortFeedSettingsBlock: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Label(t("手机短视频", "Mobile Short Feed"), systemImage: "iphone")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    Task { await library.refreshShortFeedStatus() }
+                } label: {
+                    Label(t("刷新", "Refresh"), systemImage: "arrow.clockwise")
+                }
+            }
+
+            if let status = library.shortFeedStatus {
+                Label(status.running ? t("运行中", "Running") : t("未运行", "Unavailable"), systemImage: status.running ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(status.running ? .green : .orange)
+                if !status.url.isEmpty {
+                    shortFeedURLRow(label: status.fallbackUsed ? t("本机地址（备用端口）", "Local URL (fallback port)") : t("本机地址", "Local URL"), url: status.url)
+                } else if !status.startupError.isEmpty {
+                    Text(status.startupError)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(status.lanUrls, id: \.self) { url in
+                    shortFeedURLRow(label: t("局域网地址", "LAN URL"), url: url)
+                }
+                Text(status.allowedAccess)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            } else {
+                Text(t("短视频服务状态尚未加载。", "Short Feed server status has not been loaded."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .settingsSectionStyle()
+    }
+
+    private func shortFeedURLRow(label: String, url: String) -> some View {
+        HStack(spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(label)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text(url)
+                    .font(.caption.monospaced())
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+            Button {
+                openExternalURL(url)
+            } label: {
+                Image(systemName: "safari")
+            }
+            .help(t("在浏览器打开", "Open in browser"))
+            Button {
+                copyToClipboard(url)
+            } label: {
+                Image(systemName: "doc.on.doc")
+            }
+            .help(t("复制地址", "Copy URL"))
         }
     }
 
@@ -893,11 +1358,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private func sidebarItem(_ section: SidebarSection, _ title: String, _ icon: String) -> some View {
-        Label(title, systemImage: icon)
-            .tag(section)
     }
 
     private func metricRow(_ label: String, _ value: String) -> some View {
@@ -924,24 +1384,93 @@ struct ContentView: View {
         .clipShape(RoundedRectangle(cornerRadius: 8))
     }
 
-    private func iconOnlyButton(_ title: String, _ systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold))
-                .frame(width: 44, height: 44)
+    private func tagBinding(_ tag: TagRecord) -> Binding<Bool> {
+        guard let video = library.selectedVideo else {
+            return .constant(false)
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(.white)
-        .background(.black.opacity(0.34), in: Circle())
-        .accessibilityLabel(title)
+        return tagBinding(tag, video: video)
     }
 
-    private func tagBinding(_ tag: TagRecord) -> Binding<Bool> {
+    private func tagBinding(_ tag: TagRecord, video: VideoSummary) -> Binding<Bool> {
         Binding {
-            library.selectedVideo?.tags.contains { $0.id == tag.id } ?? false
+            library.videos.first(where: { $0.id == video.id })?.tags.contains { $0.id == tag.id } ?? false
         } set: { enabled in
-            Task { await library.setTag(tag, enabled: enabled) }
+            Task { await library.setTag(tag, enabled: enabled, video: video) }
         }
+    }
+
+    private func previewVideo(_ video: VideoSummary) async {
+        await library.loadPreview(for: video)
+        previewDrawerOpen = true
+    }
+
+    private func beginRename(_ video: VideoSummary) {
+        library.selectedVideoID = video.id
+        renameText = video.nameWithoutExtension
+        activeLibraryTool = .rename
+    }
+
+    @ViewBuilder
+    private func libraryToolSheet(_ tool: LibraryTool) -> some View {
+        switch tool {
+        case .tags:
+            tagsPanel
+                .frame(minWidth: 620, minHeight: 460)
+        case .aiTags:
+            aiTagsPanel
+                .frame(minWidth: 760, minHeight: 560)
+        case .cleanup:
+            cleanupPanel
+                .frame(width: 760, height: 560)
+        case .rowTags:
+            if let video = activeRowVideo {
+                rowTagEditor(video: video)
+            } else {
+                ContentUnavailableView("No Video", systemImage: "film")
+                    .frame(minWidth: 420, minHeight: 240)
+            }
+        case .rowSubtitles:
+            subtitleGenerationPanel
+                .padding(18)
+                .frame(minWidth: 520)
+        case .rename:
+            renameSheet
+        }
+    }
+
+    private var activeRowVideo: VideoSummary? {
+        guard let activeRowVideoID else { return library.selectedVideo }
+        return library.videos.first { $0.id == activeRowVideoID }
+    }
+
+    private var renameSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Rename Video")
+                .font(.headline)
+            Text(library.selectedVideo?.name ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+            TextField("New filename", text: $renameText)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") {
+                    activeLibraryTool = nil
+                }
+                Button("Rename") {
+                    if let video = library.selectedVideo {
+                        Task {
+                            await library.rename(video, to: renameText)
+                            activeLibraryTool = nil
+                        }
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(18)
+        .frame(width: 420)
     }
 
     private func syncSettingsForm() {
@@ -950,9 +1479,17 @@ struct ContentView: View {
         settingsPlayWeight = settings.playWeight
         settingsShortFeedMinutes = settings.shortFeedMaxDurationMinutes
         settingsTheme = settings.theme
+        settingsConfirmBeforeDelete = settings.confirmBeforeDelete
+        settingsDeleteOriginalFile = settings.deleteOriginalFile
         settingsAIFrameCount = settings.aiTaggingFrameCount
         settingsAISubtitleLimit = settings.aiTaggingSubtitleCharLimit
         settingsAIStartupBatch = settings.aiTaggingStartupBatchSize
+        settingsAIBaseURL = settings.aiTaggingBaseUrl
+        settingsAIModel = settings.aiTaggingModel
+        settingsAutoScan = settings.autoScanOnStartup
+        settingsLogEnabled = settings.logEnabled
+        settingsBilingualEnabled = settings.bilingualEnabled
+        settingsBilingualLang = settings.bilingualLang
     }
 
     private func confidenceColor(_ confidence: String) -> Color {
@@ -968,17 +1505,6 @@ struct ContentView: View {
         }
     }
 
-    private func chooseVideoFile() {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        if panel.runModal() == .OK, let path = panel.url?.path {
-            videoPath = path
-            Task { await library.addVideo(path: path) }
-        }
-    }
-
     private func chooseDirectory() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
@@ -989,29 +1515,75 @@ struct ContentView: View {
         }
     }
 
+    private func chooseScanDialogDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        if panel.runModal() == .OK, let path = panel.url?.path {
+            scanDialogPath = path
+            scanDialogSummary = nil
+        }
+    }
+
+    private func openExternalURL(_ value: String) {
+        guard let url = URL(string: value) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
+    private func copyToClipboard(_ value: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
+    }
+
     private func formatDuration(_ seconds: Double) -> String {
         guard seconds.isFinite, seconds > 0 else { return "-" }
         let total = Int(seconds.rounded())
         return String(format: "%02d:%02d", total / 60, total % 60)
     }
 
-    private static func defaultConfiguration() -> DaemonLaunchConfiguration {
-        let port = Int(ProcessInfo.processInfo.environment["CINE_DAEMON_PORT"] ?? "") ?? 18088
-        let token = ProcessInfo.processInfo.environment["CINE_DAEMON_TOKEN"] ?? "dev-token"
-        let executable = ProcessInfo.processInfo.environment["CINE_DAEMON_PATH"] ?? "cine-daemon"
-        return DaemonLaunchConfiguration(executablePath: executable, port: port, token: token)
-    }
 }
 
 private enum SidebarSection: Hashable {
     case library
-    case tags
-    case directories
+    case settings
+}
+
+private enum AppLanguage: String {
+    case zh
+    case en
+}
+
+private enum SearchMode: String, CaseIterable, Identifiable {
+    case files
     case subtitles
+
+    var id: String { rawValue }
+
+    func label(isChinese: Bool) -> String {
+        switch self {
+        case .files: return isChinese ? "文件搜索" : "Files"
+        case .subtitles: return isChinese ? "字幕搜索" : "Subtitles"
+        }
+    }
+
+    func placeholder(isChinese: Bool) -> String {
+        switch self {
+        case .files: return isChinese ? "搜索视频文件名、路径或标签" : "Search videos, paths, or tags"
+        case .subtitles: return isChinese ? "搜索字幕内容" : "Search subtitle text"
+        }
+    }
+}
+
+private enum LibraryTool: String, Identifiable {
+    case tags
     case aiTags
-    case shortFeed
     case cleanup
-    case diagnostics
+    case rowTags
+    case rowSubtitles
+    case rename
+
+    var id: String { rawValue }
 }
 
 private struct FlowTags: View {
@@ -1029,6 +1601,24 @@ private struct FlowTags: View {
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
         }
+    }
+}
+
+private struct SettingsSectionStyle: ViewModifier {
+    func body(content: Content) -> some View {
+        content
+            .padding(12)
+            .background(.background)
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(.separator, lineWidth: 0.5)
+            }
+    }
+}
+
+private extension View {
+    func settingsSectionStyle() -> some View {
+        modifier(SettingsSectionStyle())
     }
 }
 

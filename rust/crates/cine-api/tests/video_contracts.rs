@@ -203,10 +203,18 @@ fn decodes_library_management_contracts() {
         {
           "video_extensions": ".mp4,.mkv",
           "play_weight": 2.0,
+          "confirm_before_delete": true,
+          "delete_original_file": false,
+          "auto_scan_on_startup": true,
           "short_feed_max_duration_minutes": 5,
           "theme": "dark",
+          "log_enabled": true,
+          "bilingual_enabled": true,
+          "bilingual_lang": "zh",
           "deepl_api_key_configured": true,
+          "ai_tagging_base_url": "https://example.invalid/v1",
           "ai_tagging_api_key_configured": false,
+          "ai_tagging_model": "vision-model",
           "ai_tagging_frame_count": 5,
           "ai_tagging_subtitle_char_limit": 4000,
           "ai_tagging_startup_batch_size": 10
@@ -214,6 +222,11 @@ fn decodes_library_management_contracts() {
         "#,
     )
     .expect("public settings");
+    assert!(settings.confirm_before_delete);
+    assert!(settings.auto_scan_on_startup);
+    assert!(settings.log_enabled);
+    assert_eq!(settings.bilingual_lang, "zh");
+    assert_eq!(settings.ai_tagging_model, "vision-model");
     assert!(settings.deepl_api_key_configured);
 
     let update: SettingsUpdateRequest = serde_json::from_str(
@@ -320,10 +333,12 @@ fn decodes_remaining_slice_contracts() {
     assert_eq!(interaction.view_count, 1);
 
     let feed_video: ShortFeedVideoRecord = serde_json::from_str(
-        r##"{"id":3,"name":"clip.mp4","duration":30.0,"width":1920,"height":1080,"tags":[{"id":1,"name":"city","color":"#0D9488"}]}"##,
+        r##"{"id":3,"name":"clip.mp4","duration":30.0,"width":1920,"height":1080,"tags":[{"id":1,"name":"city","color":"#0D9488"}],"media_url":"/short-media/3","media_mime":"video/mp4","liked":true,"favorited":false,"reason_code":"","reason_message":""}"##,
     )
     .expect("feed video");
     assert_eq!(feed_video.tags[0].name, "city");
+    assert_eq!(feed_video.media_url, "/short-media/3");
+    assert!(feed_video.liked);
 
     let cleanup: CleanupAnalysisRecord = serde_json::from_str(
         r#"{"duplicate_groups":[{"original_id":1,"candidate_ids":[2],"reason":"same"}],"low_duration_ids":[1],"low_resolution_ids":[2]}"#,
@@ -340,12 +355,20 @@ fn decodes_remaining_slice_contracts() {
           "ai_candidate_count": 1,
           "short_feed_interaction_count": 1,
           "redacted_settings": {
+            "confirm_before_delete": true,
+            "delete_original_file": false,
             "video_extensions": ".mp4",
             "play_weight": 2.0,
+            "auto_scan_on_startup": true,
             "short_feed_max_duration_minutes": 5,
             "theme": "system",
+            "log_enabled": false,
+            "bilingual_enabled": true,
+            "bilingual_lang": "zh",
             "deepl_api_key_configured": true,
+            "ai_tagging_base_url": "https://example.invalid/v1",
             "ai_tagging_api_key_configured": true,
+            "ai_tagging_model": "vision-model",
             "ai_tagging_frame_count": 5,
             "ai_tagging_subtitle_char_limit": 4000,
             "ai_tagging_startup_batch_size": 10

@@ -67,12 +67,20 @@ async fn settings_update_preserves_defaults_and_public_read_redacts_secrets() {
     update_settings(
         &pool,
         SettingsUpdate {
+            confirm_before_delete: true,
+            delete_original_file: true,
             video_extensions: ".mp4,.mkv".to_string(),
             play_weight: 0.0,
+            auto_scan_on_startup: true,
             short_feed_max_duration_minutes: 0,
             theme: "dark".to_string(),
+            log_enabled: true,
+            bilingual_enabled: true,
+            bilingual_lang: "en".to_string(),
             deepl_api_key: "deepl-secret".to_string(),
+            ai_tagging_base_url: "https://example.invalid/v1".to_string(),
             ai_tagging_api_key: "ai-secret".to_string(),
+            ai_tagging_model: "vision-model".to_string(),
             ai_tagging_frame_count: 0,
             ai_tagging_subtitle_char_limit: 0,
             ai_tagging_startup_batch_size: 0,
@@ -86,17 +94,44 @@ async fn settings_update_preserves_defaults_and_public_read_redacts_secrets() {
     assert_eq!(
         public,
         PublicSettings {
+            confirm_before_delete: true,
+            delete_original_file: true,
             video_extensions: ".mp4,.mkv".to_string(),
             play_weight: 0.0,
+            auto_scan_on_startup: true,
             short_feed_max_duration_minutes: 5,
             theme: "dark".to_string(),
+            log_enabled: true,
+            bilingual_enabled: true,
+            bilingual_lang: "en".to_string(),
             deepl_api_key_configured: true,
+            ai_tagging_base_url: "https://example.invalid/v1".to_string(),
             ai_tagging_api_key_configured: true,
+            ai_tagging_model: "vision-model".to_string(),
             ai_tagging_frame_count: 5,
             ai_tagging_subtitle_char_limit: 4000,
             ai_tagging_startup_batch_size: 10,
         }
     );
+
+    update_settings(
+        &pool,
+        SettingsUpdate {
+            video_extensions: ".mov".to_string(),
+            play_weight: 1.5,
+            short_feed_max_duration_minutes: 12,
+            theme: "system".to_string(),
+            deepl_api_key: "".to_string(),
+            ai_tagging_api_key: "".to_string(),
+            ..SettingsUpdate::default()
+        },
+    )
+    .await
+    .expect("update settings with empty secrets");
+
+    let public = get_public_settings(&pool).await.expect("public settings");
+    assert!(public.deepl_api_key_configured);
+    assert!(public.ai_tagging_api_key_configured);
 }
 
 #[tokio::test]

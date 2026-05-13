@@ -5,11 +5,13 @@ public struct DaemonLaunchConfiguration: Equatable, Sendable {
     public let executablePath: String
     public let port: Int
     public let token: String
+    public let shortFeedAssetsPath: String?
 
-    public init(executablePath: String, port: Int, token: String) {
+    public init(executablePath: String, port: Int, token: String, shortFeedAssetsPath: String? = nil) {
         self.executablePath = executablePath
         self.port = port
         self.token = token
+        self.shortFeedAssetsPath = shortFeedAssetsPath
     }
 
     public var baseURL: URL {
@@ -18,6 +20,31 @@ public struct DaemonLaunchConfiguration: Equatable, Sendable {
 
     public var authorizationHeader: String {
         "Bearer \(token)"
+    }
+
+    public static func defaultConfiguration(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        bundleResourceURL: URL? = Bundle.main.resourceURL
+    ) -> DaemonLaunchConfiguration {
+        let port = Int(environment["CINE_DAEMON_PORT"] ?? "") ?? 18088
+        let token = environment["CINE_DAEMON_TOKEN"] ?? "dev-token"
+        let bundledDaemon = bundleResourceURL?.appendingPathComponent("bin/cine-daemon").path
+        let executable = environment["CINE_DAEMON_PATH"]
+            ?? {
+                guard let bundledDaemon, FileManager.default.isExecutableFile(atPath: bundledDaemon) else {
+                    return nil
+                }
+                return bundledDaemon
+            }()
+            ?? "cine-daemon"
+        let bundleShortFeedAssets = bundleResourceURL?.appendingPathComponent("short-feed").path
+        let shortFeedAssets = environment["CINE_SHORT_FEED_ASSETS_DIR"] ?? bundleShortFeedAssets
+        return DaemonLaunchConfiguration(
+            executablePath: executable,
+            port: port,
+            token: token,
+            shortFeedAssetsPath: shortFeedAssets
+        )
     }
 }
 
@@ -54,10 +81,14 @@ public final class DaemonLifecycleManager: ObservableObject {
 
         let daemon = Process()
         daemon.executableURL = URL(fileURLWithPath: executablePath)
-        daemon.environment = ProcessInfo.processInfo.environment.merging([
+        var environment = ProcessInfo.processInfo.environment.merging([
             "CINE_DAEMON_PORT": "\(configuration.port)",
             "CINE_DAEMON_TOKEN": configuration.token
         ]) { _, new in new }
+        if let shortFeedAssetsPath = configuration.shortFeedAssetsPath {
+            environment["CINE_SHORT_FEED_ASSETS_DIR"] = shortFeedAssetsPath
+        }
+        daemon.environment = environment
         do {
             try daemon.run()
             process = daemon
@@ -240,6 +271,34 @@ public struct DeleteVideoRequest: Encodable, Equatable, Sendable {
     }
 }
 
+public struct RelocateVideoRequest: Encodable, Equatable, Sendable {
+    public let path: String
+
+    public init(path: String) {
+        self.path = path
+    }
+}
+
+public struct BatchVideoRequest: Encodable, Equatable, Sendable {
+    public let videoIds: [Int64]
+    public let deleteFile: Bool
+
+    public init(videoIds: [Int64], deleteFile: Bool = false) {
+        self.videoIds = videoIds
+        self.deleteFile = deleteFile
+    }
+}
+
+public struct BatchVideoTagRequest: Encodable, Equatable, Sendable {
+    public let videoIds: [Int64]
+    public let tagId: Int64
+
+    public init(videoIds: [Int64], tagId: Int64) {
+        self.videoIds = videoIds
+        self.tagId = tagId
+    }
+}
+
 public struct TagMutationRequest: Encodable, Equatable, Sendable {
     public let name: String
     public let color: String
@@ -295,6 +354,18 @@ public struct ShortFeedFeedbackRequest: Encodable, Equatable, Sendable {
         self.liked = liked
         self.favorited = favorited
         self.viewed = viewed
+    }
+}
+
+public struct FrontendLogRequest: Encodable, Equatable, Sendable {
+    public let level: String
+    public let source: String
+    public let message: String
+
+    public init(level: String, source: String, message: String) {
+        self.level = level
+        self.source = source
+        self.message = message
     }
 }
 
@@ -390,12 +461,25 @@ public final class NativeAPIClient: @unchecked Sendable {
         try await get("/health")
     }
 
+    public func logFrontend(level: String, source: String, message: String) async throws {
+        try await postNoContent(
+            "/api/logs/frontend",
+            body: FrontendLogRequest(level: level, source: source, message: message)
+        )
+    }
+
     public func listVideos(limit: Int = 80) async throws -> VideoListResponse {
         try await post("/api/videos/search", body: VideoFilterRequest(limit: limit))
     }
 
     public func searchVideos(_ filter: VideoFilterRequest) async throws -> VideoListResponse {
         try await post("/api/videos/search", body: filter)
+    }
+
+    public func videosByDirectory(path: String) async throws -> VideoListResponse {
+        var components = URLComponents(string: "/api/videos/by-directory")!
+        components.queryItems = [URLQueryItem(name: "path", value: path)]
+        return try await get(components.string ?? "/api/videos/by-directory")
     }
 
     public func randomCandidate() async throws -> RandomCandidateResponse {
@@ -414,8 +498,36 @@ public final class NativeAPIClient: @unchecked Sendable {
         try await post("/api/videos/\(id)/rename", body: RenameVideoRequest(name: name))
     }
 
+    public func relocateVideo(id: Int64, path: String) async throws -> VideoMutationResponse {
+        try await post("/api/videos/\(id)/relocate", body: RelocateVideoRequest(path: path))
+    }
+
+    public func refreshVideoMetadata(id: Int64) async throws -> VideoMutationResponse {
+        try await post("/api/videos/\(id)/refresh-metadata", body: EmptyRequest())
+    }
+
     public func deleteVideo(id: Int64, deleteFile: Bool = false) async throws -> VideoMutationResponse {
         try await post("/api/videos/\(id)/delete", body: DeleteVideoRequest(deleteFile: deleteFile))
+    }
+
+    public func batchDeleteVideos(ids: [Int64], deleteFile: Bool = false) async throws -> BatchVideoOperationResult {
+        try await post("/api/videos/batch/delete", body: BatchVideoRequest(videoIds: ids, deleteFile: deleteFile))
+    }
+
+    public func batchAddTag(videoIds: [Int64], tagId: Int64) async throws -> BatchVideoOperationResult {
+        try await post("/api/videos/batch/tags/add", body: BatchVideoTagRequest(videoIds: videoIds, tagId: tagId))
+    }
+
+    public func batchRemoveTag(videoIds: [Int64], tagId: Int64) async throws -> BatchVideoOperationResult {
+        try await post("/api/videos/batch/tags/remove", body: BatchVideoTagRequest(videoIds: videoIds, tagId: tagId))
+    }
+
+    public func batchRefreshVideoMetadata(ids: [Int64]) async throws -> BatchVideoOperationResult {
+        try await post("/api/videos/batch/refresh-metadata", body: BatchVideoRequest(videoIds: ids))
+    }
+
+    public func openDirectory(videoId: Int64) async throws {
+        try await postNoContent("/api/videos/\(videoId)/open-directory", body: EmptyRequest())
     }
 
     public func previewSession(videoId: Int64) async throws -> PreviewSessionResponse {
@@ -482,6 +594,42 @@ public final class NativeAPIClient: @unchecked Sendable {
         try await postNoContent("/api/scan-directories/\(id)/delete", body: EmptyRequest())
     }
 
+    public func syncScanDirectories() async throws -> ScanSyncResponse {
+        try await post("/api/scan-directories/sync", body: EmptyRequest())
+    }
+
+    public func subtitleEngineStatuses() async throws -> [SubtitleEngineStatus] {
+        try await get("/api/subtitles/engines")
+    }
+
+    public func prepareSubtitleEngine(_ engine: SubtitleEngine) async throws {
+        try await postNoContent("/api/subtitles/prepare", body: SubtitlePrepareRequest(engine: engine))
+    }
+
+    public func subtitleDependencies() async throws -> [String: Bool] {
+        try await get("/api/subtitles/dependencies")
+    }
+
+    public func downloadSubtitleDependencies() async throws {
+        try await postNoContent("/api/subtitles/dependencies/download", body: EmptyRequest())
+    }
+
+    public func generateSubtitle(_ request: SubtitleGenerateRequest) async throws -> SubtitleGenerateResult {
+        try await post("/api/subtitles/generate", body: request)
+    }
+
+    public func forceGenerateSubtitle(_ request: SubtitleGenerateRequest) async throws -> SubtitleGenerateResult {
+        try await post("/api/subtitles/force-generate", body: request)
+    }
+
+    public func subtitleStatus() async throws -> SubtitleJobStatus {
+        try await get("/api/subtitles/status")
+    }
+
+    public func cancelSubtitle() async throws {
+        try await postNoContent("/api/subtitles/cancel", body: EmptyRequest())
+    }
+
     public func searchSubtitles(keyword: String) async throws -> SubtitleSearchResponse {
         let item = URLQueryItem(name: "keyword", value: keyword)
         var components = URLComponents(string: "/api/subtitles/search")!
@@ -501,6 +649,22 @@ public final class NativeAPIClient: @unchecked Sendable {
         try await post("/api/ai-tags/candidates/\(id)/reject", body: EmptyRequest())
     }
 
+    public func rejectAITagCandidatesByVideo(videoId: Int64) async throws -> RejectAITagCandidatesByVideoResponse {
+        try await post("/api/ai-tags/videos/\(videoId)/reject-pending", body: EmptyRequest())
+    }
+
+    public func retryAITagging(videoId: Int64) async throws {
+        try await postNoContent("/api/ai-tags/videos/\(videoId)/retry", body: EmptyRequest())
+    }
+
+    public func aiTaggingStatusSummary() async throws -> AITaggingStatusSummary {
+        try await get("/api/ai-tags/status-summary")
+    }
+
+    public func shortFeedStatus() async throws -> ShortFeedServerStatus {
+        try await get("/api/short-feed/status")
+    }
+
     public func nextShortFeedVideo() async throws -> ShortFeedVideoRecord {
         try await get("/api/short-feed/next")
     }
@@ -511,6 +675,14 @@ public final class NativeAPIClient: @unchecked Sendable {
 
     public func analyzeCleanup(request: CleanupAnalyzeRequest = CleanupAnalyzeRequest()) async throws -> CleanupAnalysisRecord {
         try await post("/api/cleanup/analyze", body: request)
+    }
+
+    public func startCleanup(request: CleanupAnalyzeRequest = CleanupAnalyzeRequest()) async throws -> CleanupStatus {
+        try await post("/api/cleanup/start", body: request)
+    }
+
+    public func cleanupStatus() async throws -> CleanupStatus {
+        try await get("/api/cleanup/status")
     }
 
     public func diagnostics() async throws -> DiagnosticsSnapshot {
@@ -695,11 +867,108 @@ public struct ScanDirectoryResponse: Decodable, Equatable, Sendable {
     public let files: [ScannedFileResponse]
 }
 
+public enum SubtitleEngine: String, Codable, Equatable, Sendable {
+    case whisperx
+    case qwen
+}
+
+public struct SubtitlePrepareRequest: Encodable, Equatable, Sendable {
+    public let engine: SubtitleEngine
+
+    public init(engine: SubtitleEngine) {
+        self.engine = engine
+    }
+}
+
+public struct SubtitleGenerateRequest: Encodable, Equatable, Sendable {
+    public let videoId: Int64
+    public let engine: SubtitleEngine
+    public let sourceLang: String
+
+    public init(videoId: Int64, engine: SubtitleEngine, sourceLang: String = "auto") {
+        self.videoId = videoId
+        self.engine = engine
+        self.sourceLang = sourceLang
+    }
+}
+
+public struct SubtitleEngineStatus: Decodable, Equatable, Sendable {
+    public let engine: SubtitleEngine
+    public let displayName: String
+    public let supported: Bool
+    public let available: Bool
+    public let needsPrepare: Bool
+    public let prepareMode: String
+    public let reasonCode: String
+    public let sourceLangMode: String
+    public let reasonMessage: String
+    public let prepareHint: String
+}
+
+public struct SubtitleGenerateResult: Decodable, Equatable, Sendable {
+    public let status: String
+    public let videoId: Int64
+    public let path: String?
+    public let message: String?
+    public let validationCode: String?
+    public let forceEligible: Bool
+    public let engine: SubtitleEngine?
+    public let sourceLang: String?
+}
+
+public struct SubtitleProgressRecord: Decodable, Equatable, Sendable {
+    public let action: String
+    public let engine: SubtitleEngine?
+    public let phase: String
+    public let percent: Int
+    public let message: String
+    public let cancellable: Bool
+}
+
+public struct SubtitleJobStatus: Decodable, Equatable, Sendable {
+    public let running: Bool
+    public let completed: Bool
+    public let cancelled: Bool
+    public let progress: SubtitleProgressRecord
+    public let result: SubtitleGenerateResult?
+    public let error: String?
+}
+
 public struct VideoMutationResponse: Decodable, Equatable, Sendable {
     public let video: VideoSummary?
     public let ok: Bool
     public let reasonCode: String?
     public let userMessage: String?
+}
+
+public struct BatchVideoOperationError: Decodable, Equatable, Sendable {
+    public let videoId: Int64
+    public let error: String
+}
+
+public struct BatchVideoOperationResult: Decodable, Equatable, Sendable {
+    public let requested: Int
+    public let succeeded: Int
+    public let failed: Int
+    public let errors: [BatchVideoOperationError]
+}
+
+public struct ScanSyncErrorRecord: Decodable, Equatable, Sendable {
+    public let operation: String
+    public let directory: String?
+    public let path: String?
+    public let error: String
+}
+
+public struct ScanSyncResponse: Decodable, Equatable, Sendable {
+    public let directories: Int
+    public let scanned: Int
+    public let added: Int
+    public let deleted: Int
+    public let relocated: Int
+    public let metadataRefreshed: Int
+    public let skipped: Int
+    public let errors: [ScanSyncErrorRecord]
 }
 
 public enum PreviewMode: String, Decodable, Equatable, Sendable {
@@ -781,33 +1050,57 @@ public struct ScanDirectoryListResponse: Decodable, Equatable, Sendable {
 }
 
 public struct PublicSettings: Decodable, Equatable, Sendable {
+    public let confirmBeforeDelete: Bool
+    public let deleteOriginalFile: Bool
     public let videoExtensions: String
     public let playWeight: Double
+    public let autoScanOnStartup: Bool
     public let shortFeedMaxDurationMinutes: Int
     public let theme: String
+    public let logEnabled: Bool
+    public let bilingualEnabled: Bool
+    public let bilingualLang: String
     public let deeplApiKeyConfigured: Bool
+    public let aiTaggingBaseUrl: String
     public let aiTaggingApiKeyConfigured: Bool
+    public let aiTaggingModel: String
     public let aiTaggingFrameCount: Int
     public let aiTaggingSubtitleCharLimit: Int
     public let aiTaggingStartupBatchSize: Int
 
     public init(
+        confirmBeforeDelete: Bool,
+        deleteOriginalFile: Bool,
         videoExtensions: String,
         playWeight: Double,
+        autoScanOnStartup: Bool,
         shortFeedMaxDurationMinutes: Int,
         theme: String,
+        logEnabled: Bool,
+        bilingualEnabled: Bool,
+        bilingualLang: String,
         deeplApiKeyConfigured: Bool,
+        aiTaggingBaseUrl: String,
         aiTaggingApiKeyConfigured: Bool,
+        aiTaggingModel: String,
         aiTaggingFrameCount: Int,
         aiTaggingSubtitleCharLimit: Int,
         aiTaggingStartupBatchSize: Int
     ) {
+        self.confirmBeforeDelete = confirmBeforeDelete
+        self.deleteOriginalFile = deleteOriginalFile
         self.videoExtensions = videoExtensions
         self.playWeight = playWeight
+        self.autoScanOnStartup = autoScanOnStartup
         self.shortFeedMaxDurationMinutes = shortFeedMaxDurationMinutes
         self.theme = theme
+        self.logEnabled = logEnabled
+        self.bilingualEnabled = bilingualEnabled
+        self.bilingualLang = bilingualLang
         self.deeplApiKeyConfigured = deeplApiKeyConfigured
+        self.aiTaggingBaseUrl = aiTaggingBaseUrl
         self.aiTaggingApiKeyConfigured = aiTaggingApiKeyConfigured
+        self.aiTaggingModel = aiTaggingModel
         self.aiTaggingFrameCount = aiTaggingFrameCount
         self.aiTaggingSubtitleCharLimit = aiTaggingSubtitleCharLimit
         self.aiTaggingStartupBatchSize = aiTaggingStartupBatchSize
@@ -892,6 +1185,19 @@ public struct AITagCandidateListResponse: Decodable, Equatable, Sendable {
     public let candidates: [AITagCandidateRecord]
 }
 
+public struct RejectAITagCandidatesByVideoResponse: Decodable, Equatable, Sendable {
+    public let rejected: Int64
+}
+
+public struct AITaggingStatusSummary: Decodable, Equatable, Sendable {
+    public let configAvailable: Bool
+    public let pending: Int64
+    public let processing: Int64
+    public let completed: Int64
+    public let skipped: Int64
+    public let failed: Int64
+}
+
 public struct AITagCandidateGroup: Equatable, Identifiable, Sendable {
     public let videoId: Int64
     public let videoName: String
@@ -909,6 +1215,17 @@ public struct ShortFeedInteractionRecord: Decodable, Equatable, Sendable {
     public let viewCount: Int
 }
 
+public struct ShortFeedServerStatus: Decodable, Equatable, Sendable {
+    public let running: Bool
+    public let bindAddress: String
+    public let port: Int
+    public let url: String
+    public let lanUrls: [String]
+    public let startupError: String
+    public let fallbackUsed: Bool
+    public let allowedAccess: String
+}
+
 public struct ShortFeedVideoRecord: Decodable, Equatable, Identifiable, Sendable {
     public let id: Int64
     public let name: String
@@ -916,6 +1233,12 @@ public struct ShortFeedVideoRecord: Decodable, Equatable, Identifiable, Sendable
     public let width: Int
     public let height: Int
     public let tags: [VideoTagSummary]
+    public let mediaUrl: String
+    public let mediaMime: String
+    public let liked: Bool
+    public let favorited: Bool
+    public let reasonCode: String
+    public let reasonMessage: String
 }
 
 public struct CleanupDuplicateGroup: Decodable, Equatable, Sendable {
@@ -945,6 +1268,24 @@ public struct CleanupAnalysisRecord: Decodable, Equatable, Sendable {
         }
         return ids.sorted()
     }
+}
+
+public struct CleanupProgressRecord: Decodable, Equatable, Sendable {
+    public let stage: String
+    public let message: String
+    public let current: Int
+    public let total: Int
+    public let path: String
+}
+
+public struct CleanupStatus: Decodable, Equatable, Sendable {
+    public let running: Bool
+    public let completed: Bool
+    public let error: String
+    public let progress: CleanupProgressRecord
+    public let analysis: CleanupAnalysisRecord?
+    public let startedAt: String?
+    public let updatedAt: String?
 }
 
 public struct DiagnosticsSnapshot: Decodable, Equatable, Sendable {
