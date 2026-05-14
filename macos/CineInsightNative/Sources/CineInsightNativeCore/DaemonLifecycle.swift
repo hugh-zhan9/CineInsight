@@ -387,6 +387,7 @@ public struct SettingsUpdateRequest: Encodable, Equatable, Sendable {
     public let videoExtensions: String
     public let playWeight: Double
     public let autoScanOnStartup: Bool
+    public let autoScanIntervalSeconds: Int
     public let shortFeedMaxDurationMinutes: Int
     public let theme: String
     public let logEnabled: Bool
@@ -406,6 +407,7 @@ public struct SettingsUpdateRequest: Encodable, Equatable, Sendable {
         videoExtensions: String,
         playWeight: Double,
         autoScanOnStartup: Bool = true,
+        autoScanIntervalSeconds: Int = 43_200,
         shortFeedMaxDurationMinutes: Int,
         theme: String,
         logEnabled: Bool = false,
@@ -424,6 +426,7 @@ public struct SettingsUpdateRequest: Encodable, Equatable, Sendable {
         self.videoExtensions = videoExtensions
         self.playWeight = playWeight
         self.autoScanOnStartup = autoScanOnStartup
+        self.autoScanIntervalSeconds = autoScanIntervalSeconds
         self.shortFeedMaxDurationMinutes = shortFeedMaxDurationMinutes
         self.theme = theme
         self.logEnabled = logEnabled
@@ -1055,6 +1058,7 @@ public struct PublicSettings: Decodable, Equatable, Sendable {
     public let videoExtensions: String
     public let playWeight: Double
     public let autoScanOnStartup: Bool
+    public let autoScanIntervalSeconds: Int
     public let shortFeedMaxDurationMinutes: Int
     public let theme: String
     public let logEnabled: Bool
@@ -1074,6 +1078,7 @@ public struct PublicSettings: Decodable, Equatable, Sendable {
         videoExtensions: String,
         playWeight: Double,
         autoScanOnStartup: Bool,
+        autoScanIntervalSeconds: Int,
         shortFeedMaxDurationMinutes: Int,
         theme: String,
         logEnabled: Bool,
@@ -1092,6 +1097,7 @@ public struct PublicSettings: Decodable, Equatable, Sendable {
         self.videoExtensions = videoExtensions
         self.playWeight = playWeight
         self.autoScanOnStartup = autoScanOnStartup
+        self.autoScanIntervalSeconds = autoScanIntervalSeconds
         self.shortFeedMaxDurationMinutes = shortFeedMaxDurationMinutes
         self.theme = theme
         self.logEnabled = logEnabled

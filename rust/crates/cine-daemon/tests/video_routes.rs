@@ -11,8 +11,11 @@ use cine_db::{
     seed_library_management_fixture, seed_remaining_slices_fixture,
     seed_video_file_operation_fixture, seed_video_query_fixture,
 };
+use filetime::{set_file_mtime, FileTime};
 use http::{header::AUTHORIZATION, Request, StatusCode};
-use std::fs;
+use sqlx::{postgres::PgPoolOptions, PgPool};
+use std::time::{Duration, SystemTime};
+use std::{fs, path::Path};
 use tempfile::TempDir;
 use tower::ServiceExt;
 
@@ -865,6 +868,7 @@ async fn library_management_routes_mutate_postgres_fixture_and_redact_settings()
                         "video_extensions": ".mp4,.mkv",
                         "play_weight": 2.5,
                         "auto_scan_on_startup": true,
+                        "auto_scan_interval_seconds": 43200,
                         "short_feed_max_duration_minutes": 0,
                         "theme": "dark",
                         "log_enabled": true,
@@ -981,6 +985,83 @@ async fn library_management_routes_mutate_postgres_fixture_and_redact_settings()
 }
 
 #[tokio::test]
+async fn daemon_startup_auto_scan_syncs_configured_directories_in_backend() {
+    let Some(database_url) = std::env::var("NATIVE_TEST_DATABASE_URL").ok() else {
+        eprintln!("skipping postgres route test: NATIVE_TEST_DATABASE_URL is not set");
+        return;
+    };
+    let root = TempDir::new().expect("temp root");
+    let movie_path = root.path().join("startup-movie.mp4");
+    fs::write(&movie_path, b"startup video").expect("write video");
+    mark_file_stable_for_scan(&movie_path);
+    let pool = seed_startup_scan_fixture(&database_url, root.path(), true)
+        .await
+        .expect("seed startup scan fixture");
+
+    let _app = app(DaemonState::with_pool_for_test(
+        "secret-token",
+        pool.clone(),
+    ));
+
+    assert_eventually_video_count(&pool, "startup-movie.mp4", 1).await;
+}
+
+#[tokio::test]
+async fn daemon_periodic_auto_scan_uses_configured_interval_in_backend() {
+    let Some(database_url) = std::env::var("NATIVE_TEST_DATABASE_URL").ok() else {
+        eprintln!("skipping postgres route test: NATIVE_TEST_DATABASE_URL is not set");
+        return;
+    };
+    let root = TempDir::new().expect("temp root");
+    let first_path = root.path().join("periodic-first.mp4");
+    fs::write(&first_path, b"first video").expect("write first video");
+    mark_file_stable_for_scan(&first_path);
+    let pool = seed_startup_scan_fixture(&database_url, root.path(), true)
+        .await
+        .expect("seed startup scan fixture");
+    sqlx::query("UPDATE settings SET auto_scan_interval_seconds = 1 WHERE id = 1")
+        .execute(&pool)
+        .await
+        .expect("set scan interval");
+
+    let _app = app(DaemonState::with_pool_for_test(
+        "secret-token",
+        pool.clone(),
+    ));
+    assert_eventually_video_count(&pool, "periodic-first.mp4", 1).await;
+
+    let second_path = root.path().join("periodic-second.mp4");
+    fs::write(&second_path, b"second video").expect("write second video");
+    mark_file_stable_for_scan(&second_path);
+
+    assert_eventually_video_count(&pool, "periodic-second.mp4", 1).await;
+}
+
+#[tokio::test]
+async fn daemon_startup_auto_scan_does_not_run_when_setting_is_disabled() {
+    let Some(database_url) = std::env::var("NATIVE_TEST_DATABASE_URL").ok() else {
+        eprintln!("skipping postgres route test: NATIVE_TEST_DATABASE_URL is not set");
+        return;
+    };
+    let root = TempDir::new().expect("temp root");
+    let movie_path = root.path().join("startup-disabled.mp4");
+    fs::write(&movie_path, b"startup video").expect("write video");
+    mark_file_stable_for_scan(&movie_path);
+    let pool = seed_startup_scan_fixture(&database_url, root.path(), false)
+        .await
+        .expect("seed startup scan fixture");
+
+    let _app = app(DaemonState::with_pool_for_test(
+        "secret-token",
+        pool.clone(),
+    ));
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    let count = video_count_by_name(&pool, "startup-disabled.mp4").await;
+    assert_eq!(count, 0);
+}
+
+#[tokio::test]
 async fn settings_route_returns_default_settings_without_database_for_native_shell() {
     let app = app(DaemonState::for_test("secret-token"));
 
@@ -1018,6 +1099,7 @@ async fn settings_route_returns_default_settings_without_database_for_native_she
                         "video_extensions": ".mp4",
                         "play_weight": 2.0,
                         "auto_scan_on_startup": false,
+                        "auto_scan_interval_seconds": 43200,
                         "short_feed_max_duration_minutes": 5,
                         "theme": "dark",
                         "log_enabled": false,
@@ -1874,4 +1956,139 @@ print(json.dumps({"language": "en", "segments": [{"start": 0.0, "end": 1.0, "tex
     let result: SubtitleGenerateResult = serde_json::from_slice(&bytes).unwrap();
     assert_eq!(result.status, "cancelled");
     assert!(!root.path().join("short-a.srt").exists());
+}
+
+async fn seed_startup_scan_fixture(
+    database_url: &str,
+    root: &Path,
+    auto_scan_on_startup: bool,
+) -> Result<PgPool, sqlx::Error> {
+    let pool = PgPoolOptions::new()
+        .max_connections(1)
+        .connect(database_url)
+        .await?;
+    let schema_name = format!("daemon_startup_scan_{}", uuid::Uuid::new_v4().simple());
+
+    sqlx::query(&format!("CREATE SCHEMA {schema_name}"))
+        .execute(&pool)
+        .await?;
+    sqlx::query(&format!("SET search_path TO {schema_name}"))
+        .execute(&pool)
+        .await?;
+
+    for statement in [
+        r#"
+        CREATE TABLE settings (
+            id BIGSERIAL PRIMARY KEY,
+            confirm_before_delete BOOLEAN NOT NULL DEFAULT false,
+            delete_original_file BOOLEAN NOT NULL DEFAULT false,
+            video_extensions TEXT NOT NULL DEFAULT '',
+            play_weight DOUBLE PRECISION NOT NULL DEFAULT 2.0,
+            auto_scan_on_startup BOOLEAN NOT NULL DEFAULT false,
+            auto_scan_interval_seconds INTEGER NOT NULL DEFAULT 43200,
+            short_feed_max_duration_minutes INTEGER NOT NULL DEFAULT 5,
+            theme TEXT NOT NULL DEFAULT 'system',
+            log_enabled BOOLEAN NOT NULL DEFAULT false,
+            bilingual_enabled BOOLEAN NOT NULL DEFAULT false,
+            bilingual_lang TEXT NOT NULL DEFAULT 'zh',
+            deepl_api_key TEXT NOT NULL DEFAULT '',
+            ai_tagging_base_url TEXT NOT NULL DEFAULT '',
+            ai_tagging_api_key TEXT NOT NULL DEFAULT '',
+            ai_tagging_model TEXT NOT NULL DEFAULT '',
+            ai_tagging_frame_count INTEGER NOT NULL DEFAULT 5,
+            ai_tagging_subtitle_char_limit INTEGER NOT NULL DEFAULT 4000,
+            ai_tagging_startup_batch_size INTEGER NOT NULL DEFAULT 10
+        )
+        "#,
+        r#"
+        CREATE TABLE videos (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            path TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            size BIGINT NOT NULL DEFAULT 0,
+            duration DOUBLE PRECISION NOT NULL DEFAULT 0,
+            resolution TEXT NOT NULL DEFAULT '',
+            width INTEGER NOT NULL DEFAULT 0,
+            height INTEGER NOT NULL DEFAULT 0,
+            is_stale BOOLEAN NOT NULL DEFAULT false,
+            play_count INTEGER NOT NULL DEFAULT 0,
+            random_play_count INTEGER NOT NULL DEFAULT 0,
+            last_played_at TIMESTAMPTZ NULL,
+            created_at TIMESTAMPTZ NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NULL DEFAULT now(),
+            deleted_at TIMESTAMPTZ NULL
+        )
+        "#,
+        "CREATE UNIQUE INDEX idx_videos_path_active ON videos(path) WHERE deleted_at IS NULL",
+        r#"
+        CREATE TABLE tags (
+            id BIGSERIAL PRIMARY KEY,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL DEFAULT '',
+            deleted_at TIMESTAMPTZ NULL
+        )
+        "#,
+        r#"
+        CREATE TABLE video_tags (
+            video_id BIGINT NOT NULL,
+            tag_id BIGINT NOT NULL
+        )
+        "#,
+        r#"
+        CREATE TABLE scan_directories (
+            id BIGSERIAL PRIMARY KEY,
+            path TEXT NOT NULL,
+            alias TEXT NOT NULL DEFAULT '',
+            created_at TIMESTAMPTZ NULL DEFAULT now(),
+            updated_at TIMESTAMPTZ NULL DEFAULT now(),
+            deleted_at TIMESTAMPTZ NULL
+        )
+        "#,
+    ] {
+        sqlx::query(statement).execute(&pool).await?;
+    }
+
+    sqlx::query(
+        "INSERT INTO settings(id, video_extensions, play_weight, auto_scan_on_startup) VALUES (1, 'mp4', 2.0, $1)",
+    )
+    .bind(auto_scan_on_startup)
+    .execute(&pool)
+    .await?;
+    sqlx::query("INSERT INTO scan_directories(path, alias) VALUES ($1, 'Startup')")
+        .bind(root.to_string_lossy().to_string())
+        .execute(&pool)
+        .await?;
+
+    Ok(pool)
+}
+
+async fn assert_eventually_video_count(pool: &PgPool, name: &str, expected: i64) {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        let count = video_count_by_name(pool, name).await;
+        if count == expected {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "expected {expected} videos named {name}, got {count}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+}
+
+async fn video_count_by_name(pool: &PgPool, name: &str) -> i64 {
+    sqlx::query_scalar::<_, i64>(
+        "SELECT COUNT(*) FROM videos WHERE name = $1 AND deleted_at IS NULL",
+    )
+    .bind(name)
+    .fetch_one(pool)
+    .await
+    .expect("count videos")
+}
+
+fn mark_file_stable_for_scan(path: &Path) {
+    let mtime = FileTime::from_system_time(SystemTime::now() - Duration::from_secs(10 * 60));
+    set_file_mtime(path, mtime).expect("mark file stable");
 }

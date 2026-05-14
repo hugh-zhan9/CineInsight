@@ -9,7 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc, Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use anyhow::Context;
@@ -61,7 +61,8 @@ use cine_db::{
     list_scan_directories as query_scan_directories, list_tags as query_tags,
     list_videos as query_list_videos, list_videos_by_directory as query_videos_by_directory,
     load_pg_config_from_env, next_short_feed_video as query_next_short_feed_video,
-    open_video_directory_with_dispatch, play_video_with_dispatch, preview_externally_with_dispatch,
+    normalize_auto_scan_interval_seconds, open_video_directory_with_dispatch,
+    play_video_with_dispatch, preview_externally_with_dispatch,
     preview_session as query_preview_session, random_candidate as query_random_candidate,
     record_short_feed_feedback as mutate_short_feed_feedback,
     refresh_video_metadata_with_probe as mutate_refresh_video_metadata,
@@ -79,7 +80,7 @@ use cine_db::{
     AITagCandidateInput, AITagCandidateStatus, LibraryManagementError, MediaMetadata,
     NativeSliceError, PgConfig, PlaybackDispatch, PlaybackError, PreviewMode, SettingsUpdate,
     ShortFeedFeedback, SystemPlaybackDispatch, TagMutationError, VideoFilter, VideoMutationError,
-    REQUIRED_LEGACY_TABLES,
+    DEFAULT_AUTO_SCAN_INTERVAL_SECONDS, REQUIRED_LEGACY_TABLES,
 };
 use serde::Deserialize;
 use sqlx::{
@@ -263,6 +264,21 @@ impl DaemonState {
         format!("Bearer {}", self.token)
     }
 
+    fn ensure_startup_auto_scan_started(&self) {
+        let Some(pool) = self.pool.clone() else {
+            return;
+        };
+
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            tracing::warn!("skipping startup auto scan because no tokio runtime is active");
+            return;
+        };
+
+        handle.spawn(async move {
+            run_auto_scan_loop(pool).await;
+        });
+    }
+
     fn ensure_short_feed_server_started(&self) {
         let Some(assets_dir) = self.short_feed_assets_dir.clone() else {
             return;
@@ -311,6 +327,7 @@ impl DaemonState {
 }
 
 pub fn app(state: DaemonState) -> Router {
+    state.ensure_startup_auto_scan_started();
     state.ensure_short_feed_server_started();
     Router::new()
         .route("/health", get(health))
@@ -1099,6 +1116,79 @@ async fn sync_scan_directories(
     .map(api_scan_sync_response)
     .map(Json)
     .map_err(status_for_mutation_error)
+}
+
+async fn run_auto_scan_loop(pool: PgPool) {
+    loop {
+        let interval_seconds = match run_auto_scan_once(pool.clone()).await {
+            Ok(interval_seconds) => interval_seconds,
+            Err(error) => {
+                tracing::warn!("auto scan skipped: {error}");
+                DEFAULT_AUTO_SCAN_INTERVAL_SECONDS
+            }
+        };
+        tokio::time::sleep(Duration::from_secs(interval_seconds as u64)).await;
+    }
+}
+
+async fn run_auto_scan_once(pool: PgPool) -> anyhow::Result<i32> {
+    let settings = query_public_settings(&pool)
+        .await
+        .map_err(|error| anyhow::anyhow!("load settings: {error}"))?;
+    let interval_seconds =
+        normalize_auto_scan_interval_seconds(settings.auto_scan_interval_seconds);
+    if !settings.auto_scan_on_startup {
+        return Ok(interval_seconds);
+    }
+
+    let directories = query_scan_directories(&pool)
+        .await
+        .map_err(|error| anyhow::anyhow!("load scan directories: {error}"))?;
+    if directories.is_empty() {
+        return Ok(interval_seconds);
+    }
+
+    let roots = directories
+        .into_iter()
+        .map(|directory| PathBuf::from(directory.path))
+        .collect::<Vec<_>>();
+    match mutate_sync_scan_directories(
+        &pool,
+        &roots,
+        &settings.video_extensions,
+        system_media_metadata,
+    )
+    .await
+    {
+        Ok(result) => {
+            if result.errors.is_empty() {
+                tracing::info!(
+                    directories = result.directories,
+                    scanned = result.scanned,
+                    added = result.added,
+                    relocated = result.relocated,
+                    deleted = result.deleted,
+                    metadata_refreshed = result.metadata_refreshed,
+                    "auto scan completed"
+                );
+            } else {
+                tracing::warn!(
+                    directories = result.directories,
+                    scanned = result.scanned,
+                    added = result.added,
+                    relocated = result.relocated,
+                    deleted = result.deleted,
+                    metadata_refreshed = result.metadata_refreshed,
+                    errors = result.errors.len(),
+                    "auto scan completed with errors"
+                );
+            }
+        }
+        Err(error) => {
+            tracing::warn!("auto scan failed: {error}");
+        }
+    }
+    Ok(interval_seconds)
 }
 
 #[derive(Deserialize)]
@@ -2047,6 +2137,7 @@ fn api_public_settings(value: cine_db::PublicSettings) -> PublicSettings {
         video_extensions: value.video_extensions,
         play_weight: value.play_weight,
         auto_scan_on_startup: value.auto_scan_on_startup,
+        auto_scan_interval_seconds: value.auto_scan_interval_seconds,
         short_feed_max_duration_minutes: value.short_feed_max_duration_minutes,
         theme: value.theme,
         log_enabled: value.log_enabled,
@@ -2069,6 +2160,7 @@ fn default_public_settings() -> PublicSettings {
         video_extensions: ".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt".to_string(),
         play_weight: 2.0,
         auto_scan_on_startup: false,
+        auto_scan_interval_seconds: DEFAULT_AUTO_SCAN_INTERVAL_SECONDS,
         short_feed_max_duration_minutes: 5,
         theme: "system".to_string(),
         log_enabled: false,
@@ -2091,6 +2183,7 @@ fn db_settings_update(value: SettingsUpdateRequest) -> SettingsUpdate {
         video_extensions: value.video_extensions,
         play_weight: value.play_weight,
         auto_scan_on_startup: value.auto_scan_on_startup,
+        auto_scan_interval_seconds: value.auto_scan_interval_seconds,
         short_feed_max_duration_minutes: value.short_feed_max_duration_minutes,
         theme: value.theme,
         log_enabled: value.log_enabled,
