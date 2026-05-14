@@ -20,74 +20,54 @@ A cross-platform desktop video manager featuring smart random playback, tag mana
 
 ## 技术栈
 
-- **后端**: Go + GORM + Postgres
-- **前端**: Vue 3 + Vite
-- **框架**: Wails v2
+- **后端**: Rust daemon + PostgreSQL
+- **桌面端**: SwiftUI macOS native app
+- **局域网短视频页**: Vue 3 + Vite，作为 short-feed 静态资源随 native 包携带
+- **字幕 Sidecar**: WhisperX / Qwen Python worker，由 Rust daemon 调度
 - **数据库**: Postgres
 
 ## 开发环境要求
 
-- Go 1.23+
+- Rust stable
+- Xcode / Swift toolchain
 - Node.js 16+
-- Wails CLI v2
 - Postgres 12+
 
 ## 安装依赖
 
 ```bash
-# 安装 Wails CLI
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
-
 # 进入项目目录
 cd /Users/zhangyukun/project/CineInsight
-
-# 安装 Go 依赖
-go mod download
 
 # 安装前端依赖
 cd frontend && npm install && cd ..
 ```
 
-## 开发模式运行
+## 构建 native 开发包
 
 ```bash
-export PATH=$PATH:$HOME/go/bin
-wails dev
+# 构建 Rust daemon、SwiftUI app、short-feed 资源和 Python sidecar runtime 目录
+bash scripts/package_native_dev.sh
+
+# 产物:
+# dist/native-dev/CineInsightNative.app
+# dist/native-dev/CineInsightNative-dev.dmg
 ```
 
-## 构建生产版本
+### macOS 一键构建并替换旧应用
 
 ```bash
-# 构建桌面应用
-export PATH=$PATH:$HOME/go/bin
-wails build
-
-# 构建产物位于: build/bin/
-```
-
-### macOS 一键打包并替换旧应用
-
-```bash
-# 构建并替换 /Applications/析微影策.app
+# 构建 native 包并替换 /Applications/析微影策.app
 bash scripts/build_and_install_app.sh
 
-# 仅替换已构建好的产物
+# 仅替换已构建好的 native 产物
 bash scripts/build_and_install_app.sh --skip-build
 
-# 透传额外的 wails build 参数
-bash scripts/build_and_install_app.sh -clean
+# 只安装不自动启动
+bash scripts/build_and_install_app.sh --no-launch
 ```
 
 脚本会在安装前关闭正在运行的应用，并在必要时通过 `sudo` 写入 `/Applications`。
-
-### macOS
-构建后的应用位于 `build/bin/析微影策.app`
-
-### Windows
-构建后的应用位于 `build/bin/析微影策.exe`
-
-### Linux
-构建后的应用位于 `build/bin/析微影策`
 
 ## 使用说明
 
@@ -128,30 +108,13 @@ go run ./cmd/migrate_sqlite_to_pg --sqlite ~/.video-master/video-master.db
 ## 项目结构
 
 ```
-video-master/
-├── app.go                 # Wails 应用入口
-├── main.go               # 主程序
-├── preview_asset_handler.go # 预览媒体资源处理
-├── models/               # 数据模型
-│   └── video.go
-├── database/             # 数据库层
-│   └── database.go
-├── services/             # 业务逻辑层
-│   ├── playback_result.go
-│   ├── preview_service.go
-│   ├── video_service.go
-│   ├── subtitle_service.go
-│   ├── tag_service.go
-│   ├── directory_service.go
-│   └── settings_service.go
-└── frontend/             # Vue 前端
-    └── src/
-        ├── App.vue
-        └── components/
-            ├── PreviewDrawer.vue
-            ├── VideoListPage.vue
-            ├── VideoListRow.vue
-            └── VirtualVideoList.vue
+CineInsight/
+├── rust/                  # Rust daemon、API、DB crates
+├── macos/CineInsightNative # SwiftUI native app
+├── frontend/              # Vue short-feed 静态页面
+├── services/              # WhisperX / Qwen Python sidecar worker
+├── contracts/             # native API contract
+└── scripts/               # native 打包、验证与 runtime 预取脚本
 ```
 
 ## 许可证
