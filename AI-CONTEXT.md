@@ -4,18 +4,20 @@
 
 ## 1. 项目架构与技术栈 (Architecture & Stack)
 
-本项目是一个基于 **Wails v2** 的跨平台桌面视频管理系统，命名为“析微影策”，旨在通过 AI 分析与智能策略提供极致的本地影视管理体验。
+本项目正在完成从历史 **Go/Wails/Vue** 到 **Rust daemon + SwiftUI macOS native app** 的替代。当前主桌面入口以 Rust/SwiftUI native 包为准；历史 Go/Wails 代码仅作为迁移参考，不再作为默认构建入口。
 
-- **后端 (Go 1.23+):**
-  - **框架:** Wails v2 (负责桥接 Go 方法到前端、窗口管理、事件分发)。
-  - **数据库:** PostgreSQL（通过 **GORM** 驱动），作为当前主持久化存储。
-  - **业务逻辑:** 封装在 `services/` 目录下（如 `VideoService`, `SubtitleService`, `TagService`, `DirectoryService`, `PreviewService`）。
-- **前端 (Vue 3 + Vite):**
-  - **UI 框架:** 原生 CSS + Vue 3 组合式 API (Composition API)。
-  - **通信:** 通过 `wailsjs/go` 自动生成的绑定调用后端方法，使用 `wailsjs/runtime` 进行事件监听。
+- **后端 (Rust):**
+  - **daemon:** `rust/crates/cine-daemon` 负责本地 HTTP API、业务调度、播放、字幕任务和 sidecar 调度。
+  - **API:** `rust/crates/cine-api` 定义 native contract 对应的请求/响应模型。
+  - **数据库:** `rust/crates/cine-db` 使用 PostgreSQL 作为主持久化存储。
+- **桌面端 (SwiftUI):**
+  - **入口:** `macos/CineInsightNative`。
+  - **通信:** SwiftUI app 通过 `NativeAPIClient` 调用 Rust daemon。
+- **局域网短视频页 (Vue 3 + Vite):**
+  - **用途:** 仅作为手机/局域网浏览器访问的 short-feed 静态页面，随 native 包拷贝到 `Contents/Resources/short-feed`。
 - **外部依赖 (Sidecars):**
   - **FFmpeg:** 用于提取视频音频流（16kHz, mono, WAV）。
-  - **WhisperX Runtime:** 用于本地离线语音识别生成字幕，并与当前管理的 Python 运行时集成。
+  - **WhisperX / Qwen Python Runtime:** 由 Rust daemon 调度，用于本地离线语音识别生成字幕，并与当前管理的 Python 运行时集成。
   - **DeepL API (可选):** 用于双语字幕翻译（用户在设置页配置 API Key）。
 
 ## 2. 核心功能与实现原理 (Core Features)
@@ -80,16 +82,19 @@
 
 ## 3. 关键目录说明 (Directory Structure)
 
-- `/services`: **核心业务层**（Video, Subtitle, Tag, Settings, Directory 服务）。
-- `/models`: **数据模型层**（GORM 结构体定义）。
-- `/database`: **持久化层**（数据库连接、迁移与初始化）。
-- `/frontend/src/components`: **UI 组件**（Vue 组件）。
+- `/rust/crates/cine-daemon`: **Rust native daemon**（视频、标签、设置、字幕、播放、short-feed API）。
+- `/rust/crates/cine-api`: **Native API contract 模型**。
+- `/rust/crates/cine-db`: **PostgreSQL 持久化层**。
+- `/macos/CineInsightNative`: **SwiftUI macOS native app**。
+- `/frontend`: **short-feed 浏览器页面**，不是桌面主 UI。
+- `/services`: **Python sidecar worker**（WhisperX / Qwen）。
 - `/frontend/src/utils`: **前端纯函数工具层**（如虚拟列表窗口计算与缓存工具）。
 
 ## 4. 开发与构建指南 (Development & Build)
 
-- **开发模式:** `wails dev`
-- **构建应用:** `wails build`
+- **native 开发包:** `bash scripts/package_native_dev.sh`
+- **native 安装到 /Applications:** `bash scripts/build_and_install_app.sh`
+- **native 打包验证:** `bash scripts/verify_native_packaging.sh`
 - **数据库:** 当前通过 `.env` 中的 PostgreSQL 配置连接。
 
 ## 5. 开发规范与后续演进
