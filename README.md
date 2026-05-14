@@ -15,7 +15,7 @@ A cross-platform desktop video manager featuring smart random playback, tag mana
 - **标签管理**: 支持 12 色智能自动分配、透明度显示、输入即搜过滤、软删除恢复。
 - **视频重命名**: 支持同时重命名磁盘文件和数据库记录，自动保留扩展名。
 - **轻量可靠**: 使用 Postgres 持久化存储，支持游标分页与失效记录纠偏。
-- **现代化 UI**: 基于 Vue 3 的单列视频工作台，主列表支持持续加载；首页主列表已引入虚拟列表以降低长列表卡顿。
+- **原生桌面 UI**: 基于 SwiftUI 的 macOS native 工作台，主列表、设置、字幕和清理操作由 Rust daemon 提供数据。
 - **右键菜单**: 快速播放、定位文件、重命名或安全删除记录。
 
 ## 技术栈
@@ -95,14 +95,6 @@ PG_PASSWORD=your_password
 PG_DB=video_master
 PG_SSLMODE=disable
 PG_TIMEZONE=Asia/Shanghai
-```
-
-如果需要从旧版 SQLite 迁移数据，可运行迁移脚本：
-
-```bash
-go run ./cmd/migrate_sqlite_to_pg
-# 或指定 sqlite 路径
-go run ./cmd/migrate_sqlite_to_pg --sqlite ~/.video-master/video-master.db
 ```
 
 ## 项目结构

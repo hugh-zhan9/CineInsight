@@ -6,7 +6,7 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 : "${NATIVE_TEST_DATABASE_URL:?NATIVE_TEST_DATABASE_URL must point to a scratch PostgreSQL database}"
 
 cd "$repo_root"
-go test ./...
+bash scripts/verify_no_legacy_desktop_stack.sh
 
 cd "$repo_root/rust"
 cargo fmt --all --check

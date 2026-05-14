@@ -4,7 +4,7 @@
 
 ## 1. 项目架构与技术栈 (Architecture & Stack)
 
-本项目正在完成从历史 **Go/Wails/Vue** 到 **Rust daemon + SwiftUI macOS native app** 的替代。当前主桌面入口以 Rust/SwiftUI native 包为准；历史 Go/Wails 代码仅作为迁移参考，不再作为默认构建入口。
+本项目已经切换到 **Rust daemon + SwiftUI macOS native app**。历史 Go/Wails 桌面栈已移除；当前仓库内的 Vue 仅用于局域网 short-feed 页面。
 
 - **后端 (Rust):**
   - **daemon:** `rust/crates/cine-daemon` 负责本地 HTTP API、业务调度、播放、字幕任务和 sidecar 调度。
@@ -30,7 +30,7 @@
 
 ### 2.2 离线字幕生成 (Offline Subtitle Generation)
 集成 AI 能力实现全本地化字幕制作：
-- **运行时:** `services/whisperx_runtime.go` 管理 WhisperX sidecar、Python 环境、模型缓存与执行流程。
+- **运行时:** Rust daemon 管理 WhisperX / Qwen sidecar、Python 环境、模型缓存与执行流程。
 - **流程:** 视频 -> FFmpeg (提取音频) -> WhisperX Runtime (推理识别) -> 后处理校验 -> .srt 文件。
 - **抗幻觉:** 当前仍保留基于后处理的质量校验与强制生成分支。
 - **幻觉确认:** 检测到幻觉时弹窗询问用户，可选择强制生成保留结果 (`ForceGenerateSubtitle`)。
@@ -52,7 +52,7 @@
 ### 2.5 预览优先浏览 (Preview-First Browsing)
 - **抽屉预览:** 视频列表项支持通过右侧抽屉进行内嵌预览。
 - **降级策略:** 对不适合内嵌预览的文件，会退化为统计中立的系统播放器预览，不污染正式播放统计。
-- **资源路由:** 预览媒体通过 `preview_asset_handler.go` 暴露受控资源路径，由前端 `<video>` 使用。
+- **资源路由:** 预览媒体由 Rust daemon 暴露受控资源路径，供 native 预览和 short-feed 使用。
 
 ### 2.6 播放可靠性与失效纠偏
 - **统计保护:** 正式播放仅在 `dispatch success` 后更新统计，失败不会污染 `play_count` / `random_play_count` / `last_played_at`。
@@ -74,11 +74,10 @@
 - **功能:** `RenameVideo` 同时重命名磁盘文件和数据库记录（name/path）。
 - **安全:** 自动保留原扩展名，目标文件已存在时拒绝操作，数据库更新失败时回滚文件名。
 
-### 2.10 首页主列表虚拟化
-- **目标:** 当前首页主列表已经引入可回收 DOM 的虚拟列表机制，优先解决长列表滚动性能。
-- **滚动宿主:** 首轮实现以 `.main-view` 作为真实滚动宿主。
-- **高度策略:** 采用预估高度、渲染后测量和高度缓存的最小闭环。
-- **范围:** 首轮仅覆盖首页主列表；字幕搜索的同壳接入仍属于第二阶段。
+### 2.10 Native 列表与 Short Feed
+- **桌面主列表:** SwiftUI native 页面直接消费 Rust daemon 的分页、筛选和字幕搜索 API。
+- **局域网短视频:** `frontend/src/short-feed` 保留为唯一 Vue 页面，由 Rust daemon 暴露给局域网浏览器访问。
+- **打包范围:** native 包只携带 short-feed 静态产物，不再携带历史 Vue 桌面页面。
 
 ## 3. 关键目录说明 (Directory Structure)
 
@@ -88,7 +87,6 @@
 - `/macos/CineInsightNative`: **SwiftUI macOS native app**。
 - `/frontend`: **short-feed 浏览器页面**，不是桌面主 UI。
 - `/services`: **Python sidecar worker**（WhisperX / Qwen）。
-- `/frontend/src/utils`: **前端纯函数工具层**（如虚拟列表窗口计算与缓存工具）。
 
 ## 4. 开发与构建指南 (Development & Build)
 
@@ -99,5 +97,5 @@
 
 ## 5. 开发规范与后续演进
 
-- **规范:** Go 方法导出 PascalCase，JSON 映射 snake_case。
-- **代办:** 补齐首页虚拟列表的更强组件级自动化验证，并评估字幕搜索第二阶段接入虚拟壳的方案。
+- **规范:** Rust API 结构保持 snake_case JSON 合约；SwiftUI 文案默认中文，保留中/英文切换。
+- **代办:** 后续只在 native / Rust / short-feed 范围内演进，不恢复历史 Go/Wails 桌面入口。

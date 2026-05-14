@@ -4,7 +4,7 @@
 }
 
 :root {
-  --short-glass-bg: var(--glass-strong-bg);
+  --short-glass-bg: rgba(20, 20, 20, 0.72);
   --short-glass-border: rgba(255, 255, 255, 0.2);
   --short-glass-shadow: 0 14px 44px rgba(0, 0, 0, 0.36);
 }

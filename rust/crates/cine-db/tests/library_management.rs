@@ -84,7 +84,6 @@ async fn settings_update_preserves_defaults_and_public_read_redacts_secrets() {
             ai_tagging_frame_count: 0,
             ai_tagging_subtitle_char_limit: 0,
             ai_tagging_startup_batch_size: 0,
-            ..SettingsUpdate::default()
         },
     )
     .await
