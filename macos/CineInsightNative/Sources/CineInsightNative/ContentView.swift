@@ -38,6 +38,7 @@ struct ContentView: View {
     @State private var settingsAISubtitleLimit = 4000
     @State private var settingsAIStartupBatch = 10
     @State private var settingsAutoScan = true
+    @State private var settingsAutoScanIntervalHours = 12
     @State private var settingsLogEnabled = false
     @State private var settingsBilingualEnabled = false
     @State private var settingsBilingualLang = "zh"
@@ -1180,6 +1181,7 @@ struct ContentView: View {
 
             settingsGroup(t("自动化与扫描", "Automation & Scan")) {
                 Toggle(t("启动时自动增量扫描", "Start incremental scan on launch"), isOn: $settingsAutoScan)
+                Stepper(t("自动扫描间隔：\(settingsAutoScanIntervalHours) 小时", "Auto scan interval: \(settingsAutoScanIntervalHours) h"), value: $settingsAutoScanIntervalHours, in: 1...168)
             }
 
             settingsGroup(t("手机短视频", "Mobile Short Feed")) {
@@ -1244,6 +1246,7 @@ struct ContentView: View {
                         shortFeedMaxDurationMinutes: settingsShortFeedMinutes,
                         theme: settingsTheme,
                         autoScanOnStartup: settingsAutoScan,
+                        autoScanIntervalSeconds: settingsAutoScanIntervalHours * 60 * 60,
                         logEnabled: settingsLogEnabled,
                         bilingualEnabled: settingsBilingualEnabled,
                         bilingualLang: settingsBilingualLang,
@@ -1510,6 +1513,7 @@ struct ContentView: View {
         settingsAIBaseURL = settings.aiTaggingBaseUrl
         settingsAIModel = settings.aiTaggingModel
         settingsAutoScan = settings.autoScanOnStartup
+        settingsAutoScanIntervalHours = max(1, settings.autoScanIntervalSeconds / 3600)
         settingsLogEnabled = settings.logEnabled
         settingsBilingualEnabled = settings.bilingualEnabled
         settingsBilingualLang = settings.bilingualLang

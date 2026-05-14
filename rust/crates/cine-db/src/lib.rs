@@ -24,6 +24,7 @@ const DEFAULT_VIDEO_EXTENSIONS: &[&str] = &[
 const DEFAULT_TRASH_DIR_NAME: &str = "trash";
 const RECENT_ACTIVE_FILE_THRESHOLD: Duration = Duration::from_secs(5 * 60);
 const TEMP_VIDEO_STEM_SUFFIXES: &[&str] = &[".temp", "_temp", "-temp", ".tmp", "_tmp", "-tmp"];
+pub const DEFAULT_AUTO_SCAN_INTERVAL_SECONDS: i32 = 12 * 60 * 60;
 
 const PREVIEW_MEDIA_ROUTE_PREFIX: &str = "/preview/media/";
 const SHORT_FEED_INLINE_MIMES: &[(&str, &str)] = &[
@@ -218,6 +219,7 @@ pub struct PublicSettings {
     pub video_extensions: String,
     pub play_weight: f64,
     pub auto_scan_on_startup: bool,
+    pub auto_scan_interval_seconds: i32,
     pub short_feed_max_duration_minutes: i32,
     pub theme: String,
     pub log_enabled: bool,
@@ -358,6 +360,7 @@ pub struct SettingsUpdate {
     pub video_extensions: String,
     pub play_weight: f64,
     pub auto_scan_on_startup: bool,
+    pub auto_scan_interval_seconds: i32,
     pub short_feed_max_duration_minutes: i32,
     pub theme: String,
     pub log_enabled: bool,
@@ -380,6 +383,7 @@ impl Default for SettingsUpdate {
             video_extensions: String::new(),
             play_weight: 2.0,
             auto_scan_on_startup: false,
+            auto_scan_interval_seconds: DEFAULT_AUTO_SCAN_INTERVAL_SECONDS,
             short_feed_max_duration_minutes: 5,
             theme: "system".to_string(),
             log_enabled: false,
@@ -420,6 +424,27 @@ fn positive_i64(value: Option<i64>) -> Option<i64> {
 
 fn positive_i32(value: Option<i32>) -> Option<i32> {
     value.filter(|value| *value > 0)
+}
+
+pub fn normalize_auto_scan_interval_seconds(value: i32) -> i32 {
+    if value > 0 {
+        value
+    } else {
+        DEFAULT_AUTO_SCAN_INTERVAL_SECONDS
+    }
+}
+
+async fn ensure_settings_schema(pool: &PgPool) -> Result<(), LibraryManagementError> {
+    sqlx::query(
+        r#"
+        ALTER TABLE settings
+        ADD COLUMN IF NOT EXISTS auto_scan_interval_seconds INTEGER NOT NULL DEFAULT 43200
+        "#,
+    )
+    .execute(pool)
+    .await
+    .map_err(|_| LibraryManagementError::DatabaseWrite)?;
+    Ok(())
 }
 
 #[derive(Debug, Error, Eq, PartialEq)]
@@ -1423,6 +1448,7 @@ pub async fn update_settings(
     pool: &PgPool,
     input: SettingsUpdate,
 ) -> Result<(), LibraryManagementError> {
+    ensure_settings_schema(pool).await?;
     sqlx::query(
         r#"
         UPDATE settings SET
@@ -1431,18 +1457,19 @@ pub async fn update_settings(
             video_extensions = $3,
             play_weight = $4,
             auto_scan_on_startup = $5,
-            short_feed_max_duration_minutes = $6,
-            theme = $7,
-            log_enabled = $8,
-            bilingual_enabled = $9,
-            bilingual_lang = $10,
-            deepl_api_key = COALESCE(NULLIF($11, ''), deepl_api_key),
-            ai_tagging_base_url = $12,
-            ai_tagging_api_key = COALESCE(NULLIF($13, ''), ai_tagging_api_key),
-            ai_tagging_model = $14,
-            ai_tagging_frame_count = $15,
-            ai_tagging_subtitle_char_limit = $16,
-            ai_tagging_startup_batch_size = $17,
+            auto_scan_interval_seconds = $6,
+            short_feed_max_duration_minutes = $7,
+            theme = $8,
+            log_enabled = $9,
+            bilingual_enabled = $10,
+            bilingual_lang = $11,
+            deepl_api_key = COALESCE(NULLIF($12, ''), deepl_api_key),
+            ai_tagging_base_url = $13,
+            ai_tagging_api_key = COALESCE(NULLIF($14, ''), ai_tagging_api_key),
+            ai_tagging_model = $15,
+            ai_tagging_frame_count = $16,
+            ai_tagging_subtitle_char_limit = $17,
+            ai_tagging_startup_batch_size = $18,
             updated_at = now()
         WHERE id = 1
         "#,
@@ -1452,6 +1479,9 @@ pub async fn update_settings(
     .bind(input.video_extensions)
     .bind(input.play_weight)
     .bind(input.auto_scan_on_startup)
+    .bind(normalize_auto_scan_interval_seconds(
+        input.auto_scan_interval_seconds,
+    ))
     .bind(positive_or_default(
         input.short_feed_max_duration_minutes,
         5,
@@ -1477,6 +1507,7 @@ pub async fn update_settings(
 }
 
 pub async fn get_public_settings(pool: &PgPool) -> Result<PublicSettings, LibraryManagementError> {
+    ensure_settings_schema(pool).await?;
     let row = sqlx::query(
         r#"
         SELECT
@@ -1485,6 +1516,7 @@ pub async fn get_public_settings(pool: &PgPool) -> Result<PublicSettings, Librar
             COALESCE(video_extensions, '') AS video_extensions,
             COALESCE(play_weight, 2.0) AS play_weight,
             COALESCE(auto_scan_on_startup, false) AS auto_scan_on_startup,
+            COALESCE(auto_scan_interval_seconds, 43200) AS auto_scan_interval_seconds,
             COALESCE(short_feed_max_duration_minutes, 5) AS short_feed_max_duration_minutes,
             COALESCE(theme, 'system') AS theme,
             COALESCE(log_enabled, false) AS log_enabled,
@@ -1528,6 +1560,10 @@ pub async fn get_public_settings(pool: &PgPool) -> Result<PublicSettings, Librar
         auto_scan_on_startup: row
             .try_get("auto_scan_on_startup")
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        auto_scan_interval_seconds: normalize_auto_scan_interval_seconds(
+            row.try_get("auto_scan_interval_seconds")
+                .map_err(|_| LibraryManagementError::DatabaseWrite)?,
+        ),
         short_feed_max_duration_minutes: row
             .try_get("short_feed_max_duration_minutes")
             .map_err(|_| LibraryManagementError::DatabaseWrite)?,
@@ -3297,7 +3333,8 @@ pub async fn seed_video_query_fixture(database_url: &str) -> Result<PgPool, Vide
         r#"
         CREATE TABLE settings (
             id BIGSERIAL PRIMARY KEY,
-            play_weight DOUBLE PRECISION NOT NULL DEFAULT 2.0
+            play_weight DOUBLE PRECISION NOT NULL DEFAULT 2.0,
+            auto_scan_interval_seconds INTEGER NOT NULL DEFAULT 43200
         )
         "#,
         r#"
@@ -3398,7 +3435,8 @@ pub async fn seed_video_file_operation_fixture(
         r#"
         CREATE TABLE settings (
             id BIGSERIAL PRIMARY KEY,
-            play_weight DOUBLE PRECISION NOT NULL DEFAULT 2.0
+            play_weight DOUBLE PRECISION NOT NULL DEFAULT 2.0,
+            auto_scan_interval_seconds INTEGER NOT NULL DEFAULT 43200
         )
         "#,
         r#"
@@ -3510,6 +3548,7 @@ pub async fn seed_library_management_fixture(
             video_extensions TEXT NOT NULL DEFAULT '',
             play_weight DOUBLE PRECISION NOT NULL DEFAULT 2.0,
             auto_scan_on_startup BOOLEAN NOT NULL DEFAULT false,
+            auto_scan_interval_seconds INTEGER NOT NULL DEFAULT 43200,
             short_feed_max_duration_minutes INTEGER NOT NULL DEFAULT 5,
             theme TEXT NOT NULL DEFAULT 'system',
             log_enabled BOOLEAN NOT NULL DEFAULT false,
@@ -3575,6 +3614,7 @@ pub async fn seed_remaining_slices_fixture(
             play_weight DOUBLE PRECISION NOT NULL DEFAULT 2.0,
             short_feed_max_duration_minutes INTEGER NOT NULL DEFAULT 5,
             video_extensions TEXT NOT NULL DEFAULT '',
+            auto_scan_interval_seconds INTEGER NOT NULL DEFAULT 43200,
             theme TEXT NOT NULL DEFAULT 'system',
             bilingual_enabled BOOLEAN NOT NULL DEFAULT false,
             bilingual_lang TEXT NOT NULL DEFAULT 'zh',

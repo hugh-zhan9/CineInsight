@@ -116,6 +116,7 @@ let encodedSettingsUpdate = try JSONEncoder.cineInsight.encode(settingsUpdate)
 let settingsUpdateObject = try JSONSerialization.jsonObject(with: encodedSettingsUpdate) as? [String: Any]
 assertEqual(settingsUpdateObject?["video_extensions"] as? String, ".mp4,.mkv", "settings update extensions")
 assertEqual(settingsUpdateObject?["play_weight"] as? Double, 2.5, "settings update play weight")
+assertEqual(settingsUpdateObject?["auto_scan_interval_seconds"] as? Int, 43_200, "settings update scan interval")
 assertEqual(settingsUpdateObject?["short_feed_max_duration_minutes"] as? Int, 7, "settings update short feed")
 assertEqual(settingsUpdateObject?["ai_tagging_frame_count"] as? Int, 4, "settings update ai frames")
 assertEqual(settingsUpdateObject?["ai_tagging_base_url"] as? String, "", "settings update ai base URL")
@@ -399,6 +400,7 @@ let settingsData = """
   "video_extensions": ".mp4,.mkv",
   "play_weight": 2.0,
   "auto_scan_on_startup": true,
+  "auto_scan_interval_seconds": 43200,
   "short_feed_max_duration_minutes": 5,
   "theme": "dark",
   "log_enabled": true,
@@ -418,6 +420,7 @@ let settings = try JSONDecoder.cineInsight.decode(PublicSettings.self, from: set
 assertEqual(settings.theme, "dark", "settings theme")
 assertEqual(settings.deeplApiKeyConfigured, true, "settings deepl configured")
 assertEqual(settings.confirmBeforeDelete, true, "settings confirm delete")
+assertEqual(settings.autoScanIntervalSeconds, 43_200, "settings scan interval")
 assertEqual(settings.aiTaggingModel, "vision-model", "settings ai model")
 
 let settingsOnlySessionConfiguration = URLSessionConfiguration.ephemeral
@@ -647,6 +650,7 @@ let diagnosticsData = """
     "video_extensions": ".mp4",
     "play_weight": 2.0,
     "auto_scan_on_startup": true,
+    "auto_scan_interval_seconds": 43200,
     "short_feed_max_duration_minutes": 5,
     "theme": "system",
     "log_enabled": false,
