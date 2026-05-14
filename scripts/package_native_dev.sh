@@ -13,6 +13,29 @@ dmg_path="$dist_root/CineInsightNative-dev.dmg"
 rm -rf "$dist_root"
 mkdir -p "$macos_root" "$resources_root/bin" "$resources_root/contracts" "$resources_root/sidecars" "$resources_root/runtime" "$staging_root"
 
+create_iconfile() {
+  local source_png="$repo_root/build/appicon.png"
+  local iconset="$dist_root/AppIcon.iconset"
+  local output_icns="$resources_root/iconfile.icns"
+
+  test -s "$source_png"
+  rm -rf "$iconset"
+  mkdir -p "$iconset"
+  sips -z 16 16 "$source_png" --out "$iconset/icon_16x16.png" >/dev/null
+  sips -z 32 32 "$source_png" --out "$iconset/icon_16x16@2x.png" >/dev/null
+  sips -z 32 32 "$source_png" --out "$iconset/icon_32x32.png" >/dev/null
+  sips -z 64 64 "$source_png" --out "$iconset/icon_32x32@2x.png" >/dev/null
+  sips -z 128 128 "$source_png" --out "$iconset/icon_128x128.png" >/dev/null
+  sips -z 256 256 "$source_png" --out "$iconset/icon_128x128@2x.png" >/dev/null
+  sips -z 256 256 "$source_png" --out "$iconset/icon_256x256.png" >/dev/null
+  sips -z 512 512 "$source_png" --out "$iconset/icon_256x256@2x.png" >/dev/null
+  sips -z 512 512 "$source_png" --out "$iconset/icon_512x512.png" >/dev/null
+  cp "$source_png" "$iconset/icon_512x512@2x.png"
+  iconutil -c icns "$iconset" -o "$output_icns"
+  rm -rf "$iconset"
+  test -s "$output_icns"
+}
+
 cd "$repo_root/rust"
 cargo build --release --bin cine-daemon
 
@@ -22,7 +45,7 @@ swift build -c release --product CineInsightNative
 cp "$repo_root/macos/CineInsightNative/.build/release/CineInsightNative" "$macos_root/CineInsightNative"
 cp "$repo_root/rust/target/release/cine-daemon" "$resources_root/bin/cine-daemon"
 cp "$repo_root/contracts/native-api.yaml" "$resources_root/contracts/native-api.yaml"
-cp "$repo_root/build/bin/析微影策.app/Contents/Resources/iconfile.icns" "$resources_root/iconfile.icns"
+create_iconfile
 if [[ ! -s "$repo_root/frontend/dist/short.html" ]]; then
   (cd "$repo_root/frontend" && npm run build)
 fi
