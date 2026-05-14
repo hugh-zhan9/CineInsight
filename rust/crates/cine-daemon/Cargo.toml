@@ -10,6 +10,7 @@ axum.workspace = true
 cine-api = { path = "../cine-api" }
 cine-db = { path = "../cine-db" }
 cine-domain = { path = "../cine-domain" }
+dotenvy = "0.15"
 http.workspace = true
 serde.workspace = true
 serde_json.workspace = true

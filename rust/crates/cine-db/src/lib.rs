@@ -5,6 +5,7 @@ use std::{
     ffi::OsStr,
     fs,
     hash::{Hash, Hasher},
+    io,
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
@@ -523,6 +524,13 @@ pub trait PlaybackDispatch {
     fn dispatch(&mut self, path: &Path) -> Result<(), PlaybackError>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlaybackMetadataFailure {
+    Missing,
+    PermissionDenied,
+    Filesystem,
+}
+
 impl From<sqlx::Error> for VideoQueryError {
     fn from(value: sqlx::Error) -> Self {
         Self::Sql(value.to_string())
@@ -857,13 +865,13 @@ pub async fn list_videos_by_directory(
             v.path,
             v.directory,
             v.size,
-            COALESCE(v.duration, 0) AS duration,
+            COALESCE(v.duration, 0)::float8 AS duration,
             COALESCE(v.resolution, '') AS resolution,
-            COALESCE(v.width, 0) AS width,
-            COALESCE(v.height, 0) AS height,
+            COALESCE(v.width, 0)::int4 AS width,
+            COALESCE(v.height, 0)::int4 AS height,
             COALESCE(v.is_stale, false) AS is_stale,
-            COALESCE(v.play_count, 0) AS play_count,
-            COALESCE(v.random_play_count, 0) AS random_play_count,
+            COALESCE(v.play_count, 0)::int4 AS play_count,
+            COALESCE(v.random_play_count, 0)::int4 AS random_play_count,
             v.last_played_at::text AS last_played_at,
             v.created_at::text AS created_at,
             v.updated_at::text AS updated_at,
@@ -1146,16 +1154,38 @@ where
     let path = Path::new(&video.path);
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
-        Err(_) => {
-            return playback_failure_with_stale(
-                pool,
-                video,
-                "file_missing",
-                "源文件不存在或已被移动。",
-                true,
-            )
-            .await;
-        }
+        Err(error) => match classify_playback_metadata_error(&error) {
+            PlaybackMetadataFailure::Missing => {
+                return playback_failure_with_stale(
+                    pool,
+                    video,
+                    "file_missing",
+                    "源文件不存在或已被移动。",
+                    true,
+                )
+                .await;
+            }
+            PlaybackMetadataFailure::PermissionDenied => {
+                return playback_failure_with_stale(
+                    pool,
+                    video,
+                    "permission_denied",
+                    "没有权限访问源文件。请在 macOS 权限弹窗中允许访问，或到系统设置中授予析微影策外接磁盘/文件夹访问权限。",
+                    false,
+                )
+                .await;
+            }
+            PlaybackMetadataFailure::Filesystem => {
+                return playback_failure_with_stale(
+                    pool,
+                    video,
+                    "filesystem_error",
+                    "无法读取源文件状态。",
+                    false,
+                )
+                .await;
+            }
+        },
     };
     if metadata.is_dir() {
         return playback_failure_with_stale(
@@ -1276,7 +1306,7 @@ async fn playback_failure_with_stale(
             did_mark_stale,
             did_relocate: false,
             did_refresh_metadata: false,
-            needs_reload: true,
+            needs_reload: did_mark_stale,
             updated_video: Some(updated_video),
             reason_code: Some(reason_code.to_string()),
         }),
@@ -1293,6 +1323,14 @@ impl PlaybackDispatch for SystemPlaybackDispatch {
             .map_err(|error| PlaybackError::DispatchFailed(error.to_string()))?;
         drop(status);
         Ok(())
+    }
+}
+
+fn classify_playback_metadata_error(error: &io::Error) -> PlaybackMetadataFailure {
+    match error.kind() {
+        io::ErrorKind::NotFound => PlaybackMetadataFailure::Missing,
+        io::ErrorKind::PermissionDenied => PlaybackMetadataFailure::PermissionDenied,
+        _ => PlaybackMetadataFailure::Filesystem,
     }
 }
 
@@ -2983,13 +3021,13 @@ async fn active_video_by_id(pool: &PgPool, id: i64) -> Result<VideoSummary, Vide
             v.path,
             v.directory,
             v.size,
-            COALESCE(v.duration, 0) AS duration,
+            COALESCE(v.duration, 0)::float8 AS duration,
             COALESCE(v.resolution, '') AS resolution,
-            COALESCE(v.width, 0) AS width,
-            COALESCE(v.height, 0) AS height,
+            COALESCE(v.width, 0)::int4 AS width,
+            COALESCE(v.height, 0)::int4 AS height,
             COALESCE(v.is_stale, false) AS is_stale,
-            COALESCE(v.play_count, 0) AS play_count,
-            COALESCE(v.random_play_count, 0) AS random_play_count,
+            COALESCE(v.play_count, 0)::int4 AS play_count,
+            COALESCE(v.random_play_count, 0)::int4 AS random_play_count,
             v.last_played_at::text AS last_played_at,
             v.created_at::text AS created_at,
             v.updated_at::text AS updated_at,
@@ -3032,13 +3070,13 @@ async fn active_videos_under_roots(
             v.path,
             v.directory,
             v.size,
-            COALESCE(v.duration, 0) AS duration,
+            COALESCE(v.duration, 0)::float8 AS duration,
             COALESCE(v.resolution, '') AS resolution,
-            COALESCE(v.width, 0) AS width,
-            COALESCE(v.height, 0) AS height,
+            COALESCE(v.width, 0)::int4 AS width,
+            COALESCE(v.height, 0)::int4 AS height,
             COALESCE(v.is_stale, false) AS is_stale,
-            COALESCE(v.play_count, 0) AS play_count,
-            COALESCE(v.random_play_count, 0) AS random_play_count,
+            COALESCE(v.play_count, 0)::int4 AS play_count,
+            COALESCE(v.random_play_count, 0)::int4 AS random_play_count,
             v.last_played_at::text AS last_played_at,
             v.created_at::text AS created_at,
             v.updated_at::text AS updated_at,
@@ -3163,7 +3201,7 @@ fn choose_weighted_candidate(videos: Vec<VideoSummary>, sample: f64) -> Option<V
 async fn load_play_weight(pool: &PgPool) -> Result<f64, VideoQueryError> {
     let value = sqlx::query_scalar::<_, Option<f64>>(
         r#"
-        SELECT play_weight
+        SELECT play_weight::float8
         FROM settings
         ORDER BY id ASC
         LIMIT 1
@@ -3203,13 +3241,13 @@ async fn fetch_video_rows(
             v.path,
             v.directory,
             v.size,
-            COALESCE(v.duration, 0) AS duration,
+            COALESCE(v.duration, 0)::float8 AS duration,
             COALESCE(v.resolution, '') AS resolution,
-            COALESCE(v.width, 0) AS width,
-            COALESCE(v.height, 0) AS height,
+            COALESCE(v.width, 0)::int4 AS width,
+            COALESCE(v.height, 0)::int4 AS height,
             COALESCE(v.is_stale, false) AS is_stale,
-            COALESCE(v.play_count, 0) AS play_count,
-            COALESCE(v.random_play_count, 0) AS random_play_count,
+            COALESCE(v.play_count, 0)::int4 AS play_count,
+            COALESCE(v.random_play_count, 0)::int4 AS random_play_count,
             v.last_played_at::text AS last_played_at,
             v.created_at::text AS created_at,
             v.updated_at::text AS updated_at,
@@ -3412,6 +3450,16 @@ pub async fn seed_video_query_fixture(database_url: &str) -> Result<PgPool, Vide
     .execute(&pool)
     .await?;
 
+    Ok(pool)
+}
+
+pub async fn seed_numeric_play_weight_video_query_fixture(
+    database_url: &str,
+) -> Result<PgPool, VideoQueryError> {
+    let pool = seed_video_query_fixture(database_url).await?;
+    sqlx::query("ALTER TABLE settings ALTER COLUMN play_weight TYPE NUMERIC")
+        .execute(&pool)
+        .await?;
     Ok(pool)
 }
 
@@ -3863,4 +3911,19 @@ fn missing_values(required: &[&str], actual: &BTreeSet<String>) -> Vec<String> {
         .filter(|value| !actual.contains(*value))
         .map(str::to_string)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classifies_permission_denied_playback_metadata_as_non_stale_failure() {
+        let error = io::Error::from(io::ErrorKind::PermissionDenied);
+
+        assert_eq!(
+            classify_playback_metadata_error(&error),
+            PlaybackMetadataFailure::PermissionDenied
+        );
+    }
 }

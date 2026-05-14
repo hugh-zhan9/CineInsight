@@ -1,6 +1,7 @@
 use cine_db::{
     list_videos, native_test_database_url_from_value, random_candidate_with_sample,
-    seed_video_query_fixture, VideoFilter, VideoQueryError,
+    seed_numeric_play_weight_video_query_fixture, seed_video_query_fixture, VideoFilter,
+    VideoQueryError,
 };
 
 #[test]
@@ -38,6 +39,24 @@ async fn lists_active_videos_in_legacy_score_order_from_postgres_fixture() {
         ]
     );
     assert!(names.iter().all(|name| name != "deleted.mp4"));
+}
+
+#[tokio::test]
+async fn lists_videos_when_legacy_settings_play_weight_is_numeric() {
+    let Some(database_url) = std::env::var("NATIVE_TEST_DATABASE_URL").ok() else {
+        eprintln!("skipping postgres fixture test: NATIVE_TEST_DATABASE_URL is not set");
+        return;
+    };
+
+    let pool = seed_numeric_play_weight_video_query_fixture(&database_url)
+        .await
+        .expect("seed numeric play weight fixture");
+
+    let page = list_videos(&pool, VideoFilter::default())
+        .await
+        .expect("list videos");
+
+    assert!(!page.videos.is_empty());
 }
 
 #[tokio::test]

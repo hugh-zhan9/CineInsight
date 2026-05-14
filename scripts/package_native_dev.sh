@@ -45,6 +45,11 @@ swift build -c release --product CineInsightNative
 cp "$repo_root/macos/CineInsightNative/.build/release/CineInsightNative" "$macos_root/CineInsightNative"
 cp "$repo_root/rust/target/release/cine-daemon" "$resources_root/bin/cine-daemon"
 cp "$repo_root/contracts/native-api.yaml" "$resources_root/contracts/native-api.yaml"
+if [[ -f "$repo_root/.env" ]]; then
+  cp "$repo_root/.env" "$resources_root/.env"
+elif [[ -f "$repo_root/build/bin/析微影策.app/Contents/Resources/.env" ]]; then
+  cp "$repo_root/build/bin/析微影策.app/Contents/Resources/.env" "$resources_root/.env"
+fi
 create_iconfile
 if [[ ! -s "$repo_root/frontend/dist/short.html" ]]; then
   (cd "$repo_root/frontend" && npm run build)

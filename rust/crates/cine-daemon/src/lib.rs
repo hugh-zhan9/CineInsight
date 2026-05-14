@@ -473,6 +473,7 @@ pub async fn serve_listener(
 }
 
 pub async fn serve_from_env() -> anyhow::Result<()> {
+    load_bundled_dotenv();
     let config = DaemonConfig::from_env().await?;
     let port = std::env::var("CINE_DAEMON_PORT")
         .ok()
@@ -3282,6 +3283,27 @@ fn default_short_feed_assets_dir() -> Option<PathBuf> {
     candidate.is_dir().then_some(candidate)
 }
 
+fn load_bundled_dotenv() {
+    let Some(path) = std::env::current_exe()
+        .ok()
+        .and_then(|executable| bundled_dotenv_path_for_executable(&executable))
+    else {
+        return;
+    };
+    if let Err(error) = dotenvy::from_path(path) {
+        eprintln!("cine-daemon failed to load bundled .env: {error:#}");
+    }
+}
+
+fn bundled_dotenv_path_for_executable(executable: &StdPath) -> Option<PathBuf> {
+    let resources = executable
+        .parent()
+        .and_then(StdPath::parent)
+        .filter(|path| path.ends_with("Resources"))?;
+    let candidate = resources.join(".env");
+    candidate.is_file().then_some(candidate)
+}
+
 fn env_u16(name: &str) -> Option<u16> {
     std::env::var(name)
         .ok()
@@ -3368,5 +3390,27 @@ fn video_filter_from_request(value: VideoFilterRequest) -> VideoFilter {
         max_height: value.max_height,
         cursor: value.cursor,
         limit: value.limit,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn finds_dotenv_next_to_bundled_daemon_resources() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let resources = temp.path().join("CineInsightNative.app/Contents/Resources");
+        let bin = resources.join("bin");
+        fs::create_dir_all(&bin).expect("create bundle dirs");
+        let dotenv = resources.join(".env");
+        fs::write(&dotenv, "PG_HOST=127.0.0.1\n").expect("write dotenv");
+
+        let executable = bin.join("cine-daemon");
+
+        assert_eq!(
+            bundled_dotenv_path_for_executable(&executable),
+            Some(dotenv)
+        );
     }
 }

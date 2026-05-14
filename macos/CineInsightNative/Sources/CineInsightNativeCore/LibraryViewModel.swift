@@ -68,24 +68,25 @@ public final class LibraryViewModel: ObservableObject {
         videos.first { $0.id == selectedVideoID }
     }
 
-    public var filteredVideos: [VideoSummary] {
+    public var visibleVideos: [VideoSummary] {
         videos.filter { video in
             let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
             let matchesKeyword = trimmed.isEmpty
                 || video.name.localizedCaseInsensitiveContains(trimmed)
                 || video.path.localizedCaseInsensitiveContains(trimmed)
                 || video.tags.contains { $0.name.localizedCaseInsensitiveContains(trimmed) }
-            let matchesTags = selectedTagIDs.isEmpty || selectedTagIDs.allSatisfy { tagId in
-                video.tags.contains { $0.id == tagId }
-            }
             let sizeBounds = sizeFilter.requestBounds
             let matchesSize = (sizeBounds.minSize.map { video.size >= $0 } ?? true)
                 && (sizeBounds.maxSize.map { video.size <= $0 } ?? true)
             let resolutionBounds = resolutionFilter.requestBounds
             let matchesResolution = (resolutionBounds.minHeight.map { video.height >= $0 } ?? true)
                 && (resolutionBounds.maxHeight.map { video.height <= $0 } ?? true)
-            return matchesKeyword && matchesTags && matchesSize && matchesResolution
+            return matchesKeyword && matchesSize && matchesResolution
         }
+    }
+
+    public var filteredVideos: [VideoSummary] {
+        visibleVideos
     }
 
     public var allVisibleSelected: Bool {
@@ -270,6 +271,9 @@ public final class LibraryViewModel: ObservableObject {
         await run("Playing video") {
             let result = try await client.playVideo(id: video.id)
             applyPlayback(result)
+            if result.reconcileResult?.needsReload == true {
+                try await reloadCurrentVideoQuery()
+            }
             statusMessage = result.userMessage ?? (result.dispatchSucceeded ? "Playback dispatched" : "Playback failed")
         }
     }
@@ -278,6 +282,9 @@ public final class LibraryViewModel: ObservableObject {
         await run("Playing random video") {
             let result = try await client.playRandomVideo()
             applyPlayback(result)
+            if result.reconcileResult?.needsReload == true {
+                try await reloadCurrentVideoQuery()
+            }
             if let id = result.video?.id {
                 selectedVideoID = id
             }
@@ -767,8 +774,32 @@ public final class LibraryViewModel: ObservableObject {
         if let updated = response.reconcileResult?.updatedVideo {
             replace(updated)
         }
-        if response.reconcileResult?.needsReload == true {
-            Task { await search() }
+    }
+
+    private func reloadCurrentVideoQuery() async throws {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sizeBounds = sizeFilter.requestBounds
+        let resolutionBounds = resolutionFilter.requestBounds
+        let page: VideoListResponse
+        if trimmed.isEmpty && selectedTagIDs.isEmpty && sizeFilter == .all && resolutionFilter == .all {
+            page = try await client.listVideos()
+        } else {
+            page = try await client.searchVideos(
+                VideoFilterRequest(
+                    keyword: trimmed.isEmpty ? nil : trimmed,
+                    tagIds: Array(selectedTagIDs).sorted(),
+                    minSize: sizeBounds.minSize,
+                    maxSize: sizeBounds.maxSize,
+                    minHeight: resolutionBounds.minHeight,
+                    maxHeight: resolutionBounds.maxHeight,
+                    limit: 80
+                )
+            )
+        }
+        videos = page.videos
+        selectedVideoIDs = selectedVideoIDs.intersection(Set(videos.map(\.id)))
+        if selectedVideoID == nil || selectedVideoID.map({ id in !videos.contains { $0.id == id } }) == true {
+            selectedVideoID = videos.first?.id
         }
     }
 

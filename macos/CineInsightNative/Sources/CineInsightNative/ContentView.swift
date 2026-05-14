@@ -17,6 +17,7 @@ struct ContentView: View {
     @State private var activeRowVideoID: Int64?
     @State private var renameText = ""
     @State private var newTagName = ""
+    @State private var tagFilterQuery = ""
     @State private var tagName = ""
     @State private var tagColor = ""
     @State private var editingTag: TagRecord?
@@ -73,15 +74,16 @@ struct ContentView: View {
             Divider()
             HSplitView {
                 contentColumn
-                    .frame(minWidth: 720)
+                    .frame(minWidth: 720, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
                 if previewDrawerOpen && selection == .library {
                     Divider()
                     previewDrawer
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
-        .frame(minWidth: 1120, minHeight: 720)
+        .frame(minWidth: 1120, minHeight: 720, maxHeight: .infinity, alignment: .top)
         .task {
             NSApplication.shared.windows.first?.title = "析微影策"
             daemon.launch(client.configuration)
@@ -145,7 +147,7 @@ struct ContentView: View {
                 settingsContent
             }
         }
-        .frame(minWidth: 640)
+        .frame(minWidth: 640, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var previewDrawer: some View {
@@ -175,7 +177,7 @@ struct ContentView: View {
             }
             .padding(18)
         }
-        .frame(minWidth: 340, idealWidth: 420, maxWidth: 520)
+        .frame(minWidth: 340, idealWidth: 420, maxWidth: 520, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var toolbar: some View {
@@ -373,36 +375,98 @@ struct ContentView: View {
                 subtitleSearchResults
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 
     private var tagFilterBar: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 8) {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                HStack(spacing: 7) {
+                    Image(systemName: "tag")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(.secondary)
+                    TextField(t("搜索标签", "Search tags"), text: $tagFilterQuery)
+                        .textFieldStyle(.plain)
+                        .font(.callout)
+                    if !tagFilterQuery.isEmpty {
+                        Button {
+                            tagFilterQuery = ""
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(t("清空标签搜索", "Clear tag search"))
+                    }
+                }
+                .padding(.horizontal, 10)
+                .frame(width: 240, height: 30)
+                .background(.quaternary, in: RoundedRectangle(cornerRadius: 7))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7)
+                        .stroke(.separator, lineWidth: 0.5)
+                }
+
                 Button {
                     Task { await library.clearTagFilter() }
                 } label: {
-                    Label("All", systemImage: library.selectedTagIDs.isEmpty ? "checkmark.circle.fill" : "circle")
+                    Label(t("全部", "All"), systemImage: library.selectedTagIDs.isEmpty ? "checkmark.circle.fill" : "circle")
                 }
                 .buttonStyle(.bordered)
-                ForEach(library.tags) { tag in
+
+                if !library.selectedTagIDs.isEmpty {
                     Button {
-                        Task { await library.toggleTagFilter(tag) }
+                        Task { await library.clearTagFilter() }
                     } label: {
-                        HStack(spacing: 6) {
-                            Circle()
-                                .fill(Color(hex: tag.color) ?? .accentColor)
-                                .frame(width: 8, height: 8)
-                            Text(tag.name)
-                            if library.selectedTagIDs.contains(tag.id) {
-                                Image(systemName: "checkmark")
-                            }
-                        }
+                        Label(t("清除选择", "Clear"), systemImage: "xmark")
                     }
                     .buttonStyle(.bordered)
                 }
+
+                Spacer(minLength: 0)
             }
-            .padding(12)
+
+            ScrollView(.vertical, showsIndicators: true) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 128), spacing: 8)], alignment: .leading, spacing: 8) {
+                    ForEach(filteredTagFilters) { tag in
+                        Button {
+                            Task { await library.toggleTagFilter(tag) }
+                        } label: {
+                            tagFilterChip(tag)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.trailing, 6)
+            }
+            .frame(maxHeight: 132)
         }
+        .padding(12)
+    }
+
+    private var filteredTagFilters: [TagRecord] {
+        let trimmed = tagFilterQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return library.tags }
+        return library.tags.filter { tag in
+            tag.name.localizedCaseInsensitiveContains(trimmed)
+                || library.selectedTagIDs.contains(tag.id)
+        }
+    }
+
+    private func tagFilterChip(_ tag: TagRecord) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(Color(hex: tag.color) ?? .accentColor)
+                .frame(width: 8, height: 8)
+            Text(tag.name)
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+            if library.selectedTagIDs.contains(tag.id) {
+                Image(systemName: "checkmark")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var videoTableBody: some View {
@@ -452,6 +516,7 @@ struct ContentView: View {
             }
             .width(180)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .overlay {
             if library.isLoading && library.videos.isEmpty {
                 ProgressView("Loading library")

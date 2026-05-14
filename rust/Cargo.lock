@@ -195,6 +195,7 @@ dependencies = [
  "cine-api",
  "cine-db",
  "cine-domain",
+ "dotenvy",
  "filetime",
  "http",
  "reqwest",
