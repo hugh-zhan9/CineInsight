@@ -1157,117 +1157,140 @@ struct ContentView: View {
 
     private var settingsPanel: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if let settings = library.settings {
-                settingsGroup(t("基本设置", "General")) {
-                    Picker(t("界面语言", "Interface Language"), selection: $appLanguageRaw) {
-                        Text("中文").tag(AppLanguage.zh.rawValue)
-                        Text("English").tag(AppLanguage.en.rawValue)
-                    }
-                    .pickerStyle(.segmented)
-                    Toggle(t("删除前确认", "Confirm before delete"), isOn: $settingsConfirmBeforeDelete)
-                    Toggle(t("默认将原始文件移入回收站", "Move original file to Trash by default"), isOn: $settingsDeleteOriginalFile)
-                    Toggle(t("启用日志记录", "Enable frontend logging"), isOn: $settingsLogEnabled)
-                    Picker(t("主题模式", "Theme"), selection: $settingsTheme) {
-                        Text(t("跟随系统", "System")).tag("system")
-                        Text(t("浅色", "Light")).tag("light")
-                        Text(t("深色", "Dark")).tag("dark")
-                    }
-                    .pickerStyle(.segmented)
-                }
-
-                settingsGroup(t("自动化与扫描", "Automation & Scan")) {
-                    Toggle(t("启动时自动增量扫描", "Start incremental scan on launch"), isOn: $settingsAutoScan)
-                }
-
-                settingsGroup(t("手机短视频", "Mobile Short Feed")) {
-                    Stepper(t("短视频时长上限：\(settingsShortFeedMinutes) 分钟", "Max duration: \(settingsShortFeedMinutes) min"), value: $settingsShortFeedMinutes, in: 1...180)
-                }
-
-                settingsGroup(t("AI 标签", "AI Tags")) {
-                    TextField("https://api.openai.com/v1", text: $settingsAIBaseURL)
-                        .textFieldStyle(.roundedBorder)
-                    SecureField(settings.aiTaggingApiKeyConfigured ? t("已配置 API Key，留空则保留", "API key configured, leave blank to keep") : "API Key", text: $settingsAIAPIKey)
-                        .textFieldStyle(.roundedBorder)
-                    TextField(t("模型", "Model"), text: $settingsAIModel)
-                        .textFieldStyle(.roundedBorder)
-                    Stepper(t("抽帧数量：\(settingsAIFrameCount)", "Frames: \(settingsAIFrameCount)"), value: $settingsAIFrameCount, in: 1...8)
-                    Stepper(t("字幕字符上限：\(settingsAISubtitleLimit)", "Subtitle limit: \(settingsAISubtitleLimit)"), value: $settingsAISubtitleLimit, in: 200...12_000, step: 100)
-                    Stepper(t("后台批量数量：\(settingsAIStartupBatch)", "Startup batch: \(settingsAIStartupBatch)"), value: $settingsAIStartupBatch, in: 1...100)
-                }
-
-                settingsGroup(t("智能随机播放", "Smart Random Play")) {
-                    HStack {
-                        Text(t("播放权重", "Play Weight"))
-                        Slider(value: $settingsPlayWeight, in: 0.1...10, step: 0.1)
-                        Text(String(format: "%.1f", settingsPlayWeight))
-                            .monospacedDigit()
-                            .frame(width: 44, alignment: .trailing)
-                    }
-                }
-
-                settingsGroup(t("支持的视频格式", "Video Extensions")) {
-                    TextField(".mp4,.mkv,.mov", text: $settingsVideoExtensions)
-                        .textFieldStyle(.roundedBorder)
-                }
-
-                settingsGroup(t("字幕翻译", "Subtitle Translation")) {
-                    Toggle(t("启用双语字幕翻译", "Enable bilingual subtitle translation"), isOn: $settingsBilingualEnabled)
-                    if settingsBilingualEnabled {
-                        Picker(t("目标翻译语言", "Target language"), selection: $settingsBilingualLang) {
-                            Text(t("中文", "Chinese")).tag("zh")
-                            Text(t("英语", "English")).tag("en")
-                            Text(t("日语", "Japanese")).tag("ja")
-                            Text(t("韩语", "Korean")).tag("ko")
-                            Text(t("法语", "French")).tag("fr")
-                            Text(t("德语", "German")).tag("de")
-                            Text(t("西班牙语", "Spanish")).tag("es")
-                            Text(t("葡萄牙语", "Portuguese")).tag("pt")
-                            Text(t("俄语", "Russian")).tag("ru")
-                            Text(t("意大利语", "Italian")).tag("it")
-                        }
-                        .pickerStyle(.menu)
-                        SecureField(settings.deeplApiKeyConfigured ? t("已配置 DeepL Key，留空则保留", "DeepL key configured, leave blank to keep") : "DeepL API Key", text: $settingsDeeplApiKey)
-                            .textFieldStyle(.roundedBorder)
-                    }
-                }
-
-                Button {
-                    Task {
-                        await library.saveSettings(
-                            confirmBeforeDelete: settingsConfirmBeforeDelete,
-                            deleteOriginalFile: settingsDeleteOriginalFile,
-                            videoExtensions: settingsVideoExtensions,
-                            playWeight: settingsPlayWeight,
-                            shortFeedMaxDurationMinutes: settingsShortFeedMinutes,
-                            theme: settingsTheme,
-                            autoScanOnStartup: settingsAutoScan,
-                            logEnabled: settingsLogEnabled,
-                            bilingualEnabled: settingsBilingualEnabled,
-                            bilingualLang: settingsBilingualLang,
-                            deeplApiKey: settingsDeeplApiKey,
-                            aiTaggingBaseUrl: settingsAIBaseURL,
-                            aiTaggingApiKey: settingsAIAPIKey,
-                            aiTaggingModel: settingsAIModel,
-                            aiFrameCount: settingsAIFrameCount,
-                            aiSubtitleCharLimit: settingsAISubtitleLimit,
-                            aiStartupBatchSize: settingsAIStartupBatch
-                        )
-                        settingsDeeplApiKey = ""
-                        settingsAIAPIKey = ""
-                    }
-                } label: {
-                    Label(t("保存所有设置", "Save Settings"), systemImage: "checkmark")
-                }
-            } else {
-                Text(t("无法连接服务器。", "Settings unavailable"))
-                    .foregroundStyle(.secondary)
+            if library.settings == nil {
+                settingsUnavailableHint
             }
+
+            settingsGroup(t("基本设置", "General")) {
+                Picker(t("界面语言", "Interface Language"), selection: $appLanguageRaw) {
+                    Text("中文").tag(AppLanguage.zh.rawValue)
+                    Text("English").tag(AppLanguage.en.rawValue)
+                }
+                .pickerStyle(.segmented)
+                Toggle(t("删除前确认", "Confirm before delete"), isOn: $settingsConfirmBeforeDelete)
+                Toggle(t("默认将原始文件移入回收站", "Move original file to Trash by default"), isOn: $settingsDeleteOriginalFile)
+                Toggle(t("启用日志记录", "Enable frontend logging"), isOn: $settingsLogEnabled)
+                Picker(t("主题模式", "Theme"), selection: $settingsTheme) {
+                    Text(t("跟随系统", "System")).tag("system")
+                    Text(t("浅色", "Light")).tag("light")
+                    Text(t("深色", "Dark")).tag("dark")
+                }
+                .pickerStyle(.segmented)
+            }
+
+            settingsGroup(t("自动化与扫描", "Automation & Scan")) {
+                Toggle(t("启动时自动增量扫描", "Start incremental scan on launch"), isOn: $settingsAutoScan)
+            }
+
+            settingsGroup(t("手机短视频", "Mobile Short Feed")) {
+                Stepper(t("短视频时长上限：\(settingsShortFeedMinutes) 分钟", "Max duration: \(settingsShortFeedMinutes) min"), value: $settingsShortFeedMinutes, in: 1...180)
+            }
+
+            settingsGroup(t("AI 标签", "AI Tags")) {
+                TextField("https://api.openai.com/v1", text: $settingsAIBaseURL)
+                    .textFieldStyle(.roundedBorder)
+                SecureField(aiAPIKeyPlaceholder, text: $settingsAIAPIKey)
+                    .textFieldStyle(.roundedBorder)
+                TextField(t("模型", "Model"), text: $settingsAIModel)
+                    .textFieldStyle(.roundedBorder)
+                Stepper(t("抽帧数量：\(settingsAIFrameCount)", "Frames: \(settingsAIFrameCount)"), value: $settingsAIFrameCount, in: 1...8)
+                Stepper(t("字幕字符上限：\(settingsAISubtitleLimit)", "Subtitle limit: \(settingsAISubtitleLimit)"), value: $settingsAISubtitleLimit, in: 200...12_000, step: 100)
+                Stepper(t("后台批量数量：\(settingsAIStartupBatch)", "Startup batch: \(settingsAIStartupBatch)"), value: $settingsAIStartupBatch, in: 1...100)
+            }
+
+            settingsGroup(t("智能随机播放", "Smart Random Play")) {
+                HStack {
+                    Text(t("播放权重", "Play Weight"))
+                    Slider(value: $settingsPlayWeight, in: 0.1...10, step: 0.1)
+                    Text(String(format: "%.1f", settingsPlayWeight))
+                        .monospacedDigit()
+                        .frame(width: 44, alignment: .trailing)
+                }
+            }
+
+            settingsGroup(t("支持的视频格式", "Video Extensions")) {
+                TextField(".mp4,.mkv,.mov", text: $settingsVideoExtensions)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            settingsGroup(t("字幕翻译", "Subtitle Translation")) {
+                Toggle(t("启用双语字幕翻译", "Enable bilingual subtitle translation"), isOn: $settingsBilingualEnabled)
+                if settingsBilingualEnabled {
+                    Picker(t("目标翻译语言", "Target language"), selection: $settingsBilingualLang) {
+                        Text(t("中文", "Chinese")).tag("zh")
+                        Text(t("英语", "English")).tag("en")
+                        Text(t("日语", "Japanese")).tag("ja")
+                        Text(t("韩语", "Korean")).tag("ko")
+                        Text(t("法语", "French")).tag("fr")
+                        Text(t("德语", "German")).tag("de")
+                        Text(t("西班牙语", "Spanish")).tag("es")
+                        Text(t("葡萄牙语", "Portuguese")).tag("pt")
+                        Text(t("俄语", "Russian")).tag("ru")
+                        Text(t("意大利语", "Italian")).tag("it")
+                    }
+                    .pickerStyle(.menu)
+                    SecureField(deeplAPIKeyPlaceholder, text: $settingsDeeplApiKey)
+                        .textFieldStyle(.roundedBorder)
+                }
+            }
+
+            Button {
+                Task {
+                    await library.saveSettings(
+                        confirmBeforeDelete: settingsConfirmBeforeDelete,
+                        deleteOriginalFile: settingsDeleteOriginalFile,
+                        videoExtensions: settingsVideoExtensions,
+                        playWeight: settingsPlayWeight,
+                        shortFeedMaxDurationMinutes: settingsShortFeedMinutes,
+                        theme: settingsTheme,
+                        autoScanOnStartup: settingsAutoScan,
+                        logEnabled: settingsLogEnabled,
+                        bilingualEnabled: settingsBilingualEnabled,
+                        bilingualLang: settingsBilingualLang,
+                        deeplApiKey: settingsDeeplApiKey,
+                        aiTaggingBaseUrl: settingsAIBaseURL,
+                        aiTaggingApiKey: settingsAIAPIKey,
+                        aiTaggingModel: settingsAIModel,
+                        aiFrameCount: settingsAIFrameCount,
+                        aiSubtitleCharLimit: settingsAISubtitleLimit,
+                        aiStartupBatchSize: settingsAIStartupBatch
+                    )
+                    settingsDeeplApiKey = ""
+                    settingsAIAPIKey = ""
+                }
+            } label: {
+                Label(t("保存所有设置", "Save Settings"), systemImage: "checkmark")
+            }
+            .disabled(library.settings == nil)
             Text(library.statusMessage)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(3)
         }
         .settingsSectionStyle()
+    }
+
+    private var settingsUnavailableHint: some View {
+        Label(
+            t("设置服务暂不可用，以下为本地默认配置；连接 daemon 后可保存。", "Settings service is unavailable. Defaults remain visible and can be saved after the daemon connects."),
+            systemImage: "exclamationmark.triangle"
+        )
+        .font(.callout)
+        .foregroundStyle(.secondary)
+    }
+
+    private var aiAPIKeyPlaceholder: String {
+        if library.settings?.aiTaggingApiKeyConfigured == true {
+            return t("已配置 API Key，留空则保留", "API key configured, leave blank to keep")
+        }
+        return "API Key"
+    }
+
+    private var deeplAPIKeyPlaceholder: String {
+        if library.settings?.deeplApiKeyConfigured == true {
+            return t("已配置 DeepL Key，留空则保留", "DeepL key configured, leave blank to keep")
+        }
+        return "DeepL API Key"
     }
 
     @ViewBuilder
