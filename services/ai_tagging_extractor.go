@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"video-master/database"
 	"video-master/models"
 	"video-master/services/subtitleparser"
 )
@@ -36,6 +37,7 @@ type AITaggingEvidence struct {
 	SubtitleModTime      int64             `json:"subtitle_mod_time,omitempty"`
 	SubtitleSize         int64             `json:"subtitle_size,omitempty"`
 	Frames               []AITaggingFrame  `json:"frames,omitempty"`
+	DetectedFaceCount    int               `json:"detected_face_count,omitempty"`
 	FrameSamplingConfig  string            `json:"frame_sampling_config"`
 	PromptSchemaVersion  string            `json:"prompt_schema_version"`
 	Warnings             []string          `json:"warnings,omitempty"`
@@ -64,6 +66,7 @@ func (e *AITaggingExtractor) Collect(ctx context.Context, video models.Video, co
 		PromptSchemaVersion: aiTaggingPromptSchemaVersion,
 	}
 	e.collectSubtitle(video, config, &evidence)
+	e.collectFaceSummary(video, &evidence)
 	e.collectFrames(ctx, video, config, &evidence)
 	return evidence
 }
@@ -105,6 +108,20 @@ func (e *AITaggingExtractor) collectSubtitle(video models.Video, config AITaggin
 	evidence.SubtitlePath = srtPath
 	evidence.SubtitleModTime = info.ModTime().Unix()
 	evidence.SubtitleSize = info.Size()
+}
+
+func (e *AITaggingExtractor) collectFaceSummary(video models.Video, evidence *AITaggingEvidence) {
+	if database.DB == nil || video.ID == 0 {
+		return
+	}
+	var count int64
+	if err := database.DB.Model(&models.VideoFace{}).
+		Where("video_id = ? AND status = ?", video.ID, models.VideoFaceStatusDetected).
+		Count(&count).Error; err != nil {
+		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("face summary failed: %v", err))
+		return
+	}
+	evidence.DetectedFaceCount = int(count)
 }
 
 func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Video, config AITaggingConfig, evidence *AITaggingEvidence) {

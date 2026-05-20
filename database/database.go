@@ -122,6 +122,7 @@ func Init() error {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
 	}
 	ensureCoreQueryIndexes(db)
+	ensureVideoFaceIndexes(db)
 	ensureAITaggingIndexes(db)
 	ensureShortFeedIndexes(db)
 	ensureSubtitleSearchIndexes(db)
@@ -271,6 +272,19 @@ func ensureAITaggingIndexes(db *gorm.DB) {
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
 			log.Printf("创建 AI 标签索引失败: %v sql=%s", err, statement)
+		}
+	}
+}
+
+func ensureVideoFaceIndexes(db *gorm.DB) {
+	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_video_faces_video_status ON video_faces(video_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_video_faces_signature ON video_faces(signature)`,
+		`CREATE INDEX IF NOT EXISTS idx_face_clusters_signature ON face_clusters(signature)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			log.Printf("创建人脸索引失败: %v sql=%s", err, statement)
 		}
 	}
 }

@@ -21,6 +21,11 @@ assert.doesNotMatch(videoListSource, /<ActionMenu label="更多">[\s\S]*AI 标�
 assert.match(videoListSource, /<button[^>]+@click="openAITagReviewDialog\(\)"[^>]*>AI 标签管理<\/button>/, 'AI tag management should be a direct toolbar action');
 assert.match(videoListSource, /<button[^>]+@click="openCleanupDialog\(\)"[^>]*>清理候选<\/button>/, 'cleanup candidates should be a direct toolbar action');
 assert.match(videoListSource, /<button[^>]+@click="showTagManagerDialog = true"[^>]*>标签管理<\/button>/, 'tag manager should be a direct toolbar action');
+assert.match(videoListSource, /<option value="smart">智能搜索<\/option>/, 'video list should expose smart natural-language search mode');
+assert.match(videoListSource, /SearchVideosSmart/, 'smart search mode should call the dedicated Wails API');
+assert.match(videoListSource, /AnalyzeVideoFaces/, 'video list should call the face analysis Wails API');
+assert.match(videoRowSource, /@click="\$emit\('analyze-faces', video\)"/, 'video rows should expose a face analysis action');
+assert.match(videoRowSource, /analyzingFaceIds/, 'video rows should show face analysis progress state');
 assert.match(videoRowSource, /row-primary-actions/, 'video rows should keep only primary actions in the always-visible rail');
 assert.match(videoRowSource, /row-secondary-actions/, 'video rows should group secondary actions separately');
 assert.match(shortFeedCss, /--short-glass-bg:\s*var\(--glass-strong-bg\)/, 'short feed should consume shared glass tokens');

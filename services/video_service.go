@@ -59,6 +59,20 @@ type ScanSyncResult struct {
 	Errors            []ScanSyncError `json:"errors"`
 }
 
+type videoSearchIntent struct {
+	Keyword          string
+	TagNames         []string
+	RequireFaces     bool
+	SubtitleKeyword  string
+	MinHeight        int
+	MaxHeight        int
+	PortraitOnly     bool
+	LandscapeOnly    bool
+	MinSize          int64
+	MaxSize          int64
+	UsedNaturalHints bool
+}
+
 func (r *ScanSyncResult) recordError(operation, directory, path string, err error) {
 	r.Skipped++
 	r.Errors = append(r.Errors, ScanSyncError{
@@ -136,6 +150,11 @@ func (s *VideoService) SearchVideos(keyword string, cursorScore float64, cursorS
 	return s.SearchVideosWithFilters(keyword, nil, 0, 0, 0, 0, cursorScore, cursorSize, cursorID, limit)
 }
 
+func (s *VideoService) SearchVideosSmart(query string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+	intent := parseVideoSearchIntent(query)
+	return s.searchVideosByIntent(intent, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
+}
+
 // SearchVideosByTags 按标签搜索（多选 AND）- 支持分页（按概率优先排序）
 func (s *VideoService) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	return s.SearchVideosWithFilters("", tagIDs, 0, 0, 0, 0, cursorScore, cursorSize, cursorID, limit)
@@ -198,10 +217,27 @@ func truncateLogSnippet(text string, limit int) string {
 
 // SearchVideosWithFilters 组合搜索（关键词 + 标签 + 体积 + 分辨率 AND）- 支持分页（按概率优先排序）
 func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+	intent := videoSearchIntent{Keyword: strings.TrimSpace(keyword)}
+	return s.searchVideosByIntent(intent, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
+}
+
+func (s *VideoService) searchVideosByIntent(intent videoSearchIntent, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	var videos []models.Video
 	playWeight, err := s.getPlayWeight()
 	if err != nil {
 		return nil, err
+	}
+	if minSize > 0 {
+		intent.MinSize = minSize
+	}
+	if maxSize > 0 {
+		intent.MaxSize = maxSize
+	}
+	if minHeight > 0 {
+		intent.MinHeight = minHeight
+	}
+	if maxHeight > 0 {
+		intent.MaxHeight = maxHeight
 	}
 
 	scoreSql := scoreExprForTable("videos.", playWeight)
@@ -210,38 +246,246 @@ func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, mi
 		Order("videos.size desc").
 		Order("videos.id desc")
 
-	if strings.TrimSpace(keyword) != "" {
-		kw := "%" + strings.TrimSpace(keyword) + "%"
-		query = query.Where("(videos.name LIKE ? OR videos.path LIKE ?)", kw, kw)
+	if strings.TrimSpace(intent.Keyword) != "" {
+		kw := "%" + escapeSQLLike(strings.TrimSpace(intent.Keyword)) + "%"
+		query = query.Where("(videos.name LIKE ? ESCAPE '\\' OR videos.path LIKE ? ESCAPE '\\')", kw, kw)
 	}
 
 	// 体积过滤 (左闭右开 [min, max) )
-	if minSize > 0 {
-		query = query.Where("videos.size >= ?", minSize)
+	if intent.MinSize > 0 {
+		query = query.Where("videos.size >= ?", intent.MinSize)
 	}
-	if maxSize > 0 {
-		query = query.Where("videos.size < ?", maxSize)
+	if intent.MaxSize > 0 {
+		query = query.Where("videos.size < ?", intent.MaxSize)
 	}
 
 	// 分辨率过滤 (按高度判断)
-	if minHeight > 0 {
-		query = query.Where("videos.height >= ?", minHeight)
+	if intent.MinHeight > 0 {
+		query = query.Where("videos.height >= ?", intent.MinHeight)
 	}
-	if maxHeight > 0 {
-		query = query.Where("videos.height <= ?", maxHeight)
+	if intent.MaxHeight > 0 {
+		query = query.Where("videos.height <= ?", intent.MaxHeight)
 	}
 
-	if len(tagIDs) > 0 {
+	if intent.PortraitOnly {
+		query = query.Where("videos.height > videos.width")
+	}
+	if intent.LandscapeOnly {
+		query = query.Where("videos.width >= videos.height")
+	}
+
+	if intent.RequireFaces {
+		query = query.Where("EXISTS (SELECT 1 FROM video_faces WHERE video_faces.video_id = videos.id AND video_faces.status = ? AND video_faces.deleted_at IS NULL)", models.VideoFaceStatusDetected)
+	}
+	if strings.TrimSpace(intent.SubtitleKeyword) != "" {
+		pattern := "%" + strings.ToLower(escapeSQLLike(intent.SubtitleKeyword)) + "%"
+		query = query.Where("EXISTS (SELECT 1 FROM subtitle_segments WHERE subtitle_segments.video_id = videos.id AND LOWER(subtitle_segments.text) LIKE ? ESCAPE '\\')", pattern)
+	}
+
+	allTagIDs := append([]uint(nil), tagIDs...)
+	if len(intent.TagNames) > 0 {
+		resolvedTagIDs, err := resolveVideoSearchTagIDs(intent.TagNames)
+		if err != nil {
+			return nil, err
+		}
+		allTagIDs = append(allTagIDs, resolvedTagIDs...)
+	}
+	allTagIDs = uniqueUintIDs(allTagIDs)
+	if len(allTagIDs) > 0 {
 		query = query.Joins("JOIN video_tags ON video_tags.video_id = videos.id").
-			Where("video_tags.tag_id IN ?", tagIDs)
+			Where("video_tags.tag_id IN ?", allTagIDs)
 		query = query.Group("videos.id").
-			Having("COUNT(DISTINCT video_tags.tag_id) = ?", len(tagIDs))
+			Having("COUNT(DISTINCT video_tags.tag_id) = ?", len(allTagIDs))
 	}
 
 	query = applyCursorCondition(query, scoreSql, cursorScore, cursorSize, cursorID, "videos.")
 
 	err = query.Limit(limit).Find(&videos).Error
 	return videos, err
+}
+
+func parseVideoSearchIntent(input string) videoSearchIntent {
+	raw := strings.TrimSpace(input)
+	intent := videoSearchIntent{Keyword: raw}
+	if raw == "" {
+		return intent
+	}
+	lower := strings.ToLower(raw)
+
+	if containsAny(lower, "有人脸", "包含人脸", "检测到人脸", "face", "faces", "people", "person", "人物") {
+		intent.RequireFaces = true
+		intent.UsedNaturalHints = true
+	}
+	if containsAny(lower, "竖屏", "纵向", "portrait") {
+		intent.PortraitOnly = true
+		intent.UsedNaturalHints = true
+	}
+	if containsAny(lower, "横屏", "横向", "landscape") {
+		intent.LandscapeOnly = true
+		intent.UsedNaturalHints = true
+	}
+	if containsAny(lower, "4k", "2160p", "超清") {
+		intent.MinHeight = maxInt(intent.MinHeight, 2160)
+		intent.UsedNaturalHints = true
+	} else if containsAny(lower, "1080p", "高清") {
+		intent.MinHeight = maxInt(intent.MinHeight, 1080)
+		intent.UsedNaturalHints = true
+	} else if containsAny(lower, "720p") {
+		intent.MinHeight = maxInt(intent.MinHeight, 720)
+		intent.UsedNaturalHints = true
+	}
+	if containsAny(lower, "大文件", "体积大", "large file", "big file") {
+		intent.MinSize = maxInt64(intent.MinSize, 1024*1024*1024)
+		intent.UsedNaturalHints = true
+	}
+	if containsAny(lower, "小文件", "体积小", "small file") {
+		if intent.MaxSize == 0 || intent.MaxSize > 100*1024*1024 {
+			intent.MaxSize = 100 * 1024 * 1024
+		}
+		intent.UsedNaturalHints = true
+	}
+
+	tagKeyword, ok := extractNaturalValue(raw, []string{"标签是", "标签为", "标签:", "标签：", "带标签", "tag:", "tag "})
+	if ok {
+		intent.TagNames = append(intent.TagNames, tagKeyword)
+		intent.UsedNaturalHints = true
+	} else if strings.Contains(lower, "标签") || strings.Contains(lower, "tag") {
+		if tagKeyword := extractLooseTagName(raw); tagKeyword != "" {
+			intent.TagNames = append(intent.TagNames, tagKeyword)
+			intent.UsedNaturalHints = true
+		}
+	}
+	subtitleKeyword, ok := extractNaturalValue(raw, []string{"字幕里提到", "字幕包含", "字幕搜索", "字幕:", "字幕：", "subtitle:", "subtitle "})
+	if ok {
+		intent.SubtitleKeyword = subtitleKeyword
+		intent.UsedNaturalHints = true
+	}
+
+	if intent.UsedNaturalHints {
+		intent.Keyword = ""
+	}
+	return intent
+}
+
+func containsAny(text string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(text, strings.ToLower(needle)) {
+			return true
+		}
+	}
+	return false
+}
+
+func extractNaturalValue(input string, prefixes []string) (string, bool) {
+	lower := strings.ToLower(input)
+	bestStart := -1
+	bestPrefixLen := 0
+	for _, prefix := range prefixes {
+		idx := strings.Index(lower, strings.ToLower(prefix))
+		if idx < 0 {
+			continue
+		}
+		if bestStart == -1 || idx < bestStart {
+			bestStart = idx
+			bestPrefixLen = len([]rune(prefix))
+		}
+	}
+	if bestStart < 0 {
+		return "", false
+	}
+	runes := []rune(input)
+	if bestStart+bestPrefixLen > len(runes) {
+		return "", false
+	}
+	value := strings.TrimSpace(string(runes[bestStart+bestPrefixLen:]))
+	value = trimNaturalSearchValue(value)
+	return value, value != ""
+}
+
+func trimNaturalSearchValue(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, "\"'“”‘’")
+	for _, sep := range []string{" 的视频", " 视频", " files", " file", " videos", " video"} {
+		if strings.HasSuffix(strings.ToLower(value), strings.ToLower(sep)) {
+			value = strings.TrimSpace(value[:len(value)-len(sep)])
+		}
+	}
+	return value
+}
+
+func extractLooseTagName(input string) string {
+	value := strings.TrimSpace(input)
+	replacements := []string{
+		"查找", "寻找", "搜索", "找", "筛选",
+		"包含", "带有", "带", "有",
+		"标签", "标记", "tag",
+		"的", "视频", "影片", "文件", "是", "为",
+		":", "：",
+	}
+	for _, token := range replacements {
+		value = strings.ReplaceAll(value, token, " ")
+		value = strings.ReplaceAll(value, strings.ToUpper(token), " ")
+		value = strings.ReplaceAll(value, strings.ToLower(token), " ")
+	}
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func resolveVideoSearchTagIDs(tagNames []string) ([]uint, error) {
+	normalized := make([]string, 0, len(tagNames))
+	seen := make(map[string]struct{}, len(tagNames))
+	for _, name := range tagNames {
+		key := normalizeAITagName(name)
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		normalized = append(normalized, key)
+	}
+	if len(normalized) == 0 {
+		return nil, nil
+	}
+	var tags []models.Tag
+	if err := database.DB.Where("LOWER(name) IN ?", normalized).Find(&tags).Error; err != nil {
+		return nil, err
+	}
+	ids := make([]uint, 0, len(tags))
+	for _, tag := range tags {
+		ids = append(ids, tag.ID)
+	}
+	if len(ids) != len(normalized) {
+		return []uint{0}, nil
+	}
+	return ids, nil
+}
+
+func uniqueUintIDs(ids []uint) []uint {
+	seen := make(map[uint]struct{}, len(ids))
+	unique := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		unique = append(unique, id)
+	}
+	return unique
+}
+
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 // getVideoMetadata 使用 ffprobe 获取视频时长、分辨率、宽、高

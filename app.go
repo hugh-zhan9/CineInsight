@@ -40,6 +40,7 @@ type App struct {
 	cleanupService        *services.CleanupService
 	subtitleSearchService *services.SubtitleSearchService
 	aiTaggingService      *services.AITaggingService
+	videoFaceService      *services.VideoFaceService
 	shortFeedService      *services.ShortFeedService
 	shortFeedServer       *services.ShortFeedHTTPServer
 	shortFeedStartupError string
@@ -53,8 +54,8 @@ func NewApp() *App {
 	homeDir, _ := os.UserHomeDir()
 	dataDir := filepath.Join(homeDir, ".video-master")
 	videoService := &services.VideoService{}
-
-	return &App{
+	faceDetector, _ := services.NewPigoVideoFaceDetector()
+	app := &App{
 		videoService:          videoService,
 		tagService:            &services.TagService{},
 		settingsService:       &services.SettingsService{},
@@ -63,8 +64,11 @@ func NewApp() *App {
 		cleanupService:        &services.CleanupService{},
 		subtitleSearchService: &services.SubtitleSearchService{},
 		aiTaggingService:      services.NewAITaggingService(),
+		videoFaceService:      services.NewVideoFaceService(services.VideoFaceServiceOptions{Detector: faceDetector}),
 		shortFeedService:      services.NewShortFeedService(videoService),
 	}
+	app.aiTaggingService.SetVideoFaceService(app.videoFaceService)
+	return app
 }
 
 // startup is called when the app starts. The context is saved
@@ -258,6 +262,12 @@ func (a *App) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize 
 func (a *App) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	videos, err := a.videoService.SearchVideosWithFilters(keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
 	log.Printf("API SearchVideosWithFilters keyword=%q tags=%v size=[%d,%d] height=[%d,%d] cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
+	return videos, err
+}
+
+func (a *App) SearchVideosSmart(query string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+	videos, err := a.videoService.SearchVideosSmart(query, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
+	log.Printf("API SearchVideosSmart query=%q tags=%v size=[%d,%d] height=[%d,%d] cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", query, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
 	return videos, err
 }
 
@@ -480,6 +490,21 @@ func (a *App) GetAITaggingStatusSummary() (*services.AITaggingStatusSummary, err
 	summary, err := a.aiTaggingService.StatusSummary()
 	log.Printf("API GetAITaggingStatusSummary err=%v summary=%+v", err, summary)
 	return summary, err
+}
+
+func (a *App) AnalyzeVideoFaces(videoID uint) (*services.VideoFaceAnalysisResult, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		log.Printf("API AnalyzeVideoFaces id=%d get video err=%v", videoID, err)
+		return nil, err
+	}
+	result, err := a.videoFaceService.AnalyzeVideo(a.ctx, *video)
+	if result != nil {
+		log.Printf("API AnalyzeVideoFaces id=%d status=%s faces=%d clusters=%d reason=%q err=%v", videoID, result.Status, result.FaceCount, result.ClusterCount, result.Reason, err)
+	} else {
+		log.Printf("API AnalyzeVideoFaces id=%d err=%v", videoID, err)
+	}
+	return result, err
 }
 
 // ===== Settings Methods =====

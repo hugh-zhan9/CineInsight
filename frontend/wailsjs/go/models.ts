@@ -229,6 +229,24 @@ export namespace services {
 	        this.failed = source["failed"];
 	    }
 	}
+	export class VideoFaceAnalysisResult {
+	    status: string;
+	    reason?: string;
+	    face_count: number;
+	    cluster_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoFaceAnalysisResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	        this.face_count = source["face_count"];
+	        this.cluster_count = source["cluster_count"];
+	    }
+	}
 	export class BatchVideoOperationError {
 	    video_id: number;
 	    error: string;
@@ -799,4 +817,3 @@ export namespace subtitleparser {
 	}
 
 }
-

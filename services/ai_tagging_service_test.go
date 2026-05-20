@@ -49,8 +49,9 @@ func newTestAITaggingService(client *fakeAITaggingClient, provider AITaggingConf
 		clientFactory: func(AITaggingConfig) AITaggingAIClient {
 			return client
 		},
-		extractor: NewAITaggingExtractor(),
-		now:       time.Now,
+		localClient: NewLocalHeuristicAITaggingClient(),
+		extractor:   NewAITaggingExtractor(),
+		now:         time.Now,
 	}
 }
 
@@ -74,11 +75,23 @@ func TestAITaggingSchemaCreatesTablesAndIndexes(t *testing.T) {
 	if !database.DB.Migrator().HasTable(&models.AITagApprovalRecord{}) {
 		t.Fatalf("期望创建 ai_tag_approval_records 表")
 	}
+	if !database.DB.Migrator().HasTable(&models.VideoFace{}) {
+		t.Fatalf("期望创建 video_faces 表")
+	}
+	if !database.DB.Migrator().HasTable(&models.FaceCluster{}) {
+		t.Fatalf("期望创建 face_clusters 表")
+	}
 	if !database.DB.Migrator().HasIndex(&models.AITagCandidate{}, "idx_ai_tag_candidates_video_status") {
 		t.Fatalf("期望创建候选 video/status 索引")
 	}
 	if !database.DB.Migrator().HasIndex(&models.AITaggingState{}, "idx_ai_tagging_states_status_processed") {
 		t.Fatalf("期望创建状态 status/processed 索引")
+	}
+	if !database.DB.Migrator().HasIndex(&models.VideoFace{}, "idx_video_faces_video_status") {
+		t.Fatalf("期望创建人脸 video/status 索引")
+	}
+	if !database.DB.Migrator().HasIndex(&models.FaceCluster{}, "idx_face_clusters_signature") {
+		t.Fatalf("期望创建人脸簇 signature 索引")
 	}
 }
 
@@ -671,7 +684,7 @@ func TestAITaggingFingerprintChangeAllowsSameLabelReanalysis(t *testing.T) {
 	}
 }
 
-func TestAITaggingMissingConfigDoesNotCallAI(t *testing.T) {
+func TestAITaggingMissingConfigRunsLocalFallbackWithoutRemoteCall(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	video := models.Video{Name: "no-config.mp4", Path: "/tmp/no-config.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&video).Error; err != nil {
@@ -680,17 +693,138 @@ func TestAITaggingMissingConfigDoesNotCallAI(t *testing.T) {
 	client := &fakeAITaggingClient{}
 	svc := newTestAITaggingService(client, fakeAITaggingConfigProvider{err: fmt.Errorf("missing config")})
 	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
-		t.Fatalf("缺配置应记录跳过状态而非失败: %v", err)
+		t.Fatalf("缺配置应运行本地回退而非失败: %v", err)
 	}
 	if client.calls != 0 {
-		t.Fatalf("缺配置不应调用 AI，实际 %d", client.calls)
+		t.Fatalf("缺配置不应调用远程 AI，实际 %d", client.calls)
 	}
 	var state models.AITaggingState
 	if err := database.DB.Where("video_id = ?", video.ID).First(&state).Error; err != nil {
 		t.Fatalf("读取状态失败: %v", err)
 	}
-	if state.Status != models.AITaggingStateStatusSkipped || state.SkipReason != "config_unavailable" {
+	if state.Status != models.AITaggingStateStatusSkipped || state.SkipReason != "no_high_or_medium_confidence" {
 		t.Fatalf("状态错误: %#v", state)
+	}
+}
+
+func TestAITaggingLocalFallbackCreatesCandidatesWhenRemoteConfigMissing(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tag := models.Tag{Name: "4K", Color: "#fff"}
+	video := models.Video{
+		Name:       "family-4k-stage.mp4",
+		Path:       "/tmp/family-4k-stage.mp4",
+		Directory:  "/tmp",
+		Width:      3840,
+		Height:     2160,
+		Resolution: "3840x2160",
+	}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	client := &fakeAITaggingClient{}
+	svc := newTestAITaggingService(client, fakeAITaggingConfigProvider{err: fmt.Errorf("missing config")})
+
+	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
+		t.Fatalf("本地回退分析不应因远程配置缺失失败: %v", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("远程配置缺失时不应调用远程 AI，实际 %d", client.calls)
+	}
+	var candidates []models.AITagCandidate
+	if err := database.DB.Order("suggested_name").Find(&candidates).Error; err != nil {
+		t.Fatalf("读取候选失败: %v", err)
+	}
+	if len(candidates) == 0 {
+		t.Fatalf("本地回退分析应产生候选")
+	}
+	if candidates[0].Status != models.AITagCandidateStatusPending {
+		t.Fatalf("本地候选仍应进入待审状态，实际 %s", candidates[0].Status)
+	}
+	var state models.AITaggingState
+	if err := database.DB.Where("video_id = ?", video.ID).First(&state).Error; err != nil {
+		t.Fatalf("读取状态失败: %v", err)
+	}
+	if state.Status != models.AITaggingStateStatusCompleted {
+		t.Fatalf("产生本地候选后应标记完成，实际 %+v", state)
+	}
+}
+
+func TestAITaggingFallsBackToLocalCandidatesWhenRemoteAnalyzeFails(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tag := models.Tag{Name: "竖屏", Color: "#fff"}
+	video := models.Video{
+		Name:      "portrait-family.mp4",
+		Path:      "/tmp/portrait-family.mp4",
+		Directory: "/tmp",
+		Width:     720,
+		Height:    1280,
+	}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	client := &fakeAITaggingClient{err: fmt.Errorf("remote unavailable")}
+	svc := newTestAITaggingService(client, nil)
+
+	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
+		t.Fatalf("远程失败时应回退本地分析: %v", err)
+	}
+	if client.calls != 1 {
+		t.Fatalf("有远程配置时应先调用远程 AI，实际 %d", client.calls)
+	}
+	var candidate models.AITagCandidate
+	if err := database.DB.Where("normalized_name = ?", normalizeAITagName("竖屏")).First(&candidate).Error; err != nil {
+		t.Fatalf("应产生竖屏本地候选: %v", err)
+	}
+	if candidate.MatchedTagID == nil || *candidate.MatchedTagID != tag.ID {
+		t.Fatalf("本地候选应优先匹配已有标签，实际 %+v", candidate)
+	}
+	if !strings.Contains(candidate.Reasoning, "本地") {
+		t.Fatalf("本地回退候选应说明来源，实际 %q", candidate.Reasoning)
+	}
+}
+
+func TestLocalAITaggingUsesPersistedFaceEvidence(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tag := models.Tag{Name: "人物", Color: "#fff"}
+	video := models.Video{Name: "people.mp4", Path: "/tmp/people.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&models.VideoFace{
+		VideoID:    video.ID,
+		FrameIndex: 1,
+		X:          10,
+		Y:          10,
+		Width:      48,
+		Height:     48,
+		Score:      75,
+		Signature:  "face-sig",
+		Status:     models.VideoFaceStatusDetected,
+		Source:     "test",
+	}).Error; err != nil {
+		t.Fatalf("创建人脸证据失败: %v", err)
+	}
+	client := &fakeAITaggingClient{}
+	svc := newTestAITaggingService(client, fakeAITaggingConfigProvider{err: fmt.Errorf("missing config")})
+
+	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
+		t.Fatalf("本地人脸证据分析失败: %v", err)
+	}
+	var candidate models.AITagCandidate
+	if err := database.DB.Where("normalized_name = ?", normalizeAITagName("人物")).First(&candidate).Error; err != nil {
+		t.Fatalf("应基于人脸证据产生人物候选: %v", err)
+	}
+	if candidate.MatchedTagID == nil || *candidate.MatchedTagID != tag.ID {
+		t.Fatalf("人物候选应匹配已有标签，实际 %+v", candidate)
 	}
 }
 
