@@ -9,12 +9,13 @@
         <select v-model="searchMode" @change="handleSearch(true)" class="select-input">
           <option value="file">文件搜索</option>
           <option value="subtitle">字幕搜索</option>
+          <option value="smart">智能搜索</option>
         </select>
         <input 
           v-model="searchKeyword" 
           @input="handleSearch()"
           type="text" 
-          :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索视频文件名或路径...'" 
+          :placeholder="searchPlaceholder" 
           class="search-input"
         />
         </div>
@@ -100,12 +101,14 @@
           :video="video"
           :directories="directories"
           :generating-subtitle-ids="generatingSubtitleIds"
+          :analyzing-face-ids="analyzingFaceIds"
           :deleting-ids="deletingIds"
           :selected="isVideoSelected(video.id)"
           @preview="openPreview"
           @play="playVideo"
           @open-directory="openDirectory"
           @generate-subtitle="generateSubtitle"
+          @analyze-faces="analyzeFaces"
           @subtitle-preview="openSubtitlePreview"
           @rename="renameVideo"
           @delete="confirmDelete"
@@ -134,12 +137,14 @@
             :video="video"
             :directories="directories"
             :generating-subtitle-ids="generatingSubtitleIds"
+            :analyzing-face-ids="analyzingFaceIds"
             :deleting-ids="deletingIds"
             :selected="isVideoSelected(video.id)"
             @preview="openPreview"
             @play="playVideo"
             @open-directory="openDirectory"
             @generate-subtitle="generateSubtitle"
+            @analyze-faces="analyzeFaces"
             @subtitle-preview="openSubtitlePreview"
             @rename="renameVideo"
             @delete="confirmDelete"
@@ -855,7 +860,7 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchVideosSmart, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, AnalyzeVideoFaces } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -940,6 +945,7 @@ export default {
       homeListVirtualizationEnabled: true,
       // Subtitle states
       generatingSubtitleIds: [],
+      analyzingFaceIds: [],
       subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0, progressAction: '', phase: '', requiresPrepare: false },
       subtitleEngineStatuses: [],
       selectedSubtitleEngine: 'whisperx',
@@ -1063,6 +1069,11 @@ export default {
     allVisibleSelected() {
       const ids = this.videos.map(video => video.id);
       return ids.length > 0 && ids.every(id => this.selectedVideoIds.includes(id));
+    },
+    searchPlaceholder() {
+      if (this.searchMode === 'subtitle') return '搜索字幕内容...';
+      if (this.searchMode === 'smart') return '例如：有人脸、竖屏人物、4K、带舞台标签、字幕里提到...';
+      return '搜索视频文件名或路径...';
     },
     selectedBatchVideos() {
       if (!this.addTagDialog.show || this.addTagDialog.mode !== 'batch') return [];
@@ -1497,6 +1508,23 @@ export default {
         this.subtitlePreview.loading = false;
       }
     },
+    async analyzeFaces(video) {
+      if (!video?.id || this.analyzingFaceIds.includes(video.id)) return;
+      this.analyzingFaceIds = [...this.analyzingFaceIds, video.id];
+      try {
+        const result = await AnalyzeVideoFaces(video.id);
+        if (result?.status === 'skipped') {
+          alert('人脸分析已跳过：当前检测器不可用。');
+        } else {
+          alert(`人脸分析完成：检测到 ${result?.face_count || 0} 张人脸，聚类 ${result?.cluster_count || 0} 组。`);
+        }
+      } catch (err) {
+        console.error('人脸分析失败:', err);
+        alert('人脸分析失败: ' + err);
+      } finally {
+        this.analyzingFaceIds = this.analyzingFaceIds.filter(id => id !== video.id);
+      }
+    },
     segmentMatchesKeyword(segment) {
       const keyword = this.searchKeyword.trim().toLowerCase();
       if (!keyword || this.searchMode !== 'subtitle') {
@@ -1775,7 +1803,21 @@ export default {
           return;
         }
 
-        if (keyword || this.hasStructuredFilters()) {
+        if (this.searchMode === 'smart' && (keyword || this.hasStructuredFilters())) {
+          const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
+          newVideos = await SearchVideosSmart(
+            keyword,
+            this.selectedTags,
+            minSize,
+            maxSize,
+            minHeight,
+            maxHeight,
+            this.cursorScore,
+            this.cursorSize,
+            this.cursorID,
+            this.pageSize
+          );
+        } else if (keyword || this.hasStructuredFilters()) {
           const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
           newVideos = await SearchVideosWithFilters(
             keyword,
@@ -1837,6 +1879,9 @@ export default {
     },
     isSubtitleSearchActive(keyword = this.searchKeyword.trim()) {
       return this.searchMode === 'subtitle' && !!keyword;
+    },
+    isSmartSearchActive(keyword = this.searchKeyword.trim()) {
+      return this.searchMode === 'smart' && (!!keyword || this.hasStructuredFilters());
     },
     currentFilterBounds() {
       let minSize = 0, maxSize = 0;

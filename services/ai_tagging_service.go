@@ -20,6 +20,8 @@ const aiTaggingWorkerInterval = 5 * time.Minute
 type AITaggingService struct {
 	configProvider AITaggingConfigProvider
 	clientFactory  func(AITaggingConfig) AITaggingAIClient
+	localClient    AITaggingAIClient
+	faceService    *VideoFaceService
 	extractor      *AITaggingExtractor
 	now            func() time.Time
 	workerMu       sync.Mutex
@@ -30,9 +32,17 @@ func NewAITaggingService() *AITaggingService {
 	return &AITaggingService{
 		configProvider: SettingsAITaggingConfigProvider{},
 		clientFactory:  NewOpenAICompatibleAITaggingClient,
+		localClient:    NewLocalHeuristicAITaggingClient(),
 		extractor:      NewAITaggingExtractor(),
 		now:            time.Now,
 	}
+}
+
+func (s *AITaggingService) SetVideoFaceService(faceService *VideoFaceService) {
+	if s == nil {
+		return
+	}
+	s.faceService = faceService
 }
 
 func (s *AITaggingService) Start(ctx context.Context) {
@@ -115,7 +125,7 @@ func (s *AITaggingService) ProcessVideo(ctx context.Context, videoID uint) error
 	}
 	config, err := s.configProvider.Load()
 	if err != nil {
-		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "config_unavailable", "", err.Error())
+		return s.processVideoLocally(ctx, video, err)
 	}
 	return s.processVideoWithConfig(ctx, video, config)
 }
@@ -135,6 +145,9 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	if len(video.Tags) > 0 {
 		log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
 		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
+	}
+	if err := s.ensureFaceEvidence(ctx, video); err != nil {
+		return err
 	}
 	existingTags, err := s.loadActiveTags()
 	if err != nil {
@@ -164,7 +177,10 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	})
 	if err != nil {
 		log.Printf("[AITagging] analyze failed video_id=%d err=%v", video.ID, err)
-		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
+		suggestions, err = s.localSuggestions(ctx, video, existingTags, evidence)
+		if err != nil {
+			return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
+		}
 	}
 	log.Printf("[AITagging] analyze succeeded video_id=%d suggestions=%d", video.ID, len(suggestions))
 	created, err := s.persistSuggestions(video, existingTags, evidence, suggestions)
@@ -178,6 +194,76 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	}
 	log.Printf("[AITagging] completed video_id=%d created=%d", video.ID, created)
 	return s.markState(video.ID, models.AITaggingStateStatusCompleted, "", fingerprint, "")
+}
+
+func (s *AITaggingService) processVideoLocally(ctx context.Context, video models.Video, configErr error) error {
+	log.Printf("[AITagging] remote config unavailable; running local fallback video_id=%d err=%v", video.ID, configErr)
+	if len(video.Tags) > 0 {
+		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
+	}
+	if err := s.ensureFaceEvidence(ctx, video); err != nil {
+		return err
+	}
+	existingTags, err := s.loadActiveTags()
+	if err != nil {
+		return err
+	}
+	evidence := s.extractor.Collect(ctx, video, AITaggingConfig{FrameCount: 0, SubtitleCharLimit: defaultAITaggingSubtitleCharLimit})
+	fingerprint := buildEvidenceFingerprint(video, existingTags, evidence)
+	if skip, err := s.shouldSkipForCurrentFingerprint(video.ID, fingerprint); err != nil {
+		return err
+	} else if skip {
+		return nil
+	}
+	if err := s.setProcessing(video.ID, fingerprint); err != nil {
+		return err
+	}
+	suggestions, err := s.localSuggestions(ctx, video, existingTags, evidence)
+	if err != nil {
+		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
+	}
+	created, err := s.persistSuggestions(video, existingTags, evidence, suggestions)
+	if err != nil {
+		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
+	}
+	if created == 0 {
+		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "no_high_or_medium_confidence", fingerprint, configErr.Error())
+	}
+	return s.markState(video.ID, models.AITaggingStateStatusCompleted, "", fingerprint, configErr.Error())
+}
+
+func (s *AITaggingService) localSuggestions(ctx context.Context, video models.Video, existingTags []models.Tag, evidence AITaggingEvidence) ([]AITagSuggestion, error) {
+	localClient := s.localClient
+	if localClient == nil {
+		localClient = NewLocalHeuristicAITaggingClient()
+	}
+	return localClient.AnalyzeTags(ctx, AITaggingRequest{
+		Video:        video,
+		ExistingTags: existingTags,
+		Evidence:     evidence,
+	})
+}
+
+func (s *AITaggingService) ensureFaceEvidence(ctx context.Context, video models.Video) error {
+	if s == nil || s.faceService == nil || video.ID == 0 {
+		return nil
+	}
+	var count int64
+	if err := database.DB.Model(&models.VideoFace{}).
+		Where("video_id = ? AND status = ?", video.ID, models.VideoFaceStatusDetected).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+	result, err := s.faceService.AnalyzeVideo(ctx, video)
+	if err != nil {
+		log.Printf("[AITagging] face analysis failed video_id=%d err=%v", video.ID, err)
+		return nil
+	}
+	log.Printf("[AITagging] face analysis prepared video_id=%d status=%s faces=%d clusters=%d reason=%q", video.ID, result.Status, result.FaceCount, result.ClusterCount, result.Reason)
+	return nil
 }
 
 func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error) {

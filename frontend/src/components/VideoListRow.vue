@@ -53,6 +53,14 @@
       >
         {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
       </button>
+      <button
+        @click="$emit('analyze-faces', video)"
+        class="btn-action btn-compact"
+        :class="{ 'btn-processing': analyzingFaceIds.includes(video.id) }"
+        :disabled="analyzingFaceIds.includes(video.id)"
+      >
+        {{ analyzingFaceIds.includes(video.id) ? '分析中...' : '人脸' }}
+      </button>
       <button @click="$emit('subtitle-preview', video)" class="btn-action btn-compact">预览字幕</button>
       <button @click="$emit('rename', video)" class="btn-action btn-compact">重命名</button>
       <button @click="$emit('delete', video)" class="btn-danger btn-compact" :disabled="deletingIds.includes(video.id)">删除</button>
@@ -68,10 +76,11 @@ export default {
     video: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
     generatingSubtitleIds: { type: Array, default: () => [] },
+    analyzingFaceIds: { type: Array, default: () => [] },
     deletingIds: { type: Array, default: () => [] },
     selected: { type: Boolean, default: false }
   },
-  emits: ['preview', 'play', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
+  emits: ['preview', 'play', 'open-directory', 'generate-subtitle', 'analyze-faces', 'subtitle-preview', 'rename', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
   methods: {
     tagBgColor(hex) {
       if (!hex || !hex.startsWith('#')) return hex;

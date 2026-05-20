@@ -6,6 +6,8 @@ func AllModels() []interface{} {
 		&SubtitleSegment{},
 		&SubtitleIndexState{},
 		&Tag{},
+		&FaceCluster{},
+		&VideoFace{},
 		&AITagCandidate{},
 		&AITagApprovalRecord{},
 		&AITaggingState{},

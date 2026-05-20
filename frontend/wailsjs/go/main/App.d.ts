@@ -10,6 +10,8 @@ export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddVideo(arg1:string):Promise<models.Video>;
 
+export function AnalyzeVideoFaces(arg1:number):Promise<services.VideoFaceAnalysisResult>;
+
 export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
 
 export function BatchAddTagToVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
@@ -105,6 +107,8 @@ export function SearchVideos(arg1:string,arg2:number,arg3:number,arg4:number,arg
 export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 
 export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
+
+export function SearchVideosSmart(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
 
 export function SelectDirectory():Promise<string>;
 

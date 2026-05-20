@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -358,6 +359,144 @@ func TestSearchVideosWithFiltersCombinesKeywordAndTags(t *testing.T) {
 	if videos[0].Name != "cat_run.mp4" {
 		t.Fatalf("返回了错误的视频: %s", videos[0].Name)
 	}
+}
+
+func TestSearchVideosWithFiltersKeepsLiteralFileSearchSemantics(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	named4K := models.Video{Name: "4k-old-clip.mp4", Path: "/media/4k-old-clip.mp4", Directory: "/media", Size: 100, Width: 640, Height: 360}
+	actual4K := models.Video{Name: "plain.mp4", Path: "/media/plain.mp4", Directory: "/media", Size: 200, Width: 3840, Height: 2160}
+	if err := database.DB.Create(&named4K).Error; err != nil {
+		t.Fatalf("创建文件名包含4k的视频失败: %v", err)
+	}
+	if err := database.DB.Create(&actual4K).Error; err != nil {
+		t.Fatalf("创建真实4k视频失败: %v", err)
+	}
+
+	videos, err := svc.SearchVideosWithFilters("4k", nil, 0, 0, 0, 0, 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("文件搜索失败: %v", err)
+	}
+	if len(videos) != 1 || videos[0].ID != named4K.ID {
+		t.Fatalf("普通文件搜索应按文件名/路径字面匹配 got=%v want=%d", videoIDs(videos), named4K.ID)
+	}
+}
+
+func TestSearchVideosSmartUnderstandsNaturalLanguageHints(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	personTag := models.Tag{Name: "人物", Color: "#fff"}
+	stageTag := models.Tag{Name: "舞台", Color: "#000"}
+	if err := database.DB.Create(&personTag).Error; err != nil {
+		t.Fatalf("创建人物标签失败: %v", err)
+	}
+	if err := database.DB.Create(&stageTag).Error; err != nil {
+		t.Fatalf("创建舞台标签失败: %v", err)
+	}
+
+	personVideo := models.Video{
+		Name:      "family-portrait.mp4",
+		Path:      "/media/family-portrait.mp4",
+		Directory: "/media",
+		Size:      100,
+		Width:     720,
+		Height:    1280,
+	}
+	stageVideo := models.Video{
+		Name:      "concert-stage.mp4",
+		Path:      "/media/concert-stage.mp4",
+		Directory: "/media",
+		Size:      200,
+		Width:     1920,
+		Height:    1080,
+	}
+	silentVideo := models.Video{
+		Name:      "plain.mp4",
+		Path:      "/media/plain.mp4",
+		Directory: "/media",
+		Size:      300,
+		Width:     3840,
+		Height:    2160,
+	}
+	for _, video := range []*models.Video{&personVideo, &stageVideo, &silentVideo} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatalf("创建视频失败: %v", err)
+		}
+	}
+	if err := database.DB.Model(&personVideo).Association("Tags").Append(&personTag); err != nil {
+		t.Fatalf("绑定人物标签失败: %v", err)
+	}
+	if err := database.DB.Model(&stageVideo).Association("Tags").Append(&stageTag); err != nil {
+		t.Fatalf("绑定舞台标签失败: %v", err)
+	}
+	if err := database.DB.Create(&models.VideoFace{
+		VideoID:   personVideo.ID,
+		Signature: "face-person",
+		Status:    models.VideoFaceStatusDetected,
+		Source:    "test",
+	}).Error; err != nil {
+		t.Fatalf("创建人脸记录失败: %v", err)
+	}
+	if err := database.DB.Create(&models.VideoFace{
+		VideoID:   stageVideo.ID,
+		Signature: "face-stage",
+		Status:    models.VideoFaceStatusDetected,
+		Source:    "test",
+	}).Error; err != nil {
+		t.Fatalf("创建人脸记录失败: %v", err)
+	}
+	if err := database.DB.Create(&models.SubtitleSegment{
+		VideoID:      stageVideo.ID,
+		SegmentIndex: 1,
+		StartTimeMs:  1000,
+		EndTimeMs:    3000,
+		Text:         "the crowd says secret phrase",
+		SubtitlePath: "/media/concert-stage.srt",
+	}).Error; err != nil {
+		t.Fatalf("创建字幕索引失败: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		keyword string
+		wantIDs []uint
+	}{
+		{name: "detect face query", keyword: "找有人脸的视频", wantIDs: []uint{personVideo.ID, stageVideo.ID}},
+		{name: "detect tag query", keyword: "查找带舞台标签的视频", wantIDs: []uint{stageVideo.ID}},
+		{name: "detect resolution query", keyword: "找4k视频", wantIDs: []uint{silentVideo.ID}},
+		{name: "detect vertical query", keyword: "竖屏人物视频", wantIDs: []uint{personVideo.ID}},
+		{name: "detect subtitle query", keyword: "字幕里提到 secret phrase", wantIDs: []uint{stageVideo.ID}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			videos, err := svc.SearchVideosSmart(tc.keyword, nil, 0, 0, 0, 0, 0, 0, 0, 10)
+			if err != nil {
+				t.Fatalf("自然语言搜索失败: %v", err)
+			}
+			gotIDs := videoIDs(videos)
+			sort.Slice(gotIDs, func(i, j int) bool { return gotIDs[i] < gotIDs[j] })
+			sort.Slice(tc.wantIDs, func(i, j int) bool { return tc.wantIDs[i] < tc.wantIDs[j] })
+			if len(gotIDs) != len(tc.wantIDs) {
+				t.Fatalf("结果数量错误 got=%v want=%v", gotIDs, tc.wantIDs)
+			}
+			for i := range gotIDs {
+				if gotIDs[i] != tc.wantIDs[i] {
+					t.Fatalf("结果错误 got=%v want=%v", gotIDs, tc.wantIDs)
+				}
+			}
+		})
+	}
+}
+
+func videoIDs(videos []models.Video) []uint {
+	ids := make([]uint, 0, len(videos))
+	for _, video := range videos {
+		ids = append(ids, video.ID)
+	}
+	return ids
 }
 
 func TestBatchAddTagToVideosReportsPartialFailures(t *testing.T) {

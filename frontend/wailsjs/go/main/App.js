@@ -14,6 +14,10 @@ export function AddVideo(arg1) {
   return window['go']['main']['App']['AddVideo'](arg1);
 }
 
+export function AnalyzeVideoFaces(arg1) {
+  return window['go']['main']['App']['AnalyzeVideoFaces'](arg1);
+}
+
 export function ApproveAITagCandidate(arg1) {
   return window['go']['main']['App']['ApproveAITagCandidate'](arg1);
 }
@@ -204,6 +208,10 @@ export function SearchVideosByTags(arg1, arg2, arg3, arg4, arg5) {
 
 export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
   return window['go']['main']['App']['SearchVideosWithFilters'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+}
+
+export function SearchVideosSmart(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
+  return window['go']['main']['App']['SearchVideosSmart'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
 }
 
 export function SelectDirectory() {
