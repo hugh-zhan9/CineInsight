@@ -103,7 +103,7 @@
           <strong>{{ localMLStatusText }}</strong>
           <span>{{ localMLStatusDetail }}</span>
         </div>
-        <button type="button" class="btn-secondary" @click="loadLocalMLStatus">刷新</button>
+        <button type="button" class="btn-secondary" @click="refreshLocalMLStatus">刷新</button>
       </div>
       <div v-if="settingsForm.ai_backend_mode === 'local'" class="setting-item">
         <label>本地模型</label>
@@ -330,7 +330,7 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetLocalMLRuntimeStatus, IndexAIEmbeddings } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetLocalMLRuntimeStatus, RefreshLocalMLRuntimeStatus, IndexAIEmbeddings } from '../../wailsjs/go/main/App';
 
 export default {
   name: 'SettingsPage',
@@ -436,6 +436,17 @@ export default {
     async loadLocalMLStatus() {
       try {
         this.localMLStatus = await GetLocalMLRuntimeStatus();
+      } catch (err) {
+        this.localMLStatus = {
+          running: false,
+          state: 'failed',
+          startup_error: String(err)
+        };
+      }
+    },
+    async refreshLocalMLStatus() {
+      try {
+        this.localMLStatus = await RefreshLocalMLRuntimeStatus();
       } catch (err) {
         this.localMLStatus = {
           running: false,

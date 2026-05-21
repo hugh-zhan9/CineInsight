@@ -42,12 +42,6 @@ export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<
 
 export function GetAITaggingStatusSummary():Promise<services.AITaggingStatusSummary>;
 
-export function GetLocalMLRuntimeStatus():Promise<services.LocalMLRuntimeStatus>;
-
-export function IndexAIEmbeddings(arg1:number):Promise<services.LocalMLEmbeddingIndexResult>;
-
-export function IndexLocalMLEmbeddings(arg1:number):Promise<services.LocalMLEmbeddingIndexResult>;
-
 export function GetAllDirectories():Promise<Array<models.ScanDirectory>>;
 
 export function GetAllTags():Promise<Array<models.Tag>>;
@@ -57,6 +51,10 @@ export function GetAllVideos():Promise<Array<models.Video>>;
 export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promise<services.CleanupAnalysis>;
 
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
+
+export function GetLocalMLRuntimeStatus():Promise<services.LocalMLRuntimeStatus>;
+
+export function RefreshLocalMLRuntimeStatus():Promise<services.LocalMLRuntimeStatus>;
 
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
 
@@ -73,6 +71,10 @@ export function GetSubtitleSegments(arg1:number):Promise<Array<subtitleparser.Se
 export function GetVideosByDirectory(arg1:string):Promise<Array<models.Video>>;
 
 export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:number):Promise<Array<models.Video>>;
+
+export function IndexAIEmbeddings(arg1:number):Promise<services.LocalMLEmbeddingIndexResult>;
+
+export function IndexLocalMLEmbeddings(arg1:number):Promise<services.LocalMLEmbeddingIndexResult>;
 
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
 

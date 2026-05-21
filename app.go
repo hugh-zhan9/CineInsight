@@ -502,6 +502,23 @@ func (a *App) GetLocalMLRuntimeStatus() services.LocalMLRuntimeStatus {
 	return status
 }
 
+func (a *App) RefreshLocalMLRuntimeStatus() services.LocalMLRuntimeStatus {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := a.aiTaggingService.ConfigureBackend(ctx); err != nil {
+		status := a.aiTaggingService.LocalMLRuntimeStatus()
+		status.State = "failed"
+		status.StartupError = err.Error()
+		log.Printf("API RefreshLocalMLRuntimeStatus configure failed err=%v", err)
+		return status
+	}
+	status := a.aiTaggingService.LocalMLRuntimeStatus()
+	log.Printf("API RefreshLocalMLRuntimeStatus running=%v state=%s model=%q device=%q err=%q", status.Running, status.State, status.Model, status.Device, status.StartupError)
+	return status
+}
+
 func (a *App) IndexLocalMLEmbeddings(limit int) (*services.LocalMLEmbeddingIndexResult, error) {
 	return a.IndexAIEmbeddings(limit)
 }

@@ -43,6 +43,7 @@ assert.match(settingsSource, /<option value="api">API<\/option>/, 'AI backend mo
 assert.match(settingsSource, /<option value="local">本地 ML<\/option>/, 'AI backend mode should include local ML mode');
 assert.match(settingsSource, /<option value="off">关闭<\/option>/, 'AI backend mode should include off mode');
 assert.match(settingsSource, /GetLocalMLRuntimeStatus/, 'settings page should load local ML runtime status');
+assert.match(settingsSource, /RefreshLocalMLRuntimeStatus/, 'settings page refresh should retry local ML runtime configuration');
 assert.match(settingsSource, /IndexAIEmbeddings/, 'settings page should expose AI embedding indexing for API and local modes');
 assert.match(settingsSource, /ai_embedding_model/, 'settings page should expose API embedding model configuration');
 assert.match(settingsSource, /v-model="settingsForm\.local_ml_device"/, 'settings page should expose local ML device selection');

@@ -215,6 +215,9 @@ func TestSubtitleAPIContractsCompile(t *testing.T) {
 	var generate func(services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) = app.GenerateSubtitle
 	_ = generate
 
+	var refreshLocalML func() services.LocalMLRuntimeStatus = app.RefreshLocalMLRuntimeStatus
+	_ = refreshLocalML
+
 	var forceGenerate func(services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) = app.ForceGenerateSubtitle
 	_ = forceGenerate
 

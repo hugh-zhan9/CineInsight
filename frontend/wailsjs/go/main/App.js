@@ -78,18 +78,6 @@ export function GetAITaggingStatusSummary() {
   return window['go']['main']['App']['GetAITaggingStatusSummary']();
 }
 
-export function GetLocalMLRuntimeStatus() {
-  return window['go']['main']['App']['GetLocalMLRuntimeStatus']();
-}
-
-export function IndexAIEmbeddings(arg1) {
-  return window['go']['main']['App']['IndexAIEmbeddings'](arg1);
-}
-
-export function IndexLocalMLEmbeddings(arg1) {
-  return window['go']['main']['App']['IndexLocalMLEmbeddings'](arg1);
-}
-
 export function GetAllDirectories() {
   return window['go']['main']['App']['GetAllDirectories']();
 }
@@ -108,6 +96,14 @@ export function GetCleanupCandidates(arg1, arg2, arg3) {
 
 export function GetCleanupStatus() {
   return window['go']['main']['App']['GetCleanupStatus']();
+}
+
+export function GetLocalMLRuntimeStatus() {
+  return window['go']['main']['App']['GetLocalMLRuntimeStatus']();
+}
+
+export function RefreshLocalMLRuntimeStatus() {
+  return window['go']['main']['App']['RefreshLocalMLRuntimeStatus']();
 }
 
 export function GetPreviewSession(arg1) {
@@ -140,6 +136,14 @@ export function GetVideosByDirectory(arg1) {
 
 export function GetVideosPaginated(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['GetVideosPaginated'](arg1, arg2, arg3, arg4);
+}
+
+export function IndexAIEmbeddings(arg1) {
+  return window['go']['main']['App']['IndexAIEmbeddings'](arg1);
+}
+
+export function IndexLocalMLEmbeddings(arg1) {
+  return window['go']['main']['App']['IndexLocalMLEmbeddings'](arg1);
 }
 
 export function ListAITagCandidates(arg1, arg2, arg3) {
