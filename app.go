@@ -53,7 +53,8 @@ func NewApp() *App {
 	// 获取用户目录作为数据根目录
 	homeDir, _ := os.UserHomeDir()
 	dataDir := filepath.Join(homeDir, ".video-master")
-	videoService := &services.VideoService{}
+	localMLRuntime := services.NewInProcessLocalMLRuntime()
+	videoService := services.NewVideoService(localMLRuntime)
 	faceDetector, _ := services.NewPigoVideoFaceDetector()
 	app := &App{
 		videoService:          videoService,
@@ -63,7 +64,7 @@ func NewApp() *App {
 		subtitleService:       services.NewSubtitleService(dataDir),
 		cleanupService:        &services.CleanupService{},
 		subtitleSearchService: &services.SubtitleSearchService{},
-		aiTaggingService:      services.NewAITaggingService(),
+		aiTaggingService:      services.NewAITaggingServiceWithLocalMLRuntime(localMLRuntime),
 		videoFaceService:      services.NewVideoFaceService(services.VideoFaceServiceOptions{Detector: faceDetector}),
 		shortFeedService:      services.NewShortFeedService(videoService),
 	}
@@ -81,6 +82,9 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.subtitleService.SetContext(ctx) // Inject context
 	a.cleanupService.SetContext(ctx)
+	if err := a.aiTaggingService.ConfigureBackend(ctx); err != nil {
+		log.Printf("App startup AI backend configure skipped err=%v", err)
+	}
 	a.aiTaggingService.Start(ctx)
 	a.startShortFeedServer(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
@@ -492,6 +496,30 @@ func (a *App) GetAITaggingStatusSummary() (*services.AITaggingStatusSummary, err
 	return summary, err
 }
 
+func (a *App) GetLocalMLRuntimeStatus() services.LocalMLRuntimeStatus {
+	status := a.aiTaggingService.LocalMLRuntimeStatus()
+	log.Printf("API GetLocalMLRuntimeStatus running=%v state=%s model=%q device=%q err=%q", status.Running, status.State, status.Model, status.Device, status.StartupError)
+	return status
+}
+
+func (a *App) IndexLocalMLEmbeddings(limit int) (*services.LocalMLEmbeddingIndexResult, error) {
+	return a.IndexAIEmbeddings(limit)
+}
+
+func (a *App) IndexAIEmbeddings(limit int) (*services.LocalMLEmbeddingIndexResult, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := a.videoService.IndexAIEmbeddings(ctx, limit)
+	if result != nil {
+		log.Printf("API IndexAIEmbeddings limit=%d requested=%d indexed=%d failed=%d err=%v", limit, result.Requested, result.Indexed, result.Failed, err)
+	} else {
+		log.Printf("API IndexAIEmbeddings limit=%d err=%v", limit, err)
+	}
+	return result, err
+}
+
 func (a *App) AnalyzeVideoFaces(videoID uint) (*services.VideoFaceAnalysisResult, error) {
 	video, err := a.videoService.GetVideo(videoID)
 	if err != nil {
@@ -524,6 +552,13 @@ func (a *App) UpdateSettings(input models.Settings) error {
 	err := a.settingsService.UpdateSettings(input)
 	if err == nil {
 		a.setLogEnabled(input.LogEnabled)
+		ctx := a.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if backendErr := a.aiTaggingService.ConfigureBackend(ctx); backendErr != nil {
+			log.Printf("API UpdateSettings AI backend configure skipped err=%v", backendErr)
+		}
 	}
 	return err
 }
@@ -751,7 +786,7 @@ func summarizeSettings(settings *models.Settings) string {
 	if settings == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("{id:%d theme:%q log_enabled:%v auto_scan:%v play_weight:%.2f short_feed_max_minutes:%d bilingual:%v lang:%q}",
+	return fmt.Sprintf("{id:%d theme:%q log_enabled:%v auto_scan:%v play_weight:%.2f short_feed_max_minutes:%d bilingual:%v lang:%q ai_backend:%q local_model:%q local_device:%q}",
 		settings.ID,
 		settings.Theme,
 		settings.LogEnabled,
@@ -760,5 +795,8 @@ func summarizeSettings(settings *models.Settings) string {
 		settings.ShortFeedMaxDurationMinutes,
 		settings.BilingualEnabled,
 		settings.BilingualLang,
+		settings.AIBackendMode,
+		settings.LocalMLModel,
+		settings.LocalMLDevice,
 	)
 }

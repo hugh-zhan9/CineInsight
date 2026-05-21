@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,7 +21,13 @@ import (
 	"gorm.io/gorm"
 )
 
-type VideoService struct{}
+type VideoService struct {
+	embeddingService *VideoEmbeddingService
+}
+
+func NewVideoService(localMLRuntime LocalMLRuntime) *VideoService {
+	return &VideoService{embeddingService: NewVideoEmbeddingService(localMLRuntime)}
+}
 
 const recentActiveFileThreshold = 5 * time.Minute
 
@@ -152,7 +159,32 @@ func (s *VideoService) SearchVideos(keyword string, cursorScore float64, cursorS
 
 func (s *VideoService) SearchVideosSmart(query string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	intent := parseVideoSearchIntent(query)
+	intent = mergeVideoSearchBounds(intent, minSize, maxSize, minHeight, maxHeight)
+	if strings.TrimSpace(query) != "" {
+		videos, used, err := s.videoEmbeddingService().Search(context.Background(), query, intent, tagIDs, cursorScore, cursorID, limit)
+		if err != nil {
+			return nil, err
+		}
+		if used {
+			return videos, nil
+		}
+	}
 	return s.searchVideosByIntent(intent, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
+}
+
+func (s *VideoService) IndexAIEmbeddings(ctx context.Context, limit int) (*LocalMLEmbeddingIndexResult, error) {
+	return s.videoEmbeddingService().IndexPending(ctx, limit)
+}
+
+func (s *VideoService) IndexLocalMLEmbeddings(ctx context.Context, limit int) (*LocalMLEmbeddingIndexResult, error) {
+	return s.IndexAIEmbeddings(ctx, limit)
+}
+
+func (s *VideoService) videoEmbeddingService() *VideoEmbeddingService {
+	if s.embeddingService == nil {
+		s.embeddingService = NewVideoEmbeddingService(nil)
+	}
+	return s.embeddingService
 }
 
 // SearchVideosByTags 按标签搜索（多选 AND）- 支持分页（按概率优先排序）
@@ -227,18 +259,7 @@ func (s *VideoService) searchVideosByIntent(intent videoSearchIntent, tagIDs []u
 	if err != nil {
 		return nil, err
 	}
-	if minSize > 0 {
-		intent.MinSize = minSize
-	}
-	if maxSize > 0 {
-		intent.MaxSize = maxSize
-	}
-	if minHeight > 0 {
-		intent.MinHeight = minHeight
-	}
-	if maxHeight > 0 {
-		intent.MaxHeight = maxHeight
-	}
+	intent = mergeVideoSearchBounds(intent, minSize, maxSize, minHeight, maxHeight)
 
 	scoreSql := scoreExprForTable("videos.", playWeight)
 	query := database.DB.Model(&models.Video{}).Preload("Tags").
@@ -302,6 +323,22 @@ func (s *VideoService) searchVideosByIntent(intent videoSearchIntent, tagIDs []u
 
 	err = query.Limit(limit).Find(&videos).Error
 	return videos, err
+}
+
+func mergeVideoSearchBounds(intent videoSearchIntent, minSize, maxSize int64, minHeight, maxHeight int) videoSearchIntent {
+	if minSize > 0 {
+		intent.MinSize = minSize
+	}
+	if maxSize > 0 {
+		intent.MaxSize = maxSize
+	}
+	if minHeight > 0 {
+		intent.MinHeight = minHeight
+	}
+	if maxHeight > 0 {
+		intent.MaxHeight = maxHeight
+	}
+	return intent
 }
 
 func parseVideoSearchIntent(input string) videoSearchIntent {

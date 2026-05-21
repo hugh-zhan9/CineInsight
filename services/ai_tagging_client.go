@@ -11,6 +11,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"video-master/models"
 )
 
 type AITaggingAIClient interface {
@@ -104,6 +106,7 @@ func (c *OpenAICompatibleAITaggingClient) buildRequest(req AITaggingRequest) map
 	for _, tag := range req.ExistingTags {
 		existingTagNames = append(existingTagNames, tag.Name)
 	}
+	candidateTagLibrary := buildAITaggingCandidateTagLibrary(req.ExistingTags)
 	evidence := req.Evidence
 	frameContents := make([]map[string]interface{}, 0, len(evidence.Frames)+1)
 	text := fmt.Sprintf(`请为本地视频生成标签候选。当前请求包含 %d 张视频抽帧；如果抽帧可用，必须优先根据画面内容判断，文件名和路径只能作为辅助证据。必须优先从现有标签库中选择，只有画面证据非常明确且现有标签库没有合适标签时，才提出新标签。
@@ -125,8 +128,10 @@ func (c *OpenAICompatibleAITaggingClient) buildRequest(req AITaggingRequest) map
 视频文件名：%s
 视频路径：%s
 现有标签库：%s
+候选标签词表：
+%s
 字幕摘要：%s
-采样警告：%s`, len(evidence.Frames), req.Video.Name, req.Video.Path, strings.Join(existingTagNames, ", "), truncateLogSnippet(evidence.SubtitleText, c.config.SubtitleCharLimit), strings.Join(evidence.Warnings, "; "))
+采样警告：%s`, len(evidence.Frames), req.Video.Name, req.Video.Path, strings.Join(existingTagNames, ", "), candidateTagLibrary, truncateLogSnippet(evidence.SubtitleText, c.config.SubtitleCharLimit), strings.Join(evidence.Warnings, "; "))
 	frameContents = append(frameContents, map[string]interface{}{"type": "text", "text": text})
 	for _, frame := range evidence.Frames {
 		frameContents = append(frameContents, map[string]interface{}{
@@ -148,6 +153,19 @@ func (c *OpenAICompatibleAITaggingClient) buildRequest(req AITaggingRequest) map
 		},
 		"temperature": 0.1,
 	}
+}
+
+func buildAITaggingCandidateTagLibrary(tags []models.Tag) string {
+	candidates, prompts := buildLocalMLTagPromptCandidates(tags)
+	if len(candidates) == 0 || len(prompts) == 0 {
+		return "（空）"
+	}
+	lines := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		hints := prompts[candidate.start:candidate.end]
+		lines = append(lines, fmt.Sprintf("- %s：%s", candidate.tag.Name, strings.Join(hints, "；")))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func openAIChatCompletionsURL(baseURL string) string {

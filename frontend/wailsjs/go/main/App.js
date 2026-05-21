@@ -78,6 +78,18 @@ export function GetAITaggingStatusSummary() {
   return window['go']['main']['App']['GetAITaggingStatusSummary']();
 }
 
+export function GetLocalMLRuntimeStatus() {
+  return window['go']['main']['App']['GetLocalMLRuntimeStatus']();
+}
+
+export function IndexAIEmbeddings(arg1) {
+  return window['go']['main']['App']['IndexAIEmbeddings'](arg1);
+}
+
+export function IndexLocalMLEmbeddings(arg1) {
+  return window['go']['main']['App']['IndexLocalMLEmbeddings'](arg1);
+}
+
 export function GetAllDirectories() {
   return window['go']['main']['App']['GetAllDirectories']();
 }
@@ -206,12 +218,12 @@ export function SearchVideosByTags(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SearchVideosByTags'](arg1, arg2, arg3, arg4, arg5);
 }
 
-export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
-  return window['go']['main']['App']['SearchVideosWithFilters'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
-}
-
 export function SearchVideosSmart(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
   return window['go']['main']['App']['SearchVideosSmart'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+}
+
+export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
+  return window['go']['main']['App']['SearchVideosWithFilters'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
 }
 
 export function SelectDirectory() {

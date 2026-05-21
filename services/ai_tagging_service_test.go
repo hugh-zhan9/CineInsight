@@ -33,9 +33,104 @@ func (c *fakeAITaggingClient) AnalyzeTags(ctx context.Context, req AITaggingRequ
 	return c.suggestions, c.err
 }
 
+type fakeLocalMLRuntime struct {
+	starts       int
+	stops        int
+	analyzeCalls int
+	embedCalls   int
+	running      bool
+	model        string
+	device       string
+	suggestions  []AITagSuggestion
+	embedding    []float32
+	embeddings   [][]float32
+	err          error
+}
+
+func (r *fakeLocalMLRuntime) EnsureStarted(ctx context.Context, config LocalMLRuntimeConfig) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.starts++
+	r.running = true
+	r.model = config.Model
+	r.device = config.Device
+	return r.err
+}
+
+func (r *fakeLocalMLRuntime) Stop(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	r.stops++
+	r.running = false
+	return nil
+}
+
+func (r *fakeLocalMLRuntime) Status() LocalMLRuntimeStatus {
+	return LocalMLRuntimeStatus{
+		Running: r.running,
+		Model:   r.model,
+		Device:  r.device,
+	}
+}
+
+func (r *fakeLocalMLRuntime) AnalyzeTags(ctx context.Context, req AITaggingRequest) ([]AITagSuggestion, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.analyzeCalls++
+	return r.suggestions, r.err
+}
+
+func (r *fakeLocalMLRuntime) EmbedVideo(ctx context.Context, req LocalMLVideoEmbeddingRequest) (*LocalMLEmbeddingResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.embedCalls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &LocalMLEmbeddingResult{Embedding: r.embedding, Model: r.model, Source: "fake-local-ml"}, nil
+}
+
+func (r *fakeLocalMLRuntime) EmbedTexts(ctx context.Context, texts []string) (*LocalMLEmbeddingResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.embedCalls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	embeddings := r.embeddings
+	if len(embeddings) == 0 {
+		embeddings = make([][]float32, 0, len(texts))
+		for range texts {
+			embeddings = append(embeddings, r.embedding)
+		}
+	}
+	dimension := 0
+	if len(embeddings) > 0 {
+		dimension = len(embeddings[0])
+	}
+	return &LocalMLEmbeddingResult{Embeddings: embeddings, Dimension: dimension, Model: r.model, Source: "fake-local-ml"}, nil
+}
+
+func (r *fakeLocalMLRuntime) EmbedText(ctx context.Context, text string) (*LocalMLEmbeddingResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	r.embedCalls++
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &LocalMLEmbeddingResult{Embedding: r.embedding, Model: r.model, Source: "fake-local-ml"}, nil
+}
+
 func newTestAITaggingService(client *fakeAITaggingClient, provider AITaggingConfigProvider) *AITaggingService {
 	if provider == nil {
 		provider = fakeAITaggingConfigProvider{config: AITaggingConfig{
+			Mode:              AIBackendModeAPI,
 			BaseURL:           "http://127.0.0.1:9999/v1",
 			APIKey:            "test-key",
 			Model:             "test-model",
@@ -49,9 +144,10 @@ func newTestAITaggingService(client *fakeAITaggingClient, provider AITaggingConf
 		clientFactory: func(AITaggingConfig) AITaggingAIClient {
 			return client
 		},
-		localClient: NewLocalHeuristicAITaggingClient(),
-		extractor:   NewAITaggingExtractor(),
-		now:         time.Now,
+		localMLRuntime: NewInProcessLocalMLRuntime(),
+		localClient:    NewLocalHeuristicAITaggingClient(),
+		extractor:      NewAITaggingExtractor(),
+		now:            time.Now,
 	}
 }
 
@@ -97,14 +193,18 @@ func TestAITaggingSchemaCreatesTablesAndIndexes(t *testing.T) {
 
 func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
 	setupVideoServiceTestDB(t)
+	t.Setenv(envAIBackendMode, string(AIBackendModeLocal))
 	t.Setenv(envAITaggingBaseURL, "http://env.example/v1")
 	t.Setenv(envAITaggingAPIKey, "env-key")
 	t.Setenv(envAITaggingModel, "env-model")
 
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_backend_mode":                string(AIBackendModeAPI),
+		"local_ml_device":                "cuda",
 		"ai_tagging_base_url":            "http://db.example/v1",
 		"ai_tagging_api_key":             "db-key",
 		"ai_tagging_model":               "db-model",
+		"ai_embedding_model":             "db-embedding-model",
 		"ai_tagging_frame_count":         3,
 		"ai_tagging_subtitle_char_limit": 1200,
 		"ai_tagging_startup_batch_size":  5,
@@ -116,11 +216,200 @@ func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取 AI 配置失败: %v", err)
 	}
-	if config.BaseURL != "http://db.example/v1" || config.APIKey != "db-key" || config.Model != "db-model" {
+	if config.Mode != AIBackendModeAPI {
+		t.Fatalf("期望优先读取数据库 AI 后端模式，实际: %+v", config)
+	}
+	if config.LocalMLDevice != "cuda" {
+		t.Fatalf("期望读取数据库本地 ML 设备，实际: %+v", config)
+	}
+	if config.BaseURL != "http://db.example/v1" || config.APIKey != "db-key" || config.Model != "db-model" || config.EmbeddingModel != "db-embedding-model" {
 		t.Fatalf("期望优先读取数据库配置，实际: %+v", config)
 	}
 	if config.FrameCount != 3 || config.SubtitleCharLimit != 1200 || config.StartupBatchSize != 5 {
 		t.Fatalf("期望读取数据库数值配置，实际: %+v", config)
+	}
+}
+
+func TestAITaggingConfigureBackendStartsLocalMLOnlyForLocalMode(t *testing.T) {
+	runtime := &fakeLocalMLRuntime{}
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, fakeAITaggingConfigProvider{config: AITaggingConfig{
+		Mode:          AIBackendModeLocal,
+		LocalMLModel:  "clip-vit-b32",
+		LocalMLDevice: "mps",
+	}})
+	svc.localMLRuntime = runtime
+
+	if err := svc.ConfigureBackend(context.Background()); err != nil {
+		t.Fatalf("本地 ML 模式应能启动 runtime: %v", err)
+	}
+	if runtime.starts != 1 || !runtime.running || runtime.model != "clip-vit-b32" || runtime.device != "mps" {
+		t.Fatalf("本地 ML runtime 启动状态不正确: %+v", runtime)
+	}
+
+	svc.configProvider = fakeAITaggingConfigProvider{config: AITaggingConfig{
+		Mode:    AIBackendModeAPI,
+		BaseURL: "http://api.example/v1",
+		Model:   "vision-model",
+	}}
+	if err := svc.ConfigureBackend(context.Background()); err != nil {
+		t.Fatalf("API 模式配置不应失败: %v", err)
+	}
+	if runtime.stops != 1 || runtime.running {
+		t.Fatalf("切到 API 模式应停止本地 ML runtime: %+v", runtime)
+	}
+}
+
+func TestAITaggingLocalModeUsesLocalRuntimeWithoutRemoteClient(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tag := models.Tag{Name: "人物", Color: "#fff"}
+	video := models.Video{Name: "people.mp4", Path: "/tmp/people.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	client := &fakeAITaggingClient{}
+	runtime := &fakeLocalMLRuntime{suggestions: []AITagSuggestion{{
+		Label:               "人物",
+		Confidence:          models.AITagConfidenceHigh,
+		MatchType:           "existing_exact",
+		MatchedExistingName: "人物",
+		Reasoning:           "本地 ML：人脸 embedding 匹配人物标签",
+	}}}
+	svc := newTestAITaggingService(client, fakeAITaggingConfigProvider{config: AITaggingConfig{
+		Mode:         AIBackendModeLocal,
+		LocalMLModel: "clip-vit-b32",
+	}})
+	svc.localMLRuntime = runtime
+
+	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
+		t.Fatalf("本地 ML 模式处理失败: %v", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("本地 ML 模式不应调用远程 client，实际 %d", client.calls)
+	}
+	if runtime.starts != 1 || runtime.analyzeCalls != 1 {
+		t.Fatalf("本地 ML runtime 调用不正确: %+v", runtime)
+	}
+	var candidate models.AITagCandidate
+	if err := database.DB.Where("normalized_name = ?", normalizeAITagName("人物")).First(&candidate).Error; err != nil {
+		t.Fatalf("应保存本地 ML 候选: %v", err)
+	}
+	if candidate.MatchedTagID == nil || *candidate.MatchedTagID != tag.ID {
+		t.Fatalf("本地 ML 候选应匹配已有标签，实际 %+v", candidate)
+	}
+}
+
+func TestLocalMLRuntimeEmbeddingContractUsesRealModelOutput(t *testing.T) {
+	runtime := &fakeLocalMLRuntime{
+		running:   true,
+		model:     "clip-vit-b32",
+		embedding: []float32{0.1, 0.2, 0.3},
+	}
+
+	result, err := runtime.EmbedText(context.Background(), "舞台上的人物")
+	if err != nil {
+		t.Fatalf("本地 ML 文本 embedding 不应失败: %v", err)
+	}
+	if result.Source != "fake-local-ml" || result.Model != "clip-vit-b32" {
+		t.Fatalf("embedding 元数据不正确: %+v", result)
+	}
+	if len(result.Embedding) != 3 {
+		t.Fatalf("本地 ML embedding 应返回向量，实际维度 %d", len(result.Embedding))
+	}
+}
+
+func TestLocalMLDefaultModelPrioritizesMultilingualChineseQueries(t *testing.T) {
+	want := "xlm-roberta-base-ViT-B-32::laion5b_s13b_b90k"
+	if defaultLocalMLModel != want {
+		t.Fatalf("本地 ML 默认模型应优先支持中文 got=%q want=%q", defaultLocalMLModel, want)
+	}
+	if got := localMLModelOrDefault(""); got != want {
+		t.Fatalf("空本地模型应使用多语言默认模型 got=%q want=%q", got, want)
+	}
+	for _, legacy := range []string{legacyBuiltinLocalModel, legacyOpenAILocalModel} {
+		if got := localMLModelOrDefault(legacy); got != want {
+			t.Fatalf("旧默认模型 %q 应升级到多语言默认模型 got=%q want=%q", legacy, got, want)
+		}
+	}
+	model, pretrained := parseLocalMLModelSpec("")
+	if model != "xlm-roberta-base-ViT-B-32" || pretrained != "laion5b_s13b_b90k" {
+		t.Fatalf("默认模型解析不正确 model=%q pretrained=%q", model, pretrained)
+	}
+}
+
+func TestLocalMLDeviceDefaultsToAutoAndNormalizesSupportedDevices(t *testing.T) {
+	cases := map[string]string{
+		"":       "auto",
+		"auto":   "auto",
+		"CPU":    "cpu",
+		" cuda ": "cuda",
+		"mps":    "mps",
+		"bad":    "auto",
+	}
+	for input, want := range cases {
+		if got := normalizeLocalMLDevice(input); got != want {
+			t.Fatalf("normalizeLocalMLDevice(%q)=%q want=%q", input, got, want)
+		}
+	}
+}
+
+func TestLocalMLWorkerScriptSupportsPersistentServeMode(t *testing.T) {
+	if !strings.Contains(localMLWorkerScript, `"serve"`) {
+		t.Fatalf("本地 ML worker 应支持常驻 serve 模式")
+	}
+	if !strings.Contains(localMLWorkerScript, "for line in sys.stdin") {
+		t.Fatalf("本地 ML worker 常驻模式应通过 stdin 持续接收请求")
+	}
+}
+
+func TestLocalMLCandidateVocabularyUsesDatabaseTagPrompts(t *testing.T) {
+	candidates, prompts := buildLocalMLTagPromptCandidates([]models.Tag{
+		{ID: 1, Name: "舞台"},
+		{ID: 2, Name: "人物"},
+	})
+	if len(candidates) != 2 {
+		t.Fatalf("应为数据库已有标签建立候选词表，实际 %d", len(candidates))
+	}
+	if len(prompts) <= len(candidates) {
+		t.Fatalf("每个标签应扩展成多条中文语义提示，prompts=%v", prompts)
+	}
+	joined := strings.Join(prompts, "\n")
+	for _, want := range []string{"舞台", "视频标签：舞台", "这段视频的主题是舞台"} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("候选词表缺少 %q，prompts=%v", want, prompts)
+		}
+	}
+}
+
+func TestLocalMLCandidateVocabularyBoostsEvidenceMentions(t *testing.T) {
+	req := AITaggingRequest{
+		Video: models.Video{ID: 1, Name: "演唱会片段.mp4", Path: "/media/concert.mp4"},
+		Evidence: AITaggingEvidence{
+			SubtitleText: "灯光亮起，舞台上的演员开始表演。",
+		},
+	}
+	candidates, prompts := buildLocalMLTagPromptCandidates([]models.Tag{
+		{ID: 1, Name: "舞台"},
+		{ID: 2, Name: "厨房"},
+	})
+	tagEmbeddings := make([][]float32, len(prompts))
+	for i := range tagEmbeddings {
+		tagEmbeddings[i] = []float32{0, 0}
+	}
+	suggestions, err := buildLocalMLTagSuggestions(req, candidates, []float32{1, 0}, tagEmbeddings)
+	if err != nil {
+		t.Fatalf("构建本地标签建议失败: %v", err)
+	}
+	if len(suggestions) == 0 {
+		t.Fatalf("字幕明确命中数据库标签时应产生建议")
+	}
+	if suggestions[0].Label != "舞台" || suggestions[0].MatchedExistingName != "舞台" {
+		t.Fatalf("应优先推荐字幕命中的已有标签，实际 %+v", suggestions[0])
+	}
+	if suggestions[0].Confidence != models.AITagConfidenceHigh {
+		t.Fatalf("明确 evidence 命中应有 high 置信度，实际 %+v", suggestions[0])
 	}
 }
 
@@ -235,6 +524,11 @@ func TestOpenAICompatibleClientPromptPrioritizesFramesAndExistingTags(t *testing
 	text := userContent[0]["text"].(string)
 	if !strings.Contains(text, "必须优先根据画面内容判断") || !strings.Contains(text, "label 必须使用已有标签的原始名称") {
 		t.Fatalf("prompt 未强调画面优先和已有标签优先: %s", text)
+	}
+	for _, want := range []string{"候选标签词表", "视频标签：舞蹈", "这段视频的主题是4K"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("API prompt 应和本地模式共用候选标签词表，缺少 %q: %s", want, text)
+		}
 	}
 	if len(userContent) != 3 {
 		t.Fatalf("期望文本、帧说明、图片三段内容，实际 %d", len(userContent))

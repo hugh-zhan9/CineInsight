@@ -91,7 +91,41 @@
     <div class="settings-section">
       <h3>AI 标签</h3>
       <div class="setting-item">
-        <label>接口地址</label>
+        <label>AI 引擎模式</label>
+        <select v-model="settingsForm.ai_backend_mode" class="select-input">
+          <option value="api">API</option>
+          <option value="local">本地 ML</option>
+          <option value="off">关闭</option>
+        </select>
+      </div>
+      <div v-if="settingsForm.ai_backend_mode === 'local'" class="local-ml-status">
+        <div class="local-ml-status-main">
+          <strong>{{ localMLStatusText }}</strong>
+          <span>{{ localMLStatusDetail }}</span>
+        </div>
+        <button type="button" class="btn-secondary" @click="loadLocalMLStatus">刷新</button>
+      </div>
+      <div v-if="settingsForm.ai_backend_mode === 'local'" class="setting-item">
+        <label>本地模型</label>
+        <input
+          type="text"
+          v-model.trim="settingsForm.local_ml_model"
+          placeholder="xlm-roberta-base-ViT-B-32::laion5b_s13b_b90k"
+          class="text-input"
+        />
+      </div>
+      <div v-if="settingsForm.ai_backend_mode === 'local'" class="setting-item">
+        <label>推理设备</label>
+        <select v-model="settingsForm.local_ml_device" class="select-input">
+          <option value="auto">自动</option>
+          <option value="mps">MPS</option>
+          <option value="cuda">CUDA</option>
+          <option value="cpu">CPU</option>
+        </select>
+      </div>
+      <template v-if="settingsForm.ai_backend_mode === 'api'">
+      <div class="setting-item">
+        <label>API 接口地址</label>
         <input
           type="text"
           v-model.trim="settingsForm.ai_tagging_base_url"
@@ -117,6 +151,25 @@
           placeholder="支持图像理解的模型"
           class="text-input"
         />
+      </div>
+      <div class="setting-item">
+        <label>Embedding 模型</label>
+        <input
+          type="text"
+          v-model.trim="settingsForm.ai_embedding_model"
+          placeholder="text-embedding-3-small 或本地兼容 embedding 模型"
+          class="text-input"
+        />
+      </div>
+      </template>
+      <div v-if="settingsForm.ai_backend_mode !== 'off'" class="ai-index-status">
+        <div class="ai-index-status-main">
+          <strong>语义搜索索引</strong>
+          <span>{{ aiIndexDetail }}</span>
+        </div>
+        <button type="button" class="btn-primary" :disabled="localMLIndexing" @click="indexAIEmbeddings">
+          {{ localMLIndexing ? '索引中' : '建立索引' }}
+        </button>
       </div>
       <div class="setting-grid">
         <div class="setting-item">
@@ -153,7 +206,6 @@
           />
         </div>
       </div>
-      <p class="help-text">保存后后台会自动使用新配置；本地 LM Studio 通常可用 http://127.0.0.1:1234/v1，API Key 可填任意非空值。</p>
     </div>
 
     <!-- 智能随机播放设置 -->
@@ -278,7 +330,7 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetLocalMLRuntimeStatus, IndexAIEmbeddings } from '../../wailsjs/go/main/App';
 
 export default {
   name: 'SettingsPage',
@@ -292,6 +344,9 @@ export default {
       settingsForm: { ...this.settings },
       localDirectories: [...this.directories],
       shortFeedStatus: null,
+      localMLStatus: null,
+      localMLIndexing: false,
+      localMLIndexResult: null,
       showAddDirectoryDialog: false,
       editingDirectory: null,
       directoryForm: { path: '', alias: '' }
@@ -308,6 +363,9 @@ export default {
         this.settingsForm.ai_tagging_subtitle_char_limit = this.settingsForm.ai_tagging_subtitle_char_limit || 4000;
         this.settingsForm.ai_tagging_startup_batch_size = this.settingsForm.ai_tagging_startup_batch_size || 10;
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
+        this.settingsForm.ai_backend_mode = this.settingsForm.ai_backend_mode || 'api';
+        this.settingsForm.local_ml_model = this.localMLModelValue(this.settingsForm.local_ml_model);
+        this.settingsForm.local_ml_device = this.localMLDeviceValue(this.settingsForm.local_ml_device);
       },
       immediate: true,
       deep: true
@@ -327,10 +385,37 @@ export default {
         return this.shortFeedStatus.fallback_used ? '运行中（备用端口）' : '运行中';
       }
       return '未运行';
+    },
+    localMLStatusText() {
+      if (!this.localMLStatus) return '未加载';
+      return this.localMLStatus.running ? '运行中' : '未运行';
+    },
+    localMLStatusDetail() {
+      if (!this.localMLStatus) return '本地 ML runtime 状态未知';
+      if (this.localMLStatus.startup_error) return this.localMLStatus.startup_error;
+      const model = this.localMLStatus.model || this.localMLModelValue(this.settingsForm.local_ml_model);
+      const device = this.localMLStatus.device || this.localMLDeviceValue(this.settingsForm.local_ml_device);
+      const engine = this.localMLStatus.engine || 'in-process';
+      return `${engine} · ${device} · ${model}`;
+    },
+    localMLIndexSummary() {
+      if (!this.localMLIndexResult) return '';
+      const requested = this.localMLIndexResult.requested || 0;
+      const indexed = this.localMLIndexResult.indexed || 0;
+      const failed = this.localMLIndexResult.failed || 0;
+      return failed > 0 ? `已索引 ${indexed}/${requested}，失败 ${failed}` : `已索引 ${indexed}/${requested}`;
+    },
+    aiIndexDetail() {
+      if (this.localMLIndexSummary) return this.localMLIndexSummary;
+      if (this.settingsForm.ai_backend_mode === 'api') {
+        return this.settingsForm.ai_embedding_model ? this.settingsForm.ai_embedding_model : '需要配置 Embedding 模型';
+      }
+      return `${this.localMLDeviceValue(this.settingsForm.local_ml_device)} · ${this.localMLModelValue(this.settingsForm.local_ml_model)}`;
     }
   },
   mounted() {
     this.loadShortFeedStatus();
+    this.loadLocalMLStatus();
   },
   methods: {
     async loadShortFeedStatus() {
@@ -348,27 +433,72 @@ export default {
         window.open(this.shortFeedStatus.url, '_blank', 'noopener,noreferrer');
       }
     },
+    async loadLocalMLStatus() {
+      try {
+        this.localMLStatus = await GetLocalMLRuntimeStatus();
+      } catch (err) {
+        this.localMLStatus = {
+          running: false,
+          state: 'failed',
+          startup_error: String(err)
+        };
+      }
+    },
+    async indexAIEmbeddings() {
+      if (this.localMLIndexing) return;
+      this.localMLIndexing = true;
+      try {
+        await UpdateSettings(this.settingsPayload());
+        this.localMLIndexResult = await IndexAIEmbeddings(25);
+        await this.loadLocalMLStatus();
+        this.$emit('settings-saved', { ...this.settingsForm });
+      } catch (err) {
+        console.error('本地 ML 索引失败:', err);
+        alert('本地 ML 索引失败: ' + err);
+      } finally {
+        this.localMLIndexing = false;
+      }
+    },
+    settingsPayload() {
+      return {
+        confirm_before_delete: this.settingsForm.confirm_before_delete,
+        delete_original_file: this.settingsForm.delete_original_file,
+        video_extensions: this.settingsForm.video_extensions,
+        play_weight: this.settingsForm.play_weight,
+        auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
+        short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
+        theme: this.settingsForm.theme,
+        log_enabled: this.settingsForm.log_enabled,
+        bilingual_enabled: this.settingsForm.bilingual_enabled || false,
+        bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
+        deepl_api_key: this.settingsForm.deepl_api_key || '',
+        ai_backend_mode: this.settingsForm.ai_backend_mode || 'api',
+        local_ml_model: this.localMLModelValue(this.settingsForm.local_ml_model),
+        local_ml_device: this.localMLDeviceValue(this.settingsForm.local_ml_device),
+        ai_tagging_base_url: this.settingsForm.ai_tagging_base_url || '',
+        ai_tagging_api_key: this.settingsForm.ai_tagging_api_key || '',
+        ai_tagging_model: this.settingsForm.ai_tagging_model || '',
+        ai_embedding_model: this.settingsForm.ai_embedding_model || '',
+        ai_tagging_frame_count: this.settingsForm.ai_tagging_frame_count || 5,
+        ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
+        ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10
+      };
+    },
+    localMLModelValue(value) {
+      const model = (value || '').trim();
+      if (!model || model === 'builtin-local-ml' || model === 'ViT-B-32::openai') {
+        return 'xlm-roberta-base-ViT-B-32::laion5b_s13b_b90k';
+      }
+      return model;
+    },
+    localMLDeviceValue(value) {
+      const device = (value || '').trim().toLowerCase();
+      return ['auto', 'cpu', 'cuda', 'mps'].includes(device) ? device : 'auto';
+    },
     async saveSettings() {
       try {
-        await UpdateSettings({
-          confirm_before_delete: this.settingsForm.confirm_before_delete,
-          delete_original_file: this.settingsForm.delete_original_file,
-          video_extensions: this.settingsForm.video_extensions,
-          play_weight: this.settingsForm.play_weight,
-          auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
-          short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
-          theme: this.settingsForm.theme,
-          log_enabled: this.settingsForm.log_enabled,
-          bilingual_enabled: this.settingsForm.bilingual_enabled || false,
-          bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
-          deepl_api_key: this.settingsForm.deepl_api_key || '',
-          ai_tagging_base_url: this.settingsForm.ai_tagging_base_url || '',
-          ai_tagging_api_key: this.settingsForm.ai_tagging_api_key || '',
-          ai_tagging_model: this.settingsForm.ai_tagging_model || '',
-          ai_tagging_frame_count: this.settingsForm.ai_tagging_frame_count || 5,
-          ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
-          ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10
-        });
+        await UpdateSettings(this.settingsPayload());
+        await this.loadLocalMLStatus();
         this.$emit('settings-saved', { ...this.settingsForm });
         alert('设置保存成功！');
       } catch (err) {
@@ -547,6 +677,19 @@ export default {
   background: var(--bg-color);
 }
 
+.local-ml-status,
+.ai-index-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-color);
+}
+
 .short-feed-status-main {
   display: grid;
   gap: 6px;
@@ -554,12 +697,21 @@ export default {
 }
 
 .short-feed-status-main span,
+.local-ml-status-main span,
+.ai-index-status-main span,
 .short-feed-url {
   overflow: hidden;
   color: var(--text-secondary);
   font-size: 13px;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.local-ml-status-main,
+.ai-index-status-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
 }
 
 .short-feed-actions {

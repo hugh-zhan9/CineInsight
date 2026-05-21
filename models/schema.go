@@ -8,6 +8,7 @@ func AllModels() []interface{} {
 		&Tag{},
 		&FaceCluster{},
 		&VideoFace{},
+		&VideoEmbedding{},
 		&AITagCandidate{},
 		&AITagApprovalRecord{},
 		&AITaggingState{},

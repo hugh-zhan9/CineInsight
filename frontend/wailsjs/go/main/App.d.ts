@@ -42,6 +42,12 @@ export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<
 
 export function GetAITaggingStatusSummary():Promise<services.AITaggingStatusSummary>;
 
+export function GetLocalMLRuntimeStatus():Promise<services.LocalMLRuntimeStatus>;
+
+export function IndexAIEmbeddings(arg1:number):Promise<services.LocalMLEmbeddingIndexResult>;
+
+export function IndexLocalMLEmbeddings(arg1:number):Promise<services.LocalMLEmbeddingIndexResult>;
+
 export function GetAllDirectories():Promise<Array<models.ScanDirectory>>;
 
 export function GetAllTags():Promise<Array<models.Tag>>;
@@ -106,9 +112,9 @@ export function SearchVideos(arg1:string,arg2:number,arg3:number,arg4:number,arg
 
 export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 
-export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
-
 export function SearchVideosSmart(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
+
+export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
 
 export function SelectDirectory():Promise<string>;
 

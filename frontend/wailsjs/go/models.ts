@@ -33,9 +33,13 @@ export namespace models {
 	    bilingual_enabled: boolean;
 	    bilingual_lang: string;
 	    deepl_api_key: string;
+	    ai_backend_mode: string;
+	    local_ml_model: string;
+	    local_ml_device: string;
 	    ai_tagging_base_url: string;
 	    ai_tagging_api_key: string;
 	    ai_tagging_model: string;
+	    ai_embedding_model: string;
 	    ai_tagging_frame_count: number;
 	    ai_tagging_subtitle_char_limit: number;
 	    ai_tagging_startup_batch_size: number;
@@ -59,9 +63,13 @@ export namespace models {
 	        this.bilingual_enabled = source["bilingual_enabled"];
 	        this.bilingual_lang = source["bilingual_lang"];
 	        this.deepl_api_key = source["deepl_api_key"];
+	        this.ai_backend_mode = source["ai_backend_mode"];
+	        this.local_ml_model = source["local_ml_model"];
+	        this.local_ml_device = source["local_ml_device"];
 	        this.ai_tagging_base_url = source["ai_tagging_base_url"];
 	        this.ai_tagging_api_key = source["ai_tagging_api_key"];
 	        this.ai_tagging_model = source["ai_tagging_model"];
+	        this.ai_embedding_model = source["ai_embedding_model"];
 	        this.ai_tagging_frame_count = source["ai_tagging_frame_count"];
 	        this.ai_tagging_subtitle_char_limit = source["ai_tagging_subtitle_char_limit"];
 	        this.ai_tagging_startup_batch_size = source["ai_tagging_startup_batch_size"];
@@ -102,6 +110,7 @@ export namespace models {
 	    play_count: number;
 	    random_play_count: number;
 	    last_played_at?: string;
+	    search_score: number;
 	    tags: Tag[];
 	    created_at: string;
 	    updated_at: string;
@@ -125,6 +134,7 @@ export namespace models {
 	        this.play_count = source["play_count"];
 	        this.random_play_count = source["random_play_count"];
 	        this.last_played_at = source["last_played_at"];
+	        this.search_score = source["search_score"];
 	        this.tags = this.convertValues(source["tags"], Tag);
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -229,23 +239,85 @@ export namespace services {
 	        this.failed = source["failed"];
 	    }
 	}
-	export class VideoFaceAnalysisResult {
-	    status: string;
-	    reason?: string;
-	    face_count: number;
-	    cluster_count: number;
+	export class LocalMLRuntimeStatus {
+	    running: boolean;
+	    state: string;
+	    model: string;
+	    device: string;
+	    engine: string;
+	    managed: boolean;
+	    startup_error?: string;
+	    started_at?: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new VideoFaceAnalysisResult(source);
+	        return new LocalMLRuntimeStatus(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.status = source["status"];
-	        this.reason = source["reason"];
-	        this.face_count = source["face_count"];
-	        this.cluster_count = source["cluster_count"];
+	        this.running = source["running"];
+	        this.state = source["state"];
+	        this.model = source["model"];
+	        this.device = source["device"];
+	        this.engine = source["engine"];
+	        this.managed = source["managed"];
+	        this.startup_error = source["startup_error"];
+	        this.started_at = source["started_at"];
 	    }
+	}
+	export class LocalMLEmbeddingIndexError {
+	    video_id: number;
+	    path?: string;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new LocalMLEmbeddingIndexError(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.path = source["path"];
+	        this.error = source["error"];
+	    }
+	}
+	export class LocalMLEmbeddingIndexResult {
+	    requested: number;
+	    indexed: number;
+	    skipped: number;
+	    failed: number;
+	    errors: LocalMLEmbeddingIndexError[];
+
+	    static createFrom(source: any = {}) {
+	        return new LocalMLEmbeddingIndexResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.requested = source["requested"];
+	        this.indexed = source["indexed"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.errors = this.convertValues(source["errors"], LocalMLEmbeddingIndexError);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class BatchVideoOperationError {
 	    video_id: number;
@@ -789,6 +861,24 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class VideoFaceAnalysisResult {
+	    status: string;
+	    reason?: string;
+	    face_count: number;
+	    cluster_count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoFaceAnalysisResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.reason = source["reason"];
+	        this.face_count = source["face_count"];
+	        this.cluster_count = source["cluster_count"];
+	    }
 	}
 
 }

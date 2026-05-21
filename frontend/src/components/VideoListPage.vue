@@ -1744,6 +1744,11 @@ export default {
       const weight = this.settings.play_weight || 2.0;
       return video.play_count * weight + video.random_play_count;
     },
+    cursorScoreForVideo(video) {
+      const semanticScore = Number(video?.search_score || 0);
+      if (Number.isFinite(semanticScore) && semanticScore > 0) return semanticScore;
+      return this.calculateScore(video);
+    },
     currentQueryKeyword() {
       return this.searchKeyword.trim();
     },
@@ -1847,7 +1852,7 @@ export default {
         if (newVideos.length > 0) {
           this.videos.push(...newVideos);
           const last = newVideos[newVideos.length - 1];
-          this.cursorScore = this.calculateScore(last);
+          this.cursorScore = this.cursorScoreForVideo(last);
           this.cursorSize = last.size;
           this.cursorID = last.id;
         }

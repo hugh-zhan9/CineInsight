@@ -10,9 +10,13 @@ import (
 )
 
 const (
+	envAIBackendMode    = "AI_BACKEND_MODE"
+	envLocalMLModel     = "LOCAL_ML_MODEL"
+	envLocalMLDevice    = "LOCAL_ML_DEVICE"
 	envAITaggingBaseURL = "AI_TAGGING_BASE_URL"
 	envAITaggingAPIKey  = "AI_TAGGING_API_KEY"
 	envAITaggingModel   = "AI_TAGGING_MODEL"
+	envAIEmbeddingModel = "AI_EMBEDDING_MODEL"
 
 	envAITaggingFrameCount        = "AI_TAGGING_FRAME_COUNT"
 	envAITaggingSubtitleCharLimit = "AI_TAGGING_SUBTITLE_CHAR_LIMIT"
@@ -24,9 +28,13 @@ const (
 )
 
 type AITaggingConfig struct {
+	Mode              AIBackendMode
+	LocalMLModel      string
+	LocalMLDevice     string
 	BaseURL           string
 	APIKey            string
 	Model             string
+	EmbeddingModel    string
 	FrameCount        int
 	SubtitleCharLimit int
 	StartupBatchSize  int
@@ -40,15 +48,19 @@ type EnvAITaggingConfigProvider struct{}
 
 func (EnvAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 	config := AITaggingConfig{
+		Mode:              normalizeAIBackendMode(os.Getenv(envAIBackendMode)),
+		LocalMLModel:      localMLModelOrDefault(os.Getenv(envLocalMLModel)),
+		LocalMLDevice:     normalizeLocalMLDevice(os.Getenv(envLocalMLDevice)),
 		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
 		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
 		Model:             strings.TrimSpace(os.Getenv(envAITaggingModel)),
+		EmbeddingModel:    strings.TrimSpace(os.Getenv(envAIEmbeddingModel)),
 		FrameCount:        envInt(envAITaggingFrameCount, defaultAITaggingFrameCount),
 		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
 		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
 	}
-	if config.BaseURL == "" || config.Model == "" {
-		return config, fmt.Errorf("AI tagging config unavailable")
+	if err := validateAITaggingConfig(config); err != nil {
+		return config, err
 	}
 	return config, nil
 }
@@ -57,9 +69,13 @@ type SettingsAITaggingConfigProvider struct{}
 
 func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 	envConfig := AITaggingConfig{
+		Mode:              normalizeAIBackendMode(os.Getenv(envAIBackendMode)),
+		LocalMLModel:      localMLModelOrDefault(os.Getenv(envLocalMLModel)),
+		LocalMLDevice:     normalizeLocalMLDevice(os.Getenv(envLocalMLDevice)),
 		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
 		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
 		Model:             strings.TrimSpace(os.Getenv(envAITaggingModel)),
+		EmbeddingModel:    strings.TrimSpace(os.Getenv(envAIEmbeddingModel)),
 		FrameCount:        envInt(envAITaggingFrameCount, defaultAITaggingFrameCount),
 		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
 		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
@@ -69,6 +85,15 @@ func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 	if database.DB != nil {
 		var settings models.Settings
 		if err := database.DB.First(&settings).Error; err == nil {
+			if value := strings.TrimSpace(settings.AIBackendMode); value != "" {
+				config.Mode = normalizeAIBackendMode(value)
+			}
+			if value := strings.TrimSpace(settings.LocalMLModel); value != "" {
+				config.LocalMLModel = value
+			}
+			if value := strings.TrimSpace(settings.LocalMLDevice); value != "" {
+				config.LocalMLDevice = normalizeLocalMLDevice(value)
+			}
 			if value := strings.TrimSpace(settings.AITaggingBaseURL); value != "" {
 				config.BaseURL = value
 			}
@@ -77,6 +102,9 @@ func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 			}
 			if value := strings.TrimSpace(settings.AITaggingModel); value != "" {
 				config.Model = value
+			}
+			if value := strings.TrimSpace(settings.AIEmbeddingModel); value != "" {
+				config.EmbeddingModel = value
 			}
 			if settings.AITaggingFrameCount > 0 {
 				config.FrameCount = settings.AITaggingFrameCount
@@ -90,10 +118,25 @@ func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 		}
 	}
 
-	if config.BaseURL == "" || config.Model == "" {
-		return config, fmt.Errorf("AI tagging config unavailable")
+	config.Mode = normalizeAIBackendMode(string(config.Mode))
+	config.LocalMLModel = localMLModelOrDefault(config.LocalMLModel)
+	config.LocalMLDevice = normalizeLocalMLDevice(config.LocalMLDevice)
+	if err := validateAITaggingConfig(config); err != nil {
+		return config, err
 	}
 	return config, nil
+}
+
+func validateAITaggingConfig(config AITaggingConfig) error {
+	switch normalizeAIBackendMode(string(config.Mode)) {
+	case AIBackendModeLocal, AIBackendModeOff:
+		return nil
+	default:
+		if config.BaseURL == "" || config.Model == "" {
+			return fmt.Errorf("AI tagging config unavailable")
+		}
+		return nil
+	}
 }
 
 func envInt(key string, fallback int) int {

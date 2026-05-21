@@ -1,7 +1,12 @@
 package services
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
@@ -488,6 +493,296 @@ func TestSearchVideosSmartUnderstandsNaturalLanguageHints(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSearchVideosSmartUsesLocalMLEmbeddingSearch(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_backend_mode": string(AIBackendModeLocal),
+		"local_ml_model":  defaultLocalMLModel,
+	}).Error; err != nil {
+		t.Fatalf("更新本地 ML 设置失败: %v", err)
+	}
+
+	stageVideo := models.Video{Name: "clip-a.mp4", Path: "/media/clip-a.mp4", Directory: "/media", Size: 10}
+	kitchenVideo := models.Video{Name: "clip-b.mp4", Path: "/media/clip-b.mp4", Directory: "/media", Size: 20}
+	if err := database.DB.Create(&stageVideo).Error; err != nil {
+		t.Fatalf("创建舞台视频失败: %v", err)
+	}
+	if err := database.DB.Create(&kitchenVideo).Error; err != nil {
+		t.Fatalf("创建厨房视频失败: %v", err)
+	}
+	createVideoEmbedding(t, stageVideo.ID, defaultLocalMLModel, []float32{1, 0})
+	createVideoEmbedding(t, kitchenVideo.ID, defaultLocalMLModel, []float32{0, 1})
+
+	runtime := &fakeLocalMLRuntime{
+		running:   true,
+		model:     defaultLocalMLModel,
+		embedding: []float32{1, 0},
+	}
+	svc := &VideoService{
+		embeddingService: &VideoEmbeddingService{
+			configProvider: SettingsAITaggingConfigProvider{},
+			localMLRuntime: runtime,
+		},
+	}
+
+	videos, err := svc.SearchVideosSmart("舞台上的灯光和观众", nil, 0, 0, 0, 0, 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("本地 ML 智能搜索失败: %v", err)
+	}
+	if len(videos) != 1 || videos[0].ID != stageVideo.ID {
+		t.Fatalf("本地 ML 搜索应按语义向量召回舞台视频 got=%v want=%d", videoIDs(videos), stageVideo.ID)
+	}
+	if videos[0].SearchScore <= 0.9 {
+		t.Fatalf("本地 ML 搜索应返回相似度分数，实际 %.3f", videos[0].SearchScore)
+	}
+	if runtime.embedCalls != 1 {
+		t.Fatalf("本地 ML 搜索应只调用一次文本 embedding，实际 %d", runtime.embedCalls)
+	}
+}
+
+func TestSearchVideosSmartDoesNotUseLocalMLInAPIMode(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_backend_mode": string(AIBackendModeAPI),
+		"local_ml_model":  defaultLocalMLModel,
+	}).Error; err != nil {
+		t.Fatalf("更新 API 模式设置失败: %v", err)
+	}
+
+	video := models.Video{Name: "clip-a.mp4", Path: "/media/clip-a.mp4", Directory: "/media", Size: 10}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	createVideoEmbedding(t, video.ID, defaultLocalMLModel, []float32{1, 0})
+
+	runtime := &fakeLocalMLRuntime{
+		running:   true,
+		model:     defaultLocalMLModel,
+		embedding: []float32{1, 0},
+	}
+	svc := &VideoService{
+		embeddingService: &VideoEmbeddingService{
+			configProvider: SettingsAITaggingConfigProvider{},
+			localMLRuntime: runtime,
+		},
+	}
+
+	videos, err := svc.SearchVideosSmart("舞台上的灯光和观众", nil, 0, 0, 0, 0, 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("API 模式智能搜索失败: %v", err)
+	}
+	if len(videos) != 0 {
+		t.Fatalf("API 模式不应使用本地向量召回结果 got=%v", videoIDs(videos))
+	}
+	if runtime.embedCalls != 0 {
+		t.Fatalf("API 模式不应调用本地 ML runtime，实际 %d", runtime.embedCalls)
+	}
+}
+
+func TestSearchVideosSmartUsesAPIEmbeddingsInAPIMode(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	var embeddingCalls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Fatalf("API 语义搜索应调用 embeddings endpoint，实际 %s", r.URL.Path)
+		}
+		embeddingCalls++
+		var body struct {
+			Model string `json:"model"`
+			Input any    `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("解析 embeddings 请求失败: %v", err)
+		}
+		if body.Model != "text-embedding-3-small" {
+			t.Fatalf("embedding model 不正确: %q", body.Model)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"index": 0, "embedding": []float64{1, 0}},
+			},
+			"model": body.Model,
+		})
+	}))
+	defer server.Close()
+
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_backend_mode":     string(AIBackendModeAPI),
+		"ai_tagging_base_url": server.URL + "/v1",
+		"ai_tagging_model":    "vision-model",
+		"ai_embedding_model":  "text-embedding-3-small",
+	}).Error; err != nil {
+		t.Fatalf("更新 API embedding 设置失败: %v", err)
+	}
+
+	stageVideo := models.Video{Name: "stage.mp4", Path: "/media/stage.mp4", Directory: "/media", Size: 10}
+	kitchenVideo := models.Video{Name: "kitchen.mp4", Path: "/media/kitchen.mp4", Directory: "/media", Size: 20}
+	if err := database.DB.Create(&stageVideo).Error; err != nil {
+		t.Fatalf("创建舞台视频失败: %v", err)
+	}
+	if err := database.DB.Create(&kitchenVideo).Error; err != nil {
+		t.Fatalf("创建厨房视频失败: %v", err)
+	}
+	createVideoEmbedding(t, stageVideo.ID, "text-embedding-3-small", []float32{1, 0})
+	createVideoEmbedding(t, kitchenVideo.ID, "text-embedding-3-small", []float32{0, 1})
+
+	svc := &VideoService{}
+	videos, err := svc.SearchVideosSmart("舞台灯光", nil, 0, 0, 0, 0, 0, 0, 0, 10)
+	if err != nil {
+		t.Fatalf("API embedding 智能搜索失败: %v", err)
+	}
+	if len(videos) != 1 || videos[0].ID != stageVideo.ID {
+		t.Fatalf("API embedding 搜索应召回舞台视频 got=%v want=%d", videoIDs(videos), stageVideo.ID)
+	}
+	if embeddingCalls != 1 {
+		t.Fatalf("应调用一次 API embedding，实际 %d", embeddingCalls)
+	}
+}
+
+func TestVideoEmbeddingServiceIndexesVideosWithLocalRuntime(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_backend_mode": string(AIBackendModeLocal),
+		"local_ml_model":  defaultLocalMLModel,
+	}).Error; err != nil {
+		t.Fatalf("更新本地 ML 设置失败: %v", err)
+	}
+	video := models.Video{Name: "clip-a.mp4", Path: "/media/clip-a.mp4", Directory: "/media", Size: 10}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	runtime := &fakeLocalMLRuntime{
+		model:     defaultLocalMLModel,
+		embedding: []float32{0.25, 0.75},
+	}
+	svc := &VideoEmbeddingService{
+		configProvider: SettingsAITaggingConfigProvider{},
+		localMLRuntime: runtime,
+		extractor:      NewAITaggingExtractor(),
+	}
+
+	result, err := svc.IndexPending(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("本地 ML 索引失败: %v", err)
+	}
+	if result.Indexed != 1 || result.Requested != 1 || result.Failed != 0 {
+		t.Fatalf("索引结果不正确: %+v", result)
+	}
+	if runtime.starts != 1 || runtime.embedCalls != 1 {
+		t.Fatalf("本地 ML runtime 调用不正确: %+v", runtime)
+	}
+	var stored models.VideoEmbedding
+	if err := database.DB.Where("video_id = ? AND model = ? AND kind = ?", video.ID, defaultLocalMLModel, "semantic").First(&stored).Error; err != nil {
+		t.Fatalf("应保存视频 embedding: %v", err)
+	}
+	if stored.Source != "fake-local-ml" || stored.Dimension != 2 {
+		t.Fatalf("embedding 元数据不正确: %+v", stored)
+	}
+	var vector []float32
+	if err := json.Unmarshal([]byte(stored.VectorJSON), &vector); err != nil {
+		t.Fatalf("embedding JSON 不正确: %v", err)
+	}
+	if len(vector) != 2 || vector[0] != 0.25 || vector[1] != 0.75 {
+		t.Fatalf("embedding 向量不正确: %v", vector)
+	}
+}
+
+func TestVideoEmbeddingServiceIndexesVideosWithAPIEmbeddingModel(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	binDir := t.TempDir()
+	ffmpegMarker := filepath.Join(t.TempDir(), "ffmpeg-called")
+	fakeFFmpeg := filepath.Join(binDir, "ffmpeg")
+	script := fmt.Sprintf("#!/bin/sh\nprintf called > %q\nexit 1\n", ffmpegMarker)
+	if err := os.WriteFile(fakeFFmpeg, []byte(script), 0755); err != nil {
+		t.Fatalf("创建 fake ffmpeg 失败: %v", err)
+	}
+	t.Setenv("PATH", binDir)
+
+	var embeddingCalls int
+	var embeddingInputs []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/embeddings" {
+			t.Fatalf("API 索引应调用 embeddings endpoint，实际 %s", r.URL.Path)
+		}
+		embeddingCalls++
+		var body struct {
+			Input []string `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("解析 embeddings 请求失败: %v", err)
+		}
+		embeddingInputs = append(embeddingInputs, body.Input...)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"model": "provider-normalized-model-name",
+			"data": []map[string]any{
+				{"index": 0, "embedding": []float64{0.25, 0.75}},
+			},
+		})
+	}))
+	defer server.Close()
+
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"ai_backend_mode":     string(AIBackendModeAPI),
+		"ai_tagging_base_url": server.URL + "/v1",
+		"ai_tagging_model":    "vision-model",
+		"ai_embedding_model":  "text-embedding-3-small",
+	}).Error; err != nil {
+		t.Fatalf("更新 API embedding 设置失败: %v", err)
+	}
+	videoPath := filepath.Join(t.TempDir(), "clip-api.mp4")
+	mustCreateFile(t, videoPath)
+	video := models.Video{Name: "clip-api.mp4", Path: videoPath, Directory: filepath.Dir(videoPath), Size: 10}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	svc := &VideoService{}
+	result, err := svc.IndexAIEmbeddings(context.Background(), 10)
+	if err != nil {
+		t.Fatalf("API embedding 索引失败: %v", err)
+	}
+	if result.Indexed != 1 || result.Requested != 1 || result.Failed != 0 {
+		t.Fatalf("索引结果不正确: %+v", result)
+	}
+	if embeddingCalls != 1 {
+		t.Fatalf("应调用一次 API embedding，实际 %d", embeddingCalls)
+	}
+	if len(embeddingInputs) != 1 || !strings.Contains(embeddingInputs[0], "clip-api.mp4") {
+		t.Fatalf("API embedding 应收到视频文本证据，实际 %#v", embeddingInputs)
+	}
+	var stored models.VideoEmbedding
+	if err := database.DB.Where("video_id = ? AND model = ? AND kind = ?", video.ID, "text-embedding-3-small", "semantic").First(&stored).Error; err != nil {
+		t.Fatalf("应按用户配置的 embedding 模型保存 API 视频 embedding: %v", err)
+	}
+	if stored.Source != "api-embedding" || stored.Dimension != 2 {
+		t.Fatalf("API embedding 元数据不正确: %+v", stored)
+	}
+	if _, err := os.Stat(ffmpegMarker); err == nil {
+		t.Fatalf("API embedding 索引只需要文本证据，不应触发 ffmpeg 抽帧")
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("检查 fake ffmpeg marker 失败: %v", err)
+	}
+}
+
+func createVideoEmbedding(t *testing.T, videoID uint, model string, vector []float32) {
+	t.Helper()
+	data, err := json.Marshal(vector)
+	if err != nil {
+		t.Fatalf("序列化 embedding 失败: %v", err)
+	}
+	if err := database.DB.Create(&models.VideoEmbedding{
+		VideoID:    videoID,
+		Model:      model,
+		Kind:       "semantic",
+		VectorJSON: string(data),
+		Dimension:  len(vector),
+		Source:     "test",
+	}).Error; err != nil {
+		t.Fatalf("创建视频 embedding 失败: %v", err)
 	}
 }
 

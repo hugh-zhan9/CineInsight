@@ -20,6 +20,7 @@ const aiTaggingWorkerInterval = 5 * time.Minute
 type AITaggingService struct {
 	configProvider AITaggingConfigProvider
 	clientFactory  func(AITaggingConfig) AITaggingAIClient
+	localMLRuntime LocalMLRuntime
 	localClient    AITaggingAIClient
 	faceService    *VideoFaceService
 	extractor      *AITaggingExtractor
@@ -29,9 +30,17 @@ type AITaggingService struct {
 }
 
 func NewAITaggingService() *AITaggingService {
+	return NewAITaggingServiceWithLocalMLRuntime(NewInProcessLocalMLRuntime())
+}
+
+func NewAITaggingServiceWithLocalMLRuntime(localMLRuntime LocalMLRuntime) *AITaggingService {
+	if localMLRuntime == nil {
+		localMLRuntime = NewInProcessLocalMLRuntime()
+	}
 	return &AITaggingService{
 		configProvider: SettingsAITaggingConfigProvider{},
 		clientFactory:  NewOpenAICompatibleAITaggingClient,
+		localMLRuntime: localMLRuntime,
 		localClient:    NewLocalHeuristicAITaggingClient(),
 		extractor:      NewAITaggingExtractor(),
 		now:            time.Now,
@@ -69,6 +78,26 @@ func (s *AITaggingService) Stop() {
 		s.workerCancel()
 		s.workerCancel = nil
 	}
+	_ = s.stopLocalMLRuntime(context.Background())
+}
+
+func (s *AITaggingService) ConfigureBackend(ctx context.Context) error {
+	if s == nil {
+		return nil
+	}
+	config, err := s.configProvider.Load()
+	if err != nil {
+		_ = s.stopLocalMLRuntime(ctx)
+		return err
+	}
+	return s.applyBackendConfig(ctx, config)
+}
+
+func (s *AITaggingService) LocalMLRuntimeStatus() LocalMLRuntimeStatus {
+	if s == nil || s.localMLRuntime == nil {
+		return LocalMLRuntimeStatus{Running: false, State: "stopped", Managed: true}
+	}
+	return s.localMLRuntime.Status()
 }
 
 func (s *AITaggingService) workerLoop(ctx context.Context) {
@@ -88,10 +117,21 @@ func (s *AITaggingService) workerLoop(ctx context.Context) {
 func (s *AITaggingService) runWorkerOnce(ctx context.Context) {
 	config, err := s.configProvider.Load()
 	if err != nil {
+		_ = s.stopLocalMLRuntime(ctx)
 		log.Printf("[AITagging] config unavailable; background worker idle err=%v", err)
 		return
 	}
-	log.Printf("[AITagging] worker config base_url=%q model=%q frame_count=%d subtitle_char_limit=%d startup_batch_size=%d api_key_empty=%v",
+	if err := s.applyBackendConfig(ctx, config); err != nil {
+		log.Printf("[AITagging] backend unavailable; background worker idle err=%v", err)
+		return
+	}
+	if normalizeAIBackendMode(string(config.Mode)) == AIBackendModeOff {
+		log.Printf("[AITagging] backend off; background worker idle")
+		return
+	}
+	log.Printf("[AITagging] worker config mode=%q local_model=%q base_url=%q model=%q frame_count=%d subtitle_char_limit=%d startup_batch_size=%d api_key_empty=%v",
+		config.Mode,
+		config.LocalMLModel,
 		config.BaseURL,
 		config.Model,
 		config.FrameCount,
@@ -131,11 +171,16 @@ func (s *AITaggingService) ProcessVideo(ctx context.Context, videoID uint) error
 }
 
 func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video models.Video, config AITaggingConfig) error {
-	log.Printf("[AITagging] start video_id=%d name=%q path=%q tags=%d config={base_url:%q model:%q frame_count:%d subtitle_char_limit:%d api_key_empty:%v}",
+	config.Mode = normalizeAIBackendMode(string(config.Mode))
+	config.LocalMLModel = localMLModelOrDefault(config.LocalMLModel)
+	config.LocalMLDevice = normalizeLocalMLDevice(config.LocalMLDevice)
+	log.Printf("[AITagging] start video_id=%d name=%q path=%q tags=%d config={mode:%q local_model:%q base_url:%q model:%q frame_count:%d subtitle_char_limit:%d api_key_empty:%v}",
 		video.ID,
 		video.Name,
 		video.Path,
 		len(video.Tags),
+		config.Mode,
+		config.LocalMLModel,
 		config.BaseURL,
 		config.Model,
 		config.FrameCount,
@@ -145,6 +190,10 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	if len(video.Tags) > 0 {
 		log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
 		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
+	}
+	if config.Mode == AIBackendModeOff {
+		log.Printf("[AITagging] skip video_id=%d because backend is off", video.ID)
+		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "ai_backend_off", "", "")
 	}
 	if err := s.ensureFaceEvidence(ctx, video); err != nil {
 		return err
@@ -169,12 +218,12 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	if err := s.setProcessing(video.ID, fingerprint); err != nil {
 		return err
 	}
-	client := s.clientFactory(config)
-	suggestions, err := client.AnalyzeTags(ctx, AITaggingRequest{
+	request := AITaggingRequest{
 		Video:        video,
 		ExistingTags: existingTags,
 		Evidence:     evidence,
-	})
+	}
+	suggestions, err := s.analyzeWithConfiguredBackend(ctx, config, request)
 	if err != nil {
 		log.Printf("[AITagging] analyze failed video_id=%d err=%v", video.ID, err)
 		suggestions, err = s.localSuggestions(ctx, video, existingTags, evidence)
@@ -194,6 +243,48 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	}
 	log.Printf("[AITagging] completed video_id=%d created=%d", video.ID, created)
 	return s.markState(video.ID, models.AITaggingStateStatusCompleted, "", fingerprint, "")
+}
+
+func (s *AITaggingService) applyBackendConfig(ctx context.Context, config AITaggingConfig) error {
+	switch normalizeAIBackendMode(string(config.Mode)) {
+	case AIBackendModeLocal:
+		return s.ensureLocalMLRuntimeStarted(ctx, config)
+	case AIBackendModeOff:
+		return s.stopLocalMLRuntime(ctx)
+	default:
+		return s.stopLocalMLRuntime(ctx)
+	}
+}
+
+func (s *AITaggingService) ensureLocalMLRuntimeStarted(ctx context.Context, config AITaggingConfig) error {
+	if s.localMLRuntime == nil {
+		s.localMLRuntime = NewInProcessLocalMLRuntime()
+	}
+	return s.localMLRuntime.EnsureStarted(ctx, LocalMLRuntimeConfig{
+		Model:  localMLModelOrDefault(config.LocalMLModel),
+		Device: normalizeLocalMLDevice(config.LocalMLDevice),
+	})
+}
+
+func (s *AITaggingService) stopLocalMLRuntime(ctx context.Context) error {
+	if s.localMLRuntime == nil {
+		return nil
+	}
+	return s.localMLRuntime.Stop(ctx)
+}
+
+func (s *AITaggingService) analyzeWithConfiguredBackend(ctx context.Context, config AITaggingConfig, req AITaggingRequest) ([]AITagSuggestion, error) {
+	if normalizeAIBackendMode(string(config.Mode)) == AIBackendModeLocal {
+		if err := s.ensureLocalMLRuntimeStarted(ctx, config); err != nil {
+			return nil, err
+		}
+		return s.localMLRuntime.AnalyzeTags(ctx, req)
+	}
+	client := s.clientFactory(config)
+	if client == nil {
+		return nil, fmt.Errorf("AI tagging client unavailable")
+	}
+	return client.AnalyzeTags(ctx, req)
 }
 
 func (s *AITaggingService) processVideoLocally(ctx context.Context, video models.Video, configErr error) error {

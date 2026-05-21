@@ -3,6 +3,7 @@ module video-master
 go 1.23
 
 require (
+	github.com/esimov/pigo v1.4.6
 	github.com/jinzhu/now v1.1.5
 	github.com/joho/godotenv v1.5.1
 	github.com/wailsapp/wails/v2 v2.11.0
@@ -13,7 +14,6 @@ require (
 
 require (
 	github.com/bep/debounce v1.2.1 // indirect
-	github.com/esimov/pigo v1.4.6 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect

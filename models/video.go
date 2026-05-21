@@ -19,6 +19,7 @@ type Video struct {
 	PlayCount       int            `gorm:"default:0" json:"play_count"`                                             // 播放次数
 	RandomPlayCount int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
 	LastPlayedAt    *time.Time     `json:"last_played_at" ts_type:"string"`                                         // 最后播放时间
+	SearchScore     float64        `gorm:"-" json:"search_score,omitempty"`                                         // 临时搜索得分
 	Tags            []Tag          `gorm:"many2many:video_tags;" json:"tags"`                                       // 标签（多对多）
 	CreatedAt       time.Time      `json:"created_at" ts_type:"string"`
 	UpdatedAt       time.Time      `json:"updated_at" ts_type:"string"`
@@ -79,9 +80,13 @@ type Settings struct {
 	BilingualEnabled            bool      `json:"bilingual_enabled"`                  // 是否开启双语字幕
 	BilingualLang               string    `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
 	DeepLApiKey                 string    `json:"deepl_api_key"`                      // DeepL API Key
-	AITaggingBaseURL            string    `json:"ai_tagging_base_url"`                // OpenAI 兼容接口地址
-	AITaggingAPIKey             string    `json:"ai_tagging_api_key"`                 // AI 标签 API Key
-	AITaggingModel              string    `json:"ai_tagging_model"`                   // AI 标签模型
+	AIBackendMode               string    `gorm:"default:'api'" json:"ai_backend_mode"`
+	LocalMLModel                string    `gorm:"default:'xlm-roberta-base-ViT-B-32::laion5b_s13b_b90k'" json:"local_ml_model"`
+	LocalMLDevice               string    `gorm:"default:'auto'" json:"local_ml_device"`
+	AITaggingBaseURL            string    `json:"ai_tagging_base_url"` // OpenAI 兼容接口地址
+	AITaggingAPIKey             string    `json:"ai_tagging_api_key"`  // AI 标签 API Key
+	AITaggingModel              string    `json:"ai_tagging_model"`    // AI 标签模型
+	AIEmbeddingModel            string    `json:"ai_embedding_model"`  // AI 语义搜索 Embedding 模型
 	AITaggingFrameCount         int       `gorm:"default:5" json:"ai_tagging_frame_count"`
 	AITaggingSubtitleCharLimit  int       `gorm:"default:4000" json:"ai_tagging_subtitle_char_limit"`
 	AITaggingStartupBatchSize   int       `gorm:"default:10" json:"ai_tagging_startup_batch_size"`

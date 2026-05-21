@@ -38,6 +38,21 @@ assert.match(shortFeedCss, /\.feed-stage::after/, 'short feed should use a subtl
 assert.match(shortFeedCss, /\.progress-dock\s*{[^}]*height:\s*3px;/s, 'short feed progress should be a minimal bottom bar');
 assert.match(settingsSource, /class="settings-grid-shell"/, 'settings page should use a compact grouped layout shell');
 assert.match(settingsSource, /class="directories-list"/, 'settings directories should use class-based layout instead of inline layout');
+assert.match(settingsSource, /v-model="settingsForm\.ai_backend_mode"/, 'settings page should expose AI backend mode selection');
+assert.match(settingsSource, /<option value="api">API<\/option>/, 'AI backend mode should include API mode');
+assert.match(settingsSource, /<option value="local">本地 ML<\/option>/, 'AI backend mode should include local ML mode');
+assert.match(settingsSource, /<option value="off">关闭<\/option>/, 'AI backend mode should include off mode');
+assert.match(settingsSource, /GetLocalMLRuntimeStatus/, 'settings page should load local ML runtime status');
+assert.match(settingsSource, /IndexAIEmbeddings/, 'settings page should expose AI embedding indexing for API and local modes');
+assert.match(settingsSource, /ai_embedding_model/, 'settings page should expose API embedding model configuration');
+assert.match(settingsSource, /v-model="settingsForm\.local_ml_device"/, 'settings page should expose local ML device selection');
+assert.match(settingsSource, /<option value="mps">MPS<\/option>/, 'local ML device selection should include MPS');
+assert.match(settingsSource, /<option value="cuda">CUDA<\/option>/, 'local ML device selection should include CUDA');
+assert.match(settingsSource, /建立索引/, 'settings page should include a direct local ML indexing action');
+assert.match(settingsSource, /xlm-roberta-base-ViT-B-32::laion5b_s13b_b90k/, 'settings page should default to the multilingual open_clip local model spec');
+assert.match(settingsSource, /local_ml_model: this\.localMLModelValue\(this\.settingsForm\.local_ml_model\)/, 'settings save payload should include normalized local ML model');
+assert.match(settingsSource, /local_ml_device: this\.localMLDeviceValue\(this\.settingsForm\.local_ml_device\)/, 'settings save payload should include normalized local ML device');
+assert.match(settingsSource, /ai_backend_mode: this\.settingsForm\.ai_backend_mode/, 'settings save payload should include AI backend mode');
 
 assert.match(
   componentCss,

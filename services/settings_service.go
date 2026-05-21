@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"video-master/database"
 	"video-master/models"
 )
@@ -32,14 +33,28 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.BilingualEnabled = input.BilingualEnabled
 	settings.BilingualLang = input.BilingualLang
 	settings.DeepLApiKey = input.DeepLApiKey
+	settings.AIBackendMode = string(normalizeAIBackendMode(input.AIBackendMode))
+	settings.LocalMLModel = localMLModelOrDefault(input.LocalMLModel)
+	settings.LocalMLDevice = normalizeLocalMLDevice(input.LocalMLDevice)
 	settings.AITaggingBaseURL = input.AITaggingBaseURL
 	settings.AITaggingAPIKey = input.AITaggingAPIKey
 	settings.AITaggingModel = input.AITaggingModel
+	settings.AIEmbeddingModel = input.AIEmbeddingModel
 	settings.AITaggingFrameCount = positiveOrDefault(input.AITaggingFrameCount, defaultAITaggingFrameCount)
 	settings.AITaggingSubtitleCharLimit = positiveOrDefault(input.AITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit)
 	settings.AITaggingStartupBatchSize = positiveOrDefault(input.AITaggingStartupBatchSize, defaultAITaggingStartupBatchSize)
 
 	return database.DB.Save(&settings).Error
+}
+
+func localMLModelOrDefault(value string) string {
+	value = strings.TrimSpace(value)
+	switch value {
+	case "", legacyBuiltinLocalModel, legacyOpenAILocalModel:
+		return defaultLocalMLModel
+	default:
+		return value
+	}
 }
 
 func positiveOrDefault(value int, fallback int) int {
