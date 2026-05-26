@@ -70,9 +70,6 @@
           </button>
         </div>
       </div>
-      <div v-if="shortFeedStatus && shortFeedStatus.lan_urls && shortFeedStatus.lan_urls.length" class="short-feed-lan-list">
-        <div v-for="url in shortFeedStatus.lan_urls" :key="url" class="short-feed-url">{{ url }}</div>
-      </div>
       <div class="setting-item short-feed-duration-setting">
         <label>短视频时长上限（分钟）</label>
         <input
@@ -268,6 +265,13 @@
           </select>
         </div>
         <div class="setting-item">
+          <label>翻译方式</label>
+          <select v-model="settingsForm.subtitle_translation_provider" class="select-input">
+            <option value="deepl">DeepL</option>
+            <option value="llm">LLM API</option>
+          </select>
+        </div>
+        <div v-if="settingsForm.subtitle_translation_provider === 'deepl'" class="setting-item">
           <label>DeepL API Key</label>
           <input 
             type="password" 
@@ -278,6 +282,36 @@
           />
           <p class="help-text">免费版 Key 通常以 :fx 结尾。额度 50 万字符/月。</p>
         </div>
+        <template v-else>
+          <div class="setting-item">
+            <label>接口地址</label>
+            <input
+              type="text"
+              v-model.trim="settingsForm.subtitle_translation_base_url"
+              placeholder="https://api.openai.com/v1 或 http://127.0.0.1:1234/v1"
+              class="text-input"
+            />
+          </div>
+          <div class="setting-item">
+            <label>API Key</label>
+            <input
+              type="password"
+              v-model="settingsForm.subtitle_translation_api_key"
+              placeholder="本地接口可留空；云端接口填写 API Key"
+              class="text-input"
+              autocomplete="off"
+            />
+          </div>
+          <div class="setting-item">
+            <label>模型</label>
+            <input
+              type="text"
+              v-model.trim="settingsForm.subtitle_translation_model"
+              placeholder="gpt-4o-mini 或本地兼容模型"
+              class="text-input"
+            />
+          </div>
+        </template>
       </template>
     </div>
 
@@ -366,6 +400,7 @@ export default {
         this.settingsForm.ai_backend_mode = this.settingsForm.ai_backend_mode || 'api';
         this.settingsForm.local_ml_model = this.localMLModelValue(this.settingsForm.local_ml_model);
         this.settingsForm.local_ml_device = this.localMLDeviceValue(this.settingsForm.local_ml_device);
+        this.settingsForm.subtitle_translation_provider = this.subtitleTranslationProviderValue(this.settingsForm.subtitle_translation_provider);
       },
       immediate: true,
       deep: true
@@ -483,6 +518,10 @@ export default {
         bilingual_enabled: this.settingsForm.bilingual_enabled || false,
         bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
         deepl_api_key: this.settingsForm.deepl_api_key || '',
+        subtitle_translation_provider: this.subtitleTranslationProviderValue(this.settingsForm.subtitle_translation_provider),
+        subtitle_translation_base_url: this.settingsForm.subtitle_translation_base_url || '',
+        subtitle_translation_api_key: this.settingsForm.subtitle_translation_api_key || '',
+        subtitle_translation_model: this.settingsForm.subtitle_translation_model || '',
         ai_backend_mode: this.settingsForm.ai_backend_mode || 'api',
         local_ml_model: this.localMLModelValue(this.settingsForm.local_ml_model),
         local_ml_device: this.localMLDeviceValue(this.settingsForm.local_ml_device),
@@ -505,6 +544,10 @@ export default {
     localMLDeviceValue(value) {
       const device = (value || '').trim().toLowerCase();
       return ['auto', 'cpu', 'cuda', 'mps'].includes(device) ? device : 'auto';
+    },
+    subtitleTranslationProviderValue(value) {
+      const provider = (value || '').trim().toLowerCase();
+      return provider === 'llm' ? 'llm' : 'deepl';
     },
     async saveSettings() {
       try {
@@ -709,8 +752,7 @@ export default {
 
 .short-feed-status-main span,
 .local-ml-status-main span,
-.ai-index-status-main span,
-.short-feed-url {
+.ai-index-status-main span {
   overflow: hidden;
   color: var(--text-secondary);
   font-size: 13px;
@@ -729,18 +771,6 @@ export default {
   display: flex;
   flex-shrink: 0;
   gap: 8px;
-}
-
-.short-feed-lan-list {
-  display: grid;
-  gap: 6px;
-  margin-top: 10px;
-}
-
-.short-feed-url {
-  padding: 8px 10px;
-  border-radius: 6px;
-  background: var(--bg-color);
 }
 
 @media (max-width: 980px) {

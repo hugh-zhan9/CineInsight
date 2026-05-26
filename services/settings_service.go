@@ -33,6 +33,10 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.BilingualEnabled = input.BilingualEnabled
 	settings.BilingualLang = input.BilingualLang
 	settings.DeepLApiKey = input.DeepLApiKey
+	settings.SubtitleTranslationProvider = string(normalizeSubtitleTranslationProvider(input.SubtitleTranslationProvider))
+	settings.SubtitleTranslationBaseURL = input.SubtitleTranslationBaseURL
+	settings.SubtitleTranslationAPIKey = input.SubtitleTranslationAPIKey
+	settings.SubtitleTranslationModel = input.SubtitleTranslationModel
 	settings.AIBackendMode = string(normalizeAIBackendMode(input.AIBackendMode))
 	settings.LocalMLModel = localMLModelOrDefault(input.LocalMLModel)
 	settings.LocalMLDevice = normalizeLocalMLDevice(input.LocalMLDevice)

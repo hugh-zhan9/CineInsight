@@ -102,10 +102,6 @@ export function GetLocalMLRuntimeStatus() {
   return window['go']['main']['App']['GetLocalMLRuntimeStatus']();
 }
 
-export function RefreshLocalMLRuntimeStatus() {
-  return window['go']['main']['App']['RefreshLocalMLRuntimeStatus']();
-}
-
 export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
 }
@@ -172,6 +168,10 @@ export function PrepareSubtitleEngine(arg1) {
 
 export function PreviewExternally(arg1) {
   return window['go']['main']['App']['PreviewExternally'](arg1);
+}
+
+export function RefreshLocalMLRuntimeStatus() {
+  return window['go']['main']['App']['RefreshLocalMLRuntimeStatus']();
 }
 
 export function RefreshVideoMetadata(arg1) {

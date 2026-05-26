@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -482,5 +483,29 @@ func shortFeedLANURLs(port int) []string {
 			}
 		}
 	}
-	return urls
+	return normalizeShortFeedLANURLs(urls)
+}
+
+func normalizeShortFeedLANURLs(urls []string) []string {
+	if len(urls) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(urls))
+	normalized := make([]string, 0, len(urls))
+	for _, raw := range urls {
+		url := strings.TrimSpace(raw)
+		if url == "" {
+			continue
+		}
+		if _, ok := seen[url]; ok {
+			continue
+		}
+		seen[url] = struct{}{}
+		normalized = append(normalized, url)
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }

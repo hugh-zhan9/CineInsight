@@ -38,10 +38,16 @@ assert.match(shortFeedCss, /\.feed-stage::after/, 'short feed should use a subtl
 assert.match(shortFeedCss, /\.progress-dock\s*{[^}]*height:\s*3px;/s, 'short feed progress should be a minimal bottom bar');
 assert.match(settingsSource, /class="settings-grid-shell"/, 'settings page should use a compact grouped layout shell');
 assert.match(settingsSource, /class="directories-list"/, 'settings directories should use class-based layout instead of inline layout');
+assert.doesNotMatch(settingsSource, /shortFeedStatus\.lan_urls/, 'short feed settings should only display the single loopback URL');
 assert.match(settingsSource, /v-model="settingsForm\.ai_backend_mode"/, 'settings page should expose AI backend mode selection');
 assert.match(settingsSource, /<option value="api">API<\/option>/, 'AI backend mode should include API mode');
 assert.match(settingsSource, /<option value="local">本地 ML<\/option>/, 'AI backend mode should include local ML mode');
 assert.match(settingsSource, /<option value="off">关闭<\/option>/, 'AI backend mode should include off mode');
+assert.match(settingsSource, /v-model="settingsForm\.subtitle_translation_provider"/, 'subtitle settings should expose translation provider selection');
+assert.match(settingsSource, /<option value="deepl">DeepL<\/option>/, 'subtitle settings should keep DeepL as a provider option');
+assert.match(settingsSource, /<option value="llm">LLM API<\/option>/, 'subtitle settings should expose LLM API provider option');
+assert.match(settingsSource, /settingsForm\.subtitle_translation_base_url/, 'subtitle settings should expose OpenAI-compatible base URL');
+assert.match(settingsSource, /settingsForm\.subtitle_translation_model/, 'subtitle settings should expose translation model');
 assert.match(settingsSource, /GetLocalMLRuntimeStatus/, 'settings page should load local ML runtime status');
 assert.match(settingsSource, /RefreshLocalMLRuntimeStatus/, 'settings page refresh should retry local ML runtime configuration');
 assert.match(settingsSource, /IndexAIEmbeddings/, 'settings page should expose AI embedding indexing for API and local modes');

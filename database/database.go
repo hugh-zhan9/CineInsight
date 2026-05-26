@@ -140,6 +140,7 @@ func Init() error {
 			AutoScanOnStartup:           false,
 			ShortFeedMaxDurationMinutes: 5,
 			LogEnabled:                  false,
+			SubtitleTranslationProvider: "deepl",
 			AIBackendMode:               "api",
 			LocalMLModel:                "xlm-roberta-base-ViT-B-32::laion5b_s13b_b90k",
 			LocalMLDevice:               "auto",

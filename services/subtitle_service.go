@@ -293,7 +293,7 @@ func (s *SubtitleService) DownloadDependencies() error {
 }
 
 func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPath string,
-	bilingualEnabled bool, bilingualLang string, deeplApiKey string, forceGenerate bool) (*SubtitleGenerateResult, error) {
+	bilingualEnabled bool, bilingualLang string, translationConfig SubtitleTranslationConfig, forceGenerate bool) (*SubtitleGenerateResult, error) {
 
 	// 创建可取消的子 context
 	ctx, cancel := context.WithCancel(s.ctx)
@@ -396,22 +396,34 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 	}
 
 	// 双语字幕处理
-	if bilingualEnabled && deeplApiKey != "" && bilingualLang != "" {
-		log.Printf("[Subtitle] bilingual: detected=%s target=%s", detectedLang, bilingualLang)
+	if bilingualEnabled && strings.TrimSpace(bilingualLang) != "" {
+		targetLang := normalizeSubtitleLanguageCode(bilingualLang)
+		if targetLang == "" {
+			targetLang = strings.TrimSpace(bilingualLang)
+		}
+		provider := normalizeSubtitleTranslationProvider(translationConfig.Provider)
+		log.Printf("[Subtitle] bilingual: detected=%s target=%s provider=%s", detectedLang, targetLang, provider)
 
 		// 如果检测到的语言已经是目标语言，跳过翻译
-		if s.isSameLanguage(detectedLang, bilingualLang) {
+		if s.isSameLanguage(detectedLang, targetLang) {
 			log.Printf("[Subtitle] detected language matches target, skipping translation")
 		} else {
-			// 直接用 DeepL 翻译原文 SRT（DeepL 支持任意语言对，自动检测源语言）
-			s.emitProgress("generate", req.Engine, "translating", 60, "通过 DeepL 翻译字幕...")
+			translator, err := s.subtitleTranslator(provider, translationConfig)
+			if err != nil {
+				log.Printf("[Subtitle] translation config unavailable provider=%s err=%v, keeping original SRT", provider, err)
+				goto done
+			}
+			s.emitProgress("generate", req.Engine, "translating", 60, subtitleTranslationProgressMessage(provider))
 
 			translatedSrtPath := outputPrefix + "_translated_temp.srt"
 			defer os.Remove(translatedSrtPath)
 
-			// sourceLang 传空，让 DeepL 自动检测源语言
-			if err := s.translateSRT(srtPath, translatedSrtPath, "", bilingualLang, deeplApiKey); err != nil {
-				log.Printf("[Subtitle] DeepL translate failed: %v, keeping original SRT", err)
+			sourceLang := normalizeSubtitleLanguageCode(detectedLang)
+			if sourceLang == "auto" {
+				sourceLang = ""
+			}
+			if err := s.translateSRT(ctx, srtPath, translatedSrtPath, sourceLang, targetLang, translator); err != nil {
+				log.Printf("[Subtitle] subtitle translate failed via %s: %v, keeping original SRT", provider, err)
 				goto done
 			}
 
@@ -637,30 +649,7 @@ func hasTokenizedTimingFailure(segments []subtitleparser.Segment) bool {
 
 // isSameLanguage 判断 whisper 检测到的语言与用户目标语言是否相同
 func (s *SubtitleService) isSameLanguage(detected, target string) bool {
-	// whisper 输出格式如 "chinese", "english", "japanese"
-	// 用户设定格式如 "zh", "en", "ja"
-	langMap := map[string]string{
-		"chinese":    "zh",
-		"english":    "en",
-		"japanese":   "ja",
-		"korean":     "ko",
-		"french":     "fr",
-		"german":     "de",
-		"spanish":    "es",
-		"portuguese": "pt",
-		"russian":    "ru",
-		"italian":    "it",
-	}
-
-	detectedCode := strings.ToLower(detected)
-	targetCode := strings.ToLower(target)
-
-	// 先尝试映射 whisper 输出的全名
-	if code, ok := langMap[detectedCode]; ok {
-		detectedCode = code
-	}
-
-	return detectedCode == targetCode
+	return normalizeSubtitleLanguageCode(detected) == normalizeSubtitleLanguageCode(target)
 }
 
 // SRTEntry 表示一条 SRT 字幕
@@ -697,7 +686,7 @@ func parseSRTEntries(srtPath string) ([]SRTEntry, error) {
 }
 
 // translateDeepL 调用 DeepL API 翻译文本
-func (s *SubtitleService) translateDeepL(texts []string, sourceLang, targetLang, apiKey string) ([]string, error) {
+func (s *SubtitleService) translateDeepL(ctx context.Context, texts []string, sourceLang, targetLang, apiKey string) ([]string, error) {
 	// DeepL 目标语言代码需要大写
 	targetUpper := strings.ToUpper(targetLang)
 	// 中文需要特殊处理：DeepL 使用 ZH-HANS
@@ -731,7 +720,7 @@ func (s *SubtitleService) translateDeepL(texts []string, sourceLang, targetLang,
 		apiURL = "https://api.deepl.com/v2/translate"
 	}
 
-	req, err := http.NewRequest("POST", apiURL, bytes.NewReader(bodyBytes))
+	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(bodyBytes))
 	if err != nil {
 		return nil, err
 	}
@@ -775,7 +764,10 @@ func (s *SubtitleService) translateDeepL(texts []string, sourceLang, targetLang,
 }
 
 // translateSRT 翻译 SRT 文件中的所有文本行
-func (s *SubtitleService) translateSRT(inputPath, outputPath, sourceLang, targetLang, apiKey string) error {
+func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPath, sourceLang, targetLang string, translator SubtitleTranslator) error {
+	if translator == nil {
+		return fmt.Errorf("subtitle translator is nil")
+	}
 	entries, err := parseSRTEntries(inputPath)
 	if err != nil {
 		return fmt.Errorf("读取字幕文件失败: %v", err)
@@ -800,7 +792,7 @@ func (s *SubtitleService) translateSRT(inputPath, outputPath, sourceLang, target
 			texts[j] = e.Text
 		}
 
-		translated, err := s.translateDeepL(texts, sourceLang, targetLang, apiKey)
+		translated, err := translator.Translate(ctx, texts, sourceLang, targetLang)
 		if err != nil {
 			return err
 		}

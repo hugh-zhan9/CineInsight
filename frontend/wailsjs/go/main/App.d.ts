@@ -54,8 +54,6 @@ export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
 export function GetLocalMLRuntimeStatus():Promise<services.LocalMLRuntimeStatus>;
 
-export function RefreshLocalMLRuntimeStatus():Promise<services.LocalMLRuntimeStatus>;
-
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
 
 export function GetSettings():Promise<models.Settings>;
@@ -89,6 +87,8 @@ export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
 export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void>;
 
 export function PreviewExternally(arg1:number):Promise<void>;
+
+export function RefreshLocalMLRuntimeStatus():Promise<services.LocalMLRuntimeStatus>;
 
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 

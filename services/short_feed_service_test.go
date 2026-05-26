@@ -310,6 +310,21 @@ func TestShortFeedHTTPServerFallbackAndShutdown(t *testing.T) {
 	}
 }
 
+func TestShortFeedLANURLsAreUniqueAndStable(t *testing.T) {
+	urls := normalizeShortFeedLANURLs([]string{
+		"http://192.168.0.143:18088/short/",
+		"http://192.168.0.143:18088/short/",
+		"http://10.0.0.5:18088/short/",
+		"http://192.168.0.143:18088/short/",
+	})
+	if len(urls) != 2 {
+		t.Fatalf("局域网短视频地址应去重，实际 %v", urls)
+	}
+	if urls[0] != "http://10.0.0.5:18088/short/" || urls[1] != "http://192.168.0.143:18088/short/" {
+		t.Fatalf("局域网短视频地址应稳定排序，实际 %v", urls)
+	}
+}
+
 func strconvUint(value uint) string {
 	return strconv.FormatUint(uint64(value), 10)
 }

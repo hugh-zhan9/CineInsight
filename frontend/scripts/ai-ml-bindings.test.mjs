@@ -21,6 +21,10 @@ assert.match(modelsSource, /ai_backend_mode: string;/, 'Settings model should in
 assert.match(modelsSource, /local_ml_model: string;/, 'Settings model should include local ML model');
 assert.match(modelsSource, /local_ml_device: string;/, 'Settings model should include local ML device');
 assert.match(modelsSource, /ai_embedding_model: string;/, 'Settings model should include API embedding model');
+assert.match(modelsSource, /subtitle_translation_provider: string;/, 'Settings model should include subtitle translation provider');
+assert.match(modelsSource, /subtitle_translation_base_url: string;/, 'Settings model should include subtitle translation base URL');
+assert.match(modelsSource, /subtitle_translation_api_key: string;/, 'Settings model should include subtitle translation API key');
+assert.match(modelsSource, /subtitle_translation_model: string;/, 'Settings model should include subtitle translation model');
 assert.match(modelsSource, /search_score\??: number;/, 'Video model should include semantic search score');
 assert.match(modelsSource, /export class LocalMLRuntimeStatus/, 'Wails models should include LocalMLRuntimeStatus');
 assert.match(modelsSource, /device: string;/, 'LocalMLRuntimeStatus should expose selected local ML device');

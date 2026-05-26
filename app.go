@@ -649,14 +649,13 @@ func (a *App) GenerateSubtitle(req services.SubtitleGenerateRequest) (*services.
 	settings, _ := a.settingsService.GetSettings()
 	bilingualEnabled := false
 	bilingualLang := "zh"
-	deeplApiKey := ""
+	translationConfig := subtitleTranslationConfigFromSettings(settings)
 	if settings != nil {
 		bilingualEnabled = settings.BilingualEnabled
 		bilingualLang = settings.BilingualLang
-		deeplApiKey = settings.DeepLApiKey
 	}
-	log.Printf("API GenerateSubtitle id=%d path=%s engine=%s bilingual=%v lang=%s source=%s", req.VideoID, video.Path, req.Engine, bilingualEnabled, bilingualLang, req.SourceLang)
-	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, false)
+	log.Printf("API GenerateSubtitle id=%d path=%s engine=%s bilingual=%v lang=%s provider=%s source=%s", req.VideoID, video.Path, req.Engine, bilingualEnabled, bilingualLang, translationConfig.Provider, req.SourceLang)
+	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, translationConfig, false)
 }
 
 // ForceGenerateSubtitle 强制生成字幕（跳过幻觉检测）
@@ -668,14 +667,30 @@ func (a *App) ForceGenerateSubtitle(req services.SubtitleGenerateRequest) (*serv
 	settings, _ := a.settingsService.GetSettings()
 	bilingualEnabled := false
 	bilingualLang := "zh"
-	deeplApiKey := ""
+	translationConfig := subtitleTranslationConfigFromSettings(settings)
 	if settings != nil {
 		bilingualEnabled = settings.BilingualEnabled
 		bilingualLang = settings.BilingualLang
-		deeplApiKey = settings.DeepLApiKey
 	}
-	log.Printf("API ForceGenerateSubtitle id=%d path=%s engine=%s source=%s", req.VideoID, video.Path, req.Engine, req.SourceLang)
-	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, true)
+	log.Printf("API ForceGenerateSubtitle id=%d path=%s engine=%s provider=%s source=%s", req.VideoID, video.Path, req.Engine, translationConfig.Provider, req.SourceLang)
+	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, translationConfig, true)
+}
+
+func subtitleTranslationConfigFromSettings(settings *models.Settings) services.SubtitleTranslationConfig {
+	config := services.SubtitleTranslationConfig{
+		Provider: string(services.SubtitleTranslationProviderDeepL),
+	}
+	if settings == nil {
+		return config
+	}
+	if provider := strings.TrimSpace(settings.SubtitleTranslationProvider); provider != "" {
+		config.Provider = provider
+	}
+	config.DeepLAPIKey = settings.DeepLApiKey
+	config.BaseURL = settings.SubtitleTranslationBaseURL
+	config.APIKey = settings.SubtitleTranslationAPIKey
+	config.Model = settings.SubtitleTranslationModel
+	return config
 }
 
 // CancelSubtitle 取消正在进行的字幕生成任务

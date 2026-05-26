@@ -33,6 +33,10 @@ export namespace models {
 	    bilingual_enabled: boolean;
 	    bilingual_lang: string;
 	    deepl_api_key: string;
+	    subtitle_translation_provider: string;
+	    subtitle_translation_base_url: string;
+	    subtitle_translation_api_key: string;
+	    subtitle_translation_model: string;
 	    ai_backend_mode: string;
 	    local_ml_model: string;
 	    local_ml_device: string;
@@ -63,6 +67,10 @@ export namespace models {
 	        this.bilingual_enabled = source["bilingual_enabled"];
 	        this.bilingual_lang = source["bilingual_lang"];
 	        this.deepl_api_key = source["deepl_api_key"];
+	        this.subtitle_translation_provider = source["subtitle_translation_provider"];
+	        this.subtitle_translation_base_url = source["subtitle_translation_base_url"];
+	        this.subtitle_translation_api_key = source["subtitle_translation_api_key"];
+	        this.subtitle_translation_model = source["subtitle_translation_model"];
 	        this.ai_backend_mode = source["ai_backend_mode"];
 	        this.local_ml_model = source["local_ml_model"];
 	        this.local_ml_device = source["local_ml_device"];

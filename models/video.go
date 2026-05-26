@@ -80,6 +80,10 @@ type Settings struct {
 	BilingualEnabled            bool      `json:"bilingual_enabled"`                  // 是否开启双语字幕
 	BilingualLang               string    `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
 	DeepLApiKey                 string    `json:"deepl_api_key"`                      // DeepL API Key
+	SubtitleTranslationProvider string    `gorm:"default:'deepl'" json:"subtitle_translation_provider"`
+	SubtitleTranslationBaseURL  string    `json:"subtitle_translation_base_url"`
+	SubtitleTranslationAPIKey   string    `json:"subtitle_translation_api_key"`
+	SubtitleTranslationModel    string    `json:"subtitle_translation_model"`
 	AIBackendMode               string    `gorm:"default:'api'" json:"ai_backend_mode"`
 	LocalMLModel                string    `gorm:"default:'xlm-roberta-base-ViT-B-32::laion5b_s13b_b90k'" json:"local_ml_model"`
 	LocalMLDevice               string    `gorm:"default:'auto'" json:"local_ml_device"`
