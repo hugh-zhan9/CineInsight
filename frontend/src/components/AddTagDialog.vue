@@ -1,5 +1,5 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click="$emit('close')">
+  <div v-if="visible" class="modal-overlay">
     <div class="modal" @click.stop style="max-width: 480px;">
       <h2>{{ dialogTitle }}</h2>
 

@@ -37,6 +37,9 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.SubtitleTranslationBaseURL = input.SubtitleTranslationBaseURL
 	settings.SubtitleTranslationAPIKey = input.SubtitleTranslationAPIKey
 	settings.SubtitleTranslationModel = input.SubtitleTranslationModel
+	settings.SubtitleWhisperXModel = normalizeSubtitleWhisperXModel(input.SubtitleWhisperXModel)
+	settings.SubtitleWhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(input.SubtitleWhisperXBatchSize)
+	settings.SubtitleWhisperXComputeType = normalizeSubtitleWhisperXComputeType(input.SubtitleWhisperXComputeType)
 	settings.AIBackendMode = string(normalizeAIBackendMode(input.AIBackendMode))
 	settings.LocalMLModel = localMLModelOrDefault(input.LocalMLModel)
 	settings.LocalMLDevice = normalizeLocalMLDevice(input.LocalMLDevice)
@@ -66,4 +69,32 @@ func positiveOrDefault(value int, fallback int) int {
 		return value
 	}
 	return fallback
+}
+
+func normalizeSubtitleWhisperXModel(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "tiny", "base", "small", "medium", "large-v2", "large-v3":
+		return strings.TrimSpace(strings.ToLower(value))
+	default:
+		return defaultSubtitleWhisperXModel
+	}
+}
+
+func normalizeSubtitleWhisperXComputeType(value string) string {
+	switch strings.TrimSpace(strings.ToLower(value)) {
+	case "int8", "float16", "float32":
+		return strings.TrimSpace(strings.ToLower(value))
+	default:
+		return defaultSubtitleWhisperXComputeType
+	}
+}
+
+func normalizeSubtitleWhisperXBatchSize(value int) int {
+	if value <= 0 {
+		return defaultSubtitleWhisperXBatchSize
+	}
+	if value > maxSubtitleWhisperXBatchSize {
+		return maxSubtitleWhisperXBatchSize
+	}
+	return value
 }

@@ -79,13 +79,23 @@ func TestOpenAICompatibleSubtitleTranslatorUsesChatCompletionsAndAllowsLocalEndp
 	if hasResponseFormat {
 		t.Fatalf("不应发送本地兼容端点可能不支持的 response_format 字段")
 	}
-	for _, want := range []string{"translations", "目标语言: zh", "Hello world", "Second line"} {
+	for _, want := range []string{"translations", "\\\"index\\\":1", "目标语言: zh", "Hello world", "Second line"} {
 		if !strings.Contains(seenPrompt, want) {
 			t.Fatalf("翻译提示缺少 %q: %s", want, seenPrompt)
 		}
 	}
 	if !reflect.DeepEqual(got, []string{"你好，世界", "第二句"}) {
 		t.Fatalf("翻译结果不正确: %#v", got)
+	}
+}
+
+func TestParseSubtitleTranslationsAcceptsIndexedObjects(t *testing.T) {
+	got, err := parseSubtitleTranslations(`{"translations":[{"index":2,"text":"第二句"},{"index":1,"text":"第一句"}]}`)
+	if err != nil {
+		t.Fatalf("解析带 index 的翻译结果失败: %v", err)
+	}
+	if !reflect.DeepEqual(got, []string{"第一句", "第二句"}) {
+		t.Fatalf("翻译结果未按 index 对齐: %#v", got)
 	}
 }
 
@@ -134,6 +144,9 @@ func TestSettingsServicePersistsSubtitleTranslationLLMConfig(t *testing.T) {
 		SubtitleTranslationBaseURL:  "http://127.0.0.1:1234/v1",
 		SubtitleTranslationAPIKey:   "",
 		SubtitleTranslationModel:    "qwen2.5-7b-instruct",
+		SubtitleWhisperXModel:       "large-v3",
+		SubtitleWhisperXBatchSize:   4,
+		SubtitleWhisperXComputeType: "float32",
 		ShortFeedMaxDurationMinutes: DefaultShortFeedMaxDurationMinutes,
 		AITaggingFrameCount:         defaultAITaggingFrameCount,
 		AITaggingSubtitleCharLimit:  defaultAITaggingSubtitleCharLimit,
@@ -152,5 +165,40 @@ func TestSettingsServicePersistsSubtitleTranslationLLMConfig(t *testing.T) {
 	}
 	if got.SubtitleTranslationBaseURL != "http://127.0.0.1:1234/v1" || got.SubtitleTranslationAPIKey != "" || got.SubtitleTranslationModel != "qwen2.5-7b-instruct" {
 		t.Fatalf("字幕翻译 LLM 配置未正确保存: %+v", got)
+	}
+	if got.SubtitleWhisperXModel != "large-v3" || got.SubtitleWhisperXBatchSize != 4 || got.SubtitleWhisperXComputeType != "float32" {
+		t.Fatalf("字幕识别质量配置未正确保存: %+v", got)
+	}
+}
+
+func TestSettingsServiceNormalizesSubtitleWhisperXQualityConfig(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	input := models.Settings{
+		VideoExtensions:             ".mp4",
+		PlayWeight:                  2.0,
+		SubtitleWhisperXModel:       "too-large",
+		SubtitleWhisperXBatchSize:   99,
+		SubtitleWhisperXComputeType: "unknown",
+		ShortFeedMaxDurationMinutes: DefaultShortFeedMaxDurationMinutes,
+		AITaggingFrameCount:         defaultAITaggingFrameCount,
+		AITaggingSubtitleCharLimit:  defaultAITaggingSubtitleCharLimit,
+		AITaggingStartupBatchSize:   defaultAITaggingStartupBatchSize,
+	}
+
+	if err := (&SettingsService{}).UpdateSettings(input); err != nil {
+		t.Fatalf("保存设置失败: %v", err)
+	}
+	var got models.Settings
+	if err := database.DB.First(&got).Error; err != nil {
+		t.Fatalf("读取设置失败: %v", err)
+	}
+	if got.SubtitleWhisperXModel != defaultSubtitleWhisperXModel {
+		t.Fatalf("无效模型应回退默认值，got=%q", got.SubtitleWhisperXModel)
+	}
+	if got.SubtitleWhisperXBatchSize != maxSubtitleWhisperXBatchSize {
+		t.Fatalf("过大 batch size 应被钳制，got=%d", got.SubtitleWhisperXBatchSize)
+	}
+	if got.SubtitleWhisperXComputeType != defaultSubtitleWhisperXComputeType {
+		t.Fatalf("无效 compute type 应回退默认值，got=%q", got.SubtitleWhisperXComputeType)
 	}
 }

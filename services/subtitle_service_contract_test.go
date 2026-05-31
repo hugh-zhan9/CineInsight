@@ -60,6 +60,46 @@ func TestValidateSRTReturnsTypedValidationError(t *testing.T) {
 	}
 }
 
+func TestValidateSRTKeepsRejectedFileForForceGenerate(t *testing.T) {
+	svc := NewSubtitleService(t.TempDir())
+	srtPath := filepath.Join(t.TempDir(), "force-eligible.srt")
+	content := "1\n00:00:00,000 --> 00:00:01,000\nsame line\n\n2\n00:00:01,000 --> 00:00:02,000\nsame line\n\n3\n00:00:02,000 --> 00:00:03,000\nsame line\n\n4\n00:00:03,000 --> 00:00:04,000\nsame line\n"
+	if err := os.WriteFile(srtPath, []byte(content), 0644); err != nil {
+		t.Fatalf("写入测试字幕失败: %v", err)
+	}
+
+	err := svc.validateSRT(srtPath)
+	if err == nil {
+		t.Fatalf("期望返回校验失败错误")
+	}
+	if _, statErr := os.Stat(srtPath); statErr != nil {
+		t.Fatalf("校验失败文件应保留用于强制生成，stat err=%v", statErr)
+	}
+}
+
+func TestNormalizeSubtitleSourceLangForASR(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{name: "blank defaults to auto", input: "", want: "auto"},
+		{name: "auto stays auto", input: "auto", want: "auto"},
+		{name: "chinese display value becomes whisper code", input: "Chinese", want: "zh"},
+		{name: "english display value becomes whisper code", input: "english", want: "en"},
+		{name: "japanese display value becomes whisper code", input: " japanese ", want: "ja"},
+		{name: "language code remains normalized", input: "KO", want: "ko"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeSubtitleSourceLangForASR(tt.input); got != tt.want {
+				t.Fatalf("normalizeSubtitleSourceLangForASR(%q)=%q want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestValidateSRTRejectsTokenizedZeroDurationSubtitles(t *testing.T) {
 	svc := NewSubtitleService(t.TempDir())
 	srtPath := filepath.Join(t.TempDir(), "tokenized.srt")

@@ -315,6 +315,43 @@
       </template>
     </div>
 
+    <div class="settings-section">
+      <h3>字幕识别质量</h3>
+      <div class="setting-item">
+        <label>WhisperX 模型</label>
+        <select v-model="settingsForm.subtitle_whisperx_model" class="select-input">
+          <option value="tiny">tiny（最快）</option>
+          <option value="base">base</option>
+          <option value="small">small</option>
+          <option value="medium">medium（默认）</option>
+          <option value="large-v2">large-v2</option>
+          <option value="large-v3">large-v3（更准，更慢）</option>
+        </select>
+        <p class="help-text">提高模型档位通常能改善识别准确度，但首次使用会下载更大的模型并显著增加耗时。</p>
+      </div>
+      <div class="setting-grid">
+        <div class="setting-item">
+          <label>批量大小</label>
+          <input
+            type="number"
+            v-model.number="settingsForm.subtitle_whisperx_batch_size"
+            min="1"
+            max="16"
+            step="1"
+            class="number-input"
+          />
+        </div>
+        <div class="setting-item">
+          <label>计算精度</label>
+          <select v-model="settingsForm.subtitle_whisperx_compute_type" class="select-input">
+            <option value="int8">int8（默认，省内存）</option>
+            <option value="float16">float16</option>
+            <option value="float32">float32（更稳，更慢）</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
     <!-- 扫描目录管理 -->
     <div class="settings-section">
       <h3>扫描目录管理</h3>
@@ -401,6 +438,9 @@ export default {
         this.settingsForm.local_ml_model = this.localMLModelValue(this.settingsForm.local_ml_model);
         this.settingsForm.local_ml_device = this.localMLDeviceValue(this.settingsForm.local_ml_device);
         this.settingsForm.subtitle_translation_provider = this.subtitleTranslationProviderValue(this.settingsForm.subtitle_translation_provider);
+        this.settingsForm.subtitle_whisperx_model = this.subtitleWhisperXModelValue(this.settingsForm.subtitle_whisperx_model);
+        this.settingsForm.subtitle_whisperx_batch_size = this.settingsForm.subtitle_whisperx_batch_size || 8;
+        this.settingsForm.subtitle_whisperx_compute_type = this.subtitleWhisperXComputeTypeValue(this.settingsForm.subtitle_whisperx_compute_type);
       },
       immediate: true,
       deep: true
@@ -522,6 +562,9 @@ export default {
         subtitle_translation_base_url: this.settingsForm.subtitle_translation_base_url || '',
         subtitle_translation_api_key: this.settingsForm.subtitle_translation_api_key || '',
         subtitle_translation_model: this.settingsForm.subtitle_translation_model || '',
+        subtitle_whisperx_model: this.subtitleWhisperXModelValue(this.settingsForm.subtitle_whisperx_model),
+        subtitle_whisperx_batch_size: this.settingsForm.subtitle_whisperx_batch_size || 8,
+        subtitle_whisperx_compute_type: this.subtitleWhisperXComputeTypeValue(this.settingsForm.subtitle_whisperx_compute_type),
         ai_backend_mode: this.settingsForm.ai_backend_mode || 'api',
         local_ml_model: this.localMLModelValue(this.settingsForm.local_ml_model),
         local_ml_device: this.localMLDeviceValue(this.settingsForm.local_ml_device),
@@ -548,6 +591,14 @@ export default {
     subtitleTranslationProviderValue(value) {
       const provider = (value || '').trim().toLowerCase();
       return provider === 'llm' ? 'llm' : 'deepl';
+    },
+    subtitleWhisperXModelValue(value) {
+      const model = (value || '').trim().toLowerCase();
+      return ['tiny', 'base', 'small', 'medium', 'large-v2', 'large-v3'].includes(model) ? model : 'medium';
+    },
+    subtitleWhisperXComputeTypeValue(value) {
+      const computeType = (value || '').trim().toLowerCase();
+      return ['int8', 'float16', 'float32'].includes(computeType) ? computeType : 'int8';
     },
     async saveSettings() {
       try {

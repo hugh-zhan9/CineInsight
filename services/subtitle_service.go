@@ -38,33 +38,103 @@ var deeplHTTPClient = &http.Client{
 }
 
 type SubtitleService struct {
-	ctx        context.Context
-	cancelFunc context.CancelFunc // 取消当前生成任务
-	mu         sync.Mutex
-	BaseDir    string
-	BinDir     string
-	ModelDir   string
+	ctx       context.Context
+	mu        sync.Mutex
+	pending   map[uint]*pendingSubtitleArtifact
+	taskQueue *subtitleTaskQueue
+	BaseDir   string
+	BinDir    string
+	ModelDir  string
+}
+
+type pendingSubtitleArtifact struct {
+	VideoID      uint
+	VideoPath    string
+	SRTPath      string
+	Engine       SubtitleEngine
+	SourceLang   string
+	DetectedLang string
 }
 
 func NewSubtitleService(baseDir string) *SubtitleService {
-	return &SubtitleService{
+	service := &SubtitleService{
 		BaseDir:  baseDir,
 		BinDir:   filepath.Join(baseDir, "bin"),
 		ModelDir: filepath.Join(baseDir, "models"),
 	}
+	service.taskQueue = service.newSubtitleTaskQueue()
+	return service
 }
 
 func (s *SubtitleService) SetContext(ctx context.Context) {
 	s.ctx = ctx
 }
 
-// CancelGeneration 取消正在进行的字幕生成任务
-func (s *SubtitleService) CancelGeneration() {
+func (s *SubtitleService) newSubtitleTaskQueue() *subtitleTaskQueue {
+	return newSubtitleTaskQueue(s.emitSubtitleQueueSnapshot, func(ctx context.Context, task *subtitleQueueTask) (*SubtitleGenerateResult, error) {
+		return s.executeSubtitleTask(ctx, task.Request, task.VideoPath, task.Options)
+	})
+}
+
+func (s *SubtitleService) subtitleTaskQueue() *subtitleTaskQueue {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.cancelFunc != nil {
-		s.cancelFunc()
+	if s.taskQueue == nil {
+		s.taskQueue = s.newSubtitleTaskQueue()
+	}
+	return s.taskQueue
+}
+
+func (s *SubtitleService) GetSubtitleQueueState() SubtitleQueueSnapshot {
+	return s.subtitleTaskQueue().snapshot()
+}
+
+func (s *SubtitleService) CancelSubtitleTask(taskID uint) error {
+	return s.subtitleTaskQueue().cancelTask(taskID)
+}
+
+func (s *SubtitleService) cachePendingSubtitle(artifact *pendingSubtitleArtifact) {
+	if artifact == nil || artifact.VideoID == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending == nil {
+		s.pending = make(map[uint]*pendingSubtitleArtifact)
+	}
+	s.pending[artifact.VideoID] = artifact
+}
+
+func (s *SubtitleService) consumePendingSubtitle(videoID uint) *pendingSubtitleArtifact {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending == nil {
+		return nil
+	}
+	artifact := s.pending[videoID]
+	delete(s.pending, videoID)
+	return artifact
+}
+
+func (s *SubtitleService) peekPendingSubtitle(videoID uint) *pendingSubtitleArtifact {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending == nil {
+		return nil
+	}
+	if artifact := s.pending[videoID]; artifact != nil {
+		copy := *artifact
+		return &copy
+	}
+	return nil
+}
+
+// CancelGeneration 取消正在进行的字幕生成任务
+func (s *SubtitleService) CancelGeneration() {
+	if err := s.subtitleTaskQueue().cancelActiveTask(); err == nil {
 		log.Printf("[Subtitle] generation cancelled by user")
+	} else if !errors.Is(err, ErrSubtitleTaskNotFound) {
+		log.Printf("[Subtitle] cancel active generation failed: %v", err)
 	}
 }
 
@@ -292,21 +362,19 @@ func (s *SubtitleService) DownloadDependencies() error {
 	return s.PrepareEngine(SubtitleEngineWhisperX)
 }
 
-func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPath string,
-	bilingualEnabled bool, bilingualLang string, translationConfig SubtitleTranslationConfig, forceGenerate bool) (*SubtitleGenerateResult, error) {
+func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPath string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
+	options = normalizeSubtitleGenerateOptions(options)
+	req.SourceLang = normalizeSubtitleSourceLangForASR(req.SourceLang)
+	task := &subtitleQueueTask{
+		Request:   req,
+		VideoPath: videoPath,
+		VideoName: strings.TrimSpace(req.VideoName),
+		Options:   options,
+	}
+	return s.subtitleTaskQueue().submit(task)
+}
 
-	// 创建可取消的子 context
-	ctx, cancel := context.WithCancel(s.ctx)
-	s.mu.Lock()
-	s.cancelFunc = cancel
-	s.mu.Unlock()
-	defer func() {
-		cancel()
-		s.mu.Lock()
-		s.cancelFunc = nil
-		s.mu.Unlock()
-	}()
-
+func (s *SubtitleService) executeSubtitleTask(ctx context.Context, req SubtitleGenerateRequest, videoPath string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
 	s.emitProgress("generate", req.Engine, "checking", 0, "初始化任务...")
 
 	statuses, err := s.GetEngineStatuses()
@@ -330,6 +398,23 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 		return nil, fmt.Errorf(engineStatus.ReasonMessage)
 	}
 
+	if options.ForceGenerate {
+		if pending := s.peekPendingSubtitle(req.VideoID); pending != nil &&
+			pending.VideoPath == videoPath &&
+			pending.Engine == req.Engine &&
+			(pending.SourceLang == "" || pending.SourceLang == req.SourceLang) {
+			if _, err := os.Stat(pending.SRTPath); err == nil {
+				s.emitProgress("generate", req.Engine, "finalizing", 35, "使用上次校验结果强制生成...")
+				result, err := s.finalizeSubtitleArtifact(ctx, req, pending.SRTPath, pending.DetectedLang, options)
+				if err != nil {
+					return nil, err
+				}
+				s.consumePendingSubtitle(req.VideoID)
+				return result, nil
+			}
+		}
+	}
+
 	// Extract Audio
 	s.emitProgress("generate", req.Engine, "extracting-audio", 10, "提取音频...")
 	tempWav := filepath.Join(s.BaseDir, fmt.Sprintf("temp_%d.wav", req.VideoID))
@@ -347,15 +432,11 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 	s.emitProgress("generate", req.Engine, "transcribing", 20, fmt.Sprintf("使用 %s 转写音频...", engineStatus.DisplayName))
 	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
 
-	if req.SourceLang == "" {
-		req.SourceLang = "auto"
-	}
-
 	var detectedLang string
 	var segments []subtitleparser.Segment
 	switch req.Engine {
 	case SubtitleEngineWhisperX:
-		detectedLang, segments, err = s.transcribeWhisperXWithLang(ctx, tempWav, req.SourceLang)
+		detectedLang, segments, err = s.transcribeWhisperXWithLang(ctx, tempWav, req.SourceLang, options.RecognitionConfig)
 	case SubtitleEngineQwen:
 		detectedLang, segments, err = s.transcribeQwenWithLang(ctx, tempWav, req.SourceLang)
 	default:
@@ -376,14 +457,23 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 	}
 
 	// 后处理：检测幻觉输出（forceGenerate 时跳过）
-	if !forceGenerate {
+	if !options.ForceGenerate {
 		s.emitProgress("generate", req.Engine, "validating", 50, "校验字幕输出...")
 		if err := s.validateSRT(srtPath); err != nil {
 			var validationErr *SubtitleValidationError
 			if ok := errors.As(err, &validationErr); ok {
+				s.cachePendingSubtitle(&pendingSubtitleArtifact{
+					VideoID:      req.VideoID,
+					VideoPath:    videoPath,
+					SRTPath:      srtPath,
+					Engine:       req.Engine,
+					SourceLang:   req.SourceLang,
+					DetectedLang: detectedLang,
+				})
 				return &SubtitleGenerateResult{
 					Status:         SubtitleResultStatusValidationFailed,
 					VideoID:        req.VideoID,
+					Path:           srtPath,
 					Message:        validationErr.Message,
 					ValidationCode: validationErr.Code,
 					ForceEligible:  validationErr.ForceEligible,
@@ -395,21 +485,35 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 		}
 	}
 
-	// 双语字幕处理
-	if bilingualEnabled && strings.TrimSpace(bilingualLang) != "" {
-		targetLang := normalizeSubtitleLanguageCode(bilingualLang)
+	result, err := s.finalizeSubtitleArtifact(ctx, req, srtPath, detectedLang, options)
+	if err != nil {
+		return nil, err
+	}
+	s.consumePendingSubtitle(req.VideoID)
+	return result, nil
+}
+
+func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, req SubtitleGenerateRequest, srtPath string, detectedLang string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
+	warnings := []string{}
+	translationStatus := ""
+	outputPrefix := strings.TrimSuffix(srtPath, filepath.Ext(srtPath))
+
+	if options.BilingualEnabled && strings.TrimSpace(options.BilingualLang) != "" {
+		targetLang := normalizeSubtitleLanguageCode(options.BilingualLang)
 		if targetLang == "" {
-			targetLang = strings.TrimSpace(bilingualLang)
+			targetLang = strings.TrimSpace(options.BilingualLang)
 		}
-		provider := normalizeSubtitleTranslationProvider(translationConfig.Provider)
+		provider := normalizeSubtitleTranslationProvider(options.TranslationConfig.Provider)
 		log.Printf("[Subtitle] bilingual: detected=%s target=%s provider=%s", detectedLang, targetLang, provider)
 
-		// 如果检测到的语言已经是目标语言，跳过翻译
 		if s.isSameLanguage(detectedLang, targetLang) {
+			translationStatus = "skipped_same_language"
 			log.Printf("[Subtitle] detected language matches target, skipping translation")
 		} else {
-			translator, err := s.subtitleTranslator(provider, translationConfig)
+			translator, err := s.subtitleTranslator(provider, options.TranslationConfig)
 			if err != nil {
+				translationStatus = "skipped_config_missing"
+				warnings = append(warnings, fmt.Sprintf("双语翻译未执行：%v", err))
 				log.Printf("[Subtitle] translation config unavailable provider=%s err=%v, keeping original SRT", provider, err)
 				goto done
 			}
@@ -419,18 +523,27 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 			defer os.Remove(translatedSrtPath)
 
 			sourceLang := normalizeSubtitleLanguageCode(detectedLang)
-			if sourceLang == "auto" {
+			if sourceLang == "auto" || sourceLang == "unknown" {
 				sourceLang = ""
 			}
 			if err := s.translateSRT(ctx, srtPath, translatedSrtPath, sourceLang, targetLang, translator); err != nil {
+				if ctx.Err() != nil {
+					s.emitCancelled(req.VideoID, req.Engine, "字幕生成已取消")
+					return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
+				}
+				translationStatus = "failed"
+				warnings = append(warnings, fmt.Sprintf("双语翻译失败，已保留原文字幕：%v", err))
 				log.Printf("[Subtitle] subtitle translate failed via %s: %v, keeping original SRT", provider, err)
 				goto done
 			}
 
-			// 合并双语 SRT（原文上行、翻译下行）
 			s.emitProgress("generate", req.Engine, "merging", 85, "合并双语字幕...")
 			if err := s.mergeBilingualSRT(srtPath, translatedSrtPath, srtPath); err != nil {
+				translationStatus = "failed"
+				warnings = append(warnings, fmt.Sprintf("双语字幕合并失败，已保留原文字幕：%v", err))
 				log.Printf("[Subtitle] merge failed: %v", err)
+			} else {
+				translationStatus = "translated"
 			}
 		}
 	}
@@ -438,18 +551,27 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 done:
 	if err := indexSubtitleFileForVideoID(req.VideoID, srtPath); err != nil {
 		log.Printf("[Subtitle] index subtitle failed videoID=%d path=%s err=%v", req.VideoID, srtPath, err)
+		warnings = append(warnings, fmt.Sprintf("字幕索引更新失败：%v", err))
 	}
 
 	s.emitProgress("generate", req.Engine, "finalizing", 100, "完成收尾")
 
 	if s.ctx != nil {
 		wailsRuntime.EventsEmit(s.ctx, "subtitle-success", map[string]interface{}{
-			"videoID": req.VideoID,
-			"engine":  string(req.Engine),
-			"path":    srtPath,
+			"videoID":            req.VideoID,
+			"engine":             string(req.Engine),
+			"path":               srtPath,
+			"warnings":           warnings,
+			"translation_status": translationStatus,
 		})
 	}
-	return &SubtitleGenerateResult{Status: SubtitleResultStatusSuccess, VideoID: req.VideoID, Path: srtPath}, nil
+	return &SubtitleGenerateResult{
+		Status:            SubtitleResultStatusSuccess,
+		VideoID:           req.VideoID,
+		Path:              srtPath,
+		Warnings:          warnings,
+		TranslationStatus: translationStatus,
+	}, nil
 }
 
 func (s *SubtitleService) extractAudio(ctx context.Context, videoPath, outputPath string) error {
@@ -595,7 +717,6 @@ func (s *SubtitleService) validateSRT(srtPath string) error {
 	log.Printf("[Subtitle] validateSRT: totalLines=%d maxCount=%d ratio=%.2f maxLine=%q", totalLines, maxCount, repeatRatio, maxLine)
 
 	if repeatRatio > 0.85 {
-		os.Remove(srtPath)
 		return &SubtitleValidationError{
 			Code:          SubtitleValidationCodeHallucinationDetected,
 			Message:       fmt.Sprintf("检测到异常输出（疑似模型幻觉），字幕内容重复率 %.0f%%。可选择强制生成保留结果", repeatRatio*100),
@@ -605,7 +726,6 @@ func (s *SubtitleService) validateSRT(srtPath string) error {
 
 	segments, err := subtitleparser.ParseFile(srtPath)
 	if err == nil && hasTokenizedTimingFailure(segments) {
-		os.Remove(srtPath)
 		return &SubtitleValidationError{
 			Code:          SubtitleValidationCodeHallucinationDetected,
 			Message:       "检测到异常逐字字幕（大量单字或零时长片段），可选择强制生成保留结果",
@@ -650,6 +770,23 @@ func hasTokenizedTimingFailure(segments []subtitleparser.Segment) bool {
 // isSameLanguage 判断 whisper 检测到的语言与用户目标语言是否相同
 func (s *SubtitleService) isSameLanguage(detected, target string) bool {
 	return normalizeSubtitleLanguageCode(detected) == normalizeSubtitleLanguageCode(target)
+}
+
+func normalizeSubtitleGenerateOptions(options SubtitleGenerateOptions) SubtitleGenerateOptions {
+	options.BilingualLang = strings.TrimSpace(options.BilingualLang)
+	options.TranslationConfig.Provider = string(normalizeSubtitleTranslationProvider(options.TranslationConfig.Provider))
+	options.RecognitionConfig.WhisperXModel = normalizeSubtitleWhisperXModel(options.RecognitionConfig.WhisperXModel)
+	options.RecognitionConfig.WhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(options.RecognitionConfig.WhisperXBatchSize)
+	options.RecognitionConfig.WhisperXComputeType = normalizeSubtitleWhisperXComputeType(options.RecognitionConfig.WhisperXComputeType)
+	return options
+}
+
+func normalizeSubtitleSourceLangForASR(value string) string {
+	normalized := normalizeSubtitleLanguageCode(value)
+	if normalized == "" {
+		return "auto"
+	}
+	return normalized
 }
 
 // SRTEntry 表示一条 SRT 字幕
@@ -796,16 +933,15 @@ func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPat
 		if err != nil {
 			return err
 		}
+		if len(translated) != len(batch) {
+			return fmt.Errorf("字幕翻译返回 %d 条，期望 %d 条", len(translated), len(batch))
+		}
 
 		for j, e := range batch {
-			translatedText := e.Text
-			if j < len(translated) {
-				translatedText = translated[j]
-			}
 			translatedEntries = append(translatedEntries, SRTEntry{
 				Index: e.Index,
 				Time:  e.Time,
-				Text:  translatedText,
+				Text:  strings.TrimSpace(translated[j]),
 			})
 		}
 	}
@@ -965,6 +1101,12 @@ func (s *SubtitleService) emitProgress(action string, engine SubtitleEngine, pha
 			"cancellable": action == "generate",
 			"jobScope":    "single_active_v1",
 		})
+	}
+}
+
+func (s *SubtitleService) emitSubtitleQueueSnapshot(snapshot SubtitleQueueSnapshot) {
+	if s.ctx != nil {
+		wailsRuntime.EventsEmit(s.ctx, "subtitle-queue", snapshot)
 	}
 }
 

@@ -24,6 +24,8 @@ export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise
 
 export function CancelSubtitle():Promise<void>;
 
+export function CancelSubtitleTask(arg1:number):Promise<void>;
+
 export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
 
 export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
@@ -63,6 +65,8 @@ export function GetShortFeedServerStatus():Promise<services.ShortFeedServerStatu
 export function GetStartupError():Promise<string>;
 
 export function GetSubtitleEngineStatuses():Promise<Array<services.SubtitleEngineStatus>>;
+
+export function GetSubtitleQueueState():Promise<services.SubtitleQueueSnapshot>;
 
 export function GetSubtitleSegments(arg1:number):Promise<Array<subtitleparser.Segment>>;
 
@@ -109,6 +113,8 @@ export function ScanDirectory(arg1:string):Promise<Array<string>>;
 export function ScanDirectoryWithInfo(arg1:string):Promise<Array<services.ScannedFile>>;
 
 export function SearchSubtitleMatches(arg1:string,arg2:number):Promise<Array<services.SubtitleSearchMatch>>;
+
+export function SearchSubtitleMatchesWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number):Promise<Array<services.SubtitleSearchMatch>>;
 
 export function SearchVideos(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 

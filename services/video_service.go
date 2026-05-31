@@ -17,6 +17,7 @@ import (
 	"time"
 	"video-master/database"
 	"video-master/models"
+	"video-master/services/subtitleparser"
 
 	"gorm.io/gorm"
 )
@@ -1153,6 +1154,8 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 
 	oldPath := video.Path
 	newPath := filepath.Join(video.Directory, newName)
+	oldSubtitlePath := subtitleparser.SRTPathForVideo(oldPath)
+	newSubtitlePath := subtitleparser.SRTPathForVideo(newPath)
 
 	// 新旧路径相同则跳过
 	if oldPath == newPath {
@@ -1164,8 +1167,28 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 		return fmt.Errorf("目标文件已存在: %s", newName)
 	}
 
+	subtitleMoved := false
+	if oldSubtitlePath != newSubtitlePath {
+		if _, err := os.Stat(oldSubtitlePath); err == nil {
+			if _, targetErr := os.Stat(newSubtitlePath); targetErr == nil {
+				return fmt.Errorf("目标字幕文件已存在: %s", filepath.Base(newSubtitlePath))
+			} else if !os.IsNotExist(targetErr) {
+				return fmt.Errorf("检查目标字幕文件失败: %w", targetErr)
+			}
+			if err := os.Rename(oldSubtitlePath, newSubtitlePath); err != nil {
+				return fmt.Errorf("重命名字幕文件失败: %w", err)
+			}
+			subtitleMoved = true
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("检查字幕文件失败: %w", err)
+		}
+	}
+
 	// 重命名磁盘文件
 	if err := os.Rename(oldPath, newPath); err != nil {
+		if subtitleMoved {
+			_ = os.Rename(newSubtitlePath, oldSubtitlePath)
+		}
 		return fmt.Errorf("重命名文件失败: %w", err)
 	}
 
@@ -1176,7 +1199,15 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 	}).Error; err != nil {
 		// 回滚：将文件名改回去
 		_ = os.Rename(newPath, oldPath)
+		if subtitleMoved {
+			_ = os.Rename(newSubtitlePath, oldSubtitlePath)
+		}
 		return fmt.Errorf("更新数据库失败: %w", err)
+	}
+	if subtitleMoved {
+		if err := indexSubtitleFileForVideoID(id, newSubtitlePath); err != nil {
+			log.Printf("视频重命名后更新字幕索引失败 id=%d subtitle=%s err=%v", id, newSubtitlePath, err)
+		}
 	}
 
 	log.Printf("视频重命名 id=%d oldName=%s newName=%s", id, video.Name, newName)

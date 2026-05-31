@@ -18,6 +18,15 @@ type SubtitleSearchMatch struct {
 	Segment subtitleparser.Segment `json:"segment"`
 }
 
+type SubtitleSearchFilters struct {
+	TagIDs    []uint
+	MinSize   int64
+	MaxSize   int64
+	MinHeight int
+	MaxHeight int
+	Limit     int
+}
+
 type SubtitleSearchService struct{}
 
 func (s *SubtitleSearchService) SearchSubtitleMatches(keyword string, limit int) ([]SubtitleSearchMatch, error) {
@@ -29,7 +38,7 @@ func (s *SubtitleSearchService) SearchSubtitleMatches(keyword string, limit int)
 		limit = 20
 	}
 
-	matches, stale, err := s.searchIndexedSubtitleMatches(keyword, limit)
+	matches, stale, err := s.searchIndexedSubtitleMatches(keyword, limit, SubtitleSearchFilters{})
 	if err != nil {
 		return nil, err
 	}
@@ -37,7 +46,7 @@ func (s *SubtitleSearchService) SearchSubtitleMatches(keyword string, limit int)
 		return matches, nil
 	}
 	if stale {
-		matches, stale, err = s.searchIndexedSubtitleMatches(keyword, limit)
+		matches, stale, err = s.searchIndexedSubtitleMatches(keyword, limit, SubtitleSearchFilters{})
 		if err != nil {
 			return nil, err
 		}
@@ -49,11 +58,44 @@ func (s *SubtitleSearchService) SearchSubtitleMatches(keyword string, limit int)
 	if err := syncSubtitleIndexesFromFilesystem(); err != nil {
 		return nil, err
 	}
-	matches, _, err = s.searchIndexedSubtitleMatches(keyword, limit)
+	matches, _, err = s.searchIndexedSubtitleMatches(keyword, limit, SubtitleSearchFilters{})
 	return matches, err
 }
 
-func (s *SubtitleSearchService) searchIndexedSubtitleMatches(keyword string, limit int) ([]SubtitleSearchMatch, bool, error) {
+func (s *SubtitleSearchService) SearchSubtitleMatchesWithFilters(keyword string, filters SubtitleSearchFilters) ([]SubtitleSearchMatch, error) {
+	keyword = strings.TrimSpace(keyword)
+	if keyword == "" {
+		return []SubtitleSearchMatch{}, nil
+	}
+	if filters.Limit <= 0 {
+		filters.Limit = 20
+	}
+
+	matches, stale, err := s.searchIndexedSubtitleMatches(keyword, filters.Limit, filters)
+	if err != nil {
+		return nil, err
+	}
+	if len(matches) >= filters.Limit && !stale {
+		return matches, nil
+	}
+	if stale {
+		matches, stale, err = s.searchIndexedSubtitleMatches(keyword, filters.Limit, filters)
+		if err != nil {
+			return nil, err
+		}
+		if len(matches) >= filters.Limit && !stale {
+			return matches, nil
+		}
+	}
+
+	if err := syncSubtitleIndexesFromFilesystem(); err != nil {
+		return nil, err
+	}
+	matches, _, err = s.searchIndexedSubtitleMatches(keyword, filters.Limit, filters)
+	return matches, err
+}
+
+func (s *SubtitleSearchService) searchIndexedSubtitleMatches(keyword string, limit int, filters SubtitleSearchFilters) ([]SubtitleSearchMatch, bool, error) {
 	pattern := "%" + strings.ToLower(escapeSQLLike(keyword)) + "%"
 	type firstHit struct {
 		VideoID      uint
@@ -61,11 +103,34 @@ func (s *SubtitleSearchService) searchIndexedSubtitleMatches(keyword string, lim
 	}
 
 	var hits []firstHit
-	err := database.DB.Model(&models.SubtitleSegment{}).
-		Select("video_id, MIN(segment_index) AS segment_index").
+	query := database.DB.Model(&models.SubtitleSegment{}).
+		Select("subtitle_segments.video_id, MIN(subtitle_segments.segment_index) AS segment_index").
+		Joins("JOIN videos ON videos.id = subtitle_segments.video_id AND videos.deleted_at IS NULL").
 		Where("LOWER(text) LIKE ? ESCAPE '\\'", pattern).
-		Group("video_id").
-		Order("video_id desc").
+		Group("subtitle_segments.video_id")
+
+	if filters.MinSize > 0 {
+		query = query.Where("videos.size >= ?", filters.MinSize)
+	}
+	if filters.MaxSize > 0 {
+		query = query.Where("videos.size <= ?", filters.MaxSize)
+	}
+	if filters.MinHeight > 0 {
+		query = query.Where("videos.height >= ?", filters.MinHeight)
+	}
+	if filters.MaxHeight > 0 {
+		query = query.Where("videos.height <= ?", filters.MaxHeight)
+	}
+	if len(filters.TagIDs) > 0 {
+		tagIDs := uniqueUintIDs(filters.TagIDs)
+		query = query.Joins("JOIN video_tags ON video_tags.video_id = subtitle_segments.video_id").
+			Where("video_tags.tag_id IN ?", tagIDs).
+			Group("subtitle_segments.video_id").
+			Having("COUNT(DISTINCT video_tags.tag_id) = ?", len(tagIDs))
+	}
+
+	err := query.
+		Order("subtitle_segments.video_id desc").
 		Limit(limit).
 		Scan(&hits).Error
 	if err != nil {

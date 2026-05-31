@@ -31,6 +31,12 @@ type SubtitleTranslator interface {
 	Translate(ctx context.Context, texts []string, sourceLang, targetLang string) ([]string, error)
 }
 
+type subtitleTranslationItem struct {
+	Index       int    `json:"index"`
+	Text        string `json:"text"`
+	Translation string `json:"translation"`
+}
+
 const subtitleTranslationRequestTimeout = 5 * time.Minute
 
 type deepLSubtitleTranslator struct {
@@ -176,7 +182,7 @@ func (c *OpenAICompatibleSubtitleTranslator) buildRequest(texts []string, source
 
 func buildSubtitleTranslationPrompt(texts []string, sourceLang, targetLang string) string {
 	var builder strings.Builder
-	builder.WriteString("请逐条翻译以下字幕，只输出严格 JSON，格式为 {\"translations\":[\"...\"]}。\n")
+	builder.WriteString("请逐条翻译以下字幕，只输出严格 JSON，格式为 {\"translations\":[{\"index\":1,\"text\":\"...\"}]}。\n")
 	builder.WriteString("目标语言: ")
 	builder.WriteString(strings.TrimSpace(targetLang))
 	builder.WriteString("\n")
@@ -185,10 +191,15 @@ func buildSubtitleTranslationPrompt(texts []string, sourceLang, targetLang strin
 		builder.WriteString(trimmed)
 		builder.WriteString("\n")
 	}
-	builder.WriteString("要求：保持条目数量与顺序一致，不要添加解释、序号或 Markdown。\n")
-	builder.WriteString("字幕条目:\n")
+	builder.WriteString("要求：保持条目数量、顺序和原有换行；结合相邻条目的上下文；人名、片名、专有名词在不确定时保留原文；不要添加解释、序号或 Markdown。\n")
+	builder.WriteString("字幕条目（JSON Lines，每行包含 index 和 text）:\n")
 	for i, text := range texts {
-		fmt.Fprintf(&builder, "%d. %s\n", i+1, text)
+		payload, _ := json.Marshal(map[string]interface{}{
+			"index": i + 1,
+			"text":  text,
+		})
+		builder.Write(payload)
+		builder.WriteString("\n")
 	}
 	return builder.String()
 }
@@ -218,18 +229,72 @@ func parseSubtitleTranslations(content string) ([]string, error) {
 	content = normalizeAITaggingJSONContent(content)
 
 	var wrapped struct {
-		Translations []string `json:"translations"`
+		Translations json.RawMessage `json:"translations"`
 	}
-	if err := json.Unmarshal([]byte(content), &wrapped); err == nil && wrapped.Translations != nil {
-		return wrapped.Translations, nil
+	if err := json.Unmarshal([]byte(content), &wrapped); err == nil && len(wrapped.Translations) > 0 && string(wrapped.Translations) != "null" {
+		return parseSubtitleTranslationItems(wrapped.Translations)
 	}
 
+	return parseSubtitleTranslationItems([]byte(content))
+}
+
+func parseSubtitleTranslationItems(raw []byte) ([]string, error) {
 	var direct []string
-	if err := json.Unmarshal([]byte(content), &direct); err == nil {
+	if err := json.Unmarshal(raw, &direct); err == nil {
 		return direct, nil
 	}
 
+	var indexed []subtitleTranslationItem
+	if err := json.Unmarshal(raw, &indexed); err == nil && indexed != nil {
+		return subtitleTranslationsFromIndexedItems(indexed)
+	}
+
 	return nil, fmt.Errorf("subtitle translation response did not contain translations")
+}
+
+func subtitleTranslationsFromIndexedItems(items []subtitleTranslationItem) ([]string, error) {
+	if len(items) == 0 {
+		return []string{}, nil
+	}
+
+	hasIndex := false
+	for _, item := range items {
+		if item.Index > 0 {
+			hasIndex = true
+			break
+		}
+	}
+	if !hasIndex {
+		translations := make([]string, 0, len(items))
+		for _, item := range items {
+			translations = append(translations, subtitleTranslationItemText(item.Text, item.Translation))
+		}
+		return translations, nil
+	}
+
+	translations := make([]string, len(items))
+	seen := make(map[int]struct{}, len(items))
+	for _, item := range items {
+		if item.Index < 1 || item.Index > len(items) {
+			return nil, fmt.Errorf("subtitle translation index %d out of range 1..%d", item.Index, len(items))
+		}
+		if _, ok := seen[item.Index]; ok {
+			return nil, fmt.Errorf("subtitle translation duplicate index %d", item.Index)
+		}
+		seen[item.Index] = struct{}{}
+		translations[item.Index-1] = subtitleTranslationItemText(item.Text, item.Translation)
+	}
+	if len(seen) != len(items) {
+		return nil, fmt.Errorf("subtitle translation indexes are incomplete")
+	}
+	return translations, nil
+}
+
+func subtitleTranslationItemText(text, fallback string) string {
+	if text != "" {
+		return text
+	}
+	return fallback
 }
 
 func normalizeSubtitleTranslationProvider(value string) SubtitleTranslationProvider {

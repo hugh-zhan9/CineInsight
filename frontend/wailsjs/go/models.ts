@@ -37,6 +37,9 @@ export namespace models {
 	    subtitle_translation_base_url: string;
 	    subtitle_translation_api_key: string;
 	    subtitle_translation_model: string;
+	    subtitle_whisperx_model: string;
+	    subtitle_whisperx_batch_size: number;
+	    subtitle_whisperx_compute_type: string;
 	    ai_backend_mode: string;
 	    local_ml_model: string;
 	    local_ml_device: string;
@@ -71,6 +74,9 @@ export namespace models {
 	        this.subtitle_translation_base_url = source["subtitle_translation_base_url"];
 	        this.subtitle_translation_api_key = source["subtitle_translation_api_key"];
 	        this.subtitle_translation_model = source["subtitle_translation_model"];
+	        this.subtitle_whisperx_model = source["subtitle_whisperx_model"];
+	        this.subtitle_whisperx_batch_size = source["subtitle_whisperx_batch_size"];
+	        this.subtitle_whisperx_compute_type = source["subtitle_whisperx_compute_type"];
 	        this.ai_backend_mode = source["ai_backend_mode"];
 	        this.local_ml_model = source["local_ml_model"];
 	        this.local_ml_device = source["local_ml_device"];
@@ -798,6 +804,7 @@ export namespace services {
 	}
 	export class SubtitleGenerateRequest {
 	    video_id: number;
+	    video_name?: string;
 	    engine: string;
 	    source_lang: string;
 
@@ -808,6 +815,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.video_id = source["video_id"];
+	        this.video_name = source["video_name"];
 	        this.engine = source["engine"];
 	        this.source_lang = source["source_lang"];
 	    }
@@ -821,6 +829,8 @@ export namespace services {
 	    force_eligible?: boolean;
 	    engine?: string;
 	    source_lang?: string;
+	    warnings?: string[];
+	    translation_status?: string;
 
 	    static createFrom(source: any = {}) {
 	        return new SubtitleGenerateResult(source);
@@ -836,7 +846,77 @@ export namespace services {
 	        this.force_eligible = source["force_eligible"];
 	        this.engine = source["engine"];
 	        this.source_lang = source["source_lang"];
+	        this.warnings = source["warnings"];
+	        this.translation_status = source["translation_status"];
 	    }
+	}
+	export class SubtitleQueueTask {
+	    task_id: number;
+	    video_id: number;
+	    video_name: string;
+	    engine: string;
+	    source_lang: string;
+	    status: string;
+	    position: number;
+	    force_generate: boolean;
+	    can_cancel: boolean;
+	    enqueued_at: string;
+	    started_at?: string;
+	    finished_at?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SubtitleQueueTask(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.task_id = source["task_id"];
+	        this.video_id = source["video_id"];
+	        this.video_name = source["video_name"];
+	        this.engine = source["engine"];
+	        this.source_lang = source["source_lang"];
+	        this.status = source["status"];
+	        this.position = source["position"];
+	        this.force_generate = source["force_generate"];
+	        this.can_cancel = source["can_cancel"];
+	        this.enqueued_at = source["enqueued_at"];
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	    }
+	}
+	export class SubtitleQueueSnapshot {
+	    active_task?: SubtitleQueueTask;
+	    queued_tasks: SubtitleQueueTask[];
+	    total: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SubtitleQueueSnapshot(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.active_task = this.convertValues(source["active_task"], SubtitleQueueTask);
+	        this.queued_tasks = this.convertValues(source["queued_tasks"], SubtitleQueueTask);
+	        this.total = source["total"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class SubtitleSearchMatch {
 	    video: models.Video;

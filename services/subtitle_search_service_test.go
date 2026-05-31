@@ -123,6 +123,59 @@ func TestSearchSubtitleMatchesLimitsByUniqueVideos(t *testing.T) {
 	}
 }
 
+func TestSearchSubtitleMatchesWithFiltersAppliesTagAndMediaBounds(t *testing.T) {
+	setupSubtitleSearchTestDB(t)
+	root := t.TempDir()
+
+	tag := models.Tag{Name: "舞台", Color: "#60a5fa"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+
+	stagePath := filepath.Join(root, "stage.mp4")
+	stageSRT := filepath.Join(root, "stage.srt")
+	plainPath := filepath.Join(root, "plain.mp4")
+	plainSRT := filepath.Join(root, "plain.srt")
+	for path, content := range map[string]string{
+		stagePath: "fake-video-stage",
+		plainPath: "fake-video-plain",
+		stageSRT:  "1\n00:00:01,000 --> 00:00:02,000\nneedle phrase on stage\n",
+		plainSRT:  "1\n00:00:01,000 --> 00:00:02,000\nneedle phrase elsewhere\n",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+			t.Fatalf("写入测试文件失败 %s: %v", path, err)
+		}
+	}
+
+	stageVideo := models.Video{Name: "stage.mp4", Path: stagePath, Directory: root, Size: 400, Height: 1080}
+	plainVideo := models.Video{Name: "plain.mp4", Path: plainPath, Directory: root, Size: 40, Height: 360}
+	if err := database.DB.Create(&stageVideo).Error; err != nil {
+		t.Fatalf("创建舞台视频失败: %v", err)
+	}
+	if err := database.DB.Create(&plainVideo).Error; err != nil {
+		t.Fatalf("创建普通视频失败: %v", err)
+	}
+	if err := database.DB.Model(&stageVideo).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("绑定标签失败: %v", err)
+	}
+
+	matches, err := (&SubtitleSearchService{}).SearchSubtitleMatchesWithFilters("needle phrase", SubtitleSearchFilters{
+		TagIDs:    []uint{tag.ID},
+		MinSize:   100,
+		MinHeight: 720,
+		Limit:     10,
+	})
+	if err != nil {
+		t.Fatalf("带过滤搜索字幕失败: %v", err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("期望只命中 1 条，实际 %d", len(matches))
+	}
+	if matches[0].Video.ID != stageVideo.ID {
+		t.Fatalf("过滤后命中视频错误 got=%d want=%d", matches[0].Video.ID, stageVideo.ID)
+	}
+}
+
 func TestSearchSubtitleMatchesRefreshesStaleIndex(t *testing.T) {
 	setupSubtitleSearchTestDB(t)
 	root := t.TempDir()

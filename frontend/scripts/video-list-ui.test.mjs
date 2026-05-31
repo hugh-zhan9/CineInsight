@@ -3,6 +3,8 @@ import { readFileSync } from 'node:fs';
 
 const appSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
 const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
+const addTagDialogSource = readFileSync(new URL('../src/components/AddTagDialog.vue', import.meta.url), 'utf8');
+const appBindingsSource = readFileSync(new URL('../wailsjs/go/main/App.js', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
 const videoRowSource = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const shortFeedCss = readFileSync(new URL('../src/short-feed/short-feed.css', import.meta.url), 'utf8');
@@ -24,6 +26,14 @@ assert.match(videoListSource, /<button[^>]+@click="showTagManagerDialog = true"[
 assert.match(videoListSource, /<option value="smart">智能搜索<\/option>/, 'video list should expose smart natural-language search mode');
 assert.match(videoListSource, /SearchVideosSmart/, 'smart search mode should call the dedicated Wails API');
 assert.match(videoListSource, /AnalyzeVideoFaces/, 'video list should call the face analysis Wails API');
+assert.match(videoListSource, /SearchSubtitleMatchesWithFilters/, 'subtitle search should call the backend filtered subtitle API');
+assert.match(videoListSource, /GetSubtitleQueueState/, 'video list should load subtitle queue state');
+assert.match(videoListSource, /CancelSubtitleTask/, 'video list should cancel individual subtitle queue tasks');
+assert.match(videoListSource, /subtitle-queue/, 'video list should subscribe to subtitle queue updates');
+assert.match(videoListSource, /class="subtitle-queue-panel/, 'video list should render a subtitle queue panel');
+assert.match(videoListSource, /后台排队/, 'subtitle progress dialog should be dismissible so users can keep queueing tasks');
+assert.match(videoListSource, /subtitleProgressMinimized/, 'subtitle progress events should not reopen a minimized queue progress dialog');
+assert.doesNotMatch(videoListSource, /generatingSubtitleIds\.splice/, 'subtitle row busy state should be derived from queue snapshots, not manually spliced by completion events');
 assert.match(videoRowSource, /@click="\$emit\('analyze-faces', video\)"/, 'video rows should expose a face analysis action');
 assert.match(videoRowSource, /analyzingFaceIds/, 'video rows should show face analysis progress state');
 assert.match(videoRowSource, /row-primary-actions/, 'video rows should keep only primary actions in the always-visible rail');
@@ -48,6 +58,9 @@ assert.match(settingsSource, /<option value="deepl">DeepL<\/option>/, 'subtitle 
 assert.match(settingsSource, /<option value="llm">LLM API<\/option>/, 'subtitle settings should expose LLM API provider option');
 assert.match(settingsSource, /settingsForm\.subtitle_translation_base_url/, 'subtitle settings should expose OpenAI-compatible base URL');
 assert.match(settingsSource, /settingsForm\.subtitle_translation_model/, 'subtitle settings should expose translation model');
+assert.match(settingsSource, /v-model="settingsForm\.subtitle_whisperx_model"/, 'subtitle settings should expose WhisperX model quality');
+assert.match(settingsSource, /v-model\.number="settingsForm\.subtitle_whisperx_batch_size"/, 'subtitle settings should expose WhisperX batch size');
+assert.match(settingsSource, /v-model="settingsForm\.subtitle_whisperx_compute_type"/, 'subtitle settings should expose WhisperX compute type');
 assert.match(settingsSource, /GetLocalMLRuntimeStatus/, 'settings page should load local ML runtime status');
 assert.match(settingsSource, /RefreshLocalMLRuntimeStatus/, 'settings page refresh should retry local ML runtime configuration');
 assert.match(settingsSource, /IndexAIEmbeddings/, 'settings page should expose AI embedding indexing for API and local modes');
@@ -87,5 +100,20 @@ assert.match(videoListSource, /StartCleanupAnalysis/, 'cleanup analysis should s
 assert.match(videoListSource, /GetCleanupStatus/, 'cleanup dialog should reopen from background status');
 assert.match(videoListSource, /@click="reanalyzeCleanupCandidates"/, 'cleanup reanalysis should bypass completed background status');
 assert.match(videoListSource, /后台继续分析/, 'cleanup dialog should allow closing while analysis continues');
+
+assert.doesNotMatch(
+  addTagDialogSource,
+  /<div\s+v-if="visible"\s+class="modal-overlay"\s+@click="\$emit\('close'\)"/,
+  'add tag dialog should not close from generic backdrop clicks during editing'
+);
+assert.match(
+  addTagDialogSource,
+  /<button @click="\$emit\('close'\)" class="btn-secondary">取消<\/button>/,
+  'add tag dialog should keep an explicit cancel action'
+);
+assert.match(appBindingsSource, /SearchSubtitleMatchesWithFilters/, 'wails bindings should expose backend filtered subtitle search');
+assert.match(appBindingsSource, /GetSubtitleQueueState/, 'wails bindings should expose subtitle queue state');
+assert.match(appBindingsSource, /CancelSubtitleTask/, 'wails bindings should expose subtitle queue cancellation');
+assert.match(videoListSource, /result\.warnings/, 'subtitle result dialog should surface generation warnings');
 
 console.log('video-list-ui tests passed');
