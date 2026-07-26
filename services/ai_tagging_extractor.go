@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,12 +20,14 @@ import (
 	"video-master/services/subtitleparser"
 )
 
-const aiTaggingPromptSchemaVersion = "ai-tagging-v2-visual-first"
+const aiTaggingPromptSchemaVersion = "ai-tagging-v4-minute-sampling-batches"
 
 const (
-	aiTaggingFrameMaxWidth = 512
-	aiTaggingFrameQuality  = 8
-	aiTaggingFrameMaxCount = 8
+	aiTaggingFrameMaxWidth       = 512
+	aiTaggingFrameQuality        = 8
+	aiTaggingFrameMinimumCount   = 10
+	aiTaggingFramePolicyVersion  = "one-per-minute-v1"
+	aiTaggingFrameEdgeAvoidRatio = 0.05
 )
 
 type AITaggingEvidence struct {
@@ -56,15 +59,16 @@ func NewAITaggingExtractor() *AITaggingExtractor {
 }
 
 func (e *AITaggingExtractor) Collect(ctx context.Context, video models.Video, config AITaggingConfig) AITaggingEvidence {
+	frameCount := planAITaggingFrameCount(video.Duration)
 	evidence := AITaggingEvidence{
 		FileName:            video.Name,
 		Path:                video.Path,
 		Directory:           video.Directory,
-		FrameSamplingConfig: fmt.Sprintf("count=%d,max_width=%d,quality=%d", normalizedAITaggingFrameCount(config.FrameCount), aiTaggingFrameMaxWidth, aiTaggingFrameQuality),
+		FrameSamplingConfig: formatAITaggingFrameSamplingConfig(video.Duration, frameCount),
 		PromptSchemaVersion: aiTaggingPromptSchemaVersion,
 	}
 	e.collectSubtitle(video, config, &evidence)
-	e.collectFrames(ctx, video, config, &evidence)
+	e.collectFrames(ctx, video, &evidence)
 	return evidence
 }
 
@@ -107,8 +111,12 @@ func (e *AITaggingExtractor) collectSubtitle(video models.Video, config AITaggin
 	evidence.SubtitleSize = info.Size()
 }
 
-func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Video, config AITaggingConfig, evidence *AITaggingEvidence) {
-	if config.FrameCount <= 0 || strings.TrimSpace(video.Path) == "" {
+func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Video, evidence *AITaggingEvidence) {
+	if strings.TrimSpace(video.Path) == "" {
+		return
+	}
+	count := planAITaggingFrameCount(video.Duration)
+	if count <= 0 {
 		return
 	}
 	ffmpegBin := findMediaBinary("ffmpeg")
@@ -127,20 +135,14 @@ func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Vid
 	}
 	defer os.RemoveAll(tmpDir)
 
-	count := config.FrameCount
-	count = normalizedAITaggingFrameCount(count)
-	duration := video.Duration
-	if duration <= 0 {
-		duration = float64(count + 1)
-	}
-	for i := 0; i < count; i++ {
+	positions := planAITaggingFramePositions(video.Duration, count)
+	for i, position := range positions {
 		select {
 		case <-ctx.Done():
 			evidence.Warnings = append(evidence.Warnings, "frame sampling cancelled")
 			return
 		default:
 		}
-		position := duration * float64(i+1) / float64(count+1)
 		outPath := filepath.Join(tmpDir, fmt.Sprintf("frame-%d.jpg", i))
 		cmd := exec.CommandContext(ctx, ffmpegBin,
 			"-y",
@@ -167,16 +169,68 @@ func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Vid
 			Position: position,
 		})
 	}
+	minAccepted := count / 2
+	if minAccepted < 3 {
+		minAccepted = 3
+	}
+	if len(evidence.Frames) > 0 && len(evidence.Frames) < minAccepted {
+		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("frame sampling sparse: got=%d want>=%d", len(evidence.Frames), minAccepted))
+	}
 }
 
-func normalizedAITaggingFrameCount(count int) int {
-	if count <= 0 {
-		return 0
+func formatAITaggingFrameSamplingConfig(duration float64, resolvedCount int) string {
+	return fmt.Sprintf("policy=%s,duration=%.2f,count=%d,max_width=%d,quality=%d,edge_avoid=%.2f",
+		aiTaggingFramePolicyVersion,
+		duration,
+		resolvedCount,
+		aiTaggingFrameMaxWidth,
+		aiTaggingFrameQuality,
+		aiTaggingFrameEdgeAvoidRatio,
+	)
+}
+
+func planAITaggingFrameCount(duration float64) int {
+	if duration <= 0 {
+		return aiTaggingFrameMinimumCount
 	}
-	if count > aiTaggingFrameMaxCount {
-		return aiTaggingFrameMaxCount
+	count := int(math.Ceil(duration / 60))
+	if count < aiTaggingFrameMinimumCount {
+		return aiTaggingFrameMinimumCount
 	}
 	return count
+}
+
+func planAITaggingFramePositions(duration float64, count int) []float64 {
+	if count <= 0 {
+		return nil
+	}
+	if duration <= 0 {
+		duration = float64(count + 1)
+	}
+	start := duration * aiTaggingFrameEdgeAvoidRatio
+	end := duration * (1 - aiTaggingFrameEdgeAvoidRatio)
+	if end <= start {
+		start = 0
+		end = duration
+	}
+	span := end - start
+	positions := make([]float64, 0, count)
+	for i := 0; i < count; i++ {
+		var position float64
+		if count == 1 {
+			position = start + span/2
+		} else {
+			position = start + span*float64(i)/float64(count-1)
+		}
+		if position < 0 {
+			position = 0
+		}
+		if duration > 0 && position > duration {
+			position = duration
+		}
+		positions = append(positions, position)
+	}
+	return positions
 }
 
 func (e AITaggingEvidence) SummaryJSON() string {

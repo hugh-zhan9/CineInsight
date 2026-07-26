@@ -81,10 +81,10 @@ func (s *AITaggingService) runWorkerOnce(ctx context.Context) {
 		log.Printf("[AITagging] config unavailable; background worker idle err=%v", err)
 		return
 	}
-	log.Printf("[AITagging] worker config base_url=%q model=%q frame_count=%d subtitle_char_limit=%d startup_batch_size=%d api_key_empty=%v",
+	log.Printf("[AITagging] worker config base_url=%q model=%q images_per_request=%d subtitle_char_limit=%d startup_batch_size=%d api_key_empty=%v",
 		config.BaseURL,
 		config.Model,
-		config.FrameCount,
+		config.ImagesPerRequest,
 		config.SubtitleCharLimit,
 		config.StartupBatchSize,
 		strings.TrimSpace(config.APIKey) == "",
@@ -121,14 +121,14 @@ func (s *AITaggingService) ProcessVideo(ctx context.Context, videoID uint) error
 }
 
 func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video models.Video, config AITaggingConfig) error {
-	log.Printf("[AITagging] start video_id=%d name=%q path=%q tags=%d config={base_url:%q model:%q frame_count:%d subtitle_char_limit:%d api_key_empty:%v}",
+	log.Printf("[AITagging] start video_id=%d name=%q path=%q tags=%d config={base_url:%q model:%q images_per_request:%d subtitle_char_limit:%d api_key_empty:%v}",
 		video.ID,
 		video.Name,
 		video.Path,
 		len(video.Tags),
 		config.BaseURL,
 		config.Model,
-		config.FrameCount,
+		config.ImagesPerRequest,
 		config.SubtitleCharLimit,
 		strings.TrimSpace(config.APIKey) == "",
 	)
@@ -139,6 +139,10 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	existingTags, err := s.loadActiveTags()
 	if err != nil {
 		return err
+	}
+	if len(existingTags) == 0 {
+		log.Printf("[AITagging] skip empty tag library video_id=%d", video.ID)
+		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "empty_tag_library", "", "")
 	}
 	evidence := s.extractor.Collect(ctx, video, config)
 	log.Printf("[AITagging] evidence video_id=%d subtitle_len=%d frames=%d warnings=%q",
@@ -165,6 +169,14 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	if err != nil {
 		log.Printf("[AITagging] analyze failed video_id=%d err=%v", video.ID, err)
 		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
+	}
+	latestTags, err := s.loadActiveTags()
+	if err != nil {
+		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
+	}
+	if tagLibraryHash(latestTags) != tagLibraryHash(existingTags) {
+		log.Printf("[AITagging] tag library changed during analysis; retry scheduled video_id=%d", video.ID)
+		return s.RetryVideo(video.ID)
 	}
 	log.Printf("[AITagging] analyze succeeded video_id=%d suggestions=%d", video.ID, len(suggestions))
 	created, err := s.persistSuggestions(video, existingTags, evidence, suggestions)
@@ -204,7 +216,10 @@ func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error)
 
 func (s *AITaggingService) loadActiveTags() ([]models.Tag, error) {
 	var tags []models.Tag
-	if err := database.DB.Order("id").Find(&tags).Error; err != nil {
+	if err := database.DB.
+		Where("is_system = ? AND is_active = ?", true, true).
+		Order("namespace asc, sort_order asc, id asc").
+		Find(&tags).Error; err != nil {
 		return nil, err
 	}
 	return tags, nil
@@ -300,8 +315,12 @@ func (s *AITaggingService) markState(videoID uint, status, skipReason, fingerpri
 
 func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.Tag, evidence AITaggingEvidence, suggestions []AITagSuggestion) (int, error) {
 	tagsByName := make(map[string]models.Tag, len(tags))
+	closedOnly := false
 	for _, tag := range tags {
 		tagsByName[normalizeAITagName(tag.Name)] = tag
+		if tag.IsSystem {
+			closedOnly = true
+		}
 	}
 	created := 0
 	for _, suggestion := range suggestions {
@@ -326,8 +345,15 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 			label = matched.Name
 			normalized = normalizeAITagName(label)
 		}
-		if matchedTagID == nil && confidence != models.AITagConfidenceHigh {
-			continue
+		// Closed-set mode: never invent tags outside the system library.
+		if matchedTagID == nil {
+			if closedOnly {
+				log.Printf("[AITagging] drop out-of-library suggestion video_id=%d label=%q", video.ID, label)
+				continue
+			}
+			if confidence != models.AITagConfidenceHigh {
+				continue
+			}
 		}
 		candidate := models.AITagCandidate{
 			VideoID:        video.ID,
@@ -504,40 +530,15 @@ func (s *AITaggingService) hasManualOfficialTagsInTx(tx *gorm.DB, videoID uint) 
 }
 
 func (s *AITaggingService) resolveOfficialTagInTx(tx *gorm.DB, candidate models.AITagCandidate) (uint, error) {
-	if candidate.MatchedTagID != nil {
-		var tag models.Tag
-		if err := tx.First(&tag, *candidate.MatchedTagID).Error; err != nil {
-			return 0, err
-		}
-		return tag.ID, nil
+	if candidate.MatchedTagID == nil {
+		return 0, fmt.Errorf("candidate is not matched to the configured tag library")
 	}
-	name := strings.TrimSpace(candidate.SuggestedName)
-	if name == "" {
-		return 0, fmt.Errorf("empty suggested tag name")
-	}
-	var existing models.Tag
-	if err := tx.Where("name = ?", name).First(&existing).Error; err == nil {
-		return existing.ID, nil
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+	var tag models.Tag
+	if err := tx.First(&tag, *candidate.MatchedTagID).Error; err != nil {
 		return 0, err
 	}
-	var deleted models.Tag
-	if err := tx.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).First(&deleted).Error; err == nil {
-		deleted.DeletedAt.Clear()
-		if err := tx.Unscoped().Save(&deleted).Error; err != nil {
-			return 0, err
-		}
-		return deleted.ID, nil
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return 0, err
-	}
-	var count int64
-	if err := tx.Model(&models.Tag{}).Count(&count).Error; err != nil {
-		return 0, err
-	}
-	tag := models.Tag{Name: name, Color: tagColorPalette[int(count)%len(tagColorPalette)]}
-	if err := tx.Create(&tag).Error; err != nil {
-		return 0, err
+	if !tag.IsSystem || !tag.IsActive {
+		return 0, fmt.Errorf("candidate tag is no longer active in the configured tag library")
 	}
 	return tag.ID, nil
 }

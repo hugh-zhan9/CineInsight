@@ -50,6 +50,7 @@
         :directories="directories"
         @settings-saved="handleSettingsUpdate"
         @directories-changed="handleDirectoriesChanged"
+        @tags-changed="loadTags"
       />
     </div>
   </div>

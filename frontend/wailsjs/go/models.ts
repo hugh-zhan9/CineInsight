@@ -37,6 +37,7 @@ export namespace models {
 	    ai_tagging_api_key: string;
 	    ai_tagging_model: string;
 	    ai_tagging_frame_count: number;
+	    ai_tagging_images_per_request: number;
 	    ai_tagging_subtitle_char_limit: number;
 	    ai_tagging_startup_batch_size: number;
 	    updated_at: string;
@@ -63,6 +64,7 @@ export namespace models {
 	        this.ai_tagging_api_key = source["ai_tagging_api_key"];
 	        this.ai_tagging_model = source["ai_tagging_model"];
 	        this.ai_tagging_frame_count = source["ai_tagging_frame_count"];
+	        this.ai_tagging_images_per_request = source["ai_tagging_images_per_request"];
 	        this.ai_tagging_subtitle_char_limit = source["ai_tagging_subtitle_char_limit"];
 	        this.ai_tagging_startup_batch_size = source["ai_tagging_startup_batch_size"];
 	        this.updated_at = source["updated_at"];
@@ -72,6 +74,11 @@ export namespace models {
 	    id: number;
 	    name: string;
 	    color: string;
+	    namespace: string;
+	    is_system: boolean;
+	    is_active: boolean;
+	    review_required: boolean;
+	    sort_order: number;
 	    created_at: string;
 	    updated_at: string;
 	
@@ -84,6 +91,11 @@ export namespace models {
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.color = source["color"];
+	        this.namespace = source["namespace"];
+	        this.is_system = source["is_system"];
+	        this.is_active = source["is_active"];
+	        this.review_required = source["review_required"];
+	        this.sort_order = source["sort_order"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -152,7 +164,29 @@ export namespace models {
 }
 
 export namespace services {
+
+	export class AITagLibraryInput {
+	    id: number;
+	    namespace: string;
+	    name: string;
+	    color: string;
+	    review_required: boolean;
+	    is_active: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new AITagLibraryInput(source);
+	    }
 	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.color = source["color"];
+	        this.review_required = source["review_required"];
+	        this.is_active = source["is_active"];
+	    }
+	}
 	export class AITaggingReviewItem {
 	    id: number;
 	    video_id: number;
@@ -799,4 +833,3 @@ export namespace subtitleparser {
 	}
 
 }
-

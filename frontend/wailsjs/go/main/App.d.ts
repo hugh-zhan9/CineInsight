@@ -38,6 +38,8 @@ export function ForceGenerateSubtitle(arg1:services.SubtitleGenerateRequest):Pro
 
 export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<services.SubtitleGenerateResult>;
 
+export function GetAITagLibrary():Promise<Array<models.Tag>>;
+
 export function GetAITaggingStatusSummary():Promise<services.AITaggingStatusSummary>;
 
 export function GetAllDirectories():Promise<Array<models.ScanDirectory>>;
@@ -93,6 +95,8 @@ export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
 export function RenameVideo(arg1:number,arg2:string):Promise<void>;
 
 export function RetryAITagging(arg1:number):Promise<void>;
+
+export function SaveAITagLibrary(arg1:Array<services.AITagLibraryInput>):Promise<Array<models.Tag>>;
 
 export function ScanDirectory(arg1:string):Promise<Array<string>>;
 

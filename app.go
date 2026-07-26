@@ -419,6 +419,18 @@ func (a *App) GetAllTags() ([]models.Tag, error) {
 	return tags, err
 }
 
+func (a *App) GetAITagLibrary() ([]models.Tag, error) {
+	tags, err := a.tagService.GetAITagLibrary()
+	log.Printf("API GetAITagLibrary result=%d err=%v", len(tags), err)
+	return tags, err
+}
+
+func (a *App) SaveAITagLibrary(inputs []services.AITagLibraryInput) ([]models.Tag, error) {
+	tags, err := a.tagService.SaveAITagLibrary(inputs)
+	log.Printf("API SaveAITagLibrary requested=%d result=%d err=%v", len(inputs), len(tags), err)
+	return tags, err
+}
+
 // CreateTag 创建标签
 func (a *App) CreateTag(name, color string) (*models.Tag, error) {
 	tag, err := a.tagService.CreateTag(name, color)

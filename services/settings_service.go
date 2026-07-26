@@ -35,7 +35,8 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.AITaggingBaseURL = input.AITaggingBaseURL
 	settings.AITaggingAPIKey = input.AITaggingAPIKey
 	settings.AITaggingModel = input.AITaggingModel
-	settings.AITaggingFrameCount = positiveOrDefault(input.AITaggingFrameCount, defaultAITaggingFrameCount)
+	settings.AITaggingFrameCount = 0
+	settings.AITaggingImagesPerRequest = positiveOrDefault(input.AITaggingImagesPerRequest, defaultAITaggingImagesPerRequest)
 	settings.AITaggingSubtitleCharLimit = positiveOrDefault(input.AITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit)
 	settings.AITaggingStartupBatchSize = positiveOrDefault(input.AITaggingStartupBatchSize, defaultAITaggingStartupBatchSize)
 

@@ -14,11 +14,11 @@ const (
 	envAITaggingAPIKey  = "AI_TAGGING_API_KEY"
 	envAITaggingModel   = "AI_TAGGING_MODEL"
 
-	envAITaggingFrameCount        = "AI_TAGGING_FRAME_COUNT"
+	envAITaggingImagesPerRequest  = "AI_TAGGING_IMAGES_PER_REQUEST"
 	envAITaggingSubtitleCharLimit = "AI_TAGGING_SUBTITLE_CHAR_LIMIT"
 	envAITaggingStartupBatchSize  = "AI_TAGGING_STARTUP_BATCH_SIZE"
 
-	defaultAITaggingFrameCount        = 5
+	defaultAITaggingImagesPerRequest  = 10
 	defaultAITaggingSubtitleCharLimit = 4000
 	defaultAITaggingStartupBatchSize  = 10
 )
@@ -27,7 +27,7 @@ type AITaggingConfig struct {
 	BaseURL           string
 	APIKey            string
 	Model             string
-	FrameCount        int
+	ImagesPerRequest  int
 	SubtitleCharLimit int
 	StartupBatchSize  int
 }
@@ -43,7 +43,7 @@ func (EnvAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
 		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
 		Model:             strings.TrimSpace(os.Getenv(envAITaggingModel)),
-		FrameCount:        envInt(envAITaggingFrameCount, defaultAITaggingFrameCount),
+		ImagesPerRequest:  envInt(envAITaggingImagesPerRequest, defaultAITaggingImagesPerRequest),
 		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
 		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
 	}
@@ -60,7 +60,7 @@ func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
 		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
 		Model:             strings.TrimSpace(os.Getenv(envAITaggingModel)),
-		FrameCount:        envInt(envAITaggingFrameCount, defaultAITaggingFrameCount),
+		ImagesPerRequest:  envInt(envAITaggingImagesPerRequest, defaultAITaggingImagesPerRequest),
 		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
 		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
 	}
@@ -78,8 +78,8 @@ func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 			if value := strings.TrimSpace(settings.AITaggingModel); value != "" {
 				config.Model = value
 			}
-			if settings.AITaggingFrameCount > 0 {
-				config.FrameCount = settings.AITaggingFrameCount
+			if settings.AITaggingImagesPerRequest > 0 {
+				config.ImagesPerRequest = settings.AITaggingImagesPerRequest
 			}
 			if settings.AITaggingSubtitleCharLimit > 0 {
 				config.SubtitleCharLimit = settings.AITaggingSubtitleCharLimit

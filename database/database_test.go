@@ -65,3 +65,30 @@ func TestCleanupReimportedSoftDeletedVideosRemovesActiveDuplicatePath(t *testing
 		t.Fatalf("normal active row should remain visible: %v", err)
 	}
 }
+
+func TestSettingsAutoMigrateAddsAITagBatchFieldsToLegacyRows(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "legacy_settings.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开旧版测试库失败: %v", err)
+	}
+	if err := db.Exec(`CREATE TABLE settings (id integer primary key, ai_tagging_frame_count integer)`).Error; err != nil {
+		t.Fatalf("创建旧版 settings 表失败: %v", err)
+	}
+	if err := db.Exec(`INSERT INTO settings(id, ai_tagging_frame_count) VALUES (1, 5)`).Error; err != nil {
+		t.Fatalf("写入旧版设置失败: %v", err)
+	}
+	if err := db.AutoMigrate(&models.Settings{}); err != nil {
+		t.Fatalf("升级 settings 表失败: %v", err)
+	}
+
+	var settings models.Settings
+	if err := db.First(&settings, 1).Error; err != nil {
+		t.Fatalf("读取升级后的旧设置失败: %v", err)
+	}
+	if settings.AITaggingImagesPerRequest != 10 {
+		t.Fatalf("旧设置应获得单次请求图片上限默认值 10，实际 %d", settings.AITaggingImagesPerRequest)
+	}
+	if settings.AITaggingFrameCount != 5 {
+		t.Fatalf("兼容字段不应在迁移时丢失，实际 %d", settings.AITaggingFrameCount)
+	}
+}
