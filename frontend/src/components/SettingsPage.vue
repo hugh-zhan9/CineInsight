@@ -160,20 +160,30 @@
 	<div class="settings-section ai-tag-library-section">
 	  <div class="settings-section-heading">
 		<h3>AI 标签库</h3>
-		<button type="button" class="btn-secondary" @click="addAITagLibraryItem">添加标签</button>
+		<button type="button" class="btn-secondary" @click="addAITagLibraryGroup">添加分类</button>
 	  </div>
-	  <p class="help-text">分类和标签名称均由你定义；只有启用的标签会发送给模型。移出 AI 标签库不会删除视频已有的标签关联。</p>
+	  <p class="help-text">每个分类占一行，可在分类内维护多个标签；只有启用的标签会发送给模型。</p>
 	  <div v-if="aiTagLibraryLoading" class="empty-hint">正在加载标签库...</div>
 	  <div v-else-if="aiTagLibraryError" class="ai-tag-library-error">{{ aiTagLibraryError }}</div>
 	  <div v-else class="ai-tag-library-list">
-		<div v-for="(tag, index) in localAITagLibrary" :key="tag._key" class="ai-tag-library-row">
-		  <input v-model.trim="tag.namespace" type="text" class="text-input" placeholder="标签分类" aria-label="标签分类" />
-		  <input v-model.trim="tag.name" type="text" class="text-input" placeholder="标签名称" aria-label="标签名称" />
-		  <input v-model="tag.color" type="color" class="ai-tag-color" aria-label="标签颜色" />
-		  <label class="ai-tag-active"><input v-model="tag.is_active" type="checkbox" />启用</label>
-		  <button type="button" class="btn-action btn-action-danger ai-tag-remove" title="移出 AI 标签库" :aria-label="`移出标签 ${tag.name || index + 1}`" @click="removeAITagLibraryItem(index)">×</button>
+		<div v-for="(group, groupIndex) in localAITagGroups" :key="group._key" class="ai-tag-library-group">
+		  <div class="ai-tag-library-group-heading">
+			<input v-model.trim="group.namespace" type="text" class="text-input ai-tag-namespace-input" placeholder="分类名称" aria-label="标签分类名称" />
+			<span class="ai-tag-count">{{ group.tags.length }} 个标签</span>
+			<button type="button" class="btn-secondary btn-compact" @click="addAITagToGroup(groupIndex)">添加标签</button>
+			<button type="button" class="btn-danger btn-compact" @click="removeAITagLibraryGroup(groupIndex)">删除分类</button>
+		  </div>
+		  <div class="ai-tag-library-group-tags">
+			<div v-for="(tag, tagIndex) in group.tags" :key="tag._key" class="ai-tag-library-tag">
+			  <input v-model.trim="tag.name" type="text" class="text-input" placeholder="标签名称" :aria-label="`${group.namespace || '未命名分类'}标签名称`" />
+			  <input v-model="tag.color" type="color" class="ai-tag-color" aria-label="标签颜色" />
+			  <label class="ai-tag-active"><input v-model="tag.is_active" type="checkbox" />启用</label>
+			  <button type="button" class="btn-action btn-action-danger ai-tag-remove" title="移出 AI 标签库" :aria-label="`移出标签 ${tag.name || tagIndex + 1}`" @click="removeAITagFromGroup(groupIndex, tagIndex)">×</button>
+			</div>
+			<div v-if="group.tags.length === 0" class="empty-hint ai-tag-group-empty">当前分类暂无标签</div>
+		  </div>
 		</div>
-		<div v-if="localAITagLibrary.length === 0" class="empty-hint">当前未配置 AI 标签，后台分析将暂停。</div>
+		<div v-if="localAITagGroups.length === 0" class="empty-hint">当前未配置 AI 标签，后台分析将暂停。</div>
 	  </div>
 	</div>
 
@@ -271,7 +281,17 @@
     </div>
 
     <div class="settings-actions">
-      <button @click="saveSettings" class="btn-primary settings-save-button">保存所有设置</button>
+      <div
+        v-if="saveMessage"
+        class="settings-save-status"
+        :class="`settings-save-status--${saveState}`"
+        :role="saveState === 'error' ? 'alert' : 'status'"
+      >
+        {{ saveMessage }}
+      </div>
+      <button @click="saveSettings" class="btn-primary settings-save-button" :disabled="settingsSaving">
+        {{ settingsSaving ? '正在保存...' : '保存所有设置' }}
+      </button>
     </div>
 
     <!-- Add/Edit Directory Dialog -->
@@ -299,7 +319,8 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging } from '../../wailsjs/go/main/App';
+import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
 
 export default {
   name: 'SettingsPage',
@@ -316,10 +337,13 @@ export default {
       showAddDirectoryDialog: false,
       editingDirectory: null,
       directoryForm: { path: '', alias: '' },
-      localAITagLibrary: [],
+      localAITagGroups: [],
       aiTagLibraryLoading: false,
       aiTagLibraryError: '',
-      nextAITagLibraryKey: 1
+      nextAITagLibraryKey: 1,
+      settingsSaving: false,
+      saveState: 'idle',
+      saveMessage: ''
     };
   },
   watch: {
@@ -375,16 +399,15 @@ export default {
       }
     },
     async saveSettings() {
+      if (this.settingsSaving) return;
+      this.settingsSaving = true;
+      this.saveState = 'saving';
+      this.saveMessage = '正在保存设置...';
       try {
         this.aiTagLibraryError = '';
-        const tagInputs = this.localAITagLibrary.map(tag => ({
-          id: Number(tag.id) || 0,
-          namespace: String(tag.namespace || '').trim(),
-          name: String(tag.name || '').trim(),
-          color: tag.color || '',
-          review_required: Boolean(tag.review_required),
-          is_active: Boolean(tag.is_active)
-        }));
+        const validationError = validateAITagGroups(this.localAITagGroups);
+        if (validationError) throw new Error(validationError);
+        const tagInputs = flattenAITagGroups(this.localAITagGroups);
         const [savedTags] = await Promise.all([
           SaveAITagLibrary(tagInputs),
           UpdateSettings({
@@ -408,21 +431,30 @@ export default {
             ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10
           })
         ]);
-        this.localAITagLibrary = this.withAITagLibraryKeys(savedTags);
+        const aiTriggered = await TriggerAITagging();
+        this.localAITagGroups = this.withAITagLibraryKeys(savedTags);
         this.$emit('settings-saved', { ...this.settingsForm });
         this.$emit('tags-changed');
-        alert('设置保存成功！');
+        const hasActiveTags = tagInputs.some(tag => tag.is_active);
+        const hasAIConfig = Boolean(String(this.settingsForm.ai_tagging_base_url || '').trim() && String(this.settingsForm.ai_tagging_model || '').trim());
+        this.saveState = 'success';
+        this.saveMessage = hasActiveTags && hasAIConfig && aiTriggered
+          ? '设置保存成功，已触发 AI 自动打标。'
+          : '设置保存成功；AI 接口、模型、启用标签或后台任务未就绪，自动打标暂未启动。';
       } catch (err) {
-        this.aiTagLibraryError = String(err);
+        const message = err instanceof Error ? err.message : String(err);
+        this.saveState = 'error';
+        this.saveMessage = '设置保存失败：' + message;
         console.error('保存设置失败:', err);
-        alert('保存设置失败: ' + err);
+      } finally {
+        this.settingsSaving = false;
       }
     },
     async loadAITagLibrary() {
       this.aiTagLibraryLoading = true;
       this.aiTagLibraryError = '';
       try {
-        this.localAITagLibrary = this.withAITagLibraryKeys(await GetAITagLibrary());
+        this.localAITagGroups = this.withAITagLibraryKeys(await GetAITagLibrary());
       } catch (err) {
         this.aiTagLibraryError = '加载 AI 标签库失败: ' + err;
       } finally {
@@ -430,21 +462,41 @@ export default {
       }
     },
     withAITagLibraryKeys(tags) {
-      return (Array.isArray(tags) ? tags : []).map(tag => ({ ...tag, _key: `ai-tag-${tag.id || 'new'}-${this.nextAITagLibraryKey++}` }));
+      return groupAITagsByNamespace(tags).map(group => ({
+        ...group,
+        _key: `ai-tag-group-${this.nextAITagLibraryKey++}`,
+        tags: group.tags.map(tag => ({ ...tag, _key: `ai-tag-${tag.id || 'new'}-${this.nextAITagLibraryKey++}` }))
+      }));
     },
-    addAITagLibraryItem() {
-      this.localAITagLibrary = [...this.localAITagLibrary, {
+    newAITagLibraryItem() {
+      return {
         id: 0,
-        namespace: '',
         name: '',
         color: '#0D9488',
         review_required: false,
         is_active: true,
         _key: `ai-tag-new-${this.nextAITagLibraryKey++}`
+      };
+    },
+    addAITagLibraryGroup() {
+      this.localAITagGroups = [...this.localAITagGroups, {
+        namespace: '',
+        tags: [this.newAITagLibraryItem()],
+        _key: `ai-tag-group-new-${this.nextAITagLibraryKey++}`
       }];
     },
-    removeAITagLibraryItem(index) {
-      this.localAITagLibrary = this.localAITagLibrary.filter((_, itemIndex) => itemIndex !== index);
+    removeAITagLibraryGroup(groupIndex) {
+      this.localAITagGroups = this.localAITagGroups.filter((_, index) => index !== groupIndex);
+    },
+    addAITagToGroup(groupIndex) {
+      const group = this.localAITagGroups[groupIndex];
+      if (!group) return;
+      group.tags = [...group.tags, this.newAITagLibraryItem()];
+    },
+    removeAITagFromGroup(groupIndex, tagIndex) {
+      const group = this.localAITagGroups[groupIndex];
+      if (!group) return;
+      group.tags = group.tags.filter((_, index) => index !== tagIndex);
     },
     async selectDirectoryForConfig() {
       try {
@@ -535,18 +587,64 @@ export default {
 
 .ai-tag-library-list {
   display: grid;
-  gap: 8px;
+  gap: 0;
   max-height: 420px;
   margin-top: 12px;
   padding-right: 4px;
   overflow-y: auto;
 }
 
-.ai-tag-library-row {
+.ai-tag-library-group {
   display: grid;
-  grid-template-columns: minmax(110px, 0.7fr) minmax(180px, 1.6fr) 36px auto 32px;
+  grid-template-columns: minmax(220px, 0.7fr) minmax(0, 2fr);
+  gap: 14px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ai-tag-library-group:first-child {
+  border-top: 1px solid var(--border-color);
+}
+
+.ai-tag-library-group-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-content: start;
   align-items: center;
   gap: 8px;
+}
+
+.ai-tag-namespace-input {
+  font-weight: 650;
+}
+
+.ai-tag-count {
+  color: var(--text-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.ai-tag-library-group-heading .btn-compact {
+  width: 100%;
+}
+
+.ai-tag-library-group-tags {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 8px;
+}
+
+.ai-tag-library-tag {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 32px auto 32px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-tag-group-empty {
+  align-self: center;
+  text-align: left;
 }
 
 .ai-tag-color {
@@ -655,14 +753,39 @@ export default {
   position: sticky;
   bottom: 0;
   z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
   margin-top: 16px;
   padding: 12px 0 6px;
-  text-align: right;
   background: linear-gradient(180deg, transparent, var(--bg-color) 32%);
 }
 
 .settings-save-button {
+  flex-shrink: 0;
   padding: 0 32px;
+}
+
+.settings-save-status {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+  text-align: left;
+}
+
+.settings-save-status--success {
+  border-color: rgba(15, 143, 130, 0.34);
+  color: var(--accent-color);
+}
+
+.settings-save-status--error {
+  border-color: rgba(229, 72, 77, 0.4);
+  color: var(--danger-color);
 }
 
 .short-feed-status {
@@ -723,18 +846,27 @@ export default {
     justify-content: flex-end;
   }
 
-  .ai-tag-library-row {
-    grid-template-columns: minmax(96px, 0.8fr) minmax(130px, 1.4fr) 32px auto 32px;
+  .ai-tag-library-group {
+    grid-template-columns: minmax(190px, 0.65fr) minmax(0, 1.8fr);
   }
 }
 
 @media (max-width: 600px) {
-  .ai-tag-library-row {
-    grid-template-columns: minmax(0, 1fr) 32px auto 32px;
+  .ai-tag-library-group {
+    grid-template-columns: 1fr;
   }
 
-  .ai-tag-library-row .text-input:first-child {
-    grid-column: 1 / -1;
+  .ai-tag-library-group-tags {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-save-button {
+    width: 100%;
   }
 }
 </style>

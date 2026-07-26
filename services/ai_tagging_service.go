@@ -23,7 +23,9 @@ type AITaggingService struct {
 	extractor      *AITaggingExtractor
 	now            func() time.Time
 	workerMu       sync.Mutex
+	workerRunMu    sync.Mutex
 	workerCancel   context.CancelFunc
+	workerWake     chan struct{}
 }
 
 func NewAITaggingService() *AITaggingService {
@@ -46,7 +48,8 @@ func (s *AITaggingService) Start(ctx context.Context) {
 	}
 	workerCtx, cancel := context.WithCancel(ctx)
 	s.workerCancel = cancel
-	go s.workerLoop(workerCtx)
+	s.workerWake = make(chan struct{}, 1)
+	go s.workerLoop(workerCtx, s.workerWake)
 }
 
 func (s *AITaggingService) Stop() {
@@ -61,7 +64,25 @@ func (s *AITaggingService) Stop() {
 	}
 }
 
-func (s *AITaggingService) workerLoop(ctx context.Context) {
+func (s *AITaggingService) Trigger() bool {
+	if s == nil {
+		return false
+	}
+	s.workerMu.Lock()
+	wake := s.workerWake
+	running := s.workerCancel != nil
+	s.workerMu.Unlock()
+	if !running || wake == nil {
+		return false
+	}
+	select {
+	case wake <- struct{}{}:
+	default:
+	}
+	return true
+}
+
+func (s *AITaggingService) workerLoop(ctx context.Context, wake <-chan struct{}) {
 	s.runWorkerOnce(ctx)
 	ticker := time.NewTicker(aiTaggingWorkerInterval)
 	defer ticker.Stop()
@@ -69,6 +90,8 @@ func (s *AITaggingService) workerLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-wake:
+			s.runWorkerOnce(ctx)
 		case <-ticker.C:
 			s.runWorkerOnce(ctx)
 		}
@@ -76,6 +99,11 @@ func (s *AITaggingService) workerLoop(ctx context.Context) {
 }
 
 func (s *AITaggingService) runWorkerOnce(ctx context.Context) {
+	s.workerRunMu.Lock()
+	defer s.workerRunMu.Unlock()
+	if ctx.Err() != nil {
+		return
+	}
 	config, err := s.configProvider.Load()
 	if err != nil {
 		log.Printf("[AITagging] config unavailable; background worker idle err=%v", err)
@@ -394,21 +422,20 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 func (s *AITaggingService) ListCandidates(videoID uint, confidence string, status string) ([]AITaggingReviewItem, error) {
 	query := database.DB.
 		Model(&models.AITagCandidate{}).
-		Joins("INNER JOIN videos ON videos.id = ai_tag_candidates.video_id AND videos.deleted_at IS NULL").
-		Preload("Video").
+		Preload("Video", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Video.Tags").
 		Preload("MatchedTag")
 	if videoID > 0 {
-		query = query.Where("video_id = ?", videoID)
+		query = query.Where("ai_tag_candidates.video_id = ?", videoID)
 	}
 	if confidence = normalizeAIConfidence(confidence); confidence != "" {
-		query = query.Where("confidence = ?", confidence)
+		query = query.Where("ai_tag_candidates.confidence = ?", confidence)
 	}
 	status = strings.TrimSpace(status)
 	if status == "" {
 		status = models.AITagCandidateStatusPending
 	}
-	query = query.Where("status = ?", status)
+	query = query.Where("ai_tag_candidates.status = ?", status)
 	var candidates []models.AITagCandidate
 	if err := query.Order("ai_tag_candidates.created_at desc, ai_tag_candidates.id desc").Find(&candidates).Error; err != nil {
 		return nil, err
@@ -670,6 +697,7 @@ func aiTagCandidateReviewItem(candidate models.AITagCandidate) AITaggingReviewIt
 		ID:             candidate.ID,
 		VideoID:        candidate.VideoID,
 		Video:          video,
+		VideoDeleted:   candidate.Video.ID != 0 && candidate.Video.DeletedAt.IsValid(),
 		SuggestedName:  candidate.SuggestedName,
 		NormalizedName: candidate.NormalizedName,
 		MatchedTagID:   candidate.MatchedTagID,

@@ -8,6 +8,7 @@ type AITaggingReviewItem struct {
 	ID             uint          `json:"id"`
 	VideoID        uint          `json:"video_id"`
 	Video          *models.Video `json:"video,omitempty"`
+	VideoDeleted   bool          `json:"video_deleted"`
 	SuggestedName  string        `json:"suggested_name"`
 	NormalizedName string        `json:"normalized_name"`
 	MatchedTagID   *uint         `json:"matched_tag_id,omitempty"`

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"video-master/database"
@@ -17,6 +18,28 @@ import (
 type fakeAITaggingConfigProvider struct {
 	config AITaggingConfig
 	err    error
+}
+
+type switchableAITaggingConfigProvider struct {
+	mu          sync.RWMutex
+	config      AITaggingConfig
+	err         error
+	firstLoad   chan struct{}
+	firstLoadMu sync.Once
+}
+
+func (p *switchableAITaggingConfigProvider) Load() (AITaggingConfig, error) {
+	p.firstLoadMu.Do(func() { close(p.firstLoad) })
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.config, p.err
+}
+
+func (p *switchableAITaggingConfigProvider) set(config AITaggingConfig, err error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.config = config
+	p.err = err
 }
 
 func (p fakeAITaggingConfigProvider) Load() (AITaggingConfig, error) {
@@ -590,7 +613,7 @@ func TestRejectPendingCandidatesByVideoRejectsOnlyThatVideosPendingCandidates(t 
 	}
 }
 
-func TestListAITagCandidatesExcludesSoftDeletedVideos(t *testing.T) {
+func TestListAITagCandidatesIncludesSoftDeletedVideoMetadata(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	activeVideo := models.Video{Name: "active.mp4", Path: "/tmp/ai-active.mp4", Directory: "/tmp"}
 	deletedVideo := models.Video{Name: "deleted.mp4", Path: "/tmp/ai-deleted.mp4", Directory: "/tmp"}
@@ -616,11 +639,20 @@ func TestListAITagCandidatesExcludesSoftDeletedVideos(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取候选失败: %v", err)
 	}
-	if len(items) != 1 {
-		t.Fatalf("审阅列表应只包含有效视频候选，实际 %d: %+v", len(items), items)
+	if len(items) != 2 {
+		t.Fatalf("审阅列表应保留有效和已删除视频候选，实际 %d: %+v", len(items), items)
 	}
-	if items[0].VideoID != activeVideo.ID || items[0].Video == nil || items[0].Video.Name != activeVideo.Name {
-		t.Fatalf("返回候选不正确: %+v", items[0])
+	itemsByVideoID := make(map[uint]AITaggingReviewItem, len(items))
+	for _, item := range items {
+		itemsByVideoID[item.VideoID] = item
+	}
+	activeItem := itemsByVideoID[activeVideo.ID]
+	if activeItem.Video == nil || activeItem.Video.Name != activeVideo.Name || activeItem.VideoDeleted {
+		t.Fatalf("有效视频候选信息不正确: %+v", activeItem)
+	}
+	deletedItem := itemsByVideoID[deletedVideo.ID]
+	if deletedItem.Video == nil || deletedItem.Video.Name != deletedVideo.Name || !deletedItem.VideoDeleted {
+		t.Fatalf("已删除视频应保留名称并标记删除状态: %+v", deletedItem)
 	}
 }
 
@@ -822,6 +854,65 @@ func TestAITaggingMissingConfigDoesNotCallAI(t *testing.T) {
 	if state.Status != models.AITaggingStateStatusSkipped || state.SkipReason != "config_unavailable" {
 		t.Fatalf("状态错误: %#v", state)
 	}
+}
+
+func TestAITaggingTriggerRunsWorkerImmediatelyAfterConfigBecomesAvailable(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tag := configuredAITag("剧情", "#fff")
+	video := models.Video{Name: "trigger.mp4", Path: "/tmp/trigger.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	provider := &switchableAITaggingConfigProvider{
+		err:       fmt.Errorf("missing config"),
+		firstLoad: make(chan struct{}),
+	}
+	client := &fakeAITaggingClient{suggestions: []AITagSuggestion{{
+		Label:               tag.Name,
+		Confidence:          models.AITagConfidenceHigh,
+		MatchedExistingName: tag.Name,
+	}}}
+	svc := newTestAITaggingService(client, provider)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	svc.Start(ctx)
+	defer svc.Stop()
+
+	select {
+	case <-provider.firstLoad:
+	case <-time.After(time.Second):
+		t.Fatal("后台任务启动后未读取初始配置")
+	}
+	provider.set(AITaggingConfig{
+		BaseURL:           "http://127.0.0.1:9999/v1",
+		APIKey:            "test-key",
+		Model:             "test-model",
+		ImagesPerRequest:  10,
+		SubtitleCharLimit: 1000,
+		StartupBatchSize:  10,
+	}, nil)
+	if !svc.Trigger() {
+		t.Fatal("运行中的后台任务应接受立即唤醒信号")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		var count int64
+		if err := database.DB.Model(&models.AITagCandidate{}).
+			Where("video_id = ? AND status = ?", video.ID, models.AITagCandidateStatusPending).
+			Count(&count).Error; err != nil {
+			t.Fatalf("查询 AI 标签候选失败: %v", err)
+		}
+		if count == 1 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("保存配置后的立即唤醒未在预期时间内处理视频")
 }
 
 func TestAITaggingEmptyLibraryDoesNotCallAI(t *testing.T) {

@@ -31,10 +31,13 @@ export function groupCandidatesByVideo(candidates) {
         videoId: candidate?.video_id || video.id || 0,
         videoName: video.name || `视频 #${candidate?.video_id || ''}`,
         videoPath: video.path || '',
+        videoDeleted: Boolean(candidate?.video_deleted),
         candidates: [],
       });
     }
-    groupsByKey.get(key).candidates.push(candidate);
+    const group = groupsByKey.get(key);
+    group.videoDeleted = group.videoDeleted || Boolean(candidate?.video_deleted);
+    group.candidates.push(candidate);
   }
   return Array.from(groupsByKey.values()).map(group => ({
     ...group,

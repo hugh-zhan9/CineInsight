@@ -191,6 +191,7 @@ export namespace services {
 	    id: number;
 	    video_id: number;
 	    video?: models.Video;
+	    video_deleted: boolean;
 	    suggested_name: string;
 	    normalized_name: string;
 	    matched_tag_id?: number;
@@ -211,6 +212,7 @@ export namespace services {
 	        this.id = source["id"];
 	        this.video_id = source["video_id"];
 	        this.video = this.convertValues(source["video"], models.Video);
+	        this.video_deleted = source["video_deleted"];
 	        this.suggested_name = source["suggested_name"];
 	        this.normalized_name = source["normalized_name"];
 	        this.matched_tag_id = source["matched_tag_id"];

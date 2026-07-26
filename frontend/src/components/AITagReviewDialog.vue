@@ -26,12 +26,15 @@
       <div v-else class="ai-tag-review-list">
         <section v-for="group in groups" :key="group.videoId" class="ai-video-group">
           <div class="ai-video-title">
-            <span>{{ group.videoName }}</span>
+            <div class="ai-video-name">
+              <span>{{ group.videoName }}</span>
+              <span v-if="group.videoDeleted" class="ai-video-deleted-badge">已删除</span>
+            </div>
             <div class="ai-video-actions">
-              <button type="button" class="btn-action btn-compact" @click="previewVideo(group.videoId)" :disabled="processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
-              <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="processingIds.includes(`rename-${group.videoId}`)">重命名</button>
+              <button type="button" class="btn-action btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
+              <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
               <button type="button" class="btn-secondary btn-compact" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
-              <button type="button" class="btn-action btn-compact" @click="retryVideo(group.videoId)" :disabled="processingIds.includes(group.videoId)">重新分析</button>
+              <button type="button" class="btn-action btn-compact" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
             </div>
           </div>
           <div v-if="group.videoPath" class="ai-video-path">{{ group.videoPath }}</div>
@@ -55,7 +58,7 @@
               <p v-if="candidate.reasoning" class="ai-candidate-reason">{{ candidate.reasoning }}</p>
             </div>
             <div class="ai-candidate-actions">
-              <button type="button" class="btn-primary" @click="approve(candidate)" :disabled="processingIds.includes(candidate.id)">批准</button>
+              <button type="button" class="btn-primary" @click="approve(candidate)" :disabled="candidate.video_deleted || processingIds.includes(candidate.id)">批准</button>
               <button type="button" class="btn-secondary" @click="reject(candidate)" :disabled="processingIds.includes(candidate.id)">拒绝</button>
             </div>
           </div>
@@ -341,9 +344,27 @@ export default {
   min-width: 0;
 }
 
-.ai-video-title > span {
+.ai-video-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.ai-video-name > span:first-child {
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.ai-video-deleted-badge {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border: 1px solid rgba(229, 72, 77, 0.4);
+  border-radius: 6px;
+  background: rgba(229, 72, 77, 0.12);
+  color: var(--danger-color);
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .ai-video-actions {
