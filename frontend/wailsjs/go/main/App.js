@@ -226,6 +226,10 @@ export function SyncScanDirectories() {
   return window['go']['main']['App']['SyncScanDirectories']();
 }
 
+export function TriggerAITagging() {
+  return window['go']['main']['App']['TriggerAITagging']();
+}
+
 export function UpdateDirectory(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateDirectory'](arg1, arg2, arg3);
 }

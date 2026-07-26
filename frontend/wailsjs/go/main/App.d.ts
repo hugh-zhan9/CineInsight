@@ -116,6 +116,8 @@ export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promis
 
 export function SyncScanDirectories():Promise<services.ScanSyncResult>;
 
+export function TriggerAITagging():Promise<boolean>;
+
 export function UpdateDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
 
 export function UpdateSettings(arg1:models.Settings):Promise<void>;

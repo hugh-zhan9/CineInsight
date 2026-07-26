@@ -484,8 +484,18 @@ func (a *App) RejectAITagCandidatesByVideo(videoID uint) (int64, error) {
 
 func (a *App) RetryAITagging(videoID uint) error {
 	err := a.aiTaggingService.RetryVideo(videoID)
-	log.Printf("API RetryAITagging videoID=%d err=%v", videoID, err)
+	triggered := false
+	if err == nil {
+		triggered = a.aiTaggingService.Trigger()
+	}
+	log.Printf("API RetryAITagging videoID=%d ai_triggered=%v err=%v", videoID, triggered, err)
 	return err
+}
+
+func (a *App) TriggerAITagging() bool {
+	triggered := a.aiTaggingService.Trigger()
+	log.Printf("API TriggerAITagging triggered=%v", triggered)
+	return triggered
 }
 
 func (a *App) GetAITaggingStatusSummary() (*services.AITaggingStatusSummary, error) {
@@ -512,6 +522,7 @@ func (a *App) UpdateSettings(input models.Settings) error {
 	if err == nil {
 		a.setLogEnabled(input.LogEnabled)
 	}
+	log.Printf("API UpdateSettings err=%v", err)
 	return err
 }
 

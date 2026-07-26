@@ -16,10 +16,12 @@ assert.notEqual(confidenceMeta('high').className, confidenceMeta('medium').class
 
 const groups = groupCandidatesByVideo([
   { id: 1, video_id: 10, confidence: 'medium', video: { id: 10, name: 'a.mp4', path: '/a.mp4' } },
-  { id: 2, video_id: 10, confidence: 'high', video: { id: 10, name: 'a.mp4', path: '/a.mp4' } },
+  { id: 2, video_id: 10, confidence: 'high', video_deleted: true, video: { id: 10, name: 'a.mp4', path: '/a.mp4' } },
 ]);
 assert.equal(groups.length, 1);
 assert.equal(groups[0].candidates[0].confidence, 'high');
+assert.equal(groups[0].videoName, 'a.mp4');
+assert.equal(groups[0].videoDeleted, true);
 
 const remaining = removeCandidateById([{ id: 1 }, { id: 2 }], 1);
 assert.deepEqual(remaining, [{ id: 2 }]);
@@ -59,6 +61,8 @@ assert.match(componentSource, /ai-confirm-overlay/);
 assert.match(componentSource, /RejectAITagCandidatesByVideo/);
 assert.match(componentSource, /reviewSearch/);
 assert.match(componentSource, /RenameVideo/);
+assert.match(componentSource, /ai-video-deleted-badge/);
+assert.match(componentSource, /candidate\.video_deleted/);
 assert.match(componentSource, /renameConfirm/);
 assert.match(componentSource, /class="search-input ai-tag-review-search"/, 'AI review search should reuse shared search input styling');
 assert.match(componentSource, /class="text-input ai-tag-rename-input"/, 'AI review rename dialog should reuse shared text input styling');
