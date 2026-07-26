@@ -41,4 +41,16 @@ type AITaggingRequest struct {
 	Video        models.Video
 	ExistingTags []models.Tag
 	Evidence     AITaggingEvidence
+	BatchIndex   int
+	BatchCount   int
+	TotalFrames  int
+}
+
+type AITagLibraryInput struct {
+	ID             uint   `json:"id"`
+	Namespace      string `json:"namespace"`
+	Name           string `json:"name"`
+	Color          string `json:"color"`
+	ReviewRequired bool   `json:"review_required"`
+	IsActive       bool   `json:"is_active"`
 }

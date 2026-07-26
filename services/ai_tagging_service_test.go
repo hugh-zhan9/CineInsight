@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -39,7 +40,7 @@ func newTestAITaggingService(client *fakeAITaggingClient, provider AITaggingConf
 			BaseURL:           "http://127.0.0.1:9999/v1",
 			APIKey:            "test-key",
 			Model:             "test-model",
-			FrameCount:        0,
+			ImagesPerRequest:  10,
 			SubtitleCharLimit: 1000,
 			StartupBatchSize:  10,
 		}}
@@ -61,6 +62,10 @@ func countRows(t *testing.T, table string) int64 {
 		t.Fatalf("统计表 %s 失败: %v", table, err)
 	}
 	return count
+}
+
+func configuredAITag(name, color string) models.Tag {
+	return models.Tag{Name: name, Color: color, Namespace: "custom", IsSystem: true, IsActive: true}
 }
 
 func TestAITaggingSchemaCreatesTablesAndIndexes(t *testing.T) {
@@ -92,7 +97,7 @@ func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
 		"ai_tagging_base_url":            "http://db.example/v1",
 		"ai_tagging_api_key":             "db-key",
 		"ai_tagging_model":               "db-model",
-		"ai_tagging_frame_count":         3,
+		"ai_tagging_images_per_request":  3,
 		"ai_tagging_subtitle_char_limit": 1200,
 		"ai_tagging_startup_batch_size":  5,
 	}).Error; err != nil {
@@ -106,7 +111,7 @@ func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
 	if config.BaseURL != "http://db.example/v1" || config.APIKey != "db-key" || config.Model != "db-model" {
 		t.Fatalf("期望优先读取数据库配置，实际: %+v", config)
 	}
-	if config.FrameCount != 3 || config.SubtitleCharLimit != 1200 || config.StartupBatchSize != 5 {
+	if config.ImagesPerRequest != 3 || config.SubtitleCharLimit != 1200 || config.StartupBatchSize != 5 {
 		t.Fatalf("期望读取数据库数值配置，实际: %+v", config)
 	}
 }
@@ -186,15 +191,137 @@ func TestOpenAICompatibleClientUsesLongTimeoutForLocalVisionModels(t *testing.T)
 	}
 }
 
-func TestAITaggingFrameCountSupportsFiveFrameDefault(t *testing.T) {
-	if defaultAITaggingFrameCount != 5 {
-		t.Fatalf("默认抽帧数量应为 5，实际 %d", defaultAITaggingFrameCount)
+func TestOpenAICompatibleClientBatchesFramesAndMergesHighestConfidence(t *testing.T) {
+	requestImageCounts := make([]int, 0)
+	call := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("读取请求失败: %v", err)
+		}
+		requestImageCounts = append(requestImageCounts, strings.Count(string(payload), `"type":"image_url"`))
+		call++
+		content := `{"suggestions":[]}`
+		switch call {
+		case 1:
+			content = `{"suggestions":[{"label":"动作","confidence":"medium","matched_existing_name":"动作"}]}`
+		case 2:
+			content = `{"suggestions":[{"label":"动作","confidence":"high","matched_existing_name":"动作"},{"label":"站立","confidence":"medium","matched_existing_name":"站立"}]}`
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{{"message": map[string]string{"content": content}}},
+		})
+	}))
+	defer srv.Close()
+
+	frames := make([]AITaggingFrame, 23)
+	for i := range frames {
+		frames[i] = AITaggingFrame{Index: i + 1, Position: float64(i * 60), DataURL: "data:image/jpeg;base64,abc"}
 	}
-	if got := normalizedAITaggingFrameCount(5); got != 5 {
-		t.Fatalf("应支持一次抽取 5 帧，实际 %d", got)
+	client := NewOpenAICompatibleAITaggingClient(AITaggingConfig{
+		BaseURL:          srv.URL + "/v1",
+		Model:            "vision-model",
+		ImagesPerRequest: 10,
+	})
+	suggestions, err := client.AnalyzeTags(context.Background(), AITaggingRequest{
+		Video:    models.Video{ID: 1, Name: "long.mp4"},
+		Evidence: AITaggingEvidence{Frames: frames},
+	})
+	if err != nil {
+		t.Fatalf("分批分析失败: %v", err)
 	}
-	if got := normalizedAITaggingFrameCount(99); got != aiTaggingFrameMaxCount {
-		t.Fatalf("抽帧数量应限制到上限 %d，实际 %d", aiTaggingFrameMaxCount, got)
+	if fmt.Sprint(requestImageCounts) != "[10 10 3]" {
+		t.Fatalf("请求图片分批不正确: %v", requestImageCounts)
+	}
+	if len(suggestions) != 2 || suggestions[0].Label != "动作" || suggestions[0].Confidence != "high" || suggestions[1].Label != "站立" {
+		t.Fatalf("候选合并结果不正确: %+v", suggestions)
+	}
+}
+
+func TestAITaggingFramePolicyUsesOneFramePerMinuteWithMinimumTen(t *testing.T) {
+	if got := planAITaggingFrameCount(45); got != 10 {
+		t.Fatalf("短视频应至少 10 帧，实际 %d", got)
+	}
+	if got := planAITaggingFrameCount(5 * 60); got != 10 {
+		t.Fatalf("5 分钟应至少 10 帧，实际 %d", got)
+	}
+	if got := planAITaggingFrameCount(20 * 60); got != 20 {
+		t.Fatalf("20 分钟应抽 20 帧，实际 %d", got)
+	}
+	if got := planAITaggingFrameCount(90 * 60); got != 90 {
+		t.Fatalf("90 分钟应抽 90 帧，实际 %d", got)
+	}
+	if got := planAITaggingFrameCount(10*60 + 1); got != 11 {
+		t.Fatalf("不足整分钟的尾段也应覆盖，实际 %d", got)
+	}
+	positions := planAITaggingFramePositions(100, 5)
+	if len(positions) != 5 {
+		t.Fatalf("期望 5 个采样点，实际 %d", len(positions))
+	}
+	if positions[0] < 4.9 || positions[0] > 5.1 {
+		t.Fatalf("首帧应避开片头约 5%%，实际 %.2f", positions[0])
+	}
+	if positions[len(positions)-1] < 94.9 || positions[len(positions)-1] > 95.1 {
+		t.Fatalf("末帧应避开片尾约 5%%，实际 %.2f", positions[len(positions)-1])
+	}
+}
+
+func TestClosedTagLibraryPromptAndPersistDropsOutOfSet(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	closed := models.Tag{
+		Name:      "后入",
+		Color:     "#3b82f6",
+		Namespace: "position",
+		IsSystem:  true,
+		IsActive:  true,
+		SortOrder: 1,
+	}
+	if err := database.DB.Create(&closed).Error; err != nil {
+		t.Fatalf("创建闭集标签失败: %v", err)
+	}
+	video := models.Video{Name: "demo.mp4", Path: "/tmp/demo-closed.mp4", Directory: "/tmp", Duration: 120}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	client := &fakeAITaggingClient{suggestions: []AITagSuggestion{
+		{Label: "后入", Confidence: "high", MatchType: "existing_exact", MatchedExistingName: "后入"},
+		{Label: "不存在的标签", Confidence: "high", MatchType: "new_candidate"},
+	}}
+	svc := newTestAITaggingService(client, nil)
+	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
+		t.Fatalf("处理视频失败: %v", err)
+	}
+	if got := countRows(t, "ai_tag_candidates"); got != 1 {
+		t.Fatalf("闭集外标签应被丢弃，候选数期望 1，实际 %d", got)
+	}
+	var candidate models.AITagCandidate
+	if err := database.DB.First(&candidate).Error; err != nil {
+		t.Fatalf("读取候选失败: %v", err)
+	}
+	if candidate.SuggestedName != "后入" {
+		t.Fatalf("应保留闭集标签，实际 %q", candidate.SuggestedName)
+	}
+
+	promptClient := NewOpenAICompatibleAITaggingClient(AITaggingConfig{
+		BaseURL:           "http://127.0.0.1:1234/v1",
+		Model:             "vision-model",
+		SubtitleCharLimit: 1000,
+	}).(*OpenAICompatibleAITaggingClient)
+	body := promptClient.buildRequest(AITaggingRequest{
+		Video:        video,
+		ExistingTags: []models.Tag{closed},
+		Evidence: AITaggingEvidence{
+			Frames: []AITaggingFrame{{DataURL: "data:image/jpeg;base64,abc", Index: 1, Position: 12}},
+		},
+	})
+	messages := body["messages"].([]map[string]interface{})
+	userContent := messages[1]["content"].([]map[string]interface{})
+	text := userContent[0]["text"].(string)
+	if !strings.Contains(text, "闭集标签库") || !strings.Contains(text, "position: 后入") {
+		t.Fatalf("闭集 prompt 未包含命名空间标签库: %s", text)
+	}
+	if strings.Contains(text, "new_candidate") {
+		t.Fatalf("闭集 prompt 不应鼓励 new_candidate")
 	}
 }
 
@@ -240,7 +367,11 @@ func TestParseAITagSuggestionsAllowsMarkdownWrappedJSON(t *testing.T) {
 
 func TestAITaggingDropsLowConfidenceBeforePersistence(t *testing.T) {
 	setupVideoServiceTestDB(t)
+	tag := configuredAITag("未知", "#fff")
 	video := models.Video{Name: "quiet.mp4", Path: "/tmp/quiet.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建用户配置标签失败: %v", err)
+	}
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
@@ -263,7 +394,7 @@ func TestAITaggingDropsLowConfidenceBeforePersistence(t *testing.T) {
 
 func TestAITaggingPersistsCandidateButDoesNotWriteOfficialTablesBeforeApproval(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	tag := models.Tag{Name: "动作", Color: "#fff"}
+	tag := configuredAITag("动作", "#fff")
 	video := models.Video{Name: "fight.mp4", Path: "/tmp/fight.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("创建标签失败: %v", err)
@@ -290,7 +421,7 @@ func TestAITaggingPersistsCandidateButDoesNotWriteOfficialTablesBeforeApproval(t
 
 func TestAITaggingPersistsMatchedExistingTagNameInsteadOfModelSynonym(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	tag := models.Tag{Name: "4K", Color: "#fff"}
+	tag := configuredAITag("4K", "#fff")
 	video := models.Video{Name: "demo.mp4", Path: "/tmp/demo.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("创建标签失败: %v", err)
@@ -318,7 +449,7 @@ func TestAITaggingPersistsMatchedExistingTagNameInsteadOfModelSynonym(t *testing
 
 func TestApproveAITagCandidateExistingTagWritesOfficialAssociationOnlyAfterConfirmation(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	tag := models.Tag{Name: "动作", Color: "#fff"}
+	tag := configuredAITag("动作", "#fff")
 	video := models.Video{Name: "fight.mp4", Path: "/tmp/fight.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("创建标签失败: %v", err)
@@ -357,29 +488,28 @@ func TestApproveAITagCandidateExistingTagWritesOfficialAssociationOnlyAfterConfi
 	}
 }
 
-func TestApproveAITagCandidateNewTagCreatesOfficialTagInTransaction(t *testing.T) {
+func TestApproveAITagCandidateRejectsUnmatchedLegacyCandidate(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	video := models.Video{Name: "mystery.mp4", Path: "/tmp/mystery.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
-	client := &fakeAITaggingClient{suggestions: []AITagSuggestion{{Label: "悬疑", Confidence: "high", MatchType: "new_candidate"}}}
-	svc := newTestAITaggingService(client, nil)
-	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
-		t.Fatalf("处理视频失败: %v", err)
+	candidate := models.AITagCandidate{
+		VideoID:        video.ID,
+		SuggestedName:  "悬疑",
+		NormalizedName: "悬疑",
+		Confidence:     models.AITagConfidenceHigh,
+		Status:         models.AITagCandidateStatusPending,
 	}
-	var candidate models.AITagCandidate
-	if err := database.DB.First(&candidate).Error; err != nil {
-		t.Fatalf("读取候选失败: %v", err)
+	if err := database.DB.Create(&candidate).Error; err != nil {
+		t.Fatalf("创建旧候选失败: %v", err)
 	}
-	if _, err := svc.ApproveCandidate(candidate.ID); err != nil {
-		t.Fatalf("审批新标签候选失败: %v", err)
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
+	if _, err := svc.ApproveCandidate(candidate.ID); err == nil {
+		t.Fatal("未匹配用户标签库的旧候选不应获批")
 	}
-	if got := countRows(t, "tags"); got != 1 {
-		t.Fatalf("审批新标签后应创建 1 个正式标签，实际 %d", got)
-	}
-	if got := countRows(t, "video_tags"); got != 1 {
-		t.Fatalf("审批后应创建 1 条关联，实际 %d", got)
+	if got := countRows(t, "video_tags"); got != 0 {
+		t.Fatalf("拒绝审批后不应创建关联，实际 %d", got)
 	}
 }
 
@@ -581,8 +711,8 @@ func TestApproveAITagCandidateSupersedesWhenVideoWasManuallyTagged(t *testing.T)
 
 func TestApproveAITagCandidateSupersedesAfterManualTagAddedFollowingAIApproval(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	firstTag := models.Tag{Name: "动作", Color: "#fff"}
-	secondTag := models.Tag{Name: "悬疑", Color: "#000"}
+	firstTag := configuredAITag("动作", "#fff")
+	secondTag := configuredAITag("悬疑", "#000")
 	manualTag := models.Tag{Name: "剧情", Color: "#333"}
 	video := models.Video{Name: "mixed.mp4", Path: "/tmp/mixed.mp4", Directory: "/tmp"}
 	for _, tag := range []*models.Tag{&firstTag, &secondTag, &manualTag} {
@@ -639,7 +769,7 @@ func TestApproveAITagCandidateSupersedesAfterManualTagAddedFollowingAIApproval(t
 
 func TestAITaggingFingerprintChangeAllowsSameLabelReanalysis(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	tag := models.Tag{Name: "剧情", Color: "#fff"}
+	tag := configuredAITag("剧情", "#fff")
 	video := models.Video{Name: "story.mp4", Path: "/tmp/story.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("创建标签失败: %v", err)
@@ -694,6 +824,29 @@ func TestAITaggingMissingConfigDoesNotCallAI(t *testing.T) {
 	}
 }
 
+func TestAITaggingEmptyLibraryDoesNotCallAI(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := models.Video{Name: "empty-library.mp4", Path: "/tmp/empty-library.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	client := &fakeAITaggingClient{}
+	svc := newTestAITaggingService(client, nil)
+	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
+		t.Fatalf("空标签库应记录跳过状态而非失败: %v", err)
+	}
+	if client.calls != 0 {
+		t.Fatalf("空标签库不应调用 AI，实际 %d", client.calls)
+	}
+	var state models.AITaggingState
+	if err := database.DB.Where("video_id = ?", video.ID).First(&state).Error; err != nil {
+		t.Fatalf("读取状态失败: %v", err)
+	}
+	if state.Status != models.AITaggingStateStatusSkipped || state.SkipReason != "empty_tag_library" {
+		t.Fatalf("状态错误: %#v", state)
+	}
+}
+
 func TestFindUntaggedVideosSkipsPendingCandidatesAndCompletedStates(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
@@ -733,7 +886,7 @@ func TestFindUntaggedVideosSkipsPendingCandidatesAndCompletedStates(t *testing.T
 
 func TestAITaggingFingerprintChangeAllowsReanalysis(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	tag := models.Tag{Name: "剧情", Color: "#fff"}
+	tag := configuredAITag("剧情", "#fff")
 	video := models.Video{Name: "story.mp4", Path: "/tmp/story.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("创建标签失败: %v", err)

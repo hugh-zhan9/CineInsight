@@ -125,7 +125,6 @@ func Init() error {
 	ensureAITaggingIndexes(db)
 	ensureShortFeedIndexes(db)
 	ensureSubtitleSearchIndexes(db)
-
 	// 初始化默认设置
 	var settings models.Settings
 	if err := db.First(&settings).Error; err == gorm.ErrRecordNotFound {
@@ -139,13 +138,17 @@ func Init() error {
 			AutoScanOnStartup:           false,
 			ShortFeedMaxDurationMinutes: 5,
 			LogEnabled:                  false,
-			AITaggingFrameCount:         2,
+			AITaggingFrameCount:         0,
+			AITaggingImagesPerRequest:   10,
 			AITaggingSubtitleCharLimit:  4000,
 			AITaggingStartupBatchSize:   10,
 		}
-		db.Create(&settings)
+		if err := db.Create(&settings).Error; err != nil {
+			return fmt.Errorf("初始化默认设置失败: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("读取默认设置失败: %w", err)
 	}
-
 	DB = db
 	return nil
 }

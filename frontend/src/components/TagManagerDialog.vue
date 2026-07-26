@@ -25,11 +25,14 @@
       <!-- 标签列表 -->
       <div class="tag-list-container" style="max-height: 350px; overflow-y: auto; padding-right: 4px;">
         <div v-for="tag in localTags" :key="tag.id" class="tag-edit-row">
-          <input v-model="tag.color" type="color" class="color-picker" style="width: 28px; height: 28px; border: none; padding: 0; background: none; cursor: pointer; border-radius: 4px;" />
-          <input v-model="tag.name" type="text" class="text-input" style="height: 32px; font-size: 13px;" />
+          <input v-model="tag.color" type="color" class="color-picker" :disabled="tag.is_system" style="width: 28px; height: 28px; border: none; padding: 0; background: none; cursor: pointer; border-radius: 4px;" />
+          <input v-model="tag.name" type="text" class="text-input" :disabled="tag.is_system" style="height: 32px; font-size: 13px;" />
           <div style="display: flex; gap: 6px;">
-            <button @click="saveTag(tag)" class="btn-action">保存</button>
-            <button @click.stop="$emit('request-delete-tag', tag)" class="btn-action" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
+            <span v-if="tag.is_system" class="system-tag-note">AI 标签</span>
+            <template v-else>
+              <button @click="saveTag(tag)" class="btn-action">保存</button>
+              <button @click.stop="$emit('request-delete-tag', tag)" class="btn-action" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
+            </template>
           </div>
         </div>
         <div v-if="localTags.length === 0" class="help-text" style="text-align: center; padding: 20px;">暂无标签</div>
@@ -128,4 +131,5 @@ export default {
 .tag-list-container::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 4px; }
 .color-picker::-webkit-color-swatch-wrapper { padding: 0; }
 .color-picker::-webkit-color-swatch { border: 1px solid var(--border-color); border-radius: 4px; }
+.system-tag-note { align-self: center; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
 </style>

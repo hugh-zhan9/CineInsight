@@ -96,7 +96,7 @@ func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMissing(t *testing.T) {
 
 func TestAITaggingReviewAPIsApproveCandidate(t *testing.T) {
 	setupAppTestDB(t)
-	tag := models.Tag{Name: "动作", Color: "#fff"}
+	tag := models.Tag{Name: "动作", Color: "#fff", Namespace: "用户分类", IsSystem: true, IsActive: true}
 	video := models.Video{Name: "fight.mp4", Path: "/tmp/fight.mp4", Directory: "/tmp"}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("创建标签失败: %v", err)

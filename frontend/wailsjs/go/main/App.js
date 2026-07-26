@@ -70,6 +70,10 @@ export function GenerateSubtitle(arg1) {
   return window['go']['main']['App']['GenerateSubtitle'](arg1);
 }
 
+export function GetAITagLibrary() {
+  return window['go']['main']['App']['GetAITagLibrary']();
+}
+
 export function GetAITaggingStatusSummary() {
   return window['go']['main']['App']['GetAITaggingStatusSummary']();
 }
@@ -180,6 +184,10 @@ export function RenameVideo(arg1, arg2) {
 
 export function RetryAITagging(arg1) {
   return window['go']['main']['App']['RetryAITagging'](arg1);
+}
+
+export function SaveAITagLibrary(arg1) {
+  return window['go']['main']['App']['SaveAITagLibrary'](arg1);
 }
 
 export function ScanDirectory(arg1) {

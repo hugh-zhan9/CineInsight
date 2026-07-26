@@ -120,15 +120,16 @@
       </div>
       <div class="setting-grid">
         <div class="setting-item">
-          <label>抽帧数量</label>
+          <label>单次请求图片上限</label>
           <input
             type="number"
-            v-model.number="settingsForm.ai_tagging_frame_count"
+            v-model.number="settingsForm.ai_tagging_images_per_request"
             min="1"
-            max="8"
+            max="100"
             step="1"
             class="number-input"
           />
+		  <p class="help-text">视频按每分钟一帧、至少 10 帧抽取；超过此数量时拆成多个模型请求。</p>
         </div>
         <div class="setting-item">
           <label>字幕字符上限</label>
@@ -155,6 +156,26 @@
       </div>
       <p class="help-text">保存后后台会自动使用新配置；本地 LM Studio 通常可用 http://127.0.0.1:1234/v1，API Key 可填任意非空值。</p>
     </div>
+
+	<div class="settings-section ai-tag-library-section">
+	  <div class="settings-section-heading">
+		<h3>AI 标签库</h3>
+		<button type="button" class="btn-secondary" @click="addAITagLibraryItem">添加标签</button>
+	  </div>
+	  <p class="help-text">分类和标签名称均由你定义；只有启用的标签会发送给模型。移出 AI 标签库不会删除视频已有的标签关联。</p>
+	  <div v-if="aiTagLibraryLoading" class="empty-hint">正在加载标签库...</div>
+	  <div v-else-if="aiTagLibraryError" class="ai-tag-library-error">{{ aiTagLibraryError }}</div>
+	  <div v-else class="ai-tag-library-list">
+		<div v-for="(tag, index) in localAITagLibrary" :key="tag._key" class="ai-tag-library-row">
+		  <input v-model.trim="tag.namespace" type="text" class="text-input" placeholder="标签分类" aria-label="标签分类" />
+		  <input v-model.trim="tag.name" type="text" class="text-input" placeholder="标签名称" aria-label="标签名称" />
+		  <input v-model="tag.color" type="color" class="ai-tag-color" aria-label="标签颜色" />
+		  <label class="ai-tag-active"><input v-model="tag.is_active" type="checkbox" />启用</label>
+		  <button type="button" class="btn-action btn-action-danger ai-tag-remove" title="移出 AI 标签库" :aria-label="`移出标签 ${tag.name || index + 1}`" @click="removeAITagLibraryItem(index)">×</button>
+		</div>
+		<div v-if="localAITagLibrary.length === 0" class="empty-hint">当前未配置 AI 标签，后台分析将暂停。</div>
+	  </div>
+	</div>
 
     <!-- 智能随机播放设置 -->
     <div class="settings-section">
@@ -278,7 +299,7 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary } from '../../wailsjs/go/main/App';
 
 export default {
   name: 'SettingsPage',
@@ -286,7 +307,7 @@ export default {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
   },
-  emits: ['settings-saved', 'directories-changed'],
+  emits: ['settings-saved', 'directories-changed', 'tags-changed'],
   data() {
     return {
       settingsForm: { ...this.settings },
@@ -294,7 +315,11 @@ export default {
       shortFeedStatus: null,
       showAddDirectoryDialog: false,
       editingDirectory: null,
-      directoryForm: { path: '', alias: '' }
+      directoryForm: { path: '', alias: '' },
+      localAITagLibrary: [],
+      aiTagLibraryLoading: false,
+      aiTagLibraryError: '',
+      nextAITagLibraryKey: 1
     };
   },
   watch: {
@@ -304,7 +329,7 @@ export default {
         if (!this.settingsForm.video_extensions || this.settingsForm.video_extensions.trim() === '') {
           this.settingsForm.video_extensions = '.mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt';
         }
-        this.settingsForm.ai_tagging_frame_count = this.settingsForm.ai_tagging_frame_count || 5;
+        this.settingsForm.ai_tagging_images_per_request = this.settingsForm.ai_tagging_images_per_request || 10;
         this.settingsForm.ai_tagging_subtitle_char_limit = this.settingsForm.ai_tagging_subtitle_char_limit || 4000;
         this.settingsForm.ai_tagging_startup_batch_size = this.settingsForm.ai_tagging_startup_batch_size || 10;
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
@@ -331,6 +356,7 @@ export default {
   },
   mounted() {
     this.loadShortFeedStatus();
+    this.loadAITagLibrary();
   },
   methods: {
     async loadShortFeedStatus() {
@@ -350,31 +376,75 @@ export default {
     },
     async saveSettings() {
       try {
-        await UpdateSettings({
-          confirm_before_delete: this.settingsForm.confirm_before_delete,
-          delete_original_file: this.settingsForm.delete_original_file,
-          video_extensions: this.settingsForm.video_extensions,
-          play_weight: this.settingsForm.play_weight,
-          auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
-          short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
-          theme: this.settingsForm.theme,
-          log_enabled: this.settingsForm.log_enabled,
-          bilingual_enabled: this.settingsForm.bilingual_enabled || false,
-          bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
-          deepl_api_key: this.settingsForm.deepl_api_key || '',
-          ai_tagging_base_url: this.settingsForm.ai_tagging_base_url || '',
-          ai_tagging_api_key: this.settingsForm.ai_tagging_api_key || '',
-          ai_tagging_model: this.settingsForm.ai_tagging_model || '',
-          ai_tagging_frame_count: this.settingsForm.ai_tagging_frame_count || 5,
-          ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
-          ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10
-        });
+        this.aiTagLibraryError = '';
+        const tagInputs = this.localAITagLibrary.map(tag => ({
+          id: Number(tag.id) || 0,
+          namespace: String(tag.namespace || '').trim(),
+          name: String(tag.name || '').trim(),
+          color: tag.color || '',
+          review_required: Boolean(tag.review_required),
+          is_active: Boolean(tag.is_active)
+        }));
+        const [savedTags] = await Promise.all([
+          SaveAITagLibrary(tagInputs),
+          UpdateSettings({
+            confirm_before_delete: this.settingsForm.confirm_before_delete,
+            delete_original_file: this.settingsForm.delete_original_file,
+            video_extensions: this.settingsForm.video_extensions,
+            play_weight: this.settingsForm.play_weight,
+            auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
+            short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
+            theme: this.settingsForm.theme,
+            log_enabled: this.settingsForm.log_enabled,
+            bilingual_enabled: this.settingsForm.bilingual_enabled || false,
+            bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
+            deepl_api_key: this.settingsForm.deepl_api_key || '',
+            ai_tagging_base_url: this.settingsForm.ai_tagging_base_url || '',
+            ai_tagging_api_key: this.settingsForm.ai_tagging_api_key || '',
+            ai_tagging_model: this.settingsForm.ai_tagging_model || '',
+            ai_tagging_frame_count: 0,
+            ai_tagging_images_per_request: this.settingsForm.ai_tagging_images_per_request || 10,
+            ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
+            ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10
+          })
+        ]);
+        this.localAITagLibrary = this.withAITagLibraryKeys(savedTags);
         this.$emit('settings-saved', { ...this.settingsForm });
+        this.$emit('tags-changed');
         alert('设置保存成功！');
       } catch (err) {
+        this.aiTagLibraryError = String(err);
         console.error('保存设置失败:', err);
         alert('保存设置失败: ' + err);
       }
+    },
+    async loadAITagLibrary() {
+      this.aiTagLibraryLoading = true;
+      this.aiTagLibraryError = '';
+      try {
+        this.localAITagLibrary = this.withAITagLibraryKeys(await GetAITagLibrary());
+      } catch (err) {
+        this.aiTagLibraryError = '加载 AI 标签库失败: ' + err;
+      } finally {
+        this.aiTagLibraryLoading = false;
+      }
+    },
+    withAITagLibraryKeys(tags) {
+      return (Array.isArray(tags) ? tags : []).map(tag => ({ ...tag, _key: `ai-tag-${tag.id || 'new'}-${this.nextAITagLibraryKey++}` }));
+    },
+    addAITagLibraryItem() {
+      this.localAITagLibrary = [...this.localAITagLibrary, {
+        id: 0,
+        namespace: '',
+        name: '',
+        color: '#0D9488',
+        review_required: false,
+        is_active: true,
+        _key: `ai-tag-new-${this.nextAITagLibraryKey++}`
+      }];
+    },
+    removeAITagLibraryItem(index) {
+      this.localAITagLibrary = this.localAITagLibrary.filter((_, itemIndex) => itemIndex !== index);
     },
     async selectDirectoryForConfig() {
       try {
@@ -446,6 +516,65 @@ export default {
 .settings-section h3 {
   margin-bottom: 16px;
   padding-bottom: 10px;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-section-heading h3 {
+  margin-bottom: 0;
+}
+
+.ai-tag-library-section {
+  grid-column: 1 / -1;
+}
+
+.ai-tag-library-list {
+  display: grid;
+  gap: 8px;
+  max-height: 420px;
+  margin-top: 12px;
+  padding-right: 4px;
+  overflow-y: auto;
+}
+
+.ai-tag-library-row {
+  display: grid;
+  grid-template-columns: minmax(110px, 0.7fr) minmax(180px, 1.6fr) 36px auto 32px;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-tag-color {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: 4px;
+  background: transparent;
+}
+
+.ai-tag-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+
+.ai-tag-remove {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+}
+
+.ai-tag-library-error {
+  margin-top: 10px;
+  color: var(--danger-color);
+  font-size: 13px;
 }
 
 .setting-control-row {
@@ -592,6 +721,20 @@ export default {
 
   .directory-actions {
     justify-content: flex-end;
+  }
+
+  .ai-tag-library-row {
+    grid-template-columns: minmax(96px, 0.8fr) minmax(130px, 1.4fr) 32px auto 32px;
+  }
+}
+
+@media (max-width: 600px) {
+  .ai-tag-library-row {
+    grid-template-columns: minmax(0, 1fr) 32px auto 32px;
+  }
+
+  .ai-tag-library-row .text-input:first-child {
+    grid-column: 1 / -1;
   }
 }
 </style>
