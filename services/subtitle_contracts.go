@@ -7,6 +7,13 @@ const (
 	SubtitleEngineQwen     SubtitleEngine = "qwen"
 )
 
+const (
+	defaultSubtitleWhisperXModel       = "medium"
+	defaultSubtitleWhisperXBatchSize   = 8
+	defaultSubtitleWhisperXComputeType = "int8"
+	maxSubtitleWhisperXBatchSize       = 16
+)
+
 type SubtitlePrepareMode string
 
 const (
@@ -50,8 +57,23 @@ type SubtitleEngineStatus struct {
 
 type SubtitleGenerateRequest struct {
 	VideoID    uint           `json:"video_id"`
+	VideoName  string         `json:"video_name,omitempty"`
 	Engine     SubtitleEngine `json:"engine"`
 	SourceLang string         `json:"source_lang"`
+}
+
+type SubtitleRecognitionConfig struct {
+	WhisperXModel       string
+	WhisperXBatchSize   int
+	WhisperXComputeType string
+}
+
+type SubtitleGenerateOptions struct {
+	BilingualEnabled  bool
+	BilingualLang     string
+	TranslationConfig SubtitleTranslationConfig
+	RecognitionConfig SubtitleRecognitionConfig
+	ForceGenerate     bool
 }
 
 type SubtitleGenerateResultStatus string
@@ -69,14 +91,16 @@ const (
 )
 
 type SubtitleGenerateResult struct {
-	Status         SubtitleGenerateResultStatus `json:"status"`
-	VideoID        uint                         `json:"video_id"`
-	Path           string                       `json:"path,omitempty"`
-	Message        string                       `json:"message,omitempty"`
-	ValidationCode SubtitleValidationCode       `json:"validation_code,omitempty"`
-	ForceEligible  bool                         `json:"force_eligible,omitempty"`
-	Engine         SubtitleEngine               `json:"engine,omitempty"`
-	SourceLang     string                       `json:"source_lang,omitempty"`
+	Status            SubtitleGenerateResultStatus `json:"status"`
+	VideoID           uint                         `json:"video_id"`
+	Path              string                       `json:"path,omitempty"`
+	Message           string                       `json:"message,omitempty"`
+	ValidationCode    SubtitleValidationCode       `json:"validation_code,omitempty"`
+	ForceEligible     bool                         `json:"force_eligible,omitempty"`
+	Engine            SubtitleEngine               `json:"engine,omitempty"`
+	SourceLang        string                       `json:"source_lang,omitempty"`
+	Warnings          []string                     `json:"warnings,omitempty"`
+	TranslationStatus string                       `json:"translation_status,omitempty"`
 }
 
 type SubtitleValidationError struct {

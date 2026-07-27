@@ -587,12 +587,14 @@ def build_segmentation_options(language: Optional[str]) -> Dict[str, Any]:
 
 
 def should_apply_custom_segmentation(language: Optional[str]) -> bool:
-    return language == "ja"
+    return language in LANGUAGES_WITHOUT_SPACES
 
 
 def build_asr_options(language: Optional[str]) -> Dict[str, Any]:
     if language == "ja":
         return {"initial_prompt": "句読点を含めて自然な文として書き起こしてください。"}
+    if language == "zh":
+        return {"initial_prompt": "请使用准确的简体中文转写，并保留自然的标点。"}
     return {}
 
 

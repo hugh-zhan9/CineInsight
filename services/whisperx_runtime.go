@@ -25,7 +25,6 @@ const (
 	whisperXVenvDirName    = "venv"
 	whisperXWorkerFileName = "whisperx_worker.py"
 	whisperXVersion        = "3.8.2"
-	whisperXModelName      = "medium"
 	managedPythonMacARM64  = "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.10.20%2B20260303-aarch64-apple-darwin-install_only_stripped.tar.gz"
 	managedPythonMacAMD64  = "https://github.com/astral-sh/python-build-standalone/releases/download/20260303/cpython-3.10.20%2B20260303-x86_64-apple-darwin-install_only_stripped.tar.gz"
 )
@@ -350,22 +349,25 @@ func (s *SubtitleService) installWhisperXRuntime() error {
 	return nil
 }
 
-func (s *SubtitleService) transcribeWhisperXWithLang(ctx context.Context, wavPath, sourceLang string) (string, []subtitleparser.Segment, error) {
+func (s *SubtitleService) transcribeWhisperXWithLang(ctx context.Context, wavPath, sourceLang string, config SubtitleRecognitionConfig) (string, []subtitleparser.Segment, error) {
 	if err := s.ensureWhisperXWorkerScript(); err != nil {
 		return "", nil, err
 	}
 	if !s.isWhisperXInstalled() {
 		return "", nil, fmt.Errorf("缺少 WhisperX 运行时，请先点击下载依赖")
 	}
+	config.WhisperXModel = normalizeSubtitleWhisperXModel(config.WhisperXModel)
+	config.WhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(config.WhisperXBatchSize)
+	config.WhisperXComputeType = normalizeSubtitleWhisperXComputeType(config.WhisperXComputeType)
 
 	venvPython := s.whisperXVenvPython()
 	args := []string{
 		s.whisperXWorkerPath(),
 		"--wav-path", wavPath,
-		"--model", whisperXModelName,
+		"--model", config.WhisperXModel,
 		"--language", sourceLang,
-		"--compute-type", "int8",
-		"--batch-size", "8",
+		"--compute-type", config.WhisperXComputeType,
+		"--batch-size", strconv.Itoa(config.WhisperXBatchSize),
 		"--asr-device", "cpu",
 		"--align-device", "cpu",
 	}

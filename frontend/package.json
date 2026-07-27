@@ -11,6 +11,7 @@
     "test:ai-tag-library": "node scripts/ai-tag-library.test.mjs",
     "test:ai-tag-review": "node scripts/ai-tag-review.test.mjs",
     "test:video-list-ui": "node scripts/video-list-ui.test.mjs",
+    "test:subtitle-workflow": "node scripts/subtitle-workflow.test.mjs",
     "test:virtual-list": "node scripts/virtual-list.test.mjs",
     "test:short-feed": "node scripts/short-feed.test.mjs"
   },

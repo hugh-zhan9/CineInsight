@@ -38,6 +38,10 @@ export function CancelSubtitle() {
   return window['go']['main']['App']['CancelSubtitle']();
 }
 
+export function CancelSubtitleTask(arg1) {
+  return window['go']['main']['App']['CancelSubtitleTask'](arg1);
+}
+
 export function CheckSubtitleDependencies() {
   return window['go']['main']['App']['CheckSubtitleDependencies']();
 }
@@ -116,6 +120,10 @@ export function GetStartupError() {
 
 export function GetSubtitleEngineStatuses() {
   return window['go']['main']['App']['GetSubtitleEngineStatuses']();
+}
+
+export function GetSubtitleQueueState() {
+  return window['go']['main']['App']['GetSubtitleQueueState']();
 }
 
 export function GetSubtitleSegments(arg1) {
@@ -200,6 +208,10 @@ export function ScanDirectoryWithInfo(arg1) {
 
 export function SearchSubtitleMatches(arg1, arg2) {
   return window['go']['main']['App']['SearchSubtitleMatches'](arg1, arg2);
+}
+
+export function SearchSubtitleMatchesWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7) {
+  return window['go']['main']['App']['SearchSubtitleMatchesWithFilters'](arg1, arg2, arg3, arg4, arg5, arg6, arg7);
 }
 
 export function SearchVideos(arg1, arg2, arg3, arg4, arg5) {

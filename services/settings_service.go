@@ -1,6 +1,7 @@
 package services
 
 import (
+	"strings"
 	"video-master/database"
 	"video-master/models"
 )
@@ -32,6 +33,12 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 	settings.BilingualEnabled = input.BilingualEnabled
 	settings.BilingualLang = input.BilingualLang
 	settings.DeepLApiKey = input.DeepLApiKey
+	settings.SubtitleTranslationProvider = string(normalizeSubtitleTranslationProvider(input.SubtitleTranslationProvider))
+	settings.SubtitleTranslationBaseURL = strings.TrimSpace(input.SubtitleTranslationBaseURL)
+	settings.SubtitleTranslationAPIKey = strings.TrimSpace(input.SubtitleTranslationAPIKey)
+	settings.SubtitleTranslationModel = strings.TrimSpace(input.SubtitleTranslationModel)
+	settings.SubtitleWhisperXModel = normalizeSubtitleWhisperXModel(input.SubtitleWhisperXModel)
+	settings.SubtitleWhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(input.SubtitleWhisperXBatchSize)
 	settings.AITaggingBaseURL = input.AITaggingBaseURL
 	settings.AITaggingAPIKey = input.AITaggingAPIKey
 	settings.AITaggingModel = input.AITaggingModel
