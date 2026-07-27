@@ -41,11 +41,29 @@
         >
           {{ allVisibleSelected ? '取消全选' : '选择本页' }}
         </button>
-        <button @click="showScanDialog = true" class="btn-primary">扫描目录</button>
+        <button @click="showScanDialog = true" class="btn-primary">扫描新目录</button>
+        <button
+          type="button"
+          class="btn-secondary"
+          :disabled="incrementalScan.running || directories.length === 0"
+          :title="directories.length === 0 ? '请先添加扫描目录' : '扫描所有已配置目录中的文件变化'"
+          @click="runIncrementalScan"
+        >
+          {{ incrementalScan.running ? '扫描中...' : '增量扫描' }}
+        </button>
         <button type="button" class="btn-action" @click="openAITagReviewDialog()">AI 标签管理</button>
         <button type="button" class="btn-action" @click="openCleanupDialog()">清理候选</button>
         <button type="button" class="btn-action" @click="showTagManagerDialog = true">标签管理</button>
       </div>
+    </div>
+
+    <div
+      v-if="incrementalScan.message"
+      class="scan-sync-status"
+      :class="`scan-sync-status--${incrementalScan.state}`"
+      :role="incrementalScan.state === 'error' ? 'alert' : 'status'"
+    >
+      {{ incrementalScan.message }}
     </div>
 
     <div v-if="selectedVideoIds.length > 0" class="selection-toolbar glass-surface">
@@ -91,7 +109,7 @@
 
     <div class="video-list" ref="videoList">
       <div v-if="videos.length === 0 && !loading" class="empty-state">
-        <p>暂无视频，点击"扫描目录"开始导入视频</p>
+        <p>暂无视频，点击"扫描新目录"开始导入视频</p>
       </div>
       <template v-else-if="isSubtitleSearchActive()">
         <VideoListRow
@@ -560,6 +578,35 @@
   gap: 8px;
 }
 
+.scan-sync-status {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.scan-sync-status--running {
+  border-color: var(--border-strong);
+}
+
+.scan-sync-status--success {
+  border-color: rgba(15, 143, 130, 0.34);
+  color: var(--accent-color);
+}
+
+.scan-sync-status--warning {
+  border-color: rgba(217, 119, 6, 0.4);
+  color: var(--warning-color);
+}
+
+.scan-sync-status--error {
+  border-color: rgba(229, 72, 77, 0.4);
+  color: var(--danger-color);
+}
+
 @media (max-width: 1320px) {
   .toolbar {
     grid-template-columns: 1fr;
@@ -855,7 +902,7 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -910,6 +957,7 @@ export default {
       hasMore: true,
       contextMenu: { show: false, x: 0, y: 0, video: null },
       showScanDialog: false,
+      incrementalScan: { running: false, state: 'idle', message: '' },
       showTagManagerDialog: false,
       addTagDialog: { show: false, video: null, videoIds: [], mode: 'single' },
       selectedVideoIds: [],
@@ -2118,6 +2166,42 @@ export default {
     async handleAITagCandidatesChanged() {
       this.$emit('reload-tags');
       await this.reloadCurrentView();
+    },
+    async runIncrementalScan() {
+      if (this.incrementalScan.running || this.directories.length === 0) {
+        return;
+      }
+
+      this.incrementalScan = { running: true, state: 'running', message: '正在扫描已配置目录...' };
+      try {
+        const result = await SyncScanDirectories();
+        const errors = Array.isArray(result?.errors) ? result.errors : [];
+        const summary = [
+          `扫描 ${Number(result?.scanned || 0)} 个文件`,
+          `新增 ${Number(result?.added || 0)}`,
+          `迁移 ${Number(result?.relocated || 0)}`,
+          `移除记录 ${Number(result?.deleted || 0)}`,
+          `补全元数据 ${Number(result?.metadata_refreshed || 0)}`,
+          `跳过 ${Number(result?.skipped || 0)}`
+        ];
+        if (errors.length > 0) {
+          summary.push(`失败 ${errors.length}`);
+        }
+        this.incrementalScan = {
+          running: false,
+          state: errors.length > 0 ? 'warning' : 'success',
+          message: `增量扫描完成：${summary.join('，')}`
+        };
+        this.$emit('reload-directories');
+        await this.reloadCurrentView();
+      } catch (err) {
+        console.error('增量扫描失败:', err);
+        this.incrementalScan = {
+          running: false,
+          state: 'error',
+          message: `增量扫描失败：${String(err)}`
+        };
+      }
     },
     async removeTag(video, tag) {
       try {

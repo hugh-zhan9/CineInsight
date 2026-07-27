@@ -557,8 +557,12 @@ func (a *App) SyncScanDirectories() (*services.ScanSyncResult, error) {
 		return nil, err
 	}
 	result := a.videoService.SyncScanDirectories(dirs)
-	log.Printf("API SyncScanDirectories dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d",
-		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors))
+	aiTriggered := false
+	if result.Added > 0 && a.aiTaggingService != nil {
+		aiTriggered = a.aiTaggingService.Trigger()
+	}
+	log.Printf("API SyncScanDirectories dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d ai_triggered=%v",
+		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors), aiTriggered)
 	return result, nil
 }
 

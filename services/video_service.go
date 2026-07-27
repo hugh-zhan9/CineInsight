@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -20,7 +21,9 @@ import (
 	"gorm.io/gorm"
 )
 
-type VideoService struct{}
+type VideoService struct {
+	scanSyncMu sync.Mutex
+}
 
 const recentActiveFileThreshold = 5 * time.Minute
 
@@ -562,6 +565,9 @@ func fingerprintVideo(video models.Video) scanFileFingerprint {
 
 // SyncScanDirectories performs an incremental database sync for configured scan directories.
 func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyncResult {
+	s.scanSyncMu.Lock()
+	defer s.scanSyncMu.Unlock()
+
 	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
 	scannedByPath := make(map[string]ScannedFile)
 	existingByPath := make(map[string]models.Video)
