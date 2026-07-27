@@ -21,6 +21,10 @@ assert.doesNotMatch(videoListSource, /<ActionMenu label="更多">[\s\S]*AI 标�
 assert.match(videoListSource, /<button[^>]+@click="openAITagReviewDialog\(\)"[^>]*>AI 标签管理<\/button>/, 'AI tag management should be a direct toolbar action');
 assert.match(videoListSource, /<button[^>]+@click="openCleanupDialog\(\)"[^>]*>清理候选<\/button>/, 'cleanup candidates should be a direct toolbar action');
 assert.match(videoListSource, /<button[^>]+@click="showTagManagerDialog = true"[^>]*>标签管理<\/button>/, 'tag manager should be a direct toolbar action');
+assert.match(videoListSource, /@click="runIncrementalScan"/, 'video list should expose a manual incremental scan action');
+assert.match(videoListSource, /SyncScanDirectories/, 'manual incremental scan should reuse the backend sync API');
+assert.match(videoListSource, /增量扫描完成：\$\{summary\.join\('，'\)\}/, 'manual incremental scan should report its result counts');
+assert.match(videoListSource, /scan-sync-status--\$\{incrementalScan\.state\}/, 'manual incremental scan should expose success, warning, and error states');
 assert.match(videoRowSource, /row-primary-actions/, 'video rows should keep only primary actions in the always-visible rail');
 assert.match(videoRowSource, /row-secondary-actions/, 'video rows should group secondary actions separately');
 assert.match(shortFeedCss, /--short-glass-bg:\s*var\(--glass-strong-bg\)/, 'short feed should consume shared glass tokens');
