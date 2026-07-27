@@ -247,6 +247,13 @@
           </select>
         </div>
         <div class="setting-item">
+          <label>翻译服务</label>
+          <select v-model="settingsForm.subtitle_translation_provider" class="select-input">
+            <option value="deepl">DeepL</option>
+            <option value="llm">外部 AI（OpenAI 兼容 API）</option>
+          </select>
+        </div>
+        <div v-if="settingsForm.subtitle_translation_provider !== 'llm'" class="setting-item">
           <label>DeepL API Key</label>
           <input 
             type="password" 
@@ -257,7 +264,41 @@
           />
           <p class="help-text">免费版 Key 通常以 :fx 结尾。额度 50 万字符/月。</p>
         </div>
+        <template v-else>
+          <div class="setting-item">
+            <label>AI 翻译接口地址</label>
+            <input type="url" v-model.trim="settingsForm.subtitle_translation_base_url" class="text-input" placeholder="https://api.example.com/v1" />
+          </div>
+          <div class="setting-item">
+            <label>AI 翻译 API Key</label>
+            <input type="password" v-model="settingsForm.subtitle_translation_api_key" class="text-input" autocomplete="off" />
+          </div>
+          <div class="setting-item">
+            <label>AI 翻译模型</label>
+            <input type="text" v-model.trim="settingsForm.subtitle_translation_model" class="text-input" placeholder="gpt-4o-mini" />
+          </div>
+        </template>
       </template>
+    </div>
+
+    <div class="settings-section">
+      <h3>字幕识别质量</h3>
+      <div class="setting-item">
+        <label>WhisperX 模型</label>
+        <select v-model="settingsForm.subtitle_whisperx_model" class="select-input">
+          <option value="tiny">tiny（最快）</option>
+          <option value="base">base</option>
+          <option value="small">small</option>
+          <option value="medium">medium（推荐）</option>
+          <option value="large-v2">large-v2</option>
+          <option value="large-v3">large-v3（最准确）</option>
+        </select>
+      </div>
+      <div class="setting-item">
+        <label>WhisperX 批量大小</label>
+        <input type="number" min="1" max="16" v-model.number="settingsForm.subtitle_whisperx_batch_size" class="number-input" />
+        <p class="help-text">CPU 运行时建议使用 4-8；数值越大占用内存越多。</p>
+      </div>
     </div>
 
     <!-- 扫描目录管理 -->
@@ -357,6 +398,9 @@ export default {
         this.settingsForm.ai_tagging_subtitle_char_limit = this.settingsForm.ai_tagging_subtitle_char_limit || 4000;
         this.settingsForm.ai_tagging_startup_batch_size = this.settingsForm.ai_tagging_startup_batch_size || 10;
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
+        this.settingsForm.subtitle_translation_provider = this.settingsForm.subtitle_translation_provider || 'deepl';
+        this.settingsForm.subtitle_whisperx_model = this.settingsForm.subtitle_whisperx_model || 'medium';
+        this.settingsForm.subtitle_whisperx_batch_size = this.settingsForm.subtitle_whisperx_batch_size || 8;
       },
       immediate: true,
       deep: true
@@ -422,6 +466,12 @@ export default {
             bilingual_enabled: this.settingsForm.bilingual_enabled || false,
             bilingual_lang: this.settingsForm.bilingual_lang || 'zh',
             deepl_api_key: this.settingsForm.deepl_api_key || '',
+            subtitle_translation_provider: this.settingsForm.subtitle_translation_provider || 'deepl',
+            subtitle_translation_base_url: this.settingsForm.subtitle_translation_base_url || '',
+            subtitle_translation_api_key: this.settingsForm.subtitle_translation_api_key || '',
+            subtitle_translation_model: this.settingsForm.subtitle_translation_model || '',
+            subtitle_whisperx_model: this.settingsForm.subtitle_whisperx_model || 'medium',
+            subtitle_whisperx_batch_size: this.settingsForm.subtitle_whisperx_batch_size || 8,
             ai_tagging_base_url: this.settingsForm.ai_tagging_base_url || '',
             ai_tagging_api_key: this.settingsForm.ai_tagging_api_key || '',
             ai_tagging_model: this.settingsForm.ai_tagging_model || '',

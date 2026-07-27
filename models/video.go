@@ -79,11 +79,17 @@ type Settings struct {
 	PlayWeight                  float64   `gorm:"default:2.0" json:"play_weight"` // 播放权重（1次播放 = N次随机播放）
 	AutoScanOnStartup           bool      `json:"auto_scan_on_startup"`           // 启动时自动增量扫描
 	ShortFeedMaxDurationMinutes int       `gorm:"default:5" json:"short_feed_max_duration_minutes"`
-	Theme                       string    `gorm:"default:'system'" json:"theme"`           // 主题模式: light, dark, system
-	LogEnabled                  bool      `json:"log_enabled"`                             // 是否启用日志
-	BilingualEnabled            bool      `json:"bilingual_enabled"`                       // 是否开启双语字幕
-	BilingualLang               string    `gorm:"default:'zh'" json:"bilingual_lang"`      // 双语目标语言代码 (zh/ja/ko/fr/de/es)
-	DeepLApiKey                 string    `json:"deepl_api_key"`                           // DeepL API Key
+	Theme                       string    `gorm:"default:'system'" json:"theme"`      // 主题模式: light, dark, system
+	LogEnabled                  bool      `json:"log_enabled"`                        // 是否启用日志
+	BilingualEnabled            bool      `json:"bilingual_enabled"`                  // 是否开启双语字幕
+	BilingualLang               string    `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
+	DeepLApiKey                 string    `json:"deepl_api_key"`                      // DeepL API Key
+	SubtitleTranslationProvider string    `gorm:"default:'deepl'" json:"subtitle_translation_provider"`
+	SubtitleTranslationBaseURL  string    `json:"subtitle_translation_base_url"`
+	SubtitleTranslationAPIKey   string    `json:"subtitle_translation_api_key"`
+	SubtitleTranslationModel    string    `json:"subtitle_translation_model"`
+	SubtitleWhisperXModel       string    `gorm:"default:'medium'" json:"subtitle_whisperx_model"`
+	SubtitleWhisperXBatchSize   int       `gorm:"default:8" json:"subtitle_whisperx_batch_size"`
 	AITaggingBaseURL            string    `json:"ai_tagging_base_url"`                     // OpenAI 兼容接口地址
 	AITaggingAPIKey             string    `json:"ai_tagging_api_key"`                      // AI 标签 API Key
 	AITaggingModel              string    `json:"ai_tagging_model"`                        // AI 标签模型

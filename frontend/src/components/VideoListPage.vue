@@ -84,6 +84,23 @@
       </div>
     </div>
 
+    <div v-if="subtitleQueue.total > 0" class="subtitle-queue-panel glass-surface">
+      <div class="subtitle-queue-heading">
+        <strong>字幕任务队列（{{ subtitleQueue.total }}）</strong>
+        <button type="button" class="btn-action" @click="refreshSubtitleQueue">刷新</button>
+      </div>
+      <div v-if="subtitleQueue.active_task" class="subtitle-queue-task subtitle-queue-task--active">
+        <span class="subtitle-queue-status">处理中</span>
+        <span class="subtitle-queue-name">{{ subtitleQueue.active_task.video_name || `视频 #${subtitleQueue.active_task.video_id}` }}</span>
+        <button v-if="subtitleQueue.active_task.can_cancel" type="button" class="btn-danger btn-compact" :disabled="cancellingSubtitleTaskIds.includes(subtitleQueue.active_task.task_id)" @click="cancelSubtitleTask(subtitleQueue.active_task.task_id)">取消</button>
+      </div>
+      <div v-for="task in subtitleQueue.queued_tasks" :key="task.task_id" class="subtitle-queue-task">
+        <span class="subtitle-queue-status">排队中 #{{ task.position }}</span>
+        <span class="subtitle-queue-name">{{ task.video_name || `视频 #${task.video_id}` }}</span>
+        <button v-if="task.can_cancel" type="button" class="btn-secondary btn-compact" :disabled="cancellingSubtitleTaskIds.includes(task.task_id)" @click="cancelSubtitleTask(task.task_id)">取消</button>
+      </div>
+    </div>
+
     <div class="tags-filter">
       <div class="tags-scroll-container">
         <button 
@@ -488,6 +505,7 @@
             {{ subtitleProgressHint }}
           </p>
           <div class="modal-actions">
+            <button v-if="subtitleDialog.progressAction === 'generate'" @click="minimizeSubtitleProgress" class="btn-secondary">后台继续</button>
             <button v-if="subtitleDialog.progressAction === 'generate'" @click="cancelSubtitle" class="btn-danger">取消生成</button>
             <button v-else @click="subtitleDialog.show = false" class="btn-secondary">后台继续准备</button>
           </div>
@@ -857,6 +875,37 @@
   overflow-y: auto;
   padding: 28px;
 }
+.subtitle-queue-panel {
+  margin: 12px 0;
+  padding: 12px 16px;
+}
+.subtitle-queue-heading,
+.subtitle-queue-task {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.subtitle-queue-heading {
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+.subtitle-queue-task {
+  min-height: 32px;
+  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  font-size: 13px;
+}
+.subtitle-queue-status {
+  flex: 0 0 70px;
+  color: #0f766e;
+  font-size: 12px;
+}
+.subtitle-queue-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .subtitle-preview-list {
   display: flex;
   flex-direction: column;
@@ -902,7 +951,7 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatches, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -996,6 +1045,11 @@ export default {
       subtitleProgressStartedAt: 0,
       subtitleProgressNow: Date.now(),
       subtitleProgressTimer: null,
+      subtitleProgressTaskID: null,
+      subtitleProgressVideoID: null,
+      minimizedSubtitleTaskIds: [],
+      subtitleQueue: { active_task: null, queued_tasks: [], total: 0 },
+      cancellingSubtitleTaskIds: [],
       runtimeOffHandlers: [],
       searchDebounceTimer: null,
       sourceLang: 'auto',
@@ -1016,12 +1070,14 @@ export default {
   mounted() {
     this.configureHomeListVirtualization();
     this.loadVideos();
+    this.refreshSubtitleQueue();
     this.attachWheelFallback();
     document.addEventListener('click', this.hideContextMenu);
     
     if (window.runtime?.EventsOn) {
       this.registerRuntimeEvent('subtitle-progress', (data) => {
         const nextAction = data?.action || '';
+        if (nextAction === 'generate' && !this.acceptSubtitleTaskEvent(data)) return;
         if (nextAction === 'generate') {
           this.startSubtitleProgressTracking();
         } else {
@@ -1047,23 +1103,32 @@ export default {
       });
       
       this.registerRuntimeEvent('subtitle-success', (data) => {
-        this.resetSubtitleProgressTracking();
         const idx = this.generatingSubtitleIds.indexOf(data.videoID);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+		this.refreshSubtitleQueue();
+		if (!this.acceptSubtitleTaskCompletion(data)) return;
+		this.resetSubtitleProgressTracking();
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'result';
         this.subtitleDialog.title = '✅ 字幕生成成功';
-        this.subtitleDialog.msg = '文件: ' + data.path;
+        const warnings = Array.isArray(data.warnings) && data.warnings.length > 0 ? `\n\n注意：\n${data.warnings.join('\n')}` : '';
+        this.subtitleDialog.msg = '文件: ' + data.path + warnings;
       });
 
       this.registerRuntimeEvent('subtitle-cancelled', (data) => {
-        this.resetSubtitleProgressTracking();
         const idx = this.generatingSubtitleIds.indexOf(data.videoID);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
+		this.refreshSubtitleQueue();
+		if (!this.acceptSubtitleTaskCompletion(data)) return;
+		this.resetSubtitleProgressTracking();
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'result';
         this.subtitleDialog.title = '⏹️ 已取消字幕生成';
         this.subtitleDialog.msg = data.message || '当前字幕任务已取消。';
+      });
+
+      this.registerRuntimeEvent('subtitle-queue', (data) => {
+        this.applySubtitleQueueState(data);
       });
 
       this.registerRuntimeEvent('cleanup-progress', async (data) => {
@@ -1210,6 +1275,66 @@ export default {
     }
   },
   methods: {
+    applySubtitleQueueState(snapshot) {
+      const next = snapshot || {};
+      this.subtitleQueue = {
+        active_task: next.active_task || null,
+        queued_tasks: Array.isArray(next.queued_tasks) ? next.queued_tasks : [],
+        total: Number(next.total || 0)
+      };
+      const ids = [];
+      if (this.subtitleQueue.active_task?.video_id) ids.push(this.subtitleQueue.active_task.video_id);
+      for (const task of this.subtitleQueue.queued_tasks) {
+        if (task.video_id) ids.push(task.video_id);
+      }
+      this.generatingSubtitleIds = Array.from(new Set(ids));
+		if (!this.subtitleProgressTaskID && this.subtitleProgressVideoID) {
+			const tasks = [this.subtitleQueue.active_task, ...this.subtitleQueue.queued_tasks].filter(Boolean);
+			const task = tasks.find(item => item.video_id === this.subtitleProgressVideoID);
+			if (task) this.subtitleProgressTaskID = task.task_id;
+		}
+    },
+    acceptSubtitleTaskEvent(data) {
+		const taskID = Number(data?.taskID || 0);
+		const videoID = Number(data?.videoID || 0);
+		if (taskID && this.minimizedSubtitleTaskIds.includes(taskID)) return false;
+		if (this.subtitleProgressTaskID && taskID && this.subtitleProgressTaskID !== taskID) return false;
+		if (this.subtitleProgressVideoID && videoID && this.subtitleProgressVideoID !== videoID) return false;
+		if (taskID) this.subtitleProgressTaskID = taskID;
+		if (videoID) this.subtitleProgressVideoID = videoID;
+		return true;
+	},
+	acceptSubtitleTaskCompletion(data) {
+		const taskID = Number(data?.taskID || 0);
+		if (taskID && this.minimizedSubtitleTaskIds.includes(taskID)) {
+			return false;
+		}
+		return this.acceptSubtitleTaskEvent(data);
+	},
+	consumeMinimizedSubtitleTask() {
+		if (!this.subtitleProgressTaskID || !this.minimizedSubtitleTaskIds.includes(this.subtitleProgressTaskID)) return false;
+		this.minimizedSubtitleTaskIds = this.minimizedSubtitleTaskIds.filter(id => id !== this.subtitleProgressTaskID);
+		return true;
+	},
+    async refreshSubtitleQueue() {
+      try {
+        this.applySubtitleQueueState(await GetSubtitleQueueState());
+      } catch (err) {
+        this.debugLog('refresh subtitle queue failed', { error: String(err) }, true);
+      }
+    },
+    async cancelSubtitleTask(taskID) {
+      if (!taskID || this.cancellingSubtitleTaskIds.includes(taskID)) return;
+      this.cancellingSubtitleTaskIds.push(taskID);
+      try {
+        await CancelSubtitleTask(taskID);
+        await this.refreshSubtitleQueue();
+      } catch (err) {
+        alert('取消字幕任务失败: ' + err);
+      } finally {
+        this.cancellingSubtitleTaskIds = this.cancellingSubtitleTaskIds.filter(id => id !== taskID);
+      }
+    },
     registerRuntimeEvent(eventName, handler) {
       if (!window.runtime?.EventsOn) {
         return;
@@ -1327,6 +1452,8 @@ export default {
     },
     async handleSubtitleGenerateResult(result, video, forceMode = false) {
       if (!result) return;
+		if (this.subtitleProgressVideoID && this.subtitleProgressVideoID !== video.id) return;
+		if (this.consumeMinimizedSubtitleTask()) return;
       if (result.status === 'validation_failed' && result.force_eligible) {
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'confirm';
@@ -1351,7 +1478,10 @@ export default {
         return;
       }
       this.subtitleDialog.title = '✅ 字幕生成完成';
-      this.subtitleDialog.msg = forceMode ? '字幕文件已保存到视频同目录下（已跳过质量检测）。' : `字幕文件已保存到视频同目录下。\n${result.path || ''}`;
+      const warningText = Array.isArray(result.warnings) && result.warnings.length > 0
+        ? `\n\n注意：\n${result.warnings.join('\n')}`
+        : '';
+      this.subtitleDialog.msg = (forceMode ? '字幕文件已保存到视频同目录下（已确认保留上次校验结果）。' : `字幕文件已保存到视频同目录下。\n${result.path || ''}`) + warningText;
     },
     startSubtitleProgressTracking() {
       if (!this.subtitleProgressStartedAt) {
@@ -1372,6 +1502,17 @@ export default {
       }
       this.subtitleProgressStartedAt = 0;
       this.subtitleProgressNow = Date.now();
+    },
+    minimizeSubtitleProgress() {
+		let taskID = this.subtitleProgressTaskID;
+		if (!taskID && this.subtitleProgressVideoID) {
+			const tasks = [this.subtitleQueue.active_task, ...this.subtitleQueue.queued_tasks].filter(Boolean);
+			taskID = tasks.find(task => task.video_id === this.subtitleProgressVideoID)?.task_id || null;
+		}
+		if (taskID && !this.minimizedSubtitleTaskIds.includes(taskID)) {
+			this.minimizedSubtitleTaskIds.push(taskID);
+		}
+      this.subtitleDialog.show = false;
     },
     formatElapsedDuration(ms) {
       if (!ms || ms < 0) return '0s';
@@ -1569,6 +1710,8 @@ export default {
         this.pendingSubtitleVideo = video;
         this.pendingForceRequest = null;
         this.subtitleDialog.show = true;
+		this.subtitleProgressTaskID = null;
+		this.subtitleProgressVideoID = video.id;
         this.subtitleDialog.mode = 'confirm';
         this.refreshSubtitleConfirmCopy();
       } catch (err) {
@@ -1584,6 +1727,8 @@ export default {
       if (this.pendingForceRequest) {
         const { video, request } = this.pendingForceRequest;
         this.pendingForceRequest = null;
+		this.subtitleProgressTaskID = null;
+		this.subtitleProgressVideoID = video.id;
         this.subtitleDialog.mode = 'progress';
         this.subtitleDialog.progressAction = 'generate';
         this.subtitleDialog.phase = 'validating';
@@ -1602,9 +1747,11 @@ export default {
           this.resetSubtitleProgressTracking();
           const idx = this.generatingSubtitleIds.indexOf(video.id);
           if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
-          this.subtitleDialog.mode = 'result';
-          this.subtitleDialog.title = '❌ 强制生成失败';
-          this.subtitleDialog.msg = String(err);
+			if (!this.consumeMinimizedSubtitleTask() && (!this.subtitleProgressVideoID || this.subtitleProgressVideoID === video.id)) {
+				this.subtitleDialog.mode = 'result';
+				this.subtitleDialog.title = '❌ 强制生成失败';
+				this.subtitleDialog.msg = String(err);
+			}
         }
         return;
       }
@@ -1639,6 +1786,8 @@ export default {
       if (this.pendingSubtitleVideo) {
         const video = this.pendingSubtitleVideo;
         this.pendingSubtitleVideo = null;
+		this.subtitleProgressTaskID = null;
+		this.subtitleProgressVideoID = video.id;
         this.subtitleDialog.show = true;
         this.subtitleDialog.mode = 'progress';
         this.subtitleDialog.progressAction = 'generate';
@@ -1665,10 +1814,12 @@ export default {
         this.resetSubtitleProgressTracking();
         const idx = this.generatingSubtitleIds.indexOf(video.id);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
-        this.subtitleDialog.show = true;
-        this.subtitleDialog.mode = 'result';
-        this.subtitleDialog.title = '❌ 生成字幕失败';
-        this.subtitleDialog.msg = String(err);
+		if (!this.consumeMinimizedSubtitleTask() && (!this.subtitleProgressVideoID || this.subtitleProgressVideoID === video.id)) {
+			this.subtitleDialog.show = true;
+			this.subtitleDialog.mode = 'result';
+			this.subtitleDialog.title = '❌ 生成字幕失败';
+			this.subtitleDialog.msg = String(err);
+		}
       }
     },
     async renameVideo(video) {
@@ -1698,11 +1849,14 @@ export default {
     },
     async cancelSubtitle() {
       try {
-        await CancelSubtitle();
+		if (this.subtitleProgressTaskID) {
+			await CancelSubtitleTask(this.subtitleProgressTaskID);
+		} else {
+			await CancelSubtitle();
+		}
         this.resetSubtitleProgressTracking();
         this.subtitleDialog.show = false;
-        // 清理生成中状态
-        this.generatingSubtitleIds = [];
+		await this.refreshSubtitleQueue();
       } catch (err) {
         console.error('取消失败:', err);
       }
@@ -1805,7 +1959,8 @@ export default {
         });
 
         if (this.isSubtitleSearchActive(keyword)) {
-          const matches = await SearchSubtitleMatches(keyword, 200);
+          const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
+          const matches = await SearchSubtitleMatchesWithFilters(keyword, this.selectedTags, minSize, maxSize, minHeight, maxHeight, 200);
           const deduped = new Map();
           for (const match of matches || []) {
             const video = match.video;
@@ -1813,7 +1968,7 @@ export default {
             video._subtitleMatchText = match.segment?.text || '';
             deduped.set(video.id, video);
           }
-          newVideos = this.applyClientFilters(Array.from(deduped.values()));
+          newVideos = Array.from(deduped.values());
           this.videos = newVideos;
           this.hasMore = false;
           this.debugLog('loadVideos subtitle mode resolved', {

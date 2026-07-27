@@ -247,6 +247,15 @@ func (a *App) SearchSubtitleMatches(keyword string, limit int) ([]services.Subti
 	return matches, err
 }
 
+// SearchSubtitleMatchesWithFilters 按字幕内容及视频属性搜索视频片段。
+func (a *App) SearchSubtitleMatchesWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight, limit int) ([]services.SubtitleSearchMatch, error) {
+	matches, err := a.subtitleSearchService.SearchSubtitleMatchesWithFilters(keyword, services.SubtitleSearchFilters{
+		TagIDs: tagIDs, MinSize: minSize, MaxSize: maxSize, MinHeight: minHeight, MaxHeight: maxHeight, Limit: limit,
+	})
+	log.Printf("API SearchSubtitleMatchesWithFilters keyword=%q tags=%v size=[%d,%d] height=[%d,%d] limit=%d result=%d err=%v", keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, limit, len(matches), err)
+	return matches, err
+}
+
 // SearchVideosByTags 按标签搜索视频（多选 AND，支持分页）
 func (a *App) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	videos, err := a.videoService.SearchVideosByTags(tagIDs, cursorScore, cursorSize, cursorID, limit)
@@ -595,18 +604,11 @@ func (a *App) GenerateSubtitle(req services.SubtitleGenerateRequest) (*services.
 		log.Printf("API GenerateSubtitle id=%d failed to get video: %v", req.VideoID, err)
 		return nil, err
 	}
-	// 获取双语字幕配置
 	settings, _ := a.settingsService.GetSettings()
-	bilingualEnabled := false
-	bilingualLang := "zh"
-	deeplApiKey := ""
-	if settings != nil {
-		bilingualEnabled = settings.BilingualEnabled
-		bilingualLang = settings.BilingualLang
-		deeplApiKey = settings.DeepLApiKey
-	}
-	log.Printf("API GenerateSubtitle id=%d path=%s engine=%s bilingual=%v lang=%s source=%s", req.VideoID, video.Path, req.Engine, bilingualEnabled, bilingualLang, req.SourceLang)
-	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, false)
+	options := subtitleGenerateOptionsFromSettings(settings, false)
+	req.VideoName = video.Name
+	log.Printf("API GenerateSubtitle id=%d path=%s engine=%s bilingual=%v lang=%s source=%s provider=%s", req.VideoID, video.Path, req.Engine, options.BilingualEnabled, options.BilingualLang, req.SourceLang, options.TranslationConfig.Provider)
+	return a.subtitleService.GenerateSubtitle(req, video.Path, options)
 }
 
 // ForceGenerateSubtitle 强制生成字幕（跳过幻觉检测）
@@ -616,22 +618,56 @@ func (a *App) ForceGenerateSubtitle(req services.SubtitleGenerateRequest) (*serv
 		return nil, err
 	}
 	settings, _ := a.settingsService.GetSettings()
-	bilingualEnabled := false
-	bilingualLang := "zh"
-	deeplApiKey := ""
-	if settings != nil {
-		bilingualEnabled = settings.BilingualEnabled
-		bilingualLang = settings.BilingualLang
-		deeplApiKey = settings.DeepLApiKey
-	}
+	options := subtitleGenerateOptionsFromSettings(settings, true)
+	req.VideoName = video.Name
 	log.Printf("API ForceGenerateSubtitle id=%d path=%s engine=%s source=%s", req.VideoID, video.Path, req.Engine, req.SourceLang)
-	return a.subtitleService.GenerateSubtitle(req, video.Path, bilingualEnabled, bilingualLang, deeplApiKey, true)
+	return a.subtitleService.GenerateSubtitle(req, video.Path, options)
 }
 
 // CancelSubtitle 取消正在进行的字幕生成任务
 func (a *App) CancelSubtitle() {
 	a.subtitleService.CancelGeneration()
 	log.Printf("API CancelSubtitle")
+}
+
+// CancelSubtitleTask 取消指定的字幕任务。
+func (a *App) CancelSubtitleTask(taskID uint) error {
+	err := a.subtitleService.CancelSubtitleTask(taskID)
+	log.Printf("API CancelSubtitleTask task_id=%d err=%v", taskID, err)
+	return err
+}
+
+// GetSubtitleQueueState 返回当前字幕任务队列。
+func (a *App) GetSubtitleQueueState() services.SubtitleQueueSnapshot {
+	return a.subtitleService.GetSubtitleQueueState()
+}
+
+func subtitleGenerateOptionsFromSettings(settings *models.Settings, force bool) services.SubtitleGenerateOptions {
+	options := services.SubtitleGenerateOptions{
+		BilingualLang: "zh",
+		ForceGenerate: force,
+		RecognitionConfig: services.SubtitleRecognitionConfig{
+			WhisperXModel:       "medium",
+			WhisperXBatchSize:   8,
+			WhisperXComputeType: "int8",
+		},
+		TranslationConfig: services.SubtitleTranslationConfig{Provider: "deepl"},
+	}
+	if settings == nil {
+		return options
+	}
+	options.BilingualEnabled = settings.BilingualEnabled
+	options.BilingualLang = settings.BilingualLang
+	options.TranslationConfig = services.SubtitleTranslationConfig{
+		Provider:    settings.SubtitleTranslationProvider,
+		DeepLAPIKey: settings.DeepLApiKey,
+		BaseURL:     settings.SubtitleTranslationBaseURL,
+		APIKey:      settings.SubtitleTranslationAPIKey,
+		Model:       settings.SubtitleTranslationModel,
+	}
+	options.RecognitionConfig.WhisperXModel = settings.SubtitleWhisperXModel
+	options.RecognitionConfig.WhisperXBatchSize = settings.SubtitleWhisperXBatchSize
+	return options
 }
 
 // GetSubtitleSegments 获取已生成字幕的结构化片段

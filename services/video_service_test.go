@@ -58,6 +58,76 @@ func previewStatsSnapshot(t *testing.T, videoID uint) models.Video {
 	return video
 }
 
+func TestRenameVideoMovesSubtitleAndRefreshesIndex(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	oldVideoPath := filepath.Join(root, "old-name.mp4")
+	oldSRTPath := filepath.Join(root, "old-name.srt")
+	newSRTPath := filepath.Join(root, "new-name.srt")
+	mustCreateFile(t, oldVideoPath)
+	if err := os.WriteFile(oldSRTPath, []byte("1\n00:00:01,000 --> 00:00:03,000\nhello renamed subtitle\n\n"), 0644); err != nil {
+		t.Fatalf("写入字幕文件失败: %v", err)
+	}
+	video := models.Video{Name: "old-name.mp4", Path: oldVideoPath, Directory: root, Size: 10}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := indexSubtitleFileForVideoID(video.ID, oldSRTPath); err != nil {
+		t.Fatalf("索引字幕失败: %v", err)
+	}
+	if err := svc.RenameVideo(video.ID, "new-name"); err != nil {
+		t.Fatalf("重命名视频失败: %v", err)
+	}
+	if _, err := os.Stat(oldSRTPath); !os.IsNotExist(err) {
+		t.Fatalf("旧字幕文件应被移走，stat err=%v", err)
+	}
+	if _, err := os.Stat(newSRTPath); err != nil {
+		t.Fatalf("新字幕文件不存在: %v", err)
+	}
+	var state models.SubtitleIndexState
+	if err := database.DB.Where("video_id = ?", video.ID).First(&state).Error; err != nil {
+		t.Fatalf("读取字幕索引状态失败: %v", err)
+	}
+	if filepath.Clean(state.SubtitlePath) != filepath.Clean(newSRTPath) {
+		t.Fatalf("字幕索引路径未更新 got=%q want=%q", state.SubtitlePath, newSRTPath)
+	}
+	matches, err := (&SubtitleSearchService{}).SearchSubtitleMatches("renamed subtitle", 10)
+	if err != nil || len(matches) != 1 || matches[0].Video.ID != video.ID {
+		t.Fatalf("重命名后字幕搜索未命中: matches=%#v err=%v", matches, err)
+	}
+}
+
+func TestRenameVideoChangingOnlyExtensionKeepsSiblingSubtitle(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	oldVideoPath := filepath.Join(root, "movie.mp4")
+	newVideoPath := filepath.Join(root, "movie.mkv")
+	srtPath := filepath.Join(root, "movie.srt")
+	mustCreateFile(t, oldVideoPath)
+	if err := os.WriteFile(srtPath, []byte("1\n00:00:01,000 --> 00:00:03,000\nextension rename\n\n"), 0644); err != nil {
+		t.Fatalf("写入字幕文件失败: %v", err)
+	}
+	video := models.Video{Name: "movie.mp4", Path: oldVideoPath, Directory: root, Size: 10}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := indexSubtitleFileForVideoID(video.ID, srtPath); err != nil {
+		t.Fatalf("索引字幕失败: %v", err)
+	}
+
+	if err := svc.RenameVideo(video.ID, "movie.mkv"); err != nil {
+		t.Fatalf("修改视频扩展名失败: %v", err)
+	}
+	if _, err := os.Stat(newVideoPath); err != nil {
+		t.Fatalf("新视频文件不存在: %v", err)
+	}
+	if _, err := os.Stat(srtPath); err != nil {
+		t.Fatalf("同名字幕应保留在原路径: %v", err)
+	}
+}
+
 func TestScanDirectorySkipsHiddenFilesAndDirs(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
