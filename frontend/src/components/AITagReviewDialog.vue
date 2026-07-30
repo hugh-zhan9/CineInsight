@@ -4,7 +4,7 @@
       <div class="ai-tag-review-header">
         <div>
           <h3>AI 标签管理</h3>
-          <p class="help-text">待审 {{ candidates.length }} 条<span v-if="reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条</span>，高置信和中置信需人工确认后才会写入正式标签。</p>
+          <p class="help-text">待审标签 {{ candidates.length }} 条，同源关系 {{ sameSourceRelations.length }} 条<span v-if="reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条标签</span>。同源关系只提供证据，不会直接写入正式标签。</p>
           <p v-if="summary && !summary.config_available" class="ai-tag-warning">AI 配置不可用，后台分析已暂停。</p>
         </div>
         <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
@@ -22,7 +22,27 @@
 
       <div v-if="loading" class="ai-tag-review-empty">加载中...</div>
       <div v-else-if="error" class="ai-tag-review-error">{{ error }}</div>
-      <div v-else-if="groups.length === 0" class="ai-tag-review-empty">{{ reviewSearch.trim() ? '没有匹配的待审 AI 标签' : '暂无待审 AI 标签' }}</div>
+      <template v-else>
+      <section v-if="sameSourceRelations.length" class="same-source-review-section">
+        <h4>同源视频</h4>
+        <div v-for="relation in sameSourceRelations" :key="relation.id" class="same-source-row">
+          <div class="same-source-main">
+            <strong>{{ relation.video_a?.name || `视频 ${relation.video_a_id}` }}</strong>
+            <span v-if="relation.video_a_deleted" class="ai-video-deleted-badge">已删除</span>
+            <span class="same-source-link">与</span>
+            <strong>{{ relation.video_b?.name || `视频 ${relation.video_b_id}` }}</strong>
+            <span v-if="relation.video_b_deleted" class="ai-video-deleted-badge">已删除</span>
+            <span class="ai-confidence ai-confidence--high">高置信</span>
+            <p v-if="relation.reasoning" class="ai-candidate-reason">{{ relation.reasoning }}</p>
+          </div>
+          <div class="ai-candidate-actions">
+            <button type="button" class="btn-action btn-compact" @click="previewVideo(relation.video_a_id)" :disabled="relation.video_a_deleted || processingIds.includes(`preview-${relation.video_a_id}`)">预览 A</button>
+            <button type="button" class="btn-action btn-compact" @click="previewVideo(relation.video_b_id)" :disabled="relation.video_b_deleted || processingIds.includes(`preview-${relation.video_b_id}`)">预览 B</button>
+            <button type="button" class="btn-secondary btn-compact" @click="rejectSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">不是同源</button>
+          </div>
+        </div>
+      </section>
+      <div v-if="groups.length === 0" class="ai-tag-review-empty">{{ reviewSearch.trim() ? '没有匹配的待审 AI 标签' : '暂无待审 AI 标签' }}</div>
       <div v-else class="ai-tag-review-list">
         <section v-for="group in groups" :key="group.videoId" class="ai-video-group">
           <div class="ai-video-title">
@@ -64,6 +84,7 @@
           </div>
         </section>
       </div>
+      </template>
 
       <div v-if="rejectConfirm.show" class="ai-confirm-overlay">
         <div class="ai-confirm-dialog glass-surface">
@@ -101,7 +122,7 @@
 </template>
 
 <script>
-import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
 
 export default {
@@ -113,6 +134,7 @@ export default {
   data() {
     return {
       candidates: [],
+      sameSourceRelations: [],
       summary: null,
       loading: false,
       error: '',
@@ -143,12 +165,21 @@ export default {
       this.loading = true;
       this.error = '';
       try {
-        const [summary, candidates] = await Promise.all([
+        const [summary, candidates, relations] = await Promise.all([
           GetAITaggingStatusSummary(),
           ListAITagCandidates(0, '', 'pending'),
+          ListSameSourceRelations('detected', false),
         ]);
         this.summary = summary;
         this.candidates = Array.isArray(candidates) ? candidates : [];
+        this.sameSourceRelations = Array.isArray(relations) ? relations : [];
+        const unread = this.sameSourceRelations.filter(relation => relation.is_unread);
+        if (unread.length) {
+          await Promise.all(unread.map(relation => MarkSameSourceRelationRead(relation.id)));
+          this.sameSourceRelations = this.sameSourceRelations.map(relation => ({ ...relation, is_unread: false }));
+          if (this.summary) this.summary.same_source_unread = 0;
+          this.$emit('changed');
+        }
       } catch (err) {
         this.error = '加载 AI 标签候选失败: ' + err;
       } finally {
@@ -169,6 +200,13 @@ export default {
       await this.withProcessing(candidate.id, async () => {
         await RejectAITagCandidate(candidate.id);
         this.candidates = removeCandidateById(this.candidates, candidate.id);
+      });
+    },
+    async rejectSameSource(relation) {
+      await this.withProcessing(`same-source-${relation.id}`, async () => {
+        await RejectSameSourceRelation(relation.id);
+        this.sameSourceRelations = this.sameSourceRelations.filter(item => Number(item.id) !== Number(relation.id));
+        this.$emit('changed');
       });
     },
     async rejectVideoGroup(group) {
@@ -327,6 +365,39 @@ export default {
   overflow-x: hidden;
   padding-right: 4px;
   min-width: 0;
+}
+
+.same-source-review-section {
+  margin-bottom: 16px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--accent-color) 28%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-color) 7%, var(--panel-bg));
+}
+
+.same-source-review-section h4 {
+  margin: 0 0 10px;
+}
+
+.same-source-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 0;
+  border-top: 1px solid var(--border-color);
+}
+
+.same-source-row:first-of-type {
+  border-top: 0;
+}
+
+.same-source-main {
+  min-width: 0;
+}
+
+.same-source-link {
+  margin: 0 8px;
+  color: var(--text-secondary);
 }
 
 .ai-video-group {

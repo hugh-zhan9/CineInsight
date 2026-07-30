@@ -46,6 +46,7 @@ export namespace models {
 	    ai_tagging_images_per_request: number;
 	    ai_tagging_subtitle_char_limit: number;
 	    ai_tagging_startup_batch_size: number;
+	    ai_tagging_max_extra_frames: number;
 	    updated_at: string;
 
 	    static createFrom(source: any = {}) {
@@ -79,6 +80,7 @@ export namespace models {
 	        this.ai_tagging_images_per_request = source["ai_tagging_images_per_request"];
 	        this.ai_tagging_subtitle_char_limit = source["ai_tagging_subtitle_char_limit"];
 	        this.ai_tagging_startup_batch_size = source["ai_tagging_startup_batch_size"];
+	        this.ai_tagging_max_extra_frames = source["ai_tagging_max_extra_frames"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -260,6 +262,7 @@ export namespace services {
 	export class AITaggingStatusSummary {
 	    config_available: boolean;
 	    pending: number;
+	    same_source_unread: number;
 	    processing: number;
 	    completed: number;
 	    skipped: number;
@@ -273,11 +276,55 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.config_available = source["config_available"];
 	        this.pending = source["pending"];
+	        this.same_source_unread = source["same_source_unread"];
 	        this.processing = source["processing"];
 	        this.completed = source["completed"];
 	        this.skipped = source["skipped"];
 	        this.failed = source["failed"];
 	    }
+	}
+	export class VideoSameSourceReviewItem {
+	    id: number;
+	    video_a_id: number;
+	    video_a?: models.Video;
+	    video_a_deleted: boolean;
+	    video_b_id: number;
+	    video_b?: models.Video;
+	    video_b_deleted: boolean;
+	    status: string;
+	    confidence: string;
+	    reasoning: string;
+	    is_unread: boolean;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoSameSourceReviewItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_a_id = source["video_a_id"];
+	        this.video_a = this.convertValues(source["video_a"], models.Video);
+	        this.video_a_deleted = source["video_a_deleted"];
+	        this.video_b_id = source["video_b_id"];
+	        this.video_b = this.convertValues(source["video_b"], models.Video);
+	        this.video_b_deleted = source["video_b_deleted"];
+	        this.status = source["status"];
+	        this.confidence = source["confidence"];
+	        this.reasoning = source["reasoning"];
+	        this.is_unread = source["is_unread"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+
+		convertValues(a: any, classs: any): any {
+		    if (!a) return a;
+		    if (a.slice && a.map) return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    if ("object" === typeof a) return new classs(a);
+		    return a;
+		}
 	}
 	export class BatchVideoOperationError {
 	    video_id: number;
@@ -345,6 +392,7 @@ export namespace services {
 		    return a;
 		}
 	}
+
 	export class CleanupDuplicateGroup {
 	    original: models.Video;
 	    candidates: models.Video[];

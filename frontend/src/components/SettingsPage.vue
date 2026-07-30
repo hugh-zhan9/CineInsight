@@ -153,8 +153,21 @@
             class="number-input"
           />
         </div>
+        <div class="setting-item">
+          <label>Agent 额外补帧上限</label>
+          <input
+            type="number"
+            v-model.number="settingsForm.ai_tagging_max_extra_frames"
+            min="1"
+            max="100"
+            step="1"
+            class="number-input"
+          />
+          <p class="help-text">模型决定每次补多少帧，服务端按此值限制单个视频的额外总量，默认 20。</p>
+        </div>
       </div>
-      <p class="help-text">保存后后台会自动使用新配置；本地 LM Studio 通常可用 http://127.0.0.1:1234/v1，API Key 可填任意非空值。</p>
+      <p class="help-text">AI Agent 可按证据决定补帧、临时生成字幕或查找同源视频。临时字幕只在内存中使用，不写入 SRT；只调用已经准备好的本地 WhisperX/Qwen，不会自动安装组件。</p>
+      <p class="help-text">抽帧图片、临时字幕文本和同源候选帧可能发送到上方配置的外部 API；原始音频不会发送。保存后后台会自动使用新配置。</p>
     </div>
 
 	<div class="settings-section ai-tag-library-section">
@@ -397,6 +410,7 @@ export default {
         this.settingsForm.ai_tagging_images_per_request = this.settingsForm.ai_tagging_images_per_request || 10;
         this.settingsForm.ai_tagging_subtitle_char_limit = this.settingsForm.ai_tagging_subtitle_char_limit || 4000;
         this.settingsForm.ai_tagging_startup_batch_size = this.settingsForm.ai_tagging_startup_batch_size || 10;
+        this.settingsForm.ai_tagging_max_extra_frames = this.settingsForm.ai_tagging_max_extra_frames || 20;
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
         this.settingsForm.subtitle_translation_provider = this.settingsForm.subtitle_translation_provider || 'deepl';
         this.settingsForm.subtitle_whisperx_model = this.settingsForm.subtitle_whisperx_model || 'medium';
@@ -478,7 +492,8 @@ export default {
             ai_tagging_frame_count: 0,
             ai_tagging_images_per_request: this.settingsForm.ai_tagging_images_per_request || 10,
             ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
-            ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10
+            ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10,
+            ai_tagging_max_extra_frames: this.settingsForm.ai_tagging_max_extra_frames || 20
           })
         ]);
         const aiTriggered = await TriggerAITagging();

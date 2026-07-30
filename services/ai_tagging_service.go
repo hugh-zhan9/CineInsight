@@ -21,6 +21,8 @@ type AITaggingService struct {
 	configProvider AITaggingConfigProvider
 	clientFactory  func(AITaggingConfig) AITaggingAIClient
 	extractor      *AITaggingExtractor
+	transcript     TemporaryTranscriptProvider
+	sameSource     AISameSourceProvider
 	now            func() time.Time
 	workerMu       sync.Mutex
 	workerRunMu    sync.Mutex
@@ -29,12 +31,18 @@ type AITaggingService struct {
 }
 
 func NewAITaggingService() *AITaggingService {
+	extractor := NewAITaggingExtractor()
 	return &AITaggingService{
 		configProvider: SettingsAITaggingConfigProvider{},
 		clientFactory:  NewOpenAICompatibleAITaggingClient,
-		extractor:      NewAITaggingExtractor(),
+		extractor:      extractor,
+		sameSource:     NewAISameSourceService(extractor),
 		now:            time.Now,
 	}
+}
+
+func (s *AITaggingService) SetTemporaryTranscriptProvider(provider TemporaryTranscriptProvider) {
+	s.transcript = provider
 }
 
 func (s *AITaggingService) Start(ctx context.Context) {
@@ -189,6 +197,11 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		return err
 	}
 	client := s.clientFactory(config)
+	evidence, err = s.runAgentEvidenceLoop(ctx, video, existingTags, evidence, fingerprint, config, client)
+	if err != nil {
+		log.Printf("[AITagging] agent evidence loop failed video_id=%d err=%v", video.ID, err)
+		return s.markState(video.ID, models.AITaggingStateStatusFailed, "", fingerprint, err.Error())
+	}
 	suggestions, err := client.AnalyzeTags(ctx, AITaggingRequest{
 		Video:        video,
 		ExistingTags: existingTags,
@@ -390,12 +403,16 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 		// Closed-set mode: never invent tags outside the system library.
 		if matchedTagID == nil {
 			if closedOnly {
-				log.Printf("[AITagging] drop out-of-library suggestion video_id=%d label=%q", video.ID, label)
+				log.Printf("[AITagging] drop out-of-library suggestion video_id=%d", video.ID)
 				continue
 			}
 			if confidence != models.AITagConfidenceHigh {
 				continue
 			}
+		}
+		reasoning := strings.TrimSpace(suggestion.Reasoning)
+		if evidence.SubtitleTemporary {
+			reasoning = "使用本地临时字幕作为辅助证据；临时字幕正文未保存。"
 		}
 		candidate := models.AITagCandidate{
 			VideoID:        video.ID,
@@ -403,7 +420,7 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 			NormalizedName: normalized,
 			MatchedTagID:   matchedTagID,
 			Confidence:     confidence,
-			Reasoning:      strings.TrimSpace(suggestion.Reasoning),
+			Reasoning:      reasoning,
 			SourceSummary:  evidence.SummaryJSON(),
 			Status:         models.AITagCandidateStatusPending,
 		}
@@ -666,6 +683,15 @@ func (s *AITaggingService) StatusSummary() (*AITaggingStatusSummary, error) {
 		Count(&summary.Pending).Error; err != nil {
 		return nil, err
 	}
+	if s.sameSource != nil {
+		if sameSourceService, ok := s.sameSource.(*AISameSourceService); ok {
+			unread, err := sameSourceService.UnreadCount()
+			if err != nil {
+				return nil, err
+			}
+			summary.SameSourceUnread = unread
+		}
+	}
 	countState := func(status string, target *int64) error {
 		return database.DB.Model(&models.AITaggingState{}).
 			Joins("INNER JOIN videos ON videos.id = ai_tagging_states.video_id AND videos.deleted_at IS NULL").
@@ -685,6 +711,30 @@ func (s *AITaggingService) StatusSummary() (*AITaggingStatusSummary, error) {
 		return nil, err
 	}
 	return summary, nil
+}
+
+func (s *AITaggingService) ListSameSourceRelations(status string, unreadOnly bool) ([]VideoSameSourceReviewItem, error) {
+	service, ok := s.sameSource.(*AISameSourceService)
+	if !ok {
+		return nil, fmt.Errorf("same-source service unavailable")
+	}
+	return service.ListRelations(status, unreadOnly)
+}
+
+func (s *AITaggingService) MarkSameSourceRelationRead(relationID uint) error {
+	service, ok := s.sameSource.(*AISameSourceService)
+	if !ok {
+		return fmt.Errorf("same-source service unavailable")
+	}
+	return service.MarkRelationRead(relationID)
+}
+
+func (s *AITaggingService) RejectSameSourceRelation(relationID uint) error {
+	service, ok := s.sameSource.(*AISameSourceService)
+	if !ok {
+		return fmt.Errorf("same-source service unavailable")
+	}
+	return service.RejectRelation(relationID)
 }
 
 func normalizeAIConfidence(confidence string) string {

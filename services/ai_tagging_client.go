@@ -8,7 +8,6 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 	"video-master/models"
@@ -18,14 +17,20 @@ type AITaggingAIClient interface {
 	AnalyzeTags(ctx context.Context, req AITaggingRequest) ([]AITagSuggestion, error)
 }
 
+type AITaggingDecisionClient interface {
+	DecideNextAction(ctx context.Context, req AITagAgentDecisionRequest) (AITagAgentDecision, error)
+}
+
+type AITaggingSameSourceClient interface {
+	CompareSameSource(ctx context.Context, req AISameSourceComparisonRequest) (AISameSourceComparison, error)
+}
+
 type OpenAICompatibleAITaggingClient struct {
 	config AITaggingConfig
 	client *http.Client
 }
 
 const aiTaggingRequestTimeout = 5 * time.Minute
-
-var aiTaggingDataURLPattern = regexp.MustCompile(`"url":"data:image/[^"]+"`)
 
 func NewOpenAICompatibleAITaggingClient(config AITaggingConfig) AITaggingAIClient {
 	return &OpenAICompatibleAITaggingClient{
@@ -55,22 +60,57 @@ func (c *OpenAICompatibleAITaggingClient) AnalyzeTags(ctx context.Context, req A
 
 func (c *OpenAICompatibleAITaggingClient) analyzeBatch(ctx context.Context, req AITaggingRequest) ([]AITagSuggestion, error) {
 	body := c.buildRequest(req)
-	payload, err := json.Marshal(body)
+	content, err := c.doChatCompletion(ctx, req.Video.ID, "tag_analysis", body)
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("[AITagging] request video_id=%d batch=%d/%d model=%q base_url=%q payload_bytes=%d payload=%s",
-		req.Video.ID,
-		req.BatchIndex,
-		req.BatchCount,
-		c.config.Model,
-		openAIChatCompletionsURL(c.config.BaseURL),
-		len(payload),
-		redactAITaggingPayload(payload),
-	)
+	suggestions, err := parseAITagSuggestions(content)
+	if err != nil {
+		log.Printf("[AITagging] response content parse failed video_id=%d operation=tag_analysis err=%v", req.Video.ID, err)
+		return nil, err
+	}
+	log.Printf("[AITagging] parsed suggestions video_id=%d count=%d", req.Video.ID, len(suggestions))
+	return suggestions, nil
+}
+
+func (c *OpenAICompatibleAITaggingClient) DecideNextAction(ctx context.Context, req AITagAgentDecisionRequest) (AITagAgentDecision, error) {
+	body := c.buildDecisionRequest(req)
+	content, err := c.doChatCompletion(ctx, req.Video.ID, "agent_decision", body)
+	if err != nil {
+		return AITagAgentDecision{}, err
+	}
+	return parseAITagAgentDecision(content)
+}
+
+func (c *OpenAICompatibleAITaggingClient) CompareSameSource(ctx context.Context, req AISameSourceComparisonRequest) (AISameSourceComparison, error) {
+	body := c.buildSameSourceRequest(req)
+	content, err := c.doChatCompletion(ctx, req.Video.ID, "same_source_compare", body)
+	if err != nil {
+		return AISameSourceComparison{}, err
+	}
+	content = normalizeAITaggingJSONContent(content)
+	var comparison AISameSourceComparison
+	if err := json.Unmarshal([]byte(content), &comparison); err != nil {
+		return comparison, fmt.Errorf("parse same-source comparison: %w", err)
+	}
+	comparison.Confidence = normalizeAIConfidence(comparison.Confidence)
+	if comparison.Confidence == "" {
+		comparison.Confidence = models.AITagConfidenceLow
+	}
+	comparison.Reasoning = strings.TrimSpace(comparison.Reasoning)
+	return comparison, nil
+}
+
+func (c *OpenAICompatibleAITaggingClient) doChatCompletion(ctx context.Context, videoID uint, operation string, body map[string]interface{}) (string, error) {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("[AITagging] request video_id=%d operation=%s model=%q base_url=%q payload_bytes=%d",
+		videoID, operation, c.config.Model, openAIChatCompletionsURL(c.config.BaseURL), len(payload))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIChatCompletionsURL(c.config.BaseURL), bytes.NewReader(payload))
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if strings.TrimSpace(c.config.APIKey) != "" {
@@ -78,19 +118,17 @@ func (c *OpenAICompatibleAITaggingClient) analyzeBatch(ctx context.Context, req 
 	}
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		log.Printf("[AITagging] request failed video_id=%d err=%v", req.Video.ID, err)
-		return nil, err
+		log.Printf("[AITagging] request failed video_id=%d operation=%s err=%v", videoID, operation, err)
+		return "", err
 	}
 	defer resp.Body.Close()
-	respBody, _ := io.ReadAll(resp.Body)
-	log.Printf("[AITagging] response video_id=%d status=%d bytes=%d body=%s",
-		req.Video.ID,
-		resp.StatusCode,
-		len(respBody),
-		truncateLogSnippet(string(respBody), 4000),
-	)
+	respBody, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return "", readErr
+	}
+	log.Printf("[AITagging] response video_id=%d operation=%s status=%d bytes=%d", videoID, operation, resp.StatusCode, len(respBody))
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("AI tagging API returned %d: %s", resp.StatusCode, truncateLogSnippet(string(respBody), 300))
+		return "", fmt.Errorf("AI tagging API returned %d", resp.StatusCode)
 	}
 	var parsed struct {
 		Choices []struct {
@@ -100,25 +138,12 @@ func (c *OpenAICompatibleAITaggingClient) analyzeBatch(ctx context.Context, req 
 		} `json:"choices"`
 	}
 	if err := json.Unmarshal(respBody, &parsed); err != nil {
-		log.Printf("[AITagging] response parse failed video_id=%d err=%v body=%s", req.Video.ID, err, truncateLogSnippet(string(respBody), 4000))
-		return nil, err
+		return "", fmt.Errorf("parse AI tagging API response: %w", err)
 	}
 	if len(parsed.Choices) == 0 || strings.TrimSpace(parsed.Choices[0].Message.Content) == "" {
-		log.Printf("[AITagging] response empty content video_id=%d body=%s", req.Video.ID, truncateLogSnippet(string(respBody), 4000))
-		return nil, fmt.Errorf("AI tagging API returned empty content")
+		return "", fmt.Errorf("AI tagging API returned empty content")
 	}
-	content := parsed.Choices[0].Message.Content
-	suggestions, err := parseAITagSuggestions(content)
-	if err != nil {
-		log.Printf("[AITagging] response content parse failed video_id=%d err=%v content=%s", req.Video.ID, err, truncateLogSnippet(content, 4000))
-		return nil, err
-	}
-	log.Printf("[AITagging] parsed suggestions video_id=%d count=%d suggestions=%s",
-		req.Video.ID,
-		len(suggestions),
-		summarizeAITagSuggestions(suggestions),
-	)
-	return suggestions, nil
+	return parsed.Choices[0].Message.Content, nil
 }
 
 func splitAITaggingFrames(frames []AITaggingFrame, limit int) [][]AITaggingFrame {
@@ -204,8 +229,146 @@ func (c *OpenAICompatibleAITaggingClient) buildRequest(req AITaggingRequest) map
 	}
 }
 
+func (c *OpenAICompatibleAITaggingClient) buildDecisionRequest(req AITagAgentDecisionRequest) map[string]interface{} {
+	frameLimit := c.config.ImagesPerRequest
+	if frameLimit <= 0 {
+		frameLimit = defaultAITaggingImagesPerRequest
+	}
+	frames := selectRepresentativeAITaggingFrames(req.Evidence.Frames, frameLimit)
+	observations, _ := json.Marshal(req.Observations)
+	properties, _ := json.Marshal(req.Evidence.AdditionalProperties)
+	content := make([]map[string]interface{}, 0, len(frames)*2+1)
+	content = append(content, map[string]interface{}{
+		"type": "text",
+		"text": fmt.Sprintf(`你正在决定视频标签分析的下一步。每轮只能选择一个动作。
+
+可选动作：
+- finalize：现有证据足够，进入最终标签判断。
+- request_more_frames：需要更多画面；requested_frame_count 必须是正整数且不超过剩余额度。
+- request_transcript：需要本地临时转写补充语义证据。
+- find_same_source：需要查找清晰度变化、重编码或空间裁剪后的同源视频。
+
+规则：
+1. 当前是第 %d/%d 轮；最后一轮必须 finalize。
+2. 临时字幕和同源查找各最多执行一次；已执行后不要再次请求。
+3. 工具失败只是观察；应根据剩余证据继续决策。
+4. 同源结果只作为标签证据，不能直接当作正式标签。
+5. 只输出 JSON：{"action":"finalize|request_more_frames|request_transcript|find_same_source","requested_frame_count":0,"reasoning":"简短理由"}。
+
+视频名：%s
+时长：%.2f 秒
+当前画面数：%d
+额外帧剩余额度：%d
+已有字幕：%t
+临时字幕已请求：%t
+同源查找已请求：%t
+字幕摘要：%s
+同源证据：%s
+工具观察：%s`,
+			req.Round, req.MaxRounds, req.Video.Name, req.Video.Duration, len(req.Evidence.Frames), req.RemainingExtraFrames,
+			strings.TrimSpace(req.Evidence.SubtitleText) != "", req.TranscriptUsed, req.SameSourceUsed,
+			truncateRunes(req.Evidence.SubtitleText, c.config.SubtitleCharLimit), string(properties), string(observations)),
+	})
+	for _, frame := range frames {
+		content = append(content,
+			map[string]interface{}{"type": "text", "text": fmt.Sprintf("现有证据帧，约 %.1f 秒。", frame.Position)},
+			map[string]interface{}{"type": "image_url", "image_url": map[string]string{"url": frame.DataURL}},
+		)
+	}
+	return map[string]interface{}{
+		"model": c.config.Model,
+		"messages": []map[string]interface{}{
+			{"role": "system", "content": "你是视频分析 Agent 的决策器。只输出严格 JSON，不输出 Markdown。"},
+			{"role": "user", "content": content},
+		},
+		"temperature": 0.1,
+	}
+}
+
+func (c *OpenAICompatibleAITaggingClient) buildSameSourceRequest(req AISameSourceComparisonRequest) map[string]interface{} {
+	count := minInt(len(req.Left), len(req.Right))
+	if count > 5 {
+		count = 5
+	}
+	content := make([]map[string]interface{}, 0, count*4+1)
+	content = append(content, map[string]interface{}{
+		"type": "text",
+		"text": fmt.Sprintf(`判断两个本地视频是否来自同一段原始内容。允许清晰度下降、重新编码、加边框和空间裁剪；仅有相似主题、同一人物或同一场景不算同源。
+只有证据明确时才返回 high。只输出 JSON：{"same_source":true|false,"confidence":"high|medium|low","reasoning":"简短理由"}。
+视频 A：%s，时长 %.2f 秒
+视频 B：%s，时长 %.2f 秒`, req.Video.Name, req.Video.Duration, req.Candidate.Name, req.Candidate.Duration),
+	})
+	for index := 0; index < count; index++ {
+		content = append(content,
+			map[string]interface{}{"type": "text", "text": fmt.Sprintf("对应采样点 %d，视频 A。", index+1)},
+			map[string]interface{}{"type": "image_url", "image_url": map[string]string{"url": req.Left[index].DataURL}},
+			map[string]interface{}{"type": "text", "text": fmt.Sprintf("对应采样点 %d，视频 B。", index+1)},
+			map[string]interface{}{"type": "image_url", "image_url": map[string]string{"url": req.Right[index].DataURL}},
+		)
+	}
+	return map[string]interface{}{
+		"model": c.config.Model,
+		"messages": []map[string]interface{}{
+			{"role": "system", "content": "你是严格的视频同源比对器，只输出 JSON。"},
+			{"role": "user", "content": content},
+		},
+		"temperature": 0,
+	}
+}
+
+func selectRepresentativeAITaggingFrames(frames []AITaggingFrame, limit int) []AITaggingFrame {
+	if limit <= 0 || len(frames) <= limit {
+		return append([]AITaggingFrame(nil), frames...)
+	}
+	if limit == 1 {
+		return []AITaggingFrame{frames[len(frames)/2]}
+	}
+	selected := make([]AITaggingFrame, 0, limit)
+	for index := 0; index < limit; index++ {
+		position := index * (len(frames) - 1) / (limit - 1)
+		selected = append(selected, frames[position])
+	}
+	return selected
+}
+
+func parseAITagAgentDecision(content string) (AITagAgentDecision, error) {
+	content = normalizeAITaggingJSONContent(content)
+	var decision AITagAgentDecision
+	if err := json.Unmarshal([]byte(content), &decision); err != nil {
+		return decision, fmt.Errorf("parse AI agent decision: %w", err)
+	}
+	decision.Action = strings.TrimSpace(decision.Action)
+	if decision.Action == "" {
+		decision.Action = models.AITagAgentActionFinalize
+	}
+	switch decision.Action {
+	case models.AITagAgentActionFinalize,
+		models.AITagAgentActionMoreFrames,
+		models.AITagAgentActionTranscript,
+		models.AITagAgentActionFindSameSource:
+	default:
+		return decision, fmt.Errorf("unsupported AI agent action %q", decision.Action)
+	}
+	decision.Reasoning = strings.TrimSpace(decision.Reasoning)
+	return decision, nil
+}
+
+func truncateRunes(value string, limit int) string {
+	value = strings.TrimSpace(value)
+	if limit <= 0 {
+		return value
+	}
+	runes := []rune(value)
+	if len(runes) <= limit {
+		return value
+	}
+	return string(runes[:limit])
+}
+
 func buildAITaggingPromptText(req AITaggingRequest, subtitleCharLimit int) string {
 	evidence := req.Evidence
+	agentEvidenceJSON, _ := json.Marshal(evidence.AdditionalProperties)
+	agentEvidence := string(agentEvidenceJSON)
 	batchContext := ""
 	if req.BatchCount > 1 {
 		batchContext = fmt.Sprintf("这是第 %d/%d 批画面，本视频共抽取 %d 帧。请只判断当前批次可见的内容；服务端会合并各批结果。\n", req.BatchIndex, req.BatchCount, req.TotalFrames)
@@ -236,7 +399,8 @@ func buildAITaggingPromptText(req AITaggingRequest, subtitleCharLimit int) strin
 视频文件名：%s
 视频路径：%s
 字幕摘要：%s
-采样警告：%s`, len(evidence.Frames), batchContext, closedLibrary, req.Video.Name, req.Video.Path, truncateLogSnippet(evidence.SubtitleText, subtitleCharLimit), strings.Join(evidence.Warnings, "; "))
+Agent 补充证据：%s
+采样警告：%s`, len(evidence.Frames), batchContext, closedLibrary, req.Video.Name, req.Video.Path, truncateLogSnippet(evidence.SubtitleText, subtitleCharLimit), agentEvidence, strings.Join(evidence.Warnings, "; "))
 	}
 
 	existingTagNames := make([]string, 0, len(req.ExistingTags))
@@ -264,7 +428,8 @@ func buildAITaggingPromptText(req AITaggingRequest, subtitleCharLimit int) strin
 视频路径：%s
 现有标签库：%s
 字幕摘要：%s
-采样警告：%s`, len(evidence.Frames), batchContext, req.Video.Name, req.Video.Path, strings.Join(existingTagNames, ", "), truncateLogSnippet(evidence.SubtitleText, subtitleCharLimit), strings.Join(evidence.Warnings, "; "))
+Agent 补充证据：%s
+采样警告：%s`, len(evidence.Frames), batchContext, req.Video.Name, req.Video.Path, strings.Join(existingTagNames, ", "), truncateLogSnippet(evidence.SubtitleText, subtitleCharLimit), agentEvidence, strings.Join(evidence.Warnings, "; "))
 }
 
 func formatClosedTagLibraryForPrompt(tags []models.Tag) string {
@@ -316,34 +481,6 @@ func openAIChatCompletionsURL(baseURL string) string {
 		return base + "/chat/completions"
 	}
 	return base + "/v1/chat/completions"
-}
-
-func redactAITaggingPayload(payload []byte) string {
-	redacted := aiTaggingDataURLPattern.ReplaceAllString(string(payload), `"url":"<data_url_redacted>"`)
-	return truncateLogSnippet(redacted, 4000)
-}
-
-func summarizeAITagSuggestions(suggestions []AITagSuggestion) string {
-	if len(suggestions) == 0 {
-		return "[]"
-	}
-	limit := len(suggestions)
-	if limit > 8 {
-		limit = 8
-	}
-	parts := make([]string, 0, limit+1)
-	for i := 0; i < limit; i++ {
-		s := suggestions[i]
-		label := strings.TrimSpace(s.Label)
-		if label == "" {
-			label = "<empty>"
-		}
-		parts = append(parts, fmt.Sprintf("{label:%q confidence:%q match_type:%q matched:%q}", label, s.Confidence, s.MatchType, s.MatchedExistingName))
-	}
-	if len(suggestions) > limit {
-		parts = append(parts, fmt.Sprintf("...+%d more", len(suggestions)-limit))
-	}
-	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func parseAITagSuggestions(content string) ([]AITagSuggestion, error) {

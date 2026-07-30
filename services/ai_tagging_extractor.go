@@ -20,7 +20,7 @@ import (
 	"video-master/services/subtitleparser"
 )
 
-const aiTaggingPromptSchemaVersion = "ai-tagging-v4-minute-sampling-batches"
+const aiTaggingPromptSchemaVersion = "ai-tagging-v5-agent-evidence"
 
 const (
 	aiTaggingFrameMaxWidth       = 512
@@ -35,6 +35,7 @@ type AITaggingEvidence struct {
 	Path                 string            `json:"path"`
 	Directory            string            `json:"directory"`
 	SubtitleText         string            `json:"subtitle_text,omitempty"`
+	SubtitleTemporary    bool              `json:"-"`
 	SubtitlePath         string            `json:"subtitle_path,omitempty"`
 	SubtitleModTime      int64             `json:"subtitle_mod_time,omitempty"`
 	SubtitleSize         int64             `json:"subtitle_size,omitempty"`
@@ -119,56 +120,10 @@ func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Vid
 	if count <= 0 {
 		return
 	}
-	ffmpegBin := findMediaBinary("ffmpeg")
-	if ffmpegBin == "" {
-		evidence.Warnings = append(evidence.Warnings, "ffmpeg unavailable for frame sampling")
-		return
-	}
-	if _, err := os.Stat(video.Path); err != nil {
-		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("video file unavailable for frame sampling: %v", err))
-		return
-	}
-	tmpDir, err := os.MkdirTemp("", "cineinsight-ai-frames-*")
-	if err != nil {
-		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("frame temp dir failed: %v", err))
-		return
-	}
-	defer os.RemoveAll(tmpDir)
-
 	positions := planAITaggingFramePositions(video.Duration, count)
-	for i, position := range positions {
-		select {
-		case <-ctx.Done():
-			evidence.Warnings = append(evidence.Warnings, "frame sampling cancelled")
-			return
-		default:
-		}
-		outPath := filepath.Join(tmpDir, fmt.Sprintf("frame-%d.jpg", i))
-		cmd := exec.CommandContext(ctx, ffmpegBin,
-			"-y",
-			"-ss", strconv.FormatFloat(position, 'f', 2, 64),
-			"-i", video.Path,
-			"-frames:v", "1",
-			"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", aiTaggingFrameMaxWidth),
-			"-q:v", strconv.Itoa(aiTaggingFrameQuality),
-			outPath,
-		)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("frame sample %d failed: %v %s", i+1, err, truncateLogSnippet(string(output), 160)))
-			continue
-		}
-		data, err := os.ReadFile(outPath)
-		if err != nil {
-			evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("frame read %d failed: %v", i+1, err))
-			continue
-		}
-		evidence.Frames = append(evidence.Frames, AITaggingFrame{
-			MimeType: "image/jpeg",
-			DataURL:  "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
-			Index:    i + 1,
-			Position: position,
-		})
-	}
+	frames, warnings := sampleAITaggingFrames(ctx, video.Path, positions, 1)
+	evidence.Frames = append(evidence.Frames, frames...)
+	evidence.Warnings = append(evidence.Warnings, warnings...)
 	minAccepted := count / 2
 	if minAccepted < 3 {
 		minAccepted = 3
@@ -176,6 +131,72 @@ func (e *AITaggingExtractor) collectFrames(ctx context.Context, video models.Vid
 	if len(evidence.Frames) > 0 && len(evidence.Frames) < minAccepted {
 		evidence.Warnings = append(evidence.Warnings, fmt.Sprintf("frame sampling sparse: got=%d want>=%d", len(evidence.Frames), minAccepted))
 	}
+}
+
+func (e *AITaggingExtractor) CollectAdditionalFrames(ctx context.Context, video models.Video, existing []AITaggingFrame, count int) ([]AITaggingFrame, []string) {
+	if count <= 0 {
+		return nil, []string{"additional frame count must be positive"}
+	}
+	existingPositions := make([]float64, 0, len(existing))
+	for _, frame := range existing {
+		existingPositions = append(existingPositions, frame.Position)
+	}
+	positions := planAdditionalAITaggingFramePositions(video.Duration, existingPositions, count)
+	return sampleAITaggingFrames(ctx, video.Path, positions, len(existing)+1)
+}
+
+func sampleAITaggingFrames(ctx context.Context, videoPath string, positions []float64, startIndex int) ([]AITaggingFrame, []string) {
+	if strings.TrimSpace(videoPath) == "" || len(positions) == 0 {
+		return nil, nil
+	}
+	ffmpegBin := findMediaBinary("ffmpeg")
+	if ffmpegBin == "" {
+		return nil, []string{"ffmpeg unavailable for frame sampling"}
+	}
+	if _, err := os.Stat(videoPath); err != nil {
+		return nil, []string{fmt.Sprintf("video file unavailable for frame sampling: %v", err)}
+	}
+	tmpDir, err := os.MkdirTemp("", "cineinsight-ai-frames-*")
+	if err != nil {
+		return nil, []string{fmt.Sprintf("frame temp dir failed: %v", err)}
+	}
+	defer os.RemoveAll(tmpDir)
+
+	frames := make([]AITaggingFrame, 0, len(positions))
+	warnings := make([]string, 0)
+	for offset, position := range positions {
+		select {
+		case <-ctx.Done():
+			return frames, append(warnings, "frame sampling cancelled")
+		default:
+		}
+		outPath := filepath.Join(tmpDir, fmt.Sprintf("frame-%d.jpg", offset))
+		cmd := exec.CommandContext(ctx, ffmpegBin,
+			"-y",
+			"-ss", strconv.FormatFloat(position, 'f', 2, 64),
+			"-i", videoPath,
+			"-frames:v", "1",
+			"-vf", fmt.Sprintf("scale='min(%d,iw)':-2", aiTaggingFrameMaxWidth),
+			"-q:v", strconv.Itoa(aiTaggingFrameQuality),
+			outPath,
+		)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			warnings = append(warnings, fmt.Sprintf("frame sample %d failed: %v %s", offset+1, err, truncateLogSnippet(string(output), 160)))
+			continue
+		}
+		data, err := os.ReadFile(outPath)
+		if err != nil {
+			warnings = append(warnings, fmt.Sprintf("frame read %d failed: %v", offset+1, err))
+			continue
+		}
+		frames = append(frames, AITaggingFrame{
+			MimeType: "image/jpeg",
+			DataURL:  "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data),
+			Index:    startIndex + len(frames),
+			Position: position,
+		})
+	}
+	return frames, warnings
 }
 
 func formatAITaggingFrameSamplingConfig(duration float64, resolvedCount int) string {
@@ -233,8 +254,56 @@ func planAITaggingFramePositions(duration float64, count int) []float64 {
 	return positions
 }
 
+func planAdditionalAITaggingFramePositions(duration float64, existing []float64, count int) []float64 {
+	if count <= 0 {
+		return nil
+	}
+	if duration <= 0 {
+		duration = float64(len(existing) + count + 1)
+	}
+	start := duration * aiTaggingFrameEdgeAvoidRatio
+	end := duration * (1 - aiTaggingFrameEdgeAvoidRatio)
+	if end <= start {
+		start, end = 0, duration
+	}
+	points := make([]float64, 0, len(existing)+count+2)
+	points = append(points, start, end)
+	for _, position := range existing {
+		if position > start && position < end {
+			points = append(points, position)
+		}
+	}
+	result := make([]float64, 0, count)
+	for len(result) < count {
+		sort.Float64s(points)
+		bestStart, bestEnd := points[0], points[1]
+		for index := 1; index < len(points)-1; index++ {
+			if points[index+1]-points[index] > bestEnd-bestStart {
+				bestStart, bestEnd = points[index], points[index+1]
+			}
+		}
+		position := bestStart + (bestEnd-bestStart)/2
+		if bestEnd-bestStart < 0.001 {
+			break
+		}
+		points = append(points, position)
+		result = append(result, position)
+	}
+	sort.Float64s(result)
+	return result
+}
+
 func (e AITaggingEvidence) SummaryJSON() string {
 	summary := e
+	if summary.SubtitleTemporary {
+		summary.SubtitleText = ""
+		properties := make(map[string]string, len(summary.AdditionalProperties)+1)
+		for key, value := range summary.AdditionalProperties {
+			properties[key] = value
+		}
+		properties["temporary_transcript"] = "used_not_persisted"
+		summary.AdditionalProperties = properties
+	}
 	if len(summary.Frames) > 0 {
 		summary.Frames = make([]AITaggingFrame, len(e.Frames))
 		for i, frame := range e.Frames {

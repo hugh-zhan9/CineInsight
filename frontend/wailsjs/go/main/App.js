@@ -146,12 +146,20 @@ export function ListAITagCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListAITagCandidates'](arg1, arg2, arg3);
 }
 
+export function ListSameSourceRelations(arg1, arg2) {
+  return window['go']['main']['App']['ListSameSourceRelations'](arg1, arg2);
+}
+
 export function LogFrontend(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontend'](arg1, arg2, arg3);
 }
 
 export function MergeTags(arg1, arg2) {
   return window['go']['main']['App']['MergeTags'](arg1, arg2);
+}
+
+export function MarkSameSourceRelationRead(arg1) {
+  return window['go']['main']['App']['MarkSameSourceRelationRead'](arg1);
 }
 
 export function MoveDirectory(arg1, arg2) {
@@ -192,6 +200,10 @@ export function RejectAITagCandidate(arg1) {
 
 export function RejectAITagCandidatesByVideo(arg1) {
   return window['go']['main']['App']['RejectAITagCandidatesByVideo'](arg1);
+}
+
+export function RejectSameSourceRelation(arg1) {
+  return window['go']['main']['App']['RejectSameSourceRelation'](arg1);
 }
 
 export function RelocateVideo(arg1, arg2) {

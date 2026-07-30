@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -132,6 +133,11 @@ func TestAITaggingSchemaCreatesTablesAndIndexes(t *testing.T) {
 	if !database.DB.Migrator().HasTable(&models.AITagApprovalRecord{}) {
 		t.Fatalf("期望创建 ai_tag_approval_records 表")
 	}
+	if !database.DB.Migrator().HasTable(&models.AITagAgentStep{}) ||
+		!database.DB.Migrator().HasTable(&models.VideoVisualFingerprint{}) ||
+		!database.DB.Migrator().HasTable(&models.VideoSameSourceRelation{}) {
+		t.Fatalf("期望创建 Agent 决策、视觉指纹和同源关系表")
+	}
 	if !database.DB.Migrator().HasIndex(&models.AITagCandidate{}, "idx_ai_tag_candidates_video_status") {
 		t.Fatalf("期望创建候选 video/status 索引")
 	}
@@ -146,13 +152,16 @@ func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
 	t.Setenv(envAITaggingAPIKey, "env-key")
 	t.Setenv(envAITaggingModel, "env-model")
 
-	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
-		"ai_tagging_base_url":            "http://db.example/v1",
-		"ai_tagging_api_key":             "db-key",
-		"ai_tagging_model":               "db-model",
-		"ai_tagging_images_per_request":  3,
-		"ai_tagging_subtitle_char_limit": 1200,
-		"ai_tagging_startup_batch_size":  5,
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(models.Settings{
+		AITaggingBaseURL:           "http://db.example/v1",
+		AITaggingAPIKey:            "db-key",
+		AITaggingModel:             "db-model",
+		AITaggingImagesPerRequest:  3,
+		AITaggingSubtitleCharLimit: 1200,
+		AITaggingStartupBatchSize:  5,
+		AITaggingMaxExtraFrames:    37,
+		SubtitleWhisperXModel:      "large-v3",
+		SubtitleWhisperXBatchSize:  4,
 	}).Error; err != nil {
 		t.Fatalf("更新设置失败: %v", err)
 	}
@@ -164,8 +173,11 @@ func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
 	if config.BaseURL != "http://db.example/v1" || config.APIKey != "db-key" || config.Model != "db-model" {
 		t.Fatalf("期望优先读取数据库配置，实际: %+v", config)
 	}
-	if config.ImagesPerRequest != 3 || config.SubtitleCharLimit != 1200 || config.StartupBatchSize != 5 {
+	if config.ImagesPerRequest != 3 || config.SubtitleCharLimit != 1200 || config.StartupBatchSize != 5 || config.MaxExtraFrames != 37 {
 		t.Fatalf("期望读取数据库数值配置，实际: %+v", config)
+	}
+	if config.SubtitleWhisperXModel != "large-v3" || config.SubtitleWhisperXBatchSize != 4 {
+		t.Fatalf("临时字幕应复用用户 WhisperX 配置，实际: %+v", config)
 	}
 }
 
@@ -316,6 +328,29 @@ func TestAITaggingFramePolicyUsesOneFramePerMinuteWithMinimumTen(t *testing.T) {
 	}
 	if positions[len(positions)-1] < 94.9 || positions[len(positions)-1] > 95.1 {
 		t.Fatalf("末帧应避开片尾约 5%%，实际 %.2f", positions[len(positions)-1])
+	}
+}
+
+func TestPlanAdditionalAITaggingFramePositionsFillsLargestGaps(t *testing.T) {
+	positions := planAdditionalAITaggingFramePositions(100, []float64{5, 50, 95}, 3)
+	if len(positions) != 3 {
+		t.Fatalf("expected 3 additional positions, got %d", len(positions))
+	}
+	want := []float64{16.25, 27.5, 72.5}
+	for index := range want {
+		if math.Abs(positions[index]-want[index]) > 0.001 {
+			t.Fatalf("position %d = %.2f, want %.2f", index, positions[index], want[index])
+		}
+	}
+}
+
+func TestPlanAdditionalAITaggingFramePositionsHandlesEmptyAndSingle(t *testing.T) {
+	if got := planAdditionalAITaggingFramePositions(10, nil, 0); got != nil {
+		t.Fatalf("zero count must return nil, got %#v", got)
+	}
+	got := planAdditionalAITaggingFramePositions(10, nil, 1)
+	if len(got) != 1 || math.Abs(got[0]-5) > 0.001 {
+		t.Fatalf("single additional frame must use midpoint, got %#v", got)
 	}
 }
 
