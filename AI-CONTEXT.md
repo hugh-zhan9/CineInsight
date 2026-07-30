@@ -110,9 +110,20 @@
 - **统一清理:** 清理中心同时展示大小+采样哈希确认的精确重复、短/低清视频及已有 `detected` 同源关系；精确重复配对不会再次进入同源区。
 - **安全边界:** 同源候选按分辨率、大小、标签数量和 ID 稳定给出保留建议与预计释放空间，但默认不选中、不自动删除；否认沿用 `RejectSameSourceRelation`，删除沿用可恢复回收站。
 
+### 2.12 本地媒体详情、人物与作品集
+- **单页详情抽屉:** `PreviewDrawer.vue` 在同一连续页面展示预览、显示标题、原始标题、nullable 半分制个人评分、人物、作品集及技术信息；人物/作品集详情使用抽屉内部返回栈，不引入标签页。
+- **显示标题边界:** `videos.display_title` 为空时前端回退 `name`；编辑显示/原始标题不调用文件重命名。文件搜索覆盖显示标题、原始标题、文件名和路径。
+- **评分查询:** `LibraryFilter` 支持 nullable `min_rating/max_rating` 和 `balanced/rating_desc/rating_asc`。评分排序使用显式 NULL 段游标；0 与 NULL 不等价；保存视图持久化评分条件。
+- **人物:** `people` 只保存显示姓名、原始姓名和托管头像，允许同名；`video_people` 不保存角色或顺序。显式移除最后关系会清理人物，视频软删除保留关系且不触发清理。
+- **作品集:** `media_collections` 是手工编排的通用容器，活跃规范化名称唯一；`collection_videos.position` 保存完整顺序。隐藏的软删除视频保留顺序槽位，恢复后回到原位；删除作品集不删除视频。
+- **托管图片:** 头像和封面仅接受不超过 20 MiB 的 JPEG/PNG/WebP，复制到 `~/.video-master/media-details/{people|collections}/{id}/`；WebView 只通过实体 ID 资源路由访问，不暴露数据库路径。
+- **技术快照:** `MediaProbeService` 以参数数组执行本地 `ffprobe -v error -show_format -show_streams -print_format json <path>`，限制输出并在探测前后核对 size+mtime。成功事务替换 `video_technical_metadata/media_streams` 并同步基础元数据；失败只更新尝试状态，保留最后成功快照。
+- **显式补全:** `TechnicalBackfillService` 只有一个串行 worker，只由 Wails 操作显式启动，可取消并通过 `technical-backfill-state` 事件/轮询展示状态。应用启动和详情读取都不会隐式全库探测；再次运行依靠成功指纹跳过有效项。
+- **本地边界:** 本期详情信息只来自用户输入、现有数据库和本地文件/ffprobe，不调用在线影视资料源。
+
 ## 3. 关键目录说明 (Directory Structure)
 
-- `/services`: **核心业务层**（Video, Subtitle, Tag, Settings, Directory 服务）。
+- `/services`: **核心业务层**（Video, VideoDetail, MediaProbe, TechnicalBackfill, Person, Collection, Subtitle, Tag, Settings, Directory 服务）。
 - `/models`: **数据模型层**（GORM 结构体定义）。
 - `/database`: **持久化层**（数据库连接、迁移与初始化）。
 - `/frontend/src/components`: **UI 组件**（Vue 组件）。

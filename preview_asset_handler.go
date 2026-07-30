@@ -12,6 +12,24 @@ import (
 
 func newAssetHandler(app *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/preview/person-avatar/") {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			app.servePersonAvatar(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/preview/collection-cover/") {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			app.serveCollectionCover(w, r)
+			return
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			if strings.HasPrefix(r.URL.Path, "/preview/media/") {
 				app.servePreviewMedia(w, r)
@@ -25,6 +43,58 @@ func newAssetHandler(app *App) http.Handler {
 
 		http.NotFound(w, r)
 	})
+}
+
+func (a *App) serveCollectionCover(w http.ResponseWriter, r *http.Request) {
+	collectionID, err := assetVideoIDFromPath(r.URL.Path, "/preview/collection-cover/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	asset, err := a.collectionService.ResolveCollectionCover(collectionID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "collection cover not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "collection cover unavailable", http.StatusInternalServerError)
+		return
+	}
+	file, err := os.Open(asset.Path)
+	if err != nil {
+		http.Error(w, "collection cover not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", asset.MIME)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, asset.DisplayName, asset.ModTime, file)
+}
+
+func (a *App) servePersonAvatar(w http.ResponseWriter, r *http.Request) {
+	personID, err := assetVideoIDFromPath(r.URL.Path, "/preview/person-avatar/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	asset, err := a.personService.ResolvePersonAvatar(personID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "person avatar not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "person avatar unavailable", http.StatusInternalServerError)
+		return
+	}
+	file, err := os.Open(asset.Path)
+	if err != nil {
+		http.Error(w, "person avatar not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", asset.MIME)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, asset.DisplayName, asset.ModTime, file)
 }
 
 func (a *App) serveThumbnail(w http.ResponseWriter, r *http.Request) {

@@ -42,6 +42,11 @@ type App struct {
 	subtitleSearchService *services.SubtitleSearchService
 	aiTaggingService      *services.AITaggingService
 	shortFeedService      *services.ShortFeedService
+	personService         *services.PersonService
+	collectionService     *services.CollectionService
+	videoDetailService    *services.VideoDetailService
+	mediaProbeService     *services.MediaProbeService
+	technicalBackfill     *services.TechnicalBackfillService
 	shortFeedServer       *services.ShortFeedHTTPServer
 	shortFeedStartupError string
 	startupError          string
@@ -53,11 +58,14 @@ func NewApp() *App {
 	// 获取用户目录作为数据根目录
 	homeDir, _ := os.UserHomeDir()
 	dataDir := filepath.Join(homeDir, ".video-master")
-	videoService := &services.VideoService{}
+	mediaProbeService := services.NewMediaProbeService()
+	videoService := services.NewVideoService(mediaProbeService)
 	subtitleService := services.NewSubtitleService(dataDir)
 	aiTaggingService := services.NewAITaggingService()
 	aiTaggingService.SetTemporaryTranscriptProvider(subtitleService)
 
+	personService := services.NewPersonService(dataDir)
+	collectionService := services.NewCollectionService(dataDir)
 	return &App{
 		videoService:          videoService,
 		thumbnailService:      services.NewThumbnailService(videoService, dataDir),
@@ -69,6 +77,11 @@ func NewApp() *App {
 		subtitleSearchService: &services.SubtitleSearchService{},
 		aiTaggingService:      aiTaggingService,
 		shortFeedService:      services.NewShortFeedService(videoService),
+		personService:         personService,
+		collectionService:     collectionService,
+		videoDetailService:    services.NewVideoDetailService(personService, collectionService),
+		mediaProbeService:     mediaProbeService,
+		technicalBackfill:     services.NewTechnicalBackfillService(mediaProbeService),
 	}
 }
 
@@ -84,6 +97,9 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("App startup trash reconciliation failed err=%v", err)
 	}
 	a.subtitleService.SetContext(ctx) // Inject context
+	a.technicalBackfill.SetEventEmitter(func(status services.TechnicalBackfillStatus) {
+		runtime.EventsEmit(ctx, "technical-backfill-state", status)
+	})
 	a.cleanupService.SetContext(ctx)
 	if result, err := a.tagService.SyncShortVideoTags(); err != nil {
 		log.Printf("App startup short-video tag sync failed err=%v", err)
@@ -101,6 +117,9 @@ func (a *App) startup(ctx context.Context) {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.technicalBackfill != nil {
+		_ = a.technicalBackfill.Cancel()
+	}
 	if a.aiTaggingService != nil {
 		a.aiTaggingService.Stop()
 	}
@@ -309,6 +328,124 @@ func (a *App) GetLibrarySubtitleHits(keyword string, videoIDs []uint) ([]service
 	hits, err := a.videoService.GetLibrarySubtitleHits(keyword, videoIDs)
 	log.Printf("API GetLibrarySubtitleHits videos=%d hits=%d err=%v", len(videoIDs), len(hits), err)
 	return hits, err
+}
+
+func (a *App) SearchLibraryVideoPage(request services.LibraryVideoPageRequest) (*services.LibraryVideoPage, error) {
+	return a.videoService.SearchLibraryVideoPage(request.Filter, request.Cursor, request.Limit)
+}
+
+func (a *App) GetVideoDetails(videoID uint) (*services.VideoDetails, error) {
+	return a.videoDetailService.GetVideoDetails(videoID)
+}
+
+func (a *App) UpdateVideoDetails(input services.VideoDetailsUpdate) (*services.VideoDetails, error) {
+	return a.videoDetailService.UpdateVideoDetails(input)
+}
+
+func (a *App) RefreshVideoTechnicalMetadata(videoID uint) (*services.VideoDetails, error) {
+	if err := a.videoService.RefreshVideoMetadata(videoID); err != nil {
+		return nil, err
+	}
+	return a.videoDetailService.GetVideoDetails(videoID)
+}
+
+func (a *App) StartTechnicalBackfill() (services.TechnicalBackfillStatus, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.technicalBackfill.Start(ctx)
+}
+
+func (a *App) GetTechnicalBackfillStatus() services.TechnicalBackfillStatus {
+	return a.technicalBackfill.Status()
+}
+
+func (a *App) CancelTechnicalBackfill() error {
+	return a.technicalBackfill.Cancel()
+}
+
+// ListPeople returns stable local person candidates and their active video counts.
+func (a *App) ListPeople(keyword, cursorName string, cursorID uint, limit int) ([]services.PersonListItem, error) {
+	return a.personService.ListPeople(keyword, cursorName, cursorID, limit)
+}
+
+func (a *App) GetPersonDetail(personID, cursorVideoID uint, limit int) (*services.PersonDetail, error) {
+	return a.personService.GetPersonDetail(personID, cursorVideoID, limit)
+}
+
+func (a *App) CreatePerson(displayName, originalName string) (*models.Person, error) {
+	return a.personService.CreatePerson(displayName, originalName)
+}
+
+func (a *App) UpdatePerson(personID uint, displayName, originalName string) (*models.Person, error) {
+	return a.personService.UpdatePerson(personID, displayName, originalName)
+}
+
+func (a *App) SelectPersonAvatar() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择人物头像",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "图片 (*.jpg;*.jpeg;*.png;*.webp)", Pattern: "*.jpg;*.jpeg;*.png;*.webp"},
+		},
+	})
+}
+
+func (a *App) SetPersonAvatar(personID uint, sourcePath string) (*models.Person, error) {
+	return a.personService.SetPersonAvatar(personID, sourcePath)
+}
+
+func (a *App) RemovePersonAvatar(personID uint) error {
+	return a.personService.RemovePersonAvatar(personID)
+}
+
+func (a *App) ListCollections(keyword, cursorName string, cursorID uint, limit int) ([]services.CollectionListItem, error) {
+	return a.collectionService.ListCollections(keyword, cursorName, cursorID, limit)
+}
+
+func (a *App) GetCollectionDetail(collectionID uint) (*services.CollectionDetail, error) {
+	return a.collectionService.GetCollectionDetail(collectionID)
+}
+
+func (a *App) CreateCollection(name, description string) (*models.MediaCollection, error) {
+	return a.collectionService.CreateCollection(name, description)
+}
+
+func (a *App) UpdateCollection(collectionID uint, name, description string) (*models.MediaCollection, error) {
+	return a.collectionService.UpdateCollection(collectionID, name, description)
+}
+
+func (a *App) DeleteCollection(collectionID uint) error {
+	return a.collectionService.DeleteCollection(collectionID)
+}
+
+func (a *App) AddCollectionVideo(collectionID, videoID uint) error {
+	return a.collectionService.AddCollectionVideo(collectionID, videoID)
+}
+
+func (a *App) RemoveCollectionVideo(collectionID, videoID uint) error {
+	return a.collectionService.RemoveCollectionVideo(collectionID, videoID)
+}
+
+func (a *App) ReorderCollectionVideos(collectionID uint, activeVideoIDs []uint) error {
+	return a.collectionService.ReorderCollectionVideos(collectionID, activeVideoIDs)
+}
+
+func (a *App) SelectCollectionCover() (string, error) {
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择作品集封面",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "图片 (*.jpg;*.jpeg;*.png;*.webp)", Pattern: "*.jpg;*.jpeg;*.png;*.webp"},
+		},
+	})
+}
+
+func (a *App) SetCollectionCover(collectionID uint, sourcePath string) (*models.MediaCollection, error) {
+	return a.collectionService.SetCollectionCover(collectionID, sourcePath)
+}
+
+func (a *App) RemoveCollectionCover(collectionID uint) error {
+	return a.collectionService.RemoveCollectionCover(collectionID)
 }
 
 // SelectDirectory 选择目录对话框

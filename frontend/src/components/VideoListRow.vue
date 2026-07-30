@@ -22,8 +22,8 @@
       <span v-else aria-hidden="true">▶</span>
     </div>
     <div class="video-info">
-      <h3>{{ video.name }}</h3>
-      <p class="video-path">{{ getDirectoryLabel(video) }}</p>
+      <h3>{{ video.display_title || video.name }}</h3>
+      <p class="video-path"><span v-if="video.display_title">{{ video.name }} · </span>{{ getDirectoryLabel(video) }}</p>
       <div class="video-meta">
         <span class="video-size">{{ formatSize(video.size) }}</span>
         <span v-if="video.duration" class="meta-divider">|</span>
@@ -34,6 +34,8 @@
         <span v-if="video.is_stale" class="video-stale">路径失效</span>
         <span v-if="video.is_watched" class="meta-divider">|</span>
         <span v-if="video.is_watched" class="video-watched">已看</span>
+        <span v-if="video.personal_rating !== null && video.personal_rating !== undefined" class="meta-divider">|</span>
+        <span v-if="video.personal_rating !== null && video.personal_rating !== undefined" class="video-rating">评分 {{ video.personal_rating }}/10</span>
       </div>
       <div v-if="watchProgressPercent > 0" class="video-watch-progress" :title="watchProgressLabel">
         <span :style="{ width: `${watchProgressPercent}%` }"></span>

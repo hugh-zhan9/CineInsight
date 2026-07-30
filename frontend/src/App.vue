@@ -9,7 +9,13 @@
           @click="currentPage = 'videos'" 
           :class="['nav-btn', { active: currentPage === 'videos' }]"
         >
-          视频列表
+          视频
+        </button>
+        <button @click="currentPage = 'people'" :class="['nav-btn', { active: currentPage === 'people' }]">
+          人物
+        </button>
+        <button @click="currentPage = 'collections'" :class="['nav-btn', { active: currentPage === 'collections' }]">
+          作品集
         </button>
         <button 
           @click="currentPage = 'settings'" 
@@ -35,7 +41,7 @@
 
     <div v-else class="main-view">
       <VideoListPage
-        v-if="currentPage === 'videos'"
+        v-show="currentPage === 'videos'"
         :tags="tags"
         :settings="settings"
         :directories="directories"
@@ -52,6 +58,9 @@
         @directories-changed="handleDirectoriesChanged"
         @tags-changed="loadTags"
       />
+
+      <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" />
+      <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" />
     </div>
   </div>
 </template>
@@ -60,11 +69,12 @@
 import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
+import EntityLibraryPage from './components/EntityLibraryPage.vue';
 import { logFrontend } from './utils/frontendLog.js';
 
 export default {
   name: 'App',
-  components: { VideoListPage, SettingsPage },
+  components: { VideoListPage, SettingsPage, EntityLibraryPage },
   data() {
     return {
       currentPage: 'videos',
