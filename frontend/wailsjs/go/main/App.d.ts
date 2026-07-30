@@ -16,6 +16,8 @@ export function BatchAddTagToVideos(arg1:Array<number>,arg2:number):Promise<serv
 
 export function BatchDeleteVideos(arg1:Array<number>,arg2:boolean):Promise<services.BatchVideoOperationResult>;
 
+export function BatchMoveVideos(arg1:Array<number>,arg2:string):Promise<services.BatchVideoOperationResult>;
+
 export function BatchRefreshVideoMetadata(arg1:Array<number>):Promise<services.BatchVideoOperationResult>;
 
 export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
@@ -76,6 +78,12 @@ export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise
 
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
+export function MergeTags(arg1:Array<number>,arg2:number):Promise<services.MergeTagsResult>;
+
+export function MoveDirectory(arg1:string,arg2:string):Promise<services.FolderMigrationResult>;
+
+export function MoveVideo(arg1:number,arg2:string):Promise<services.FileMigrationResult>;
+
 export function OpenDirectory(arg1:number):Promise<void>;
 
 export function PlayRandomVideo():Promise<services.PlaybackAttemptResult>;
@@ -117,6 +125,10 @@ export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,ar
 export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
 
 export function SelectDirectory():Promise<string>;
+
+export function SelectMigrationDestinationDirectory():Promise<string>;
+
+export function SelectMigrationSourceDirectory():Promise<string>;
 
 export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
 

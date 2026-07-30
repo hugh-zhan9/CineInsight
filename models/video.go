@@ -60,6 +60,7 @@ type Tag struct {
 	Name           string         `gorm:"unique" json:"name"` // 标签名称
 	Color          string         `json:"color"`              // 标签颜色
 	Namespace      string         `gorm:"index" json:"namespace"`
+	AutomaticKind  string         `gorm:"uniqueIndex:idx_tags_automatic_kind,where:automatic_kind <> ''" json:"automatic_kind"`
 	IsSystem       bool           `gorm:"index;default:false" json:"is_system"`
 	IsActive       bool           `gorm:"index;default:true" json:"is_active"`
 	ReviewRequired bool           `gorm:"default:false" json:"review_required"`

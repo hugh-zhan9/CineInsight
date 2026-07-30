@@ -6,6 +6,217 @@ import (
 	"video-master/models"
 )
 
+func TestMergeTagsUnionsAssociationsAndSoftDeletesSources(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	target := models.Tag{Name: "旅行", Color: "#111111", IsActive: true}
+	sourceA := models.Tag{Name: "旅游", Color: "#222222", IsActive: true}
+	sourceB := models.Tag{Name: "出游", Color: "#333333", IsActive: true}
+	if err := database.DB.Create(&[]*models.Tag{&target, &sourceA, &sourceB}).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	videoA := models.Video{Name: "a.mp4", Path: "/tmp/merge-tag-a.mp4"}
+	videoB := models.Video{Name: "b.mp4", Path: "/tmp/merge-tag-b.mp4"}
+	if err := database.DB.Create(&[]*models.Video{&videoA, &videoB}).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Model(&videoA).Association("Tags").Append(&target, &sourceA); err != nil {
+		t.Fatalf("关联视频A标签失败: %v", err)
+	}
+	if err := database.DB.Model(&videoB).Association("Tags").Append(&sourceB); err != nil {
+		t.Fatalf("关联视频B标签失败: %v", err)
+	}
+	candidateA := models.AITagCandidate{VideoID: videoA.ID, SuggestedName: sourceA.Name, NormalizedName: sourceA.Name, MatchedTagID: &sourceA.ID, Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusApproved}
+	candidateB := models.AITagCandidate{VideoID: videoA.ID, SuggestedName: target.Name, NormalizedName: target.Name, MatchedTagID: &target.ID, Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusApproved}
+	if err := database.DB.Create(&[]*models.AITagCandidate{&candidateA, &candidateB}).Error; err != nil {
+		t.Fatalf("创建 AI 候选失败: %v", err)
+	}
+	approvals := []models.AITagApprovalRecord{
+		{VideoID: videoA.ID, TagID: sourceA.ID, CandidateID: candidateA.ID},
+		{VideoID: videoA.ID, TagID: target.ID, CandidateID: candidateB.ID},
+	}
+	if err := database.DB.Create(&approvals).Error; err != nil {
+		t.Fatalf("创建审批记录失败: %v", err)
+	}
+	preferences := []models.ShortFeedTagPreference{
+		{TagID: target.ID, Score: 1.5},
+		{TagID: sourceA.ID, Score: 2},
+		{TagID: sourceB.ID, Score: -0.5},
+	}
+	if err := database.DB.Create(&preferences).Error; err != nil {
+		t.Fatalf("创建短视频偏好失败: %v", err)
+	}
+
+	result, err := (&TagService{}).MergeTags([]uint{sourceA.ID, sourceB.ID}, target.ID)
+	if err != nil {
+		t.Fatalf("合并标签失败: %v", err)
+	}
+	if result.MergedTagCount != 2 || result.VideoLinksMoved != 1 {
+		t.Fatalf("合并结果错误: %+v", result)
+	}
+	for _, videoID := range []uint{videoA.ID, videoB.ID} {
+		var video models.Video
+		if err := database.DB.Preload("Tags").First(&video, videoID).Error; err != nil {
+			t.Fatalf("读取视频标签失败: %v", err)
+		}
+		if len(video.Tags) != 1 || video.Tags[0].ID != target.ID {
+			t.Fatalf("视频 %d 应仅保留目标标签: %+v", videoID, video.Tags)
+		}
+	}
+	var candidate models.AITagCandidate
+	if err := database.DB.First(&candidate, candidateA.ID).Error; err != nil || candidate.MatchedTagID == nil || *candidate.MatchedTagID != target.ID {
+		t.Fatalf("AI 候选引用未更新: %+v err=%v", candidate, err)
+	}
+	var approvalCount int64
+	if err := database.DB.Model(&models.AITagApprovalRecord{}).Where("video_id = ? AND tag_id = ?", videoA.ID, target.ID).Count(&approvalCount).Error; err != nil || approvalCount != 1 {
+		t.Fatalf("重复审批记录未合并: count=%d err=%v", approvalCount, err)
+	}
+	var preference models.ShortFeedTagPreference
+	if err := database.DB.Where("tag_id = ?", target.ID).First(&preference).Error; err != nil || preference.Score != 3 {
+		t.Fatalf("偏好权重未合并: %+v err=%v", preference, err)
+	}
+	var deletedCount int64
+	if err := database.DB.Unscoped().Model(&models.Tag{}).Where("id IN ? AND deleted_at IS NOT NULL", []uint{sourceA.ID, sourceB.ID}).Count(&deletedCount).Error; err != nil || deletedCount != 2 {
+		t.Fatalf("源标签未软删除: count=%d err=%v", deletedCount, err)
+	}
+}
+
+func TestSyncShortVideoTagsReconcilesAgainstConfiguredDuration(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	short := models.Video{Name: "short.mp4", Path: "/tmp/short-tag.mp4", Duration: 120}
+	long := models.Video{Name: "long.mp4", Path: "/tmp/long-tag.mp4", Duration: 420}
+	if err := database.DB.Create(&[]*models.Video{&short, &long}).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	result, err := (&TagService{}).SyncShortVideoTags()
+	if err != nil {
+		t.Fatalf("同步短视频标签失败: %v", err)
+	}
+	if result.Added != 1 || result.Removed != 0 || result.TagID == 0 {
+		t.Fatalf("首次同步结果错误: %+v", result)
+	}
+	var tagged models.Video
+	if err := database.DB.Preload("Tags").First(&tagged, short.ID).Error; err != nil || len(tagged.Tags) != 1 || tagged.Tags[0].Name != ShortVideoTagName {
+		t.Fatalf("短视频未自动打标签: %+v err=%v", tagged.Tags, err)
+	}
+
+	var settings models.Settings
+	if err := database.DB.First(&settings).Error; err != nil {
+		t.Fatalf("读取设置失败: %v", err)
+	}
+	settings.ShortFeedMaxDurationMinutes = 1
+	if err := (&SettingsService{}).UpdateSettings(settings); err != nil {
+		t.Fatalf("更新短视频时长失败: %v", err)
+	}
+	if err := database.DB.Preload("Tags").First(&tagged, short.ID).Error; err != nil {
+		t.Fatalf("读取更新后标签失败: %v", err)
+	}
+	if len(tagged.Tags) != 0 {
+		t.Fatalf("时长阈值缩短后应移除自动标签: %+v", tagged.Tags)
+	}
+}
+
+func TestSyncShortVideoTagsDoesNotTakeOverExistingSameNameTag(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	manualTag := models.Tag{Name: ShortVideoTagName, Color: "#999999", IsActive: true}
+	short := models.Video{Name: "short.mp4", Path: "/tmp/collision-short.mp4", Duration: 30}
+	long := models.Video{Name: "long.mp4", Path: "/tmp/collision-long.mp4", Duration: 600}
+	if err := database.DB.Create(&manualTag).Error; err != nil {
+		t.Fatalf("创建同名人工标签失败: %v", err)
+	}
+	if err := database.DB.Create(&[]*models.Video{&short, &long}).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Model(&long).Association("Tags").Append(&manualTag); err != nil {
+		t.Fatalf("绑定人工标签失败: %v", err)
+	}
+
+	result, err := (&TagService{}).SyncShortVideoTags()
+	if err != nil {
+		t.Fatalf("同步短视频标签失败: %v", err)
+	}
+	if result.TagID == manualTag.ID {
+		t.Fatal("自动标签不能接管同名人工标签")
+	}
+	var loadedLong models.Video
+	if err := database.DB.Preload("Tags").First(&loadedLong, long.ID).Error; err != nil {
+		t.Fatalf("读取长视频失败: %v", err)
+	}
+	if len(loadedLong.Tags) != 1 || loadedLong.Tags[0].ID != manualTag.ID {
+		t.Fatalf("人工标签关联不应被自动规则删除: %+v", loadedLong.Tags)
+	}
+	var automaticTag models.Tag
+	if err := database.DB.First(&automaticTag, result.TagID).Error; err != nil {
+		t.Fatalf("读取自动标签失败: %v", err)
+	}
+	if automaticTag.AutomaticKind != shortVideoAutomaticTagKind || automaticTag.Name == manualTag.Name {
+		t.Fatalf("自动标签应使用持久类型和无冲突名称: %+v", automaticTag)
+	}
+}
+
+func TestMergeTagsAllowsSystemTagsWithinAITagLibrary(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	target := models.Tag{Name: "动作", Namespace: "内容", Color: "#111111", IsSystem: true, IsActive: true}
+	source := models.Tag{Name: "激烈动作", Namespace: "内容", Color: "#222222", IsSystem: true, IsActive: true}
+	video := models.Video{Name: "action.mp4", Path: "/tmp/system-tag-merge.mp4"}
+	if err := database.DB.Create(&[]*models.Tag{&target, &source}).Error; err != nil {
+		t.Fatalf("创建 AI 标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Model(&video).Association("Tags").Append(&source); err != nil {
+		t.Fatalf("关联来源标签失败: %v", err)
+	}
+
+	if _, err := (&TagService{}).MergeTags([]uint{source.ID}, target.ID); err != nil {
+		t.Fatalf("同一 AI 标签库内应支持合并: %v", err)
+	}
+	if err := database.DB.Preload("Tags").First(&video, video.ID).Error; err != nil {
+		t.Fatalf("读取合并后视频失败: %v", err)
+	}
+	if len(video.Tags) != 1 || video.Tags[0].ID != target.ID {
+		t.Fatalf("AI 标签关联未合并: %+v", video.Tags)
+	}
+}
+
+func TestMergeTagsDeduplicatesApprovalRecordsAcrossMultipleSources(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	target := models.Tag{Name: "目标", Color: "#111111", IsActive: true}
+	sourceA := models.Tag{Name: "来源A", Color: "#222222", IsActive: true}
+	sourceB := models.Tag{Name: "来源B", Color: "#333333", IsActive: true}
+	video := models.Video{Name: "approval.mp4", Path: "/tmp/multi-source-approval.mp4"}
+	if err := database.DB.Create(&[]*models.Tag{&target, &sourceA, &sourceB}).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	candidateA := models.AITagCandidate{VideoID: video.ID, SuggestedName: sourceA.Name, NormalizedName: sourceA.Name, MatchedTagID: &sourceA.ID, Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusApproved}
+	candidateB := models.AITagCandidate{VideoID: video.ID, SuggestedName: sourceB.Name, NormalizedName: sourceB.Name, MatchedTagID: &sourceB.ID, Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusApproved}
+	if err := database.DB.Create(&[]*models.AITagCandidate{&candidateA, &candidateB}).Error; err != nil {
+		t.Fatalf("创建候选失败: %v", err)
+	}
+	approvals := []models.AITagApprovalRecord{
+		{VideoID: video.ID, TagID: sourceA.ID, CandidateID: candidateA.ID},
+		{VideoID: video.ID, TagID: sourceB.ID, CandidateID: candidateB.ID},
+	}
+	if err := database.DB.Create(&approvals).Error; err != nil {
+		t.Fatalf("创建审批记录失败: %v", err)
+	}
+
+	if _, err := (&TagService{}).MergeTags([]uint{sourceA.ID, sourceB.ID}, target.ID); err != nil {
+		t.Fatalf("多来源审批标签合并失败: %v", err)
+	}
+	var loaded []models.AITagApprovalRecord
+	if err := database.DB.Where("video_id = ?", video.ID).Find(&loaded).Error; err != nil {
+		t.Fatalf("读取审批记录失败: %v", err)
+	}
+	if len(loaded) != 1 || loaded[0].TagID != target.ID {
+		t.Fatalf("审批记录应去重并指向目标标签: %+v", loaded)
+	}
+}
+
 func TestSaveAITagLibraryPreservesValidCandidatesAndSupersedesInvalidOnes(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	existing := []models.Tag{

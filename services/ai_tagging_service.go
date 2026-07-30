@@ -160,7 +160,7 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		config.SubtitleCharLimit,
 		strings.TrimSpace(config.APIKey) == "",
 	)
-	if len(video.Tags) > 0 {
+	if hasNonAutomaticTags(video.Tags) {
 		log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
 		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
 	}
@@ -220,12 +220,26 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	return s.markState(video.ID, models.AITaggingStateStatusCompleted, "", fingerprint, "")
 }
 
+func hasNonAutomaticTags(tags []models.Tag) bool {
+	for _, tag := range tags {
+		if tag.AutomaticKind == "" {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error) {
 	var videos []models.Video
 	err := database.DB.Model(&models.Video{}).
 		Preload("Tags").
 		Where("is_stale = ?", false).
-		Where("NOT EXISTS (SELECT 1 FROM video_tags WHERE video_tags.video_id = videos.id)").
+		Where(`NOT EXISTS (
+			SELECT 1 FROM video_tags
+			INNER JOIN tags ON tags.id = video_tags.tag_id
+			WHERE video_tags.video_id = videos.id
+				AND COALESCE(tags.automatic_kind, '') = ''
+		)`).
 		Where("NOT EXISTS (SELECT 1 FROM ai_tag_candidates WHERE ai_tag_candidates.video_id = videos.id AND ai_tag_candidates.status = ?)", models.AITagCandidateStatusPending).
 		Where(`NOT EXISTS (
 			SELECT 1 FROM ai_tagging_states
@@ -540,7 +554,10 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 
 func (s *AITaggingService) hasManualOfficialTagsInTx(tx *gorm.DB, videoID uint) (bool, error) {
 	var officialCount int64
-	if err := tx.Table("video_tags").Where("video_id = ?", videoID).Count(&officialCount).Error; err != nil {
+	if err := tx.Table("video_tags AS vt").
+		Joins("INNER JOIN tags ON tags.id = vt.tag_id").
+		Where("vt.video_id = ? AND COALESCE(tags.automatic_kind, '') = ''", videoID).
+		Count(&officialCount).Error; err != nil {
 		return false, err
 	}
 	if officialCount == 0 {

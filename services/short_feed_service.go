@@ -428,6 +428,9 @@ func incrementShortFeedTagPreference(tx *gorm.DB, tagID uint, delta float64) err
 	if err := tx.First(&tag, tagID).Error; err != nil {
 		return err
 	}
+	if tag.AutomaticKind != "" {
+		return nil
+	}
 	return tx.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "tag_id"}},
 		DoUpdates: clause.Assignments(map[string]interface{}{

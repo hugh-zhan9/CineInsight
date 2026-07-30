@@ -26,6 +26,8 @@ type VideoService struct {
 	scanSyncMu sync.Mutex
 }
 
+var libraryPathMutationMu sync.RWMutex
+
 const recentActiveFileThreshold = 5 * time.Minute
 
 var tempVideoStemSuffixes = []string{
@@ -38,11 +40,17 @@ type BatchVideoOperationError struct {
 	Error   string `json:"error"`
 }
 
+type BatchVideoOperationWarning struct {
+	VideoID uint   `json:"video_id"`
+	Warning string `json:"warning"`
+}
+
 type BatchVideoOperationResult struct {
-	Requested int                        `json:"requested"`
-	Succeeded int                        `json:"succeeded"`
-	Failed    int                        `json:"failed"`
-	Errors    []BatchVideoOperationError `json:"errors"`
+	Requested int                          `json:"requested"`
+	Succeeded int                          `json:"succeeded"`
+	Failed    int                          `json:"failed"`
+	Errors    []BatchVideoOperationError   `json:"errors"`
+	Warnings  []BatchVideoOperationWarning `json:"warnings"`
 }
 
 type ScanSyncError struct {
@@ -298,6 +306,12 @@ func (s *VideoService) getVideoMetadata(path string) (duration float64, resoluti
 
 // AddVideo 添加视频
 func (s *VideoService) AddVideo(path string) (*models.Video, error) {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
+	return s.addVideo(path)
+}
+
+func (s *VideoService) addVideo(path string) (*models.Video, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
 
 	// 检查文件是否存在
@@ -329,7 +343,12 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 		Height:     height,
 	}
 
-	err = database.DB.Create(video).Error
+	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(video).Error; err != nil {
+			return err
+		}
+		return syncShortVideoTagForVideo(tx, video.ID)
+	})
 	if err != nil {
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "unique") || strings.Contains(errMsg, "constraint") {
@@ -354,6 +373,12 @@ func (s *VideoService) GetVideo(id uint) (*models.Video, error) {
 
 // DeleteVideo 删除视频
 func (s *VideoService) DeleteVideo(id uint, deleteFile bool) error {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
+	return s.deleteVideo(id, deleteFile)
+}
+
+func (s *VideoService) deleteVideo(id uint, deleteFile bool) error {
 	var video models.Video
 	if err := database.DB.First(&video, id).Error; err != nil {
 		return err
@@ -381,6 +406,7 @@ func newBatchVideoOperationResult(ids []uint) *BatchVideoOperationResult {
 	return &BatchVideoOperationResult{
 		Requested: len(ids),
 		Errors:    make([]BatchVideoOperationError, 0),
+		Warnings:  make([]BatchVideoOperationWarning, 0),
 	}
 }
 
@@ -439,6 +465,9 @@ func (s *VideoService) AddTagToVideo(videoID uint, tagID uint) error {
 	if err := database.DB.First(&tag, tagID).Error; err != nil {
 		return err
 	}
+	if tag.AutomaticKind != "" {
+		return fmt.Errorf("自动标签由应用维护，不能手动添加")
+	}
 
 	return database.DB.Model(&video).Association("Tags").Append(&tag)
 }
@@ -453,6 +482,9 @@ func (s *VideoService) RemoveTagFromVideo(videoID uint, tagID uint) error {
 	}
 	if err := database.DB.First(&tag, tagID).Error; err != nil {
 		return err
+	}
+	if tag.AutomaticKind != "" {
+		return fmt.Errorf("自动标签由应用维护，不能手动移除")
 	}
 
 	return database.DB.Model(&video).Association("Tags").Delete(&tag)
@@ -566,6 +598,8 @@ func fingerprintVideo(video models.Video) scanFileFingerprint {
 
 // SyncScanDirectories performs an incremental database sync for configured scan directories.
 func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyncResult {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
 	s.scanSyncMu.Lock()
 	defer s.scanSyncMu.Unlock()
 
@@ -659,7 +693,7 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		if _, used := relocatedVideoIDs[video.ID]; used {
 			continue
 		}
-		if err := s.RelocateVideo(video.ID, file.Path); err != nil {
+		if err := s.relocateVideo(video.ID, file.Path); err != nil {
 			result.recordError("relocate", video.Directory, file.Path, err)
 			continue
 		}
@@ -672,7 +706,7 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		if _, consumed := consumedNewPaths[file.Path]; consumed {
 			continue
 		}
-		if _, err := s.AddVideo(file.Path); err != nil {
+		if _, err := s.addVideo(file.Path); err != nil {
 			if errors.Is(err, ErrVideoExists) {
 				result.Skipped++
 				continue
@@ -687,11 +721,14 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		if _, relocated := relocatedVideoIDs[video.ID]; relocated {
 			continue
 		}
-		if err := s.DeleteVideo(video.ID, false); err != nil {
+		if err := s.deleteVideo(video.ID, false); err != nil {
 			result.recordError("delete", video.Directory, video.Path, err)
 			continue
 		}
 		result.Deleted++
+	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
+		result.recordError("short-video-tag", "", "", err)
 	}
 
 	log.Printf("增量扫描同步完成 dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d",
@@ -803,6 +840,12 @@ func isRecentlyActiveFile(info os.FileInfo) bool {
 
 // RelocateVideo 更新视频路径（文件迁移场景，保留标签等元数据）
 func (s *VideoService) RelocateVideo(id uint, newPath string) error {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
+	return s.relocateVideo(id, newPath)
+}
+
+func (s *VideoService) relocateVideo(id uint, newPath string) error {
 	newPath = filepath.Clean(strings.TrimSpace(newPath))
 
 	// 验证新路径文件存在
@@ -819,17 +862,22 @@ func (s *VideoService) RelocateVideo(id uint, newPath string) error {
 	// 迁移时也尝试重新提取元数据（可能之前的元数据是空的）
 	duration, resolution, width, height := s.getVideoMetadata(newPath)
 
-	result := database.DB.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
-		"path":       newPath,
-		"directory":  filepath.Dir(newPath),
-		"name":       filepath.Base(newPath),
-		"duration":   duration,
-		"resolution": resolution,
-		"width":      width,
-		"height":     height,
-	})
-	if result.Error != nil {
-		return result.Error
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
+			"path":       newPath,
+			"directory":  filepath.Dir(newPath),
+			"name":       filepath.Base(newPath),
+			"duration":   duration,
+			"resolution": resolution,
+			"width":      width,
+			"height":     height,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		return syncShortVideoTagForVideo(tx, id)
+	}); err != nil {
+		return err
 	}
 	log.Printf("视频迁移并更新元数据 id=%d newPath=%s duration=%.1f res=%s", id, newPath, duration, resolution)
 	return nil
@@ -847,16 +895,24 @@ func (s *VideoService) RefreshVideoMetadata(id uint) error {
 		return fmt.Errorf("未能从文件中提取有效元数据: %s", video.Path)
 	}
 
-	return database.DB.Model(&video).Updates(map[string]interface{}{
-		"duration":   duration,
-		"resolution": resolution,
-		"width":      width,
-		"height":     height,
-	}).Error
+	return database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&video).Updates(map[string]interface{}{
+			"duration":   duration,
+			"resolution": resolution,
+			"width":      width,
+			"height":     height,
+		}).Error; err != nil {
+			return err
+		}
+		return syncShortVideoTagForVideo(tx, video.ID)
+	})
 }
 
 // RenameVideo 重命名视频文件及数据库记录
 func (s *VideoService) RenameVideo(id uint, newName string) error {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
+
 	newName = strings.TrimSpace(newName)
 	if newName == "" {
 		return fmt.Errorf("文件名不能为空")

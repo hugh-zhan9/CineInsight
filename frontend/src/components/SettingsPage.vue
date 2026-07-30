@@ -83,7 +83,7 @@
           step="1"
           class="number-input"
         />
-        <p class="help-text">只有时长小于此上限的视频会进入手机短视频，默认 5 分钟。</p>
+        <p class="help-text">只有时长小于此上限的视频会进入手机短视频，并自动维护“短视频”标签，默认 5 分钟。</p>
       </div>
       <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
     </div>

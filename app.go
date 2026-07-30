@@ -77,6 +77,11 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.subtitleService.SetContext(ctx) // Inject context
 	a.cleanupService.SetContext(ctx)
+	if result, err := a.tagService.SyncShortVideoTags(); err != nil {
+		log.Printf("App startup short-video tag sync failed err=%v", err)
+	} else {
+		log.Printf("App startup short-video tag sync tag=%d added=%d removed=%d", result.TagID, result.Added, result.Removed)
+	}
 	a.aiTaggingService.Start(ctx)
 	a.startShortFeedServer(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
@@ -278,6 +283,18 @@ func (a *App) SelectDirectory() (string, error) {
 	return dir, err
 }
 
+func (a *App) SelectMigrationSourceDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择要迁移的文件夹",
+	})
+}
+
+func (a *App) SelectMigrationDestinationDirectory() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择迁移目标文件夹",
+	})
+}
+
 // ScanDirectory 扫描目录
 func (a *App) ScanDirectory(dir string) ([]string, error) {
 	files, err := a.videoService.ScanDirectory(dir)
@@ -297,6 +314,24 @@ func (a *App) RelocateVideo(id uint, newPath string) error {
 	err := a.videoService.RelocateVideo(id, newPath)
 	log.Printf("API RelocateVideo id=%d newPath=%s err=%v", id, newPath, err)
 	return err
+}
+
+func (a *App) MoveVideo(id uint, destinationDirectory string) (*services.FileMigrationResult, error) {
+	result, err := a.videoService.MoveVideo(id, destinationDirectory)
+	log.Printf("API MoveVideo id=%d destination=%s err=%v", id, destinationDirectory, err)
+	return result, err
+}
+
+func (a *App) BatchMoveVideos(videoIDs []uint, destinationDirectory string) *services.BatchVideoOperationResult {
+	result := a.videoService.BatchMoveVideos(videoIDs, destinationDirectory)
+	log.Printf("API BatchMoveVideos requested=%d succeeded=%d failed=%d destination=%s", result.Requested, result.Succeeded, result.Failed, destinationDirectory)
+	return result
+}
+
+func (a *App) MoveDirectory(sourceDirectory, destinationParent string) (*services.FolderMigrationResult, error) {
+	result, err := a.videoService.MoveDirectory(sourceDirectory, destinationParent)
+	log.Printf("API MoveDirectory source=%s destinationParent=%s result=%+v err=%v", sourceDirectory, destinationParent, result, err)
+	return result, err
 }
 
 // RefreshVideoMetadata 刷新并补全视频元数据 (时长/分辨率)
@@ -463,6 +498,12 @@ func (a *App) DeleteTag(id uint) error {
 	err := a.tagService.DeleteTag(id)
 	log.Printf("API DeleteTag id=%d err=%v", id, err)
 	return err
+}
+
+func (a *App) MergeTags(sourceTagIDs []uint, targetTagID uint) (*services.MergeTagsResult, error) {
+	result, err := a.tagService.MergeTags(sourceTagIDs, targetTagID)
+	log.Printf("API MergeTags sources=%v target=%d result=%+v err=%v", sourceTagIDs, targetTagID, result, err)
+	return result, err
 }
 
 // ===== AI Tagging Methods =====

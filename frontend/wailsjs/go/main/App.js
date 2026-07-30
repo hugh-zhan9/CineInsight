@@ -26,6 +26,10 @@ export function BatchDeleteVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchDeleteVideos'](arg1, arg2);
 }
 
+export function BatchMoveVideos(arg1, arg2) {
+  return window['go']['main']['App']['BatchMoveVideos'](arg1, arg2);
+}
+
 export function BatchRefreshVideoMetadata(arg1) {
   return window['go']['main']['App']['BatchRefreshVideoMetadata'](arg1);
 }
@@ -146,6 +150,18 @@ export function LogFrontend(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontend'](arg1, arg2, arg3);
 }
 
+export function MergeTags(arg1, arg2) {
+  return window['go']['main']['App']['MergeTags'](arg1, arg2);
+}
+
+export function MoveDirectory(arg1, arg2) {
+  return window['go']['main']['App']['MoveDirectory'](arg1, arg2);
+}
+
+export function MoveVideo(arg1, arg2) {
+  return window['go']['main']['App']['MoveVideo'](arg1, arg2);
+}
+
 export function OpenDirectory(arg1) {
   return window['go']['main']['App']['OpenDirectory'](arg1);
 }
@@ -228,6 +244,14 @@ export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7
 
 export function SelectDirectory() {
   return window['go']['main']['App']['SelectDirectory']();
+}
+
+export function SelectMigrationDestinationDirectory() {
+  return window['go']['main']['App']['SelectMigrationDestinationDirectory']();
+}
+
+export function SelectMigrationSourceDirectory() {
+  return window['go']['main']['App']['SelectMigrationSourceDirectory']();
 }
 
 export function StartCleanupAnalysis(arg1, arg2, arg3) {

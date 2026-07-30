@@ -87,6 +87,7 @@ export namespace models {
 	    name: string;
 	    color: string;
 	    namespace: string;
+	    automatic_kind: string;
 	    is_system: boolean;
 	    is_active: boolean;
 	    review_required: boolean;
@@ -104,6 +105,7 @@ export namespace models {
 	        this.name = source["name"];
 	        this.color = source["color"];
 	        this.namespace = source["namespace"];
+	        this.automatic_kind = source["automatic_kind"];
 	        this.is_system = source["is_system"];
 	        this.is_active = source["is_active"];
 	        this.review_required = source["review_required"];
@@ -291,11 +293,26 @@ export namespace services {
 	        this.error = source["error"];
 	    }
 	}
+	export class BatchVideoOperationWarning {
+	    video_id: number;
+	    warning: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BatchVideoOperationWarning(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.warning = source["warning"];
+	    }
+	}
 	export class BatchVideoOperationResult {
 	    requested: number;
 	    succeeded: number;
 	    failed: number;
 	    errors: BatchVideoOperationError[];
+	    warnings: BatchVideoOperationWarning[];
 
 	    static createFrom(source: any = {}) {
 	        return new BatchVideoOperationResult(source);
@@ -307,6 +324,7 @@ export namespace services {
 	        this.succeeded = source["succeeded"];
 	        this.failed = source["failed"];
 	        this.errors = this.convertValues(source["errors"], BatchVideoOperationError);
+	        this.warnings = this.convertValues(source["warnings"], BatchVideoOperationWarning);
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -457,6 +475,60 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class FileMigrationResult {
+	    video_id: number;
+	    source: string;
+	    destination: string;
+	    warning?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new FileMigrationResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source = source["source"];
+	        this.destination = source["destination"];
+	        this.warning = source["warning"];
+	    }
+	}
+	export class FolderMigrationResult {
+	    source: string;
+	    destination: string;
+	    videos_updated: number;
+	    directories_updated: number;
+	    warning?: string;
+
+	    static createFrom(source: any = {}) {
+	        return new FolderMigrationResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.destination = source["destination"];
+	        this.videos_updated = source["videos_updated"];
+	        this.directories_updated = source["directories_updated"];
+	        this.warning = source["warning"];
+	    }
+	}
+	export class MergeTagsResult {
+	    target_tag_id: number;
+	    merged_tag_count: number;
+	    video_links_moved: number;
+
+	    static createFrom(source: any = {}) {
+	        return new MergeTagsResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target_tag_id = source["target_tag_id"];
+	        this.merged_tag_count = source["merged_tag_count"];
+	        this.video_links_moved = source["video_links_moved"];
+	    }
 	}
 	export class PlaybackReconcileResult {
 	    video_id: number;

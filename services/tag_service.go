@@ -9,9 +9,27 @@ import (
 	"video-master/models"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type TagService struct{}
+
+const (
+	ShortVideoTagName          = "短视频"
+	shortVideoAutomaticTagKind = "short_video"
+)
+
+type MergeTagsResult struct {
+	TargetTagID     uint `json:"target_tag_id"`
+	MergedTagCount  int  `json:"merged_tag_count"`
+	VideoLinksMoved int  `json:"video_links_moved"`
+}
+
+type ShortVideoTagSyncResult struct {
+	TagID   uint  `json:"tag_id"`
+	Added   int64 `json:"added"`
+	Removed int64 `json:"removed"`
+}
 
 func (s *TagService) GetAITagLibrary() ([]models.Tag, error) {
 	var tags []models.Tag
@@ -154,7 +172,12 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 			return err
 		}
 		if err := tx.Model(&models.AITaggingState{}).
-			Where("NOT EXISTS (SELECT 1 FROM video_tags WHERE video_tags.video_id = ai_tagging_states.video_id)").
+			Where(`NOT EXISTS (
+				SELECT 1 FROM video_tags
+				INNER JOIN tags ON tags.id = video_tags.tag_id
+				WHERE video_tags.video_id = ai_tagging_states.video_id
+					AND COALESCE(tags.automatic_kind, '') = ''
+			)`).
 			Updates(map[string]interface{}{
 				"status":               models.AITaggingStateStatusPending,
 				"skip_reason":          "",
@@ -176,6 +199,307 @@ func (s *TagService) GetAllTags() ([]models.Tag, error) {
 	var tags []models.Tag
 	err := database.DB.Order("name").Find(&tags).Error
 	return tags, err
+}
+
+// MergeTags retains targetTagID, unions all video and recommendation links into
+// it, rewrites AI history references, and soft-deletes the source tags.
+func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTagsResult, error) {
+	uniqueSources := make([]uint, 0, len(sourceTagIDs))
+	seen := make(map[uint]struct{}, len(sourceTagIDs))
+	for _, id := range sourceTagIDs {
+		if id == 0 || id == targetTagID {
+			continue
+		}
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		uniqueSources = append(uniqueSources, id)
+	}
+	if targetTagID == 0 || len(uniqueSources) == 0 {
+		return nil, fmt.Errorf("请选择目标标签和至少一个待合并标签")
+	}
+
+	result := &MergeTagsResult{TargetTagID: targetTagID, MergedTagCount: len(uniqueSources)}
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var target models.Tag
+		if err := tx.First(&target, targetTagID).Error; err != nil {
+			return fmt.Errorf("目标标签不存在: %w", err)
+		}
+		var sources []models.Tag
+		if err := tx.Where("id IN ?", uniqueSources).Find(&sources).Error; err != nil {
+			return err
+		}
+		if len(sources) != len(uniqueSources) {
+			return fmt.Errorf("部分待合并标签不存在")
+		}
+		if target.AutomaticKind != "" {
+			return fmt.Errorf("自动标签不能作为合并目标")
+		}
+		for _, source := range sources {
+			if source.IsSystem != target.IsSystem {
+				return fmt.Errorf("普通标签与 AI 标签库标签不能交叉合并")
+			}
+			if source.AutomaticKind != "" {
+				return fmt.Errorf("自动标签不能合并: %s", source.Name)
+			}
+		}
+
+		insertResult := tx.Exec(`
+			INSERT INTO video_tags(video_id, tag_id)
+			SELECT video_id, ? FROM video_tags WHERE tag_id IN ?
+			ON CONFLICT DO NOTHING
+		`, targetTagID, uniqueSources)
+		if insertResult.Error != nil {
+			return insertResult.Error
+		}
+		result.VideoLinksMoved = int(insertResult.RowsAffected)
+		if err := tx.Exec("DELETE FROM video_tags WHERE tag_id IN ?", uniqueSources).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&models.AITagCandidate{}).
+			Where("matched_tag_id IN ? AND status = ?", uniqueSources, models.AITagCandidateStatusPending).
+			Updates(map[string]interface{}{
+				"suggested_name":  target.Name,
+				"normalized_name": normalizeAITagName(target.Name),
+			}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.AITagCandidate{}).
+			Where("matched_tag_id IN ?", uniqueSources).
+			Update("matched_tag_id", targetTagID).Error; err != nil {
+			return err
+		}
+		approvalTagIDs := append([]uint{targetTagID}, uniqueSources...)
+		var approvals []models.AITagApprovalRecord
+		if err := tx.Where("tag_id IN ?", approvalTagIDs).Order("id").Find(&approvals).Error; err != nil {
+			return err
+		}
+		keptApprovalByVideo := make(map[uint]models.AITagApprovalRecord)
+		for _, approval := range approvals {
+			kept, exists := keptApprovalByVideo[approval.VideoID]
+			if !exists || (kept.TagID != targetTagID && approval.TagID == targetTagID) {
+				keptApprovalByVideo[approval.VideoID] = approval
+			}
+		}
+		deleteApprovalIDs := make([]uint, 0)
+		for _, approval := range approvals {
+			if keptApprovalByVideo[approval.VideoID].ID != approval.ID {
+				deleteApprovalIDs = append(deleteApprovalIDs, approval.ID)
+			}
+		}
+		if len(deleteApprovalIDs) > 0 {
+			if err := tx.Where("id IN ?", deleteApprovalIDs).Delete(&models.AITagApprovalRecord{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&models.AITagApprovalRecord{}).
+			Where("tag_id IN ?", uniqueSources).
+			Update("tag_id", targetTagID).Error; err != nil {
+			return err
+		}
+
+		var sourcePreferenceScore float64
+		if err := tx.Model(&models.ShortFeedTagPreference{}).
+			Where("tag_id IN ?", uniqueSources).
+			Select("COALESCE(SUM(score), 0)").
+			Scan(&sourcePreferenceScore).Error; err != nil {
+			return err
+		}
+		if sourcePreferenceScore != 0 {
+			var targetPreference models.ShortFeedTagPreference
+			err := tx.Where("tag_id = ?", targetTagID).First(&targetPreference).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				targetPreference = models.ShortFeedTagPreference{TagID: targetTagID, Score: sourcePreferenceScore}
+				if err := tx.Create(&targetPreference).Error; err != nil {
+					return err
+				}
+			} else if err != nil {
+				return err
+			} else if err := tx.Model(&targetPreference).Update("score", targetPreference.Score+sourcePreferenceScore).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("tag_id IN ?", uniqueSources).Delete(&models.ShortFeedTagPreference{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id IN ?", uniqueSources).Delete(&models.Tag{}).Error; err != nil {
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (s *TagService) SyncShortVideoTags() (*ShortVideoTagSyncResult, error) {
+	result := &ShortVideoTagSyncResult{}
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		return syncShortVideoTagsWithResult(tx, result)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func syncShortVideoTags(tx *gorm.DB) error {
+	return syncShortVideoTagsWithResult(tx, &ShortVideoTagSyncResult{})
+}
+
+func syncShortVideoTagsWithResult(tx *gorm.DB, result *ShortVideoTagSyncResult) error {
+	maxDurationSeconds, err := shortVideoMaxDurationSeconds(tx)
+	if err != nil {
+		return err
+	}
+
+	var eligibleCount int64
+	if err := tx.Model(&models.Video{}).
+		Where("is_stale = ? AND duration > ? AND duration < ?", false, 0, maxDurationSeconds).
+		Count(&eligibleCount).Error; err != nil {
+		return err
+	}
+
+	tag, err := ensureShortVideoAutomaticTag(tx, eligibleCount > 0)
+	if err != nil {
+		return err
+	}
+	if tag == nil {
+		return nil
+	}
+	result.TagID = tag.ID
+
+	added := tx.Exec(`
+		INSERT INTO video_tags(video_id, tag_id)
+		SELECT id, ? FROM videos
+		WHERE deleted_at IS NULL AND is_stale = ? AND duration > ? AND duration < ?
+		ON CONFLICT DO NOTHING
+	`, tag.ID, false, 0, maxDurationSeconds)
+	if added.Error != nil {
+		return added.Error
+	}
+	result.Added = added.RowsAffected
+
+	removed := tx.Exec(`
+		DELETE FROM video_tags
+		WHERE tag_id = ? AND video_id IN (
+			SELECT id FROM videos
+			WHERE deleted_at IS NULL AND (is_stale = ? OR duration <= ? OR duration >= ?)
+		)
+	`, tag.ID, true, 0, maxDurationSeconds)
+	if removed.Error != nil {
+		return removed.Error
+	}
+	result.Removed = removed.RowsAffected
+	return nil
+}
+
+func syncShortVideoTagForVideo(tx *gorm.DB, videoID uint) error {
+	maxDurationSeconds, err := shortVideoMaxDurationSeconds(tx)
+	if err != nil {
+		return err
+	}
+	var video models.Video
+	if err := tx.First(&video, videoID).Error; err != nil {
+		return err
+	}
+	eligible := !video.IsStale && video.Duration > 0 && video.Duration < maxDurationSeconds
+
+	tag, err := ensureShortVideoAutomaticTag(tx, eligible)
+	if err != nil {
+		return err
+	}
+	if tag == nil {
+		return nil
+	}
+	if eligible {
+		return tx.Exec("INSERT INTO video_tags(video_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", video.ID, tag.ID).Error
+	}
+	return tx.Exec("DELETE FROM video_tags WHERE video_id = ? AND tag_id = ?", video.ID, tag.ID).Error
+}
+
+func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error) {
+	var tag models.Tag
+	err := tx.Unscoped().Where("automatic_kind = ?", shortVideoAutomaticTagKind).Order("id").First(&tag).Error
+	if err == nil {
+		if tag.DeletedAt.IsValid() && create {
+			tag.DeletedAt.Clear()
+			tag.IsActive = true
+			if err := tx.Unscoped().Save(&tag).Error; err != nil {
+				return nil, err
+			}
+		}
+		if tag.DeletedAt.IsValid() {
+			return nil, nil
+		}
+		return &tag, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+	if !create {
+		return nil, nil
+	}
+
+	for attempts := 0; attempts < 5; attempts++ {
+		name, err := availableAutomaticTagName(tx, ShortVideoTagName)
+		if err != nil {
+			return nil, err
+		}
+		tag = models.Tag{
+			Name:          name,
+			Color:         tagColorPalette[0],
+			Namespace:     "自动",
+			AutomaticKind: shortVideoAutomaticTagKind,
+			IsActive:      true,
+		}
+		createResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&tag)
+		if createResult.Error != nil {
+			return nil, createResult.Error
+		}
+		if createResult.RowsAffected == 1 {
+			return &tag, nil
+		}
+		if err := tx.Where("automatic_kind = ?", shortVideoAutomaticTagKind).First(&tag).Error; err == nil {
+			return &tag, nil
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("创建短视频自动标签时发生并发冲突")
+}
+
+func availableAutomaticTagName(tx *gorm.DB, preferred string) (string, error) {
+	for index := 0; ; index++ {
+		candidate := preferred
+		if index == 1 {
+			candidate = preferred + "（自动）"
+		} else if index > 1 {
+			candidate = fmt.Sprintf("%s（自动 %d）", preferred, index)
+		}
+		var count int64
+		if err := tx.Unscoped().Model(&models.Tag{}).Where("name = ?", candidate).Count(&count).Error; err != nil {
+			return "", err
+		}
+		if count == 0 {
+			return candidate, nil
+		}
+	}
+}
+
+func shortVideoMaxDurationSeconds(tx *gorm.DB) (float64, error) {
+	var settings models.Settings
+	if err := tx.Select("short_feed_max_duration_minutes").First(&settings).Error; err != nil {
+		return 0, err
+	}
+	minutes := settings.ShortFeedMaxDurationMinutes
+	if minutes <= 0 {
+		minutes = DefaultShortFeedMaxDurationMinutes
+	}
+	return float64(minutes * 60), nil
 }
 
 // 预设标签调色板（视觉和谐的 12 色）
@@ -246,6 +570,9 @@ func (s *TagService) UpdateTag(id uint, name, color string) error {
 	if current.IsSystem {
 		return fmt.Errorf("系统标签请在设置中的 AI 标签库维护")
 	}
+	if current.AutomaticKind != "" {
+		return fmt.Errorf("自动标签由应用维护，不能手动修改")
+	}
 	// 检查是否存在同名的活跃标签（排除自身）
 	var existing models.Tag
 	if err := database.DB.Where("name = ? AND id != ?", name, id).First(&existing).Error; err == nil {
@@ -270,6 +597,9 @@ func (s *TagService) DeleteTag(id uint) error {
 	}
 	if tag.IsSystem {
 		return fmt.Errorf("系统标签请在设置中的 AI 标签库维护")
+	}
+	if tag.AutomaticKind != "" {
+		return fmt.Errorf("自动标签由应用维护，不能手动删除")
 	}
 	// 清理关联关系
 	if err := database.DB.Model(&tag).Association("Videos").Clear(); err != nil {
