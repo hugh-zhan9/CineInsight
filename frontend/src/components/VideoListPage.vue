@@ -10,11 +10,11 @@
           <option value="file">文件搜索</option>
           <option value="subtitle">字幕搜索</option>
         </select>
-        <input 
-          v-model="searchKeyword" 
+        <input
+          v-model="searchKeyword"
           @input="handleSearch()"
-          type="text" 
-          :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索视频文件名或路径...'" 
+          type="text"
+          :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索标题、文件名或路径...'"
           class="search-input"
         />
         </div>
@@ -31,6 +31,13 @@
           <select v-model="selectedResRange" @change="handleSearch(true)" class="select-input">
             <option value="all">分辨率：全部</option>
             <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
+          </select>
+          <input v-model="minRating" @change="handleSearch(true)" type="number" min="0" max="10" step="0.5" class="rating-filter-input" placeholder="最低评分" aria-label="最低评分" />
+          <input v-model="maxRating" @change="handleSearch(true)" type="number" min="0" max="10" step="0.5" class="rating-filter-input" placeholder="最高评分" aria-label="最高评分" />
+          <select v-model="sortMode" @change="handleSearch(true)" class="select-input" aria-label="排序方式">
+            <option value="balanced">均衡排序</option>
+            <option value="rating_desc">评分从高到低</option>
+            <option value="rating_asc">评分从低到高</option>
           </select>
         </div>
       </div>
@@ -76,6 +83,10 @@
         <span v-if="aiTagSummary.same_source_unread" class="ai-review-badge" title="未读同源视频关系">{{ aiTagSummary.same_source_unread }}</span>
         <button type="button" class="btn-action" @click="openCleanupDialog()">清理候选</button>
         <button type="button" class="btn-action" @click="openTrashDialog">回收站</button>
+        <button type="button" class="btn-action" :disabled="technicalBackfill.running" @click="startTechnicalBackfill">
+          {{ technicalBackfill.running ? (technicalBackfill.preparing ? '正在统计待补全视频...' : `技术信息 ${technicalBackfill.processed}/${technicalBackfill.total}`) : '补全技术信息' }}
+        </button>
+        <button v-if="technicalBackfill.running" type="button" class="btn-secondary" @click="cancelTechnicalBackfill">取消补全</button>
         <button type="button" class="btn-action" @click="showTagManagerDialog = true">标签管理</button>
       </div>
     </div>
@@ -87,6 +98,19 @@
       :role="incrementalScan.state === 'error' ? 'alert' : 'status'"
     >
       {{ incrementalScan.message }}
+    </div>
+
+    <div v-if="technicalBackfill.running || technicalBackfill.completed || technicalBackfill.cancelled || technicalBackfill.failed" class="scan-sync-status" :role="technicalBackfill.failed ? 'alert' : 'status'">
+      <span v-if="technicalBackfill.preparing">正在统计待补全视频...</span>
+      <span v-else-if="technicalBackfill.completed && technicalBackfill.total === 0 && !technicalBackfill.failed">技术信息无需补全（已是最新状态）。</span>
+      <span v-else>
+        技术信息：成功 {{ technicalBackfill.succeeded }}，跳过 {{ technicalBackfill.skipped }}，失败 {{ technicalBackfill.failed }}
+        <span v-if="technicalBackfill.cancelled">（已取消）</span>
+        <span v-else-if="technicalBackfill.completed">（已完成）</span>
+      </span>
+      <ul v-if="technicalBackfill.failures?.length" class="technical-backfill-failures">
+        <li v-for="failure in technicalBackfill.failures" :key="`${failure.video_id}:${failure.name}`">{{ failure.name || `视频 #${failure.video_id}` }}：{{ failure.error }}</li>
+      </ul>
     </div>
 
     <div v-if="undoNotice" class="undo-delete-banner" role="status">
@@ -142,7 +166,7 @@
 
     <div class="tags-filter">
       <div class="tags-scroll-container">
-        <button 
+        <button
           @click="clearTagFilter"
           :class="['tag-chip', { active: selectedTags.length === 0 }]"
         >
@@ -207,7 +231,7 @@
           />
         </template>
       </VirtualVideoList>
-      
+
       <!-- 加载更多指示器 -->
       <div v-if="loading" class="loading-indicator">
         <p>加载中...</p>
@@ -226,6 +250,7 @@
       @close="closePreview"
       @preview-externally="previewExternally"
       @watch-progress="handlePreviewWatchProgress"
+      @details-updated="handleVideoDetailsUpdated"
     />
 
     <TrashRestoreDialog
@@ -235,8 +260,8 @@
     />
 
     <!-- Context Menu -->
-    <div 
-      v-if="contextMenu.show" 
+    <div
+      v-if="contextMenu.show"
       :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
       class="context-menu"
       @click="contextMenu.show = false"
@@ -557,13 +582,13 @@
         </div>
       </div>
     </div>
-    
+
     <!-- 字幕操作弹窗（确认/进度/结果） -->
     <div v-if="subtitleDialog.show" class="modal-overlay">
       <div class="modal download-modal">
         <h3>{{ subtitleDialog.title }}</h3>
         <p>{{ subtitleDialog.msg }}</p>
-        
+
         <!-- 引擎与语言选择 (确认生成时显示) -->
         <div v-if="subtitleDialog.mode === 'confirm'" class="lang-select-box">
           <label class="dialog-field-label">字幕引擎</label>
@@ -582,7 +607,7 @@
             <p class="dialog-field-hint">如果自动检测不准，请手动指定视频中的语言。</p>
           </template>
         </div>
-        
+
         <!-- 下载进度条 -->
         <template v-if="subtitleDialog.mode === 'progress'">
           <div class="progress-bar-container">
@@ -602,13 +627,13 @@
             <button v-else @click="subtitleDialog.show = false" class="btn-secondary">后台继续准备</button>
           </div>
         </template>
-        
+
         <!-- 确认按钮 -->
         <div v-if="subtitleDialog.mode === 'confirm'" class="modal-actions">
           <button @click="subtitleDialog.show = false; pendingForceRequest = null; pendingSubtitleVideo = null;" class="btn-secondary">取消</button>
           <button @click="onSubtitleConfirm" class="btn-primary" :disabled="subtitleConfirmDisabled">{{ subtitleConfirmActionLabel }}</button>
         </div>
-        
+
         <!-- 结果关闭按钮 -->
         <div v-if="subtitleDialog.mode === 'result'" class="modal-actions">
           <button @click="subtitleDialog.show = false" class="btn-primary">确定</button>
@@ -687,6 +712,15 @@
 
 .filter-group .select-input {
   width: 132px;
+}
+.rating-filter-input {
+  width: 88px;
+  min-width: 78px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0 8px;
+  color: var(--text-primary);
+  background: var(--panel-bg);
 }
 
 .action-group {
@@ -1098,7 +1132,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1111,6 +1145,7 @@ import VideoListRow from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
+import { patchVideoFromDetails } from '../utils/mediaDetails.js';
 
 export default {
   name: 'VideoListPage',
@@ -1148,6 +1183,9 @@ export default {
       selectedTags: [],
       selectedSizeRange: 'all',
       selectedResRange: 'all',
+      minRating: '',
+      maxRating: '',
+      sortMode: 'balanced',
       sizeOptions: [
         { label: '0-10M', value: { min: 0, max: 10 * 1024 * 1024 } },
         { label: '10M-100M', value: { min: 10 * 1024 * 1024, max: 100 * 1024 * 1024 } },
@@ -1170,6 +1208,7 @@ export default {
       cursorID: 0,
       cursorLastPlayedAt: '',
       cursorRecentPlayedID: 0,
+      libraryCursor: null,
       pageSize: 20,
       loading: false,
       hasMore: true,
@@ -1193,6 +1232,7 @@ export default {
       aiTagReviewDialog: { show: false },
       aiTagSummary: { same_source_unread: 0 },
       aiTagSummaryTimer: null,
+      technicalBackfill: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
       cleanupDialog: {
         show: false,
         loading: false,
@@ -1253,10 +1293,11 @@ export default {
     this.loadSavedLibraryViews();
     this.refreshSubtitleQueue();
     this.refreshAITagSummary();
+    this.refreshTechnicalBackfillStatus();
     this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
     this.attachWheelFallback();
     document.addEventListener('click', this.hideContextMenu);
-    
+
     if (window.runtime?.EventsOn) {
       this.registerRuntimeEvent('subtitle-progress', (data) => {
         const nextAction = data?.action || '';
@@ -1284,7 +1325,7 @@ export default {
           this.subtitleDialog.msg = '当前引擎已就绪，现在可以开始生成字幕。';
         }
       });
-      
+
       this.registerRuntimeEvent('subtitle-success', (data) => {
         const idx = this.generatingSubtitleIds.indexOf(data.videoID);
         if (idx !== -1) this.generatingSubtitleIds.splice(idx, 1);
@@ -1331,6 +1372,10 @@ export default {
           const status = await GetCleanupStatus();
           this.applyCleanupStatus(status);
         }
+      });
+
+      this.registerRuntimeEvent('technical-backfill-state', (data) => {
+        this.technicalBackfill = { ...this.technicalBackfill, ...(data || {}) };
       });
 
     }
@@ -1382,7 +1427,8 @@ export default {
         smartView: this.smartView,
         tags: [...this.selectedTags].sort((a, b) => a - b),
         size: this.selectedSizeRange === 'all' ? 'all' : `${this.selectedSizeRange.min}:${this.selectedSizeRange.max}`,
-        res: this.selectedResRange === 'all' ? 'all' : `${this.selectedResRange.min}:${this.selectedResRange.max}`
+        res: this.selectedResRange === 'all' ? 'all' : `${this.selectedResRange.min}:${this.selectedResRange.max}`,
+        rating: `${this.minRating}:${this.maxRating}:${this.sortMode}`
       });
     },
     cleanupCandidateCount() {
@@ -1561,6 +1607,28 @@ export default {
     },
     debugLog(message, payload = null, isError = false) {
       return logFrontend('VideoListPage', message, payload, isError);
+    },
+    async refreshTechnicalBackfillStatus() {
+      try {
+        this.technicalBackfill = { ...this.technicalBackfill, ...(await GetTechnicalBackfillStatus()) };
+      } catch (err) {
+        this.debugLog('technical backfill status failed', { err: String(err) }, true);
+      }
+    },
+    async startTechnicalBackfill() {
+      try {
+        this.technicalBackfill = { ...this.technicalBackfill, ...(await StartTechnicalBackfill()) };
+      } catch (err) {
+        alert('启动技术信息补全失败: ' + err);
+      }
+    },
+    async cancelTechnicalBackfill() {
+      try {
+        await CancelTechnicalBackfill();
+        await this.refreshTechnicalBackfillStatus();
+      } catch (err) {
+        alert('取消技术信息补全失败: ' + err);
+      }
     },
     startCleanupProgressTracking() {
       if (!this.cleanupStartedAt) {
@@ -2222,7 +2290,7 @@ export default {
       return estimateVideoRowHeight(video, widthBucket, subtitleMode);
     },
     hasStructuredFilters() {
-      return this.selectedTags.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all';
+      return this.selectedTags.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
     },
     currentLibraryFilter() {
       const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
@@ -2234,7 +2302,10 @@ export default {
         min_size: minSize,
         max_size: maxSize,
         min_height: minHeight,
-        max_height: maxHeight
+        max_height: maxHeight,
+        min_rating: this.minRating === '' ? null : Number(this.minRating),
+        max_rating: this.maxRating === '' ? null : Number(this.maxRating),
+        sort_mode: this.sortMode
       };
     },
     matchesSmartView(video) {
@@ -2271,7 +2342,7 @@ export default {
           existingVideos: this.videos.length
         });
 
-        if (this.smartView === 'recently_played') {
+        if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
           newVideos = await ListRecentlyPlayedWithFilter(
             this.currentLibraryFilter(),
             this.cursorLastPlayedAt,
@@ -2279,13 +2350,11 @@ export default {
             this.pageSize
           );
         } else {
-          newVideos = await SearchLibraryVideos(
-            this.currentLibraryFilter(),
-            this.cursorScore,
-            this.cursorSize,
-            this.cursorID,
-            this.pageSize
-          );
+          const request = { filter: this.currentLibraryFilter(), limit: this.pageSize };
+          if (this.libraryCursor) request.cursor = this.libraryCursor;
+          const page = await SearchLibraryVideoPage(request);
+          newVideos = page?.videos || [];
+          this.libraryCursor = page?.next_cursor || null;
         }
 
         if (this.isSubtitleSearchActive(keyword) && newVideos.length > 0) {
@@ -2309,19 +2378,15 @@ export default {
           mode: this.smartView || keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
         });
 
-        if (newVideos.length < this.pageSize) {
+        if (this.smartView === 'recently_played' && this.sortMode === 'balanced' ? newVideos.length < this.pageSize : !this.libraryCursor) {
           this.hasMore = false;
         }
         if (newVideos.length > 0) {
           this.videos.push(...newVideos);
           const last = newVideos[newVideos.length - 1];
-          if (this.smartView === 'recently_played') {
+          if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
             this.cursorLastPlayedAt = last.last_played_at || '';
             this.cursorRecentPlayedID = last.id;
-          } else {
-            this.cursorScore = this.calculateScore(last);
-            this.cursorSize = last.size;
-            this.cursorID = last.id;
           }
         }
         this.debugLog('loadVideos applied to state', {
@@ -2365,6 +2430,7 @@ export default {
           this.cursorID = 0;
           this.cursorLastPlayedAt = '';
           this.cursorRecentPlayedID = 0;
+          this.libraryCursor = null;
           this.hasMore = true;
           await this.loadVideos();
         }
@@ -2441,6 +2507,9 @@ export default {
       this.selectedTags = tagIDs;
       this.selectedSizeRange = this.findRangeOption(this.sizeOptions, view.min_size, view.max_size);
       this.selectedResRange = this.findRangeOption(this.resOptions, view.min_height, view.max_height);
+      this.minRating = view.min_rating === null || view.min_rating === undefined ? '' : String(view.min_rating);
+      this.maxRating = view.max_rating === null || view.max_rating === undefined ? '' : String(view.max_rating);
+      this.sortMode = view.sort_mode || 'balanced';
       await this.reloadCurrentView();
     },
     async deleteSelectedSavedView() {
@@ -2468,7 +2537,13 @@ export default {
         const resMatched = this.selectedResRange === 'all' ||
           (video.height >= this.selectedResRange.min && (this.selectedResRange.max === 0 || video.height <= this.selectedResRange.max));
 
-        return tagMatched && sizeMatched && resMatched;
+        const rating = video.personal_rating;
+        const ratingMatched = (this.minRating === '' && this.maxRating === '') ||
+          (rating !== null && rating !== undefined &&
+            (this.minRating === '' || Number(rating) >= Number(this.minRating)) &&
+            (this.maxRating === '' || Number(rating) <= Number(this.maxRating)));
+
+        return tagMatched && sizeMatched && resMatched && ratingMatched;
       });
     },
     formatDuration(seconds) {
@@ -2520,7 +2595,7 @@ export default {
       if (this.isSubtitleSearchActive(keyword)) {
         return false;
       }
-      const nameOrPathMatched = !keyword || `${video.name} ${video.path}`.toLowerCase().includes(keyword);
+      const nameOrPathMatched = !keyword || `${video.display_title || ''} ${video.original_title || ''} ${video.name} ${video.path}`.toLowerCase().includes(keyword);
       if (!nameOrPathMatched) return false;
       return this.applyClientFilters([video]).length > 0 && this.matchesSmartView(video);
     },
@@ -2537,6 +2612,20 @@ export default {
           tags: Array.isArray(updatedVideo.tags) ? [...updatedVideo.tags] : (this.previewVideoSnapshot?.tags || [])
         };
       }
+    },
+    async handleVideoDetailsUpdated(details) {
+      const updatedVideoID = Number(details?.video?.id || 0);
+      if (this.selectedPreviewVideoId === updatedVideoID) {
+        this.previewVideoSnapshot = patchVideoFromDetails(this.previewVideoSnapshot || details.video, details);
+      }
+      const index = this.videos.findIndex(video => video.id === updatedVideoID);
+      if (index < 0) return;
+      const patched = patchVideoFromDetails(this.videos[index], details);
+      if (!this.canVideoMatchCurrentView(patched) || this.sortMode !== 'balanced') {
+        await this.reloadCurrentView();
+        return;
+      }
+      this.videos.splice(index, 1, patched);
     },
     resumePositionFor(video) {
       if (!video || video.is_watched) return 0;

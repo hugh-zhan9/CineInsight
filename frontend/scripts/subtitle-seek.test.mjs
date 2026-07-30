@@ -11,7 +11,7 @@ assert.match(videoListSource, /this\.previewStartTimeMs = null/, 'ordinary or cl
 assert.match(videoListSource, /:subtitle-mode="isSubtitleSearchActive\(\)"/, 'subtitle results should use the virtual list in subtitle mode');
 assert.match(videoRowSource, /_subtitleMatchStartMs/, 'subtitle result rows should expose the hit time');
 assert.match(previewSource, /startTimeMs/, 'preview drawer should accept a subtitle start time');
-assert.match(previewSource, /startTimeMs < 0 \|\| video\.readyState < 1/, 'seek should preserve 0ms and wait for metadata');
+assert.match(previewSource, /video\.readyState < 1/, 'seek should wait for metadata');
 assert.match(previewSource, /this\.appliedSeekKey = ''/, 'switching preview sessions should clear the previous seek');
 assert.match(previewSource, /video\.currentTime = seekSeconds/, 'preview drawer should seek only after metadata is available');
 

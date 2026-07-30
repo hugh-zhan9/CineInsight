@@ -18,5 +18,11 @@ func AllModels() []interface{} {
 		&Settings{},
 		&ScanDirectory{},
 		&SavedLibraryView{},
+		&Person{},
+		&VideoPerson{},
+		&MediaCollection{},
+		&CollectionVideo{},
+		&VideoTechnicalMetadata{},
+		&MediaStream{},
 	}
 }

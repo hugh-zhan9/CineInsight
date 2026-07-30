@@ -4,6 +4,8 @@ import {models} from '../models';
 import {services} from '../models';
 import {subtitleparser} from '../models';
 
+export function AddCollectionVideo(arg1:number,arg2:number):Promise<void>;
+
 export function AddDirectory(arg1:string,arg2:string):Promise<models.ScanDirectory>;
 
 export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
@@ -26,9 +28,17 @@ export function CancelSubtitle():Promise<void>;
 
 export function CancelSubtitleTask(arg1:number):Promise<void>;
 
+export function CancelTechnicalBackfill():Promise<void>;
+
 export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
 
+export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCollection>;
+
+export function CreatePerson(arg1:string,arg2:string):Promise<models.Person>;
+
 export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
+
+export function DeleteCollection(arg1:number):Promise<void>;
 
 export function DeleteDirectory(arg1:number):Promise<void>;
 
@@ -58,7 +68,11 @@ export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promis
 
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
+export function GetCollectionDetail(arg1:number):Promise<services.CollectionDetail>;
+
 export function GetLibrarySubtitleHits(arg1:string,arg2:Array<number>):Promise<Array<services.LibrarySubtitleHit>>;
+
+export function GetPersonDetail(arg1:number,arg2:number,arg3:number):Promise<services.PersonDetail>;
 
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
 
@@ -74,11 +88,19 @@ export function GetSubtitleQueueState():Promise<services.SubtitleQueueSnapshot>;
 
 export function GetSubtitleSegments(arg1:number):Promise<Array<subtitleparser.Segment>>;
 
+export function GetTechnicalBackfillStatus():Promise<services.TechnicalBackfillStatus>;
+
+export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
+
 export function GetVideosByDirectory(arg1:string):Promise<Array<models.Video>>;
 
 export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:number):Promise<Array<models.Video>>;
 
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
+
+export function ListCollections(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.CollectionListItem>>;
+
+export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;
 
 export function ListRecentlyPlayed(arg1:number):Promise<Array<models.Video>>;
 
@@ -114,6 +136,8 @@ export function PreviewExternally(arg1:number):Promise<void>;
 
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 
+export function RefreshVideoTechnicalMetadata(arg1:number):Promise<services.VideoDetails>;
+
 export function RejectAITagCandidate(arg1:number):Promise<void>;
 
 export function RejectAITagCandidatesByVideo(arg1:number):Promise<number>;
@@ -122,9 +146,17 @@ export function RejectSameSourceRelation(arg1:number):Promise<void>;
 
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
+export function RemoveCollectionCover(arg1:number):Promise<void>;
+
+export function RemoveCollectionVideo(arg1:number,arg2:number):Promise<void>;
+
+export function RemovePersonAvatar(arg1:number):Promise<void>;
+
 export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
 
 export function RenameVideo(arg1:number,arg2:string):Promise<void>;
+
+export function ReorderCollectionVideos(arg1:number,arg2:Array<number>):Promise<void>;
 
 export function RestoreTrashEntry(arg1:number):Promise<models.Video>;
 
@@ -138,6 +170,8 @@ export function ScanDirectory(arg1:string):Promise<Array<string>>;
 
 export function ScanDirectoryWithInfo(arg1:string):Promise<Array<services.ScannedFile>>;
 
+export function SearchLibraryVideoPage(arg1:services.LibraryVideoPageRequest):Promise<services.LibraryVideoPage>;
+
 export function SearchLibraryVideos(arg1:services.LibraryFilter,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 
 export function SearchSubtitleMatches(arg1:string,arg2:number):Promise<Array<services.SubtitleSearchMatch>>;
@@ -150,11 +184,19 @@ export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,ar
 
 export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
 
+export function SelectCollectionCover():Promise<string>;
+
 export function SelectDirectory():Promise<string>;
 
 export function SelectMigrationDestinationDirectory():Promise<string>;
 
 export function SelectMigrationSourceDirectory():Promise<string>;
+
+export function SelectPersonAvatar():Promise<string>;
+
+export function SetCollectionCover(arg1:number,arg2:string):Promise<models.MediaCollection>;
+
+export function SetPersonAvatar(arg1:number,arg2:string):Promise<models.Person>;
 
 export function SetVideoFavorite(arg1:number,arg2:boolean):Promise<models.Video>;
 
@@ -162,14 +204,22 @@ export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
 
 export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
 
+export function StartTechnicalBackfill():Promise<services.TechnicalBackfillStatus>;
+
 export function SyncScanDirectories():Promise<services.ScanSyncResult>;
 
 export function TriggerAITagging():Promise<boolean>;
 
+export function UpdateCollection(arg1:number,arg2:string,arg3:string):Promise<models.MediaCollection>;
+
 export function UpdateDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function UpdatePerson(arg1:number,arg2:string,arg3:string):Promise<models.Person>;
 
 export function UpdateSettings(arg1:models.Settings):Promise<void>;
 
 export function UpdateTag(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function UpdateVideoDetails(arg1:services.VideoDetailsUpdate):Promise<services.VideoDetails>;
 
 export function UpdateVideoWatchProgress(arg1:number,arg2:number,arg3:boolean):Promise<models.Video>;

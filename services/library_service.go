@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -17,6 +18,9 @@ import (
 const (
 	LibrarySearchModeFile     = "file"
 	LibrarySearchModeSubtitle = "subtitle"
+	LibrarySortBalanced       = "balanced"
+	LibrarySortRatingDesc     = "rating_desc"
+	LibrarySortRatingAsc      = "rating_asc"
 
 	LibraryViewAll              = ""
 	LibraryViewFavorites        = "favorites"
@@ -34,14 +38,40 @@ const recentlyAddedWindow = 30 * 24 * time.Hour
 
 // LibraryFilter 描述主片库和随机播放共享的筛选边界。
 type LibraryFilter struct {
-	SearchMode string `json:"search_mode"`
-	Keyword    string `json:"keyword"`
-	SmartView  string `json:"smart_view"`
-	TagIDs     []uint `json:"tag_ids"`
-	MinSize    int64  `json:"min_size"`
-	MaxSize    int64  `json:"max_size"`
-	MinHeight  int    `json:"min_height"`
-	MaxHeight  int    `json:"max_height"`
+	SearchMode string   `json:"search_mode"`
+	Keyword    string   `json:"keyword"`
+	SmartView  string   `json:"smart_view"`
+	TagIDs     []uint   `json:"tag_ids"`
+	MinSize    int64    `json:"min_size"`
+	MaxSize    int64    `json:"max_size"`
+	MinHeight  int      `json:"min_height"`
+	MaxHeight  int      `json:"max_height"`
+	MinRating  *float64 `json:"min_rating"`
+	MaxRating  *float64 `json:"max_rating"`
+	SortMode   string   `json:"sort_mode"`
+}
+
+// LibraryVideoCursor is an opaque stable cursor for SearchLibraryVideoPage.
+type LibraryVideoCursor struct {
+	SortMode     string   `json:"sort_mode"`
+	Score        float64  `json:"score"`
+	Size         int64    `json:"size"`
+	Rating       *float64 `json:"rating,omitempty"`
+	RatingIsNull bool     `json:"rating_is_null"`
+	ID           uint     `json:"id"`
+}
+
+type LibraryVideoPage struct {
+	Videos     []models.Video      `json:"videos"`
+	NextCursor *LibraryVideoCursor `json:"next_cursor,omitempty"`
+}
+
+// LibraryVideoPageRequest keeps the optional cursor inside a generated DTO so
+// frontend callers can omit it instead of passing an untyped null argument.
+type LibraryVideoPageRequest struct {
+	Filter LibraryFilter       `json:"filter"`
+	Cursor *LibraryVideoCursor `json:"cursor,omitempty"`
+	Limit  int                 `json:"limit"`
 }
 
 // SavedLibraryViewInput 是创建保存视图的输入。
@@ -87,6 +117,22 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 	if filter.MaxHeight > 0 && filter.MinHeight > filter.MaxHeight {
 		return LibraryFilter{}, fmt.Errorf("分辨率筛选上限不能小于下限")
 	}
+	filter.SortMode = strings.TrimSpace(filter.SortMode)
+	if filter.SortMode == "" {
+		filter.SortMode = LibrarySortBalanced
+	}
+	if filter.SortMode != LibrarySortBalanced && filter.SortMode != LibrarySortRatingDesc && filter.SortMode != LibrarySortRatingAsc {
+		return LibraryFilter{}, fmt.Errorf("不支持的排序模式: %s", filter.SortMode)
+	}
+	if err := validateRatingValue(filter.MinRating); err != nil {
+		return LibraryFilter{}, fmt.Errorf("最低评分无效: %w", err)
+	}
+	if err := validateRatingValue(filter.MaxRating); err != nil {
+		return LibraryFilter{}, fmt.Errorf("最高评分无效: %w", err)
+	}
+	if filter.MinRating != nil && filter.MaxRating != nil && *filter.MinRating > *filter.MaxRating {
+		return LibraryFilter{}, fmt.Errorf("评分筛选上限不能小于下限")
+	}
 	return filter, nil
 }
 
@@ -111,7 +157,7 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 				  AND LOWER(subtitle_segments.text) LIKE ? ESCAPE '\'
 			)`, pattern)
 		} else {
-			query = query.Where("(LOWER(videos.name) LIKE ? ESCAPE '\\' OR LOWER(videos.path) LIKE ? ESCAPE '\\')", pattern, pattern)
+			query = query.Where("(LOWER(videos.display_title) LIKE ? ESCAPE '\\' OR LOWER(videos.original_title) LIKE ? ESCAPE '\\' OR LOWER(videos.name) LIKE ? ESCAPE '\\' OR LOWER(videos.path) LIKE ? ESCAPE '\\')", pattern, pattern, pattern, pattern)
 		}
 	}
 	if filter.MinSize > 0 {
@@ -125,6 +171,12 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	}
 	if filter.MaxHeight > 0 {
 		query = query.Where("videos.height <= ?", filter.MaxHeight)
+	}
+	if filter.MinRating != nil {
+		query = query.Where("videos.personal_rating >= ?", *filter.MinRating)
+	}
+	if filter.MaxRating != nil {
+		query = query.Where("videos.personal_rating <= ?", *filter.MaxRating)
 	}
 	if len(filter.TagIDs) > 0 {
 		subquery := database.DB.Table("video_tags").Select("video_id").
@@ -255,11 +307,124 @@ func (s *VideoService) SaveLibraryView(input SavedLibraryViewInput) (*models.Sav
 		Name: name, SearchMode: filter.SearchMode, Keyword: filter.Keyword, SmartView: filter.SmartView,
 		TagIDsJSON: string(tagJSON), MinSize: filter.MinSize, MaxSize: filter.MaxSize,
 		MinHeight: filter.MinHeight, MaxHeight: filter.MaxHeight,
+		MinRating: filter.MinRating, MaxRating: filter.MaxRating, SortMode: filter.SortMode,
 	}
 	if err := database.DB.Create(&view).Error; err != nil {
 		return nil, fmt.Errorf("保存视图失败: %w", err)
 	}
 	return &view, nil
+}
+
+// SearchLibraryVideoPage provides stable pagination for balanced and nullable rating sorts.
+func (s *VideoService) SearchLibraryVideoPage(filter LibraryFilter, cursor *LibraryVideoCursor, limit int) (*LibraryVideoPage, error) {
+	normalized, err := normalizeLibraryFilter(filter)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	if err := validateLibraryVideoCursor(normalized.SortMode, cursor); err != nil {
+		return nil, err
+	}
+	if cursor == nil && libraryFilterNeedsSubtitleSync(normalized) {
+		if err := syncSubtitleIndexesFromFilesystem(); err != nil {
+			return nil, err
+		}
+	}
+
+	if normalized.SortMode == LibrarySortBalanced {
+		var score float64
+		var size int64
+		var id uint
+		if cursor != nil {
+			score, size, id = cursor.Score, cursor.Size, cursor.ID
+		}
+		videos, err := s.searchLibraryVideos(normalized, score, size, id, limit+1)
+		if err != nil {
+			return nil, err
+		}
+		page := &LibraryVideoPage{Videos: videos}
+		if len(videos) > limit {
+			page.Videos = videos[:limit]
+			last := page.Videos[len(page.Videos)-1]
+			playWeight, err := s.getPlayWeight()
+			if err != nil {
+				return nil, err
+			}
+			page.NextCursor = &LibraryVideoCursor{
+				SortMode: LibrarySortBalanced,
+				Score:    float64(last.PlayCount)*playWeight + float64(last.RandomPlayCount),
+				Size:     last.Size,
+				ID:       last.ID,
+			}
+		}
+		return page, nil
+	}
+
+	query := database.DB.Model(&models.Video{}).Preload("Tags")
+	query, err = applyLibraryFilter(query, normalized, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if cursor != nil {
+		if cursor.RatingIsNull {
+			query = query.Where("videos.personal_rating IS NULL AND videos.id < ?", cursor.ID)
+		} else if normalized.SortMode == LibrarySortRatingDesc {
+			query = query.Where("(videos.personal_rating < ? OR (videos.personal_rating = ? AND videos.id < ?) OR videos.personal_rating IS NULL)", *cursor.Rating, *cursor.Rating, cursor.ID)
+		} else {
+			query = query.Where("(videos.personal_rating > ? OR (videos.personal_rating = ? AND videos.id < ?) OR videos.personal_rating IS NULL)", *cursor.Rating, *cursor.Rating, cursor.ID)
+		}
+	}
+	if normalized.SortMode == LibrarySortRatingDesc {
+		query = query.Order("videos.personal_rating DESC NULLS LAST")
+	} else {
+		query = query.Order("videos.personal_rating ASC NULLS LAST")
+	}
+	query = query.Order("videos.id DESC")
+	var videos []models.Video
+	if err := query.Limit(limit + 1).Find(&videos).Error; err != nil {
+		return nil, err
+	}
+	page := &LibraryVideoPage{Videos: videos}
+	if len(videos) > limit {
+		page.Videos = videos[:limit]
+		last := page.Videos[len(page.Videos)-1]
+		page.NextCursor = &LibraryVideoCursor{SortMode: normalized.SortMode, RatingIsNull: last.PersonalRating == nil, ID: last.ID}
+		if last.PersonalRating != nil {
+			rating := *last.PersonalRating
+			page.NextCursor.Rating = &rating
+		}
+	}
+	return page, nil
+}
+
+func validateLibraryVideoCursor(sortMode string, cursor *LibraryVideoCursor) error {
+	if cursor == nil {
+		return nil
+	}
+	if cursor.SortMode != sortMode {
+		return errors.New("片库游标排序模式不匹配")
+	}
+	if cursor.ID == 0 {
+		return errors.New("片库游标 ID 无效")
+	}
+	if sortMode == LibrarySortBalanced {
+		if cursor.Rating != nil || cursor.RatingIsNull {
+			return errors.New("balanced 游标包含评分字段")
+		}
+		return nil
+	}
+	if cursor.RatingIsNull {
+		if cursor.Rating != nil {
+			return errors.New("NULL 评分游标不能包含评分值")
+		}
+		return nil
+	}
+	if cursor.Rating == nil {
+		return errors.New("评分游标缺少评分值")
+	}
+	return validateRatingValue(cursor.Rating)
 }
 
 // DeleteSavedLibraryView 软删除命名保存视图。
@@ -279,6 +444,9 @@ func (s *VideoService) DeleteSavedLibraryView(viewID uint) error {
 
 // SearchLibraryVideos 使用片库共享过滤器并保持现有游标排序。
 func (s *VideoService) SearchLibraryVideos(filter LibraryFilter, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
 	if cursorScore == 0 && cursorSize == 0 && cursorID == 0 && libraryFilterNeedsSubtitleSync(filter) {
 		if err := syncSubtitleIndexesFromFilesystem(); err != nil {
 			return nil, err
@@ -385,7 +553,8 @@ func (s *VideoService) searchLibraryVideos(filter LibraryFilter, cursorScore flo
 	if err != nil {
 		return nil, err
 	}
-	if limit <= 0 || limit > 200 {
+	// SearchLibraryVideoPage asks for one lookahead row at the public maximum of 200.
+	if limit <= 0 || limit > 201 {
 		limit = 20
 	}
 	scoreSQL := scoreExprForTable("videos.", playWeight)

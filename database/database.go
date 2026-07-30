@@ -121,6 +121,9 @@ func Init() error {
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
 	}
+	if err := ensureMediaDetailConstraints(db); err != nil {
+		return fmt.Errorf("创建媒体详情约束失败: %w", err)
+	}
 	ensureCoreQueryIndexes(db)
 	ensureAITaggingIndexes(db)
 	ensureShortFeedIndexes(db)
@@ -245,6 +248,45 @@ func ensureVideoPathUniqueIndex(db *gorm.DB) error {
 		ON videos(path)
 		WHERE deleted_at IS NULL AND path <> ''
 	`).Error
+}
+
+func ensureMediaDetailConstraints(db *gorm.DB) error {
+	statements := []string{
+		`DO $$ BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_videos_personal_rating') THEN
+				ALTER TABLE videos ADD CONSTRAINT chk_videos_personal_rating
+				CHECK (personal_rating IS NULL OR (
+					personal_rating >= 0 AND personal_rating <= 10 AND
+					personal_rating * 2 = CAST(personal_rating * 2 AS INTEGER)
+				));
+			END IF;
+		END $$`,
+		`DO $$ BEGIN
+			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_collection_videos_position') THEN
+				ALTER TABLE collection_videos ADD CONSTRAINT chk_collection_videos_position CHECK (position > 0);
+			END IF;
+		END $$`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_media_collections_name_active
+		 ON media_collections(normalized_name) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_media_streams_video_index
+		 ON media_streams(video_id, stream_index)`,
+		`CREATE INDEX IF NOT EXISTS idx_videos_rating_active
+		 ON videos(personal_rating DESC, id DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_video_people_person_video
+		 ON video_people(person_id, video_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_collection_videos_collection_position
+		 ON collection_videos(collection_id, position, video_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_collection_videos_video
+		 ON collection_videos(video_id, collection_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_media_streams_video_type
+		 ON media_streams(video_id, stream_type)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func ensureCoreQueryIndexes(db *gorm.DB) {

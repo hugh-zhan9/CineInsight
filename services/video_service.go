@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -25,6 +26,18 @@ import (
 
 type VideoService struct {
 	scanSyncMu sync.Mutex
+	mediaProbe *MediaProbeService
+}
+
+func NewVideoService(mediaProbe *MediaProbeService) *VideoService {
+	return &VideoService{mediaProbe: mediaProbe}
+}
+
+func (s *VideoService) technicalProbe() *MediaProbeService {
+	if s != nil && s.mediaProbe != nil {
+		return s.mediaProbe
+	}
+	return NewMediaProbeService()
 }
 
 var libraryPathMutationMu sync.RWMutex
@@ -353,17 +366,11 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 		return &existingVideo, ErrVideoExists
 	}
 
-	duration, resolution, width, height := s.getVideoMetadata(path)
-
 	video := &models.Video{
-		Name:       filepath.Base(path),
-		Path:       path,
-		Directory:  filepath.Dir(path),
-		Size:       info.Size(),
-		Duration:   duration,
-		Resolution: resolution,
-		Width:      width,
-		Height:     height,
+		Name:      filepath.Base(path),
+		Path:      path,
+		Directory: filepath.Dir(path),
+		Size:      info.Size(),
 	}
 
 	err = database.DB.Transaction(func(tx *gorm.DB) error {
@@ -380,6 +387,16 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 			}
 		}
 		return nil, err
+	}
+	if probeErr := s.technicalProbe().Refresh(context.Background(), video.ID); probeErr != nil {
+		log.Printf("新增视频技术信息读取失败 id=%d err=%v", video.ID, probeErr)
+	} else {
+		if syncErr := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, video.ID) }); syncErr != nil {
+			log.Printf("新增视频技术信息读取成功但短视频标签同步失败 id=%d err=%v", video.ID, syncErr)
+		}
+		if refreshed, refreshErr := s.GetVideo(video.ID); refreshErr == nil {
+			video = refreshed
+		}
 	}
 	log.Printf("新增视频 path=%s", path)
 	return video, nil
@@ -1270,7 +1287,11 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 			missingVideos = append(missingVideos, video)
 			continue
 		}
-		if video.Duration == 0 || video.Resolution == "" || video.Height == 0 {
+		needsRefresh, refreshCheckErr := s.needsTechnicalRefreshDuringScan(video, scannedByPath[video.Path])
+		if refreshCheckErr != nil {
+			result.recordError("check_metadata", video.Directory, video.Path, refreshCheckErr)
+		}
+		if needsRefresh {
 			if err := s.RefreshVideoMetadata(video.ID); err != nil {
 				result.recordError("refresh_metadata", video.Directory, video.Path, err)
 			} else {
@@ -1349,6 +1370,30 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 	log.Printf("增量扫描同步完成 dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d",
 		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors))
 	return result
+}
+
+func (s *VideoService) needsTechnicalRefreshDuringScan(video models.Video, scanned ScannedFile) (bool, error) {
+	if video.Duration == 0 || video.Resolution == "" || video.Height == 0 || scanned.Size != video.Size {
+		return true, nil
+	}
+	var metadata models.VideoTechnicalMetadata
+	err := database.DB.Select("video_id", "successful_source_size", "successful_source_mod_time_ns", "probed_at").
+		First(&metadata, "video_id = ?", video.ID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		// A complete legacy base record is intentionally left for explicit backfill.
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if metadata.ProbedAt == nil || metadata.SuccessfulSourceSize == nil || metadata.SuccessfulSourceModTimeNS == nil {
+		return true, nil
+	}
+	fingerprint, err := mediaProbeStat(video.Path)
+	if err != nil {
+		return true, nil
+	}
+	return fingerprint.size != *metadata.SuccessfulSourceSize || fingerprint.modTimeNS != *metadata.SuccessfulSourceModTimeNS, nil
 }
 
 func (s *VideoService) getActiveVideosUnderRoots(roots []string) ([]models.Video, error) {
@@ -1464,7 +1509,8 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 	newPath = filepath.Clean(strings.TrimSpace(newPath))
 
 	// 验证新路径文件存在
-	if _, err := os.Stat(newPath); err != nil {
+	info, err := os.Stat(newPath)
+	if err != nil {
 		return fmt.Errorf("目标文件不存在: %w", err)
 	}
 
@@ -1474,18 +1520,12 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 		return fmt.Errorf("目标路径已被其他记录占用: %s", newPath)
 	}
 
-	// 迁移时也尝试重新提取元数据（可能之前的元数据是空的）
-	duration, resolution, width, height := s.getVideoMetadata(newPath)
-
 	if err := database.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
-			"path":       newPath,
-			"directory":  filepath.Dir(newPath),
-			"name":       filepath.Base(newPath),
-			"duration":   duration,
-			"resolution": resolution,
-			"width":      width,
-			"height":     height,
+			"path":      newPath,
+			"directory": filepath.Dir(newPath),
+			"name":      filepath.Base(newPath),
+			"size":      info.Size(),
 		})
 		if result.Error != nil {
 			return result.Error
@@ -1494,7 +1534,12 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 	}); err != nil {
 		return err
 	}
-	log.Printf("视频迁移并更新元数据 id=%d newPath=%s duration=%.1f res=%s", id, newPath, duration, resolution)
+	if probeErr := s.technicalProbe().Refresh(context.Background(), id); probeErr != nil {
+		log.Printf("视频迁移完成但技术信息读取失败 id=%d newPath=%s err=%v", id, newPath, probeErr)
+	} else if syncErr := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, id) }); syncErr != nil {
+		log.Printf("视频迁移技术信息读取成功但短视频标签同步失败 id=%d newPath=%s err=%v", id, newPath, syncErr)
+	}
+	log.Printf("视频迁移并更新元数据 id=%d newPath=%s", id, newPath)
 	return nil
 }
 
@@ -1505,22 +1550,10 @@ func (s *VideoService) RefreshVideoMetadata(id uint) error {
 		return err
 	}
 
-	duration, resolution, width, height := s.getVideoMetadata(video.Path)
-	if duration == 0 && resolution == "" {
-		return fmt.Errorf("未能从文件中提取有效元数据: %s", video.Path)
+	if err := s.technicalProbe().Refresh(context.Background(), video.ID); err != nil {
+		return err
 	}
-
-	return database.DB.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&video).Updates(map[string]interface{}{
-			"duration":   duration,
-			"resolution": resolution,
-			"width":      width,
-			"height":     height,
-		}).Error; err != nil {
-			return err
-		}
-		return syncShortVideoTagForVideo(tx, video.ID)
-	})
+	return database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, video.ID) })
 }
 
 // RenameVideo 重命名视频文件及数据库记录

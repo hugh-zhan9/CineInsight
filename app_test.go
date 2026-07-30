@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"video-master/database"
 	"video-master/models"
 	"video-master/services"
@@ -237,6 +238,173 @@ func TestThumbnailHandlerServesGeneratedJPEG(t *testing.T) {
 	}
 	if rec.Body.String() != "jpeg-thumbnail" {
 		t.Fatalf("缩略图响应体错误: %q", rec.Body.String())
+	}
+}
+
+func TestPersonAvatarHandlerServesOnlyManagedEntityAsset(t *testing.T) {
+	setupAppTestDB(t)
+	dataDir := t.TempDir()
+	app := NewApp()
+	app.personService = services.NewPersonService(dataDir)
+	person, err := app.personService.CreatePerson("Handler Person", "")
+	if err != nil {
+		t.Fatalf("创建人物失败: %v", err)
+	}
+	source := filepath.Join(t.TempDir(), "avatar.png")
+	content := append([]byte("\x89PNG\r\n\x1a\n"), []byte("handler-image")...)
+	if err := os.WriteFile(source, content, 0600); err != nil {
+		t.Fatalf("写入头像源文件失败: %v", err)
+	}
+	if _, err := app.personService.SetPersonAvatar(person.ID, source); err != nil {
+		t.Fatalf("设置人物头像失败: %v", err)
+	}
+
+	path := fmt.Sprintf("/preview/person-avatar/%d", person.ID)
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	rec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Body.String() != string(content) {
+		t.Fatalf("人物头像响应错误: status=%d body=%q", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("人物头像 Content-Type=%q", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("人物头像 Cache-Control=%q", got)
+	}
+
+	post := httptest.NewRequest(http.MethodPost, path, nil)
+	postRec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(postRec, post)
+	if postRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("人物头像非 GET/HEAD 应返回 405，实际=%d", postRec.Code)
+	}
+
+	outside := filepath.Join(t.TempDir(), "outside.png")
+	if err := os.WriteFile(outside, content, 0600); err != nil {
+		t.Fatalf("写入外部文件失败: %v", err)
+	}
+	if err := database.DB.Model(&models.Person{}).Where("id = ?", person.ID).Update("avatar_path", outside).Error; err != nil {
+		t.Fatalf("构造越界数据库路径失败: %v", err)
+	}
+	traversalReq := httptest.NewRequest(http.MethodGet, path, nil)
+	traversalRec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(traversalRec, traversalReq)
+	if traversalRec.Code != http.StatusNotFound {
+		t.Fatalf("绝对/越界数据库路径必须拒绝，实际=%d body=%q", traversalRec.Code, traversalRec.Body.String())
+	}
+}
+
+func TestCollectionCoverHandlerServesManagedAssetAndRejectsOtherMethods(t *testing.T) {
+	setupAppTestDB(t)
+	dataDir := t.TempDir()
+	app := NewApp()
+	app.collectionService = services.NewCollectionService(dataDir)
+	collection, err := app.collectionService.CreateCollection("Handler Collection", "")
+	if err != nil {
+		t.Fatalf("创建作品集失败: %v", err)
+	}
+	source := filepath.Join(t.TempDir(), "cover.png")
+	content := append([]byte("\x89PNG\r\n\x1a\n"), []byte("collection-cover")...)
+	if err := os.WriteFile(source, content, 0600); err != nil {
+		t.Fatalf("写入作品集封面失败: %v", err)
+	}
+	if _, err := app.collectionService.SetCollectionCover(collection.ID, source); err != nil {
+		t.Fatalf("设置作品集封面失败: %v", err)
+	}
+
+	path := fmt.Sprintf("/preview/collection-cover/%d", collection.ID)
+	rec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(rec, httptest.NewRequest(http.MethodHead, path, nil))
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("作品集封面 HEAD 响应错误: status=%d content-type=%q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("作品集封面 Cache-Control=%q", got)
+	}
+	postRec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(postRec, httptest.NewRequest(http.MethodPost, path, nil))
+	if postRec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("作品集封面非 GET/HEAD 应返回 405，实际=%d", postRec.Code)
+	}
+}
+
+func TestMediaDetailAppMethodsReturnAggregatedLocalDetail(t *testing.T) {
+	setupAppTestDB(t)
+	if err := database.DB.Create(&models.Settings{PlayWeight: 2}).Error; err != nil {
+		t.Fatalf("创建片库设置失败: %v", err)
+	}
+	video := models.Video{Name: "app-detail.mkv", Path: filepath.Join(t.TempDir(), "app-detail.mkv"), DisplayTitle: "App Detail"}
+	if err := os.WriteFile(video.Path, []byte("video"), 0600); err != nil {
+		t.Fatalf("创建详情视频失败: %v", err)
+	}
+	video.Directory = filepath.Dir(video.Path)
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建详情视频记录失败: %v", err)
+	}
+	app := NewApp()
+	detail, err := app.GetVideoDetails(video.ID)
+	if err != nil {
+		t.Fatalf("App 获取视频详情失败: %v", err)
+	}
+	if detail.EffectiveTitle != "App Detail" || detail.TechnicalStatus.State != services.TechnicalStateUnprobed {
+		t.Fatalf("App 视频详情错误: %#v", detail)
+	}
+	page, err := app.SearchLibraryVideoPage(services.LibraryVideoPageRequest{Limit: 20})
+	if err != nil || len(page.Videos) != 1 || page.Videos[0].ID != video.ID {
+		t.Fatalf("App 新片库分页接口错误: page=%#v err=%v", page, err)
+	}
+}
+
+func TestTechnicalBackfillAppRemainsIdleUntilExplicitStart(t *testing.T) {
+	setupAppTestDB(t)
+	if err := database.DB.Create(&models.Settings{ShortFeedMaxDurationMinutes: services.DefaultShortFeedMaxDurationMinutes}).Error; err != nil {
+		t.Fatalf("创建补全测试设置失败: %v", err)
+	}
+	root := t.TempDir()
+	path := filepath.Join(root, "backfill.mkv")
+	if err := os.WriteFile(path, []byte("video"), 0600); err != nil {
+		t.Fatalf("创建补全视频失败: %v", err)
+	}
+	video := models.Video{Name: "backfill.mkv", Path: path, Directory: root}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建补全视频记录失败: %v", err)
+	}
+	app := NewApp()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("创建 ffprobe stub 目录失败: %v", err)
+	}
+	marker := filepath.Join(root, "ffprobe-calls")
+	script := "#!/bin/sh\nprintf x >> \"$CINEINSIGHT_PROBE_MARKER\"\nprintf '{\"streams\":[],\"format\":{\"format_name\":\"matroska\"}}'\n"
+	if err := os.WriteFile(filepath.Join(binDir, "ffprobe"), []byte(script), 0755); err != nil {
+		t.Fatalf("写入 ffprobe stub 失败: %v", err)
+	}
+	t.Setenv("CINEINSIGHT_PROBE_MARKER", marker)
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	probe := services.NewMediaProbeService()
+	app.mediaProbeService = probe
+	app.technicalBackfill = services.NewTechnicalBackfillService(probe)
+	if status := app.GetTechnicalBackfillStatus(); status.Running {
+		t.Fatalf("显式启动前不得补全: status=%#v", status)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("显式启动前 ffprobe 不应执行: err=%v", err)
+	}
+	if _, err := app.StartTechnicalBackfill(); err != nil {
+		t.Fatalf("App 启动技术补全失败: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for app.GetTechnicalBackfillStatus().Running && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	status := app.GetTechnicalBackfillStatus()
+	markerContent, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatalf("读取 ffprobe 调用标记失败: %v", err)
+	}
+	if !status.Completed || status.Succeeded != 1 || len(markerContent) != 1 {
+		t.Fatalf("显式技术补全结果错误: status=%#v calls=%d", status, len(markerContent))
 	}
 }
 

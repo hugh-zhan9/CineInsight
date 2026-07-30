@@ -1,5 +1,109 @@
 export namespace models {
 
+	export class MediaCollection {
+	    id: number;
+	    name: string;
+	    description: string;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MediaCollection(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.description = source["description"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class MediaStream {
+	    id: number;
+	    video_id: number;
+	    stream_index: number;
+	    stream_type: string;
+	    codec_name: string;
+	    codec_long_name: string;
+	    profile: string;
+	    bit_rate?: number;
+	    language: string;
+	    title: string;
+	    is_default: boolean;
+	    width?: number;
+	    height?: number;
+	    avg_frame_rate: string;
+	    real_frame_rate: string;
+	    pixel_format: string;
+	    bits_per_raw_sample?: number;
+	    color_range: string;
+	    color_space: string;
+	    color_transfer: string;
+	    color_primaries: string;
+	    is_hdr?: boolean;
+	    is_attached_pic: boolean;
+	    sample_rate?: number;
+	    channels?: number;
+	    channel_layout: string;
+	    created_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new MediaStream(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.stream_index = source["stream_index"];
+	        this.stream_type = source["stream_type"];
+	        this.codec_name = source["codec_name"];
+	        this.codec_long_name = source["codec_long_name"];
+	        this.profile = source["profile"];
+	        this.bit_rate = source["bit_rate"];
+	        this.language = source["language"];
+	        this.title = source["title"];
+	        this.is_default = source["is_default"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.avg_frame_rate = source["avg_frame_rate"];
+	        this.real_frame_rate = source["real_frame_rate"];
+	        this.pixel_format = source["pixel_format"];
+	        this.bits_per_raw_sample = source["bits_per_raw_sample"];
+	        this.color_range = source["color_range"];
+	        this.color_space = source["color_space"];
+	        this.color_transfer = source["color_transfer"];
+	        this.color_primaries = source["color_primaries"];
+	        this.is_hdr = source["is_hdr"];
+	        this.is_attached_pic = source["is_attached_pic"];
+	        this.sample_rate = source["sample_rate"];
+	        this.channels = source["channels"];
+	        this.channel_layout = source["channel_layout"];
+	        this.created_at = source["created_at"];
+	    }
+	}
+	export class Person {
+	    id: number;
+	    display_name: string;
+	    original_name: string;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new Person(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.display_name = source["display_name"];
+	        this.original_name = source["original_name"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class SavedLibraryView {
 	    id: number;
 	    name: string;
@@ -11,6 +115,9 @@ export namespace models {
 	    max_size: number;
 	    min_height: number;
 	    max_height: number;
+	    min_rating?: number;
+	    max_rating?: number;
+	    sort_mode: string;
 	    created_at: string;
 	    updated_at: string;
 
@@ -30,6 +137,9 @@ export namespace models {
 	        this.max_size = source["max_size"];
 	        this.min_height = source["min_height"];
 	        this.max_height = source["max_height"];
+	        this.min_rating = source["min_rating"];
+	        this.max_rating = source["max_rating"];
+	        this.sort_mode = source["sort_mode"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -153,6 +263,9 @@ export namespace models {
 	export class Video {
 	    id: number;
 	    name: string;
+	    display_title: string;
+	    original_title: string;
+	    personal_rating?: number;
 	    path: string;
 	    directory: string;
 	    size: number;
@@ -181,6 +294,9 @@ export namespace models {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.name = source["name"];
+	        this.display_title = source["display_title"];
+	        this.original_title = source["original_title"];
+	        this.personal_rating = source["personal_rating"];
 	        this.path = source["path"];
 	        this.directory = source["directory"];
 	        this.size = source["size"];
@@ -219,6 +335,42 @@ export namespace models {
 		    }
 		    return a;
 		}
+	}
+	export class VideoTechnicalMetadata {
+	    video_id: number;
+	    format_name: string;
+	    format_long_name: string;
+	    total_bit_rate?: number;
+	    successful_source_size?: number;
+	    successful_source_mod_time_ns?: number;
+	    probed_at?: string;
+	    last_attempt_source_size?: number;
+	    last_attempt_source_mod_time_ns?: number;
+	    last_attempt_at?: string;
+	    last_error: string;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoTechnicalMetadata(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.format_name = source["format_name"];
+	        this.format_long_name = source["format_long_name"];
+	        this.total_bit_rate = source["total_bit_rate"];
+	        this.successful_source_size = source["successful_source_size"];
+	        this.successful_source_mod_time_ns = source["successful_source_mod_time_ns"];
+	        this.probed_at = source["probed_at"];
+	        this.last_attempt_source_size = source["last_attempt_source_size"];
+	        this.last_attempt_source_mod_time_ns = source["last_attempt_source_mod_time_ns"];
+	        this.last_attempt_at = source["last_attempt_at"];
+	        this.last_error = source["last_error"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
 	}
 	export class VideoTrashEntry {
 	    id: number;
@@ -602,6 +754,126 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class CollectionVideoItem {
+	    video: models.Video;
+	    position: number;
+
+	    static createFrom(source: any = {}) {
+	        return new CollectionVideoItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.position = source["position"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CollectionListItem {
+	    collection: models.MediaCollection;
+	    cover_url: string;
+	    active_video_count: number;
+	    cursor_name: string;
+
+	    static createFrom(source: any = {}) {
+	        return new CollectionListItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.collection = this.convertValues(source["collection"], models.MediaCollection);
+	        this.cover_url = source["cover_url"];
+	        this.active_video_count = source["active_video_count"];
+	        this.cursor_name = source["cursor_name"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CollectionDetail {
+	    collection: CollectionListItem;
+	    videos: CollectionVideoItem[];
+
+	    static createFrom(source: any = {}) {
+	        return new CollectionDetail(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.collection = this.convertValues(source["collection"], CollectionListItem);
+	        this.videos = this.convertValues(source["videos"], CollectionVideoItem);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+
+	export class ExternalSubtitleDetails {
+	    path: string;
+	    language: string;
+	    segment_count: number;
+	    last_segment_index: number;
+
+	    static createFrom(source: any = {}) {
+	        return new ExternalSubtitleDetails(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.language = source["language"];
+	        this.segment_count = source["segment_count"];
+	        this.last_segment_index = source["last_segment_index"];
+	    }
+	}
 	export class FileMigrationResult {
 	    video_id: number;
 	    source: string;
@@ -649,6 +921,9 @@ export namespace services {
 	    max_size: number;
 	    min_height: number;
 	    max_height: number;
+	    min_rating?: number;
+	    max_rating?: number;
+	    sort_mode: string;
 
 	    static createFrom(source: any = {}) {
 	        return new LibraryFilter(source);
@@ -664,6 +939,9 @@ export namespace services {
 	        this.max_size = source["max_size"];
 	        this.min_height = source["min_height"];
 	        this.max_height = source["max_height"];
+	        this.min_rating = source["min_rating"];
+	        this.max_rating = source["max_rating"];
+	        this.sort_mode = source["sort_mode"];
 	    }
 	}
 	export class LibrarySubtitleHit {
@@ -678,6 +956,94 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.video_id = source["video_id"];
 	        this.segment = this.convertValues(source["segment"], subtitleparser.Segment);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LibraryVideoCursor {
+	    sort_mode: string;
+	    score: number;
+	    size: number;
+	    rating?: number;
+	    rating_is_null: boolean;
+	    id: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryVideoCursor(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sort_mode = source["sort_mode"];
+	        this.score = source["score"];
+	        this.size = source["size"];
+	        this.rating = source["rating"];
+	        this.rating_is_null = source["rating_is_null"];
+	        this.id = source["id"];
+	    }
+	}
+	export class LibraryVideoPage {
+	    videos: models.Video[];
+	    next_cursor?: LibraryVideoCursor;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryVideoPage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.videos = this.convertValues(source["videos"], models.Video);
+	        this.next_cursor = this.convertValues(source["next_cursor"], LibraryVideoCursor);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LibraryVideoPageRequest {
+	    filter: LibraryFilter;
+	    cursor?: LibraryVideoCursor;
+	    limit: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryVideoPageRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.cursor = this.convertValues(source["cursor"], LibraryVideoCursor);
+	        this.limit = source["limit"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -714,6 +1080,77 @@ export namespace services {
 	        this.video_links_moved = source["video_links_moved"];
 	    }
 	}
+	export class PersonListItem {
+	    person: models.Person;
+	    avatar_url: string;
+	    active_video_count: number;
+	    cursor_name: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PersonListItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.person = this.convertValues(source["person"], models.Person);
+	        this.avatar_url = source["avatar_url"];
+	        this.active_video_count = source["active_video_count"];
+	        this.cursor_name = source["cursor_name"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class PersonDetail {
+	    person: PersonListItem;
+	    videos: models.Video[];
+	    next_video_id: number;
+
+	    static createFrom(source: any = {}) {
+	        return new PersonDetail(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.person = this.convertValues(source["person"], PersonListItem);
+	        this.videos = this.convertValues(source["videos"], models.Video);
+	        this.next_video_id = source["next_video_id"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
 	export class PlaybackReconcileResult {
 	    video_id: number;
 	    did_mark_stale: boolean;
@@ -916,6 +1353,9 @@ export namespace services {
 	    max_size: number;
 	    min_height: number;
 	    max_height: number;
+	    min_rating?: number;
+	    max_rating?: number;
+	    sort_mode: string;
 
 	    static createFrom(source: any = {}) {
 	        return new SavedLibraryViewInput(source);
@@ -932,6 +1372,9 @@ export namespace services {
 	        this.max_size = source["max_size"];
 	        this.min_height = source["min_height"];
 	        this.max_height = source["max_height"];
+	        this.min_rating = source["min_rating"];
+	        this.max_rating = source["max_rating"];
+	        this.sort_mode = source["sort_mode"];
 	    }
 	}
 	export class ScanSyncError {
@@ -1214,6 +1657,160 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class TechnicalBackfillFailure {
+	    video_id: number;
+	    name: string;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new TechnicalBackfillFailure(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.name = source["name"];
+	        this.error = source["error"];
+	    }
+	}
+	export class TechnicalBackfillStatus {
+	    running: boolean;
+	    preparing: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    current_video_id: number;
+	    current_video_name: string;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: TechnicalBackfillFailure[];
+
+	    static createFrom(source: any = {}) {
+	        return new TechnicalBackfillStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.preparing = source["preparing"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.current_video_id = source["current_video_id"];
+	        this.current_video_name = source["current_video_name"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], TechnicalBackfillFailure);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TechnicalSnapshotStatus {
+	    state: string;
+	    is_stale: boolean;
+	    has_error: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new TechnicalSnapshotStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.is_stale = source["is_stale"];
+	        this.has_error = source["has_error"];
+	    }
+	}
+	export class VideoDetails {
+	    video: models.Video;
+	    effective_title: string;
+	    people: PersonListItem[];
+	    collections: CollectionListItem[];
+	    technical_metadata?: models.VideoTechnicalMetadata;
+	    streams: models.MediaStream[];
+	    external_subtitle?: ExternalSubtitleDetails;
+	    technical_status: TechnicalSnapshotStatus;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoDetails(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.effective_title = source["effective_title"];
+	        this.people = this.convertValues(source["people"], PersonListItem);
+	        this.collections = this.convertValues(source["collections"], CollectionListItem);
+	        this.technical_metadata = this.convertValues(source["technical_metadata"], models.VideoTechnicalMetadata);
+	        this.streams = this.convertValues(source["streams"], models.MediaStream);
+	        this.external_subtitle = this.convertValues(source["external_subtitle"], ExternalSubtitleDetails);
+	        this.technical_status = this.convertValues(source["technical_status"], TechnicalSnapshotStatus);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VideoDetailsUpdate {
+	    video_id: number;
+	    display_title: string;
+	    original_title: string;
+	    personal_rating?: number;
+	    person_ids: number[];
+	    collection_ids: number[];
+
+	    static createFrom(source: any = {}) {
+	        return new VideoDetailsUpdate(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.display_title = source["display_title"];
+	        this.original_title = source["original_title"];
+	        this.personal_rating = source["personal_rating"];
+	        this.person_ids = source["person_ids"];
+	        this.collection_ids = source["collection_ids"];
+	    }
 	}
 	export class VideoSameSourceReviewItem {
 	    id: number;

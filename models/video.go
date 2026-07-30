@@ -7,7 +7,10 @@ import (
 // Video 视频文件模型
 type Video struct {
 	ID                     uint           `gorm:"primarykey" json:"id"`
-	Name                   string         `json:"name"`                                                                    // 文件名
+	Name                   string         `json:"name"`                                               // 文件名
+	DisplayTitle           string         `gorm:"size:255;not null;default:''" json:"display_title"`  // 用户维护的显示标题
+	OriginalTitle          string         `gorm:"size:255;not null;default:''" json:"original_title"` // 用户维护的原始标题
+	PersonalRating         *float64       `gorm:"type:numeric(3,1);check:chk_videos_personal_rating,personal_rating IS NULL OR (personal_rating >= 0 AND personal_rating <= 10 AND personal_rating * 2 = CAST(personal_rating * 2 AS INTEGER))" json:"personal_rating"`
 	Path                   string         `gorm:"uniqueIndex:idx_videos_path_active,where:deleted_at IS NULL" json:"path"` // 完整路径
 	Directory              string         `json:"directory"`                                                               // 所在目录
 	Size                   int64          `json:"size"`                                                                    // 文件大小（字节）
@@ -147,6 +150,9 @@ type SavedLibraryView struct {
 	MaxSize    int64          `json:"max_size"`
 	MinHeight  int            `json:"min_height"`
 	MaxHeight  int            `json:"max_height"`
+	MinRating  *float64       `gorm:"type:numeric(3,1)" json:"min_rating"`
+	MaxRating  *float64       `gorm:"type:numeric(3,1)" json:"max_rating"`
+	SortMode   string         `gorm:"not null;default:'balanced'" json:"sort_mode"`
 	CreatedAt  time.Time      `json:"created_at" ts_type:"string"`
 	UpdatedAt  time.Time      `json:"updated_at" ts_type:"string"`
 	DeletedAt  SoftDeleteTime `gorm:"index" json:"-"`

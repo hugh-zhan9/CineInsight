@@ -8,7 +8,7 @@ const bindingsSource = readFileSync(new URL('../wailsjs/go/main/App.js', import.
 assert.match(videoListSource, /GetSubtitleQueueState/);
 assert.match(videoListSource, /CancelSubtitleTask/);
 assert.match(videoListSource, /subtitle-queue-panel/);
-assert.match(videoListSource, /SearchLibraryVideos/);
+assert.match(videoListSource, /SearchLibraryVideoPage/);
 assert.match(videoListSource, /GetLibrarySubtitleHits/);
 assert.match(videoListSource, /minimizeSubtitleProgress/);
 assert.match(videoListSource, /subtitleProgressTaskID/);
