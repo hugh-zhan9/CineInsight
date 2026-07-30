@@ -53,16 +53,19 @@ func NewApp() *App {
 	homeDir, _ := os.UserHomeDir()
 	dataDir := filepath.Join(homeDir, ".video-master")
 	videoService := &services.VideoService{}
+	subtitleService := services.NewSubtitleService(dataDir)
+	aiTaggingService := services.NewAITaggingService()
+	aiTaggingService.SetTemporaryTranscriptProvider(subtitleService)
 
 	return &App{
 		videoService:          videoService,
 		tagService:            &services.TagService{},
 		settingsService:       &services.SettingsService{},
 		directoryService:      &services.DirectoryService{},
-		subtitleService:       services.NewSubtitleService(dataDir),
+		subtitleService:       subtitleService,
 		cleanupService:        &services.CleanupService{},
 		subtitleSearchService: &services.SubtitleSearchService{},
-		aiTaggingService:      services.NewAITaggingService(),
+		aiTaggingService:      aiTaggingService,
 		shortFeedService:      services.NewShortFeedService(videoService),
 	}
 }
@@ -552,6 +555,24 @@ func (a *App) GetAITaggingStatusSummary() (*services.AITaggingStatusSummary, err
 	summary, err := a.aiTaggingService.StatusSummary()
 	log.Printf("API GetAITaggingStatusSummary err=%v summary=%+v", err, summary)
 	return summary, err
+}
+
+func (a *App) ListSameSourceRelations(status string, unreadOnly bool) ([]services.VideoSameSourceReviewItem, error) {
+	items, err := a.aiTaggingService.ListSameSourceRelations(status, unreadOnly)
+	log.Printf("API ListSameSourceRelations status=%s unreadOnly=%v result=%d err=%v", status, unreadOnly, len(items), err)
+	return items, err
+}
+
+func (a *App) MarkSameSourceRelationRead(relationID uint) error {
+	err := a.aiTaggingService.MarkSameSourceRelationRead(relationID)
+	log.Printf("API MarkSameSourceRelationRead relationID=%d err=%v", relationID, err)
+	return err
+}
+
+func (a *App) RejectSameSourceRelation(relationID uint) error {
+	err := a.aiTaggingService.RejectSameSourceRelation(relationID)
+	log.Printf("API RejectSameSourceRelation relationID=%d err=%v", relationID, err)
+	return err
 }
 
 // ===== Settings Methods =====

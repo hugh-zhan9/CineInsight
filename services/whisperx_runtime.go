@@ -377,6 +377,9 @@ func (s *SubtitleService) transcribeWhisperXWithLang(ctx context.Context, wavPat
 	if err != nil {
 		return "", nil, err
 	}
+	if isSubtitleLocalOnlyASR(ctx) {
+		env = append(env, "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1")
+	}
 	cmd.Env = env
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -386,16 +389,13 @@ func (s *SubtitleService) transcribeWhisperXWithLang(ctx context.Context, wavPat
 			return "", nil, fmt.Errorf("字幕生成已取消")
 		}
 		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = strings.TrimSpace(stdout.String())
-		}
-		log.Printf("[Subtitle] whisperx error: %v\n%s", err, detail)
-		return "", nil, fmt.Errorf("WhisperX 识别失败: %s", detail)
+		log.Printf("[Subtitle] whisperx error: %v stderr_bytes=%d", err, len(stderr.Bytes()))
+		return "", nil, fmt.Errorf("WhisperX 识别失败: %s", truncateLogSnippet(detail, 500))
 	}
 
 	var payload whisperXPayload
 	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		log.Printf("[Subtitle] whisperx json parse failed: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+		log.Printf("[Subtitle] whisperx json parse failed: %v stdout_bytes=%d stderr_bytes=%d", err, len(stdout.Bytes()), len(stderr.Bytes()))
 		return "", nil, fmt.Errorf("WhisperX 输出解析失败")
 	}
 

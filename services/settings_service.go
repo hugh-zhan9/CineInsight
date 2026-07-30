@@ -49,6 +49,7 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.AITaggingImagesPerRequest = positiveOrDefault(input.AITaggingImagesPerRequest, defaultAITaggingImagesPerRequest)
 		settings.AITaggingSubtitleCharLimit = positiveOrDefault(input.AITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit)
 		settings.AITaggingStartupBatchSize = positiveOrDefault(input.AITaggingStartupBatchSize, defaultAITaggingStartupBatchSize)
+		settings.AITaggingMaxExtraFrames = normalizeAITaggingMaxExtraFrames(input.AITaggingMaxExtraFrames)
 
 		if err := tx.Save(&settings).Error; err != nil {
 			return err

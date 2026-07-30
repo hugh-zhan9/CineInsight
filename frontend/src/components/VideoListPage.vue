@@ -55,6 +55,7 @@
           {{ incrementalScan.running ? '扫描中...' : '增量扫描' }}
         </button>
         <button type="button" class="btn-action" @click="openAITagReviewDialog()">AI 标签管理</button>
+        <span v-if="aiTagSummary.same_source_unread" class="ai-review-badge" title="未读同源视频关系">{{ aiTagSummary.same_source_unread }}</span>
         <button type="button" class="btn-action" @click="openCleanupDialog()">清理候选</button>
         <button type="button" class="btn-action" @click="showTagManagerDialog = true">标签管理</button>
       </div>
@@ -540,6 +541,21 @@
 </template>
 
 <style scoped>
+.ai-review-badge {
+  display: inline-flex;
+  min-width: 18px;
+  height: 18px;
+  margin-left: 6px;
+  padding: 0 5px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: #dc2626;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+
 .toolbar .search-group {
   flex: 1 1 360px;
   min-width: 280px;
@@ -964,7 +980,7 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1028,6 +1044,8 @@ export default {
       deletingIds: [],
       tagDeleteDialog: { show: false, tag: null },
       aiTagReviewDialog: { show: false },
+      aiTagSummary: { same_source_unread: 0 },
+      aiTagSummaryTimer: null,
       cleanupDialog: {
         show: false,
         loading: false,
@@ -1085,6 +1103,8 @@ export default {
     this.configureHomeListVirtualization();
     this.loadVideos();
     this.refreshSubtitleQueue();
+    this.refreshAITagSummary();
+    this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
     this.attachWheelFallback();
     document.addEventListener('click', this.hideContextMenu);
     
@@ -1181,6 +1201,9 @@ export default {
     this.detachWheelFallback();
     if (this.searchDebounceTimer) {
       clearTimeout(this.searchDebounceTimer);
+    }
+    if (this.aiTagSummaryTimer) {
+      clearInterval(this.aiTagSummaryTimer);
     }
     this.teardownRuntimeEvents();
     this.resetCleanupProgressTracking();
@@ -2391,8 +2414,16 @@ export default {
     openAITagReviewDialog() {
       this.aiTagReviewDialog.show = true;
     },
+    async refreshAITagSummary() {
+      try {
+        this.aiTagSummary = await GetAITaggingStatusSummary() || { same_source_unread: 0 };
+      } catch (err) {
+        this.aiTagSummary = { ...this.aiTagSummary, same_source_unread: 0 };
+      }
+    },
     async handleAITagCandidatesChanged() {
       this.$emit('reload-tags');
+      await this.refreshAITagSummary();
       await this.reloadCurrentView();
     },
     async runIncrementalScan() {

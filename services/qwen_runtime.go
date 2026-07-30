@@ -243,6 +243,10 @@ func (s *SubtitleService) runQwenTranscription(ctx context.Context, wavPath, sou
 	if err != nil {
 		return "", nil, "", err
 	}
+	if isSubtitleLocalOnlyASR(ctx) && !offline {
+		env = append(env, "HF_HUB_OFFLINE=1", "TRANSFORMERS_OFFLINE=1")
+		offline = true
+	}
 	cmd.Env = env
 	log.Printf("[Subtitle][Qwen] starting worker device=%s source_lang=%s offline_cache=%t", device, sourceLang, offline)
 	var stdout, stderr bytes.Buffer
@@ -250,9 +254,6 @@ func (s *SubtitleService) runQwenTranscription(ctx context.Context, wavPath, sou
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		detail := strings.TrimSpace(stderr.String())
-		if detail == "" {
-			detail = strings.TrimSpace(stdout.String())
-		}
 		runErr := strings.TrimSpace(err.Error())
 		if runErr != "" && !strings.Contains(detail, runErr) {
 			if detail == "" {

@@ -19,6 +19,8 @@ assert.match(videoListSource, /toolbar-primary/, 'video list should split primar
 assert.match(videoListSource, /selection-toolbar/, 'batch actions should live in a contextual selection toolbar');
 assert.doesNotMatch(videoListSource, /<ActionMenu label="更多">[\s\S]*AI 标签管理[\s\S]*<\/ActionMenu>/, 'AI tag management should not be hidden in the more menu');
 assert.match(videoListSource, /<button[^>]+@click="openAITagReviewDialog\(\)"[^>]*>AI 标签管理<\/button>/, 'AI tag management should be a direct toolbar action');
+assert.match(videoListSource, /aiTagSummary\.same_source_unread/, 'AI tag management should expose unread same-source relations');
+assert.match(videoListSource, /GetAITaggingStatusSummary/, 'same-source unread badge should refresh from the backend summary');
 assert.match(videoListSource, /<button[^>]+@click="openCleanupDialog\(\)"[^>]*>清理候选<\/button>/, 'cleanup candidates should be a direct toolbar action');
 assert.match(videoListSource, /<button[^>]+@click="showTagManagerDialog = true"[^>]*>标签管理<\/button>/, 'tag manager should be a direct toolbar action');
 assert.match(videoListSource, /@click="runIncrementalScan"/, 'video list should expose a manual incremental scan action');

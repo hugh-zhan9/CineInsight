@@ -98,6 +98,7 @@ type Settings struct {
 	AITaggingImagesPerRequest   int       `gorm:"default:10" json:"ai_tagging_images_per_request"`
 	AITaggingSubtitleCharLimit  int       `gorm:"default:4000" json:"ai_tagging_subtitle_char_limit"`
 	AITaggingStartupBatchSize   int       `gorm:"default:10" json:"ai_tagging_startup_batch_size"`
+	AITaggingMaxExtraFrames     int       `gorm:"default:20" json:"ai_tagging_max_extra_frames"`
 	UpdatedAt                   time.Time `json:"updated_at" ts_type:"string"`
 }
 

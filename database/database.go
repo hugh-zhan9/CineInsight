@@ -145,6 +145,7 @@ func Init() error {
 			AITaggingImagesPerRequest:   10,
 			AITaggingSubtitleCharLimit:  4000,
 			AITaggingStartupBatchSize:   10,
+			AITaggingMaxExtraFrames:     20,
 		}
 		if err := db.Create(&settings).Error; err != nil {
 			return fmt.Errorf("初始化默认设置失败: %w", err)
@@ -273,6 +274,13 @@ func ensureAITaggingIndexes(db *gorm.DB) {
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_tag_approval_video_tag ON ai_tag_approval_records(video_id, tag_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_tag_approval_records_candidate_id ON ai_tag_approval_records(candidate_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_ai_tagging_states_status_processed ON ai_tagging_states(status, last_processed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_ai_tag_agent_steps_video_created ON ai_tag_agent_steps(video_id, created_at)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_tag_agent_step_run_round ON ai_tag_agent_steps(video_id, evidence_fingerprint, attempt, round)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_video_visual_fingerprints_video_id ON video_visual_fingerprints(video_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_video_same_source_pair ON video_same_source_relations(video_a_id, video_b_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_video_same_source_unread ON video_same_source_relations(status, is_unread, updated_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_video_same_source_a_status ON video_same_source_relations(video_a_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_video_same_source_b_status ON video_same_source_relations(video_b_id, status)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {

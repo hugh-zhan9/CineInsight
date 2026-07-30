@@ -34,6 +34,9 @@ assert.match(settingsSource, /v-for="\(group, groupIndex\) in localAITagGroups"/
 assert.match(settingsSource, /class="ai-tag-library-group"/);
 assert.match(settingsSource, /class="settings-save-status"/);
 assert.match(settingsSource, /设置保存成功，已触发 AI 自动打标/);
+assert.match(settingsSource, /ai_tagging_max_extra_frames/);
+assert.match(settingsSource, /原始音频不会发送/);
+assert.match(settingsSource, /临时字幕只在内存中使用/);
 assert.doesNotMatch(settingsSource, /alert\('设置保存/);
 
 console.log('ai-tag-library tests passed');

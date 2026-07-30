@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 	"unicode/utf8"
+	"video-master/models"
 	"video-master/services/subtitleparser"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -38,13 +39,25 @@ var deeplHTTPClient = &http.Client{
 }
 
 type SubtitleService struct {
-	ctx       context.Context
-	mu        sync.Mutex
-	pending   map[uint]*pendingSubtitleArtifact
-	taskQueue *subtitleTaskQueue
-	BaseDir   string
-	BinDir    string
-	ModelDir  string
+	ctx               context.Context
+	mu                sync.Mutex
+	transcriptionSlot chan struct{}
+	pending           map[uint]*pendingSubtitleArtifact
+	taskQueue         *subtitleTaskQueue
+	BaseDir           string
+	BinDir            string
+	ModelDir          string
+}
+
+type subtitleLocalOnlyASRContextKey struct{}
+
+func withSubtitleLocalOnlyASR(ctx context.Context) context.Context {
+	return context.WithValue(ctx, subtitleLocalOnlyASRContextKey{}, true)
+}
+
+func isSubtitleLocalOnlyASR(ctx context.Context) bool {
+	value, _ := ctx.Value(subtitleLocalOnlyASRContextKey{}).(bool)
+	return value
 }
 
 type pendingSubtitleArtifact struct {
@@ -58,9 +71,10 @@ type pendingSubtitleArtifact struct {
 
 func NewSubtitleService(baseDir string) *SubtitleService {
 	service := &SubtitleService{
-		BaseDir:  baseDir,
-		BinDir:   filepath.Join(baseDir, "bin"),
-		ModelDir: filepath.Join(baseDir, "models"),
+		BaseDir:           baseDir,
+		BinDir:            filepath.Join(baseDir, "bin"),
+		ModelDir:          filepath.Join(baseDir, "models"),
+		transcriptionSlot: make(chan struct{}, 1),
 	}
 	service.taskQueue = service.newSubtitleTaskQueue()
 	return service
@@ -416,33 +430,11 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 		return nil, fmt.Errorf(engineStatus.ReasonMessage)
 	}
 
-	// Extract Audio
+	// Extract audio and transcribe with the shared local-ASR execution slot.
 	s.emitGenerateProgress(taskID, req, "extracting-audio", 10, "提取音频...")
-	tempWav := filepath.Join(s.BaseDir, fmt.Sprintf("temp_%d.wav", req.VideoID))
-	defer os.Remove(tempWav)
-
-	if err := s.extractAudio(ctx, videoPath, tempWav); err != nil {
-		if ctx.Err() != nil {
-			s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
-			return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
-		}
-		return nil, err
-	}
-
-	// Transcribe (原文识别)
 	s.emitGenerateProgress(taskID, req, "transcribing", 20, fmt.Sprintf("使用 %s 转写音频...", engineStatus.DisplayName))
 	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
-
-	var detectedLang string
-	var segments []subtitleparser.Segment
-	switch req.Engine {
-	case SubtitleEngineWhisperX:
-		detectedLang, segments, err = s.transcribeWhisperXWithLang(ctx, tempWav, req.SourceLang, options.RecognitionConfig)
-	case SubtitleEngineQwen:
-		detectedLang, segments, err = s.transcribeQwenWithLang(ctx, tempWav, req.SourceLang)
-	default:
-		return nil, fmt.Errorf("不支持的字幕引擎: %s", req.Engine)
-	}
+	detectedLang, segments, err := s.transcribeVideoLocally(ctx, videoPath, req.Engine, req.SourceLang, options.RecognitionConfig)
 	if err != nil {
 		if ctx.Err() != nil {
 			s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
@@ -492,6 +484,111 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 	}
 	s.consumePendingSubtitle(req.VideoID)
 	return result, nil
+}
+
+// GenerateTemporaryTranscript performs local ASR without writing an SRT or sending raw audio externally.
+func (s *SubtitleService) GenerateTemporaryTranscript(ctx context.Context, video models.Video, charLimit int, recognitionConfig SubtitleRecognitionConfig) (TemporaryTranscriptEvidence, error) {
+	statuses, err := s.GetEngineStatuses()
+	if err != nil {
+		return TemporaryTranscriptEvidence{}, err
+	}
+	available := make(map[SubtitleEngine]bool, len(statuses))
+	for _, status := range statuses {
+		available[status.Engine] = status.Available
+	}
+	engines := []SubtitleEngine{SubtitleEngineWhisperX, SubtitleEngineQwen}
+	var failures []string
+	localOnlyCtx := withSubtitleLocalOnlyASR(ctx)
+	for _, engine := range engines {
+		if !available[engine] {
+			continue
+		}
+		detectedLang, segments, transcribeErr := s.transcribeVideoLocally(localOnlyCtx, video.Path, engine, "auto", recognitionConfig)
+		if transcribeErr != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", engine, transcribeErr))
+			continue
+		}
+		text := plainTranscriptText(segments, charLimit)
+		if text == "" {
+			failures = append(failures, fmt.Sprintf("%s: empty transcript", engine))
+			continue
+		}
+		return TemporaryTranscriptEvidence{Text: text, DetectedLang: detectedLang, Engine: string(engine)}, nil
+	}
+	if len(failures) > 0 {
+		return TemporaryTranscriptEvidence{}, fmt.Errorf("temporary transcript failed: %s", strings.Join(failures, "; "))
+	}
+	return TemporaryTranscriptEvidence{}, fmt.Errorf("no prepared local subtitle engine is available")
+}
+
+func (s *SubtitleService) transcribeVideoLocally(ctx context.Context, videoPath string, engine SubtitleEngine, sourceLang string, config SubtitleRecognitionConfig) (string, []subtitleparser.Segment, error) {
+	if err := s.acquireTranscriptionSlot(ctx); err != nil {
+		return "", nil, err
+	}
+	defer s.releaseTranscriptionSlot()
+	tempFile, err := os.CreateTemp("", "cineinsight-local-asr-*.wav")
+	if err != nil {
+		return "", nil, fmt.Errorf("create temporary audio: %w", err)
+	}
+	tempWav := tempFile.Name()
+	if closeErr := tempFile.Close(); closeErr != nil {
+		_ = os.Remove(tempWav)
+		return "", nil, fmt.Errorf("close temporary audio: %w", closeErr)
+	}
+	defer os.Remove(tempWav)
+	if err := s.extractAudio(ctx, videoPath, tempWav); err != nil {
+		return "", nil, err
+	}
+	switch engine {
+	case SubtitleEngineWhisperX:
+		return s.transcribeWhisperXWithLang(ctx, tempWav, sourceLang, config)
+	case SubtitleEngineQwen:
+		return s.transcribeQwenWithLang(ctx, tempWav, sourceLang)
+	default:
+		return "", nil, fmt.Errorf("不支持的字幕引擎: %s", engine)
+	}
+}
+
+func (s *SubtitleService) acquireTranscriptionSlot(ctx context.Context) error {
+	s.mu.Lock()
+	if s.transcriptionSlot == nil {
+		s.transcriptionSlot = make(chan struct{}, 1)
+	}
+	slot := s.transcriptionSlot
+	s.mu.Unlock()
+	select {
+	case slot <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (s *SubtitleService) releaseTranscriptionSlot() {
+	s.mu.Lock()
+	slot := s.transcriptionSlot
+	s.mu.Unlock()
+	if slot != nil {
+		<-slot
+	}
+}
+
+func plainTranscriptText(segments []subtitleparser.Segment, charLimit int) string {
+	var builder strings.Builder
+	for _, segment := range segments {
+		text := strings.TrimSpace(segment.Text)
+		if text == "" {
+			continue
+		}
+		if builder.Len() > 0 {
+			builder.WriteString("\n")
+		}
+		builder.WriteString(text)
+		if charLimit > 0 && len([]rune(builder.String())) >= charLimit {
+			break
+		}
+	}
+	return truncateRunes(builder.String(), charLimit)
 }
 
 func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID uint, req SubtitleGenerateRequest, srtPath string, detectedLang string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {

@@ -76,9 +76,13 @@ export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:numb
 
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
 
+export function ListSameSourceRelations(arg1:string,arg2:boolean):Promise<Array<services.VideoSameSourceReviewItem>>;
+
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function MergeTags(arg1:Array<number>,arg2:number):Promise<services.MergeTagsResult>;
+
+export function MarkSameSourceRelationRead(arg1:number):Promise<void>;
 
 export function MoveDirectory(arg1:string,arg2:string):Promise<services.FolderMigrationResult>;
 
@@ -99,6 +103,8 @@ export function RefreshVideoMetadata(arg1:number):Promise<void>;
 export function RejectAITagCandidate(arg1:number):Promise<void>;
 
 export function RejectAITagCandidatesByVideo(arg1:number):Promise<number>;
+
+export function RejectSameSourceRelation(arg1:number):Promise<void>;
 
 export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 
