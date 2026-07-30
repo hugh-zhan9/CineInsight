@@ -53,11 +53,26 @@
             <div class="ai-video-actions">
               <button type="button" class="btn-action btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
               <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
+              <button type="button" class="btn-secondary btn-compact" @click="openManualTagDialog(group)" :disabled="group.videoDeleted">手动添加标签</button>
               <button type="button" class="btn-secondary btn-compact" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
               <button type="button" class="btn-action btn-compact" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
             </div>
           </div>
           <div v-if="group.videoPath" class="ai-video-path">{{ group.videoPath }}</div>
+          <div class="ai-video-existing-tags">
+            <span class="ai-video-existing-tags-label">已有标签</span>
+            <div v-if="group.videoTags.length" class="ai-video-existing-tag-list">
+              <span
+                v-for="tag in group.videoTags"
+                :key="tag.id"
+                class="tag-badge ai-video-existing-tag"
+                :style="{ backgroundColor: tagBgColor(tag.color) }"
+              >
+                {{ tag.name }}
+              </span>
+            </div>
+            <span v-else class="ai-video-no-tags">暂无</span>
+          </div>
 
           <div
             v-for="candidate in group.candidates"
@@ -117,18 +132,29 @@
           </div>
         </div>
       </div>
+
+      <AddTagDialog
+        :visible="manualTagDialog.show"
+        :video="manualTagDialog.video"
+        :tags="tags"
+        @close="closeManualTagDialog"
+        @tag-added="handleManualTagAdded"
+      />
     </div>
   </div>
 </template>
 
 <script>
 import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import AddTagDialog from './AddTagDialog.vue';
 import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
 
 export default {
   name: 'AITagReviewDialog',
+  components: { AddTagDialog },
   props: {
     visible: { type: Boolean, default: false },
+    tags: { type: Array, default: () => [] },
   },
   emits: ['close', 'changed'],
   data() {
@@ -140,6 +166,7 @@ export default {
       error: '',
       reviewSearch: '',
       processingIds: [],
+      manualTagDialog: { show: false, video: null },
       rejectConfirm: { show: false, videoId: 0, videoName: '', count: 0, candidateIds: [] },
       renameConfirm: { show: false, videoId: 0, videoName: '', videoPath: '', newName: '', ext: '(无)' },
     };
@@ -239,6 +266,33 @@ export default {
       await this.withProcessing(`preview-${videoId}`, async () => {
         await PreviewExternally(videoId);
       });
+    },
+    openManualTagDialog(group) {
+      if (!group?.videoId || group.videoDeleted) return;
+      this.manualTagDialog = {
+        show: true,
+        video: {
+          ...(group.video || {}),
+          id: group.videoId,
+          name: group.videoName,
+          path: group.videoPath,
+          tags: group.videoTags,
+        },
+      };
+    },
+    closeManualTagDialog() {
+      this.manualTagDialog = { show: false, video: null };
+    },
+    async handleManualTagAdded() {
+      await this.loadCandidates();
+      this.$emit('changed');
+    },
+    tagBgColor(hex) {
+      if (!hex || !hex.startsWith('#')) return hex;
+      const r = parseInt(hex.slice(1, 3), 16);
+      const g = parseInt(hex.slice(3, 5), 16);
+      const b = parseInt(hex.slice(5, 7), 16);
+      return `rgba(${r},${g},${b},0.35)`;
     },
     openRenameDialog(group) {
       if (!group?.videoId) return;
@@ -452,6 +506,38 @@ export default {
   color: var(--text-muted);
   font-size: 12px;
   overflow-wrap: anywhere;
+}
+
+.ai-video-existing-tags {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  min-width: 0;
+}
+
+.ai-video-existing-tags-label {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.ai-video-existing-tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ai-video-existing-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+
+.ai-video-no-tags {
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .ai-candidate-row {

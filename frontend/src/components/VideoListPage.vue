@@ -295,6 +295,7 @@
 
     <AITagReviewDialog
       :visible="aiTagReviewDialog.show"
+      :tags="tags"
       @close="aiTagReviewDialog.show = false"
       @changed="handleAITagCandidatesChanged"
     />
