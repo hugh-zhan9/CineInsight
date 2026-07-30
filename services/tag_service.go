@@ -79,6 +79,7 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 			}
 
 			sortOrder := namespaceOrders[input.Namespace]
+			nameChanged := tag.ID != 0 && tag.Name != input.Name
 			changed := tag.ID == 0 ||
 				tag.Name != input.Name ||
 				tag.Namespace != input.Namespace ||
@@ -107,6 +108,16 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 					}
 					tag.IsActive = false
 				}
+				if nameChanged {
+					if err := tx.Model(&models.AITagCandidate{}).
+						Where("matched_tag_id = ? AND status = ?", tag.ID, models.AITagCandidateStatusPending).
+						Updates(map[string]interface{}{
+							"suggested_name":  tag.Name,
+							"normalized_name": normalizeAITagName(tag.Name),
+						}).Error; err != nil {
+						return err
+					}
+				}
 				libraryChanged = true
 			}
 			submittedIDs[tag.ID] = struct{}{}
@@ -132,6 +143,13 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 		}
 		if err := tx.Model(&models.AITagCandidate{}).
 			Where("status = ?", models.AITagCandidateStatusPending).
+			Where(`matched_tag_id IS NULL OR NOT EXISTS (
+				SELECT 1 FROM tags
+				WHERE tags.id = ai_tag_candidates.matched_tag_id
+					AND tags.deleted_at IS NULL
+					AND tags.is_system = ?
+					AND tags.is_active = ?
+			)`, true, true).
 			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 			return err
 		}
