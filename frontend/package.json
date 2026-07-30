@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "npm run test:add-tag-selection && npm run test:ai-tag-library && npm run test:ai-tag-review && npm run test:video-list-ui && npm run test:subtitle-workflow && npm run test:virtual-list && npm run test:short-feed && npm run test:migration-tag-management && npm run test:trash-restore && npm run test:subtitle-seek",
+    "test": "npm run test:add-tag-selection && npm run test:ai-tag-library && npm run test:ai-tag-review && npm run test:video-list-ui && npm run test:subtitle-workflow && npm run test:virtual-list && npm run test:short-feed && npm run test:migration-tag-management && npm run test:trash-restore && npm run test:subtitle-seek && npm run test:visual-library && npm run test:library-2",
     "test:add-tag-selection": "node scripts/add-tag-selection.test.mjs",
     "test:ai-tag-library": "node scripts/ai-tag-library.test.mjs",
     "test:ai-tag-review": "node scripts/ai-tag-review.test.mjs",
@@ -17,7 +17,9 @@
     "test:short-feed": "node scripts/short-feed.test.mjs",
     "test:migration-tag-management": "node scripts/migration-tag-management.test.mjs",
     "test:trash-restore": "node scripts/trash-restore.test.mjs",
-    "test:subtitle-seek": "node scripts/subtitle-seek.test.mjs"
+    "test:subtitle-seek": "node scripts/subtitle-seek.test.mjs",
+    "test:visual-library": "node scripts/visual-library.test.mjs",
+    "test:library-2": "node scripts/library-2.test.mjs"
   },
   "dependencies": {
     "esbuild": "^0.27.3",

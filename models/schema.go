@@ -17,5 +17,6 @@ func AllModels() []interface{} {
 		&ShortFeedTagPreference{},
 		&Settings{},
 		&ScanDirectory{},
+		&SavedLibraryView{},
 	}
 }

@@ -1,5 +1,39 @@
 export namespace models {
 
+	export class SavedLibraryView {
+	    id: number;
+	    name: string;
+	    search_mode: string;
+	    keyword: string;
+	    smart_view: string;
+	    tag_ids_json: string;
+	    min_size: number;
+	    max_size: number;
+	    min_height: number;
+	    max_height: number;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SavedLibraryView(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.search_mode = source["search_mode"];
+	        this.keyword = source["keyword"];
+	        this.smart_view = source["smart_view"];
+	        this.tag_ids_json = source["tag_ids_json"];
+	        this.min_size = source["min_size"];
+	        this.max_size = source["max_size"];
+	        this.min_height = source["min_height"];
+	        this.max_height = source["max_height"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class ScanDirectory {
 	    id: number;
 	    path: string;
@@ -130,6 +164,11 @@ export namespace models {
 	    play_count: number;
 	    random_play_count: number;
 	    last_played_at?: string;
+	    is_favorite: boolean;
+	    is_watched: boolean;
+	    watch_position_seconds: number;
+	    watch_progress_updated_at?: string;
+	    watched_at?: string;
 	    tags: Tag[];
 	    created_at: string;
 	    updated_at: string;
@@ -153,6 +192,11 @@ export namespace models {
 	        this.play_count = source["play_count"];
 	        this.random_play_count = source["random_play_count"];
 	        this.last_played_at = source["last_played_at"];
+	        this.is_favorite = source["is_favorite"];
+	        this.is_watched = source["is_watched"];
+	        this.watch_position_seconds = source["watch_position_seconds"];
+	        this.watch_progress_updated_at = source["watch_progress_updated_at"];
+	        this.watched_at = source["watched_at"];
 	        this.tags = this.convertValues(source["tags"], Tag);
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -384,6 +428,46 @@ export namespace services {
 		}
 	}
 
+	export class CleanupSameSourceGroup {
+	    relation_id: number;
+	    preferred: models.Video;
+	    alternative: models.Video;
+	    confidence: string;
+	    reason: string;
+	    estimated_savings: number;
+
+	    static createFrom(source: any = {}) {
+	        return new CleanupSameSourceGroup(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.relation_id = source["relation_id"];
+	        this.preferred = this.convertValues(source["preferred"], models.Video);
+	        this.alternative = this.convertValues(source["alternative"], models.Video);
+	        this.confidence = source["confidence"];
+	        this.reason = source["reason"];
+	        this.estimated_savings = source["estimated_savings"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class CleanupDuplicateGroup {
 	    original: models.Video;
 	    candidates: models.Video[];
@@ -420,6 +504,7 @@ export namespace services {
 	}
 	export class CleanupAnalysis {
 	    duplicate_groups: CleanupDuplicateGroup[];
+	    same_source_groups: CleanupSameSourceGroup[];
 	    low_duration: models.Video[];
 	    low_resolution: models.Video[];
 
@@ -430,6 +515,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.duplicate_groups = this.convertValues(source["duplicate_groups"], CleanupDuplicateGroup);
+	        this.same_source_groups = this.convertValues(source["same_source_groups"], CleanupSameSourceGroup);
 	        this.low_duration = this.convertValues(source["low_duration"], models.Video);
 	        this.low_resolution = this.convertValues(source["low_resolution"], models.Video);
 	    }
@@ -473,6 +559,7 @@ export namespace services {
 	        this.path = source["path"];
 	    }
 	}
+
 	export class CleanupStatus {
 	    running: boolean;
 	    completed: boolean;
@@ -553,6 +640,64 @@ export namespace services {
 	        this.warning = source["warning"];
 	    }
 	}
+	export class LibraryFilter {
+	    search_mode: string;
+	    keyword: string;
+	    smart_view: string;
+	    tag_ids: number[];
+	    min_size: number;
+	    max_size: number;
+	    min_height: number;
+	    max_height: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryFilter(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.search_mode = source["search_mode"];
+	        this.keyword = source["keyword"];
+	        this.smart_view = source["smart_view"];
+	        this.tag_ids = source["tag_ids"];
+	        this.min_size = source["min_size"];
+	        this.max_size = source["max_size"];
+	        this.min_height = source["min_height"];
+	        this.max_height = source["max_height"];
+	    }
+	}
+	export class LibrarySubtitleHit {
+	    video_id: number;
+	    segment: subtitleparser.Segment;
+
+	    static createFrom(source: any = {}) {
+	        return new LibrarySubtitleHit(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.segment = this.convertValues(source["segment"], subtitleparser.Segment);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class MergeTagsResult {
 	    target_tag_id: number;
 	    merged_tag_count: number;
@@ -616,6 +761,7 @@ export namespace services {
 	    dispatch_succeeded: boolean;
 	    user_message?: string;
 	    reason_code?: string;
+	    selection_reason?: string;
 	    reconcile_result?: PlaybackReconcileResult;
 
 	    static createFrom(source: any = {}) {
@@ -628,6 +774,7 @@ export namespace services {
 	        this.dispatch_succeeded = source["dispatch_succeeded"];
 	        this.user_message = source["user_message"];
 	        this.reason_code = source["reason_code"];
+	        this.selection_reason = source["selection_reason"];
 	        this.reconcile_result = this.convertValues(source["reconcile_result"], PlaybackReconcileResult);
 	    }
 
@@ -725,6 +872,68 @@ export namespace services {
 		}
 	}
 
+	export class RandomPlayRequest {
+	    filter: LibraryFilter;
+	    mode: string;
+	    exclude_ids: number[];
+
+	    static createFrom(source: any = {}) {
+	        return new RandomPlayRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.mode = source["mode"];
+	        this.exclude_ids = source["exclude_ids"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SavedLibraryViewInput {
+	    name: string;
+	    search_mode: string;
+	    keyword: string;
+	    smart_view: string;
+	    tag_ids: number[];
+	    min_size: number;
+	    max_size: number;
+	    min_height: number;
+	    max_height: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SavedLibraryViewInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.search_mode = source["search_mode"];
+	        this.keyword = source["keyword"];
+	        this.smart_view = source["smart_view"];
+	        this.tag_ids = source["tag_ids"];
+	        this.min_size = source["min_size"];
+	        this.max_size = source["max_size"];
+	        this.min_height = source["min_height"];
+	        this.max_height = source["max_height"];
+	    }
+	}
 	export class ScanSyncError {
 	    operation: string;
 	    directory?: string;

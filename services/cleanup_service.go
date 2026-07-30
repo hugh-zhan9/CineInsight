@@ -31,10 +31,20 @@ type CleanupDuplicateGroup struct {
 	Reason     string         `json:"reason"`
 }
 
+type CleanupSameSourceGroup struct {
+	RelationID       uint         `json:"relation_id"`
+	Preferred        models.Video `json:"preferred"`
+	Alternative      models.Video `json:"alternative"`
+	Confidence       string       `json:"confidence"`
+	Reason           string       `json:"reason"`
+	EstimatedSavings int64        `json:"estimated_savings"`
+}
+
 type CleanupAnalysis struct {
-	DuplicateGroups []CleanupDuplicateGroup `json:"duplicate_groups"`
-	LowDuration     []models.Video          `json:"low_duration"`
-	LowResolution   []models.Video          `json:"low_resolution"`
+	DuplicateGroups  []CleanupDuplicateGroup  `json:"duplicate_groups"`
+	SameSourceGroups []CleanupSameSourceGroup `json:"same_source_groups"`
+	LowDuration      []models.Video           `json:"low_duration"`
+	LowResolution    []models.Video           `json:"low_resolution"`
 }
 
 type CleanupProgress struct {
@@ -56,9 +66,10 @@ type CleanupStatus struct {
 }
 
 type CleanupService struct {
-	ctx    context.Context
-	mu     sync.Mutex
-	status CleanupStatus
+	ctx                  context.Context
+	mu                   sync.Mutex
+	status               CleanupStatus
+	invalidatedDuringRun bool
 }
 
 func (s *CleanupService) SetContext(ctx context.Context) {
@@ -85,6 +96,7 @@ func (s *CleanupService) StartAnalysis(criteria CleanupCriteria) (*CleanupStatus
 			Total:   0,
 		},
 	}
+	s.invalidatedDuringRun = false
 	status := s.statusSnapshotLocked()
 	s.mu.Unlock()
 
@@ -94,6 +106,13 @@ func (s *CleanupService) StartAnalysis(criteria CleanupCriteria) (*CleanupStatus
 		defer s.mu.Unlock()
 		now := time.Now()
 		s.status.Running = false
+		if s.invalidatedDuringRun {
+			s.status.Completed = false
+			s.status.Error = ""
+			s.status.Analysis = nil
+			s.invalidatedDuringRun = false
+			return
+		}
 		s.status.Completed = err == nil
 		s.status.UpdatedAt = &now
 		if err != nil {
@@ -113,6 +132,22 @@ func (s *CleanupService) Status() *CleanupStatus {
 	defer s.mu.Unlock()
 	status := s.statusSnapshotLocked()
 	return &status
+}
+
+// InvalidateAnalysis 丢弃已完成的缓存结果；运行中的分析保持不变。
+func (s *CleanupService) InvalidateAnalysis() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.status.Running {
+		s.invalidatedDuringRun = true
+		return
+	}
+	s.status.Completed = false
+	s.status.Error = ""
+	s.status.Analysis = nil
+	s.status.Progress = CleanupProgress{}
+	now := time.Now()
+	s.status.UpdatedAt = &now
 }
 
 func (s *CleanupService) statusSnapshotLocked() CleanupStatus {
@@ -222,20 +257,77 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 		})
 	}
 
+	exactPairs := make(map[[2]uint]struct{})
+	for _, group := range result.DuplicateGroups {
+		members := append([]models.Video{group.Original}, group.Candidates...)
+		for i := 0; i < len(members); i++ {
+			for j := i + 1; j < len(members); j++ {
+				exactPairs[cleanupVideoPairKey(members[i].ID, members[j].ID)] = struct{}{}
+			}
+		}
+	}
+	sameSourceGroups, err := loadCleanupSameSourceGroups(exactPairs)
+	if err != nil {
+		return nil, err
+	}
+	result.SameSourceGroups = sameSourceGroups
+
 	sort.Slice(result.DuplicateGroups, func(i, j int) bool {
 		return result.DuplicateGroups[i].Original.ID < result.DuplicateGroups[j].Original.ID
 	})
 
-	log.Printf("[Cleanup] analysis completed elapsed=%s duplicate_groups=%d low_duration=%d low_resolution=%d hash_candidates=%d",
+	log.Printf("[Cleanup] analysis completed elapsed=%s duplicate_groups=%d same_source_groups=%d low_duration=%d low_resolution=%d hash_candidates=%d",
 		time.Since(startedAt).Round(time.Millisecond),
-		len(result.DuplicateGroups), len(result.LowDuration), len(result.LowResolution), len(hashCandidates),
+		len(result.DuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution), len(hashCandidates),
 	)
 	s.emitProgress("done", len(hashCandidates), len(hashCandidates), "", fmt.Sprintf(
-		"分析完成：重复组 %d，短视频 %d，低清视频 %d。",
-		len(result.DuplicateGroups), len(result.LowDuration), len(result.LowResolution),
+		"分析完成：重复组 %d，同源候选 %d，短视频 %d，低清视频 %d。",
+		len(result.DuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution),
 	))
 
 	return result, nil
+}
+
+func loadCleanupSameSourceGroups(exactPairs map[[2]uint]struct{}) ([]CleanupSameSourceGroup, error) {
+	var relations []models.VideoSameSourceRelation
+	err := database.DB.Model(&models.VideoSameSourceRelation{}).
+		Joins("INNER JOIN videos AS same_source_video_a ON same_source_video_a.id = video_same_source_relations.video_a_id AND same_source_video_a.deleted_at IS NULL").
+		Joins("INNER JOIN videos AS same_source_video_b ON same_source_video_b.id = video_same_source_relations.video_b_id AND same_source_video_b.deleted_at IS NULL").
+		Preload("VideoA.Tags").
+		Preload("VideoB.Tags").
+		Where("video_same_source_relations.status = ?", models.VideoSameSourceStatusDetected).
+		Order("video_same_source_relations.id ASC").
+		Find(&relations).Error
+	if err != nil {
+		return nil, err
+	}
+
+	groups := make([]CleanupSameSourceGroup, 0, len(relations))
+	for _, relation := range relations {
+		if _, duplicate := exactPairs[cleanupVideoPairKey(relation.VideoAID, relation.VideoBID)]; duplicate {
+			continue
+		}
+		preferred, alternative := relation.VideoA, relation.VideoB
+		if isPreferredCleanupVideo(alternative, preferred) {
+			preferred, alternative = alternative, preferred
+		}
+		reason := relation.Reasoning
+		if reason == "" {
+			reason = "画面指纹与 AI 复核判断为同源视频"
+		}
+		groups = append(groups, CleanupSameSourceGroup{
+			RelationID: relation.ID, Preferred: preferred, Alternative: alternative,
+			Confidence: relation.Confidence, Reason: reason, EstimatedSavings: alternative.Size,
+		})
+	}
+	return groups, nil
+}
+
+func cleanupVideoPairKey(a, b uint) [2]uint {
+	if a > b {
+		a, b = b, a
+	}
+	return [2]uint{a, b}
 }
 
 func shouldEmitCleanupProgress(current int, total int, every int) bool {
@@ -273,6 +365,10 @@ func buildDuplicateBucketKey(size int64, hash string) string {
 }
 
 func isPreferredOriginal(a, b models.Video) bool {
+	return isPreferredCleanupVideo(a, b)
+}
+
+func isPreferredCleanupVideo(a, b models.Video) bool {
 	aPixels := a.Width * a.Height
 	bPixels := b.Width * b.Height
 	if aPixels != bPixels {
@@ -280,6 +376,9 @@ func isPreferredOriginal(a, b models.Video) bool {
 	}
 	if a.Size != b.Size {
 		return a.Size > b.Size
+	}
+	if len(a.Tags) != len(b.Tags) {
+		return len(a.Tags) > len(b.Tags)
 	}
 	return a.ID < b.ID
 }

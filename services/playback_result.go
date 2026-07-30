@@ -7,6 +7,7 @@ type PlaybackAttemptResult struct {
 	DispatchSucceeded bool                     `json:"dispatch_succeeded"`
 	UserMessage       string                   `json:"user_message,omitempty"`
 	ReasonCode        string                   `json:"reason_code,omitempty"`
+	SelectionReason   string                   `json:"selection_reason,omitempty"`
 	ReconcileResult   *PlaybackReconcileResult `json:"reconcile_result,omitempty"`
 }
 

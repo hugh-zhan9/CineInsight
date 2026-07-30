@@ -5,7 +5,7 @@ const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vu
 const videoRowSource = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const previewSource = readFileSync(new URL('../src/components/PreviewDrawer.vue', import.meta.url), 'utf8');
 
-assert.match(videoListSource, /video\._subtitleMatchStartMs = match\.segment\?\.start_time_ms/, 'subtitle results should retain the first hit start time');
+assert.match(videoListSource, /_subtitleMatchStartMs: segment\.start_time_ms/, 'subtitle results should retain the first hit start time');
 assert.match(videoListSource, /:start-time-ms="previewStartTimeMs"/, 'preview drawer should receive the requested subtitle time');
 assert.match(videoListSource, /this\.previewStartTimeMs = null/, 'ordinary or closed previews should clear stale seek time');
 assert.match(videoListSource, /:subtitle-mode="isSubtitleSearchActive\(\)"/, 'subtitle results should use the virtual list in subtitle mode');

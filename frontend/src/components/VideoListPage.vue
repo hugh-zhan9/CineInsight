@@ -20,6 +20,9 @@
         </div>
 
         <div class="filter-group">
+          <select v-model="smartView" @change="handleSearch(true)" class="select-input" aria-label="智能视图">
+            <option v-for="view in smartViewOptions" :key="view.value" :value="view.value">{{ view.label }}</option>
+          </select>
           <select v-model="selectedSizeRange" @change="handleSearch(true)" class="select-input">
             <option value="all">体积：全部</option>
             <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
@@ -33,7 +36,22 @@
       </div>
 
       <div class="action-group">
-        <button @click="playRandom" class="btn-random">随机播放</button>
+        <select v-model="selectedSavedViewID" @change="applySelectedSavedView" class="select-input saved-view-select" aria-label="保存视图">
+          <option :value="0">保存视图</option>
+          <option v-for="view in savedViews" :key="view.id" :value="view.id">{{ view.name }}</option>
+        </select>
+        <button type="button" class="btn-action" @click="openSaveViewDialog">保存当前视图</button>
+        <button v-if="selectedSavedViewID" type="button" class="btn-action" @click="deleteSelectedSavedView">删除该视图</button>
+        <div class="layout-toggle" aria-label="片库布局">
+          <button type="button" :class="['btn-action', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
+          <button type="button" :class="['btn-action', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
+        </div>
+        <select v-model="randomMode" class="select-input" aria-label="随机播放模式">
+          <option value="balanced">均衡随机</option>
+          <option value="unwatched">随机未看</option>
+          <option value="favorites">随机收藏</option>
+        </select>
+        <button @click="playRandom" class="btn-random">按当前条件随机</button>
         <button
           @click="toggleSelectAllVisible"
           class="btn-secondary"
@@ -154,7 +172,8 @@
         :items="videos"
         :loading="loading"
         :has-more="hasMore"
-        :virtualization-enabled="homeListVirtualizationEnabled"
+        :virtualization-enabled="homeListVirtualizationEnabled && viewMode === 'list'"
+        :layout-mode="viewMode"
         :subtitle-mode="isSubtitleSearchActive()"
         :preview-open="previewOpen"
         :query-key="virtualListQueryKey"
@@ -170,8 +189,11 @@
             :generating-subtitle-ids="generatingSubtitleIds"
             :deleting-ids="deletingIds"
             :selected="isVideoSelected(video.id)"
+            :layout-mode="viewMode"
             @preview="openPreview"
             @play="playVideo"
+            @toggle-favorite="toggleVideoFavorite"
+            @toggle-watched="toggleVideoWatched"
             @open-directory="openDirectory"
             @generate-subtitle="generateSubtitle"
             @subtitle-preview="openSubtitlePreview"
@@ -200,8 +222,10 @@
       :video="selectedPreviewVideo"
       :session="previewSession"
       :start-time-ms="previewStartTimeMs"
+      :resume-position-seconds="resumePositionFor(selectedPreviewVideo)"
       @close="closePreview"
       @preview-externally="previewExternally"
+      @watch-progress="handlePreviewWatchProgress"
     />
 
     <TrashRestoreDialog
@@ -240,6 +264,28 @@
         <div class="modal-actions">
           <button @click="renameDialog.show = false" class="btn-secondary">取消</button>
           <button @click="executeRename" class="btn-primary">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="saveViewDialog.show" class="modal-overlay">
+      <div class="modal download-modal">
+        <h3>保存当前片库视图</h3>
+        <input
+          ref="saveViewNameInput"
+          v-model="saveViewDialog.name"
+          type="text"
+          maxlength="80"
+          class="search-input rename-input"
+          placeholder="输入视图名称"
+          @keyup.enter="saveCurrentView"
+        />
+        <p v-if="saveViewDialog.error" class="cleanup-error">{{ saveViewDialog.error }}</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" @click="saveViewDialog.show = false">取消</button>
+          <button type="button" class="btn-primary" :disabled="saveViewDialog.saving" @click="saveCurrentView">
+            {{ saveViewDialog.saving ? '保存中...' : '保存' }}
+          </button>
         </div>
       </div>
     </div>
@@ -324,9 +370,46 @@
           <div v-else-if="cleanupDialog.analysis" class="cleanup-body">
             <div class="cleanup-summary">
               <span>重复组 {{ cleanupDialog.analysis.duplicate_groups?.length || 0 }}</span>
+              <span>疑似同源 {{ cleanupDialog.analysis.same_source_groups?.length || 0 }}</span>
               <span>短视频 {{ cleanupDialog.analysis.low_duration?.length || 0 }}</span>
               <span>低清视频 {{ cleanupDialog.analysis.low_resolution?.length || 0 }}</span>
               <span>已选 {{ cleanupSelection.length }}</span>
+            </div>
+
+            <div v-if="cleanupDialog.analysis.same_source_groups?.length" class="cleanup-section">
+              <h4 class="cleanup-section-title">疑似同源（不会默认选中）</h4>
+              <div
+                v-for="group in cleanupDialog.analysis.same_source_groups"
+                :key="`same-source-${group.relation_id}`"
+                class="cleanup-card"
+              >
+                <div class="cleanup-select-row cleanup-select-row--original">
+                  <strong>建议保留：</strong>
+                  <div class="cleanup-item-text">
+                    <span class="cleanup-item-main">{{ group.preferred?.name }} · {{ group.preferred?.resolution || '未知分辨率' }} · {{ formatDuration(group.preferred?.duration) || '00:00' }}</span>
+                    <span v-if="group.preferred?.path" class="cleanup-item-path" :title="group.preferred.path">{{ group.preferred.path }}</span>
+                  </div>
+                  <div class="cleanup-item-actions">
+                    <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(group.preferred)">预览保留项</button>
+                  </div>
+                </div>
+                <p><strong>判断：</strong>{{ group.reason }}<span v-if="group.confidence"> · 置信度 {{ group.confidence }}</span></p>
+                <div class="cleanup-select-row">
+                  <input
+                    type="checkbox"
+                    :checked="isCleanupSelected(group.alternative?.id)"
+                    @change="toggleCleanupSelection(group.alternative?.id)"
+                  />
+                  <span class="cleanup-item-text">
+                    <span class="cleanup-item-main">可清理版本：{{ group.alternative?.name }} · 预计释放 {{ formatFileSize(group.estimated_savings) }}</span>
+                    <span v-if="group.alternative?.path" class="cleanup-item-path" :title="group.alternative.path">{{ group.alternative.path }}</span>
+                  </span>
+                  <span class="cleanup-item-actions">
+                    <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(group.alternative)">预览该版本</button>
+                    <button type="button" class="btn-secondary btn-compact" @click="rejectCleanupSameSource(group)">不是同源</button>
+                  </span>
+                </div>
+              </div>
             </div>
 
             <div v-if="cleanupCandidateCount" class="cleanup-toolbar">
@@ -424,7 +507,7 @@
             </div>
 
             <div
-              v-if="!(cleanupDialog.analysis.duplicate_groups?.length || cleanupDialog.analysis.low_duration?.length || cleanupDialog.analysis.low_resolution?.length)"
+              v-if="!(cleanupDialog.analysis.duplicate_groups?.length || cleanupDialog.analysis.same_source_groups?.length || cleanupDialog.analysis.low_duration?.length || cleanupDialog.analysis.low_resolution?.length)"
               class="cleanup-empty"
             >
               当前没有命中轻量清理规则的候选项。
@@ -583,6 +666,17 @@
   min-width: 0;
   align-items: center;
   gap: 10px;
+}
+.layout-toggle {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+}
+.layout-toggle .btn-action.active {
+  background: var(--accent-color);
+  color: white;
 }
 
 .filter-group {
@@ -1004,7 +1098,7 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1030,8 +1124,27 @@ export default {
   data() {
     return {
       videos: [],
+      viewMode: window.localStorage?.getItem('cineinsight-library-layout') === 'grid' ? 'grid' : 'list',
       searchKeyword: '',
       searchMode: 'file',
+      smartView: '',
+      smartViewOptions: [
+        { label: '全部视频', value: '' },
+        { label: '继续观看', value: 'continue_watching' },
+        { label: '收藏', value: 'favorites' },
+        { label: '最近播放', value: 'recently_played' },
+        { label: '未看', value: 'unwatched' },
+        { label: '已看', value: 'watched' },
+        { label: '最近添加', value: 'recently_added' },
+        { label: '未打标签', value: 'untagged' },
+        { label: '无字幕', value: 'no_subtitle' },
+        { label: '路径失效', value: 'stale' }
+      ],
+      savedViews: [],
+      selectedSavedViewID: 0,
+      saveViewDialog: { show: false, name: '', saving: false, error: '' },
+      randomMode: 'balanced',
+      recentRandomVideoIDs: [],
       selectedTags: [],
       selectedSizeRange: 'all',
       selectedResRange: 'all',
@@ -1055,6 +1168,8 @@ export default {
       cursorScore: 0,
       cursorSize: 0,
       cursorID: 0,
+      cursorLastPlayedAt: '',
+      cursorRecentPlayedID: 0,
       pageSize: 20,
       loading: false,
       hasMore: true,
@@ -1135,6 +1250,7 @@ export default {
   mounted() {
     this.configureHomeListVirtualization();
     this.loadVideos();
+    this.loadSavedLibraryViews();
     this.refreshSubtitleQueue();
     this.refreshAITagSummary();
     this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
@@ -1263,6 +1379,7 @@ export default {
       return JSON.stringify({
         mode: this.searchMode,
         keyword: this.currentQueryKeyword(),
+        smartView: this.smartView,
         tags: [...this.selectedTags].sort((a, b) => a - b),
         size: this.selectedSizeRange === 'all' ? 'all' : `${this.selectedSizeRange.min}:${this.selectedSizeRange.max}`,
         res: this.selectedResRange === 'all' ? 'all' : `${this.selectedResRange.min}:${this.selectedResRange.max}`
@@ -1696,6 +1813,11 @@ export default {
           byID.set(candidate.id, candidate);
         }
       }
+      for (const group of analysis.same_source_groups || []) {
+        if (group.alternative?.id) {
+          byID.set(group.alternative.id, group.alternative);
+        }
+      }
       for (const video of analysis.low_duration || []) {
         byID.set(video.id, video);
       }
@@ -1725,6 +1847,20 @@ export default {
       if (!video) return;
       await this.openPreview(video);
     },
+    async rejectCleanupSameSource(group) {
+      if (!group?.relation_id) return;
+      try {
+        await RejectSameSourceRelation(group.relation_id);
+        this.cleanupDialog.analysis.same_source_groups = (this.cleanupDialog.analysis.same_source_groups || [])
+          .filter(item => item.relation_id !== group.relation_id);
+        if (group.alternative?.id) {
+          this.cleanupSelection = this.cleanupSelection.filter(id => id !== group.alternative.id);
+        }
+        await this.refreshAITagSummary();
+      } catch (err) {
+        alert('更新同源判断失败: ' + err);
+      }
+    },
     async trashSelectedCleanupCandidates() {
       const selectedVideos = this.getAllCleanupCandidates().filter(video => this.cleanupSelection.includes(video.id));
       if (selectedVideos.length === 0) {
@@ -1742,7 +1878,7 @@ export default {
         this.cleanupSelection = selectedIDs.filter(id => failedIDs.has(id));
         await this.showDeleteUndo(succeededIDs);
         await this.reloadCurrentView();
-        await this.openCleanupDialog();
+        await this.reanalyzeCleanupCandidates();
         if (result?.failed > 0) {
           const firstError = result.errors?.[0];
           alert(`批量清理完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
@@ -2058,6 +2194,10 @@ export default {
       const weight = this.settings.play_weight || 2.0;
       return video.play_count * weight + video.random_play_count;
     },
+    setViewMode(mode) {
+      this.viewMode = mode === 'grid' ? 'grid' : 'list';
+      window.localStorage?.setItem('cineinsight-library-layout', this.viewMode);
+    },
     currentQueryKeyword() {
       return this.searchKeyword.trim();
     },
@@ -2072,6 +2212,9 @@ export default {
       return JSON.stringify({
         tagCount: Array.isArray(video?.tags) ? video.tags.length : 0,
         isStale: !!video?.is_stale,
+        isFavorite: !!video?.is_favorite,
+        isWatched: !!video?.is_watched,
+        watchPosition: Math.floor(Number(video?.watch_position_seconds || 0)),
         subtitleBucket: this.subtitleLengthBucket(video?._subtitleMatchText)
       });
     },
@@ -2080,6 +2223,36 @@ export default {
     },
     hasStructuredFilters() {
       return this.selectedTags.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all';
+    },
+    currentLibraryFilter() {
+      const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
+      return {
+        search_mode: this.searchMode,
+        keyword: this.currentQueryKeyword(),
+        smart_view: this.smartView,
+        tag_ids: [...this.selectedTags],
+        min_size: minSize,
+        max_size: maxSize,
+        min_height: minHeight,
+        max_height: maxHeight
+      };
+    },
+    matchesSmartView(video) {
+      switch (this.smartView) {
+        case 'favorites': return !!video.is_favorite;
+        case 'continue_watching': return !video.is_watched && Number(video.watch_position_seconds || 0) > 0;
+        case 'unwatched': return !video.is_watched;
+        case 'watched': return !!video.is_watched;
+        case 'recently_played': return !!video.last_played_at;
+        case 'recently_added': {
+          const createdAt = new Date(video.created_at || 0).getTime();
+          return createdAt > 0 && createdAt >= Date.now() - 30 * 24 * 60 * 60 * 1000;
+        }
+        case 'untagged': return !Array.isArray(video.tags) || video.tags.length === 0;
+        case 'no_subtitle': return !this.isSubtitleSearchActive();
+        case 'stale': return !!video.is_stale;
+        default: return true;
+      }
     },
     async loadVideos() {
       if (this.loading || !this.hasMore) return;
@@ -2098,50 +2271,42 @@ export default {
           existingVideos: this.videos.length
         });
 
-        if (this.isSubtitleSearchActive(keyword)) {
-          const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
-          const matches = await SearchSubtitleMatchesWithFilters(keyword, this.selectedTags, minSize, maxSize, minHeight, maxHeight, 200);
-          const deduped = new Map();
-          for (const match of matches || []) {
-            const video = match.video;
-            if (!video || deduped.has(video.id)) continue;
-            video._subtitleMatchText = match.segment?.text || '';
-            video._subtitleMatchStartMs = match.segment?.start_time_ms;
-            video._subtitleMatchEndMs = match.segment?.end_time_ms;
-            deduped.set(video.id, video);
-          }
-          newVideos = Array.from(deduped.values());
-          this.videos = newVideos;
-          this.hasMore = false;
-          this.debugLog('loadVideos subtitle mode resolved', {
-            count: newVideos.length,
-            sample: newVideos.slice(0, 3).map(video => ({ id: video.id, name: video.name }))
-          });
-          return;
-        }
-
-        if (keyword || this.hasStructuredFilters()) {
-          const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
-          newVideos = await SearchVideosWithFilters(
-            keyword,
-            this.selectedTags,
-            minSize,
-            maxSize,
-            minHeight,
-            maxHeight,
+        if (this.smartView === 'recently_played') {
+          newVideos = await ListRecentlyPlayedWithFilter(
+            this.currentLibraryFilter(),
+            this.cursorLastPlayedAt,
+            this.cursorRecentPlayedID,
+            this.pageSize
+          );
+        } else {
+          newVideos = await SearchLibraryVideos(
+            this.currentLibraryFilter(),
             this.cursorScore,
             this.cursorSize,
             this.cursorID,
             this.pageSize
           );
-        } else {
-          newVideos = await GetVideosPaginated(this.cursorScore, this.cursorSize, this.cursorID, this.pageSize);
+        }
+
+        if (this.isSubtitleSearchActive(keyword) && newVideos.length > 0) {
+          const hits = await GetLibrarySubtitleHits(keyword, newVideos.map(video => video.id));
+          const hitsByVideoID = new Map((hits || []).map(hit => [hit.video_id, hit.segment]));
+          newVideos = newVideos.map(video => {
+            const segment = hitsByVideoID.get(video.id);
+            if (!segment) return video;
+            return {
+              ...video,
+              _subtitleMatchText: segment.text || '',
+              _subtitleMatchStartMs: segment.start_time_ms,
+              _subtitleMatchEndMs: segment.end_time_ms
+            };
+          });
         }
 
         this.debugLog('loadVideos query resolved', {
           count: newVideos.length,
           sample: newVideos.slice(0, 3).map(video => ({ id: video.id, name: video.name, path: video.path })),
-          mode: keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
+          mode: this.smartView || keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
         });
 
         if (newVideos.length < this.pageSize) {
@@ -2150,9 +2315,14 @@ export default {
         if (newVideos.length > 0) {
           this.videos.push(...newVideos);
           const last = newVideos[newVideos.length - 1];
-          this.cursorScore = this.calculateScore(last);
-          this.cursorSize = last.size;
-          this.cursorID = last.id;
+          if (this.smartView === 'recently_played') {
+            this.cursorLastPlayedAt = last.last_played_at || '';
+            this.cursorRecentPlayedID = last.id;
+          } else {
+            this.cursorScore = this.calculateScore(last);
+            this.cursorSize = last.size;
+            this.cursorID = last.id;
+          }
         }
         this.debugLog('loadVideos applied to state', {
           totalVideos: this.videos.length,
@@ -2193,6 +2363,8 @@ export default {
           this.cursorScore = 0;
           this.cursorSize = 0;
           this.cursorID = 0;
+          this.cursorLastPlayedAt = '';
+          this.cursorRecentPlayedID = 0;
           this.hasMore = true;
           await this.loadVideos();
         }
@@ -2219,6 +2391,68 @@ export default {
         maxHeight = this.selectedResRange.max;
       }
       return { minSize, maxSize, minHeight, maxHeight };
+    },
+    findRangeOption(options, min, max) {
+      return options.find(option => option.value.min === Number(min || 0) && option.value.max === Number(max || 0))?.value || 'all';
+    },
+    async loadSavedLibraryViews() {
+      try {
+        this.savedViews = await ListSavedLibraryViews() || [];
+      } catch (err) {
+        console.error('加载保存视图失败:', err);
+      }
+    },
+    openSaveViewDialog() {
+      this.saveViewDialog = { show: true, name: '', saving: false, error: '' };
+      this.$nextTick(() => this.$refs.saveViewNameInput?.focus());
+    },
+    async saveCurrentView() {
+      const name = this.saveViewDialog.name.trim();
+      if (!name || this.saveViewDialog.saving) return;
+      this.saveViewDialog.saving = true;
+      this.saveViewDialog.error = '';
+      try {
+        const saved = await SaveLibraryView({ name, ...this.currentLibraryFilter() });
+        await this.loadSavedLibraryViews();
+        this.selectedSavedViewID = saved.id;
+        this.saveViewDialog.show = false;
+      } catch (err) {
+        this.saveViewDialog.error = String(err);
+      } finally {
+        this.saveViewDialog.saving = false;
+      }
+    },
+    async applySelectedSavedView() {
+      const view = this.savedViews.find(item => item.id === Number(this.selectedSavedViewID));
+      if (!view) return;
+      let tagIDs = [];
+      try {
+        const parsed = JSON.parse(view.tag_ids_json || '[]');
+        const activeTagIDs = new Set((this.tags || []).map(tag => Number(tag.id)));
+        tagIDs = Array.isArray(parsed)
+          ? parsed.map(Number).filter(id => Number.isFinite(id) && activeTagIDs.has(id))
+          : [];
+      } catch (err) {
+        console.error('保存视图标签条件无效:', err);
+      }
+      this.searchMode = view.search_mode || 'file';
+      this.searchKeyword = view.keyword || '';
+      this.smartView = view.smart_view || '';
+      this.selectedTags = tagIDs;
+      this.selectedSizeRange = this.findRangeOption(this.sizeOptions, view.min_size, view.max_size);
+      this.selectedResRange = this.findRangeOption(this.resOptions, view.min_height, view.max_height);
+      await this.reloadCurrentView();
+    },
+    async deleteSelectedSavedView() {
+      const view = this.savedViews.find(item => item.id === Number(this.selectedSavedViewID));
+      if (!view || !window.confirm(`确定删除保存视图「${view.name}」吗？`)) return;
+      try {
+        await DeleteSavedLibraryView(view.id);
+        this.selectedSavedViewID = 0;
+        await this.loadSavedLibraryViews();
+      } catch (err) {
+        alert('删除保存视图失败: ' + err);
+      }
     },
     async reloadCurrentView() {
       return this.resetAndLoadVideos();
@@ -2248,6 +2482,14 @@ export default {
       parts.push(s.toString().padStart(2, '0'));
       return parts.join(':');
     },
+    formatFileSize(bytes) {
+      const value = Number(bytes || 0);
+      if (value <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+      const scaled = value / Math.pow(1024, index);
+      return `${scaled.toFixed(scaled >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+    },
     tagBgColor(hex) {
       if (!hex || !hex.startsWith('#')) return hex;
       const r = parseInt(hex.slice(1, 3), 16);
@@ -2265,10 +2507,12 @@ export default {
       } else {
         this.selectedTags = [...this.selectedTags, id];
       }
+      this.selectedSavedViewID = 0;
       this.reloadCurrentView();
     },
     clearTagFilter() {
       this.selectedTags = [];
+      this.selectedSavedViewID = 0;
       this.reloadCurrentView();
     },
     canVideoMatchCurrentView(video) {
@@ -2278,7 +2522,65 @@ export default {
       }
       const nameOrPathMatched = !keyword || `${video.name} ${video.path}`.toLowerCase().includes(keyword);
       if (!nameOrPathMatched) return false;
-      return this.applyClientFilters([video]).length > 0;
+      return this.applyClientFilters([video]).length > 0 && this.matchesSmartView(video);
+    },
+    mergeVideoState(updatedVideo) {
+      if (!updatedVideo) return;
+      const index = this.videos.findIndex(video => video.id === updatedVideo.id);
+      if (index !== -1) {
+        this.videos.splice(index, 1, { ...this.videos[index], ...updatedVideo });
+      }
+      if (this.selectedPreviewVideoId === updatedVideo.id) {
+        this.previewVideoSnapshot = {
+          ...(this.previewVideoSnapshot || {}),
+          ...updatedVideo,
+          tags: Array.isArray(updatedVideo.tags) ? [...updatedVideo.tags] : (this.previewVideoSnapshot?.tags || [])
+        };
+      }
+    },
+    resumePositionFor(video) {
+      if (!video || video.is_watched) return 0;
+      const position = Number(video.watch_position_seconds || 0);
+      const duration = Number(video.duration || 0);
+      if (!Number.isFinite(position) || position <= 0) return 0;
+      if (duration > 0 && position >= Math.max(duration - 5, duration * 0.98)) return 0;
+      return position;
+    },
+    async applyVideoStateChange(updatedVideo) {
+      if (!updatedVideo) return;
+      const stateSensitiveViews = ['favorites', 'continue_watching', 'unwatched', 'watched'];
+      if (stateSensitiveViews.includes(this.smartView) && !this.matchesSmartView(updatedVideo)) {
+        await this.reloadCurrentView();
+        return;
+      }
+      this.mergeVideoState(updatedVideo);
+    },
+    async toggleVideoFavorite(video) {
+      try {
+        const updated = await SetVideoFavorite(video.id, !video.is_favorite);
+        await this.applyVideoStateChange(updated);
+      } catch (err) {
+        alert('更新收藏状态失败: ' + err);
+      }
+    },
+    async toggleVideoWatched(video) {
+      try {
+        const updated = await SetVideoWatched(video.id, !video.is_watched);
+        await this.applyVideoStateChange(updated);
+      } catch (err) {
+        alert('更新观看状态失败: ' + err);
+      }
+    },
+    handlePreviewWatchProgress(progress) {
+      const videoID = Number(progress?.videoID || this.selectedPreviewVideoId || 0);
+      if (!videoID) return;
+      const save = async () => {
+        const updated = await UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), !!progress?.completed);
+        await this.applyVideoStateChange(updated);
+      };
+      this._watchProgressPromise = (this._watchProgressPromise || Promise.resolve())
+        .then(save)
+        .catch(err => console.error('保存观看进度失败:', err));
     },
     async applyPlaybackAttemptResult(result) {
       if (!result) return;
@@ -2293,6 +2595,11 @@ export default {
       }
 
       if (reconcile.needs_reload || !reconcile.updated_video) {
+        await this.reloadCurrentView();
+        return;
+      }
+
+      if (this.smartView === 'recently_played') {
         await this.reloadCurrentView();
         return;
       }
@@ -2320,6 +2627,7 @@ export default {
       }
     },
     async handleSearch(immediate = false) {
+      this.selectedSavedViewID = 0;
       if (this.searchDebounceTimer) {
         clearTimeout(this.searchDebounceTimer);
         this.searchDebounceTimer = null;
@@ -2337,9 +2645,15 @@ export default {
     },
     async playRandom() {
       try {
-        const result = await PlayRandomVideo();
+        const result = await PlayRandomVideoWithFilter({
+          filter: this.currentLibraryFilter(),
+          mode: this.randomMode,
+          exclude_ids: this.recentRandomVideoIDs.slice(-12)
+        });
         if (result.dispatch_succeeded && result.video) {
-          alert(`正在随机播放: ${result.video.name}\n播放次数: ${result.video.play_count}\n随机播放次数: ${result.video.random_play_count}`);
+          this.recentRandomVideoIDs = [...this.recentRandomVideoIDs, result.video.id].slice(-24);
+          await this.applyPlaybackAttemptResult(result);
+          alert(`正在随机播放: ${result.video.name}\n${result.selection_reason || '按当前筛选条件选择'}`);
           return;
         }
         await this.applyPlaybackAttemptResult(result);

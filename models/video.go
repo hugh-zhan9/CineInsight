@@ -6,23 +6,28 @@ import (
 
 // Video 视频文件模型
 type Video struct {
-	ID              uint           `gorm:"primarykey" json:"id"`
-	Name            string         `json:"name"`                                                                    // 文件名
-	Path            string         `gorm:"uniqueIndex:idx_videos_path_active,where:deleted_at IS NULL" json:"path"` // 完整路径
-	Directory       string         `json:"directory"`                                                               // 所在目录
-	Size            int64          `json:"size"`                                                                    // 文件大小（字节）
-	Duration        float64        `json:"duration"`                                                                // 时长（秒）
-	Resolution      string         `json:"resolution"`                                                              // 分辨率 (如 1920x1080)
-	Width           int            `json:"width"`                                                                   // 宽度
-	Height          int            `json:"height"`                                                                  // 高度
-	IsStale         bool           `gorm:"default:false" json:"is_stale"`                                           // 当前路径是否失效/待纠偏
-	PlayCount       int            `gorm:"default:0" json:"play_count"`                                             // 播放次数
-	RandomPlayCount int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
-	LastPlayedAt    *time.Time     `json:"last_played_at" ts_type:"string"`                                         // 最后播放时间
-	Tags            []Tag          `gorm:"many2many:video_tags;" json:"tags"`                                       // 标签（多对多）
-	CreatedAt       time.Time      `json:"created_at" ts_type:"string"`
-	UpdatedAt       time.Time      `json:"updated_at" ts_type:"string"`
-	DeletedAt       SoftDeleteTime `gorm:"index" json:"-"`
+	ID                     uint           `gorm:"primarykey" json:"id"`
+	Name                   string         `json:"name"`                                                                    // 文件名
+	Path                   string         `gorm:"uniqueIndex:idx_videos_path_active,where:deleted_at IS NULL" json:"path"` // 完整路径
+	Directory              string         `json:"directory"`                                                               // 所在目录
+	Size                   int64          `json:"size"`                                                                    // 文件大小（字节）
+	Duration               float64        `json:"duration"`                                                                // 时长（秒）
+	Resolution             string         `json:"resolution"`                                                              // 分辨率 (如 1920x1080)
+	Width                  int            `json:"width"`                                                                   // 宽度
+	Height                 int            `json:"height"`                                                                  // 高度
+	IsStale                bool           `gorm:"default:false" json:"is_stale"`                                           // 当前路径是否失效/待纠偏
+	PlayCount              int            `gorm:"default:0" json:"play_count"`                                             // 播放次数
+	RandomPlayCount        int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
+	LastPlayedAt           *time.Time     `json:"last_played_at" ts_type:"string"`                                         // 最后播放时间
+	IsFavorite             bool           `gorm:"not null;default:false" json:"is_favorite"`                               // 主片库收藏状态
+	IsWatched              bool           `gorm:"not null;default:false" json:"is_watched"`                                // 是否已看
+	WatchPositionSeconds   float64        `gorm:"not null;default:0" json:"watch_position_seconds"`                        // 内嵌播放器观看位置（秒）
+	WatchProgressUpdatedAt *time.Time     `json:"watch_progress_updated_at" ts_type:"string"`                              // 最近一次观看进度更新时间
+	WatchedAt              *time.Time     `json:"watched_at" ts_type:"string"`                                             // 最近标记已看的时间
+	Tags                   []Tag          `gorm:"many2many:video_tags;" json:"tags"`                                       // 标签（多对多）
+	CreatedAt              time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt              time.Time      `json:"updated_at" ts_type:"string"`
+	DeletedAt              SoftDeleteTime `gorm:"index" json:"-"`
 }
 
 // VideoTrashEntry 记录恢复软删除视频所需的信息。
@@ -128,4 +133,21 @@ type ScanDirectory struct {
 	CreatedAt time.Time      `json:"created_at" ts_type:"string"`
 	UpdatedAt time.Time      `json:"updated_at" ts_type:"string"`
 	DeletedAt SoftDeleteTime `gorm:"index" json:"-"`
+}
+
+// SavedLibraryView 保存用户命名的片库筛选条件。
+type SavedLibraryView struct {
+	ID         uint           `gorm:"primarykey" json:"id"`
+	Name       string         `gorm:"not null;uniqueIndex:idx_saved_library_views_name_active,where:deleted_at IS NULL" json:"name"`
+	SearchMode string         `gorm:"not null;default:'file'" json:"search_mode"`
+	Keyword    string         `json:"keyword"`
+	SmartView  string         `gorm:"index" json:"smart_view"`
+	TagIDsJSON string         `gorm:"type:text;not null;default:'[]'" json:"tag_ids_json"`
+	MinSize    int64          `json:"min_size"`
+	MaxSize    int64          `json:"max_size"`
+	MinHeight  int            `json:"min_height"`
+	MaxHeight  int            `json:"max_height"`
+	CreatedAt  time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt  time.Time      `json:"updated_at" ts_type:"string"`
+	DeletedAt  SoftDeleteTime `gorm:"index" json:"-"`
 }

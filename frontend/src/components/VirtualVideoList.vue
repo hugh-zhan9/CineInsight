@@ -1,5 +1,9 @@
 <template>
-  <div class="virtual-video-list" ref="shell" :data-scroll-owner-fallback="scrollOwnerMissing ? 'true' : null">
+  <div
+    :class="['virtual-video-list', `virtual-video-list--${layoutMode}`]"
+    ref="shell"
+    :data-scroll-owner-fallback="scrollOwnerMissing ? 'true' : null"
+  >
     <div v-if="virtualizationEnabled && topSpacer > 0" :style="{ height: `${topSpacer}px` }" aria-hidden="true"></div>
 
     <template v-for="(item, visibleIndex) in renderedItems" :key="item.id">
@@ -39,6 +43,7 @@ export default {
     subtitleMode: { type: Boolean, default: false },
     previewOpen: { type: Boolean, default: false },
     queryKey: { type: String, default: '' },
+    layoutMode: { type: String, default: 'list' },
     overscan: { type: Number, default: 8 },
     rangeEngine: {
       type: Object,

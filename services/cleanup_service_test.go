@@ -102,6 +102,11 @@ func TestCleanupBackgroundAnalysisKeepsStatusAfterCompletion(t *testing.T) {
 	if status.Analysis == nil || len(status.Analysis.LowDuration) != 1 {
 		t.Fatalf("完成后应保留分析结果，实际 %+v", status.Analysis)
 	}
+	svc.InvalidateAnalysis()
+	status = svc.Status()
+	if status.Completed || status.Analysis != nil {
+		t.Fatalf("失效后不应继续返回旧分析: %+v", status)
+	}
 }
 
 func TestAnalyzeCleanupCandidatesFindsPhysicalDuplicates(t *testing.T) {
@@ -201,6 +206,63 @@ func TestAnalyzeCleanupCandidatesFindsLowQualityVideos(t *testing.T) {
 	}
 	if len(result.LowResolution) != 1 || result.LowResolution[0].ID != small.ID {
 		t.Fatalf("低分辨率候选错误: %+v", result.LowResolution)
+	}
+}
+
+func TestAnalyzeCleanupCandidatesIncludesDetectedSameSourceWithoutExactDuplicates(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	mockFFProbe(t, root)
+
+	makeVideo := func(name, content string) models.Video {
+		path := filepath.Join(root, name)
+		mustWriteSizedFile(t, path, []byte(content))
+		video := models.Video{Name: name, Path: path, Directory: root, Size: int64(len(content))}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建视频 %s 失败: %v", name, err)
+		}
+		return video
+	}
+
+	a := makeVideo("same-a.mp4", "aaa")
+	b := makeVideo("same-b.mp4", "bbb")
+	c := makeVideo("duplicate-a.mp4", "dup")
+	d := makeVideo("duplicate-b.mp4", "dup")
+	e := makeVideo("rejected-a.mp4", "eee")
+	f := makeVideo("rejected-b.mp4", "fff")
+	tag := models.Tag{Name: "保留标签", Color: "#123456"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Model(&b).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("给候选添加标签失败: %v", err)
+	}
+
+	relations := []models.VideoSameSourceRelation{
+		{VideoAID: a.ID, VideoBID: b.ID, Status: models.VideoSameSourceStatusDetected, Confidence: "high", Reasoning: "画面内容一致", DetectionVersion: "test"},
+		{VideoAID: c.ID, VideoBID: d.ID, Status: models.VideoSameSourceStatusDetected, Confidence: "high", Reasoning: "精确重复", DetectionVersion: "test"},
+		{VideoAID: e.ID, VideoBID: f.ID, Status: models.VideoSameSourceStatusRejected, Confidence: "medium", Reasoning: "已否认", DetectionVersion: "test"},
+	}
+	if err := database.DB.Create(&relations).Error; err != nil {
+		t.Fatalf("创建同源关系失败: %v", err)
+	}
+
+	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("分析清理候选失败: %v", err)
+	}
+	if len(result.DuplicateGroups) != 1 {
+		t.Fatalf("应识别一组精确重复，实际 %d", len(result.DuplicateGroups))
+	}
+	if len(result.SameSourceGroups) != 1 {
+		t.Fatalf("应只保留 detected 且非精确重复的同源关系，实际 %+v", result.SameSourceGroups)
+	}
+	group := result.SameSourceGroups[0]
+	if group.RelationID != relations[0].ID || group.Preferred.ID != b.ID || group.Alternative.ID != a.ID {
+		t.Fatalf("同源保留建议不稳定: %+v", group)
+	}
+	if group.EstimatedSavings != a.Size || group.Confidence != "high" || group.Reason != "画面内容一致" {
+		t.Fatalf("同源候选信息不完整: %+v", group)
 	}
 }
 
