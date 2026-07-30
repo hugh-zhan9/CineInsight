@@ -16,6 +16,8 @@ func (s *DirectoryService) GetAllDirectories() ([]models.ScanDirectory, error) {
 
 // AddDirectory 添加扫描目录
 func (s *DirectoryService) AddDirectory(path, alias string) (*models.ScanDirectory, error) {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
 	dir := &models.ScanDirectory{
 		Path:  path,
 		Alias: alias,
@@ -26,6 +28,8 @@ func (s *DirectoryService) AddDirectory(path, alias string) (*models.ScanDirecto
 
 // UpdateDirectory 更新目录别名
 func (s *DirectoryService) UpdateDirectory(id uint, path, alias string) error {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
 	return database.DB.Model(&models.ScanDirectory{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"path":  path,
 		"alias": alias,
@@ -34,5 +38,7 @@ func (s *DirectoryService) UpdateDirectory(id uint, path, alias string) error {
 
 // DeleteDirectory 删除扫描目录
 func (s *DirectoryService) DeleteDirectory(id uint) error {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
 	return database.DB.Delete(&models.ScanDirectory{}, id).Error
 }

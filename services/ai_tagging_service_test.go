@@ -15,6 +15,36 @@ import (
 	"video-master/models"
 )
 
+func TestAutomaticTagsDoNotMakeVideoIneligibleForAITagging(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := models.Video{Name: "automatic-only.mp4", Path: "/tmp/automatic-only.mp4", Duration: 30}
+	automaticTag := models.Tag{Name: "短视频", Color: "#111111", AutomaticKind: shortVideoAutomaticTagKind, IsActive: true}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&automaticTag).Error; err != nil {
+		t.Fatalf("创建自动标签失败: %v", err)
+	}
+	if err := database.DB.Model(&video).Association("Tags").Append(&automaticTag); err != nil {
+		t.Fatalf("关联自动标签失败: %v", err)
+	}
+
+	svc := NewAITaggingService()
+	videos, err := svc.findUntaggedVideos(10)
+	if err != nil {
+		t.Fatalf("查询待打标视频失败: %v", err)
+	}
+	if len(videos) != 1 || videos[0].ID != video.ID {
+		t.Fatalf("只有自动标签的视频仍应进入 AI 打标: %+v", videos)
+	}
+	if hasNonAutomaticTags(videos[0].Tags) {
+		t.Fatalf("自动标签不应被识别为人工/正式标签: %+v", videos[0].Tags)
+	}
+	if manual, err := svc.hasManualOfficialTagsInTx(database.DB, video.ID); err != nil || manual {
+		t.Fatalf("自动标签不应使候选审批冲突: manual=%v err=%v", manual, err)
+	}
+}
+
 type fakeAITaggingConfigProvider struct {
 	config AITaggingConfig
 	err    error

@@ -41,11 +41,14 @@
         >
           {{ allVisibleSelected ? '取消全选' : '选择本页' }}
         </button>
-        <button @click="showScanDialog = true" class="btn-primary">扫描新目录</button>
+        <button @click="showScanDialog = true" class="btn-primary" :disabled="migrationRunning">扫描新目录</button>
+        <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="moveFolder">
+          {{ migrationRunning ? '迁移中...' : '迁移文件夹' }}
+        </button>
         <button
           type="button"
           class="btn-secondary"
-          :disabled="incrementalScan.running || directories.length === 0"
+          :disabled="migrationRunning || incrementalScan.running || directories.length === 0"
           :title="directories.length === 0 ? '请先添加扫描目录' : '扫描所有已配置目录中的文件变化'"
           @click="runIncrementalScan"
         >
@@ -74,6 +77,13 @@
           class="btn-secondary"
         >
           批量标签编辑
+        </button>
+        <button
+          @click="moveSelectedVideos"
+          class="btn-secondary"
+          :disabled="migrationRunning"
+        >
+          批量迁移
         </button>
         <button
           @click="confirmBatchDelete"
@@ -119,7 +129,7 @@
         >
           <span class="tag-chip-name">{{ tag.name }}</span>
           <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
-          <button type="button" class="tag-chip-delete" @click.stop="requestDeleteTag(tag)">×</button>
+          <button v-if="!tag.automatic_kind" type="button" class="tag-chip-delete" @click.stop="requestDeleteTag(tag)">×</button>
         </div>
       </div>
     </div>
@@ -143,6 +153,7 @@
           @generate-subtitle="generateSubtitle"
           @subtitle-preview="openSubtitlePreview"
           @rename="renameVideo"
+          @move="moveVideo"
           @delete="confirmDelete"
           @open-add-tag="openAddTagDialog"
           @remove-tag="removeTag"
@@ -177,6 +188,7 @@
             @generate-subtitle="generateSubtitle"
             @subtitle-preview="openSubtitlePreview"
             @rename="renameVideo"
+            @move="moveVideo"
             @delete="confirmDelete"
             @open-add-tag="openAddTagDialog"
             @remove-tag="removeTag"
@@ -213,6 +225,7 @@
       <div @click="playVideo(contextMenu.video.id)">播放</div>
       <div @click="openDirectory(contextMenu.video.id)">打开目录</div>
       <div @click="renameVideo(contextMenu.video)">重命名</div>
+      <div @click="moveVideo(contextMenu.video)">迁移</div>
       <div @click="confirmDelete(contextMenu.video)" class="danger">删除</div>
     </div>
 
@@ -951,7 +964,7 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1007,6 +1020,7 @@ export default {
       contextMenu: { show: false, x: 0, y: 0, video: null },
       showScanDialog: false,
       incrementalScan: { running: false, state: 'idle', message: '' },
+      migrationRunning: false,
       showTagManagerDialog: false,
       addTagDialog: { show: false, video: null, videoIds: [], mode: 'single' },
       selectedVideoIds: [],
@@ -1847,6 +1861,65 @@ export default {
         alert('重命名失败: ' + err);
       }
     },
+    async moveVideo(video) {
+      if (!video || this.migrationRunning) return;
+      const destination = await SelectMigrationDestinationDirectory();
+      if (!destination) return;
+      this.migrationRunning = true;
+      try {
+        const result = await MoveVideo(video.id, destination);
+        await this.reloadCurrentView();
+        if (result?.warning) alert(`视频迁移完成。\n警告：${result.warning}`);
+      } catch (err) {
+        console.error('迁移视频失败:', err);
+        alert('迁移视频失败: ' + err);
+      } finally {
+        this.migrationRunning = false;
+      }
+    },
+    async moveSelectedVideos() {
+      if (this.selectedVideoIds.length === 0 || this.migrationRunning) return;
+      const destination = await SelectMigrationDestinationDirectory();
+      if (!destination) return;
+      const ids = [...this.selectedVideoIds];
+      this.migrationRunning = true;
+      try {
+        const result = await BatchMoveVideos(ids, destination);
+        this.selectedVideoIds = [];
+        await this.reloadCurrentView();
+        const failures = (result?.errors || []).map(item => `失败 #${item.video_id}: ${item.error}`);
+        const warnings = (result?.warnings || []).map(item => `警告 #${item.video_id}: ${item.warning}`);
+        if (failures.length > 0 || warnings.length > 0) {
+          alert(`迁移完成：成功 ${result.succeeded || 0}，失败 ${result.failed || 0}\n${[...failures, ...warnings].join('\n')}`);
+        }
+      } catch (err) {
+        console.error('批量迁移失败:', err);
+        alert('批量迁移失败: ' + err);
+      } finally {
+        this.migrationRunning = false;
+      }
+    },
+    async moveFolder() {
+      if (this.migrationRunning) return;
+      const source = await SelectMigrationSourceDirectory();
+      if (!source) return;
+      const destinationParent = await SelectMigrationDestinationDirectory();
+      if (!destinationParent) return;
+      if (!window.confirm(`将文件夹\n${source}\n迁移到\n${destinationParent}\n并同步更新库内路径，是否继续？`)) return;
+      this.migrationRunning = true;
+      try {
+        const result = await MoveDirectory(source, destinationParent);
+        this.$emit('reload-directories');
+        await this.reloadCurrentView();
+        const warning = result?.warning ? `\n警告：${result.warning}` : '';
+        alert(`文件夹迁移完成：更新 ${result?.videos_updated || 0} 个视频、${result?.directories_updated || 0} 个扫描目录。${warning}`);
+      } catch (err) {
+        console.error('迁移文件夹失败:', err);
+        alert('迁移文件夹失败: ' + err);
+      } finally {
+        this.migrationRunning = false;
+      }
+    },
     async cancelSubtitle() {
       try {
 		if (this.subtitleProgressTaskID) {
@@ -2323,7 +2396,7 @@ export default {
       await this.reloadCurrentView();
     },
     async runIncrementalScan() {
-      if (this.incrementalScan.running || this.directories.length === 0) {
+      if (this.migrationRunning || this.incrementalScan.running || this.directories.length === 0) {
         return;
       }
 

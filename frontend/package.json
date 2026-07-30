@@ -13,7 +13,8 @@
     "test:video-list-ui": "node scripts/video-list-ui.test.mjs",
     "test:subtitle-workflow": "node scripts/subtitle-workflow.test.mjs",
     "test:virtual-list": "node scripts/virtual-list.test.mjs",
-    "test:short-feed": "node scripts/short-feed.test.mjs"
+    "test:short-feed": "node scripts/short-feed.test.mjs",
+    "test:migration-tag-management": "node scripts/migration-tag-management.test.mjs"
   },
   "dependencies": {
     "esbuild": "^0.27.3",

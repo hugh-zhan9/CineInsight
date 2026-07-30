@@ -32,7 +32,7 @@
           :style="{ backgroundColor: tagBgColor(tag.color) }"
         >
           {{ tag.name }}
-          <button @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
+          <button v-if="!tag.automatic_kind" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
         </span>
         <button @click="$emit('open-add-tag', video)" class="btn-add-tag">+ 标签</button>
       </div>
@@ -55,6 +55,7 @@
       </button>
       <button @click="$emit('subtitle-preview', video)" class="btn-action btn-compact">预览字幕</button>
       <button @click="$emit('rename', video)" class="btn-action btn-compact">重命名</button>
+      <button @click="$emit('move', video)" class="btn-action btn-compact">迁移</button>
       <button @click="$emit('delete', video)" class="btn-danger btn-compact" :disabled="deletingIds.includes(video.id)">删除</button>
       </div>
     </div>
@@ -71,7 +72,7 @@ export default {
     deletingIds: { type: Array, default: () => [] },
     selected: { type: Boolean, default: false }
   },
-  emits: ['preview', 'play', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
+  emits: ['preview', 'play', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'move', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
   methods: {
     tagBgColor(hex) {
       if (!hex || !hex.startsWith('#')) return hex;

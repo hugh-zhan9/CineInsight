@@ -91,7 +91,7 @@
           :disabled="!currentVideo"
           @click="toggleLike"
         >
-          <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <svg class="action-icon action-icon--heart" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M20.8 4.9c-2-2-5.2-1.9-7.1.2L12 6.9l-1.7-1.8C8.4 3 5.2 2.9 3.2 4.9c-2.1 2.1-2 5.5.2 7.6L12 21l8.6-8.5c2.2-2.1 2.3-5.5.2-7.6Z" />
           </svg>
           <span class="action-count">{{ currentVideo?.liked ? 1 : 0 }}</span>
@@ -104,7 +104,7 @@
           :disabled="!currentVideo"
           @click="toggleFavorite"
         >
-          <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <svg class="action-icon action-icon--bookmark" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M6 4.8C6 3.8 6.8 3 7.8 3h8.4c1 0 1.8.8 1.8 1.8V21l-6-3.8L6 21V4.8Z" />
           </svg>
           <span class="action-count">{{ currentVideo?.favorited ? 1 : 0 }}</span>
