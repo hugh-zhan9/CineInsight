@@ -197,6 +197,49 @@ func TestPreviewMediaHandlerServesInlineMedia(t *testing.T) {
 	}
 }
 
+func TestThumbnailHandlerServesGeneratedJPEG(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "clip.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake-video"), 0644); err != nil {
+		t.Fatalf("写入视频文件失败: %v", err)
+	}
+	video := models.Video{Name: "clip.mp4", Path: videoPath, Directory: root, Size: 10, Duration: 30}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("创建 ffmpeg stub 目录失败: %v", err)
+	}
+	ffmpegPath := filepath.Join(binDir, "ffmpeg")
+	ffmpegScript := "#!/bin/bash\ndestination=\"${@: -1}\"\nprintf 'jpeg-thumbnail' > \"$destination\"\n"
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+		t.Fatalf("写入 ffmpeg stub 失败: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	app := NewApp()
+	app.thumbnailService = services.NewThumbnailService(app.videoService, root)
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/preview/thumbnail/%d", video.ID), nil)
+	rec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际 %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("content-type 错误: got=%s want=image/jpeg", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=300" {
+		t.Fatalf("cache-control 错误: %q", got)
+	}
+	if rec.Body.String() != "jpeg-thumbnail" {
+		t.Fatalf("缩略图响应体错误: %q", rec.Body.String())
+	}
+}
+
 func TestSubtitleAPIContractsCompile(t *testing.T) {
 	app := NewApp()
 

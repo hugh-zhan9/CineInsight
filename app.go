@@ -33,6 +33,7 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 type App struct {
 	ctx                   context.Context
 	videoService          *services.VideoService
+	thumbnailService      *services.ThumbnailService
 	tagService            *services.TagService
 	settingsService       *services.SettingsService
 	directoryService      *services.DirectoryService
@@ -59,6 +60,7 @@ func NewApp() *App {
 
 	return &App{
 		videoService:          videoService,
+		thumbnailService:      services.NewThumbnailService(videoService, dataDir),
 		tagService:            &services.TagService{},
 		settingsService:       &services.SettingsService{},
 		directoryService:      &services.DirectoryService{},
@@ -281,6 +283,34 @@ func (a *App) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, ma
 	return videos, err
 }
 
+// SearchLibraryVideos 使用主片库智能视图与筛选条件查询视频。
+func (a *App) SearchLibraryVideos(filter services.LibraryFilter, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
+	videos, err := a.videoService.SearchLibraryVideos(filter, cursorScore, cursorSize, cursorID, limit)
+	log.Printf("API SearchLibraryVideos view=%s mode=%s count=%d err=%v", filter.SmartView, filter.SearchMode, len(videos), err)
+	return videos, err
+}
+
+// ListRecentlyPlayed 返回最近正式播放的视频。
+func (a *App) ListRecentlyPlayed(limit int) ([]models.Video, error) {
+	videos, err := a.videoService.ListRecentlyPlayed(limit)
+	log.Printf("API ListRecentlyPlayed count=%d err=%v", len(videos), err)
+	return videos, err
+}
+
+// ListRecentlyPlayedWithFilter 按当前片库条件稳定分页返回最近播放视频。
+func (a *App) ListRecentlyPlayedWithFilter(filter services.LibraryFilter, cursorLastPlayedAt string, cursorID uint, limit int) ([]models.Video, error) {
+	videos, err := a.videoService.ListRecentlyPlayedWithFilter(filter, cursorLastPlayedAt, cursorID, limit)
+	log.Printf("API ListRecentlyPlayedWithFilter cursorLastPlayedAt=%q cursorID=%d count=%d err=%v", cursorLastPlayedAt, cursorID, len(videos), err)
+	return videos, err
+}
+
+// GetLibrarySubtitleHits 为当前片库页补充首个字幕命中片段。
+func (a *App) GetLibrarySubtitleHits(keyword string, videoIDs []uint) ([]services.LibrarySubtitleHit, error) {
+	hits, err := a.videoService.GetLibrarySubtitleHits(keyword, videoIDs)
+	log.Printf("API GetLibrarySubtitleHits videos=%d hits=%d err=%v", len(videoIDs), len(hits), err)
+	return hits, err
+}
+
 // SelectDirectory 选择目录对话框
 func (a *App) SelectDirectory() (string, error) {
 	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
@@ -361,6 +391,9 @@ func (a *App) RenameVideo(id uint, newName string) error {
 // AddVideo 添加视频
 func (a *App) AddVideo(path string) (*models.Video, error) {
 	video, err := a.videoService.AddVideo(path)
+	if err == nil && video != nil && a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
 	if video != nil {
 		log.Printf("API AddVideo path=%s id=%d err=%v", path, video.ID, err)
 	} else {
@@ -379,12 +412,18 @@ func (a *App) GetVideosByDirectory(dir string) ([]models.Video, error) {
 // DeleteVideo 删除视频
 func (a *App) DeleteVideo(id uint, deleteFile bool) error {
 	err := a.videoService.DeleteVideo(id, deleteFile)
+	if err == nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
 	log.Printf("API DeleteVideo id=%d deleteFile=%v err=%v", id, deleteFile, err)
 	return err
 }
 
 func (a *App) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *services.BatchVideoOperationResult {
 	result := a.videoService.BatchDeleteVideos(videoIDs, deleteFile)
+	if result.Succeeded > 0 {
+		a.cleanupService.InvalidateAnalysis()
+	}
 	log.Printf("API BatchDeleteVideos requested=%d succeeded=%d failed=%d deleteFile=%v", result.Requested, result.Succeeded, result.Failed, deleteFile)
 	return result
 }
@@ -399,6 +438,9 @@ func (a *App) ListTrashEntries() ([]models.VideoTrashEntry, error) {
 // RestoreTrashEntry 将一个视频恢复到删除前的路径。
 func (a *App) RestoreTrashEntry(entryID uint) (*models.Video, error) {
 	video, err := a.videoService.RestoreTrashEntry(entryID)
+	if err == nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
 	log.Printf("API RestoreTrashEntry entryID=%d err=%v", entryID, err)
 	return video, err
 }
@@ -448,6 +490,17 @@ func (a *App) PlayRandomVideo() (*services.PlaybackAttemptResult, error) {
 	return result, err
 }
 
+// PlayRandomVideoWithFilter 在当前片库筛选范围内发起随机播放。
+func (a *App) PlayRandomVideoWithFilter(request services.RandomPlayRequest) (*services.PlaybackAttemptResult, error) {
+	result, err := a.videoService.PlayRandomVideoWithFilter(request)
+	if result != nil {
+		log.Printf("API PlayRandomVideoWithFilter mode=%s dispatch=%v reason=%s err=%v", request.Mode, result.DispatchSucceeded, result.ReasonCode, err)
+	} else {
+		log.Printf("API PlayRandomVideoWithFilter mode=%s result=nil err=%v", request.Mode, err)
+	}
+	return result, err
+}
+
 // AddTagToVideo 为视频添加标签
 func (a *App) AddTagToVideo(videoID uint, tagID uint) error {
 	err := a.videoService.AddTagToVideo(videoID, tagID)
@@ -465,6 +518,48 @@ func (a *App) BatchAddTagToVideos(videoIDs []uint, tagID uint) *services.BatchVi
 func (a *App) RemoveTagFromVideo(videoID uint, tagID uint) error {
 	err := a.videoService.RemoveTagFromVideo(videoID, tagID)
 	log.Printf("API RemoveTagFromVideo videoID=%d tagID=%d err=%v", videoID, tagID, err)
+	return err
+}
+
+// SetVideoFavorite 更新主片库收藏状态。
+func (a *App) SetVideoFavorite(videoID uint, favorite bool) (*models.Video, error) {
+	video, err := a.videoService.SetVideoFavorite(videoID, favorite)
+	log.Printf("API SetVideoFavorite video_id=%d favorite=%v err=%v", videoID, favorite, err)
+	return video, err
+}
+
+// SetVideoWatched 更新主片库已看状态。
+func (a *App) SetVideoWatched(videoID uint, watched bool) (*models.Video, error) {
+	video, err := a.videoService.SetVideoWatched(videoID, watched)
+	log.Printf("API SetVideoWatched video_id=%d watched=%v err=%v", videoID, watched, err)
+	return video, err
+}
+
+// UpdateVideoWatchProgress 保存内嵌播放器观看位置。
+func (a *App) UpdateVideoWatchProgress(videoID uint, positionSeconds float64, completed bool) (*models.Video, error) {
+	video, err := a.videoService.UpdateVideoWatchProgress(videoID, positionSeconds, completed)
+	log.Printf("API UpdateVideoWatchProgress video_id=%d completed=%v err=%v", videoID, completed, err)
+	return video, err
+}
+
+// ListSavedLibraryViews 返回用户保存的片库筛选。
+func (a *App) ListSavedLibraryViews() ([]models.SavedLibraryView, error) {
+	views, err := a.videoService.ListSavedLibraryViews()
+	log.Printf("API ListSavedLibraryViews count=%d err=%v", len(views), err)
+	return views, err
+}
+
+// SaveLibraryView 创建用户命名的片库筛选。
+func (a *App) SaveLibraryView(input services.SavedLibraryViewInput) (*models.SavedLibraryView, error) {
+	view, err := a.videoService.SaveLibraryView(input)
+	log.Printf("API SaveLibraryView name=%q err=%v", input.Name, err)
+	return view, err
+}
+
+// DeleteSavedLibraryView 删除用户保存的片库筛选。
+func (a *App) DeleteSavedLibraryView(viewID uint) error {
+	err := a.videoService.DeleteSavedLibraryView(viewID)
+	log.Printf("API DeleteSavedLibraryView id=%d err=%v", viewID, err)
 	return err
 }
 
@@ -588,6 +683,9 @@ func (a *App) MarkSameSourceRelationRead(relationID uint) error {
 
 func (a *App) RejectSameSourceRelation(relationID uint) error {
 	err := a.aiTaggingService.RejectSameSourceRelation(relationID)
+	if err == nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
 	log.Printf("API RejectSameSourceRelation relationID=%d err=%v", relationID, err)
 	return err
 }
@@ -645,6 +743,9 @@ func (a *App) SyncScanDirectories() (*services.ScanSyncResult, error) {
 		return nil, err
 	}
 	result := a.videoService.SyncScanDirectories(dirs)
+	if a.cleanupService != nil && (result.Added > 0 || result.Relocated > 0 || result.Deleted > 0 || result.MetadataRefreshed > 0) {
+		a.cleanupService.InvalidateAnalysis()
+	}
 	aiTriggered := false
 	if result.Added > 0 && a.aiTaggingService != nil {
 		aiTriggered = a.aiTaggingService.Trigger()

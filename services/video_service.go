@@ -78,6 +78,25 @@ type ScanSyncResult struct {
 	Errors            []ScanSyncError `json:"errors"`
 }
 
+const (
+	RandomPlayModeBalanced  = "balanced"
+	RandomPlayModeUnwatched = "unwatched"
+	RandomPlayModeFavorites = "favorites"
+)
+
+// RandomPlayRequest 描述筛选内随机播放的边界和模式。
+type RandomPlayRequest struct {
+	Filter     LibraryFilter `json:"filter"`
+	Mode       string        `json:"mode"`
+	ExcludeIDs []uint        `json:"exclude_ids"`
+}
+
+type videoScoreRow struct {
+	ID              uint
+	PlayCount       int
+	RandomPlayCount int
+}
+
 func (r *ScanSyncResult) recordError(operation, directory, path string, err error) {
 	r.Skipped++
 	r.Errors = append(r.Errors, ScanSyncError{
@@ -234,15 +253,12 @@ func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, mi
 		query = query.Where("(videos.name LIKE ? OR videos.path LIKE ?)", kw, kw)
 	}
 
-	// 体积过滤 (左闭右开 [min, max) )
 	if minSize > 0 {
 		query = query.Where("videos.size >= ?", minSize)
 	}
 	if maxSize > 0 {
 		query = query.Where("videos.size < ?", maxSize)
 	}
-
-	// 分辨率过滤 (按高度判断)
 	if minHeight > 0 {
 		query = query.Where("videos.height >= ?", minHeight)
 	}
@@ -1618,9 +1634,9 @@ func (s *VideoService) GetVideosByDirectory(dir string) ([]models.Video, error) 
 
 func escapeSQLLike(input string) string {
 	replacer := strings.NewReplacer(
-		`\\`, `\\\\`,
-		`%`, `\\%`,
-		`_`, `\\_`,
+		`\`, `\\`,
+		`%`, `\%`,
+		`_`, `\_`,
 	)
 	return replacer.Replace(input)
 }
@@ -1658,11 +1674,6 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 	}
 
 	// 仅查询计算权重所需的最少字段，避免全量加载
-	type videoScoreRow struct {
-		ID              uint
-		PlayCount       int
-		RandomPlayCount int
-	}
 	var rows []videoScoreRow
 	if err := database.DB.Model(&models.Video{}).
 		Select("id, play_count, random_play_count").
@@ -1678,6 +1689,81 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 		}, nil
 	}
 
+	return s.playRandomFromRows(rows, playWeight, "按全库均衡权重选择")
+}
+
+// PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放。
+func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*PlaybackAttemptResult, error) {
+	mode := strings.TrimSpace(request.Mode)
+	if mode == "" {
+		mode = RandomPlayModeBalanced
+	}
+	if mode != RandomPlayModeBalanced && mode != RandomPlayModeUnwatched && mode != RandomPlayModeFavorites {
+		return nil, fmt.Errorf("不支持的随机播放模式: %s", mode)
+	}
+	if libraryFilterNeedsSubtitleSync(request.Filter) {
+		if err := syncSubtitleIndexesFromFilesystem(); err != nil {
+			return nil, err
+		}
+	}
+	playWeight, err := s.getPlayWeight()
+	if err != nil {
+		return nil, err
+	}
+	query := database.DB.Model(&models.Video{}).
+		Select("videos.id, videos.play_count, videos.random_play_count").
+		Where("videos.is_stale = ?", false)
+	query, err = applyLibraryFilter(query, request.Filter, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	switch mode {
+	case RandomPlayModeUnwatched:
+		query = query.Where("videos.is_watched = ?", false)
+	case RandomPlayModeFavorites:
+		query = query.Where("videos.is_favorite = ?", true)
+	}
+	excludeIDs := uniqueUintIDs(request.ExcludeIDs)
+	if len(excludeIDs) > 100 {
+		excludeIDs = excludeIDs[len(excludeIDs)-100:]
+	}
+	if len(excludeIDs) > 0 {
+		query = query.Where("videos.id NOT IN ?", excludeIDs)
+	}
+	var rows []videoScoreRow
+	if err := query.Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return &PlaybackAttemptResult{
+			DispatchSucceeded: false,
+			ReasonCode:        "no_filtered_videos",
+			UserMessage:       "随机播放失败：当前筛选范围没有可播放的视频。",
+			SelectionReason:   randomModeReason(mode),
+		}, nil
+	}
+	return s.playRandomFromRows(rows, playWeight, randomModeReason(mode))
+}
+
+func randomModeReason(mode string) string {
+	switch mode {
+	case RandomPlayModeUnwatched:
+		return "在当前筛选范围内优先选择未看视频"
+	case RandomPlayModeFavorites:
+		return "在当前筛选范围内选择收藏视频"
+	default:
+		return "在当前筛选范围内按播放次数均衡选择"
+	}
+}
+
+func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float64, selectionReason string) (*PlaybackAttemptResult, error) {
+	if len(rows) == 0 {
+		return &PlaybackAttemptResult{
+			DispatchSucceeded: false,
+			ReasonCode:        "no_videos",
+			UserMessage:       "随机播放失败：当前没有可播放的视频记录。",
+		}, nil
+	}
 	// 计算每个视频的播放分数和最大分数
 	scores := make([]float64, len(rows))
 	maxScore := 0.0
@@ -1715,7 +1801,11 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 	}
 
 	// 使用数据库原子操作更新随机播放次数和最后播放时间
-	return s.dispatchFormalPlayback(&selectedVideo, true)
+	result, err := s.dispatchFormalPlayback(&selectedVideo, true)
+	if result != nil {
+		result.SelectionReason = selectionReason
+	}
+	return result, err
 }
 
 var openWithDefaultFn = openPath

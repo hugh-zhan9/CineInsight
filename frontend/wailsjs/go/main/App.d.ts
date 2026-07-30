@@ -32,6 +32,8 @@ export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
 
 export function DeleteDirectory(arg1:number):Promise<void>;
 
+export function DeleteSavedLibraryView(arg1:number):Promise<void>;
+
 export function DeleteTag(arg1:number):Promise<void>;
 
 export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
@@ -56,6 +58,8 @@ export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promis
 
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
+export function GetLibrarySubtitleHits(arg1:string,arg2:Array<number>):Promise<Array<services.LibrarySubtitleHit>>;
+
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
 
 export function GetSettings():Promise<models.Settings>;
@@ -76,7 +80,13 @@ export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:numb
 
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
 
+export function ListRecentlyPlayed(arg1:number):Promise<Array<models.Video>>;
+
+export function ListRecentlyPlayedWithFilter(arg1:services.LibraryFilter,arg2:string,arg3:number,arg4:number):Promise<Array<models.Video>>;
+
 export function ListSameSourceRelations(arg1:string,arg2:boolean):Promise<Array<services.VideoSameSourceReviewItem>>;
+
+export function ListSavedLibraryViews():Promise<Array<models.SavedLibraryView>>;
 
 export function ListTrashEntries():Promise<Array<models.VideoTrashEntry>>;
 
@@ -93,6 +103,8 @@ export function MoveVideo(arg1:number,arg2:string):Promise<services.FileMigratio
 export function OpenDirectory(arg1:number):Promise<void>;
 
 export function PlayRandomVideo():Promise<services.PlaybackAttemptResult>;
+
+export function PlayRandomVideoWithFilter(arg1:services.RandomPlayRequest):Promise<services.PlaybackAttemptResult>;
 
 export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
 
@@ -120,9 +132,13 @@ export function RetryAITagging(arg1:number):Promise<void>;
 
 export function SaveAITagLibrary(arg1:Array<services.AITagLibraryInput>):Promise<Array<models.Tag>>;
 
+export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<models.SavedLibraryView>;
+
 export function ScanDirectory(arg1:string):Promise<Array<string>>;
 
 export function ScanDirectoryWithInfo(arg1:string):Promise<Array<services.ScannedFile>>;
+
+export function SearchLibraryVideos(arg1:services.LibraryFilter,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 
 export function SearchSubtitleMatches(arg1:string,arg2:number):Promise<Array<services.SubtitleSearchMatch>>;
 
@@ -140,6 +156,10 @@ export function SelectMigrationDestinationDirectory():Promise<string>;
 
 export function SelectMigrationSourceDirectory():Promise<string>;
 
+export function SetVideoFavorite(arg1:number,arg2:boolean):Promise<models.Video>;
+
+export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
+
 export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
 
 export function SyncScanDirectories():Promise<services.ScanSyncResult>;
@@ -151,3 +171,5 @@ export function UpdateDirectory(arg1:number,arg2:string,arg3:string):Promise<voi
 export function UpdateSettings(arg1:models.Settings):Promise<void>;
 
 export function UpdateTag(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function UpdateVideoWatchProgress(arg1:number,arg2:number,arg3:boolean):Promise<models.Video>;

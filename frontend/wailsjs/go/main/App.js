@@ -58,6 +58,10 @@ export function DeleteDirectory(arg1) {
   return window['go']['main']['App']['DeleteDirectory'](arg1);
 }
 
+export function DeleteSavedLibraryView(arg1) {
+  return window['go']['main']['App']['DeleteSavedLibraryView'](arg1);
+}
+
 export function DeleteTag(arg1) {
   return window['go']['main']['App']['DeleteTag'](arg1);
 }
@@ -106,6 +110,10 @@ export function GetCleanupStatus() {
   return window['go']['main']['App']['GetCleanupStatus']();
 }
 
+export function GetLibrarySubtitleHits(arg1, arg2) {
+  return window['go']['main']['App']['GetLibrarySubtitleHits'](arg1, arg2);
+}
+
 export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
 }
@@ -146,8 +154,20 @@ export function ListAITagCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListAITagCandidates'](arg1, arg2, arg3);
 }
 
+export function ListRecentlyPlayed(arg1) {
+  return window['go']['main']['App']['ListRecentlyPlayed'](arg1);
+}
+
+export function ListRecentlyPlayedWithFilter(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ListRecentlyPlayedWithFilter'](arg1, arg2, arg3, arg4);
+}
+
 export function ListSameSourceRelations(arg1, arg2) {
   return window['go']['main']['App']['ListSameSourceRelations'](arg1, arg2);
+}
+
+export function ListSavedLibraryViews() {
+  return window['go']['main']['App']['ListSavedLibraryViews']();
 }
 
 export function ListTrashEntries() {
@@ -180,6 +200,10 @@ export function OpenDirectory(arg1) {
 
 export function PlayRandomVideo() {
   return window['go']['main']['App']['PlayRandomVideo']();
+}
+
+export function PlayRandomVideoWithFilter(arg1) {
+  return window['go']['main']['App']['PlayRandomVideoWithFilter'](arg1);
 }
 
 export function PlayVideo(arg1) {
@@ -234,12 +258,20 @@ export function SaveAITagLibrary(arg1) {
   return window['go']['main']['App']['SaveAITagLibrary'](arg1);
 }
 
+export function SaveLibraryView(arg1) {
+  return window['go']['main']['App']['SaveLibraryView'](arg1);
+}
+
 export function ScanDirectory(arg1) {
   return window['go']['main']['App']['ScanDirectory'](arg1);
 }
 
 export function ScanDirectoryWithInfo(arg1) {
   return window['go']['main']['App']['ScanDirectoryWithInfo'](arg1);
+}
+
+export function SearchLibraryVideos(arg1, arg2, arg3, arg4, arg5) {
+  return window['go']['main']['App']['SearchLibraryVideos'](arg1, arg2, arg3, arg4, arg5);
 }
 
 export function SearchSubtitleMatches(arg1, arg2) {
@@ -274,6 +306,14 @@ export function SelectMigrationSourceDirectory() {
   return window['go']['main']['App']['SelectMigrationSourceDirectory']();
 }
 
+export function SetVideoFavorite(arg1, arg2) {
+  return window['go']['main']['App']['SetVideoFavorite'](arg1, arg2);
+}
+
+export function SetVideoWatched(arg1, arg2) {
+  return window['go']['main']['App']['SetVideoWatched'](arg1, arg2);
+}
+
 export function StartCleanupAnalysis(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartCleanupAnalysis'](arg1, arg2, arg3);
 }
@@ -296,4 +336,8 @@ export function UpdateSettings(arg1) {
 
 export function UpdateTag(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateTag'](arg1, arg2, arg3);
+}
+
+export function UpdateVideoWatchProgress(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UpdateVideoWatchProgress'](arg1, arg2, arg3);
 }

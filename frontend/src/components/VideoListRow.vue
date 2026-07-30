@@ -1,6 +1,6 @@
 <template>
   <div
-    :class="['video-item', { 'video-item--selected': selected }]"
+    :class="['video-item', `video-item--${layoutMode}`, { 'video-item--selected': selected }]"
     @contextmenu.prevent="$emit('contextmenu', $event, video)"
   >
     <label class="video-select" @click.stop>
@@ -11,6 +11,16 @@
         @change="$emit('toggle-select', video, $event.target.checked)"
       />
     </label>
+    <div class="video-thumbnail" :class="{ 'video-thumbnail--failed': thumbnailFailed }">
+      <img
+        v-if="!thumbnailFailed"
+        :src="thumbnailURL"
+        :alt="`${video.name} 缩略图`"
+        loading="lazy"
+        @error="thumbnailFailed = true"
+      />
+      <span v-else aria-hidden="true">▶</span>
+    </div>
     <div class="video-info">
       <h3>{{ video.name }}</h3>
       <p class="video-path">{{ getDirectoryLabel(video) }}</p>
@@ -22,6 +32,11 @@
         <span v-if="video.resolution" class="video-resolution">{{ video.resolution }}</span>
         <span v-if="video.is_stale" class="meta-divider">|</span>
         <span v-if="video.is_stale" class="video-stale">路径失效</span>
+        <span v-if="video.is_watched" class="meta-divider">|</span>
+        <span v-if="video.is_watched" class="video-watched">已看</span>
+      </div>
+      <div v-if="watchProgressPercent > 0" class="video-watch-progress" :title="watchProgressLabel">
+        <span :style="{ width: `${watchProgressPercent}%` }"></span>
       </div>
       <button v-if="video._subtitleMatchText" type="button" class="video-subtitle-hit" @click="$emit('preview', video)">
         字幕命中 {{ formatTimestamp(video._subtitleMatchStartMs) }}：{{ video._subtitleMatchText }}
@@ -44,6 +59,16 @@
       <div class="row-primary-actions">
         <button @click="$emit('preview', video)" class="btn-secondary btn-compact">预览</button>
         <button @click="$emit('play', video.id)" class="btn-action btn-compact">播放</button>
+        <button
+          @click="$emit('toggle-favorite', video)"
+          :class="['btn-action', 'btn-compact', { active: video.is_favorite }]"
+          :aria-pressed="!!video.is_favorite"
+        >{{ video.is_favorite ? '★ 已收藏' : '☆ 收藏' }}</button>
+        <button
+          @click="$emit('toggle-watched', video)"
+          :class="['btn-action', 'btn-compact', { active: video.is_watched }]"
+          :aria-pressed="!!video.is_watched"
+        >{{ video.is_watched ? '✓ 已看' : '标记已看' }}</button>
       </div>
       <div class="row-secondary-actions">
       <button @click="$emit('open-directory', video.id)" class="btn-action btn-compact">目录</button>
@@ -72,9 +97,32 @@ export default {
     directories: { type: Array, default: () => [] },
     generatingSubtitleIds: { type: Array, default: () => [] },
     deletingIds: { type: Array, default: () => [] },
-    selected: { type: Boolean, default: false }
+    selected: { type: Boolean, default: false },
+    layoutMode: { type: String, default: 'list' }
   },
-  emits: ['preview', 'play', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'move', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
+  emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'move', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
+  data() {
+    return { thumbnailFailed: false };
+  },
+  computed: {
+    thumbnailURL() {
+      return `/preview/thumbnail/${this.video.id}`;
+    },
+    watchProgressPercent() {
+      const duration = Number(this.video.duration || 0);
+      const position = Number(this.video.watch_position_seconds || 0);
+      if (duration <= 0 || position <= 0) return 0;
+      return Math.min(100, Math.max(0, (position / duration) * 100));
+    },
+    watchProgressLabel() {
+      return `看到 ${this.formatDuration(this.video.watch_position_seconds)} / ${this.formatDuration(this.video.duration)}`;
+    }
+  },
+  watch: {
+    'video.id'() {
+      this.thumbnailFailed = false;
+    }
+  },
   methods: {
     tagBgColor(hex) {
       if (!hex || !hex.startsWith('#')) return hex;

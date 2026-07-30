@@ -23,6 +23,10 @@
             preload="metadata"
             :muted="true"
             @loadedmetadata="handleLoadedMetadata"
+            @play="hasPlaybackStarted = true"
+            @timeupdate="handleTimeUpdate"
+            @pause="emitWatchProgress(true, false)"
+            @ended="emitWatchProgress(true, true)"
           >
             <source :src="session.inline_source.locator_value" :type="session.inline_source.mime" />
           </video>
@@ -57,12 +61,16 @@ export default {
   props: {
     video: { type: Object, default: null },
     session: { type: Object, default: null },
-    startTimeMs: { type: Number, default: null }
+    startTimeMs: { type: Number, default: null },
+    resumePositionSeconds: { type: Number, default: 0 }
   },
-  emits: ['close', 'preview-externally'],
+  emits: ['close', 'preview-externally', 'watch-progress'],
   data() {
     return {
-      appliedSeekKey: ''
+      appliedSeekKey: '',
+      lastProgressEmittedAt: 0,
+      resettingVideo: false,
+      hasPlaybackStarted: false
     };
   },
   watch: {
@@ -70,6 +78,7 @@ export default {
       immediate: true,
       handler(newSession, oldSession) {
         if (oldSession) {
+          this.emitWatchProgress(true, false, oldSession?.video_id);
           this.resetVideoElement();
         }
         this.appliedSeekKey = '';
@@ -84,6 +93,7 @@ export default {
     }
   },
   beforeUnmount() {
+    this.emitWatchProgress(true, false);
     this.resetVideoElement();
   },
   methods: {
@@ -98,8 +108,12 @@ export default {
       this.applyStartTime(video);
     },
     applyStartTime(video) {
-      const startTimeMs = Number(this.startTimeMs);
+      const explicitStartTimeMs = Number(this.startTimeMs);
+      const hasExplicitStart = this.startTimeMs !== null && Number.isFinite(explicitStartTimeMs) && explicitStartTimeMs >= 0;
+      const resumePosition = Number(this.resumePositionSeconds);
+      const startTimeMs = hasExplicitStart ? explicitStartTimeMs : resumePosition * 1000;
       if (!Number.isFinite(startTimeMs) || startTimeMs < 0 || video.readyState < 1) return;
+      if (!hasExplicitStart && startTimeMs === 0) return;
       let seekSeconds = startTimeMs / 1000;
       if (Number.isFinite(video.duration) && video.duration > 0) {
         seekSeconds = Math.min(seekSeconds, Math.max(video.duration - 0.001, 0));
@@ -109,9 +123,27 @@ export default {
       video.currentTime = seekSeconds;
       this.appliedSeekKey = seekKey;
     },
+    handleTimeUpdate() {
+      this.emitWatchProgress(false, false);
+    },
+    emitWatchProgress(force, completed, videoID = null) {
+      if (this.resettingVideo || (!this.hasPlaybackStarted && !completed)) return;
+      const video = this.$refs.videoElement;
+      const positionSeconds = Number(video?.currentTime || 0);
+      if (!Number.isFinite(positionSeconds) || positionSeconds <= 0) return;
+      const now = Date.now();
+      if (!force && now - this.lastProgressEmittedAt < 10000) return;
+      this.lastProgressEmittedAt = now;
+      this.$emit('watch-progress', {
+        videoID: Number(videoID || this.session?.video_id || this.video?.id || 0),
+        positionSeconds,
+        completed: !!completed
+      });
+    },
     resetVideoElement() {
       const video = this.$refs.videoElement;
       if (!video) return;
+      this.resettingVideo = true;
       try {
         video.pause();
       } catch (err) {}
@@ -127,6 +159,9 @@ export default {
         source.removeAttribute('src');
       }
       video.load();
+      this.lastProgressEmittedAt = 0;
+      this.hasPlaybackStarted = false;
+      this.resettingVideo = false;
     }
   }
 };
