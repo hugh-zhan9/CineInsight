@@ -150,16 +150,20 @@ export function ListSameSourceRelations(arg1, arg2) {
   return window['go']['main']['App']['ListSameSourceRelations'](arg1, arg2);
 }
 
+export function ListTrashEntries() {
+  return window['go']['main']['App']['ListTrashEntries']();
+}
+
 export function LogFrontend(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontend'](arg1, arg2, arg3);
 }
 
-export function MergeTags(arg1, arg2) {
-  return window['go']['main']['App']['MergeTags'](arg1, arg2);
-}
-
 export function MarkSameSourceRelationRead(arg1) {
   return window['go']['main']['App']['MarkSameSourceRelationRead'](arg1);
+}
+
+export function MergeTags(arg1, arg2) {
+  return window['go']['main']['App']['MergeTags'](arg1, arg2);
 }
 
 export function MoveDirectory(arg1, arg2) {
@@ -216,6 +220,10 @@ export function RemoveTagFromVideo(arg1, arg2) {
 
 export function RenameVideo(arg1, arg2) {
   return window['go']['main']['App']['RenameVideo'](arg1, arg2);
+}
+
+export function RestoreTrashEntry(arg1) {
+  return window['go']['main']['App']['RestoreTrashEntry'](arg1);
 }
 
 export function RetryAITagging(arg1) {

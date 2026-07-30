@@ -23,7 +23,9 @@
         <span v-if="video.is_stale" class="meta-divider">|</span>
         <span v-if="video.is_stale" class="video-stale">路径失效</span>
       </div>
-      <p v-if="video._subtitleMatchText" class="video-subtitle-hit">字幕命中: {{ video._subtitleMatchText }}</p>
+      <button v-if="video._subtitleMatchText" type="button" class="video-subtitle-hit" @click="$emit('preview', video)">
+        字幕命中 {{ formatTimestamp(video._subtitleMatchStartMs) }}：{{ video._subtitleMatchText }}
+      </button>
       <div class="video-tags">
         <span
           v-for="tag in (video.tags || [])"
@@ -122,6 +124,15 @@ export default {
       if (h > 0) parts.push(h.toString().padStart(2, '0'));
       parts.push(m.toString().padStart(2, '0'));
       parts.push(s.toString().padStart(2, '0'));
+      return parts.join(':');
+    },
+    formatTimestamp(ms) {
+      const totalSeconds = Math.max(0, Math.floor(Number(ms) / 1000) || 0);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      const parts = [minutes, seconds].map(value => String(value).padStart(2, '0'));
+      if (hours > 0) parts.unshift(String(hours).padStart(2, '0'));
       return parts.join(':');
     }
   }

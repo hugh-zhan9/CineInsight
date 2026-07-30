@@ -245,6 +245,17 @@ func TestBatchVideoAPIContractsCompile(t *testing.T) {
 	_ = batchRefreshMetadata
 }
 
+func TestTrashRestoreAPIContracts(t *testing.T) {
+	app := NewApp()
+	type trashRestoreAPI interface {
+		ListTrashEntries() ([]models.VideoTrashEntry, error)
+		RestoreTrashEntry(uint) (*models.Video, error)
+	}
+	if _, ok := any(app).(trashRestoreAPI); !ok {
+		t.Fatalf("App 应暴露回收站列表与恢复 API")
+	}
+}
+
 func TestRedactSensitiveLogMessage(t *testing.T) {
 	message := `{"deepl_api_key":"abc123:fx","nested":{"apiKey":"secret"},"Authorization":"Bearer token-value"}`
 	redacted := redactSensitiveLogMessage(message)

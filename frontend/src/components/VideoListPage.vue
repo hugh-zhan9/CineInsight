@@ -57,6 +57,7 @@
         <button type="button" class="btn-action" @click="openAITagReviewDialog()">AI 标签管理</button>
         <span v-if="aiTagSummary.same_source_unread" class="ai-review-badge" title="未读同源视频关系">{{ aiTagSummary.same_source_unread }}</span>
         <button type="button" class="btn-action" @click="openCleanupDialog()">清理候选</button>
+        <button type="button" class="btn-action" @click="openTrashDialog">回收站</button>
         <button type="button" class="btn-action" @click="showTagManagerDialog = true">标签管理</button>
       </div>
     </div>
@@ -68,6 +69,15 @@
       :role="incrementalScan.state === 'error' ? 'alert' : 'status'"
     >
       {{ incrementalScan.message }}
+    </div>
+
+    <div v-if="undoNotice" class="undo-delete-banner" role="status">
+      <span>已移入回收站 {{ undoNotice.count }} 个视频。</span>
+      <button v-if="undoNotice.entry" type="button" class="btn-primary btn-compact" :disabled="undoing" @click="undoLastDelete">
+        {{ undoing ? '撤销中...' : '撤销' }}
+      </button>
+      <button v-else type="button" class="btn-secondary btn-compact" @click="openTrashDialog">查看回收站</button>
+      <button type="button" class="undo-delete-banner__close" aria-label="关闭提示" @click="undoNotice = null">×</button>
     </div>
 
     <div v-if="selectedVideoIds.length > 0" class="selection-toolbar glass-surface">
@@ -139,36 +149,13 @@
       <div v-if="videos.length === 0 && !loading" class="empty-state">
         <p>暂无视频，点击"扫描新目录"开始导入视频</p>
       </div>
-      <template v-else-if="isSubtitleSearchActive()">
-        <VideoListRow
-          v-for="video in videos"
-          :key="video.id"
-          :video="video"
-          :directories="directories"
-          :generating-subtitle-ids="generatingSubtitleIds"
-          :deleting-ids="deletingIds"
-          :selected="isVideoSelected(video.id)"
-          @preview="openPreview"
-          @play="playVideo"
-          @open-directory="openDirectory"
-          @generate-subtitle="generateSubtitle"
-          @subtitle-preview="openSubtitlePreview"
-          @rename="renameVideo"
-          @move="moveVideo"
-          @delete="confirmDelete"
-          @open-add-tag="openAddTagDialog"
-          @remove-tag="removeTag"
-          @toggle-select="toggleVideoSelection"
-          @contextmenu="showContextMenu"
-        />
-      </template>
       <VirtualVideoList
         v-else-if="videos.length > 0"
         :items="videos"
         :loading="loading"
         :has-more="hasMore"
         :virtualization-enabled="homeListVirtualizationEnabled"
-        :subtitle-mode="false"
+        :subtitle-mode="isSubtitleSearchActive()"
         :preview-open="previewOpen"
         :query-key="virtualListQueryKey"
         :estimate-height="estimateVideoHeight"
@@ -212,8 +199,15 @@
       v-if="previewOpen && selectedPreviewVideo"
       :video="selectedPreviewVideo"
       :session="previewSession"
+      :start-time-ms="previewStartTimeMs"
       @close="closePreview"
       @preview-externally="previewExternally"
+    />
+
+    <TrashRestoreDialog
+      :visible="trashDialog.show"
+      @close="trashDialog.show = false"
+      @restored="handleTrashRestored"
     />
 
     <!-- Context Menu -->
@@ -655,6 +649,28 @@
   color: var(--danger-color);
 }
 
+.undo-delete-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(15, 143, 130, 0.34);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.undo-delete-banner__close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+}
+
 @media (max-width: 1320px) {
   .toolbar {
     grid-template-columns: 1fr;
@@ -970,9 +986,16 @@
   color: #0f766e;
 }
 .video-subtitle-hit {
+  display: block;
+  width: 100%;
   margin: 8px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: #0f766e;
+  cursor: pointer;
   font-size: 13px;
+  text-align: left;
 }
 .video-stale {
   color: #b45309;
@@ -981,13 +1004,14 @@
 </style>
 
 <script>
-import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
+import { GetVideosPaginated, SearchVideosWithFilters, SearchSubtitleMatchesWithFilters, PlayVideo, PlayRandomVideo, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
 import DeleteConfirmDialog from './DeleteConfirmDialog.vue';
 import TagDeleteDialog from './TagDeleteDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
+import TrashRestoreDialog from './TrashRestoreDialog.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
 import VideoListRow from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
@@ -996,7 +1020,7 @@ import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, VirtualVideoList, VideoListRow, AITagReviewDialog },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, TrashRestoreDialog, VirtualVideoList, VideoListRow, AITagReviewDialog },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -1039,6 +1063,13 @@ export default {
       incrementalScan: { running: false, state: 'idle', message: '' },
       migrationRunning: false,
       showTagManagerDialog: false,
+      trashDialog: { show: false },
+      undoNotice: null,
+      undoNoticeTimer: null,
+      undoing: false,
+      reloadRequested: false,
+      reloadPromise: null,
+      loadIdleResolvers: [],
       addTagDialog: { show: false, video: null, videoIds: [], mode: 'single' },
       selectedVideoIds: [],
       deleteDialog: { show: false, video: null, videoIds: [] },
@@ -1064,6 +1095,7 @@ export default {
       previewVideoSnapshot: null,
       previewOpen: false,
       previewSession: null,
+      previewStartTimeMs: null,
       wheelFallbackTarget: null,
       wheelFallbackHandler: null,
       rangeEngine: defaultRangeEngine,
@@ -1205,6 +1237,9 @@ export default {
     }
     if (this.aiTagSummaryTimer) {
       clearInterval(this.aiTagSummaryTimer);
+    }
+    if (this.undoNoticeTimer) {
+      clearTimeout(this.undoNoticeTimer);
     }
     this.teardownRuntimeEvents();
     this.resetCleanupProgressTracking();
@@ -1570,6 +1605,10 @@ export default {
     async openPreview(video) {
       const requestToken = Symbol('preview');
       this._previewRequestToken = requestToken;
+      const requestedStartMs = Number(video?._subtitleMatchStartMs);
+      this.previewStartTimeMs = this.isSubtitleSearchActive() && Number.isFinite(requestedStartMs) && requestedStartMs >= 0
+        ? requestedStartMs
+        : null;
       this.selectedPreviewVideoId = video.id;
       this.previewVideoSnapshot = {
         ...video,
@@ -1597,6 +1636,7 @@ export default {
       this._previewRequestToken = null;
       this.previewOpen = false;
       this.previewSession = null;
+      this.previewStartTimeMs = null;
       this.selectedPreviewVideoId = null;
       this.previewVideoSnapshot = null;
     },
@@ -1694,16 +1734,19 @@ export default {
 
       this.cleanupDialog.processing = true;
       try {
-        for (const video of selectedVideos) {
-          if (!this.deletingIds.includes(video.id)) {
-            this.deletingIds.push(video.id);
-          }
-          await DeleteVideo(video.id, true);
-          this.videos = this.videos.filter(item => item.id !== video.id);
-        }
-        this.cleanupSelection = [];
+        this.deletingIds = [...new Set([...this.deletingIds, ...selectedIDs])];
+        const result = await BatchDeleteVideos(selectedIDs, true);
+        const failedIDs = new Set((result?.errors || []).map(item => item.video_id));
+        const succeededIDs = selectedIDs.filter(id => !failedIDs.has(id));
+        this.videos = this.videos.filter(item => !succeededIDs.includes(item.id));
+        this.cleanupSelection = selectedIDs.filter(id => failedIDs.has(id));
+        await this.showDeleteUndo(succeededIDs);
         await this.reloadCurrentView();
         await this.openCleanupDialog();
+        if (result?.failed > 0) {
+          const firstError = result.errors?.[0];
+          alert(`批量清理完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
+        }
       } catch (err) {
         console.error('批量清理失败:', err);
         alert('批量清理失败: ' + err);
@@ -2063,6 +2106,8 @@ export default {
             const video = match.video;
             if (!video || deduped.has(video.id)) continue;
             video._subtitleMatchText = match.segment?.text || '';
+            video._subtitleMatchStartMs = match.segment?.start_time_ms;
+            video._subtitleMatchEndMs = match.segment?.end_time_ms;
             deduped.set(video.id, video);
           }
           newVideos = Array.from(deduped.values());
@@ -2119,6 +2164,8 @@ export default {
         alert('加载视频失败: ' + err);
       } finally {
         this.loading = false;
+        const idleResolvers = this.loadIdleResolvers.splice(0);
+        idleResolvers.forEach(resolve => resolve());
         this.debugLog('loadVideos finished', {
           totalVideos: this.videos.length,
           hasMore: this.hasMore,
@@ -2126,14 +2173,36 @@ export default {
         });
       }
     },
-    resetAndLoadVideos() {
-      this.videos = [];
-      this.selectedVideoIds = [];
-      this.cursorScore = 0;
-      this.cursorSize = 0;
-      this.cursorID = 0;
-      this.hasMore = true;
-      this.loadVideos();
+    waitForLoadIdle() {
+      if (!this.loading) return Promise.resolve();
+      return new Promise(resolve => this.loadIdleResolvers.push(resolve));
+    },
+    async resetAndLoadVideos() {
+      this.reloadRequested = true;
+      if (this.reloadPromise) {
+        await this.reloadPromise;
+        if (this.reloadRequested) return this.resetAndLoadVideos();
+        return;
+      }
+      const activeReload = (async () => {
+        while (this.reloadRequested) {
+          this.reloadRequested = false;
+          await this.waitForLoadIdle();
+          this.videos = [];
+          this.selectedVideoIds = [];
+          this.cursorScore = 0;
+          this.cursorSize = 0;
+          this.cursorID = 0;
+          this.hasMore = true;
+          await this.loadVideos();
+        }
+      })();
+      this.reloadPromise = activeReload;
+      await activeReload;
+      if (this.reloadPromise === activeReload) {
+        this.reloadPromise = null;
+      }
+      if (this.reloadRequested) return this.resetAndLoadVideos();
     },
     isSubtitleSearchActive(keyword = this.searchKeyword.trim()) {
       return this.searchMode === 'subtitle' && !!keyword;
@@ -2152,7 +2221,7 @@ export default {
       return { minSize, maxSize, minHeight, maxHeight };
     },
     async reloadCurrentView() {
-      this.resetAndLoadVideos();
+      return this.resetAndLoadVideos();
     },
     applyClientFilters(videos) {
       return (videos || []).filter(video => {
@@ -2346,6 +2415,7 @@ export default {
         this.closePreview();
       }
         this.videos = this.videos.filter(v => v.id !== video.id);
+        await this.showDeleteUndo([video.id], video.id);
         await this.reloadCurrentView();
       } catch (err) {
         console.error('删除失败:', err);
@@ -2368,6 +2438,7 @@ export default {
         }
         this.videos = this.videos.filter(video => !succeededIds.includes(video.id));
         this.selectedVideoIds = this.selectedVideoIds.filter(id => failedIds.has(id));
+        await this.showDeleteUndo(succeededIds);
         await this.reloadCurrentView();
 
         if (result?.failed > 0) {
@@ -2414,6 +2485,57 @@ export default {
     },
     openAITagReviewDialog() {
       this.aiTagReviewDialog.show = true;
+    },
+    openTrashDialog() {
+      this.trashDialog.show = true;
+    },
+    async showDeleteUndo(videoIDs, preferredVideoID = null) {
+      const ids = [...new Set((videoIDs || []).filter(Boolean))];
+      if (ids.length === 0) return;
+      try {
+        const entries = await ListTrashEntries() || [];
+        const entry = preferredVideoID
+          ? entries.find(item => item.video_id === preferredVideoID) || null
+          : ids.length === 1
+            ? entries.find(item => item.video_id === ids[0]) || null
+            : null;
+        this.undoNotice = { count: ids.length, entry };
+        if (this.undoNoticeTimer) clearTimeout(this.undoNoticeTimer);
+        this.undoNoticeTimer = window.setTimeout(() => {
+          this.undoNotice = null;
+          this.undoNoticeTimer = null;
+        }, 12000);
+      } catch (err) {
+        console.error('读取回收站失败:', err);
+        this.undoNotice = { count: ids.length, entry: null };
+      }
+    },
+    async undoLastDelete() {
+      const entry = this.undoNotice?.entry;
+      if (!entry) {
+        this.openTrashDialog();
+        return;
+      }
+      if (this.undoing) return;
+      this.undoing = true;
+      try {
+        await RestoreTrashEntry(entry.id);
+        this.undoNotice = null;
+        if (this.undoNoticeTimer) clearTimeout(this.undoNoticeTimer);
+        this.undoNoticeTimer = null;
+        await this.reloadCurrentView();
+      } catch (err) {
+        console.error('撤销删除失败:', err);
+        alert('撤销删除失败: ' + err);
+      } finally {
+        this.undoing = false;
+      }
+    },
+    async handleTrashRestored() {
+      this.undoNotice = null;
+      if (this.undoNoticeTimer) clearTimeout(this.undoNoticeTimer);
+      this.undoNoticeTimer = null;
+      await this.reloadCurrentView();
     },
     async refreshAITagSummary() {
       try {

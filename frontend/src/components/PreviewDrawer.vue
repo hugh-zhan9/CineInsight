@@ -56,9 +56,15 @@ export default {
   name: 'PreviewDrawer',
   props: {
     video: { type: Object, default: null },
-    session: { type: Object, default: null }
+    session: { type: Object, default: null },
+    startTimeMs: { type: Number, default: null }
   },
   emits: ['close', 'preview-externally'],
+  data() {
+    return {
+      appliedSeekKey: ''
+    };
+  },
   watch: {
     session: {
       immediate: true,
@@ -66,10 +72,15 @@ export default {
         if (oldSession) {
           this.resetVideoElement();
         }
+        this.appliedSeekKey = '';
         this.$nextTick(() => {
           this.configureVideoElement();
         });
       }
+    },
+    startTimeMs() {
+      this.appliedSeekKey = '';
+      this.$nextTick(() => this.configureVideoElement());
     }
   },
   beforeUnmount() {
@@ -84,6 +95,19 @@ export default {
       if (!video) return;
       video.defaultMuted = true;
       video.muted = true;
+      this.applyStartTime(video);
+    },
+    applyStartTime(video) {
+      const startTimeMs = Number(this.startTimeMs);
+      if (!Number.isFinite(startTimeMs) || startTimeMs < 0 || video.readyState < 1) return;
+      let seekSeconds = startTimeMs / 1000;
+      if (Number.isFinite(video.duration) && video.duration > 0) {
+        seekSeconds = Math.min(seekSeconds, Math.max(video.duration - 0.001, 0));
+      }
+      const seekKey = `${this.session?.video_id || ''}:${seekSeconds}`;
+      if (seekKey === this.appliedSeekKey) return;
+      video.currentTime = seekSeconds;
+      this.appliedSeekKey = seekKey;
     },
     resetVideoElement() {
       const video = this.$refs.videoElement;
@@ -96,6 +120,7 @@ export default {
       } catch (err) {}
       video.defaultMuted = true;
       video.muted = true;
+      this.appliedSeekKey = '';
       video.removeAttribute('src');
       const source = video.querySelector('source');
       if (source) {

@@ -351,6 +351,620 @@ func TestDeleteVideoMovesFileToTrashWhenDeleteFileEnabled(t *testing.T) {
 	if !deleted.DeletedAt.IsValid() {
 		t.Fatalf("期望视频记录已被软删除")
 	}
+
+	var entry struct {
+		VideoID      uint
+		OriginalPath string
+		TrashPath    string
+		FileMoved    bool
+	}
+	if err := database.DB.Table("video_trash_entries").Where("video_id = ?", video.ID).Take(&entry).Error; err != nil {
+		t.Fatalf("期望删除操作创建可恢复条目: %v", err)
+	}
+	if entry.VideoID != video.ID || entry.OriginalPath != videoPath || entry.TrashPath != trashPath || !entry.FileMoved {
+		t.Fatalf("回收站条目与删除结果不一致: %#v", entry)
+	}
+}
+
+func TestListTrashEntriesReturnsNewestFirst(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+
+	first := models.Video{Name: "first.mp4", Path: filepath.Join(root, "first.mp4"), Directory: root, Size: 1}
+	second := models.Video{Name: "second.mp4", Path: filepath.Join(root, "second.mp4"), Directory: root, Size: 1}
+	mustCreateFile(t, first.Path)
+	mustCreateFile(t, second.Path)
+	if err := database.DB.Create(&first).Error; err != nil {
+		t.Fatalf("创建第一个视频失败: %v", err)
+	}
+	if err := database.DB.Create(&second).Error; err != nil {
+		t.Fatalf("创建第二个视频失败: %v", err)
+	}
+	if err := svc.DeleteVideo(first.ID, false); err != nil {
+		t.Fatalf("删除第一个视频记录失败: %v", err)
+	}
+	if err := svc.DeleteVideo(second.ID, false); err != nil {
+		t.Fatalf("删除第二个视频记录失败: %v", err)
+	}
+
+	lister, ok := any(svc).(interface {
+		ListTrashEntries() ([]models.VideoTrashEntry, error)
+	})
+	if !ok {
+		t.Fatalf("VideoService 应提供 ListTrashEntries")
+	}
+	entries, err := lister.ListTrashEntries()
+	if err != nil {
+		t.Fatalf("列出回收站失败: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("回收站条目数量错误: %#v", entries)
+	}
+	if entries[0].VideoID != second.ID || entries[1].VideoID != first.ID {
+		t.Fatalf("回收站应按最新删除优先排序: %#v", entries)
+	}
+	if entries[0].FileMoved || entries[0].TrashPath != "" {
+		t.Fatalf("仅删除记录不应标记文件已移动: %#v", entries[0])
+	}
+	if _, err := os.Stat(second.Path); err != nil {
+		t.Fatalf("仅删除记录后原文件应保留: %v", err)
+	}
+}
+
+func TestRestoreTrashEntryRestoresMovedFileAndSubtitleIndex(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "restorable.mp4")
+	srtPath := filepath.Join(root, "restorable.srt")
+	mustCreateFile(t, videoPath)
+	if err := os.WriteFile(srtPath, []byte("1\n00:00:04,000 --> 00:00:06,000\nrestored subtitle phrase\n\n"), 0644); err != nil {
+		t.Fatalf("写入字幕失败: %v", err)
+	}
+	video := models.Video{Name: "restorable.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := indexSubtitleFileForVideoID(video.ID, srtPath); err != nil {
+		t.Fatalf("创建字幕索引失败: %v", err)
+	}
+	if err := svc.DeleteVideo(video.ID, true); err != nil {
+		t.Fatalf("删除视频失败: %v", err)
+	}
+	entries, err := svc.ListTrashEntries()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("读取回收站条目失败: entries=%#v err=%v", entries, err)
+	}
+
+	restorer, ok := any(svc).(interface {
+		RestoreTrashEntry(uint) (*models.Video, error)
+	})
+	if !ok {
+		t.Fatalf("VideoService 应提供 RestoreTrashEntry")
+	}
+	restored, err := restorer.RestoreTrashEntry(entries[0].ID)
+	if err != nil {
+		t.Fatalf("恢复视频失败: %v", err)
+	}
+	if restored.ID != video.ID || restored.Path != videoPath {
+		t.Fatalf("恢复结果错误: %#v", restored)
+	}
+	if _, err := os.Stat(videoPath); err != nil {
+		t.Fatalf("视频文件未恢复到原路径: %v", err)
+	}
+	if _, err := os.Stat(entries[0].TrashPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("回收站文件应已移回原路径: %v", err)
+	}
+	var active models.Video
+	if err := database.DB.First(&active, video.ID).Error; err != nil {
+		t.Fatalf("视频记录未恢复为活动状态: %v", err)
+	}
+	if remaining, err := svc.ListTrashEntries(); err != nil || len(remaining) != 0 {
+		t.Fatalf("恢复后应移除回收站条目: entries=%#v err=%v", remaining, err)
+	}
+	matches, err := (&SubtitleSearchService{}).SearchSubtitleMatches("restored subtitle", 10)
+	if err != nil {
+		t.Fatalf("搜索恢复后的字幕失败: %v", err)
+	}
+	if len(matches) != 1 || matches[0].Video.ID != video.ID || matches[0].Segment.StartTimeMs != 4000 {
+		t.Fatalf("恢复后字幕索引未重建: %#v", matches)
+	}
+}
+
+func TestRestoreTrashEntryRejectsOccupiedOriginalPath(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "occupied.mp4")
+	mustCreateFile(t, videoPath)
+	video := models.Video{Name: "occupied.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := svc.DeleteVideo(video.ID, true); err != nil {
+		t.Fatalf("删除视频失败: %v", err)
+	}
+	entries, err := svc.ListTrashEntries()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("读取回收站条目失败: entries=%#v err=%v", entries, err)
+	}
+	if err := os.WriteFile(videoPath, []byte("replacement"), 0644); err != nil {
+		t.Fatalf("创建占位文件失败: %v", err)
+	}
+
+	if _, err := svc.RestoreTrashEntry(entries[0].ID); err == nil {
+		t.Fatalf("原路径被占用时恢复应失败")
+	}
+	content, err := os.ReadFile(videoPath)
+	if err != nil || string(content) != "replacement" {
+		t.Fatalf("恢复失败不应覆盖占位文件: content=%q err=%v", string(content), err)
+	}
+	if _, err := os.Stat(entries[0].TrashPath); err != nil {
+		t.Fatalf("恢复失败后回收站文件应保留: %v", err)
+	}
+	if remaining, err := svc.ListTrashEntries(); err != nil || len(remaining) != 1 {
+		t.Fatalf("恢复失败后条目应保留: entries=%#v err=%v", remaining, err)
+	}
+}
+
+func TestRestoreTrashEntryRestoresRecordOnlyDeletion(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "record-only.mp4")
+	mustCreateFile(t, videoPath)
+	video := models.Video{Name: "record-only.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := svc.DeleteVideo(video.ID, false); err != nil {
+		t.Fatalf("仅删除记录失败: %v", err)
+	}
+	entries, err := svc.ListTrashEntries()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("读取回收站条目失败: entries=%#v err=%v", entries, err)
+	}
+	if entries[0].FileMoved || entries[0].TrashPath != "" {
+		t.Fatalf("仅删除记录不应标记文件移动: %#v", entries[0])
+	}
+
+	restored, err := svc.RestoreTrashEntry(entries[0].ID)
+	if err != nil {
+		t.Fatalf("恢复记录失败: %v", err)
+	}
+	if restored.ID != video.ID {
+		t.Fatalf("恢复了错误的视频: %#v", restored)
+	}
+	if _, err := os.Stat(videoPath); err != nil {
+		t.Fatalf("记录恢复后原文件应保持不变: %v", err)
+	}
+}
+
+func TestDeleteVideoRestoresFileWhenTrashEntryCannotBeRecorded(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "entry-conflict.mp4")
+	mustCreateFile(t, videoPath)
+	video := models.Video{Name: "entry-conflict.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: video.Path,
+	}).Error; err != nil {
+		t.Fatalf("创建冲突条目失败: %v", err)
+	}
+
+	err := svc.DeleteVideo(video.ID, true)
+	if err == nil {
+		t.Fatalf("回收站条目冲突时删除应失败")
+	}
+	if _, err := os.Stat(videoPath); err != nil {
+		t.Fatalf("记录回收站条目失败后应恢复原文件: %v", err)
+	}
+	trashPath := filepath.Join(root, DefaultTrashDirName, filepath.Base(videoPath))
+	if _, err := os.Stat(trashPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("补偿后不应残留回收站文件: %v", err)
+	}
+	if err := database.DB.First(&models.Video{}, video.ID).Error; err != nil {
+		t.Fatalf("删除失败后视频记录应保持活动: %v", err)
+	}
+}
+
+func TestMoveToTrashNeverOverwritesCollidingCandidates(t *testing.T) {
+	root := t.TempDir()
+	sourcePath := filepath.Join(root, "movie.mp4")
+	mustCreateFile(t, sourcePath)
+	trashDir := filepath.Join(root, DefaultTrashDirName)
+	if err := os.MkdirAll(trashDir, 0755); err != nil {
+		t.Fatalf("创建回收站目录失败: %v", err)
+	}
+	fixedNow := time.Date(2026, 7, 30, 12, 34, 56, 0, time.Local)
+	baseCollision := filepath.Join(trashDir, "movie.mp4")
+	timestampCollision := filepath.Join(trashDir, "movie_20260730123456.mp4")
+	if err := os.WriteFile(baseCollision, []byte("keep-base"), 0644); err != nil {
+		t.Fatalf("创建基础碰撞文件失败: %v", err)
+	}
+	if err := os.WriteFile(timestampCollision, []byte("keep-timestamp"), 0644); err != nil {
+		t.Fatalf("创建时间戳碰撞文件失败: %v", err)
+	}
+
+	trashService := NewTrashService()
+	trashService.now = func() time.Time { return fixedNow }
+	targetPath, err := trashService.MoveToTrash(sourcePath)
+	if err != nil {
+		t.Fatalf("移动碰撞文件失败: %v", err)
+	}
+	if targetPath != filepath.Join(trashDir, "movie_20260730123456_2.mp4") {
+		t.Fatalf("应跳过所有已占用候选: %s", targetPath)
+	}
+	for path, want := range map[string]string{
+		baseCollision:      "keep-base",
+		timestampCollision: "keep-timestamp",
+	} {
+		content, readErr := os.ReadFile(path)
+		if readErr != nil || string(content) != want {
+			t.Fatalf("碰撞文件不应被覆盖 path=%s content=%q err=%v", path, content, readErr)
+		}
+	}
+}
+
+func TestReconcileTrashEntriesCompletesPendingDeleteAfterFileMove(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "pending.mp4")
+	mustCreateFile(t, videoPath)
+	info, err := os.Stat(videoPath)
+	if err != nil {
+		t.Fatalf("读取视频信息失败: %v", err)
+	}
+	video := models.Video{Name: "pending.mp4", Path: videoPath, Directory: root, Size: info.Size()}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	trashService := NewTrashService()
+	digest, err := fileSHA256Hex(videoPath)
+	if err != nil {
+		t.Fatalf("计算视频摘要失败: %v", err)
+	}
+	entry := models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: video.Path,
+		TrashPath:    trashService.TrashTargetPath(video.Path, 0),
+		FileSize:     info.Size(),
+		FileModTime:  info.ModTime().UnixNano(),
+		FileIdentity: stableFileIdentity(info),
+		FileSHA256:   digest,
+		State:        trashStatePendingMove,
+	}
+	if err := database.DB.Create(&entry).Error; err != nil {
+		t.Fatalf("创建待移动状态失败: %v", err)
+	}
+	if err := trashService.MoveToTrashAt(video.Path, entry.TrashPath); err != nil {
+		t.Fatalf("模拟文件已移动失败: %v", err)
+	}
+
+	if err := svc.ReconcileTrashEntries(); err != nil {
+		t.Fatalf("启动对账失败: %v", err)
+	}
+	var deleted models.Video
+	if err := database.DB.Unscoped().First(&deleted, video.ID).Error; err != nil || !deleted.DeletedAt.IsValid() {
+		t.Fatalf("对账后视频应完成软删除: %#v err=%v", deleted, err)
+	}
+	var reconciled models.VideoTrashEntry
+	if err := database.DB.First(&reconciled, entry.ID).Error; err != nil {
+		t.Fatalf("读取对账条目失败: %v", err)
+	}
+	if reconciled.State != trashStateDeleted || !reconciled.FileMoved {
+		t.Fatalf("待移动条目未完成: %#v", reconciled)
+	}
+}
+
+func TestReconcilePendingDeleteSkipsUnownedPlannedPath(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "collision-pending.mp4")
+	mustCreateFile(t, videoPath)
+	info, err := os.Stat(videoPath)
+	if err != nil {
+		t.Fatalf("读取视频信息失败: %v", err)
+	}
+	video := models.Video{Name: filepath.Base(videoPath), Path: videoPath, Directory: root, Size: info.Size()}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	trashService := NewTrashService()
+	digest, err := fileSHA256Hex(videoPath)
+	if err != nil {
+		t.Fatalf("计算视频摘要失败: %v", err)
+	}
+	plannedPath := trashService.TrashTargetPath(videoPath, 0)
+	if err := os.MkdirAll(filepath.Dir(plannedPath), 0755); err != nil {
+		t.Fatalf("创建回收站目录失败: %v", err)
+	}
+	if err := os.WriteFile(plannedPath, []byte("unowned"), 0644); err != nil {
+		t.Fatalf("创建既有回收站文件失败: %v", err)
+	}
+	entry := models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: video.Path,
+		TrashPath:    plannedPath,
+		FileSize:     info.Size(),
+		FileModTime:  info.ModTime().UnixNano(),
+		FileIdentity: stableFileIdentity(info),
+		FileSHA256:   digest,
+		State:        trashStatePendingMove,
+	}
+	if err := database.DB.Create(&entry).Error; err != nil {
+		t.Fatalf("创建待移动状态失败: %v", err)
+	}
+
+	if err := svc.ReconcileTrashEntries(); err != nil {
+		t.Fatalf("碰撞对账失败: %v", err)
+	}
+	content, err := os.ReadFile(plannedPath)
+	if err != nil || string(content) != "unowned" {
+		t.Fatalf("对账不应覆盖或删除既有文件 content=%q err=%v", content, err)
+	}
+	if err := database.DB.First(&entry, entry.ID).Error; err != nil {
+		t.Fatalf("读取对账后条目失败: %v", err)
+	}
+	if entry.TrashPath == plannedPath || entry.State != trashStateDeleted || !entry.FileMoved {
+		t.Fatalf("对账应选择新路径并完成删除: %#v", entry)
+	}
+	if _, err := os.Stat(entry.TrashPath); err != nil {
+		t.Fatalf("视频应移动到新回收站路径: %v", err)
+	}
+}
+
+func TestRestoreTrashEntryCancelsVisibleInterruptedDelete(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "cancel-pending.mp4")
+	mustCreateFile(t, videoPath)
+	info, err := os.Stat(videoPath)
+	if err != nil {
+		t.Fatalf("读取视频信息失败: %v", err)
+	}
+	digest, err := fileSHA256Hex(videoPath)
+	if err != nil {
+		t.Fatalf("计算视频摘要失败: %v", err)
+	}
+	video := models.Video{Name: filepath.Base(videoPath), Path: videoPath, Directory: root, Size: info.Size()}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	trashService := NewTrashService()
+	entry := models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: video.Path,
+		TrashPath:    trashService.TrashTargetPath(video.Path, 0),
+		FileSize:     info.Size(),
+		FileModTime:  info.ModTime().UnixNano(),
+		FileIdentity: stableFileIdentity(info),
+		FileSHA256:   digest,
+		State:        trashStatePendingMove,
+		LastError:    "上次移动中断",
+	}
+	if err := database.DB.Create(&entry).Error; err != nil {
+		t.Fatalf("创建中断条目失败: %v", err)
+	}
+	if err := trashService.MoveToTrashAt(videoPath, entry.TrashPath); err != nil {
+		t.Fatalf("模拟中断删除的文件移动失败: %v", err)
+	}
+	entries, err := svc.ListTrashEntries()
+	if err != nil || len(entries) != 1 || entries[0].State != trashStatePendingMove || entries[0].LastError == "" {
+		t.Fatalf("中断条目应对用户可见: entries=%#v err=%v", entries, err)
+	}
+
+	restored, err := svc.RestoreTrashEntry(entry.ID)
+	if err != nil {
+		t.Fatalf("恢复中断删除失败: %v", err)
+	}
+	if restored.ID != video.ID {
+		t.Fatalf("恢复了错误的视频: %#v", restored)
+	}
+	if _, err := os.Stat(videoPath); err != nil {
+		t.Fatalf("文件未恢复到原路径: %v", err)
+	}
+	if remaining, err := svc.ListTrashEntries(); err != nil || len(remaining) != 0 {
+		t.Fatalf("恢复后中断条目应清理: entries=%#v err=%v", remaining, err)
+	}
+}
+
+func TestReconcilePendingDeleteRejectsSameSizeMtimeReplacement(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "identity.mp4")
+	if err := os.WriteFile(videoPath, []byte("original"), 0644); err != nil {
+		t.Fatalf("创建原视频失败: %v", err)
+	}
+	info, err := os.Stat(videoPath)
+	if err != nil {
+		t.Fatalf("读取原视频信息失败: %v", err)
+	}
+	digest, err := fileSHA256Hex(videoPath)
+	if err != nil {
+		t.Fatalf("计算原视频摘要失败: %v", err)
+	}
+	video := models.Video{Name: filepath.Base(videoPath), Path: videoPath, Directory: root, Size: info.Size()}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频记录失败: %v", err)
+	}
+	entry := models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: video.Path,
+		TrashPath:    NewTrashService().TrashTargetPath(video.Path, 0),
+		FileSize:     info.Size(),
+		FileModTime:  info.ModTime().UnixNano(),
+		FileIdentity: stableFileIdentity(info),
+		FileSHA256:   digest,
+		State:        trashStatePendingMove,
+	}
+	if err := database.DB.Create(&entry).Error; err != nil {
+		t.Fatalf("创建待删除条目失败: %v", err)
+	}
+	if err := os.Remove(videoPath); err != nil {
+		t.Fatalf("移除原视频失败: %v", err)
+	}
+	if err := os.WriteFile(videoPath, []byte("replaced"), 0644); err != nil {
+		t.Fatalf("创建同大小替换文件失败: %v", err)
+	}
+	if err := os.Chtimes(videoPath, info.ModTime(), info.ModTime()); err != nil {
+		t.Fatalf("复原替换文件时间失败: %v", err)
+	}
+
+	if err := svc.ReconcileTrashEntries(); err == nil {
+		t.Fatalf("强身份不一致时对账应失败")
+	}
+	content, err := os.ReadFile(videoPath)
+	if err != nil || string(content) != "replaced" {
+		t.Fatalf("对账不应移动替换文件 content=%q err=%v", content, err)
+	}
+	var retained models.VideoTrashEntry
+	if err := database.DB.First(&retained, entry.ID).Error; err != nil || retained.LastError == "" {
+		t.Fatalf("失败条目应保留诊断信息: %#v err=%v", retained, err)
+	}
+}
+
+func TestReconcileTrashEntriesCompletesInterruptedRestore(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "restoring.mp4")
+	mustCreateFile(t, videoPath)
+	video := models.Video{Name: "restoring.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := svc.DeleteVideo(video.ID, true); err != nil {
+		t.Fatalf("删除视频失败: %v", err)
+	}
+	entries, err := svc.ListTrashEntries()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("读取回收站失败: entries=%#v err=%v", entries, err)
+	}
+	entry := entries[0]
+	if err := database.DB.Model(&entry).Update("state", trashStateRestoring).Error; err != nil {
+		t.Fatalf("标记恢复中失败: %v", err)
+	}
+	if err := NewTrashService().RestoreFromTrash(entry.TrashPath, entry.OriginalPath); err != nil {
+		t.Fatalf("模拟文件已恢复失败: %v", err)
+	}
+
+	if err := svc.ReconcileTrashEntries(); err != nil {
+		t.Fatalf("恢复对账失败: %v", err)
+	}
+	if err := database.DB.First(&models.Video{}, video.ID).Error; err != nil {
+		t.Fatalf("对账后视频应恢复活动状态: %v", err)
+	}
+	var entryCount int64
+	if err := database.DB.Model(&models.VideoTrashEntry{}).Where("id = ?", entry.ID).Count(&entryCount).Error; err != nil || entryCount != 0 {
+		t.Fatalf("对账后条目应删除 count=%d err=%v", entryCount, err)
+	}
+}
+
+func TestRestoreTrashEntryKeepsRetryStateWhenSubtitleIndexRebuildFails(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "broken-subtitle.mp4")
+	srtPath := filepath.Join(root, "broken-subtitle.srt")
+	mustCreateFile(t, videoPath)
+	if err := os.Mkdir(srtPath, 0755); err != nil {
+		t.Fatalf("创建无效字幕路径失败: %v", err)
+	}
+	video := models.Video{Name: "broken-subtitle.mp4", Path: videoPath, Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := svc.DeleteVideo(video.ID, true); err != nil {
+		t.Fatalf("删除视频失败: %v", err)
+	}
+	entries, err := svc.ListTrashEntries()
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("读取回收站失败: entries=%#v err=%v", entries, err)
+	}
+
+	if _, err := svc.RestoreTrashEntry(entries[0].ID); err == nil || !strings.Contains(err.Error(), "字幕索引") {
+		t.Fatalf("字幕索引失败应使恢复失败: %v", err)
+	}
+	if _, err := os.Stat(entries[0].TrashPath); err != nil {
+		t.Fatalf("恢复失败后文件应回滚到回收站: %v", err)
+	}
+	if _, err := os.Stat(videoPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("恢复失败后原路径不应残留视频: %v", err)
+	}
+	remaining, err := svc.ListTrashEntries()
+	if err != nil || len(remaining) != 1 || remaining[0].State != trashStateDeleted {
+		t.Fatalf("恢复失败后应保留可重试条目: entries=%#v err=%v", remaining, err)
+	}
+}
+
+func TestTrashTransactionOutcomeChecksDistinguishCommitFromRollback(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	video := models.Video{Name: "outcome.mp4", Path: filepath.Join(root, "outcome.mp4"), Directory: root, Size: 1}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	entry := models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: video.Path,
+		TrashPath:    filepath.Join(root, DefaultTrashDirName, video.Name),
+		State:        trashStatePendingMove,
+	}
+	if err := database.DB.Create(&entry).Error; err != nil {
+		t.Fatalf("创建操作日志失败: %v", err)
+	}
+	committed, rolledBack, err := confirmDeleteTransactionOutcome(video.ID, entry.ID)
+	if err != nil || committed || !rolledBack {
+		t.Fatalf("活动视频和 pending 日志应判定删除回滚: committed=%v rolledBack=%v err=%v", committed, rolledBack, err)
+	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&entry).Update("state", trashStateDeleted).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&video).Error
+	}); err != nil {
+		t.Fatalf("模拟删除提交失败: %v", err)
+	}
+	committed, rolledBack, err = confirmDeleteTransactionOutcome(video.ID, entry.ID)
+	if err != nil || !committed || rolledBack {
+		t.Fatalf("软删除视频和 deleted 日志应判定删除已提交: committed=%v rolledBack=%v err=%v", committed, rolledBack, err)
+	}
+	if err := database.DB.Model(&entry).Update("state", trashStateRestoring).Error; err != nil {
+		t.Fatalf("模拟恢复中状态失败: %v", err)
+	}
+	committed, rolledBack, err = confirmRestoreTransactionOutcome(video.ID, entry.ID)
+	if err != nil || committed || !rolledBack {
+		t.Fatalf("软删除视频和 restoring 日志应判定恢复回滚: committed=%v rolledBack=%v err=%v", committed, rolledBack, err)
+	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.Video{}).Unscoped().Where("id = ?", video.ID).Update("deleted_at", nil).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&entry).Error
+	}); err != nil {
+		t.Fatalf("模拟恢复提交失败: %v", err)
+	}
+	committed, rolledBack, err = confirmRestoreTransactionOutcome(video.ID, entry.ID)
+	if err != nil || !committed || rolledBack {
+		t.Fatalf("活动视频且日志删除应判定恢复已提交: committed=%v rolledBack=%v err=%v", committed, rolledBack, err)
+	}
 }
 
 func TestBatchDeleteVideosReportsPartialFailures(t *testing.T) {

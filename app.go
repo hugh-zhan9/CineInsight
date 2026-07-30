@@ -78,6 +78,9 @@ func (a *App) startup(ctx context.Context) {
 	if a.startupError != "" {
 		return
 	}
+	if err := a.videoService.ReconcileTrashEntries(); err != nil {
+		log.Printf("App startup trash reconciliation failed err=%v", err)
+	}
 	a.subtitleService.SetContext(ctx) // Inject context
 	a.cleanupService.SetContext(ctx)
 	if result, err := a.tagService.SyncShortVideoTags(); err != nil {
@@ -384,6 +387,20 @@ func (a *App) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *services.Batc
 	result := a.videoService.BatchDeleteVideos(videoIDs, deleteFile)
 	log.Printf("API BatchDeleteVideos requested=%d succeeded=%d failed=%d deleteFile=%v", result.Requested, result.Succeeded, result.Failed, deleteFile)
 	return result
+}
+
+// ListTrashEntries 返回当前可恢复的视频删除记录。
+func (a *App) ListTrashEntries() ([]models.VideoTrashEntry, error) {
+	entries, err := a.videoService.ListTrashEntries()
+	log.Printf("API ListTrashEntries result=%d err=%v", len(entries), err)
+	return entries, err
+}
+
+// RestoreTrashEntry 将一个视频恢复到删除前的路径。
+func (a *App) RestoreTrashEntry(entryID uint) (*models.Video, error) {
+	video, err := a.videoService.RestoreTrashEntry(entryID)
+	log.Printf("API RestoreTrashEntry entryID=%d err=%v", entryID, err)
+	return video, err
 }
 
 // OpenDirectory 打开文件所在目录
