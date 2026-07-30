@@ -31,6 +31,8 @@ export function groupCandidatesByVideo(candidates) {
         videoId: candidate?.video_id || video.id || 0,
         videoName: video.name || `视频 #${candidate?.video_id || ''}`,
         videoPath: video.path || '',
+        video,
+        videoTags: Array.isArray(video.tags) ? video.tags : [],
         videoDeleted: Boolean(candidate?.video_deleted),
         candidates: [],
       });
@@ -54,6 +56,7 @@ export function filterCandidatesForReview(candidates, searchTerm) {
     return [
       video.name,
       video.path,
+      ...(Array.isArray(video.tags) ? video.tags.map(tag => tag?.name) : []),
       candidate?.suggested_name,
       candidate?.matched_tag?.name,
       candidate?.reasoning,

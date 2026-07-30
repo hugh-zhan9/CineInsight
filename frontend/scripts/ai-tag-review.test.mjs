@@ -15,25 +15,28 @@ assert.equal(confidenceMeta('medium').className, 'ai-confidence--medium');
 assert.notEqual(confidenceMeta('high').className, confidenceMeta('medium').className);
 
 const groups = groupCandidatesByVideo([
-  { id: 1, video_id: 10, confidence: 'medium', video: { id: 10, name: 'a.mp4', path: '/a.mp4' } },
-  { id: 2, video_id: 10, confidence: 'high', video_deleted: true, video: { id: 10, name: 'a.mp4', path: '/a.mp4' } },
+  { id: 1, video_id: 10, confidence: 'medium', video: { id: 10, name: 'a.mp4', path: '/a.mp4', tags: [{ id: 3, name: '已有标签' }] } },
+  { id: 2, video_id: 10, confidence: 'high', video_deleted: true, video: { id: 10, name: 'a.mp4', path: '/a.mp4', tags: [{ id: 3, name: '已有标签' }] } },
 ]);
 assert.equal(groups.length, 1);
 assert.equal(groups[0].candidates[0].confidence, 'high');
 assert.equal(groups[0].videoName, 'a.mp4');
 assert.equal(groups[0].videoDeleted, true);
+assert.equal(groups[0].video.id, 10);
+assert.deepEqual(groups[0].videoTags.map(tag => tag.name), ['已有标签']);
 
 const remaining = removeCandidateById([{ id: 1 }, { id: 2 }], 1);
 assert.deepEqual(remaining, [{ id: 2 }]);
 
 const reviewCandidates = [
-  { id: 1, suggested_name: '动作', reasoning: 'fast cuts', video: { name: 'fight.mp4', path: '/library/fight.mp4' } },
+  { id: 1, suggested_name: '动作', reasoning: 'fast cuts', video: { name: 'fight.mp4', path: '/library/fight.mp4', tags: [{ id: 9, name: '功夫' }] } },
   { id: 2, suggested_name: '舞蹈', reasoning: 'stage', video: { name: 'dance.mp4', path: '/library/dance.mp4' } },
 ];
 assert.deepEqual(filterCandidatesForReview(reviewCandidates, ''), reviewCandidates);
 assert.deepEqual(filterCandidatesForReview(reviewCandidates, 'fight').map(candidate => candidate.id), [1]);
 assert.deepEqual(filterCandidatesForReview(reviewCandidates, '舞蹈').map(candidate => candidate.id), [2]);
 assert.deepEqual(filterCandidatesForReview(reviewCandidates, '/library/dance').map(candidate => candidate.id), [2]);
+assert.deepEqual(filterCandidatesForReview(reviewCandidates, '功夫').map(candidate => candidate.id), [1]);
 assert.deepEqual(filterCandidatesForReview(reviewCandidates, 'missing'), []);
 
 const confirmState = createRejectVideoConfirm({
@@ -70,6 +73,10 @@ assert.match(componentSource, /RejectSameSourceRelation/);
 assert.match(componentSource, /不是同源/);
 assert.match(componentSource, /relation\.video_a_deleted/);
 assert.match(componentSource, /relation\.video_b_deleted/);
+assert.match(componentSource, /手动添加标签/);
+assert.match(componentSource, /group\.videoTags/);
+assert.match(componentSource, /<AddTagDialog/);
+assert.match(componentSource, /handleManualTagAdded/);
 assert.match(componentSource, /class="search-input ai-tag-review-search"/, 'AI review search should reuse shared search input styling');
 assert.match(componentSource, /class="text-input ai-tag-rename-input"/, 'AI review rename dialog should reuse shared text input styling');
 assert.match(componentSource, /class="ai-confirm-dialog glass-surface"/, 'AI review nested confirmations should use shared glass surfaces');
