@@ -265,37 +265,56 @@ func replaceSubtitleIndex(video models.Video, srtPath string, segments []subtitl
 	}
 
 	return database.DB.Transaction(func(tx *gorm.DB) error {
+		return replaceSubtitleIndexTx(tx, video, srtPath, info, segments)
+	})
+}
+
+func rebuildSubtitleIndexTx(tx *gorm.DB, video models.Video) error {
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	info, err := os.Stat(srtPath)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
 		if err := tx.Where("video_id = ?", video.ID).Delete(&models.SubtitleSegment{}).Error; err != nil {
 			return err
 		}
-		if len(segments) == 0 {
-			return nil
-		}
+		return upsertSubtitleIndexStateTx(tx, video.ID, srtPath, 0, 0, 0)
+	}
+	segments, err := subtitleparser.ParseFile(srtPath)
+	if err != nil {
+		return err
+	}
+	return replaceSubtitleIndexTx(tx, video, srtPath, info, segments)
+}
 
-		indexed := make([]models.SubtitleSegment, 0, len(segments))
-		for idx, segment := range segments {
-			text := strings.TrimSpace(segment.Text)
-			if text == "" {
-				continue
-			}
-			indexed = append(indexed, models.SubtitleSegment{
-				VideoID:         video.ID,
-				SegmentIndex:    idx + 1,
-				StartTimeMs:     segment.StartTimeMs,
-				EndTimeMs:       segment.EndTimeMs,
-				Text:            text,
-				SubtitlePath:    srtPath,
-				SubtitleModTime: info.ModTime().UnixNano(),
-			})
+func replaceSubtitleIndexTx(tx *gorm.DB, video models.Video, srtPath string, info os.FileInfo, segments []subtitleparser.Segment) error {
+	if err := tx.Where("video_id = ?", video.ID).Delete(&models.SubtitleSegment{}).Error; err != nil {
+		return err
+	}
+
+	indexed := make([]models.SubtitleSegment, 0, len(segments))
+	for idx, segment := range segments {
+		text := strings.TrimSpace(segment.Text)
+		if text == "" {
+			continue
 		}
-		if len(indexed) == 0 {
-			return upsertSubtitleIndexStateTx(tx, video.ID, srtPath, info.ModTime().UnixNano(), info.Size(), 0)
-		}
+		indexed = append(indexed, models.SubtitleSegment{
+			VideoID:         video.ID,
+			SegmentIndex:    idx + 1,
+			StartTimeMs:     segment.StartTimeMs,
+			EndTimeMs:       segment.EndTimeMs,
+			Text:            text,
+			SubtitlePath:    srtPath,
+			SubtitleModTime: info.ModTime().UnixNano(),
+		})
+	}
+	if len(indexed) > 0 {
 		if err := tx.CreateInBatches(indexed, 500).Error; err != nil {
 			return err
 		}
-		return upsertSubtitleIndexStateTx(tx, video.ID, srtPath, info.ModTime().UnixNano(), info.Size(), len(indexed))
-	})
+	}
+	return upsertSubtitleIndexStateTx(tx, video.ID, srtPath, info.ModTime().UnixNano(), info.Size(), len(indexed))
 }
 
 func deleteSubtitleIndex(videoID uint) error {

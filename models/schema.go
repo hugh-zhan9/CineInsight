@@ -3,6 +3,7 @@ package models
 func AllModels() []interface{} {
 	return []interface{}{
 		&Video{},
+		&VideoTrashEntry{},
 		&SubtitleSegment{},
 		&SubtitleIndexState{},
 		&Tag{},

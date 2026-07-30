@@ -78,11 +78,13 @@ export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise
 
 export function ListSameSourceRelations(arg1:string,arg2:boolean):Promise<Array<services.VideoSameSourceReviewItem>>;
 
+export function ListTrashEntries():Promise<Array<models.VideoTrashEntry>>;
+
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
-export function MergeTags(arg1:Array<number>,arg2:number):Promise<services.MergeTagsResult>;
-
 export function MarkSameSourceRelationRead(arg1:number):Promise<void>;
+
+export function MergeTags(arg1:Array<number>,arg2:number):Promise<services.MergeTagsResult>;
 
 export function MoveDirectory(arg1:string,arg2:string):Promise<services.FolderMigrationResult>;
 
@@ -111,6 +113,8 @@ export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
 
 export function RenameVideo(arg1:number,arg2:string):Promise<void>;
+
+export function RestoreTrashEntry(arg1:number):Promise<models.Video>;
 
 export function RetryAITagging(arg1:number):Promise<void>;
 

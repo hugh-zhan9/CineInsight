@@ -176,6 +176,40 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class VideoTrashEntry {
+	    id: number;
+	    video_id: number;
+	    video_name: string;
+	    original_path: string;
+	    trash_path: string;
+	    file_moved: boolean;
+	    file_size: number;
+	    file_mod_time: number;
+	    state: string;
+	    last_error: string;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoTrashEntry(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.video_name = source["video_name"];
+	        this.original_path = source["original_path"];
+	        this.trash_path = source["trash_path"];
+	        this.file_moved = source["file_moved"];
+	        this.file_size = source["file_size"];
+	        this.file_mod_time = source["file_mod_time"];
+	        this.state = source["state"];
+	        this.last_error = source["last_error"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 
 }
 
@@ -282,49 +316,6 @@ export namespace services {
 	        this.skipped = source["skipped"];
 	        this.failed = source["failed"];
 	    }
-	}
-	export class VideoSameSourceReviewItem {
-	    id: number;
-	    video_a_id: number;
-	    video_a?: models.Video;
-	    video_a_deleted: boolean;
-	    video_b_id: number;
-	    video_b?: models.Video;
-	    video_b_deleted: boolean;
-	    status: string;
-	    confidence: string;
-	    reasoning: string;
-	    is_unread: boolean;
-	    created_at: string;
-	    updated_at: string;
-
-	    static createFrom(source: any = {}) {
-	        return new VideoSameSourceReviewItem(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.video_a_id = source["video_a_id"];
-	        this.video_a = this.convertValues(source["video_a"], models.Video);
-	        this.video_a_deleted = source["video_a_deleted"];
-	        this.video_b_id = source["video_b_id"];
-	        this.video_b = this.convertValues(source["video_b"], models.Video);
-	        this.video_b_deleted = source["video_b_deleted"];
-	        this.status = source["status"];
-	        this.confidence = source["confidence"];
-	        this.reasoning = source["reasoning"];
-	        this.is_unread = source["is_unread"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	    }
-
-		convertValues(a: any, classs: any): any {
-		    if (!a) return a;
-		    if (a.slice && a.map) return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    if ("object" === typeof a) return new classs(a);
-		    return a;
-		}
 	}
 	export class BatchVideoOperationError {
 	    video_id: number;
@@ -995,6 +986,60 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.video = this.convertValues(source["video"], models.Video);
 	        this.segment = this.convertValues(source["segment"], subtitleparser.Segment);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VideoSameSourceReviewItem {
+	    id: number;
+	    video_a_id: number;
+	    video_a?: models.Video;
+	    video_a_deleted: boolean;
+	    video_b_id: number;
+	    video_b?: models.Video;
+	    video_b_deleted: boolean;
+	    status: string;
+	    confidence: string;
+	    reasoning: string;
+	    is_unread: boolean;
+	    created_at: string;
+	    updated_at: string;
+
+	    static createFrom(source: any = {}) {
+	        return new VideoSameSourceReviewItem(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_a_id = source["video_a_id"];
+	        this.video_a = this.convertValues(source["video_a"], models.Video);
+	        this.video_a_deleted = source["video_a_deleted"];
+	        this.video_b_id = source["video_b_id"];
+	        this.video_b = this.convertValues(source["video_b"], models.Video);
+	        this.video_b_deleted = source["video_b_deleted"];
+	        this.status = source["status"];
+	        this.confidence = source["confidence"];
+	        this.reasoning = source["reasoning"];
+	        this.is_unread = source["is_unread"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
 	    }
 
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

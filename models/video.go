@@ -25,6 +25,24 @@ type Video struct {
 	DeletedAt       SoftDeleteTime `gorm:"index" json:"-"`
 }
 
+// VideoTrashEntry 记录恢复软删除视频所需的信息。
+type VideoTrashEntry struct {
+	ID           uint      `gorm:"primarykey" json:"id"`
+	VideoID      uint      `gorm:"uniqueIndex;not null" json:"video_id"`
+	VideoName    string    `gorm:"not null" json:"video_name"`
+	OriginalPath string    `gorm:"not null" json:"original_path"`
+	TrashPath    string    `gorm:"uniqueIndex:idx_video_trash_entries_trash_path,where:trash_path <> ''" json:"trash_path"`
+	FileMoved    bool      `gorm:"not null;default:false" json:"file_moved"`
+	FileSize     int64     `gorm:"not null;default:0" json:"file_size"`
+	FileModTime  int64     `gorm:"not null;default:0" json:"file_mod_time"`
+	FileIdentity string    `json:"-"`
+	FileSHA256   string    `json:"-"`
+	State        string    `gorm:"not null;default:deleted;index" json:"state"`
+	LastError    string    `json:"last_error"`
+	CreatedAt    time.Time `gorm:"index" json:"created_at" ts_type:"string"`
+	UpdatedAt    time.Time `json:"updated_at" ts_type:"string"`
+}
+
 // SubtitleSegment stores searchable SRT segments for fast subtitle lookup.
 type SubtitleSegment struct {
 	ID              uint      `gorm:"primarykey" json:"id"`
