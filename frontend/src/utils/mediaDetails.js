@@ -29,6 +29,7 @@ export function createVideoDetailsDraft(details) {
   return {
     displayTitle: details?.video?.display_title || '',
     originalTitle: details?.video?.original_title || '',
+    description: details?.video?.description || '',
     personalRating: rating === null || rating === undefined ? '' : String(rating),
     personIDs: uniqueIDs((details?.people || []).map(item => item?.person?.id)),
     collectionIDs: uniqueIDs((details?.collections || []).map(item => item?.collection?.id))

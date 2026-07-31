@@ -47,6 +47,30 @@
         </label>
         <p class="help-text">开启后，每次启动应用都会自动同步磁盘文件变动并补全元数据。</p>
       </div>
+      <div class="setting-item">
+        <label class="switch">
+          <input data-test="library-watch-toggle" type="checkbox" v-model="settingsForm.library_watch_enabled" />
+          <span class="slider"></span>
+          <span>实时同步片库</span>
+        </label>
+        <p class="help-text">监听可靠的本地或直连磁盘；网络盘仍使用启动或手动扫描。</p>
+      </div>
+      <div class="setting-item">
+        <label class="switch">
+          <input data-test="local-metadata-toggle" type="checkbox" v-model="settingsForm.local_metadata_enabled" />
+          <span class="slider"></span>
+          <span>本地元数据自动补全</span>
+        </label>
+        <p class="help-text">控制新视频自动填空与后台补全任务；详情页手工导入仍可使用。</p>
+      </div>
+      <div class="setting-item">
+        <label class="switch">
+          <input data-test="ai-quality-toggle" type="checkbox" v-model="settingsForm.ai_quality_enabled" />
+          <span class="slider"></span>
+          <span>显示 AI 质量评估</span>
+        </label>
+        <p class="help-text">只控制质量视图入口；已有归因和审核记录不会删除。</p>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -323,6 +347,16 @@
           <div class="directory-main">
             <strong>{{ dir.alias || '未命名' }}</strong>
             <span>{{ dir.path }}</span>
+            <div class="directory-watch-status" :class="`directory-watch-status--${directoryWatchState(dir.id)}`">
+              <span>{{ directoryWatchText(dir.id) }}</span>
+              <button
+                v-if="settingsForm.library_watch_enabled && ['unavailable', 'error'].includes(directoryWatchState(dir.id))"
+                type="button"
+                class="btn-link"
+                :data-test="`retry-library-watch-${dir.id}`"
+                @click="retryDirectoryWatch(dir.id)"
+              >重试</button>
+            </div>
           </div>
           <div class="directory-actions">
             <button @click="editDirectory(dir)" class="btn-action">编辑</button>
@@ -374,7 +408,7 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot } from '../../wailsjs/go/main/App';
 import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
 
 export default {
@@ -389,6 +423,8 @@ export default {
       settingsForm: { ...this.settings },
       localDirectories: [...this.directories],
       shortFeedStatus: null,
+      watcherStatus: null,
+      watcherStatusOff: null,
       showAddDirectoryDialog: false,
       editingDirectory: null,
       directoryForm: { path: '', alias: '' },
@@ -440,6 +476,16 @@ export default {
   mounted() {
     this.loadShortFeedStatus();
     this.loadAITagLibrary();
+    this.loadLibraryWatcherStatus();
+    if (window.runtime?.EventsOn) {
+      const off = window.runtime.EventsOn('library-watcher-status', (status) => {
+        this.watcherStatus = status || null;
+      });
+      if (typeof off === 'function') this.watcherStatusOff = off;
+    }
+  },
+  beforeUnmount() {
+    this.watcherStatusOff?.();
   },
   methods: {
     async loadShortFeedStatus() {
@@ -475,6 +521,9 @@ export default {
             video_extensions: this.settingsForm.video_extensions,
             play_weight: this.settingsForm.play_weight,
             auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
+            library_watch_enabled: this.settingsForm.library_watch_enabled || false,
+            local_metadata_enabled: this.settingsForm.local_metadata_enabled || false,
+            ai_quality_enabled: this.settingsForm.ai_quality_enabled || false,
             short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
             theme: this.settingsForm.theme,
             log_enabled: this.settingsForm.log_enabled,
@@ -498,6 +547,7 @@ export default {
           })
         ]);
         const aiTriggered = await TriggerAITagging();
+        await this.loadLibraryWatcherStatus();
         this.localAITagGroups = this.withAITagLibraryKeys(savedTags);
         this.$emit('settings-saved', { ...this.settingsForm });
         this.$emit('tags-changed');
@@ -525,6 +575,34 @@ export default {
         this.aiTagLibraryError = '加载 AI 标签库失败: ' + err;
       } finally {
         this.aiTagLibraryLoading = false;
+      }
+    },
+    async loadLibraryWatcherStatus() {
+      try {
+        this.watcherStatus = await GetLibraryWatcherStatus();
+      } catch (_err) {
+        this.watcherStatus = null;
+      }
+    },
+    directoryWatchStatus(directoryID) {
+      return this.watcherStatus?.roots?.find(root => Number(root.directory_id) === Number(directoryID)) || null;
+    },
+    directoryWatchState(directoryID) {
+      if (!this.settingsForm.library_watch_enabled) return 'disabled';
+      return this.directoryWatchStatus(directoryID)?.state || 'error';
+    },
+    directoryWatchText(directoryID) {
+      if (!this.settingsForm.library_watch_enabled) return '实时同步已关闭';
+      const status = this.directoryWatchStatus(directoryID);
+      if (!status) return '实时同步状态未知';
+      if (status.state === 'watching') return `实时同步中（${status.watch_count || 0} 个目录）`;
+      return status.message || (status.state === 'unavailable' ? '当前不可用' : '监听错误');
+    },
+    async retryDirectoryWatch(directoryID) {
+      try {
+        await RetryLibraryWatcherRoot(directoryID);
+      } finally {
+        await this.loadLibraryWatcherStatus();
       }
     },
     withAITagLibraryKeys(tags) {
@@ -596,6 +674,7 @@ export default {
     async refreshDirectories() {
       try {
         this.localDirectories = await GetAllDirectories();
+        await this.loadLibraryWatcherStatus();
         this.$emit('directories-changed', this.localDirectories);
       } catch (err) {}
     },
@@ -789,6 +868,40 @@ export default {
 
 .directory-main span {
   color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.directory-watch-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 7px;
+}
+
+.directory-watch-status::before {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+  content: '';
+}
+
+.directory-watch-status--watching::before {
+  background: #22a06b;
+}
+
+.directory-watch-status--error::before,
+.directory-watch-status--unavailable::before {
+  background: var(--danger-color);
+}
+
+.directory-watch-status .btn-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--primary-color);
+  cursor: pointer;
   font-size: 12px;
 }
 

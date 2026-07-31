@@ -10,7 +10,12 @@
         <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
       </div>
 
-      <div class="ai-tag-review-actions">
+      <nav class="ai-tag-review-tabs" aria-label="AI 管理视图">
+        <button type="button" :class="{ active: activeTab === 'review' }" data-test="ai-review-tab" @click="activeTab = 'review'">待审工作台</button>
+        <button v-if="qualityEnabled" type="button" :class="{ active: activeTab === 'quality' }" data-test="ai-quality-tab" @click="activeTab = 'quality'">质量评估</button>
+      </nav>
+
+      <div v-if="activeTab === 'review'" class="ai-tag-review-actions">
         <input
           v-model="reviewSearch"
           type="search"
@@ -20,6 +25,7 @@
         <button type="button" class="btn-secondary" @click="loadCandidates" :disabled="loading">刷新</button>
       </div>
 
+      <template v-if="activeTab === 'review'">
       <div v-if="loading" class="ai-tag-review-empty">加载中...</div>
       <div v-else-if="error" class="ai-tag-review-error">{{ error }}</div>
       <template v-else>
@@ -100,6 +106,9 @@
         </section>
       </div>
       </template>
+      </template>
+
+      <AIQualityPanel v-if="activeTab === 'quality'" :tags="tags" />
 
       <div v-if="rejectConfirm.show" class="ai-confirm-overlay">
         <div class="ai-confirm-dialog glass-surface">
@@ -147,19 +156,22 @@
 <script>
 import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import AddTagDialog from './AddTagDialog.vue';
+import AIQualityPanel from './AIQualityPanel.vue';
 import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
 
 export default {
   name: 'AITagReviewDialog',
-  components: { AddTagDialog },
+  components: { AddTagDialog, AIQualityPanel },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] },
+    qualityEnabled: { type: Boolean, default: true },
   },
   emits: ['close', 'changed'],
   data() {
     return {
       candidates: [],
+      activeTab: 'review',
       sameSourceRelations: [],
       summary: null,
       loading: false,
@@ -180,8 +192,12 @@ export default {
     },
   },
   watch: {
+	qualityEnabled(value) {
+	  if (!value && this.activeTab === 'quality') this.activeTab = 'review';
+	},
     visible(value) {
       if (value) {
+		this.activeTab = 'review';
         this.loadCandidates();
       }
     },
@@ -407,6 +423,28 @@ export default {
   gap: 12px;
   padding: 12px 0;
   min-width: 0;
+}
+
+.ai-tag-review-tabs {
+  display: flex;
+  gap: 6px;
+  padding-top: 12px;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.ai-tag-review-tabs button {
+  padding: 8px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.ai-tag-review-tabs button.active {
+  border-bottom-color: var(--accent-color);
+  color: var(--text-primary);
+  font-weight: 700;
 }
 
 .ai-tag-review-search {

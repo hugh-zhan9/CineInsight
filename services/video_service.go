@@ -25,12 +25,34 @@ import (
 )
 
 type VideoService struct {
-	scanSyncMu sync.Mutex
-	mediaProbe *MediaProbeService
+	scanSyncMu               sync.Mutex
+	mediaProbe               *MediaProbeService
+	scanDirectoryWithOptions func(string, bool) ([]ScannedFile, error)
+	localMetadataObserverMu  sync.RWMutex
+	localMetadataObserver    func(uint, bool) error
 }
 
 func NewVideoService(mediaProbe *MediaProbeService) *VideoService {
 	return &VideoService{mediaProbe: mediaProbe}
+}
+
+// SetLocalMetadataObserver may run while a scan is in flight, so the observer is guarded.
+func (s *VideoService) SetLocalMetadataObserver(observer func(uint, bool) error) {
+	s.localMetadataObserverMu.Lock()
+	s.localMetadataObserver = observer
+	s.localMetadataObserverMu.Unlock()
+}
+
+func (s *VideoService) observeLocalMetadata(videoID uint, isNew bool) {
+	s.localMetadataObserverMu.RLock()
+	observer := s.localMetadataObserver
+	s.localMetadataObserverMu.RUnlock()
+	if observer == nil {
+		return
+	}
+	if err := observer(videoID, isNew); err != nil {
+		log.Printf("本地元数据观察失败 video_id=%d new=%v err=%v", videoID, isNew, err)
+	}
 }
 
 func (s *VideoService) technicalProbe() *MediaProbeService {
@@ -85,6 +107,7 @@ type ScanSyncResult struct {
 	Scanned           int             `json:"scanned"`
 	Added             int             `json:"added"`
 	Deleted           int             `json:"deleted"`
+	Stale             int             `json:"stale"`
 	Relocated         int             `json:"relocated"`
 	MetadataRefreshed int             `json:"metadata_refreshed"`
 	Skipped           int             `json:"skipped"`
@@ -397,6 +420,10 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 		if refreshed, refreshErr := s.GetVideo(video.ID); refreshErr == nil {
 			video = refreshed
 		}
+	}
+	s.observeLocalMetadata(video.ID, true)
+	if refreshed, refreshErr := s.GetVideo(video.ID); refreshErr == nil {
+		video = refreshed
 	}
 	log.Printf("新增视频 path=%s", path)
 	return video, nil
@@ -1143,6 +1170,10 @@ type ScannedFile struct {
 
 // ScanDirectoryWithInfo 扫描目录获取视频文件（附带文件大小）
 func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) {
+	return s.scanDirectoryWithInfo(dir, true)
+}
+
+func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool) ([]ScannedFile, error) {
 	var videoFiles []ScannedFile
 	dir = filepath.Clean(strings.TrimSpace(dir))
 	if dir == "" || dir == "." {
@@ -1196,7 +1227,7 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 			return nil
 		}
 
-		if isTrashPath(path) || hasTempVideoSuffix(path) || isRecentlyActiveFile(info) || isKnownNonVideoSourcePath(path) {
+		if isTrashPath(path) || hasTempVideoSuffix(path) || (skipRecentlyActive && isRecentlyActiveFile(info)) || isKnownNonVideoSourcePath(path) {
 			return nil
 		}
 
@@ -1213,6 +1244,13 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 	log.Printf("扫描目录完成 dir=%s files=%d", dir, len(videoFiles))
 
 	return videoFiles, err
+}
+
+func (s *VideoService) scanDirectoryForReconciliation(dir string) ([]ScannedFile, error) {
+	if s != nil && s.scanDirectoryWithOptions != nil {
+		return s.scanDirectoryWithOptions(dir, false)
+	}
+	return s.scanDirectoryWithInfo(dir, false)
 }
 
 type scanFileFingerprint struct {
@@ -1298,6 +1336,7 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 				result.MetadataRefreshed++
 			}
 		}
+		s.observeLocalMetadata(video.ID, false)
 	}
 
 	newFiles := make([]ScannedFile, 0)
@@ -1372,6 +1411,294 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 	return result
 }
 
+// SyncAffectedDirectories reconciles only stable watcher-affected subtrees.
+// It deliberately marks disappeared paths stale instead of invoking the user's
+// explicit delete workflow; a later event can restore or relocate the record.
+func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affected []string) *ScanSyncResult {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
+	s.scanSyncMu.Lock()
+	defer s.scanSyncMu.Unlock()
+
+	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
+	roots := cleanScanRoots(dirs)
+	targets, err := normalizeAffectedScanDirectories(roots, affected)
+	if err != nil {
+		result.recordError("validate_affected", "", "", err)
+		return result
+	}
+	result.Directories = len(targets)
+
+	scannedByPath := make(map[string]ScannedFile)
+	successfulTargets := make([]string, 0, len(targets))
+	for _, target := range targets {
+		files, scanErr := s.scanDirectoryForReconciliation(target)
+		if scanErr != nil {
+			result.recordError("scan_affected", target, "", scanErr)
+			continue
+		}
+		successfulTargets = append(successfulTargets, target)
+		result.Scanned += len(files)
+		for _, file := range files {
+			file.Path = filepath.Clean(file.Path)
+			scannedByPath[file.Path] = file
+		}
+	}
+
+	allExisting, loadErr := s.getActiveVideosUnderRoots(roots)
+	if loadErr != nil {
+		result.recordError("load_existing", "", "", loadErr)
+		return result
+	}
+	existingByPath := make(map[string]models.Video, len(allExisting))
+	for _, video := range allExisting {
+		existingByPath[filepath.Clean(video.Path)] = video
+	}
+
+	missingCandidates := make([]models.Video, 0)
+	missingIDs := make(map[uint]struct{})
+	for _, video := range allExisting {
+		path := filepath.Clean(video.Path)
+		if !pathBelongsToAny(path, successfulTargets) {
+			if video.IsStale {
+				missingCandidates = append(missingCandidates, video)
+				missingIDs[video.ID] = struct{}{}
+			}
+			continue
+		}
+		file, exists := scannedByPath[path]
+		if !exists {
+			missingCandidates = append(missingCandidates, video)
+			missingIDs[video.ID] = struct{}{}
+			continue
+		}
+		if video.IsStale {
+			if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_stale", false).Error; err != nil {
+				result.recordError("clear_stale", video.Directory, video.Path, err)
+			} else {
+				video.IsStale = false
+			}
+		}
+		needsRefresh, refreshErr := s.needsTechnicalRefreshDuringNarrowScan(video, file)
+		if refreshErr != nil {
+			result.recordError("check_metadata", video.Directory, video.Path, refreshErr)
+		} else if needsRefresh {
+			if err := s.RefreshVideoMetadata(video.ID); err != nil {
+				result.recordError("refresh_metadata", video.Directory, video.Path, err)
+			} else {
+				result.MetadataRefreshed++
+			}
+		}
+		if err := ensureSubtitleIndexForVideo(video); err != nil {
+			result.recordError("refresh_subtitle_index", video.Directory, video.Path, err)
+		}
+		s.observeLocalMetadata(video.ID, false)
+	}
+
+	newFiles := make([]ScannedFile, 0)
+	for path, file := range scannedByPath {
+		if _, exists := existingByPath[path]; !exists {
+			newFiles = append(newFiles, file)
+		}
+	}
+	sortScannedFiles(newFiles)
+
+	relocatedIDs := make(map[uint]struct{})
+	consumedPaths := make(map[string]struct{})
+	// Pass 1 uses the same (name, size) identity rule as the full scan, so it may draw on
+	// every recoverable record. Pass 2 matches on size alone to catch renames; that rule
+	// is loose enough to hijack an unrelated record, so it is restricted to candidates
+	// that lived in the directories this batch actually reconciled.
+	matchWatcherRelocations(s, result, newFiles, missingCandidates, relocatedIDs, consumedPaths, true)
+	localCandidates := make([]models.Video, 0, len(missingCandidates))
+	for _, candidate := range missingCandidates {
+		if pathBelongsToAny(filepath.Clean(candidate.Path), successfulTargets) {
+			localCandidates = append(localCandidates, candidate)
+		}
+	}
+	matchWatcherRelocations(s, result, newFiles, localCandidates, relocatedIDs, consumedPaths, false)
+
+	for _, file := range newFiles {
+		if _, consumed := consumedPaths[file.Path]; consumed {
+			continue
+		}
+		video, addErr := s.addVideo(file.Path)
+		if addErr != nil {
+			if errors.Is(addErr, ErrVideoExists) {
+				result.Skipped++
+				continue
+			}
+			result.recordError("add", filepath.Dir(file.Path), file.Path, addErr)
+			continue
+		}
+		result.Added++
+		if video != nil {
+			if err := ensureSubtitleIndexForVideo(*video); err != nil {
+				result.recordError("refresh_subtitle_index", video.Directory, video.Path, err)
+			}
+		}
+	}
+
+	for _, video := range missingCandidates {
+		if _, relocated := relocatedIDs[video.ID]; relocated {
+			continue
+		}
+		if _, affectedMissing := missingIDs[video.ID]; !affectedMissing || video.IsStale {
+			continue
+		}
+		if err := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true).Error; err != nil {
+			result.recordError("mark_stale", video.Directory, video.Path, err)
+			continue
+		}
+		result.Stale++
+	}
+	if err := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
+		result.recordError("short-video-tag", "", "", err)
+	}
+	return result
+}
+
+func cleanScanRoots(dirs []models.ScanDirectory) []string {
+	roots := make([]string, 0, len(dirs))
+	seen := make(map[string]struct{}, len(dirs))
+	for _, dir := range dirs {
+		root := filepath.Clean(strings.TrimSpace(dir.Path))
+		if root == "" || root == "." {
+			continue
+		}
+		if _, exists := seen[root]; exists {
+			continue
+		}
+		seen[root] = struct{}{}
+		roots = append(roots, root)
+	}
+	return roots
+}
+
+func normalizeAffectedScanDirectories(roots, affected []string) ([]string, error) {
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("no configured scan roots")
+	}
+	unique := make(map[string]struct{}, len(affected))
+	for _, raw := range affected {
+		path := filepath.Clean(strings.TrimSpace(raw))
+		if path == "" || path == "." {
+			continue
+		}
+		if info, err := os.Stat(path); err == nil && !info.IsDir() {
+			path = filepath.Dir(path)
+		}
+		if !pathBelongsToAny(path, roots) {
+			return nil, fmt.Errorf("affected path is outside configured roots: %s", path)
+		}
+		unique[path] = struct{}{}
+	}
+	if len(unique) == 0 {
+		return nil, fmt.Errorf("no affected directories")
+	}
+	targets := make([]string, 0, len(unique))
+	for path := range unique {
+		targets = append(targets, path)
+	}
+	sort.Slice(targets, func(i, j int) bool {
+		if len(targets[i]) == len(targets[j]) {
+			return targets[i] < targets[j]
+		}
+		return len(targets[i]) < len(targets[j])
+	})
+	reduced := make([]string, 0, len(targets))
+	for _, target := range targets {
+		if pathBelongsToAny(target, reduced) {
+			continue
+		}
+		reduced = append(reduced, target)
+	}
+	return reduced, nil
+}
+
+func pathBelongsToAny(path string, parents []string) bool {
+	path = filepath.Clean(path)
+	for _, parent := range parents {
+		relative, err := filepath.Rel(filepath.Clean(parent), path)
+		if err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func matchWatcherRelocations(service *VideoService, result *ScanSyncResult, newFiles []ScannedFile, candidates []models.Video, relocatedIDs map[uint]struct{}, consumedPaths map[string]struct{}, exactName bool) {
+	type matchKey struct {
+		name string
+		size int64
+	}
+	candidatesByKey := make(map[matchKey][]models.Video)
+	filesByKey := make(map[matchKey][]ScannedFile)
+	for _, candidate := range candidates {
+		if _, used := relocatedIDs[candidate.ID]; used {
+			continue
+		}
+		key := matchKey{size: candidate.Size}
+		if exactName {
+			key.name = candidate.Name
+		}
+		candidatesByKey[key] = append(candidatesByKey[key], candidate)
+	}
+	for _, file := range newFiles {
+		if _, used := consumedPaths[file.Path]; used {
+			continue
+		}
+		key := matchKey{size: file.Size}
+		if exactName {
+			key.name = filepath.Base(file.Path)
+		}
+		filesByKey[key] = append(filesByKey[key], file)
+	}
+	for key, matchingFiles := range filesByKey {
+		matchingCandidates := candidatesByKey[key]
+		if len(matchingFiles) != 1 || len(matchingCandidates) != 1 {
+			continue
+		}
+		file := matchingFiles[0]
+		video := matchingCandidates[0]
+		if err := service.relocateVideo(video.ID, file.Path); err != nil {
+			result.recordError("relocate", video.Directory, file.Path, err)
+			continue
+		}
+		result.Relocated++
+		relocatedIDs[video.ID] = struct{}{}
+		consumedPaths[file.Path] = struct{}{}
+		var updated models.Video
+		if err := database.DB.First(&updated, video.ID).Error; err == nil {
+			_ = ensureSubtitleIndexForVideo(updated)
+			service.observeLocalMetadata(updated.ID, false)
+		}
+	}
+}
+
+func (s *VideoService) needsTechnicalRefreshDuringNarrowScan(video models.Video, scanned ScannedFile) (bool, error) {
+	if scanned.Size != video.Size {
+		return true, nil
+	}
+	var metadata models.VideoTechnicalMetadata
+	err := database.DB.Select("video_id", "successful_source_size", "successful_source_mod_time_ns", "probed_at").
+		First(&metadata, "video_id = ?", video.ID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if metadata.ProbedAt == nil || metadata.SuccessfulSourceSize == nil || metadata.SuccessfulSourceModTimeNS == nil {
+		return true, nil
+	}
+	fingerprint, err := mediaProbeStat(video.Path)
+	if err != nil {
+		return true, nil
+	}
+	return fingerprint.size != *metadata.SuccessfulSourceSize || fingerprint.modTimeNS != *metadata.SuccessfulSourceModTimeNS, nil
+}
+
 func (s *VideoService) needsTechnicalRefreshDuringScan(video models.Video, scanned ScannedFile) (bool, error) {
 	if video.Duration == 0 || video.Resolution == "" || video.Height == 0 || scanned.Size != video.Size {
 		return true, nil
@@ -1400,8 +1727,24 @@ func (s *VideoService) getActiveVideosUnderRoots(roots []string) ([]models.Video
 	if len(roots) == 0 {
 		return []models.Video{}, nil
 	}
+	// Narrow in SQL so a reconciliation batch does not load the whole library. LIKE can
+	// over-match on paths containing wildcards, so videoBelongsToRoots stays authoritative.
+	query := database.DB.Model(&models.Video{})
+	conditions := database.DB.Session(&gorm.Session{NewDB: true})
+	for index, root := range roots {
+		prefix := escapeSQLLikePrefix(root+string(os.PathSeparator)) + "%"
+		clause := database.DB.Session(&gorm.Session{NewDB: true}).
+			Where("directory = ?", root).
+			Or(`directory LIKE ? ESCAPE '\'`, prefix).
+			Or(`path LIKE ? ESCAPE '\'`, prefix)
+		if index == 0 {
+			conditions = conditions.Where(clause)
+			continue
+		}
+		conditions = conditions.Or(clause)
+	}
 	var videos []models.Video
-	if err := database.DB.Preload("Tags").Find(&videos).Error; err != nil {
+	if err := query.Where(conditions).Find(&videos).Error; err != nil {
 		return nil, err
 	}
 	filtered := videos[:0]
@@ -1411,6 +1754,11 @@ func (s *VideoService) getActiveVideosUnderRoots(roots []string) ([]models.Video
 		}
 	}
 	return filtered, nil
+}
+
+func escapeSQLLikePrefix(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return replacer.Replace(value)
 }
 
 func videoBelongsToRoots(video models.Video, roots []string) bool {

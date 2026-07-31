@@ -26,6 +26,7 @@ type VideoDetailsUpdate struct {
 	VideoID        uint     `json:"video_id"`
 	DisplayTitle   string   `json:"display_title"`
 	OriginalTitle  string   `json:"original_title"`
+	Description    string   `json:"description"`
 	PersonalRating *float64 `json:"personal_rating"`
 	PersonIDs      []uint   `json:"person_ids"`
 	CollectionIDs  []uint   `json:"collection_ids"`
@@ -53,6 +54,12 @@ type VideoDetails struct {
 	Streams           []models.MediaStream           `json:"streams"`
 	ExternalSubtitle  *ExternalSubtitleDetails       `json:"external_subtitle"`
 	TechnicalStatus   TechnicalSnapshotStatus        `json:"technical_status"`
+	Artwork           VideoArtworkStatus             `json:"artwork"`
+}
+
+type VideoArtworkStatus struct {
+	HasPoster bool `json:"has_poster"`
+	HasFanart bool `json:"has_fanart"`
 }
 
 type VideoDetailService struct {
@@ -70,6 +77,7 @@ func (s *VideoDetailService) GetVideoDetails(videoID uint) (*VideoDetails, error
 		return nil, err
 	}
 	detail := &VideoDetails{Video: video, EffectiveTitle: strings.TrimSpace(video.DisplayTitle)}
+	detail.Artwork = VideoArtworkStatus{HasPoster: video.PosterPath != "", HasFanart: video.FanartPath != ""}
 	if detail.EffectiveTitle == "" {
 		detail.EffectiveTitle = video.Name
 	}
@@ -203,8 +211,12 @@ func validateVideoDetailInput(input VideoDetailsUpdate) (VideoDetailsUpdate, err
 	}
 	input.DisplayTitle = strings.TrimSpace(input.DisplayTitle)
 	input.OriginalTitle = strings.TrimSpace(input.OriginalTitle)
+	input.Description = strings.TrimSpace(input.Description)
 	if utf8.RuneCountInString(input.DisplayTitle) > 255 || utf8.RuneCountInString(input.OriginalTitle) > 255 {
 		return VideoDetailsUpdate{}, errors.New("video title exceeds 255 characters")
+	}
+	if len(input.Description) > localMetadataTextMaxBytes {
+		return VideoDetailsUpdate{}, errors.New("video description exceeds 64 KiB")
 	}
 	if err := validateRatingValue(input.PersonalRating); err != nil {
 		return VideoDetailsUpdate{}, err
@@ -236,6 +248,7 @@ func (s *VideoDetailService) UpdateVideoDetails(input VideoDetailsUpdate) (*Vide
 		if err := tx.Model(&video).Updates(map[string]any{
 			"display_title":   input.DisplayTitle,
 			"original_title":  input.OriginalTitle,
+			"description":     input.Description,
 			"personal_rating": input.PersonalRating,
 		}).Error; err != nil {
 			return err
@@ -280,7 +293,21 @@ func validateDetailTargets(tx *gorm.DB, personIDs, collectionIDs []uint) error {
 	return nil
 }
 
+// replaceVideoPeopleInTransaction swaps a video's cast and deletes people that no longer
+// belong to any video. Only explicit user editing may prune entities this way; callers
+// that merely apply an external source must use replaceVideoPeopleKeepingEntities.
 func replaceVideoPeopleInTransaction(tx *gorm.DB, videoID uint, desired []uint) ([]string, error) {
+	return replaceVideoPeopleRelations(tx, videoID, desired, true)
+}
+
+// replaceVideoPeopleKeepingEntities swaps a video's cast but never deletes a person
+// record or its managed avatar, so importing metadata cannot destroy curated entities.
+func replaceVideoPeopleKeepingEntities(tx *gorm.DB, videoID uint, desired []uint) error {
+	_, err := replaceVideoPeopleRelations(tx, videoID, desired, false)
+	return err
+}
+
+func replaceVideoPeopleRelations(tx *gorm.DB, videoID uint, desired []uint, pruneOrphans bool) ([]string, error) {
 	var relations []models.VideoPerson
 	if err := tx.Where("video_id = ?", videoID).Find(&relations).Error; err != nil {
 		return nil, err
@@ -316,6 +343,9 @@ func replaceVideoPeopleInTransaction(tx *gorm.DB, videoID uint, desired []uint) 
 		}
 	}
 	orphanAvatars := make([]string, 0)
+	if !pruneOrphans {
+		return orphanAvatars, nil
+	}
 	for _, personID := range removed {
 		var count int64
 		if err := tx.Model(&models.VideoPerson{}).Where("person_id = ?", personID).Count(&count).Error; err != nil {

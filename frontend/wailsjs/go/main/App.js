@@ -18,6 +18,14 @@ export function AddVideo(arg1) {
   return window['go']['main']['App']['AddVideo'](arg1);
 }
 
+export function ApplyLocalMetadata(arg1) {
+  return window['go']['main']['App']['ApplyLocalMetadata'](arg1);
+}
+
+export function ApplyLocalMetadataBatch(arg1) {
+  return window['go']['main']['App']['ApplyLocalMetadataBatch'](arg1);
+}
+
 export function ApproveAITagCandidate(arg1) {
   return window['go']['main']['App']['ApproveAITagCandidate'](arg1);
 }
@@ -40,6 +48,10 @@ export function BatchRefreshVideoMetadata(arg1) {
 
 export function BatchRemoveTagFromVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchRemoveTagFromVideos'](arg1, arg2);
+}
+
+export function CancelLocalMetadataBackfill() {
+  return window['go']['main']['App']['CancelLocalMetadataBackfill']();
 }
 
 export function CancelSubtitle() {
@@ -102,6 +114,10 @@ export function GenerateSubtitle(arg1) {
   return window['go']['main']['App']['GenerateSubtitle'](arg1);
 }
 
+export function GetAIQualityReport(arg1) {
+  return window['go']['main']['App']['GetAIQualityReport'](arg1);
+}
+
 export function GetAITagLibrary() {
   return window['go']['main']['App']['GetAITagLibrary']();
 }
@@ -138,6 +154,18 @@ export function GetLibrarySubtitleHits(arg1, arg2) {
   return window['go']['main']['App']['GetLibrarySubtitleHits'](arg1, arg2);
 }
 
+export function GetLibraryWatcherStatus() {
+  return window['go']['main']['App']['GetLibraryWatcherStatus']();
+}
+
+export function GetLocalMetadataBackfillStatus() {
+  return window['go']['main']['App']['GetLocalMetadataBackfillStatus']();
+}
+
+export function GetLocalMetadataDiff(arg1) {
+  return window['go']['main']['App']['GetLocalMetadataDiff'](arg1);
+}
+
 export function GetPersonDetail(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetPersonDetail'](arg1, arg2, arg3);
 }
@@ -156,6 +184,10 @@ export function GetShortFeedServerStatus() {
 
 export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
+}
+
+export function GetSubtitleEditDocument(arg1) {
+  return window['go']['main']['App']['GetSubtitleEditDocument'](arg1);
 }
 
 export function GetSubtitleEngineStatuses() {
@@ -262,6 +294,10 @@ export function PreviewExternally(arg1) {
   return window['go']['main']['App']['PreviewExternally'](arg1);
 }
 
+export function PreviewLocalMetadataBatch(arg1) {
+  return window['go']['main']['App']['PreviewLocalMetadataBatch'](arg1);
+}
+
 export function RefreshVideoMetadata(arg1) {
   return window['go']['main']['App']['RefreshVideoMetadata'](arg1);
 }
@@ -310,12 +346,24 @@ export function ReorderCollectionVideos(arg1, arg2) {
   return window['go']['main']['App']['ReorderCollectionVideos'](arg1, arg2);
 }
 
+export function ResolveVideoArtwork(arg1, arg2) {
+  return window['go']['main']['App']['ResolveVideoArtwork'](arg1, arg2);
+}
+
 export function RestoreTrashEntry(arg1) {
   return window['go']['main']['App']['RestoreTrashEntry'](arg1);
 }
 
+export function RetranslateSubtitleEntries(arg1) {
+  return window['go']['main']['App']['RetranslateSubtitleEntries'](arg1);
+}
+
 export function RetryAITagging(arg1) {
   return window['go']['main']['App']['RetryAITagging'](arg1);
+}
+
+export function RetryLibraryWatcherRoot(arg1) {
+  return window['go']['main']['App']['RetryLibraryWatcherRoot'](arg1);
 }
 
 export function SaveAITagLibrary(arg1) {
@@ -324,6 +372,10 @@ export function SaveAITagLibrary(arg1) {
 
 export function SaveLibraryView(arg1) {
   return window['go']['main']['App']['SaveLibraryView'](arg1);
+}
+
+export function SaveSubtitleEditDocument(arg1) {
+  return window['go']['main']['App']['SaveSubtitleEditDocument'](arg1);
 }
 
 export function ScanDirectory(arg1) {
@@ -402,6 +454,10 @@ export function StartCleanupAnalysis(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartCleanupAnalysis'](arg1, arg2, arg3);
 }
 
+export function StartLocalMetadataBackfill() {
+  return window['go']['main']['App']['StartLocalMetadataBackfill']();
+}
+
 export function StartTechnicalBackfill() {
   return window['go']['main']['App']['StartTechnicalBackfill']();
 }
@@ -440,4 +496,8 @@ export function UpdateVideoDetails(arg1) {
 
 export function UpdateVideoWatchProgress(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateVideoWatchProgress'](arg1, arg2, arg3);
+}
+
+export function ValidateSubtitleEditDocument(arg1) {
+  return window['go']['main']['App']['ValidateSubtitleEditDocument'](arg1);
 }

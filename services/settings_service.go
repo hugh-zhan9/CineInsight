@@ -30,6 +30,9 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.VideoExtensions = input.VideoExtensions
 		settings.PlayWeight = input.PlayWeight
 		settings.AutoScanOnStartup = input.AutoScanOnStartup
+		settings.LibraryWatchEnabled = input.LibraryWatchEnabled
+		settings.LocalMetadataEnabled = input.LocalMetadataEnabled
+		settings.AIQualityEnabled = input.AIQualityEnabled
 		settings.ShortFeedMaxDurationMinutes = positiveOrDefault(input.ShortFeedMaxDurationMinutes, DefaultShortFeedMaxDurationMinutes)
 		settings.Theme = input.Theme
 		settings.LogEnabled = input.LogEnabled
