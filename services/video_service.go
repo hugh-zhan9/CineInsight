@@ -1161,6 +1161,11 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 	if err := database.DB.First(&settings).Error; err != nil {
 		return nil, fmt.Errorf("获取设置失败: %w", err)
 	}
+	excludedPaths := parseScanExcludePaths(settings.ScanExcludePaths)
+	if isScanPathExcluded(dir, excludedPaths) {
+		log.Printf("跳过黑名单扫描目录 dir=%s", dir)
+		return videoFiles, nil
+	}
 
 	// 解析视频格式
 	videoExts := strings.Split(settings.VideoExtensions, ",")
@@ -1180,6 +1185,12 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // 跳过错误的文件
+		}
+		if isScanPathExcluded(path, excludedPaths) {
+			if info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
 		}
 
 		if shouldSkipHiddenPath(info) {
@@ -1241,6 +1252,13 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 	roots := make([]string, 0, len(dirs))
 	allExisting := make([]models.Video, 0)
 	duplicateVideos := make([]models.Video, 0)
+	var settings models.Settings
+	excludedPaths := make([]string, 0)
+	if err := database.DB.Select("scan_exclude_paths").First(&settings).Error; err != nil {
+		result.recordError("load_scan_blacklist", "", "", err)
+	} else {
+		excludedPaths = parseScanExcludePaths(settings.ScanExcludePaths)
+	}
 
 	for _, dir := range dirs {
 		root := filepath.Clean(strings.TrimSpace(dir.Path))
@@ -1267,6 +1285,9 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		result.recordError("load_existing", "", "", err)
 	} else {
 		for _, video := range loadedExisting {
+			if isScanPathExcluded(video.Path, excludedPaths) {
+				continue
+			}
 			if !videoBelongsToRoots(video, roots) {
 				continue
 			}

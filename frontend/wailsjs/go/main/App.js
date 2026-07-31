@@ -10,6 +10,10 @@ export function AddDirectory(arg1, arg2) {
   return window['go']['main']['App']['AddDirectory'](arg1, arg2);
 }
 
+export function AddPersonVideo(arg1, arg2) {
+  return window['go']['main']['App']['AddPersonVideo'](arg1, arg2);
+}
+
 export function AddTagToVideo(arg1, arg2) {
   return window['go']['main']['App']['AddTagToVideo'](arg1, arg2);
 }
@@ -296,6 +300,10 @@ export function RemoveCollectionVideo(arg1, arg2) {
 
 export function RemovePersonAvatar(arg1) {
   return window['go']['main']['App']['RemovePersonAvatar'](arg1);
+}
+
+export function RemovePersonVideo(arg1, arg2) {
+  return window['go']['main']['App']['RemovePersonVideo'](arg1, arg2);
 }
 
 export function RemoveTagFromVideo(arg1, arg2) {

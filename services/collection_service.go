@@ -216,29 +216,50 @@ func (s *CollectionService) GetCollectionDetail(id uint) (*CollectionDetail, err
 }
 
 func (s *CollectionService) AddCollectionVideo(collectionID, videoID uint) error {
+	return s.AddCollectionVideos(collectionID, []uint{videoID})
+}
+
+// AddCollectionVideos atomically appends multiple active videos while
+// preserving the caller's order and ignoring existing relationships.
+func (s *CollectionService) AddCollectionVideos(collectionID uint, videoIDs []uint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	videoIDs = uniqueUintIDs(videoIDs)
+	if collectionID == 0 || len(videoIDs) == 0 {
+		return fmt.Errorf("collection and at least one video are required")
+	}
 	return database.DB.Transaction(func(tx *gorm.DB) error {
 		if err := lockActiveCollection(tx, collectionID); err != nil {
 			return err
 		}
-		var video models.Video
-		if err := tx.First(&video, videoID).Error; err != nil {
+		var videoCount int64
+		if err := tx.Model(&models.Video{}).Where("id IN ?", videoIDs).Count(&videoCount).Error; err != nil {
 			return err
 		}
-		var existing models.CollectionVideo
-		err := tx.Where("collection_id = ? AND video_id = ?", collectionID, videoID).First(&existing).Error
-		if err == nil {
-			return nil
+		if videoCount != int64(len(videoIDs)) {
+			return fmt.Errorf("one or more videos do not exist")
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
+		var existingVideoIDs []uint
+		if err := tx.Model(&models.CollectionVideo{}).Where("collection_id = ? AND video_id IN ?", collectionID, videoIDs).Pluck("video_id", &existingVideoIDs).Error; err != nil {
 			return err
 		}
+		existing := idSet(existingVideoIDs)
 		var maxPosition int
 		if err := tx.Model(&models.CollectionVideo{}).Where("collection_id = ?", collectionID).Select("COALESCE(MAX(position), 0)").Scan(&maxPosition).Error; err != nil {
 			return err
 		}
-		return tx.Create(&models.CollectionVideo{CollectionID: collectionID, VideoID: videoID, Position: maxPosition + 1}).Error
+		relations := make([]models.CollectionVideo, 0, len(videoIDs))
+		for _, videoID := range videoIDs {
+			if _, found := existing[videoID]; found {
+				continue
+			}
+			maxPosition++
+			relations = append(relations, models.CollectionVideo{CollectionID: collectionID, VideoID: videoID, Position: maxPosition})
+		}
+		if len(relations) == 0 {
+			return nil
+		}
+		return tx.Create(&relations).Error
 	})
 }
 

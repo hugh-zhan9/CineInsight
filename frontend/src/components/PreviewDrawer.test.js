@@ -2,6 +2,8 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
+  AddCollectionVideo: vi.fn(),
+  AddPersonVideo: vi.fn(),
   CreatePerson: vi.fn(),
   DeleteCollection: vi.fn(),
   GetCollectionDetail: vi.fn(),
@@ -12,8 +14,11 @@ const api = vi.hoisted(() => ({
   ListPeople: vi.fn(),
   RefreshVideoTechnicalMetadata: vi.fn(),
   RemoveCollectionCover: vi.fn(),
+  RemoveCollectionVideo: vi.fn(),
   RemovePersonAvatar: vi.fn(),
+  RemovePersonVideo: vi.fn(),
   ReorderCollectionVideos: vi.fn(),
+  SearchLibraryVideoPage: vi.fn(),
   SelectCollectionCover: vi.fn(),
   SelectPersonAvatar: vi.fn(),
   SetCollectionCover: vi.fn(),
@@ -90,9 +95,13 @@ describe('PreviewDrawer', () => {
 
   it('saves a zero rating through the mounted drawer', async () => {
     const wrapper = await mountDrawer();
+    const ratingInput = wrapper.get('.detail-rating-input input');
+    expect(ratingInput.attributes('type')).toBe('text');
+    expect(ratingInput.attributes('inputmode')).toBe('decimal');
+    expect(wrapper.find('.detail-rating-input select').exists()).toBe(false);
     const updated = videoDetails(1, { video: { id: 1, personal_rating: 0 } });
     api.UpdateVideoDetails.mockResolvedValueOnce(updated);
-    wrapper.vm.draft.personalRating = '0';
+    await ratingInput.setValue('0');
 
     await wrapper.vm.saveVideoDetails();
 
@@ -116,6 +125,62 @@ describe('PreviewDrawer', () => {
     expect(wrapper.vm.personDetail.person.person.display_name).toBe('Actor Seven');
     expect(wrapper.text()).toContain('Actor Seven');
     expect(wrapper.vm.canGoBack).toBe(true);
+  });
+
+  it('searches and associates videos from a person detail with thumbnails', async () => {
+    const firstVideo = { id: 1, name: 'one.mp4', display_title: 'One' };
+    const secondVideo = { id: 2, name: 'two.mp4', display_title: 'Two' };
+    api.GetPersonDetail
+      .mockResolvedValueOnce({
+        person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 1 },
+        videos: [firstVideo], next_video_id: 0
+      })
+      .mockResolvedValueOnce({
+        person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 2 },
+        videos: [secondVideo, firstVideo], next_video_id: 0
+      });
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [secondVideo] });
+    api.AddPersonVideo.mockResolvedValueOnce();
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
+    await flushPromises();
+
+    wrapper.vm.relatedVideoKeyword = 'two';
+    await wrapper.vm.searchRelatedVideos();
+
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith(expect.objectContaining({
+      filter: expect.objectContaining({ keyword: 'two', search_mode: 'file' }),
+      limit: 20
+    }));
+    expect(wrapper.find('img[src="/preview/thumbnail/2"]').exists()).toBe(true);
+
+    await wrapper.vm.addRelatedVideo(secondVideo);
+    await flushPromises();
+
+    expect(api.AddPersonVideo).toHaveBeenCalledWith(7, 2);
+    expect(wrapper.vm.personDetail.person.active_video_count).toBe(2);
+    expect(wrapper.vm.relatedVideoIDs).toEqual([2, 1]);
+  });
+
+  it('warns before removing a person final video and reports person cleanup', async () => {
+    const onlyVideo = { id: 1, name: 'only.mp4', display_title: 'Only' };
+    api.GetPersonDetail.mockResolvedValueOnce({
+      person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 1 },
+      videos: [onlyVideo], next_video_id: 0
+    });
+    api.RemovePersonVideo.mockResolvedValueOnce(true);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
+    await flushPromises();
+
+    await wrapper.vm.removeRelatedVideo(onlyVideo);
+    expect(api.RemovePersonVideo).not.toHaveBeenCalled();
+    await wrapper.vm.removeRelatedVideo(onlyVideo);
+
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(api.RemovePersonVideo).toHaveBeenCalledWith(7, 1);
+    expect(wrapper.emitted('person-deleted')).toEqual([[7]]);
+    expect(wrapper.emitted('close')).toHaveLength(1);
+    confirm.mockRestore();
   });
 
   it('does not apply a completed save after navigating to another video', async () => {
@@ -231,5 +296,32 @@ describe('PreviewDrawer', () => {
 
     expect(api.ReorderCollectionVideos).toHaveBeenCalledWith(3, [2, 1]);
     expect(wrapper.vm.collectionDetail.videos.map(item => item.video.id)).toEqual([2, 1]);
+  });
+
+  it('adds and removes collection videos while preserving thumbnail cards', async () => {
+    const firstVideo = { id: 1, name: 'one.mp4', display_title: 'One' };
+    const secondVideo = { id: 2, name: 'two.mp4', display_title: 'Two' };
+    const collection = { collection: { id: 3, name: 'Collection', description: '' }, cover_url: '', active_video_count: 1 };
+    api.GetCollectionDetail
+      .mockResolvedValueOnce({ collection, videos: [{ video: firstVideo, position: 1 }] })
+      .mockResolvedValueOnce({ collection: { ...collection, active_video_count: 2 }, videos: [{ video: firstVideo, position: 1 }, { video: secondVideo, position: 2 }] })
+      .mockResolvedValueOnce({ collection, videos: [{ video: secondVideo, position: 1 }] });
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [secondVideo] });
+    api.AddCollectionVideo.mockResolvedValueOnce();
+    api.RemoveCollectionVideo.mockResolvedValueOnce();
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'collection', id: 3 } } });
+    await flushPromises();
+
+    await wrapper.vm.searchRelatedVideos();
+    expect(wrapper.find('img[src="/preview/thumbnail/1"]').exists()).toBe(true);
+    expect(wrapper.find('img[src="/preview/thumbnail/2"]').exists()).toBe(true);
+
+    await wrapper.vm.addRelatedVideo(secondVideo);
+    expect(api.AddCollectionVideo).toHaveBeenCalledWith(3, 2);
+    expect(wrapper.vm.relatedVideoIDs).toEqual([1, 2]);
+
+    await wrapper.vm.removeRelatedVideo(firstVideo);
+    expect(api.RemoveCollectionVideo).toHaveBeenCalledWith(3, 1);
+    expect(wrapper.vm.relatedVideoIDs).toEqual([2]);
   });
 });

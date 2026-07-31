@@ -6,35 +6,35 @@
     <div class="toolbar glass-surface">
       <div class="toolbar-primary">
         <div class="search-group">
-        <select v-model="searchMode" @change="handleSearch(true)" class="select-input">
-          <option value="file">文件搜索</option>
-          <option value="subtitle">字幕搜索</option>
-        </select>
-        <input
-          v-model="searchKeyword"
-          @input="handleSearch()"
-          type="text"
-          :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索标题、文件名或路径...'"
-          class="search-input"
-        />
+          <select v-model="searchMode" @change="handleSearch(true)" class="select-input toolbar-control">
+            <option value="file">文件搜索</option>
+            <option value="subtitle">字幕搜索</option>
+          </select>
+          <input
+            v-model="searchKeyword"
+            @input="handleSearch()"
+            type="text"
+            :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索标题、文件名或路径...'"
+            class="search-input toolbar-control"
+          />
         </div>
 
         <div class="filter-group">
-          <select v-model="smartView" @change="handleSearch(true)" class="select-input" aria-label="智能视图">
+          <select v-model="smartView" @change="handleSearch(true)" class="select-input toolbar-control" aria-label="智能视图">
             <option v-for="view in smartViewOptions" :key="view.value" :value="view.value">{{ view.label }}</option>
           </select>
-          <select v-model="selectedSizeRange" @change="handleSearch(true)" class="select-input">
+          <select v-model="selectedSizeRange" @change="handleSearch(true)" class="select-input toolbar-control">
             <option value="all">体积：全部</option>
             <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
           </select>
 
-          <select v-model="selectedResRange" @change="handleSearch(true)" class="select-input">
+          <select v-model="selectedResRange" @change="handleSearch(true)" class="select-input toolbar-control">
             <option value="all">分辨率：全部</option>
             <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
           </select>
-          <input v-model="minRating" @change="handleSearch(true)" type="number" min="0" max="10" step="0.5" class="rating-filter-input" placeholder="最低评分" aria-label="最低评分" />
-          <input v-model="maxRating" @change="handleSearch(true)" type="number" min="0" max="10" step="0.5" class="rating-filter-input" placeholder="最高评分" aria-label="最高评分" />
-          <select v-model="sortMode" @change="handleSearch(true)" class="select-input" aria-label="排序方式">
+          <input v-model="minRating" @change="handleSearch(true)" type="text" inputmode="decimal" maxlength="4" class="text-input toolbar-control rating-filter-input" placeholder="最低评分" aria-label="最低评分，0 到 10" />
+          <input v-model="maxRating" @change="handleSearch(true)" type="text" inputmode="decimal" maxlength="4" class="text-input toolbar-control rating-filter-input" placeholder="最高评分" aria-label="最高评分，0 到 10" />
+          <select v-model="sortMode" @change="handleSearch(true)" class="select-input toolbar-control" aria-label="排序方式">
             <option value="balanced">均衡排序</option>
             <option value="rating_desc">评分从高到低</option>
             <option value="rating_asc">评分从低到高</option>
@@ -42,30 +42,38 @@
         </div>
       </div>
 
-      <div class="action-group">
-        <select v-model="selectedSavedViewID" @change="applySelectedSavedView" class="select-input saved-view-select" aria-label="保存视图">
-          <option :value="0">保存视图</option>
-          <option v-for="view in savedViews" :key="view.id" :value="view.id">{{ view.name }}</option>
-        </select>
-        <button type="button" class="btn-action" @click="openSaveViewDialog">保存当前视图</button>
-        <button v-if="selectedSavedViewID" type="button" class="btn-action" @click="deleteSelectedSavedView">删除该视图</button>
-        <div class="layout-toggle" aria-label="片库布局">
-          <button type="button" :class="['btn-action', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
-          <button type="button" :class="['btn-action', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
+      <div class="toolbar-secondary">
+        <div class="toolbar-cluster toolbar-cluster--views">
+          <select v-model="selectedSavedViewID" @change="applySelectedSavedView" class="select-input saved-view-select" aria-label="保存视图">
+            <option :value="0">保存视图</option>
+            <option v-for="view in savedViews" :key="view.id" :value="view.id">{{ view.name }}</option>
+          </select>
+          <button type="button" class="btn-action" @click="openSaveViewDialog">保存当前视图</button>
+          <button v-if="selectedSavedViewID" type="button" class="btn-action" @click="deleteSelectedSavedView">删除该视图</button>
+          <div class="layout-toggle" aria-label="片库布局">
+            <button type="button" :class="['btn-action', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
+            <button type="button" :class="['btn-action', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
+          </div>
         </div>
-        <select v-model="randomMode" class="select-input" aria-label="随机播放模式">
-          <option value="balanced">均衡随机</option>
-          <option value="unwatched">随机未看</option>
-          <option value="favorites">随机收藏</option>
-        </select>
-        <button @click="playRandom" class="btn-random">按当前条件随机</button>
-        <button
-          @click="toggleSelectAllVisible"
-          class="btn-secondary"
-          :disabled="videos.length === 0"
-        >
-          {{ allVisibleSelected ? '取消全选' : '选择本页' }}
-        </button>
+
+        <div class="toolbar-cluster toolbar-cluster--playback">
+          <select v-model="randomMode" class="select-input" aria-label="随机播放模式">
+            <option value="balanced">均衡随机</option>
+            <option value="unwatched">随机未看</option>
+            <option value="favorites">随机收藏</option>
+          </select>
+          <button @click="playRandom" class="btn-random">按当前条件随机</button>
+          <button
+            @click="toggleSelectAllVisible"
+            class="btn-secondary"
+            :disabled="videos.length === 0"
+          >
+            {{ allVisibleSelected ? '取消全选' : '选择本页' }}
+          </button>
+        </div>
+      </div>
+
+      <div class="toolbar-management" aria-label="片库管理">
         <button @click="showScanDialog = true" class="btn-primary" :disabled="migrationRunning">扫描新目录</button>
         <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="moveFolder">
           {{ migrationRunning ? '迁移中...' : '迁移文件夹' }}
@@ -361,7 +369,7 @@
     <AITagReviewDialog
       :visible="aiTagReviewDialog.show"
       :tags="tags"
-      @close="aiTagReviewDialog.show = false"
+      @close="closeAITagReviewDialog"
       @changed="handleAITagCandidatesChanged"
     />
 
@@ -677,10 +685,9 @@
   position: sticky;
   top: 10px;
   z-index: 90;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
   margin-bottom: 10px;
   padding: 9px;
   border-radius: 16px;
@@ -688,6 +695,7 @@
 
 .toolbar-primary {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   align-items: center;
   gap: 10px;
@@ -706,29 +714,62 @@
 
 .filter-group {
   display: flex;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .filter-group .select-input {
   width: 132px;
 }
+.toolbar-control {
+  height: var(--h-unit);
+  border-color: var(--border-color);
+  border-radius: var(--radius);
+  background-color: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+}
 .rating-filter-input {
   width: 88px;
   min-width: 78px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-  padding: 0 8px;
-  color: var(--text-primary);
-  background: var(--panel-bg);
+  padding-inline: 10px;
 }
 
-.action-group {
+.toolbar-secondary,
+.toolbar-management {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
   gap: 8px;
-  flex-shrink: 0;
   flex-wrap: wrap;
+  padding-top: 9px;
+  border-top: 1px solid var(--border-color);
+}
+
+.toolbar-secondary {
+  justify-content: space-between;
+  gap: 8px 18px;
+}
+
+.toolbar-cluster {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.toolbar-cluster .select-input {
+  width: 132px;
+  flex: 0 0 132px;
+}
+
+.toolbar-cluster .saved-view-select {
+  width: 168px;
+  flex-basis: 168px;
+}
+
+.toolbar-management {
+  justify-content: flex-end;
 }
 
 .selection-toolbar {
@@ -799,29 +840,40 @@
   font-size: 18px;
 }
 
-@media (max-width: 1320px) {
-  .toolbar {
-    grid-template-columns: 1fr;
-  }
+.page-content--with-preview .toolbar .search-group {
+  flex-basis: 100%;
+}
 
-  .action-group {
-    justify-content: flex-start;
-  }
+.page-content--with-preview .toolbar-management {
+  justify-content: flex-start;
 }
 
 @media (max-width: 920px) {
-  .toolbar-primary {
-    flex-wrap: wrap;
-  }
-
   .toolbar .search-group {
     flex-basis: 100%;
   }
 
   .filter-group,
-  .action-group,
+  .toolbar-secondary,
+  .toolbar-management,
   .selection-toolbar {
     flex-wrap: wrap;
+  }
+
+  .toolbar-secondary,
+  .toolbar-management {
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 620px) {
+  .toolbar .search-group,
+  .toolbar-cluster {
+    flex-wrap: wrap;
+  }
+
+  .toolbar .search-group .search-input {
+    flex-basis: 100%;
   }
 }
 .download-modal {
@@ -1229,7 +1281,7 @@ export default {
       deleteDialog: { show: false, video: null, videoIds: [] },
       deletingIds: [],
       tagDeleteDialog: { show: false, tag: null },
-      aiTagReviewDialog: { show: false },
+      aiTagReviewDialog: { show: false, dirty: false },
       aiTagSummary: { same_source_unread: 0 },
       aiTagSummaryTimer: null,
       technicalBackfill: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
@@ -2887,7 +2939,12 @@ export default {
       this.addTagDialog = { show: true, video: video, videoIds: [], mode: 'single' };
     },
     openAITagReviewDialog() {
-      this.aiTagReviewDialog.show = true;
+      this.aiTagReviewDialog = { show: true, dirty: false };
+    },
+    async closeAITagReviewDialog() {
+      const dirty = this.aiTagReviewDialog.dirty;
+      this.aiTagReviewDialog = { show: false, dirty: false };
+      if (dirty) await this.reloadCurrentView();
     },
     openTrashDialog() {
       this.trashDialog.show = true;
@@ -2948,9 +3005,9 @@ export default {
       }
     },
     async handleAITagCandidatesChanged() {
+      this.aiTagReviewDialog.dirty = true;
       this.$emit('reload-tags');
       await this.refreshAITagSummary();
-      await this.reloadCurrentView();
     },
     async runIncrementalScan() {
       if (this.migrationRunning || this.incrementalScan.running || this.directories.length === 0) {

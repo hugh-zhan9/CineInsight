@@ -19,7 +19,10 @@ assert.match(videoRowSource, /\$emit\('move', video\)/, 'each video row should e
 
 assert.match(tagManagerSource, /合并同义标签/, 'tag manager should explain tag merging');
 assert.match(tagManagerSource, /v-model\.number="mergeTargetId"/, 'tag merge should require a retained target');
-assert.match(tagManagerSource, /v-model="mergeSourceIds"[^>]+multiple/s, 'tag merge should support multiple sources');
+assert.match(tagManagerSource, /v-model\.trim="mergeKeyword"/, 'tag merge should provide a searchable name filter');
+assert.match(tagManagerSource, /v-for="tag in filteredMergeSourceTags"/, 'tag merge should render filtered source choices');
+assert.match(tagManagerSource, /type="checkbox"[\s\S]+toggleMergeSource/, 'tag merge should support visible checkbox multi-selection');
+assert.match(tagManagerSource, /selectAllVisibleMergeSources/, 'tag merge should support selecting all filtered sources');
 assert.match(tagManagerSource, /await MergeTags\(sourceIds, Number\(this\.mergeTargetId\)\)/, 'tag merge should call the backend operation');
 assert.match(tagManagerSource, /window\.confirm\(`确定将/, 'destructive tag merge should require final confirmation');
 assert.match(tagManagerSource, /tag\.is_system === target\.is_system/, 'manual and AI-library tags should merge within their own type');

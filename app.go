@@ -382,6 +382,18 @@ func (a *App) UpdatePerson(personID uint, displayName, originalName string) (*mo
 	return a.personService.UpdatePerson(personID, displayName, originalName)
 }
 
+func (a *App) AddPersonVideo(personID, videoID uint) error {
+	return a.personService.AddPersonVideo(personID, videoID)
+}
+
+func (a *App) AddPersonVideos(personID uint, videoIDs []uint) error {
+	return a.personService.AddPersonVideos(personID, videoIDs)
+}
+
+func (a *App) RemovePersonVideo(personID, videoID uint) (bool, error) {
+	return a.personService.RemovePersonVideo(personID, videoID)
+}
+
 func (a *App) SelectPersonAvatar() (string, error) {
 	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "选择人物头像",
@@ -421,6 +433,10 @@ func (a *App) DeleteCollection(collectionID uint) error {
 
 func (a *App) AddCollectionVideo(collectionID, videoID uint) error {
 	return a.collectionService.AddCollectionVideo(collectionID, videoID)
+}
+
+func (a *App) AddCollectionVideos(collectionID uint, videoIDs []uint) error {
+	return a.collectionService.AddCollectionVideos(collectionID, videoIDs)
 }
 
 func (a *App) RemoveCollectionVideo(collectionID, videoID uint) error {

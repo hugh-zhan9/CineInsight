@@ -72,19 +72,30 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 			}
 			var tag models.Tag
 			if input.ID > 0 {
-				if err := tx.First(&tag, input.ID).Error; err != nil {
+				if err := tx.Unscoped().First(&tag, input.ID).Error; err != nil {
 					return err
 				}
-				if !tag.IsSystem {
-					return fmt.Errorf("标签 %d 不属于 AI 标签库", input.ID)
+				if tag.AutomaticKind != "" {
+					return fmt.Errorf("自动标签不能加入 AI 标签库: %s", tag.Name)
 				}
 				var conflict models.Tag
 				err := tx.Unscoped().Where("name = ? AND id <> ?", input.Name, tag.ID).First(&conflict).Error
 				if err == nil {
-					return fmt.Errorf("标签名称已存在: %s", input.Name)
+					if conflict.AutomaticKind != "" {
+						return fmt.Errorf("自动标签不能加入 AI 标签库: %s", conflict.Name)
+					}
+					if conflict.IsSystem {
+						return fmt.Errorf("标签名称已存在于 AI 标签库: %s", input.Name)
+					}
+					// Reuse the existing manual tag instead of renaming over it. This
+					// preserves all of its current video relationships when users add
+					// that name to the AI library from an existing library row.
+					tag = conflict
 				}
 				if !errors.Is(err, gorm.ErrRecordNotFound) {
-					return err
+					if err != nil {
+						return err
+					}
 				}
 			} else {
 				err := tx.Unscoped().Where("name = ?", input.Name).First(&tag).Error
@@ -94,6 +105,9 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 				if errors.Is(err, gorm.ErrRecordNotFound) {
 					tag = models.Tag{Name: input.Name}
 				}
+			}
+			if tag.AutomaticKind != "" {
+				return fmt.Errorf("自动标签不能加入 AI 标签库: %s", tag.Name)
 			}
 
 			sortOrder := namespaceOrders[input.Namespace]
@@ -425,6 +439,15 @@ func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error)
 	var tag models.Tag
 	err := tx.Unscoped().Where("automatic_kind = ?", shortVideoAutomaticTagKind).Order("id").First(&tag).Error
 	if err == nil {
+		if err := reserveShortVideoTagName(tx, tag.ID); err != nil {
+			return nil, err
+		}
+		if tag.Name != ShortVideoTagName {
+			tag.Name = ShortVideoTagName
+			if err := tx.Unscoped().Model(&tag).Update("name", tag.Name).Error; err != nil {
+				return nil, err
+			}
+		}
 		if tag.DeletedAt.IsValid() && create {
 			tag.DeletedAt.Clear()
 			tag.IsActive = true
@@ -445,12 +468,11 @@ func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error)
 	}
 
 	for attempts := 0; attempts < 5; attempts++ {
-		name, err := availableAutomaticTagName(tx, ShortVideoTagName)
-		if err != nil {
+		if err := reserveShortVideoTagName(tx, 0); err != nil {
 			return nil, err
 		}
 		tag = models.Tag{
-			Name:          name,
+			Name:          ShortVideoTagName,
 			Color:         tagColorPalette[0],
 			Namespace:     "自动",
 			AutomaticKind: shortVideoAutomaticTagKind,
@@ -472,16 +494,33 @@ func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error)
 	return nil, fmt.Errorf("创建短视频自动标签时发生并发冲突")
 }
 
-func availableAutomaticTagName(tx *gorm.DB, preferred string) (string, error) {
+// reserveShortVideoTagName keeps the automatic label's public name stable.
+// A pre-existing manual label is renamed without changing its ID or video
+// relationships, so the automatic rule never takes ownership of those links.
+func reserveShortVideoTagName(tx *gorm.DB, automaticTagID uint) error {
+	var conflict models.Tag
+	err := tx.Unscoped().Where("name = ? AND id <> ?", ShortVideoTagName, automaticTagID).First(&conflict).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	name, err := availableTagName(tx, ShortVideoTagName+"（原标签）", conflict.ID)
+	if err != nil {
+		return err
+	}
+	return tx.Unscoped().Model(&conflict).Update("name", name).Error
+}
+
+func availableTagName(tx *gorm.DB, preferred string, excludeID uint) (string, error) {
 	for index := 0; ; index++ {
 		candidate := preferred
-		if index == 1 {
-			candidate = preferred + "（自动）"
-		} else if index > 1 {
-			candidate = fmt.Sprintf("%s（自动 %d）", preferred, index)
+		if index > 0 {
+			candidate = fmt.Sprintf("%s %d", preferred, index+1)
 		}
 		var count int64
-		if err := tx.Unscoped().Model(&models.Tag{}).Where("name = ?", candidate).Count(&count).Error; err != nil {
+		if err := tx.Unscoped().Model(&models.Tag{}).Where("name = ? AND id <> ?", candidate, excludeID).Count(&count).Error; err != nil {
 			return "", err
 		}
 		if count == 0 {

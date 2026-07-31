@@ -1,6 +1,7 @@
 package services
 
 import (
+	"path/filepath"
 	"strings"
 	"video-master/database"
 	"video-master/models"
@@ -28,6 +29,7 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.ConfirmBeforeDelete = input.ConfirmBeforeDelete
 		settings.DeleteOriginalFile = input.DeleteOriginalFile
 		settings.VideoExtensions = input.VideoExtensions
+		settings.ScanExcludePaths = normalizeScanExcludePaths(input.ScanExcludePaths)
 		settings.PlayWeight = input.PlayWeight
 		settings.AutoScanOnStartup = input.AutoScanOnStartup
 		settings.ShortFeedMaxDurationMinutes = positiveOrDefault(input.ShortFeedMaxDurationMinutes, DefaultShortFeedMaxDurationMinutes)
@@ -56,6 +58,37 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		}
 		return syncShortVideoTags(tx)
 	})
+}
+
+func normalizeScanExcludePaths(raw string) string {
+	return strings.Join(parseScanExcludePaths(raw), "\n")
+}
+
+func parseScanExcludePaths(raw string) []string {
+	paths := make([]string, 0)
+	seen := make(map[string]struct{})
+	for _, line := range strings.FieldsFunc(raw, func(r rune) bool { return r == '\n' || r == '\r' }) {
+		path := filepath.Clean(strings.TrimSpace(line))
+		if path == "" || path == "." {
+			continue
+		}
+		key := strings.ToLower(path)
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		paths = append(paths, path)
+	}
+	return paths
+}
+
+func isScanPathExcluded(path string, excludedPaths []string) bool {
+	for _, excluded := range excludedPaths {
+		if pathIsEqualOrInside(path, excluded) {
+			return true
+		}
+	}
+	return false
 }
 
 func positiveOrDefault(value int, fallback int) int {

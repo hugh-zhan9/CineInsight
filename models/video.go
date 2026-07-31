@@ -100,9 +100,10 @@ type Tag struct {
 // Settings 应用设置
 type Settings struct {
 	ID                          uint      `gorm:"primarykey" json:"id"`
-	ConfirmBeforeDelete         bool      `json:"confirm_before_delete"`          // 删除前确认
-	DeleteOriginalFile          bool      `json:"delete_original_file"`           // 是否删除原始文件
-	VideoExtensions             string    `json:"video_extensions"`               // 支持的视频格式（逗号分隔）
+	ConfirmBeforeDelete         bool      `json:"confirm_before_delete"` // 删除前确认
+	DeleteOriginalFile          bool      `json:"delete_original_file"`  // 是否删除原始文件
+	VideoExtensions             string    `json:"video_extensions"`      // 支持的视频格式（逗号分隔）
+	ScanExcludePaths            string    `gorm:"type:text" json:"scan_exclude_paths"`
 	PlayWeight                  float64   `gorm:"default:2.0" json:"play_weight"` // 播放权重（1次播放 = N次随机播放）
 	AutoScanOnStartup           bool      `json:"auto_scan_on_startup"`           // 启动时自动增量扫描
 	ShortFeedMaxDurationMinutes int       `gorm:"default:5" json:"short_feed_max_duration_minutes"`

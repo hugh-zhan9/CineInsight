@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -40,6 +42,7 @@ const recentlyAddedWindow = 30 * 24 * time.Hour
 type LibraryFilter struct {
 	SearchMode string   `json:"search_mode"`
 	Keyword    string   `json:"keyword"`
+	PathPrefix string   `json:"path_prefix"`
 	SmartView  string   `json:"smart_view"`
 	TagIDs     []uint   `json:"tag_ids"`
 	MinSize    int64    `json:"min_size"`
@@ -102,6 +105,10 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 		return LibraryFilter{}, fmt.Errorf("不支持的搜索模式: %s", filter.SearchMode)
 	}
 	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	filter.PathPrefix = strings.TrimSpace(filter.PathPrefix)
+	if filter.PathPrefix != "" {
+		filter.PathPrefix = filepath.Clean(filter.PathPrefix)
+	}
 	filter.SmartView = strings.TrimSpace(filter.SmartView)
 	if _, ok := validLibraryViews[filter.SmartView]; !ok {
 		return LibraryFilter{}, fmt.Errorf("不支持的智能视图: %s", filter.SmartView)
@@ -159,6 +166,11 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 		} else {
 			query = query.Where("(LOWER(videos.display_title) LIKE ? ESCAPE '\\' OR LOWER(videos.original_title) LIKE ? ESCAPE '\\' OR LOWER(videos.name) LIKE ? ESCAPE '\\' OR LOWER(videos.path) LIKE ? ESCAPE '\\')", pattern, pattern, pattern, pattern)
 		}
+	}
+	if filter.PathPrefix != "" {
+		prefix := strings.ToLower(filter.PathPrefix)
+		childPattern := strings.ToLower(escapeSQLLike(prefix+string(os.PathSeparator))) + "%"
+		query = query.Where("(LOWER(videos.path) = ? OR LOWER(videos.path) LIKE ? ESCAPE '\\')", prefix, childPattern)
 	}
 	if filter.MinSize > 0 {
 		query = query.Where("videos.size >= ?", filter.MinSize)
