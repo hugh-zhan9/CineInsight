@@ -95,6 +95,36 @@ func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMissing(t *testing.T) {
 	}
 }
 
+func TestSubtitleGenerateOptionsUseIndependentTranslationConfig(t *testing.T) {
+	settings := &models.Settings{
+		BilingualEnabled:            true,
+		BilingualLang:               "ja",
+		SubtitleTranslationProvider: "llm",
+		SubtitleTranslationBaseURL:  "http://127.0.0.1:1234/v1",
+		SubtitleTranslationAPIKey:   "subtitle-key",
+		SubtitleTranslationModel:    "subtitle-model",
+		AITaggingBaseURL:            "https://tagging.example/v1",
+		AITaggingAPIKey:             "tagging-key",
+		AITaggingModel:              "vision-model",
+	}
+
+	options := subtitleGenerateOptionsFromSettings(settings, false)
+	if !options.BilingualEnabled || options.BilingualLang != "ja" {
+		t.Fatalf("双语字幕设置映射错误: %+v", options)
+	}
+	if options.TranslationConfig.Provider != "llm" ||
+		options.TranslationConfig.BaseURL != "http://127.0.0.1:1234/v1" ||
+		options.TranslationConfig.APIKey != "subtitle-key" ||
+		options.TranslationConfig.Model != "subtitle-model" {
+		t.Fatalf("字幕翻译未使用独立配置: %+v", options.TranslationConfig)
+	}
+	if options.TranslationConfig.BaseURL == settings.AITaggingBaseURL ||
+		options.TranslationConfig.APIKey == settings.AITaggingAPIKey ||
+		options.TranslationConfig.Model == settings.AITaggingModel {
+		t.Fatalf("字幕翻译错误复用了 AI 标签配置: %+v", options.TranslationConfig)
+	}
+}
+
 func TestAITaggingReviewAPIsApproveCandidate(t *testing.T) {
 	setupAppTestDB(t)
 	tag := models.Tag{Name: "动作", Color: "#fff", Namespace: "用户分类", IsSystem: true, IsActive: true}
