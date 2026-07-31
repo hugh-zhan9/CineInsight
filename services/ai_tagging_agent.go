@@ -52,6 +52,9 @@ func (s *AITaggingService) runAgentEvidenceLoop(
 			Action: decision.Action, RequestedCount: decision.RequestedFrameCount,
 			ToolStatus: models.AITagToolStatusNotRun,
 		}
+		if attribution := aiRunAttributionFromContext(ctx); attribution.RunID != 0 {
+			step.RunID = &attribution.RunID
+		}
 		if !supportsDecisions {
 			step.FinishReason = "client_without_agent_support"
 			step.DurationMS = time.Since(startedAt).Milliseconds()

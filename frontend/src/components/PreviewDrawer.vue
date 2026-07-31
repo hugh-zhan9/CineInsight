@@ -53,6 +53,7 @@
           <div class="detail-section__heading"><h4>作品信息</h4><span class="detail-readonly-hint">文件名不会被修改</span></div>
           <label class="detail-field">显示标题<input v-model="draft.displayTitle" maxlength="255" /></label>
           <label class="detail-field">原始标题<input v-model="draft.originalTitle" maxlength="255" /></label>
+          <label class="detail-field">简介<textarea v-model="draft.description" maxlength="65536" rows="5"></textarea></label>
           <label class="detail-field">个人评分
             <select v-model="draft.personalRating">
               <option value="">未评分</option>
@@ -60,7 +61,10 @@
             </select>
           </label>
           <p class="detail-secondary">原文件：{{ details.video.name }}</p>
-          <button type="button" class="btn-primary" :disabled="saving" @click="saveVideoDetails">{{ saving ? '保存中...' : '保存作品信息' }}</button>
+          <div class="detail-inline-actions">
+            <button type="button" class="btn-primary" :disabled="saving" @click="saveVideoDetails">{{ saving ? '保存中...' : '保存作品信息' }}</button>
+            <button type="button" class="btn-secondary" @click="$emit('open-local-metadata', details.video)">导入本地资料</button>
+          </div>
         </section>
 
         <section class="detail-section">
@@ -207,12 +211,12 @@ export default {
     startTimeMs: { type: Number, default: null },
     resumePositionSeconds: { type: Number, default: 0 }
   },
-  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted'],
+  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'open-local-metadata'],
   data() {
     return {
       navigator: null, currentEntry: null, canGoBack: false,
       loading: false, error: '', saving: false, refreshingTechnical: false,
-      details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', personalRating: '', personIDs: [], collectionIDs: [] },
+      details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', personalRating: '', personIDs: [], collectionIDs: [] },
       personKeyword: '', personCandidates: [], creatingPerson: false, collectionKeyword: '', collectionCandidates: [], collectionCursorName: '', collectionCursorID: 0, collectionHasMore: false, collectionSearching: false, newPerson: { displayName: '', originalName: '' },
       personDetail: null, personEdit: { displayName: '', originalName: '' },
       collectionDetail: null, collectionEdit: { name: '', description: '' }, draggedMemberIndex: -1,
@@ -323,6 +327,7 @@ export default {
       try {
         const updatedDetails = await UpdateVideoDetails({
           video_id: videoID, display_title: this.draft.displayTitle, original_title: this.draft.originalTitle,
+          description: this.draft.description,
           personal_rating: validateRatingDraft(this.draft.personalRating), person_ids: [...this.draft.personIDs], collection_ids: [...this.draft.collectionIDs]
         });
         this.$emit('details-updated', updatedDetails);

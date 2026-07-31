@@ -125,7 +125,7 @@ func (s *AISameSourceService) FindSameSource(ctx context.Context, video models.V
 		if !comparison.SameSource || comparison.Confidence != models.AITagConfidenceHigh {
 			continue
 		}
-		relation, persistErr := s.persistDetectedRelation(video, candidate.video, referenceFingerprint, candidate.fingerprint, comparison)
+		relation, persistErr := s.persistDetectedRelation(video, candidate.video, referenceFingerprint, candidate.fingerprint, comparison, aiRunAttributionFromContext(ctx))
 		if persistErr != nil {
 			return result, &AITaggingFatalError{Err: persistErr}
 		}
@@ -262,7 +262,7 @@ func rejectedSameSourcePairStillCurrent(leftID, rightID uint, leftFingerprint, r
 		relation.VideoAFingerprint == leftFingerprint && relation.VideoBFingerprint == rightFingerprint, nil
 }
 
-func (s *AISameSourceService) persistDetectedRelation(left, right models.Video, leftFingerprint, rightFingerprint models.VideoVisualFingerprint, comparison AISameSourceComparison) (models.VideoSameSourceRelation, error) {
+func (s *AISameSourceService) persistDetectedRelation(left, right models.Video, leftFingerprint, rightFingerprint models.VideoVisualFingerprint, comparison AISameSourceComparison, attributions ...aiRunAttribution) (models.VideoSameSourceRelation, error) {
 	videoAID, videoBID, err := normalizedVideoPair(left.ID, right.ID)
 	if err != nil {
 		return models.VideoSameSourceRelation{}, err
@@ -270,8 +270,13 @@ func (s *AISameSourceService) persistDetectedRelation(left, right models.Video, 
 	if left.ID != videoAID {
 		leftFingerprint, rightFingerprint = rightFingerprint, leftFingerprint
 	}
+	attribution := aiRunAttribution{}
+	if len(attributions) > 0 {
+		attribution = attributions[0]
+	}
 	var relation models.VideoSameSourceRelation
 	err = database.DB.Transaction(func(tx *gorm.DB) error {
+		createEvaluation := false
 		findErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("video_a_id = ? AND video_b_id = ?", videoAID, videoBID).
 			First(&relation).Error
@@ -282,27 +287,83 @@ func (s *AISameSourceService) persistDetectedRelation(left, right models.Video, 
 				Status: models.VideoSameSourceStatusDetected, Confidence: comparison.Confidence, Reasoning: comparison.Reasoning,
 				DetectionVersion: sameSourceFingerprintVersion, IsUnread: true,
 			}
-			return tx.Create(&relation).Error
-		}
-		if findErr != nil {
+			if err := tx.Create(&relation).Error; err != nil {
+				return err
+			}
+			createEvaluation = true
+		} else if findErr != nil {
 			return findErr
+		} else {
+			fingerprintsChanged := relation.VideoAFingerprint != leftFingerprint.ContentFingerprint || relation.VideoBFingerprint != rightFingerprint.ContentFingerprint
+			if relation.Status == models.VideoSameSourceStatusRejected && !fingerprintsChanged {
+				return nil
+			}
+			// This exact fingerprint pair may already have a sample, for example after a
+			// file was re-encoded and then restored. Reuse it instead of inserting a
+			// duplicate, and keep honouring a rejection recorded against that content.
+			var known models.AISameSourceEvaluation
+			knownErr := tx.Where("relation_id = ? AND left_fingerprint = ? AND right_fingerprint = ?",
+				relation.ID, leftFingerprint.ContentFingerprint, rightFingerprint.ContentFingerprint).First(&known).Error
+			if knownErr != nil && !errors.Is(knownErr, gorm.ErrRecordNotFound) {
+				return knownErr
+			}
+			if knownErr == nil {
+				if known.Status == models.VideoSameSourceStatusRejected {
+					return nil
+				}
+				if err := tx.Model(&relation).Updates(map[string]interface{}{
+					"video_a_fingerprint":   leftFingerprint.ContentFingerprint,
+					"video_b_fingerprint":   rightFingerprint.ContentFingerprint,
+					"status":                models.VideoSameSourceStatusDetected,
+					"confidence":            comparison.Confidence,
+					"reasoning":             comparison.Reasoning,
+					"detection_version":     sameSourceFingerprintVersion,
+					"rejected_at":           nil,
+					"current_evaluation_id": known.ID,
+				}).Error; err != nil {
+					return err
+				}
+				relation.Status = models.VideoSameSourceStatusDetected
+				relation.CurrentEvaluationID = &known.ID
+				return nil
+			}
+			updates := map[string]interface{}{
+				"video_a_fingerprint": leftFingerprint.ContentFingerprint, "video_b_fingerprint": rightFingerprint.ContentFingerprint,
+				"status": models.VideoSameSourceStatusDetected, "confidence": comparison.Confidence, "reasoning": comparison.Reasoning,
+				"detection_version": sameSourceFingerprintVersion, "rejected_at": nil,
+			}
+			if fingerprintsChanged || relation.Status != models.VideoSameSourceStatusDetected {
+				updates["is_unread"] = true
+			}
+			if err := tx.Model(&relation).Updates(updates).Error; err != nil {
+				return err
+			}
+			relation.Status = models.VideoSameSourceStatusDetected
+			createEvaluation = fingerprintsChanged || relation.CurrentEvaluationID == nil
 		}
-		fingerprintsChanged := relation.VideoAFingerprint != leftFingerprint.ContentFingerprint || relation.VideoBFingerprint != rightFingerprint.ContentFingerprint
-		if relation.Status == models.VideoSameSourceStatusRejected && !fingerprintsChanged {
+		if !createEvaluation {
 			return nil
 		}
-		updates := map[string]interface{}{
-			"video_a_fingerprint": leftFingerprint.ContentFingerprint, "video_b_fingerprint": rightFingerprint.ContentFingerprint,
-			"status": models.VideoSameSourceStatusDetected, "confidence": comparison.Confidence, "reasoning": comparison.Reasoning,
-			"detection_version": sameSourceFingerprintVersion, "rejected_at": nil,
+		var runID *uint
+		if attribution.RunID != 0 {
+			runID = &attribution.RunID
 		}
-		if fingerprintsChanged || relation.Status != models.VideoSameSourceStatusDetected {
-			updates["is_unread"] = true
+		now := s.now()
+		evaluation := models.AISameSourceEvaluation{
+			RelationID: relation.ID, LeftVideoID: videoAID, RightVideoID: videoBID, RunID: runID,
+			LeftFingerprint: leftFingerprint.ContentFingerprint, RightFingerprint: rightFingerprint.ContentFingerprint,
+			Status: models.VideoSameSourceStatusDetected, Confidence: comparison.Confidence,
+			ModelIdentifier:         sanitizeAIAttribution(attribution.ModelIdentifier),
+			ComparisonPromptVersion: sanitizeAIAttribution(attribution.ComparisonPromptVersion),
+			DetectionVersion:        sameSourceFingerprintVersion, DetectedAt: now,
 		}
-		if err := tx.Model(&relation).Updates(updates).Error; err != nil {
+		if err := tx.Create(&evaluation).Error; err != nil {
 			return err
 		}
-		relation.Status = models.VideoSameSourceStatusDetected
+		if err := tx.Model(&relation).Update("current_evaluation_id", evaluation.ID).Error; err != nil {
+			return err
+		}
+		relation.CurrentEvaluationID = &evaluation.ID
 		return nil
 	})
 	if err != nil {
@@ -354,19 +415,31 @@ func (s *AISameSourceService) MarkRelationRead(relationID uint) error {
 
 func (s *AISameSourceService) RejectRelation(relationID uint) error {
 	now := s.now()
-	result := database.DB.Model(&models.VideoSameSourceRelation{}).
-		Where("id = ? AND status = ?", relationID, models.VideoSameSourceStatusDetected).
-		Updates(map[string]interface{}{"status": models.VideoSameSourceStatusRejected, "is_unread": false, "rejected_at": &now})
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected != 1 {
+	return database.DB.Transaction(func(tx *gorm.DB) error {
 		var relation models.VideoSameSourceRelation
-		if err := database.DB.Select("id").Where("id = ? AND status = ?", relationID, models.VideoSameSourceStatusRejected).First(&relation).Error; err != nil {
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&relation, relationID).Error; err != nil {
 			return err
 		}
-	}
-	return nil
+		if relation.Status == models.VideoSameSourceStatusRejected {
+			return nil
+		}
+		if relation.Status != models.VideoSameSourceStatusDetected {
+			return errors.New("same-source relation is not detected")
+		}
+		if err := tx.Model(&relation).Updates(map[string]interface{}{
+			"status": models.VideoSameSourceStatusRejected, "is_unread": false, "rejected_at": &now,
+		}).Error; err != nil {
+			return err
+		}
+		if relation.CurrentEvaluationID != nil {
+			if err := tx.Model(&models.AISameSourceEvaluation{}).
+				Where("id = ? AND status = ?", *relation.CurrentEvaluationID, models.VideoSameSourceStatusDetected).
+				Updates(map[string]interface{}{"status": models.VideoSameSourceStatusRejected, "rejected_at": &now}).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (s *AISameSourceService) UnreadCount() (int64, error) {

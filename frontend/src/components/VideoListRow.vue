@@ -82,6 +82,7 @@
       >
         {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
       </button>
+      <button @click="$emit('subtitle-edit', video)" class="btn-action btn-compact">编辑字幕</button>
       <button @click="$emit('subtitle-preview', video)" class="btn-action btn-compact">预览字幕</button>
       <button @click="$emit('rename', video)" class="btn-action btn-compact">重命名</button>
       <button @click="$emit('move', video)" class="btn-action btn-compact">迁移</button>
@@ -102,7 +103,7 @@ export default {
     selected: { type: Boolean, default: false },
     layoutMode: { type: String, default: 'list' }
   },
-  emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-directory', 'generate-subtitle', 'subtitle-preview', 'rename', 'move', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
+  emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-directory', 'generate-subtitle', 'subtitle-edit', 'subtitle-preview', 'rename', 'move', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
   data() {
     return { thumbnailFailed: false };
   },
