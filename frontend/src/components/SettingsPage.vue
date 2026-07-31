@@ -263,7 +263,7 @@
           <label>翻译服务</label>
           <select v-model="settingsForm.subtitle_translation_provider" class="select-input">
             <option value="deepl">DeepL</option>
-            <option value="llm">外部 AI（OpenAI 兼容 API）</option>
+            <option value="llm">OpenAI 兼容接口（本地 / 远程）</option>
           </select>
         </div>
         <div v-if="settingsForm.subtitle_translation_provider !== 'llm'" class="setting-item">
@@ -279,16 +279,17 @@
         </div>
         <template v-else>
           <div class="setting-item">
-            <label>AI 翻译接口地址</label>
-            <input type="url" v-model.trim="settingsForm.subtitle_translation_base_url" class="text-input" placeholder="https://api.example.com/v1" />
+            <label>字幕翻译接口地址</label>
+            <input type="url" v-model.trim="settingsForm.subtitle_translation_base_url" class="text-input" placeholder="https://api.example.com/v1 或 http://127.0.0.1:1234/v1" />
           </div>
           <div class="setting-item">
-            <label>AI 翻译 API Key</label>
+            <label>字幕翻译 API Key</label>
             <input type="password" v-model="settingsForm.subtitle_translation_api_key" class="text-input" autocomplete="off" />
+            <p class="help-text">本地服务可留空；远程服务按提供商要求填写。此配置不会复用 AI 标签接口。</p>
           </div>
           <div class="setting-item">
-            <label>AI 翻译模型</label>
-            <input type="text" v-model.trim="settingsForm.subtitle_translation_model" class="text-input" placeholder="gpt-4o-mini" />
+            <label>字幕翻译模型</label>
+            <input type="text" v-model.trim="settingsForm.subtitle_translation_model" class="text-input" placeholder="gpt-4o-mini 或本地兼容模型" />
           </div>
         </template>
       </template>
