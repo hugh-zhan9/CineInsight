@@ -188,8 +188,9 @@ export default {
   },
   methods: {
     confidenceMeta,
-    async loadCandidates() {
-      this.loading = true;
+    async loadCandidates(options = {}) {
+      const silent = !!options.silent;
+      if (!silent) this.loading = true;
       this.error = '';
       try {
         const [summary, candidates, relations] = await Promise.all([
@@ -210,7 +211,7 @@ export default {
       } catch (err) {
         this.error = '加载 AI 标签候选失败: ' + err;
       } finally {
-        this.loading = false;
+        if (!silent) this.loading = false;
       }
     },
     async approve(candidate) {
@@ -218,7 +219,7 @@ export default {
         const item = await ApproveAITagCandidate(candidate.id);
         this.candidates = removeCandidateById(this.candidates, candidate.id);
         if (item?.status === 'superseded') {
-          await this.loadCandidates();
+          await this.loadCandidates({ silent: true });
         }
         this.$emit('changed');
       });
@@ -259,7 +260,7 @@ export default {
     async retryVideo(videoId) {
       await this.withProcessing(videoId, async () => {
         await RetryAITagging(videoId);
-        await this.loadCandidates();
+        await this.loadCandidates({ silent: true });
       });
     },
     async previewVideo(videoId) {
@@ -284,7 +285,7 @@ export default {
       this.manualTagDialog = { show: false, video: null };
     },
     async handleManualTagAdded() {
-      await this.loadCandidates();
+      await this.loadCandidates({ silent: true });
       this.$emit('changed');
     },
     tagBgColor(hex) {
@@ -358,7 +359,7 @@ export default {
         await action();
       } catch (err) {
         if (this.isStaleCandidateError(err)) {
-          await this.loadCandidates();
+          await this.loadCandidates({ silent: true });
           this.error = '这条候选已被处理或已过期，列表已刷新。';
         } else {
           this.error = String(err);

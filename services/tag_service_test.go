@@ -116,7 +116,7 @@ func TestSyncShortVideoTagsReconcilesAgainstConfiguredDuration(t *testing.T) {
 	}
 }
 
-func TestSyncShortVideoTagsDoesNotTakeOverExistingSameNameTag(t *testing.T) {
+func TestSyncShortVideoTagsKeepsExactAutomaticNameAndPreservesConflictingManualTag(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	manualTag := models.Tag{Name: ShortVideoTagName, Color: "#999999", IsActive: true}
 	short := models.Video{Name: "short.mp4", Path: "/tmp/collision-short.mp4", Duration: 30}
@@ -136,21 +136,21 @@ func TestSyncShortVideoTagsDoesNotTakeOverExistingSameNameTag(t *testing.T) {
 		t.Fatalf("同步短视频标签失败: %v", err)
 	}
 	if result.TagID == manualTag.ID {
-		t.Fatal("自动标签不能接管同名人工标签")
+		t.Fatal("自动标签不能接管同名人工标签记录")
 	}
 	var loadedLong models.Video
 	if err := database.DB.Preload("Tags").First(&loadedLong, long.ID).Error; err != nil {
 		t.Fatalf("读取长视频失败: %v", err)
 	}
-	if len(loadedLong.Tags) != 1 || loadedLong.Tags[0].ID != manualTag.ID {
+	if len(loadedLong.Tags) != 1 || loadedLong.Tags[0].ID != manualTag.ID || loadedLong.Tags[0].Name == ShortVideoTagName {
 		t.Fatalf("人工标签关联不应被自动规则删除: %+v", loadedLong.Tags)
 	}
 	var automaticTag models.Tag
 	if err := database.DB.First(&automaticTag, result.TagID).Error; err != nil {
 		t.Fatalf("读取自动标签失败: %v", err)
 	}
-	if automaticTag.AutomaticKind != shortVideoAutomaticTagKind || automaticTag.Name == manualTag.Name {
-		t.Fatalf("自动标签应使用持久类型和无冲突名称: %+v", automaticTag)
+	if automaticTag.AutomaticKind != shortVideoAutomaticTagKind || automaticTag.Name != ShortVideoTagName {
+		t.Fatalf("自动标签应固定显示为短视频: %+v", automaticTag)
 	}
 }
 
@@ -318,6 +318,64 @@ func TestSaveAITagLibraryAllowsEmptyButRejectsDuplicateNames(t *testing.T) {
 		{Namespace: "分类B", Name: "重复", IsActive: true},
 	}); err == nil {
 		t.Fatal("重复标签名应被拒绝")
+	}
+}
+
+func TestSaveAITagLibraryReusesExistingManualTagAndPreservesVideoLinks(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	manual := models.Tag{Name: "女上", Color: "#111111", IsActive: true}
+	previousLibraryTag := models.Tag{Name: "旧 AI 标签", Namespace: "人物", Color: "#222222", IsSystem: true, IsActive: true}
+	video := models.Video{Name: "existing-tag.mp4", Path: "/tmp/existing-tag.mp4"}
+	if err := database.DB.Create(&[]*models.Tag{&manual, &previousLibraryTag}).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Model(&video).Association("Tags").Append(&manual); err != nil {
+		t.Fatalf("关联已有普通标签失败: %v", err)
+	}
+
+	saved, err := (&TagService{}).SaveAITagLibrary([]AITagLibraryInput{
+		{ID: previousLibraryTag.ID, Namespace: "人物", Name: manual.Name, Color: "#abcdef", IsActive: true},
+	})
+	if err != nil {
+		t.Fatalf("已有普通标签应能直接加入 AI 标签库: %v", err)
+	}
+	if len(saved) != 1 || saved[0].ID != manual.ID || !saved[0].IsSystem || saved[0].Namespace != "人物" {
+		t.Fatalf("应复用已有普通标签记录: %+v", saved)
+	}
+	var loadedVideo models.Video
+	if err := database.DB.Preload("Tags").First(&loadedVideo, video.ID).Error; err != nil {
+		t.Fatalf("读取视频标签失败: %v", err)
+	}
+	if len(loadedVideo.Tags) != 1 || loadedVideo.Tags[0].ID != manual.ID {
+		t.Fatalf("加入 AI 标签库不得丢失已有视频关联: %+v", loadedVideo.Tags)
+	}
+	var oldTag models.Tag
+	if err := database.DB.First(&oldTag, previousLibraryTag.ID).Error; err != nil {
+		t.Fatalf("读取被替换的旧 AI 标签失败: %v", err)
+	}
+	if oldTag.IsSystem || !oldTag.IsActive || oldTag.Namespace != "" {
+		t.Fatalf("旧 AI 标签应退出标签库但保留为普通标签: %+v", oldTag)
+	}
+}
+
+func TestSaveAITagLibraryPromotesExistingManualTagByID(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	manual := models.Tag{Name: "现有标签", Color: "#111111", IsActive: true}
+	if err := database.DB.Create(&manual).Error; err != nil {
+		t.Fatalf("创建普通标签失败: %v", err)
+	}
+
+	saved, err := (&TagService{}).SaveAITagLibrary([]AITagLibraryInput{
+		{ID: manual.ID, Namespace: "自定义", Name: manual.Name, Color: manual.Color, IsActive: true},
+	})
+	if err != nil {
+		t.Fatalf("按已有标签 ID 加入 AI 标签库失败: %v", err)
+	}
+	if len(saved) != 1 || saved[0].ID != manual.ID || !saved[0].IsSystem {
+		t.Fatalf("应原地升级已有标签: %+v", saved)
 	}
 }
 

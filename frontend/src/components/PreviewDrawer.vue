@@ -54,10 +54,11 @@
           <label class="detail-field">显示标题<input v-model="draft.displayTitle" maxlength="255" /></label>
           <label class="detail-field">原始标题<input v-model="draft.originalTitle" maxlength="255" /></label>
           <label class="detail-field">个人评分
-            <select v-model="draft.personalRating">
-              <option value="">未评分</option>
-              <option v-for="rating in ratingOptions" :key="rating" :value="String(rating)">{{ rating }}</option>
-            </select>
+            <span class="detail-rating-input">
+              <input v-model.trim="draft.personalRating" type="text" inputmode="decimal" maxlength="4" placeholder="未评分" aria-label="个人评分，0 到 10，支持 0.5 分" />
+              <span aria-hidden="true">/ 10</span>
+            </span>
+            <small>输入 0–10，支持半分；留空表示未评分</small>
           </label>
           <p class="detail-secondary">原文件：{{ details.video.name }}</p>
           <button type="button" class="btn-primary" :disabled="saving" @click="saveVideoDetails">{{ saving ? '保存中...' : '保存作品信息' }}</button>
@@ -147,10 +148,47 @@
           </div>
         </section>
         <section class="detail-section">
-          <h4>关联作品（{{ personDetail.person.active_video_count }}）</h4>
-          <button v-for="related in personDetail.videos || []" :key="related.id" type="button" class="related-video" @click="openVideo(related.id)">
-            <span>{{ related.display_title || related.name }}</span><small>{{ related.name }}</small>
-          </button>
+          <div class="detail-section__heading"><h4>关联视频（{{ personDetail.person.active_video_count }}）</h4><span>点击卡片查看详情</span></div>
+          <div class="related-video-editor">
+            <select v-model="relatedVideoDirectory" class="select-input" aria-label="按文件夹筛选可关联视频" @change="searchRelatedVideos(true)">
+              <option value="">全部文件夹</option>
+              <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
+            </select>
+            <div class="detail-inline-form">
+              <input v-model="relatedVideoKeyword" placeholder="搜索标题、文件名或路径" @keyup.enter="searchRelatedVideos(true)" />
+              <button type="button" class="btn-secondary btn-compact" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中...' : '搜索视频' }}</button>
+            </div>
+            <div v-if="availableRelatedVideoCandidates.length" class="related-video-batch-actions">
+              <button type="button" class="btn-action btn-compact" @click="selectAllRelatedVideoCandidates">全选已加载</button>
+              <button type="button" class="btn-primary btn-compact" :disabled="relatedVideoSelection.length === 0 || relatedVideoSearching" @click="addSelectedRelatedVideos">批量关联（{{ relatedVideoSelection.length }}）</button>
+            </div>
+            <p v-if="relatedVideoError" class="detail-error-text">{{ relatedVideoError }}</p>
+            <div v-if="availableRelatedVideoCandidates.length" class="related-video-results">
+              <RelatedVideoItem
+                v-for="candidate in availableRelatedVideoCandidates"
+                :key="candidate.id"
+                :video="candidate"
+                selectable
+                :selected="relatedVideoSelection.includes(Number(candidate.id))"
+                @open="openVideo(candidate.id)"
+                @select="toggleRelatedVideoSelection(candidate.id, $event)"
+              />
+            </div>
+            <button v-if="relatedVideoHasMore" type="button" class="btn-secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中...' : '加载更多搜索结果' }}</button>
+            <p v-else-if="relatedVideoSearchPerformed && !relatedVideoSearching" class="detail-empty">没有可关联的视频。</p>
+          </div>
+          <div class="related-video-list">
+            <RelatedVideoItem
+              v-for="related in personDetail.videos || []"
+              :key="related.id"
+              :video="related"
+              :action-label="isRelatedVideoUpdating(related.id) ? '处理中...' : '解除关联'"
+              :action-disabled="isRelatedVideoUpdating(related.id)"
+              destructive
+              @open="openVideo(related.id)"
+              @action="removeRelatedVideo(related)"
+            />
+          </div>
           <p v-if="!(personDetail.videos || []).length" class="detail-empty">当前没有活跃关联视频。软删除视频的关系仍会保留。</p>
         </section>
       </template>
@@ -170,19 +208,50 @@
         </section>
         <section class="detail-section">
           <div class="detail-section__heading"><h4>成员顺序</h4><span>拖拽调整</span></div>
-          <button
-            v-for="(member, index) in collectionDetail.videos || []"
-            :key="member.video.id"
-            type="button"
-            class="related-video related-video--draggable"
-            draggable="true"
-            @dragstart="draggedMemberIndex = index"
-            @dragover.prevent
-            @drop="dropCollectionMember(index)"
-            @click="openVideo(member.video.id)"
-          >
-            <span>{{ index + 1 }}. {{ member.video.display_title || member.video.name }}</span><small>{{ member.video.name }}</small>
-          </button>
+          <div class="related-video-editor">
+            <select v-model="relatedVideoDirectory" class="select-input" aria-label="按文件夹筛选可加入视频" @change="searchRelatedVideos(true)">
+              <option value="">全部文件夹</option>
+              <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
+            </select>
+            <div class="detail-inline-form">
+              <input v-model="relatedVideoKeyword" placeholder="搜索标题、文件名或路径" @keyup.enter="searchRelatedVideos(true)" />
+              <button type="button" class="btn-secondary btn-compact" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中...' : '搜索视频' }}</button>
+            </div>
+            <div v-if="availableRelatedVideoCandidates.length" class="related-video-batch-actions">
+              <button type="button" class="btn-action btn-compact" @click="selectAllRelatedVideoCandidates">全选已加载</button>
+              <button type="button" class="btn-primary btn-compact" :disabled="relatedVideoSelection.length === 0 || relatedVideoSearching" @click="addSelectedRelatedVideos">批量加入（{{ relatedVideoSelection.length }}）</button>
+            </div>
+            <p v-if="relatedVideoError" class="detail-error-text">{{ relatedVideoError }}</p>
+            <div v-if="availableRelatedVideoCandidates.length" class="related-video-results">
+              <RelatedVideoItem
+                v-for="candidate in availableRelatedVideoCandidates"
+                :key="candidate.id"
+                :video="candidate"
+                selectable
+                :selected="relatedVideoSelection.includes(Number(candidate.id))"
+                @open="openVideo(candidate.id)"
+                @select="toggleRelatedVideoSelection(candidate.id, $event)"
+              />
+            </div>
+            <button v-if="relatedVideoHasMore" type="button" class="btn-secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中...' : '加载更多搜索结果' }}</button>
+            <p v-else-if="relatedVideoSearchPerformed && !relatedVideoSearching" class="detail-empty">没有可加入的视频。</p>
+          </div>
+          <div class="related-video-list">
+            <RelatedVideoItem
+              v-for="(member, index) in collectionDetail.videos || []"
+              :key="member.video.id"
+              :video="member.video"
+              :position-label="`${index + 1}. `"
+              :action-label="isRelatedVideoUpdating(member.video.id) ? '处理中...' : '移出'"
+              :action-disabled="isRelatedVideoUpdating(member.video.id)"
+              destructive
+              draggable
+              @dragstart="draggedMemberIndex = index"
+              @drop="dropCollectionMember(index)"
+              @open="openVideo(member.video.id)"
+              @action="removeRelatedVideo(member.video)"
+            />
+          </div>
           <p v-if="!(collectionDetail.videos || []).length" class="detail-empty">作品集尚无视频。</p>
         </section>
       </template>
@@ -192,14 +261,16 @@
 
 <script>
 import {
-  CreatePerson, DeleteCollection, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
-  RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemovePersonAvatar, ReorderCollectionVideos,
+  AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
+  RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
   SelectCollectionCover, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails
 } from '../../wailsjs/go/main/App';
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
+import RelatedVideoItem from './RelatedVideoItem.vue';
 
 export default {
   name: 'PreviewDrawer',
+  components: { RelatedVideoItem },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
@@ -207,7 +278,7 @@ export default {
     startTimeMs: { type: Number, default: null },
     resumePositionSeconds: { type: Number, default: 0 }
   },
-  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted'],
+  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated'],
   data() {
     return {
       navigator: null, currentEntry: null, canGoBack: false,
@@ -216,11 +287,11 @@ export default {
       personKeyword: '', personCandidates: [], creatingPerson: false, collectionKeyword: '', collectionCandidates: [], collectionCursorName: '', collectionCursorID: 0, collectionHasMore: false, collectionSearching: false, newPerson: { displayName: '', originalName: '' },
       personDetail: null, personEdit: { displayName: '', originalName: '' },
       collectionDetail: null, collectionEdit: { name: '', description: '' }, draggedMemberIndex: -1,
+      relatedVideoKeyword: '', relatedVideoDirectory: '', relatedVideoDirectories: [], relatedVideoCandidates: [], relatedVideoSelection: [], relatedVideoCursor: null, relatedVideoHasMore: false, relatedVideoSearching: false, relatedVideoSearchPerformed: false, relatedVideoUpdatingIDs: [], relatedVideoError: '',
       appliedSeekKey: '', lastProgressEmittedAt: 0, resettingVideo: false, hasPlaybackStarted: false
     };
   },
   computed: {
-    ratingOptions() { return Array.from({ length: 21 }, (_, index) => index / 2); },
     currentSession() {
       if (this.currentEntry?.type !== 'video') return null;
       return Number(this.currentEntry.id) === Number(this.video?.id) ? this.session : this.nestedSession;
@@ -234,6 +305,15 @@ export default {
     selectedPeople() {
       const byID = new Map([...(this.details?.people || []), ...this.personCandidates].map(item => [Number(item?.person?.id), item]));
       return this.draft.personIDs.map(id => byID.get(Number(id))).filter(Boolean);
+    },
+    relatedVideoIDs() {
+      if (this.currentEntry?.type === 'person') return (this.personDetail?.videos || []).map(video => Number(video.id));
+      if (this.currentEntry?.type === 'collection') return (this.collectionDetail?.videos || []).map(item => Number(item.video?.id));
+      return [];
+    },
+    availableRelatedVideoCandidates() {
+      const related = new Set(this.relatedVideoIDs);
+      return this.relatedVideoCandidates.filter(video => !related.has(Number(video.id)));
     },
     technicalStatusLabel() {
       const state = this.details?.technical_status?.state;
@@ -253,15 +333,19 @@ export default {
     },
     startTimeMs() { this.appliedSeekKey = ''; this.$nextTick(() => this.configureVideoElement()); }
   },
-  mounted() { this.resetRootEntry(); },
+  mounted() { this.loadRelatedVideoDirectories(); this.resetRootEntry(); },
   beforeUnmount() { this.emitWatchProgress(true, false); this.resetVideoElement(); },
   methods: {
+    async loadRelatedVideoDirectories() {
+      try { this.relatedVideoDirectories = await GetAllDirectories() || []; }
+      catch (err) { this.relatedVideoDirectories = []; }
+    },
     resetRootEntry() {
       const root = this.initialEntity?.type && this.initialEntity?.id
         ? { type: this.initialEntity.type, id: Number(this.initialEntity.id) }
         : (this.video?.id ? { type: 'video', id: Number(this.video.id) } : null);
       if (!root) return;
-      this.navigator = createDetailNavigator(root); this.currentEntry = root; this.canGoBack = false; this.loadCurrentEntry();
+      this.resetRelatedVideoEditor(); this.navigator = createDetailNavigator(root); this.currentEntry = root; this.canGoBack = false; this.loadCurrentEntry();
     },
     async loadCurrentEntry() {
       if (!this.currentEntry) return;
@@ -308,8 +392,8 @@ export default {
       }
       return detail;
     },
-    async navigate(entry) { this.navigator.push(entry); this.currentEntry = this.navigator.current(); this.canGoBack = this.navigator.canGoBack(); await this.loadCurrentEntry(); },
-    async goBack() { this.currentEntry = this.navigator.back(); this.canGoBack = this.navigator.canGoBack(); await this.loadCurrentEntry(); },
+    async navigate(entry) { this.resetRelatedVideoEditor(); this.navigator.push(entry); this.currentEntry = this.navigator.current(); this.canGoBack = this.navigator.canGoBack(); await this.loadCurrentEntry(); },
+    async goBack() { this.resetRelatedVideoEditor(); this.currentEntry = this.navigator.back(); this.canGoBack = this.navigator.canGoBack(); await this.loadCurrentEntry(); },
     openPerson(id) { return this.navigate({ type: 'person', id }); },
     openCollection(id) { return this.navigate({ type: 'collection', id }); },
     openVideo(id) { return this.navigate({ type: 'video', id }); },
@@ -341,6 +425,111 @@ export default {
     },
     togglePerson(id, force) { this.draft.personIDs = toggleEntityID(this.draft.personIDs, id, force); },
     toggleCollection(id, force) { this.draft.collectionIDs = toggleEntityID(this.draft.collectionIDs, id, force); },
+    resetRelatedVideoEditor() {
+      this._relatedVideoSearchToken = Symbol('related-video-search');
+      this.relatedVideoKeyword = ''; this.relatedVideoDirectory = ''; this.relatedVideoCandidates = []; this.relatedVideoSelection = []; this.relatedVideoCursor = null; this.relatedVideoHasMore = false; this.relatedVideoSearching = false;
+      this.relatedVideoSearchPerformed = false; this.relatedVideoUpdatingIDs = []; this.relatedVideoError = '';
+    },
+    async searchRelatedVideos(reset = true) {
+      if (!['person', 'collection'].includes(this.currentEntry?.type)) return;
+      if (!reset && (!this.relatedVideoHasMore || this.relatedVideoSearching)) return;
+      const requestToken = reset ? Symbol('related-video-search') : this._relatedVideoSearchToken;
+      this._relatedVideoSearchToken = requestToken;
+      this.relatedVideoSearching = true; this.relatedVideoError = '';
+      try {
+        const request = {
+          filter: {
+            search_mode: 'file', keyword: this.relatedVideoKeyword, path_prefix: this.relatedVideoDirectory, smart_view: '', tag_ids: [],
+            min_size: 0, max_size: 0, min_height: 0, max_height: 0,
+            min_rating: null, max_rating: null, sort_mode: 'balanced'
+          },
+          limit: 30
+        };
+        if (!reset && this.relatedVideoCursor) request.cursor = this.relatedVideoCursor;
+        const page = await SearchLibraryVideoPage(request);
+        if (this._relatedVideoSearchToken !== requestToken) return;
+        const incoming = page?.videos || [];
+        const combined = reset ? incoming : [...this.relatedVideoCandidates, ...incoming];
+        this.relatedVideoCandidates = [...new Map(combined.map(video => [Number(video.id), video])).values()];
+        this.relatedVideoCursor = page?.next_cursor || null;
+        this.relatedVideoHasMore = !!page?.next_cursor;
+        if (reset) this.relatedVideoSelection = [];
+        this.relatedVideoSearchPerformed = true;
+      } catch (err) {
+        if (this._relatedVideoSearchToken === requestToken) this.relatedVideoError = `搜索视频失败：${err}`;
+      } finally {
+        if (this._relatedVideoSearchToken === requestToken) this.relatedVideoSearching = false;
+      }
+    },
+    toggleRelatedVideoSelection(videoID, selected) {
+      const id = Number(videoID);
+      this.relatedVideoSelection = selected
+        ? [...new Set([...this.relatedVideoSelection, id])]
+        : this.relatedVideoSelection.filter(item => Number(item) !== id);
+    },
+    selectAllRelatedVideoCandidates() {
+      this.relatedVideoSelection = [...new Set([
+        ...this.relatedVideoSelection,
+        ...this.availableRelatedVideoCandidates.map(video => Number(video.id))
+      ])];
+    },
+    async addSelectedRelatedVideos() {
+      const type = this.currentEntry?.type; const entityID = Number(this.currentEntry?.id);
+      const videoIDs = [...new Set(this.relatedVideoSelection.map(Number).filter(id => id > 0 && !this.relatedVideoIDs.includes(id)))];
+      if (!entityID || videoIDs.length === 0 || !['person', 'collection'].includes(type)) return;
+      this.relatedVideoUpdatingIDs = [...new Set([...this.relatedVideoUpdatingIDs, ...videoIDs])]; this.relatedVideoError = '';
+      try {
+        if (type === 'person') await AddPersonVideos(entityID, videoIDs);
+        else await AddCollectionVideos(entityID, videoIDs);
+        this.relatedVideoSelection = [];
+        this.$emit('relations-updated', { type, id: entityID });
+        if (this.isCurrentEntity(type, entityID)) await this.loadCurrentEntry();
+      } catch (err) { if (this.isCurrentEntity(type, entityID)) this.relatedVideoError = `批量关联视频失败：${err}`; }
+      finally { this.relatedVideoUpdatingIDs = this.relatedVideoUpdatingIDs.filter(id => !videoIDs.includes(Number(id))); }
+    },
+    isRelatedVideoUpdating(videoID) { return this.relatedVideoUpdatingIDs.includes(Number(videoID)); },
+    isCurrentEntity(type, entityID) { return this.currentEntry?.type === type && Number(this.currentEntry?.id) === Number(entityID); },
+    setRelatedVideoUpdating(videoID, updating) {
+      const id = Number(videoID);
+      this.relatedVideoUpdatingIDs = updating
+        ? [...new Set([...this.relatedVideoUpdatingIDs, id])]
+        : this.relatedVideoUpdatingIDs.filter(item => item !== id);
+    },
+    async addRelatedVideo(video) {
+      const type = this.currentEntry?.type; const entityID = Number(this.currentEntry?.id); const videoID = Number(video?.id);
+      if (!entityID || !videoID || this.isRelatedVideoUpdating(videoID) || !['person', 'collection'].includes(type)) return;
+      this.setRelatedVideoUpdating(videoID, true); this.relatedVideoError = '';
+      try {
+        if (type === 'person') await AddPersonVideo(entityID, videoID);
+        else await AddCollectionVideo(entityID, videoID);
+        this.$emit('relations-updated', { type, id: entityID });
+        if (this.isCurrentEntity(type, entityID)) await this.loadCurrentEntry();
+      } catch (err) { if (this.isCurrentEntity(type, entityID)) this.relatedVideoError = `关联视频失败：${err}`; }
+      finally { this.setRelatedVideoUpdating(videoID, false); }
+    },
+    async removeRelatedVideo(video) {
+      const type = this.currentEntry?.type; const entityID = Number(this.currentEntry?.id); const videoID = Number(video?.id);
+      if (!entityID || !videoID || this.isRelatedVideoUpdating(videoID) || !['person', 'collection'].includes(type)) return;
+      if (type === 'person' && this.relatedVideoIDs.length === 1 && !window.confirm('这是该人物最后一个活跃关联视频。若没有软删除视频保留的关系，解除后人物也会被删除，确定继续吗？')) return;
+      this.setRelatedVideoUpdating(videoID, true); this.relatedVideoError = '';
+      try {
+        if (type === 'person') {
+          const personDeleted = await RemovePersonVideo(entityID, videoID);
+          if (personDeleted) {
+            this.$emit('person-deleted', entityID);
+            if (this.isCurrentEntity(type, entityID)) {
+              if (this.canGoBack) await this.goBack(); else this.$emit('close');
+            }
+            return;
+          }
+        } else {
+          await RemoveCollectionVideo(entityID, videoID);
+        }
+        this.$emit('relations-updated', { type, id: entityID });
+        if (this.isCurrentEntity(type, entityID)) await this.loadCurrentEntry();
+      } catch (err) { if (this.isCurrentEntity(type, entityID)) this.relatedVideoError = `解除视频关联失败：${err}`; }
+      finally { this.setRelatedVideoUpdating(videoID, false); }
+    },
     updateCollectionCursor(page) {
       const last = page[page.length - 1];
       this.collectionCursorName = last?.cursor_name || '';
@@ -458,17 +647,20 @@ export default {
 .preview-drawer__heading { display: flex; align-items: center; gap: 10px; min-width: 0; }.preview-drawer__heading > div { min-width: 0; }
 .preview-drawer__eyebrow { margin: 0 0 4px; font-size: 11px; letter-spacing: .08em; color: var(--text-muted); }.preview-drawer__header h3 { font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preview-drawer__body { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
-.preview-drawer__player-shell { background: #020617; border-radius: 14px; overflow: hidden; min-height: 220px; }.preview-drawer__video { width: 100%; display: block; background: #020617; }
+.preview-drawer__player-shell { width: 100%; aspect-ratio: 16 / 9; min-height: 220px; max-height: min(40vh, 360px); display: grid; place-items: center; background: #020617; border-radius: 14px; overflow: hidden; }.preview-drawer__video { width: 100%; height: 100%; min-height: 220px; display: block; object-fit: contain; background: #020617; }
 .preview-drawer__placeholder { min-height: 150px; border: 1px dashed var(--border-color); border-radius: 14px; padding: 22px; display: flex; flex-direction: column; justify-content: center; gap: 12px; color: var(--text-secondary); }
 .detail-section { padding: 16px; border: 1px solid var(--border-color); border-radius: 14px; background: var(--panel-bg); display: grid; gap: 12px; }.detail-section--player { padding: 0; overflow: hidden; }
 .detail-section__heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; }.detail-section h4 { margin: 0; font-size: 15px; }.detail-section__heading span,.detail-readonly-hint { font-size: 12px; color: var(--text-muted); }
 .detail-field { display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }.detail-field input,.detail-field select,.detail-field textarea,.detail-inline-form input,.detail-create-box input { width: 100%; border: 1px solid var(--border-color); border-radius: 8px; padding: 9px 10px; background: var(--input-bg); color: var(--text-primary); }
+.detail-rating-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; }.detail-rating-input > span { color: var(--text-muted); font-size: 13px; }.detail-field small { color: var(--text-muted); font-size: 11px; font-weight: 400; }
 .detail-secondary,.detail-empty { font-size: 12px; color: var(--text-muted); word-break: break-all; }.detail-error,.detail-error-text { color: var(--danger-color); }.detail-error { padding: 18px; border: 1px solid var(--danger-color); border-radius: 12px; }
 .entity-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }.entity-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border-color); border-radius: 999px; padding: 4px 9px 4px 5px; background: var(--control-hover-bg); color: var(--text-primary); }.entity-chip img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }.entity-chip__remove { color: var(--danger-color); font-size: 16px; }
-.detail-inline-form,.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }.detail-inline-form input { flex: 1; }.candidate-list { display: grid; gap: 6px; }.candidate-list button,.related-video { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid var(--border-color); border-radius: 9px; padding: 9px 10px; color: var(--text-primary); background: transparent; }.candidate-list small,.related-video small { color: var(--text-muted); }.detail-create-box { display: grid; gap: 8px; }.detail-create-box summary { cursor: pointer; color: var(--accent-color); }
+.detail-inline-form,.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }.detail-inline-form input { flex: 1; }.candidate-list { display: grid; gap: 6px; }.candidate-list button { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid var(--border-color); border-radius: 9px; padding: 9px 10px; color: var(--text-primary); background: transparent; }.candidate-list small { color: var(--text-muted); }.detail-create-box { display: grid; gap: 8px; }.detail-create-box summary { cursor: pointer; color: var(--accent-color); }
+.related-video-editor { display: grid; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }.related-video-results,.related-video-list { display: grid; gap: 8px; }
+.related-video-batch-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }.selection-row button { background: transparent; border: 0; color: var(--text-primary); text-align: left; cursor: pointer; }.selection-row small { color: var(--text-muted); }
 .technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: 12px; }.technical-status--current { color: var(--success-color, #15803d); }.technical-status--stale,.technical-status--error { color: #b45309; }
 .stream-card { display: grid; gap: 4px; padding: 10px; border-radius: 9px; background: var(--control-hover-bg); font-size: 12px; }.stream-card span { color: var(--text-secondary); word-break: break-word; }
-.entity-identity > img,.entity-avatar-placeholder { width: 96px; height: 96px; object-fit: cover; border-radius: 14px; }.entity-avatar-placeholder { display: grid; place-items: center; background: var(--control-hover-bg); color: var(--text-muted); }.related-video--draggable { cursor: grab; }
+.entity-identity > img,.entity-avatar-placeholder { width: 96px; height: 96px; object-fit: cover; border-radius: 14px; }.entity-avatar-placeholder { display: grid; place-items: center; background: var(--control-hover-bg); color: var(--text-muted); }
 @media (max-width: 900px) { .preview-drawer { width: 100vw; right: 0; bottom: 0; top: 70px; min-width: 0; border-radius: 18px 18px 0 0; } }
 </style>

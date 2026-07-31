@@ -195,6 +195,96 @@ func (s *PersonService) GetPersonDetail(id, cursorVideoID uint, limit int) (*Per
 	return detail, nil
 }
 
+// AddPersonVideo creates one relationship from the person side without
+// replacing the video's other people. Repeating the same request is safe.
+func (s *PersonService) AddPersonVideo(personID, videoID uint) error {
+	return s.AddPersonVideos(personID, []uint{videoID})
+}
+
+// AddPersonVideos atomically adds multiple video relationships from the
+// person side. Repeated video IDs and already-related videos are ignored.
+func (s *PersonService) AddPersonVideos(personID uint, videoIDs []uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	videoIDs = uniqueUintIDs(videoIDs)
+	if personID == 0 || len(videoIDs) == 0 {
+		return fmt.Errorf("person and at least one video are required")
+	}
+
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var videoCount int64
+		if err := tx.Model(&models.Video{}).Where("id IN ?", videoIDs).Count(&videoCount).Error; err != nil {
+			return err
+		}
+		if videoCount != int64(len(videoIDs)) {
+			return fmt.Errorf("one or more videos do not exist")
+		}
+		var person models.Person
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&person, personID).Error; err != nil {
+			return err
+		}
+		relations := make([]models.VideoPerson, 0, len(videoIDs))
+		for _, videoID := range videoIDs {
+			relations = append(relations, models.VideoPerson{VideoID: videoID, PersonID: personID})
+		}
+		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&relations).Error
+	})
+	if err != nil {
+		return fmt.Errorf("add person videos: %w", err)
+	}
+	return nil
+}
+
+// RemovePersonVideo removes one relationship from the person side. It returns
+// true when this was the person's final relationship and the person was
+// consequently cleaned up, matching SetVideoPeople's existing semantics.
+func (s *PersonService) RemovePersonVideo(personID, videoID uint) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	personDeleted := false
+	avatarPath := ""
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		var video models.Video
+		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).First(&video, videoID).Error; err != nil {
+			return err
+		}
+		var person models.Person
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&person, personID).Error; err != nil {
+			return err
+		}
+		result := tx.Where("video_id = ? AND person_id = ?", videoID, personID).Delete(&models.VideoPerson{})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		var remaining int64
+		if err := tx.Model(&models.VideoPerson{}).Where("person_id = ?", personID).Count(&remaining).Error; err != nil {
+			return err
+		}
+		if remaining != 0 {
+			return nil
+		}
+		if err := tx.Delete(&person).Error; err != nil {
+			return err
+		}
+		personDeleted = true
+		avatarPath = person.AvatarPath
+		return nil
+	})
+	if err != nil {
+		return false, fmt.Errorf("remove person video: %w", err)
+	}
+	if avatarPath != "" {
+		if err := s.images.Remove(avatarPath); err != nil {
+			return personDeleted, fmt.Errorf("person video removed but orphan avatar cleanup failed: %w", err)
+		}
+	}
+	return personDeleted, nil
+}
+
 func normalizeEntityPageLimit(limit int) int {
 	if limit <= 0 {
 		return defaultEntityPageLimit

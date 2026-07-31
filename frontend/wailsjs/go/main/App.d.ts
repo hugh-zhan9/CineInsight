@@ -8,6 +8,8 @@ export function AddCollectionVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddDirectory(arg1:string,arg2:string):Promise<models.ScanDirectory>;
 
+export function AddPersonVideo(arg1:number,arg2:number):Promise<void>;
+
 export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddVideo(arg1:string):Promise<models.Video>;
@@ -151,6 +153,8 @@ export function RemoveCollectionCover(arg1:number):Promise<void>;
 export function RemoveCollectionVideo(arg1:number,arg2:number):Promise<void>;
 
 export function RemovePersonAvatar(arg1:number):Promise<void>;
+
+export function RemovePersonVideo(arg1:number,arg2:number):Promise<boolean>;
 
 export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
 

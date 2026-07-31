@@ -16,6 +16,15 @@ assert.match(appSource, /class="app-shell glass-app-shell"/, 'app shell should u
 assert.doesNotMatch(videoListSource, /<ActionMenu\b/, 'video list toolbar should not hide primary management actions in a more menu');
 assert.doesNotMatch(videoListSource, /ui\/ActionMenu\.vue/, 'video list should not keep the unused more-menu primitive for primary actions');
 assert.match(videoListSource, /toolbar-primary/, 'video list should split primary toolbar controls from secondary actions');
+assert.match(videoListSource, /class="toolbar-secondary"/, 'saved views and playback controls should have a dedicated toolbar row');
+assert.match(videoListSource, /toolbar-cluster toolbar-cluster--views/, 'saved-view controls should wrap as one logical cluster');
+assert.match(videoListSource, /toolbar-cluster toolbar-cluster--playback/, 'random playback controls should wrap as one logical cluster');
+assert.match(videoListSource, /class="toolbar-management"/, 'library management actions should have a dedicated toolbar row');
+assert.match(
+  videoListSource,
+  /\.toolbar-cluster \.select-input\s*{[^}]*width:\s*132px;[^}]*flex:\s*0 0 132px;/s,
+  'toolbar selects should not inherit the global full-row width'
+);
 assert.match(videoListSource, /selection-toolbar/, 'batch actions should live in a contextual selection toolbar');
 assert.doesNotMatch(videoListSource, /<ActionMenu label="更多">[\s\S]*AI 标签管理[\s\S]*<\/ActionMenu>/, 'AI tag management should not be hidden in the more menu');
 assert.match(videoListSource, /<button[^>]+@click="openAITagReviewDialog\(\)"[^>]*>AI 标签管理<\/button>/, 'AI tag management should be a direct toolbar action');

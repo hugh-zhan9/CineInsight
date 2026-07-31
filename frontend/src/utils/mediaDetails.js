@@ -92,6 +92,31 @@ export function formatFrameRate(avgFrameRate, realFrameRate) {
   return '未知帧率';
 }
 
+export function formatBytes(value) {
+  const bytes = Number(value);
+  if (!Number.isFinite(bytes)) return '未知';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let size = bytes;
+  let unit = 0;
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024;
+    unit++;
+  }
+  return `${size.toFixed(unit ? 1 : 0)} ${units[unit]}`;
+}
+
+export function formatDuration(seconds) {
+  const value = Number(seconds);
+  if (!value) return '';
+  const hours = Math.floor(value / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  const remainingSeconds = Math.floor(value % 60);
+  return [hours, minutes, remainingSeconds]
+    .filter((_, index) => index > 0 || hours > 0)
+    .map(part => String(part).padStart(2, '0'))
+    .join(':');
+}
+
 export function moveCollectionMember(members, fromIndex, toIndex) {
   const result = [...(members || [])];
   if (fromIndex < 0 || toIndex < 0 || fromIndex >= result.length || toIndex >= result.length || fromIndex === toIndex) {

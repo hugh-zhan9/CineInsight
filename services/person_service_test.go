@@ -93,6 +93,79 @@ func TestPersonServiceExplicitLastRelationshipRemovalCleansPerson(t *testing.T) 
 	}
 }
 
+func TestPersonServiceMaintainsRelationshipsFromPersonDetail(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewPersonService(t.TempDir())
+	person, err := svc.CreatePerson("Maintained Actor", "")
+	if err != nil {
+		t.Fatalf("创建人物失败: %v", err)
+	}
+	first := createProbeTestVideo(t)
+	second := createProbeTestVideo(t)
+
+	if err := svc.AddPersonVideo(person.ID, first.ID); err != nil {
+		t.Fatalf("从人物详情关联视频失败: %v", err)
+	}
+	if err := svc.AddPersonVideo(person.ID, first.ID); err != nil {
+		t.Fatalf("重复关联应保持幂等: %v", err)
+	}
+	if err := svc.AddPersonVideo(person.ID, second.ID); err != nil {
+		t.Fatalf("关联第二个视频失败: %v", err)
+	}
+	var relationCount int64
+	if err := database.DB.Model(&models.VideoPerson{}).Where("person_id = ?", person.ID).Count(&relationCount).Error; err != nil {
+		t.Fatalf("统计人物关系失败: %v", err)
+	}
+	if relationCount != 2 {
+		t.Fatalf("重复请求不得创建重复关系: count=%d", relationCount)
+	}
+
+	deleted, err := svc.RemovePersonVideo(person.ID, first.ID)
+	if err != nil {
+		t.Fatalf("解除非最后关系失败: %v", err)
+	}
+	if deleted {
+		t.Fatal("仍有视频关系时不得删除人物")
+	}
+	if err := database.DB.First(&models.Person{}, person.ID).Error; err != nil {
+		t.Fatalf("仍有关联时人物应保留: %v", err)
+	}
+
+	deleted, err = svc.RemovePersonVideo(person.ID, second.ID)
+	if err != nil {
+		t.Fatalf("解除最后关系失败: %v", err)
+	}
+	if !deleted {
+		t.Fatal("解除最后关系应报告人物已清理")
+	}
+	if err := database.DB.First(&models.Person{}, person.ID).Error; !errors.Is(err, gorm.ErrRecordNotFound) {
+		t.Fatalf("解除最后关系后人物应删除: err=%v", err)
+	}
+}
+
+func TestPersonServiceRejectsInvalidPersonDetailRelationshipTargets(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewPersonService(t.TempDir())
+	person, err := svc.CreatePerson("Valid Actor", "")
+	if err != nil {
+		t.Fatalf("创建人物失败: %v", err)
+	}
+	video := createProbeTestVideo(t)
+	if err := svc.AddPersonVideo(person.ID, 999999); err == nil {
+		t.Fatal("关联不存在的视频应失败")
+	}
+	if err := svc.AddPersonVideo(999999, video.ID); err == nil {
+		t.Fatal("关联不存在的人物应失败")
+	}
+	var relationCount int64
+	if err := database.DB.Model(&models.VideoPerson{}).Count(&relationCount).Error; err != nil {
+		t.Fatalf("统计人物关系失败: %v", err)
+	}
+	if relationCount != 0 {
+		t.Fatalf("无效关联请求必须整体回滚: count=%d", relationCount)
+	}
+}
+
 func TestPersonServiceValidatesNamesAndRelationshipTargets(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := NewPersonService(t.TempDir())

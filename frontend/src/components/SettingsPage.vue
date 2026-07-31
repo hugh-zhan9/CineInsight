@@ -175,7 +175,7 @@
 		<h3>AI 标签库</h3>
 		<button type="button" class="btn-secondary" @click="addAITagLibraryGroup">添加分类</button>
 	  </div>
-	  <p class="help-text">每个分类占一行，可在分类内维护多个标签；只有启用的标签会发送给模型。</p>
+	  <p class="help-text">每个分类占一行，可在分类内维护多个标签；只有启用的标签会发送给模型。可直接填写已有普通标签的名称，保存后会保留它现有的视频关联并加入 AI 标签库。</p>
 	  <div v-if="aiTagLibraryLoading" class="empty-hint">正在加载标签库...</div>
 	  <div v-else-if="aiTagLibraryError" class="ai-tag-library-error">{{ aiTagLibraryError }}</div>
 	  <div v-else class="ai-tag-library-list">

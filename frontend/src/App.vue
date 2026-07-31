@@ -86,6 +86,7 @@ export default {
         confirm_before_delete: true,
         delete_original_file: false,
         video_extensions: '',
+        scan_exclude_paths: '',
         play_weight: 2.0,
         auto_scan_on_startup: false,
         theme: 'system',
