@@ -354,6 +354,10 @@ export function RemoveTagFromVideo(arg1, arg2) {
   return window['go']['main']['App']['RemoveTagFromVideo'](arg1, arg2);
 }
 
+export function RenameDirectory(arg1, arg2) {
+  return window['go']['main']['App']['RenameDirectory'](arg1, arg2);
+}
+
 export function RenameVideo(arg1, arg2) {
   return window['go']['main']['App']['RenameVideo'](arg1, arg2);
 }
@@ -436,6 +440,10 @@ export function SelectCollectionCover() {
 
 export function SelectDirectory() {
   return window['go']['main']['App']['SelectDirectory']();
+}
+
+export function SelectFolderToRename() {
+  return window['go']['main']['App']['SelectFolderToRename']();
 }
 
 export function SelectMigrationDestinationDirectory() {

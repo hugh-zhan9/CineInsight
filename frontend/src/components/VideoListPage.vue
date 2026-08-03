@@ -78,6 +78,9 @@
         <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="moveFolder">
           {{ migrationRunning ? '迁移中...' : '迁移文件夹' }}
         </button>
+        <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="renameFolder">
+          {{ migrationRunning ? '处理中...' : '重命名文件夹' }}
+        </button>
         <button
           type="button"
           class="btn-secondary"
@@ -323,6 +326,29 @@
         <div class="modal-actions">
           <button @click="renameDialog.show = false" class="btn-secondary">取消</button>
           <button @click="executeRename" class="btn-primary">确认</button>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="folderRenameDialog.show" class="modal-overlay">
+      <div class="modal download-modal">
+        <h3>重命名文件夹</h3>
+        <p class="folder-rename-source" :title="folderRenameDialog.source">{{ folderRenameDialog.source }}</p>
+        <input
+          ref="folderRenameInput"
+          v-model="folderRenameDialog.newName"
+          type="text"
+          maxlength="255"
+          class="search-input rename-input"
+          placeholder="输入新的文件夹名称"
+          :disabled="migrationRunning"
+          @keyup.enter="executeFolderRename"
+        />
+        <p class="rename-hint">只修改当前文件夹名称，内部目录结构和视频关联保持不变。</p>
+        <p v-if="folderRenameDialog.error" class="cleanup-error">{{ folderRenameDialog.error }}</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="folderRenameDialog.show = false">取消</button>
+          <button type="button" class="btn-primary" :disabled="migrationRunning || !folderRenameDialog.newName.trim()" @click="executeFolderRename">{{ migrationRunning ? '重命名中...' : '确认重命名' }}</button>
         </div>
       </div>
     </div>
@@ -916,6 +942,13 @@
   color: var(--text-muted);
   font-size: 12px;
 }
+.folder-rename-source {
+  margin: 12px 0 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
 .lang-select-box {
   margin-top: 15px;
 }
@@ -1212,7 +1245,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1370,6 +1403,7 @@ export default {
       ],
       // 重命名弹窗
       renameDialog: { show: false, video: null, newName: '', ext: '' },
+      folderRenameDialog: { show: false, source: '', currentName: '', newName: '', error: '' },
     };
   },
   mounted() {
@@ -2323,6 +2357,47 @@ export default {
       } catch (err) {
         console.error('迁移文件夹失败:', err);
         alert('迁移文件夹失败: ' + err);
+      } finally {
+        this.migrationRunning = false;
+      }
+    },
+    async renameFolder() {
+      if (this.migrationRunning) return;
+      try {
+        const source = await SelectFolderToRename();
+        if (!source) return;
+        const currentName = String(source).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '';
+        this.folderRenameDialog = { show: true, source, currentName, newName: currentName, error: '' };
+        this.$nextTick(() => this.$refs.folderRenameInput?.focus());
+      } catch (err) {
+        alert('选择文件夹失败: ' + err);
+      }
+    },
+    async executeFolderRename() {
+      const source = this.folderRenameDialog.source;
+      const newName = this.folderRenameDialog.newName.trim();
+      if (!source || !newName || this.migrationRunning) return;
+      if (newName === this.folderRenameDialog.currentName) {
+        this.folderRenameDialog.error = '请输入不同于当前名称的新名称。';
+        return;
+      }
+      this.migrationRunning = true;
+      this.folderRenameDialog.error = '';
+      try {
+        const result = await RenameDirectory(source, newName);
+        this.folderRenameDialog.show = false;
+        this.$emit('reload-directories');
+        try {
+          const refreshedSettings = await GetSettings();
+          this.$emit('update-settings', refreshedSettings);
+        } catch (settingsErr) {
+          console.warn('文件夹重命名后刷新设置失败:', settingsErr);
+        }
+        await this.reloadCurrentView();
+        alert(`文件夹重命名完成：更新 ${result?.videos_updated || 0} 个视频、${result?.directories_updated || 0} 个扫描目录。`);
+      } catch (err) {
+        console.error('重命名文件夹失败:', err);
+        this.folderRenameDialog.error = '重命名失败：' + err;
       } finally {
         this.migrationRunning = false;
       }

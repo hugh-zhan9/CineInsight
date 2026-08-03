@@ -23,6 +23,7 @@ const api = vi.hoisted(() => ({
   ReorderCollectionVideos: vi.fn(),
   SearchLibraryVideoPage: vi.fn(),
   SelectCollectionCover: vi.fn(),
+  SelectDirectory: vi.fn(),
   SelectPersonAvatar: vi.fn(),
   SetCollectionCover: vi.fn(),
   SetPersonAvatar: vi.fn(),
@@ -85,6 +86,7 @@ async function mountDrawer(details = videoDetails(1)) {
 beforeEach(() => {
   vi.clearAllMocks();
   api.GetAllDirectories.mockResolvedValue([]);
+  api.SelectDirectory.mockResolvedValue('');
 });
 
 describe('PreviewDrawer', () => {
@@ -163,6 +165,26 @@ describe('PreviewDrawer', () => {
     expect(api.AddPersonVideo).toHaveBeenCalledWith(7, 2);
     expect(wrapper.vm.personDetail.person.active_video_count).toBe(2);
     expect(wrapper.vm.relatedVideoIDs).toEqual([2, 1]);
+  });
+
+  it('selects a nested folder and searches all videos below that path', async () => {
+    api.GetPersonDetail.mockResolvedValueOnce({
+      person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 0 },
+      videos: [], next_video_id: 0
+    });
+    api.SelectDirectory.mockResolvedValueOnce('/library/shows/season-1');
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: [] });
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
+    await flushPromises();
+
+    await wrapper.get('[data-test="related-video-folder-picker"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.vm.relatedVideoDirectory).toBe('/library/shows/season-1');
+    expect(wrapper.text()).toContain('已选：/library/shows/season-1');
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith(expect.objectContaining({
+      filter: expect.objectContaining({ path_prefix: '/library/shows/season-1' })
+    }));
   });
 
   it('warns before removing a person final video and reports person cleanup', async () => {

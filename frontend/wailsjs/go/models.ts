@@ -1123,6 +1123,8 @@ export namespace services {
 	    destination: string;
 	    videos_updated: number;
 	    directories_updated: number;
+	    trash_entries_updated: number;
+	    scan_exclusions_updated: number;
 	    warning?: string;
 
 	    static createFrom(source: any = {}) {
@@ -1135,6 +1137,8 @@ export namespace services {
 	        this.destination = source["destination"];
 	        this.videos_updated = source["videos_updated"];
 	        this.directories_updated = source["directories_updated"];
+	        this.trash_entries_updated = source["trash_entries_updated"];
+	        this.scan_exclusions_updated = source["scan_exclusions_updated"];
 	        this.warning = source["warning"];
 	    }
 	}
