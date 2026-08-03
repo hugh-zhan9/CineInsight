@@ -4,7 +4,7 @@
       <div class="ai-tag-review-header">
         <div>
           <h3>AI 标签管理</h3>
-          <p class="help-text">待审标签 {{ candidates.length }} 条，同源关系 {{ sameSourceRelations.length }} 条<span v-if="reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条标签</span>。同源关系只提供证据，不会直接写入正式标签。</p>
+          <p class="help-text">待审标签 {{ candidates.length }} 条，待处理同源 {{ sameSourceRelations.length }} 条<span v-if="reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条标签</span>。同源关系只提供证据，不会直接写入正式标签。</p>
           <p v-if="summary && !summary.config_available" class="ai-tag-warning">AI 配置不可用，后台分析已暂停。</p>
         </div>
         <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
@@ -42,8 +42,8 @@
             <p v-if="relation.reasoning" class="ai-candidate-reason">{{ relation.reasoning }}</p>
           </div>
           <div class="ai-candidate-actions">
-            <button type="button" class="btn-action btn-compact" @click="previewVideo(relation.video_a_id)" :disabled="relation.video_a_deleted || processingIds.includes(`preview-${relation.video_a_id}`)">预览 A</button>
-            <button type="button" class="btn-action btn-compact" @click="previewVideo(relation.video_b_id)" :disabled="relation.video_b_deleted || processingIds.includes(`preview-${relation.video_b_id}`)">预览 B</button>
+            <button type="button" class="btn-action btn-compact" title="同时打开两个视频" @click="previewSameSource(relation)" :disabled="relation.video_a_deleted || relation.video_b_deleted || processingIds.includes(`same-source-preview-${relation.id}`)">预览</button>
+            <button type="button" class="btn-primary btn-compact" @click="confirmSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">确认同源</button>
             <button type="button" class="btn-secondary btn-compact" @click="rejectSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">不是同源</button>
           </div>
         </div>
@@ -154,7 +154,7 @@
 </template>
 
 <script>
-import { ApproveAITagCandidate, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import { ApproveAITagCandidate, ConfirmSameSourceRelation, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import AddTagDialog from './AddTagDialog.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
 import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
@@ -253,6 +253,13 @@ export default {
         this.$emit('changed');
       });
     },
+    async confirmSameSource(relation) {
+      await this.withProcessing(`same-source-${relation.id}`, async () => {
+        await ConfirmSameSourceRelation(relation.id);
+        this.sameSourceRelations = this.sameSourceRelations.filter(item => Number(item.id) !== Number(relation.id));
+        this.$emit('changed');
+      });
+    },
     async rejectVideoGroup(group) {
       const confirmState = createRejectVideoConfirm(group);
       if (!confirmState) return;
@@ -282,6 +289,15 @@ export default {
     async previewVideo(videoId) {
       await this.withProcessing(`preview-${videoId}`, async () => {
         await PreviewExternally(videoId);
+      });
+    },
+    async previewSameSource(relation) {
+      if (!relation || relation.video_a_deleted || relation.video_b_deleted) return;
+      await this.withProcessing(`same-source-preview-${relation.id}`, async () => {
+        await Promise.all([
+          PreviewExternally(relation.video_a_id),
+          PreviewExternally(relation.video_b_id),
+        ]);
       });
     },
     openManualTagDialog(group) {
@@ -474,10 +490,17 @@ export default {
 
 .same-source-row {
   display: flex;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 14px;
   padding: 10px 0;
   border-top: 1px solid var(--border-color);
+}
+
+.same-source-row .ai-candidate-actions {
+  max-width: 320px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .same-source-row:first-of-type {
@@ -735,6 +758,14 @@ export default {
 
   .ai-candidate-actions {
     justify-content: flex-start;
+  }
+
+  .same-source-row {
+    flex-direction: column;
+  }
+
+  .same-source-row .ai-candidate-actions {
+    max-width: 100%;
   }
 }
 </style>

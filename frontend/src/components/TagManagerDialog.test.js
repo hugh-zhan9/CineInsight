@@ -26,11 +26,8 @@ beforeEach(() => {
 });
 
 describe('TagManagerDialog merge picker', () => {
-  it('filters labels and merges checkbox-selected sources', async () => {
+  it('filters ordinary source labels and merges checkbox-selected sources', async () => {
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
-    const filter = wrapper.get('[aria-label="筛选待合并标签"]');
-    await filter.setValue('旅');
-
     const target = wrapper.get('.merge-target-select');
     expect(target.findAll('option').map(option => option.text())).toEqual([
       '选择要保留的标签',
@@ -38,6 +35,8 @@ describe('TagManagerDialog merge picker', () => {
       '旅游 · 普通'
     ]);
     await target.setValue('1');
+    const filter = wrapper.get('[aria-label="筛选待合并标签"]');
+    await filter.setValue('旅游');
 
     const sources = wrapper.findAll('.merge-source-option');
     expect(sources).toHaveLength(1);
@@ -51,11 +50,34 @@ describe('TagManagerDialog merge picker', () => {
     expect(api.MergeTags).toHaveBeenCalledWith([2], 1);
   });
 
-  it('keeps automatic and cross-type labels out of source multi-selection', async () => {
+  it('selects AI targets independently from the source keyword and excludes other types', async () => {
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await wrapper.get('[aria-label="选择合并标签类型"] button:nth-child(2)').trigger('click');
+
+    const target = wrapper.get('.merge-target-select');
+    expect(target.findAll('option').map(option => option.text())).toEqual([
+      '选择要保留的标签',
+      '动作 · AI',
+      '激烈动作 · AI'
+    ]);
     await wrapper.get('.merge-target-select').setValue('3');
+    await wrapper.get('[aria-label="筛选待合并标签"]').setValue('激烈');
 
     expect(wrapper.findAll('.merge-source-option').map(option => option.text())).toEqual(['激烈动作AI 标签']);
-    expect(wrapper.text()).not.toContain('短视频自动标签');
+    expect(target.findAll('option').map(option => option.text())).toContain('动作 · AI');
+    expect(target.findAll('option').map(option => option.text())).not.toContain('旅行 · 普通');
+    expect(wrapper.findAll('.merge-source-option').map(option => option.text())).not.toContain('短视频自动标签');
+  });
+
+  it('clears target and source selections when switching merge type', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await wrapper.get('.merge-target-select').setValue('1');
+    await wrapper.get('.merge-source-option input[type="checkbox"]').setValue(true);
+
+    await wrapper.get('[aria-label="选择合并标签类型"] button:nth-child(2)').trigger('click');
+
+    expect(wrapper.vm.mergeTargetId).toBe(0);
+    expect(wrapper.vm.mergeSourceIds).toEqual([]);
+    expect(wrapper.find('.merge-source-picker').exists()).toBe(false);
   });
 });

@@ -99,6 +99,27 @@ describe('PreviewDrawer', () => {
     expect(wrapper.text()).toContain('Video 1');
   });
 
+  it('renders an inline preview inside the dedicated non-collapsing player section', async () => {
+    const details = videoDetails(1);
+    api.GetVideoDetails.mockResolvedValue(details);
+    api.ListCollections.mockResolvedValue([]);
+    const wrapper = mount(PreviewDrawer, {
+      props: {
+        video: details.video,
+        session: {
+          video_id: 1,
+          mode: 'inline',
+          inline_source: { locator_value: '/preview/video/1', mime: 'video/mp4' }
+        }
+      }
+    });
+    await flushPromises();
+
+    expect(wrapper.get('.detail-section--player').exists()).toBe(true);
+    expect(wrapper.get('.preview-drawer__player-shell').exists()).toBe(true);
+    expect(wrapper.get('.preview-drawer__video source').attributes('src')).toBe('/preview/video/1');
+  });
+
   it('saves a zero rating through the mounted drawer', async () => {
     const wrapper = await mountDrawer();
     const ratingInput = wrapper.get('.detail-rating-input input');

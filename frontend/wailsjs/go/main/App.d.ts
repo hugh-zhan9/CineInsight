@@ -44,6 +44,8 @@ export function CancelTechnicalBackfill():Promise<void>;
 
 export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
 
+export function ConfirmSameSourceRelation(arg1:number):Promise<void>;
+
 export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCollection>;
 
 export function CreatePerson(arg1:string,arg2:string):Promise<models.Person>;

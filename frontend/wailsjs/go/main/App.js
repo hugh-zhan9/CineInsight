@@ -82,6 +82,10 @@ export function CheckSubtitleDependencies() {
   return window['go']['main']['App']['CheckSubtitleDependencies']();
 }
 
+export function ConfirmSameSourceRelation(arg1) {
+  return window['go']['main']['App']['ConfirmSameSourceRelation'](arg1);
+}
+
 export function CreateCollection(arg1, arg2) {
   return window['go']['main']['App']['CreateCollection'](arg1, arg2);
 }
