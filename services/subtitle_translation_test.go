@@ -89,6 +89,31 @@ func TestOpenAICompatibleSubtitleTranslatorUsesChatCompletionsAndAllowsLocalEndp
 	}
 }
 
+func TestOpenAICompatibleSubtitleTranslatorSendsRemoteAPIKey(t *testing.T) {
+	var seenAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"choices": []map[string]interface{}{
+				{"message": map[string]string{"content": `{"translations":["你好"]}`}},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	translator := NewOpenAICompatibleSubtitleTranslator(SubtitleTranslationConfig{
+		BaseURL: srv.URL,
+		APIKey:  "subtitle-remote-key",
+		Model:   "remote-model",
+	})
+	if _, err := translator.Translate(context.Background(), []string{"Hello"}, "en", "zh"); err != nil {
+		t.Fatalf("远程 LLM 字幕翻译失败: %v", err)
+	}
+	if seenAuth != "Bearer subtitle-remote-key" {
+		t.Fatalf("远程字幕翻译未使用独立 API Key，实际 Authorization=%q", seenAuth)
+	}
+}
+
 func TestParseSubtitleTranslationsAcceptsIndexedObjects(t *testing.T) {
 	got, err := parseSubtitleTranslations(`{"translations":[{"index":2,"text":"第二句"},{"index":1,"text":"第一句"}]}`)
 	if err != nil {

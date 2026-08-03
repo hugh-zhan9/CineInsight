@@ -10,7 +10,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'SelectMigrationSourceDirectory', 'SelectMigrationDestinationDirectory', 'CancelSubtitle', 'CancelSubtitleTask',
   'GetSubtitleQueueState', 'GetCleanupStatus', 'GetAITaggingStatusSummary', 'StartCleanupAnalysis', 'GetSubtitleSegments',
   'GetPreviewSession', 'PreviewExternally', 'SyncScanDirectories', 'StartTechnicalBackfill', 'GetTechnicalBackfillStatus',
-  'CancelTechnicalBackfill', 'LogFrontend'
+  'CancelTechnicalBackfill', 'StartLocalMetadataBackfill', 'GetLocalMetadataBackfillStatus', 'CancelLocalMetadataBackfill', 'LogFrontend'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -20,6 +20,8 @@ vi.mock('./AddTagDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./DeleteConfirmDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./TagDeleteDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./PreviewDrawer.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('./SubtitleWorkbench.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('./LocalMetadataDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./TrashRestoreDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./VirtualVideoList.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./VideoListRow.vue', () => ({ default: { template: '<div />' } }));
@@ -47,10 +49,23 @@ beforeEach(() => {
   api.GetSubtitleQueueState.mockResolvedValue({ active_task: null, queued_tasks: [], total: 0 });
   api.GetAITaggingStatusSummary.mockResolvedValue({ same_source_unread: 0 });
   api.GetTechnicalBackfillStatus.mockResolvedValue({ running: false, preparing: false, completed: false, cancelled: false, failed: 0, failures: [] });
+  api.GetLocalMetadataBackfillStatus.mockResolvedValue({ running: false, completed: false, cancelled: false, failed: 0, failures: [] });
   api.LogFrontend.mockResolvedValue();
 });
 
 describe('VideoListPage media-detail integration', () => {
+  it('opens the subtitle workbench for the selected video', async () => {
+    const wrapper = await mountPage();
+    const video = { id: 12, name: 'editable.mp4' };
+
+    wrapper.vm.openSubtitleWorkbench(video);
+
+    expect(wrapper.vm.subtitleWorkbench).toEqual({ show: true, video });
+    wrapper.vm.closeSubtitleWorkbench();
+    expect(wrapper.vm.subtitleWorkbench).toEqual({ show: false, video: null });
+    wrapper.unmount();
+  });
+
   it('sends nullable rating filters and sort mode through the generated request DTO', async () => {
     const wrapper = await mountPage();
     wrapper.vm.minRating = '0';

@@ -44,6 +44,22 @@ type CollectionVideo struct {
 	UpdatedAt    time.Time       `json:"updated_at" ts_type:"string"`
 }
 
+// VideoLocalMetadataState tracks local sidecar observation without persisting parsed candidates or source paths.
+type VideoLocalMetadataState struct {
+	VideoID                uint       `gorm:"primaryKey;autoIncrement:false" json:"video_id"`
+	Video                  Video      `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	ObservedManifestSHA256 string     `gorm:"size:64;not null;default:'';index" json:"observed_manifest_sha256"`
+	ObservedSourceStat     string     `gorm:"size:64;not null;default:''" json:"observed_source_stat"`
+	AppliedManifestSHA256  string     `gorm:"size:64;not null;default:''" json:"applied_manifest_sha256"`
+	Status                 string     `gorm:"size:32;not null;index" json:"status"`
+	LastErrorCode          string     `gorm:"size:64;not null;default:''" json:"last_error_code"`
+	LastError              string     `gorm:"type:text;not null;default:''" json:"last_error"`
+	LastCheckedAt          time.Time  `gorm:"not null;index" json:"last_checked_at" ts_type:"string"`
+	AppliedAt              *time.Time `json:"applied_at" ts_type:"string"`
+	CreatedAt              time.Time  `json:"created_at" ts_type:"string"`
+	UpdatedAt              time.Time  `json:"updated_at" ts_type:"string"`
+}
+
 // VideoTechnicalMetadata records the last successful local probe and the last attempt.
 type VideoTechnicalMetadata struct {
 	VideoID                    uint       `gorm:"primaryKey;autoIncrement:false" json:"video_id"`

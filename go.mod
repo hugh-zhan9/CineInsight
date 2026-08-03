@@ -3,9 +3,11 @@ module video-master
 go 1.23
 
 require (
+	github.com/fsnotify/fsnotify v1.9.0
 	github.com/jinzhu/now v1.1.5
 	github.com/joho/godotenv v1.5.1
 	github.com/wailsapp/wails/v2 v2.11.0
+	golang.org/x/sys v0.30.0
 	gorm.io/driver/postgres v1.6.0
 	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.1
@@ -44,7 +46,6 @@ require (
 	golang.org/x/crypto v0.33.0 // indirect
 	golang.org/x/net v0.35.0 // indirect
 	golang.org/x/sync v0.11.0 // indirect
-	golang.org/x/sys v0.30.0 // indirect
 	golang.org/x/text v0.22.0 // indirect
 )
 

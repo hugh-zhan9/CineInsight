@@ -10,6 +10,9 @@ type Video struct {
 	Name                   string         `json:"name"`                                               // 文件名
 	DisplayTitle           string         `gorm:"size:255;not null;default:''" json:"display_title"`  // 用户维护的显示标题
 	OriginalTitle          string         `gorm:"size:255;not null;default:''" json:"original_title"` // 用户维护的原始标题
+	Description            string         `gorm:"type:text;not null;default:''" json:"description"`
+	PosterPath             string         `gorm:"type:text;not null;default:''" json:"-"`
+	FanartPath             string         `gorm:"type:text;not null;default:''" json:"-"`
 	PersonalRating         *float64       `gorm:"type:numeric(3,1);check:chk_videos_personal_rating,personal_rating IS NULL OR (personal_rating >= 0 AND personal_rating <= 10 AND personal_rating * 2 = CAST(personal_rating * 2 AS INTEGER))" json:"personal_rating"`
 	Path                   string         `gorm:"uniqueIndex:idx_videos_path_active,where:deleted_at IS NULL" json:"path"` // 完整路径
 	Directory              string         `json:"directory"`                                                               // 所在目录
@@ -106,6 +109,9 @@ type Settings struct {
 	ScanExcludePaths            string    `gorm:"type:text" json:"scan_exclude_paths"`
 	PlayWeight                  float64   `gorm:"default:2.0" json:"play_weight"` // 播放权重（1次播放 = N次随机播放）
 	AutoScanOnStartup           bool      `json:"auto_scan_on_startup"`           // 启动时自动增量扫描
+	LibraryWatchEnabled         bool      `json:"library_watch_enabled"`          // 实时同步片库
+	LocalMetadataEnabled        bool      `json:"local_metadata_enabled"`         // 新视频本地元数据自动填空与补全任务
+	AIQualityEnabled            bool      `json:"ai_quality_enabled"`             // 显示 AI 质量评估入口
 	ShortFeedMaxDurationMinutes int       `gorm:"default:5" json:"short_feed_max_duration_minutes"`
 	Theme                       string    `gorm:"default:'system'" json:"theme"`      // 主题模式: light, dark, system
 	LogEnabled                  bool      `json:"log_enabled"`                        // 是否启用日志

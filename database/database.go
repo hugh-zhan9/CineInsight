@@ -114,9 +114,20 @@ func Init() error {
 		}
 	}
 
+	settingsTableExisted := db.Migrator().HasTable(&models.Settings{})
+	libraryWatchColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "library_watch_enabled")
+	localMetadataColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "local_metadata_enabled")
+	aiQualityColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "ai_quality_enabled")
+
 	// 自动迁移数据表
 	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
+	}
+	if err := migrateLibraryWatchSetting(db, settingsTableExisted, libraryWatchColumnExisted); err != nil {
+		return fmt.Errorf("迁移实时同步设置失败: %w", err)
+	}
+	if err := migrateWorkflowFeatureSettings(db, settingsTableExisted, localMetadataColumnExisted, aiQualityColumnExisted); err != nil {
+		return fmt.Errorf("迁移本地工作流设置失败: %w", err)
 	}
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
@@ -139,6 +150,9 @@ func Init() error {
 			VideoExtensions:             defaultExts,
 			PlayWeight:                  2.0, // 默认 1次播放 = 2次随机播放
 			AutoScanOnStartup:           false,
+			LibraryWatchEnabled:         true,
+			LocalMetadataEnabled:        true,
+			AIQualityEnabled:            true,
 			ShortFeedMaxDurationMinutes: 5,
 			LogEnabled:                  false,
 			SubtitleTranslationProvider: "deepl",
@@ -157,6 +171,28 @@ func Init() error {
 		return fmt.Errorf("读取默认设置失败: %w", err)
 	}
 	DB = db
+	return nil
+}
+
+func migrateLibraryWatchSetting(db *gorm.DB, settingsTableExisted, libraryWatchColumnExisted bool) error {
+	if !settingsTableExisted || libraryWatchColumnExisted {
+		return nil
+	}
+	return db.Model(&models.Settings{}).Where("1 = 1").Update("library_watch_enabled", false).Error
+}
+
+func migrateWorkflowFeatureSettings(db *gorm.DB, settingsTableExisted, localMetadataColumnExisted, aiQualityColumnExisted bool) error {
+	if !settingsTableExisted {
+		return nil
+	}
+	if !localMetadataColumnExisted {
+		if err := db.Model(&models.Settings{}).Where("1 = 1").Update("local_metadata_enabled", false).Error; err != nil {
+			return err
+		}
+	}
+	if !aiQualityColumnExisted {
+		return db.Model(&models.Settings{}).Where("1 = 1").Update("ai_quality_enabled", true).Error
+	}
 	return nil
 }
 

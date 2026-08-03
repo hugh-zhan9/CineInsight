@@ -35,21 +35,41 @@ const (
 
 // AITagCandidate stores unconfirmed AI suggestions outside the canonical tag tables.
 type AITagCandidate struct {
-	ID             uint       `gorm:"primarykey" json:"id"`
-	VideoID        uint       `gorm:"index:idx_ai_tag_candidates_video_status,priority:1" json:"video_id"`
-	Video          Video      `gorm:"constraint:OnDelete:CASCADE;" json:"video"`
-	SuggestedName  string     `gorm:"not null" json:"suggested_name"`
-	NormalizedName string     `gorm:"index" json:"normalized_name"`
-	MatchedTagID   *uint      `gorm:"index:idx_ai_tag_candidates_matched_status,priority:1" json:"matched_tag_id,omitempty"`
-	MatchedTag     *Tag       `json:"matched_tag,omitempty"`
-	Confidence     string     `gorm:"index;not null" json:"confidence"`
-	Reasoning      string     `gorm:"type:text" json:"reasoning"`
-	SourceSummary  string     `gorm:"type:text" json:"source_summary"`
-	Status         string     `gorm:"index:idx_ai_tag_candidates_video_status,priority:2;index:idx_ai_tag_candidates_matched_status,priority:2;not null;default:'pending'" json:"status"`
-	CreatedAt      time.Time  `json:"created_at" ts_type:"string"`
-	UpdatedAt      time.Time  `json:"updated_at" ts_type:"string"`
-	ApprovedAt     *time.Time `json:"approved_at,omitempty" ts_type:"string"`
-	RejectedAt     *time.Time `json:"rejected_at,omitempty" ts_type:"string"`
+	ID             uint          `gorm:"primarykey" json:"id"`
+	VideoID        uint          `gorm:"index:idx_ai_tag_candidates_video_status,priority:1" json:"video_id"`
+	Video          Video         `gorm:"constraint:OnDelete:CASCADE;" json:"video"`
+	SuggestedName  string        `gorm:"not null" json:"suggested_name"`
+	NormalizedName string        `gorm:"index" json:"normalized_name"`
+	MatchedTagID   *uint         `gorm:"index:idx_ai_tag_candidates_matched_status,priority:1" json:"matched_tag_id,omitempty"`
+	MatchedTag     *Tag          `json:"matched_tag,omitempty"`
+	RunID          *uint         `gorm:"index" json:"run_id,omitempty"`
+	Run            *AITaggingRun `gorm:"constraint:OnDelete:SET NULL;" json:"-"`
+	Confidence     string        `gorm:"index;not null" json:"confidence"`
+	Reasoning      string        `gorm:"type:text" json:"reasoning"`
+	SourceSummary  string        `gorm:"type:text" json:"source_summary"`
+	Status         string        `gorm:"index:idx_ai_tag_candidates_video_status,priority:2;index:idx_ai_tag_candidates_matched_status,priority:2;index:idx_ai_tag_candidates_status_approved,priority:1;index:idx_ai_tag_candidates_status_rejected,priority:1;not null;default:'pending'" json:"status"`
+	CreatedAt      time.Time     `json:"created_at" ts_type:"string"`
+	UpdatedAt      time.Time     `json:"updated_at" ts_type:"string"`
+	ApprovedAt     *time.Time    `gorm:"index:idx_ai_tag_candidates_status_approved,priority:2" json:"approved_at,omitempty" ts_type:"string"`
+	RejectedAt     *time.Time    `gorm:"index:idx_ai_tag_candidates_status_rejected,priority:2" json:"rejected_at,omitempty" ts_type:"string"`
+}
+
+// AITaggingRun stores minimal attribution for one actual AI tagging attempt.
+type AITaggingRun struct {
+	ID                  uint       `gorm:"primarykey" json:"id"`
+	VideoID             uint       `gorm:"index;not null" json:"video_id"`
+	Video               Video      `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
+	Status              string     `gorm:"size:32;not null;index" json:"status"`
+	FailureCode         string     `gorm:"size:64;not null;default:''" json:"failure_code"`
+	ModelIdentifier     string     `gorm:"size:255;not null;default:'';index:idx_ai_tagging_runs_completed_model_prompt,priority:2" json:"model_identifier"`
+	PromptSchemaVersion string     `gorm:"size:255;not null;default:'';index:idx_ai_tagging_runs_completed_model_prompt,priority:3" json:"prompt_schema_version"`
+	DurationMS          int64      `gorm:"not null;default:0" json:"duration_ms"`
+	RequestCount        int        `gorm:"not null;default:0" json:"request_count"`
+	ToolCallCount       int        `gorm:"not null;default:0" json:"tool_call_count"`
+	StartedAt           time.Time  `gorm:"not null;index" json:"started_at" ts_type:"string"`
+	CompletedAt         *time.Time `gorm:"index:idx_ai_tagging_runs_completed_model_prompt,priority:1" json:"completed_at" ts_type:"string"`
+	CreatedAt           time.Time  `json:"created_at" ts_type:"string"`
+	UpdatedAt           time.Time  `json:"updated_at" ts_type:"string"`
 }
 
 // AITagApprovalRecord records which official video/tag links were created by AI candidate approval.
@@ -82,6 +102,7 @@ type AITaggingState struct {
 // AITagAgentStep stores one sanitized agent decision without raw media or transcript text.
 type AITagAgentStep struct {
 	ID                  uint      `gorm:"primarykey" json:"id"`
+	RunID               *uint     `gorm:"index" json:"run_id,omitempty"`
 	VideoID             uint      `gorm:"index:idx_ai_tag_agent_steps_video_created,priority:1;uniqueIndex:idx_ai_tag_agent_step_run_round,priority:1" json:"video_id"`
 	Video               Video     `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
 	EvidenceFingerprint string    `gorm:"size:64;uniqueIndex:idx_ai_tag_agent_step_run_round,priority:2" json:"evidence_fingerprint"`
@@ -113,19 +134,41 @@ type VideoVisualFingerprint struct {
 
 // VideoSameSourceRelation stores a detected or user-rejected normalized video pair.
 type VideoSameSourceRelation struct {
-	ID                uint       `gorm:"primarykey" json:"id"`
-	VideoAID          uint       `gorm:"uniqueIndex:idx_video_same_source_pair,priority:1;index:idx_video_same_source_a_status,priority:1" json:"video_a_id"`
-	VideoA            Video      `gorm:"foreignKey:VideoAID;constraint:OnDelete:CASCADE;" json:"video_a"`
-	VideoBID          uint       `gorm:"uniqueIndex:idx_video_same_source_pair,priority:2;index:idx_video_same_source_b_status,priority:1" json:"video_b_id"`
-	VideoB            Video      `gorm:"foreignKey:VideoBID;constraint:OnDelete:CASCADE;" json:"video_b"`
-	VideoAFingerprint string     `gorm:"size:64;not null" json:"-"`
-	VideoBFingerprint string     `gorm:"size:64;not null" json:"-"`
-	Status            string     `gorm:"size:16;not null;index:idx_video_same_source_unread,priority:1;index:idx_video_same_source_a_status,priority:2;index:idx_video_same_source_b_status,priority:2" json:"status"`
-	Confidence        string     `gorm:"size:16;not null;default:''" json:"confidence"`
-	Reasoning         string     `gorm:"type:text;not null;default:''" json:"reasoning"`
-	DetectionVersion  string     `gorm:"size:64;not null" json:"detection_version"`
-	IsUnread          bool       `gorm:"not null;default:true;index:idx_video_same_source_unread,priority:2" json:"is_unread"`
-	RejectedAt        *time.Time `json:"rejected_at,omitempty" ts_type:"string"`
-	CreatedAt         time.Time  `json:"created_at" ts_type:"string"`
-	UpdatedAt         time.Time  `gorm:"index:idx_video_same_source_unread,priority:3" json:"updated_at" ts_type:"string"`
+	ID                  uint       `gorm:"primarykey" json:"id"`
+	VideoAID            uint       `gorm:"uniqueIndex:idx_video_same_source_pair,priority:1;index:idx_video_same_source_a_status,priority:1" json:"video_a_id"`
+	VideoA              Video      `gorm:"foreignKey:VideoAID;constraint:OnDelete:CASCADE;" json:"video_a"`
+	VideoBID            uint       `gorm:"uniqueIndex:idx_video_same_source_pair,priority:2;index:idx_video_same_source_b_status,priority:1" json:"video_b_id"`
+	VideoB              Video      `gorm:"foreignKey:VideoBID;constraint:OnDelete:CASCADE;" json:"video_b"`
+	VideoAFingerprint   string     `gorm:"size:64;not null" json:"-"`
+	VideoBFingerprint   string     `gorm:"size:64;not null" json:"-"`
+	Status              string     `gorm:"size:16;not null;index:idx_video_same_source_unread,priority:1;index:idx_video_same_source_a_status,priority:2;index:idx_video_same_source_b_status,priority:2" json:"status"`
+	Confidence          string     `gorm:"size:16;not null;default:''" json:"confidence"`
+	Reasoning           string     `gorm:"type:text;not null;default:''" json:"reasoning"`
+	DetectionVersion    string     `gorm:"size:64;not null" json:"detection_version"`
+	IsUnread            bool       `gorm:"not null;default:true;index:idx_video_same_source_unread,priority:2" json:"is_unread"`
+	RejectedAt          *time.Time `json:"rejected_at,omitempty" ts_type:"string"`
+	CurrentEvaluationID *uint      `gorm:"index" json:"current_evaluation_id,omitempty"`
+	CreatedAt           time.Time  `json:"created_at" ts_type:"string"`
+	UpdatedAt           time.Time  `gorm:"index:idx_video_same_source_unread,priority:3" json:"updated_at" ts_type:"string"`
+}
+
+// AISameSourceEvaluation stores one distinct displayed fingerprint-pair sample.
+type AISameSourceEvaluation struct {
+	ID                      uint                    `gorm:"primarykey" json:"id"`
+	RelationID              uint                    `gorm:"index;uniqueIndex:idx_ai_same_source_evaluation_fingerprints,priority:1;not null" json:"relation_id"`
+	Relation                VideoSameSourceRelation `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
+	LeftVideoID             uint                    `gorm:"index;not null" json:"left_video_id"`
+	RightVideoID            uint                    `gorm:"index;not null" json:"right_video_id"`
+	LeftFingerprint         string                  `gorm:"size:64;uniqueIndex:idx_ai_same_source_evaluation_fingerprints,priority:2;not null" json:"-"`
+	RightFingerprint        string                  `gorm:"size:64;uniqueIndex:idx_ai_same_source_evaluation_fingerprints,priority:3;not null" json:"-"`
+	RunID                   *uint                   `gorm:"index" json:"run_id,omitempty"`
+	Status                  string                  `gorm:"size:16;not null;index:idx_ai_same_source_evaluations_status_detected,priority:1;index:idx_ai_same_source_evaluations_status_rejected,priority:1;index:idx_ai_same_source_evaluations_version_status,priority:2" json:"status"`
+	Confidence              string                  `gorm:"size:16;not null;default:''" json:"confidence"`
+	ModelIdentifier         string                  `gorm:"size:255;not null;default:''" json:"model_identifier"`
+	ComparisonPromptVersion string                  `gorm:"size:255;not null;default:''" json:"comparison_prompt_version"`
+	DetectionVersion        string                  `gorm:"size:64;not null;index:idx_ai_same_source_evaluations_version_status,priority:1" json:"detection_version"`
+	DetectedAt              time.Time               `gorm:"not null;index:idx_ai_same_source_evaluations_status_detected,priority:2" json:"detected_at" ts_type:"string"`
+	RejectedAt              *time.Time              `gorm:"index:idx_ai_same_source_evaluations_status_rejected,priority:2" json:"rejected_at,omitempty" ts_type:"string"`
+	CreatedAt               time.Time               `json:"created_at" ts_type:"string"`
+	UpdatedAt               time.Time               `json:"updated_at" ts_type:"string"`
 }
