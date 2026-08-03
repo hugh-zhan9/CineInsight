@@ -168,6 +168,114 @@ func TestMoveDirectoryPreservesRelativePathsAndUpdatesScanDirectories(t *testing
 	}
 }
 
+func TestRenameDirectoryUpdatesManagedPathsAndSubtitleIndex(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	sourceDirectory := filepath.Join(root, "library")
+	newDirectory := filepath.Join(root, "renamed-library")
+	videoPath := filepath.Join(sourceDirectory, "season", "episode.mp4")
+	subtitlePath := filepath.Join(sourceDirectory, "season", "episode.srt")
+	deletedPath := filepath.Join(sourceDirectory, "deleted.mp4")
+	mustCreateFile(t, videoPath)
+	mustCreateFile(t, deletedPath)
+	if err := os.WriteFile(subtitlePath, []byte("1\n00:00:01,000 --> 00:00:02,000\nrenamed subtitle\n\n"), 0644); err != nil {
+		t.Fatalf("创建字幕失败: %v", err)
+	}
+	video := models.Video{Name: "episode.mp4", Path: videoPath, Directory: filepath.Dir(videoPath), Duration: 90}
+	deletedVideo := models.Video{Name: "deleted.mp4", Path: deletedPath, Directory: sourceDirectory, Duration: 90}
+	if err := database.DB.Create(&[]*models.Video{&video, &deletedVideo}).Error; err != nil {
+		t.Fatalf("创建视频记录失败: %v", err)
+	}
+	if err := database.DB.Delete(&deletedVideo).Error; err != nil {
+		t.Fatalf("软删除视频失败: %v", err)
+	}
+	directory := models.ScanDirectory{Path: sourceDirectory, Alias: "媒体库"}
+	if err := database.DB.Create(&directory).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	trashEntry := models.VideoTrashEntry{VideoID: deletedVideo.ID, VideoName: deletedVideo.Name, OriginalPath: deletedPath, State: "deleted"}
+	if err := database.DB.Create(&trashEntry).Error; err != nil {
+		t.Fatalf("创建回收站记录失败: %v", err)
+	}
+	excludedPath := filepath.Join(sourceDirectory, "private")
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("scan_exclude_paths", excludedPath).Error; err != nil {
+		t.Fatalf("保存扫描黑名单失败: %v", err)
+	}
+
+	result, err := (&VideoService{}).RenameDirectory(sourceDirectory, "renamed-library")
+	if err != nil {
+		t.Fatalf("重命名文件夹失败: %v", err)
+	}
+	if result.VideosUpdated != 2 || result.DirectoriesUpdated != 1 || result.TrashEntriesUpdated != 1 || result.ScanExclusionsUpdated != 1 {
+		t.Fatalf("重命名结果计数错误: %+v", result)
+	}
+	newVideoPath := filepath.Join(newDirectory, "season", "episode.mp4")
+	newSubtitlePath := filepath.Join(newDirectory, "season", "episode.srt")
+	if _, err := os.Stat(sourceDirectory); !os.IsNotExist(err) {
+		t.Fatalf("旧文件夹应已消失, err=%v", err)
+	}
+	if _, err := os.Stat(newVideoPath); err != nil {
+		t.Fatalf("新路径视频不存在: %v", err)
+	}
+	if _, err := os.Stat(newSubtitlePath); err != nil {
+		t.Fatalf("新路径字幕不存在: %v", err)
+	}
+	var loaded models.Video
+	if err := database.DB.First(&loaded, video.ID).Error; err != nil || loaded.Path != newVideoPath || loaded.Directory != filepath.Dir(newVideoPath) {
+		t.Fatalf("视频路径未同步: %+v err=%v", loaded, err)
+	}
+	var loadedDeleted models.Video
+	wantDeletedPath := filepath.Join(newDirectory, "deleted.mp4")
+	if err := database.DB.Unscoped().First(&loadedDeleted, deletedVideo.ID).Error; err != nil || loadedDeleted.Path != wantDeletedPath {
+		t.Fatalf("软删除视频路径未同步: %+v err=%v", loadedDeleted, err)
+	}
+	var loadedDirectory models.ScanDirectory
+	if err := database.DB.First(&loadedDirectory, directory.ID).Error; err != nil || loadedDirectory.Path != newDirectory {
+		t.Fatalf("扫描目录未同步: %+v err=%v", loadedDirectory, err)
+	}
+	var loadedTrash models.VideoTrashEntry
+	if err := database.DB.First(&loadedTrash, trashEntry.ID).Error; err != nil || loadedTrash.OriginalPath != wantDeletedPath {
+		t.Fatalf("回收站恢复路径未同步: %+v err=%v", loadedTrash, err)
+	}
+	var settings models.Settings
+	if err := database.DB.First(&settings).Error; err != nil || settings.ScanExcludePaths != filepath.Join(newDirectory, "private") {
+		t.Fatalf("扫描黑名单未同步: %+v err=%v", settings, err)
+	}
+	var subtitleState models.SubtitleIndexState
+	if err := database.DB.Where("video_id = ?", video.ID).First(&subtitleState).Error; err != nil || subtitleState.SubtitlePath != newSubtitlePath {
+		t.Fatalf("字幕索引未同步: %+v err=%v", subtitleState, err)
+	}
+}
+
+func TestRenameDirectoryRejectsInvalidOrOccupiedTarget(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	sourceDirectory := filepath.Join(root, "library")
+	videoPath := filepath.Join(sourceDirectory, "clip.mp4")
+	mustCreateFile(t, videoPath)
+	if err := os.MkdirAll(filepath.Join(root, "occupied"), 0755); err != nil {
+		t.Fatalf("创建占用目录失败: %v", err)
+	}
+	video := models.Video{Name: "clip.mp4", Path: videoPath, Directory: sourceDirectory}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频记录失败: %v", err)
+	}
+
+	if _, err := (&VideoService{}).RenameDirectory(sourceDirectory, "../escaped"); err == nil {
+		t.Fatal("包含路径分隔符的名称必须被拒绝")
+	}
+	if _, err := (&VideoService{}).RenameDirectory(sourceDirectory, "occupied"); err == nil {
+		t.Fatal("已存在的目标文件夹必须被拒绝")
+	}
+	if _, err := os.Stat(videoPath); err != nil {
+		t.Fatalf("拒绝后源视频必须保留: %v", err)
+	}
+	var loaded models.Video
+	if err := database.DB.First(&loaded, video.ID).Error; err != nil || loaded.Path != videoPath {
+		t.Fatalf("拒绝后数据库路径不应变化: %+v err=%v", loaded, err)
+	}
+}
+
 func TestMoveDirectoryRejectsProjectedDatabasePathConflictBeforeMoving(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()

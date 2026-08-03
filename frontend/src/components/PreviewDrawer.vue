@@ -154,10 +154,15 @@
         <section class="detail-section">
           <div class="detail-section__heading"><h4>关联视频（{{ personDetail.person.active_video_count }}）</h4><span>点击卡片查看详情</span></div>
           <div class="related-video-editor">
-            <select v-model="relatedVideoDirectory" class="select-input" aria-label="按文件夹筛选可关联视频" @change="searchRelatedVideos(true)">
-              <option value="">全部文件夹</option>
-              <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
-            </select>
+            <div class="related-video-directory-filter">
+              <select v-model="relatedVideoDirectory" class="select-input" aria-label="按文件夹筛选可关联视频" @change="searchRelatedVideos(true)">
+                <option value="">全部文件夹</option>
+                <option v-if="customRelatedVideoDirectory" :value="customRelatedVideoDirectory">已选：{{ customRelatedVideoDirectory }}</option>
+                <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
+              </select>
+              <button type="button" class="btn-secondary btn-compact" data-test="related-video-folder-picker" :disabled="relatedVideoSearching" @click="chooseRelatedVideoDirectory">选择子文件夹</button>
+            </div>
+            <p class="related-video-directory-hint">选择父文件夹会包含其中全部子文件夹的已收录视频。</p>
             <div class="detail-inline-form">
               <input v-model="relatedVideoKeyword" placeholder="搜索标题、文件名或路径" @keyup.enter="searchRelatedVideos(true)" />
               <button type="button" class="btn-secondary btn-compact" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中...' : '搜索视频' }}</button>
@@ -213,10 +218,15 @@
         <section class="detail-section">
           <div class="detail-section__heading"><h4>成员顺序</h4><span>拖拽调整</span></div>
           <div class="related-video-editor">
-            <select v-model="relatedVideoDirectory" class="select-input" aria-label="按文件夹筛选可加入视频" @change="searchRelatedVideos(true)">
-              <option value="">全部文件夹</option>
-              <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
-            </select>
+            <div class="related-video-directory-filter">
+              <select v-model="relatedVideoDirectory" class="select-input" aria-label="按文件夹筛选可加入视频" @change="searchRelatedVideos(true)">
+                <option value="">全部文件夹</option>
+                <option v-if="customRelatedVideoDirectory" :value="customRelatedVideoDirectory">已选：{{ customRelatedVideoDirectory }}</option>
+                <option v-for="directory in relatedVideoDirectories" :key="directory.id" :value="directory.path">{{ directory.alias || directory.path }}</option>
+              </select>
+              <button type="button" class="btn-secondary btn-compact" data-test="related-video-folder-picker" :disabled="relatedVideoSearching" @click="chooseRelatedVideoDirectory">选择子文件夹</button>
+            </div>
+            <p class="related-video-directory-hint">选择父文件夹会包含其中全部子文件夹的已收录视频。</p>
             <div class="detail-inline-form">
               <input v-model="relatedVideoKeyword" placeholder="搜索标题、文件名或路径" @keyup.enter="searchRelatedVideos(true)" />
               <button type="button" class="btn-secondary btn-compact" :disabled="relatedVideoSearching" @click="searchRelatedVideos(true)">{{ relatedVideoSearching ? '搜索中...' : '搜索视频' }}</button>
@@ -267,7 +277,7 @@
 import {
   AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
   RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
-  SelectCollectionCover, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails
+  SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails
 } from '../../wailsjs/go/main/App';
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
 import RelatedVideoItem from './RelatedVideoItem.vue';
@@ -319,6 +329,11 @@ export default {
       const related = new Set(this.relatedVideoIDs);
       return this.relatedVideoCandidates.filter(video => !related.has(Number(video.id)));
     },
+    customRelatedVideoDirectory() {
+      const selected = String(this.relatedVideoDirectory || '').trim();
+      if (!selected || this.relatedVideoDirectories.some(directory => directory.path === selected)) return '';
+      return selected;
+    },
     technicalStatusLabel() {
       const state = this.details?.technical_status?.state;
       return { unprobed: '尚未读取', current: '快照与当前文件一致', stale: '文件已变化，快照可能过期', error: '最近读取失败' }[state] || '状态未知';
@@ -343,6 +358,16 @@ export default {
     async loadRelatedVideoDirectories() {
       try { this.relatedVideoDirectories = await GetAllDirectories() || []; }
       catch (err) { this.relatedVideoDirectories = []; }
+    },
+    async chooseRelatedVideoDirectory() {
+      try {
+        const directory = await SelectDirectory();
+        if (!directory) return;
+        this.relatedVideoDirectory = directory;
+        await this.searchRelatedVideos(true);
+      } catch (err) {
+        this.relatedVideoError = '选择文件夹失败：' + err;
+      }
     },
     resetRootEntry() {
       const root = this.initialEntity?.type && this.initialEntity?.id
@@ -662,6 +687,7 @@ export default {
 .entity-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }.entity-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border-color); border-radius: 999px; padding: 4px 9px 4px 5px; background: var(--control-hover-bg); color: var(--text-primary); }.entity-chip img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }.entity-chip__remove { color: var(--danger-color); font-size: 16px; }
 .detail-inline-form,.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }.detail-inline-form input { flex: 1; }.candidate-list { display: grid; gap: 6px; }.candidate-list button { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid var(--border-color); border-radius: 9px; padding: 9px 10px; color: var(--text-primary); background: transparent; }.candidate-list small { color: var(--text-muted); }.detail-create-box { display: grid; gap: 8px; }.detail-create-box summary { cursor: pointer; color: var(--accent-color); }
 .related-video-editor { display: grid; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }.related-video-results,.related-video-list { display: grid; gap: 8px; }
+.related-video-directory-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }.related-video-directory-filter select { min-width: 0; }.related-video-directory-hint { margin: -3px 0 0; color: var(--text-muted); font-size: 11px; }
 .related-video-batch-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }.selection-row button { background: transparent; border: 0; color: var(--text-primary); text-align: left; cursor: pointer; }.selection-row small { color: var(--text-muted); }
 .technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: 12px; }.technical-status--current { color: var(--success-color, #15803d); }.technical-status--stale,.technical-status--error { color: #b45309; }

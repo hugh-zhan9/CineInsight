@@ -9,10 +9,12 @@ const videoRowSource = readFileSync(join(currentDir, '../src/components/VideoLis
 const tagManagerSource = readFileSync(join(currentDir, '../src/components/TagManagerDialog.vue'), 'utf8');
 
 assert.match(videoListSource, /@click="moveFolder"/, 'toolbar should expose folder migration');
+assert.match(videoListSource, /@click="renameFolder"/, 'toolbar should expose folder rename');
 assert.match(videoListSource, /@click="moveSelectedVideos"/, 'selection toolbar should expose batch file migration');
 assert.match(videoListSource, /SelectMigrationSourceDirectory/, 'folder migration should select an explicit source');
 assert.match(videoListSource, /SelectMigrationDestinationDirectory/, 'migration should select an explicit destination');
 assert.match(videoListSource, /await MoveDirectory\(source, destinationParent\)/, 'folder migration should call the backend operation');
+assert.match(videoListSource, /await RenameDirectory\(source, newName\)/, 'folder rename should call the backend operation');
 assert.match(videoListSource, /await BatchMoveVideos\(ids, destination\)/, 'batch migration should call the backend operation');
 assert.match(videoListSource, /\[\.\.\.failures, \.\.\.warnings\]\.join\('\\n'\)/, 'mixed batch results should show both failures and retained-source warnings');
 assert.match(videoRowSource, /\$emit\('move', video\)/, 'each video row should expose a migration action');

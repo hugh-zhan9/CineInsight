@@ -305,8 +305,10 @@ export default {
 
 .virtual-video-list--grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 220px));
+  justify-content: start;
+  align-items: start;
+  gap: 12px;
 }
 .virtual-video-list--grid .virtual-video-list__row { min-width: 0; height: 100%; }
 .virtual-video-list--grid .virtual-video-list__sentinel { grid-column: 1 / -1; min-height: 1px; }

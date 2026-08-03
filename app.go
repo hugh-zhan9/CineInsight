@@ -578,6 +578,12 @@ func (a *App) SelectMigrationDestinationDirectory() (string, error) {
 	})
 }
 
+func (a *App) SelectFolderToRename() (string, error) {
+	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择要重命名的文件夹",
+	})
+}
+
 // ScanDirectory 扫描目录
 func (a *App) ScanDirectory(dir string) ([]string, error) {
 	files, err := a.videoService.ScanDirectory(dir)
@@ -614,6 +620,15 @@ func (a *App) BatchMoveVideos(videoIDs []uint, destinationDirectory string) *ser
 func (a *App) MoveDirectory(sourceDirectory, destinationParent string) (*services.FolderMigrationResult, error) {
 	result, err := a.videoService.MoveDirectory(sourceDirectory, destinationParent)
 	log.Printf("API MoveDirectory source=%s destinationParent=%s result=%+v err=%v", sourceDirectory, destinationParent, result, err)
+	return result, err
+}
+
+func (a *App) RenameDirectory(sourceDirectory, newName string) (*services.FolderMigrationResult, error) {
+	result, err := a.videoService.RenameDirectory(sourceDirectory, newName)
+	if err == nil {
+		a.reconfigureLibraryWatcher()
+	}
+	log.Printf("API RenameDirectory source=%s newName=%s result=%+v err=%v", sourceDirectory, newName, result, err)
 	return result, err
 }
 

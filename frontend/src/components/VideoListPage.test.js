@@ -6,11 +6,11 @@ const api = vi.hoisted(() => Object.fromEntries([
   'SetVideoFavorite', 'SetVideoWatched', 'UpdateVideoWatchProgress', 'ListSavedLibraryViews', 'SaveLibraryView',
   'DeleteSavedLibraryView', 'RejectSameSourceRelation', 'OpenDirectory', 'DeleteVideo', 'BatchDeleteVideos', 'ListTrashEntries',
   'RestoreTrashEntry', 'RemoveTagFromVideo', 'UpdateSettings', 'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine',
-  'GenerateSubtitle', 'ForceGenerateSubtitle', 'RenameVideo', 'MoveVideo', 'BatchMoveVideos', 'MoveDirectory',
-  'SelectMigrationSourceDirectory', 'SelectMigrationDestinationDirectory', 'CancelSubtitle', 'CancelSubtitleTask',
+  'GenerateSubtitle', 'ForceGenerateSubtitle', 'RenameVideo', 'RenameDirectory', 'MoveVideo', 'BatchMoveVideos', 'MoveDirectory',
+  'SelectFolderToRename', 'SelectMigrationSourceDirectory', 'SelectMigrationDestinationDirectory', 'CancelSubtitle', 'CancelSubtitleTask',
   'GetSubtitleQueueState', 'GetCleanupStatus', 'GetAITaggingStatusSummary', 'StartCleanupAnalysis', 'GetSubtitleSegments',
   'GetPreviewSession', 'PreviewExternally', 'SyncScanDirectories', 'StartTechnicalBackfill', 'GetTechnicalBackfillStatus',
-  'CancelTechnicalBackfill', 'StartLocalMetadataBackfill', 'GetLocalMetadataBackfillStatus', 'CancelLocalMetadataBackfill', 'LogFrontend'
+  'CancelTechnicalBackfill', 'StartLocalMetadataBackfill', 'GetLocalMetadataBackfillStatus', 'CancelLocalMetadataBackfill', 'GetSettings', 'LogFrontend'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -50,10 +50,37 @@ beforeEach(() => {
   api.GetAITaggingStatusSummary.mockResolvedValue({ same_source_unread: 0 });
   api.GetTechnicalBackfillStatus.mockResolvedValue({ running: false, preparing: false, completed: false, cancelled: false, failed: 0, failures: [] });
   api.GetLocalMetadataBackfillStatus.mockResolvedValue({ running: false, completed: false, cancelled: false, failed: 0, failures: [] });
+  api.GetSettings.mockResolvedValue({ scan_exclude_paths: '' });
   api.LogFrontend.mockResolvedValue();
 });
 
 describe('VideoListPage media-detail integration', () => {
+  it('renames a selected managed folder and refreshes paths', async () => {
+    const wrapper = await mountPage();
+    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    api.SelectFolderToRename.mockResolvedValueOnce('/library/Old Name');
+    api.RenameDirectory.mockResolvedValueOnce({ videos_updated: 3, directories_updated: 1 });
+    api.GetSettings.mockResolvedValueOnce({ scan_exclude_paths: '/library/New Name/private' });
+    wrapper.vm.reloadCurrentView = vi.fn().mockResolvedValue();
+
+    await wrapper.vm.renameFolder();
+    expect(wrapper.vm.folderRenameDialog).toEqual(expect.objectContaining({
+      show: true, source: '/library/Old Name', currentName: 'Old Name', newName: 'Old Name'
+    }));
+
+    wrapper.vm.folderRenameDialog.newName = 'New Name';
+    await wrapper.vm.executeFolderRename();
+
+    expect(api.RenameDirectory).toHaveBeenCalledWith('/library/Old Name', 'New Name');
+    expect(wrapper.emitted('reload-directories')).toHaveLength(1);
+    expect(wrapper.emitted('update-settings')[0][0]).toEqual({ scan_exclude_paths: '/library/New Name/private' });
+    expect(wrapper.vm.reloadCurrentView).toHaveBeenCalledOnce();
+    expect(wrapper.vm.folderRenameDialog.show).toBe(false);
+    expect(alert).toHaveBeenCalledWith('文件夹重命名完成：更新 3 个视频、1 个扫描目录。');
+    alert.mockRestore();
+    wrapper.unmount();
+  });
+
   it('opens the subtitle workbench for the selected video', async () => {
     const wrapper = await mountPage();
     const video = { id: 12, name: 'editable.mp4' };

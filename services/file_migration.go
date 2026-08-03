@@ -15,11 +15,13 @@ import (
 )
 
 type FolderMigrationResult struct {
-	Source             string `json:"source"`
-	Destination        string `json:"destination"`
-	VideosUpdated      int    `json:"videos_updated"`
-	DirectoriesUpdated int    `json:"directories_updated"`
-	Warning            string `json:"warning,omitempty"`
+	Source                string `json:"source"`
+	Destination           string `json:"destination"`
+	VideosUpdated         int    `json:"videos_updated"`
+	DirectoriesUpdated    int    `json:"directories_updated"`
+	TrashEntriesUpdated   int    `json:"trash_entries_updated"`
+	ScanExclusionsUpdated int    `json:"scan_exclusions_updated"`
+	Warning               string `json:"warning,omitempty"`
 }
 
 type FileMigrationResult struct {
@@ -334,6 +336,228 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 		}
 	}
 	return result, nil
+}
+
+// RenameDirectory renames a managed directory in place and rewrites every
+// persisted path that points at the directory or one of its descendants.
+func (s *VideoService) RenameDirectory(sourceDirectory, newName string) (*FolderMigrationResult, error) {
+	libraryPathMutationMu.Lock()
+	defer libraryPathMutationMu.Unlock()
+
+	sourceDirectory, err := existingSourceDirectory(sourceDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("源文件夹无效: %w", err)
+	}
+	newName, err = validDirectoryName(newName)
+	if err != nil {
+		return nil, err
+	}
+	parentDirectory := filepath.Dir(sourceDirectory)
+	if parentDirectory == sourceDirectory {
+		return nil, fmt.Errorf("不支持重命名文件系统根目录")
+	}
+	destinationDirectory := filepath.Join(parentDirectory, newName)
+	result := &FolderMigrationResult{Source: sourceDirectory, Destination: destinationDirectory}
+	if destinationDirectory == sourceDirectory {
+		return result, nil
+	}
+
+	sourceInfo, err := os.Lstat(sourceDirectory)
+	if err != nil {
+		return nil, fmt.Errorf("读取源文件夹失败: %w", err)
+	}
+	if destinationInfo, destinationErr := os.Lstat(destinationDirectory); destinationErr == nil {
+		if !os.SameFile(sourceInfo, destinationInfo) {
+			return nil, fmt.Errorf("目标文件夹已存在: %s", destinationDirectory)
+		}
+	} else if !errors.Is(destinationErr, os.ErrNotExist) {
+		return nil, fmt.Errorf("检查目标文件夹失败: %w", destinationErr)
+	}
+
+	var videos []models.Video
+	if err := database.DB.Unscoped().Find(&videos).Error; err != nil {
+		return nil, fmt.Errorf("读取视频记录失败: %w", err)
+	}
+	var directories []models.ScanDirectory
+	if err := database.DB.Unscoped().Find(&directories).Error; err != nil {
+		return nil, fmt.Errorf("读取扫描目录失败: %w", err)
+	}
+	var trashEntries []models.VideoTrashEntry
+	if err := database.DB.Find(&trashEntries).Error; err != nil {
+		return nil, fmt.Errorf("读取回收站记录失败: %w", err)
+	}
+	var settings models.Settings
+	settingsErr := database.DB.First(&settings).Error
+	if settingsErr != nil && !errors.Is(settingsErr, gorm.ErrRecordNotFound) {
+		return nil, fmt.Errorf("读取扫描设置失败: %w", settingsErr)
+	}
+
+	affected := false
+	occupiedPaths := make(map[string]uint)
+	for i := range videos {
+		if pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
+			affected = true
+			continue
+		}
+		if !videos[i].DeletedAt.IsValid() {
+			occupiedPaths[filepath.Clean(videos[i].Path)] = videos[i].ID
+		}
+	}
+	projectedPaths := make(map[string]uint)
+	for i := range videos {
+		if videos[i].DeletedAt.IsValid() || !pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
+			continue
+		}
+		newPath, replaceErr := replacePathPrefix(videos[i].Path, sourceDirectory, destinationDirectory)
+		if replaceErr != nil {
+			return nil, replaceErr
+		}
+		cleanedNewPath := filepath.Clean(newPath)
+		if occupiedID, exists := occupiedPaths[cleanedNewPath]; exists {
+			return nil, fmt.Errorf("重命名后的路径已被视频记录 %d 占用: %s", occupiedID, cleanedNewPath)
+		}
+		if projectedID, exists := projectedPaths[cleanedNewPath]; exists {
+			return nil, fmt.Errorf("视频记录 %d 和 %d 会映射到同一路径: %s", projectedID, videos[i].ID, cleanedNewPath)
+		}
+		projectedPaths[cleanedNewPath] = videos[i].ID
+	}
+	for i := range directories {
+		if pathIsEqualOrInside(directories[i].Path, sourceDirectory) {
+			affected = true
+			break
+		}
+	}
+	if !affected {
+		return nil, fmt.Errorf("所选文件夹不包含已收录视频，也不是已配置的扫描目录")
+	}
+
+	if err := os.Rename(sourceDirectory, destinationDirectory); err != nil {
+		return nil, fmt.Errorf("重命名文件夹失败: %w", err)
+	}
+	rollbackFilesystem := func(cause error) error {
+		if rollbackErr := os.Rename(destinationDirectory, sourceDirectory); rollbackErr != nil {
+			return errors.Join(cause, fmt.Errorf("回滚文件夹名称失败，新路径保留在 %s: %w", destinationDirectory, rollbackErr))
+		}
+		return cause
+	}
+
+	updateErr := database.DB.Transaction(func(tx *gorm.DB) error {
+		for i := range videos {
+			if !pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
+				continue
+			}
+			newPath, replaceErr := replacePathPrefix(videos[i].Path, sourceDirectory, destinationDirectory)
+			if replaceErr != nil {
+				return replaceErr
+			}
+			if err := tx.Unscoped().Model(&models.Video{}).Where("id = ?", videos[i].ID).Updates(map[string]interface{}{
+				"path": newPath, "directory": filepath.Dir(newPath), "is_stale": false,
+			}).Error; err != nil {
+				return err
+			}
+			videos[i].Path = newPath
+			videos[i].Directory = filepath.Dir(newPath)
+			result.VideosUpdated++
+		}
+		for i := range directories {
+			if !pathIsEqualOrInside(directories[i].Path, sourceDirectory) {
+				continue
+			}
+			newPath, replaceErr := replacePathPrefix(directories[i].Path, sourceDirectory, destinationDirectory)
+			if replaceErr != nil {
+				return replaceErr
+			}
+			if err := tx.Unscoped().Model(&models.ScanDirectory{}).Where("id = ?", directories[i].ID).Update("path", newPath).Error; err != nil {
+				return err
+			}
+			result.DirectoriesUpdated++
+		}
+		for i := range trashEntries {
+			updates := make(map[string]interface{})
+			if pathIsEqualOrInside(trashEntries[i].OriginalPath, sourceDirectory) {
+				newPath, replaceErr := replacePathPrefix(trashEntries[i].OriginalPath, sourceDirectory, destinationDirectory)
+				if replaceErr != nil {
+					return replaceErr
+				}
+				updates["original_path"] = newPath
+			}
+			if trashEntries[i].TrashPath != "" && pathIsEqualOrInside(trashEntries[i].TrashPath, sourceDirectory) {
+				newPath, replaceErr := replacePathPrefix(trashEntries[i].TrashPath, sourceDirectory, destinationDirectory)
+				if replaceErr != nil {
+					return replaceErr
+				}
+				updates["trash_path"] = newPath
+			}
+			if len(updates) > 0 {
+				if err := tx.Model(&models.VideoTrashEntry{}).Where("id = ?", trashEntries[i].ID).Updates(updates).Error; err != nil {
+					return err
+				}
+				result.TrashEntriesUpdated++
+			}
+		}
+		if settings.ID != 0 {
+			excludedPaths := parseScanExcludePaths(settings.ScanExcludePaths)
+			for i := range excludedPaths {
+				if !pathIsEqualOrInside(excludedPaths[i], sourceDirectory) {
+					continue
+				}
+				newPath, replaceErr := replacePathPrefix(excludedPaths[i], sourceDirectory, destinationDirectory)
+				if replaceErr != nil {
+					return replaceErr
+				}
+				excludedPaths[i] = newPath
+				result.ScanExclusionsUpdated++
+			}
+			if result.ScanExclusionsUpdated > 0 {
+				normalized := normalizeScanExcludePaths(strings.Join(excludedPaths, "\n"))
+				if err := tx.Model(&models.Settings{}).Where("id = ?", settings.ID).Update("scan_exclude_paths", normalized).Error; err != nil {
+					return err
+				}
+			}
+		}
+		return syncShortVideoTags(tx)
+	})
+	if updateErr != nil {
+		return nil, rollbackFilesystem(fmt.Errorf("更新重命名路径失败: %w", updateErr))
+	}
+
+	for i := range videos {
+		if videos[i].DeletedAt.IsValid() || !pathIsEqualOrInside(videos[i].Path, destinationDirectory) {
+			continue
+		}
+		srtPath := subtitleparser.SRTPathForVideo(videos[i].Path)
+		exists, checkErr := pathExists(srtPath)
+		if checkErr == nil && exists {
+			if indexErr := indexSubtitleFileForVideoID(videos[i].ID, srtPath); indexErr != nil {
+				log.Printf("文件夹重命名后刷新字幕索引失败 id=%d path=%s err=%v", videos[i].ID, srtPath, indexErr)
+				if deleteErr := deleteSubtitleIndex(videos[i].ID); deleteErr != nil {
+					log.Printf("文件夹重命名后清理失效字幕索引失败 id=%d err=%v", videos[i].ID, deleteErr)
+				}
+			}
+		} else {
+			if checkErr != nil {
+				log.Printf("文件夹重命名后检查字幕失败 id=%d path=%s err=%v", videos[i].ID, srtPath, checkErr)
+			}
+			if deleteErr := deleteSubtitleIndex(videos[i].ID); deleteErr != nil {
+				log.Printf("文件夹重命名后清理无效字幕索引失败 id=%d err=%v", videos[i].ID, deleteErr)
+			}
+		}
+	}
+	return result, nil
+}
+
+func validDirectoryName(raw string) (string, error) {
+	name := strings.TrimSpace(raw)
+	if name == "" || name == "." || name == ".." {
+		return "", fmt.Errorf("文件夹名称不能为空或使用 . / ..")
+	}
+	if strings.ContainsAny(name, `/\\`) || filepath.Base(name) != name {
+		return "", fmt.Errorf("文件夹名称不能包含路径分隔符")
+	}
+	if strings.ContainsRune(name, 0) {
+		return "", fmt.Errorf("文件夹名称包含无效字符")
+	}
+	return name, nil
 }
 
 func existingDirectory(path string) (string, error) {

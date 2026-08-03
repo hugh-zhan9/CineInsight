@@ -98,9 +98,11 @@ func TestLibraryFilterRestrictsResultsToPathPrefix(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()
 	insideRoot := filepath.Join(root, "inside")
+	insideNested := filepath.Join(insideRoot, "season-1")
 	outsideRoot := filepath.Join(root, "outside")
 	videos := []models.Video{
 		{Name: "inside.mp4", Path: filepath.Join(insideRoot, "inside.mp4"), Directory: insideRoot},
+		{Name: "nested.mp4", Path: filepath.Join(insideNested, "nested.mp4"), Directory: insideNested},
 		{Name: "outside.mp4", Path: filepath.Join(outsideRoot, "outside.mp4"), Directory: outsideRoot},
 	}
 	if err := database.DB.Create(&videos).Error; err != nil {
@@ -111,7 +113,7 @@ func TestLibraryFilterRestrictsResultsToPathPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("目录范围筛选失败: %v", err)
 	}
-	if len(filtered) != 1 || filtered[0].ID != videos[0].ID {
+	if len(filtered) != 2 || filtered[0].ID != videos[1].ID || filtered[1].ID != videos[0].ID {
 		t.Fatalf("目录范围筛选结果错误: %+v", filtered)
 	}
 }
