@@ -146,6 +146,7 @@ type VideoSameSourceRelation struct {
 	Reasoning           string     `gorm:"type:text;not null;default:''" json:"reasoning"`
 	DetectionVersion    string     `gorm:"size:64;not null" json:"detection_version"`
 	IsUnread            bool       `gorm:"not null;default:true;index:idx_video_same_source_unread,priority:2" json:"is_unread"`
+	ReviewedAt          *time.Time `gorm:"index" json:"reviewed_at,omitempty" ts_type:"string"`
 	RejectedAt          *time.Time `json:"rejected_at,omitempty" ts_type:"string"`
 	CurrentEvaluationID *uint      `gorm:"index" json:"current_evaluation_id,omitempty"`
 	CreatedAt           time.Time  `json:"created_at" ts_type:"string"`

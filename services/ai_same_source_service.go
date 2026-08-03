@@ -334,6 +334,7 @@ func (s *AISameSourceService) persistDetectedRelation(left, right models.Video, 
 			}
 			if fingerprintsChanged || relation.Status != models.VideoSameSourceStatusDetected {
 				updates["is_unread"] = true
+				updates["reviewed_at"] = nil
 			}
 			if err := tx.Model(&relation).Updates(updates).Error; err != nil {
 				return err
@@ -378,13 +379,15 @@ func (s *AISameSourceService) persistDetectedRelation(left, right models.Video, 
 func (s *AISameSourceService) ListRelations(status string, unreadOnly bool) ([]VideoSameSourceReviewItem, error) {
 	query := database.DB.
 		Preload("VideoA", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
-		Preload("VideoB", func(db *gorm.DB) *gorm.DB { return db.Unscoped() })
+		Preload("VideoB", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Joins("INNER JOIN videos AS same_source_video_a ON same_source_video_a.id = video_same_source_relations.video_a_id AND same_source_video_a.deleted_at IS NULL").
+		Joins("INNER JOIN videos AS same_source_video_b ON same_source_video_b.id = video_same_source_relations.video_b_id AND same_source_video_b.deleted_at IS NULL")
 	if strings.TrimSpace(status) == "" {
 		status = models.VideoSameSourceStatusDetected
 	}
-	query = query.Where("status = ?", status)
+	query = query.Where("video_same_source_relations.status = ? AND video_same_source_relations.reviewed_at IS NULL", status)
 	if unreadOnly {
-		query = query.Where("is_unread = ?", true)
+		query = query.Where("video_same_source_relations.is_unread = ?", true)
 	}
 	var relations []models.VideoSameSourceRelation
 	if err := query.Order("video_same_source_relations.updated_at DESC, video_same_source_relations.id DESC").Limit(sameSourceShortlistLimit).Find(&relations).Error; err != nil {
@@ -395,6 +398,27 @@ func (s *AISameSourceService) ListRelations(status string, unreadOnly bool) ([]V
 		items = append(items, sameSourceReviewItem(relation))
 	}
 	return items, nil
+}
+
+func (s *AISameSourceService) ConfirmRelation(relationID uint) error {
+	now := s.now()
+	result := database.DB.Model(&models.VideoSameSourceRelation{}).
+		Where("id = ? AND status = ? AND reviewed_at IS NULL", relationID, models.VideoSameSourceStatusDetected).
+		Updates(map[string]interface{}{"reviewed_at": &now, "is_unread": false})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 1 {
+		return nil
+	}
+	var relation models.VideoSameSourceRelation
+	if err := database.DB.Select("id", "status", "reviewed_at").First(&relation, relationID).Error; err != nil {
+		return err
+	}
+	if relation.Status == models.VideoSameSourceStatusDetected && relation.ReviewedAt != nil {
+		return nil
+	}
+	return errors.New("same-source relation is not detected")
 }
 
 func (s *AISameSourceService) MarkRelationRead(relationID uint) error {
@@ -427,7 +451,7 @@ func (s *AISameSourceService) RejectRelation(relationID uint) error {
 			return errors.New("same-source relation is not detected")
 		}
 		if err := tx.Model(&relation).Updates(map[string]interface{}{
-			"status": models.VideoSameSourceStatusRejected, "is_unread": false, "rejected_at": &now,
+			"status": models.VideoSameSourceStatusRejected, "is_unread": false, "reviewed_at": &now, "rejected_at": &now,
 		}).Error; err != nil {
 			return err
 		}

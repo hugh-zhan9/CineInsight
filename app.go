@@ -958,6 +958,12 @@ func (a *App) MarkSameSourceRelationRead(relationID uint) error {
 	return err
 }
 
+func (a *App) ConfirmSameSourceRelation(relationID uint) error {
+	err := a.aiTaggingService.ConfirmSameSourceRelation(relationID)
+	log.Printf("API ConfirmSameSourceRelation relationID=%d err=%v", relationID, err)
+	return err
+}
+
 func (a *App) RejectSameSourceRelation(relationID uint) error {
 	err := a.aiTaggingService.RejectSameSourceRelation(relationID)
 	if err == nil {

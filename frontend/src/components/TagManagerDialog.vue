@@ -25,13 +25,13 @@
       <div class="setting-item">
         <label>合并同义标签</label>
         <p class="help-text">先选要保留的目标，再勾选一个或多个来源。视频关联会转移到目标标签，来源随后删除；普通标签与 AI 标签只在各自类型内合并。</p>
-        <input
-          v-model.trim="mergeKeyword"
-          type="search"
-          class="text-input merge-filter-input"
-          placeholder="筛选标签名称..."
-          aria-label="筛选待合并标签"
-        />
+        <div class="merge-type-row">
+          <span>标签类型</span>
+          <div class="merge-type-switch" role="group" aria-label="选择合并标签类型">
+            <button type="button" :class="{ active: mergeType === 'normal' }" :aria-pressed="mergeType === 'normal'" @click="mergeType = 'normal'">普通标签</button>
+            <button type="button" :class="{ active: mergeType === 'ai' }" :aria-pressed="mergeType === 'ai'" @click="mergeType = 'ai'">AI 标签</button>
+          </div>
+        </div>
         <div class="merge-target-row">
           <span>保留目标</span>
           <select v-model.number="mergeTargetId" class="select-input merge-target-select">
@@ -44,6 +44,13 @@
             <span>选择来源（可多选）</span>
             <span>已选 {{ mergeSourceIds.length }} 个</span>
           </div>
+          <input
+            v-model.trim="mergeKeyword"
+            type="search"
+            class="text-input merge-filter-input"
+            placeholder="筛选来源标签名称..."
+            aria-label="筛选待合并标签"
+          />
           <div v-if="selectedMergeSourceTags.length" class="merge-selected-tags" aria-label="已选择的来源标签">
             <button v-for="tag in selectedMergeSourceTags" :key="`selected-${tag.id}`" type="button" @click="toggleMergeSource(tag.id, false)">
               {{ tag.name }} <span>×</span>
@@ -120,6 +127,7 @@ export default {
       localTags: [],
       mergeTargetId: 0,
       mergeSourceIds: [],
+      mergeType: 'normal',
       mergeKeyword: '',
       mergeLoading: false,
       mergeError: ''
@@ -130,16 +138,12 @@ export default {
       return this.localTags.filter(tag => !tag.automatic_kind);
     },
     mergeTargetOptions() {
-      const filtered = this.mergeableTags.filter(tag => this.matchesMergeKeyword(tag));
-      const current = this.mergeableTags.find(tag => Number(tag.id) === Number(this.mergeTargetId));
-      return current && !filtered.some(tag => Number(tag.id) === Number(current.id))
-        ? [current, ...filtered]
-        : filtered;
+      return this.mergeableTags.filter(tag => this.matchesMergeType(tag));
     },
     mergeSourceTags() {
       const target = this.mergeableTags.find(tag => Number(tag.id) === Number(this.mergeTargetId));
-      if (!target) return [];
-      return this.mergeableTags.filter(tag => tag.is_system === target.is_system && Number(tag.id) !== Number(target.id));
+      if (!target || !this.matchesMergeType(target)) return [];
+      return this.mergeableTags.filter(tag => Boolean(tag.is_system) === Boolean(target.is_system) && Number(tag.id) !== Number(target.id));
     },
     filteredMergeSourceTags() {
       return this.mergeSourceTags.filter(tag => this.matchesMergeKeyword(tag));
@@ -153,6 +157,12 @@ export default {
     }
   },
   watch: {
+    mergeType() {
+      this.mergeTargetId = 0;
+      this.mergeSourceIds = [];
+      this.mergeKeyword = '';
+      this.mergeError = '';
+    },
     mergeTargetId() {
       const allowed = new Set(this.mergeSourceTags.map(tag => Number(tag.id)));
       this.mergeSourceIds = this.mergeSourceIds.filter(id => allowed.has(Number(id)));
@@ -168,6 +178,7 @@ export default {
       if (val) {
         this.tagCreateError = '';
         this.mergeError = '';
+        this.mergeType = 'normal';
         this.mergeTargetId = 0;
         this.mergeSourceIds = [];
         this.mergeKeyword = '';
@@ -176,6 +187,9 @@ export default {
     }
   },
   methods: {
+    matchesMergeType(tag) {
+      return this.mergeType === 'ai' ? Boolean(tag?.is_system) : !Boolean(tag?.is_system);
+    },
     matchesMergeKeyword(tag) {
       const keyword = this.mergeKeyword.trim().toLocaleLowerCase();
       return !keyword || String(tag?.name || '').toLocaleLowerCase().includes(keyword);
@@ -270,7 +284,11 @@ export default {
 
 <style scoped>
 .tag-list-container::-webkit-scrollbar { width: 4px; }
-.merge-filter-input { margin-top: 10px; }
+.merge-type-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
+.merge-type-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--control-bg); }
+.merge-type-switch button { min-height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
+.merge-type-switch button.active { background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }
+.merge-filter-input { width: calc(100% - 16px); margin: 8px 8px 0; }
 .merge-target-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
 .merge-target-select { width: 100%; }
 .merge-source-picker { margin-top: 10px; overflow: hidden; border: 1px solid var(--border-color); border-radius: 10px; background: var(--control-bg); }

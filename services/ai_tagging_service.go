@@ -759,6 +759,14 @@ func (s *AITaggingService) MarkSameSourceRelationRead(relationID uint) error {
 	return service.MarkRelationRead(relationID)
 }
 
+func (s *AITaggingService) ConfirmSameSourceRelation(relationID uint) error {
+	service, ok := s.sameSource.(*AISameSourceService)
+	if !ok {
+		return fmt.Errorf("same-source service unavailable")
+	}
+	return service.ConfirmRelation(relationID)
+}
+
 func (s *AITaggingService) RejectSameSourceRelation(relationID uint) error {
 	service, ok := s.sameSource.(*AISameSourceService)
 	if !ok {

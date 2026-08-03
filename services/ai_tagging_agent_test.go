@@ -285,3 +285,46 @@ func TestSameSourceRelationReviewLifecycleIsNormalizedAndIdempotent(t *testing.T
 		t.Fatalf("rejected current relation must block re-confirmation: blocked=%v err=%v", blocked, err)
 	}
 }
+
+func TestSameSourceReviewCanBeConfirmedAndExcludesDeletedVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	videos := []models.Video{{Name: "left.mp4", Path: "/tmp/left-review.mp4"}, {Name: "right.mp4", Path: "/tmp/right-review.mp4"}}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewAISameSourceService(nil)
+	relation, err := service.persistDetectedRelation(
+		videos[0], videos[1],
+		models.VideoVisualFingerprint{VideoID: videos[0].ID, ContentFingerprint: "left-review"},
+		models.VideoVisualFingerprint{VideoID: videos[1].ID, ContentFingerprint: "right-review"},
+		AISameSourceComparison{SameSource: true, Confidence: models.AITagConfidenceHigh, Reasoning: "same"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := service.ListRelations(models.VideoSameSourceStatusDetected, false)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("unreviewed relation should be visible: items=%+v err=%v", items, err)
+	}
+	if err := service.ConfirmRelation(relation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.ConfirmRelation(relation.ID); err != nil {
+		t.Fatalf("confirm must be idempotent: %v", err)
+	}
+	items, err = service.ListRelations(models.VideoSameSourceStatusDetected, false)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("confirmed relation should leave the workbench: items=%+v err=%v", items, err)
+	}
+
+	if err := database.DB.Model(&relation).Updates(map[string]interface{}{"reviewed_at": nil, "is_unread": true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Delete(&videos[0]).Error; err != nil {
+		t.Fatal(err)
+	}
+	items, err = service.ListRelations(models.VideoSameSourceStatusDetected, false)
+	if err != nil || len(items) != 0 {
+		t.Fatalf("relations containing a deleted video should be hidden: items=%+v err=%v", items, err)
+	}
+}

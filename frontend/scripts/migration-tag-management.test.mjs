@@ -27,7 +27,8 @@ assert.match(tagManagerSource, /type="checkbox"[\s\S]+toggleMergeSource/, 'tag m
 assert.match(tagManagerSource, /selectAllVisibleMergeSources/, 'tag merge should support selecting all filtered sources');
 assert.match(tagManagerSource, /await MergeTags\(sourceIds, Number\(this\.mergeTargetId\)\)/, 'tag merge should call the backend operation');
 assert.match(tagManagerSource, /window\.confirm\(`确定将/, 'destructive tag merge should require final confirmation');
-assert.match(tagManagerSource, /tag\.is_system === target\.is_system/, 'manual and AI-library tags should merge within their own type');
+assert.match(tagManagerSource, /Boolean\(tag\.is_system\) === Boolean\(target\.is_system\)/, 'manual and AI-library tags should merge within their own type');
+assert.match(tagManagerSource, /mergeType === 'ai'/, 'tag merge should expose a dedicated AI tag type filter');
 assert.match(tagManagerSource, /!tag\.automatic_kind/, 'automatic tags should not be manually merged');
 
 console.log('migration and tag-management tests passed');
