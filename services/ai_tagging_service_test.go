@@ -301,6 +301,9 @@ func TestOpenAICompatibleClientBatchesFramesAndMergesHighestConfidence(t *testin
 	if len(suggestions) != 2 || suggestions[0].Label != "动作" || suggestions[0].Confidence != "high" || suggestions[1].Label != "站立" {
 		t.Fatalf("候选合并结果不正确: %+v", suggestions)
 	}
+	if usage := client.(AITaggingUsageReporter).AITaggingUsage(); usage.RequestCount != 3 {
+		t.Fatalf("请求计数应记录实际 HTTP 调用，实际 %+v", usage)
+	}
 }
 
 func TestAITaggingFramePolicyUsesOneFramePerMinuteWithMinimumTen(t *testing.T) {
@@ -504,6 +507,20 @@ func TestAITaggingPersistsCandidateButDoesNotWriteOfficialTablesBeforeApproval(t
 	}
 	if got := countRows(t, "video_tags"); got != 0 {
 		t.Fatalf("审批前不应写 video_tags，实际 %d", got)
+	}
+	var candidate models.AITagCandidate
+	if err := database.DB.First(&candidate).Error; err != nil {
+		t.Fatalf("读取候选失败: %v", err)
+	}
+	if candidate.RunID == nil {
+		t.Fatalf("候选必须关联实际 AI 任务")
+	}
+	var run models.AITaggingRun
+	if err := database.DB.First(&run, *candidate.RunID).Error; err != nil {
+		t.Fatalf("读取 AI 任务失败: %v", err)
+	}
+	if run.Status != models.AITaggingStateStatusCompleted || run.ModelIdentifier != "test-model" || run.PromptSchemaVersion != aiTaggingPromptSchemaVersion || run.CompletedAt == nil {
+		t.Fatalf("AI 任务归因不完整: %+v", run)
 	}
 }
 

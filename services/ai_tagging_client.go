@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 	"video-master/models"
 )
@@ -26,8 +27,21 @@ type AITaggingSameSourceClient interface {
 }
 
 type OpenAICompatibleAITaggingClient struct {
-	config AITaggingConfig
-	client *http.Client
+	config       AITaggingConfig
+	client       *http.Client
+	requestCount atomic.Int64
+}
+
+type AITaggingUsage struct {
+	RequestCount int
+}
+
+type AITaggingUsageReporter interface {
+	AITaggingUsage() AITaggingUsage
+}
+
+func (c *OpenAICompatibleAITaggingClient) AITaggingUsage() AITaggingUsage {
+	return AITaggingUsage{RequestCount: int(c.requestCount.Load())}
 }
 
 const aiTaggingRequestTimeout = 5 * time.Minute
@@ -106,8 +120,8 @@ func (c *OpenAICompatibleAITaggingClient) doChatCompletion(ctx context.Context, 
 	if err != nil {
 		return "", err
 	}
-	log.Printf("[AITagging] request video_id=%d operation=%s model=%q base_url=%q payload_bytes=%d",
-		videoID, operation, c.config.Model, openAIChatCompletionsURL(c.config.BaseURL), len(payload))
+	log.Printf("[AITagging] request video_id=%d operation=%s model=%q payload_bytes=%d",
+		videoID, operation, c.config.Model, len(payload))
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, openAIChatCompletionsURL(c.config.BaseURL), bytes.NewReader(payload))
 	if err != nil {
 		return "", err
@@ -116,9 +130,10 @@ func (c *OpenAICompatibleAITaggingClient) doChatCompletion(ctx context.Context, 
 	if strings.TrimSpace(c.config.APIKey) != "" {
 		httpReq.Header.Set("Authorization", "Bearer "+c.config.APIKey)
 	}
+	c.requestCount.Add(1)
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
-		log.Printf("[AITagging] request failed video_id=%d operation=%s err=%v", videoID, operation, err)
+		log.Printf("[AITagging] request failed video_id=%d operation=%s", videoID, operation)
 		return "", err
 	}
 	defer resp.Body.Close()

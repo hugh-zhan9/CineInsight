@@ -38,15 +38,19 @@ type App struct {
 	settingsService       *services.SettingsService
 	directoryService      *services.DirectoryService
 	subtitleService       *services.SubtitleService
+	subtitleWorkbench     *services.SubtitleWorkbenchService
 	cleanupService        *services.CleanupService
 	subtitleSearchService *services.SubtitleSearchService
 	aiTaggingService      *services.AITaggingService
+	aiQualityService      *services.AIQualityService
 	shortFeedService      *services.ShortFeedService
 	personService         *services.PersonService
 	collectionService     *services.CollectionService
 	videoDetailService    *services.VideoDetailService
+	localMetadata         *services.LocalMetadataService
 	mediaProbeService     *services.MediaProbeService
 	technicalBackfill     *services.TechnicalBackfillService
+	libraryWatcher        *services.LibraryWatcherService
 	shortFeedServer       *services.ShortFeedHTTPServer
 	shortFeedStartupError string
 	startupError          string
@@ -60,12 +64,14 @@ func NewApp() *App {
 	dataDir := filepath.Join(homeDir, ".video-master")
 	mediaProbeService := services.NewMediaProbeService()
 	videoService := services.NewVideoService(mediaProbeService)
+	libraryWatcher := services.NewLibraryWatcherService(videoService)
 	subtitleService := services.NewSubtitleService(dataDir)
 	aiTaggingService := services.NewAITaggingService()
 	aiTaggingService.SetTemporaryTranscriptProvider(subtitleService)
 
 	personService := services.NewPersonService(dataDir)
 	collectionService := services.NewCollectionService(dataDir)
+	localMetadata := services.NewLocalMetadataService(dataDir, personService, collectionService)
 	return &App{
 		videoService:          videoService,
 		thumbnailService:      services.NewThumbnailService(videoService, dataDir),
@@ -73,15 +79,19 @@ func NewApp() *App {
 		settingsService:       &services.SettingsService{},
 		directoryService:      &services.DirectoryService{},
 		subtitleService:       subtitleService,
+		subtitleWorkbench:     services.NewSubtitleWorkbenchService(subtitleService),
 		cleanupService:        &services.CleanupService{},
 		subtitleSearchService: &services.SubtitleSearchService{},
 		aiTaggingService:      aiTaggingService,
+		aiQualityService:      services.NewAIQualityService(),
 		shortFeedService:      services.NewShortFeedService(videoService),
 		personService:         personService,
 		collectionService:     collectionService,
 		videoDetailService:    services.NewVideoDetailService(personService, collectionService),
+		localMetadata:         localMetadata,
 		mediaProbeService:     mediaProbeService,
 		technicalBackfill:     services.NewTechnicalBackfillService(mediaProbeService),
+		libraryWatcher:        libraryWatcher,
 	}
 }
 
@@ -97,8 +107,29 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("App startup trash reconciliation failed err=%v", err)
 	}
 	a.subtitleService.SetContext(ctx) // Inject context
+	// Background workers can still emit while the app is tearing down; the frontend is gone by then.
+	emit := func(event string, data any) {
+		if ctx.Err() != nil {
+			return
+		}
+		runtime.EventsEmit(ctx, event, data)
+	}
 	a.technicalBackfill.SetEventEmitter(func(status services.TechnicalBackfillStatus) {
-		runtime.EventsEmit(ctx, "technical-backfill-state", status)
+		emit("technical-backfill-state", status)
+	})
+	a.libraryWatcher.SetEventEmitters(func(status services.LibraryWatcherStatus) {
+		emit("library-watcher-status", status)
+	}, func(event services.LibraryReconcileEvent) {
+		if event.Result != nil && (event.Result.Added > 0 || event.Result.Relocated > 0 || event.Result.Stale > 0 || event.Result.MetadataRefreshed > 0) {
+			a.cleanupService.InvalidateAnalysis()
+		}
+		if event.Result != nil && event.Result.Added > 0 {
+			a.aiTaggingService.Trigger()
+		}
+		emit("library-watcher-reconciled", event)
+	})
+	a.localMetadata.SetBackfillEventEmitter(func(status services.LocalMetadataBackfillStatus) {
+		emit("local-metadata-backfill", status)
 	})
 	a.cleanupService.SetContext(ctx)
 	if result, err := a.tagService.SyncShortVideoTags(); err != nil {
@@ -111,12 +142,24 @@ func (a *App) startup(ctx context.Context) {
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
 		a.setLogEnabled(settings.LogEnabled)
+		if err := a.configureLibraryWatcher(settings.LibraryWatchEnabled); err != nil {
+			log.Printf("App startup library watcher configuration failed err=%v", err)
+		}
+		a.configureLocalMetadata(settings.LocalMetadataEnabled)
 	} else {
 		log.Printf("App startup settings load failed err=%v", err)
 	}
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.localMetadata != nil {
+		a.localMetadata.StopBackfill()
+	}
+	if a.libraryWatcher != nil {
+		if err := a.libraryWatcher.Close(); err != nil {
+			log.Printf("Library watcher shutdown failed: %v", err)
+		}
+	}
 	if a.technicalBackfill != nil {
 		_ = a.technicalBackfill.Cancel()
 	}
@@ -347,6 +390,57 @@ func (a *App) RefreshVideoTechnicalMetadata(videoID uint) (*services.VideoDetail
 		return nil, err
 	}
 	return a.videoDetailService.GetVideoDetails(videoID)
+}
+
+func (a *App) GetLocalMetadataDiff(videoID uint) (*services.LocalMetadataDiff, error) {
+	return a.localMetadata.GetDiff(videoID)
+}
+
+func (a *App) ApplyLocalMetadata(request services.LocalMetadataApplyRequest) (*services.LocalMetadataApplyResult, error) {
+	result, err := a.localMetadata.Apply(request)
+	if err == nil && a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	return result, err
+}
+
+func (a *App) PreviewLocalMetadataBatch(videoIDs []uint) services.LocalMetadataBatchPreview {
+	return a.localMetadata.PreviewBatch(videoIDs)
+}
+
+func (a *App) ApplyLocalMetadataBatch(request services.LocalMetadataBatchApplyRequest) services.LocalMetadataBatchResult {
+	result := a.localMetadata.ApplyBatch(request)
+	if result.Succeeded > 0 && a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	return result
+}
+
+func (a *App) StartLocalMetadataBackfill() (services.LocalMetadataBackfillStatus, error) {
+	settings, err := a.settingsService.GetSettings()
+	if err != nil {
+		return services.LocalMetadataBackfillStatus{}, err
+	}
+	if !settings.LocalMetadataEnabled {
+		return services.LocalMetadataBackfillStatus{}, fmt.Errorf("本地元数据自动补全已关闭")
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.localMetadata.StartBackfill(ctx)
+}
+
+func (a *App) GetLocalMetadataBackfillStatus() services.LocalMetadataBackfillStatus {
+	return a.localMetadata.BackfillStatus()
+}
+
+func (a *App) CancelLocalMetadataBackfill() error {
+	return a.localMetadata.CancelBackfill()
+}
+
+func (a *App) ResolveVideoArtwork(videoID uint, kind string) (*services.VideoArtworkData, error) {
+	return a.localMetadata.ResolveVideoArtwork(videoID, kind)
 }
 
 func (a *App) StartTechnicalBackfill() (services.TechnicalBackfillStatus, error) {
@@ -822,6 +916,21 @@ func (a *App) GetAITaggingStatusSummary() (*services.AITaggingStatusSummary, err
 	return summary, err
 }
 
+func (a *App) GetAIQualityReport(filter services.AIQualityFilter) (*services.AIQualityReport, error) {
+	startedAt := time.Now()
+	report, err := a.aiQualityService.Report(filter)
+	var tagSamples, sameSourceSamples, runs int64
+	if report != nil {
+		tagSamples = report.TagSummary.Decided
+		sameSourceSamples = report.SameSourceSummary.Decided
+		runs = report.RunSummary.Total
+	}
+	log.Printf("API GetAIQualityReport window=%s filters={tag:%v confidence:%v model:%v tag_prompt:%v comparison_prompt:%v detection:%v} samples={tag:%d same_source:%d runs:%d} duration_ms=%d failed=%v",
+		filter.Window, filter.TagID > 0, filter.Confidence != "", filter.ModelIdentifier != "", filter.PromptSchemaVersion != "", filter.ComparisonPromptVersion != "", filter.DetectionVersion != "",
+		tagSamples, sameSourceSamples, runs, time.Since(startedAt).Milliseconds(), err != nil)
+	return report, err
+}
+
 func (a *App) ListSameSourceRelations(status string, unreadOnly bool) ([]services.VideoSameSourceReviewItem, error) {
 	items, err := a.aiTaggingService.ListSameSourceRelations(status, unreadOnly)
 	log.Printf("API ListSameSourceRelations status=%s unreadOnly=%v result=%d err=%v", status, unreadOnly, len(items), err)
@@ -860,9 +969,27 @@ func (a *App) UpdateSettings(input models.Settings) error {
 	err := a.settingsService.UpdateSettings(input)
 	if err == nil {
 		a.setLogEnabled(input.LogEnabled)
+		a.configureLocalMetadata(input.LocalMetadataEnabled)
+		if watchErr := a.configureLibraryWatcher(input.LibraryWatchEnabled); watchErr != nil {
+			log.Printf("Library watcher settings apply failed err=%v", watchErr)
+		}
 	}
 	log.Printf("API UpdateSettings err=%v", err)
 	return err
+}
+
+func (a *App) configureLocalMetadata(enabled bool) {
+	if a.videoService == nil || a.localMetadata == nil {
+		return
+	}
+	if enabled {
+		a.videoService.SetLocalMetadataObserver(a.localMetadata.ObserveVideo)
+		return
+	}
+	if a.localMetadata.BackfillStatus().Running {
+		_ = a.localMetadata.CancelBackfill()
+	}
+	a.videoService.SetLocalMetadataObserver(nil)
 }
 
 // ===== Directory Methods =====
@@ -876,17 +1003,111 @@ func (a *App) GetAllDirectories() ([]models.ScanDirectory, error) {
 
 // AddDirectory 添加扫描目录
 func (a *App) AddDirectory(path, alias string) (*models.ScanDirectory, error) {
-	return a.directoryService.AddDirectory(path, alias)
+	dir, err := a.directoryService.AddDirectory(path, alias)
+	if err == nil {
+		a.reconfigureLibraryWatcher()
+	}
+	return dir, err
 }
 
 // UpdateDirectory 更新目录
 func (a *App) UpdateDirectory(id uint, path, alias string) error {
-	return a.directoryService.UpdateDirectory(id, path, alias)
+	err := a.directoryService.UpdateDirectory(id, path, alias)
+	if err == nil {
+		a.reconfigureLibraryWatcher()
+	}
+	return err
 }
 
 // DeleteDirectory 删除扫描目录
 func (a *App) DeleteDirectory(id uint) error {
-	return a.directoryService.DeleteDirectory(id)
+	err := a.directoryService.DeleteDirectory(id)
+	if err == nil {
+		a.reconfigureLibraryWatcher()
+	}
+	return err
+}
+
+func (a *App) GetLibraryWatcherStatus() services.LibraryWatcherStatus {
+	if a.libraryWatcher == nil {
+		return services.LibraryWatcherStatus{}
+	}
+	status := a.libraryWatcher.Snapshot()
+	if status.Running || len(status.Roots) > 0 {
+		return status
+	}
+	settings, settingsErr := a.settingsService.GetSettings()
+	dirs, dirsErr := a.directoryService.GetAllDirectories()
+	if settingsErr != nil || dirsErr != nil {
+		return status
+	}
+	state := services.LibraryWatchStateDisabled
+	reason := "disabled"
+	message := "实时同步已关闭"
+	if settings.LibraryWatchEnabled {
+		state = services.LibraryWatchStateError
+		reason = "watcher_not_running"
+		message = "实时同步未运行"
+	}
+	for _, dir := range dirs {
+		status.Roots = append(status.Roots, services.LibraryWatchRootStatus{
+			DirectoryID: dir.ID,
+			State:       state,
+			ReasonCode:  reason,
+			Message:     message,
+			UpdatedAt:   time.Now(),
+		})
+	}
+	return status
+}
+
+func (a *App) RetryLibraryWatcherRoot(directoryID uint) (services.LibraryWatchRootStatus, error) {
+	if a.libraryWatcher == nil || !a.libraryWatcher.Snapshot().Running {
+		return services.LibraryWatchRootStatus{}, fmt.Errorf("实时同步未运行")
+	}
+	return a.libraryWatcher.RetryRoot(directoryID)
+}
+
+func (a *App) configureLibraryWatcher(enabled bool) error {
+	if a.libraryWatcher == nil {
+		return nil
+	}
+	if !enabled {
+		err := a.libraryWatcher.Close()
+		a.emitLibraryWatcherStatus()
+		return err
+	}
+	dirs, err := a.directoryService.GetAllDirectories()
+	if err != nil {
+		return err
+	}
+	if a.libraryWatcher.Snapshot().Running {
+		err = a.libraryWatcher.Reconfigure(dirs)
+	} else {
+		ctx := a.ctx
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		err = a.libraryWatcher.Start(ctx, dirs)
+	}
+	a.emitLibraryWatcherStatus()
+	return err
+}
+
+func (a *App) reconfigureLibraryWatcher() {
+	settings, err := a.settingsService.GetSettings()
+	if err != nil || !settings.LibraryWatchEnabled {
+		return
+	}
+	if err := a.configureLibraryWatcher(true); err != nil {
+		log.Printf("Library watcher directory reconfiguration failed err=%v", err)
+	}
+}
+
+func (a *App) emitLibraryWatcherStatus() {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "library-watcher-status", a.GetLibraryWatcherStatus())
+	}
 }
 
 func (a *App) SyncScanDirectories() (*services.ScanSyncResult, error) {
@@ -1021,6 +1242,60 @@ func (a *App) GetSubtitleSegments(videoID uint) ([]subtitleparser.Segment, error
 	return segments, nil
 }
 
+// GetSubtitleEditDocument loads the external SRT through the strict editor parser.
+func (a *App) GetSubtitleEditDocument(videoID uint) (*services.SubtitleEditDocument, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+	document, err := a.subtitleWorkbench.GetDocument(*video)
+	log.Printf("API GetSubtitleEditDocument id=%d entries=%d err=%v", videoID, subtitleEditEntryCount(document), err)
+	return document, err
+}
+
+func subtitleEditEntryCount(document *services.SubtitleEditDocument) int {
+	if document == nil {
+		return 0
+	}
+	return len(document.Entries)
+}
+
+// ValidateSubtitleEditDocument validates an in-memory edit without touching the source SRT.
+func (a *App) ValidateSubtitleEditDocument(request services.SubtitleSaveRequest) services.SubtitleValidationResult {
+	return a.subtitleWorkbench.Validate(request.Entries)
+}
+
+// RetranslateSubtitleEntries translates a selection without persisting it.
+func (a *App) RetranslateSubtitleEntries(request services.SubtitleRetranslateRequest) (*services.SubtitleRetranslateResult, error) {
+	settings, err := a.settingsService.GetSettings()
+	if err != nil {
+		return nil, err
+	}
+	config := subtitleGenerateOptionsFromSettings(settings, false).TranslationConfig
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := a.subtitleWorkbench.Retranslate(ctx, request, config)
+	log.Printf("API RetranslateSubtitleEntries id=%d entries=%d err=%v", request.VideoID, len(request.Entries), err)
+	return result, err
+}
+
+// SaveSubtitleEditDocument atomically replaces the current SRT if its fingerprint is unchanged.
+func (a *App) SaveSubtitleEditDocument(request services.SubtitleSaveRequest) (*services.SubtitleSaveResult, error) {
+	video, err := a.videoService.GetVideo(request.VideoID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := a.subtitleWorkbench.SaveDocument(*video, request)
+	status := services.SubtitleSaveStatus("")
+	if result != nil {
+		status = result.Status
+	}
+	log.Printf("API SaveSubtitleEditDocument id=%d entries=%d status=%s err=%v", request.VideoID, len(request.Entries), status, err)
+	return result, err
+}
+
 // GetCleanupCandidates 获取清理候选（轻量规则）
 func (a *App) GetCleanupCandidates(minDurationSeconds int, minWidth int, minHeight int) (*services.CleanupAnalysis, error) {
 	criteria := services.CleanupCriteria{
@@ -1122,11 +1397,12 @@ func summarizeSettings(settings *models.Settings) string {
 	if settings == nil {
 		return "<nil>"
 	}
-	return fmt.Sprintf("{id:%d theme:%q log_enabled:%v auto_scan:%v play_weight:%.2f short_feed_max_minutes:%d bilingual:%v lang:%q}",
+	return fmt.Sprintf("{id:%d theme:%q log_enabled:%v auto_scan:%v watch_enabled:%v play_weight:%.2f short_feed_max_minutes:%d bilingual:%v lang:%q}",
 		settings.ID,
 		settings.Theme,
 		settings.LogEnabled,
 		settings.AutoScanOnStartup,
+		settings.LibraryWatchEnabled,
 		settings.PlayWeight,
 		settings.ShortFeedMaxDurationMinutes,
 		settings.BilingualEnabled,

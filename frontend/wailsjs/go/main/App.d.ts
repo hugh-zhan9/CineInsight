@@ -14,6 +14,10 @@ export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
 export function AddVideo(arg1:string):Promise<models.Video>;
 
+export function ApplyLocalMetadata(arg1:services.LocalMetadataApplyRequest):Promise<services.LocalMetadataApplyResult>;
+
+export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyRequest):Promise<services.LocalMetadataBatchResult>;
+
 export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
 
 export function BatchAddTagToVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
@@ -25,6 +29,8 @@ export function BatchMoveVideos(arg1:Array<number>,arg2:string):Promise<services
 export function BatchRefreshVideoMetadata(arg1:Array<number>):Promise<services.BatchVideoOperationResult>;
 
 export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
+
+export function CancelLocalMetadataBackfill():Promise<void>;
 
 export function CancelSubtitle():Promise<void>;
 
@@ -56,6 +62,8 @@ export function ForceGenerateSubtitle(arg1:services.SubtitleGenerateRequest):Pro
 
 export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<services.SubtitleGenerateResult>;
 
+export function GetAIQualityReport(arg1:services.AIQualityFilter):Promise<services.AIQualityReport>;
+
 export function GetAITagLibrary():Promise<Array<models.Tag>>;
 
 export function GetAITaggingStatusSummary():Promise<services.AITaggingStatusSummary>;
@@ -74,6 +82,12 @@ export function GetCollectionDetail(arg1:number):Promise<services.CollectionDeta
 
 export function GetLibrarySubtitleHits(arg1:string,arg2:Array<number>):Promise<Array<services.LibrarySubtitleHit>>;
 
+export function GetLibraryWatcherStatus():Promise<services.LibraryWatcherStatus>;
+
+export function GetLocalMetadataBackfillStatus():Promise<services.LocalMetadataBackfillStatus>;
+
+export function GetLocalMetadataDiff(arg1:number):Promise<services.LocalMetadataDiff>;
+
 export function GetPersonDetail(arg1:number,arg2:number,arg3:number):Promise<services.PersonDetail>;
 
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
@@ -83,6 +97,8 @@ export function GetSettings():Promise<models.Settings>;
 export function GetShortFeedServerStatus():Promise<services.ShortFeedServerStatus>;
 
 export function GetStartupError():Promise<string>;
+
+export function GetSubtitleEditDocument(arg1:number):Promise<services.SubtitleEditDocument>;
 
 export function GetSubtitleEngineStatuses():Promise<Array<services.SubtitleEngineStatus>>;
 
@@ -136,6 +152,8 @@ export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void
 
 export function PreviewExternally(arg1:number):Promise<void>;
 
+export function PreviewLocalMetadataBatch(arg1:Array<number>):Promise<services.LocalMetadataBatchPreview>;
+
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 
 export function RefreshVideoTechnicalMetadata(arg1:number):Promise<services.VideoDetails>;
@@ -162,13 +180,21 @@ export function RenameVideo(arg1:number,arg2:string):Promise<void>;
 
 export function ReorderCollectionVideos(arg1:number,arg2:Array<number>):Promise<void>;
 
+export function ResolveVideoArtwork(arg1:number,arg2:string):Promise<services.VideoArtworkData>;
+
 export function RestoreTrashEntry(arg1:number):Promise<models.Video>;
 
+export function RetranslateSubtitleEntries(arg1:services.SubtitleRetranslateRequest):Promise<services.SubtitleRetranslateResult>;
+
 export function RetryAITagging(arg1:number):Promise<void>;
+
+export function RetryLibraryWatcherRoot(arg1:number):Promise<services.LibraryWatchRootStatus>;
 
 export function SaveAITagLibrary(arg1:Array<services.AITagLibraryInput>):Promise<Array<models.Tag>>;
 
 export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<models.SavedLibraryView>;
+
+export function SaveSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleSaveResult>;
 
 export function ScanDirectory(arg1:string):Promise<Array<string>>;
 
@@ -208,6 +234,8 @@ export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
 
 export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
 
+export function StartLocalMetadataBackfill():Promise<services.LocalMetadataBackfillStatus>;
+
 export function StartTechnicalBackfill():Promise<services.TechnicalBackfillStatus>;
 
 export function SyncScanDirectories():Promise<services.ScanSyncResult>;
@@ -227,3 +255,5 @@ export function UpdateTag(arg1:number,arg2:string,arg3:string):Promise<void>;
 export function UpdateVideoDetails(arg1:services.VideoDetailsUpdate):Promise<services.VideoDetails>;
 
 export function UpdateVideoWatchProgress(arg1:number,arg2:number,arg3:boolean):Promise<models.Video>;
+
+export function ValidateSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleValidationResult>;

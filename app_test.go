@@ -95,6 +95,88 @@ func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMissing(t *testing.T) {
 	}
 }
 
+func TestSubtitleGenerateOptionsUseIndependentTranslationConfig(t *testing.T) {
+	settings := &models.Settings{
+		BilingualEnabled:            true,
+		BilingualLang:               "ja",
+		SubtitleTranslationProvider: "llm",
+		SubtitleTranslationBaseURL:  "http://127.0.0.1:1234/v1",
+		SubtitleTranslationAPIKey:   "subtitle-key",
+		SubtitleTranslationModel:    "subtitle-model",
+		AITaggingBaseURL:            "https://tagging.example/v1",
+		AITaggingAPIKey:             "tagging-key",
+		AITaggingModel:              "vision-model",
+	}
+
+	options := subtitleGenerateOptionsFromSettings(settings, false)
+	if !options.BilingualEnabled || options.BilingualLang != "ja" {
+		t.Fatalf("双语字幕设置映射错误: %+v", options)
+	}
+	if options.TranslationConfig.Provider != "llm" ||
+		options.TranslationConfig.BaseURL != "http://127.0.0.1:1234/v1" ||
+		options.TranslationConfig.APIKey != "subtitle-key" ||
+		options.TranslationConfig.Model != "subtitle-model" {
+		t.Fatalf("字幕翻译未使用独立配置: %+v", options.TranslationConfig)
+	}
+	if options.TranslationConfig.BaseURL == settings.AITaggingBaseURL ||
+		options.TranslationConfig.APIKey == settings.AITaggingAPIKey ||
+		options.TranslationConfig.Model == settings.AITaggingModel {
+		t.Fatalf("字幕翻译错误复用了 AI 标签配置: %+v", options.TranslationConfig)
+	}
+}
+
+func TestAppLibraryWatcherSettingControlsLifecycleAndDirectoryCRUD(t *testing.T) {
+	setupAppTestDB(t)
+	settings := models.Settings{VideoExtensions: ".mp4", PlayWeight: 2, LibraryWatchEnabled: false}
+	if err := database.DB.Create(&settings).Error; err != nil {
+		t.Fatalf("创建设置失败: %v", err)
+	}
+	firstRoot := t.TempDir()
+	app := NewApp()
+	first, err := app.AddDirectory(firstRoot, "first")
+	if err != nil {
+		t.Fatalf("添加关闭状态下的目录失败: %v", err)
+	}
+	status := app.GetLibraryWatcherStatus()
+	if status.Running || len(status.Roots) != 1 || status.Roots[0].State != services.LibraryWatchStateDisabled {
+		t.Fatalf("关闭状态 = %#v", status)
+	}
+
+	settings.LibraryWatchEnabled = true
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatalf("开启实时同步失败: %v", err)
+	}
+	status = app.GetLibraryWatcherStatus()
+	if !status.Running || len(status.Roots) != 1 || status.Roots[0].DirectoryID != first.ID || status.Roots[0].State != services.LibraryWatchStateWatching {
+		t.Fatalf("开启状态 = %#v", status)
+	}
+
+	secondRoot := t.TempDir()
+	second, err := app.AddDirectory(secondRoot, "second")
+	if err != nil {
+		t.Fatalf("动态添加目录失败: %v", err)
+	}
+	status = app.GetLibraryWatcherStatus()
+	if len(status.Roots) != 2 {
+		t.Fatalf("动态添加后的状态 = %#v", status)
+	}
+	if err := app.DeleteDirectory(second.ID); err != nil {
+		t.Fatalf("动态删除目录失败: %v", err)
+	}
+	if status = app.GetLibraryWatcherStatus(); len(status.Roots) != 1 {
+		t.Fatalf("动态删除后的状态 = %#v", status)
+	}
+
+	settings.LibraryWatchEnabled = false
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatalf("关闭实时同步失败: %v", err)
+	}
+	status = app.GetLibraryWatcherStatus()
+	if status.Running || len(status.Roots) != 1 || status.Roots[0].State != services.LibraryWatchStateDisabled {
+		t.Fatalf("关闭后的状态 = %#v", status)
+	}
+}
+
 func TestAITaggingReviewAPIsApproveCandidate(t *testing.T) {
 	setupAppTestDB(t)
 	tag := models.Tag{Name: "动作", Color: "#fff", Namespace: "用户分类", IsSystem: true, IsActive: true}

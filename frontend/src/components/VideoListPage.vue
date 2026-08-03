@@ -95,6 +95,10 @@
           {{ technicalBackfill.running ? (technicalBackfill.preparing ? '正在统计待补全视频...' : `技术信息 ${technicalBackfill.processed}/${technicalBackfill.total}`) : '补全技术信息' }}
         </button>
         <button v-if="technicalBackfill.running" type="button" class="btn-secondary" @click="cancelTechnicalBackfill">取消补全</button>
+        <button v-if="settings.local_metadata_enabled" type="button" class="btn-action" :disabled="localMetadataBackfill.running" @click="startLocalMetadataBackfill">
+          {{ localMetadataBackfill.running ? `本地资料 ${localMetadataBackfill.processed}/${localMetadataBackfill.total}` : '补全本地资料' }}
+        </button>
+        <button v-if="settings.local_metadata_enabled && localMetadataBackfill.running" type="button" class="btn-secondary" @click="cancelLocalMetadataBackfill">取消本地资料补全</button>
         <button type="button" class="btn-action" @click="showTagManagerDialog = true">标签管理</button>
       </div>
     </div>
@@ -119,6 +123,11 @@
       <ul v-if="technicalBackfill.failures?.length" class="technical-backfill-failures">
         <li v-for="failure in technicalBackfill.failures" :key="`${failure.video_id}:${failure.name}`">{{ failure.name || `视频 #${failure.video_id}` }}：{{ failure.error }}</li>
       </ul>
+    </div>
+
+    <div v-if="localMetadataBackfill.running || localMetadataBackfill.completed" class="scan-sync-status" :role="localMetadataBackfill.failed ? 'alert' : 'status'">
+      本地资料：成功 {{ localMetadataBackfill.succeeded }}，跳过 {{ localMetadataBackfill.skipped }}，失败 {{ localMetadataBackfill.failed }}
+      <span v-if="localMetadataBackfill.cancelled">（已取消）</span><span v-else-if="localMetadataBackfill.completed">（已完成）</span>
     </div>
 
     <div v-if="undoNotice" class="undo-delete-banner" role="status">
@@ -146,6 +155,7 @@
         >
           批量迁移
         </button>
+        <button type="button" class="btn-secondary" @click="openLocalMetadataDialog(selectedVideoIds)">导入本地资料</button>
         <button
           @click="confirmBatchDelete"
           class="btn-danger"
@@ -228,6 +238,7 @@
             @toggle-watched="toggleVideoWatched"
             @open-directory="openDirectory"
             @generate-subtitle="generateSubtitle"
+            @subtitle-edit="openSubtitleWorkbench"
             @subtitle-preview="openSubtitlePreview"
             @rename="renameVideo"
             @move="moveVideo"
@@ -259,6 +270,21 @@
       @preview-externally="previewExternally"
       @watch-progress="handlePreviewWatchProgress"
       @details-updated="handleVideoDetailsUpdated"
+      @open-local-metadata="openLocalMetadataDialog([$event.id])"
+    />
+
+    <SubtitleWorkbench
+      v-if="subtitleWorkbench.show && subtitleWorkbench.video"
+      :video="subtitleWorkbench.video"
+      @close="closeSubtitleWorkbench"
+      @saved="handleSubtitleWorkbenchSaved"
+    />
+
+    <LocalMetadataDialog
+      :visible="localMetadataDialog.show"
+      :video-ids="localMetadataDialog.videoIds"
+      @close="localMetadataDialog = { show: false, videoIds: [] }"
+      @applied="handleLocalMetadataApplied"
     />
 
     <TrashRestoreDialog
@@ -369,6 +395,7 @@
     <AITagReviewDialog
       :visible="aiTagReviewDialog.show"
       :tags="tags"
+      :quality-enabled="settings.ai_quality_enabled"
       @close="closeAITagReviewDialog"
       @changed="handleAITagCandidatesChanged"
     />
@@ -1184,24 +1211,26 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
 import DeleteConfirmDialog from './DeleteConfirmDialog.vue';
 import TagDeleteDialog from './TagDeleteDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
+import SubtitleWorkbench from './SubtitleWorkbench.vue';
 import TrashRestoreDialog from './TrashRestoreDialog.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
 import VideoListRow from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
+import LocalMetadataDialog from './LocalMetadataDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, TrashRestoreDialog, VirtualVideoList, VideoListRow, AITagReviewDialog },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, TrashRestoreDialog, VirtualVideoList, VideoListRow, AITagReviewDialog },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -1285,6 +1314,8 @@ export default {
       aiTagSummary: { same_source_unread: 0 },
       aiTagSummaryTimer: null,
       technicalBackfill: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
+      localMetadataBackfill: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
+      localMetadataDialog: { show: false, videoIds: [] },
       cleanupDialog: {
         show: false,
         loading: false,
@@ -1298,6 +1329,7 @@ export default {
       cleanupNow: Date.now(),
       cleanupTimer: null,
       subtitlePreview: { show: false, loading: false, error: '', video: null, segments: [] },
+      subtitleWorkbench: { show: false, video: null },
       selectedPreviewVideoId: null,
       previewVideoSnapshot: null,
       previewOpen: false,
@@ -1346,6 +1378,7 @@ export default {
     this.refreshSubtitleQueue();
     this.refreshAITagSummary();
     this.refreshTechnicalBackfillStatus();
+    this.refreshLocalMetadataBackfillStatus();
     this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
     this.attachWheelFallback();
     document.addEventListener('click', this.hideContextMenu);
@@ -1428,6 +1461,18 @@ export default {
 
       this.registerRuntimeEvent('technical-backfill-state', (data) => {
         this.technicalBackfill = { ...this.technicalBackfill, ...(data || {}) };
+      });
+
+      this.registerRuntimeEvent('local-metadata-backfill', (data) => {
+        this.localMetadataBackfill = { ...this.localMetadataBackfill, ...(data || {}) };
+        if (data?.completed && data?.succeeded) this.reloadCurrentView();
+      });
+
+      this.registerRuntimeEvent('library-watcher-reconciled', (event) => {
+        const result = event?.result;
+        if (!result || result.error_count > 0 || result.added > 0 || result.relocated > 0 || result.stale > 0 || result.metadata_refreshed > 0) {
+          this.reloadCurrentView();
+        }
       });
 
     }
@@ -1680,6 +1725,28 @@ export default {
         await this.refreshTechnicalBackfillStatus();
       } catch (err) {
         alert('取消技术信息补全失败: ' + err);
+      }
+    },
+    async refreshLocalMetadataBackfillStatus() {
+      try {
+        this.localMetadataBackfill = { ...this.localMetadataBackfill, ...(await GetLocalMetadataBackfillStatus()) };
+      } catch (err) {
+        this.debugLog('local metadata backfill status failed', { err: String(err) }, true);
+      }
+    },
+    async startLocalMetadataBackfill() {
+      try {
+        this.localMetadataBackfill = { ...this.localMetadataBackfill, ...(await StartLocalMetadataBackfill()) };
+      } catch (err) {
+        alert('启动本地资料补全失败: ' + err);
+      }
+    },
+    async cancelLocalMetadataBackfill() {
+      try {
+        await CancelLocalMetadataBackfill();
+        await this.refreshLocalMetadataBackfillStatus();
+      } catch (err) {
+        alert('取消本地资料补全失败: ' + err);
       }
     },
     startCleanupProgressTracking() {
@@ -2022,6 +2089,22 @@ export default {
       } finally {
         this.subtitlePreview.loading = false;
       }
+    },
+    openSubtitleWorkbench(video) {
+      this.subtitleWorkbench = { show: true, video };
+    },
+    closeSubtitleWorkbench() {
+      this.subtitleWorkbench = { show: false, video: null };
+    },
+    async handleSubtitleWorkbenchSaved() {
+      await this.reloadCurrentView();
+    },
+    openLocalMetadataDialog(videoIDs) {
+      this.localMetadataDialog = { show: true, videoIds: [...new Set((videoIDs || []).map(Number).filter(Boolean))] };
+    },
+    async handleLocalMetadataApplied() {
+      this.selectedVideoIds = [];
+      await this.reloadCurrentView();
     },
     segmentMatchesKeyword(segment) {
       const keyword = this.searchKeyword.trim().toLowerCase();

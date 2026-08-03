@@ -396,6 +396,8 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 			pending.Engine == req.Engine &&
 			(pending.SourceLang == "" || pending.SourceLang == req.SourceLang) {
 			if _, err := os.Stat(pending.SRTPath); err == nil {
+				unlockSubtitle := lockSubtitleFile(req.VideoID)
+				defer unlockSubtitle()
 				s.emitGenerateProgress(taskID, req, "finalizing", 35, "使用上次校验结果强制生成...")
 				result, err := s.finalizeSubtitleArtifact(ctx, taskID, req, pending.SRTPath, pending.DetectedLang, options)
 				if err != nil {
@@ -445,6 +447,8 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 
 	s.emitGenerateProgress(taskID, req, "normalizing", 35, "整理转写结果...")
 	srtPath := outputPrefix + ".srt"
+	unlockSubtitle := lockSubtitleFile(req.VideoID)
+	defer unlockSubtitle()
 	if err := writeSRT(srtPath, segments); err != nil {
 		return nil, fmt.Errorf("写入字幕失败: %w", err)
 	}
@@ -1127,9 +1131,10 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return fmt.Errorf("关闭临时字幕文件失败: %w", err)
 	}
-	if err := os.Rename(tempPath, path); err != nil {
+	if err := replaceSubtitleFileAtomically(tempPath, path); err != nil {
 		return fmt.Errorf("替换字幕文件失败: %w", err)
 	}
+	_ = syncSubtitleParentDirectory(filepath.Dir(path))
 	return nil
 }
 

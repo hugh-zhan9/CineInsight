@@ -42,7 +42,7 @@ func (s *ManagedImageService) Import(entityType string, entityID uint, sourcePat
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if entityType != "people" && entityType != "collections" {
+	if entityType != "people" && entityType != "collections" && entityType != "videos" {
 		return managedImageImport{}, fmt.Errorf("unsupported managed image entity %q", entityType)
 	}
 	file, err := os.Open(sourcePath)
