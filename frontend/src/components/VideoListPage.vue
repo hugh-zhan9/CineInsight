@@ -353,6 +353,7 @@
     <ScanDialog
       :visible="showScanDialog"
       :directories="directories"
+      :settings="settings"
       @close="showScanDialog = false"
       @scan-complete="handleScanComplete"
     />

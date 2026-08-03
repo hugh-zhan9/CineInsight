@@ -3,10 +3,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   AddCollectionVideo: vi.fn(),
+  AddCollectionVideos: vi.fn(),
   AddPersonVideo: vi.fn(),
+  AddPersonVideos: vi.fn(),
   CreatePerson: vi.fn(),
   DeleteCollection: vi.fn(),
   GetCollectionDetail: vi.fn(),
+  GetAllDirectories: vi.fn(),
   GetPersonDetail: vi.fn(),
   GetPreviewSession: vi.fn(),
   GetVideoDetails: vi.fn(),
@@ -81,6 +84,7 @@ async function mountDrawer(details = videoDetails(1)) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  api.GetAllDirectories.mockResolvedValue([]);
 });
 
 describe('PreviewDrawer', () => {
@@ -149,7 +153,7 @@ describe('PreviewDrawer', () => {
 
     expect(api.SearchLibraryVideoPage).toHaveBeenCalledWith(expect.objectContaining({
       filter: expect.objectContaining({ keyword: 'two', search_mode: 'file' }),
-      limit: 20
+      limit: 30
     }));
     expect(wrapper.find('img[src="/preview/thumbnail/2"]').exists()).toBe(true);
 

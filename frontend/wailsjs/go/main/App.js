@@ -6,12 +6,20 @@ export function AddCollectionVideo(arg1, arg2) {
   return window['go']['main']['App']['AddCollectionVideo'](arg1, arg2);
 }
 
+export function AddCollectionVideos(arg1, arg2) {
+  return window['go']['main']['App']['AddCollectionVideos'](arg1, arg2);
+}
+
 export function AddDirectory(arg1, arg2) {
   return window['go']['main']['App']['AddDirectory'](arg1, arg2);
 }
 
 export function AddPersonVideo(arg1, arg2) {
   return window['go']['main']['App']['AddPersonVideo'](arg1, arg2);
+}
+
+export function AddPersonVideos(arg1, arg2) {
+  return window['go']['main']['App']['AddPersonVideos'](arg1, arg2);
 }
 
 export function AddTagToVideo(arg1, arg2) {

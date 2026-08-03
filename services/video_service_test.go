@@ -223,6 +223,41 @@ func TestScanDirectoryWithInfoReturnsErrorForMissingRoot(t *testing.T) {
 	}
 }
 
+func TestScanDirectoryBlacklistSkipsSubtreeWithoutDeletingExistingRecords(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	excluded := filepath.Join(root, "private")
+	visiblePath := filepath.Join(root, "visible.mp4")
+	excludedPath := filepath.Join(excluded, "hidden.mp4")
+	for _, path := range []string{visiblePath, excludedPath} {
+		mustCreateFile(t, path)
+		mustSetFileModTime(t, path, time.Now().Add(-10*time.Minute))
+	}
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("scan_exclude_paths", excluded).Error; err != nil {
+		t.Fatalf("保存扫描黑名单失败: %v", err)
+	}
+	existing := models.Video{Name: filepath.Base(excludedPath), Path: excludedPath, Directory: excluded, Size: 1}
+	if err := database.DB.Create(&existing).Error; err != nil {
+		t.Fatalf("创建黑名单内既有记录失败: %v", err)
+	}
+
+	files, err := svc.ScanDirectory(root)
+	if err != nil {
+		t.Fatalf("扫描失败: %v", err)
+	}
+	if len(files) != 1 || files[0] != visiblePath {
+		t.Fatalf("黑名单子树不应进入扫描结果: %v", files)
+	}
+	result := svc.SyncScanDirectories([]models.ScanDirectory{{Path: root, Alias: "root"}})
+	if result.Deleted != 0 {
+		t.Fatalf("黑名单内既有记录不得被误判为缺失: %+v", result)
+	}
+	if err := database.DB.First(&models.Video{}, existing.ID).Error; err != nil {
+		t.Fatalf("黑名单内既有记录应保留: %v", err)
+	}
+}
+
 func TestSyncScanDirectoriesAddsAndRelocatesPreservingTags(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}

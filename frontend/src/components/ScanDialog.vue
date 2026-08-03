@@ -34,7 +34,8 @@ export default {
   name: 'ScanDialog',
   props: {
     visible: { type: Boolean, default: false },
-    directories: { type: Array, default: () => [] }
+    directories: { type: Array, default: () => [] },
+    settings: { type: Object, default: () => ({}) }
   },
   emits: ['close', 'scan-complete'],
   data() {
@@ -81,6 +82,10 @@ export default {
         alert('请先选择目录');
         return;
       }
+      if (this.isExcludedPath(this.scanDirectory)) {
+        alert('所选目录位于扫描黑名单中，请先从设置中移除后再扫描。');
+        return;
+      }
 
       this.scanProgress.scanning = true;
       this.scanProgress.found = 0;
@@ -92,7 +97,7 @@ export default {
 
       try {
         const files = await ScanDirectory(this.scanDirectory) || [];
-        const existingVideos = await GetVideosByDirectory(this.scanDirectory) || [];
+        const existingVideos = (await GetVideosByDirectory(this.scanDirectory) || []).filter(video => !this.isExcludedPath(video.path));
         const scannedSet = new Set(files);
         const keptByPath = new Map();
         const duplicateVideos = [];
@@ -166,6 +171,17 @@ export default {
     async flushProgress() {
       await this.$nextTick();
       await new Promise(resolve => setTimeout(resolve, 0));
+    },
+    excludedPaths() {
+      return String(this.settings?.scan_exclude_paths || '').split(/\r?\n/).map(path => path.trim()).filter(Boolean);
+    },
+    isExcludedPath(path) {
+      const normalize = value => String(value || '').replace(/\\/g, '/').replace(/\/+$/, '').toLocaleLowerCase();
+      const candidate = normalize(path);
+      return this.excludedPaths().some(excluded => {
+        const root = normalize(excluded);
+        return candidate === root || candidate.startsWith(root + '/');
+      });
     }
   }
 };
