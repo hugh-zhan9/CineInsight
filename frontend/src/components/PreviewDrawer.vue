@@ -179,7 +179,7 @@
               />
             </div>
             <button v-if="relatedVideoHasMore" type="button" class="btn-secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中...' : '加载更多搜索结果' }}</button>
-            <p v-else-if="relatedVideoSearchPerformed && !relatedVideoSearching" class="detail-empty">没有可关联的视频。</p>
+            <p v-if="relatedVideoSearchPerformed && !relatedVideoSearching && availableRelatedVideoCandidates.length === 0" class="detail-empty">没有可关联的视频。</p>
           </div>
           <div class="related-video-list">
             <RelatedVideoItem
@@ -238,7 +238,7 @@
               />
             </div>
             <button v-if="relatedVideoHasMore" type="button" class="btn-secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中...' : '加载更多搜索结果' }}</button>
-            <p v-else-if="relatedVideoSearchPerformed && !relatedVideoSearching" class="detail-empty">没有可加入的视频。</p>
+            <p v-if="relatedVideoSearchPerformed && !relatedVideoSearching && availableRelatedVideoCandidates.length === 0" class="detail-empty">没有可加入的视频。</p>
           </div>
           <div class="related-video-list">
             <RelatedVideoItem
@@ -515,7 +515,7 @@ export default {
     async removeRelatedVideo(video) {
       const type = this.currentEntry?.type; const entityID = Number(this.currentEntry?.id); const videoID = Number(video?.id);
       if (!entityID || !videoID || this.isRelatedVideoUpdating(videoID) || !['person', 'collection'].includes(type)) return;
-      if (type === 'person' && this.relatedVideoIDs.length === 1 && !window.confirm('这是该人物最后一个活跃关联视频。若没有软删除视频保留的关系，解除后人物也会被删除，确定继续吗？')) return;
+      if (type === 'person' && Number(this.personDetail?.person?.active_video_count || 0) <= 1 && !window.confirm('这是该人物最后一个活跃关联视频。若没有软删除视频保留的关系，解除后人物也会被删除，确定继续吗？')) return;
       this.setRelatedVideoUpdating(videoID, true); this.relatedVideoError = '';
       try {
         if (type === 'person') {

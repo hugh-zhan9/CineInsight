@@ -6,9 +6,13 @@ import {subtitleparser} from '../models';
 
 export function AddCollectionVideo(arg1:number,arg2:number):Promise<void>;
 
+export function AddCollectionVideos(arg1:number,arg2:Array<number>):Promise<void>;
+
 export function AddDirectory(arg1:string,arg2:string):Promise<models.ScanDirectory>;
 
 export function AddPersonVideo(arg1:number,arg2:number):Promise<void>;
+
+export function AddPersonVideos(arg1:number,arg2:Array<number>):Promise<void>;
 
 export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 

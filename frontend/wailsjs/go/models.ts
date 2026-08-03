@@ -169,9 +169,12 @@ export namespace models {
 	    confirm_before_delete: boolean;
 	    delete_original_file: boolean;
 	    video_extensions: string;
+	    scan_exclude_paths: string;
 	    play_weight: number;
 	    auto_scan_on_startup: boolean;
 	    library_watch_enabled: boolean;
+	    local_metadata_enabled: boolean;
+	    ai_quality_enabled: boolean;
 	    short_feed_max_duration_minutes: number;
 	    theme: string;
 	    log_enabled: boolean;
@@ -204,9 +207,12 @@ export namespace models {
 	        this.confirm_before_delete = source["confirm_before_delete"];
 	        this.delete_original_file = source["delete_original_file"];
 	        this.video_extensions = source["video_extensions"];
+	        this.scan_exclude_paths = source["scan_exclude_paths"];
 	        this.play_weight = source["play_weight"];
 	        this.auto_scan_on_startup = source["auto_scan_on_startup"];
 	        this.library_watch_enabled = source["library_watch_enabled"];
+	        this.local_metadata_enabled = source["local_metadata_enabled"];
+	        this.ai_quality_enabled = source["ai_quality_enabled"];
 	        this.short_feed_max_duration_minutes = source["short_feed_max_duration_minutes"];
 	        this.theme = source["theme"];
 	        this.log_enabled = source["log_enabled"];
@@ -419,7 +425,8 @@ export namespace services {
 	    decided: number;
 	    approved: number;
 	    rejected: number;
-	    rate?: number;
+	    approval_rate?: number;
+	    rejection_rate?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new AIQualityDecisionMetrics(source);
@@ -430,7 +437,8 @@ export namespace services {
 	        this.decided = source["decided"];
 	        this.approved = source["approved"];
 	        this.rejected = source["rejected"];
-	        this.rate = source["rate"];
+	        this.approval_rate = source["approval_rate"];
+	        this.rejection_rate = source["rejection_rate"];
 	    }
 	}
 	export class AIQualityFilter {
@@ -529,7 +537,8 @@ export namespace services {
 	    decided: number;
 	    approved: number;
 	    rejected: number;
-	    rate?: number;
+	    approval_rate?: number;
+	    rejection_rate?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new AIQualitySameSourceGroup(source);
@@ -544,7 +553,8 @@ export namespace services {
 	        this.decided = source["decided"];
 	        this.approved = source["approved"];
 	        this.rejected = source["rejected"];
-	        this.rate = source["rate"];
+	        this.approval_rate = source["approval_rate"];
+	        this.rejection_rate = source["rejection_rate"];
 	    }
 	}
 	export class AIQualityTagGroup {
@@ -556,7 +566,8 @@ export namespace services {
 	    decided: number;
 	    approved: number;
 	    rejected: number;
-	    rate?: number;
+	    approval_rate?: number;
+	    rejection_rate?: number;
 
 	    static createFrom(source: any = {}) {
 	        return new AIQualityTagGroup(source);
@@ -572,7 +583,8 @@ export namespace services {
 	        this.decided = source["decided"];
 	        this.approved = source["approved"];
 	        this.rejected = source["rejected"];
-	        this.rate = source["rate"];
+	        this.approval_rate = source["approval_rate"];
+	        this.rejection_rate = source["rejection_rate"];
 	    }
 	}
 	export class AIQualityReport {
@@ -621,6 +633,10 @@ export namespace services {
 		    return a;
 		}
 	}
+
+
+
+
 	export class AITagLibraryInput {
 	    id: number;
 	    namespace: string;
@@ -1125,6 +1141,7 @@ export namespace services {
 	export class LibraryFilter {
 	    search_mode: string;
 	    keyword: string;
+	    path_prefix: string;
 	    smart_view: string;
 	    tag_ids: number[];
 	    min_size: number;
@@ -1143,6 +1160,7 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.search_mode = source["search_mode"];
 	        this.keyword = source["keyword"];
+	        this.path_prefix = source["path_prefix"];
 	        this.smart_view = source["smart_view"];
 	        this.tag_ids = source["tag_ids"];
 	        this.min_size = source["min_size"];
@@ -2054,6 +2072,7 @@ export namespace services {
 	    name: string;
 	    search_mode: string;
 	    keyword: string;
+	    path_prefix: string;
 	    smart_view: string;
 	    tag_ids: number[];
 	    min_size: number;
@@ -2073,6 +2092,7 @@ export namespace services {
 	        this.name = source["name"];
 	        this.search_mode = source["search_mode"];
 	        this.keyword = source["keyword"];
+	        this.path_prefix = source["path_prefix"];
 	        this.smart_view = source["smart_view"];
 	        this.tag_ids = source["tag_ids"];
 	        this.min_size = source["min_size"];
@@ -2911,3 +2931,4 @@ export namespace subtitleparser {
 	}
 
 }
+

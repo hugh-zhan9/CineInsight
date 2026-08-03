@@ -94,6 +94,28 @@ func TestLibraryFiltersCoverBuiltInViewsAndSubtitleKeyword(t *testing.T) {
 	}
 }
 
+func TestLibraryFilterRestrictsResultsToPathPrefix(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	insideRoot := filepath.Join(root, "inside")
+	outsideRoot := filepath.Join(root, "outside")
+	videos := []models.Video{
+		{Name: "inside.mp4", Path: filepath.Join(insideRoot, "inside.mp4"), Directory: insideRoot},
+		{Name: "outside.mp4", Path: filepath.Join(outsideRoot, "outside.mp4"), Directory: outsideRoot},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatalf("创建目录筛选夹具失败: %v", err)
+	}
+
+	filtered, err := (&VideoService{}).SearchLibraryVideos(LibraryFilter{PathPrefix: insideRoot}, 0, 0, 0, 20)
+	if err != nil {
+		t.Fatalf("目录范围筛选失败: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].ID != videos[0].ID {
+		t.Fatalf("目录范围筛选结果错误: %+v", filtered)
+	}
+}
+
 func TestRecentlyPlayedWithFilterPaginatesAfterDatabaseFiltering(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	now := time.Now()

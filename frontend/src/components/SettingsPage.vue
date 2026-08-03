@@ -71,6 +71,20 @@
         </label>
         <p class="help-text">只控制质量视图入口；已有归因和审核记录不会删除。</p>
       </div>
+      <div class="setting-item scan-blacklist-setting">
+        <div class="settings-section-heading">
+          <label>扫描目录黑名单</label>
+          <button type="button" class="btn-secondary btn-compact" @click="addScanExcludeDirectory">选择目录</button>
+        </div>
+        <div v-if="scanExcludePaths.length" class="scan-blacklist-list">
+          <div v-for="path in scanExcludePaths" :key="path" class="scan-blacklist-item">
+            <span :title="path">{{ path }}</span>
+            <button type="button" class="btn-action btn-compact btn-action-danger" @click="removeScanExcludeDirectory(path)">移除</button>
+          </div>
+        </div>
+        <p v-else class="help-text">尚未设置黑名单目录。</p>
+        <p class="help-text">黑名单目录及其全部子目录不会被后续扫描收录；已有视频记录不会自动删除。</p>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -449,6 +463,7 @@ export default {
         this.settingsForm.ai_tagging_startup_batch_size = this.settingsForm.ai_tagging_startup_batch_size || 10;
         this.settingsForm.ai_tagging_max_extra_frames = this.settingsForm.ai_tagging_max_extra_frames || 20;
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
+        this.settingsForm.scan_exclude_paths = this.settingsForm.scan_exclude_paths || '';
         this.settingsForm.subtitle_translation_provider = this.settingsForm.subtitle_translation_provider || 'deepl';
         this.settingsForm.subtitle_whisperx_model = this.settingsForm.subtitle_whisperx_model || 'medium';
         this.settingsForm.subtitle_whisperx_batch_size = this.settingsForm.subtitle_whisperx_batch_size || 8;
@@ -465,6 +480,9 @@ export default {
     }
   },
   computed: {
+    scanExcludePaths() {
+      return [...new Set(String(this.settingsForm.scan_exclude_paths || '').split(/\r?\n/).map(path => path.trim()).filter(Boolean))];
+    },
     shortFeedStatusText() {
       if (!this.shortFeedStatus) return '未加载';
       if (this.shortFeedStatus.running) {
@@ -519,6 +537,7 @@ export default {
             confirm_before_delete: this.settingsForm.confirm_before_delete,
             delete_original_file: this.settingsForm.delete_original_file,
             video_extensions: this.settingsForm.video_extensions,
+            scan_exclude_paths: this.settingsForm.scan_exclude_paths || '',
             play_weight: this.settingsForm.play_weight,
             auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
             library_watch_enabled: this.settingsForm.library_watch_enabled || false,
@@ -641,6 +660,19 @@ export default {
       const group = this.localAITagGroups[groupIndex];
       if (!group) return;
       group.tags = group.tags.filter((_, index) => index !== tagIndex);
+    },
+    async addScanExcludeDirectory() {
+      try {
+        const path = await SelectDirectory();
+        if (!path) return;
+        this.settingsForm.scan_exclude_paths = [...new Set([...this.scanExcludePaths, path])].join('\n');
+      } catch (err) {
+        this.saveState = 'error';
+        this.saveMessage = '选择黑名单目录失败：' + err;
+      }
+    },
+    removeScanExcludeDirectory(path) {
+      this.settingsForm.scan_exclude_paths = this.scanExcludePaths.filter(item => item !== path).join('\n');
     },
     async selectDirectoryForConfig() {
       try {
@@ -823,6 +855,7 @@ export default {
 .setting-control-row {
   margin-top: 10px;
 }
+.scan-blacklist-setting { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color); }.scan-blacklist-list { display: grid; gap: 7px; margin-top: 10px; }.scan-blacklist-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--control-bg); }.scan-blacklist-item span { min-width: 0; flex: 1; overflow: hidden; color: var(--text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
 .settings-textarea {
   height: auto;
