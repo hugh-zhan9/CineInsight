@@ -171,11 +171,13 @@ export namespace models {
 	    video_extensions: string;
 	    scan_exclude_paths: string;
 	    play_weight: number;
+	    random_half_life_days: number;
 	    auto_scan_on_startup: boolean;
 	    library_watch_enabled: boolean;
 	    local_metadata_enabled: boolean;
 	    ai_quality_enabled: boolean;
 	    short_feed_max_duration_minutes: number;
+	    short_feed_feedback_sync_enabled: boolean;
 	    theme: string;
 	    log_enabled: boolean;
 	    bilingual_enabled: boolean;
@@ -190,11 +192,18 @@ export namespace models {
 	    ai_tagging_base_url: string;
 	    ai_tagging_api_key: string;
 	    ai_tagging_model: string;
+	    semantic_embedding_model: string;
 	    ai_tagging_frame_count: number;
 	    ai_tagging_images_per_request: number;
 	    ai_tagging_subtitle_char_limit: number;
 	    ai_tagging_startup_batch_size: number;
 	    ai_tagging_max_extra_frames: number;
+	    backup_directory: string;
+	    backup_retention_count: number;
+	    backup_interval_hours: number;
+	    backup_last_attempt_at?: string;
+	    backup_last_success_at?: string;
+	    backup_last_error: string;
 	    updated_at: string;
 
 	    static createFrom(source: any = {}) {
@@ -209,11 +218,13 @@ export namespace models {
 	        this.video_extensions = source["video_extensions"];
 	        this.scan_exclude_paths = source["scan_exclude_paths"];
 	        this.play_weight = source["play_weight"];
+	        this.random_half_life_days = source["random_half_life_days"];
 	        this.auto_scan_on_startup = source["auto_scan_on_startup"];
 	        this.library_watch_enabled = source["library_watch_enabled"];
 	        this.local_metadata_enabled = source["local_metadata_enabled"];
 	        this.ai_quality_enabled = source["ai_quality_enabled"];
 	        this.short_feed_max_duration_minutes = source["short_feed_max_duration_minutes"];
+	        this.short_feed_feedback_sync_enabled = source["short_feed_feedback_sync_enabled"];
 	        this.theme = source["theme"];
 	        this.log_enabled = source["log_enabled"];
 	        this.bilingual_enabled = source["bilingual_enabled"];
@@ -228,11 +239,18 @@ export namespace models {
 	        this.ai_tagging_base_url = source["ai_tagging_base_url"];
 	        this.ai_tagging_api_key = source["ai_tagging_api_key"];
 	        this.ai_tagging_model = source["ai_tagging_model"];
+	        this.semantic_embedding_model = source["semantic_embedding_model"];
 	        this.ai_tagging_frame_count = source["ai_tagging_frame_count"];
 	        this.ai_tagging_images_per_request = source["ai_tagging_images_per_request"];
 	        this.ai_tagging_subtitle_char_limit = source["ai_tagging_subtitle_char_limit"];
 	        this.ai_tagging_startup_batch_size = source["ai_tagging_startup_batch_size"];
 	        this.ai_tagging_max_extra_frames = source["ai_tagging_max_extra_frames"];
+	        this.backup_directory = source["backup_directory"];
+	        this.backup_retention_count = source["backup_retention_count"];
+	        this.backup_interval_hours = source["backup_interval_hours"];
+	        this.backup_last_attempt_at = source["backup_last_attempt_at"];
+	        this.backup_last_success_at = source["backup_last_success_at"];
+	        this.backup_last_error = source["backup_last_error"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -739,6 +757,72 @@ export namespace services {
 	        this.failed = source["failed"];
 	    }
 	}
+	export class BackupFile {
+	    name: string;
+	    size: number;
+	    created_at: string;
+	    fingerprint: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BackupFile(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.created_at = source["created_at"];
+	        this.fingerprint = source["fingerprint"];
+	    }
+	}
+	export class BackupRestoreRequest {
+	    name: string;
+	    size: number;
+	    fingerprint: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BackupRestoreRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.size = source["size"];
+	        this.fingerprint = source["fingerprint"];
+	    }
+	}
+	export class BackupStatus {
+	    available: boolean;
+	    backup_available: boolean;
+	    restore_available: boolean;
+	    reason: string;
+	    running: boolean;
+	    backup_directory: string;
+	    retention_count: number;
+	    interval_hours: number;
+	    last_attempt_at?: string;
+	    last_success_at?: string;
+	    last_error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new BackupStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.backup_available = source["backup_available"];
+	        this.restore_available = source["restore_available"];
+	        this.reason = source["reason"];
+	        this.running = source["running"];
+	        this.backup_directory = source["backup_directory"];
+	        this.retention_count = source["retention_count"];
+	        this.interval_hours = source["interval_hours"];
+	        this.last_attempt_at = source["last_attempt_at"];
+	        this.last_success_at = source["last_success_at"];
+	        this.last_error = source["last_error"];
+	    }
+	}
 	export class BatchVideoOperationError {
 	    video_id: number;
 	    error: string;
@@ -882,6 +966,7 @@ export namespace services {
 	}
 	export class CleanupAnalysis {
 	    duplicate_groups: CleanupDuplicateGroup[];
+	    near_duplicate_groups: CleanupDuplicateGroup[];
 	    same_source_groups: CleanupSameSourceGroup[];
 	    low_duration: models.Video[];
 	    low_resolution: models.Video[];
@@ -893,6 +978,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.duplicate_groups = this.convertValues(source["duplicate_groups"], CleanupDuplicateGroup);
+	        this.near_duplicate_groups = this.convertValues(source["near_duplicate_groups"], CleanupDuplicateGroup);
 	        this.same_source_groups = this.convertValues(source["same_source_groups"], CleanupSameSourceGroup);
 	        this.low_duration = this.convertValues(source["low_duration"], models.Video);
 	        this.low_resolution = this.convertValues(source["low_resolution"], models.Video);
@@ -1176,6 +1262,118 @@ export namespace services {
 	        this.sort_mode = source["sort_mode"];
 	    }
 	}
+	export class LibraryStatsRatingBucket {
+	    rating: number;
+	    count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryStatsRatingBucket(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rating = source["rating"];
+	        this.count = source["count"];
+	    }
+	}
+	export class LibraryStatsWatchDay {
+	    date: string;
+	    count: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryStatsWatchDay(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.count = source["count"];
+	    }
+	}
+	export class LibraryStatsBucket {
+	    label: string;
+	    count: number;
+	    bytes: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryStatsBucket(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.count = source["count"];
+	        this.bytes = source["bytes"];
+	    }
+	}
+	export class LibraryStatsSummary {
+	    video_count: number;
+	    total_duration: number;
+	    total_size: number;
+	    watched_count: number;
+	    watched_percent: number;
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryStatsSummary(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_count = source["video_count"];
+	        this.total_duration = source["total_duration"];
+	        this.total_size = source["total_size"];
+	        this.watched_count = source["watched_count"];
+	        this.watched_percent = source["watched_percent"];
+	    }
+	}
+	export class LibraryStats {
+	    generated_at: string;
+	    summary: LibraryStatsSummary;
+	    storage_by_tag: LibraryStatsBucket[];
+	    storage_by_directory: LibraryStatsBucket[];
+	    storage_by_resolution: LibraryStatsBucket[];
+	    watch_heatmap: LibraryStatsWatchDay[];
+	    rating_distribution: LibraryStatsRatingBucket[];
+	    top_ai_tags: LibraryStatsBucket[];
+
+	    static createFrom(source: any = {}) {
+	        return new LibraryStats(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generated_at = source["generated_at"];
+	        this.summary = this.convertValues(source["summary"], LibraryStatsSummary);
+	        this.storage_by_tag = this.convertValues(source["storage_by_tag"], LibraryStatsBucket);
+	        this.storage_by_directory = this.convertValues(source["storage_by_directory"], LibraryStatsBucket);
+	        this.storage_by_resolution = this.convertValues(source["storage_by_resolution"], LibraryStatsBucket);
+	        this.watch_heatmap = this.convertValues(source["watch_heatmap"], LibraryStatsWatchDay);
+	        this.rating_distribution = this.convertValues(source["rating_distribution"], LibraryStatsRatingBucket);
+	        this.top_ai_tags = this.convertValues(source["top_ai_tags"], LibraryStatsBucket);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+
+
+
 	export class LibrarySubtitleHit {
 	    video_id: number;
 	    segment: subtitleparser.Segment;
@@ -1789,7 +1987,105 @@ export namespace services {
 
 
 
+	export class LocalMetadataExportRequest {
+	    filter: LibraryFilter;
 
+	    static createFrom(source: any = {}) {
+	        return new LocalMetadataExportRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LocalMetadataExportStatus {
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    failed: number;
+	    current_video_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: LocalMetadataFailure[];
+
+	    static createFrom(source: any = {}) {
+	        return new LocalMetadataExportStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.failed = source["failed"];
+	        this.current_video_id = source["current_video_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], LocalMetadataFailure);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+
+	export class LocalMetadataNFOExportResult {
+	    nfo_path: string;
+	    created: boolean;
+	    size: number;
+	    warnings: string[];
+
+	    static createFrom(source: any = {}) {
+	        return new LocalMetadataNFOExportResult(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.nfo_path = source["nfo_path"];
+	        this.created = source["created"];
+	        this.size = source["size"];
+	        this.warnings = source["warnings"];
+	    }
+	}
 
 
 
@@ -1808,6 +2104,74 @@ export namespace services {
 	        this.merged_tag_count = source["merged_tag_count"];
 	        this.video_links_moved = source["video_links_moved"];
 	    }
+	}
+	export class PerceptualHashFailure {
+	    video_id: number;
+	    name: string;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new PerceptualHashFailure(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.name = source["name"];
+	        this.error = source["error"];
+	    }
+	}
+	export class PerceptualHashStatus {
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    current_video_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: PerceptualHashFailure[];
+
+	    static createFrom(source: any = {}) {
+	        return new PerceptualHashStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.current_video_id = source["current_video_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], PerceptualHashFailure);
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class PersonListItem {
 	    person: models.Person;
@@ -1979,6 +2343,30 @@ export namespace services {
 	        this.hint = source["hint"];
 	    }
 	}
+	export class SeekSpriteDescriptor {
+	    locator_value: string;
+	    frame_width: number;
+	    frame_height: number;
+	    columns: number;
+	    rows: number;
+	    frame_count: number;
+	    interval_seconds: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SeekSpriteDescriptor(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.locator_value = source["locator_value"];
+	        this.frame_width = source["frame_width"];
+	        this.frame_height = source["frame_height"];
+	        this.columns = source["columns"];
+	        this.rows = source["rows"];
+	        this.frame_count = source["frame_count"];
+	        this.interval_seconds = source["interval_seconds"];
+	    }
+	}
 	export class PreviewSourceDescriptor {
 	    locator_strategy: string;
 	    locator_value: string;
@@ -2000,6 +2388,7 @@ export namespace services {
 	    mode: string;
 	    display_name: string;
 	    inline_source?: PreviewSourceDescriptor;
+	    seek_sprite?: SeekSpriteDescriptor;
 	    external_action?: PreviewExternalAction;
 	    reason_code?: string;
 	    reason_message?: string;
@@ -2014,6 +2403,7 @@ export namespace services {
 	        this.mode = source["mode"];
 	        this.display_name = source["display_name"];
 	        this.inline_source = this.convertValues(source["inline_source"], PreviewSourceDescriptor);
+	        this.seek_sprite = this.convertValues(source["seek_sprite"], SeekSpriteDescriptor);
 	        this.external_action = this.convertValues(source["external_action"], PreviewExternalAction);
 	        this.reason_code = source["reason_code"];
 	        this.reason_message = source["reason_message"];
@@ -2185,6 +2575,253 @@ export namespace services {
 	        this.path = source["path"];
 	        this.size = source["size"];
 	    }
+	}
+
+	export class SemanticIndexBuildRequest {
+	    rebuild: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticIndexBuildRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rebuild = source["rebuild"];
+	    }
+	}
+	export class SemanticIndexFailure {
+	    video_id: number;
+	    name: string;
+	    code: string;
+	    error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticIndexFailure(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.name = source["name"];
+	        this.code = source["code"];
+	        this.error = source["error"];
+	    }
+	}
+	export class SemanticIndexStatus {
+	    available: boolean;
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    needs_rebuild: boolean;
+	    model: string;
+	    dimension: number;
+	    generation: number;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    current_video_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: SemanticIndexFailure[];
+	    unavailable: string;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticIndexStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.needs_rebuild = source["needs_rebuild"];
+	        this.model = source["model"];
+	        this.dimension = source["dimension"];
+	        this.generation = source["generation"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.current_video_id = source["current_video_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], SemanticIndexFailure);
+	        this.unavailable = source["unavailable"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SemanticSearchCoverage {
+	    indexed: number;
+	    total: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticSearchCoverage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.indexed = source["indexed"];
+	        this.total = source["total"];
+	    }
+	}
+	export class SemanticSearchHit {
+	    video: models.Video;
+	    score: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticSearchHit(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.score = source["score"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SemanticSearchPage {
+	    hits: SemanticSearchHit[];
+	    coverage: SemanticSearchCoverage;
+	    has_more: boolean;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticSearchPage(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hits = this.convertValues(source["hits"], SemanticSearchHit);
+	        this.coverage = this.convertValues(source["coverage"], SemanticSearchCoverage);
+	        this.has_more = source["has_more"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SemanticSearchRequest {
+	    query: string;
+	    filter: LibraryFilter;
+	    offset: number;
+	    limit: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticSearchRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.query = source["query"];
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.offset = source["offset"];
+	        this.limit = source["limit"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SemanticSimilarRequest {
+	    video_id: number;
+	    filter: LibraryFilter;
+	    offset: number;
+	    limit: number;
+
+	    static createFrom(source: any = {}) {
+	        return new SemanticSimilarRequest(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.offset = source["offset"];
+	        this.limit = source["limit"];
+	    }
+
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ShortFeedServerStatus {
 	    running: boolean;

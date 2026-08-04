@@ -16,6 +16,7 @@ type PreviewSession struct {
 	Mode           string                   `json:"mode"`
 	DisplayName    string                   `json:"display_name"`
 	InlineSource   *PreviewSourceDescriptor `json:"inline_source,omitempty"`
+	SeekSprite     *SeekSpriteDescriptor    `json:"seek_sprite,omitempty"`
 	ExternalAction *PreviewExternalAction   `json:"external_action,omitempty"`
 	ReasonCode     string                   `json:"reason_code,omitempty"`
 	ReasonMessage  string                   `json:"reason_message,omitempty"`
@@ -87,6 +88,7 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 				LocatorValue:    previewMediaPath(video.ID),
 				MIME:            mimeType,
 			},
+			SeekSprite: SeekSpriteIndex(video.ID, video.Duration),
 		}, nil
 	}
 

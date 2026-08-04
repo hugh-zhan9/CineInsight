@@ -75,6 +75,15 @@ func (s *AITaggingService) Stop() {
 	}
 }
 
+func (s *AITaggingService) StopAndWait() {
+	if s == nil {
+		return
+	}
+	s.Stop()
+	s.workerRunMu.Lock()
+	s.workerRunMu.Unlock()
+}
+
 func (s *AITaggingService) Trigger() bool {
 	if s == nil {
 		return false
@@ -335,7 +344,7 @@ func (s *AITaggingService) shouldSkipForCurrentFingerprint(videoID uint, fingerp
 
 func (s *AITaggingService) setProcessing(videoID uint, fingerprint string) error {
 	now := s.now()
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		var state models.AITaggingState
 		err := tx.Where("video_id = ?", videoID).First(&state).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -518,7 +527,7 @@ func activeVideoExistsInTx(tx *gorm.DB, videoID uint) error {
 
 func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewItem, error) {
 	var approved models.AITagCandidate
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var candidate models.AITagCandidate
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", candidateID).First(&candidate).Error; err != nil {
 			return err
@@ -654,7 +663,7 @@ func (s *AITaggingService) RejectCandidate(candidateID uint) error {
 func (s *AITaggingService) RejectPendingCandidatesByVideo(videoID uint) (int64, error) {
 	now := s.now()
 	var rejected int64
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		if err := activeVideoExistsInTx(tx, videoID); err != nil {
 			return err
 		}
@@ -677,7 +686,7 @@ func (s *AITaggingService) RejectPendingCandidatesByVideo(videoID uint) (int64, 
 }
 
 func (s *AITaggingService) RetryVideo(videoID uint) error {
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		if err := activeVideoExistsInTx(tx, videoID); err != nil {
 			return err
 		}
@@ -757,6 +766,13 @@ func (s *AITaggingService) MarkSameSourceRelationRead(relationID uint) error {
 		return fmt.Errorf("same-source service unavailable")
 	}
 	return service.MarkRelationRead(relationID)
+}
+
+// SameSourceService 返回底层同源服务实例，供确定性来源功能（如视频超分
+// 发布后的指纹缓存）复用；不可用时返回 nil。
+func (s *AITaggingService) SameSourceService() *AISameSourceService {
+	service, _ := s.sameSource.(*AISameSourceService)
+	return service
 }
 
 func (s *AITaggingService) ConfirmSameSourceRelation(relationID uint) error {

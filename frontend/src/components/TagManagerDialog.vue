@@ -1,6 +1,5 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click="$emit('close')">
-    <div class="modal" @click.stop style="max-width: 520px; max-height: 90vh; overflow-y: auto;">
+  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks style="max-width: 520px; max-height: 90vh; overflow-y: auto;" @close="$emit('close')">
       <h2>标签管理</h2>
       
       <!-- 创建新标签 -->
@@ -70,8 +69,8 @@
             <div v-if="filteredMergeSourceTags.length === 0" class="merge-source-empty">没有符合筛选条件的来源标签</div>
           </div>
           <div class="merge-source-tools">
-            <button type="button" class="btn-action btn-compact" :disabled="filteredMergeSourceTags.length === 0" @click="selectAllVisibleMergeSources">全选筛选结果</button>
-            <button type="button" class="btn-action btn-compact" :disabled="mergeSourceIds.length === 0" @click="clearMergeSources">清空已选</button>
+            <button type="button" class="btn-secondary btn-compact" :disabled="filteredMergeSourceTags.length === 0" @click="selectAllVisibleMergeSources">全选筛选结果</button>
+            <button type="button" class="btn-secondary btn-compact" :disabled="mergeSourceIds.length === 0" @click="clearMergeSources">清空已选</button>
           </div>
         </div>
         <p v-else class="merge-source-empty merge-source-empty--target">选择目标标签后即可多选普通或 AI 来源标签。</p>
@@ -94,8 +93,8 @@
             <span v-if="tag.is_system" class="system-tag-note">AI 标签</span>
             <span v-else-if="tag.automatic_kind" class="system-tag-note">自动标签</span>
             <template v-else>
-              <button @click="saveTag(tag)" class="btn-action">保存</button>
-              <button @click.stop="$emit('request-delete-tag', tag)" class="btn-action" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
+              <button @click="saveTag(tag)" class="btn-secondary">保存</button>
+              <button @click.stop="$emit('request-delete-tag', tag)" class="btn-secondary" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
             </template>
           </div>
         </div>
@@ -105,15 +104,16 @@
       <div class="modal-actions">
         <button @click="$emit('close')" class="btn-secondary">完成</button>
       </div>
-    </div>
-  </div>
+  </BaseModal>
 </template>
 
 <script>
 import { CreateTag, MergeTags, UpdateTag } from '../../wailsjs/go/main/App';
+import BaseModal from './ui/BaseModal.vue';
 
 export default {
   name: 'TagManagerDialog',
+  components: { BaseModal },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] }
@@ -283,6 +283,7 @@ export default {
 </script>
 
 <style scoped>
+.tag-edit-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border-color); }
 .tag-list-container::-webkit-scrollbar { width: 4px; }
 .merge-type-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
 .merge-type-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--control-bg); }

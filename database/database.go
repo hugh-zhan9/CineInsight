@@ -14,6 +14,56 @@ import (
 
 var DB *gorm.DB
 
+// PostgresCLIConfig contains the connection fields needed by PostgreSQL client
+// tools. Passwords are intentionally exposed only as environment values so
+// callers never need to place credentials in process arguments.
+type PostgresCLIConfig struct {
+	Host     string
+	Port     string
+	User     string
+	Password string
+	Database string
+	SSLMode  string
+}
+
+func PostgresCLIConfigFromEnv() (PostgresCLIConfig, error) {
+	config := PostgresCLIConfig{
+		Host:     os.Getenv("PG_HOST"),
+		Port:     os.Getenv("PG_PORT"),
+		User:     os.Getenv("PG_USER"),
+		Password: os.Getenv("PG_PASSWORD"),
+		Database: os.Getenv("PG_DB"),
+		SSLMode:  os.Getenv("PG_SSLMODE"),
+	}
+	if config.Host == "" {
+		return PostgresCLIConfig{}, fmt.Errorf("PG_HOST 不能为空")
+	}
+	if config.User == "" {
+		return PostgresCLIConfig{}, fmt.Errorf("PG_USER 不能为空")
+	}
+	if config.Database == "" {
+		return PostgresCLIConfig{}, fmt.Errorf("PG_DB 不能为空")
+	}
+	if config.Port == "" {
+		config.Port = "5432"
+	}
+	if config.SSLMode == "" {
+		config.SSLMode = "disable"
+	}
+	return config, nil
+}
+
+func (config PostgresCLIConfig) Environment() []string {
+	return []string{
+		"PGHOST=" + config.Host,
+		"PGPORT=" + config.Port,
+		"PGUSER=" + config.User,
+		"PGPASSWORD=" + config.Password,
+		"PGDATABASE=" + config.Database,
+		"PGSSLMODE=" + config.SSLMode,
+	}
+}
+
 func loadEnvConfig() {
 	paths := []string{".env"}
 
@@ -45,31 +95,14 @@ func loadEnvConfig() {
 }
 
 func postgresDSNFromEnv() (string, error) {
-	host := os.Getenv("PG_HOST")
-	if host == "" {
-		return "", fmt.Errorf("PG_HOST 不能为空")
-	}
-	user := os.Getenv("PG_USER")
-	if user == "" {
-		return "", fmt.Errorf("PG_USER 不能为空")
-	}
-	db := os.Getenv("PG_DB")
-	if db == "" {
-		return "", fmt.Errorf("PG_DB 不能为空")
-	}
-	port := os.Getenv("PG_PORT")
-	if port == "" {
-		port = "5432"
-	}
-	password := os.Getenv("PG_PASSWORD")
-	sslmode := os.Getenv("PG_SSLMODE")
-	if sslmode == "" {
-		sslmode = "disable"
+	config, err := PostgresCLIConfigFromEnv()
+	if err != nil {
+		return "", err
 	}
 	timezone := os.Getenv("PG_TIMEZONE")
 
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s",
-		host, port, user, password, db, sslmode,
+		config.Host, config.Port, config.User, config.Password, config.Database, config.SSLMode,
 	)
 	if timezone != "" {
 		dsn = fmt.Sprintf("%s TimeZone=%s", dsn, timezone)
@@ -103,6 +136,15 @@ func Init() error {
 	if err != nil {
 		return fmt.Errorf("打开数据库失败: %w", err)
 	}
+	published := false
+	defer func() {
+		if published {
+			return
+		}
+		if sqlDB, closeErr := db.DB(); closeErr == nil {
+			_ = sqlDB.Close()
+		}
+	}()
 
 	// 如果表存在，先清理重复数据，避免 AutoMigrate 创建唯一索引失败
 	if db.Migrator().HasTable(&models.Video{}) {
@@ -145,24 +187,28 @@ func Init() error {
 		// 默认支持的视频格式
 		defaultExts := ".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
 		settings = models.Settings{
-			ConfirmBeforeDelete:         true,
-			DeleteOriginalFile:          false,
-			VideoExtensions:             defaultExts,
-			PlayWeight:                  2.0, // 默认 1次播放 = 2次随机播放
-			AutoScanOnStartup:           false,
-			LibraryWatchEnabled:         true,
-			LocalMetadataEnabled:        true,
-			AIQualityEnabled:            true,
-			ShortFeedMaxDurationMinutes: 5,
-			LogEnabled:                  false,
-			SubtitleTranslationProvider: "deepl",
-			SubtitleWhisperXModel:       "medium",
-			SubtitleWhisperXBatchSize:   8,
-			AITaggingFrameCount:         0,
-			AITaggingImagesPerRequest:   10,
-			AITaggingSubtitleCharLimit:  4000,
-			AITaggingStartupBatchSize:   10,
-			AITaggingMaxExtraFrames:     20,
+			ConfirmBeforeDelete:          true,
+			DeleteOriginalFile:           false,
+			VideoExtensions:              defaultExts,
+			PlayWeight:                   2.0, // 默认 1次播放 = 2次随机播放
+			RandomHalfLifeDays:           90,
+			AutoScanOnStartup:            false,
+			LibraryWatchEnabled:          true,
+			LocalMetadataEnabled:         true,
+			AIQualityEnabled:             true,
+			ShortFeedMaxDurationMinutes:  5,
+			ShortFeedFeedbackSyncEnabled: true,
+			LogEnabled:                   false,
+			SubtitleTranslationProvider:  "deepl",
+			SubtitleWhisperXModel:        "medium",
+			SubtitleWhisperXBatchSize:    8,
+			AITaggingFrameCount:          0,
+			AITaggingImagesPerRequest:    10,
+			AITaggingSubtitleCharLimit:   4000,
+			AITaggingStartupBatchSize:    10,
+			AITaggingMaxExtraFrames:      20,
+			BackupRetentionCount:         7,
+			BackupIntervalHours:          24,
 		}
 		if err := db.Create(&settings).Error; err != nil {
 			return fmt.Errorf("初始化默认设置失败: %w", err)
@@ -170,7 +216,11 @@ func Init() error {
 	} else if err != nil {
 		return fmt.Errorf("读取默认设置失败: %w", err)
 	}
+	if err := registerMaintenanceCallbacks(db); err != nil {
+		return fmt.Errorf("注册数据库维护屏障失败: %w", err)
+	}
 	DB = db
+	published = true
 	return nil
 }
 
@@ -316,6 +366,8 @@ func ensureMediaDetailConstraints(db *gorm.DB) error {
 		 ON collection_videos(video_id, collection_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_media_streams_video_type
 		 ON media_streams(video_id, stream_type)`,
+		`CREATE INDEX IF NOT EXISTS idx_video_perceptual_hashes_source
+		 ON video_perceptual_hashes(source_size, source_mod_time_ns)`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -339,6 +391,8 @@ func ensureCoreQueryIndexes(db *gorm.DB) {
 		`CREATE INDEX IF NOT EXISTS idx_video_tags_tag_video ON video_tags(tag_id, video_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_video_tags_video_tag ON video_tags(video_id, tag_id)`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_saved_library_views_name_active ON saved_library_views(name) WHERE deleted_at IS NULL`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_enhancement_tasks_active_source ON video_enhancement_tasks(video_id) WHERE status IN ('queued', 'running', 'cancel_requested')`,
+		`CREATE INDEX IF NOT EXISTS idx_enhancement_tasks_queue ON video_enhancement_tasks(created_at, id) WHERE status IN ('queued', 'running', 'cancel_requested')`,
 	}
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
@@ -401,6 +455,9 @@ func ensureSubtitleSearchIndexes(db *gorm.DB) {
 
 // Close 关闭数据库连接
 func Close() error {
+	if DB == nil {
+		return nil
+	}
 	sqlDB, err := DB.DB()
 	if err != nil {
 		return err

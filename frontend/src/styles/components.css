@@ -59,8 +59,7 @@
 .btn-primary,
 .btn-random,
 .btn-secondary,
-.btn-danger,
-.btn-action {
+.btn-danger {
   height: var(--h-unit);
   padding: 0 14px;
   border: 1px solid transparent;
@@ -86,15 +85,14 @@
   color: #221606;
 }
 
-.btn-secondary,
-.btn-action {
+.btn-secondary {
   background: var(--control-bg);
   border-color: var(--border-color);
   color: var(--text-primary);
 }
 
 .btn-danger {
-  background: rgba(229, 72, 77, 0.12);
+  background: var(--danger-soft);
   border-color: rgba(229, 72, 77, 0.38);
   color: var(--danger-color);
 }
@@ -102,13 +100,11 @@
 .btn-primary:hover:not(:disabled),
 .btn-random:hover:not(:disabled),
 .btn-secondary:hover:not(:disabled),
-.btn-action:hover:not(:disabled),
 .btn-danger:hover:not(:disabled) {
   transform: translateY(-1px);
 }
 
-.btn-secondary:hover:not(:disabled),
-.btn-action:hover:not(:disabled) {
+.btn-secondary:hover:not(:disabled) {
   background: var(--control-hover-bg);
   border-color: var(--border-strong);
 }
@@ -118,11 +114,15 @@
   border-color: var(--danger-color);
 }
 
+.btn-danger-outline {
+  border-color: var(--danger-color);
+  color: var(--danger-color);
+}
+
 .btn-primary:disabled,
 .btn-secondary:disabled,
 .btn-random:disabled,
-.btn-danger:disabled,
-.btn-action:disabled {
+.btn-danger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
   transform: none;
@@ -154,7 +154,7 @@
   align-items: center;
   justify-content: center;
   padding: 18px;
-  background: rgba(15, 23, 42, 0.34);
+  background: var(--overlay-bg);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
@@ -314,6 +314,76 @@ input:checked + .slider::before {
   line-height: 1.5;
 }
 
+.video-list { display: flex; flex-direction: column; gap: 12px; }
+.video-item {
+  background: var(--row-bg); padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-color);
+  display: flex; align-items: center; transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
+}
+.video-item:hover { border-color: var(--accent-color); background: var(--row-hover-bg); box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06); }
+.video-item--selected { border-color: var(--accent-color); background: rgba(20, 184, 166, 0.08); }
+.video-item--focused { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+.video-select { width: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: flex-start; }
+.video-select input { width: 16px; height: 16px; accent-color: var(--accent-color); }
+.video-thumbnail {
+  width: 152px; aspect-ratio: 16 / 9; flex: 0 0 auto; margin-right: 14px;
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+  border-radius: 8px; background: var(--thumb-bg); color: var(--thumb-fg); font-size: 24px;
+}
+.video-thumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.video-thumbnail--failed { background: var(--thumb-fallback-bg); }
+.video-info { flex: 1; min-width: 0; }
+.video-info h3 { font-size: 14px; font-weight: 650; color: var(--text-primary); margin-bottom: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.video-path { font-size: 12px; color: var(--text-secondary); margin-bottom: 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.video-meta { font-size: 11px; color: var(--text-muted); display: flex; gap: 12px; }
+.video-watched { color: var(--accent-color); font-weight: 650; }
+.video-watch-progress { width: min(360px, 100%); height: 4px; margin-top: 7px; overflow: hidden; border-radius: 999px; background: var(--neutral-soft); }
+.video-watch-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent-color); }
+.video-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 9px; }
+
+.video-actions { display: grid; gap: 6px; margin-left: 16px; justify-items: end; }
+.row-primary-actions,
+.row-secondary-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.row-secondary-actions { flex-wrap: wrap; max-width: 360px; }
+.video-actions .btn-danger, .video-actions .btn-secondary {
+  height: 28px; padding: 0 10px; font-size: 12px; background: transparent;
+  border: 1px solid var(--accent-color); color: var(--accent-color);
+}
+.video-actions .btn-danger { border-color: var(--danger-color); color: var(--danger-color); }
+.video-actions .btn-secondary.active { background: var(--accent-color); color: white; }
+.video-actions .btn-secondary:hover { background: var(--accent-color); color: white; }
+.video-actions .btn-danger:hover { background: var(--danger-color); color: white; }
+
+.btn-processing,
+.btn-processing:disabled {
+  opacity: 0.7;
+  cursor: wait;
+  background-color: #aaa !important;
+}
+
+.virtual-video-list--grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 220px));
+  justify-content: start;
+  align-items: start;
+  gap: 12px;
+}
+.virtual-video-list--grid .virtual-video-list__row { min-width: 0; height: 100%; }
+.virtual-video-list--grid .virtual-video-list__sentinel { grid-column: 1 / -1; min-height: 1px; }
+.video-item--grid { position: relative; height: 100%; align-items: stretch; flex-direction: column; gap: 10px; }
+.video-item--grid .video-select { position: absolute; margin: 8px; z-index: 2; padding: 5px; border-radius: 6px; background: var(--overlay-strong); }
+.video-item--grid .video-thumbnail { width: 100%; margin: 0; }
+.video-item--grid .video-info { width: 100%; }
+.video-item--grid .video-actions { margin: auto 0 0; justify-items: stretch; }
+.video-item--grid .row-primary-actions,
+.video-item--grid .row-secondary-actions { justify-content: flex-start; max-width: none; }
+.video-item--grid .row-primary-actions { flex-wrap: wrap; }
+
+.setting-item { margin-bottom: 24px; }
+.setting-item label { display: block; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
+.setting-item label.switch { display: inline-flex; margin-bottom: 0; font-weight: 400; }
+
+.divider { height: 1px; background: var(--border-color); margin: 24px 0; }
+
 .empty-state {
   text-align: center;
   padding: 52px 24px;
@@ -321,7 +391,7 @@ input:checked + .slider::before {
   font-size: 14px;
   border: 1px dashed var(--border-color);
   border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.36);
+  background: var(--surface-faint);
 }
 
 @media (max-width: 1180px) {

@@ -102,37 +102,46 @@ type Tag struct {
 
 // Settings 应用设置
 type Settings struct {
-	ID                          uint      `gorm:"primarykey" json:"id"`
-	ConfirmBeforeDelete         bool      `json:"confirm_before_delete"` // 删除前确认
-	DeleteOriginalFile          bool      `json:"delete_original_file"`  // 是否删除原始文件
-	VideoExtensions             string    `json:"video_extensions"`      // 支持的视频格式（逗号分隔）
-	ScanExcludePaths            string    `gorm:"type:text" json:"scan_exclude_paths"`
-	PlayWeight                  float64   `gorm:"default:2.0" json:"play_weight"` // 播放权重（1次播放 = N次随机播放）
-	AutoScanOnStartup           bool      `json:"auto_scan_on_startup"`           // 启动时自动增量扫描
-	LibraryWatchEnabled         bool      `json:"library_watch_enabled"`          // 实时同步片库
-	LocalMetadataEnabled        bool      `json:"local_metadata_enabled"`         // 新视频本地元数据自动填空与补全任务
-	AIQualityEnabled            bool      `json:"ai_quality_enabled"`             // 显示 AI 质量评估入口
-	ShortFeedMaxDurationMinutes int       `gorm:"default:5" json:"short_feed_max_duration_minutes"`
-	Theme                       string    `gorm:"default:'system'" json:"theme"`      // 主题模式: light, dark, system
-	LogEnabled                  bool      `json:"log_enabled"`                        // 是否启用日志
-	BilingualEnabled            bool      `json:"bilingual_enabled"`                  // 是否开启双语字幕
-	BilingualLang               string    `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
-	DeepLApiKey                 string    `json:"deepl_api_key"`                      // DeepL API Key
-	SubtitleTranslationProvider string    `gorm:"default:'deepl'" json:"subtitle_translation_provider"`
-	SubtitleTranslationBaseURL  string    `json:"subtitle_translation_base_url"`
-	SubtitleTranslationAPIKey   string    `json:"subtitle_translation_api_key"`
-	SubtitleTranslationModel    string    `json:"subtitle_translation_model"`
-	SubtitleWhisperXModel       string    `gorm:"default:'medium'" json:"subtitle_whisperx_model"`
-	SubtitleWhisperXBatchSize   int       `gorm:"default:8" json:"subtitle_whisperx_batch_size"`
-	AITaggingBaseURL            string    `json:"ai_tagging_base_url"`                     // OpenAI 兼容接口地址
-	AITaggingAPIKey             string    `json:"ai_tagging_api_key"`                      // AI 标签 API Key
-	AITaggingModel              string    `json:"ai_tagging_model"`                        // AI 标签模型
-	AITaggingFrameCount         int       `gorm:"default:0" json:"ai_tagging_frame_count"` // 兼容旧设置；抽帧现按视频时长自动规划
-	AITaggingImagesPerRequest   int       `gorm:"default:10" json:"ai_tagging_images_per_request"`
-	AITaggingSubtitleCharLimit  int       `gorm:"default:4000" json:"ai_tagging_subtitle_char_limit"`
-	AITaggingStartupBatchSize   int       `gorm:"default:10" json:"ai_tagging_startup_batch_size"`
-	AITaggingMaxExtraFrames     int       `gorm:"default:20" json:"ai_tagging_max_extra_frames"`
-	UpdatedAt                   time.Time `json:"updated_at" ts_type:"string"`
+	ID                           uint       `gorm:"primarykey" json:"id"`
+	ConfirmBeforeDelete          bool       `json:"confirm_before_delete"` // 删除前确认
+	DeleteOriginalFile           bool       `json:"delete_original_file"`  // 是否删除原始文件
+	VideoExtensions              string     `json:"video_extensions"`      // 支持的视频格式（逗号分隔）
+	ScanExcludePaths             string     `gorm:"type:text" json:"scan_exclude_paths"`
+	PlayWeight                   float64    `gorm:"default:2.0" json:"play_weight"` // 播放权重（1次播放 = N次随机播放）
+	RandomHalfLifeDays           int        `gorm:"not null;default:90" json:"random_half_life_days"`
+	AutoScanOnStartup            bool       `json:"auto_scan_on_startup"`   // 启动时自动增量扫描
+	LibraryWatchEnabled          bool       `json:"library_watch_enabled"`  // 实时同步片库
+	LocalMetadataEnabled         bool       `json:"local_metadata_enabled"` // 新视频本地元数据自动填空与补全任务
+	AIQualityEnabled             bool       `json:"ai_quality_enabled"`     // 显示 AI 质量评估入口
+	ShortFeedMaxDurationMinutes  int        `gorm:"default:5" json:"short_feed_max_duration_minutes"`
+	ShortFeedFeedbackSyncEnabled bool       `gorm:"not null;default:true" json:"short_feed_feedback_sync_enabled"`
+	Theme                        string     `gorm:"default:'system'" json:"theme"`      // 主题模式: light, dark, system
+	LogEnabled                   bool       `json:"log_enabled"`                        // 是否启用日志
+	BilingualEnabled             bool       `json:"bilingual_enabled"`                  // 是否开启双语字幕
+	BilingualLang                string     `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
+	DeepLApiKey                  string     `json:"deepl_api_key"`                      // DeepL API Key
+	SubtitleTranslationProvider  string     `gorm:"default:'deepl'" json:"subtitle_translation_provider"`
+	SubtitleTranslationBaseURL   string     `json:"subtitle_translation_base_url"`
+	SubtitleTranslationAPIKey    string     `json:"subtitle_translation_api_key"`
+	SubtitleTranslationModel     string     `json:"subtitle_translation_model"`
+	SubtitleWhisperXModel        string     `gorm:"default:'medium'" json:"subtitle_whisperx_model"`
+	SubtitleWhisperXBatchSize    int        `gorm:"default:8" json:"subtitle_whisperx_batch_size"`
+	AITaggingBaseURL             string     `json:"ai_tagging_base_url"` // OpenAI 兼容接口地址
+	AITaggingAPIKey              string     `json:"ai_tagging_api_key"`  // AI 标签 API Key
+	AITaggingModel               string     `json:"ai_tagging_model"`    // AI 标签模型
+	SemanticEmbeddingModel       string     `gorm:"type:text;not null;default:''" json:"semantic_embedding_model"`
+	AITaggingFrameCount          int        `gorm:"default:0" json:"ai_tagging_frame_count"` // 兼容旧设置；抽帧现按视频时长自动规划
+	AITaggingImagesPerRequest    int        `gorm:"default:10" json:"ai_tagging_images_per_request"`
+	AITaggingSubtitleCharLimit   int        `gorm:"default:4000" json:"ai_tagging_subtitle_char_limit"`
+	AITaggingStartupBatchSize    int        `gorm:"default:10" json:"ai_tagging_startup_batch_size"`
+	AITaggingMaxExtraFrames      int        `gorm:"default:20" json:"ai_tagging_max_extra_frames"`
+	BackupDirectory              string     `gorm:"type:text;not null;default:''" json:"backup_directory"`
+	BackupRetentionCount         int        `gorm:"not null;default:7" json:"backup_retention_count"`
+	BackupIntervalHours          int        `gorm:"not null;default:24" json:"backup_interval_hours"`
+	BackupLastAttemptAt          *time.Time `json:"backup_last_attempt_at" ts_type:"string"`
+	BackupLastSuccessAt          *time.Time `json:"backup_last_success_at" ts_type:"string"`
+	BackupLastError              string     `gorm:"type:text;not null;default:''" json:"backup_last_error"`
+	UpdatedAt                    time.Time  `json:"updated_at" ts_type:"string"`
 }
 
 // ScanDirectory 扫描目录配置

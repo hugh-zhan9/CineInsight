@@ -228,7 +228,7 @@ func (s *CollectionService) AddCollectionVideos(collectionID uint, videoIDs []ui
 	if collectionID == 0 || len(videoIDs) == 0 {
 		return fmt.Errorf("collection and at least one video are required")
 	}
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		if err := lockActiveCollection(tx, collectionID); err != nil {
 			return err
 		}
@@ -266,7 +266,7 @@ func (s *CollectionService) AddCollectionVideos(collectionID uint, videoIDs []ui
 func (s *CollectionService) RemoveCollectionVideo(collectionID, videoID uint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		if err := lockActiveCollection(tx, collectionID); err != nil {
 			return err
 		}
@@ -281,7 +281,7 @@ func (s *CollectionService) RemoveCollectionVideo(collectionID, videoID uint) er
 func (s *CollectionService) ReorderCollectionVideos(collectionID uint, activeVideoIDs []uint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		if err := lockActiveCollection(tx, collectionID); err != nil {
 			return err
 		}
@@ -372,7 +372,7 @@ func (s *CollectionService) DeleteCollection(collectionID uint) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var coverPath string
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var collection models.MediaCollection
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&collection, collectionID).Error; err != nil {
 			return err

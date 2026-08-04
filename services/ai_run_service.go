@@ -90,7 +90,7 @@ func (s *AITaggingService) finishRun(run models.AITaggingRun, status, failureCod
 
 func (s *AITaggingService) recoverInterruptedRuns() error {
 	now := s.now()
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		var videoIDs []uint
 		if err := tx.Model(&models.AITaggingRun{}).Where("status = ?", models.AITaggingStateStatusProcessing).Pluck("video_id", &videoIDs).Error; err != nil {
 			return err

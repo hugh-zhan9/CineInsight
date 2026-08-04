@@ -1,11 +1,16 @@
 🥷 视频清晰度增强技术选型探讨
 ============================
 
-**状态**：选型讨论
+**状态**：已被取代（仅保留为历史调研）
+
+> 本文的阶段性建议已由 2026-08-04 定稿设计取代：
+> [`docs/loopx/design/2026-08-04-video-super-resolution/设计提案.md`](loopx/design/2026-08-04-video-super-resolution/设计提案.md) 与
+> [`docs/loopx/design/2026-08-04-video-super-resolution/需求设计文档.md`](loopx/design/2026-08-04-video-super-resolution/需求设计文档.md)。
+> 后续实现与评审只以新设计为准；新设计仍处于送审状态，用户明确批准前不得开始 P-013。
 
 **目标设备**：Apple M4 Mac mini，32GB 统一内存
 
-**结论性质**：阶段性建议，不代表最终实施设计
+**结论性质**：历史调研，不再代表当前实施设计
 
 ## 1. 背景
 

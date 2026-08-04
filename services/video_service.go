@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"os"
 	"os/exec"
@@ -63,6 +64,13 @@ func (s *VideoService) technicalProbe() *MediaProbeService {
 }
 
 var libraryPathMutationMu sync.RWMutex
+
+// BeginLibraryMaintenance waits for active path readers/writers and blocks new
+// media-path mutations until the returned release function is called.
+func BeginLibraryMaintenance() func() {
+	libraryPathMutationMu.Lock()
+	return libraryPathMutationMu.Unlock
+}
 
 const (
 	recentActiveFileThreshold = 5 * time.Minute
@@ -131,6 +139,7 @@ type videoScoreRow struct {
 	ID              uint
 	PlayCount       int
 	RandomPlayCount int
+	LastPlayedAt    *time.Time
 }
 
 func (r *ScanSyncResult) recordError(operation, directory, path string, err error) {
@@ -161,6 +170,18 @@ func (s *VideoService) getPlayWeight() (float64, error) {
 		w = 0.1
 	}
 	return w, nil
+}
+
+func (s *VideoService) getRandomPlayConfig() (float64, int, error) {
+	var settings models.Settings
+	if err := database.DB.First(&settings).Error; err != nil {
+		return 0, 0, fmt.Errorf("获取设置失败: %w", err)
+	}
+	playWeight := settings.PlayWeight
+	if playWeight < 0.1 {
+		playWeight = 0.1
+	}
+	return playWeight, normalizeRandomHalfLifeDays(settings.RandomHalfLifeDays), nil
 }
 
 // scoreExprForTable 返回播放分数的 SQL 表达式片段，使用 fmt.Sprintf 将权重直接嵌入 SQL，
@@ -396,7 +417,7 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 		Size:      info.Size(),
 	}
 
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
+	err = database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(video).Error; err != nil {
 			return err
 		}
@@ -414,7 +435,7 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 	if probeErr := s.technicalProbe().Refresh(context.Background(), video.ID); probeErr != nil {
 		log.Printf("新增视频技术信息读取失败 id=%d err=%v", video.ID, probeErr)
 	} else {
-		if syncErr := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, video.ID) }); syncErr != nil {
+		if syncErr := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, video.ID) }); syncErr != nil {
 			log.Printf("新增视频技术信息读取成功但短视频标签同步失败 id=%d err=%v", video.ID, syncErr)
 		}
 		if refreshed, refreshErr := s.GetVideo(video.ID); refreshErr == nil {
@@ -519,7 +540,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 	}
 
 	var restored models.Video
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).
 			Unscoped().
 			Where("id = ? AND deleted_at IS NOT NULL", video.ID).
@@ -621,7 +642,7 @@ func (s *VideoService) deleteVideo(id uint, deleteFile bool) error {
 
 	shouldMoveFile := deleteFile && sourceInfo != nil && !isTrashPath(video.Path)
 	if !shouldMoveFile {
-		return database.DB.Transaction(func(tx *gorm.DB) error {
+		return database.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&entry).Error; err != nil {
 				return err
 			}
@@ -647,7 +668,7 @@ func (s *VideoService) deleteVideo(id uint, deleteFile bool) error {
 	}
 	log.Printf("视频已移入回收站 src=%s dst=%s", video.Path, entry.TrashPath)
 
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
+	err = database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.VideoTrashEntry{}).
 			Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).
 			Updates(map[string]interface{}{
@@ -1020,7 +1041,7 @@ func (s *VideoService) reconcilePendingDelete(entry *models.VideoTrashEntry) err
 		return fmt.Errorf("回收站文件与待删除记录不一致")
 	}
 
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "file_moved": true, "last_error": ""}).Error; err != nil {
 			return err
 		}
@@ -1423,7 +1444,7 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		}
 		result.Deleted++
 	}
-	if err := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
+	if err := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
 		result.recordError("short-video-tag", "", "", err)
 	}
 
@@ -1573,7 +1594,7 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		}
 		result.Stale++
 	}
-	if err := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
+	if err := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
 		result.recordError("short-video-tag", "", "", err)
 	}
 	return result
@@ -1889,7 +1910,7 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 		return fmt.Errorf("目标路径已被其他记录占用: %s", newPath)
 	}
 
-	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+	if err := database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"path":      newPath,
 			"directory": filepath.Dir(newPath),
@@ -1905,7 +1926,7 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 	}
 	if probeErr := s.technicalProbe().Refresh(context.Background(), id); probeErr != nil {
 		log.Printf("视频迁移完成但技术信息读取失败 id=%d newPath=%s err=%v", id, newPath, probeErr)
-	} else if syncErr := database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, id) }); syncErr != nil {
+	} else if syncErr := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, id) }); syncErr != nil {
 		log.Printf("视频迁移技术信息读取成功但短视频标签同步失败 id=%d newPath=%s err=%v", id, newPath, syncErr)
 	}
 	log.Printf("视频迁移并更新元数据 id=%d newPath=%s", id, newPath)
@@ -1922,7 +1943,7 @@ func (s *VideoService) RefreshVideoMetadata(id uint) error {
 	if err := s.technicalProbe().Refresh(context.Background(), video.ID); err != nil {
 		return err
 	}
-	return database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, video.ID) })
+	return database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, video.ID) })
 }
 
 // RenameVideo 重命名视频文件及数据库记录
@@ -2074,11 +2095,12 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 	if playWeight < 0.1 {
 		playWeight = 0.1
 	}
+	halfLifeDays := normalizeRandomHalfLifeDays(settings.RandomHalfLifeDays)
 
 	// 仅查询计算权重所需的最少字段，避免全量加载
 	var rows []videoScoreRow
 	if err := database.DB.Model(&models.Video{}).
-		Select("id, play_count, random_play_count").
+		Select("id, play_count, random_play_count, last_played_at").
 		Find(&rows).Error; err != nil {
 		return nil, err
 	}
@@ -2091,7 +2113,7 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 		}, nil
 	}
 
-	return s.playRandomFromRows(rows, playWeight, "按全库均衡权重选择")
+	return s.playRandomFromRows(rows, playWeight, halfLifeDays, time.Now(), "按全库均衡权重选择")
 }
 
 // PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放。
@@ -2108,12 +2130,12 @@ func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*Pl
 			return nil, err
 		}
 	}
-	playWeight, err := s.getPlayWeight()
+	playWeight, halfLifeDays, err := s.getRandomPlayConfig()
 	if err != nil {
 		return nil, err
 	}
 	query := database.DB.Model(&models.Video{}).
-		Select("videos.id, videos.play_count, videos.random_play_count").
+		Select("videos.id, videos.play_count, videos.random_play_count, videos.last_played_at").
 		Where("videos.is_stale = ?", false)
 	query, err = applyLibraryFilter(query, request.Filter, time.Now())
 	if err != nil {
@@ -2144,7 +2166,7 @@ func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*Pl
 			SelectionReason:   randomModeReason(mode),
 		}, nil
 	}
-	return s.playRandomFromRows(rows, playWeight, randomModeReason(mode))
+	return s.playRandomFromRows(rows, playWeight, halfLifeDays, time.Now(), randomModeReason(mode))
 }
 
 func randomModeReason(mode string) string {
@@ -2158,7 +2180,7 @@ func randomModeReason(mode string) string {
 	}
 }
 
-func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float64, selectionReason string) (*PlaybackAttemptResult, error) {
+func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time, selectionReason string) (*PlaybackAttemptResult, error) {
 	if len(rows) == 0 {
 		return &PlaybackAttemptResult{
 			DispatchSucceeded: false,
@@ -2166,23 +2188,7 @@ func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float
 			UserMessage:       "随机播放失败：当前没有可播放的视频记录。",
 		}, nil
 	}
-	// 计算每个视频的播放分数和最大分数
-	scores := make([]float64, len(rows))
-	maxScore := 0.0
-	for i, r := range rows {
-		scores[i] = float64(r.PlayCount)*playWeight + float64(r.RandomPlayCount)
-		if scores[i] > maxScore {
-			maxScore = scores[i]
-		}
-	}
-
-	// 计算选择权重并做加权随机选择
-	totalWeight := 0.0
-	weights := make([]float64, len(rows))
-	for i, score := range scores {
-		weights[i] = maxScore - score + 1.0
-		totalWeight += weights[i]
-	}
+	weights, totalWeight := randomSelectionWeights(rows, playWeight, halfLifeDays, now)
 
 	// 使用加权随机选择（Go 1.20+ 全局 rand 已自动 seed，无需手动调用）
 	randomValue := rand.Float64() * totalWeight
@@ -2208,6 +2214,33 @@ func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float
 		result.SelectionReason = selectionReason
 	}
 	return result, err
+}
+
+func randomSelectionWeights(rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time) ([]float64, float64) {
+	scores := make([]float64, len(rows))
+	maxScore := 0.0
+	for index, row := range rows {
+		scores[index] = decayedPlayScore(row, playWeight, halfLifeDays, now)
+		if scores[index] > maxScore {
+			maxScore = scores[index]
+		}
+	}
+	weights := make([]float64, len(rows))
+	totalWeight := 0.0
+	for index, score := range scores {
+		weights[index] = maxScore - score + 1.0
+		totalWeight += weights[index]
+	}
+	return weights, totalWeight
+}
+
+func decayedPlayScore(row videoScoreRow, playWeight float64, halfLifeDays int, now time.Time) float64 {
+	base := float64(row.PlayCount)*playWeight + float64(row.RandomPlayCount)
+	if halfLifeDays <= 0 || row.LastPlayedAt == nil || !now.After(*row.LastPlayedAt) {
+		return base
+	}
+	ageDays := now.Sub(*row.LastPlayedAt).Hours() / 24
+	return base * math.Exp(-math.Ln2*ageDays/float64(halfLifeDays))
 }
 
 var openWithDefaultFn = openPath

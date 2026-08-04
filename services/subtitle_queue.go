@@ -161,6 +161,37 @@ func (q *subtitleTaskQueue) cancelActiveTask() error {
 	return q.cancelTask(taskID)
 }
 
+func (q *subtitleTaskQueue) cancelAllAndWait() {
+	q.mu.Lock()
+	queued := q.queued
+	q.queued = nil
+	active := q.active
+	var cancel context.CancelFunc
+	if active != nil {
+		cancel = active.cancel
+	}
+	now := time.Now()
+	for _, task := range queued {
+		task.status = SubtitleQueueTaskStatusCancelled
+		task.finishedAt = &now
+		task.result = &SubtitleGenerateResult{
+			Status:  SubtitleResultStatusCancelled,
+			VideoID: task.Request.VideoID,
+			Message: "字幕任务已取消",
+		}
+		close(task.done)
+	}
+	snapshot := q.snapshotLocked()
+	q.mu.Unlock()
+	q.emitSnapshot(snapshot)
+	if cancel != nil {
+		cancel()
+	}
+	if active != nil {
+		<-active.done
+	}
+}
+
 func (q *subtitleTaskQueue) snapshot() SubtitleQueueSnapshot {
 	q.mu.Lock()
 	defer q.mu.Unlock()

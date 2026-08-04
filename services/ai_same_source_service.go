@@ -275,7 +275,7 @@ func (s *AISameSourceService) persistDetectedRelation(left, right models.Video, 
 		attribution = attributions[0]
 	}
 	var relation models.VideoSameSourceRelation
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
+	err = database.Transaction(func(tx *gorm.DB) error {
 		createEvaluation := false
 		findErr := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 			Where("video_a_id = ? AND video_b_id = ?", videoAID, videoBID).
@@ -439,7 +439,7 @@ func (s *AISameSourceService) MarkRelationRead(relationID uint) error {
 
 func (s *AISameSourceService) RejectRelation(relationID uint) error {
 	now := s.now()
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		var relation models.VideoSameSourceRelation
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&relation, relationID).Error; err != nil {
 			return err

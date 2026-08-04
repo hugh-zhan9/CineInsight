@@ -408,7 +408,7 @@ func (s *MediaProbeService) Refresh(ctx context.Context, videoID uint) error {
 }
 
 func (s *MediaProbeService) persistSuccess(video models.Video, fingerprint mediaProbeFingerprint, attemptedAt time.Time, parsed parsedMediaProbe) error {
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		var current models.Video
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, video.ID).Error; err != nil {
 			return err

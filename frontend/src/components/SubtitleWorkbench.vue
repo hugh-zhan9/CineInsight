@@ -682,7 +682,7 @@ export default {
   display: grid;
   place-items: center;
   padding: 16px;
-  background: rgba(15, 23, 42, 0.72);
+  background: var(--overlay-strong);
   backdrop-filter: blur(8px);
 }
 

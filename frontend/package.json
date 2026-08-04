@@ -11,7 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "npm run test:components && npm run test:media-details && npm run test:add-tag-selection && npm run test:ai-tag-library && npm run test:ai-tag-review && npm run test:video-list-ui && npm run test:subtitle-workflow && npm run test:virtual-list && npm run test:short-feed && npm run test:migration-tag-management && npm run test:trash-restore && npm run test:subtitle-seek && npm run test:visual-library && npm run test:library-2",
-    "test:components": "vitest run src/components/*.test.js",
+    "test:components": "vitest run src/components/*.test.js src/components/ui/*.test.js src/utils/*.test.js",
     "test:media-details": "node scripts/media-details.test.mjs",
     "test:add-tag-selection": "node scripts/add-tag-selection.test.mjs",
     "test:ai-tag-library": "node scripts/ai-tag-library.test.mjs",

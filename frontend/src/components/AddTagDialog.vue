@@ -1,6 +1,5 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click="$emit('close')">
-    <div class="modal" @click.stop style="max-width: 480px;">
+  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks style="max-width: 480px;" @close="$emit('close')">
       <h2>{{ dialogTitle }}</h2>
 
       <div v-if="isBatchMode" class="batch-summary">
@@ -93,16 +92,17 @@
           {{ applying ? '添加中...' : `添加 ${selectedTagIds.length} 个标签` }}
         </button>
       </div>
-    </div>
-  </div>
+  </BaseModal>
 </template>
 
 <script>
 import { CreateTag, AddTagToVideo, BatchAddTagToVideos, BatchRemoveTagFromVideos } from '../../wailsjs/go/main/App';
 import { selectedTagsFromIds, toggleSelectedTagId, uniqueTagsById } from '../utils/addTagSelection.js';
+import BaseModal from './ui/BaseModal.vue';
 
 export default {
   name: 'AddTagDialog',
+  components: { BaseModal },
   props: {
     visible: { type: Boolean, default: false },
     video: { type: Object, default: null },
@@ -295,7 +295,7 @@ export default {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
   margin-bottom: 6px;
-  background: var(--card-bg);
+  background: var(--panel-solid-bg);
 }
 
 .btn-small {

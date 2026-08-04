@@ -41,10 +41,14 @@ type CleanupSameSourceGroup struct {
 }
 
 type CleanupAnalysis struct {
-	DuplicateGroups  []CleanupDuplicateGroup  `json:"duplicate_groups"`
-	SameSourceGroups []CleanupSameSourceGroup `json:"same_source_groups"`
-	LowDuration      []models.Video           `json:"low_duration"`
-	LowResolution    []models.Video           `json:"low_resolution"`
+	DuplicateGroups     []CleanupDuplicateGroup  `json:"duplicate_groups"`
+	NearDuplicateGroups []CleanupDuplicateGroup  `json:"near_duplicate_groups"`
+	SameSourceGroups    []CleanupSameSourceGroup `json:"same_source_groups"`
+	LowDuration         []models.Video           `json:"low_duration"`
+	LowResolution       []models.Video           `json:"low_resolution"`
+	// StaleHashCount 是源文件已变更、感知哈希失效待重算的视频数；这些视频
+	// 暂不参与近似重复检测，可通过"补全感知哈希"一键重算。
+	StaleHashCount int64 `json:"stale_hash_count"`
 }
 
 type CleanupProgress struct {
@@ -266,6 +270,26 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 			}
 		}
 	}
+	dismissed, err := loadNearDuplicateDismissals()
+	if err != nil {
+		return nil, err
+	}
+	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed))
+	for pair := range exactPairs {
+		excludedPairs[pair] = struct{}{}
+	}
+	for pair := range dismissed {
+		excludedPairs[pair] = struct{}{}
+	}
+	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(excludedPairs)
+	if err != nil {
+		return nil, err
+	}
+	result.NearDuplicateGroups = nearDuplicateGroups
+	result.StaleHashCount = staleHashCount
+	for pair := range nearPairs {
+		exactPairs[pair] = struct{}{}
+	}
 	sameSourceGroups, err := loadCleanupSameSourceGroups(exactPairs)
 	if err != nil {
 		return nil, err
@@ -276,13 +300,13 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 		return result.DuplicateGroups[i].Original.ID < result.DuplicateGroups[j].Original.ID
 	})
 
-	log.Printf("[Cleanup] analysis completed elapsed=%s duplicate_groups=%d same_source_groups=%d low_duration=%d low_resolution=%d hash_candidates=%d",
+	log.Printf("[Cleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d same_source_groups=%d low_duration=%d low_resolution=%d hash_candidates=%d",
 		time.Since(startedAt).Round(time.Millisecond),
-		len(result.DuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution), len(hashCandidates),
+		len(result.DuplicateGroups), len(result.NearDuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution), len(hashCandidates),
 	)
 	s.emitProgress("done", len(hashCandidates), len(hashCandidates), "", fmt.Sprintf(
-		"分析完成：重复组 %d，同源候选 %d，短视频 %d，低清视频 %d。",
-		len(result.DuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution),
+		"分析完成：重复组 %d，近似重复 %d，同源候选 %d，短视频 %d，低清视频 %d。",
+		len(result.DuplicateGroups), len(result.NearDuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution),
 	))
 
 	return result, nil

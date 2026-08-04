@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"log"
 	"math/rand"
 	"os"
 	"time"
@@ -26,6 +27,14 @@ type ShortFeedService struct {
 	videoService *VideoService
 	now          func() time.Time
 	randFloat64  func() float64
+}
+
+type ShortFeedFeedbackSyncResult struct {
+	Enabled        bool  `json:"enabled"`
+	TagID          uint  `json:"tag_id"`
+	LikesAdded     int64 `json:"likes_added"`
+	LikesRemoved   int64 `json:"likes_removed"`
+	FavoritesAdded int64 `json:"favorites_added"`
 }
 
 func NewShortFeedService(videoService *VideoService) *ShortFeedService {
@@ -113,7 +122,7 @@ func (s *ShortFeedService) RecordShortFeedPlayback(videoID uint) (*ShortFeedInte
 	now := s.now()
 	maxDurationSeconds := s.maxDurationSeconds()
 	var interaction models.ShortFeedInteraction
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.First(&video, videoID).Error; err != nil {
 			return err
@@ -146,7 +155,7 @@ func (s *ShortFeedService) SetLiked(videoID uint, liked bool) (*ShortFeedInterac
 	maxDurationSeconds := s.maxDurationSeconds()
 	var interaction models.ShortFeedInteraction
 	wasLiked := false
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.Preload("Tags").First(&video, videoID).Error; err != nil {
 			return err
@@ -180,6 +189,11 @@ func (s *ShortFeedService) SetLiked(videoID uint, liked bool) (*ShortFeedInterac
 	if err != nil {
 		return nil, err
 	}
+	// 交互已提交；投影同步失败只记录日志，不把已成功的操作报成失败。
+	// 投影会在下次交互、设置保存或启动同步时自愈。
+	if _, err := s.SyncFeedback(); err != nil {
+		log.Printf("short-feed: 同步喜欢状态到主片库失败（将于下次同步自愈）: %v", err)
+	}
 	return interactionDTO(&interaction), nil
 }
 
@@ -187,7 +201,7 @@ func (s *ShortFeedService) SetFavorited(videoID uint, favorited bool) (*ShortFee
 	now := s.now()
 	maxDurationSeconds := s.maxDurationSeconds()
 	var interaction models.ShortFeedInteraction
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.First(&video, videoID).Error; err != nil {
 			return err
@@ -196,6 +210,9 @@ func (s *ShortFeedService) SetFavorited(videoID uint, favorited bool) (*ShortFee
 			return ErrShortFeedNoEligibleVideos
 		}
 		return upsertShortFeedInteraction(tx, videoID, func(row *models.ShortFeedInteraction) {
+			if row.Favorited != favorited {
+				row.FavoriteSyncedToLibrary = false
+			}
 			row.Favorited = favorited
 			if favorited {
 				row.FavoritedAt = &now
@@ -208,7 +225,91 @@ func (s *ShortFeedService) SetFavorited(videoID uint, favorited bool) (*ShortFee
 	if err != nil {
 		return nil, err
 	}
+	if _, err := s.SyncFeedback(); err != nil {
+		log.Printf("short-feed: 同步收藏状态到主片库失败（将于下次同步自愈）: %v", err)
+	}
 	return interactionDTO(&interaction), nil
+}
+
+// SyncFeedback projects phone-feed state into the main library. The liked tag
+// is fully owned by this projection and is reconciled both ways. Favorites
+// project exactly once per phone-side favorite action (tracked by
+// favorite_synced_to_library): a feed un-favorite never erases a favorite set
+// manually in the main library, and a manual un-favorite in the main library
+// is never overwritten by a later sync of the same phone-side action.
+func (s *ShortFeedService) SyncFeedback() (ShortFeedFeedbackSyncResult, error) {
+	result := ShortFeedFeedbackSyncResult{}
+	if database.DB == nil {
+		return result, errors.New("database is not initialized")
+	}
+	var settings models.Settings
+	if err := database.DB.Select("short_feed_feedback_sync_enabled").First(&settings).Error; err != nil {
+		return result, err
+	}
+	result.Enabled = settings.ShortFeedFeedbackSyncEnabled
+	if !result.Enabled {
+		return result, nil
+	}
+
+	err := database.Transaction(func(tx *gorm.DB) error {
+		tag, err := ensureShortFeedLikedAutomaticTag(tx)
+		if err != nil {
+			return err
+		}
+		result.TagID = tag.ID
+
+		inserted := tx.Exec(`
+			INSERT INTO video_tags(video_id, tag_id)
+			SELECT interactions.video_id, ?
+			FROM short_feed_interactions interactions
+			JOIN videos ON videos.id = interactions.video_id
+			WHERE interactions.liked = ? AND videos.deleted_at IS NULL
+			ON CONFLICT DO NOTHING
+		`, tag.ID, true)
+		if inserted.Error != nil {
+			return inserted.Error
+		}
+		result.LikesAdded = inserted.RowsAffected
+
+		removed := tx.Exec(`
+			DELETE FROM video_tags
+			WHERE tag_id = ?
+			  AND NOT EXISTS (
+				SELECT 1
+				FROM short_feed_interactions interactions
+				JOIN videos ON videos.id = interactions.video_id
+				WHERE interactions.video_id = video_tags.video_id
+				  AND interactions.liked = ?
+				  AND videos.deleted_at IS NULL
+			  )
+		`, tag.ID, true)
+		if removed.Error != nil {
+			return removed.Error
+		}
+		result.LikesRemoved = removed.RowsAffected
+
+		favorited := tx.Model(&models.Video{}).
+			Where("is_favorite = ?", false).
+			Where("id IN (?)", tx.Model(&models.ShortFeedInteraction{}).Select("video_id").
+				Where("favorited = ? AND favorite_synced_to_library = ?", true, false)).
+			Update("is_favorite", true)
+		if favorited.Error != nil {
+			return favorited.Error
+		}
+		result.FavoritesAdded = favorited.RowsAffected
+
+		// 只把"视频当前已是收藏"的行标记为已同步：并发提交的新收藏若落在
+		// 投影 UPDATE 之后，不会被误标，下次同步仍会投影。
+		marked := tx.Model(&models.ShortFeedInteraction{}).
+			Where("favorited = ? AND favorite_synced_to_library = ?", true, false).
+			Where("video_id IN (?)", tx.Model(&models.Video{}).Select("id").Where("is_favorite = ?", true)).
+			Update("favorite_synced_to_library", true)
+		if marked.Error != nil {
+			return marked.Error
+		}
+		return nil
+	})
+	return result, err
 }
 
 func (s *ShortFeedService) DeleteVideo(videoID uint) error {

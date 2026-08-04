@@ -211,7 +211,7 @@ func (s *PersonService) AddPersonVideos(personID uint, videoIDs []uint) error {
 		return fmt.Errorf("person and at least one video are required")
 	}
 
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var videoCount int64
 		if err := tx.Model(&models.Video{}).Where("id IN ?", videoIDs).Count(&videoCount).Error; err != nil {
 			return err
@@ -244,7 +244,7 @@ func (s *PersonService) RemovePersonVideo(personID, videoID uint) (bool, error) 
 
 	personDeleted := false
 	avatarPath := ""
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).First(&video, videoID).Error; err != nil {
 			return err
@@ -301,7 +301,7 @@ func (s *PersonService) SetVideoPeople(videoID uint, personIDs []uint) error {
 
 	desired := uniqueSortedIDs(personIDs)
 	orphanAvatarPaths := make([]string, 0)
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&video, videoID).Error; err != nil {
 			return err

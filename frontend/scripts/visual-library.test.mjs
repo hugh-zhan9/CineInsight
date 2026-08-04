@@ -4,7 +4,7 @@ import fs from 'node:fs';
 const page = fs.readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
 const row = fs.readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const virtualList = fs.readFileSync(new URL('../src/components/VirtualVideoList.vue', import.meta.url), 'utf8');
-const app = fs.readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
+const sharedCss = fs.readFileSync(new URL('../src/styles/components.css', import.meta.url), 'utf8');
 const previewDrawer = fs.readFileSync(new URL('../src/components/PreviewDrawer.vue', import.meta.url), 'utf8');
 const handler = fs.readFileSync(new URL('../../preview_asset_handler.go', import.meta.url), 'utf8');
 
@@ -14,8 +14,8 @@ assert.match(row, /\/preview\/thumbnail\/\$\{this\.video\.id\}/, 'rows should us
 assert.match(row, /thumbnailFailed/, 'thumbnail failures need a local placeholder');
 assert.match(virtualList, /virtual-video-list--\$\{layoutMode\}/, 'virtual list shell should expose layout styling');
 assert.match(virtualList, /\.virtual-video-list\.virtual-video-list--grid\s*{[^}]*display:\s*grid;[^}]*gap:\s*12px;/s, 'the scoped list shell must switch from flex rows to a real grid');
-assert.match(app, /\.virtual-video-list--grid\s*{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px,\s*220px\)\)/s, 'grid cards should stay compact enough for multiple columns');
-assert.match(app, /\.virtual-video-list--grid\s*{[^}]*justify-content:\s*start/s, 'a partially filled grid row should not stretch cards');
+assert.match(sharedCss, /\.virtual-video-list--grid\s*{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px,\s*220px\)\)/s, 'grid cards should stay compact enough for multiple columns');
+assert.match(sharedCss, /\.virtual-video-list--grid\s*{[^}]*justify-content:\s*start/s, 'a partially filled grid row should not stretch cards');
 assert.match(previewDrawer, /\.preview-drawer__body\s*{[^}]*display:\s*grid[^}]*grid-auto-rows:\s*max-content/s, 'drawer sections must not flex-shrink the player');
 assert.match(previewDrawer, /\.detail-section--player\s*{[^}]*min-height:\s*220px/s, 'player section needs a non-collapsing minimum height');
 assert.match(previewDrawer, /\.preview-drawer__player-shell\s*{[^}]*aspect-ratio:\s*16\s*\/\s*9[^}]*min-height:\s*220px/s, 'player shell should preserve its 16:9 viewport');

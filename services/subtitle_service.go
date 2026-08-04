@@ -152,6 +152,12 @@ func (s *SubtitleService) CancelGeneration() {
 	}
 }
 
+// QuiesceGeneration cancels queued and active subtitle writes and waits until
+// the active task has released its database/file resources.
+func (s *SubtitleService) QuiesceGeneration() {
+	s.subtitleTaskQueue().cancelAllAndWait()
+}
+
 func (s *SubtitleService) GetEngineStatuses() ([]SubtitleEngineStatus, error) {
 	statuses := []SubtitleEngineStatus{
 		s.getWhisperXStatus(),

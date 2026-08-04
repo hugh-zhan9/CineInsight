@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"video-master/services"
 )
 
 func newAssetHandler(app *App) http.Handler {
@@ -37,6 +39,10 @@ func newAssetHandler(app *App) http.Handler {
 			}
 			if strings.HasPrefix(r.URL.Path, "/preview/thumbnail/") {
 				app.serveThumbnail(w, r)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/preview/seek-sprite/") {
+				app.serveSeekSprite(w, r)
 				return
 			}
 		}
@@ -115,6 +121,32 @@ func (a *App) serveThumbnail(w http.ResponseWriter, r *http.Request) {
 	file, err := os.Open(media.Path)
 	if err != nil {
 		http.Error(w, "thumbnail not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
+}
+
+func (a *App) serveSeekSprite(w http.ResponseWriter, r *http.Request) {
+	videoID, err := assetVideoIDFromPath(r.URL.Path, "/preview/seek-sprite/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	media, err := a.thumbnailService.ResolveSeekSprite(r.Context(), videoID)
+	if err != nil {
+		if errors.Is(err, services.ErrSeekSpriteNotReady) || errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "seek sprite not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "seek sprite unavailable", http.StatusInternalServerError)
+		return
+	}
+	file, err := os.Open(media.Path)
+	if err != nil {
+		http.Error(w, "seek sprite not found", http.StatusNotFound)
 		return
 	}
 	defer file.Close()

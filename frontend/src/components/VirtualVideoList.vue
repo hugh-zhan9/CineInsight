@@ -280,6 +280,24 @@ export default {
       }
       return this.estimateHeight(item, this.widthBucket, this.subtitleMode);
     },
+    scrollToItem(itemId) {
+      const row = this.$el?.querySelector?.(`[data-virtual-row-id="${Number(itemId)}"]`);
+      if (row && typeof row.scrollIntoView === 'function') {
+        row.scrollIntoView({ block: 'nearest' });
+        return;
+      }
+      if (!this.virtualizationEnabled || !this.scrollOwnerEl) return;
+      const index = this.items.findIndex(item => Number(item.id) === Number(itemId));
+      if (index < 0) return;
+      this.scrollOwnerEl.scrollTop = this.rangeEngine.calculateAnchorScrollTop({
+        items: this.items,
+        listTop: this.getListTop(),
+        anchorIndex: index,
+        anchorOffsetWithin: 0,
+        getItemHeight: (item) => this.getItemHeight(item)
+      });
+      this.syncWindow();
+    },
     syncWindow(force = false) {
       if (!this.virtualizationEnabled || !this.scrollOwnerEl || this.scrollOwnerMissing) {
         this.startIndex = 0;

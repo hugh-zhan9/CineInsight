@@ -1,6 +1,5 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click="$emit('close')">
-    <div class="modal" @click.stop>
+  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks @close="$emit('close')">
       <h2>扫描视频目录</h2>
       <div class="form-group">
         <button @click="selectDir" class="btn-primary">选择目录</button>
@@ -12,7 +11,7 @@
         <p>正在处理 {{ scanProgress.processed }}/{{ scanProgress.total }}</p>
         <p>新增 {{ scanProgress.imported }} 个，删除 {{ scanProgress.deleted }} 个，跳过 {{ scanProgress.skipped }} 个</p>
       </div>
-      <div v-if="!scanProgress.scanning && scanProgress.statusMessage" class="scan-result" style="margin-top: 15px; color: #4caf50; font-weight: bold;">
+      <div v-if="!scanProgress.scanning && scanProgress.statusMessage" class="scan-result" style="margin-top: 15px; color: var(--success-bright); font-weight: bold;">
         <p>{{ scanProgress.statusMessage }}</p>
       </div>
       <div class="modal-actions">
@@ -23,15 +22,16 @@
           {{ scanProgress.statusMessage ? '关闭' : '取消' }}
         </button>
       </div>
-    </div>
-  </div>
+  </BaseModal>
 </template>
 
 <script>
 import { SelectDirectory, ScanDirectory, AddVideo, DeleteVideo, GetVideosByDirectory, AddDirectory } from '../../wailsjs/go/main/App';
+import BaseModal from './ui/BaseModal.vue';
 
 export default {
   name: 'ScanDialog',
+  components: { BaseModal },
   props: {
     visible: { type: Boolean, default: false },
     directories: { type: Array, default: () => [] },

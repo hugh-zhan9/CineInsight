@@ -142,7 +142,7 @@ func TestShortFeedSkipsMissingFilesBeforeReturningNextVideo(t *testing.T) {
 	}
 }
 
-func TestShortFeedLikeFavoriteDoNotPolluteCanonicalTags(t *testing.T) {
+func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()
 	tag := createShortFeedTag(t, "人物")
@@ -161,11 +161,22 @@ func TestShortFeedLikeFavoriteDoNotPolluteCanonicalTags(t *testing.T) {
 		t.Fatalf("设置收藏失败: %v", err)
 	}
 
-	if got := countShortFeedRows(t, "tags"); got != beforeTags {
-		t.Fatalf("like/favorite 不应改变 tags 数量，got=%d want=%d", got, beforeTags)
+	if got := countShortFeedRows(t, "tags"); got != beforeTags+1 {
+		t.Fatalf("喜欢应创建一个自动标签，got=%d want=%d", got, beforeTags+1)
 	}
-	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags {
-		t.Fatalf("like/favorite 不应改变 video_tags 数量，got=%d want=%d", got, beforeVideoTags)
+	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags+1 {
+		t.Fatalf("喜欢应只增加一个自动标签关联，got=%d want=%d", got, beforeVideoTags+1)
+	}
+	var likedTag models.Tag
+	if err := database.DB.Where("automatic_kind = ?", shortFeedLikedTagKind).First(&likedTag).Error; err != nil {
+		t.Fatalf("读取喜欢自动标签失败: %v", err)
+	}
+	if likedTag.Name != ShortFeedLikedTagName {
+		t.Fatalf("喜欢自动标签名称=%q", likedTag.Name)
+	}
+	var reloaded models.Video
+	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
+		t.Fatalf("手机收藏应同步到主片库: favorite=%v err=%v", reloaded.IsFavorite, err)
 	}
 	var preference models.ShortFeedTagPreference
 	if err := database.DB.Where("tag_id = ?", tag.ID).First(&preference).Error; err != nil {
@@ -173,6 +184,68 @@ func TestShortFeedLikeFavoriteDoNotPolluteCanonicalTags(t *testing.T) {
 	}
 	if preference.Score != ShortFeedPreferenceStep {
 		t.Fatalf("重复 liked=true 应保持 set-state 幂等，score=%.2f", preference.Score)
+	}
+
+	if _, err := svc.SetLiked(video.ID, false); err != nil {
+		t.Fatalf("取消喜欢失败: %v", err)
+	}
+	if got := countShortFeedRows(t, "tags"); got != beforeTags+1 {
+		t.Fatalf("取消喜欢不应删除自动标签，got=%d", got)
+	}
+	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags {
+		t.Fatalf("取消喜欢应移除自动标签关联，got=%d want=%d", got, beforeVideoTags)
+	}
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_favorite", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SyncFeedback(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || reloaded.IsFavorite {
+		t.Fatalf("主库手动取消收藏不应被后续同步覆盖: favorite=%v err=%v", reloaded.IsFavorite, err)
+	}
+
+	if _, err := svc.SetFavorited(video.ID, false); err != nil {
+		t.Fatalf("手机取消收藏失败: %v", err)
+	}
+	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || reloaded.IsFavorite {
+		t.Fatalf("手机取消收藏不应改变主库状态: favorite=%v err=%v", reloaded.IsFavorite, err)
+	}
+	if _, err := svc.SetFavorited(video.ID, true); err != nil {
+		t.Fatalf("手机重新收藏失败: %v", err)
+	}
+	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
+		t.Fatalf("手机端新的收藏动作应重新投影到主库: favorite=%v err=%v", reloaded.IsFavorite, err)
+	}
+}
+
+func TestShortFeedFeedbackSyncDisabledDoesNotRemoveExistingProjection(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	video := createShortFeedVideo(t, root, "disabled.mp4", 80, false)
+	svc := NewShortFeedService(&VideoService{})
+	if _, err := svc.SetLiked(video.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetFavorited(video.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	beforeVideoTags := countShortFeedRows(t, "video_tags")
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("short_feed_feedback_sync_enabled", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetLiked(video.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.SetFavorited(video.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags {
+		t.Fatalf("关闭同步不得删除既有标签关联，got=%d want=%d", got, beforeVideoTags)
+	}
+	var reloaded models.Video
+	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
+		t.Fatalf("关闭同步不得清除既有主片库收藏: favorite=%v err=%v", reloaded.IsFavorite, err)
 	}
 }
 

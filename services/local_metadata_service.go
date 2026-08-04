@@ -109,6 +109,9 @@ type LocalMetadataService struct {
 	backfill        *localMetadataBackfill
 	backfillLoad    func(context.Context) ([]models.Video, error)
 	backfillProcess func(context.Context, uint) (bool, error)
+	exportInit      sync.Once
+	exportTask      *localMetadataExportTask
+	exportProcess   func(context.Context, uint) (*LocalMetadataNFOExportResult, error)
 }
 
 func NewLocalMetadataService(dataDir string, people *PersonService, collections *CollectionService) *LocalMetadataService {
@@ -117,6 +120,8 @@ func NewLocalMetadataService(dataDir string, people *PersonService, collections 
 	}
 	service.backfillLoad = loadLocalMetadataBackfillVideos
 	service.backfillProcess = service.processLocalMetadataBackfillVideo
+	service.exportTask = &localMetadataExportTask{}
+	service.exportProcess = service.ExportVideoNFO
 	return service
 }
 

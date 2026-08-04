@@ -1,6 +1,6 @@
 <template>
   <div
-    :class="['video-item', `video-item--${layoutMode}`, { 'video-item--selected': selected }]"
+    :class="['video-item', `video-item--${layoutMode}`, { 'video-item--selected': selected, 'video-item--focused': keyboardFocused }]"
     @contextmenu.prevent="$emit('contextmenu', $event, video)"
   >
     <label class="video-select" @click.stop>
@@ -36,6 +36,8 @@
         <span v-if="video.is_watched" class="video-watched">已看</span>
         <span v-if="video.personal_rating !== null && video.personal_rating !== undefined" class="meta-divider">|</span>
         <span v-if="video.personal_rating !== null && video.personal_rating !== undefined" class="video-rating">评分 {{ video.personal_rating }}/10</span>
+        <span v-if="video._semanticScore !== null && video._semanticScore !== undefined" class="meta-divider">|</span>
+        <span v-if="video._semanticScore !== null && video._semanticScore !== undefined" class="video-semantic-score">相似度 {{ formatSemanticScore(video._semanticScore) }}</span>
       </div>
       <div v-if="watchProgressPercent > 0" class="video-watch-progress" :title="watchProgressLabel">
         <span :style="{ width: `${watchProgressPercent}%` }"></span>
@@ -60,32 +62,32 @@
     <div class="video-actions">
       <div class="row-primary-actions">
         <button @click="$emit('preview', video)" class="btn-secondary btn-compact">预览</button>
-        <button @click="$emit('play', video.id)" class="btn-action btn-compact">播放</button>
+        <button @click="$emit('play', video.id)" class="btn-secondary btn-compact">播放</button>
         <button
           @click="$emit('toggle-favorite', video)"
-          :class="['btn-action', 'btn-compact', { active: video.is_favorite }]"
+          :class="['btn-secondary', 'btn-compact', { active: video.is_favorite }]"
           :aria-pressed="!!video.is_favorite"
         >{{ video.is_favorite ? '★ 已收藏' : '☆ 收藏' }}</button>
         <button
           @click="$emit('toggle-watched', video)"
-          :class="['btn-action', 'btn-compact', { active: video.is_watched }]"
+          :class="['btn-secondary', 'btn-compact', { active: video.is_watched }]"
           :aria-pressed="!!video.is_watched"
         >{{ video.is_watched ? '✓ 已看' : '标记已看' }}</button>
       </div>
       <div class="row-secondary-actions">
-      <button @click="$emit('open-directory', video.id)" class="btn-action btn-compact">目录</button>
+      <button @click="$emit('open-directory', video.id)" class="btn-secondary btn-compact">目录</button>
       <button
         @click="$emit('generate-subtitle', video)"
-        class="btn-action btn-compact"
+        class="btn-secondary btn-compact"
         :class="{ 'btn-processing': generatingSubtitleIds.includes(video.id) }"
         :disabled="generatingSubtitleIds.includes(video.id)"
       >
         {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
       </button>
-      <button @click="$emit('subtitle-edit', video)" class="btn-action btn-compact">编辑字幕</button>
-      <button @click="$emit('subtitle-preview', video)" class="btn-action btn-compact">预览字幕</button>
-      <button @click="$emit('rename', video)" class="btn-action btn-compact">重命名</button>
-      <button @click="$emit('move', video)" class="btn-action btn-compact">迁移</button>
+      <button @click="$emit('subtitle-edit', video)" class="btn-secondary btn-compact">编辑字幕</button>
+      <button @click="$emit('subtitle-preview', video)" class="btn-secondary btn-compact">预览字幕</button>
+      <button @click="$emit('rename', video)" class="btn-secondary btn-compact">重命名</button>
+      <button @click="$emit('move', video)" class="btn-secondary btn-compact">迁移</button>
       <button @click="$emit('delete', video)" class="btn-danger btn-compact" :disabled="deletingIds.includes(video.id)">删除</button>
       </div>
     </div>
@@ -101,6 +103,7 @@ export default {
     generatingSubtitleIds: { type: Array, default: () => [] },
     deletingIds: { type: Array, default: () => [] },
     selected: { type: Boolean, default: false },
+    keyboardFocused: { type: Boolean, default: false },
     layoutMode: { type: String, default: 'list' }
   },
   emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-directory', 'generate-subtitle', 'subtitle-edit', 'subtitle-preview', 'rename', 'move', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
@@ -127,6 +130,9 @@ export default {
     }
   },
   methods: {
+    formatSemanticScore(value) {
+      return `${Math.round(Math.max(-1, Math.min(1, Number(value) || 0)) * 100)}%`;
+    },
     tagBgColor(hex) {
       if (!hex || !hex.startsWith('#')) return hex;
       const r = parseInt(hex.slice(1, 3), 16);

@@ -99,7 +99,7 @@ func (s *VideoService) MoveVideo(id uint, destinationDirectory string) (*FileMig
 		subtitleMoved = true
 	}
 
-	updateErr := database.DB.Transaction(func(tx *gorm.DB) error {
+	updateErr := database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&video).Updates(map[string]interface{}{
 			"path":      newPath,
 			"directory": destinationDirectory,
@@ -265,7 +265,7 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 	}
 
 	result := &FolderMigrationResult{Source: sourceDirectory, Destination: destinationDirectory}
-	updateErr := database.DB.Transaction(func(tx *gorm.DB) error {
+	updateErr := database.Transaction(func(tx *gorm.DB) error {
 		for i := range videos {
 			if !pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
 				continue
@@ -441,7 +441,7 @@ func (s *VideoService) RenameDirectory(sourceDirectory, newName string) (*Folder
 		return cause
 	}
 
-	updateErr := database.DB.Transaction(func(tx *gorm.DB) error {
+	updateErr := database.Transaction(func(tx *gorm.DB) error {
 		for i := range videos {
 			if !pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
 				continue

@@ -1,6 +1,7 @@
 package database
 
 import (
+	"errors"
 	"path/filepath"
 	"testing"
 	"time"
@@ -9,6 +10,66 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
+
+func TestMaintenanceGateWaitsForTransactionsAndRejectsNewOperations(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "maintenance.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.AutoMigrate(&models.Settings{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := registerMaintenanceCallbacks(db); err != nil {
+		t.Fatal(err)
+	}
+	previousDB := DB
+	DB = db
+	t.Cleanup(func() { DB = previousDB })
+
+	transactionStarted := make(chan struct{})
+	finishTransaction := make(chan struct{})
+	transactionDone := make(chan error, 1)
+	go func() {
+		transactionDone <- Transaction(func(_ *gorm.DB) error {
+			close(transactionStarted)
+			<-finishTransaction
+			return nil
+		})
+	}()
+	<-transactionStarted
+
+	maintenanceAcquired := make(chan func(), 1)
+	go func() { maintenanceAcquired <- BeginMaintenance() }()
+	select {
+	case <-maintenanceAcquired:
+		t.Fatal("maintenance must wait for the active transaction")
+	case <-time.After(20 * time.Millisecond):
+	}
+	close(finishTransaction)
+	if err := <-transactionDone; err != nil {
+		t.Fatal(err)
+	}
+
+	var release func()
+	select {
+	case release = <-maintenanceAcquired:
+	case <-time.After(time.Second):
+		t.Fatal("maintenance did not acquire after transaction completed")
+	}
+	if err := DB.Create(&models.Settings{}).Error; !errors.Is(err, ErrMaintenance) {
+		t.Fatalf("direct operation during maintenance error=%v", err)
+	}
+	if err := Transaction(func(_ *gorm.DB) error { return nil }); !errors.Is(err, ErrMaintenance) {
+		t.Fatalf("explicit transaction during maintenance error=%v", err)
+	}
+	if err := WithMaintenanceAccess(DB).Create(&models.Settings{}).Error; err != nil {
+		t.Fatalf("restore lifecycle access during maintenance failed: %v", err)
+	}
+	release()
+	if err := DB.Create(&models.Settings{}).Error; err != nil {
+		t.Fatalf("operation after maintenance release failed: %v", err)
+	}
+}
 
 func TestInitUsesPostgresEnv(t *testing.T) {
 	t.Setenv("PG_HOST", "127.0.0.1")

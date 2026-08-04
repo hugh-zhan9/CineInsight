@@ -69,6 +69,8 @@ assert.match(videoListSource, /@click="previewCleanupVideo\(/, 'cleanup candidat
 assert.match(videoListSource, /cleanup-item-actions/, 'cleanup candidate rows should reserve an actions area');
 assert.match(videoListSource, /短视频：时长 < 5 秒/, 'cleanup dialog should explain the short-video threshold');
 assert.match(videoListSource, /低清视频：分辨率低于 480x320/, 'cleanup dialog should explain the low-resolution threshold');
+assert.match(videoListSource, /近似重复（不同转码，不会默认选中）/, 'near-duplicate groups should state that they are not selected by default');
+assert.match(videoListSource, /near_duplicate_groups/, 'cleanup dialog should render perceptual-hash near-duplicate groups');
 assert.match(videoListSource, /低清视频[\s\S]*短视频/, 'low-resolution section should appear before short-video section');
 assert.match(videoListSource, /GetPreviewSession/, 'cleanup preview should validate file availability before opening');
 assert.match(videoListSource, /StartCleanupAnalysis/, 'cleanup analysis should start as a background task');

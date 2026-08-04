@@ -122,6 +122,12 @@ func localMetadataFailure(videoID uint, err error) LocalMetadataFailure {
 		code = "metadata_conflict"
 	case errors.Is(err, ErrLocalMetadataOverwriteRequired):
 		code = "overwrite_required"
+	case errors.Is(err, ErrLocalMetadataNFOInvalid):
+		code = "nfo_invalid"
+	case errors.Is(err, ErrLocalMetadataNFOSymlink):
+		code = "nfo_symlink"
+	case errors.Is(err, ErrLocalMetadataNFOConflict):
+		code = "nfo_conflict"
 	case errors.Is(err, gorm.ErrRecordNotFound):
 		code = "video_not_found"
 	}
