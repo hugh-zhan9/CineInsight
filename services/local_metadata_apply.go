@@ -133,7 +133,7 @@ func (s *LocalMetadataService) Apply(request LocalMetadataApplyRequest) (*LocalM
 	}
 	appliedFields := make([]string, 0, len(selected))
 	oldArtwork := make([]string, 0, 2)
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
+	err = database.Transaction(func(tx *gorm.DB) error {
 		video, currentPeople, currentCollections, loadErr := loadLockedLocalMetadataCurrent(tx, request.VideoID)
 		if loadErr != nil {
 			return loadErr

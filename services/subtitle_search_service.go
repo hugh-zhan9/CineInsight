@@ -264,7 +264,7 @@ func replaceSubtitleIndex(video models.Video, srtPath string, segments []subtitl
 		return err
 	}
 
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		return replaceSubtitleIndexTx(tx, video, srtPath, info, segments)
 	})
 }
@@ -318,7 +318,7 @@ func replaceSubtitleIndexTx(tx *gorm.DB, video models.Video, srtPath string, inf
 }
 
 func deleteSubtitleIndex(videoID uint) error {
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("video_id = ?", videoID).Delete(&models.SubtitleSegment{}).Error; err != nil {
 			return err
 		}

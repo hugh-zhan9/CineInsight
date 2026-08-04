@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
+	"video-master/database"
 	"video-master/models"
 	"video-master/services"
 	"video-master/services/subtitleparser"
@@ -36,6 +38,7 @@ type App struct {
 	thumbnailService      *services.ThumbnailService
 	tagService            *services.TagService
 	settingsService       *services.SettingsService
+	backupService         *services.BackupService
 	directoryService      *services.DirectoryService
 	subtitleService       *services.SubtitleService
 	subtitleWorkbench     *services.SubtitleWorkbenchService
@@ -47,14 +50,26 @@ type App struct {
 	personService         *services.PersonService
 	collectionService     *services.CollectionService
 	videoDetailService    *services.VideoDetailService
+	libraryStatsService   *services.LibraryStatsService
 	localMetadata         *services.LocalMetadataService
 	mediaProbeService     *services.MediaProbeService
 	technicalBackfill     *services.TechnicalBackfillService
+	perceptualHash        *services.PerceptualHashService
+	enhancement           *services.EnhancementService
+	semanticIndex         *services.SemanticIndexService
 	libraryWatcher        *services.LibraryWatcherService
 	shortFeedServer       *services.ShortFeedHTTPServer
 	shortFeedStartupError string
 	startupError          string
 	logFile               *os.File // 保持日志文件句柄引用，防止泄漏
+	backupCancel          context.CancelFunc
+	backupWG              sync.WaitGroup
+	backupOpMu            sync.Mutex
+	backupOpsClosed       bool
+	semanticMu            sync.RWMutex
+	restoreMu             sync.Mutex
+	restoreTerminal       bool
+	restoreRelease        func()
 }
 
 // NewApp creates a new App application struct
@@ -77,6 +92,7 @@ func NewApp() *App {
 		thumbnailService:      services.NewThumbnailService(videoService, dataDir),
 		tagService:            &services.TagService{},
 		settingsService:       &services.SettingsService{},
+		backupService:         services.NewBackupService(dataDir),
 		directoryService:      &services.DirectoryService{},
 		subtitleService:       subtitleService,
 		subtitleWorkbench:     services.NewSubtitleWorkbenchService(subtitleService),
@@ -88,9 +104,12 @@ func NewApp() *App {
 		personService:         personService,
 		collectionService:     collectionService,
 		videoDetailService:    services.NewVideoDetailService(personService, collectionService),
+		libraryStatsService:   services.NewLibraryStatsService(),
 		localMetadata:         localMetadata,
 		mediaProbeService:     mediaProbeService,
 		technicalBackfill:     services.NewTechnicalBackfillService(mediaProbeService),
+		perceptualHash:        services.NewPerceptualHashService(),
+		enhancement:           services.NewEnhancementService(videoService, mediaProbeService, aiTaggingService.SameSourceService()),
 		libraryWatcher:        libraryWatcher,
 	}
 }
@@ -114,8 +133,15 @@ func (a *App) startup(ctx context.Context) {
 		}
 		runtime.EventsEmit(ctx, event, data)
 	}
+	a.resetSemanticIndexService()
 	a.technicalBackfill.SetEventEmitter(func(status services.TechnicalBackfillStatus) {
 		emit("technical-backfill-state", status)
+	})
+	a.perceptualHash.SetEventEmitter(func(status services.PerceptualHashStatus) {
+		if status.Completed && status.Succeeded > 0 {
+			a.cleanupService.InvalidateAnalysis()
+		}
+		emit("perceptual-hash-state", status)
 	})
 	a.libraryWatcher.SetEventEmitters(func(status services.LibraryWatcherStatus) {
 		emit("library-watcher-status", status)
@@ -131,11 +157,24 @@ func (a *App) startup(ctx context.Context) {
 	a.localMetadata.SetBackfillEventEmitter(func(status services.LocalMetadataBackfillStatus) {
 		emit("local-metadata-backfill", status)
 	})
+	a.localMetadata.SetExportEventEmitter(func(status services.LocalMetadataExportStatus) {
+		emit("local-metadata-export", status)
+	})
+	a.enhancement.SetEventEmitter(func(view services.EnhancementTaskView) {
+		emit("video-enhancement-state", view)
+	})
+	// 对账可能包含大文件 SHA-256，异步执行避免阻塞窗口可用。
+	go a.enhancement.RecoverOnStartup(ctx)
 	a.cleanupService.SetContext(ctx)
 	if result, err := a.tagService.SyncShortVideoTags(); err != nil {
 		log.Printf("App startup short-video tag sync failed err=%v", err)
 	} else {
 		log.Printf("App startup short-video tag sync tag=%d added=%d removed=%d", result.TagID, result.Added, result.Removed)
+	}
+	if result, err := a.shortFeedService.SyncFeedback(); err != nil {
+		log.Printf("App startup short-feed feedback sync failed err=%v", err)
+	} else if result.Enabled {
+		log.Printf("App startup short-feed feedback sync tag=%d likes_added=%d likes_removed=%d favorites_added=%d", result.TagID, result.LikesAdded, result.LikesRemoved, result.FavoritesAdded)
 	}
 	a.aiTaggingService.Start(ctx)
 	a.startShortFeedServer(ctx)
@@ -146,13 +185,50 @@ func (a *App) startup(ctx context.Context) {
 			log.Printf("App startup library watcher configuration failed err=%v", err)
 		}
 		a.configureLocalMetadata(settings.LocalMetadataEnabled)
+		backupCtx, backupCancel := context.WithCancel(ctx)
+		a.backupCancel = backupCancel
+		a.backupWG.Add(1)
+		go func() {
+			defer a.backupWG.Done()
+			if _, err := a.backupService.MaybeBackup(backupCtx); err != nil && backupCtx.Err() == nil {
+				log.Printf("App startup automatic database backup failed err=%v", err)
+			}
+		}()
 	} else {
 		log.Printf("App startup settings load failed err=%v", err)
 	}
 }
 
+// beginBackupOperation 在 backupWG 上安全登记一次操作：关闭后拒绝新操作，
+// 避免 Add 与 shutdown 的 Wait 并发（sync.WaitGroup 复用误用会 panic）。
+func (a *App) beginBackupOperation() error {
+	a.backupOpMu.Lock()
+	defer a.backupOpMu.Unlock()
+	if a.backupOpsClosed {
+		return fmt.Errorf("应用正在退出，备份操作不可用")
+	}
+	a.backupWG.Add(1)
+	return nil
+}
+
+// semanticIndexService 以读锁返回当前语义索引服务指针；恢复失败路径会
+// 重建该指针，绑定读取与重建之间需要同步。
+func (a *App) semanticIndexService() *services.SemanticIndexService {
+	a.semanticMu.RLock()
+	defer a.semanticMu.RUnlock()
+	return a.semanticIndex
+}
+
 func (a *App) shutdown(ctx context.Context) {
+	if a.backupCancel != nil {
+		a.backupCancel()
+	}
+	a.backupOpMu.Lock()
+	a.backupOpsClosed = true
+	a.backupOpMu.Unlock()
+	a.backupWG.Wait()
 	if a.localMetadata != nil {
+		a.localMetadata.StopExport()
 		a.localMetadata.StopBackfill()
 	}
 	if a.libraryWatcher != nil {
@@ -161,10 +237,19 @@ func (a *App) shutdown(ctx context.Context) {
 		}
 	}
 	if a.technicalBackfill != nil {
-		_ = a.technicalBackfill.Cancel()
+		a.technicalBackfill.StopAndWait()
+	}
+	if a.enhancement != nil {
+		a.enhancement.StopAndWait()
+	}
+	if a.perceptualHash != nil {
+		a.perceptualHash.StopAndWait()
+	}
+	if svc := a.semanticIndexService(); svc != nil {
+		svc.StopAndWait()
 	}
 	if a.aiTaggingService != nil {
-		a.aiTaggingService.Stop()
+		a.aiTaggingService.StopAndWait()
 	}
 	if a.shortFeedServer != nil {
 		if err := a.shortFeedServer.Stop(ctx); err != nil {
@@ -381,6 +466,10 @@ func (a *App) GetVideoDetails(videoID uint) (*services.VideoDetails, error) {
 	return a.videoDetailService.GetVideoDetails(videoID)
 }
 
+func (a *App) GetLibraryInsights() (*services.LibraryStats, error) {
+	return a.libraryStatsService.GetStats()
+}
+
 func (a *App) UpdateVideoDetails(input services.VideoDetailsUpdate) (*services.VideoDetails, error) {
 	return a.videoDetailService.UpdateVideoDetails(input)
 }
@@ -439,6 +528,30 @@ func (a *App) CancelLocalMetadataBackfill() error {
 	return a.localMetadata.CancelBackfill()
 }
 
+func (a *App) ExportLocalMetadataNFO(videoID uint) (*services.LocalMetadataNFOExportResult, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.localMetadata.ExportVideoNFO(ctx, videoID)
+}
+
+func (a *App) StartLocalMetadataExport(request services.LocalMetadataExportRequest) (services.LocalMetadataExportStatus, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.localMetadata.StartExport(ctx, request)
+}
+
+func (a *App) GetLocalMetadataExportStatus() services.LocalMetadataExportStatus {
+	return a.localMetadata.ExportStatus()
+}
+
+func (a *App) CancelLocalMetadataExport() error {
+	return a.localMetadata.CancelExport()
+}
+
 func (a *App) ResolveVideoArtwork(videoID uint, kind string) (*services.VideoArtworkData, error) {
 	return a.localMetadata.ResolveVideoArtwork(videoID, kind)
 }
@@ -457,6 +570,74 @@ func (a *App) GetTechnicalBackfillStatus() services.TechnicalBackfillStatus {
 
 func (a *App) CancelTechnicalBackfill() error {
 	return a.technicalBackfill.Cancel()
+}
+
+func (a *App) StartPerceptualHashBackfill() (services.PerceptualHashStatus, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.perceptualHash.Start(ctx)
+}
+
+func (a *App) GetPerceptualHashBackfillStatus() services.PerceptualHashStatus {
+	return a.perceptualHash.Status()
+}
+
+func (a *App) CancelPerceptualHashBackfill() error {
+	return a.perceptualHash.Cancel()
+}
+
+func (a *App) StartSemanticIndex(request services.SemanticIndexBuildRequest) (services.SemanticIndexStatus, error) {
+	svc := a.semanticIndexService()
+	if svc == nil {
+		return services.SemanticIndexStatus{}, services.ErrSemanticIndexUnavailable
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return svc.Start(ctx, request)
+}
+
+func (a *App) GetSemanticIndexStatus() services.SemanticIndexStatus {
+	svc := a.semanticIndexService()
+	if svc == nil {
+		return services.SemanticIndexStatus{Available: false, Unavailable: "数据库未初始化"}
+	}
+	return svc.Status()
+}
+
+func (a *App) CancelSemanticIndex() error {
+	svc := a.semanticIndexService()
+	if svc == nil {
+		return services.ErrSemanticIndexUnavailable
+	}
+	return svc.Cancel()
+}
+
+func (a *App) SearchSemanticVideos(request services.SemanticSearchRequest) (*services.SemanticSearchPage, error) {
+	svc := a.semanticIndexService()
+	if svc == nil {
+		return nil, services.ErrSemanticIndexUnavailable
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return svc.Search(ctx, request)
+}
+
+func (a *App) FindSimilarVideos(request services.SemanticSimilarRequest) (*services.SemanticSearchPage, error) {
+	svc := a.semanticIndexService()
+	if svc == nil {
+		return nil, services.ErrSemanticIndexUnavailable
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return svc.FindSimilar(ctx, request)
 }
 
 // ListPeople returns stable local person candidates and their active video counts.
@@ -994,9 +1175,174 @@ func (a *App) UpdateSettings(input models.Settings) error {
 		if watchErr := a.configureLibraryWatcher(input.LibraryWatchEnabled); watchErr != nil {
 			log.Printf("Library watcher settings apply failed err=%v", watchErr)
 		}
+		// 设置已保存；回流同步失败只记录（下次交互/启动同步自愈），
+		// 不把已成功的设置保存报成失败。
+		if _, syncErr := a.shortFeedService.SyncFeedback(); syncErr != nil {
+			log.Printf("Short-feed feedback settings apply failed err=%v", syncErr)
+		}
 	}
 	log.Printf("API UpdateSettings err=%v", err)
 	return err
+}
+
+func (a *App) GetBackupStatus() services.BackupStatus {
+	return a.backupService.GetStatus()
+}
+
+func (a *App) ListDatabaseBackups() ([]services.BackupFile, error) {
+	return a.backupService.ListBackups()
+}
+
+func (a *App) CreateDatabaseBackup() (*services.BackupFile, error) {
+	if err := a.beginBackupOperation(); err != nil {
+		return nil, err
+	}
+	defer a.backupWG.Done()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.backupService.CreateBackup(ctx)
+}
+
+func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error {
+	if err := a.beginBackupOperation(); err != nil {
+		return err
+	}
+	defer a.backupWG.Done()
+	a.restoreMu.Lock()
+	defer a.restoreMu.Unlock()
+	if a.restoreTerminal {
+		return fmt.Errorf("数据库恢复已完成或进入不可恢复状态，请等待应用退出后重新打开")
+	}
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	err := a.backupService.RestoreBackupWithLifecycle(ctx, request, a.enterDatabaseRestoreMode, database.Init)
+	if err == nil || services.DatabaseRestoreRequiresRestart(err) {
+		a.restoreTerminal = true
+		_ = database.Close()
+		if a.ctx != nil {
+			go func(runtimeCtx context.Context) {
+				time.Sleep(150 * time.Millisecond)
+				runtime.Quit(runtimeCtx)
+			}(a.ctx)
+		} else {
+			// 运行时上下文不可用（理论上只在启动完成前触发）：仍然退出进程，
+			// 避免恢复完成后应用停留在数据库已关闭的僵死状态。
+			go func() {
+				time.Sleep(150 * time.Millisecond)
+				log.Printf("Database restore finished without runtime context; exiting process")
+				os.Exit(0)
+			}()
+		}
+		return err
+	}
+	a.resumeAfterDatabaseRestoreFailure()
+	return err
+}
+
+func (a *App) enterDatabaseRestoreMode() error {
+	if a.aiTaggingService != nil {
+		a.aiTaggingService.StopAndWait()
+	}
+	if a.localMetadata != nil {
+		a.localMetadata.StopExport()
+		a.localMetadata.StopBackfill()
+	}
+	if a.libraryWatcher != nil {
+		if err := a.libraryWatcher.Close(); err != nil {
+			return err
+		}
+	}
+	if a.technicalBackfill != nil {
+		a.technicalBackfill.StopAndWait()
+	}
+	if a.enhancement != nil {
+		a.enhancement.StopAndWait()
+	}
+	if a.perceptualHash != nil {
+		a.perceptualHash.StopAndWait()
+	}
+	if svc := a.semanticIndexService(); svc != nil {
+		svc.StopAndWait()
+	}
+	if a.subtitleService != nil {
+		a.subtitleService.QuiesceGeneration()
+	}
+	if a.shortFeedServer != nil {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := a.shortFeedServer.Stop(stopCtx); err != nil {
+			return err
+		}
+	}
+	pathRelease := services.BeginLibraryMaintenance()
+	databaseRelease := database.BeginMaintenance()
+	a.restoreRelease = func() {
+		databaseRelease()
+		pathRelease()
+	}
+	if err := database.Close(); err != nil {
+		return &services.DatabaseRestoreError{
+			Fatal: true,
+			Err:   fmt.Errorf("关闭数据库连接失败，应用必须重启: %w", err),
+		}
+	}
+	return nil
+}
+
+func (a *App) resumeAfterDatabaseRestoreFailure() {
+	a.releaseDatabaseRestoreMode()
+	if a.ctx == nil {
+		return
+	}
+	a.aiTaggingService.Start(a.ctx)
+	a.resetSemanticIndexService()
+	a.startShortFeedServer(a.ctx)
+	if settings, err := a.settingsService.GetSettings(); err == nil {
+		_ = a.configureLibraryWatcher(settings.LibraryWatchEnabled)
+		a.configureLocalMetadata(settings.LocalMetadataEnabled)
+	}
+}
+
+func (a *App) resetSemanticIndexService() {
+	if database.DB == nil {
+		a.semanticMu.Lock()
+		a.semanticIndex = nil
+		a.semanticMu.Unlock()
+		return
+	}
+	capability := database.PrepareSemanticVectorStorage(database.DB)
+	provider := services.SemanticIndexConfigProviderFunc(func() (services.SemanticIndexConfig, error) {
+		config, err := (services.SettingsAITaggingConfigProvider{}).Load()
+		if err != nil {
+			return services.SemanticIndexConfig{}, err
+		}
+		semanticConfig := services.SemanticIndexConfigFromAITagging(config)
+		var settings models.Settings
+		if err := database.DB.First(&settings).Error; err == nil && strings.TrimSpace(settings.SemanticEmbeddingModel) != "" {
+			semanticConfig.Model = strings.TrimSpace(settings.SemanticEmbeddingModel)
+		}
+		return semanticConfig, nil
+	})
+	service := services.NewSemanticIndexService(database.DB, capability, provider)
+	service.SetEventEmitter(func(status services.SemanticIndexStatus) {
+		if a.ctx != nil && a.ctx.Err() == nil {
+			runtime.EventsEmit(a.ctx, "semantic-index-state", status)
+		}
+	})
+	a.semanticMu.Lock()
+	a.semanticIndex = service
+	a.semanticMu.Unlock()
+}
+
+func (a *App) releaseDatabaseRestoreMode() {
+	if a.restoreRelease != nil {
+		a.restoreRelease()
+		a.restoreRelease = nil
+	}
 }
 
 func (a *App) configureLocalMetadata(enabled bool) {
@@ -1358,6 +1704,49 @@ func (a *App) GetCleanupStatus() *services.CleanupStatus {
 	log.Printf("API GetCleanupStatus running=%v completed=%v hasAnalysis=%v err=%q",
 		status.Running, status.Completed, status.Analysis != nil, status.Error)
 	return status
+}
+
+// ===== Video Enhancement (P-013) =====
+
+func (a *App) GetEnhancementCapability() services.EnhancementRuntimeCapability {
+	return a.enhancement.Capability()
+}
+
+func (a *App) CreateEnhancementTask(request services.EnhancementCreateRequest) (*services.EnhancementTaskView, error) {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	view, err := a.enhancement.CreateTask(ctx, request)
+	log.Printf("API CreateEnhancementTask video=%d profile=%s err=%v", request.VideoID, request.Profile, err)
+	return view, err
+}
+
+func (a *App) GetEnhancementVideoPreflight(videoID uint) (*services.EnhancementVideoPreflight, error) {
+	return a.enhancement.PreflightVideo(videoID)
+}
+
+func (a *App) ListEnhancementTasks(limit int) ([]services.EnhancementTaskView, error) {
+	return a.enhancement.ListTasks(limit)
+}
+
+func (a *App) CancelEnhancementTask(taskID uint) error {
+	err := a.enhancement.CancelTask(taskID)
+	log.Printf("API CancelEnhancementTask task=%d err=%v", taskID, err)
+	return err
+}
+
+func (a *App) RetryEnhancementTask(taskID uint) (*services.EnhancementTaskView, error) {
+	view, err := a.enhancement.RetryTask(taskID)
+	log.Printf("API RetryEnhancementTask task=%d err=%v", taskID, err)
+	return view, err
+}
+
+// DismissNearDuplicateGroup 持久忽略一组近似重复视频，后续分析不再报出。
+func (a *App) DismissNearDuplicateGroup(videoIDs []uint) error {
+	err := services.DismissNearDuplicateGroup(videoIDs)
+	log.Printf("API DismissNearDuplicateGroup videos=%d err=%v", len(videoIDs), err)
+	return err
 }
 
 func summarizeVideos(videos []models.Video, limit int) string {

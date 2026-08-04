@@ -20,7 +20,7 @@ func (s *SettingsService) GetSettings() (*models.Settings, error) {
 
 // UpdateSettings 更新设置
 func (s *SettingsService) UpdateSettings(input models.Settings) error {
-	return database.DB.Transaction(func(tx *gorm.DB) error {
+	return database.Transaction(func(tx *gorm.DB) error {
 		var settings models.Settings
 		if err := tx.First(&settings).Error; err != nil {
 			return err
@@ -31,11 +31,13 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.VideoExtensions = input.VideoExtensions
 		settings.ScanExcludePaths = normalizeScanExcludePaths(input.ScanExcludePaths)
 		settings.PlayWeight = input.PlayWeight
+		settings.RandomHalfLifeDays = normalizeRandomHalfLifeDays(input.RandomHalfLifeDays)
 		settings.AutoScanOnStartup = input.AutoScanOnStartup
 		settings.LibraryWatchEnabled = input.LibraryWatchEnabled
 		settings.LocalMetadataEnabled = input.LocalMetadataEnabled
 		settings.AIQualityEnabled = input.AIQualityEnabled
 		settings.ShortFeedMaxDurationMinutes = positiveOrDefault(input.ShortFeedMaxDurationMinutes, DefaultShortFeedMaxDurationMinutes)
+		settings.ShortFeedFeedbackSyncEnabled = input.ShortFeedFeedbackSyncEnabled
 		settings.Theme = input.Theme
 		settings.LogEnabled = input.LogEnabled
 		settings.BilingualEnabled = input.BilingualEnabled
@@ -50,17 +52,32 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.AITaggingBaseURL = input.AITaggingBaseURL
 		settings.AITaggingAPIKey = input.AITaggingAPIKey
 		settings.AITaggingModel = input.AITaggingModel
+		settings.SemanticEmbeddingModel = strings.TrimSpace(input.SemanticEmbeddingModel)
 		settings.AITaggingFrameCount = 0
 		settings.AITaggingImagesPerRequest = positiveOrDefault(input.AITaggingImagesPerRequest, defaultAITaggingImagesPerRequest)
 		settings.AITaggingSubtitleCharLimit = positiveOrDefault(input.AITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit)
 		settings.AITaggingStartupBatchSize = positiveOrDefault(input.AITaggingStartupBatchSize, defaultAITaggingStartupBatchSize)
 		settings.AITaggingMaxExtraFrames = normalizeAITaggingMaxExtraFrames(input.AITaggingMaxExtraFrames)
+		settings.BackupDirectory = strings.TrimSpace(input.BackupDirectory)
+		// 与备份执行层共用同一套归一化，保证存储值等于生效值。
+		settings.BackupRetentionCount = normalizedBackupRetention(input.BackupRetentionCount)
+		settings.BackupIntervalHours = normalizedBackupInterval(input.BackupIntervalHours)
 
 		if err := tx.Save(&settings).Error; err != nil {
 			return err
 		}
 		return syncShortVideoTags(tx)
 	})
+}
+
+func normalizeRandomHalfLifeDays(value int) int {
+	if value < 0 {
+		return 90
+	}
+	if value > 3650 {
+		return 3650
+	}
+	return value
 }
 
 func normalizeScanExcludePaths(raw string) string {

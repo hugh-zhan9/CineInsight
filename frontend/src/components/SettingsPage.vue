@@ -34,6 +34,11 @@
           <option value="system">跟随系统 (System)</option>
         </select>
       </div>
+	  <div class="setting-item">
+		<label>键盘快捷键</label>
+		<button data-test="shortcut-help-button" type="button" class="btn-secondary" @click="showShortcutHelp = true">查看快捷键</button>
+		<p class="help-text">用于列表和详情抽屉中的连续审阅。</p>
+	  </div>
     </div>
 
     <!-- 自动化设置 -->
@@ -79,7 +84,7 @@
         <div v-if="scanExcludePaths.length" class="scan-blacklist-list">
           <div v-for="path in scanExcludePaths" :key="path" class="scan-blacklist-item">
             <span :title="path">{{ path }}</span>
-            <button type="button" class="btn-action btn-compact btn-action-danger" @click="removeScanExcludeDirectory(path)">移除</button>
+            <button type="button" class="btn-secondary btn-compact btn-danger-outline" @click="removeScanExcludeDirectory(path)">移除</button>
           </div>
         </div>
         <p v-else class="help-text">尚未设置黑名单目录。</p>
@@ -123,6 +128,13 @@
         />
         <p class="help-text">只有时长小于此上限的视频会进入手机短视频，并自动维护“短视频”标签，默认 5 分钟。</p>
       </div>
+	  <div class="setting-item">
+		<label class="checkbox-label">
+		  <input data-test="short-feed-feedback-sync-toggle" type="checkbox" v-model="settingsForm.short_feed_feedback_sync_enabled" />
+		  <span>将手机端喜欢与收藏同步到主片库</span>
+		</label>
+		<p class="help-text">喜欢会维护“短视频喜欢”自动标签，收藏会写入主片库收藏；关闭不会删除已经同步的结果。</p>
+	  </div>
       <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
     </div>
 
@@ -206,6 +218,22 @@
       </div>
       <p class="help-text">AI Agent 可按证据决定补帧、临时生成字幕或查找同源视频。临时字幕只在内存中使用，不写入 SRT；只调用已经准备好的本地 WhisperX/Qwen，不会自动安装组件。</p>
       <p class="help-text">抽帧图片、临时字幕文本和同源候选帧可能发送到上方配置的外部 API；原始音频不会发送。保存后后台会自动使用新配置。</p>
+      <div class="setting-item semantic-index-controls">
+        <label>语义索引</label>
+        <input type="text" v-model.trim="settingsForm.semantic_embedding_model" class="text-input" placeholder="例如 text-embedding-3-small；留空复用上方模型" />
+        <p class="help-text">复用上方 OpenAI 兼容接口的 <code>/embeddings</code> 能力。索引仅在显式启动后构建；模型或向量维度变化时必须显式重建。</p>
+        <div class="backup-status" :class="{ 'backup-status--error': semanticIndexStatus && !semanticIndexStatus.available }">
+          <strong>{{ semanticIndexStatusText }}</strong>
+          <span v-if="semanticIndexStatus?.model">模型 {{ semanticIndexStatus.model }}<template v-if="semanticIndexStatus.dimension"> · {{ semanticIndexStatus.dimension }} 维</template></span>
+          <span v-if="semanticIndexStatus?.running || semanticIndexStatus?.completed">进度 {{ semanticIndexStatus.processed || 0 }}/{{ semanticIndexStatus.total || 0 }} · 成功 {{ semanticIndexStatus.succeeded || 0 }} · 跳过 {{ semanticIndexStatus.skipped || 0 }} · 失败 {{ semanticIndexStatus.failed || 0 }}</span>
+          <span v-if="semanticIndexStatus?.unavailable">{{ semanticIndexStatus.unavailable }}</span>
+        </div>
+        <div class="backup-actions">
+          <button type="button" class="btn-primary" :disabled="semanticIndexStatus?.running || !semanticIndexStatus?.available" @click="startSemanticIndex(false)">开始/继续构建</button>
+          <button type="button" class="btn-secondary" :disabled="semanticIndexStatus?.running || !semanticIndexStatus?.available" @click="startSemanticIndex(true)">重建索引</button>
+          <button v-if="semanticIndexStatus?.running" type="button" class="btn-secondary" @click="cancelSemanticIndex">取消</button>
+        </div>
+      </div>
     </div>
 
 	<div class="settings-section ai-tag-library-section">
@@ -229,7 +257,7 @@
 			  <input v-model.trim="tag.name" type="text" class="text-input" placeholder="标签名称" :aria-label="`${group.namespace || '未命名分类'}标签名称`" />
 			  <input v-model="tag.color" type="color" class="ai-tag-color" aria-label="标签颜色" />
 			  <label class="ai-tag-active"><input v-model="tag.is_active" type="checkbox" />启用</label>
-			  <button type="button" class="btn-action btn-action-danger ai-tag-remove" title="移出 AI 标签库" :aria-label="`移出标签 ${tag.name || tagIndex + 1}`" @click="removeAITagFromGroup(groupIndex, tagIndex)">×</button>
+			  <button type="button" class="btn-secondary btn-danger-outline ai-tag-remove" title="移出 AI 标签库" :aria-label="`移出标签 ${tag.name || tagIndex + 1}`" @click="removeAITagFromGroup(groupIndex, tagIndex)">×</button>
 			</div>
 			<div v-if="group.tags.length === 0" class="empty-hint ai-tag-group-empty">当前分类暂无标签</div>
 		  </div>
@@ -254,6 +282,11 @@
           />
         </div>
         <p class="help-text">建议值: 1.0-3.0，默认2.0。权重越高，普通播放对随机选择的影响越大。</p>
+      </div>
+      <div class="setting-item">
+        <label>播放记录半衰期（天）</label>
+        <input type="number" v-model.number="settingsForm.random_half_life_days" min="0" max="3650" step="1" class="number-input" />
+        <p class="help-text">默认 90 天；久未播放的视频会逐渐回到随机池。设为 0 时关闭衰减并完全使用原算法。</p>
       </div>
     </div>
 
@@ -373,13 +406,50 @@
             </div>
           </div>
           <div class="directory-actions">
-            <button @click="editDirectory(dir)" class="btn-action">编辑</button>
-            <button @click="deleteDirectoryItem(dir.id)" class="btn-action btn-action-danger">删除</button>
+            <button @click="editDirectory(dir)" class="btn-secondary">编辑</button>
+            <button @click="deleteDirectoryItem(dir.id)" class="btn-secondary btn-danger-outline">删除</button>
           </div>
         </div>
         <div v-if="localDirectories.length === 0" class="empty-hint">暂无扫描目录配置</div>
       </div>
       <button @click="showAddDirectoryDialog = true" class="btn-primary settings-section-action">添加扫描目录</button>
+    </div>
+
+    <div class="settings-section backup-settings-section">
+      <h3>数据库备份</h3>
+      <div class="backup-status" :class="{ 'backup-status--error': backupStatus && !backupStatus.available }">
+        <strong>{{ backupStatusText }}</strong>
+        <span v-if="backupStatus?.last_success_at">最近成功：{{ formatBackupTime(backupStatus.last_success_at) }}</span>
+        <span v-if="backupStatus?.last_error">最近失败：{{ backupStatus.last_error }}</span>
+        <span v-else-if="backupStatus?.reason">{{ backupStatus.reason }}</span>
+      </div>
+      <div class="setting-item">
+        <label>备份目录</label>
+        <div class="directory-dialog-row">
+          <input type="text" v-model.trim="settingsForm.backup_directory" class="text-input" placeholder="留空使用应用数据目录" />
+          <button type="button" class="btn-secondary" @click="selectBackupDirectory">选择</button>
+        </div>
+        <p class="help-text">留空时保存到应用数据目录下的 backups 文件夹。</p>
+      </div>
+      <div class="setting-grid backup-setting-grid">
+        <div class="setting-item">
+          <label>保留份数</label>
+          <input type="number" min="1" max="100" v-model.number="settingsForm.backup_retention_count" class="number-input" />
+        </div>
+        <div class="setting-item">
+          <label>自动备份间隔（小时）</label>
+          <input type="number" min="0" max="8760" v-model.number="settingsForm.backup_interval_hours" class="number-input" />
+          <p class="help-text">0 表示关闭启动时自动备份。</p>
+        </div>
+      </div>
+      <div class="backup-actions">
+        <button type="button" class="btn-primary" :disabled="backupBusy || !backupStatus?.backup_available" @click="createBackupNow">
+          {{ backupBusy ? '处理中...' : '立即备份' }}
+        </button>
+        <button type="button" class="btn-secondary" :disabled="backupBusy || !backupStatus?.restore_available" @click="openBackupDialog">从备份恢复</button>
+        <button type="button" class="btn-secondary" :disabled="backupBusy" @click="loadBackupStatus">刷新状态</button>
+      </div>
+      <p v-if="backupMessage" class="help-text" :class="{ 'backup-message--error': backupMessageIsError }">{{ backupMessage }}</p>
     </div>
     </div>
 
@@ -398,8 +468,7 @@
     </div>
 
     <!-- Add/Edit Directory Dialog -->
-    <div v-if="showAddDirectoryDialog || editingDirectory" class="modal-overlay" @click="closeDirectoryDialog">
-      <div class="modal" @click.stop>
+    <BaseModal v-if="showAddDirectoryDialog || editingDirectory" close-on-overlay stop-modal-clicks @close="closeDirectoryDialog">
         <h2>{{ editingDirectory ? '编辑' : '添加' }}扫描目录</h2>
         <div class="setting-item">
           <label>目录路径</label>
@@ -416,17 +485,62 @@
           <button @click="saveDirectoryConfig" class="btn-primary">保存</button>
           <button @click="closeDirectoryDialog" class="btn-secondary">取消</button>
         </div>
-      </div>
-    </div>
+    </BaseModal>
+
+    <BaseModal v-if="showBackupDialog" stop-modal-clicks @close="closeBackupDialog">
+      <template v-if="!selectedBackup">
+        <h2>选择数据库备份</h2>
+        <p class="help-text">恢复会替换当前数据库。执行前系统会先自动创建一份当前数据库的安全备份。</p>
+        <div v-if="backupFiles.length" class="backup-file-list">
+          <div v-for="backup in backupFiles" :key="backup.name" class="backup-file-item">
+            <div>
+              <strong>{{ formatBackupTime(backup.created_at) }}</strong>
+              <span>{{ backup.name }} · {{ formatBackupSize(backup.size) }}</span>
+            </div>
+            <button type="button" class="btn-secondary btn-danger-outline" @click="selectedBackup = backup">恢复</button>
+          </div>
+        </div>
+        <p v-else class="empty-hint">当前目录没有可用备份。</p>
+        <div class="modal-actions"><button type="button" class="btn-secondary" @click="closeBackupDialog">关闭</button></div>
+      </template>
+      <template v-else>
+        <h2>确认恢复数据库</h2>
+        <p>将恢复到 <strong>{{ formatBackupTime(selectedBackup.created_at) }}</strong> 的数据状态。</p>
+        <p class="backup-danger-text">这是破坏性操作。当前数据库会先自动备份；恢复期间请勿关闭应用。</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" :disabled="backupBusy" @click="selectedBackup = null">返回</button>
+          <button type="button" class="btn-primary btn-danger" :disabled="backupBusy" @click="confirmRestoreBackup">
+            {{ backupBusy ? '正在恢复...' : '确认恢复' }}
+          </button>
+        </div>
+      </template>
+    </BaseModal>
+
+	<BaseModal v-if="showShortcutHelp" stop-modal-clicks @close="showShortcutHelp = false">
+	  <h2>键盘快捷键</h2>
+	  <dl class="shortcut-help-list">
+		<dt>J / ↓</dt><dd>选择下一个视频</dd>
+		<dt>K / ↑</dt><dd>选择上一个视频</dd>
+		<dt>空格</dt><dd>打开或关闭详情预览</dd>
+		<dt>F</dt><dd>切换收藏</dd>
+		<dt>W</dt><dd>切换已看</dd>
+		<dt>T</dt><dd>打开添加标签</dd>
+		<dt>回车</dt><dd>播放视频</dd>
+	  </dl>
+	  <p class="help-text">输入框、下拉框和弹窗处于焦点时不会触发快捷键。</p>
+	  <div class="modal-actions"><button type="button" class="btn-primary" @click="showShortcutHelp = false">知道了</button></div>
+	</BaseModal>
   </div>
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex } from '../../wailsjs/go/main/App';
 import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
+import BaseModal from './ui/BaseModal.vue';
 
 export default {
   name: 'SettingsPage',
+  components: { BaseModal },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
@@ -439,6 +553,8 @@ export default {
       shortFeedStatus: null,
       watcherStatus: null,
       watcherStatusOff: null,
+      semanticIndexStatusOff: null,
+      semanticIndexStatus: null,
       showAddDirectoryDialog: false,
       editingDirectory: null,
       directoryForm: { path: '', alias: '' },
@@ -448,7 +564,15 @@ export default {
       nextAITagLibraryKey: 1,
       settingsSaving: false,
       saveState: 'idle',
-      saveMessage: ''
+      saveMessage: '',
+      backupStatus: null,
+      backupFiles: [],
+      showBackupDialog: false,
+	  showShortcutHelp: false,
+      selectedBackup: null,
+      backupBusy: false,
+      backupMessage: '',
+      backupMessageIsError: false
     };
   },
   watch: {
@@ -462,11 +586,17 @@ export default {
         this.settingsForm.ai_tagging_subtitle_char_limit = this.settingsForm.ai_tagging_subtitle_char_limit || 4000;
         this.settingsForm.ai_tagging_startup_batch_size = this.settingsForm.ai_tagging_startup_batch_size || 10;
         this.settingsForm.ai_tagging_max_extra_frames = this.settingsForm.ai_tagging_max_extra_frames || 20;
+        this.settingsForm.semantic_embedding_model = this.settingsForm.semantic_embedding_model || '';
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
+		if (this.settingsForm.short_feed_feedback_sync_enabled == null) this.settingsForm.short_feed_feedback_sync_enabled = true;
         this.settingsForm.scan_exclude_paths = this.settingsForm.scan_exclude_paths || '';
         this.settingsForm.subtitle_translation_provider = this.settingsForm.subtitle_translation_provider || 'deepl';
         this.settingsForm.subtitle_whisperx_model = this.settingsForm.subtitle_whisperx_model || 'medium';
         this.settingsForm.subtitle_whisperx_batch_size = this.settingsForm.subtitle_whisperx_batch_size || 8;
+        this.settingsForm.backup_directory = this.settingsForm.backup_directory || '';
+        this.settingsForm.backup_retention_count = this.settingsForm.backup_retention_count || 7;
+        this.settingsForm.backup_interval_hours = Number.isFinite(this.settingsForm.backup_interval_hours) ? this.settingsForm.backup_interval_hours : 24;
+        this.settingsForm.random_half_life_days = Number.isFinite(this.settingsForm.random_half_life_days) ? this.settingsForm.random_half_life_days : 90;
       },
       immediate: true,
       deep: true
@@ -489,23 +619,69 @@ export default {
         return this.shortFeedStatus.fallback_used ? '运行中（备用端口）' : '运行中';
       }
       return '未运行';
+    },
+    backupStatusText() {
+      if (!this.backupStatus) return '正在读取备份状态...';
+      if (this.backupStatus.running) return '备份任务运行中';
+      return this.backupStatus.available ? '备份功能可用' : '备份功能不可用';
+    },
+    semanticIndexStatusText() {
+      const status = this.semanticIndexStatus;
+      if (!status) return '正在读取语义索引状态...';
+      if (!status.available) return '语义索引不可用';
+      if (status.running) return '语义索引构建中';
+      if (status.needs_rebuild) return '模型或维度已变化，需要重建';
+      if (status.cancelled) return '语义索引构建已取消，可继续';
+      if (status.completed) return '语义索引构建完成';
+      return '语义索引可用，尚未构建';
     }
   },
   mounted() {
     this.loadShortFeedStatus();
     this.loadAITagLibrary();
     this.loadLibraryWatcherStatus();
+    this.loadBackupStatus();
+    this.loadSemanticIndexStatus();
     if (window.runtime?.EventsOn) {
       const off = window.runtime.EventsOn('library-watcher-status', (status) => {
         this.watcherStatus = status || null;
       });
       if (typeof off === 'function') this.watcherStatusOff = off;
+      const semanticOff = window.runtime.EventsOn('semantic-index-state', (status) => {
+        this.semanticIndexStatus = { ...(this.semanticIndexStatus || {}), ...(status || {}) };
+      });
+      if (typeof semanticOff === 'function') this.semanticIndexStatusOff = semanticOff;
     }
   },
   beforeUnmount() {
     this.watcherStatusOff?.();
+    this.semanticIndexStatusOff?.();
   },
   methods: {
+    async loadSemanticIndexStatus() {
+      try {
+        this.semanticIndexStatus = await GetSemanticIndexStatus();
+      } catch (err) {
+        this.semanticIndexStatus = { available: false, unavailable: String(err) };
+      }
+    },
+    async startSemanticIndex(rebuild) {
+      if (rebuild && !window.confirm('重建会为当前模型重新请求全部视频的 embedding。继续吗？')) return;
+      try {
+        this.semanticIndexStatus = { ...(this.semanticIndexStatus || {}), ...(await StartSemanticIndex({ rebuild })) };
+      } catch (err) {
+        alert((rebuild ? '重建' : '启动') + '语义索引失败：' + err);
+        await this.loadSemanticIndexStatus();
+      }
+    },
+    async cancelSemanticIndex() {
+      try {
+        await CancelSemanticIndex();
+        await this.loadSemanticIndexStatus();
+      } catch (err) {
+        alert('取消语义索引失败：' + err);
+      }
+    },
     async loadShortFeedStatus() {
       try {
         this.shortFeedStatus = await GetShortFeedServerStatus();
@@ -539,11 +715,13 @@ export default {
             video_extensions: this.settingsForm.video_extensions,
             scan_exclude_paths: this.settingsForm.scan_exclude_paths || '',
             play_weight: this.settingsForm.play_weight,
+            random_half_life_days: Math.max(0, Number(this.settingsForm.random_half_life_days) || 0),
             auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
             library_watch_enabled: this.settingsForm.library_watch_enabled || false,
             local_metadata_enabled: this.settingsForm.local_metadata_enabled || false,
             ai_quality_enabled: this.settingsForm.ai_quality_enabled || false,
             short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
+			short_feed_feedback_sync_enabled: this.settingsForm.short_feed_feedback_sync_enabled !== false,
             theme: this.settingsForm.theme,
             log_enabled: this.settingsForm.log_enabled,
             bilingual_enabled: this.settingsForm.bilingual_enabled || false,
@@ -558,11 +736,15 @@ export default {
             ai_tagging_base_url: this.settingsForm.ai_tagging_base_url || '',
             ai_tagging_api_key: this.settingsForm.ai_tagging_api_key || '',
             ai_tagging_model: this.settingsForm.ai_tagging_model || '',
+            semantic_embedding_model: this.settingsForm.semantic_embedding_model || '',
             ai_tagging_frame_count: 0,
             ai_tagging_images_per_request: this.settingsForm.ai_tagging_images_per_request || 10,
             ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
             ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10,
-            ai_tagging_max_extra_frames: this.settingsForm.ai_tagging_max_extra_frames || 20
+            ai_tagging_max_extra_frames: this.settingsForm.ai_tagging_max_extra_frames || 20,
+            backup_directory: this.settingsForm.backup_directory || '',
+            backup_retention_count: this.settingsForm.backup_retention_count || 7,
+            backup_interval_hours: Math.max(0, Number(this.settingsForm.backup_interval_hours) || 0)
           })
         ]);
         const aiTriggered = await TriggerAITagging();
@@ -602,6 +784,87 @@ export default {
       } catch (_err) {
         this.watcherStatus = null;
       }
+    },
+    async loadBackupStatus() {
+      try {
+        this.backupStatus = await GetBackupStatus();
+      } catch (err) {
+        this.backupStatus = { available: false, backup_available: false, restore_available: false, reason: String(err) };
+      }
+    },
+    async selectBackupDirectory() {
+      try {
+        const directory = await SelectDirectory();
+        if (directory) this.settingsForm.backup_directory = directory;
+      } catch (err) {
+        this.backupMessageIsError = true;
+        this.backupMessage = '选择备份目录失败：' + err;
+      }
+    },
+    async createBackupNow() {
+      if (this.backupBusy) return;
+      this.backupBusy = true;
+      this.backupMessage = '正在创建并校验数据库备份...';
+      this.backupMessageIsError = false;
+      try {
+        const backup = await CreateDatabaseBackup();
+        this.backupMessage = `备份成功：${backup.name}`;
+      } catch (err) {
+        this.backupMessageIsError = true;
+        this.backupMessage = '备份失败：' + err;
+      } finally {
+        this.backupBusy = false;
+        await this.loadBackupStatus();
+      }
+    },
+    async openBackupDialog() {
+      this.backupMessage = '';
+      this.backupMessageIsError = false;
+      try {
+        this.backupFiles = await ListDatabaseBackups();
+        this.selectedBackup = null;
+        this.showBackupDialog = true;
+      } catch (err) {
+        this.backupMessageIsError = true;
+        this.backupMessage = '读取备份列表失败：' + err;
+      }
+    },
+    closeBackupDialog() {
+      if (this.backupBusy) return;
+      this.showBackupDialog = false;
+      this.selectedBackup = null;
+    },
+    async confirmRestoreBackup() {
+      if (!this.selectedBackup || this.backupBusy) return;
+      this.backupBusy = true;
+      try {
+        await RestoreDatabaseBackup({
+          name: this.selectedBackup.name,
+          size: this.selectedBackup.size,
+          fingerprint: this.selectedBackup.fingerprint
+        });
+        this.backupMessage = '数据库恢复成功，应用将自动退出；重新打开后即可使用恢复的数据。';
+        this.backupMessageIsError = false;
+        this.showBackupDialog = false;
+        this.selectedBackup = null;
+      } catch (err) {
+        this.backupMessageIsError = true;
+        this.backupMessage = '数据库恢复失败：' + err;
+      } finally {
+        this.backupBusy = false;
+        await this.loadBackupStatus();
+      }
+    },
+    formatBackupTime(value) {
+      if (!value) return '未知时间';
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
+    },
+    formatBackupSize(value) {
+      const bytes = Number(value) || 0;
+      if (bytes < 1024) return `${bytes} B`;
+      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+      return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
     },
     directoryWatchStatus(directoryID) {
       return this.watcherStatus?.roots?.find(root => Number(root.directory_id) === Number(directoryID)) || null;
@@ -736,6 +999,7 @@ export default {
 .settings-section {
   margin-bottom: 0;
   padding: 18px;
+  border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--panel-bg);
   -webkit-backdrop-filter: blur(14px);
@@ -743,8 +1007,19 @@ export default {
 }
 
 .settings-section h3 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+  border-bottom: 1px solid var(--border-color);
   margin-bottom: 16px;
   padding-bottom: 10px;
+}
+
+.setting-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 16px; }
+.setting-grid .setting-item { margin-bottom: 0; }
+
+@media (max-width: 760px) {
+  .setting-grid { grid-template-columns: 1fr; }
 }
 
 .settings-section-heading {
@@ -878,7 +1153,7 @@ export default {
   padding: 11px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.36);
+  background: var(--surface-faint);
 }
 
 .directory-main {
@@ -933,7 +1208,7 @@ export default {
   padding: 0;
   border: 0;
   background: transparent;
-  color: var(--primary-color);
+  color: var(--accent-color);
   cursor: pointer;
   font-size: 12px;
 }
@@ -950,11 +1225,6 @@ export default {
 
 .directory-alias-input {
   margin-top: 8px;
-}
-
-.btn-action-danger {
-  border-color: var(--danger-color);
-  color: var(--danger-color);
 }
 
 .settings-section-action {
@@ -991,12 +1261,12 @@ export default {
 }
 
 .settings-save-status--success {
-  border-color: rgba(15, 143, 130, 0.34);
+  border-color: var(--accent-border);
   color: var(--accent-color);
 }
 
 .settings-save-status--error {
-  border-color: rgba(229, 72, 77, 0.4);
+  border-color: var(--danger-border);
   color: var(--danger-color);
 }
 
@@ -1042,6 +1312,95 @@ export default {
   padding: 8px 10px;
   border-radius: 6px;
   background: var(--bg-color);
+}
+
+.backup-settings-section {
+  grid-column: 1 / -1;
+}
+
+.backup-status {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.backup-status--error {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.backup-status span,
+.backup-file-item span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.shortcut-help-list {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 10px 18px;
+  margin: 18px 0;
+}
+
+.shortcut-help-list dt {
+  color: var(--text-primary);
+  font-weight: 700;
+}
+
+.shortcut-help-list dd {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.backup-setting-grid {
+  grid-template-columns: repeat(2, minmax(180px, 1fr));
+}
+
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.backup-message--error,
+.backup-danger-text {
+  color: var(--danger-color);
+}
+
+.backup-file-list {
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  margin-top: 16px;
+  overflow-y: auto;
+}
+
+.backup-file-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+}
+
+.backup-file-item div {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.backup-file-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 980px) {

@@ -52,6 +52,7 @@ type TechnicalBackfillService struct {
 	status         TechnicalBackfillStatus
 	cancel         context.CancelFunc
 	emitter        func(TechnicalBackfillStatus)
+	worker         sync.WaitGroup
 }
 
 func NewTechnicalBackfillService(probe *MediaProbeService) *TechnicalBackfillService {
@@ -59,7 +60,7 @@ func NewTechnicalBackfillService(probe *MediaProbeService) *TechnicalBackfillSer
 		probe:          probe,
 		loadCandidates: loadTechnicalBackfillCandidates,
 		syncVideoTag: func(videoID uint) error {
-			return database.DB.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, videoID) })
+			return database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, videoID) })
 		},
 	}
 }
@@ -95,9 +96,13 @@ func (s *TechnicalBackfillService) Start(parent context.Context) (TechnicalBackf
 	s.cancel = cancel
 	status := s.snapshotLocked()
 	emitter := s.emitter
+	s.worker.Add(1)
 	s.mu.Unlock()
 	emitTechnicalBackfillStatus(emitter, status)
-	go s.prepareAndRun(ctx)
+	go func() {
+		defer s.worker.Done()
+		s.prepareAndRun(ctx)
+	}()
 	return status, nil
 }
 
@@ -337,6 +342,19 @@ func (s *TechnicalBackfillService) Cancel() error {
 	cancel()
 	emitTechnicalBackfillStatus(emitter, status)
 	return nil
+}
+
+func (s *TechnicalBackfillService) StopAndWait() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	s.worker.Wait()
 }
 
 func (s *TechnicalBackfillService) Status() TechnicalBackfillStatus {

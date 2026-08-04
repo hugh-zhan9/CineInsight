@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -969,7 +970,7 @@ func TestTrashTransactionOutcomeChecksDistinguishCommitFromRollback(t *testing.T
 	if err != nil || committed || !rolledBack {
 		t.Fatalf("活动视频和 pending 日志应判定删除回滚: committed=%v rolledBack=%v err=%v", committed, rolledBack, err)
 	}
-	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+	if err := database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&entry).Update("state", trashStateDeleted).Error; err != nil {
 			return err
 		}
@@ -988,7 +989,7 @@ func TestTrashTransactionOutcomeChecksDistinguishCommitFromRollback(t *testing.T
 	if err != nil || committed || !rolledBack {
 		t.Fatalf("软删除视频和 restoring 日志应判定恢复回滚: committed=%v rolledBack=%v err=%v", committed, rolledBack, err)
 	}
-	if err := database.DB.Transaction(func(tx *gorm.DB) error {
+	if err := database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&models.Video{}).Unscoped().Where("id = ?", video.ID).Update("deleted_at", nil).Error; err != nil {
 			return err
 		}
@@ -1247,7 +1248,7 @@ func TestGetPreviewSessionInlineMode(t *testing.T) {
 	videoPath := filepath.Join(root, "clip.mp4")
 	mustCreateFile(t, videoPath)
 
-	video := models.Video{Name: "clip.mp4", Path: videoPath, Directory: root, Size: 1}
+	video := models.Video{Name: "clip.mp4", Path: videoPath, Directory: root, Size: 1, Duration: 95}
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
@@ -1270,6 +1271,15 @@ func TestGetPreviewSessionInlineMode(t *testing.T) {
 	}
 	if session.InlineSource.MIME != "video/mp4" {
 		t.Fatalf("mime 错误: %s", session.InlineSource.MIME)
+	}
+	if session.SeekSprite == nil {
+		t.Fatalf("已知时长的 inline 预览应返回 seek sprite 索引")
+	}
+	if session.SeekSprite.LocatorValue != "/preview/seek-sprite/"+strconv.FormatUint(uint64(video.ID), 10) {
+		t.Fatalf("seek sprite locator 错误: %s", session.SeekSprite.LocatorValue)
+	}
+	if session.SeekSprite.FrameCount != 10 || session.SeekSprite.IntervalSeconds != 9.5 {
+		t.Fatalf("seek sprite 索引错误: %+v", session.SeekSprite)
 	}
 	if session.ExternalAction != nil {
 		t.Fatalf("inline 模式不应返回 external action")

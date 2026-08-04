@@ -78,6 +78,32 @@ type VideoTechnicalMetadata struct {
 	UpdatedAt                  time.Time  `json:"updated_at" ts_type:"string"`
 }
 
+// VideoPerceptualHash stores three local frame hashes tied to an exact source
+// file fingerprint. Rows with a mismatching size/mtime are ignored until the
+// backfill worker recomputes them.
+type VideoPerceptualHash struct {
+	VideoID         uint      `gorm:"primaryKey;autoIncrement:false" json:"video_id"`
+	Video           Video     `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	SourceSize      int64     `gorm:"not null" json:"source_size"`
+	SourceModTimeNS int64     `gorm:"not null" json:"source_mod_time_ns"`
+	HashEarly       string    `gorm:"size:16;not null" json:"hash_early"`
+	HashMiddle      string    `gorm:"size:16;not null" json:"hash_middle"`
+	HashLate        string    `gorm:"size:16;not null" json:"hash_late"`
+	ComputedAt      time.Time `gorm:"not null;index" json:"computed_at" ts_type:"string"`
+	LastError       string    `gorm:"type:text;not null;default:''" json:"last_error"`
+	CreatedAt       time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt       time.Time `json:"updated_at" ts_type:"string"`
+}
+
+// NearDuplicateDismissal 持久化用户对"近似重复"误报的忽略：被忽略的视频对
+// 不再进入后续清理分析的近似重复候选。低 ID 存 VideoLowID，高 ID 存 VideoHighID。
+type NearDuplicateDismissal struct {
+	ID          uint      `gorm:"primarykey" json:"id"`
+	VideoLowID  uint      `gorm:"not null;uniqueIndex:idx_near_dup_dismissal_pair" json:"video_low_id"`
+	VideoHighID uint      `gorm:"not null;uniqueIndex:idx_near_dup_dismissal_pair" json:"video_high_id"`
+	CreatedAt   time.Time `json:"created_at" ts_type:"string"`
+}
+
 // MediaStream stores one supported ffprobe stream from the last successful snapshot.
 type MediaStream struct {
 	ID               uint      `gorm:"primarykey" json:"id"`

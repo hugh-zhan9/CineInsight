@@ -1,6 +1,5 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click="$emit('close')">
-    <div class="modal" @click.stop>
+  <BaseModal v-if="visible" close-on-overlay stop-modal-clicks @close="$emit('close')">
       <h2>确认删除</h2>
       <p>{{ confirmMessage }}</p>
       <div class="form-group">
@@ -18,13 +17,15 @@
         <button @click="handleConfirm" class="btn-danger">确认删除</button>
         <button @click="$emit('close')" class="btn-secondary">取消</button>
       </div>
-    </div>
-  </div>
+  </BaseModal>
 </template>
 
 <script>
+import BaseModal from './ui/BaseModal.vue';
+
 export default {
   name: 'DeleteConfirmDialog',
+  components: { BaseModal },
   props: {
     visible: { type: Boolean, default: false },
     video: { type: Object, default: null },

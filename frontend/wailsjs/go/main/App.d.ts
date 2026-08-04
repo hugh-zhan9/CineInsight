@@ -36,6 +36,12 @@ export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise
 
 export function CancelLocalMetadataBackfill():Promise<void>;
 
+export function CancelLocalMetadataExport():Promise<void>;
+
+export function CancelPerceptualHashBackfill():Promise<void>;
+
+export function CancelSemanticIndex():Promise<void>;
+
 export function CancelSubtitle():Promise<void>;
 
 export function CancelSubtitleTask(arg1:number):Promise<void>;
@@ -47,6 +53,8 @@ export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
 export function ConfirmSameSourceRelation(arg1:number):Promise<void>;
 
 export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCollection>;
+
+export function CreateDatabaseBackup():Promise<services.BackupFile>;
 
 export function CreatePerson(arg1:string,arg2:string):Promise<models.Person>;
 
@@ -64,6 +72,10 @@ export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
 
 export function DownloadSubtitleDependencies():Promise<void>;
 
+export function ExportLocalMetadataNFO(arg1:number):Promise<services.LocalMetadataNFOExportResult>;
+
+export function FindSimilarVideos(arg1:services.SemanticSimilarRequest):Promise<services.SemanticSearchPage>;
+
 export function ForceGenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<services.SubtitleGenerateResult>;
 
 export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<services.SubtitleGenerateResult>;
@@ -80,11 +92,15 @@ export function GetAllTags():Promise<Array<models.Tag>>;
 
 export function GetAllVideos():Promise<Array<models.Video>>;
 
+export function GetBackupStatus():Promise<services.BackupStatus>;
+
 export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promise<services.CleanupAnalysis>;
 
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
 export function GetCollectionDetail(arg1:number):Promise<services.CollectionDetail>;
+
+export function GetLibraryInsights():Promise<services.LibraryStats>;
 
 export function GetLibrarySubtitleHits(arg1:string,arg2:Array<number>):Promise<Array<services.LibrarySubtitleHit>>;
 
@@ -94,9 +110,15 @@ export function GetLocalMetadataBackfillStatus():Promise<services.LocalMetadataB
 
 export function GetLocalMetadataDiff(arg1:number):Promise<services.LocalMetadataDiff>;
 
+export function GetLocalMetadataExportStatus():Promise<services.LocalMetadataExportStatus>;
+
+export function GetPerceptualHashBackfillStatus():Promise<services.PerceptualHashStatus>;
+
 export function GetPersonDetail(arg1:number,arg2:number,arg3:number):Promise<services.PersonDetail>;
 
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
+
+export function GetSemanticIndexStatus():Promise<services.SemanticIndexStatus>;
 
 export function GetSettings():Promise<models.Settings>;
 
@@ -123,6 +145,8 @@ export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:numb
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
 
 export function ListCollections(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.CollectionListItem>>;
+
+export function ListDatabaseBackups():Promise<Array<services.BackupFile>>;
 
 export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;
 
@@ -190,6 +214,8 @@ export function ReorderCollectionVideos(arg1:number,arg2:Array<number>):Promise<
 
 export function ResolveVideoArtwork(arg1:number,arg2:string):Promise<services.VideoArtworkData>;
 
+export function RestoreDatabaseBackup(arg1:services.BackupRestoreRequest):Promise<void>;
+
 export function RestoreTrashEntry(arg1:number):Promise<models.Video>;
 
 export function RetranslateSubtitleEntries(arg1:services.SubtitleRetranslateRequest):Promise<services.SubtitleRetranslateResult>;
@@ -211,6 +237,8 @@ export function ScanDirectoryWithInfo(arg1:string):Promise<Array<services.Scanne
 export function SearchLibraryVideoPage(arg1:services.LibraryVideoPageRequest):Promise<services.LibraryVideoPage>;
 
 export function SearchLibraryVideos(arg1:services.LibraryFilter,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
+
+export function SearchSemanticVideos(arg1:services.SemanticSearchRequest):Promise<services.SemanticSearchPage>;
 
 export function SearchSubtitleMatches(arg1:string,arg2:number):Promise<Array<services.SubtitleSearchMatch>>;
 
@@ -245,6 +273,19 @@ export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
 export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
 
 export function StartLocalMetadataBackfill():Promise<services.LocalMetadataBackfillStatus>;
+
+export function StartLocalMetadataExport(arg1:services.LocalMetadataExportRequest):Promise<services.LocalMetadataExportStatus>;
+
+export function GetEnhancementCapability():Promise<any>;
+export function CreateEnhancementTask(arg1:any):Promise<any>;
+export function GetEnhancementVideoPreflight(arg1:number):Promise<any>;
+export function ListEnhancementTasks(arg1:number):Promise<Array<any>>;
+export function CancelEnhancementTask(arg1:number):Promise<void>;
+export function RetryEnhancementTask(arg1:number):Promise<any>;
+export function DismissNearDuplicateGroup(arg1:Array<number>):Promise<void>;
+export function StartPerceptualHashBackfill():Promise<services.PerceptualHashStatus>;
+
+export function StartSemanticIndex(arg1:services.SemanticIndexBuildRequest):Promise<services.SemanticIndexStatus>;
 
 export function StartTechnicalBackfill():Promise<services.TechnicalBackfillStatus>;
 

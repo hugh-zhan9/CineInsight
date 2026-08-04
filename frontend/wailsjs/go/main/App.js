@@ -66,6 +66,18 @@ export function CancelLocalMetadataBackfill() {
   return window['go']['main']['App']['CancelLocalMetadataBackfill']();
 }
 
+export function CancelLocalMetadataExport() {
+  return window['go']['main']['App']['CancelLocalMetadataExport']();
+}
+
+export function CancelPerceptualHashBackfill() {
+  return window['go']['main']['App']['CancelPerceptualHashBackfill']();
+}
+
+export function CancelSemanticIndex() {
+  return window['go']['main']['App']['CancelSemanticIndex']();
+}
+
 export function CancelSubtitle() {
   return window['go']['main']['App']['CancelSubtitle']();
 }
@@ -88,6 +100,10 @@ export function ConfirmSameSourceRelation(arg1) {
 
 export function CreateCollection(arg1, arg2) {
   return window['go']['main']['App']['CreateCollection'](arg1, arg2);
+}
+
+export function CreateDatabaseBackup() {
+  return window['go']['main']['App']['CreateDatabaseBackup']();
 }
 
 export function CreatePerson(arg1, arg2) {
@@ -122,6 +138,14 @@ export function DownloadSubtitleDependencies() {
   return window['go']['main']['App']['DownloadSubtitleDependencies']();
 }
 
+export function ExportLocalMetadataNFO(arg1) {
+  return window['go']['main']['App']['ExportLocalMetadataNFO'](arg1);
+}
+
+export function FindSimilarVideos(arg1) {
+  return window['go']['main']['App']['FindSimilarVideos'](arg1);
+}
+
 export function ForceGenerateSubtitle(arg1) {
   return window['go']['main']['App']['ForceGenerateSubtitle'](arg1);
 }
@@ -154,6 +178,10 @@ export function GetAllVideos() {
   return window['go']['main']['App']['GetAllVideos']();
 }
 
+export function GetBackupStatus() {
+  return window['go']['main']['App']['GetBackupStatus']();
+}
+
 export function GetCleanupCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetCleanupCandidates'](arg1, arg2, arg3);
 }
@@ -164,6 +192,10 @@ export function GetCleanupStatus() {
 
 export function GetCollectionDetail(arg1) {
   return window['go']['main']['App']['GetCollectionDetail'](arg1);
+}
+
+export function GetLibraryInsights() {
+  return window['go']['main']['App']['GetLibraryInsights']();
 }
 
 export function GetLibrarySubtitleHits(arg1, arg2) {
@@ -182,12 +214,24 @@ export function GetLocalMetadataDiff(arg1) {
   return window['go']['main']['App']['GetLocalMetadataDiff'](arg1);
 }
 
+export function GetLocalMetadataExportStatus() {
+  return window['go']['main']['App']['GetLocalMetadataExportStatus']();
+}
+
+export function GetPerceptualHashBackfillStatus() {
+  return window['go']['main']['App']['GetPerceptualHashBackfillStatus']();
+}
+
 export function GetPersonDetail(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetPersonDetail'](arg1, arg2, arg3);
 }
 
 export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
+}
+
+export function GetSemanticIndexStatus() {
+  return window['go']['main']['App']['GetSemanticIndexStatus']();
 }
 
 export function GetSettings() {
@@ -240,6 +284,10 @@ export function ListAITagCandidates(arg1, arg2, arg3) {
 
 export function ListCollections(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListCollections'](arg1, arg2, arg3, arg4);
+}
+
+export function ListDatabaseBackups() {
+  return window['go']['main']['App']['ListDatabaseBackups']();
 }
 
 export function ListPeople(arg1, arg2, arg3, arg4) {
@@ -374,6 +422,10 @@ export function ResolveVideoArtwork(arg1, arg2) {
   return window['go']['main']['App']['ResolveVideoArtwork'](arg1, arg2);
 }
 
+export function RestoreDatabaseBackup(arg1) {
+  return window['go']['main']['App']['RestoreDatabaseBackup'](arg1);
+}
+
 export function RestoreTrashEntry(arg1) {
   return window['go']['main']['App']['RestoreTrashEntry'](arg1);
 }
@@ -416,6 +468,10 @@ export function SearchLibraryVideoPage(arg1) {
 
 export function SearchLibraryVideos(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['SearchLibraryVideos'](arg1, arg2, arg3, arg4, arg5);
+}
+
+export function SearchSemanticVideos(arg1) {
+  return window['go']['main']['App']['SearchSemanticVideos'](arg1);
 }
 
 export function SearchSubtitleMatches(arg1, arg2) {
@@ -484,6 +540,46 @@ export function StartCleanupAnalysis(arg1, arg2, arg3) {
 
 export function StartLocalMetadataBackfill() {
   return window['go']['main']['App']['StartLocalMetadataBackfill']();
+}
+
+export function StartLocalMetadataExport(arg1) {
+  return window['go']['main']['App']['StartLocalMetadataExport'](arg1);
+}
+
+export function GetEnhancementCapability() {
+  return window['go']['main']['App']['GetEnhancementCapability']();
+}
+
+export function CreateEnhancementTask(arg1) {
+  return window['go']['main']['App']['CreateEnhancementTask'](arg1);
+}
+
+export function GetEnhancementVideoPreflight(arg1) {
+  return window['go']['main']['App']['GetEnhancementVideoPreflight'](arg1);
+}
+
+export function ListEnhancementTasks(arg1) {
+  return window['go']['main']['App']['ListEnhancementTasks'](arg1);
+}
+
+export function CancelEnhancementTask(arg1) {
+  return window['go']['main']['App']['CancelEnhancementTask'](arg1);
+}
+
+export function RetryEnhancementTask(arg1) {
+  return window['go']['main']['App']['RetryEnhancementTask'](arg1);
+}
+
+export function DismissNearDuplicateGroup(arg1) {
+  return window['go']['main']['App']['DismissNearDuplicateGroup'](arg1);
+}
+
+export function StartPerceptualHashBackfill() {
+  return window['go']['main']['App']['StartPerceptualHashBackfill']();
+}
+
+export function StartSemanticIndex(arg1) {
+  return window['go']['main']['App']['StartSemanticIndex'](arg1);
 }
 
 export function StartTechnicalBackfill() {

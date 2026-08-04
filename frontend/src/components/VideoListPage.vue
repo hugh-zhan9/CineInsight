@@ -6,15 +6,17 @@
     <div class="toolbar glass-surface">
       <div class="toolbar-primary">
         <div class="search-group">
-          <select v-model="searchMode" @change="handleSearch(true)" class="select-input toolbar-control">
+          <select v-model="searchMode" @change="handleSearch(true, true)" class="select-input toolbar-control">
             <option value="file">文件搜索</option>
             <option value="subtitle">字幕搜索</option>
+            <option value="semantic">语义搜索</option>
           </select>
           <input
             v-model="searchKeyword"
-            @input="handleSearch()"
+            @input="handleSearch(false, true)"
+            @keyup.enter="handleSearch(true, true)"
             type="text"
-            :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : '搜索标题、文件名或路径...'"
+            :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : (searchMode === 'semantic' ? '用自然语言描述想找的内容，回车搜索...' : '搜索标题、文件名或路径...')"
             class="search-input toolbar-control"
           />
         </div>
@@ -48,11 +50,11 @@
             <option :value="0">保存视图</option>
             <option v-for="view in savedViews" :key="view.id" :value="view.id">{{ view.name }}</option>
           </select>
-          <button type="button" class="btn-action" @click="openSaveViewDialog">保存当前视图</button>
-          <button v-if="selectedSavedViewID" type="button" class="btn-action" @click="deleteSelectedSavedView">删除该视图</button>
+          <button type="button" class="btn-secondary" @click="openSaveViewDialog">保存当前视图</button>
+          <button v-if="selectedSavedViewID" type="button" class="btn-secondary" @click="deleteSelectedSavedView">删除该视图</button>
           <div class="layout-toggle" aria-label="片库布局">
-            <button type="button" :class="['btn-action', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
-            <button type="button" :class="['btn-action', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
+            <button type="button" :class="['btn-secondary', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
+            <button type="button" :class="['btn-secondary', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
           </div>
         </div>
 
@@ -90,19 +92,27 @@
         >
           {{ incrementalScan.running ? '扫描中...' : '增量扫描' }}
         </button>
-        <button type="button" class="btn-action" @click="openAITagReviewDialog()">AI 标签管理</button>
+        <button type="button" class="btn-secondary" @click="openAITagReviewDialog()">AI 标签管理</button>
         <span v-if="aiTagSummary.same_source_unread" class="ai-review-badge" title="未读同源视频关系">{{ aiTagSummary.same_source_unread }}</span>
-        <button type="button" class="btn-action" @click="openCleanupDialog()">清理候选</button>
-        <button type="button" class="btn-action" @click="openTrashDialog">回收站</button>
-        <button type="button" class="btn-action" :disabled="technicalBackfill.running" @click="startTechnicalBackfill">
+        <button type="button" class="btn-secondary" @click="openCleanupDialog()">清理候选</button>
+        <button type="button" class="btn-secondary" @click="openTrashDialog">回收站</button>
+        <button type="button" class="btn-secondary" :disabled="technicalBackfill.running" @click="startTechnicalBackfill">
           {{ technicalBackfill.running ? (technicalBackfill.preparing ? '正在统计待补全视频...' : `技术信息 ${technicalBackfill.processed}/${technicalBackfill.total}`) : '补全技术信息' }}
         </button>
         <button v-if="technicalBackfill.running" type="button" class="btn-secondary" @click="cancelTechnicalBackfill">取消补全</button>
-        <button v-if="settings.local_metadata_enabled" type="button" class="btn-action" :disabled="localMetadataBackfill.running" @click="startLocalMetadataBackfill">
+        <button type="button" class="btn-secondary" :disabled="perceptualHash.running" @click="startPerceptualHashBackfill">
+          {{ perceptualHash.running ? `近重复指纹 ${perceptualHash.processed}/${perceptualHash.total}` : '补全近重复指纹' }}
+        </button>
+        <button v-if="perceptualHash.running" type="button" class="btn-secondary" @click="cancelPerceptualHashBackfill">取消指纹补全</button>
+        <button v-if="settings.local_metadata_enabled" type="button" class="btn-secondary" :disabled="localMetadataBackfill.running" @click="startLocalMetadataBackfill">
           {{ localMetadataBackfill.running ? `本地资料 ${localMetadataBackfill.processed}/${localMetadataBackfill.total}` : '补全本地资料' }}
         </button>
         <button v-if="settings.local_metadata_enabled && localMetadataBackfill.running" type="button" class="btn-secondary" @click="cancelLocalMetadataBackfill">取消本地资料补全</button>
-        <button type="button" class="btn-action" @click="showTagManagerDialog = true">标签管理</button>
+		<button type="button" class="btn-secondary" :disabled="localMetadataExport.running" @click="startLocalMetadataExport">
+		  {{ localMetadataExport.running ? `写出 NFO ${localMetadataExport.processed}/${localMetadataExport.total}` : '当前筛选写出 NFO' }}
+		</button>
+		<button v-if="localMetadataExport.running" type="button" class="btn-secondary" @click="cancelLocalMetadataExport">取消写出 NFO</button>
+        <button type="button" class="btn-secondary" @click="showTagManagerDialog = true">标签管理</button>
       </div>
     </div>
 
@@ -128,9 +138,26 @@
       </ul>
     </div>
 
+    <div v-if="perceptualHash.running || perceptualHash.completed" class="scan-sync-status" :role="perceptualHash.failed ? 'alert' : 'status'">
+      近重复指纹：成功 {{ perceptualHash.succeeded }}，跳过 {{ perceptualHash.skipped }}，失败 {{ perceptualHash.failed }}
+      <span v-if="perceptualHash.cancelled">（已取消）</span><span v-else-if="perceptualHash.completed">（已完成）</span>
+      <ul v-if="perceptualHash.failures?.length" class="technical-backfill-failures">
+        <li v-for="failure in perceptualHash.failures" :key="`phash-${failure.video_id}`">{{ failure.name || `视频 #${failure.video_id}` }}：{{ failure.error }}</li>
+      </ul>
+    </div>
+
     <div v-if="localMetadataBackfill.running || localMetadataBackfill.completed" class="scan-sync-status" :role="localMetadataBackfill.failed ? 'alert' : 'status'">
       本地资料：成功 {{ localMetadataBackfill.succeeded }}，跳过 {{ localMetadataBackfill.skipped }}，失败 {{ localMetadataBackfill.failed }}
       <span v-if="localMetadataBackfill.cancelled">（已取消）</span><span v-else-if="localMetadataBackfill.completed">（已完成）</span>
+    </div>
+	<div v-if="localMetadataExport.running || localMetadataExport.completed" class="scan-sync-status" :role="localMetadataExport.failed ? 'alert' : 'status'">
+	  NFO 写出：成功 {{ localMetadataExport.succeeded }}，失败 {{ localMetadataExport.failed }}
+	  <span v-if="localMetadataExport.cancelled">（已取消）</span><span v-else-if="localMetadataExport.completed">（已完成）</span>
+	</div>
+    <div v-if="searchMode === 'semantic'" class="scan-sync-status" :role="semanticSearchError ? 'alert' : 'status'">
+      <span v-if="semanticSearchError">语义搜索失败：{{ semanticSearchErrorText }}</span>
+      <span v-else-if="semanticCoverage">语义索引覆盖 {{ semanticCoverage.indexed || 0 }}/{{ semanticCoverage.total || 0 }}；未建立索引的视频不会出现在结果中。</span>
+      <span v-else>用自然语言描述想找的内容，回车开始搜索；未建立索引的视频不会出现在结果中。</span>
     </div>
 
     <div v-if="undoNotice" class="undo-delete-banner" role="status">
@@ -171,7 +198,7 @@
     <div v-if="subtitleQueue.total > 0" class="subtitle-queue-panel glass-surface">
       <div class="subtitle-queue-heading">
         <strong>字幕任务队列（{{ subtitleQueue.total }}）</strong>
-        <button type="button" class="btn-action" @click="refreshSubtitleQueue">刷新</button>
+        <button type="button" class="btn-secondary" @click="refreshSubtitleQueue">刷新</button>
       </div>
       <div v-if="subtitleQueue.active_task" class="subtitle-queue-task subtitle-queue-task--active">
         <span class="subtitle-queue-status">处理中</span>
@@ -214,6 +241,7 @@
       </div>
       <VirtualVideoList
         v-else-if="videos.length > 0"
+        ref="virtualList"
         :items="videos"
         :loading="loading"
         :has-more="hasMore"
@@ -234,6 +262,7 @@
             :generating-subtitle-ids="generatingSubtitleIds"
             :deleting-ids="deletingIds"
             :selected="isVideoSelected(video.id)"
+            :keyboard-focused="Number(video.id) === Number(keyboardFocusVideoID)"
             :layout-mode="viewMode"
             @preview="openPreview"
             @play="playVideo"
@@ -265,6 +294,7 @@
 
     <PreviewDrawer
       v-if="previewOpen && selectedPreviewVideo"
+      :page-active="pageActive"
       :video="selectedPreviewVideo"
       :session="previewSession"
       :start-time-ms="previewStartTimeMs"
@@ -274,6 +304,10 @@
       @watch-progress="handlePreviewWatchProgress"
       @details-updated="handleVideoDetailsUpdated"
       @open-local-metadata="openLocalMetadataDialog([$event.id])"
+	  @export-local-metadata="exportLocalMetadataNFO"
+	  @enhance="openEnhanceDialog"
+	  @find-similar="findSimilarVideos"
+	  @shortcut="handlePreviewShortcut"
     />
 
     <SubtitleWorkbench
@@ -307,12 +341,54 @@
       <div @click="openDirectory(contextMenu.video.id)">打开目录</div>
       <div @click="renameVideo(contextMenu.video)">重命名</div>
       <div @click="moveVideo(contextMenu.video)">迁移</div>
+	  <div @click="exportLocalMetadataNFO(contextMenu.video)">写出 NFO</div>
+	  <div @click="openEnhanceDialog(contextMenu.video)">视频超分…</div>
       <div @click="confirmDelete(contextMenu.video)" class="danger">删除</div>
     </div>
 
+    <!-- 视频超分 -->
+    <BaseModal v-if="enhanceDialog.show" stop-modal-clicks @close="enhanceDialog.show = false">
+      <h2>视频超分（2×）</h2>
+      <template v-if="!enhanceCapability?.available">
+        <p class="help-text">超分能力不可用：{{ enhanceCapability?.message || '运行时未打包' }}</p>
+      </template>
+      <template v-else-if="enhanceDialog.video">
+        <p class="enhance-source-name" :title="enhanceDialog.video.path">{{ enhanceDialog.video.name }}</p>
+        <div class="setting-item">
+          <label>内容类型（决定模型，不会自动判断）</label>
+          <div class="merge-type-switch" role="group" aria-label="超分内容类型">
+            <button type="button" :class="{ active: enhanceDialog.profile === 'general' }" @click="enhanceDialog.profile = 'general'">普通真人</button>
+            <button type="button" :class="{ active: enhanceDialog.profile === 'anime' }" @click="enhanceDialog.profile = 'anime'">动漫</button>
+          </div>
+        </div>
+        <p class="help-text">输出：<code>{{ enhanceOutputPreview }}</code>（与源同目录）</p>
+        <p class="help-text">固定 2× 放大；原文件不会被修改；任务可随时取消。运行需要同卷至少约 {{ enhanceDiskFloorText }} 可用空间。</p>
+        <p v-if="enhanceDialog.error" class="cleanup-error">{{ enhanceDialog.error }}</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" @click="enhanceDialog.show = false">取消</button>
+          <button type="button" class="btn-primary" :disabled="enhanceDialog.creating" @click="createEnhancementTask">
+            {{ enhanceDialog.creating ? '创建中...' : '创建超分任务' }}
+          </button>
+        </div>
+      </template>
+      <template v-if="enhanceTasks.length">
+        <div class="divider"></div>
+        <h3 class="enhance-task-heading">任务</h3>
+        <div v-for="task in enhanceTasks" :key="task.id" class="enhance-task-row">
+          <span class="enhance-task-main">
+            {{ task.video_name }} · {{ enhanceStatusLabel(task) }}
+            <template v-if="task.status === 'running' && task.total_frames">（{{ task.committed_frames }}/{{ task.total_frames }} 帧）</template>
+          </span>
+          <span class="enhance-task-actions">
+            <button v-if="['queued','running'].includes(task.status)" type="button" class="btn-secondary btn-compact" @click="cancelEnhancementTask(task)">取消</button>
+            <button v-if="['failed','cancelled'].includes(task.status)" type="button" class="btn-secondary btn-compact" @click="retryEnhancementTask(task)">重试</button>
+          </span>
+        </div>
+      </template>
+    </BaseModal>
+
     <!-- 重命名弹窗 -->
-    <div v-if="renameDialog.show" class="modal-overlay">
-      <div class="modal download-modal">
+    <BaseModal v-if="renameDialog.show" class="download-modal">
         <h3>重命名视频</h3>
         <input
           v-model="renameDialog.newName"
@@ -327,11 +403,9 @@
           <button @click="renameDialog.show = false" class="btn-secondary">取消</button>
           <button @click="executeRename" class="btn-primary">确认</button>
         </div>
-      </div>
-    </div>
+    </BaseModal>
 
-    <div v-if="folderRenameDialog.show" class="modal-overlay">
-      <div class="modal download-modal">
+    <BaseModal v-if="folderRenameDialog.show" class="download-modal">
         <h3>重命名文件夹</h3>
         <p class="folder-rename-source" :title="folderRenameDialog.source">{{ folderRenameDialog.source }}</p>
         <input
@@ -350,11 +424,9 @@
           <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="folderRenameDialog.show = false">取消</button>
           <button type="button" class="btn-primary" :disabled="migrationRunning || !folderRenameDialog.newName.trim()" @click="executeFolderRename">{{ migrationRunning ? '重命名中...' : '确认重命名' }}</button>
         </div>
-      </div>
-    </div>
+    </BaseModal>
 
-    <div v-if="saveViewDialog.show" class="modal-overlay">
-      <div class="modal download-modal">
+    <BaseModal v-if="saveViewDialog.show" class="download-modal">
         <h3>保存当前片库视图</h3>
         <input
           ref="saveViewNameInput"
@@ -372,8 +444,7 @@
             {{ saveViewDialog.saving ? '保存中...' : '保存' }}
           </button>
         </div>
-      </div>
-    </div>
+    </BaseModal>
 
     <!-- 弹窗组件 -->
     <ScanDialog
@@ -427,12 +498,11 @@
       @changed="handleAITagCandidatesChanged"
     />
 
-    <div v-if="cleanupDialog.show" class="modal-overlay">
-      <div class="modal cleanup-modal">
+    <BaseModal v-if="cleanupDialog.show" class="cleanup-modal">
         <div class="cleanup-modal-header">
           <div>
             <h3>清理候选审阅</h3>
-            <p class="cleanup-intro">当前审阅基于轻量规则：重复文件（大小 + 采样哈希）、低清视频：分辨率低于 480x320、短视频：时长 < 5 秒。选中的视频会直接移入回收站并从库中移除。</p>
+            <p class="cleanup-intro">当前审阅基于轻量规则：精确重复（大小 + 采样哈希）、近似重复（多帧感知哈希）、低清视频：分辨率低于 480x320、短视频：时长 < 5 秒。选中的视频会直接移入回收站并从库中移除。</p>
             <p class="cleanup-intro cleanup-intro--muted">每条候选都支持预览，优先看画面再决定是否保留更稳妥。</p>
           </div>
           <button @click="cleanupDialog.show = false" class="btn-secondary">关闭</button>
@@ -457,6 +527,7 @@
           <div v-else-if="cleanupDialog.analysis" class="cleanup-body">
             <div class="cleanup-summary">
               <span>重复组 {{ cleanupDialog.analysis.duplicate_groups?.length || 0 }}</span>
+              <span>近似重复 {{ cleanupDialog.analysis.near_duplicate_groups?.length || 0 }}</span>
               <span>疑似同源 {{ cleanupDialog.analysis.same_source_groups?.length || 0 }}</span>
               <span>短视频 {{ cleanupDialog.analysis.low_duration?.length || 0 }}</span>
               <span>低清视频 {{ cleanupDialog.analysis.low_resolution?.length || 0 }}</span>
@@ -549,6 +620,58 @@
               </div>
             </div>
 
+            <div v-if="cleanupDialog.analysis.stale_hash_count" class="cleanup-section cleanup-stale-hash-hint">
+              <span>有 {{ cleanupDialog.analysis.stale_hash_count }} 个视频的源文件已变更，感知哈希待重算，暂未参与近似重复检测。</span>
+              <button type="button" class="btn-secondary btn-compact" :disabled="perceptualHash.running" @click="startPerceptualHashBackfill">
+                {{ perceptualHash.running ? '重算中...' : '重算感知哈希' }}
+              </button>
+            </div>
+
+            <div v-if="cleanupDialog.analysis.near_duplicate_groups?.length" class="cleanup-section">
+              <h4 class="cleanup-section-title">近似重复（不同转码，不会默认选中）</h4>
+              <div
+                v-for="group in cleanupDialog.analysis.near_duplicate_groups"
+                :key="`near-${group.original?.id}-${group.candidates?.length}`"
+                class="cleanup-card"
+              >
+                <div class="cleanup-select-row cleanup-select-row--original">
+                  <input
+                    type="checkbox"
+                    :checked="isCleanupSelected(group.original?.id)"
+                    @change="toggleCleanupSelection(group.original?.id)"
+                  />
+                  <strong>建议保留：</strong>
+                  <div class="cleanup-item-text">
+                    <span class="cleanup-item-main">{{ group.original?.name }} · {{ group.original?.resolution || '未知分辨率' }} · {{ formatDuration(group.original?.duration) || '00:00' }}</span>
+                    <span v-if="group.original?.path" class="cleanup-item-path" :title="group.original.path">{{ group.original.path }}</span>
+                  </div>
+                  <div class="cleanup-item-actions">
+                    <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(group.original)">预览</button>
+                    <button type="button" class="btn-secondary btn-compact" @click="dismissNearDuplicateGroup(group)">不是同片</button>
+                  </div>
+                </div>
+                <p><strong>原因：</strong>{{ group.reason }}</p>
+                <ul>
+                  <li v-for="candidate in group.candidates || []" :key="`near-${candidate.id}`">
+                    <div class="cleanup-select-row">
+                      <input
+                        type="checkbox"
+                        :checked="isCleanupSelected(candidate.id)"
+                        @change="toggleCleanupSelection(candidate.id)"
+                      />
+                      <span class="cleanup-item-text">
+                        <span class="cleanup-item-main">{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }} · {{ formatDuration(candidate.duration) || '00:00' }}</span>
+                        <span v-if="candidate.path" class="cleanup-item-path" :title="candidate.path">{{ candidate.path }}</span>
+                      </span>
+                      <span class="cleanup-item-actions">
+                        <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(candidate)">预览</button>
+                      </span>
+                    </div>
+                  </li>
+                </ul>
+              </div>
+            </div>
+
             <div v-if="cleanupDialog.analysis.low_resolution?.length" class="cleanup-section">
               <h4 class="cleanup-section-title">低清视频</h4>
               <ul>
@@ -594,7 +717,7 @@
             </div>
 
             <div
-              v-if="!(cleanupDialog.analysis.duplicate_groups?.length || cleanupDialog.analysis.same_source_groups?.length || cleanupDialog.analysis.low_duration?.length || cleanupDialog.analysis.low_resolution?.length)"
+              v-if="!(cleanupDialog.analysis.duplicate_groups?.length || cleanupDialog.analysis.near_duplicate_groups?.length || cleanupDialog.analysis.same_source_groups?.length || cleanupDialog.analysis.low_duration?.length || cleanupDialog.analysis.low_resolution?.length)"
               class="cleanup-empty"
             >
               当前没有命中轻量清理规则的候选项。
@@ -614,11 +737,9 @@
           <button @click="cleanupDialog.show = false" class="btn-primary">关闭</button>
           <button v-if="cleanupDialog.loading" @click="cleanupDialog.show = false" class="btn-secondary">后台继续分析</button>
         </div>
-      </div>
-    </div>
+    </BaseModal>
 
-    <div v-if="subtitlePreview.show" class="modal-overlay">
-      <div class="modal subtitle-preview-modal">
+    <BaseModal v-if="subtitlePreview.show" class="subtitle-preview-modal">
         <h3>字幕预览</h3>
         <p class="cleanup-intro" v-if="subtitlePreview.video">{{ subtitlePreview.video.name }}</p>
 
@@ -642,12 +763,10 @@
         <div class="modal-actions">
           <button @click="subtitlePreview.show = false" class="btn-primary">关闭</button>
         </div>
-      </div>
-    </div>
+    </BaseModal>
 
     <!-- 字幕操作弹窗（确认/进度/结果） -->
-    <div v-if="subtitleDialog.show" class="modal-overlay">
-      <div class="modal download-modal">
+    <BaseModal v-if="subtitleDialog.show" class="download-modal">
         <h3>{{ subtitleDialog.title }}</h3>
         <p>{{ subtitleDialog.msg }}</p>
 
@@ -700,12 +819,20 @@
         <div v-if="subtitleDialog.mode === 'result'" class="modal-actions">
           <button @click="subtitleDialog.show = false" class="btn-primary">确定</button>
         </div>
-      </div>
-    </div>
+    </BaseModal>
   </div>
 </template>
 
 <style scoped>
+.tags-filter { padding: 6px 0 10px; border-bottom: 1px solid var(--border-color); margin-bottom: 12px; }
+.tags-scroll-container {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+  overflow: visible;
+  padding-bottom: 0;
+  align-items: flex-start;
+}
 .ai-review-badge {
   display: inline-flex;
   min-width: 18px;
@@ -715,7 +842,7 @@
   align-items: center;
   justify-content: center;
   border-radius: 999px;
-  background: #dc2626;
+  background: var(--danger-color);
   color: #fff;
   font-size: 11px;
   font-weight: 700;
@@ -761,7 +888,7 @@
   border: 1px solid var(--border-color);
   border-radius: 8px;
 }
-.layout-toggle .btn-action.active {
+.layout-toggle .btn-secondary.active {
   background: var(--accent-color);
   color: white;
 }
@@ -858,17 +985,17 @@
 }
 
 .scan-sync-status--success {
-  border-color: rgba(15, 143, 130, 0.34);
+  border-color: var(--accent-border);
   color: var(--accent-color);
 }
 
 .scan-sync-status--warning {
-  border-color: rgba(217, 119, 6, 0.4);
+  border-color: var(--warning-border);
   color: var(--warning-color);
 }
 
 .scan-sync-status--error {
-  border-color: rgba(229, 72, 77, 0.4);
+  border-color: var(--danger-border);
   color: var(--danger-color);
 }
 
@@ -878,7 +1005,7 @@
   gap: 8px;
   margin: 0 0 10px;
   padding: 8px 10px;
-  border: 1px solid rgba(15, 143, 130, 0.34);
+  border: 1px solid var(--accent-border);
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
@@ -930,7 +1057,7 @@
     flex-basis: 100%;
   }
 }
-.download-modal {
+:deep(.download-modal) {
   width: 400px;
   text-align: center;
   padding: 30px;
@@ -973,38 +1100,33 @@
 .progress-bar-container {
   width: 100%;
   height: 10px;
-  background-color: #f0f0f0;
+  background-color: var(--review-progress-track-bg);
   border-radius: 5px;
   margin: 20px 0;
   overflow: hidden;
 }
 .progress-bar {
   height: 100%;
-  background-color: #4caf50;
+  background-color: var(--success-bright);
   transition: width 0.3s ease;
 }
 .progress-text {
   font-size: 0.9em;
-  color: #666;
+  color: var(--review-text-muted);
   margin: 0;
 }
 .progress-meta {
   font-size: 13px;
-  color: #374151;
+  color: var(--review-text-meta);
   margin: 10px 0 0;
 }
 .progress-hint {
   font-size: 12px;
   line-height: 1.6;
-  color: #666;
+  color: var(--review-text-muted);
   margin: 8px 0 0;
 }
-.btn-processing {
-  opacity: 0.7;
-  cursor: wait;
-  background-color: #aaa !important;
-}
-.cleanup-modal {
+:deep(.cleanup-modal) {
   width: min(920px, calc(100vw - 32px));
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 48px);
@@ -1044,11 +1166,11 @@
 .cleanup-loading,
 .cleanup-error,
 .cleanup-empty {
-  color: #666;
+  color: var(--review-text-muted);
   font-size: 13px;
 }
 .cleanup-intro--muted {
-  color: #4b5563;
+  color: var(--review-text-secondary);
   margin-top: 4px;
 }
 .cleanup-summary {
@@ -1057,20 +1179,20 @@
   flex-wrap: wrap;
   margin: 0 0 14px;
   font-size: 13px;
-  color: #444;
+  color: var(--review-text-emphasis);
 }
 .cleanup-summary span {
   padding: 5px 9px;
   border: 1px solid var(--border-color);
   border-radius: 6px;
-  background: rgba(148, 163, 184, 0.1);
+  background: var(--review-neutral-chip-bg);
 }
 .cleanup-progress-meta,
 .cleanup-progress-hint,
 .cleanup-progress-path {
   margin-top: 8px;
   font-size: 13px;
-  color: #4b5563;
+  color: var(--review-text-secondary);
 }
 .cleanup-progress-path {
   word-break: break-all;
@@ -1092,16 +1214,16 @@
   padding: 8px 0;
   font-size: 14px;
   font-weight: 700;
-  color: #111827;
+  color: var(--review-text-strong);
   background: var(--panel-bg);
   border-bottom: 1px solid var(--border-color);
 }
 .cleanup-card {
   padding: 12px 14px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--review-border-color);
   border-radius: 8px;
   margin-top: 10px;
-  background: rgba(0, 0, 0, 0.02);
+  background: var(--review-subtle-bg);
 }
 .cleanup-card p,
 .cleanup-card ul,
@@ -1120,7 +1242,7 @@
   width: 100%;
   min-width: 0;
   padding: 8px 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.16);
+  border-top: 1px solid var(--neutral-softer);
 }
 .cleanup-select-row--original {
   border-top: 0;
@@ -1134,13 +1256,13 @@
   gap: 2px;
 }
 .cleanup-item-main {
-  color: #111827;
+  color: var(--review-text-strong);
   font-size: 13px;
   font-weight: 600;
 }
 .cleanup-item-path {
   font-size: 11px;
-  color: #6b7280;
+  color: var(--review-text-path);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1155,7 +1277,7 @@
   padding: 0 10px;
   font-size: 12px;
 }
-.subtitle-preview-modal {
+:deep(.subtitle-preview-modal) {
   width: 760px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 48px);
@@ -1178,12 +1300,12 @@
 }
 .subtitle-queue-task {
   min-height: 32px;
-  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  border-top: 1px solid var(--neutral-soft);
   font-size: 13px;
 }
 .subtitle-queue-status {
   flex: 0 0 70px;
-  color: #0f766e;
+  color: var(--accent-deep);
   font-size: 12px;
 }
 .subtitle-queue-name {
@@ -1200,18 +1322,18 @@
   margin-top: 16px;
 }
 .subtitle-segment {
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--review-border-color);
   border-radius: 10px;
   padding: 12px 14px;
-  background: #fff;
+  background: var(--review-solid-bg);
 }
 .subtitle-segment-match {
-  border-color: #0f766e;
-  background: rgba(15, 118, 110, 0.06);
+  border-color: var(--accent-deep);
+  background: var(--review-accent-soft);
 }
 .subtitle-segment-time {
   font-size: 12px;
-  color: #666;
+  color: var(--review-text-muted);
   margin-bottom: 6px;
 }
 .subtitle-segment-text {
@@ -1223,8 +1345,8 @@
   margin-left: 8px;
   padding: 2px 8px;
   border-radius: 999px;
-  background: rgba(15, 118, 110, 0.12);
-  color: #0f766e;
+  background: var(--review-accent-badge-bg);
+  color: var(--accent-deep);
 }
 .video-subtitle-hit {
   display: block;
@@ -1233,19 +1355,25 @@
   padding: 0;
   border: 0;
   background: transparent;
-  color: #0f766e;
+  color: var(--accent-deep);
   cursor: pointer;
   font-size: 13px;
   text-align: left;
 }
 .video-stale {
-  color: #b45309;
+  color: var(--warning-strong);
   font-weight: 600;
 }
+
+.enhance-source-name { font-weight: 650; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enhance-task-heading { font-size: 14px; margin-bottom: 8px; }
+.enhance-task-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 12px; }
+.enhance-task-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enhance-task-actions { flex: 0 0 auto; display: flex; gap: 6px; }
 </style>
 
 <script>
-import { SearchLibraryVideoPage, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, DismissNearDuplicateGroup, GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1260,15 +1388,18 @@ import AITagReviewDialog from './AITagReviewDialog.vue';
 import LocalMetadataDialog from './LocalMetadataDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
+import BaseModal from './ui/BaseModal.vue';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
+import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, TrashRestoreDialog, VirtualVideoList, VideoListRow, AITagReviewDialog },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, TrashRestoreDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BaseModal },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
-    directories: { type: Array, default: () => [] }
+    directories: { type: Array, default: () => [] },
+    pageActive: { type: Boolean, default: true }
   },
   emits: ['reload-tags', 'update-settings', 'reload-directories'],
   data() {
@@ -1277,6 +1408,12 @@ export default {
       viewMode: window.localStorage?.getItem('cineinsight-library-layout') === 'grid' ? 'grid' : 'list',
       searchKeyword: '',
       searchMode: 'file',
+      semanticSimilarVideoID: 0,
+      semanticCoverage: null,
+      semanticSearchError: '',
+      enhanceCapability: null,
+      enhanceDialog: { show: false, video: null, profile: 'general', creating: false, error: '', preflight: null },
+      enhanceTasks: [],
       smartView: '',
       smartViewOptions: [
         { label: '全部视频', value: '' },
@@ -1341,6 +1478,7 @@ export default {
       loadIdleResolvers: [],
       addTagDialog: { show: false, video: null, videoIds: [], mode: 'single' },
       selectedVideoIds: [],
+	  keyboardFocusVideoID: 0,
       deleteDialog: { show: false, video: null, videoIds: [] },
       deletingIds: [],
       tagDeleteDialog: { show: false, tag: null },
@@ -1348,7 +1486,9 @@ export default {
       aiTagSummary: { same_source_unread: 0 },
       aiTagSummaryTimer: null,
       technicalBackfill: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
+      perceptualHash: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
       localMetadataBackfill: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
+	  localMetadataExport: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, failed: 0, failures: [] },
       localMetadataDialog: { show: false, videoIds: [] },
       cleanupDialog: {
         show: false,
@@ -1413,9 +1553,12 @@ export default {
     this.refreshSubtitleQueue();
     this.refreshAITagSummary();
     this.refreshTechnicalBackfillStatus();
+    this.refreshPerceptualHashBackfillStatus();
     this.refreshLocalMetadataBackfillStatus();
+	this.refreshLocalMetadataExportStatus();
     this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
     this.attachWheelFallback();
+	window.addEventListener('keydown', this.handleLibraryShortcut);
     document.addEventListener('click', this.hideContextMenu);
 
     if (window.runtime?.EventsOn) {
@@ -1494,14 +1637,23 @@ export default {
         }
       });
 
-      this.registerRuntimeEvent('technical-backfill-state', (data) => {
+      this.registerRuntimeEvent('video-enhancement-state', view => this.applyEnhancementState(view));
+	  this.registerRuntimeEvent('technical-backfill-state', (data) => {
         this.technicalBackfill = { ...this.technicalBackfill, ...(data || {}) };
+      });
+
+      this.registerRuntimeEvent('perceptual-hash-state', (data) => {
+        this.perceptualHash = { ...this.perceptualHash, ...(data || {}) };
       });
 
       this.registerRuntimeEvent('local-metadata-backfill', (data) => {
         this.localMetadataBackfill = { ...this.localMetadataBackfill, ...(data || {}) };
         if (data?.completed && data?.succeeded) this.reloadCurrentView();
       });
+
+	  this.registerRuntimeEvent('local-metadata-export', (data) => {
+		this.localMetadataExport = { ...this.localMetadataExport, ...(data || {}) };
+	  });
 
       this.registerRuntimeEvent('library-watcher-reconciled', (event) => {
         const result = event?.result;
@@ -1523,6 +1675,7 @@ export default {
     }
   },
   beforeUnmount() {
+	window.removeEventListener('keydown', this.handleLibraryShortcut);
     document.removeEventListener('click', this.hideContextMenu);
     this.detachWheelFallback();
     if (this.searchDebounceTimer) {
@@ -1539,6 +1692,26 @@ export default {
     this.resetSubtitleProgressTracking();
   },
   computed: {
+    semanticSearchErrorText() {
+      const raw = String(this.semanticSearchError || '');
+      if (raw.includes('semantic_index_rebuild_required') || raw.includes('需要重建')) return '语义索引需要重建（模型或配置已变更），请到设置页重建索引。';
+      if (raw.includes('尚未建立语义索引')) return '当前视频尚未建立语义索引，请先在设置页运行索引补全。';
+      if (raw.includes('pgvector')) return '语义检索不可用：数据库缺少 pgvector 扩展。';
+      return raw;
+    },
+    enhanceOutputPreview() {
+      const preflight = this.enhanceDialog.preflight;
+      if (preflight) {
+        return this.enhanceDialog.profile === 'anime' ? preflight.output_basename_anime : preflight.output_basename_general;
+      }
+      const name = this.enhanceDialog.video?.name || '';
+      return `${name.replace(/\.[^.]+$/, '')}.enhanced-${this.enhanceDialog.profile}-2x.mkv`;
+    },
+    enhanceDiskFloorText() {
+      const required = Number(this.enhanceDialog.preflight?.required_bytes || 0);
+      if (!required) return '数 GiB';
+      return `${(required / (1 << 30)).toFixed(1)} GiB`;
+    },
     allVisibleSelected() {
       const ids = this.videos.map(video => video.id);
       return ids.length > 0 && ids.every(id => this.selectedVideoIds.includes(id));
@@ -1556,6 +1729,7 @@ export default {
       return JSON.stringify({
         mode: this.searchMode,
         keyword: this.currentQueryKeyword(),
+        similarVideoID: this.semanticSimilarVideoID,
         smartView: this.smartView,
         tags: [...this.selectedTags].sort((a, b) => a - b),
         size: this.selectedSizeRange === 'all' ? 'all' : `${this.selectedSizeRange.min}:${this.selectedSizeRange.max}`,
@@ -1643,6 +1817,75 @@ export default {
     }
   },
   methods: {
+	handleLibraryShortcut(event) {
+	  if (!this.pageActive || this.previewOpen || this.contextMenu.show || document.querySelector('[role="dialog"]')) return;
+	  const action = shortcutActionForEvent(event);
+	  if (!action) return;
+	  event.preventDefault();
+	  if (action === 'next' || action === 'previous') {
+		this.moveKeyboardFocus(action === 'next' ? 1 : -1, false);
+		return;
+	  }
+	  const video = this.keyboardFocusedVideo();
+	  if (video) this.applyReviewShortcut(action, video);
+	},
+	keyboardFocusedVideo(allowFirstRowFallback = false) {
+	  if (!this.videos.length) return null;
+	  const selectedID = Number(this.keyboardFocusVideoID || this.selectedVideoIds.at(-1) || 0);
+	  const found = this.videos.find(video => Number(video.id) === selectedID) || null;
+	  // 动作键（收藏/已看/播放等）不允许在没有可见焦点时落到第一行；
+	  // 只有 J/K 导航可以从第一行开始建立焦点。
+	  return found || (allowFirstRowFallback ? this.videos[0] : null);
+	},
+	moveKeyboardFocus(delta, openPreview) {
+	  if (!this.videos.length) return;
+	  const current = this.keyboardFocusedVideo(true);
+	  const hadFocus = !!(this.keyboardFocusVideoID || this.selectedVideoIds.length);
+	  const currentIndex = Math.max(0, this.videos.findIndex(video => video.id === current?.id));
+	  const nextIndex = hadFocus
+		? Math.max(0, Math.min(this.videos.length - 1, currentIndex + delta))
+		: currentIndex;
+	  const next = this.videos[nextIndex];
+	  this.keyboardFocusVideoID = next.id;
+	  // 保留用户已建立的多选（批量操作目标）；单选/无选时选中跟随焦点。
+	  if (this.selectedVideoIds.length <= 1) this.selectedVideoIds = [next.id];
+	  this.scrollKeyboardFocusIntoView(next.id);
+	  if (openPreview) this.openPreview(next);
+	},
+	scrollKeyboardFocusIntoView(videoId) {
+	  this.$nextTick(() => this.$refs.virtualList?.scrollToItem?.(videoId));
+	},
+	async applyReviewShortcut(action, video) {
+	  switch (action) {
+		case 'preview':
+		  await this.openPreview(video);
+		  break;
+		case 'favorite':
+		  await this.toggleVideoFavorite(video);
+		  break;
+		case 'watched':
+		  await this.toggleVideoWatched(video);
+		  break;
+		case 'tag':
+		  this.openAddTagDialog(video);
+		  break;
+		case 'play':
+		  await this.playVideo(video.id);
+		  break;
+	  }
+	},
+	handlePreviewShortcut({ action, video }) {
+	  if (action === 'preview') {
+		this.closePreview();
+		return;
+	  }
+	  if (action === 'next' || action === 'previous') {
+		this.keyboardFocusVideoID = video?.id || this.selectedPreviewVideoId;
+		this.moveKeyboardFocus(action === 'next' ? 1 : -1, true);
+		return;
+	  }
+	  if (video) this.applyReviewShortcut(action, video);
+	},
     applySubtitleQueueState(snapshot) {
       const next = snapshot || {};
       this.subtitleQueue = {
@@ -1762,6 +2005,28 @@ export default {
         alert('取消技术信息补全失败: ' + err);
       }
     },
+    async refreshPerceptualHashBackfillStatus() {
+      try {
+        this.perceptualHash = { ...this.perceptualHash, ...(await GetPerceptualHashBackfillStatus()) };
+      } catch (err) {
+        this.debugLog('perceptual hash status failed', { err: String(err) }, true);
+      }
+    },
+    async startPerceptualHashBackfill() {
+      try {
+        this.perceptualHash = { ...this.perceptualHash, ...(await StartPerceptualHashBackfill()) };
+      } catch (err) {
+        alert('启动近重复指纹补全失败: ' + err);
+      }
+    },
+    async cancelPerceptualHashBackfill() {
+      try {
+        await CancelPerceptualHashBackfill();
+        await this.refreshPerceptualHashBackfillStatus();
+      } catch (err) {
+        alert('取消近重复指纹补全失败: ' + err);
+      }
+    },
     async refreshLocalMetadataBackfillStatus() {
       try {
         this.localMetadataBackfill = { ...this.localMetadataBackfill, ...(await GetLocalMetadataBackfillStatus()) };
@@ -1784,6 +2049,39 @@ export default {
         alert('取消本地资料补全失败: ' + err);
       }
     },
+	async refreshLocalMetadataExportStatus() {
+	  try {
+		this.localMetadataExport = { ...this.localMetadataExport, ...(await GetLocalMetadataExportStatus()) };
+	  } catch (err) {
+		this.debugLog('local metadata export status failed', { err: String(err) }, true);
+	  }
+	},
+	async exportLocalMetadataNFO(video) {
+	  if (!video?.id) return;
+	  try {
+		const result = await ExportLocalMetadataNFO(video.id);
+		const warning = Array.isArray(result?.warnings) && result.warnings.length ? `\n${result.warnings.join('\n')}` : '';
+		alert(`NFO 已写出：${result?.nfo_path || video.name}${warning}`);
+	  } catch (err) {
+		alert('写出 NFO 失败: ' + err);
+	  }
+	},
+	async startLocalMetadataExport() {
+	  if (!window.confirm('将当前筛选结果逐个写出为同名 NFO；已有 NFO 会保留未知字段并合并应用管理字段。继续吗？')) return;
+	  try {
+		this.localMetadataExport = { ...this.localMetadataExport, ...(await StartLocalMetadataExport({ filter: this.currentLibraryFilter() })) };
+	  } catch (err) {
+		alert('启动 NFO 写出失败: ' + err);
+	  }
+	},
+	async cancelLocalMetadataExport() {
+	  try {
+		await CancelLocalMetadataExport();
+		await this.refreshLocalMetadataExportStatus();
+	  } catch (err) {
+		alert('取消 NFO 写出失败: ' + err);
+	  }
+	},
     startCleanupProgressTracking() {
       if (!this.cleanupStartedAt) {
         this.cleanupStartedAt = Date.now();
@@ -1979,6 +2277,15 @@ export default {
       this.selectedPreviewVideoId = null;
       this.previewVideoSnapshot = null;
     },
+    async findSimilarVideos(video) {
+      if (!video?.id) return;
+      this.semanticSimilarVideoID = video.id;
+      this.searchMode = 'semantic';
+      this.searchKeyword = `与「${video.display_title || video.name}」相似`;
+      this.semanticSearchError = '';
+      this.closePreview();
+      await this.resetAndLoadVideos();
+    },
     async previewExternally(video) {
       if (!video) return;
       try {
@@ -2035,6 +2342,14 @@ export default {
           byID.set(candidate.id, candidate);
         }
       }
+      for (const group of analysis.near_duplicate_groups || []) {
+        if (group.original?.id) {
+          byID.set(group.original.id, group.original);
+        }
+        for (const candidate of group.candidates || []) {
+          byID.set(candidate.id, candidate);
+        }
+      }
       for (const group of analysis.same_source_groups || []) {
         if (group.alternative?.id) {
           byID.set(group.alternative.id, group.alternative);
@@ -2059,8 +2374,32 @@ export default {
       }
       this.cleanupSelection = [...this.cleanupSelection, videoID];
     },
+    getSelectAllCleanupCandidates() {
+      const analysis = this.cleanupDialog.analysis || {};
+      const byID = new Map();
+      for (const group of analysis.duplicate_groups || []) {
+        if (group.original?.id) {
+          byID.set(group.original.id, group.original);
+        }
+        for (const candidate of group.candidates || []) {
+          byID.set(candidate.id, candidate);
+        }
+      }
+      for (const group of analysis.same_source_groups || []) {
+        if (group.alternative?.id) {
+          byID.set(group.alternative.id, group.alternative);
+        }
+      }
+      for (const video of analysis.low_duration || []) {
+        byID.set(video.id, video);
+      }
+      for (const video of analysis.low_resolution || []) {
+        byID.set(video.id, video);
+      }
+      return Array.from(byID.values());
+    },
     selectAllCleanupCandidates() {
-      this.cleanupSelection = this.getAllCleanupCandidates().map(video => video.id);
+      this.cleanupSelection = this.getSelectAllCleanupCandidates().map(video => video.id);
     },
     clearCleanupSelection() {
       this.cleanupSelection = [];
@@ -2068,6 +2407,78 @@ export default {
     async previewCleanupVideo(video) {
       if (!video) return;
       await this.openPreview(video);
+    },
+    async openEnhanceDialog(video) {
+      this.enhanceDialog = { show: true, video, profile: 'general', creating: false, error: '' };
+      try {
+        this.enhanceCapability = await GetEnhancementCapability();
+      } catch (err) {
+        this.enhanceCapability = { available: false, message: String(err) };
+      }
+      try {
+        this.enhanceDialog.preflight = await GetEnhancementVideoPreflight(video.id);
+      } catch (err) {
+        this.enhanceDialog.preflight = null;
+      }
+      await this.refreshEnhancementTasks();
+    },
+    async refreshEnhancementTasks() {
+      try {
+        this.enhanceTasks = await ListEnhancementTasks(10) || [];
+      } catch (err) {
+        this.enhanceTasks = [];
+      }
+    },
+    applyEnhancementState(view) {
+      if (!view?.id) return;
+      const index = this.enhanceTasks.findIndex(task => task.id === view.id);
+      if (index >= 0) this.enhanceTasks.splice(index, 1, view);
+      else this.enhanceTasks.unshift(view);
+    },
+    enhanceStatusLabel(task) {
+      const labels = { queued: '排队中', running: `处理中（${task.phase}）`, cancel_requested: '取消中', cancelled: '已取消', completed: '已完成', failed: `失败（${task.error_code}）` };
+      return labels[task.status] || task.status;
+    },
+    async createEnhancementTask() {
+      if (!this.enhanceDialog.video) return;
+      this.enhanceDialog.creating = true;
+      this.enhanceDialog.error = '';
+      try {
+        await CreateEnhancementTask({ video_id: this.enhanceDialog.video.id, profile: this.enhanceDialog.profile });
+        await this.refreshEnhancementTasks();
+      } catch (err) {
+        this.enhanceDialog.error = String(err);
+      } finally {
+        this.enhanceDialog.creating = false;
+      }
+    },
+    async cancelEnhancementTask(task) {
+      try {
+        await CancelEnhancementTask(task.id);
+      } catch (err) {
+        alert('取消超分任务失败: ' + err);
+      }
+      await this.refreshEnhancementTasks();
+    },
+    async retryEnhancementTask(task) {
+      try {
+        await RetryEnhancementTask(task.id);
+      } catch (err) {
+        alert('重试超分任务失败: ' + err);
+      }
+      await this.refreshEnhancementTasks();
+    },
+    async dismissNearDuplicateGroup(group) {
+      const ids = [group.original?.id, ...(group.candidates || []).map(video => video.id)].filter(Boolean);
+      if (ids.length < 2) return;
+      try {
+        await DismissNearDuplicateGroup(ids);
+        this.cleanupDialog.analysis.near_duplicate_groups = (this.cleanupDialog.analysis.near_duplicate_groups || [])
+          .filter(item => item !== group);
+        this.cleanupSelection = this.cleanupSelection.filter(id => !ids.includes(id));
+      } catch (err) {
+        alert('忽略近似重复组失败: ' + err);
+      }
     },
     async rejectCleanupSameSource(group) {
       if (!group?.relation_id) return;
@@ -2505,9 +2916,13 @@ export default {
     },
     currentLibraryFilter() {
       const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
+      // 语义模式不进入共享筛选 DTO：后端筛选器不认识 semantic 模式，语义
+      // 查询只通过 SearchSemanticVideos/FindSimilarVideos 的专用参数传递；
+      // 随机播放、保存视图、批量导出等消费方拿到的是纯结构化筛选。
+      const semantic = this.searchMode === 'semantic';
       return {
-        search_mode: this.searchMode,
-        keyword: this.currentQueryKeyword(),
+        search_mode: semantic ? 'file' : this.searchMode,
+        keyword: semantic ? '' : this.currentQueryKeyword(),
         smart_view: this.smartView,
         tag_ids: [...this.selectedTags],
         min_size: minSize,
@@ -2542,6 +2957,7 @@ export default {
       try {
         const keyword = this.currentQueryKeyword();
         let newVideos = [];
+        let semanticHasMore = null;
         this.debugLog('loadVideos begin', {
           keyword,
           searchMode: this.searchMode,
@@ -2553,7 +2969,25 @@ export default {
           existingVideos: this.videos.length
         });
 
-        if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
+        if (this.searchMode === 'semantic') {
+          if (!keyword && !this.semanticSimilarVideoID) {
+            this.hasMore = false;
+            return;
+          }
+          this.semanticSearchError = '';
+          const request = {
+            filter: this.currentLibraryFilter(),
+            offset: this.videos.length,
+            limit: this.pageSize
+          };
+          const page = this.semanticSimilarVideoID
+            ? await FindSimilarVideos({ ...request, video_id: this.semanticSimilarVideoID })
+            : await SearchSemanticVideos({ ...request, query: keyword });
+          this.semanticCoverage = page?.coverage || null;
+          semanticHasMore = !!page?.has_more;
+          newVideos = (page?.hits || []).map(hit => ({ ...hit.video, _semanticScore: hit.score }));
+          this.libraryCursor = null;
+        } else if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
           newVideos = await ListRecentlyPlayedWithFilter(
             this.currentLibraryFilter(),
             this.cursorLastPlayedAt,
@@ -2589,7 +3023,7 @@ export default {
           mode: this.smartView || keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
         });
 
-        if (this.smartView === 'recently_played' && this.sortMode === 'balanced' ? newVideos.length < this.pageSize : !this.libraryCursor) {
+        if (this.searchMode === 'semantic' ? !semanticHasMore : (this.smartView === 'recently_played' && this.sortMode === 'balanced' ? newVideos.length < this.pageSize : !this.libraryCursor)) {
           this.hasMore = false;
         }
         if (newVideos.length > 0) {
@@ -2605,6 +3039,7 @@ export default {
           hasMore: this.hasMore
         });
       } catch (err) {
+		if (this.searchMode === 'semantic') this.semanticSearchError = String(err);
         this.debugLog('loadVideos failed', { err: String(err) }, true);
         console.error('加载视频失败:', err);
         alert('加载视频失败: ' + err);
@@ -2642,6 +3077,10 @@ export default {
           this.cursorLastPlayedAt = '';
           this.cursorRecentPlayedID = 0;
           this.libraryCursor = null;
+          if (this.searchMode !== 'semantic') {
+            this.semanticCoverage = null;
+            this.semanticSearchError = '';
+          }
           this.hasMore = true;
           await this.loadVideos();
         }
@@ -2803,6 +3242,9 @@ export default {
     },
     canVideoMatchCurrentView(video) {
       const keyword = this.currentQueryKeyword().toLowerCase();
+      if (this.searchMode === 'semantic') {
+        return this.applyClientFilters([video]).length > 0 && this.matchesSmartView(video);
+      }
       if (this.isSubtitleSearchActive(keyword)) {
         return false;
       }
@@ -2926,8 +3368,9 @@ export default {
         };
       }
     },
-    async handleSearch(immediate = false) {
+    async handleSearch(immediate = false, clearSimilar = false) {
       this.selectedSavedViewID = 0;
+      if (clearSimilar) this.semanticSimilarVideoID = 0;
       if (this.searchDebounceTimer) {
         clearTimeout(this.searchDebounceTimer);
         this.searchDebounceTimer = null;
@@ -2937,6 +3380,10 @@ export default {
         await this.reloadCurrentView();
         return;
       }
+
+      // 语义模式下每次检索都要调用一次 embedding 接口，输入过程不自动触发，
+      // 由回车（immediate）显式发起。
+      if (this.searchMode === 'semantic') return;
 
       this.searchDebounceTimer = setTimeout(() => {
         this.searchDebounceTimer = null;

@@ -244,3 +244,36 @@ func TestFilteredRandomPlayHonorsViewModeStaleAndRecentExclusions(t *testing.T) 
 		t.Fatalf("排除后应明确空集 result=%+v err=%v", result, err)
 	}
 }
+
+func TestRandomPlayHalfLifeReturnsOldPlaybackToHigherProbability(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	oldPlayedAt := now.Add(-180 * 24 * time.Hour)
+	recentPlayedAt := now.Add(-24 * time.Hour)
+	rows := []videoScoreRow{
+		{ID: 1, PlayCount: 5, LastPlayedAt: &oldPlayedAt},
+		{ID: 2, PlayCount: 2, LastPlayedAt: &recentPlayedAt},
+	}
+	weights, total := randomSelectionWeights(rows, 2, 90, now)
+	if !(weights[0] > weights[1]) {
+		t.Fatalf("久未播放的视频应获得更高选择权重: weights=%v", weights)
+	}
+	if math.Abs(total-(weights[0]+weights[1])) > 1e-12 {
+		t.Fatalf("总权重错误 total=%v weights=%v", total, weights)
+	}
+}
+
+func TestRandomPlayHalfLifeZeroExactlyPreservesLegacyScores(t *testing.T) {
+	now := time.Date(2026, 8, 4, 12, 0, 0, 0, time.UTC)
+	oldPlayedAt := now.Add(-10 * 365 * 24 * time.Hour)
+	rows := []videoScoreRow{
+		{ID: 1, PlayCount: 1, RandomPlayCount: 2, LastPlayedAt: &oldPlayedAt},
+		{ID: 2, PlayCount: 3, RandomPlayCount: 0, LastPlayedAt: nil},
+	}
+	weights, total := randomSelectionWeights(rows, 2, 0, now)
+	legacyScores := []float64{4, 6}
+	legacyMax := 6.0
+	want := []float64{legacyMax - legacyScores[0] + 1, legacyMax - legacyScores[1] + 1}
+	if weights[0] != want[0] || weights[1] != want[1] || total != want[0]+want[1] {
+		t.Fatalf("半衰期为 0 必须精确保留旧算法 got=%v total=%v want=%v", weights, total, want)
+	}
+}

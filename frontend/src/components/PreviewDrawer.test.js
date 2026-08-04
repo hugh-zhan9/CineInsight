@@ -99,6 +99,22 @@ describe('PreviewDrawer', () => {
     expect(wrapper.text()).toContain('Video 1');
   });
 
+  it('exposes an explicit NFO export action for the current video', async () => {
+	  const wrapper = await mountDrawer();
+	  const button = wrapper.findAll('button').find(item => item.text() === '写出 NFO');
+	  expect(button).toBeTruthy();
+	  await button.trigger('click');
+	  expect(wrapper.emitted('export-local-metadata')?.[0]?.[0]).toEqual(expect.objectContaining({ id: 1 }));
+	});
+
+  it('emits the current video from the find-similar action', async () => {
+	const wrapper = await mountDrawer();
+	const button = wrapper.findAll('button').find(item => item.text() === '找相似');
+	expect(button).toBeTruthy();
+	await button.trigger('click');
+	expect(wrapper.emitted('find-similar')?.[0]?.[0]).toEqual(expect.objectContaining({ id: 1 }));
+  });
+
   it('renders an inline preview inside the dedicated non-collapsing player section', async () => {
     const details = videoDetails(1);
     api.GetVideoDetails.mockResolvedValue(details);
@@ -117,6 +133,61 @@ describe('PreviewDrawer', () => {
 
     expect(wrapper.get('.detail-section--player').exists()).toBe(true);
     expect(wrapper.get('.preview-drawer__player-shell').exists()).toBe(true);
+    expect(wrapper.get('.preview-drawer__video source').attributes('src')).toBe('/preview/video/1');
+    expect(wrapper.find('.preview-drawer__seek-track').exists()).toBe(false);
+  });
+
+	it('emits the same review action for drawer keyboard shortcuts and ignores inputs', async () => {
+	  const wrapper = await mountDrawer();
+	  const preventDefault = vi.fn();
+	  wrapper.vm.handleReviewShortcut({ key: 'f', target: document.body, preventDefault });
+	  expect(preventDefault).toHaveBeenCalledOnce();
+	  expect(wrapper.emitted('shortcut')?.[0]?.[0]).toEqual(expect.objectContaining({ action: 'favorite', video: expect.objectContaining({ id: 1 }) }));
+
+	  wrapper.vm.handleReviewShortcut({ key: 'w', target: document.createElement('input'), preventDefault });
+	  expect(wrapper.emitted('shortcut')).toHaveLength(1);
+	});
+
+  it('maps seek hover time to the matching sprite frame and degrades on asset failure', async () => {
+    const details = videoDetails(1);
+    api.GetVideoDetails.mockResolvedValue(details);
+    api.ListCollections.mockResolvedValue([]);
+    const wrapper = mount(PreviewDrawer, {
+      props: {
+        video: details.video,
+        session: {
+          video_id: 1,
+          mode: 'inline',
+          inline_source: { locator_value: '/preview/video/1', mime: 'video/mp4' },
+          seek_sprite: {
+            locator_value: '/preview/seek-sprite/1',
+            frame_width: 160,
+            frame_height: 90,
+            columns: 6,
+            rows: 1,
+            frame_count: 6,
+            interval_seconds: 10
+          }
+        }
+      }
+    });
+    await flushPromises();
+
+    const track = wrapper.get('.preview-drawer__seek-track');
+    wrapper.vm.handleSeekPointerMove({
+      clientX: 55,
+      currentTarget: { getBoundingClientRect: () => ({ left: 5, width: 100 }) }
+    });
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.vm.seekPreview.frameIndex).toBe(3);
+    expect(wrapper.get('.preview-drawer__seek-preview time').text()).toBe('00:30');
+    const sprite = wrapper.get('.preview-drawer__seek-image img');
+    expect(sprite.attributes('src')).toBe('/preview/seek-sprite/1');
+    expect(sprite.attributes('style')).toContain('left: -300%');
+
+    await sprite.trigger('error');
+    expect(wrapper.find('.preview-drawer__seek-track').exists()).toBe(false);
     expect(wrapper.get('.preview-drawer__video source').attributes('src')).toBe('/preview/video/1');
   });
 

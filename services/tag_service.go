@@ -17,6 +17,8 @@ type TagService struct{}
 const (
 	ShortVideoTagName          = "短视频"
 	shortVideoAutomaticTagKind = "short_video"
+	ShortFeedLikedTagName      = "短视频喜欢"
+	shortFeedLikedTagKind      = "short_feed_liked"
 )
 
 type MergeTagsResult struct {
@@ -55,7 +57,7 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 		normalizedNames[normalized] = struct{}{}
 	}
 
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var existingSystemTags []models.Tag
 		if err := tx.Where("is_system = ?", true).Find(&existingSystemTags).Error; err != nil {
 			return err
@@ -235,7 +237,7 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 	}
 
 	result := &MergeTagsResult{TargetTagID: targetTagID, MergedTagCount: len(uniqueSources)}
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		var target models.Tag
 		if err := tx.First(&target, targetTagID).Error; err != nil {
 			return fmt.Errorf("目标标签不存在: %w", err)
@@ -352,7 +354,7 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 
 func (s *TagService) SyncShortVideoTags() (*ShortVideoTagSyncResult, error) {
 	result := &ShortVideoTagSyncResult{}
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		return syncShortVideoTagsWithResult(tx, result)
 	})
 	if err != nil {
@@ -493,6 +495,62 @@ func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error)
 		}
 	}
 	return nil, fmt.Errorf("创建短视频自动标签时发生并发冲突")
+}
+
+func ensureShortFeedLikedAutomaticTag(tx *gorm.DB) (*models.Tag, error) {
+	var tag models.Tag
+	err := tx.Unscoped().Where("automatic_kind = ?", shortFeedLikedTagKind).Order("id").First(&tag).Error
+	if err == nil {
+		if err := reserveAutomaticTagName(tx, ShortFeedLikedTagName, tag.ID); err != nil {
+			return nil, err
+		}
+		tag.Name = ShortFeedLikedTagName
+		tag.DeletedAt.Clear()
+		tag.IsActive = true
+		if err := tx.Unscoped().Save(&tag).Error; err != nil {
+			return nil, err
+		}
+		return &tag, nil
+	}
+	if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, err
+	}
+
+	if err := reserveAutomaticTagName(tx, ShortFeedLikedTagName, 0); err != nil {
+		return nil, err
+	}
+	tag = models.Tag{
+		Name:          ShortFeedLikedTagName,
+		Color:         tagColorPalette[5],
+		Namespace:     "自动",
+		AutomaticKind: shortFeedLikedTagKind,
+		IsActive:      true,
+	}
+	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&tag).Error; err != nil {
+		return nil, err
+	}
+	if tag.ID == 0 {
+		if err := tx.Where("automatic_kind = ?", shortFeedLikedTagKind).First(&tag).Error; err != nil {
+			return nil, err
+		}
+	}
+	return &tag, nil
+}
+
+func reserveAutomaticTagName(tx *gorm.DB, name string, automaticTagID uint) error {
+	var conflict models.Tag
+	err := tx.Unscoped().Where("name = ? AND id <> ?", name, automaticTagID).First(&conflict).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	replacement, err := availableTagName(tx, name+"（原标签）", conflict.ID)
+	if err != nil {
+		return err
+	}
+	return tx.Unscoped().Model(&conflict).Update("name", replacement).Error
 }
 
 // reserveShortVideoTagName keeps the automatic label's public name stable.

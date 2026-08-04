@@ -1,6 +1,5 @@
 <template>
-  <div v-if="visible" class="modal-overlay">
-    <div class="modal ai-tag-review-modal">
+  <BaseModal v-if="visible" class="ai-tag-review-modal">
       <div class="ai-tag-review-header">
         <div>
           <h3>AI 标签管理</h3>
@@ -77,7 +76,7 @@
                   </div>
                 </div>
                 <div class="ai-candidate-actions">
-                  <button type="button" class="btn-action btn-compact" title="同时打开两个视频" @click="previewSameSource(relation)" :disabled="processingIds.includes(`same-source-preview-${relation.id}`)">预览</button>
+                  <button type="button" class="btn-secondary btn-compact" title="同时打开两个视频" @click="previewSameSource(relation)" :disabled="processingIds.includes(`same-source-preview-${relation.id}`)">预览</button>
                   <button type="button" class="btn-danger btn-compact" @click="openSameSourceDelete(relation, 'a')" :disabled="processingIds.includes(`same-source-delete-${relation.video_a_id}`)">删除 A</button>
                   <button type="button" class="btn-danger btn-compact" @click="openSameSourceDelete(relation, 'b')" :disabled="processingIds.includes(`same-source-delete-${relation.video_b_id}`)">删除 B</button>
                   <button type="button" class="btn-primary btn-compact" @click="confirmSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">确认同源</button>
@@ -97,11 +96,11 @@
                     <span v-if="group.videoDeleted" class="ai-video-deleted-badge">已删除</span>
                   </div>
                   <div class="ai-video-actions">
-                    <button type="button" class="btn-action btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
+                    <button type="button" class="btn-secondary btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
                     <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
                     <button type="button" class="btn-secondary btn-compact" @click="openManualTagDialog(group)" :disabled="group.videoDeleted">手动添加标签</button>
                     <button type="button" class="btn-secondary btn-compact" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
-                    <button type="button" class="btn-action btn-compact" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
+                    <button type="button" class="btn-secondary btn-compact" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
                   </div>
                 </div>
                 <div v-if="group.videoPath" class="ai-video-path">{{ group.videoPath }}</div>
@@ -203,19 +202,19 @@
         @close="closeManualTagDialog"
         @tag-added="handleManualTagAdded"
       />
-    </div>
-  </div>
+  </BaseModal>
 </template>
 
 <script>
 import { ApproveAITagCandidate, ConfirmSameSourceRelation, DeleteVideo, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import AddTagDialog from './AddTagDialog.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
+import BaseModal from './ui/BaseModal.vue';
 import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
 
 export default {
   name: 'AITagReviewDialog',
-  components: { AddTagDialog, AIQualityPanel },
+  components: { AddTagDialog, AIQualityPanel, BaseModal },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] },
@@ -505,7 +504,7 @@ export default {
 </script>
 
 <style scoped>
-.ai-tag-review-modal {
+:deep(.ai-tag-review-modal) {
   position: relative;
   width: min(760px, calc(100vw - 40px));
   max-width: 760px;
@@ -688,8 +687,8 @@ export default {
   place-items: center;
   overflow: hidden;
   border-radius: 8px;
-  background: #0f172a;
-  color: rgba(255, 255, 255, 0.68);
+  background: var(--thumb-bg);
+  color: var(--thumb-fg);
   font-size: 24px;
 }
 
@@ -701,7 +700,7 @@ export default {
 }
 
 .same-source-thumbnail--failed {
-  background: linear-gradient(135deg, #1e293b, #334155);
+  background: var(--thumb-fallback-bg);
 }
 
 .same-source-video-title {
@@ -781,9 +780,9 @@ export default {
 .ai-video-deleted-badge {
   flex: 0 0 auto;
   padding: 2px 6px;
-  border: 1px solid rgba(229, 72, 77, 0.4);
+  border: 1px solid var(--danger-border);
   border-radius: 6px;
-  background: rgba(229, 72, 77, 0.12);
+  background: var(--danger-soft);
   color: var(--danger-color);
   font-size: 11px;
   font-weight: 700;
@@ -843,7 +842,7 @@ export default {
   align-items: start;
   gap: 14px;
   padding: 12px 0;
-  border-top: 1px solid rgba(148, 163, 184, 0.22);
+  border-top: 1px solid var(--neutral-soft);
   min-width: 0;
 }
 
@@ -864,21 +863,21 @@ export default {
 }
 
 .ai-confidence--high {
-  color: #065f46;
-  background: rgba(16, 185, 129, 0.16);
-  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: var(--confidence-high-text);
+  background: var(--confidence-high-bg);
+  border: 1px solid var(--confidence-high-border);
 }
 
 .ai-confidence--medium {
-  color: #92400e;
-  background: rgba(245, 158, 11, 0.16);
-  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: var(--confidence-medium-text);
+  background: var(--confidence-medium-bg);
+  border: 1px solid var(--confidence-medium-border);
 }
 
 .ai-confidence--unknown {
   color: var(--text-secondary);
-  background: rgba(148, 163, 184, 0.16);
-  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: var(--confidence-unknown-bg);
+  border: 1px solid var(--confidence-unknown-border);
 }
 
 .ai-candidate-name {
@@ -926,7 +925,7 @@ export default {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(15, 23, 42, 0.34);
+  background: var(--overlay-bg);
   -webkit-backdrop-filter: blur(14px);
   backdrop-filter: blur(14px);
 }
@@ -958,8 +957,8 @@ export default {
   overflow: auto;
   padding: 10px;
   border-radius: 6px;
-  background: rgba(148, 163, 184, 0.12);
-  color: var(--text-primary) !important;
+  background: var(--neutral-faint);
+  color: var(--text-primary);
   overflow-wrap: anywhere;
 }
 
@@ -971,7 +970,7 @@ export default {
 }
 
 @media (max-width: 640px) {
-  .ai-tag-review-modal {
+  :deep(.ai-tag-review-modal) {
     width: calc(100vw - 24px);
     padding: 18px;
   }

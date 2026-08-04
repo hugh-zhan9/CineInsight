@@ -323,6 +323,63 @@ func TestThumbnailHandlerServesGeneratedJPEG(t *testing.T) {
 	}
 }
 
+func TestSeekSpriteHandlerServesGeneratedJPEG(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "clip.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake-video"), 0644); err != nil {
+		t.Fatalf("写入视频文件失败: %v", err)
+	}
+	video := models.Video{Name: "clip.mp4", Path: videoPath, Directory: root, Size: 10, Duration: 60}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0755); err != nil {
+		t.Fatalf("创建 ffmpeg stub 目录失败: %v", err)
+	}
+	ffmpegPath := filepath.Join(binDir, "ffmpeg")
+	ffmpegScript := "#!/bin/bash\ndestination=\"${@: -1}\"\nprintf 'jpeg-seek-sprite' > \"$destination\"\n"
+	if err := os.WriteFile(ffmpegPath, []byte(ffmpegScript), 0755); err != nil {
+		t.Fatalf("写入 ffmpeg stub 失败: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	app := NewApp()
+	app.thumbnailService = services.NewThumbnailService(app.videoService, root)
+	handler := newAssetHandler(app)
+
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/preview/seek-sprite/%d", video.ID), nil))
+	if first.Code != http.StatusNotFound {
+		t.Fatalf("首次请求应返回 404 并转入后台生成，实际 %d body=%s", first.Code, first.Body.String())
+	}
+
+	var rec *httptest.ResponseRecorder
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec = httptest.NewRecorder()
+		handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, fmt.Sprintf("/preview/seek-sprite/%d", video.ID), nil))
+		if rec.Code == http.StatusOK {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("后台生成完成后应返回 200，实际 %d body=%s", rec.Code, rec.Body.String())
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("content-type 错误: got=%s want=image/jpeg", got)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "private, max-age=300" {
+		t.Fatalf("cache-control 错误: %q", got)
+	}
+	if rec.Body.String() != "jpeg-seek-sprite" {
+		t.Fatalf("seek sprite 响应体错误: %q", rec.Body.String())
+	}
+}
+
 func TestPersonAvatarHandlerServesOnlyManagedEntityAsset(t *testing.T) {
 	setupAppTestDB(t)
 	dataDir := t.TempDir()

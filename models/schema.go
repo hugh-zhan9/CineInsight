@@ -26,6 +26,9 @@ func AllModels() []interface{} {
 		&CollectionVideo{},
 		&VideoLocalMetadataState{},
 		&VideoTechnicalMetadata{},
+		&VideoPerceptualHash{},
+		&NearDuplicateDismissal{},
+		&VideoEnhancementTask{},
 		&MediaStream{},
 	}
 }

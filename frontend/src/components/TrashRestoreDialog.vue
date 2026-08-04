@@ -1,6 +1,5 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click.self="$emit('close')">
-    <div class="modal trash-restore-modal" role="dialog" aria-modal="true" aria-labelledby="trash-restore-title">
+  <BaseModal v-if="visible" close-on-overlay class="trash-restore-modal" role="dialog" aria-modal="true" aria-labelledby="trash-restore-title" @close="$emit('close')">
       <div class="trash-restore-header">
         <div>
           <h3 id="trash-restore-title">回收站</h3>
@@ -35,15 +34,16 @@
       <div class="modal-actions">
         <button type="button" class="btn-secondary" @click="$emit('close')">完成</button>
       </div>
-    </div>
-  </div>
+  </BaseModal>
 </template>
 
 <script>
 import { ListTrashEntries, RestoreTrashEntry } from '../../wailsjs/go/main/App';
+import BaseModal from './ui/BaseModal.vue';
 
 export default {
   name: 'TrashRestoreDialog',
+  components: { BaseModal },
   props: {
     visible: { type: Boolean, default: false }
   },
@@ -118,7 +118,7 @@ export default {
 </script>
 
 <style scoped>
-.trash-restore-modal {
+:deep(.trash-restore-modal) {
   width: min(720px, calc(100vw - 32px));
   max-height: min(720px, calc(100vh - 48px));
   display: flex;
@@ -177,7 +177,7 @@ export default {
 
 .trash-restore-entry__error,
 .trash-restore-state--error {
-  color: var(--danger-color, #c0392b) !important;
+  color: var(--danger-color) !important;
 }
 
 .trash-restore-state {

@@ -237,7 +237,7 @@ func (s *VideoDetailService) UpdateVideoDetails(input VideoDetailsUpdate) (*Vide
 	defer s.collections.mu.Unlock()
 
 	orphanAvatars := make([]string, 0)
-	err = database.DB.Transaction(func(tx *gorm.DB) error {
+	err = database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&video, input.VideoID).Error; err != nil {
 			return err
