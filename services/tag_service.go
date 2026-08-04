@@ -251,9 +251,6 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 			return fmt.Errorf("自动标签不能作为合并目标")
 		}
 		for _, source := range sources {
-			if source.IsSystem != target.IsSystem {
-				return fmt.Errorf("普通标签与 AI 标签库标签不能交叉合并")
-			}
 			if source.AutomaticKind != "" {
 				return fmt.Errorf("自动标签不能合并: %s", source.Name)
 			}
@@ -272,12 +269,16 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 			return err
 		}
 
-		if err := tx.Model(&models.AITagCandidate{}).
-			Where("matched_tag_id IN ? AND status = ?", uniqueSources, models.AITagCandidateStatusPending).
-			Updates(map[string]interface{}{
+		pendingCandidates := tx.Model(&models.AITagCandidate{}).
+			Where("matched_tag_id IN ? AND status = ?", uniqueSources, models.AITagCandidateStatusPending)
+		if target.IsSystem {
+			if err := pendingCandidates.Updates(map[string]interface{}{
 				"suggested_name":  target.Name,
 				"normalized_name": normalizeAITagName(target.Name),
 			}).Error; err != nil {
+				return err
+			}
+		} else if err := pendingCandidates.Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&models.AITagCandidate{}).

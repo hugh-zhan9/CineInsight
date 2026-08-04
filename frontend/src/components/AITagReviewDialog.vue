@@ -42,11 +42,31 @@
                 <div class="same-source-main">
                   <div class="same-source-pair">
                     <article class="same-source-video-card">
+                      <div :class="['same-source-thumbnail', { 'same-source-thumbnail--failed': thumbnailFailed(relation.video_a_id) }]">
+                        <img
+                          v-if="!thumbnailFailed(relation.video_a_id)"
+                          :src="thumbnailURL(relation.video_a_id)"
+                          :alt="`${relation.video_a?.name || `视频 ${relation.video_a_id}`} 缩略图`"
+                          loading="lazy"
+                          @error="markThumbnailFailed(relation.video_a_id)"
+                        />
+                        <span v-else aria-hidden="true">▶</span>
+                      </div>
                       <div class="same-source-video-title"><span>A</span><strong>{{ relation.video_a?.name || `视频 ${relation.video_a_id}` }}</strong></div>
                       <p class="same-source-path" :title="relation.video_a?.path || ''">{{ relation.video_a?.path || '原始路径不可用' }}</p>
                     </article>
                     <span class="same-source-link" aria-hidden="true">↔</span>
                     <article class="same-source-video-card">
+                      <div :class="['same-source-thumbnail', { 'same-source-thumbnail--failed': thumbnailFailed(relation.video_b_id) }]">
+                        <img
+                          v-if="!thumbnailFailed(relation.video_b_id)"
+                          :src="thumbnailURL(relation.video_b_id)"
+                          :alt="`${relation.video_b?.name || `视频 ${relation.video_b_id}`} 缩略图`"
+                          loading="lazy"
+                          @error="markThumbnailFailed(relation.video_b_id)"
+                        />
+                        <span v-else aria-hidden="true">▶</span>
+                      </div>
                       <div class="same-source-video-title"><span>B</span><strong>{{ relation.video_b?.name || `视频 ${relation.video_b_id}` }}</strong></div>
                       <p class="same-source-path" :title="relation.video_b?.path || ''">{{ relation.video_b?.path || '原始路径不可用' }}</p>
                     </article>
@@ -213,6 +233,7 @@ export default {
       error: '',
       reviewSearch: '',
       processingIds: [],
+      thumbnailFailures: {},
       manualTagDialog: { show: false, video: null },
       rejectConfirm: { show: false, videoId: 0, videoName: '', count: 0, candidateIds: [] },
       renameConfirm: { show: false, videoId: 0, videoName: '', videoPath: '', newName: '', ext: '(无)' },
@@ -242,6 +263,15 @@ export default {
   },
   methods: {
     confidenceMeta,
+    thumbnailURL(videoId) {
+      return `/preview/thumbnail/${videoId}`;
+    },
+    thumbnailFailed(videoId) {
+      return !!this.thumbnailFailures[videoId];
+    },
+    markThumbnailFailed(videoId) {
+      this.thumbnailFailures = { ...this.thumbnailFailures, [videoId]: true };
+    },
     async loadCandidates(options = {}) {
       const silent = !!options.silent;
       if (!silent) this.loading = true;
@@ -648,6 +678,30 @@ export default {
   border: 1px solid var(--border-color);
   border-radius: 9px;
   background: var(--control-bg);
+}
+
+.same-source-thumbnail {
+  display: grid;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 10px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: #0f172a;
+  color: rgba(255, 255, 255, 0.68);
+  font-size: 24px;
+}
+
+.same-source-thumbnail img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.same-source-thumbnail--failed {
+  background: linear-gradient(135deg, #1e293b, #334155);
 }
 
 .same-source-video-title {

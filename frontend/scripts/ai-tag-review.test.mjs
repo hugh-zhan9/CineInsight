@@ -74,6 +74,9 @@ assert.match(componentSource, /data-test="ai-candidate-review-tab"/, 'AI tag can
 assert.match(componentSource, /data-test="same-source-review-tab"/, 'same-source candidates should have a dedicated workbench tab');
 assert.match(componentSource, /relation\.video_a\?\.path/, 'same-source review should show the original A path');
 assert.match(componentSource, /relation\.video_b\?\.path/, 'same-source review should show the original B path');
+assert.match(componentSource, /thumbnailURL\(relation\.video_a_id\)/, 'same-source review should show the A thumbnail');
+assert.match(componentSource, /thumbnailURL\(relation\.video_b_id\)/, 'same-source review should show the B thumbnail');
+assert.match(componentSource, /same-source-thumbnail--failed/, 'same-source thumbnails need a local failure placeholder');
 assert.match(componentSource, /DeleteVideo\(videoId, false\)/, 'same-source deletion should preserve the original file');
 assert.match(componentSource, /删除 A/);
 assert.match(componentSource, /删除 B/);

@@ -180,6 +180,89 @@ func TestMergeTagsAllowsSystemTagsWithinAITagLibrary(t *testing.T) {
 	}
 }
 
+func TestMergeTagsAllowsCrossTypeSourcesAndPreservesTargetType(t *testing.T) {
+	tests := []struct {
+		name           string
+		targetIsSystem bool
+		sourceIsSystem bool
+	}{
+		{name: "普通来源合并到 AI 目标", targetIsSystem: true, sourceIsSystem: false},
+		{name: "AI 来源合并到普通目标", targetIsSystem: false, sourceIsSystem: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			setupVideoServiceTestDB(t)
+			target := models.Tag{Name: "保留目标", Color: "#111111", IsSystem: test.targetIsSystem, IsActive: true}
+			source := models.Tag{Name: "合并来源", Color: "#222222", IsSystem: test.sourceIsSystem, IsActive: true}
+			video := models.Video{Name: "cross-type.mp4", Path: "/tmp/cross-type-tag-merge.mp4"}
+			if err := database.DB.Create(&[]*models.Tag{&target, &source}).Error; err != nil {
+				t.Fatalf("创建跨类型标签失败: %v", err)
+			}
+			if err := database.DB.Create(&video).Error; err != nil {
+				t.Fatalf("创建视频失败: %v", err)
+			}
+			if err := database.DB.Model(&video).Association("Tags").Append(&source); err != nil {
+				t.Fatalf("关联来源标签失败: %v", err)
+			}
+
+			if _, err := (&TagService{}).MergeTags([]uint{source.ID}, target.ID); err != nil {
+				t.Fatalf("跨类型标签应支持合并: %v", err)
+			}
+			var loadedTarget models.Tag
+			if err := database.DB.First(&loadedTarget, target.ID).Error; err != nil {
+				t.Fatalf("读取保留目标失败: %v", err)
+			}
+			if loadedTarget.IsSystem != test.targetIsSystem {
+				t.Fatalf("保留目标类型被修改: got=%v want=%v", loadedTarget.IsSystem, test.targetIsSystem)
+			}
+			if err := database.DB.Preload("Tags").First(&video, video.ID).Error; err != nil {
+				t.Fatalf("读取合并后视频失败: %v", err)
+			}
+			if len(video.Tags) != 1 || video.Tags[0].ID != target.ID {
+				t.Fatalf("跨类型来源关联未迁移到目标: %+v", video.Tags)
+			}
+		})
+	}
+}
+
+func TestMergeTagsSupersedesPendingCandidatesWhenAITagMergesIntoOrdinaryTarget(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	target := models.Tag{Name: "普通目标", Color: "#111111", IsActive: true}
+	source := models.Tag{Name: "AI 来源", Color: "#222222", IsSystem: true, IsActive: true}
+	video := models.Video{Name: "pending-cross-type.mp4", Path: "/tmp/pending-cross-type-tag-merge.mp4"}
+	if err := database.DB.Create(&[]*models.Tag{&target, &source}).Error; err != nil {
+		t.Fatalf("创建跨类型标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	candidate := models.AITagCandidate{
+		VideoID:        video.ID,
+		SuggestedName:  source.Name,
+		NormalizedName: normalizeAITagName(source.Name),
+		MatchedTagID:   &source.ID,
+		Confidence:     models.AITagConfidenceHigh,
+		Status:         models.AITagCandidateStatusPending,
+	}
+	if err := database.DB.Create(&candidate).Error; err != nil {
+		t.Fatalf("创建待审 AI 候选失败: %v", err)
+	}
+
+	if _, err := (&TagService{}).MergeTags([]uint{source.ID}, target.ID); err != nil {
+		t.Fatalf("AI 来源合并到普通目标失败: %v", err)
+	}
+	if err := database.DB.First(&candidate, candidate.ID).Error; err != nil {
+		t.Fatalf("读取合并后 AI 候选失败: %v", err)
+	}
+	if candidate.Status != models.AITagCandidateStatusSuperseded {
+		t.Fatalf("不再属于 AI 标签库的待审候选应失效: got=%s", candidate.Status)
+	}
+	if candidate.MatchedTagID == nil || *candidate.MatchedTagID != target.ID {
+		t.Fatalf("失效候选的历史引用仍应指向保留目标: %+v", candidate.MatchedTagID)
+	}
+}
+
 func TestMergeTagsDeduplicatesApprovalRecordsAcrossMultipleSources(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	target := models.Tag{Name: "目标", Color: "#111111", IsActive: true}

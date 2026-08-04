@@ -50,9 +50,9 @@ describe('TagManagerDialog merge picker', () => {
     expect(api.MergeTags).toHaveBeenCalledWith([2], 1);
   });
 
-  it('selects AI targets independently from the source keyword and excludes other types', async () => {
+  it('filters AI targets independently while allowing ordinary sources', async () => {
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
-    await wrapper.get('[aria-label="选择合并标签类型"] button:nth-child(2)').trigger('click');
+    await wrapper.get('[aria-label="选择目标标签类型"] button:nth-child(2)').trigger('click');
 
     const target = wrapper.get('.merge-target-select');
     expect(target.findAll('option').map(option => option.text())).toEqual([
@@ -61,12 +61,29 @@ describe('TagManagerDialog merge picker', () => {
       '激烈动作 · AI'
     ]);
     await wrapper.get('.merge-target-select').setValue('3');
-    await wrapper.get('[aria-label="筛选待合并标签"]').setValue('激烈');
+    await wrapper.get('[aria-label="筛选待合并标签"]').setValue('旅行');
 
-    expect(wrapper.findAll('.merge-source-option').map(option => option.text())).toEqual(['激烈动作AI 标签']);
+    expect(wrapper.findAll('.merge-source-option').map(option => option.text())).toEqual(['旅行普通标签']);
     expect(target.findAll('option').map(option => option.text())).toContain('动作 · AI');
     expect(target.findAll('option').map(option => option.text())).not.toContain('旅行 · 普通');
     expect(wrapper.findAll('.merge-source-option').map(option => option.text())).not.toContain('短视频自动标签');
+
+    await wrapper.get('.merge-source-option input[type="checkbox"]').setValue(true);
+    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+
+    expect(api.MergeTags).toHaveBeenCalledWith([1], 3);
+  });
+
+  it('allows an AI tag source when the retained target is ordinary', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await wrapper.get('.merge-target-select').setValue('1');
+    await wrapper.get('[aria-label="筛选待合并标签"]').setValue('动作');
+
+    expect(wrapper.findAll('.merge-source-option').map(option => option.text())).toEqual(['动作AI 标签', '激烈动作AI 标签']);
+    await wrapper.findAll('.merge-source-option input[type="checkbox"]')[0].setValue(true);
+    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+
+    expect(api.MergeTags).toHaveBeenCalledWith([3], 1);
   });
 
   it('clears target and source selections when switching merge type', async () => {
@@ -74,7 +91,7 @@ describe('TagManagerDialog merge picker', () => {
     await wrapper.get('.merge-target-select').setValue('1');
     await wrapper.get('.merge-source-option input[type="checkbox"]').setValue(true);
 
-    await wrapper.get('[aria-label="选择合并标签类型"] button:nth-child(2)').trigger('click');
+    await wrapper.get('[aria-label="选择目标标签类型"] button:nth-child(2)').trigger('click');
 
     expect(wrapper.vm.mergeTargetId).toBe(0);
     expect(wrapper.vm.mergeSourceIds).toEqual([]);
