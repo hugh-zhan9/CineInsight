@@ -13,6 +13,7 @@ assert.match(page, /homeListVirtualizationEnabled && viewMode === 'list'/, 'defa
 assert.match(row, /\/preview\/thumbnail\/\$\{this\.video\.id\}/, 'rows should use the thumbnail asset route');
 assert.match(row, /thumbnailFailed/, 'thumbnail failures need a local placeholder');
 assert.match(virtualList, /virtual-video-list--\$\{layoutMode\}/, 'virtual list shell should expose layout styling');
+assert.match(virtualList, /\.virtual-video-list\.virtual-video-list--grid\s*{[^}]*display:\s*grid;[^}]*gap:\s*12px;/s, 'the scoped list shell must switch from flex rows to a real grid');
 assert.match(app, /\.virtual-video-list--grid\s*{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px,\s*220px\)\)/s, 'grid cards should stay compact enough for multiple columns');
 assert.match(app, /\.virtual-video-list--grid\s*{[^}]*justify-content:\s*start/s, 'a partially filled grid row should not stretch cards');
 assert.match(previewDrawer, /\.preview-drawer__body\s*{[^}]*display:\s*grid[^}]*grid-auto-rows:\s*max-content/s, 'drawer sections must not flex-shrink the player');

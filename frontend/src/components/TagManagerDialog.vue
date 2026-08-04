@@ -24,10 +24,10 @@
 
       <div class="setting-item">
         <label>合并同义标签</label>
-        <p class="help-text">先选要保留的目标，再勾选一个或多个来源。视频关联会转移到目标标签，来源随后删除；普通标签与 AI 标签只在各自类型内合并。</p>
+        <p class="help-text">先选要保留的目标，再勾选一个或多个普通或 AI 来源标签。视频关联会转移到目标标签，来源随后删除；合并结果保留目标标签的类型。</p>
         <div class="merge-type-row">
-          <span>标签类型</span>
-          <div class="merge-type-switch" role="group" aria-label="选择合并标签类型">
+          <span>目标类型</span>
+          <div class="merge-type-switch" role="group" aria-label="选择目标标签类型">
             <button type="button" :class="{ active: mergeType === 'normal' }" :aria-pressed="mergeType === 'normal'" @click="mergeType = 'normal'">普通标签</button>
             <button type="button" :class="{ active: mergeType === 'ai' }" :aria-pressed="mergeType === 'ai'" @click="mergeType = 'ai'">AI 标签</button>
           </div>
@@ -67,14 +67,14 @@
               <span class="merge-source-name">{{ tag.name }}</span>
               <small>{{ tag.is_system ? 'AI 标签' : '普通标签' }}</small>
             </label>
-            <div v-if="filteredMergeSourceTags.length === 0" class="merge-source-empty">没有符合筛选条件的同类型来源标签</div>
+            <div v-if="filteredMergeSourceTags.length === 0" class="merge-source-empty">没有符合筛选条件的来源标签</div>
           </div>
           <div class="merge-source-tools">
             <button type="button" class="btn-action btn-compact" :disabled="filteredMergeSourceTags.length === 0" @click="selectAllVisibleMergeSources">全选筛选结果</button>
             <button type="button" class="btn-action btn-compact" :disabled="mergeSourceIds.length === 0" @click="clearMergeSources">清空已选</button>
           </div>
         </div>
-        <p v-else class="merge-source-empty merge-source-empty--target">选择目标标签后即可多选同类型来源。</p>
+        <p v-else class="merge-source-empty merge-source-empty--target">选择目标标签后即可多选普通或 AI 来源标签。</p>
         <div class="merge-actions">
           <span v-if="mergeError" class="help-text merge-error">{{ mergeError }}</span>
           <button class="btn-primary" :disabled="mergeLoading || !canMerge" @click="handleMergeTags">
@@ -143,7 +143,7 @@ export default {
     mergeSourceTags() {
       const target = this.mergeableTags.find(tag => Number(tag.id) === Number(this.mergeTargetId));
       if (!target || !this.matchesMergeType(target)) return [];
-      return this.mergeableTags.filter(tag => Boolean(tag.is_system) === Boolean(target.is_system) && Number(tag.id) !== Number(target.id));
+      return this.mergeableTags.filter(tag => Number(tag.id) !== Number(target.id));
     },
     filteredMergeSourceTags() {
       return this.mergeSourceTags.filter(tag => this.matchesMergeKeyword(tag));

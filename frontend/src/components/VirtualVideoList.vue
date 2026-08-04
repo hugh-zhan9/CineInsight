@@ -387,6 +387,11 @@ export default {
   gap: 0;
 }
 
+.virtual-video-list.virtual-video-list--grid {
+  display: grid;
+  gap: 12px;
+}
+
 .virtual-video-list__row {
   display: block;
 }

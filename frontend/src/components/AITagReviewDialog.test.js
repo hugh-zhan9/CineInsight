@@ -59,6 +59,12 @@ describe('AITagReviewDialog same-source review', () => {
     expect(confirmButton).toBeTruthy();
     expect(wrapper.text()).toContain('/library/original/A.mp4');
     expect(wrapper.text()).toContain('/library/alternate/B.mp4');
+    const thumbnails = wrapper.findAll('.same-source-thumbnail img');
+    expect(thumbnails).toHaveLength(2);
+    expect(thumbnails[0].attributes('src')).toBe('/preview/thumbnail/1');
+    expect(thumbnails[1].attributes('src')).toBe('/preview/thumbnail/2');
+    await thumbnails[0].trigger('error');
+    expect(wrapper.findAll('.same-source-thumbnail--failed')).toHaveLength(1);
     const previewButtons = wrapper.findAll('.same-source-row button').filter(button => button.text() === '预览');
     expect(previewButtons).toHaveLength(1);
     await previewButtons[0].trigger('click');
