@@ -20,6 +20,9 @@
 		<button @click="currentPage = 'insights'" :class="['nav-btn', { active: currentPage === 'insights' }]">
 		  洞察
 		</button>
+		<button @click="currentPage = 'photos'" :class="['nav-btn', { active: currentPage === 'photos' }]">
+		  图片
+		</button>
         <button 
           @click="currentPage = 'settings'" 
           :class="['nav-btn', { active: currentPage === 'settings' }]"
@@ -66,21 +69,28 @@
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" />
       <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" />
 	  <InsightsPage v-if="currentPage === 'insights'" />
+	  <PhotoLibraryPage
+	    v-if="currentPage === 'photos'"
+	    :settings="settings"
+	    :tags="tags"
+	    @open-settings="currentPage = 'settings'"
+	  />
     </div>
   </div>
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
 import InsightsPage from './components/InsightsPage.vue';
+import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
 import { logFrontend } from './utils/frontendLog.js';
 
 export default {
   name: 'App',
-  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage },
+  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage },
   data() {
     return {
       currentPage: 'videos',
@@ -92,6 +102,7 @@ export default {
         confirm_before_delete: true,
         delete_original_file: false,
         video_extensions: '',
+        image_extensions: '',
         scan_exclude_paths: '',
         play_weight: 2.0,
         auto_scan_on_startup: false,
@@ -119,8 +130,11 @@ export default {
       this.applyTheme();
     });
 
-    if (this.settings.auto_scan_on_startup && this.directories.length > 0) {
-      this.incrementalScanAll();
+    if (this.settings.auto_scan_on_startup) {
+      if (this.directories.length > 0) {
+        this.incrementalScanAll();
+      }
+      this.incrementalScanImageDirectories();
     }
   },
   watch: {
@@ -186,6 +200,14 @@ export default {
         }
       } catch (err) {
         this.debugLog('incrementalScanAll failed', { err: String(err) }, true);
+      }
+    },
+    async incrementalScanImageDirectories() {
+      try {
+        const result = await SyncImageDirectories();
+        this.debugLog('incrementalScanImageDirectories resolved', result);
+      } catch (err) {
+        this.debugLog('incrementalScanImageDirectories failed', { err: String(err) }, true);
       }
     }
   }

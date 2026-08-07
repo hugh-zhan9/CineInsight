@@ -14,6 +14,10 @@ import (
 
 var DB *gorm.DB
 
+// DefaultImageExtensions 是新库初始化时写入 Settings.ImageExtensions 的默认图片扩展名清单；
+// 老库该字段为零值时由使用方回退到本清单（设计 6.2）。
+const DefaultImageExtensions = ".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.dng,.cr2,.cr3,.nef,.arw,.orf,.raf,.rw2"
+
 // PostgresCLIConfig contains the connection fields needed by PostgreSQL client
 // tools. Passwords are intentionally exposed only as environment values so
 // callers never need to place credentials in process arguments.
@@ -174,10 +178,14 @@ func Init() error {
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
 	}
+	if err := ensureImagePathUniqueIndex(db); err != nil {
+		return fmt.Errorf("创建图片路径唯一索引失败: %w", err)
+	}
 	if err := ensureMediaDetailConstraints(db); err != nil {
 		return fmt.Errorf("创建媒体详情约束失败: %w", err)
 	}
 	ensureCoreQueryIndexes(db)
+	ensureImageQueryIndexes(db)
 	ensureAITaggingIndexes(db)
 	ensureShortFeedIndexes(db)
 	ensureSubtitleSearchIndexes(db)
@@ -190,6 +198,7 @@ func Init() error {
 			ConfirmBeforeDelete:          true,
 			DeleteOriginalFile:           false,
 			VideoExtensions:              defaultExts,
+			ImageExtensions:              DefaultImageExtensions,
 			PlayWeight:                   2.0, // 默认 1次播放 = 2次随机播放
 			RandomHalfLifeDays:           90,
 			AutoScanOnStartup:            false,
@@ -336,6 +345,14 @@ func ensureVideoPathUniqueIndex(db *gorm.DB) error {
 	`).Error
 }
 
+func ensureImagePathUniqueIndex(db *gorm.DB) error {
+	return db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_images_path_active
+		ON images(path)
+		WHERE deleted_at IS NULL
+	`).Error
+}
+
 func ensureMediaDetailConstraints(db *gorm.DB) error {
 	statements := []string{
 		`DO $$ BEGIN
@@ -397,6 +414,23 @@ func ensureCoreQueryIndexes(db *gorm.DB) {
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
 			log.Printf("创建查询索引失败: %v sql=%s", err, statement)
+		}
+	}
+}
+
+func ensureImageQueryIndexes(db *gorm.DB) {
+	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_images_directory_active ON images(directory) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_images_size_active ON images(size) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_images_favorite_active ON images(is_favorite) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_images_created_active ON images(created_at DESC, id DESC) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_images_rating_active ON images(personal_rating) WHERE deleted_at IS NULL`,
+		`CREATE INDEX IF NOT EXISTS idx_image_tags_image_tag ON image_tags(image_id, tag_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_image_tags_tag_image ON image_tags(tag_id, image_id)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			log.Printf("创建图片查询索引失败: %v sql=%s", err, statement)
 		}
 	}
 }

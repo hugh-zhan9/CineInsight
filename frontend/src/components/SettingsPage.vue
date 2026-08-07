@@ -234,6 +234,7 @@
           <button v-if="semanticIndexStatus?.running" type="button" class="btn-secondary" @click="cancelSemanticIndex">取消</button>
         </div>
       </div>
+      <PhotoAITaskPanel />
     </div>
 
 	<div class="settings-section ai-tag-library-section">
@@ -294,13 +295,28 @@
     <div class="settings-section">
       <h3>支持的视频格式</h3>
       <div class="setting-item">
-        <textarea 
-          v-model="settingsForm.video_extensions" 
+        <textarea
+          v-model="settingsForm.video_extensions"
           rows="3"
           class="text-input settings-textarea"
           placeholder=".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
         ></textarea>
         <p class="help-text">用逗号分隔，留空则使用默认配置。</p>
+      </div>
+    </div>
+
+    <!-- 图片格式设置 -->
+    <div class="settings-section">
+      <h3>支持的图片格式</h3>
+      <div class="setting-item">
+        <textarea
+          v-model="settingsForm.image_extensions"
+          rows="3"
+          class="text-input settings-textarea"
+          data-test="image-extensions"
+          placeholder=".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.dng,.cr2,.cr3,.nef,.arw,.orf,.raf,.rw2"
+        ></textarea>
+        <p class="help-text">用逗号分隔，留空则回退默认清单。</p>
       </div>
     </div>
 
@@ -415,6 +431,25 @@
       <button @click="showAddDirectoryDialog = true" class="btn-primary settings-section-action">添加扫描目录</button>
     </div>
 
+    <!-- 图片扫描目录管理 -->
+    <div class="settings-section">
+      <h3>图片扫描目录</h3>
+      <div class="directories-list">
+        <div v-for="dir in localImageDirectories" :key="dir.id" class="directory-item" data-test="image-directory-item">
+          <div class="directory-main">
+            <strong>{{ dir.alias || '未命名' }}</strong>
+            <span>{{ dir.path }}</span>
+          </div>
+          <div class="directory-actions">
+            <button @click="editImageDirectory(dir)" class="btn-secondary">编辑</button>
+            <button @click="deleteImageDirectoryItem(dir.id)" class="btn-secondary btn-danger-outline">删除</button>
+          </div>
+        </div>
+        <div v-if="localImageDirectories.length === 0" class="empty-hint">暂无图片扫描目录配置</div>
+      </div>
+      <button @click="showAddImageDirectoryDialog = true" class="btn-primary settings-section-action" data-test="add-image-directory">添加图片目录</button>
+    </div>
+
     <div class="settings-section backup-settings-section">
       <h3>数据库备份</h3>
       <div class="backup-status" :class="{ 'backup-status--error': backupStatus && !backupStatus.available }">
@@ -487,6 +522,26 @@
         </div>
     </BaseModal>
 
+    <!-- Add/Edit Image Directory Dialog -->
+    <BaseModal v-if="showAddImageDirectoryDialog || editingImageDirectory" close-on-overlay stop-modal-clicks @close="closeImageDirectoryDialog">
+        <h2>{{ editingImageDirectory ? '编辑' : '添加' }}图片扫描目录</h2>
+        <div class="setting-item">
+          <label>目录路径</label>
+          <div class="directory-dialog-row">
+            <input type="text" v-model="imageDirectoryForm.path" placeholder="选择目录" class="text-input" readonly data-test="image-directory-path" />
+            <button @click="selectDirectoryForImageConfig" class="btn-secondary">选择</button>
+          </div>
+        </div>
+        <div class="setting-item">
+          <label>目录别名</label>
+          <input type="text" v-model="imageDirectoryForm.alias" placeholder="给这个目录起个名字" class="text-input directory-alias-input" data-test="image-directory-alias" />
+        </div>
+        <div class="modal-actions">
+          <button @click="saveImageDirectoryConfig" class="btn-primary" data-test="save-image-directory">保存</button>
+          <button @click="closeImageDirectoryDialog" class="btn-secondary">取消</button>
+        </div>
+    </BaseModal>
+
     <BaseModal v-if="showBackupDialog" stop-modal-clicks @close="closeBackupDialog">
       <template v-if="!selectedBackup">
         <h2>选择数据库备份</h2>
@@ -534,13 +589,14 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../wailsjs/go/main/App';
 import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
 import BaseModal from './ui/BaseModal.vue';
+import PhotoAITaskPanel from './PhotoAITaskPanel.vue';
 
 export default {
   name: 'SettingsPage',
-  components: { BaseModal },
+  components: { BaseModal, PhotoAITaskPanel },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
@@ -558,6 +614,10 @@ export default {
       showAddDirectoryDialog: false,
       editingDirectory: null,
       directoryForm: { path: '', alias: '' },
+      localImageDirectories: [],
+      showAddImageDirectoryDialog: false,
+      editingImageDirectory: null,
+      imageDirectoryForm: { path: '', alias: '' },
       localAITagGroups: [],
       aiTagLibraryLoading: false,
       aiTagLibraryError: '',
@@ -590,6 +650,7 @@ export default {
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
 		if (this.settingsForm.short_feed_feedback_sync_enabled == null) this.settingsForm.short_feed_feedback_sync_enabled = true;
         this.settingsForm.scan_exclude_paths = this.settingsForm.scan_exclude_paths || '';
+        this.settingsForm.image_extensions = this.settingsForm.image_extensions || '';
         this.settingsForm.subtitle_translation_provider = this.settingsForm.subtitle_translation_provider || 'deepl';
         this.settingsForm.subtitle_whisperx_model = this.settingsForm.subtitle_whisperx_model || 'medium';
         this.settingsForm.subtitle_whisperx_batch_size = this.settingsForm.subtitle_whisperx_batch_size || 8;
@@ -642,6 +703,7 @@ export default {
     this.loadLibraryWatcherStatus();
     this.loadBackupStatus();
     this.loadSemanticIndexStatus();
+    this.loadImageDirectories();
     if (window.runtime?.EventsOn) {
       const off = window.runtime.EventsOn('library-watcher-status', (status) => {
         this.watcherStatus = status || null;
@@ -713,6 +775,7 @@ export default {
             confirm_before_delete: this.settingsForm.confirm_before_delete,
             delete_original_file: this.settingsForm.delete_original_file,
             video_extensions: this.settingsForm.video_extensions,
+            image_extensions: this.settingsForm.image_extensions || '',
             scan_exclude_paths: this.settingsForm.scan_exclude_paths || '',
             play_weight: this.settingsForm.play_weight,
             random_half_life_days: Math.max(0, Number(this.settingsForm.random_half_life_days) || 0),
@@ -977,6 +1040,47 @@ export default {
       this.showAddDirectoryDialog = false;
       this.editingDirectory = null;
       this.directoryForm = { path: '', alias: '' };
+    },
+    async loadImageDirectories() {
+      try {
+        this.localImageDirectories = await GetAllImageDirectories() || [];
+      } catch (err) {
+        this.localImageDirectories = [];
+      }
+    },
+    async selectDirectoryForImageConfig() {
+      try {
+        const dir = await SelectDirectory();
+        if (dir) this.imageDirectoryForm.path = dir;
+      } catch (err) {}
+    },
+    editImageDirectory(dir) {
+      this.editingImageDirectory = dir;
+      this.imageDirectoryForm = { path: dir.path, alias: dir.alias };
+    },
+    async saveImageDirectoryConfig() {
+      if (!this.imageDirectoryForm.path) return;
+      try {
+        if (this.editingImageDirectory) {
+          await UpdateImageDirectory(this.editingImageDirectory.id, this.imageDirectoryForm.path, this.imageDirectoryForm.alias);
+        } else {
+          await AddImageDirectory(this.imageDirectoryForm.path, this.imageDirectoryForm.alias);
+        }
+        await this.loadImageDirectories();
+        this.closeImageDirectoryDialog();
+      } catch (err) {}
+    },
+    async deleteImageDirectoryItem(id) {
+      if (!confirm('确定要删除此图片目录配置吗？')) return;
+      try {
+        await DeleteImageDirectory(id);
+        await this.loadImageDirectories();
+      } catch (err) {}
+    },
+    closeImageDirectoryDialog() {
+      this.showAddImageDirectoryDialog = false;
+      this.editingImageDirectory = null;
+      this.imageDirectoryForm = { path: '', alias: '' };
     }
   }
 };

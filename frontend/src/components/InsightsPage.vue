@@ -2,7 +2,7 @@
   <section class="page-content insights-page">
     <div class="insights-heading">
       <div><h2>片库洞察</h2><p>基于本地片库与观看状态的只读统计</p></div>
-      <button type="button" class="btn-secondary" :disabled="loading" @click="loadStats">{{ loading ? '统计中...' : '刷新' }}</button>
+      <button type="button" class="btn-secondary" :disabled="loading || imageLoading" @click="refresh">{{ loading || imageLoading ? '统计中...' : '刷新' }}</button>
     </div>
     <p v-if="error" class="insights-error" role="alert">{{ error }}</p>
     <div v-else-if="loading && !stats" class="insights-empty">正在汇总片库...</div>
@@ -41,17 +41,37 @@
         </article>
       </div>
     </template>
+
+    <div class="insights-heading insights-heading--section">
+      <div><h2>图片</h2><p>基于图片库的只读统计</p></div>
+    </div>
+    <p v-if="imageError" class="insights-error" role="alert">{{ imageError }}</p>
+    <div v-else-if="imageLoading && !imageStats" class="insights-empty">正在汇总图片库...</div>
+    <div v-else-if="!imageStats?.summary?.image_count" class="insights-empty">
+      <h3>图片库还没有图片</h3><p>完成一次图片扫描后，这里会显示存储与格式分布。</p>
+    </div>
+    <template v-else>
+      <div class="insights-summary insights-summary--images">
+        <article><span>图片总数</span><strong>{{ formatNumber(imageStats.summary.image_count) }}</strong></article>
+        <article><span>存储占用</span><strong>{{ formatBytes(imageStats.summary.total_size) }}</strong></article>
+        <article><span>收藏</span><strong>{{ formatNumber(imageStats.summary.favorite_count) }}</strong></article>
+      </div>
+      <div class="insights-grid">
+        <BucketChart title="图片目录存储" :items="imageStats.storage_by_directory" value-key="total_size" :format-value="formatBytes" />
+        <BucketChart title="图片格式存储" :items="imageStats.storage_by_format" value-key="total_size" :format-value="formatBytes" />
+      </div>
+    </template>
   </section>
 </template>
 
 <script>
-import { GetLibraryInsights } from '../../wailsjs/go/main/App';
+import { GetImageInsights, GetLibraryInsights } from '../../wailsjs/go/main/App';
 import BucketChart from './insights/BucketChart.vue';
 
 export default {
   name: 'InsightsPage',
   components: { BucketChart },
-  data() { return { loading: false, error: '', stats: null }; },
+  data() { return { loading: false, error: '', stats: null, imageLoading: false, imageError: '', imageStats: null }; },
   computed: {
     heatmapDays() {
       const counts = new Map((this.stats?.watch_heatmap || []).map(day => [String(day.date).slice(0, 10), Number(day.count || 0)]));
@@ -77,14 +97,23 @@ export default {
     },
     maxRatingCount() { return Math.max(1, ...(this.stats?.rating_distribution || []).map(item => Number(item.count || 0))); }
   },
-  mounted() { this.loadStats(); },
+  mounted() { this.refresh(); },
   methods: {
+    // 视频与图片分区各自独立加载：任一侧失败只影响自己的分区。
+    refresh() { this.loadStats(); this.loadImageStats(); },
     async loadStats() {
       if (this.loading) return;
       this.loading = true; this.error = '';
       try { this.stats = await GetLibraryInsights(); }
       catch (err) { this.error = '读取片库洞察失败：' + err; }
       finally { this.loading = false; }
+    },
+    async loadImageStats() {
+      if (this.imageLoading) return;
+      this.imageLoading = true; this.imageError = '';
+      try { this.imageStats = await GetImageInsights(); }
+      catch (err) { this.imageError = '读取图片洞察失败：' + err; }
+      finally { this.imageLoading = false; }
     },
     formatNumber(value) { return new Intl.NumberFormat('zh-CN').format(Number(value || 0)); },
     formatBytes(value) {
@@ -106,6 +135,8 @@ export default {
 .insights-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .insights-heading p, .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
 .insights-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.insights-summary--images { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.insights-heading--section { margin-top: 6px; }
 .insights-summary article, .insights-panel, .insights-empty { border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--panel-bg); padding: 16px; }
 .insights-summary article { display: grid; gap: 8px; }
 .insights-summary span { color: var(--text-secondary); font-size: 13px; }

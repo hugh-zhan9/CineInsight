@@ -625,3 +625,119 @@ export function UpdateVideoWatchProgress(arg1, arg2, arg3) {
 export function ValidateSubtitleEditDocument(arg1) {
   return window['go']['main']['App']['ValidateSubtitleEditDocument'](arg1);
 }
+
+export function AddImageDirectory(arg1, arg2) {
+  return window['go']['main']['App']['AddImageDirectory'](arg1, arg2);
+}
+
+export function AddTagToImage(arg1, arg2) {
+  return window['go']['main']['App']['AddTagToImage'](arg1, arg2);
+}
+
+export function BatchAddTagToImages(arg1, arg2) {
+  return window['go']['main']['App']['BatchAddTagToImages'](arg1, arg2);
+}
+
+export function BatchRemoveTagFromImages(arg1, arg2) {
+  return window['go']['main']['App']['BatchRemoveTagFromImages'](arg1, arg2);
+}
+
+export function DeleteImageDirectory(arg1) {
+  return window['go']['main']['App']['DeleteImageDirectory'](arg1);
+}
+
+export function GetAllImageDirectories() {
+  return window['go']['main']['App']['GetAllImageDirectories']();
+}
+
+export function GetImageDetail(arg1) {
+  return window['go']['main']['App']['GetImageDetail'](arg1);
+}
+
+export function GetImageInsights() {
+  return window['go']['main']['App']['GetImageInsights']();
+}
+
+export function RemoveTagFromImage(arg1, arg2) {
+  return window['go']['main']['App']['RemoveTagFromImage'](arg1, arg2);
+}
+
+export function SearchImagePage(arg1) {
+  return window['go']['main']['App']['SearchImagePage'](arg1);
+}
+
+export function SetImageFavorite(arg1, arg2) {
+  return window['go']['main']['App']['SetImageFavorite'](arg1, arg2);
+}
+
+export function SetImageRating(arg1, arg2) {
+  return window['go']['main']['App']['SetImageRating'](arg1, arg2);
+}
+
+export function SyncImageDirectories() {
+  return window['go']['main']['App']['SyncImageDirectories']();
+}
+
+export function UpdateImageDirectory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UpdateImageDirectory'](arg1, arg2, arg3);
+}
+
+export function BatchDeleteImages(arg1, arg2) {
+  return window['go']['main']['App']['BatchDeleteImages'](arg1, arg2);
+}
+
+export function DeleteImage(arg1, arg2) {
+  return window['go']['main']['App']['DeleteImage'](arg1, arg2);
+}
+
+export function ListImageTrashEntries() {
+  return window['go']['main']['App']['ListImageTrashEntries']();
+}
+
+export function RestoreImageTrashEntry(arg1) {
+  return window['go']['main']['App']['RestoreImageTrashEntry'](arg1);
+}
+
+export function CancelImageAIDescription() {
+  return window['go']['main']['App']['CancelImageAIDescription']();
+}
+
+export function GetImageAIDescriptionStatus() {
+  return window['go']['main']['App']['GetImageAIDescriptionStatus']();
+}
+
+export function RegenerateImageAIDescription(arg1) {
+  return window['go']['main']['App']['RegenerateImageAIDescription'](arg1);
+}
+
+export function StartImageAIDescription() {
+  return window['go']['main']['App']['StartImageAIDescription']();
+}
+
+export function CancelImageSemanticIndex() {
+  return window['go']['main']['App']['CancelImageSemanticIndex']();
+}
+
+export function DismissImageNearDuplicateGroup(arg1) {
+  return window['go']['main']['App']['DismissImageNearDuplicateGroup'](arg1);
+}
+
+export function GetImageCleanupStatus() {
+  return window['go']['main']['App']['GetImageCleanupStatus']();
+}
+
+export function GetImageSemanticIndexStatus() {
+  return window['go']['main']['App']['GetImageSemanticIndexStatus']();
+}
+
+export function SearchImagesSemantic(arg1) {
+  return window['go']['main']['App']['SearchImagesSemantic'](arg1);
+}
+
+export function StartImageCleanupAnalysis() {
+  return window['go']['main']['App']['StartImageCleanupAnalysis']();
+}
+
+export function StartImageSemanticIndex() {
+  return window['go']['main']['App']['StartImageSemanticIndex']();
+}

@@ -25,6 +25,7 @@ type MergeTagsResult struct {
 	TargetTagID     uint `json:"target_tag_id"`
 	MergedTagCount  int  `json:"merged_tag_count"`
 	VideoLinksMoved int  `json:"video_links_moved"`
+	ImageLinksMoved int  `json:"image_links_moved"`
 }
 
 type ShortVideoTagSyncResult struct {
@@ -268,6 +269,20 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 		}
 		result.VideoLinksMoved = int(insertResult.RowsAffected)
 		if err := tx.Exec("DELETE FROM video_tags WHERE tag_id IN ?", uniqueSources).Error; err != nil {
+			return err
+		}
+
+		// D-002: 图片侧关联同步改写到目标标签并按 (image_id, tag_id) 唯一键去重。
+		imageInsertResult := tx.Exec(`
+			INSERT INTO image_tags(image_id, tag_id)
+			SELECT image_id, ? FROM image_tags WHERE tag_id IN ?
+			ON CONFLICT DO NOTHING
+		`, targetTagID, uniqueSources)
+		if imageInsertResult.Error != nil {
+			return imageInsertResult.Error
+		}
+		result.ImageLinksMoved = int(imageInsertResult.RowsAffected)
+		if err := tx.Exec("DELETE FROM image_tags WHERE tag_id IN ?", uniqueSources).Error; err != nil {
 			return err
 		}
 
@@ -702,6 +717,11 @@ func (s *TagService) DeleteTag(id uint) error {
 	// 清理关联关系
 	if err := database.DB.Model(&tag).Association("Videos").Clear(); err != nil {
 		log.Printf("清理标签关联失败 id=%d err=%v", id, err)
+		return err
+	}
+	// D-002: 删除标签时同步清理图片侧关联，视频侧行为不变。
+	if err := database.DB.Exec("DELETE FROM image_tags WHERE tag_id = ?", id).Error; err != nil {
+		log.Printf("清理图片标签关联失败 id=%d err=%v", id, err)
 		return err
 	}
 	log.Printf("删除标签 id=%d name=%s", id, tag.Name)

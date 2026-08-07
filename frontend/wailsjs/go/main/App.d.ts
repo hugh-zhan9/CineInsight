@@ -308,3 +308,61 @@ export function UpdateVideoDetails(arg1:services.VideoDetailsUpdate):Promise<ser
 export function UpdateVideoWatchProgress(arg1:number,arg2:number,arg3:boolean):Promise<models.Video>;
 
 export function ValidateSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleValidationResult>;
+
+export function AddImageDirectory(arg1:string,arg2:string):Promise<models.ImageDirectory>;
+
+export function AddTagToImage(arg1:number,arg2:number):Promise<void>;
+
+export function BatchAddTagToImages(arg1:Array<number>,arg2:number):Promise<services.BatchImageOperationResult>;
+
+export function BatchRemoveTagFromImages(arg1:Array<number>,arg2:number):Promise<services.BatchImageOperationResult>;
+
+export function DeleteImageDirectory(arg1:number):Promise<void>;
+
+export function GetAllImageDirectories():Promise<Array<models.ImageDirectory>>;
+
+export function GetImageDetail(arg1:number):Promise<services.ImageDetail>;
+
+export function GetImageInsights():Promise<services.ImageStats>;
+
+export function RemoveTagFromImage(arg1:number,arg2:number):Promise<void>;
+
+export function SearchImagePage(arg1:services.ImagePageRequest):Promise<services.ImagePage>;
+
+export function SetImageFavorite(arg1:number,arg2:boolean):Promise<models.Image>;
+
+export function SetImageRating(arg1:number,arg2:number):Promise<models.Image>;
+
+export function SyncImageDirectories():Promise<services.ImageScanResult>;
+
+export function UpdateImageDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function BatchDeleteImages(arg1:Array<number>,arg2:boolean):Promise<services.BatchImageOperationResult>;
+
+export function DeleteImage(arg1:number,arg2:boolean):Promise<void>;
+
+export function ListImageTrashEntries():Promise<Array<models.ImageTrashEntry>>;
+
+export function RestoreImageTrashEntry(arg1:number):Promise<models.Image>;
+
+export function CancelImageAIDescription():Promise<void>;
+
+export function GetImageAIDescriptionStatus():Promise<services.ImageAIDescriptionStatus>;
+
+export function RegenerateImageAIDescription(arg1:number):Promise<models.ImageAIDescription>;
+
+export function StartImageAIDescription():Promise<services.ImageAIDescriptionStatus>;
+
+export function CancelImageSemanticIndex():Promise<void>;
+
+export function DismissImageNearDuplicateGroup(arg1:Array<number>):Promise<void>;
+
+export function GetImageCleanupStatus():Promise<services.ImageCleanupStatus>;
+
+export function GetImageSemanticIndexStatus():Promise<services.ImageSemanticIndexStatus>;
+
+export function SearchImagesSemantic(arg1:services.ImageSemanticSearchRequest):Promise<services.ImageSemanticSearchPage>;
+
+export function StartImageCleanupAnalysis():Promise<services.ImageCleanupStatus>;
+
+export function StartImageSemanticIndex():Promise<services.ImageSemanticIndexStatus>;

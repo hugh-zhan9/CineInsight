@@ -32,6 +32,24 @@ func newAssetHandler(app *App) http.Handler {
 			app.serveCollectionCover(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/preview/image-thumbnail/") {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			app.serveImageThumbnail(w, r)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, "/preview/image/") {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			app.serveImageView(w, r)
+			return
+		}
 		if r.Method == http.MethodGet || r.Method == http.MethodHead {
 			if strings.HasPrefix(r.URL.Path, "/preview/media/") {
 				app.servePreviewMedia(w, r)
@@ -152,6 +170,63 @@ func (a *App) serveSeekSprite(w http.ResponseWriter, r *http.Request) {
 	defer file.Close()
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
+}
+
+func (a *App) serveImageThumbnail(w http.ResponseWriter, r *http.Request) {
+	imageID, err := assetVideoIDFromPath(r.URL.Path, "/preview/image-thumbnail/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	media, err := a.imageThumbnail.ResolveImageThumbnail(r.Context(), imageID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, services.ErrImageDecodeUnsupported) {
+			http.Error(w, "image thumbnail not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("image thumbnail unavailable: %v", err), http.StatusInternalServerError)
+		return
+	}
+	file, err := os.Open(media.Path)
+	if err != nil {
+		http.Error(w, "image thumbnail not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
+}
+
+func (a *App) serveImageView(w http.ResponseWriter, r *http.Request) {
+	imageID, err := assetVideoIDFromPath(r.URL.Path, "/preview/image/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	media, err := a.imageThumbnail.ResolveImageView(r.Context(), imageID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, services.ErrImageDecodeUnsupported) {
+			http.Error(w, "image not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("image unavailable: %v", err), http.StatusInternalServerError)
+		return
+	}
+	file, err := os.Open(media.Path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "image not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("open image failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer file.Close()
+	if media.MIME != "" {
+		w.Header().Set("Content-Type", media.MIME)
+	}
 	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
 }
 
