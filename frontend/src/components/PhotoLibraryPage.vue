@@ -32,8 +32,8 @@
         <select
           v-model="filters.sortMode"
           class="select-input photo-toolbar__sort"
-          :disabled="searchMode === 'semantic'"
-          :title="searchMode === 'semantic' ? '语义模式按相关度排序' : ''"
+          :disabled="searchMode === 'semantic' || timelineMode"
+          :title="sortDisabledReason"
           data-test="photo-sort"
         >
           <option value="recent">最近添加</option>
@@ -41,6 +41,18 @@
           <option value="rating">评分最高</option>
           <option value="taken">拍摄时间</option>
         </select>
+        <label
+          class="photo-toolbar__timeline"
+          :title="searchMode === 'semantic' ? '语义模式按相关度排序，不做时间线分组' : '按拍摄时间倒序，并插入年月分组头'"
+        >
+          <input
+            v-model="timelineMode"
+            type="checkbox"
+            :disabled="searchMode === 'semantic'"
+            data-test="photo-timeline-toggle"
+          />
+          <span>时间线</span>
+        </label>
         <label class="photo-toolbar__favorite">
           <input v-model="filters.favoriteOnly" type="checkbox" data-test="photo-favorite-only" />
           <span>仅收藏</span>
@@ -94,45 +106,68 @@
 
     <p v-if="error" class="photo-library__error" role="alert">{{ error }}</p>
 
-    <section v-if="images.length" class="photo-grid" data-test="photo-grid">
-      <article v-for="(image, index) in images" :key="image.id" class="photo-card glass-surface">
-        <button type="button" class="photo-card__media" :title="image.name" @click="openViewer(index)">
-          <img
-            v-if="!failedThumbs[image.id]"
-            :src="`/preview/image-thumbnail/${image.id}`"
-            :alt="image.name"
-            loading="lazy"
-            @error="markThumbFailed(image.id)"
-          />
-          <span v-else class="photo-card__fallback" data-test="photo-thumb-fallback">
-            <strong>{{ image.name }}</strong>
-            <em class="photo-format-badge">{{ formatBadge(image) }}</em>
-          </span>
-        </button>
-        <div class="photo-card__overlay">
-          <button
-            type="button"
-            :class="['photo-card__action', { 'photo-card__action--active': image.is_favorite }]"
-            :title="image.is_favorite ? '取消收藏' : '收藏'"
-            :aria-label="`${image.is_favorite ? '取消收藏' : '收藏'} ${image.name}`"
-            @click.stop="toggleFavorite(image)"
-          >{{ image.is_favorite ? '★' : '☆' }}</button>
-          <button
-            type="button"
-            class="photo-card__action photo-card__action--danger"
-            title="删除"
-            :aria-label="`删除 ${image.name}`"
-            data-test="photo-card-delete"
-            @click.stop="requestDelete(image)"
-          >×</button>
+    <section
+      v-if="images.length"
+      ref="gridShell"
+      class="photo-grid"
+      :style="gridStyle"
+      :data-scroll-owner-fallback="virtualized ? null : 'true'"
+      data-test="photo-grid"
+    >
+      <div v-if="virtualized && windowState.topSpacer > 0" :style="{ height: `${windowState.topSpacer}px` }" aria-hidden="true"></div>
+
+      <template v-for="row in renderedRows" :key="row.key">
+        <div
+          v-if="row.isHeader"
+          class="photo-timeline-header"
+          :style="rowStyle(row)"
+          data-test="photo-timeline-header"
+        >
+          <h3>{{ timelineLabel(row) }}</h3>
         </div>
-        <div class="photo-card__meta">
-          <span :title="image.name">{{ image.name }}</span>
-          <small>
-            {{ formatBytes(image.size) }}<template v-if="image.personal_rating != null"> · {{ image.personal_rating }} 分</template><template v-if="scoreLabel(image)"> · 相关度 {{ scoreLabel(image) }}</template>
-          </small>
+        <div v-else class="photo-grid-row" :style="rowStyle(row)">
+          <article v-for="(image, offset) in rowImages(row)" :key="image.id" class="photo-card glass-surface">
+            <button type="button" class="photo-card__media" :title="image.name" @click="openViewer(row.startIndex + offset)">
+              <img
+                v-if="!failedThumbs[image.id]"
+                :src="`/preview/image-thumbnail/${image.id}`"
+                :alt="image.name"
+                loading="lazy"
+                @error="markThumbFailed(image.id)"
+              />
+              <span v-else class="photo-card__fallback" data-test="photo-thumb-fallback">
+                <strong>{{ image.name }}</strong>
+                <em class="photo-format-badge">{{ formatBadge(image) }}</em>
+              </span>
+            </button>
+            <div class="photo-card__overlay">
+              <button
+                type="button"
+                :class="['photo-card__action', { 'photo-card__action--active': image.is_favorite }]"
+                :title="image.is_favorite ? '取消收藏' : '收藏'"
+                :aria-label="`${image.is_favorite ? '取消收藏' : '收藏'} ${image.name}`"
+                @click.stop="toggleFavorite(image)"
+              >{{ image.is_favorite ? '★' : '☆' }}</button>
+              <button
+                type="button"
+                class="photo-card__action photo-card__action--danger"
+                title="删除"
+                :aria-label="`删除 ${image.name}`"
+                data-test="photo-card-delete"
+                @click.stop="requestDelete(image)"
+              >×</button>
+            </div>
+            <div class="photo-card__meta">
+              <span :title="image.name">{{ image.name }}</span>
+              <small>
+                {{ formatBytes(image.size) }}<template v-if="image.personal_rating != null"> · {{ image.personal_rating }} 分</template><template v-if="scoreLabel(image)"> · 相关度 {{ scoreLabel(image) }}</template>
+              </small>
+            </div>
+          </article>
         </div>
-      </article>
+      </template>
+
+      <div v-if="virtualized && windowState.bottomSpacer > 0" :style="{ height: `${windowState.bottomSpacer}px` }" aria-hidden="true"></div>
     </section>
 
     <div v-if="showEmptyState" class="photo-empty" data-test="photo-empty">
@@ -168,7 +203,6 @@
       </template>
     </div>
 
-    <div ref="loadSentinel" class="photo-library__sentinel" aria-hidden="true"></div>
     <button
       v-if="hasMore"
       type="button"
@@ -314,15 +348,34 @@
 <script>
 import {
   AddTagToImage, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus,
-  RegenerateImageAIDescription, RemoveTagFromImage, SearchImagePage, SearchImagesSemantic,
-  SetImageFavorite, SetImageRating, SyncImageDirectories
+  ListImageTimelineBuckets, RegenerateImageAIDescription, RemoveTagFromImage, SearchImagePage,
+  SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import PhotoCleanupPanel from './PhotoCleanupPanel.vue';
 import PhotoTrashDialog from './PhotoTrashDialog.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
+import {
+  PHOTO_GROUP_MONTH, PHOTO_GROUP_NONE, PHOTO_ROW_HEADER,
+  buildPhotoLayout, calculatePhotoAnchorScrollTop, calculatePhotoWindow,
+  firstVisiblePhotoItemIndex, formatPhotoTimelineLabel, photoTimelineKey, resolvePhotoColumns
+} from '../utils/photoGrid.js';
+// 只读复用视频列表的滚动宿主解析（.main-view），不修改 virtualList.js。
+import { resolveScrollOwnerDescriptor } from '../utils/virtualList.js';
 
 const PAGE_SIZE = 60;
+// 网格几何常量。卡片高度固定 = 方形缩略图 + 定高信息条，布局计算才能不依赖实测回写：
+// 缩略图区高度由列宽算出（aspect-ratio 1 的等价物），信息条用 CSS 钉死成 CARD_META_HEIGHT。
+const GRID_GAP = 12;
+const MIN_COLUMN_WIDTH = 180;
+const CARD_META_HEIGHT = 52;
+// glass-surface 给卡片加了 1px 边框，卡片是 border-box：上下各 1px 要算进行高，
+// 缩略图的正方形边长也要相应减去，否则内容比卡片内容盒高 2px 被裁掉。
+const CARD_BORDER = 2;
+const TIMELINE_HEADER_HEIGHT = 40;
+const OVERSCAN_ROWS = 3;
+// 视口底边距列表底部小于该值时预取下一页；虚拟化后哨兵元素不再稳定出现在 DOM 里。
+const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
@@ -372,11 +425,62 @@ export default {
       showCleanup: false,
       deleteTarget: null,
       deleteFileChoice: false,
-      deleting: false
+      deleting: false,
+      timelineMode: false,
+      timelineBuckets: {},
+      columns: 1,
+      mediaHeight: 0,
+      scrollOwnerEl: null,
+      scrollOwnerMissing: false,
+      loadMoreQueued: false,
+      windowState: { startRow: 0, endRow: 0, topSpacer: 0, bottomSpacer: 0, totalHeight: 0 }
     };
   },
   computed: {
     hasMore() { return !this.exhausted && this.loadedOnce; },
+    // 时间线分组只在文件名模式下生效：语义结果按相关度排序，插年月分组头没有意义。
+    timelineActive() { return this.timelineMode && this.searchMode !== 'semantic'; },
+    // 时间线开启时强制按拍摄时间排序，但不改写用户在下拉里的选择，关掉即恢复。
+    effectiveSortMode() { return this.timelineActive ? 'taken' : this.filters.sortMode; },
+    sortDisabledReason() {
+      if (this.searchMode === 'semantic') return '语义模式按相关度排序';
+      if (this.timelineMode) return '时间线分组固定按拍摄时间倒序';
+      return '';
+    },
+    virtualized() { return Boolean(this.scrollOwnerEl) && !this.scrollOwnerMissing; },
+    layout() {
+      return buildPhotoLayout({
+        items: this.images,
+        columns: this.columns,
+        groupBy: this.timelineActive ? PHOTO_GROUP_MONTH : PHOTO_GROUP_NONE,
+        cellHeight: this.mediaHeight + CARD_META_HEIGHT + CARD_BORDER,
+        headerHeight: TIMELINE_HEADER_HEIGHT,
+        gap: GRID_GAP
+      });
+    },
+    renderedRows() {
+      const rows = this.virtualized
+        ? this.layout.rows.slice(this.windowState.startRow, this.windowState.endRow)
+        : this.layout.rows;
+      return rows.map(row => ({
+        ...row,
+        isHeader: row.kind === PHOTO_ROW_HEADER,
+        // startIndex 在同一份布局里逐行递增，分组头带上它才不会在同一个年月出现两次时撞 key
+        // （回收站恢复会把照片插到队首，可能造出不连续的同名分组）。
+        key: row.kind === PHOTO_ROW_HEADER ? `h:${row.startIndex}:${row.groupKey}` : `c:${row.startIndex}`
+      }));
+    },
+    gridStyle() {
+      const style = {
+        '--photo-columns': String(this.columns),
+        // 行间隙与信息条高度由 JS 常量下发，保证 CSS 与 photoGrid 的布局计算同一份来源。
+        '--photo-grid-gap': `${GRID_GAP}px`,
+        '--photo-card-meta': `${CARD_META_HEIGHT}px`
+      };
+      // 尚未测量出宽度时不下发高度变量，让卡片退回 aspect-ratio: 1，避免首帧塌成 0 高。
+      if (this.mediaHeight > 0) style['--photo-cell-media'] = `${this.mediaHeight}px`;
+      return style;
+    },
     semanticAvailable() { return Boolean(this.semanticStatus?.available); },
     semanticNotice() {
       if (this.semanticNoticeOverride) return this.semanticNoticeOverride;
@@ -432,19 +536,29 @@ export default {
     'filters.minRating'() { this.reload(); },
     'filters.maxRating'() { this.reload(); },
     'filters.takenAfter'() { this.reload(); },
-    'filters.takenBefore'() { this.reload(); }
+    'filters.takenBefore'() { this.reload(); },
+    timelineMode() { this.reload(); },
+    // 必须侦听长度而不是 images 本身：分页是 push/splice/unshift 原地改数组，
+    // Vue 3 的非深度侦听只在整个引用被替换时触发，watch images 会让翻页后的窗口永远不刷新。
+    'images.length'() {
+      this.$nextTick(() => this.syncWindow());
+    }
   },
   mounted() {
-    this.setupInfiniteLoading();
     window.addEventListener('keydown', this.handleKeydown);
     this.loadImageDirectories();
     this.loadSemanticStatus();
     this.reload();
+    this.$nextTick(() => {
+      this.attachResizeObserver();
+      this.syncWindow(true);
+    });
   },
   beforeUnmount() {
     clearTimeout(this._keywordTimer);
     window.removeEventListener('keydown', this.handleKeydown);
-    this._intersectionObserver?.disconnect();
+    this.detachScrollOwner();
+    this.detachResizeObserver();
   },
   methods: {
     formatBytes,
@@ -455,16 +569,124 @@ export default {
       const dot = name.lastIndexOf('.');
       return dot >= 0 ? name.slice(dot + 1).toUpperCase() : '未知格式';
     },
-    setupInfiniteLoading() {
-      if (typeof IntersectionObserver === 'undefined') return;
-      const root = this.$el?.closest?.('.main-view') || null;
-      this._intersectionObserver = new IntersectionObserver(entries => {
-        if (!entries.some(entry => entry.isIntersecting)) return;
-        this.loadMore();
-      }, { root, rootMargin: '320px 0px' });
+    rowImages(row) {
+      return this.images.slice(row.startIndex, row.endIndex);
+    },
+    rowStyle(row) {
+      // outerHeight 把行间隙做成行自身的 padding-bottom（border-box），既不引入外边距合并，
+      // 又让 topSpacer/bottomSpacer 与前缀和精确对齐。
+      return { height: `${row.outerHeight}px`, paddingBottom: `${row.outerHeight - row.height}px` };
+    },
+    timelineLabel(row) {
+      return formatPhotoTimelineLabel(row, this.timelineBuckets[row.groupKey]);
+    },
+    // ===== 网格虚拟化（AC-15）=====
+    resolveScrollOwner() {
+      const { nextOwner, sameOwner, missing } = resolveScrollOwnerDescriptor(this.$el, this.scrollOwnerEl);
+      this.scrollOwnerMissing = missing;
+      if (sameOwner) return;
+      this.detachScrollOwner();
+      this.scrollOwnerEl = nextOwner;
+      // 找不到 .main-view 时退回整列表渲染，并把状态挂到 data-scroll-owner-fallback 上
+      // （与 VirtualVideoList 同款可观测标记）。
+      if (this.scrollOwnerEl) {
+        this.scrollOwnerEl.addEventListener('scroll', this.handleOwnerScroll, { passive: true });
+      }
+    },
+    detachScrollOwner() {
+      if (!this.scrollOwnerEl) return;
+      this.scrollOwnerEl.removeEventListener('scroll', this.handleOwnerScroll);
+      this.scrollOwnerEl = null;
+    },
+    attachResizeObserver() {
+      if (typeof ResizeObserver === 'undefined' || this._resizeObserver) return;
+      this._resizeObserver = new ResizeObserver(() => this.handleGridResize());
+      this._resizeObserver.observe(this.$el);
+    },
+    detachResizeObserver() {
+      this._resizeObserver?.disconnect();
+      this._resizeObserver = null;
+    },
+    getListTop() {
+      const shell = this.$refs.gridShell;
+      if (!this.scrollOwnerEl || !shell) return 0;
+      const ownerRect = this.scrollOwnerEl.getBoundingClientRect();
+      const shellRect = shell.getBoundingClientRect();
+      return this.scrollOwnerEl.scrollTop + (shellRect.top - ownerRect.top);
+    },
+    // measureGrid 只读容器宽度就能定出列数与卡片高度：卡片是定高的，不需要实测回写。
+    // 网格未挂载（如 reload 清空列表期间）或还没布局出宽度时保留上一次的测量值，
+    // 否则行高会被清成 0，卡片撑出行外互相压盖。
+    measureGrid() {
+      const width = this.$refs.gridShell?.getBoundingClientRect().width || 0;
+      if (width <= 0) return false;
+      const columns = resolvePhotoColumns(width, { minColumnWidth: MIN_COLUMN_WIDTH, gap: GRID_GAP });
+      const cellWidth = (width - GRID_GAP * (columns - 1)) / columns;
+      const mediaHeight = Math.max(0, Math.round(cellWidth) - CARD_BORDER);
+      const changed = columns !== this.columns || mediaHeight !== this.mediaHeight;
+      this.columns = columns;
+      this.mediaHeight = mediaHeight;
+      return changed;
+    },
+    // handleGridResize 在列数/卡片高度变化后重算布局，并把重算前视口顶部那张照片放回视口顶，
+    // 避免宽度变化时滚动位置跳回列表开头。
+    handleGridResize() {
+      const anchorIndex = this.virtualized
+        ? firstVisiblePhotoItemIndex(this.layout, this.windowState.startRow)
+        : -1;
+      const changed = this.measureGrid();
+      const willRestoreAnchor = changed && anchorIndex >= 0 && Boolean(this.scrollOwnerEl);
+      // 锚点回写前 scrollTop 还停在旧布局的位置，拿它去跟新的（加宽后会变短的）总高比，会误判
+      // 成"已经滚到底"而多预取一页；预取判断交给回写之后的那次同步。
+      this.syncWindow(false, !willRestoreAnchor);
+      if (!willRestoreAnchor) return;
+      // 等新布局的占位块渲染出来再改 scrollTop，否则浏览器会按旧的 scrollHeight 把它夹回去。
       this.$nextTick(() => {
-        if (this.$refs.loadSentinel) this._intersectionObserver.observe(this.$refs.loadSentinel);
+        if (!this.scrollOwnerEl) return;
+        this.scrollOwnerEl.scrollTop = calculatePhotoAnchorScrollTop({
+          layout: this.layout,
+          listTop: this.getListTop(),
+          itemIndex: anchorIndex
+        });
+        this.syncWindow();
       });
+    },
+    handleOwnerScroll() {
+      this.syncWindow();
+    },
+    syncWindow(remeasure = false, allowLoadMore = true) {
+      this.resolveScrollOwner();
+      if (remeasure || this.mediaHeight === 0) this.measureGrid();
+      if (!this.virtualized) {
+        this.windowState = { startRow: 0, endRow: this.layout.rows.length, topSpacer: 0, bottomSpacer: 0, totalHeight: this.layout.totalHeight };
+        return;
+      }
+      const listTop = this.getListTop();
+      const next = calculatePhotoWindow({
+        layout: this.layout,
+        scrollTop: this.scrollOwnerEl.scrollTop,
+        viewportHeight: this.scrollOwnerEl.clientHeight,
+        listTop,
+        overscan: OVERSCAN_ROWS
+      });
+      // 绝大多数滚动帧窗口没有变化，原样赋值会白白触发一次重渲染。
+      if (this.windowChanged(next)) this.windowState = next;
+      if (allowLoadMore) this.maybeLoadMore(listTop, next.totalHeight);
+    },
+    windowChanged(next) {
+      const current = this.windowState;
+      return next.startRow !== current.startRow || next.endRow !== current.endRow
+        || next.topSpacer !== current.topSpacer || next.bottomSpacer !== current.bottomSpacer
+        || next.totalHeight !== current.totalHeight;
+    },
+    // maybeLoadMore 取代原来的 IntersectionObserver 哨兵：虚拟化后列表末尾的哨兵元素不再
+    // 稳定存在于 DOM 中，改为按滚动位置与列表底部的距离判断。
+    maybeLoadMore(listTop, totalHeight) {
+      if (!this.hasMore || this.loading || this.loadMoreQueued || !this.scrollOwnerEl) return;
+      const viewportBottom = this.scrollOwnerEl.scrollTop + this.scrollOwnerEl.clientHeight;
+      if (viewportBottom < listTop + totalHeight - LOAD_MORE_THRESHOLD) return;
+      this.loadMoreQueued = true;
+      this.loadMore();
     },
     scoreLabel(image) {
       if (this.searchMode !== 'semantic') return '';
@@ -510,7 +732,7 @@ export default {
         max_size: 0,
         taken_after: this.takenBoundary(this.filters.takenAfter, false),
         taken_before: this.takenBoundary(this.filters.takenBefore, true),
-        sort_mode: this.filters.sortMode
+        sort_mode: this.effectiveSortMode
       };
     },
     buildSemanticFilter() {
@@ -535,8 +757,45 @@ export default {
       this.semanticCoverage = null;
       this.exhausted = false;
       this.failedThumbs = {};
+      this.loadMoreQueued = false;
       this.closeViewer();
+      const buckets = this.loadTimelineBuckets(token);
       await this.loadMore(token, true);
+      await buckets;
+    },
+    // loadTimelineBuckets 拉后端的年月计数摘要：分组头要显示整组张数，而前端只加载了当前页，
+    // 不能靠已加载条目数冒充总数，也不能为了算分组头去拉全量图片。
+    async loadTimelineBuckets(token) {
+      if (!this.timelineActive) {
+        this.timelineBuckets = {};
+        return;
+      }
+      try {
+        const buckets = await ListImageTimelineBuckets(this.buildFilter()) || [];
+        if (this._queryToken !== token) return;
+        const counts = {};
+        buckets.forEach(bucket => {
+          counts[`${bucket.year}-${String(bucket.month).padStart(2, '0')}`] = bucket.count;
+        });
+        this.timelineBuckets = counts;
+      } catch (err) {
+        if (this._queryToken !== token) return;
+        this.timelineBuckets = {};
+        this.error = `加载时间线分组失败：${err}`;
+      }
+    },
+    // adjustTimelineBucket 在删除/恢复单张照片后就地增减它所属的年月桶。
+    // 不重新调 ListImageTimelineBuckets：那个接口会把全部匹配行读进后端，
+    // 为一张照片重扫一遍全表在大图库上代价随库增长。分组键用与后端同一个 photoTimelineKey 定义。
+    adjustTimelineBucket(image, delta) {
+      if (!this.timelineActive) return;
+      const group = photoTimelineKey(image);
+      if (!group) return;
+      const counts = { ...this.timelineBuckets };
+      const next = (counts[group.key] || 0) + delta;
+      if (next > 0) counts[group.key] = next;
+      else delete counts[group.key];
+      this.timelineBuckets = counts;
     },
     async loadMore(token = this._queryToken, force = false) {
       if (!token) { token = Symbol('photo-query'); this._queryToken = token; }
@@ -560,7 +819,7 @@ export default {
       } catch (err) {
         if (this._queryToken === token) { this.error = `加载图片失败：${err}`; this.exhausted = true; this.loadedOnce = true; }
       } finally {
-        if (this._queryToken === token) this.loading = false;
+        if (this._queryToken === token) { this.loading = false; this.loadMoreQueued = false; }
       }
     },
     async loadMoreSemantic(token) {
@@ -573,6 +832,7 @@ export default {
         this.exhausted = true;
         this.loadedOnce = true;
         this.loading = false;
+        this.loadMoreQueued = false;
         return;
       }
       this.loading = true;
@@ -606,7 +866,7 @@ export default {
         await this.handleSemanticFailure(err);
         return;
       } finally {
-        if (this._queryToken === token) this.loading = false;
+        if (this._queryToken === token) { this.loading = false; this.loadMoreQueued = false; }
       }
     },
     // handleSemanticFailure 明确暴露失败原因；若能力本身不可用则退回文件名模式并禁用语义入口。
@@ -726,6 +986,9 @@ export default {
         if (this.viewerImage) this.toggleFavorite(this.viewerImage);
       }
     },
+    // patchImage 是等长替换，不会触发 'images.length' 侦听，因此不会重算虚拟化窗口。
+    // 前提是它合并进来的字段不影响布局：现有接口都不会改写 taken_at/created_at，
+    // 所以行数与分组不变。若将来有接口能改拍摄时间，这里要显式补一次 syncWindow。
     patchImage(updated) {
       if (!updated) return;
       const index = this.images.findIndex(item => Number(item.id) === Number(updated.id));
@@ -810,6 +1073,8 @@ export default {
             else if (index < this.viewerIndex) this.viewerIndex -= 1;
           }
         }
+        // 分组头显示的是后端整组总数，删掉一张后要同步减一，否则计数长期偏大。
+        this.adjustTimelineBucket(image, -1);
       } catch (err) {
         this.error = `删除图片失败：${err}`;
       }
@@ -818,6 +1083,7 @@ export default {
       if (!image) return;
       if (!this.images.some(item => Number(item.id) === Number(image.id))) {
         this.images.unshift(image);
+        this.adjustTimelineBucket(image, 1);
       }
       this.loadedOnce = true;
     }
@@ -837,6 +1103,8 @@ export default {
 .photo-toolbar__rating { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
 .photo-toolbar__rating .number-input { width: 76px; }
 .photo-toolbar__taken { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
+.photo-toolbar__timeline { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: 13px; white-space: nowrap; cursor: pointer; }
+.photo-toolbar__timeline input:disabled { cursor: not-allowed; }
 .photo-toolbar__date { width: 148px; }
 .photo-toolbar__date:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__tags { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -847,9 +1115,16 @@ export default {
 .photo-toolbar__semantic-notice { margin: 0; color: var(--text-muted); font-size: 12px; }
 .photo-library__error { margin: 0; color: var(--danger-color); }
 
-.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+/* 虚拟化网格：外层只负责堆叠"行"，列数由 --photo-columns 显式给出（而不是 auto-fill），
+   保证 DOM 布局与 photoGrid.js 的窗口计算用的是同一个列数。 */
+.photo-grid { display: block; }
+.photo-grid-row { display: grid; grid-template-columns: repeat(var(--photo-columns, 1), minmax(0, 1fr)); gap: var(--photo-grid-gap, 12px); box-sizing: border-box; }
+.photo-timeline-header { display: flex; align-items: flex-end; overflow: hidden; box-sizing: border-box; }
+.photo-timeline-header h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
 .photo-card { position: relative; overflow: hidden; border-radius: 13px; }
-.photo-card__media { display: block; width: 100%; aspect-ratio: 1; padding: 0; border: 0; background: var(--thumb-bg); cursor: pointer; }
+/* 定高卡片：缩略图区高度由列宽算出（等价于 aspect-ratio 1），信息条固定 52px，
+   两者相加即 photoGrid 的 cellHeight，布局无需实测回写。 */
+.photo-card__media { display: block; width: 100%; height: var(--photo-cell-media, auto); aspect-ratio: 1; padding: 0; border: 0; background: var(--thumb-bg); cursor: pointer; }
 .photo-card__media img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .photo-card__fallback { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; padding: 12px; color: var(--text-muted); }
 .photo-card__fallback strong { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 12px; }
@@ -861,7 +1136,7 @@ export default {
 .photo-card__action--active { color: #f6b94a; opacity: 1; }
 .photo-card:has(.photo-card__action--active) .photo-card__overlay { opacity: 1; }
 .photo-card__action--danger:hover { color: var(--danger-color); border-color: var(--danger-border); }
-.photo-card__meta { display: grid; gap: 2px; padding: 9px 11px 10px; }
+.photo-card__meta { display: grid; align-content: center; gap: 2px; height: var(--photo-card-meta, 52px); box-sizing: border-box; overflow: hidden; padding: 9px 11px 10px; }
 .photo-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-primary); }
 .photo-card__meta small { color: var(--text-muted); font-size: 11px; }
 
@@ -869,7 +1144,6 @@ export default {
 .photo-empty h3 { margin: 0 0 8px; color: var(--text-primary); }
 .photo-empty p { margin: 0 0 16px; font-size: 13px; }
 .photo-empty__actions { display: flex; justify-content: center; gap: 10px; }
-.photo-library__sentinel { height: 1px; }
 .photo-library__more { align-self: center; }
 
 .photo-viewer { position: fixed; inset: 0; z-index: 200; display: grid; grid-template-columns: minmax(0, 1fr) min(360px, 38vw); background: rgba(8, 12, 20, 0.86); }

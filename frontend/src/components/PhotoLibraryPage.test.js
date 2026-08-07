@@ -6,7 +6,8 @@ const api = vi.hoisted(() => Object.fromEntries([
   'AddTagToImage', 'RemoveTagFromImage', 'GetAllImageDirectories', 'SyncImageDirectories',
   'DeleteImage', 'ListImageTrashEntries', 'RestoreImageTrashEntry',
   'StartImageCleanupAnalysis', 'GetImageCleanupStatus', 'DismissImageNearDuplicateGroup', 'BatchDeleteImages',
-  'GetImageSemanticIndexStatus', 'SearchImagesSemantic', 'RegenerateImageAIDescription'
+  'GetImageSemanticIndexStatus', 'SearchImagesSemantic', 'RegenerateImageAIDescription',
+  'ListImageTimelineBuckets'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -68,7 +69,65 @@ beforeEach(() => {
   api.GetImageSemanticIndexStatus.mockResolvedValue({ available: true, running: false, completed: true, unavailable: '' });
   api.SearchImagesSemantic.mockResolvedValue({ hits: [], coverage: { indexed: 0, total: 0 }, has_more: false });
   api.RegenerateImageAIDescription.mockResolvedValue({ image_id: 1, description: '', generated_at: null });
+  api.ListImageTimelineBuckets.mockResolvedValue([]);
 });
+
+// mountInScrollOwner 把页面挂进一个假的 .main-view 滚动宿主里，让虚拟化真正生效。
+// jsdom 不做布局，所以几何全靠桩：
+//   - 网格宽度通过 Element.prototype.getBoundingClientRect 在 mount 之前就位，组件第一次
+//     测量就能拿到真实宽度，因此这里**不**手动调 syncWindow —— 冷启动首屏走的是组件自己的
+//     响应式路径（这正是"翻页/首屏靠 images 侦听刷新窗口"要覆盖的东西）。
+//   - scrollTop 的 setter 复刻浏览器的钳制：写入值被 scrollHeight - clientHeight 限制。
+//     少了这一条就分不出"锚点在渲染前写"和"渲染后写"，锚点用例会失去意义。
+async function mountInScrollOwner({ viewportHeight = 800, gridWidth = 1200, settings = baseSettings() } = {}) {
+  const host = document.createElement('div');
+  host.className = 'main-view';
+  document.body.appendChild(host);
+
+  let scrollTop = 0;
+  const rect = (top, width, height) => ({ top, left: 0, width, height, bottom: top + height, right: width, x: 0, y: top, toJSON() {} });
+  // 内容高度 = 网格所有直接子节点（占位块 + 行）的内联高度之和，与真实文档流一致。
+  const contentHeight = () => {
+    const grid = host.querySelector('.photo-grid');
+    if (!grid) return 0;
+    return Array.from(grid.children)
+      .reduce((sum, child) => sum + (parseFloat(child.style.height) || 0), 0);
+  };
+  const maxScrollTop = () => Math.max(0, contentHeight() - viewportHeight);
+
+  Object.defineProperty(host, 'clientHeight', { configurable: true, get: () => viewportHeight });
+  Object.defineProperty(host, 'scrollHeight', { configurable: true, get: () => Math.max(viewportHeight, contentHeight()) });
+  Object.defineProperty(host, 'scrollTop', {
+    configurable: true,
+    get: () => scrollTop,
+    set: value => { scrollTop = Math.max(0, Math.min(Number(value) || 0, maxScrollTop())); }
+  });
+  host.getBoundingClientRect = () => rect(0, gridWidth, viewportHeight);
+
+  const originalGetRect = Element.prototype.getBoundingClientRect;
+  Element.prototype.getBoundingClientRect = function patchedGetRect() {
+    if (this === host) return rect(0, gridWidth, viewportHeight);
+    if (this.classList?.contains('photo-grid')) return rect(-scrollTop, gridWidth, contentHeight());
+    return originalGetRect.call(this);
+  };
+
+  const wrapper = mount(PhotoLibraryPage, { props: { settings, tags: [] }, attachTo: host });
+  await flushPromises();
+  await wrapper.vm.$nextTick();
+
+  const setGridWidth = (width) => { gridWidth = width; };
+  const scrollTo = async (position) => {
+    host.scrollTop = position;
+    host.dispatchEvent(new Event('scroll'));
+    await wrapper.vm.$nextTick();
+  };
+  const cleanup = () => {
+    Element.prototype.getBoundingClientRect = originalGetRect;
+    wrapper.unmount();
+    host.remove();
+  };
+  return { wrapper, host, scrollTo, setGridWidth, cleanup };
+}
 
 // 关键词输入有 300ms 防抖，等待真实定时器触发后再断言，避免测试结束后有游离定时器。
 async function typeKeyword(wrapper, value) {
@@ -578,5 +637,233 @@ describe('PhotoLibraryPage cleanup review', () => {
     expect(api.DismissImageNearDuplicateGroup).toHaveBeenCalledWith([3, 4]);
     expect(wrapper.find('[data-test="cleanup-near-section"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="cleanup-empty"]').exists()).toBe(true);
+  });
+});
+
+describe('PhotoLibraryPage timeline grouping', () => {
+  const timelineImages = () => [
+    makeImage(1, { taken_at: '2026-08-21T10:00:00' }),
+    makeImage(2, { taken_at: '2026-08-03T10:00:00' }),
+    makeImage(3, { taken_at: '2026-07-09T10:00:00' })
+  ];
+
+  it('forces the taken sort, pulls the bucket summary and labels each group with the backend total', async () => {
+    api.SearchImagePage
+      .mockResolvedValueOnce(makePage([makeImage(9)]))
+      .mockResolvedValueOnce(makePage(timelineImages()));
+    api.ListImageTimelineBuckets.mockResolvedValue([
+      { year: 2026, month: 8, count: 128 },
+      { year: 2026, month: 7, count: 40 }
+    ]);
+
+    const wrapper = await mountPage();
+    expect(api.ListImageTimelineBuckets).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-test="photo-timeline-header"]')).toHaveLength(0);
+
+    await wrapper.get('[data-test="photo-timeline-toggle"]').setValue(true);
+    await flushPromises();
+
+    expect(api.SearchImagePage.mock.calls[1][0].filter.sort_mode).toBe('taken');
+    expect(api.ListImageTimelineBuckets).toHaveBeenCalledTimes(1);
+    expect(api.ListImageTimelineBuckets.mock.calls[0][0]).toMatchObject({ sort_mode: 'taken', keyword: '', tag_ids: [] });
+
+    const headers = wrapper.findAll('[data-test="photo-timeline-header"]');
+    expect(headers.map(header => header.text())).toEqual(['2026 年 8 月 · 128 张', '2026 年 7 月 · 40 张']);
+    // 分组头是整行穿插的，卡片仍是全部 3 张。
+    expect(wrapper.findAll('.photo-card')).toHaveLength(3);
+    expect(wrapper.get('[data-test="photo-sort"]').attributes('disabled')).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it('keeps 最近添加 as the default and restores the chosen sort when timeline mode is switched off', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage(timelineImages()));
+    const wrapper = await mountPage();
+    expect(api.SearchImagePage.mock.calls[0][0].filter.sort_mode).toBe('recent');
+
+    await wrapper.get('[data-test="photo-sort"]').setValue('size');
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.sort_mode).toBe('size');
+
+    await wrapper.get('[data-test="photo-timeline-toggle"]').setValue(true);
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.sort_mode).toBe('taken');
+
+    await wrapper.get('[data-test="photo-timeline-toggle"]').setValue(false);
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.sort_mode).toBe('size');
+    expect(wrapper.get('[data-test="photo-sort"]').element.value).toBe('size');
+    expect(wrapper.findAll('[data-test="photo-timeline-header"]')).toHaveLength(0);
+    wrapper.unmount();
+  });
+
+  it('shows the year and month without a count when the bucket summary fails', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1, { taken_at: '2026-08-21T10:00:00' })]));
+    api.ListImageTimelineBuckets.mockRejectedValue(new Error('分组计数失败'));
+
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-timeline-toggle"]').setValue(true);
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="photo-timeline-header"]').text()).toBe('2026 年 8 月');
+    expect(wrapper.text()).toContain('加载时间线分组失败');
+    wrapper.unmount();
+  });
+
+  it('disables timeline grouping in semantic mode', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+
+    await wrapper.get('[data-test="photo-mode-semantic"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="photo-timeline-toggle"]').attributes('disabled')).toBeDefined();
+    wrapper.unmount();
+  });
+});
+
+describe('PhotoLibraryPage grid virtualization', () => {
+  it('keeps the rendered card count bounded by the viewport for a ten-thousand image library', async () => {
+    const images = Array.from({ length: 10000 }, (_, index) => makeImage(index + 1));
+    api.SearchImagePage.mockResolvedValue(makePage(images, null));
+
+    const { wrapper, scrollTo, cleanup } = await mountInScrollOwner();
+
+    // 1200px 宽、180px 最小列宽、12px 间隙 => 6 列；视口 800px + 3 行 overscan。
+    expect(wrapper.vm.columns).toBe(6);
+    const atTop = wrapper.findAll('.photo-card');
+    expect(atTop.length).toBeGreaterThan(0);
+    expect(atTop.length).toBeLessThan(100);
+    expect(wrapper.vm.layout.rows.length).toBeGreaterThan(1600);
+
+    await scrollTo(Math.floor(wrapper.vm.layout.totalHeight / 2));
+    const atMiddle = wrapper.findAll('.photo-card');
+    expect(atMiddle.length).toBeLessThan(100);
+    // 窗口确实跟着滚动位置走，而不是永远渲染开头那批。
+    expect(atMiddle[0].text()).not.toContain('photo-1.jpg');
+    expect(wrapper.vm.windowState.startRow).toBeGreaterThan(700);
+    expect(wrapper.vm.windowState.topSpacer).toBeGreaterThan(0);
+    expect(wrapper.vm.windowState.bottomSpacer).toBeGreaterThan(0);
+
+    await scrollTo(wrapper.vm.layout.totalHeight);
+    expect(wrapper.findAll('.photo-card').length).toBeLessThan(100);
+    expect(wrapper.vm.windowState.endRow).toBe(wrapper.vm.layout.rows.length);
+    expect(wrapper.vm.windowState.bottomSpacer).toBe(0);
+    cleanup();
+  });
+
+  it('asks for the next page from the scroll position instead of a sentinel element', async () => {
+    const cursor = { sort_mode: 'recent', created_at: '2026-08-07T09:00:00Z', size: 0, rating_is_null: false, id: 60 };
+    const first = Array.from({ length: 60 }, (_, index) => makeImage(index + 1));
+    api.SearchImagePage
+      .mockResolvedValueOnce(makePage(first, cursor))
+      .mockResolvedValueOnce(makePage([makeImage(61)], null));
+
+    const { wrapper, scrollTo, cleanup } = await mountInScrollOwner();
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+
+    await scrollTo(wrapper.vm.layout.totalHeight);
+    await flushPromises();
+
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(2);
+    expect(api.SearchImagePage.mock.calls[1][0].cursor).toEqual(cursor);
+    expect(wrapper.vm.images).toHaveLength(61);
+    cleanup();
+  });
+
+  // 回归：分页是 this.images.push 原地改数组，不会替换数组引用。侦听 images 本身在 Vue 3 下
+  // 不触发，窗口会永远停在第一页的高度，新照片渲染不出来。这里刻意不手动调 syncWindow。
+  it('refreshes the window and renders the appended page after an in-place push', async () => {
+    const cursor = { sort_mode: 'recent', created_at: '2026-08-07T09:00:00Z', size: 0, rating_is_null: false, id: 300 };
+    api.SearchImagePage
+      .mockResolvedValueOnce(makePage(Array.from({ length: 300 }, (_, index) => makeImage(index + 1)), cursor))
+      .mockResolvedValueOnce(makePage(Array.from({ length: 60 }, (_, index) => makeImage(index + 301)), null));
+
+    const { wrapper, scrollTo, cleanup } = await mountInScrollOwner();
+    const heightBefore = wrapper.vm.windowState.totalHeight;
+    expect(heightBefore).toBe(wrapper.vm.layout.totalHeight);
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+
+    await wrapper.get('[data-test="photo-load-more"]').trigger('click');
+    await flushPromises();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.vm.images).toHaveLength(360);
+    expect(wrapper.vm.windowState.totalHeight).toBeGreaterThan(heightBefore);
+    expect(wrapper.vm.windowState.totalHeight).toBe(wrapper.vm.layout.totalHeight);
+
+    await scrollTo(wrapper.vm.layout.totalHeight);
+    expect(wrapper.text()).toContain('photo-360.jpg');
+    expect(wrapper.findAll('.photo-card').length).toBeLessThan(100);
+    cleanup();
+  });
+
+  it('re-lays out on a width change and keeps the anchored photo in view', async () => {
+    const images = Array.from({ length: 600 }, (_, index) => makeImage(index + 1));
+    api.SearchImagePage.mockResolvedValue(makePage(images, null));
+
+    const { wrapper, host, scrollTo, setGridWidth, cleanup } = await mountInScrollOwner();
+    expect(wrapper.vm.columns).toBe(6);
+
+    // 滚到 80%：收窄到 3 列后行数翻倍，锚点的新位置会超过旧布局的最大 scrollTop，
+    // 于是"渲染前写 scrollTop"会被钳制、落不到锚点上——这正是本用例要区分的。
+    const before = wrapper.vm.layout.totalHeight;
+    await scrollTo(Math.floor(before * 0.8));
+    const anchorIndex = wrapper.vm.layout.rows[wrapper.vm.windowState.startRow].startIndex;
+    expect(anchorIndex).toBeGreaterThan(0);
+
+    // 收窄到 3 列：ResizeObserver 在 jsdom 里不存在，直接调用它的回调。
+    setGridWidth(600);
+    wrapper.vm.handleGridResize();
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.vm.columns).toBe(3);
+    // 锚点照片所在的行必须精确回到视口顶，而不只是"没跳回开头"。宿主的 scrollTop 会按
+    // scrollHeight 钳制，所以只有等新布局渲染完再写才落得准。
+    const anchorRow = wrapper.vm.layout.rows.find(row => row.startIndex <= anchorIndex && anchorIndex < row.endIndex);
+    expect(anchorRow).toBeTruthy();
+    expect(anchorRow.top).toBeGreaterThan(before - 800);
+    expect(host.scrollTop).toBe(anchorRow.top);
+    expect(wrapper.vm.windowState.startRow).toBe(Math.max(0, wrapper.vm.layout.rows.indexOf(anchorRow) - 3));
+    expect(wrapper.findAll('.photo-card').length).toBeLessThan(100);
+    cleanup();
+  });
+
+  // N2 回归：加宽列数会让总高变短，锚点回写前的那次同步若还做预取判断，就会用旧的大 scrollTop
+  // 误判成"到底了"而多拉一页。
+  it('does not prefetch an extra page when widening the grid while scrolled deep', async () => {
+    const cursor = { sort_mode: 'recent', created_at: '2026-08-07T09:00:00Z', size: 0, rating_is_null: false, id: 600 };
+    api.SearchImagePage.mockResolvedValue(makePage(Array.from({ length: 600 }, (_, index) => makeImage(index + 1)), cursor));
+
+    const { wrapper, scrollTo, setGridWidth, cleanup } = await mountInScrollOwner();
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+
+    await scrollTo(Math.floor(wrapper.vm.layout.totalHeight / 2));
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+
+    setGridWidth(2400);
+    wrapper.vm.handleGridResize();
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.vm.columns).toBe(12);
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+    cleanup();
+  });
+
+  // T1 回归：不手动 syncWindow，冷启动首屏必须自己量出列数与行高并渲染出窗口。
+  it('measures and renders the first paint without any manual window sync', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage(Array.from({ length: 500 }, (_, index) => makeImage(index + 1)), null));
+
+    const { wrapper, cleanup } = await mountInScrollOwner();
+
+    expect(wrapper.vm.columns).toBe(6);
+    expect(wrapper.vm.mediaHeight).toBe(188);
+    expect(wrapper.vm.windowState.totalHeight).toBe(wrapper.vm.layout.totalHeight);
+    expect(wrapper.vm.windowState.endRow).toBeGreaterThan(0);
+    const cards = wrapper.findAll('.photo-card');
+    expect(cards.length).toBeGreaterThan(0);
+    expect(cards.length).toBeLessThan(100);
+    cleanup();
   });
 });

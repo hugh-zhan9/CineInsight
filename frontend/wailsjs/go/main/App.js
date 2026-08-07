@@ -666,6 +666,10 @@ export function SearchImagePage(arg1) {
   return window['go']['main']['App']['SearchImagePage'](arg1);
 }
 
+export function ListImageTimelineBuckets(arg1) {
+  return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
+}
+
 export function SetImageFavorite(arg1, arg2) {
   return window['go']['main']['App']['SetImageFavorite'](arg1, arg2);
 }
