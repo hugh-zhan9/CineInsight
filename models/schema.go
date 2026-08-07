@@ -30,5 +30,10 @@ func AllModels() []interface{} {
 		&NearDuplicateDismissal{},
 		&VideoEnhancementTask{},
 		&MediaStream{},
+		&Image{},
+		&ImageDirectory{},
+		&ImageTrashEntry{},
+		&ImageAIDescription{},
+		&ImageNearDuplicateDismissal{},
 	}
 }

@@ -1,0 +1,422 @@
+package services
+
+import (
+	"bytes"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+	"video-master/database"
+	"video-master/models"
+)
+
+// imageCleanupCreateImage 写入真实文件并按当前 stat 建库记录；hash 非空时把
+// hash_source_size/mod_time 设为与文件一致（即"非 stale"）。
+func imageCleanupCreateImage(t *testing.T, path string, content []byte, hash string, width, height int) *models.Image {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		t.Fatalf("创建目录失败: %v", err)
+	}
+	if err := os.WriteFile(path, content, 0644); err != nil {
+		t.Fatalf("写入图片文件失败: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat 图片文件失败: %v", err)
+	}
+	img := models.Image{
+		Name:           filepath.Base(path),
+		Path:           path,
+		Directory:      filepath.Dir(path),
+		Size:           info.Size(),
+		Width:          width,
+		Height:         height,
+		Format:         "jpg",
+		PerceptualHash: hash,
+	}
+	if hash != "" {
+		img.HashSourceSize = info.Size()
+		img.HashSourceModTimeNS = info.ModTime().UnixNano()
+	}
+	if err := database.DB.Create(&img).Error; err != nil {
+		t.Fatalf("创建图片记录失败: %v", err)
+	}
+	return &img
+}
+
+func imageCleanupGroupIDs(group ImageCleanupDuplicateGroup) []uint {
+	ids := []uint{group.Original.ID}
+	for _, candidate := range group.Candidates {
+		ids = append(ids, candidate.ID)
+	}
+	return ids
+}
+
+func imageCleanupContainsID(ids []uint, id uint) bool {
+	for _, item := range ids {
+		if item == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestImageCleanupEmptyLibraryProducesEmptyAnalysis(t *testing.T) {
+	setupImageServiceTestDB(t)
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("空库分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 0 || len(analysis.NearDuplicateGroups) != 0 || analysis.StaleHashCount != 0 {
+		t.Fatalf("空库应产出空分析结果，实际 %+v", analysis)
+	}
+}
+
+func TestImageCleanupExactDuplicateGroupAndOriginalSelection(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	same := bytes.Repeat([]byte("a"), 2048)
+	differentSameSize := append(bytes.Repeat([]byte("a"), 2047), 'b')
+
+	small := imageCleanupCreateImage(t, filepath.Join(dir, "dup-small.jpg"), same, "", 100, 100)
+	large := imageCleanupCreateImage(t, filepath.Join(dir, "dup-large.jpg"), same, "", 4000, 3000)
+	sizeOnly := imageCleanupCreateImage(t, filepath.Join(dir, "same-size-other-bytes.jpg"), differentSameSize, "", 100, 100)
+	unrelated := imageCleanupCreateImage(t, filepath.Join(dir, "other.jpg"), bytes.Repeat([]byte("c"), 99), "", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个精确重复组，实际 %d", len(analysis.DuplicateGroups))
+	}
+	group := analysis.DuplicateGroups[0]
+	if group.Original.ID != large.ID {
+		t.Fatalf("Original 应按像素数优先选中 %d，实际 %d", large.ID, group.Original.ID)
+	}
+	if len(group.Candidates) != 1 || group.Candidates[0].ID != small.ID {
+		t.Fatalf("候选应为 %d，实际 %+v", small.ID, group.Candidates)
+	}
+	if group.Reason != "文件大小和采样哈希一致" {
+		t.Fatalf("精确重复 Reason 不符: %q", group.Reason)
+	}
+	ids := imageCleanupGroupIDs(group)
+	if imageCleanupContainsID(ids, sizeOnly.ID) || imageCleanupContainsID(ids, unrelated.ID) {
+		t.Fatalf("同大小不同内容/无关图片不应进组: %v", ids)
+	}
+	if len(analysis.NearDuplicateGroups) != 0 || analysis.StaleHashCount != 0 {
+		t.Fatalf("无哈希图片不应产出近似组或 stale 计数，实际 %+v", analysis)
+	}
+}
+
+func TestImageCleanupMissingFileSkipped(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	same := bytes.Repeat([]byte("a"), 512)
+	imageCleanupCreateImage(t, filepath.Join(dir, "kept.jpg"), same, "abcd000000000000", 100, 100)
+	missing := imageCleanupCreateImage(t, filepath.Join(dir, "missing.jpg"), same, "abcd000000000000", 100, 100)
+	if err := os.Remove(missing.Path); err != nil {
+		t.Fatalf("删除测试文件失败: %v", err)
+	}
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 0 || len(analysis.NearDuplicateGroups) != 0 {
+		t.Fatalf("文件缺失的图片应被跳过，实际 %+v", analysis)
+	}
+	if analysis.StaleHashCount != 0 {
+		t.Fatalf("文件缺失不应计入 StaleHashCount，实际 %d", analysis.StaleHashCount)
+	}
+}
+
+func TestImageCleanupNearDuplicateGroupsByHammingDistance(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	// 各文件大小互不相同，避免落入精确重复分桶。
+	big := imageCleanupCreateImage(t, filepath.Join(dir, "near-big.jpg"), bytes.Repeat([]byte("a"), 300), "abcd000000000000", 200, 200)
+	smallVariant := imageCleanupCreateImage(t, filepath.Join(dir, "near-small.jpg"), bytes.Repeat([]byte("b"), 301), "abcd000000000001", 100, 100)
+	farSameBand := imageCleanupCreateImage(t, filepath.Join(dir, "far-same-band.jpg"), bytes.Repeat([]byte("c"), 302), "abcd0000ffffffff", 100, 100)
+	closeOtherBand := imageCleanupCreateImage(t, filepath.Join(dir, "close-other-band.jpg"), bytes.Repeat([]byte("d"), 303), "abce000000000000", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 0 {
+		t.Fatalf("不应产出精确重复组，实际 %d", len(analysis.DuplicateGroups))
+	}
+	if len(analysis.NearDuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个近似重复组，实际 %d", len(analysis.NearDuplicateGroups))
+	}
+	group := analysis.NearDuplicateGroups[0]
+	if group.Original.ID != big.ID {
+		t.Fatalf("近似组 Original 应按像素数选中 %d，实际 %d", big.ID, group.Original.ID)
+	}
+	if len(group.Candidates) != 1 || group.Candidates[0].ID != smallVariant.ID {
+		t.Fatalf("近似组候选应为 %d，实际 %+v", smallVariant.ID, group.Candidates)
+	}
+	if !strings.Contains(group.Reason, "感知哈希") {
+		t.Fatalf("近似重复 Reason 不符: %q", group.Reason)
+	}
+	ids := imageCleanupGroupIDs(group)
+	if imageCleanupContainsID(ids, farSameBand.ID) || imageCleanupContainsID(ids, closeOtherBand.ID) {
+		t.Fatalf("汉明距离超阈值或不同分桶的图片不应进组: %v", ids)
+	}
+}
+
+func TestImageCleanupNearDuplicateOriginalFallsBackToFileSize(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	smallFile := imageCleanupCreateImage(t, filepath.Join(dir, "same-pixels-small.jpg"), bytes.Repeat([]byte("a"), 400), "1234000000000000", 100, 100)
+	bigFile := imageCleanupCreateImage(t, filepath.Join(dir, "same-pixels-big.jpg"), bytes.Repeat([]byte("b"), 900), "1234000000000000", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.NearDuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个近似重复组，实际 %d", len(analysis.NearDuplicateGroups))
+	}
+	group := analysis.NearDuplicateGroups[0]
+	if group.Original.ID != bigFile.ID {
+		t.Fatalf("像素数相同时 Original 应按体积选中 %d，实际 %d", bigFile.ID, group.Original.ID)
+	}
+	if len(group.Candidates) != 1 || group.Candidates[0].ID != smallFile.ID {
+		t.Fatalf("候选应为 %d，实际 %+v", smallFile.ID, group.Candidates)
+	}
+}
+
+func TestImageCleanupStaleHashCountedAndSkipped(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	fresh := imageCleanupCreateImage(t, filepath.Join(dir, "fresh.jpg"), bytes.Repeat([]byte("a"), 500), "abcd000000000000", 100, 100)
+	stale := imageCleanupCreateImage(t, filepath.Join(dir, "stale.jpg"), bytes.Repeat([]byte("b"), 501), "abcd000000000000", 100, 100)
+	imageCleanupCreateImage(t, filepath.Join(dir, "no-hash.jpg"), bytes.Repeat([]byte("c"), 502), "", 100, 100)
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", stale.ID).
+		Update("hash_source_size", stale.HashSourceSize+1).Error; err != nil {
+		t.Fatalf("制造 stale 指纹失败: %v", err)
+	}
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if analysis.StaleHashCount != 1 {
+		t.Fatalf("StaleHashCount 应为 1（无哈希不计），实际 %d", analysis.StaleHashCount)
+	}
+	if len(analysis.NearDuplicateGroups) != 0 {
+		t.Fatalf("stale 指纹图片不应参与近似检测，实际 %+v", analysis.NearDuplicateGroups)
+	}
+	_ = fresh
+}
+
+func TestImageCleanupExactPairsExcludedFromNearDuplicates(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	same := bytes.Repeat([]byte("a"), 2048)
+	imageCleanupCreateImage(t, filepath.Join(dir, "exact-1.jpg"), same, "abcd000000000000", 100, 100)
+	imageCleanupCreateImage(t, filepath.Join(dir, "exact-2.jpg"), same, "abcd000000000000", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个精确重复组，实际 %d", len(analysis.DuplicateGroups))
+	}
+	if len(analysis.NearDuplicateGroups) != 0 {
+		t.Fatalf("已属精确重复的对不应再报近似重复，实际 %+v", analysis.NearDuplicateGroups)
+	}
+}
+
+func TestImageCleanupDismissalExcludesGroupAndIsIdempotent(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	first := imageCleanupCreateImage(t, filepath.Join(dir, "pair-1.jpg"), bytes.Repeat([]byte("a"), 700), "beef000000000000", 100, 100)
+	second := imageCleanupCreateImage(t, filepath.Join(dir, "pair-2.jpg"), bytes.Repeat([]byte("b"), 701), "beef000000000003", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.NearDuplicateGroups) != 1 {
+		t.Fatalf("忽略前应产出 1 个近似重复组，实际 %d", len(analysis.NearDuplicateGroups))
+	}
+
+	// 故意用高 ID 在前的顺序传入，校验低/高 ID 归一化。
+	if err := DismissImageNearDuplicateGroup([]uint{second.ID, first.ID}); err != nil {
+		t.Fatalf("忽略近似重复组失败: %v", err)
+	}
+	analysis, err = svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("忽略后分析失败: %v", err)
+	}
+	if len(analysis.NearDuplicateGroups) != 0 {
+		t.Fatalf("忽略后不应再产出近似重复组，实际 %+v", analysis.NearDuplicateGroups)
+	}
+
+	if err := DismissImageNearDuplicateGroup([]uint{first.ID, second.ID}); err != nil {
+		t.Fatalf("重复忽略应幂等无错误: %v", err)
+	}
+	var count int64
+	if err := database.DB.Model(&models.ImageNearDuplicateDismissal{}).Count(&count).Error; err != nil {
+		t.Fatalf("统计 dismissals 失败: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("重复忽略不应新增行，实际 %d 行", count)
+	}
+	var dismissal models.ImageNearDuplicateDismissal
+	if err := database.DB.First(&dismissal).Error; err != nil {
+		t.Fatalf("读取 dismissal 失败: %v", err)
+	}
+	if dismissal.ImageLowID != first.ID || dismissal.ImageHighID != second.ID {
+		t.Fatalf("dismissal 应低 ID 在前，实际 low=%d high=%d", dismissal.ImageLowID, dismissal.ImageHighID)
+	}
+
+	if err := DismissImageNearDuplicateGroup([]uint{first.ID}); err == nil {
+		t.Fatal("单张图片的忽略请求应报错")
+	}
+	if err := DismissImageNearDuplicateGroup([]uint{first.ID, first.ID}); err == nil {
+		t.Fatal("重复同一 ID 的忽略请求应报错")
+	}
+}
+
+func TestImageCleanupGiantBandBucketTruncatesNeighbors(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	// A 先入桶，随后 65 个同前缀但距离远（>8）的 filler 把 A 挤出邻居窗口，
+	// 最后与 A 哈希完全相同的 Z 到达时已看不到 A。
+	first := imageCleanupCreateImage(t, filepath.Join(dir, "victim-a.jpg"), bytes.Repeat([]byte("a"), 1000), "abcd000000000000", 100, 100)
+	fillerCount := imageCleanupMaxBandNeighbors + 1
+	for i := 0; i < fillerCount; i++ {
+		imageCleanupCreateImage(t, filepath.Join(dir, fmt.Sprintf("filler-%02d.jpg", i)),
+			bytes.Repeat([]byte("f"), 1100+i), "abcd0000ffffffff", 100, 100)
+	}
+	last := imageCleanupCreateImage(t, filepath.Join(dir, "victim-z.jpg"), bytes.Repeat([]byte("z"), 3000), "abcd000000000000", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	// filler 之间距离 0，分组仍产出（边界表：巨型桶截断后分组仍产出）。
+	if len(analysis.NearDuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个 filler 近似重复组，实际 %d", len(analysis.NearDuplicateGroups))
+	}
+	group := analysis.NearDuplicateGroups[0]
+	if len(group.Candidates)+1 != fillerCount {
+		t.Fatalf("filler 组应含 %d 张图片，实际 %d", fillerCount, len(group.Candidates)+1)
+	}
+	ids := imageCleanupGroupIDs(group)
+	if imageCleanupContainsID(ids, first.ID) || imageCleanupContainsID(ids, last.ID) {
+		t.Fatalf("被邻居上限截断的 A/Z 不应进 filler 组: %v", ids)
+	}
+}
+
+func TestImageCleanupSoftDeletedImagesExcluded(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	same := bytes.Repeat([]byte("a"), 2048)
+	imageCleanupCreateImage(t, filepath.Join(dir, "active.jpg"), same, "abcd000000000000", 100, 100)
+	deleted := imageCleanupCreateImage(t, filepath.Join(dir, "deleted.jpg"), same, "abcd000000000000", 100, 100)
+	if err := database.DB.Delete(&models.Image{}, deleted.ID).Error; err != nil {
+		t.Fatalf("软删图片失败: %v", err)
+	}
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 0 || len(analysis.NearDuplicateGroups) != 0 {
+		t.Fatalf("软删图片不应参与分析，实际 %+v", analysis)
+	}
+}
+
+func TestImageCleanupStartStatusProgressAndInvalidate(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	same := bytes.Repeat([]byte("a"), 2048)
+	small := imageCleanupCreateImage(t, filepath.Join(dir, "dup-1.jpg"), same, "", 100, 100)
+	imageCleanupCreateImage(t, filepath.Join(dir, "dup-2.jpg"), same, "", 4000, 3000)
+
+	svc := NewImageCleanupService()
+	var stagesMu sync.Mutex
+	stages := make([]string, 0)
+	svc.SetEventEmitter(func(progress ImageCleanupProgress) {
+		stagesMu.Lock()
+		stages = append(stages, progress.Stage)
+		stagesMu.Unlock()
+	})
+
+	status, err := svc.StartImageCleanupAnalysis()
+	if err != nil {
+		t.Fatalf("启动分析失败: %v", err)
+	}
+	if !status.Running {
+		t.Fatalf("启动后状态应为 Running，实际 %+v", status)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		status = svc.GetImageCleanupStatus()
+		if !status.Running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("等待分析完成超时")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !status.Completed || status.Error != "" || status.Analysis == nil {
+		t.Fatalf("分析应成功完成，实际 %+v", status)
+	}
+	if len(status.Analysis.DuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个精确重复组，实际 %d", len(status.Analysis.DuplicateGroups))
+	}
+	stagesMu.Lock()
+	sawDone := false
+	for _, stage := range stages {
+		if stage == "done" {
+			sawDone = true
+		}
+	}
+	stagesMu.Unlock()
+	if !sawDone {
+		t.Fatalf("进度事件应包含 done 阶段，实际 %v", stages)
+	}
+
+	// 模拟删除后失效（app 层在 DeleteImage/BatchDeleteImages/Restore 后调用）：
+	// 软删候选 → Invalidate → 重新分析不再成组。
+	imageService := NewImageService()
+	result := imageService.BatchDeleteImages([]uint{small.ID}, false)
+	if result.Failed != 0 {
+		t.Fatalf("软删候选失败: %+v", result.Errors)
+	}
+	svc.InvalidateAnalysis()
+	status = svc.GetImageCleanupStatus()
+	if status.Completed || status.Analysis != nil || status.Error != "" {
+		t.Fatalf("Invalidate 后应清空缓存结果，实际 %+v", status)
+	}
+
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("重新分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 0 {
+		t.Fatalf("删除候选后重新分析不应再成组，实际 %+v", analysis.DuplicateGroups)
+	}
+}

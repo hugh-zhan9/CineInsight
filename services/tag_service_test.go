@@ -507,3 +507,170 @@ func TestSaveAITagLibraryWithoutChangesKeepsPendingCandidates(t *testing.T) {
 		t.Fatalf("标签库未变化时不应使候选失效，实际 %s", candidate.Status)
 	}
 }
+
+func mustCountTagLinks(t *testing.T, table string, tagID uint) int64 {
+	t.Helper()
+	var count int64
+	if err := database.DB.Table(table).Where("tag_id = ?", tagID).Count(&count).Error; err != nil {
+		t.Fatalf("统计 %s 关联失败: %v", table, err)
+	}
+	return count
+}
+
+func TestTagServiceDeleteTagCleansVideoAndImageLinks(t *testing.T) {
+	cases := []struct {
+		name      string
+		withVideo bool
+		withImage bool
+	}{
+		{name: "仅视频", withVideo: true},
+		{name: "仅图片", withImage: true},
+		{name: "视频图片混挂", withVideo: true, withImage: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setupVideoServiceTestDB(t)
+			doomed := models.Tag{Name: "待删标签", Color: "#111111", IsActive: true}
+			kept := models.Tag{Name: "保留标签", Color: "#222222", IsActive: true}
+			if err := database.DB.Create(&[]*models.Tag{&doomed, &kept}).Error; err != nil {
+				t.Fatalf("创建标签失败: %v", err)
+			}
+			if testCase.withVideo {
+				video := models.Video{Name: "delete-tag.mp4", Path: "/tmp/delete-tag-" + testCase.name + ".mp4"}
+				if err := database.DB.Create(&video).Error; err != nil {
+					t.Fatalf("创建视频失败: %v", err)
+				}
+				if err := database.DB.Model(&video).Association("Tags").Append(&doomed, &kept); err != nil {
+					t.Fatalf("关联视频标签失败: %v", err)
+				}
+			}
+			if testCase.withImage {
+				image := models.Image{Name: "delete-tag.jpg", Path: "/tmp/delete-tag-" + testCase.name + ".jpg"}
+				if err := database.DB.Create(&image).Error; err != nil {
+					t.Fatalf("创建图片失败: %v", err)
+				}
+				if err := database.DB.Model(&image).Association("Tags").Append(&doomed, &kept); err != nil {
+					t.Fatalf("关联图片标签失败: %v", err)
+				}
+			}
+
+			if err := (&TagService{}).DeleteTag(doomed.ID); err != nil {
+				t.Fatalf("删除标签失败: %v", err)
+			}
+			if count := mustCountTagLinks(t, "video_tags", doomed.ID); count != 0 {
+				t.Fatalf("video_tags 应清空: count=%d", count)
+			}
+			if count := mustCountTagLinks(t, "image_tags", doomed.ID); count != 0 {
+				t.Fatalf("image_tags 应清空: count=%d", count)
+			}
+			expectedKept := int64(0)
+			if testCase.withVideo {
+				expectedKept++
+			}
+			if testCase.withImage {
+				expectedKept++
+			}
+			keptTotal := mustCountTagLinks(t, "video_tags", kept.ID) + mustCountTagLinks(t, "image_tags", kept.ID)
+			if keptTotal != expectedKept {
+				t.Fatalf("其他标签的关联不应受影响: got=%d want=%d", keptTotal, expectedKept)
+			}
+			var deletedCount int64
+			if err := database.DB.Unscoped().Model(&models.Tag{}).Where("id = ? AND deleted_at IS NOT NULL", doomed.ID).Count(&deletedCount).Error; err != nil || deletedCount != 1 {
+				t.Fatalf("标签应软删除: count=%d err=%v", deletedCount, err)
+			}
+		})
+	}
+}
+
+func TestTagServiceMergeTagsRewritesBothTablesWithDedup(t *testing.T) {
+	cases := []struct {
+		name      string
+		withVideo bool
+		withImage bool
+	}{
+		{name: "仅视频", withVideo: true},
+		{name: "仅图片", withImage: true},
+		{name: "视频图片混挂", withVideo: true, withImage: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			setupVideoServiceTestDB(t)
+			target := models.Tag{Name: "合并目标", Color: "#111111", IsActive: true}
+			source := models.Tag{Name: "合并来源", Color: "#222222", IsActive: true}
+			if err := database.DB.Create(&[]*models.Tag{&target, &source}).Error; err != nil {
+				t.Fatalf("创建标签失败: %v", err)
+			}
+
+			var video models.Video
+			if testCase.withVideo {
+				video = models.Video{Name: "merge.mp4", Path: "/tmp/merge-both-" + testCase.name + ".mp4"}
+				if err := database.DB.Create(&video).Error; err != nil {
+					t.Fatalf("创建视频失败: %v", err)
+				}
+				if err := database.DB.Model(&video).Association("Tags").Append(&source); err != nil {
+					t.Fatalf("关联视频标签失败: %v", err)
+				}
+			}
+			var moved, duplicated models.Image
+			if testCase.withImage {
+				// duplicated 同时挂 source+target（去重路径），moved 仅挂 source（改写路径）。
+				moved = models.Image{Name: "merge-moved.jpg", Path: "/tmp/merge-moved-" + testCase.name + ".jpg"}
+				duplicated = models.Image{Name: "merge-dup.jpg", Path: "/tmp/merge-dup-" + testCase.name + ".jpg"}
+				if err := database.DB.Create(&[]*models.Image{&moved, &duplicated}).Error; err != nil {
+					t.Fatalf("创建图片失败: %v", err)
+				}
+				if err := database.DB.Model(&moved).Association("Tags").Append(&source); err != nil {
+					t.Fatalf("关联图片标签失败: %v", err)
+				}
+				if err := database.DB.Model(&duplicated).Association("Tags").Append(&source, &target); err != nil {
+					t.Fatalf("关联图片标签失败: %v", err)
+				}
+			}
+
+			result, err := (&TagService{}).MergeTags([]uint{source.ID}, target.ID)
+			if err != nil {
+				t.Fatalf("合并标签失败: %v", err)
+			}
+			expectedVideoMoved, expectedImageMoved := 0, 0
+			if testCase.withVideo {
+				expectedVideoMoved = 1
+			}
+			if testCase.withImage {
+				expectedImageMoved = 1
+			}
+			if result.VideoLinksMoved != expectedVideoMoved || result.ImageLinksMoved != expectedImageMoved {
+				t.Fatalf("双表改写计数错误: %+v", result)
+			}
+			if count := mustCountTagLinks(t, "video_tags", source.ID); count != 0 {
+				t.Fatalf("video_tags 不应残留来源标签: count=%d", count)
+			}
+			if count := mustCountTagLinks(t, "image_tags", source.ID); count != 0 {
+				t.Fatalf("image_tags 不应残留来源标签: count=%d", count)
+			}
+			if testCase.withVideo {
+				var loaded models.Video
+				if err := database.DB.Preload("Tags").First(&loaded, video.ID).Error; err != nil {
+					t.Fatalf("读取合并后视频失败: %v", err)
+				}
+				if len(loaded.Tags) != 1 || loaded.Tags[0].ID != target.ID {
+					t.Fatalf("视频应仅保留目标标签: %+v", loaded.Tags)
+				}
+			}
+			if testCase.withImage {
+				for _, imageID := range []uint{moved.ID, duplicated.ID} {
+					var loaded models.Image
+					if err := database.DB.Preload("Tags").First(&loaded, imageID).Error; err != nil {
+						t.Fatalf("读取合并后图片失败: %v", err)
+					}
+					if len(loaded.Tags) != 1 || loaded.Tags[0].ID != target.ID {
+						t.Fatalf("图片 %d 应仅保留一条目标标签关联: %+v", imageID, loaded.Tags)
+					}
+				}
+			}
+			var deletedCount int64
+			if err := database.DB.Unscoped().Model(&models.Tag{}).Where("id = ? AND deleted_at IS NOT NULL", source.ID).Count(&deletedCount).Error; err != nil || deletedCount != 1 {
+				t.Fatalf("来源标签应软删除: count=%d err=%v", deletedCount, err)
+			}
+		})
+	}
+}

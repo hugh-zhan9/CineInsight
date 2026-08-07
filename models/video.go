@@ -106,6 +106,7 @@ type Settings struct {
 	ConfirmBeforeDelete          bool       `json:"confirm_before_delete"` // 删除前确认
 	DeleteOriginalFile           bool       `json:"delete_original_file"`  // 是否删除原始文件
 	VideoExtensions              string     `json:"video_extensions"`      // 支持的视频格式（逗号分隔）
+	ImageExtensions              string     `json:"image_extensions"`      // 支持的图片格式（逗号分隔），老库零值由使用方回退默认清单
 	ScanExcludePaths             string     `gorm:"type:text" json:"scan_exclude_paths"`
 	PlayWeight                   float64    `gorm:"default:2.0" json:"play_weight"` // 播放权重（1次播放 = N次随机播放）
 	RandomHalfLifeDays           int        `gorm:"not null;default:90" json:"random_half_life_days"`
