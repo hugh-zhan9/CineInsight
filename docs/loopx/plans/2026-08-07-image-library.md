@@ -1,6 +1,6 @@
 ---
 source: docs/loopx/design/2026-08-07-image-library/需求设计文档.md（AC-1..AC-11 / D-001..D-017 / TC-1..TC-9；intake：.loopx/intake/2026-08-07-image-library/）
-status: ready
+status: done
 slices:
   - id: P-001
     status: done
@@ -36,10 +36,10 @@ slices:
     status: done
     depends: [P-001]
   - id: P-012
-    status: in_progress
+    status: done
     depends: [P-001, P-003, P-004]
   - id: P-013
-    status: pending
+    status: done
     depends: [P-006, P-012]
 ---
 

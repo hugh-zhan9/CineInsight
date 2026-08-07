@@ -336,6 +336,8 @@ export function RemoveTagFromImage(arg1:number,arg2:number):Promise<void>;
 
 export function SearchImagePage(arg1:services.ImagePageRequest):Promise<services.ImagePage>;
 
+export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
+
 export function SetImageFavorite(arg1:number,arg2:boolean):Promise<models.Image>;
 
 export function SetImageRating(arg1:number,arg2:number):Promise<models.Image>;

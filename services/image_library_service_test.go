@@ -2,6 +2,7 @@ package services
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 	"video-master/database"
@@ -559,5 +560,191 @@ func TestImageGetDetailIncludesTagsAndExistingAIDescription(t *testing.T) {
 	}
 	if _, err := svc.GetImageDetail(0); err == nil {
 		t.Fatal("ID 为 0 应被拒绝")
+	}
+}
+
+// bucketKey 把年月桶压成 "YYYY-MM" 便于断言。
+func bucketKey(bucket ImageTimelineBucket) string {
+	return time.Date(bucket.Year, time.Month(bucket.Month), 1, 0, 0, 0, 0, time.Local).Format("2006-01")
+}
+
+// TestImageTimelineBucketsGroupByTakenKeyDescending 覆盖时间线分组计数（P-013/AC-16）：
+// 口径与 taken 排序键一致（有 EXIF 用 taken_at，无 EXIF 回退 created_at），按年月倒序，
+// 软删除行不计入。
+func TestImageTimelineBucketsGroupByTakenKeyDescending(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewImageLibraryService()
+
+	local := func(year int, month time.Month, day int) time.Time {
+		return time.Date(year, month, day, 10, 30, 0, 0, time.Local)
+	}
+	takenAt := func(value time.Time) *time.Time { return &value }
+	fallbackCreated := local(2025, time.December, 31)
+
+	augA := mustCreateTestImage(t, "aug-a.jpg", 10)
+	augB := mustCreateTestImage(t, "aug-b.jpg", 10)
+	julA := mustCreateTestImage(t, "jul-a.jpg", 10)
+	prevYear := mustCreateTestImage(t, "prev-year.jpg", 10)
+	noExif := mustCreateTestImage(t, "no-exif.jpg", 10)
+	removed := mustCreateTestImage(t, "removed.jpg", 10)
+
+	mustSetImageTaken(t, augA.ID, takenAt(local(2026, time.August, 3)), fallbackCreated)
+	mustSetImageTaken(t, augB.ID, takenAt(local(2026, time.August, 21)), fallbackCreated)
+	mustSetImageTaken(t, julA.ID, takenAt(local(2026, time.July, 9)), fallbackCreated)
+	mustSetImageTaken(t, prevYear.ID, takenAt(local(2025, time.August, 9)), fallbackCreated)
+	// 无 EXIF：必须按 created_at 落到 2025-12，而不是被丢掉。
+	mustSetImageTaken(t, noExif.ID, nil, fallbackCreated)
+	mustSetImageTaken(t, removed.ID, takenAt(local(2026, time.August, 5)), fallbackCreated)
+	if err := database.DB.Delete(&models.Image{}, removed.ID).Error; err != nil {
+		t.Fatalf("软删除图片失败: %v", err)
+	}
+
+	buckets, err := svc.ListImageTimelineBuckets(ImageFilter{})
+	if err != nil {
+		t.Fatalf("时间线分组计数失败: %v", err)
+	}
+
+	gotOrder := make([]string, 0, len(buckets))
+	gotCounts := make(map[string]int, len(buckets))
+	for _, bucket := range buckets {
+		gotOrder = append(gotOrder, bucketKey(bucket))
+		gotCounts[bucketKey(bucket)] = bucket.Count
+	}
+	wantOrder := []string{"2026-08", "2026-07", "2025-12", "2025-08"}
+	if len(gotOrder) != len(wantOrder) {
+		t.Fatalf("分组桶数量不符: got=%v want=%v", gotOrder, wantOrder)
+	}
+	for index := range wantOrder {
+		if gotOrder[index] != wantOrder[index] {
+			t.Fatalf("分组桶应按年月倒序: got=%v want=%v", gotOrder, wantOrder)
+		}
+	}
+	wantCounts := map[string]int{"2026-08": 2, "2026-07": 1, "2025-12": 1, "2025-08": 1}
+	for key, want := range wantCounts {
+		if gotCounts[key] != want {
+			t.Fatalf("分组 %s 计数不符: got=%d want=%d (%v)", key, gotCounts[key], want, gotCounts)
+		}
+	}
+}
+
+// TestImageTimelineBucketsMatchTakenSortPaging 钉住「分组头计数」与「时间线排序翻页结果」
+// 同源：逐页拉完 taken 排序的全部图片再自行归并，应与分组 API 逐桶相等。
+func TestImageTimelineBucketsMatchTakenSortPaging(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewImageLibraryService()
+
+	base := time.Date(2026, 6, 15, 8, 0, 0, 0, time.Local)
+	for index := 0; index < 7; index++ {
+		image := mustCreateTestImage(t, fmt.Sprintf("paged-%d.jpg", index), 10)
+		taken := base.AddDate(0, -index, 0)
+		if index%3 == 0 {
+			// 每三张留一张没有 EXIF 时间，靠 created_at 参与分组。
+			mustSetImageTaken(t, image.ID, nil, taken)
+			continue
+		}
+		mustSetImageTaken(t, image.ID, &taken, base.AddDate(-5, 0, 0))
+	}
+
+	paged := make(map[string]int)
+	var cursor *ImageCursor
+	for range [10]struct{}{} {
+		page, err := svc.SearchImagePage(ImagePageRequest{
+			Filter: ImageFilter{SortMode: ImageSortTaken}, Cursor: cursor, Limit: 2,
+		})
+		if err != nil {
+			t.Fatalf("时间线翻页失败: %v", err)
+		}
+		for _, image := range page.Images {
+			key := imageTakenSortKey(image).In(time.Local)
+			paged[key.Format("2006-01")]++
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		cursor = page.NextCursor
+	}
+
+	buckets, err := svc.ListImageTimelineBuckets(ImageFilter{SortMode: ImageSortTaken})
+	if err != nil {
+		t.Fatalf("时间线分组计数失败: %v", err)
+	}
+	if len(buckets) != len(paged) {
+		t.Fatalf("分组桶数应与翻页归并一致: buckets=%v paged=%v", buckets, paged)
+	}
+	total := 0
+	for _, bucket := range buckets {
+		total += bucket.Count
+		if paged[bucketKey(bucket)] != bucket.Count {
+			t.Fatalf("分组 %s 计数与翻页归并不一致: bucket=%d paged=%d", bucketKey(bucket), bucket.Count, paged[bucketKey(bucket)])
+		}
+	}
+	if total != 7 {
+		t.Fatalf("分组计数总和应等于图片总数: got=%d", total)
+	}
+}
+
+// TestImageTimelineBucketsApplyFiltersAndValidate 覆盖筛选复用与非法筛选拒绝：
+// 分组计数必须与照片页当前筛选同口径，否则分组头会显示筛不出来的张数。
+func TestImageTimelineBucketsApplyFiltersAndValidate(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewImageLibraryService()
+
+	local := func(month time.Month, day int) time.Time {
+		return time.Date(2026, month, day, 9, 0, 0, 0, time.Local)
+	}
+	takenAt := func(value time.Time) *time.Time { return &value }
+
+	starred := mustCreateTestImage(t, "starred.jpg", 10)
+	plain := mustCreateTestImage(t, "plain.jpg", 10)
+	tagged := mustCreateTestImage(t, "tagged.jpg", 10)
+	travel := mustCreateImageTag(t, "旅行")
+
+	mustSetImageTaken(t, starred.ID, takenAt(local(time.May, 2)), local(time.January, 1))
+	mustSetImageTaken(t, plain.ID, takenAt(local(time.May, 3)), local(time.January, 1))
+	mustSetImageTaken(t, tagged.ID, takenAt(local(time.April, 4)), local(time.January, 1))
+	if _, err := svc.SetImageFavorite(starred.ID, true); err != nil {
+		t.Fatalf("收藏失败: %v", err)
+	}
+	if err := svc.AddTagToImage(tagged.ID, travel.ID); err != nil {
+		t.Fatalf("打标失败: %v", err)
+	}
+
+	favorites, err := svc.ListImageTimelineBuckets(ImageFilter{FavoriteOnly: true})
+	if err != nil {
+		t.Fatalf("收藏筛选分组失败: %v", err)
+	}
+	if len(favorites) != 1 || bucketKey(favorites[0]) != "2026-05" || favorites[0].Count != 1 {
+		t.Fatalf("仅收藏筛选下应只剩 2026-05 的 1 张: %+v", favorites)
+	}
+
+	byTag, err := svc.ListImageTimelineBuckets(ImageFilter{TagIDs: []uint{travel.ID}})
+	if err != nil {
+		t.Fatalf("标签筛选分组失败: %v", err)
+	}
+	if len(byTag) != 1 || bucketKey(byTag[0]) != "2026-04" || byTag[0].Count != 1 {
+		t.Fatalf("标签筛选下应只剩 2026-04 的 1 张: %+v", byTag)
+	}
+
+	byKeyword, err := svc.ListImageTimelineBuckets(ImageFilter{Keyword: "plain"})
+	if err != nil {
+		t.Fatalf("关键词筛选分组失败: %v", err)
+	}
+	if len(byKeyword) != 1 || byKeyword[0].Count != 1 {
+		t.Fatalf("关键词筛选下应只剩 1 张: %+v", byKeyword)
+	}
+
+	empty, err := svc.ListImageTimelineBuckets(ImageFilter{Keyword: "没有这个文件"})
+	if err != nil {
+		t.Fatalf("空结果分组失败: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("无命中时应返回空桶列表: %+v", empty)
+	}
+
+	if _, err := svc.ListImageTimelineBuckets(ImageFilter{SortMode: "unknown"}); err == nil {
+		t.Fatal("未知排序模式应被拒绝")
+	}
+	if _, err := svc.ListImageTimelineBuckets(ImageFilter{MinRating: ratingPointer(6.3)}); err == nil {
+		t.Fatal("非 0.5 步进评分筛选应被拒绝")
 	}
 }

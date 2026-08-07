@@ -2001,6 +2001,13 @@ func (a *App) SearchImagePage(request services.ImagePageRequest) (*services.Imag
 	return page, err
 }
 
+// ListImageTimelineBuckets 返回照片时间线分组的年月计数摘要（供分组头显示总张数）。
+func (a *App) ListImageTimelineBuckets(filter services.ImageFilter) ([]services.ImageTimelineBucket, error) {
+	buckets, err := a.imageLibraryService.ListImageTimelineBuckets(filter)
+	log.Printf("API ListImageTimelineBuckets buckets=%d err=%v", len(buckets), err)
+	return buckets, err
+}
+
 // GetImageDetail 返回图片详情（含标签与 AI 描述）。
 func (a *App) GetImageDetail(imageID uint) (*services.ImageDetail, error) {
 	detail, err := a.imageLibraryService.GetImageDetail(imageID)

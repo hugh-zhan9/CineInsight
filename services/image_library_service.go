@@ -243,10 +243,16 @@ func validateImageCursor(sortMode string, cursor *ImageCursor) error {
 
 // imageTakenSortKey 复现 imageTakenSortKeyExpr 的取值，用于构造下一页游标。
 func imageTakenSortKey(image models.Image) time.Time {
-	if image.TakenAt != nil {
-		return *image.TakenAt
+	return imageTakenSortKeyOf(image.TakenAt, image.CreatedAt)
+}
+
+// imageTakenSortKeyOf 是 imageTakenSortKeyExpr 在 Go 侧的唯一同义实现，
+// 游标构造与时间线分组共用它，避免两处各写一套口径。
+func imageTakenSortKeyOf(takenAt *time.Time, createdAt time.Time) time.Time {
+	if takenAt != nil {
+		return *takenAt
 	}
-	return image.CreatedAt
+	return createdAt
 }
 
 // SearchImagePage 按 DTO 游标稳定分页照片页（AC-4/D-017）：recent=created_at DESC（默认）、
@@ -330,6 +336,62 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 		page.NextCursor = next
 	}
 	return page, nil
+}
+
+// ImageTimelineBucket 是时间线分组浏览的一个年月桶（P-013）。Month 为 1–12。
+type ImageTimelineBucket struct {
+	Year  int `json:"year"`
+	Month int `json:"month"`
+	Count int `json:"count"`
+}
+
+// imageTimelineRow 只投影排序键所需的两列：分组计数不需要整行，也不需要 Preload 标签。
+type imageTimelineRow struct {
+	TakenAt   *time.Time
+	CreatedAt time.Time
+}
+
+// ListImageTimelineBuckets 按与 imageTakenSortKeyExpr 完全相同的口径
+// （COALESCE(taken_at, created_at)）统计年月分组计数，按时间倒序返回；只含活跃行。
+//
+// 归并放在 Go 侧而不是下推成 SQL 的 GROUP BY，有两个原因：
+//   - 年月提取在 SQLite（strftime）与 PostgreSQL（EXTRACT/to_char）上写法不同，下推要写
+//     两套分支，而测试只跑得到 SQLite 那套；
+//   - Postgres 的 EXTRACT 对 timestamptz 取会话时区，而 EXIF 拍摄时间本就是按本机时区读入的
+//     墙钟时间（见 models.Image.TakenAt 注释），按 time.Local 归并才与前端分组头显示一致。
+//
+// filter.SortMode 只参与校验，不影响分组口径——时间线分组恒按拍摄时间键。
+func (s *ImageLibraryService) ListImageTimelineBuckets(filter ImageFilter) ([]ImageTimelineBucket, error) {
+	normalized, err := normalizeImageFilter(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	var rows []imageTimelineRow
+	query := applyImageFilter(database.DB.Model(&models.Image{}), normalized).
+		Select("images.taken_at", "images.created_at")
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	type yearMonth struct{ year, month int }
+	counts := make(map[yearMonth]int)
+	for _, row := range rows {
+		key := imageTakenSortKeyOf(row.TakenAt, row.CreatedAt).In(time.Local)
+		counts[yearMonth{year: key.Year(), month: int(key.Month())}]++
+	}
+
+	buckets := make([]ImageTimelineBucket, 0, len(counts))
+	for key, count := range counts {
+		buckets = append(buckets, ImageTimelineBucket{Year: key.year, Month: key.month, Count: count})
+	}
+	sort.Slice(buckets, func(i, j int) bool {
+		if buckets[i].Year != buckets[j].Year {
+			return buckets[i].Year > buckets[j].Year
+		}
+		return buckets[i].Month > buckets[j].Month
+	})
+	return buckets, nil
 }
 
 // GetImageDetail 返回图片（含标签）与已生成的 AI 描述；描述行缺失时为空串。
