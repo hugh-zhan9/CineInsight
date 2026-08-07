@@ -286,7 +286,7 @@ func (s *SubtitleService) PrepareEngine(engine SubtitleEngine) error {
 		return fmt.Errorf("不支持的字幕引擎: %s", engine)
 	}
 	if !status.Supported {
-		return fmt.Errorf(status.ReasonMessage)
+		return fmt.Errorf("%s", status.ReasonMessage)
 	}
 	if !status.NeedsPrepare {
 		if s.ctx != nil {
@@ -432,10 +432,10 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 		return nil, fmt.Errorf("不支持的字幕引擎: %s", req.Engine)
 	}
 	if !engineStatus.Supported {
-		return nil, fmt.Errorf(engineStatus.ReasonMessage)
+		return nil, fmt.Errorf("%s", engineStatus.ReasonMessage)
 	}
 	if !engineStatus.Available {
-		return nil, fmt.Errorf(engineStatus.ReasonMessage)
+		return nil, fmt.Errorf("%s", engineStatus.ReasonMessage)
 	}
 
 	// Extract audio and transcribe with the shared local-ASR execution slot.

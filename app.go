@@ -59,6 +59,7 @@ type App struct {
 	semanticIndex         *services.SemanticIndexService
 	libraryWatcher        *services.LibraryWatcherService
 	imageService          *services.ImageService
+	imageEXIFBackfill     *services.ImageEXIFBackfillService
 	imageThumbnail        *services.ImageThumbnailService
 	imageLibraryService   *services.ImageLibraryService
 	imageStatsService     *services.ImageStatsService
@@ -121,6 +122,7 @@ func NewApp() *App {
 		enhancement:           services.NewEnhancementService(videoService, mediaProbeService, aiTaggingService.SameSourceService()),
 		libraryWatcher:        libraryWatcher,
 		imageService:          services.NewImageService(),
+		imageEXIFBackfill:     services.NewImageEXIFBackfillService(),
 		imageThumbnail:        services.NewImageThumbnailService(dataDir),
 		imageLibraryService:   services.NewImageLibraryService(),
 		imageStatsService:     services.NewImageStatsService(),
@@ -158,6 +160,9 @@ func (a *App) startup(ctx context.Context) {
 	})
 	a.imageCleanupService.SetEventEmitter(func(progress services.ImageCleanupProgress) {
 		emit("image-cleanup-progress", progress)
+	})
+	a.imageEXIFBackfill.SetEventEmitter(func(status services.ImageEXIFBackfillStatus) {
+		emit("image-exif-backfill-progress", status)
 	})
 	a.perceptualHash.SetEventEmitter(func(status services.PerceptualHashStatus) {
 		if status.Completed && status.Succeeded > 0 {
@@ -266,6 +271,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
+	}
+	if a.imageEXIFBackfill != nil {
+		a.imageEXIFBackfill.StopAndWait()
 	}
 	if svc := a.semanticIndexService(); svc != nil {
 		svc.StopAndWait()
@@ -1297,6 +1305,9 @@ func (a *App) enterDatabaseRestoreMode() error {
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
 	}
+	if a.imageEXIFBackfill != nil {
+		a.imageEXIFBackfill.StopAndWait()
+	}
 	if svc := a.semanticIndexService(); svc != nil {
 		svc.StopAndWait()
 	}
@@ -2200,6 +2211,36 @@ func (a *App) RegenerateImageAIDescription(imageID uint) (*models.ImageAIDescrip
 	desc, err := svc.RegenerateImageAIDescription(imageID)
 	log.Printf("API RegenerateImageAIDescription image_id=%d err=%v", imageID, err)
 	return desc, err
+}
+
+// ===== Image EXIF Backfill Methods =====
+
+// StartImageEXIFBackfill 启动历史图片的 EXIF 补全任务
+func (a *App) StartImageEXIFBackfill() (services.ImageEXIFBackfillStatus, error) {
+	if a.imageEXIFBackfill == nil {
+		return services.ImageEXIFBackfillStatus{}, fmt.Errorf("数据库未初始化")
+	}
+	status, err := a.imageEXIFBackfill.StartImageEXIFBackfill(a.ctx)
+	log.Printf("API StartImageEXIFBackfill err=%v", err)
+	return status, err
+}
+
+// GetImageEXIFBackfillStatus 返回 EXIF 补全任务状态
+func (a *App) GetImageEXIFBackfillStatus() services.ImageEXIFBackfillStatus {
+	if a.imageEXIFBackfill == nil {
+		return services.ImageEXIFBackfillStatus{}
+	}
+	return a.imageEXIFBackfill.GetImageEXIFBackfillStatus()
+}
+
+// CancelImageEXIFBackfill 取消 EXIF 补全任务
+func (a *App) CancelImageEXIFBackfill() error {
+	if a.imageEXIFBackfill == nil {
+		return fmt.Errorf("数据库未初始化")
+	}
+	err := a.imageEXIFBackfill.CancelImageEXIFBackfill()
+	log.Printf("API CancelImageEXIFBackfill err=%v", err)
+	return err
 }
 
 // ===== Image Insights Methods =====

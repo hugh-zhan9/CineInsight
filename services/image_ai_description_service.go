@@ -35,6 +35,7 @@ const (
 	imageAIDescriptionErrorDecodeUnsupported = "decode_unsupported"
 	imageAIDescriptionErrorInterrupted       = "interrupted"
 	imageAIDescriptionErrorPersistFailed     = "persist_failed"
+	imageAIDescriptionErrorMetadataStrip     = "metadata_strip_failed"
 )
 
 const (
@@ -458,6 +459,13 @@ func (s *ImageAIDescriptionService) executeOne(ctx context.Context, config AITag
 		}
 		s.markFailed(img.ID, imageAIDescriptionErrorDecodeUnsupported, err)
 		return imageAIDescriptionErrorDecodeUnsupported, err
+	}
+	// AC-14：外发前必须剥除元数据。sips 生成的 HEIC/RAW 缩略图会原样保留源图 EXIF
+	// （含 GPS），剥不掉就不外发。
+	jpegData, err = StripJPEGMetadataForUpload(jpegData)
+	if err != nil {
+		s.markFailed(img.ID, imageAIDescriptionErrorMetadataStrip, err)
+		return imageAIDescriptionErrorMetadataStrip, err
 	}
 	content, err := client.Describe(ctx, img.ID, imageAIDescriptionUserPrompt, jpegData)
 	if err != nil {

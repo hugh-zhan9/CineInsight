@@ -249,6 +249,100 @@ func TestImagePageRatingSortPutsNullLastAcrossCursor(t *testing.T) {
 	}
 }
 
+// mustSetImageTaken 直接改写 taken_at/created_at，避免测试依赖 EXIF 夹具。
+func mustSetImageTaken(t *testing.T, imageID uint, takenAt *time.Time, createdAt time.Time) {
+	t.Helper()
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", imageID).
+		Updates(map[string]interface{}{"taken_at": takenAt, "created_at": createdAt}).Error; err != nil {
+		t.Fatalf("设置拍摄时间失败: %v", err)
+	}
+}
+
+// TestImageExifTakenSortFallsBackToCreatedAtAcrossCursor 覆盖「拍摄时间」排序：
+// 有 EXIF 用 taken_at，无 EXIF 回退 created_at，两者混排后仍按同一键 DESC + id 决胜。
+func TestImageExifTakenSortFallsBackToCreatedAtAcrossCursor(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewImageLibraryService()
+	newest := mustCreateTestImage(t, "newest.jpg", 10)
+	middle := mustCreateTestImage(t, "middle.jpg", 10)
+	oldest := mustCreateTestImage(t, "oldest.jpg", 10)
+	tieLow := mustCreateTestImage(t, "tie-low.jpg", 10)
+	tieHigh := mustCreateTestImage(t, "tie-high.jpg", 10)
+
+	base := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	taken := func(offset time.Duration) *time.Time { value := base.Add(offset); return &value }
+	// newest/oldest 有 EXIF 时间；middle 没有，靠 created_at 落在两者之间。
+	mustSetImageTaken(t, newest.ID, taken(72*time.Hour), base)
+	mustSetImageTaken(t, middle.ID, nil, base.Add(48*time.Hour))
+	mustSetImageTaken(t, oldest.ID, taken(24*time.Hour), base)
+	// 两张排序键完全相同，只能靠 id DESC 决胜。
+	mustSetImageTaken(t, tieLow.ID, taken(time.Hour), base)
+	mustSetImageTaken(t, tieHigh.ID, taken(time.Hour), base)
+
+	expected := []uint{newest.ID, middle.ID, oldest.ID, tieHigh.ID, tieLow.ID}
+	collected := make([]uint, 0, len(expected))
+	var cursor *ImageCursor
+	for range [6]struct{}{} {
+		page, err := svc.SearchImagePage(ImagePageRequest{
+			Filter: ImageFilter{SortMode: ImageSortTaken}, Cursor: cursor, Limit: 2,
+		})
+		if err != nil {
+			t.Fatalf("拍摄时间排序翻页失败: %v", err)
+		}
+		for _, image := range page.Images {
+			collected = append(collected, image.ID)
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		if page.NextCursor.SortMode != ImageSortTaken || page.NextCursor.TakenAt == "" {
+			t.Fatalf("taken 游标字段不完整: %+v", page.NextCursor)
+		}
+		cursor = page.NextCursor
+	}
+	if len(collected) != len(expected) {
+		t.Fatalf("应返回全部 5 张: %v", collected)
+	}
+	for index := range expected {
+		if collected[index] != expected[index] {
+			t.Fatalf("拍摄时间排序不符: got=%v want=%v", collected, expected)
+		}
+	}
+}
+
+// TestImageExifTakenRangeFilterMatchesOnlyExifTimes 覆盖拍摄日期区间筛选：闭区间，
+// 且无 taken_at 的图片不参与（不会被 created_at 回退带进来）。
+func TestImageExifTakenRangeFilterMatchesOnlyExifTimes(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	base := time.Date(2026, 8, 1, 12, 0, 0, 0, time.UTC)
+	inside := mustCreateTestImage(t, "inside.jpg", 10)
+	lowerEdge := mustCreateTestImage(t, "lower-edge.jpg", 10)
+	upperEdge := mustCreateTestImage(t, "upper-edge.jpg", 10)
+	outside := mustCreateTestImage(t, "outside.jpg", 10)
+	noExif := mustCreateTestImage(t, "no-exif.jpg", 10)
+
+	taken := func(offset time.Duration) *time.Time { value := base.Add(offset); return &value }
+	mustSetImageTaken(t, inside.ID, taken(36*time.Hour), base)
+	mustSetImageTaken(t, lowerEdge.ID, taken(24*time.Hour), base)
+	mustSetImageTaken(t, upperEdge.ID, taken(48*time.Hour), base)
+	mustSetImageTaken(t, outside.ID, taken(96*time.Hour), base)
+	// created_at 落在区间内但没有 EXIF 时间，不应被筛出来。
+	mustSetImageTaken(t, noExif.ID, nil, base.Add(30*time.Hour))
+
+	after, before := base.Add(24*time.Hour), base.Add(48*time.Hour)
+	ids := searchImageIDs(t, ImageFilter{TakenAfter: &after, TakenBefore: &before})
+	matched := map[uint]bool{}
+	for _, id := range ids {
+		matched[id] = true
+	}
+	if len(ids) != 3 || !matched[inside.ID] || !matched[lowerEdge.ID] || !matched[upperEdge.ID] {
+		t.Fatalf("拍摄日期区间应闭区间命中 3 张: %v", ids)
+	}
+	if matched[outside.ID] || matched[noExif.ID] {
+		t.Fatalf("区间外与无 EXIF 时间的图片不应命中: %v", ids)
+	}
+}
+
 func TestImagePageRejectsInvalidFilterAndCursor(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := NewImageLibraryService()
@@ -285,6 +379,29 @@ func TestImagePageRejectsInvalidFilterAndCursor(t *testing.T) {
 	}
 	if _, err := svc.SearchImagePage(ImagePageRequest{Filter: ImageFilter{SortMode: ImageSortRating}, Cursor: &ImageCursor{SortMode: ImageSortRating, RatingIsNull: true, Rating: ratingPointer(5), ID: 1}}); err == nil {
 		t.Fatal("NULL 评分游标不能同时带评分值")
+	}
+	takenEarly := time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC)
+	takenLate := time.Date(2026, 8, 9, 0, 0, 0, 0, time.UTC)
+	if _, err := svc.SearchImagePage(ImagePageRequest{Filter: ImageFilter{TakenAfter: &takenLate, TakenBefore: &takenEarly}}); err == nil {
+		t.Fatal("拍摄时间上限早于下限应被拒绝")
+	}
+	if _, err := svc.SearchImagePage(ImagePageRequest{Filter: ImageFilter{SortMode: ImageSortTaken}, Cursor: &ImageCursor{SortMode: ImageSortTaken, TakenAt: "not-a-time", ID: 1}}); err == nil {
+		t.Fatal("非法拍摄时间游标应被拒绝")
+	}
+	if _, err := svc.SearchImagePage(ImagePageRequest{Filter: ImageFilter{SortMode: ImageSortTaken}, Cursor: &ImageCursor{SortMode: ImageSortTaken, TakenAt: "2026-08-01T12:00:00Z", RatingIsNull: true, ID: 1}}); err == nil {
+		t.Fatal("taken 游标不应包含评分字段")
+	}
+}
+
+// TestImageExifDefaultSortStaysRecent 钉住 D-013 的既有默认：不传排序模式仍是最近添加。
+func TestImageExifDefaultSortStaysRecent(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	normalized, err := normalizeImageFilter(ImageFilter{})
+	if err != nil {
+		t.Fatalf("归一化失败: %v", err)
+	}
+	if normalized.SortMode != ImageSortRecent {
+		t.Fatalf("默认排序必须保持 recent, got %q", normalized.SortMode)
 	}
 }
 

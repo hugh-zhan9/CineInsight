@@ -714,6 +714,18 @@ export function StartImageAIDescription() {
   return window['go']['main']['App']['StartImageAIDescription']();
 }
 
+export function CancelImageEXIFBackfill() {
+  return window['go']['main']['App']['CancelImageEXIFBackfill']();
+}
+
+export function GetImageEXIFBackfillStatus() {
+  return window['go']['main']['App']['GetImageEXIFBackfillStatus']();
+}
+
+export function StartImageEXIFBackfill() {
+  return window['go']['main']['App']['StartImageEXIFBackfill']();
+}
+
 export function CancelImageSemanticIndex() {
   return window['go']['main']['App']['CancelImageSemanticIndex']();
 }

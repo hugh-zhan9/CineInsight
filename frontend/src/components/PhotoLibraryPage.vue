@@ -39,6 +39,7 @@
           <option value="recent">最近添加</option>
           <option value="size">体积最大</option>
           <option value="rating">评分最高</option>
+          <option value="taken">拍摄时间</option>
         </select>
         <label class="photo-toolbar__favorite">
           <input v-model="filters.favoriteOnly" type="checkbox" data-test="photo-favorite-only" />
@@ -49,6 +50,26 @@
           <input v-model="filters.minRating" type="number" min="0" max="10" step="0.5" class="number-input" placeholder="最低" data-test="photo-min-rating" />
           <span>–</span>
           <input v-model="filters.maxRating" type="number" min="0" max="10" step="0.5" class="number-input" placeholder="最高" data-test="photo-max-rating" />
+        </div>
+        <div class="photo-toolbar__taken" :title="searchMode === 'semantic' ? '语义模式暂不支持拍摄日期筛选' : ''">
+          <span>拍摄日期</span>
+          <input
+            v-model="filters.takenAfter"
+            type="date"
+            class="text-input photo-toolbar__date"
+            aria-label="拍摄日期起"
+            :disabled="searchMode === 'semantic'"
+            data-test="photo-taken-after"
+          />
+          <span>–</span>
+          <input
+            v-model="filters.takenBefore"
+            type="date"
+            class="text-input photo-toolbar__date"
+            aria-label="拍摄日期止"
+            :disabled="searchMode === 'semantic'"
+            data-test="photo-taken-before"
+          />
         </div>
         <button type="button" class="btn-secondary" :disabled="scanning" data-test="photo-scan" @click="scanNow">
           {{ scanning ? '扫描中...' : '立即扫描' }}
@@ -190,6 +211,15 @@
           <dt>格式</dt><dd>{{ formatBadge(viewerImage) }}</dd>
         </dl>
 
+        <div v-if="exifFacts.length" class="photo-viewer__block" data-test="photo-viewer-exif">
+          <h4>拍摄信息</h4>
+          <dl class="photo-viewer__facts">
+            <template v-for="fact in exifFacts" :key="fact.label">
+              <dt>{{ fact.label }}</dt><dd :title="fact.value">{{ fact.value }}</dd>
+            </template>
+          </dl>
+        </div>
+
         <div class="photo-viewer__block">
           <div class="photo-viewer__block-heading">
             <h4>收藏与评分</h4>
@@ -325,6 +355,8 @@ export default {
         favoriteOnly: false,
         minRating: '',
         maxRating: '',
+        takenAfter: '',
+        takenBefore: '',
         sortMode: 'recent'
       },
       viewerIndex: -1,
@@ -364,7 +396,27 @@ export default {
     },
     hasActiveFilters() {
       return Boolean(this.filters.keyword.trim()) || this.filters.tagIDs.length > 0 || this.filters.favoriteOnly
-        || this.filters.minRating !== '' || this.filters.maxRating !== '';
+        || this.filters.minRating !== '' || this.filters.maxRating !== ''
+        || this.filters.takenAfter !== '' || this.filters.takenBefore !== '';
+    },
+    // exifFacts 只列出真正有值的项；全空时整个「拍摄信息」区不渲染。
+    exifFacts() {
+      const image = this.viewerImage;
+      if (!image) return [];
+      const camera = [image.camera_make, image.camera_model].map(part => String(part || '').trim()).filter(Boolean).join(' ');
+      const facts = [
+        { label: '拍摄时间', value: image.taken_at ? this.formatDateTime(image.taken_at) : '' },
+        { label: '相机', value: camera },
+        { label: '镜头', value: String(image.lens_model || '').trim() },
+        { label: 'ISO', value: image.iso ? String(image.iso) : '' },
+        { label: '光圈', value: image.f_number ? `f/${Number(image.f_number).toFixed(1)}` : '' },
+        { label: '快门', value: image.exposure_time ? `${image.exposure_time} 秒` : '' },
+        { label: '焦距', value: image.focal_length ? `${Number(image.focal_length).toFixed(0)} mm` : '' }
+      ];
+      if (image.gps_latitude != null && image.gps_longitude != null) {
+        facts.push({ label: 'GPS', value: `${Number(image.gps_latitude).toFixed(6)}, ${Number(image.gps_longitude).toFixed(6)}` });
+      }
+      return facts.filter(fact => fact.value);
     },
     showEmptyState() {
       return this.loadedOnce && !this.loading && this.images.length === 0;
@@ -378,7 +430,9 @@ export default {
     'filters.favoriteOnly'() { this.reload(); },
     'filters.sortMode'() { this.reload(); },
     'filters.minRating'() { this.reload(); },
-    'filters.maxRating'() { this.reload(); }
+    'filters.maxRating'() { this.reload(); },
+    'filters.takenAfter'() { this.reload(); },
+    'filters.takenBefore'() { this.reload(); }
   },
   mounted() {
     this.setupInfiniteLoading();
@@ -436,6 +490,14 @@ export default {
       this.semanticNoticeOverride = '';
       this.reload();
     },
+    // takenBoundary 把 date 输入转成 RFC3339；后端按闭区间比较，所以起点取当天 0 点、
+    // 终点取当天最后一毫秒，让"某一天"能整天命中。
+    takenBoundary(value, endOfDay) {
+      const raw = String(value || '').trim();
+      if (!raw) return null;
+      const date = new Date(`${raw}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}`);
+      return Number.isNaN(date.getTime()) ? null : date.toISOString();
+    },
     buildFilter() {
       const parseRating = value => (value === '' || value == null ? null : Number(value));
       return {
@@ -446,6 +508,8 @@ export default {
         max_rating: parseRating(this.filters.maxRating),
         min_size: 0,
         max_size: 0,
+        taken_after: this.takenBoundary(this.filters.takenAfter, false),
+        taken_before: this.takenBoundary(this.filters.takenBefore, true),
         sort_mode: this.filters.sortMode
       };
     },
@@ -772,6 +836,9 @@ export default {
 .photo-toolbar__favorite { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: 13px; white-space: nowrap; cursor: pointer; }
 .photo-toolbar__rating { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
 .photo-toolbar__rating .number-input { width: 76px; }
+.photo-toolbar__taken { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
+.photo-toolbar__date { width: 148px; }
+.photo-toolbar__date:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .photo-search-mode { display: inline-flex; padding: 2px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); }
 .photo-search-mode__btn { padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
