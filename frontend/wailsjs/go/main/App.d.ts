@@ -353,6 +353,12 @@ export function RegenerateImageAIDescription(arg1:number):Promise<models.ImageAI
 
 export function StartImageAIDescription():Promise<services.ImageAIDescriptionStatus>;
 
+export function CancelImageEXIFBackfill():Promise<void>;
+
+export function GetImageEXIFBackfillStatus():Promise<services.ImageEXIFBackfillStatus>;
+
+export function StartImageEXIFBackfill():Promise<services.ImageEXIFBackfillStatus>;
+
 export function CancelImageSemanticIndex():Promise<void>;
 
 export function DismissImageNearDuplicateGroup(arg1:Array<number>):Promise<void>;

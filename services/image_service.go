@@ -365,7 +365,8 @@ func imageBelongsToRoots(image models.Image, roots []string) bool {
 	return false
 }
 
-// addImage 新增图片记录：os.Stat → Unscoped 路径预查 → 仅写 name/path/directory/size。
+// addImage 新增图片记录：os.Stat → Unscoped 路径预查 → 仅写 name/path/directory/size，
+// 随后即时解析一次 EXIF（双轨回填的入库一轨）。
 // 尺寸探测与 dHash 回填由缩略图管线（4.2）异步承担，本方法不做。
 func (s *ImageService) addImage(path string) (*models.Image, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
@@ -395,6 +396,10 @@ func (s *ImageService) addImage(path string) (*models.Image, error) {
 			}
 		}
 		return nil, err
+	}
+	// EXIF 解析失败不阻塞入库：exif_parsed_at 保持 NULL，由补全任务下次接手。
+	if _, err := refreshImageEXIF(database.DB, image.ID, image.Path, time.Now); err != nil {
+		log.Printf("[ImageEXIF] 入库解析失败 image=%d path=%s err=%v", image.ID, image.Path, err)
 	}
 	log.Printf("新增图片 path=%s", path)
 	return image, nil

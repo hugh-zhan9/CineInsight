@@ -41,6 +41,47 @@
       </div>
     </div>
 
+    <div class="setting-item image-exif-backfill-controls">
+      <label>图片 EXIF 补全</label>
+      <p class="help-text">
+        为还没解析过 EXIF 的历史图片补全拍摄时间、相机参数与 GPS。新扫描入库的图片会在入库时自动解析，这里只补历史存量。
+      </p>
+      <div class="image-task-status" :class="{ 'image-task-status--error': Boolean(exifError) }" data-test="image-exif-backfill-status">
+        <strong>{{ exifStatusText }}</strong>
+        <span v-if="exifStatus?.running || exifStatus?.completed || exifStatus?.cancelled">
+          进度 {{ exifStatus.processed || 0 }}/{{ exifStatus.total || 0 }}
+          · 有 EXIF {{ exifStatus.succeeded || 0 }}
+          · 无 EXIF {{ exifStatus.skipped || 0 }}
+          · 失败 {{ exifStatus.failed || 0 }}
+        </span>
+        <div v-if="exifProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="exifStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="exifStatus.total || 0">
+          <i :style="{ width: exifProgressRatio + '%' }"></i>
+        </div>
+        <span v-if="exifError" data-test="image-exif-backfill-error">{{ exifError }}</span>
+        <ul v-if="exifFailures.length" class="image-task-failures" data-test="image-exif-backfill-failures">
+          <li v-for="failure in exifFailures" :key="`exif-${failure.image_id}`">
+            {{ failure.name || `图片 ${failure.image_id}` }}（{{ failure.error || '未知错误' }}）
+          </li>
+        </ul>
+      </div>
+      <div class="image-task-actions">
+        <button
+          type="button"
+          class="btn-primary"
+          :disabled="exifStatus?.running"
+          data-test="image-exif-backfill-start"
+          @click="startEXIFBackfill"
+        >开始/继续补全</button>
+        <button
+          v-if="exifStatus?.running"
+          type="button"
+          class="btn-secondary"
+          data-test="image-exif-backfill-cancel"
+          @click="cancelEXIFBackfill"
+        >取消</button>
+      </div>
+    </div>
+
     <div class="setting-item image-semantic-index-controls">
       <label>图片语义索引</label>
       <p class="help-text">
@@ -93,8 +134,9 @@
 
 <script>
 import {
-  CancelImageAIDescription, CancelImageSemanticIndex, GetImageAIDescriptionStatus,
-  GetImageSemanticIndexStatus, StartImageAIDescription, StartImageSemanticIndex
+  CancelImageAIDescription, CancelImageEXIFBackfill, CancelImageSemanticIndex,
+  GetImageAIDescriptionStatus, GetImageEXIFBackfillStatus, GetImageSemanticIndexStatus,
+  StartImageAIDescription, StartImageEXIFBackfill, StartImageSemanticIndex
 } from '../../wailsjs/go/main/App';
 
 // 事件推送之外保留 1s 轮询兜底（镜像 PhotoCleanupPanel）。
@@ -113,10 +155,13 @@ export default {
     return {
       descriptionStatus: null,
       semanticStatus: null,
+      exifStatus: null,
       descriptionError: '',
       semanticError: '',
+      exifError: '',
       descriptionOff: null,
-      semanticOff: null
+      semanticOff: null,
+      exifOff: null
     };
   },
   computed: {
@@ -138,15 +183,26 @@ export default {
       if (status.completed) return '图片语义索引构建完成';
       return '图片语义索引可用，尚未构建';
     },
+    exifStatusText() {
+      const status = this.exifStatus;
+      if (!status) return '正在读取 EXIF 补全任务状态...';
+      if (status.running) return 'EXIF 补全中';
+      if (status.cancelled) return 'EXIF 补全任务已取消，可继续';
+      if (status.completed) return 'EXIF 补全任务已完成';
+      return 'EXIF 补全任务未运行';
+    },
     descriptionProgressRatio() { return progressRatio(this.descriptionStatus); },
     semanticProgressRatio() { return progressRatio(this.semanticStatus); },
+    exifProgressRatio() { return progressRatio(this.exifStatus); },
     descriptionFailures() { return (this.descriptionStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
-    semanticFailures() { return (this.semanticStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); }
+    semanticFailures() { return (this.semanticStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
+    exifFailures() { return (this.exifStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); }
   },
   mounted() {
     this._alive = true;
     this.loadDescriptionStatus();
     this.loadSemanticStatus();
+    this.loadEXIFStatus();
     if (window.runtime?.EventsOn) {
       const descriptionOff = window.runtime.EventsOn('image-ai-description-progress', status => {
         this.descriptionStatus = { ...(this.descriptionStatus || {}), ...(status || {}) };
@@ -156,6 +212,10 @@ export default {
         this.semanticStatus = { ...(this.semanticStatus || {}), ...(status || {}) };
       });
       if (typeof semanticOff === 'function') this.semanticOff = semanticOff;
+      const exifOff = window.runtime.EventsOn('image-exif-backfill-progress', status => {
+        this.exifStatus = { ...(this.exifStatus || {}), ...(status || {}) };
+      });
+      if (typeof exifOff === 'function') this.exifOff = exifOff;
     }
   },
   beforeUnmount() {
@@ -163,16 +223,18 @@ export default {
     clearTimeout(this._pollTimer);
     this.descriptionOff?.();
     this.semanticOff?.();
+    this.exifOff?.();
   },
   methods: {
     schedulePoll() {
       clearTimeout(this._pollTimer);
       if (!this._alive) return;
-      if (!this.descriptionStatus?.running && !this.semanticStatus?.running) return;
+      if (!this.descriptionStatus?.running && !this.semanticStatus?.running && !this.exifStatus?.running) return;
       this._pollTimer = setTimeout(async () => {
         if (!this._alive) return;
         if (this.descriptionStatus?.running) await this.loadDescriptionStatus();
         if (this.semanticStatus?.running) await this.loadSemanticStatus();
+        if (this.exifStatus?.running) await this.loadEXIFStatus();
         this.schedulePoll();
       }, POLL_INTERVAL_MS);
     },
@@ -193,6 +255,36 @@ export default {
         return;
       }
       this.schedulePoll();
+    },
+    async loadEXIFStatus() {
+      try {
+        this.exifStatus = await GetImageEXIFBackfillStatus() || null;
+      } catch (err) {
+        this.exifError = `读取 EXIF 补全任务状态失败：${String(err?.message || err)}`;
+        return;
+      }
+      this.schedulePoll();
+    },
+    async startEXIFBackfill() {
+      if (this.exifStatus?.running) return;
+      this.exifError = '';
+      try {
+        this.exifStatus = { ...(this.exifStatus || {}), ...(await StartImageEXIFBackfill() || {}) };
+      } catch (err) {
+        this.exifError = `启动 EXIF 补全任务失败：${String(err?.message || err)}`;
+        await this.loadEXIFStatus();
+        return;
+      }
+      this.schedulePoll();
+    },
+    async cancelEXIFBackfill() {
+      this.exifError = '';
+      try {
+        await CancelImageEXIFBackfill();
+      } catch (err) {
+        this.exifError = `取消 EXIF 补全任务失败：${String(err?.message || err)}`;
+      }
+      await this.loadEXIFStatus();
     },
     async startDescription() {
       if (this.descriptionStatus?.running) return;

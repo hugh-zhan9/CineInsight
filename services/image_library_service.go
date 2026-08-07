@@ -12,12 +12,18 @@ import (
 	"gorm.io/gorm"
 )
 
-// 照片页排序模式（D-013/D-017）。
+// 照片页排序模式（D-013/D-017）。默认仍是 ImageSortRecent。
 const (
 	ImageSortRecent = "recent"
 	ImageSortSize   = "size"
 	ImageSortRating = "rating"
+	ImageSortTaken  = "taken"
 )
+
+// imageTakenSortKeyExpr 是「拍摄时间」排序键：优先 EXIF 拍摄时间，缺失时回退入库时间。
+// images 表没有文件 mtime 列（hash_source_mod_time_ns 只在 dHash 回填后才有值，且是
+// 纳秒整数无法与时间戳列 COALESCE），created_at 是唯一恒有值的时间等价物。
+const imageTakenSortKeyExpr = "COALESCE(images.taken_at, images.created_at)"
 
 // ImageLibraryService 提供照片页的查询、标签与收藏/评分能力。
 type ImageLibraryService struct{}
@@ -27,22 +33,27 @@ func NewImageLibraryService() *ImageLibraryService {
 	return &ImageLibraryService{}
 }
 
-// ImageFilter 描述照片页的筛选边界。
+// ImageFilter 描述照片页的筛选边界。TakenAfter/TakenBefore 是 EXIF 拍摄时间的闭区间，
+// 只命中有 taken_at 的图片。
 type ImageFilter struct {
-	Keyword      string   `json:"keyword"`
-	TagIDs       []uint   `json:"tag_ids"`
-	FavoriteOnly bool     `json:"favorite_only"`
-	MinRating    *float64 `json:"min_rating"`
-	MaxRating    *float64 `json:"max_rating"`
-	MinSize      int64    `json:"min_size"`
-	MaxSize      int64    `json:"max_size"`
-	SortMode     string   `json:"sort_mode"`
+	Keyword      string     `json:"keyword"`
+	TagIDs       []uint     `json:"tag_ids"`
+	FavoriteOnly bool       `json:"favorite_only"`
+	MinRating    *float64   `json:"min_rating"`
+	MaxRating    *float64   `json:"max_rating"`
+	MinSize      int64      `json:"min_size"`
+	MaxSize      int64      `json:"max_size"`
+	TakenAfter   *time.Time `json:"taken_after,omitempty" ts_type:"string"`
+	TakenBefore  *time.Time `json:"taken_before,omitempty" ts_type:"string"`
+	SortMode     string     `json:"sort_mode"`
 }
 
 // ImageCursor 是 SearchImagePage 的稳定分页游标，字段按排序模式取用。
 type ImageCursor struct {
-	SortMode     string   `json:"sort_mode"`
-	CreatedAt    string   `json:"created_at,omitempty"`
+	SortMode  string `json:"sort_mode"`
+	CreatedAt string `json:"created_at,omitempty"`
+	// TakenAt 是 taken 排序键 COALESCE(taken_at, created_at) 的取值，不是原始 EXIF 时间。
+	TakenAt      string   `json:"taken_at,omitempty"`
 	Size         int64    `json:"size"`
 	Rating       *float64 `json:"rating,omitempty"`
 	RatingIsNull bool     `json:"rating_is_null"`
@@ -129,12 +140,15 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 	if filter.MinRating != nil && filter.MaxRating != nil && *filter.MinRating > *filter.MaxRating {
 		return ImageFilter{}, fmt.Errorf("评分筛选上限不能小于下限")
 	}
+	if filter.TakenAfter != nil && filter.TakenBefore != nil && filter.TakenAfter.After(*filter.TakenBefore) {
+		return ImageFilter{}, fmt.Errorf("拍摄时间筛选上限不能早于下限")
+	}
 	filter.SortMode = strings.TrimSpace(filter.SortMode)
 	if filter.SortMode == "" {
 		filter.SortMode = ImageSortRecent
 	}
 	switch filter.SortMode {
-	case ImageSortRecent, ImageSortSize, ImageSortRating:
+	case ImageSortRecent, ImageSortSize, ImageSortRating, ImageSortTaken:
 	default:
 		return ImageFilter{}, fmt.Errorf("不支持的排序模式: %s", filter.SortMode)
 	}
@@ -161,6 +175,12 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 	}
 	if filter.MaxRating != nil {
 		query = query.Where("images.personal_rating <= ?", *filter.MaxRating)
+	}
+	if filter.TakenAfter != nil {
+		query = query.Where("images.taken_at >= ?", *filter.TakenAfter)
+	}
+	if filter.TakenBefore != nil {
+		query = query.Where("images.taken_at <= ?", *filter.TakenBefore)
 	}
 	if len(filter.TagIDs) > 0 {
 		subquery := database.DB.Table("image_tags").Select("image_id").
@@ -191,6 +211,14 @@ func validateImageCursor(sortMode string, cursor *ImageCursor) error {
 			return fmt.Errorf("照片时间游标无效: %w", err)
 		}
 		return nil
+	case ImageSortTaken:
+		if cursor.Rating != nil || cursor.RatingIsNull {
+			return errors.New("taken 游标包含评分字段")
+		}
+		if _, err := time.Parse(time.RFC3339Nano, cursor.TakenAt); err != nil {
+			return fmt.Errorf("照片拍摄时间游标无效: %w", err)
+		}
+		return nil
 	case ImageSortSize:
 		if cursor.Rating != nil || cursor.RatingIsNull {
 			return errors.New("size 游标包含评分字段")
@@ -213,8 +241,17 @@ func validateImageCursor(sortMode string, cursor *ImageCursor) error {
 	}
 }
 
-// SearchImagePage 按 DTO 游标稳定分页照片页（AC-4/D-017）：
-// recent=created_at DESC（默认）、size=体积 DESC、rating=评分 DESC 且 NULL 排后，均以 id DESC 决胜。
+// imageTakenSortKey 复现 imageTakenSortKeyExpr 的取值，用于构造下一页游标。
+func imageTakenSortKey(image models.Image) time.Time {
+	if image.TakenAt != nil {
+		return *image.TakenAt
+	}
+	return image.CreatedAt
+}
+
+// SearchImagePage 按 DTO 游标稳定分页照片页（AC-4/D-017）：recent=created_at DESC（默认）、
+// size=体积 DESC、rating=评分 DESC 且 NULL 排后、taken=拍摄时间 DESC（缺失回退入库时间），
+// 均以 id DESC 决胜。
 func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImagePage, error) {
 	filter, err := normalizeImageFilter(request.Filter)
 	if err != nil {
@@ -240,6 +277,17 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 			query = query.Where("(images.created_at < ? OR (images.created_at = ? AND images.id < ?))", cursorTime, cursorTime, cursor.ID)
 		}
 		query = query.Order("images.created_at DESC").Order("images.id DESC")
+	case ImageSortTaken:
+		if cursor != nil {
+			cursorTime, err := time.Parse(time.RFC3339Nano, cursor.TakenAt)
+			if err != nil {
+				return nil, fmt.Errorf("照片拍摄时间游标无效: %w", err)
+			}
+			query = query.Where(
+				fmt.Sprintf("(%s < ? OR (%s = ? AND images.id < ?))", imageTakenSortKeyExpr, imageTakenSortKeyExpr),
+				cursorTime, cursorTime, cursor.ID)
+		}
+		query = query.Order(imageTakenSortKeyExpr + " DESC").Order("images.id DESC")
 	case ImageSortSize:
 		if cursor != nil {
 			query = query.Where("(images.size < ? OR (images.size = ? AND images.id < ?))", cursor.Size, cursor.Size, cursor.ID)
@@ -268,6 +316,8 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 		switch filter.SortMode {
 		case ImageSortRecent:
 			next.CreatedAt = last.CreatedAt.Format(time.RFC3339Nano)
+		case ImageSortTaken:
+			next.TakenAt = imageTakenSortKey(last).Format(time.RFC3339Nano)
 		case ImageSortSize:
 			next.Size = last.Size
 		default:

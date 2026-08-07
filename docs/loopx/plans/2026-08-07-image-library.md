@@ -1,6 +1,6 @@
 ---
 source: docs/loopx/design/2026-08-07-image-library/需求设计文档.md（AC-1..AC-11 / D-001..D-017 / TC-1..TC-9；intake：.loopx/intake/2026-08-07-image-library/）
-status: done
+status: ready
 slices:
   - id: P-001
     status: done
@@ -35,6 +35,12 @@ slices:
   - id: P-011
     status: done
     depends: [P-001]
+  - id: P-012
+    status: in_progress
+    depends: [P-001, P-003, P-004]
+  - id: P-013
+    status: pending
+    depends: [P-006, P-012]
 ---
 
 # CineInsight 图片管理
@@ -183,6 +189,40 @@ slices:
 - 混排终验：视频页文件/字幕/语义搜索均不出现图片；照片页不出现视频（AC-6 集成级断言）。
 - darwin 人工终验一轮：TC-1→TC-2→TC-3→TC-4→TC-5→TC-7→TC-8→TC-9 按 requirements.md 场景走通。
 - deferred-with-rationale：TC-2 的非 darwin 真机人工验证（无 Windows/Linux 环境时以 stub 单测 + 交叉编译代替）。
+
+## P-012 EXIF 元数据（含 GPS）
+
+用户于 2026-08-07 首版交付后裁决把原非目标「EXIF 拍摄时间」纳入范围，粒度为**全量含 GPS 位置**。本切片交付 EXIF 提取、存储、展示与筛选排序。
+
+`images` 表新增 EXIF 列：`taken_at *time.Time`（index）、`camera_make`、`camera_model`、`lens_model`、`iso int`、`f_number float64`、`exposure_time string`（原始分数文本如 `1/250`）、`focal_length float64`、`exif_orientation int`、`gps_latitude/gps_longitude *float64`、`exif_parsed_at *time.Time`（区分"未解析"与"已解析但无 EXIF"）。解析用 `github.com/rwcarlsen/goexif`（零依赖纯 Go，已固定进 go.mod 并预置 go.sum）：JPEG 与 TIFF 系 RAW（DNG/CR2/NEF/ARW/RW2/ORF）直接 `exif.Decode`；HEIC/HEIF/CR3 因是 ISO-BMFF 容器，扫描文件头部定位 `Exif\x00\x00` 魔数后把其后的 TIFF blob 交给同一解析器。解析失败或无 EXIF 一律不是错误——写 `exif_parsed_at` 后留空值，不阻塞任何流程。
+
+回填沿用 dHash 的双轨模式：扫描入库时解析一次；另提供显式后台任务补全历史图片（Start/Status/Cancel 三件套，镜像既有任务形态）。
+
+排序与筛选：排序下拉新增「拍摄时间」（**默认仍为「最近添加」，D-013 的既有默认不变**），无 `taken_at` 的图片回退到文件 mtime 参与同一排序；筛选条新增拍摄日期区间。查看器侧栏新增「拍摄信息」区展示相机/镜头/参数/拍摄时间，有 GPS 时显示经纬度。
+
+**安全要求（本切片必须落实）**：AI 描述发往外部端点的 JPEG 必须剥除元数据——`sips` 转码会保留 EXIF，GPS 会随图外发。需验证并确保送出的字节不含 EXIF/GPS。同时 GPS 与相机参数**不得进入语义索引文本**（索引文本维持标题+标签+AI 描述三段不变）。
+
+完成标志：TC-10/TC-11 自动化覆盖；`GetLibraryInsights` 与视频侧行为不变。
+
+> writes: `models/image.go`, `database/database.go`（新列索引）, `services/image_exif.go`, `services/image_exif_test.go`, `services/image_service.go`（扫描时解析接入）, `services/image_library_service.go`（排序/筛选）, `services/image_ai_description_service.go`（元数据剥除）, `app.go`, `frontend/src/components/PhotoLibraryPage.vue`, `frontend/src/components/PhotoLibraryPage.test.js`, `frontend/wailsjs/go/main/App.*`
+> anchors: 用户 2026-08-07 裁决（EXIF 全量含 GPS；默认排序不变）；新增 AC-12（EXIF 提取与展示）、AC-13（拍摄时间排序与日期筛选）、AC-14（外发 JPEG 不含 EXIF/GPS）
+> verify: `go test ./services -run 'TestImageExif' -count=1`；`go test ./...`；`cd frontend && npm test`；外发剥除以字节断言验证（解析送出的 JPEG 应无 EXIF 段）
+> review: 高危——GPS 是敏感信息且触碰既有 AI 外发路径；独立审查外发剥除的有效性与语义索引文本未被污染
+
+## P-013 照片网格虚拟化与时间线分组
+
+用户裁决把原非目标「网格虚拟化」纳入范围，并**一并做时间线分组**。两者必须协同设计：分组头要在虚拟化窗口内正确定位。
+
+现有 `frontend/src/utils/virtualList.js` 的 `calculateVirtualWindow` 是一维行高累加，不支持多列，也不支持分组头——本切片新增二维分组窗口计算（建议 `frontend/src/utils/photoGrid.js`，**不修改现有 virtualList.js**，避免回归视频列表）。模型：按当前列数把条目切成行，分组头占独立整行；前缀和支持 O(log n) 定位；列数随容器宽度变化时重算。
+
+时间线分组作为独立浏览模式（开关或视图切换），开启时强制按 `taken_at` 排序并插入年/月分组头；关闭时是普通虚拟化网格，沿用排序下拉。分组模式需要后端配合返回分组计数（避免前端为算分组头拉全量），新增轻量 API 返回按年月的计数摘要。
+
+完成标志：万级图片滚动流畅（DOM 节点数恒定）；分组头吸顶或正确穿插；调整窗口宽度后布局与滚动位置不错乱；视频列表虚拟化行为零回归。
+
+> writes: `frontend/src/utils/photoGrid.js`, `frontend/src/utils/photoGrid.test.js`, `frontend/src/components/PhotoLibraryPage.vue`, `frontend/src/components/PhotoLibraryPage.test.js`, `services/image_library_service.go`（分组计数 API）, `services/image_library_service_test.go`, `app.go`, `frontend/wailsjs/go/main/App.*`
+> anchors: 用户 2026-08-07 裁决（网格虚拟化 + 时间线分组）；新增 AC-15（虚拟化网格 DOM 恒定）、AC-16（时间线年月分组浏览）
+> verify: `cd frontend && npm test`（含 photoGrid 纯函数窗口计算用例：多列切行、分组头占位、列数变化重算、边界空组）；`go test ./services -run 'TestImageTimeline' -count=1`；万级数据的人工滚动验收
+> review: 现有 `virtualList.js` 与视频列表虚拟化零改动（diff 审查）
 
 ## 集成终验结果（2026-08-07，全部为自动化新鲜输出）
 

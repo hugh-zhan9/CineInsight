@@ -8,7 +8,8 @@ const api = vi.hoisted(() => Object.fromEntries([
   'CreateDatabaseBackup', 'RestoreDatabaseBackup', 'GetSemanticIndexStatus', 'StartSemanticIndex', 'CancelSemanticIndex',
   'GetAllImageDirectories', 'AddImageDirectory', 'UpdateImageDirectory', 'DeleteImageDirectory',
   'GetImageAIDescriptionStatus', 'StartImageAIDescription', 'CancelImageAIDescription',
-  'GetImageSemanticIndexStatus', 'StartImageSemanticIndex', 'CancelImageSemanticIndex'
+  'GetImageSemanticIndexStatus', 'StartImageSemanticIndex', 'CancelImageSemanticIndex',
+  'GetImageEXIFBackfillStatus', 'StartImageEXIFBackfill', 'CancelImageEXIFBackfill'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -71,6 +72,11 @@ async function mountPage(status = {
   api.CancelImageAIDescription.mockResolvedValue();
   api.StartImageSemanticIndex.mockResolvedValue({ available: true, running: true, total: 5, processed: 0, failures: [] });
   api.CancelImageSemanticIndex.mockResolvedValue();
+  api.GetImageEXIFBackfillStatus.mockResolvedValue(
+    imageTasks.exif || { running: false, completed: false, total: 0, processed: 0, failures: [] }
+  );
+  api.StartImageEXIFBackfill.mockResolvedValue({ running: true, total: 4, processed: 0, failures: [] });
+  api.CancelImageEXIFBackfill.mockResolvedValue();
   const wrapper = mount(SettingsPage, {
     props: {
       settings: baseSettings(),
@@ -338,14 +344,15 @@ describe('SettingsPage image AI task panels', () => {
     expect(wrapper.get('[data-test="image-semantic-index-status"]').text()).toContain('text-embedding-3-small');
   });
 
-  it('subscribes to both image task events and unbinds them on unmount', async () => {
+  it('subscribes to all image task events and unbinds them on unmount', async () => {
     const handlers = {};
-    const off = { description: vi.fn(), semantic: vi.fn() };
+    const off = { description: vi.fn(), semantic: vi.fn(), exif: vi.fn() };
     window.runtime = {
       EventsOn: vi.fn((event, handler) => {
         handlers[event] = handler;
         if (event === 'image-ai-description-progress') return off.description;
         if (event === 'image-semantic-index-state') return off.semantic;
+        if (event === 'image-exif-backfill-progress') return off.exif;
         return () => {};
       })
     };
@@ -354,17 +361,67 @@ describe('SettingsPage image AI task panels', () => {
 
     expect(typeof handlers['image-ai-description-progress']).toBe('function');
     expect(typeof handlers['image-semantic-index-state']).toBe('function');
+    expect(typeof handlers['image-exif-backfill-progress']).toBe('function');
 
     handlers['image-ai-description-progress']({ running: true, total: 8, processed: 3, succeeded: 3, failures: [] });
     handlers['image-semantic-index-state']({ available: true, running: true, total: 8, processed: 4, failures: [] });
+    handlers['image-exif-backfill-progress']({ running: true, total: 8, processed: 5, succeeded: 5, failures: [] });
     await wrapper.vm.$nextTick();
 
     expect(wrapper.get('[data-test="image-ai-description-status"]').text()).toContain('进度 3/8');
     expect(wrapper.get('[data-test="image-semantic-index-status"]').text()).toContain('进度 4/8');
+    expect(wrapper.get('[data-test="image-exif-backfill-status"]').text()).toContain('进度 5/8');
 
     wrapper.unmount();
     expect(off.description).toHaveBeenCalledTimes(1);
     expect(off.semantic).toHaveBeenCalledTimes(1);
+    expect(off.exif).toHaveBeenCalledTimes(1);
+  });
+
+  it('starts and cancels the image EXIF backfill task', async () => {
+    const wrapper = await mountPage();
+
+    expect(api.GetImageEXIFBackfillStatus).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-test="image-exif-backfill-status"]').text()).toContain('EXIF 补全任务未运行');
+    expect(wrapper.find('[data-test="image-exif-backfill-cancel"]').exists()).toBe(false);
+
+    await wrapper.get('[data-test="image-exif-backfill-start"]').trigger('click');
+    await flushPromises();
+
+    expect(api.StartImageEXIFBackfill).toHaveBeenCalledTimes(1);
+    const running = wrapper.get('[data-test="image-exif-backfill-status"]').text();
+    expect(running).toContain('EXIF 补全中');
+    expect(running).toContain('进度 0/4');
+    expect(wrapper.get('[data-test="image-exif-backfill-start"]').attributes('disabled')).toBeDefined();
+
+    api.GetImageEXIFBackfillStatus.mockResolvedValue({ running: false, cancelled: true, total: 4, processed: 2, failures: [] });
+    await wrapper.get('[data-test="image-exif-backfill-cancel"]').trigger('click');
+    await flushPromises();
+
+    expect(api.CancelImageEXIFBackfill).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-test="image-exif-backfill-status"]').text()).toContain('EXIF 补全任务已取消');
+    wrapper.unmount();
+  });
+
+  it('renders EXIF backfill counters and failures from the status snapshot', async () => {
+    const wrapper = await mountPage(watcher(), {
+      exif: {
+        running: false,
+        completed: true,
+        total: 3,
+        processed: 3,
+        succeeded: 1,
+        skipped: 1,
+        failed: 1,
+        failures: [{ image_id: 12, name: 'gone.jpg', error: '文件不存在' }]
+      }
+    });
+
+    const status = wrapper.get('[data-test="image-exif-backfill-status"]').text();
+    expect(status).toContain('EXIF 补全任务已完成');
+    expect(status).toContain('有 EXIF 1');
+    expect(status).toContain('无 EXIF 1');
+    expect(wrapper.get('[data-test="image-exif-backfill-failures"]').text()).toContain('gone.jpg');
   });
 });
 

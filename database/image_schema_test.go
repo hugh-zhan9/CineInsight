@@ -87,6 +87,7 @@ func TestEnsureImageQueryIndexesIsIdempotent(t *testing.T) {
 		"idx_images_favorite_active",
 		"idx_images_created_active",
 		"idx_images_rating_active",
+		"idx_images_taken_sort_active",
 		"idx_image_tags_image_tag",
 		"idx_image_tags_tag_image",
 	} {

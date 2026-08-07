@@ -425,6 +425,9 @@ func ensureImageQueryIndexes(db *gorm.DB) {
 		`CREATE INDEX IF NOT EXISTS idx_images_favorite_active ON images(is_favorite) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_images_created_active ON images(created_at DESC, id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_images_rating_active ON images(personal_rating) WHERE deleted_at IS NULL`,
+		// 「拍摄时间」排序键是 COALESCE(taken_at, created_at)，普通列索引服务不了这个表达式，
+		// 必须建成表达式索引。taken_at 单列的区间筛选由模型上的 index 标签覆盖。
+		`CREATE INDEX IF NOT EXISTS idx_images_taken_sort_active ON images((COALESCE(taken_at, created_at)) DESC, id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_image_tags_image_tag ON image_tags(image_id, tag_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_image_tags_tag_image ON image_tags(tag_id, image_id)`,
 	}

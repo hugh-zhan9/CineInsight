@@ -126,6 +126,35 @@ describe('PhotoLibraryPage grid paging', () => {
     expect(wrapper.findAll('.photo-card')).toHaveLength(1);
     expect(wrapper.text()).toContain('photo-9.jpg');
   });
+
+  it('keeps 最近添加 as the default sort and offers 拍摄时间 as an option', async () => {
+    const wrapper = await mountPage();
+    const sort = wrapper.get('[data-test="photo-sort"]');
+
+    expect(sort.element.value).toBe('recent');
+    expect(api.SearchImagePage.mock.calls[0][0].filter.sort_mode).toBe('recent');
+    expect(sort.findAll('option').map(option => option.element.value))
+      .toEqual(['recent', 'size', 'rating', 'taken']);
+
+    await sort.setValue('taken');
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls[1][0].filter.sort_mode).toBe('taken');
+  });
+
+  it('sends the taken date range as a full-day RFC3339 interval', async () => {
+    const wrapper = await mountPage();
+    expect(api.SearchImagePage.mock.calls[0][0].filter.taken_after).toBeNull();
+    expect(api.SearchImagePage.mock.calls[0][0].filter.taken_before).toBeNull();
+
+    await wrapper.get('[data-test="photo-taken-after"]').setValue('2024-03-11');
+    await flushPromises();
+    await wrapper.get('[data-test="photo-taken-before"]').setValue('2024-03-12');
+    await flushPromises();
+
+    const filter = api.SearchImagePage.mock.calls.at(-1)[0].filter;
+    expect(filter.taken_after).toBe(new Date('2024-03-11T00:00:00.000').toISOString());
+    expect(filter.taken_before).toBe(new Date('2024-03-12T23:59:59.999').toISOString());
+  });
 });
 
 describe('PhotoLibraryPage thumbnails and empty state', () => {
@@ -190,6 +219,47 @@ describe('PhotoLibraryPage viewer', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
     await flushPromises();
     expect(wrapper.find('[data-test="photo-viewer"]').exists()).toBe(false);
+  });
+
+  it('renders the 拍摄信息 block with camera, exposure and GPS when EXIF is present', async () => {
+    const withEXIF = makeImage(4, {
+      taken_at: '2024-03-11T08:09:10Z',
+      camera_make: 'CineCam',
+      camera_model: 'CI-900',
+      lens_model: 'CineLens 35mm F2.8',
+      iso: 400,
+      f_number: 2.8,
+      exposure_time: '1/250',
+      focal_length: 35,
+      gps_latitude: 31.233333,
+      gps_longitude: 121.466667
+    });
+    api.SearchImagePage.mockResolvedValueOnce(makePage([withEXIF]));
+    api.GetImageDetail.mockResolvedValue({ image: withEXIF, ai_description: '' });
+    const wrapper = await mountPage();
+
+    await wrapper.get('.photo-card__media').trigger('click');
+    await flushPromises();
+
+    const exif = wrapper.get('[data-test="photo-viewer-exif"]').text();
+    expect(exif).toContain('CineCam CI-900');
+    expect(exif).toContain('CineLens 35mm F2.8');
+    expect(exif).toContain('400');
+    expect(exif).toContain('f/2.8');
+    expect(exif).toContain('1/250 秒');
+    expect(exif).toContain('35 mm');
+    expect(exif).toContain('31.233333, 121.466667');
+  });
+
+  it('omits the 拍摄信息 block entirely when no EXIF field is present', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(5)]));
+    const wrapper = await mountPage();
+
+    await wrapper.get('.photo-card__media').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="photo-viewer"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="photo-viewer-exif"]').exists()).toBe(false);
   });
 
   it('shows the AI description from GetImageDetail when present', async () => {
