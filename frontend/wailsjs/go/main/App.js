@@ -14,12 +14,20 @@ export function AddDirectory(arg1, arg2) {
   return window['go']['main']['App']['AddDirectory'](arg1, arg2);
 }
 
+export function AddImageDirectory(arg1, arg2) {
+  return window['go']['main']['App']['AddImageDirectory'](arg1, arg2);
+}
+
 export function AddPersonVideo(arg1, arg2) {
   return window['go']['main']['App']['AddPersonVideo'](arg1, arg2);
 }
 
 export function AddPersonVideos(arg1, arg2) {
   return window['go']['main']['App']['AddPersonVideos'](arg1, arg2);
+}
+
+export function AddTagToImage(arg1, arg2) {
+  return window['go']['main']['App']['AddTagToImage'](arg1, arg2);
 }
 
 export function AddTagToVideo(arg1, arg2) {
@@ -42,8 +50,16 @@ export function ApproveAITagCandidate(arg1) {
   return window['go']['main']['App']['ApproveAITagCandidate'](arg1);
 }
 
+export function BatchAddTagToImages(arg1, arg2) {
+  return window['go']['main']['App']['BatchAddTagToImages'](arg1, arg2);
+}
+
 export function BatchAddTagToVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchAddTagToVideos'](arg1, arg2);
+}
+
+export function BatchDeleteImages(arg1, arg2) {
+  return window['go']['main']['App']['BatchDeleteImages'](arg1, arg2);
 }
 
 export function BatchDeleteVideos(arg1, arg2) {
@@ -58,12 +74,28 @@ export function BatchRefreshVideoMetadata(arg1) {
   return window['go']['main']['App']['BatchRefreshVideoMetadata'](arg1);
 }
 
+export function BatchRemoveTagFromImages(arg1, arg2) {
+  return window['go']['main']['App']['BatchRemoveTagFromImages'](arg1, arg2);
+}
+
 export function BatchRemoveTagFromVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchRemoveTagFromVideos'](arg1, arg2);
 }
 
 export function CancelEnhancementTask(arg1) {
   return window['go']['main']['App']['CancelEnhancementTask'](arg1);
+}
+
+export function CancelImageAIDescription() {
+  return window['go']['main']['App']['CancelImageAIDescription']();
+}
+
+export function CancelImageEXIFBackfill() {
+  return window['go']['main']['App']['CancelImageEXIFBackfill']();
+}
+
+export function CancelImageSemanticIndex() {
+  return window['go']['main']['App']['CancelImageSemanticIndex']();
 }
 
 export function CancelLocalMetadataBackfill() {
@@ -130,6 +162,14 @@ export function DeleteDirectory(arg1) {
   return window['go']['main']['App']['DeleteDirectory'](arg1);
 }
 
+export function DeleteImage(arg1, arg2) {
+  return window['go']['main']['App']['DeleteImage'](arg1, arg2);
+}
+
+export function DeleteImageDirectory(arg1) {
+  return window['go']['main']['App']['DeleteImageDirectory'](arg1);
+}
+
 export function DeleteSavedLibraryView(arg1) {
   return window['go']['main']['App']['DeleteSavedLibraryView'](arg1);
 }
@@ -140,6 +180,10 @@ export function DeleteTag(arg1) {
 
 export function DeleteVideo(arg1, arg2) {
   return window['go']['main']['App']['DeleteVideo'](arg1, arg2);
+}
+
+export function DismissImageNearDuplicateGroup(arg1) {
+  return window['go']['main']['App']['DismissImageNearDuplicateGroup'](arg1);
 }
 
 export function DismissNearDuplicateGroup(arg1) {
@@ -182,6 +226,10 @@ export function GetAllDirectories() {
   return window['go']['main']['App']['GetAllDirectories']();
 }
 
+export function GetAllImageDirectories() {
+  return window['go']['main']['App']['GetAllImageDirectories']();
+}
+
 export function GetAllTags() {
   return window['go']['main']['App']['GetAllTags']();
 }
@@ -212,6 +260,30 @@ export function GetEnhancementCapability() {
 
 export function GetEnhancementVideoPreflight(arg1) {
   return window['go']['main']['App']['GetEnhancementVideoPreflight'](arg1);
+}
+
+export function GetImageAIDescriptionStatus() {
+  return window['go']['main']['App']['GetImageAIDescriptionStatus']();
+}
+
+export function GetImageCleanupStatus() {
+  return window['go']['main']['App']['GetImageCleanupStatus']();
+}
+
+export function GetImageDetail(arg1) {
+  return window['go']['main']['App']['GetImageDetail'](arg1);
+}
+
+export function GetImageEXIFBackfillStatus() {
+  return window['go']['main']['App']['GetImageEXIFBackfillStatus']();
+}
+
+export function GetImageInsights() {
+  return window['go']['main']['App']['GetImageInsights']();
+}
+
+export function GetImageSemanticIndexStatus() {
+  return window['go']['main']['App']['GetImageSemanticIndexStatus']();
 }
 
 export function GetLibraryInsights() {
@@ -314,6 +386,14 @@ export function ListEnhancementTasks(arg1) {
   return window['go']['main']['App']['ListEnhancementTasks'](arg1);
 }
 
+export function ListImageTimelineBuckets(arg1) {
+  return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
+}
+
+export function ListImageTrashEntries() {
+  return window['go']['main']['App']['ListImageTrashEntries']();
+}
+
 export function ListPeople(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListPeople'](arg1, arg2, arg3, arg4);
 }
@@ -394,6 +474,10 @@ export function RefreshVideoTechnicalMetadata(arg1) {
   return window['go']['main']['App']['RefreshVideoTechnicalMetadata'](arg1);
 }
 
+export function RegenerateImageAIDescription(arg1) {
+  return window['go']['main']['App']['RegenerateImageAIDescription'](arg1);
+}
+
 export function RejectAITagCandidate(arg1) {
   return window['go']['main']['App']['RejectAITagCandidate'](arg1);
 }
@@ -426,6 +510,10 @@ export function RemovePersonVideo(arg1, arg2) {
   return window['go']['main']['App']['RemovePersonVideo'](arg1, arg2);
 }
 
+export function RemoveTagFromImage(arg1, arg2) {
+  return window['go']['main']['App']['RemoveTagFromImage'](arg1, arg2);
+}
+
 export function RemoveTagFromVideo(arg1, arg2) {
   return window['go']['main']['App']['RemoveTagFromVideo'](arg1, arg2);
 }
@@ -448,6 +536,10 @@ export function ResolveVideoArtwork(arg1, arg2) {
 
 export function RestoreDatabaseBackup(arg1) {
   return window['go']['main']['App']['RestoreDatabaseBackup'](arg1);
+}
+
+export function RestoreImageTrashEntry(arg1) {
+  return window['go']['main']['App']['RestoreImageTrashEntry'](arg1);
 }
 
 export function RestoreTrashEntry(arg1) {
@@ -488,6 +580,14 @@ export function ScanDirectory(arg1) {
 
 export function ScanDirectoryWithInfo(arg1) {
   return window['go']['main']['App']['ScanDirectoryWithInfo'](arg1);
+}
+
+export function SearchImagePage(arg1) {
+  return window['go']['main']['App']['SearchImagePage'](arg1);
+}
+
+export function SearchImagesSemantic(arg1) {
+  return window['go']['main']['App']['SearchImagesSemantic'](arg1);
 }
 
 export function SearchLibraryVideoPage(arg1) {
@@ -550,6 +650,14 @@ export function SetCollectionCover(arg1, arg2) {
   return window['go']['main']['App']['SetCollectionCover'](arg1, arg2);
 }
 
+export function SetImageFavorite(arg1, arg2) {
+  return window['go']['main']['App']['SetImageFavorite'](arg1, arg2);
+}
+
+export function SetImageRating(arg1, arg2) {
+  return window['go']['main']['App']['SetImageRating'](arg1, arg2);
+}
+
 export function SetPersonAvatar(arg1, arg2) {
   return window['go']['main']['App']['SetPersonAvatar'](arg1, arg2);
 }
@@ -564,6 +672,22 @@ export function SetVideoWatched(arg1, arg2) {
 
 export function StartCleanupAnalysis(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartCleanupAnalysis'](arg1, arg2, arg3);
+}
+
+export function StartImageAIDescription() {
+  return window['go']['main']['App']['StartImageAIDescription']();
+}
+
+export function StartImageCleanupAnalysis() {
+  return window['go']['main']['App']['StartImageCleanupAnalysis']();
+}
+
+export function StartImageEXIFBackfill() {
+  return window['go']['main']['App']['StartImageEXIFBackfill']();
+}
+
+export function StartImageSemanticIndex() {
+  return window['go']['main']['App']['StartImageSemanticIndex']();
 }
 
 export function StartLocalMetadataBackfill() {
@@ -586,6 +710,10 @@ export function StartTechnicalBackfill() {
   return window['go']['main']['App']['StartTechnicalBackfill']();
 }
 
+export function SyncImageDirectories() {
+  return window['go']['main']['App']['SyncImageDirectories']();
+}
+
 export function SyncScanDirectories() {
   return window['go']['main']['App']['SyncScanDirectories']();
 }
@@ -600,6 +728,10 @@ export function UpdateCollection(arg1, arg2, arg3) {
 
 export function UpdateDirectory(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateDirectory'](arg1, arg2, arg3);
+}
+
+export function UpdateImageDirectory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['UpdateImageDirectory'](arg1, arg2, arg3);
 }
 
 export function UpdatePerson(arg1, arg2, arg3) {
@@ -624,136 +756,4 @@ export function UpdateVideoWatchProgress(arg1, arg2, arg3) {
 
 export function ValidateSubtitleEditDocument(arg1) {
   return window['go']['main']['App']['ValidateSubtitleEditDocument'](arg1);
-}
-
-export function AddImageDirectory(arg1, arg2) {
-  return window['go']['main']['App']['AddImageDirectory'](arg1, arg2);
-}
-
-export function AddTagToImage(arg1, arg2) {
-  return window['go']['main']['App']['AddTagToImage'](arg1, arg2);
-}
-
-export function BatchAddTagToImages(arg1, arg2) {
-  return window['go']['main']['App']['BatchAddTagToImages'](arg1, arg2);
-}
-
-export function BatchRemoveTagFromImages(arg1, arg2) {
-  return window['go']['main']['App']['BatchRemoveTagFromImages'](arg1, arg2);
-}
-
-export function DeleteImageDirectory(arg1) {
-  return window['go']['main']['App']['DeleteImageDirectory'](arg1);
-}
-
-export function GetAllImageDirectories() {
-  return window['go']['main']['App']['GetAllImageDirectories']();
-}
-
-export function GetImageDetail(arg1) {
-  return window['go']['main']['App']['GetImageDetail'](arg1);
-}
-
-export function GetImageInsights() {
-  return window['go']['main']['App']['GetImageInsights']();
-}
-
-export function RemoveTagFromImage(arg1, arg2) {
-  return window['go']['main']['App']['RemoveTagFromImage'](arg1, arg2);
-}
-
-export function SearchImagePage(arg1) {
-  return window['go']['main']['App']['SearchImagePage'](arg1);
-}
-
-export function ListImageTimelineBuckets(arg1) {
-  return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
-}
-
-export function SetImageFavorite(arg1, arg2) {
-  return window['go']['main']['App']['SetImageFavorite'](arg1, arg2);
-}
-
-export function SetImageRating(arg1, arg2) {
-  return window['go']['main']['App']['SetImageRating'](arg1, arg2);
-}
-
-export function SyncImageDirectories() {
-  return window['go']['main']['App']['SyncImageDirectories']();
-}
-
-export function UpdateImageDirectory(arg1, arg2, arg3) {
-  return window['go']['main']['App']['UpdateImageDirectory'](arg1, arg2, arg3);
-}
-
-export function BatchDeleteImages(arg1, arg2) {
-  return window['go']['main']['App']['BatchDeleteImages'](arg1, arg2);
-}
-
-export function DeleteImage(arg1, arg2) {
-  return window['go']['main']['App']['DeleteImage'](arg1, arg2);
-}
-
-export function ListImageTrashEntries() {
-  return window['go']['main']['App']['ListImageTrashEntries']();
-}
-
-export function RestoreImageTrashEntry(arg1) {
-  return window['go']['main']['App']['RestoreImageTrashEntry'](arg1);
-}
-
-export function CancelImageAIDescription() {
-  return window['go']['main']['App']['CancelImageAIDescription']();
-}
-
-export function GetImageAIDescriptionStatus() {
-  return window['go']['main']['App']['GetImageAIDescriptionStatus']();
-}
-
-export function RegenerateImageAIDescription(arg1) {
-  return window['go']['main']['App']['RegenerateImageAIDescription'](arg1);
-}
-
-export function StartImageAIDescription() {
-  return window['go']['main']['App']['StartImageAIDescription']();
-}
-
-export function CancelImageEXIFBackfill() {
-  return window['go']['main']['App']['CancelImageEXIFBackfill']();
-}
-
-export function GetImageEXIFBackfillStatus() {
-  return window['go']['main']['App']['GetImageEXIFBackfillStatus']();
-}
-
-export function StartImageEXIFBackfill() {
-  return window['go']['main']['App']['StartImageEXIFBackfill']();
-}
-
-export function CancelImageSemanticIndex() {
-  return window['go']['main']['App']['CancelImageSemanticIndex']();
-}
-
-export function DismissImageNearDuplicateGroup(arg1) {
-  return window['go']['main']['App']['DismissImageNearDuplicateGroup'](arg1);
-}
-
-export function GetImageCleanupStatus() {
-  return window['go']['main']['App']['GetImageCleanupStatus']();
-}
-
-export function GetImageSemanticIndexStatus() {
-  return window['go']['main']['App']['GetImageSemanticIndexStatus']();
-}
-
-export function SearchImagesSemantic(arg1) {
-  return window['go']['main']['App']['SearchImagesSemantic'](arg1);
-}
-
-export function StartImageCleanupAnalysis() {
-  return window['go']['main']['App']['StartImageCleanupAnalysis']();
-}
-
-export function StartImageSemanticIndex() {
-  return window['go']['main']['App']['StartImageSemanticIndex']();
 }
