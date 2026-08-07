@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -597,12 +596,10 @@ func sanitizeEnhancementError(message string) string {
 
 func runEnhancementCommand(ctx context.Context, name string, args []string) (string, error) {
 	command := exec.CommandContext(ctx, name, args...)
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	applyEnhancementProcessGroup(command)
 	command.Cancel = func() error {
 		// 终止整个子进程组，保证 sidecar 的解码线程一起退出。
-		if command.Process != nil {
-			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		}
+		killEnhancementProcessGroup(command)
 		return nil
 	}
 	tail := &tailBuffer{limit: 4096}
@@ -616,11 +613,9 @@ func runEnhancementCommand(ctx context.Context, name string, args []string) (str
 
 func runEnhancementCommandOutput(ctx context.Context, name string, args []string) (string, string, error) {
 	command := exec.CommandContext(ctx, name, args...)
-	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	applyEnhancementProcessGroup(command)
 	command.Cancel = func() error {
-		if command.Process != nil {
-			_ = syscall.Kill(-command.Process.Pid, syscall.SIGKILL)
-		}
+		killEnhancementProcessGroup(command)
 		return nil
 	}
 	stdout := &boundedBuffer{limit: 16 << 20}
@@ -667,14 +662,6 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 }
 
 func (b *tailBuffer) String() string { return string(b.data) }
-
-func enhancementDiskFree(path string) (uint64, error) {
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return 0, err
-	}
-	return stat.Bavail * uint64(stat.Bsize), nil
-}
 
 // logEnhancement 只输出 ID、版本、计数与已清洗错误（P-012 运行与安全影响）。
 func logEnhancement(format string, args ...any) {

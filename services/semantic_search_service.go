@@ -270,4 +270,3 @@ func (s *SemanticIndexService) semanticCoverage(ctx context.Context, profile mod
 	}
 	return coverage, nil
 }
-

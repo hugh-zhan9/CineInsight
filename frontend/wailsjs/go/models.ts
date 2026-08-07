@@ -1,5 +1,209 @@
 export namespace models {
 	
+	export class Tag {
+	    id: number;
+	    name: string;
+	    color: string;
+	    namespace: string;
+	    automatic_kind: string;
+	    is_system: boolean;
+	    is_active: boolean;
+	    review_required: boolean;
+	    sort_order: number;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Tag(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.color = source["color"];
+	        this.namespace = source["namespace"];
+	        this.automatic_kind = source["automatic_kind"];
+	        this.is_system = source["is_system"];
+	        this.is_active = source["is_active"];
+	        this.review_required = source["review_required"];
+	        this.sort_order = source["sort_order"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class Image {
+	    id: number;
+	    name: string;
+	    path: string;
+	    directory: string;
+	    size: number;
+	    width: number;
+	    height: number;
+	    format: string;
+	    is_stale: boolean;
+	    is_favorite: boolean;
+	    personal_rating?: number;
+	    perceptual_hash: string;
+	    hash_source_size: number;
+	    hash_source_mod_time_ns: number;
+	    taken_at?: string;
+	    camera_make: string;
+	    camera_model: string;
+	    lens_model: string;
+	    iso: number;
+	    f_number: number;
+	    exposure_time: string;
+	    focal_length: number;
+	    exif_orientation: number;
+	    gps_latitude?: number;
+	    gps_longitude?: number;
+	    exif_parsed_at?: string;
+	    tags: Tag[];
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new Image(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.directory = source["directory"];
+	        this.size = source["size"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.format = source["format"];
+	        this.is_stale = source["is_stale"];
+	        this.is_favorite = source["is_favorite"];
+	        this.personal_rating = source["personal_rating"];
+	        this.perceptual_hash = source["perceptual_hash"];
+	        this.hash_source_size = source["hash_source_size"];
+	        this.hash_source_mod_time_ns = source["hash_source_mod_time_ns"];
+	        this.taken_at = source["taken_at"];
+	        this.camera_make = source["camera_make"];
+	        this.camera_model = source["camera_model"];
+	        this.lens_model = source["lens_model"];
+	        this.iso = source["iso"];
+	        this.f_number = source["f_number"];
+	        this.exposure_time = source["exposure_time"];
+	        this.focal_length = source["focal_length"];
+	        this.exif_orientation = source["exif_orientation"];
+	        this.gps_latitude = source["gps_latitude"];
+	        this.gps_longitude = source["gps_longitude"];
+	        this.exif_parsed_at = source["exif_parsed_at"];
+	        this.tags = this.convertValues(source["tags"], Tag);
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageAIDescription {
+	    id: number;
+	    image_id: number;
+	    status: string;
+	    description: string;
+	    model_identifier: string;
+	    error_code: string;
+	    last_error: string;
+	    attempt_count: number;
+	    generated_at?: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAIDescription(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.image_id = source["image_id"];
+	        this.status = source["status"];
+	        this.description = source["description"];
+	        this.model_identifier = source["model_identifier"];
+	        this.error_code = source["error_code"];
+	        this.last_error = source["last_error"];
+	        this.attempt_count = source["attempt_count"];
+	        this.generated_at = source["generated_at"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class ImageDirectory {
+	    id: number;
+	    path: string;
+	    alias: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageDirectory(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.path = source["path"];
+	        this.alias = source["alias"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
+	export class ImageTrashEntry {
+	    id: number;
+	    image_id: number;
+	    image_name: string;
+	    original_path: string;
+	    trash_path: string;
+	    file_moved: boolean;
+	    file_size: number;
+	    file_mod_time: number;
+	    state: string;
+	    last_error: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageTrashEntry(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.image_id = source["image_id"];
+	        this.image_name = source["image_name"];
+	        this.original_path = source["original_path"];
+	        this.trash_path = source["trash_path"];
+	        this.file_moved = source["file_moved"];
+	        this.file_size = source["file_size"];
+	        this.file_mod_time = source["file_mod_time"];
+	        this.state = source["state"];
+	        this.last_error = source["last_error"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class MediaCollection {
 	    id: number;
 	    name: string;
@@ -169,6 +373,7 @@ export namespace models {
 	    confirm_before_delete: boolean;
 	    delete_original_file: boolean;
 	    video_extensions: string;
+	    image_extensions: string;
 	    scan_exclude_paths: string;
 	    play_weight: number;
 	    random_half_life_days: number;
@@ -216,6 +421,7 @@ export namespace models {
 	        this.confirm_before_delete = source["confirm_before_delete"];
 	        this.delete_original_file = source["delete_original_file"];
 	        this.video_extensions = source["video_extensions"];
+	        this.image_extensions = source["image_extensions"];
 	        this.scan_exclude_paths = source["scan_exclude_paths"];
 	        this.play_weight = source["play_weight"];
 	        this.random_half_life_days = source["random_half_life_days"];
@@ -254,38 +460,7 @@ export namespace models {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
-	export class Tag {
-	    id: number;
-	    name: string;
-	    color: string;
-	    namespace: string;
-	    automatic_kind: string;
-	    is_system: boolean;
-	    is_active: boolean;
-	    review_required: boolean;
-	    sort_order: number;
-	    created_at: string;
-	    updated_at: string;
 	
-	    static createFrom(source: any = {}) {
-	        return new Tag(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.color = source["color"];
-	        this.namespace = source["namespace"];
-	        this.automatic_kind = source["automatic_kind"];
-	        this.is_system = source["is_system"];
-	        this.is_active = source["is_active"];
-	        this.review_required = source["review_required"];
-	        this.sort_order = source["sort_order"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	    }
-	}
 	export class Video {
 	    id: number;
 	    name: string;
@@ -823,6 +998,73 @@ export namespace services {
 	        this.last_error = source["last_error"];
 	    }
 	}
+	export class BatchImageOperationError {
+	    image_id: number;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BatchImageOperationError(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.error = source["error"];
+	    }
+	}
+	export class BatchImageOperationWarning {
+	    image_id: number;
+	    warning: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BatchImageOperationWarning(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.warning = source["warning"];
+	    }
+	}
+	export class BatchImageOperationResult {
+	    requested: number;
+	    succeeded: number;
+	    failed: number;
+	    errors: BatchImageOperationError[];
+	    warnings: BatchImageOperationWarning[];
+	
+	    static createFrom(source: any = {}) {
+	        return new BatchImageOperationResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.requested = source["requested"];
+	        this.succeeded = source["succeeded"];
+	        this.failed = source["failed"];
+	        this.errors = this.convertValues(source["errors"], BatchImageOperationError);
+	        this.warnings = this.convertValues(source["warnings"], BatchImageOperationWarning);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class BatchVideoOperationError {
 	    video_id: number;
 	    error: string;
@@ -1328,6 +1570,787 @@ export namespace services {
 	        this.trash_entries_updated = source["trash_entries_updated"];
 	        this.scan_exclusions_updated = source["scan_exclusions_updated"];
 	        this.warning = source["warning"];
+	    }
+	}
+	export class ImageAIDescriptionFailure {
+	    image_id: number;
+	    name: string;
+	    code: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAIDescriptionFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.name = source["name"];
+	        this.code = source["code"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ImageAIDescriptionStatus {
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    failed: number;
+	    skipped: number;
+	    current_image_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: ImageAIDescriptionFailure[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAIDescriptionStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.failed = source["failed"];
+	        this.skipped = source["skipped"];
+	        this.current_image_id = source["current_image_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], ImageAIDescriptionFailure);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageCleanupDuplicateGroup {
+	    original: models.Image;
+	    candidates: models.Image[];
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageCleanupDuplicateGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.original = this.convertValues(source["original"], models.Image);
+	        this.candidates = this.convertValues(source["candidates"], models.Image);
+	        this.reason = source["reason"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageCleanupAnalysis {
+	    duplicate_groups: ImageCleanupDuplicateGroup[];
+	    near_duplicate_groups: ImageCleanupDuplicateGroup[];
+	    stale_hash_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageCleanupAnalysis(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.duplicate_groups = this.convertValues(source["duplicate_groups"], ImageCleanupDuplicateGroup);
+	        this.near_duplicate_groups = this.convertValues(source["near_duplicate_groups"], ImageCleanupDuplicateGroup);
+	        this.stale_hash_count = source["stale_hash_count"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class ImageCleanupProgress {
+	    stage: string;
+	    message: string;
+	    current: number;
+	    total: number;
+	    path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageCleanupProgress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.stage = source["stage"];
+	        this.message = source["message"];
+	        this.current = source["current"];
+	        this.total = source["total"];
+	        this.path = source["path"];
+	    }
+	}
+	export class ImageCleanupStatus {
+	    running: boolean;
+	    completed: boolean;
+	    error: string;
+	    progress: ImageCleanupProgress;
+	    analysis?: ImageCleanupAnalysis;
+	    started_at?: string;
+	    updated_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageCleanupStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.completed = source["completed"];
+	        this.error = source["error"];
+	        this.progress = this.convertValues(source["progress"], ImageCleanupProgress);
+	        this.analysis = this.convertValues(source["analysis"], ImageCleanupAnalysis);
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageCursor {
+	    sort_mode: string;
+	    created_at?: string;
+	    taken_at?: string;
+	    size: number;
+	    rating?: number;
+	    rating_is_null: boolean;
+	    id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageCursor(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sort_mode = source["sort_mode"];
+	        this.created_at = source["created_at"];
+	        this.taken_at = source["taken_at"];
+	        this.size = source["size"];
+	        this.rating = source["rating"];
+	        this.rating_is_null = source["rating_is_null"];
+	        this.id = source["id"];
+	    }
+	}
+	export class ImageDetail {
+	    image: models.Image;
+	    ai_description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageDetail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image = this.convertValues(source["image"], models.Image);
+	        this.ai_description = source["ai_description"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageEXIFBackfillFailure {
+	    image_id: number;
+	    name: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageEXIFBackfillFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.name = source["name"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ImageEXIFBackfillStatus {
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    current_image_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: ImageEXIFBackfillFailure[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageEXIFBackfillStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.current_image_id = source["current_image_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], ImageEXIFBackfillFailure);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageFilter {
+	    keyword: string;
+	    tag_ids: number[];
+	    favorite_only: boolean;
+	    min_rating?: number;
+	    max_rating?: number;
+	    min_size: number;
+	    max_size: number;
+	    taken_after?: string;
+	    taken_before?: string;
+	    sort_mode: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageFilter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.keyword = source["keyword"];
+	        this.tag_ids = source["tag_ids"];
+	        this.favorite_only = source["favorite_only"];
+	        this.min_rating = source["min_rating"];
+	        this.max_rating = source["max_rating"];
+	        this.min_size = source["min_size"];
+	        this.max_size = source["max_size"];
+	        this.taken_after = source["taken_after"];
+	        this.taken_before = source["taken_before"];
+	        this.sort_mode = source["sort_mode"];
+	    }
+	}
+	export class ImagePage {
+	    images: models.Image[];
+	    next_cursor?: ImageCursor;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImagePage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.images = this.convertValues(source["images"], models.Image);
+	        this.next_cursor = this.convertValues(source["next_cursor"], ImageCursor);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImagePageRequest {
+	    filter: ImageFilter;
+	    cursor?: ImageCursor;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImagePageRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.filter = this.convertValues(source["filter"], ImageFilter);
+	        this.cursor = this.convertValues(source["cursor"], ImageCursor);
+	        this.limit = source["limit"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageScanError {
+	    operation: string;
+	    directory?: string;
+	    path?: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageScanError(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.operation = source["operation"];
+	        this.directory = source["directory"];
+	        this.path = source["path"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ImageScanResult {
+	    added: number;
+	    relocated: number;
+	    removed: number;
+	    skipped: number;
+	    errors: ImageScanError[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageScanResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.added = source["added"];
+	        this.relocated = source["relocated"];
+	        this.removed = source["removed"];
+	        this.skipped = source["skipped"];
+	        this.errors = this.convertValues(source["errors"], ImageScanError);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageSemanticCoverage {
+	    indexed: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageSemanticCoverage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.indexed = source["indexed"];
+	        this.total = source["total"];
+	    }
+	}
+	export class ImageSemanticFilter {
+	    tag_ids: number[];
+	    favorite_only: boolean;
+	    min_rating?: number;
+	    max_rating?: number;
+	    min_size: number;
+	    max_size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageSemanticFilter(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag_ids = source["tag_ids"];
+	        this.favorite_only = source["favorite_only"];
+	        this.min_rating = source["min_rating"];
+	        this.max_rating = source["max_rating"];
+	        this.min_size = source["min_size"];
+	        this.max_size = source["max_size"];
+	    }
+	}
+	export class ImageSemanticIndexFailure {
+	    image_id: number;
+	    name: string;
+	    code: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageSemanticIndexFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.name = source["name"];
+	        this.code = source["code"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ImageSemanticIndexStatus {
+	    available: boolean;
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    needs_rebuild: boolean;
+	    model: string;
+	    dimension: number;
+	    generation: number;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    current_image_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: ImageSemanticIndexFailure[];
+	    unavailable: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageSemanticIndexStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.needs_rebuild = source["needs_rebuild"];
+	        this.model = source["model"];
+	        this.dimension = source["dimension"];
+	        this.generation = source["generation"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.current_image_id = source["current_image_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], ImageSemanticIndexFailure);
+	        this.unavailable = source["unavailable"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageSemanticSearchHit {
+	    image: models.Image;
+	    score: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageSemanticSearchHit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image = this.convertValues(source["image"], models.Image);
+	        this.score = source["score"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageSemanticSearchPage {
+	    hits: ImageSemanticSearchHit[];
+	    coverage: ImageSemanticCoverage;
+	    has_more: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageSemanticSearchPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hits = this.convertValues(source["hits"], ImageSemanticSearchHit);
+	        this.coverage = this.convertValues(source["coverage"], ImageSemanticCoverage);
+	        this.has_more = source["has_more"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageSemanticSearchRequest {
+	    query: string;
+	    filter: ImageSemanticFilter;
+	    offset: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageSemanticSearchRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.query = source["query"];
+	        this.filter = this.convertValues(source["filter"], ImageSemanticFilter);
+	        this.offset = source["offset"];
+	        this.limit = source["limit"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageStatsBucket {
+	    label: string;
+	    total_size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageStatsBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.total_size = source["total_size"];
+	    }
+	}
+	export class ImageStatsSummary {
+	    image_count: number;
+	    total_size: number;
+	    favorite_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageStatsSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_count = source["image_count"];
+	        this.total_size = source["total_size"];
+	        this.favorite_count = source["favorite_count"];
+	    }
+	}
+	export class ImageStats {
+	    generated_at: string;
+	    summary: ImageStatsSummary;
+	    storage_by_directory: ImageStatsBucket[];
+	    storage_by_format: ImageStatsBucket[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageStats(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generated_at = source["generated_at"];
+	        this.summary = this.convertValues(source["summary"], ImageStatsSummary);
+	        this.storage_by_directory = this.convertValues(source["storage_by_directory"], ImageStatsBucket);
+	        this.storage_by_format = this.convertValues(source["storage_by_format"], ImageStatsBucket);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class ImageTimelineBucket {
+	    year: number;
+	    month: number;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageTimelineBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.year = source["year"];
+	        this.month = source["month"];
+	        this.count = source["count"];
 	    }
 	}
 	export class LibraryFilter {
@@ -2197,6 +3220,7 @@ export namespace services {
 	    target_tag_id: number;
 	    merged_tag_count: number;
 	    video_links_moved: number;
+	    image_links_moved: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new MergeTagsResult(source);
@@ -2207,6 +3231,7 @@ export namespace services {
 	        this.target_tag_id = source["target_tag_id"];
 	        this.merged_tag_count = source["merged_tag_count"];
 	        this.video_links_moved = source["video_links_moved"];
+	        this.image_links_moved = source["image_links_moved"];
 	    }
 	}
 	export class PerceptualHashFailure {
