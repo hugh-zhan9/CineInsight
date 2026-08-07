@@ -85,10 +85,22 @@
       <div class="divider"></div>
 
       <!-- 标签列表 -->
+      <div class="tag-list-heading">
+        <label>全部标签</label>
+        <span v-if="tagKeyword" class="tag-list-count">显示 {{ filteredTags.length }} / {{ localTags.length }}</span>
+        <span v-else class="tag-list-count">共 {{ localTags.length }} 个</span>
+      </div>
+      <input
+        v-model.trim="tagKeyword"
+        type="search"
+        class="text-input tag-filter-input"
+        placeholder="搜索标签名称..."
+        aria-label="搜索标签"
+      />
       <div class="tag-list-container" style="max-height: 260px; overflow-y: auto; padding-right: 4px;">
-        <div v-for="tag in localTags" :key="tag.id" class="tag-edit-row">
-          <input v-model="tag.color" type="color" class="color-picker" :disabled="tag.is_system || tag.automatic_kind" style="width: 28px; height: 28px; border: none; padding: 0; background: none; cursor: pointer; border-radius: 4px;" />
-          <input v-model="tag.name" type="text" class="text-input" :disabled="tag.is_system || tag.automatic_kind" style="height: 32px; font-size: 13px;" />
+        <div v-for="tag in filteredTags" :key="tag.id" class="tag-edit-row">
+          <input v-model="tag.color" type="color" class="color-picker" :disabled="Boolean(tag.is_system || tag.automatic_kind)" style="width: 28px; height: 28px; border: none; padding: 0; background: none; cursor: pointer; border-radius: 4px;" />
+          <input v-model="tag.name" type="text" class="text-input" :disabled="Boolean(tag.is_system || tag.automatic_kind)" style="height: 32px; font-size: 13px;" />
           <div style="display: flex; gap: 6px;">
             <span v-if="tag.is_system" class="system-tag-note">AI 标签</span>
             <span v-else-if="tag.automatic_kind" class="system-tag-note">自动标签</span>
@@ -99,6 +111,7 @@
           </div>
         </div>
         <div v-if="localTags.length === 0" class="help-text" style="text-align: center; padding: 20px;">暂无标签</div>
+        <div v-else-if="filteredTags.length === 0" class="help-text" style="text-align: center; padding: 20px;">没有匹配“{{ tagKeyword }}”的标签</div>
       </div>
 
       <div class="modal-actions">
@@ -125,6 +138,9 @@ export default {
       createTagLoading: false,
       tagCreateError: '',
       localTags: [],
+      tagKeyword: '',
+      // 按 id 快照标签名，避免行内改名时该行立刻从筛选结果消失（改完保存后才随 props 刷新）。
+      tagFilterNames: {},
       mergeTargetId: 0,
       mergeSourceIds: [],
       mergeType: 'normal',
@@ -134,6 +150,9 @@ export default {
     };
   },
   computed: {
+    filteredTags() {
+      return this.localTags.filter(tag => this.matchesTagKeyword(tag));
+    },
     mergeableTags() {
       return this.localTags.filter(tag => !tag.automatic_kind);
     },
@@ -170,6 +189,10 @@ export default {
     tags: {
       handler(val) {
         this.localTags = val.map(t => ({ ...t }));
+        this.tagFilterNames = val.reduce((acc, t) => {
+          acc[t.id] = String(t.name || '');
+          return acc;
+        }, {});
       },
       immediate: true,
       deep: true
@@ -182,6 +205,7 @@ export default {
         this.mergeTargetId = 0;
         this.mergeSourceIds = [];
         this.mergeKeyword = '';
+        this.tagKeyword = '';
         this.localTags = this.tags.map(t => ({ ...t }));
       }
     }
@@ -189,6 +213,14 @@ export default {
   methods: {
     matchesMergeType(tag) {
       return this.mergeType === 'ai' ? Boolean(tag?.is_system) : !Boolean(tag?.is_system);
+    },
+    matchesTagKeyword(tag) {
+      const keyword = this.tagKeyword.trim().toLocaleLowerCase();
+      if (!keyword) return true;
+      // 用快照名匹配：行内编辑时该行不会因为改名而中途消失。
+      const snapshot = this.tagFilterNames[tag?.id];
+      const name = snapshot === undefined ? String(tag?.name || '') : snapshot;
+      return name.toLocaleLowerCase().includes(keyword);
     },
     matchesMergeKeyword(tag) {
       const keyword = this.mergeKeyword.trim().toLocaleLowerCase();
@@ -290,6 +322,9 @@ export default {
 .merge-type-switch button { min-height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
 .merge-type-switch button.active { background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }
 .merge-filter-input { width: calc(100% - 16px); margin: 8px 8px 0; }
+.tag-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.tag-list-count { color: var(--text-secondary); font-size: 12px; }
+.tag-filter-input { width: 100%; margin: 8px 0; }
 .merge-target-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 8px; color: var(--text-secondary); font-size: 12px; }
 .merge-target-select { width: 100%; }
 .merge-source-picker { margin-top: 10px; overflow: hidden; border: 1px solid var(--border-color); border-radius: 10px; background: var(--control-bg); }

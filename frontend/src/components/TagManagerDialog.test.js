@@ -98,3 +98,88 @@ describe('TagManagerDialog merge picker', () => {
     expect(wrapper.find('.merge-source-picker').exists()).toBe(false);
   });
 });
+
+describe('TagManagerDialog tag list search', () => {
+  const listNames = wrapper =>
+    wrapper.findAll('.tag-edit-row').map(row => row.get('input[type="text"]').element.value);
+
+  it('filters the tag list by name and reports the visible count', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    expect(listNames(wrapper)).toHaveLength(tags.length);
+    expect(wrapper.get('.tag-list-count').text()).toContain(String(tags.length));
+
+    await wrapper.get('.tag-filter-input').setValue('旅');
+
+    expect(listNames(wrapper)).toEqual(['旅行', '旅游']);
+    expect(wrapper.get('.tag-list-count').text()).toBe('显示 2 / 5');
+  });
+
+  it('matches AI and automatic tags too, case-insensitively', async () => {
+    const wrapper = mount(TagManagerDialog, {
+      props: {
+        visible: true,
+        tags: [...tags, { id: 6, name: 'Anime', color: '#666666', is_system: true, automatic_kind: '' }]
+      }
+    });
+
+    await wrapper.get('.tag-filter-input').setValue('动作');
+    expect(listNames(wrapper)).toEqual(['动作', '激烈动作']);
+
+    await wrapper.get('.tag-filter-input').setValue('anime');
+    expect(listNames(wrapper)).toEqual(['Anime']);
+
+    await wrapper.get('.tag-filter-input').setValue('短视频');
+    expect(listNames(wrapper)).toEqual(['短视频']);
+  });
+
+  it('shows a no-match hint without hiding the empty-library hint', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await wrapper.get('.tag-filter-input').setValue('不存在的标签');
+
+    expect(listNames(wrapper)).toEqual([]);
+    expect(wrapper.text()).toContain('没有匹配');
+
+    const empty = mount(TagManagerDialog, { props: { visible: true, tags: [] } });
+    expect(empty.text()).toContain('暂无标签');
+  });
+
+  it('keeps a row visible while its name is edited away from the keyword', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await wrapper.get('.tag-filter-input').setValue('旅行');
+    expect(listNames(wrapper)).toEqual(['旅行']);
+
+    await wrapper.get('.tag-edit-row input[type="text"]').setValue('假期');
+
+    // 行内改名不应让该行中途消失，否则用户点不到“保存”。
+    expect(listNames(wrapper)).toEqual(['假期']);
+    expect(wrapper.vm.localTags.find(t => t.id === 1).name).toBe('假期');
+  });
+
+  it('keeps ordinary tag inputs editable while locking system and automatic ones', () => {
+    // 回归：automatic_kind 为空字符串时，:disabled="a || b" 会得到 ''，
+    // 而 Vue 对布尔属性把空字符串视为 true，导致普通标签无法改名/改色。
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    const state = wrapper.findAll('.tag-edit-row').map(row => ({
+      name: row.get('input[type="text"]').element.value,
+      nameDisabled: row.get('input[type="text"]').element.disabled,
+      colorDisabled: row.get('input[type="color"]').element.disabled
+    }));
+
+    expect(state.find(s => s.name === '旅行')).toMatchObject({ nameDisabled: false, colorDisabled: false });
+    expect(state.find(s => s.name === '动作')).toMatchObject({ nameDisabled: true, colorDisabled: true });
+    expect(state.find(s => s.name === '短视频')).toMatchObject({ nameDisabled: true, colorDisabled: true });
+  });
+
+  it('resets the keyword when the dialog is reopened', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: false, tags } });
+    await wrapper.setProps({ visible: true });
+    await wrapper.get('.tag-filter-input').setValue('旅');
+    expect(wrapper.vm.tagKeyword).toBe('旅');
+
+    await wrapper.setProps({ visible: false });
+    await wrapper.setProps({ visible: true });
+
+    expect(wrapper.vm.tagKeyword).toBe('');
+    expect(listNames(wrapper)).toHaveLength(tags.length);
+  });
+});
