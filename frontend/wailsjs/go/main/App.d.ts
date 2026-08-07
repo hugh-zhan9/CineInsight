@@ -34,6 +34,8 @@ export function BatchRefreshVideoMetadata(arg1:Array<number>):Promise<services.B
 
 export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
 
+export function CancelEnhancementTask(arg1:number):Promise<void>;
+
 export function CancelLocalMetadataBackfill():Promise<void>;
 
 export function CancelLocalMetadataExport():Promise<void>;
@@ -56,6 +58,8 @@ export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCo
 
 export function CreateDatabaseBackup():Promise<services.BackupFile>;
 
+export function CreateEnhancementTask(arg1:services.EnhancementCreateRequest):Promise<services.EnhancementTaskView>;
+
 export function CreatePerson(arg1:string,arg2:string):Promise<models.Person>;
 
 export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
@@ -69,6 +73,8 @@ export function DeleteSavedLibraryView(arg1:number):Promise<void>;
 export function DeleteTag(arg1:number):Promise<void>;
 
 export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
+
+export function DismissNearDuplicateGroup(arg1:Array<number>):Promise<void>;
 
 export function DownloadSubtitleDependencies():Promise<void>;
 
@@ -99,6 +105,10 @@ export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promis
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
 export function GetCollectionDetail(arg1:number):Promise<services.CollectionDetail>;
+
+export function GetEnhancementCapability():Promise<services.EnhancementRuntimeCapability>;
+
+export function GetEnhancementVideoPreflight(arg1:number):Promise<services.EnhancementVideoPreflight>;
 
 export function GetLibraryInsights():Promise<services.LibraryStats>;
 
@@ -147,6 +157,8 @@ export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise
 export function ListCollections(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.CollectionListItem>>;
 
 export function ListDatabaseBackups():Promise<Array<services.BackupFile>>;
+
+export function ListEnhancementTasks(arg1:number):Promise<Array<services.EnhancementTaskView>>;
 
 export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;
 
@@ -222,6 +234,8 @@ export function RetranslateSubtitleEntries(arg1:services.SubtitleRetranslateRequ
 
 export function RetryAITagging(arg1:number):Promise<void>;
 
+export function RetryEnhancementTask(arg1:number):Promise<services.EnhancementTaskView>;
+
 export function RetryLibraryWatcherRoot(arg1:number):Promise<services.LibraryWatchRootStatus>;
 
 export function SaveAITagLibrary(arg1:Array<services.AITagLibraryInput>):Promise<Array<models.Tag>>;
@@ -276,13 +290,6 @@ export function StartLocalMetadataBackfill():Promise<services.LocalMetadataBackf
 
 export function StartLocalMetadataExport(arg1:services.LocalMetadataExportRequest):Promise<services.LocalMetadataExportStatus>;
 
-export function GetEnhancementCapability():Promise<any>;
-export function CreateEnhancementTask(arg1:any):Promise<any>;
-export function GetEnhancementVideoPreflight(arg1:number):Promise<any>;
-export function ListEnhancementTasks(arg1:number):Promise<Array<any>>;
-export function CancelEnhancementTask(arg1:number):Promise<void>;
-export function RetryEnhancementTask(arg1:number):Promise<any>;
-export function DismissNearDuplicateGroup(arg1:Array<number>):Promise<void>;
 export function StartPerceptualHashBackfill():Promise<services.PerceptualHashStatus>;
 
 export function StartSemanticIndex(arg1:services.SemanticIndexBuildRequest):Promise<services.SemanticIndexStatus>;

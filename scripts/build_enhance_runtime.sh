@@ -5,7 +5,7 @@
 # 开发模式放在可执行文件旁的 enhance-runtime/）：
 #   bin/realesrgan-ncnn-vulkan        darwin/arm64 原生二进制（源码构建）
 #   models/realesrgan-x4plus.{param,bin}
-#   models/realesr-animevideov3.{param,bin}
+#   models/realesr-animevideov3-x2.{param,bin}（sidecar 对该模型按 <name>-x<scale> 拼路径）
 #   licenses/…                        第三方许可证
 #   manifest.json                     runtime_version + 全部文件 SHA-256
 #
@@ -38,10 +38,22 @@ echo "==> 组装运行时目录"
 rm -rf "$OUT_DIR"
 mkdir -p "$OUT_DIR/bin" "$OUT_DIR/models" "$OUT_DIR/licenses"
 cp "$WORK_DIR/build/realesrgan-ncnn-vulkan" "$OUT_DIR/bin/"
-for model in realesrgan-x4plus realesr-animevideov3; do
-  cp "$WORK_DIR/src/models/${model}.param" "$OUT_DIR/models/"
-  cp "$WORK_DIR/src/models/${model}.bin" "$OUT_DIR/models/"
-done
+# 注意：模型文件不在源码仓库中，需从上游 release 包获取：
+#   https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip
+# 其中 realesr-animevideov3-x2.{param,bin} 须重命名为 <model>-x<scale> 形式
+#（sidecar 对该模型按 scale 拼路径，见上游 main.cpp）。
+MODELS_SRC="${MODELS_SRC:-}"
+if [[ -z "$MODELS_SRC" ]]; then
+  echo "==> 拉取模型文件（上游 release 包）"
+  curl -sfL -o "$WORK_DIR/models.zip" \
+    "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip"
+  unzip -o -q "$WORK_DIR/models.zip" -d "$WORK_DIR/models"
+  MODELS_SRC="$WORK_DIR/models/models"
+fi
+cp "$MODELS_SRC/realesrgan-x4plus.param" "$OUT_DIR/models/"
+cp "$MODELS_SRC/realesrgan-x4plus.bin" "$OUT_DIR/models/"
+cp "$MODELS_SRC/realesr-animevideov3-x2.param" "$OUT_DIR/models/realesr-animevideov3-x2.param"
+cp "$MODELS_SRC/realesr-animevideov3-x2.bin" "$OUT_DIR/models/realesr-animevideov3-x2.bin"
 cp "$WORK_DIR/src/LICENSE" "$OUT_DIR/licenses/REAL-ESRGAN-NCNN-VULKAN-LICENSE.txt"
 
 echo "==> 生成 manifest.json"

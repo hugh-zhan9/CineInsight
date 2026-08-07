@@ -62,6 +62,10 @@ export function BatchRemoveTagFromVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchRemoveTagFromVideos'](arg1, arg2);
 }
 
+export function CancelEnhancementTask(arg1) {
+  return window['go']['main']['App']['CancelEnhancementTask'](arg1);
+}
+
 export function CancelLocalMetadataBackfill() {
   return window['go']['main']['App']['CancelLocalMetadataBackfill']();
 }
@@ -106,6 +110,10 @@ export function CreateDatabaseBackup() {
   return window['go']['main']['App']['CreateDatabaseBackup']();
 }
 
+export function CreateEnhancementTask(arg1) {
+  return window['go']['main']['App']['CreateEnhancementTask'](arg1);
+}
+
 export function CreatePerson(arg1, arg2) {
   return window['go']['main']['App']['CreatePerson'](arg1, arg2);
 }
@@ -132,6 +140,10 @@ export function DeleteTag(arg1) {
 
 export function DeleteVideo(arg1, arg2) {
   return window['go']['main']['App']['DeleteVideo'](arg1, arg2);
+}
+
+export function DismissNearDuplicateGroup(arg1) {
+  return window['go']['main']['App']['DismissNearDuplicateGroup'](arg1);
 }
 
 export function DownloadSubtitleDependencies() {
@@ -192,6 +204,14 @@ export function GetCleanupStatus() {
 
 export function GetCollectionDetail(arg1) {
   return window['go']['main']['App']['GetCollectionDetail'](arg1);
+}
+
+export function GetEnhancementCapability() {
+  return window['go']['main']['App']['GetEnhancementCapability']();
+}
+
+export function GetEnhancementVideoPreflight(arg1) {
+  return window['go']['main']['App']['GetEnhancementVideoPreflight'](arg1);
 }
 
 export function GetLibraryInsights() {
@@ -288,6 +308,10 @@ export function ListCollections(arg1, arg2, arg3, arg4) {
 
 export function ListDatabaseBackups() {
   return window['go']['main']['App']['ListDatabaseBackups']();
+}
+
+export function ListEnhancementTasks(arg1) {
+  return window['go']['main']['App']['ListEnhancementTasks'](arg1);
 }
 
 export function ListPeople(arg1, arg2, arg3, arg4) {
@@ -438,6 +462,10 @@ export function RetryAITagging(arg1) {
   return window['go']['main']['App']['RetryAITagging'](arg1);
 }
 
+export function RetryEnhancementTask(arg1) {
+  return window['go']['main']['App']['RetryEnhancementTask'](arg1);
+}
+
 export function RetryLibraryWatcherRoot(arg1) {
   return window['go']['main']['App']['RetryLibraryWatcherRoot'](arg1);
 }
@@ -544,34 +572,6 @@ export function StartLocalMetadataBackfill() {
 
 export function StartLocalMetadataExport(arg1) {
   return window['go']['main']['App']['StartLocalMetadataExport'](arg1);
-}
-
-export function GetEnhancementCapability() {
-  return window['go']['main']['App']['GetEnhancementCapability']();
-}
-
-export function CreateEnhancementTask(arg1) {
-  return window['go']['main']['App']['CreateEnhancementTask'](arg1);
-}
-
-export function GetEnhancementVideoPreflight(arg1) {
-  return window['go']['main']['App']['GetEnhancementVideoPreflight'](arg1);
-}
-
-export function ListEnhancementTasks(arg1) {
-  return window['go']['main']['App']['ListEnhancementTasks'](arg1);
-}
-
-export function CancelEnhancementTask(arg1) {
-  return window['go']['main']['App']['CancelEnhancementTask'](arg1);
-}
-
-export function RetryEnhancementTask(arg1) {
-  return window['go']['main']['App']['RetryEnhancementTask'](arg1);
-}
-
-export function DismissNearDuplicateGroup(arg1) {
-  return window['go']['main']['App']['DismissNearDuplicateGroup'](arg1);
 }
 
 export function StartPerceptualHashBackfill() {
