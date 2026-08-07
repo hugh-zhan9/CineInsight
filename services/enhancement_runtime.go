@@ -107,8 +107,13 @@ func ProbeEnhancementRuntime(runtimeDir string) EnhancementRuntimeCapability {
 	modelDir := filepath.Join(runtimeDir, manifest.ModelDir)
 	for _, spec := range EnhancementProfiles {
 		for _, ext := range []string{".param", ".bin"} {
-			if _, err := os.Stat(filepath.Join(modelDir, spec.ModelName+ext)); err != nil {
-				return EnhancementRuntimeCapability{ReasonCode: "runtime_unavailable", Message: fmt.Sprintf("超分模型文件缺失: %s%s", spec.ModelName, ext)}
+			// sidecar 对 realesr-animevideov3 按 <name>-x<scale> 拼路径（上游 main.cpp 行为）
+			modelFile := spec.ModelName + ext
+			if spec.ModelName == "realesr-animevideov3" {
+				modelFile = fmt.Sprintf("%s-x%d%s", spec.ModelName, spec.Scale, ext)
+			}
+			if _, err := os.Stat(filepath.Join(modelDir, modelFile)); err != nil {
+				return EnhancementRuntimeCapability{ReasonCode: "runtime_unavailable", Message: fmt.Sprintf("超分模型文件缺失: %s", modelFile)}
 			}
 		}
 	}

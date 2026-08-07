@@ -51,18 +51,43 @@ type perceptualFrameRunner interface {
 type ffmpegPerceptualFrameRunner struct{}
 
 func (ffmpegPerceptualFrameRunner) Frame(ctx context.Context, path string, second float64) ([]byte, error) {
-	args := []string{"-v", "error", "-ss", strconv.FormatFloat(second, 'f', 3, 64), "-i", path, "-frames:v", "1", "-vf", "scale=9:8:flags=lanczos,format=gray", "-f", "rawvideo", "pipe:1"}
-	command := exec.CommandContext(ctx, "ffmpeg", args...)
+	ffmpegBin, err := findThumbnailFFmpeg()
+	if err != nil {
+		return nil, err
+	}
+	// -fflags +discardcorrupt 容忍损坏的 NAL 单元/数据包（老编码器或部分下载的文件常见），
+	// 让 ffmpeg 尽量从可解码的 GOP 中恢复出一帧，而不是直接报错退出。
+	ss := strconv.FormatFloat(second, 'f', 3, 64)
+	frame, stderrText, err := extractPerceptualFrame(ctx, ffmpegBin, []string{"-ss", ss, "-i", path})
+	if err != nil {
+		return nil, err
+	}
+	if len(frame) == 0 && second > 1 {
+		// 输入侧 seek（-ss 在 -i 之前）依赖 mp4 关键帧索引；索引不完整或文件尾部
+		// 码流损坏（部分下载）时，目标时间点之后可能解不出任何帧。回退到更早的
+		// 时间点再试一次——对感知哈希而言，近似位置的帧足够用于近重复判断。
+		frame, stderrText, err = extractPerceptualFrame(ctx, ffmpegBin, []string{"-ss", strconv.FormatFloat(second*0.5, 'f', 3, 64), "-i", path})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(frame) != 72 {
+		return nil, fmt.Errorf("ffmpeg returned %d grayscale bytes, want 72: %s", len(frame), truncateLogSnippet(stderrText, 400))
+	}
+	return frame, nil
+}
+
+func extractPerceptualFrame(ctx context.Context, ffmpegBin string, seekArgs []string) ([]byte, string, error) {
+	args := append([]string{"-v", "warning", "-fflags", "+discardcorrupt"}, seekArgs...)
+	args = append(args, "-frames:v", "1", "-vf", "scale=9:8:flags=lanczos,format=gray", "-f", "rawvideo", "pipe:1")
+	command := exec.CommandContext(ctx, ffmpegBin, args...)
 	var stdout, stderr bytes.Buffer
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		return nil, fmt.Errorf("ffmpeg frame extraction failed: %w", err)
+		return nil, stderr.String(), fmt.Errorf("ffmpeg frame extraction failed: %w: %s", err, truncateLogSnippet(stderr.String(), 400))
 	}
-	if stdout.Len() != 72 {
-		return nil, fmt.Errorf("ffmpeg returned %d grayscale bytes, want 72", stdout.Len())
-	}
-	return stdout.Bytes(), nil
+	return stdout.Bytes(), stderr.String(), nil
 }
 
 type PerceptualHashService struct {
