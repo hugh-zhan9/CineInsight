@@ -114,6 +114,32 @@
 		<button v-if="localMetadataExport.running" type="button" class="btn-secondary" @click="cancelLocalMetadataExport">取消写出 NFO</button>
         <button type="button" class="btn-secondary" @click="showTagManagerDialog = true">标签管理</button>
       </div>
+
+      <div v-if="selectedVideoIds.length > 0" class="selection-toolbar">
+        <span>已选 {{ selectedVideoIds.length }} 个视频</span>
+        <div class="selection-toolbar__actions">
+          <button
+            @click="openBatchAddTagDialog"
+            class="btn-secondary"
+          >
+            批量标签编辑
+          </button>
+          <button
+            @click="moveSelectedVideos"
+            class="btn-secondary"
+            :disabled="migrationRunning"
+          >
+            批量迁移
+          </button>
+          <button type="button" class="btn-secondary" @click="openLocalMetadataDialog(selectedVideoIds)">导入本地资料</button>
+          <button
+            @click="confirmBatchDelete"
+            class="btn-danger"
+          >
+            批量删除
+          </button>
+        </div>
+      </div>
     </div>
 
     <div
@@ -167,32 +193,6 @@
       </button>
       <button v-else type="button" class="btn-secondary btn-compact" @click="openTrashDialog">查看回收站</button>
       <button type="button" class="undo-delete-banner__close" aria-label="关闭提示" @click="undoNotice = null">×</button>
-    </div>
-
-    <div v-if="selectedVideoIds.length > 0" class="selection-toolbar glass-surface">
-      <span>已选 {{ selectedVideoIds.length }} 个视频</span>
-      <div class="selection-toolbar__actions">
-        <button
-          @click="openBatchAddTagDialog"
-          class="btn-secondary"
-        >
-          批量标签编辑
-        </button>
-        <button
-          @click="moveSelectedVideos"
-          class="btn-secondary"
-          :disabled="migrationRunning"
-        >
-          批量迁移
-        </button>
-        <button type="button" class="btn-secondary" @click="openLocalMetadataDialog(selectedVideoIds)">导入本地资料</button>
-        <button
-          @click="confirmBatchDelete"
-          class="btn-danger"
-        >
-          批量删除
-        </button>
-      </div>
     </div>
 
     <div v-if="subtitleQueue.total > 0" class="subtitle-queue-panel glass-surface">
@@ -953,15 +953,21 @@
   justify-content: flex-end;
 }
 
+/* 批量操作栏内嵌在 .toolbar 中，随其一起吸顶：选中项后向下滚动时按钮
+   必须保持可见，否则用户要滚回顶部才能操作（旧实现是流内元素，会被滚走）。
+   放在 .toolbar 内部而非自行设 sticky top，是为了避免依赖主工具栏的高度
+   ——它是 flex column 且窄屏会换行，高度不固定。 */
 .selection-toolbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin: 0 0 10px;
+  margin: 0;
   padding: 8px 10px;
-  border-radius: 14px;
-  color: var(--text-secondary);
+  border-radius: 12px;
+  border: 1px solid var(--accent-color);
+  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
+  color: var(--text-primary);
   font-size: 13px;
 }
 

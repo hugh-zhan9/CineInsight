@@ -78,4 +78,20 @@ assert.match(videoListSource, /GetCleanupStatus/, 'cleanup dialog should reopen 
 assert.match(videoListSource, /@click="reanalyzeCleanupCandidates"/, 'cleanup reanalysis should bypass completed background status');
 assert.match(videoListSource, /后台继续分析/, 'cleanup dialog should allow closing while analysis continues');
 
+// 批量操作栏必须随吸顶工具栏一起常驻：选中项后向下滚动时若按钮被滚走，
+// 用户就得滚回顶部才能操作。用「selection-toolbar 出现在 .toolbar 闭合之前」
+// 来钉住它的嵌套位置，避免被挪回流内。
+const toolbarBlockMatch = videoListSource.match(/<div class="toolbar glass-surface">[\s\S]*?\n    <\/div>/);
+assert.ok(toolbarBlockMatch, 'sticky toolbar block should be locatable');
+assert.match(
+  toolbarBlockMatch[0],
+  /class="selection-toolbar"/,
+  'batch action bar must live inside the sticky toolbar so it stays visible while scrolling'
+);
+assert.match(
+  videoListSource,
+  /\.toolbar\s*{[^}]*position:\s*sticky;/s,
+  'the toolbar that hosts the batch action bar must stay sticky'
+);
+
 console.log('video-list-ui tests passed');
