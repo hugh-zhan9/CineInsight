@@ -69,8 +69,11 @@
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" />
       <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" />
 	  <InsightsPage v-if="currentPage === 'insights'" />
+	  <!-- 首次进入才挂载，之后只隐藏不卸载：切走再切回不会丢已加载的图片和滚动位置。 -->
 	  <PhotoLibraryPage
-	    v-if="currentPage === 'photos'"
+	    v-if="photosMounted"
+	    v-show="currentPage === 'photos'"
+	    :page-active="currentPage === 'photos'"
 	    :settings="settings"
 	    :tags="tags"
 	    @open-settings="currentPage = 'settings'"
@@ -94,6 +97,8 @@ export default {
   data() {
     return {
       currentPage: 'videos',
+      // 图片页首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"。
+      photosMounted: false,
       tags: [],
       directories: [],
       startupError: '',
@@ -140,6 +145,12 @@ export default {
   watch: {
     'settings.theme'() {
       this.applyTheme();
+    },
+    currentPage: {
+      immediate: true,
+      handler(page) {
+        if (page === 'photos') this.photosMounted = true;
+      }
     }
   },
   methods: {

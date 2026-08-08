@@ -124,6 +124,79 @@ describe('VideoListPage media-detail integration', () => {
     wrapper.unmount();
   });
 
+  it('restores a background analysis on reopen and groups candidates by directory', async () => {
+    const analysis = {
+      duplicate_groups: [{
+        original: { id: 1, name: 'keep.mp4', directory: '/lib/a', path: '/lib/a/keep.mp4' },
+        candidates: [{ id: 2, name: 'copy.mp4', directory: '/lib/b', path: '/lib/b/copy.mp4' }],
+        reason: '文件大小和采样哈希一致'
+      }],
+      near_duplicate_groups: [],
+      same_source_groups: [],
+      low_duration: [],
+      low_resolution: []
+    };
+    // 后台跑完的结果（并且期间库变过被标记为过期）：重开面板必须直接看到它，不是重新分析。
+    api.GetCleanupStatus.mockResolvedValue({
+      running: false, completed: true, error: '', stale: true, progress: { stage: 'done' }, analysis
+    });
+    const wrapper = await mountPage();
+
+    await wrapper.vm.openCleanupDialog();
+    await flushPromises();
+
+    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
+    expect(wrapper.vm.cleanupDialog.loading).toBe(false);
+    expect(wrapper.vm.cleanupDialog.analysis).toBeTruthy();
+    expect(wrapper.vm.cleanupResultStale).toBe(true);
+
+    // 整组归到建议保留项所在目录，另一份仍在 /lib/b 但跟着组走。
+    const sections = wrapper.vm.cleanupDirectorySections;
+    expect(sections.map(section => section.directory)).toEqual(['/lib/a']);
+    expect(sections[0].entries[0].kind).toBe('exact');
+    expect(sections[0].videoCount).toBe(2);
+    wrapper.unmount();
+  });
+
+  it('asks before re-analysing after trashing cleanup candidates', async () => {
+    const analysis = {
+      duplicate_groups: [{
+        original: { id: 1, name: 'keep.mp4', directory: '/lib/a' },
+        candidates: [{ id: 2, name: 'copy.mp4', directory: '/lib/a' }],
+        reason: '文件大小和采样哈希一致'
+      }],
+      near_duplicate_groups: [], same_source_groups: [], low_duration: [], low_resolution: []
+    };
+    api.GetCleanupStatus.mockResolvedValue({
+      running: false, completed: true, error: '', stale: false, progress: { stage: 'done' }, analysis
+    });
+    api.BatchDeleteVideos.mockResolvedValue({ requested: 1, succeeded: 1, failed: 0, errors: [] });
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+
+    const wrapper = await mountPage();
+    await wrapper.vm.openCleanupDialog();
+    await flushPromises();
+
+    wrapper.vm.cleanupSelection = [2];
+    await wrapper.vm.trashSelectedCleanupCandidates();
+    await flushPromises();
+
+    expect(api.BatchDeleteVideos).toHaveBeenCalledWith([2], true);
+    // 答"取消"：不重跑，结果留在原地继续审阅，只标记为已过期。
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
+    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
+    expect(wrapper.vm.cleanupDialog.analysis).toBeTruthy();
+    expect(wrapper.vm.cleanupResultStale).toBe(true);
+
+    // 全选候选不能把已移入回收站的项重新选上，否则会对着已删的视频再删一次。
+    wrapper.vm.selectAllCleanupCandidates();
+    expect(wrapper.vm.cleanupSelection).not.toContain(2);
+    expect(wrapper.vm.cleanupSelection).toContain(1);
+
+    confirmSpy.mockRestore();
+    wrapper.unmount();
+  });
+
   it('renames a selected managed folder and refreshes paths', async () => {
     const wrapper = await mountPage();
     const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});

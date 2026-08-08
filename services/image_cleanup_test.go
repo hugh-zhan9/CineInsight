@@ -437,8 +437,16 @@ func TestImageCleanupStartStatusProgressAndInvalidate(t *testing.T) {
 		t.Fatalf("进度事件应包含 done 阶段，实际 %v", stages)
 	}
 
+	if status.Stale {
+		t.Fatalf("刚完成的分析不应是过期状态，实际 %+v", status)
+	}
+	// 与视频侧同一条不变量：done 阶段出现时结果必须已经可读。
+	if status.Progress.Stage != "done" {
+		t.Fatalf("完成后进度阶段应为 done，实际 %+v", status.Progress)
+	}
+
 	// 模拟删除后失效（app 层在 DeleteImage/BatchDeleteImages/Restore 后调用）：
-	// 软删候选 → Invalidate → 重新分析不再成组。
+	// 软删候选 → Invalidate 只标记过期（结果保留供继续审阅）→ 重新分析不再成组。
 	imageService := NewImageService()
 	result := imageService.BatchDeleteImages([]uint{small.ID}, false)
 	if result.Failed != 0 {
@@ -446,8 +454,11 @@ func TestImageCleanupStartStatusProgressAndInvalidate(t *testing.T) {
 	}
 	svc.InvalidateAnalysis()
 	status = svc.GetImageCleanupStatus()
-	if status.Completed || status.Analysis != nil || status.Error != "" {
-		t.Fatalf("Invalidate 后应清空缓存结果，实际 %+v", status)
+	if !status.Completed || status.Analysis == nil || status.Error != "" {
+		t.Fatalf("Invalidate 后仍应保留结果供审阅，实际 %+v", status)
+	}
+	if !status.Stale {
+		t.Fatalf("Invalidate 后应标记为过期，实际 %+v", status)
 	}
 
 	analysis, err := svc.AnalyzeImageCleanupCandidates()

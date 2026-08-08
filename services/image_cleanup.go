@@ -55,10 +55,13 @@ type ImageCleanupProgress struct {
 
 // ImageCleanupStatus 分析任务状态，镜像 CleanupStatus。
 type ImageCleanupStatus struct {
-	Running   bool                  `json:"running"`
-	Completed bool                  `json:"completed"`
-	Error     string                `json:"error"`
-	Progress  ImageCleanupProgress  `json:"progress"`
+	Running   bool                 `json:"running"`
+	Completed bool                 `json:"completed"`
+	Error     string               `json:"error"`
+	Progress  ImageCleanupProgress `json:"progress"`
+	// Stale 表示缓存结果算出后图片库又发生了变化（删除、恢复、忽略近似组等）。
+	// 结果仍然保留供用户继续审阅，只是提示可能过期，由用户决定何时重新分析。
+	Stale     bool                  `json:"stale"`
 	Analysis  *ImageCleanupAnalysis `json:"analysis,omitempty"`
 	StartedAt *time.Time            `json:"started_at,omitempty" ts_type:"string"`
 	UpdatedAt *time.Time            `json:"updated_at,omitempty" ts_type:"string"`
@@ -70,6 +73,9 @@ type ImageCleanupService struct {
 	status               ImageCleanupStatus
 	invalidatedDuringRun bool
 	emitter              func(ImageCleanupProgress)
+	// runID 每次启动分析自增；后台 goroutine 用它判断自己是否仍是当前这轮，
+	// 避免旧的收尾事件把 done 阶段盖到新一轮的状态上。
+	runID uint64
 }
 
 func NewImageCleanupService() *ImageCleanupService {
@@ -103,31 +109,42 @@ func (s *ImageCleanupService) StartImageCleanupAnalysis() (*ImageCleanupStatus, 
 		},
 	}
 	s.invalidatedDuringRun = false
+	s.runID++
+	runID := s.runID
 	status := s.statusSnapshotLocked()
 	s.mu.Unlock()
 
 	go func() {
-		analysis, err := s.AnalyzeImageCleanupCandidates()
+		analysis, _, err := s.analyzeImageCleanupCandidates()
+
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		now := time.Now()
 		s.status.Running = false
-		if s.invalidatedDuringRun {
-			s.status.Completed = false
-			s.status.Error = ""
-			s.status.Analysis = nil
-			s.invalidatedDuringRun = false
-			return
-		}
-		s.status.Completed = err == nil
 		s.status.UpdatedAt = &now
+		// 运行期间图片库发生了变化：结果仍然保留供审阅，只标记为可能过期。
+		staleDuringRun := s.invalidatedDuringRun
+		s.invalidatedDuringRun = false
 		if err != nil {
+			s.status.Completed = false
 			s.status.Error = err.Error()
 			s.status.Analysis = nil
+			s.status.Stale = false
+		} else {
+			s.status.Completed = true
+			s.status.Error = ""
+			s.status.Analysis = analysis
+			s.status.Stale = staleDuringRun
+		}
+		total := s.status.Progress.Total
+		s.mu.Unlock()
+
+		// 与视频侧一致：done 阶段必须在结果写入之后才出现，否则观察者会看到
+		// stage=done 却 running=true / analysis=nil。
+		if err != nil {
+			s.emitDoneForRun(runID, total, fmt.Sprintf("分析失败：%v", err))
 			return
 		}
-		s.status.Error = ""
-		s.status.Analysis = analysis
+		s.emitDoneForRun(runID, total, imageCleanupDoneMessage(analysis))
 	}()
 
 	return &status, nil
@@ -141,7 +158,8 @@ func (s *ImageCleanupService) GetImageCleanupStatus() *ImageCleanupStatus {
 	return &status
 }
 
-// InvalidateAnalysis 丢弃已完成的缓存结果（删除/恢复图片后调用）；运行中的分析结果作废。
+// InvalidateAnalysis 标记缓存结果可能已过期（删除/恢复图片后调用）；结果本身保留，
+// 用户重开清理审阅仍能看到并继续处理，由用户自己决定何时重新分析。
 func (s *ImageCleanupService) InvalidateAnalysis() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -149,10 +167,10 @@ func (s *ImageCleanupService) InvalidateAnalysis() {
 		s.invalidatedDuringRun = true
 		return
 	}
-	s.status.Completed = false
-	s.status.Error = ""
-	s.status.Analysis = nil
-	s.status.Progress = ImageCleanupProgress{}
+	if s.status.Analysis == nil {
+		return
+	}
+	s.status.Stale = true
 	now := time.Now()
 	s.status.UpdatedAt = &now
 }
@@ -173,12 +191,49 @@ type imageCleanupFileState struct {
 	modTimeNS int64
 }
 
-// AnalyzeImageCleanupCandidates 同步执行一次完整分析（Start 的 goroutine 调用，测试可直接调）。
+// AnalyzeImageCleanupCandidates 同步执行一次完整分析并发出终止事件（测试与同步调用方使用）；
+// 异步任务走 analyzeImageCleanupCandidates，由 StartImageCleanupAnalysis 在写完状态后补发 done。
 func (s *ImageCleanupService) AnalyzeImageCleanupCandidates() (*ImageCleanupAnalysis, error) {
+	result, states, err := s.analyzeImageCleanupCandidates()
+	if err != nil {
+		return nil, err
+	}
+	s.emitProgress("done", states, states, "", imageCleanupDoneMessage(result))
+	return result, nil
+}
+
+func imageCleanupDoneMessage(result *ImageCleanupAnalysis) string {
+	return fmt.Sprintf(
+		"分析完成：精确重复组 %d，近似重复组 %d，指纹过期 %d。",
+		len(result.DuplicateGroups), len(result.NearDuplicateGroups), result.StaleHashCount,
+	)
+}
+
+// emitDoneForRun 只在自己仍是当前这轮分析时写入 done 进度并回调事件。
+func (s *ImageCleanupService) emitDoneForRun(runID uint64, total int, message string) {
+	progress := ImageCleanupProgress{Stage: "done", Message: message, Current: total, Total: total}
+	s.mu.Lock()
+	if s.runID != runID {
+		s.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	s.status.Progress = progress
+	s.status.UpdatedAt = &now
+	emitter := s.emitter
+	s.mu.Unlock()
+
+	if emitter != nil {
+		emitter(progress)
+	}
+}
+
+// analyzeImageCleanupCandidates 返回分析结果和参与比对的图片数；不发终止事件。
+func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnalysis, int, error) {
 	startedAt := time.Now()
 	var images []models.Image
 	if err := database.DB.Order("id asc").Find(&images).Error; err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	// 黑名单目录不参与清理审阅：图片黑名单优先，空则回退通用黑名单（与扫描行为一致）。
@@ -282,7 +337,7 @@ func (s *ImageCleanupService) AnalyzeImageCleanupCandidates() (*ImageCleanupAnal
 	}
 	dismissed, err := loadImageNearDuplicateDismissals()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed))
 	for pair := range exactPairs {
@@ -300,12 +355,8 @@ func (s *ImageCleanupService) AnalyzeImageCleanupCandidates() (*ImageCleanupAnal
 		time.Since(startedAt).Round(time.Millisecond),
 		len(result.DuplicateGroups), len(result.NearDuplicateGroups), result.StaleHashCount, len(hashCandidates),
 	)
-	s.emitProgress("done", len(states), len(states), "", fmt.Sprintf(
-		"分析完成：精确重复组 %d，近似重复组 %d，指纹过期 %d。",
-		len(result.DuplicateGroups), len(result.NearDuplicateGroups), result.StaleHashCount,
-	))
-
-	return result, nil
+	// done 事件由调用方在写完状态后发出。
+	return result, len(states), nil
 }
 
 // imageCleanupHashEntry 参与近似重复比对的一张图片及其解析后的 64 位 dHash。

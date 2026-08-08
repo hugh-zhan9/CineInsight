@@ -89,7 +89,7 @@
         <button type="button" class="btn-secondary photo-cleanup-open-btn" data-test="photo-cleanup-open" @click="showCleanup = true">
           清理审阅
           <span v-if="cleanupRunning" class="photo-cleanup-badge" data-test="photo-cleanup-badge" :title="cleanupBadgeTitle">分析中 {{ cleanupProgressText }}</span>
-          <span v-else-if="cleanupDone" class="photo-cleanup-badge photo-cleanup-badge--done" data-test="photo-cleanup-done" title="清理分析已完成，点击查看候选">有结果</span>
+          <span v-else-if="cleanupDone" class="photo-cleanup-badge photo-cleanup-badge--done" data-test="photo-cleanup-done" title="清理分析已完成，点击查看候选">待审阅 {{ cleanupGroupCount }} 组</span>
         </button>
         <button type="button" class="btn-secondary" data-test="photo-trash-open" @click="showTrash = true">回收站</button>
       </div>
@@ -107,6 +107,13 @@
         </button>
       </div>
     </section>
+
+    <!-- 切走再切回不重新加载列表（滚动位置要留着），所以用提示条告诉用户库里有变化。 -->
+    <div v-if="libraryChanged" class="photo-library__refresh" role="status" data-test="photo-library-refresh">
+      <span>图片库有更新。刷新会回到列表顶部。</span>
+      <button type="button" class="btn-secondary btn-compact" data-test="photo-library-refresh-apply" @click="applyLibraryRefresh">刷新</button>
+      <button type="button" class="photo-library__refresh-dismiss" aria-label="忽略此提示" data-test="photo-library-refresh-dismiss" @click="libraryChanged = false">×</button>
+    </div>
 
     <p v-if="error" class="photo-library__error" role="alert">{{ error }}</p>
 
@@ -360,7 +367,7 @@ import BaseModal from './ui/BaseModal.vue';
 import PhotoCleanupPanel from './PhotoCleanupPanel.vue';
 import PhotoTrashDialog from './PhotoTrashDialog.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
-import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
+import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
 import {
   PHOTO_GROUP_MONTH, PHOTO_GROUP_NONE, PHOTO_ROW_HEADER,
   buildPhotoLayout, calculatePhotoAnchorScrollTop, calculatePhotoWindow,
@@ -388,7 +395,9 @@ export default {
   components: { BaseModal, PhotoCleanupPanel, PhotoTrashDialog },
   props: {
     settings: { type: Object, required: true },
-    tags: { type: Array, default: () => [] }
+    tags: { type: Array, default: () => [] },
+    // 切到别的标签页时本页只是隐藏、不卸载：已加载的图片和滚动位置都要留着。
+    pageActive: { type: Boolean, default: true }
   },
   emits: ['open-settings'],
   data() {
@@ -439,6 +448,10 @@ export default {
       mediaHeight: 0,
       scrollOwnerEl: null,
       scrollOwnerMissing: false,
+      // 切走前记下的滚动位置，切回来照原样恢复。
+      inactiveScrollTop: 0,
+      // 切回本页时探到列表首页与已加载的不一致，就提示可刷新（不自动刷，免得丢滚动位置）。
+      libraryChanged: false,
       loadMoreQueued: false,
       windowState: { startRow: 0, endRow: 0, topSpacer: 0, bottomSpacer: 0, totalHeight: 0 }
     };
@@ -500,6 +513,11 @@ export default {
     cleanupDone() {
       const s = photoCleanupStore.status;
       return Boolean(!s?.running && s?.completed && s?.analysis);
+    },
+    // 后台跑完不自动重来，徽标直接报出待审阅组数，提醒去处理。
+    cleanupGroupCount() {
+      const analysis = photoCleanupStore.status?.analysis;
+      return (analysis?.duplicate_groups?.length || 0) + (analysis?.near_duplicate_groups?.length || 0);
     },
     cleanupProgressText() {
       const p = photoCleanupStore.status?.progress || {};
@@ -570,6 +588,16 @@ export default {
     // Vue 3 的非深度侦听只在整个引用被替换时触发，watch images 会让翻页后的窗口永远不刷新。
     'images.length'() {
       this.$nextTick(() => this.syncWindow());
+    },
+    // 滚动容器（.main-view）是各页共用的：切走时别的页面会把 scrollTop 改掉，
+    // 所以离开前记下位置，切回来再放回去，不用从头往下滑。
+    pageActive(active) {
+      if (!active) {
+        this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
+        return;
+      }
+      this.$nextTick(() => this.restoreScrollPosition());
+      this.checkLibraryFreshness();
     }
   },
   mounted() {
@@ -663,6 +691,8 @@ export default {
     // handleGridResize 在列数/卡片高度变化后重算布局，并把重算前视口顶部那张照片放回视口顶，
     // 避免宽度变化时滚动位置跳回列表开头。
     handleGridResize() {
+      // 隐藏时 ResizeObserver 会报 0 宽，按它重算会把布局清空。
+      if (!this.pageActive) return;
       const anchorIndex = this.virtualized
         ? firstVisiblePhotoItemIndex(this.layout, this.windowState.startRow)
         : -1;
@@ -684,7 +714,27 @@ export default {
       });
     },
     handleOwnerScroll() {
+      // 本页隐藏时滚动的是别的页面，别拿那个位置去算本页的可视窗口。
+      if (!this.pageActive) return;
       this.syncWindow();
+    },
+    // 切回本页：先按记下的位置回写，再让虚拟化窗口跟上。占位块高度要等窗口重算后才
+    // 回到原尺寸，浏览器可能先把 scrollTop 夹小，所以下一帧再校正一次。
+    restoreScrollPosition() {
+      this.resolveScrollOwner();
+      const target = this.inactiveScrollTop;
+      if (!this.scrollOwnerEl) return;
+      if (target > 0) this.scrollOwnerEl.scrollTop = target;
+      this.syncWindow(true);
+      if (target <= 0) return;
+      const settle = () => {
+        if (!this.scrollOwnerEl || !this.pageActive) return;
+        if (this.scrollOwnerEl.scrollTop === target) return;
+        this.scrollOwnerEl.scrollTop = target;
+        this.syncWindow();
+      };
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(settle);
+      else settle();
     },
     syncWindow(remeasure = false, allowLoadMore = true) {
       this.resolveScrollOwner();
@@ -778,9 +828,36 @@ export default {
         max_size: 0
       };
     },
+    // checkLibraryFreshness 只比对列表首页：拉一页当前筛选下的结果，和已加载的前一页比 id。
+    // 不动任何列表状态，只决定要不要亮提示条——自动重新加载会把滚动位置冲掉。
+    async checkLibraryFreshness() {
+      if (this.libraryChanged || this.loading || !this.loadedOnce) return;
+      // 语义搜索是一次性查询结果，没有"库里多了几张"这个概念，跳过。
+      if (this.searchMode === 'semantic') return;
+      const token = this._queryToken;
+      try {
+        const page = await SearchImagePage({ filter: this.buildFilter(), limit: PAGE_SIZE });
+        if (this._queryToken !== token) return;
+        const incoming = (page?.images || []).map(image => Number(image.id));
+        const loaded = this.images.slice(0, incoming.length).map(image => Number(image.id));
+        if (incoming.length !== loaded.length || incoming.some((id, index) => id !== loaded[index])) {
+          this.libraryChanged = true;
+        }
+      } catch (err) {
+        // 探测失败不打扰用户：下次切回来再试。
+      }
+    },
+    async applyLibraryRefresh() {
+      this.libraryChanged = false;
+      await this.reload();
+      if (this.scrollOwnerEl) this.scrollOwnerEl.scrollTop = 0;
+      this.inactiveScrollTop = 0;
+      this.syncWindow(true);
+    },
     async reload() {
       const token = Symbol('photo-query');
       this._queryToken = token;
+      this.libraryChanged = false;
       this.images = [];
       // 文件名游标分页与语义 offset 分页是两套状态，切换时一并清空避免串档。
       this.nextCursor = null;
@@ -1014,6 +1091,7 @@ export default {
       }
     },
     handleKeydown(event) {
+      if (!this.pageActive) return;
       if (this.viewerIndex < 0) return;
       const tag = event.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
@@ -1116,6 +1194,8 @@ export default {
         }
         // 分组头显示的是后端整组总数，删掉一张后要同步减一，否则计数长期偏大。
         this.adjustTimelineBucket(image, -1);
+        // 后端已把清理分析标记为过期，空闲时不轮询，得主动同步一次。
+        refreshPhotoCleanupStatus();
       } catch (err) {
         this.error = `删除图片失败：${err}`;
       }
@@ -1127,6 +1207,13 @@ export default {
         this.adjustTimelineBucket(image, 1);
       }
       this.loadedOnce = true;
+      // 恢复回来的图片不该再在清理审阅里显示为"已删除"。
+      const restoredID = Number(image.id);
+      const review = photoCleanupStore.review;
+      if (review.deletedIDs.includes(restoredID)) {
+        review.deletedIDs = review.deletedIDs.filter(id => id !== restoredID);
+      }
+      refreshPhotoCleanupStatus();
     }
   }
 };
@@ -1157,6 +1244,10 @@ export default {
 .photo-search-mode__btn.active { background: var(--panel-bg); color: var(--text-primary); }
 .photo-search-mode__btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__semantic-notice { margin: 0; color: var(--text-muted); font-size: 12px; }
+.photo-library__refresh { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--primary-color, #0d9488); border-radius: 10px; background: var(--control-bg); color: var(--text-primary); font-size: 12px; }
+.photo-library__refresh span { flex: 1; min-width: 0; }
+.photo-library__refresh-dismiss { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; }
+.photo-library__refresh-dismiss:hover { background: var(--border-color); color: var(--text-primary); }
 .photo-library__error { margin: 0; color: var(--danger-color); }
 
 /* 虚拟化网格：外层只负责堆叠"行"，列数由 --photo-columns 显式给出（而不是 auto-fill），
@@ -1200,8 +1291,10 @@ export default {
 .photo-empty__actions { display: flex; justify-content: center; gap: 10px; }
 .photo-library__more { align-self: center; }
 
-.photo-viewer { position: fixed; inset: 0; z-index: 200; display: grid; grid-template-columns: minmax(0, 1fr) min(360px, 38vw); background: rgba(8, 12, 20, 0.86); }
-.photo-viewer__stage { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; padding: 48px 56px; }
+/* grid-template-rows 必须显式给一行确定高度：隐式行是 auto，img 的 max-height:100%
+   会因为父级高度不确定而失效，竖图就按原始尺寸撑出视口显示不全。 */
+.photo-viewer { position: fixed; inset: 0; z-index: 200; display: grid; grid-template-columns: minmax(0, 1fr) min(360px, 38vw); grid-template-rows: minmax(0, 1fr); background: rgba(8, 12, 20, 0.86); }
+.photo-viewer__stage { position: relative; display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; overflow: hidden; padding: 48px 56px; }
 .photo-viewer__img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; }
 .photo-viewer__fallback { max-width: 420px; display: grid; gap: 10px; justify-items: center; padding: 24px; border: 1px dashed rgba(255, 255, 255, 0.3); border-radius: 12px; color: rgba(255, 255, 255, 0.75); text-align: center; }
 .photo-viewer__fallback strong { color: #fff; word-break: break-all; }

@@ -13,6 +13,7 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import PhotoLibraryPage from './PhotoLibraryPage.vue';
+import { photoCleanupStore, resetPhotoCleanupReview, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
 
 function makeImage(id, overrides = {}) {
   return {
@@ -42,8 +43,8 @@ function idleCleanupStatus() {
   return { running: false, completed: false, error: '', progress: {}, analysis: null };
 }
 
-function completedCleanupStatus(analysis) {
-  return { running: false, completed: true, error: '', progress: { stage: 'done' }, analysis };
+function completedCleanupStatus(analysis, { stale = false } = {}) {
+  return { running: false, completed: true, error: '', progress: { stage: 'done' }, stale, analysis };
 }
 
 async function mountPage({ settings = baseSettings(), tags = [] } = {}) {
@@ -71,6 +72,12 @@ beforeEach(() => {
   api.RegenerateImageAIDescription.mockResolvedValue({ image_id: 1, description: '', generated_at: null });
   api.ListImageTimelineBuckets.mockResolvedValue([]);
   api.GetImageTags.mockResolvedValue([]);
+  // 删除后是否重新分析改为询问用户；默认答"取消"，让结果留在原地继续审阅。
+  window.confirm = vi.fn(() => false);
+  // 清理审阅状态是模块级共享 store，用例之间必须清干净。
+  stopPhotoCleanupPolling();
+  photoCleanupStore.status = null;
+  resetPhotoCleanupReview('');
 });
 
 // mountInScrollOwner 把页面挂进一个假的 .main-view 滚动宿主里，让虚拟化真正生效。
@@ -591,8 +598,11 @@ describe('PhotoLibraryPage cleanup review', () => {
     await flushPromises();
 
     expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
-    expect(wrapper.find('[data-test="cleanup-exact-section"]').exists()).toBe(true);
-    expect(wrapper.find('[data-test="cleanup-near-section"]').exists()).toBe(true);
+    // 顶层就是目录：两组的推荐保留项都在 /photos，所以只有一个目录区，下挂两个组。
+    const sections = wrapper.findAll('[data-test="cleanup-dir-section"]');
+    expect(sections).toHaveLength(1);
+    const cards = sections[0].findAll('[data-test="cleanup-group-card"]');
+    expect(cards.map(card => card.attributes('data-kind'))).toEqual(['exact', 'near']);
 
     // 每个成员都有勾选框（保留项的禁用）；候选默认勾选、保留项不勾。
     const toggles = wrapper.findAll('[data-test="cleanup-candidate-toggle"]');
@@ -679,7 +689,90 @@ describe('PhotoLibraryPage cleanup review', () => {
     expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
   });
 
-  it('deletes only the selected candidates into the trash and refreshes the analysis', async () => {
+  it('keeps the reviewed result after deleting and only re-analyses when the user confirms', async () => {
+    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] });
+
+    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
+    await flushPromises();
+    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
+
+    // 答"取消"：不重跑，结果留在原地，已删的行置灰标注，剩下的组还能继续审阅。
+    await wrapper.get('[data-test="cleanup-delete-selected"]').trigger('click');
+    await flushPromises();
+
+    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(2);
+    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(2);
+    expect(wrapper.get('[data-test="cleanup-outdated-hint"]').exists()).toBe(true);
+  });
+
+  it('keeps the review progress when the panel is closed and reopened', async () => {
+    const status = completedCleanupStatus({
+      duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()], stale_hash_count: 0
+    });
+    status.started_at = '2026-08-08T09:00:00Z';
+    api.GetImageCleanupStatus.mockResolvedValue(status);
+    api.StartImageCleanupAnalysis.mockResolvedValue(status);
+    api.SearchImagePage.mockResolvedValue(makePage([]));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await flushPromises();
+
+    // 两个候选默认勾选，取消其中一个 + 折叠目录，模拟审阅到一半。
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
+    await wrapper.findAll('[data-test="cleanup-candidate-toggle"]')[1].setValue(false);
+    await wrapper.get('[data-test="cleanup-dir-toggle"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+
+    // 关掉面板再打开：勾选和折叠都还在，不用从头再勾一遍。
+    await wrapper.get('[data-test="photo-cleanup-panel"] .btn-secondary').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+    expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(0);
+  });
+
+  it('keeps the results visible when part of the deletion fails and only greys the ones that went through', async () => {
+    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] });
+    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
+    await flushPromises();
+
+    // 候选 id=2、id=4 默认勾选；id=4 删除失败。
+    api.BatchDeleteImages.mockResolvedValue({
+      requested: 2, succeeded: 1, failed: 1, errors: [{ image_id: 4, error: 'record not found' }]
+    });
+    await wrapper.get('[data-test="cleanup-delete-selected"]').trigger('click');
+    await flushPromises();
+
+    // 结果没有被错误信息顶掉，两组还在，可以接着审阅。
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(2);
+    expect(wrapper.get('[data-test="cleanup-error"]').text()).toContain('1 张图片删除失败');
+    // 只有真正删掉的那张置灰；失败的那张仍然勾着可以重试。
+    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(1);
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+  });
+
+  it('re-reads the backend status when the panel opens so an outdated result is flagged', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([]));
+    const wrapper = await mountPage();
+
+    // 面板打开时后端已经把结果标记为过期（例如刚从网格里删了一张图）。
+    api.GetImageCleanupStatus.mockResolvedValue(
+      completedCleanupStatus({ duplicate_groups: [exactGroup()], near_duplicate_groups: [], stale_hash_count: 0 }, { stale: true })
+    );
+    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="cleanup-outdated-hint"]').exists()).toBe(true);
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(1);
+  });
+
+  it('deletes only the selected candidates into the trash and re-analyses when confirmed', async () => {
+    window.confirm.mockReturnValue(true);
     const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] });
 
     await wrapper.get('[data-test="cleanup-start"]').trigger('click');
@@ -825,6 +918,78 @@ describe('PhotoLibraryPage grid virtualization', () => {
     expect(wrapper.findAll('.photo-card').length).toBeLessThan(100);
     expect(wrapper.vm.windowState.endRow).toBe(wrapper.vm.layout.rows.length);
     expect(wrapper.vm.windowState.bottomSpacer).toBe(0);
+    cleanup();
+  });
+
+  it('keeps its scroll position when the tab is switched away and back', async () => {
+    const images = Array.from({ length: 3000 }, (_, index) => makeImage(index + 1));
+    api.SearchImagePage.mockResolvedValue(makePage(images, null));
+
+    const { wrapper, host, scrollTo, cleanup } = await mountInScrollOwner();
+
+    const target = Math.floor(wrapper.vm.layout.totalHeight / 2);
+    await scrollTo(target);
+    const startRow = wrapper.vm.windowState.startRow;
+    expect(startRow).toBeGreaterThan(0);
+
+    // 切到别的标签页：本页只隐藏不卸载，共用的 .main-view 被别的页面归零。
+    await wrapper.setProps({ pageActive: false });
+    host.scrollTop = 0;
+    host.dispatchEvent(new Event('scroll'));
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.windowState.startRow).toBe(startRow);
+
+    // 切回来：位置和渲染窗口都回到原处，不用重新往下滑。
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(host.scrollTop).toBe(target);
+    expect(wrapper.vm.windowState.startRow).toBe(startRow);
+    // 切回来只探一次首页判断要不要提示，已加载的列表原封不动（不会被重新拉一遍）。
+    expect(wrapper.vm.images).toHaveLength(3000);
+    expect(wrapper.find('[data-test="photo-library-refresh"]').exists()).toBe(false);
+    cleanup();
+  });
+
+  it('offers a refresh bar when the library changed while the tab was away, without moving the scroll', async () => {
+    const images = Array.from({ length: 200 }, (_, index) => makeImage(index + 1));
+    api.SearchImagePage.mockResolvedValue(makePage(images, null));
+
+    const { wrapper, host, scrollTo, cleanup } = await mountInScrollOwner();
+    const target = Math.floor(wrapper.vm.layout.totalHeight / 2);
+    await scrollTo(target);
+
+    // 切走期间扫描到一张新图，回来时首页第一条变了。
+    await wrapper.setProps({ pageActive: false });
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(999), ...images], null));
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+
+    // 只提示，不自动刷新：位置还在原处，列表也还是原来那批。
+    expect(wrapper.get('[data-test="photo-library-refresh"]').exists()).toBe(true);
+    expect(host.scrollTop).toBe(target);
+    expect(wrapper.vm.images[0].id).toBe(1);
+
+    // 点刷新才真正重新加载，并回到顶部。
+    await wrapper.get('[data-test="photo-library-refresh-apply"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.images[0].id).toBe(999);
+    expect(host.scrollTop).toBe(0);
+    expect(wrapper.find('[data-test="photo-library-refresh"]').exists()).toBe(false);
+    cleanup();
+  });
+
+  it('stays quiet when nothing changed while the tab was away', async () => {
+    const images = Array.from({ length: 200 }, (_, index) => makeImage(index + 1));
+    api.SearchImagePage.mockResolvedValue(makePage(images, null));
+
+    const { wrapper, scrollTo, cleanup } = await mountInScrollOwner();
+    await scrollTo(400);
+
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="photo-library-refresh"]').exists()).toBe(false);
     cleanup();
   });
 

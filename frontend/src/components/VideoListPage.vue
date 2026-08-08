@@ -94,7 +94,11 @@
         </button>
         <button type="button" class="btn-secondary" @click="openAITagReviewDialog()">AI 标签管理</button>
         <span v-if="aiTagSummary.same_source_unread" class="ai-review-badge" title="未读同源视频关系">{{ aiTagSummary.same_source_unread }}</span>
-        <button type="button" class="btn-secondary" @click="openCleanupDialog()">清理候选</button>
+        <button type="button" class="btn-secondary cleanup-open-btn" @click="openCleanupDialog()">
+          清理候选
+          <span v-if="cleanupDialog.loading" class="cleanup-badge" data-test="cleanup-badge-running">分析中 {{ cleanupDialog.progress.total > 0 ? `${cleanupDialog.progress.current}/${cleanupDialog.progress.total}` : '…' }}</span>
+          <span v-else-if="cleanupBadgeCount" class="cleanup-badge cleanup-badge--done" data-test="cleanup-badge-done" title="清理分析已完成，点击查看候选">待审阅 {{ cleanupBadgeCount }} 项</span>
+        </button>
         <button type="button" class="btn-secondary" @click="openTrashDialog">回收站</button>
         <button type="button" class="btn-secondary" :disabled="technicalBackfill.running" @click="startTechnicalBackfill">
           {{ technicalBackfill.running ? (technicalBackfill.preparing ? '正在统计待补全视频...' : `技术信息 ${technicalBackfill.processed}/${technicalBackfill.total}`) : '补全技术信息' }}
@@ -534,90 +538,14 @@
               <span>已选 {{ cleanupSelection.length }}</span>
             </div>
 
-            <div v-if="cleanupDialog.analysis.same_source_groups?.length" class="cleanup-section">
-              <h4 class="cleanup-section-title">疑似同源（不会默认选中）</h4>
-              <div
-                v-for="group in cleanupDialog.analysis.same_source_groups"
-                :key="`same-source-${group.relation_id}`"
-                class="cleanup-card"
-              >
-                <div class="cleanup-select-row cleanup-select-row--original">
-                  <strong>建议保留：</strong>
-                  <div class="cleanup-item-text">
-                    <span class="cleanup-item-main">{{ group.preferred?.name }} · {{ group.preferred?.resolution || '未知分辨率' }} · {{ formatDuration(group.preferred?.duration) || '00:00' }}</span>
-                    <span v-if="group.preferred?.path" class="cleanup-item-path" :title="group.preferred.path">{{ group.preferred.path }}</span>
-                  </div>
-                  <div class="cleanup-item-actions">
-                    <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(group.preferred)">预览保留项</button>
-                  </div>
-                </div>
-                <p><strong>判断：</strong>{{ group.reason }}<span v-if="group.confidence"> · 置信度 {{ group.confidence }}</span></p>
-                <div class="cleanup-select-row">
-                  <input
-                    type="checkbox"
-                    :checked="isCleanupSelected(group.alternative?.id)"
-                    @change="toggleCleanupSelection(group.alternative?.id)"
-                  />
-                  <span class="cleanup-item-text">
-                    <span class="cleanup-item-main">可清理版本：{{ group.alternative?.name }} · 预计释放 {{ formatFileSize(group.estimated_savings) }}</span>
-                    <span v-if="group.alternative?.path" class="cleanup-item-path" :title="group.alternative.path">{{ group.alternative.path }}</span>
-                  </span>
-                  <span class="cleanup-item-actions">
-                    <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(group.alternative)">预览该版本</button>
-                    <button type="button" class="btn-secondary btn-compact" @click="rejectCleanupSameSource(group)">不是同源</button>
-                  </span>
-                </div>
-              </div>
-            </div>
+            <p v-if="cleanupResultStale" class="cleanup-outdated" data-test="cleanup-outdated-hint">
+              视频库在本次分析之后发生过变化，下面的结果可能已过期。你可以继续审阅，也可以点「重新分析」刷新候选。
+            </p>
 
             <div v-if="cleanupCandidateCount" class="cleanup-toolbar">
               <button @click="selectAllCleanupCandidates" class="btn-secondary">全选候选</button>
               <button @click="clearCleanupSelection" class="btn-secondary" :disabled="cleanupSelection.length === 0">清空选择</button>
               <button @click="reanalyzeCleanupCandidates" class="btn-secondary" :disabled="cleanupDialog.loading || cleanupDialog.processing">重新分析</button>
-            </div>
-
-            <div v-if="cleanupDialog.analysis.duplicate_groups?.length" class="cleanup-section">
-              <h4 class="cleanup-section-title">重复候选</h4>
-              <div
-                v-for="group in cleanupDialog.analysis.duplicate_groups"
-                :key="`${group.original?.id}-${group.candidates?.length}`"
-                class="cleanup-card"
-              >
-                <div class="cleanup-select-row cleanup-select-row--original">
-                  <input
-                    type="checkbox"
-                    :checked="isCleanupSelected(group.original?.id)"
-                    @change="toggleCleanupSelection(group.original?.id)"
-                  />
-                  <strong>建议保留：</strong>
-                  <div class="cleanup-item-text">
-                    <span class="cleanup-item-main">{{ group.original?.name }} · {{ group.original?.resolution || '未知分辨率' }} · {{ formatDuration(group.original?.duration) || '00:00' }}</span>
-                    <span v-if="group.original?.path" class="cleanup-item-path" :title="group.original.path">{{ group.original.path }}</span>
-                  </div>
-                  <div class="cleanup-item-actions">
-                    <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(group.original)">预览</button>
-                  </div>
-                </div>
-                <p><strong>原因：</strong>{{ group.reason }}</p>
-                <ul>
-                  <li v-for="candidate in group.candidates || []" :key="candidate.id">
-                    <div class="cleanup-select-row">
-                      <input
-                        type="checkbox"
-                        :checked="isCleanupSelected(candidate.id)"
-                        @change="toggleCleanupSelection(candidate.id)"
-                      />
-                      <span class="cleanup-item-text">
-                        <span class="cleanup-item-main">{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }} · {{ formatDuration(candidate.duration) || '00:00' }}</span>
-                        <span v-if="candidate.path" class="cleanup-item-path" :title="candidate.path">{{ candidate.path }}</span>
-                      </span>
-                      <span class="cleanup-item-actions">
-                        <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(candidate)">预览</button>
-                      </span>
-                    </div>
-                  </li>
-                </ul>
-              </div>
             </div>
 
             <div v-if="cleanupDialog.analysis.stale_hash_count" class="cleanup-section cleanup-stale-hash-hint">
@@ -627,93 +555,131 @@
               </button>
             </div>
 
-            <div v-if="cleanupDialog.analysis.near_duplicate_groups?.length" class="cleanup-section">
-              <h4 class="cleanup-section-title">近似重复（不同转码，不会默认选中）</h4>
-              <div
-                v-for="group in cleanupDialog.analysis.near_duplicate_groups"
-                :key="`near-${group.original?.id}-${group.candidates?.length}`"
-                class="cleanup-card"
+            <!-- 顶层按目录展示：每条候选归到"建议保留项"所在目录，组员可以位于别的目录。 -->
+            <div
+              v-for="section in cleanupDirectorySections"
+              :key="section.directory"
+              class="cleanup-section"
+              data-test="cleanup-dir-section"
+            >
+              <button
+                type="button"
+                class="cleanup-dir-toggle"
+                :title="section.directory"
+                :aria-expanded="!isCleanupDirCollapsed(section.directory)"
+                data-test="cleanup-dir-toggle"
+                @click="toggleCleanupDir(section.directory)"
               >
-                <div class="cleanup-select-row cleanup-select-row--original">
-                  <input
-                    type="checkbox"
-                    :checked="isCleanupSelected(group.original?.id)"
-                    @change="toggleCleanupSelection(group.original?.id)"
-                  />
-                  <strong>建议保留：</strong>
-                  <div class="cleanup-item-text">
-                    <span class="cleanup-item-main">{{ group.original?.name }} · {{ group.original?.resolution || '未知分辨率' }} · {{ formatDuration(group.original?.duration) || '00:00' }}</span>
-                    <span v-if="group.original?.path" class="cleanup-item-path" :title="group.original.path">{{ group.original.path }}</span>
-                  </div>
-                  <div class="cleanup-item-actions">
-                    <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(group.original)">预览</button>
-                    <button type="button" class="btn-secondary btn-compact" @click="dismissNearDuplicateGroup(group)">不是同片</button>
-                  </div>
-                </div>
-                <p><strong>原因：</strong>{{ group.reason }}</p>
-                <ul>
-                  <li v-for="candidate in group.candidates || []" :key="`near-${candidate.id}`">
+                <span class="cleanup-dir-toggle__chevron">{{ isCleanupDirCollapsed(section.directory) ? '▸' : '▾' }}</span>
+                <span class="cleanup-dir-toggle__label">目录</span>
+                <span class="cleanup-dir-toggle__path">{{ section.directory }}</span>
+                <span class="cleanup-dir-toggle__count">{{ section.entries.length }} 项 · {{ section.videoCount }} 个视频</span>
+              </button>
+
+              <template v-if="!isCleanupDirCollapsed(section.directory)">
+                <div
+                  v-for="entry in section.entries"
+                  :key="entry.key"
+                  class="cleanup-card"
+                  data-test="cleanup-group-card"
+                  :data-kind="entry.kind"
+                >
+                  <div class="cleanup-card-kind">{{ cleanupKindLabel(entry.kind) }}</div>
+
+                  <!-- 疑似同源：保留项不给勾选框，只清理可替代版本。 -->
+                  <template v-if="entry.kind === 'same-source'">
+                    <div class="cleanup-select-row cleanup-select-row--original">
+                      <strong>建议保留：</strong>
+                      <div class="cleanup-item-text">
+                        <span class="cleanup-item-main">{{ entry.keeper?.name }} · {{ entry.keeper?.resolution || '未知分辨率' }} · {{ formatDuration(entry.keeper?.duration) || '00:00' }}</span>
+                        <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
+                      </div>
+                      <div class="cleanup-item-actions">
+                        <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.keeper)">预览保留项</button>
+                      </div>
+                    </div>
+                    <p><strong>判断：</strong>{{ entry.group.reason }}<span v-if="entry.group.confidence"> · 置信度 {{ entry.group.confidence }}</span></p>
                     <div class="cleanup-select-row">
                       <input
                         type="checkbox"
-                        :checked="isCleanupSelected(candidate.id)"
-                        @change="toggleCleanupSelection(candidate.id)"
+                        :checked="isCleanupSelected(entry.group.alternative?.id)"
+                        :disabled="isCleanupTrashed(entry.group.alternative)"
+                        @change="toggleCleanupSelection(entry.group.alternative?.id)"
                       />
                       <span class="cleanup-item-text">
-                        <span class="cleanup-item-main">{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }} · {{ formatDuration(candidate.duration) || '00:00' }}</span>
-                        <span v-if="candidate.path" class="cleanup-item-path" :title="candidate.path">{{ candidate.path }}</span>
+                        <span class="cleanup-item-main">可清理版本：{{ entry.group.alternative?.name }} · 预计释放 {{ formatFileSize(entry.group.estimated_savings) }}</span>
+                        <span v-if="entry.group.alternative?.path" class="cleanup-item-path" :title="entry.group.alternative.path">{{ entry.group.alternative.path }}</span>
+                        <span v-if="cleanupVideoDirectory(entry.group.alternative) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(entry.group.alternative) }}</span>
                       </span>
                       <span class="cleanup-item-actions">
-                        <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(candidate)">预览</button>
+                        <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.group.alternative)">预览该版本</button>
+                        <button type="button" class="btn-secondary btn-compact" @click="rejectCleanupSameSource(entry.group)">不是同源</button>
                       </span>
                     </div>
-                  </li>
-                </ul>
-              </div>
-            </div>
+                  </template>
 
-            <div v-if="cleanupDialog.analysis.low_resolution?.length" class="cleanup-section">
-              <h4 class="cleanup-section-title">低清视频</h4>
-              <ul>
-                <li v-for="video in cleanupDialog.analysis.low_resolution" :key="`res-${video.id}`">
-                  <div class="cleanup-select-row">
-                    <input
-                      type="checkbox"
-                      :checked="isCleanupSelected(video.id)"
-                      @change="toggleCleanupSelection(video.id)"
-                    />
-                    <span class="cleanup-item-text">
-                      <span class="cleanup-item-main">{{ video.name }} · {{ video.resolution || '未知分辨率' }} · {{ formatDuration(video.duration) || '00:00' }}</span>
-                      <span v-if="video.path" class="cleanup-item-path" :title="video.path">{{ video.path }}</span>
-                    </span>
-                    <span class="cleanup-item-actions">
-                      <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(video)">预览</button>
-                    </span>
-                  </div>
-                </li>
-              </ul>
-            </div>
+                  <!-- 精确重复 / 近似重复 -->
+                  <template v-else-if="entry.kind === 'exact' || entry.kind === 'near'">
+                    <div class="cleanup-select-row cleanup-select-row--original" :class="{ 'cleanup-select-row--trashed': isCleanupTrashed(entry.keeper) }">
+                      <input
+                        type="checkbox"
+                        :checked="isCleanupSelected(entry.keeper?.id)"
+                        :disabled="isCleanupTrashed(entry.keeper)"
+                        @change="toggleCleanupSelection(entry.keeper?.id)"
+                      />
+                      <strong>建议保留：</strong>
+                      <div class="cleanup-item-text">
+                        <span class="cleanup-item-main">{{ entry.keeper?.name }} · {{ entry.keeper?.resolution || '未知分辨率' }} · {{ formatDuration(entry.keeper?.duration) || '00:00' }}</span>
+                        <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
+                      </div>
+                      <div class="cleanup-item-actions">
+                        <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.keeper)">预览</button>
+                        <button v-if="entry.kind === 'near'" type="button" class="btn-secondary btn-compact" @click="dismissNearDuplicateGroup(entry.group)">不是同片</button>
+                      </div>
+                    </div>
+                    <p><strong>原因：</strong>{{ entry.group.reason }}</p>
+                    <ul>
+                      <li v-for="candidate in entry.group.candidates || []" :key="`${entry.key}-${candidate.id}`">
+                        <div class="cleanup-select-row" :class="{ 'cleanup-select-row--trashed': isCleanupTrashed(candidate) }">
+                          <input
+                            type="checkbox"
+                            :checked="isCleanupSelected(candidate.id)"
+                            :disabled="isCleanupTrashed(candidate)"
+                            @change="toggleCleanupSelection(candidate.id)"
+                          />
+                          <span class="cleanup-item-text">
+                            <span class="cleanup-item-main">{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }} · {{ formatDuration(candidate.duration) || '00:00' }}</span>
+                            <span v-if="candidate.path" class="cleanup-item-path" :title="candidate.path">{{ candidate.path }}</span>
+                            <span v-if="cleanupVideoDirectory(candidate) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(candidate) }}</span>
+                          </span>
+                          <span class="cleanup-item-actions">
+                            <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(candidate)">预览</button>
+                          </span>
+                        </div>
+                      </li>
+                    </ul>
+                  </template>
 
-            <div v-if="cleanupDialog.analysis.low_duration?.length" class="cleanup-section">
-              <h4 class="cleanup-section-title">短视频</h4>
-              <ul>
-                <li v-for="video in cleanupDialog.analysis.low_duration" :key="`dur-${video.id}`">
-                  <div class="cleanup-select-row">
-                    <input
-                      type="checkbox"
-                      :checked="isCleanupSelected(video.id)"
-                      @change="toggleCleanupSelection(video.id)"
-                    />
-                    <span class="cleanup-item-text">
-                      <span class="cleanup-item-main">{{ video.name }} · {{ formatDuration(video.duration) || '00:00' }} · {{ video.resolution || '未知分辨率' }}</span>
-                      <span v-if="video.path" class="cleanup-item-path" :title="video.path">{{ video.path }}</span>
-                    </span>
-                    <span class="cleanup-item-actions">
-                      <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(video)">预览</button>
-                    </span>
-                  </div>
-                </li>
-              </ul>
+                  <!-- 低清视频 / 短视频：单条候选，没有保留项。 -->
+                  <template v-else>
+                    <div class="cleanup-select-row">
+                      <input
+                        type="checkbox"
+                        :checked="isCleanupSelected(entry.keeper?.id)"
+                        :disabled="isCleanupTrashed(entry.keeper)"
+                        @change="toggleCleanupSelection(entry.keeper?.id)"
+                      />
+                      <span class="cleanup-item-text">
+                        <span class="cleanup-item-main">{{ entry.keeper?.name }} · {{ entry.keeper?.resolution || '未知分辨率' }} · {{ formatDuration(entry.keeper?.duration) || '00:00' }}</span>
+                        <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
+                      </span>
+                      <span class="cleanup-item-actions">
+                        <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.keeper)">预览</button>
+                      </span>
+                    </div>
+                  </template>
+                </div>
+              </template>
             </div>
 
             <div
@@ -1212,18 +1178,43 @@
 .cleanup-section {
   margin-top: 18px;
 }
-.cleanup-section-title {
-  position: sticky;
-  top: -16px;
-  z-index: 1;
-  margin: 0 0 10px;
-  padding: 8px 0;
-  font-size: 14px;
-  font-weight: 700;
+.cleanup-outdated {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border: 1px solid var(--primary-color, #0d9488);
+  border-radius: 8px;
+  background: var(--review-subtle-bg);
   color: var(--review-text-strong);
-  background: var(--panel-bg);
-  border-bottom: 1px solid var(--border-color);
+  font-size: 12px;
 }
+.cleanup-dir-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 10px;
+  padding: 8px 6px;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  color: var(--review-text-strong);
+  font-size: 12px;
+  font-family: var(--font-mono, monospace);
+  text-align: left;
+  cursor: pointer;
+}
+.cleanup-dir-toggle__chevron { flex: none; width: 12px; }
+.cleanup-dir-toggle__label {
+  flex: none;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--review-subtle-bg);
+  font-family: inherit;
+  font-size: 10px;
+}
+.cleanup-dir-toggle__path { flex: 1; min-width: 0; word-break: break-all; }
+.cleanup-dir-toggle__count { flex: none; font-size: 10px; font-family: inherit; white-space: nowrap; opacity: 0.75; }
 .cleanup-card {
   padding: 12px 14px;
   border: 1px solid var(--review-border-color);
@@ -1231,6 +1222,30 @@
   margin-top: 10px;
   background: var(--review-subtle-bg);
 }
+.cleanup-card-kind {
+  margin-bottom: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--review-text-strong);
+  opacity: 0.8;
+}
+.cleanup-item-otherdir {
+  display: block;
+  font-size: 10px;
+  font-family: var(--font-mono, monospace);
+  opacity: 0.7;
+}
+.cleanup-select-row--trashed { opacity: 0.45; text-decoration: line-through; }
+.cleanup-open-btn { display: inline-flex; align-items: center; gap: 6px; }
+.cleanup-badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 10px;
+  white-space: nowrap;
+}
+.cleanup-badge--done { background: var(--primary-color, #0d9488); color: #fff; }
 .cleanup-card p,
 .cleanup-card ul,
 .cleanup-section ul {
@@ -1502,9 +1517,16 @@ export default {
         processing: false,
         analysis: null,
         error: '',
+        // stale：结果算出后视频库又变过，提示可能过期但保留结果继续审阅。
+        stale: false,
         progress: { stage: '', message: '', current: 0, total: 0, path: '' }
       },
       cleanupSelection: [],
+      // 切走前记下共用滚动容器的位置，切回来照原样恢复（图片页也在用同一个容器）。
+      inactiveScrollTop: 0,
+      cleanupCollapsedDirs: {},
+      // 本次审阅中已移入回收站的视频 id：结果不重跑，用来提示结果已过期。
+      cleanupTrashedIDs: [],
       cleanupStartedAt: 0,
       cleanupNow: Date.now(),
       cleanupTimer: null,
@@ -1562,6 +1584,8 @@ export default {
     this.refreshPerceptualHashBackfillStatus();
     this.refreshLocalMetadataBackfillStatus();
 	this.refreshLocalMetadataExportStatus();
+    // 回到列表页时先取一次清理分析状态，后台跑出来的结果才能在按钮徽标上提醒。
+    this.refreshCleanupStatus();
     this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
     this.attachWheelFallback();
 	window.addEventListener('keydown', this.handleLibraryShortcut);
@@ -1624,10 +1648,9 @@ export default {
         this.applySubtitleQueueState(data);
       });
 
+      // 面板关闭（后台继续分析）时也要处理：否则后台跑完没人记录结果，
+      // 重新打开只能看到停在关闭那一刻的旧进度。
       this.registerRuntimeEvent('cleanup-progress', async (data) => {
-        if (!this.cleanupDialog.show) {
-          return;
-        }
         this.startCleanupProgressTracking();
         this.cleanupDialog.loading = data?.stage !== 'done';
         this.cleanupDialog.progress = {
@@ -1638,8 +1661,15 @@ export default {
           path: data?.path || ''
         };
         if (data?.stage === 'done') {
-          const status = await GetCleanupStatus();
-          this.applyCleanupStatus(status);
+          // 回读失败也必须收尾，否则 1 秒计时器和"分析中"徽标会一直挂着。
+          try {
+            const status = await GetCleanupStatus();
+            this.applyCleanupStatus(status);
+          } catch (err) {
+            console.error('读取清理分析结果失败:', err);
+            this.cleanupDialog.loading = false;
+            this.resetCleanupProgressTracking();
+          }
         }
       });
 
@@ -1671,6 +1701,23 @@ export default {
     }
   },
   watch: {
+    // .main-view 是各页共用的滚动容器：切走时别的页面会改掉 scrollTop，
+    // 所以离开前记下位置，切回来再放回去。
+    pageActive(active) {
+      const owner = this.$el?.closest?.('.main-view');
+      if (!owner) return;
+      if (!active) {
+        this.inactiveScrollTop = owner.scrollTop || 0;
+        return;
+      }
+      const target = this.inactiveScrollTop;
+      if (target <= 0) return;
+      this.$nextTick(() => {
+        const el = this.$el?.closest?.('.main-view');
+        if (!el) return;
+        el.scrollTop = target;
+      });
+    },
     directories: {
       handler() {
         if (this.settings?.auto_scan_on_startup) {
@@ -1745,6 +1792,52 @@ export default {
     },
     cleanupCandidateCount() {
       return this.getAllCleanupCandidates().length;
+    },
+    cleanupResultStale() {
+      return Boolean(this.cleanupDialog.analysis && (this.cleanupDialog.stale || this.cleanupTrashedIDs.length));
+    },
+    // 顶层按目录分组：每条候选归到"建议保留项"所在目录（单条候选就按它自己的目录），
+    // 组员仍可位于别的目录，行内会标出来。
+    cleanupDirectorySections() {
+      const analysis = this.cleanupDialog.analysis;
+      if (!analysis) return [];
+      const buckets = new Map();
+      const push = (kind, key, group, keeper, members) => {
+        const directory = this.cleanupVideoDirectory(keeper);
+        if (!buckets.has(directory)) buckets.set(directory, { directory, entries: [], videoCount: 0 });
+        const bucket = buckets.get(directory);
+        bucket.entries.push({ kind, key, group, keeper, members });
+        bucket.videoCount += members.length;
+      };
+      for (const group of analysis.same_source_groups || []) {
+        push('same-source', `same-source-${group.relation_id}`, group, group.preferred,
+          [group.preferred, group.alternative].filter(Boolean));
+      }
+      for (const group of analysis.duplicate_groups || []) {
+        push('exact', `exact-${group.original?.id}`, group, group.original,
+          [group.original, ...(group.candidates || [])].filter(Boolean));
+      }
+      for (const group of analysis.near_duplicate_groups || []) {
+        push('near', `near-${group.original?.id}`, group, group.original,
+          [group.original, ...(group.candidates || [])].filter(Boolean));
+      }
+      for (const video of analysis.low_resolution || []) {
+        push('low-resolution', `res-${video.id}`, null, video, [video]);
+      }
+      for (const video of analysis.low_duration || []) {
+        push('low-duration', `dur-${video.id}`, null, video, [video]);
+      }
+      return [...buckets.values()].sort((a, b) => a.directory.localeCompare(b.directory));
+    },
+    // 后台跑完不自动重来，按钮徽标直接报出待审阅项数，提醒去处理。
+    cleanupBadgeCount() {
+      const analysis = this.cleanupDialog.analysis;
+      if (!analysis) return 0;
+      return (analysis.duplicate_groups?.length || 0)
+        + (analysis.near_duplicate_groups?.length || 0)
+        + (analysis.same_source_groups?.length || 0)
+        + (analysis.low_resolution?.length || 0)
+        + (analysis.low_duration?.length || 0);
     },
     selectedSubtitleEngineStatus() {
       return this.subtitleEngineStatuses.find(status => status.engine === this.selectedSubtitleEngine) || null;
@@ -2088,8 +2181,12 @@ export default {
 		alert('取消 NFO 写出失败: ' + err);
 	  }
 	},
-    startCleanupProgressTracking() {
-      if (!this.cleanupStartedAt) {
+    startCleanupProgressTracking(startedAt = 0) {
+      // 进列表页时分析可能早就在跑了，用后端的 started_at 才能算对已运行时长。
+      const backendStart = startedAt ? new Date(startedAt).getTime() : 0;
+      if (Number.isFinite(backendStart) && backendStart > 0) {
+        this.cleanupStartedAt = backendStart;
+      } else if (!this.cleanupStartedAt) {
         this.cleanupStartedAt = Date.now();
       }
       this.cleanupNow = Date.now();
@@ -2111,14 +2208,35 @@ export default {
         this.cleanupDialog.progress = { stage: '', message: '', current: 0, total: 0, path: '' };
       }
     },
+    cleanupVideoDirectory(video) {
+      return String(video?.directory || '').trim() || '未知目录';
+    },
+    cleanupKindLabel(kind) {
+      if (kind === 'same-source') return '疑似同源（不会默认选中）';
+      if (kind === 'exact') return '精确重复';
+      if (kind === 'near') return '近似重复（不同转码，不会默认选中）';
+      if (kind === 'low-resolution') return '低清视频';
+      return '短视频';
+    },
+    // 结果不重跑，已移入回收站的行留在原地但置灰禁选，避免重复删已删的项。
+    isCleanupTrashed(video) {
+      return this.cleanupTrashedIDs.includes(Number(video?.id));
+    },
+    isCleanupDirCollapsed(directory) {
+      return !!this.cleanupCollapsedDirs[directory];
+    },
+    toggleCleanupDir(directory) {
+      this.cleanupCollapsedDirs = { ...this.cleanupCollapsedDirs, [directory]: !this.cleanupCollapsedDirs[directory] };
+    },
     applyCleanupStatus(status) {
       if (!status) return;
       this.cleanupDialog.loading = !!status.running;
       this.cleanupDialog.error = status.error || '';
+      this.cleanupDialog.stale = !!status.stale;
       this.cleanupDialog.analysis = status.analysis || null;
       this.cleanupDialog.progress = status.progress || { stage: '', message: '', current: 0, total: 0, path: '' };
       if (status.running) {
-        this.startCleanupProgressTracking();
+        this.startCleanupProgressTracking(status.started_at);
       } else {
         this.resetCleanupProgressTracking();
         this.cleanupDialog.progress = status.progress || this.cleanupDialog.progress;
@@ -2301,6 +2419,17 @@ export default {
         alert('外部预览失败: ' + err);
       }
     },
+    // 只读地同步一次后端状态，用于按钮徽标；不打开面板、不触发分析。
+    async refreshCleanupStatus() {
+      try {
+        const status = await GetCleanupStatus();
+        if (status?.running || status?.completed) {
+          this.applyCleanupStatus(status);
+        }
+      } catch (err) {
+        console.error('读取清理分析状态失败:', err);
+      }
+    },
     async openCleanupDialog() {
       this.cleanupDialog.show = true;
       try {
@@ -2328,10 +2457,13 @@ export default {
     },
     async startNewCleanupAnalysis() {
       this.cleanupSelection = [];
+      this.cleanupCollapsedDirs = {};
+      this.cleanupTrashedIDs = [];
       this.cleanupDialog.loading = true;
       this.cleanupDialog.processing = false;
       this.cleanupDialog.analysis = null;
       this.cleanupDialog.error = '';
+      this.cleanupDialog.stale = false;
       this.cleanupDialog.progress = { stage: 'load', message: '正在准备清理候选分析…', current: 0, total: 0, path: '' };
       this.startCleanupProgressTracking();
       const started = await StartCleanupAnalysis(5, 480, 320);
@@ -2405,7 +2537,10 @@ export default {
       return Array.from(byID.values());
     },
     selectAllCleanupCandidates() {
-      this.cleanupSelection = this.getSelectAllCleanupCandidates().map(video => video.id);
+      // 已移入回收站的项行内已禁选，全选也必须跳过，否则会对着已删的视频再删一次。
+      this.cleanupSelection = this.getSelectAllCleanupCandidates()
+        .map(video => video.id)
+        .filter(id => !this.cleanupTrashedIDs.includes(Number(id)));
     },
     clearCleanupSelection() {
       this.cleanupSelection = [];
@@ -2501,7 +2636,8 @@ export default {
       }
     },
     async trashSelectedCleanupCandidates() {
-      const selectedVideos = this.getAllCleanupCandidates().filter(video => this.cleanupSelection.includes(video.id));
+      const selectedVideos = this.getAllCleanupCandidates()
+        .filter(video => this.cleanupSelection.includes(video.id) && !this.isCleanupTrashed(video));
       if (selectedVideos.length === 0) {
         return;
       }
@@ -2517,10 +2653,17 @@ export default {
         this.cleanupSelection = selectedIDs.filter(id => failedIDs.has(id));
         await this.showDeleteUndo(succeededIDs);
         await this.reloadCurrentView();
-        await this.reanalyzeCleanupCandidates();
+        // 已清理的项留在结果里，只标记结果可能过期；剩下的候选还能接着审阅。
+        this.cleanupTrashedIDs = [...new Set([...this.cleanupTrashedIDs, ...succeededIDs])];
         if (result?.failed > 0) {
           const firstError = result.errors?.[0];
           alert(`批量清理完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
+        }
+        // 不再静默重跑：先问一句，让用户自己决定是继续审阅还是刷新候选。
+        if (succeededIDs.length > 0 && window.confirm(
+          `已把 ${succeededIDs.length} 个视频移入回收站。是否立即重新分析？\n选择"取消"可以继续审阅当前结果。`
+        )) {
+          await this.reanalyzeCleanupCandidates();
         }
       } catch (err) {
         console.error('批量清理失败:', err);
@@ -3595,6 +3738,8 @@ export default {
         this.undoNotice = null;
         if (this.undoNoticeTimer) clearTimeout(this.undoNoticeTimer);
         this.undoNoticeTimer = null;
+        // 恢复回来的视频不该继续在清理审阅里显示为"已移入回收站"。
+        this.forgetCleanupTrashed(entry.video_id);
         await this.reloadCurrentView();
       } catch (err) {
         console.error('撤销删除失败:', err);
@@ -3603,11 +3748,21 @@ export default {
         this.undoing = false;
       }
     },
-    async handleTrashRestored() {
+    // TrashRestoreDialog 的 restored 事件带的是恢复出来的视频对象。
+    async handleTrashRestored(video) {
       this.undoNotice = null;
       if (this.undoNoticeTimer) clearTimeout(this.undoNoticeTimer);
       this.undoNoticeTimer = null;
+      this.forgetCleanupTrashed(video?.id);
       await this.reloadCurrentView();
+      await this.refreshCleanupStatus();
+    },
+    // 恢复了具体某个视频就只放它；拿不到 id 时整体清空，宁可少标也不要长期标错。
+    forgetCleanupTrashed(videoID) {
+      const id = Number(videoID);
+      this.cleanupTrashedIDs = Number.isFinite(id) && id > 0
+        ? this.cleanupTrashedIDs.filter(item => item !== id)
+        : [];
     },
     async refreshAITagSummary() {
       try {

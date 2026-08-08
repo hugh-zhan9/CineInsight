@@ -102,10 +102,82 @@ func TestCleanupBackgroundAnalysisKeepsStatusAfterCompletion(t *testing.T) {
 	if status.Analysis == nil || len(status.Analysis.LowDuration) != 1 {
 		t.Fatalf("完成后应保留分析结果，实际 %+v", status.Analysis)
 	}
+	if status.Stale {
+		t.Fatalf("刚完成的分析不应是过期状态: %+v", status)
+	}
+	// 失效只标记过期：结果保留供用户继续审阅，由用户决定何时重新分析。
 	svc.InvalidateAnalysis()
 	status = svc.Status()
-	if status.Completed || status.Analysis != nil {
-		t.Fatalf("失效后不应继续返回旧分析: %+v", status)
+	if !status.Completed || status.Analysis == nil {
+		t.Fatalf("失效后仍应保留分析结果供审阅: %+v", status)
+	}
+	if !status.Stale {
+		t.Fatalf("失效后应标记为过期: %+v", status)
+	}
+}
+
+// 前端收到 cleanup-progress 的 done 事件后会立刻回读 Status()。done 阶段必须
+// 在结果写入之后才出现，否则界面会回读到 running=true / analysis=nil 而卡在"分析中"。
+func TestCleanupDoneProgressAppearsOnlyAfterAnalysisIsReadable(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	mockFFProbe(t, root)
+
+	shortPath := filepath.Join(root, "short.mp4")
+	mustWriteSizedFile(t, shortPath, []byte("short"))
+	video := models.Video{Name: "short.mp4", Path: shortPath, Directory: root, Size: 5, Duration: 30, Width: 1280, Height: 720}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	svc := &CleanupService{}
+	if _, err := svc.StartAnalysis(CleanupCriteria{MinDuration: 5 * time.Second, MinWidth: 480, MinHeight: 320}); err != nil {
+		t.Fatalf("启动后台清理分析失败: %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		// 单次快照内同时检查阶段和结果，避免两次读取之间状态发生变化。
+		status := svc.Status()
+		if status.Progress.Stage == "done" {
+			if status.Running || !status.Completed || status.Analysis == nil {
+				t.Fatalf("done 阶段出现时结果必须已可读，实际 %+v", status)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("等待 done 阶段超时，实际 %+v", status)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// 上一轮的收尾事件不能盖到新一轮的状态上：goroutine 从写完状态到发 done 之间没有持锁，
+// 期间用户可能已经点了"重新分析"。
+func TestCleanupStaleDoneEventDoesNotOverwriteANewerRun(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	svc := &CleanupService{}
+
+	// 模拟第 1 轮已经写完状态、还没来得及发 done 的时刻。
+	svc.mu.Lock()
+	svc.runID = 1
+	staleRunID := svc.runID
+	svc.mu.Unlock()
+
+	// 第 2 轮启动，状态被整体重置为 running。
+	svc.mu.Lock()
+	svc.runID++
+	svc.status = CleanupStatus{Running: true, Progress: CleanupProgress{Stage: "load", Message: "第二轮"}}
+	svc.mu.Unlock()
+
+	svc.emitDoneForRun(staleRunID, 42, "第一轮的收尾消息")
+
+	status := svc.Status()
+	if status.Progress.Stage != "load" || status.Progress.Message != "第二轮" {
+		t.Fatalf("旧一轮的 done 事件不应改写新一轮的进度，实际 %+v", status.Progress)
+	}
+	if !status.Running {
+		t.Fatalf("新一轮应仍在运行，实际 %+v", status)
 	}
 }
 
