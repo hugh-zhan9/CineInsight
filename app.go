@@ -2119,6 +2119,20 @@ func (a *App) BatchDeleteImages(imageIDs []uint, deleteFile bool) *services.Batc
 	return result
 }
 
+// OpenImageDirectory 在系统文件管理器中打开图片目录。
+func (a *App) OpenImageDirectory(directory string) error {
+	err := a.imageService.OpenImageDirectory(directory)
+	log.Printf("API OpenImageDirectory directory=%s err=%v", directory, err)
+	return err
+}
+
+// RevealImage 在系统文件管理器中定位到指定图片文件。
+func (a *App) RevealImage(imageID uint) error {
+	err := a.imageService.RevealImage(imageID)
+	log.Printf("API RevealImage image_id=%d err=%v", imageID, err)
+	return err
+}
+
 // ListImageTrashEntries 返回当前可恢复的图片删除记录。
 func (a *App) ListImageTrashEntries() ([]models.ImageTrashEntry, error) {
 	entries, err := a.imageService.ListImageTrashEntries()

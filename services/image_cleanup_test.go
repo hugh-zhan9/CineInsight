@@ -211,6 +211,89 @@ func TestImageCleanupNearDuplicateGroupsByHammingDistance(t *testing.T) {
 	}
 }
 
+// 审阅界面要靠标签、AI 描述、实测大小和修改时间判断该留哪一份；分析的主查询不做
+// 全库 Preload，这些字段必须在成组之后单独补回来。
+func TestImageCleanupMembersCarryFactsTagsAndDescription(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	content := bytes.Repeat([]byte("same"), 40)
+	keep := imageCleanupCreateImage(t, filepath.Join(dir, "keep.jpg"), content, "", 400, 300)
+	copyImage := imageCleanupCreateImage(t, filepath.Join(dir, "copy.jpg"), content, "", 400, 300)
+
+	tag := models.Tag{Name: "旅行"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Model(keep).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("关联标签失败: %v", err)
+	}
+	descriptions := []models.ImageAIDescription{
+		{ImageID: keep.ID, Status: "completed", Description: "海边日落"},
+		{ImageID: copyImage.ID, Status: "failed", Description: "不该下发"},
+	}
+	if err := database.DB.Create(&descriptions).Error; err != nil {
+		t.Fatalf("创建 AI 描述失败: %v", err)
+	}
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个精确重复组，实际 %d", len(analysis.DuplicateGroups))
+	}
+	group := analysis.DuplicateGroups[0]
+	original := group.Original
+	if original.FileSize != int64(len(content)) {
+		t.Fatalf("成员应带实测文件大小 %d，实际 %d", len(content), original.FileSize)
+	}
+	if original.ModTimeNS == 0 {
+		t.Fatalf("成员应带实测修改时间，实际 %+v", original)
+	}
+	var keeper, other ImageCleanupMember
+	for _, member := range append([]ImageCleanupMember{group.Original}, group.Candidates...) {
+		if member.ID == keep.ID {
+			keeper = member
+		} else {
+			other = member
+		}
+	}
+	if len(keeper.Tags) != 1 || keeper.Tags[0].Name != "旅行" {
+		t.Fatalf("已打标签的成员应带出标签，实际 %+v", keeper.Tags)
+	}
+	if keeper.Description != "海边日落" {
+		t.Fatalf("已完成的 AI 描述应带出，实际 %q", keeper.Description)
+	}
+	if other.Description != "" {
+		t.Fatalf("未完成的 AI 描述不应下发，实际 %q", other.Description)
+	}
+	if group.MaxHammingDistance != 0 {
+		t.Fatalf("精确重复组的汉明距离应为 0，实际 %d", group.MaxHammingDistance)
+	}
+}
+
+// 近似重复组要报出"有多像"，界面靠它给用户量化说法。
+func TestImageCleanupNearDuplicateReportsMaxHammingDistance(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	imageCleanupCreateImage(t, filepath.Join(dir, "a.jpg"), bytes.Repeat([]byte("a"), 300), "abcd000000000000", 200, 200)
+	// 与上一张相差 3 个 bit（0x7 = 三位）。
+	imageCleanupCreateImage(t, filepath.Join(dir, "b.jpg"), bytes.Repeat([]byte("b"), 301), "abcd000000000007", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.NearDuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个近似重复组，实际 %d", len(analysis.NearDuplicateGroups))
+	}
+	if got := analysis.NearDuplicateGroups[0].MaxHammingDistance; got != 3 {
+		t.Fatalf("组内最大汉明距离应为 3，实际 %d", got)
+	}
+}
+
 func TestImageCleanupNearDuplicateOriginalFallsBackToFileSize(t *testing.T) {
 	setupImageServiceTestDB(t)
 	dir := t.TempDir()

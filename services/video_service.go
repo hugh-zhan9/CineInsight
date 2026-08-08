@@ -2268,6 +2268,22 @@ func openPath(path string, isDir bool) error {
 	return cmd.Start()
 }
 
+// revealPath 在系统文件管理器里定位到该文件本身，而不是只打开所在目录——
+// 审阅重复文件时"哪一份被选中了"比"打开哪个文件夹"更有用。
+// Linux 没有跨发行版的通用做法，退回打开所在目录。
+func revealPath(path string) error {
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", "-R", path).Start()
+	case "windows":
+		return exec.Command("explorer", "/select,"+path).Start()
+	case "linux":
+		return openPath(filepath.Dir(path), true)
+	default:
+		return ErrUnsupportedOS
+	}
+}
+
 func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) (*PlaybackAttemptResult, error) {
 	info, err := os.Stat(video.Path)
 	if err != nil {

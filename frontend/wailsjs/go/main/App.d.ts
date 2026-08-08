@@ -226,6 +226,8 @@ export function MoveVideo(arg1:number,arg2:string):Promise<services.FileMigratio
 
 export function OpenDirectory(arg1:number):Promise<void>;
 
+export function OpenImageDirectory(arg1:string):Promise<void>;
+
 export function PlayRandomVideo():Promise<services.PlaybackAttemptResult>;
 
 export function PlayRandomVideoWithFilter(arg1:services.RandomPlayRequest):Promise<services.PlaybackAttemptResult>;
@@ -285,6 +287,8 @@ export function RetryAITagging(arg1:number):Promise<void>;
 export function RetryEnhancementTask(arg1:number):Promise<services.EnhancementTaskView>;
 
 export function RetryLibraryWatcherRoot(arg1:number):Promise<services.LibraryWatchRootStatus>;
+
+export function RevealImage(arg1:number):Promise<void>;
 
 export function SaveAITagLibrary(arg1:Array<services.AITagLibraryInput>):Promise<Array<models.Tag>>;
 

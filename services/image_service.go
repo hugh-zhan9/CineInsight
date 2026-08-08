@@ -470,6 +470,35 @@ func (s *ImageService) BatchDeleteImages(imageIDs []uint, deleteFile bool) *Batc
 	return result
 }
 
+// OpenImageDirectory 打开图片目录。只接受库里确实存在图片的目录，
+// 避免把"用系统默认程序打开任意路径"变成一个无约束的接口。
+func (s *ImageService) OpenImageDirectory(directory string) error {
+	cleaned := strings.TrimSpace(directory)
+	if cleaned == "" {
+		return fmt.Errorf("目录为空")
+	}
+	var count int64
+	if err := database.DB.Model(&models.Image{}).Where("directory = ?", cleaned).Count(&count).Error; err != nil {
+		return err
+	}
+	if count == 0 {
+		return fmt.Errorf("目录不在图片库中：%s", cleaned)
+	}
+	return openPath(cleaned, true)
+}
+
+// RevealImage 在系统文件管理器里定位到这张图片本身。
+func (s *ImageService) RevealImage(imageID uint) error {
+	var image models.Image
+	if err := database.DB.First(&image, imageID).Error; err != nil {
+		return err
+	}
+	if _, err := os.Stat(image.Path); err != nil {
+		return fmt.Errorf("源文件不可访问：%w", err)
+	}
+	return revealPath(image.Path)
+}
+
 // ListImageTrashEntries 按最新删除优先返回可恢复条目。
 func (s *ImageService) ListImageTrashEntries() ([]models.ImageTrashEntry, error) {
 	var entries []models.ImageTrashEntry

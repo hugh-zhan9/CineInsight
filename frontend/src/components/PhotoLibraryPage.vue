@@ -1,5 +1,11 @@
 <template>
-  <main class="photo-library">
+  <PhotoCleanupPage
+    v-if="showCleanup"
+    @close="closeCleanup"
+    @deleted="handleCleanupDeleted"
+  />
+
+  <main v-else class="photo-library">
     <section class="photo-toolbar glass-surface">
       <div class="photo-toolbar__title">
         <h2>图片</h2>
@@ -86,7 +92,7 @@
         <button type="button" class="btn-secondary" :disabled="scanning" data-test="photo-scan" @click="scanNow">
           {{ scanning ? '扫描中...' : '立即扫描' }}
         </button>
-        <button type="button" class="btn-secondary photo-cleanup-open-btn" data-test="photo-cleanup-open" @click="showCleanup = true">
+        <button type="button" class="btn-secondary photo-cleanup-open-btn" data-test="photo-cleanup-open" @click="openCleanup">
           清理审阅
           <span v-if="cleanupRunning" class="photo-cleanup-badge" data-test="photo-cleanup-badge" :title="cleanupBadgeTitle">分析中 {{ cleanupProgressText }}</span>
           <span v-else-if="cleanupDone" class="photo-cleanup-badge photo-cleanup-badge--done" data-test="photo-cleanup-done" title="清理分析已完成，点击查看候选">待审阅 {{ cleanupGroupCount }} 组</span>
@@ -351,8 +357,6 @@
       </div>
     </BaseModal>
 
-    <PhotoCleanupPanel v-if="showCleanup" @close="showCleanup = false" @deleted="reload" />
-
     <PhotoTrashDialog :visible="showTrash" @close="showTrash = false" @restored="handleRestored" />
   </main>
 </template>
@@ -364,7 +368,7 @@ import {
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
-import PhotoCleanupPanel from './PhotoCleanupPanel.vue';
+import PhotoCleanupPage from './PhotoCleanupPage.vue';
 import PhotoTrashDialog from './PhotoTrashDialog.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
@@ -392,7 +396,7 @@ const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
-  components: { BaseModal, PhotoCleanupPanel, PhotoTrashDialog },
+  components: { BaseModal, PhotoCleanupPage, PhotoTrashDialog },
   props: {
     settings: { type: Object, required: true },
     tags: { type: Array, default: () => [] },
@@ -592,6 +596,8 @@ export default {
     // 滚动容器（.main-view）是各页共用的：切走时别的页面会把 scrollTop 改掉，
     // 所以离开前记下位置，切回来再放回去，不用从头往下滑。
     pageActive(active) {
+      // 清理审阅页整页接管了主区域，这时保存/恢复的是它的滚动位置，与网格无关。
+      if (this.showCleanup) return;
       if (!active) {
         this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
         return;
@@ -729,6 +735,9 @@ export default {
       if (target <= 0) return;
       const settle = () => {
         if (!this.scrollOwnerEl || !this.pageActive) return;
+        // 这一帧之间用户可能已经刷新列表或主动滚走：保存位置变了就说明这次恢复已经作废，
+        // 再写回去会把新的位置冲掉。
+        if (this.inactiveScrollTop !== target) return;
         if (this.scrollOwnerEl.scrollTop === target) return;
         this.scrollOwnerEl.scrollTop = target;
         this.syncWindow();
@@ -848,10 +857,15 @@ export default {
       }
     },
     async applyLibraryRefresh() {
+      // 先拿住滚动宿主：reload 期间列表会短暂清空，重新解析未必拿得到。
+      // .main-view 本身不会随列表消失，引用始终有效。
+      const owner = this.scrollOwnerEl;
       this.libraryChanged = false;
       await this.reload();
-      if (this.scrollOwnerEl) this.scrollOwnerEl.scrollTop = 0;
       this.inactiveScrollTop = 0;
+      // 等新列表渲染出来再回顶，否则会被旧的 scrollHeight 夹住。
+      await this.$nextTick();
+      if (owner) owner.scrollTop = 0;
       this.syncWindow(true);
     },
     async reload() {
@@ -992,6 +1006,20 @@ export default {
       } catch (err) {
         this.imageDirectories = [];
       }
+    },
+    openCleanup() {
+      // 审阅页会把网格从 DOM 里换走，先记下位置，返回时照原样恢复。
+      this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
+      this.showCleanup = true;
+    },
+    closeCleanup() {
+      this.showCleanup = false;
+      this.$nextTick(() => this.restoreScrollPosition());
+    },
+    async handleCleanupDeleted() {
+      await this.reload();
+      // reload 会把列表清空重来，恢复到旧位置没有意义。
+      this.inactiveScrollTop = 0;
     },
     async loadImageTags() {
       try {
