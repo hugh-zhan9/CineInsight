@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"video-master/database"
@@ -333,7 +334,77 @@ func TestImageAIDescriptionCancelRollsBackCurrentToPending(t *testing.T) {
 	}
 }
 
-func TestImageAIDescriptionRejectsConcurrentStartAndRegenerate(t *testing.T) {
+// 后台批量会自动开跑且可能跑很久；用户点某一张的"重新生成"要能立刻插进去，
+// 而不是被批量顶回来。批量的目标集是"没有描述的图"，重跑针对"已有描述的图"，
+// 两者本来就不重叠，只需要行级认领防住罕见的重叠。
+func TestImageAIDescriptionRegenerateRunsAlongsideRunningBatch(t *testing.T) {
+	release := make(chan struct{})
+	entered := make(chan struct{}, 1)
+	var calls int32
+	client := imageDescriptionClientFunc(func(ctx context.Context, imageID uint, prompt string, jpegData []byte) (string, error) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			// 第一次调用属于批量：卡住它，制造"批量正在跑"的窗口。
+			select {
+			case entered <- struct{}{}:
+			default:
+			}
+			<-release
+		}
+		return "湖面平静如镜，远处雪山与晚霞相接，画面开阔，风格偏风光摄影。", nil
+	})
+	svc := newImageAIDescriptionTestService(t, client)
+	batchTarget := imageAIDescriptionTestImage(t, "heic")
+	// 另建一张已有描述的图：它不在批量目标集里，正是"重新生成"的典型对象。
+	regenTarget := imageAIDescriptionTestImage(t, "heic")
+	if err := database.DB.Create(&models.ImageAIDescription{
+		ImageID: regenTarget.ID, Status: "completed", Description: "旧描述",
+	}).Error; err != nil {
+		t.Fatalf("创建既有描述失败: %v", err)
+	}
+
+	if _, err := svc.StartImageAIDescription(context.Background()); err != nil {
+		t.Fatalf("启动批量描述失败: %v", err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("客户端未被调用")
+	}
+	// 批量之间仍然互斥：重复 Start 必须被拒绝。
+	if _, err := svc.StartImageAIDescription(context.Background()); !errors.Is(err, ErrImageAIDescriptionBusy) {
+		t.Fatalf("重复 Start 未被拒绝: %v", err)
+	}
+
+	// 批量还卡在第一张上，单张重跑应当立刻完成。
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.RegenerateImageAIDescription(regenTarget.ID)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("批量运行中单张重跑应当成功: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("批量运行中单张重跑被阻塞了")
+	}
+	if row := imageAIDescriptionRow(t, regenTarget.ID); row.Description == "旧描述" {
+		t.Fatalf("重跑应覆盖旧描述，实际 %+v", row)
+	}
+
+	close(release)
+	status := waitImageAIDescription(t, svc)
+	if status.Succeeded != 1 {
+		t.Fatalf("批量结束状态异常: %+v", status)
+	}
+	if batchTarget.ID == 0 {
+		t.Fatal("批量目标图片未创建")
+	}
+}
+
+// 同一张图不允许并发重跑两次，避免同一行双写。
+func TestImageAIDescriptionRejectsConcurrentRegenerateOfSameImage(t *testing.T) {
 	release := make(chan struct{})
 	entered := make(chan struct{}, 1)
 	client := imageDescriptionClientFunc(func(ctx context.Context, imageID uint, prompt string, jpegData []byte) (string, error) {
@@ -347,24 +418,22 @@ func TestImageAIDescriptionRejectsConcurrentStartAndRegenerate(t *testing.T) {
 	svc := newImageAIDescriptionTestService(t, client)
 	img := imageAIDescriptionTestImage(t, "heic")
 
-	if _, err := svc.StartImageAIDescription(context.Background()); err != nil {
-		t.Fatalf("启动批量描述失败: %v", err)
-	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := svc.RegenerateImageAIDescription(img.ID)
+		done <- err
+	}()
 	select {
 	case <-entered:
 	case <-time.After(5 * time.Second):
 		t.Fatalf("客户端未被调用")
 	}
-	if _, err := svc.StartImageAIDescription(context.Background()); !errors.Is(err, ErrImageAIDescriptionBusy) {
-		t.Fatalf("重复 Start 未被拒绝: %v", err)
-	}
 	if _, err := svc.RegenerateImageAIDescription(img.ID); !errors.Is(err, ErrImageAIDescriptionBusy) {
-		t.Fatalf("批量运行中 Regenerate 未被拒绝: %v", err)
+		t.Fatalf("同一张图的并发重跑应被拒绝: %v", err)
 	}
 	close(release)
-	status := waitImageAIDescription(t, svc)
-	if status.Succeeded != 1 {
-		t.Fatalf("批量结束状态异常: %+v", status)
+	if err := <-done; err != nil {
+		t.Fatalf("首个重跑失败: %v", err)
 	}
 }
 

@@ -194,8 +194,13 @@ type ImageAIDescriptionService struct {
 	worker   sync.WaitGroup
 	emitter  func(ImageAIDescriptionStatus)
 	stopping bool
-	// busy 同时覆盖批量运行与同步单张重跑：两者互斥，避免同一行双写。
+	// busy 表示批量任务占用中。单张重跑不再受它约束：批量的目标集是"没有描述的图"，
+	// 而重跑针对的是"已经有描述的图"，两者本来就不重叠，一刀切互斥会让用户在
+	// 长时间的后台批量期间完全没法手动重跑某一张。
 	busy bool
+	// regenerating 记录正在单张重跑的图片：批量若恰好走到同一张就跳过，
+	// 同一张也不允许并发重跑两次。值是各自的取消函数，供 shutdown 统一取消。
+	regenerating map[uint]context.CancelFunc
 }
 
 // NewImageAIDescriptionService 创建图片 AI 描述服务（单 worker、显式启动）。
@@ -294,9 +299,16 @@ func (s *ImageAIDescriptionService) StopAndWait() {
 	s.mu.Lock()
 	s.stopping = true
 	cancel := s.cancel
+	regenerating := make([]context.CancelFunc, 0, len(s.regenerating))
+	for _, regenCancel := range s.regenerating {
+		regenerating = append(regenerating, regenCancel)
+	}
 	s.mu.Unlock()
 	if cancel != nil {
 		cancel()
+	}
+	for _, regenCancel := range regenerating {
+		regenCancel()
 	}
 	s.worker.Wait()
 	s.mu.Lock()
@@ -304,31 +316,35 @@ func (s *ImageAIDescriptionService) StopAndWait() {
 	s.mu.Unlock()
 }
 
-// RegenerateImageAIDescription 同步单张重跑并覆盖旧描述。与批量任务互斥：
-// 批量运行中拒绝（跟随语义索引"同一时刻只有一个写任务"的并发惯例）。
+// RegenerateImageAIDescription 同步单张重跑并覆盖旧描述。可以与后台批量任务并发：
+// 用户点了这一张就应该立刻拿到结果，而不是等一个可能要跑几小时的批量任务结束。
+// 冲突只用行级认领来防：同一张图不允许并发重跑两次，批量走到正在重跑的图会跳过。
 func (s *ImageAIDescriptionService) RegenerateImageAIDescription(imageID uint) (*models.ImageAIDescription, error) {
 	config, client, err := s.prepareClient()
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
 	if s.stopping {
 		s.mu.Unlock()
+		cancel()
 		return nil, errors.New("图片 AI 描述任务正在停止")
 	}
-	if s.busy || s.status.Running {
+	if _, running := s.regenerating[imageID]; running {
 		s.mu.Unlock()
+		cancel()
 		return nil, ErrImageAIDescriptionBusy
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s.busy = true
-	s.cancel = cancel
+	if s.regenerating == nil {
+		s.regenerating = make(map[uint]context.CancelFunc)
+	}
+	s.regenerating[imageID] = cancel
 	s.worker.Add(1)
 	s.mu.Unlock()
 	defer func() {
 		s.mu.Lock()
-		s.busy = false
-		s.cancel = nil
+		delete(s.regenerating, imageID)
 		s.mu.Unlock()
 		cancel()
 		s.worker.Done()
@@ -353,6 +369,13 @@ func (s *ImageAIDescriptionService) RegenerateImageAIDescription(imageID uint) (
 		return nil, err
 	}
 	return &row, nil
+}
+
+func (s *ImageAIDescriptionService) isRegenerating(imageID uint) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.regenerating[imageID]
+	return ok
 }
 
 // RecoverInterruptedImageDescriptions 启动恢复：processing → failed/interrupted
@@ -401,6 +424,11 @@ func (s *ImageAIDescriptionService) run(ctx context.Context, config AITaggingCon
 				continue
 			}
 			s.recordImageFailure(target.ID, target.Name, "image_load_failed", err)
+			continue
+		}
+		if s.isRegenerating(img.ID) {
+			// 用户已经手动重跑这一张了，批量不再重复调用一次 AI。
+			s.updateStatus(func(status *ImageAIDescriptionStatus) { status.Processed++; status.Skipped++ })
 			continue
 		}
 		code, execErr := s.executeOne(ctx, config, client, img)
