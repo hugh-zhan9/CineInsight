@@ -89,7 +89,9 @@ beforeEach(() => {
 //     响应式路径（这正是"翻页/首屏靠 images 侦听刷新窗口"要覆盖的东西）。
 //   - scrollTop 的 setter 复刻浏览器的钳制：写入值被 scrollHeight - clientHeight 限制。
 //     少了这一条就分不出"锚点在渲染前写"和"渲染后写"，锚点用例会失去意义。
-async function mountInScrollOwner({ viewportHeight = 800, gridWidth = 1200, settings = baseSettings() } = {}) {
+// fallbackContentHeight：网格不在 DOM 里时（清理审阅整页接管）宿主里装的是审阅页，
+// 它自己也很高。默认 0 保持既有用例不变；要覆盖"审阅页里滚动"的场景就把它调大。
+async function mountInScrollOwner({ viewportHeight = 800, gridWidth = 1200, settings = baseSettings(), fallbackContentHeight = 0 } = {}) {
   const host = document.createElement('div');
   host.className = 'main-view';
   document.body.appendChild(host);
@@ -99,7 +101,7 @@ async function mountInScrollOwner({ viewportHeight = 800, gridWidth = 1200, sett
   // 内容高度 = 网格所有直接子节点（占位块 + 行）的内联高度之和，与真实文档流一致。
   const contentHeight = () => {
     const grid = host.querySelector('.photo-grid');
-    if (!grid) return 0;
+    if (!grid) return fallbackContentHeight;
     return Array.from(grid.children)
       .reduce((sum, child) => sum + (parseFloat(child.style.height) || 0), 0);
   };
@@ -546,6 +548,33 @@ describe('PhotoLibraryPage delete', () => {
 
     expect(api.DeleteImage).toHaveBeenCalledWith(4, false);
     expect(wrapper.findAll('.photo-card')).toHaveLength(0);
+  });
+});
+
+describe('PhotoLibraryPage AI description filter', () => {
+  it('sends the selected AI description state and reloads', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+    expect(api.SearchImagePage.mock.calls[0][0].filter.ai_description_state).toBe('');
+
+    await wrapper.get('[data-test="photo-ai-state"]').setValue('undescribed');
+    await flushPromises();
+
+    const last = api.SearchImagePage.mock.calls.at(-1)[0];
+    expect(last.filter.ai_description_state).toBe('undescribed');
+    expect(last.cursor).toBeUndefined();
+
+    await wrapper.get('[data-test="photo-ai-state"]').setValue('failed');
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.ai_description_state).toBe('failed');
+  });
+
+  it('disables the AI filter in semantic search mode', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([]));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-mode-semantic"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="photo-ai-state"]').attributes('disabled')).toBeDefined();
   });
 });
 
@@ -1081,6 +1110,54 @@ describe('PhotoLibraryPage grid virtualization', () => {
     await flushPromises();
 
     expect(wrapper.find('[data-test="photo-library-refresh"]').exists()).toBe(false);
+    cleanup();
+  });
+
+  // 回归：清理审阅页整页接管主区域，但滚的是同一个 .main-view。网格已不在 DOM 里，
+  // 再按那个 scrollTop 算窗口会把 maybeLoadMore 一路触发到翻完整个库。
+  it('does not paginate the grid while the cleanup review page is showing', async () => {
+    const cursor = { sort_mode: 'recent', created_at: '2026-08-07T09:00:00Z', size: 0, rating_is_null: false, id: 60 };
+    api.SearchImagePage.mockResolvedValue(
+      makePage(Array.from({ length: 60 }, (_, index) => makeImage(index + 1)), cursor)
+    );
+
+    const { wrapper, host, cleanup } = await mountInScrollOwner({ fallbackContentHeight: 200000 });
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+
+    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
+
+    api.SearchImagePage.mockClear();
+    host.scrollTop = 100000;
+    host.dispatchEvent(new Event('scroll'));
+    await flushPromises();
+
+    expect(api.SearchImagePage).not.toHaveBeenCalled();
+    expect(wrapper.vm.images).toHaveLength(60);
+    cleanup();
+  });
+
+  // 回归：从网格顶部进入审阅页时保存的位置是 0，返回时必须真的回到 0，
+  // 而不是停在审阅页滚出去的偏移上。
+  it('returns the grid to the top when the review page was opened from the top', async () => {
+    api.SearchImagePage.mockResolvedValue(
+      makePage(Array.from({ length: 600 }, (_, index) => makeImage(index + 1)), null)
+    );
+    const { wrapper, host, cleanup } = await mountInScrollOwner({ fallbackContentHeight: 200000 });
+    expect(host.scrollTop).toBe(0);
+
+    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await flushPromises();
+    // 审阅页里滚了很远。
+    host.scrollTop = 100000;
+    host.dispatchEvent(new Event('scroll'));
+    await flushPromises();
+
+    await wrapper.get('[data-test="cleanup-back"]').trigger('click');
+    await flushPromises();
+
+    expect(host.scrollTop).toBe(0);
     cleanup();
   });
 

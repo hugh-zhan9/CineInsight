@@ -80,6 +80,7 @@
             <span class="cleanup-dir__count">{{ section.entries.length }} 组 · 共 {{ section.imageCount }} 张</span>
           </button>
           <button
+            v-if="section.directory !== UNKNOWN_DIRECTORY"
             type="button"
             class="btn-secondary btn-compact"
             data-test="cleanup-open-dir"
@@ -163,12 +164,13 @@
                     <input
                       type="checkbox"
                       :checked="selection.includes(Number(member.id))"
-                      :disabled="isKept(entry, member) || isSkipped(entry) || isDeleted(member)"
+                      :disabled="isKept(entry, member) || isSkipped(entry) || isDeleted(member) || isProtected(entry, member)"
                       :aria-label="`删除 ${member.name}`"
                       data-test="cleanup-candidate-toggle"
                       @change="toggleSelection(member.id)"
                     />
                     删除
+                    <span v-if="isProtected(entry, member)" class="cleanup-member__locked" data-test="cleanup-member-locked">（另一组要保留它）</span>
                   </label>
                 </div>
 
@@ -219,7 +221,13 @@
                 </p>
 
                 <div class="cleanup-member__actions">
-                  <button type="button" class="btn-secondary btn-compact" data-test="cleanup-reveal" @click="revealMember(member)">在文件管理器中定位</button>
+                  <button
+                    type="button"
+                    class="btn-secondary btn-compact"
+                    :disabled="isDeleted(member)"
+                    data-test="cleanup-reveal"
+                    @click="revealMember(member)"
+                  >在文件管理器中定位</button>
                 </div>
               </div>
             </div>
@@ -272,12 +280,15 @@ const STAGE_LABELS = {
 };
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+// 库里目录为空时的占位串。它不是真实路径，不能拿去调打开目录。
+const UNKNOWN_DIRECTORY = '未知目录';
 
 export default {
   name: 'PhotoCleanupPage',
   emits: ['close', 'deleted'],
   data() {
     return {
+      UNKNOWN_DIRECTORY,
       localError: '',
       processing: false,
       dismissing: false,
@@ -319,10 +330,11 @@ export default {
           spansDirectories: directories.size > 1
         };
       });
+      const dismissed = new Set(this.review.dismissedKeys || []);
       return [
         ...flatten(this.analysis.duplicate_groups, 'exact'),
         ...flatten(this.analysis.near_duplicate_groups, 'near')
-      ];
+      ].filter(entry => !dismissed.has(entry.key));
     },
     // 顶层按目录分组：整组归到"推荐保留项"（后端 original）所在目录，
     // 手动切换保留项时组不会跳走；组员仍可位于其他目录，卡片上会标出来。
@@ -330,14 +342,21 @@ export default {
       const buckets = new Map();
       for (const entry of this.entries) {
         const directory = this.directoryOf(entry.group.original);
-        if (!buckets.has(directory)) buckets.set(directory, { directory, entries: [], imageCount: 0 });
+        if (!buckets.has(directory)) buckets.set(directory, { directory, entries: [], imageIDs: new Set() });
         const bucket = buckets.get(directory);
         bucket.entries.push(entry);
-        bucket.imageCount += entry.members.length;
+        for (const member of entry.members) bucket.imageIDs.add(Number(member.id));
       }
-      return [...buckets.values()].sort((a, b) => a.directory.localeCompare(b.directory));
+      return [...buckets.values()]
+        .map(bucket => ({ ...bucket, imageCount: bucket.imageIDs.size }))
+        .sort((a, b) => a.directory.localeCompare(b.directory));
     },
     hasGroups() { return this.entries.length > 0; },
+    // 同一张图可能既是某组的候选、又是另一组的保留项（精确对只在彼此之间排除）。
+    // 任何一组的保留项都不允许被删，否则会出现"这一组勾了删、那一组显示保留"的自相矛盾。
+    protectedIDs() {
+      return new Set(this.entries.map(entry => this.keepFor(entry)));
+    },
     allCollapsed() {
       return this.directorySections.length > 0
         && this.directorySections.every(section => this.isDirCollapsed(section.directory));
@@ -346,14 +365,16 @@ export default {
     // 打开"只勾同目录"后，精确重复里位于别处的副本也不勾。
     autoSelectedIDs() {
       const ids = [];
+      const protectedIDs = this.protectedIDs;
       for (const entry of this.entries) {
         if (entry.kind !== 'exact') continue;
-        const keepID = this.keepFor(entry);
         const keepDir = this.keepDirFor(entry);
         for (const member of entry.members) {
-          if (Number(member.id) === keepID) continue;
+          const id = Number(member.id);
+          if (protectedIDs.has(id)) continue;
+          if (this.deletedIDs.includes(id)) continue;
           if (this.sameDirOnly && this.directoryOf(member) !== keepDir) continue;
-          ids.push(Number(member.id));
+          ids.push(id);
         }
       }
       return [...new Set(ids)];
@@ -371,6 +392,8 @@ export default {
       immediate: true,
       handler(key) {
         // 只有换了一批分析结果才重置；返回图片库再进来时 key 没变，接着上次审阅。
+        // 结果换批，查看器里的成员对象已经失效。
+        this.closeViewer();
         if (!key || key === this.review.key) return;
         this.resetGroupState(key);
       }
@@ -387,7 +410,7 @@ export default {
   methods: {
     formatBytes,
     directoryOf(image) {
-      return String(image?.directory || '').trim() || '未知目录';
+      return String(image?.directory || '').trim() || UNKNOWN_DIRECTORY;
     },
     // file_size 是分析时 os.Stat 的实测值，比库里的 size 更贴近磁盘现状。
     memberBytes(member) {
@@ -421,9 +444,11 @@ export default {
       const diff = {};
       const keepPixels = (keeper.width || 0) * (keeper.height || 0);
       const pixels = (member.width || 0) * (member.height || 0);
-      if (keepPixels > 0 && pixels > 0 && keepPixels !== pixels) {
+      // 差异不到 5% 就不标了：1004×1004 对 1000×1000 标成"仅 1/1"只会误导。
+      if (keepPixels > 0 && pixels > 0) {
         const ratio = pixels / keepPixels;
-        diff.resolution = ratio < 1 ? `仅 1/${Math.round(1 / ratio)}` : `${ratio.toFixed(1)}×`;
+        if (ratio <= 0.95) diff.resolution = `仅 1/${Math.round(1 / ratio)}`;
+        else if (ratio >= 1.05) diff.resolution = `${ratio.toFixed(1)}×`;
       }
       const keepBytes = this.memberBytes(keeper);
       const bytes = this.memberBytes(member);
@@ -431,9 +456,11 @@ export default {
         const delta = Math.round(((bytes - keepBytes) / keepBytes) * 100);
         if (delta !== 0) diff.size = delta < 0 ? `小 ${Math.abs(delta)}%` : `大 ${delta}%`;
       }
+      // 只在两边取的是同一种时间时才比：EXIF 拍摄时间减文件修改时间没有意义。
       const keepTime = this.memberTimeMs(keeper);
       const time = this.memberTimeMs(member);
-      if (keepTime > 0 && time > 0) {
+      const sameClock = Boolean(keeper.taken_at) === Boolean(member.taken_at);
+      if (sameClock && keepTime > 0 && time > 0) {
         const days = Math.round((time - keepTime) / DAY_MS);
         if (days !== 0) diff.time = days < 0 ? `早 ${Math.abs(days)} 天` : `晚 ${days} 天`;
       }
@@ -442,9 +469,17 @@ export default {
     isDeleted(image) {
       return this.deletedIDs.includes(Number(image?.id));
     },
+    // 这张图是别的组的保留项：本组不能勾它删。
+    isProtected(entry, image) {
+      const id = Number(image?.id);
+      return this.protectedIDs.has(id) && this.keepFor(entry) !== id;
+    },
     keepFor(entry) {
       const override = this.keepOverrides[entry.key];
-      return override != null ? Number(override) : Number(entry.group.original?.id);
+      if (override != null) return Number(override);
+      // original 缺失时退回组内第一个成员，避免 NaN 让整组失去保留项、全部可删。
+      const fallback = entry.group.original?.id ?? entry.members[0]?.id;
+      return Number(fallback);
     },
     keepDirFor(entry) {
       const keepID = this.keepFor(entry);
@@ -481,10 +516,11 @@ export default {
       if (entry.kind !== 'exact') return kept;
       const keepDir = this.keepDirFor(entry);
       const marked = entry.members
-        .filter(member => Number(member.id) !== Number(keepID))
-        .filter(member => !this.deletedIDs.includes(Number(member.id)))
-        .filter(member => !this.sameDirOnly || this.directoryOf(member) === keepDir)
-        .map(member => Number(member.id));
+        .map(member => ({ id: Number(member.id), directory: this.directoryOf(member) }))
+        .filter(member => !this.protectedIDs.has(member.id))
+        .filter(member => !this.deletedIDs.includes(member.id))
+        .filter(member => !this.sameDirOnly || member.directory === keepDir)
+        .map(member => member.id);
       return [...new Set([...kept, ...marked])];
     },
     toggleSameDirOnly() {
@@ -594,7 +630,6 @@ export default {
         this.review.selection = requested.filter(id => failedIDs.has(id));
       } catch (err) {
         this.localError = `删除所选图片失败：${err}`;
-        this.processing = false;
         return;
       } finally {
         this.processing = false;
@@ -604,6 +639,8 @@ export default {
         return;
       }
       this.$emit('deleted');
+      // 让工具栏徽标与"结果可能过期"跟上这次删除。
+      refreshPhotoCleanupStatus();
       // 不静默重跑：先问一句，让用户决定是继续审阅还是刷新候选。
       const rerun = window.confirm(
         `已把 ${succeeded.length} 张图片移入回收站。是否立即重新分析？\n选择"取消"可以继续审阅当前结果。`
@@ -618,10 +655,9 @@ export default {
       this.localError = '';
       try {
         await DismissImageNearDuplicateGroup(ids);
-        if (this.status?.analysis?.near_duplicate_groups) {
-          this.status.analysis.near_duplicate_groups =
-            this.status.analysis.near_duplicate_groups.filter(item => item !== entry.group);
-        }
+        // 后端缓存里那一组还在（Dismiss 只写忽略表并标记过期），本地过滤一刷新就复原。
+        // 记进 dismissedKeys 让它在本轮审阅里稳定隐藏，重新分析后自然不再出现。
+        this.review.dismissedKeys = [...new Set([...(this.review.dismissedKeys || []), entry.key])];
         this.review.selection = this.selection.filter(id => !ids.includes(id));
       } catch (err) {
         this.localError = `忽略近似重复组失败：${err}`;

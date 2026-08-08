@@ -46,7 +46,18 @@ type ImageFilter struct {
 	TakenAfter   *time.Time `json:"taken_after,omitempty" ts_type:"string"`
 	TakenBefore  *time.Time `json:"taken_before,omitempty" ts_type:"string"`
 	SortMode     string     `json:"sort_mode"`
+	// AIDescriptionState 按 AI 描述状态筛选，取值见 ImageAIDescriptionState* 常量；空串表示不筛。
+	AIDescriptionState string `json:"ai_description_state"`
 }
+
+// AI 描述筛选取值。undescribed 覆盖"从未排队""排队中""生成失败"三种情况，
+// 因为它们对用户是同一件事：这张图现在没有描述。
+const (
+	ImageAIDescriptionStateAny         = ""
+	ImageAIDescriptionStateDescribed   = "described"
+	ImageAIDescriptionStateUndescribed = "undescribed"
+	ImageAIDescriptionStateFailed      = "failed"
+)
 
 // ImageCursor 是 SearchImagePage 的稳定分页游标，字段按排序模式取用。
 type ImageCursor struct {
@@ -143,6 +154,12 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 	if filter.TakenAfter != nil && filter.TakenBefore != nil && filter.TakenAfter.After(*filter.TakenBefore) {
 		return ImageFilter{}, fmt.Errorf("拍摄时间筛选上限不能早于下限")
 	}
+	filter.AIDescriptionState = strings.TrimSpace(filter.AIDescriptionState)
+	switch filter.AIDescriptionState {
+	case ImageAIDescriptionStateAny, ImageAIDescriptionStateDescribed, ImageAIDescriptionStateUndescribed, ImageAIDescriptionStateFailed:
+	default:
+		return ImageFilter{}, fmt.Errorf("不支持的 AI 描述筛选: %s", filter.AIDescriptionState)
+	}
 	filter.SortMode = strings.TrimSpace(filter.SortMode)
 	if filter.SortMode == "" {
 		filter.SortMode = ImageSortRecent
@@ -181,6 +198,14 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 	}
 	if filter.TakenBefore != nil {
 		query = query.Where("images.taken_at <= ?", *filter.TakenBefore)
+	}
+	switch filter.AIDescriptionState {
+	case ImageAIDescriptionStateDescribed:
+		query = query.Where("EXISTS (SELECT 1 FROM image_ai_descriptions d WHERE d.image_id = images.id AND d.status = ?)", imageAIDescriptionStatusCompleted)
+	case ImageAIDescriptionStateUndescribed:
+		query = query.Where("NOT EXISTS (SELECT 1 FROM image_ai_descriptions d WHERE d.image_id = images.id AND d.status = ?)", imageAIDescriptionStatusCompleted)
+	case ImageAIDescriptionStateFailed:
+		query = query.Where("EXISTS (SELECT 1 FROM image_ai_descriptions d WHERE d.image_id = images.id AND d.status = ?)", imageAIDescriptionStatusFailed)
 	}
 	if len(filter.TagIDs) > 0 {
 		subquery := database.DB.Table("image_tags").Select("image_id").

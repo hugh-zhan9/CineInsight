@@ -7,7 +7,17 @@ import { GetImageCleanupStatus } from '../../wailsjs/go/main/App';
 // review 保存"这一批分析结果"的审阅进度（key 取分析的 started_at）。放在 store 里而不是
 // 面板组件里，关闭面板再打开才能接着上次的勾选继续，而不是从头再来一遍。
 function emptyReview(key = '') {
-  return { key, keepOverrides: {}, skippedGroups: {}, collapsedDirs: {}, selection: [], deletedIDs: [] };
+  return {
+    key,
+    keepOverrides: {},
+    skippedGroups: {},
+    collapsedDirs: {},
+    selection: [],
+    deletedIDs: [],
+    dismissedKeys: [],
+    // sameDirOnly 是勾选策略偏好，不随每轮分析重置，由调用方跨批次带过来。
+    sameDirOnly: false
+  };
 }
 
 export const photoCleanupStore = reactive({

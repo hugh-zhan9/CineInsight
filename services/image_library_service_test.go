@@ -121,6 +121,63 @@ func TestImagePageFiltersByTagFavoriteRatingSizeAndKeyword(t *testing.T) {
 	}
 }
 
+// AI 描述筛选：undescribed 要覆盖"从未排队""排队中""生成失败"三种没有描述的情况。
+func TestImagePageFiltersByAIDescriptionState(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	described := mustCreateTestImage(t, "described.jpg", 100)
+	failed := mustCreateTestImage(t, "failed.jpg", 100)
+	pending := mustCreateTestImage(t, "pending.jpg", 100)
+	never := mustCreateTestImage(t, "never.jpg", 100)
+
+	rows := []models.ImageAIDescription{
+		{ImageID: described.ID, Status: "completed", Description: "海边日落"},
+		{ImageID: failed.ID, Status: "failed", ErrorCode: "request_failed"},
+		{ImageID: pending.ID, Status: "pending"},
+	}
+	if err := database.DB.Create(&rows).Error; err != nil {
+		t.Fatalf("创建 AI 描述记录失败: %v", err)
+	}
+
+	if got := searchImageIDs(t, ImageFilter{AIDescriptionState: ImageAIDescriptionStateDescribed}); len(got) != 1 || got[0] != described.ID {
+		t.Fatalf("described 应只命中已生成描述的图片，实际 %v", got)
+	}
+
+	undescribed := searchImageIDs(t, ImageFilter{AIDescriptionState: ImageAIDescriptionStateUndescribed})
+	if len(undescribed) != 3 {
+		t.Fatalf("undescribed 应命中失败/排队中/从未排队三张，实际 %v", undescribed)
+	}
+	for _, id := range undescribed {
+		if id == described.ID {
+			t.Fatalf("undescribed 不应包含已生成描述的图片: %v", undescribed)
+		}
+	}
+	for _, want := range []uint{failed.ID, pending.ID, never.ID} {
+		found := false
+		for _, id := range undescribed {
+			if id == want {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("undescribed 应包含图片 %d，实际 %v", want, undescribed)
+		}
+	}
+
+	if got := searchImageIDs(t, ImageFilter{AIDescriptionState: ImageAIDescriptionStateFailed}); len(got) != 1 || got[0] != failed.ID {
+		t.Fatalf("failed 应只命中生成失败的图片，实际 %v", got)
+	}
+
+	if got := searchImageIDs(t, ImageFilter{}); len(got) != 4 {
+		t.Fatalf("不筛时应返回全部 4 张，实际 %v", got)
+	}
+
+	if _, err := NewImageLibraryService().SearchImagePage(ImagePageRequest{
+		Filter: ImageFilter{AIDescriptionState: "bogus"}, Limit: 10,
+	}); err == nil {
+		t.Fatal("非法的 AI 描述筛选值应报错")
+	}
+}
+
 func TestImagePageExcludesSoftDeletedRows(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	kept := mustCreateTestImage(t, "kept.jpg", 10)
