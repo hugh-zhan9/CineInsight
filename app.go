@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -75,6 +76,7 @@ type App struct {
 	semanticMu            sync.RWMutex
 	imageAIDescMu         sync.RWMutex
 	imageAIDescription    *services.ImageAIDescriptionService
+	imageAIDescAutoMu     sync.Mutex // 串行化自动触发，防止启动与扫描后触发并发
 	imageSemanticMu       sync.RWMutex
 	imageSemanticIndex    *services.ImageSemanticIndexService
 	restoreMu             sync.Mutex
@@ -204,6 +206,8 @@ func (a *App) startup(ctx context.Context) {
 		log.Printf("App startup short-feed feedback sync tag=%d likes_added=%d likes_removed=%d favorites_added=%d", result.TagID, result.LikesAdded, result.LikesRemoved, result.FavoritesAdded)
 	}
 	a.aiTaggingService.Start(ctx)
+	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。
+	go a.triggerImageAIDescriptionAuto("startup")
 	a.startShortFeedServer(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
@@ -1061,6 +1065,13 @@ func (a *App) GetAllTags() ([]models.Tag, error) {
 	return tags, err
 }
 
+// GetImageTags 仅返回被图片实际使用的标签，供图片库筛选栏展示。
+func (a *App) GetImageTags() ([]models.Tag, error) {
+	tags, err := a.tagService.GetImageTags()
+	log.Printf("API GetImageTags result=%d err=%v", len(tags), err)
+	return tags, err
+}
+
 func (a *App) GetAITagLibrary() ([]models.Tag, error) {
 	tags, err := a.tagService.GetAITagLibrary()
 	log.Printf("API GetAITagLibrary result=%d err=%v", len(tags), err)
@@ -1419,6 +1430,31 @@ func (a *App) imageAIDescriptionService() *services.ImageAIDescriptionService {
 	a.imageAIDescMu.RLock()
 	defer a.imageAIDescMu.RUnlock()
 	return a.imageAIDescription
+}
+
+// triggerImageAIDescriptionAuto 在后台增量生成图片描述：复用 StartImageAIDescription
+// 的增量目标集（仅无 completed 描述的图）。配置缺失（ErrImageAIDescriptionConfigUnavailable）
+// 与运行中（ErrImageAIDescriptionBusy）都静默跳过，等下次触发或手动启动。
+func (a *App) triggerImageAIDescriptionAuto(reason string) {
+	a.imageAIDescAutoMu.Lock()
+	defer a.imageAIDescAutoMu.Unlock()
+	svc := a.imageAIDescriptionService()
+	if svc == nil {
+		return
+	}
+	ctx := a.ctx
+	if ctx == nil || ctx.Err() != nil {
+		ctx = context.Background()
+	}
+	if _, err := svc.StartImageAIDescription(ctx); err != nil {
+		if errors.Is(err, services.ErrImageAIDescriptionConfigUnavailable) || errors.Is(err, services.ErrImageAIDescriptionBusy) {
+			log.Printf("image AI description auto-start skipped (%s): %v", reason, err)
+			return
+		}
+		log.Printf("image AI description auto-start failed (%s): %v", reason, err)
+		return
+	}
+	log.Printf("image AI description auto-started (%s)", reason)
 }
 
 // imageSemanticIndexService 以读锁返回当前图片语义索引服务指针。
@@ -1985,6 +2021,10 @@ func (a *App) SyncImageDirectories() (*services.ImageScanResult, error) {
 	}
 	log.Printf("API SyncImageDirectories added=%d relocated=%d removed=%d skipped=%d errors=%d",
 		result.Added, result.Relocated, result.Removed, result.Skipped, len(result.Errors))
+	// 扫到新图后后台增量生成描述；勿阻塞对账返回。
+	if result.Added > 0 {
+		go a.triggerImageAIDescriptionAuto("image-scan")
+	}
 	return result, nil
 }
 

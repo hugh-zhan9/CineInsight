@@ -218,6 +218,18 @@ func (s *TagService) GetAllTags() ([]models.Tag, error) {
 	return tags, err
 }
 
+// GetImageTags 仅返回实际关联过图片的标签（image_tags 中出现过的 tag），
+// 供图片库筛选栏使用，避免展示只被视频使用的标签。
+func (s *TagService) GetImageTags() ([]models.Tag, error) {
+	var tags []models.Tag
+	err := database.DB.
+		Joins("JOIN image_tags ON image_tags.tag_id = tags.id").
+		Group("tags.id").
+		Order("tags.name").
+		Find(&tags).Error
+	return tags, err
+}
+
 // MergeTags retains targetTagID, unions all video and recommendation links into
 // it, rewrites AI history references, and soft-deletes the source tags.
 func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTagsResult, error) {
