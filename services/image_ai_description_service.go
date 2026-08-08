@@ -504,10 +504,11 @@ func (s *ImageAIDescriptionService) markProcessing(ctx context.Context, imageID 
 		Columns: []clause.Column{{Name: "image_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"status": imageAIDescriptionStatusProcessing,
-			// 不带表名前缀：模型未定义 TableName，GORM 默认命名为
-			// image_a_idescriptions；DO UPDATE 中不带前缀的列在
-			// SQLite/Postgres 里都指向冲突前的旧行，天然与表名解耦。
-			"attempt_count": gorm.Expr("attempt_count + 1"),
+			// Postgres 的 ON CONFLICT DO UPDATE 中，SET 右侧不带限定的列名是歧义的
+			// （既可能指目标表列、也可能指 excluded 行），会直接报 42702 导致整批失败。
+			// 用 excluded.attempt_count 显式取"本次 INSERT 试图写入的值"做自增，
+			// 与表名无关，SQLite/Postgres 均成立。
+			"attempt_count": gorm.Expr("excluded.attempt_count + 1"),
 			"updated_at":    s.now(),
 		}),
 	}).Create(&row).Error
