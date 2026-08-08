@@ -54,6 +54,15 @@ const (
 // imageDecoderForFormat 按小写扩展名（无点）分流解码器；未收录格式一律降级为
 // 不支持（占位 404），不做未约定的兜底解码。
 func imageDecoderForFormat(format string) imageDecoderKind {
+	return imageDecoderForFormatAndPath(format, "")
+}
+
+// imageDecoderForFormatAndPath 在 format 为空（早期入库未回填 Format 的历史记录）
+// 时回退用路径扩展名分流，保证存量记录仍可出图。
+func imageDecoderForFormatAndPath(format, path string) imageDecoderKind {
+	if format == "" && path != "" {
+		format = strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	}
 	switch strings.ToLower(format) {
 	case "jpg", "jpeg", "png", "gif", "webp":
 		return imageDecoderFFmpeg
@@ -66,6 +75,14 @@ func imageDecoderForFormat(format string) imageDecoderKind {
 
 // mimeByImageFormat 返回常规格式原文件直出时的 Content-Type。
 func mimeByImageFormat(format string) string {
+	return mimeByImageFormatAndPath(format, "")
+}
+
+// mimeByImageFormatAndPath 与解码矩阵一致，format 为空时回退路径扩展名。
+func mimeByImageFormatAndPath(format, path string) string {
+	if format == "" && path != "" {
+		format = strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	}
 	switch strings.ToLower(format) {
 	case "jpg", "jpeg":
 		return "image/jpeg"
@@ -153,7 +170,7 @@ func (s *ImageThumbnailService) ResolveImageThumbnail(ctx context.Context, image
 	if err != nil {
 		return nil, err
 	}
-	decoder := imageDecoderForFormat(img.Format)
+	decoder := imageDecoderForFormatAndPath(img.Format, img.Path)
 	if decoder == imageDecoderUnsupported {
 		return nil, fmt.Errorf("图片格式 %q 无可用解码器: %w", img.Format, ErrImageDecodeUnsupported)
 	}
@@ -197,7 +214,7 @@ func (s *ImageThumbnailService) ResolveImageView(ctx context.Context, imageID ui
 	if err != nil {
 		return nil, err
 	}
-	decoder := imageDecoderForFormat(img.Format)
+	decoder := imageDecoderForFormatAndPath(img.Format, img.Path)
 	if decoder == imageDecoderUnsupported {
 		return nil, fmt.Errorf("图片格式 %q 无可用解码器: %w", img.Format, ErrImageDecodeUnsupported)
 	}
@@ -209,7 +226,7 @@ func (s *ImageThumbnailService) ResolveImageView(ctx context.Context, imageID ui
 		return nil, fmt.Errorf("图片源路径不是文件")
 	}
 	if decoder == imageDecoderFFmpeg {
-		return &ImageMedia{Path: img.Path, ModTime: sourceInfo.ModTime(), MIME: mimeByImageFormat(img.Format)}, nil
+		return &ImageMedia{Path: img.Path, ModTime: sourceInfo.ModTime(), MIME: mimeByImageFormatAndPath(img.Format, img.Path)}, nil
 	}
 
 	if err := os.MkdirAll(s.cacheDir, 0755); err != nil {

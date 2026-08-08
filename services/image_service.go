@@ -115,11 +115,15 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 	}
 
 	var settings models.Settings
-	if err := database.DB.Select("image_extensions, scan_exclude_paths").First(&settings).Error; err != nil {
+	if err := database.DB.Select("image_extensions, scan_exclude_paths, image_scan_exclude_paths").First(&settings).Error; err != nil {
 		return nil, fmt.Errorf("获取设置失败: %w", err)
 	}
 	extensions := parseImageExtensions(settings.ImageExtensions)
-	excludedPaths := parseScanExcludePaths(settings.ScanExcludePaths)
+	// 图片黑名单独立配置；空值回退共用视频黑名单，保持老库行为。
+	excludedPaths := parseScanExcludePaths(settings.ImageScanExcludePaths)
+	if len(excludedPaths) == 0 {
+		excludedPaths = parseScanExcludePaths(settings.ScanExcludePaths)
+	}
 
 	result := &ImageScanResult{Errors: make([]ImageScanError, 0)}
 	scannedByPath := make(map[string]ScannedFile)
@@ -387,6 +391,7 @@ func (s *ImageService) addImage(path string) (*models.Image, error) {
 		Path:      path,
 		Directory: filepath.Dir(path),
 		Size:      info.Size(),
+		Format:    strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), "."),
 	}
 	if err := database.DB.Create(image).Error; err != nil {
 		errMsg := strings.ToLower(err.Error())

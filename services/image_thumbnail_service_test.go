@@ -118,6 +118,28 @@ func TestImageDecoderRoutingMatrix(t *testing.T) {
 	}
 }
 
+func TestImageDecoderRoutingFallbackToPathExt(t *testing.T) {
+	// 早期入库未回填 Format 的历史记录：format 为空时回退路径扩展名分流。
+	if got := imageDecoderForFormatAndPath("", "/Volumes/disk/a/b.JPG"); got != imageDecoderFFmpeg {
+		t.Fatalf("空 format 应回退路径扩展名走 FFmpeg: got=%d", got)
+	}
+	if got := imageDecoderForFormatAndPath("", "/data/photo.heic"); got != imageDecoderSips {
+		t.Fatalf("空 format 应回退路径扩展名走 sips: got=%d", got)
+	}
+	if got := imageDecoderForFormatAndPath("", "/data/photo.bmp"); got != imageDecoderUnsupported {
+		t.Fatalf("空 format 且扩展名未收录应不支持: got=%d", got)
+	}
+	if got := imageDecoderForFormatAndPath("png", "/data/photo.heic"); got != imageDecoderFFmpeg {
+		t.Fatalf("format 非空时应忽略路径: got=%d", got)
+	}
+	if got := mimeByImageFormatAndPath("", "/Volumes/disk/a/b.JPG"); got != "image/jpeg" {
+		t.Fatalf("空 format MIME 应回退路径扩展名: got=%q", got)
+	}
+	if got := mimeByImageFormatAndPath("", "/data/photo.heic"); got != "" {
+		t.Fatalf("未收录格式 MIME 应为空: got=%q", got)
+	}
+}
+
 func TestImageThumbnailCacheHitAndMtimeInvalidation(t *testing.T) {
 	setupImageThumbnailTestDB(t)
 	root := t.TempDir()
