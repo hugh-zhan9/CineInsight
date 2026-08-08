@@ -228,17 +228,60 @@ func (s *ImageThumbnailService) ResolveImageView(ctx context.Context, imageID ui
 	if decoder == imageDecoderFFmpeg {
 		return &ImageMedia{Path: img.Path, ModTime: sourceInfo.ModTime(), MIME: mimeByImageFormatAndPath(img.Format, img.Path)}, nil
 	}
+	return s.resolveViewCache(ctx, img, decoder, sourceInfo)
+}
 
+// ResolveImageFeedView 手机端（局域网 Feed）用的大图。与桌面端的区别只有一条：
+// 浏览器能直接解码的格式**不再直出原文件**——一张 30MB 的 JPEG 走 WiFi 要好几秒，
+// 而手机屏幕用不上那个分辨率。超过 inlineOriginalMaxBytes 的一律给降采样后的
+// JPEG 缓存（长边 imageViewMaxEdge）；生成失败时退回原文件，保证仍然能看。
+func (s *ImageThumbnailService) ResolveImageFeedView(ctx context.Context, imageID uint, inlineOriginalMaxBytes int64) (*ImageMedia, error) {
+	img, err := loadImageForAsset(imageID)
+	if err != nil {
+		return nil, err
+	}
+	decoder := imageDecoderForFormatAndPath(img.Format, img.Path)
+	if decoder == imageDecoderUnsupported {
+		return nil, fmt.Errorf("图片格式 %q 无可用解码器: %w", img.Format, ErrImageDecodeUnsupported)
+	}
+	sourceInfo, err := os.Stat(img.Path)
+	if err != nil {
+		return nil, err
+	}
+	if sourceInfo.IsDir() {
+		return nil, fmt.Errorf("图片源路径不是文件")
+	}
+
+	original := &ImageMedia{Path: img.Path, ModTime: sourceInfo.ModTime(), MIME: mimeByImageFormatAndPath(img.Format, img.Path)}
+	// 小图直出：为了省几十 KB 去转码反而更慢。
+	if decoder == imageDecoderFFmpeg && inlineOriginalMaxBytes > 0 && sourceInfo.Size() <= inlineOriginalMaxBytes {
+		return original, nil
+	}
+
+	media, err := s.resolveViewCache(ctx, img, decoder, sourceInfo)
+	if err != nil {
+		if decoder == imageDecoderFFmpeg {
+			// 没有 ffmpeg 或转码失败：宁可慢也要能看，退回原文件。
+			log.Printf("[ShortFeed] 图片降采样失败，退回原文件 id=%d err=%v", imageID, err)
+			return original, nil
+		}
+		return nil, err
+	}
+	return media, nil
+}
+
+// resolveViewCache 取（必要时生成）长边 imageViewMaxEdge 的 JPEG 缓存。
+func (s *ImageThumbnailService) resolveViewCache(ctx context.Context, img *models.Image, decoder imageDecoderKind, sourceInfo os.FileInfo) (*ImageMedia, error) {
 	if err := os.MkdirAll(s.cacheDir, 0755); err != nil {
 		return nil, fmt.Errorf("创建图片缩略图缓存目录失败: %w", err)
 	}
 
-	lockValue, _ := s.locks.LoadOrStore(imageID, &sync.Mutex{})
+	lockValue, _ := s.locks.LoadOrStore(img.ID, &sync.Mutex{})
 	lock := lockValue.(*sync.Mutex)
 	lock.Lock()
 	defer lock.Unlock()
 
-	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(imageID), 10)+".view.jpg")
+	cachePath := filepath.Join(s.cacheDir, strconv.FormatUint(uint64(img.ID), 10)+".view.jpg")
 	if media, ok := validThumbnailCache(cachePath, sourceInfo.ModTime()); ok {
 		return &ImageMedia{Path: media.Path, ModTime: media.ModTime, MIME: "image/jpeg"}, nil
 	}

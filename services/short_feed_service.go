@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -19,6 +20,18 @@ var ErrShortFeedNoEligibleVideos = errors.New("no eligible short-feed videos")
 
 // ErrShortFeedUnsupportedMedia 表示这个媒体类型在当前构建下还没有实现。
 var ErrShortFeedUnsupportedMedia = errors.New("unsupported short-feed media kind")
+
+// shortFeedInlineImageMaxBytes 是直接把原图发给手机的体积上限。超过它就发降采样后的
+// JPEG：手机屏幕用不上原始分辨率，而几十 MB 走 WiFi 要好几秒。
+const shortFeedInlineImageMaxBytes int64 = 3 << 20
+
+// shortFeedCandidateTTL 是候选快照的有效期。Feed 本身就是近似的随机抽取，
+// 没必要每划一次就把整库重读一遍。删除等会主动让它失效。
+const shortFeedCandidateTTL = 30 * time.Second
+
+// shortFeedMissingRetries 是选中项文件缺失后的重试次数：只 stat 被选中的那一条，
+// 而不是先把整库 stat 一遍。
+const shortFeedMissingRetries = 8
 
 type ShortFeedMedia struct {
 	Path        string
@@ -35,6 +48,13 @@ type ShortFeedService struct {
 	imageThumbnail *ImageThumbnailService
 	now            func() time.Time
 	randFloat64    func() float64
+	// statFile 可注入，测试用它统计"一次抽取到底 stat 了几个文件"。
+	statFile func(string) (os.FileInfo, error)
+
+	candidateMu   sync.Mutex
+	candidates    []shortFeedCandidate
+	candidateHint *models.Video
+	candidatesAt  time.Time
 }
 
 type ShortFeedFeedbackSyncResult struct {
@@ -53,7 +73,17 @@ func NewShortFeedService(videoService *VideoService) *ShortFeedService {
 		videoService: videoService,
 		now:          time.Now,
 		randFloat64:  rand.Float64,
+		statFile:     os.Stat,
 	}
+}
+
+// invalidateCandidates 让候选快照立即失效（删除等改变可选集合的操作后调用）。
+func (s *ShortFeedService) invalidateCandidates() {
+	s.candidateMu.Lock()
+	s.candidates = nil
+	s.candidateHint = nil
+	s.candidatesAt = time.Time{}
+	s.candidateMu.Unlock()
 }
 
 // SetImageThumbnailService 注入图片解码/缓存服务。app 层在构造完
@@ -113,7 +143,7 @@ func (s *ShortFeedService) resolveImageMedia(imageID uint, view bool) (*ShortFee
 	var media *ImageMedia
 	var err error
 	if view {
-		media, err = s.imageThumbnail.ResolveImageView(ctx, imageID)
+		media, err = s.imageThumbnail.ResolveImageFeedView(ctx, imageID, shortFeedInlineImageMaxBytes)
 	} else {
 		media, err = s.imageThumbnail.ResolveImageThumbnail(ctx, imageID)
 	}
@@ -151,7 +181,7 @@ type shortFeedCandidate struct {
 // NextItem 抽取下一条内容。exclude 是客户端最近看过的类型化标识，
 // 混编流里图片与视频按同一套标签偏好加权后随机抽一条。
 func (s *ShortFeedService) NextItem(exclude []ShortFeedMediaRef) (*ShortFeedItemDTO, error) {
-	all, unsupportedVideo, err := s.collectCandidates()
+	all, unsupportedVideo, err := s.cachedCandidates()
 	if err != nil {
 		return nil, err
 	}
@@ -179,21 +209,84 @@ func (s *ShortFeedService) NextItem(exclude []ShortFeedMediaRef) (*ShortFeedItem
 	if err != nil {
 		return nil, err
 	}
-	selected := s.weightedSelectCandidate(pool, prefs)
-	if selected.image != nil {
-		return s.imageDTO(selected.image)
+
+	// 只对被选中的那一条做 stat。以前是先把整库每个文件都 stat 一遍再抽签，
+	// 外置盘上几千次系统调用会让每一次划动都等上好几秒。
+	for attempt := 0; attempt < shortFeedMissingRetries && len(pool) > 0; attempt++ {
+		index := s.weightedSelectIndex(pool, prefs)
+		selected := pool[index]
+		if !s.candidateFileExists(selected) {
+			s.invalidateCandidates()
+			pool = append(pool[:index:index], pool[index+1:]...)
+			continue
+		}
+		if selected.image != nil {
+			return s.imageDTO(selected.image)
+		}
+		return s.videoDTO(selected.video, "", "")
 	}
-	return s.videoDTO(selected.video, "", "")
+	return nil, ErrShortFeedNoEligibleVideos
+}
+
+// cachedCandidates 返回候选快照。Feed 是近似的随机抽取，没必要每划一次就把整库
+// 重读一遍；快照过期或被主动失效后才重建。
+func (s *ShortFeedService) cachedCandidates() ([]shortFeedCandidate, *models.Video, error) {
+	s.candidateMu.Lock()
+	if s.candidates != nil && s.now().Sub(s.candidatesAt) < shortFeedCandidateTTL {
+		items, hint := s.candidates, s.candidateHint
+		s.candidateMu.Unlock()
+		return items, hint, nil
+	}
+	s.candidateMu.Unlock()
+
+	items, hint, err := s.collectCandidates()
+	if err != nil {
+		return nil, nil, err
+	}
+	s.candidateMu.Lock()
+	s.candidates, s.candidateHint, s.candidatesAt = items, hint, s.now()
+	s.candidateMu.Unlock()
+	return items, hint, nil
+}
+
+// candidateFileExists 只检查这一条；缺失的顺手标记 stale，下次重建快照时自然排除。
+func (s *ShortFeedService) candidateFileExists(candidate shortFeedCandidate) bool {
+	path := ""
+	if candidate.video != nil {
+		path = candidate.video.Path
+	} else if candidate.image != nil {
+		path = candidate.image.Path
+	}
+	if path == "" {
+		return false
+	}
+	info, err := s.stat(path)
+	if err != nil || info.IsDir() {
+		if candidate.video != nil {
+			s.markStale(candidate.ref.ID)
+		} else {
+			s.markImageStale(candidate.ref.ID)
+		}
+		return false
+	}
+	return true
+}
+
+func (s *ShortFeedService) stat(path string) (os.FileInfo, error) {
+	if s.statFile != nil {
+		return s.statFile(path)
+	}
+	return os.Stat(path)
 }
 
 // collectCandidates 合并两种媒体的可入选集合。第二个返回值是"存在但不可内联
 // 播放"的视频样本，仅在候选为空时用于给出可解释的原因。
 func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Video, error) {
-	videos, err := s.loadEligibleVideos(nil)
+	// 这里不做文件存在性检查：抽中之后只 stat 那一条即可。
+	existingVideos, err := s.loadEligibleVideos(nil)
 	if err != nil {
 		return nil, nil, err
 	}
-	existingVideos := s.filterExistingVideos(videos)
 
 	candidates := make([]shortFeedCandidate, 0, len(existingVideos))
 	var unsupportedVideo *models.Video
@@ -217,9 +310,6 @@ func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Vi
 		return nil, nil, err
 	}
 	for i := range images {
-		if !s.imageFileExists(images[i]) {
-			continue
-		}
 		candidates = append(candidates, shortFeedCandidate{
 			ref:   ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: images[i].ID},
 			tags:  images[i].Tags,
@@ -269,9 +359,9 @@ func lastShortFeedRef(exclude []ShortFeedMediaRef) []ShortFeedMediaRef {
 	return exclude[len(exclude)-1:]
 }
 
-func (s *ShortFeedService) weightedSelectCandidate(candidates []shortFeedCandidate, prefs map[uint]float64) shortFeedCandidate {
+func (s *ShortFeedService) weightedSelectIndex(candidates []shortFeedCandidate, prefs map[uint]float64) int {
 	if len(candidates) == 1 {
-		return candidates[0]
+		return 0
 	}
 	weights := make([]float64, len(candidates))
 	total := 0.0
@@ -280,17 +370,17 @@ func (s *ShortFeedService) weightedSelectCandidate(candidates []shortFeedCandida
 		total += weights[i]
 	}
 	if total <= 0 {
-		return candidates[0]
+		return 0
 	}
 	draw := s.randFloat64() * total
 	cumulative := 0.0
 	for i, weight := range weights {
 		cumulative += weight
 		if draw <= cumulative {
-			return candidates[i]
+			return i
 		}
 	}
-	return candidates[len(candidates)-1]
+	return len(candidates) - 1
 }
 
 // FavoriteItems 收藏页：两种媒体合并，各自按最近收藏时间倒序后再按时间归并。
@@ -617,9 +707,17 @@ func syncShortFeedImageFeedback(tx *gorm.DB, tagID uint, result *ShortFeedFeedba
 func (s *ShortFeedService) DeleteItem(ref ShortFeedMediaRef) error {
 	switch ref.Kind {
 	case ShortFeedMediaVideo:
-		return s.videoService.DeleteVideo(ref.ID, true)
+		err := s.videoService.DeleteVideo(ref.ID, true)
+		if err == nil {
+			s.invalidateCandidates()
+		}
+		return err
 	case ShortFeedMediaImage:
-		return NewImageService().DeleteImage(ref.ID, true)
+		err := NewImageService().DeleteImage(ref.ID, true)
+		if err == nil {
+			s.invalidateCandidates()
+		}
+		return err
 	default:
 		return ErrShortFeedUnsupportedMedia
 	}
