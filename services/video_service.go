@@ -2274,14 +2274,30 @@ func openPath(path string, isDir bool) error {
 func revealPath(path string) error {
 	switch runtime.GOOS {
 	case "darwin":
-		return exec.Command("open", "-R", path).Start()
+		return runRevealCommand(exec.Command("open", "-R", path))
 	case "windows":
-		return exec.Command("explorer", "/select,"+path).Start()
+		// explorer 自己解析命令行，Go 会把含空格的整个参数加引号变成 "/select,C:\a b\x.jpg"，
+		// 那样 explorer 认不出开关。必须写成 /select,"<path>" 的形式。
+		cmd := exec.Command("explorer")
+		cmd.SysProcAttr = revealSysProcAttr(`/select,"` + path + `"`)
+		if cmd.SysProcAttr == nil {
+			return exec.Command("explorer", "/select,"+path).Start()
+		}
+		return runRevealCommand(cmd)
 	case "linux":
 		return openPath(filepath.Dir(path), true)
 	default:
 		return ErrUnsupportedOS
 	}
+}
+
+// runRevealCommand 等待进程退出以便把失败返回给调用方；这些命令都是即起即退的
+// 轻量启动器，等待不会卡住界面。
+func runRevealCommand(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Wait()
 }
 
 func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) (*PlaybackAttemptResult, error) {

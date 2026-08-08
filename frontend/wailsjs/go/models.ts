@@ -2014,6 +2014,7 @@ export namespace services {
 	    taken_after?: string;
 	    taken_before?: string;
 	    sort_mode: string;
+	    ai_description_state: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImageFilter(source);
@@ -2031,6 +2032,7 @@ export namespace services {
 	        this.taken_after = source["taken_after"];
 	        this.taken_before = source["taken_before"];
 	        this.sort_mode = source["sort_mode"];
+	        this.ai_description_state = source["ai_description_state"];
 	    }
 	}
 	export class ImagePage {

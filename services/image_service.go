@@ -477,12 +477,16 @@ func (s *ImageService) OpenImageDirectory(directory string) error {
 	if cleaned == "" {
 		return fmt.Errorf("目录为空")
 	}
+	// 含软删除行：清理审阅会把刚删掉的成员留在结果里，这时"打开目录"仍应可用。
 	var count int64
-	if err := database.DB.Model(&models.Image{}).Where("directory = ?", cleaned).Count(&count).Error; err != nil {
+	if err := database.DB.Unscoped().Model(&models.Image{}).Where("directory = ?", cleaned).Count(&count).Error; err != nil {
 		return err
 	}
 	if count == 0 {
 		return fmt.Errorf("目录不在图片库中：%s", cleaned)
+	}
+	if _, err := os.Stat(cleaned); err != nil {
+		return fmt.Errorf("目录不可访问：%w", err)
 	}
 	return openPath(cleaned, true)
 }
@@ -490,11 +494,11 @@ func (s *ImageService) OpenImageDirectory(directory string) error {
 // RevealImage 在系统文件管理器里定位到这张图片本身。
 func (s *ImageService) RevealImage(imageID uint) error {
 	var image models.Image
-	if err := database.DB.First(&image, imageID).Error; err != nil {
-		return err
+	if err := database.DB.Unscoped().First(&image, imageID).Error; err != nil {
+		return fmt.Errorf("图片不存在：%w", err)
 	}
 	if _, err := os.Stat(image.Path); err != nil {
-		return fmt.Errorf("源文件不可访问：%w", err)
+		return fmt.Errorf("源文件不可访问（可能已移入回收站）：%w", err)
 	}
 	return revealPath(image.Path)
 }

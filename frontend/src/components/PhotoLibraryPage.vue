@@ -47,6 +47,18 @@
           <option value="rating">评分最高</option>
           <option value="taken">拍摄时间</option>
         </select>
+        <select
+          v-model="filters.aiDescriptionState"
+          class="select-input photo-toolbar__ai"
+          :disabled="searchMode === 'semantic'"
+          :title="searchMode === 'semantic' ? '语义模式本身就依赖描述，不再叠加此筛选' : '按 AI 描述的生成状态筛选'"
+          data-test="photo-ai-state"
+        >
+          <option value="">AI 描述：全部</option>
+          <option value="described">已生成</option>
+          <option value="undescribed">未生成</option>
+          <option value="failed">生成失败</option>
+        </select>
         <label
           class="photo-toolbar__timeline"
           :title="searchMode === 'semantic' ? '语义模式按相关度排序，不做时间线分组' : '按拍摄时间倒序，并插入年月分组头'"
@@ -430,7 +442,9 @@ export default {
         maxRating: '',
         takenAfter: '',
         takenBefore: '',
-        sortMode: 'recent'
+        sortMode: 'recent',
+        // ''=不筛 / described=已生成 / undescribed=未生成 / failed=生成失败
+        aiDescriptionState: ''
       },
       viewerIndex: -1,
       viewerImageError: false,
@@ -472,6 +486,8 @@ export default {
       return '';
     },
     virtualized() { return Boolean(this.scrollOwnerEl) && !this.scrollOwnerMissing; },
+    // 网格是否真的在视野里：切走标签页或清理审阅整页接管时都不是。
+    gridActive() { return this.pageActive && !this.showCleanup; },
     layout() {
       return buildPhotoLayout({
         items: this.images,
@@ -583,6 +599,7 @@ export default {
     },
     'filters.favoriteOnly'() { this.reload(); },
     'filters.sortMode'() { this.reload(); },
+    'filters.aiDescriptionState'() { this.reload(); },
     'filters.minRating'() { this.reload(); },
     'filters.maxRating'() { this.reload(); },
     'filters.takenAfter'() { this.reload(); },
@@ -665,13 +682,19 @@ export default {
       this.scrollOwnerEl = null;
     },
     attachResizeObserver() {
-      if (typeof ResizeObserver === 'undefined' || this._resizeObserver) return;
+      if (typeof ResizeObserver === 'undefined' || !this.$el?.nodeType) return;
+      // 清理审阅页进出会把根节点从 <main> 换成 <section> 再换回新的 <main>，
+      // 只判断"已有 observer"会让它一直盯着已经脱离文档的旧节点。
+      if (this._resizeObserver && this._observedEl === this.$el) return;
+      this.detachResizeObserver();
       this._resizeObserver = new ResizeObserver(() => this.handleGridResize());
+      this._observedEl = this.$el;
       this._resizeObserver.observe(this.$el);
     },
     detachResizeObserver() {
       this._resizeObserver?.disconnect();
       this._resizeObserver = null;
+      this._observedEl = null;
     },
     getListTop() {
       const shell = this.$refs.gridShell;
@@ -698,7 +721,7 @@ export default {
     // 避免宽度变化时滚动位置跳回列表开头。
     handleGridResize() {
       // 隐藏时 ResizeObserver 会报 0 宽，按它重算会把布局清空。
-      if (!this.pageActive) return;
+      if (!this.gridActive) return;
       const anchorIndex = this.virtualized
         ? firstVisiblePhotoItemIndex(this.layout, this.windowState.startRow)
         : -1;
@@ -720,8 +743,7 @@ export default {
       });
     },
     handleOwnerScroll() {
-      // 本页隐藏时滚动的是别的页面，别拿那个位置去算本页的可视窗口。
-      if (!this.pageActive) return;
+      if (!this.gridActive) return;
       this.syncWindow();
     },
     // 切回本页：先按记下的位置回写，再让虚拟化窗口跟上。占位块高度要等窗口重算后才
@@ -730,11 +752,12 @@ export default {
       this.resolveScrollOwner();
       const target = this.inactiveScrollTop;
       if (!this.scrollOwnerEl) return;
-      if (target > 0) this.scrollOwnerEl.scrollTop = target;
+      // 0 也是要恢复的位置：从网格顶部进入审阅页、在审阅页里滚很远再返回，
+      // 不写回去的话网格会停在审阅页的偏移上。
+      this.scrollOwnerEl.scrollTop = target;
       this.syncWindow(true);
-      if (target <= 0) return;
       const settle = () => {
-        if (!this.scrollOwnerEl || !this.pageActive) return;
+        if (!this.scrollOwnerEl || !this.gridActive) return;
         // 这一帧之间用户可能已经刷新列表或主动滚走：保存位置变了就说明这次恢复已经作废，
         // 再写回去会把新的位置冲掉。
         if (this.inactiveScrollTop !== target) return;
@@ -746,6 +769,9 @@ export default {
       else settle();
     },
     syncWindow(remeasure = false, allowLoadMore = true) {
+      // 网格不在视野里（切走了标签页、或清理审阅整页接管）时滚动的是别人，
+      // 继续按那个 scrollTop 算窗口会把 maybeLoadMore 一路触发到翻完整个库。
+      if (!this.gridActive) return;
       this.resolveScrollOwner();
       if (remeasure || this.mediaHeight === 0) this.measureGrid();
       if (!this.virtualized) {
@@ -823,7 +849,8 @@ export default {
         max_size: 0,
         taken_after: this.takenBoundary(this.filters.takenAfter, false),
         taken_before: this.takenBoundary(this.filters.takenBefore, true),
-        sort_mode: this.effectiveSortMode
+        sort_mode: this.effectiveSortMode,
+        ai_description_state: this.filters.aiDescriptionState
       };
     },
     buildSemanticFilter() {
@@ -841,6 +868,7 @@ export default {
     // 不动任何列表状态，只决定要不要亮提示条——自动重新加载会把滚动位置冲掉。
     async checkLibraryFreshness() {
       if (this.libraryChanged || this.loading || !this.loadedOnce) return;
+      if (!this.pageActive) return;
       // 语义搜索是一次性查询结果，没有"库里多了几张"这个概念，跳过。
       if (this.searchMode === 'semantic') return;
       const token = this._queryToken;
@@ -1014,7 +1042,12 @@ export default {
     },
     closeCleanup() {
       this.showCleanup = false;
-      this.$nextTick(() => this.restoreScrollPosition());
+      this.$nextTick(() => {
+        // 换根之后要重新盯新的 $el，再恢复位置。
+        this.attachResizeObserver();
+        this.restoreScrollPosition();
+        this.checkLibraryFreshness();
+      });
     },
     async handleCleanupDeleted() {
       await this.reload();
@@ -1258,6 +1291,7 @@ export default {
 .photo-cleanup-badge--done { background: var(--primary-color, #0d9488); color: #fff; }
 .photo-toolbar__keyword { max-width: 240px; }
 .photo-toolbar__sort { width: auto; min-width: 120px; }
+.photo-toolbar__ai { width: auto; min-width: 140px; }
 .photo-toolbar__favorite { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: 13px; white-space: nowrap; cursor: pointer; }
 .photo-toolbar__rating { display: inline-flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: 12px; }
 .photo-toolbar__rating .number-input { width: 76px; }

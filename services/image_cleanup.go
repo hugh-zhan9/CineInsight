@@ -25,7 +25,28 @@ const (
 	imageCleanupMaxBandNeighbors = 64
 	// imageCleanupMaxCandidates 单张图片参与逐对比对的候选上限，镜像 perceptualHashMaxCandidates。
 	imageCleanupMaxCandidates = 256
+	// imageCleanupEnrichChunkSize 回填标签/描述时单条 IN 语句的 id 上限，
+	// 远低于 Postgres/SQLite 的绑定参数上限。
+	imageCleanupEnrichChunkSize = 500
+	// imageCleanupMaxDistanceSamples 计算组内最大汉明距离时的成员采样上限：
+	// 连通分量可以很大，两两比对是 O(n²)。
+	imageCleanupMaxDistanceSamples = 64
 )
+
+func chunkUintIDs(ids []uint, size int) [][]uint {
+	if size <= 0 || len(ids) <= size {
+		return [][]uint{ids}
+	}
+	chunks := make([][]uint, 0, (len(ids)+size-1)/size)
+	for start := 0; start < len(ids); start += size {
+		end := start + size
+		if end > len(ids) {
+			end = len(ids)
+		}
+		chunks = append(chunks, ids[start:end])
+	}
+	return chunks
+}
 
 // ImageCleanupMember 审阅界面里的一张候选图片：内嵌 models.Image（JSON 平铺，
 // 前端字段名不变），再补上审阅要用、但库里字段给不出的实测信息。
@@ -369,8 +390,9 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 	result.StaleHashCount = staleHashCount
 
 	// 标签与 AI 描述只为参与审阅的成员回填，不给全库做 Preload。
+	// 它们只是展示信息：回填失败就少显示几行，不该把跑了几分钟的整轮扫描一起丢掉。
 	if err := enrichImageCleanupMembers(result); err != nil {
-		return nil, 0, err
+		log.Printf("[ImageCleanup] enrich members failed (结果仍可用) err=%v", err)
 	}
 
 	log.Printf("[ImageCleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d stale_hash_count=%d hash_candidates=%d",
@@ -410,25 +432,29 @@ func enrichImageCleanupMembers(result *ImageCleanupAnalysis) error {
 		return nil
 	}
 
-	var tagged []models.Image
-	if err := database.DB.Preload("Tags").Select("id").Where("id IN ?", ids).Find(&tagged).Error; err != nil {
-		return err
-	}
-	tagsByID := make(map[uint][]models.Tag, len(tagged))
-	for _, image := range tagged {
-		tagsByID[image.ID] = image.Tags
-	}
+	tagsByID := make(map[uint][]models.Tag, len(ids))
+	descriptionByID := make(map[uint]string, len(ids))
+	// 分批查：一次 IN 的绑定参数受驱动限制（Postgres 65535 / SQLite 32766），
+	// 重复成员多的大库会直接把整条语句打爆。
+	for _, chunk := range chunkUintIDs(ids, imageCleanupEnrichChunkSize) {
+		var tagged []models.Image
+		if err := database.DB.Preload("Tags").Select("id").Where("id IN ?", chunk).Find(&tagged).Error; err != nil {
+			return err
+		}
+		for _, image := range tagged {
+			tagsByID[image.ID] = image.Tags
+		}
 
-	var descriptions []models.ImageAIDescription
-	if err := database.DB.
-		Select("image_id", "status", "description").
-		Where("image_id IN ? AND status = ?", ids, "completed").
-		Find(&descriptions).Error; err != nil {
-		return err
-	}
-	descriptionByID := make(map[uint]string, len(descriptions))
-	for _, item := range descriptions {
-		descriptionByID[item.ImageID] = item.Description
+		var descriptions []models.ImageAIDescription
+		if err := database.DB.
+			Select("image_id", "status", "description").
+			Where("image_id IN ? AND status = ?", chunk, imageAIDescriptionStatusCompleted).
+			Find(&descriptions).Error; err != nil {
+			return err
+		}
+		for _, item := range descriptions {
+			descriptionByID[item.ImageID] = item.Description
+		}
 	}
 
 	forEachImageCleanupMember(result, func(member *ImageCleanupMember) {
@@ -561,13 +587,17 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 		sort.Slice(entries, func(i, j int) bool {
 			return isPreferredCleanupImage(entries[i].image(), entries[j].image())
 		})
-		// 组内最大汉明距离：界面用它给出"有多像"的量化说法。
+		// 与推荐保留项的最大汉明距离：界面用它给出"有多像"的量化说法。
+		// 不用组内两两最大值——连通分量是链式的，链两端可以毫不相似，
+		// 报出来会把一个刚判定为近似重复的组标成相似度 0%。
 		maxDistance := 0
-		for i := 0; i < len(entries); i++ {
-			for j := i + 1; j < len(entries); j++ {
-				if distance := bits.OnesCount64(entries[i].hash ^ entries[j].hash); distance > maxDistance {
-					maxDistance = distance
-				}
+		sampled := entries
+		if len(sampled) > imageCleanupMaxDistanceSamples {
+			sampled = sampled[:imageCleanupMaxDistanceSamples]
+		}
+		for _, entry := range sampled[1:] {
+			if distance := bits.OnesCount64(sampled[0].hash ^ entry.hash); distance > maxDistance {
+				maxDistance = distance
 			}
 		}
 		members := make([]ImageCleanupMember, 0, len(entries))

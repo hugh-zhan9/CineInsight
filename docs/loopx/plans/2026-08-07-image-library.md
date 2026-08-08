@@ -162,14 +162,14 @@ slices:
 
 ## P-010 图片清理审阅
 
-交付 `StartImageCleanupAnalysis/GetImageCleanupStatus`（异步+进度事件）：精确重复=size 分桶+`getPartialHash` 实时配对；近似重复=库内 dHash（stale 指纹跳过计数）+16 位前缀分桶+邻居上限+汉明≤8 连通分量；排除精确对与 `image_near_duplicate_dismissals`；`DismissImageNearDuplicateGroup`；照片页内审阅 UI（分组展示、候选不自动勾选、删除走 `BatchDeleteImages(ids,true)`、忽略、StaleHashCount 提示）；删除/恢复后分析失效。
+交付 `StartImageCleanupAnalysis/GetImageCleanupStatus`（异步+进度事件）：精确重复=size 分桶+`getPartialHash` 实时配对；近似重复=库内 dHash（stale 指纹跳过计数）+16 位前缀分桶+邻居上限+汉明≤8 连通分量；排除精确对与 `image_near_duplicate_dismissals`；`DismissImageNearDuplicateGroup`；审阅 UI（按目录分组、精确重复默认勾选多余副本而近似重复不勾〔2026-08-08 修订〕、删除走 `BatchDeleteImages(ids,true)`、忽略、StaleHashCount 提示）；删除/恢复后分析失效。
 
 完成标志：TC-7 自动化覆盖（同字节夹具成精确组、缩放差异夹具成近似组、忽略后不再出现、删除可恢复）。
 
 > writes: `services/image_cleanup.go`, `services/image_cleanup_test.go`, `app.go`, `main_bindings.go`, `frontend/src/components/PhotoLibraryPage.vue`（或独立审阅子组件）
 > anchors: AC-9, D-012, TC-7
 > verify: `go test ./services -run 'TestImageCleanup' -count=1`；`go test ./...`；`cd frontend && npm test`
-> review: 视频清理审阅五类候选零回归；候选不自动勾选契约
+> review: 视频清理审阅五类候选零回归；默认勾选规则契约（见设计文档 D-012 的 2026-08-08 修订）
 
 ## P-011 洞察图片维度
 

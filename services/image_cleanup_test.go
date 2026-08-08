@@ -273,6 +273,34 @@ func TestImageCleanupMembersCarryFactsTagsAndDescription(t *testing.T) {
 	}
 }
 
+// 回归：连通分量是链式的，链两端可以毫不相似。若报组内两两最大距离，
+// 一个刚判定为近似重复的组会被界面标成相似度 0%。距离只对推荐保留项算。
+func TestImageCleanupNearDuplicateDistanceIsRelativeToKeeper(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	// a—b 距离 3，b—c 距离 3，a—c 距离 6：三者连成一条链。a 像素最大，是推荐保留项。
+	imageCleanupCreateImage(t, filepath.Join(dir, "a.jpg"), bytes.Repeat([]byte("a"), 300), "abcd000000000000", 400, 400)
+	imageCleanupCreateImage(t, filepath.Join(dir, "b.jpg"), bytes.Repeat([]byte("b"), 301), "abcd000000000007", 200, 200)
+	imageCleanupCreateImage(t, filepath.Join(dir, "c.jpg"), bytes.Repeat([]byte("c"), 302), "abcd000000000038", 100, 100)
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.NearDuplicateGroups) != 1 {
+		t.Fatalf("应产出 1 个近似重复组，实际 %d", len(analysis.NearDuplicateGroups))
+	}
+	group := analysis.NearDuplicateGroups[0]
+	if len(group.Candidates) != 2 {
+		t.Fatalf("组内应有 2 个候选，实际 %d", len(group.Candidates))
+	}
+	// 相对保留项 a：b 距离 3、c 距离 3（0x38 是三位），最大 3；两两最大值会是 6。
+	if group.MaxHammingDistance != 3 {
+		t.Fatalf("距离应相对推荐保留项计算（期望 3），实际 %d", group.MaxHammingDistance)
+	}
+}
+
 // 近似重复组要报出"有多像"，界面靠它给用户量化说法。
 func TestImageCleanupNearDuplicateReportsMaxHammingDistance(t *testing.T) {
 	setupImageServiceTestDB(t)
