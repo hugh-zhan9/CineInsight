@@ -107,8 +107,10 @@ func (s *ShortFeedService) loadEligibleImages(excludeIDs []uint) ([]models.Image
 		return nil, nil
 	}
 	var images []models.Image
+	// 刻意不 Preload("Tags")：GORM 会按加载条数生成 IN 参数，整库预载会撑爆
+	// Postgres extended protocol 的 65535 参数上限（那是线路协议的硬限制）。
+	// 权重需要的标签信息改由 tagBoostMap 精确取，展示需要的标签只为选中项再查。
 	query := database.DB.Model(&models.Image{}).
-		Preload("Tags").
 		Where("is_stale = ?", false).
 		Order("id ASC")
 	if len(excludeIDs) > 0 {
@@ -172,8 +174,10 @@ func (s *ShortFeedService) markImageStale(imageID uint) {
 
 // shortFeedCandidate 是抽取阶段的统一候选：两种媒体在这一层不再有分支。
 type shortFeedCandidate struct {
-	ref   ShortFeedMediaRef
-	tags  []models.Tag
+	ref ShortFeedMediaRef
+	// boost 是这条内容因标签偏好获得的加权（上限 ShortFeedPreferenceBoostCap）。
+	// 只存这个数而不是整串标签：抽签不需要标签名，展示才需要，而展示只涉及被选中的一条。
+	boost float64
 	video *models.Video
 	image *models.Image
 }
@@ -205,23 +209,27 @@ func (s *ShortFeedService) NextItem(exclude []ShortFeedMediaRef) (*ShortFeedItem
 		}
 	}
 
-	prefs, err := s.tagPreferenceMap()
-	if err != nil {
-		return nil, err
-	}
-
 	// 只对被选中的那一条做 stat。以前是先把整库每个文件都 stat 一遍再抽签，
 	// 外置盘上几千次系统调用会让每一次划动都等上好几秒。
 	for attempt := 0; attempt < shortFeedMissingRetries && len(pool) > 0; attempt++ {
-		index := s.weightedSelectIndex(pool, prefs)
+		index := s.weightedSelectIndex(pool)
 		selected := pool[index]
 		if !s.candidateFileExists(selected) {
 			s.invalidateCandidates()
 			pool = append(pool[:index:index], pool[index+1:]...)
 			continue
 		}
+		// 标签只为被选中的这一条查：抽签阶段刻意没有预载。
 		if selected.image != nil {
+			image := *selected.image
+			if err := database.DB.Preload("Tags").First(&image, image.ID).Error; err == nil {
+				return s.imageDTO(&image)
+			}
 			return s.imageDTO(selected.image)
+		}
+		video := *selected.video
+		if err := database.DB.Preload("Tags").First(&video, video.ID).Error; err == nil {
+			return s.videoDTO(&video, "", "")
 		}
 		return s.videoDTO(selected.video, "", "")
 	}
@@ -281,7 +289,72 @@ func (s *ShortFeedService) stat(path string) (os.FileInfo, error) {
 
 // collectCandidates 合并两种媒体的可入选集合。第二个返回值是"存在但不可内联
 // 播放"的视频样本，仅在候选为空时用于给出可解释的原因。
+// shortFeedTagBoosts 是"哪些媒体因标签偏好该被加权"的稀疏映射。
+// 偏好只存在于用户喜欢过的少量标签上，所以这里只查那几个标签的关联，
+// 参数量与库大小无关。
+type shortFeedTagBoosts struct {
+	videos map[uint]float64
+	images map[uint]float64
+}
+
+func (b shortFeedTagBoosts) forVideo(id uint) float64 { return clampShortFeedBoost(b.videos[id]) }
+func (b shortFeedTagBoosts) forImage(id uint) float64 { return clampShortFeedBoost(b.images[id]) }
+
+func clampShortFeedBoost(boost float64) float64 {
+	if boost > ShortFeedPreferenceBoostCap {
+		return ShortFeedPreferenceBoostCap
+	}
+	if boost < 0 {
+		return 0
+	}
+	return boost
+}
+
+func (s *ShortFeedService) loadTagBoosts() (shortFeedTagBoosts, error) {
+	boosts := shortFeedTagBoosts{videos: map[uint]float64{}, images: map[uint]float64{}}
+	prefs, err := s.tagPreferenceMap()
+	if err != nil {
+		return boosts, err
+	}
+	tagIDs := make([]uint, 0, len(prefs))
+	for tagID, score := range prefs {
+		if score != 0 {
+			tagIDs = append(tagIDs, tagID)
+		}
+	}
+	if len(tagIDs) == 0 {
+		return boosts, nil
+	}
+	type link struct {
+		MediaID uint
+		TagID   uint
+	}
+	var videoLinks []link
+	if err := database.DB.Table("video_tags").
+		Select("video_id AS media_id, tag_id").
+		Where("tag_id IN ?", tagIDs).Scan(&videoLinks).Error; err != nil {
+		return boosts, err
+	}
+	for _, row := range videoLinks {
+		boosts.videos[row.MediaID] += prefs[row.TagID]
+	}
+	var imageLinks []link
+	if err := database.DB.Table("image_tags").
+		Select("image_id AS media_id, tag_id").
+		Where("tag_id IN ?", tagIDs).Scan(&imageLinks).Error; err != nil {
+		return boosts, err
+	}
+	for _, row := range imageLinks {
+		boosts.images[row.MediaID] += prefs[row.TagID]
+	}
+	return boosts, nil
+}
+
 func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Video, error) {
+	boosts, err := s.loadTagBoosts()
+	if err != nil {
+		return nil, nil, err
+	}
 	// 这里不做文件存在性检查：抽中之后只 stat 那一条即可。
 	existingVideos, err := s.loadEligibleVideos(nil)
 	if err != nil {
@@ -300,7 +373,7 @@ func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Vi
 		}
 		candidates = append(candidates, shortFeedCandidate{
 			ref:   ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID},
-			tags:  video.Tags,
+			boost: boosts.forVideo(video.ID),
 			video: &existingVideos[i],
 		})
 	}
@@ -312,7 +385,7 @@ func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Vi
 	for i := range images {
 		candidates = append(candidates, shortFeedCandidate{
 			ref:   ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: images[i].ID},
-			tags:  images[i].Tags,
+			boost: boosts.forImage(images[i].ID),
 			image: &images[i],
 		})
 	}
@@ -359,14 +432,14 @@ func lastShortFeedRef(exclude []ShortFeedMediaRef) []ShortFeedMediaRef {
 	return exclude[len(exclude)-1:]
 }
 
-func (s *ShortFeedService) weightedSelectIndex(candidates []shortFeedCandidate, prefs map[uint]float64) int {
+func (s *ShortFeedService) weightedSelectIndex(candidates []shortFeedCandidate) int {
 	if len(candidates) == 1 {
 		return 0
 	}
 	weights := make([]float64, len(candidates))
 	total := 0.0
 	for i := range candidates {
-		weights[i] = shortFeedTagWeight(candidates[i].tags, prefs)
+		weights[i] = 1.0 + candidates[i].boost
 		total += weights[i]
 	}
 	if total <= 0 {
@@ -872,8 +945,8 @@ func (s *ShortFeedService) ResolveMedia(ref ShortFeedMediaRef) (*ShortFeedMedia,
 func (s *ShortFeedService) loadEligibleVideos(excludeIDs []uint) ([]models.Video, error) {
 	var videos []models.Video
 	maxDurationSeconds := s.maxDurationSeconds()
+	// 同上：抽签阶段不预载标签。
 	query := database.DB.Model(&models.Video{}).
-		Preload("Tags").
 		Where("is_stale = ?", false).
 		Where("duration > ? AND duration < ?", 0, maxDurationSeconds).
 		Order("id ASC")

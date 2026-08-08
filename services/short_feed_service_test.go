@@ -17,6 +17,8 @@ import (
 	"time"
 	"video-master/database"
 	"video-master/models"
+
+	"gorm.io/gorm"
 )
 
 func createShortFeedVideo(t *testing.T, root string, name string, duration float64, stale bool, tags ...*models.Tag) models.Video {
@@ -511,6 +513,73 @@ func TestShortFeedLargeImageIsNotServedAsOriginal(t *testing.T) {
 	}
 	if _, err := svc.ResolveMedia(imageRef(big.ID)); err != nil {
 		t.Fatalf("大图解析不应失败（转码不可用时应退回原文件）: %v", err)
+	}
+}
+
+// 回归：抽签阶段曾用 Preload("Tags") 整库预载，GORM 会按加载条数生成 IN 参数，
+// 库超过 65535 条时直接撞上 Postgres extended protocol 的参数上限，整个 feed 报错、
+// 手机端什么都放不了。现在抽签不预载标签，标签只为选中的那一条查。
+func TestShortFeedNextItemDoesNotPreloadTagsForWholeLibrary(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	const n = 30
+	for i := 0; i < n; i++ {
+		createShortFeedVideo(t, root, fmt.Sprintf("clip-%d.mp4", i), 30, false)
+		createShortFeedImage(t, root, fmt.Sprintf("photo-%d.jpg", i), "jpg", false)
+	}
+
+	// 统计每条 SQL 的绑定参数数量：任何一条都不该随库大小线性增长。
+	maxVars := 0
+	statement := ""
+	database.DB.Callback().Query().After("gorm:query").Register("shortfeed_param_probe", func(tx *gorm.DB) {
+		if len(tx.Statement.Vars) > maxVars {
+			maxVars = len(tx.Statement.Vars)
+			statement = tx.Statement.SQL.String()
+		}
+	})
+	defer database.DB.Callback().Query().Remove("shortfeed_param_probe")
+
+	if _, err := svc.NextItem(nil); err != nil {
+		t.Fatalf("抽取失败: %v", err)
+	}
+	// 留出余量：正常查询只有个位数参数；整库预载会是 n*2 量级。
+	if maxVars > 12 {
+		t.Fatalf("单次抽取出现了 %d 个绑定参数（库内 %d 条），疑似整库预载: %s", maxVars, n*2, statement)
+	}
+
+	// 选中项仍要带出标签，供手机端展示。
+	tag := models.Tag{Name: "风景"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	var first models.Image
+	if err := database.DB.Order("id ASC").First(&first).Error; err != nil {
+		t.Fatalf("读取图片失败: %v", err)
+	}
+	if err := database.DB.Exec("INSERT INTO image_tags(image_id, tag_id) VALUES (?, ?)", first.ID, tag.ID).Error; err != nil {
+		t.Fatalf("绑定标签失败: %v", err)
+	}
+	svc.invalidateCandidates()
+	dto, err := svc.imageDTO(&first)
+	if err != nil {
+		t.Fatalf("构建图片条目失败: %v", err)
+	}
+	if len(dto.Tags) != 0 {
+		t.Fatalf("未预载时不应凭空带出标签: %+v", dto.Tags)
+	}
+	var reloaded models.Image
+	if err := database.DB.Preload("Tags").First(&reloaded, first.ID).Error; err != nil {
+		t.Fatalf("重载图片失败: %v", err)
+	}
+	dto, err = svc.imageDTO(&reloaded)
+	if err != nil {
+		t.Fatalf("构建图片条目失败: %v", err)
+	}
+	if len(dto.Tags) != 1 || dto.Tags[0].Name != "风景" {
+		t.Fatalf("选中项应带出标签，实际 %+v", dto.Tags)
 	}
 }
 
