@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -415,6 +416,104 @@ func TestShortFeedMixedFeedDrawsBothMediaKinds(t *testing.T) {
 	}
 }
 
+// 性能回归：以前每次抽取都会把整库每个文件 stat 一遍，外置盘上几千次系统调用
+// 会让每一次划动都等好几秒。现在只 stat 被选中的那一条。
+func TestShortFeedNextItemStatsOnlyTheSelectedFile(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	const n = 40
+	for i := 0; i < n; i++ {
+		createShortFeedVideo(t, root, fmt.Sprintf("clip-%d.mp4", i), 30, false)
+		createShortFeedImage(t, root, fmt.Sprintf("photo-%d.jpg", i), "jpg", false)
+	}
+
+	statCount := 0
+	svc.statFile = func(path string) (os.FileInfo, error) {
+		statCount++
+		return os.Stat(path)
+	}
+
+	if _, err := svc.NextItem(nil); err != nil {
+		t.Fatalf("抽取失败: %v", err)
+	}
+	if statCount != 1 {
+		t.Fatalf("一次抽取应只 stat 被选中的那一条，实际 %d 次（候选共 %d 条）", statCount, n*2)
+	}
+
+	// 候选快照命中时也不该重新扫库。
+	statCount = 0
+	if _, err := svc.NextItem(nil); err != nil {
+		t.Fatalf("第二次抽取失败: %v", err)
+	}
+	if statCount != 1 {
+		t.Fatalf("第二次抽取同样只应 stat 一条，实际 %d 次", statCount)
+	}
+}
+
+// 选中项的文件不在了：标记 stale 并另选一条，而不是把这次划动报成失败。
+func TestShortFeedNextItemRetriesWhenSelectedFileIsMissing(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+
+	missing := createShortFeedVideo(t, root, "gone.mp4", 30, false)
+	alive := createShortFeedVideo(t, root, "alive.mp4", 30, false)
+	if err := os.Remove(missing.Path); err != nil {
+		t.Fatalf("删除文件失败: %v", err)
+	}
+	// 先抽到已缺失的那条。
+	svc.randFloat64 = func() float64 { return 0 }
+
+	item, err := svc.NextItem(nil)
+	if err != nil {
+		t.Fatalf("抽取失败: %v", err)
+	}
+	if item.ID != alive.ID {
+		t.Fatalf("应跳过缺失文件另选一条，实际选中 %d", item.ID)
+	}
+	var reloaded models.Video
+	if err := database.DB.First(&reloaded, missing.ID).Error; err != nil {
+		t.Fatalf("读取视频失败: %v", err)
+	}
+	if !reloaded.IsStale {
+		t.Fatal("缺失文件的视频应被标记为 stale")
+	}
+}
+
+// 手机端不该被塞一张几十 MB 的原图：超过阈值改发降采样后的 JPEG。
+func TestShortFeedLargeImageIsNotServedAsOriginal(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	small := createShortFeedImage(t, root, "small.jpg", "jpg", false)
+	media, err := svc.ResolveMedia(imageRef(small.ID))
+	if err != nil {
+		t.Fatalf("解析小图失败: %v", err)
+	}
+	if media.Path != small.Path {
+		t.Fatalf("小图应直出原文件，实际 %q", media.Path)
+	}
+
+	// 造一张超过直出阈值的"大图"。转码在测试环境多半不可用，
+	// 此时必须退回原文件而不是报错——宁可慢也要能看。
+	bigPath := filepath.Join(root, "big.jpg")
+	if err := os.WriteFile(bigPath, make([]byte, shortFeedInlineImageMaxBytes+1024), 0644); err != nil {
+		t.Fatalf("写入大图失败: %v", err)
+	}
+	big := models.Image{Name: "big.jpg", Path: bigPath, Directory: root, Size: shortFeedInlineImageMaxBytes + 1024, Format: "jpg"}
+	if err := database.DB.Create(&big).Error; err != nil {
+		t.Fatalf("创建大图记录失败: %v", err)
+	}
+	if _, err := svc.ResolveMedia(imageRef(big.ID)); err != nil {
+		t.Fatalf("大图解析不应失败（转码不可用时应退回原文件）: %v", err)
+	}
+}
+
 // 收藏页把两种媒体都带出来。
 func TestShortFeedFavoritesIncludeImages(t *testing.T) {
 	setupVideoServiceTestDB(t)
@@ -520,14 +619,9 @@ func TestShortFeedSkipsMissingFilesBeforeReturningNextVideo(t *testing.T) {
 	if next.ID != existing.ID {
 		t.Fatalf("应跳过缺失文件并返回存在的视频，got=%d want=%d", next.ID, existing.ID)
 	}
-
-	var reloaded models.Video
-	if err := database.DB.First(&reloaded, missing.ID).Error; err != nil {
-		t.Fatalf("读取缺失视频记录失败: %v", err)
-	}
-	if !reloaded.IsStale {
-		t.Fatalf("缺失文件应被标记为 stale")
-	}
+	// 标记 stale 只在缺失项被抽中时发生——不再每次划动都把整库巡检一遍，
+	// 那正是外置盘上卡顿的来源。被抽中时的 stale 标记见
+	// TestShortFeedNextItemRetriesWhenSelectedFileIsMissing。
 }
 
 func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
