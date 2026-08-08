@@ -90,6 +90,20 @@
         <p v-else class="help-text">尚未设置黑名单目录。</p>
         <p class="help-text">黑名单目录及其全部子目录不会被后续扫描收录；已有视频记录不会自动删除。</p>
       </div>
+      <div class="setting-item scan-blacklist-setting">
+        <div class="settings-section-heading">
+          <label>图片扫描黑名单</label>
+          <button type="button" class="btn-secondary btn-compact" @click="addImageScanExcludeDirectory">选择目录</button>
+        </div>
+        <div v-if="imageScanExcludePaths.length" class="scan-blacklist-list">
+          <div v-for="path in imageScanExcludePaths" :key="path" class="scan-blacklist-item">
+            <span :title="path">{{ path }}</span>
+            <button type="button" class="btn-secondary btn-compact btn-danger-outline" @click="removeImageScanExcludeDirectory(path)">移除</button>
+          </div>
+        </div>
+        <p v-else class="help-text">未单独设置，沿用上方扫描目录黑名单。</p>
+        <p class="help-text">图片扫描专用黑名单；设置后仅对图片扫描生效，与视频扫描互不影响。</p>
+      </div>
     </div>
 
     <div class="settings-section">
@@ -650,6 +664,7 @@ export default {
         this.settingsForm.short_feed_max_duration_minutes = this.settingsForm.short_feed_max_duration_minutes || 5;
 		if (this.settingsForm.short_feed_feedback_sync_enabled == null) this.settingsForm.short_feed_feedback_sync_enabled = true;
         this.settingsForm.scan_exclude_paths = this.settingsForm.scan_exclude_paths || '';
+        this.settingsForm.image_scan_exclude_paths = this.settingsForm.image_scan_exclude_paths || '';
         this.settingsForm.image_extensions = this.settingsForm.image_extensions || '';
         this.settingsForm.subtitle_translation_provider = this.settingsForm.subtitle_translation_provider || 'deepl';
         this.settingsForm.subtitle_whisperx_model = this.settingsForm.subtitle_whisperx_model || 'medium';
@@ -673,6 +688,9 @@ export default {
   computed: {
     scanExcludePaths() {
       return [...new Set(String(this.settingsForm.scan_exclude_paths || '').split(/\r?\n/).map(path => path.trim()).filter(Boolean))];
+    },
+    imageScanExcludePaths() {
+      return [...new Set(String(this.settingsForm.image_scan_exclude_paths || '').split(/\r?\n/).map(path => path.trim()).filter(Boolean))];
     },
     shortFeedStatusText() {
       if (!this.shortFeedStatus) return '未加载';
@@ -777,6 +795,7 @@ export default {
             video_extensions: this.settingsForm.video_extensions,
             image_extensions: this.settingsForm.image_extensions || '',
             scan_exclude_paths: this.settingsForm.scan_exclude_paths || '',
+            image_scan_exclude_paths: this.settingsForm.image_scan_exclude_paths || '',
             play_weight: this.settingsForm.play_weight,
             random_half_life_days: Math.max(0, Number(this.settingsForm.random_half_life_days) || 0),
             auto_scan_on_startup: this.settingsForm.auto_scan_on_startup,
@@ -1000,6 +1019,19 @@ export default {
     removeScanExcludeDirectory(path) {
       this.settingsForm.scan_exclude_paths = this.scanExcludePaths.filter(item => item !== path).join('\n');
     },
+    async addImageScanExcludeDirectory() {
+      try {
+        const path = await SelectDirectory();
+        if (!path) return;
+        this.settingsForm.image_scan_exclude_paths = [...new Set([...this.imageScanExcludePaths, path])].join('\n');
+      } catch (err) {
+        this.saveState = 'error';
+        this.saveMessage = '选择图片黑名单目录失败：' + err;
+      }
+    },
+    removeImageScanExcludeDirectory(path) {
+      this.settingsForm.image_scan_exclude_paths = this.imageScanExcludePaths.filter(item => item !== path).join('\n');
+    },
     async selectDirectoryForConfig() {
       try {
         const dir = await SelectDirectory();
@@ -1023,7 +1055,7 @@ export default {
       } catch (err) {}
     },
     async deleteDirectoryItem(id) {
-      if (!confirm('确定要删除此目录配置吗？')) return;
+      if (!window.confirm('确定要删除此目录配置吗？')) return;
       try {
         await DeleteDirectory(id);
         await this.refreshDirectories();
@@ -1071,7 +1103,7 @@ export default {
       } catch (err) {}
     },
     async deleteImageDirectoryItem(id) {
-      if (!confirm('确定要删除此图片目录配置吗？')) return;
+      if (!window.confirm('确定要删除此图片目录配置吗？')) return;
       try {
         await DeleteImageDirectory(id);
         await this.loadImageDirectories();
