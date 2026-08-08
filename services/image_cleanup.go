@@ -27,12 +27,25 @@ const (
 	imageCleanupMaxCandidates = 256
 )
 
+// ImageCleanupMember 审阅界面里的一张候选图片：内嵌 models.Image（JSON 平铺，
+// 前端字段名不变），再补上审阅要用、但库里字段给不出的实测信息。
+type ImageCleanupMember struct {
+	models.Image
+	// FileSize/ModTimeNS 来自分析时的 os.Stat，比库里的 Size 更能反映磁盘现状。
+	FileSize  int64 `json:"file_size"`
+	ModTimeNS int64 `json:"mod_time_ns"`
+	// Description 是已生成完成的 AI 描述，没有则为空串。
+	Description string `json:"description"`
+}
+
 // ImageCleanupDuplicateGroup 一组重复/近似重复图片：Original 为建议保留项
-// （像素数优先、次按体积），Candidates 为可删除候选（一律不自动勾选）。
+// （像素数优先、次按体积），Candidates 为其余成员。
 type ImageCleanupDuplicateGroup struct {
-	Original   models.Image   `json:"original"`
-	Candidates []models.Image `json:"candidates"`
-	Reason     string         `json:"reason"`
+	Original   ImageCleanupMember   `json:"original"`
+	Candidates []ImageCleanupMember `json:"candidates"`
+	Reason     string               `json:"reason"`
+	// MaxHammingDistance 是组内两两感知哈希的最大距离，越小越像；精确重复组为 0。
+	MaxHammingDistance int `json:"max_hamming_distance"`
 }
 
 // ImageCleanupAnalysis 图片清理审阅分析产出（设计 4.8.2，无 LowDuration/LowResolution/SameSource）。
@@ -293,13 +306,13 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 
 	s.emitProgress("hash", 0, len(hashCandidates), "", fmt.Sprintf("发现 %d 个疑似重复文件，正在读取采样哈希…", len(hashCandidates)))
 
-	duplicateBuckets := make(map[string][]models.Image)
+	duplicateBuckets := make(map[string][]imageCleanupFileState)
 	for idx, stateIdx := range hashCandidates {
 		state := states[stateIdx]
 		hash, err := getPartialHash(state.image.Path)
 		if err == nil && hash != "" {
 			bucketKey := buildDuplicateBucketKey(state.size, hash)
-			duplicateBuckets[bucketKey] = append(duplicateBuckets[bucketKey], state.image)
+			duplicateBuckets[bucketKey] = append(duplicateBuckets[bucketKey], state)
 		} else if err != nil {
 			log.Printf("[ImageCleanup] partial hash failed image id=%d path=%s err=%v", state.image.ID, state.image.Path, err)
 		}
@@ -314,11 +327,15 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 			continue
 		}
 		sort.Slice(bucket, func(i, j int) bool {
-			return isPreferredCleanupImage(bucket[i], bucket[j])
+			return isPreferredCleanupImage(bucket[i].image, bucket[j].image)
 		})
+		members := make([]ImageCleanupMember, 0, len(bucket))
+		for _, state := range bucket {
+			members = append(members, newImageCleanupMember(state))
+		}
 		result.DuplicateGroups = append(result.DuplicateGroups, ImageCleanupDuplicateGroup{
-			Original:   bucket[0],
-			Candidates: append([]models.Image(nil), bucket[1:]...),
+			Original:   members[0],
+			Candidates: append([]ImageCleanupMember(nil), members[1:]...),
 			Reason:     "文件大小和采样哈希一致",
 		})
 	}
@@ -328,7 +345,7 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 
 	exactPairs := make(map[[2]uint]struct{})
 	for _, group := range result.DuplicateGroups {
-		members := append([]models.Image{group.Original}, group.Candidates...)
+		members := append([]ImageCleanupMember{group.Original}, group.Candidates...)
 		for i := 0; i < len(members); i++ {
 			for j := i + 1; j < len(members); j++ {
 				exactPairs[imageCleanupPairKey(members[i].ID, members[j].ID)] = struct{}{}
@@ -351,6 +368,11 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 	result.NearDuplicateGroups = nearGroups
 	result.StaleHashCount = staleHashCount
 
+	// 标签与 AI 描述只为参与审阅的成员回填，不给全库做 Preload。
+	if err := enrichImageCleanupMembers(result); err != nil {
+		return nil, 0, err
+	}
+
 	log.Printf("[ImageCleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d stale_hash_count=%d hash_candidates=%d",
 		time.Since(startedAt).Round(time.Millisecond),
 		len(result.DuplicateGroups), len(result.NearDuplicateGroups), result.StaleHashCount, len(hashCandidates),
@@ -361,8 +383,71 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 
 // imageCleanupHashEntry 参与近似重复比对的一张图片及其解析后的 64 位 dHash。
 type imageCleanupHashEntry struct {
-	image models.Image
+	state imageCleanupFileState
 	hash  uint64
+}
+
+func (e imageCleanupHashEntry) image() models.Image { return e.state.image }
+
+// newImageCleanupMember 把分析期实测到的文件信息附到图片上；AI 描述稍后统一回填。
+func newImageCleanupMember(state imageCleanupFileState) ImageCleanupMember {
+	return ImageCleanupMember{Image: state.image, FileSize: state.size, ModTimeNS: state.modTimeNS}
+}
+
+// enrichImageCleanupMembers 只为出现在结果里的图片补标签和已完成的 AI 描述。
+// 全库 Preload 在大图库上代价过高，而审阅界面又要靠这些信息判断该留哪一份。
+func enrichImageCleanupMembers(result *ImageCleanupAnalysis) error {
+	ids := make([]uint, 0)
+	seen := make(map[uint]struct{})
+	forEachImageCleanupMember(result, func(member *ImageCleanupMember) {
+		if _, ok := seen[member.ID]; ok {
+			return
+		}
+		seen[member.ID] = struct{}{}
+		ids = append(ids, member.ID)
+	})
+	if len(ids) == 0 {
+		return nil
+	}
+
+	var tagged []models.Image
+	if err := database.DB.Preload("Tags").Select("id").Where("id IN ?", ids).Find(&tagged).Error; err != nil {
+		return err
+	}
+	tagsByID := make(map[uint][]models.Tag, len(tagged))
+	for _, image := range tagged {
+		tagsByID[image.ID] = image.Tags
+	}
+
+	var descriptions []models.ImageAIDescription
+	if err := database.DB.
+		Select("image_id", "status", "description").
+		Where("image_id IN ? AND status = ?", ids, "completed").
+		Find(&descriptions).Error; err != nil {
+		return err
+	}
+	descriptionByID := make(map[uint]string, len(descriptions))
+	for _, item := range descriptions {
+		descriptionByID[item.ImageID] = item.Description
+	}
+
+	forEachImageCleanupMember(result, func(member *ImageCleanupMember) {
+		member.Tags = tagsByID[member.ID]
+		member.Description = descriptionByID[member.ID]
+	})
+	return nil
+}
+
+func forEachImageCleanupMember(result *ImageCleanupAnalysis, visit func(*ImageCleanupMember)) {
+	groups := [][]ImageCleanupDuplicateGroup{result.DuplicateGroups, result.NearDuplicateGroups}
+	for _, set := range groups {
+		for i := range set {
+			visit(&set[i].Original)
+			for j := range set[i].Candidates {
+				visit(&set[i].Candidates[j])
+			}
+		}
+	}
 }
 
 // buildNearDuplicateGroups 库内 dHash 近似重复检测：stale 指纹跳过计数、
@@ -388,7 +473,7 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 			log.Printf("[ImageCleanup] skip malformed perceptual hash id=%d hash=%q err=%v", state.image.ID, raw, err)
 			continue
 		}
-		valid = append(valid, imageCleanupHashEntry{image: state.image, hash: hash})
+		valid = append(valid, imageCleanupHashEntry{state: state, hash: hash})
 	}
 	if len(valid) < 2 {
 		return []ImageCleanupDuplicateGroup{}, staleCount
@@ -399,7 +484,7 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 	bands := make(map[string][]int)
 	adjacency := make(map[int]map[int]struct{})
 	for index, entry := range valid {
-		key := entry.image.PerceptualHash[:imageCleanupBandPrefixLen]
+		key := entry.state.image.PerceptualHash[:imageCleanupBandPrefixLen]
 		candidates := make([]int, 0, len(bands[key]))
 		for _, other := range bands[key] {
 			if len(candidates) >= imageCleanupMaxCandidates {
@@ -415,7 +500,7 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 
 		for _, other := range candidates {
 			left := valid[other]
-			pair := imageCleanupPairKey(left.image.ID, entry.image.ID)
+			pair := imageCleanupPairKey(left.image().ID, entry.image().ID)
 			if _, skip := excluded[pair]; skip {
 				continue
 			}
@@ -432,7 +517,7 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 			adjacency[index][other] = struct{}{}
 		}
 		if shouldEmitCleanupProgress(index+1, len(valid), 400) {
-			s.emitProgress("near", index+1, len(valid), entry.image.Path, "正在比对图片感知哈希…")
+			s.emitProgress("near", index+1, len(valid), entry.state.image.Path, "正在比对图片感知哈希…")
 		}
 	}
 
@@ -469,17 +554,31 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 		if len(component) < 2 {
 			continue
 		}
-		members := make([]models.Image, 0, len(component))
+		entries := make([]imageCleanupHashEntry, 0, len(component))
 		for _, memberIdx := range component {
-			members = append(members, valid[memberIdx].image)
+			entries = append(entries, valid[memberIdx])
 		}
-		sort.Slice(members, func(i, j int) bool {
-			return isPreferredCleanupImage(members[i], members[j])
+		sort.Slice(entries, func(i, j int) bool {
+			return isPreferredCleanupImage(entries[i].image(), entries[j].image())
 		})
+		// 组内最大汉明距离：界面用它给出"有多像"的量化说法。
+		maxDistance := 0
+		for i := 0; i < len(entries); i++ {
+			for j := i + 1; j < len(entries); j++ {
+				if distance := bits.OnesCount64(entries[i].hash ^ entries[j].hash); distance > maxDistance {
+					maxDistance = distance
+				}
+			}
+		}
+		members := make([]ImageCleanupMember, 0, len(entries))
+		for _, entry := range entries {
+			members = append(members, newImageCleanupMember(entry.state))
+		}
 		groups = append(groups, ImageCleanupDuplicateGroup{
-			Original:   members[0],
-			Candidates: append([]models.Image(nil), members[1:]...),
-			Reason:     "感知哈希相近，可能是同图不同尺寸或压缩（不会默认选中）",
+			Original:           members[0],
+			Candidates:         append([]ImageCleanupMember(nil), members[1:]...),
+			Reason:             "感知哈希相近，可能是同图不同尺寸或压缩",
+			MaxHammingDistance: maxDistance,
 		})
 	}
 	sort.Slice(groups, func(i, j int) bool {

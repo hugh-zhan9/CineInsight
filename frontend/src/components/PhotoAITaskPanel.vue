@@ -139,7 +139,7 @@ import {
   StartImageAIDescription, StartImageEXIFBackfill, StartImageSemanticIndex
 } from '../../wailsjs/go/main/App';
 
-// 事件推送之外保留 1s 轮询兜底（镜像 PhotoCleanupPanel）。
+// 事件推送之外保留 1s 轮询兜底（镜像 PhotoCleanupPage）。
 const POLL_INTERVAL_MS = 1000;
 const MAX_FAILURES_SHOWN = 5;
 

@@ -446,6 +446,10 @@ export function OpenDirectory(arg1) {
   return window['go']['main']['App']['OpenDirectory'](arg1);
 }
 
+export function OpenImageDirectory(arg1) {
+  return window['go']['main']['App']['OpenImageDirectory'](arg1);
+}
+
 export function PlayRandomVideo() {
   return window['go']['main']['App']['PlayRandomVideo']();
 }
@@ -564,6 +568,10 @@ export function RetryEnhancementTask(arg1) {
 
 export function RetryLibraryWatcherRoot(arg1) {
   return window['go']['main']['App']['RetryLibraryWatcherRoot'](arg1);
+}
+
+export function RevealImage(arg1) {
+  return window['go']['main']['App']['RevealImage'](arg1);
 }
 
 export function SaveAITagLibrary(arg1) {

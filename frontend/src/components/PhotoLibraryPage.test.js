@@ -7,7 +7,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'DeleteImage', 'ListImageTrashEntries', 'RestoreImageTrashEntry',
   'StartImageCleanupAnalysis', 'GetImageCleanupStatus', 'DismissImageNearDuplicateGroup', 'BatchDeleteImages',
   'GetImageSemanticIndexStatus', 'SearchImagesSemantic', 'RegenerateImageAIDescription',
-  'ListImageTimelineBuckets', 'GetImageTags'
+  'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -72,6 +72,8 @@ beforeEach(() => {
   api.RegenerateImageAIDescription.mockResolvedValue({ image_id: 1, description: '', generated_at: null });
   api.ListImageTimelineBuckets.mockResolvedValue([]);
   api.GetImageTags.mockResolvedValue([]);
+  api.OpenImageDirectory.mockResolvedValue();
+  api.RevealImage.mockResolvedValue();
   // 删除后是否重新分析改为询问用户；默认答"取消"，让结果留在原地继续审阅。
   window.confirm = vi.fn(() => false);
   // 清理审阅状态是模块级共享 store，用例之间必须清干净。
@@ -577,12 +579,12 @@ describe('PhotoLibraryPage cleanup review', () => {
     api.SearchImagePage.mockResolvedValue(makePage([]));
     const wrapper = await mountPage();
 
-    expect(wrapper.find('[data-test="photo-cleanup-panel"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(false);
 
     await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.find('[data-test="photo-cleanup-panel"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
     // 打开面板本身不另起分析；状态由共享 store 的持续轮询提供。
     expect(api.StartImageCleanupAnalysis).not.toHaveBeenCalled();
     expect(wrapper.find('[data-test="cleanup-idle"]').exists()).toBe(true);
@@ -604,24 +606,25 @@ describe('PhotoLibraryPage cleanup review', () => {
     const cards = sections[0].findAll('[data-test="cleanup-group-card"]');
     expect(cards.map(card => card.attributes('data-kind'))).toEqual(['exact', 'near']);
 
-    // 每个成员都有勾选框（保留项的禁用）；候选默认勾选、保留项不勾。
+    // 每个成员都有勾选框；默认只勾精确重复的多余副本，近似重复一律不勾。
     const toggles = wrapper.findAll('[data-test="cleanup-candidate-toggle"]');
     expect(toggles).toHaveLength(4);
-    expect(toggles.filter(t => t.element.checked === true)).toHaveLength(2);
+    const checked = toggles.filter(t => t.element.checked === true);
+    expect(checked).toHaveLength(1);
+    expect(checked[0].attributes('aria-label')).toContain('copy.jpg');
 
     // 目录分组标题可见并显示路径。
     const dirToggles = wrapper.findAll('[data-test="cleanup-dir-toggle"]');
     expect(dirToggles.length).toBeGreaterThan(0);
     expect(dirToggles[0].text()).toContain('/photos');
 
-    const thumbs = wrapper.findAll('.photo-cleanup-thumb');
+    const thumbs = wrapper.findAll('.cleanup-member__thumb img');
     expect(thumbs[0].attributes('src')).toBe('/preview/image-thumbnail/1');
     expect(wrapper.text()).toContain('4000×3000');
 
     expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('7');
     expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('浏览图片可自动刷新缩略图与指纹');
-    // 两个同目录候选都已默认勾选，删除按钮可用。
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
   });
 
   it('collapses and expands a directory group', async () => {
@@ -703,7 +706,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     expect(window.confirm).toHaveBeenCalledTimes(1);
     expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
     expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(2);
-    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(2);
+    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(1);
     expect(wrapper.get('[data-test="cleanup-outdated-hint"]').exists()).toBe(true);
   });
 
@@ -719,20 +722,22 @@ describe('PhotoLibraryPage cleanup review', () => {
     await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
     await flushPromises();
 
-    // 两个候选默认勾选，取消其中一个 + 折叠目录，模拟审阅到一半。
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
-    await wrapper.findAll('[data-test="cleanup-candidate-toggle"]')[1].setValue(false);
+    // 精确重复的副本默认勾选；再手动勾上一张近似重复的，然后折叠目录，模拟审阅到一半。
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+    const nearToggle = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
+      .find(toggle => toggle.attributes('aria-label').includes('near-small'));
+    await nearToggle.setValue(true);
     await wrapper.get('[data-test="cleanup-dir-toggle"]').trigger('click');
     await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
 
     // 关掉面板再打开：勾选和折叠都还在，不用从头再勾一遍。
-    await wrapper.get('[data-test="photo-cleanup-panel"] .btn-secondary').trigger('click');
+    await wrapper.get('[data-test="photo-cleanup-page"] .btn-secondary').trigger('click');
     await flushPromises();
     await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
     expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(0);
   });
 
@@ -741,7 +746,10 @@ describe('PhotoLibraryPage cleanup review', () => {
     await wrapper.get('[data-test="cleanup-start"]').trigger('click');
     await flushPromises();
 
-    // 候选 id=2、id=4 默认勾选；id=4 删除失败。
+    // 手动把近似重复那张也勾上，凑成两张；其中 id=4 删除失败。
+    const nearToggle = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
+      .find(toggle => toggle.attributes('aria-label').includes('near-small'));
+    await nearToggle.setValue(true);
     api.BatchDeleteImages.mockResolvedValue({
       requested: 2, succeeded: 1, failed: 1, errors: [{ image_id: 4, error: 'record not found' }]
     });
@@ -754,6 +762,89 @@ describe('PhotoLibraryPage cleanup review', () => {
     // 只有真正删掉的那张置灰；失败的那张仍然勾着可以重试。
     expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(1);
     expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+  });
+
+  it('shows per-item facts, diffs against the kept copy, and can open the directory or reveal a file', async () => {
+    const wrapper = await openCleanup({
+      duplicate_groups: [{
+        original: {
+          ...makeImage(1, { name: 'keep.jpg', width: 4000, height: 3000, directory: '/photos' }),
+          file_size: 8_000_000,
+          mod_time_ns: Date.parse('2026-03-01T00:00:00Z') * 1e6,
+          description: '海边日落',
+          tags: [{ id: 7, name: '旅行', color: '#0d9488' }],
+          is_favorite: true
+        },
+        candidates: [{
+          ...makeImage(2, { name: 'copy.jpg', width: 800, height: 600, directory: '/backup' }),
+          file_size: 1_000_000,
+          mod_time_ns: Date.parse('2026-03-03T00:00:00Z') * 1e6,
+          description: '',
+          tags: []
+        }],
+        reason: '文件大小和采样哈希一致',
+        max_hamming_distance: 0
+      }],
+      near_duplicate_groups: []
+    });
+    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
+    await flushPromises();
+
+    const text = wrapper.text();
+    // 尺寸、体积、时间、元数据、AI 描述都要在卡片上直接看得到。
+    expect(text).toContain('4000×3000');
+    expect(text).toContain('7.6 MB');
+    expect(text).toContain('★ 已收藏');
+    expect(text).toContain('旅行');
+    expect(wrapper.get('[data-test="cleanup-member-description"]').text()).toContain('海边日落');
+    // 与保留项的差异直接标出来，不用自己换算。
+    expect(text).toContain('仅 1/25');
+    expect(text).toContain('小 87%');
+    expect(text).toContain('晚 2 天');
+    // 跨目录的副本要有醒目标记。
+    expect(wrapper.get('[data-test="cleanup-member-otherdir"]').text()).toContain('/backup');
+    expect(wrapper.get('[data-test="cleanup-cross-dir"]').exists()).toBe(true);
+
+    await wrapper.get('[data-test="cleanup-open-dir"]').trigger('click');
+    await flushPromises();
+    expect(api.OpenImageDirectory).toHaveBeenCalledWith('/photos');
+
+    await wrapper.findAll('[data-test="cleanup-reveal"]')[1].trigger('click');
+    await flushPromises();
+    expect(api.RevealImage).toHaveBeenCalledWith(2);
+  });
+
+  it('marks every extra copy of an exact duplicate but never pre-checks a near duplicate', async () => {
+    const wrapper = await openCleanup({
+      duplicate_groups: [{
+        original: makeImage(11, { name: 'keep.jpg', directory: '/photos' }),
+        candidates: [
+          makeImage(12, { name: 'same-dir-copy.jpg', directory: '/photos' }),
+          makeImage(13, { name: 'other-dir-copy.jpg', directory: '/backup' })
+        ],
+        reason: '文件大小和采样哈希一致'
+      }],
+      near_duplicate_groups: [nearGroup()]
+    });
+    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
+    await flushPromises();
+
+    // 精确重复：两份副本都勾上，不管在不在同一个目录；近似重复一份都不勾。
+    const checkedLabels = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
+      .filter(toggle => toggle.element.checked)
+      .map(toggle => toggle.attributes('aria-label'));
+    expect(checkedLabels).toHaveLength(2);
+    expect(checkedLabels.join(' ')).toContain('same-dir-copy.jpg');
+    expect(checkedLabels.join(' ')).toContain('other-dir-copy.jpg');
+
+    // 打开"只勾同目录"后，跨目录那份退出待删集合。
+    await wrapper.get('[data-test="cleanup-samedir-switch"] input').setValue(true);
+    await flushPromises();
+    const narrowed = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
+      .filter(toggle => toggle.element.checked)
+      .map(toggle => toggle.attributes('aria-label'));
+    expect(narrowed).toHaveLength(1);
+    expect(narrowed[0]).toContain('same-dir-copy.jpg');
   });
 
   it('re-reads the backend status when the panel opens so an outdated result is flagged', async () => {

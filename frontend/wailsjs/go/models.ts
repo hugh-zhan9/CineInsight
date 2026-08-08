@@ -1649,10 +1649,105 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class ImageCleanupMember {
+	    id: number;
+	    name: string;
+	    path: string;
+	    directory: string;
+	    size: number;
+	    width: number;
+	    height: number;
+	    format: string;
+	    is_stale: boolean;
+	    is_favorite: boolean;
+	    personal_rating?: number;
+	    perceptual_hash: string;
+	    hash_source_size: number;
+	    hash_source_mod_time_ns: number;
+	    taken_at?: string;
+	    camera_make: string;
+	    camera_model: string;
+	    lens_model: string;
+	    iso: number;
+	    f_number: number;
+	    exposure_time: string;
+	    focal_length: number;
+	    exif_orientation: number;
+	    gps_latitude?: number;
+	    gps_longitude?: number;
+	    exif_parsed_at?: string;
+	    tags: models.Tag[];
+	    ai_descriptions?: models.ImageAIDescription[];
+	    created_at: string;
+	    updated_at: string;
+	    file_size: number;
+	    mod_time_ns: number;
+	    description: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageCleanupMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.directory = source["directory"];
+	        this.size = source["size"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.format = source["format"];
+	        this.is_stale = source["is_stale"];
+	        this.is_favorite = source["is_favorite"];
+	        this.personal_rating = source["personal_rating"];
+	        this.perceptual_hash = source["perceptual_hash"];
+	        this.hash_source_size = source["hash_source_size"];
+	        this.hash_source_mod_time_ns = source["hash_source_mod_time_ns"];
+	        this.taken_at = source["taken_at"];
+	        this.camera_make = source["camera_make"];
+	        this.camera_model = source["camera_model"];
+	        this.lens_model = source["lens_model"];
+	        this.iso = source["iso"];
+	        this.f_number = source["f_number"];
+	        this.exposure_time = source["exposure_time"];
+	        this.focal_length = source["focal_length"];
+	        this.exif_orientation = source["exif_orientation"];
+	        this.gps_latitude = source["gps_latitude"];
+	        this.gps_longitude = source["gps_longitude"];
+	        this.exif_parsed_at = source["exif_parsed_at"];
+	        this.tags = this.convertValues(source["tags"], models.Tag);
+	        this.ai_descriptions = this.convertValues(source["ai_descriptions"], models.ImageAIDescription);
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.file_size = source["file_size"];
+	        this.mod_time_ns = source["mod_time_ns"];
+	        this.description = source["description"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ImageCleanupDuplicateGroup {
-	    original: models.Image;
-	    candidates: models.Image[];
+	    original: ImageCleanupMember;
+	    candidates: ImageCleanupMember[];
 	    reason: string;
+	    max_hamming_distance: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImageCleanupDuplicateGroup(source);
@@ -1660,9 +1755,10 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.original = this.convertValues(source["original"], models.Image);
-	        this.candidates = this.convertValues(source["candidates"], models.Image);
+	        this.original = this.convertValues(source["original"], ImageCleanupMember);
+	        this.candidates = this.convertValues(source["candidates"], ImageCleanupMember);
 	        this.reason = source["reason"];
+	        this.max_hamming_distance = source["max_hamming_distance"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1717,6 +1813,7 @@ export namespace services {
 		    return a;
 		}
 	}
+	
 	
 	export class ImageCleanupProgress {
 	    stage: string;
