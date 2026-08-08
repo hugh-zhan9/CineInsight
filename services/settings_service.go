@@ -30,6 +30,7 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.DeleteOriginalFile = input.DeleteOriginalFile
 		settings.VideoExtensions = input.VideoExtensions
 		settings.ScanExcludePaths = normalizeScanExcludePaths(input.ScanExcludePaths)
+		settings.ImageScanExcludePaths = normalizeScanExcludePaths(input.ImageScanExcludePaths)
 		settings.PlayWeight = input.PlayWeight
 		settings.RandomHalfLifeDays = normalizeRandomHalfLifeDays(input.RandomHalfLifeDays)
 		settings.AutoScanOnStartup = input.AutoScanOnStartup
