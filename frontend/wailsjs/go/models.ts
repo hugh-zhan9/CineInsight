@@ -1278,6 +1278,7 @@ export namespace services {
 	    completed: boolean;
 	    error: string;
 	    progress: CleanupProgress;
+	    stale: boolean;
 	    analysis?: CleanupAnalysis;
 	    started_at?: string;
 	    updated_at?: string;
@@ -1292,6 +1293,7 @@ export namespace services {
 	        this.completed = source["completed"];
 	        this.error = source["error"];
 	        this.progress = this.convertValues(source["progress"], CleanupProgress);
+	        this.stale = source["stale"];
 	        this.analysis = this.convertValues(source["analysis"], CleanupAnalysis);
 	        this.started_at = source["started_at"];
 	        this.updated_at = source["updated_at"];
@@ -1741,6 +1743,7 @@ export namespace services {
 	    completed: boolean;
 	    error: string;
 	    progress: ImageCleanupProgress;
+	    stale: boolean;
 	    analysis?: ImageCleanupAnalysis;
 	    started_at?: string;
 	    updated_at?: string;
@@ -1755,6 +1758,7 @@ export namespace services {
 	        this.completed = source["completed"];
 	        this.error = source["error"];
 	        this.progress = this.convertValues(source["progress"], ImageCleanupProgress);
+	        this.stale = source["stale"];
 	        this.analysis = this.convertValues(source["analysis"], ImageCleanupAnalysis);
 	        this.started_at = source["started_at"];
 	        this.updated_at = source["updated_at"];

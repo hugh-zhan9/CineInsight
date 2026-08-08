@@ -30,7 +30,9 @@ assert.doesNotMatch(videoListSource, /<ActionMenu label="更多">[\s\S]*AI 标�
 assert.match(videoListSource, /<button[^>]+@click="openAITagReviewDialog\(\)"[^>]*>AI 标签管理<\/button>/, 'AI tag management should be a direct toolbar action');
 assert.match(videoListSource, /aiTagSummary\.same_source_unread/, 'AI tag management should expose unread same-source relations');
 assert.match(videoListSource, /GetAITaggingStatusSummary/, 'same-source unread badge should refresh from the backend summary');
-assert.match(videoListSource, /<button[^>]+@click="openCleanupDialog\(\)"[^>]*>清理候选<\/button>/, 'cleanup candidates should be a direct toolbar action');
+// 按钮内多了"分析中/待审阅"徽标，但仍是工具栏上的直接入口。
+assert.match(videoListSource, /<button[^>]+@click="openCleanupDialog\(\)"[^>]*>\s*清理候选/, 'cleanup candidates should be a direct toolbar action');
+assert.match(videoListSource, /data-test="cleanup-badge-done"/, 'a completed background analysis should be surfaced on the toolbar button');
 assert.match(videoListSource, /<button[^>]+@click="showTagManagerDialog = true"[^>]*>标签管理<\/button>/, 'tag manager should be a direct toolbar action');
 assert.match(videoListSource, /@click="runIncrementalScan"/, 'video list should expose a manual incremental scan action');
 assert.match(videoListSource, /SyncScanDirectories/, 'manual incremental scan should reuse the backend sync API');
@@ -63,8 +65,11 @@ assert.match(
 assert.match(videoListSource, /cleanup-modal-header/, 'cleanup modal should have a fixed header area');
 assert.match(videoListSource, /cleanup-modal-body/, 'cleanup modal should have a dedicated scroll body');
 assert.match(videoListSource, /cleanup-modal-footer/, 'cleanup modal should keep actions visible at the bottom');
-assert.match(videoListSource, /cleanup-section-title/, 'cleanup sections should use visible category headers');
-assert.match(videoListSource, /toggleCleanupSelection\(group\.original\?\.id\)/, 'cleanup duplicate original row should be selectable');
+// 顶层改成按目录分组：目录标题可折叠，组内类别用 cleanup-card-kind 标注。
+assert.match(videoListSource, /data-test="cleanup-dir-section"/, 'cleanup candidates should be grouped by directory');
+assert.match(videoListSource, /@click="toggleCleanupDir\(section\.directory\)"/, 'cleanup directory headers should collapse');
+assert.match(videoListSource, /cleanup-card-kind/, 'cleanup cards should label their candidate category');
+assert.match(videoListSource, /toggleCleanupSelection\(entry\.keeper\?\.id\)/, 'cleanup duplicate original row should be selectable');
 assert.match(videoListSource, /@click="previewCleanupVideo\(/, 'cleanup candidates should expose preview actions');
 assert.match(videoListSource, /cleanup-item-actions/, 'cleanup candidate rows should reserve an actions area');
 assert.match(videoListSource, /短视频：时长 < 5 秒/, 'cleanup dialog should explain the short-video threshold');

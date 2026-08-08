@@ -60,10 +60,13 @@ type CleanupProgress struct {
 }
 
 type CleanupStatus struct {
-	Running   bool             `json:"running"`
-	Completed bool             `json:"completed"`
-	Error     string           `json:"error"`
-	Progress  CleanupProgress  `json:"progress"`
+	Running   bool            `json:"running"`
+	Completed bool            `json:"completed"`
+	Error     string          `json:"error"`
+	Progress  CleanupProgress `json:"progress"`
+	// Stale 表示缓存结果算出后库又发生了变化（删除、扫描、感知哈希补全等）。
+	// 结果仍然保留供用户继续审阅，只是提示可能过期，由用户决定何时重新分析。
+	Stale     bool             `json:"stale"`
 	Analysis  *CleanupAnalysis `json:"analysis,omitempty"`
 	StartedAt *time.Time       `json:"started_at,omitempty" ts_type:"string"`
 	UpdatedAt *time.Time       `json:"updated_at,omitempty" ts_type:"string"`
@@ -74,6 +77,10 @@ type CleanupService struct {
 	mu                   sync.Mutex
 	status               CleanupStatus
 	invalidatedDuringRun bool
+	// runID 每次启动分析自增。后台 goroutine 写完状态到发出 done 事件之间没有持锁，
+	// 期间用户可能已经启动了新一轮；靠它判断自己是否仍是当前这轮，避免旧的收尾事件
+	// 把 done 阶段盖到新一轮的状态上。
+	runID uint64
 }
 
 func (s *CleanupService) SetContext(ctx context.Context) {
@@ -101,31 +108,43 @@ func (s *CleanupService) StartAnalysis(criteria CleanupCriteria) (*CleanupStatus
 		},
 	}
 	s.invalidatedDuringRun = false
+	s.runID++
+	runID := s.runID
 	status := s.statusSnapshotLocked()
 	s.mu.Unlock()
 
 	go func() {
-		analysis, err := s.AnalyzeCleanupCandidates(criteria)
+		analysis, _, err := s.analyzeCleanupCandidates(criteria)
+
 		s.mu.Lock()
-		defer s.mu.Unlock()
 		now := time.Now()
 		s.status.Running = false
-		if s.invalidatedDuringRun {
-			s.status.Completed = false
-			s.status.Error = ""
-			s.status.Analysis = nil
-			s.invalidatedDuringRun = false
-			return
-		}
-		s.status.Completed = err == nil
 		s.status.UpdatedAt = &now
+		// 运行期间库发生了变化：结果仍然保留供审阅，只标记为可能过期。
+		staleDuringRun := s.invalidatedDuringRun
+		s.invalidatedDuringRun = false
 		if err != nil {
+			s.status.Completed = false
 			s.status.Error = err.Error()
 			s.status.Analysis = nil
+			s.status.Stale = false
+		} else {
+			s.status.Completed = true
+			s.status.Error = ""
+			s.status.Analysis = analysis
+			s.status.Stale = staleDuringRun
+		}
+		total := s.status.Progress.Total
+		s.mu.Unlock()
+
+		// done 事件必须在状态写入之后再发：前端收到 done 会立刻回读 Status()，
+		// 先发事件会读到 running=true / analysis=nil，界面就永远停在"分析中"。
+		// 失败同样要发终止事件，否则纯事件驱动的界面收不到任何结束信号。
+		if err != nil {
+			s.emitDoneForRun(runID, total, fmt.Sprintf("分析失败：%v", err))
 			return
 		}
-		s.status.Error = ""
-		s.status.Analysis = analysis
+		s.emitDoneForRun(runID, total, cleanupDoneMessage(analysis))
 	}()
 
 	return &status, nil
@@ -138,7 +157,8 @@ func (s *CleanupService) Status() *CleanupStatus {
 	return &status
 }
 
-// InvalidateAnalysis 丢弃已完成的缓存结果；运行中的分析保持不变。
+// InvalidateAnalysis 标记缓存结果可能已过期；结果本身保留，用户重开审阅界面
+// 仍能看到并继续处理，由用户自己决定何时重新分析（不再静默丢弃并自动重跑）。
 func (s *CleanupService) InvalidateAnalysis() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -146,10 +166,10 @@ func (s *CleanupService) InvalidateAnalysis() {
 		s.invalidatedDuringRun = true
 		return
 	}
-	s.status.Completed = false
-	s.status.Error = ""
-	s.status.Analysis = nil
-	s.status.Progress = CleanupProgress{}
+	if s.status.Analysis == nil {
+		return
+	}
+	s.status.Stale = true
 	now := time.Now()
 	s.status.UpdatedAt = &now
 }
@@ -163,11 +183,30 @@ func (s *CleanupService) statusSnapshotLocked() CleanupStatus {
 	return status
 }
 
+// AnalyzeCleanupCandidates 同步执行一次完整分析并发出终止事件，供 GetCleanupCandidates
+// 这类同步调用方使用；异步任务走 analyzeCleanupCandidates，由 StartAnalysis 在写完状态后补发 done。
 func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*CleanupAnalysis, error) {
+	result, hashCandidates, err := s.analyzeCleanupCandidates(criteria)
+	if err != nil {
+		return nil, err
+	}
+	s.emitProgress("done", hashCandidates, hashCandidates, "", cleanupDoneMessage(result))
+	return result, nil
+}
+
+func cleanupDoneMessage(result *CleanupAnalysis) string {
+	return fmt.Sprintf(
+		"分析完成：重复组 %d，近似重复 %d，同源候选 %d，短视频 %d，低清视频 %d。",
+		len(result.DuplicateGroups), len(result.NearDuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution),
+	)
+}
+
+// analyzeCleanupCandidates 返回分析结果和参与哈希比对的候选数；不发终止事件。
+func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*CleanupAnalysis, int, error) {
 	startedAt := time.Now()
 	var videos []models.Video
 	if err := database.DB.Order("id asc").Find(&videos).Error; err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	videoService := &VideoService{}
 
@@ -272,7 +311,7 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	}
 	dismissed, err := loadNearDuplicateDismissals()
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed))
 	for pair := range exactPairs {
@@ -283,7 +322,7 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	}
 	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(excludedPairs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	result.NearDuplicateGroups = nearDuplicateGroups
 	result.StaleHashCount = staleHashCount
@@ -292,7 +331,7 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	}
 	sameSourceGroups, err := loadCleanupSameSourceGroups(exactPairs)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	result.SameSourceGroups = sameSourceGroups
 
@@ -304,12 +343,27 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 		time.Since(startedAt).Round(time.Millisecond),
 		len(result.DuplicateGroups), len(result.NearDuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution), len(hashCandidates),
 	)
-	s.emitProgress("done", len(hashCandidates), len(hashCandidates), "", fmt.Sprintf(
-		"分析完成：重复组 %d，近似重复 %d，同源候选 %d，短视频 %d，低清视频 %d。",
-		len(result.DuplicateGroups), len(result.NearDuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution),
-	))
+	// done 事件由调用方在写完状态后发出，这里不发，避免前端收到 done 时回读到尚未写入结果的状态。
+	return result, len(hashCandidates), nil
+}
 
-	return result, nil
+// emitDoneForRun 只在自己仍是当前这轮分析时写入 done 进度并发事件。
+func (s *CleanupService) emitDoneForRun(runID uint64, total int, message string) {
+	progress := CleanupProgress{Stage: "done", Message: message, Current: total, Total: total}
+	s.mu.Lock()
+	if s.runID != runID {
+		s.mu.Unlock()
+		return
+	}
+	now := time.Now()
+	s.status.Progress = progress
+	s.status.UpdatedAt = &now
+	s.mu.Unlock()
+
+	if s.ctx == nil {
+		return
+	}
+	wailsRuntime.EventsEmit(s.ctx, "cleanup-progress", progress)
 }
 
 func loadCleanupSameSourceGroups(exactPairs map[[2]uint]struct{}) ([]CleanupSameSourceGroup, error) {
