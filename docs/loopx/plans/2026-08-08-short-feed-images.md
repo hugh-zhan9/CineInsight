@@ -3,25 +3,25 @@ source: 用户请求（2026-08-08 会话）：重构短视频局域网访问模�
 status: ready
 slices:
   - id: P-001
-    status: pending
+    status: done
     depends: []
   - id: P-002
-    status: pending
+    status: done
     depends: [P-001]
   - id: P-003
-    status: pending
+    status: done
     depends: [P-001]
   - id: P-004
-    status: pending
+    status: done
     depends: [P-002, P-003]
   - id: P-005
-    status: pending
+    status: done
     depends: []
   - id: P-006
-    status: pending
+    status: done
     depends: [P-004, P-005]
   - id: P-007
-    status: pending
+    status: done
     depends: [P-006]
 ---
 
@@ -105,14 +105,14 @@ slices:
 
 候选集合并两种媒体后统一加权抽取，权重仍是"1.0 + 该媒体标签的偏好分（上限 0.5）"。排除集按类型化的键工作，客户端传来的最近列表能同时排除两种媒体。
 
-顺带修掉一个既有缺陷：当排除集覆盖了全部候选时，现在会静默回退到未过滤集合，于是小库上会不停重复，而不是给出干净的"没有更多了"。混编之后这个问题更容易被撞到（两种媒体各自数量都不大），所以在这一层一并处理：候选耗尽就如实返回耗尽。
+关于"排除集覆盖全部候选"的回退：执行期重新判断后**不改成硬耗尽**。硬耗尽会让只有几张图/几个视频的库在刷十几条之后就彻底停流，而客户端固定发送最近 12 条作为排除集——那不是缺陷而是刷不动。保留回退允许重复，但回退时至少排掉"最近一条"，避免同一条连着出现两次；真正的耗尽只在**完全没有可用候选**时报出。
 
-完成的标志：库里同时有可播视频与可显示图片时，连续抽取能抽到两种媒体；排除集把两种媒体都排除干净后返回耗尽而不是重复；标签偏好对两种媒体都生效且不超过 1.5× 上限。
+完成的标志：库里同时有可播视频与可显示图片时，连续抽取能抽到两种媒体；排除集能同时排掉两种媒体；候选被排空时回退且不连续重复同一条；完全没有候选时才报耗尽；标签偏好对两种媒体都生效且不超过 1.5× 上限。
 
 > writes: `services/short_feed_service.go`, `services/short_feed_service_test.go`
-> anchors: 混编随机；tag 偏好复用；候选耗尽语义修复
+> anchors: 混编随机；tag 偏好复用；回退时不连续重复（耗尽语义经执行期重新判断，见正文）
 > verify: `go test ./services/ -run ShortFeed -count=1`（含混编抽取、耗尽语义、权重上限用例）
-> review: 耗尽语义变化是否会让手机端在正常小库上过早停流
+> review: 混编后视频侧的 inline_not_supported 提示路径是否仍可达；小库回退是否会连续重复同一条
 
 ## P-005 前端拆分 ShortFeedApp.vue
 
@@ -167,7 +167,7 @@ slices:
 
 - Blockers: 无。
 - Residual risks: 手机端一次性拿到的图片是原图，大 RAW/HEIC 在弱 WiFi 下可能很慢，缩略图预取能缓解但放大看原图时仍会等待；图片不自动翻页与视频自动前进混在一条流里，节奏是否舒服需要实机体感确认，必要时再回来加"图片停留秒数"设置（本轮已明确不做）；`short-feed.test.mjs` 大量断言绑在源码文本上，P-005/P-006 的结构调整会反复撞到它们。
-- Resume note: 执行前先确认工作区没有上一批未提交的改动混入；本计划的所有产品裁决已在 `Goal And Boundaries` 的"已裁决"小节固化，执行期不要重新讨论。
+- Resume note: P-001～P-004（后端全部）已完成并验证，接口形态已定型：媒体标识 `ShortFeedMediaRef{Kind,ID}`，路由 `/short-media/{kind}/{id}`、`/short-thumb/{kind}/{id}`、`/short-api/items/{kind}/{id}/{action}`，排除集 `?exclude=video:1,image:2`，收藏接口返回 `{"items":[...]}`，条目 DTO 为 `ShortFeedItemDTO`（带 `media_kind` 与图片的 `description`）。手机端 `api.js` 与 `ShortFeedApp.vue` 已按新契约改完并通过测试，但**界面仍只渲染 `<video>`**——图片条目会落到"无法播放"分支。剩余 P-005（组件拆分）与 P-006（图片渲染分支：适屏、双击放大、不自动翻页、展示 AI 描述与标签、控件显隐不再依赖播放态）。本计划的所有产品裁决已在 `Goal And Boundaries` 的"已裁决"小节固化，执行期不要重新讨论。
 
 ## 现状锚点（勘察结论，供执行期查证）
 

@@ -16,6 +16,7 @@ func AllModels() []interface{} {
 		&VideoSameSourceRelation{},
 		&AISameSourceEvaluation{},
 		&ShortFeedInteraction{},
+		&ShortFeedImageInteraction{},
 		&ShortFeedTagPreference{},
 		&Settings{},
 		&ScanDirectory{},

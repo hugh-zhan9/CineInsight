@@ -7,6 +7,7 @@ const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf
 const videoRowSource = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const shortFeedCss = readFileSync(new URL('../src/short-feed/short-feed.css', import.meta.url), 'utf8');
 const shortFeedSource = readFileSync(new URL('../src/short-feed/ShortFeedApp.vue', import.meta.url), 'utf8');
+const shortFeedActionRail = readFileSync(new URL('../src/short-feed/components/FeedActionRail.vue', import.meta.url), 'utf8');
 const shortFeedMain = readFileSync(new URL('../src/short-feed/main.js', import.meta.url), 'utf8');
 const settingsSource = readFileSync(new URL('../src/components/SettingsPage.vue', import.meta.url), 'utf8');
 const componentCss = readFileSync(new URL('../src/styles/components.css', import.meta.url), 'utf8');
@@ -44,8 +45,9 @@ assert.match(shortFeedCss, /--short-glass-bg:\s*var\(--glass-strong-bg\)/, 'shor
 assert.match(shortFeedMain, /styles\/tokens\.css/, 'short feed entry should load shared design tokens');
 assert.doesNotMatch(shortFeedSource, /🔇|🔊|🗑/, 'short feed controls should avoid emoji action labels');
 assert.doesNotMatch(shortFeedSource, />\s*(Fav|Mute|Sound|Like|Save|Del)\s*</, 'short feed controls should use compact icons instead of text action labels');
-assert.match(shortFeedSource, /class="action-icon action-icon--heart"/, 'short feed like action should render as a heart icon');
-assert.match(shortFeedSource, /class="action-icon action-icon--bookmark"/, 'short feed favorite action should render as a bookmark icon');
+// 动作按钮已拆到 FeedActionRail.vue，断言跟着搬过去。
+assert.match(shortFeedActionRail, /class="action-icon action-icon--heart"/, 'short feed like action should render as a heart icon');
+assert.match(shortFeedActionRail, /class="action-icon action-icon--bookmark"/, 'short feed favorite action should render as a bookmark icon');
 assert.match(shortFeedCss, /\.feed-stage::after/, 'short feed should use a subtle readable overlay instead of boxed panels');
 assert.match(shortFeedCss, /\.progress-dock\s*{[^}]*height:\s*3px;/s, 'short feed progress should be a minimal bottom bar');
 assert.match(settingsSource, /class="settings-grid-shell"/, 'settings page should use a compact grouped layout shell');

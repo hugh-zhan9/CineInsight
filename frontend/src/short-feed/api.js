@@ -23,25 +23,34 @@ function postJSON(path, body) {
   });
 }
 
-export function getNextVideo(excludeIDs = []) {
-  const query = excludeIDs.length > 0 ? `?exclude=${excludeIDs.join(',')}` : '';
+// 图片 ID 与视频 ID 各自从 1 开始，所以最近列表与媒体地址都必须带类型。
+export function itemKey(item) {
+  return item ? `${item.media_kind}:${item.id}` : '';
+}
+
+function itemPath(item, action) {
+  return `/short-api/items/${item.media_kind}/${item.id}/${action}`;
+}
+
+export function getNextItem(excludeKeys = []) {
+  const query = excludeKeys.length > 0 ? `?exclude=${excludeKeys.join(',')}` : '';
   return requestJSON(`/short-api/feed/next${query}`);
 }
 
-export function recordPlay(videoID) {
-  return postJSON(`/short-api/videos/${videoID}/play`, { source: 'short_feed' });
+export function recordPlay(item) {
+  return postJSON(itemPath(item, 'play'), { source: 'short_feed' });
 }
 
-export function setLiked(videoID, liked) {
-  return postJSON(`/short-api/videos/${videoID}/like`, { liked });
+export function setLiked(item, liked) {
+  return postJSON(itemPath(item, 'like'), { liked });
 }
 
-export function setFavorited(videoID, favorited) {
-  return postJSON(`/short-api/videos/${videoID}/favorite`, { favorited });
+export function setFavorited(item, favorited) {
+  return postJSON(itemPath(item, 'favorite'), { favorited });
 }
 
-export function deleteVideo(videoID) {
-  return postJSON(`/short-api/videos/${videoID}/delete`, { confirm_move_to_trash: true });
+export function deleteItem(item) {
+  return postJSON(itemPath(item, 'delete'), { confirm_move_to_trash: true });
 }
 
 export function getFavorites() {

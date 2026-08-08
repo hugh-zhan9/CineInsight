@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -60,6 +61,393 @@ func countShortFeedRows(t *testing.T, table string) int64 {
 	return count
 }
 
+// 排除集与媒体路由都改成带类型的键：图片 ID 与视频 ID 各自从 1 开始，
+// 裸 ID 会让两种媒体互相顶掉。未知类型必须拒绝而不是回退成视频。
+func TestShortFeedTypedRefParsing(t *testing.T) {
+	if ref, ok := ParseShortFeedMediaRef("video:12"); !ok || ref.Kind != ShortFeedMediaVideo || ref.ID != 12 {
+		t.Fatalf("video:12 解析失败: %+v ok=%v", ref, ok)
+	}
+	if ref, ok := ParseShortFeedMediaRef(" image:7 "); !ok || ref.Kind != ShortFeedMediaImage || ref.ID != 7 {
+		t.Fatalf("image:7 解析失败: %+v ok=%v", ref, ok)
+	}
+	for _, bad := range []string{"", "12", "audio:1", "video:0", "video:abc", "video:", ":1"} {
+		if ref, ok := ParseShortFeedMediaRef(bad); ok {
+			t.Fatalf("%q 不应被接受，实际 %+v", bad, ref)
+		}
+	}
+	if got := (ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: 3}).Key(); got != "image:3" {
+		t.Fatalf("Key() 应为 image:3，实际 %q", got)
+	}
+
+	refs := parseShortFeedExcludeRefs("video:1, image:2 ,audio:3,,video:0,video:4")
+	want := []ShortFeedMediaRef{
+		{Kind: ShortFeedMediaVideo, ID: 1},
+		{Kind: ShortFeedMediaImage, ID: 2},
+		{Kind: ShortFeedMediaVideo, ID: 4},
+	}
+	if len(refs) != len(want) {
+		t.Fatalf("排除集应丢弃无法识别的条目，期望 %d 条，实际 %+v", len(want), refs)
+	}
+	for i := range want {
+		if refs[i] != want[i] {
+			t.Fatalf("排除集第 %d 条应为 %+v，实际 %+v", i, want[i], refs[i])
+		}
+	}
+
+	if ref, action, ok := parseShortFeedItemAction("/short-api/items/video/9/like"); !ok || action != "like" || ref.ID != 9 {
+		t.Fatalf("动作路径解析失败: %+v %q ok=%v", ref, action, ok)
+	}
+	for _, bad := range []string{"/short-api/items/9/like", "/short-api/items/audio/9/like", "/short-api/items/video/0/like", "/short-api/items/video/9"} {
+		if _, _, ok := parseShortFeedItemAction(bad); ok {
+			t.Fatalf("%q 不应被接受", bad)
+		}
+	}
+	if ref, ok := parseShortFeedMediaPath("/short-media/image/5"); !ok || ref.Kind != ShortFeedMediaImage || ref.ID != 5 {
+		t.Fatalf("媒体路径解析失败: %+v ok=%v", ref, ok)
+	}
+	for _, bad := range []string{"/short-media/5", "/short-media/audio/5", "/short-media/video/0"} {
+		if _, ok := parseShortFeedMediaPath(bad); ok {
+			t.Fatalf("%q 不应被接受", bad)
+		}
+	}
+}
+
+func imageRef(id uint) ShortFeedMediaRef {
+	return ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: id}
+}
+
+// createShortFeedImage 写一张真实字节的文件并建库记录。内容不需要是合法图像：
+// jpg 走 ffmpeg 解码分支，大图直出原文件，不经过解码。
+func createShortFeedImage(t *testing.T, root string, name string, format string, stale bool) models.Image {
+	t.Helper()
+	path := filepath.Join(root, name)
+	if err := os.WriteFile(path, []byte("0123456789abcdef"), 0644); err != nil {
+		t.Fatalf("写入图片文件失败: %v", err)
+	}
+	img := models.Image{
+		Name:      name,
+		Path:      path,
+		Directory: root,
+		Size:      16,
+		Format:    format,
+		IsStale:   stale,
+	}
+	if err := database.DB.Create(&img).Error; err != nil {
+		t.Fatalf("创建图片失败: %v", err)
+	}
+	return img
+}
+
+// 图片没有时长，视频那条门槛不适用；判据是"未失效 + 有可用解码器"。
+// 不可解码的格式必须在入选阶段就被挡掉，而不是入选后再报"无法播放"。
+func TestShortFeedImageEligibilityAndMediaRange(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	ok := createShortFeedImage(t, root, "ok.jpg", "jpg", false)
+	staleImage := createShortFeedImage(t, root, "stale.jpg", "jpg", true)
+	unsupported := createShortFeedImage(t, root, "weird.xyz", "xyz", false)
+
+	eligible, err := svc.loadEligibleImages(nil)
+	if err != nil {
+		t.Fatalf("读取可入选图片失败: %v", err)
+	}
+	if len(eligible) != 1 || eligible[0].ID != ok.ID {
+		ids := make([]uint, 0, len(eligible))
+		for _, img := range eligible {
+			ids = append(ids, img.ID)
+		}
+		t.Fatalf("只有可解码且未失效的图片应入选，期望 [%d]，实际 %v", ok.ID, ids)
+	}
+	if svc.shortFeedImageEligible(staleImage) {
+		t.Fatal("失效图片不应入选")
+	}
+	if svc.shortFeedImageEligible(unsupported) {
+		t.Fatal("无可用解码器的图片不应入选")
+	}
+
+	// 未注入解码服务时图片一律不入选，不能悄悄退化成"当作视频处理"。
+	bare := NewShortFeedService(&VideoService{})
+	if bare.shortFeedImageEligible(ok) {
+		t.Fatal("未注入图片解码服务时不应入选任何图片")
+	}
+
+	server := NewShortFeedHTTPServer(svc, fstest.MapFS{"short.html": &fstest.MapFile{Data: []byte("<html></html>")}}, ShortFeedHTTPServerConfig{})
+	handler := server.Handler()
+
+	rangeReq := httptest.NewRequest(http.MethodGet, "/short-media/image/"+strconvUint(ok.ID), nil)
+	rangeReq.RemoteAddr = "127.0.0.1:5321"
+	rangeReq.Header.Set("Range", "bytes=0-3")
+	rangeRec := httptest.NewRecorder()
+	handler.ServeHTTP(rangeRec, rangeReq)
+	if rangeRec.Code != http.StatusPartialContent {
+		t.Fatalf("图片应支持 Range 请求，实际 %d", rangeRec.Code)
+	}
+	if body := rangeRec.Body.String(); body != "0123" {
+		t.Fatalf("Range 响应体应为 0123，实际 %q", body)
+	}
+	if cache := rangeRec.Header().Get("Cache-Control"); cache == "" {
+		t.Fatal("图片下发应带 Cache-Control")
+	}
+
+	// 不可解码的图片不给下发，且不泄露内部原因。
+	badReq := httptest.NewRequest(http.MethodGet, "/short-media/image/"+strconvUint(unsupported.ID), nil)
+	badReq.RemoteAddr = "127.0.0.1:5321"
+	badRec := httptest.NewRecorder()
+	handler.ServeHTTP(badRec, badReq)
+	if badRec.Code != http.StatusNotFound {
+		t.Fatalf("不可解码的图片应返回 404，实际 %d", badRec.Code)
+	}
+
+	// 源文件消失后要标记 stale，与视频侧一致。
+	if err := os.Remove(ok.Path); err != nil {
+		t.Fatalf("删除图片文件失败: %v", err)
+	}
+	missingReq := httptest.NewRequest(http.MethodGet, "/short-media/image/"+strconvUint(ok.ID), nil)
+	missingReq.RemoteAddr = "127.0.0.1:5321"
+	missingRec := httptest.NewRecorder()
+	handler.ServeHTTP(missingRec, missingReq)
+	if missingRec.Code != http.StatusNotFound {
+		t.Fatalf("源文件缺失应返回 404，实际 %d", missingRec.Code)
+	}
+	var reloaded models.Image
+	if err := database.DB.First(&reloaded, ok.ID).Error; err != nil {
+		t.Fatalf("重新读取图片失败: %v", err)
+	}
+	if !reloaded.IsStale {
+		t.Fatal("源文件缺失的图片应被标记为 stale")
+	}
+}
+
+// 图片的喜欢/收藏/删除与回写投影：喜欢完全拥有那个自动标签（含反向清理），
+// 收藏每次动作只投影一次，绝不覆盖用户随后在桌面端的手动取消。
+func TestShortFeedImageInteractionsProjectIntoImageLibrary(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	img := createShortFeedImage(t, root, "photo.jpg", "jpg", false)
+	ref := imageRef(img.ID)
+
+	if _, err := svc.SetLiked(ref, true); err != nil {
+		t.Fatalf("图片喜欢失败: %v", err)
+	}
+	// 幂等：重复喜欢不应重复插标签。
+	if _, err := svc.SetLiked(ref, true); err != nil {
+		t.Fatalf("图片重复喜欢失败: %v", err)
+	}
+	tagID := shortFeedLikedTagID(t)
+	if got := imageTagLinkCount(t, img.ID, tagID); got != 1 {
+		t.Fatalf("喜欢应投影为 1 条图片标签关联，实际 %d", got)
+	}
+
+	if _, err := svc.SetFavorited(ref, true); err != nil {
+		t.Fatalf("图片收藏失败: %v", err)
+	}
+	var reloaded models.Image
+	if err := database.DB.First(&reloaded, img.ID).Error; err != nil {
+		t.Fatalf("读取图片失败: %v", err)
+	}
+	if !reloaded.IsFavorite {
+		t.Fatal("手机端收藏应回写图片库的 is_favorite")
+	}
+
+	// 用户在桌面端手动取消收藏后，再次同步不得把它改回去。
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", img.ID).Update("is_favorite", false).Error; err != nil {
+		t.Fatalf("手动取消收藏失败: %v", err)
+	}
+	if _, err := svc.SyncFeedback(); err != nil {
+		t.Fatalf("再次同步失败: %v", err)
+	}
+	if err := database.DB.First(&reloaded, img.ID).Error; err != nil {
+		t.Fatalf("读取图片失败: %v", err)
+	}
+	if reloaded.IsFavorite {
+		t.Fatal("同一次手机端收藏动作只投影一次，不应覆盖桌面端的手动取消")
+	}
+
+	// 取消喜欢要反向清理投影出去的标签。
+	if _, err := svc.SetLiked(ref, false); err != nil {
+		t.Fatalf("取消图片喜欢失败: %v", err)
+	}
+	if got := imageTagLinkCount(t, img.ID, tagID); got != 0 {
+		t.Fatalf("取消喜欢后标签投影应被回收，实际 %d", got)
+	}
+
+	// 浏览计数走图片自己的并行表，不碰视频表。
+	if _, err := svc.RecordPlayback(ref); err != nil {
+		t.Fatalf("记录图片浏览失败: %v", err)
+	}
+	var imageInteraction models.ShortFeedImageInteraction
+	if err := database.DB.Where("image_id = ?", img.ID).First(&imageInteraction).Error; err != nil {
+		t.Fatalf("读取图片互动失败: %v", err)
+	}
+	if imageInteraction.ViewCount != 1 {
+		t.Fatalf("图片浏览次数应为 1，实际 %d", imageInteraction.ViewCount)
+	}
+	var videoInteractions int64
+	if err := database.DB.Model(&models.ShortFeedInteraction{}).Count(&videoInteractions).Error; err != nil {
+		t.Fatalf("统计视频互动失败: %v", err)
+	}
+	if videoInteractions != 0 {
+		t.Fatalf("图片互动不应写进视频互动表，实际 %d 行", videoInteractions)
+	}
+
+	// 删除走图片回收站：记录软删除且留有可恢复条目。
+	if err := svc.DeleteItem(ref); err != nil {
+		t.Fatalf("删除图片失败: %v", err)
+	}
+	var alive int64
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", img.ID).Count(&alive).Error; err != nil {
+		t.Fatalf("统计图片失败: %v", err)
+	}
+	if alive != 0 {
+		t.Fatal("删除后图片不应仍是活跃记录")
+	}
+	var trashed int64
+	if err := database.DB.Model(&models.ImageTrashEntry{}).Where("image_id = ?", img.ID).Count(&trashed).Error; err != nil {
+		t.Fatalf("统计图片回收站失败: %v", err)
+	}
+	if trashed != 1 {
+		t.Fatalf("删除应留下 1 条图片回收站记录，实际 %d", trashed)
+	}
+}
+
+// 投影总开关关闭时既不新增也不清理既有投影，图片侧与视频侧一致。
+func TestShortFeedImageSyncDisabledLeavesProjectionAlone(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+	img := createShortFeedImage(t, root, "photo.jpg", "jpg", false)
+	ref := imageRef(img.ID)
+
+	if _, err := svc.SetLiked(ref, true); err != nil {
+		t.Fatalf("图片喜欢失败: %v", err)
+	}
+	tagID := shortFeedLikedTagID(t)
+	if got := imageTagLinkCount(t, img.ID, tagID); got != 1 {
+		t.Fatalf("投影应存在，实际 %d", got)
+	}
+
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("short_feed_feedback_sync_enabled", false).Error; err != nil {
+		t.Fatalf("关闭投影开关失败: %v", err)
+	}
+	if _, err := svc.SetLiked(ref, false); err != nil {
+		t.Fatalf("取消图片喜欢失败: %v", err)
+	}
+	if got := imageTagLinkCount(t, img.ID, tagID); got != 1 {
+		t.Fatalf("关闭开关后不应清理既有投影，实际 %d", got)
+	}
+}
+
+func shortFeedLikedTagID(t *testing.T) uint {
+	t.Helper()
+	var tag models.Tag
+	if err := database.DB.Where("name = ?", ShortFeedLikedTagName).First(&tag).Error; err != nil {
+		t.Fatalf("读取自动标签失败: %v", err)
+	}
+	return tag.ID
+}
+
+// 混编流：视频与图片进同一个候选池，排除集能同时排掉两种媒体。
+func TestShortFeedMixedFeedDrawsBothMediaKinds(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	video := createShortFeedVideo(t, root, "clip.mp4", 30, false)
+	img := createShortFeedImage(t, root, "photo.jpg", "jpg", false)
+
+	// 抽满两端：randFloat64 分别落在第一个与最后一个候选上。
+	svc.randFloat64 = func() float64 { return 0 }
+	first, err := svc.NextItem(nil)
+	if err != nil {
+		t.Fatalf("抽取失败: %v", err)
+	}
+	svc.randFloat64 = func() float64 { return 0.999 }
+	last, err := svc.NextItem(nil)
+	if err != nil {
+		t.Fatalf("抽取失败: %v", err)
+	}
+	kinds := map[ShortFeedMediaKind]bool{first.MediaKind: true, last.MediaKind: true}
+	if !kinds[ShortFeedMediaVideo] || !kinds[ShortFeedMediaImage] {
+		t.Fatalf("混编流应能抽到两种媒体，实际 %v / %v", first.MediaKind, last.MediaKind)
+	}
+
+	// 排除视频后只能抽到图片，反之亦然。
+	onlyImage, err := svc.NextItem([]ShortFeedMediaRef{videoRef(video.ID)})
+	if err != nil {
+		t.Fatalf("排除视频后抽取失败: %v", err)
+	}
+	if onlyImage.MediaKind != ShortFeedMediaImage || onlyImage.ID != img.ID {
+		t.Fatalf("排除视频后应只抽到图片，实际 %+v", onlyImage)
+	}
+	onlyVideo, err := svc.NextItem([]ShortFeedMediaRef{imageRef(img.ID)})
+	if err != nil {
+		t.Fatalf("排除图片后抽取失败: %v", err)
+	}
+	if onlyVideo.MediaKind != ShortFeedMediaVideo || onlyVideo.ID != video.ID {
+		t.Fatalf("排除图片后应只抽到视频，实际 %+v", onlyVideo)
+	}
+	if onlyImage.MediaURL != "/short-media/image/"+strconvUint(img.ID) {
+		t.Fatalf("图片媒体地址应带类型，实际 %q", onlyImage.MediaURL)
+	}
+
+	// 排除集盖住全部候选时回退允许重复，但不能连着重复最后那一条。
+	repeated, err := svc.NextItem([]ShortFeedMediaRef{imageRef(img.ID), videoRef(video.ID)})
+	if err != nil {
+		t.Fatalf("排除集盖满时不应报错: %v", err)
+	}
+	if repeated.Ref() == (ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID}) {
+		t.Fatalf("回退时不应连着重复最近一条，实际 %+v", repeated)
+	}
+
+	// 完全没有候选才报耗尽。
+	empty := NewShortFeedService(&VideoService{})
+	setupVideoServiceTestDB(t)
+	if _, err := empty.NextItem(nil); !errors.Is(err, ErrShortFeedNoEligibleVideos) {
+		t.Fatalf("没有任何候选时应报耗尽，实际 %v", err)
+	}
+}
+
+// 收藏页把两种媒体都带出来。
+func TestShortFeedFavoritesIncludeImages(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	video := createShortFeedVideo(t, root, "clip.mp4", 30, false)
+	img := createShortFeedImage(t, root, "photo.jpg", "jpg", false)
+	if _, err := svc.SetFavorited(videoRef(video.ID), true); err != nil {
+		t.Fatalf("收藏视频失败: %v", err)
+	}
+	if _, err := svc.SetFavorited(imageRef(img.ID), true); err != nil {
+		t.Fatalf("收藏图片失败: %v", err)
+	}
+
+	items, err := svc.FavoriteItems()
+	if err != nil {
+		t.Fatalf("读取收藏失败: %v", err)
+	}
+	seen := map[ShortFeedMediaKind]bool{}
+	for _, item := range items {
+		seen[item.MediaKind] = true
+	}
+	if !seen[ShortFeedMediaVideo] || !seen[ShortFeedMediaImage] {
+		t.Fatalf("收藏页应同时含视频与图片，实际 %+v", items)
+	}
+}
+
+func videoRef(id uint) ShortFeedMediaRef {
+	return ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: id}
+}
+
 func TestShortFeedSelectionUsesCappedWeakRecommendation(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()
@@ -85,7 +473,7 @@ func TestShortFeedSelectionUsesCappedWeakRecommendation(t *testing.T) {
 
 	svc := NewShortFeedService(&VideoService{})
 	svc.randFloat64 = func() float64 { return 0.99 }
-	next, err := svc.NextVideo(nil)
+	next, err := svc.NextItem(nil)
 	if err != nil {
 		t.Fatalf("获取下一个视频失败: %v", err)
 	}
@@ -106,7 +494,7 @@ func TestShortFeedUsesConfiguredMaxDuration(t *testing.T) {
 	}
 
 	svc := NewShortFeedService(&VideoService{})
-	next, err := svc.NextVideo(nil)
+	next, err := svc.NextItem(nil)
 	if err != nil {
 		t.Fatalf("获取下一个视频失败: %v", err)
 	}
@@ -125,7 +513,7 @@ func TestShortFeedSkipsMissingFilesBeforeReturningNextVideo(t *testing.T) {
 	}
 
 	svc := NewShortFeedService(&VideoService{})
-	next, err := svc.NextVideo(nil)
+	next, err := svc.NextItem(nil)
 	if err != nil {
 		t.Fatalf("获取下一个视频失败: %v", err)
 	}
@@ -151,13 +539,13 @@ func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 	beforeVideoTags := countShortFeedRows(t, "video_tags")
 
 	svc := NewShortFeedService(&VideoService{})
-	if _, err := svc.SetLiked(video.ID, true); err != nil {
+	if _, err := svc.SetLiked(videoRef(video.ID), true); err != nil {
 		t.Fatalf("设置喜欢失败: %v", err)
 	}
-	if _, err := svc.SetLiked(video.ID, true); err != nil {
+	if _, err := svc.SetLiked(videoRef(video.ID), true); err != nil {
 		t.Fatalf("重复设置喜欢失败: %v", err)
 	}
-	if _, err := svc.SetFavorited(video.ID, true); err != nil {
+	if _, err := svc.SetFavorited(videoRef(video.ID), true); err != nil {
 		t.Fatalf("设置收藏失败: %v", err)
 	}
 
@@ -186,7 +574,7 @@ func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 		t.Fatalf("重复 liked=true 应保持 set-state 幂等，score=%.2f", preference.Score)
 	}
 
-	if _, err := svc.SetLiked(video.ID, false); err != nil {
+	if _, err := svc.SetLiked(videoRef(video.ID), false); err != nil {
 		t.Fatalf("取消喜欢失败: %v", err)
 	}
 	if got := countShortFeedRows(t, "tags"); got != beforeTags+1 {
@@ -205,13 +593,13 @@ func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 		t.Fatalf("主库手动取消收藏不应被后续同步覆盖: favorite=%v err=%v", reloaded.IsFavorite, err)
 	}
 
-	if _, err := svc.SetFavorited(video.ID, false); err != nil {
+	if _, err := svc.SetFavorited(videoRef(video.ID), false); err != nil {
 		t.Fatalf("手机取消收藏失败: %v", err)
 	}
 	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || reloaded.IsFavorite {
 		t.Fatalf("手机取消收藏不应改变主库状态: favorite=%v err=%v", reloaded.IsFavorite, err)
 	}
-	if _, err := svc.SetFavorited(video.ID, true); err != nil {
+	if _, err := svc.SetFavorited(videoRef(video.ID), true); err != nil {
 		t.Fatalf("手机重新收藏失败: %v", err)
 	}
 	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
@@ -224,20 +612,20 @@ func TestShortFeedFeedbackSyncDisabledDoesNotRemoveExistingProjection(t *testing
 	root := t.TempDir()
 	video := createShortFeedVideo(t, root, "disabled.mp4", 80, false)
 	svc := NewShortFeedService(&VideoService{})
-	if _, err := svc.SetLiked(video.ID, true); err != nil {
+	if _, err := svc.SetLiked(videoRef(video.ID), true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.SetFavorited(video.ID, true); err != nil {
+	if _, err := svc.SetFavorited(videoRef(video.ID), true); err != nil {
 		t.Fatal(err)
 	}
 	beforeVideoTags := countShortFeedRows(t, "video_tags")
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("short_feed_feedback_sync_enabled", false).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.SetLiked(video.ID, false); err != nil {
+	if _, err := svc.SetLiked(videoRef(video.ID), false); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.SetFavorited(video.ID, false); err != nil {
+	if _, err := svc.SetFavorited(videoRef(video.ID), false); err != nil {
 		t.Fatal(err)
 	}
 	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags {
@@ -255,7 +643,7 @@ func TestShortFeedPlaybackAndDeleteUseExistingSemantics(t *testing.T) {
 	video := createShortFeedVideo(t, root, "play.mp4", 120, false)
 
 	svc := NewShortFeedService(&VideoService{})
-	if _, err := svc.RecordShortFeedPlayback(video.ID); err != nil {
+	if _, err := svc.RecordPlayback(videoRef(video.ID)); err != nil {
 		t.Fatalf("记录播放失败: %v", err)
 	}
 	var afterPlay models.Video
@@ -266,7 +654,7 @@ func TestShortFeedPlaybackAndDeleteUseExistingSemantics(t *testing.T) {
 		t.Fatalf("播放统计未更新 random=%d last=%v", afterPlay.RandomPlayCount, afterPlay.LastPlayedAt)
 	}
 
-	if err := svc.DeleteVideo(video.ID); err != nil {
+	if err := svc.DeleteItem(videoRef(video.ID)); err != nil {
 		t.Fatalf("删除视频失败: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, DefaultTrashDirName, "play.mp4")); err != nil {
@@ -300,7 +688,7 @@ func TestShortFeedHTTPGuardsAndRange(t *testing.T) {
 	}
 
 	formWrite := httptest.NewRecorder()
-	formReq := httptest.NewRequest(http.MethodPost, "/short-api/videos/1/like", strings.NewReader("liked=true"))
+	formReq := httptest.NewRequest(http.MethodPost, "/short-api/items/video/1/like", strings.NewReader("liked=true"))
 	formReq.RemoteAddr = "127.0.0.1:1234"
 	formReq.Host = "127.0.0.1:18088"
 	formReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -310,7 +698,7 @@ func TestShortFeedHTTPGuardsAndRange(t *testing.T) {
 	}
 
 	missingBody := httptest.NewRecorder()
-	missingBodyReq := httptest.NewRequest(http.MethodPost, "/short-api/videos/"+strconvUint(video.ID)+"/like", nil)
+	missingBodyReq := httptest.NewRequest(http.MethodPost, "/short-api/items/video/"+strconvUint(video.ID)+"/like", nil)
 	missingBodyReq.RemoteAddr = "127.0.0.1:1234"
 	missingBodyReq.Host = "127.0.0.1:18088"
 	missingBodyReq.Header.Set("Content-Type", "application/json")
@@ -320,7 +708,7 @@ func TestShortFeedHTTPGuardsAndRange(t *testing.T) {
 	}
 
 	originMismatch := httptest.NewRecorder()
-	originReq := httptest.NewRequest(http.MethodPost, "/short-api/videos/"+strconvUint(video.ID)+"/like", strings.NewReader(`{"liked":true}`))
+	originReq := httptest.NewRequest(http.MethodPost, "/short-api/items/video/"+strconvUint(video.ID)+"/like", strings.NewReader(`{"liked":true}`))
 	originReq.RemoteAddr = "127.0.0.1:1234"
 	originReq.Host = "127.0.0.1:18088"
 	originReq.Header.Set("Content-Type", "application/json")
@@ -331,7 +719,7 @@ func TestShortFeedHTTPGuardsAndRange(t *testing.T) {
 	}
 
 	rangeResp := httptest.NewRecorder()
-	rangeReq := httptest.NewRequest(http.MethodGet, "/short-media/"+strconvUint(video.ID), nil)
+	rangeReq := httptest.NewRequest(http.MethodGet, "/short-media/video/"+strconvUint(video.ID), nil)
 	rangeReq.RemoteAddr = "127.0.0.1:1234"
 	rangeReq.Header.Set("Range", "bytes=0-3")
 	handler.ServeHTTP(rangeResp, rangeReq)

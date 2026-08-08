@@ -107,13 +107,13 @@
     </div>
 
     <div class="settings-section">
-      <h3>手机短视频</h3>
+      <h3>手机端浏览</h3>
       <div class="short-feed-status">
         <div class="short-feed-status-main">
           <strong>{{ shortFeedStatusText }}</strong>
           <span v-if="shortFeedStatus && shortFeedStatus.running">{{ shortFeedStatus.url }}</span>
           <span v-else-if="shortFeedStatus && shortFeedStatus.startup_error">{{ shortFeedStatus.startup_error }}</span>
-          <span v-else>短视频服务状态未知</span>
+          <span v-else>手机端浏览服务状态未知</span>
         </div>
         <div class="short-feed-actions">
           <button type="button" class="btn-secondary" @click="loadShortFeedStatus">刷新</button>
@@ -131,7 +131,7 @@
         <div v-for="url in shortFeedStatus.lan_urls" :key="url" class="short-feed-url">{{ url }}</div>
       </div>
       <div class="setting-item short-feed-duration-setting">
-        <label>短视频时长上限（分钟）</label>
+        <label>视频时长上限（分钟）</label>
         <input
           type="number"
           v-model.number="settingsForm.short_feed_max_duration_minutes"
@@ -140,15 +140,16 @@
           step="1"
           class="number-input"
         />
-        <p class="help-text">只有时长小于此上限的视频会进入手机短视频，并自动维护“短视频”标签，默认 5 分钟。</p>
+        <p class="help-text">只有时长小于此上限的视频会进入手机端 Feed，并自动维护“短视频”标签，默认 5 分钟。此上限只对视频生效，图片不受它限制。</p>
       </div>
 	  <div class="setting-item">
 		<label class="checkbox-label">
 		  <input data-test="short-feed-feedback-sync-toggle" type="checkbox" v-model="settingsForm.short_feed_feedback_sync_enabled" />
-		  <span>将手机端喜欢与收藏同步到主片库</span>
+		  <span>将手机端喜欢与收藏同步到主库</span>
 		</label>
-		<p class="help-text">喜欢会维护“短视频喜欢”自动标签，收藏会写入主片库收藏；关闭不会删除已经同步的结果。</p>
+		<p class="help-text">喜欢会维护“短视频喜欢”自动标签，收藏会写入视频库/图片库的收藏；关闭不会删除已经同步的结果。</p>
 	  </div>
+      <p class="help-text">手机端 Feed 混编视频与图片：视频自动播放并有进度条，图片停在原地直到你划走，双击可在适屏与原图之间切换。</p>
       <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
     </div>
 

@@ -74,6 +74,31 @@ button {
   user-select: none;
 }
 
+/* 图片：默认适屏完整显示（不像视频那样裁切），双击后按原始像素铺开由浏览器原生平移。 */
+.feed-media { position: absolute; inset: 0; }
+.feed-photo-pane {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  touch-action: none;
+}
+.feed-photo-pane.zoomed { overflow: auto; touch-action: auto; -webkit-overflow-scrolling: touch; }
+.feed-photo { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; }
+.feed-photo.zoomed { max-width: none; max-height: none; object-fit: none; cursor: zoom-out; }
+.meta-description {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.72);
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 .preload-video {
   position: fixed;
   width: 1px;
