@@ -76,6 +76,44 @@ func TestImageCleanupEmptyLibraryProducesEmptyAnalysis(t *testing.T) {
 	}
 }
 
+func TestImageCleanupExcludesBlacklistedDirectories(t *testing.T) {
+	setupImageServiceTestDB(t)
+	included := t.TempDir()
+	excluded := t.TempDir()
+	same := bytes.Repeat([]byte("a"), 2048)
+
+	// 黑名单目录内的一对精确重复；若黑名单生效，它们不应出现在候选里。
+	imageCleanupCreateImage(t, filepath.Join(excluded, "a.jpg"), same, "", 100, 100)
+	imageCleanupCreateImage(t, filepath.Join(excluded, "b.jpg"), same, "", 100, 100)
+	// 非黑名单的一对精确重复，作为对照应当保留。
+	imageCleanupCreateImage(t, filepath.Join(included, "c.jpg"), same, "", 4000, 3000)
+	imageCleanupCreateImage(t, filepath.Join(included, "d.jpg"), same, "", 100, 100)
+
+	// 通过图片专用黑名单排除 excluded 目录。
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").
+		Update("image_scan_exclude_paths", excluded).Error; err != nil {
+		t.Fatalf("设置图片黑名单失败: %v", err)
+	}
+
+	svc := NewImageCleanupService()
+	analysis, err := svc.AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 1 {
+		t.Fatalf("黑名单目录应被排除，仅剩 1 组精确重复，实际 %d 组", len(analysis.DuplicateGroups))
+	}
+	for _, id := range imageCleanupGroupIDs(analysis.DuplicateGroups[0]) {
+		var img models.Image
+		if err := database.DB.First(&img, id).Error; err != nil {
+			t.Fatalf("读取候选图片失败: %v", err)
+		}
+		if strings.HasPrefix(img.Path, excluded) {
+			t.Fatalf("黑名单目录 %s 的图片不应进入候选: %s", excluded, img.Path)
+		}
+	}
+}
+
 func TestImageCleanupExactDuplicateGroupAndOriginalSelection(t *testing.T) {
 	setupImageServiceTestDB(t)
 	dir := t.TempDir()
