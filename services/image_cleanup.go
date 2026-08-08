@@ -181,6 +181,25 @@ func (s *ImageCleanupService) AnalyzeImageCleanupCandidates() (*ImageCleanupAnal
 		return nil, err
 	}
 
+	// 黑名单目录不参与清理审阅：图片黑名单优先，空则回退通用黑名单（与扫描行为一致）。
+	var settings models.Settings
+	if err := database.DB.Select("scan_exclude_paths", "image_scan_exclude_paths").First(&settings).Error; err == nil {
+		excluded := parseScanExcludePaths(settings.ImageScanExcludePaths)
+		if len(excluded) == 0 {
+			excluded = parseScanExcludePaths(settings.ScanExcludePaths)
+		}
+		if len(excluded) > 0 {
+			filtered := images[:0]
+			for _, img := range images {
+				if isScanPathExcluded(img.Path, excluded) {
+					continue
+				}
+				filtered = append(filtered, img)
+			}
+			images = filtered
+		}
+	}
+
 	log.Printf("[ImageCleanup] analysis started total_images=%d", len(images))
 	s.emitProgress("load", 0, len(images), "", fmt.Sprintf("已读取 %d 条图片记录，正在整理候选…", len(images)))
 
