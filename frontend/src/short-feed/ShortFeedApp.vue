@@ -11,208 +11,102 @@
     @contextmenu.prevent
   >
     <section v-if="view === 'feed'" class="feed-stage">
-      <video
-        v-if="currentVideo && currentVideo.media_url"
-        ref="videoEl"
-        class="feed-video"
-        :src="currentVideo.media_url"
+      <FeedStage
+        ref="stage"
+        :item="currentVideo"
+        :prefetched="prefetchedVideo"
         :muted="muted"
-        preload="auto"
-        autoplay
-        playsinline
-        loop
-        @pointerdown.prevent="startLongPress"
-        @pointermove.prevent="trackLongPressMove"
-        @pointerup.prevent="finishPointerPress"
-        @pointercancel.prevent="cancelLongPress"
-        @pointerleave.prevent="cancelLongPress"
-        @contextmenu.prevent
-        @loadedmetadata="syncVideoTime"
-        @timeupdate="onTimeUpdate"
+        :zoomed="photoZoomed"
+        :status-text="statusText"
+        @press-start="startLongPress"
+        @press-move="trackLongPressMove"
+        @press-end="finishPointerPress"
+        @press-cancel="cancelLongPress"
+        @media-loaded="onMediaLoaded"
+        @time-update="onTimeUpdate"
         @play="onVideoPlay"
         @pause="onVideoPause"
         @playing="onVideoPlaying"
-        @error="onVideoError"
-      ></video>
+        @media-error="onMediaError"
+        @stage-tap="handleStageTap"
+      />
 
-      <video
-        v-if="prefetchedVideo && prefetchedVideo.media_url"
-        class="preload-video"
-        :src="prefetchedVideo.media_url"
-        muted
-        preload="auto"
-        playsinline
-      ></video>
-
-      <div v-if="!currentVideo || !currentVideo.media_url" class="feed-empty" @click="handleStageTap">
-        <div>{{ statusText }}</div>
-      </div>
-
-      <div class="top-bar" :class="{ visible: controlsVisible || !isPlaying }" @click.stop>
-        <button class="icon-btn" type="button" title="收藏夹" aria-label="收藏夹" @click="openFavorites">
-          <svg class="top-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 6.8C4 5.8 4.8 5 5.8 5h12.4C19.2 5 20 5.8 20 6.8v9.4c0 1-.8 1.8-1.8 1.8H5.8C4.8 18 4 17.2 4 16.2V6.8Z" />
-            <path d="M7 2.8h10M7 21.2h10" />
-          </svg>
-        </button>
-        <button class="icon-btn" type="button" :title="muted ? '打开声音' : '静音'" :aria-label="muted ? '打开声音' : '静音'" @click="muted = !muted">
-          <svg v-if="muted" class="top-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 9.5h4l5-4v13l-5-4H4v-5Z" />
-            <path d="m17 9 4 4m0-4-4 4" />
-          </svg>
-          <svg v-else class="top-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M4 9.5h4l5-4v13l-5-4H4v-5Z" />
-            <path d="M17 8.5c1.2.9 2 2.2 2 3.5s-.8 2.6-2 3.5" />
-            <path d="M19.5 5.5A8.6 8.6 0 0 1 23 12a8.6 8.6 0 0 1-3.5 6.5" />
-          </svg>
-        </button>
-      </div>
-
-      <div v-if="currentVideo" class="video-meta" :class="{ visible: controlsVisible || !isPlaying }">
-        <h1>{{ currentVideo.name }}</h1>
-        <div v-if="currentVideo.tags && currentVideo.tags.length" class="tag-row">
-          <span
-            v-for="tag in currentVideo.tags"
-            :key="tag.id"
-            class="tag-chip"
-            :style="{ backgroundColor: tagColor(tag.color) }"
-          >
-            {{ tag.name }}
-          </span>
-        </div>
-      </div>
-
-      <nav class="action-rail" :class="{ visible: controlsVisible || !isPlaying }" aria-label="视频操作" @click.stop>
-        <button
-          class="round-action"
-          :class="{ active: currentVideo?.liked }"
-          type="button"
-          title="喜欢"
-          :disabled="!currentVideo"
-          @click="toggleLike"
-        >
-          <svg class="action-icon action-icon--heart" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M20.8 4.9c-2-2-5.2-1.9-7.1.2L12 6.9l-1.7-1.8C8.4 3 5.2 2.9 3.2 4.9c-2.1 2.1-2 5.5.2 7.6L12 21l8.6-8.5c2.2-2.1 2.3-5.5.2-7.6Z" />
-          </svg>
-          <span class="action-count">{{ currentVideo?.liked ? 1 : 0 }}</span>
-        </button>
-        <button
-          class="round-action"
-          :class="{ active: currentVideo?.favorited }"
-          type="button"
-          title="收藏"
-          :disabled="!currentVideo"
-          @click="toggleFavorite"
-        >
-          <svg class="action-icon action-icon--bookmark" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6 4.8C6 3.8 6.8 3 7.8 3h8.4c1 0 1.8.8 1.8 1.8V21l-6-3.8L6 21V4.8Z" />
-          </svg>
-          <span class="action-count">{{ currentVideo?.favorited ? 1 : 0 }}</span>
-        </button>
-        <button
-          class="round-action danger"
-          type="button"
-          title="删除"
-          :disabled="!currentVideo"
-          @click="deleteDialogOpen = true"
-        >
-          <svg class="action-icon" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 7h14" />
-            <path d="M9 7V5.5C9 4.7 9.7 4 10.5 4h3c.8 0 1.5.7 1.5 1.5V7" />
-            <path d="M7 7l1 12c.1.8.8 1.5 1.6 1.5h4.8c.8 0 1.5-.7 1.6-1.5l1-12" />
-            <path d="M10.5 11v5.5M13.5 11v5.5" />
-          </svg>
-        </button>
-      </nav>
-
-      <div
-        v-if="currentVideo && currentVideo.media_url"
-        class="progress-dock"
-        :class="{ visible: controlsVisible || !isPlaying }"
-        @click.stop
-        @touchstart.stop
-        @touchend.stop
-        @wheel.stop
-      >
-        <div
-          class="progress-scrubber"
-          role="slider"
-          tabindex="0"
-          aria-label="播放进度"
-          aria-valuemin="0"
-          aria-valuemax="1000"
-          :aria-valuenow="progressValue"
-          :aria-valuetext="`${formatTime(videoCurrentTime)} / ${formatTime(videoDuration)}`"
-          @pointerdown.stop.prevent="startSeeking"
-          @pointermove.stop.prevent="moveSeeking"
-          @pointerup.stop.prevent="finishSeeking"
-          @pointercancel.stop.prevent="cancelSeeking"
-          @keydown.stop.prevent="seekByKeyboard"
-        >
-          <div class="progress-track">
-            <div class="progress-fill" :style="{ width: `${progressValue / 10}%` }"></div>
-            <div class="progress-thumb" :style="{ left: `${progressValue / 10}%` }"></div>
-          </div>
-        </div>
-      </div>
+      <FeedTopBar :visible="chromeVisible" :muted="muted" @open-favorites="openFavorites" @toggle-muted="muted = !muted" />
+      <FeedMeta :visible="chromeVisible" :item="currentVideo" />
+      <FeedActionRail
+        :visible="chromeVisible"
+        :item="currentVideo"
+        :rail-label="isImageItem ? '图片操作' : '视频操作'"
+        @toggle-like="toggleLike"
+        @toggle-favorite="toggleFavorite"
+        @request-delete="deleteDialogOpen = true"
+      />
+      <FeedProgress
+        v-if="!isImageItem && currentVideo && currentVideo.media_url"
+        :visible="chromeVisible"
+        :value="progressValue"
+        :value-text="`${formatTime(videoCurrentTime)} / ${formatTime(videoDuration)}`"
+        @seek-start="startSeeking"
+        @seek-move="moveSeeking"
+        @seek-end="finishSeeking"
+        @seek-cancel="cancelSeeking"
+        @seek-key="seekByKeyboard"
+      />
     </section>
 
-    <section v-else class="favorites-view">
-      <header class="favorites-header">
-        <button class="icon-btn" type="button" title="返回" @click="view = 'feed'">←</button>
-        <h1>收藏夹</h1>
-        <button class="icon-btn" type="button" title="刷新" @click="loadFavorites">↻</button>
-      </header>
-      <div class="favorite-list">
-        <button
-          v-for="video in favorites"
-          :key="video.id"
-          class="favorite-item"
-          type="button"
-          @click="selectFavorite(video)"
-        >
-          <span class="favorite-title">{{ video.name }}</span>
-          <span class="favorite-tags">{{ video.tags.map(tag => tag.name).join(' · ') }}</span>
-        </button>
-        <div v-if="favorites.length === 0" class="feed-empty">暂无收藏</div>
-      </div>
-    </section>
+    <FavoritesView
+      v-else
+      :items="favorites"
+      @close="view = 'feed'"
+      @refresh="loadFavorites"
+      @select="selectFavorite"
+    />
 
-    <div v-if="deleteDialogOpen" class="modal-backdrop" @click="deleteDialogOpen = false">
-      <div class="confirm-modal" @click.stop>
-        <h2>删除视频</h2>
-        <p>文件会移入 trash 文件夹，并从普通列表和短视频 Feed 中移除。</p>
-        <div class="modal-actions">
-          <button type="button" class="modal-btn" @click="deleteDialogOpen = false">取消</button>
-          <button type="button" class="modal-btn danger" @click="confirmDelete">删除</button>
-        </div>
-      </div>
-    </div>
+    <DeleteDialog
+      v-if="deleteDialogOpen"
+      :title="isImageItem ? '删除图片' : '删除视频'"
+      :message="isImageItem
+        ? '图片会移入回收站，可在桌面端恢复，并从图片库与手机 Feed 中移除。'
+        : '文件会移入 trash 文件夹，并从普通列表和短视频 Feed 中移除。'"
+      @cancel="deleteDialogOpen = false"
+      @confirm="confirmDelete"
+    />
   </main>
 </template>
 
 <script>
-import { deleteVideo, getFavorites, getNextVideo, recordPlay, setFavorited, setLiked } from './api.js';
+import { deleteItem, getFavorites, getNextItem, itemKey, recordPlay, setFavorited, setLiked } from './api.js';
 import { createSwipeTracker, keyboardDirection, wheelDirection } from './gesture.js';
 import { unsupportedStatusText } from './videoState.js';
+import { createWakeLock } from './useWakeLock.js';
+import FeedStage from './components/FeedStage.vue';
+import FeedTopBar from './components/FeedTopBar.vue';
+import FeedMeta from './components/FeedMeta.vue';
+import FeedActionRail from './components/FeedActionRail.vue';
+import FeedProgress from './components/FeedProgress.vue';
+import FavoritesView from './components/FavoritesView.vue';
+import DeleteDialog from './components/DeleteDialog.vue';
 
 const swipeTracker = createSwipeTracker();
+const wakeLock = createWakeLock();
+// 图片没有播放态，控件不能靠"暂停中"常驻，改为定时收起。
+const PHOTO_CONTROLS_HIDE_MS = 2600;
 
 export default {
   name: 'ShortFeedApp',
+  components: { FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, DeleteDialog },
   data() {
     return {
       currentVideo: null,
       prefetchedVideo: null,
       prefetching: false,
-      recentIDs: [],
+      recentKeys: [],
       favorites: [],
       view: 'feed',
       loading: false,
       statusText: '加载中',
       muted: true,
       playbackRate: 1,
-      playbackRates: [0.75, 1, 1.25, 1.5, 2],
       recordedVideoID: null,
       deleteDialogOpen: false,
       wheelState: { lastWheelAt: 0 },
@@ -229,18 +123,23 @@ export default {
       longPressActionInFlight: false,
       lastStageTapAt: 0,
       lastStageTapPoint: null,
-      wakeLock: null
+      photoZoomed: false
     };
   },
   computed: {
+    isImageItem() {
+      return this.currentVideo?.media_kind === 'image';
+    },
+    // 视频靠"暂停中"常驻控件；图片没有播放态，只认 controlsVisible。
+    chromeVisible() {
+      if (this.isImageItem) return this.controlsVisible;
+      return this.controlsVisible || !this.isPlaying;
+    },
     progressValue() {
       if (this.seeking) return this.scrubValue;
       if (!this.videoDuration) return 0;
       return Math.round((this.videoCurrentTime / this.videoDuration) * 1000);
     },
-    playbackRateLabel() {
-      return `${this.playbackRate}x`;
-    }
   },
   beforeUnmount() {
     this.clearControlsHideTimer();
@@ -259,7 +158,7 @@ export default {
       this.loading = true;
       this.statusText = '加载中';
       try {
-        const video = this.takePrefetchedVideo() || await getNextVideo(this.recentIDs.slice(-12));
+        const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12));
         this.applyVideo(video);
       } catch (err) {
         this.currentVideo = null;
@@ -277,13 +176,15 @@ export default {
       this.videoDuration = 0;
       this.scrubValue = 0;
       this.controlsVisible = false;
+      this.photoZoomed = false;
       this.clearControlsHideTimer();
-      if (!this.recentIDs.includes(video.id)) {
-        this.recentIDs.push(video.id);
+      const key = itemKey(video);
+      if (!this.recentKeys.includes(key)) {
+        this.recentKeys.push(key);
       }
-      this.recentIDs = this.recentIDs.slice(-20);
+      this.recentKeys = this.recentKeys.slice(-20);
       this.$nextTick(() => {
-        const player = this.$refs.videoEl;
+        const player = this.player();
         this.applyPlaybackRate();
         if (player?.play) player.play().catch(() => {});
       });
@@ -299,8 +200,8 @@ export default {
       if (this.prefetching || this.prefetchedVideo || !this.currentVideo) return;
       this.prefetching = true;
       try {
-        const excludeIDs = [...new Set([...this.recentIDs.slice(-12), this.currentVideo.id])];
-        const video = await getNextVideo(excludeIDs);
+        const excludeKeys = [...new Set([...this.recentKeys.slice(-12), itemKey(this.currentVideo)])];
+        const video = await getNextItem(excludeKeys);
         if (video?.id && video.id !== this.currentVideo?.id) {
           this.prefetchedVideo = video;
         }
@@ -320,7 +221,13 @@ export default {
       this.lastStageTapAt = now;
       this.lastStageTapPoint = point;
       if (isDoubleTap) {
-        this.togglePlayback();
+        if (this.isImageItem) {
+          this.photoZoomed = !this.photoZoomed;
+          this.showControls();
+          this.schedulePhotoControlsHide();
+        } else {
+          this.togglePlayback();
+        }
         return;
       }
       this.showPlaybackControls();
@@ -333,9 +240,20 @@ export default {
     showPlaybackControls() {
       if (!this.currentVideo?.media_url) return;
       this.showControls();
+      if (this.isImageItem) {
+        this.schedulePhotoControlsHide();
+        return;
+      }
       if (this.isPlaying) {
         this.scheduleControlsHide();
       }
+    },
+    // 图片没有 isPlaying，scheduleControlsHide 会直接返回，所以单独排一个定时器。
+    schedulePhotoControlsHide() {
+      this.clearControlsHideTimer();
+      this.controlsHideTimer = window.setTimeout(() => {
+        this.controlsVisible = false;
+      }, PHOTO_CONTROLS_HIDE_MS);
     },
     onVideoPlay() {
       this.isPlaying = true;
@@ -349,7 +267,7 @@ export default {
       this.releaseWakeLock();
     },
     togglePlayback() {
-      const player = this.$refs.videoEl;
+      const player = this.player();
       if (!player) return;
       if (player.paused) {
         player.play().catch(() => {});
@@ -361,38 +279,22 @@ export default {
         this.scheduleControlsHide();
       }
     },
-    async requestWakeLock() {
-      if (this.wakeLock || !navigator?.wakeLock?.request) return;
-      try {
-        this.wakeLock = await navigator.wakeLock.request('screen');
-        this.wakeLock.addEventListener?.('release', () => {
-          this.wakeLock = null;
-        });
-      } catch (err) {}
+    player() {
+      return this.$refs.stage?.player?.() || null;
     },
-    async releaseWakeLock() {
-      const lock = this.wakeLock;
-      this.wakeLock = null;
-      try {
-        await lock?.release?.();
-      } catch (err) {}
+    requestWakeLock() {
+      return wakeLock.request();
+    },
+    releaseWakeLock() {
+      return wakeLock.release();
     },
     handleVisibilityChange() {
       if (!document.hidden && this.isPlaying) {
         this.requestWakeLock();
       }
     },
-    cyclePlaybackRate() {
-      const index = this.playbackRates.indexOf(this.playbackRate);
-      this.playbackRate = this.playbackRates[(index + 1) % this.playbackRates.length];
-      this.applyPlaybackRate();
-      this.showControls();
-      if (this.isPlaying) {
-        this.scheduleControlsHide();
-      }
-    },
     applyPlaybackRate() {
-      const player = this.$refs.videoEl;
+      const player = this.player();
       if (player) {
         player.playbackRate = this.playbackRate;
       }
@@ -447,10 +349,10 @@ export default {
       this.clearControlsHideTimer();
       try {
         if (!wasLiked) {
-          await setLiked(this.currentVideo.id, true);
+          await setLiked(this.currentVideo, true);
         }
         if (!wasFavorited) {
-          await setFavorited(this.currentVideo.id, true);
+          await setFavorited(this.currentVideo, true);
         }
         if (this.isPlaying) {
           this.scheduleControlsHide();
@@ -462,20 +364,34 @@ export default {
         this.longPressActionInFlight = false;
       }
     },
-    async onVideoPlaying() {
-      if (!this.currentVideo || this.recordedVideoID === this.currentVideo.id) return;
-      this.recordedVideoID = this.currentVideo.id;
+    onVideoPlaying() {
+      this.recordCurrentItemView();
+    },
+    async recordCurrentItemView() {
+      const key = itemKey(this.currentVideo);
+      if (!this.currentVideo || this.recordedVideoID === key) return;
+      this.recordedVideoID = key;
       try {
-        await recordPlay(this.currentVideo.id);
+        await recordPlay(this.currentVideo);
       } catch (err) {}
     },
-    onVideoError() {
+    onMediaLoaded() {
+      if (this.isImageItem) return;
+      this.syncVideoTime();
+    },
+    onMediaError() {
       if (!this.currentVideo) return;
+      if (this.isImageItem) {
+        // 图片没有自动前进的节奏；停在原地把原因说清楚，由用户自己划走。
+        this.statusText = '当前图片无法在浏览器中显示';
+        this.currentVideo = { ...this.currentVideo, media_url: '' };
+        return;
+      }
       this.statusText = '当前视频无法在浏览器中播放';
       setTimeout(() => this.nextVideo(), 350);
     },
     syncVideoTime() {
-      const player = this.$refs.videoEl;
+      const player = this.player();
       if (!player) return;
       this.videoDuration = Number.isFinite(player.duration) ? player.duration : 0;
       this.videoCurrentTime = Number.isFinite(player.currentTime) ? player.currentTime : 0;
@@ -514,7 +430,7 @@ export default {
         this.updateScrubFromPointer(event);
         event.currentTarget?.releasePointerCapture?.(event.pointerId);
       }
-      const player = this.$refs.videoEl;
+      const player = this.player();
       if (player && this.videoDuration) {
         player.currentTime = (this.scrubValue / 1000) * this.videoDuration;
       }
@@ -546,7 +462,7 @@ export default {
       }
     },
     commitSeek(seconds) {
-      const player = this.$refs.videoEl;
+      const player = this.player();
       if (!player || !this.videoDuration) return;
       player.currentTime = seconds;
       this.videoCurrentTime = seconds;
@@ -577,7 +493,7 @@ export default {
       const liked = !this.currentVideo.liked;
       this.currentVideo.liked = liked;
       try {
-        await setLiked(this.currentVideo.id, liked);
+        await setLiked(this.currentVideo, liked);
       } catch (err) {
         this.currentVideo.liked = !liked;
       }
@@ -587,18 +503,19 @@ export default {
       const favorited = !this.currentVideo.favorited;
       this.currentVideo.favorited = favorited;
       try {
-        await setFavorited(this.currentVideo.id, favorited);
+        await setFavorited(this.currentVideo, favorited);
       } catch (err) {
         this.currentVideo.favorited = !favorited;
       }
     },
     async confirmDelete() {
       if (!this.currentVideo) return;
-      const deletedID = this.currentVideo.id;
+      const deleted = this.currentVideo;
+      const deletedKey = itemKey(deleted);
       this.deleteDialogOpen = false;
       try {
-        await deleteVideo(deletedID);
-        this.recentIDs = this.recentIDs.filter(id => id !== deletedID);
+        await deleteItem(deleted);
+        this.recentKeys = this.recentKeys.filter(key => key !== deletedKey);
         await this.nextVideo();
       } catch (err) {
         this.statusText = String(err.message || err);
@@ -611,7 +528,7 @@ export default {
     async loadFavorites() {
       try {
         const payload = await getFavorites();
-        this.favorites = payload?.videos || [];
+        this.favorites = payload?.items || [];
       } catch (err) {
         this.favorites = [];
       }
@@ -657,6 +574,8 @@ export default {
       this.cancelLongPress();
     },
     isInteractiveControl(target) {
+      // 图片放大时整个舞台交给浏览器原生平移，不再拦截为翻页手势。
+      if (this.photoZoomed) return true;
       return !!target?.closest?.('button, [role="slider"], .progress-dock, .modal-backdrop, .favorites-view');
     },
     onWheel(event) {

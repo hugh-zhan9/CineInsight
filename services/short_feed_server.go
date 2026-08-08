@@ -157,8 +157,9 @@ func (s *ShortFeedHTTPServer) Handler() http.Handler {
 	mux.HandleFunc("/short-api/status", s.handleStatus)
 	mux.HandleFunc("/short-api/feed/next", s.handleNext)
 	mux.HandleFunc("/short-api/favorites", s.handleFavorites)
-	mux.HandleFunc("/short-api/videos/", s.handleVideoMutation)
+	mux.HandleFunc("/short-api/items/", s.handleItemMutation)
 	mux.HandleFunc("/short-media/", s.handleMedia)
+	mux.HandleFunc("/short-thumb/", s.handleThumbnail)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !shortFeedRemoteAllowed(r.RemoteAddr) {
@@ -221,7 +222,7 @@ func (s *ShortFeedHTTPServer) handleNext(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	dto, err := s.feed.NextVideo(parseShortFeedExcludeIDs(r.URL.Query().Get("exclude")))
+	dto, err := s.feed.NextItem(parseShortFeedExcludeRefs(r.URL.Query().Get("exclude")))
 	if err != nil {
 		status := http.StatusInternalServerError
 		code := "next_failed"
@@ -240,15 +241,15 @@ func (s *ShortFeedHTTPServer) handleFavorites(w http.ResponseWriter, r *http.Req
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	dtos, err := s.feed.FavoriteVideos()
+	dtos, err := s.feed.FavoriteItems()
 	if err != nil {
 		writeShortFeedError(w, http.StatusInternalServerError, "favorites_failed", err.Error())
 		return
 	}
-	writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"videos": dtos})
+	writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"items": dtos})
 }
 
-func (s *ShortFeedHTTPServer) handleVideoMutation(w http.ResponseWriter, r *http.Request) {
+func (s *ShortFeedHTTPServer) handleItemMutation(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
@@ -258,9 +259,9 @@ func (s *ShortFeedHTTPServer) handleVideoMutation(w http.ResponseWriter, r *http
 		return
 	}
 
-	videoID, action, ok := parseShortFeedVideoAction(r.URL.Path)
+	ref, action, ok := parseShortFeedItemAction(r.URL.Path)
 	if !ok {
-		writeShortFeedError(w, http.StatusNotFound, "invalid_video_action", "invalid short feed video action")
+		writeShortFeedError(w, http.StatusNotFound, "invalid_item_action", "invalid short feed item action")
 		return
 	}
 
@@ -274,21 +275,21 @@ func (s *ShortFeedHTTPServer) handleVideoMutation(w http.ResponseWriter, r *http
 			writeShortFeedError(w, http.StatusBadRequest, "invalid_source", "play source must be short_feed")
 			return
 		}
-		result, err := s.feed.RecordShortFeedPlayback(videoID)
+		result, err := s.feed.RecordPlayback(ref)
 		writeShortFeedMutationResult(w, result, err)
 	case "like":
 		var req ShortFeedLikeRequest
 		if !decodeShortFeedMutation(w, r, &req) {
 			return
 		}
-		result, err := s.feed.SetLiked(videoID, req.Liked)
+		result, err := s.feed.SetLiked(ref, req.Liked)
 		writeShortFeedMutationResult(w, result, err)
 	case "favorite":
 		var req ShortFeedFavoriteRequest
 		if !decodeShortFeedMutation(w, r, &req) {
 			return
 		}
-		result, err := s.feed.SetFavorited(videoID, req.Favorited)
+		result, err := s.feed.SetFavorited(ref, req.Favorited)
 		writeShortFeedMutationResult(w, result, err)
 	case "delete":
 		var req ShortFeedDeleteRequest
@@ -299,14 +300,14 @@ func (s *ShortFeedHTTPServer) handleVideoMutation(w http.ResponseWriter, r *http
 			writeShortFeedError(w, http.StatusBadRequest, "delete_confirmation_required", "confirm_move_to_trash must be true")
 			return
 		}
-		err := s.feed.DeleteVideo(videoID)
+		err := s.feed.DeleteItem(ref)
 		if err != nil {
 			writeShortFeedMutationResult(w, nil, err)
 			return
 		}
 		writeShortFeedJSON(w, http.StatusOK, map[string]bool{"deleted": true})
 	default:
-		writeShortFeedError(w, http.StatusNotFound, "invalid_video_action", "invalid short feed video action")
+		writeShortFeedError(w, http.StatusNotFound, "invalid_item_action", "invalid short feed item action")
 	}
 }
 
@@ -315,21 +316,35 @@ func (s *ShortFeedHTTPServer) handleMedia(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	videoIDText := strings.TrimPrefix(r.URL.Path, "/short-media/")
-	videoID64, err := strconv.ParseUint(videoIDText, 10, 64)
-	if err != nil || videoID64 == 0 {
-		writeShortFeedError(w, http.StatusBadRequest, "invalid_media_id", "invalid short media id")
+	ref, ok := parseShortFeedMediaPath(r.URL.Path)
+	if !ok {
+		writeShortFeedError(w, http.StatusBadRequest, "invalid_media_id", "invalid short media reference")
 		return
 	}
-	media, err := s.feed.ResolveMedia(uint(videoID64))
+	media, err := s.feed.ResolveMedia(ref)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) || errors.Is(err, gorm.ErrRecordNotFound) {
-			writeShortFeedError(w, http.StatusNotFound, "media_not_found", "short feed media not found")
-			return
-		}
-		writeShortFeedError(w, http.StatusInternalServerError, "media_unavailable", err.Error())
+		s.writeMediaError(w, err)
 		return
 	}
+	s.serveMediaFile(w, r, media)
+}
+
+// writeMediaError 把服务层错误映射成手机端能理解的状态码：不可用与不存在都收敛
+// 成 404，避免把内部原因泄露给局域网。
+func (s *ShortFeedHTTPServer) writeMediaError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrShortFeedUnsupportedMedia) ||
+		errors.Is(err, ErrShortFeedNoEligibleVideos) ||
+		errors.Is(err, ErrImageDecodeUnsupported) ||
+		errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, gorm.ErrRecordNotFound) {
+		writeShortFeedError(w, http.StatusNotFound, "media_not_found", "short feed media not found")
+		return
+	}
+	writeShortFeedError(w, http.StatusInternalServerError, "media_unavailable", err.Error())
+}
+
+// serveMediaFile 统一用 ServeContent 下发，Range/If-Range/Last-Modified 免费获得。
+func (s *ShortFeedHTTPServer) serveMediaFile(w http.ResponseWriter, r *http.Request, media *ShortFeedMedia) {
 	file, err := os.Open(media.Path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -347,32 +362,79 @@ func (s *ShortFeedHTTPServer) handleMedia(w http.ResponseWriter, r *http.Request
 	http.ServeContent(w, r, media.DisplayName, media.ModTime, file)
 }
 
-func parseShortFeedVideoAction(path string) (uint, string, bool) {
-	trimmed := strings.TrimPrefix(path, "/short-api/videos/")
-	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
-	if len(parts) != 2 {
-		return 0, "", false
+// parseShortFeedItemAction 解析 /short-api/items/{kind}/{id}/{action}。
+// handleThumbnail 下发缩略图。收藏页与预取用它，避免手机反复拉原图。
+func (s *ShortFeedHTTPServer) handleThumbnail(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
 	}
-	id, err := strconv.ParseUint(parts[0], 10, 64)
-	if err != nil || id == 0 {
-		return 0, "", false
+	ref, ok := parseShortFeedMediaRefPath(r.URL.Path, "/short-thumb/")
+	if !ok {
+		writeShortFeedError(w, http.StatusBadRequest, "invalid_media_id", "invalid short media reference")
+		return
 	}
-	return uint(id), parts[1], true
+	media, err := s.feed.ResolveThumbnail(ref)
+	if err != nil {
+		s.writeMediaError(w, err)
+		return
+	}
+	s.serveMediaFile(w, r, media)
 }
 
-func parseShortFeedExcludeIDs(value string) []uint {
+func parseShortFeedItemAction(path string) (ShortFeedMediaRef, string, bool) {
+	trimmed := strings.TrimPrefix(path, "/short-api/items/")
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) != 3 {
+		return ShortFeedMediaRef{}, "", false
+	}
+	ref, ok := parseShortFeedKindAndID(parts[0], parts[1])
+	if !ok {
+		return ShortFeedMediaRef{}, "", false
+	}
+	return ref, parts[2], true
+}
+
+// parseShortFeedMediaPath 解析 /short-media/{kind}/{id}。
+func parseShortFeedMediaPath(path string) (ShortFeedMediaRef, bool) {
+	return parseShortFeedMediaRefPath(path, "/short-media/")
+}
+
+func parseShortFeedMediaRefPath(path string, prefix string) (ShortFeedMediaRef, bool) {
+	trimmed := strings.TrimPrefix(path, prefix)
+	parts := strings.Split(strings.Trim(trimmed, "/"), "/")
+	if len(parts) != 2 {
+		return ShortFeedMediaRef{}, false
+	}
+	return parseShortFeedKindAndID(parts[0], parts[1])
+}
+
+func parseShortFeedKindAndID(kindText string, idText string) (ShortFeedMediaRef, bool) {
+	kind, ok := ParseShortFeedMediaKind(kindText)
+	if !ok {
+		return ShortFeedMediaRef{}, false
+	}
+	id, err := strconv.ParseUint(idText, 10, 64)
+	if err != nil || id == 0 {
+		return ShortFeedMediaRef{}, false
+	}
+	return ShortFeedMediaRef{Kind: kind, ID: uint(id)}, true
+}
+
+// parseShortFeedExcludeRefs 解析 "video:1,image:2" 形式的排除集；
+// 无法识别的条目直接丢弃，不回退成任何默认类型。
+func parseShortFeedExcludeRefs(value string) []ShortFeedMediaRef {
 	if strings.TrimSpace(value) == "" {
 		return nil
 	}
 	parts := strings.Split(value, ",")
-	ids := make([]uint, 0, len(parts))
+	refs := make([]ShortFeedMediaRef, 0, len(parts))
 	for _, part := range parts {
-		id, err := strconv.ParseUint(strings.TrimSpace(part), 10, 64)
-		if err == nil && id > 0 {
-			ids = append(ids, uint(id))
+		if ref, ok := ParseShortFeedMediaRef(part); ok {
+			refs = append(refs, ref)
 		}
 	}
-	return ids
+	return refs
 }
 
 func decodeShortFeedMutation(w http.ResponseWriter, r *http.Request, target interface{}) bool {

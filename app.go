@@ -99,6 +99,10 @@ func NewApp() *App {
 	personService := services.NewPersonService(dataDir)
 	collectionService := services.NewCollectionService(dataDir)
 	localMetadata := services.NewLocalMetadataService(dataDir, personService, collectionService)
+	imageThumbnail := services.NewImageThumbnailService(dataDir)
+	shortFeedService := services.NewShortFeedService(videoService)
+	// 手机端要能刷到图片：图片能否在浏览器显示由解码矩阵裁定，复用同一套缓存。
+	shortFeedService.SetImageThumbnailService(imageThumbnail)
 	return &App{
 		videoService:          videoService,
 		thumbnailService:      services.NewThumbnailService(videoService, dataDir),
@@ -112,7 +116,7 @@ func NewApp() *App {
 		subtitleSearchService: &services.SubtitleSearchService{},
 		aiTaggingService:      aiTaggingService,
 		aiQualityService:      services.NewAIQualityService(),
-		shortFeedService:      services.NewShortFeedService(videoService),
+		shortFeedService:      shortFeedService,
 		personService:         personService,
 		collectionService:     collectionService,
 		videoDetailService:    services.NewVideoDetailService(personService, collectionService),
@@ -125,7 +129,7 @@ func NewApp() *App {
 		libraryWatcher:        libraryWatcher,
 		imageService:          services.NewImageService(),
 		imageEXIFBackfill:     services.NewImageEXIFBackfillService(),
-		imageThumbnail:        services.NewImageThumbnailService(dataDir),
+		imageThumbnail:        imageThumbnail,
 		imageLibraryService:   services.NewImageLibraryService(),
 		imageStatsService:     services.NewImageStatsService(),
 		imageCleanupService:   services.NewImageCleanupService(),

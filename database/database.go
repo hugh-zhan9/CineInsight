@@ -467,6 +467,8 @@ func ensureShortFeedIndexes(db *gorm.DB) {
 	statements := []string{
 		`CREATE INDEX IF NOT EXISTS idx_short_feed_interactions_favorited_video ON short_feed_interactions(favorited, video_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_short_feed_interactions_liked_video ON short_feed_interactions(liked, video_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_short_feed_image_interactions_favorited_image ON short_feed_image_interactions(favorited, image_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_short_feed_image_interactions_liked_image ON short_feed_image_interactions(liked, image_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_short_feed_tag_preferences_score ON short_feed_tag_preferences(score)`,
 	}
 	for _, statement := range statements {
