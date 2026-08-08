@@ -86,13 +86,17 @@
         <button type="button" class="btn-secondary" :disabled="scanning" data-test="photo-scan" @click="scanNow">
           {{ scanning ? '扫描中...' : '立即扫描' }}
         </button>
-        <button type="button" class="btn-secondary" data-test="photo-cleanup-open" @click="showCleanup = true">清理审阅</button>
+        <button type="button" class="btn-secondary photo-cleanup-open-btn" data-test="photo-cleanup-open" @click="showCleanup = true">
+          清理审阅
+          <span v-if="cleanupRunning" class="photo-cleanup-badge" data-test="photo-cleanup-badge" :title="cleanupBadgeTitle">分析中 {{ cleanupProgressText }}</span>
+          <span v-else-if="cleanupDone" class="photo-cleanup-badge photo-cleanup-badge--done" data-test="photo-cleanup-done" title="清理分析已完成，点击查看候选">有结果</span>
+        </button>
         <button type="button" class="btn-secondary" data-test="photo-trash-open" @click="showTrash = true">回收站</button>
       </div>
       <p v-if="semanticNotice" class="photo-toolbar__semantic-notice" role="status" data-test="photo-semantic-unavailable">{{ semanticNotice }}</p>
-      <div v-if="tags.length" class="photo-toolbar__tags">
+      <div v-if="imageTags.length" class="photo-toolbar__tags">
         <button
-          v-for="tag in tags"
+          v-for="tag in imageTags"
           :key="tag.id"
           type="button"
           :class="['tag-chip', { active: filters.tagIDs.includes(tag.id) }]"
@@ -162,6 +166,7 @@
               <small>
                 {{ formatBytes(image.size) }}<template v-if="image.personal_rating != null"> · {{ image.personal_rating }} 分</template><template v-if="scoreLabel(image)"> · 相关度 {{ scoreLabel(image) }}</template>
               </small>
+              <p v-if="cardDescription(image)" class="photo-card__description" :title="cardDescription(image)" data-test="photo-card-description">{{ cardDescription(image) }}</p>
             </div>
           </article>
         </div>
@@ -347,7 +352,7 @@
 
 <script>
 import {
-  AddTagToImage, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus,
+  AddTagToImage, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
   ListImageTimelineBuckets, RegenerateImageAIDescription, RemoveTagFromImage, SearchImagePage,
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
@@ -355,6 +360,7 @@ import BaseModal from './ui/BaseModal.vue';
 import PhotoCleanupPanel from './PhotoCleanupPanel.vue';
 import PhotoTrashDialog from './PhotoTrashDialog.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
+import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
 import {
   PHOTO_GROUP_MONTH, PHOTO_GROUP_NONE, PHOTO_ROW_HEADER,
   buildPhotoLayout, calculatePhotoAnchorScrollTop, calculatePhotoWindow,
@@ -368,7 +374,7 @@ const PAGE_SIZE = 60;
 // 缩略图区高度由列宽算出（aspect-ratio 1 的等价物），信息条用 CSS 钉死成 CARD_META_HEIGHT。
 const GRID_GAP = 12;
 const MIN_COLUMN_WIDTH = 180;
-const CARD_META_HEIGHT = 52;
+const CARD_META_HEIGHT = 86;
 // glass-surface 给卡片加了 1px 边框，卡片是 border-box：上下各 1px 要算进行高，
 // 缩略图的正方形边长也要相应减去，否则内容比卡片内容盒高 2px 被裁掉。
 const CARD_BORDER = 2;
@@ -400,6 +406,7 @@ export default {
       semanticCoverage: null,
       semanticScores: {},
       imageDirectories: [],
+      imageTags: [],
       scanning: false,
       failedThumbs: {},
       filters: {
@@ -489,6 +496,27 @@ export default {
       return `语义搜索不可用：${reason || '图片语义索引能力未就绪'}`;
     },
     viewerImage() { return this.viewerIndex >= 0 ? this.images[this.viewerIndex] || null : null; },
+    cleanupRunning() { return !!photoCleanupStore.status?.running; },
+    cleanupDone() {
+      const s = photoCleanupStore.status;
+      return Boolean(!s?.running && s?.completed && s?.analysis);
+    },
+    cleanupProgressText() {
+      const p = photoCleanupStore.status?.progress || {};
+      return p.total > 0 ? `${p.current}/${p.total}` : '…';
+    },
+    cleanupBadgeTitle() {
+      const p = photoCleanupStore.status?.progress || {};
+      return `清理分析进行中${p.message ? '：' + p.message : ''}`;
+    },
+    // 卡片描述：优先取已完成的状态行；仅 Preload 回填（SearchImagePage）的图有值。
+    cardDescription() {
+      return (image) => {
+        const rows = image?.ai_descriptions || [];
+        const done = rows.find(r => r.status === 'completed' && String(r.description || '').trim());
+        return done ? String(done.description).trim() : '';
+      };
+    },
     viewerDescription() {
       return this.viewerDetail && Number(this.viewerDetail.image?.id) === Number(this.viewerImage?.id)
         ? String(this.viewerDetail.ai_description || '').trim()
@@ -547,8 +575,11 @@ export default {
   mounted() {
     window.addEventListener('keydown', this.handleKeydown);
     this.loadImageDirectories();
+    this.loadImageTags();
     this.loadSemanticStatus();
     this.reload();
+    // 清理审阅状态由本页持续轮询：面板关闭后分析仍在后台跑，徽标可见进度。
+    startPhotoCleanupPolling();
     this.$nextTick(() => {
       this.attachResizeObserver();
       this.syncWindow(true);
@@ -559,6 +590,7 @@ export default {
     window.removeEventListener('keydown', this.handleKeydown);
     this.detachScrollOwner();
     this.detachResizeObserver();
+    stopPhotoCleanupPolling();
   },
   methods: {
     formatBytes,
@@ -884,6 +916,13 @@ export default {
         this.imageDirectories = [];
       }
     },
+    async loadImageTags() {
+      try {
+        this.imageTags = await GetImageTags() || [];
+      } catch (err) {
+        this.imageTags = [];
+      }
+    },
     async scanNow() {
       if (this.scanning) return;
       this.scanning = true;
@@ -1030,6 +1069,7 @@ export default {
         const tag = this.tags.find(item => Number(item.id) === Number(tagID));
         if (tag) this.patchImage({ id: image.id, tags: [...(image.tags || []), tag] });
         this.tagToAdd = 0;
+        this.loadImageTags();
       } catch (err) {
         this.error = `添加标签失败：${err}`;
       }
@@ -1039,6 +1079,7 @@ export default {
       try {
         await RemoveTagFromImage(image.id, tag.id);
         this.patchImage({ id: image.id, tags: (image.tags || []).filter(item => Number(item.id) !== Number(tag.id)) });
+        this.loadImageTags();
       } catch (err) {
         this.error = `移除标签失败：${err}`;
       }
@@ -1097,6 +1138,9 @@ export default {
 .photo-toolbar__title h2 { margin: 0 0 3px; font-size: 18px; }
 .photo-toolbar__title p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .photo-toolbar__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.photo-cleanup-open-btn { display: inline-flex; align-items: center; gap: 6px; }
+.photo-cleanup-badge { padding: 1px 7px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
+.photo-cleanup-badge--done { background: var(--primary-color, #0d9488); color: #fff; }
 .photo-toolbar__keyword { max-width: 240px; }
 .photo-toolbar__sort { width: auto; min-width: 120px; }
 .photo-toolbar__favorite { display: inline-flex; align-items: center; gap: 6px; color: var(--text-primary); font-size: 13px; white-space: nowrap; cursor: pointer; }
@@ -1136,9 +1180,19 @@ export default {
 .photo-card__action--active { color: #f6b94a; opacity: 1; }
 .photo-card:has(.photo-card__action--active) .photo-card__overlay { opacity: 1; }
 .photo-card__action--danger:hover { color: var(--danger-color); border-color: var(--danger-border); }
-.photo-card__meta { display: grid; align-content: center; gap: 2px; height: var(--photo-card-meta, 52px); box-sizing: border-box; overflow: hidden; padding: 9px 11px 10px; }
+.photo-card__meta { display: grid; align-content: start; gap: 2px; height: var(--photo-card-meta, 86px); box-sizing: border-box; overflow: hidden; padding: 9px 11px 10px; }
 .photo-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-primary); }
 .photo-card__meta small { color: var(--text-muted); font-size: 11px; }
+.photo-card__description {
+  margin: 2px 0 0;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
 
 .photo-empty { padding: 48px 16px; text-align: center; color: var(--text-muted); }
 .photo-empty h3 { margin: 0 0 8px; color: var(--text-primary); }

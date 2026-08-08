@@ -35,6 +35,8 @@ type Image struct {
 	GPSLongitude    *float64       `json:"gps_longitude,omitempty"`                          // GPS 经度，NULL=无定位
 	ExifParsedAt    *time.Time     `json:"exif_parsed_at,omitempty" ts_type:"string"`        // EXIF 解析完成时间，NULL=未解析
 	Tags            []Tag          `gorm:"many2many:image_tags;" json:"tags"`                // 标签（多对多，与视频共享 tags 表）
+	// 列表/详情通过 Preload 回填，网格卡片直接展示描述；不主动 Preload 时保持 nil，不额外查库。
+	AIDescriptions  []ImageAIDescription `gorm:"foreignKey:ImageID" json:"ai_descriptions,omitempty"`
 	CreatedAt       time.Time      `json:"created_at" ts_type:"string"`
 	UpdatedAt       time.Time      `json:"updated_at" ts_type:"string"`
 	DeletedAt       SoftDeleteTime `gorm:"index" json:"-"`

@@ -1,5 +1,37 @@
 export namespace models {
 	
+	export class ImageAIDescription {
+	    id: number;
+	    image_id: number;
+	    status: string;
+	    description: string;
+	    model_identifier: string;
+	    error_code: string;
+	    last_error: string;
+	    attempt_count: number;
+	    generated_at?: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAIDescription(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.image_id = source["image_id"];
+	        this.status = source["status"];
+	        this.description = source["description"];
+	        this.model_identifier = source["model_identifier"];
+	        this.error_code = source["error_code"];
+	        this.last_error = source["last_error"];
+	        this.attempt_count = source["attempt_count"];
+	        this.generated_at = source["generated_at"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class Tag {
 	    id: number;
 	    name: string;
@@ -60,6 +92,7 @@ export namespace models {
 	    gps_longitude?: number;
 	    exif_parsed_at?: string;
 	    tags: Tag[];
+	    ai_descriptions?: ImageAIDescription[];
 	    created_at: string;
 	    updated_at: string;
 	
@@ -96,6 +129,7 @@ export namespace models {
 	        this.gps_longitude = source["gps_longitude"];
 	        this.exif_parsed_at = source["exif_parsed_at"];
 	        this.tags = this.convertValues(source["tags"], Tag);
+	        this.ai_descriptions = this.convertValues(source["ai_descriptions"], ImageAIDescription);
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -118,38 +152,7 @@ export namespace models {
 		    return a;
 		}
 	}
-	export class ImageAIDescription {
-	    id: number;
-	    image_id: number;
-	    status: string;
-	    description: string;
-	    model_identifier: string;
-	    error_code: string;
-	    last_error: string;
-	    attempt_count: number;
-	    generated_at?: string;
-	    created_at: string;
-	    updated_at: string;
 	
-	    static createFrom(source: any = {}) {
-	        return new ImageAIDescription(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.image_id = source["image_id"];
-	        this.status = source["status"];
-	        this.description = source["description"];
-	        this.model_identifier = source["model_identifier"];
-	        this.error_code = source["error_code"];
-	        this.last_error = source["last_error"];
-	        this.attempt_count = source["attempt_count"];
-	        this.generated_at = source["generated_at"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	    }
-	}
 	export class ImageDirectory {
 	    id: number;
 	    path: string;
@@ -375,6 +378,7 @@ export namespace models {
 	    video_extensions: string;
 	    image_extensions: string;
 	    scan_exclude_paths: string;
+	    image_scan_exclude_paths: string;
 	    play_weight: number;
 	    random_half_life_days: number;
 	    auto_scan_on_startup: boolean;
@@ -423,6 +427,7 @@ export namespace models {
 	        this.video_extensions = source["video_extensions"];
 	        this.image_extensions = source["image_extensions"];
 	        this.scan_exclude_paths = source["scan_exclude_paths"];
+	        this.image_scan_exclude_paths = source["image_scan_exclude_paths"];
 	        this.play_weight = source["play_weight"];
 	        this.random_half_life_days = source["random_half_life_days"];
 	        this.auto_scan_on_startup = source["auto_scan_on_startup"];

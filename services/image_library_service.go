@@ -272,7 +272,10 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 		return nil, err
 	}
 
-	query := applyImageFilter(database.DB.Model(&models.Image{}).Preload("Tags"), filter)
+	query := applyImageFilter(database.DB.Model(&models.Image{}).Preload("Tags").
+		Preload("AIDescriptions", func(db *gorm.DB) *gorm.DB {
+			return db.Select("image_id", "status", "description")
+		}), filter)
 	switch filter.SortMode {
 	case ImageSortRecent:
 		if cursor != nil {

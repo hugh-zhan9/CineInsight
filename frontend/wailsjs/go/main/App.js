@@ -286,6 +286,10 @@ export function GetImageSemanticIndexStatus() {
   return window['go']['main']['App']['GetImageSemanticIndexStatus']();
 }
 
+export function GetImageTags() {
+  return window['go']['main']['App']['GetImageTags']();
+}
+
 export function GetLibraryInsights() {
   return window['go']['main']['App']['GetLibraryInsights']();
 }
