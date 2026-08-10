@@ -200,6 +200,8 @@ export function ListEnhancementTasks(arg1:number):Promise<Array<services.Enhance
 
 export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
 
+export function ListImageFolderGroups(arg1:services.ImageFilter):Promise<Array<services.ImageFolderGroup>>;
+
 export function ListImageTrashEntries():Promise<Array<models.ImageTrashEntry>>;
 
 export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;

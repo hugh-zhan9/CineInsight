@@ -394,6 +394,10 @@ export function ListImageTimelineBuckets(arg1) {
   return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
 }
 
+export function ListImageFolderGroups(arg1) {
+  return window['go']['main']['App']['ListImageFolderGroups'](arg1);
+}
+
 export function ListImageTrashEntries() {
   return window['go']['main']['App']['ListImageTrashEntries']();
 }

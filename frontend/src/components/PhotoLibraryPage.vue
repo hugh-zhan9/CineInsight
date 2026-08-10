@@ -28,6 +28,22 @@
             @click="setSearchMode('semantic')"
           >语义</button>
         </div>
+        <div class="photo-view-mode" role="group" aria-label="图片展示模式">
+          <button
+            type="button"
+            :class="['photo-view-mode__btn', { active: displayMode === 'stream' }]"
+            data-test="photo-display-stream"
+            @click="setDisplayMode('stream')"
+          >图片流</button>
+          <button
+            type="button"
+            :class="['photo-view-mode__btn', { active: displayMode === 'folders' }]"
+            :disabled="searchMode === 'semantic'"
+            :title="searchMode === 'semantic' ? '语义搜索结果按相关度展示，暂不按文件夹汇总' : '每个直属文件夹作为一个独立图集，不递归包含子文件夹'"
+            data-test="photo-display-folders"
+            @click="setDisplayMode('folders')"
+          >按文件夹</button>
+        </div>
         <input
           v-model="filters.keyword"
           class="search-input photo-toolbar__keyword"
@@ -134,9 +150,49 @@
     </div>
 
     <p v-if="error" class="photo-library__error" role="alert">{{ error }}</p>
+    <p v-if="folderModeRoot && folderLoading" class="photo-folder-loading" role="status" data-test="photo-folder-loading">正在整理图片文件夹…</p>
+
+    <div v-if="folderModeActive" class="photo-folder-breadcrumb glass-surface" data-test="photo-folder-breadcrumb">
+      <button type="button" class="btn-secondary btn-compact" data-test="photo-folder-back" @click="leaveFolder">← 文件夹</button>
+      <div class="photo-folder-breadcrumb__text">
+        <strong>{{ activeFolder.name }}</strong>
+        <span :title="activeFolder.directory">{{ activeFolder.directory }} · {{ activeFolder.count }} 张图片</span>
+      </div>
+    </div>
+
+    <section v-if="folderModeRoot && folderGroups.length" class="photo-folder-grid" data-test="photo-folder-grid">
+      <article v-for="folder in folderGroups" :key="folder.directory" class="photo-folder-card glass-surface">
+        <button
+          type="button"
+          class="photo-folder-card__open"
+          :title="`打开 ${folder.directory}`"
+          :aria-label="`打开文件夹 ${folder.name}`"
+          @click="enterFolder(folder)"
+        >
+          <div class="photo-folder-card__covers" :data-cover-count="folder.covers?.length || 0">
+            <template v-for="cover in (folder.covers || [])" :key="cover.id">
+              <img
+                v-if="!folderCoverFailed(folder, cover)"
+                :src="`/preview/image-thumbnail/${cover.id}`"
+                :alt="cover.name"
+                loading="lazy"
+                @error="markFolderCoverFailed(folder, cover)"
+              />
+              <span v-else class="photo-folder-card__cover-fallback">{{ formatBadge(cover) }}</span>
+            </template>
+            <span v-if="!(folder.covers || []).length" class="photo-folder-card__cover-fallback">空图集</span>
+          </div>
+          <div class="photo-folder-card__meta">
+            <strong :title="folder.name">{{ folder.name }}</strong>
+            <small>{{ folder.count }} 张图片</small>
+            <span :title="folder.directory">{{ folder.directory }}</span>
+          </div>
+        </button>
+      </article>
+    </section>
 
     <section
-      v-if="images.length"
+      v-else-if="images.length"
       ref="gridShell"
       class="photo-grid"
       :style="gridStyle"
@@ -211,6 +267,29 @@
           图片语义索引还没有建立。请先在设置页生成 AI 描述并运行"图片语义索引"任务。
         </p>
         <p v-else>换个说法再试，或为更多图片生成 AI 描述后重跑图片语义索引。</p>
+      </template>
+      <template v-else-if="folderModeRoot && imageDirectories.length === 0">
+        <h3>还没有配置图片扫描目录</h3>
+        <p>先在设置页添加图片目录，再回来扫描入库。</p>
+        <div class="photo-empty__actions">
+          <button type="button" class="btn-primary" data-test="photo-empty-settings" @click="$emit('open-settings')">去设置添加图片目录</button>
+          <button type="button" class="btn-secondary" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中...' : '立即扫描' }}</button>
+        </div>
+      </template>
+      <template v-else-if="folderModeRoot && hasActiveFilters">
+        <h3>没有符合筛选条件的文件夹</h3>
+        <p>调整关键词、标签或评分区间后重试。</p>
+      </template>
+      <template v-else-if="folderModeRoot">
+        <h3>还没有可展示的文件夹</h3>
+        <p>目录已配置，点击扫描把磁盘上的图片同步进来。</p>
+        <div class="photo-empty__actions">
+          <button type="button" class="btn-primary" :disabled="scanning" @click="scanNow">{{ scanning ? '扫描中...' : '立即扫描' }}</button>
+        </div>
+      </template>
+      <template v-else-if="folderModeActive">
+        <h3>文件夹中没有符合条件的图片</h3>
+        <p>调整筛选条件，或返回文件夹列表查看其他图集。</p>
       </template>
       <template v-else-if="imageDirectories.length === 0">
         <h3>还没有配置图片扫描目录</h3>
@@ -376,7 +455,7 @@
 <script>
 import {
   AddTagToImage, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
-  ListImageTimelineBuckets, RegenerateImageAIDescription, RemoveTagFromImage, SearchImagePage,
+  ListImageFolderGroups, ListImageTimelineBuckets, RegenerateImageAIDescription, RemoveTagFromImage, SearchImagePage,
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
@@ -425,6 +504,7 @@ export default {
       loadedOnce: false,
       error: '',
       searchMode: 'name',
+      displayMode: window.localStorage?.getItem?.('cineinsight-photo-display-mode') === 'folders' ? 'folders' : 'stream',
       semanticStatus: null,
       semanticNoticeOverride: '',
       semanticOffset: 0,
@@ -432,6 +512,11 @@ export default {
       semanticScores: {},
       imageDirectories: [],
       imageTags: [],
+      folderGroups: [],
+      folderLoading: false,
+      folderLoadedOnce: false,
+      activeFolder: null,
+      failedFolderCovers: {},
       scanning: false,
       failedThumbs: {},
       filters: {
@@ -475,7 +560,9 @@ export default {
     };
   },
   computed: {
-    hasMore() { return !this.exhausted && this.loadedOnce; },
+    hasMore() { return !this.folderModeRoot && !this.exhausted && this.loadedOnce; },
+    folderModeRoot() { return this.displayMode === 'folders' && !this.activeFolder; },
+    folderModeActive() { return this.displayMode === 'folders' && Boolean(this.activeFolder); },
     // 时间线分组只在文件名模式下生效：语义结果按相关度排序，插年月分组头没有意义。
     timelineActive() { return this.timelineMode && this.searchMode !== 'semantic'; },
     // 时间线开启时强制按拍摄时间排序，但不改写用户在下拉里的选择，关掉即恢复。
@@ -567,7 +654,8 @@ export default {
     hasActiveFilters() {
       return Boolean(this.filters.keyword.trim()) || this.filters.tagIDs.length > 0 || this.filters.favoriteOnly
         || this.filters.minRating !== '' || this.filters.maxRating !== ''
-        || this.filters.takenAfter !== '' || this.filters.takenBefore !== '';
+        || this.filters.takenAfter !== '' || this.filters.takenBefore !== ''
+        || this.filters.aiDescriptionState !== '';
     },
     // exifFacts 只列出真正有值的项；全空时整个「拍摄信息」区不渲染。
     exifFacts() {
@@ -589,6 +677,9 @@ export default {
       return facts.filter(fact => fact.value);
     },
     showEmptyState() {
+      if (this.folderModeRoot) {
+        return this.folderLoadedOnce && !this.folderLoading && this.folderGroups.length === 0;
+      }
       return this.loadedOnce && !this.loading && this.images.length === 0;
     }
   },
@@ -651,6 +742,31 @@ export default {
       const name = String(image?.name || '');
       const dot = name.lastIndexOf('.');
       return dot >= 0 ? name.slice(dot + 1).toUpperCase() : '未知格式';
+    },
+    folderCoverKey(folder, cover) {
+      return `${folder?.directory || ''}:${cover?.id || ''}`;
+    },
+    folderCoverFailed(folder, cover) {
+      return Boolean(this.failedFolderCovers[this.folderCoverKey(folder, cover)]);
+    },
+    markFolderCoverFailed(folder, cover) {
+      const key = this.folderCoverKey(folder, cover);
+      this.failedFolderCovers = { ...this.failedFolderCovers, [key]: true };
+    },
+    enterFolder(folder) {
+      if (!folder?.directory) return;
+      this.activeFolder = folder;
+      this.failedThumbs = {};
+      this.inactiveScrollTop = 0;
+      if (this.scrollOwnerEl) this.scrollOwnerEl.scrollTop = 0;
+      this.reload();
+    },
+    leaveFolder() {
+      if (!this.folderModeActive) return;
+      this.activeFolder = null;
+      this.inactiveScrollTop = 0;
+      if (this.scrollOwnerEl) this.scrollOwnerEl.scrollTop = 0;
+      this.reload();
     },
     rowImages(row) {
       return this.images.slice(row.startIndex, row.endIndex);
@@ -827,6 +943,24 @@ export default {
       if (mode === 'semantic' && !this.semanticAvailable) return;
       this.searchMode = mode;
       this.semanticNoticeOverride = '';
+      if (mode === 'semantic' && this.displayMode === 'folders') {
+        this.setDisplayMode('stream');
+        return;
+      }
+      this.reload();
+    },
+    setDisplayMode(mode) {
+      if (mode !== 'stream' && mode !== 'folders') return;
+      if (mode === 'folders' && this.searchMode === 'semantic') return;
+      if (mode === this.displayMode && !this.activeFolder) return;
+      this.displayMode = mode;
+      window.localStorage?.setItem?.('cineinsight-photo-display-mode', mode);
+      this.activeFolder = null;
+      this.folderGroups = [];
+      this.folderLoadedOnce = false;
+      this.failedFolderCovers = {};
+      this.inactiveScrollTop = 0;
+      if (this.scrollOwnerEl) this.scrollOwnerEl.scrollTop = 0;
       this.reload();
     },
     // takenBoundary 把 date 输入转成 RFC3339；后端按闭区间比较，所以起点取当天 0 点、
@@ -837,10 +971,11 @@ export default {
       const date = new Date(`${raw}T${endOfDay ? '23:59:59.999' : '00:00:00.000'}`);
       return Number.isNaN(date.getTime()) ? null : date.toISOString();
     },
-    buildFilter() {
+    buildFilter(directory = this.activeFolder?.directory || '') {
       const parseRating = value => (value === '' || value == null ? null : Number(value));
       return {
         keyword: this.filters.keyword.trim(),
+        directory,
         tag_ids: [...this.filters.tagIDs],
         favorite_only: this.filters.favoriteOnly,
         min_rating: parseRating(this.filters.minRating),
@@ -869,6 +1004,7 @@ export default {
     async checkLibraryFreshness() {
       if (this.libraryChanged || this.loading || !this.loadedOnce) return;
       if (!this.pageActive) return;
+      if (this.folderModeRoot) return;
       // 语义搜索是一次性查询结果，没有"库里多了几张"这个概念，跳过。
       if (this.searchMode === 'semantic') return;
       const token = this._queryToken;
@@ -910,9 +1046,48 @@ export default {
       this.failedThumbs = {};
       this.loadMoreQueued = false;
       this.closeViewer();
+      if (this.folderModeRoot) {
+        this.folderGroups = [];
+        this.folderLoadedOnce = false;
+        this.timelineBuckets = {};
+        await this.loadFolderGroups(token);
+        return;
+      }
       const buckets = this.loadTimelineBuckets(token);
+      const folderSummary = this.folderModeActive ? this.loadActiveFolderSummary(token) : null;
       await this.loadMore(token, true);
       await buckets;
+      await folderSummary;
+    },
+    async loadFolderGroups(token, directory = '') {
+      this.folderLoading = true;
+      this.error = '';
+      try {
+        const groups = await ListImageFolderGroups(this.buildFilter(directory));
+        if (this._queryToken !== token) return;
+        this.folderGroups = groups || [];
+        this.folderLoadedOnce = true;
+      } catch (err) {
+        if (this._queryToken !== token) return;
+        this.folderGroups = [];
+        this.folderLoadedOnce = true;
+        this.error = `加载图片文件夹失败：${err}`;
+      } finally {
+        if (this._queryToken === token) this.folderLoading = false;
+      }
+    },
+    async loadActiveFolderSummary(token) {
+      try {
+        const groups = await ListImageFolderGroups(this.buildFilter());
+        if (this._queryToken !== token || !this.activeFolder) return;
+        const current = groups?.[0];
+        this.activeFolder = {
+          ...this.activeFolder,
+          count: Number(current?.count || 0)
+        };
+      } catch (err) {
+        // 图集内容查询仍然可用，数量摘要失败不阻断浏览。
+      }
     },
     // loadTimelineBuckets 拉后端的年月计数摘要：分组头要显示整组张数，而前端只加载了当前页，
     // 不能靠已加载条目数冒充总数，也不能为了算分组头去拉全量图片。
@@ -950,6 +1125,7 @@ export default {
     },
     async loadMore(token = this._queryToken, force = false) {
       if (!token) { token = Symbol('photo-query'); this._queryToken = token; }
+      if (this.folderModeRoot) return;
       if ((!force && this.loading) || (this.exhausted && !force)) return;
       if (this.searchMode === 'semantic') {
         await this.loadMoreSemantic(token);
@@ -1255,6 +1431,11 @@ export default {
         }
         // 分组头显示的是后端整组总数，删掉一张后要同步减一，否则计数长期偏大。
         this.adjustTimelineBucket(image, -1);
+        if (this.folderModeActive && this.activeFolder?.directory === image.directory) {
+          this.activeFolder = { ...this.activeFolder, count: Math.max(0, Number(this.activeFolder.count || 0) - 1) };
+          this.folderGroups = [];
+          this.folderLoadedOnce = false;
+        }
         // 后端已把清理分析标记为过期，空闲时不轮询，得主动同步一次。
         refreshPhotoCleanupStatus();
       } catch (err) {
@@ -1263,9 +1444,19 @@ export default {
     },
     handleRestored(image) {
       if (!image) return;
-      if (!this.images.some(item => Number(item.id) === Number(image.id))) {
+      if (this.folderModeRoot) {
+        this.folderGroups = [];
+        this.folderLoadedOnce = false;
+        this.reload();
+      } else if ((!this.folderModeActive || this.activeFolder?.directory === image.directory)
+        && !this.images.some(item => Number(item.id) === Number(image.id))) {
         this.images.unshift(image);
         this.adjustTimelineBucket(image, 1);
+        if (this.folderModeActive) {
+          this.activeFolder = { ...this.activeFolder, count: Number(this.activeFolder.count || 0) + 1 };
+          this.folderGroups = [];
+          this.folderLoadedOnce = false;
+        }
       }
       this.loadedOnce = true;
       // 恢复回来的图片不该再在清理审阅里显示为"已删除"。
@@ -1305,12 +1496,35 @@ export default {
 .photo-search-mode__btn { padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .photo-search-mode__btn.active { background: var(--panel-bg); color: var(--text-primary); }
 .photo-search-mode__btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.photo-view-mode { display: inline-flex; padding: 2px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); }
+.photo-view-mode__btn { padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.photo-view-mode__btn.active { background: var(--panel-bg); color: var(--text-primary); }
+.photo-view-mode__btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__semantic-notice { margin: 0; color: var(--text-muted); font-size: 12px; }
 .photo-library__refresh { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--primary-color, #0d9488); border-radius: 10px; background: var(--control-bg); color: var(--text-primary); font-size: 12px; }
 .photo-library__refresh span { flex: 1; min-width: 0; }
 .photo-library__refresh-dismiss { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; }
 .photo-library__refresh-dismiss:hover { background: var(--border-color); color: var(--text-primary); }
 .photo-library__error { margin: 0; color: var(--danger-color); }
+.photo-folder-loading { margin: 0; color: var(--text-muted); font-size: 12px; }
+
+.photo-folder-breadcrumb { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 10px; }
+.photo-folder-breadcrumb__text { display: grid; min-width: 0; gap: 2px; }
+.photo-folder-breadcrumb__text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 13px; }
+.photo-folder-breadcrumb__text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
+.photo-folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.photo-folder-card { min-width: 0; overflow: hidden; border-radius: 13px; }
+.photo-folder-card__open { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.photo-folder-card__open:focus-visible { outline: 2px solid var(--primary-color, #0d9488); outline-offset: -2px; }
+.photo-folder-card__covers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); aspect-ratio: 1.55; gap: 2px; overflow: hidden; background: var(--thumb-bg); }
+.photo-folder-card__covers img { width: 100%; height: 100%; min-width: 0; min-height: 0; display: block; object-fit: cover; }
+.photo-folder-card__covers[data-cover-count="1"] img { grid-column: 1 / -1; grid-row: 1 / -1; }
+.photo-folder-card__covers[data-cover-count="3"] img:last-of-type { grid-column: 1 / -1; }
+.photo-folder-card__cover-fallback { display: flex; align-items: center; justify-content: center; min-width: 0; min-height: 0; color: var(--text-muted); font-size: 11px; }
+.photo-folder-card__meta { display: grid; gap: 3px; padding: 10px 12px 12px; }
+.photo-folder-card__meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 13px; }
+.photo-folder-card__meta small { color: var(--text-secondary); font-size: 11px; }
+.photo-folder-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 10px; }
 
 /* 虚拟化网格：外层只负责堆叠"行"，列数由 --photo-columns 显式给出（而不是 auto-fill），
    保证 DOM 布局与 photoGrid.js 的窗口计算用的是同一个列数。 */

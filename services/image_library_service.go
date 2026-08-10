@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -37,6 +38,7 @@ func NewImageLibraryService() *ImageLibraryService {
 // 只命中有 taken_at 的图片。
 type ImageFilter struct {
 	Keyword      string     `json:"keyword"`
+	Directory    string     `json:"directory"`
 	TagIDs       []uint     `json:"tag_ids"`
 	FavoriteOnly bool       `json:"favorite_only"`
 	MinRating    *float64   `json:"min_rating"`
@@ -48,6 +50,22 @@ type ImageFilter struct {
 	SortMode     string     `json:"sort_mode"`
 	// AIDescriptionState 按 AI 描述状态筛选，取值见 ImageAIDescriptionState* 常量；空串表示不筛。
 	AIDescriptionState string `json:"ai_description_state"`
+}
+
+// ImageFolderCover 是文件夹图集卡片使用的最小封面信息。
+type ImageFolderCover struct {
+	ID     uint   `json:"id"`
+	Name   string `json:"name"`
+	Format string `json:"format"`
+}
+
+// ImageFolderGroup 是图片库按直属文件夹展示时的一个图集。
+// Images.directory 已经是文件所在的直接父目录，因此同一组不会递归包含子目录。
+type ImageFolderGroup struct {
+	Directory string             `json:"directory"`
+	Name      string             `json:"name"`
+	Count     int                `json:"count"`
+	Covers    []ImageFolderCover `json:"covers"`
 }
 
 // AI 描述筛选取值。undescribed 覆盖"从未排队""排队中""生成失败"三种情况，
@@ -134,6 +152,10 @@ func (r *BatchImageOperationResult) record(imageID uint, err error) {
 
 func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 	filter.Keyword = strings.TrimSpace(filter.Keyword)
+	filter.Directory = strings.TrimSpace(filter.Directory)
+	if filter.Directory != "" {
+		filter.Directory = filepath.Clean(filter.Directory)
+	}
 	filter.TagIDs = uniqueUintIDs(filter.TagIDs)
 	sort.Slice(filter.TagIDs, func(i, j int) bool { return filter.TagIDs[i] < filter.TagIDs[j] })
 	if filter.MinSize < 0 || filter.MaxSize < 0 {
@@ -178,6 +200,9 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 		pattern := "%" + strings.ToLower(escapeSQLLike(filter.Keyword)) + "%"
 		query = query.Where("LOWER(images.name) LIKE ? ESCAPE '\\'", pattern)
 	}
+	if filter.Directory != "" {
+		query = query.Where("images.directory = ?", filter.Directory)
+	}
 	if filter.FavoriteOnly {
 		query = query.Where("images.is_favorite = ?", true)
 	}
@@ -215,6 +240,19 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 		query = query.Where("images.id IN (?)", subquery)
 	}
 	return query
+}
+
+func orderImageQuery(query *gorm.DB, sortMode string) *gorm.DB {
+	switch sortMode {
+	case ImageSortTaken:
+		return query.Order(imageTakenSortKeyExpr + " DESC").Order("images.id DESC")
+	case ImageSortSize:
+		return query.Order("images.size DESC").Order("images.id DESC")
+	case ImageSortRating:
+		return query.Order("images.personal_rating DESC NULLS LAST").Order("images.id DESC")
+	default:
+		return query.Order("images.created_at DESC").Order("images.id DESC")
+	}
 }
 
 func validateImageCursor(sortMode string, cursor *ImageCursor) error {
@@ -364,6 +402,62 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 		page.NextCursor = next
 	}
 	return page, nil
+}
+
+type imageFolderCoverRow struct {
+	ID        uint   `gorm:"column:id"`
+	Name      string `gorm:"column:name"`
+	Directory string `gorm:"column:directory"`
+	Format    string `gorm:"column:format"`
+}
+
+// ListImageFolderGroups 按直属目录汇总当前筛选命中的图片。
+// 查询只投影分组和封面所需字段，避免为了文件夹视图把整库图片及标签预加载到内存。
+func (s *ImageLibraryService) ListImageFolderGroups(filter ImageFilter) ([]ImageFolderGroup, error) {
+	normalized, err := normalizeImageFilter(filter)
+	if err != nil {
+		return nil, err
+	}
+
+	query := applyImageFilter(database.DB.Model(&models.Image{}), normalized).
+		Select("images.id, images.name, images.directory, images.format")
+	query = orderImageQuery(query, normalized.SortMode)
+
+	var rows []imageFolderCoverRow
+	if err := query.Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+
+	groups := make([]ImageFolderGroup, 0)
+	byDirectory := make(map[string]int)
+	for _, row := range rows {
+		index, ok := byDirectory[row.Directory]
+		if !ok {
+			index = len(groups)
+			byDirectory[row.Directory] = index
+			groups = append(groups, ImageFolderGroup{
+				Directory: row.Directory,
+				Name:      imageFolderDisplayName(row.Directory),
+				Covers:    make([]ImageFolderCover, 0, 4),
+			})
+		}
+		group := &groups[index]
+		group.Count++
+		if len(group.Covers) < 4 {
+			group.Covers = append(group.Covers, ImageFolderCover{
+				ID: row.ID, Name: row.Name, Format: row.Format,
+			})
+		}
+	}
+	return groups, nil
+}
+
+func imageFolderDisplayName(directory string) string {
+	cleaned := filepath.Clean(strings.TrimSpace(directory))
+	if cleaned == "." || cleaned == string(filepath.Separator) {
+		return cleaned
+	}
+	return filepath.Base(cleaned)
 }
 
 // ImageTimelineBucket 是时间线分组浏览的一个年月桶（P-013）。Month 为 1–12。

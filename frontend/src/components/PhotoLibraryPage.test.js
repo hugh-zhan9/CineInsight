@@ -7,7 +7,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'DeleteImage', 'ListImageTrashEntries', 'RestoreImageTrashEntry',
   'StartImageCleanupAnalysis', 'GetImageCleanupStatus', 'DismissImageNearDuplicateGroup', 'BatchDeleteImages',
   'GetImageSemanticIndexStatus', 'SearchImagesSemantic', 'RegenerateImageAIDescription',
-  'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage'
+  'ListImageFolderGroups', 'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -55,8 +55,10 @@ async function mountPage({ settings = baseSettings(), tags = [] } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  window.localStorage?.removeItem?.('cineinsight-photo-display-mode');
   api.GetAllImageDirectories.mockResolvedValue([{ id: 1, alias: '相册', path: '/photos' }]);
   api.SearchImagePage.mockResolvedValue(makePage([]));
+  api.ListImageFolderGroups.mockResolvedValue([]);
   api.SyncImageDirectories.mockResolvedValue({ added: 0, relocated: 0, removed: 0, skipped: 0, errors: [] });
   api.GetImageDetail.mockImplementation(id => Promise.resolve({ image: makeImage(Number(id)), ai_description: '' }));
   api.SetImageFavorite.mockImplementation((id, favorite) => Promise.resolve({ id, is_favorite: favorite }));
@@ -225,6 +227,48 @@ describe('PhotoLibraryPage grid paging', () => {
     const filter = api.SearchImagePage.mock.calls.at(-1)[0].filter;
     expect(filter.taken_after).toBe(new Date('2024-03-11T00:00:00.000').toISOString());
     expect(filter.taken_before).toBe(new Date('2024-03-12T23:59:59.999').toISOString());
+  });
+});
+
+describe('PhotoLibraryPage folder display', () => {
+  it('loads independent folder albums and enters a folder with an exact directory filter', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    api.ListImageFolderGroups.mockResolvedValue([
+      {
+        directory: '/photos',
+        name: 'photos',
+        count: 2,
+        covers: [{ id: 1, name: 'one.jpg', format: 'jpg' }, { id: 2, name: 'two.jpg', format: 'jpg' }]
+      },
+      {
+        directory: '/photos/trip',
+        name: 'trip',
+        count: 1,
+        covers: [{ id: 3, name: 'trip.jpg', format: 'jpg' }]
+      }
+    ]);
+
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+
+    expect(api.ListImageFolderGroups).toHaveBeenCalledWith(expect.objectContaining({ directory: '' }));
+    expect(wrapper.findAll('.photo-folder-card')).toHaveLength(2);
+    expect(wrapper.find('[data-test="photo-folder-grid"]').text()).toContain('2 张图片');
+    expect(wrapper.findAll('.photo-folder-card__covers img')).toHaveLength(3);
+
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(7, { directory: '/photos' })]));
+    await wrapper.findAll('.photo-folder-card__open')[0].trigger('click');
+    await flushPromises();
+
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.directory).toBe('/photos');
+    expect(wrapper.get('[data-test="photo-folder-breadcrumb"]').text()).toContain('photos');
+    expect(wrapper.findAll('.photo-card')).toHaveLength(1);
+
+    await wrapper.get('[data-test="photo-folder-back"]').trigger('click');
+    await flushPromises();
+    expect(api.ListImageFolderGroups).toHaveBeenCalledTimes(3);
+    expect(wrapper.find('[data-test="photo-folder-grid"]').exists()).toBe(true);
   });
 });
 

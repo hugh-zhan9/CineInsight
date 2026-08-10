@@ -121,6 +121,70 @@ func TestImagePageFiltersByTagFavoriteRatingSizeAndKeyword(t *testing.T) {
 	}
 }
 
+func TestImageFolderGroupsUseDirectDirectoriesAndCurrentFilters(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewImageLibraryService()
+
+	parent := mustCreateTestImage(t, "parent.jpg", 10)
+	childA := mustCreateTestImage(t, "child-a.jpg", 20)
+	childB := mustCreateTestImage(t, "child-b.jpg", 30)
+	sibling := mustCreateTestImage(t, "sibling.jpg", 40)
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", childA.ID).Update("directory", "/tmp/image-library/child").Error; err != nil {
+		t.Fatalf("更新子目录图片失败: %v", err)
+	}
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", childB.ID).Update("directory", "/tmp/image-library/child").Error; err != nil {
+		t.Fatalf("更新子目录图片失败: %v", err)
+	}
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", sibling.ID).Update("directory", "/tmp/image-library/sibling").Error; err != nil {
+		t.Fatalf("更新兄弟目录图片失败: %v", err)
+	}
+
+	groups, err := svc.ListImageFolderGroups(ImageFilter{})
+	if err != nil {
+		t.Fatalf("文件夹图集查询失败: %v", err)
+	}
+	if len(groups) != 3 {
+		t.Fatalf("父目录和两个子目录应分别成组: %+v", groups)
+	}
+
+	byDirectory := make(map[string]ImageFolderGroup, len(groups))
+	for _, group := range groups {
+		byDirectory[group.Directory] = group
+	}
+	if got := byDirectory[parent.Directory].Count; got != 1 {
+		t.Fatalf("父目录只能包含直属图片，实际 %d: %+v", got, byDirectory[parent.Directory])
+	}
+	if got := byDirectory["/tmp/image-library/child"].Count; got != 2 {
+		t.Fatalf("子目录图片应独立成组，实际 %d: %+v", got, byDirectory["/tmp/image-library/child"])
+	}
+	if got := len(byDirectory["/tmp/image-library/child"].Covers); got != 2 {
+		t.Fatalf("图集封面应返回组内图片，实际 %d", got)
+	}
+
+	filtered, err := svc.ListImageFolderGroups(ImageFilter{Keyword: "child-b"})
+	if err != nil {
+		t.Fatalf("带筛选的文件夹图集查询失败: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].Directory != "/tmp/image-library/child" || filtered[0].Count != 1 {
+		t.Fatalf("文件夹摘要必须复用图片筛选: %+v", filtered)
+	}
+	directoryFiltered, err := svc.ListImageFolderGroups(ImageFilter{Directory: "/tmp/image-library/child/"})
+	if err != nil {
+		t.Fatalf("按直属目录读取图集摘要失败: %v", err)
+	}
+	if len(directoryFiltered) != 1 || directoryFiltered[0].Count != 2 {
+		t.Fatalf("图集摘要的目录筛选应保持精确且不递归: %+v", directoryFiltered)
+	}
+
+	page, err := svc.SearchImagePage(ImagePageRequest{Filter: ImageFilter{Directory: "/tmp/image-library/child/"}, Limit: 10})
+	if err != nil {
+		t.Fatalf("按直属目录进入图集失败: %v", err)
+	}
+	if len(page.Images) != 2 || page.Images[0].Directory != "/tmp/image-library/child" || page.Images[1].Directory != "/tmp/image-library/child" {
+		t.Fatalf("目录筛选不能递归且应支持规范化路径: %+v", page.Images)
+	}
+}
+
 // AI 描述筛选：undescribed 要覆盖"从未排队""排队中""生成失败"三种没有描述的情况。
 func TestImagePageFiltersByAIDescriptionState(t *testing.T) {
 	setupVideoServiceTestDB(t)

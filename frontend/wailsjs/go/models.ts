@@ -2003,8 +2003,61 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class ImageFolderCover {
+	    id: number;
+	    name: string;
+	    format: string;
+
+	    static createFrom(source: any = {}) {
+	        return new ImageFolderCover(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.format = source["format"];
+	    }
+	}
+	export class ImageFolderGroup {
+	    directory: string;
+	    name: string;
+	    count: number;
+	    covers: ImageFolderCover[];
+
+	    static createFrom(source: any = {}) {
+	        return new ImageFolderGroup(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directory = source["directory"];
+	        this.name = source["name"];
+	        this.count = source["count"];
+	        this.covers = this.convertValues(source["covers"], ImageFolderCover);
+	    }
+
+	convertValues(a: any, classs: any, asMap: boolean = false): any {
+	    if (!a) {
+	        return a;
+	    }
+	    if (a.slice && a.map) {
+	        return (a as any[]).map(elem => this.convertValues(elem, classs));
+	    } else if ("object" === typeof a) {
+	        if (asMap) {
+	            for (const key of Object.keys(a)) {
+	                a[key] = new classs(a[key]);
+	            }
+	            return a;
+	        }
+	        return new classs(a);
+	    }
+	    return a;
+	}
+	}
 	export class ImageFilter {
 	    keyword: string;
+	    directory: string;
 	    tag_ids: number[];
 	    favorite_only: boolean;
 	    min_rating?: number;
@@ -2023,6 +2076,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.keyword = source["keyword"];
+	        this.directory = source["directory"];
 	        this.tag_ids = source["tag_ids"];
 	        this.favorite_only = source["favorite_only"];
 	        this.min_rating = source["min_rating"];
@@ -4809,4 +4863,3 @@ export namespace subtitleparser {
 	}
 
 }
-

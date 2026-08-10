@@ -2052,6 +2052,13 @@ func (a *App) ListImageTimelineBuckets(filter services.ImageFilter) ([]services.
 	return buckets, err
 }
 
+// ListImageFolderGroups 返回图片库按直属目录分组的图集摘要。
+func (a *App) ListImageFolderGroups(filter services.ImageFilter) ([]services.ImageFolderGroup, error) {
+	groups, err := a.imageLibraryService.ListImageFolderGroups(filter)
+	log.Printf("API ListImageFolderGroups groups=%d err=%v", len(groups), err)
+	return groups, err
+}
+
 // GetImageDetail 返回图片详情（含标签与 AI 描述）。
 func (a *App) GetImageDetail(imageID uint) (*services.ImageDetail, error) {
 	detail, err := a.imageLibraryService.GetImageDetail(imageID)
