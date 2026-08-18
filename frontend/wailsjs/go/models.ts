@@ -1,37 +1,5 @@
 export namespace models {
 	
-	export class ImageAIDescription {
-	    id: number;
-	    image_id: number;
-	    status: string;
-	    description: string;
-	    model_identifier: string;
-	    error_code: string;
-	    last_error: string;
-	    attempt_count: number;
-	    generated_at?: string;
-	    created_at: string;
-	    updated_at: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImageAIDescription(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.image_id = source["image_id"];
-	        this.status = source["status"];
-	        this.description = source["description"];
-	        this.model_identifier = source["model_identifier"];
-	        this.error_code = source["error_code"];
-	        this.last_error = source["last_error"];
-	        this.attempt_count = source["attempt_count"];
-	        this.generated_at = source["generated_at"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	    }
-	}
 	export class Tag {
 	    id: number;
 	    name: string;
@@ -92,7 +60,6 @@ export namespace models {
 	    gps_longitude?: number;
 	    exif_parsed_at?: string;
 	    tags: Tag[];
-	    ai_descriptions?: ImageAIDescription[];
 	    created_at: string;
 	    updated_at: string;
 	
@@ -129,7 +96,6 @@ export namespace models {
 	        this.gps_longitude = source["gps_longitude"];
 	        this.exif_parsed_at = source["exif_parsed_at"];
 	        this.tags = this.convertValues(source["tags"], Tag);
-	        this.ai_descriptions = this.convertValues(source["ai_descriptions"], ImageAIDescription);
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -152,7 +118,64 @@ export namespace models {
 		    return a;
 		}
 	}
+	export class ImageAITagCandidate {
+	    id: number;
+	    image_id: number;
+	    image: Image;
+	    suggested_name: string;
+	    normalized_name: string;
+	    matched_tag_id?: number;
+	    matched_tag?: Tag;
+	    confidence: string;
+	    reasoning: string;
+	    source_summary: string;
+	    status: string;
+	    created_at: string;
+	    updated_at: string;
+	    approved_at?: string;
+	    rejected_at?: string;
 	
+	    static createFrom(source: any = {}) {
+	        return new ImageAITagCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.image_id = source["image_id"];
+	        this.image = this.convertValues(source["image"], Image);
+	        this.suggested_name = source["suggested_name"];
+	        this.normalized_name = source["normalized_name"];
+	        this.matched_tag_id = source["matched_tag_id"];
+	        this.matched_tag = this.convertValues(source["matched_tag"], Tag);
+	        this.confidence = source["confidence"];
+	        this.reasoning = source["reasoning"];
+	        this.source_summary = source["source_summary"];
+	        this.status = source["status"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.approved_at = source["approved_at"];
+	        this.rejected_at = source["rejected_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class ImageDirectory {
 	    id: number;
 	    path: string;
@@ -1579,14 +1602,14 @@ export namespace services {
 	        this.warning = source["warning"];
 	    }
 	}
-	export class ImageAIDescriptionFailure {
+	export class ImageAITaggingFailure {
 	    image_id: number;
 	    name: string;
 	    code: string;
 	    error: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new ImageAIDescriptionFailure(source);
+	        return new ImageAITaggingFailure(source);
 	    }
 	
 	    constructor(source: any = {}) {
@@ -1597,38 +1620,42 @@ export namespace services {
 	        this.error = source["error"];
 	    }
 	}
-	export class ImageAIDescriptionStatus {
-	    running: boolean;
-	    cancelled: boolean;
-	    completed: boolean;
-	    total: number;
-	    processed: number;
-	    succeeded: number;
-	    failed: number;
-	    skipped: number;
-	    current_image_id: number;
-	    started_at?: string;
-	    updated_at?: string;
-	    failures: ImageAIDescriptionFailure[];
+	export class ImageAITaggingReviewItem {
+	    id: number;
+	    image_id: number;
+	    image?: models.Image;
+	    image_deleted: boolean;
+	    suggested_name: string;
+	    normalized_name: string;
+	    matched_tag_id?: number;
+	    matched_tag?: models.Tag;
+	    confidence: string;
+	    reasoning: string;
+	    source_summary: string;
+	    status: string;
+	    created_at: string;
+	    updated_at: string;
 	
 	    static createFrom(source: any = {}) {
-	        return new ImageAIDescriptionStatus(source);
+	        return new ImageAITaggingReviewItem(source);
 	    }
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.running = source["running"];
-	        this.cancelled = source["cancelled"];
-	        this.completed = source["completed"];
-	        this.total = source["total"];
-	        this.processed = source["processed"];
-	        this.succeeded = source["succeeded"];
-	        this.failed = source["failed"];
-	        this.skipped = source["skipped"];
-	        this.current_image_id = source["current_image_id"];
-	        this.started_at = source["started_at"];
+	        this.id = source["id"];
+	        this.image_id = source["image_id"];
+	        this.image = this.convertValues(source["image"], models.Image);
+	        this.image_deleted = source["image_deleted"];
+	        this.suggested_name = source["suggested_name"];
+	        this.normalized_name = source["normalized_name"];
+	        this.matched_tag_id = source["matched_tag_id"];
+	        this.matched_tag = this.convertValues(source["matched_tag"], models.Tag);
+	        this.confidence = source["confidence"];
+	        this.reasoning = source["reasoning"];
+	        this.source_summary = source["source_summary"];
+	        this.status = source["status"];
+	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
-	        this.failures = this.convertValues(source["failures"], ImageAIDescriptionFailure);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1648,6 +1675,76 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class ImageAITaggingStatus {
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    failed: number;
+	    skipped: number;
+	    candidates: number;
+	    current_image_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: ImageAITaggingFailure[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAITaggingStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.failed = source["failed"];
+	        this.skipped = source["skipped"];
+	        this.candidates = source["candidates"];
+	        this.current_image_id = source["current_image_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], ImageAITaggingFailure);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageAITaggingSummary {
+	    config_available: boolean;
+	    pending: number;
+	    pending_images: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAITaggingSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.config_available = source["config_available"];
+	        this.pending = source["pending"];
+	        this.pending_images = source["pending_images"];
+	    }
 	}
 	export class ImageCleanupMember {
 	    id: number;
@@ -1677,12 +1774,10 @@ export namespace services {
 	    gps_longitude?: number;
 	    exif_parsed_at?: string;
 	    tags: models.Tag[];
-	    ai_descriptions?: models.ImageAIDescription[];
 	    created_at: string;
 	    updated_at: string;
 	    file_size: number;
 	    mod_time_ns: number;
-	    description: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImageCleanupMember(source);
@@ -1717,12 +1812,10 @@ export namespace services {
 	        this.gps_longitude = source["gps_longitude"];
 	        this.exif_parsed_at = source["exif_parsed_at"];
 	        this.tags = this.convertValues(source["tags"], models.Tag);
-	        this.ai_descriptions = this.convertValues(source["ai_descriptions"], models.ImageAIDescription);
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	        this.file_size = source["file_size"];
 	        this.mod_time_ns = source["mod_time_ns"];
-	        this.description = source["description"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1905,7 +1998,6 @@ export namespace services {
 	}
 	export class ImageDetail {
 	    image: models.Image;
-	    ai_description: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImageDetail(source);
@@ -1914,7 +2006,6 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.image = this.convertValues(source["image"], models.Image);
-	        this.ai_description = source["ai_description"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2003,58 +2094,6 @@ export namespace services {
 		    return a;
 		}
 	}
-	export class ImageFolderCover {
-	    id: number;
-	    name: string;
-	    format: string;
-
-	    static createFrom(source: any = {}) {
-	        return new ImageFolderCover(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.name = source["name"];
-	        this.format = source["format"];
-	    }
-	}
-	export class ImageFolderGroup {
-	    directory: string;
-	    name: string;
-	    count: number;
-	    covers: ImageFolderCover[];
-
-	    static createFrom(source: any = {}) {
-	        return new ImageFolderGroup(source);
-	    }
-
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.directory = source["directory"];
-	        this.name = source["name"];
-	        this.count = source["count"];
-	        this.covers = this.convertValues(source["covers"], ImageFolderCover);
-	    }
-
-	convertValues(a: any, classs: any, asMap: boolean = false): any {
-	    if (!a) {
-	        return a;
-	    }
-	    if (a.slice && a.map) {
-	        return (a as any[]).map(elem => this.convertValues(elem, classs));
-	    } else if ("object" === typeof a) {
-	        if (asMap) {
-	            for (const key of Object.keys(a)) {
-	                a[key] = new classs(a[key]);
-	            }
-	            return a;
-	        }
-	        return new classs(a);
-	    }
-	    return a;
-	}
-	}
 	export class ImageFilter {
 	    keyword: string;
 	    directory: string;
@@ -2067,7 +2106,7 @@ export namespace services {
 	    taken_after?: string;
 	    taken_before?: string;
 	    sort_mode: string;
-	    ai_description_state: string;
+	    ai_tag_state: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImageFilter(source);
@@ -2086,8 +2125,60 @@ export namespace services {
 	        this.taken_after = source["taken_after"];
 	        this.taken_before = source["taken_before"];
 	        this.sort_mode = source["sort_mode"];
-	        this.ai_description_state = source["ai_description_state"];
+	        this.ai_tag_state = source["ai_tag_state"];
 	    }
+	}
+	export class ImageFolderCover {
+	    id: number;
+	    name: string;
+	    format: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageFolderCover(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.format = source["format"];
+	    }
+	}
+	export class ImageFolderGroup {
+	    directory: string;
+	    name: string;
+	    count: number;
+	    covers: ImageFolderCover[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageFolderGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directory = source["directory"];
+	        this.name = source["name"];
+	        this.count = source["count"];
+	        this.covers = this.convertValues(source["covers"], ImageFolderCover);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class ImagePage {
 	    images: models.Image[];
@@ -4863,3 +4954,4 @@ export namespace subtitleparser {
 	}
 
 }
+

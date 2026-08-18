@@ -28,6 +28,8 @@ export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyReq
 
 export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
 
+export function ApproveImageAITagCandidate(arg1:number):Promise<services.ImageAITaggingReviewItem>;
+
 export function BatchAddTagToImages(arg1:Array<number>,arg2:number):Promise<services.BatchImageOperationResult>;
 
 export function BatchAddTagToVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
@@ -46,7 +48,7 @@ export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise
 
 export function CancelEnhancementTask(arg1:number):Promise<void>;
 
-export function CancelImageAIDescription():Promise<void>;
+export function CancelImageAITagging():Promise<void>;
 
 export function CancelImageEXIFBackfill():Promise<void>;
 
@@ -136,7 +138,9 @@ export function GetEnhancementCapability():Promise<services.EnhancementRuntimeCa
 
 export function GetEnhancementVideoPreflight(arg1:number):Promise<services.EnhancementVideoPreflight>;
 
-export function GetImageAIDescriptionStatus():Promise<services.ImageAIDescriptionStatus>;
+export function GetImageAITaggingStatus():Promise<services.ImageAITaggingStatus>;
+
+export function GetImageAITaggingSummary():Promise<services.ImageAITaggingSummary>;
 
 export function GetImageCleanupStatus():Promise<services.ImageCleanupStatus>;
 
@@ -200,6 +204,8 @@ export function ListDatabaseBackups():Promise<Array<services.BackupFile>>;
 
 export function ListEnhancementTasks(arg1:number):Promise<Array<services.EnhancementTaskView>>;
 
+export function ListImageAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.ImageAITaggingReviewItem>>;
+
 export function ListImageFolderGroups(arg1:services.ImageFilter):Promise<Array<services.ImageFolderGroup>>;
 
 export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
@@ -248,11 +254,13 @@ export function RefreshVideoMetadata(arg1:number):Promise<void>;
 
 export function RefreshVideoTechnicalMetadata(arg1:number):Promise<services.VideoDetails>;
 
-export function RegenerateImageAIDescription(arg1:number):Promise<models.ImageAIDescription>;
-
 export function RejectAITagCandidate(arg1:number):Promise<void>;
 
 export function RejectAITagCandidatesByVideo(arg1:number):Promise<number>;
+
+export function RejectImageAITagCandidate(arg1:number):Promise<void>;
+
+export function RejectImageAITagCandidatesByImage(arg1:number):Promise<number>;
 
 export function RejectSameSourceRelation(arg1:number):Promise<void>;
 
@@ -283,6 +291,8 @@ export function RestoreDatabaseBackup(arg1:services.BackupRestoreRequest):Promis
 export function RestoreImageTrashEntry(arg1:number):Promise<models.Image>;
 
 export function RestoreTrashEntry(arg1:number):Promise<models.Video>;
+
+export function RetagImage(arg1:number):Promise<Array<models.ImageAITagCandidate>>;
 
 export function RetranslateSubtitleEntries(arg1:services.SubtitleRetranslateRequest):Promise<services.SubtitleRetranslateResult>;
 
@@ -350,7 +360,7 @@ export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
 
 export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
 
-export function StartImageAIDescription():Promise<services.ImageAIDescriptionStatus>;
+export function StartImageAITagging():Promise<services.ImageAITaggingStatus>;
 
 export function StartImageCleanupAnalysis():Promise<services.ImageCleanupStatus>;
 

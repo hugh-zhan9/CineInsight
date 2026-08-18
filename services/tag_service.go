@@ -168,6 +168,16 @@ func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty boo
 						}).Error; err != nil {
 						return err
 					}
+					// 图片侧候选改为作废而不是就地改名：image_ai_tag_candidates 上有
+					// (image_id, normalized_name) WHERE status='pending' 的部分唯一索引，
+					// 把「日落」改名成「海边」会和同一张图已有的「海边」候选撞键，
+					// 整个保存事务跟着失败。作废是安全的——图片打标的证据指纹含标签名，
+					// 改名本身就会让指纹失配，下一轮会用新名字重新提出候选。
+					if err := tx.Model(&models.ImageAITagCandidate{}).
+						Where("matched_tag_id = ? AND status = ?", tag.ID, models.AITagCandidateStatusPending).
+						Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+						return err
+					}
 				}
 				libraryChanged = true
 			}
@@ -197,6 +207,19 @@ func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty boo
 			Where(`matched_tag_id IS NULL OR NOT EXISTS (
 				SELECT 1 FROM tags
 				WHERE tags.id = ai_tag_candidates.matched_tag_id
+					AND tags.deleted_at IS NULL
+					AND tags.is_system = ?
+					AND tags.is_active = ?
+			)`, true, true).
+			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+			return err
+		}
+		// 图片侧同理：标签被移出词表或停用后，指向它的待审候选不该继续挂着等人处理。
+		if err := tx.Model(&models.ImageAITagCandidate{}).
+			Where("status = ?", models.AITagCandidateStatusPending).
+			Where(`matched_tag_id IS NULL OR NOT EXISTS (
+				SELECT 1 FROM tags
+				WHERE tags.id = image_ai_tag_candidates.matched_tag_id
 					AND tags.deleted_at IS NULL
 					AND tags.is_system = ?
 					AND tags.is_active = ?

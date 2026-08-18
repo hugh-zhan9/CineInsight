@@ -34,7 +34,9 @@ func AllModels() []interface{} {
 		&Image{},
 		&ImageDirectory{},
 		&ImageTrashEntry{},
-		&ImageAIDescription{},
+		&ImageAITagCandidate{},
+		&ImageAITagApprovalRecord{},
+		&ImageAITaggingState{},
 		&ImageNearDuplicateDismissal{},
 	}
 }

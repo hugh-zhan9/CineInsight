@@ -282,20 +282,7 @@ func (s *ImageSemanticIndexService) run(ctx context.Context, profile models.Sema
 			break
 		}
 		s.updateStatus(func(status *ImageSemanticIndexStatus) { status.CurrentImageID = image.ID })
-		description, hasDescription, err := s.loadCompletedDescription(ctx, image.ID)
-		if err != nil {
-			if ctx.Err() != nil {
-				break
-			}
-			s.recordImageFailure(image, profile, "", "index_text_failed", err)
-			continue
-		}
-		if !hasDescription {
-			// D-010：无 completed AI 描述的图片不索引，Skipped 计数。
-			s.updateStatus(func(status *ImageSemanticIndexStatus) { status.Processed++; status.Skipped++ })
-			continue
-		}
-		text, fingerprint := s.buildIndexText(image, description, config)
+		text, fingerprint := s.buildIndexText(image, config)
 		if profile.Dimension > 0 {
 			var count int64
 			err := s.db.WithContext(ctx).Model(&models.ImageSemanticIndex{}).
@@ -355,28 +342,10 @@ func (s *ImageSemanticIndexService) run(ctx context.Context, profile models.Sema
 	s.finish(ctx.Err() != nil)
 }
 
-// loadCompletedDescription 返回图片的 completed AI 描述；无行或描述为空视为无描述。
-func (s *ImageSemanticIndexService) loadCompletedDescription(ctx context.Context, imageID uint) (string, bool, error) {
-	var row models.ImageAIDescription
-	err := s.db.WithContext(ctx).
-		Where("image_id = ? AND status = ?", imageID, imageAIDescriptionStatusCompleted).
-		First(&row).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
-	}
-	if strings.TrimSpace(row.Description) == "" {
-		return "", false, nil
-	}
-	return row.Description, true, nil
-}
-
-// buildIndexText 构建三段式索引文本（标题=文件名、标签、AI 描述），复用视频侧的
+// buildIndexText 构建两段式索引文本（标题=文件名、标签），复用视频侧的
 // 分段结构、脱敏与截断，并返回 sha256 内容指纹。
-func (s *ImageSemanticIndexService) buildIndexText(image models.Image, description string, config SemanticIndexConfig) (string, string) {
-	sections := make([]string, 0, 3)
+func (s *ImageSemanticIndexService) buildIndexText(image models.Image, config SemanticIndexConfig) (string, string) {
+	sections := make([]string, 0, 2)
 	appendSemanticSection(&sections, "标题", image.Name)
 	tags := make([]string, 0, len(image.Tags))
 	for _, tag := range image.Tags {
@@ -388,7 +357,6 @@ func (s *ImageSemanticIndexService) buildIndexText(image models.Image, descripti
 	if len(tags) > 0 {
 		appendSemanticSection(&sections, "标签", strings.Join(tags, " / "))
 	}
-	appendSemanticSection(&sections, "AI 描述", description)
 	text := sanitizeSemanticIndexText(strings.Join(sections, "\n"), config.APIKey)
 	text = truncateSemanticRunes(text, config.MaxTextRunes)
 	digest := sha256.Sum256([]byte(text))

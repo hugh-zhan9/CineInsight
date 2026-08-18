@@ -224,8 +224,8 @@ func TestImageSemanticSearchPageExcludesSoftDeletedImagesAndScoresHits(t *testin
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("create tag: %v", err)
 	}
-	kept := createImageSemanticTestImage(t, "kept.jpg", "保留的图片", tag)
-	removed := createImageSemanticTestImage(t, "removed.jpg", "被软删的图片")
+	kept := createImageSemanticTestImage(t, "kept.jpg", tag)
+	removed := createImageSemanticTestImage(t, "removed.jpg")
 	profile := models.SemanticIndexProfile{ID: 1, ActiveModel: "embed-v1", Dimension: 2, Generation: 1}
 	if err := database.DB.Create(&profile).Error; err != nil {
 		t.Fatalf("create profile: %v", err)

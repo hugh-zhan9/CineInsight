@@ -1,24 +1,26 @@
 <template>
   <div class="image-ai-tasks">
-    <div class="setting-item image-ai-description-controls">
-      <label>图片 AI 描述</label>
+    <div class="setting-item image-ai-tagging-controls">
+      <label>图片 AI 打标</label>
       <p class="help-text">
-        为还没有描述的图片批量生成中文描述，复用上方 AI 接口配置。描述是图片语义索引的输入，没有描述的图片会被语义索引跳过。
+        让 AI 从上方配置的标签库里为图片挑标签，复用同一份 AI 接口配置。产出的是<strong>待审候选</strong>，
+        要在照片页「AI 标签审阅」里接受之后才会真正挂到图片上。标签库为空时整批都会被跳过。
       </p>
-      <div class="image-task-status" :class="{ 'image-task-status--error': Boolean(descriptionError) }" data-test="image-ai-description-status">
-        <strong>{{ descriptionStatusText }}</strong>
-        <span v-if="descriptionStatus?.running || descriptionStatus?.completed || descriptionStatus?.cancelled">
-          进度 {{ descriptionStatus.processed || 0 }}/{{ descriptionStatus.total || 0 }}
-          · 成功 {{ descriptionStatus.succeeded || 0 }}
-          · 跳过 {{ descriptionStatus.skipped || 0 }}
-          · 失败 {{ descriptionStatus.failed || 0 }}
+      <div class="image-task-status" :class="{ 'image-task-status--error': Boolean(taggingError) }" data-test="image-ai-tagging-status">
+        <strong>{{ taggingStatusText }}</strong>
+        <span v-if="taggingStatus?.running || taggingStatus?.completed || taggingStatus?.cancelled">
+          进度 {{ taggingStatus.processed || 0 }}/{{ taggingStatus.total || 0 }}
+          · 成功 {{ taggingStatus.succeeded || 0 }}
+          · 跳过 {{ taggingStatus.skipped || 0 }}
+          · 失败 {{ taggingStatus.failed || 0 }}
+          · 产出候选 {{ taggingStatus.candidates || 0 }}
         </span>
-        <div v-if="descriptionProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="descriptionStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="descriptionStatus.total || 0">
-          <i :style="{ width: descriptionProgressRatio + '%' }"></i>
+        <div v-if="taggingProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="taggingStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="taggingStatus.total || 0">
+          <i :style="{ width: taggingProgressRatio + '%' }"></i>
         </div>
-        <span v-if="descriptionError" data-test="image-ai-description-error">{{ descriptionError }}</span>
-        <ul v-if="descriptionFailures.length" class="image-task-failures" data-test="image-ai-description-failures">
-          <li v-for="failure in descriptionFailures" :key="`desc-${failure.image_id}`">
+        <span v-if="taggingError" data-test="image-ai-tagging-error">{{ taggingError }}</span>
+        <ul v-if="taggingFailures.length" class="image-task-failures" data-test="image-ai-tagging-failures">
+          <li v-for="failure in taggingFailures" :key="`tag-${failure.image_id}`">
             {{ failure.name || `图片 ${failure.image_id}` }}（{{ failure.code || '未知错误' }}）
           </li>
         </ul>
@@ -27,16 +29,16 @@
         <button
           type="button"
           class="btn-primary"
-          :disabled="descriptionStatus?.running"
-          data-test="image-ai-description-start"
-          @click="startDescription"
+          :disabled="taggingStatus?.running"
+          data-test="image-ai-tagging-start"
+          @click="startTagging"
         >开始/继续生成</button>
         <button
-          v-if="descriptionStatus?.running"
+          v-if="taggingStatus?.running"
           type="button"
           class="btn-secondary"
-          data-test="image-ai-description-cancel"
-          @click="cancelDescription"
+          data-test="image-ai-tagging-cancel"
+          @click="cancelTagging"
         >取消</button>
       </div>
     </div>
@@ -134,9 +136,9 @@
 
 <script>
 import {
-  CancelImageAIDescription, CancelImageEXIFBackfill, CancelImageSemanticIndex,
-  GetImageAIDescriptionStatus, GetImageEXIFBackfillStatus, GetImageSemanticIndexStatus,
-  StartImageAIDescription, StartImageEXIFBackfill, StartImageSemanticIndex
+  CancelImageAITagging, CancelImageEXIFBackfill, CancelImageSemanticIndex,
+  GetImageAITaggingStatus, GetImageEXIFBackfillStatus, GetImageSemanticIndexStatus,
+  StartImageAITagging, StartImageEXIFBackfill, StartImageSemanticIndex
 } from '../../wailsjs/go/main/App';
 
 // 事件推送之外保留 1s 轮询兜底（镜像 PhotoCleanupPage）。
@@ -153,25 +155,25 @@ export default {
   name: 'PhotoAITaskPanel',
   data() {
     return {
-      descriptionStatus: null,
+      taggingStatus: null,
       semanticStatus: null,
       exifStatus: null,
-      descriptionError: '',
+      taggingError: '',
       semanticError: '',
       exifError: '',
-      descriptionOff: null,
+      taggingOff: null,
       semanticOff: null,
       exifOff: null
     };
   },
   computed: {
-    descriptionStatusText() {
-      const status = this.descriptionStatus;
-      if (!status) return '正在读取图片描述任务状态...';
-      if (status.running) return '图片描述生成中';
-      if (status.cancelled) return '图片描述任务已取消，可继续';
-      if (status.completed) return '图片描述任务已完成';
-      return '图片描述任务未运行';
+    taggingStatusText() {
+      const status = this.taggingStatus;
+      if (!status) return '正在读取图片打标任务状态...';
+      if (status.running) return '图片打标进行中';
+      if (status.cancelled) return '图片打标任务已取消，可继续';
+      if (status.completed) return '图片打标任务已完成';
+      return '图片打标任务未运行';
     },
     semanticStatusText() {
       const status = this.semanticStatus;
@@ -191,23 +193,23 @@ export default {
       if (status.completed) return 'EXIF 补全任务已完成';
       return 'EXIF 补全任务未运行';
     },
-    descriptionProgressRatio() { return progressRatio(this.descriptionStatus); },
+    taggingProgressRatio() { return progressRatio(this.taggingStatus); },
     semanticProgressRatio() { return progressRatio(this.semanticStatus); },
     exifProgressRatio() { return progressRatio(this.exifStatus); },
-    descriptionFailures() { return (this.descriptionStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
+    taggingFailures() { return (this.taggingStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
     semanticFailures() { return (this.semanticStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
     exifFailures() { return (this.exifStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); }
   },
   mounted() {
     this._alive = true;
-    this.loadDescriptionStatus();
+    this.loadTaggingStatus();
     this.loadSemanticStatus();
     this.loadEXIFStatus();
     if (window.runtime?.EventsOn) {
-      const descriptionOff = window.runtime.EventsOn('image-ai-description-progress', status => {
-        this.descriptionStatus = { ...(this.descriptionStatus || {}), ...(status || {}) };
+      const taggingOff = window.runtime.EventsOn('image-ai-tagging-progress', status => {
+        this.taggingStatus = { ...(this.taggingStatus || {}), ...(status || {}) };
       });
-      if (typeof descriptionOff === 'function') this.descriptionOff = descriptionOff;
+      if (typeof taggingOff === 'function') this.taggingOff = taggingOff;
       const semanticOff = window.runtime.EventsOn('image-semantic-index-state', status => {
         this.semanticStatus = { ...(this.semanticStatus || {}), ...(status || {}) };
       });
@@ -221,7 +223,7 @@ export default {
   beforeUnmount() {
     this._alive = false;
     clearTimeout(this._pollTimer);
-    this.descriptionOff?.();
+    this.taggingOff?.();
     this.semanticOff?.();
     this.exifOff?.();
   },
@@ -229,20 +231,20 @@ export default {
     schedulePoll() {
       clearTimeout(this._pollTimer);
       if (!this._alive) return;
-      if (!this.descriptionStatus?.running && !this.semanticStatus?.running && !this.exifStatus?.running) return;
+      if (!this.taggingStatus?.running && !this.semanticStatus?.running && !this.exifStatus?.running) return;
       this._pollTimer = setTimeout(async () => {
         if (!this._alive) return;
-        if (this.descriptionStatus?.running) await this.loadDescriptionStatus();
+        if (this.taggingStatus?.running) await this.loadTaggingStatus();
         if (this.semanticStatus?.running) await this.loadSemanticStatus();
         if (this.exifStatus?.running) await this.loadEXIFStatus();
         this.schedulePoll();
       }, POLL_INTERVAL_MS);
     },
-    async loadDescriptionStatus() {
+    async loadTaggingStatus() {
       try {
-        this.descriptionStatus = await GetImageAIDescriptionStatus() || null;
+        this.taggingStatus = await GetImageAITaggingStatus() || null;
       } catch (err) {
-        this.descriptionError = `读取图片描述任务状态失败：${String(err?.message || err)}`;
+        this.taggingError = `读取图片打标任务状态失败：${String(err?.message || err)}`;
         return;
       }
       this.schedulePoll();
@@ -286,29 +288,29 @@ export default {
       }
       await this.loadEXIFStatus();
     },
-    async startDescription() {
-      if (this.descriptionStatus?.running) return;
-      this.descriptionError = '';
+    async startTagging() {
+      if (this.taggingStatus?.running) return;
+      this.taggingError = '';
       try {
-        this.descriptionStatus = { ...(this.descriptionStatus || {}), ...(await StartImageAIDescription() || {}) };
+        this.taggingStatus = { ...(this.taggingStatus || {}), ...(await StartImageAITagging() || {}) };
       } catch (err) {
         const message = String(err?.message || err);
-        this.descriptionError = message.includes('AI 配置不可用')
-          ? `启动图片描述任务失败：${message}。请先在上方配置 AI 接口的 BaseURL 与模型。`
-          : `启动图片描述任务失败：${message}`;
-        await this.loadDescriptionStatus();
+        this.taggingError = message.includes('AI 配置不可用')
+          ? `启动图片打标任务失败：${message}。请先在上方配置 AI 接口的 BaseURL 与模型。`
+          : `启动图片打标任务失败：${message}`;
+        await this.loadTaggingStatus();
         return;
       }
       this.schedulePoll();
     },
-    async cancelDescription() {
-      this.descriptionError = '';
+    async cancelTagging() {
+      this.taggingError = '';
       try {
-        await CancelImageAIDescription();
+        await CancelImageAITagging();
       } catch (err) {
-        this.descriptionError = `取消图片描述任务失败：${String(err?.message || err)}`;
+        this.taggingError = `取消图片打标任务失败：${String(err?.message || err)}`;
       }
-      await this.loadDescriptionStatus();
+      await this.loadTaggingStatus();
     },
     async startSemanticIndex() {
       if (this.semanticStatus?.running) return;

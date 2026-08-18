@@ -7,7 +7,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetLibraryWatcherStatus', 'RetryLibraryWatcherRoot', 'GetBackupStatus', 'ListDatabaseBackups',
   'CreateDatabaseBackup', 'RestoreDatabaseBackup', 'GetSemanticIndexStatus', 'StartSemanticIndex', 'CancelSemanticIndex',
   'GetAllImageDirectories', 'AddImageDirectory', 'UpdateImageDirectory', 'DeleteImageDirectory',
-  'GetImageAIDescriptionStatus', 'StartImageAIDescription', 'CancelImageAIDescription',
+  'GetImageAITaggingStatus', 'StartImageAITagging', 'CancelImageAITagging',
   'GetImageSemanticIndexStatus', 'StartImageSemanticIndex', 'CancelImageSemanticIndex',
   'GetImageEXIFBackfillStatus', 'StartImageEXIFBackfill', 'CancelImageEXIFBackfill'
 ].map(name => [name, vi.fn()])));
@@ -67,14 +67,14 @@ async function mountPage(status = {
   api.AddImageDirectory.mockResolvedValue({ id: 4, alias: '', path: '/media/raw' });
   api.UpdateImageDirectory.mockResolvedValue();
   api.DeleteImageDirectory.mockResolvedValue();
-  api.GetImageAIDescriptionStatus.mockResolvedValue(
+  api.GetImageAITaggingStatus.mockResolvedValue(
     imageTasks.description || { running: false, completed: false, total: 0, processed: 0, failures: [] }
   );
   api.GetImageSemanticIndexStatus.mockResolvedValue(
     imageTasks.semantic || { available: true, running: false, completed: false, processed: 0, total: 0, failures: [] }
   );
-  api.StartImageAIDescription.mockResolvedValue({ running: true, total: 5, processed: 0, failures: [] });
-  api.CancelImageAIDescription.mockResolvedValue();
+  api.StartImageAITagging.mockResolvedValue({ running: true, total: 5, processed: 0, failures: [] });
+  api.CancelImageAITagging.mockResolvedValue();
   api.StartImageSemanticIndex.mockResolvedValue({ available: true, running: true, total: 5, processed: 0, failures: [] });
   api.CancelImageSemanticIndex.mockResolvedValue();
   api.GetImageEXIFBackfillStatus.mockResolvedValue(
@@ -283,9 +283,9 @@ describe('SettingsPage image AI task panels', () => {
   it('renders both image task panels next to the video semantic index panel', async () => {
     const wrapper = await mountPage();
 
-    expect(api.GetImageAIDescriptionStatus).toHaveBeenCalledTimes(1);
+    expect(api.GetImageAITaggingStatus).toHaveBeenCalledTimes(1);
     expect(api.GetImageSemanticIndexStatus).toHaveBeenCalledTimes(1);
-    expect(wrapper.get('[data-test="image-ai-description-status"]').text()).toContain('图片描述任务未运行');
+    expect(wrapper.get('[data-test="image-ai-tagging-status"]').text()).toContain('图片打标任务未运行');
     expect(wrapper.get('[data-test="image-semantic-index-status"]').text()).toContain('图片语义索引可用，尚未构建');
     expect(wrapper.find('.semantic-index-controls').exists()).toBe(true);
   });
@@ -293,32 +293,32 @@ describe('SettingsPage image AI task panels', () => {
   it('starts and cancels the image AI description task', async () => {
     const wrapper = await mountPage();
 
-    expect(wrapper.find('[data-test="image-ai-description-cancel"]').exists()).toBe(false);
-    await wrapper.get('[data-test="image-ai-description-start"]').trigger('click');
+    expect(wrapper.find('[data-test="image-ai-tagging-cancel"]').exists()).toBe(false);
+    await wrapper.get('[data-test="image-ai-tagging-start"]').trigger('click');
     await flushPromises();
 
-    expect(api.StartImageAIDescription).toHaveBeenCalledTimes(1);
-    expect(wrapper.get('[data-test="image-ai-description-status"]').text()).toContain('图片描述生成中');
-    expect(wrapper.get('[data-test="image-ai-description-status"]').text()).toContain('进度 0/5');
-    expect(wrapper.get('[data-test="image-ai-description-start"]').attributes('disabled')).toBeDefined();
+    expect(api.StartImageAITagging).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-test="image-ai-tagging-status"]').text()).toContain('图片打标进行中');
+    expect(wrapper.get('[data-test="image-ai-tagging-status"]').text()).toContain('进度 0/5');
+    expect(wrapper.get('[data-test="image-ai-tagging-start"]').attributes('disabled')).toBeDefined();
 
-    api.GetImageAIDescriptionStatus.mockResolvedValue({ running: false, cancelled: true, total: 5, processed: 2, failures: [] });
-    await wrapper.get('[data-test="image-ai-description-cancel"]').trigger('click');
+    api.GetImageAITaggingStatus.mockResolvedValue({ running: false, cancelled: true, total: 5, processed: 2, failures: [] });
+    await wrapper.get('[data-test="image-ai-tagging-cancel"]').trigger('click');
     await flushPromises();
 
-    expect(api.CancelImageAIDescription).toHaveBeenCalledTimes(1);
-    expect(wrapper.get('[data-test="image-ai-description-status"]').text()).toContain('图片描述任务已取消');
+    expect(api.CancelImageAITagging).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-test="image-ai-tagging-status"]').text()).toContain('图片打标任务已取消');
     wrapper.unmount();
   });
 
   it('surfaces an unavailable AI configuration when the description task cannot start', async () => {
     const wrapper = await mountPage();
-    api.StartImageAIDescription.mockRejectedValueOnce('AI 配置不可用: BaseURL 或 Model 为空');
+    api.StartImageAITagging.mockRejectedValueOnce('AI 配置不可用: BaseURL 或 Model 为空');
 
-    await wrapper.get('[data-test="image-ai-description-start"]').trigger('click');
+    await wrapper.get('[data-test="image-ai-tagging-start"]').trigger('click');
     await flushPromises();
 
-    const error = wrapper.get('[data-test="image-ai-description-error"]');
+    const error = wrapper.get('[data-test="image-ai-tagging-error"]');
     expect(error.text()).toContain('AI 配置不可用');
     expect(error.text()).toContain('请先在上方配置 AI 接口');
   });
@@ -337,9 +337,9 @@ describe('SettingsPage image AI task panels', () => {
       }
     });
 
-    expect(wrapper.get('[data-test="image-ai-description-status"]').text()).toContain('图片描述任务已完成');
-    expect(wrapper.get('[data-test="image-ai-description-failures"]').text()).toContain('raw.nef');
-    expect(wrapper.get('[data-test="image-ai-description-failures"]').text()).toContain('decode_unsupported');
+    expect(wrapper.get('[data-test="image-ai-tagging-status"]').text()).toContain('图片打标任务已完成');
+    expect(wrapper.get('[data-test="image-ai-tagging-failures"]').text()).toContain('raw.nef');
+    expect(wrapper.get('[data-test="image-ai-tagging-failures"]').text()).toContain('decode_unsupported');
   });
 
   it('starts and cancels the image semantic index task', async () => {
@@ -382,11 +382,11 @@ describe('SettingsPage image AI task panels', () => {
 
   it('subscribes to all image task events and unbinds them on unmount', async () => {
     const handlers = {};
-    const off = { description: vi.fn(), semantic: vi.fn(), exif: vi.fn() };
+    const off = { tagging: vi.fn(), semantic: vi.fn(), exif: vi.fn() };
     window.runtime = {
       EventsOn: vi.fn((event, handler) => {
         handlers[event] = handler;
-        if (event === 'image-ai-description-progress') return off.description;
+        if (event === 'image-ai-tagging-progress') return off.tagging;
         if (event === 'image-semantic-index-state') return off.semantic;
         if (event === 'image-exif-backfill-progress') return off.exif;
         return () => {};
@@ -395,21 +395,21 @@ describe('SettingsPage image AI task panels', () => {
 
     const wrapper = await mountPage();
 
-    expect(typeof handlers['image-ai-description-progress']).toBe('function');
+    expect(typeof handlers['image-ai-tagging-progress']).toBe('function');
     expect(typeof handlers['image-semantic-index-state']).toBe('function');
     expect(typeof handlers['image-exif-backfill-progress']).toBe('function');
 
-    handlers['image-ai-description-progress']({ running: true, total: 8, processed: 3, succeeded: 3, failures: [] });
+    handlers['image-ai-tagging-progress']({ running: true, total: 8, processed: 3, succeeded: 3, failures: [] });
     handlers['image-semantic-index-state']({ available: true, running: true, total: 8, processed: 4, failures: [] });
     handlers['image-exif-backfill-progress']({ running: true, total: 8, processed: 5, succeeded: 5, failures: [] });
     await wrapper.vm.$nextTick();
 
-    expect(wrapper.get('[data-test="image-ai-description-status"]').text()).toContain('进度 3/8');
+    expect(wrapper.get('[data-test="image-ai-tagging-status"]').text()).toContain('进度 3/8');
     expect(wrapper.get('[data-test="image-semantic-index-status"]').text()).toContain('进度 4/8');
     expect(wrapper.get('[data-test="image-exif-backfill-status"]').text()).toContain('进度 5/8');
 
     wrapper.unmount();
-    expect(off.description).toHaveBeenCalledTimes(1);
+    expect(off.tagging).toHaveBeenCalledTimes(1);
     expect(off.semantic).toHaveBeenCalledTimes(1);
     expect(off.exif).toHaveBeenCalledTimes(1);
   });

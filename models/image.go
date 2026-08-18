@@ -35,8 +35,6 @@ type Image struct {
 	GPSLongitude    *float64       `json:"gps_longitude,omitempty"`                          // GPS 经度，NULL=无定位
 	ExifParsedAt    *time.Time     `json:"exif_parsed_at,omitempty" ts_type:"string"`        // EXIF 解析完成时间，NULL=未解析
 	Tags            []Tag          `gorm:"many2many:image_tags;" json:"tags"`                // 标签（多对多，与视频共享 tags 表）
-	// 列表/详情通过 Preload 回填，网格卡片直接展示描述；不主动 Preload 时保持 nil，不额外查库。
-	AIDescriptions  []ImageAIDescription `gorm:"foreignKey:ImageID" json:"ai_descriptions,omitempty"`
 	CreatedAt       time.Time      `json:"created_at" ts_type:"string"`
 	UpdatedAt       time.Time      `json:"updated_at" ts_type:"string"`
 	DeletedAt       SoftDeleteTime `gorm:"index" json:"-"`
@@ -68,28 +66,6 @@ type ImageTrashEntry struct {
 	LastError    string    `json:"last_error"`
 	CreatedAt    time.Time `gorm:"index" json:"created_at" ts_type:"string"`
 	UpdatedAt    time.Time `json:"updated_at" ts_type:"string"`
-}
-
-// ImageAIDescription 单表承载图片 AI 描述的结果与任务状态（设计 4.6.2）。
-type ImageAIDescription struct {
-	ID              uint       `gorm:"primarykey" json:"id"`
-	ImageID         uint       `gorm:"uniqueIndex;not null" json:"image_id"`
-	Image           Image      `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
-	Status          string     `gorm:"size:32;not null;index" json:"status"`
-	Description     string     `gorm:"type:text;not null;default:''" json:"description"`
-	ModelIdentifier string     `gorm:"size:255;not null;default:''" json:"model_identifier"`
-	ErrorCode       string     `gorm:"size:64;not null;default:''" json:"error_code"`
-	LastError       string     `gorm:"type:text;not null;default:''" json:"last_error"`
-	AttemptCount    int        `gorm:"not null;default:0" json:"attempt_count"`
-	GeneratedAt     *time.Time `json:"generated_at,omitempty" ts_type:"string"`
-	CreatedAt       time.Time  `json:"created_at" ts_type:"string"`
-	UpdatedAt       time.Time  `json:"updated_at" ts_type:"string"`
-}
-
-// TableName 固定表名为设计契约的 image_ai_descriptions；GORM 默认复数化会把
-// AIDescription 错误拆分为 image_a_idescriptions。
-func (ImageAIDescription) TableName() string {
-	return "image_ai_descriptions"
 }
 
 // ImageSemanticIndex 记录按模型与维度隔离的图片向量落库成功状态，镜像 VideoSemanticIndex。

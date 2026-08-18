@@ -187,8 +187,12 @@ func Init() error {
 	ensureCoreQueryIndexes(db)
 	ensureImageQueryIndexes(db)
 	ensureAITaggingIndexes(db)
+	EnsureImageAITaggingIndexes(db)
 	ensureShortFeedIndexes(db)
 	ensureSubtitleSearchIndexes(db)
+	// 2026-08-18 裁决：图片 AI 产出由描述改为标签，遗留的描述与其语义向量一次性删除。
+	// 幂等，表已删则空转。放在迁移与索引之后，确保它面对的是已经就位的表结构。
+	CleanupLegacyImageDescriptions(db)
 	// 初始化默认设置
 	var settings models.Settings
 	if err := db.First(&settings).Error; err == gorm.ErrRecordNotFound {
@@ -459,6 +463,27 @@ func ensureAITaggingIndexes(db *gorm.DB) {
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
 			log.Printf("创建 AI 标签索引失败: %v sql=%s", err, statement)
+		}
+	}
+}
+
+// EnsureImageAITaggingIndexes 与 ensureAITaggingIndexes 同形，只负责图片侧 AI 标签候选表族的
+// 显式索引；照片页查询索引归 ensureImageQueryIndexes，两者职责不同，不要合并。
+// 导出是因为它建的部分唯一索引 AutoMigrate 表达不了，测试库要建出同样的约束才有保真度。
+func EnsureImageAITaggingIndexes(db *gorm.DB) {
+	statements := []string{
+		`CREATE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_image_status ON image_ai_tag_candidates(image_id, status)`,
+		`CREATE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_matched_status ON image_ai_tag_candidates(matched_tag_id, status)`,
+		// 一张图同一个标签只能有一条待审候选。既是 persistImageSuggestions 的 upsert 冲突目标，
+		// 也是批量与单张重跑万一并发时的最后一道兜底，避免插出两条一模一样的待审行。
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_pending_unique ON image_ai_tag_candidates(image_id, normalized_name) WHERE status = 'pending'`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_approval_image_tag ON image_ai_tag_approval_records(image_id, tag_id)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_approval_records_candidate_id ON image_ai_tag_approval_records(candidate_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_image_ai_tagging_states_status_processed ON image_ai_tagging_states(status, last_processed_at)`,
+	}
+	for _, statement := range statements {
+		if err := db.Exec(statement).Error; err != nil {
+			log.Printf("创建图片 AI 标签索引失败: %v sql=%s", err, statement)
 		}
 	}
 }

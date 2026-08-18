@@ -64,16 +64,16 @@
           <option value="taken">拍摄时间</option>
         </select>
         <select
-          v-model="filters.aiDescriptionState"
+          v-model="filters.aiTagState"
           class="select-input photo-toolbar__ai"
           :disabled="searchMode === 'semantic'"
-          :title="searchMode === 'semantic' ? '语义模式本身就依赖描述，不再叠加此筛选' : '按 AI 描述的生成状态筛选'"
+          :title="searchMode === 'semantic' ? '语义模式不叠加此筛选' : '按 AI 打标状态筛选'"
           data-test="photo-ai-state"
         >
-          <option value="">AI 描述：全部</option>
-          <option value="described">已生成</option>
-          <option value="undescribed">未生成</option>
-          <option value="failed">生成失败</option>
+          <option value="">AI 标签：全部</option>
+          <option value="pending">有待审候选</option>
+          <option value="tagged">已打标</option>
+          <option value="untagged">未打标</option>
         </select>
         <label
           class="photo-toolbar__timeline"
@@ -124,6 +124,10 @@
           清理审阅
           <span v-if="cleanupRunning" class="photo-cleanup-badge" data-test="photo-cleanup-badge" :title="cleanupBadgeTitle">分析中 {{ cleanupProgressText }}</span>
           <span v-else-if="cleanupDone" class="photo-cleanup-badge photo-cleanup-badge--done" data-test="photo-cleanup-done" title="清理分析已完成，点击查看候选">待审阅 {{ cleanupGroupCount }} 组</span>
+        </button>
+        <button type="button" class="btn-secondary photo-ai-tag-open-btn" data-test="photo-ai-tag-review-open" @click="openAITagReview">
+          AI 标签审阅
+          <span v-if="aiTagPending > 0" class="photo-cleanup-badge" data-test="photo-ai-tag-badge" :title="`${aiTagPending} 条候选待审`">待审 {{ aiTagPending }}</span>
         </button>
         <button type="button" class="btn-secondary" data-test="photo-trash-open" @click="showTrash = true">回收站</button>
       </div>
@@ -247,7 +251,7 @@
               <small>
                 {{ formatBytes(image.size) }}<template v-if="image.personal_rating != null"> · {{ image.personal_rating }} 分</template><template v-if="scoreLabel(image)"> · 相关度 {{ scoreLabel(image) }}</template>
               </small>
-              <p v-if="cardDescription(image)" class="photo-card__description" :title="cardDescription(image)" data-test="photo-card-description">{{ cardDescription(image) }}</p>
+              <p v-if="cardTagText(image)" class="photo-card__tags" :title="cardTagText(image)" data-test="photo-card-tags">{{ cardTagText(image) }}</p>
             </div>
           </article>
         </div>
@@ -410,20 +414,38 @@
 
         <div class="photo-viewer__block">
           <div class="photo-viewer__block-heading">
-            <h4>AI 描述</h4>
+            <h4>AI 标签候选</h4>
             <button
               type="button"
               class="btn-secondary btn-compact"
-              :disabled="regeneratingDescription"
-              data-test="photo-ai-regenerate"
-              @click="regenerateDescription"
-            >{{ regeneratingDescription ? '生成中...' : '重新生成' }}</button>
+              :disabled="retagging"
+              data-test="photo-ai-retag"
+              @click="retagImage"
+            >{{ retagging ? '打标中...' : '重新打标' }}</button>
           </div>
           <p v-if="viewerDetailError" class="photo-viewer__muted">{{ viewerDetailError }}</p>
-          <p v-else-if="viewerDescription" class="photo-viewer__description" data-test="photo-ai-description">{{ viewerDescription }}</p>
-          <p v-else class="photo-viewer__muted" data-test="photo-ai-description-empty">尚未生成</p>
-          <small v-if="descriptionGeneratedAt" class="photo-viewer__muted" data-test="photo-ai-generated-at">生成时间：{{ formatDateTime(descriptionGeneratedAt) }}</small>
-          <p v-if="regenerateError" class="photo-library__error" role="alert" data-test="photo-ai-regenerate-error">{{ regenerateError }}</p>
+          <ul v-else-if="viewerCandidates.length" class="photo-viewer__candidates" data-test="photo-ai-candidates">
+            <li v-for="candidate in viewerCandidates" :key="candidate.id" class="photo-viewer__candidate">
+              <span class="tag-chip" :style="{ '--tag-color': candidate.matched_tag?.color }">{{ candidate.suggested_name }}</span>
+              <span class="photo-viewer__muted">{{ confidenceLabel(candidate.confidence) }}</span>
+              <button
+                type="button"
+                class="btn-primary btn-compact"
+                :disabled="candidateBusy"
+                :data-test="`photo-ai-candidate-approve-${candidate.id}`"
+                @click="approveViewerCandidate(candidate)"
+              >接受</button>
+              <button
+                type="button"
+                class="btn-secondary btn-compact"
+                :disabled="candidateBusy"
+                :data-test="`photo-ai-candidate-reject-${candidate.id}`"
+                @click="rejectViewerCandidate(candidate)"
+              >拒绝</button>
+            </li>
+          </ul>
+          <p v-else class="photo-viewer__muted" data-test="photo-ai-candidates-empty">没有待审候选。</p>
+          <p v-if="retagError" class="photo-library__error" role="alert" data-test="photo-ai-retag-error">{{ retagError }}</p>
         </div>
 
         <div class="photo-viewer__block">
@@ -449,18 +471,26 @@
     </BaseModal>
 
     <PhotoTrashDialog :visible="showTrash" @close="showTrash = false" @restored="handleRestored" />
+
+    <ImageAITagReviewPanel
+      :visible="showAITagReview"
+      @close="closeAITagReview"
+      @changed="handleAITagApproved"
+    />
   </main>
 </template>
 
 <script>
 import {
   AddTagToImage, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
-  ListImageFolderGroups, ListImageTimelineBuckets, RegenerateImageAIDescription, RemoveTagFromImage, SearchImagePage,
+  ApproveImageAITagCandidate, GetImageAITaggingSummary, ListImageAITagCandidates, RejectImageAITagCandidate, RetagImage,
+  ListImageFolderGroups, ListImageTimelineBuckets, RemoveTagFromImage, SearchImagePage,
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import PhotoCleanupPage from './PhotoCleanupPage.vue';
 import PhotoTrashDialog from './PhotoTrashDialog.vue';
+import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
 import {
@@ -487,7 +517,7 @@ const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
-  components: { BaseModal, PhotoCleanupPage, PhotoTrashDialog },
+  components: { BaseModal, PhotoCleanupPage, PhotoTrashDialog, ImageAITagReviewPanel },
   props: {
     settings: { type: Object, required: true },
     tags: { type: Array, default: () => [] },
@@ -529,18 +559,21 @@ export default {
         takenBefore: '',
         sortMode: 'recent',
         // ''=不筛 / described=已生成 / undescribed=未生成 / failed=生成失败
-        aiDescriptionState: ''
+        aiTagState: ''
       },
       viewerIndex: -1,
       viewerImageError: false,
       viewerDetail: null,
       viewerDetailError: '',
-      descriptionGeneratedAt: '',
-      regeneratingDescription: false,
-      regenerateError: '',
+      viewerCandidates: [],
+      retagging: false,
+      candidateBusy: false,
+      retagError: '',
       ratingDraft: '',
       tagToAdd: 0,
       showTrash: false,
+      showAITagReview: false,
+      aiTagPending: 0,
       showCleanup: false,
       deleteTarget: null,
       deleteFileChoice: false,
@@ -634,18 +667,12 @@ export default {
       const p = photoCleanupStore.status?.progress || {};
       return `清理分析进行中${p.message ? '：' + p.message : ''}`;
     },
-    // 卡片描述：优先取已完成的状态行；仅 Preload 回填（SearchImagePage）的图有值。
-    cardDescription() {
-      return (image) => {
-        const rows = image?.ai_descriptions || [];
-        const done = rows.find(r => r.status === 'completed' && String(r.description || '').trim());
-        return done ? String(done.description).trim() : '';
-      };
-    },
-    viewerDescription() {
-      return this.viewerDetail && Number(this.viewerDetail.image?.id) === Number(this.viewerImage?.id)
-        ? String(this.viewerDetail.ai_description || '').trim()
-        : '';
+    // 卡片标签：直接用图片已有的标签，SearchImagePage 已经预载。
+    cardTagText() {
+      return (image) => (image?.tags || [])
+        .map(tag => String(tag?.name || '').trim())
+        .filter(Boolean)
+        .join(' · ');
     },
     addableTags() {
       const applied = new Set((this.viewerImage?.tags || []).map(tag => Number(tag.id)));
@@ -655,7 +682,7 @@ export default {
       return Boolean(this.filters.keyword.trim()) || this.filters.tagIDs.length > 0 || this.filters.favoriteOnly
         || this.filters.minRating !== '' || this.filters.maxRating !== ''
         || this.filters.takenAfter !== '' || this.filters.takenBefore !== ''
-        || this.filters.aiDescriptionState !== '';
+        || this.filters.aiTagState !== '';
     },
     // exifFacts 只列出真正有值的项；全空时整个「拍摄信息」区不渲染。
     exifFacts() {
@@ -690,7 +717,7 @@ export default {
     },
     'filters.favoriteOnly'() { this.reload(); },
     'filters.sortMode'() { this.reload(); },
-    'filters.aiDescriptionState'() { this.reload(); },
+    'filters.aiTagState'() { this.reload(); },
     'filters.minRating'() { this.reload(); },
     'filters.maxRating'() { this.reload(); },
     'filters.takenAfter'() { this.reload(); },
@@ -719,6 +746,7 @@ export default {
     this.loadImageDirectories();
     this.loadImageTags();
     this.loadSemanticStatus();
+    this.refreshAITagSummary();
     this.reload();
     // 清理审阅状态由本页持续轮询：面板关闭后分析仍在后台跑，徽标可见进度。
     startPhotoCleanupPolling();
@@ -985,7 +1013,7 @@ export default {
         taken_after: this.takenBoundary(this.filters.takenAfter, false),
         taken_before: this.takenBoundary(this.filters.takenBefore, true),
         sort_mode: this.effectiveSortMode,
-        ai_description_state: this.filters.aiDescriptionState
+        ai_tag_state: this.filters.aiTagState
       };
     },
     buildSemanticFilter() {
@@ -1211,6 +1239,28 @@ export default {
         this.imageDirectories = [];
       }
     },
+    async refreshAITagSummary() {
+      try {
+        const summary = await GetImageAITaggingSummary();
+        this.aiTagPending = summary?.pending || 0;
+      } catch (err) {
+        // 待审计数只是个徽标，取不到就不显示，不打断页面。
+        this.aiTagPending = 0;
+      }
+    },
+    openAITagReview() {
+      this.showAITagReview = true;
+    },
+    closeAITagReview() {
+      this.showAITagReview = false;
+      this.refreshAITagSummary();
+    },
+    async handleAITagApproved() {
+      // 接受候选会给图片挂上标签：标签筛选栏与当前列表都可能过期。
+      await this.loadImageTags();
+      this.libraryChanged = true;
+      this.refreshAITagSummary();
+    },
     openCleanup() {
       // 审阅页会把网格从 DOM 里换走，先记下位置，返回时照原样恢复。
       this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
@@ -1275,8 +1325,8 @@ export default {
       this.viewerImageError = false;
       this.viewerDetail = null;
       this.viewerDetailError = '';
-      this.descriptionGeneratedAt = '';
-      this.regenerateError = '';
+      this.viewerCandidates = [];
+      this.retagError = '';
       this.tagToAdd = 0;
     },
     viewerNext() {
@@ -1290,8 +1340,9 @@ export default {
       this._detailToken = token;
       this.viewerDetail = null;
       this.viewerDetailError = '';
-      this.descriptionGeneratedAt = '';
-      this.regenerateError = '';
+      this.viewerCandidates = [];
+      this.retagError = '';
+      this.loadViewerCandidates(imageID);
       try {
         const detail = await GetImageDetail(imageID);
         if (this._detailToken !== token) return;
@@ -1305,26 +1356,78 @@ export default {
         if (this._detailToken === token) this.viewerDetailError = `加载详情失败：${err}`;
       }
     },
-    async regenerateDescription() {
-      const image = this.viewerImage;
-      if (!image || this.regeneratingDescription) return;
-      this.regeneratingDescription = true;
-      this.regenerateError = '';
+    confidenceLabel(value) {
+      return { high: '高', medium: '中', low: '低' }[value] || value;
+    },
+    // 候选与详情分开取：详情接口不带候选，而候选在接受/拒绝后要能单独刷新。
+    async loadViewerCandidates(imageID) {
+      const token = Symbol('photo-candidates');
+      this._candidateToken = token;
       try {
-        const result = await RegenerateImageAIDescription(image.id);
+        const items = await ListImageAITagCandidates(imageID, '', '');
+        if (this._candidateToken !== token) return;
+        this.viewerCandidates = items || [];
+      } catch (err) {
+        if (this._candidateToken !== token) return;
+        this.viewerCandidates = [];
+        this.retagError = `加载标签候选失败：${err}`;
+      }
+    },
+    async retagImage() {
+      const image = this.viewerImage;
+      if (!image || this.retagging) return;
+      this.retagging = true;
+      this.retagError = '';
+      try {
+        const candidates = await RetagImage(image.id);
         if (Number(this.viewerImage?.id) !== Number(image.id)) return;
-        const description = String(result?.description || '').trim();
-        this.viewerDetail = { ...(this.viewerDetail || {}), image, ai_description: description };
-        this.descriptionGeneratedAt = result?.generated_at || '';
-        this.viewerDetailError = '';
+        this.viewerCandidates = candidates || [];
+        this.refreshAITagSummary();
       } catch (err) {
         if (Number(this.viewerImage?.id) !== Number(image.id)) return;
         const message = String(err?.message || err);
-        this.regenerateError = message.includes('AI 配置不可用')
-          ? `重新生成描述失败：${message}。请先在设置页配置 AI 接口的 BaseURL 与模型。`
-          : `重新生成描述失败：${message}`;
+        this.retagError = message.includes('AI 配置不可用')
+          ? `重新打标失败：${message}。请先在设置页配置 AI 接口的 BaseURL 与模型。`
+          : `重新打标失败：${message}`;
       } finally {
-        this.regeneratingDescription = false;
+        this.retagging = false;
+      }
+    },
+    async approveViewerCandidate(candidate) {
+      const image = this.viewerImage;
+      if (!image || this.candidateBusy) return;
+      this.candidateBusy = true;
+      this.retagError = '';
+      try {
+        const item = await ApproveImageAITagCandidate(candidate.id);
+        // 该图已有手工标签时后端整体作废候选而不写标签，得说清楚为什么没挂上。
+        if (item && item.status === 'superseded') {
+          this.retagError = '这张图片已经有你手工打的标签，AI 候选已整体作废，没有写入标签。';
+        } else {
+          await this.loadViewerDetail(image.id);
+          await this.loadImageTags();
+        }
+        await this.loadViewerCandidates(image.id);
+        this.refreshAITagSummary();
+      } catch (err) {
+        this.retagError = `接受候选失败：${err}`;
+      } finally {
+        this.candidateBusy = false;
+      }
+    },
+    async rejectViewerCandidate(candidate) {
+      const image = this.viewerImage;
+      if (!image || this.candidateBusy) return;
+      this.candidateBusy = true;
+      this.retagError = '';
+      try {
+        await RejectImageAITagCandidate(candidate.id);
+        await this.loadViewerCandidates(image.id);
+        this.refreshAITagSummary();
+      } catch (err) {
+        this.retagError = `拒绝候选失败：${err}`;
+      } finally {
+        this.candidateBusy = false;
       }
     },
     handleKeydown(event) {
@@ -1550,15 +1653,14 @@ export default {
 .photo-card__meta { display: grid; align-content: start; gap: 2px; height: var(--photo-card-meta, 86px); box-sizing: border-box; overflow: hidden; padding: 9px 11px 10px; }
 .photo-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-primary); }
 .photo-card__meta small { color: var(--text-muted); font-size: 11px; }
-.photo-card__description {
+.photo-card__tags {
   margin: 2px 0 0;
   color: var(--text-secondary);
   font-size: 11px;
   line-height: 1.4;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .photo-empty { padding: 48px 16px; text-align: center; color: var(--text-muted); }
@@ -1596,7 +1698,8 @@ export default {
 .photo-viewer__tag-add { display: flex; gap: 8px; }
 .photo-viewer__tag-add .select-input { flex: 1; min-width: 0; }
 .photo-viewer__muted { margin: 0; color: var(--text-muted); font-size: 12px; }
-.photo-viewer__description { margin: 0; color: var(--text-primary); font-size: 13px; line-height: 1.7; white-space: pre-wrap; }
+.photo-viewer__candidates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.photo-viewer__candidate { display: flex; align-items: center; gap: 8px; }
 .photo-delete__options { display: grid; gap: 8px; margin-top: 14px; }
 .photo-delete__options label { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; }
 

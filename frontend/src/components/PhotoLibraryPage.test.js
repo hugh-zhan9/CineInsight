@@ -6,7 +6,9 @@ const api = vi.hoisted(() => Object.fromEntries([
   'AddTagToImage', 'RemoveTagFromImage', 'GetAllImageDirectories', 'SyncImageDirectories',
   'DeleteImage', 'ListImageTrashEntries', 'RestoreImageTrashEntry',
   'StartImageCleanupAnalysis', 'GetImageCleanupStatus', 'DismissImageNearDuplicateGroup', 'BatchDeleteImages',
-  'GetImageSemanticIndexStatus', 'SearchImagesSemantic', 'RegenerateImageAIDescription',
+  'GetImageSemanticIndexStatus', 'SearchImagesSemantic',
+  'RetagImage', 'ListImageAITagCandidates', 'ApproveImageAITagCandidate', 'RejectImageAITagCandidate',
+  'GetImageAITaggingSummary',
   'ListImageFolderGroups', 'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage'
 ].map(name => [name, vi.fn()])));
 
@@ -60,7 +62,7 @@ beforeEach(() => {
   api.SearchImagePage.mockResolvedValue(makePage([]));
   api.ListImageFolderGroups.mockResolvedValue([]);
   api.SyncImageDirectories.mockResolvedValue({ added: 0, relocated: 0, removed: 0, skipped: 0, errors: [] });
-  api.GetImageDetail.mockImplementation(id => Promise.resolve({ image: makeImage(Number(id)), ai_description: '' }));
+  api.GetImageDetail.mockImplementation(id => Promise.resolve({ image: makeImage(Number(id)) }));
   api.SetImageFavorite.mockImplementation((id, favorite) => Promise.resolve({ id, is_favorite: favorite }));
   api.SetImageRating.mockImplementation((id, rating) => Promise.resolve({ id, personal_rating: rating }));
   api.DeleteImage.mockResolvedValue();
@@ -71,7 +73,11 @@ beforeEach(() => {
   api.BatchDeleteImages.mockResolvedValue({ requested: 0, succeeded: 0, failed: 0, errors: [] });
   api.GetImageSemanticIndexStatus.mockResolvedValue({ available: true, running: false, completed: true, unavailable: '' });
   api.SearchImagesSemantic.mockResolvedValue({ hits: [], coverage: { indexed: 0, total: 0 }, has_more: false });
-  api.RegenerateImageAIDescription.mockResolvedValue({ image_id: 1, description: '', generated_at: null });
+  api.RetagImage.mockResolvedValue([]);
+  api.ListImageAITagCandidates.mockResolvedValue([]);
+  api.ApproveImageAITagCandidate.mockResolvedValue({ id: 1, status: 'approved' });
+  api.RejectImageAITagCandidate.mockResolvedValue();
+  api.GetImageAITaggingSummary.mockResolvedValue({ config_available: true, pending: 0, pending_images: 0 });
   api.ListImageTimelineBuckets.mockResolvedValue([]);
   api.GetImageTags.mockResolvedValue([]);
   api.OpenImageDirectory.mockResolvedValue();
@@ -316,7 +322,7 @@ describe('PhotoLibraryPage viewer', () => {
 
     expect(wrapper.find('[data-test="photo-viewer"]').exists()).toBe(true);
     expect(api.GetImageDetail).toHaveBeenCalledWith(1);
-    expect(wrapper.get('[data-test="photo-ai-description-empty"]').text()).toBe('尚未生成');
+    expect(wrapper.get('[data-test="photo-ai-candidates-empty"]').text()).toBe('没有待审候选。');
 
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
     await flushPromises();
@@ -350,7 +356,7 @@ describe('PhotoLibraryPage viewer', () => {
       gps_longitude: 121.466667
     });
     api.SearchImagePage.mockResolvedValueOnce(makePage([withEXIF]));
-    api.GetImageDetail.mockResolvedValue({ image: withEXIF, ai_description: '' });
+    api.GetImageDetail.mockResolvedValue({ image: withEXIF });
     const wrapper = await mountPage();
 
     await wrapper.get('.photo-card__media').trigger('click');
@@ -377,63 +383,104 @@ describe('PhotoLibraryPage viewer', () => {
     expect(wrapper.find('[data-test="photo-viewer-exif"]').exists()).toBe(false);
   });
 
-  it('shows the AI description from GetImageDetail when present', async () => {
+  it('lists this image\'s pending AI tag candidates', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(3)]));
-    api.GetImageDetail.mockResolvedValue({ image: makeImage(3), ai_description: '一片海边的落日。' });
+    api.GetImageDetail.mockResolvedValue({ image: makeImage(3) });
+    api.ListImageAITagCandidates.mockResolvedValue([
+      { id: 11, image_id: 3, suggested_name: '海边', confidence: 'high' }
+    ]);
     const wrapper = await mountPage();
 
     await wrapper.get('.photo-card__media').trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="photo-ai-description"]').text()).toBe('一片海边的落日。');
+    expect(api.ListImageAITagCandidates).toHaveBeenCalledWith(3, '', '');
+    expect(wrapper.get('[data-test="photo-ai-candidates"]').text()).toContain('海边');
+    expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(false);
   });
 });
 
-describe('PhotoLibraryPage AI description regenerate', () => {
-  async function openViewer(detail = { image: makeImage(3), ai_description: '' }) {
+describe('PhotoLibraryPage AI retag and candidate review', () => {
+  async function openViewer(candidates = []) {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(3)]));
-    api.GetImageDetail.mockResolvedValue(detail);
+    api.GetImageDetail.mockResolvedValue({ image: makeImage(3) });
+    api.ListImageAITagCandidates.mockResolvedValue(candidates);
     const wrapper = await mountPage();
     await wrapper.get('.photo-card__media').trigger('click');
     await flushPromises();
     return wrapper;
   }
 
-  it('regenerates the description in place and shows the generated time', async () => {
+  it('retags in place and shows the returned candidates', async () => {
     const wrapper = await openViewer();
-    expect(wrapper.find('[data-test="photo-ai-description-empty"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(true);
 
     let resolveCall;
-    api.RegenerateImageAIDescription.mockReturnValueOnce(new Promise(resolve => { resolveCall = resolve; }));
-    await wrapper.get('[data-test="photo-ai-regenerate"]').trigger('click');
+    api.RetagImage.mockReturnValueOnce(new Promise(resolve => { resolveCall = resolve; }));
+    await wrapper.get('[data-test="photo-ai-retag"]').trigger('click');
     await wrapper.vm.$nextTick();
 
-    const button = wrapper.get('[data-test="photo-ai-regenerate"]');
+    const button = wrapper.get('[data-test="photo-ai-retag"]');
     expect(button.attributes('disabled')).toBeDefined();
-    expect(button.text()).toBe('生成中...');
+    expect(button.text()).toBe('打标中...');
 
-    resolveCall({ image_id: 3, description: '沙滩上的两个人在看日落。', generated_at: '2026-08-07T12:00:00Z' });
+    resolveCall([{ id: 21, image_id: 3, suggested_name: '日落', confidence: 'medium' }]);
     await flushPromises();
 
-    expect(api.RegenerateImageAIDescription).toHaveBeenCalledWith(3);
-    expect(wrapper.get('[data-test="photo-ai-description"]').text()).toBe('沙滩上的两个人在看日落。');
-    expect(wrapper.get('[data-test="photo-ai-generated-at"]').text()).toContain('生成时间');
-    expect(wrapper.find('[data-test="photo-ai-description-empty"]').exists()).toBe(false);
-    expect(wrapper.get('[data-test="photo-ai-regenerate"]').attributes('disabled')).toBeUndefined();
+    expect(api.RetagImage).toHaveBeenCalledWith(3);
+    expect(wrapper.get('[data-test="photo-ai-candidates"]').text()).toContain('日落');
+    expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="photo-ai-retag"]').attributes('disabled')).toBeUndefined();
   });
 
   it('keeps the placeholder and reports an unavailable AI configuration', async () => {
     const wrapper = await openViewer();
-    api.RegenerateImageAIDescription.mockRejectedValueOnce('AI 配置不可用: BaseURL 或 Model 为空');
+    api.RetagImage.mockRejectedValueOnce('AI 配置不可用: BaseURL 或 Model 为空');
 
-    await wrapper.get('[data-test="photo-ai-regenerate"]').trigger('click');
+    await wrapper.get('[data-test="photo-ai-retag"]').trigger('click');
     await flushPromises();
 
-    const error = wrapper.get('[data-test="photo-ai-regenerate-error"]');
+    const error = wrapper.get('[data-test="photo-ai-retag-error"]');
     expect(error.text()).toContain('AI 配置不可用');
     expect(error.text()).toContain('请先在设置页配置 AI 接口');
-    expect(wrapper.find('[data-test="photo-ai-description-empty"]').exists()).toBe(true);
-    expect(wrapper.get('[data-test="photo-ai-regenerate"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="photo-ai-retag"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('approves a candidate from the viewer and refreshes the image', async () => {
+    const wrapper = await openViewer([{ id: 31, image_id: 3, suggested_name: '海边', confidence: 'high' }]);
+    api.ApproveImageAITagCandidate.mockResolvedValueOnce({ id: 31, status: 'approved' });
+    api.ListImageAITagCandidates.mockResolvedValue([]);
+
+    await wrapper.get('[data-test="photo-ai-candidate-approve-31"]').trigger('click');
+    await flushPromises();
+
+    expect(api.ApproveImageAITagCandidate).toHaveBeenCalledWith(31);
+    expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(true);
+  });
+
+  // 后端在图片已有手工标签时返回 superseded 而不是报错，界面必须解释标签为什么没挂上。
+  it('explains why approving wrote nothing when the image has manual tags', async () => {
+    const wrapper = await openViewer([{ id: 32, image_id: 3, suggested_name: '海边', confidence: 'high' }]);
+    api.ApproveImageAITagCandidate.mockResolvedValueOnce({ id: 32, status: 'superseded' });
+    api.ListImageAITagCandidates.mockResolvedValue([]);
+
+    await wrapper.get('[data-test="photo-ai-candidate-approve-32"]').trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="photo-ai-retag-error"]').text()).toContain('手工打的标签');
+  });
+
+  it('rejects a candidate without touching the image tags', async () => {
+    const wrapper = await openViewer([{ id: 33, image_id: 3, suggested_name: '海边', confidence: 'high' }]);
+    api.RejectImageAITagCandidate.mockResolvedValueOnce();
+    api.ListImageAITagCandidates.mockResolvedValue([]);
+
+    await wrapper.get('[data-test="photo-ai-candidate-reject-33"]').trigger('click');
+    await flushPromises();
+
+    expect(api.RejectImageAITagCandidate).toHaveBeenCalledWith(33);
+    expect(api.ApproveImageAITagCandidate).not.toHaveBeenCalled();
   });
 });
 
@@ -595,22 +642,22 @@ describe('PhotoLibraryPage delete', () => {
   });
 });
 
-describe('PhotoLibraryPage AI description filter', () => {
-  it('sends the selected AI description state and reloads', async () => {
+describe('PhotoLibraryPage AI tag filter', () => {
+  it('sends the selected AI tag state and reloads', async () => {
     api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
     const wrapper = await mountPage();
-    expect(api.SearchImagePage.mock.calls[0][0].filter.ai_description_state).toBe('');
+    expect(api.SearchImagePage.mock.calls[0][0].filter.ai_tag_state).toBe('');
 
-    await wrapper.get('[data-test="photo-ai-state"]').setValue('undescribed');
+    await wrapper.get('[data-test="photo-ai-state"]').setValue('pending');
     await flushPromises();
 
     const last = api.SearchImagePage.mock.calls.at(-1)[0];
-    expect(last.filter.ai_description_state).toBe('undescribed');
+    expect(last.filter.ai_tag_state).toBe('pending');
     expect(last.cursor).toBeUndefined();
 
-    await wrapper.get('[data-test="photo-ai-state"]').setValue('failed');
+    await wrapper.get('[data-test="photo-ai-state"]').setValue('untagged');
     await flushPromises();
-    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.ai_description_state).toBe('failed');
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.ai_tag_state).toBe('untagged');
   });
 
   it('disables the AI filter in semantic search mode', async () => {
@@ -844,7 +891,6 @@ describe('PhotoLibraryPage cleanup review', () => {
           ...makeImage(1, { name: 'keep.jpg', width: 4000, height: 3000, directory: '/photos' }),
           file_size: 8_000_000,
           mod_time_ns: Date.parse('2026-03-01T00:00:00Z') * 1e6,
-          description: '海边日落',
           tags: [{ id: 7, name: '旅行', color: '#0d9488' }],
           is_favorite: true
         },
@@ -852,7 +898,6 @@ describe('PhotoLibraryPage cleanup review', () => {
           ...makeImage(2, { name: 'copy.jpg', width: 800, height: 600, directory: '/backup' }),
           file_size: 1_000_000,
           mod_time_ns: Date.parse('2026-03-03T00:00:00Z') * 1e6,
-          description: '',
           tags: []
         }],
         reason: '文件大小和采样哈希一致',
@@ -869,7 +914,8 @@ describe('PhotoLibraryPage cleanup review', () => {
     expect(text).toContain('7.6 MB');
     expect(text).toContain('★ 已收藏');
     expect(text).toContain('旅行');
-    expect(wrapper.get('[data-test="cleanup-member-description"]').text()).toContain('海边日落');
+    // 清理审阅刻意不展示 AI 内容：近似重复的两张图标签几乎一定相同，在这里帮不上判断。
+    expect(wrapper.find('[data-test="cleanup-member-description"]').exists()).toBe(false);
     // 与保留项的差异直接标出来，不用自己换算。
     expect(text).toContain('仅 1/25');
     expect(text).toContain('小 87%');

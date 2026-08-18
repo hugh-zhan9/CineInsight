@@ -48,8 +48,8 @@ type ImageFilter struct {
 	TakenAfter   *time.Time `json:"taken_after,omitempty" ts_type:"string"`
 	TakenBefore  *time.Time `json:"taken_before,omitempty" ts_type:"string"`
 	SortMode     string     `json:"sort_mode"`
-	// AIDescriptionState 按 AI 描述状态筛选，取值见 ImageAIDescriptionState* 常量；空串表示不筛。
-	AIDescriptionState string `json:"ai_description_state"`
+	// AITagState 按 AI 打标状态筛选，取值见 ImageAITagState* 常量；空串表示不筛。
+	AITagState string `json:"ai_tag_state"`
 }
 
 // ImageFolderCover 是文件夹图集卡片使用的最小封面信息。
@@ -68,13 +68,13 @@ type ImageFolderGroup struct {
 	Covers    []ImageFolderCover `json:"covers"`
 }
 
-// AI 描述筛选取值。undescribed 覆盖"从未排队""排队中""生成失败"三种情况，
-// 因为它们对用户是同一件事：这张图现在没有描述。
+// AI 打标筛选取值。pending 是"有候选等着你审"，untagged 覆盖"从未打标""跳过""失败"
+// 三种情况，因为它们对用户是同一件事：这张图现在既没有 AI 标签也没有待审候选。
 const (
-	ImageAIDescriptionStateAny         = ""
-	ImageAIDescriptionStateDescribed   = "described"
-	ImageAIDescriptionStateUndescribed = "undescribed"
-	ImageAIDescriptionStateFailed      = "failed"
+	ImageAITagStateAny      = ""
+	ImageAITagStatePending  = "pending"
+	ImageAITagStateTagged   = "tagged"
+	ImageAITagStateUntagged = "untagged"
 )
 
 // ImageCursor 是 SearchImagePage 的稳定分页游标，字段按排序模式取用。
@@ -103,10 +103,10 @@ type ImagePageRequest struct {
 	Limit  int          `json:"limit"`
 }
 
-// ImageDetail 聚合单张图片与已生成的 AI 描述；描述由后续切片回填，未生成时为空串。
+// ImageDetail 是单张图片的详情。AI 标签候选不放在这里：候选有自己的审阅接口，
+// 且接受/拒绝之后要能单独刷新，塞进详情会逼前端为了一条候选重拉整个详情。
 type ImageDetail struct {
-	Image         models.Image `json:"image"`
-	AIDescription string       `json:"ai_description"`
+	Image models.Image `json:"image"`
 }
 
 // BatchImageOperationError 记录批量操作中单张图片的失败原因。
@@ -176,11 +176,11 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 	if filter.TakenAfter != nil && filter.TakenBefore != nil && filter.TakenAfter.After(*filter.TakenBefore) {
 		return ImageFilter{}, fmt.Errorf("拍摄时间筛选上限不能早于下限")
 	}
-	filter.AIDescriptionState = strings.TrimSpace(filter.AIDescriptionState)
-	switch filter.AIDescriptionState {
-	case ImageAIDescriptionStateAny, ImageAIDescriptionStateDescribed, ImageAIDescriptionStateUndescribed, ImageAIDescriptionStateFailed:
+	filter.AITagState = strings.TrimSpace(filter.AITagState)
+	switch filter.AITagState {
+	case ImageAITagStateAny, ImageAITagStatePending, ImageAITagStateTagged, ImageAITagStateUntagged:
 	default:
-		return ImageFilter{}, fmt.Errorf("不支持的 AI 描述筛选: %s", filter.AIDescriptionState)
+		return ImageFilter{}, fmt.Errorf("不支持的 AI 打标筛选: %s", filter.AITagState)
 	}
 	filter.SortMode = strings.TrimSpace(filter.SortMode)
 	if filter.SortMode == "" {
@@ -224,13 +224,16 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 	if filter.TakenBefore != nil {
 		query = query.Where("images.taken_at <= ?", *filter.TakenBefore)
 	}
-	switch filter.AIDescriptionState {
-	case ImageAIDescriptionStateDescribed:
-		query = query.Where("EXISTS (SELECT 1 FROM image_ai_descriptions d WHERE d.image_id = images.id AND d.status = ?)", imageAIDescriptionStatusCompleted)
-	case ImageAIDescriptionStateUndescribed:
-		query = query.Where("NOT EXISTS (SELECT 1 FROM image_ai_descriptions d WHERE d.image_id = images.id AND d.status = ?)", imageAIDescriptionStatusCompleted)
-	case ImageAIDescriptionStateFailed:
-		query = query.Where("EXISTS (SELECT 1 FROM image_ai_descriptions d WHERE d.image_id = images.id AND d.status = ?)", imageAIDescriptionStatusFailed)
+	// 「已打标」看的是审批记录而不是 image_tags：手工标签不算 AI 打标的成果。
+	switch filter.AITagState {
+	case ImageAITagStatePending:
+		query = query.Where("EXISTS (SELECT 1 FROM image_ai_tag_candidates c WHERE c.image_id = images.id AND c.status = ?)", models.AITagCandidateStatusPending)
+	case ImageAITagStateTagged:
+		query = query.Where("EXISTS (SELECT 1 FROM image_ai_tag_approval_records r WHERE r.image_id = images.id)")
+	case ImageAITagStateUntagged:
+		query = query.
+			Where("NOT EXISTS (SELECT 1 FROM image_ai_tag_approval_records r WHERE r.image_id = images.id)").
+			Where("NOT EXISTS (SELECT 1 FROM image_ai_tag_candidates c WHERE c.image_id = images.id AND c.status = ?)", models.AITagCandidateStatusPending)
 	}
 	if len(filter.TagIDs) > 0 {
 		subquery := database.DB.Table("image_tags").Select("image_id").
@@ -335,10 +338,7 @@ func (s *ImageLibraryService) SearchImagePage(request ImagePageRequest) (*ImageP
 		return nil, err
 	}
 
-	query := applyImageFilter(database.DB.Model(&models.Image{}).Preload("Tags").
-		Preload("AIDescriptions", func(db *gorm.DB) *gorm.DB {
-			return db.Select("image_id", "status", "description")
-		}), filter)
+	query := applyImageFilter(database.DB.Model(&models.Image{}).Preload("Tags"), filter)
 	switch filter.SortMode {
 	case ImageSortRecent:
 		if cursor != nil {
@@ -525,16 +525,7 @@ func (s *ImageLibraryService) GetImageDetail(imageID uint) (*ImageDetail, error)
 	if err := database.DB.Preload("Tags").First(&image, imageID).Error; err != nil {
 		return nil, err
 	}
-	detail := &ImageDetail{Image: image}
-	var description models.ImageAIDescription
-	err := database.DB.Where("image_id = ?", imageID).First(&description).Error
-	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-	if err == nil {
-		detail.AIDescription = description.Description
-	}
-	return detail, nil
+	return &ImageDetail{Image: image}, nil
 }
 
 // SetImageFavorite 更新照片收藏状态。

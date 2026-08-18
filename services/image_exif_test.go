@@ -699,39 +699,6 @@ func TestImageExifStripJPEGMetadataKeepsOnlyWhitelistedAPPSegments(t *testing.T)
 	}
 }
 
-// TestImageExifAIDescriptionRefusesToSendWhenStripFails 钉住 AC-14 的 fail-closed 语义：
-// 剥不掉就一个字节都不外发，并留下 metadata_strip_failed 留痕。
-func TestImageExifAIDescriptionRefusesToSendWhenStripFails(t *testing.T) {
-	called := false
-	client := imageDescriptionClientFunc(func(ctx context.Context, imageID uint, prompt string, jpegData []byte) (string, error) {
-		called = true
-		return "不该走到这里", nil
-	})
-	svc := newImageAIDescriptionTestService(t, client)
-	// 缩略图产物不是可解析的 JPEG——剥除会失败。
-	svc.thumbnails.SetDecodeRunnersForTest(
-		func(ctx context.Context, sourcePath, destinationPath string, maxEdge int) error {
-			return os.WriteFile(destinationPath, []byte("definitely-not-a-jpeg"), 0644)
-		},
-		func(ctx context.Context, sourcePath string) (int, int, error) { return 8, 6, nil },
-	)
-	img := imageAIDescriptionTestImage(t, "heic")
-
-	if _, err := svc.RegenerateImageAIDescription(img.ID); err == nil {
-		t.Fatal("剥除失败时应报错")
-	}
-	if called {
-		t.Fatal("剥除失败后仍然发起了外发请求")
-	}
-	var row models.ImageAIDescription
-	if err := database.DB.First(&row, "image_id = ?", img.ID).Error; err != nil {
-		t.Fatalf("读取描述行失败: %v", err)
-	}
-	if row.Status != imageAIDescriptionStatusFailed || row.ErrorCode != imageAIDescriptionErrorMetadataStrip {
-		t.Fatalf("失败留痕不符: status=%s code=%s", row.Status, row.ErrorCode)
-	}
-}
-
 // TestImageExifRejectsValueBudgetAmplification 覆盖解析期的内存放大防护：goexif 会为
 // 每个 IFD 条目单独保留一份值拷贝，成千上万个条目指向同一大块数据能把小文件放大成
 // 数百 GB 内存。预检超预算时按"没有 EXIF"处理，不进解析器。
@@ -824,43 +791,7 @@ func TestImageExifFFmpegThumbnailCarriesNoEXIF(t *testing.T) {
 	}
 }
 
-// TestImageExifAIDescriptionSendsStrippedJPEG 端到端断言外发字节：缩略图带 EXIF+GPS，
-// 到达 client 的 payload 必须已被剥净。
-func TestImageExifAIDescriptionSendsStrippedJPEG(t *testing.T) {
-	var sent []byte
-	client := imageDescriptionClientFunc(func(ctx context.Context, imageID uint, prompt string, jpegData []byte) (string, error) {
-		sent = append([]byte(nil), jpegData...)
-		return "一段中文描述", nil
-	})
-	svc := newImageAIDescriptionTestService(t, client)
-	// 覆写缩略图 runner，让 heic 产出带 EXIF+GPS 的 JPEG（复现 sips 的行为）。
-	fixture := exifFixtureJPEG(t)
-	svc.thumbnails.SetDecodeRunnersForTest(
-		func(ctx context.Context, sourcePath, destinationPath string, maxEdge int) error {
-			return os.WriteFile(destinationPath, fixture, 0644)
-		},
-		func(ctx context.Context, sourcePath string) (int, int, error) { return 64, 48, nil },
-	)
-	img := imageAIDescriptionTestImage(t, "heic")
-
-	if _, err := svc.RegenerateImageAIDescription(img.ID); err != nil {
-		t.Fatalf("生成描述失败: %v", err)
-	}
-	if len(sent) == 0 {
-		t.Fatal("client 没有收到图片数据")
-	}
-	if exifBytesPresent(sent) {
-		t.Fatal("外发字节仍含 Exif 段")
-	}
-	if gpsRationalBytesPresent(sent) {
-		t.Fatal("外发字节仍含 GPS 坐标")
-	}
-	if _, err := jpeg.Decode(bytes.NewReader(sent)); err != nil {
-		t.Fatalf("外发字节不是可解码 JPEG: %v", err)
-	}
-}
-
-// TestImageExifSemanticIndexTextExcludesEXIF 守住"索引文本=标题+标签+AI 描述"三段不变：
+// TestImageExifSemanticIndexTextExcludesEXIF 守住"索引文本=标题+标签"两段不变（4.6.6 修订版 D-010）：
 // GPS 与相机参数不得进入语义索引。
 func TestImageExifSemanticIndexTextExcludesEXIF(t *testing.T) {
 	latitude, longitude := exifFixtureLatitude, exifFixtureLongitude
@@ -877,7 +808,7 @@ func TestImageExifSemanticIndexTextExcludesEXIF(t *testing.T) {
 		GPSLongitude: &longitude,
 		Tags:         []models.Tag{{Name: "海边"}},
 	}
-	text, _ := (&ImageSemanticIndexService{}).buildIndexText(img, "画面里是一片海滩。", SemanticIndexConfig{MaxTextRunes: 4000})
+	text, _ := (&ImageSemanticIndexService{}).buildIndexText(img, SemanticIndexConfig{MaxTextRunes: 4000})
 	for _, forbidden := range []string{
 		exifFixtureMake, exifFixtureModel, exifFixtureLens, exifFixtureExposure,
 		"31.23", "121.46", "GPS", "2024",
@@ -886,9 +817,9 @@ func TestImageExifSemanticIndexTextExcludesEXIF(t *testing.T) {
 			t.Fatalf("索引文本混入 EXIF 片段 %q: %q", forbidden, text)
 		}
 	}
-	for _, expected := range []string{"beach.jpg", "海边", "画面里是一片海滩。"} {
+	for _, expected := range []string{"beach.jpg", "海边"} {
 		if !bytes.Contains([]byte(text), []byte(expected)) {
-			t.Fatalf("索引文本缺少三段之一 %q: %q", expected, text)
+			t.Fatalf("索引文本缺少两段之一 %q: %q", expected, text)
 		}
 	}
 }

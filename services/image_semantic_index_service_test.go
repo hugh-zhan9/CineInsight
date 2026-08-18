@@ -34,18 +34,12 @@ func imageSemanticTestProvider(model string) SemanticIndexConfigProvider {
 	})
 }
 
-func createImageSemanticTestImage(t *testing.T, name, description string, tags ...models.Tag) models.Image {
+// createImageSemanticTestImage 建图。索引文本自 4.6.6 起只由文件名与标签构成。
+func createImageSemanticTestImage(t *testing.T, name string, tags ...models.Tag) models.Image {
 	t.Helper()
 	image := models.Image{Name: name, Path: "/library/" + name, Tags: tags}
 	if err := database.DB.Create(&image).Error; err != nil {
 		t.Fatalf("create image: %v", err)
-	}
-	if description != "" {
-		if err := database.DB.Create(&models.ImageAIDescription{
-			ImageID: image.ID, Status: imageAIDescriptionStatusCompleted, Description: description,
-		}).Error; err != nil {
-			t.Fatalf("create image description: %v", err)
-		}
 	}
 	return image
 }
@@ -64,16 +58,13 @@ func waitImageSemanticIndex(t *testing.T, service *ImageSemanticIndexService) Im
 	return ImageSemanticIndexStatus{}
 }
 
-func TestImageSemanticIndexSkipsImagesWithoutCompletedDescription(t *testing.T) {
+// TestImageSemanticIndexIndexesEveryImage 钉住 4.6.6 修订后的 D-010：
+// 索引文本只由标题与标签构成，没有任何 AI 产出的图片也照样进索引。
+func TestImageSemanticIndexIndexesEveryImage(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
-	described := createImageSemanticTestImage(t, "cat.jpg", "一只在窗台晒太阳的橘猫")
-	noRow := createImageSemanticTestImage(t, "dog.jpg", "")
-	failedRow := createImageSemanticTestImage(t, "bird.jpg", "")
-	if err := database.DB.Create(&models.ImageAIDescription{
-		ImageID: failedRow.ID, Status: imageAIDescriptionStatusFailed, LastError: "endpoint down",
-	}).Error; err != nil {
-		t.Fatalf("create failed description: %v", err)
-	}
+	described := createImageSemanticTestImage(t, "cat.jpg")
+	noRow := createImageSemanticTestImage(t, "dog.jpg")
+	failedRow := createImageSemanticTestImage(t, "bird.jpg")
 	// 视频侧既有行：图片索引运行不得触碰视频语义表（零交集）。
 	video := models.Video{Name: "movie.mp4", Path: "/library/movie.mp4"}
 	if err := database.DB.Create(&video).Error; err != nil {
@@ -98,10 +89,10 @@ func TestImageSemanticIndexSkipsImagesWithoutCompletedDescription(t *testing.T) 
 		t.Fatalf("start image semantic indexing: %v", err)
 	}
 	status := waitImageSemanticIndex(t, service)
-	if !status.Completed || status.Total != 3 || status.Succeeded != 1 || status.Skipped != 2 || status.Failed != 0 {
+	if !status.Completed || status.Total != 3 || status.Succeeded != 3 || status.Skipped != 0 || status.Failed != 0 {
 		t.Fatalf("unexpected final status: %+v", status)
 	}
-	if calls != 1 {
+	if calls != 3 {
 		t.Fatalf("embedding calls = %d", calls)
 	}
 
@@ -115,14 +106,23 @@ func TestImageSemanticIndexSkipsImagesWithoutCompletedDescription(t *testing.T) 
 	}
 
 	var rows []models.ImageSemanticIndex
-	if err := database.DB.Find(&rows).Error; err != nil {
+	if err := database.DB.Order("image_id ASC").Find(&rows).Error; err != nil {
 		t.Fatalf("load image semantic rows: %v", err)
 	}
-	if len(rows) != 1 || rows[0].ImageID != described.ID || rows[0].ContentFingerprint == "" {
+	if len(rows) != 3 {
 		t.Fatalf("unexpected image semantic rows: %+v", rows)
 	}
-	if noRow.ID == rows[0].ImageID || failedRow.ID == rows[0].ImageID {
-		t.Fatalf("skipped image was indexed: %+v", rows)
+	indexed := map[uint]string{}
+	for _, row := range rows {
+		if row.ContentFingerprint == "" {
+			t.Fatalf("empty fingerprint: %+v", row)
+		}
+		indexed[row.ImageID] = row.ContentFingerprint
+	}
+	for _, image := range []models.Image{described, noRow, failedRow} {
+		if _, ok := indexed[image.ID]; !ok {
+			t.Fatalf("image %q was not indexed: %+v", image.Name, rows)
+		}
 	}
 	var videoRows, videoAttempts int64
 	if err := database.DB.Model(&models.VideoSemanticIndex{}).Count(&videoRows).Error; err != nil || videoRows != 1 {
@@ -133,14 +133,63 @@ func TestImageSemanticIndexSkipsImagesWithoutCompletedDescription(t *testing.T) 
 	}
 }
 
+// TestImageSemanticIndexTextIsTitleAndTagsOnly 钉住索引文本与指纹的新契约：
+// 只由文件名与标签决定，标签不变则指纹稳定，标签变化则指纹变化。
+func TestImageSemanticIndexTextIsTitleAndTagsOnly(t *testing.T) {
+	service := &ImageSemanticIndexService{}
+	config := SemanticIndexConfig{MaxTextRunes: 8192}
+	image := models.Image{
+		Name: "beach.jpg",
+		Tags: []models.Tag{{Name: "日落"}, {Name: "海边"}},
+	}
+	text, fingerprint := service.buildIndexText(image, config)
+	// 标签按 normalizeLocalMetadataName 排序后拼接，与图片上的关联顺序无关。
+	if text != "标题: beach.jpg\n标签: 日落 / 海边" {
+		t.Fatalf("index text = %q", text)
+	}
+
+	// 同名同标签（含标签顺序变化）→ 指纹稳定。
+	sameText, sameFingerprint := service.buildIndexText(models.Image{
+		Name: "beach.jpg",
+		Tags: []models.Tag{{Name: "海边"}, {Name: "日落"}},
+	}, config)
+	if sameText != text || sameFingerprint != fingerprint {
+		t.Fatalf("fingerprint is not stable for identical name+tags: %q/%q", sameText, sameFingerprint)
+	}
+
+	// 标签变化 → 指纹变化。
+	_, tagChanged := service.buildIndexText(models.Image{
+		Name: "beach.jpg",
+		Tags: []models.Tag{{Name: "海边"}},
+	}, config)
+	if tagChanged == fingerprint {
+		t.Fatalf("fingerprint did not change with tags: %s", tagChanged)
+	}
+
+	// 文件名变化 → 指纹变化。
+	_, nameChanged := service.buildIndexText(models.Image{
+		Name: "sunset.jpg",
+		Tags: []models.Tag{{Name: "海边"}, {Name: "日落"}},
+	}, config)
+	if nameChanged == fingerprint {
+		t.Fatalf("fingerprint did not change with name: %s", nameChanged)
+	}
+
+	// 无标签的图片仍有可索引文本（不再被跳过）。
+	untaggedText, untaggedFingerprint := service.buildIndexText(models.Image{Name: "plain.jpg"}, config)
+	if untaggedText != "标题: plain.jpg" || untaggedFingerprint == "" {
+		t.Fatalf("untagged index text = %q fingerprint = %q", untaggedText, untaggedFingerprint)
+	}
+}
+
 func TestImageSemanticIndexPipelineSanitizesIndexText(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
 	tag := models.Tag{Name: "夜景", IsActive: true}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatalf("create tag: %v", err)
 	}
-	image := createImageSemanticTestImage(t, "night.jpg",
-		"雨后的城市夜景，霓虹倒影。原图位于 /Users/private/photos/night.jpg，鉴权 secret-key。", tag)
+	// 文件名里混入 API Key（必须脱敏）。
+	image := createImageSemanticTestImage(t, "night-secret-key.jpg", tag)
 
 	requestText := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -179,12 +228,12 @@ func TestImageSemanticIndexPipelineSanitizesIndexText(t *testing.T) {
 	}
 
 	input := <-requestText
-	for _, forbidden := range []string{"secret-key", "/Users/private"} {
+	for _, forbidden := range []string{"secret-key", "/Users/private", "AI 描述", "雨后的城市夜景"} {
 		if strings.Contains(input, forbidden) {
 			t.Errorf("embedding input contains %q: %s", forbidden, input)
 		}
 	}
-	for _, expected := range []string{"标题: night.jpg", "标签: 夜景", "AI 描述:", "雨后的城市夜景"} {
+	for _, expected := range []string{"标题: night-[redacted-secret].jpg", "标签: 夜景"} {
 		if !strings.Contains(input, expected) {
 			t.Errorf("embedding input missing %q: %s", expected, input)
 		}
@@ -198,9 +247,11 @@ func TestImageSemanticIndexPipelineSanitizesIndexText(t *testing.T) {
 	}
 }
 
-func TestImageSemanticIndexFingerprintResumeAndDescriptionUpdateReindexes(t *testing.T) {
+// TestImageSemanticIndexFingerprintResumeAndTagUpdateReindexes 守住续跑跳过不回归，
+// 并钉住指纹只跟标签走：描述改动不再触发重建，标签改动才会。
+func TestImageSemanticIndexFingerprintResumeAndTagUpdateReindexes(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
-	image := createImageSemanticTestImage(t, "cat.jpg", "一只橘猫")
+	image := createImageSemanticTestImage(t, "cat.jpg")
 	service := NewImageSemanticIndexService(database.DB, capability, imageSemanticTestProvider("embed-v1"))
 	calls := 0
 	service.embedderFactory = func(SemanticIndexConfig) SemanticEmbeddingClient {
@@ -229,10 +280,14 @@ func TestImageSemanticIndexFingerprintResumeAndDescriptionUpdateReindexes(t *tes
 		t.Fatalf("resume run status=%+v calls=%d", status, calls)
 	}
 
-	// 描述更新 → 指纹失配 → 下次任务重建该图（设计 4.7.4）。
-	if err := database.DB.Model(&models.ImageAIDescription{}).
-		Where("image_id = ?", image.ID).Update("description", "一只趴在键盘上的橘猫").Error; err != nil {
-		t.Fatalf("update description: %v", err)
+	// 标签变化 → 指纹失配 → 下次任务重建该图。
+	tag := models.Tag{Name: "橘猫", IsActive: true}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	if err := database.DB.Model(&models.Image{ID: image.ID}).
+		Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("append tag: %v", err)
 	}
 	if _, err := service.Start(context.Background()); err != nil {
 		t.Fatalf("start reindex run: %v", err)
@@ -244,13 +299,13 @@ func TestImageSemanticIndexFingerprintResumeAndDescriptionUpdateReindexes(t *tes
 		t.Fatalf("reload indexed row: %v", err)
 	}
 	if indexed.ContentFingerprint == firstFingerprint {
-		t.Fatalf("fingerprint did not change after description update: %s", indexed.ContentFingerprint)
+		t.Fatalf("fingerprint did not change after tag update: %s", indexed.ContentFingerprint)
 	}
 }
 
 func TestImageSemanticIndexRejectsModelMismatchOrNeedsRebuildProfile(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
-	createImageSemanticTestImage(t, "cat.jpg", "一只橘猫")
+	createImageSemanticTestImage(t, "cat.jpg")
 	if err := database.DB.Create(&models.SemanticIndexProfile{ID: 1, ActiveModel: "other-model", Generation: 1}).Error; err != nil {
 		t.Fatalf("create profile: %v", err)
 	}
@@ -278,7 +333,7 @@ func TestImageSemanticIndexRejectsModelMismatchOrNeedsRebuildProfile(t *testing.
 
 func TestImageSemanticIndexDimensionMismatchLeavesFailureTrail(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
-	createImageSemanticTestImage(t, "cat.jpg", "一只橘猫")
+	createImageSemanticTestImage(t, "cat.jpg")
 	service := NewImageSemanticIndexService(database.DB, capability, imageSemanticTestProvider("embed-v1"))
 	vector := []float64{0.1, 0.2}
 	service.embedderFactory = func(SemanticIndexConfig) SemanticEmbeddingClient {
@@ -292,7 +347,7 @@ func TestImageSemanticIndexDimensionMismatchLeavesFailureTrail(t *testing.T) {
 	}
 
 	// 维度漂移（端点换模型未换名）：失败留痕 + needs_rebuild。
-	mismatched := createImageSemanticTestImage(t, "dog.jpg", "一只柴犬")
+	mismatched := createImageSemanticTestImage(t, "dog.jpg")
 	vector = []float64{0.1, 0.2, 0.3}
 	if _, err := service.Start(context.Background()); err != nil {
 		t.Fatalf("start drifted run: %v", err)
@@ -322,8 +377,8 @@ func TestImageSemanticIndexDimensionMismatchLeavesFailureTrail(t *testing.T) {
 
 func TestImageSemanticIndexCancellationResumesWithoutRepeatingSuccess(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
-	createImageSemanticTestImage(t, "first.jpg", "第一张")
-	createImageSemanticTestImage(t, "second.jpg", "第二张")
+	createImageSemanticTestImage(t, "first.jpg")
+	createImageSemanticTestImage(t, "second.jpg")
 	service := NewImageSemanticIndexService(database.DB, capability, imageSemanticTestProvider("embed-v1"))
 	blocking := &cancellingSemanticEmbedder{secondStarted: make(chan struct{})}
 	service.embedderFactory = func(SemanticIndexConfig) SemanticEmbeddingClient { return blocking }
@@ -364,7 +419,7 @@ func TestImageSemanticIndexCancellationResumesWithoutRepeatingSuccess(t *testing
 
 func TestImageSemanticIndexRejectsConcurrentStart(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
-	createImageSemanticTestImage(t, "cat.jpg", "一只橘猫")
+	createImageSemanticTestImage(t, "cat.jpg")
 	service := NewImageSemanticIndexService(database.DB, capability, imageSemanticTestProvider("embed-v1"))
 	started := make(chan struct{})
 	var once sync.Once
@@ -417,8 +472,8 @@ func TestImageSemanticIndexUnavailableCapabilityIsExplicit(t *testing.T) {
 
 func TestImageSemanticIndexExcludesSoftDeletedImages(t *testing.T) {
 	capability := setupImageSemanticIndexTestDB(t)
-	kept := createImageSemanticTestImage(t, "kept.jpg", "保留的图片")
-	removed := createImageSemanticTestImage(t, "removed.jpg", "被软删的图片")
+	kept := createImageSemanticTestImage(t, "kept.jpg")
+	removed := createImageSemanticTestImage(t, "removed.jpg")
 	if err := database.DB.Delete(&models.Image{}, removed.ID).Error; err != nil {
 		t.Fatalf("soft delete image: %v", err)
 	}

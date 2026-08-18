@@ -2,7 +2,11 @@ package database
 
 import (
 	"errors"
+	"fmt"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 	"time"
 	"video-master/models"
@@ -32,7 +36,6 @@ func TestImageSchemaMigrationIsRepeatableAndCreatesAllTables(t *testing.T) {
 		&models.Image{},
 		&models.ImageDirectory{},
 		&models.ImageTrashEntry{},
-		&models.ImageAIDescription{},
 		&models.ImageNearDuplicateDismissal{},
 	} {
 		if !db.Migrator().HasTable(model) {
@@ -285,5 +288,313 @@ func TestLegacySettingsUpgradeLeavesImageExtensionsEmpty(t *testing.T) {
 	}
 	if settings.ImageExtensions != "" {
 		t.Fatalf("legacy image extensions must stay empty for caller-side fallback, got %q", settings.ImageExtensions)
+	}
+}
+
+// openImageSchemaTestDBWithForeignKeys 打开一个开启外键强制的 SQLite；SQLite 默认不强制外键，
+// 不显式打开时级联断言会全部空过。
+func openImageSchemaTestDBWithForeignKeys(t *testing.T) *gorm.DB {
+	t.Helper()
+	dsn := filepath.Join(t.TempDir(), "image_schema_fk.db") + "?_foreign_keys=on"
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("open sqlite with foreign keys: %v", err)
+	}
+	var enabled int
+	if err := db.Raw(`PRAGMA foreign_keys`).Scan(&enabled).Error; err != nil {
+		t.Fatalf("read foreign_keys pragma: %v", err)
+	}
+	if enabled != 1 {
+		t.Fatal("foreign key enforcement is off, cascade assertions would pass vacuously")
+	}
+	return db
+}
+
+func TestImageAITaggingSchemaMirrorsVideoSideIndexShape(t *testing.T) {
+	db := openImageSchemaTestDB(t)
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatalf("automigrate image schema: %v", err)
+	}
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatalf("rerun image schema migration: %v", err)
+	}
+	for _, model := range []any{
+		&models.ImageAITagCandidate{},
+		&models.ImageAITagApprovalRecord{},
+		&models.ImageAITaggingState{},
+	} {
+		if !db.Migrator().HasTable(model) {
+			t.Fatalf("image AI tagging table missing for %T", model)
+		}
+	}
+	for _, tableName := range []string{
+		"image_ai_tag_candidates",
+		"image_ai_tag_approval_records",
+		"image_ai_tagging_states",
+	} {
+		if !db.Migrator().HasTable(tableName) {
+			t.Fatalf("image AI tagging table name drifted, %s missing", tableName)
+		}
+	}
+	for run := 0; run < 2; run++ {
+		EnsureImageAITaggingIndexes(db)
+	}
+	for _, expectation := range []struct {
+		index   string
+		columns []string
+	}{
+		{"idx_image_ai_tag_candidates_image_status", []string{"image_id", "status"}},
+		{"idx_image_ai_tag_candidates_matched_status", []string{"matched_tag_id", "status"}},
+		{"idx_image_ai_tag_candidates_status_approved", []string{"status", "approved_at"}},
+		{"idx_image_ai_tag_candidates_status_rejected", []string{"status", "rejected_at"}},
+		{"idx_image_ai_tag_candidates_normalized_name", []string{"normalized_name"}},
+		{"idx_image_ai_tag_candidates_confidence", []string{"confidence"}},
+		{"idx_image_ai_tag_approval_image_tag", []string{"image_id", "tag_id"}},
+		{"idx_image_ai_tag_approval_records_candidate_id", []string{"candidate_id"}},
+		{"idx_image_ai_tag_approval_records_image_id", []string{"image_id"}},
+		{"idx_image_ai_tag_approval_records_tag_id", []string{"tag_id"}},
+		{"idx_image_ai_tagging_states_image_id", []string{"image_id"}},
+		{"idx_image_ai_tagging_states_status_processed", []string{"status", "last_processed_at"}},
+		{"idx_image_ai_tagging_states_evidence_fingerprint", []string{"evidence_fingerprint"}},
+	} {
+		assertSQLiteIndexColumns(t, db, expectation.index, expectation.columns)
+	}
+	// 图片侧是单轮请求，没有 run 历史表，候选表不得带 run_id。
+	if db.Migrator().HasColumn(&models.ImageAITagCandidate{}, "run_id") {
+		t.Fatal("image candidate table must not carry run_id")
+	}
+}
+
+func TestImageAITaggingUniqueKeysMirrorVideoSide(t *testing.T) {
+	db := openImageSchemaTestDB(t)
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatalf("automigrate image schema: %v", err)
+	}
+	EnsureImageAITaggingIndexes(db)
+
+	approval := models.ImageAITagApprovalRecord{ImageID: 1, TagID: 2, CandidateID: 3}
+	if err := db.Create(&approval).Error; err != nil {
+		t.Fatalf("create approval record: %v", err)
+	}
+	sameImageAndTag := models.ImageAITagApprovalRecord{ImageID: 1, TagID: 2, CandidateID: 4}
+	if err := db.Create(&sameImageAndTag).Error; err == nil {
+		t.Fatal("duplicate (image_id, tag_id) approval record must be rejected")
+	}
+	sameCandidate := models.ImageAITagApprovalRecord{ImageID: 5, TagID: 6, CandidateID: 3}
+	if err := db.Create(&sameCandidate).Error; err == nil {
+		t.Fatal("duplicate candidate_id approval record must be rejected")
+	}
+
+	state := models.ImageAITaggingState{ImageID: 1, Status: models.AITaggingStateStatusPending}
+	if err := db.Create(&state).Error; err != nil {
+		t.Fatalf("create tagging state: %v", err)
+	}
+	duplicateState := models.ImageAITaggingState{ImageID: 1, Status: models.AITaggingStateStatusCompleted}
+	if err := db.Create(&duplicateState).Error; err == nil {
+		t.Fatal("duplicate image_id tagging state must be rejected")
+	}
+}
+
+func TestImageAITaggingRowsCascadeWhenImageIsHardDeleted(t *testing.T) {
+	db := openImageSchemaTestDBWithForeignKeys(t)
+	if err := db.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatalf("automigrate image schema: %v", err)
+	}
+
+	tag := models.Tag{Name: "海边"}
+	if err := db.Create(&tag).Error; err != nil {
+		t.Fatalf("create tag: %v", err)
+	}
+	deleted := models.Image{Name: "deleted.jpg", Path: "/tmp/deleted.jpg", Directory: "/tmp", Format: "jpg"}
+	kept := models.Image{Name: "kept.jpg", Path: "/tmp/kept.jpg", Directory: "/tmp", Format: "jpg"}
+	if err := db.Create(&[]*models.Image{&deleted, &kept}).Error; err != nil {
+		t.Fatalf("create images: %v", err)
+	}
+
+	for _, image := range []*models.Image{&deleted, &kept} {
+		candidate := models.ImageAITagCandidate{
+			ImageID:        image.ID,
+			SuggestedName:  tag.Name,
+			NormalizedName: tag.Name,
+			MatchedTagID:   &tag.ID,
+			Confidence:     models.AITagConfidenceHigh,
+			Status:         models.AITagCandidateStatusApproved,
+		}
+		if err := db.Create(&candidate).Error; err != nil {
+			t.Fatalf("create candidate for image %d: %v", image.ID, err)
+		}
+		approval := models.ImageAITagApprovalRecord{ImageID: image.ID, TagID: tag.ID, CandidateID: candidate.ID}
+		if err := db.Create(&approval).Error; err != nil {
+			t.Fatalf("create approval record for image %d: %v", image.ID, err)
+		}
+		state := models.ImageAITaggingState{
+			ImageID:             image.ID,
+			Status:              models.AITaggingStateStatusCompleted,
+			EvidenceFingerprint: "fingerprint",
+		}
+		if err := db.Create(&state).Error; err != nil {
+			t.Fatalf("create tagging state for image %d: %v", image.ID, err)
+		}
+	}
+
+	if err := db.Unscoped().Delete(&models.Image{}, deleted.ID).Error; err != nil {
+		t.Fatalf("hard delete image: %v", err)
+	}
+
+	for _, table := range []string{"image_ai_tag_candidates", "image_ai_tag_approval_records", "image_ai_tagging_states"} {
+		var orphaned int64
+		if err := db.Table(table).Where("image_id = ?", deleted.ID).Count(&orphaned).Error; err != nil {
+			t.Fatalf("count %s rows for deleted image: %v", table, err)
+		}
+		if orphaned != 0 {
+			t.Fatalf("%s left %d rows behind after hard delete", table, orphaned)
+		}
+		var survived int64
+		if err := db.Table(table).Where("image_id = ?", kept.ID).Count(&survived).Error; err != nil {
+			t.Fatalf("count %s rows for kept image: %v", table, err)
+		}
+		if survived != 1 {
+			t.Fatalf("%s rows for the untouched image = %d want=1", table, survived)
+		}
+	}
+
+	var tagCount int64
+	if err := db.Model(&models.Tag{}).Where("id = ?", tag.ID).Count(&tagCount).Error; err != nil {
+		t.Fatalf("count shared tag: %v", err)
+	}
+	if tagCount != 1 {
+		t.Fatal("deleting an image must not remove the shared tag vocabulary row")
+	}
+}
+
+// modelsWithoutImageAITagging 返回去掉本切片三张新表后的模型集合，用于与全量迁移做结构差分。
+func modelsWithoutImageAITagging(t *testing.T) []interface{} {
+	t.Helper()
+	excluded := map[string]bool{
+		"*models.ImageAITagCandidate":      true,
+		"*models.ImageAITagApprovalRecord": true,
+		"*models.ImageAITaggingState":      true,
+	}
+	all := models.AllModels()
+	filtered := make([]interface{}, 0, len(all))
+	for _, model := range all {
+		if excluded[fmt.Sprintf("%T", model)] {
+			continue
+		}
+		filtered = append(filtered, model)
+	}
+	if len(all)-len(filtered) != len(excluded) {
+		t.Fatalf("baseline filter matched %d models, want %d", len(all)-len(filtered), len(excluded))
+	}
+	return filtered
+}
+
+// dumpSQLiteTableStructure 把若干表的列、外键与索引摊成有序的文本快照。
+// 不直接比对 sqlite_master.sql：GORM 生成 CREATE TABLE 时外键约束的书写顺序不稳定，
+// 原文比对会随机失败。
+func dumpSQLiteTableStructure(t *testing.T, db *gorm.DB, tables []string) []string {
+	t.Helper()
+	dumped := make([]string, 0)
+	for _, table := range tables {
+		var exists int64
+		if err := db.Raw(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&exists).Error; err != nil {
+			t.Fatalf("probe table %s: %v", table, err)
+		}
+		dumped = append(dumped, fmt.Sprintf("table %s exists=%d", table, exists))
+
+		var columns []struct {
+			Cid       int
+			Name      string
+			Type      string
+			Notnull   int
+			DfltValue *string `gorm:"column:dflt_value"`
+			Pk        int
+		}
+		if err := db.Raw("PRAGMA table_info('" + table + "')").Scan(&columns).Error; err != nil {
+			t.Fatalf("inspect columns of %s: %v", table, err)
+		}
+		for _, column := range columns {
+			dflt := "<nil>"
+			if column.DfltValue != nil {
+				dflt = *column.DfltValue
+			}
+			dumped = append(dumped, fmt.Sprintf("column %s.%d %s %s notnull=%d default=%s pk=%d", table, column.Cid, column.Name, column.Type, column.Notnull, dflt, column.Pk))
+		}
+
+		var foreignKeys []struct {
+			Table    string
+			From     string
+			To       string
+			OnUpdate string `gorm:"column:on_update"`
+			OnDelete string `gorm:"column:on_delete"`
+		}
+		if err := db.Raw("PRAGMA foreign_key_list('" + table + "')").Scan(&foreignKeys).Error; err != nil {
+			t.Fatalf("inspect foreign keys of %s: %v", table, err)
+		}
+		foreignKeyLines := make([]string, 0, len(foreignKeys))
+		for _, key := range foreignKeys {
+			foreignKeyLines = append(foreignKeyLines, fmt.Sprintf("foreignkey %s.%s -> %s.%s on_update=%s on_delete=%s", table, key.From, key.Table, key.To, key.OnUpdate, key.OnDelete))
+		}
+		sort.Strings(foreignKeyLines)
+		dumped = append(dumped, foreignKeyLines...)
+
+		var indexes []struct {
+			Name   string
+			Unique int
+			Origin string
+		}
+		if err := db.Raw("PRAGMA index_list('" + table + "')").Scan(&indexes).Error; err != nil {
+			t.Fatalf("inspect indexes of %s: %v", table, err)
+		}
+		indexLines := make([]string, 0, len(indexes))
+		for _, index := range indexes {
+			var indexColumns []struct {
+				Seqno int
+				Name  string
+			}
+			if err := db.Raw("PRAGMA index_info('" + index.Name + "')").Scan(&indexColumns).Error; err != nil {
+				t.Fatalf("inspect index %s: %v", index.Name, err)
+			}
+			columnNames := make([]string, 0, len(indexColumns))
+			for _, indexColumn := range indexColumns {
+				columnNames = append(columnNames, indexColumn.Name)
+			}
+			indexLines = append(indexLines, fmt.Sprintf("index %s.%s unique=%d origin=%s columns=%s", table, index.Name, index.Unique, index.Origin, strings.Join(columnNames, ",")))
+		}
+		sort.Strings(indexLines)
+		dumped = append(dumped, indexLines...)
+	}
+	return dumped
+}
+
+func TestImageAITaggingTablesLeaveVideoAITagSchemaUntouched(t *testing.T) {
+	videoAITagTables := []string{
+		"ai_tag_candidates",
+		"ai_tagging_runs",
+		"ai_tag_approval_records",
+		"ai_tagging_states",
+		"ai_tag_agent_steps",
+	}
+
+	baseline := openImageSchemaTestDB(t)
+	if err := baseline.AutoMigrate(modelsWithoutImageAITagging(t)...); err != nil {
+		t.Fatalf("automigrate baseline schema: %v", err)
+	}
+	ensureAITaggingIndexes(baseline)
+
+	current := openImageSchemaTestDB(t)
+	if err := current.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatalf("automigrate current schema: %v", err)
+	}
+	ensureAITaggingIndexes(current)
+	EnsureImageAITaggingIndexes(current)
+
+	want := dumpSQLiteTableStructure(t, baseline, videoAITagTables)
+	got := dumpSQLiteTableStructure(t, current, videoAITagTables)
+	if len(want) == 0 {
+		t.Fatal("baseline dump is empty, the comparison would be vacuous")
+	}
+	if !reflect.DeepEqual(want, got) {
+		t.Fatalf("video AI tagging schema changed\nbaseline:\n%s\ncurrent:\n%s", strings.Join(want, "\n"), strings.Join(got, "\n"))
 	}
 }

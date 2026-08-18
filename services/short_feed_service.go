@@ -1102,7 +1102,7 @@ func (s *ShortFeedService) videoDTO(video *models.Video, reasonCode string, reas
 	}, nil
 }
 
-// imageDTO 图片条目。没有时长与进度条，Description 带上已生成的 AI 描述当图说。
+// imageDTO 图片条目。没有时长与进度条；图说用的是已接受的标签，Tags 在这里已经预载好。
 func (s *ShortFeedService) imageDTO(img *models.Image) (*ShortFeedItemDTO, error) {
 	ref := ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: img.ID}
 	state, err := loadShortFeedInteraction(ref)
@@ -1113,27 +1113,17 @@ func (s *ShortFeedService) imageDTO(img *models.Image) (*ShortFeedItemDTO, error
 	for _, tag := range img.Tags {
 		tags = append(tags, ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color})
 	}
-	description := ""
-	var row models.ImageAIDescription
-	if err := database.DB.Select("description").
-		Where("image_id = ? AND status = ?", img.ID, imageAIDescriptionStatusCompleted).
-		First(&row).Error; err == nil {
-		description = row.Description
-	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
 	return &ShortFeedItemDTO{
-		MediaKind:   ShortFeedMediaImage,
-		ID:          img.ID,
-		Name:        img.Name,
-		Width:       img.Width,
-		Height:      img.Height,
-		Tags:        tags,
-		MediaURL:    shortFeedMediaURL(ref),
-		MediaMIME:   "image/jpeg",
-		Description: description,
-		Liked:       state.Liked,
-		Favorited:   state.Favorited,
+		MediaKind: ShortFeedMediaImage,
+		ID:        img.ID,
+		Name:      img.Name,
+		Width:     img.Width,
+		Height:    img.Height,
+		Tags:      tags,
+		MediaURL:  shortFeedMediaURL(ref),
+		MediaMIME: "image/jpeg",
+		Liked:     state.Liked,
+		Favorited: state.Favorited,
 	}, nil
 }
 

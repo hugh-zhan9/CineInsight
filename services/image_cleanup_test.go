@@ -213,7 +213,7 @@ func TestImageCleanupNearDuplicateGroupsByHammingDistance(t *testing.T) {
 
 // 审阅界面要靠标签、AI 描述、实测大小和修改时间判断该留哪一份；分析的主查询不做
 // 全库 Preload，这些字段必须在成组之后单独补回来。
-func TestImageCleanupMembersCarryFactsTagsAndDescription(t *testing.T) {
+func TestImageCleanupMembersCarryFactsAndTags(t *testing.T) {
 	setupImageServiceTestDB(t)
 	dir := t.TempDir()
 	content := bytes.Repeat([]byte("same"), 40)
@@ -227,14 +227,6 @@ func TestImageCleanupMembersCarryFactsTagsAndDescription(t *testing.T) {
 	if err := database.DB.Model(keep).Association("Tags").Append(&tag); err != nil {
 		t.Fatalf("关联标签失败: %v", err)
 	}
-	descriptions := []models.ImageAIDescription{
-		{ImageID: keep.ID, Status: "completed", Description: "海边日落"},
-		{ImageID: copyImage.ID, Status: "failed", Description: "不该下发"},
-	}
-	if err := database.DB.Create(&descriptions).Error; err != nil {
-		t.Fatalf("创建 AI 描述失败: %v", err)
-	}
-
 	svc := NewImageCleanupService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
@@ -262,11 +254,11 @@ func TestImageCleanupMembersCarryFactsTagsAndDescription(t *testing.T) {
 	if len(keeper.Tags) != 1 || keeper.Tags[0].Name != "旅行" {
 		t.Fatalf("已打标签的成员应带出标签，实际 %+v", keeper.Tags)
 	}
-	if keeper.Description != "海边日落" {
-		t.Fatalf("已完成的 AI 描述应带出，实际 %q", keeper.Description)
+	if other.ID != copyImage.ID {
+		t.Fatalf("另一名成员应是副本 %d，实际 %d", copyImage.ID, other.ID)
 	}
-	if other.Description != "" {
-		t.Fatalf("未完成的 AI 描述不应下发，实际 %q", other.Description)
+	if len(other.Tags) != 0 {
+		t.Fatalf("未打标签的成员不应凭空带出标签，实际 %+v", other.Tags)
 	}
 	if group.MaxHammingDistance != 0 {
 		t.Fatalf("精确重复组的汉明距离应为 0，实际 %d", group.MaxHammingDistance)

@@ -55,8 +55,6 @@ type ImageCleanupMember struct {
 	// FileSize/ModTimeNS 来自分析时的 os.Stat，比库里的 Size 更能反映磁盘现状。
 	FileSize  int64 `json:"file_size"`
 	ModTimeNS int64 `json:"mod_time_ns"`
-	// Description 是已生成完成的 AI 描述，没有则为空串。
-	Description string `json:"description"`
 }
 
 // ImageCleanupDuplicateGroup 一组重复/近似重复图片：Original 为建议保留项
@@ -433,7 +431,6 @@ func enrichImageCleanupMembers(result *ImageCleanupAnalysis) error {
 	}
 
 	tagsByID := make(map[uint][]models.Tag, len(ids))
-	descriptionByID := make(map[uint]string, len(ids))
 	// 分批查：一次 IN 的绑定参数受驱动限制（Postgres 65535 / SQLite 32766），
 	// 重复成员多的大库会直接把整条语句打爆。
 	for _, chunk := range chunkUintIDs(ids, imageCleanupEnrichChunkSize) {
@@ -444,22 +441,10 @@ func enrichImageCleanupMembers(result *ImageCleanupAnalysis) error {
 		for _, image := range tagged {
 			tagsByID[image.ID] = image.Tags
 		}
-
-		var descriptions []models.ImageAIDescription
-		if err := database.DB.
-			Select("image_id", "status", "description").
-			Where("image_id IN ? AND status = ?", chunk, imageAIDescriptionStatusCompleted).
-			Find(&descriptions).Error; err != nil {
-			return err
-		}
-		for _, item := range descriptions {
-			descriptionByID[item.ImageID] = item.Description
-		}
 	}
 
 	forEachImageCleanupMember(result, func(member *ImageCleanupMember) {
 		member.Tags = tagsByID[member.ID]
-		member.Description = descriptionByID[member.ID]
 	})
 	return nil
 }

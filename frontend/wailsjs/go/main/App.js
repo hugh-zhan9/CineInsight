@@ -50,6 +50,10 @@ export function ApproveAITagCandidate(arg1) {
   return window['go']['main']['App']['ApproveAITagCandidate'](arg1);
 }
 
+export function ApproveImageAITagCandidate(arg1) {
+  return window['go']['main']['App']['ApproveImageAITagCandidate'](arg1);
+}
+
 export function BatchAddTagToImages(arg1, arg2) {
   return window['go']['main']['App']['BatchAddTagToImages'](arg1, arg2);
 }
@@ -86,8 +90,8 @@ export function CancelEnhancementTask(arg1) {
   return window['go']['main']['App']['CancelEnhancementTask'](arg1);
 }
 
-export function CancelImageAIDescription() {
-  return window['go']['main']['App']['CancelImageAIDescription']();
+export function CancelImageAITagging() {
+  return window['go']['main']['App']['CancelImageAITagging']();
 }
 
 export function CancelImageEXIFBackfill() {
@@ -266,8 +270,12 @@ export function GetEnhancementVideoPreflight(arg1) {
   return window['go']['main']['App']['GetEnhancementVideoPreflight'](arg1);
 }
 
-export function GetImageAIDescriptionStatus() {
-  return window['go']['main']['App']['GetImageAIDescriptionStatus']();
+export function GetImageAITaggingStatus() {
+  return window['go']['main']['App']['GetImageAITaggingStatus']();
+}
+
+export function GetImageAITaggingSummary() {
+  return window['go']['main']['App']['GetImageAITaggingSummary']();
 }
 
 export function GetImageCleanupStatus() {
@@ -394,6 +402,10 @@ export function ListEnhancementTasks(arg1) {
   return window['go']['main']['App']['ListEnhancementTasks'](arg1);
 }
 
+export function ListImageAITagCandidates(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListImageAITagCandidates'](arg1, arg2, arg3);
+}
+
 export function ListImageFolderGroups(arg1) {
   return window['go']['main']['App']['ListImageFolderGroups'](arg1);
 }
@@ -490,16 +502,20 @@ export function RefreshVideoTechnicalMetadata(arg1) {
   return window['go']['main']['App']['RefreshVideoTechnicalMetadata'](arg1);
 }
 
-export function RegenerateImageAIDescription(arg1) {
-  return window['go']['main']['App']['RegenerateImageAIDescription'](arg1);
-}
-
 export function RejectAITagCandidate(arg1) {
   return window['go']['main']['App']['RejectAITagCandidate'](arg1);
 }
 
 export function RejectAITagCandidatesByVideo(arg1) {
   return window['go']['main']['App']['RejectAITagCandidatesByVideo'](arg1);
+}
+
+export function RejectImageAITagCandidate(arg1) {
+  return window['go']['main']['App']['RejectImageAITagCandidate'](arg1);
+}
+
+export function RejectImageAITagCandidatesByImage(arg1) {
+  return window['go']['main']['App']['RejectImageAITagCandidatesByImage'](arg1);
 }
 
 export function RejectSameSourceRelation(arg1) {
@@ -560,6 +576,10 @@ export function RestoreImageTrashEntry(arg1) {
 
 export function RestoreTrashEntry(arg1) {
   return window['go']['main']['App']['RestoreTrashEntry'](arg1);
+}
+
+export function RetagImage(arg1) {
+  return window['go']['main']['App']['RetagImage'](arg1);
 }
 
 export function RetranslateSubtitleEntries(arg1) {
@@ -694,8 +714,8 @@ export function StartCleanupAnalysis(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartCleanupAnalysis'](arg1, arg2, arg3);
 }
 
-export function StartImageAIDescription() {
-  return window['go']['main']['App']['StartImageAIDescription']();
+export function StartImageAITagging() {
+  return window['go']['main']['App']['StartImageAITagging']();
 }
 
 export function StartImageCleanupAnalysis() {

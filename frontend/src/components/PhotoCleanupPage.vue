@@ -216,9 +216,6 @@
                   <span v-if="!hasMetadata(member)" class="cleanup-member__badge cleanup-member__badge--empty">无标签 / 评分</span>
                 </div>
 
-                <p v-if="member.description" class="cleanup-member__description" :title="member.description" data-test="cleanup-member-description">
-                  {{ member.description }}
-                </p>
 
                 <div class="cleanup-member__actions">
                   <button
@@ -735,7 +732,6 @@ export default {
 .cleanup-member__badge--keepish { border: 1px solid var(--primary-color, #0d9488); color: var(--primary-color, #0d9488); }
 .cleanup-member__badge--tag { background: var(--tag-color, var(--control-bg)); color: #fff; }
 .cleanup-member__badge--empty { color: var(--text-muted); }
-.cleanup-member__description { margin: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; color: var(--text-muted); font-size: 11px; }
 .cleanup-member__actions { margin-top: auto; }
 
 .cleanup-viewer { position: fixed; inset: 0; z-index: 300; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr); align-items: center; gap: 12px; padding: 48px 24px 72px; background: rgba(8, 12, 20, 0.9); }

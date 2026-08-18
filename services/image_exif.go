@@ -453,7 +453,7 @@ type ImageEXIFBackfillFailure struct {
 	Error   string `json:"error"`
 }
 
-// ImageEXIFBackfillStatus 形态镜像 ImageAIDescriptionStatus，供进度事件与状态查询共用。
+// ImageEXIFBackfillStatus 形态与图片打标等长任务的状态一致，供进度事件与状态查询共用。
 // Succeeded=解析到 EXIF；Skipped=已标记解析但文件无 EXIF；Failed=文件读写失败。
 type ImageEXIFBackfillStatus struct {
 	Running        bool                       `json:"running"`

@@ -186,49 +186,80 @@ func TestImageFolderGroupsUseDirectDirectoriesAndCurrentFilters(t *testing.T) {
 }
 
 // AI 描述筛选：undescribed 要覆盖"从未排队""排队中""生成失败"三种没有描述的情况。
-func TestImagePageFiltersByAIDescriptionState(t *testing.T) {
+func TestImagePageFiltersByAITagState(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	described := mustCreateTestImage(t, "described.jpg", 100)
-	failed := mustCreateTestImage(t, "failed.jpg", 100)
-	pending := mustCreateTestImage(t, "pending.jpg", 100)
+	tagged := mustCreateTestImage(t, "tagged.jpg", 100)
+	awaiting := mustCreateTestImage(t, "awaiting.jpg", 100)
+	rejectedOnly := mustCreateTestImage(t, "rejected.jpg", 100)
 	never := mustCreateTestImage(t, "never.jpg", 100)
 
-	rows := []models.ImageAIDescription{
-		{ImageID: described.ID, Status: "completed", Description: "海边日落"},
-		{ImageID: failed.ID, Status: "failed", ErrorCode: "request_failed"},
-		{ImageID: pending.ID, Status: "pending"},
-	}
-	if err := database.DB.Create(&rows).Error; err != nil {
-		t.Fatalf("创建 AI 描述记录失败: %v", err)
+	tag := models.Tag{Name: "海边", IsSystem: true, IsActive: true}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
 	}
 
-	if got := searchImageIDs(t, ImageFilter{AIDescriptionState: ImageAIDescriptionStateDescribed}); len(got) != 1 || got[0] != described.ID {
-		t.Fatalf("described 应只命中已生成描述的图片，实际 %v", got)
+	// tagged：AI 候选已被接受，留下审批记录。
+	approvedCandidate := models.ImageAITagCandidate{
+		ImageID: tagged.ID, SuggestedName: tag.Name, NormalizedName: tag.Name,
+		MatchedTagID: &tag.ID, Confidence: models.AITagConfidenceHigh,
+		Status: models.AITagCandidateStatusApproved,
+	}
+	if err := database.DB.Omit("Image", "MatchedTag").Create(&approvedCandidate).Error; err != nil {
+		t.Fatalf("创建已接受候选失败: %v", err)
+	}
+	if err := database.DB.Omit("Image", "Tag", "Candidate").Create(&models.ImageAITagApprovalRecord{
+		ImageID: tagged.ID, TagID: tag.ID, CandidateID: approvedCandidate.ID,
+	}).Error; err != nil {
+		t.Fatalf("创建审批记录失败: %v", err)
 	}
 
-	undescribed := searchImageIDs(t, ImageFilter{AIDescriptionState: ImageAIDescriptionStateUndescribed})
-	if len(undescribed) != 3 {
-		t.Fatalf("undescribed 应命中失败/排队中/从未排队三张，实际 %v", undescribed)
+	// awaiting：有待审候选。
+	if err := database.DB.Omit("Image", "MatchedTag").Create(&models.ImageAITagCandidate{
+		ImageID: awaiting.ID, SuggestedName: tag.Name, NormalizedName: tag.Name,
+		MatchedTagID: &tag.ID, Confidence: models.AITagConfidenceHigh,
+		Status: models.AITagCandidateStatusPending,
+	}).Error; err != nil {
+		t.Fatalf("创建待审候选失败: %v", err)
 	}
-	for _, id := range undescribed {
-		if id == described.ID {
-			t.Fatalf("undescribed 不应包含已生成描述的图片: %v", undescribed)
-		}
+
+	// rejectedOnly：候选被拒，既无审批记录也无待审 —— 归入未打标。
+	if err := database.DB.Omit("Image", "MatchedTag").Create(&models.ImageAITagCandidate{
+		ImageID: rejectedOnly.ID, SuggestedName: tag.Name, NormalizedName: tag.Name,
+		MatchedTagID: &tag.ID, Confidence: models.AITagConfidenceHigh,
+		Status: models.AITagCandidateStatusRejected,
+	}).Error; err != nil {
+		t.Fatalf("创建被拒候选失败: %v", err)
 	}
-	for _, want := range []uint{failed.ID, pending.ID, never.ID} {
+
+	if got := searchImageIDs(t, ImageFilter{AITagState: ImageAITagStateTagged}); len(got) != 1 || got[0] != tagged.ID {
+		t.Fatalf("tagged 应只命中有审批记录的图片，实际 %v", got)
+	}
+	if got := searchImageIDs(t, ImageFilter{AITagState: ImageAITagStatePending}); len(got) != 1 || got[0] != awaiting.ID {
+		t.Fatalf("pending 应只命中有待审候选的图片，实际 %v", got)
+	}
+
+	untagged := searchImageIDs(t, ImageFilter{AITagState: ImageAITagStateUntagged})
+	if len(untagged) != 2 {
+		t.Fatalf("untagged 应命中被拒与从未打标两张，实际 %v", untagged)
+	}
+	for _, want := range []uint{rejectedOnly.ID, never.ID} {
 		found := false
-		for _, id := range undescribed {
+		for _, id := range untagged {
 			if id == want {
 				found = true
 			}
 		}
 		if !found {
-			t.Fatalf("undescribed 应包含图片 %d，实际 %v", want, undescribed)
+			t.Fatalf("untagged 应包含图片 %d，实际 %v", want, untagged)
 		}
 	}
 
-	if got := searchImageIDs(t, ImageFilter{AIDescriptionState: ImageAIDescriptionStateFailed}); len(got) != 1 || got[0] != failed.ID {
-		t.Fatalf("failed 应只命中生成失败的图片，实际 %v", got)
+	// 手工标签不算 AI 打标的成果：只挂 image_tags 不应被 tagged 命中。
+	if err := database.DB.Exec("INSERT INTO image_tags(image_id, tag_id) VALUES (?, ?)", never.ID, tag.ID).Error; err != nil {
+		t.Fatalf("关联手工标签失败: %v", err)
+	}
+	if got := searchImageIDs(t, ImageFilter{AITagState: ImageAITagStateTagged}); len(got) != 1 || got[0] != tagged.ID {
+		t.Fatalf("手工标签不应被算作 AI 已打标，实际 %v", got)
 	}
 
 	if got := searchImageIDs(t, ImageFilter{}); len(got) != 4 {
@@ -236,9 +267,9 @@ func TestImagePageFiltersByAIDescriptionState(t *testing.T) {
 	}
 
 	if _, err := NewImageLibraryService().SearchImagePage(ImagePageRequest{
-		Filter: ImageFilter{AIDescriptionState: "bogus"}, Limit: 10,
+		Filter: ImageFilter{AITagState: "bogus"}, Limit: 10,
 	}); err == nil {
-		t.Fatal("非法的 AI 描述筛选值应报错")
+		t.Fatal("非法的 AI 打标筛选值应报错")
 	}
 }
 
@@ -644,47 +675,6 @@ func TestImageBatchTagOperationsRecordPerItemFailures(t *testing.T) {
 	}
 }
 
-func TestImageGetDetailIncludesTagsAndExistingAIDescription(t *testing.T) {
-	setupVideoServiceTestDB(t)
-	svc := NewImageLibraryService()
-	described := mustCreateTestImage(t, "described.jpg", 10)
-	plain := mustCreateTestImage(t, "plain.jpg", 10)
-	tag := mustCreateImageTag(t, "详情")
-	if err := svc.AddTagToImage(described.ID, tag.ID); err != nil {
-		t.Fatalf("打标失败: %v", err)
-	}
-	description := models.ImageAIDescription{ImageID: described.ID, Status: "completed", Description: "山间日出，逆光剪影。"}
-	if err := database.DB.Create(&description).Error; err != nil {
-		t.Fatalf("创建 AI 描述失败: %v", err)
-	}
-
-	detail, err := svc.GetImageDetail(described.ID)
-	if err != nil {
-		t.Fatalf("读取详情失败: %v", err)
-	}
-	if detail.Image.ID != described.ID || len(detail.Image.Tags) != 1 || detail.Image.Tags[0].ID != tag.ID {
-		t.Fatalf("详情应包含标签: %+v", detail.Image.Tags)
-	}
-	if detail.AIDescription != description.Description {
-		t.Fatalf("详情应回读已有 AI 描述: %q", detail.AIDescription)
-	}
-
-	detail, err = svc.GetImageDetail(plain.ID)
-	if err != nil {
-		t.Fatalf("读取无描述详情失败: %v", err)
-	}
-	if detail.AIDescription != "" {
-		t.Fatalf("无描述行时应为空串: %q", detail.AIDescription)
-	}
-	if _, err := svc.GetImageDetail(plain.ID + 1000); !errors.Is(err, gorm.ErrRecordNotFound) {
-		t.Fatalf("不存在的图片应返回未找到: %v", err)
-	}
-	if _, err := svc.GetImageDetail(0); err == nil {
-		t.Fatal("ID 为 0 应被拒绝")
-	}
-}
-
-// bucketKey 把年月桶压成 "YYYY-MM" 便于断言。
 func bucketKey(bucket ImageTimelineBucket) string {
 	return time.Date(bucket.Year, time.Month(bucket.Month), 1, 0, 0, 0, 0, time.Local).Format("2006-01")
 }

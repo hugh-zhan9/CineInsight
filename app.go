@@ -74,9 +74,9 @@ type App struct {
 	backupOpMu            sync.Mutex
 	backupOpsClosed       bool
 	semanticMu            sync.RWMutex
-	imageAIDescMu         sync.RWMutex
-	imageAIDescription    *services.ImageAIDescriptionService
-	imageAIDescAutoMu     sync.Mutex // 串行化自动触发，防止启动与扫描后触发并发
+	imageAITagMu          sync.RWMutex
+	imageAITagging        *services.ImageAITaggingService
+	imageAITagAutoMu      sync.Mutex // 串行化自动触发，防止启动与扫描后触发并发
 	imageSemanticMu       sync.RWMutex
 	imageSemanticIndex    *services.ImageSemanticIndexService
 	restoreMu             sync.Mutex
@@ -160,7 +160,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.resetSemanticIndexService()
 	a.resetImageSemanticIndexService()
-	a.resetImageAIDescriptionService()
+	a.resetImageAITaggingService()
 	a.technicalBackfill.SetEventEmitter(func(status services.TechnicalBackfillStatus) {
 		emit("technical-backfill-state", status)
 	})
@@ -211,7 +211,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.aiTaggingService.Start(ctx)
 	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。
-	go a.triggerImageAIDescriptionAuto("startup")
+	go a.triggerImageAITaggingAuto("startup")
 	a.startShortFeedServer(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
@@ -286,7 +286,7 @@ func (a *App) shutdown(ctx context.Context) {
 	if svc := a.semanticIndexService(); svc != nil {
 		svc.StopAndWait()
 	}
-	if svc := a.imageAIDescriptionService(); svc != nil {
+	if svc := a.imageAITaggingService(); svc != nil {
 		svc.StopAndWait()
 	}
 	if svc := a.imageSemanticIndexService(); svc != nil {
@@ -1332,7 +1332,7 @@ func (a *App) enterDatabaseRestoreMode() error {
 	if svc := a.semanticIndexService(); svc != nil {
 		svc.StopAndWait()
 	}
-	if svc := a.imageAIDescriptionService(); svc != nil {
+	if svc := a.imageAITaggingService(); svc != nil {
 		svc.StopAndWait()
 	}
 	if svc := a.imageSemanticIndexService(); svc != nil {
@@ -1371,7 +1371,7 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	a.aiTaggingService.Start(a.ctx)
 	a.resetSemanticIndexService()
 	a.resetImageSemanticIndexService()
-	a.resetImageAIDescriptionService()
+	a.resetImageAITaggingService()
 	a.startShortFeedServer(a.ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		_ = a.configureLibraryWatcher(settings.LibraryWatchEnabled)
@@ -1410,45 +1410,44 @@ func (a *App) resetSemanticIndexService() {
 	a.semanticMu.Unlock()
 }
 
-// resetImageAIDescriptionService 在数据库就绪后（启动或恢复失败续跑）重建图片 AI 描述服务。
-func (a *App) resetImageAIDescriptionService() {
-	a.imageAIDescMu.Lock()
-	old := a.imageAIDescription
-	a.imageAIDescription = nil
-	a.imageAIDescMu.Unlock()
+// resetImageAITaggingService 在数据库就绪后（启动或恢复失败续跑）重建图片 AI 打标服务。
+func (a *App) resetImageAITaggingService() {
+	a.imageAITagMu.Lock()
+	old := a.imageAITagging
+	a.imageAITagging = nil
+	a.imageAITagMu.Unlock()
 	if old != nil {
 		old.StopAndWait()
 	}
 	if database.DB == nil {
 		return
 	}
-	svc := services.NewImageAIDescriptionService(database.DB, a.imageThumbnail, services.SettingsAITaggingConfigProvider{})
-	if err := svc.RecoverInterruptedImageDescriptions(); err != nil {
-		log.Printf("App startup image AI description recovery failed err=%v", err)
+	svc := services.NewImageAITaggingService(database.DB, a.imageThumbnail, services.SettingsAITaggingConfigProvider{})
+	if err := svc.RecoverInterruptedImageTagging(); err != nil {
+		log.Printf("App startup image AI tagging recovery failed err=%v", err)
 	}
-	svc.SetEventEmitter(func(status services.ImageAIDescriptionStatus) {
+	svc.SetEventEmitter(func(status services.ImageAITaggingStatus) {
 		if a.ctx != nil && a.ctx.Err() == nil {
-			runtime.EventsEmit(a.ctx, "image-ai-description-progress", status)
+			runtime.EventsEmit(a.ctx, "image-ai-tagging-progress", status)
 		}
 	})
-	a.imageAIDescMu.Lock()
-	a.imageAIDescription = svc
-	a.imageAIDescMu.Unlock()
+	a.imageAITagMu.Lock()
+	a.imageAITagging = svc
+	a.imageAITagMu.Unlock()
 }
 
-func (a *App) imageAIDescriptionService() *services.ImageAIDescriptionService {
-	a.imageAIDescMu.RLock()
-	defer a.imageAIDescMu.RUnlock()
-	return a.imageAIDescription
+func (a *App) imageAITaggingService() *services.ImageAITaggingService {
+	a.imageAITagMu.RLock()
+	defer a.imageAITagMu.RUnlock()
+	return a.imageAITagging
 }
 
-// triggerImageAIDescriptionAuto 在后台增量生成图片描述：复用 StartImageAIDescription
-// 的增量目标集（仅无 completed 描述的图）。配置缺失（ErrImageAIDescriptionConfigUnavailable）
-// 与运行中（ErrImageAIDescriptionBusy）都静默跳过，等下次触发或手动启动。
-func (a *App) triggerImageAIDescriptionAuto(reason string) {
-	a.imageAIDescAutoMu.Lock()
-	defer a.imageAIDescAutoMu.Unlock()
-	svc := a.imageAIDescriptionService()
+// triggerImageAITaggingAuto 在后台增量打标：目标集与手动启动一致，重复调用由证据指纹拦。
+// 配置缺失与运行中都静默跳过，等下次触发或手动启动。
+func (a *App) triggerImageAITaggingAuto(reason string) {
+	a.imageAITagAutoMu.Lock()
+	defer a.imageAITagAutoMu.Unlock()
+	svc := a.imageAITaggingService()
 	if svc == nil {
 		return
 	}
@@ -1456,15 +1455,15 @@ func (a *App) triggerImageAIDescriptionAuto(reason string) {
 	if ctx == nil || ctx.Err() != nil {
 		ctx = context.Background()
 	}
-	if _, err := svc.StartImageAIDescription(ctx); err != nil {
-		if errors.Is(err, services.ErrImageAIDescriptionConfigUnavailable) || errors.Is(err, services.ErrImageAIDescriptionBusy) {
-			log.Printf("image AI description auto-start skipped (%s): %v", reason, err)
+	if _, err := svc.StartImageAITagging(ctx); err != nil {
+		if errors.Is(err, services.ErrImageAITaggingConfigUnavailable) || errors.Is(err, services.ErrImageAITaggingBusy) {
+			log.Printf("image AI tagging auto-start skipped (%s): %v", reason, err)
 			return
 		}
-		log.Printf("image AI description auto-start failed (%s): %v", reason, err)
+		log.Printf("image AI tagging auto-start failed (%s): %v", reason, err)
 		return
 	}
-	log.Printf("image AI description auto-started (%s)", reason)
+	log.Printf("image AI tagging auto-started (%s)", reason)
 }
 
 // imageSemanticIndexService 以读锁返回当前图片语义索引服务指针。
@@ -2033,7 +2032,7 @@ func (a *App) SyncImageDirectories() (*services.ImageScanResult, error) {
 		result.Added, result.Relocated, result.Removed, result.Skipped, len(result.Errors))
 	// 扫到新图后后台增量生成描述；勿阻塞对账返回。
 	if result.Added > 0 {
-		go a.triggerImageAIDescriptionAuto("image-scan")
+		go a.triggerImageAITaggingAuto("image-scan")
 	}
 	return result, nil
 }
@@ -2247,48 +2246,99 @@ func (a *App) DismissImageNearDuplicateGroup(imageIDs []uint) error {
 	return err
 }
 
-// ===== Image AI Description Methods =====
+// ===== Image AI Tagging Methods =====
 
-// StartImageAIDescription 启动图片 AI 描述批量生成任务
-func (a *App) StartImageAIDescription() (services.ImageAIDescriptionStatus, error) {
-	svc := a.imageAIDescriptionService()
+// StartImageAITagging 启动图片 AI 打标批量任务
+func (a *App) StartImageAITagging() (services.ImageAITaggingStatus, error) {
+	svc := a.imageAITaggingService()
 	if svc == nil {
-		return services.ImageAIDescriptionStatus{}, fmt.Errorf("数据库未初始化")
+		return services.ImageAITaggingStatus{}, fmt.Errorf("数据库未初始化")
 	}
-	status, err := svc.StartImageAIDescription(a.ctx)
-	log.Printf("API StartImageAIDescription err=%v", err)
+	status, err := svc.StartImageAITagging(a.ctx)
+	log.Printf("API StartImageAITagging err=%v", err)
 	return status, err
 }
 
-// GetImageAIDescriptionStatus 返回图片 AI 描述任务状态
-func (a *App) GetImageAIDescriptionStatus() services.ImageAIDescriptionStatus {
-	svc := a.imageAIDescriptionService()
+// GetImageAITaggingStatus 返回图片 AI 打标任务状态
+func (a *App) GetImageAITaggingStatus() services.ImageAITaggingStatus {
+	svc := a.imageAITaggingService()
 	if svc == nil {
-		return services.ImageAIDescriptionStatus{}
+		return services.ImageAITaggingStatus{}
 	}
-	return svc.GetImageAIDescriptionStatus()
+	return svc.GetImageAITaggingStatus()
 }
 
-// CancelImageAIDescription 取消图片 AI 描述批量任务
-func (a *App) CancelImageAIDescription() error {
-	svc := a.imageAIDescriptionService()
+// CancelImageAITagging 取消图片 AI 打标批量任务
+func (a *App) CancelImageAITagging() error {
+	svc := a.imageAITaggingService()
 	if svc == nil {
 		return fmt.Errorf("数据库未初始化")
 	}
-	err := svc.CancelImageAIDescription()
-	log.Printf("API CancelImageAIDescription err=%v", err)
+	err := svc.CancelImageAITagging()
+	log.Printf("API CancelImageAITagging err=%v", err)
 	return err
 }
 
-// RegenerateImageAIDescription 对单张图片同步重新生成 AI 描述
-func (a *App) RegenerateImageAIDescription(imageID uint) (*models.ImageAIDescription, error) {
-	svc := a.imageAIDescriptionService()
+// ListImageAITagCandidates 列出图片 AI 标签候选。imageID 为 0 表示不限图片
+func (a *App) ListImageAITagCandidates(imageID uint, confidence string, status string) ([]services.ImageAITaggingReviewItem, error) {
+	svc := a.imageAITaggingService()
 	if svc == nil {
 		return nil, fmt.Errorf("数据库未初始化")
 	}
-	desc, err := svc.RegenerateImageAIDescription(imageID)
-	log.Printf("API RegenerateImageAIDescription image_id=%d err=%v", imageID, err)
-	return desc, err
+	return svc.ListImageAITagCandidates(imageID, confidence, status)
+}
+
+// ApproveImageAITagCandidate 接受一个图片标签候选，写入官方标签
+func (a *App) ApproveImageAITagCandidate(candidateID uint) (*services.ImageAITaggingReviewItem, error) {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return nil, fmt.Errorf("数据库未初始化")
+	}
+	item, err := svc.ApproveImageAITagCandidate(candidateID)
+	log.Printf("API ApproveImageAITagCandidate candidate=%d err=%v", candidateID, err)
+	return item, err
+}
+
+// RejectImageAITagCandidate 拒绝一个图片标签候选
+func (a *App) RejectImageAITagCandidate(candidateID uint) error {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return fmt.Errorf("数据库未初始化")
+	}
+	err := svc.RejectImageAITagCandidate(candidateID)
+	log.Printf("API RejectImageAITagCandidate candidate=%d err=%v", candidateID, err)
+	return err
+}
+
+// RejectImageAITagCandidatesByImage 拒绝某张图片的全部待审候选
+func (a *App) RejectImageAITagCandidatesByImage(imageID uint) (int64, error) {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return 0, fmt.Errorf("数据库未初始化")
+	}
+	rejected, err := svc.RejectPendingImageAITagCandidatesByImage(imageID)
+	log.Printf("API RejectImageAITagCandidatesByImage image=%d rejected=%d err=%v", imageID, rejected, err)
+	return rejected, err
+}
+
+// GetImageAITaggingSummary 返回图片标签候选的待审汇总
+func (a *App) GetImageAITaggingSummary() (*services.ImageAITaggingSummary, error) {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return nil, fmt.Errorf("数据库未初始化")
+	}
+	return svc.GetImageAITaggingSummary()
+}
+
+// RetagImage 对单张图片同步重跑 AI 打标，返回该图当前的待审候选
+func (a *App) RetagImage(imageID uint) ([]models.ImageAITagCandidate, error) {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return nil, fmt.Errorf("数据库未初始化")
+	}
+	candidates, err := svc.RetagImage(imageID)
+	log.Printf("API RetagImage image=%d err=%v", imageID, err)
+	return candidates, err
 }
 
 // ===== Image EXIF Backfill Methods =====
