@@ -1088,6 +1088,12 @@ func (a *App) SaveAITagLibrary(inputs []services.AITagLibraryInput) ([]models.Ta
 	return tags, err
 }
 
+func (a *App) ClearAITagLibrary() ([]models.Tag, error) {
+	tags, err := a.tagService.ClearAITagLibrary()
+	log.Printf("API ClearAITagLibrary result=%d err=%v", len(tags), err)
+	return tags, err
+}
+
 // CreateTag 创建标签
 func (a *App) CreateTag(name, color string) (*models.Tag, error) {
 	tag, err := a.tagService.CreateTag(name, color)

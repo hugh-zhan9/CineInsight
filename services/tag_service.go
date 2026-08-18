@@ -14,6 +14,8 @@ import (
 
 type TagService struct{}
 
+var ErrAITagLibraryEmptyConfirmationRequired = errors.New("AI 标签库非空，拒绝未经确认的空保存")
+
 const (
 	ShortVideoTagName          = "短视频"
 	shortVideoAutomaticTagKind = "short_video"
@@ -43,6 +45,17 @@ func (s *TagService) GetAITagLibrary() ([]models.Tag, error) {
 }
 
 func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag, error) {
+	return s.saveAITagLibrary(inputs, false)
+}
+
+// ClearAITagLibrary is the explicit destructive counterpart to SaveAITagLibrary.
+// Keeping the empty operation separate prevents a failed/stale client load from
+// being interpreted as an intentional deletion of the entire AI tag library.
+func (s *TagService) ClearAITagLibrary() ([]models.Tag, error) {
+	return s.saveAITagLibrary(nil, true)
+}
+
+func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty bool) ([]models.Tag, error) {
 	normalizedNames := make(map[string]struct{}, len(inputs))
 	for i := range inputs {
 		inputs[i].Name = strings.TrimSpace(inputs[i].Name)
@@ -62,6 +75,9 @@ func (s *TagService) SaveAITagLibrary(inputs []AITagLibraryInput) ([]models.Tag,
 		var existingSystemTags []models.Tag
 		if err := tx.Where("is_system = ?", true).Find(&existingSystemTags).Error; err != nil {
 			return err
+		}
+		if len(inputs) == 0 && len(existingSystemTags) > 0 && !allowEmpty {
+			return ErrAITagLibraryEmptyConfirmationRequired
 		}
 		submittedIDs := make(map[uint]struct{}, len(inputs))
 		namespaceOrders := make(map[string]int)

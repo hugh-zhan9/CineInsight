@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'UpdateSettings', 'SelectDirectory', 'GetAllDirectories', 'AddDirectory', 'UpdateDirectory', 'DeleteDirectory',
-  'GetShortFeedServerStatus', 'GetAITagLibrary', 'SaveAITagLibrary', 'TriggerAITagging',
+  'GetShortFeedServerStatus', 'GetAITagLibrary', 'SaveAITagLibrary', 'ClearAITagLibrary', 'TriggerAITagging',
   'GetLibraryWatcherStatus', 'RetryLibraryWatcherRoot', 'GetBackupStatus', 'ListDatabaseBackups',
   'CreateDatabaseBackup', 'RestoreDatabaseBackup', 'GetSemanticIndexStatus', 'StartSemanticIndex', 'CancelSemanticIndex',
   'GetAllImageDirectories', 'AddImageDirectory', 'UpdateImageDirectory', 'DeleteImageDirectory',
@@ -41,9 +41,14 @@ async function mountPage(status = {
   roots: [{ directory_id: 7, state: 'watching', message: '实时同步中', watch_count: 3 }]
 }, imageTasks = {}) {
   api.GetShortFeedServerStatus.mockResolvedValue({ running: false });
-  api.GetAITagLibrary.mockResolvedValue([]);
+  if (imageTasks.aiTagLibraryError) {
+	api.GetAITagLibrary.mockRejectedValue(imageTasks.aiTagLibraryError);
+  } else {
+	api.GetAITagLibrary.mockResolvedValue(imageTasks.aiTags || []);
+  }
   api.GetLibraryWatcherStatus.mockResolvedValue(status);
   api.SaveAITagLibrary.mockResolvedValue([]);
+  api.ClearAITagLibrary.mockResolvedValue([]);
   api.UpdateSettings.mockResolvedValue();
   api.TriggerAITagging.mockResolvedValue(false);
   api.GetBackupStatus.mockResolvedValue({
@@ -93,6 +98,37 @@ beforeEach(() => {
 });
 
 describe('SettingsPage library watcher', () => {
+	it('blocks all settings saves when the AI tag library failed to load', async () => {
+	  const wrapper = await mountPage(undefined, { aiTagLibraryError: 'database unavailable' });
+
+	  expect(wrapper.get('.settings-save-button').attributes('disabled')).toBeDefined();
+	  expect(wrapper.get('[data-test="reload-ai-tag-library"]').text()).toContain('重新加载');
+	  await wrapper.vm.saveSettings();
+	  await flushPromises();
+
+	  expect(api.SaveAITagLibrary).not.toHaveBeenCalled();
+	  expect(api.ClearAITagLibrary).not.toHaveBeenCalled();
+	  expect(api.UpdateSettings).not.toHaveBeenCalled();
+	  expect(wrapper.text()).toContain('AI 标签库尚未成功加载');
+	});
+
+	it('requires explicit confirmation and the dedicated API to clear a loaded library', async () => {
+	  const wrapper = await mountPage(undefined, {
+		aiTags: [{ id: 7, namespace: '行为', name: '动作', color: '#123456', is_active: true }]
+	  });
+	  wrapper.vm.localAITagGroups = [];
+	  await wrapper.vm.$nextTick();
+	  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
+
+	  await wrapper.get('.settings-save-button').trigger('click');
+	  await flushPromises();
+
+	  expect(api.ClearAITagLibrary).toHaveBeenCalledTimes(1);
+	  expect(api.SaveAITagLibrary).not.toHaveBeenCalled();
+	  expect(api.UpdateSettings).toHaveBeenCalledTimes(1);
+	  confirm.mockRestore();
+	});
+
 	it('starts and explicitly confirms semantic index rebuilds', async () => {
 	  const wrapper = await mountPage();
 	  api.StartSemanticIndex.mockResolvedValue({ available: true, running: true, processed: 0, total: 3 });

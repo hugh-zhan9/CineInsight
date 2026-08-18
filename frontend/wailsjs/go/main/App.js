@@ -130,6 +130,10 @@ export function CheckSubtitleDependencies() {
   return window['go']['main']['App']['CheckSubtitleDependencies']();
 }
 
+export function ClearAITagLibrary() {
+  return window['go']['main']['App']['ClearAITagLibrary']();
+}
+
 export function ConfirmSameSourceRelation(arg1) {
   return window['go']['main']['App']['ConfirmSameSourceRelation'](arg1);
 }
@@ -390,12 +394,12 @@ export function ListEnhancementTasks(arg1) {
   return window['go']['main']['App']['ListEnhancementTasks'](arg1);
 }
 
-export function ListImageTimelineBuckets(arg1) {
-  return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
-}
-
 export function ListImageFolderGroups(arg1) {
   return window['go']['main']['App']['ListImageFolderGroups'](arg1);
+}
+
+export function ListImageTimelineBuckets(arg1) {
+  return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
 }
 
 export function ListImageTrashEntries() {

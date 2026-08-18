@@ -68,6 +68,8 @@ export function CancelTechnicalBackfill():Promise<void>;
 
 export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
 
+export function ClearAITagLibrary():Promise<Array<models.Tag>>;
+
 export function ConfirmSameSourceRelation(arg1:number):Promise<void>;
 
 export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCollection>;
@@ -198,9 +200,9 @@ export function ListDatabaseBackups():Promise<Array<services.BackupFile>>;
 
 export function ListEnhancementTasks(arg1:number):Promise<Array<services.EnhancementTaskView>>;
 
-export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
-
 export function ListImageFolderGroups(arg1:services.ImageFilter):Promise<Array<services.ImageFolderGroup>>;
+
+export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
 
 export function ListImageTrashEntries():Promise<Array<models.ImageTrashEntry>>;
 

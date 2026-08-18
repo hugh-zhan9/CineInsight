@@ -255,11 +255,14 @@
 	<div class="settings-section ai-tag-library-section">
 	  <div class="settings-section-heading">
 		<h3>AI 标签库</h3>
-		<button type="button" class="btn-secondary" @click="addAITagLibraryGroup">添加分类</button>
+		<button type="button" class="btn-secondary" :disabled="aiTagLibraryLoading || !aiTagLibraryLoaded" @click="addAITagLibraryGroup">添加分类</button>
 	  </div>
 	  <p class="help-text">每个分类占一行，可在分类内维护多个标签；只有启用的标签会发送给模型。可直接填写已有普通标签的名称，保存后会保留它现有的视频关联并加入 AI 标签库。</p>
 	  <div v-if="aiTagLibraryLoading" class="empty-hint">正在加载标签库...</div>
-	  <div v-else-if="aiTagLibraryError" class="ai-tag-library-error">{{ aiTagLibraryError }}</div>
+	  <div v-else-if="aiTagLibraryError" class="ai-tag-library-error">
+		<span>{{ aiTagLibraryError }}</span>
+		<button data-test="reload-ai-tag-library" type="button" class="btn-secondary btn-compact" @click="loadAITagLibrary">重新加载</button>
+	  </div>
 	  <div v-else class="ai-tag-library-list">
 		<div v-for="(group, groupIndex) in localAITagGroups" :key="group._key" class="ai-tag-library-group">
 		  <div class="ai-tag-library-group-heading">
@@ -512,7 +515,7 @@
       >
         {{ saveMessage }}
       </div>
-      <button @click="saveSettings" class="btn-primary settings-save-button" :disabled="settingsSaving">
+      <button @click="saveSettings" class="btn-primary settings-save-button" :disabled="settingsSaving || aiTagLibraryLoading || !aiTagLibraryLoaded">
         {{ settingsSaving ? '正在保存...' : '保存所有设置' }}
       </button>
     </div>
@@ -604,7 +607,7 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../wailsjs/go/main/App';
+import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, ClearAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../wailsjs/go/main/App';
 import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
 import BaseModal from './ui/BaseModal.vue';
 import PhotoAITaskPanel from './PhotoAITaskPanel.vue';
@@ -635,6 +638,8 @@ export default {
       imageDirectoryForm: { path: '', alias: '' },
       localAITagGroups: [],
       aiTagLibraryLoading: false,
+      aiTagLibraryLoaded: false,
+      aiTagLibraryBaselineCount: 0,
       aiTagLibraryError: '',
       nextAITagLibraryKey: 1,
       settingsSaving: false,
@@ -780,16 +785,30 @@ export default {
     },
     async saveSettings() {
       if (this.settingsSaving) return;
+      if (!this.aiTagLibraryLoaded) {
+        this.saveState = 'error';
+        this.saveMessage = 'AI 标签库尚未成功加载，请重新加载后再保存。';
+        return;
+      }
+      const validationError = validateAITagGroups(this.localAITagGroups);
+      if (validationError) {
+        this.saveState = 'error';
+        this.saveMessage = '设置保存失败：' + validationError;
+        return;
+      }
+      const tagInputs = flattenAITagGroups(this.localAITagGroups);
+      const clearingExistingLibrary = tagInputs.length === 0 && this.aiTagLibraryBaselineCount > 0;
+      if (clearingExistingLibrary && !window.confirm('这会清空整个 AI 标签库，并使相关待审候选失效。确认继续吗？')) {
+        this.saveState = 'idle';
+        this.saveMessage = '已取消保存，AI 标签库未更改。';
+        return;
+      }
       this.settingsSaving = true;
       this.saveState = 'saving';
       this.saveMessage = '正在保存设置...';
       try {
-        this.aiTagLibraryError = '';
-        const validationError = validateAITagGroups(this.localAITagGroups);
-        if (validationError) throw new Error(validationError);
-        const tagInputs = flattenAITagGroups(this.localAITagGroups);
         const [savedTags] = await Promise.all([
-          SaveAITagLibrary(tagInputs),
+          clearingExistingLibrary ? ClearAITagLibrary() : SaveAITagLibrary(tagInputs),
           UpdateSettings({
             confirm_before_delete: this.settingsForm.confirm_before_delete,
             delete_original_file: this.settingsForm.delete_original_file,
@@ -833,14 +852,21 @@ export default {
         const aiTriggered = await TriggerAITagging();
         await this.loadLibraryWatcherStatus();
         this.localAITagGroups = this.withAITagLibraryKeys(savedTags);
+        this.aiTagLibraryBaselineCount = savedTags.length;
         this.$emit('settings-saved', { ...this.settingsForm });
         this.$emit('tags-changed');
         const hasActiveTags = tagInputs.some(tag => tag.is_active);
         const hasAIConfig = Boolean(String(this.settingsForm.ai_tagging_base_url || '').trim() && String(this.settingsForm.ai_tagging_model || '').trim());
         this.saveState = 'success';
-        this.saveMessage = hasActiveTags && hasAIConfig && aiTriggered
-          ? '设置保存成功，已触发 AI 自动打标。'
-          : '设置保存成功；AI 接口、模型、启用标签或后台任务未就绪，自动打标暂未启动。';
+        if (!hasActiveTags) {
+          this.saveMessage = '设置保存成功；AI 标签库没有启用标签，自动打标已暂停。';
+        } else if (!hasAIConfig) {
+          this.saveMessage = '设置保存成功；AI 接口或模型未配置，自动打标已暂停。';
+        } else if (!aiTriggered) {
+          this.saveMessage = '设置保存成功；AI 后台任务未运行，自动打标暂未启动。';
+        } else {
+          this.saveMessage = '设置保存成功，已触发 AI 自动打标。';
+        }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         this.saveState = 'error';
@@ -852,9 +878,13 @@ export default {
     },
     async loadAITagLibrary() {
       this.aiTagLibraryLoading = true;
+      this.aiTagLibraryLoaded = false;
       this.aiTagLibraryError = '';
       try {
-        this.localAITagGroups = this.withAITagLibraryKeys(await GetAITagLibrary());
+        const tags = await GetAITagLibrary();
+        this.localAITagGroups = this.withAITagLibraryKeys(tags);
+        this.aiTagLibraryBaselineCount = tags.length;
+        this.aiTagLibraryLoaded = true;
       } catch (err) {
         this.aiTagLibraryError = '加载 AI 标签库失败: ' + err;
       } finally {

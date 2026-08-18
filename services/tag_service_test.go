@@ -1,6 +1,7 @@
 package services
 
 import (
+	"errors"
 	"testing"
 	"video-master/database"
 	"video-master/models"
@@ -390,12 +391,48 @@ func TestSaveAITagLibraryPreservesValidCandidatesAndSupersedesInvalidOnes(t *tes
 	}
 }
 
-func TestSaveAITagLibraryAllowsEmptyButRejectsDuplicateNames(t *testing.T) {
+func TestSaveAITagLibraryProtectsExistingLibraryFromAccidentalEmptySave(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &TagService{}
 	if saved, err := svc.SaveAITagLibrary(nil); err != nil || len(saved) != 0 {
-		t.Fatalf("用户应能保存空 AI 标签库，saved=%v err=%v", saved, err)
+		t.Fatalf("原本为空的 AI 标签库应允许空保存，saved=%v err=%v", saved, err)
 	}
+	tag := models.Tag{Name: "受保护标签", Namespace: "分类", Color: "#111111", IsSystem: true, IsActive: true}
+	video := models.Video{Name: "protected.mp4", Path: "/tmp/tag-library-protected.mp4"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建 AI 标签失败: %v", err)
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	tagID := tag.ID
+	candidate := models.AITagCandidate{VideoID: video.ID, SuggestedName: tag.Name, NormalizedName: tag.Name, MatchedTagID: &tagID, Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending}
+	if err := database.DB.Create(&candidate).Error; err != nil {
+		t.Fatalf("创建待审候选失败: %v", err)
+	}
+
+	if _, err := svc.SaveAITagLibrary(nil); !errors.Is(err, ErrAITagLibraryEmptyConfirmationRequired) {
+		t.Fatalf("非空标签库的空保存应被保护，实际 err=%v", err)
+	}
+	if err := database.DB.First(&tag, tag.ID).Error; err != nil || !tag.IsSystem {
+		t.Fatalf("被拒绝的空保存不得降级 AI 标签: tag=%+v err=%v", tag, err)
+	}
+	if err := database.DB.First(&candidate, candidate.ID).Error; err != nil || candidate.Status != models.AITagCandidateStatusPending {
+		t.Fatalf("被拒绝的空保存不得使待审候选失效: candidate=%+v err=%v", candidate, err)
+	}
+
+	cleared, err := svc.ClearAITagLibrary()
+	if err != nil || len(cleared) != 0 {
+		t.Fatalf("显式清空 AI 标签库应成功，saved=%v err=%v", cleared, err)
+	}
+	if err := database.DB.First(&candidate, candidate.ID).Error; err != nil || candidate.Status != models.AITagCandidateStatusSuperseded {
+		t.Fatalf("显式清空应使待审候选失效: candidate=%+v err=%v", candidate, err)
+	}
+}
+
+func TestSaveAITagLibraryRejectsDuplicateNames(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &TagService{}
 	if _, err := svc.SaveAITagLibrary([]AITagLibraryInput{
 		{Namespace: "分类A", Name: "重复", IsActive: true},
 		{Namespace: "分类B", Name: "重复", IsActive: true},
