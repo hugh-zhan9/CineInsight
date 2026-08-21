@@ -288,6 +288,21 @@ func TestImageSyncMissingFileRemovesRecordOnly(t *testing.T) {
 	mustCreateFile(t, keptPath)
 	imageTestMustAddDirectory(t, svc, root)
 	imageTestMustSync(t, svc)
+	var original models.Image
+	if err := database.DB.Where("path = ?", gonePath).First(&original).Error; err != nil {
+		t.Fatalf("读取待失踪图片失败: %v", err)
+	}
+	tag := models.Tag{Name: "保留标签"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Model(&original).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("添加标签失败: %v", err)
+	}
+	rating := 8.5
+	if err := database.DB.Model(&original).Updates(map[string]interface{}{"is_favorite": true, "personal_rating": rating}).Error; err != nil {
+		t.Fatalf("写入收藏评分失败: %v", err)
+	}
 
 	if err := os.Remove(gonePath); err != nil {
 		t.Fatalf("删除文件失败: %v", err)
@@ -313,6 +328,47 @@ func TestImageSyncMissingFileRemovesRecordOnly(t *testing.T) {
 	}
 	if imageTestActiveCount(t) != 1 {
 		t.Fatalf("失踪后活跃图片数应为 1, got %d", imageTestActiveCount(t))
+	}
+
+	// 移动盘重新挂载、原路径上的文件回来时，扫描应恢复原记录而不是
+	// 新建一条丢失标签/评分的图片。
+	imageTestWriteFile(t, gonePath, 1)
+	result = imageTestMustSync(t, svc)
+	if result.Restored != 1 || result.Added != 0 || result.Removed != 0 {
+		t.Fatalf("文件恢复后应复活原记录: %+v", result)
+	}
+	var restored models.Image
+	if err := database.DB.Preload("Tags").Where("path = ?", gonePath).First(&restored).Error; err != nil {
+		t.Fatalf("恢复后的图片记录缺失: %v", err)
+	}
+	if restored.DeletedAt.IsValid() || restored.IsStale {
+		t.Fatalf("恢复后的图片仍是失效态: %+v", restored)
+	}
+	if restored.ID != original.ID || !restored.IsFavorite || restored.PersonalRating == nil || *restored.PersonalRating != rating || len(restored.Tags) != 1 || restored.Tags[0].ID != tag.ID {
+		t.Fatalf("恢复没有保留原记录数据: original=%+v restored=%+v", original, restored)
+	}
+}
+
+func TestImageSyncDoesNotRestoreIntentionalRecordDeletion(t *testing.T) {
+	setupImageServiceTestDB(t)
+	svc := NewImageService()
+	root := t.TempDir()
+	path := filepath.Join(root, "keep-on-disk.jpg")
+	mustCreateFile(t, path)
+	imageTestMustAddDirectory(t, svc, root)
+	imageTestMustSync(t, svc)
+
+	var image models.Image
+	if err := database.DB.Where("path = ?", path).First(&image).Error; err != nil {
+		t.Fatalf("读取图片失败: %v", err)
+	}
+	if err := svc.DeleteImage(image.ID, false); err != nil {
+		t.Fatalf("仅删除记录失败: %v", err)
+	}
+
+	result := imageTestMustSync(t, svc)
+	if result.Restored != 0 || imageTestActiveCount(t) != 0 {
+		t.Fatalf("用户主动删除的记录不得被扫描恢复: result=%+v active=%d", result, imageTestActiveCount(t))
 	}
 }
 

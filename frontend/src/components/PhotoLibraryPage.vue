@@ -130,6 +130,27 @@
           <span v-if="aiTagPending > 0" class="photo-cleanup-badge" data-test="photo-ai-tag-badge" :title="`${aiTagPending} 条候选待审`">待审 {{ aiTagPending }}</span>
         </button>
         <button type="button" class="btn-secondary" data-test="photo-trash-open" @click="showTrash = true">回收站</button>
+        <div v-if="images.length" class="photo-selection-tools" data-test="photo-selection-tools">
+          <span class="photo-selection-tools__count">已选 {{ selectedImageIDs.length }} 张</span>
+          <button type="button" class="btn-secondary btn-compact" data-test="photo-select-all" @click="toggleSelectAll">
+            {{ allLoadedSelected ? '取消全选' : '全选已加载' }}
+          </button>
+          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" data-test="photo-clear-selection" @click="clearSelection">清除选择</button>
+          <input
+            v-if="selectedImageIDs.length"
+            v-model="batchTagKeyword"
+            type="search"
+            class="search-input photo-batch-tag-search"
+            placeholder="搜索标签"
+            data-test="photo-batch-tag-search"
+          />
+          <select v-if="selectedImageIDs.length" v-model="batchTagToAdd" class="select-input" data-test="photo-batch-tag-select">
+            <option :value="0" disabled>批量添加标签...</option>
+            <option v-for="tag in filteredBatchTags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
+          </select>
+          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" :disabled="!batchTagToAdd || batchBusy" data-test="photo-batch-tag-add" @click="batchAddTag">添加标签</button>
+          <button v-if="selectedImageIDs.length" type="button" class="btn-danger btn-compact" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">删除所选</button>
+        </div>
       </div>
       <p v-if="semanticNotice" class="photo-toolbar__semantic-notice" role="status" data-test="photo-semantic-unavailable">{{ semanticNotice }}</p>
       <div v-if="imageTags.length" class="photo-toolbar__tags">
@@ -216,6 +237,15 @@
         </div>
         <div v-else class="photo-grid-row" :style="rowStyle(row)">
           <article v-for="(image, offset) in rowImages(row)" :key="image.id" class="photo-card glass-surface">
+            <label class="photo-card__select" :title="`选择 ${image.name}`" @click.stop>
+              <input
+                type="checkbox"
+                :checked="selectedImageIDs.includes(Number(image.id))"
+                :aria-label="`选择 ${image.name}`"
+                :data-test="`photo-select-${image.id}`"
+                @change="toggleImageSelection(image.id, $event.target.checked)"
+              />
+            </label>
             <button type="button" class="photo-card__media" :title="image.name" @click="openViewer(row.startIndex + offset)">
               <img
                 v-if="!failedThumbs[image.id]"
@@ -404,9 +434,16 @@
             <span v-if="!(viewerImage.tags || []).length" class="photo-viewer__muted">尚无标签</span>
           </div>
           <div v-if="addableTags.length" class="photo-viewer__tag-add">
+            <input
+              v-model="tagKeyword"
+              type="search"
+              class="search-input"
+              placeholder="搜索标签"
+              data-test="photo-tag-search"
+            />
             <select v-model="tagToAdd" class="select-input" data-test="photo-tag-select">
               <option :value="0" disabled>选择标签...</option>
-              <option v-for="tag in addableTags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
+              <option v-for="tag in filteredAddableTags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
             </select>
             <button type="button" class="btn-secondary btn-compact" :disabled="!tagToAdd" data-test="photo-tag-add" @click="addTag(viewerImage)">添加</button>
           </div>
@@ -470,6 +507,21 @@
       </div>
     </BaseModal>
 
+    <BaseModal v-if="batchDeletePending" close-on-overlay stop-modal-clicks @close="batchDeletePending = false">
+      <h2>确认删除所选图片</h2>
+      <p>确定要删除已选的 {{ selectedImageIDs.length }} 张图片吗？</p>
+      <div class="photo-delete__options">
+        <label>
+          <input v-model="batchDeleteFileChoice" type="checkbox" data-test="photo-batch-delete-file" />
+          同时将原始文件移入回收站
+        </label>
+      </div>
+      <div class="modal-actions">
+        <button type="button" class="btn-danger" :disabled="batchBusy" data-test="photo-batch-delete-confirm" @click="confirmBatchDelete">确认删除</button>
+        <button type="button" class="btn-secondary" :disabled="batchBusy" @click="batchDeletePending = false">取消</button>
+      </div>
+    </BaseModal>
+
     <PhotoTrashDialog :visible="showTrash" @close="showTrash = false" @restored="handleRestored" />
 
     <ImageAITagReviewPanel
@@ -482,7 +534,7 @@
 
 <script>
 import {
-  AddTagToImage, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
+  AddTagToImage, BatchAddTagToImages, BatchDeleteImages, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
   ApproveImageAITagCandidate, GetImageAITaggingSummary, ListImageAITagCandidates, RejectImageAITagCandidate, RetagImage,
   ListImageFolderGroups, ListImageTimelineBuckets, RemoveTagFromImage, SearchImagePage,
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
@@ -571,6 +623,13 @@ export default {
       retagError: '',
       ratingDraft: '',
       tagToAdd: 0,
+      tagKeyword: '',
+      selectedImageIDs: [],
+      batchTagKeyword: '',
+      batchTagToAdd: 0,
+      batchDeletePending: false,
+      batchDeleteFileChoice: false,
+      batchBusy: false,
       showTrash: false,
       showAITagReview: false,
       aiTagPending: 0,
@@ -677,6 +736,19 @@ export default {
     addableTags() {
       const applied = new Set((this.viewerImage?.tags || []).map(tag => Number(tag.id)));
       return this.tags.filter(tag => !applied.has(Number(tag.id)));
+    },
+    filteredAddableTags() {
+      const keyword = this.tagKeyword.trim().toLowerCase();
+      if (!keyword) return this.addableTags;
+      return this.addableTags.filter(tag => String(tag?.name || '').toLowerCase().includes(keyword));
+    },
+    filteredBatchTags() {
+      const keyword = this.batchTagKeyword.trim().toLowerCase();
+      if (!keyword) return this.tags;
+      return this.tags.filter(tag => String(tag?.name || '').toLowerCase().includes(keyword));
+    },
+    allLoadedSelected() {
+      return this.images.length > 0 && this.images.every(image => this.selectedImageIDs.includes(Number(image.id)));
     },
     hasActiveFilters() {
       return Boolean(this.filters.keyword.trim()) || this.filters.tagIDs.length > 0 || this.filters.favoriteOnly
@@ -1065,6 +1137,7 @@ export default {
       this._queryToken = token;
       this.libraryChanged = false;
       this.images = [];
+      this.clearSelection();
       // 文件名游标分页与语义 offset 分页是两套状态，切换时一并清空避免串档。
       this.nextCursor = null;
       this.semanticOffset = 0;
@@ -1308,6 +1381,81 @@ export default {
         : [...this.filters.tagIDs, id];
       this.reload();
     },
+    toggleImageSelection(imageID, checked) {
+      const id = Number(imageID);
+      if (!id) return;
+      this.selectedImageIDs = checked
+        ? (this.selectedImageIDs.includes(id) ? this.selectedImageIDs : [...this.selectedImageIDs, id])
+        : this.selectedImageIDs.filter(item => item !== id);
+    },
+    toggleSelectAll() {
+      this.selectedImageIDs = this.allLoadedSelected ? [] : this.images.map(image => Number(image.id));
+    },
+    clearSelection() {
+      this.selectedImageIDs = [];
+      this.batchTagToAdd = 0;
+      this.batchTagKeyword = '';
+    },
+    async batchAddTag() {
+      const ids = [...this.selectedImageIDs];
+      const tagID = Number(this.batchTagToAdd);
+      if (!ids.length || !tagID || this.batchBusy) return;
+      this.batchBusy = true;
+      try {
+        const result = await BatchAddTagToImages(ids, tagID);
+        const failed = new Set((result?.errors || []).map(item => Number(item.image_id)));
+        const tag = this.tags.find(item => Number(item.id) === tagID);
+        if (tag) {
+          ids.filter(id => !failed.has(id)).forEach(id => {
+            const image = this.images.find(item => Number(item.id) === id);
+            if (image && !(image.tags || []).some(item => Number(item.id) === tagID)) {
+              this.patchImage({ id, tags: [...(image.tags || []), tag] });
+            }
+          });
+        }
+        this.selectedImageIDs = ids.filter(id => failed.has(id));
+        this.batchTagToAdd = 0;
+        if (!this.selectedImageIDs.length) this.batchTagKeyword = '';
+        if (result?.failed) this.error = `批量添加标签部分失败：${result.failed} 张图片未完成。`;
+        await this.loadImageTags();
+      } catch (err) {
+        this.error = `批量添加标签失败：${err}`;
+      } finally {
+        this.batchBusy = false;
+      }
+    },
+    requestBatchDelete() {
+      if (!this.selectedImageIDs.length || this.batchBusy) return;
+      if (!this.settings.confirm_before_delete) {
+        this.performBatchDelete(!!this.settings.delete_original_file);
+        return;
+      }
+      this.batchDeleteFileChoice = !!this.settings.delete_original_file;
+      this.batchDeletePending = true;
+    },
+    async confirmBatchDelete() {
+      if (!this.batchDeletePending || this.batchBusy) return;
+      this.batchDeletePending = false;
+      await this.performBatchDelete(this.batchDeleteFileChoice);
+    },
+    async performBatchDelete(deleteFile) {
+      const ids = [...this.selectedImageIDs];
+      if (!ids.length || this.batchBusy) return;
+      this.batchBusy = true;
+      try {
+        const before = new Map(this.images.map(image => [Number(image.id), image]));
+        const result = await BatchDeleteImages(ids, deleteFile);
+        const failed = new Set((result?.errors || []).map(item => Number(item.image_id)));
+        ids.filter(id => !failed.has(id)).forEach(id => this.adjustTimelineBucket(before.get(id), -1));
+        this.images = this.images.filter(image => !ids.includes(Number(image.id)) || failed.has(Number(image.id)));
+        this.selectedImageIDs = ids.filter(id => failed.has(id));
+        if (result?.failed) this.error = `批量删除部分失败：${result.failed} 张图片未删除。`;
+      } catch (err) {
+        this.error = `批量删除失败：${err}`;
+      } finally {
+        this.batchBusy = false;
+      }
+    },
     markThumbFailed(imageID) {
       this.failedThumbs = { ...this.failedThumbs, [imageID]: true };
     },
@@ -1316,6 +1464,7 @@ export default {
       this.viewerIndex = index;
       this.viewerImageError = false;
       this.tagToAdd = 0;
+      this.tagKeyword = '';
       const image = this.images[index];
       this.ratingDraft = image.personal_rating == null ? '' : image.personal_rating;
       this.loadViewerDetail(image.id);
@@ -1328,6 +1477,7 @@ export default {
       this.viewerCandidates = [];
       this.retagError = '';
       this.tagToAdd = 0;
+      this.tagKeyword = '';
     },
     viewerNext() {
       if (this.viewerIndex < this.images.length - 1) this.openViewer(this.viewerIndex + 1);
@@ -1487,6 +1637,7 @@ export default {
         const tag = this.tags.find(item => Number(item.id) === Number(tagID));
         if (tag) this.patchImage({ id: image.id, tags: [...(image.tags || []), tag] });
         this.tagToAdd = 0;
+        this.tagKeyword = '';
         this.loadImageTags();
       } catch (err) {
         this.error = `添加标签失败：${err}`;
@@ -1580,6 +1731,9 @@ export default {
 .photo-toolbar__title h2 { margin: 0 0 3px; font-size: 18px; }
 .photo-toolbar__title p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .photo-toolbar__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.photo-selection-tools { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
+.photo-selection-tools__count { color: var(--text-secondary); font-size: 12px; }
+.photo-batch-tag-search { width: 150px; }
 .photo-cleanup-open-btn { display: inline-flex; align-items: center; gap: 6px; }
 .photo-cleanup-badge { padding: 1px 7px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
 .photo-cleanup-badge--done { background: var(--primary-color, #0d9488); color: #fff; }
@@ -1636,6 +1790,8 @@ export default {
 .photo-timeline-header { display: flex; align-items: flex-end; overflow: hidden; box-sizing: border-box; }
 .photo-timeline-header h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
 .photo-card { position: relative; overflow: hidden; border-radius: 13px; }
+.photo-card__select { position: absolute; z-index: 3; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: rgba(12, 20, 28, .72); cursor: pointer; }
+.photo-card__select input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary-color, #0d9488); }
 /* 定高卡片：缩略图区高度由列宽算出（等价于 aspect-ratio 1），信息条固定 52px，
    两者相加即 photoGrid 的 cellHeight，布局无需实测回写。 */
 .photo-card__media { display: block; width: 100%; height: var(--photo-cell-media, auto); aspect-ratio: 1; padding: 0; border: 0; background: var(--thumb-bg); cursor: pointer; }

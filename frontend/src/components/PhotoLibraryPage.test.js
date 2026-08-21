@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'SearchImagePage', 'GetImageDetail', 'SetImageFavorite', 'SetImageRating',
-  'AddTagToImage', 'RemoveTagFromImage', 'GetAllImageDirectories', 'SyncImageDirectories',
+  'AddTagToImage', 'BatchAddTagToImages', 'RemoveTagFromImage', 'GetAllImageDirectories', 'SyncImageDirectories',
   'DeleteImage', 'ListImageTrashEntries', 'RestoreImageTrashEntry',
   'StartImageCleanupAnalysis', 'GetImageCleanupStatus', 'DismissImageNearDuplicateGroup', 'BatchDeleteImages',
   'GetImageSemanticIndexStatus', 'SearchImagesSemantic',
@@ -61,7 +61,7 @@ beforeEach(() => {
   api.GetAllImageDirectories.mockResolvedValue([{ id: 1, alias: '相册', path: '/photos' }]);
   api.SearchImagePage.mockResolvedValue(makePage([]));
   api.ListImageFolderGroups.mockResolvedValue([]);
-  api.SyncImageDirectories.mockResolvedValue({ added: 0, relocated: 0, removed: 0, skipped: 0, errors: [] });
+  api.SyncImageDirectories.mockResolvedValue({ added: 0, restored: 0, relocated: 0, removed: 0, skipped: 0, errors: [] });
   api.GetImageDetail.mockImplementation(id => Promise.resolve({ image: makeImage(Number(id)) }));
   api.SetImageFavorite.mockImplementation((id, favorite) => Promise.resolve({ id, is_favorite: favorite }));
   api.SetImageRating.mockImplementation((id, rating) => Promise.resolve({ id, personal_rating: rating }));
@@ -71,6 +71,7 @@ beforeEach(() => {
   api.StartImageCleanupAnalysis.mockResolvedValue(idleCleanupStatus());
   api.DismissImageNearDuplicateGroup.mockResolvedValue();
   api.BatchDeleteImages.mockResolvedValue({ requested: 0, succeeded: 0, failed: 0, errors: [] });
+  api.BatchAddTagToImages.mockResolvedValue({ requested: 0, succeeded: 0, failed: 0, errors: [] });
   api.GetImageSemanticIndexStatus.mockResolvedValue({ available: true, running: false, completed: true, unavailable: '' });
   api.SearchImagesSemantic.mockResolvedValue({ hits: [], coverage: { indexed: 0, total: 0 }, has_more: false });
   api.RetagImage.mockResolvedValue([]);
@@ -383,6 +384,22 @@ describe('PhotoLibraryPage viewer', () => {
     expect(wrapper.find('[data-test="photo-viewer-exif"]').exists()).toBe(false);
   });
 
+  it('filters addable tags by a search keyword', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(6)]));
+    const wrapper = await mountPage({ tags: [
+      { id: 1, name: '旅行' },
+      { id: 2, name: '家人' },
+      { id: 3, name: '旅行夜景' }
+    ] });
+
+    await wrapper.get('.photo-card__media').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="photo-tag-search"]').setValue('旅行');
+
+    const options = wrapper.findAll('[data-test="photo-tag-select"] option').map(option => option.text());
+    expect(options).toEqual(['选择标签...', '旅行', '旅行夜景']);
+  });
+
   it('lists this image\'s pending AI tag candidates', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(3)]));
     api.GetImageDetail.mockResolvedValue({ image: makeImage(3) });
@@ -614,6 +631,20 @@ describe('PhotoLibraryPage semantic search', () => {
 });
 
 describe('PhotoLibraryPage delete', () => {
+  it('multi-selects images and applies a tag in one batch', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
+    api.BatchAddTagToImages.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });
+    const wrapper = await mountPage({ tags: [{ id: 7, name: '旅行' }] });
+
+    await wrapper.get('[data-test="photo-select-all"]').trigger('click');
+    await wrapper.get('[data-test="photo-batch-tag-search"]').setValue('旅');
+    await wrapper.get('[data-test="photo-batch-tag-select"]').setValue('7');
+    await wrapper.get('[data-test="photo-batch-tag-add"]').trigger('click');
+    await flushPromises();
+
+    expect(api.BatchAddTagToImages).toHaveBeenCalledWith([1, 2], 7);
+  });
+
   it('deletes directly with the settings default and removes the card from the list', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
     const wrapper = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: true } });

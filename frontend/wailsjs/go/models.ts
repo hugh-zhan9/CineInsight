@@ -2266,6 +2266,7 @@ export namespace services {
 	}
 	export class ImageScanResult {
 	    added: number;
+	    restored: number;
 	    relocated: number;
 	    removed: number;
 	    skipped: number;
@@ -2278,6 +2279,7 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.added = source["added"];
+	        this.restored = source["restored"];
 	        this.relocated = source["relocated"];
 	        this.removed = source["removed"];
 	        this.skipped = source["skipped"];
@@ -4954,4 +4956,3 @@ export namespace subtitleparser {
 	}
 
 }
-

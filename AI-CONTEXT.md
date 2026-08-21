@@ -166,6 +166,11 @@
 - **隐私:** 只持久化计数、耗时、稳定版本号和模型名称；不保存帧、字幕正文、请求/响应 body、API Key、base URL 或本地路径。
 - **软删除:** 软删除视频的历史样本仍进入聚合，但不返回可操作记录。
 
+### 2.17 图片库批量管理与扫描恢复
+- **图片多选:** 图片流卡片支持复选、全选当前已加载结果、批量添加标签和批量删除；批量接口逐项返回失败，失败项保留选中以便重试。
+- **图片标签搜索:** 单图详情和批量标签工具均可按名称实时过滤可添加标签。
+- **自动删除恢复:** 图片扫描对账因路径失踪而软删除记录时写入 `is_stale` 恢复标记；同一路径文件重新出现后复活原记录，保留原 ID、标签、收藏、评分等数据。用户主动“仅删除记录”不会写该标记，因此不会被后续扫描自动恢复。
+
 ## 3. 关键目录说明 (Directory Structure)
 
 - `/services`: **核心业务层**（Video, VideoDetail, MediaProbe, TechnicalBackfill, Person, Collection, Subtitle, SubtitleWorkbench, LibraryWatcher, LocalMetadata, AIQuality, Tag, Settings, Directory 服务）。

@@ -42,6 +42,7 @@ type ImageScanError struct {
 // ImageScanResult 图片目录对账扫描结果。
 type ImageScanResult struct {
 	Added     int              `json:"added"`
+	Restored  int              `json:"restored"`
 	Relocated int              `json:"relocated"`
 	Removed   int              `json:"removed"`
 	Skipped   int              `json:"skipped"`
@@ -217,6 +218,17 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 		if _, consumed := consumedNewPaths[file.Path]; consumed {
 			continue
 		}
+		// A previous scan may have soft-deleted a record while a removable
+		// volume was unavailable. Revive only records explicitly marked as
+		// auto-removed (IsStale), never records deleted by an intentional user
+		// action.
+		if restored, restoreErr := s.restoreStaleImage(file.Path, file.Size); restoreErr != nil {
+			result.recordError("restore", filepath.Dir(file.Path), file.Path, restoreErr)
+			continue
+		} else if restored {
+			result.Restored++
+			continue
+		}
 		if _, err := s.addImage(file.Path); err != nil {
 			if errors.Is(err, ErrImageExists) {
 				result.Skipped++
@@ -232,15 +244,15 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 		if _, relocated := relocatedImageIDs[image.ID]; relocated {
 			continue
 		}
-		if err := s.deleteImageRecord(image.ID); err != nil {
+		if err := s.deleteMissingImageRecord(image.ID); err != nil {
 			result.recordError("delete", image.Directory, image.Path, err)
 			continue
 		}
 		result.Removed++
 	}
 
-	log.Printf("图片目录对账完成 dirs=%d scanned=%d added=%d relocated=%d removed=%d skipped=%d errors=%d",
-		len(roots), len(scannedByPath), result.Added, result.Relocated, result.Removed, result.Skipped, len(result.Errors))
+	log.Printf("图片目录对账完成 dirs=%d scanned=%d added=%d restored=%d relocated=%d removed=%d skipped=%d errors=%d",
+		len(roots), len(scannedByPath), result.Added, result.Restored, result.Relocated, result.Removed, result.Skipped, len(result.Errors))
 	return result, nil
 }
 
@@ -410,6 +422,39 @@ func (s *ImageService) addImage(path string) (*models.Image, error) {
 	return image, nil
 }
 
+// restoreStaleImage revives a row that this scanner previously removed after
+// its source path disappeared. The IsStale marker is the guard that keeps an
+// intentional user deletion (which leaves IsStale=false) from being undone by
+// a later scan when the original file is still on disk.
+func (s *ImageService) restoreStaleImage(path string, size int64) (bool, error) {
+	path = filepath.Clean(strings.TrimSpace(path))
+	var image models.Image
+	if err := database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path).
+		Order("deleted_at DESC, id DESC").First(&image).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !image.IsStale {
+		return false, nil
+	}
+	result := database.DB.Unscoped().Model(&models.Image{}).Where("id = ? AND deleted_at IS NOT NULL AND is_stale = ?", image.ID, true).Updates(map[string]interface{}{
+		"deleted_at": nil,
+		"is_stale":   false,
+		"size":       size,
+		"name":       filepath.Base(path),
+		"directory":  filepath.Dir(path),
+	})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	return true, nil
+}
+
 // relocateImage 迁移场景原地改写 path/directory，保留标签/收藏/评分等其余字段（D-005）。
 func (s *ImageService) relocateImage(id uint, newPath string) error {
 	newPath = filepath.Clean(strings.TrimSpace(newPath))
@@ -437,17 +482,44 @@ func (s *ImageService) relocateImage(id uint, newPath string) error {
 	return nil
 }
 
-// deleteImageRecord 失踪对账仅软删记录：不动磁盘文件，不建回收站条目。
-func (s *ImageService) deleteImageRecord(id uint) error {
-	result := database.DB.Delete(&models.Image{}, id)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("图片记录不存在或已删除: %d", id)
+// deleteMissingImageRecord 失踪对账仅软删记录：不动磁盘文件，不建回收站条目。
+// is_stale 是后续自动恢复的来源标记。
+func (s *ImageService) deleteMissingImageRecord(id uint) error {
+	// Preserve a recovery breadcrumb before soft deletion. If a removable
+	// volume disappears temporarily, the next scan can revive the same row and
+	// retain its tags, rating, and other curated metadata.
+	if err := database.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.Image{}).Where("id = ?", id).Update("is_stale", true)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("图片记录不存在或已删除: %d", id)
+		}
+		return tx.Delete(&models.Image{}, id).Error
+	}); err != nil {
+		return err
 	}
 	log.Printf("图片记录软删除（失踪对账，不动文件） id=%d", id)
 	return nil
+}
+
+// deleteImageRecord is an intentional user deletion. It explicitly clears the
+// scanner recovery marker so a later scan cannot undo that choice.
+func (s *ImageService) deleteImageRecord(id uint) error {
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.Image{}).Where("id = ?", id).Update("is_stale", false).Error; err != nil {
+			return err
+		}
+		result := tx.Delete(&models.Image{}, id)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return fmt.Errorf("图片记录不存在或已删除: %d", id)
+		}
+		return nil
+	})
 }
 
 // ===== 回收站（镜像视频侧四态状态机 pending_move/deleted/restoring/rollback，设计 4.5 / D-008） =====
