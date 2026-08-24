@@ -136,19 +136,38 @@
             {{ allLoadedSelected ? '取消全选' : '全选已加载' }}
           </button>
           <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" data-test="photo-clear-selection" @click="clearSelection">清除选择</button>
-          <input
-            v-if="selectedImageIDs.length"
-            v-model="batchTagKeyword"
-            type="search"
-            class="search-input photo-batch-tag-search"
-            placeholder="搜索标签"
-            data-test="photo-batch-tag-search"
-          />
-          <select v-if="selectedImageIDs.length" v-model="batchTagToAdd" class="select-input" data-test="photo-batch-tag-select">
-            <option :value="0" disabled>批量添加标签...</option>
-            <option v-for="tag in filteredBatchTags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
-          </select>
-          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" :disabled="!batchTagToAdd || batchBusy" data-test="photo-batch-tag-add" @click="batchAddTag">添加标签</button>
+          <div v-if="selectedImageIDs.length" class="photo-tag-combobox photo-batch-tag-search">
+            <input
+              v-model="batchTagKeyword"
+              type="search"
+              class="search-input"
+              placeholder="搜索标签，回车添加"
+              role="combobox"
+              autocomplete="off"
+              aria-controls="photo-batch-tag-options"
+              :aria-expanded="batchTagMenuOpen"
+              :aria-activedescendant="batchTagMenuOpen && filteredBatchTags[batchTagActiveIndex] ? `photo-batch-tag-option-${filteredBatchTags[batchTagActiveIndex].id}` : undefined"
+              data-test="photo-batch-tag-search"
+              @focus="openBatchTagMenu"
+              @input="handleBatchTagInput"
+              @keydown="handleBatchTagKeydown"
+              @blur="closeBatchTagMenu"
+            />
+            <div v-if="batchTagMenuOpen" id="photo-batch-tag-options" class="photo-tag-options" role="listbox" data-test="photo-batch-tag-options">
+              <button
+                v-for="(tag, index) in filteredBatchTags"
+                :id="`photo-batch-tag-option-${tag.id}`"
+                :key="tag.id"
+                type="button"
+                role="option"
+                :aria-selected="index === batchTagActiveIndex"
+                :class="['photo-tag-option', { active: index === batchTagActiveIndex }]"
+                @mouseenter="batchTagActiveIndex = index"
+                @mousedown.prevent="batchAddTag(tag)"
+              >{{ tag.name }}</button>
+              <span v-if="filteredBatchTags.length === 0" class="photo-tag-options__empty">没有匹配标签</span>
+            </div>
+          </div>
           <button v-if="selectedImageIDs.length" type="button" class="btn-danger btn-compact" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">删除所选</button>
         </div>
       </div>
@@ -433,19 +452,37 @@
             </span>
             <span v-if="!(viewerImage.tags || []).length" class="photo-viewer__muted">尚无标签</span>
           </div>
-          <div v-if="addableTags.length" class="photo-viewer__tag-add">
+          <div v-if="addableTags.length" class="photo-viewer__tag-add photo-tag-combobox">
             <input
               v-model="tagKeyword"
               type="search"
               class="search-input"
-              placeholder="搜索标签"
+              placeholder="搜索标签，回车添加"
+              role="combobox"
+              autocomplete="off"
+              aria-controls="photo-tag-options"
+              :aria-expanded="tagMenuOpen"
+              :aria-activedescendant="tagMenuOpen && filteredAddableTags[tagActiveIndex] ? `photo-tag-option-${filteredAddableTags[tagActiveIndex].id}` : undefined"
               data-test="photo-tag-search"
+              @focus="openTagMenu"
+              @input="handleTagInput"
+              @keydown="handleTagKeydown"
+              @blur="closeTagMenu"
             />
-            <select v-model="tagToAdd" class="select-input" data-test="photo-tag-select">
-              <option :value="0" disabled>选择标签...</option>
-              <option v-for="tag in filteredAddableTags" :key="tag.id" :value="tag.id">{{ tag.name }}</option>
-            </select>
-            <button type="button" class="btn-secondary btn-compact" :disabled="!tagToAdd" data-test="photo-tag-add" @click="addTag(viewerImage)">添加</button>
+            <div v-if="tagMenuOpen" id="photo-tag-options" class="photo-tag-options" role="listbox" data-test="photo-tag-options">
+              <button
+                v-for="(tag, index) in filteredAddableTags"
+                :id="`photo-tag-option-${tag.id}`"
+                :key="tag.id"
+                type="button"
+                role="option"
+                :aria-selected="index === tagActiveIndex"
+                :class="['photo-tag-option', { active: index === tagActiveIndex }]"
+                @mouseenter="tagActiveIndex = index"
+                @mousedown.prevent="addTag(viewerImage, tag)"
+              >{{ tag.name }}</button>
+              <span v-if="filteredAddableTags.length === 0" class="photo-tag-options__empty">没有匹配标签</span>
+            </div>
           </div>
         </div>
 
@@ -622,11 +659,13 @@ export default {
       candidateBusy: false,
       retagError: '',
       ratingDraft: '',
-      tagToAdd: 0,
       tagKeyword: '',
+      tagMenuOpen: false,
+      tagActiveIndex: 0,
       selectedImageIDs: [],
       batchTagKeyword: '',
-      batchTagToAdd: 0,
+      batchTagMenuOpen: false,
+      batchTagActiveIndex: 0,
       batchDeletePending: false,
       batchDeleteFileChoice: false,
       batchBusy: false,
@@ -1393,12 +1432,44 @@ export default {
     },
     clearSelection() {
       this.selectedImageIDs = [];
-      this.batchTagToAdd = 0;
       this.batchTagKeyword = '';
+      this.batchTagMenuOpen = false;
+      this.batchTagActiveIndex = 0;
     },
-    async batchAddTag() {
+    openBatchTagMenu() {
+      this.batchTagMenuOpen = true;
+      this.batchTagActiveIndex = 0;
+    },
+    closeBatchTagMenu() {
+      this.batchTagMenuOpen = false;
+    },
+    handleBatchTagInput() {
+      this.batchTagMenuOpen = true;
+      this.batchTagActiveIndex = 0;
+    },
+    handleBatchTagKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeBatchTagMenu();
+        return;
+      }
+      if (!this.filteredBatchTags.length) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.batchTagMenuOpen = true;
+        this.batchTagActiveIndex = (this.batchTagActiveIndex + 1) % this.filteredBatchTags.length;
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.batchTagMenuOpen = true;
+        this.batchTagActiveIndex = (this.batchTagActiveIndex - 1 + this.filteredBatchTags.length) % this.filteredBatchTags.length;
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        this.batchAddTag(this.filteredBatchTags[this.batchTagActiveIndex] || this.filteredBatchTags[0]);
+      }
+    },
+    async batchAddTag(tag) {
       const ids = [...this.selectedImageIDs];
-      const tagID = Number(this.batchTagToAdd);
+      const tagID = Number(tag?.id);
       if (!ids.length || !tagID || this.batchBusy) return;
       this.batchBusy = true;
       try {
@@ -1414,8 +1485,9 @@ export default {
           });
         }
         this.selectedImageIDs = ids.filter(id => failed.has(id));
-        this.batchTagToAdd = 0;
-        if (!this.selectedImageIDs.length) this.batchTagKeyword = '';
+        this.batchTagKeyword = '';
+        this.batchTagMenuOpen = false;
+        this.batchTagActiveIndex = 0;
         if (result?.failed) this.error = `批量添加标签部分失败：${result.failed} 张图片未完成。`;
         await this.loadImageTags();
       } catch (err) {
@@ -1463,8 +1535,9 @@ export default {
       if (index < 0 || index >= this.images.length) return;
       this.viewerIndex = index;
       this.viewerImageError = false;
-      this.tagToAdd = 0;
       this.tagKeyword = '';
+      this.tagMenuOpen = false;
+      this.tagActiveIndex = 0;
       const image = this.images[index];
       this.ratingDraft = image.personal_rating == null ? '' : image.personal_rating;
       this.loadViewerDetail(image.id);
@@ -1476,8 +1549,9 @@ export default {
       this.viewerDetailError = '';
       this.viewerCandidates = [];
       this.retagError = '';
-      this.tagToAdd = 0;
       this.tagKeyword = '';
+      this.tagMenuOpen = false;
+      this.tagActiveIndex = 0;
     },
     viewerNext() {
       if (this.viewerIndex < this.images.length - 1) this.openViewer(this.viewerIndex + 1);
@@ -1629,15 +1703,46 @@ export default {
       this.ratingDraft = '';
       await this.applyRating();
     },
-    async addTag(image) {
-      const tagID = Number(this.tagToAdd);
+    openTagMenu() {
+      this.tagMenuOpen = true;
+      this.tagActiveIndex = 0;
+    },
+    closeTagMenu() {
+      this.tagMenuOpen = false;
+    },
+    handleTagInput() {
+      this.tagMenuOpen = true;
+      this.tagActiveIndex = 0;
+    },
+    handleTagKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeTagMenu();
+        return;
+      }
+      if (!this.filteredAddableTags.length) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.tagMenuOpen = true;
+        this.tagActiveIndex = (this.tagActiveIndex + 1) % this.filteredAddableTags.length;
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.tagMenuOpen = true;
+        this.tagActiveIndex = (this.tagActiveIndex - 1 + this.filteredAddableTags.length) % this.filteredAddableTags.length;
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        this.addTag(this.viewerImage, this.filteredAddableTags[this.tagActiveIndex] || this.filteredAddableTags[0]);
+      }
+    },
+    async addTag(image, tag) {
+      const tagID = Number(tag?.id);
       if (!image || !tagID) return;
       try {
         await AddTagToImage(image.id, tagID);
-        const tag = this.tags.find(item => Number(item.id) === Number(tagID));
         if (tag) this.patchImage({ id: image.id, tags: [...(image.tags || []), tag] });
-        this.tagToAdd = 0;
         this.tagKeyword = '';
+        this.tagMenuOpen = false;
+        this.tagActiveIndex = 0;
         this.loadImageTags();
       } catch (err) {
         this.error = `添加标签失败：${err}`;
@@ -1733,7 +1838,14 @@ export default {
 .photo-toolbar__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
 .photo-selection-tools { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
 .photo-selection-tools__count { color: var(--text-secondary); font-size: 12px; }
-.photo-batch-tag-search { width: 150px; }
+.photo-batch-tag-search { width: 210px; }
+.photo-tag-combobox { position: relative; min-width: 0; }
+.photo-tag-combobox > .search-input { width: 100%; }
+.photo-tag-options { position: absolute; top: calc(100% + 4px); right: 0; left: 0; z-index: 20; max-height: 220px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); box-shadow: 0 10px 24px rgba(0, 0, 0, .22); }
+.photo-tag-option { display: block; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
+.photo-tag-option:hover,
+.photo-tag-option.active { background: var(--control-bg); color: var(--primary-color, #0d9488); }
+.photo-tag-options__empty { display: block; padding: 8px; color: var(--text-muted); font-size: 12px; }
 .photo-cleanup-open-btn { display: inline-flex; align-items: center; gap: 6px; }
 .photo-cleanup-badge { padding: 1px 7px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
 .photo-cleanup-badge--done { background: var(--primary-color, #0d9488); color: #fff; }
@@ -1851,8 +1963,7 @@ export default {
 .photo-viewer__rating { display: flex; align-items: center; gap: 8px; }
 .photo-viewer__rating .number-input { width: 120px; }
 .photo-viewer__tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.photo-viewer__tag-add { display: flex; gap: 8px; }
-.photo-viewer__tag-add .select-input { flex: 1; min-width: 0; }
+.photo-viewer__tag-add { width: 100%; }
 .photo-viewer__muted { margin: 0; color: var(--text-muted); font-size: 12px; }
 .photo-viewer__candidates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .photo-viewer__candidate { display: flex; align-items: center; gap: 8px; }

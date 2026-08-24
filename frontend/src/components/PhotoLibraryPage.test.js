@@ -384,7 +384,7 @@ describe('PhotoLibraryPage viewer', () => {
     expect(wrapper.find('[data-test="photo-viewer-exif"]').exists()).toBe(false);
   });
 
-  it('filters addable tags by a search keyword', async () => {
+  it('filters tags in the input menu and adds the first match with Enter', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(6)]));
     const wrapper = await mountPage({ tags: [
       { id: 1, name: '旅行' },
@@ -394,10 +394,18 @@ describe('PhotoLibraryPage viewer', () => {
 
     await wrapper.get('.photo-card__media').trigger('click');
     await flushPromises();
-    await wrapper.get('[data-test="photo-tag-search"]').setValue('旅行');
+    const input = wrapper.get('[data-test="photo-tag-search"]');
+    await input.setValue('旅行');
 
-    const options = wrapper.findAll('[data-test="photo-tag-select"] option').map(option => option.text());
-    expect(options).toEqual(['选择标签...', '旅行', '旅行夜景']);
+    const options = wrapper.findAll('[data-test="photo-tag-options"] .photo-tag-option').map(option => option.text());
+    expect(options).toEqual(['旅行', '旅行夜景']);
+    expect(wrapper.find('[data-test="photo-tag-add"]').exists()).toBe(false);
+
+    await input.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+
+    expect(api.AddTagToImage).toHaveBeenCalledWith(6, 1);
+    expect(wrapper.find('[data-test="photo-tag-options"]').exists()).toBe(false);
   });
 
   it('lists this image\'s pending AI tag candidates', async () => {
@@ -637,9 +645,11 @@ describe('PhotoLibraryPage delete', () => {
     const wrapper = await mountPage({ tags: [{ id: 7, name: '旅行' }] });
 
     await wrapper.get('[data-test="photo-select-all"]').trigger('click');
-    await wrapper.get('[data-test="photo-batch-tag-search"]').setValue('旅');
-    await wrapper.get('[data-test="photo-batch-tag-select"]').setValue('7');
-    await wrapper.get('[data-test="photo-batch-tag-add"]').trigger('click');
+    const input = wrapper.get('[data-test="photo-batch-tag-search"]');
+    await input.setValue('旅');
+    expect(wrapper.get('[data-test="photo-batch-tag-options"]').text()).toContain('旅行');
+    expect(wrapper.find('[data-test="photo-batch-tag-add"]').exists()).toBe(false);
+    await input.trigger('keydown', { key: 'Enter' });
     await flushPromises();
 
     expect(api.BatchAddTagToImages).toHaveBeenCalledWith([1, 2], 7);
