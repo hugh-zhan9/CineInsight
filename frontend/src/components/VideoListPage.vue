@@ -17,6 +17,9 @@
             :key="mode.value"
             type="button"
             :class="['segmented__btn', { active: searchMode === mode.value }]"
+            :disabled="mode.value === 'semantic' && !semanticAvailable"
+            :title="mode.value === 'semantic' && !semanticAvailable ? semanticUnavailableNotice : null"
+            :data-test="`search-mode-${mode.value}`"
             @click="setSearchMode(mode.value)"
           >{{ mode.label }}</button>
         </div>
@@ -281,7 +284,11 @@
 	  </span>
 	  <button v-if="localMetadataExport.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelLocalMetadataExport">取消</button>
 	</div>
-    <div v-if="searchMode === 'semantic'" class="scan-sync-status" :role="semanticSearchError ? 'alert' : 'status'">
+    <div v-if="!semanticAvailable && semanticUnavailableNotice" class="scan-sync-status" role="status" data-test="semantic-unavailable">
+      {{ semanticUnavailableNotice }}
+    </div>
+
+    <div v-else-if="searchMode === 'semantic'" class="scan-sync-status" :role="semanticSearchError ? 'alert' : 'status'">
       <span v-if="semanticSearchError">语义搜索失败：{{ semanticSearchErrorText }}</span>
       <span v-else-if="semanticCoverage">语义索引覆盖 {{ semanticCoverage.indexed || 0 }}/{{ semanticCoverage.total || 0 }}；未建立索引的视频不会出现在结果中。</span>
       <span v-else>用自然语言描述想找的内容，回车开始搜索；未建立索引的视频不会出现在结果中。</span>
@@ -1778,7 +1785,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, CountLibraryVideos, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, DismissNearDuplicateGroup, GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, DismissNearDuplicateGroup, GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1822,6 +1829,7 @@ export default {
       semanticSimilarVideoID: 0,
       semanticCoverage: null,
       semanticSearchError: '',
+      semanticStatus: null,
       enhanceCapability: null,
       enhanceDialog: { show: false, video: null, profile: 'general', creating: false, error: '', preflight: null },
       enhanceTasks: [],
@@ -1985,6 +1993,7 @@ export default {
     this.configureHomeListVirtualization();
     this.loadVideos();
     this.refreshLibraryCounts();
+    this.loadSemanticStatus();
     this.loadSavedLibraryViews();
     this.refreshSubtitleQueue();
     this.refreshAITagSummary();
@@ -2157,6 +2166,19 @@ export default {
   computed: {
     randomPickSize() {
       return RANDOM_PICK_SIZE;
+    },
+    // 能力不可用时把「语义」入口置灰并说明原因，而不是让用户搜完看到一个空结果——
+    // 空结果会被读成"库里没有匹配内容"，而不是"这个能力现在用不了"。
+    // SQLite 后端下语义检索依赖的 pgvector 不存在，这是最常见的触发。
+    semanticAvailable() {
+      // 状态尚未取回时不预判：默认可用，避免启动瞬间入口闪一下灰。
+      if (!this.semanticStatus) return true;
+      return Boolean(this.semanticStatus.available);
+    },
+    semanticUnavailableNotice() {
+      if (!this.semanticStatus || this.semanticStatus.available) return '';
+      const reason = String(this.semanticStatus.unavailable || '').trim();
+      return `语义搜索不可用：${reason || '语义索引能力未就绪'}`;
     },
     searchPlaceholder() {
       if (this.searchMode === 'subtitle') return '搜索字幕内容…';
@@ -3709,9 +3731,23 @@ export default {
       window.localStorage?.setItem('cineinsight-library-density', this.rowDensity);
     },
     setSearchMode(mode) {
+      if (mode === 'semantic' && !this.semanticAvailable) return;
       if (this.searchMode === mode) return;
       this.searchMode = mode;
       this.handleSearch(true, true);
+    },
+    async loadSemanticStatus() {
+      try {
+        this.semanticStatus = await GetSemanticIndexStatus();
+        // 能力掉了而当前正停在语义模式，退回文件搜索，别把用户卡在一个用不了的模式里。
+        if (!this.semanticAvailable && this.searchMode === 'semantic') {
+          this.searchMode = 'file';
+          this.handleSearch(true, true);
+        }
+      } catch (err) {
+        this.semanticStatus = null;
+        this.debugLog('loadSemanticStatus failed', { err: String(err) }, true);
+      }
     },
     formatCount(value) {
       return Number(value || 0).toLocaleString('zh-CN');

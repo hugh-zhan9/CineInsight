@@ -2,7 +2,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter', 'PickRandomVideos', 'GetVideosByIDs', 'CountLibraryVideos',
+  'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter', 'PickRandomVideos', 'GetVideosByIDs', 'CountLibraryVideos', 'GetSemanticIndexStatus',
   'SetVideoFavorite', 'SetVideoWatched', 'UpdateVideoWatchProgress', 'ListSavedLibraryViews', 'SaveLibraryView',
   'DeleteSavedLibraryView', 'RejectSameSourceRelation', 'OpenDirectory', 'DeleteVideo', 'BatchDeleteVideos', 'ListTrashEntries',
   'RestoreTrashEntry', 'RemoveTagFromVideo', 'UpdateSettings', 'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine',
@@ -48,6 +48,7 @@ beforeEach(() => {
   });
   api.SearchLibraryVideoPage.mockResolvedValue({ videos: [] });
   api.CountLibraryVideos.mockResolvedValue(0);
+  api.GetSemanticIndexStatus.mockResolvedValue({ available: true, unavailable: '' });
   api.SearchSemanticVideos.mockResolvedValue({ hits: [], coverage: { indexed: 0, total: 0 }, has_more: false });
   api.FindSimilarVideos.mockResolvedValue({ hits: [], coverage: { indexed: 0, total: 0 }, has_more: false });
   api.ListSavedLibraryViews.mockResolvedValue([]);
@@ -788,6 +789,61 @@ describe('VideoListPage 清理弹窗重排', () => {
     wrapper.vm.cleanupSelection = [2];
     await wrapper.vm.$nextTick();
     expect(wrapper.vm.cleanupSelectedSizeText).toBe('100 B');
+    wrapper.unmount();
+  });
+});
+
+describe('VideoListPage 语义检索降级', () => {
+  it('能力不可用时语义入口置灰并说明原因，而不是让用户搜出空结果', async () => {
+    api.GetSemanticIndexStatus.mockResolvedValue({
+      available: false,
+      unavailable: '语义向量检索需要 PostgreSQL pgvector'
+    });
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(wrapper.vm.semanticAvailable).toBe(false);
+    expect(wrapper.vm.semanticUnavailableNotice).toContain('pgvector');
+    const semanticButton = wrapper.find('[data-test="search-mode-semantic"]');
+    expect(semanticButton.attributes('disabled')).toBeDefined();
+    expect(semanticButton.attributes('title')).toContain('语义搜索不可用');
+    // 原因常驻可见，不用等到搜索之后。
+    expect(wrapper.find('[data-test="semantic-unavailable"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('能力不可用时切不进语义模式', async () => {
+    api.GetSemanticIndexStatus.mockResolvedValue({ available: false, unavailable: '缺少 pgvector' });
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    wrapper.vm.setSearchMode('semantic');
+    expect(wrapper.vm.searchMode).not.toBe('semantic');
+    wrapper.unmount();
+  });
+
+  it('停在语义模式时能力掉了会退回文件搜索', async () => {
+    api.GetSemanticIndexStatus.mockResolvedValue({ available: false, unavailable: '缺少 pgvector' });
+    const wrapper = await mountPage();
+    wrapper.vm.searchMode = 'semantic';
+    await wrapper.vm.loadSemanticStatus();
+    await flushPromises();
+    // 不能把用户卡在一个用不了的模式里。
+    expect(wrapper.vm.searchMode).toBe('file');
+    wrapper.unmount();
+  });
+
+  it('能力可用时语义入口正常，且状态未取回前不预判为不可用', async () => {
+    const wrapper = await mountPage();
+    await flushPromises();
+    expect(wrapper.vm.semanticAvailable).toBe(true);
+    expect(wrapper.find('[data-test="search-mode-semantic"]').attributes('disabled')).toBeUndefined();
+    expect(wrapper.find('[data-test="semantic-unavailable"]').exists()).toBe(false);
+
+    // 状态还没回来时默认可用，避免启动瞬间入口闪一下灰。
+    wrapper.vm.semanticStatus = null;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.semanticAvailable).toBe(true);
     wrapper.unmount();
   });
 });
