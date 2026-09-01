@@ -571,6 +571,47 @@ describe('VideoListPage random pick of 10', () => {
   });
 });
 
+describe('VideoListPage 多选批量栏', () => {
+  const rows = [
+    { id: 1, name: 'a.mp4', size: 2 * 1024 ** 3, tags: [] },
+    { id: 2, name: 'b.mp4', size: 1024 ** 3, tags: [] }
+  ];
+
+  it('批量栏顶替结果条，显示已选数与合计体积', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [...rows];
+    wrapper.vm.selectedVideoIds = [1, 2];
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('.result-bar').exists()).toBe(false);
+    expect(wrapper.find('.selection-toolbar').exists()).toBe(true);
+    expect(wrapper.text()).toContain('已选 2 个');
+    expect(wrapper.vm.selectedTotalSizeText).toBe('3.0 GB');
+    wrapper.unmount();
+  });
+
+  it('跨页选中时不猜合计体积', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [rows[0]];
+    // 第 2 条不在已加载页里，拿不到 size —— 宁可不显示也不显示一个偏小的数。
+    wrapper.vm.selectedVideoIds = [1, 2];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.selectedTotalSizeText).toBe('');
+    wrapper.unmount();
+  });
+
+  it('Esc 清除选择', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [...rows];
+    wrapper.vm.selectedVideoIds = [1, 2];
+    await wrapper.vm.$nextTick();
+
+    wrapper.vm.handleLibraryShortcut({ key: 'Escape', preventDefault() {} });
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+});
+
 describe('VideoListPage 工具栏三层重排', () => {
   it('结果条用后端计数回显命中数与全库总数', async () => {
     api.CountLibraryVideos.mockResolvedValue(218).mockResolvedValueOnce(218).mockResolvedValueOnce(3482);

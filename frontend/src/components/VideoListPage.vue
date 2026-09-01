@@ -143,13 +143,17 @@
     </div>
 
     <div v-else class="selection-toolbar">
-      <span>已选 {{ selectedVideoIds.length }} 个视频</span>
-      <div class="selection-toolbar__actions">
-        <button @click="openBatchAddTagDialog" class="btn-secondary btn-compact">批量标签编辑</button>
-        <button @click="moveSelectedVideos" class="btn-secondary btn-compact" :disabled="migrationRunning">批量迁移</button>
-        <button type="button" class="btn-secondary btn-compact" @click="openLocalMetadataDialog(selectedVideoIds)">导入本地资料</button>
-        <button @click="confirmBatchDelete" class="btn-danger btn-compact">批量删除</button>
-      </div>
+      <span class="selection-toolbar__check" aria-hidden="true">✓</span>
+      <strong>已选 {{ selectedVideoIds.length }} 个</strong>
+      <span v-if="selectedTotalSizeText" class="selection-toolbar__size">共 {{ selectedTotalSizeText }}</span>
+      <span class="selection-toolbar__divider"></span>
+      <button @click="openBatchAddTagDialog" class="btn-secondary btn-compact">批量标签编辑</button>
+      <button @click="moveSelectedVideos" class="btn-secondary btn-compact" :disabled="migrationRunning">批量迁移</button>
+      <button type="button" class="btn-secondary btn-compact" @click="openLocalMetadataDialog(selectedVideoIds)">导入本地资料</button>
+      <button @click="confirmBatchDelete" class="btn-danger btn-compact">批量删除</button>
+      <div class="selection-toolbar__spacer"></div>
+      <button type="button" class="link-btn" @click="toggleSelectAllVisible">{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
+      <button type="button" class="link-btn" @click="clearSelection">清除选择 <kbd>Esc</kbd></button>
     </div>
     </div>
 
@@ -352,6 +356,7 @@
             :layout-mode="viewMode"
             :density="rowDensity"
             :narrow="previewOpen && viewMode === 'list'"
+            :actions-suspended="selectedVideoIds.length > 0"
             @preview="openPreview"
             @play="playVideo"
             @toggle-favorite="toggleVideoFavorite"
@@ -1123,10 +1128,28 @@
   font-weight: 650;
 }
 
-.selection-toolbar__actions {
-  display: flex;
-  gap: 8px;
-  margin-left: auto;
+.selection-toolbar__check {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: var(--accent-color);
+  color: var(--accent-on);
+  font-size: 11px;
+}
+
+.selection-toolbar__size { font-weight: 400; color: var(--text-secondary); }
+.selection-toolbar__divider { width: 1px; height: 20px; background: var(--accent-border); }
+.selection-toolbar__spacer { flex: 1; }
+.selection-toolbar kbd {
+  padding: 0 4px;
+  border: 1px solid var(--accent-border);
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  opacity: 0.8;
 }
 
 /* 筛选浮层 */
@@ -2087,6 +2110,17 @@ export default {
       }
       return labels;
     },
+    selectedTotalSizeText() {
+      const ids = new Set(this.selectedVideoIds);
+      // 只能合计当前已加载的行；跨页选中的条目没有 size 可用，宁可不显示也不猜。
+      const loaded = this.videos.filter(video => ids.has(video.id));
+      if (loaded.length !== ids.size || loaded.length === 0) return '';
+      const bytes = loaded.reduce((total, video) => total + Number(video.size || 0), 0);
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const index = bytes > 0 ? Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024))) : 0;
+      const value = bytes / Math.pow(1024, index);
+      return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+    },
     filteredCountText() {
       // 语义搜索的命中数由检索接口决定，不能用结构化筛选计数冒充。
       if (this.searchMode === 'semantic') return `${this.formatCount(this.videos.length)}${this.hasMore ? '+' : ''}`;
@@ -2392,6 +2426,11 @@ export default {
 	},
 	handleLibraryShortcut(event) {
 	  if (!this.pageActive || this.previewOpen || this.rowMenu.video || document.querySelector('[role="dialog"]')) return;
+	  if (event.key === 'Escape' && this.selectedVideoIds.length > 0) {
+	    event.preventDefault();
+	    this.clearSelection();
+	    return;
+	  }
 	  const action = shortcutActionForEvent(event);
 	  if (!action) return;
 	  event.preventDefault();
@@ -3678,6 +3717,9 @@ export default {
         this.selectedSavedViewID = Number(item.id.slice(6));
         this.applySelectedSavedView();
       }
+    },
+    clearSelection() {
+      this.selectedVideoIds = [];
     },
     openRowMenu(video, anchor) {
       this.rowMenu = { video, anchor, position: null };

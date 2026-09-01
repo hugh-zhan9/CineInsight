@@ -411,6 +411,7 @@ input:checked + .slider::before {
 }
 
 .video-actions { flex: none; display: flex; align-items: center; gap: 4px; }
+.video-actions-suspended { flex: none; color: var(--text-muted); font-size: 11.5px; }
 .row-btn {
   height: 30px; padding: 0 11px;
   display: inline-flex; align-items: center; justify-content: center;

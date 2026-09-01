@@ -80,9 +80,11 @@
       </div>
     </div>
 
+    <span v-if="actionsSuspended" class="video-actions-suspended">多选中 · 行内动作已挂起</span>
+
     <!-- 常驻四个高频动作，其余七个进 ⋯。不做"悬停才出现"：
          鼠标扫过时整列按钮闪烁反而更难扫读。 -->
-    <div class="video-actions">
+    <div v-else class="video-actions">
       <button v-if="!narrow" type="button" class="row-btn" @click="$emit('preview', video)">预览</button>
       <button type="button" class="row-btn row-btn--primary" @click="$emit('play', video.id)">播放</button>
       <button
@@ -121,7 +123,10 @@ export default {
     layoutMode: { type: String, default: 'list' },
     density: { type: String, default: 'compact' },
     // 详情抽屉展开后列表收窄，行切到窄变体：缩略图变小，只留播放 / ♥ / ⋯
-    narrow: { type: Boolean, default: false }
+    narrow: { type: Boolean, default: false },
+    // 多选态下整排隐去行内动作：这时用户的目标是批量操作，
+    // 行内按钮只会带来误点。
+    actionsSuspended: { type: Boolean, default: false }
   },
   emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select', 'open-row-menu'],
   data() {
