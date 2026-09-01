@@ -926,8 +926,6 @@ export default {
   justify-content: center;
   padding: 24px;
   background: var(--overlay-bg);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
 }
 
 .ai-confirm-dialog {

@@ -70,7 +70,7 @@ export default {
 .related-video-card { display: flex; min-width: 0; align-items: center; gap: 8px; padding: 7px; border: 1px solid var(--border-color); border-radius: 11px; background: transparent; }
 .related-video-card__select { width: 16px; height: 16px; flex: 0 0 auto; accent-color: var(--accent-color); }
 .related-video-card__main { display: grid; min-width: 0; flex: 1; grid-template-columns: 88px minmax(0, 1fr); align-items: center; gap: 10px; border: 0; padding: 0; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
-.related-video-card__thumbnail { display: grid; width: 88px; aspect-ratio: 16 / 9; place-items: center; overflow: hidden; border-radius: 8px; background: var(--thumb-bg); color: rgba(255, 255, 255, .72); }
+.related-video-card__thumbnail { display: grid; width: 88px; aspect-ratio: 16 / 9; place-items: center; overflow: hidden; border-radius: 8px; background: var(--thumb-bg); color: var(--thumb-fg); }
 .related-video-card__thumbnail img { width: 100%; height: 100%; display: block; object-fit: cover; }
 .related-video-card__thumbnail--failed { background: var(--thumb-fallback-bg); }
 .related-video-card__copy { min-width: 0; display: grid; gap: 4px; }

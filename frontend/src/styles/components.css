@@ -1,9 +1,6 @@
 .glass-surface {
-  background: var(--glass-bg);
-  border: 1px solid var(--glass-border);
-  box-shadow: var(--glass-shadow);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.35);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.35);
+  background: var(--panel-bg);
+  border: 1px solid var(--hairline);
 }
 
 .app-shell {
@@ -77,12 +74,15 @@
 
 .btn-primary {
   background: var(--accent-color);
-  color: #061b18;
+  color: var(--accent-on);
 }
 
+/* 原型把随机收敛成一个拆分按钮，不再用独立的琥珀色；这里先按普通控件着色，
+   拆分按钮结构在工具栏重排里给出。 */
 .btn-random {
-  background: #f6b94a;
-  color: #221606;
+  background: var(--control-bg);
+  border-color: var(--border-color);
+  color: var(--accent-text);
 }
 
 .btn-secondary {
@@ -93,8 +93,8 @@
 
 .btn-danger {
   background: var(--danger-soft);
-  border-color: rgba(229, 72, 77, 0.38);
-  color: var(--danger-color);
+  border-color: var(--danger-border);
+  color: var(--danger-text);
 }
 
 .btn-primary:hover:not(:disabled),
@@ -110,7 +110,7 @@
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: rgba(229, 72, 77, 0.18);
+  background: var(--danger-soft);
   border-color: var(--danger-color);
 }
 
@@ -155,21 +155,17 @@
   justify-content: center;
   padding: 18px;
   background: var(--overlay-bg);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
 }
 
 .modal {
   width: 100%;
   max-width: 500px;
   padding: 26px;
-  border: 1px solid var(--glass-border);
+  border: 1px solid var(--hairline);
   border-radius: var(--radius-lg);
-  background: var(--glass-strong-bg);
-  box-shadow: var(--glass-shadow);
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-modal);
   color: var(--text-primary);
-  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
-  backdrop-filter: blur(var(--glass-blur)) saturate(1.25);
 }
 
 .modal h2 {
@@ -238,7 +234,7 @@
 }
 
 .tag-badge {
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  border: 1px solid var(--hairline);
   color: var(--text-primary);
 }
 
@@ -294,7 +290,7 @@
   height: 14px;
   left: 3px;
   bottom: 3px;
-  background-color: white;
+  background-color: var(--panel-solid-bg);
   border-radius: 50%;
   transition: transform var(--transition);
 }
@@ -319,8 +315,8 @@ input:checked + .slider::before {
   background: var(--row-bg); padding: 12px 14px; border-radius: 10px; border: 1px solid var(--border-color);
   display: flex; align-items: center; transition: border-color var(--transition), background var(--transition), box-shadow var(--transition);
 }
-.video-item:hover { border-color: var(--accent-color); background: var(--row-hover-bg); box-shadow: 0 8px 22px rgba(15, 23, 42, 0.06); }
-.video-item--selected { border-color: var(--accent-color); background: rgba(20, 184, 166, 0.08); }
+.video-item:hover { border-color: var(--border-strong); background: var(--row-hover-bg); }
+.video-item--selected { border-color: var(--row-selected-border); background: var(--row-selected-bg); }
 .video-item--focused { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .video-select { width: 28px; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: flex-start; }
 .video-select input { width: 16px; height: 16px; accent-color: var(--accent-color); }
@@ -349,15 +345,15 @@ input:checked + .slider::before {
   border: 1px solid var(--accent-color); color: var(--accent-color);
 }
 .video-actions .btn-danger { border-color: var(--danger-color); color: var(--danger-color); }
-.video-actions .btn-secondary.active { background: var(--accent-color); color: white; }
-.video-actions .btn-secondary:hover { background: var(--accent-color); color: white; }
-.video-actions .btn-danger:hover { background: var(--danger-color); color: white; }
+.video-actions .btn-secondary.active { background: var(--accent-color); color: var(--accent-on); }
+.video-actions .btn-secondary:hover { background: var(--accent-color); color: var(--accent-on); }
+.video-actions .btn-danger:hover { background: var(--danger-color); color: var(--accent-on); }
 
 .btn-processing,
 .btn-processing:disabled {
   opacity: 0.7;
   cursor: wait;
-  background-color: #aaa !important;
+  background-color: var(--neutral-soft) !important;
 }
 
 .virtual-video-list--grid {

@@ -345,7 +345,7 @@ export default {
 }
 
 .remove-selected-tag:hover {
-  background: rgba(239, 68, 68, 0.12);
+  background: var(--danger-soft);
   color: var(--danger-color);
 }
 
@@ -371,7 +371,7 @@ export default {
 
 .clickable-tag-item.selected {
   border: 1px solid var(--accent-color);
-  background: rgba(59, 130, 246, 0.12);
+  background: var(--neutral-faint);
 }
 
 .color-dot {

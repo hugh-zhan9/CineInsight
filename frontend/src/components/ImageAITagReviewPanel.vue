@@ -256,7 +256,7 @@ export default {
 
 .image-ai-tag-review__error {
   margin: 0 0 12px;
-  color: var(--danger-color, #d9534f);
+  color: var(--danger-color);
   font-size: 13px;
 }
 
@@ -295,7 +295,7 @@ export default {
 
 .image-ai-tag-review__deleted {
   font-size: 12px;
-  color: var(--danger-color, #d9534f);
+  color: var(--danger-color);
 }
 
 .image-ai-tag-review__list {
@@ -319,7 +319,7 @@ export default {
 }
 
 .image-ai-tag-review__confidence.is-high {
-  color: var(--success-color, #2f9e44);
+  color: var(--success-color);
 }
 
 .image-ai-tag-review__reason {

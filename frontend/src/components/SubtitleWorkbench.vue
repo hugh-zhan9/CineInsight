@@ -683,7 +683,6 @@ export default {
   place-items: center;
   padding: 16px;
   background: var(--overlay-strong);
-  backdrop-filter: blur(8px);
 }
 
 .subtitle-workbench {
@@ -695,7 +694,7 @@ export default {
   border: 1px solid var(--border-color);
   border-radius: 18px;
   background: var(--panel-bg);
-  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.38);
+  box-shadow: var(--shadow-modal);
 }
 
 .subtitle-workbench__header,
@@ -857,7 +856,7 @@ export default {
 }
 
 .subtitle-workbench__entry--invalid {
-  border-color: rgba(229, 72, 77, 0.55);
+  border-color: var(--danger-color);
 }
 
 .subtitle-workbench__entry-heading,

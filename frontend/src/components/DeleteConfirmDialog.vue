@@ -71,6 +71,6 @@ export default {
 .delete-hint {
   margin-top: 12px;
   font-size: 12px;
-  color: #666;
+  color: var(--text-secondary);
 }
 </style>

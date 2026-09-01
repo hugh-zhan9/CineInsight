@@ -1844,11 +1844,11 @@ export default {
 .photo-tag-options { position: absolute; top: calc(100% + 4px); right: 0; left: 0; z-index: 20; max-height: 220px; overflow-y: auto; padding: 4px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); box-shadow: 0 10px 24px rgba(0, 0, 0, .22); }
 .photo-tag-option { display: block; width: 100%; padding: 7px 8px; border: 0; border-radius: 4px; background: transparent; color: var(--text-primary); text-align: left; cursor: pointer; }
 .photo-tag-option:hover,
-.photo-tag-option.active { background: var(--control-bg); color: var(--primary-color, #0d9488); }
+.photo-tag-option.active { background: var(--control-bg); color: var(--accent-color); }
 .photo-tag-options__empty { display: block; padding: 8px; color: var(--text-muted); font-size: 12px; }
 .photo-cleanup-open-btn { display: inline-flex; align-items: center; gap: 6px; }
 .photo-cleanup-badge { padding: 1px 7px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 10px; white-space: nowrap; }
-.photo-cleanup-badge--done { background: var(--primary-color, #0d9488); color: #fff; }
+.photo-cleanup-badge--done { background: var(--accent-color); color: #fff; }
 .photo-toolbar__keyword { max-width: 240px; }
 .photo-toolbar__sort { width: auto; min-width: 120px; }
 .photo-toolbar__ai { width: auto; min-width: 140px; }
@@ -1870,7 +1870,7 @@ export default {
 .photo-view-mode__btn.active { background: var(--panel-bg); color: var(--text-primary); }
 .photo-view-mode__btn:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__semantic-notice { margin: 0; color: var(--text-muted); font-size: 12px; }
-.photo-library__refresh { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--primary-color, #0d9488); border-radius: 10px; background: var(--control-bg); color: var(--text-primary); font-size: 12px; }
+.photo-library__refresh { display: flex; align-items: center; gap: 10px; margin: 0 0 10px; padding: 8px 12px; border: 1px solid var(--accent-color); border-radius: 10px; background: var(--control-bg); color: var(--text-primary); font-size: 12px; }
 .photo-library__refresh span { flex: 1; min-width: 0; }
 .photo-library__refresh-dismiss { flex: none; width: 22px; height: 22px; padding: 0; border: 0; border-radius: 999px; background: transparent; color: var(--text-muted); font-size: 15px; line-height: 1; cursor: pointer; }
 .photo-library__refresh-dismiss:hover { background: var(--border-color); color: var(--text-primary); }
@@ -1884,7 +1884,7 @@ export default {
 .photo-folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
 .photo-folder-card { min-width: 0; overflow: hidden; border-radius: 13px; }
 .photo-folder-card__open { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
-.photo-folder-card__open:focus-visible { outline: 2px solid var(--primary-color, #0d9488); outline-offset: -2px; }
+.photo-folder-card__open:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .photo-folder-card__covers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); aspect-ratio: 1.55; gap: 2px; overflow: hidden; background: var(--thumb-bg); }
 .photo-folder-card__covers img { width: 100%; height: 100%; min-width: 0; min-height: 0; display: block; object-fit: cover; }
 .photo-folder-card__covers[data-cover-count="1"] img { grid-column: 1 / -1; grid-row: 1 / -1; }
@@ -1903,7 +1903,7 @@ export default {
 .photo-timeline-header h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
 .photo-card { position: relative; overflow: hidden; border-radius: 13px; }
 .photo-card__select { position: absolute; z-index: 3; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: rgba(12, 20, 28, .72); cursor: pointer; }
-.photo-card__select input { width: 16px; height: 16px; margin: 0; accent-color: var(--primary-color, #0d9488); }
+.photo-card__select input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
 /* 定高卡片：缩略图区高度由列宽算出（等价于 aspect-ratio 1），信息条固定 52px，
    两者相加即 photoGrid 的 cellHeight，布局无需实测回写。 */
 .photo-card__media { display: block; width: 100%; height: var(--photo-cell-media, auto); aspect-ratio: 1; padding: 0; border: 0; background: var(--thumb-bg); cursor: pointer; }
@@ -1915,7 +1915,7 @@ export default {
 .photo-card:hover .photo-card__overlay,
 .photo-card:focus-within .photo-card__overlay { opacity: 1; }
 .photo-card__action { display: inline-flex; align-items: center; justify-content: center; min-width: 26px; height: 26px; padding: 0 7px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--panel-bg); color: var(--text-secondary); font-size: 13px; cursor: pointer; }
-.photo-card__action--active { color: #f6b94a; opacity: 1; }
+.photo-card__action--active { color: var(--warning-color); opacity: 1; }
 .photo-card:has(.photo-card__action--active) .photo-card__overlay { opacity: 1; }
 .photo-card__action--danger:hover { color: var(--danger-color); border-color: var(--danger-border); }
 .photo-card__meta { display: grid; align-content: start; gap: 2px; height: var(--photo-card-meta, 86px); box-sizing: border-box; overflow: hidden; padding: 9px 11px 10px; }

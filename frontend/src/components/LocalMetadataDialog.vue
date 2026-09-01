@@ -148,7 +148,7 @@ export default {
 </script>
 
 <style scoped>
-.local-metadata-overlay { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 24px; background: rgba(15, 23, 42, .58); }
+.local-metadata-overlay { position: fixed; inset: 0; z-index: 1300; display: grid; place-items: center; padding: 24px; background: var(--overlay-bg); }
 .local-metadata-dialog { width: min(880px, 96vw); max-height: 92vh; overflow: auto; padding: 20px; border-radius: 16px; background: var(--panel-bg); color: var(--text-primary); }
 .local-metadata-dialog header,.local-metadata-dialog footer,.local-metadata-field { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
 .local-metadata-dialog header { position: sticky; top: -20px; z-index: 2; padding: 16px 0; background: var(--panel-bg); }

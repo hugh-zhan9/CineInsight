@@ -829,7 +829,7 @@
   justify-content: center;
   border-radius: 999px;
   background: var(--danger-color);
-  color: #fff;
+  color: var(--accent-on);
   font-size: 11px;
   font-weight: 700;
 }
@@ -1235,7 +1235,7 @@
 .cleanup-outdated {
   margin: 0 0 12px;
   padding: 8px 12px;
-  border: 1px solid var(--primary-color, #0d9488);
+  border: 1px solid var(--accent-color);
   border-radius: 8px;
   background: var(--review-subtle-bg);
   color: var(--review-text-strong);
@@ -1299,7 +1299,7 @@
   font-size: 10px;
   white-space: nowrap;
 }
-.cleanup-badge--done { background: var(--primary-color, #0d9488); color: #fff; }
+.cleanup-badge--done { background: var(--accent-color); color: #fff; }
 .cleanup-card p,
 .cleanup-card ul,
 .cleanup-section ul {

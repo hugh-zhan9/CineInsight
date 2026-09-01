@@ -1169,8 +1169,6 @@ export default {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
   background: var(--panel-bg);
-  -webkit-backdrop-filter: blur(14px);
-  backdrop-filter: blur(14px);
 }
 
 .settings-section h3 {
@@ -1363,7 +1361,7 @@ export default {
 }
 
 .directory-watch-status--watching::before {
-  background: #22a06b;
+  background: var(--success-color);
 }
 
 .directory-watch-status--error::before,
