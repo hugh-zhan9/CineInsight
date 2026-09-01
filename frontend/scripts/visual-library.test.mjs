@@ -16,7 +16,10 @@ assert.match(row, /\/preview\/thumbnail\/\$\{this\.video\.id\}/, 'rows should us
 assert.match(row, /thumbnailFailed/, 'thumbnail failures need a local placeholder');
 assert.match(virtualList, /virtual-video-list--\$\{layoutMode\}/, 'virtual list shell should expose layout styling');
 assert.match(virtualList, /\.virtual-video-list\.virtual-video-list--grid\s*{[^}]*display:\s*grid;[^}]*gap:\s*12px;/s, 'the scoped list shell must switch from flex rows to a real grid');
-assert.match(sharedCss, /\.virtual-video-list--grid\s*{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px,\s*220px\)\)/s, 'grid cards should stay compact enough for multiple columns');
+// 原型 A3 把列宽改成 minmax(200px, 1fr)，列数随窗口自增。仍必须是 auto-fill
+// 而不是 auto-fit：auto-fill 保留空轨道，最后一行没填满时卡片才不会被拉宽。
+assert.match(sharedCss, /\.virtual-video-list--grid\s*{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px,\s*1fr\)\)/s, 'grid columns should grow with the window');
+assert.doesNotMatch(sharedCss, /repeat\(auto-fit,/, 'auto-fit would stretch a partially filled row');
 assert.match(sharedCss, /\.virtual-video-list--grid\s*{[^}]*justify-content:\s*start/s, 'a partially filled grid row should not stretch cards');
 assert.match(previewDrawer, /\.preview-drawer__body\s*{[^}]*display:\s*grid[^}]*grid-auto-rows:\s*max-content/s, 'drawer sections must not flex-shrink the player');
 assert.match(previewDrawer, /\.detail-section--player\s*{[^}]*min-height:\s*220px/s, 'player section needs a non-collapsing minimum height');

@@ -24,10 +24,16 @@ function runTests() {
   assert.equal(getWidthBucket(0), 1);
   assert.equal(getWidthBucket(320), 4);
 
+  // 2026-09-01 重构后行高固定：标签与字幕命中都压在同一行横向溢出隐藏，
+  // 不再换行撑高，所以预估只随档位与窄变体变化。三档必须互不相同且递增，
+  // 否则切档位后滚动条长度会算错。
   const simpleVideo = { id: 1, tags: [], is_stale: false };
   const subtitleVideo = { id: 2, tags: [{ id: 1 }], is_stale: true, _subtitleMatchText: 'match' };
-  assert.equal(estimateVideoRowHeight(simpleVideo, 10, false), 150);
-  assert.ok(estimateVideoRowHeight(subtitleVideo, 10, true) > 150);
+  assert.equal(estimateVideoRowHeight(simpleVideo, 10, false), 94);
+  assert.equal(estimateVideoRowHeight(subtitleVideo, 10, true), 94);
+  assert.equal(estimateVideoRowHeight(simpleVideo, 10, false, 'comfortable'), 110);
+  assert.equal(estimateVideoRowHeight(simpleVideo, 10, false, 'narrow'), 74);
+  assert.equal(estimateVideoRowHeight(simpleVideo, 10, false, 'nope'), 94);
 
   const items = [
     { id: 1 },

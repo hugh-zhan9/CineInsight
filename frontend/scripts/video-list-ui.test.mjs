@@ -60,8 +60,22 @@ assert.match(videoListSource, /@click="runIncrementalScan"|case 'scan-incrementa
 assert.match(videoListSource, /SyncScanDirectories/, 'manual incremental scan should reuse the backend sync API');
 assert.match(videoListSource, /增量扫描完成：\$\{summary\.join\('，'\)\}/, 'manual incremental scan should report its result counts');
 assert.match(videoListSource, /scan-sync-status--\$\{incrementalScan\.state\}/, 'manual incremental scan should expose success, warning, and error states');
-assert.match(videoRowSource, /row-primary-actions/, 'video rows should keep only primary actions in the always-visible rail');
-assert.match(videoRowSource, /row-secondary-actions/, 'video rows should group secondary actions separately');
+// 行内 11 个动作 2026-09-01 起降到常驻 4 个（预览·播放·收藏·已看）加一个 ⋯，
+// 七个次级动作与右键菜单共用同一份定义。四个常驻动作不做"悬停才出现"。
+assert.match(videoRowSource, /class="video-actions"/, 'video rows keep an always-visible action rail');
+assert.match(videoRowSource, /@click="\$emit\('open-row-menu', video, \$event\.currentTarget\)"/, 'secondary row actions collapse into a shared menu');
+assert.doesNotMatch(videoRowSource, /row-secondary-actions/, 'the second row of action buttons is gone');
+for (const label of ['预览', '播放', '已看']) {
+  assert.match(videoRowSource, new RegExp(`>${label}<`), `${label} must stay an always-visible row action`);
+}
+// 七个次级动作在页面级菜单里一个都不能少，删除仍走既有确认与回收站路径。
+for (const id of ['directory', 'rename', 'move', 'export-nfo', 'subtitle', 'subtitle-edit', 'subtitle-preview', 'enhance', 'delete']) {
+  assert.match(videoListSource, new RegExp(`id: '${id}'`), `row menu should keep the ${id} action`);
+}
+assert.match(videoListSource, /case 'delete': this\.confirmDelete\(video\)/, 'row menu delete must still go through the confirm + trash path');
+// ⋯ 与右键是同一份定义、两个入口：右键只是换了定位方式。
+assert.match(videoListSource, /this\.rowMenu = \{ video, anchor: null, position: \{ x: event\.clientX, y: event\.clientY \} \}/, 'right-click reuses the same menu definition');
+assert.doesNotMatch(videoListSource, /class="context-menu"/, 'the bespoke context menu markup is gone');
 assert.match(shortFeedCss, /--short-glass-bg:\s*var\(--glass-strong-bg\)/, 'short feed should consume shared glass tokens');
 assert.match(shortFeedMain, /styles\/tokens\.css/, 'short feed entry should load shared design tokens');
 assert.doesNotMatch(shortFeedSource, /🔇|🔊|🗑/, 'short feed controls should avoid emoji action labels');

@@ -1,6 +1,11 @@
 <template>
   <div
-    :class="['video-item', `video-item--${layoutMode}`, { 'video-item--selected': selected, 'video-item--focused': keyboardFocused }]"
+    :class="[
+      'video-item',
+      `video-item--${layoutMode}`,
+      `video-item--${density}`,
+      { 'video-item--selected': selected, 'video-item--focused': keyboardFocused, 'video-item--narrow': narrow }
+    ]"
     @contextmenu.prevent="$emit('contextmenu', $event, video)"
   >
     <label class="video-select" @click.stop>
@@ -11,6 +16,7 @@
         @change="$emit('toggle-select', video, $event.target.checked)"
       />
     </label>
+
     <div class="video-thumbnail" :class="{ 'video-thumbnail--failed': thumbnailFailed }">
       <img
         v-if="!thumbnailFailed"
@@ -20,31 +26,40 @@
         @error="thumbnailFailed = true"
       />
       <span v-else aria-hidden="true">▶</span>
+      <span v-if="video.duration" class="video-thumbnail__duration">{{ formatDuration(video.duration) }}</span>
+      <span v-if="layoutMode === 'grid' && video._semanticScore !== null && video._semanticScore !== undefined" class="video-thumbnail__score">
+        {{ formatSemanticScore(video._semanticScore) }}
+      </span>
+      <span v-if="watchProgressPercent > 0" class="video-thumbnail__progress" :title="watchProgressLabel">
+        <i :style="{ width: `${watchProgressPercent}%` }"></i>
+      </span>
     </div>
+
     <div class="video-info">
-      <h3>{{ video.display_title || video.name }}</h3>
-      <p class="video-path"><span v-if="video.display_title">{{ video.name }} · </span>{{ getDirectoryLabel(video) }}</p>
+      <div class="video-title-row">
+        <h3 :title="video.display_title || video.name">{{ video.display_title || video.name }}</h3>
+        <span v-if="video.is_watched" class="video-badge video-badge--accent">已看</span>
+        <span v-if="video.is_stale" class="video-badge video-badge--danger">路径失效</span>
+      </div>
+
+      <p class="video-path" :title="video.path">{{ video.name }} <span class="video-path__sep">·</span> {{ getDirectoryLabel(video) }}</p>
+
       <div class="video-meta">
-        <span class="video-size">{{ formatSize(video.size) }}</span>
-        <span v-if="video.duration" class="meta-divider">|</span>
-        <span v-if="video.duration" class="video-duration">{{ formatDuration(video.duration) }}</span>
-        <span v-if="video.resolution" class="meta-divider">|</span>
-        <span v-if="video.resolution" class="video-resolution">{{ video.resolution }}</span>
-        <span v-if="video.is_stale" class="meta-divider">|</span>
-        <span v-if="video.is_stale" class="video-stale">路径失效</span>
-        <span v-if="video.is_watched" class="meta-divider">|</span>
-        <span v-if="video.is_watched" class="video-watched">已看</span>
-        <span v-if="video.personal_rating !== null && video.personal_rating !== undefined" class="meta-divider">|</span>
-        <span v-if="video.personal_rating !== null && video.personal_rating !== undefined" class="video-rating">评分 {{ video.personal_rating }}/10</span>
-        <span v-if="video._semanticScore !== null && video._semanticScore !== undefined" class="meta-divider">|</span>
-        <span v-if="video._semanticScore !== null && video._semanticScore !== undefined" class="video-semantic-score">相似度 {{ formatSemanticScore(video._semanticScore) }}</span>
+        <span>{{ formatSize(video.size) }}</span>
+        <span class="meta-divider">|</span>
+        <span>{{ video.resolution || '未知分辨率' }}</span>
+        <span class="meta-divider">|</span>
+        <span class="video-rating">{{ ratingLabel }}</span>
+        <template v-if="watchProgressPercent > 0">
+          <span class="meta-divider">|</span>
+          <span>{{ watchProgressLabel }}</span>
+        </template>
+        <template v-if="video._semanticScore !== null && video._semanticScore !== undefined">
+          <span class="meta-divider">|</span>
+          <span class="video-semantic-score">相似度 {{ formatSemanticScore(video._semanticScore) }}</span>
+        </template>
       </div>
-      <div v-if="watchProgressPercent > 0" class="video-watch-progress" :title="watchProgressLabel">
-        <span :style="{ width: `${watchProgressPercent}%` }"></span>
-      </div>
-      <button v-if="video._subtitleMatchText" type="button" class="video-subtitle-hit" @click="$emit('preview', video)">
-        字幕命中 {{ formatTimestamp(video._subtitleMatchStartMs) }}：{{ video._subtitleMatchText }}
-      </button>
+
       <div class="video-tags">
         <span
           v-for="tag in (video.tags || [])"
@@ -56,40 +71,41 @@
           <button v-if="!tag.automatic_kind" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
         </span>
         <button @click="$emit('open-add-tag', video)" class="btn-add-tag">+ 标签</button>
+        <button
+          v-if="video._subtitleMatchText"
+          type="button"
+          class="video-subtitle-hit"
+          @click="$emit('preview', video)"
+        >{{ formatTimestamp(video._subtitleMatchStartMs) }} 「{{ video._subtitleMatchText }}」</button>
       </div>
     </div>
 
+    <!-- 常驻四个高频动作，其余七个进 ⋯。不做"悬停才出现"：
+         鼠标扫过时整列按钮闪烁反而更难扫读。 -->
     <div class="video-actions">
-      <div class="row-primary-actions">
-        <button @click="$emit('preview', video)" class="btn-secondary btn-compact">预览</button>
-        <button @click="$emit('play', video.id)" class="btn-secondary btn-compact">播放</button>
-        <button
-          @click="$emit('toggle-favorite', video)"
-          :class="['btn-secondary', 'btn-compact', { active: video.is_favorite }]"
-          :aria-pressed="!!video.is_favorite"
-        >{{ video.is_favorite ? '★ 已收藏' : '☆ 收藏' }}</button>
-        <button
-          @click="$emit('toggle-watched', video)"
-          :class="['btn-secondary', 'btn-compact', { active: video.is_watched }]"
-          :aria-pressed="!!video.is_watched"
-        >{{ video.is_watched ? '✓ 已看' : '标记已看' }}</button>
-      </div>
-      <div class="row-secondary-actions">
-      <button @click="$emit('open-directory', video.id)" class="btn-secondary btn-compact">目录</button>
+      <button v-if="!narrow" type="button" class="row-btn" @click="$emit('preview', video)">预览</button>
+      <button type="button" class="row-btn row-btn--primary" @click="$emit('play', video.id)">播放</button>
       <button
-        @click="$emit('generate-subtitle', video)"
-        class="btn-secondary btn-compact"
-        :class="{ 'btn-processing': generatingSubtitleIds.includes(video.id) }"
-        :disabled="generatingSubtitleIds.includes(video.id)"
-      >
-        {{ generatingSubtitleIds.includes(video.id) ? '生成中...' : '字幕' }}
-      </button>
-      <button @click="$emit('subtitle-edit', video)" class="btn-secondary btn-compact">编辑字幕</button>
-      <button @click="$emit('subtitle-preview', video)" class="btn-secondary btn-compact">预览字幕</button>
-      <button @click="$emit('rename', video)" class="btn-secondary btn-compact">重命名</button>
-      <button @click="$emit('move', video)" class="btn-secondary btn-compact">迁移</button>
-      <button @click="$emit('delete', video)" class="btn-danger btn-compact" :disabled="deletingIds.includes(video.id)">删除</button>
-      </div>
+        type="button"
+        :class="['row-btn', 'row-btn--icon', { 'row-btn--fav': video.is_favorite }]"
+        :aria-pressed="!!video.is_favorite"
+        :aria-label="video.is_favorite ? '取消收藏' : '收藏'"
+        @click="$emit('toggle-favorite', video)"
+      >♥</button>
+      <button
+        v-if="!narrow"
+        type="button"
+        :class="['row-btn', { active: video.is_watched }]"
+        :aria-pressed="!!video.is_watched"
+        @click="$emit('toggle-watched', video)"
+      >已看</button>
+      <button
+        type="button"
+        class="row-btn row-btn--icon"
+        aria-label="更多操作"
+        aria-haspopup="menu"
+        @click="$emit('open-row-menu', video, $event.currentTarget)"
+      >⋯</button>
     </div>
   </div>
 </template>
@@ -100,19 +116,25 @@ export default {
   props: {
     video: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
-    generatingSubtitleIds: { type: Array, default: () => [] },
-    deletingIds: { type: Array, default: () => [] },
     selected: { type: Boolean, default: false },
     keyboardFocused: { type: Boolean, default: false },
-    layoutMode: { type: String, default: 'list' }
+    layoutMode: { type: String, default: 'list' },
+    density: { type: String, default: 'compact' },
+    // 详情抽屉展开后列表收窄，行切到窄变体：缩略图变小，只留播放 / ♥ / ⋯
+    narrow: { type: Boolean, default: false }
   },
-  emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-directory', 'generate-subtitle', 'subtitle-edit', 'subtitle-preview', 'rename', 'move', 'delete', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select'],
+  emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select', 'open-row-menu'],
   data() {
     return { thumbnailFailed: false };
   },
   computed: {
     thumbnailURL() {
       return `/preview/thumbnail/${this.video.id}`;
+    },
+    ratingLabel() {
+      const rating = this.video.personal_rating;
+      if (rating === null || rating === undefined) return '未评分';
+      return `评分 ${rating}/10`;
     },
     watchProgressPercent() {
       const duration = Number(this.video.duration || 0);
@@ -125,6 +147,8 @@ export default {
     }
   },
   watch: {
+    // 虚拟列表会复用行组件：换了视频必须重置失败标记，
+    // 否则一次缩略图失败会让后面复用到这一行的视频都显示占位。
     'video.id'() {
       this.thumbnailFailed = false;
     }

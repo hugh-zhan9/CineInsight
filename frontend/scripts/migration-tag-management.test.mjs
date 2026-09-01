@@ -19,7 +19,9 @@ assert.match(videoListSource, /await MoveDirectory\(source, destinationParent\)/
 assert.match(videoListSource, /await RenameDirectory\(source, newName\)/, 'folder rename should call the backend operation');
 assert.match(videoListSource, /await BatchMoveVideos\(ids, destination\)/, 'batch migration should call the backend operation');
 assert.match(videoListSource, /\[\.\.\.failures, \.\.\.warnings\]\.join\('\\n'\)/, 'mixed batch results should show both failures and retained-source warnings');
-assert.match(videoRowSource, /\$emit\('move', video\)/, 'each video row should expose a migration action');
+// 单条迁移 2026-09-01 起在行内 ⋯ 菜单的「文件」组里。
+assert.match(videoRowSource, /open-row-menu/, 'each video row should expose the shared action menu');
+assert.match(videoListSource, /case 'move': this\.moveVideo\(video\)/, 'the row menu should expose a migration action');
 
 assert.match(tagManagerSource, /合并同义标签/, 'tag manager should explain tag merging');
 assert.match(tagManagerSource, /v-model\.number="mergeTargetId"/, 'tag merge should require a retained target');

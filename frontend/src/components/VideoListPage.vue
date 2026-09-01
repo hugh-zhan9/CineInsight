@@ -347,25 +347,19 @@
           <VideoListRow
             :video="video"
             :directories="directories"
-            :generating-subtitle-ids="generatingSubtitleIds"
-            :deleting-ids="deletingIds"
             :selected="isVideoSelected(video.id)"
             :keyboard-focused="Number(video.id) === Number(keyboardFocusVideoID)"
             :layout-mode="viewMode"
+            :density="rowDensity"
+            :narrow="previewOpen && viewMode === 'list'"
             @preview="openPreview"
             @play="playVideo"
             @toggle-favorite="toggleVideoFavorite"
             @toggle-watched="toggleVideoWatched"
-            @open-directory="openDirectory"
-            @generate-subtitle="generateSubtitle"
-            @subtitle-edit="openSubtitleWorkbench"
-            @subtitle-preview="openSubtitlePreview"
-            @rename="renameVideo"
-            @move="moveVideo"
-            @delete="confirmDelete"
             @open-add-tag="openAddTagDialog"
             @remove-tag="removeTag"
             @toggle-select="toggleVideoSelection"
+            @open-row-menu="openRowMenu"
             @contextmenu="showContextMenu"
           />
         </template>
@@ -418,21 +412,18 @@
       @restored="handleTrashRestored"
     />
 
-    <!-- Context Menu -->
-    <div
-      v-if="contextMenu.show"
-      :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
-      class="context-menu"
-      @click="contextMenu.show = false"
-    >
-      <div @click="playVideo(contextMenu.video.id)">播放</div>
-      <div @click="openDirectory(contextMenu.video.id)">打开目录</div>
-      <div @click="renameVideo(contextMenu.video)">重命名</div>
-      <div @click="moveVideo(contextMenu.video)">迁移</div>
-	  <div @click="exportLocalMetadataNFO(contextMenu.video)">写出 NFO</div>
-	  <div @click="openEnhanceDialog(contextMenu.video)">视频超分…</div>
-      <div @click="confirmDelete(contextMenu.video)" class="danger">删除</div>
-    </div>
+    <!-- 行内 ⋯ 与右键菜单共用同一份菜单项定义，只是两个入口 -->
+    <BaseMenu
+      v-if="rowMenu.video"
+      :anchor="rowMenu.anchor"
+      :position="rowMenu.position"
+      :items="rowMenuItems"
+      :min-width="200"
+      align="end"
+      label="视频操作"
+      @select="onRowMenuSelect"
+      @close="closeRowMenu"
+    />
 
     <!-- 视频超分 -->
     <BaseModal v-if="enhanceDialog.show" stop-modal-clicks @close="enhanceDialog.show = false">
@@ -1782,7 +1773,7 @@ export default {
       pageSize: 20,
       loading: false,
       hasMore: true,
-      contextMenu: { show: false, x: 0, y: 0, video: null },
+      rowMenu: { video: null, anchor: null, position: null },
       showScanDialog: false,
       incrementalScan: { running: false, state: 'idle', message: '' },
       migrationRunning: false,
@@ -2170,6 +2161,28 @@ export default {
       items.push({ id: 'delete-current', label: '删除该视图', danger: true, disabled: !this.selectedSavedViewID });
       return items;
     },
+    // 行内 ⋯ 与右键菜单共用这一份。原型只画了七项，但「写出 NFO」和「视频超分」
+    // 此前只有右键菜单这一个入口，合并后不能把它们弄丢。
+    rowMenuItems() {
+      const video = this.rowMenu.video;
+      if (!video) return [];
+      const generating = this.generatingSubtitleIds.includes(video.id);
+      return [
+        { heading: '文件' },
+        { id: 'directory', label: '打开目录' },
+        { id: 'rename', label: '重命名' },
+        { id: 'move', label: '迁移', disabled: this.migrationRunning },
+        { id: 'export-nfo', label: '写出 NFO' },
+        { heading: '字幕' },
+        { id: 'subtitle', label: generating ? '生成字幕（进行中）' : '生成字幕', disabled: generating },
+        { id: 'subtitle-edit', label: '编辑字幕' },
+        { id: 'subtitle-preview', label: '预览字幕' },
+        { heading: '增强' },
+        { id: 'enhance', label: '视频超分…' },
+        { divider: true },
+        { id: 'delete', label: '删除', danger: true, disabled: this.deletingIds.includes(video.id) }
+      ];
+    },
     randomMenuItems() {
       return [
         { id: 'mode:balanced', label: '均衡随机', checked: this.randomMode === 'balanced' },
@@ -2378,7 +2391,7 @@ export default {
 	  }
 	},
 	handleLibraryShortcut(event) {
-	  if (!this.pageActive || this.previewOpen || this.contextMenu.show || document.querySelector('[role="dialog"]')) return;
+	  if (!this.pageActive || this.previewOpen || this.rowMenu.video || document.querySelector('[role="dialog"]')) return;
 	  const action = shortcutActionForEvent(event);
 	  if (!action) return;
 	  event.preventDefault();
@@ -3439,7 +3452,7 @@ export default {
       }
     },
     hideContextMenu() {
-      this.contextMenu.show = false;
+      this.closeRowMenu();
     },
     attachWheelFallback() {
       this.$nextTick(() => {
@@ -3666,6 +3679,28 @@ export default {
         this.applySelectedSavedView();
       }
     },
+    openRowMenu(video, anchor) {
+      this.rowMenu = { video, anchor, position: null };
+    },
+    closeRowMenu() {
+      this.rowMenu = { video: null, anchor: null, position: null };
+    },
+    onRowMenuSelect(item) {
+      const video = this.rowMenu.video;
+      if (!video) return;
+      switch (item.id) {
+        case 'directory': this.openDirectory(video.id); break;
+        case 'rename': this.renameVideo(video); break;
+        case 'move': this.moveVideo(video); break;
+        case 'export-nfo': this.exportLocalMetadataNFO(video); break;
+        case 'subtitle': this.generateSubtitle(video); break;
+        case 'subtitle-edit': this.openSubtitleWorkbench(video); break;
+        case 'subtitle-preview': this.openSubtitlePreview(video); break;
+        case 'enhance': this.openEnhanceDialog(video); break;
+        case 'delete': this.confirmDelete(video); break;
+        default: break;
+      }
+    },
     onRandomSelect(item) {
       if (item.id === 'pick-ten') {
         this.enterRandomPick();
@@ -3694,7 +3729,8 @@ export default {
       });
     },
     estimateVideoHeight(video, widthBucket, subtitleMode) {
-      return estimateVideoRowHeight(video, widthBucket, subtitleMode);
+      const density = this.previewOpen && this.viewMode === 'list' ? 'narrow' : this.rowDensity;
+      return estimateVideoRowHeight(video, widthBucket, subtitleMode, density);
     },
     hasStructuredFilters() {
       return this.selectedTags.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
@@ -4397,7 +4433,7 @@ export default {
       }
     },
     showContextMenu(event, video) {
-      this.contextMenu = { show: true, x: event.clientX, y: event.clientY, video: video };
+      this.rowMenu = { video, anchor: null, position: { x: event.clientX, y: event.clientY } };
     },
     isVideoSelected(videoID) {
       return this.selectedVideoIds.includes(videoID);

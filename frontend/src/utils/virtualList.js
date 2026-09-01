@@ -2,15 +2,14 @@ export function createHeightCacheKey(videoId, widthBucket, subtitleMode) {
   return `${videoId}:${widthBucket}:${subtitleMode ? 1 : 0}`;
 }
 
-export function estimateVideoRowHeight(video, widthBucket, subtitleMode) {
-  const baseHeight = 150;
-  const tags = Array.isArray(video?.tags) ? video.tags.length : 0;
-  const tagsPerRow = widthBucket >= 14 ? 5 : widthBucket >= 10 ? 4 : 3;
-  const extraTagRows = Math.max(0, Math.ceil(Math.max(tags, 1) / tagsPerRow) - 1);
-  const tagExtra = extraTagRows * 28;
-  const subtitleExtra = subtitleMode && video?._subtitleMatchText ? 42 : 0;
-  const staleExtra = video?.is_stale ? 18 : 0;
-  return baseHeight + tagExtra + subtitleExtra + staleExtra;
+// 2026-09-01 重构后行高是固定的：标签与字幕命中都被压在同一行里横向溢出隐藏，
+// 不再换行撑高，所以预估值只随档位和窄变体变化。列表间距 6px 计在内。
+const ROW_HEIGHTS = { compact: 88, comfortable: 104, narrow: 68 };
+const ROW_GAP = 6;
+
+export function estimateVideoRowHeight(video, widthBucket, subtitleMode, density = 'compact') {
+  const base = ROW_HEIGHTS[density] || ROW_HEIGHTS.compact;
+  return base + ROW_GAP;
 }
 
 export function getWidthBucket(width) {
