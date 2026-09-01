@@ -6,7 +6,7 @@ slices:
     status: done
     depends: []
   - id: P-002
-    status: pending
+    status: done
     depends: [P-001]
   - id: P-003
     status: pending

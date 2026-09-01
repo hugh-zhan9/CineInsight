@@ -18,10 +18,8 @@ import (
 	"testing"
 	"time"
 	"video-master/database"
+	"video-master/internal/dbtest"
 	"video-master/models"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
 type imageTaggingClientFunc func(ctx context.Context, imageID uint, prompt string, jpegData []byte) ([]AITagSuggestion, error)
@@ -46,14 +44,7 @@ const (
 
 func setupImageAITaggingTestDB(t *testing.T) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "image_ai_tagging_test.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("打开测试数据库失败: %v", err)
-	}
-	if err := db.AutoMigrate(models.AllModels()...); err != nil {
-		t.Fatalf("迁移测试数据库失败: %v", err)
-	}
+	db := dbtest.Open(t)
 	// 部分唯一索引 AutoMigrate 建不出来，测试库要和生产建同一套，
 	// 否则并发兜底约束在测试里根本不存在。
 	database.EnsureImageAITaggingIndexes(db)

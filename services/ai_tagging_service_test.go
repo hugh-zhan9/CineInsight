@@ -624,17 +624,26 @@ func TestApproveAITagCandidateRollsBackWhenMatchedTagMissing(t *testing.T) {
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
-	missingTagID := uint(999)
+	// 原来这里直接指向一个不存在的标签 ID。那个状态在开了外键约束的库上根本
+	// 插不进去（Postgres 一直如此，SQLite 现在也是），测的是一个不可达的场景。
+	// 真实可达的触发是标签被软删除：行还在、外键成立，但按作用域查不到。
+	tag := models.Tag{Name: "待删除"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
 	candidate := models.AITagCandidate{
 		VideoID:        video.ID,
 		SuggestedName:  "不存在",
 		NormalizedName: "不存在",
-		MatchedTagID:   &missingTagID,
+		MatchedTagID:   &tag.ID,
 		Confidence:     models.AITagConfidenceHigh,
 		Status:         models.AITagCandidateStatusPending,
 	}
 	if err := database.DB.Create(&candidate).Error; err != nil {
 		t.Fatalf("创建候选失败: %v", err)
+	}
+	if err := database.DB.Delete(&models.Tag{}, tag.ID).Error; err != nil {
+		t.Fatalf("软删除标签失败: %v", err)
 	}
 	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
 	if _, err := svc.ApproveCandidate(candidate.ID); err == nil {

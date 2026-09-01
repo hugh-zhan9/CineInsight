@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -126,7 +127,10 @@ func TestImageSemanticSearchDistanceQueryAppliesFiltersAndNeverTouchesVideoTable
 	var rows []imageSemanticDistanceRow
 	stmt := service.imageSemanticDistanceQuery(context.Background(), filter, profile, "[0.1,0.2,0.3]", 20, 20).
 		Session(&gorm.Session{DryRun: true}).Scan(&rows).Statement
-	sql := stmt.SQL.String()
+	// 占位符按方言渲染：sqlite/mysql 是 ?，postgres 是 $1/$2…。断言关心的是
+	// 语句结构而不是绑定语法，先归一化再比对，否则同一条正确的 SQL 在两个后端
+	// 上会有一个恒失败。
+	sql := normalizeSQLPlaceholders(stmt.SQL.String())
 
 	for _, expected := range []string{
 		"image_semantic_vectors.embedding <=> CAST(? AS vector)",
@@ -159,6 +163,12 @@ func TestImageSemanticSearchDistanceQueryAppliesFiltersAndNeverTouchesVideoTable
 	if !strings.Contains(sql, "OFFSET 20") && !imageSemanticSQLVarsContain(stmt.Vars, 20) {
 		t.Errorf("offset missing: sql=%s vars=%v", sql, stmt.Vars)
 	}
+}
+
+var sqlPlaceholderPattern = regexp.MustCompile(`\$\d+`)
+
+func normalizeSQLPlaceholders(sql string) string {
+	return sqlPlaceholderPattern.ReplaceAllString(sql, "?")
 }
 
 // TestImageSemanticSearchFilterSelectsExpectedRows 在 sqlite 上实际执行筛选子句，

@@ -267,8 +267,17 @@ func TestAIQualityLegacySameSourceWindowUsesDetectionTimeNotLastTouch(t *testing
 	setupVideoServiceTestDB(t)
 	now := time.Date(2026, 7, 31, 12, 0, 0, 0, time.UTC)
 	old := now.AddDate(-2, 0, 0)
+	// 关系行指向的两个视频必须真实存在：开了外键约束之后，凭空写 ID 1/2 会被拒绝。
+	videoA := models.Video{Name: "a.mp4", Path: "/tmp/qa-a.mp4", Directory: "/tmp"}
+	videoB := models.Video{Name: "b.mp4", Path: "/tmp/qa-b.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&videoA).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&videoB).Error; err != nil {
+		t.Fatal(err)
+	}
 	relation := models.VideoSameSourceRelation{
-		VideoAID: 1, VideoBID: 2, VideoAFingerprint: "fa", VideoBFingerprint: "fb",
+		VideoAID: videoA.ID, VideoBID: videoB.ID, VideoAFingerprint: "fa", VideoBFingerprint: "fb",
 		Status: models.VideoSameSourceStatusDetected, Confidence: models.AITagConfidenceHigh,
 		DetectionVersion: "legacy-v1",
 	}

@@ -5,10 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"video-master/database"
+	"video-master/internal/dbtest"
 	"video-master/models"
-
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
 
 func TestSearchSubtitleMatchesFindsVideoBySegmentText(t *testing.T) {
@@ -245,13 +243,6 @@ func TestSearchSubtitleMatchesRefreshesStaleIndex(t *testing.T) {
 
 func setupSubtitleSearchTestDB(t *testing.T) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "subtitle_search_test.db")
-	db, err := gorm.Open(sqlite.Open(dbPath), &gorm.Config{})
-	if err != nil {
-		t.Fatalf("打开测试数据库失败: %v", err)
-	}
-	if err := db.AutoMigrate(models.AllModels()...); err != nil {
-		t.Fatalf("迁移测试数据库失败: %v", err)
-	}
+	db := dbtest.Open(t)
 	database.DB = db
 }

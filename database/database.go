@@ -79,7 +79,7 @@ func openBackend(backend Backend, dataDir string) (*gorm.DB, error) {
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 			return nil, fmt.Errorf("创建 SQLite 库目录失败 path=%s: %w", path, err)
 		}
-		db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+		db, err := gorm.Open(sqlite.Open(SQLiteDSN(path)), &gorm.Config{})
 		if err != nil {
 			return nil, fmt.Errorf("打开 SQLite 数据库失败 path=%s: %w", path, err)
 		}
@@ -195,6 +195,16 @@ func ResolveBackend(env BackendEnv) (Backend, error) {
 
 func backendEnvFromOS() BackendEnv {
 	return BackendEnv{Backend: os.Getenv("DB_BACKEND"), PGHost: os.Getenv("PG_HOST")}
+}
+
+// SQLiteDSN 在库文件路径上附加必须的连接参数。
+//
+// _foreign_keys=1 不是可选项（设计 D-009）：SQLite 默认关闭外键约束，而 Postgres
+// 强制执行。两个后端在这一点上不一致会带来一个具体后果——用户在 SQLite 下可能
+// 积累孤儿行，随后迁移到 Postgres 时在中途因外键冲突失败，正好打断"带数据切换"
+// 这个功能本身。让两边都强制执行，两个后端的数据完整性保证才是同一个。
+func SQLiteDSN(path string) string {
+	return path + "?_foreign_keys=1"
 }
 
 // SQLitePath 返回 SQLite 库文件路径；SQLITE_PATH 可覆盖默认值。
