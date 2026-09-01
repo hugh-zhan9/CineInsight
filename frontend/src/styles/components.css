@@ -142,8 +142,10 @@
   transition: padding-right var(--transition);
 }
 
+/* 抽屉是 520px 的停靠面板，列表让出的宽度必须与它一致，
+   否则列表会被压在抽屉底下或者留出一条空隙。 */
 .page-content--with-preview {
-  padding-right: calc(20px + min(420px, 38vw));
+  padding-right: calc(20px + 520px);
 }
 
 .modal-overlay {
@@ -475,13 +477,8 @@ input:checked + .slider::before {
   background: var(--surface-faint);
 }
 
-@media (max-width: 1180px) {
-  .page-content--with-preview {
-    padding-right: calc(20px + min(460px, 52vw));
-  }
-}
-
-@media (max-width: 860px) {
+/* 窄于 1100 抽屉改为覆盖式：列表不再收窄，否则两边都放不下。 */
+@media (max-width: 1100px) {
   .page-content--with-preview {
     padding-right: 20px;
   }

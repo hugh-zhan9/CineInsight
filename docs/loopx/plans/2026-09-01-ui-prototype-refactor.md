@@ -21,7 +21,7 @@ slices:
     status: done
     depends: [P-005]
   - id: P-007
-    status: pending
+    status: done
     depends: [P-005]
   - id: P-008
     status: pending

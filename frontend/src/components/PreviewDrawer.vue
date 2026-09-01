@@ -1,5 +1,5 @@
 <template>
-  <aside class="preview-drawer glass-surface" role="dialog" aria-label="媒体详情抽屉">
+  <aside class="preview-drawer" role="dialog" aria-label="媒体详情抽屉">
     <div class="preview-drawer__header glass-drawer-header">
       <div class="preview-drawer__heading">
         <button v-if="canGoBack" type="button" class="btn-secondary btn-compact" @click="goBack">返回</button>
@@ -773,12 +773,15 @@ export default {
 </script>
 
 <style scoped>
-.preview-drawer { position: fixed; top: 74px; right: 12px; bottom: 12px; width: min(520px, 46vw); min-width: 360px; border-radius: 18px; display: flex; flex-direction: column; z-index: 140; overflow: hidden; }
-.preview-drawer__header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 16px 18px; border-bottom: 1px solid var(--border-color); background: var(--glass-strong-bg); }
+/* 原型 A4：抽屉固定 520px 并排停靠，不再是圆角浮块；
+   窗口窄于 1100 改为覆盖式，列表不再收窄（收窄到放不下反而更难用）。 */
+.preview-drawer { position: fixed; top: 52px; right: 0; bottom: 0; width: 520px; border-left: 1px solid var(--hairline); border-radius: 0; background: var(--panel-bg); box-shadow: var(--shadow-drawer); display: flex; flex-direction: column; z-index: 140; overflow: hidden; }
+@media (max-width: 1100px) { .preview-drawer { width: min(520px, 100vw); } }
+.preview-drawer__header { display: flex; justify-content: space-between; align-items: center; gap: 16px; height: 44px; padding: 0 16px; border-bottom: 1px solid var(--hairline); background: var(--panel-bg); }
 .preview-drawer__heading { display: flex; align-items: center; gap: 10px; min-width: 0; }.preview-drawer__heading > div { min-width: 0; }
-.preview-drawer__eyebrow { margin: 0 0 4px; font-size: 11px; letter-spacing: .08em; color: var(--text-muted); }.preview-drawer__header h3 { font-size: 17px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.preview-drawer__body { flex: 1; min-height: 0; overflow-y: auto; padding: 18px; display: grid; grid-auto-rows: max-content; align-content: start; gap: 14px; }
-.preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 14px; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
+.preview-drawer__eyebrow { margin: 0 0 4px; font-size: 11px; letter-spacing: .08em; color: var(--text-muted); }.preview-drawer__header h3 { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preview-drawer__body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 16px; display: grid; grid-auto-rows: max-content; align-content: start; gap: 14px; }
+.preview-drawer__player-shell { position: relative; width: 100%; aspect-ratio: 16 / 9; min-height: 220px; background: var(--player-bg); border-radius: 0; overflow: hidden; }.preview-drawer__video { position: absolute; inset: 0; width: 100%; height: 100%; min-height: 0; display: block; object-fit: contain; background: var(--player-bg); }
 .preview-drawer__seek-track { position: absolute; z-index: 2; right: 12px; bottom: 42px; left: 12px; height: 12px; border-radius: 999px; background: color-mix(in srgb, var(--text-primary) 28%, transparent); cursor: default; }
 .preview-drawer__seek-track::after { position: absolute; inset: 4px 0; border-radius: inherit; background: color-mix(in srgb, var(--text-primary) 58%, transparent); content: ''; }
 .preview-drawer__seek-preview { position: absolute; bottom: 18px; width: 160px; transform: translateX(-50%); display: grid; gap: 4px; justify-items: center; pointer-events: none; }
@@ -786,7 +789,7 @@ export default {
 .preview-drawer__seek-image img { position: absolute; max-width: none; object-fit: fill; }
 .preview-drawer__seek-preview time { padding: 2px 6px; border-radius: 5px; color: #fff; background: rgba(0, 0, 0, .78); font-size: 11px; font-variant-numeric: tabular-nums; }
 .preview-drawer__placeholder { min-height: 150px; border: 1px dashed var(--border-color); border-radius: 14px; padding: 22px; display: flex; flex-direction: column; justify-content: center; gap: 12px; color: var(--text-secondary); }
-.detail-section { padding: 16px; border: 1px solid var(--border-color); border-radius: 14px; background: var(--panel-bg); display: grid; gap: 12px; }.detail-section--player { min-height: 220px; padding: 0; overflow: hidden; background: var(--player-bg); }
+.detail-section { padding: 14px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: grid; gap: 12px; }.detail-section--player { min-height: 220px; padding: 0; overflow: hidden; background: var(--player-bg); }
 .detail-section__heading { display: flex; justify-content: space-between; gap: 10px; align-items: center; }.detail-section h4 { margin: 0; font-size: 15px; }.detail-section__heading span,.detail-readonly-hint { font-size: 12px; color: var(--text-muted); }
 .detail-field { display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }.detail-field input,.detail-field select,.detail-field textarea,.detail-inline-form input,.detail-create-box input { width: 100%; border: 1px solid var(--border-color); border-radius: 8px; padding: 9px 10px; background: var(--control-bg); color: var(--text-primary); }
 .detail-rating-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; }.detail-rating-input > span { color: var(--text-muted); font-size: 13px; }.detail-field small { color: var(--text-muted); font-size: 11px; font-weight: 400; }

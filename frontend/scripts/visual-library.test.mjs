@@ -25,6 +25,13 @@ assert.match(previewDrawer, /\.preview-drawer__body\s*{[^}]*display:\s*grid[^}]*
 assert.match(previewDrawer, /\.detail-section--player\s*{[^}]*min-height:\s*220px/s, 'player section needs a non-collapsing minimum height');
 assert.match(previewDrawer, /\.preview-drawer__player-shell\s*{[^}]*aspect-ratio:\s*16\s*\/\s*9[^}]*min-height:\s*220px/s, 'player shell should preserve its 16:9 viewport');
 assert.match(previewDrawer, /\.preview-drawer__video\s*{[^}]*position:\s*absolute[^}]*inset:\s*0/s, 'video should fill the preserved player shell');
+// 原型 A4：抽屉固定 520px 停靠，列表让出的宽度必须与它一致，
+// 窄于 1100 改为覆盖式且列表不再收窄。
+assert.match(previewDrawer, /\.preview-drawer\s*{[^}]*width:\s*520px/s, 'the drawer docks at a fixed 520px');
+assert.match(sharedCss, /\.page-content--with-preview\s*{[^}]*padding-right:\s*calc\(20px \+ 520px\)/s, 'the list must yield exactly the drawer width');
+assert.match(sharedCss, /@media \(max-width: 1100px\)[\s\S]*?\.page-content--with-preview\s*{[^}]*padding-right:\s*20px/s, 'below 1100 the drawer overlays instead of narrowing the list');
+assert.match(previewDrawer, /class="preview-drawer" role="dialog"/, 'the drawer is an opaque docked panel, not a glass floating block');
+
 assert.match(handler, /\/preview\/thumbnail\//, 'asset handler should route thumbnail requests');
 
 // 大图查看器：网格必须显式给一行确定高度，否则 img 的 max-height:100% 失效，竖图会被撑出视口。
