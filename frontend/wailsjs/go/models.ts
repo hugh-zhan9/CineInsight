@@ -43,6 +43,7 @@ export namespace models {
 	    format: string;
 	    is_stale: boolean;
 	    is_favorite: boolean;
+	    is_liked: boolean;
 	    personal_rating?: number;
 	    perceptual_hash: string;
 	    hash_source_size: number;
@@ -79,6 +80,7 @@ export namespace models {
 	        this.format = source["format"];
 	        this.is_stale = source["is_stale"];
 	        this.is_favorite = source["is_favorite"];
+	        this.is_liked = source["is_liked"];
 	        this.personal_rating = source["personal_rating"];
 	        this.perceptual_hash = source["perceptual_hash"];
 	        this.hash_source_size = source["hash_source_size"];
@@ -508,6 +510,7 @@ export namespace models {
 	    random_play_count: number;
 	    last_played_at?: string;
 	    is_favorite: boolean;
+	    is_liked: boolean;
 	    is_watched: boolean;
 	    watch_position_seconds: number;
 	    watch_progress_updated_at?: string;
@@ -540,6 +543,7 @@ export namespace models {
 	        this.random_play_count = source["random_play_count"];
 	        this.last_played_at = source["last_played_at"];
 	        this.is_favorite = source["is_favorite"];
+	        this.is_liked = source["is_liked"];
 	        this.is_watched = source["is_watched"];
 	        this.watch_position_seconds = source["watch_position_seconds"];
 	        this.watch_progress_updated_at = source["watch_progress_updated_at"];
@@ -1825,6 +1829,7 @@ export namespace services {
 	    format: string;
 	    is_stale: boolean;
 	    is_favorite: boolean;
+	    is_liked: boolean;
 	    personal_rating?: number;
 	    perceptual_hash: string;
 	    hash_source_size: number;
@@ -1863,6 +1868,7 @@ export namespace services {
 	        this.format = source["format"];
 	        this.is_stale = source["is_stale"];
 	        this.is_favorite = source["is_favorite"];
+	        this.is_liked = source["is_liked"];
 	        this.personal_rating = source["personal_rating"];
 	        this.perceptual_hash = source["perceptual_hash"];
 	        this.hash_source_size = source["hash_source_size"];

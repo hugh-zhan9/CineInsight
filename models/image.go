@@ -14,6 +14,7 @@ type Image struct {
 	Format              string   `gorm:"size:16;not null;default:''" json:"format"`                               // 小写扩展名（无点），洞察聚合用
 	IsStale             bool     `gorm:"default:false" json:"is_stale"`                                           // 当前路径是否失效/待纠偏
 	IsFavorite          bool     `gorm:"not null;default:false" json:"is_favorite"`                               // 收藏
+	IsLiked             bool     `gorm:"not null;default:false;index" json:"is_liked"`                            // 手机端点赞状态的投影；与 is_favorite 同构
 	PersonalRating      *float64 `gorm:"type:numeric(3,1);check:chk_images_personal_rating,personal_rating IS NULL OR (personal_rating >= 0 AND personal_rating <= 10 AND personal_rating * 2 = CAST(personal_rating * 2 AS INTEGER))" json:"personal_rating"`
 	PerceptualHash      string   `gorm:"size:16;not null;default:''" json:"perceptual_hash"` // 64 位 dHash hex，''=未回填
 	HashSourceSize      int64    `gorm:"not null;default:0" json:"hash_source_size"`         // 哈希时源文件大小，stale 判定

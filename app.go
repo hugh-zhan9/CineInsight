@@ -212,7 +212,9 @@ func (a *App) startup(ctx context.Context) {
 	if result, err := a.shortFeedService.SyncFeedback(); err != nil {
 		log.Printf("App startup short-feed feedback sync failed err=%v", err)
 	} else if result.Enabled {
-		log.Printf("App startup short-feed feedback sync tag=%d likes_added=%d likes_removed=%d favorites_added=%d", result.TagID, result.LikesAdded, result.LikesRemoved, result.FavoritesAdded)
+		log.Printf("App startup short-feed feedback sync video(likes +%d/-%d favorites +%d) image(likes +%d/-%d favorites +%d)",
+			result.LikesAdded, result.LikesRemoved, result.FavoritesAdded,
+			result.ImageLikesAdded, result.ImageLikesRemoved, result.ImageFavoritesAdded)
 	}
 	a.aiTaggingService.Start(ctx)
 	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。

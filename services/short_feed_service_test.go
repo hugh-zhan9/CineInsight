@@ -239,13 +239,12 @@ func TestShortFeedImageInteractionsProjectIntoImageLibrary(t *testing.T) {
 	if _, err := svc.SetLiked(ref, true); err != nil {
 		t.Fatalf("图片喜欢失败: %v", err)
 	}
-	// 幂等：重复喜欢不应重复插标签。
+	// 幂等：重复喜欢结果不变。
 	if _, err := svc.SetLiked(ref, true); err != nil {
 		t.Fatalf("图片重复喜欢失败: %v", err)
 	}
-	tagID := shortFeedLikedTagID(t)
-	if got := imageTagLinkCount(t, img.ID, tagID); got != 1 {
-		t.Fatalf("喜欢应投影为 1 条图片标签关联，实际 %d", got)
+	if !imageIsLiked(t, img.ID) {
+		t.Fatalf("喜欢应投影为 images.is_liked = true")
 	}
 
 	if _, err := svc.SetFavorited(ref, true); err != nil {
@@ -273,12 +272,12 @@ func TestShortFeedImageInteractionsProjectIntoImageLibrary(t *testing.T) {
 		t.Fatal("同一次手机端收藏动作只投影一次，不应覆盖桌面端的手动取消")
 	}
 
-	// 取消喜欢要反向清理投影出去的标签。
+	// 点赞完全由投影拥有：取消喜欢要反向把列改回去。
 	if _, err := svc.SetLiked(ref, false); err != nil {
 		t.Fatalf("取消图片喜欢失败: %v", err)
 	}
-	if got := imageTagLinkCount(t, img.ID, tagID); got != 0 {
-		t.Fatalf("取消喜欢后标签投影应被回收，实际 %d", got)
+	if imageIsLiked(t, img.ID) {
+		t.Fatalf("取消喜欢后 is_liked 应被回收")
 	}
 
 	// 浏览计数走图片自己的并行表，不碰视频表。
@@ -332,9 +331,8 @@ func TestShortFeedImageSyncDisabledLeavesProjectionAlone(t *testing.T) {
 	if _, err := svc.SetLiked(ref, true); err != nil {
 		t.Fatalf("图片喜欢失败: %v", err)
 	}
-	tagID := shortFeedLikedTagID(t)
-	if got := imageTagLinkCount(t, img.ID, tagID); got != 1 {
-		t.Fatalf("投影应存在，实际 %d", got)
+	if !imageIsLiked(t, img.ID) {
+		t.Fatalf("投影应存在：is_liked 应为 true")
 	}
 
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("short_feed_feedback_sync_enabled", false).Error; err != nil {
@@ -343,18 +341,28 @@ func TestShortFeedImageSyncDisabledLeavesProjectionAlone(t *testing.T) {
 	if _, err := svc.SetLiked(ref, false); err != nil {
 		t.Fatalf("取消图片喜欢失败: %v", err)
 	}
-	if got := imageTagLinkCount(t, img.ID, tagID); got != 1 {
-		t.Fatalf("关闭开关后不应清理既有投影，实际 %d", got)
+	if !imageIsLiked(t, img.ID) {
+		t.Fatalf("关闭开关后不应清理既有投影")
 	}
 }
 
-func shortFeedLikedTagID(t *testing.T) uint {
+// 2026-09-01 起点赞投影到 images/videos.is_liked 列，不再走自动标签。
+func imageIsLiked(t *testing.T, imageID uint) bool {
 	t.Helper()
-	var tag models.Tag
-	if err := database.DB.Where("name = ?", ShortFeedLikedTagName).First(&tag).Error; err != nil {
-		t.Fatalf("读取自动标签失败: %v", err)
+	var img models.Image
+	if err := database.DB.First(&img, imageID).Error; err != nil {
+		t.Fatalf("读取图片失败: %v", err)
 	}
-	return tag.ID
+	return img.IsLiked
+}
+
+func videoIsLiked(t *testing.T, videoID uint) bool {
+	t.Helper()
+	var video models.Video
+	if err := database.DB.First(&video, videoID).Error; err != nil {
+		t.Fatalf("读取视频失败: %v", err)
+	}
+	return video.IsLiked
 }
 
 // 混编流：视频与图片进同一个候选池，排除集能同时排掉两种媒体。
@@ -713,18 +721,15 @@ func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 		t.Fatalf("设置收藏失败: %v", err)
 	}
 
-	if got := countShortFeedRows(t, "tags"); got != beforeTags+1 {
-		t.Fatalf("喜欢应创建一个自动标签，got=%d want=%d", got, beforeTags+1)
+	// 点赞不再创建任何标签：标签列表是用户自己的分类空间，投影不该往里塞东西。
+	if got := countShortFeedRows(t, "tags"); got != beforeTags {
+		t.Fatalf("喜欢不应创建标签，got=%d want=%d", got, beforeTags)
 	}
-	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags+1 {
-		t.Fatalf("喜欢应只增加一个自动标签关联，got=%d want=%d", got, beforeVideoTags+1)
+	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags {
+		t.Fatalf("喜欢不应新增标签关联，got=%d want=%d", got, beforeVideoTags)
 	}
-	var likedTag models.Tag
-	if err := database.DB.Where("automatic_kind = ?", shortFeedLikedTagKind).First(&likedTag).Error; err != nil {
-		t.Fatalf("读取喜欢自动标签失败: %v", err)
-	}
-	if likedTag.Name != ShortFeedLikedTagName {
-		t.Fatalf("喜欢自动标签名称=%q", likedTag.Name)
+	if !videoIsLiked(t, video.ID) {
+		t.Fatalf("喜欢应投影为 videos.is_liked = true")
 	}
 	var reloaded models.Video
 	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
@@ -741,11 +746,15 @@ func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 	if _, err := svc.SetLiked(videoRef(video.ID), false); err != nil {
 		t.Fatalf("取消喜欢失败: %v", err)
 	}
-	if got := countShortFeedRows(t, "tags"); got != beforeTags+1 {
-		t.Fatalf("取消喜欢不应删除自动标签，got=%d", got)
+	// 点赞完全由投影拥有：取消喜欢把列改回去，且始终不牵动标签表。
+	if videoIsLiked(t, video.ID) {
+		t.Fatalf("取消喜欢后 is_liked 应被回收")
+	}
+	if got := countShortFeedRows(t, "tags"); got != beforeTags {
+		t.Fatalf("点赞的任何操作都不应动标签表，got=%d want=%d", got, beforeTags)
 	}
 	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags {
-		t.Fatalf("取消喜欢应移除自动标签关联，got=%d want=%d", got, beforeVideoTags)
+		t.Fatalf("点赞的任何操作都不应动标签关联，got=%d want=%d", got, beforeVideoTags)
 	}
 	if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_favorite", false).Error; err != nil {
 		t.Fatal(err)

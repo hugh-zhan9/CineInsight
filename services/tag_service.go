@@ -19,8 +19,6 @@ var ErrAITagLibraryEmptyConfirmationRequired = errors.New("AI 标签库非空，
 const (
 	ShortVideoTagName          = "短视频"
 	shortVideoAutomaticTagKind = "short_video"
-	ShortFeedLikedTagName      = "短视频喜欢"
-	shortFeedLikedTagKind      = "short_feed_liked"
 )
 
 type MergeTagsResult struct {
@@ -561,46 +559,6 @@ func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error)
 		}
 	}
 	return nil, fmt.Errorf("创建短视频自动标签时发生并发冲突")
-}
-
-func ensureShortFeedLikedAutomaticTag(tx *gorm.DB) (*models.Tag, error) {
-	var tag models.Tag
-	err := tx.Unscoped().Where("automatic_kind = ?", shortFeedLikedTagKind).Order("id").First(&tag).Error
-	if err == nil {
-		if err := reserveAutomaticTagName(tx, ShortFeedLikedTagName, tag.ID); err != nil {
-			return nil, err
-		}
-		tag.Name = ShortFeedLikedTagName
-		tag.DeletedAt.Clear()
-		tag.IsActive = true
-		if err := tx.Unscoped().Save(&tag).Error; err != nil {
-			return nil, err
-		}
-		return &tag, nil
-	}
-	if !errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil, err
-	}
-
-	if err := reserveAutomaticTagName(tx, ShortFeedLikedTagName, 0); err != nil {
-		return nil, err
-	}
-	tag = models.Tag{
-		Name:          ShortFeedLikedTagName,
-		Color:         tagColorPalette[5],
-		Namespace:     "自动",
-		AutomaticKind: shortFeedLikedTagKind,
-		IsActive:      true,
-	}
-	if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&tag).Error; err != nil {
-		return nil, err
-	}
-	if tag.ID == 0 {
-		if err := tx.Where("automatic_kind = ?", shortFeedLikedTagKind).First(&tag).Error; err != nil {
-			return nil, err
-		}
-	}
-	return &tag, nil
 }
 
 func reserveAutomaticTagName(tx *gorm.DB, name string, automaticTagID uint) error {

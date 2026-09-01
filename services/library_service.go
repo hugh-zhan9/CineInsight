@@ -26,6 +26,7 @@ const (
 
 	LibraryViewAll              = ""
 	LibraryViewFavorites        = "favorites"
+	LibraryViewLiked            = "liked"
 	LibraryViewContinueWatching = "continue_watching"
 	LibraryViewUnwatched        = "unwatched"
 	LibraryViewWatched          = "watched"
@@ -90,7 +91,7 @@ type LibrarySubtitleHit struct {
 }
 
 var validLibraryViews = map[string]struct{}{
-	LibraryViewAll: {}, LibraryViewFavorites: {}, LibraryViewContinueWatching: {},
+	LibraryViewAll: {}, LibraryViewFavorites: {}, LibraryViewLiked: {}, LibraryViewContinueWatching: {},
 	LibraryViewUnwatched: {}, LibraryViewWatched: {}, LibraryViewRecentlyAdded: {},
 	LibraryViewRecentlyPlayed: {}, LibraryViewUntagged: {}, LibraryViewNoSubtitle: {},
 	LibraryViewStale: {},
@@ -201,6 +202,8 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	switch filter.SmartView {
 	case LibraryViewFavorites:
 		query = query.Where("videos.is_favorite = ?", true)
+	case LibraryViewLiked:
+		query = query.Where("videos.is_liked = ?", true)
 	case LibraryViewContinueWatching:
 		query = query.Where("videos.is_watched = ? AND videos.watch_position_seconds > 0", false)
 	case LibraryViewUnwatched:

@@ -335,6 +335,11 @@ func ApplySchema(db *gorm.DB) error {
 	EnsureImageAITaggingIndexes(db)
 	ensureShortFeedIndexes(db)
 	ensureSubtitleSearchIndexes(db)
+	// 2026-09-01 裁决：手机端点赞由自动标签改为 videos/images.is_liked 列。
+	// 一次性把已有的标签关联转成列值，然后删掉那个自动标签。幂等，标签不存在则空转。
+	if err := migrateShortFeedLikedTagToColumn(db); err != nil {
+		return fmt.Errorf("迁移短视频点赞标签失败: %w", err)
+	}
 	// 2026-08-18 裁决：图片 AI 产出由描述改为标签，遗留的描述与其语义向量一次性删除。
 	// 幂等，表已删则空转。放在迁移与索引之后，确保它面对的是已经就位的表结构。
 	CleanupLegacyImageDescriptions(db)
@@ -482,6 +487,58 @@ func cleanupReimportedSoftDeletedVideos(db *gorm.DB) error {
 		log.Printf("清理软删除后重导入的视频 path=%s", item.Path)
 	}
 	return nil
+}
+
+// migrateShortFeedLikedTagToColumn 把「短视频喜欢」自动标签的关联转成 is_liked 列值。
+//
+// 为什么要迁而不是直接删标签：已有用户的库里，"哪些视频/图片被点过喜欢"这个信息
+// 当时只存在标签关联里（短视频互动表里也有 liked，但那是手机端状态，主片库这侧
+// 只有标签）。直接删标签会让主片库丢掉这个信息。
+//
+// 只认 automatic_kind='short_feed_liked' 的那一个标签。用户自己建的同名标签
+// （历史上可能被 reserveAutomaticTagName 改名成「短视频喜欢（原标签）」）不在
+// 范围内，不碰。
+func migrateShortFeedLikedTagToColumn(db *gorm.DB) error {
+	var tagIDs []uint
+	if err := db.Unscoped().Model(&models.Tag{}).
+		Where("automatic_kind = ?", "short_feed_liked").
+		Pluck("id", &tagIDs).Error; err != nil {
+		return err
+	}
+	if len(tagIDs) == 0 {
+		return nil
+	}
+
+	// 用传入的句柄开事务，不走包级 Transaction()——后者读全局 DB，而本函数在
+	// Init 里跑在 DB 赋值之前，用它会直接 nil 解引用。
+	return db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.Video{}).
+			Where("id IN (?)", tx.Table("video_tags").Select("video_id").Where("tag_id IN ?", tagIDs)).
+			Update("is_liked", true).Error; err != nil {
+			return err
+		}
+		if tx.Migrator().HasTable("image_tags") {
+			if err := tx.Model(&models.Image{}).
+				Where("id IN (?)", tx.Table("image_tags").Select("image_id").Where("tag_id IN ?", tagIDs)).
+				Update("is_liked", true).Error; err != nil {
+				return err
+			}
+			if err := tx.Table("image_tags").Where("tag_id IN ?", tagIDs).Delete(nil).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Table("video_tags").Where("tag_id IN ?", tagIDs).Delete(nil).Error; err != nil {
+			return err
+		}
+		// 偏好表里可能有这个标签自己的分数：点赞时加权加的是"视频当前的标签"，
+		// 而投影过的视频身上就带着它。留着会让一个纯投影标签持续影响抽取权重。
+		if err := tx.Where("tag_id IN ?", tagIDs).Delete(&models.ShortFeedTagPreference{}).Error; err != nil {
+			return err
+		}
+		// 硬删标签本身：它是应用自己建的投影产物，软删除会让它在标签管理里
+		// 以"已删除"的形态卡住同名占用。
+		return tx.Unscoped().Where("id IN ?", tagIDs).Delete(&models.Tag{}).Error
+	})
 }
 
 func ensureVideoPathUniqueIndex(db *gorm.DB) error {

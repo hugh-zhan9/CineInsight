@@ -58,11 +58,16 @@ type ShortFeedService struct {
 }
 
 type ShortFeedFeedbackSyncResult struct {
-	Enabled        bool  `json:"enabled"`
-	TagID          uint  `json:"tag_id"`
+	Enabled bool `json:"enabled"`
+	// 视频侧
 	LikesAdded     int64 `json:"likes_added"`
 	LikesRemoved   int64 `json:"likes_removed"`
 	FavoritesAdded int64 `json:"favorites_added"`
+	// 图片侧。以前两侧共用一个自动标签，所以只有一组计数；改成各自的 is_liked
+	// 列之后，两侧分开计数才说得清同步做了什么。
+	ImageLikesAdded     int64 `json:"image_likes_added"`
+	ImageLikesRemoved   int64 `json:"image_likes_removed"`
+	ImageFavoritesAdded int64 `json:"image_favorites_added"`
 }
 
 func NewShortFeedService(videoService *VideoService) *ShortFeedService {
@@ -677,41 +682,35 @@ func (s *ShortFeedService) SyncFeedback() (ShortFeedFeedbackSyncResult, error) {
 	}
 
 	err := database.Transaction(func(tx *gorm.DB) error {
-		tag, err := ensureShortFeedLikedAutomaticTag(tx)
-		if err != nil {
-			return err
+		// 点赞投影到 videos.is_liked 列，与收藏同构。
+		//
+		// 早先这里落到一个 automatic_kind=short_feed_liked 的自动标签上，因为
+		// videos 表当时没有对应的列。代价是：应用启动就无条件往用户的标签列表里
+		// 塞一个标签（哪怕一次喜欢都没点过），而那个标签除了被创建和改名之外
+		// 没有任何代码读它——对 Feed 的推荐加权也毫无贡献（加权加的是视频自己的
+		// 内容标签）。2026-09-01 用户裁决改为真实列。
+		liked := tx.Model(&models.Video{}).
+			Where("is_liked = ?", false).
+			Where("id IN (?)", tx.Model(&models.ShortFeedInteraction{}).Select("video_id").
+				Where("liked = ?", true)).
+			Update("is_liked", true)
+		if liked.Error != nil {
+			return liked.Error
 		}
-		result.TagID = tag.ID
+		result.LikesAdded = liked.RowsAffected
 
-		inserted := tx.Exec(`
-			INSERT INTO video_tags(video_id, tag_id)
-			SELECT interactions.video_id, ?
-			FROM short_feed_interactions interactions
-			JOIN videos ON videos.id = interactions.video_id
-			WHERE interactions.liked = ? AND videos.deleted_at IS NULL
-			ON CONFLICT DO NOTHING
-		`, tag.ID, true)
-		if inserted.Error != nil {
-			return inserted.Error
+		// 双向对账：手机端取消喜欢后，列上的投影也要撤掉。
+		// 收藏是"每次手机端操作只投影一次"（怕覆盖主片库里的手工取消），
+		// 点赞不同——它完全由这个投影拥有，所以两个方向都跟着走。
+		unliked := tx.Model(&models.Video{}).
+			Where("is_liked = ?", true).
+			Where("id NOT IN (?)", tx.Model(&models.ShortFeedInteraction{}).Select("video_id").
+				Where("liked = ?", true)).
+			Update("is_liked", false)
+		if unliked.Error != nil {
+			return unliked.Error
 		}
-		result.LikesAdded = inserted.RowsAffected
-
-		removed := tx.Exec(`
-			DELETE FROM video_tags
-			WHERE tag_id = ?
-			  AND NOT EXISTS (
-				SELECT 1
-				FROM short_feed_interactions interactions
-				JOIN videos ON videos.id = interactions.video_id
-				WHERE interactions.video_id = video_tags.video_id
-				  AND interactions.liked = ?
-				  AND videos.deleted_at IS NULL
-			  )
-		`, tag.ID, true)
-		if removed.Error != nil {
-			return removed.Error
-		}
-		result.LikesRemoved = removed.RowsAffected
+		result.LikesRemoved = unliked.RowsAffected
 
 		favorited := tx.Model(&models.Video{}).
 			Where("is_favorite = ?", false).
@@ -733,44 +732,33 @@ func (s *ShortFeedService) SyncFeedback() (ShortFeedFeedbackSyncResult, error) {
 			return marked.Error
 		}
 
-		return syncShortFeedImageFeedback(tx, tag.ID, &result)
+		return syncShortFeedImageFeedback(tx, &result)
 	})
 	return result, err
 }
 
-// syncShortFeedImageFeedback 是图片侧的等价投影：喜欢完全拥有那个自动标签
-// （含反向清理），收藏每次动作只投影一次。表名与收藏列换成图片侧的等价物，
-// 语义与视频侧逐条对齐。
-func syncShortFeedImageFeedback(tx *gorm.DB, tagID uint, result *ShortFeedFeedbackSyncResult) error {
-	inserted := tx.Exec(`
-		INSERT INTO image_tags(image_id, tag_id)
-		SELECT interactions.image_id, ?
-		FROM short_feed_image_interactions interactions
-		JOIN images ON images.id = interactions.image_id
-		WHERE interactions.liked = ? AND images.deleted_at IS NULL
-		ON CONFLICT DO NOTHING
-	`, tagID, true)
-	if inserted.Error != nil {
-		return inserted.Error
+// syncShortFeedImageFeedback 是图片侧的等价投影，与视频侧逐条对齐：
+// 点赞完全由投影拥有（双向对账），收藏每次手机端动作只投影一次。
+func syncShortFeedImageFeedback(tx *gorm.DB, result *ShortFeedFeedbackSyncResult) error {
+	liked := tx.Model(&models.Image{}).
+		Where("is_liked = ?", false).
+		Where("id IN (?)", tx.Model(&models.ShortFeedImageInteraction{}).Select("image_id").
+			Where("liked = ?", true)).
+		Update("is_liked", true)
+	if liked.Error != nil {
+		return liked.Error
 	}
-	result.LikesAdded += inserted.RowsAffected
+	result.ImageLikesAdded = liked.RowsAffected
 
-	removed := tx.Exec(`
-		DELETE FROM image_tags
-		WHERE tag_id = ?
-		  AND NOT EXISTS (
-			SELECT 1
-			FROM short_feed_image_interactions interactions
-			JOIN images ON images.id = interactions.image_id
-			WHERE interactions.image_id = image_tags.image_id
-			  AND interactions.liked = ?
-			  AND images.deleted_at IS NULL
-		  )
-	`, tagID, true)
-	if removed.Error != nil {
-		return removed.Error
+	unliked := tx.Model(&models.Image{}).
+		Where("is_liked = ?", true).
+		Where("id NOT IN (?)", tx.Model(&models.ShortFeedImageInteraction{}).Select("image_id").
+			Where("liked = ?", true)).
+		Update("is_liked", false)
+	if unliked.Error != nil {
+		return unliked.Error
 	}
-	result.LikesRemoved += removed.RowsAffected
+	result.ImageLikesRemoved = unliked.RowsAffected
 
 	favorited := tx.Model(&models.Image{}).
 		Where("is_favorite = ?", false).
@@ -780,7 +768,7 @@ func syncShortFeedImageFeedback(tx *gorm.DB, tagID uint, result *ShortFeedFeedba
 	if favorited.Error != nil {
 		return favorited.Error
 	}
-	result.FavoritesAdded += favorited.RowsAffected
+	result.ImageFavoritesAdded = favorited.RowsAffected
 
 	marked := tx.Model(&models.ShortFeedImageInteraction{}).
 		Where("favorited = ? AND favorite_synced_to_library = ?", true, false).
@@ -789,7 +777,6 @@ func syncShortFeedImageFeedback(tx *gorm.DB, tagID uint, result *ShortFeedFeedba
 	return marked.Error
 }
 
-// DeleteItem 把一条内容移入对应媒体的回收站。图片走图片回收站链路，可恢复。
 func (s *ShortFeedService) DeleteItem(ref ShortFeedMediaRef) error {
 	switch ref.Kind {
 	case ShortFeedMediaVideo:

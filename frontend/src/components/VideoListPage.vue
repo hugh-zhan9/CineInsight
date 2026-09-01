@@ -1838,6 +1838,7 @@ export default {
         { label: '全部视频', value: '' },
         { label: '继续观看', value: 'continue_watching' },
         { label: '收藏', value: 'favorites' },
+        { label: '点赞', value: 'liked' },
         { label: '最近播放', value: 'recently_played' },
         { label: '未看', value: 'unwatched' },
         { label: '已看', value: 'watched' },
@@ -4009,6 +4010,7 @@ export default {
     matchesSmartView(video) {
       switch (this.smartView) {
         case 'favorites': return !!video.is_favorite;
+        case 'liked': return !!video.is_liked;
         case 'continue_watching': return !video.is_watched && Number(video.watch_position_seconds || 0) > 0;
         case 'unwatched': return !video.is_watched;
         case 'watched': return !!video.is_watched;
@@ -4370,7 +4372,7 @@ export default {
     },
     async applyVideoStateChange(updatedVideo) {
       if (!updatedVideo) return;
-      const stateSensitiveViews = ['favorites', 'continue_watching', 'unwatched', 'watched'];
+      const stateSensitiveViews = ['favorites', 'liked', 'continue_watching', 'unwatched', 'watched'];
       if (stateSensitiveViews.includes(this.smartView) && !this.matchesSmartView(updatedVideo)) {
         await this.reloadCurrentView();
         return;

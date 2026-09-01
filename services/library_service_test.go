@@ -553,3 +553,67 @@ func TestCountLibraryVideosMatchesTheListedPage(t *testing.T) {
 		t.Fatalf("非法智能视图应被拒绝")
 	}
 }
+
+// 点赞与收藏在主片库这一侧必须完全同构：各自一个真实列、各自一个智能视图。
+// 早先点赞走的是一个自动标签，用户裁决改成列（2026-09-01）。
+func TestLikedSmartViewMirrorsFavorites(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+
+	create := func(name string, favorite, liked bool) models.Video {
+		path := root + "/" + name
+		mustCreateFile(t, path)
+		video := models.Video{Name: name, Path: path, Directory: root, IsFavorite: favorite, IsLiked: liked}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("建视频失败: %v", err)
+		}
+		return video
+	}
+	likedOnly := create("liked.mp4", false, true)
+	favoriteOnly := create("favorite.mp4", true, false)
+	both := create("both.mp4", true, true)
+	create("plain.mp4", false, false)
+
+	idsOf := func(view string) []uint {
+		page, err := svc.SearchLibraryVideoPage(LibraryFilter{SmartView: view}, nil, 50)
+		if err != nil {
+			t.Fatalf("查询 %s 失败: %v", view, err)
+		}
+		ids := make([]uint, 0, len(page.Videos))
+		for _, video := range page.Videos {
+			ids = append(ids, video.ID)
+		}
+		return ids
+	}
+	contains := func(ids []uint, want uint) bool {
+		for _, id := range ids {
+			if id == want {
+				return true
+			}
+		}
+		return false
+	}
+
+	liked := idsOf(LibraryViewLiked)
+	if len(liked) != 2 || !contains(liked, likedOnly.ID) || !contains(liked, both.ID) {
+		t.Fatalf("点赞视图应只含点赞过的两条: %v", liked)
+	}
+	if contains(liked, favoriteOnly.ID) {
+		t.Fatalf("点赞视图不应把只收藏的算进来: %v", liked)
+	}
+
+	favorites := idsOf(LibraryViewFavorites)
+	if len(favorites) != 2 || contains(favorites, likedOnly.ID) {
+		t.Fatalf("收藏视图不应受点赞影响: %v", favorites)
+	}
+
+	// 计数口径要与列表一致，否则结果条会骗人。
+	count, err := svc.CountLibraryVideos(LibraryFilter{SmartView: LibraryViewLiked})
+	if err != nil {
+		t.Fatalf("点赞计数失败: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("点赞计数应为 2，实际 %d", count)
+	}
+}

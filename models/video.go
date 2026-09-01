@@ -26,6 +26,7 @@ type Video struct {
 	RandomPlayCount        int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
 	LastPlayedAt           *time.Time     `json:"last_played_at" ts_type:"string"`                                         // 最后播放时间
 	IsFavorite             bool           `gorm:"not null;default:false" json:"is_favorite"`                               // 主片库收藏状态
+	IsLiked                bool           `gorm:"not null;default:false;index" json:"is_liked"`                            // 手机端点赞状态的投影；与 is_favorite 同构
 	IsWatched              bool           `gorm:"not null;default:false" json:"is_watched"`                                // 是否已看
 	WatchPositionSeconds   float64        `gorm:"not null;default:0" json:"watch_position_seconds"`                        // 内嵌播放器观看位置（秒）
 	WatchProgressUpdatedAt *time.Time     `json:"watch_progress_updated_at" ts_type:"string"`                              // 最近一次观看进度更新时间
@@ -109,7 +110,7 @@ type Settings struct {
 	ImageExtensions              string     `json:"image_extensions"`      // 支持的图片格式（逗号分隔），老库零值由使用方回退默认清单
 	ScanExcludePaths             string     `gorm:"type:text" json:"scan_exclude_paths"`
 	ImageScanExcludePaths        string     `gorm:"type:text" json:"image_scan_exclude_paths"` // 图片扫描黑名单；空值回退共用 scan_exclude_paths（老库行为）
-	PlayWeight                   float64    `gorm:"default:2.0" json:"play_weight"` // 播放权重（1次播放 = N次随机播放）
+	PlayWeight                   float64    `gorm:"default:2.0" json:"play_weight"`            // 播放权重（1次播放 = N次随机播放）
 	RandomHalfLifeDays           int        `gorm:"not null;default:90" json:"random_half_life_days"`
 	AutoScanOnStartup            bool       `json:"auto_scan_on_startup"`   // 启动时自动增量扫描
 	LibraryWatchEnabled          bool       `json:"library_watch_enabled"`  // 实时同步片库
