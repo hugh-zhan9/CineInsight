@@ -9,12 +9,10 @@
         <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
       </div>
 
-      <nav class="ai-tag-review-tabs" aria-label="AI 管理视图">
-        <button type="button" :class="{ active: activeTab === 'review' }" data-test="ai-review-tab" @click="activeTab = 'review'">待审工作台</button>
-        <button v-if="qualityEnabled" type="button" :class="{ active: activeTab === 'quality' }" data-test="ai-quality-tab" @click="activeTab = 'quality'">质量评估</button>
-      </nav>
-
-      <template v-if="activeTab === 'review'">
+      <!-- 原型 A6：两个页签合并成主从布局——待审在左，质量评估作为右侧
+           352px 常驻只读面板。判断一条候选值不值得批准时，命中率就在旁边。 -->
+      <div :class="['ai-review-split', { 'ai-review-split--with-quality': qualityEnabled }]">
+        <div class="ai-review-main">
         <nav class="ai-review-type-tabs" aria-label="待审工作台类型">
           <button type="button" :class="{ active: reviewSection === 'tags' }" data-test="ai-candidate-review-tab" @click="reviewSection = 'tags'">AI 标签待审 <span>{{ candidates.length }}</span></button>
           <button type="button" :class="{ active: reviewSection === 'same-source' }" data-test="same-source-review-tab" @click="reviewSection = 'same-source'">视频同源待审 <span>{{ sameSourceRelations.length }}</span></button>
@@ -146,9 +144,12 @@
             </div>
           </template>
         </div>
-      </template>
+        </div>
 
-      <AIQualityPanel v-if="activeTab === 'quality'" :tags="tags" />
+        <aside v-if="qualityEnabled" class="ai-review-quality" data-test="ai-quality-tab">
+          <AIQualityPanel :tags="tags" />
+        </aside>
+      </div>
 
       <div v-if="rejectConfirm.show" class="ai-confirm-overlay">
         <div class="ai-confirm-dialog glass-surface">
@@ -224,7 +225,6 @@ export default {
   data() {
     return {
       candidates: [],
-      activeTab: 'review',
       reviewSection: 'tags',
       sameSourceRelations: [],
       summary: null,
@@ -248,12 +248,8 @@ export default {
     },
   },
   watch: {
-	qualityEnabled(value) {
-	  if (!value && this.activeTab === 'quality') this.activeTab = 'review';
-	},
     visible(value) {
       if (value) {
-		this.activeTab = 'review';
         this.reviewSection = 'tags';
         this.reviewSearch = '';
         this.loadCandidates();
@@ -578,6 +574,32 @@ export default {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.ai-review-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.ai-review-split--with-quality { grid-template-columns: minmax(0, 1fr) 352px; }
+
+.ai-review-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+
+.ai-review-quality {
+  min-width: 0;
+  overflow-y: auto;
+  padding-left: 16px;
+  margin-left: 16px;
+  border-left: 1px solid var(--hairline-soft);
+  background: var(--panel-subtle-bg);
+}
+
+@media (max-width: 1100px) {
+  /* 窄屏放不下并排：质量面板落到待审流下面，而不是把两边都挤没。 */
+  .ai-review-split--with-quality { grid-template-columns: minmax(0, 1fr); }
+  .ai-review-quality { padding-left: 0; margin-left: 0; border-left: 0; border-top: 1px solid var(--hairline-soft); }
 }
 
 .ai-review-workbench-content {

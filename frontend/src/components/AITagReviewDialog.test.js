@@ -19,20 +19,26 @@ beforeEach(() => {
   api.ListSameSourceRelations.mockResolvedValue([]);
 });
 
+// 2026-09-01 起两个顶层页签合并成主从布局：待审在左，质量评估作为右侧常驻
+// 只读面板——判断一条候选值不值得批准时，命中率就该在旁边，而不是隔一次点击。
 describe('AITagReviewDialog quality entry', () => {
   it('can hide the quality view independently', async () => {
     const wrapper = mount(AITagReviewDialog, { props: { visible: true, qualityEnabled: false } });
     await flushPromises();
     expect(wrapper.find('[data-test="ai-quality-tab"]').exists()).toBe(false);
-    expect(wrapper.find('[data-test="ai-review-tab"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="quality-panel"]').exists()).toBe(false);
+    // 关掉质量面板不影响待审工作台。
+    expect(wrapper.find('.ai-tag-review-actions').exists()).toBe(true);
+    expect(wrapper.find('.ai-review-split--with-quality').exists()).toBe(false);
   });
 
-  it('opens quality as a separate read-only tab', async () => {
+  it('keeps quality visible beside the review stream instead of behind a tab', async () => {
     const wrapper = mount(AITagReviewDialog, { props: { visible: true, qualityEnabled: true } });
     await flushPromises();
-    await wrapper.find('[data-test="ai-quality-tab"]').trigger('click');
+    // 不需要先点任何东西，面板就在那儿。
     expect(wrapper.find('[data-test="quality-panel"]').exists()).toBe(true);
-    expect(wrapper.find('.ai-tag-review-actions').exists()).toBe(false);
+    expect(wrapper.find('.ai-tag-review-actions').exists()).toBe(true);
+    expect(wrapper.find('.ai-review-split--with-quality').exists()).toBe(true);
   });
 });
 
