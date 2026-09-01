@@ -302,6 +302,10 @@ export function GetImageTags() {
   return window['go']['main']['App']['GetImageTags']();
 }
 
+export function GetLibraryCounts() {
+  return window['go']['main']['App']['GetLibraryCounts']();
+}
+
 export function GetLibraryInsights() {
   return window['go']['main']['App']['GetLibraryInsights']();
 }

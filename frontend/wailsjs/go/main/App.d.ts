@@ -154,6 +154,8 @@ export function GetImageSemanticIndexStatus():Promise<services.ImageSemanticInde
 
 export function GetImageTags():Promise<Array<models.Tag>>;
 
+export function GetLibraryCounts():Promise<services.LibraryCounts>;
+
 export function GetLibraryInsights():Promise<services.LibraryStats>;
 
 export function GetLibrarySubtitleHits(arg1:string,arg2:Array<number>):Promise<Array<services.LibrarySubtitleHit>>;

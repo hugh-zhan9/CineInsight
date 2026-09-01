@@ -4,7 +4,7 @@
       <div class="header-left">
         <h1>析微影策</h1>
       </div>
-      <div class="header-actions">
+      <div class="header-nav">
         <button 
           @click="currentPage = 'videos'" 
           :class="['nav-btn', { active: currentPage === 'videos' }]"
@@ -30,6 +30,7 @@
           设置
         </button>
       </div>
+      <div v-if="libraryCountsText" class="header-counts">{{ libraryCountsText }}</div>
     </div>
 
     <div v-if="startupError" class="startup-error-view">
@@ -83,7 +84,7 @@
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
@@ -103,6 +104,7 @@ export default {
       directories: [],
       startupError: '',
       systemTheme: 'light',
+      libraryCounts: null,
       settings: {
         confirm_before_delete: true,
         delete_original_file: false,
@@ -126,6 +128,7 @@ export default {
     await this.loadSettings();
     await this.loadDirectories();
     this.loadTags();
+    this.loadLibraryCounts();
     
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     this.systemTheme = mediaQuery.matches ? 'dark' : 'light';
@@ -153,7 +156,25 @@ export default {
       }
     }
   },
+  computed: {
+    // 计数任一失败就整段不显示，不给占位数字——头部的数字是用来一眼确认库规模的，
+    // 显示一个假的比不显示更糟。
+    libraryCountsText() {
+      const counts = this.libraryCounts;
+      if (!counts) return '';
+      const format = value => Number(value || 0).toLocaleString('zh-CN');
+      return `库 ${format(counts.video_count)} 视频 · ${format(counts.image_count)} 图片`;
+    }
+  },
   methods: {
+    async loadLibraryCounts() {
+      try {
+        this.libraryCounts = await GetLibraryCounts();
+      } catch (err) {
+        this.libraryCounts = null;
+        this.debugLog('loadLibraryCounts failed', { err: String(err) }, true);
+      }
+    },
     debugLog(message, payload = null, isError = false) {
       return logFrontend('App.vue', message, payload, isError);
     },
@@ -226,47 +247,55 @@ export default {
 </script>
 
 <style>
-/* --- Header --- */
+/* --- Header ---
+   原型 A1：52px 通栏、不透明面板、底部一条发丝线；导航是 32px 胶囊，
+   选中态直接填主色，不再靠投影和浅底区分。 */
 .header {
-  height: 54px;
-  margin: 8px 12px 0;
-  padding: 0 14px;
+  height: 52px;
+  flex: none;
+  padding: 0 20px 0 82px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  border-radius: 16px;
+  gap: 20px;
+  border: 0;
+  border-bottom: 1px solid var(--hairline);
+  border-radius: 0;
+  background: var(--header-bg);
   z-index: 100;
   --wails-draggable: drag;
 }
-.header-left { padding-left: 62px; pointer-events: none; }
-.header h1 { font-size: 17px; font-weight: 740; color: var(--text-primary); }
-.header-actions {
+.header-left { pointer-events: none; }
+.header h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-primary); }
+.header-nav {
   display: flex;
-  gap: 4px;
-  height: 38px;
+  gap: 2px;
   align-items: center;
-  margin-left: auto;
-  padding: 4px;
-  border: 1px solid var(--border-color);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.22);
   --wails-draggable: none;
 }
 
 .nav-btn {
-  height: 28px;
+  height: 32px;
   padding: 0 14px;
   background: transparent;
   border: none;
-  border-radius: 999px;
+  border-radius: var(--radius);
   color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 650;
+  font-size: 13.5px;
+  font-weight: 500;
   cursor: pointer;
-  transition: background var(--transition), color var(--transition), box-shadow var(--transition);
+  transition: background var(--transition), color var(--transition);
 }
-.nav-btn.active { color: var(--text-primary); background: var(--control-hover-bg); box-shadow: 0 1px 8px rgba(15, 23, 42, 0.08); }
-.nav-btn:hover:not(.active) { color: var(--text-primary); background: var(--accent-soft); }
+.nav-btn.active { color: var(--accent-on); background: var(--accent-color); font-weight: 600; }
+.nav-btn:hover:not(.active) { color: var(--text-primary); background: var(--panel-muted-bg); }
+
+.header-counts {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: nowrap;
+  --wails-draggable: none;
+}
 
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .startup-error-view {
@@ -281,9 +310,8 @@ export default {
   width: 100%;
   background: var(--panel-bg);
   border: 1px solid var(--border-color);
-  border-radius: 16px;
+  border-radius: var(--radius-lg);
   padding: 28px 32px;
-  box-shadow: 0 20px 25px -5px rgba(0,0,0,0.08);
 }
 .startup-error-card h2 {
   font-size: 22px;

@@ -448,3 +448,44 @@ func TestGetVideosByIDsPreservesOrderAndSkipsMissing(t *testing.T) {
 		t.Fatalf("空 ID 列表应返回空结果: %v %v", empty, err)
 	}
 }
+
+func TestGetLibraryCountsCountsOnlyActiveRows(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+
+	counts, err := svc.GetLibraryCounts()
+	if err != nil {
+		t.Fatalf("空库计数失败: %v", err)
+	}
+	if counts.VideoCount != 0 || counts.ImageCount != 0 {
+		t.Fatalf("空库应返回 0/0，实际 %+v", counts)
+	}
+
+	ids := make([]uint, 0, 3)
+	for index := 0; index < 3; index++ {
+		path := fmt.Sprintf("%s/count-%d.mp4", root, index)
+		mustCreateFile(t, path)
+		video := models.Video{Name: fmt.Sprintf("count-%d.mp4", index), Path: path, Directory: root}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建视频失败: %v", err)
+		}
+		ids = append(ids, video.ID)
+	}
+	image := models.Image{Name: "one.jpg", Path: root + "/one.jpg", Directory: root}
+	if err := database.DB.Create(&image).Error; err != nil {
+		t.Fatalf("创建图片失败: %v", err)
+	}
+	// 软删除的行不该计入头部总数。
+	if err := database.DB.Delete(&models.Video{}, ids[0]).Error; err != nil {
+		t.Fatalf("软删除失败: %v", err)
+	}
+
+	counts, err = svc.GetLibraryCounts()
+	if err != nil {
+		t.Fatalf("计数失败: %v", err)
+	}
+	if counts.VideoCount != 2 || counts.ImageCount != 1 {
+		t.Fatalf("期望 2 视频 1 图片，实际 %+v", counts)
+	}
+}

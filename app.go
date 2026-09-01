@@ -510,6 +510,11 @@ func (a *App) GetVideoDetails(videoID uint) (*services.VideoDetails, error) {
 	return a.videoDetailService.GetVideoDetails(videoID)
 }
 
+// GetLibraryCounts 返回应用头部展示的视频与图片总数。
+func (a *App) GetLibraryCounts() (*services.LibraryCounts, error) {
+	return a.videoService.GetLibraryCounts()
+}
+
 func (a *App) GetLibraryInsights() (*services.LibraryStats, error) {
 	return a.libraryStatsService.GetStats()
 }

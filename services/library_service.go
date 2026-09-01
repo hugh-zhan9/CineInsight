@@ -581,3 +581,23 @@ func (s *VideoService) searchLibraryVideos(filter LibraryFilter, cursorScore flo
 	err = query.Limit(limit).Find(&videos).Error
 	return videos, err
 }
+
+// LibraryCounts 是应用头部那行「库 N 视频 · M 图片」需要的两个总数。
+// 单独走两条 COUNT，而不是复用洞察聚合——洞察要跑目录、标签、分辨率、热力图
+// 等一整套聚合，只为两个数字在启动时跑一遍不划算。
+type LibraryCounts struct {
+	VideoCount int64 `json:"video_count"`
+	ImageCount int64 `json:"image_count"`
+}
+
+// GetLibraryCounts 返回活跃视频与活跃图片的总数（软删除的不计）。
+func (s *VideoService) GetLibraryCounts() (*LibraryCounts, error) {
+	counts := &LibraryCounts{}
+	if err := database.DB.Model(&models.Video{}).Count(&counts.VideoCount).Error; err != nil {
+		return nil, err
+	}
+	if err := database.DB.Model(&models.Image{}).Count(&counts.ImageCount).Error; err != nil {
+		return nil, err
+	}
+	return counts, nil
+}

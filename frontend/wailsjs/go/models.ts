@@ -2608,6 +2608,20 @@ export namespace services {
 	        this.count = source["count"];
 	    }
 	}
+	export class LibraryCounts {
+	    video_count: number;
+	    image_count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LibraryCounts(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_count = source["video_count"];
+	        this.image_count = source["image_count"];
+	    }
+	}
 	export class LibraryFilter {
 	    search_mode: string;
 	    keyword: string;
