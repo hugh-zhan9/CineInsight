@@ -63,18 +63,6 @@
           <option value="rating">评分最高</option>
           <option value="taken">拍摄时间</option>
         </select>
-        <select
-          v-model="filters.aiTagState"
-          class="select-input photo-toolbar__ai"
-          :disabled="searchMode === 'semantic'"
-          :title="searchMode === 'semantic' ? '语义模式不叠加此筛选' : '按 AI 打标状态筛选'"
-          data-test="photo-ai-state"
-        >
-          <option value="">AI 标签：全部</option>
-          <option value="pending">有待审候选</option>
-          <option value="tagged">已打标</option>
-          <option value="untagged">未打标</option>
-        </select>
         <label
           class="photo-toolbar__timeline"
           :title="searchMode === 'semantic' ? '语义模式按相关度排序，不做时间线分组' : '按拍摄时间倒序，并插入年月分组头'"
@@ -87,50 +75,29 @@
           />
           <span>时间线</span>
         </label>
-        <label class="photo-toolbar__favorite">
-          <input v-model="filters.favoriteOnly" type="checkbox" data-test="photo-favorite-only" />
-          <span>仅收藏</span>
-        </label>
-        <div class="photo-toolbar__rating">
-          <span>评分</span>
-          <input v-model="filters.minRating" type="number" min="0" max="10" step="0.5" class="number-input" placeholder="最低" data-test="photo-min-rating" />
-          <span>–</span>
-          <input v-model="filters.maxRating" type="number" min="0" max="10" step="0.5" class="number-input" placeholder="最高" data-test="photo-max-rating" />
-        </div>
-        <div class="photo-toolbar__taken" :title="searchMode === 'semantic' ? '语义模式暂不支持拍摄日期筛选' : ''">
-          <span>拍摄日期</span>
-          <input
-            v-model="filters.takenAfter"
-            type="date"
-            class="text-input photo-toolbar__date"
-            aria-label="拍摄日期起"
-            :disabled="searchMode === 'semantic'"
-            data-test="photo-taken-after"
-          />
-          <span>–</span>
-          <input
-            v-model="filters.takenBefore"
-            type="date"
-            class="text-input photo-toolbar__date"
-            aria-label="拍摄日期止"
-            :disabled="searchMode === 'semantic'"
-            data-test="photo-taken-before"
-          />
-        </div>
-        <button type="button" class="btn-secondary" :disabled="scanning" data-test="photo-scan" @click="scanNow">
-          {{ scanning ? '扫描中...' : '立即扫描' }}
+        <button
+          ref="photoFilterTrigger"
+          type="button"
+          :class="['toolbar-btn', { 'toolbar-btn--on': activePhotoFilterCount > 0 }]"
+          data-test="photo-filter-open"
+          @click="togglePhotoMenu('filter', 'photoFilterTrigger')"
+        >
+          筛选
+          <span v-if="activePhotoFilterCount > 0" class="toolbar-btn__badge">{{ activePhotoFilterCount }}</span>
+          <span class="toolbar-btn__caret">▾</span>
         </button>
-        <button type="button" class="btn-secondary photo-cleanup-open-btn" data-test="photo-cleanup-open" @click="openCleanup">
-          清理审阅
-          <span v-if="cleanupRunning" class="photo-cleanup-badge" data-test="photo-cleanup-badge" :title="cleanupBadgeTitle">分析中 {{ cleanupProgressText }}</span>
-          <span v-else-if="cleanupDone" class="photo-cleanup-badge photo-cleanup-badge--done" data-test="photo-cleanup-done" title="清理分析已完成，点击查看候选">待审阅 {{ cleanupGroupCount }} 组</span>
+        <button
+          ref="photoManageTrigger"
+          type="button"
+          class="toolbar-btn toolbar-btn--strong"
+          data-test="photo-manage-open"
+          @click="togglePhotoMenu('manage', 'photoManageTrigger')"
+        >
+          管理
+          <span v-if="photoAttentionCount > 0" class="toolbar-btn__badge">{{ photoAttentionCount }}</span>
+          <span class="toolbar-btn__caret">▾</span>
         </button>
-        <button type="button" class="btn-secondary photo-ai-tag-open-btn" data-test="photo-ai-tag-review-open" @click="openAITagReview">
-          AI 标签审阅
-          <span v-if="aiTagPending > 0" class="photo-cleanup-badge" data-test="photo-ai-tag-badge" :title="`${aiTagPending} 条候选待审`">待审 {{ aiTagPending }}</span>
-        </button>
-        <button type="button" class="btn-secondary" data-test="photo-trash-open" @click="showTrash = true">回收站</button>
-        <div v-if="images.length" class="photo-selection-tools" data-test="photo-selection-tools">
+        <div v-if="images.length" :class="['photo-selection-tools', { 'photo-selection-tools--active': selectedImageIDs.length > 0 }]" data-test="photo-selection-tools">
           <span class="photo-selection-tools__count">已选 {{ selectedImageIDs.length }} 张</span>
           <button type="button" class="btn-secondary btn-compact" data-test="photo-select-all" @click="toggleSelectAll">
             {{ allLoadedSelected ? '取消全选' : '全选已加载' }}
@@ -171,6 +138,70 @@
           <button v-if="selectedImageIDs.length" type="button" class="btn-danger btn-compact" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">删除所选</button>
         </div>
       </div>
+      <BasePopover
+        v-if="photoMenu === 'filter'"
+        :anchor="photoMenuAnchor"
+        :min-width="360"
+        :teleport="false"
+        panel-class="photo-filter-popover"
+        @close="closePhotoMenu"
+      >
+        <div class="photo-filter-popover__head"><strong>筛选条件</strong></div>
+        <select
+          v-model="filters.aiTagState"
+          class="select-input photo-toolbar__ai"
+          :disabled="searchMode === 'semantic'"
+          :title="searchMode === 'semantic' ? '语义模式不叠加此筛选' : '按 AI 打标状态筛选'"
+          data-test="photo-ai-state"
+        >
+          <option value="">AI 标签：全部</option>
+          <option value="pending">有待审候选</option>
+          <option value="tagged">已打标</option>
+          <option value="untagged">未打标</option>
+        </select>
+        <label class="photo-toolbar__favorite">
+          <input v-model="filters.favoriteOnly" type="checkbox" data-test="photo-favorite-only" />
+          <span>仅收藏</span>
+        </label>
+        <div class="photo-toolbar__rating">
+          <span>评分</span>
+          <input v-model="filters.minRating" type="number" min="0" max="10" step="0.5" class="number-input" placeholder="最低" data-test="photo-min-rating" />
+          <span>–</span>
+          <input v-model="filters.maxRating" type="number" min="0" max="10" step="0.5" class="number-input" placeholder="最高" data-test="photo-max-rating" />
+        </div>
+        <div class="photo-toolbar__taken" :title="searchMode === 'semantic' ? '语义模式暂不支持拍摄日期筛选' : ''">
+          <span>拍摄日期</span>
+          <input
+            v-model="filters.takenAfter"
+            type="date"
+            class="text-input photo-toolbar__date"
+            aria-label="拍摄日期起"
+            :disabled="searchMode === 'semantic'"
+            data-test="photo-taken-after"
+          />
+          <span>–</span>
+          <input
+            v-model="filters.takenBefore"
+            type="date"
+            class="text-input photo-toolbar__date"
+            aria-label="拍摄日期止"
+            :disabled="searchMode === 'semantic'"
+            data-test="photo-taken-before"
+          />
+        </div>
+      </BasePopover>
+
+      <BaseMenu
+        v-if="photoMenu === 'manage'"
+        :anchor="photoMenuAnchor"
+        :items="photoManageItems"
+        :min-width="240"
+        align="end"
+        label="图片库管理"
+        @select="onPhotoManageSelect"
+        @close="closePhotoMenu"
+      />
+
       <p v-if="semanticNotice" class="photo-toolbar__semantic-notice" role="status" data-test="photo-semantic-unavailable">{{ semanticNotice }}</p>
       <div v-if="imageTags.length" class="photo-toolbar__tags">
         <button
@@ -255,7 +286,11 @@
           <h3>{{ timelineLabel(row) }}</h3>
         </div>
         <div v-else class="photo-grid-row" :style="rowStyle(row)">
-          <article v-for="(image, offset) in rowImages(row)" :key="image.id" class="photo-card glass-surface">
+          <article
+            v-for="(image, offset) in rowImages(row)"
+            :key="image.id"
+            :class="['photo-card', { 'photo-card--selected': selectedImageIDs.includes(Number(image.id)) }]"
+          >
             <label class="photo-card__select" :title="`选择 ${image.name}`" @click.stop>
               <input
                 type="checkbox"
@@ -577,6 +612,8 @@ import {
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import BaseMenu from './ui/BaseMenu.vue';
+import BasePopover from './ui/BasePopover.vue';
 import PhotoCleanupPage from './PhotoCleanupPage.vue';
 import PhotoTrashDialog from './PhotoTrashDialog.vue';
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
@@ -606,7 +643,7 @@ const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
-  components: { BaseModal, PhotoCleanupPage, PhotoTrashDialog, ImageAITagReviewPanel },
+  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, PhotoTrashDialog, ImageAITagReviewPanel },
   props: {
     settings: { type: Object, required: true },
     tags: { type: Array, default: () => [] },
@@ -616,6 +653,8 @@ export default {
   emits: ['open-settings'],
   data() {
     return {
+      photoMenu: null,
+      photoMenuAnchor: null,
       images: [],
       nextCursor: null,
       exhausted: false,
@@ -691,6 +730,32 @@ export default {
     };
   },
   computed: {
+    // 与视频库同构：徽标只数收进浮层的那几项低频筛选。
+    activePhotoFilterCount() {
+      let count = 0;
+      if (this.filters.aiTagState) count += 1;
+      if (this.timelineMode) count += 1;
+      if (this.filters.favoriteOnly) count += 1;
+      if (this.filters.minRating !== '' || this.filters.maxRating !== '') count += 1;
+      if (this.filters.takenAfter || this.filters.takenBefore) count += 1;
+      return count;
+    },
+    photoAttentionCount() {
+      return (this.aiTagPending || 0) + (this.cleanupDone ? this.cleanupGroupCount || 0 : 0);
+    },
+    photoManageItems() {
+      const cleanup = this.cleanupRunning
+        ? `清理审阅（分析中 ${this.cleanupProgressText}）`
+        : (this.cleanupDone && this.cleanupGroupCount ? `清理审阅（待审阅 ${this.cleanupGroupCount} 组）` : '清理审阅');
+      return [
+        { heading: '扫描' },
+        { id: 'scan', label: this.scanning ? '立即扫描（进行中）' : '立即扫描', disabled: this.scanning },
+        { heading: '维护' },
+        { id: 'cleanup', label: cleanup },
+        { id: 'ai-tags', label: this.aiTagPending > 0 ? `AI 标签审阅（待审 ${this.aiTagPending}）` : 'AI 标签审阅' },
+        { id: 'trash', label: '回收站' }
+      ];
+    },
     hasMore() { return !this.folderModeRoot && !this.exhausted && this.loadedOnce; },
     folderModeRoot() { return this.displayMode === 'folders' && !this.activeFolder; },
     folderModeActive() { return this.displayMode === 'folders' && Boolean(this.activeFolder); },
@@ -874,6 +939,27 @@ export default {
     stopPhotoCleanupPolling();
   },
   methods: {
+    togglePhotoMenu(name, triggerRef) {
+      if (this.photoMenu === name) {
+        this.closePhotoMenu();
+        return;
+      }
+      this.photoMenuAnchor = this.$refs[triggerRef] || null;
+      this.photoMenu = name;
+    },
+    closePhotoMenu() {
+      this.photoMenu = null;
+      this.photoMenuAnchor = null;
+    },
+    onPhotoManageSelect(item) {
+      switch (item.id) {
+        case 'scan': this.scanNow(); break;
+        case 'cleanup': this.openCleanup(); break;
+        case 'ai-tags': this.openAITagReview(); break;
+        case 'trash': this.showTrash = true; break;
+        default: break;
+      }
+    },
     formatBytes,
     formatBadge(image) {
       const format = String(image?.format || '').trim();
@@ -1832,11 +1918,14 @@ export default {
 
 <style scoped>
 .photo-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }
-.photo-toolbar { padding: 14px 16px; border-radius: 14px; display: flex; flex-direction: column; gap: 12px; }
+.photo-toolbar { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; flex-direction: column; gap: 8px; }
 .photo-toolbar__title h2 { margin: 0 0 3px; font-size: 18px; }
 .photo-toolbar__title p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .photo-toolbar__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+/* 选中态把这一条变成与视频库同构的批量栏：主色底、发丝线分隔。 */
 .photo-selection-tools { flex-basis: 100%; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 4px; }
+.photo-selection-tools--active { margin: 0 -16px -10px; padding: 8px 16px; border-top: 1px solid var(--accent-border); background: var(--accent-soft); }
+.photo-selection-tools--active .photo-selection-tools__count { color: var(--accent-text); font-weight: 650; }
 .photo-selection-tools__count { color: var(--text-secondary); font-size: 12px; }
 .photo-batch-tag-search { width: 210px; }
 .photo-tag-combobox { position: relative; min-width: 0; }
@@ -1901,8 +1990,14 @@ export default {
 .photo-grid-row { display: grid; grid-template-columns: repeat(var(--photo-columns, 1), minmax(0, 1fr)); gap: var(--photo-grid-gap, 12px); box-sizing: border-box; }
 .photo-timeline-header { display: flex; align-items: flex-end; overflow: hidden; box-sizing: border-box; }
 .photo-timeline-header h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-size: 13px; font-weight: 600; letter-spacing: 0.2px; }
-.photo-card { position: relative; overflow: hidden; border-radius: 13px; }
-.photo-card__select { position: absolute; z-index: 3; top: 8px; left: 8px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 8px; background: rgba(12, 20, 28, .72); cursor: pointer; }
+.photo-card { position: relative; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.photo-card:hover { border-color: var(--border-strong); }
+/* 勾选框只在悬停或已选时显形：常驻会在密集缩略图上形成一片噪点。
+   键盘聚焦时也要显形，否则用键盘的人根本看不到它。 */
+.photo-card__select { position: absolute; z-index: 3; top: 6px; left: 6px; display: grid; place-items: center; width: 26px; height: 26px; border-radius: 6px; background: var(--overlay-strong); cursor: pointer; opacity: 0; transition: opacity var(--transition); }
+.photo-card:hover .photo-card__select,
+.photo-card__select:focus-within,
+.photo-card--selected .photo-card__select { opacity: 1; }
 .photo-card__select input { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
 /* 定高卡片：缩略图区高度由列宽算出（等价于 aspect-ratio 1），信息条固定 52px，
    两者相加即 photoGrid 的 cellHeight，布局无需实测回写。 */

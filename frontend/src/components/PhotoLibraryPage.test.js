@@ -55,6 +55,23 @@ async function mountPage({ settings = baseSettings(), tags = [] } = {}) {
   return wrapper;
 }
 
+
+// 2026-09-01 起「立即扫描 / 清理审阅 / AI 标签审阅 / 回收站」收进了「管理」菜单，
+// 低频筛选收进了「筛选」浮层，测试需要先把它们打开。
+async function openPhotoManageItem(wrapper, id) {
+  await wrapper.get('[data-test="photo-manage-open"]').trigger('click');
+  await flushPromises();
+  document.querySelector(`.base-menu__item[data-menu-id="${id}"]`).click();
+  await flushPromises();
+}
+
+async function openPhotoFilter(wrapper) {
+  if (!wrapper.find('[data-test="photo-filter-open"]').exists()) return;
+  if (wrapper.find('.photo-filter-popover').exists()) return;
+  await wrapper.get('[data-test="photo-filter-open"]').trigger('click');
+  await flushPromises();
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage?.removeItem?.('cineinsight-photo-display-mode');
@@ -196,6 +213,8 @@ describe('PhotoLibraryPage grid paging', () => {
     const wrapper = await mountPage();
     expect(wrapper.findAll('.photo-card')).toHaveLength(2);
 
+    await openPhotoFilter(wrapper);
+
     await wrapper.get('[data-test="photo-favorite-only"]').setValue(true);
     await flushPromises();
 
@@ -226,8 +245,11 @@ describe('PhotoLibraryPage grid paging', () => {
     expect(api.SearchImagePage.mock.calls[0][0].filter.taken_after).toBeNull();
     expect(api.SearchImagePage.mock.calls[0][0].filter.taken_before).toBeNull();
 
+    await openPhotoFilter(wrapper);
+
     await wrapper.get('[data-test="photo-taken-after"]').setValue('2024-03-11');
     await flushPromises();
+    await openPhotoFilter(wrapper);
     await wrapper.get('[data-test="photo-taken-before"]').setValue('2024-03-12');
     await flushPromises();
 
@@ -552,10 +574,13 @@ describe('PhotoLibraryPage semantic search', () => {
     api.GetImageTags.mockResolvedValue([{ id: 5, name: '风景', color: '#123456' }]);
     const wrapper = await mountPage({ tags: [{ id: 5, name: '风景', color: '#123456' }] });
 
+    await openPhotoFilter(wrapper);
+
     await wrapper.get('[data-test="photo-favorite-only"]').setValue(true);
     await flushPromises();
     await wrapper.findAll('.tag-chip')[0].trigger('click');
     await flushPromises();
+    await openPhotoFilter(wrapper);
     await wrapper.get('[data-test="photo-min-rating"]').setValue('6');
     await flushPromises();
 
@@ -689,12 +714,16 @@ describe('PhotoLibraryPage AI tag filter', () => {
     const wrapper = await mountPage();
     expect(api.SearchImagePage.mock.calls[0][0].filter.ai_tag_state).toBe('');
 
+    await openPhotoFilter(wrapper);
+
     await wrapper.get('[data-test="photo-ai-state"]').setValue('pending');
     await flushPromises();
 
     const last = api.SearchImagePage.mock.calls.at(-1)[0];
     expect(last.filter.ai_tag_state).toBe('pending');
     expect(last.cursor).toBeUndefined();
+
+    await openPhotoFilter(wrapper);
 
     await wrapper.get('[data-test="photo-ai-state"]').setValue('untagged');
     await flushPromises();
@@ -706,6 +735,7 @@ describe('PhotoLibraryPage AI tag filter', () => {
     const wrapper = await mountPage();
     await wrapper.get('[data-test="photo-mode-semantic"]').trigger('click');
     await flushPromises();
+    await openPhotoFilter(wrapper);
     expect(wrapper.get('[data-test="photo-ai-state"]').attributes('disabled')).toBeDefined();
   });
 });
@@ -731,7 +761,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     api.GetImageCleanupStatus.mockResolvedValue(
       completedCleanupStatus({ ...analysis, stale_hash_count: staleHashCount })
     );
-    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
     return wrapper;
   }
@@ -742,7 +772,7 @@ describe('PhotoLibraryPage cleanup review', () => {
 
     expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(false);
 
-    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
 
     expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
@@ -880,7 +910,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     api.StartImageCleanupAnalysis.mockResolvedValue(status);
     api.SearchImagePage.mockResolvedValue(makePage([]));
     const wrapper = await mountPage();
-    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
 
     // 精确重复的副本默认勾选；再手动勾上一张近似重复的，然后折叠目录，模拟审阅到一半。
@@ -895,7 +925,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     // 关掉面板再打开：勾选和折叠都还在，不用从头再勾一遍。
     await wrapper.get('[data-test="photo-cleanup-page"] .btn-secondary').trigger('click');
     await flushPromises();
-    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
 
     expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
@@ -1015,7 +1045,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     api.GetImageCleanupStatus.mockResolvedValue(
       completedCleanupStatus({ duplicate_groups: [exactGroup()], near_duplicate_groups: [], stale_hash_count: 0 }, { stale: true })
     );
-    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
 
     expect(wrapper.find('[data-test="cleanup-outdated-hint"]').exists()).toBe(true);
@@ -1255,7 +1285,7 @@ describe('PhotoLibraryPage grid virtualization', () => {
     const { wrapper, host, cleanup } = await mountInScrollOwner({ fallbackContentHeight: 200000 });
     expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
 
-    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
     expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
 
@@ -1278,7 +1308,7 @@ describe('PhotoLibraryPage grid virtualization', () => {
     const { wrapper, host, cleanup } = await mountInScrollOwner({ fallbackContentHeight: 200000 });
     expect(host.scrollTop).toBe(0);
 
-    await wrapper.get('[data-test="photo-cleanup-open"]').trigger('click');
+    await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
     // 审阅页里滚了很远。
     host.scrollTop = 100000;
@@ -1406,5 +1436,41 @@ describe('PhotoLibraryPage grid virtualization', () => {
     expect(cards.length).toBeGreaterThan(0);
     expect(cards.length).toBeLessThan(100);
     cleanup();
+  });
+});
+
+describe('PhotoLibraryPage 工具栏收纳', () => {
+  it('四个库维护动作收进「管理」菜单，一个都不少', async () => {
+    const wrapper = await mountPage();
+    const ids = wrapper.vm.photoManageItems.filter(item => item.id).map(item => item.id);
+    expect(ids).toEqual(['scan', 'cleanup', 'ai-tags', 'trash']);
+    wrapper.unmount();
+  });
+
+  it('筛选徽标只数收进浮层的低频条件；排序与时间线留在第一行', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.vm.activePhotoFilterCount).toBe(0);
+    // 排序和时间线是高频视图切换，留在常驻行，不进徽标。
+    expect(wrapper.find('[data-test="photo-sort"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="photo-timeline-toggle"]').exists()).toBe(true);
+
+    wrapper.vm.filters.favoriteOnly = true;
+    wrapper.vm.filters.minRating = '6';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.activePhotoFilterCount).toBe(2);
+    wrapper.unmount();
+  });
+
+  it('选中态把选择工具条变成批量栏', async () => {
+    // 工具条只在有已加载图片时渲染。
+    const wrapper = await mountPage();
+    wrapper.vm.images = [{ id: 1, name: 'a.jpg', tags: [] }];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="photo-selection-tools"]').exists()).toBe(true);
+    expect(wrapper.find('.photo-selection-tools--active').exists()).toBe(false);
+    wrapper.vm.selectedImageIDs = [1];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('.photo-selection-tools--active').exists()).toBe(true);
+    wrapper.unmount();
   });
 });

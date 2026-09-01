@@ -1,5 +1,8 @@
 <template>
-  <Teleport to="body">
+  <!-- 浮层是 position: fixed，overflow:hidden 的祖先不会裁剪它；
+       teleport 主要是为了避开 transform 造成的包含块。少数需要留在
+       组件子树里的场景（例如便于按组件边界断言）可以关掉。 -->
+  <Teleport to="body" :disabled="!teleport">
     <div
       ref="panel"
       class="base-popover"
@@ -33,7 +36,8 @@ export default {
     position: { type: Object, default: null },
     align: { type: String, default: 'start' },
     minWidth: { type: Number, default: 0 },
-    panelClass: { type: String, default: '' }
+    panelClass: { type: String, default: '' },
+    teleport: { type: Boolean, default: true }
   },
   emits: ['close'],
   data() {
