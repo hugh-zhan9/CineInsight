@@ -937,3 +937,137 @@ func TestShortFeedHTTPServerFallbackAndShutdown(t *testing.T) {
 func strconvUint(value uint) string {
 	return strconv.FormatUint(uint64(value), 10)
 }
+
+func TestShortFeedScopeNarrowsCandidatesWithoutChangingSelection(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+
+	watched := createShortFeedVideo(t, root, "watched.mp4", 20, false)
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", watched.ID).Update("is_watched", true).Error; err != nil {
+		t.Fatalf("标记已看失败: %v", err)
+	}
+	unwatched := createShortFeedVideo(t, root, "unwatched.mp4", 20, false)
+
+	svc.invalidateCandidates()
+	for attempt := 0; attempt < 12; attempt++ {
+		dto, err := svc.NextItemInScope(nil, ShortFeedScopeUnwatched)
+		if err != nil {
+			t.Fatalf("未看范围取下一条失败: %v", err)
+		}
+		if dto.ID != unwatched.ID {
+			t.Fatalf("未看范围不该抽到已看视频: got=%d want=%d", dto.ID, unwatched.ID)
+		}
+	}
+
+	counts, err := svc.ScopeCounts()
+	if err != nil {
+		t.Fatalf("范围计数失败: %v", err)
+	}
+	byScope := map[string]int{}
+	for _, item := range counts {
+		byScope[item.Scope] = item.Count
+	}
+	if byScope[ShortFeedScopeAll] != 2 || byScope[ShortFeedScopeUnwatched] != 1 {
+		t.Fatalf("范围计数错误: %+v", byScope)
+	}
+	// 全都没打标签，未打标签范围应等于全部。
+	if byScope[ShortFeedScopeUntagged] != 2 {
+		t.Fatalf("未打标签计数错误: %+v", byScope)
+	}
+	if byScope[ShortFeedScopeFavorites] != 0 {
+		t.Fatalf("尚未收藏时收藏范围应为 0: %+v", byScope)
+	}
+
+	if _, err := svc.NextItemInScope(nil, "nope"); err == nil {
+		t.Fatalf("非法播放范围应被拒绝")
+	}
+}
+
+func TestShortFeedRatingWatchedAndTagRoundTrip(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	video := createShortFeedVideo(t, root, "actions.mp4", 15, false)
+	ref := ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID}
+
+	rating := 8.5
+	dto, err := svc.SetRating(ref, &rating)
+	if err != nil {
+		t.Fatalf("设置评分失败: %v", err)
+	}
+	if dto.PersonalRating == nil || *dto.PersonalRating != 8.5 {
+		t.Fatalf("评分未回显: %+v", dto.PersonalRating)
+	}
+
+	// 半分制之外的值必须被拒绝，和主片库同一套校验。
+	invalid := 8.3
+	if _, err := svc.SetRating(ref, &invalid); err == nil {
+		t.Fatalf("非半分制评分应被拒绝")
+	}
+
+	if dto, err = svc.SetRating(ref, nil); err != nil || dto.PersonalRating != nil {
+		t.Fatalf("清空评分失败: %+v %v", dto, err)
+	}
+
+	if dto, err = svc.SetWatched(ref, true); err != nil || !dto.Watched {
+		t.Fatalf("标记已看失败: %+v %v", dto, err)
+	}
+	if dto, err = svc.SetWatched(ref, false); err != nil || dto.Watched {
+		t.Fatalf("取消已看失败: %+v %v", dto, err)
+	}
+
+	tag := models.Tag{Name: "夜景"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if dto, err = svc.SetItemTag(ref, tag.ID, true); err != nil {
+		t.Fatalf("挂标签失败: %v", err)
+	}
+	if len(dto.Tags) != 1 || dto.Tags[0].ID != tag.ID {
+		t.Fatalf("标签未回显: %+v", dto.Tags)
+	}
+	if dto, err = svc.SetItemTag(ref, tag.ID, false); err != nil || len(dto.Tags) != 0 {
+		t.Fatalf("摘标签失败: %+v %v", dto, err)
+	}
+
+	tags, err := svc.ListFeedTags()
+	if err != nil || len(tags) != 1 || tags[0].Name != "夜景" {
+		t.Fatalf("标签列表错误: %+v %v", tags, err)
+	}
+
+	// 图片没有观看状态，明确拒绝而不是假装成功。
+	if _, err := svc.SetWatched(ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: 1}, true); err == nil {
+		t.Fatalf("图片不应支持已看状态")
+	}
+}
+
+func TestShortFeedRestoreUndoesTheLastDelete(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	video := createShortFeedVideo(t, root, "undo.mp4", 12, false)
+	ref := ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID}
+
+	if err := svc.DeleteItem(ref); err != nil {
+		t.Fatalf("删除失败: %v", err)
+	}
+	var afterDelete int64
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Count(&afterDelete).Error; err != nil {
+		t.Fatalf("计数失败: %v", err)
+	}
+	if afterDelete != 0 {
+		t.Fatalf("删除后不该还在活跃集合里")
+	}
+
+	if err := svc.RestoreDeleted(ref); err != nil {
+		t.Fatalf("撤销删除失败: %v", err)
+	}
+	var restored models.Video
+	if err := database.DB.First(&restored, video.ID).Error; err != nil {
+		t.Fatalf("撤销后应能查到原记录: %v", err)
+	}
+	if restored.Path != video.Path {
+		t.Fatalf("撤销应恢复到原路径: got=%s want=%s", restored.Path, video.Path)
+	}
+}

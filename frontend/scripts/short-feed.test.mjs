@@ -80,4 +80,42 @@ assert.match(css, /\.feed-video\s*{[^}]*object-fit:\s*cover;/s, 'short-feed vide
 assert.match(css, /\.progress-dock\s*{[^}]*height:\s*3px;/s, 'short-feed progress should be a minimal bottom bar');
 assert.doesNotMatch(css, /\.progress-time/, 'short-feed should not keep the old time panel visible');
 
+// ---- 2026-09-01 手机端原型重构 ----
+const sheet = readFileSync(new URL('../src/short-feed/components/FeedSheet.vue', import.meta.url), 'utf8');
+const api = readFileSync(new URL('../src/short-feed/api.js', import.meta.url), 'utf8');
+
+// 右侧六个动作：收藏 · 点赞 · 评分 · 标签 · 已看 · 删除。用户裁决保留点赞，
+// 标签偏好学习链路因此不断。
+for (const label of ['收藏', '点赞', '评分', '已看', '删除']) {
+  assert.match(rail, new RegExp(`rail-action__label">${label}<`), `action rail should keep the ${label} action`);
+}
+assert.match(rail, /item\?\.media_kind !== 'image'/, 'watched must not appear for photos, which have no watched state');
+
+// 四个底部面板与撤销提示。
+assert.match(source, /sheet === 'rating'/, 'rating sheet should exist');
+assert.match(source, /sheet === 'tags'/, 'tag sheet should exist');
+assert.match(source, /sheet === 'scope'/, 'playback scope sheet should exist');
+assert.match(source, /class="feed-toast"/, 'a toast should confirm the delete');
+assert.match(source, /@click="undoDelete"/, 'the delete toast must offer an undo');
+assert.match(source, /ratingOptions\(\)\s*{[\s\S]*length: 21/, 'rating grid should cover 0–10 in half steps');
+
+// 浏览历史：往回划走历史而不是重新抽签，圆点指示才有意义。
+assert.match(source, /if \(direction < 0\)/, 'swiping back should walk history');
+assert.match(source, /FEED_HISTORY_LIMIT/, 'history must be bounded');
+assert.doesNotMatch(source, /applyVideo\(/, 'the single-item apply path is replaced by the history list');
+
+// 写入结果由后端回整条 DTO，前端不猜。
+assert.match(source, /replaceCurrent\(await setRating/, 'rating writes should adopt the returned item');
+assert.match(source, /replaceCurrent\(await setWatched/, 'watched writes should adopt the returned item');
+assert.match(source, /replaceCurrent\(await setItemTag/, 'tag writes should adopt the returned item');
+
+// 换范围要重开时间线，否则历史会前后矛盾。
+assert.match(source, /this\.items = \[\];[\s\S]{0,120}this\.recentKeys = \[\];/, 'switching scope should reset the timeline');
+
+assert.match(sheet, /Escape/, 'bottom sheets should close on Escape');
+for (const fn of ['getScopes', 'getFeedTags', 'setRating', 'setWatched', 'setItemTag', 'restoreItem']) {
+  assert.match(api, new RegExp(`export function ${fn}\\b`), `api client should expose ${fn}`);
+}
+assert.match(api, /if \(scope && scope !== 'all'\) params\.set\('scope', scope\)/, 'next-item requests should carry the scope');
+
 console.log('short-feed tests passed');

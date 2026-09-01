@@ -77,20 +77,24 @@ type ShortFeedTagDTO struct {
 
 // ShortFeedItemDTO 是手机端拿到的一条内容。Duration 只对视频有意义，图片为 0。
 type ShortFeedItemDTO struct {
-	MediaKind     ShortFeedMediaKind `json:"media_kind"`
-	ID            uint               `json:"id"`
-	Name          string             `json:"name"`
-	Duration      float64            `json:"duration"`
-	Width         int                `json:"width"`
-	Height        int                `json:"height"`
-	Tags          []ShortFeedTagDTO  `json:"tags"`
-	MediaURL      string             `json:"media_url"`
-	MediaMIME     string             `json:"media_mime"`
-	Description   string             `json:"description,omitempty"`
-	Liked         bool               `json:"liked"`
-	Favorited     bool               `json:"favorited"`
-	ReasonCode    string             `json:"reason_code,omitempty"`
-	ReasonMessage string             `json:"reason_message,omitempty"`
+	MediaKind   ShortFeedMediaKind `json:"media_kind"`
+	ID          uint               `json:"id"`
+	Name        string             `json:"name"`
+	Duration    float64            `json:"duration"`
+	Width       int                `json:"width"`
+	Height      int                `json:"height"`
+	Tags        []ShortFeedTagDTO  `json:"tags"`
+	MediaURL    string             `json:"media_url"`
+	MediaMIME   string             `json:"media_mime"`
+	Description string             `json:"description,omitempty"`
+	Liked       bool               `json:"liked"`
+	Favorited   bool               `json:"favorited"`
+	// PersonalRating 与 Watched 供手机端的评分与已看动作回显。
+	// 图片没有观看状态，Watched 恒为 false。
+	PersonalRating *float64 `json:"personal_rating"`
+	Watched        bool     `json:"watched"`
+	ReasonCode     string   `json:"reason_code,omitempty"`
+	ReasonMessage  string   `json:"reason_message,omitempty"`
 }
 
 // Ref 返回这一条的类型化标识。
@@ -134,4 +138,17 @@ type ShortFeedFavoriteRequest struct {
 
 type ShortFeedDeleteRequest struct {
 	ConfirmMoveToTrash bool `json:"confirm_move_to_trash"`
+}
+
+type ShortFeedRatingRequest struct {
+	Rating *float64 `json:"rating"`
+}
+
+type ShortFeedWatchedRequest struct {
+	Watched bool `json:"watched"`
+}
+
+type ShortFeedTagRequest struct {
+	TagID    uint `json:"tag_id"`
+	Attached bool `json:"attached"`
 }

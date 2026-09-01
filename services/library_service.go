@@ -615,6 +615,29 @@ type LibraryCounts struct {
 	ImageCount int64 `json:"image_count"`
 }
 
+// SetVideoRating 设置个人评分（0–10 半分制，nil 表示清空），镜像图片侧的
+// SetImageRating：只改这一列，不走详情更新的整体覆盖路径。
+func (s *VideoService) SetVideoRating(videoID uint, rating *float64) (*models.Video, error) {
+	if videoID == 0 {
+		return nil, fmt.Errorf("视频 ID 不能为空")
+	}
+	if err := validateRatingValue(rating); err != nil {
+		return nil, err
+	}
+	result := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("personal_rating", rating)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var video models.Video
+	if err := database.DB.Preload("Tags").First(&video, videoID).Error; err != nil {
+		return nil, err
+	}
+	return &video, nil
+}
+
 // GetLibraryCounts 返回活跃视频与活跃图片的总数（软删除的不计）。
 func (s *VideoService) GetLibraryCounts() (*LibraryCounts, error) {
 	counts := &LibraryCounts{}

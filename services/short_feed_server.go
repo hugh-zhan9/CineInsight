@@ -156,6 +156,8 @@ func (s *ShortFeedHTTPServer) Handler() http.Handler {
 	mux.Handle("/assets/", http.FileServer(http.FS(s.assets)))
 	mux.HandleFunc("/short-api/status", s.handleStatus)
 	mux.HandleFunc("/short-api/feed/next", s.handleNext)
+	mux.HandleFunc("/short-api/feed/scopes", s.handleScopes)
+	mux.HandleFunc("/short-api/tags", s.handleTags)
 	mux.HandleFunc("/short-api/favorites", s.handleFavorites)
 	mux.HandleFunc("/short-api/items/", s.handleItemMutation)
 	mux.HandleFunc("/short-media/", s.handleMedia)
@@ -222,7 +224,10 @@ func (s *ShortFeedHTTPServer) handleNext(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	dto, err := s.feed.NextItem(parseShortFeedExcludeRefs(r.URL.Query().Get("exclude")))
+	dto, err := s.feed.NextItemInScope(
+		parseShortFeedExcludeRefs(r.URL.Query().Get("exclude")),
+		r.URL.Query().Get("scope"),
+	)
 	if err != nil {
 		status := http.StatusInternalServerError
 		code := "next_failed"
@@ -230,10 +235,40 @@ func (s *ShortFeedHTTPServer) handleNext(w http.ResponseWriter, r *http.Request)
 			status = http.StatusNotFound
 			code = "no_eligible_videos"
 		}
+		if strings.HasPrefix(err.Error(), "不支持的播放范围") {
+			status = http.StatusBadRequest
+			code = "invalid_scope"
+		}
 		writeShortFeedError(w, status, code, err.Error())
 		return
 	}
 	writeShortFeedJSON(w, http.StatusOK, dto)
+}
+
+func (s *ShortFeedHTTPServer) handleScopes(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	scopes, err := s.feed.ScopeCounts()
+	if err != nil {
+		writeShortFeedError(w, http.StatusInternalServerError, "scopes_failed", err.Error())
+		return
+	}
+	writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"scopes": scopes})
+}
+
+func (s *ShortFeedHTTPServer) handleTags(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	tags, err := s.feed.ListFeedTags()
+	if err != nil {
+		writeShortFeedError(w, http.StatusInternalServerError, "tags_failed", err.Error())
+		return
+	}
+	writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"tags": tags})
 }
 
 func (s *ShortFeedHTTPServer) handleFavorites(w http.ResponseWriter, r *http.Request) {
@@ -306,6 +341,34 @@ func (s *ShortFeedHTTPServer) handleItemMutation(w http.ResponseWriter, r *http.
 			return
 		}
 		writeShortFeedJSON(w, http.StatusOK, map[string]bool{"deleted": true})
+	case "restore":
+		// 撤销刚才那次删除。回收站里每个媒体最多一条记录，按 ref 找就是它。
+		if err := s.feed.RestoreDeleted(ref); err != nil {
+			writeShortFeedError(w, http.StatusBadRequest, "restore_failed", err.Error())
+			return
+		}
+		writeShortFeedJSON(w, http.StatusOK, map[string]bool{"restored": true})
+	case "rating":
+		var req ShortFeedRatingRequest
+		if !decodeShortFeedMutation(w, r, &req) {
+			return
+		}
+		dto, err := s.feed.SetRating(ref, req.Rating)
+		writeShortFeedItemResult(w, dto, err)
+	case "watched":
+		var req ShortFeedWatchedRequest
+		if !decodeShortFeedMutation(w, r, &req) {
+			return
+		}
+		dto, err := s.feed.SetWatched(ref, req.Watched)
+		writeShortFeedItemResult(w, dto, err)
+	case "tag":
+		var req ShortFeedTagRequest
+		if !decodeShortFeedMutation(w, r, &req) {
+			return
+		}
+		dto, err := s.feed.SetItemTag(ref, req.TagID, req.Attached)
+		writeShortFeedItemResult(w, dto, err)
 	default:
 		writeShortFeedError(w, http.StatusNotFound, "invalid_item_action", "invalid short feed item action")
 	}
@@ -474,6 +537,22 @@ func writeShortFeedMutationResult(w http.ResponseWriter, result *ShortFeedIntera
 		return
 	}
 	writeShortFeedError(w, http.StatusInternalServerError, "mutation_failed", err.Error())
+}
+
+// writeShortFeedItemResult 把改动后的整条 DTO 回给前端，
+// 前端据此更新，不必猜写入结果。
+func writeShortFeedItemResult(w http.ResponseWriter, dto *ShortFeedItemDTO, err error) {
+	if err != nil {
+		status := http.StatusInternalServerError
+		code := "mutation_failed"
+		if errors.Is(err, ErrShortFeedUnsupportedMedia) {
+			status = http.StatusBadRequest
+			code = "unsupported_media"
+		}
+		writeShortFeedError(w, status, code, err.Error())
+		return
+	}
+	writeShortFeedJSON(w, http.StatusOK, dto)
 }
 
 func writeShortFeedJSON(w http.ResponseWriter, status int, payload interface{}) {

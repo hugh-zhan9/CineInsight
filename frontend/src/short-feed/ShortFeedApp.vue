@@ -31,16 +31,28 @@
         @stage-tap="handleStageTap"
       />
 
-      <FeedTopBar :visible="chromeVisible" :muted="muted" @open-favorites="openFavorites" @toggle-muted="muted = !muted" />
-      <FeedMeta :visible="chromeVisible" :item="currentVideo" />
+      <FeedTopBar
+        :visible="chromeVisible"
+        :muted="muted"
+        :counter="counterText"
+        :scope-label="scopeLabel"
+        @open-favorites="openFavorites"
+        @toggle-muted="muted = !muted"
+        @open-scope="openScopeSheet"
+      />
+      <FeedMeta :visible="chromeVisible" :item="currentVideo" @open-tags="openTagSheet" />
       <FeedActionRail
         :visible="chromeVisible"
         :item="currentVideo"
         :rail-label="isImageItem ? '图片操作' : '视频操作'"
         @toggle-like="toggleLike"
         @toggle-favorite="toggleFavorite"
+        @toggle-watched="toggleWatched"
+        @open-rating="openRatingSheet"
+        @open-tags="openTagSheet"
         @request-delete="deleteDialogOpen = true"
       />
+      <FeedDots v-if="items.length > 1" :total="items.length" :index="index" />
       <FeedProgress
         v-if="!isImageItem && currentVideo && currentVideo.media_url"
         :visible="chromeVisible"
@@ -62,6 +74,65 @@
       @select="selectFavorite"
     />
 
+    <FeedSheet
+      v-if="sheet === 'rating'"
+      title="个人评分"
+      hint="0–10，半分制，可清空"
+      @close="sheet = null"
+    >
+      <template #head>
+        <strong class="sheet__value">{{ currentRatingText }}</strong>
+      </template>
+      <div class="rating-grid">
+        <button
+          v-for="option in ratingOptions"
+          :key="option"
+          type="button"
+          class="rating-cell"
+          :class="{ active: currentVideo && currentVideo.personal_rating === option }"
+          @click="applyRating(option)"
+        >{{ option.toFixed(1) }}</button>
+      </div>
+      <template #footer>
+        <button type="button" class="sheet-btn" @click="applyRating(null)">清空评分</button>
+        <button type="button" class="sheet-btn sheet-btn--primary sheet-btn--wide" @click="sheet = null">完成</button>
+      </template>
+    </FeedSheet>
+
+    <FeedSheet v-if="sheet === 'tags'" title="标签" hint="点击切换，改动即时写入本地库" @close="sheet = null">
+      <input v-model="tagKeyword" class="sheet-input" type="text" placeholder="搜索标签…" aria-label="搜索标签" />
+      <div class="tag-picker">
+        <button
+          v-for="tag in visibleFeedTags"
+          :key="tag.id"
+          type="button"
+          class="tag-option"
+          :class="{ active: isTagAttached(tag.id) }"
+          :style="isTagAttached(tag.id) ? { backgroundColor: `${tag.color}44`, borderColor: `${tag.color}aa` } : null"
+          @click="toggleTag(tag)"
+        >
+          <span class="tag-option__dot" :style="{ backgroundColor: tag.color || '#8fa0a5' }"></span>{{ tag.name }}
+        </button>
+        <p v-if="visibleFeedTags.length === 0" class="sheet__empty">没有匹配的标签。标签在桌面端「标签管理」里新建。</p>
+      </div>
+      <template #footer>
+        <button type="button" class="sheet-btn sheet-btn--primary sheet-btn--wide" @click="sheet = null">完成</button>
+      </template>
+    </FeedSheet>
+
+    <FeedSheet v-if="sheet === 'scope'" title="播放范围" @close="sheet = null">
+      <button
+        v-for="option in scopes"
+        :key="option.scope"
+        type="button"
+        class="scope-option"
+        :class="{ active: option.scope === scope }"
+        @click="applyScope(option.scope)"
+      >
+        {{ option.name }}<span class="scope-option__count">{{ option.count }}</span>
+      </button>
+    </FeedSheet>
+
     <DeleteDialog
       v-if="deleteDialogOpen"
       :title="isImageItem ? '删除图片' : '删除视频'"
@@ -71,11 +142,19 @@
       @cancel="deleteDialogOpen = false"
       @confirm="confirmDelete"
     />
+
+    <div v-if="toast" class="feed-toast" role="status">
+      <span class="feed-toast__text">{{ toast.message }}</span>
+      <button v-if="toast.undo" type="button" class="feed-toast__undo" @click="undoDelete">撤销</button>
+    </div>
   </main>
 </template>
 
 <script>
-import { deleteItem, getFavorites, getNextItem, itemKey, recordPlay, setFavorited, setLiked } from './api.js';
+import {
+  deleteItem, getFavorites, getFeedTags, getNextItem, getScopes, itemKey, recordPlay,
+  restoreItem, setFavorited, setItemTag, setLiked, setRating, setWatched
+} from './api.js';
 import { createSwipeTracker, keyboardDirection, wheelDirection } from './gesture.js';
 import { unsupportedStatusText } from './videoState.js';
 import { createWakeLock } from './useWakeLock.js';
@@ -86,18 +165,32 @@ import FeedActionRail from './components/FeedActionRail.vue';
 import FeedProgress from './components/FeedProgress.vue';
 import FavoritesView from './components/FavoritesView.vue';
 import DeleteDialog from './components/DeleteDialog.vue';
+import FeedSheet from './components/FeedSheet.vue';
+import FeedDots from './components/FeedDots.vue';
 
 const swipeTracker = createSwipeTracker();
 const wakeLock = createWakeLock();
 // 图片没有播放态，控件不能靠"暂停中"常驻，改为定时收起。
 const PHOTO_CONTROLS_HIDE_MS = 2600;
+// 浏览历史的上限：一路划下去不能把整库都留在内存里。
+const FEED_HISTORY_LIMIT = 40;
 
 export default {
   name: 'ShortFeedApp',
-  components: { FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, DeleteDialog },
+  components: { FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, DeleteDialog, FeedSheet, FeedDots },
   data() {
     return {
-      currentVideo: null,
+      // 保留浏览历史而不是只留当前一条：能往回划，右侧圆点的位置才是个真实的东西。
+      items: [],
+      index: -1,
+      scope: 'all',
+      scopes: [],
+      feedTags: [],
+      tagKeyword: '',
+      sheet: null,
+      toast: null,
+      toastTimer: null,
+      pendingUndo: null,
       prefetchedVideo: null,
       prefetching: false,
       recentKeys: [],
@@ -127,6 +220,28 @@ export default {
     };
   },
   computed: {
+    currentVideo() {
+      return this.items[this.index] || null;
+    },
+    counterText() {
+      if (this.items.length === 0) return '';
+      return `${this.index + 1} / ${this.items.length}`;
+    },
+    scopeLabel() {
+      return this.scopes.find(item => item.scope === this.scope)?.name || '全部短视频';
+    },
+    currentRatingText() {
+      const rating = this.currentVideo?.personal_rating;
+      return rating === null || rating === undefined ? '未评分' : Number(rating).toFixed(1);
+    },
+    ratingOptions() {
+      return Array.from({ length: 21 }, (_, step) => step * 0.5);
+    },
+    visibleFeedTags() {
+      const keyword = this.tagKeyword.trim().toLowerCase();
+      if (!keyword) return this.feedTags;
+      return this.feedTags.filter(tag => tag.name.toLowerCase().includes(keyword));
+    },
     isImageItem() {
       return this.currentVideo?.media_kind === 'image';
     },
@@ -154,21 +269,42 @@ export default {
   },
   methods: {
     async nextVideo(direction = 1) {
-      if (this.loading || direction === 0) return;
+      if (this.loading || direction === 0 || this.sheet) return;
+      // 往回划走历史，不重新抽签：抽签回来的是另一条，那不叫"上一条"。
+      if (direction < 0) {
+        if (this.index > 0) {
+          this.index -= 1;
+          this.activateCurrent();
+        }
+        return;
+      }
+      if (this.index + 1 < this.items.length) {
+        this.index += 1;
+        this.activateCurrent();
+        return;
+      }
       this.loading = true;
       this.statusText = '加载中';
       try {
-        const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12));
-        this.applyVideo(video);
+        const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12), this.scope);
+        this.appendItem(video);
       } catch (err) {
-        this.currentVideo = null;
+        this.items = [];
+        this.index = -1;
         this.statusText = String(err.message || err);
       } finally {
         this.loading = false;
       }
     },
-    applyVideo(video) {
-      this.currentVideo = video;
+    appendItem(video) {
+      // 历史有上限，否则一路划下去会把整库都留在内存里。
+      this.items = [...this.items, video].slice(-FEED_HISTORY_LIMIT);
+      this.index = this.items.length - 1;
+      this.activateCurrent();
+    },
+    activateCurrent() {
+      const video = this.currentVideo;
+      if (!video) return;
       this.statusText = unsupportedStatusText(video);
       this.recordedVideoID = null;
       this.isPlaying = false;
@@ -190,6 +326,18 @@ export default {
       });
       this.prefetchNextVideo();
     },
+    // 改动后的整条 DTO 由后端回来，就地换掉，不猜写入结果。
+    replaceCurrent(updated) {
+      if (!updated || this.index < 0) return;
+      const next = [...this.items];
+      next[this.index] = updated;
+      this.items = next;
+    },
+    flashToast(message, undo = false) {
+      this.toast = { message, undo };
+      if (this.toastTimer) clearTimeout(this.toastTimer);
+      this.toastTimer = window.setTimeout(() => { this.toast = null; }, 5000);
+    },
     takePrefetchedVideo() {
       if (!this.prefetchedVideo) return null;
       const video = this.prefetchedVideo;
@@ -201,7 +349,7 @@ export default {
       this.prefetching = true;
       try {
         const excludeKeys = [...new Set([...this.recentKeys.slice(-12), itemKey(this.currentVideo)])];
-        const video = await getNextItem(excludeKeys);
+        const video = await getNextItem(excludeKeys, this.scope);
         if (video?.id && video.id !== this.currentVideo?.id) {
           this.prefetchedVideo = video;
         }
@@ -384,7 +532,8 @@ export default {
       if (this.isImageItem) {
         // 图片没有自动前进的节奏；停在原地把原因说清楚，由用户自己划走。
         this.statusText = '当前图片无法在浏览器中显示';
-        this.currentVideo = { ...this.currentVideo, media_url: '' };
+        // currentVideo 现在是历史列表的派生值，只能就地换掉这一条。
+        this.replaceCurrent({ ...this.currentVideo, media_url: '' });
         return;
       }
       this.statusText = '当前视频无法在浏览器中播放';
@@ -516,9 +665,103 @@ export default {
       try {
         await deleteItem(deleted);
         this.recentKeys = this.recentKeys.filter(key => key !== deletedKey);
-        await this.nextVideo();
+        // 删掉的这条从历史里摘掉，往回划不该再翻到一条已经不存在的内容。
+        this.items = this.items.filter((item, position) => position !== this.index);
+        this.index = Math.min(this.index, this.items.length - 1);
+        this.pendingUndo = deleted;
+        this.flashToast(`已移入回收站 · ${deleted.name}`, true);
+        if (this.index < 0 || this.items.length === 0) {
+          await this.nextVideo();
+        } else {
+          this.activateCurrent();
+        }
       } catch (err) {
         this.statusText = String(err.message || err);
+      }
+    },
+    async undoDelete() {
+      if (!this.pendingUndo) return;
+      const target = this.pendingUndo;
+      this.pendingUndo = null;
+      this.toast = null;
+      try {
+        await restoreItem(target);
+        this.flashToast(`已恢复 · ${target.name}`);
+      } catch (err) {
+        this.flashToast(`恢复失败：${String(err.message || err)}`);
+      }
+    },
+    openRatingSheet() {
+      this.sheet = 'rating';
+      this.showControls();
+      this.clearControlsHideTimer();
+    },
+    async openTagSheet() {
+      this.sheet = 'tags';
+      this.tagKeyword = '';
+      this.showControls();
+      this.clearControlsHideTimer();
+      if (this.feedTags.length === 0) await this.loadFeedTags();
+    },
+    async openScopeSheet() {
+      this.sheet = 'scope';
+      this.showControls();
+      this.clearControlsHideTimer();
+      await this.loadScopes();
+    },
+    async loadFeedTags() {
+      try {
+        const payload = await getFeedTags();
+        this.feedTags = payload?.tags || [];
+      } catch (err) {
+        this.feedTags = [];
+      }
+    },
+    async loadScopes() {
+      try {
+        const payload = await getScopes();
+        this.scopes = payload?.scopes || [];
+      } catch (err) {
+        this.scopes = [];
+      }
+    },
+    async applyScope(scope) {
+      this.sheet = null;
+      if (scope === this.scope) return;
+      this.scope = scope;
+      // 换了范围就重开一条时间线：旧历史属于旧范围，留着会前后矛盾。
+      this.items = [];
+      this.index = -1;
+      this.prefetchedVideo = null;
+      this.recentKeys = [];
+      await this.nextVideo();
+    },
+    async applyRating(rating) {
+      if (!this.currentVideo) return;
+      try {
+        this.replaceCurrent(await setRating(this.currentVideo, rating));
+      } catch (err) {
+        this.flashToast(`评分失败：${String(err.message || err)}`);
+      }
+    },
+    async toggleWatched() {
+      if (!this.currentVideo) return;
+      try {
+        this.replaceCurrent(await setWatched(this.currentVideo, !this.currentVideo.watched));
+      } catch (err) {
+        this.flashToast(`标记失败：${String(err.message || err)}`);
+      }
+    },
+    isTagAttached(tagID) {
+      return (this.currentVideo?.tags || []).some(tag => tag.id === tagID);
+    },
+    async toggleTag(tag) {
+      if (!this.currentVideo) return;
+      const attached = !this.isTagAttached(tag.id);
+      try {
+        this.replaceCurrent(await setItemTag(this.currentVideo, tag.id, attached));
+      } catch (err) {
+        this.flashToast(`标签写入失败：${String(err.message || err)}`);
       }
     },
     async openFavorites() {
@@ -535,7 +778,7 @@ export default {
     },
     selectFavorite(video) {
       this.view = 'feed';
-      this.applyVideo(video);
+      this.appendItem(video);
     },
     onTouchStart(event) {
       if (this.isInteractiveControl(event.target)) return;

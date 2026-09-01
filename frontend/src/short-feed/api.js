@@ -32,9 +32,12 @@ function itemPath(item, action) {
   return `/short-api/items/${item.media_kind}/${item.id}/${action}`;
 }
 
-export function getNextItem(excludeKeys = []) {
-  const query = excludeKeys.length > 0 ? `?exclude=${excludeKeys.join(',')}` : '';
-  return requestJSON(`/short-api/feed/next${query}`);
+export function getNextItem(excludeKeys = [], scope = 'all') {
+  const params = new URLSearchParams();
+  if (excludeKeys.length > 0) params.set('exclude', excludeKeys.join(','));
+  if (scope && scope !== 'all') params.set('scope', scope);
+  const query = params.toString();
+  return requestJSON(`/short-api/feed/next${query ? `?${query}` : ''}`);
 }
 
 export function recordPlay(item) {
@@ -55,4 +58,28 @@ export function deleteItem(item) {
 
 export function getFavorites() {
   return requestJSON('/short-api/favorites');
+}
+
+export function getScopes() {
+  return requestJSON('/short-api/feed/scopes');
+}
+
+export function getFeedTags() {
+  return requestJSON('/short-api/tags');
+}
+
+export function setRating(item, rating) {
+  return postJSON(itemPath(item, 'rating'), { rating });
+}
+
+export function setWatched(item, watched) {
+  return postJSON(itemPath(item, 'watched'), { watched });
+}
+
+export function setItemTag(item, tagID, attached) {
+  return postJSON(itemPath(item, 'tag'), { tag_id: tagID, attached });
+}
+
+export function restoreItem(item) {
+  return postJSON(itemPath(item, 'restore'), {});
 }

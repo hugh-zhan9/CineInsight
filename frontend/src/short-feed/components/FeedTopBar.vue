@@ -1,5 +1,9 @@
 <template>
   <div class="top-bar" :class="{ visible }" @click.stop>
+    <span class="top-bar__title">短视频</span>
+    <span class="top-bar__counter">{{ counter }}</span>
+    <div class="top-bar__spacer"></div>
+    <button class="pill-btn" type="button" @click="$emit('open-scope')">{{ scopeLabel }} ▾</button>
     <button class="icon-btn" type="button" title="收藏夹" aria-label="收藏夹" @click="$emit('open-favorites')">
       <svg class="top-icon" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 6.8C4 5.8 4.8 5 5.8 5h12.4C19.2 5 20 5.8 20 6.8v9.4c0 1-.8 1.8-1.8 1.8H5.8C4.8 18 4 17.2 4 16.2V6.8Z" />
@@ -31,8 +35,10 @@ export default {
   name: 'FeedTopBar',
   props: {
     visible: { type: Boolean, default: false },
-    muted: { type: Boolean, default: true }
+    muted: { type: Boolean, default: true },
+    counter: { type: String, default: '' },
+    scopeLabel: { type: String, default: '全部短视频' }
   },
-  emits: ['open-favorites', 'toggle-muted']
+  emits: ['open-favorites', 'toggle-muted', 'open-scope']
 };
 </script>

@@ -185,8 +185,21 @@ type shortFeedCandidate struct {
 // NextItem 抽取下一条内容。exclude 是客户端最近看过的类型化标识，
 // 混编流里图片与视频按同一套标签偏好加权后随机抽一条。
 func (s *ShortFeedService) NextItem(exclude []ShortFeedMediaRef) (*ShortFeedItemDTO, error) {
+	return s.NextItemInScope(exclude, ShortFeedScopeAll)
+}
+
+// NextItemInScope 在指定播放范围内抽下一条。范围只收窄候选池，
+// 加权抽取本身与全部范围完全一致。
+func (s *ShortFeedService) NextItemInScope(exclude []ShortFeedMediaRef, scope string) (*ShortFeedItemDTO, error) {
+	normalizedScope, err := normalizeShortFeedScope(scope)
+	if err != nil {
+		return nil, err
+	}
 	all, unsupportedVideo, err := s.cachedCandidates()
 	if err != nil {
+		return nil, err
+	}
+	if all, err = s.filterCandidatesByScope(all, normalizedScope); err != nil {
 		return nil, err
 	}
 	if len(all) == 0 {
@@ -1086,19 +1099,21 @@ func (s *ShortFeedService) videoDTO(video *models.Video, reasonCode string, reas
 		tags = append(tags, ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color})
 	}
 	return &ShortFeedItemDTO{
-		MediaKind:     ShortFeedMediaVideo,
-		ID:            video.ID,
-		Name:          video.Name,
-		Duration:      video.Duration,
-		Width:         video.Width,
-		Height:        video.Height,
-		Tags:          tags,
-		MediaURL:      mediaURL,
-		MediaMIME:     mediaMIME,
-		Liked:         interaction.Liked,
-		Favorited:     interaction.Favorited,
-		ReasonCode:    reasonCode,
-		ReasonMessage: reasonMessage,
+		MediaKind:      ShortFeedMediaVideo,
+		ID:             video.ID,
+		Name:           video.Name,
+		Duration:       video.Duration,
+		Width:          video.Width,
+		Height:         video.Height,
+		Tags:           tags,
+		MediaURL:       mediaURL,
+		MediaMIME:      mediaMIME,
+		Liked:          interaction.Liked,
+		Favorited:      interaction.Favorited,
+		PersonalRating: video.PersonalRating,
+		Watched:        video.IsWatched,
+		ReasonCode:     reasonCode,
+		ReasonMessage:  reasonMessage,
 	}, nil
 }
 
@@ -1124,6 +1139,8 @@ func (s *ShortFeedService) imageDTO(img *models.Image) (*ShortFeedItemDTO, error
 		MediaMIME: "image/jpeg",
 		Liked:     state.Liked,
 		Favorited: state.Favorited,
+		// 图片没有观看状态，Watched 保持 false。
+		PersonalRating: img.PersonalRating,
 	}, nil
 }
 
