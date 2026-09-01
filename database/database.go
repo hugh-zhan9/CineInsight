@@ -197,14 +197,29 @@ func backendEnvFromOS() BackendEnv {
 	return BackendEnv{Backend: os.Getenv("DB_BACKEND"), PGHost: os.Getenv("PG_HOST")}
 }
 
-// SQLiteDSN 在库文件路径上附加必须的连接参数。
+// SQLiteDSN 在库文件路径上附加必须的连接参数。三个参数都不是可选项。
 //
-// _foreign_keys=1 不是可选项（设计 D-009）：SQLite 默认关闭外键约束，而 Postgres
-// 强制执行。两个后端在这一点上不一致会带来一个具体后果——用户在 SQLite 下可能
-// 积累孤儿行，随后迁移到 Postgres 时在中途因外键冲突失败，正好打断"带数据切换"
-// 这个功能本身。让两边都强制执行，两个后端的数据完整性保证才是同一个。
+// _foreign_keys=1（设计 D-009）：SQLite 默认关闭外键约束，而 Postgres 强制执行。
+// 两边不一致会带来一个具体后果——用户在 SQLite 下可能积累孤儿行，随后迁移到
+// Postgres 时在中途因外键冲突失败，正好打断"带数据切换"这个功能本身。
+//
+// _busy_timeout 与 _journal_mode（设计 D-010）：SQLite 是单写者，这保证了不会丢
+// 更新，但默认情况下第二个写事务不等锁、直接返回 "database is locked"。本应用有
+// AI 打标、各类补全、库监听、字幕队列等后台写入，会持续与用户操作并发，不配等待
+// 就会随机报错。WAL 让读不被写阻塞；busy_timeout 让写者排队而不是失败。
+// _txlock=immediate（同属 D-010）：GORM 用 DEFERRED 开事务，先读后写。两个事务
+// 都先拿了读锁、再同时想升级成写锁时会互相卡死，这种死锁 busy_timeout 解不了——
+// 它只对"锁被占用、等一等就好"有效。BEGIN IMMEDIATE 让写事务一开始就取写锁，
+// 升级这一步不存在，后来者退化成排队等待。
+const (
+	sqliteBusyTimeoutMS = 5000
+	sqliteJournalMode   = "WAL"
+	sqliteTxLock        = "immediate"
+)
+
 func SQLiteDSN(path string) string {
-	return path + "?_foreign_keys=1"
+	return fmt.Sprintf("%s?_foreign_keys=1&_busy_timeout=%d&_journal_mode=%s&_txlock=%s",
+		path, sqliteBusyTimeoutMS, sqliteJournalMode, sqliteTxLock)
 }
 
 // SQLitePath 返回 SQLite 库文件路径；SQLITE_PATH 可覆盖默认值。

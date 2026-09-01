@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -1069,5 +1070,52 @@ func TestShortFeedRestoreUndoesTheLastDelete(t *testing.T) {
 	}
 	if restored.Path != video.Path {
 		t.Fatalf("撤销应恢复到原路径: got=%s want=%s", restored.Path, video.Path)
+	}
+}
+
+// TestShortFeedPlaybackCountSurvivesConcurrentWrites 钉住设计 D-003 的结论。
+//
+// 21 处 clause.Locking{Strength:"UPDATE"} 在 SQLite 上被静默忽略——不报错也不生效。
+// 设计的论证是这依然安全：SQLite 的写事务在数据库级互斥，保证强于行级锁，所以
+// 「读-改-写」的丢更新不可能发生。
+//
+// 这条结论只写在文档里是不够的：后人看到 SQLite 上锁不生效，很可能以为是遗漏而去
+// "修" 它。这里用一个真实的读-改-写路径（播放计数）把它变成可执行的断言，两个后端
+// 都要通过。
+func TestShortFeedPlaybackCountSurvivesConcurrentWrites(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	video := createShortFeedVideo(t, root, "concurrent.mp4", 20, false)
+	ref := ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID}
+
+	const writers = 8
+	var wg sync.WaitGroup
+	errs := make(chan error, writers)
+	start := make(chan struct{})
+	for i := 0; i < writers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := svc.RecordPlayback(ref); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatalf("并发记录播放失败: %v", err)
+	}
+
+	var interaction models.ShortFeedInteraction
+	if err := database.DB.Where("video_id = ?", video.ID).First(&interaction).Error; err != nil {
+		t.Fatalf("读取互动记录失败: %v", err)
+	}
+	// 丢更新的表现就是这个数小于并发数。
+	if interaction.ViewCount != writers {
+		t.Fatalf("并发写出现丢更新: got=%d want=%d", interaction.ViewCount, writers)
 	}
 }
