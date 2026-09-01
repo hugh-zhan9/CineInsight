@@ -382,6 +382,10 @@ export function GetVideosByDirectory(arg1) {
   return window['go']['main']['App']['GetVideosByDirectory'](arg1);
 }
 
+export function GetVideosByIDs(arg1) {
+  return window['go']['main']['App']['GetVideosByIDs'](arg1);
+}
+
 export function GetVideosPaginated(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['GetVideosPaginated'](arg1, arg2, arg3, arg4);
 }
@@ -468,6 +472,10 @@ export function OpenDirectory(arg1) {
 
 export function OpenImageDirectory(arg1) {
   return window['go']['main']['App']['OpenImageDirectory'](arg1);
+}
+
+export function PickRandomVideos(arg1, arg2) {
+  return window['go']['main']['App']['PickRandomVideos'](arg1, arg2);
 }
 
 export function PlayRandomVideo() {

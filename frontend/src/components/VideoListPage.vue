@@ -66,6 +66,12 @@
           </select>
           <button @click="playRandom" class="btn-random">按当前条件随机</button>
           <button
+            type="button"
+            class="btn-random"
+            :disabled="randomPick.loading"
+            @click="enterRandomPick"
+          >{{ randomPick.loading ? '抽取中...' : `随机 ${randomPickSize} 部` }}</button>
+          <button
             @click="toggleSelectAllVisible"
             class="btn-secondary"
             :disabled="videos.length === 0"
@@ -236,6 +242,20 @@
           <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
           <button v-if="!tag.automatic_kind" type="button" class="tag-chip-delete" @click.stop="requestDeleteTag(tag)">×</button>
         </div>
+      </div>
+    </div>
+
+    <div v-if="randomPick.active" class="random-pick-banner" data-test="random-pick-banner">
+      <div class="random-pick-banner__text">
+        <strong>随机 {{ randomPickSize }} 部</strong>
+        <span v-if="randomPick.reason" class="random-pick-banner__reason">{{ randomPick.reason }}</span>
+        <span class="random-pick-banner__count">当前 {{ videos.length }} 条</span>
+      </div>
+      <div class="random-pick-banner__actions">
+        <button type="button" class="btn-secondary btn-compact" :disabled="randomPick.loading" @click="reshuffleRandomPick">
+          {{ randomPick.loading ? '抽取中...' : '换一批' }}
+        </button>
+        <button type="button" class="btn-secondary btn-compact" :disabled="randomPick.loading" @click="exitRandomPick">退出随机</button>
       </div>
     </div>
 
@@ -993,6 +1013,40 @@
   font-size: 18px;
 }
 
+.random-pick-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.random-pick-banner__text {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.random-pick-banner__reason,
+.random-pick-banner__count {
+  color: var(--text-muted);
+}
+
+.random-pick-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
 .page-content--with-preview .toolbar .search-group {
   flex-basis: 100%;
 }
@@ -1394,7 +1448,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, DismissNearDuplicateGroup, GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, DismissNearDuplicateGroup, GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1412,6 +1466,9 @@ import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList
 import BaseModal from './ui/BaseModal.vue';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
+
+// 「随机 N 部」一次抽取的条数。
+const RANDOM_PICK_SIZE = 10;
 
 export default {
   name: 'VideoListPage',
@@ -1453,6 +1510,8 @@ export default {
       saveViewDialog: { show: false, name: '', saving: false, error: '' },
       randomMode: 'balanced',
       recentRandomVideoIDs: [],
+      randomPick: { active: false, ids: [], reason: '', loading: false },
+      randomPickToken: 0,
       selectedTags: [],
       selectedSizeRange: 'all',
       selectedResRange: 'all',
@@ -1745,6 +1804,9 @@ export default {
     this.resetSubtitleProgressTracking();
   },
   computed: {
+    randomPickSize() {
+      return RANDOM_PICK_SIZE;
+    },
     semanticSearchErrorText() {
       const raw = String(this.semanticSearchError || '');
       if (raw.includes('semantic_index_rebuild_required') || raw.includes('需要重建')) return '语义索引需要重建（模型或配置已变更），请到设置页重建索引。';
@@ -1780,6 +1842,7 @@ export default {
     },
     virtualListQueryKey() {
       return JSON.stringify({
+        randomPick: this.randomPick.active ? this.randomPick.ids.join(',') : '',
         mode: this.searchMode,
         keyword: this.currentQueryKeyword(),
         similarVideoID: this.semanticSimilarVideoID,
@@ -2403,6 +2466,7 @@ export default {
     },
     async findSimilarVideos(video) {
       if (!video?.id) return;
+      this.deactivateRandomPick();
       this.semanticSimilarVideoID = video.id;
       this.searchMode = 'semantic';
       this.searchKeyword = `与「${video.display_title || video.name}」相似`;
@@ -3100,6 +3164,22 @@ export default {
         default: return true;
       }
     },
+    // 字幕搜索模式下给每条结果补上首个命中片段，行内的"字幕命中"按钮才有内容可跳转。
+    async attachSubtitleHits(videos, keyword) {
+      if (!this.isSubtitleSearchActive(keyword) || videos.length === 0) return videos;
+      const hits = await GetLibrarySubtitleHits(keyword, videos.map(video => video.id));
+      const hitsByVideoID = new Map((hits || []).map(hit => [hit.video_id, hit.segment]));
+      return videos.map(video => {
+        const segment = hitsByVideoID.get(video.id);
+        if (!segment) return video;
+        return {
+          ...video,
+          _subtitleMatchText: segment.text || '',
+          _subtitleMatchStartMs: segment.start_time_ms,
+          _subtitleMatchEndMs: segment.end_time_ms
+        };
+      });
+    },
     async loadVideos() {
       if (this.loading || !this.hasMore) return;
       this.loading = true;
@@ -3151,20 +3231,7 @@ export default {
           this.libraryCursor = page?.next_cursor || null;
         }
 
-        if (this.isSubtitleSearchActive(keyword) && newVideos.length > 0) {
-          const hits = await GetLibrarySubtitleHits(keyword, newVideos.map(video => video.id));
-          const hitsByVideoID = new Map((hits || []).map(hit => [hit.video_id, hit.segment]));
-          newVideos = newVideos.map(video => {
-            const segment = hitsByVideoID.get(video.id);
-            if (!segment) return video;
-            return {
-              ...video,
-              _subtitleMatchText: segment.text || '',
-              _subtitleMatchStartMs: segment.start_time_ms,
-              _subtitleMatchEndMs: segment.end_time_ms
-            };
-          });
-        }
+        newVideos = await this.attachSubtitleHits(newVideos, keyword);
 
         this.debugLog('loadVideos query resolved', {
           count: newVideos.length,
@@ -3290,6 +3357,7 @@ export default {
     async applySelectedSavedView() {
       const view = this.savedViews.find(item => item.id === Number(this.selectedSavedViewID));
       if (!view) return;
+      this.deactivateRandomPick();
       let tagIDs = [];
       try {
         const parsed = JSON.parse(view.tag_ids_json || '[]');
@@ -3323,6 +3391,7 @@ export default {
       }
     },
     async reloadCurrentView() {
+      if (this.randomPick.active) return this.refreshRandomPick();
       return this.resetAndLoadVideos();
     },
     applyClientFilters(videos) {
@@ -3375,6 +3444,7 @@ export default {
       return this.selectedTags.includes(Number(tagID));
     },
     toggleTagFilter(tagID) {
+      this.deactivateRandomPick();
       const id = Number(tagID);
       if (this.isTagSelected(id)) {
         this.selectedTags = this.selectedTags.filter(item => item !== id);
@@ -3385,6 +3455,7 @@ export default {
       this.reloadCurrentView();
     },
     clearTagFilter() {
+      this.deactivateRandomPick();
       this.selectedTags = [];
       this.selectedSavedViewID = 0;
       this.reloadCurrentView();
@@ -3518,6 +3589,9 @@ export default {
       }
     },
     async handleSearch(immediate = false, clearSimilar = false) {
+      // 筛选条件变了，固定的随机批次就不再成立：退出批次、作废在途的抽取，按新条件正常加载。
+      if (this.randomPick.active) immediate = true;
+      this.deactivateRandomPick();
       this.selectedSavedViewID = 0;
       if (clearSimilar) this.semanticSimilarVideoID = 0;
       if (this.searchDebounceTimer) {
@@ -3538,6 +3612,93 @@ export default {
         this.searchDebounceTimer = null;
         this.reloadCurrentView();
       }, 250);
+    },
+    // 「随机 N 部」直接接管主列表：抽出来的条目走的是同一个列表组件，
+    // 预览/播放/标签/删除等操作与平时完全一致，不需要另做一套。
+    async enterRandomPick() {
+      await this.loadRandomPickBatch([]);
+    },
+    async reshuffleRandomPick() {
+      await this.loadRandomPickBatch(this.randomPick.ids);
+    },
+    async loadRandomPickBatch(extraExcludeIDs) {
+      if (this.randomPick.loading) return;
+      const token = ++this.randomPickToken;
+      this.randomPick.loading = true;
+      try {
+        const excludeIDs = [...new Set([
+          ...this.recentRandomVideoIDs.slice(-12),
+          ...(extraExcludeIDs || [])
+        ])];
+        const result = await PickRandomVideos({
+          filter: this.currentLibraryFilter(),
+          mode: this.randomMode,
+          exclude_ids: excludeIDs
+        }, RANDOM_PICK_SIZE);
+        const picked = result?.videos || [];
+        if (picked.length === 0) {
+          alert(result?.user_message || '当前筛选范围没有可随机的视频。');
+          return;
+        }
+        const videos = await this.attachSubtitleHits(picked, this.currentQueryKeyword());
+        // 抽样结果要盖掉列表，先等在途的加载收尾，避免被后到的分页结果覆盖。
+        if (this.reloadPromise) await this.reloadPromise;
+        await this.waitForLoadIdle();
+        // 等待期间用户可能改了筛选或退出了随机，这一批已经作废，不能再装回列表。
+        if (token !== this.randomPickToken) return;
+        this.randomPick.active = true;
+        this.randomPick.ids = videos.map(video => video.id);
+        this.randomPick.reason = result?.selection_reason || '';
+        this.applyRandomPickVideos(videos);
+      } catch (err) {
+        console.error('随机抽取失败:', err);
+        alert('随机抽取失败: ' + err);
+      } finally {
+        this.randomPick.loading = false;
+      }
+    },
+    applyRandomPickVideos(videos) {
+      this.videos = videos;
+      this.selectedVideoIds = [];
+      this.hasMore = false;
+      this.libraryCursor = null;
+      this.cursorScore = 0;
+      this.cursorSize = 0;
+      this.cursorID = 0;
+      this.cursorLastPlayedAt = '';
+      this.cursorRecentPlayedID = 0;
+    },
+    // 随机批次是固定的一组 ID，刷新时按 ID 取最新记录，而不是重新抽一批。
+    async refreshRandomPick() {
+      let videos = [];
+      try {
+        const refreshed = await GetVideosByIDs(this.randomPick.ids) || [];
+        videos = await this.attachSubtitleHits(refreshed, this.currentQueryKeyword());
+      } catch (err) {
+        // 与普通列表加载失败保持一致：报错并留住当前批次，不把列表清空。
+        console.error('刷新随机批次失败:', err);
+        alert('刷新随机批次失败: ' + err);
+        return;
+      }
+      if (videos.length === 0) {
+        this.deactivateRandomPick();
+        await this.resetAndLoadVideos();
+        return;
+      }
+      this.randomPick.ids = videos.map(video => video.id);
+      this.applyRandomPickVideos(videos);
+    },
+    deactivateRandomPick() {
+      // 顺带作废在途的抽取请求；loading 仍由 loadRandomPickBatch 自己收尾。
+      this.randomPickToken += 1;
+      this.randomPick.active = false;
+      this.randomPick.ids = [];
+      this.randomPick.reason = '';
+    },
+    async exitRandomPick() {
+      if (this.randomPick.loading) return;
+      this.deactivateRandomPick();
+      await this.resetAndLoadVideos();
     },
     async playRandom() {
       try {

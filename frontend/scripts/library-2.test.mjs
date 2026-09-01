@@ -8,7 +8,9 @@ const preview = readFileSync(new URL('../src/components/PreviewDrawer.vue', impo
 assert.match(page, /SearchLibraryVideoPage/, 'main library should use the stable shared smart-view query');
 assert.match(page, /ListRecentlyPlayedWithFilter/, 'recently played should be filtered and paginated by the backend');
 assert.match(page, /this\.cursorLastPlayedAt,\s+this\.cursorRecentPlayedID,\s+this\.pageSize/, 'recently played should use a stable time-and-ID cursor');
-assert.match(page, /GetLibrarySubtitleHits\(keyword, newVideos\.map\(video => video\.id\)\)/, 'subtitle snippets should enrich only the current filtered page');
+assert.match(page, /GetLibrarySubtitleHits\(keyword, videos\.map\(video => video\.id\)\)/, 'subtitle snippets should enrich only the videos handed in, never the whole library');
+assert.match(page, /PickRandomVideos\(\{[\s\S]*?filter: this\.currentLibraryFilter\(\)/, 'random pick should reuse the same filter contract as random play');
+assert.match(page, /if \(this\.randomPick\.active\) return this\.refreshRandomPick\(\)/, 'reloads inside a random batch should refresh the fixed batch, not re-draw one');
 assert.match(page, /ListSavedLibraryViews/, 'saved views should be loaded from the backend');
 assert.match(page, /SaveLibraryView\(\{ name, \.\.\.this\.currentLibraryFilter\(\) \}\)/, 'saved views should capture the current filter');
 assert.match(page, /activeTagIDs\.has\(id\)/, 'saved views should ignore deleted tag IDs when restored');

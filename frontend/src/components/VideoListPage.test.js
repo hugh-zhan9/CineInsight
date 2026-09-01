@@ -2,7 +2,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter',
+  'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter', 'PickRandomVideos', 'GetVideosByIDs',
   'SetVideoFavorite', 'SetVideoWatched', 'UpdateVideoWatchProgress', 'ListSavedLibraryViews', 'SaveLibraryView',
   'DeleteSavedLibraryView', 'RejectSameSourceRelation', 'OpenDirectory', 'DeleteVideo', 'BatchDeleteVideos', 'ListTrashEntries',
   'RestoreTrashEntry', 'RemoveTagFromVideo', 'UpdateSettings', 'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine',
@@ -410,5 +410,162 @@ describe('VideoListPage media-detail integration', () => {
     expect(wrapper.vm.technicalBackfill.cancelled).toBe(true);
     wrapper.unmount();
     expect(handlers.has('technical-backfill-state')).toBe(false);
+  });
+});
+
+describe('VideoListPage random pick of 10', () => {
+  const pickedVideos = [
+    { id: 11, name: 'a.mp4', tags: [] },
+    { id: 12, name: 'b.mp4', tags: [] }
+  ];
+
+  it('抽取后接管主列表，沿用随机播放的筛选、模式和最近排除', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.randomMode = 'unwatched';
+    wrapper.vm.selectedTags = [3];
+    wrapper.vm.recentRandomVideoIDs = [99];
+    wrapper.vm.hasMore = true;
+    api.PickRandomVideos.mockResolvedValueOnce({
+      videos: pickedVideos,
+      selection_reason: '在当前筛选范围内优先选择未看视频'
+    });
+
+    await wrapper.vm.enterRandomPick();
+
+    expect(api.PickRandomVideos).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'unwatched',
+        exclude_ids: [99],
+        filter: expect.objectContaining({ tag_ids: [3] })
+      }),
+      10
+    );
+    expect(wrapper.vm.randomPick.active).toBe(true);
+    expect(wrapper.vm.randomPick.ids).toEqual([11, 12]);
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([11, 12]);
+    // 固定批次不再分页加载，避免后续滚动把普通结果追加进来。
+    expect(wrapper.vm.hasMore).toBe(false);
+    expect(wrapper.text()).toContain('在当前筛选范围内优先选择未看视频');
+    wrapper.unmount();
+  });
+
+  it('批次内的刷新按 ID 取最新记录，不会重新抽一批', async () => {
+    const wrapper = await mountPage();
+    api.PickRandomVideos.mockResolvedValueOnce({ videos: pickedVideos, selection_reason: '' });
+    await wrapper.vm.enterRandomPick();
+    api.SearchLibraryVideoPage.mockClear();
+    api.PickRandomVideos.mockClear();
+    // 加标签这类列表内操作会触发 reloadCurrentView：批次要保持原样，只更新内容。
+    api.GetVideosByIDs.mockResolvedValueOnce([
+      { id: 11, name: 'a.mp4', tags: [{ id: 5, name: '新标签' }] },
+      { id: 12, name: 'b.mp4', tags: [] }
+    ]);
+
+    await wrapper.vm.reloadCurrentView();
+
+    expect(api.GetVideosByIDs).toHaveBeenCalledWith([11, 12]);
+    expect(api.PickRandomVideos).not.toHaveBeenCalled();
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
+    expect(wrapper.vm.videos[0].tags).toHaveLength(1);
+    expect(wrapper.vm.randomPick.active).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('换一批会把当前批次一起排除掉', async () => {
+    const wrapper = await mountPage();
+    api.PickRandomVideos.mockResolvedValueOnce({ videos: pickedVideos, selection_reason: '' });
+    await wrapper.vm.enterRandomPick();
+    api.PickRandomVideos.mockResolvedValueOnce({ videos: [{ id: 21, name: 'c.mp4', tags: [] }], selection_reason: '' });
+
+    await wrapper.vm.reshuffleRandomPick();
+
+    expect(api.PickRandomVideos).toHaveBeenLastCalledWith(
+      expect.objectContaining({ exclude_ids: [11, 12] }),
+      10
+    );
+    expect(wrapper.vm.randomPick.ids).toEqual([21]);
+    wrapper.unmount();
+  });
+
+  it('批次里的条目被删光后自动退出随机并回到普通列表', async () => {
+    const wrapper = await mountPage();
+    api.PickRandomVideos.mockResolvedValueOnce({ videos: pickedVideos, selection_reason: '' });
+    await wrapper.vm.enterRandomPick();
+    api.GetVideosByIDs.mockResolvedValueOnce([]);
+    api.SearchLibraryVideoPage.mockClear();
+
+    await wrapper.vm.reloadCurrentView();
+
+    expect(wrapper.vm.randomPick.active).toBe(false);
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('改筛选条件会退出随机批次并按新条件重新加载', async () => {
+    const wrapper = await mountPage();
+    api.PickRandomVideos.mockResolvedValueOnce({ videos: pickedVideos, selection_reason: '' });
+    await wrapper.vm.enterRandomPick();
+    api.SearchLibraryVideoPage.mockClear();
+    api.GetVideosByIDs.mockClear();
+
+    await wrapper.vm.handleSearch(false);
+    await flushPromises();
+
+    expect(wrapper.vm.randomPick.active).toBe(false);
+    expect(api.GetVideosByIDs).not.toHaveBeenCalled();
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('刷新批次失败时报错并留住当前批次', async () => {
+    const wrapper = await mountPage();
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    api.PickRandomVideos.mockResolvedValueOnce({ videos: pickedVideos, selection_reason: '' });
+    await wrapper.vm.enterRandomPick();
+    api.GetVideosByIDs.mockRejectedValueOnce(new Error('数据库不可用'));
+
+    await wrapper.vm.reloadCurrentView();
+
+    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('刷新随机批次失败'));
+    expect(wrapper.vm.randomPick.active).toBe(true);
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([11, 12]);
+    alertSpy.mockRestore();
+    wrapper.unmount();
+  });
+
+  it('抽取途中改了筛选，回来的旧批次不会再装回列表', async () => {
+    const wrapper = await mountPage();
+    let resolvePick;
+    api.PickRandomVideos.mockReturnValueOnce(new Promise(resolve => { resolvePick = resolve; }));
+    const pending = wrapper.vm.enterRandomPick();
+
+    wrapper.vm.searchKeyword = '换个关键词';
+    await wrapper.vm.handleSearch(true);
+    resolvePick({ videos: pickedVideos, selection_reason: '' });
+    await pending;
+    await flushPromises();
+
+    expect(wrapper.vm.randomPick.active).toBe(false);
+    expect(wrapper.vm.videos.map(video => video.id)).not.toContain(11);
+    wrapper.unmount();
+  });
+
+  it('筛选范围内抽不到视频时保持原列表并提示', async () => {
+    const wrapper = await mountPage();
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    wrapper.vm.videos = [{ id: 1, name: 'kept.mp4', tags: [] }];
+    api.PickRandomVideos.mockResolvedValueOnce({
+      videos: [],
+      reason_code: 'no_filtered_videos',
+      user_message: '随机取样失败：当前筛选范围没有可用的视频。'
+    });
+
+    await wrapper.vm.enterRandomPick();
+
+    expect(alertSpy).toHaveBeenCalledWith('随机取样失败：当前筛选范围没有可用的视频。');
+    expect(wrapper.vm.randomPick.active).toBe(false);
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([1]);
+    alertSpy.mockRestore();
+    wrapper.unmount();
   });
 });

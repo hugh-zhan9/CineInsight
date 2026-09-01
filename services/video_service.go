@@ -159,6 +159,30 @@ func (s *VideoService) GetAllVideos() ([]models.Video, error) {
 	return videos, err
 }
 
+// GetVideosByIDs 按传入顺序返回这些视频（含标签）。已删除或查不到的 ID 直接跳过，
+// 调用方据此知道哪些条目已经不在库里。
+func (s *VideoService) GetVideosByIDs(ids []uint) ([]models.Video, error) {
+	orderedIDs := uniqueUintIDs(ids)
+	if len(orderedIDs) == 0 {
+		return []models.Video{}, nil
+	}
+	var found []models.Video
+	if err := database.DB.Preload("Tags").Where("id IN ?", orderedIDs).Find(&found).Error; err != nil {
+		return nil, err
+	}
+	byID := make(map[uint]models.Video, len(found))
+	for _, video := range found {
+		byID[video.ID] = video
+	}
+	ordered := make([]models.Video, 0, len(found))
+	for _, id := range orderedIDs {
+		if video, ok := byID[id]; ok {
+			ordered = append(ordered, video)
+		}
+	}
+	return ordered, nil
+}
+
 // getPlayWeight 获取播放权重配置
 func (s *VideoService) getPlayWeight() (float64, error) {
 	var settings models.Settings
@@ -2116,8 +2140,16 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 	return s.playRandomFromRows(rows, playWeight, halfLifeDays, time.Now(), "按全库均衡权重选择")
 }
 
-// PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放。
-func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*PlaybackAttemptResult, error) {
+// randomCandidatePool 是筛选内随机的候选集合，随机播放和随机取样共用同一份边界、模式和权重配置。
+type randomCandidatePool struct {
+	mode         string
+	rows         []videoScoreRow
+	playWeight   float64
+	halfLifeDays int
+}
+
+// collectRandomCandidates 按请求的筛选条件和随机模式组装候选行。
+func (s *VideoService) collectRandomCandidates(request RandomPlayRequest) (*randomCandidatePool, error) {
 	mode := strings.TrimSpace(request.Mode)
 	if mode == "" {
 		mode = RandomPlayModeBalanced
@@ -2158,15 +2190,110 @@ func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*Pl
 	if err := query.Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	if len(rows) == 0 {
+	return &randomCandidatePool{mode: mode, rows: rows, playWeight: playWeight, halfLifeDays: halfLifeDays}, nil
+}
+
+// PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放。
+func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*PlaybackAttemptResult, error) {
+	pool, err := s.collectRandomCandidates(request)
+	if err != nil {
+		return nil, err
+	}
+	if len(pool.rows) == 0 {
 		return &PlaybackAttemptResult{
 			DispatchSucceeded: false,
 			ReasonCode:        "no_filtered_videos",
 			UserMessage:       "随机播放失败：当前筛选范围没有可播放的视频。",
-			SelectionReason:   randomModeReason(mode),
+			SelectionReason:   randomModeReason(pool.mode),
 		}, nil
 	}
-	return s.playRandomFromRows(rows, playWeight, halfLifeDays, time.Now(), randomModeReason(mode))
+	return s.playRandomFromRows(pool.rows, pool.playWeight, pool.halfLifeDays, time.Now(), randomModeReason(pool.mode))
+}
+
+// RandomPickMaxCount 限制单次随机取样的条数，避免把过大的结果集一次性加载进内存。
+const RandomPickMaxCount = 50
+
+// RandomPickResult 是「随机 N 部」的取样结果。取样只挑视频、不派发播放，因此不写播放统计。
+type RandomPickResult struct {
+	Videos          []models.Video `json:"videos"`
+	SelectionReason string         `json:"selection_reason"`
+	ReasonCode      string         `json:"reason_code"`
+	UserMessage     string         `json:"user_message"`
+}
+
+// PickRandomVideos 用与随机播放完全相同的候选边界和加权规则，抽取 count 条互不重复的视频。
+func (s *VideoService) PickRandomVideos(request RandomPlayRequest, count int) (*RandomPickResult, error) {
+	if count <= 0 {
+		return nil, fmt.Errorf("随机取样条数必须大于 0")
+	}
+	if count > RandomPickMaxCount {
+		return nil, fmt.Errorf("随机取样条数不能超过 %d", RandomPickMaxCount)
+	}
+	pool, err := s.collectRandomCandidates(request)
+	if err != nil {
+		return nil, err
+	}
+	reason := randomModeReason(pool.mode)
+	if len(pool.rows) == 0 {
+		return &RandomPickResult{
+			Videos:          []models.Video{},
+			SelectionReason: reason,
+			ReasonCode:      "no_filtered_videos",
+			UserMessage:     "随机取样失败：当前筛选范围没有可用的视频。",
+		}, nil
+	}
+	weights, totalWeight := randomSelectionWeights(pool.rows, pool.playWeight, pool.halfLifeDays, time.Now())
+	ids := make([]uint, 0, count)
+	for _, index := range weightedSampleWithoutReplacement(weights, totalWeight, count) {
+		ids = append(ids, pool.rows[index].ID)
+	}
+	videos, err := s.GetVideosByIDs(ids)
+	if err != nil {
+		return nil, fmt.Errorf("查询随机取样结果失败: %w", err)
+	}
+	return &RandomPickResult{Videos: videos, SelectionReason: reason}, nil
+}
+
+// weightedSampleWithoutReplacement 连续做加权抽取：每轮只在尚未抽中的候选里按权重选一个，
+// 再把它的权重从剩余总量里扣掉，保证抽出的下标互不重复且单次抽取的分布与随机播放一致。
+func weightedSampleWithoutReplacement(weights []float64, totalWeight float64, count int) []int {
+	if count > len(weights) {
+		count = len(weights)
+	}
+	taken := make([]bool, len(weights))
+	picked := make([]int, 0, count)
+	remaining := totalWeight
+	for len(picked) < count {
+		target := rand.Float64() * remaining
+		selected := -1
+		cumulative := 0.0
+		for index, weight := range weights {
+			if taken[index] {
+				continue
+			}
+			cumulative += weight
+			if target <= cumulative {
+				selected = index
+				break
+			}
+		}
+		if selected < 0 {
+			// 防御浮点精度：累计和可能略小于 remaining，退回最后一个还没抽中的候选。
+			for index := len(weights) - 1; index >= 0; index-- {
+				if !taken[index] {
+					selected = index
+					break
+				}
+			}
+		}
+		if selected < 0 {
+			break
+		}
+		taken[selected] = true
+		remaining -= weights[selected]
+		picked = append(picked, selected)
+	}
+	return picked
 }
 
 func randomModeReason(mode string) string {

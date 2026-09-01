@@ -194,6 +194,8 @@ export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
 
 export function GetVideosByDirectory(arg1:string):Promise<Array<models.Video>>;
 
+export function GetVideosByIDs(arg1:Array<number>):Promise<Array<models.Video>>;
+
 export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:number):Promise<Array<models.Video>>;
 
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
@@ -237,6 +239,8 @@ export function MoveVideo(arg1:number,arg2:string):Promise<services.FileMigratio
 export function OpenDirectory(arg1:number):Promise<void>;
 
 export function OpenImageDirectory(arg1:string):Promise<void>;
+
+export function PickRandomVideos(arg1:services.RandomPlayRequest,arg2:number):Promise<services.RandomPickResult>;
 
 export function PlayRandomVideo():Promise<services.PlaybackAttemptResult>;
 

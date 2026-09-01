@@ -1,6 +1,7 @@
 package services
 
 import (
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -275,5 +276,175 @@ func TestRandomPlayHalfLifeZeroExactlyPreservesLegacyScores(t *testing.T) {
 	want := []float64{legacyMax - legacyScores[0] + 1, legacyMax - legacyScores[1] + 1}
 	if weights[0] != want[0] || weights[1] != want[1] || total != want[0]+want[1] {
 		t.Fatalf("半衰期为 0 必须精确保留旧算法 got=%v total=%v want=%v", weights, total, want)
+	}
+}
+
+func TestPickRandomVideosSharesRandomPlayBoundariesAndLeavesStatsUntouched(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := &VideoService{}
+
+	created := make([]models.Video, 0, 6)
+	for index := 0; index < 6; index++ {
+		path := fmt.Sprintf("%s/pick-%d.mp4", root, index)
+		mustCreateFile(t, path)
+		video := models.Video{
+			Name:      fmt.Sprintf("pick-%d.mp4", index),
+			Path:      path,
+			Directory: root,
+			// 只有偶数号是收藏，用来验证模式过滤和随机播放一致。
+			IsFavorite: index%2 == 0,
+		}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建候选失败: %v", err)
+		}
+		created = append(created, video)
+	}
+	// 失效条目不该出现在取样里，和 PlayRandomVideoWithFilter 的边界保持一致。
+	stalePath := root + "/stale.mp4"
+	mustCreateFile(t, stalePath)
+	stale := models.Video{Name: "stale.mp4", Path: stalePath, Directory: root, IsFavorite: true, IsStale: true}
+	if err := database.DB.Create(&stale).Error; err != nil {
+		t.Fatalf("创建失效候选失败: %v", err)
+	}
+
+	result, err := svc.PickRandomVideos(RandomPlayRequest{Mode: RandomPlayModeFavorites}, 10)
+	if err != nil {
+		t.Fatalf("随机取样失败: %v", err)
+	}
+	if len(result.Videos) != 3 {
+		t.Fatalf("候选不足 10 条时应返回全部 3 条收藏，实际 %d", len(result.Videos))
+	}
+	seen := make(map[uint]struct{}, len(result.Videos))
+	for _, video := range result.Videos {
+		if _, duplicated := seen[video.ID]; duplicated {
+			t.Fatalf("取样结果不能重复: id=%d", video.ID)
+		}
+		seen[video.ID] = struct{}{}
+		if video.ID == stale.ID {
+			t.Fatalf("失效视频不应进入取样结果")
+		}
+		if !video.IsFavorite {
+			t.Fatalf("收藏模式取样命中了非收藏视频: id=%d", video.ID)
+		}
+	}
+	if result.SelectionReason != randomModeReason(RandomPlayModeFavorites) {
+		t.Fatalf("取样理由应与随机播放一致: %s", result.SelectionReason)
+	}
+
+	// 取样只挑不播，播放统计必须原样不动。
+	for _, video := range created {
+		stats := previewStatsSnapshot(t, video.ID)
+		if stats.RandomPlayCount != 0 || stats.PlayCount != 0 || stats.LastPlayedAt != nil {
+			t.Fatalf("随机取样不应写播放统计: id=%d stats=%+v", video.ID, stats)
+		}
+	}
+
+	excluded, err := svc.PickRandomVideos(RandomPlayRequest{
+		Mode:       RandomPlayModeFavorites,
+		ExcludeIDs: []uint{created[0].ID, created[2].ID, created[4].ID},
+	}, 10)
+	if err != nil {
+		t.Fatalf("排除取样失败: %v", err)
+	}
+	if len(excluded.Videos) != 0 || excluded.ReasonCode != "no_filtered_videos" {
+		t.Fatalf("排除全部候选后应返回空集: %+v", excluded)
+	}
+}
+
+func TestPickRandomVideosCapsCountAndRejectsInvalidCount(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := &VideoService{}
+
+	for index := 0; index < 12; index++ {
+		path := fmt.Sprintf("%s/cap-%d.mp4", root, index)
+		mustCreateFile(t, path)
+		video := models.Video{Name: fmt.Sprintf("cap-%d.mp4", index), Path: path, Directory: root}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建候选失败: %v", err)
+		}
+	}
+
+	result, err := svc.PickRandomVideos(RandomPlayRequest{}, 10)
+	if err != nil {
+		t.Fatalf("随机取样失败: %v", err)
+	}
+	if len(result.Videos) != 10 {
+		t.Fatalf("候选充足时应恰好返回 10 条，实际 %d", len(result.Videos))
+	}
+
+	if _, err := svc.PickRandomVideos(RandomPlayRequest{}, 0); err == nil {
+		t.Fatalf("条数为 0 应被拒绝")
+	}
+	if _, err := svc.PickRandomVideos(RandomPlayRequest{}, RandomPickMaxCount+1); err == nil {
+		t.Fatalf("超过上限的条数应被拒绝")
+	}
+	if _, err := svc.PickRandomVideos(RandomPlayRequest{Mode: "nope"}, 10); err == nil {
+		t.Fatalf("非法随机模式应被拒绝")
+	}
+}
+
+func TestWeightedSampleWithoutReplacementCoversWholePoolWithoutDuplicates(t *testing.T) {
+	weights := []float64{1, 5, 2, 8}
+	total := 16.0
+	picked := weightedSampleWithoutReplacement(weights, total, 10)
+	if len(picked) != len(weights) {
+		t.Fatalf("请求条数超过候选数时应取完整池，实际 %d", len(picked))
+	}
+	seen := make(map[int]struct{}, len(picked))
+	for _, index := range picked {
+		if _, duplicated := seen[index]; duplicated {
+			t.Fatalf("抽样下标重复: %v", picked)
+		}
+		seen[index] = struct{}{}
+	}
+	if len(weightedSampleWithoutReplacement(weights, total, 1)) != 1 {
+		t.Fatalf("请求 1 条时只应抽一条")
+	}
+	if len(weightedSampleWithoutReplacement(nil, 0, 3)) != 0 {
+		t.Fatalf("空候选池应抽不到任何条目")
+	}
+}
+
+func TestGetVideosByIDsPreservesOrderAndSkipsMissing(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := &VideoService{}
+
+	tag := models.Tag{Name: "取样标签"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	ids := make([]uint, 0, 3)
+	for index := 0; index < 3; index++ {
+		path := fmt.Sprintf("%s/order-%d.mp4", root, index)
+		mustCreateFile(t, path)
+		video := models.Video{Name: fmt.Sprintf("order-%d.mp4", index), Path: path, Directory: root}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建视频失败: %v", err)
+		}
+		ids = append(ids, video.ID)
+	}
+	if err := database.DB.Model(&models.Video{ID: ids[1]}).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("挂标签失败: %v", err)
+	}
+	if err := database.DB.Delete(&models.Video{}, ids[2]).Error; err != nil {
+		t.Fatalf("删除视频失败: %v", err)
+	}
+
+	got, err := svc.GetVideosByIDs([]uint{ids[1], 0, ids[2], ids[0], ids[1]})
+	if err != nil {
+		t.Fatalf("按 ID 查询失败: %v", err)
+	}
+	if len(got) != 2 || got[0].ID != ids[1] || got[1].ID != ids[0] {
+		t.Fatalf("应按传入顺序去重返回并跳过已删除条目: %+v", got)
+	}
+	if len(got[0].Tags) != 1 || got[0].Tags[0].ID != tag.ID {
+		t.Fatalf("按 ID 查询应带出标签: %+v", got[0].Tags)
+	}
+	empty, err := svc.GetVideosByIDs(nil)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("空 ID 列表应返回空结果: %v %v", empty, err)
 	}
 }

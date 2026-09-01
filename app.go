@@ -992,6 +992,22 @@ func (a *App) PlayRandomVideoWithFilter(request services.RandomPlayRequest) (*se
 	return result, err
 }
 
+// PickRandomVideos 在当前片库筛选范围内随机抽取若干视频，只返回列表不发起播放。
+func (a *App) PickRandomVideos(request services.RandomPlayRequest, count int) (*services.RandomPickResult, error) {
+	result, err := a.videoService.PickRandomVideos(request, count)
+	if result != nil {
+		log.Printf("API PickRandomVideos mode=%s count=%d picked=%d reason=%s err=%v", request.Mode, count, len(result.Videos), result.ReasonCode, err)
+	} else {
+		log.Printf("API PickRandomVideos mode=%s count=%d result=nil err=%v", request.Mode, count, err)
+	}
+	return result, err
+}
+
+// GetVideosByIDs 按给定顺序刷新这些视频的最新记录，查不到的条目会被跳过。
+func (a *App) GetVideosByIDs(ids []uint) ([]models.Video, error) {
+	return a.videoService.GetVideosByIDs(ids)
+}
+
 // AddTagToVideo 为视频添加标签
 func (a *App) AddTagToVideo(videoID uint, tagID uint) error {
 	err := a.videoService.AddTagToVideo(videoID, tagID)
