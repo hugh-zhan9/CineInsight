@@ -2706,6 +2706,7 @@ export namespace services {
 	    total_size: number;
 	    watched_count: number;
 	    watched_percent: number;
+	    recent_added_count: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new LibraryStatsSummary(source);
@@ -2718,6 +2719,7 @@ export namespace services {
 	        this.total_size = source["total_size"];
 	        this.watched_count = source["watched_count"];
 	        this.watched_percent = source["watched_percent"];
+	        this.recent_added_count = source["recent_added_count"];
 	    }
 	}
 	export class LibraryStats {
