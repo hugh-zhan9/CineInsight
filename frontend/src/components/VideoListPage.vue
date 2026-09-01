@@ -584,12 +584,31 @@
 
     <BaseModal v-if="cleanupDialog.show" class="cleanup-modal">
         <div class="cleanup-modal-header">
-          <div>
-            <h3>清理候选审阅</h3>
-            <p class="cleanup-intro">当前审阅基于轻量规则：精确重复（大小 + 采样哈希）、近似重复（多帧感知哈希）、低清视频：分辨率低于 480x320、短视频：时长 < 5 秒。选中的视频会直接移入回收站并从库中移除。</p>
-            <p class="cleanup-intro cleanup-intro--muted">每条候选都支持预览，优先看画面再决定是否保留更稳妥。</p>
+          <h3>清理候选审阅</h3>
+          <span class="cleanup-header__meta">
+            共 {{ cleanupCandidateCount }} 项候选
+            <template v-if="cleanupReleasableText"> · 可释放约 <b>{{ cleanupReleasableText }}</b></template>
+          </span>
+          <div class="cleanup-header__spacer"></div>
+          <div v-if="cleanupResultStale" class="cleanup-outdated" data-test="cleanup-outdated-hint">
+            <span>视频库在本次分析之后变过，结果可能已过期</span>
+            <button type="button" class="btn-secondary btn-compact" :disabled="cleanupDialog.loading || cleanupDialog.processing" @click="reanalyzeCleanupCandidates">重新分析</button>
           </div>
-          <button @click="cleanupDialog.show = false" class="btn-secondary">关闭</button>
+          <button type="button" class="cleanup-header__close" aria-label="关闭" @click="cleanupDialog.show = false">✕</button>
+        </div>
+
+        <div v-if="cleanupDialog.analysis && !cleanupDialog.loading" class="cleanup-filter-bar">
+          <button
+            v-for="option in cleanupCategoryOptions"
+            :key="option.key"
+            type="button"
+            :class="['cleanup-chip', { active: cleanupCategory === option.key }]"
+            :title="option.hint"
+            data-test="cleanup-category"
+            @click="cleanupCategory = option.key"
+          >{{ option.label }}<span v-if="option.key !== 'all'" class="cleanup-chip__count">{{ option.count }}</span></button>
+          <div class="cleanup-header__spacer"></div>
+          <button type="button" class="btn-secondary btn-compact" :disabled="cleanupDialog.loading || cleanupDialog.processing" @click="reanalyzeCleanupCandidates">重新分析</button>
         </div>
 
         <div class="cleanup-modal-body">
@@ -609,25 +628,6 @@
           </div>
           <div v-else-if="cleanupDialog.error" class="cleanup-error">{{ cleanupDialog.error }}</div>
           <div v-else-if="cleanupDialog.analysis" class="cleanup-body">
-            <div class="cleanup-summary">
-              <span>重复组 {{ cleanupDialog.analysis.duplicate_groups?.length || 0 }}</span>
-              <span>近似重复 {{ cleanupDialog.analysis.near_duplicate_groups?.length || 0 }}</span>
-              <span>疑似同源 {{ cleanupDialog.analysis.same_source_groups?.length || 0 }}</span>
-              <span>短视频 {{ cleanupDialog.analysis.low_duration?.length || 0 }}</span>
-              <span>低清视频 {{ cleanupDialog.analysis.low_resolution?.length || 0 }}</span>
-              <span>已选 {{ cleanupSelection.length }}</span>
-            </div>
-
-            <p v-if="cleanupResultStale" class="cleanup-outdated" data-test="cleanup-outdated-hint">
-              视频库在本次分析之后发生过变化，下面的结果可能已过期。你可以继续审阅，也可以点「重新分析」刷新候选。
-            </p>
-
-            <div v-if="cleanupCandidateCount" class="cleanup-toolbar">
-              <button @click="selectAllCleanupCandidates" class="btn-secondary">全选候选</button>
-              <button @click="clearCleanupSelection" class="btn-secondary" :disabled="cleanupSelection.length === 0">清空选择</button>
-              <button @click="reanalyzeCleanupCandidates" class="btn-secondary" :disabled="cleanupDialog.loading || cleanupDialog.processing">重新分析</button>
-            </div>
-
             <div v-if="cleanupDialog.analysis.stale_hash_count" class="cleanup-section cleanup-stale-hash-hint">
               <span>有 {{ cleanupDialog.analysis.stale_hash_count }} 个视频的源文件已变更，感知哈希待重算，暂未参与近似重复检测。</span>
               <button type="button" class="btn-secondary btn-compact" :disabled="perceptualHash.running" @click="startPerceptualHashBackfill">
@@ -635,28 +635,41 @@
               </button>
             </div>
 
-            <!-- 顶层按目录展示：每条候选归到"建议保留项"所在目录，组员可以位于别的目录。 -->
+            <!-- 左侧目录承担分组，右侧只放当前目录的候选流（原型 A5）。
+                 候选归到"建议保留项"所在目录，组员可以位于别的目录。 -->
+            <div class="cleanup-split">
+              <nav class="cleanup-dirs" aria-label="按目录分组">
+                <div class="cleanup-dirs__heading">按目录分组</div>
+                <button
+                  v-for="section in cleanupFilteredSections"
+                  :key="section.directory"
+                  type="button"
+                  :class="['cleanup-dirs__item', { active: section.directory === activeCleanupDirectory }]"
+                  :title="section.directory"
+                  data-test="cleanup-dir-section"
+                  @click="activeCleanupDirectory = section.directory"
+                >
+                  <span class="cleanup-dirs__path">{{ section.directory }}</span>
+                  <span class="cleanup-dirs__count">{{ section.entries.length }}</span>
+                </button>
+                <div class="cleanup-dirs__spacer"></div>
+                <p class="cleanup-dirs__note">默认不勾选任何一项。逐条或整组勾选后统一移入回收站，回收站里可原路撤销。</p>
+              </nav>
+
+              <div class="cleanup-stream">
             <div
-              v-for="section in cleanupDirectorySections"
+              v-for="section in activeCleanupSections"
               :key="section.directory"
               class="cleanup-section"
-              data-test="cleanup-dir-section"
             >
-              <button
-                type="button"
-                class="cleanup-dir-toggle"
-                :title="section.directory"
-                :aria-expanded="!isCleanupDirCollapsed(section.directory)"
-                data-test="cleanup-dir-toggle"
-                @click="toggleCleanupDir(section.directory)"
-              >
-                <span class="cleanup-dir-toggle__chevron">{{ isCleanupDirCollapsed(section.directory) ? '▸' : '▾' }}</span>
-                <span class="cleanup-dir-toggle__label">目录</span>
-                <span class="cleanup-dir-toggle__path">{{ section.directory }}</span>
-                <span class="cleanup-dir-toggle__count">{{ section.entries.length }} 项 · {{ section.videoCount }} 个视频</span>
-              </button>
+              <div class="cleanup-section__head">
+                <strong :title="section.directory">{{ section.directory }}</strong>
+                <span>{{ section.entries.length }} 项候选 · {{ section.videoCount }} 个视频</span>
+                <div class="cleanup-header__spacer"></div>
+                <button type="button" class="link-btn" data-test="cleanup-suggest-group" @click="selectSuggestedInSection(section)">按建议勾选本组（保留最高画质版本）</button>
+              </div>
 
-              <template v-if="!isCleanupDirCollapsed(section.directory)">
+              <template v-if="true">
                 <div
                   v-for="entry in section.entries"
                   :key="entry.key"
@@ -762,26 +775,31 @@
               </template>
             </div>
 
-            <div
-              v-if="!(cleanupDialog.analysis.duplicate_groups?.length || cleanupDialog.analysis.near_duplicate_groups?.length || cleanupDialog.analysis.same_source_groups?.length || cleanupDialog.analysis.low_duration?.length || cleanupDialog.analysis.low_resolution?.length)"
-              class="cleanup-empty"
-            >
+            <div v-if="cleanupCandidateCount === 0" class="cleanup-empty">
               当前没有命中轻量清理规则的候选项。
+            </div>
+              </div>
             </div>
           </div>
         </div>
 
+        <!-- 底栏常显将要发生什么，以及"这一步可撤销"这件事 -->
         <div class="cleanup-modal-footer">
-          <button @click="reanalyzeCleanupCandidates" class="btn-secondary" :disabled="cleanupDialog.loading || cleanupDialog.processing">重新分析</button>
+          <span class="cleanup-footer__summary">
+            将移入回收站 <b>{{ cleanupSelection.length }}</b> 项
+            <template v-if="cleanupSelectedSizeText"> · 释放 <b>{{ cleanupSelectedSizeText }}</b></template>
+          </span>
+          <span class="cleanup-footer__hint">移入回收站可撤销，不会立即删除磁盘文件</span>
+          <div class="cleanup-header__spacer"></div>
+          <button v-if="cleanupDialog.loading" @click="cleanupDialog.show = false" class="btn-secondary">后台继续分析</button>
+          <button @click="cleanupDialog.show = false" class="btn-secondary">取消</button>
           <button
             @click="trashSelectedCleanupCandidates"
             class="btn-danger"
             :disabled="cleanupSelection.length === 0 || cleanupDialog.loading || cleanupDialog.processing"
           >
-            {{ cleanupDialog.processing ? '处理中...' : `将选中项移入回收站 (${cleanupSelection.length})` }}
+            {{ cleanupDialog.processing ? '处理中...' : '移入回收站' }}
           </button>
-          <button @click="cleanupDialog.show = false" class="btn-primary">关闭</button>
-          <button v-if="cleanupDialog.loading" @click="cleanupDialog.show = false" class="btn-secondary">后台继续分析</button>
         </div>
     </BaseModal>
 
@@ -1397,28 +1415,104 @@
   display: flex;
   flex-direction: column;
 }
+/* 清理弹窗（原型 A5）：顶部标题栏 + 类别筛选条 + 左目录右候选流 + 常显底栏 */
+.cleanup-header__meta { color: var(--text-secondary); font-size: 12px; }
+.cleanup-header__meta b { color: var(--text-primary); font-family: var(--font-mono); }
+.cleanup-header__spacer { flex: 1; }
+.cleanup-header__close { border: 0; background: transparent; color: var(--text-muted); font-size: 16px; cursor: pointer; }
+
+.cleanup-filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--hairline-soft);
+  background: var(--panel-subtle-bg);
+}
+
+.cleanup-chip {
+  height: 26px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.cleanup-chip.active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
+.cleanup-chip__count { font-family: var(--font-mono); }
+
+.cleanup-split { display: grid; grid-template-columns: 268px minmax(0, 1fr); min-height: 0; height: 100%; }
+
+.cleanup-dirs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--hairline-soft);
+  background: var(--panel-subtle-bg);
+  overflow-y: auto;
+}
+
+.cleanup-dirs__heading { padding: 6px 10px 4px; color: var(--text-muted); font-size: 10.5px; font-weight: 700; letter-spacing: 0.08em; }
+.cleanup-dirs__item { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border: 0; border-radius: var(--radius); background: transparent; color: var(--text-secondary); font-size: 12.5px; text-align: left; cursor: pointer; }
+.cleanup-dirs__item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
+.cleanup-dirs__path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cleanup-dirs__count { flex: none; font-family: var(--font-mono); }
+.cleanup-dirs__spacer { flex: 1; min-height: 10px; }
+.cleanup-dirs__note { padding: 10px; border-top: 1px solid var(--hairline-soft); color: var(--text-muted); font-size: 11.5px; line-height: 1.6; }
+
+.cleanup-stream { min-width: 0; overflow-y: auto; padding: 10px 16px; }
+.cleanup-section__head { display: flex; align-items: baseline; gap: 10px; padding: 2px 0 8px; border-bottom: 1px solid var(--hairline-faint); margin-bottom: 10px; }
+.cleanup-section__head strong { font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cleanup-section__head span { color: var(--text-muted); font-size: 12px; }
+
+.cleanup-outdated {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning-text);
+  font-size: 11.5px;
+}
+
+.cleanup-footer__summary { font-size: 13px; }
+.cleanup-footer__summary b { font-family: var(--font-mono); }
+.cleanup-footer__hint { color: var(--text-muted); font-size: 11.5px; }
+
 .cleanup-modal-header,
 .cleanup-modal-footer {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 18px 22px;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
   flex: 0 0 auto;
   background: var(--panel-bg);
 }
 .cleanup-modal-header {
-  border-bottom: 1px solid var(--border-color);
+  height: 56px;
+  border-bottom: 1px solid var(--hairline);
 }
 .cleanup-modal-header h3 {
   margin: 0;
+  font-size: 16px;
 }
 .cleanup-modal-footer {
-  align-items: center;
-  justify-content: flex-end;
-  border-top: 1px solid var(--border-color);
+  height: 60px;
+  border-top: 1px solid var(--hairline);
+  background: var(--panel-subtle-bg);
 }
 .cleanup-modal-body {
+  padding: 0;
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
@@ -1833,6 +1927,8 @@ export default {
         progress: { stage: '', message: '', current: 0, total: 0, path: '' }
       },
       cleanupSelection: [],
+      cleanupCategory: 'all',
+      activeCleanupDirectory: '',
       // 切走前记下共用滚动容器的位置，切回来照原样恢复（图片页也在用同一个容器）。
       inactiveScrollTop: 0,
       cleanupCollapsedDirs: {},
@@ -2310,6 +2406,63 @@ export default {
         push('low-duration', `dur-${video.id}`, null, video, [video]);
       }
       return [...buckets.values()].sort((a, b) => a.directory.localeCompare(b.directory));
+    },
+    cleanupCategoryOptions() {
+      const analysis = this.cleanupDialog.analysis;
+      const count = key => this.cleanupDirectorySections
+        .reduce((total, section) => total + section.entries.filter(entry => entry.kind === key).length, 0);
+      if (!analysis) return [];
+      // 判定阈值挂在各自的类别上——「低清到底指多低」这个疑问就产生在这里。
+      return [
+        { key: 'all', label: '全部类别', count: this.cleanupCandidateCount, hint: '选中的视频会移入回收站并从库中移除，可原路撤销' },
+        { key: 'exact', label: '精确重复', count: count('exact'), hint: '大小 + 采样哈希完全一致' },
+        { key: 'near', label: '近似重复', count: count('near'), hint: '多帧感知哈希接近' },
+        { key: 'same-source', label: '同源视频', count: count('same-source'), hint: '同一片源的不同转码或裁剪版本' },
+        { key: 'low-resolution', label: '低清', count: count('low-resolution'), hint: '低清视频：分辨率低于 480x320' },
+        { key: 'low-duration', label: '短视频', count: count('low-duration'), hint: '短视频：时长 < 5 秒' }
+      ];
+    },
+    // 类别筛选只收窄看到的候选，不改变分析结果本身。
+    cleanupFilteredSections() {
+      if (this.cleanupCategory === 'all') return this.cleanupDirectorySections;
+      return this.cleanupDirectorySections
+        .map(section => ({
+          ...section,
+          entries: section.entries.filter(entry => entry.kind === this.cleanupCategory)
+        }))
+        .filter(section => section.entries.length > 0);
+    },
+    activeCleanupSections() {
+      const sections = this.cleanupFilteredSections;
+      if (sections.length === 0) return [];
+      const active = sections.find(section => section.directory === this.activeCleanupDirectory);
+      return [active || sections[0]];
+    },
+    // 底栏的"释放多少"只算真正选中的那些视频，不含建议保留项。
+    cleanupSelectedSizeText() {
+      const selected = new Set(this.cleanupSelection);
+      let bytes = 0;
+      for (const section of this.cleanupDirectorySections) {
+        for (const entry of section.entries) {
+          for (const member of entry.members) {
+            if (selected.has(member.id)) bytes += Number(member.size || 0);
+          }
+        }
+      }
+      return bytes > 0 ? this.formatBytesShort(bytes) : '';
+    },
+    cleanupReleasableText() {
+      let bytes = 0;
+      for (const section of this.cleanupDirectorySections) {
+        for (const entry of section.entries) {
+          // 每组里除建议保留项之外的部分才是可释放空间。
+          for (const member of entry.members) {
+            if (entry.keeper && member.id === entry.keeper.id) continue;
+            bytes += Number(member.size || 0);
+          }
+        }
+      }
+      return bytes > 0 ? this.formatBytesShort(bytes) : '';
     },
     // 后台跑完不自动重来，按钮徽标直接报出待审阅项数，提醒去处理。
     cleanupBadgeCount() {
@@ -3720,6 +3873,26 @@ export default {
     },
     clearSelection() {
       this.selectedVideoIds = [];
+    },
+    formatBytesShort(bytes) {
+      const size = Number(bytes || 0);
+      if (size <= 0) return '0 B';
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const index = Math.min(units.length - 1, Math.floor(Math.log(size) / Math.log(1024)));
+      const value = size / Math.pow(1024, index);
+      return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+    },
+    // 「按建议勾选本组」只勾非保留项；默认零选中这条边界不受影响，
+    // 用户必须显式点一次才会有选中项。
+    selectSuggestedInSection(section) {
+      const ids = [];
+      for (const entry of section.entries) {
+        for (const member of entry.members) {
+          if (entry.keeper && member.id === entry.keeper.id) continue;
+          ids.push(member.id);
+        }
+      }
+      this.cleanupSelection = [...new Set([...this.cleanupSelection, ...ids])];
     },
     openRowMenu(video, anchor) {
       this.rowMenu = { video, anchor, position: null };

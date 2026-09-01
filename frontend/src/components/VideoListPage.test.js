@@ -730,3 +730,64 @@ describe('VideoListPage 工具栏三层重排', () => {
     wrapper.unmount();
   });
 });
+
+describe('VideoListPage 清理弹窗重排', () => {
+  const analysis = {
+    duplicate_groups: [{
+      original: { id: 1, name: 'keep.mkv', directory: '/lib/a', path: '/lib/a/keep.mkv', size: 100 },
+      candidates: [{ id: 2, name: 'copy.mkv', directory: '/lib/a', path: '/lib/a/copy.mkv', size: 100 }]
+    }],
+    near_duplicate_groups: [],
+    same_source_groups: [],
+    low_duration: [{ id: 3, name: 'short.mov', directory: '/lib/b', path: '/lib/b/short.mov', size: 10 }],
+    low_resolution: []
+  };
+
+  async function openCleanup() {
+    const wrapper = await mountPage();
+    wrapper.vm.cleanupDialog.show = true;
+    wrapper.vm.cleanupDialog.analysis = analysis;
+    await wrapper.vm.$nextTick();
+    return wrapper;
+  }
+
+  // 弹窗内容在 BaseModal 的插槽里，shallowMount 下不渲染，
+  // 所以这里查状态；按钮的 disabled 绑定由源码断言钉住。
+  it('默认零选中，可释放空间按整组扣掉建议保留项', async () => {
+    const wrapper = await openCleanup();
+    expect(wrapper.vm.cleanupSelection).toEqual([]);
+    // 两组各有一个建议保留项：重复组保留 1（100B），短视频组只有它自己且是保留项。
+    expect(wrapper.vm.cleanupReleasableText).toBe('100 B');
+    wrapper.unmount();
+  });
+
+  it('类别筛选只收窄看到的候选，不改分析结果', async () => {
+    const wrapper = await openCleanup();
+    expect(wrapper.vm.cleanupFilteredSections).toHaveLength(2);
+    wrapper.vm.cleanupCategory = 'low-duration';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.cleanupFilteredSections).toHaveLength(1);
+    expect(wrapper.vm.cleanupFilteredSections[0].directory).toBe('/lib/b');
+    // 分析结果本身没有被改动。
+    expect(wrapper.vm.cleanupDialog.analysis.duplicate_groups).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('「按建议勾选本组」只勾非保留项', async () => {
+    const wrapper = await openCleanup();
+    const section = wrapper.vm.cleanupDirectorySections.find(item => item.directory === '/lib/a');
+    wrapper.vm.selectSuggestedInSection(section);
+    // 建议保留的 1 不该被勾上，只勾副本 2。
+    expect(wrapper.vm.cleanupSelection).toEqual([2]);
+    wrapper.unmount();
+  });
+
+  it('底栏的可释放空间只算选中项，不含建议保留项', async () => {
+    const wrapper = await openCleanup();
+    expect(wrapper.vm.cleanupSelectedSizeText).toBe('');
+    wrapper.vm.cleanupSelection = [2];
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.cleanupSelectedSizeText).toBe('100 B');
+    wrapper.unmount();
+  });
+});

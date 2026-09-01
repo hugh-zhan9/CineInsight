@@ -103,13 +103,26 @@ assert.match(videoListSource, /cleanup-modal-header/, 'cleanup modal should have
 assert.match(videoListSource, /cleanup-modal-body/, 'cleanup modal should have a dedicated scroll body');
 assert.match(videoListSource, /cleanup-modal-footer/, 'cleanup modal should keep actions visible at the bottom');
 // 顶层改成按目录分组：目录标题可折叠，组内类别用 cleanup-card-kind 标注。
+// 2026-09-01 起目录分组从内联折叠改成左侧栏 + 右侧候选流（原型 A5），
+// 折叠开关随之消失，但"按目录分组"这件事本身保留。
 assert.match(videoListSource, /data-test="cleanup-dir-section"/, 'cleanup candidates should be grouped by directory');
-assert.match(videoListSource, /@click="toggleCleanupDir\(section\.directory\)"/, 'cleanup directory headers should collapse');
+assert.match(videoListSource, /class="cleanup-split"/, 'cleanup should use a directory sidebar plus a candidate stream');
+assert.match(videoListSource, /activeCleanupDirectory/, 'the sidebar should drive which directory the stream shows');
+assert.match(videoListSource, /data-test="cleanup-category"/, 'cleanup should offer a category filter with counts');
+// 三条安全边界不能被重排破坏。
+assert.match(videoListSource, /默认不勾选任何一项/, 'the zero-selected-by-default boundary must stay stated in the UI');
+assert.match(videoListSource, /移入回收站可撤销，不会立即删除磁盘文件/, 'the footer must keep saying the delete is undoable');
+assert.match(videoListSource, /:disabled="cleanupSelection\.length === 0/, 'the trash button stays disabled while nothing is selected');
+assert.match(videoListSource, /RejectSameSourceRelation/, 'same-source rejection must still be reachable');
 assert.match(videoListSource, /cleanup-card-kind/, 'cleanup cards should label their candidate category');
 assert.match(videoListSource, /toggleCleanupSelection\(entry\.keeper\?\.id\)/, 'cleanup duplicate original row should be selectable');
 assert.match(videoListSource, /@click="previewCleanupVideo\(/, 'cleanup candidates should expose preview actions');
 assert.match(videoListSource, /cleanup-item-actions/, 'cleanup candidate rows should reserve an actions area');
-assert.match(videoListSource, /短视频：时长 < 5 秒/, 'cleanup dialog should explain the short-video threshold');
+// 判定阈值从顶部一整段说明挪到了各个类别自己的 tooltip 上——
+// 「低清到底指多低」这个疑问产生在类别上，说明就该在那里。
+assert.match(videoListSource, /短视频：时长 < 5 秒/, 'cleanup should still explain the short-video threshold');
+assert.match(videoListSource, /低清视频：分辨率低于 480x320/, 'cleanup should still explain the low-resolution threshold');
+assert.match(videoListSource, /:title="option\.hint"/, 'the thresholds should ride on the category chips');
 assert.match(videoListSource, /低清视频：分辨率低于 480x320/, 'cleanup dialog should explain the low-resolution threshold');
 assert.match(videoListSource, /近似重复（不同转码，不会默认选中）/, 'near-duplicate groups should state that they are not selected by default');
 assert.match(videoListSource, /near_duplicate_groups/, 'cleanup dialog should render perceptual-hash near-duplicate groups');
