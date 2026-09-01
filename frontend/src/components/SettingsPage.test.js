@@ -500,3 +500,26 @@ describe('SettingsPage database backup', () => {
     });
   });
 });
+
+describe('SettingsPage 锚点导航', () => {
+  it('13 个分区各有锚点，导航项与分区一一对应', async () => {
+    const wrapper = await mountPage();
+    const keys = wrapper.vm.navSections.map(section => section.key);
+    expect(keys).toHaveLength(13);
+    for (const key of keys) {
+      expect(wrapper.find(`#settings-${key}`).exists()).toBe(true);
+    }
+    expect(wrapper.findAll('.settings-nav__item')).toHaveLength(13);
+    wrapper.unmount();
+  });
+
+  it('点击导航项高亮并滚到对应分区', async () => {
+    const wrapper = await mountPage();
+    const target = wrapper.find('#settings-scan-dirs').element;
+    target.scrollIntoView = vi.fn();
+    wrapper.vm.scrollToSection('scan-dirs');
+    expect(wrapper.vm.activeSection).toBe('scan-dirs');
+    expect(target.scrollIntoView).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});

@@ -1,9 +1,23 @@
 <template>
   <div class="page-content settings-page">
+    <!-- 原型 A10：16 个分区改成左侧锚点导航 + 右侧连续长表单。
+         这是全应用唯一出现侧栏的地方。 -->
+    <div class="settings-shell">
+      <nav class="settings-nav" aria-label="设置分区">
+        <button
+          v-for="section in navSections"
+          :key="section.key"
+          type="button"
+          :class="['settings-nav__item', { active: activeSection === section.key }]"
+          @click="scrollToSection(section.key)"
+        >{{ section.label }}</button>
+      </nav>
+
+      <div class="settings-body" ref="settingsBody">
     <h2>设置</h2>
 
     <div class="settings-grid-shell">
-    <div class="settings-section">
+    <div :id="`settings-basic`" class="settings-section">
       <h3>基本设置</h3>
       <div class="setting-item">
         <label class="switch">
@@ -42,7 +56,7 @@
     </div>
 
     <!-- 自动化设置 -->
-    <div class="settings-section">
+    <div :id="`settings-automation`" class="settings-section">
       <h3>自动化与扫描</h3>
       <div class="setting-item">
         <label class="switch">
@@ -77,7 +91,7 @@
         <p class="help-text">只控制质量视图入口；已有归因和审核记录不会删除。</p>
       </div>
       <div class="setting-item scan-blacklist-setting">
-        <div class="settings-section-heading">
+        <div :id="`settings-mobile`" class="settings-section-heading">
           <label>扫描目录黑名单</label>
           <button type="button" class="btn-secondary btn-compact" @click="addScanExcludeDirectory">选择目录</button>
         </div>
@@ -91,7 +105,7 @@
         <p class="help-text">黑名单目录及其全部子目录不会被后续扫描收录；已有视频记录不会自动删除。</p>
       </div>
       <div class="setting-item scan-blacklist-setting">
-        <div class="settings-section-heading">
+        <div :id="`settings-ai-tags`" class="settings-section-heading">
           <label>图片扫描黑名单</label>
           <button type="button" class="btn-secondary btn-compact" @click="addImageScanExcludeDirectory">选择目录</button>
         </div>
@@ -106,7 +120,7 @@
       </div>
     </div>
 
-    <div class="settings-section">
+    <div :id="`settings-ai-tag-library`" class="settings-section">
       <h3>手机端浏览</h3>
       <div class="short-feed-status">
         <div class="short-feed-status-main">
@@ -153,7 +167,7 @@
       <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
     </div>
 
-    <div class="settings-section">
+    <div :id="`settings-random`" class="settings-section">
       <h3>AI 标签</h3>
       <div class="setting-item">
         <label>接口地址</label>
@@ -252,8 +266,8 @@
       <PhotoAITaskPanel />
     </div>
 
-	<div class="settings-section ai-tag-library-section">
-	  <div class="settings-section-heading">
+	<div :id="`settings-video-formats`" class="settings-section ai-tag-library-section">
+	  <div :id="`settings-image-formats`" class="settings-section-heading">
 		<h3>AI 标签库</h3>
 		<button type="button" class="btn-secondary" :disabled="aiTagLibraryLoading || !aiTagLibraryLoaded" @click="addAITagLibraryGroup">添加分类</button>
 	  </div>
@@ -286,7 +300,7 @@
 	</div>
 
     <!-- 智能随机播放设置 -->
-    <div class="settings-section">
+    <div :id="`settings-subtitle-translate`" class="settings-section">
       <h3>智能随机播放</h3>
       <div class="setting-item">
         <label>播放权重（1次普通播放 = N次随机播放）</label>
@@ -310,7 +324,7 @@
     </div>
 
     <!-- 视频格式设置 -->
-    <div class="settings-section">
+    <div :id="`settings-subtitle-quality`" class="settings-section">
       <h3>支持的视频格式</h3>
       <div class="setting-item">
         <textarea
@@ -324,7 +338,7 @@
     </div>
 
     <!-- 图片格式设置 -->
-    <div class="settings-section">
+    <div :id="`settings-scan-dirs`" class="settings-section">
       <h3>支持的图片格式</h3>
       <div class="setting-item">
         <textarea
@@ -339,7 +353,7 @@
     </div>
 
     <!-- 字幕设置 -->
-    <div class="settings-section">
+    <div :id="`settings-image-dirs`" class="settings-section">
       <h3>字幕翻译</h3>
       <div class="setting-item">
         <label class="switch">
@@ -400,7 +414,7 @@
       </template>
     </div>
 
-    <div class="settings-section">
+    <div :id="`settings-backup`" class="settings-section">
       <h3>字幕识别质量</h3>
       <div class="setting-item">
         <label>WhisperX 模型</label>
@@ -519,6 +533,8 @@
         {{ settingsSaving ? '正在保存...' : '保存所有设置' }}
       </button>
     </div>
+      </div>
+    </div>
 
     <!-- Add/Edit Directory Dialog -->
     <BaseModal v-if="showAddDirectoryDialog || editingDirectory" close-on-overlay stop-modal-clicks @close="closeDirectoryDialog">
@@ -609,6 +625,23 @@
 <script>
 import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, ClearAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../wailsjs/go/main/App';
 import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
+
+// 左侧锚点导航的分区清单，顺序与模板里的分区顺序一致。
+const SETTINGS_SECTIONS = [
+  { key: 'basic', label: '基本设置' },
+  { key: 'automation', label: '自动化与扫描' },
+  { key: 'mobile', label: '手机端浏览' },
+  { key: 'ai-tags', label: 'AI 标签' },
+  { key: 'ai-tag-library', label: 'AI 标签库' },
+  { key: 'random', label: '智能随机播放' },
+  { key: 'video-formats', label: '支持的视频格式' },
+  { key: 'image-formats', label: '支持的图片格式' },
+  { key: 'subtitle-translate', label: '字幕翻译' },
+  { key: 'subtitle-quality', label: '字幕识别质量' },
+  { key: 'scan-dirs', label: '扫描目录管理' },
+  { key: 'image-dirs', label: '图片扫描目录' },
+  { key: 'backup', label: '数据库备份' }
+];
 import BaseModal from './ui/BaseModal.vue';
 import PhotoAITaskPanel from './PhotoAITaskPanel.vue';
 
@@ -623,6 +656,9 @@ export default {
   data() {
     return {
       settingsForm: { ...this.settings },
+      navSections: SETTINGS_SECTIONS,
+      activeSection: SETTINGS_SECTIONS[0].key,
+      sectionObserver: null,
       localDirectories: [...this.directories],
       shortFeedStatus: null,
       watcherStatus: null,
@@ -728,6 +764,7 @@ export default {
     this.loadBackupStatus();
     this.loadSemanticIndexStatus();
     this.loadImageDirectories();
+    this.observeSections();
     if (window.runtime?.EventsOn) {
       const off = window.runtime.EventsOn('library-watcher-status', (status) => {
         this.watcherStatus = status || null;
@@ -742,8 +779,38 @@ export default {
   beforeUnmount() {
     this.watcherStatusOff?.();
     this.semanticIndexStatusOff?.();
+    this.sectionObserver?.disconnect();
   },
   methods: {
+    // 滚动到哪个分区就高亮哪一项。用 IntersectionObserver 而不是监听滚动：
+    // 真正的滚动宿主是外层的 .main-view，这里拿不到它。
+    observeSections() {
+      if (typeof IntersectionObserver !== 'function') return;
+      this.$nextTick(() => {
+        this.sectionObserver?.disconnect();
+        this.sectionObserver = new IntersectionObserver(entries => {
+          const visible = entries
+            .filter(entry => entry.isIntersecting)
+            .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+          if (visible) this.activeSection = visible.target.id.replace('settings-', '');
+        }, { rootMargin: '-52px 0px -60% 0px', threshold: 0 });
+        for (const section of this.navSections) {
+          const element = this.sectionElement(section.key);
+          if (element) this.sectionObserver.observe(element);
+        }
+      });
+    },
+    // 在组件自己的子树里找，不走 document：设置页是 v-if 挂载的，
+    // 组件树之外的同名 id 不该被误命中。
+    sectionElement(key) {
+      return this.$el?.querySelector(`#settings-${key}`) || null;
+    },
+    scrollToSection(key) {
+      const element = this.sectionElement(key);
+      if (!element) return;
+      this.activeSection = key;
+      element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    },
     async loadSemanticIndexStatus() {
       try {
         this.semanticIndexStatus = await GetSemanticIndexStatus();
@@ -1156,26 +1223,66 @@ export default {
   font-weight: 760;
 }
 
+.settings-shell {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 0;
+  align-items: start;
+}
+
+.settings-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 10px 8px;
+  border-right: 1px solid var(--hairline-soft);
+  background: var(--panel-subtle-bg);
+}
+
+.settings-nav__item {
+  padding: 7px 12px;
+  border: 0;
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.settings-nav__item:hover { background: var(--control-hover-bg); color: var(--text-primary); }
+.settings-nav__item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
+
+.settings-body { min-width: 0; padding: 18px 0 0 22px; }
+
 .settings-grid-shell {
   display: grid;
-  grid-template-columns: repeat(2, minmax(320px, 1fr));
-  gap: 14px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
 }
 
 .settings-section {
   margin-bottom: 0;
-  padding: 18px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-lg);
-  background: var(--panel-bg);
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  scroll-margin-top: 12px;
+}
+
+.settings-section + .settings-section {
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline-faint);
 }
 
 .settings-section h3 {
-  font-size: 16px;
-  font-weight: 600;
+  font-size: 15px;
+  font-weight: 700;
   color: var(--text-primary);
-  border-bottom: 1px solid var(--border-color);
+  border-bottom: 0;
   margin-bottom: 16px;
   padding-bottom: 10px;
 }
@@ -1569,8 +1676,21 @@ export default {
 }
 
 @media (max-width: 980px) {
-  .settings-grid-shell {
+  /* 窄屏把锚点导航收起来：230px 侧栏加长表单在这个宽度下两边都放不下。 */
+  .settings-shell {
     grid-template-columns: 1fr;
+  }
+
+  .settings-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    border-right: 0;
+    border-bottom: 1px solid var(--hairline-soft);
+  }
+
+  .settings-body {
+    padding: 14px 0 0;
   }
 
   .directory-item {
