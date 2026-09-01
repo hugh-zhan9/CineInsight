@@ -91,7 +91,7 @@
         <p class="help-text">只控制质量视图入口；已有归因和审核记录不会删除。</p>
       </div>
       <div class="setting-item scan-blacklist-setting">
-        <div :id="`settings-mobile`" class="settings-section-heading">
+        <div class="settings-section-heading">
           <label>扫描目录黑名单</label>
           <button type="button" class="btn-secondary btn-compact" @click="addScanExcludeDirectory">选择目录</button>
         </div>
@@ -105,7 +105,7 @@
         <p class="help-text">黑名单目录及其全部子目录不会被后续扫描收录；已有视频记录不会自动删除。</p>
       </div>
       <div class="setting-item scan-blacklist-setting">
-        <div :id="`settings-ai-tags`" class="settings-section-heading">
+        <div class="settings-section-heading">
           <label>图片扫描黑名单</label>
           <button type="button" class="btn-secondary btn-compact" @click="addImageScanExcludeDirectory">选择目录</button>
         </div>
@@ -120,7 +120,7 @@
       </div>
     </div>
 
-    <div :id="`settings-ai-tag-library`" class="settings-section">
+    <div :id="`settings-mobile`" class="settings-section">
       <h3>手机端浏览</h3>
       <div class="short-feed-status">
         <div class="short-feed-status-main">
@@ -167,7 +167,7 @@
       <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
     </div>
 
-    <div :id="`settings-random`" class="settings-section">
+    <div :id="`settings-ai-tags`" class="settings-section">
       <h3>AI 标签</h3>
       <div class="setting-item">
         <label>接口地址</label>
@@ -266,8 +266,8 @@
       <PhotoAITaskPanel />
     </div>
 
-	<div :id="`settings-video-formats`" class="settings-section ai-tag-library-section">
-	  <div :id="`settings-image-formats`" class="settings-section-heading">
+	<div :id="`settings-ai-tag-library`" class="settings-section ai-tag-library-section">
+	  <div class="settings-section-heading">
 		<h3>AI 标签库</h3>
 		<button type="button" class="btn-secondary" :disabled="aiTagLibraryLoading || !aiTagLibraryLoaded" @click="addAITagLibraryGroup">添加分类</button>
 	  </div>
@@ -300,7 +300,7 @@
 	</div>
 
     <!-- 智能随机播放设置 -->
-    <div :id="`settings-subtitle-translate`" class="settings-section">
+    <div :id="`settings-random`" class="settings-section">
       <h3>智能随机播放</h3>
       <div class="setting-item">
         <label>播放权重（1次普通播放 = N次随机播放）</label>
@@ -324,7 +324,7 @@
     </div>
 
     <!-- 视频格式设置 -->
-    <div :id="`settings-subtitle-quality`" class="settings-section">
+    <div :id="`settings-video-formats`" class="settings-section">
       <h3>支持的视频格式</h3>
       <div class="setting-item">
         <textarea
@@ -338,7 +338,7 @@
     </div>
 
     <!-- 图片格式设置 -->
-    <div :id="`settings-scan-dirs`" class="settings-section">
+    <div :id="`settings-image-formats`" class="settings-section">
       <h3>支持的图片格式</h3>
       <div class="setting-item">
         <textarea
@@ -353,7 +353,7 @@
     </div>
 
     <!-- 字幕设置 -->
-    <div :id="`settings-image-dirs`" class="settings-section">
+    <div :id="`settings-subtitle-translate`" class="settings-section">
       <h3>字幕翻译</h3>
       <div class="setting-item">
         <label class="switch">
@@ -414,7 +414,7 @@
       </template>
     </div>
 
-    <div :id="`settings-backup`" class="settings-section">
+    <div :id="`settings-subtitle-quality`" class="settings-section">
       <h3>字幕识别质量</h3>
       <div class="setting-item">
         <label>WhisperX 模型</label>
@@ -435,7 +435,7 @@
     </div>
 
     <!-- 扫描目录管理 -->
-    <div class="settings-section">
+    <div :id="`settings-scan-dirs`" class="settings-section">
       <h3>扫描目录管理</h3>
       <div class="directories-list">
         <div v-for="dir in localDirectories" :key="dir.id" class="directory-item">
@@ -464,7 +464,7 @@
     </div>
 
     <!-- 图片扫描目录管理 -->
-    <div class="settings-section">
+    <div :id="`settings-image-dirs`" class="settings-section">
       <h3>图片扫描目录</h3>
       <div class="directories-list">
         <div v-for="dir in localImageDirectories" :key="dir.id" class="directory-item" data-test="image-directory-item">
@@ -482,7 +482,63 @@
       <button @click="showAddImageDirectoryDialog = true" class="btn-primary settings-section-action" data-test="add-image-directory">添加图片目录</button>
     </div>
 
-    <div class="settings-section backup-settings-section">
+    <div :id="`settings-database`" class="settings-section">
+      <h3>数据库</h3>
+      <div class="database-status">
+        <div class="database-status__row">
+          <span>当前后端</span>
+          <strong data-test="db-backend">{{ backendLabel(databaseStatus.backend) }}</strong>
+        </div>
+        <div class="database-status__row">
+          <span>库位置</span>
+          <code>{{ databaseStatus.location || '—' }}</code>
+        </div>
+        <div class="database-status__row">
+          <span>语义检索</span>
+          <strong :class="{ 'database-status__off': !databaseStatus.semantic_available }">
+            {{ databaseStatus.semantic_available ? '可用' : '不可用' }}
+          </strong>
+          <small v-if="!databaseStatus.semantic_available && databaseStatus.semantic_reason">{{ databaseStatus.semantic_reason }}</small>
+        </div>
+      </div>
+
+      <p v-if="databaseStatus.pending_restart" class="database-restart-notice" role="status" data-test="db-pending-restart">
+        已切换到 {{ backendLabel(databaseStatus.backend) }}，但当前仍在使用切换前的库。<strong>重启应用后生效。</strong>
+      </p>
+
+      <div class="setting-item">
+        <label>切换后端</label>
+        <div class="database-switch-row">
+          <select v-model="switchTarget" class="select-input" data-test="db-switch-target">
+            <option value="sqlite">SQLite（单文件，无需额外安装）</option>
+            <option value="postgres">PostgreSQL（支持语义检索）</option>
+          </select>
+          <button
+            type="button"
+            class="btn-secondary"
+            :disabled="switchBusy || switchTarget === databaseStatus.backend"
+            data-test="db-preflight"
+            @click="preflightDatabaseSwitch"
+          >检查目标库</button>
+          <button
+            type="button"
+            class="btn-secondary btn-danger-outline"
+            :disabled="switchBusy || !switchPreflight || !switchPreflight.empty"
+            data-test="db-switch-start"
+            @click="startDatabaseSwitch"
+          >{{ switchBusy ? '迁移中...' : '迁移并切换' }}</button>
+        </div>
+        <p v-if="switchPreflight" class="help-text" data-test="db-preflight-result">{{ switchPreflight.message }}</p>
+        <p v-if="switchProgressText" class="help-text" data-test="db-switch-progress">{{ switchProgressText }}</p>
+        <p class="help-text">
+          迁移是<strong>复制</strong>：原来的库不会被清空，切换后想改回去只要把后端选回来重启即可。
+          代价是切换之后在新库里产生的改动不会回到旧库。
+        </p>
+        <p class="help-text">SQLite 下语义检索不可用——它依赖 PostgreSQL 的 pgvector 扩展。</p>
+      </div>
+    </div>
+
+    <div :id="`settings-backup`" class="settings-section backup-settings-section">
       <h3>数据库备份</h3>
       <div class="backup-status" :class="{ 'backup-status--error': backupStatus && !backupStatus.available }">
         <strong>{{ backupStatusText }}</strong>
@@ -623,7 +679,7 @@
 </template>
 
 <script>
-import { UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, ClearAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../wailsjs/go/main/App';
+import { GetDatabaseBackendStatus, PreflightDatabaseSwitch, StartDatabaseSwitch, UpdateSettings, SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, GetShortFeedServerStatus, GetAITagLibrary, SaveAITagLibrary, ClearAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus, RetryLibraryWatcherRoot, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup, GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../wailsjs/go/main/App';
 import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
 
 // 左侧锚点导航的分区清单，顺序与模板里的分区顺序一致。
@@ -640,6 +696,7 @@ const SETTINGS_SECTIONS = [
   { key: 'subtitle-quality', label: '字幕识别质量' },
   { key: 'scan-dirs', label: '扫描目录管理' },
   { key: 'image-dirs', label: '图片扫描目录' },
+  { key: 'database', label: '数据库' },
   { key: 'backup', label: '数据库备份' }
 ];
 import BaseModal from './ui/BaseModal.vue';
@@ -657,6 +714,12 @@ export default {
     return {
       settingsForm: { ...this.settings },
       navSections: SETTINGS_SECTIONS,
+      databaseStatus: { backend: '', location: '', semantic_available: false, semantic_reason: '', pending_restart: false },
+      switchTarget: 'sqlite',
+      switchPreflight: null,
+      switchStatus: null,
+      switchBusy: false,
+      switchStatusOff: null,
       activeSection: SETTINGS_SECTIONS[0].key,
       sectionObserver: null,
       localDirectories: [...this.directories],
@@ -728,6 +791,15 @@ export default {
     }
   },
   computed: {
+    switchProgressText() {
+      const status = this.switchStatus;
+      if (!status) return '';
+      if (status.failed) return `迁移失败：${status.message}`;
+      if (status.completed) return status.message;
+      if (!status.running) return '';
+      const scope = status.table_total ? `（${status.table_index}/${status.table_total}）` : '';
+      return `${status.message}${scope}`;
+    },
     scanExcludePaths() {
       return [...new Set(String(this.settingsForm.scan_exclude_paths || '').split(/\r?\n/).map(path => path.trim()).filter(Boolean))];
     },
@@ -765,6 +837,7 @@ export default {
     this.loadSemanticIndexStatus();
     this.loadImageDirectories();
     this.observeSections();
+    this.loadDatabaseStatus();
     if (window.runtime?.EventsOn) {
       const off = window.runtime.EventsOn('library-watcher-status', (status) => {
         this.watcherStatus = status || null;
@@ -774,14 +847,57 @@ export default {
         this.semanticIndexStatus = { ...(this.semanticIndexStatus || {}), ...(status || {}) };
       });
       if (typeof semanticOff === 'function') this.semanticIndexStatusOff = semanticOff;
+      const switchOff = window.runtime.EventsOn('database-switch-state', (status) => {
+        this.switchStatus = status || null;
+        this.switchBusy = Boolean(status?.running);
+        if (status && !status.running) this.loadDatabaseStatus();
+      });
+      if (typeof switchOff === 'function') this.switchStatusOff = switchOff;
     }
   },
   beforeUnmount() {
     this.watcherStatusOff?.();
     this.semanticIndexStatusOff?.();
+    this.switchStatusOff?.();
     this.sectionObserver?.disconnect();
   },
   methods: {
+    backendLabel(backend) {
+      if (backend === 'sqlite') return 'SQLite';
+      if (backend === 'postgres') return 'PostgreSQL';
+      return backend || '未知';
+    },
+    async loadDatabaseStatus() {
+      try {
+        this.databaseStatus = await GetDatabaseBackendStatus();
+        // 目标默认选成另一个后端：选中当前后端没有意义，切换按钮也会禁用。
+        this.switchTarget = this.databaseStatus.backend === 'sqlite' ? 'postgres' : 'sqlite';
+      } catch (err) {
+        this.databaseStatus = { backend: '', location: '', semantic_available: false, semantic_reason: '', pending_restart: false };
+      }
+    },
+    async preflightDatabaseSwitch() {
+      this.switchPreflight = null;
+      try {
+        this.switchPreflight = await PreflightDatabaseSwitch(this.switchTarget);
+      } catch (err) {
+        this.switchPreflight = { empty: false, reachable: false, message: String(err) };
+      }
+    },
+    async startDatabaseSwitch() {
+      if (!window.confirm(
+        '迁移会把当前库的全部数据复制到目标库，原库保持不变。完成后需要重启应用才生效。\n\n' +
+        '注意：切换之后在新库里产生的改动不会回到旧库。继续吗？'
+      )) return;
+      this.switchBusy = true;
+      this.switchStatus = null;
+      try {
+        await StartDatabaseSwitch(this.switchTarget);
+      } catch (err) {
+        this.switchBusy = false;
+        this.switchStatus = { failed: true, message: String(err) };
+      }
+    },
     // 滚动到哪个分区就高亮哪一项。用 IntersectionObserver 而不是监听滚动：
     // 真正的滚动宿主是外层的 .main-view，这里拿不到它。
     observeSections() {
@@ -1254,6 +1370,35 @@ export default {
 
 .settings-nav__item:hover { background: var(--control-hover-bg); color: var(--text-primary); }
 .settings-nav__item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
+
+.database-status {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md);
+  background: var(--panel-subtle-bg);
+  font-size: 13px;
+}
+
+.database-status__row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.database-status__row > span:first-child { min-width: 72px; color: var(--text-muted); font-size: 12px; }
+.database-status__row code { font-family: var(--font-mono); font-size: 12px; color: var(--text-secondary); word-break: break-all; }
+.database-status__row small { color: var(--text-muted); font-size: 11.5px; }
+.database-status__off { color: var(--warning-text); }
+
+.database-restart-notice {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius);
+  background: var(--warning-soft);
+  color: var(--warning-text);
+  font-size: 12.5px;
+}
+
+.database-switch-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.database-switch-row .select-input { width: auto; min-width: 240px; }
 
 .settings-body { min-width: 0; padding: 18px 0 0 22px; }
 

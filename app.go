@@ -40,6 +40,7 @@ type App struct {
 	tagService            *services.TagService
 	settingsService       *services.SettingsService
 	backupService         *services.BackupService
+	databaseSwitchService *services.DatabaseSwitchService
 	directoryService      *services.DirectoryService
 	subtitleService       *services.SubtitleService
 	subtitleWorkbench     *services.SubtitleWorkbenchService
@@ -109,6 +110,7 @@ func NewApp() *App {
 		tagService:            &services.TagService{},
 		settingsService:       &services.SettingsService{},
 		backupService:         services.NewBackupService(dataDir),
+		databaseSwitchService: services.NewDatabaseSwitchService(dataDir),
 		directoryService:      &services.DirectoryService{},
 		subtitleService:       subtitleService,
 		subtitleWorkbench:     services.NewSubtitleWorkbenchService(subtitleService),
@@ -163,6 +165,9 @@ func (a *App) startup(ctx context.Context) {
 	a.resetImageAITaggingService()
 	a.technicalBackfill.SetEventEmitter(func(status services.TechnicalBackfillStatus) {
 		emit("technical-backfill-state", status)
+	})
+	a.databaseSwitchService.SetProgressSink(func(status services.DatabaseSwitchStatus) {
+		emit("database-switch-state", status)
 	})
 	a.imageCleanupService.SetEventEmitter(func(progress services.ImageCleanupProgress) {
 		emit("image-cleanup-progress", progress)
@@ -513,6 +518,39 @@ func (a *App) GetVideoDetails(videoID uint) (*services.VideoDetails, error) {
 // CountLibraryVideos 返回当前筛选命中的视频条数，供片库结果条回显。
 func (a *App) CountLibraryVideos(filter services.LibraryFilter) (int64, error) {
 	return a.videoService.CountLibraryVideos(filter)
+}
+
+// GetDatabaseBackendStatus 返回当前数据库后端、库位置与语义检索可用性。
+func (a *App) GetDatabaseBackendStatus() services.DatabaseBackendStatus {
+	return a.databaseSwitchService.Status()
+}
+
+// PreflightDatabaseSwitch 检查目标后端能否连接、是否为空。不写任何数据。
+func (a *App) PreflightDatabaseSwitch(target string) (*services.DatabaseSwitchPreflight, error) {
+	return a.databaseSwitchService.Preflight(target)
+}
+
+// StartDatabaseSwitch 迁移数据并写入后端配置；成功后需要重启才生效。
+// 迁移在后台跑，进度走 database-switch-state 事件，GetDatabaseSwitchStatus 兜底。
+func (a *App) StartDatabaseSwitch(target string) error {
+	preflight, err := a.databaseSwitchService.Preflight(target)
+	if err != nil {
+		return err
+	}
+	if !preflight.Reachable || !preflight.Empty {
+		return fmt.Errorf("%s", preflight.Message)
+	}
+	go func() {
+		if err := a.databaseSwitchService.Switch(context.Background(), target); err != nil {
+			log.Printf("API StartDatabaseSwitch target=%s err=%v", target, err)
+		}
+	}()
+	return nil
+}
+
+// GetDatabaseSwitchStatus 返回迁移进度，供前端轮询兜底。
+func (a *App) GetDatabaseSwitchStatus() services.DatabaseSwitchStatus {
+	return a.databaseSwitchService.SwitchStatus()
 }
 
 // GetLibraryCounts 返回应用头部展示的视频与图片总数。

@@ -136,6 +136,10 @@ export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
 export function GetCollectionDetail(arg1:number):Promise<services.CollectionDetail>;
 
+export function GetDatabaseBackendStatus():Promise<services.DatabaseBackendStatus>;
+
+export function GetDatabaseSwitchStatus():Promise<services.DatabaseSwitchStatus>;
+
 export function GetEnhancementCapability():Promise<services.EnhancementRuntimeCapability>;
 
 export function GetEnhancementVideoPreflight(arg1:number):Promise<services.EnhancementVideoPreflight>;
@@ -252,6 +256,8 @@ export function PlayRandomVideoWithFilter(arg1:services.RandomPlayRequest):Promi
 
 export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
 
+export function PreflightDatabaseSwitch(arg1:string):Promise<services.DatabaseSwitchPreflight>;
+
 export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void>;
 
 export function PreviewExternally(arg1:number):Promise<void>;
@@ -367,6 +373,8 @@ export function SetVideoFavorite(arg1:number,arg2:boolean):Promise<models.Video>
 export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
 
 export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
+
+export function StartDatabaseSwitch(arg1:string):Promise<void>;
 
 export function StartImageAITagging():Promise<services.ImageAITaggingStatus>;
 

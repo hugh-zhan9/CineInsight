@@ -266,6 +266,14 @@ export function GetCollectionDetail(arg1) {
   return window['go']['main']['App']['GetCollectionDetail'](arg1);
 }
 
+export function GetDatabaseBackendStatus() {
+  return window['go']['main']['App']['GetDatabaseBackendStatus']();
+}
+
+export function GetDatabaseSwitchStatus() {
+  return window['go']['main']['App']['GetDatabaseSwitchStatus']();
+}
+
 export function GetEnhancementCapability() {
   return window['go']['main']['App']['GetEnhancementCapability']();
 }
@@ -498,6 +506,10 @@ export function PlayVideo(arg1) {
   return window['go']['main']['App']['PlayVideo'](arg1);
 }
 
+export function PreflightDatabaseSwitch(arg1) {
+  return window['go']['main']['App']['PreflightDatabaseSwitch'](arg1);
+}
+
 export function PrepareSubtitleEngine(arg1) {
   return window['go']['main']['App']['PrepareSubtitleEngine'](arg1);
 }
@@ -728,6 +740,10 @@ export function SetVideoWatched(arg1, arg2) {
 
 export function StartCleanupAnalysis(arg1, arg2, arg3) {
   return window['go']['main']['App']['StartCleanupAnalysis'](arg1, arg2, arg3);
+}
+
+export function StartDatabaseSwitch(arg1) {
+  return window['go']['main']['App']['StartDatabaseSwitch'](arg1);
 }
 
 export function StartImageAITagging() {

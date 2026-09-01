@@ -1,6 +1,6 @@
 ---
 source: docs/loopx/design/2026-09-01-sqlite-backend-and-switching/需求设计文档.md
-status: ready
+status: done
 slices:
   - id: P-001
     status: done
@@ -21,7 +21,7 @@ slices:
     status: done
     depends: [P-002]
   - id: P-007
-    status: pending
+    status: done
     depends: [P-006]
   - id: P-008
     status: done

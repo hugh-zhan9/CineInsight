@@ -1442,6 +1442,74 @@ export namespace services {
 	}
 	
 	
+	export class DatabaseBackendStatus {
+	    backend: string;
+	    location: string;
+	    semantic_available: boolean;
+	    semantic_reason: string;
+	    pending_restart: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DatabaseBackendStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.backend = source["backend"];
+	        this.location = source["location"];
+	        this.semantic_available = source["semantic_available"];
+	        this.semantic_reason = source["semantic_reason"];
+	        this.pending_restart = source["pending_restart"];
+	    }
+	}
+	export class DatabaseSwitchPreflight {
+	    target: string;
+	    reachable: boolean;
+	    empty: boolean;
+	    location: string;
+	    reason_code: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DatabaseSwitchPreflight(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.target = source["target"];
+	        this.reachable = source["reachable"];
+	        this.empty = source["empty"];
+	        this.location = source["location"];
+	        this.reason_code = source["reason_code"];
+	        this.message = source["message"];
+	    }
+	}
+	export class DatabaseSwitchStatus {
+	    running: boolean;
+	    target: string;
+	    table: string;
+	    table_index: number;
+	    table_total: number;
+	    completed: boolean;
+	    failed: boolean;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DatabaseSwitchStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.target = source["target"];
+	        this.table = source["table"];
+	        this.table_index = source["table_index"];
+	        this.table_total = source["table_total"];
+	        this.completed = source["completed"];
+	        this.failed = source["failed"];
+	        this.message = source["message"];
+	    }
+	}
 	export class EnhancementCreateRequest {
 	    video_id: number;
 	    profile: string;

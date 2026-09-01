@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
+  'GetDatabaseBackendStatus', 'PreflightDatabaseSwitch', 'StartDatabaseSwitch',
   'UpdateSettings', 'SelectDirectory', 'GetAllDirectories', 'AddDirectory', 'UpdateDirectory', 'DeleteDirectory',
   'GetShortFeedServerStatus', 'GetAITagLibrary', 'SaveAITagLibrary', 'ClearAITagLibrary', 'TriggerAITagging',
   'GetLibraryWatcherStatus', 'RetryLibraryWatcherRoot', 'GetBackupStatus', 'ListDatabaseBackups',
@@ -502,14 +503,21 @@ describe('SettingsPage database backup', () => {
 });
 
 describe('SettingsPage 锚点导航', () => {
-  it('13 个分区各有锚点，导航项与分区一一对应', async () => {
+  // 这条断言必须比对"id 与它下面的标题是否一致"，只查 id 存在是不够的——
+  // 最初的实现就是因为 settings-section-heading 的类名以 settings-section 开头
+  // 被误匹配，吃掉两个 id 让后面全体错位：点「扫描目录管理」滚到了「字幕翻译」。
+  it('每个锚点都落在标题相符的分区上', async () => {
     const wrapper = await mountPage();
     const keys = wrapper.vm.navSections.map(section => section.key);
-    expect(keys).toHaveLength(13);
-    for (const key of keys) {
-      expect(wrapper.find(`#settings-${key}`).exists()).toBe(true);
+    expect(wrapper.findAll('.settings-nav__item')).toHaveLength(keys.length);
+
+    for (const section of wrapper.vm.navSections) {
+      const element = wrapper.find(`#settings-${section.key}`);
+      expect(element.exists()).toBe(true);
+      const heading = element.find('h3');
+      expect(heading.exists()).toBe(true);
+      expect(heading.text()).toBe(section.label);
     }
-    expect(wrapper.findAll('.settings-nav__item')).toHaveLength(13);
     wrapper.unmount();
   });
 
@@ -520,6 +528,76 @@ describe('SettingsPage 锚点导航', () => {
     wrapper.vm.scrollToSection('scan-dirs');
     expect(wrapper.vm.activeSection).toBe('scan-dirs');
     expect(target.scrollIntoView).toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});
+
+describe('SettingsPage 数据库后端切换', () => {
+  it('展示当前后端、库位置与语义检索可用性', async () => {
+    api.GetDatabaseBackendStatus.mockResolvedValue({
+      backend: 'sqlite', location: '/home/me/.video-master/library.db',
+      semantic_available: false, semantic_reason: '语义向量检索需要 PostgreSQL pgvector',
+      pending_restart: false
+    });
+    const wrapper = await mountPage();
+    expect(wrapper.find('[data-test="db-backend"]').text()).toBe('SQLite');
+    expect(wrapper.text()).toContain('/home/me/.video-master/library.db');
+    expect(wrapper.text()).toContain('pgvector');
+    // 目标默认选另一个后端——选中当前后端没有意义。
+    expect(wrapper.vm.switchTarget).toBe('postgres');
+    wrapper.unmount();
+  });
+
+  it('目标库非空时不允许开始迁移', async () => {
+    const wrapper = await mountPage();
+    api.PreflightDatabaseSwitch.mockResolvedValue({
+      target: 'sqlite', reachable: true, empty: false,
+      reason_code: 'not_empty', message: '目标库不是空的（videos 有 12 行）'
+    });
+    await wrapper.vm.preflightDatabaseSwitch();
+    await wrapper.vm.$nextTick();
+
+    expect(wrapper.find('[data-test="db-preflight-result"]').text()).toContain('不是空的');
+    expect(wrapper.find('[data-test="db-switch-start"]').attributes('disabled')).toBeDefined();
+    wrapper.unmount();
+  });
+
+  it('预检通过后才放开迁移按钮', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.find('[data-test="db-switch-start"]').attributes('disabled')).toBeDefined();
+
+    api.PreflightDatabaseSwitch.mockResolvedValue({
+      target: 'sqlite', reachable: true, empty: true, message: '目标可用，可以开始迁移'
+    });
+    await wrapper.vm.preflightDatabaseSwitch();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="db-switch-start"]').attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('迁移进度按表上报，失败与完成各有明确文案', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.switchStatus = { running: true, message: '正在复制 videos', table_index: 3, table_total: 38 };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.switchProgressText).toBe('正在复制 videos（3/38）');
+
+    wrapper.vm.switchStatus = { running: false, completed: true, message: '迁移完成，重启应用后生效' };
+    expect(wrapper.vm.switchProgressText).toContain('重启');
+
+    wrapper.vm.switchStatus = { running: false, failed: true, message: '目标库不是空的' };
+    expect(wrapper.vm.switchProgressText).toContain('迁移失败');
+    wrapper.unmount();
+  });
+
+  it('配置已切换但未重启时给出明确提示', async () => {
+    api.GetDatabaseBackendStatus.mockResolvedValue({
+      backend: 'sqlite', location: '/tmp/library.db',
+      semantic_available: false, semantic_reason: '', pending_restart: true
+    });
+    const wrapper = await mountPage();
+    const notice = wrapper.find('[data-test="db-pending-restart"]');
+    expect(notice.exists()).toBe(true);
+    expect(notice.text()).toContain('重启应用后生效');
     wrapper.unmount();
   });
 });

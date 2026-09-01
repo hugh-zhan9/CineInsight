@@ -129,6 +129,9 @@ func loadEnvConfig() {
 	}
 }
 
+// PostgresDSNFromEnv 供切换流程在不改动当前连接的前提下打开目标库。
+func PostgresDSNFromEnv() (string, error) { return postgresDSNFromEnv() }
+
 func postgresDSNFromEnv() (string, error) {
 	config, err := PostgresCLIConfigFromEnv()
 	if err != nil {
