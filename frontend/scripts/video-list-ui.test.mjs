@@ -14,28 +14,49 @@ const componentCss = readFileSync(new URL('../src/styles/components.css', import
 
 assert.match(mainSource, /styles\/tokens\.css/, 'desktop entry should load shared design tokens');
 assert.match(appSource, /class="app-shell glass-app-shell"/, 'app shell should use the shared glass shell treatment');
-assert.doesNotMatch(videoListSource, /<ActionMenu\b/, 'video list toolbar should not hide primary management actions in a more menu');
-assert.doesNotMatch(videoListSource, /ui\/ActionMenu\.vue/, 'video list should not keep the unused more-menu primitive for primary actions');
-assert.match(videoListSource, /toolbar-primary/, 'video list should split primary toolbar controls from secondary actions');
-assert.match(videoListSource, /class="toolbar-secondary"/, 'saved views and playback controls should have a dedicated toolbar row');
-assert.match(videoListSource, /toolbar-cluster toolbar-cluster--views/, 'saved-view controls should wrap as one logical cluster');
-assert.match(videoListSource, /toolbar-cluster toolbar-cluster--playback/, 'random playback controls should wrap as one logical cluster');
-assert.match(videoListSource, /class="toolbar-management"/, 'library management actions should have a dedicated toolbar row');
-assert.match(
-  videoListSource,
-  /\.toolbar-cluster \.select-input\s*{[^}]*width:\s*132px;[^}]*flex:\s*0 0 132px;/s,
-  'toolbar selects should not inherit the global full-row width'
-);
-assert.match(videoListSource, /selection-toolbar/, 'batch actions should live in a contextual selection toolbar');
-assert.doesNotMatch(videoListSource, /<ActionMenu label="更多">[\s\S]*AI 标签管理[\s\S]*<\/ActionMenu>/, 'AI tag management should not be hidden in the more menu');
-assert.match(videoListSource, /<button[^>]+@click="openAITagReviewDialog\(\)"[^>]*>AI 标签管理<\/button>/, 'AI tag management should be a direct toolbar action');
+// 2026-09-01 桌面端重构原型反转了此前"管理动作不得藏进更多菜单"的结论：
+// 25 个平铺控件里真正跟着查询走的只有前 9 个，12 个库维护动作改为收进「管理」
+// 菜单分四组。下面钉的是新结构，以及"收进去之后一个都不能少"。
+assert.match(videoListSource, /class="toolbar-row"/, 'toolbar should have a query row of always-on controls');
+assert.match(videoListSource, /class="toolbar-row toolbar-row--tags"/, 'tag filtering and selection should live on their own row');
+assert.match(videoListSource, /class="segmented"/, 'search mode and layout should use segmented controls');
+assert.match(videoListSource, /class="split-btn"/, 'random play should be one split button, not a select plus two buttons');
+assert.match(videoListSource, /toggleToolbarMenu\('filter', 'filterTrigger'\)/, 'range conditions should collapse into a filter popover');
+assert.match(videoListSource, /toggleToolbarMenu\('manage', 'manageTrigger'\)/, 'library maintenance should collapse into a manage menu');
+
+// 管理菜单的四个分组和 12 个动作一个都不能丢。
+for (const heading of ['扫描', '整理', '补全', '维护']) {
+  assert.match(videoListSource, new RegExp(`heading: '${heading}'`), `manage menu should keep the ${heading} group`);
+}
+for (const id of [
+  'scan-new', 'scan-incremental', 'move-folder', 'rename-folder', 'export-nfo',
+  'backfill-technical', 'backfill-phash', 'backfill-local-metadata',
+  'ai-tags', 'tag-manager', 'cleanup', 'trash'
+]) {
+  assert.match(videoListSource, new RegExp(`id: '${id}'`), `manage menu should keep the ${id} action`);
+}
+assert.match(videoListSource, /case 'ai-tags': this\.openAITagReviewDialog\(\)/, 'manage menu should still open AI tag review');
+assert.match(videoListSource, /case 'cleanup': this\.openCleanupDialog\(\)/, 'manage menu should still open cleanup review');
+assert.match(videoListSource, /case 'trash': this\.openTrashDialog\(\)/, 'manage menu should still open the trash');
 assert.match(videoListSource, /aiTagSummary\.same_source_unread/, 'AI tag management should expose unread same-source relations');
 assert.match(videoListSource, /GetAITaggingStatusSummary/, 'same-source unread badge should refresh from the backend summary');
-// 按钮内多了"分析中/待审阅"徽标，但仍是工具栏上的直接入口。
-assert.match(videoListSource, /<button[^>]+@click="openCleanupDialog\(\)"[^>]*>\s*清理候选/, 'cleanup candidates should be a direct toolbar action');
-assert.match(videoListSource, /data-test="cleanup-badge-done"/, 'a completed background analysis should be surfaced on the toolbar button');
-assert.match(videoListSource, /<button[^>]+@click="showTagManagerDialog = true"[^>]*>标签管理<\/button>/, 'tag manager should be a direct toolbar action');
-assert.match(videoListSource, /@click="runIncrementalScan"/, 'video list should expose a manual incremental scan action');
+// 徽标从按钮搬到了「管理」按钮上，但仍要能一眼看到有待办。
+assert.match(videoListSource, /manageAttentionCount\(\)/, 'the manage button should carry a combined attention badge');
+assert.match(videoListSource, /待审阅 \$\{this\.cleanupBadgeCount\} 项/, 'a completed background analysis should still surface its count');
+
+// 运行中的补全任务把进度和取消让给了常驻状态条——按钮进了菜单，
+// 进度不能跟着一起藏起来，否则关掉菜单就看不到还在跑什么。
+assert.match(videoListSource, /技术信息 \{\{ technicalBackfill\.processed \}\}\/\{\{ technicalBackfill\.total \}\}/, 'running backfill progress should stay visible in the status banner');
+assert.match(videoListSource, /@click="cancelTechnicalBackfill"/, 'the status banner should carry the cancel action');
+assert.match(videoListSource, /@click="cancelPerceptualHashBackfill"/, 'the status banner should carry the phash cancel action');
+assert.match(videoListSource, /@click="cancelLocalMetadataExport"/, 'the status banner should carry the NFO export cancel action');
+
+// 结果条是新工具栏的回显机制：条件折叠进浮层后，靠它让用户知道还开着什么。
+assert.match(videoListSource, /class="result-bar"/, 'a result bar should echo the active conditions');
+assert.match(videoListSource, /activeConditionLabels/, 'the result bar should spell out active conditions in Chinese');
+assert.match(videoListSource, /CountLibraryVideos/, 'the result bar count should come from the backend filter count');
+assert.match(videoListSource, /selection-toolbar/, 'batch actions should live in a contextual selection toolbar');
+assert.match(videoListSource, /@click="runIncrementalScan"|case 'scan-incremental': this\.runIncrementalScan\(\)/, 'video list should expose a manual incremental scan action');
 assert.match(videoListSource, /SyncScanDirectories/, 'manual incremental scan should reuse the backend sync API');
 assert.match(videoListSource, /增量扫描完成：\$\{summary\.join\('，'\)\}/, 'manual incremental scan should report its result counts');
 assert.match(videoListSource, /scan-sync-status--\$\{incrementalScan\.state\}/, 'manual incremental scan should expose success, warning, and error states');
@@ -88,17 +109,25 @@ assert.match(videoListSource, /后台继续分析/, 'cleanup dialog should allow
 // 批量操作栏必须随吸顶工具栏一起常驻：选中项后向下滚动时若按钮被滚走，
 // 用户就得滚回顶部才能操作。用「selection-toolbar 出现在 .toolbar 闭合之前」
 // 来钉住它的嵌套位置，避免被挪回流内。
-const toolbarBlockMatch = videoListSource.match(/<div class="toolbar glass-surface">[\s\S]*?\n    <\/div>/);
-assert.ok(toolbarBlockMatch, 'sticky toolbar block should be locatable');
+// 非贪婪正则会停在工具栏自己的闭合上，改用两个稳定锚点之间的切片。
+const chromeStart = videoListSource.indexOf('<div class="library-chrome">');
+const chromeEnd = videoListSource.indexOf('v-if="incrementalScan.message"');
+assert.ok(chromeStart > 0 && chromeEnd > chromeStart, 'sticky library chrome block should be locatable');
+const chromeBlock = videoListSource.slice(chromeStart, chromeEnd);
 assert.match(
-  toolbarBlockMatch[0],
+  chromeBlock,
   /class="selection-toolbar"/,
-  'batch action bar must live inside the sticky toolbar so it stays visible while scrolling'
+  'batch action bar must live inside the sticky chrome so it stays visible while scrolling'
+);
+assert.match(
+  chromeBlock,
+  /class="result-bar"/,
+  'the result bar shares the sticky slot with the batch bar'
 );
 assert.match(
   videoListSource,
-  /\.toolbar\s*{[^}]*position:\s*sticky;/s,
-  'the toolbar that hosts the batch action bar must stay sticky'
+  /\.library-chrome\s*{[^}]*position:\s*sticky;/s,
+  'the chrome that hosts the batch action bar must stay sticky'
 );
 
 console.log('video-list-ui tests passed');

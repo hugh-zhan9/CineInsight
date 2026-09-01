@@ -22,6 +22,7 @@
           @click="select(item)"
           @mouseenter="activeIndex = index"
         >
+          <span v-if="hasCheckable" class="base-menu__check" aria-hidden="true">{{ item.checked ? '✓' : '' }}</span>
           <span class="base-menu__label">{{ item.label }}</span>
           <span v-if="item.shortcut" class="base-menu__shortcut">{{ item.shortcut }}</span>
         </button>
@@ -39,7 +40,7 @@ export default {
   name: 'BaseMenu',
   components: { BasePopover },
   props: {
-    // 每项是 { id, label, shortcut?, danger?, disabled? }，
+    // 每项是 { id, label, shortcut?, checked?, danger?, disabled? }，
     // 或 { heading } 分组标题，或 { divider: true } 分隔线。
     items: { type: Array, default: () => [] },
     anchor: { type: Object, default: null },
@@ -53,6 +54,10 @@ export default {
     return { activeIndex: -1, itemEls: {} };
   },
   computed: {
+    // 任意一项声明了 checked 就给整份菜单留出勾选列，免得选中与未选中的标签错位。
+    hasCheckable() {
+      return this.items.some(item => 'checked' in item);
+    },
     selectableIndexes() {
       return this.items
         .map((item, index) => ({ item, index }))
@@ -154,6 +159,13 @@ export default {
 .base-menu__item:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.base-menu__check {
+  width: 12px;
+  flex: none;
+  color: var(--accent-text);
+  font-size: 11px;
 }
 
 .base-menu__label {

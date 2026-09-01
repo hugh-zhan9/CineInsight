@@ -3,154 +3,227 @@
     :class="['page-content', { 'page-content--with-preview': previewOpen }]"
     @wheel="forwardWheelToScrollOwner"
   >
-    <div class="toolbar glass-surface">
-      <div class="toolbar-primary">
-        <div class="search-group">
-          <select v-model="searchMode" @change="handleSearch(true, true)" class="select-input toolbar-control">
-            <option value="file">文件搜索</option>
-            <option value="subtitle">字幕搜索</option>
-            <option value="semantic">语义搜索</option>
-          </select>
+    <!-- 工具栏与结果条/批量栏一起吸顶：选中若干项后向下滚动时，批量按钮
+         必须保持可见，否则要滚回顶部才能操作。 -->
+    <div class="library-chrome">
+    <!-- 工具栏按频率分三层（原型 A1）：第一行是跟着查询走的常驻控件，
+         区间类条件收进「筛选」浮层，12 个库维护动作收进「管理」菜单，
+         第二行放跟着列表内容走的标签筛选与选择动作。 -->
+    <div class="toolbar">
+      <div class="toolbar-row">
+        <div class="segmented" role="group" aria-label="搜索模式">
+          <button
+            v-for="mode in searchModeOptions"
+            :key="mode.value"
+            type="button"
+            :class="['segmented__btn', { active: searchMode === mode.value }]"
+            @click="setSearchMode(mode.value)"
+          >{{ mode.label }}</button>
+        </div>
+
+        <div class="search-field">
           <input
+            ref="searchInput"
             v-model="searchKeyword"
             @input="handleSearch(false, true)"
             @keyup.enter="handleSearch(true, true)"
             type="text"
-            :placeholder="searchMode === 'subtitle' ? '搜索字幕内容...' : (searchMode === 'semantic' ? '用自然语言描述想找的内容，回车搜索...' : '搜索标题、文件名或路径...')"
-            class="search-input toolbar-control"
+            :placeholder="searchPlaceholder"
+            class="search-field__input"
+            aria-label="搜索"
           />
+          <kbd class="search-field__hint">⌘F</kbd>
         </div>
 
-        <div class="filter-group">
-          <select v-model="smartView" @change="handleSearch(true)" class="select-input toolbar-control" aria-label="智能视图">
-            <option v-for="view in smartViewOptions" :key="view.value" :value="view.value">{{ view.label }}</option>
-          </select>
-          <select v-model="selectedSizeRange" @change="handleSearch(true)" class="select-input toolbar-control">
-            <option value="all">体积：全部</option>
-            <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
-          </select>
+        <select v-model="smartView" @change="handleSearch(true)" class="select-input toolbar-control" aria-label="智能视图">
+          <option v-for="view in smartViewOptions" :key="view.value" :value="view.value">{{ view.label }}</option>
+        </select>
 
-          <select v-model="selectedResRange" @change="handleSearch(true)" class="select-input toolbar-control">
-            <option value="all">分辨率：全部</option>
-            <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
-          </select>
-          <input v-model="minRating" @change="handleSearch(true)" type="text" inputmode="decimal" maxlength="4" class="text-input toolbar-control rating-filter-input" placeholder="最低评分" aria-label="最低评分，0 到 10" />
-          <input v-model="maxRating" @change="handleSearch(true)" type="text" inputmode="decimal" maxlength="4" class="text-input toolbar-control rating-filter-input" placeholder="最高评分" aria-label="最高评分，0 到 10" />
-          <select v-model="sortMode" @change="handleSearch(true)" class="select-input toolbar-control" aria-label="排序方式">
-            <option value="balanced">均衡排序</option>
-            <option value="rating_desc">评分从高到低</option>
-            <option value="rating_asc">评分从低到高</option>
-          </select>
+        <button
+          ref="filterTrigger"
+          type="button"
+          :class="['toolbar-btn', { 'toolbar-btn--on': activeFilterCount > 0 }]"
+          @click="toggleToolbarMenu('filter', 'filterTrigger')"
+        >
+          筛选
+          <span v-if="activeFilterCount > 0" class="toolbar-btn__badge">{{ activeFilterCount }}</span>
+          <span class="toolbar-btn__caret">▾</span>
+        </button>
+
+        <select v-model="sortMode" @change="handleSearch(true)" class="select-input toolbar-control" aria-label="排序方式">
+          <option value="balanced">均衡排序</option>
+          <option value="rating_desc">评分从高到低</option>
+          <option value="rating_asc">评分从低到高</option>
+        </select>
+
+        <div class="split-btn">
+          <button type="button" class="split-btn__main" @click="playRandom">按当前条件随机</button>
+          <span class="split-btn__divider" aria-hidden="true"></span>
+          <button
+            ref="randomTrigger"
+            type="button"
+            class="split-btn__caret"
+            aria-label="随机选项"
+            @click="toggleToolbarMenu('random', 'randomTrigger')"
+          >▾</button>
         </div>
+
+        <button
+          ref="viewTrigger"
+          type="button"
+          :class="['toolbar-btn', { 'toolbar-btn--on': selectedSavedViewID > 0 }]"
+          @click="toggleToolbarMenu('view', 'viewTrigger')"
+        >{{ selectedSavedViewName || '视图' }}<span class="toolbar-btn__caret">▾</span></button>
+
+        <div class="segmented" role="group" aria-label="片库布局">
+          <button type="button" :class="['segmented__btn', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
+          <button type="button" :class="['segmented__btn', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
+        </div>
+
+        <button
+          ref="manageTrigger"
+          type="button"
+          class="toolbar-btn toolbar-btn--strong"
+          @click="toggleToolbarMenu('manage', 'manageTrigger')"
+        >
+          管理
+          <span v-if="manageAttentionCount > 0" class="toolbar-btn__badge">{{ manageAttentionCount }}</span>
+          <span class="toolbar-btn__caret">▾</span>
+        </button>
       </div>
 
-      <div class="toolbar-secondary">
-        <div class="toolbar-cluster toolbar-cluster--views">
-          <select v-model="selectedSavedViewID" @change="applySelectedSavedView" class="select-input saved-view-select" aria-label="保存视图">
-            <option :value="0">保存视图</option>
-            <option v-for="view in savedViews" :key="view.id" :value="view.id">{{ view.name }}</option>
-          </select>
-          <button type="button" class="btn-secondary" @click="openSaveViewDialog">保存当前视图</button>
-          <button v-if="selectedSavedViewID" type="button" class="btn-secondary" @click="deleteSelectedSavedView">删除该视图</button>
-          <div class="layout-toggle" aria-label="片库布局">
-            <button type="button" :class="['btn-secondary', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
-            <button type="button" :class="['btn-secondary', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
+      <div class="toolbar-row toolbar-row--tags">
+        <span class="toolbar-row__label">标签</span>
+        <div class="tags-scroll-container">
+          <button
+            @click="clearTagFilter"
+            :class="['tag-chip', { active: selectedTags.length === 0 }]"
+          >全部</button>
+          <div
+            v-for="tag in tags"
+            :key="tag.id"
+            class="tag-chip tag-chip-wrap"
+            :class="{ active: isTagSelected(tag.id) }"
+            :style="{ backgroundColor: tagBgColor(tag.color) }"
+            @click="toggleTagFilter(tag.id)"
+          >
+            <span class="tag-chip-name">{{ tag.name }}</span>
+            <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
+            <button v-if="!tag.automatic_kind" type="button" class="tag-chip-delete" @click.stop="requestDeleteTag(tag)">×</button>
           </div>
         </div>
-
-        <div class="toolbar-cluster toolbar-cluster--playback">
-          <select v-model="randomMode" class="select-input" aria-label="随机播放模式">
-            <option value="balanced">均衡随机</option>
-            <option value="unwatched">随机未看</option>
-            <option value="favorites">随机收藏</option>
-          </select>
-          <button @click="playRandom" class="btn-random">按当前条件随机</button>
-          <button
-            type="button"
-            class="btn-random"
-            :disabled="randomPick.loading"
-            @click="enterRandomPick"
-          >{{ randomPick.loading ? '抽取中...' : `随机 ${randomPickSize} 部` }}</button>
-          <button
-            @click="toggleSelectAllVisible"
-            class="btn-secondary"
-            :disabled="videos.length === 0"
-          >
-            {{ allVisibleSelected ? '取消全选' : '选择本页' }}
-          </button>
-        </div>
-      </div>
-
-      <div class="toolbar-management" aria-label="片库管理">
-        <button @click="showScanDialog = true" class="btn-primary" :disabled="migrationRunning">扫描新目录</button>
-        <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="moveFolder">
-          {{ migrationRunning ? '迁移中...' : '迁移文件夹' }}
-        </button>
-        <button type="button" class="btn-secondary" :disabled="migrationRunning" @click="renameFolder">
-          {{ migrationRunning ? '处理中...' : '重命名文件夹' }}
-        </button>
+        <button type="button" class="toolbar-btn toolbar-btn--compact" @click="showTagManagerDialog = true">标签管理</button>
         <button
           type="button"
-          class="btn-secondary"
-          :disabled="migrationRunning || incrementalScan.running || directories.length === 0"
-          :title="directories.length === 0 ? '请先添加扫描目录' : '扫描所有已配置目录中的文件变化'"
-          @click="runIncrementalScan"
-        >
-          {{ incrementalScan.running ? '扫描中...' : '增量扫描' }}
-        </button>
-        <button type="button" class="btn-secondary" @click="openAITagReviewDialog()">AI 标签管理</button>
-        <span v-if="aiTagSummary.same_source_unread" class="ai-review-badge" title="未读同源视频关系">{{ aiTagSummary.same_source_unread }}</span>
-        <button type="button" class="btn-secondary cleanup-open-btn" @click="openCleanupDialog()">
-          清理候选
-          <span v-if="cleanupDialog.loading" class="cleanup-badge" data-test="cleanup-badge-running">分析中 {{ cleanupDialog.progress.total > 0 ? `${cleanupDialog.progress.current}/${cleanupDialog.progress.total}` : '…' }}</span>
-          <span v-else-if="cleanupBadgeCount" class="cleanup-badge cleanup-badge--done" data-test="cleanup-badge-done" title="清理分析已完成，点击查看候选">待审阅 {{ cleanupBadgeCount }} 项</span>
-        </button>
-        <button type="button" class="btn-secondary" @click="openTrashDialog">回收站</button>
-        <button type="button" class="btn-secondary" :disabled="technicalBackfill.running" @click="startTechnicalBackfill">
-          {{ technicalBackfill.running ? (technicalBackfill.preparing ? '正在统计待补全视频...' : `技术信息 ${technicalBackfill.processed}/${technicalBackfill.total}`) : '补全技术信息' }}
-        </button>
-        <button v-if="technicalBackfill.running" type="button" class="btn-secondary" @click="cancelTechnicalBackfill">取消补全</button>
-        <button type="button" class="btn-secondary" :disabled="perceptualHash.running" @click="startPerceptualHashBackfill">
-          {{ perceptualHash.running ? `近重复指纹 ${perceptualHash.processed}/${perceptualHash.total}` : '补全近重复指纹' }}
-        </button>
-        <button v-if="perceptualHash.running" type="button" class="btn-secondary" @click="cancelPerceptualHashBackfill">取消指纹补全</button>
-        <button v-if="settings.local_metadata_enabled" type="button" class="btn-secondary" :disabled="localMetadataBackfill.running" @click="startLocalMetadataBackfill">
-          {{ localMetadataBackfill.running ? `本地资料 ${localMetadataBackfill.processed}/${localMetadataBackfill.total}` : '补全本地资料' }}
-        </button>
-        <button v-if="settings.local_metadata_enabled && localMetadataBackfill.running" type="button" class="btn-secondary" @click="cancelLocalMetadataBackfill">取消本地资料补全</button>
-		<button type="button" class="btn-secondary" :disabled="localMetadataExport.running" @click="startLocalMetadataExport">
-		  {{ localMetadataExport.running ? `写出 NFO ${localMetadataExport.processed}/${localMetadataExport.total}` : '当前筛选写出 NFO' }}
-		</button>
-		<button v-if="localMetadataExport.running" type="button" class="btn-secondary" @click="cancelLocalMetadataExport">取消写出 NFO</button>
-        <button type="button" class="btn-secondary" @click="showTagManagerDialog = true">标签管理</button>
-      </div>
-
-      <div v-if="selectedVideoIds.length > 0" class="selection-toolbar">
-        <span>已选 {{ selectedVideoIds.length }} 个视频</span>
-        <div class="selection-toolbar__actions">
-          <button
-            @click="openBatchAddTagDialog"
-            class="btn-secondary"
-          >
-            批量标签编辑
-          </button>
-          <button
-            @click="moveSelectedVideos"
-            class="btn-secondary"
-            :disabled="migrationRunning"
-          >
-            批量迁移
-          </button>
-          <button type="button" class="btn-secondary" @click="openLocalMetadataDialog(selectedVideoIds)">导入本地资料</button>
-          <button
-            @click="confirmBatchDelete"
-            class="btn-danger"
-          >
-            批量删除
-          </button>
-        </div>
+          class="toolbar-btn toolbar-btn--compact"
+          :disabled="videos.length === 0"
+          @click="toggleSelectAllVisible"
+        >{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
       </div>
     </div>
+
+    <!-- 结果条：筛选命中数、生效条件回显、一键清除与行高档位 -->
+    <div v-if="selectedVideoIds.length === 0" class="result-bar">
+      <span class="result-bar__count">
+        筛选出 <b>{{ filteredCountText }}</b>
+        <span v-if="libraryTotalCount !== null"> / {{ formatCount(libraryTotalCount) }}</span>
+      </span>
+      <template v-if="activeConditionLabels.length > 0">
+        <span class="result-bar__sep">|</span>
+        <span class="result-bar__conditions">条件：{{ activeConditionLabels.join(' · ') }}</span>
+        <button type="button" class="result-bar__clear" @click="clearAllConditions">清除</button>
+      </template>
+      <span v-else class="result-bar__conditions">未设置筛选条件</span>
+      <div class="result-bar__spacer"></div>
+      <span class="result-bar__label">行高</span>
+      <div class="segmented segmented--mini" role="group" aria-label="行高">
+        <button type="button" :class="['segmented__btn', { active: rowDensity === 'compact' }]" @click="setRowDensity('compact')">紧凑</button>
+        <button type="button" :class="['segmented__btn', { active: rowDensity === 'comfortable' }]" @click="setRowDensity('comfortable')">舒适</button>
+      </div>
+    </div>
+
+    <div v-else class="selection-toolbar">
+      <span>已选 {{ selectedVideoIds.length }} 个视频</span>
+      <div class="selection-toolbar__actions">
+        <button @click="openBatchAddTagDialog" class="btn-secondary btn-compact">批量标签编辑</button>
+        <button @click="moveSelectedVideos" class="btn-secondary btn-compact" :disabled="migrationRunning">批量迁移</button>
+        <button type="button" class="btn-secondary btn-compact" @click="openLocalMetadataDialog(selectedVideoIds)">导入本地资料</button>
+        <button @click="confirmBatchDelete" class="btn-danger btn-compact">批量删除</button>
+      </div>
+    </div>
+    </div>
+
+    <!-- 筛选浮层：区间类条件先改草稿，「应用」才提交，按钮上的数字是草稿的预览计数 -->
+    <BasePopover
+      v-if="toolbarMenu === 'filter'"
+      :anchor="toolbarMenuAnchor"
+      :min-width="392"
+      panel-class="filter-popover"
+      @close="closeToolbarMenu"
+    >
+      <div class="filter-popover__head">
+        <strong>筛选条件</strong>
+        <div class="filter-popover__spacer"></div>
+        <button type="button" class="link-btn" @click="clearFilterDraft">全部清除</button>
+      </div>
+      <label class="filter-popover__field">
+        <span>体积区间</span>
+        <select v-model="filterDraft.sizeRange" class="select-input" @change="scheduleFilterPreview">
+          <option value="all">不限</option>
+          <option v-for="opt in sizeOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </label>
+      <label class="filter-popover__field">
+        <span>分辨率区间</span>
+        <select v-model="filterDraft.resRange" class="select-input" @change="scheduleFilterPreview">
+          <option value="all">不限</option>
+          <option v-for="opt in resOptions" :key="opt.label" :value="opt.value">{{ opt.label }}</option>
+        </select>
+      </label>
+      <div class="filter-popover__field">
+        <span>评分区间（0–10，半分制）</span>
+        <div class="filter-popover__range">
+          <input v-model="filterDraft.minRating" @input="scheduleFilterPreview" type="text" inputmode="decimal" maxlength="4" class="text-input" placeholder="最低" aria-label="最低评分" />
+          <span class="filter-popover__dash">–</span>
+          <input v-model="filterDraft.maxRating" @input="scheduleFilterPreview" type="text" inputmode="decimal" maxlength="4" class="text-input" placeholder="最高" aria-label="最高评分" />
+        </div>
+      </div>
+      <div class="filter-popover__divider"></div>
+      <div class="filter-popover__actions">
+        <button type="button" class="btn-secondary" @click="openSaveViewDialog">存为视图</button>
+        <button type="button" class="btn-primary" @click="applyFilterDraft">应用{{ filterPreviewText }}</button>
+      </div>
+    </BasePopover>
+
+    <BaseMenu
+      v-if="toolbarMenu === 'manage'"
+      :anchor="toolbarMenuAnchor"
+      :items="manageMenuItems"
+      :min-width="268"
+      align="end"
+      label="片库管理"
+      @select="onManageSelect"
+      @close="closeToolbarMenu"
+    />
+    <BaseMenu
+      v-if="toolbarMenu === 'view'"
+      :anchor="toolbarMenuAnchor"
+      :items="viewMenuItems"
+      :min-width="240"
+      label="保存视图"
+      @select="onViewSelect"
+      @close="closeToolbarMenu"
+    />
+    <BaseMenu
+      v-if="toolbarMenu === 'random'"
+      :anchor="toolbarMenuAnchor"
+      :items="randomMenuItems"
+      :min-width="200"
+      align="end"
+      label="随机选项"
+      @select="onRandomSelect"
+      @close="closeToolbarMenu"
+    />
 
     <div
       v-if="incrementalScan.message"
@@ -164,31 +237,45 @@
     <div v-if="technicalBackfill.running || technicalBackfill.completed || technicalBackfill.cancelled || technicalBackfill.failed" class="scan-sync-status" :role="technicalBackfill.failed ? 'alert' : 'status'">
       <span v-if="technicalBackfill.preparing">正在统计待补全视频...</span>
       <span v-else-if="technicalBackfill.completed && technicalBackfill.total === 0 && !technicalBackfill.failed">技术信息无需补全（已是最新状态）。</span>
+      <span v-else-if="technicalBackfill.running">技术信息 {{ technicalBackfill.processed }}/{{ technicalBackfill.total }}</span>
       <span v-else>
         技术信息：成功 {{ technicalBackfill.succeeded }}，跳过 {{ technicalBackfill.skipped }}，失败 {{ technicalBackfill.failed }}
         <span v-if="technicalBackfill.cancelled">（已取消）</span>
         <span v-else-if="technicalBackfill.completed">（已完成）</span>
       </span>
+      <button v-if="technicalBackfill.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelTechnicalBackfill">取消</button>
       <ul v-if="technicalBackfill.failures?.length" class="technical-backfill-failures">
         <li v-for="failure in technicalBackfill.failures" :key="`${failure.video_id}:${failure.name}`">{{ failure.name || `视频 #${failure.video_id}` }}：{{ failure.error }}</li>
       </ul>
     </div>
 
     <div v-if="perceptualHash.running || perceptualHash.completed" class="scan-sync-status" :role="perceptualHash.failed ? 'alert' : 'status'">
-      近重复指纹：成功 {{ perceptualHash.succeeded }}，跳过 {{ perceptualHash.skipped }}，失败 {{ perceptualHash.failed }}
-      <span v-if="perceptualHash.cancelled">（已取消）</span><span v-else-if="perceptualHash.completed">（已完成）</span>
+      <span v-if="perceptualHash.running">近重复指纹 {{ perceptualHash.processed }}/{{ perceptualHash.total }}</span>
+      <span v-else>
+        近重复指纹：成功 {{ perceptualHash.succeeded }}，跳过 {{ perceptualHash.skipped }}，失败 {{ perceptualHash.failed }}
+        <span v-if="perceptualHash.cancelled">（已取消）</span><span v-else-if="perceptualHash.completed">（已完成）</span>
+      </span>
+      <button v-if="perceptualHash.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelPerceptualHashBackfill">取消</button>
       <ul v-if="perceptualHash.failures?.length" class="technical-backfill-failures">
         <li v-for="failure in perceptualHash.failures" :key="`phash-${failure.video_id}`">{{ failure.name || `视频 #${failure.video_id}` }}：{{ failure.error }}</li>
       </ul>
     </div>
 
     <div v-if="localMetadataBackfill.running || localMetadataBackfill.completed" class="scan-sync-status" :role="localMetadataBackfill.failed ? 'alert' : 'status'">
-      本地资料：成功 {{ localMetadataBackfill.succeeded }}，跳过 {{ localMetadataBackfill.skipped }}，失败 {{ localMetadataBackfill.failed }}
-      <span v-if="localMetadataBackfill.cancelled">（已取消）</span><span v-else-if="localMetadataBackfill.completed">（已完成）</span>
+      <span v-if="localMetadataBackfill.running">本地资料 {{ localMetadataBackfill.processed }}/{{ localMetadataBackfill.total }}</span>
+      <span v-else>
+        本地资料：成功 {{ localMetadataBackfill.succeeded }}，跳过 {{ localMetadataBackfill.skipped }}，失败 {{ localMetadataBackfill.failed }}
+        <span v-if="localMetadataBackfill.cancelled">（已取消）</span><span v-else-if="localMetadataBackfill.completed">（已完成）</span>
+      </span>
+      <button v-if="localMetadataBackfill.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelLocalMetadataBackfill">取消</button>
     </div>
 	<div v-if="localMetadataExport.running || localMetadataExport.completed" class="scan-sync-status" :role="localMetadataExport.failed ? 'alert' : 'status'">
-	  NFO 写出：成功 {{ localMetadataExport.succeeded }}，失败 {{ localMetadataExport.failed }}
-	  <span v-if="localMetadataExport.cancelled">（已取消）</span><span v-else-if="localMetadataExport.completed">（已完成）</span>
+	  <span v-if="localMetadataExport.running">写出 NFO {{ localMetadataExport.processed }}/{{ localMetadataExport.total }}</span>
+	  <span v-else>
+	    NFO 写出：成功 {{ localMetadataExport.succeeded }}，失败 {{ localMetadataExport.failed }}
+	    <span v-if="localMetadataExport.cancelled">（已取消）</span><span v-else-if="localMetadataExport.completed">（已完成）</span>
+	  </span>
+	  <button v-if="localMetadataExport.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelLocalMetadataExport">取消</button>
 	</div>
     <div v-if="searchMode === 'semantic'" class="scan-sync-status" :role="semanticSearchError ? 'alert' : 'status'">
       <span v-if="semanticSearchError">语义搜索失败：{{ semanticSearchErrorText }}</span>
@@ -219,29 +306,6 @@
         <span class="subtitle-queue-status">排队中 #{{ task.position }}</span>
         <span class="subtitle-queue-name">{{ task.video_name || `视频 #${task.video_id}` }}</span>
         <button v-if="task.can_cancel" type="button" class="btn-secondary btn-compact" :disabled="cancellingSubtitleTaskIds.includes(task.task_id)" @click="cancelSubtitleTask(task.task_id)">取消</button>
-      </div>
-    </div>
-
-    <div class="tags-filter">
-      <div class="tags-scroll-container">
-        <button
-          @click="clearTagFilter"
-          :class="['tag-chip', { active: selectedTags.length === 0 }]"
-        >
-          全部
-        </button>
-        <div
-          v-for="tag in tags"
-          :key="tag.id"
-          class="tag-chip tag-chip-wrap"
-          :class="{ active: isTagSelected(tag.id) }"
-          :style="{ backgroundColor: tagBgColor(tag.color) }"
-          @click="toggleTagFilter(tag.id)"
-        >
-          <span class="tag-chip-name">{{ tag.name }}</span>
-          <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
-          <button v-if="!tag.automatic_kind" type="button" class="tag-chip-delete" @click.stop="requestDeleteTag(tag)">×</button>
-        </div>
       </div>
     </div>
 
@@ -810,15 +874,297 @@
 </template>
 
 <style scoped>
-.tags-filter { padding: 6px 0 10px; border-bottom: 1px solid var(--border-color); margin-bottom: 12px; }
+/* 工具栏（原型 A1）：不透明面板 + 底部发丝线，两行常驻，不再吸顶成圆角浮块。 */
+.library-chrome {
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  margin-bottom: 10px;
+}
+
+.toolbar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 -20px 0;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--panel-bg);
+}
+
+.toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.toolbar-row--tags {
+  flex-wrap: nowrap;
+}
+
+.toolbar-row__label {
+  flex: none;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .tags-scroll-container {
   display: flex;
-  gap: 5px;
-  flex-wrap: wrap;
-  overflow: visible;
-  padding-bottom: 0;
-  align-items: flex-start;
+  flex: 1;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  align-items: center;
+  scrollbar-width: none;
 }
+
+.tags-scroll-container::-webkit-scrollbar { display: none; }
+
+/* 三段器：搜索模式、列表/网格、行高共用 */
+.segmented {
+  display: inline-flex;
+  flex: none;
+  height: var(--h-unit);
+  padding: 3px;
+  gap: 2px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-muted-bg);
+}
+
+.segmented__btn {
+  padding: 0 11px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.segmented__btn.active {
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  font-weight: 600;
+  box-shadow: var(--shadow-segment);
+}
+
+.segmented--mini {
+  height: 22px;
+  padding: 2px;
+}
+
+.segmented--mini .segmented__btn {
+  padding: 0 8px;
+  font-size: 11.5px;
+}
+
+.search-field {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  min-width: 240px;
+  height: var(--h-unit);
+  padding: 0 10px 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--input-bg);
+}
+
+.search-field:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.search-field__input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.search-field__hint {
+  flex: none;
+  padding: 1px 5px;
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.toolbar-control {
+  width: auto;
+  min-width: 116px;
+  flex: none;
+}
+
+.toolbar-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: var(--h-unit);
+  padding: 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toolbar-btn:hover:not(:disabled) { background: var(--control-hover-bg); }
+.toolbar-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.toolbar-btn--strong { font-weight: 600; }
+
+.toolbar-btn--on {
+  border-color: var(--accent-color);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.toolbar-btn--compact {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toolbar-btn__badge {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--accent-color);
+  color: var(--accent-on);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.toolbar-btn__caret { color: var(--text-muted); }
+.toolbar-btn--on .toolbar-btn__caret { color: var(--accent-text); }
+
+/* 随机拆分按钮：主键直接随机，▾ 里选模式或改抽十部 */
+.split-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: stretch;
+  height: var(--h-unit);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  overflow: hidden;
+}
+
+.split-btn__main,
+.split-btn__caret {
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.split-btn__main { padding: 0 12px; }
+.split-btn__caret { padding: 0 9px; color: var(--text-muted); }
+.split-btn__main:hover,
+.split-btn__caret:hover { background: var(--control-hover-bg); }
+.split-btn__divider { width: 1px; background: var(--hairline); }
+
+/* 结果条与批量栏占同一个位置、同一个高度，互斥出现 */
+.result-bar,
+.selection-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 32px;
+  margin: 0 -20px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--hairline-soft);
+  font-size: 12px;
+}
+
+.result-bar {
+  background: var(--bg-color);
+  color: var(--text-secondary);
+}
+
+.result-bar__count b {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.result-bar__sep { color: var(--hairline); }
+.result-bar__spacer { flex: 1; }
+.result-bar__label { color: var(--text-muted); }
+
+.result-bar__conditions {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.result-bar__clear,
+.link-btn {
+  flex: none;
+  border: 0;
+  background: transparent;
+  color: var(--accent-text);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+}
+
+.selection-toolbar {
+  height: 44px;
+  border-bottom: 1px solid var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 650;
+}
+
+.selection-toolbar__actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* 筛选浮层 */
+:deep(.filter-popover) {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.filter-popover__head { display: flex; align-items: center; font-size: 13px; font-weight: 700; }
+.filter-popover__spacer { flex: 1; }
+
+.filter-popover__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+
+.filter-popover__range { display: flex; align-items: center; gap: 8px; }
+.filter-popover__range .text-input { flex: 1; }
+.filter-popover__dash { color: var(--text-muted); }
+.filter-popover__divider { height: 1px; background: var(--hairline-faint); }
+
+.filter-popover__actions { display: flex; gap: 8px; }
+.filter-popover__actions > * { flex: 1; }
+
 .ai-review-badge {
   display: inline-flex;
   min-width: 18px;
@@ -834,136 +1180,12 @@
   font-weight: 700;
 }
 
-.toolbar .search-group {
-  flex: 1 1 360px;
-  min-width: 280px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-.toolbar .search-group .select-input {
-  flex: 0 0 120px;
-}
-.toolbar .search-group .search-input {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-.toolbar {
-  position: sticky;
-  top: 10px;
-  z-index: 90;
-  display: flex;
-  flex-direction: column;
-  gap: 9px;
-  margin-bottom: 10px;
-  padding: 9px;
-  border-radius: 16px;
-}
-
-.toolbar-primary {
-  display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
-  align-items: center;
-  gap: 10px;
-}
-.layout-toggle {
-  display: inline-flex;
-  gap: 3px;
-  padding: 3px;
-  border: 1px solid var(--border-color);
-  border-radius: 8px;
-}
-.layout-toggle .btn-secondary.active {
-  background: var(--accent-color);
-  color: white;
-}
-
-.filter-group {
-  display: flex;
-  flex: 0 1 auto;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.filter-group .select-input {
-  width: 132px;
-}
-.toolbar-control {
-  height: var(--h-unit);
-  border-color: var(--border-color);
-  border-radius: var(--radius);
-  background-color: var(--control-bg);
-  color: var(--text-primary);
-  font-size: 13px;
-}
-.rating-filter-input {
-  width: 88px;
-  min-width: 78px;
-  padding-inline: 10px;
-}
-
-.toolbar-secondary,
-.toolbar-management {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  padding-top: 9px;
-  border-top: 1px solid var(--border-color);
-}
-
-.toolbar-secondary {
-  justify-content: space-between;
-  gap: 8px 18px;
-}
-
-.toolbar-cluster {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 8px;
-}
-
-.toolbar-cluster .select-input {
-  width: 132px;
-  flex: 0 0 132px;
-}
-
-.toolbar-cluster .saved-view-select {
-  width: 168px;
-  flex-basis: 168px;
-}
-
-.toolbar-management {
-  justify-content: flex-end;
-}
-
-/* 批量操作栏内嵌在 .toolbar 中，随其一起吸顶：选中项后向下滚动时按钮
-   必须保持可见，否则用户要滚回顶部才能操作（旧实现是流内元素，会被滚走）。
-   放在 .toolbar 内部而非自行设 sticky top，是为了避免依赖主工具栏的高度
-   ——它是 flex column 且窄屏会换行，高度不固定。 */
-.selection-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--accent-color);
-  background: color-mix(in srgb, var(--accent-color) 12%, transparent);
-  color: var(--text-primary);
-  font-size: 13px;
-}
-
-.selection-toolbar__actions {
-  display: flex;
-  gap: 8px;
-}
+.status-cancel { margin-left: 10px; }
 
 .scan-sync-status {
-  margin: 0 0 10px;
+  margin: 10px 0 0;
+  display: flex;
+  align-items: center;
   padding: 8px 10px;
   border: 1px solid var(--border-color);
   border-radius: var(--radius);
@@ -1448,7 +1670,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, DismissNearDuplicateGroup, GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, CountLibraryVideos, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, SaveLibraryView, DeleteSavedLibraryView, RejectSameSourceRelation, OpenDirectory, DeleteVideo, BatchDeleteVideos, ListTrashEntries, RestoreTrashEntry, RemoveTagFromVideo, UpdateSettings, GetSettings, GetSubtitleEngineStatuses, PrepareSubtitleEngine, GenerateSubtitle, ForceGenerateSubtitle, RenameVideo, RenameDirectory, MoveVideo, BatchMoveVideos, MoveDirectory, SelectFolderToRename, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, CancelSubtitle, CancelSubtitleTask, GetSubtitleQueueState, GetCleanupStatus, GetAITaggingStatusSummary, StartCleanupAnalysis, GetSubtitleSegments, GetPreviewSession, PreviewExternally, SyncScanDirectories, StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, DismissNearDuplicateGroup, GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -1464,6 +1686,8 @@ import LocalMetadataDialog from './LocalMetadataDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 import BaseModal from './ui/BaseModal.vue';
+import BaseMenu from './ui/BaseMenu.vue';
+import BasePopover from './ui/BasePopover.vue';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 
@@ -1472,7 +1696,7 @@ const RANDOM_PICK_SIZE = 10;
 
 export default {
   name: 'VideoListPage',
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, TrashRestoreDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BaseModal },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, TrashRestoreDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BaseModal, BaseMenu, BasePopover },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -1484,6 +1708,7 @@ export default {
     return {
       videos: [],
       viewMode: window.localStorage?.getItem('cineinsight-library-layout') === 'grid' ? 'grid' : 'list',
+      rowDensity: window.localStorage?.getItem('cineinsight-library-density') === 'comfortable' ? 'comfortable' : 'compact',
       searchKeyword: '',
       searchMode: 'file',
       semanticSimilarVideoID: 0,
@@ -1507,6 +1732,19 @@ export default {
       ],
       savedViews: [],
       selectedSavedViewID: 0,
+      toolbarMenu: null,
+      toolbarMenuAnchor: null,
+      filterDraft: { sizeRange: 'all', resRange: 'all', minRating: '', maxRating: '' },
+      filterPreviewCount: null,
+      filterPreviewTimer: null,
+      filteredCount: null,
+      libraryTotalCount: null,
+      countToken: 0,
+      searchModeOptions: [
+        { label: '文件', value: 'file' },
+        { label: '字幕', value: 'subtitle' },
+        { label: '语义', value: 'semantic' }
+      ],
       saveViewDialog: { show: false, name: '', saving: false, error: '' },
       randomMode: 'balanced',
       recentRandomVideoIDs: [],
@@ -1636,6 +1874,7 @@ export default {
   mounted() {
     this.configureHomeListVirtualization();
     this.loadVideos();
+    this.refreshLibraryCounts();
     this.loadSavedLibraryViews();
     this.refreshSubtitleQueue();
     this.refreshAITagSummary();
@@ -1648,6 +1887,7 @@ export default {
     this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
     this.attachWheelFallback();
 	window.addEventListener('keydown', this.handleLibraryShortcut);
+	window.addEventListener('keydown', this.handleToolbarShortcut);
     document.addEventListener('click', this.hideContextMenu);
 
     if (window.runtime?.EventsOn) {
@@ -1788,6 +2028,7 @@ export default {
   },
   beforeUnmount() {
 	window.removeEventListener('keydown', this.handleLibraryShortcut);
+	window.removeEventListener('keydown', this.handleToolbarShortcut);
     document.removeEventListener('click', this.hideContextMenu);
     this.detachWheelFallback();
     if (this.searchDebounceTimer) {
@@ -1806,6 +2047,137 @@ export default {
   computed: {
     randomPickSize() {
       return RANDOM_PICK_SIZE;
+    },
+    searchPlaceholder() {
+      if (this.searchMode === 'subtitle') return '搜索字幕内容…';
+      if (this.searchMode === 'semantic') return '用自然语言描述想找的内容，回车搜索…';
+      return '搜索标题、文件名或路径…';
+    },
+    selectedSavedViewName() {
+      return this.savedViews.find(view => view.id === Number(this.selectedSavedViewID))?.name || '';
+    },
+    // 「筛选」按钮徽标只数收进浮层的那三类区间条件；智能视图有自己的常驻控件，
+    // 数进来会让徽标和浮层里看到的内容对不上。
+    activeFilterCount() {
+      let count = 0;
+      if (this.selectedSizeRange !== 'all') count += 1;
+      if (this.selectedResRange !== 'all') count += 1;
+      if (this.minRating !== '' || this.maxRating !== '') count += 1;
+      return count;
+    },
+    // 结果条的条件回显：智能视图 + 三类区间 + 标签，用中文写全，
+    // 免得折叠之后用户不知道自己还开着什么条件。
+    activeConditionLabels() {
+      const labels = [];
+      if (this.smartView) {
+        const view = this.smartViewOptions.find(option => option.value === this.smartView);
+        if (view) labels.push(view.label);
+      }
+      if (this.selectedTags.length > 0) {
+        const names = this.selectedTags
+          .map(id => this.tags.find(tag => tag.id === id)?.name)
+          .filter(Boolean);
+        if (names.length > 0) labels.push(`标签 ${names.join('、')}`);
+      }
+      // 按 min/max 取值比对，不比对象引用：保存视图恢复出来的区间是新对象。
+      const rangeLabel = (options, range) => options.find(
+        item => item.value.min === range.min && item.value.max === range.max
+      )?.label;
+      if (this.selectedSizeRange !== 'all') {
+        const label = rangeLabel(this.sizeOptions, this.selectedSizeRange);
+        if (label) labels.push(`体积 ${label}`);
+      }
+      if (this.selectedResRange !== 'all') {
+        const label = rangeLabel(this.resOptions, this.selectedResRange);
+        if (label) labels.push(`分辨率 ${label}`);
+      }
+      if (this.minRating !== '' || this.maxRating !== '') {
+        labels.push(`评分 ${this.minRating === '' ? '0' : this.minRating}–${this.maxRating === '' ? '10' : this.maxRating}`);
+      }
+      return labels;
+    },
+    filteredCountText() {
+      // 语义搜索的命中数由检索接口决定，不能用结构化筛选计数冒充。
+      if (this.searchMode === 'semantic') return `${this.formatCount(this.videos.length)}${this.hasMore ? '+' : ''}`;
+      if (this.filteredCount === null) return '—';
+      return this.formatCount(this.filteredCount);
+    },
+    filterPreviewText() {
+      return this.filterPreviewCount === null ? '' : `（${this.formatCount(this.filterPreviewCount)}）`;
+    },
+    manageAttentionCount() {
+      return (this.aiTagSummary.same_source_unread || 0) + (this.cleanupBadgeCount || 0);
+    },
+    manageMenuItems() {
+      const unread = this.aiTagSummary.same_source_unread || 0;
+      const cleanup = this.cleanupDialog.loading
+        ? '清理候选（分析中）'
+        : (this.cleanupBadgeCount ? `清理候选（待审阅 ${this.cleanupBadgeCount} 项）` : '清理候选');
+      const items = [
+        { heading: '扫描' },
+        { id: 'scan-new', label: '扫描新目录', shortcut: '⇧⌘N', disabled: this.migrationRunning },
+        {
+          id: 'scan-incremental',
+          label: this.incrementalScan.running ? '增量扫描（进行中）' : '增量扫描',
+          shortcut: '⌘R',
+          disabled: this.migrationRunning || this.incrementalScan.running || this.directories.length === 0
+        },
+        { heading: '整理' },
+        { id: 'move-folder', label: this.migrationRunning ? '迁移文件夹（进行中）' : '迁移文件夹', disabled: this.migrationRunning },
+        { id: 'rename-folder', label: this.migrationRunning ? '重命名文件夹（进行中）' : '重命名文件夹', disabled: this.migrationRunning },
+        {
+          id: 'export-nfo',
+          label: this.localMetadataExport.running ? `当前筛选写出 NFO（${this.localMetadataExport.processed}/${this.localMetadataExport.total}）` : '当前筛选写出 NFO',
+          disabled: this.localMetadataExport.running
+        },
+        { heading: '补全' },
+        {
+          id: 'backfill-technical',
+          label: this.technicalBackfill.running ? `补全技术信息（${this.technicalBackfill.processed}/${this.technicalBackfill.total}）` : '补全技术信息',
+          disabled: this.technicalBackfill.running
+        },
+        {
+          id: 'backfill-phash',
+          label: this.perceptualHash.running ? `补全近重复指纹（${this.perceptualHash.processed}/${this.perceptualHash.total}）` : '补全近重复指纹',
+          disabled: this.perceptualHash.running
+        }
+      ];
+      if (this.settings.local_metadata_enabled) {
+        items.push({
+          id: 'backfill-local-metadata',
+          label: this.localMetadataBackfill.running ? `补全本地资料（${this.localMetadataBackfill.processed}/${this.localMetadataBackfill.total}）` : '补全本地资料',
+          disabled: this.localMetadataBackfill.running
+        });
+      }
+      items.push(
+        { heading: '维护' },
+        { id: 'ai-tags', label: unread ? `AI 标签管理（${unread} 未读）` : 'AI 标签管理', shortcut: '⌘T' },
+        { id: 'tag-manager', label: '标签管理' },
+        { id: 'cleanup', label: cleanup, shortcut: '⌘K' },
+        { id: 'trash', label: '回收站' }
+      );
+      return items;
+    },
+    viewMenuItems() {
+      const items = this.savedViews.map(view => ({
+        id: `saved:${view.id}`,
+        label: view.name,
+        checked: Number(this.selectedSavedViewID) === Number(view.id)
+      }));
+      if (items.length === 0) items.push({ id: 'none', label: '还没有保存的视图', disabled: true });
+      items.push({ divider: true });
+      items.push({ id: 'save-current', label: '保存当前视图' });
+      items.push({ id: 'delete-current', label: '删除该视图', danger: true, disabled: !this.selectedSavedViewID });
+      return items;
+    },
+    randomMenuItems() {
+      return [
+        { id: 'mode:balanced', label: '均衡随机', checked: this.randomMode === 'balanced' },
+        { id: 'mode:unwatched', label: '随机未看', checked: this.randomMode === 'unwatched' },
+        { id: 'mode:favorites', label: '随机收藏', checked: this.randomMode === 'favorites' },
+        { divider: true },
+        { id: 'pick-ten', label: `随机 ${RANDOM_PICK_SIZE} 部`, disabled: this.randomPick.loading }
+      ];
     },
     semanticSearchErrorText() {
       const raw = String(this.semanticSearchError || '');
@@ -1979,6 +2351,32 @@ export default {
     }
   },
   methods: {
+	// 管理菜单里印了 ⇧⌘N / ⌘R / ⌘T / ⌘K，搜索框上印了 ⌘F —— 印了就得真的能按，
+	// 否则那些提示是在骗人。这些走独立处理器，不受列表焦点限制。
+	handleToolbarShortcut(event) {
+	  if (!this.pageActive || !(event.metaKey || event.ctrlKey)) return;
+	  const key = event.key.toLowerCase();
+	  if (key === 'f') {
+	    event.preventDefault();
+	    this.$refs.searchInput?.focus();
+	    this.$refs.searchInput?.select();
+	    return;
+	  }
+	  if (document.querySelector('[role="dialog"]')) return;
+	  if (key === 'n' && event.shiftKey) {
+	    event.preventDefault();
+	    if (!this.migrationRunning) this.showScanDialog = true;
+	  } else if (key === 'r' && !event.shiftKey) {
+	    event.preventDefault();
+	    if (!this.migrationRunning && !this.incrementalScan.running && this.directories.length > 0) this.runIncrementalScan();
+	  } else if (key === 't' && !event.shiftKey) {
+	    event.preventDefault();
+	    this.openAITagReviewDialog();
+	  } else if (key === 'k' && !event.shiftKey) {
+	    event.preventDefault();
+	    this.openCleanupDialog();
+	  }
+	},
 	handleLibraryShortcut(event) {
 	  if (!this.pageActive || this.previewOpen || this.contextMenu.show || document.querySelector('[role="dialog"]')) return;
 	  const action = shortcutActionForEvent(event);
@@ -3101,6 +3499,180 @@ export default {
       this.viewMode = mode === 'grid' ? 'grid' : 'list';
       window.localStorage?.setItem('cineinsight-library-layout', this.viewMode);
     },
+    setRowDensity(density) {
+      this.rowDensity = density === 'comfortable' ? 'comfortable' : 'compact';
+      window.localStorage?.setItem('cineinsight-library-density', this.rowDensity);
+    },
+    setSearchMode(mode) {
+      if (this.searchMode === mode) return;
+      this.searchMode = mode;
+      this.handleSearch(true, true);
+    },
+    formatCount(value) {
+      return Number(value || 0).toLocaleString('zh-CN');
+    },
+    toggleToolbarMenu(name, triggerRef) {
+      if (this.toolbarMenu === name) {
+        this.closeToolbarMenu();
+        return;
+      }
+      this.toolbarMenuAnchor = this.$refs[triggerRef] || null;
+      this.toolbarMenu = name;
+      if (name === 'filter') this.resetFilterDraft();
+    },
+    closeToolbarMenu() {
+      this.toolbarMenu = null;
+      this.toolbarMenuAnchor = null;
+      if (this.filterPreviewTimer) {
+        clearTimeout(this.filterPreviewTimer);
+        this.filterPreviewTimer = null;
+      }
+    },
+    resetFilterDraft() {
+      this.filterDraft = {
+        sizeRange: this.selectedSizeRange,
+        resRange: this.selectedResRange,
+        minRating: this.minRating,
+        maxRating: this.maxRating
+      };
+      this.filterPreviewCount = this.filteredCount;
+    },
+    clearFilterDraft() {
+      this.filterDraft = { sizeRange: 'all', resRange: 'all', minRating: '', maxRating: '' };
+      this.scheduleFilterPreview();
+    },
+    // 草稿只在停止输入后预览一次计数；不预览每一次击键，否则改评分区间会连打请求。
+    scheduleFilterPreview() {
+      if (this.filterPreviewTimer) clearTimeout(this.filterPreviewTimer);
+      this.filterPreviewTimer = window.setTimeout(() => {
+        this.filterPreviewTimer = null;
+        this.previewFilterDraft();
+      }, 300);
+    },
+    async previewFilterDraft() {
+      if (this.searchMode === 'semantic') {
+        this.filterPreviewCount = null;
+        return;
+      }
+      try {
+        this.filterPreviewCount = await CountLibraryVideos(this.libraryFilterFrom(this.filterDraft));
+      } catch (err) {
+        this.filterPreviewCount = null;
+        this.debugLog('previewFilterDraft failed', { err: String(err) }, true);
+      }
+    },
+    applyFilterDraft() {
+      this.selectedSizeRange = this.filterDraft.sizeRange;
+      this.selectedResRange = this.filterDraft.resRange;
+      this.minRating = this.filterDraft.minRating;
+      this.maxRating = this.filterDraft.maxRating;
+      this.closeToolbarMenu();
+      this.handleSearch(true);
+    },
+    clearAllConditions() {
+      this.smartView = '';
+      this.selectedTags = [];
+      this.selectedSizeRange = 'all';
+      this.selectedResRange = 'all';
+      this.minRating = '';
+      this.maxRating = '';
+      this.searchKeyword = '';
+      this.handleSearch(true, true);
+    },
+    // 结果条与浮层预览共用一份筛选 DTO 构造：给定一份区间条件覆盖，
+    // 其余维度沿用当前生效值。
+    libraryFilterFrom(overrides) {
+      const base = this.currentLibraryFilter();
+      const bounds = source => {
+        const range = source === 'all' ? null : source;
+        return range ? { min: range.min, max: range.max } : { min: 0, max: 0 };
+      };
+      const size = bounds(overrides.sizeRange);
+      const res = bounds(overrides.resRange);
+      return {
+        ...base,
+        min_size: size.min,
+        max_size: size.max,
+        min_height: res.min,
+        max_height: res.max,
+        min_rating: overrides.minRating === '' ? null : Number(overrides.minRating),
+        max_rating: overrides.maxRating === '' ? null : Number(overrides.maxRating)
+      };
+    },
+    // 结果条的命中数：筛选变化后请求一次，翻页不再重复请求。
+    async refreshLibraryCounts() {
+      if (this.searchMode === 'semantic') {
+        this.filteredCount = null;
+        return;
+      }
+      const token = ++this.countToken;
+      try {
+        const [filtered, total] = await Promise.all([
+          CountLibraryVideos(this.currentLibraryFilter()),
+          this.libraryTotalCount === null ? CountLibraryVideos(this.emptyLibraryFilter()) : Promise.resolve(this.libraryTotalCount)
+        ]);
+        if (token !== this.countToken) return;
+        this.filteredCount = filtered;
+        this.libraryTotalCount = total;
+      } catch (err) {
+        if (token !== this.countToken) return;
+        this.filteredCount = null;
+        this.debugLog('refreshLibraryCounts failed', { err: String(err) }, true);
+      }
+    },
+    emptyLibraryFilter() {
+      return {
+        search_mode: 'file',
+        keyword: '',
+        smart_view: '',
+        tag_ids: [],
+        min_size: 0,
+        max_size: 0,
+        min_height: 0,
+        max_height: 0,
+        min_rating: null,
+        max_rating: null,
+        sort_mode: 'balanced'
+      };
+    },
+    onManageSelect(item) {
+      switch (item.id) {
+        case 'scan-new': this.showScanDialog = true; break;
+        case 'scan-incremental': this.runIncrementalScan(); break;
+        case 'move-folder': this.moveFolder(); break;
+        case 'rename-folder': this.renameFolder(); break;
+        case 'export-nfo': this.startLocalMetadataExport(); break;
+        case 'backfill-technical': this.startTechnicalBackfill(); break;
+        case 'backfill-phash': this.startPerceptualHashBackfill(); break;
+        case 'backfill-local-metadata': this.startLocalMetadataBackfill(); break;
+        case 'ai-tags': this.openAITagReviewDialog(); break;
+        case 'tag-manager': this.showTagManagerDialog = true; break;
+        case 'cleanup': this.openCleanupDialog(); break;
+        case 'trash': this.openTrashDialog(); break;
+        default: break;
+      }
+    },
+    onViewSelect(item) {
+      if (item.id === 'save-current') {
+        this.openSaveViewDialog();
+        return;
+      }
+      if (item.id === 'delete-current') {
+        this.deleteSelectedSavedView();
+        return;
+      }
+      if (item.id.startsWith('saved:')) {
+        this.selectedSavedViewID = Number(item.id.slice(6));
+        this.applySelectedSavedView();
+      }
+    },
+    onRandomSelect(item) {
+      if (item.id === 'pick-ten') {
+        this.enterRandomPick();
+        return;
+      }
+      if (item.id.startsWith('mode:')) this.randomMode = item.id.slice(5);
+    },
     currentQueryKeyword() {
       return this.searchKeyword.trim();
     },
@@ -3281,6 +3853,7 @@ export default {
         if (this.reloadRequested) return this.resetAndLoadVideos();
         return;
       }
+      this.refreshLibraryCounts();
       const activeReload = (async () => {
         while (this.reloadRequested) {
           this.reloadRequested = false;

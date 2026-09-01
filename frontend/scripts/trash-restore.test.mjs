@@ -4,7 +4,8 @@ import { readFileSync } from 'node:fs';
 const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
 const trashDialogSource = readFileSync(new URL('../src/components/TrashRestoreDialog.vue', import.meta.url), 'utf8');
 
-assert.match(videoListSource, /@click="openTrashDialog"[^>]*>回收站<\/button>/, 'video toolbar should expose the trash center');
+// 回收站入口 2026-09-01 起在「管理」菜单的「维护」组里。
+assert.match(videoListSource, /case 'trash': this\.openTrashDialog\(\)/, 'manage menu should expose the trash center');
 assert.match(videoListSource, /<TrashRestoreDialog\b/, 'video list should render the trash restore dialog');
 assert.match(videoListSource, /ListTrashEntries/, 'video list should refresh the latest trash entry after deletion');
 assert.match(videoListSource, /RestoreTrashEntry/, 'video list should support immediate undo');

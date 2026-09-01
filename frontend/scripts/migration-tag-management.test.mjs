@@ -8,8 +8,10 @@ const videoListSource = readFileSync(join(currentDir, '../src/components/VideoLi
 const videoRowSource = readFileSync(join(currentDir, '../src/components/VideoListRow.vue'), 'utf8');
 const tagManagerSource = readFileSync(join(currentDir, '../src/components/TagManagerDialog.vue'), 'utf8');
 
-assert.match(videoListSource, /@click="moveFolder"/, 'toolbar should expose folder migration');
-assert.match(videoListSource, /@click="renameFolder"/, 'toolbar should expose folder rename');
+// 2026-09-01 重构后这两个动作收进了「管理」菜单的「整理」组，入口从按钮
+// 变成菜单项，但必须仍然可达。
+assert.match(videoListSource, /case 'move-folder': this\.moveFolder\(\)/, 'manage menu should expose folder migration');
+assert.match(videoListSource, /case 'rename-folder': this\.renameFolder\(\)/, 'manage menu should expose folder rename');
 assert.match(videoListSource, /@click="moveSelectedVideos"/, 'selection toolbar should expose batch file migration');
 assert.match(videoListSource, /SelectMigrationSourceDirectory/, 'folder migration should select an explicit source');
 assert.match(videoListSource, /SelectMigrationDestinationDirectory/, 'migration should select an explicit destination');

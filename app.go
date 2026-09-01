@@ -510,6 +510,11 @@ func (a *App) GetVideoDetails(videoID uint) (*services.VideoDetails, error) {
 	return a.videoDetailService.GetVideoDetails(videoID)
 }
 
+// CountLibraryVideos 返回当前筛选命中的视频条数，供片库结果条回显。
+func (a *App) CountLibraryVideos(filter services.LibraryFilter) (int64, error) {
+	return a.videoService.CountLibraryVideos(filter)
+}
+
 // GetLibraryCounts 返回应用头部展示的视频与图片总数。
 func (a *App) GetLibraryCounts() (*services.LibraryCounts, error) {
 	return a.videoService.GetLibraryCounts()

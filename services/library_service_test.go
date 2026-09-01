@@ -489,3 +489,67 @@ func TestGetLibraryCountsCountsOnlyActiveRows(t *testing.T) {
 		t.Fatalf("期望 2 视频 1 图片，实际 %+v", counts)
 	}
 }
+
+func TestCountLibraryVideosMatchesTheListedPage(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+
+	favoriteIDs := 0
+	for index := 0; index < 7; index++ {
+		path := fmt.Sprintf("%s/count-filter-%d.mp4", root, index)
+		mustCreateFile(t, path)
+		video := models.Video{
+			Name:       fmt.Sprintf("count-filter-%d.mp4", index),
+			Path:       path,
+			Directory:  root,
+			Size:       int64(index+1) * 1000,
+			IsFavorite: index%3 == 0,
+		}
+		if video.IsFavorite {
+			favoriteIDs++
+		}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建视频失败: %v", err)
+		}
+	}
+
+	total, err := svc.CountLibraryVideos(LibraryFilter{})
+	if err != nil {
+		t.Fatalf("全库计数失败: %v", err)
+	}
+	if total != 7 {
+		t.Fatalf("全库计数应为 7，实际 %d", total)
+	}
+
+	filter := LibraryFilter{SmartView: LibraryViewFavorites}
+	filtered, err := svc.CountLibraryVideos(filter)
+	if err != nil {
+		t.Fatalf("筛选计数失败: %v", err)
+	}
+	if filtered != int64(favoriteIDs) {
+		t.Fatalf("收藏计数应为 %d，实际 %d", favoriteIDs, filtered)
+	}
+
+	// 计数必须和真正翻完页数出来的条数一致，否则结果条会骗人。
+	listed := 0
+	var cursor *LibraryVideoCursor
+	for {
+		page, err := svc.SearchLibraryVideoPage(filter, cursor, 1)
+		if err != nil {
+			t.Fatalf("翻页失败: %v", err)
+		}
+		listed += len(page.Videos)
+		if page.NextCursor == nil {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	if int64(listed) != filtered {
+		t.Fatalf("计数 %d 与翻页得到的 %d 不一致", filtered, listed)
+	}
+
+	if _, err := svc.CountLibraryVideos(LibraryFilter{SmartView: "nope"}); err == nil {
+		t.Fatalf("非法智能视图应被拒绝")
+	}
+}

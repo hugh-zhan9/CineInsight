@@ -2,7 +2,7 @@ import { flushPromises, shallowMount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter', 'PickRandomVideos', 'GetVideosByIDs',
+  'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter', 'PickRandomVideos', 'GetVideosByIDs', 'CountLibraryVideos',
   'SetVideoFavorite', 'SetVideoWatched', 'UpdateVideoWatchProgress', 'ListSavedLibraryViews', 'SaveLibraryView',
   'DeleteSavedLibraryView', 'RejectSameSourceRelation', 'OpenDirectory', 'DeleteVideo', 'BatchDeleteVideos', 'ListTrashEntries',
   'RestoreTrashEntry', 'RemoveTagFromVideo', 'UpdateSettings', 'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine',
@@ -47,6 +47,7 @@ beforeEach(() => {
     value: { getItem: vi.fn(() => null), setItem: vi.fn(), removeItem: vi.fn(), clear: vi.fn() }
   });
   api.SearchLibraryVideoPage.mockResolvedValue({ videos: [] });
+  api.CountLibraryVideos.mockResolvedValue(0);
   api.SearchSemanticVideos.mockResolvedValue({ hits: [], coverage: { indexed: 0, total: 0 }, has_more: false });
   api.FindSimilarVideos.mockResolvedValue({ hits: [], coverage: { indexed: 0, total: 0 }, has_more: false });
   api.ListSavedLibraryViews.mockResolvedValue([]);
@@ -566,6 +567,125 @@ describe('VideoListPage random pick of 10', () => {
     expect(wrapper.vm.randomPick.active).toBe(false);
     expect(wrapper.vm.videos.map(video => video.id)).toEqual([1]);
     alertSpy.mockRestore();
+    wrapper.unmount();
+  });
+});
+
+describe('VideoListPage 工具栏三层重排', () => {
+  it('结果条用后端计数回显命中数与全库总数', async () => {
+    api.CountLibraryVideos.mockResolvedValue(218).mockResolvedValueOnce(218).mockResolvedValueOnce(3482);
+    const wrapper = await mountPage();
+    await flushPromises();
+
+    expect(api.CountLibraryVideos).toHaveBeenCalled();
+    expect(wrapper.vm.filteredCount).toBe(218);
+    expect(wrapper.vm.libraryTotalCount).toBe(3482);
+    expect(wrapper.text()).toContain('筛选出');
+    wrapper.unmount();
+  });
+
+  it('条件回显把智能视图、标签和三类区间都写成中文，清除能一次复位', async () => {
+    const wrapper = await mountPage({ tags: [{ id: 3, name: '科幻' }] });
+    wrapper.vm.smartView = 'unwatched';
+    wrapper.vm.selectedTags = [3];
+    wrapper.vm.selectedSizeRange = { min: 2 * 1024 ** 3, max: 4 * 1024 ** 3 };
+    wrapper.vm.minRating = '6';
+    await wrapper.vm.$nextTick();
+
+    const labels = wrapper.vm.activeConditionLabels;
+    expect(labels[0]).toBe('未看');
+    expect(labels).toContain('标签 科幻');
+    expect(labels.some(text => text.startsWith('体积'))).toBe(true);
+    expect(labels).toContain('评分 6–10');
+
+    await wrapper.vm.clearAllConditions();
+    expect(wrapper.vm.smartView).toBe('');
+    expect(wrapper.vm.selectedTags).toEqual([]);
+    expect(wrapper.vm.selectedSizeRange).toBe('all');
+    expect(wrapper.vm.minRating).toBe('');
+    expect(wrapper.vm.activeConditionLabels).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('筛选徽标只数收进浮层的三类区间条件', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.vm.activeFilterCount).toBe(0);
+    wrapper.vm.smartView = 'unwatched';
+    await wrapper.vm.$nextTick();
+    // 智能视图有自己的常驻控件，不该算进徽标，否则徽标和浮层内容对不上。
+    expect(wrapper.vm.activeFilterCount).toBe(0);
+    wrapper.vm.selectedResRange = { min: 2160, max: 0 };
+    wrapper.vm.maxRating = '8';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.activeFilterCount).toBe(2);
+    wrapper.unmount();
+  });
+
+  it('筛选浮层改的是草稿，应用后才生效', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.toggleToolbarMenu('filter', 'filterTrigger');
+    wrapper.vm.filterDraft.minRating = '7';
+    await wrapper.vm.$nextTick();
+    // 还没点应用，生效条件不动。
+    expect(wrapper.vm.minRating).toBe('');
+
+    wrapper.vm.applyFilterDraft();
+    await flushPromises();
+    expect(wrapper.vm.minRating).toBe('7');
+    expect(wrapper.vm.toolbarMenu).toBeNull();
+    wrapper.unmount();
+  });
+
+  it('管理菜单保留全部 12 个维护动作并按四组分开', async () => {
+    const wrapper = await mountPage({ settings: { local_metadata_enabled: true } });
+    const items = wrapper.vm.manageMenuItems;
+    expect(items.filter(item => item.heading).map(item => item.heading)).toEqual(['扫描', '整理', '补全', '维护']);
+    expect(items.filter(item => item.id).map(item => item.id)).toEqual([
+      'scan-new', 'scan-incremental',
+      'move-folder', 'rename-folder', 'export-nfo',
+      'backfill-technical', 'backfill-phash', 'backfill-local-metadata',
+      'ai-tags', 'tag-manager', 'cleanup', 'trash'
+    ]);
+    wrapper.unmount();
+  });
+
+  it('随机菜单承载三种模式与随机 10 部，主键仍是按当前条件随机', async () => {
+    const wrapper = await mountPage();
+    const ids = wrapper.vm.randomMenuItems.filter(item => item.id).map(item => item.id);
+    expect(ids).toEqual(['mode:balanced', 'mode:unwatched', 'mode:favorites', 'pick-ten']);
+    expect(wrapper.vm.randomMenuItems[0].checked).toBe(true);
+
+    wrapper.vm.onRandomSelect({ id: 'mode:favorites' });
+    expect(wrapper.vm.randomMode).toBe('favorites');
+    wrapper.unmount();
+  });
+
+  it('视图菜单合并了保存视图的三个控件，没有视图时删除项禁用', async () => {
+    const wrapper = await mountPage();
+    let items = wrapper.vm.viewMenuItems;
+    expect(items.find(item => item.id === 'delete-current').disabled).toBe(true);
+
+    wrapper.vm.savedViews = [{ id: 5, name: '未看 4K' }];
+    wrapper.vm.selectedSavedViewID = 5;
+    await wrapper.vm.$nextTick();
+    items = wrapper.vm.viewMenuItems;
+    expect(items[0]).toEqual(expect.objectContaining({ id: 'saved:5', label: '未看 4K', checked: true }));
+    expect(items.find(item => item.id === 'delete-current').disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('语义模式下不用结构化计数冒充命中数', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.searchMode = 'semantic';
+    wrapper.vm.videos = [{ id: 1 }, { id: 2 }];
+    wrapper.vm.hasMore = false;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.filteredCountText).toBe('2');
+
+    api.CountLibraryVideos.mockClear();
+    await wrapper.vm.refreshLibraryCounts();
+    expect(api.CountLibraryVideos).not.toHaveBeenCalled();
+    expect(wrapper.vm.filteredCount).toBeNull();
     wrapper.unmount();
   });
 });

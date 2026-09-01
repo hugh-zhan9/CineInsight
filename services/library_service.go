@@ -328,6 +328,31 @@ func (s *VideoService) SaveLibraryView(input SavedLibraryViewInput) (*models.Sav
 }
 
 // SearchLibraryVideoPage provides stable pagination for balanced and nullable rating sorts.
+// CountLibraryVideos 返回当前筛选命中的视频条数，供片库结果条回显「筛选出 N」。
+// 走的是与列表查询同一个 applyLibraryFilter，保证计数和翻完页数出来的条数一致；
+// 排序与游标不影响计数，因此这里不复制那部分逻辑。
+func (s *VideoService) CountLibraryVideos(filter LibraryFilter) (int64, error) {
+	normalized, err := normalizeLibraryFilter(filter)
+	if err != nil {
+		return 0, err
+	}
+	if libraryFilterNeedsSubtitleSync(normalized) {
+		if err := syncSubtitleIndexesFromFilesystem(); err != nil {
+			return 0, err
+		}
+	}
+	query := database.DB.Model(&models.Video{})
+	query, err = applyLibraryFilter(query, normalized, time.Now())
+	if err != nil {
+		return 0, err
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *VideoService) SearchLibraryVideoPage(filter LibraryFilter, cursor *LibraryVideoCursor, limit int) (*LibraryVideoPage, error) {
 	normalized, err := normalizeLibraryFilter(filter)
 	if err != nil {

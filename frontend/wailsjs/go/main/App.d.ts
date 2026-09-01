@@ -74,6 +74,8 @@ export function ClearAITagLibrary():Promise<Array<models.Tag>>;
 
 export function ConfirmSameSourceRelation(arg1:number):Promise<void>;
 
+export function CountLibraryVideos(arg1:services.LibraryFilter):Promise<number>;
+
 export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCollection>;
 
 export function CreateDatabaseBackup():Promise<services.BackupFile>;
