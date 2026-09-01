@@ -280,6 +280,21 @@ func Init() error {
 		}
 	}()
 
+	if err := ApplySchema(db); err != nil {
+		return err
+	}
+	DB = db
+	published = true
+	return nil
+}
+
+// ApplySchema 建表、建索引、补约束并初始化默认设置。
+//
+// 从 Init 里抽出来是为了能被测试直接调用：这一整串 ensure* 之前没有任何测试覆盖，
+// 因为测试建库只走 AutoMigrate，绕开了它们。SQLite 后端上线时正是在这里炸的
+// （ensureMediaDetailConstraints 里的 Postgres DO 块），而两个后端的全套测试都没
+// 拦住——测试根本没跑到这条路径上。
+func ApplySchema(db *gorm.DB) error {
 	// 如果表存在，先清理重复数据，避免 AutoMigrate 创建唯一索引失败
 	if db.Migrator().HasTable(&models.Video{}) {
 		if err := cleanupReimportedSoftDeletedVideos(db); err != nil {
@@ -362,8 +377,6 @@ func Init() error {
 	if err := registerMaintenanceCallbacks(db); err != nil {
 		return fmt.Errorf("注册数据库维护屏障失败: %w", err)
 	}
-	DB = db
-	published = true
 	return nil
 }
 
@@ -488,8 +501,17 @@ func ensureImagePathUniqueIndex(db *gorm.DB) error {
 }
 
 func ensureMediaDetailConstraints(db *gorm.DB) error {
-	statements := []string{
-		`DO $$ BEGIN
+	// 这两条 CHECK 约束在 Postgres 上要靠 ALTER TABLE 补：老库建表时没有它们，
+	// 而 pg_constraint 查询 + DO 块是"存在则跳过"的惯用写法。
+	//
+	// SQLite 走不到也不需要走这条路：约束已经写在模型 tag 里
+	// （chk_videos_personal_rating / chk_collection_videos_position），
+	// AutoMigrate 建表时就带上了；而 SQLite 本身没有 ALTER TABLE ADD CONSTRAINT，
+	// 硬发过去只会得到一句 near "DO": syntax error。
+	statements := []string{}
+	if db.Dialector.Name() == string(BackendPostgres) {
+		statements = append(statements,
+			`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_videos_personal_rating') THEN
 				ALTER TABLE videos ADD CONSTRAINT chk_videos_personal_rating
 				CHECK (personal_rating IS NULL OR (
@@ -498,11 +520,14 @@ func ensureMediaDetailConstraints(db *gorm.DB) error {
 				));
 			END IF;
 		END $$`,
-		`DO $$ BEGIN
+			`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'chk_collection_videos_position') THEN
 				ALTER TABLE collection_videos ADD CONSTRAINT chk_collection_videos_position CHECK (position > 0);
 			END IF;
 		END $$`,
+		)
+	}
+	statements = append(statements,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_media_collections_name_active
 		 ON media_collections(normalized_name) WHERE deleted_at IS NULL`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_media_streams_video_index
@@ -519,7 +544,7 @@ func ensureMediaDetailConstraints(db *gorm.DB) error {
 		 ON media_streams(video_id, stream_type)`,
 		`CREATE INDEX IF NOT EXISTS idx_video_perceptual_hashes_source
 		 ON video_perceptual_hashes(source_size, source_mod_time_ns)`,
-	}
+	)
 	for _, statement := range statements {
 		if err := db.Exec(statement).Error; err != nil {
 			return err
