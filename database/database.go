@@ -5,10 +5,12 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"video-master/models"
 
 	"github.com/joho/godotenv"
 	"gorm.io/driver/postgres"
+	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 
@@ -68,6 +70,35 @@ func (config PostgresCLIConfig) Environment() []string {
 	}
 }
 
+// openBackend 按后端打开连接。后续的 AutoMigrate、索引与默认设置初始化两后端共用，
+// 不在这里分叉。
+func openBackend(backend Backend, dataDir string) (*gorm.DB, error) {
+	switch backend {
+	case BackendSQLite:
+		path := SQLitePath(dataDir)
+		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+			return nil, fmt.Errorf("创建 SQLite 库目录失败 path=%s: %w", path, err)
+		}
+		db, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+		if err != nil {
+			return nil, fmt.Errorf("打开 SQLite 数据库失败 path=%s: %w", path, err)
+		}
+		return db, nil
+	case BackendPostgres:
+		dsn, err := postgresDSNFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+		if err != nil {
+			return nil, fmt.Errorf("打开数据库失败: %w", err)
+		}
+		return db, nil
+	default:
+		return nil, fmt.Errorf("不支持的数据库后端: %s", backend)
+	}
+}
+
 func loadEnvConfig() {
 	paths := []string{".env"}
 
@@ -114,6 +145,66 @@ func postgresDSNFromEnv() (string, error) {
 	return dsn, nil
 }
 
+// Backend 是应用可用的数据库后端。
+type Backend string
+
+const (
+	BackendSQLite   Backend = "sqlite"
+	BackendPostgres Backend = "postgres"
+)
+
+// LegacySQLiteFileName 是 Postgres 之前那一代使用的库文件名。这里只用于说明
+// "刻意不采纳"：机器上若残留这份很久以前的库，自动读它会让用户看到一份陈旧片库
+// 且看不出发生了什么。新后端一律用 DefaultSQLiteFileName，旧文件不读、不删。
+const LegacySQLiteFileName = "video-master.db"
+
+// DefaultSQLiteFileName 是 SQLite 后端的默认库文件名。
+const DefaultSQLiteFileName = "library.db"
+
+// BackendEnv 描述后端判定需要的环境输入。抽成结构体是为了让判定成为纯函数，
+// 四种配置组合可以直接断言，不必依赖真实连接。
+type BackendEnv struct {
+	Backend string // DB_BACKEND
+	PGHost  string // PG_HOST
+}
+
+// ResolveBackend 决定使用哪个后端。
+//
+// 规则（设计 D-001）：显式配置优先；未配置时，PG_HOST 存在就沿用 Postgres，
+// 否则用 SQLite。第二条是本次改动最硬的兼容性约束——现有安装的 .env 里有
+// PG_HOST 而没有 DB_BACKEND，升级后必须仍然连到原来那个库，否则用户会看到
+// 一个空片库并以为数据没了。
+//
+// 非法取值直接报错而不是回退到某个默认值：静默回退会让用户以为连上了 A，
+// 实际连的是 B。
+func ResolveBackend(env BackendEnv) (Backend, error) {
+	switch strings.ToLower(strings.TrimSpace(env.Backend)) {
+	case string(BackendSQLite):
+		return BackendSQLite, nil
+	case string(BackendPostgres):
+		return BackendPostgres, nil
+	case "":
+		if strings.TrimSpace(env.PGHost) != "" {
+			return BackendPostgres, nil
+		}
+		return BackendSQLite, nil
+	default:
+		return "", fmt.Errorf("不支持的 DB_BACKEND 取值: %s（可选 sqlite / postgres）", env.Backend)
+	}
+}
+
+func backendEnvFromOS() BackendEnv {
+	return BackendEnv{Backend: os.Getenv("DB_BACKEND"), PGHost: os.Getenv("PG_HOST")}
+}
+
+// SQLitePath 返回 SQLite 库文件路径；SQLITE_PATH 可覆盖默认值。
+func SQLitePath(dataDir string) string {
+	if custom := strings.TrimSpace(os.Getenv("SQLITE_PATH")); custom != "" {
+		return custom
+	}
+	return filepath.Join(dataDir, DefaultSQLiteFileName)
+}
+
 // Init 初始化数据库
 func Init() error {
 	loadEnvConfig()
@@ -130,15 +221,14 @@ func Init() error {
 		return fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
-	dsn, err := postgresDSNFromEnv()
+	backend, err := ResolveBackend(backendEnvFromOS())
 	if err != nil {
 		return err
 	}
 
-	// 连接数据库
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+	db, err := openBackend(backend, dataDir)
 	if err != nil {
-		return fmt.Errorf("打开数据库失败: %w", err)
+		return err
 	}
 	published := false
 	defer func() {

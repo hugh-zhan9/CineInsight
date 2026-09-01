@@ -2,6 +2,7 @@ package database
 
 import (
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -464,5 +465,110 @@ func TestFreshSettingsEnableWorkflowFeatures(t *testing.T) {
 	}
 	if !loaded.LocalMetadataEnabled || !loaded.AIQualityEnabled {
 		t.Fatalf("fresh workflow defaults = %#v", loaded)
+	}
+}
+
+func TestResolveBackendKeepsExistingPostgresInstallsOnPostgres(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     BackendEnv
+		want    Backend
+		wantErr bool
+	}{
+		{
+			// 这一条是本次改动最硬的兼容性约束：现有安装的 .env 里有 PG_HOST
+			// 而没有 DB_BACKEND，升级后必须仍然连原来那个库。判错会让用户看到
+			// 一个空片库并以为数据丢了。
+			name: "现有安装：有 PG_HOST 未设 DB_BACKEND",
+			env:  BackendEnv{PGHost: "127.0.0.1"},
+			want: BackendPostgres,
+		},
+		{
+			name: "新机器：两者都没有",
+			env:  BackendEnv{},
+			want: BackendSQLite,
+		},
+		{
+			name: "显式选 sqlite 时即使有 PG_HOST 也走 sqlite",
+			env:  BackendEnv{Backend: "sqlite", PGHost: "127.0.0.1"},
+			want: BackendSQLite,
+		},
+		{
+			name: "显式选 postgres",
+			env:  BackendEnv{Backend: "postgres", PGHost: "127.0.0.1"},
+			want: BackendPostgres,
+		},
+		{
+			name: "大小写与空白不敏感",
+			env:  BackendEnv{Backend: "  SQLite "},
+			want: BackendSQLite,
+		},
+		{
+			// 静默回退会让用户以为连上了 A 实际连的是 B，必须报错。
+			name:    "非法取值直接报错而不是回退",
+			env:     BackendEnv{Backend: "mysql", PGHost: "127.0.0.1"},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ResolveBackend(tc.env)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("期望报错，实际返回 %s", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("判定失败: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("后端判定错误: got=%s want=%s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSQLitePathPrefersOverrideAndNeverAdoptsLegacyFile(t *testing.T) {
+	dataDir := t.TempDir()
+
+	t.Setenv("SQLITE_PATH", "")
+	got := SQLitePath(dataDir)
+	want := filepath.Join(dataDir, DefaultSQLiteFileName)
+	if got != want {
+		t.Fatalf("默认路径错误: got=%s want=%s", got, want)
+	}
+	// 历史库文件即使存在也不该被默认路径命中——静默采纳一份很久以前的库，
+	// 用户会看到陈旧片库且看不出发生了什么。
+	if filepath.Base(got) == LegacySQLiteFileName {
+		t.Fatalf("默认路径不得复用历史库文件名")
+	}
+
+	t.Setenv("SQLITE_PATH", "/tmp/custom-library.db")
+	if got := SQLitePath(dataDir); got != "/tmp/custom-library.db" {
+		t.Fatalf("SQLITE_PATH 覆盖未生效: %s", got)
+	}
+}
+
+func TestOpenBackendCreatesSQLiteFileAndRejectsUnknownBackend(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("SQLITE_PATH", filepath.Join(dataDir, "nested", "lib.db"))
+
+	db, err := openBackend(BackendSQLite, dataDir)
+	if err != nil {
+		t.Fatalf("打开 SQLite 失败: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("取底层连接失败: %v", err)
+	}
+	defer sqlDB.Close()
+	if _, err := os.Stat(filepath.Join(dataDir, "nested", "lib.db")); err != nil {
+		t.Fatalf("库文件未创建: %v", err)
+	}
+
+	if _, err := openBackend(Backend("mysql"), dataDir); err == nil {
+		t.Fatalf("未知后端应报错")
 	}
 }
