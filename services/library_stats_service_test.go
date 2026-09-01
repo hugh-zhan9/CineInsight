@@ -119,3 +119,67 @@ func TestLibraryStatsCountsRecentlyAddedVideos(t *testing.T) {
 		t.Fatalf("最近 30 天新增应为 1，实际 %d", stats.Summary.RecentAddedCount)
 	}
 }
+
+// 这条测试必须在两个后端上都跑。只跑 SQLite 恰好会掩盖它要防的问题：
+// CAST(last_played_at AS DATE) 在 SQLite 上返回 "2026"，一整年落进同一个格子。
+func TestLibraryWatchHeatmapGroupsByLocalDateOnBothBackends(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	now := time.Now()
+
+	// 同一天两条、另一天一条，外加一条落在一年窗口之外。
+	day := func(offsetDays int, hour int) time.Time {
+		base := now.AddDate(0, 0, -offsetDays)
+		return time.Date(base.Year(), base.Month(), base.Day(), hour, 30, 0, 0, time.Local)
+	}
+	fixtures := []struct {
+		name     string
+		playedAt time.Time
+	}{
+		{"a.mp4", day(2, 1)},
+		{"b.mp4", day(2, 23)},
+		{"c.mp4", day(5, 12)},
+		{"old.mp4", now.AddDate(-2, 0, 0)},
+	}
+	for _, item := range fixtures {
+		playedAt := item.playedAt
+		video := models.Video{
+			Name: item.name, Path: root + "/" + item.name, Directory: root,
+			LastPlayedAt: &playedAt,
+		}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建视频失败: %v", err)
+		}
+	}
+
+	heatmap, err := libraryWatchHeatmap(now)
+	if err != nil {
+		t.Fatalf("统计热力图失败: %v", err)
+	}
+
+	got := map[string]int64{}
+	for _, entry := range heatmap {
+		// 分组键必须是完整的 YYYY-MM-DD。SQLite 上的旧写法会返回 "2026"，
+		// 长度断言直接把那种退化钉死。
+		if len(entry.Date) != len("2006-01-02") {
+			t.Fatalf("分组键必须是完整日期，实际 %q", entry.Date)
+		}
+		got[entry.Date] = entry.Count
+	}
+
+	twoDaysAgo := day(2, 0).Format("2006-01-02")
+	fiveDaysAgo := day(5, 0).Format("2006-01-02")
+	if got[twoDaysAgo] != 2 {
+		t.Fatalf("同一天的两条应合并计数：%+v", got)
+	}
+	if got[fiveDaysAgo] != 1 {
+		t.Fatalf("另一天应单独成组：%+v", got)
+	}
+	if len(heatmap) != 2 {
+		t.Fatalf("一年窗口之外的记录不应入组：%+v", heatmap)
+	}
+	// 顺序必须递增，前端按这个顺序填坐标轴。
+	if heatmap[0].Date > heatmap[1].Date {
+		t.Fatalf("分组应按日期升序：%+v", heatmap)
+	}
+}

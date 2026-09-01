@@ -91,13 +91,11 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 	if stats.StorageByResolution, err = libraryStorageByResolution(); err != nil {
 		return nil, err
 	}
-	if err := database.DB.Model(&models.Video{}).
-		Select("CAST(last_played_at AS DATE) AS date, COUNT(*) AS count").
-		Where("last_played_at >= ?", now.AddDate(-1, 0, 0)).
-		Group("CAST(last_played_at AS DATE)").Order("date ASC").
-		Scan(&stats.WatchHeatmap).Error; err != nil {
+	heatmap, err := libraryWatchHeatmap(now)
+	if err != nil {
 		return nil, err
 	}
+	stats.WatchHeatmap = heatmap
 	if err := database.DB.Model(&models.Video{}).
 		Select("personal_rating AS rating, COUNT(*) AS count").
 		Where("personal_rating IS NOT NULL").Group("personal_rating").Order("personal_rating ASC").
@@ -105,6 +103,42 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 		return nil, err
 	}
 	return stats, nil
+}
+
+// libraryWatchHeatmap 按最后播放日期统计近一年的每日视频数。
+//
+// 分组刻意放在 Go 侧而不是下推成 SQL，与 ListImageTimelineBuckets 同一个理由，
+// 外加一条更硬的：SQLite 没有 DATE 类型，CAST(last_played_at AS DATE) 走 NUMERIC
+// 亲和性，实测返回 "2026" 而不是 "2026-09-01"——一整年的播放会塞进热力图的同一个
+// 格子，而且不报错。这类静默错误数据比崩溃难发现得多。
+//
+// 按 time.Local 归并也让口径与前端对上：heatmapDays 本来就是按本地日期构建坐标轴的，
+// 而 Postgres 的 timestamptz 是按会话时区取值的。
+func libraryWatchHeatmap(now time.Time) ([]LibraryStatsWatchDay, error) {
+	var playedAt []time.Time
+	if err := database.DB.Model(&models.Video{}).
+		Where("last_played_at >= ?", now.AddDate(-1, 0, 0)).
+		Order("last_played_at ASC").
+		Pluck("last_played_at", &playedAt).Error; err != nil {
+		return nil, err
+	}
+
+	counts := make(map[string]int64, len(playedAt))
+	order := make([]string, 0, len(playedAt))
+	for _, at := range playedAt {
+		day := at.In(time.Local).Format("2006-01-02")
+		if _, seen := counts[day]; !seen {
+			order = append(order, day)
+		}
+		counts[day]++
+	}
+	sort.Strings(order)
+
+	result := make([]LibraryStatsWatchDay, 0, len(order))
+	for _, day := range order {
+		result = append(result, LibraryStatsWatchDay{Date: day, Count: counts[day]})
+	}
+	return result, nil
 }
 
 func libraryStorageByDirectory() ([]LibraryStatsBucket, error) {
