@@ -69,7 +69,7 @@
 
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" />
       <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" />
-	  <InsightsPage v-if="currentPage === 'insights'" />
+	  <InsightsPage v-if="currentPage === 'insights'" :directories="directories" />
 	  <!-- 首次进入才挂载，之后只隐藏不卸载：切走再切回不会丢已加载的图片和滚动位置。 -->
 	  <PhotoLibraryPage
 	    v-if="photosMounted"

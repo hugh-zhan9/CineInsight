@@ -14,6 +14,10 @@ type LibraryStatsSummary struct {
 	TotalSize      int64   `json:"total_size"`
 	WatchedCount   int64   `json:"watched_count"`
 	WatchedPercent float64 `json:"watched_percent"`
+	// RecentAddedCount 是最近 30 天新入库的条数，供摘要卡的副行显示。
+	// 其余副行指标（平均单片时长、观看总次数、最长连续天数、已评分数、
+	// 评分中位数）都能从本结构其他字段推导，不再各开一条查询。
+	RecentAddedCount int64 `json:"recent_added_count"`
 }
 
 type LibraryStatsBucket struct {
@@ -67,6 +71,11 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 	}
 	if stats.Summary.VideoCount > 0 {
 		stats.Summary.WatchedPercent = float64(stats.Summary.WatchedCount) * 100 / float64(stats.Summary.VideoCount)
+	}
+	if err := database.DB.Model(&models.Video{}).
+		Where("created_at >= ?", now.AddDate(0, 0, -30)).
+		Count(&stats.Summary.RecentAddedCount).Error; err != nil {
+		return nil, err
 	}
 
 	var err error

@@ -89,3 +89,33 @@ func TestLibraryStatsEmptyLibrary(t *testing.T) {
 		t.Fatalf("empty stats=%#v", stats)
 	}
 }
+
+func TestLibraryStatsCountsRecentlyAddedVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+
+	fresh := models.Video{Name: "fresh.mp4", Path: root + "/fresh.mp4", Directory: root, Size: 10}
+	if err := database.DB.Create(&fresh).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	old := models.Video{Name: "old.mp4", Path: root + "/old.mp4", Directory: root, Size: 10}
+	if err := database.DB.Create(&old).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	// created_at 由 GORM 自动写入，这里显式改成 60 天前。
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", old.ID).
+		UpdateColumn("created_at", time.Now().AddDate(0, 0, -60)).Error; err != nil {
+		t.Fatalf("回拨创建时间失败: %v", err)
+	}
+
+	stats, err := NewLibraryStatsService().GetStats()
+	if err != nil {
+		t.Fatalf("统计失败: %v", err)
+	}
+	if stats.Summary.VideoCount != 2 {
+		t.Fatalf("总数应为 2，实际 %d", stats.Summary.VideoCount)
+	}
+	if stats.Summary.RecentAddedCount != 1 {
+		t.Fatalf("最近 30 天新增应为 1，实际 %d", stats.Summary.RecentAddedCount)
+	}
+}

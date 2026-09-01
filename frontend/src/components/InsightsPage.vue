@@ -11,15 +11,40 @@
     </div>
     <template v-else>
       <div class="insights-summary">
-        <article><span>视频</span><strong>{{ formatNumber(stats.summary.video_count) }}</strong></article>
-        <article><span>总时长</span><strong>{{ formatDuration(stats.summary.total_duration) }}</strong></article>
-        <article><span>存储</span><strong>{{ formatBytes(stats.summary.total_size) }}</strong></article>
-        <article><span>已看比例</span><strong>{{ Number(stats.summary.watched_percent || 0).toFixed(1) }}%</strong></article>
+        <article>
+          <span>视频总数</span>
+          <strong>{{ formatNumber(stats.summary.video_count) }}</strong>
+          <small>最近 30 天 +{{ formatNumber(stats.summary.recent_added_count) }}</small>
+        </article>
+        <article>
+          <span>总时长</span>
+          <strong>{{ formatDuration(stats.summary.total_duration) }}</strong>
+          <small>平均单片 {{ averageDurationText }}</small>
+        </article>
+        <article>
+          <span>存储占用</span>
+          <strong>{{ formatBytes(stats.summary.total_size) }}</strong>
+          <small>{{ volumeSummaryText }}</small>
+        </article>
+        <article>
+          <span>已看比例</span>
+          <div class="insights-summary__inline">
+            <strong>{{ Number(stats.summary.watched_percent || 0).toFixed(1) }}%</strong>
+            <small>{{ formatNumber(stats.summary.watched_count) }} / {{ formatNumber(stats.summary.video_count) }}</small>
+          </div>
+          <div class="insights-progress"><i :style="{ width: `${Math.min(100, Number(stats.summary.watched_percent || 0))}%` }"></i></div>
+        </article>
       </div>
 
       <div class="insights-grid">
         <article class="insights-panel insights-panel--wide">
-          <div class="insights-panel__heading"><h3>近一年观看</h3><span>按最后播放日期</span></div>
+          <div class="insights-panel__heading">
+            <h3>近一年观看热力</h3>
+            <span>共 {{ formatNumber(heatmapTotal) }} 次播放 · 最长连续 {{ longestWatchStreak }} 天</span>
+            <div class="heatmap-legend" aria-hidden="true">
+              少<i class="heat-0"></i><i class="heat-1"></i><i class="heat-2"></i><i class="heat-3"></i><i class="heat-4"></i>多
+            </div>
+          </div>
           <div class="watch-heatmap" aria-label="近一年观看热力图">
             <span v-for="day in heatmapDays" :key="day.date" :class="`heat-${day.level}`" :title="`${day.date} · ${day.count} 部`"></span>
           </div>
@@ -30,11 +55,19 @@
         <BucketChart title="分辨率存储" :items="stats.storage_by_resolution" value-key="bytes" :format-value="formatBytes" />
         <BucketChart title="AI 标签 Top" :items="stats.top_ai_tags" value-key="count" :format-value="formatNumber" />
 
-        <article class="insights-panel">
-          <div class="insights-panel__heading"><h3>评分分布</h3><span>个人评分</span></div>
-          <div v-if="stats.rating_distribution?.length" class="rating-bars">
-            <div v-for="bucket in stats.rating_distribution" :key="bucket.rating" class="rating-bar">
-              <span>{{ bucket.rating }}</span><i :style="{ height: `${ratingHeight(bucket.count)}%` }"></i><small>{{ bucket.count }}</small>
+        <article class="insights-panel insights-panel--wide">
+          <div class="insights-panel__heading">
+            <h3>个人评分分布</h3>
+            <span>
+              已评分 {{ formatNumber(ratedCount) }} / {{ formatNumber(stats.summary.video_count) }}
+              <template v-if="ratingMedian !== null"> · 中位数 {{ ratingMedian.toFixed(1) }}</template>
+              · 半分制 21 档
+            </span>
+          </div>
+          <div v-if="ratedCount > 0" class="rating-bars">
+            <div v-for="bucket in ratingBuckets" :key="bucket.rating" class="rating-bar">
+              <i :style="{ height: `${ratingHeight(bucket.count)}%` }" :title="`${bucket.rating.toFixed(1)} · ${bucket.count} 部`"></i>
+              <small>{{ bucket.rating.toFixed(1) }}</small>
             </div>
           </div>
           <p v-else class="panel-empty">尚无个人评分。</p>
@@ -71,8 +104,68 @@ import BucketChart from './insights/BucketChart.vue';
 export default {
   name: 'InsightsPage',
   components: { BucketChart },
+  props: {
+    // 卷可用性由扫描目录与监听状态推出，不再单开一条后端统计。
+    directories: { type: Array, default: () => [] }
+  },
   data() { return { loading: false, error: '', stats: null, imageLoading: false, imageError: '', imageStats: null }; },
   computed: {
+    averageDurationText() {
+      const count = Number(this.stats?.summary?.video_count || 0);
+      if (count === 0) return '—';
+      return this.formatDuration(Number(this.stats.summary.total_duration || 0) / count);
+    },
+    // 「N 个卷 · M 个当前不可用」：卷取扫描目录路径的顶层挂载点，
+    // 不可用以目录自己的监听状态为准。拿不到状态时只报卷数，不猜可用性。
+    volumeSummaryText() {
+      const roots = new Map();
+      for (const directory of this.directories) {
+        const path = String(directory?.path || '');
+        if (!path) continue;
+        const match = path.match(/^(\/Volumes\/[^/]+|\/)/);
+        const root = match ? match[1] : path;
+        const unavailable = ['unavailable', 'error'].includes(String(directory?.watch_state || ''));
+        roots.set(root, (roots.get(root) || false) || unavailable);
+      }
+      if (roots.size === 0) return '';
+      const broken = [...roots.values()].filter(Boolean).length;
+      return broken > 0 ? `${roots.size} 个卷 · ${broken} 个当前不可用` : `${roots.size} 个卷`;
+    },
+    heatmapTotal() {
+      return (this.stats?.watch_heatmap || []).reduce((total, day) => total + Number(day.count || 0), 0);
+    },
+    longestWatchStreak() {
+      let best = 0;
+      let current = 0;
+      for (const day of this.heatmapDays) {
+        current = day.count > 0 ? current + 1 : 0;
+        if (current > best) best = current;
+      }
+      return best;
+    },
+    // 后端只返回出现过的评分值；21 档要补齐空档，否则柱状图的横轴会塌缩。
+    ratingBuckets() {
+      const counts = new Map((this.stats?.rating_distribution || [])
+        .map(item => [Number(item.rating).toFixed(1), Number(item.count || 0)]));
+      return Array.from({ length: 21 }, (_, step) => {
+        const rating = step * 0.5;
+        return { rating, count: counts.get(rating.toFixed(1)) || 0 };
+      });
+    },
+    ratedCount() {
+      return this.ratingBuckets.reduce((total, bucket) => total + bucket.count, 0);
+    },
+    ratingMedian() {
+      const total = this.ratedCount;
+      if (total === 0) return null;
+      const middle = (total + 1) / 2;
+      let seen = 0;
+      for (const bucket of this.ratingBuckets) {
+        seen += bucket.count;
+        if (seen >= middle) return bucket.rating;
+      }
+      return null;
+    },
     heatmapDays() {
       const counts = new Map((this.stats?.watch_heatmap || []).map(day => [String(day.date).slice(0, 10), Number(day.count || 0)]));
       // 后端按数据库会话时区 CAST(last_played_at AS DATE)（单机场景即本地
@@ -95,7 +188,7 @@ export default {
       }
       return result;
     },
-    maxRatingCount() { return Math.max(1, ...(this.stats?.rating_distribution || []).map(item => Number(item.count || 0))); }
+    maxRatingCount() { return Math.max(1, ...this.ratingBuckets.map(bucket => bucket.count)); }
   },
   mounted() { this.refresh(); },
   methods: {
@@ -122,10 +215,13 @@ export default {
       return `${(bytes / (1024 ** index)).toFixed(index > 1 ? 1 : 0)} ${units[index]}`;
     },
     formatDuration(seconds) {
-      const hours = Number(seconds || 0) / 3600;
-      return hours >= 24 ? `${(hours / 24).toFixed(1)} 天` : `${hours.toFixed(1)} 小时`;
+      const total = Number(seconds || 0);
+      const hours = total / 3600;
+      if (hours >= 24) return `${(hours / 24).toFixed(1)} 天`;
+      if (hours >= 1) return `${hours.toFixed(1)} 小时`;
+      return `${Math.round(total / 60)} 分钟`;
     },
-    ratingHeight(count) { return Math.max(8, Number(count || 0) / this.maxRatingCount * 100); }
+    ratingHeight(count) { return Number(count || 0) === 0 ? 2 : Math.max(6, Number(count) / this.maxRatingCount * 100); }
   }
 };
 </script>
@@ -137,22 +233,31 @@ export default {
 .insights-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .insights-summary--images { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .insights-heading--section { margin-top: 6px; }
-.insights-summary article, .insights-panel, .insights-empty { border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--panel-bg); padding: 16px; }
-.insights-summary article { display: grid; gap: 8px; }
-.insights-summary span { color: var(--text-secondary); font-size: 13px; }
-.insights-summary strong { color: var(--text-primary); font-size: 24px; }
+.insights-summary article, .insights-panel, .insights-empty { border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); padding: 14px 16px; }
+.insights-summary article { display: grid; gap: 4px; align-content: start; }
+.insights-summary span { color: var(--text-muted); font-size: 12px; }
+.insights-summary strong { color: var(--text-primary); font-size: 30px; font-weight: 700; font-family: var(--font-mono); letter-spacing: -0.02em; }
+.insights-summary small { color: var(--text-muted); font-size: 11.5px; }
+.insights-summary__inline { display: flex; align-items: baseline; gap: 8px; }
+.insights-summary__inline small { font-family: var(--font-mono); }
+.insights-progress { height: 5px; margin-top: 3px; border-radius: 3px; background: var(--neutral-softer); }
+.insights-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent-color); }
+.heatmap-legend { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-muted); font-size: 11px; }
+.heatmap-legend i { width: 10px; height: 10px; border-radius: 2px; }
 .insights-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .insights-panel--wide { grid-column: 1 / -1; }
-.insights-panel__heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
+.insights-panel__heading { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.insights-panel__heading h3 { font-size: 13px; }
 .watch-heatmap { display: grid; grid-template-columns: repeat(53, minmax(5px, 1fr)); grid-auto-flow: column; grid-template-rows: repeat(7, 8px); gap: 3px; }
-.watch-heatmap span { border-radius: 2px; background: var(--control-hover-bg); }
-.watch-heatmap .heat-1 { background: color-mix(in srgb, var(--accent-color) 30%, var(--control-hover-bg)); }
-.watch-heatmap .heat-2 { background: color-mix(in srgb, var(--accent-color) 50%, var(--control-hover-bg)); }
-.watch-heatmap .heat-3 { background: color-mix(in srgb, var(--accent-color) 72%, var(--control-hover-bg)); }
-.watch-heatmap .heat-4 { background: var(--accent-color); }
-.rating-bars { display: flex; align-items: end; height: 190px; gap: 8px; overflow-x: auto; }
-.rating-bar { display: grid; grid-template-rows: 20px 130px 20px; align-items: end; min-width: 28px; text-align: center; color: var(--text-secondary); font-size: 11px; }
-.rating-bar i { display: block; width: 18px; max-height: 130px; margin: 0 auto; border-radius: 5px 5px 2px 2px; background: var(--accent-color); }
+.watch-heatmap span, .heatmap-legend .heat-0 { border-radius: 2px; background: var(--neutral-faint); }
+.watch-heatmap .heat-1, .heatmap-legend .heat-1 { background: color-mix(in srgb, var(--accent-color) 30%, var(--neutral-faint)); }
+.watch-heatmap .heat-2, .heatmap-legend .heat-2 { background: color-mix(in srgb, var(--accent-color) 50%, var(--neutral-faint)); }
+.watch-heatmap .heat-3, .heatmap-legend .heat-3 { background: color-mix(in srgb, var(--accent-color) 72%, var(--neutral-faint)); }
+.watch-heatmap .heat-4, .heatmap-legend .heat-4 { background: var(--accent-color); }
+.rating-bars { display: flex; align-items: flex-end; height: 120px; gap: 4px; }
+.rating-bar { flex: 1; display: grid; grid-template-rows: 1fr auto; align-items: end; min-width: 0; text-align: center; }
+.rating-bar i { display: block; width: 100%; border-radius: 3px 3px 0 0; background: var(--accent-color); opacity: 0.9; }
+.rating-bar small { color: var(--text-muted); font-size: 10px; font-family: var(--font-mono); }
 .insights-error { color: var(--danger-color); }
 @media (max-width: 900px) { .insights-summary, .insights-grid { grid-template-columns: 1fr 1fr; } }
 @media (max-width: 620px) { .insights-summary, .insights-grid { grid-template-columns: 1fr; } .insights-panel--wide { grid-column: auto; } }
