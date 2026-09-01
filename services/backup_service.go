@@ -17,13 +17,20 @@ import (
 	"time"
 	"video-master/database"
 	"video-master/models"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 const (
 	defaultBackupRetentionCount = 7
 	defaultBackupIntervalHours  = 24
 	backupFilePrefix            = "cineinsight-"
-	backupFileSuffix            = ".dump"
+	// 后缀按后端区分：Postgres 快照是 pg_dump 自定义格式，SQLite 快照是库文件。
+	// 两者互不可用，靠后缀就能在恢复前判出来并明确拒绝，而不是交给工具报一句
+	// 看不懂的错。
+	backupFileSuffix       = ".dump"
+	sqliteBackupFileSuffix = ".sqlite"
 )
 
 type BackupFile struct {
@@ -217,11 +224,22 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 		return fmt.Errorf("读取备份设置失败: %w", err)
 	}
 	directory := s.resolveDirectory(settings.BackupDirectory)
+	backend := database.ActiveBackend()
+	// 先判快照与后端是否匹配：此时还没进维护模式、还没做安全备份，
+	// 拒绝的代价最小，用户拿到的也是一句说得清的话。
+	if !backupSuffixMatchesBackend(request.Name, backend) {
+		return s.recordedFailure(fmt.Errorf(
+			"备份文件与当前数据库后端不匹配，数据库未被修改：当前是 %s，而 %s 是另一种后端的快照",
+			backend, request.Name))
+	}
 	backupPath, err := s.copyVerifiedBackup(directory, request)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(backupPath)
+	if backend == database.BackendSQLite {
+		return s.restoreSQLite(ctx, directory, backupPath, request, settings, beforeRestore)
+	}
 	config, env, err := postgresCommandEnvironment()
 	if err != nil {
 		return s.recordedFailure(err)
@@ -279,6 +297,108 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 	return nil
 }
 
+// restoreSQLite 用快照替换当前库文件。
+//
+// 与 Postgres 那条路径的关键差别：那边是把数据灌回同一个库（连接可以保留并重连），
+// 这边是换掉库文件本身。正在使用的句柄不能安全地指向一个被换掉的文件，所以恢复
+// 成功后一律要求重启，不尝试重连。
+//
+// 顺序刻意与 Postgres 路径一致：先校验、再进维护模式围栏、再做安全备份、最后替换。
+// 安全备份放在围栏之后，才能保证围栏前落库的写入都被包含进去。
+func (s *BackupService) restoreSQLite(
+	ctx context.Context,
+	directory string,
+	backupPath string,
+	request BackupRestoreRequest,
+	settings *models.Settings,
+	beforeRestore func() error,
+) error {
+	if err := verifySQLiteSnapshot(backupPath); err != nil {
+		return s.recordedFailure(fmt.Errorf("备份文件校验失败，数据库未被修改: %w", err))
+	}
+
+	livePath := database.SQLitePath(s.dataDir)
+	if beforeRestore != nil {
+		if err := beforeRestore(); err != nil {
+			if DatabaseRestoreRequiresRestart(err) {
+				return err
+			}
+			return s.recordedFailure(fmt.Errorf("进入数据库维护模式失败，数据库未被修改: %w", err))
+		}
+	}
+	if err := s.performSafetyBackup(ctx, directory, normalizedBackupRetention(settings.BackupRetentionCount), request.Name); err != nil {
+		// 这里不 reconnect：SQLite 恢复本来就以重启收尾，维护模式保持到重启为止
+		// 反而是安全的——它挡住了所有写入。
+		return &DatabaseRestoreError{
+			Fatal: true,
+			Err:   fmt.Errorf("恢复前安全备份失败，数据库未被修改，应用必须重启以退出维护模式: %w", err),
+		}
+	}
+
+	// 关掉句柄再换文件。换的是主库文件，WAL 与 shm 边车必须一并清掉，
+	// 否则残留的 WAL 会被当成新库的一部分而让内容对不上。
+	if database.DB != nil {
+		if sqlDB, err := database.DB.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}
+	for _, sidecar := range []string{livePath + "-wal", livePath + "-shm"} {
+		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+			return &DatabaseRestoreError{
+				Fatal: true,
+				Err:   fmt.Errorf("清理 WAL 边车文件失败，应用必须重启: %w", err),
+			}
+		}
+	}
+	if err := copyFileContents(backupPath, livePath); err != nil {
+		return &DatabaseRestoreError{
+			Fatal: true,
+			Err:   fmt.Errorf("替换数据库文件失败，应用必须重启并检查备份目录: %w", err),
+		}
+	}
+	// 状态持久化要等重启后才有可用连接，这里不写，直接要求重启。
+	return &DatabaseRestoreError{
+		Committed: true,
+		Fatal:     true,
+		Err:       errors.New("数据库已从备份恢复，应用必须重启后生效"),
+	}
+}
+
+// verifySQLiteSnapshot 确认快照确实是一个能打开、且含本应用表的 SQLite 库。
+// 只读打开，不做迁移——迁移会改动快照本身。
+func verifySQLiteSnapshot(path string) error {
+	db, err := gorm.Open(sqlite.Open(path+"?mode=ro"), &gorm.Config{})
+	if err != nil {
+		return fmt.Errorf("无法作为 SQLite 库打开: %w", err)
+	}
+	defer func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	if !db.Migrator().HasTable(&models.Video{}) {
+		return errors.New("快照里没有 videos 表，不像是本应用的备份")
+	}
+	return nil
+}
+
+func copyFileContents(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		return err
+	}
+	return out.Close()
+}
+
 func (s *BackupService) createBackupLocked(ctx context.Context) (*BackupFile, error) {
 	settings, err := (&SettingsService{}).GetSettings()
 	if err != nil {
@@ -315,6 +435,39 @@ func (s *BackupService) performSafetyBackup(ctx context.Context, directory strin
 // performBackup 生成并校验一份新的转储文件。它不读写应用数据库，因此在数据库
 // 维护围栏生效期间也可以安全执行；状态记录由调用方负责。
 func (s *BackupService) performBackup(ctx context.Context, directory string) (*BackupFile, error) {
+	if database.ActiveBackend() == database.BackendSQLite {
+		return s.performSQLiteBackup(directory)
+	}
+	return s.performPostgresBackup(ctx, directory)
+}
+
+// performSQLiteBackup 用 VACUUM INTO 写一份单文件一致性快照。
+//
+// 选它而不是复制库文件：VACUUM INTO 在事务边界上产出一致快照，不需要停写，
+// 也不受 WAL 的 -wal / -shm 边车文件影响——直接拷贝库文件会漏掉尚未 checkpoint
+// 的 WAL 内容，拷出来的东西可能根本打不开。
+func (s *BackupService) performSQLiteBackup(directory string) (*BackupFile, error) {
+	if database.DB == nil {
+		return nil, errors.New("数据库未初始化")
+	}
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return nil, fmt.Errorf("创建备份目录失败: %w", err)
+	}
+	s.sweepStaleTempFiles(directory)
+
+	now := s.now()
+	name := backupFilePrefix + now.Format("20060102-150405.000000000") + sqliteBackupFileSuffix
+	// VACUUM INTO 要求目标文件不存在，所以这里只取一个唯一名字，不预先建文件。
+	tempPath := filepath.Join(directory, fmt.Sprintf(".cineinsight-backup-%d.tmp", now.UnixNano()))
+	defer os.Remove(tempPath)
+
+	if err := database.DB.Exec("VACUUM INTO ?", tempPath).Error; err != nil {
+		return nil, fmt.Errorf("写出 SQLite 快照失败: %w", err)
+	}
+	return s.publishBackupArtifact(directory, tempPath, name, now)
+}
+
+func (s *BackupService) performPostgresBackup(ctx context.Context, directory string) (*BackupFile, error) {
 	if _, err := s.runner.LookPath("pg_dump"); err != nil {
 		return nil, errors.New("未找到 pg_dump")
 	}
@@ -331,7 +484,6 @@ func (s *BackupService) performBackup(ctx context.Context, directory string) (*B
 	}
 	now := s.now()
 	name := backupFilePrefix + now.Format("20060102-150405.000000000") + backupFileSuffix
-	finalPath := filepath.Join(directory, name)
 	tempFile, err := os.CreateTemp(directory, ".cineinsight-backup-*.tmp")
 	if err != nil {
 		return nil, fmt.Errorf("创建备份临时文件失败: %w", err)
@@ -349,6 +501,14 @@ func (s *BackupService) performBackup(ctx context.Context, directory string) (*B
 	if err := s.runner.Run(ctx, "pg_restore", []string{"--list", tempPath}, env); err != nil {
 		return nil, fmt.Errorf("备份产物校验失败: %w", err)
 	}
+	return s.publishBackupArtifact(directory, tempPath, name, now)
+}
+
+// publishBackupArtifact 把临时产物原子地发布成正式备份文件。两个后端共用：
+// 校验非空、收紧权限、先算指纹再发布（发布之后不再有可失败的读取步骤），
+// 用"独占创建占位 + rename"保证不覆盖同名文件，同时不依赖用户所选磁盘的硬链接支持。
+func (s *BackupService) publishBackupArtifact(directory, tempPath, name string, now time.Time) (*BackupFile, error) {
+	finalPath := filepath.Join(directory, name)
 	info, err := os.Stat(tempPath)
 	if err != nil || info.Size() == 0 {
 		if err == nil {
@@ -359,14 +519,10 @@ func (s *BackupService) performBackup(ctx context.Context, directory string) (*B
 	if err := os.Chmod(tempPath, 0600); err != nil {
 		return nil, err
 	}
-	// 在发布前计算指纹，发布之后不再有可失败的读取步骤。
 	fingerprint, err := hashFile(tempPath)
 	if err != nil {
 		return nil, fmt.Errorf("读取备份产物失败: %w", err)
 	}
-	// Reserve the final name exclusively, then atomically replace our own empty
-	// placeholder. This preserves no-overwrite semantics without requiring hard
-	// link support from user-selected removable or network filesystems.
 	placeholder, err := os.OpenFile(finalPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("发布备份文件失败: %w", err)
@@ -594,11 +750,25 @@ func normalizedBackupInterval(value int) int {
 	return value
 }
 
+// isBackupFileName 认两种后缀，列表因此能同时看见历史 Postgres 快照与 SQLite 快照。
+// 能不能用是恢复时按后端判的（见 backupSuffixMatchesBackend），不在这里筛。
 func isBackupFileName(name string) bool {
 	return backupFileNamePattern.MatchString(name)
 }
 
-var backupFileNamePattern = regexp.MustCompile(`^cineinsight-\d{8}-\d{6}\.\d{9}\.dump$`)
+var backupFileNamePattern = regexp.MustCompile(`^cineinsight-\d{8}-\d{6}\.\d{9}\.(dump|sqlite)$`)
+
+// backupSuffixMatchesBackend 判断快照能不能在当前后端上恢复。
+//
+// 两种快照互不可用：Postgres 的是 pg_dump 自定义格式，SQLite 的是库文件。
+// 明确拒绝而不是交给工具去试——pg_restore 面对一个 SQLite 文件只会报一句
+// 用户看不懂的话，而且此时维护模式围栏可能已经生效。
+func backupSuffixMatchesBackend(name string, backend database.Backend) bool {
+	if backend == database.BackendSQLite {
+		return strings.HasSuffix(name, sqliteBackupFileSuffix)
+	}
+	return strings.HasSuffix(name, backupFileSuffix)
+}
 
 func hashFile(path string) (string, error) {
 	file, err := os.Open(path)

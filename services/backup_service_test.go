@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 	"video-master/database"
+	"video-master/internal/dbtest"
 	"video-master/models"
 
 	"gorm.io/driver/sqlite"
@@ -521,4 +522,111 @@ func containsString(values []string, expected string) bool {
 		}
 	}
 	return false
+}
+
+// SQLite 备份走 VACUUM INTO，与 Postgres 那条路径的产物、后缀和校验都不同。
+func TestSQLiteBackupWritesUsableSnapshotAndRotates(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端；Postgres 路径由既有用例覆盖")
+	}
+	setupVideoServiceTestDB(t)
+	t.Setenv("DB_BACKEND", "sqlite")
+	if database.ActiveBackend() != database.BackendSQLite {
+		t.Fatalf("测试前置：期望 SQLite 后端")
+	}
+	video := models.Video{Name: "backup.mp4", Path: t.TempDir() + "/backup.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("建行失败: %v", err)
+	}
+
+	directory := t.TempDir()
+	svc := &BackupService{dataDir: t.TempDir(), runner: execPostgresToolRunner{}, now: time.Now}
+	file, err := svc.performBackup(context.Background(), directory)
+	if err != nil {
+		t.Fatalf("SQLite 备份失败: %v", err)
+	}
+	if !strings.HasSuffix(file.Name, sqliteBackupFileSuffix) {
+		t.Fatalf("SQLite 快照后缀应为 %s，实际 %s", sqliteBackupFileSuffix, file.Name)
+	}
+	if file.Size <= 0 || file.Fingerprint == "" {
+		t.Fatalf("快照元信息不完整: %+v", file)
+	}
+
+	// 产物必须是能打开、且含本应用表的真库——不然"备份成功"是假的。
+	snapshot := filepath.Join(directory, file.Name)
+	if err := verifySQLiteSnapshot(snapshot); err != nil {
+		t.Fatalf("快照不可用: %v", err)
+	}
+	// 快照里应当能读到备份前写入的那一行。
+	opened, err := gorm.Open(sqlite.Open(snapshot+"?mode=ro"), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开快照失败: %v", err)
+	}
+	var count int64
+	if err := opened.Model(&models.Video{}).Count(&count).Error; err != nil {
+		t.Fatalf("读取快照失败: %v", err)
+	}
+	if sqlDB, err := opened.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
+	if count != 1 {
+		t.Fatalf("快照内容不含备份前写入的行: count=%d", count)
+	}
+}
+
+func TestRestoreRejectsSnapshotFromTheOtherBackend(t *testing.T) {
+	for _, tc := range []struct {
+		backend database.Backend
+		name    string
+	}{
+		{database.BackendSQLite, "cineinsight-20260901-120000.000000000.dump"},
+		{database.BackendPostgres, "cineinsight-20260901-120000.000000000.sqlite"},
+	} {
+		if backupSuffixMatchesBackend(tc.name, tc.backend) {
+			t.Fatalf("%s 上不应接受 %s", tc.backend, tc.name)
+		}
+	}
+	// 同后端的快照必须仍然被接受，否则拒绝逻辑写反了也测不出来。
+	if !backupSuffixMatchesBackend("cineinsight-20260901-120000.000000000.sqlite", database.BackendSQLite) {
+		t.Fatalf("SQLite 快照应被 SQLite 后端接受")
+	}
+	if !backupSuffixMatchesBackend("cineinsight-20260901-120000.000000000.dump", database.BackendPostgres) {
+		t.Fatalf("Postgres 快照应被 Postgres 后端接受")
+	}
+	// 两种后缀都要能被列表识别，否则历史快照会在界面上消失。
+	for _, name := range []string{
+		"cineinsight-20260901-120000.000000000.dump",
+		"cineinsight-20260901-120000.000000000.sqlite",
+	} {
+		if !isBackupFileName(name) {
+			t.Fatalf("备份列表应识别 %s", name)
+		}
+	}
+}
+
+func TestRestoreRefusesMismatchedBackendBeforeTouchingTheDatabase(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端")
+	}
+	setupVideoServiceTestDB(t)
+	t.Setenv("DB_BACKEND", "sqlite")
+
+	fenced := false
+	svc := &BackupService{dataDir: t.TempDir(), runner: execPostgresToolRunner{}, now: time.Now}
+	err := svc.RestoreBackupWithLifecycle(
+		context.Background(),
+		BackupRestoreRequest{Name: "cineinsight-20260901-120000.000000000.dump", Size: 10, Fingerprint: "x"},
+		func() error { fenced = true; return nil },
+		func() error { return nil },
+	)
+	if err == nil {
+		t.Fatalf("跨后端恢复应被拒绝")
+	}
+	if !strings.Contains(err.Error(), "与当前数据库后端不匹配") {
+		t.Fatalf("拒绝理由应说清楚，实际: %v", err)
+	}
+	// 关键：拒绝发生在进维护模式之前，数据库完全没被碰过。
+	if fenced {
+		t.Fatalf("跨后端快照不应触发维护模式围栏")
+	}
 }

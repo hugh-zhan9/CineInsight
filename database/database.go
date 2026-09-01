@@ -193,6 +193,18 @@ func ResolveBackend(env BackendEnv) (Backend, error) {
 	}
 }
 
+// ActiveBackend 返回当前配置的后端。刻意从配置读而不是从 DB.Dialector 取——
+// 数据库恢复流程会先关掉句柄再替换文件，那之后仍然需要知道自己在哪个后端上。
+func ActiveBackend() Backend {
+	backend, err := ResolveBackend(backendEnvFromOS())
+	if err != nil {
+		// 启动期已经校验过取值；走到这里只可能是环境被中途改坏，
+		// 退回 Postgres 与既有行为一致。
+		return BackendPostgres
+	}
+	return backend
+}
+
 func backendEnvFromOS() BackendEnv {
 	return BackendEnv{Backend: os.Getenv("DB_BACKEND"), PGHost: os.Getenv("PG_HOST")}
 }
