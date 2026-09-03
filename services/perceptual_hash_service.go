@@ -42,6 +42,8 @@ type PerceptualHashStatus struct {
 	StartedAt      *time.Time              `json:"started_at" ts_type:"string"`
 	UpdatedAt      *time.Time              `json:"updated_at" ts_type:"string"`
 	Failures       []PerceptualHashFailure `json:"failures"`
+	// Gate 是空闲门状态（D-032）：自动路径被挡住时这里说明原因，显式启动恒为零值。
+	Gate TaskGateState `json:"gate"`
 }
 
 type perceptualFrameRunner interface {
@@ -91,15 +93,17 @@ func extractPerceptualFrame(ctx context.Context, ffmpegBin string, seekArgs []st
 }
 
 type PerceptualHashService struct {
-	runner   perceptualFrameRunner
-	now      func() time.Time
-	mu       sync.Mutex
-	stopMu   sync.Mutex
-	status   PerceptualHashStatus
-	cancel   context.CancelFunc
-	worker   sync.WaitGroup
-	emitter  func(PerceptualHashStatus)
-	stopping bool
+	runner    perceptualFrameRunner
+	now       func() time.Time
+	mu        sync.Mutex
+	stopMu    sync.Mutex
+	status    PerceptualHashStatus
+	cancel    context.CancelFunc
+	worker    sync.WaitGroup
+	emitter   func(PerceptualHashStatus)
+	stopping  bool
+	registry  *BackgroundTaskRegistry
+	pauseHook TaskPauseHook
 }
 
 func NewPerceptualHashService() *PerceptualHashService {
@@ -112,34 +116,75 @@ func (s *PerceptualHashService) SetEventEmitter(emitter func(PerceptualHashStatu
 	s.mu.Unlock()
 }
 
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+func (s *PerceptualHashService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
+}
+
+func (s *PerceptualHashService) waitForPauseHook(ctx context.Context) error {
+	s.mu.Lock()
+	hook := s.pauseHook
+	s.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+	// 钩子在服务锁之外调用：它会阻塞很久，持锁等待会连 Status/Cancel 一起冻住。
+	return hook.Wait(ctx, s.setGateState)
+}
+
+func (s *PerceptualHashService) setGateState(state TaskGateState) {
+	s.update(func(status *PerceptualHashStatus) { status.Gate = state })
+}
+
+// Start 是显式启动路径：同一把锁下摘掉当前这一轮的项间检查点（D-030）。
 func (s *PerceptualHashService) Start(parent context.Context) (PerceptualHashStatus, error) {
+	return s.start(parent, nil)
+}
+
+// StartWithPauseHook 是自动路径专用：装钩子与翻 Running 在同一把锁里完成；
+// 已经在跑的那一轮不补装钩子（它可能是用户显式启动的）。
+func (s *PerceptualHashService) StartWithPauseHook(parent context.Context, hook TaskPauseHook) (PerceptualHashStatus, error) {
+	return s.start(parent, hook)
+}
+
+func (s *PerceptualHashService) start(parent context.Context, hook TaskPauseHook) (PerceptualHashStatus, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
 	s.mu.Lock()
+	releasing := clearReplacedPauseHook(&s.pauseHook, hook)
 	if s.stopping {
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return PerceptualHashStatus{}, errors.New("感知哈希任务正在停止")
 	}
 	if s.status.Running {
 		status := clonePerceptualHashStatus(s.status)
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return status, nil
 	}
 	var videos []models.Video
 	if err := database.DB.WithContext(parent).Select("id", "name", "path", "duration").Order("id ASC").Find(&videos).Error; err != nil {
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return PerceptualHashStatus{}, err
 	}
+	s.pauseHook = hook
 	now := s.now()
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
 	s.status = PerceptualHashStatus{Running: true, Total: len(videos), StartedAt: &now, UpdatedAt: &now, Failures: []PerceptualHashFailure{}}
 	status, emitter := clonePerceptualHashStatus(s.status), s.emitter
+	registry := s.registry
 	s.worker.Add(1)
 	s.mu.Unlock()
+	releaseTaskPauseHook(releasing)
+	registry.Begin(BackgroundTaskPerceptualHash)
 	emitPerceptualHashStatus(emitter, status)
-	go s.run(ctx, videos)
+	go s.run(ctx, videos, registry)
 	return status, nil
 }
 
@@ -176,10 +221,14 @@ func (s *PerceptualHashService) StopAndWait() {
 	s.mu.Unlock()
 }
 
-func (s *PerceptualHashService) run(ctx context.Context, videos []models.Video) {
+func (s *PerceptualHashService) run(ctx context.Context, videos []models.Video, registry *BackgroundTaskRegistry) {
 	defer s.worker.Done()
+	defer registry.End(BackgroundTaskPerceptualHash)
 	for _, video := range videos {
 		if ctx.Err() != nil {
+			break
+		}
+		if err := s.waitForPauseHook(ctx); err != nil {
 			break
 		}
 		s.update(func(status *PerceptualHashStatus) { status.CurrentVideoID = video.ID })
@@ -336,6 +385,7 @@ func (s *PerceptualHashService) finish(cancelled bool) {
 	s.status.Cancelled = cancelled
 	s.status.Completed = true
 	s.status.CurrentVideoID = 0
+	s.status.Gate = TaskGateState{}
 	now := s.now()
 	s.status.UpdatedAt = &now
 	s.cancel = nil

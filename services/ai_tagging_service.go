@@ -28,6 +28,21 @@ type AITaggingService struct {
 	workerRunMu    sync.Mutex
 	workerCancel   context.CancelFunc
 	workerWake     chan struct{}
+	registry       *BackgroundTaskRegistry
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+//
+// 这里不装项间检查点：worker 循环同时服务自动唤醒与用户显式的
+// TriggerAITagging / RetryVideo，钩子装上去会把显式任务也挡住（D-030 明令禁止）。
+// 自动唤醒改在 app 层过门。
+func (s *AITaggingService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	if s == nil {
+		return
+	}
+	s.workerMu.Lock()
+	s.registry = registry
+	s.workerMu.Unlock()
 }
 
 func NewAITaggingService() *AITaggingService {
@@ -144,6 +159,14 @@ func (s *AITaggingService) runWorkerOnce(ctx context.Context) {
 		log.Printf("[AITagging] find untagged videos failed: %v", err)
 		return
 	}
+	if len(videos) == 0 {
+		return
+	}
+	s.workerMu.Lock()
+	registry := s.registry
+	s.workerMu.Unlock()
+	registry.Begin(BackgroundTaskAITagging)
+	defer registry.End(BackgroundTaskAITagging)
 	for _, video := range videos {
 		if ctx.Err() != nil {
 			return

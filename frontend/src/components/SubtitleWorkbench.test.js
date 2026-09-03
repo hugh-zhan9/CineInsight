@@ -1,4 +1,16 @@
 import { flushPromises, mount } from '@vue/test-utils';
+
+// 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
+const feedback = vi.hoisted(() => ({
+  confirmAction: vi.fn(() => Promise.resolve(true)),
+  notify: vi.fn(),
+  notifyError: vi.fn(),
+  notifySuccess: vi.fn()
+}));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...feedback
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -63,12 +75,14 @@ describe('SubtitleWorkbench', () => {
   it('protects unsaved work when closing', async () => {
     const wrapper = await mountWorkbench();
     await wrapper.find('[data-test="entry-text-cue-1"]').setValue('changed');
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    feedback.confirmAction.mockResolvedValue(false);
 
     await wrapper.find('[data-test="close-workbench"]').trigger('click');
+    await flushPromises();
     expect(wrapper.emitted('close')).toBeUndefined();
-    confirm.mockReturnValue(true);
+    feedback.confirmAction.mockResolvedValue(true);
     await wrapper.find('[data-test="close-workbench"]').trigger('click');
+    await flushPromises();
     expect(wrapper.emitted('close')).toHaveLength(1);
   });
 

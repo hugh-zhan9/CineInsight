@@ -103,19 +103,30 @@ type Tag struct {
 
 // Settings 应用设置
 type Settings struct {
-	ID                           uint       `gorm:"primarykey" json:"id"`
-	ConfirmBeforeDelete          bool       `json:"confirm_before_delete"` // 删除前确认
-	DeleteOriginalFile           bool       `json:"delete_original_file"`  // 是否删除原始文件
-	VideoExtensions              string     `json:"video_extensions"`      // 支持的视频格式（逗号分隔）
-	ImageExtensions              string     `json:"image_extensions"`      // 支持的图片格式（逗号分隔），老库零值由使用方回退默认清单
-	ScanExcludePaths             string     `gorm:"type:text" json:"scan_exclude_paths"`
-	ImageScanExcludePaths        string     `gorm:"type:text" json:"image_scan_exclude_paths"` // 图片扫描黑名单；空值回退共用 scan_exclude_paths（老库行为）
-	PlayWeight                   float64    `gorm:"default:2.0" json:"play_weight"`            // 播放权重（1次播放 = N次随机播放）
-	RandomHalfLifeDays           int        `gorm:"not null;default:90" json:"random_half_life_days"`
-	AutoScanOnStartup            bool       `json:"auto_scan_on_startup"`   // 启动时自动增量扫描
-	LibraryWatchEnabled          bool       `json:"library_watch_enabled"`  // 实时同步片库
-	LocalMetadataEnabled         bool       `json:"local_metadata_enabled"` // 新视频本地元数据自动填空与补全任务
-	AIQualityEnabled             bool       `json:"ai_quality_enabled"`     // 显示 AI 质量评估入口
+	ID                    uint    `gorm:"primarykey" json:"id"`
+	ConfirmBeforeDelete   bool    `json:"confirm_before_delete"` // 删除前确认
+	DeleteOriginalFile    bool    `json:"delete_original_file"`  // 是否删除原始文件
+	VideoExtensions       string  `json:"video_extensions"`      // 支持的视频格式（逗号分隔）
+	ImageExtensions       string  `json:"image_extensions"`      // 支持的图片格式（逗号分隔），老库零值由使用方回退默认清单
+	ScanExcludePaths      string  `gorm:"type:text" json:"scan_exclude_paths"`
+	ImageScanExcludePaths string  `gorm:"type:text" json:"image_scan_exclude_paths"` // 图片扫描黑名单；空值回退共用 scan_exclude_paths（老库行为）
+	PlayWeight            float64 `gorm:"default:2.0" json:"play_weight"`            // 播放权重（1次播放 = N次随机播放）
+	RandomHalfLifeDays    int     `gorm:"not null;default:90" json:"random_half_life_days"`
+	AutoScanOnStartup     bool    `json:"auto_scan_on_startup"`   // 启动时自动增量扫描
+	LibraryWatchEnabled   bool    `json:"library_watch_enabled"`  // 实时同步片库
+	LocalMetadataEnabled  bool    `json:"local_metadata_enabled"` // 新视频本地元数据自动填空与补全任务
+	// 点「播放」时的续播口径。resume=交给播放器自己决定（IINA 会接着上次播），
+	// restart=总是从头，restart_watched=已看的从头、没看完的接着播。
+	PlaybackResumeMode string `gorm:"type:text;not null;default:'resume'" json:"playback_resume_mode"`
+
+	// 扫描完成后自动接着跑的后台任务。默认全关：这些都吃 CPU/IO，
+	// 什么时候跑该由用户决定，不能装完就替他占着机器。
+	AutoTechnicalBackfill        bool       `json:"auto_technical_backfill"`  // 补全分辨率/时长等技术元数据
+	AutoPerceptualHash           bool       `json:"auto_perceptual_hash"`     // 补全感知哈希（近似重复检测的前提）
+	AutoCleanupAnalysis          bool       `json:"auto_cleanup_analysis"`    // 扫描后重算清理候选
+	AutoImageEXIFBackfill        bool       `json:"auto_image_exif_backfill"` // 图片 EXIF/GPS 补全
+	AutoCollectionSuggestions    bool       `json:"auto_collection_suggestions"`
+	AIQualityEnabled             bool       `json:"ai_quality_enabled"` // 显示 AI 质量评估入口
 	ShortFeedMaxDurationMinutes  int        `gorm:"default:5" json:"short_feed_max_duration_minutes"`
 	ShortFeedFeedbackSyncEnabled bool       `gorm:"not null;default:true" json:"short_feed_feedback_sync_enabled"`
 	Theme                        string     `gorm:"default:'system'" json:"theme"`      // 主题模式: light, dark, system
@@ -144,7 +155,51 @@ type Settings struct {
 	BackupLastAttemptAt          *time.Time `json:"backup_last_attempt_at" ts_type:"string"`
 	BackupLastSuccessAt          *time.Time `json:"backup_last_success_at" ts_type:"string"`
 	BackupLastError              string     `gorm:"type:text;not null;default:''" json:"backup_last_error"`
-	UpdatedAt                    time.Time  `json:"updated_at" ts_type:"string"`
+	// 后台任务空闲调度（D-032）。只挡自动触发的任务，用户显式启动永远不受影响。
+	//
+	// 这一列有意不带 gorm default：默认值为 true 的布尔列会被 GORM 的 Create 当成
+	// "零值即未设置"跳过，双向迁移器的 Unscoped().Create 会把用户关掉的开关翻回 true。
+	// 默认开由两处显式保证：新库在 ApplySchema 里带值插入，老库由
+	// database.migrateIdleSchedulingSetting 显式刷成 true。
+	IdleSchedulingEnabled bool   `json:"idle_scheduling_enabled"`
+	IdleThresholdMinutes  int    `gorm:"not null;default:5" json:"idle_threshold_minutes"`
+	IdleRequireACPower    bool   `gorm:"not null;default:false" json:"idle_require_ac_power"`
+	IdleWindowStart       string `gorm:"type:text;not null;default:''" json:"idle_window_start"`
+	IdleWindowEnd         string `gorm:"type:text;not null;default:''" json:"idle_window_end"`
+
+	// 桌面通知与 Dock 角标（D-013）。仅 macOS 生效，其他平台是空实现。
+	//
+	// 与 IdleSchedulingEnabled 同理，这一列也不带 gorm default 标签：默认值为 true
+	// 的布尔列会被 GORM 的 Create 当成"零值即未设置"跳过，双向迁移器的
+	// Unscoped().Create 会把用户关掉的开关翻回 true。默认开由新库在 ApplySchema 里
+	// 带值插入、老库由 database.migrateDesktopNotificationsSetting 显式刷成 true。
+	DesktopNotificationsEnabled bool `json:"desktop_notifications_enabled"`
+
+	// 兼容性转封装代理（D-005、D-006）。
+	//
+	// AutoCompatibilityProxy 默认关，零值即默认，不需要迁移。
+	// ProxyCacheLimitBytes 默认 50 GiB，但同样**不带 gorm default 标签**：0 在这里
+	// 是"不限"这个有意义的取值，带上默认标签之后 GORM 的 Create 会把它当成未设置，
+	// 双向迁移器就会把用户设的"不限"翻回 50 GiB。默认值由新库在 ApplySchema 里
+	// 带值插入、老库由 database.migrateProxyCacheLimitSetting 显式刷出。
+	AutoCompatibilityProxy bool  `json:"auto_compatibility_proxy"`
+	ProxyCacheLimitBytes   int64 `json:"proxy_cache_limit_bytes"`
+
+	// 人脸识别（D-016、D-022）。两列的默认值都是零值，因此不需要显式迁移，
+	// 也不用（更不能用）gorm default 标签。
+	//
+	// AutoFaceAnalysis 默认关：人脸分析是重任务，且它产出的是人物候选，
+	// 装完就替用户跑一遍并不合适。FaceModelMirrorURL 为空时用 manifest 里的
+	// 官方地址，非空时替换其 URL 前缀（本机直连 GitHub 未必通）。
+	AutoFaceAnalysis   bool   `json:"auto_face_analysis"`
+	FaceModelMirrorURL string `gorm:"type:text;not null;default:''" json:"face_model_mirror_url"`
+
+	// 帧哈希序列（D-026）。默认关，零值即默认，不需要显式迁移，也不用（更不能用）
+	// gorm default 标签。回填要逐帧抽整部片，是本应用里最吃 CPU 的一类任务，
+	// 什么时候跑该由用户决定。
+	AutoFrameHashSequence bool `json:"auto_frame_hash_sequence"`
+
+	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }
 
 // ScanDirectory 扫描目录配置

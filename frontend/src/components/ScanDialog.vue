@@ -28,6 +28,7 @@
 <script>
 import { SelectDirectory, ScanDirectory, AddVideo, DeleteVideo, GetVideosByDirectory, AddDirectory } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import { notify, notifyError } from '../utils/feedback.js';
 
 export default {
   name: 'ScanDialog',
@@ -74,16 +75,16 @@ export default {
         this.scanDirectory = await SelectDirectory();
       } catch (err) {
         console.error('选择目录失败:', err);
-        alert('选择目录失败: ' + err);
+        notifyError('选择目录失败: ' + err);
       }
     },
     async startScan() {
       if (!this.scanDirectory) {
-        alert('请先选择目录');
+        notify('请先选择目录');
         return;
       }
       if (this.isExcludedPath(this.scanDirectory)) {
-        alert('所选目录位于扫描黑名单中，请先从设置中移除后再扫描。');
+        notify('所选目录位于扫描黑名单中，请先从设置中移除后再扫描。');
         return;
       }
 
@@ -150,7 +151,7 @@ export default {
             await AddDirectory(this.scanDirectory, alias);
           } catch (err) {
             console.warn('保存扫描目录失败:', err);
-            alert('保存扫描目录失败: ' + err);
+            notifyError('保存扫描目录失败: ' + err);
           }
         }
 

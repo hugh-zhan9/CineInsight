@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,4 +251,62 @@ func createSubtitleWorkbenchFixture(t *testing.T) (*models.Video, string) {
 		t.Fatalf("create video: %v", err)
 	}
 	return video, srtPath
+}
+
+// P-010：选区重译与字幕生成走同一套术语表 + 滑动窗口（D-033、D-035）。
+func TestSubtitleWorkbenchRetranslateInjectsGlossaryAndSlidesContextWindow(t *testing.T) {
+	service := NewSubtitleWorkbenchService(nil)
+	translator := &recordingContextualTranslator{reply: echoTranslationReply("译:")}
+	service.translatorFactory = func(SubtitleTranslationConfig) (SubtitleTranslator, error) { return translator, nil }
+	glossary := []GlossaryTerm{{SourceTerm: "Neo", TargetTerm: "尼奥"}}
+	resolvedFor := []uint{}
+	service.glossaryResolver = func(videoID uint) ([]GlossaryTerm, error) {
+		resolvedFor = append(resolvedFor, videoID)
+		return glossary, nil
+	}
+
+	entries := make([]SubtitleRetranslateEntry, 0, 60)
+	texts := make([]string, 0, 60)
+	for index := 1; index <= 60; index++ {
+		text := fmt.Sprintf("Line %d about NEO", index)
+		texts = append(texts, text)
+		entries = append(entries, SubtitleRetranslateEntry{ClientID: fmt.Sprintf("c%d", index), Text: text})
+	}
+
+	result, err := service.Retranslate(context.Background(), SubtitleRetranslateRequest{
+		VideoID: 42, SourceLang: "en", TargetLang: "zh", Entries: entries,
+	}, SubtitleTranslationConfig{})
+	if err != nil {
+		t.Fatalf("选区重译失败: %v", err)
+	}
+	if len(result.Entries) != 60 || result.Entries[59].Text != "译:"+texts[59] {
+		t.Fatalf("重译结果不完整: %d 条", len(result.Entries))
+	}
+	if len(resolvedFor) != 1 || resolvedFor[0] != 42 {
+		t.Fatalf("术语生效集应当按视频解析且只解析一次: %#v", resolvedFor)
+	}
+	assertSlidingWindow(t, translator.requests, texts, "译:")
+	for index, request := range translator.requests {
+		if len(request.Glossary) != 1 || request.Glossary[0].TargetTerm != "尼奥" {
+			t.Fatalf("第 %d 批未带上术语生效集: %+v", index, request.Glossary)
+		}
+	}
+}
+
+func TestSubtitleWorkbenchRetranslateFailsWhenGlossaryCannotBeResolved(t *testing.T) {
+	service := NewSubtitleWorkbenchService(nil)
+	service.translatorFactory = func(SubtitleTranslationConfig) (SubtitleTranslator, error) {
+		return &recordingContextualTranslator{reply: func(TranslationRequest) ([]string, error) {
+			t.Fatal("术语表解析失败时不应发出翻译请求")
+			return nil, nil
+		}}, nil
+	}
+	service.glossaryResolver = func(uint) ([]GlossaryTerm, error) { return nil, errors.New("glossary unavailable") }
+
+	_, err := service.Retranslate(context.Background(), SubtitleRetranslateRequest{
+		VideoID: 1, TargetLang: "zh", Entries: []SubtitleRetranslateEntry{{ClientID: "a", Text: "one"}},
+	}, SubtitleTranslationConfig{})
+	if err == nil || !strings.Contains(err.Error(), "glossary unavailable") {
+		t.Fatalf("术语表解析失败应当直接失败，实际 err=%v", err)
+	}
 }

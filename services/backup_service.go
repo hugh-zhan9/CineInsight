@@ -115,11 +115,59 @@ func (execPostgresToolRunner) Run(ctx context.Context, name string, args []strin
 }
 
 type BackupService struct {
-	dataDir string
-	runner  postgresToolRunner
-	now     func() time.Time
-	mu      sync.Mutex
-	running atomic.Bool
+	dataDir    string
+	runner     postgresToolRunner
+	now        func() time.Time
+	mu         sync.Mutex
+	running    atomic.Bool
+	registryMu sync.Mutex
+	registry   *BackgroundTaskRegistry
+	notifier   DesktopNotifier
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+// 登记范围与 running 标记一致：手动备份与启动时的自动备份，不含恢复流程里的
+// 安全备份（那时数据库已被围栏挡住，界面也不再是"后台任务"的语境）。
+func (s *BackupService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.registryMu.Lock()
+	s.registry = registry
+	s.registryMu.Unlock()
+}
+
+func (s *BackupService) taskRegistry() *BackgroundTaskRegistry {
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	return s.registry
+}
+
+// SetDesktopNotifier 接入桌面通知（D-013）。备份只有失败才通知：
+// 成功的备份用户不需要知道，失败了才必须知道。
+func (s *BackupService) SetDesktopNotifier(notifier DesktopNotifier) {
+	s.registryMu.Lock()
+	s.notifier = notifier
+	s.registryMu.Unlock()
+}
+
+func (s *BackupService) desktopNotifier() DesktopNotifier {
+	s.registryMu.Lock()
+	defer s.registryMu.Unlock()
+	return s.notifier
+}
+
+// backupDue 判断距上次成功备份是否已到间隔。不碰任何共享状态，可在锁外调用。
+func (s *BackupService) backupDue() (bool, error) {
+	settings, err := (&SettingsService{}).GetSettings()
+	if err != nil {
+		return false, err
+	}
+	interval := normalizedBackupInterval(settings.BackupIntervalHours)
+	if interval == 0 {
+		return false, nil
+	}
+	if settings.BackupLastSuccessAt != nil && s.now().Sub(*settings.BackupLastSuccessAt) < time.Duration(interval)*time.Hour {
+		return false, nil
+	}
+	return true, nil
 }
 
 func NewBackupService(dataDir string) *BackupService {
@@ -177,6 +225,11 @@ func (s *BackupService) ListBackups() ([]BackupFile, error) {
 }
 
 func (s *BackupService) CreateBackup(ctx context.Context) (*BackupFile, error) {
+	// 登记表的变化回调在服务锁之外跑：回调会走到空闲门与前端事件，
+	// 把它关在备份锁里等于给后来者埋一个隐形的锁序。
+	registry := s.taskRegistry()
+	registry.Begin(BackgroundTaskBackup)
+	defer registry.End(BackgroundTaskBackup)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.running.Store(true)
@@ -185,18 +238,20 @@ func (s *BackupService) CreateBackup(ctx context.Context) (*BackupFile, error) {
 }
 
 func (s *BackupService) MaybeBackup(ctx context.Context) (bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	settings, err := (&SettingsService{}).GetSettings()
-	if err != nil {
+	// 先在锁外判一次"到点了没"：不到点就不登记，免得角标为一次空转闪一下。
+	due, err := s.backupDue()
+	if err != nil || !due {
 		return false, err
 	}
-	interval := normalizedBackupInterval(settings.BackupIntervalHours)
-	if interval == 0 {
-		return false, nil
-	}
-	if settings.BackupLastSuccessAt != nil && s.now().Sub(*settings.BackupLastSuccessAt) < time.Duration(interval)*time.Hour {
-		return false, nil
+	registry := s.taskRegistry()
+	registry.Begin(BackgroundTaskBackup)
+	defer registry.End(BackgroundTaskBackup)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	// 锁内复查，保持原语义：并发调用时后一个要看到前一个刚写的成功时间。
+	due, err = s.backupDue()
+	if err != nil || !due {
+		return false, err
 	}
 	s.running.Store(true)
 	defer s.running.Store(false)
@@ -407,6 +462,8 @@ func (s *BackupService) createBackupLocked(ctx context.Context) (*BackupFile, er
 	directory := s.resolveDirectory(settings.BackupDirectory)
 	backup, err := s.performBackup(ctx, directory)
 	if err != nil {
+		// 失败原因不进通知文案：pg_dump 的报错里带备份目录的绝对路径。
+		notifyDesktop(s.desktopNotifier(), "数据库备份失败", "备份未完成，可在设置页的数据库备份分区查看原因")
 		return nil, s.recordedFailure(err)
 	}
 	// 转储已成功，先落成功状态；随后的轮转问题只作为告警，不否定本次成功。

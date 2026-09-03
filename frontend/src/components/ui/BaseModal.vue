@@ -15,7 +15,21 @@ export default {
     stopModalClicks: { type: Boolean, default: false }
   },
   emits: ['close'],
+  mounted() {
+    // Esc 是弹窗的兜底逃生口：个别分支里没有按钮可点（例如能力不可用的提示态），
+    // 没有它用户就只能重启应用。父组件没监听 close 时这里什么也不会发生。
+    document.addEventListener('keydown', this.handleDocumentKeydown);
+  },
+  beforeUnmount() {
+    document.removeEventListener('keydown', this.handleDocumentKeydown);
+  },
   methods: {
+    handleDocumentKeydown(event) {
+      if (event.key !== 'Escape') return;
+      event.stopPropagation();
+      this.$emit('close');
+    },
+
     handleOverlayClick() {
       if (this.closeOnOverlay) this.$emit('close');
     },

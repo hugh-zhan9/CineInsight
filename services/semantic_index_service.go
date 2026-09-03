@@ -182,6 +182,28 @@ type SemanticIndexService struct {
 	stopping        bool
 	queryMu         sync.Mutex
 	queryCache      map[string]semanticQueryCacheEntry
+	registry        *BackgroundTaskRegistry
+	notifier        DesktopNotifier
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+func (s *SemanticIndexService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
+}
+
+// SetDesktopNotifier 接入桌面通知（D-013）。
+func (s *SemanticIndexService) SetDesktopNotifier(notifier DesktopNotifier) {
+	s.mu.Lock()
+	s.notifier = notifier
+	s.mu.Unlock()
+}
+
+func (s *SemanticIndexService) taskRegistry() *BackgroundTaskRegistry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registry
 }
 
 // NewSemanticIndexService creates an explicitly started, single-worker semantic indexer.
@@ -385,6 +407,11 @@ func (s *SemanticIndexService) prepareProfile(model string, rebuild bool) (model
 
 func (s *SemanticIndexService) run(ctx context.Context, profile models.SemanticIndexProfile, config SemanticIndexConfig, embedder SemanticEmbeddingClient) {
 	defer s.worker.Done()
+	// 登记表在 worker 里取：startLocked 是持着服务锁跑的，在那里 Begin 会让
+	// 登记表的变化回调在服务锁内执行，给后来者留一个隐形的锁序陷阱。
+	registry := s.taskRegistry()
+	registry.Begin(BackgroundTaskSemantic)
+	defer registry.End(BackgroundTaskSemantic)
 	// 全量视频加载在 worker 内完成，避免在服务互斥锁内做 O(库) 的读取，
 	// 阻塞 Status/Cancel 调用；快照语义：启动后新增的视频等下次运行。
 	var videos []models.Video
@@ -749,8 +776,10 @@ func (s *SemanticIndexService) finish(cancelled bool) {
 	s.status.UpdatedAt = &now
 	s.cancel = nil
 	status, emitter := cloneSemanticIndexStatus(s.status), s.emitter
+	notifier := s.notifier
 	s.mu.Unlock()
 	emitSemanticIndexStatus(emitter, status)
+	notifySemanticIndexTerminal(notifier, "视频语义索引", status.Cancelled, status.Succeeded, status.Failed)
 }
 
 func cloneSemanticIndexStatus(status SemanticIndexStatus) SemanticIndexStatus {

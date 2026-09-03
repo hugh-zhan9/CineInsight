@@ -33,6 +33,7 @@
             <small>{{ formatNumber(stats.summary.watched_count) }} / {{ formatNumber(stats.summary.video_count) }}</small>
           </div>
           <div class="insights-progress"><i :style="{ width: `${Math.min(100, Number(stats.summary.watched_percent || 0))}%` }"></i></div>
+          <small data-test="insights-play-events">{{ playEventsSummaryText }}</small>
         </article>
       </div>
 
@@ -46,7 +47,7 @@
             </div>
           </div>
           <div class="watch-heatmap" aria-label="近一年观看热力图">
-            <span v-for="day in heatmapDays" :key="day.date" :class="`heat-${day.level}`" :title="`${day.date} · ${day.count} 部`"></span>
+            <span v-for="day in heatmapDays" :key="day.date" :class="`heat-${day.level}`" :title="`${day.date} · ${day.count} 次播放`"></span>
           </div>
         </article>
 
@@ -100,6 +101,7 @@
 <script>
 import { GetImageInsights, GetLibraryInsights } from '../../wailsjs/go/main/App';
 import BucketChart from './insights/BucketChart.vue';
+import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
 export default {
   name: 'InsightsPage',
@@ -133,6 +135,22 @@ export default {
     },
     heatmapTotal() {
       return (this.stats?.watch_heatmap || []).reduce((total, day) => total + Number(day.count || 0), 0);
+    },
+    // 播放事件账本的两项：全库流水总数与按来源的拆分。总数不限一年窗口，
+    // 与只看近一年的热力图刻意是两个数。
+    playEventsSummaryText() {
+      const total = Number(this.stats?.total_play_events || 0);
+      const bySource = this.stats?.plays_by_source || {};
+      const labels = { desktop_play: '桌面', desktop_random: '随机', mobile_feed: '手机', legacy: '历史' };
+      const ordered = Object.keys(labels).filter(source => Number(bySource[source] || 0) > 0);
+      // 后端将来加了新来源也要能显示出来，不认识的键按原样排在后面。
+      const extra = Object.keys(bySource)
+        .filter(source => !(source in labels) && Number(bySource[source] || 0) > 0)
+        .sort();
+      const parts = [...ordered, ...extra]
+        .map(source => `${labels[source] || source} ${this.formatNumber(bySource[source])}`);
+      const head = `播放事件 ${this.formatNumber(total)}`;
+      return parts.length > 0 ? `${head} · ${parts.join(' · ')}` : head;
     },
     longestWatchStreak() {
       let best = 0;
@@ -168,8 +186,8 @@ export default {
     },
     heatmapDays() {
       const counts = new Map((this.stats?.watch_heatmap || []).map(day => [String(day.date).slice(0, 10), Number(day.count || 0)]));
-      // 后端按数据库会话时区 CAST(last_played_at AS DATE)（单机场景即本地
-      // 时区）；坐标轴同样用本地日期构建，避免 UTC 轴导致的错位一天。
+      // 后端读 play_events 后在 Go 侧按 time.Local 归并成 YYYY-MM-DD；
+      // 坐标轴同样用本地日期构建，避免 UTC 轴导致的错位一天。
       const localDate = (value) => {
         const year = value.getFullYear();
         const month = String(value.getMonth() + 1).padStart(2, '0');
@@ -190,7 +208,19 @@ export default {
     },
     maxRatingCount() { return Math.max(1, ...this.ratingBuckets.map(bucket => bucket.count)); }
   },
-  mounted() { this.refresh(); },
+  mounted() {
+    this.refresh();
+    // 命令面板的本页动作（D-029）。
+    registerCommands('insights-page', [{
+      id: 'action:insights-refresh',
+      group: 'action',
+      label: '刷新洞察数据',
+      keywords: ['refresh insights', '刷新洞察'],
+      enabled: () => !this.loading && !this.imageLoading,
+      run: () => this.refresh()
+    }]);
+  },
+  beforeUnmount() { unregisterCommands('insights-page'); },
   methods: {
     // 视频与图片分区各自独立加载：任一侧失败只影响自己的分区。
     refresh() { this.loadStats(); this.loadImageStats(); },

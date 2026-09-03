@@ -20,6 +20,19 @@ func TestLibraryStatsAggregatesFixture(t *testing.T) {
 	if err := database.DB.Create(&videos).Error; err != nil {
 		t.Fatal(err)
 	}
+	// 热力图读账本：给近期播放的那条补一条事件，一年窗口之外的那条也补上，
+	// 用来证明窗口过滤仍然生效。
+	for _, item := range []struct {
+		videoIndex int
+		playedAt   time.Time
+	}{{0, recent}, {1, old}} {
+		if err := database.DB.Create(&models.PlayEvent{
+			VideoID: videos[item.videoIndex].ID, PlayedAt: item.playedAt,
+			Source: models.PlayEventSourceDesktopPlay,
+		}).Error; err != nil {
+			t.Fatalf("创建播放事件失败: %v", err)
+		}
+	}
 	tag := models.Tag{Name: "剧情", Color: "#fff", IsSystem: true, IsActive: true}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatal(err)
@@ -74,6 +87,10 @@ func TestLibraryStatsAggregatesFixture(t *testing.T) {
 	if len(stats.WatchHeatmap) != 1 || stats.WatchHeatmap[0].Count != 1 {
 		t.Fatalf("watch heatmap=%#v", stats.WatchHeatmap)
 	}
+	// 一年窗口之外的事件不进热力图，但仍计入总数。
+	if stats.TotalPlayEvents != 2 || stats.PlaysBySource[models.PlayEventSourceDesktopPlay] != 2 {
+		t.Fatalf("play events total=%d bySource=%#v", stats.TotalPlayEvents, stats.PlaysBySource)
+	}
 	if len(stats.RatingDistribution) != 1 || stats.RatingDistribution[0].Rating != 8.5 || stats.RatingDistribution[0].Count != 2 {
 		t.Fatalf("ratings=%#v", stats.RatingDistribution)
 	}
@@ -121,7 +138,7 @@ func TestLibraryStatsCountsRecentlyAddedVideos(t *testing.T) {
 }
 
 // 这条测试必须在两个后端上都跑。只跑 SQLite 恰好会掩盖它要防的问题：
-// CAST(last_played_at AS DATE) 在 SQLite 上返回 "2026"，一整年落进同一个格子。
+// CAST(played_at AS DATE) 在 SQLite 上返回 "2026"，一整年落进同一个格子。
 func TestLibraryWatchHeatmapGroupsByLocalDateOnBothBackends(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()
@@ -149,6 +166,12 @@ func TestLibraryWatchHeatmapGroupsByLocalDateOnBothBackends(t *testing.T) {
 		}
 		if err := database.DB.Create(&video).Error; err != nil {
 			t.Fatalf("创建视频失败: %v", err)
+		}
+		// 热力图读的是账本，不再是 videos.last_played_at。
+		if err := database.DB.Create(&models.PlayEvent{
+			VideoID: video.ID, PlayedAt: playedAt, Source: models.PlayEventSourceDesktopPlay,
+		}).Error; err != nil {
+			t.Fatalf("创建播放事件失败: %v", err)
 		}
 	}
 

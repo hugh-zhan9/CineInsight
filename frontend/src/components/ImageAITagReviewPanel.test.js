@@ -6,6 +6,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'RejectImageAITagCandidate', 'RejectImageAITagCandidatesByImage',
 ].map(name => [name, vi.fn()])));
 vi.mock('../../wailsjs/go/main/App', () => api);
+vi.mock('./FaceClusterReviewPanel.vue', () => ({ default: { template: '<div data-test="face-panel-stub">face panel</div>' } }));
 
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
 
@@ -122,5 +123,25 @@ describe('ImageAITagReviewPanel', () => {
     const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } });
     await flushPromises();
     expect(wrapper.find('[data-test="image-ai-tag-review-error"]').text()).toContain('加载候选失败');
+  });
+});
+
+// P-013：图片侧复用视频侧那一个人物候选面板，不复制一份。
+describe('ImageAITagReviewPanel face cluster section', () => {
+  it('offers the shared face candidate panel as a second section', async () => {
+    api.ListImageAITagCandidates.mockResolvedValue([]);
+    const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } });
+    await flushPromises();
+    expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="image-face-cluster-review-tab"]').trigger('click');
+    expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(true);
+    // 人物候选与标签候选是两批数据，标签侧的筛选与空态都不该出现在这一页。
+    expect(wrapper.find('[data-test="image-ai-tag-confidence-high"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="image-ai-tag-review-empty"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="image-ai-tag-review-tab"]').trigger('click');
+    expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="image-ai-tag-review-empty"]').exists()).toBe(true);
   });
 });

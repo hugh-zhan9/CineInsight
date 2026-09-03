@@ -57,11 +57,26 @@ type LocalMetadataBackfillStatus struct {
 }
 
 type localMetadataBackfill struct {
-	mu      sync.Mutex
-	status  LocalMetadataBackfillStatus
-	cancel  context.CancelFunc
-	worker  sync.WaitGroup
-	emitter func(LocalMetadataBackfillStatus)
+	mu       sync.Mutex
+	status   LocalMetadataBackfillStatus
+	cancel   context.CancelFunc
+	worker   sync.WaitGroup
+	emitter  func(LocalMetadataBackfillStatus)
+	registry *BackgroundTaskRegistry
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+// 补全与写出共用 local_metadata 这一个 key：任一在跑就算这项在跑，
+// 登记表用计数配对，两条 worker 各自 Begin/End 不会互相抵消。
+func (s *LocalMetadataService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	backfill := s.backfillState()
+	backfill.mu.Lock()
+	backfill.registry = registry
+	backfill.mu.Unlock()
+	export := s.exportState()
+	export.mu.Lock()
+	export.registry = registry
+	export.mu.Unlock()
 }
 
 func (s *LocalMetadataService) PreviewBatch(videoIDs []uint) LocalMetadataBatchPreview {
@@ -176,10 +191,12 @@ func (s *LocalMetadataService) StartBackfill(parent context.Context) (LocalMetad
 		Running: true, Total: len(videos), StartedAt: &now, UpdatedAt: &now, Failures: []LocalMetadataFailure{},
 	}
 	status, emitter := cloneLocalMetadataBackfillStatus(state.status), state.emitter
+	registry := state.registry
 	state.worker.Add(1)
 	state.mu.Unlock()
+	registry.Begin(BackgroundTaskLocalMetadata)
 	emitLocalMetadataBackfill(emitter, status)
-	go s.runBackfill(ctx, videos)
+	go s.runBackfill(ctx, videos, registry)
 	return status, nil
 }
 
@@ -216,8 +233,9 @@ func (s *LocalMetadataService) StopBackfill() {
 	state.worker.Wait()
 }
 
-func (s *LocalMetadataService) runBackfill(ctx context.Context, videos []models.Video) {
+func (s *LocalMetadataService) runBackfill(ctx context.Context, videos []models.Video, registry *BackgroundTaskRegistry) {
 	defer s.backfillState().worker.Done()
+	defer registry.End(BackgroundTaskLocalMetadata)
 	for _, video := range videos {
 		if ctx.Err() != nil {
 			break

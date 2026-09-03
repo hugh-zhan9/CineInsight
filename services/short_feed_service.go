@@ -295,6 +295,17 @@ func (s *ShortFeedService) candidateFileExists(candidate shortFeedCandidate) boo
 		}
 		return false
 	}
+	// 抽签阶段只看"有没有 ready 代理行"，不校验指纹（那一步要 stat 源文件）。
+	// 抽中之后必须补上这一校验：代理刚失效（源被替换、产物被删）的话，
+	// 这条视频本来就不该入选，放过去手机端只会拿到一段播不了的源字节。
+	// resolveVideoProxy 顺手把失效的文件与表行清掉，重建快照时它自然消失。
+	if candidate.video != nil {
+		if _, inline := inlinePreviewMIME(candidate.video.Path); !inline {
+			if s.resolveVideoProxy(*candidate.video, false) == nil {
+				return false
+			}
+		}
+	}
 	return true
 }
 
@@ -379,15 +390,24 @@ func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Vi
 		return nil, nil, err
 	}
 
+	// 有有效代理的视频也入选（D-004）：内嵌白名单不命中但代理已经生成好了，
+	// 手机端拿到的是代理字节。
+	proxied, err := loadProxiedVideoIDs()
+	if err != nil {
+		return nil, nil, err
+	}
+
 	candidates := make([]shortFeedCandidate, 0, len(existingVideos))
 	var unsupportedVideo *models.Video
 	for i := range existingVideos {
 		video := existingVideos[i]
 		if _, ok := inlinePreviewMIME(video.Path); !ok {
-			if unsupportedVideo == nil {
-				unsupportedVideo = &existingVideos[i]
+			if _, hasProxy := proxied[video.ID]; !hasProxy {
+				if unsupportedVideo == nil {
+					unsupportedVideo = &existingVideos[i]
+				}
+				continue
 			}
-			continue
 		}
 		candidates = append(candidates, shortFeedCandidate{
 			ref:   ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID},
@@ -550,6 +570,14 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 			"random_play_count": gorm.Expr("random_play_count + 1"),
 			"last_played_at":    now,
 			"is_stale":          false,
+		}).Error; err != nil {
+			return err
+		}
+		// 播放事件与计数递增同事务：手机端与桌面端在账本里必须是同一种一致性。
+		if err := tx.Create(&models.PlayEvent{
+			VideoID:  videoID,
+			PlayedAt: now,
+			Source:   models.PlayEventSourceMobileFeed,
 		}).Error; err != nil {
 			return err
 		}
@@ -932,7 +960,28 @@ func (s *ShortFeedService) ResolveMedia(ref ShortFeedMediaRef) (*ShortFeedMedia,
 	}
 	mimeType, ok := inlinePreviewMIME(video.Path)
 	if !ok {
-		mimeType = fallbackVideoMIME(video.Path)
+		// 白名单不命中时才可能有代理：命中就下发代理字节（D-004）。
+		// 路径形态不变，手机端仍然只知道 /short-media/video/{id} 这一个地址。
+		if proxies := s.videoService.playbackProxies(); proxies != nil {
+			if proxy := proxies.resolveValidProxy(video.ID, playbackProxyFingerprintOf(info), true); proxy != nil {
+				if proxyInfo, statErr := s.stat(proxy.Path); statErr == nil {
+					return &ShortFeedMedia{
+						Path:        proxy.Path,
+						DisplayName: video.Name,
+						MIME:        playbackProxyMIME,
+						ModTime:     proxyInfo.ModTime(),
+					}, nil
+				}
+			}
+		}
+		// 白名单不命中、又没有可用代理：这条视频没有任何能发给浏览器的字节。
+		// **不回落到源文件**——把一段 mkv 配上猜出来的 MIME 发过去，手机端只会
+		// 得到一个放不出来的黑框，还白占几十兆流量。报"没有可播内容"，
+		// 由 writeMediaError 收敛成 404，这才是诚实的答案。
+		//
+		// 这一条也兜住"抽签时代理还有效、下发时刚失效"的窗口：抽签阶段只看
+		// 有没有 ready 行，指纹校验落在 resolveValidProxy 里，就是上面那一步。
+		return nil, ErrShortFeedNoEligibleVideos
 	}
 	return &ShortFeedMedia{
 		Path:        video.Path,
@@ -1076,6 +1125,10 @@ func (s *ShortFeedService) videoDTO(video *models.Video, reasonCode string, reas
 	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
 		mediaURL = shortFeedMediaURL(ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID})
 		mediaMIME = mimeType
+	} else if proxy := s.resolveVideoProxy(*video, false); proxy != nil {
+		// 有有效代理：媒体地址不变，MIME 换成代理产物的 mp4（D-004）。
+		mediaURL = shortFeedMediaURL(ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID})
+		mediaMIME = playbackProxyMIME
 	} else if reasonCode == "" {
 		reasonCode = "inline_not_supported"
 		reasonMessage = "当前文件格式不适合浏览器内播放。"
@@ -1150,6 +1203,41 @@ func shortFeedEligible(video models.Video, maxDurationSeconds float64) bool {
 		maxDurationSeconds = defaultShortFeedMaxDurationSeconds
 	}
 	return !video.IsStale && video.Duration > 0 && video.Duration < maxDurationSeconds
+}
+
+// loadProxiedVideoIDs 读出当前有 ready 代理行的视频集合（D-004）。
+//
+// 抽签阶段只看这一份集合，不 stat：与既有候选收集的口径一致——那里也刻意不做
+// 文件存在性检查，抽中之后才 stat 那一条。指纹校验留给真正命中代理的时刻。
+func loadProxiedVideoIDs() (map[uint]struct{}, error) {
+	if database.DB == nil {
+		return nil, nil
+	}
+	var ids []uint
+	if err := database.DB.Model(&models.VideoPlaybackProxy{}).
+		Where("status = ?", models.PlaybackProxyStatusReady).
+		Pluck("video_id", &ids).Error; err != nil {
+		return nil, fmt.Errorf("读取播放代理集合失败: %w", err)
+	}
+	proxied := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		proxied[id] = struct{}{}
+	}
+	return proxied, nil
+}
+
+// resolveVideoProxy 取一条视频当前可用的代理；没有代理服务或没有有效代理时返回 nil。
+// 白名单本身一个字都没改——代理是白名单之外的第二条路，而不是把那张表扩宽。
+func (s *ShortFeedService) resolveVideoProxy(video models.Video, touch bool) *resolvedPlaybackProxy {
+	proxies := s.videoService.playbackProxies()
+	if proxies == nil {
+		return nil
+	}
+	info, err := s.stat(video.Path)
+	if err != nil || info.IsDir() {
+		return nil
+	}
+	return proxies.resolveValidProxy(video.ID, playbackProxyFingerprintOf(info), touch)
 }
 
 // shortFeedInteractionState 是两种媒体互动的公共形态。两张并行表形状一致，

@@ -73,6 +73,8 @@ type ImageAITaggingStatus struct {
 	StartedAt      *time.Time              `json:"started_at,omitempty" ts_type:"string"`
 	UpdatedAt      *time.Time              `json:"updated_at,omitempty" ts_type:"string"`
 	Failures       []ImageAITaggingFailure `json:"failures"`
+	// Gate 是空闲门状态（D-032）：自动路径被挡住时这里说明原因，显式启动恒为零值。
+	Gate TaskGateState `json:"gate"`
 }
 
 // ImageAITaggingService 管理图片 AI 打标的批量三件套与单张重跑（设计 4.6.6）。
@@ -97,7 +99,9 @@ type ImageAITaggingService struct {
 	// 只让重跑登记是不够的：批量先 check 再执行，重跑可以在这个窗口里插进来，
 	// 于是同一张图被发两次 AI、状态行互相覆盖。两条路径都登记，冲突才真的被挡住。
 	// 值是各自的取消函数，供 shutdown 统一取消。
-	inFlight map[uint]context.CancelFunc
+	inFlight  map[uint]context.CancelFunc
+	registry  *BackgroundTaskRegistry
+	pauseHook TaskPauseHook
 }
 
 // NewImageAITaggingService 创建图片 AI 打标服务（单 worker、显式启动）。
@@ -120,6 +124,28 @@ func (s *ImageAITaggingService) SetEventEmitter(emitter func(ImageAITaggingStatu
 }
 
 // prepareClient 校验 AI 配置可用并构造客户端；BaseURL/Model 为空一律拒绝。
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+func (s *ImageAITaggingService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
+}
+
+func (s *ImageAITaggingService) waitForPauseHook(ctx context.Context) error {
+	s.mu.Lock()
+	hook := s.pauseHook
+	s.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+	// 钩子在服务锁之外调用：它会阻塞很久，持锁等待会连 Status/Cancel 一起冻住。
+	return hook.Wait(ctx, s.setGateState)
+}
+
+func (s *ImageAITaggingService) setGateState(state TaskGateState) {
+	s.updateStatus(func(status *ImageAITaggingStatus) { status.Gate = state })
+}
+
 func (s *ImageAITaggingService) prepareClient() (AITaggingConfig, ImageTaggingClient, error) {
 	if s.configProvider == nil {
 		return AITaggingConfig{}, nil, fmt.Errorf("%w: 配置提供者缺失", ErrImageAITaggingConfigUnavailable)
@@ -142,24 +168,43 @@ func (s *ImageAITaggingService) prepareClient() (AITaggingConfig, ImageTaggingCl
 // 已经打过标的媒体永远不会按新词表重新评估，"标签库为空时跑过一次"的媒体更是永久停在 skipped。
 // 图片侧不复制这个行为——不发请求的跳过路径代价只有一次状态查询，
 // 而标签库变化本来就在证据指纹里，指纹变了就该重打。
+// StartImageAITagging 是显式启动路径：同一把锁下摘掉当前这一轮的项间检查点（D-030）。
 func (s *ImageAITaggingService) StartImageAITagging(parent context.Context) (ImageAITaggingStatus, error) {
+	return s.startImageAITagging(parent, nil)
+}
+
+// StartImageAITaggingWithPauseHook 是自动路径专用：装钩子与翻 Running 在同一把锁里完成；
+// 已经在跑的那一轮不补装钩子（它可能是用户显式启动的）。
+func (s *ImageAITaggingService) StartImageAITaggingWithPauseHook(parent context.Context, hook TaskPauseHook) (ImageAITaggingStatus, error) {
+	return s.startImageAITagging(parent, hook)
+}
+
+func (s *ImageAITaggingService) startImageAITagging(parent context.Context, hook TaskPauseHook) (ImageAITaggingStatus, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
 	config, client, err := s.prepareClient()
 	if err != nil {
+		s.mu.Lock()
+		releasing := clearReplacedPauseHook(&s.pauseHook, hook)
+		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return ImageAITaggingStatus{}, err
 	}
 	s.mu.Lock()
+	releasing := clearReplacedPauseHook(&s.pauseHook, hook)
 	if s.stopping {
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return ImageAITaggingStatus{}, errors.New("图片 AI 打标任务正在停止")
 	}
 	if s.busy || s.status.Running {
 		status := cloneImageAITaggingStatus(s.status)
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return status, ErrImageAITaggingBusy
 	}
+	s.pauseHook = hook
 	now := s.now()
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
@@ -169,10 +214,13 @@ func (s *ImageAITaggingService) StartImageAITagging(parent context.Context) (Ima
 		Failures: []ImageAITaggingFailure{},
 	}
 	status, emitter := cloneImageAITaggingStatus(s.status), s.emitter
+	registry := s.registry
 	s.worker.Add(1)
 	s.mu.Unlock()
+	releaseTaskPauseHook(releasing)
+	registry.Begin(BackgroundTaskImageAITagging)
 	emitImageAITaggingStatus(emitter, status)
-	go s.run(ctx, config, client)
+	go s.run(ctx, config, client, registry)
 	return status, nil
 }
 
@@ -312,8 +360,9 @@ func (s *ImageAITaggingService) RecoverInterruptedImageTagging() error {
 }
 
 // run 是单 worker 主循环：目标集快照在 worker 内加载，避免持锁做 O(库) 读取。
-func (s *ImageAITaggingService) run(ctx context.Context, config AITaggingConfig, client ImageTaggingClient) {
+func (s *ImageAITaggingService) run(ctx context.Context, config AITaggingConfig, client ImageTaggingClient, registry *BackgroundTaskRegistry) {
 	defer s.worker.Done()
+	defer registry.End(BackgroundTaskImageAITagging)
 	inFlight := s.db.Model(&models.ImageAITaggingState{}).Select("image_id").
 		Where("status = ?", models.AITaggingStateStatusProcessing)
 	var targets []models.Image
@@ -334,6 +383,9 @@ func (s *ImageAITaggingService) run(ctx context.Context, config AITaggingConfig,
 	s.updateStatus(func(status *ImageAITaggingStatus) { status.Total = len(targets) })
 	for _, target := range targets {
 		if ctx.Err() != nil {
+			break
+		}
+		if err := s.waitForPauseHook(ctx); err != nil {
 			break
 		}
 		s.updateStatus(func(status *ImageAITaggingStatus) { status.CurrentImageID = target.ID })
@@ -794,6 +846,7 @@ func (s *ImageAITaggingService) finish(cancelled bool) {
 	s.status.Cancelled = cancelled
 	s.status.Completed = !cancelled
 	s.status.CurrentImageID = 0
+	s.status.Gate = TaskGateState{}
 	now := s.now()
 	s.status.UpdatedAt = &now
 	s.busy = false

@@ -5,7 +5,8 @@
       <div class="cleanup-page__title">
         <h2>清理审阅</h2>
         <p class="cleanup-page__subtitle">
-          精确重复默认勾选多余副本；近似重复交给你判断，默认不勾。删除都进回收站，可随时恢复。
+          默认按"保留推荐那份、其余勾删"预置，近似重复是哈希判定，请逐组过一眼——每组都能一键「按建议勾选 / 取消」。
+          只有勾了「删除」的会被移入回收站（可随时恢复），「保留这份」只是本组的对比基准，不勾任何删除的组不会有任何改动。
         </p>
       </div>
       <div class="cleanup-page__summary" data-test="cleanup-summary">
@@ -106,7 +107,17 @@
                 相似度 {{ similarityLabel(entry) }}
               </span>
               <span v-if="entry.spansDirectories" class="cleanup-group__warn" data-test="cleanup-cross-dir">跨 {{ entry.directoryCount }} 个目录</span>
+              <!-- "保留这份"只是对比基准，不会连带删除别的；真正决定生死的是"删除"复选框。
+                   一个都没勾时明说本组不会有任何改动，免得用户以为没勾的会被自动清掉。 -->
+              <span class="cleanup-group__outcome" data-test="cleanup-group-outcome">{{ groupOutcomeLabel(entry) }}</span>
               <span class="cleanup-group__spacer"></span>
+              <button
+                type="button"
+                class="btn-secondary btn-compact"
+                :disabled="isSkipped(entry)"
+                data-test="cleanup-suggest-group"
+                @click="toggleGroupSuggestion(entry)"
+              >{{ isGroupFullySuggested(entry) ? '取消本组勾选' : '按建议勾选（保留推荐项）' }}</button>
               <button
                 type="button"
                 class="btn-secondary btn-compact"
@@ -267,6 +278,7 @@ import {
   resetPhotoCleanupReview,
   refreshPhotoCleanupStatus
 } from '../utils/photoCleanupStore.js';
+import { confirmAction } from '../utils/feedback.js';
 
 const STAGE_LABELS = {
   load: '读取图片记录',
@@ -358,13 +370,13 @@ export default {
       return this.directorySections.length > 0
         && this.directorySections.every(section => this.isDirCollapsed(section.directory));
     },
-    // 默认勾选规则：精确重复内容就是同一份，除保留项外全勾；近似重复是判断题，一律不勾。
-    // 打开"只勾同目录"后，精确重复里位于别处的副本也不勾。
+    // 默认勾选规则（用户裁决）：两类都按"保留推荐那份、其余勾删"预置——推荐项由后端
+    // 按画质排序给出。近似重复毕竟是哈希判定，每组都留了「按建议勾选 / 取消」一键翻转。
+    // 打开"只勾同目录"后，位于别处的副本不勾。
     autoSelectedIDs() {
       const ids = [];
       const protectedIDs = this.protectedIDs;
       for (const entry of this.entries) {
-        if (entry.kind !== 'exact') continue;
         const keepDir = this.keepDirFor(entry);
         for (const member of entry.members) {
           const id = Number(member.id);
@@ -396,10 +408,16 @@ export default {
       }
     }
   },
-  mounted() {
+  async mounted() {
     startPhotoCleanupPolling();
-    refreshPhotoCleanupStatus();
     window.addEventListener('keydown', this.handleKeydown);
+    await refreshPhotoCleanupStatus();
+    // 与视频侧的清理审阅同构：进来时后端既没在跑、也没有可用结果，就直接发起一次分析，
+    // 不用再多点一次"开始分析"。已有结果（哪怕已标记过期）保留下来，要不要重跑由用户决定。
+    const status = photoCleanupStore.status;
+    if (!status?.running && !status?.completed) {
+      await this.startAnalysis();
+    }
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.handleKeydown);
@@ -471,6 +489,38 @@ export default {
       const id = Number(image?.id);
       return this.protectedIDs.has(id) && this.keepFor(entry) !== id;
     },
+    // 本组是否已经是"保留推荐项、其余全勾"的状态。
+    isGroupFullySuggested(entry) {
+      const suggested = this.suggestedIDsFor(entry);
+      return suggested.length > 0 && suggested.every(id => this.selection.includes(id));
+    },
+    suggestedIDsFor(entry) {
+      const keepID = this.keepFor(entry);
+      const keepDir = this.keepDirFor(entry);
+      return entry.members
+        .map(member => Number(member.id))
+        .filter(id => id !== keepID)
+        .filter(id => !this.deletedIDs.includes(id))
+        .filter(id => !this.protectedIDs.has(id))
+        .filter(id => {
+          if (!this.sameDirOnly) return true;
+          const member = entry.members.find(item => Number(item.id) === id);
+          return this.directoryOf(member) === keepDir;
+        });
+    },
+    toggleGroupSuggestion(entry) {
+      const suggested = new Set(this.suggestedIDsFor(entry));
+      if (this.isGroupFullySuggested(entry)) {
+        this.review.selection = this.selection.filter(id => !suggested.has(Number(id)));
+        return;
+      }
+      this.review.selection = [...new Set([...this.selection, ...suggested])];
+    },
+    groupOutcomeLabel(entry) {
+      if (this.isSkipped(entry)) return '本组不删';
+      const marked = entry.members.filter(member => this.selection.includes(Number(member.id))).length;
+      return marked === 0 ? '本组暂不删除任何图片' : `本组将删除 ${marked} 张`;
+    },
     keepFor(entry) {
       const override = this.keepOverrides[entry.key];
       if (override != null) return Number(override);
@@ -510,7 +560,6 @@ export default {
       const memberIDs = entry.members.map(member => Number(member.id));
       const memberSet = new Set(memberIDs);
       const kept = this.selection.filter(id => !memberSet.has(id));
-      if (entry.kind !== 'exact') return kept;
       const keepDir = this.keepDirFor(entry);
       const marked = entry.members
         .map(member => ({ id: Number(member.id), directory: this.directoryOf(member) }))
@@ -639,9 +688,11 @@ export default {
       // 让工具栏徽标与"结果可能过期"跟上这次删除。
       refreshPhotoCleanupStatus();
       // 不静默重跑：先问一句，让用户决定是继续审阅还是刷新候选。
-      const rerun = window.confirm(
-        `已把 ${succeeded.length} 张图片移入回收站。是否立即重新分析？\n选择"取消"可以继续审阅当前结果。`
-      );
+      const rerun = await confirmAction({
+        title: '重新分析清理候选',
+        message: `已把 ${succeeded.length} 张图片移入回收站。是否立即重新分析？\n选择"取消"可以继续审阅当前结果。`,
+        confirmText: '重新分析'
+      });
       if (rerun) await this.startAnalysis();
       if (failureNotice) this.localError = failureNotice;
     },
@@ -707,6 +758,7 @@ export default {
 .cleanup-group__reason { color: var(--text-muted); font-size: 12px; }
 .cleanup-group__similarity { color: var(--text-secondary); font-size: 11px; }
 .cleanup-group__warn { padding: 2px 8px; border: 1px solid var(--danger-color); border-radius: 999px; color: var(--danger-color); font-size: 11px; }
+.cleanup-group__outcome { padding: 2px 8px; border: 1px dashed var(--hairline); border-radius: 999px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
 .cleanup-group__skip--active { border-color: var(--accent-color); color: var(--accent-color); }
 
 .cleanup-group__members { display: flex; flex-wrap: wrap; gap: 12px; }

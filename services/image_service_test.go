@@ -506,3 +506,62 @@ func TestImageAddImageRejectsDuplicatePath(t *testing.T) {
 		t.Fatalf("重复入库不得产生第二条记录: %d", imageTestActiveCount(t))
 	}
 }
+
+// 文件夹视图里的"删除文件夹"：只清掉这个目录直属的图片，子目录不受影响，
+// 磁盘上的目录本身留着（用户删的是库里的内容，不是目录结构）。
+func TestBatchDeleteImagesInDirectoryOnlyTouchesItsOwnImages(t *testing.T) {
+	setupImageServiceTestDB(t)
+	svc := NewImageService()
+	root := t.TempDir()
+	folder := filepath.Join(root, "folder")
+	nested := filepath.Join(folder, "nested")
+	for _, dir := range []string{folder, nested} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("建目录失败: %v", err)
+		}
+	}
+	images := []models.Image{
+		{Name: "a.jpg", Path: filepath.Join(folder, "a.jpg"), Directory: folder},
+		{Name: "b.jpg", Path: filepath.Join(folder, "b.jpg"), Directory: folder},
+		{Name: "c.jpg", Path: filepath.Join(nested, "c.jpg"), Directory: nested},
+	}
+	for i := range images {
+		if err := os.WriteFile(images[i].Path, []byte("x"), 0o644); err != nil {
+			t.Fatalf("写文件失败: %v", err)
+		}
+	}
+	if err := database.DB.Create(&images).Error; err != nil {
+		t.Fatalf("创建图片失败: %v", err)
+	}
+
+	result, err := svc.BatchDeleteImagesInDirectory(folder, false)
+	if err != nil {
+		t.Fatalf("按目录删除失败: %v", err)
+	}
+	if result.Requested != 2 || result.Succeeded != 2 || result.Failed != 0 {
+		t.Fatalf("只应删掉直属的两张: %+v", result)
+	}
+
+	var remaining []models.Image
+	if err := database.DB.Find(&remaining).Error; err != nil {
+		t.Fatalf("查询剩余图片失败: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].Directory != nested {
+		t.Fatalf("子目录里的图片不该被牵连: %+v", remaining)
+	}
+	if _, err := os.Stat(folder); err != nil {
+		t.Fatalf("磁盘上的目录本身必须留着: %v", err)
+	}
+}
+
+func TestBatchDeleteImagesInDirectoryRejectsUnknownDirectory(t *testing.T) {
+	setupImageServiceTestDB(t)
+	svc := NewImageService()
+
+	if _, err := svc.BatchDeleteImagesInDirectory(filepath.Join(t.TempDir(), "empty"), false); err == nil {
+		t.Fatalf("目录里没有图片时应当报错而不是静默成功")
+	}
+	if _, err := svc.BatchDeleteImagesInDirectory("   ", false); err == nil {
+		t.Fatalf("空目录名应当被拒绝")
+	}
+}

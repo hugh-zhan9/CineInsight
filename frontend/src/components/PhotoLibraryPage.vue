@@ -143,7 +143,7 @@
         :anchor="photoMenuAnchor"
         :min-width="360"
         :teleport="false"
-        panel-class="photo-filter-popover"
+        panel-class="filter-popover photo-filter-popover"
         @close="closePhotoMenu"
       >
         <div class="photo-filter-popover__head"><strong>筛选条件</strong></div>
@@ -188,6 +188,54 @@
             :disabled="searchMode === 'semantic'"
             data-test="photo-taken-before"
           />
+        </div>
+        <div class="photo-toolbar__people" :title="searchMode === 'semantic' ? '语义模式不叠加此筛选' : ''">
+          <span>人物</span>
+          <div v-if="personFilterSelections.length" class="photo-person-chips" data-test="photo-person-filter-chips">
+            <span v-for="selection in personFilterSelections" :key="selection.id" class="tag-badge">
+              {{ selection.name }}
+              <button
+                type="button"
+                class="tag-remove"
+                :aria-label="`移除人物筛选 ${selection.name}`"
+                :data-test="`photo-person-filter-remove-${selection.id}`"
+                @click="removePersonFilter(selection.id)"
+              >×</button>
+            </span>
+          </div>
+          <div class="photo-tag-combobox">
+            <input
+              v-model="personFilterKeyword"
+              type="search"
+              class="search-input"
+              placeholder="搜索人物，回车添加"
+              role="combobox"
+              autocomplete="off"
+              aria-controls="photo-person-filter-options"
+              :aria-expanded="personFilterMenuOpen"
+              :aria-activedescendant="personFilterMenuOpen && filteredPersonFilterCandidates[personFilterActiveIndex] ? `photo-person-filter-option-${filteredPersonFilterCandidates[personFilterActiveIndex].person.id}` : undefined"
+              :disabled="searchMode === 'semantic'"
+              data-test="photo-person-filter-search"
+              @focus="openPersonFilterMenu"
+              @input="handlePersonFilterInput"
+              @keydown="handlePersonFilterKeydown"
+              @blur="closePersonFilterMenu"
+            />
+            <div v-if="personFilterMenuOpen" id="photo-person-filter-options" class="photo-tag-options" role="listbox" data-test="photo-person-filter-options">
+              <button
+                v-for="(item, index) in filteredPersonFilterCandidates"
+                :id="`photo-person-filter-option-${item.person.id}`"
+                :key="item.person.id"
+                type="button"
+                role="option"
+                :aria-selected="index === personFilterActiveIndex"
+                :class="['photo-tag-option', { active: index === personFilterActiveIndex }]"
+                @mouseenter="personFilterActiveIndex = index"
+                @mousedown.prevent="addPersonFilter(item)"
+              >{{ item.person.display_name }}</button>
+              <span v-if="filteredPersonFilterCandidates.length === 0" class="photo-tag-options__empty">没有匹配人物</span>
+            </div>
+          </div>
         </div>
       </BasePopover>
 
@@ -263,6 +311,14 @@
             <span :title="folder.directory">{{ folder.directory }}</span>
           </div>
         </button>
+        <button
+          type="button"
+          class="btn-danger btn-compact photo-folder-card__delete"
+          :disabled="folderDeleting"
+          :title="`删除 ${folder.name} 里的全部图片`"
+          data-test="photo-folder-delete"
+          @click="deleteFolder(folder)"
+        >删除文件夹</button>
       </article>
     </section>
 
@@ -521,6 +577,56 @@
           </div>
         </div>
 
+        <div class="photo-viewer__block" data-test="photo-viewer-people">
+          <h4>人物</h4>
+          <div class="photo-viewer__tags">
+            <span v-for="item in viewerPeople" :key="item.person.id" class="tag-badge">
+              {{ item.person.display_name }}
+              <button
+                type="button"
+                class="tag-remove"
+                :aria-label="`移除人物 ${item.person.display_name}`"
+                :disabled="viewerPersonBusy"
+                :data-test="`photo-person-remove-${item.person.id}`"
+                @click="removeViewerPerson(item)"
+              >×</button>
+            </span>
+            <span v-if="!viewerPeople.length" class="photo-viewer__muted">尚无人物</span>
+          </div>
+          <div class="photo-viewer__tag-add photo-tag-combobox">
+            <input
+              v-model="viewerPersonKeyword"
+              type="search"
+              class="search-input"
+              placeholder="搜索人物，回车关联"
+              role="combobox"
+              autocomplete="off"
+              aria-controls="photo-person-options"
+              :aria-expanded="viewerPersonMenuOpen"
+              :aria-activedescendant="viewerPersonMenuOpen && filteredViewerPersonCandidates[viewerPersonActiveIndex] ? `photo-person-option-${filteredViewerPersonCandidates[viewerPersonActiveIndex].person.id}` : undefined"
+              data-test="photo-person-search"
+              @focus="openViewerPersonMenu"
+              @input="handleViewerPersonInput"
+              @keydown="handleViewerPersonKeydown"
+              @blur="closeViewerPersonMenu"
+            />
+            <div v-if="viewerPersonMenuOpen" id="photo-person-options" class="photo-tag-options" role="listbox" data-test="photo-person-options">
+              <button
+                v-for="(item, index) in filteredViewerPersonCandidates"
+                :id="`photo-person-option-${item.person.id}`"
+                :key="item.person.id"
+                type="button"
+                role="option"
+                :aria-selected="index === viewerPersonActiveIndex"
+                :class="['photo-tag-option', { active: index === viewerPersonActiveIndex }]"
+                @mouseenter="viewerPersonActiveIndex = index"
+                @mousedown.prevent="addViewerPerson(item)"
+              >{{ item.person.display_name }}</button>
+              <span v-if="filteredViewerPersonCandidates.length === 0" class="photo-tag-options__empty">没有匹配人物</span>
+            </div>
+          </div>
+        </div>
+
         <div class="photo-viewer__block">
           <div class="photo-viewer__block-heading">
             <h4>AI 标签候选</h4>
@@ -606,8 +712,10 @@
 
 <script>
 import {
-  AddTagToImage, BatchAddTagToImages, BatchDeleteImages, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
+  AddPersonImages, AddTagToImage, BatchAddTagToImages, BatchDeleteImages, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
+  ListPeople, RemovePersonImage,
   ApproveImageAITagCandidate, GetImageAITaggingSummary, ListImageAITagCandidates, RejectImageAITagCandidate, RetagImage,
+  BatchDeleteImagesInDirectory,
   ListImageFolderGroups, ListImageTimelineBuckets, RemoveTagFromImage, SearchImagePage,
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
@@ -619,6 +727,8 @@ import PhotoTrashDialog from './PhotoTrashDialog.vue';
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
+import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
+import { confirmAction } from '../utils/feedback.js';
 import {
   PHOTO_GROUP_MONTH, PHOTO_GROUP_NONE, PHOTO_ROW_HEADER,
   buildPhotoLayout, calculatePhotoAnchorScrollTop, calculatePhotoWindow,
@@ -671,6 +781,7 @@ export default {
       imageDirectories: [],
       imageTags: [],
       folderGroups: [],
+      folderDeleting: false,
       folderLoading: false,
       folderLoadedOnce: false,
       activeFolder: null,
@@ -680,6 +791,8 @@ export default {
       filters: {
         keyword: '',
         tagIDs: [],
+        // 人物筛选与标签同为 AND 语义；空数组等同不筛（D-015）。
+        personIDs: [],
         favoriteOnly: false,
         minRating: '',
         maxRating: '',
@@ -701,6 +814,19 @@ export default {
       tagKeyword: '',
       tagMenuOpen: false,
       tagActiveIndex: 0,
+      // 人物候选要查库（不像标签是本地全量），所以筛选栏与单图详情各自持一份
+      // 关键词/候选/高亮项，交互与标签组合框一致。
+      personFilterSelections: [],
+      personFilterKeyword: '',
+      personFilterCandidates: [],
+      personFilterMenuOpen: false,
+      personFilterActiveIndex: 0,
+      viewerPeople: [],
+      viewerPersonKeyword: '',
+      viewerPersonCandidates: [],
+      viewerPersonMenuOpen: false,
+      viewerPersonActiveIndex: 0,
+      viewerPersonBusy: false,
       selectedImageIDs: [],
       batchTagKeyword: '',
       batchTagMenuOpen: false,
@@ -734,6 +860,7 @@ export default {
     activePhotoFilterCount() {
       let count = 0;
       if (this.filters.aiTagState) count += 1;
+      if (this.filters.personIDs.length > 0) count += 1;
       if (this.timelineMode) count += 1;
       if (this.filters.favoriteOnly) count += 1;
       if (this.filters.minRating !== '' || this.filters.maxRating !== '') count += 1;
@@ -846,6 +973,15 @@ export default {
       if (!keyword) return this.addableTags;
       return this.addableTags.filter(tag => String(tag?.name || '').toLowerCase().includes(keyword));
     },
+    // 已经选进筛选条件的人物不再出现在候选里，与 addableTags 同一口径。
+    filteredPersonFilterCandidates() {
+      const applied = new Set(this.filters.personIDs.map(Number));
+      return this.personFilterCandidates.filter(item => !applied.has(Number(item?.person?.id)));
+    },
+    filteredViewerPersonCandidates() {
+      const applied = new Set(this.viewerPeople.map(item => Number(item?.person?.id)));
+      return this.viewerPersonCandidates.filter(item => !applied.has(Number(item?.person?.id)));
+    },
     filteredBatchTags() {
       const keyword = this.batchTagKeyword.trim().toLowerCase();
       if (!keyword) return this.tags;
@@ -855,7 +991,8 @@ export default {
       return this.images.length > 0 && this.images.every(image => this.selectedImageIDs.includes(Number(image.id)));
     },
     hasActiveFilters() {
-      return Boolean(this.filters.keyword.trim()) || this.filters.tagIDs.length > 0 || this.filters.favoriteOnly
+      return Boolean(this.filters.keyword.trim()) || this.filters.tagIDs.length > 0
+        || this.filters.personIDs.length > 0 || this.filters.favoriteOnly
         || this.filters.minRating !== '' || this.filters.maxRating !== ''
         || this.filters.takenAfter !== '' || this.filters.takenBefore !== ''
         || this.filters.aiTagState !== '';
@@ -926,12 +1063,22 @@ export default {
     this.reload();
     // 清理审阅状态由本页持续轮询：面板关闭后分析仍在后台跑，徽标可见进度。
     startPhotoCleanupPolling();
+    // 命令面板的本页动作（D-029）。
+    registerCommands('photo-library', [{
+      id: 'action:photo-scan',
+      group: 'action',
+      label: '扫描图片目录',
+      keywords: ['scan', '扫描', '图片'],
+      enabled: () => !this.scanning,
+      run: () => this.scanNow()
+    }]);
     this.$nextTick(() => {
       this.attachResizeObserver();
       this.syncWindow(true);
     });
   },
   beforeUnmount() {
+    unregisterCommands('photo-library');
     clearTimeout(this._keywordTimer);
     window.removeEventListener('keydown', this.handleKeydown);
     this.detachScrollOwner();
@@ -977,6 +1124,35 @@ export default {
     markFolderCoverFailed(folder, cover) {
       const key = this.folderCoverKey(folder, cover);
       this.failedFolderCovers = { ...this.failedFolderCovers, [key]: true };
+    },
+    // 删除文件夹 = 把这个目录直属的图片整体移入回收站（可恢复），磁盘上的目录本身不动，
+    // 子目录也不受影响。删完分组自然消失，不用再回来看到一个空文件夹。
+    async deleteFolder(folder) {
+      if (!folder?.directory || this.folderDeleting) return;
+      const confirmed = await confirmAction({
+        title: '删除文件夹',
+        message: `将「${folder.name}」下的 ${folder.count} 张图片移入回收站（可恢复）。\n磁盘上的文件夹本身和子文件夹里的图片都不会动。`,
+        confirmText: '移入回收站',
+        danger: true
+      });
+      if (!confirmed) return;
+      this.folderDeleting = true;
+      this.error = '';
+      try {
+        const result = await BatchDeleteImagesInDirectory(folder.directory, this.settings?.delete_original_file || false);
+        if (result?.failed) {
+          this.error = `「${folder.name}」有 ${result.failed} 张图片删除失败，其余已移入回收站。`;
+        }
+        this.folderGroups = [];
+        this.folderLoadedOnce = false;
+        if (this.activeFolder?.directory === folder.directory) this.activeFolder = null;
+        await this.reload();
+        refreshPhotoCleanupStatus();
+      } catch (err) {
+        this.error = `删除文件夹失败：${err}`;
+      } finally {
+        this.folderDeleting = false;
+      }
     },
     enterFolder(folder) {
       if (!folder?.directory) return;
@@ -1202,6 +1378,7 @@ export default {
         keyword: this.filters.keyword.trim(),
         directory,
         tag_ids: [...this.filters.tagIDs],
+        person_ids: [...this.filters.personIDs],
         favorite_only: this.filters.favoriteOnly,
         min_rating: parseRating(this.filters.minRating),
         max_rating: parseRating(this.filters.maxRating),
@@ -1506,6 +1683,69 @@ export default {
         : [...this.filters.tagIDs, id];
       this.reload();
     },
+    openPersonFilterMenu() {
+      this.personFilterMenuOpen = true;
+      this.personFilterActiveIndex = 0;
+      this.searchPersonFilterCandidates();
+    },
+    closePersonFilterMenu() {
+      this.personFilterMenuOpen = false;
+    },
+    handlePersonFilterInput() {
+      this.personFilterMenuOpen = true;
+      this.personFilterActiveIndex = 0;
+      this.searchPersonFilterCandidates();
+    },
+    // 人物候选来自库里，输入即查；用 token 丢弃过期响应，避免慢的那一次覆盖新的。
+    async searchPersonFilterCandidates() {
+      const token = Symbol('person-filter-search');
+      this._personFilterToken = token;
+      try {
+        const results = await ListPeople(this.personFilterKeyword.trim(), '', 0, 20);
+        if (this._personFilterToken !== token) return;
+        this.personFilterCandidates = results || [];
+      } catch (err) {
+        if (this._personFilterToken === token) this.error = `搜索人物失败：${err}`;
+      }
+    },
+    handlePersonFilterKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closePersonFilterMenu();
+        return;
+      }
+      const candidates = this.filteredPersonFilterCandidates;
+      if (!candidates.length) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.personFilterMenuOpen = true;
+        this.personFilterActiveIndex = (this.personFilterActiveIndex + 1) % candidates.length;
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.personFilterMenuOpen = true;
+        this.personFilterActiveIndex = (this.personFilterActiveIndex - 1 + candidates.length) % candidates.length;
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        this.addPersonFilter(candidates[this.personFilterActiveIndex] || candidates[0]);
+      }
+    },
+    addPersonFilter(item) {
+      const id = Number(item?.person?.id);
+      if (!id || this.filters.personIDs.includes(id)) return;
+      this.filters.personIDs = [...this.filters.personIDs, id];
+      this.personFilterSelections = [...this.personFilterSelections, { id, name: item.person.display_name }];
+      this.personFilterKeyword = '';
+      this.personFilterMenuOpen = false;
+      this.personFilterActiveIndex = 0;
+      this.reload();
+    },
+    removePersonFilter(personID) {
+      const id = Number(personID);
+      if (!this.filters.personIDs.includes(id)) return;
+      this.filters.personIDs = this.filters.personIDs.filter(item => item !== id);
+      this.personFilterSelections = this.personFilterSelections.filter(item => Number(item.id) !== id);
+      this.reload();
+    },
     toggleImageSelection(imageID, checked) {
       const id = Number(imageID);
       if (!id) return;
@@ -1608,6 +1848,15 @@ export default {
         this.images = this.images.filter(image => !ids.includes(Number(image.id)) || failed.has(Number(image.id)));
         this.selectedImageIDs = ids.filter(id => failed.has(id));
         if (result?.failed) this.error = `批量删除部分失败：${result.failed} 张图片未删除。`;
+        // 单张删除早就这么做了，批量删除漏了：不作废分组的话，图片删光了文件夹
+        // 还留在列表上，点进去是空的。
+        this.folderGroups = [];
+        this.folderLoadedOnce = false;
+        if (this.folderModeActive && this.activeFolder) {
+          const removed = ids.length - failed.size;
+          this.activeFolder = { ...this.activeFolder, count: Math.max(0, Number(this.activeFolder.count || 0) - removed) };
+        }
+        refreshPhotoCleanupStatus();
       } catch (err) {
         this.error = `批量删除失败：${err}`;
       } finally {
@@ -1624,6 +1873,7 @@ export default {
       this.tagKeyword = '';
       this.tagMenuOpen = false;
       this.tagActiveIndex = 0;
+      this.resetViewerPersonEditor();
       const image = this.images[index];
       this.ratingDraft = image.personal_rating == null ? '' : image.personal_rating;
       this.loadViewerDetail(image.id);
@@ -1638,6 +1888,16 @@ export default {
       this.tagKeyword = '';
       this.tagMenuOpen = false;
       this.tagActiveIndex = 0;
+      this.resetViewerPersonEditor();
+    },
+    resetViewerPersonEditor() {
+      this._viewerPersonToken = Symbol('viewer-person-search');
+      this._viewerPeopleToken = Symbol('viewer-people');
+      this.viewerPeople = [];
+      this.viewerPersonKeyword = '';
+      this.viewerPersonCandidates = [];
+      this.viewerPersonMenuOpen = false;
+      this.viewerPersonActiveIndex = 0;
     },
     viewerNext() {
       if (this.viewerIndex < this.images.length - 1) this.openViewer(this.viewerIndex + 1);
@@ -1657,6 +1917,7 @@ export default {
         const detail = await GetImageDetail(imageID);
         if (this._detailToken !== token) return;
         this.viewerDetail = detail;
+        this.viewerPeople = detail?.people || [];
         const image = detail?.image;
         if (image && Number(image.id) === Number(this.viewerImage?.id)) {
           this.patchImage(image);
@@ -1844,6 +2105,120 @@ export default {
         this.error = `移除标签失败：${err}`;
       }
     },
+    openViewerPersonMenu() {
+      this.viewerPersonMenuOpen = true;
+      this.viewerPersonActiveIndex = 0;
+      this.searchViewerPersonCandidates();
+    },
+    closeViewerPersonMenu() {
+      this.viewerPersonMenuOpen = false;
+    },
+    handleViewerPersonInput() {
+      this.viewerPersonMenuOpen = true;
+      this.viewerPersonActiveIndex = 0;
+      this.searchViewerPersonCandidates();
+    },
+    async searchViewerPersonCandidates() {
+      const token = Symbol('viewer-person-search');
+      this._viewerPersonToken = token;
+      try {
+        const results = await ListPeople(this.viewerPersonKeyword.trim(), '', 0, 20);
+        if (this._viewerPersonToken !== token) return;
+        this.viewerPersonCandidates = results || [];
+      } catch (err) {
+        if (this._viewerPersonToken === token) this.error = `搜索人物失败：${err}`;
+      }
+    },
+    handleViewerPersonKeydown(event) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeViewerPersonMenu();
+        return;
+      }
+      const candidates = this.filteredViewerPersonCandidates;
+      if (!candidates.length) return;
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        this.viewerPersonMenuOpen = true;
+        this.viewerPersonActiveIndex = (this.viewerPersonActiveIndex + 1) % candidates.length;
+      } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        this.viewerPersonMenuOpen = true;
+        this.viewerPersonActiveIndex = (this.viewerPersonActiveIndex - 1 + candidates.length) % candidates.length;
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        this.addViewerPerson(candidates[this.viewerPersonActiveIndex] || candidates[0]);
+      }
+    },
+    async addViewerPerson(item) {
+      const image = this.viewerImage;
+      const personID = Number(item?.person?.id);
+      if (!image || !personID || this.viewerPersonBusy) return;
+      this.viewerPersonBusy = true;
+      try {
+        await AddPersonImages(personID, [Number(image.id)]);
+        this.viewerPersonKeyword = '';
+        this.viewerPersonMenuOpen = false;
+        this.viewerPersonActiveIndex = 0;
+        // 改动的人物正被当作筛选条件时，这张图是否还该出现在网格里已经变了，
+        // 必须重查（reload 会连带关掉查看器，因为它清空了 images）。
+        if (this.filters.personIDs.includes(personID)) {
+          await this.reload();
+          return;
+        }
+        await this.refreshViewerPeople(image.id);
+      } catch (err) {
+        this.error = `关联人物失败：${err}`;
+      } finally {
+        this.viewerPersonBusy = false;
+      }
+    },
+    // 与视频侧一致：这是该人物跨视频与图片的最后一条关系时先确认，
+    // 因为后端会连带删除人物本身。
+    async removeViewerPerson(item) {
+      const image = this.viewerImage;
+      const personID = Number(item?.person?.id);
+      if (!image || !personID || this.viewerPersonBusy) return;
+      const isLastRelation = Number(item.active_video_count || 0) === 0 && Number(item.active_image_count || 0) <= 1;
+      if (isLastRelation && !await confirmAction({
+        title: '解除关联',
+        message: '这是该人物最后一个活跃关联媒体。若没有软删除媒体保留的关系，解除后人物也会被删除，确定继续吗？',
+        confirmText: '解除',
+        danger: true
+      })) return;
+      this.viewerPersonBusy = true;
+      try {
+        const personDeleted = await RemovePersonImage(personID, Number(image.id));
+        const filtered = this.filters.personIDs.includes(personID);
+        if (personDeleted && filtered) {
+          // 人物被连带清理后，筛选栏里指向它的条件已经指不到任何东西了；
+          // removePersonFilter 自带 reload，不要再重查一次。
+          this.removePersonFilter(personID);
+          return;
+        }
+        if (filtered) {
+          // 这张图不再命中当前人物筛选，网格必须重查。
+          await this.reload();
+          return;
+        }
+        await this.refreshViewerPeople(image.id);
+      } catch (err) {
+        this.error = `解除人物关联失败：${err}`;
+      } finally {
+        this.viewerPersonBusy = false;
+      }
+    },
+    async refreshViewerPeople(imageID) {
+      const token = Symbol('viewer-people');
+      this._viewerPeopleToken = token;
+      try {
+        const detail = await GetImageDetail(imageID);
+        if (this._viewerPeopleToken !== token || Number(this.viewerImage?.id) !== Number(imageID)) return;
+        this.viewerPeople = detail?.people || [];
+      } catch (err) {
+        if (this._viewerPeopleToken === token) this.error = `加载图片人物失败：${err}`;
+      }
+    },
     requestDelete(image) {
       if (!image) return;
       if (!this.settings.confirm_before_delete) {
@@ -1918,7 +2293,9 @@ export default {
 
 <style scoped>
 .photo-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }
-.photo-toolbar { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; flex-direction: column; gap: 8px; }
+/* 与视频库同构地吸顶：勾选若干张之后往下滚，批量按钮必须一直在手边，
+   否则要滚回顶部才能操作。z-index 压过网格但让开浮层（1200）和弹窗（1000）。 */
+.photo-toolbar { position: sticky; top: 0; z-index: 90; padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; flex-direction: column; gap: 8px; }
 .photo-toolbar__title h2 { margin: 0 0 3px; font-size: 18px; }
 .photo-toolbar__title p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .photo-toolbar__controls { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
@@ -1950,6 +2327,9 @@ export default {
 .photo-toolbar__date { width: 148px; }
 .photo-toolbar__date:disabled { opacity: 0.45; cursor: not-allowed; }
 .photo-toolbar__tags { display: flex; flex-wrap: wrap; gap: 6px; }
+.photo-toolbar__people { display: grid; gap: 6px; }
+.photo-toolbar__people > span:first-child { color: var(--text-muted); font-size: 12px; }
+.photo-person-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .photo-search-mode { display: inline-flex; padding: 2px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); }
 .photo-search-mode__btn { padding: 4px 12px; border: 0; border-radius: 999px; background: transparent; color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .photo-search-mode__btn.active { background: var(--panel-bg); color: var(--text-primary); }
@@ -1971,7 +2351,11 @@ export default {
 .photo-folder-breadcrumb__text strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: 13px; }
 .photo-folder-breadcrumb__text span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
 .photo-folder-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
-.photo-folder-card { min-width: 0; overflow: hidden; border-radius: 13px; }
+.photo-folder-card { position: relative; min-width: 0; overflow: hidden; border-radius: 13px; }
+/* 删除按钮压在封面右上角，且在"打开文件夹"那个大按钮之外，点它不会误进文件夹。 */
+.photo-folder-card__delete { position: absolute; z-index: 2; top: 8px; right: 8px; opacity: 0; transition: opacity var(--transition); }
+.photo-folder-card:hover .photo-folder-card__delete,
+.photo-folder-card__delete:focus-visible { opacity: 1; }
 .photo-folder-card__open { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .photo-folder-card__open:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
 .photo-folder-card__covers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-template-rows: repeat(2, minmax(0, 1fr)); aspect-ratio: 1.55; gap: 2px; overflow: hidden; background: var(--thumb-bg); }

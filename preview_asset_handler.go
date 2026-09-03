@@ -32,6 +32,15 @@ func newAssetHandler(app *App) http.Handler {
 			app.serveCollectionCover(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/preview/face-crop/") {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			app.serveFaceCrop(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/preview/image-thumbnail/") {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				w.Header().Set("Allow", "GET, HEAD")
@@ -171,6 +180,37 @@ func (a *App) serveSeekSprite(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
+}
+
+// serveFaceCrop 是人脸裁剪图的受控路由（D-020）。
+//
+// 两道边界：路径里只接受纯数字的观测 id（assetVideoIDFromPath 会把 `..` 挡在
+// ParseUint 上），而库里的 crop_path 由服务侧再校验一次必须落在 faces 目录内。
+// 裁剪图不进任何缓存头之外的地方，也不带 Content-Disposition。
+func (a *App) serveFaceCrop(w http.ResponseWriter, r *http.Request) {
+	observationID, err := assetVideoIDFromPath(r.URL.Path, "/preview/face-crop/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	asset, err := a.faceAnalysis.ResolveFaceCrop(observationID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "face crop not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "face crop unavailable", http.StatusInternalServerError)
+		return
+	}
+	file, err := os.Open(asset.Path)
+	if err != nil {
+		http.Error(w, "face crop not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", asset.MIME)
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, filepath.Base(asset.Path), asset.ModTime, file)
 }
 
 func (a *App) serveImageThumbnail(w http.ResponseWriter, r *http.Request) {

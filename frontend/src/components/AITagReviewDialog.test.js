@@ -9,6 +9,7 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('./AddTagDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./AIQualityPanel.vue', () => ({ default: { template: '<div data-test="quality-panel">quality panel</div>' } }));
+vi.mock('./FaceClusterReviewPanel.vue', () => ({ default: { template: '<div data-test="face-panel-stub">face panel</div>' } }));
 
 import AITagReviewDialog from './AITagReviewDialog.vue';
 
@@ -116,5 +117,38 @@ describe('AITagReviewDialog same-source review', () => {
     expect(api.DeleteVideo).toHaveBeenCalledWith(7, false);
     expect(wrapper.vm.sameSourceDeleteConfirm.show).toBe(false);
     expect(wrapper.find('.same-source-row').exists()).toBe(false);
+  });
+});
+
+// P-013：人物候选是待审工作台的第三个 section，与 AI 标签、视频同源并列。
+describe('AITagReviewDialog face cluster review section', () => {
+  it('switches to the face candidate section and hands the panel its own toolbar', async () => {
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await flushPromises();
+    expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(false);
+
+    await wrapper.find('[data-test="face-cluster-review-tab"]').trigger('click');
+    expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(true);
+    // 人物候选面板自带说明与刷新，标签侧的工具条不该跟着出现。
+    expect(wrapper.find('.ai-tag-review-actions').exists()).toBe(false);
+    expect(wrapper.find('.ai-tag-review-search').exists()).toBe(false);
+
+    // 切回来标签待审照旧。
+    await wrapper.find('[data-test="ai-candidate-review-tab"]').trigger('click');
+    expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(false);
+    expect(wrapper.find('.ai-tag-review-actions').exists()).toBe(true);
+  });
+
+  // AI 标签候选加载失败不该把人物候选一起挡掉：两批数据来自不同的接口。
+  it('keeps the face section usable when loading tag candidates failed', async () => {
+    api.ListAITagCandidates.mockRejectedValueOnce(new Error('boom'));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    expect(wrapper.find('.ai-tag-review-error').exists()).toBe(true);
+
+    await wrapper.find('[data-test="face-cluster-review-tab"]').trigger('click');
+    expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(true);
+    expect(wrapper.find('.ai-tag-review-error').exists()).toBe(false);
   });
 });

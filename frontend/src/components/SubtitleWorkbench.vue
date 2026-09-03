@@ -197,6 +197,7 @@ import {
   RetranslateSubtitleEntries,
   SaveSubtitleEditDocument
 } from '../../wailsjs/go/main/App';
+import { confirmAction } from '../utils/feedback.js';
 
 const ENTRY_ROW_HEIGHT = 210;
 const HISTORY_LIMIT = 100;
@@ -394,11 +395,11 @@ export default {
       this.$nextTick(this.measureViewport);
     },
     async reloadDocument() {
-      if (this.isDirty && !window.confirm('重新加载会丢弃当前未保存修改，确定继续？')) return;
+      if (this.isDirty && !await confirmAction({ title: '重新加载字幕', message: '重新加载会丢弃当前未保存修改，确定继续？', confirmText: '丢弃并重载', danger: true })) return;
       await this.loadWorkbench();
     },
-    requestClose() {
-      if (this.isDirty && !window.confirm('字幕还有未保存修改，确定关闭并丢弃吗？')) return;
+    async requestClose() {
+      if (this.isDirty && !await confirmAction({ title: '关闭字幕工作台', message: '字幕还有未保存修改，确定关闭并丢弃吗？', confirmText: '丢弃并关闭', danger: true })) return;
       this.$emit('close');
     },
     handleBeforeUnload(event) {

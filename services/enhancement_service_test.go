@@ -85,7 +85,7 @@ func indexOfArg(args []string, flag string) int {
 
 func newEnhancementTestService(t *testing.T, runner enhancementCommandRunner) *EnhancementService {
 	t.Helper()
-	service := NewEnhancementService(&VideoService{}, NewMediaProbeService(), nil)
+	service := NewEnhancementService(&VideoService{}, NewMediaProbeService(), nil, t.TempDir())
 	service.capability = EnhancementRuntimeCapability{
 		Available: true, RuntimeVersion: EnhancementRuntimeIdentity,
 		BinaryPath: "sidecar", ModelDir: "models",
@@ -308,7 +308,7 @@ func TestEnhancementRecoverOnStartupFailsTasksWhenRuntimeUnavailable(t *testing.
 	if err := database.DB.Create(&task).Error; err != nil {
 		t.Fatal(err)
 	}
-	service := NewEnhancementService(&VideoService{}, NewMediaProbeService(), nil)
+	service := NewEnhancementService(&VideoService{}, NewMediaProbeService(), nil, t.TempDir())
 	service.capability = EnhancementRuntimeCapability{ReasonCode: "runtime_unavailable", Message: "缺少运行时"}
 	service.RecoverOnStartup(context.Background())
 	var reloaded models.VideoEnhancementTask

@@ -468,6 +468,8 @@ type ImageEXIFBackfillStatus struct {
 	StartedAt      *time.Time                 `json:"started_at,omitempty" ts_type:"string"`
 	UpdatedAt      *time.Time                 `json:"updated_at,omitempty" ts_type:"string"`
 	Failures       []ImageEXIFBackfillFailure `json:"failures"`
+	// Gate 是空闲门状态（D-032）：自动路径被挡住时这里说明原因，显式启动恒为零值。
+	Gate TaskGateState `json:"gate"`
 }
 
 // ImageEXIFBackfillService 为历史图片补全 EXIF：目标集 = exif_parsed_at IS NULL 的活跃图片。
@@ -475,13 +477,15 @@ type ImageEXIFBackfillStatus struct {
 type ImageEXIFBackfillService struct {
 	now func() time.Time
 
-	mu       sync.Mutex
-	stopMu   sync.Mutex
-	status   ImageEXIFBackfillStatus
-	cancel   context.CancelFunc
-	worker   sync.WaitGroup
-	emitter  func(ImageEXIFBackfillStatus)
-	stopping bool
+	mu        sync.Mutex
+	stopMu    sync.Mutex
+	status    ImageEXIFBackfillStatus
+	cancel    context.CancelFunc
+	worker    sync.WaitGroup
+	emitter   func(ImageEXIFBackfillStatus)
+	stopping  bool
+	registry  *BackgroundTaskRegistry
+	pauseHook TaskPauseHook
 }
 
 // NewImageEXIFBackfillService 创建 EXIF 补全服务（单 worker、显式启动）。
@@ -499,8 +503,41 @@ func (s *ImageEXIFBackfillService) SetEventEmitter(emitter func(ImageEXIFBackfil
 	s.mu.Unlock()
 }
 
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+func (s *ImageEXIFBackfillService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
+}
+
+func (s *ImageEXIFBackfillService) waitForPauseHook(ctx context.Context) error {
+	s.mu.Lock()
+	hook := s.pauseHook
+	s.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+	// 钩子在服务锁之外调用：它会阻塞很久，持锁等待会连 Status/Cancel 一起冻住。
+	return hook.Wait(ctx, s.setGateState)
+}
+
+func (s *ImageEXIFBackfillService) setGateState(state TaskGateState) {
+	s.update(func(status *ImageEXIFBackfillStatus) { status.Gate = state })
+}
+
 // StartImageEXIFBackfill 启动补全任务；运行中重复启动返回当前状态，不重复起 worker。
+// 这是显式启动路径：同一把锁下摘掉当前这一轮的项间检查点（D-030）。
 func (s *ImageEXIFBackfillService) StartImageEXIFBackfill(parent context.Context) (ImageEXIFBackfillStatus, error) {
+	return s.startImageEXIFBackfill(parent, nil)
+}
+
+// StartImageEXIFBackfillWithPauseHook 是自动路径专用：装钩子与翻 Running 在同一把锁里完成；
+// 已经在跑的那一轮不补装钩子（它可能是用户显式启动的）。
+func (s *ImageEXIFBackfillService) StartImageEXIFBackfillWithPauseHook(parent context.Context, hook TaskPauseHook) (ImageEXIFBackfillStatus, error) {
+	return s.startImageEXIFBackfill(parent, hook)
+}
+
+func (s *ImageEXIFBackfillService) startImageEXIFBackfill(parent context.Context, hook TaskPauseHook) (ImageEXIFBackfillStatus, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -508,15 +545,19 @@ func (s *ImageEXIFBackfillService) StartImageEXIFBackfill(parent context.Context
 		return ImageEXIFBackfillStatus{}, errors.New("数据库未初始化")
 	}
 	s.mu.Lock()
+	releasing := clearReplacedPauseHook(&s.pauseHook, hook)
 	if s.stopping {
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return ImageEXIFBackfillStatus{}, errors.New("EXIF 补全任务正在停止")
 	}
 	if s.status.Running {
 		status := cloneImageEXIFBackfillStatus(s.status)
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return status, ErrImageEXIFBackfillBusy
 	}
+	s.pauseHook = hook
 	now := s.now()
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
@@ -525,10 +566,13 @@ func (s *ImageEXIFBackfillService) StartImageEXIFBackfill(parent context.Context
 		Failures: []ImageEXIFBackfillFailure{},
 	}
 	status, emitter := cloneImageEXIFBackfillStatus(s.status), s.emitter
+	registry := s.registry
 	s.worker.Add(1)
 	s.mu.Unlock()
+	releaseTaskPauseHook(releasing)
+	registry.Begin(BackgroundTaskEXIF)
 	emitImageEXIFBackfillStatus(emitter, status)
-	go s.run(ctx)
+	go s.run(ctx, registry)
 	return status, nil
 }
 
@@ -570,8 +614,9 @@ func (s *ImageEXIFBackfillService) StopAndWait() {
 
 // run 是单 worker 主循环：按 id 递增分批取未解析图片，解析后逐张写库。
 // 分批而非一次性快照，是因为每张成功后 exif_parsed_at 即被填上，游标只需向前推进 id。
-func (s *ImageEXIFBackfillService) run(ctx context.Context) {
+func (s *ImageEXIFBackfillService) run(ctx context.Context, registry *BackgroundTaskRegistry) {
 	defer s.worker.Done()
+	defer registry.End(BackgroundTaskEXIF)
 	total, err := s.countPending(ctx)
 	if err != nil {
 		if ctx.Err() == nil {
@@ -605,6 +650,9 @@ func (s *ImageEXIFBackfillService) run(ctx context.Context) {
 		}
 		for _, image := range batch {
 			if ctx.Err() != nil {
+				break
+			}
+			if err := s.waitForPauseHook(ctx); err != nil {
 				break
 			}
 			afterID = image.ID
@@ -678,6 +726,7 @@ func (s *ImageEXIFBackfillService) finish(cancelled, completed bool) {
 	s.status.Cancelled = cancelled
 	s.status.Completed = !cancelled && completed
 	s.status.CurrentImageID = 0
+	s.status.Gate = TaskGateState{}
 	s.status.UpdatedAt = &now
 	s.cancel = nil
 	status, emitter := cloneImageEXIFBackfillStatus(s.status), s.emitter

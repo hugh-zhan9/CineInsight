@@ -62,7 +62,7 @@ func TestImagePageFiltersByTagFavoriteRatingSizeAndKeyword(t *testing.T) {
 	svc := NewImageLibraryService()
 	alpha := mustCreateTestImage(t, "Alpha.JPG", 100)
 	beta := mustCreateTestImage(t, "beta.png", 2048)
-	gamma := mustCreateTestImage(t, "gamma.heic", 4096)
+	mustCreateTestImage(t, "gamma.heic", 4096)
 	travel := mustCreateImageTag(t, "旅行")
 	family := mustCreateImageTag(t, "家庭")
 
@@ -110,7 +110,6 @@ func TestImagePageFiltersByTagFavoriteRatingSizeAndKeyword(t *testing.T) {
 	if got := searchImageIDs(t, ImageFilter{Keyword: "%"}); len(got) != 0 {
 		t.Fatalf("LIKE 通配符应被转义: %v", got)
 	}
-	_ = gamma
 
 	// 去标后同一标签筛选不再命中。
 	if err := svc.RemoveTagFromImage(beta.ID, family.ID); err != nil {
@@ -118,6 +117,77 @@ func TestImagePageFiltersByTagFavoriteRatingSizeAndKeyword(t *testing.T) {
 	}
 	if got := searchImageIDs(t, ImageFilter{TagIDs: []uint{family.ID}}); len(got) != 0 {
 		t.Fatalf("去标后不应再命中: %v", got)
+	}
+}
+
+// D-015：照片页人物筛选与标签同为 AND 语义，空切片等同不筛。
+func TestImagePageFiltersByPersonIDsWithAndSemantics(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	people := NewPersonService(t.TempDir())
+	alpha := mustCreateTestImage(t, "person-alpha.jpg", 100)
+	beta := mustCreateTestImage(t, "person-beta.jpg", 200)
+	gamma := mustCreateTestImage(t, "person-gamma.jpg", 300)
+	first, err := people.CreatePerson("第一人物", "")
+	if err != nil {
+		t.Fatalf("创建人物失败: %v", err)
+	}
+	second, err := people.CreatePerson("第二人物", "")
+	if err != nil {
+		t.Fatalf("创建人物失败: %v", err)
+	}
+	if err := people.AddPersonImages(first.ID, []uint{alpha.ID, beta.ID}); err != nil {
+		t.Fatalf("关联人物失败: %v", err)
+	}
+	if err := people.AddPersonImages(second.ID, []uint{beta.ID}); err != nil {
+		t.Fatalf("关联人物失败: %v", err)
+	}
+
+	single := searchImageIDs(t, ImageFilter{PersonIDs: []uint{first.ID}})
+	if len(single) != 2 {
+		t.Fatalf("单人物筛选应命中两张: %v", single)
+	}
+	for _, id := range single {
+		if id == gamma.ID {
+			t.Fatalf("未关联人物的图片不得命中: %v", single)
+		}
+	}
+	ids := searchImageIDs(t, ImageFilter{PersonIDs: []uint{first.ID, second.ID}})
+	if len(ids) != 1 || ids[0] != beta.ID {
+		t.Fatalf("多人物筛选必须是 AND 语义: %v", ids)
+	}
+	if ids := searchImageIDs(t, ImageFilter{PersonIDs: []uint{}}); len(ids) != 3 {
+		t.Fatalf("空人物列表应等同不筛: %v", ids)
+	}
+	if ids := searchImageIDs(t, ImageFilter{PersonIDs: nil}); len(ids) != 3 {
+		t.Fatalf("nil 人物列表应等同不筛: %v", ids)
+	}
+	if ids := searchImageIDs(t, ImageFilter{PersonIDs: []uint{first.ID, first.ID}}); len(ids) != 2 {
+		t.Fatalf("重复人物 ID 应先去重再判定: %v", ids)
+	}
+	_ = gamma
+
+	// 分组与时间线走同一个 applyImageFilter，人物筛选必须同样生效。
+	groups, err := NewImageLibraryService().ListImageFolderGroups(ImageFilter{PersonIDs: []uint{first.ID}})
+	if err != nil {
+		t.Fatalf("文件夹分组失败: %v", err)
+	}
+	total := 0
+	for _, group := range groups {
+		total += group.Count
+	}
+	if total != 2 {
+		t.Fatalf("文件夹分组应只数命中人物的图片: total=%d", total)
+	}
+	buckets, err := NewImageLibraryService().ListImageTimelineBuckets(ImageFilter{PersonIDs: []uint{first.ID, second.ID}})
+	if err != nil {
+		t.Fatalf("时间线分组失败: %v", err)
+	}
+	total = 0
+	for _, bucket := range buckets {
+		total += bucket.Count
+	}
+	if total != 1 {
+		t.Fatalf("时间线分组应遵循 AND 语义: total=%d", total)
 	}
 }
 

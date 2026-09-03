@@ -16,9 +16,12 @@
         <nav class="ai-review-type-tabs" aria-label="待审工作台类型">
           <button type="button" :class="{ active: reviewSection === 'tags' }" data-test="ai-candidate-review-tab" @click="reviewSection = 'tags'">AI 标签待审 <span>{{ candidates.length }}</span></button>
           <button type="button" :class="{ active: reviewSection === 'same-source' }" data-test="same-source-review-tab" @click="reviewSection = 'same-source'">视频同源待审 <span>{{ sameSourceRelations.length }}</span></button>
+          <button type="button" :class="{ active: reviewSection === 'face' }" data-test="face-cluster-review-tab" @click="reviewSection = 'face'">人物候选</button>
         </nav>
 
-        <div class="ai-tag-review-actions">
+        <!-- 人物候选自带说明与刷新（它的数据与 AI 标签候选不是同一批），
+             所以这一行工具条只属于另外两个页签。 -->
+        <div v-if="reviewSection !== 'face'" class="ai-tag-review-actions">
           <input
             v-if="reviewSection === 'tags'"
             v-model="reviewSearch"
@@ -31,7 +34,9 @@
         </div>
 
         <div class="ai-review-workbench-content" data-test="ai-review-scroll-area">
-          <div v-if="loading" class="ai-tag-review-empty">加载中...</div>
+          <!-- 人物候选面板自己管加载与报错，不受 AI 标签候选那一次请求的成败影响。 -->
+          <FaceClusterReviewPanel v-if="reviewSection === 'face'" />
+          <div v-else-if="loading" class="ai-tag-review-empty">加载中...</div>
           <div v-else-if="error" class="ai-tag-review-error">{{ error }}</div>
           <template v-else-if="reviewSection === 'same-source'">
             <section v-if="sameSourceRelations.length" class="same-source-review-section">
@@ -210,12 +215,13 @@
 import { ApproveAITagCandidate, ConfirmSameSourceRelation, DeleteVideo, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import AddTagDialog from './AddTagDialog.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
+import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import BaseModal from './ui/BaseModal.vue';
 import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
 
 export default {
   name: 'AITagReviewDialog',
-  components: { AddTagDialog, AIQualityPanel, BaseModal },
+  components: { AddTagDialog, AIQualityPanel, BaseModal, FaceClusterReviewPanel },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] },

@@ -1,4 +1,16 @@
 import { mount } from '@vue/test-utils';
+
+// 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
+const feedback = vi.hoisted(() => ({
+  confirmAction: vi.fn(() => Promise.resolve(true)),
+  notify: vi.fn(),
+  notifyError: vi.fn(),
+  notifySuccess: vi.fn()
+}));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...feedback
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -22,7 +34,7 @@ const tags = [
 beforeEach(() => {
   vi.clearAllMocks();
   api.MergeTags.mockResolvedValue({ target_tag_id: 1, merged_tag_count: 1 });
-  window.confirm = vi.fn(() => true);
+  feedback.confirmAction.mockResolvedValue(true);
 });
 
 describe('TagManagerDialog merge picker', () => {
@@ -46,7 +58,7 @@ describe('TagManagerDialog merge picker', () => {
 
     await wrapper.get('.merge-actions .btn-primary').trigger('click');
 
-    expect(window.confirm).toHaveBeenCalledOnce();
+    expect(feedback.confirmAction).toHaveBeenCalledOnce();
     expect(api.MergeTags).toHaveBeenCalledWith([2], 1);
   });
 

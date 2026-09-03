@@ -1576,3 +1576,82 @@ func TestParseFFProbeOutputRejectsNonJSON(t *testing.T) {
 		t.Fatalf("期望非 JSON 输出返回错误")
 	}
 }
+
+// 用户裁决：磁盘上确实找不到文件时，删除应当直接清掉库记录；但必须先确认
+// 文件所属的扫描根可访问，否则"卷没挂载"会被误判成"文件没了"。
+func TestDeleteVideoClearsRecordWhenFileIsGoneAndScanRootReachable(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "gone.mp4")
+	video := models.Video{Name: "gone.mp4", Path: videoPath, Directory: root}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	// 复刻线上现场：上次删除被打断，条目卡在 pending_move，两个路径都没有文件。
+	entry := models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: videoPath,
+		TrashPath:    NewTrashService().TrashTargetPath(videoPath, 0),
+		State:        trashStatePendingMove,
+	}
+	if err := database.DB.Create(&entry).Error; err != nil {
+		t.Fatalf("创建待移动状态失败: %v", err)
+	}
+
+	if err := svc.DeleteVideo(video.ID, true); err != nil {
+		t.Fatalf("文件已不存在时删除应当成功: %v", err)
+	}
+	var deleted models.Video
+	if err := database.DB.Unscoped().First(&deleted, video.ID).Error; err != nil || !deleted.DeletedAt.IsValid() {
+		t.Fatalf("库记录应被清掉: %#v err=%v", deleted, err)
+	}
+	var reconciled models.VideoTrashEntry
+	if err := database.DB.First(&reconciled, entry.ID).Error; err != nil {
+		t.Fatalf("读取条目失败: %v", err)
+	}
+	if reconciled.State != trashStateDeleted {
+		t.Fatalf("条目应结束在 deleted: %#v", reconciled)
+	}
+}
+
+func TestDeleteVideoKeepsRecordWhenScanRootUnreachable(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	// 扫描根指向一个不存在的挂载点：模拟外置卷没挂上。
+	root := filepath.Join(t.TempDir(), "unmounted-volume")
+	videoPath := filepath.Join(root, "gone.mp4")
+	video := models.Video{Name: "gone.mp4", Path: videoPath, Directory: root}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	entry := models.VideoTrashEntry{
+		VideoID:      video.ID,
+		VideoName:    video.Name,
+		OriginalPath: videoPath,
+		TrashPath:    NewTrashService().TrashTargetPath(videoPath, 0),
+		State:        trashStatePendingMove,
+	}
+	if err := database.DB.Create(&entry).Error; err != nil {
+		t.Fatalf("创建待移动状态失败: %v", err)
+	}
+
+	err := svc.DeleteVideo(video.ID, true)
+	if err == nil {
+		t.Fatalf("扫描根不可达时不应当删除库记录")
+	}
+	if !strings.Contains(err.Error(), "不可访问") {
+		t.Fatalf("错误信息应说明扫描根不可访问: %v", err)
+	}
+	var kept models.Video
+	if err := database.DB.Unscoped().First(&kept, video.ID).Error; err != nil || kept.DeletedAt.IsValid() {
+		t.Fatalf("库记录必须保持原样: %#v err=%v", kept, err)
+	}
+}

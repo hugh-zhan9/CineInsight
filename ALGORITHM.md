@@ -28,6 +28,8 @@
 - `播放权重(play_weight)`: 可配置参数，默认为 2.0
 - `随机半衰期(random_half_life_days)`: 可配置参数，默认 90 天，0 表示关闭
 
+播放事件账本（`play_events` 表）不参与算法：它只为洞察页的观看热力与来源统计记流水，打分与选择一律只读 `videos` 上的 `play_count`、`random_play_count`、`last_played_at` 三列。
+
 **示例**：
 - 如果权重为 2.0，那么 1 次普通播放 = 2 次随机播放
 - 视频A: play_count=1, random_play_count=0 → 分数=2.0

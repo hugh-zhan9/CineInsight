@@ -1,21 +1,40 @@
 import { flushPromises, mount } from '@vue/test-utils';
+
+// 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
+const feedback = vi.hoisted(() => ({
+  confirmAction: vi.fn(() => Promise.resolve(true)),
+  notify: vi.fn(),
+  notifyError: vi.fn(),
+  notifySuccess: vi.fn()
+}));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...feedback
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'GetDatabaseBackendStatus', 'PreflightDatabaseSwitch', 'StartDatabaseSwitch',
   'UpdateSettings', 'SelectDirectory', 'GetAllDirectories', 'AddDirectory', 'UpdateDirectory', 'DeleteDirectory',
   'GetShortFeedServerStatus', 'GetAITagLibrary', 'SaveAITagLibrary', 'ClearAITagLibrary', 'TriggerAITagging',
+  'GetEnhancementCapability', 'GetEnhancementModelStatus', 'StartEnhancementModelDownload', 'CancelEnhancementModelDownload',
   'GetLibraryWatcherStatus', 'RetryLibraryWatcherRoot', 'GetBackupStatus', 'ListDatabaseBackups',
   'CreateDatabaseBackup', 'RestoreDatabaseBackup', 'GetSemanticIndexStatus', 'StartSemanticIndex', 'CancelSemanticIndex',
   'GetAllImageDirectories', 'AddImageDirectory', 'UpdateImageDirectory', 'DeleteImageDirectory',
   'GetImageAITaggingStatus', 'StartImageAITagging', 'CancelImageAITagging',
   'GetImageSemanticIndexStatus', 'StartImageSemanticIndex', 'CancelImageSemanticIndex',
-  'GetImageEXIFBackfillStatus', 'StartImageEXIFBackfill', 'CancelImageEXIFBackfill'
+  'GetImageEXIFBackfillStatus', 'StartImageEXIFBackfill', 'CancelImageEXIFBackfill',
+  'ListGlossaryEntries', 'UpsertGlossaryEntry', 'DeleteGlossaryEntry'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
 
-import SettingsPage from './SettingsPage.vue';
+import SettingsPage, { SETTINGS_SECTIONS } from './SettingsPage.vue';
+import { commandList } from '../utils/commandRegistry.js';
+
+// P-002 把设置分区拆成 components/settings/** 的子组件；分区自己持有的状态与方法
+// 通过 findComponent 深入取用，断言本身不变。
+const sectionVm = (wrapper, name) => wrapper.findComponent({ name }).vm;
 
 const baseSettings = () => ({
   video_extensions: '.mp4',
@@ -137,7 +156,7 @@ describe('SettingsPage library watcher', () => {
 	  await buttons[0].trigger('click');
 	  expect(api.StartSemanticIndex).toHaveBeenCalledWith({ rebuild: false });
 
-	  wrapper.vm.semanticIndexStatus = { available: true, running: false };
+	  sectionVm(wrapper, 'AITagSection').semanticIndexStatus = { available: true, running: false };
 	  await wrapper.vm.$nextTick();
 	  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
 	  await wrapper.findAll('.semantic-index-controls button')[1].trigger('click');
@@ -224,8 +243,10 @@ describe('SettingsPage image library', () => {
     api.SelectDirectory.mockResolvedValue('/media/raw');
 
     await wrapper.get('[data-test="add-image-directory"]').trigger('click');
-    const dialogButtons = wrapper.findAll('button').filter(item => item.text() === '选择');
-    await dialogButtons[dialogButtons.length - 1].trigger('click');
+    // 直接定位图片目录弹窗里那一行，别再靠「页面上最后一个『选择』」这种顺序假设。
+    const imageDialogRow = wrapper.findAll('.directory-dialog-row')
+      .find(row => row.find('[data-test="image-directory-path"]').exists());
+    await imageDialogRow.find('button').trigger('click');
     await flushPromises();
     await wrapper.get('[data-test="image-directory-alias"]').setValue('原片');
     await wrapper.get('[data-test="save-image-directory"]').trigger('click');
@@ -544,7 +565,7 @@ describe('SettingsPage 数据库后端切换', () => {
     expect(wrapper.text()).toContain('/home/me/.video-master/library.db');
     expect(wrapper.text()).toContain('pgvector');
     // 目标默认选另一个后端——选中当前后端没有意义。
-    expect(wrapper.vm.switchTarget).toBe('postgres');
+    expect(sectionVm(wrapper, 'DatabaseSection').switchTarget).toBe('postgres');
     wrapper.unmount();
   });
 
@@ -554,7 +575,7 @@ describe('SettingsPage 数据库后端切换', () => {
       target: 'sqlite', reachable: true, empty: false,
       reason_code: 'not_empty', message: '目标库不是空的（videos 有 12 行）'
     });
-    await wrapper.vm.preflightDatabaseSwitch();
+    await sectionVm(wrapper, 'DatabaseSection').preflightDatabaseSwitch();
     await wrapper.vm.$nextTick();
 
     expect(wrapper.find('[data-test="db-preflight-result"]').text()).toContain('不是空的');
@@ -569,7 +590,7 @@ describe('SettingsPage 数据库后端切换', () => {
     api.PreflightDatabaseSwitch.mockResolvedValue({
       target: 'sqlite', reachable: true, empty: true, message: '目标可用，可以开始迁移'
     });
-    await wrapper.vm.preflightDatabaseSwitch();
+    await sectionVm(wrapper, 'DatabaseSection').preflightDatabaseSwitch();
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="db-switch-start"]').attributes('disabled')).toBeUndefined();
     wrapper.unmount();
@@ -577,15 +598,15 @@ describe('SettingsPage 数据库后端切换', () => {
 
   it('迁移进度按表上报，失败与完成各有明确文案', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.switchStatus = { running: true, message: '正在复制 videos', table_index: 3, table_total: 38 };
+    sectionVm(wrapper, 'DatabaseSection').switchStatus = { running: true, message: '正在复制 videos', table_index: 3, table_total: 38 };
     await wrapper.vm.$nextTick();
-    expect(wrapper.vm.switchProgressText).toBe('正在复制 videos（3/38）');
+    expect(sectionVm(wrapper, 'DatabaseSection').switchProgressText).toBe('正在复制 videos（3/38）');
 
-    wrapper.vm.switchStatus = { running: false, completed: true, message: '迁移完成，重启应用后生效' };
-    expect(wrapper.vm.switchProgressText).toContain('重启');
+    sectionVm(wrapper, 'DatabaseSection').switchStatus = { running: false, completed: true, message: '迁移完成，重启应用后生效' };
+    expect(sectionVm(wrapper, 'DatabaseSection').switchProgressText).toContain('重启');
 
-    wrapper.vm.switchStatus = { running: false, failed: true, message: '目标库不是空的' };
-    expect(wrapper.vm.switchProgressText).toContain('迁移失败');
+    sectionVm(wrapper, 'DatabaseSection').switchStatus = { running: false, failed: true, message: '目标库不是空的' };
+    expect(sectionVm(wrapper, 'DatabaseSection').switchProgressText).toContain('迁移失败');
     wrapper.unmount();
   });
 
@@ -599,5 +620,286 @@ describe('SettingsPage 数据库后端切换', () => {
     expect(notice.exists()).toBe(true);
     expect(notice.text()).toContain('重启应用后生效');
     wrapper.unmount();
+  });
+});
+
+describe('手机端浏览地址', () => {
+  async function mountWithShortFeed(status) {
+    const wrapper = await mountPage();
+    api.GetShortFeedServerStatus.mockResolvedValue(status);
+    await sectionVm(wrapper, 'MobileSection').loadShortFeedStatus();
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('主位显示手机能连的局域网地址，界面上不出现 127.0.0.1', async () => {
+    const wrapper = await mountWithShortFeed({
+      running: true,
+      url: 'http://127.0.0.1:18088/short/',
+      lan_urls: ['http://192.168.162.250:18088/short/']
+    });
+
+    expect(wrapper.get('[data-test="short-feed-phone-url"]').text()).toBe('http://192.168.162.250:18088/short/');
+    expect(wrapper.find('[data-test="short-feed-local-url"]').exists()).toBe(false);
+    expect(wrapper.text()).not.toContain('127.0.0.1');
+  });
+
+  it('多网卡时其余地址作为备用列出', async () => {
+    const wrapper = await mountWithShortFeed({
+      running: true,
+      url: 'http://127.0.0.1:18088/short/',
+      lan_urls: ['http://192.168.162.250:18088/short/', 'http://192.168.8.20:18088/short/']
+    });
+
+    const alternates = wrapper.findAll('[data-test="short-feed-alt-url"]');
+    expect(alternates).toHaveLength(1);
+    expect(alternates[0].text()).toContain('http://192.168.8.20:18088/short/');
+  });
+
+  it('一个局域网地址都没有时直接说明手机连不上', async () => {
+    const wrapper = await mountWithShortFeed({
+      running: true,
+      url: 'http://127.0.0.1:18088/short/',
+      lan_urls: []
+    });
+
+    expect(wrapper.get('[data-test="short-feed-no-lan"]').text()).toContain('手机连不上');
+    expect(wrapper.find('[data-test="short-feed-phone-url"]').exists()).toBe(false);
+  });
+});
+
+describe('视频超分：模型按需下载', () => {
+  async function mountWithEnhance(capability, modelStatus = { running: false }) {
+    const wrapper = await mountPage();
+    api.GetEnhancementCapability.mockResolvedValue(capability);
+    api.GetEnhancementModelStatus.mockResolvedValue(modelStatus);
+    await sectionVm(wrapper, 'EnhanceSection').loadEnhanceStatus();
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('模型没下载时给出下载入口，而不是一句"不可用"', async () => {
+    const wrapper = await mountWithEnhance({
+      available: false,
+      reason_code: 'models_missing',
+      models_installable: true,
+      message: '超分模型尚未下载（约 52 MB），在设置里下载后即可使用'
+    });
+
+    const button = wrapper.get('[data-test="enhance-model-download"]');
+    expect(button.text()).toContain('下载模型');
+
+    api.StartEnhancementModelDownload.mockResolvedValue({ running: true, total_bytes: 100, downloaded_bytes: 0 });
+    await button.trigger('click');
+    await flushPromises();
+
+    expect(api.StartEnhancementModelDownload).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="enhance-model-progress"]').exists()).toBe(true);
+  });
+
+  it('校验失败时按钮变成重新下载', async () => {
+    const wrapper = await mountWithEnhance({
+      available: false,
+      reason_code: 'models_corrupt',
+      models_installable: true,
+      message: '超分模型校验失败，请重新下载'
+    });
+
+    expect(wrapper.get('[data-test="enhance-model-download"]').text()).toContain('重新下载');
+  });
+
+  it('平台不支持这类原因不给下载入口', async () => {
+    const wrapper = await mountWithEnhance({
+      available: false,
+      reason_code: 'platform_unsupported',
+      models_installable: false,
+      message: '视频超分首版只支持 Apple Silicon macOS'
+    });
+
+    expect(wrapper.find('[data-test="enhance-model-download"]').exists()).toBe(false);
+    expect(wrapper.text()).toContain('只支持 Apple Silicon');
+  });
+
+  it('下载中显示进度并可取消', async () => {
+    const wrapper = await mountWithEnhance(
+      { available: false, reason_code: 'models_missing', models_installable: true, message: '' },
+      { running: true, total_bytes: 200, downloaded_bytes: 50, message: '正在下载超分模型…' }
+    );
+
+    expect(wrapper.get('[data-test="enhance-model-progress"]').text()).toContain('25%');
+    api.CancelEnhancementModelDownload.mockResolvedValue({ running: false, cancelled: true });
+    await wrapper.get('[data-test="enhance-model-cancel"]').trigger('click');
+    await flushPromises();
+
+    expect(api.CancelEnhancementModelDownload).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('扫描后的自动任务', () => {
+  it('四个开关都会随设置一起提交', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="auto-technical-backfill-toggle"]').setValue(true);
+    await wrapper.get('[data-test="auto-perceptual-hash-toggle"]').setValue(true);
+    await wrapper.get('[data-test="auto-cleanup-analysis-toggle"]').setValue(true);
+    await wrapper.get('[data-test="auto-image-exif-toggle"]').setValue(true);
+
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+
+    expect(api.UpdateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      auto_technical_backfill: true,
+      auto_perceptual_hash: true,
+      auto_cleanup_analysis: true,
+      auto_image_exif_backfill: true
+    }));
+  });
+
+  it('默认是关的，不会装完就替用户占着机器', async () => {
+    const wrapper = await mountPage();
+
+    for (const key of ['auto-technical-backfill-toggle', 'auto-perceptual-hash-toggle', 'auto-cleanup-analysis-toggle', 'auto-image-exif-toggle']) {
+      expect(wrapper.get(`[data-test="${key}"]`).element.checked).toBe(false);
+    }
+  });
+
+  // 建议作品集的自动开关（P-007）：默认关，且必须出现在保存载荷里——
+  // 少一个键后端就会用 Go 零值覆盖用户的选择。
+  it('建议作品集自动开关默认关且随设置一起提交', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="auto-collection-suggestions-toggle"]').element.checked).toBe(false);
+
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    let payload = api.UpdateSettings.mock.calls.at(-1)[0];
+    expect(Object.prototype.hasOwnProperty.call(payload, 'auto_collection_suggestions')).toBe(true);
+    expect(payload.auto_collection_suggestions).toBe(false);
+
+    await wrapper.get('[data-test="auto-collection-suggestions-toggle"]').setValue(true);
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    payload = api.UpdateSettings.mock.calls.at(-1)[0];
+    expect(payload.auto_collection_suggestions).toBe(true);
+  });
+
+  // 帧哈希的自动开关（P-008）：同样默认关，且必须出现在保存载荷里——
+  // 少一个键后端就会用 Go 零值覆盖用户的选择。
+  it('帧哈希自动开关默认关且随设置一起提交', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="auto-frame-hash-sequence-toggle"]').element.checked).toBe(false);
+
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    let payload = api.UpdateSettings.mock.calls.at(-1)[0];
+    expect(Object.prototype.hasOwnProperty.call(payload, 'auto_frame_hash_sequence')).toBe(true);
+    expect(payload.auto_frame_hash_sequence).toBe(false);
+
+    await wrapper.get('[data-test="auto-frame-hash-sequence-toggle"]').setValue(true);
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    payload = api.UpdateSettings.mock.calls.at(-1)[0];
+    expect(payload.auto_frame_hash_sequence).toBe(true);
+  });
+});
+
+describe('后台任务空闲调度（P-003）', () => {
+  it('五个 idle_* 字段随设置一起提交，并按合法区间归一化', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="idle-scheduling-toggle"]').setValue(true);
+    await wrapper.get('[data-test="idle-threshold-minutes"]').setValue(999);
+    await wrapper.get('[data-test="idle-require-ac-power"]').setValue(true);
+    await wrapper.get('[data-test="idle-window-start"]').setValue('22:00');
+    await wrapper.get('[data-test="idle-window-end"]').setValue('06:00');
+
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+
+    expect(api.UpdateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      idle_scheduling_enabled: true,
+      idle_threshold_minutes: 120,
+      idle_require_ac_power: true,
+      idle_window_start: '22:00',
+      idle_window_end: '06:00'
+    }));
+  });
+
+  // 载荷里少一个键，后端就会拿 Go 的零值覆盖用户的选择（四个自动开关此前正是
+  // 因为后端漏赋值而永远存不下来）。这里把九个键的存在性钉住。
+  it('保存载荷同时带上四个自动开关与五个空闲调度字段', async () => {
+    const wrapper = await mountPage();
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+
+    const payload = api.UpdateSettings.mock.calls.at(-1)[0];
+    for (const key of [
+      'auto_technical_backfill', 'auto_perceptual_hash', 'auto_cleanup_analysis', 'auto_image_exif_backfill',
+      'idle_scheduling_enabled', 'idle_threshold_minutes', 'idle_require_ac_power', 'idle_window_start', 'idle_window_end'
+    ]) {
+      expect(Object.prototype.hasOwnProperty.call(payload, key)).toBe(true);
+    }
+    expect(payload).toEqual(expect.objectContaining({
+      idle_scheduling_enabled: true,
+      idle_threshold_minutes: 5,
+      idle_require_ac_power: false,
+      idle_window_start: '',
+      idle_window_end: ''
+    }));
+  });
+});
+
+describe('字幕翻译术语表（P-010）', () => {
+  it('挂在字幕翻译分区里，按全局作用域加载', async () => {
+    const wrapper = await mountPage();
+    expect(api.ListGlossaryEntries).toHaveBeenCalledWith(0);
+    expect(wrapper.findComponent({ name: 'GlossaryEditor' }).props('collectionId')).toBe(0);
+  });
+
+  it('provider 是 DeepL 时说明术语表不适用', async () => {
+    const wrapper = await mountPage();
+    const notice = wrapper.get('[data-test="glossary-deepl-notice"]');
+    expect(notice.text()).toContain('术语表不适用于 DeepL');
+  });
+
+  it('切到 OpenAI 兼容接口后不再显示这条说明', async () => {
+    const wrapper = await mountPage();
+    sectionVm(wrapper, 'SubtitleSection').form.subtitle_translation_provider = 'llm';
+    await flushPromises();
+    expect(wrapper.find('[data-test="glossary-deepl-notice"]').exists()).toBe(false);
+  });
+});
+
+describe('桌面通知开关（P-004）', () => {
+  it('老库读回 undefined 时界面显示成开着', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="desktop-notifications-toggle"]').element.checked).toBe(true);
+  });
+
+  it('desktop_notifications_enabled 随设置一起提交', async () => {
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="desktop-notifications-toggle"]').setValue(false);
+
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+
+    const payload = api.UpdateSettings.mock.calls.at(-1)[0];
+    expect(Object.prototype.hasOwnProperty.call(payload, 'desktop_notifications_enabled')).toBe(true);
+    expect(payload.desktop_notifications_enabled).toBe(false);
+  });
+});
+
+describe('命令面板接线', () => {
+  it('挂载注册保存设置命令，卸载即注销', async () => {
+    const wrapper = await mountPage();
+    const saveCommand = () => commandList().find(command => command.id === 'action:settings-save');
+
+    expect(saveCommand()).toBeTruthy();
+    expect(saveCommand().enabled()).toBe(true);
+
+    wrapper.unmount();
+    expect(saveCommand()).toBeUndefined();
+  });
+
+  it('分区清单对外导出，命令面板的分区锚点动作读的是同一份', () => {
+    expect(SETTINGS_SECTIONS.length).toBeGreaterThan(0);
+    expect(SETTINGS_SECTIONS.every(section => section.key && section.label)).toBe(true);
   });
 });

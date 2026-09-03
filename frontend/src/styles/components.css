@@ -134,6 +134,56 @@
   font-size: 12px;
 }
 
+.toolbar-btn {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  height: var(--h-unit);
+  padding: 0 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.toolbar-btn:hover:not(:disabled) { background: var(--control-hover-bg); }
+.toolbar-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.toolbar-btn--strong { font-weight: 600; }
+
+.toolbar-btn--on {
+  border-color: var(--accent-color);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+
+.toolbar-btn--compact {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.toolbar-btn__badge {
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--accent-color);
+  color: var(--accent-on);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.toolbar-btn__caret { color: var(--text-muted); }
+.toolbar-btn--on .toolbar-btn__caret { color: var(--accent-text); }
+
+.merge-type-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--control-bg); }
+.merge-type-switch button { min-height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
+.merge-type-switch button.active { background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }
+
 .page-content {
   width: 100%;
   max-width: var(--content-max-width);
@@ -233,7 +283,20 @@
   align-items: center;
   gap: 4px;
   font-weight: 650;
+  /* 不参与压缩：标签一多时被压扁会让文字折行、末尾字被裁掉。 */
+  flex: none;
+  white-space: nowrap;
 }
+
+/* 单个标签名过长时省略，别让一个标签吃掉整行。 */
+.tag-badge__name {
+  max-width: 92px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
 
 .tag-badge {
   border: 1px solid var(--hairline);
@@ -391,9 +454,12 @@ input:checked + .slider::before {
 .video-path__sep { color: var(--border-strong); }
 
 .video-meta {
-  display: flex; align-items: center; gap: 9px;
+  display: flex; align-items: center; flex-wrap: wrap; gap: 3px 9px;
   font-family: var(--font-mono); font-size: 11.5px; color: var(--text-secondary);
 }
+/* 每项都不参与压缩也不折行：窄卡片里被压扁会让"评分 8/10"竖着断成两行、
+   "看到 06:29 / 36:28"断成四行。放不下就整项换行，不在项内部拆字。 */
+.video-meta > * { flex: none; white-space: nowrap; }
 .meta-divider { color: var(--hairline); }
 .video-rating { color: var(--text-primary); font-weight: 600; }
 .video-semantic-score { color: var(--accent-text); }
@@ -402,7 +468,11 @@ input:checked + .slider::before {
 .video-item--narrow .video-info { gap: 4px; }
 .video-item--narrow .video-tags--keep { display: flex; }
 
-.video-tags { display: flex; align-items: center; gap: 5px; min-width: 0; overflow: hidden; }
+.video-tags { display: flex; align-items: center; gap: 5px; min-width: 0; }
+/* 列表行的高度是固定估算值（utils/virtualList.js），标签不能换行撑高，
+   所以横向滚动而不是截断——每个标签都还够得着。滚动条藏起来免得吃掉行高。 */
+.video-tags__strip { display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.video-tags__strip::-webkit-scrollbar { display: none; }
 
 .video-subtitle-hit {
   margin-left: 6px; max-width: 440px; padding: 1px 8px;
@@ -413,7 +483,6 @@ input:checked + .slider::before {
 }
 
 .video-actions { flex: none; display: flex; align-items: center; gap: 4px; }
-.video-actions-suspended { flex: none; color: var(--text-muted); font-size: 11.5px; }
 .row-btn {
   height: 30px; padding: 0 11px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -457,7 +526,12 @@ input:checked + .slider::before {
 .video-item--grid .video-info { padding: 8px 9px 0; gap: 5px; }
 .video-item--grid .video-info h3 { font-size: 12.5px; white-space: normal; line-height: 1.35; max-height: 34px; }
 .video-item--grid .video-path { display: none; }
-.video-item--grid .video-actions { padding: 0 9px 9px; margin-top: auto; }
+/* 信息区下内边距是 0，动作行上内边距也是 0，两行会直接贴在一起（标签行尤其明显）。
+   动作行自己补上间距，标签多到换行时也不会糊成一片。 */
+.video-item--grid .video-actions { padding: 9px 9px; margin-top: auto; }
+/* 网格卡高度自适应且不参与虚拟化，标签可以照实换行铺开，不折叠也不截断。 */
+.video-item--grid .video-tags,
+.video-item--grid .video-tags__strip { flex-wrap: wrap; row-gap: 5px; overflow: visible; }
 .video-item--grid .row-btn { flex: 1; height: 26px; padding: 0; font-size: 11.5px; }
 .video-item--grid .row-btn--icon { flex: 0 0 28px; }
 
@@ -482,4 +556,139 @@ input:checked + .slider::before {
   .page-content--with-preview {
     padding-right: 20px;
   }
+}
+
+/* 浮层面板是 teleport 到 body 的，组件 scoped 样式里的 :deep(.filter-popover)
+   编译成 [data-v-x] .filter-popover，面板没了那个祖先就永远不命中。面板级规则
+   必须是全局的。 */
+.filter-popover {
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* 设置分区的共用骨架（P-002 起分区拆成 components/settings/** 的子组件，
+   `.settings-section + .settings-section` 这类跨分区选择器必须是全局的才生效）。 */
+.settings-section {
+  margin-bottom: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  scroll-margin-top: 12px;
+}
+
+.settings-section + .settings-section {
+  padding-top: 16px;
+  border-top: 1px solid var(--hairline-faint);
+}
+
+.settings-section h3 {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  border-bottom: 0;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
+}
+
+.settings-section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.settings-section-heading h3 {
+  margin-bottom: 0;
+}
+
+.settings-section-action {
+  margin-top: 15px;
+}
+
+.setting-control-row {
+  margin-top: 10px;
+}
+
+.settings-textarea {
+  height: auto;
+  min-height: 80px;
+  padding: 12px;
+  resize: vertical;
+}
+
+.setting-grid { display: grid; grid-template-columns: repeat(3, minmax(160px, 1fr)); gap: 16px; }
+.setting-grid .setting-item { margin-bottom: 0; }
+
+@media (max-width: 760px) {
+  .setting-grid { grid-template-columns: 1fr; }
+}
+
+/* 设置分区之间复用的状态卡片与目录选择行（P-002 分区拆分后跨组件共用，
+   必须是全局的）。 */
+.backup-status {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 16px;
+  padding: 12px;
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+}
+
+.backup-status--error {
+  border-color: var(--danger-border);
+  background: var(--danger-soft);
+}
+
+.backup-status span,
+.backup-file-item span {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.backup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.short-feed-status {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--bg-color);
+}
+
+.short-feed-status-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.short-feed-status-main span,
+.short-feed-url {
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.short-feed-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 8px;
+}
+
+.directory-dialog-row {
+  display: flex;
+  gap: 8px;
 }

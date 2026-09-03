@@ -61,7 +61,7 @@ func TestProbeEnhancementRuntimeVerifiesManifestAndModels(t *testing.T) {
 	}
 	dir := t.TempDir()
 	writeEnhancementRuntimeFixture(t, dir, nil)
-	capability := ProbeEnhancementRuntime(dir)
+	capability := ProbeEnhancementRuntime(dir, "")
 	if !capability.Available || capability.RuntimeVersion != EnhancementRuntimeIdentity {
 		t.Fatalf("capability=%+v", capability)
 	}
@@ -74,7 +74,7 @@ func TestProbeEnhancementRuntimeFailsClosed(t *testing.T) {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		t.Skip("超分运行时只支持 darwin/arm64")
 	}
-	missing := ProbeEnhancementRuntime(t.TempDir())
+	missing := ProbeEnhancementRuntime(t.TempDir(), "")
 	if missing.Available || missing.ReasonCode != "runtime_unavailable" {
 		t.Fatalf("missing runtime should be unavailable: %+v", missing)
 	}
@@ -84,7 +84,7 @@ func TestProbeEnhancementRuntimeFailsClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(tampered, "models/realesrgan-x4plus.bin"), []byte("tampered"), 0644); err != nil {
 		t.Fatal(err)
 	}
-	capability := ProbeEnhancementRuntime(tampered)
+	capability := ProbeEnhancementRuntime(tampered, "")
 	if capability.Available || capability.ReasonCode != "runtime_unavailable" {
 		t.Fatalf("tampered runtime should be unavailable: %+v", capability)
 	}
@@ -93,7 +93,7 @@ func TestProbeEnhancementRuntimeFailsClosed(t *testing.T) {
 	writeEnhancementRuntimeFixture(t, wrongVersion, func(manifest *enhancementManifest) {
 		manifest.RuntimeVersion = "realesrgan-ncnn-vulkan-v0.1.0"
 	})
-	capability = ProbeEnhancementRuntime(wrongVersion)
+	capability = ProbeEnhancementRuntime(wrongVersion, "")
 	if capability.Available {
 		t.Fatalf("wrong runtime version should be unavailable: %+v", capability)
 	}
@@ -120,5 +120,120 @@ func TestEnhancementOutputBasenameAndDiskFloor(t *testing.T) {
 	}
 	if EnhancementRequiredDiskBytes(int64(^uint64(0)>>2), 1920, 1080) <= 0 {
 		t.Fatalf("overflow must clamp to positive max")
+	}
+}
+
+// 用户裁决：模型不随包，按需下载装到用户目录。包内只有二进制时，
+// 能力要报"模型没下载"而不是笼统的"不可用"，且给出可安装的信号。
+func writeEnhancementBinaryOnlyFixture(t *testing.T, dir string, models map[string]string) {
+	t.Helper()
+	bundled := map[string]string{
+		"bin/realesrgan-ncnn-vulkan":       "fake-binary",
+		"licenses/REAL-ESRGAN-LICENSE.txt": "license",
+	}
+	manifest := enhancementManifest{
+		RuntimeVersion: EnhancementRuntimeIdentity,
+		Binary:         "bin/realesrgan-ncnn-vulkan",
+		ModelDir:       "models",
+	}
+	for path, content := range bundled {
+		full := filepath.Join(dir, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+			t.Fatal(err)
+		}
+		mode := os.FileMode(0644)
+		if path == manifest.Binary {
+			mode = 0755
+		}
+		if err := os.WriteFile(full, []byte(content), mode); err != nil {
+			t.Fatal(err)
+		}
+		digest := sha256.Sum256([]byte(content))
+		manifest.Files = append(manifest.Files, enhancementManifestFile{Path: path, SHA256: hex.EncodeToString(digest[:])})
+	}
+	for name, content := range models {
+		digest := sha256.Sum256([]byte(content))
+		manifest.Models = append(manifest.Models, enhancementManifestFile{Path: name, SHA256: hex.EncodeToString(digest[:])})
+	}
+	raw, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, enhancementManifestName), raw, 0644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func enhancementModelFixtureContents() map[string]string {
+	contents := make(map[string]string)
+	for _, name := range EnhancementRequiredModelFiles() {
+		contents[name] = "model:" + name
+	}
+	return contents
+}
+
+func TestProbeEnhancementRuntimeReportsModelsMissingWhenNotDownloaded(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("超分运行时只支持 darwin/arm64")
+	}
+	runtimeDir := t.TempDir()
+	installDir := t.TempDir()
+	writeEnhancementBinaryOnlyFixture(t, runtimeDir, enhancementModelFixtureContents())
+
+	capability := ProbeEnhancementRuntime(runtimeDir, installDir)
+
+	if capability.Available {
+		t.Fatalf("模型没下载时不该报可用: %+v", capability)
+	}
+	if capability.ReasonCode != "models_missing" {
+		t.Fatalf("应当明确是模型没下载: %+v", capability)
+	}
+	if !capability.ModelsInstallable {
+		t.Fatalf("界面需要知道这是可以下载解决的: %+v", capability)
+	}
+}
+
+func TestProbeEnhancementRuntimeAcceptsDownloadedModels(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("超分运行时只支持 darwin/arm64")
+	}
+	runtimeDir := t.TempDir()
+	installDir := t.TempDir()
+	contents := enhancementModelFixtureContents()
+	writeEnhancementBinaryOnlyFixture(t, runtimeDir, contents)
+	for name, content := range contents {
+		if err := os.WriteFile(filepath.Join(installDir, name), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	capability := ProbeEnhancementRuntime(runtimeDir, installDir)
+
+	if !capability.Available {
+		t.Fatalf("下载好的模型应当被接受: %+v", capability)
+	}
+	if capability.ModelDir != installDir {
+		t.Fatalf("应当用下载目录里的模型: %+v", capability)
+	}
+}
+
+func TestProbeEnhancementRuntimeRejectsTamperedModels(t *testing.T) {
+	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
+		t.Skip("超分运行时只支持 darwin/arm64")
+	}
+	runtimeDir := t.TempDir()
+	installDir := t.TempDir()
+	contents := enhancementModelFixtureContents()
+	writeEnhancementBinaryOnlyFixture(t, runtimeDir, contents)
+	for name := range contents {
+		if err := os.WriteFile(filepath.Join(installDir, name), []byte("tampered"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	capability := ProbeEnhancementRuntime(runtimeDir, installDir)
+
+	if capability.Available || capability.ReasonCode != "models_corrupt" {
+		t.Fatalf("哈希对不上必须拒绝: %+v", capability)
 	}
 }

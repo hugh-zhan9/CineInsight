@@ -49,6 +49,12 @@ type CleanupAnalysis struct {
 	// StaleHashCount 是源文件已变更、感知哈希失效待重算的视频数；这些视频
 	// 暂不参与近似重复检测，可通过"补全感知哈希"一键重算。
 	StaleHashCount int64 `json:"stale_hash_count"`
+	// ClipGroups 是"完整片 + 从它里面截下来的片段"候选（D-028）。
+	// 建议保留完整片，前端默认不勾选，删除走回收站。
+	ClipGroups []CleanupClipGroup `json:"clip_groups"`
+	// StaleFrameHashCount 是还没有可用帧哈希序列的视频数（没回填过的 + 源文件
+	// 变过失效的）；这些视频暂不参与截取片段识别，可通过"补全帧哈希"一键补齐。
+	StaleFrameHashCount int64 `json:"stale_frame_hash_count"`
 }
 
 type CleanupProgress struct {
@@ -80,7 +86,16 @@ type CleanupService struct {
 	// runID 每次启动分析自增。后台 goroutine 写完状态到发出 done 事件之间没有持锁，
 	// 期间用户可能已经启动了新一轮；靠它判断自己是否仍是当前这轮，避免旧的收尾事件
 	// 把 done 阶段盖到新一轮的状态上。
-	runID uint64
+	runID    uint64
+	registry *BackgroundTaskRegistry
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+// 清理分析没有取消入口，也不逐项处理，因此只登记运行区间，不装项间检查点。
+func (s *CleanupService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
 }
 
 func (s *CleanupService) SetContext(ctx context.Context) {
@@ -111,9 +126,14 @@ func (s *CleanupService) StartAnalysis(criteria CleanupCriteria) (*CleanupStatus
 	s.runID++
 	runID := s.runID
 	status := s.statusSnapshotLocked()
+	registry := s.registry
 	s.mu.Unlock()
+	registry.Begin(BackgroundTaskCleanup)
 
 	go func() {
+		// End 放在最外层 defer：它在 done 事件发出之后才执行，登记表因此可以
+		// 当作"这一轮真的收尾了"的信号用（测试等待窗口不再靠猜时间）。
+		defer registry.End(BackgroundTaskCleanup)
 		analysis, _, err := s.analyzeCleanupCandidates(criteria)
 
 		s.mu.Lock()
@@ -205,7 +225,13 @@ func cleanupDoneMessage(result *CleanupAnalysis) string {
 func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*CleanupAnalysis, int, error) {
 	startedAt := time.Now()
 	var videos []models.Video
-	if err := database.DB.Order("id asc").Find(&videos).Error; err != nil {
+	// 只分析扫描根之内的视频：改窄扫描目录后留下的范围外记录在列表里已经看不见，
+	// 再把它们列成清理候选会让用户对着一批"不存在"的东西做决定。
+	scopedQuery, err := applyScanRootScope(database.DB.Model(&models.Video{}).Order("id asc"))
+	if err != nil {
+		return nil, 0, err
+	}
+	if err := scopedQuery.Find(&videos).Error; err != nil {
 		return nil, 0, err
 	}
 	videoService := &VideoService{}
@@ -335,6 +361,15 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	}
 	result.SameSourceGroups = sameSourceGroups
 
+	// 截取片段是最后一步（D-028）：它只读帧哈希序列表，与上面四类的计算路径互不
+	// 相交。排除集只用精确重复的两两配对，近似重复与同源另有各自的语义。
+	clipGroups, staleFrameHashCount, err := loadCleanupClipGroups(cleanupExactDuplicatePairs(result.DuplicateGroups))
+	if err != nil {
+		return nil, 0, err
+	}
+	result.ClipGroups = clipGroups
+	result.StaleFrameHashCount = staleFrameHashCount
+
 	sort.Slice(result.DuplicateGroups, func(i, j int) bool {
 		return result.DuplicateGroups[i].Original.ID < result.DuplicateGroups[j].Original.ID
 	})
@@ -380,9 +415,17 @@ func loadCleanupSameSourceGroups(exactPairs map[[2]uint]struct{}) ([]CleanupSame
 		return nil, err
 	}
 
+	roots, err := loadScanRootScope()
+	if err != nil {
+		return nil, err
+	}
 	groups := make([]CleanupSameSourceGroup, 0, len(relations))
 	for _, relation := range relations {
 		if _, duplicate := exactPairs[cleanupVideoPairKey(relation.VideoAID, relation.VideoBID)]; duplicate {
+			continue
+		}
+		// 任一侧落在扫描根之外，这一对就不该出现在清理候选里。
+		if !pathWithinScanRoots(relation.VideoA.Path, roots) || !pathWithinScanRoots(relation.VideoB.Path, roots) {
 			continue
 		}
 		preferred, alternative := relation.VideoA, relation.VideoB

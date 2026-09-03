@@ -66,6 +66,8 @@
   --neutral-softer: #e4e9e9;
   --neutral-faint: #eff2f2;
   --surface-faint: #fafbfb;
+  --media-badge-bg: rgba(0, 0, 0, 0.55);
+  --media-badge-fg: #ffffff;
   --thumb-bg: #e9eeee;
   --thumb-fg: #9aa9ac;
   --thumb-fallback-bg: repeating-linear-gradient(135deg, #dfe5e6 0 6px, #e9eeee 6px 12px);
@@ -153,6 +155,8 @@
   --neutral-softer: #232b2c;
   --neutral-faint: #1f2627;
   --surface-faint: #171d1e;
+  --media-badge-bg: rgba(0, 0, 0, 0.55);
+  --media-badge-fg: #ffffff;
   --thumb-bg: #232b2c;
   --thumb-fg: #7a8a8c;
   --thumb-fallback-bg: repeating-linear-gradient(135deg, #232b2c 0 6px, #1d2425 6px 12px);

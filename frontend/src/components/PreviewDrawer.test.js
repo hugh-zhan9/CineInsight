@@ -1,4 +1,16 @@
 import { flushPromises, mount } from '@vue/test-utils';
+
+// 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
+const feedback = vi.hoisted(() => ({
+  confirmAction: vi.fn(() => Promise.resolve(true)),
+  notify: vi.fn(),
+  notifyError: vi.fn(),
+  notifySuccess: vi.fn()
+}));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...feedback
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
@@ -8,9 +20,13 @@ const api = vi.hoisted(() => ({
   AddPersonVideos: vi.fn(),
   CreatePerson: vi.fn(),
   DeleteCollection: vi.fn(),
+  DeleteGlossaryEntry: vi.fn(),
+  ListGlossaryEntries: vi.fn(() => Promise.resolve([])),
+  UpsertGlossaryEntry: vi.fn(),
   GetCollectionDetail: vi.fn(),
   GetAllDirectories: vi.fn(),
   GetPersonDetail: vi.fn(),
+  GetPersonImages: vi.fn(),
   GetPreviewSession: vi.fn(),
   GetVideoDetails: vi.fn(),
   ListCollections: vi.fn(),
@@ -19,6 +35,7 @@ const api = vi.hoisted(() => ({
   RemoveCollectionCover: vi.fn(),
   RemoveCollectionVideo: vi.fn(),
   RemovePersonAvatar: vi.fn(),
+  RemovePersonImage: vi.fn(),
   RemovePersonVideo: vi.fn(),
   ReorderCollectionVideos: vi.fn(),
   SearchLibraryVideoPage: vi.fn(),
@@ -29,7 +46,10 @@ const api = vi.hoisted(() => ({
   SetPersonAvatar: vi.fn(),
   UpdateCollection: vi.fn(),
   UpdatePerson: vi.fn(),
-  UpdateVideoDetails: vi.fn()
+  UpdateVideoDetails: vi.fn(),
+  CreatePlaybackProxy: vi.fn(),
+  DeletePlaybackProxy: vi.fn(),
+  GetPlaybackProxy: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -87,6 +107,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.GetAllDirectories.mockResolvedValue([]);
   api.SelectDirectory.mockResolvedValue('');
+  api.GetPlaybackProxy.mockResolvedValue(null);
+  api.CreatePlaybackProxy.mockResolvedValue({ results: [{ video_id: 1, code: 'created', strategy: 'remux' }] });
+  api.DeletePlaybackProxy.mockResolvedValue(null);
 });
 
 describe('PreviewDrawer', () => {
@@ -286,7 +309,7 @@ describe('PreviewDrawer', () => {
       videos: [onlyVideo], next_video_id: 0
     });
     api.RemovePersonVideo.mockResolvedValueOnce(true);
-    const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+    feedback.confirmAction.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
     const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
     await flushPromises();
 
@@ -294,11 +317,83 @@ describe('PreviewDrawer', () => {
     expect(api.RemovePersonVideo).not.toHaveBeenCalled();
     await wrapper.vm.removeRelatedVideo(onlyVideo);
 
-    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(2);
     expect(api.RemovePersonVideo).toHaveBeenCalledWith(7, 1);
     expect(wrapper.emitted('person-deleted')).toEqual([[7]]);
     expect(wrapper.emitted('close')).toHaveLength(1);
-    confirm.mockRestore();
+  });
+
+  // D-021：人物详情里视频与图片是两个区块、各自分页。
+  it('renders the person image section, pages it separately and removes one relation', async () => {
+    api.GetPersonDetail.mockResolvedValue({
+      person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 1, active_image_count: 3 },
+      videos: [{ id: 1, name: 'one.mp4' }], next_video_id: 0,
+      images: [{ id: 11, name: 'a.jpg' }, { id: 12, name: 'b.jpg' }], next_image_id: 12
+    });
+    api.GetPersonImages.mockResolvedValueOnce({ images: [{ id: 13, name: 'c.jpg' }], next_image_id: 0 });
+    api.RemovePersonImage.mockResolvedValueOnce(false);
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
+    await flushPromises();
+
+    const section = wrapper.get('[data-test="person-image-section"]');
+    expect(section.text()).toContain('关联图片（3）');
+    expect(section.findAll('.person-image-card')).toHaveLength(2);
+    expect(section.find('img[src="/preview/image-thumbnail/11"]').exists()).toBe(true);
+
+    await wrapper.get('[data-test="person-image-more"]').trigger('click');
+    await flushPromises();
+    expect(api.GetPersonImages).toHaveBeenCalledWith(7, 12, 200);
+    expect(wrapper.findAll('.person-image-card')).toHaveLength(3);
+    expect(wrapper.find('[data-test="person-image-more"]').exists()).toBe(false);
+
+    // 该人物还有视频关系，解除一条图片关系不需要确认。
+    await wrapper.get('[data-test="person-image-remove-11"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.RemovePersonImage).toHaveBeenCalledWith(7, 11);
+    expect(wrapper.emitted('relations-updated')).toEqual([[{ type: 'person', id: 7 }]]);
+  });
+
+  it('warns before removing a person final image and reports person cleanup', async () => {
+    api.GetPersonDetail.mockResolvedValue({
+      person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 0, active_image_count: 1 },
+      videos: [], next_video_id: 0,
+      images: [{ id: 11, name: 'a.jpg' }], next_image_id: 0
+    });
+    api.RemovePersonImage.mockResolvedValueOnce(true);
+    feedback.confirmAction.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
+    await flushPromises();
+
+    await wrapper.get('[data-test="person-image-remove-11"]').trigger('click');
+    await flushPromises();
+    expect(api.RemovePersonImage).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-test="person-image-remove-11"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(2);
+    expect(api.RemovePersonImage).toHaveBeenCalledWith(7, 11);
+    expect(wrapper.emitted('person-deleted')).toEqual([[7]]);
+    expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+
+  // 最后关系判定跨两种媒体：还有图片关系时解除最后一个视频关系不该弹确认。
+  it('skips the final-relation warning for a video when image relations remain', async () => {
+    const onlyVideo = { id: 1, name: 'only.mp4', display_title: 'Only' };
+    api.GetPersonDetail.mockResolvedValue({
+      person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 1, active_image_count: 2 },
+      videos: [onlyVideo], next_video_id: 0,
+      images: [{ id: 11, name: 'a.jpg' }, { id: 12, name: 'b.jpg' }], next_image_id: 0
+    });
+    api.RemovePersonVideo.mockResolvedValueOnce(false);
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } });
+    await flushPromises();
+
+    await wrapper.vm.removeRelatedVideo(onlyVideo);
+    await flushPromises();
+
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.RemovePersonVideo).toHaveBeenCalledWith(7, 1);
   });
 
   it('does not apply a completed save after navigating to another video', async () => {
@@ -441,5 +536,133 @@ describe('PreviewDrawer', () => {
     await wrapper.vm.removeRelatedVideo(firstVideo);
     expect(api.RemoveCollectionVideo).toHaveBeenCalledWith(3, 1);
     expect(wrapper.vm.relatedVideoIDs).toEqual([2]);
+  });
+});
+
+describe('PreviewDrawer 作品集术语表（P-010）', () => {
+  it('作品集详情按该作品集的作用域加载术语表', async () => {
+    api.GetCollectionDetail.mockResolvedValueOnce({
+      collection: { collection: { id: 3, name: 'Collection', description: '' }, cover_url: '', active_video_count: 0 },
+      videos: []
+    });
+    api.ListGlossaryEntries.mockResolvedValue([
+      { id: 9, collection_id: 3, scope_key: 3, source_term: 'Neo', source_term_lower: 'neo', target_term: '尼奥', note: '' }
+    ]);
+
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'collection', id: 3 } } });
+    await flushPromises();
+
+    const editor = wrapper.findComponent({ name: 'GlossaryEditor' });
+    expect(editor.exists()).toBe(true);
+    expect(editor.props('collectionId')).toBe(3);
+    expect(api.ListGlossaryEntries).toHaveBeenCalledWith(3);
+    expect(wrapper.findAll('[data-test="glossary-entry"]')).toHaveLength(1);
+  });
+
+  it('视频详情里没有术语表区块', async () => {
+    api.GetVideoDetails.mockResolvedValue(videoDetails(1));
+    api.GetPreviewSession.mockResolvedValue({ url: 'http://127.0.0.1/preview/1' });
+    api.ListCollections.mockResolvedValue([]);
+    const wrapper = mount(PreviewDrawer, { props: { video: { id: 1, name: 'one.mp4' } } });
+    await flushPromises();
+
+    expect(wrapper.findComponent({ name: 'GlossaryEditor' }).exists()).toBe(false);
+  });
+
+  // ===== 播放代理（D-004、D-006）=====
+
+  it('没有代理时技术信息区块给出生成入口，没有删除入口', async () => {
+    const wrapper = await mountDrawer();
+    expect(api.GetPlaybackProxy).toHaveBeenCalledWith(1);
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('尚未生成播放代理');
+    expect(wrapper.find('[data-test="preview-proxy-create"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="preview-proxy-delete"]').exists()).toBe(false);
+  });
+
+  it('已有代理时显示策略与体积，并给出删除入口', async () => {
+    api.GetPlaybackProxy.mockResolvedValue({
+      video_id: 1, strategy: 'remux', status: 'ready', output_size: 2048, last_error: ''
+    });
+    const wrapper = await mountDrawer();
+    const text = wrapper.get('[data-test="preview-proxy-status"]').text();
+    expect(text).toContain('已有播放代理');
+    expect(text).toContain('换容器（未重编码）');
+    expect(text).toContain('2.0 KB');
+    expect(wrapper.find('[data-test="preview-proxy-delete"]').exists()).toBe(true);
+  });
+
+  it('上次生成失败时把原因显示出来', async () => {
+    api.GetPlaybackProxy.mockResolvedValue({
+      video_id: 1, strategy: 'transcode', status: 'failed', output_size: 0, last_error: '磁盘空间不足'
+    });
+    const wrapper = await mountDrawer();
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('磁盘空间不足');
+  });
+
+  it('经代理播放时明确标注出来', async () => {
+    const details = videoDetails(1);
+    api.GetVideoDetails.mockResolvedValue(details);
+    api.ListCollections.mockResolvedValue([]);
+    const wrapper = mount(PreviewDrawer, {
+      props: {
+        video: details.video,
+        session: {
+          video_id: 1,
+          mode: 'inline',
+          inline_source: { locator_strategy: 'asset_route', locator_value: '/preview/media/1', mime: 'video/mp4' },
+          proxy: { strategy: 'transcode', size: 4096 }
+        }
+      }
+    });
+    await flushPromises();
+    const text = wrapper.get('[data-test="preview-proxy-status"]').text();
+    expect(text).toContain('正经播放代理播放');
+    expect(text).toContain('已重编码');
+    expect(wrapper.vm.playingThroughProxy).toBe(true);
+  });
+
+  it('生成代理之后回读元数据并请求刷新根条目的预览会话', async () => {
+    api.GetPlaybackProxy
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ video_id: 1, strategy: 'remux', status: 'ready', output_size: 1024, last_error: '' });
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    await flushPromises();
+
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(1);
+    expect(wrapper.vm.playbackProxy?.status).toBe('ready');
+    expect(wrapper.emitted('preview-session-stale')?.[0]).toEqual([1]);
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('已有播放代理');
+  });
+
+  it('生成失败时把结果码翻成人话', async () => {
+    api.CreatePlaybackProxy.mockResolvedValue({ results: [{ video_id: 1, code: 'disk_full' }] });
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="preview-proxy-error"]').text()).toContain('磁盘空间不足');
+  });
+
+  it('删除代理先确认，取消就什么都不做', async () => {
+    api.GetPlaybackProxy.mockResolvedValue({ video_id: 1, strategy: 'remux', status: 'ready', output_size: 1024, last_error: '' });
+    feedback.confirmAction.mockResolvedValue(false);
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-delete"]').trigger('click');
+    await flushPromises();
+    expect(api.DeletePlaybackProxy).not.toHaveBeenCalled();
+  });
+
+  it('确认后删除代理并刷新状态', async () => {
+    // 上一条用例把确认框改成了"取消"，clearAllMocks 不会撤销 mockResolvedValue。
+    feedback.confirmAction.mockResolvedValue(true);
+    api.GetPlaybackProxy
+      .mockResolvedValueOnce({ video_id: 1, strategy: 'remux', status: 'ready', output_size: 1024, last_error: '' })
+      .mockResolvedValue(null);
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-delete"]').trigger('click');
+    await flushPromises();
+    expect(api.DeletePlaybackProxy).toHaveBeenCalledWith(1);
+    expect(wrapper.vm.playbackProxy).toBeNull();
+    expect(wrapper.emitted('preview-session-stale')?.[0]).toEqual([1]);
   });
 });

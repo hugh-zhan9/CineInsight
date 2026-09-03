@@ -91,11 +91,18 @@ func (s *SubtitleService) whisperXVenvPython() string {
 	return filepath.Join(s.whisperXVenvDir(), "bin", "python3")
 }
 
-func (s *SubtitleService) whisperXManagedPython() string {
+// managedPythonPathIn 返回托管解释器在某个运行时目录下的位置。
+// 抽成包级函数是为了让第二、第三个 sidecar（Qwen、人脸）复用同一套目录约定，
+// 行为与原来逐个 runtime 各写一份完全一致。
+func managedPythonPathIn(runtimeDir string) string {
 	if runtime.GOOS == "windows" {
-		return filepath.Join(s.whisperXRuntimeDir(), "python", "python.exe")
+		return filepath.Join(runtimeDir, "python", "python.exe")
 	}
-	return filepath.Join(s.whisperXRuntimeDir(), "python", "bin", "python3")
+	return filepath.Join(runtimeDir, "python", "bin", "python3")
+}
+
+func (s *SubtitleService) whisperXManagedPython() string {
+	return managedPythonPathIn(s.whisperXRuntimeDir())
 }
 
 func (s *SubtitleService) ensureWhisperXWorkerScript() error {
@@ -144,7 +151,17 @@ func (s *SubtitleService) whisperXEnvironment() ([]string, error) {
 }
 
 func (s *SubtitleService) findBasePython() string {
-	if path := s.whisperXManagedPython(); s.pythonMeetsMinimumVersion(path) {
+	return findPythonInterpreter(s.whisperXManagedPython(), s.pythonMeetsMinimumVersion)
+}
+
+// findPythonInterpreter 按"托管解释器 → 平台候选清单 → PATH"的顺序返回第一个被
+// accept 接受的解释器路径；一个都没有时返回空串。
+//
+// 从 SubtitleService.findBasePython 原样抽出来（顺序、候选清单、PATH 兜底都不变），
+// 只是把"什么版本算可用"变成参数：人脸 sidecar 的 onnxruntime wheel 只覆盖
+// 3.10–3.13，它需要一个带上限的判据，而 WhisperX 仍是"3.10 及以上"。
+func findPythonInterpreter(managedPython string, accept func(string) bool) string {
+	if path := managedPython; accept(path) {
 		return path
 	}
 
@@ -169,26 +186,36 @@ func (s *SubtitleService) findBasePython() string {
 			continue
 		}
 		if strings.Contains(candidate, string(os.PathSeparator)) {
-			if s.pythonMeetsMinimumVersion(candidate) {
+			if accept(candidate) {
 				return candidate
 			}
 			continue
 		}
-		if path, err := exec.LookPath(candidate); err == nil && s.pythonMeetsMinimumVersion(path) {
+		if path, err := exec.LookPath(candidate); err == nil && accept(path) {
 			return path
 		}
 	}
 
-	if path, err := exec.LookPath("python3"); err == nil && s.pythonMeetsMinimumVersion(path) {
+	if path, err := exec.LookPath("python3"); err == nil && accept(path) {
 		return path
 	}
-	if path, err := exec.LookPath("python"); err == nil && s.pythonMeetsMinimumVersion(path) {
+	if path, err := exec.LookPath("python"); err == nil && accept(path) {
 		return path
 	}
 	return ""
 }
 
 func (s *SubtitleService) pythonMeetsMinimumVersion(path string) bool {
+	return pythonVersionInRange(path, 10, 0)
+}
+
+// pythonVersionInRange 报告 path 上的解释器是否是 3.minMinor 及以上、且（maxMinor > 0
+// 时）不高于 3.maxMinor。
+//
+// 从 SubtitleService.pythonMeetsMinimumVersion 原样抽出：maxMinor <= 0 时的判据
+// 与原来逐字一致（major > 3 || (major == 3 && minor >= minMinor)）。上限是为人脸
+// sidecar 加的——它的 onnxruntime wheel 只发到 cp313。
+func pythonVersionInRange(path string, minMinor, maxMinor int) bool {
 	if _, err := os.Stat(path); err != nil {
 		return false
 	}
@@ -213,12 +240,27 @@ func (s *SubtitleService) pythonMeetsMinimumVersion(path string) bool {
 	if err != nil {
 		return false
 	}
-	return major > 3 || (major == 3 && minor >= 10)
+	if maxMinor > 0 {
+		return major == 3 && minor >= minMinor && minor <= maxMinor
+	}
+	return major > 3 || (major == 3 && minor >= minMinor)
 }
 
 func (s *SubtitleService) ensureManagedPython() (string, error) {
-	pythonPath := s.whisperXManagedPython()
-	if s.pythonMeetsMinimumVersion(pythonPath) {
+	// WhisperX 侧传 context.Background()：它原来就没有取消与超时，
+	// 换成带 ctx 的实现只是让人脸那一侧能取消，这里的行为一个字节都不变。
+	return ensureManagedPythonRuntime(context.Background(), s.whisperXRuntimeDir(), "WhisperX", "Python 3.10+", s.pythonMeetsMinimumVersion)
+}
+
+// ensureManagedPythonRuntime 把 python-build-standalone 解到 runtimeDir/python 并返回
+// 解释器路径；已经装好（accept 接受）时直接返回，不重复下载。
+//
+// 从 SubtitleService.ensureManagedPython 原样抽出，只把两处会出现在文案里的名字
+// 变成参数：label（"WhisperX" / "人脸识别"）与 requirement（版本要求的说法）。
+// 传入 "WhisperX" 与 "Python 3.10+" 时，四条错误信息与抽取前逐字一致。
+func ensureManagedPythonRuntime(ctx context.Context, runtimeDir, label, requirement string, accept func(string) bool) (string, error) {
+	pythonPath := managedPythonPathIn(runtimeDir)
+	if accept(pythonPath) {
 		return pythonPath, nil
 	}
 
@@ -229,21 +271,25 @@ func (s *SubtitleService) ensureManagedPython() (string, error) {
 	case runtime.GOOS == "darwin" && runtime.GOARCH == "amd64":
 		url = managedPythonMacAMD64
 	default:
-		return "", fmt.Errorf("当前平台缺少 Python 3.10+，且暂未实现自动下载: %s/%s", runtime.GOOS, runtime.GOARCH)
+		return "", fmt.Errorf("当前平台缺少 %s，且暂未实现自动下载: %s/%s", requirement, runtime.GOOS, runtime.GOARCH)
 	}
 
-	if err := os.MkdirAll(s.whisperXRuntimeDir(), 0755); err != nil {
+	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
 		return "", err
 	}
 
-	archivePath := filepath.Join(s.whisperXRuntimeDir(), "python-runtime.tar.gz")
-	resp, err := http.Get(url)
+	archivePath := filepath.Join(runtimeDir, "python-runtime.tar.gz")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return "", fmt.Errorf("下载 WhisperX Python runtime 失败: %w", err)
+		return "", fmt.Errorf("下载 %s Python runtime 失败: %w", label, err)
+	}
+	resp, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("下载 %s Python runtime 失败: %w", label, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("下载 WhisperX Python runtime 失败: HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("下载 %s Python runtime 失败: HTTP %d", label, resp.StatusCode)
 	}
 
 	out, err := os.Create(archivePath)
@@ -256,14 +302,14 @@ func (s *SubtitleService) ensureManagedPython() (string, error) {
 	}
 	out.Close()
 
-	extractCmd := exec.Command("tar", "-xzf", archivePath, "-C", s.whisperXRuntimeDir())
+	extractCmd := exec.CommandContext(ctx, "tar", "-xzf", archivePath, "-C", runtimeDir)
 	output, err := extractCmd.CombinedOutput()
 	if err != nil {
-		return "", fmt.Errorf("解压 WhisperX Python runtime 失败: %s", strings.TrimSpace(string(output)))
+		return "", fmt.Errorf("解压 %s Python runtime 失败: %s", label, strings.TrimSpace(string(output)))
 	}
 
-	if !s.pythonMeetsMinimumVersion(pythonPath) {
-		return "", fmt.Errorf("WhisperX Python runtime 解压完成，但未找到可用的 Python 3.10+")
+	if !accept(pythonPath) {
+		return "", fmt.Errorf("%s Python runtime 解压完成，但未找到可用的 %s", label, requirement)
 	}
 	return pythonPath, nil
 }

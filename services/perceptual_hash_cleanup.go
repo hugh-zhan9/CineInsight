@@ -21,10 +21,17 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}) ([]CleanupDup
 	if err := database.DB.Preload("Video.Tags").Order("video_id ASC").Find(&rows).Error; err != nil {
 		return nil, nil, 0, err
 	}
+	roots, err := loadScanRootScope()
+	if err != nil {
+		return nil, nil, 0, err
+	}
 	var staleCount int64
 	valid := rows[:0]
 	for _, row := range rows {
 		if row.HashEarly == "" || row.HashMiddle == "" || row.HashLate == "" {
+			continue
+		}
+		if !pathWithinScanRoots(row.Video.Path, roots) {
 			continue
 		}
 		info, err := os.Stat(row.Video.Path)

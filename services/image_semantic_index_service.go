@@ -73,6 +73,28 @@ type ImageSemanticIndexService struct {
 	stopping        bool
 	queryMu         sync.Mutex
 	queryCache      map[string]semanticQueryCacheEntry
+	registry        *BackgroundTaskRegistry
+	notifier        DesktopNotifier
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+func (s *ImageSemanticIndexService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
+}
+
+// SetDesktopNotifier 接入桌面通知（D-013）。
+func (s *ImageSemanticIndexService) SetDesktopNotifier(notifier DesktopNotifier) {
+	s.mu.Lock()
+	s.notifier = notifier
+	s.mu.Unlock()
+}
+
+func (s *ImageSemanticIndexService) taskRegistry() *BackgroundTaskRegistry {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.registry
 }
 
 // NewImageSemanticIndexService 创建显式启动的图片语义索引服务，签名镜像视频侧。
@@ -264,6 +286,10 @@ func (s *ImageSemanticIndexService) prepareProfile(model string) (models.Semanti
 
 func (s *ImageSemanticIndexService) run(ctx context.Context, profile models.SemanticIndexProfile, config SemanticIndexConfig, embedder SemanticEmbeddingClient) {
 	defer s.worker.Done()
+	// 与视频侧同理：登记表在 worker 里取，避免变化回调在服务锁内执行。
+	registry := s.taskRegistry()
+	registry.Begin(BackgroundTaskImageSemantic)
+	defer registry.End(BackgroundTaskImageSemantic)
 	// 快照加载全部活跃图片（软删除由默认作用域排除）；启动后新增的图片等下次运行。
 	var images []models.Image
 	if err := s.db.WithContext(ctx).Preload("Tags").Order("id ASC").Find(&images).Error; err != nil {
@@ -481,8 +507,10 @@ func (s *ImageSemanticIndexService) finish(cancelled bool) {
 	s.status.UpdatedAt = &now
 	s.cancel = nil
 	status, emitter := cloneImageSemanticIndexStatus(s.status), s.emitter
+	notifier := s.notifier
 	s.mu.Unlock()
 	emitImageSemanticIndexStatus(emitter, status)
+	notifySemanticIndexTerminal(notifier, "图片语义索引", status.Cancelled, status.Succeeded, status.Failed)
 }
 
 func cloneImageSemanticIndexStatus(status ImageSemanticIndexStatus) ImageSemanticIndexStatus {

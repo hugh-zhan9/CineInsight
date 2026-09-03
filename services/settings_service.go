@@ -36,6 +36,13 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.AutoScanOnStartup = input.AutoScanOnStartup
 		settings.LibraryWatchEnabled = input.LibraryWatchEnabled
 		settings.LocalMetadataEnabled = input.LocalMetadataEnabled
+		// 扫描后自动任务的四个开关：前端一直在发，这里此前漏了赋值，
+		// tx.Save 于是保留旧值——用户拨了开关、提示保存成功、重开设置页又变回去。
+		settings.AutoTechnicalBackfill = input.AutoTechnicalBackfill
+		settings.AutoPerceptualHash = input.AutoPerceptualHash
+		settings.AutoCleanupAnalysis = input.AutoCleanupAnalysis
+		settings.AutoImageEXIFBackfill = input.AutoImageEXIFBackfill
+		settings.AutoCollectionSuggestions = input.AutoCollectionSuggestions
 		settings.AIQualityEnabled = input.AIQualityEnabled
 		settings.ShortFeedMaxDurationMinutes = positiveOrDefault(input.ShortFeedMaxDurationMinutes, DefaultShortFeedMaxDurationMinutes)
 		settings.ShortFeedFeedbackSyncEnabled = input.ShortFeedFeedbackSyncEnabled
@@ -63,6 +70,25 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		// 与备份执行层共用同一套归一化，保证存储值等于生效值。
 		settings.BackupRetentionCount = normalizedBackupRetention(input.BackupRetentionCount)
 		settings.BackupIntervalHours = normalizedBackupInterval(input.BackupIntervalHours)
+		// 空闲调度（D-032）：阈值收进 1–120 分钟，时间窗只认 HH:MM，
+		// 存进去的就是生效值——门控读设置时不用再猜。
+		settings.IdleSchedulingEnabled = input.IdleSchedulingEnabled
+		settings.IdleThresholdMinutes = NormalizeIdleThresholdMinutes(input.IdleThresholdMinutes)
+		settings.IdleRequireACPower = input.IdleRequireACPower
+		settings.IdleWindowStart = NormalizeIdleWindowBound(input.IdleWindowStart)
+		settings.IdleWindowEnd = NormalizeIdleWindowBound(input.IdleWindowEnd)
+		// 桌面通知（D-013）：开关即时生效，通知中心每次投递前读一次这一列。
+		settings.DesktopNotificationsEnabled = input.DesktopNotificationsEnabled
+		// 播放代理（D-005、D-006）：上限 0 是"不限"，负数按默认 50 GiB 归一化，
+		// 存进去的就是生效值。调低上限不立即淘汰，下一次写入时生效。
+		settings.AutoCompatibilityProxy = input.AutoCompatibilityProxy
+		settings.ProxyCacheLimitBytes = NormalizeProxyCacheLimitBytes(input.ProxyCacheLimitBytes)
+		// 人脸识别（D-016、D-022）：镜像前缀存进去的就是生效值（去空白），
+		// 自动开关即时生效——扫描后自动化每次读一次这一列。
+		settings.AutoFaceAnalysis = input.AutoFaceAnalysis
+		settings.FaceModelMirrorURL = strings.TrimSpace(input.FaceModelMirrorURL)
+		// 帧哈希序列（D-026）：自动开关即时生效，扫描后自动化每次读一次这一列。
+		settings.AutoFrameHashSequence = input.AutoFrameHashSequence
 
 		if err := tx.Save(&settings).Error; err != nil {
 			return err

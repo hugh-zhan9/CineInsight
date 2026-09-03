@@ -28,6 +28,8 @@ type EnhancementService struct {
 	videoService *VideoService
 	probe        *MediaProbeService
 	sameSource   *AISameSourceService
+	// 模型按需下载后的安装目录；重新探测能力时要带上它。
+	modelInstallDir string
 
 	// 测试接缝：外部命令、磁盘空间、ffmpeg/ffprobe 定位、时间源。
 	runCommand       enhancementCommandRunner
@@ -46,6 +48,58 @@ type EnhancementService struct {
 	worker        sync.WaitGroup
 	emitter       func(EnhancementTaskView)
 	parentCtx     context.Context
+	registry      *BackgroundTaskRegistry
+	notifier      DesktopNotifier
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+func (s *EnhancementService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
+}
+
+// SetDesktopNotifier 接入桌面通知（D-013）。
+func (s *EnhancementService) SetDesktopNotifier(notifier DesktopNotifier) {
+	s.mu.Lock()
+	s.notifier = notifier
+	s.mu.Unlock()
+}
+
+// runTaskRegistered 跑一项超分任务，并保证登记表的 Begin/End 成对（defer 防漂移）。
+func (s *EnhancementService) runTaskRegistered(ctx context.Context, task models.VideoEnhancementTask) error {
+	s.mu.Lock()
+	registry := s.registry
+	s.mu.Unlock()
+	registry.Begin(BackgroundTaskEnhancement)
+	defer registry.End(BackgroundTaskEnhancement)
+	err := s.processTask(ctx, task)
+	s.notifyTaskTerminal(task)
+	return err
+}
+
+// notifyTaskTerminal 按任务表里的最终状态发一条系统通知（D-013）。
+// 以库里的状态为准而不是 processTask 的返回值：失败是由 failTask 写进去的，
+// 生命周期停止时任务保持 running（可恢复），那种情况本来就不该通知。
+func (s *EnhancementService) notifyTaskTerminal(task models.VideoEnhancementTask) {
+	s.mu.Lock()
+	notifier := s.notifier
+	s.mu.Unlock()
+	if notifier == nil || database.DB == nil {
+		return
+	}
+	var status string
+	if err := database.DB.Model(&models.VideoEnhancementTask{}).
+		Where("id = ?", task.ID).Pluck("status", &status).Error; err != nil {
+		return
+	}
+	name := notificationMediaName(task.Video.Name)
+	switch status {
+	case models.EnhancementStatusCompleted:
+		notifyDesktop(notifier, "视频超分完成", fmt.Sprintf("《%s》超分已完成", name))
+	case models.EnhancementStatusFailed:
+		notifyDesktop(notifier, "视频超分失败", fmt.Sprintf("《%s》超分任务失败，可在超分面板查看原因", name))
+	}
 }
 
 type enhancementCommandRunner func(ctx context.Context, name string, args []string) (stderrTail string, err error)
@@ -70,9 +124,10 @@ type EnhancementCreateRequest struct {
 var ErrEnhancementPublishInProgress = errors.New("publish_in_progress")
 
 // NewEnhancementService 创建服务并探测运行时能力。
-func NewEnhancementService(videoService *VideoService, probe *MediaProbeService, sameSource *AISameSourceService) *EnhancementService {
+func NewEnhancementService(videoService *VideoService, probe *MediaProbeService, sameSource *AISameSourceService, dataDir string) *EnhancementService {
 	return &EnhancementService{
-		capability:       ProbeEnhancementRuntime(""),
+		modelInstallDir:  EnhancementModelDirFor(dataDir),
+		capability:       ProbeEnhancementRuntime("", EnhancementModelDirFor(dataDir)),
 		videoService:     videoService,
 		probe:            probe,
 		sameSource:       sameSource,
@@ -94,7 +149,28 @@ func (s *EnhancementService) SetEventEmitter(emitter func(EnhancementTaskView)) 
 
 // Capability 返回运行时能力状态。
 func (s *EnhancementService) Capability() EnhancementRuntimeCapability {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.capability
+}
+
+// RefreshCapability 重新探测运行时。模型下载完成后调用，界面不必重启就能用。
+func (s *EnhancementService) RefreshCapability() EnhancementRuntimeCapability {
+	capability := ProbeEnhancementRuntime("", s.modelInstallDir)
+	s.mu.Lock()
+	s.capability = capability
+	s.mu.Unlock()
+	return capability
+}
+
+// RequiredModelFiles 返回随包清单里声明的模型身份（含 SHA-256），供下载器校验。
+func (s *EnhancementService) RequiredModelFiles() ([]enhancementManifestFile, error) {
+	return loadEnhancementModelRequirements("")
+}
+
+// ModelInstallDir 返回按需下载的模型安装目录。
+func (s *EnhancementService) ModelInstallDir() string {
+	return s.modelInstallDir
 }
 
 // CreateTask 校验输入闭集与磁盘下限后排队任务；同源视频已有活跃任务时
@@ -419,7 +495,7 @@ func (s *EnhancementService) runWorker(parent context.Context) {
 		s.currentCancel = cancel
 		s.publishing = false
 		s.mu.Unlock()
-		err := s.processTask(ctx, task)
+		err := s.runTaskRegistered(ctx, task)
 		cancel()
 		s.mu.Lock()
 		s.currentTaskID = 0

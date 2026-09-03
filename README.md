@@ -101,6 +101,20 @@ bash scripts/build_and_install_app.sh -clean
 ### Linux
 构建后的应用位于 `build/bin/析微影策`
 
+## 平台支持
+
+三个平台都能构建和运行，但下面这几项能力目前只在 macOS 上可用。其他平台不会崩溃，对应入口会返回明确的不可用原因。
+
+| 能力 | 可用平台 | 其他平台上的表现 |
+| --- | --- | --- |
+| HEIC / RAW 图片解码与缩略图 | 仅 macOS | 解码依赖系统自带的 `sips` 命令。非 macOS 上返回「不支持解码」，预览请求为 404，图片仍会入库但没有可用预览 |
+| IINA 播放断点回读与续播 | 仅 macOS | 进度来自 IINA 的 `~/Library/Application Support/com.colliderli.iina/watch_later`，这是 macOS 专属路径。其他平台读不到断点，外部播放只记播放次数 |
+| 视频超分 | 仅 Apple Silicon macOS | 超分 sidecar 只随 Apple Silicon 构建打包。其他平台的能力探测返回 `platform_unsupported`，入口不可用 |
+| 字幕依赖自动下载 | 仅 macOS | 自动安装 FFmpeg 与 Whisper 运行时走 Homebrew。Windows 上没有自动下载实现，会明确报「当前平台不支持自动下载字幕依赖」，需先手工安装再使用字幕功能 |
+| 后台任务空闲判定 | 仅 macOS | 空闲与供电状态读 `ioreg` 与 `pmset`。其他平台一律视为始终空闲，等同于关掉「空闲时才跑自动后台任务」——自动任务照常立即执行 |
+| 桌面通知与 Dock 角标 | 仅 macOS | 通知走 `NSUserNotificationCenter`，角标走 Dock 图标。其他平台是空实现，设置页的「桌面通知」开关不产生任何效果，应用内提示不受影响 |
+| 人脸识别 | 仅 Apple Silicon macOS | 人脸检测与向量走托管 Python sidecar（onnxruntime + InsightFace），依赖与模型只为 Apple Silicon 固定了版本。其他平台的运行时状态返回 `incompatible`，设置页「人脸识别」分区的准备与分析入口都不可用；人脸向量与裁剪小图始终只在本机 |
+
 ## 使用说明
 
 1. **首次使用**: 启动应用后点击"扫描目录"按钮
@@ -121,7 +135,7 @@ bash scripts/build_and_install_app.sh -clean
 
 ## 数据存储
 
-结构化数据存储在 Postgres 数据库中，连接信息通过 `.env` 提供。头像和作品集封面复制到 `~/.video-master/media-details/`，不依赖原始图片路径。
+结构化数据存储在 Postgres 数据库中，连接信息通过 `.env` 提供。头像和作品集封面复制到 `~/.CineInsight/media-details/`，不依赖原始图片路径。
 
 示例 `.env`：
 
@@ -142,7 +156,7 @@ PG_TIMEZONE=Asia/Shanghai
 ```bash
 go run ./cmd/migrate_sqlite_to_pg
 # 或指定 sqlite 路径
-go run ./cmd/migrate_sqlite_to_pg --sqlite ~/.video-master/video-master.db
+go run ./cmd/migrate_sqlite_to_pg --sqlite ~/.CineInsight/video-master.db
 ```
 
 ## 项目结构

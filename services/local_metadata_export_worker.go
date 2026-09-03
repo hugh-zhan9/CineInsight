@@ -41,6 +41,7 @@ type localMetadataExportTask struct {
 	// StartExport，保证 worker.Add 不会与 worker.Wait 并发（WaitGroup 复用约束）。
 	stopping bool
 	emitter  func(LocalMetadataExportStatus)
+	registry *BackgroundTaskRegistry
 }
 
 func (s *LocalMetadataService) exportState() *localMetadataExportTask {
@@ -181,10 +182,12 @@ func (s *LocalMetadataService) StartExport(parent context.Context, request Local
 	updatedAt := time.Now()
 	state.status.UpdatedAt = &updatedAt
 	status, emitter := cloneLocalMetadataExportStatus(state.status), state.emitter
+	registry := state.registry
 	state.worker.Add(1)
 	state.mu.Unlock()
+	registry.Begin(BackgroundTaskLocalMetadata)
 	emitLocalMetadataExport(emitter, status)
-	go s.runExport(ctx, videoIDs)
+	go s.runExport(ctx, videoIDs, registry)
 	return status, nil
 }
 
@@ -244,8 +247,9 @@ func (s *LocalMetadataService) StopExport() {
 // runExport 逐个写出 NFO。已知的有界交互：批量写出会改动媒体目录内的 NFO
 // 文件，使库监视器的快照变脏并触发一轮 reconcile 扫描；监视器对已存在视频
 // 只做观察、不回写数据库，因此不会形成数据回环。
-func (s *LocalMetadataService) runExport(ctx context.Context, videoIDs []uint) {
+func (s *LocalMetadataService) runExport(ctx context.Context, videoIDs []uint, registry *BackgroundTaskRegistry) {
 	defer s.exportState().worker.Done()
+	defer registry.End(BackgroundTaskLocalMetadata)
 	for _, videoID := range videoIDs {
 		if ctx.Err() != nil {
 			break

@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+	"video-master/internal/appdata"
 	"video-master/models"
 
 	"github.com/joho/godotenv"
@@ -19,6 +21,11 @@ var DB *gorm.DB
 // DefaultImageExtensions 是新库初始化时写入 Settings.ImageExtensions 的默认图片扩展名清单；
 // 老库该字段为零值时由使用方回退到本清单（设计 6.2）。
 const DefaultImageExtensions = ".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.dng,.cr2,.cr3,.nef,.arw,.orf,.raf,.rw2"
+
+// DefaultProxyCacheLimitBytes 是播放代理目录的默认体积上限（50 GiB，D-005）。
+// 0 表示不限，所以这一列不能带 gorm default 标签，默认值只由新库初始化行与
+// migrateProxyCacheLimitSetting 给出。
+const DefaultProxyCacheLimitBytes int64 = 50 << 30
 
 // PostgresCLIConfig contains the connection fields needed by PostgreSQL client
 // tools. Passwords are intentionally exposed only as environment values so
@@ -249,14 +256,11 @@ func SQLitePath(dataDir string) string {
 func Init() error {
 	loadEnvConfig()
 
-	// 获取用户数据目录
-	homeDir, err := os.UserHomeDir()
+	// 数据目录由 appdata 统一解析（含旧目录一次性改名），两处必须口径一致。
+	dataDir, err := appdata.Resolve()
 	if err != nil {
-		return fmt.Errorf("获取用户目录失败: %w", err)
+		return err
 	}
-
-	// 创建应用数据目录
-	dataDir := filepath.Join(homeDir, ".video-master")
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("创建数据目录失败: %w", err)
 	}
@@ -309,6 +313,9 @@ func ApplySchema(db *gorm.DB) error {
 	libraryWatchColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "library_watch_enabled")
 	localMetadataColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "local_metadata_enabled")
 	aiQualityColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "ai_quality_enabled")
+	idleSchedulingColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "idle_scheduling_enabled")
+	desktopNotificationsColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "desktop_notifications_enabled")
+	proxyCacheLimitColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "proxy_cache_limit_bytes")
 
 	// 自动迁移数据表
 	if err := db.AutoMigrate(models.AllModels()...); err != nil {
@@ -319,6 +326,15 @@ func ApplySchema(db *gorm.DB) error {
 	}
 	if err := migrateWorkflowFeatureSettings(db, settingsTableExisted, localMetadataColumnExisted, aiQualityColumnExisted); err != nil {
 		return fmt.Errorf("迁移本地工作流设置失败: %w", err)
+	}
+	if err := migrateIdleSchedulingSetting(db, settingsTableExisted, idleSchedulingColumnExisted); err != nil {
+		return fmt.Errorf("迁移空闲调度设置失败: %w", err)
+	}
+	if err := migrateDesktopNotificationsSetting(db, settingsTableExisted, desktopNotificationsColumnExisted); err != nil {
+		return fmt.Errorf("迁移桌面通知设置失败: %w", err)
+	}
+	if err := migrateProxyCacheLimitSetting(db, settingsTableExisted, proxyCacheLimitColumnExisted); err != nil {
+		return fmt.Errorf("迁移播放代理上限设置失败: %w", err)
 	}
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
@@ -343,6 +359,11 @@ func ApplySchema(db *gorm.DB) error {
 	// 2026-08-18 裁决：图片 AI 产出由描述改为标签，遗留的描述与其语义向量一次性删除。
 	// 幂等，表已删则空转。放在迁移与索引之后，确保它面对的是已经就位的表结构。
 	CleanupLegacyImageDescriptions(db)
+	// 播放事件账本（D-011）：老库里只有 videos.last_played_at 这一个时间点，
+	// 一次性把它回填成一条 legacy 事件，让热力图升级后不至于空一年。幂等。
+	if err := backfillLegacyPlayEvents(db); err != nil {
+		return fmt.Errorf("回填历史播放事件失败: %w", err)
+	}
 	// 初始化默认设置
 	var settings models.Settings
 	if err := db.First(&settings).Error; err == gorm.ErrRecordNotFound {
@@ -372,6 +393,10 @@ func ApplySchema(db *gorm.DB) error {
 			AITaggingMaxExtraFrames:      20,
 			BackupRetentionCount:         7,
 			BackupIntervalHours:          24,
+			IdleSchedulingEnabled:        true,
+			IdleThresholdMinutes:         5,
+			DesktopNotificationsEnabled:  true,
+			ProxyCacheLimitBytes:         DefaultProxyCacheLimitBytes,
 		}
 		if err := db.Create(&settings).Error; err != nil {
 			return fmt.Errorf("初始化默认设置失败: %w", err)
@@ -405,6 +430,42 @@ func migrateWorkflowFeatureSettings(db *gorm.DB, settingsTableExisted, localMeta
 		return db.Model(&models.Settings{}).Where("1 = 1").Update("ai_quality_enabled", true).Error
 	}
 	return nil
+}
+
+// migrateIdleSchedulingSetting 把老库的空闲调度开关刷成开（D-032）。
+//
+// 与 migrateLibraryWatchSetting 同一套路：AutoMigrate 只保证新列存在，
+// 列的默认值在不同后端上未必会回填到已有行；默认开的开关一旦漏掉这一步，
+// 老用户升级后就在毫不知情的情况下失去了这个功能。
+func migrateIdleSchedulingSetting(db *gorm.DB, settingsTableExisted, idleSchedulingColumnExisted bool) error {
+	if !settingsTableExisted || idleSchedulingColumnExisted {
+		return nil
+	}
+	return db.Model(&models.Settings{}).Where("1 = 1").Update("idle_scheduling_enabled", true).Error
+}
+
+// migrateDesktopNotificationsSetting 把老库的桌面通知开关刷成开（D-013）。
+//
+// 与 migrateIdleSchedulingSetting 同一套路，理由也一样：这一列不带 gorm default
+// 标签（否则双向迁移器会把用户关掉的开关翻回 true），默认开就只能靠这里显式刷。
+// 只在"表已存在、列是这一轮才建出来"时执行，用户自己关掉之后重启不受影响。
+func migrateDesktopNotificationsSetting(db *gorm.DB, settingsTableExisted, desktopNotificationsColumnExisted bool) error {
+	if !settingsTableExisted || desktopNotificationsColumnExisted {
+		return nil
+	}
+	return db.Model(&models.Settings{}).Where("1 = 1").Update("desktop_notifications_enabled", true).Error
+}
+
+// migrateProxyCacheLimitSetting 把老库的播放代理上限刷成 50 GiB（D-005）。
+//
+// 与上面两个开关同一套路，理由更硬一层：0 在这一列上是"不限"这个真实取值，
+// 带 gorm default 标签会让双向迁移器把用户设的"不限"翻回 50 GiB。
+// 只在"表已存在、列是这一轮才建出来"时执行，用户自己改过之后重启不受影响。
+func migrateProxyCacheLimitSetting(db *gorm.DB, settingsTableExisted, proxyCacheLimitColumnExisted bool) error {
+	if !settingsTableExisted || proxyCacheLimitColumnExisted {
+		return nil
+	}
+	return db.Model(&models.Settings{}).Where("1 = 1").Update("proxy_cache_limit_bytes", DefaultProxyCacheLimitBytes).Error
 }
 
 func cleanupDuplicateVideos(db *gorm.DB) error {
@@ -593,6 +654,10 @@ func ensureMediaDetailConstraints(db *gorm.DB) error {
 		 ON videos(personal_rating DESC, id DESC) WHERE deleted_at IS NULL`,
 		`CREATE INDEX IF NOT EXISTS idx_video_people_person_video
 		 ON video_people(person_id, video_id)`,
+		// image_people 与 video_people 完全对称（D-015），索引也对称。
+		// 这张表没有 CHECK 约束，所以不需要上面那种 Postgres 专属的 DO 块。
+		`CREATE INDEX IF NOT EXISTS idx_image_people_person_image
+		 ON image_people(person_id, image_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_collection_videos_collection_position
 		 ON collection_videos(collection_id, position, video_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_collection_videos_video
@@ -739,4 +804,28 @@ func Close() error {
 		return err
 	}
 	return sqlDB.Close()
+}
+
+// backfillLegacyPlayEvents 把老库里 videos.last_played_at 记的「最后一次播放」
+// 补成一条 legacy 播放事件，让升级后的热力图不至于凭空空掉一年。
+//
+// 幂等靠 NOT EXISTS：该视频只要已经有 legacy 事件就跳过，反复启动不会累积。
+// 刻意不按 play_count 合成多条——库里根本没有那些时间点，编出来的日期会让热力图
+// 说谎。从没播过（last_played_at 为空）的视频不回填。
+// SQL 两个后端通用：不用任何方言函数，时间值全部走参数绑定。
+func backfillLegacyPlayEvents(db *gorm.DB) error {
+	result := db.Exec(`INSERT INTO play_events (video_id, played_at, source, created_at)
+SELECT videos.id, videos.last_played_at, ?, ?
+FROM videos
+WHERE videos.last_played_at IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM play_events WHERE play_events.video_id = videos.id AND play_events.source = ?
+  )`, models.PlayEventSourceLegacy, time.Now(), models.PlayEventSourceLegacy)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		log.Printf("回填历史播放事件 count=%d", result.RowsAffected)
+	}
+	return nil
 }

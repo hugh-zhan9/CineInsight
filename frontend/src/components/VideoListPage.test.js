@@ -1,4 +1,16 @@
 import { flushPromises, shallowMount } from '@vue/test-utils';
+
+// 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
+const feedback = vi.hoisted(() => ({
+  confirmAction: vi.fn(() => Promise.resolve(true)),
+  notify: vi.fn(),
+  notifyError: vi.fn(),
+  notifySuccess: vi.fn()
+}));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...feedback
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
@@ -12,7 +24,8 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetPreviewSession', 'PreviewExternally', 'SyncScanDirectories', 'StartTechnicalBackfill', 'GetTechnicalBackfillStatus',
   'CancelTechnicalBackfill', 'StartLocalMetadataBackfill', 'GetLocalMetadataBackfillStatus', 'CancelLocalMetadataBackfill',
   'StartPerceptualHashBackfill', 'GetPerceptualHashBackfillStatus', 'CancelPerceptualHashBackfill',
-  'ExportLocalMetadataNFO', 'StartLocalMetadataExport', 'GetLocalMetadataExportStatus', 'CancelLocalMetadataExport', 'GetSettings', 'LogFrontend'
+  'ExportLocalMetadataNFO', 'StartLocalMetadataExport', 'GetLocalMetadataExportStatus', 'CancelLocalMetadataExport', 'GetSettings', 'LogFrontend',
+  'CreatePlaybackProxy', 'BatchCreatePlaybackProxies', 'BatchCreatePlaybackProxiesForFilter'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -30,10 +43,12 @@ vi.mock('./VideoListRow.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./AITagReviewDialog.vue', () => ({ default: { template: '<div />' } }));
 
 import VideoListPage from './VideoListPage.vue';
+import { commandList } from '../utils/commandRegistry.js';
 
-async function mountPage(extraProps = {}) {
+async function mountPage(extraProps = {}, extraOptions = {}) {
   const wrapper = shallowMount(VideoListPage, {
-    props: { tags: [], settings: {}, directories: [], ...extraProps }
+    props: { tags: [], settings: {}, directories: [], ...extraProps },
+    ...extraOptions
   });
   await flushPromises();
   return wrapper;
@@ -95,133 +110,62 @@ describe('VideoListPage media-detail integration', () => {
 	  wrapper.unmount();
 	});
 
-  it('shows near-duplicate groups without selecting either video by default', async () => {
-    const wrapper = await mountPage();
-    wrapper.vm.cleanupDialog.show = true;
-    wrapper.vm.cleanupDialog.analysis = {
-      duplicate_groups: [],
-      near_duplicate_groups: [{
-        original: { id: 41, name: 'source.mkv', duration: 120, resolution: '1080p' },
-        candidates: [{ id: 42, name: 'transcode.mp4', duration: 120, resolution: '720p' }],
-        reason: '三帧感知哈希接近'
-      }],
-      same_source_groups: [],
-      low_duration: [],
-      low_resolution: []
-    };
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.vm.cleanupSelection).toEqual([]);
-    expect(wrapper.vm.getAllCleanupCandidates().map(video => video.id)).toEqual([41, 42]);
-
-    wrapper.vm.selectAllCleanupCandidates();
-    expect(wrapper.vm.cleanupSelection).toEqual([]);
-
-    wrapper.vm.cleanupDialog.analysis.duplicate_groups = [{
-      original: { id: 51, name: 'orig.mkv' },
-      candidates: [{ id: 52, name: 'copy.mkv' }]
-    }];
-    wrapper.vm.selectAllCleanupCandidates();
-    expect(wrapper.vm.cleanupSelection).toEqual([51, 52]);
-    wrapper.unmount();
-  });
-
-  it('restores a background analysis on reopen and groups candidates by directory', async () => {
-    const analysis = {
-      duplicate_groups: [{
-        original: { id: 1, name: 'keep.mp4', directory: '/lib/a', path: '/lib/a/keep.mp4' },
-        candidates: [{ id: 2, name: 'copy.mp4', directory: '/lib/b', path: '/lib/b/copy.mp4' }],
-        reason: '文件大小和采样哈希一致'
-      }],
-      near_duplicate_groups: [],
-      same_source_groups: [],
-      low_duration: [],
-      low_resolution: []
-    };
-    // 后台跑完的结果（并且期间库变过被标记为过期）：重开面板必须直接看到它，不是重新分析。
-    api.GetCleanupStatus.mockResolvedValue({
-      running: false, completed: true, error: '', stale: true, progress: { stage: 'done' }, analysis
+  // 清理面板已抽成 video-list/CleanupReviewPanel.vue，其自身用例见同目录的
+  // CleanupReviewPanel.test.js；这里只钉住片库页这一侧的接线。
+  it('清理面板要删的候选仍由片库页删除：移出列表、给撤销条、再重载', async () => {
+    const showDeleteUndo = vi.fn();
+    const wrapper = await mountPage({}, {
+      global: { stubs: { TrashUndoBanner: { template: '<div />', methods: { showDeleteUndo } } } }
     });
-    const wrapper = await mountPage();
-
-    await wrapper.vm.openCleanupDialog();
-    await flushPromises();
-
-    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
-    expect(wrapper.vm.cleanupDialog.loading).toBe(false);
-    expect(wrapper.vm.cleanupDialog.analysis).toBeTruthy();
-    expect(wrapper.vm.cleanupResultStale).toBe(true);
-
-    // 整组归到建议保留项所在目录，另一份仍在 /lib/b 但跟着组走。
-    const sections = wrapper.vm.cleanupDirectorySections;
-    expect(sections.map(section => section.directory)).toEqual(['/lib/a']);
-    expect(sections[0].entries[0].kind).toBe('exact');
-    expect(sections[0].videoCount).toBe(2);
-    wrapper.unmount();
-  });
-
-  it('asks before re-analysing after trashing cleanup candidates', async () => {
-    const analysis = {
-      duplicate_groups: [{
-        original: { id: 1, name: 'keep.mp4', directory: '/lib/a' },
-        candidates: [{ id: 2, name: 'copy.mp4', directory: '/lib/a' }],
-        reason: '文件大小和采样哈希一致'
-      }],
-      near_duplicate_groups: [], same_source_groups: [], low_duration: [], low_resolution: []
-    };
-    api.GetCleanupStatus.mockResolvedValue({
-      running: false, completed: true, error: '', stale: false, progress: { stage: 'done' }, analysis
-    });
+    wrapper.vm.videos = [{ id: 1, name: 'keep.mp4' }, { id: 2, name: 'copy.mp4' }];
     api.BatchDeleteVideos.mockResolvedValue({ requested: 1, succeeded: 1, failed: 0, errors: [] });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    // 第一步只删除并把行从已加载列表里摘掉；撤销条与重载是第二步，
+    // 中间留给清理面板收窄勾选。
+    api.SearchLibraryVideoPage.mockClear();
 
-    const wrapper = await mountPage();
-    await wrapper.vm.openCleanupDialog();
-    await flushPromises();
-
-    wrapper.vm.cleanupSelection = [2];
-    await wrapper.vm.trashSelectedCleanupCandidates();
-    await flushPromises();
+    const outcome = await wrapper.vm.trashCleanupVideos([2]);
 
     expect(api.BatchDeleteVideos).toHaveBeenCalledWith([2], true);
-    // 答"取消"：不重跑，结果留在原地继续审阅，只标记为已过期。
-    expect(confirmSpy).toHaveBeenCalledTimes(1);
-    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
-    expect(wrapper.vm.cleanupDialog.analysis).toBeTruthy();
-    expect(wrapper.vm.cleanupResultStale).toBe(true);
+    expect(outcome.succeededIDs).toEqual([2]);
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([1]);
+    expect(showDeleteUndo).not.toHaveBeenCalled();
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
 
-    // 全选候选不能把已移入回收站的项重新选上，否则会对着已删的视频再删一次。
-    wrapper.vm.selectAllCleanupCandidates();
-    expect(wrapper.vm.cleanupSelection).not.toContain(2);
-    expect(wrapper.vm.cleanupSelection).toContain(1);
+    // 第二步：先撤销提示条，再重载列表。
+    let reloadedBeforeUndo = false;
+    showDeleteUndo.mockImplementation(async () => {
+      reloadedBeforeUndo = api.SearchLibraryVideoPage.mock.calls.length > 0;
+    });
+    await wrapper.vm.afterTrashCleanupVideos(outcome.succeededIDs);
 
-    confirmSpy.mockRestore();
+    expect(showDeleteUndo).toHaveBeenCalledWith([2], null);
+    expect(reloadedBeforeUndo).toBe(false);
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
     wrapper.unmount();
   });
 
-  it('renames a selected managed folder and refreshes paths', async () => {
+  it('管理菜单的清理徽标与「分析中」文案读的是面板镜像出来的值', async () => {
     const wrapper = await mountPage();
-    const alert = vi.spyOn(window, 'alert').mockImplementation(() => {});
-    api.SelectFolderToRename.mockResolvedValueOnce('/library/Old Name');
-    api.RenameDirectory.mockResolvedValueOnce({ videos_updated: 3, directories_updated: 1 });
-    api.GetSettings.mockResolvedValueOnce({ scan_exclude_paths: '/library/New Name/private' });
-    wrapper.vm.reloadCurrentView = vi.fn().mockResolvedValue();
+    wrapper.vm.cleanupBadgeCount = 3;
+    await wrapper.vm.$nextTick();
+    // 徽标与文案由工具栏组件渲染（用例见 video-list/LibraryToolbar.test.js），
+    // 片库页这一侧只负责把面板镜像出来的值挂到工具栏的 prop 上。
+    expect(wrapper.findComponent({ name: 'LibraryToolbar' }).props('cleanupBadgeCount')).toBe(3);
 
-    await wrapper.vm.renameFolder();
-    expect(wrapper.vm.folderRenameDialog).toEqual(expect.objectContaining({
-      show: true, source: '/library/Old Name', currentName: 'Old Name', newName: 'Old Name'
-    }));
+    wrapper.vm.cleanupAnalyzing = true;
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findComponent({ name: 'LibraryToolbar' }).props('cleanupAnalyzing')).toBe(true);
+    wrapper.unmount();
+  });
 
-    wrapper.vm.folderRenameDialog.newName = 'New Name';
-    await wrapper.vm.executeFolderRename();
+  // 两个重命名弹窗已抽成 video-list/RenameDialogs.vue，用例见同目录的 RenameDialogs.test.js。
+  it('重命名回来的新文件名就地改掉那一行，不整表重载', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 5, name: 'old.mkv', path: '/lib/old.mkv' }];
 
-    expect(api.RenameDirectory).toHaveBeenCalledWith('/library/Old Name', 'New Name');
-    expect(wrapper.emitted('reload-directories')).toHaveLength(1);
-    expect(wrapper.emitted('update-settings')[0][0]).toEqual({ scan_exclude_paths: '/library/New Name/private' });
-    expect(wrapper.vm.reloadCurrentView).toHaveBeenCalledOnce();
-    expect(wrapper.vm.folderRenameDialog.show).toBe(false);
-    expect(alert).toHaveBeenCalledWith('文件夹重命名完成：更新 3 个视频、1 个扫描目录。');
-    alert.mockRestore();
+    wrapper.vm.applyVideoRename({ video: { id: 5, name: 'old.mkv', path: '/lib/old.mkv' }, finalName: 'new.mkv' });
+
+    expect(wrapper.vm.videos[0]).toEqual(expect.objectContaining({ name: 'new.mkv', path: '/lib/new.mkv' }));
     wrapper.unmount();
   });
 
@@ -256,61 +200,35 @@ describe('VideoListPage media-detail integration', () => {
     wrapper.unmount();
   });
 
-  it('renders preparing, empty, failure, and failure-summary backfill states', async () => {
+  // 后台任务状态条已抽成 video-list/BackgroundTaskStatusBars.vue，
+  // 其自身用例见同目录的 BackgroundTaskStatusBars.test.js；这里只钉住片库页这一侧的接线。
+  it('管理菜单的进度文案读的是状态条组件镜像回来的几份状态', async () => {
     const wrapper = await mountPage();
-
-    wrapper.vm.technicalBackfill = { ...wrapper.vm.technicalBackfill, running: true, preparing: true };
+    wrapper.vm.applyBackgroundTaskState({
+      technicalBackfill: { running: true, processed: 1, total: 4 },
+      perceptualHash: { running: false },
+      frameHash: { running: false },
+      localMetadataBackfill: { running: false },
+      localMetadataExport: { running: false }
+    });
     await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain('正在统计待补全视频');
-
-    wrapper.vm.technicalBackfill = { ...wrapper.vm.technicalBackfill, running: false, preparing: false, completed: true, total: 0, failed: 0 };
-    await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain('技术信息无需补全');
-
-    wrapper.vm.technicalBackfill = {
-      ...wrapper.vm.technicalBackfill,
-      completed: true,
-      total: 1,
-      processed: 1,
-      succeeded: 0,
-      skipped: 0,
-      failed: 1,
-      failures: [{ video_id: 4, name: 'broken.mkv', error: 'ffprobe failed' }]
-    };
-    await wrapper.vm.$nextTick();
-    expect(wrapper.text()).toContain('失败 1');
-    expect(wrapper.text()).toContain('broken.mkv：ffprobe failed');
+    expect(wrapper.findComponent({ name: 'LibraryToolbar' }).props('technicalBackfill'))
+      .toEqual(expect.objectContaining({ running: true, processed: 1, total: 4 }));
     wrapper.unmount();
   });
 
-  it('starts backfill from the mounted page and applies the returned state', async () => {
-    const wrapper = await mountPage();
-    api.StartTechnicalBackfill.mockResolvedValueOnce({ running: true, preparing: true, total: 0 });
+  it('NFO 写出把当前筛选算好再交给状态条组件', async () => {
+    const startExport = vi.fn();
+    const wrapper = await mountPage({}, {
+      global: { stubs: { BackgroundTaskStatusBars: { template: '<div />', methods: { startLocalMetadataExport: startExport } } } }
+    });
+    wrapper.vm.searchKeyword = '导演剪辑版';
+    wrapper.vm.selectedTags = [7];
+    wrapper.vm.startLocalMetadataExport();
 
-    await wrapper.vm.startTechnicalBackfill();
-
-    expect(api.StartTechnicalBackfill).toHaveBeenCalledOnce();
-    expect(wrapper.vm.technicalBackfill.running).toBe(true);
-    expect(wrapper.vm.technicalBackfill.preparing).toBe(true);
+    expect(startExport).toHaveBeenCalledWith(expect.objectContaining({ keyword: '导演剪辑版', tag_ids: [7] }));
     wrapper.unmount();
   });
-
-  it('starts NFO export for the complete current filter', async () => {
-	  const wrapper = await mountPage();
-	  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
-	  wrapper.vm.searchKeyword = '导演剪辑版';
-	  wrapper.vm.selectedTags = [7];
-	  api.StartLocalMetadataExport.mockResolvedValueOnce({ running: true, total: 3, processed: 0 });
-
-	  await wrapper.vm.startLocalMetadataExport();
-
-	  expect(api.StartLocalMetadataExport).toHaveBeenCalledWith({
-		filter: expect.objectContaining({ keyword: '导演剪辑版', tag_ids: [7] })
-	  });
-	  expect(wrapper.vm.localMetadataExport).toEqual(expect.objectContaining({ running: true, total: 3 }));
-	  confirm.mockRestore();
-	  wrapper.unmount();
-	});
 
 	it('moves review focus and reuses favorite behavior from keyboard input', async () => {
 	  const wrapper = await mountPage();
@@ -390,29 +308,6 @@ describe('VideoListPage media-detail integration', () => {
 	  activeWrapper.unmount();
 	});
 
-  it('applies runtime backfill events and refreshes state after cancellation', async () => {
-    const handlers = new Map();
-    window.runtime = {
-      EventsOn: vi.fn((name, handler) => {
-        handlers.set(name, handler);
-        return () => handlers.delete(name);
-      })
-    };
-    const wrapper = await mountPage();
-    handlers.get('technical-backfill-state')({ running: true, preparing: false, total: 3, processed: 1, succeeded: 1 });
-    await wrapper.vm.$nextTick();
-    expect(wrapper.vm.technicalBackfill).toEqual(expect.objectContaining({ running: true, total: 3, processed: 1, succeeded: 1 }));
-    expect(wrapper.text()).toContain('技术信息 1/3');
-
-    api.CancelTechnicalBackfill.mockResolvedValueOnce();
-    api.GetTechnicalBackfillStatus.mockResolvedValueOnce({ running: false, cancelled: true, completed: false, total: 3, processed: 1, succeeded: 1, failed: 0, failures: [] });
-    await wrapper.vm.cancelTechnicalBackfill();
-
-    expect(api.CancelTechnicalBackfill).toHaveBeenCalledOnce();
-    expect(wrapper.vm.technicalBackfill.cancelled).toBe(true);
-    wrapper.unmount();
-    expect(handlers.has('technical-backfill-state')).toBe(false);
-  });
 });
 
 describe('VideoListPage random pick of 10', () => {
@@ -447,7 +342,9 @@ describe('VideoListPage random pick of 10', () => {
     expect(wrapper.vm.videos.map(video => video.id)).toEqual([11, 12]);
     // 固定批次不再分页加载，避免后续滚动把普通结果追加进来。
     expect(wrapper.vm.hasMore).toBe(false);
-    expect(wrapper.text()).toContain('在当前筛选范围内优先选择未看视频');
+    // 文案由 video-list/RandomPickBanner.vue 渲染（用例见同目录的 RandomPickBanner.test.js）；这里钉住传过去的批次。
+    expect(wrapper.findComponent({ name: 'RandomPickBanner' }).props('randomPick').reason)
+      .toBe('在当前筛选范围内优先选择未看视频');
     wrapper.unmount();
   });
 
@@ -521,17 +418,15 @@ describe('VideoListPage random pick of 10', () => {
 
   it('刷新批次失败时报错并留住当前批次', async () => {
     const wrapper = await mountPage();
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
     api.PickRandomVideos.mockResolvedValueOnce({ videos: pickedVideos, selection_reason: '' });
     await wrapper.vm.enterRandomPick();
     api.GetVideosByIDs.mockRejectedValueOnce(new Error('数据库不可用'));
 
     await wrapper.vm.reloadCurrentView();
 
-    expect(alertSpy).toHaveBeenCalledWith(expect.stringContaining('刷新随机批次失败'));
+    expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('刷新随机批次失败'));
     expect(wrapper.vm.randomPick.active).toBe(true);
     expect(wrapper.vm.videos.map(video => video.id)).toEqual([11, 12]);
-    alertSpy.mockRestore();
     wrapper.unmount();
   });
 
@@ -554,7 +449,6 @@ describe('VideoListPage random pick of 10', () => {
 
   it('筛选范围内抽不到视频时保持原列表并提示', async () => {
     const wrapper = await mountPage();
-    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
     wrapper.vm.videos = [{ id: 1, name: 'kept.mp4', tags: [] }];
     api.PickRandomVideos.mockResolvedValueOnce({
       videos: [],
@@ -564,46 +458,49 @@ describe('VideoListPage random pick of 10', () => {
 
     await wrapper.vm.enterRandomPick();
 
-    expect(alertSpy).toHaveBeenCalledWith('随机取样失败：当前筛选范围没有可用的视频。');
+    expect(feedback.notifyError).toHaveBeenCalledWith('随机取样失败：当前筛选范围没有可用的视频。');
     expect(wrapper.vm.randomPick.active).toBe(false);
     expect(wrapper.vm.videos.map(video => video.id)).toEqual([1]);
-    alertSpy.mockRestore();
     wrapper.unmount();
   });
 });
 
-describe('VideoListPage 多选批量栏', () => {
-  const rows = [
-    { id: 1, name: 'a.mp4', size: 2 * 1024 ** 3, tags: [] },
-    { id: 2, name: 'b.mp4', size: 1024 ** 3, tags: [] }
-  ];
+describe('VideoListPage 工具栏接线', () => {
+  // 工具栏本体已抽成 video-list/LibraryToolbar.vue，其用例见同目录的 LibraryToolbar.test.js。
+  // 这两条钉的是「工具栏发回来的动作，片库页这一侧真的能执行完」——
+  // 拆分时 isTagSelected / allVisibleSelected 被整体搬进工具栏，页面上的
+  // toggleTagFilter / toggleSelectAllVisible 就地失效过，只有这种用例能抓住。
+  it('点标签筛选真的会切换选中并重载，而不是半路抛错', async () => {
+    const wrapper = await mountPage({ tags: [{ id: 3, name: '科幻' }] });
+    api.SearchLibraryVideoPage.mockClear();
 
-  it('批量栏顶替结果条，显示已选数与合计体积', async () => {
-    const wrapper = await mountPage();
-    wrapper.vm.videos = [...rows];
-    wrapper.vm.selectedVideoIds = [1, 2];
-    await wrapper.vm.$nextTick();
+    wrapper.vm.toggleTagFilter(3);
+    await flushPromises();
+    expect(wrapper.vm.selectedTags).toEqual([3]);
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
 
-    expect(wrapper.find('.result-bar').exists()).toBe(false);
-    expect(wrapper.find('.selection-toolbar').exists()).toBe(true);
-    expect(wrapper.text()).toContain('已选 2 个');
-    expect(wrapper.vm.selectedTotalSizeText).toBe('3.0 GB');
+    wrapper.vm.toggleTagFilter(3);
+    await flushPromises();
+    expect(wrapper.vm.selectedTags).toEqual([]);
     wrapper.unmount();
   });
 
-  it('跨页选中时不猜合计体积', async () => {
+  it('「选择本页」在全选状态下必须能取消，而不是又选一遍', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.videos = [rows[0]];
-    // 第 2 条不在已加载页里，拿不到 size —— 宁可不显示也不显示一个偏小的数。
-    wrapper.vm.selectedVideoIds = [1, 2];
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }];
     await wrapper.vm.$nextTick();
-    expect(wrapper.vm.selectedTotalSizeText).toBe('');
+
+    wrapper.vm.toggleSelectAllVisible();
+    expect(wrapper.vm.selectedVideoIds).toEqual([1, 2]);
+
+    wrapper.vm.toggleSelectAllVisible();
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
     wrapper.unmount();
   });
 
   it('Esc 清除选择', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.videos = [...rows];
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }];
     wrapper.vm.selectedVideoIds = [1, 2];
     await wrapper.vm.$nextTick();
 
@@ -611,10 +508,8 @@ describe('VideoListPage 多选批量栏', () => {
     expect(wrapper.vm.selectedVideoIds).toEqual([]);
     wrapper.unmount();
   });
-});
 
-describe('VideoListPage 工具栏三层重排', () => {
-  it('结果条用后端计数回显命中数与全库总数', async () => {
+  it('结果条的计数仍由后端筛选计数驱动', async () => {
     api.CountLibraryVideos.mockResolvedValue(218).mockResolvedValueOnce(218).mockResolvedValueOnce(3482);
     const wrapper = await mountPage();
     await flushPromises();
@@ -622,11 +517,20 @@ describe('VideoListPage 工具栏三层重排', () => {
     expect(api.CountLibraryVideos).toHaveBeenCalled();
     expect(wrapper.vm.filteredCount).toBe(218);
     expect(wrapper.vm.libraryTotalCount).toBe(3482);
-    expect(wrapper.text()).toContain('筛选出');
     wrapper.unmount();
   });
 
-  it('条件回显把智能视图、标签和三类区间都写成中文，清除能一次复位', async () => {
+  it('浮层「应用」回来的草稿才写进生效条件', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.vm.minRating).toBe('');
+
+    wrapper.vm.applyFilterConditions({ sizeRange: 'all', resRange: 'all', minRating: '7', maxRating: '' });
+    await flushPromises();
+    expect(wrapper.vm.minRating).toBe('7');
+    wrapper.unmount();
+  });
+
+  it('「清除」把智能视图、标签与三类区间一次复位', async () => {
     const wrapper = await mountPage({ tags: [{ id: 3, name: '科幻' }] });
     wrapper.vm.smartView = 'unwatched';
     wrapper.vm.selectedTags = [3];
@@ -634,95 +538,18 @@ describe('VideoListPage 工具栏三层重排', () => {
     wrapper.vm.minRating = '6';
     await wrapper.vm.$nextTick();
 
-    const labels = wrapper.vm.activeConditionLabels;
-    expect(labels[0]).toBe('未看');
-    expect(labels).toContain('标签 科幻');
-    expect(labels.some(text => text.startsWith('体积'))).toBe(true);
-    expect(labels).toContain('评分 6–10');
-
     await wrapper.vm.clearAllConditions();
     expect(wrapper.vm.smartView).toBe('');
     expect(wrapper.vm.selectedTags).toEqual([]);
     expect(wrapper.vm.selectedSizeRange).toBe('all');
     expect(wrapper.vm.minRating).toBe('');
-    expect(wrapper.vm.activeConditionLabels).toEqual([]);
     wrapper.unmount();
   });
 
-  it('筛选徽标只数收进浮层的三类区间条件', async () => {
-    const wrapper = await mountPage();
-    expect(wrapper.vm.activeFilterCount).toBe(0);
-    wrapper.vm.smartView = 'unwatched';
-    await wrapper.vm.$nextTick();
-    // 智能视图有自己的常驻控件，不该算进徽标，否则徽标和浮层内容对不上。
-    expect(wrapper.vm.activeFilterCount).toBe(0);
-    wrapper.vm.selectedResRange = { min: 2160, max: 0 };
-    wrapper.vm.maxRating = '8';
-    await wrapper.vm.$nextTick();
-    expect(wrapper.vm.activeFilterCount).toBe(2);
-    wrapper.unmount();
-  });
-
-  it('筛选浮层改的是草稿，应用后才生效', async () => {
-    const wrapper = await mountPage();
-    wrapper.vm.toggleToolbarMenu('filter', 'filterTrigger');
-    wrapper.vm.filterDraft.minRating = '7';
-    await wrapper.vm.$nextTick();
-    // 还没点应用，生效条件不动。
-    expect(wrapper.vm.minRating).toBe('');
-
-    wrapper.vm.applyFilterDraft();
-    await flushPromises();
-    expect(wrapper.vm.minRating).toBe('7');
-    expect(wrapper.vm.toolbarMenu).toBeNull();
-    wrapper.unmount();
-  });
-
-  it('管理菜单保留全部 12 个维护动作并按四组分开', async () => {
-    const wrapper = await mountPage({ settings: { local_metadata_enabled: true } });
-    const items = wrapper.vm.manageMenuItems;
-    expect(items.filter(item => item.heading).map(item => item.heading)).toEqual(['扫描', '整理', '补全', '维护']);
-    expect(items.filter(item => item.id).map(item => item.id)).toEqual([
-      'scan-new', 'scan-incremental',
-      'move-folder', 'rename-folder', 'export-nfo',
-      'backfill-technical', 'backfill-phash', 'backfill-local-metadata',
-      'ai-tags', 'tag-manager', 'cleanup', 'trash'
-    ]);
-    wrapper.unmount();
-  });
-
-  it('随机菜单承载三种模式与随机 10 部，主键仍是按当前条件随机', async () => {
-    const wrapper = await mountPage();
-    const ids = wrapper.vm.randomMenuItems.filter(item => item.id).map(item => item.id);
-    expect(ids).toEqual(['mode:balanced', 'mode:unwatched', 'mode:favorites', 'pick-ten']);
-    expect(wrapper.vm.randomMenuItems[0].checked).toBe(true);
-
-    wrapper.vm.onRandomSelect({ id: 'mode:favorites' });
-    expect(wrapper.vm.randomMode).toBe('favorites');
-    wrapper.unmount();
-  });
-
-  it('视图菜单合并了保存视图的三个控件，没有视图时删除项禁用', async () => {
-    const wrapper = await mountPage();
-    let items = wrapper.vm.viewMenuItems;
-    expect(items.find(item => item.id === 'delete-current').disabled).toBe(true);
-
-    wrapper.vm.savedViews = [{ id: 5, name: '未看 4K' }];
-    wrapper.vm.selectedSavedViewID = 5;
-    await wrapper.vm.$nextTick();
-    items = wrapper.vm.viewMenuItems;
-    expect(items[0]).toEqual(expect.objectContaining({ id: 'saved:5', label: '未看 4K', checked: true }));
-    expect(items.find(item => item.id === 'delete-current').disabled).toBe(false);
-    wrapper.unmount();
-  });
-
-  it('语义模式下不用结构化计数冒充命中数', async () => {
+  it('语义模式下不向后端要结构化计数', async () => {
     const wrapper = await mountPage();
     wrapper.vm.searchMode = 'semantic';
-    wrapper.vm.videos = [{ id: 1 }, { id: 2 }];
-    wrapper.vm.hasMore = false;
     await wrapper.vm.$nextTick();
-    expect(wrapper.vm.filteredCountText).toBe('2');
 
     api.CountLibraryVideos.mockClear();
     await wrapper.vm.refreshLibraryCounts();
@@ -730,65 +557,11 @@ describe('VideoListPage 工具栏三层重排', () => {
     expect(wrapper.vm.filteredCount).toBeNull();
     wrapper.unmount();
   });
-});
 
-describe('VideoListPage 清理弹窗重排', () => {
-  const analysis = {
-    duplicate_groups: [{
-      original: { id: 1, name: 'keep.mkv', directory: '/lib/a', path: '/lib/a/keep.mkv', size: 100 },
-      candidates: [{ id: 2, name: 'copy.mkv', directory: '/lib/a', path: '/lib/a/copy.mkv', size: 100 }]
-    }],
-    near_duplicate_groups: [],
-    same_source_groups: [],
-    low_duration: [{ id: 3, name: 'short.mov', directory: '/lib/b', path: '/lib/b/short.mov', size: 10 }],
-    low_resolution: []
-  };
-
-  async function openCleanup() {
+  it('随机菜单选中模式后仍由片库页记住模式', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.cleanupDialog.show = true;
-    wrapper.vm.cleanupDialog.analysis = analysis;
-    await wrapper.vm.$nextTick();
-    return wrapper;
-  }
-
-  // 弹窗内容在 BaseModal 的插槽里，shallowMount 下不渲染，
-  // 所以这里查状态；按钮的 disabled 绑定由源码断言钉住。
-  it('默认零选中，可释放空间按整组扣掉建议保留项', async () => {
-    const wrapper = await openCleanup();
-    expect(wrapper.vm.cleanupSelection).toEqual([]);
-    // 两组各有一个建议保留项：重复组保留 1（100B），短视频组只有它自己且是保留项。
-    expect(wrapper.vm.cleanupReleasableText).toBe('100 B');
-    wrapper.unmount();
-  });
-
-  it('类别筛选只收窄看到的候选，不改分析结果', async () => {
-    const wrapper = await openCleanup();
-    expect(wrapper.vm.cleanupFilteredSections).toHaveLength(2);
-    wrapper.vm.cleanupCategory = 'low-duration';
-    await wrapper.vm.$nextTick();
-    expect(wrapper.vm.cleanupFilteredSections).toHaveLength(1);
-    expect(wrapper.vm.cleanupFilteredSections[0].directory).toBe('/lib/b');
-    // 分析结果本身没有被改动。
-    expect(wrapper.vm.cleanupDialog.analysis.duplicate_groups).toHaveLength(1);
-    wrapper.unmount();
-  });
-
-  it('「按建议勾选本组」只勾非保留项', async () => {
-    const wrapper = await openCleanup();
-    const section = wrapper.vm.cleanupDirectorySections.find(item => item.directory === '/lib/a');
-    wrapper.vm.selectSuggestedInSection(section);
-    // 建议保留的 1 不该被勾上，只勾副本 2。
-    expect(wrapper.vm.cleanupSelection).toEqual([2]);
-    wrapper.unmount();
-  });
-
-  it('底栏的可释放空间只算选中项，不含建议保留项', async () => {
-    const wrapper = await openCleanup();
-    expect(wrapper.vm.cleanupSelectedSizeText).toBe('');
-    wrapper.vm.cleanupSelection = [2];
-    await wrapper.vm.$nextTick();
-    expect(wrapper.vm.cleanupSelectedSizeText).toBe('100 B');
+    wrapper.vm.onRandomSelect({ id: 'mode:favorites' });
+    expect(wrapper.vm.randomMode).toBe('favorites');
     wrapper.unmount();
   });
 });
@@ -804,11 +577,12 @@ describe('VideoListPage 语义检索降级', () => {
 
     expect(wrapper.vm.semanticAvailable).toBe(false);
     expect(wrapper.vm.semanticUnavailableNotice).toContain('pgvector');
-    const semanticButton = wrapper.find('[data-test="search-mode-semantic"]');
-    expect(semanticButton.attributes('disabled')).toBeDefined();
-    expect(semanticButton.attributes('title')).toContain('语义搜索不可用');
+    // 入口置灰由 LibraryToolbar 渲染、提示条由 SemanticNoticeBar 渲染，用例见 video-list/ 下的同名 .test.js。
     // 原因常驻可见，不用等到搜索之后。
-    expect(wrapper.find('[data-test="semantic-unavailable"]').exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'SemanticNoticeBar' }).props()).toEqual(expect.objectContaining({
+      semanticAvailable: false,
+      semanticUnavailableNotice: expect.stringContaining('pgvector')
+    }));
     wrapper.unmount();
   });
 
@@ -837,13 +611,223 @@ describe('VideoListPage 语义检索降级', () => {
     const wrapper = await mountPage();
     await flushPromises();
     expect(wrapper.vm.semanticAvailable).toBe(true);
-    expect(wrapper.find('[data-test="search-mode-semantic"]').attributes('disabled')).toBeUndefined();
-    expect(wrapper.find('[data-test="semantic-unavailable"]').exists()).toBe(false);
+    expect(wrapper.findComponent({ name: 'SemanticNoticeBar' }).props('semanticAvailable')).toBe(true);
 
     // 状态还没回来时默认可用，避免启动瞬间入口闪一下灰。
     wrapper.vm.semanticStatus = null;
     await wrapper.vm.$nextTick();
     expect(wrapper.vm.semanticAvailable).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe('IINA 进度同步不打乱列表', () => {
+  it('就地更新受影响的行，不整表重载（重载会让刚看完的视频跳位置）', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [
+      { id: 1, name: 'a.mp4', tags: [], watch_position_seconds: 0 },
+      { id: 2, name: 'b.mp4', tags: [], watch_position_seconds: 30 },
+      { id: 3, name: 'c.mp4', tags: [], watch_position_seconds: 0 }
+    ];
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView');
+    api.SearchLibraryVideoPage.mockClear();
+
+    const applied = wrapper.vm.applyWatchProgressUpdates([
+      { video_id: 2, watch_position_seconds: 615.5 },
+      { video_id: 99, watch_position_seconds: 10 }
+    ]);
+    await flushPromises();
+
+    expect(applied).toBe(1);
+    expect(wrapper.vm.videos[1].watch_position_seconds).toBe(615.5);
+    // 顺序必须原样保持，用户才找得到刚才看的是哪个
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([1, 2, 3]);
+    expect(reload).not.toHaveBeenCalled();
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+
+  it('没有变化时什么都不做', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4', tags: [], watch_position_seconds: 0 }];
+
+    expect(wrapper.vm.applyWatchProgressUpdates([])).toBe(0);
+    expect(wrapper.vm.applyWatchProgressUpdates(undefined)).toBe(0);
+
+    wrapper.unmount();
+  });
+});
+
+describe('命令面板接线', () => {
+  it('挂载注册本页动作，卸载即注销', async () => {
+    const wrapper = await mountPage();
+    const ids = () => commandList().map(command => command.id);
+
+    expect(ids()).toContain('action:scan-new');
+    expect(ids()).toContain('action:random-play');
+
+    wrapper.unmount();
+    expect(ids()).not.toContain('action:scan-new');
+  });
+
+  it('扫描命令在迁移进行中灰显，执行时打开扫描弹窗', async () => {
+    const wrapper = await mountPage();
+    const command = commandList().find(item => item.id === 'action:scan-new');
+
+    expect(command.enabled()).toBe(true);
+    wrapper.vm.migrationRunning = true;
+    expect(command.enabled()).toBe(false);
+
+    wrapper.vm.migrationRunning = false;
+    command.run();
+    expect(wrapper.vm.showScanDialog).toBe(true);
+
+    wrapper.unmount();
+  });
+
+  it('命令面板切智能视图走的还是工具栏那条重载路径', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], next_cursor: null });
+    const wrapper = await mountPage();
+    api.SearchLibraryVideoPage.mockClear();
+
+    await wrapper.vm.applySmartViewCommand('favorites');
+    await flushPromises();
+
+    expect(wrapper.vm.smartView).toBe('favorites');
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
+    expect(api.SearchLibraryVideoPage.mock.calls[0][0].filter.smart_view).toBe('favorites');
+
+    wrapper.unmount();
+  });
+
+  it('命令面板应用保存视图会套用该视图的全部条件', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], next_cursor: null });
+    const wrapper = await mountPage();
+    wrapper.vm.savedViews = [{
+      id: 4, name: '收藏大文件', search_mode: 'file', keyword: 'sea', smart_view: 'favorites',
+      tag_ids_json: '[]', min_size: 0, max_size: 0, min_height: 0, max_height: 0,
+      min_rating: null, max_rating: null, sort_mode: 'balanced'
+    }];
+    api.SearchLibraryVideoPage.mockClear();
+
+    await wrapper.vm.applySavedViewCommand(4);
+    await flushPromises();
+
+    expect(wrapper.vm.smartView).toBe('favorites');
+    expect(wrapper.vm.searchKeyword).toBe('sea');
+    expect(wrapper.vm.selectedSavedViewID).toBe(4);
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
+
+    wrapper.unmount();
+  });
+});
+
+describe('播放代理入口（D-006）', () => {
+  it('行菜单在「增强」组里追加生成播放代理', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.rowMenu = { video: { id: 7, name: 'seven.mkv' }, anchor: null, position: null };
+    await wrapper.vm.$nextTick();
+    const item = wrapper.vm.rowMenuItems.find(entry => entry.id === 'playback-proxy');
+    expect(item).toBeTruthy();
+    expect(item.label).toBe('生成播放代理');
+    expect(item.disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('任务在跑时行菜单项置灰', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.rowMenu = { video: { id: 7, name: 'seven.mkv' }, anchor: null, position: null };
+    wrapper.vm.playbackProxy = { ...wrapper.vm.playbackProxy, running: true };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.rowMenuItems.find(entry => entry.id === 'playback-proxy').disabled).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('行菜单选中后为该视频入队', async () => {
+    api.CreatePlaybackProxy.mockResolvedValue({ results: [{ video_id: 7, code: 'created' }] });
+    const wrapper = await mountPage();
+    wrapper.vm.rowMenu = { video: { id: 7, name: 'seven.mkv' }, anchor: null, position: null };
+    await wrapper.vm.$nextTick();
+    wrapper.vm.onRowMenuSelect({ id: 'playback-proxy' });
+    await flushPromises();
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(7);
+    wrapper.unmount();
+  });
+
+  it('单个视频拿不到代理时把结果码翻成人话', async () => {
+    api.CreatePlaybackProxy.mockResolvedValue({ results: [{ video_id: 7, code: 'probe_failed' }] });
+    const wrapper = await mountPage();
+    await wrapper.vm.createProxyForVideo({ id: 7, name: 'seven.mkv' });
+    await flushPromises();
+    expect(feedback.notify).toHaveBeenCalledWith(expect.stringContaining('读不出技术信息'));
+    wrapper.unmount();
+  });
+
+  it('批量栏为选中的视频入队，未选中时不调后端', async () => {
+    api.BatchCreatePlaybackProxies.mockResolvedValue({ total: 2 });
+    const wrapper = await mountPage();
+    await wrapper.vm.createProxiesForSelected();
+    expect(api.BatchCreatePlaybackProxies).not.toHaveBeenCalled();
+
+    wrapper.vm.selectedVideoIds = [3, 5];
+    await wrapper.vm.createProxiesForSelected();
+    await flushPromises();
+    expect(api.BatchCreatePlaybackProxies).toHaveBeenCalledWith([3, 5]);
+    wrapper.unmount();
+  });
+
+  it('管理菜单为当前筛选入队，走既有筛选 DTO', async () => {
+    api.BatchCreatePlaybackProxiesForFilter.mockResolvedValue({ total: 4 });
+    const wrapper = await mountPage();
+    wrapper.vm.smartView = 'favorites';
+    await wrapper.vm.$nextTick();
+    wrapper.vm.onManageSelect({ id: 'backfill-playback-proxy' });
+    await flushPromises();
+    expect(api.BatchCreatePlaybackProxiesForFilter).toHaveBeenCalledTimes(1);
+    expect(api.BatchCreatePlaybackProxiesForFilter.mock.calls[0][0].smart_view).toBe('favorites');
+    wrapper.unmount();
+  });
+
+  it('当前筛选零命中时明确提示而不是静默', async () => {
+    api.BatchCreatePlaybackProxiesForFilter.mockResolvedValue({ total: 0 });
+    const wrapper = await mountPage();
+    await wrapper.vm.createProxiesForCurrentFilter();
+    await flushPromises();
+    expect(feedback.notify).toHaveBeenCalledWith(expect.stringContaining('没有命中任何视频'));
+    wrapper.unmount();
+  });
+
+  it('playback-proxy-state 事件驱动状态，只在跑完那一刻汇总提示一次', async () => {
+    const handlers = {};
+    window.runtime = { EventsOn: (name, handler) => { handlers[name] = handler; return () => {}; } };
+    const wrapper = await mountPage();
+
+    handlers['playback-proxy-state']({ running: true, processed: 1, total: 2, succeeded: 1, skipped: 0, failed: 0, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.playbackProxy.running).toBe(true);
+    expect(feedback.notify).not.toHaveBeenCalled();
+
+    handlers['playback-proxy-state']({ running: false, completed: true, processed: 2, total: 2, succeeded: 1, skipped: 0, failed: 1, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(feedback.notify).toHaveBeenCalledWith(expect.stringContaining('成功 1'));
+    // 再来一条同样的终态不该重复提示。
+    feedback.notify.mockClear();
+    handlers['playback-proxy-state']({ running: false, completed: true, processed: 2, total: 2, succeeded: 1, skipped: 0, failed: 1, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(feedback.notify).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('取消的那一轮不弹汇总提示', async () => {
+    const handlers = {};
+    window.runtime = { EventsOn: (name, handler) => { handlers[name] = handler; return () => {}; } };
+    const wrapper = await mountPage();
+    handlers['playback-proxy-state']({ running: true, processed: 0, total: 2, results: [] });
+    await wrapper.vm.$nextTick();
+    handlers['playback-proxy-state']({ running: false, cancelled: true, processed: 1, total: 2, results: [] });
+    await wrapper.vm.$nextTick();
+    expect(feedback.notify).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 });

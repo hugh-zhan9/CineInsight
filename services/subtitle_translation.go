@@ -31,6 +31,28 @@ type SubtitleTranslator interface {
 	Translate(ctx context.Context, texts []string, sourceLang, targetLang string) ([]string, error)
 }
 
+// ContextPair 是滑动窗口里的一条只读上文：上一批的原文与它的译文（D-035）。
+type ContextPair struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+// TranslationRequest 是带术语表与上文的翻译请求。返回条数校验只看 Texts，
+// PrecedingContext 明确不计入返回（D-035）。
+type TranslationRequest struct {
+	Texts            []string
+	SourceLang       string
+	TargetLang       string
+	Glossary         []GlossaryTerm
+	PrecedingContext []ContextPair
+}
+
+// ContextualTranslator 是 SubtitleTranslator 的可选扩展：只有 OpenAI 兼容翻译器
+// 实现它，DeepL 保持旧接口与旧请求体不变（D-034）。调用方用类型断言判定。
+type ContextualTranslator interface {
+	TranslateWithContext(ctx context.Context, request TranslationRequest) ([]string, error)
+}
+
 type subtitleTranslationItem struct {
 	Index       int    `json:"index"`
 	Text        string `json:"text"`
@@ -101,6 +123,11 @@ func subtitleTranslationProgressMessage(provider SubtitleTranslationProvider) st
 }
 
 func (c *OpenAICompatibleSubtitleTranslator) Translate(ctx context.Context, texts []string, sourceLang, targetLang string) ([]string, error) {
+	return c.TranslateWithContext(ctx, TranslationRequest{Texts: texts, SourceLang: sourceLang, TargetLang: targetLang})
+}
+
+func (c *OpenAICompatibleSubtitleTranslator) TranslateWithContext(ctx context.Context, request TranslationRequest) ([]string, error) {
+	texts := request.Texts
 	if len(texts) == 0 {
 		return []string{}, nil
 	}
@@ -111,17 +138,19 @@ func (c *OpenAICompatibleSubtitleTranslator) Translate(ctx context.Context, text
 		return nil, fmt.Errorf("subtitle translation model is required")
 	}
 
-	body := c.buildRequest(texts, sourceLang, targetLang)
+	body := c.buildRequest(request)
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
 	}
 
 	url := openAIChatCompletionsURL(c.config.BaseURL)
-	log.Printf("[Subtitle] llm translation request model=%q url=%q lines=%d payload_bytes=%d",
+	log.Printf("[Subtitle] llm translation request model=%q url=%q lines=%d glossary_terms=%d context_pairs=%d payload_bytes=%d",
 		c.config.Model,
 		url,
 		len(texts),
+		len(request.Glossary),
+		len(request.PrecedingContext),
 		len(payload),
 	)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
@@ -163,7 +192,7 @@ func (c *OpenAICompatibleSubtitleTranslator) Translate(ctx context.Context, text
 	return translations, nil
 }
 
-func (c *OpenAICompatibleSubtitleTranslator) buildRequest(texts []string, sourceLang, targetLang string) map[string]interface{} {
+func (c *OpenAICompatibleSubtitleTranslator) buildRequest(request TranslationRequest) map[string]interface{} {
 	return map[string]interface{}{
 		"model": c.config.Model,
 		"messages": []map[string]interface{}{
@@ -173,27 +202,80 @@ func (c *OpenAICompatibleSubtitleTranslator) buildRequest(texts []string, source
 			},
 			{
 				"role":    "user",
-				"content": buildSubtitleTranslationPrompt(texts, sourceLang, targetLang),
+				"content": buildSubtitleTranslationPrompt(request),
 			},
 		},
 		"temperature": 0.1,
 	}
 }
 
-func buildSubtitleTranslationPrompt(texts []string, sourceLang, targetLang string) string {
+// matchedGlossaryTerms 只留命中本批原文的术语（大小写不敏感子串匹配）：一张几千条的
+// 表全量注入会挤掉字幕本身的预算，而模型也用不上没出现过的词（D-034）。
+func matchedGlossaryTerms(glossary []GlossaryTerm, texts []string) []GlossaryTerm {
+	if len(glossary) == 0 || len(texts) == 0 {
+		return nil
+	}
+	lowered := make([]string, 0, len(texts))
+	for _, text := range texts {
+		lowered = append(lowered, strings.ToLower(text))
+	}
+	matched := make([]GlossaryTerm, 0, len(glossary))
+	for _, term := range glossary {
+		needle := strings.ToLower(strings.TrimSpace(term.SourceTerm))
+		if needle == "" {
+			continue
+		}
+		for _, text := range lowered {
+			if strings.Contains(text, needle) {
+				matched = append(matched, term)
+				break
+			}
+		}
+	}
+	return matched
+}
+
+type glossaryPromptLine struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+	Note   string `json:"note,omitempty"`
+}
+
+type contextPromptLine struct {
+	Source string `json:"source"`
+	Target string `json:"target"`
+}
+
+func buildSubtitleTranslationPrompt(request TranslationRequest) string {
 	var builder strings.Builder
 	builder.WriteString("请逐条翻译以下字幕，只输出严格 JSON，格式为 {\"translations\":[{\"index\":1,\"text\":\"...\"}]}。\n")
 	builder.WriteString("目标语言: ")
-	builder.WriteString(strings.TrimSpace(targetLang))
+	builder.WriteString(strings.TrimSpace(request.TargetLang))
 	builder.WriteString("\n")
-	if trimmed := strings.TrimSpace(sourceLang); trimmed != "" {
+	if trimmed := strings.TrimSpace(request.SourceLang); trimmed != "" {
 		builder.WriteString("源语言: ")
 		builder.WriteString(trimmed)
 		builder.WriteString("\n")
 	}
 	builder.WriteString("要求：保持条目数量、顺序和原有换行；结合相邻条目的上下文；人名、片名、专有名词在不确定时保留原文；不要添加解释、序号或 Markdown。\n")
+	if matched := matchedGlossaryTerms(request.Glossary, request.Texts); len(matched) > 0 {
+		builder.WriteString("术语表（必须遵循，JSON Lines，每行包含 source / target，可能带 note）:\n")
+		for _, term := range matched {
+			payload, _ := json.Marshal(glossaryPromptLine{Source: term.SourceTerm, Target: term.TargetTerm, Note: term.Note})
+			builder.Write(payload)
+			builder.WriteString("\n")
+		}
+	}
+	if len(request.PrecedingContext) > 0 {
+		builder.WriteString("上文（只读，勿翻译，勿计入返回；JSON Lines，每行包含 source / target）:\n")
+		for _, pair := range request.PrecedingContext {
+			payload, _ := json.Marshal(contextPromptLine{Source: pair.Source, Target: pair.Target})
+			builder.Write(payload)
+			builder.WriteString("\n")
+		}
+	}
 	builder.WriteString("字幕条目（JSON Lines，每行包含 index 和 text）:\n")
-	for i, text := range texts {
+	for i, text := range request.Texts {
 		payload, _ := json.Marshal(map[string]interface{}{
 			"index": i + 1,
 			"text":  text,
@@ -331,4 +413,32 @@ func normalizeSubtitleLanguageCode(value string) string {
 	default:
 		return strings.TrimSpace(strings.ToLower(value))
 	}
+}
+
+// subtitleTranslationContextWindow 是滑动窗口保留的上文条数：前一批尾部 5 条（D-035）。
+const subtitleTranslationContextWindow = 5
+
+// translateSubtitleBatch 走可选的 ContextualTranslator，拿不到就退回旧接口。
+// DeepL 只实现旧接口，因此它的请求体不会被术语表与上文影响（D-034）。
+func translateSubtitleBatch(ctx context.Context, translator SubtitleTranslator, contextual ContextualTranslator, request TranslationRequest) ([]string, error) {
+	if contextual != nil {
+		return contextual.TranslateWithContext(ctx, request)
+	}
+	return translator.Translate(ctx, request.Texts, request.SourceLang, request.TargetLang)
+}
+
+// trailingContextPairs 取本批尾部 limit 条 (原文, 译文) 作为下一批的只读上文。
+func trailingContextPairs(texts, translations []string, limit int) []ContextPair {
+	if limit <= 0 || len(texts) == 0 || len(translations) != len(texts) {
+		return nil
+	}
+	start := len(texts) - limit
+	if start < 0 {
+		start = 0
+	}
+	pairs := make([]ContextPair, 0, len(texts)-start)
+	for index := start; index < len(texts); index++ {
+		pairs = append(pairs, ContextPair{Source: texts[index], Target: translations[index]})
+	}
+	return pairs
 }

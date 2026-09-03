@@ -18,6 +18,7 @@
         <div v-if="taggingProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="taggingStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="taggingStatus.total || 0">
           <i :style="{ width: taggingProgressRatio + '%' }"></i>
         </div>
+        <span v-if="taggingWaitingText" class="image-task-waiting-idle" data-test="image-ai-tagging-waiting-idle">{{ taggingWaitingText }}</span>
         <span v-if="taggingError" data-test="image-ai-tagging-error">{{ taggingError }}</span>
         <ul v-if="taggingFailures.length" class="image-task-failures" data-test="image-ai-tagging-failures">
           <li v-for="failure in taggingFailures" :key="`tag-${failure.image_id}`">
@@ -33,6 +34,13 @@
           data-test="image-ai-tagging-start"
           @click="startTagging"
         >开始/继续生成</button>
+        <button
+          v-if="taggingWaitingText"
+          type="button"
+          class="btn-secondary"
+          data-test="image-ai-tagging-run-now"
+          @click="runGatedTaskNow('image_ai_tagging')"
+        >忽略空闲立即运行</button>
         <button
           v-if="taggingStatus?.running"
           type="button"
@@ -59,6 +67,7 @@
         <div v-if="exifProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="exifStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="exifStatus.total || 0">
           <i :style="{ width: exifProgressRatio + '%' }"></i>
         </div>
+        <span v-if="exifWaitingText" class="image-task-waiting-idle" data-test="image-exif-backfill-waiting-idle">{{ exifWaitingText }}</span>
         <span v-if="exifError" data-test="image-exif-backfill-error">{{ exifError }}</span>
         <ul v-if="exifFailures.length" class="image-task-failures" data-test="image-exif-backfill-failures">
           <li v-for="failure in exifFailures" :key="`exif-${failure.image_id}`">
@@ -74,6 +83,13 @@
           data-test="image-exif-backfill-start"
           @click="startEXIFBackfill"
         >开始/继续补全</button>
+        <button
+          v-if="exifWaitingText"
+          type="button"
+          class="btn-secondary"
+          data-test="image-exif-backfill-run-now"
+          @click="runGatedTaskNow('exif')"
+        >忽略空闲立即运行</button>
         <button
           v-if="exifStatus?.running"
           type="button"
@@ -137,9 +153,10 @@
 <script>
 import {
   CancelImageAITagging, CancelImageEXIFBackfill, CancelImageSemanticIndex,
-  GetImageAITaggingStatus, GetImageEXIFBackfillStatus, GetImageSemanticIndexStatus,
-  StartImageAITagging, StartImageEXIFBackfill, StartImageSemanticIndex
+  GetIdleSchedulerStatus, GetImageAITaggingStatus, GetImageEXIFBackfillStatus, GetImageSemanticIndexStatus,
+  RunGatedTaskNow, StartImageAITagging, StartImageEXIFBackfill, StartImageSemanticIndex
 } from '../../wailsjs/go/main/App';
+import { idleGateWaitingText, isIdleGateNotWaitingError } from '../utils/idleScheduling.js';
 
 // 事件推送之外保留 1s 轮询兜底（镜像 PhotoCleanupPage）。
 const POLL_INTERVAL_MS = 1000;
@@ -163,7 +180,11 @@ export default {
       exifError: '',
       taggingOff: null,
       semanticOff: null,
-      exifOff: null
+      exifOff: null,
+      // 空闲门里"还没开始就在排队"的任务：任务本身尚未运行，状态里读不到 gate 字段，
+      // 只能从门的总览里拿（跑到一半被拦住则读各自的 gate）。
+      idleWaitingReasons: {},
+      idleOff: null
     };
   },
   computed: {
@@ -193,6 +214,10 @@ export default {
       if (status.completed) return 'EXIF 补全任务已完成';
       return 'EXIF 补全任务未运行';
     },
+    // 自动触发的那一轮被空闲门挡住时，面板上直接说明原因并给一条出路；
+    // 用户自己点「开始」的那一轮不会有 gate.waiting_idle，这两个元素也就不出现。
+    taggingWaitingText() { return this.waitingTextFor('image_ai_tagging', this.taggingStatus?.gate); },
+    exifWaitingText() { return this.waitingTextFor('exif', this.exifStatus?.gate); },
     taggingProgressRatio() { return progressRatio(this.taggingStatus); },
     semanticProgressRatio() { return progressRatio(this.semanticStatus); },
     exifProgressRatio() { return progressRatio(this.exifStatus); },
@@ -205,7 +230,12 @@ export default {
     this.loadTaggingStatus();
     this.loadSemanticStatus();
     this.loadEXIFStatus();
+    this.loadIdleSchedulerStatus();
     if (window.runtime?.EventsOn) {
+      const idleOff = window.runtime.EventsOn('idle-scheduler-state', status => {
+        this.applyIdleSchedulerStatus(status);
+      });
+      if (typeof idleOff === 'function') this.idleOff = idleOff;
       const taggingOff = window.runtime.EventsOn('image-ai-tagging-progress', status => {
         this.taggingStatus = { ...(this.taggingStatus || {}), ...(status || {}) };
       });
@@ -226,8 +256,42 @@ export default {
     this.taggingOff?.();
     this.semanticOff?.();
     this.exifOff?.();
+    this.idleOff?.();
   },
   methods: {
+    waitingTextFor(taskKey, gate) {
+      const fromGate = idleGateWaitingText(gate);
+      if (fromGate) return fromGate;
+      const reason = this.idleWaitingReasons[taskKey];
+      return reason ? idleGateWaitingText({ waiting_idle: true, reason }) : '';
+    },
+    applyIdleSchedulerStatus(status) {
+      const reasons = {};
+      for (const item of status?.waiting || []) {
+        if (item?.task_key) reasons[item.task_key] = item.reason;
+      }
+      this.idleWaitingReasons = reasons;
+    },
+    async loadIdleSchedulerStatus() {
+      try {
+        this.applyIdleSchedulerStatus(await GetIdleSchedulerStatus());
+      } catch {
+        this.idleWaitingReasons = {};
+      }
+    },
+    async runGatedTaskNow(taskKey) {
+      try {
+        await RunGatedTaskNow(taskKey);
+      } catch (err) {
+        // 任务刚好已经被放行：没什么可豁免的了，静默刷新即可，不该报错。
+        if (!isIdleGateNotWaitingError(err)) {
+          const message = `忽略空闲立即运行失败：${String(err?.message || err)}`;
+          if (taskKey === 'exif') this.exifError = message;
+          else this.taggingError = message;
+        }
+      }
+      await this.loadIdleSchedulerStatus();
+    },
     schedulePoll() {
       clearTimeout(this._pollTimer);
       if (!this._alive) return;
@@ -354,4 +418,5 @@ export default {
 .image-task-bar i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
 .image-task-failures { margin: 0; padding-left: 18px; color: var(--text-muted); font-size: 12px; }
 .image-task-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.image-task-status span.image-task-waiting-idle { color: var(--warning-color); }
 </style>

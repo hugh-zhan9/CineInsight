@@ -81,12 +81,14 @@ type SubtitleWorkbenchService struct {
 	subtitleService   *SubtitleService
 	replaceFile       func(string, string) error
 	translatorFactory func(SubtitleTranslationConfig) (SubtitleTranslator, error)
+	glossaryResolver  func(videoID uint) ([]GlossaryTerm, error)
 }
 
 func NewSubtitleWorkbenchService(subtitleService *SubtitleService) *SubtitleWorkbenchService {
 	service := &SubtitleWorkbenchService{
-		subtitleService: subtitleService,
-		replaceFile:     replaceSubtitleFileAtomically,
+		subtitleService:  subtitleService,
+		replaceFile:      replaceSubtitleFileAtomically,
+		glossaryResolver: NewTranslationGlossaryService().ResolveForVideo,
 	}
 	service.translatorFactory = func(config SubtitleTranslationConfig) (SubtitleTranslator, error) {
 		if service.subtitleService == nil {
@@ -250,7 +252,20 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 	if translator == nil {
 		return nil, fmt.Errorf("subtitle translator unavailable")
 	}
+	// 术语生效集按视频解析一次，整次选区重译共用（D-033）。只有能吃下术语表的翻译器
+	// 才去查：DeepL 用不上，也就不该因为一次库读失败而多出一条失败路径（D-034）。
+	contextual, injectable := translator.(ContextualTranslator)
+	var glossary []GlossaryTerm
+	if injectable {
+		resolved, err := s.glossaryResolver(request.VideoID)
+		if err != nil {
+			return nil, err
+		}
+		glossary = resolved
+	}
 	translatedEntries := make([]SubtitleRetranslateEntry, 0, len(request.Entries))
+	// 滑动窗口：上一批尾部若干条 (原文, 译文) 作为只读上文，首批为空（D-035）。
+	var preceding []ContextPair
 	const batchSize = 50
 	for start := 0; start < len(request.Entries); start += batchSize {
 		end := start + batchSize
@@ -261,13 +276,20 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 		for index := start; index < end; index++ {
 			texts[index-start] = request.Entries[index].Text
 		}
-		translations, err := translator.Translate(ctx, texts, request.SourceLang, request.TargetLang)
+		translations, err := translateSubtitleBatch(ctx, translator, contextual, TranslationRequest{
+			Texts:            texts,
+			SourceLang:       request.SourceLang,
+			TargetLang:       request.TargetLang,
+			Glossary:         glossary,
+			PrecedingContext: preceding,
+		})
 		if err != nil {
 			return nil, err
 		}
 		if len(translations) != len(texts) {
 			return nil, fmt.Errorf("subtitle translation returned %d entries for %d inputs", len(translations), len(texts))
 		}
+		preceding = trailingContextPairs(texts, translations, subtitleTranslationContextWindow)
 		for index, translation := range translations {
 			translatedEntries = append(translatedEntries, SubtitleRetranslateEntry{
 				ClientID: request.Entries[start+index].ClientID,

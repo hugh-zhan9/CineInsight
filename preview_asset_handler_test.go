@@ -198,3 +198,99 @@ func TestImageViewHandlerServesOriginalFile(t *testing.T) {
 		t.Fatalf("HEAD content-type 错误: %q", headRec.Header().Get("Content-Type"))
 	}
 }
+
+// 人脸裁剪图路由（D-020）：只接受纯数字的观测 id，只读 faces 目录内的文件。
+func TestFaceCropRouteMethodAndIDBoundaries(t *testing.T) {
+	setupAppTestDB(t)
+	app := NewApp()
+	handler := newAssetHandler(app)
+
+	req := httptest.NewRequest(http.MethodPost, "/preview/face-crop/1", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST 期望 405，实际 %d", rec.Code)
+	}
+	if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Fatalf("Allow 头错误: %q", got)
+	}
+
+	// 路径穿越在 id 解析这一步就被挡住：这里只可能是一个十进制整数。
+	for _, path := range []string{
+		"/preview/face-crop/abc",
+		"/preview/face-crop/",
+		"/preview/face-crop/../secret.jpg",
+		"/preview/face-crop/1/../../etc/passwd",
+		"/preview/face-crop/-1",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s 期望 400，实际 %d", path, rec.Code)
+		}
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/preview/face-crop/9999", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("不存在的观测期望 404，实际 %d", rec.Code)
+	}
+}
+
+func TestFaceCropRouteServesCropAndRefusesEscapes(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	app := NewApp()
+	app.faceAnalysis = services.NewFaceAnalysisService(root, nil, nil)
+
+	facesDir := app.faceAnalysis.FacesDir()
+	if err := os.MkdirAll(facesDir, 0o755); err != nil {
+		t.Fatalf("建裁剪图目录失败: %v", err)
+	}
+	observation := models.FaceObservation{
+		MediaKind: models.FaceMediaKindImage, MediaID: 1, SourceFingerprint: "1-1",
+		BBox: "0,0,1,1", BBoxHash: "000000999999", AppendStatus: models.FaceAppendStatusNone,
+	}
+	if err := database.DB.Create(&observation).Error; err != nil {
+		t.Fatalf("建观测失败: %v", err)
+	}
+	cropName := fmt.Sprintf("%d.jpg", observation.ID)
+	if err := os.WriteFile(filepath.Join(facesDir, cropName), []byte("jpeg-face-crop"), 0o644); err != nil {
+		t.Fatalf("写裁剪图失败: %v", err)
+	}
+	if err := database.DB.Model(&models.FaceObservation{}).Where("id = ?", observation.ID).
+		Update("crop_path", cropName).Error; err != nil {
+		t.Fatalf("写 crop_path 失败: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/preview/face-crop/%d", observation.ID), nil)
+	rec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际 %d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Content-Type"); got != "image/jpeg" {
+		t.Fatalf("content-type 错误: %q", got)
+	}
+	if rec.Body.String() != "jpeg-face-crop" {
+		t.Fatalf("响应体错误: %q", rec.Body.String())
+	}
+
+	// 库里的 crop_path 指到目录外：路由必须当作不存在，不能顺着读出去。
+	outside := filepath.Join(root, "outside.jpg")
+	if err := os.WriteFile(outside, []byte("secret"), 0o644); err != nil {
+		t.Fatalf("写目录外文件失败: %v", err)
+	}
+	if err := database.DB.Model(&models.FaceObservation{}).Where("id = ?", observation.ID).
+		Update("crop_path", "../outside.jpg").Error; err != nil {
+		t.Fatalf("改 crop_path 失败: %v", err)
+	}
+	req = httptest.NewRequest(http.MethodGet, fmt.Sprintf("/preview/face-crop/%d", observation.ID), nil)
+	rec = httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("越界的 crop_path 期望 404，实际 %d body=%s", rec.Code, rec.Body.String())
+	}
+}

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"video-master/database"
@@ -604,5 +606,268 @@ func TestRedactSensitiveLogMessage(t *testing.T) {
 	}
 	if !strings.Contains(redacted, "[REDACTED]") {
 		t.Fatalf("期望包含脱敏占位符: %s", redacted)
+	}
+}
+
+// 扫描后的自动任务：默认全关，开了才跑；库没变化时一件都不做。
+func TestPostScanAutomationRespectsSettingsAndSkipsUnchangedLibrary(t *testing.T) {
+	setupAppTestDB(t)
+	settings := models.Settings{VideoExtensions: ".mp4", PlayWeight: 2}
+	if err := database.DB.Create(&settings).Error; err != nil {
+		t.Fatalf("创建设置失败: %v", err)
+	}
+	app := NewApp()
+
+	// 库没有任何变化：即使开着开关也不该启动后台任务
+	settings.AutoTechnicalBackfill = true
+	settings.AutoPerceptualHash = true
+	settings.AutoCleanupAnalysis = true
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatalf("更新设置失败: %v", err)
+	}
+	app.runPostScanAutomation(&services.ScanSyncResult{Scanned: 12})
+	if app.technicalBackfill.Status().Running || app.perceptualHash.Status().Running {
+		t.Fatal("库没变化时不该启动任何后台任务")
+	}
+
+	// 全部关掉：库有变化也不该自动跑
+	settings.AutoTechnicalBackfill = false
+	settings.AutoPerceptualHash = false
+	settings.AutoCleanupAnalysis = false
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatalf("更新设置失败: %v", err)
+	}
+	app.runPostScanAutomation(&services.ScanSyncResult{Added: 3})
+	time.Sleep(50 * time.Millisecond)
+	if app.technicalBackfill.Status().Running || app.perceptualHash.Status().Running {
+		t.Fatal("开关关着时不该自动启动后台任务")
+	}
+}
+
+// 扫描后自动 pHash 经空闲门（AC-20）：用户活跃时任务停在「等待空闲」，
+// 模拟空闲之后才开始；用户显式点「补全」永远不排队。
+func TestPostScanAutomationGatesAutomaticPerceptualHashOnly(t *testing.T) {
+	setupAppTestDB(t)
+	settings := models.Settings{
+		VideoExtensions: ".mp4", PlayWeight: 2,
+		IdleSchedulingEnabled: true, IdleThresholdMinutes: 5,
+	}
+	if err := database.DB.Create(&settings).Error; err != nil {
+		t.Fatalf("创建设置失败: %v", err)
+	}
+	app := NewApp()
+	settings.AutoPerceptualHash = true
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatalf("打开自动感知哈希失败: %v", err)
+	}
+	var probeMu sync.Mutex
+	idle := 10 * time.Second
+	app.idleGate.SetProbe(func(context.Context) (services.IdleSample, error) {
+		probeMu.Lock()
+		defer probeMu.Unlock()
+		return services.IdleSample{Idle: idle, OnACPower: true}, nil
+	})
+	app.idleGate.SetProbeInterval(5 * time.Millisecond)
+
+	app.runPostScanAutomation(&services.ScanSyncResult{Added: 1})
+
+	// 用户活跃：任务应停在门口，pHash 一直没启动。
+	waitForIdleGateWaiting(t, app, "phash")
+	if app.perceptualHash.Status().Running {
+		t.Fatal("用户活跃时不该启动自动感知哈希")
+	}
+
+	// 显式启动不经门：立刻就跑起来（库里没有视频，随即正常收尾）。
+	if _, err := app.StartPerceptualHashBackfill(); err != nil {
+		t.Fatalf("显式启动感知哈希失败: %v", err)
+	}
+	status := app.perceptualHash.Status()
+	if !status.Running && !status.Completed {
+		t.Fatalf("显式启动应立即执行，实际 %+v", status)
+	}
+	if status.Gate.WaitingIdle {
+		t.Fatalf("显式启动不该被空闲门挡住: %+v", status.Gate)
+	}
+	waitForPerceptualHashIdle(t, app)
+
+	// 模拟机器空闲：门放行，自动任务开始（无视频时会立刻跑完）。
+	probeMu.Lock()
+	idle = 30 * time.Minute
+	probeMu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(app.idleGate.GetIdleSchedulerStatus().Waiting) == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("空闲之后自动任务应被放行，实际仍在等待: %+v",
+		app.idleGate.GetIdleSchedulerStatus().Waiting)
+}
+
+func waitForIdleGateWaiting(t *testing.T, app *App, taskKey string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		for _, waiting := range app.idleGate.GetIdleSchedulerStatus().Waiting {
+			if waiting.TaskKey == taskKey {
+				return
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("等待 %s 进入空闲门等待清单超时", taskKey)
+}
+
+func waitForPerceptualHashIdle(t *testing.T, app *App) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !app.perceptualHash.Status().Running {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("显式感知哈希任务未在预期时间内结束")
+}
+
+// 登记表接线：任务跑起来时 background-tasks 里出现对应 key，结束后清空。
+func TestBackgroundTaskRegistryReflectsExplicitPerceptualHashRun(t *testing.T) {
+	setupAppTestDB(t)
+	app := NewApp()
+	seen := make(chan []string, 32)
+	app.backgroundTasks.SetOnChange(func(running []string) {
+		select {
+		case seen <- running:
+		default:
+		}
+	})
+	if _, err := app.StartPerceptualHashBackfill(); err != nil {
+		t.Fatalf("启动感知哈希失败: %v", err)
+	}
+	waitForPerceptualHashIdle(t, app)
+	if tasks := app.GetBackgroundTasks(); len(tasks) != 0 {
+		t.Fatalf("任务结束后登记表应清空: %v", tasks)
+	}
+	sawRunning := false
+	for {
+		select {
+		case running := <-seen:
+			for _, key := range running {
+				if key == "phash" {
+					sawRunning = true
+				}
+			}
+			continue
+		default:
+		}
+		break
+	}
+	if !sawRunning {
+		t.Fatal("任务运行期间 background-tasks 应包含 phash")
+	}
+}
+
+// 扫描扫到新片后的 AI 打标唤醒是扫描的自动后果，与扫描后自动任务同一口径：
+// 用户活跃时唤醒停在空闲门后（AC-20），机器空闲后才放行。
+func TestScanSyncGatesAutomaticAITaggingWake(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	videoPath := filepath.Join(root, "one.mp4")
+	if err := os.WriteFile(videoPath, []byte("fake-video"), 0644); err != nil {
+		t.Fatalf("写入视频文件失败: %v", err)
+	}
+	// 扫描会跳过 5 分钟内改动过的文件（可能正在写入），把 mtime 拨回去。
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(videoPath, past, past); err != nil {
+		t.Fatalf("回拨文件时间失败: %v", err)
+	}
+	settings := models.Settings{
+		VideoExtensions: ".mp4", PlayWeight: 2,
+		IdleSchedulingEnabled: true, IdleThresholdMinutes: 5,
+	}
+	if err := database.DB.Create(&settings).Error; err != nil {
+		t.Fatalf("创建设置失败: %v", err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: root, Alias: "扫描根"}).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+
+	app := NewApp()
+	var probeMu sync.Mutex
+	idle := 10 * time.Second
+	app.idleGate.SetProbe(func(context.Context) (services.IdleSample, error) {
+		probeMu.Lock()
+		defer probeMu.Unlock()
+		return services.IdleSample{Idle: idle, OnACPower: true}, nil
+	})
+	app.idleGate.SetProbeInterval(5 * time.Millisecond)
+
+	result, err := app.SyncScanDirectories()
+	if err != nil {
+		t.Fatalf("扫描同步失败: %v", err)
+	}
+	if result.Added != 1 {
+		t.Fatalf("应新增 1 个视频，实际 %+v", result)
+	}
+
+	waitForIdleGateWaiting(t, app, "ai_tagging")
+
+	// 空闲之后唤醒被放行（worker 没起来，Trigger 什么也不做，等待清单清空即可）。
+	probeMu.Lock()
+	idle = 30 * time.Minute
+	probeMu.Unlock()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(app.idleGate.GetIdleSchedulerStatus().Waiting) == 0 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("空闲之后唤醒应被放行，实际仍在等待: %+v",
+		app.idleGate.GetIdleSchedulerStatus().Waiting)
+}
+
+// 前后台上报（D-013）：前端调 SetWindowForeground，后端的通知中心随之改标记。
+// 没上报过时默认后台，所以初始就是 false。
+func TestSetWindowForegroundUpdatesNotificationCenter(t *testing.T) {
+	setupAppTestDB(t)
+	app := NewApp()
+
+	if app.desktopNotify.Foreground() {
+		t.Fatal("未上报前后台时应默认视为后台")
+	}
+	app.SetWindowForeground(true)
+	if !app.desktopNotify.Foreground() {
+		t.Fatal("上报前台后标记应为前台")
+	}
+	app.SetWindowForeground(false)
+	if app.desktopNotify.Foreground() {
+		t.Fatal("上报后台后标记应回到后台")
+	}
+}
+
+// 通知开关直接从库里读，保存即时生效（设计 6.2）；读不到设置就当没开。
+func TestDesktopNotificationsEnabledReadsCurrentSettings(t *testing.T) {
+	setupAppTestDB(t)
+	app := NewApp()
+
+	if app.desktopNotificationsEnabled() {
+		t.Fatal("读不到设置行时不该认为开关是开的")
+	}
+	settings := models.Settings{DesktopNotificationsEnabled: true}
+	if err := database.DB.Create(&settings).Error; err != nil {
+		t.Fatalf("创建设置行失败: %v", err)
+	}
+	if !app.desktopNotificationsEnabled() {
+		t.Fatal("开关开着时应读到开启")
+	}
+
+	settings.DesktopNotificationsEnabled = false
+	if err := app.settingsService.UpdateSettings(settings); err != nil {
+		t.Fatalf("保存设置失败: %v", err)
+	}
+	if app.desktopNotificationsEnabled() {
+		t.Fatal("关掉开关后应立即读到关闭")
 	}
 }

@@ -21,6 +21,17 @@ type VideoPerson struct {
 	CreatedAt time.Time `json:"created_at" ts_type:"string"`
 }
 
+// ImagePerson stores the same person entity on the image side. It mirrors
+// VideoPerson exactly (composite key, no role, no order, cascade both ways):
+// 2026-09-02 裁决 CD-02 让人物同时覆盖视频与图片，替换 2026-08-07「人物不覆盖图片」。
+type ImagePerson struct {
+	ImageID   uint      `gorm:"primaryKey;autoIncrement:false;index:idx_image_people_person_image,priority:2" json:"image_id"`
+	Image     Image     `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	PersonID  uint      `gorm:"primaryKey;autoIncrement:false;index:idx_image_people_person_image,priority:1" json:"person_id"`
+	Person    Person    `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	CreatedAt time.Time `json:"created_at" ts_type:"string"`
+}
+
 // MediaCollection is a manually curated ordered group of videos.
 type MediaCollection struct {
 	ID             uint           `gorm:"primarykey" json:"id"`
@@ -134,4 +145,85 @@ type MediaStream struct {
 	Channels         *int      `json:"channels"`
 	ChannelLayout    string    `gorm:"size:100;not null;default:''" json:"channel_layout"`
 	CreatedAt        time.Time `json:"created_at" ts_type:"string"`
+}
+
+// TranslationGlossaryEntry binds one source term to its required translation for
+// subtitle translation (D-033). CollectionID NULL means the entry is global.
+// ScopeKey materializes COALESCE(collection_id, 0) so the uniqueness rule stays a
+// plain multi-column index instead of an expression index, which SQLite and
+// Postgres spell differently. SourceTermLower is written lowercased for the same
+// reason: the unique key must not depend on a dialect's lower() in an index.
+type TranslationGlossaryEntry struct {
+	ID              uint             `gorm:"primarykey" json:"id"`
+	CollectionID    *uint            `gorm:"index:idx_translation_glossary_entries_collection" json:"collection_id"`
+	Collection      *MediaCollection `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	ScopeKey        int64            `gorm:"not null;default:0;uniqueIndex:idx_translation_glossary_entries_scope_term,priority:1" json:"scope_key"`
+	SourceTerm      string           `gorm:"size:200;not null" json:"source_term"`
+	SourceTermLower string           `gorm:"size:200;not null;uniqueIndex:idx_translation_glossary_entries_scope_term,priority:2" json:"source_term_lower"`
+	TargetTerm      string           `gorm:"size:200;not null" json:"target_term"`
+	Note            string           `gorm:"type:text;not null;default:''" json:"note"`
+	CreatedAt       time.Time        `json:"created_at" ts_type:"string"`
+	UpdatedAt       time.Time        `json:"updated_at" ts_type:"string"`
+}
+
+// 建议作品集的候选状态（D-024）。
+const (
+	CollectionSuggestionStatusPending   = "pending"
+	CollectionSuggestionStatusConfirmed = "confirmed"
+	CollectionSuggestionStatusDismissed = "dismissed"
+)
+
+// CollectionSuggestion 是一组按文件名解析出来的同系列视频（D-024）。
+//
+// Fingerprint 是成员 ID 排序后的 sha256，同时充当"忽略/已确认"的记忆键：
+// 成员集合只要变一个，指纹就变，旧的判断不再适用，候选会重新出现。唯一索引保证
+// 同一成员集合在库里最多一行——分析可以随便重跑，不会堆出一串重复候选。
+//
+// 分析只产出候选，任何情况下都不自动建作品集，也不改视频标题与文件名。
+type CollectionSuggestion struct {
+	ID uint `gorm:"primarykey" json:"id"`
+	// ScanRoot 是成员所属的扫描根。跨扫描根不合并（D-023），所以它是分组键的一半。
+	ScanRoot         string    `gorm:"type:text;not null;default:''" json:"scan_root"`
+	SeriesName       string    `gorm:"size:200;not null" json:"series_name"`
+	NormalizedSeries string    `gorm:"size:200;not null" json:"normalized_series"`
+	Status           string    `gorm:"size:16;not null;index:idx_collection_suggestions_status" json:"status"`
+	Fingerprint      string    `gorm:"size:64;not null;uniqueIndex:idx_collection_suggestions_fingerprint" json:"fingerprint"`
+	CreatedAt        time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt        time.Time `json:"updated_at" ts_type:"string"`
+}
+
+// CollectionSuggestionMember 是候选里的一个视频（D-024）。
+//
+// Season 为 NULL 表示文件名里没有季信息（只有 SxxExx 给得出季）；Position 是按
+// (season, episode) 排出来的次序，同集多版本（03 与 03v2）共用同一个 position，
+// 界面据此提示"同集多版本"。
+type CollectionSuggestionMember struct {
+	SuggestionID uint                 `gorm:"primaryKey;autoIncrement:false" json:"suggestion_id"`
+	Suggestion   CollectionSuggestion `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	VideoID      uint                 `gorm:"primaryKey;autoIncrement:false;index:idx_collection_suggestion_members_video" json:"video_id"`
+	Video        Video                `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	Season       *int                 `json:"season"`
+	Episode      *int                 `json:"episode"`
+	Position     int                  `gorm:"not null" json:"position"`
+	CreatedAt    time.Time            `json:"created_at" ts_type:"string"`
+}
+
+// ClipDismissal 持久化用户对"截取片段"误报的忽略（D-028）。
+//
+// 与 NearDuplicateDismissal 的区别在于方向有意义：这一对是"完整片 → 截取片段"，
+// 不能像近似重复那样归一成低 ID / 高 ID，两个字段各自固定角色。
+//
+// 四个指纹字段是忽略生效的条件：只有双方的源文件都还是当初那两个文件时，这条
+// 忽略才算数。任一侧重编码（指纹变了）就是一份新的素材，候选应当重新出现让用户
+// 再看一眼——这是设计里明确写下的边界，而不是可有可无的宽容。
+type ClipDismissal struct {
+	ID                  uint      `gorm:"primarykey" json:"id"`
+	VideoFullID         uint      `gorm:"not null;uniqueIndex:idx_clip_dismissal_pair,priority:1" json:"video_full_id"`
+	VideoClipID         uint      `gorm:"not null;uniqueIndex:idx_clip_dismissal_pair,priority:2" json:"video_clip_id"`
+	FullSourceSize      int64     `gorm:"not null" json:"full_source_size"`
+	FullSourceModTimeNS int64     `gorm:"not null" json:"full_source_mod_time_ns"`
+	ClipSourceSize      int64     `gorm:"not null" json:"clip_source_size"`
+	ClipSourceModTimeNS int64     `gorm:"not null" json:"clip_source_mod_time_ns"`
+	CreatedAt           time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt           time.Time `json:"updated_at" ts_type:"string"`
 }

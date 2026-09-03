@@ -99,6 +99,7 @@
 import { CreateTag, AddTagToVideo, BatchAddTagToVideos, BatchRemoveTagFromVideos } from '../../wailsjs/go/main/App';
 import { selectedTagsFromIds, toggleSelectedTagId, uniqueTagsById } from '../utils/addTagSelection.js';
 import BaseModal from './ui/BaseModal.vue';
+import { confirmAction, notifyError } from '../utils/feedback.js';
 
 export default {
   name: 'AddTagDialog',
@@ -231,7 +232,7 @@ export default {
         this.$emit('close');
       } catch (err) {
         console.error('添加标签失败:', err);
-        alert('添加标签失败: ' + err);
+        notifyError('添加标签失败: ' + err);
       } finally {
         this.applying = false;
       }
@@ -245,7 +246,7 @@ export default {
     },
     async removeCommonTag(tag) {
       if (!this.isBatchMode || !tag) return;
-      if (!confirm(`确定要从 ${this.videoIds.length} 个已选视频中移除标签「${tag.name}」吗？`)) return;
+      if (!await confirmAction({ title: '移除标签', message: `确定要从 ${this.videoIds.length} 个已选视频中移除标签「${tag.name}」吗？`, confirmText: '移除', danger: true })) return;
       if (this.processingTagIds.includes(tag.id)) return;
       this.processingTagIds = [...this.processingTagIds, tag.id];
       try {
@@ -253,11 +254,11 @@ export default {
         this.$emit('tag-added');
         if (result?.failed > 0) {
           const firstError = result.errors?.[0];
-          alert(`批量移除完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
+          notifyError(`批量移除完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
         }
       } catch (err) {
         console.error('批量移除标签失败:', err);
-        alert('批量移除标签失败: ' + err);
+        notifyError('批量移除标签失败: ' + err);
       } finally {
         this.processingTagIds = this.processingTagIds.filter(id => id !== tag.id);
       }

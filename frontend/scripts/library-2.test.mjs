@@ -4,6 +4,9 @@ import { readFileSync } from 'node:fs';
 const page = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
 const row = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const preview = readFileSync(new URL('../src/components/PreviewDrawer.vue', import.meta.url), 'utf8');
+// P-002 把清理审阅面板抽成了独立组件，下面属于面板的断言跟着搬到新文件上。
+const cleanupPanel = readFileSync(new URL('../src/components/video-list/CleanupReviewPanel.vue', import.meta.url), 'utf8');
+const saveViewDialog = readFileSync(new URL('../src/components/video-list/SaveViewDialog.vue', import.meta.url), 'utf8');
 
 assert.match(page, /SearchLibraryVideoPage/, 'main library should use the stable shared smart-view query');
 assert.match(page, /ListRecentlyPlayedWithFilter/, 'recently played should be filtered and paginated by the backend');
@@ -12,7 +15,7 @@ assert.match(page, /GetLibrarySubtitleHits\(keyword, videos\.map\(video => video
 assert.match(page, /PickRandomVideos\(\{[\s\S]*?filter: this\.currentLibraryFilter\(\)/, 'random pick should reuse the same filter contract as random play');
 assert.match(page, /if \(this\.randomPick\.active\) return this\.refreshRandomPick\(\)/, 'reloads inside a random batch should refresh the fixed batch, not re-draw one');
 assert.match(page, /ListSavedLibraryViews/, 'saved views should be loaded from the backend');
-assert.match(page, /SaveLibraryView\(\{ name, \.\.\.this\.currentLibraryFilter\(\) \}\)/, 'saved views should capture the current filter');
+assert.match(saveViewDialog, /SaveLibraryView\(\{ name, \.\.\.this\.currentLibraryFilter\(\) \}\)/, 'saved views should capture the current filter');
 assert.match(page, /activeTagIDs\.has\(id\)/, 'saved views should ignore deleted tag IDs when restored');
 assert.match(page, /PlayRandomVideoWithFilter/, 'random play should use the current filter contract');
 assert.match(page, /exclude_ids: this\.recentRandomVideoIDs\.slice\(-12\)/, 'random play should avoid recent repeats');
@@ -24,9 +27,9 @@ assert.match(row, /watch_position_seconds/, 'library rows should show resume pro
 assert.match(preview, /detailPlaybackStartMs\(/, 'preview should resolve subtitle and resume start times through the tested behavior helper');
 assert.doesNotMatch(preview, /^\s+resumePositionSeconds\(\)/m, 'progress persistence must not seek the active player backwards');
 assert.match(preview, /@ended="emitWatchProgress\(true, true\)"/, 'finishing inline playback should mark completion');
-assert.match(page, /same_source_groups/, 'cleanup review should include same-source candidates');
-assert.match(page, /RejectSameSourceRelation/, 'cleanup review should reuse the existing rejection path');
-assert.match(page, /byID\.set\(group\.alternative\.id, group\.alternative\)/, 'only the alternative same-source version should be selectable for cleanup');
-assert.match(page, /await this\.reanalyzeCleanupCandidates\(\)/, 'cleanup should refresh stale candidates after deletion');
+assert.match(cleanupPanel, /same_source_groups/, 'cleanup review should include same-source candidates');
+assert.match(cleanupPanel, /RejectSameSourceRelation/, 'cleanup review should reuse the existing rejection path');
+assert.match(cleanupPanel, /byID\.set\(group\.alternative\.id, group\.alternative\)/, 'only the alternative same-source version should be selectable for cleanup');
+assert.match(cleanupPanel, /await this\.reanalyzeCleanupCandidates\(\)/, 'cleanup should refresh stale candidates after deletion');
 
 console.log('library 2 tests passed');

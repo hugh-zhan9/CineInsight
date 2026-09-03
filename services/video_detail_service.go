@@ -98,9 +98,13 @@ func (s *VideoDetailService) GetVideoDetails(videoID uint) (*VideoDetails, error
 	if err != nil {
 		return nil, err
 	}
+	personImageCounts, err := activeImageCountsByPerson(personIDs)
+	if err != nil {
+		return nil, err
+	}
 	detail.People = make([]PersonListItem, 0, len(people))
 	for _, person := range people {
-		detail.People = append(detail.People, personListItemWithCount(person, personCounts[person.ID]))
+		detail.People = append(detail.People, personListItemWithCount(person, personCounts[person.ID], personImageCounts[person.ID]))
 	}
 
 	var collections []models.MediaCollection
@@ -347,11 +351,13 @@ func replaceVideoPeopleRelations(tx *gorm.DB, videoID uint, desired []uint, prun
 		return orphanAvatars, nil
 	}
 	for _, personID := range removed {
-		var count int64
-		if err := tx.Model(&models.VideoPerson{}).Where("person_id = ?", personID).Count(&count).Error; err != nil {
+		// 最后关系判定跨两种媒体（D-015）：只看 video_people 会把仍有图片关系的
+		// 人物删掉，而人物删除会级联清空 image_people。
+		hasRelations, err := personHasRemainingRelations(tx, personID)
+		if err != nil {
 			return nil, err
 		}
-		if count != 0 {
+		if hasRelations {
 			continue
 		}
 		var person models.Person

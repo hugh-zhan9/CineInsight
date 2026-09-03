@@ -37,9 +37,12 @@ func NewImageLibraryService() *ImageLibraryService {
 // ImageFilter 描述照片页的筛选边界。TakenAfter/TakenBefore 是 EXIF 拍摄时间的闭区间，
 // 只命中有 taken_at 的图片。
 type ImageFilter struct {
-	Keyword      string     `json:"keyword"`
-	Directory    string     `json:"directory"`
-	TagIDs       []uint     `json:"tag_ids"`
+	Keyword   string `json:"keyword"`
+	Directory string `json:"directory"`
+	TagIDs    []uint `json:"tag_ids"`
+	// PersonIDs 与 TagIDs 同为 AND 语义：命中的图片必须关联全部所列人物；
+	// 空切片等同不筛（D-015）。
+	PersonIDs    []uint     `json:"person_ids"`
 	FavoriteOnly bool       `json:"favorite_only"`
 	MinRating    *float64   `json:"min_rating"`
 	MaxRating    *float64   `json:"max_rating"`
@@ -107,6 +110,9 @@ type ImagePageRequest struct {
 // 且接受/拒绝之后要能单独刷新，塞进详情会逼前端为了一条候选重拉整个详情。
 type ImageDetail struct {
 	Image models.Image `json:"image"`
+	// People 是这张图片当前关联的人物（D-015）。放在详情里而不是列表行上：
+	// 照片网格一屏几百张，为人物维护多查一次关系表只在打开单图时值得。
+	People []PersonListItem `json:"people"`
 }
 
 // BatchImageOperationError 记录批量操作中单张图片的失败原因。
@@ -158,6 +164,8 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 	}
 	filter.TagIDs = uniqueUintIDs(filter.TagIDs)
 	sort.Slice(filter.TagIDs, func(i, j int) bool { return filter.TagIDs[i] < filter.TagIDs[j] })
+	filter.PersonIDs = uniqueUintIDs(filter.PersonIDs)
+	sort.Slice(filter.PersonIDs, func(i, j int) bool { return filter.PersonIDs[i] < filter.PersonIDs[j] })
 	if filter.MinSize < 0 || filter.MaxSize < 0 {
 		return ImageFilter{}, fmt.Errorf("筛选范围不能为负数")
 	}
@@ -240,6 +248,14 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 			Where("tag_id IN ?", filter.TagIDs).
 			Group("image_id").
 			Having("COUNT(DISTINCT tag_id) = ?", len(filter.TagIDs))
+		query = query.Where("images.id IN (?)", subquery)
+	}
+	// 人物筛选与标签同法：分组计数保证 AND 语义，而不是任一命中。
+	if len(filter.PersonIDs) > 0 {
+		subquery := database.DB.Table("image_people").Select("image_id").
+			Where("person_id IN ?", filter.PersonIDs).
+			Group("image_id").
+			Having("COUNT(DISTINCT person_id) = ?", len(filter.PersonIDs))
 		query = query.Where("images.id IN (?)", subquery)
 	}
 	return query
@@ -525,7 +541,40 @@ func (s *ImageLibraryService) GetImageDetail(imageID uint) (*ImageDetail, error)
 	if err := database.DB.Preload("Tags").First(&image, imageID).Error; err != nil {
 		return nil, err
 	}
-	return &ImageDetail{Image: image}, nil
+	people, err := imagePeopleListItems(imageID)
+	if err != nil {
+		return nil, err
+	}
+	return &ImageDetail{Image: image, People: people}, nil
+}
+
+// imagePeopleListItems 与视频详情的人物区块同形：按显示名排序，附带两侧活跃计数。
+func imagePeopleListItems(imageID uint) ([]PersonListItem, error) {
+	var people []models.Person
+	if err := database.DB.Model(&models.Person{}).
+		Joins("JOIN image_people ON image_people.person_id = people.id").
+		Where("image_people.image_id = ?", imageID).
+		Order("LOWER(people.display_name) ASC").Order("people.id ASC").
+		Find(&people).Error; err != nil {
+		return nil, fmt.Errorf("load image people: %w", err)
+	}
+	personIDs := make([]uint, 0, len(people))
+	for _, person := range people {
+		personIDs = append(personIDs, person.ID)
+	}
+	videoCounts, err := activeVideoCountsByPerson(personIDs)
+	if err != nil {
+		return nil, err
+	}
+	imageCounts, err := activeImageCountsByPerson(personIDs)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]PersonListItem, 0, len(people))
+	for _, person := range people {
+		items = append(items, personListItemWithCount(person, videoCounts[person.ID], imageCounts[person.ID]))
+	}
+	return items, nil
 }
 
 // SetImageFavorite 更新照片收藏状态。

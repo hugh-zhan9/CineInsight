@@ -72,6 +72,7 @@ func TestCleanupBackgroundAnalysisKeepsStatusAfterCompletion(t *testing.T) {
 	}
 
 	svc := &CleanupService{}
+	finished := watchCleanupRunFinished(svc)
 	status, err := svc.StartAnalysis(CleanupCriteria{
 		MinDuration: 5 * time.Second,
 		MinWidth:    480,
@@ -84,14 +85,9 @@ func TestCleanupBackgroundAnalysisKeepsStatusAfterCompletion(t *testing.T) {
 		t.Fatalf("启动后状态错误: %+v", status)
 	}
 
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		status = svc.Status()
-		if status.Completed {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
+	// 等真正的收尾信号，而不是一个猜出来的时间窗：Postgres 全量并发下这一轮
+	// 可能跑上好几秒，固定 2 秒会随机超时。
+	waitForCleanupRunFinished(t, finished)
 
 	status = svc.Status()
 	if status.Running || !status.Completed || status.Error != "" {
@@ -129,11 +125,14 @@ func TestCleanupDoneProgressAppearsOnlyAfterAnalysisIsReadable(t *testing.T) {
 	}
 
 	svc := &CleanupService{}
+	finished := watchCleanupRunFinished(svc)
 	if _, err := svc.StartAnalysis(CleanupCriteria{MinDuration: 5 * time.Second, MinWidth: 480, MinHeight: 320}); err != nil {
 		t.Fatalf("启动后台清理分析失败: %v", err)
 	}
 
-	deadline := time.Now().Add(5 * time.Second)
+	// 一边轮询一边等收尾信号：轮询才抓得住"done 已出现但结果还读不到"的瞬间窗口，
+	// 收尾信号则接管了原来那个固定 5 秒的截止时间（并发负载下会误报超时）。
+	deadline := time.Now().Add(cleanupRunWaitTimeout)
 	for {
 		// 单次快照内同时检查阶段和结果，避免两次读取之间状态发生变化。
 		status := svc.Status()
@@ -143,10 +142,54 @@ func TestCleanupDoneProgressAppearsOnlyAfterAnalysisIsReadable(t *testing.T) {
 			}
 			return
 		}
+		select {
+		case <-finished:
+			// worker 已经收尾：此刻 done 必须已经可见，且结果必须可读。
+			status = svc.Status()
+			if status.Progress.Stage != "done" {
+				t.Fatalf("收尾之后 done 阶段必须已可见，实际 %+v", status)
+			}
+			if status.Running || !status.Completed || status.Analysis == nil {
+				t.Fatalf("done 阶段出现时结果必须已可读，实际 %+v", status)
+			}
+			return
+		default:
+		}
 		if time.Now().After(deadline) {
 			t.Fatalf("等待 done 阶段超时，实际 %+v", status)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// cleanupRunWaitTimeout 只是防挂死的兜底，不再充当"应该多久跑完"的判据。
+const cleanupRunWaitTimeout = 60 * time.Second
+
+// watchCleanupRunFinished 用后台任务登记表当收尾信号：登记表的 End 是 goroutine
+// 最外层的 defer，一定在 done 事件之后执行，因此"cleanup 从登记表消失"正好
+// 等价于"这一轮真的收尾了"。必须在 StartAnalysis 之前调用。
+func watchCleanupRunFinished(svc *CleanupService) <-chan struct{} {
+	finished := make(chan struct{}, 1)
+	registry := NewBackgroundTaskRegistry()
+	registry.SetOnChange(func(running []string) {
+		if len(running) != 0 {
+			return
+		}
+		select {
+		case finished <- struct{}{}:
+		default:
+		}
+	})
+	svc.SetBackgroundTaskRegistry(registry)
+	return finished
+}
+
+func waitForCleanupRunFinished(t *testing.T, finished <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-finished:
+	case <-time.After(cleanupRunWaitTimeout):
+		t.Fatalf("等待清理分析收尾超时（%s）", cleanupRunWaitTimeout)
 	}
 }
 
@@ -387,4 +430,65 @@ func setupCleanupServiceTestDB(t *testing.T) {
 	t.Helper()
 	db := dbtest.Open(t)
 	database.DB = db
+}
+
+// 改窄扫描根之后，范围外的旧记录在列表里已经看不见，也不该再被列成清理候选。
+func TestCleanupAnalysisSkipsVideosOutsideScanRoots(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	mockFFProbe(t, root)
+	insideDir := filepath.Join(root, "inside")
+	outsideDir := filepath.Join(root, "outside")
+	if err := os.MkdirAll(insideDir, 0o755); err != nil {
+		t.Fatalf("建目录失败: %v", err)
+	}
+	if err := os.MkdirAll(outsideDir, 0o755); err != nil {
+		t.Fatalf("建目录失败: %v", err)
+	}
+	// 两个同样内容的文件放在范围外：只有它们会被判为精确重复。
+	payload := []byte("same-content-payload")
+	outsideA := filepath.Join(outsideDir, "a.mp4")
+	outsideB := filepath.Join(outsideDir, "b.mp4")
+	for _, path := range []string{outsideA, outsideB} {
+		if err := os.WriteFile(path, payload, 0o644); err != nil {
+			t.Fatalf("写文件失败: %v", err)
+		}
+	}
+	insidePath := filepath.Join(insideDir, "kept.mp4")
+	if err := os.WriteFile(insidePath, []byte("unique"), 0o644); err != nil {
+		t.Fatalf("写文件失败: %v", err)
+	}
+	videos := []models.Video{
+		{Name: "a.mp4", Path: outsideA, Directory: outsideDir, Size: int64(len(payload)), Duration: 600, Width: 1920, Height: 1080},
+		{Name: "b.mp4", Path: outsideB, Directory: outsideDir, Size: int64(len(payload)), Duration: 600, Width: 1920, Height: 1080},
+		{Name: "kept.mp4", Path: insidePath, Directory: insideDir, Size: 6, Duration: 600, Width: 1920, Height: 1080},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	// 扫描根覆盖整个 root 时，范围外那一对会被认出来。
+	wide := models.ScanDirectory{Path: root}
+	if err := database.DB.Create(&wide).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	analysis, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("宽根分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 1 {
+		t.Fatalf("宽根下应认出一组精确重复: %+v", analysis.DuplicateGroups)
+	}
+
+	// 把根改窄到 inside 之后，那一对整个从候选里消失。
+	if err := database.DB.Model(&models.ScanDirectory{}).Where("id = ?", wide.ID).Update("path", insideDir).Error; err != nil {
+		t.Fatalf("改窄扫描目录失败: %v", err)
+	}
+	analysis, err = (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("窄根分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 0 {
+		t.Fatalf("范围外的重复不该再是候选: %+v", analysis.DuplicateGroups)
+	}
 }

@@ -617,3 +617,126 @@ func TestLikedSmartViewMirrorsFavorites(t *testing.T) {
 		t.Fatalf("点赞计数应为 2，实际 %d", count)
 	}
 }
+
+// 改窄扫描根后，落在范围外的旧记录不该再出现在片库视图里；把根改回去，
+// 同一条记录要自己回来（记录本身不删）。
+func TestLibraryViewsScopeResultsToConfiguredScanRoots(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	keptDir := filepath.Join(root, "Ellieli-Collection")
+	droppedDir := filepath.Join(root, "xxxx")
+	videos := []models.Video{
+		{Name: "kept.mp4", Path: filepath.Join(keptDir, "kept.mp4"), Directory: keptDir},
+		{Name: "dropped.mp4", Path: filepath.Join(droppedDir, "dropped.mp4"), Directory: droppedDir},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatalf("创建扫描范围夹具失败: %v", err)
+	}
+	svc := &VideoService{}
+
+	// 根还是整个卷时，两条都在范围内。
+	wideDir := models.ScanDirectory{Path: root}
+	if err := database.DB.Create(&wideDir).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	total, err := svc.CountLibraryVideos(LibraryFilter{})
+	if err != nil || total != 2 {
+		t.Fatalf("宽根下应计入两条 total=%d err=%v", total, err)
+	}
+
+	// 把根改窄到子目录：范围外那条从列表和计数里消失，但记录还在库里。
+	if err := database.DB.Model(&models.ScanDirectory{}).Where("id = ?", wideDir.ID).Update("path", keptDir).Error; err != nil {
+		t.Fatalf("改窄扫描目录失败: %v", err)
+	}
+	page, err := svc.SearchLibraryVideoPage(LibraryFilter{}, nil, 20)
+	if err != nil {
+		t.Fatalf("窄根下查询失败: %v", err)
+	}
+	if len(page.Videos) != 1 || page.Videos[0].ID != videos[0].ID {
+		t.Fatalf("窄根下只应剩范围内那条: %+v", page.Videos)
+	}
+	total, err = svc.CountLibraryVideos(LibraryFilter{})
+	if err != nil || total != 1 {
+		t.Fatalf("窄根下计数应为 1 total=%d err=%v", total, err)
+	}
+	var stillThere models.Video
+	if err := database.DB.First(&stillThere, videos[1].ID).Error; err != nil {
+		t.Fatalf("范围外记录不该被删除: %v", err)
+	}
+
+	// 根恢复：范围外那条自己回来，不需要重新扫描。
+	if err := database.DB.Model(&models.ScanDirectory{}).Where("id = ?", wideDir.ID).Update("path", root).Error; err != nil {
+		t.Fatalf("恢复扫描目录失败: %v", err)
+	}
+	total, err = svc.CountLibraryVideos(LibraryFilter{})
+	if err != nil || total != 2 {
+		t.Fatalf("恢复宽根后应重新计入两条 total=%d err=%v", total, err)
+	}
+}
+
+// 一个扫描目录都没配置时不做范围裁剪：此时没有"范围"可言，不能把整库藏起来。
+func TestLibraryViewsSkipScopeWhenNoScanDirectoryConfigured(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dir := t.TempDir()
+	video := models.Video{Name: "orphan.mp4", Path: filepath.Join(dir, "orphan.mp4"), Directory: dir}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	total, err := (&VideoService{}).CountLibraryVideos(LibraryFilter{})
+	if err != nil || total != 1 {
+		t.Fatalf("未配置扫描目录时不应裁剪 total=%d err=%v", total, err)
+	}
+}
+
+// 卷根（"/"）做扫描根：filepath.Clean 会保留尾部分隔符，前缀拼接必须不重复加，
+// 否则整库都会被裁掉。
+func TestLibraryViewsScopeHandlesVolumeRootWithoutHidingEverything(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dir := "/Volumes/think plus"
+	video := models.Video{Name: "root.mp4", Path: filepath.Join(dir, "root.mp4"), Directory: dir}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: "/"}).Error; err != nil {
+		t.Fatalf("创建卷根扫描目录失败: %v", err)
+	}
+
+	total, err := (&VideoService{}).CountLibraryVideos(LibraryFilter{})
+	if err != nil || total != 1 {
+		t.Fatalf("卷根应覆盖其下全部视频 total=%d err=%v", total, err)
+	}
+}
+
+// 顶栏计数和列表结果条必须是同一个口径，否则两个数字并排显示却对不上。
+func TestLibraryCountsMatchScopedListing(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	insideDir := filepath.Join(root, "inside")
+	outsideDir := filepath.Join(root, "outside")
+	videos := []models.Video{
+		{Name: "inside.mp4", Path: filepath.Join(insideDir, "inside.mp4"), Directory: insideDir},
+		{Name: "outside.mp4", Path: filepath.Join(outsideDir, "outside.mp4"), Directory: outsideDir},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: insideDir}).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	svc := &VideoService{}
+
+	counts, err := svc.GetLibraryCounts()
+	if err != nil {
+		t.Fatalf("读取库计数失败: %v", err)
+	}
+	listed, err := svc.CountLibraryVideos(LibraryFilter{})
+	if err != nil {
+		t.Fatalf("读取列表计数失败: %v", err)
+	}
+	if counts.VideoCount != listed {
+		t.Fatalf("顶栏计数与列表计数不一致 header=%d list=%d", counts.VideoCount, listed)
+	}
+	if counts.VideoCount != 1 {
+		t.Fatalf("范围外记录不该计入 header=%d", counts.VideoCount)
+	}
+}

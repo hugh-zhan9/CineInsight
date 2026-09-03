@@ -10,6 +10,26 @@
       <button type="button" class="btn-secondary btn-compact" data-test="image-ai-tag-review-close" @click="$emit('close')">关闭</button>
     </header>
 
+    <!-- 人物候选与 AI 标签是两批不同的候选，但都是"确认后才写库"的审阅动作，
+         放在同一个面板的两个页签下，和视频侧待审工作台同一套形状。 -->
+    <nav class="image-ai-tag-review__tabs" aria-label="图片审阅类型">
+      <button
+        type="button"
+        :class="{ active: section === 'tags' }"
+        data-test="image-ai-tag-review-tab"
+        @click="section = 'tags'"
+      >AI 标签待审</button>
+      <button
+        type="button"
+        :class="{ active: section === 'face' }"
+        data-test="image-face-cluster-review-tab"
+        @click="section = 'face'"
+      >人物候选</button>
+    </nav>
+
+    <FaceClusterReviewPanel v-if="section === 'face'" />
+
+    <template v-else>
     <div class="image-ai-tag-review__toolbar">
       <div class="image-ai-tag-review__filters" role="group" aria-label="置信度筛选">
         <button
@@ -77,6 +97,7 @@
         </li>
       </ul>
     </section>
+    </template>
   </BaseModal>
 </template>
 
@@ -86,10 +107,11 @@ import {
   RejectImageAITagCandidate, RejectImageAITagCandidatesByImage
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 
 export default {
   name: 'ImageAITagReviewPanel',
-  components: { BaseModal },
+  components: { BaseModal, FaceClusterReviewPanel },
   props: {
     visible: { type: Boolean, default: false }
   },
@@ -97,6 +119,7 @@ export default {
   data() {
     return {
       candidates: [],
+      section: 'tags',
       confidence: '',
       loading: false,
       busy: false,
@@ -132,7 +155,10 @@ export default {
   },
   watch: {
     visible(value) {
-      if (value) this.load();
+      if (value) {
+        this.section = 'tags';
+        this.load();
+      }
     }
   },
   mounted() {
@@ -234,6 +260,28 @@ export default {
   margin: 0;
   font-size: 12px;
   color: var(--text-secondary);
+}
+
+.image-ai-tag-review__tabs {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--hairline-faint);
+}
+
+.image-ai-tag-review__tabs button {
+  padding: 6px 10px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.image-ai-tag-review__tabs button.active {
+  border-bottom-color: var(--accent-color);
+  color: var(--text-primary);
 }
 
 .image-ai-tag-review__toolbar {

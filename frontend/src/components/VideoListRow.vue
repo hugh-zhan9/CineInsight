@@ -61,15 +61,19 @@
       </div>
 
       <div class="video-tags">
-        <span
-          v-for="tag in (video.tags || [])"
-          :key="tag.id"
-          class="tag-badge"
-          :style="{ backgroundColor: tagBgColor(tag.color) }"
-        >
-          {{ tag.name }}
-          <button v-if="!tag.automatic_kind" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
-        </span>
+        <!-- 标签全部展示，一个都不折叠：网格卡换行长高，列表行高是固定估算值不能换行，
+             所以改成横向滚动，滚过去仍然看得到每一个。"+ 标签"留在滚动区外面常驻。 -->
+        <div class="video-tags__strip" data-test="row-tag-strip">
+          <span
+            v-for="tag in (video.tags || [])"
+            :key="tag.id"
+            class="tag-badge"
+            :style="{ backgroundColor: tagBgColor(tag.color) }"
+          >
+            <span class="tag-badge__name">{{ tag.name }}</span>
+            <button v-if="!tag.automatic_kind" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
+          </span>
+        </div>
         <button @click="$emit('open-add-tag', video)" class="btn-add-tag">+ 标签</button>
         <button
           v-if="video._subtitleMatchText"
@@ -80,11 +84,10 @@
       </div>
     </div>
 
-    <span v-if="actionsSuspended" class="video-actions-suspended">多选中 · 行内动作已挂起</span>
-
     <!-- 常驻四个高频动作，其余七个进 ⋯。不做"悬停才出现"：
-         鼠标扫过时整列按钮闪烁反而更难扫读。 -->
-    <div v-else class="video-actions">
+         鼠标扫过时整列按钮闪烁反而更难扫读。
+         多选态下整排隐去（不留占位文案，批量操作条已经说明了当前处境）。 -->
+    <div v-if="!actionsSuspended" class="video-actions">
       <button v-if="!narrow" type="button" class="row-btn" @click="$emit('preview', video)">预览</button>
       <button type="button" class="row-btn row-btn--primary" @click="$emit('play', video.id)">播放</button>
       <button

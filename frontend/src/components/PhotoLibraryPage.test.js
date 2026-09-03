@@ -1,4 +1,16 @@
 import { flushPromises, mount } from '@vue/test-utils';
+
+// 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
+const feedback = vi.hoisted(() => ({
+  confirmAction: vi.fn(() => Promise.resolve(true)),
+  notify: vi.fn(),
+  notifyError: vi.fn(),
+  notifySuccess: vi.fn()
+}));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  ...feedback
+}));
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
@@ -9,7 +21,9 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetImageSemanticIndexStatus', 'SearchImagesSemantic',
   'RetagImage', 'ListImageAITagCandidates', 'ApproveImageAITagCandidate', 'RejectImageAITagCandidate',
   'GetImageAITaggingSummary',
-  'ListImageFolderGroups', 'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage'
+  'ListImageFolderGroups', 'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage',
+  'BatchDeleteImagesInDirectory',
+  'ListPeople', 'AddPersonImages', 'RemovePersonImage'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -100,8 +114,11 @@ beforeEach(() => {
   api.GetImageTags.mockResolvedValue([]);
   api.OpenImageDirectory.mockResolvedValue();
   api.RevealImage.mockResolvedValue();
+  api.ListPeople.mockResolvedValue([]);
+  api.AddPersonImages.mockResolvedValue();
+  api.RemovePersonImage.mockResolvedValue(false);
   // 删除后是否重新分析改为询问用户；默认答"取消"，让结果留在原地继续审阅。
-  window.confirm = vi.fn(() => false);
+  feedback.confirmAction.mockResolvedValue(false);
   // 清理审阅状态是模块级共享 store，用例之间必须清干净。
   stopPhotoCleanupPolling();
   photoCleanupStore.status = null;
@@ -260,6 +277,57 @@ describe('PhotoLibraryPage grid paging', () => {
 });
 
 describe('PhotoLibraryPage folder display', () => {
+  async function openFolderMode() {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    api.ListImageFolderGroups.mockResolvedValue([
+      { directory: '/photos', name: 'photos', count: 2, covers: [{ id: 1, name: 'one.jpg', format: 'jpg' }] }
+    ]);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('删除文件夹把该目录的图片整体移入回收站，并让分组重新拉取', async () => {
+    const wrapper = await openFolderMode();
+    feedback.confirmAction.mockResolvedValue(true);
+    api.BatchDeleteImagesInDirectory.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });
+    api.ListImageFolderGroups.mockResolvedValue([]);
+
+    await wrapper.get('[data-test="photo-folder-delete"]').trigger('click');
+    await flushPromises();
+    // eslint-disable-next-line no-console
+
+    expect(api.BatchDeleteImagesInDirectory).toHaveBeenCalledWith('/photos', false);
+    // 删空之后不该还剩一个点进去是空的文件夹
+    expect(wrapper.findAll('.photo-folder-card')).toHaveLength(0);
+  });
+
+  it('确认框答"取消"时什么都不做', async () => {
+    const wrapper = await openFolderMode();
+    feedback.confirmAction.mockResolvedValueOnce(false);
+
+    await wrapper.get('[data-test="photo-folder-delete"]').trigger('click');
+    await flushPromises();
+
+    expect(api.BatchDeleteImagesInDirectory).not.toHaveBeenCalled();
+    expect(wrapper.findAll('.photo-folder-card')).toHaveLength(1);
+  });
+
+  it('批量删除之后文件夹分组也要作废重拉，不能留着空文件夹', async () => {
+    const wrapper = await openFolderMode();
+    await wrapper.get('[data-test="photo-display-stream"]').trigger('click');
+    await flushPromises();
+    wrapper.vm.selectedImageIDs = [1, 2];
+    api.BatchDeleteImages.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });
+
+    await wrapper.vm.performBatchDelete(false);
+    await flushPromises();
+
+    expect(wrapper.vm.folderGroups).toEqual([]);
+    expect(wrapper.vm.folderLoadedOnce).toBe(false);
+  });
+
   it('loads independent folder albums and enters a folder with an exact directory filter', async () => {
     api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
     api.ListImageFolderGroups.mockResolvedValue([
@@ -444,6 +512,147 @@ describe('PhotoLibraryPage viewer', () => {
     expect(api.ListImageAITagCandidates).toHaveBeenCalledWith(3, '', '');
     expect(wrapper.get('[data-test="photo-ai-candidates"]').text()).toContain('海边');
     expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(false);
+  });
+});
+
+// D-015 / D-021：照片页人物筛选与单图人物维护。
+describe('PhotoLibraryPage people', () => {
+  function personItem(id, name, { videos = 0, images = 0 } = {}) {
+    return {
+      person: { id, display_name: name, original_name: '' },
+      avatar_url: '',
+      active_video_count: videos,
+      active_image_count: images
+    };
+  }
+
+  it('filters by person with AND semantics and drops the filter when removed', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([]));
+    api.ListPeople.mockResolvedValue([personItem(7, '周迅'), personItem(8, '张三')]);
+    const wrapper = await mountPage();
+    await openPhotoFilter(wrapper);
+
+    const input = wrapper.get('[data-test="photo-person-filter-search"]');
+    await input.trigger('focus');
+    await flushPromises();
+    expect(api.ListPeople).toHaveBeenCalledWith('', '', 0, 20);
+
+    await input.setValue('周');
+    await flushPromises();
+    expect(api.ListPeople).toHaveBeenLastCalledWith('周', '', 0, 20);
+    const options = wrapper.findAll('[data-test="photo-person-filter-options"] .photo-tag-option').map(item => item.text());
+    expect(options).toEqual(['周迅', '张三']);
+
+    await input.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.person_ids).toEqual([7]);
+    expect(wrapper.get('[data-test="photo-person-filter-chips"]').text()).toContain('周迅');
+
+    // 第二个人物是 AND 叠加，不是替换。
+    await input.trigger('focus');
+    await flushPromises();
+    await input.trigger('keydown', { key: 'ArrowDown' });
+    await input.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.person_ids).toEqual([7, 8]);
+
+    await wrapper.get('[data-test="photo-person-filter-remove-7"]').trigger('click');
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.person_ids).toEqual([8]);
+    expect(wrapper.get('[data-test="photo-person-filter-chips"]').text()).not.toContain('周迅');
+  });
+
+  it('shows and maintains the people of one image in the viewer', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(9)]));
+    api.GetImageDetail.mockResolvedValue({ image: makeImage(9), people: [personItem(3, '既有人物', { videos: 2, images: 1 })] });
+    api.ListPeople.mockResolvedValue([personItem(3, '既有人物', { videos: 2, images: 1 }), personItem(4, '新人物')]);
+    const wrapper = await mountPage();
+
+    await wrapper.get('.photo-card__media').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="photo-viewer-people"]').text()).toContain('既有人物');
+
+    const input = wrapper.get('[data-test="photo-person-search"]');
+    await input.trigger('focus');
+    await flushPromises();
+    // 已关联的人物不再出现在候选里。
+    const options = wrapper.findAll('[data-test="photo-person-options"] .photo-tag-option').map(item => item.text());
+    expect(options).toEqual(['新人物']);
+
+    await input.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(api.AddPersonImages).toHaveBeenCalledWith(4, [9]);
+
+    // 该人物还有视频关系，不需要确认。
+    await wrapper.get('[data-test="photo-person-remove-3"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.RemovePersonImage).toHaveBeenCalledWith(3, 9);
+  });
+
+  // 人物筛选生效时改动该人物的关系会改变网格成员，必须重查。
+  it('reloads the grid when the changed person is part of the active filter', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(9)]));
+    api.GetImageDetail.mockResolvedValue({ image: makeImage(9), people: [personItem(3, '筛选人物', { videos: 2, images: 1 })] });
+    api.ListPeople.mockResolvedValue([personItem(3, '筛选人物', { videos: 2, images: 1 })]);
+    const wrapper = await mountPage();
+    await openPhotoFilter(wrapper);
+
+    const filterInput = wrapper.get('[data-test="photo-person-filter-search"]');
+    await filterInput.trigger('focus');
+    await flushPromises();
+    await filterInput.trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.person_ids).toEqual([3]);
+    const queriesAfterFilter = api.SearchImagePage.mock.calls.length;
+
+    await wrapper.findAll('.photo-card__media')[0].trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="photo-person-remove-3"]').trigger('click');
+    await flushPromises();
+
+    expect(api.RemovePersonImage).toHaveBeenCalledWith(3, 9);
+    // 关系没了，这张图不再命中筛选：网格重查，筛选条件本身保留。
+    expect(api.SearchImagePage.mock.calls.length).toBeGreaterThan(queriesAfterFilter);
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.person_ids).toEqual([3]);
+    expect(wrapper.find('[data-test="photo-viewer"]').exists()).toBe(false);
+  });
+
+  it('does not reload the grid when the changed person is not filtered', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(9)]));
+    api.GetImageDetail.mockResolvedValue({ image: makeImage(9), people: [personItem(3, '无关人物', { videos: 2, images: 1 })] });
+    const wrapper = await mountPage();
+
+    await wrapper.findAll('.photo-card__media')[0].trigger('click');
+    await flushPromises();
+    const queriesBefore = api.SearchImagePage.mock.calls.length;
+
+    await wrapper.get('[data-test="photo-person-remove-3"]').trigger('click');
+    await flushPromises();
+
+    expect(api.RemovePersonImage).toHaveBeenCalledWith(3, 9);
+    expect(api.SearchImagePage.mock.calls.length).toBe(queriesBefore);
+    expect(wrapper.find('[data-test="photo-viewer"]').exists()).toBe(true);
+  });
+
+  it('confirms before removing the person\'s final relationship', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(10)]));
+    api.GetImageDetail.mockResolvedValue({ image: makeImage(10), people: [personItem(5, '最后关系', { videos: 0, images: 1 })] });
+    const wrapper = await mountPage();
+
+    await wrapper.get('.photo-card__media').trigger('click');
+    await flushPromises();
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="photo-person-remove-5"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
+    expect(api.RemovePersonImage).not.toHaveBeenCalled();
+
+    feedback.confirmAction.mockResolvedValueOnce(true);
+    await wrapper.get('[data-test="photo-person-remove-5"]').trigger('click');
+    await flushPromises();
+    expect(api.RemovePersonImage).toHaveBeenCalledWith(5, 10);
   });
 });
 
@@ -766,7 +975,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     return wrapper;
   }
 
-  it('opens the panel and polls for status without auto-starting an analysis', async () => {
+  it('opens the panel and starts an analysis when the backend has nothing to show', async () => {
     api.SearchImagePage.mockResolvedValue(makePage([]));
     const wrapper = await mountPage();
 
@@ -776,9 +985,8 @@ describe('PhotoLibraryPage cleanup review', () => {
     await flushPromises();
 
     expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
-    // 打开面板本身不另起分析；状态由共享 store 的持续轮询提供。
-    expect(api.StartImageCleanupAnalysis).not.toHaveBeenCalled();
-    expect(wrapper.find('[data-test="cleanup-idle"]').exists()).toBe(true);
+    // 与视频侧同构（用户裁决）：既没在跑也没有可用结果时，打开面板就自动分析一次。
+    expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
   });
 
   it('renders both group sections grouped by directory, auto-checks same-dir candidates, and shows the stale hash hint', async () => {
@@ -797,12 +1005,13 @@ describe('PhotoLibraryPage cleanup review', () => {
     const cards = sections[0].findAll('[data-test="cleanup-group-card"]');
     expect(cards.map(card => card.attributes('data-kind'))).toEqual(['exact', 'near']);
 
-    // 每个成员都有勾选框；默认只勾精确重复的多余副本，近似重复一律不勾。
+    // 每个成员都有勾选框；两类都按"保留推荐那份、其余勾删"预置（用户裁决）。
     const toggles = wrapper.findAll('[data-test="cleanup-candidate-toggle"]');
     expect(toggles).toHaveLength(4);
     const checked = toggles.filter(t => t.element.checked === true);
-    expect(checked).toHaveLength(1);
-    expect(checked[0].attributes('aria-label')).toContain('copy.jpg');
+    expect(checked.map(t => t.attributes('aria-label')).join(' ')).toContain('copy.jpg');
+    expect(checked.map(t => t.attributes('aria-label')).join(' ')).toContain('near-small.jpg');
+    expect(checked).toHaveLength(2);
 
     // 目录分组标题可见并显示路径。
     const dirToggles = wrapper.findAll('[data-test="cleanup-dir-toggle"]');
@@ -815,7 +1024,7 @@ describe('PhotoLibraryPage cleanup review', () => {
 
     expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('7');
     expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('浏览图片可自动刷新缩略图与指纹');
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
   });
 
   it('collapses and expands a directory group', async () => {
@@ -894,10 +1103,10 @@ describe('PhotoLibraryPage cleanup review', () => {
     await wrapper.get('[data-test="cleanup-delete-selected"]').trigger('click');
     await flushPromises();
 
-    expect(window.confirm).toHaveBeenCalledTimes(1);
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
     expect(api.StartImageCleanupAnalysis).toHaveBeenCalledTimes(1);
     expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(2);
-    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-test="cleanup-member-deleted"]')).toHaveLength(2);
     expect(wrapper.get('[data-test="cleanup-outdated-hint"]').exists()).toBe(true);
   });
 
@@ -913,14 +1122,14 @@ describe('PhotoLibraryPage cleanup review', () => {
     await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
 
-    // 精确重复的副本默认勾选；再手动勾上一张近似重复的，然后折叠目录，模拟审阅到一半。
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
+    // 两类默认都勾上；手动取消掉近似重复那张，然后折叠目录，模拟审阅到一半。
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
     const nearToggle = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
       .find(toggle => toggle.attributes('aria-label').includes('near-small'));
-    await nearToggle.setValue(true);
+    await nearToggle.setValue(false);
     await wrapper.get('[data-test="cleanup-dir-toggle"]').trigger('click');
     await flushPromises();
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
 
     // 关掉面板再打开：勾选和折叠都还在，不用从头再勾一遍。
     await wrapper.get('[data-test="photo-cleanup-page"] .btn-secondary').trigger('click');
@@ -928,7 +1137,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(1)');
     expect(wrapper.findAll('[data-test="cleanup-candidate-toggle"]')).toHaveLength(0);
   });
 
@@ -1004,7 +1213,7 @@ describe('PhotoLibraryPage cleanup review', () => {
     expect(api.RevealImage).toHaveBeenCalledWith(2);
   });
 
-  it('marks every extra copy of an exact duplicate but never pre-checks a near duplicate', async () => {
+  it('marks every extra copy of both exact and near duplicates by default', async () => {
     const wrapper = await openCleanup({
       duplicate_groups: [{
         original: makeImage(11, { name: 'keep.jpg', directory: '/photos' }),
@@ -1019,11 +1228,11 @@ describe('PhotoLibraryPage cleanup review', () => {
     await wrapper.get('[data-test="cleanup-start"]').trigger('click');
     await flushPromises();
 
-    // 精确重复：两份副本都勾上，不管在不在同一个目录；近似重复一份都不勾。
+    // 两份精确副本都勾上（不管在不在同一目录），近似重复那份也按建议勾上。
     const checkedLabels = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
       .filter(toggle => toggle.element.checked)
       .map(toggle => toggle.attributes('aria-label'));
-    expect(checkedLabels).toHaveLength(2);
+    expect(checkedLabels).toHaveLength(3);
     expect(checkedLabels.join(' ')).toContain('same-dir-copy.jpg');
     expect(checkedLabels.join(' ')).toContain('other-dir-copy.jpg');
 
@@ -1033,8 +1242,8 @@ describe('PhotoLibraryPage cleanup review', () => {
     const narrowed = wrapper.findAll('[data-test="cleanup-candidate-toggle"]')
       .filter(toggle => toggle.element.checked)
       .map(toggle => toggle.attributes('aria-label'));
-    expect(narrowed).toHaveLength(1);
-    expect(narrowed[0]).toContain('same-dir-copy.jpg');
+    expect(narrowed.join(' ')).toContain('same-dir-copy.jpg');
+    expect(narrowed.join(' ')).not.toContain('other-dir-copy.jpg');
   });
 
   it('re-reads the backend status when the panel opens so an outdated result is flagged', async () => {
@@ -1053,7 +1262,7 @@ describe('PhotoLibraryPage cleanup review', () => {
   });
 
   it('deletes only the selected candidates into the trash and re-analyses when confirmed', async () => {
-    window.confirm.mockReturnValue(true);
+    feedback.confirmAction.mockResolvedValue(true);
     const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] });
 
     await wrapper.get('[data-test="cleanup-start"]').trigger('click');

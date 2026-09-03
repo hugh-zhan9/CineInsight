@@ -37,6 +37,8 @@ type TechnicalBackfillStatus struct {
 	StartedAt        *time.Time                 `json:"started_at" ts_type:"string"`
 	UpdatedAt        *time.Time                 `json:"updated_at" ts_type:"string"`
 	Failures         []TechnicalBackfillFailure `json:"failures"`
+	// Gate 是空闲门状态（D-032）：自动路径被挡住时这里说明原因，显式启动恒为零值。
+	Gate TaskGateState `json:"gate"`
 }
 
 type technicalBackfillCandidate struct {
@@ -53,6 +55,8 @@ type TechnicalBackfillService struct {
 	cancel         context.CancelFunc
 	emitter        func(TechnicalBackfillStatus)
 	worker         sync.WaitGroup
+	registry       *BackgroundTaskRegistry
+	pauseHook      TaskPauseHook
 }
 
 func NewTechnicalBackfillService(probe *MediaProbeService) *TechnicalBackfillService {
@@ -71,7 +75,42 @@ func (s *TechnicalBackfillService) SetEventEmitter(emitter func(TechnicalBackfil
 	s.emitter = emitter
 }
 
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+func (s *TechnicalBackfillService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.mu.Lock()
+	s.registry = registry
+	s.mu.Unlock()
+}
+
+func (s *TechnicalBackfillService) waitForPauseHook(ctx context.Context) error {
+	s.mu.Lock()
+	hook := s.pauseHook
+	s.mu.Unlock()
+	if hook == nil {
+		return nil
+	}
+	// 钩子在服务锁之外调用：它会阻塞很久，持锁等待会连 Status/Cancel 一起冻住。
+	return hook.Wait(ctx, s.setGateState)
+}
+
+func (s *TechnicalBackfillService) setGateState(state TaskGateState) {
+	s.updateItem(func(status *TechnicalBackfillStatus) { status.Gate = state })
+}
+
+// Start 是显式启动路径：同一把锁下摘掉当前这一轮的项间检查点，
+// 用户主动点的任务永远不被空闲门挡住（D-030）。
 func (s *TechnicalBackfillService) Start(parent context.Context) (TechnicalBackfillStatus, error) {
+	return s.start(parent, nil)
+}
+
+// StartWithPauseHook 是自动路径专用：装钩子与翻 Running 在同一把锁里完成。
+// 服务已经在跑时按"已在运行"返回且不装钩子——那一轮可能是用户显式启动的，
+// 中途给它补装检查点等于把显式任务也关进门里。
+func (s *TechnicalBackfillService) StartWithPauseHook(parent context.Context, hook TaskPauseHook) (TechnicalBackfillStatus, error) {
+	return s.start(parent, hook)
+}
+
+func (s *TechnicalBackfillService) start(parent context.Context, hook TaskPauseHook) (TechnicalBackfillStatus, error) {
 	if s == nil || s.probe == nil {
 		return TechnicalBackfillStatus{}, errors.New("technical backfill service is not initialized")
 	}
@@ -79,11 +118,14 @@ func (s *TechnicalBackfillService) Start(parent context.Context) (TechnicalBackf
 		parent = context.Background()
 	}
 	s.mu.Lock()
+	releasing := clearReplacedPauseHook(&s.pauseHook, hook)
 	if s.status.Running {
 		status := s.snapshotLocked()
 		s.mu.Unlock()
+		releaseTaskPauseHook(releasing)
 		return status, nil
 	}
+	s.pauseHook = hook
 	now := time.Now()
 	s.status = TechnicalBackfillStatus{
 		Running:   true,
@@ -95,12 +137,15 @@ func (s *TechnicalBackfillService) Start(parent context.Context) (TechnicalBackf
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
 	status := s.snapshotLocked()
-	emitter := s.emitter
+	emitter, registry := s.emitter, s.registry
 	s.worker.Add(1)
 	s.mu.Unlock()
+	releaseTaskPauseHook(releasing)
+	registry.Begin(BackgroundTaskTechnical)
 	emitTechnicalBackfillStatus(emitter, status)
 	go func() {
 		defer s.worker.Done()
+		defer registry.End(BackgroundTaskTechnical)
 		s.prepareAndRun(ctx)
 	}()
 	return status, nil
@@ -214,6 +259,9 @@ func (s *TechnicalBackfillService) run(ctx context.Context, candidates []technic
 		if ctx.Err() != nil {
 			break
 		}
+		if err := s.waitForPauseHook(ctx); err != nil {
+			break
+		}
 		s.setCurrent(candidate)
 		var video models.Video
 		if err := database.DB.Select("id", "name", "path").First(&video, candidate.ID).Error; err != nil {
@@ -315,6 +363,7 @@ func (s *TechnicalBackfillService) finish(cancelled bool) {
 	s.status.Completed = !cancelled
 	s.status.CurrentVideoID = 0
 	s.status.CurrentVideoName = ""
+	s.status.Gate = TaskGateState{}
 	now := time.Now()
 	s.status.UpdatedAt = &now
 	cancel := s.cancel

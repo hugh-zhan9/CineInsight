@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"video-master/internal/appdata"
 	"video-master/models"
 
 	"github.com/joho/godotenv"
@@ -33,7 +34,7 @@ func defaultSqlitePath() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("获取用户目录失败: %w", err)
 	}
-	return filepath.Join(homeDir, ".video-master", "video-master.db"), nil
+	return filepath.Join(homeDir, appdata.DirName, "video-master.db"), nil
 }
 
 func postgresDSNFromEnv() (string, error) {

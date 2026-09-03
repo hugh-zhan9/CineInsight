@@ -542,6 +542,27 @@ func (s *ImageService) BatchDeleteImages(imageIDs []uint, deleteFile bool) *Batc
 	return result
 }
 
+// BatchDeleteImagesInDirectory 把某个文件夹里的图片整体移入回收站。只处理这个目录
+// 直属的图片，不递归子目录——文件夹视图本来就是按直属目录分组的，递归会删掉用户
+// 在界面上根本没看到的东西。磁盘上的目录本身不动。
+func (s *ImageService) BatchDeleteImagesInDirectory(directory string, deleteFile bool) (*BatchImageOperationResult, error) {
+	cleaned := strings.TrimSpace(directory)
+	if cleaned == "" {
+		return nil, fmt.Errorf("目录为空")
+	}
+	var ids []uint
+	if err := database.DB.Model(&models.Image{}).
+		Where("directory = ?", cleaned).
+		Order("id ASC").
+		Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, fmt.Errorf("目录里没有可删除的图片：%s", cleaned)
+	}
+	return s.BatchDeleteImages(ids, deleteFile), nil
+}
+
 // OpenImageDirectory 打开图片目录。只接受库里确实存在图片的目录，
 // 避免把"用系统默认程序打开任意路径"变成一个无约束的接口。
 func (s *ImageService) OpenImageDirectory(directory string) error {

@@ -123,6 +123,7 @@
 <script>
 import { CreateTag, MergeTags, UpdateTag } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 
 export default {
   name: 'TagManagerDialog',
@@ -275,14 +276,14 @@ export default {
     async saveTag(tag) {
       const name = (tag.name || '').trim();
       if (!name) {
-        alert('标签名称不能为空');
+        notify('标签名称不能为空');
         return;
       }
       try {
         await UpdateTag(tag.id, name, tag.color);
         this.$emit('tags-changed');
       } catch (err) {
-        alert('更新失败: ' + err);
+        notifyError('更新失败: ' + err);
       }
     },
     async handleMergeTags() {
@@ -295,7 +296,7 @@ export default {
         .filter(tag => sourceIds.includes(Number(tag.id)))
         .map(tag => `「${tag.name}」`)
         .join('、');
-      if (!target || !window.confirm(`确定将 ${sourceNames} 合并到「${target.name}」吗？源标签会被删除，此操作不能自动撤销。`)) return;
+      if (!target || !await confirmAction({ title: '合并标签', message: `确定将 ${sourceNames} 合并到「${target.name}」吗？源标签会被删除，此操作不能自动撤销。`, confirmText: '合并', danger: true })) return;
       this.mergeLoading = true;
       this.mergeError = '';
       try {
@@ -318,9 +319,6 @@ export default {
 .tag-edit-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-bottom: 1px solid var(--border-color); }
 .tag-list-container::-webkit-scrollbar { width: 4px; }
 .merge-type-row { display: grid; grid-template-columns: 72px minmax(0, 1fr); align-items: center; gap: 10px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
-.merge-type-switch { display: grid; grid-template-columns: 1fr 1fr; padding: 3px; border: 1px solid var(--border-color); border-radius: 9px; background: var(--control-bg); }
-.merge-type-switch button { min-height: 30px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); cursor: pointer; font-size: 12px; }
-.merge-type-switch button.active { background: var(--accent-soft); color: var(--accent-color); font-weight: 600; }
 .merge-filter-input { width: calc(100% - 16px); margin: 8px 8px 0; }
 .tag-list-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
 .tag-list-count { color: var(--text-secondary); font-size: 12px; }

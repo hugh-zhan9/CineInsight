@@ -18,7 +18,9 @@ const baseStats = {
   generated_at: '2026-09-01T12:00:00Z',
   summary: { video_count: 4, total_duration: 4 * 3600, total_size: 10, watched_count: 1, watched_percent: 25, recent_added_count: 2 },
   watch_heatmap: [],
-  rating_distribution: [{ rating: 7, count: 1 }, { rating: 8.5, count: 3 }]
+  rating_distribution: [{ rating: 7, count: 1 }, { rating: 8.5, count: 3 }],
+  total_play_events: 0,
+  plays_by_source: {}
 };
 
 describe('InsightsPage 摘要副行', () => {
@@ -59,6 +61,33 @@ describe('InsightsPage 摘要副行', () => {
     const empty = mountWith(baseStats, []);
     expect(empty.vm.volumeSummaryText).toBe('');
     empty.unmount();
+    wrapper.unmount();
+  });
+
+  it('播放事件总数与来源拆分显示在摘要副行', () => {
+    const wrapper = mountWith({
+      ...baseStats,
+      total_play_events: 1234,
+      plays_by_source: { desktop_play: 800, desktop_random: 300, mobile_feed: 100, legacy: 34 }
+    });
+    expect(wrapper.vm.playEventsSummaryText)
+      .toBe('播放事件 1,234 · 桌面 800 · 随机 300 · 手机 100 · 历史 34');
+    wrapper.unmount();
+  });
+
+  it('来源为空时只显示总数，计数为 0 的来源不占位', () => {
+    const wrapper = mountWith({ ...baseStats, total_play_events: 0, plays_by_source: {} });
+    expect(wrapper.vm.playEventsSummaryText).toBe('播放事件 0');
+    wrapper.vm.stats = { ...baseStats, total_play_events: 5, plays_by_source: { desktop_play: 5, mobile_feed: 0 } };
+    expect(wrapper.vm.playEventsSummaryText).toBe('播放事件 5 · 桌面 5');
+    wrapper.unmount();
+  });
+
+  it('后端缺字段时不报错，认不出的来源按原样列出', () => {
+    const wrapper = mountWith({ ...baseStats, total_play_events: undefined, plays_by_source: undefined });
+    expect(wrapper.vm.playEventsSummaryText).toBe('播放事件 0');
+    wrapper.vm.stats = { ...baseStats, total_play_events: 2, plays_by_source: { future_source: 2 } };
+    expect(wrapper.vm.playEventsSummaryText).toBe('播放事件 2 · future_source 2');
     wrapper.unmount();
   });
 

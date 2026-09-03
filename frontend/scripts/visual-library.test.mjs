@@ -43,4 +43,8 @@ assert.match(appShell, /<PhotoLibraryPage[^>]*v-show="currentPage === 'photos'"/
 assert.match(photoPage, /pageActive\(active\)/, 'photo page should react to becoming active again');
 assert.match(photoPage, /restoreScrollPosition\(\)\s*{/, 'photo page should restore the shared scroll position');
 
+// 勾选之后往下滚，批量操作条必须跟着吸顶，否则要滚回顶部才能点"删除所选"。
+assert.match(photoPage, /\.photo-toolbar\s*{[^}]*position:\s*sticky/s, 'photo toolbar should stick so batch actions stay reachable');
+assert.match(photoPage, /\.photo-selection-tools\b/, 'batch actions live inside the sticky toolbar');
+
 console.log('visual-library tests passed');

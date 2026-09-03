@@ -78,6 +78,33 @@ type subtitleTaskQueue struct {
 	workerStarted bool
 	emit          func(SubtitleQueueSnapshot)
 	executor      subtitleTaskExecutor
+	registry      *BackgroundTaskRegistry
+	notifier      DesktopNotifier
+}
+
+// SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
+// 定义在队列这一侧：字幕任务的运行区间就是队列 worker 的一次 execute，
+// 与 SubtitleService 的其余部分无关。
+func (s *SubtitleService) SetBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	s.subtitleTaskQueue().setBackgroundTaskRegistry(registry)
+}
+
+func (q *subtitleTaskQueue) setBackgroundTaskRegistry(registry *BackgroundTaskRegistry) {
+	q.mu.Lock()
+	q.registry = registry
+	q.mu.Unlock()
+}
+
+// SetDesktopNotifier 接入桌面通知（D-013）。与登记表同理放在队列这一侧：
+// 字幕任务的终态就是队列 worker 拿到的那一份 result/err。
+func (s *SubtitleService) SetDesktopNotifier(notifier DesktopNotifier) {
+	s.subtitleTaskQueue().setDesktopNotifier(notifier)
+}
+
+func (q *subtitleTaskQueue) setDesktopNotifier(notifier DesktopNotifier) {
+	q.mu.Lock()
+	q.notifier = notifier
+	q.mu.Unlock()
 }
 
 func newSubtitleTaskQueue(emit func(SubtitleQueueSnapshot), executor subtitleTaskExecutor) *subtitleTaskQueue {
@@ -226,6 +253,9 @@ func (q *subtitleTaskQueue) worker() {
 
 		result, err := q.execute(ctx, task)
 		cancel()
+		// 通知放在 close(task.done) 之前：execute 的 defer 已经把登记表 End 掉
+		// （角标先减），此刻正是这一项的终态，而等待 submit 的调用方也还没返回。
+		q.notifyTerminal(task, result, err)
 
 		q.mu.Lock()
 		finishedAt := time.Now()
@@ -242,10 +272,36 @@ func (q *subtitleTaskQueue) worker() {
 	}
 }
 
+// notifyTerminal 在字幕任务走到终态时发一条系统通知（D-013）。
+// 取消不发：那是用户自己按的，桌面上再弹一条只是噪音。
+func (q *subtitleTaskQueue) notifyTerminal(task *subtitleQueueTask, result *SubtitleGenerateResult, err error) {
+	q.mu.Lock()
+	notifier := q.notifier
+	q.mu.Unlock()
+	if notifier == nil {
+		return
+	}
+	name := notificationMediaName(task.VideoName)
+	switch {
+	case err != nil:
+		// 失败原因不进通知文案：识别与转写的报错里经常带绝对路径。
+		notifyDesktop(notifier, "字幕生成失败", fmt.Sprintf("《%s》字幕生成失败，可在字幕任务面板查看原因", name))
+	case result != nil && result.Status == SubtitleResultStatusValidationFailed:
+		notifyDesktop(notifier, "字幕需要确认", fmt.Sprintf("《%s》检测到疑似模型幻觉，需要确认是否强制生成", name))
+	case result != nil && result.Status == SubtitleResultStatusSuccess:
+		notifyDesktop(notifier, "字幕生成完成", fmt.Sprintf("《%s》字幕已生成", name))
+	}
+}
+
 func (q *subtitleTaskQueue) execute(ctx context.Context, task *subtitleQueueTask) (*SubtitleGenerateResult, error) {
 	if q.executor == nil {
 		return nil, fmt.Errorf("subtitle task executor is nil")
 	}
+	q.mu.Lock()
+	registry := q.registry
+	q.mu.Unlock()
+	registry.Begin(BackgroundTaskSubtitle)
+	defer registry.End(BackgroundTaskSubtitle)
 	return q.executor(ctx, task)
 }
 

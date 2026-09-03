@@ -114,9 +114,14 @@
           </div>
           <details class="detail-create-box">
             <summary>明确新建人物（允许同名）</summary>
-            <input v-model="newPerson.displayName" placeholder="显示姓名" maxlength="200" />
-            <input v-model="newPerson.originalName" placeholder="原始姓名（可空）" maxlength="200" />
-            <button type="button" class="btn-secondary" :disabled="creatingPerson" @click="createAndSelectPerson">{{ creatingPerson ? '创建中...' : '新建并加入' }}</button>
+            <!-- 展开内容必须自己是布局容器：details 的内容在 WebKit 里走 shadow slot，
+                 在 details 上写 display:grid 只作用到 summary 和整块内容之间，
+                 内容里的这几个控件不是网格项，间距管不到它们。 -->
+            <div class="detail-create-box__fields">
+              <input v-model="newPerson.displayName" placeholder="显示姓名" maxlength="200" />
+              <input v-model="newPerson.originalName" placeholder="原始姓名（可空）" maxlength="200" />
+              <button type="button" class="btn-secondary" :disabled="creatingPerson" @click="createAndSelectPerson">{{ creatingPerson ? '创建中...' : '新建并加入' }}</button>
+            </div>
           </details>
         </section>
 
@@ -141,6 +146,30 @@
           </div>
           <p class="technical-status" :class="`technical-status--${details.technical_status?.state}`">{{ technicalStatusLabel }}</p>
           <p v-if="technicalError || details.technical_metadata?.last_error" class="detail-error-text">最近错误：{{ technicalError || details.technical_metadata.last_error }}</p>
+
+          <!-- 播放代理（D-004、D-006）：mkv/avi 这类容器在应用内播不了，
+               生成一份 mp4 代理之后预览与手机端自动改用它，源文件不动。 -->
+          <div class="proxy-block" data-test="preview-proxy-block">
+            <p class="proxy-block__status" data-test="preview-proxy-status">{{ proxyStatusText }}</p>
+            <p v-if="proxyError" class="detail-error-text" data-test="preview-proxy-error">{{ proxyError }}</p>
+            <div class="detail-action-row">
+              <button
+                type="button"
+                class="btn-secondary btn-compact"
+                data-test="preview-proxy-create"
+                :disabled="proxyBusy"
+                @click="createPlaybackProxy"
+              >{{ proxyBusy ? '生成中...' : '生成播放代理' }}</button>
+              <button
+                v-if="playbackProxy"
+                type="button"
+                class="btn-secondary btn-compact btn-danger-outline"
+                data-test="preview-proxy-delete"
+                :disabled="proxyBusy"
+                @click="deletePlaybackProxy"
+              >删除此代理</button>
+            </div>
+          </div>
           <dl class="technical-grid">
             <dt>容器</dt><dd>{{ details.technical_metadata?.format_long_name || details.technical_metadata?.format_name || '未知' }}</dd>
             <dt>大小</dt><dd>{{ formatBytes(details.video.size) }}</dd>
@@ -226,6 +255,32 @@
           </div>
           <p v-if="!(personDetail.videos || []).length" class="detail-empty">当前没有活跃关联视频。软删除视频的关系仍会保留。</p>
         </section>
+        <section class="detail-section" data-test="person-image-section">
+          <div class="detail-section__heading"><h4>关联图片（{{ personDetail.person.active_image_count || 0 }}）</h4><span>与视频分开分页</span></div>
+          <p v-if="personImageError" class="detail-error-text">{{ personImageError }}</p>
+          <div v-if="personImages.length" class="person-image-grid">
+            <figure v-for="image in personImages" :key="image.id" class="person-image-card">
+              <img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" />
+              <figcaption :title="image.name">{{ image.name }}</figcaption>
+              <button
+                type="button"
+                class="btn-secondary btn-compact"
+                :disabled="isPersonImageUpdating(image.id)"
+                :data-test="`person-image-remove-${image.id}`"
+                @click="removePersonImageRelation(image)"
+              >{{ isPersonImageUpdating(image.id) ? '处理中...' : '解除关联' }}</button>
+            </figure>
+          </div>
+          <p v-else class="detail-empty">当前没有活跃关联图片。软删除图片的关系仍会保留。</p>
+          <button
+            v-if="personImageCursor"
+            type="button"
+            class="btn-secondary"
+            :disabled="personImagesLoading"
+            data-test="person-image-more"
+            @click="loadMorePersonImages"
+          >{{ personImagesLoading ? '加载中...' : '加载更多关联图片' }}</button>
+        </section>
       </template>
 
       <template v-else-if="currentEntry?.type === 'collection' && collectionDetail">
@@ -294,6 +349,13 @@
           </div>
           <p v-if="!(collectionDetail.videos || []).length" class="detail-empty">作品集尚无视频。</p>
         </section>
+        <section class="detail-section">
+          <div class="detail-section__heading"><h4>术语表</h4><span>字幕翻译</span></div>
+          <GlossaryEditor
+            :collection-id="Number(currentEntry.id)"
+            hint="这些术语只在本作品集的视频里生效，并覆盖同名的全局条目。"
+          />
+        </section>
       </template>
     </div>
   </aside>
@@ -302,16 +364,20 @@
 <script>
 import {
   AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
-  RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
-  SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails
+  GetPersonImages, RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonImage, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
+  SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails,
+  CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy
 } from '../../wailsjs/go/main/App';
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
+import GlossaryEditor from './GlossaryEditor.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
+import { confirmAction } from '../utils/feedback.js';
+import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyStrategyLabel } from '../utils/playbackProxy.js';
 
 export default {
   name: 'PreviewDrawer',
-  components: { RelatedVideoItem },
+  components: { GlossaryEditor, RelatedVideoItem },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
@@ -320,7 +386,7 @@ export default {
     resumePositionSeconds: { type: Number, default: 0 },
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut'],
+  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale'],
   data() {
     return {
       navigator: null, currentEntry: null, canGoBack: false,
@@ -328,10 +394,14 @@ export default {
       details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', personalRating: '', personIDs: [], collectionIDs: [] },
       personKeyword: '', personCandidates: [], creatingPerson: false, collectionKeyword: '', collectionCandidates: [], collectionCursorName: '', collectionCursorID: 0, collectionHasMore: false, collectionSearching: false, newPerson: { displayName: '', originalName: '' },
       personDetail: null, personEdit: { displayName: '', originalName: '' },
+      // 图片区块与视频区块各自分页、不混排（D-021）：首页来自 GetPersonDetail，
+      // 后续页走 GetPersonImages。
+      personImages: [], personImageCursor: 0, personImagesLoading: false, personImageUpdatingIDs: [], personImageError: '',
       collectionDetail: null, collectionEdit: { name: '', description: '' }, draggedMemberIndex: -1,
       relatedVideoKeyword: '', relatedVideoDirectory: '', relatedVideoDirectories: [], relatedVideoCandidates: [], relatedVideoSelection: [], relatedVideoCursor: null, relatedVideoHasMore: false, relatedVideoSearching: false, relatedVideoSearchPerformed: false, relatedVideoUpdatingIDs: [], relatedVideoError: '',
       appliedSeekKey: '', lastProgressEmittedAt: 0, resettingVideo: false, hasPlaybackStarted: false,
-      seekPreview: null, seekSpriteUnavailable: false, seekSpriteRetryCount: 0, seekSpriteRetryTimer: null
+      seekPreview: null, seekSpriteUnavailable: false, seekSpriteRetryCount: 0, seekSpriteRetryTimer: null,
+      playbackProxy: null, proxyBusy: false, proxyError: ''
     };
   },
   computed: {
@@ -390,6 +460,23 @@ export default {
     technicalStatusLabel() {
       const state = this.details?.technical_status?.state;
       return { unprobed: '尚未读取', current: '快照与当前文件一致', stale: '文件已变化，快照可能过期', error: '最近读取失败' }[state] || '状态未知';
+    },
+    // 会话里带 proxy 就说明这次内嵌播放走的是代理（后端 D-004 标注），
+    // 这里直说出来——否则用户会以为应用能直接播 mkv。
+    playingThroughProxy() {
+      return Boolean(this.currentSession?.proxy);
+    },
+    proxyStatusText() {
+      if (this.playingThroughProxy) {
+        const proxy = this.currentSession.proxy;
+        return `当前正经播放代理播放（${playbackProxyStrategyLabel(proxy.strategy)}，${this.formatBytes(proxy.size)}）。`;
+      }
+      const row = this.playbackProxy;
+      if (!row) return '尚未生成播放代理。源文件能不能在应用内直接播，取决于它的容器格式。';
+      if (row.status === 'failed') {
+        return `上次生成失败：${row.last_error || '原因未记录'}`;
+      }
+      return `已有播放代理（${playbackProxyStrategyLabel(row.strategy)}，${this.formatBytes(row.output_size)}）。`;
     }
   },
   watch: {
@@ -456,6 +543,8 @@ export default {
           this.details = details;
           this.technicalError = '';
           this.nestedSession = nestedSession;
+          this.playbackProxy = null; this.proxyError = ''; this.proxyBusy = false;
+          this.loadPlaybackProxy(Number(entry.id), requestToken);
           this.draft = createVideoDetailsDraft(details);
           this._personSearchToken = Symbol('person-search'); this.personCandidates = [...(details.people || [])];
           this.collectionKeyword = ''; this._collectionSearchToken = Symbol('collection-search'); this.collectionSearching = false;
@@ -467,6 +556,9 @@ export default {
           if (this._entryLoadToken !== requestToken) return;
           this.personDetail = personDetail;
           this.personEdit = { displayName: personDetail.person.person.display_name || '', originalName: personDetail.person.person.original_name || '' };
+          this.personImages = personDetail.images || [];
+          this.personImageCursor = Number(personDetail.next_image_id || 0);
+          this.personImagesLoading = false; this.personImageUpdatingIDs = []; this.personImageError = '';
         } else {
           const collectionDetail = await GetCollectionDetail(entry.id);
           if (this._entryLoadToken !== requestToken) return;
@@ -603,7 +695,9 @@ export default {
     async removeRelatedVideo(video) {
       const type = this.currentEntry?.type; const entityID = Number(this.currentEntry?.id); const videoID = Number(video?.id);
       if (!entityID || !videoID || this.isRelatedVideoUpdating(videoID) || !['person', 'collection'].includes(type)) return;
-      if (type === 'person' && Number(this.personDetail?.person?.active_video_count || 0) <= 1 && !window.confirm('这是该人物最后一个活跃关联视频。若没有软删除视频保留的关系，解除后人物也会被删除，确定继续吗？')) return;
+      // 最后关系判定跨视频与图片（D-015）：还有图片关系时解除视频关系不会删人物，
+      // 那种情况下不该吓唬用户。
+      if (type === 'person' && this.isPersonFinalRelation({ videoDelta: 1 }) && !await confirmAction({ title: '解除关联', message: '这是该人物最后一个活跃关联媒体。若没有软删除媒体保留的关系，解除后人物也会被删除，确定继续吗？', confirmText: '解除', danger: true })) return;
       this.setRelatedVideoUpdating(videoID, true); this.relatedVideoError = '';
       try {
         if (type === 'person') {
@@ -622,6 +716,53 @@ export default {
         if (this.isCurrentEntity(type, entityID)) await this.loadCurrentEntry();
       } catch (err) { if (this.isCurrentEntity(type, entityID)) this.relatedVideoError = `解除视频关联失败：${err}`; }
       finally { this.setRelatedVideoUpdating(videoID, false); }
+    },
+    // 这一次解除会不会解掉人物的最后一条关系：videoDelta / imageDelta 指出本次
+    // 解除的是哪一侧的一条关系。两侧活跃计数都归零才算最后一条。
+    isPersonFinalRelation({ videoDelta = 0, imageDelta = 0 } = {}) {
+      const videos = Number(this.personDetail?.person?.active_video_count || 0) - videoDelta;
+      const images = Number(this.personDetail?.person?.active_image_count || 0) - imageDelta;
+      return videos <= 0 && images <= 0;
+    },
+    isPersonImageUpdating(imageID) { return this.personImageUpdatingIDs.includes(Number(imageID)); },
+    async loadMorePersonImages() {
+      const personID = Number(this.currentEntry?.id);
+      if (this.currentEntry?.type !== 'person' || !personID || !this.personImageCursor || this.personImagesLoading) return;
+      const cursor = this.personImageCursor;
+      const requestToken = this._entryLoadToken;
+      this.personImagesLoading = true; this.personImageError = '';
+      try {
+        const page = await GetPersonImages(personID, cursor, 200);
+        if (this._entryLoadToken !== requestToken || !this.isCurrentEntity('person', personID)) return;
+        this.personImages = [...this.personImages, ...(page?.images || [])];
+        this.personImageCursor = Number(page?.next_image_id || 0);
+      } catch (err) {
+        if (this.isCurrentEntity('person', personID)) this.personImageError = `加载关联图片失败：${err}`;
+      } finally {
+        if (this._entryLoadToken === requestToken) this.personImagesLoading = false;
+      }
+    },
+    async removePersonImageRelation(image) {
+      const personID = Number(this.currentEntry?.id); const imageID = Number(image?.id);
+      if (this.currentEntry?.type !== 'person' || !personID || !imageID || this.isPersonImageUpdating(imageID)) return;
+      if (this.isPersonFinalRelation({ imageDelta: 1 }) && !await confirmAction({ title: '解除关联', message: '这是该人物最后一个活跃关联媒体。若没有软删除媒体保留的关系，解除后人物也会被删除，确定继续吗？', confirmText: '解除', danger: true })) return;
+      this.personImageUpdatingIDs = [...new Set([...this.personImageUpdatingIDs, imageID])]; this.personImageError = '';
+      try {
+        const personDeleted = await RemovePersonImage(personID, imageID);
+        if (personDeleted) {
+          this.$emit('person-deleted', personID);
+          if (this.isCurrentEntity('person', personID)) {
+            if (this.canGoBack) await this.goBack(); else this.$emit('close');
+          }
+          return;
+        }
+        this.$emit('relations-updated', { type: 'person', id: personID });
+        if (this.isCurrentEntity('person', personID)) await this.loadCurrentEntry();
+      } catch (err) {
+        if (this.isCurrentEntity('person', personID)) this.personImageError = `解除图片关联失败：${err}`;
+      } finally {
+        this.personImageUpdatingIDs = this.personImageUpdatingIDs.filter(item => item !== imageID);
+      }
     },
     updateCollectionCursor(page) {
       const last = page[page.length - 1];
@@ -679,6 +820,64 @@ export default {
       }
       finally { if (this._technicalRefreshToken === operationToken) this.refreshingTechnical = false; }
     },
+    // ===== 播放代理（D-004、D-006）=====
+    // 生成是后台单 worker 任务，这里等它跑完这一项再回读元数据：
+    // 用户点完按钮总要看到结果，抽屉里没有别的地方能显示进度。
+    async loadPlaybackProxy(videoID, entryToken) {
+      try {
+        const proxy = await GetPlaybackProxy(videoID);
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.playbackProxy = proxy || null;
+      } catch (err) {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyError = `读取播放代理状态失败：${err}`;
+      }
+    },
+    async createPlaybackProxy() {
+      if (this.proxyBusy || this.currentEntry?.type !== 'video') return;
+      const videoID = Number(this.currentEntry.id); const entryToken = this._entryLoadToken;
+      this.proxyBusy = true; this.proxyError = '';
+      try {
+        const status = await CreatePlaybackProxy(videoID);
+        const item = (status?.results || []).find(result => Number(result.video_id) === videoID);
+        if (item && item.code !== 'created' && item.code !== 'already_exists' && this.isCurrentVideoRequest(videoID, entryToken)) {
+          this.proxyError = `生成播放代理失败：${PLAYBACK_PROXY_CODE_LABELS[item.code] || item.code}`;
+        }
+      } catch (err) {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyError = `生成播放代理失败：${err}`;
+      } finally {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyBusy = false;
+        await this.loadPlaybackProxy(videoID, entryToken);
+        await this.reloadPreviewSessionForProxy(videoID, entryToken);
+      }
+    },
+    async deletePlaybackProxy() {
+      if (this.proxyBusy || this.currentEntry?.type !== 'video') return;
+      if (!await confirmAction({ title: '删除播放代理', message: '删除这份播放代理？源文件不受影响，需要时可以重新生成。', confirmText: '删除', danger: true })) return;
+      const videoID = Number(this.currentEntry.id); const entryToken = this._entryLoadToken;
+      this.proxyBusy = true; this.proxyError = '';
+      try {
+        await DeletePlaybackProxy(videoID);
+      } catch (err) {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyError = `删除播放代理失败：${err}`;
+      } finally {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyBusy = false;
+        await this.loadPlaybackProxy(videoID, entryToken);
+        await this.reloadPreviewSessionForProxy(videoID, entryToken);
+      }
+    },
+    // 代理增删之后预览会话的 mode 会变（外部预览 <-> 内嵌），只有嵌套条目
+    // 的会话由抽屉自己持有；根条目的会话归片库页，交给它自己刷。
+    async reloadPreviewSessionForProxy(videoID, entryToken) {
+      if (Number(videoID) === Number(this.video?.id)) {
+        this.$emit('preview-session-stale', videoID);
+        return;
+      }
+      try {
+        const session = await GetPreviewSession(videoID);
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.nestedSession = session;
+      } catch (err) {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyError = `刷新预览会话失败：${err}`;
+      }
+    },
     async savePerson() { try { await UpdatePerson(this.currentEntry.id, this.personEdit.displayName, this.personEdit.originalName); await this.loadCurrentEntry(); } catch (err) { this.error = String(err); } },
     async replacePersonAvatar() { try { const path = await SelectPersonAvatar(); if (path) { await SetPersonAvatar(this.currentEntry.id, path); await this.loadCurrentEntry(); } } catch (err) { this.error = String(err); } },
     async removePersonAvatar() { try { await RemovePersonAvatar(this.currentEntry.id); await this.loadCurrentEntry(); } catch (err) { this.error = String(err); } },
@@ -686,7 +885,7 @@ export default {
     async replaceCollectionCover() { try { const path = await SelectCollectionCover(); if (path) { await SetCollectionCover(this.currentEntry.id, path); await this.loadCurrentEntry(); } } catch (err) { this.error = String(err); } },
     async removeCollectionCover() { try { await RemoveCollectionCover(this.currentEntry.id); await this.loadCurrentEntry(); } catch (err) { this.error = String(err); } },
     async deleteCollection() {
-      if (!window.confirm('删除作品集？其中的视频不会被删除。')) return;
+      if (!await confirmAction({ title: '删除作品集', message: '删除作品集？其中的视频不会被删除。', confirmText: '删除', danger: true })) return;
       try { const id = this.currentEntry.id; await DeleteCollection(id); this.$emit('collection-deleted', id); if (this.canGoBack) await this.goBack(); else this.$emit('close'); }
       catch (err) { this.error = String(err); }
     },
@@ -773,6 +972,14 @@ export default {
 </script>
 
 <style scoped>
+/* 这一排动作按钮原本没有任何样式：靠行内空白撑横向间隙，换行后两行会贴死。 */
+.detail-inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
 /* 原型 A4：抽屉固定 520px 并排停靠，不再是圆角浮块；
    窗口窄于 1100 改为覆盖式，列表不再收窄（收窄到放不下反而更难用）。 */
 .preview-drawer { position: fixed; top: 52px; right: 0; bottom: 0; width: 520px; border-left: 1px solid var(--hairline); border-radius: 0; background: var(--panel-bg); box-shadow: var(--shadow-drawer); display: flex; flex-direction: column; z-index: 140; overflow: hidden; }
@@ -795,12 +1002,17 @@ export default {
 .detail-rating-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; }.detail-rating-input > span { color: var(--text-muted); font-size: 13px; }.detail-field small { color: var(--text-muted); font-size: 11px; font-weight: 400; }
 .detail-secondary,.detail-empty { font-size: 12px; color: var(--text-muted); word-break: break-all; }.detail-error,.detail-error-text { color: var(--danger-color); }.detail-error { padding: 18px; border: 1px solid var(--danger-color); border-radius: 12px; }
 .entity-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }.entity-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border-color); border-radius: 999px; padding: 4px 9px 4px 5px; background: var(--control-hover-bg); color: var(--text-primary); }.entity-chip img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }.entity-chip__remove { color: var(--danger-color); font-size: 16px; }
-.detail-inline-form,.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }.detail-inline-form input { flex: 1; }.candidate-list { display: grid; gap: 6px; }.candidate-list button { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid var(--border-color); border-radius: 9px; padding: 9px 10px; color: var(--text-primary); background: transparent; }.candidate-list small { color: var(--text-muted); }.detail-create-box { display: grid; gap: 8px; }.detail-create-box summary { cursor: pointer; color: var(--accent-color); }
+.detail-inline-form,.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }.detail-inline-form input { flex: 1; }.candidate-list { display: grid; gap: 6px; }.candidate-list button { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid var(--border-color); border-radius: 9px; padding: 9px 10px; color: var(--text-primary); background: transparent; }.candidate-list small { color: var(--text-muted); }.detail-create-box { display: grid; gap: 8px; }.detail-create-box summary { cursor: pointer; color: var(--accent-color); }.detail-create-box__fields { display: grid; gap: 8px; justify-items: start; }.detail-create-box__fields input { width: 100%; }
 .related-video-editor { display: grid; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }.related-video-results,.related-video-list { display: grid; gap: 8px; }
 .related-video-directory-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }.related-video-directory-filter select { min-width: 0; }.related-video-directory-hint { margin: -3px 0 0; color: var(--text-muted); font-size: 11px; }
 .related-video-batch-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.person-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
+.person-image-card { margin: 0; display: grid; gap: 6px; justify-items: stretch; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--control-hover-bg); }
+.person-image-card img { width: 100%; aspect-ratio: 1; display: block; object-fit: cover; border-radius: 8px; background: var(--thumb-bg); }
+.person-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
 .selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }.selection-row button { background: transparent; border: 0; color: var(--text-primary); text-align: left; cursor: pointer; }.selection-row small { color: var(--text-muted); }
 .technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: 12px; }.technical-status--current { color: var(--success-color); }.technical-status--stale,.technical-status--error { color: var(--warning-strong); }
+.proxy-block { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }.proxy-block__status { margin: 0; color: var(--text-secondary); font-size: 12px; }
 .stream-card { display: grid; gap: 4px; padding: 10px; border-radius: 9px; background: var(--control-hover-bg); font-size: 12px; }.stream-card span { color: var(--text-secondary); word-break: break-word; }
 .entity-identity > img,.entity-avatar-placeholder { width: 96px; height: 96px; object-fit: cover; border-radius: 14px; }.entity-avatar-placeholder { display: grid; place-items: center; background: var(--control-hover-bg); color: var(--text-muted); }
 @media (max-width: 900px) { .preview-drawer { width: 100vw; right: 0; bottom: 0; top: 70px; min-width: 0; border-radius: 18px 18px 0 0; } }

@@ -149,12 +149,68 @@ func libraryFilterNeedsSubtitleSync(filter LibraryFilter) bool {
 		(strings.TrimSpace(filter.SearchMode) == LibrarySearchModeSubtitle && strings.TrimSpace(filter.Keyword) != "")
 }
 
+// applyScanRootScope 把查询限制在当前配置的扫描根之内。改窄或删掉扫描目录后，
+// 落在范围外的旧记录不再进入任何片库视图；记录本身留着，路径重新被纳入某个根
+// 就会自动重新出现。一个扫描目录都没配置时不做裁剪——此时没有"范围"可言。
+// loadScanRootScope 读出当前配置的扫描根。空集合表示"没有范围"，调用方一律
+// 理解成不裁剪——此时把整库藏起来比留着更糟。
+func loadScanRootScope() ([]string, error) {
+	var dirs []models.ScanDirectory
+	if err := database.DB.Find(&dirs).Error; err != nil {
+		return nil, fmt.Errorf("加载扫描目录失败: %w", err)
+	}
+	return cleanScanRoots(dirs), nil
+}
+
+// pathWithinScanRoots 是 applyScanRootScope 的 Go 侧对照实现，给那些不是直接查
+// videos 表的入口用（清理分析的感知哈希表、同源关系表）。roots 为空同样表示不裁剪。
+func pathWithinScanRoots(path string, roots []string) bool {
+	if len(roots) == 0 {
+		return true
+	}
+	for _, root := range roots {
+		if path == root || strings.HasPrefix(path, scanRootChildPrefix(root)) {
+			return true
+		}
+	}
+	return false
+}
+
+func applyScanRootScope(query *gorm.DB) (*gorm.DB, error) {
+	roots, err := loadScanRootScope()
+	if err != nil {
+		return nil, err
+	}
+	if len(roots) == 0 {
+		return query, nil
+	}
+	conditions := database.DB.Session(&gorm.Session{NewDB: true})
+	for index, root := range roots {
+		prefix := escapeSQLLikePrefix(scanRootChildPrefix(root)) + "%"
+		clause := database.DB.Session(&gorm.Session{NewDB: true}).
+			Where("videos.directory = ?", root).
+			Or(`videos.directory LIKE ? ESCAPE '\'`, prefix).
+			Or(`videos.path LIKE ? ESCAPE '\'`, prefix)
+		if index == 0 {
+			conditions = conditions.Where(clause)
+			continue
+		}
+		conditions = conditions.Or(clause)
+	}
+	return query.Where(conditions), nil
+}
+
 func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*gorm.DB, error) {
 	normalized, err := normalizeLibraryFilter(filter)
 	if err != nil {
 		return nil, err
 	}
 	filter = normalized
+
+	query, err = applyScanRootScope(query)
+	if err != nil {
+		return nil, err
+	}
 
 	if filter.Keyword != "" {
 		pattern := "%" + strings.ToLower(escapeSQLLike(filter.Keyword)) + "%"
@@ -644,7 +700,13 @@ func (s *VideoService) SetVideoRating(videoID uint, rating *float64) (*models.Vi
 // GetLibraryCounts 返回活跃视频与活跃图片的总数（软删除的不计）。
 func (s *VideoService) GetLibraryCounts() (*LibraryCounts, error) {
 	counts := &LibraryCounts{}
-	if err := database.DB.Model(&models.Video{}).Count(&counts.VideoCount).Error; err != nil {
+	// 顶栏这个数必须和片库列表用同一套扫描根裁剪，否则"库 N 视频"会比列表结果条多出
+	// 一批范围外的旧记录，两个数字并排显示却对不上。
+	videoQuery, err := applyScanRootScope(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return nil, err
+	}
+	if err := videoQuery.Count(&counts.VideoCount).Error; err != nil {
 		return nil, err
 	}
 	if err := database.DB.Model(&models.Image{}).Count(&counts.ImageCount).Error; err != nil {

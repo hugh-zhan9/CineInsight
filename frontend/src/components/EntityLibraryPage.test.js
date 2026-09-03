@@ -6,6 +6,7 @@ const api = vi.hoisted(() => ({
   CreatePerson: vi.fn(),
   GetCollectionDetail: vi.fn(),
   GetPersonDetail: vi.fn(),
+  GetPersonImages: vi.fn(),
   ListCollections: vi.fn(),
   ListPeople: vi.fn(),
   OpenDirectory: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('./PreviewDrawer.vue', () => ({
 }));
 
 import EntityLibraryPage from './EntityLibraryPage.vue';
+import { commandList } from '../utils/commandRegistry.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -32,8 +34,11 @@ beforeEach(() => {
   api.GetPersonDetail.mockResolvedValue({
     person: { person: { id: 7, display_name: 'Actor Seven', original_name: 'Seven' }, avatar_url: '', active_video_count: 0 },
     videos: [],
-    next_video_id: 0
+    next_video_id: 0,
+    images: [],
+    next_image_id: 0
   });
+  api.GetPersonImages.mockResolvedValue({ images: [], next_image_id: 0 });
   api.GetCollectionDetail.mockResolvedValue({
     collection: { collection: { id: 5, name: 'Saga', description: 'Local set' }, cover_url: '', active_video_count: 0 },
     videos: []
@@ -59,6 +64,61 @@ describe('EntityLibraryPage', () => {
     expect(wrapper.vm.selectedEntity).toEqual({ type: 'person', id: 7 });
     expect(wrapper.get('.preview-drawer-stub').text()).toBe('person:7');
     expect(api.GetPersonDetail).toHaveBeenCalledWith(7, 0, 30);
+  });
+
+  // D-021：人物详情的视频与图片是两个区块、各自分页，不混排。
+  it('renders the person image section with its own pagination', async () => {
+    api.ListPeople.mockResolvedValueOnce([{
+      person: { id: 7, display_name: 'Actor Seven', original_name: '' },
+      avatar_url: '', active_video_count: 1, active_image_count: 3, cursor_name: 'actor seven'
+    }]);
+    api.GetPersonDetail.mockResolvedValueOnce({
+      person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 1, active_image_count: 3 },
+      videos: [{ id: 2, name: 'two.mp4', size: 1024, duration: 60 }], next_video_id: 0,
+      images: [{ id: 11, name: 'a.jpg' }, { id: 12, name: 'b.jpg' }], next_image_id: 12
+    });
+    api.GetPersonImages.mockResolvedValueOnce({ images: [{ id: 13, name: 'c.jpg' }], next_image_id: 0 });
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    await wrapper.get('.entity-card').trigger('click');
+    await flushPromises();
+
+    const section = wrapper.get('[data-test="person-image-section"]');
+    expect(section.text()).toContain('图片（3）');
+    expect(section.findAll('.entity-image-card')).toHaveLength(2);
+    expect(section.find('img[src="/preview/image-thumbnail/11"]').exists()).toBe(true);
+    // 视频卡片留在自己的区块里，两者不混排。
+    expect(section.findAll('.entity-video-card')).toHaveLength(0);
+
+    await wrapper.get('[data-test="person-image-more"]').trigger('click');
+    await flushPromises();
+    expect(api.GetPersonImages).toHaveBeenCalledWith(7, 12, 30);
+    expect(wrapper.findAll('.entity-image-card')).toHaveLength(3);
+    expect(wrapper.find('[data-test="person-image-more"]').exists()).toBe(false);
+  });
+
+  it('keeps the loaded images while paging videos', async () => {
+    api.ListPeople.mockResolvedValueOnce([{
+      person: { id: 7, display_name: 'Actor Seven', original_name: '' },
+      avatar_url: '', active_video_count: 2, active_image_count: 1, cursor_name: 'actor seven'
+    }]);
+    const personPage = (videos, nextVideoID) => ({
+      person: { person: { id: 7, display_name: 'Actor Seven', original_name: '' }, avatar_url: '', active_video_count: 2, active_image_count: 1 },
+      videos, next_video_id: nextVideoID,
+      images: [{ id: 11, name: 'a.jpg' }], next_image_id: 0
+    });
+    api.GetPersonDetail
+      .mockResolvedValueOnce(personPage([{ id: 2, name: 'two.mp4', size: 1, duration: 1 }], 2))
+      .mockResolvedValueOnce(personPage([{ id: 1, name: 'one.mp4', size: 1, duration: 1 }], 0));
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    await wrapper.get('.entity-card').trigger('click');
+    await flushPromises();
+
+    await wrapper.vm.loadEntityVideos(false);
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findAll('.entity-video-card')).toHaveLength(2);
+    expect(wrapper.findAll('.entity-image-card')).toHaveLength(1);
   });
 
   it('creates a collection, reloads the list, and opens its drawer', async () => {
@@ -102,5 +162,43 @@ describe('EntityLibraryPage', () => {
 
     await wrapper.find('.entity-video-card__actions .btn-primary').trigger('click');
     expect(api.PlayVideo).toHaveBeenCalledWith(2);
+  });
+});
+
+describe('EntityLibraryPage 命令面板落点', () => {
+  it('挂载时带着 focusEntity 就直接展开那个人物', async () => {
+    const wrapper = mount(EntityLibraryPage, {
+      props: { entityType: 'person', focusEntity: { id: 7, name: 'Actor Seven' } }
+    });
+    await flushPromises();
+
+    expect(api.GetPersonDetail).toHaveBeenCalledWith(7, 0, 30);
+    expect(wrapper.text()).toContain('返回人物列表');
+    // 列表本身照常加载，返回列表时不是空页。
+    expect(api.ListPeople).toHaveBeenCalledWith('', '', 0, 50);
+  });
+
+  it('已挂载后 focusEntity 变化同样展开，置空不再动', async () => {
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'collection' } });
+    await flushPromises();
+    expect(api.GetCollectionDetail).not.toHaveBeenCalled();
+
+    await wrapper.setProps({ focusEntity: { id: 5, name: 'Saga' } });
+    await flushPromises();
+    expect(api.GetCollectionDetail).toHaveBeenCalledWith(5);
+
+    await wrapper.setProps({ focusEntity: null });
+    await flushPromises();
+    expect(api.GetCollectionDetail).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain('返回作品集列表');
+  });
+
+  it('挂载与卸载会注册与注销本页的刷新命令', async () => {
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'collection' } });
+    await flushPromises();
+    expect(commandList().map(command => command.id)).toContain('action:collection-reload');
+
+    wrapper.unmount();
+    expect(commandList().map(command => command.id)).not.toContain('action:collection-reload');
   });
 });

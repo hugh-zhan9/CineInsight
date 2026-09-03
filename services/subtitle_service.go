@@ -44,9 +44,12 @@ type SubtitleService struct {
 	transcriptionSlot chan struct{}
 	pending           map[uint]*pendingSubtitleArtifact
 	taskQueue         *subtitleTaskQueue
-	BaseDir           string
-	BinDir            string
-	ModelDir          string
+	// glossaryResolver 解析视频的术语生效集（D-033）。可替换是为了让翻译流程的
+	// 测试不必先造出作品集与库表。
+	glossaryResolver func(videoID uint) ([]GlossaryTerm, error)
+	BaseDir          string
+	BinDir           string
+	ModelDir         string
 }
 
 type subtitleLocalOnlyASRContextKey struct{}
@@ -75,6 +78,7 @@ func NewSubtitleService(baseDir string) *SubtitleService {
 		BinDir:            filepath.Join(baseDir, "bin"),
 		ModelDir:          filepath.Join(baseDir, "models"),
 		transcriptionSlot: make(chan struct{}, 1),
+		glossaryResolver:  NewTranslationGlossaryService().ResolveForVideo,
 	}
 	service.taskQueue = service.newSubtitleTaskQueue()
 	return service
@@ -308,7 +312,7 @@ func (s *SubtitleService) PrepareEngine(engine SubtitleEngine) error {
 	switch engine {
 	case SubtitleEngineWhisperX:
 		if runtime.GOOS != "darwin" && s.findBinary("ffmpeg") == "" {
-			return fmt.Errorf("当前平台需先手动安装 FFmpeg，再准备 WhisperX 运行时")
+			return ErrSubtitleDependencyUnsupportedPlatform
 		}
 		if err := s.installWhisperXRuntime(); err != nil {
 			return err
@@ -625,6 +629,20 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 				log.Printf("[Subtitle] translation config unavailable provider=%s err=%v, keeping original SRT", provider, err)
 				goto done
 			}
+			// 术语生效集按视频所属作品集解析一次，整轮翻译共用（D-033）。
+			// 只有能吃下术语表的翻译器才去查：DeepL 用不上，也就不该因为一次库读失败
+			// 而多出一条它原本没有的失败路径（D-034）。
+			var glossary []GlossaryTerm
+			if _, injectable := translator.(ContextualTranslator); injectable {
+				resolved, resolveErr := s.glossaryResolver(req.VideoID)
+				if resolveErr != nil {
+					translationStatus = "failed"
+					warnings = append(warnings, fmt.Sprintf("双语翻译失败，已保留原文字幕：读取术语表失败：%v", resolveErr))
+					log.Printf("[Subtitle] resolve translation glossary failed video_id=%d err=%v", req.VideoID, resolveErr)
+					goto done
+				}
+				glossary = resolved
+			}
 			s.emitGenerateProgress(taskID, req, "translating", 60, subtitleTranslationProgressMessage(provider))
 
 			translatedSrtPath := outputPrefix + "_translated_temp.srt"
@@ -634,7 +652,7 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 			if sourceLang == "auto" || sourceLang == "unknown" {
 				sourceLang = ""
 			}
-			if err := s.translateSRT(ctx, srtPath, translatedSrtPath, sourceLang, targetLang, translator); err != nil {
+			if err := s.translateSRT(ctx, srtPath, translatedSrtPath, sourceLang, targetLang, translator, glossary); err != nil {
 				if ctx.Err() != nil {
 					s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
 					return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
@@ -1010,7 +1028,7 @@ func (s *SubtitleService) translateDeepL(ctx context.Context, texts []string, so
 }
 
 // translateSRT 翻译 SRT 文件中的所有文本行
-func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPath, sourceLang, targetLang string, translator SubtitleTranslator) error {
+func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPath, sourceLang, targetLang string, translator SubtitleTranslator, glossary []GlossaryTerm) error {
 	if translator == nil {
 		return fmt.Errorf("subtitle translator is nil")
 	}
@@ -1025,6 +1043,9 @@ func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPat
 	// 收集文本行（DeepL 一次最多翻译 50 条）
 	batchSize := 50
 	var translatedEntries []SRTEntry
+	// 滑动窗口：上一批尾部若干条 (原文, 译文) 作为只读上文，首批为空（D-035）。
+	contextual, _ := translator.(ContextualTranslator)
+	var preceding []ContextPair
 
 	for i := 0; i < len(entries); i += batchSize {
 		end := i + batchSize
@@ -1038,13 +1059,20 @@ func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPat
 			texts[j] = e.Text
 		}
 
-		translated, err := translator.Translate(ctx, texts, sourceLang, targetLang)
+		translated, err := translateSubtitleBatch(ctx, translator, contextual, TranslationRequest{
+			Texts:            texts,
+			SourceLang:       sourceLang,
+			TargetLang:       targetLang,
+			Glossary:         glossary,
+			PrecedingContext: preceding,
+		})
 		if err != nil {
 			return err
 		}
 		if len(translated) != len(batch) {
 			return fmt.Errorf("字幕翻译返回 %d 条，期望 %d 条", len(translated), len(batch))
 		}
+		preceding = trailingContextPairs(texts, translated, subtitleTranslationContextWindow)
 
 		for j, e := range batch {
 			translatedEntries = append(translatedEntries, SRTEntry{
@@ -1144,12 +1172,16 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
 	return nil
 }
 
+// ErrSubtitleDependencyUnsupportedPlatform 表示当前平台没有自动下载字幕依赖的实现。
+// 这不是临时失败，重试不会改变结果，只能由用户手工安装依赖后再用。
+var ErrSubtitleDependencyUnsupportedPlatform = errors.New("当前平台不支持自动下载字幕依赖，请手工安装 Whisper 运行时与 FFmpeg 后重试")
+
 // Download helpers
 func (s *SubtitleService) downloadFFmpeg() error {
 	if runtime.GOOS == "darwin" {
 		return s.installBrewPackage("ffmpeg", "FFmpeg")
 	}
-	return fmt.Errorf("auto-download ffmpeg only supported on macOS for now")
+	return ErrSubtitleDependencyUnsupportedPlatform
 }
 
 func (s *SubtitleService) installWhisperMac() error {
@@ -1184,11 +1216,6 @@ func (s *SubtitleService) installBrewPackage(pkg, displayName string) error {
 
 	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 100, fmt.Sprintf("%s 安装完成", displayName))
 	return nil
-}
-
-func (s *SubtitleService) downloadWhisperWindows() error {
-	// TODO: download windows binary from releases
-	return fmt.Errorf("windows auto-download pending")
 }
 
 func (s *SubtitleService) downloadModel() error {

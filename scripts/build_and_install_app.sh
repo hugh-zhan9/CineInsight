@@ -93,6 +93,23 @@ build_app() {
   )
 }
 
+# 超分 sidecar 不由 wails build 产出，构建完要手动放进 Resources。
+# 只带二进制和许可证，模型由用户在设置里按需下载（P-012 后续裁决）。
+bundle_enhance_runtime() {
+  local source_dir="${PROJECT_ROOT}/build/enhance-runtime"
+  local target_dir="${BUILD_APP_PATH}/Contents/Resources/enhance-runtime"
+
+  if [[ ! -f "${source_dir}/manifest.json" ]]; then
+    log "未找到超分运行时（${source_dir}），跳过；应用内会显示"超分不可用"。"
+    log "需要它就先跑：scripts/build_enhance_runtime.sh"
+    return
+  fi
+  log "打包超分运行时"
+  rm -rf "${target_dir}"
+  mkdir -p "$(dirname "${target_dir}")"
+  ditto "${source_dir}" "${target_dir}"
+}
+
 wait_for_app_exit() {
   local retries=0
 
@@ -174,6 +191,8 @@ main() {
   build_app "${wails_bin}"
 
   [[ -d "${BUILD_APP_PATH}" ]] || fail "未找到构建产物: ${BUILD_APP_PATH}"
+
+  bundle_enhance_runtime
 
   replace_installed_app
   launch_installed_app

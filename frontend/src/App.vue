@@ -48,6 +48,7 @@
 
     <div v-else class="main-view">
       <VideoListPage
+        ref="videoListPage"
         v-show="currentPage === 'videos'"
         :page-active="currentPage === 'videos'"
         :tags="tags"
@@ -59,6 +60,7 @@
       />
 
       <SettingsPage
+        ref="settingsPage"
         v-if="currentPage === 'settings'"
         :settings="settings"
         :directories="directories"
@@ -67,8 +69,8 @@
         @tags-changed="loadTags"
       />
 
-      <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" />
-      <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" />
+      <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" />
+      <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" :focus-entity="entityFocus.collection" />
 	  <InsightsPage v-if="currentPage === 'insights'" :directories="directories" />
 	  <!-- 首次进入才挂载，之后只隐藏不卸载：切走再切回不会丢已加载的图片和滚动位置。 -->
 	  <PhotoLibraryPage
@@ -80,21 +82,42 @@
 	    @open-settings="currentPage = 'settings'"
 	  />
     </div>
+
+    <!-- 命令面板（⌘⇧P / Ctrl+Shift+P）：不新增顶栏按钮，只有快捷键这一个入口 -->
+    <CommandPalette
+      v-if="!startupError"
+      :open="commandPaletteOpen"
+      :open-video="openVideoFromCommand"
+      @close="closeCommandPalette"
+    />
+
+    <!-- 全局提示宿主：webview 的 alert/confirm 是哑的，所有错误提示和危险操作确认都走这里 -->
+    <AppFeedback />
   </div>
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
 import InsightsPage from './components/InsightsPage.vue';
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
+import AppFeedback from './components/AppFeedback.vue';
+import CommandPalette from './components/CommandPalette.vue';
 import { logFrontend } from './utils/frontendLog.js';
+import { appCommandsMixin } from './utils/appCommands.js';
+
+// 扫描根的身份只由路径集合决定：别名、时间戳变了不影响"扫描范围"。
+function scanRootKey(dirs) {
+  return (dirs || []).map(dir => String(dir?.path || '')).sort().join('\n');
+}
 
 export default {
   name: 'App',
-  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage },
+  // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
+  mixins: [appCommandsMixin],
+  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, AppFeedback, CommandPalette },
   data() {
     return {
       currentPage: 'videos',
@@ -105,6 +128,9 @@ export default {
       startupError: '',
       systemTheme: 'light',
       libraryCounts: null,
+      // 已上报给后端的前后台标记；null = 还没报过。相同值不重复上报。
+      windowForeground: null,
+      foregroundListeners: null,
       settings: {
         confirm_before_delete: true,
         delete_original_file: false,
@@ -119,6 +145,9 @@ export default {
     };
   },
   async mounted() {
+    // 前后台上报（D-013）：后端据此决定长任务终态要不要发系统通知。
+    // 放在最前面，数据库连不上时也要报——通知开关与库无关。
+    this.attachForegroundReporting();
     this.startupError = await GetStartupError();
     if (this.startupError) {
       this.applyTheme();
@@ -145,6 +174,9 @@ export default {
       this.incrementalScanImageDirectories();
     }
   },
+  beforeUnmount() {
+    this.detachForegroundReporting();
+  },
   watch: {
     'settings.theme'() {
       this.applyTheme();
@@ -167,6 +199,40 @@ export default {
     }
   },
   methods: {
+    // 三个事件报的是同一件事：窗口现在是不是用户正在看的那个。
+    // 后端未收到上报时默认按后台处理，所以挂上监听后立刻同步一次当前状态。
+    attachForegroundReporting() {
+      if (this.foregroundListeners) return;
+      const onFocus = () => this.reportWindowForeground(true);
+      const onBlur = () => this.reportWindowForeground(false);
+      const onVisibility = () => this.reportWindowForeground(this.documentIsVisibleAndFocused());
+      window.addEventListener('focus', onFocus);
+      window.addEventListener('blur', onBlur);
+      document.addEventListener('visibilitychange', onVisibility);
+      this.foregroundListeners = { onFocus, onBlur, onVisibility };
+      this.reportWindowForeground(this.documentIsVisibleAndFocused());
+    },
+    detachForegroundReporting() {
+      const listeners = this.foregroundListeners;
+      if (!listeners) return;
+      window.removeEventListener('focus', listeners.onFocus);
+      window.removeEventListener('blur', listeners.onBlur);
+      document.removeEventListener('visibilitychange', listeners.onVisibility);
+      this.foregroundListeners = null;
+    },
+    documentIsVisibleAndFocused() {
+      const visible = document.visibilityState !== 'hidden';
+      const focused = typeof document.hasFocus === 'function' ? document.hasFocus() : true;
+      return visible && focused;
+    },
+    reportWindowForeground(foreground) {
+      const next = Boolean(foreground);
+      if (this.windowForeground === next) return;
+      this.windowForeground = next;
+      Promise.resolve(SetWindowForeground(next)).catch(err => {
+        this.debugLog('SetWindowForeground failed', { err: String(err) }, true);
+      });
+    },
     async loadLibraryCounts() {
       try {
         this.libraryCounts = await GetLibraryCounts();
@@ -221,7 +287,11 @@ export default {
       this.settings = { ...this.settings, ...newSettings };
     },
     handleDirectoriesChanged(newDirectories) {
+      const rootsChanged = scanRootKey(this.directories) !== scanRootKey(newDirectories);
       this.directories = newDirectories;
+      // 扫描根真的变了才对账：新根下的文件立刻入库，范围外的旧记录靠查询侧的
+      // 扫描根裁剪自动从列表里消失。只改别名不该触发一次全盘扫描。
+      if (rootsChanged && this.directories.length > 0) this.incrementalScanAll();
     },
     async incrementalScanAll() {
       try {

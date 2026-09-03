@@ -598,30 +598,107 @@ func shortFeedSameOriginMutation(r *http.Request) bool {
 	return true
 }
 
-func shortFeedLANURLs(port int) []string {
+// lanInterface 是 net.Interface 的可测试快照。
+type lanInterface struct {
+	Name  string
+	Flags net.Flags
+	Addrs []netip.Addr
+}
+
+// 手机连不上的接口：macOS 的互联网共享/虚拟机网桥（bridge、vmnet）、VPN 隧道
+// （utun）、AirDrop 与热点（awdl、llw、ap、anpi）、容器网络（docker、veth、
+// tap、tun、vboxnet）。这些地址列出来只会让人挨个去试。
+var virtualInterfacePrefixes = []string{
+	"anpi", "ap", "awdl", "bridge", "docker", "llw", "tap", "tun", "utun", "vboxnet", "veth", "vmnet",
+}
+
+func isVirtualInterfaceName(name string) bool {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	for _, prefix := range virtualInterfacePrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// primaryOutboundIPv4 借一次 UDP "连接"问内核默认路由从哪块网卡出去。UDP 不握手，
+// 不会真发包，拿不到就返回零值，调用方照常列出其余候选。
+func primaryOutboundIPv4() netip.Addr {
+	conn, err := net.Dial("udp4", "203.0.113.1:9")
+	if err != nil {
+		return netip.Addr{}
+	}
+	defer conn.Close()
+	addr, ok := conn.LocalAddr().(*net.UDPAddr)
+	if !ok {
+		return netip.Addr{}
+	}
+	ip, ok := netip.AddrFromSlice(addr.IP.To4())
+	if !ok {
+		return netip.Addr{}
+	}
+	return ip
+}
+
+func collectLANInterfaces() []lanInterface {
 	interfaces, err := net.Interfaces()
 	if err != nil {
 		return nil
 	}
-	urls := []string{}
+	result := make([]lanInterface, 0, len(interfaces))
 	for _, iface := range interfaces {
-		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
-			continue
-		}
 		addrs, err := iface.Addrs()
 		if err != nil {
 			continue
 		}
+		parsed := make([]netip.Addr, 0, len(addrs))
 		for _, addr := range addrs {
 			prefix, err := netip.ParsePrefix(addr.String())
 			if err != nil {
 				continue
 			}
-			ip := prefix.Addr()
-			if ip.Is4() && (ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
-				urls = append(urls, fmt.Sprintf("http://%s:%d/short/", ip.String(), port))
+			parsed = append(parsed, prefix.Addr())
+		}
+		result = append(result, lanInterface{Name: iface.Name, Flags: iface.Flags, Addrs: parsed})
+	}
+	return result
+}
+
+// buildShortFeedLANURLs 只留手机真正连得上的地址，并把默认路由所在的那块网卡排在最前。
+func buildShortFeedLANURLs(interfaces []lanInterface, primary netip.Addr, port int) []string {
+	urls := []string{}
+	seen := make(map[string]struct{})
+	var primaryURL string
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagPointToPoint != 0 {
+			continue
+		}
+		if isVirtualInterfaceName(iface.Name) {
+			continue
+		}
+		for _, ip := range iface.Addrs {
+			if !ip.Is4() || !(ip.IsPrivate() || ip.IsLinkLocalUnicast()) {
+				continue
 			}
+			url := fmt.Sprintf("http://%s:%d/short/", ip.String(), port)
+			if _, exists := seen[url]; exists {
+				continue
+			}
+			seen[url] = struct{}{}
+			if primary.IsValid() && ip == primary {
+				primaryURL = url
+				continue
+			}
+			urls = append(urls, url)
 		}
 	}
+	if primaryURL != "" {
+		urls = append([]string{primaryURL}, urls...)
+	}
 	return urls
+}
+
+func shortFeedLANURLs(port int) []string {
+	return buildShortFeedLANURLs(collectLANInterfaces(), primaryOutboundIPv4(), port)
 }
