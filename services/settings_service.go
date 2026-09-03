@@ -89,6 +89,14 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.FaceModelMirrorURL = strings.TrimSpace(input.FaceModelMirrorURL)
 		// 帧哈希序列（D-026）：自动开关即时生效，扫描后自动化每次读一次这一列。
 		settings.AutoFrameHashSequence = input.AutoFrameHashSequence
+		// 浏览器插件桥接（D-B03、D-B05、D-B06）：目录与并发存进去的就是生效值。
+		//
+		// 令牌**有意不在这里赋值**：它是配对凭据，只由 RegenerateBrowserBridgeToken
+		// 生成。走通用设置保存的话，前端任何一次漏带该字段的提交都会把令牌抹成空，
+		// 已经配好的插件会在用户毫不知情的情况下断开。
+		settings.BrowserBridgeEnabled = input.BrowserBridgeEnabled
+		settings.BrowserDownloadDirectory = strings.TrimSpace(input.BrowserDownloadDirectory)
+		settings.BrowserDownloadConcurrency = NormalizeBrowserDownloadConcurrency(input.BrowserDownloadConcurrency)
 
 		if err := tx.Save(&settings).Error; err != nil {
 			return err

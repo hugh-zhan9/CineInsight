@@ -1,0 +1,15 @@
+{
+  "name": "cineinsight-media-grabber",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "抓取网页流式媒体（HLS/TS/直链）的 Chrome/Edge MV3 扩展，可选推送到 CineInsight 桌面端",
+  "scripts": {
+    "test": "node --test \"test/**/*.test.js\"",
+    "test:hls": "node --test \"test/hls/*.test.js\"",
+    "test:download": "node --test \"test/download/*.test.js\"",
+    "test:ui": "node --test \"test/ui/*.test.js\"",
+    "test:bridge": "node --test \"test/bridge/*.test.js\"",
+    "package": "rm -f ../build/bin/cineinsight-media-grabber-$npm_package_version.zip && zip -r -q ../build/bin/cineinsight-media-grabber-$npm_package_version.zip manifest.json src icons vendor README.md -x 'icons/make-icons.py' && echo packaged: build/bin/cineinsight-media-grabber-$npm_package_version.zip"
+  }
+}

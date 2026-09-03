@@ -54,6 +54,8 @@ export function BatchRemoveTagFromImages(arg1:Array<number>,arg2:number):Promise
 
 export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
 
+export function CancelBrowserDownloadTask(arg1:string):Promise<void>;
+
 export function CancelCollectionSuggestionAnalysis():Promise<void>;
 
 export function CancelEnhancementModelDownload():Promise<services.EnhancementModelStatus>;
@@ -174,6 +176,8 @@ export function GetBackgroundTasks():Promise<Array<string>>;
 
 export function GetBackupStatus():Promise<services.BackupStatus>;
 
+export function GetBrowserBridgeStatus():Promise<services.BrowserBridgeStatus>;
+
 export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promise<services.CleanupAnalysis>;
 
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
@@ -280,6 +284,8 @@ export function LinkFaceCluster(arg1:number,arg2:number):Promise<services.FaceCl
 
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
 
+export function ListBrowserDownloadTasks():Promise<Array<services.BrowserDownloadTask>>;
+
 export function ListCollectionSuggestions():Promise<Array<services.CollectionSuggestionView>>;
 
 export function ListCollections(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.CollectionListItem>>;
@@ -349,6 +355,8 @@ export function PreviewLocalMetadataBatch(arg1:Array<number>):Promise<services.L
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 
 export function RefreshVideoTechnicalMetadata(arg1:number):Promise<services.VideoDetails>;
+
+export function RegenerateBrowserBridgeToken():Promise<string>;
 
 export function RejectAITagCandidate(arg1:number):Promise<void>;
 
@@ -433,6 +441,8 @@ export function SearchVideos(arg1:string,arg2:number,arg3:number,arg4:number,arg
 export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
 
 export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
+
+export function SelectBrowserDownloadDirectory():Promise<string>;
 
 export function SelectCollectionCover():Promise<string>;
 

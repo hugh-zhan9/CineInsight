@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>CineInsight 媒体抓取</title>
+    <link rel="stylesheet" href="../common/ui.css" />
+    <style>
+      body { width: 440px; max-height: 580px; overflow-y: auto; }
+      .variant-list { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
+      .variant {
+        display: flex; align-items: center; gap: 8px;
+        padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg);
+      }
+      .url { font-size: 11px; }
+      .thumb-box:empty { display: none; }
+      .thumb {
+        display: block;
+        width: 100%;
+        max-width: 240px;
+        border-radius: 6px;
+        margin-top: 8px;
+        background: var(--border);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <h1>抓到的媒体</h1>
+      <div class="row">
+        <button id="open-downloads">下载管理</button>
+        <button id="open-options">选项</button>
+      </div>
+    </div>
+
+    <div id="bridge-status" class="notice small" hidden></div>
+    <div id="message" class="notice small" hidden></div>
+    <div id="list" class="list"></div>
+    <div id="empty" class="empty" hidden>
+      这个页面上还没抓到流式媒体。<br />
+      先把视频播起来，再打开这里；有些站点要点了播放才会去取播放列表。
+    </div>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

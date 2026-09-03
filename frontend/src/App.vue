@@ -23,6 +23,9 @@
 		<button @click="currentPage = 'photos'" :class="['nav-btn', { active: currentPage === 'photos' }]">
 		  图片
 		</button>
+		<button @click="currentPage = 'downloads'" :class="['nav-btn', { active: currentPage === 'downloads' }]">
+		  下载
+		</button>
         <button 
           @click="currentPage = 'settings'" 
           :class="['nav-btn', { active: currentPage === 'settings' }]"
@@ -58,6 +61,8 @@
         @reload-directories="loadDirectories"
         @update-settings="handleSettingsUpdate"
       />
+
+      <DownloadsPage v-if="currentPage === 'downloads'" />
 
       <SettingsPage
         ref="settingsPage"
@@ -103,6 +108,7 @@ import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
 import InsightsPage from './components/InsightsPage.vue';
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
+import DownloadsPage from './components/DownloadsPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import { logFrontend } from './utils/frontendLog.js';
@@ -117,7 +123,7 @@ export default {
   name: 'App',
   // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
   mixins: [appCommandsMixin],
-  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, AppFeedback, CommandPalette },
+  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, AppFeedback, CommandPalette },
   data() {
     return {
       currentPage: 'videos',

@@ -3,6 +3,8 @@
 
 # Build artifacts
 build/bin/
+# 超分运行时是按需下载的二进制（约 6 MB），不入库
+build/enhance-runtime/
 
 # Frontend dependencies
 node_modules/
@@ -31,3 +33,6 @@ video-master
 .claude/
 .loopx/
 .superpowers/
+
+# 第三方研究副本（各自带 go.mod，不属于本应用）
+search/

@@ -37,11 +37,15 @@ type ScanSyncError struct {
 }
 
 type ScanSyncResult struct {
-	Directories       int             `json:"directories"`
-	Scanned           int             `json:"scanned"`
-	Added             int             `json:"added"`
-	Deleted           int             `json:"deleted"`
-	Stale             int             `json:"stale"`
+	Directories int `json:"directories"`
+	Scanned     int `json:"scanned"`
+	Added       int `json:"added"`
+	Deleted     int `json:"deleted"`
+	Stale       int `json:"stale"`
+	// Restored 是这一轮把 is_stale 清掉的条数（文件重新出现）。删掉扫描目录后
+	// 记录会被标失效，把同一路径加回来时就靠这个计数让界面知道"数据回来了"，
+	// 否则一轮只做恢复的扫描在计数上全是 0，前端不会刷新列表。
+	Restored          int             `json:"restored"`
 	Relocated         int             `json:"relocated"`
 	MetadataRefreshed int             `json:"metadata_refreshed"`
 	Skipped           int             `json:"skipped"`
@@ -210,12 +214,17 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		excludedPaths = parseScanExcludePaths(settings.ScanExcludePaths)
 	}
 
+	// configuredRoots 是"当前配置了哪些目录"，与 roots（本轮成功扫到的根）有意分开：
+	// 移动硬盘没插时那个根扫不了、进不了 roots，但它仍然配置着，底下的记录不能
+	// 因此被当成孤儿标失效。
+	configuredRoots := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
 		root := filepath.Clean(strings.TrimSpace(dir.Path))
 		if root == "" || root == "." {
 			result.recordError("scan", dir.Path, "", fmt.Errorf("扫描目录为空"))
 			continue
 		}
+		configuredRoots = append(configuredRoots, root)
 		result.Directories++
 
 		scannedFiles, err := s.ScanDirectoryWithInfo(root)
@@ -339,6 +348,8 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		}
 		result.Deleted++
 	}
+
+	s.reconcileOrphanedVideos(configuredRoots, result)
 	if err := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
 		result.recordError("short-video-tag", "", "", err)
 	}
@@ -414,6 +425,7 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 				result.recordError("clear_stale", video.Directory, video.Path, err)
 			} else {
 				video.IsStale = false
+				result.Restored++
 			}
 		}
 		needsRefresh, refreshErr := s.needsTechnicalRefreshDuringNarrowScan(video, file)
@@ -494,6 +506,122 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		result.recordError("short-video-tag", "", "", err)
 	}
 	return result
+}
+
+// reconcileOrphanedVideos 处理"不属于任何已配置扫描目录"的记录。
+//
+// 这类记录从哪来：用户删掉过某个扫描目录（旧版本只删配置行、不动记录），或者把
+// 目录改成了别的路径。而两条对账都只在配置目录之下取候选（getActiveVideosUnderRoots），
+// 所以它们过去永远碰不到，记录就停在"扫描看不见、列表看得见"的夹缝里。
+// 只在删除目录那一刻做处理是不够的——那修不了已经掉进夹缝的历史记录。
+//
+// 与 D-S01 同口径：标失效，不软删、不进回收站，磁盘文件不动。目录加回来时由
+// 窄对账的 clear_stale 分支恢复。
+//
+// 一个目录都没配置时所有记录都是孤儿、全部失效——"没有扫描目录就不该有内容"。
+// 调用方必须先确认目录清单读成功：读失败时绝不能走到这里，否则会把整库藏起来。
+func (s *VideoService) reconcileOrphanedVideos(configuredRoots []string, result *ScanSyncResult) {
+	var videos []models.Video
+	if err := database.DB.Select("id", "path", "directory", "is_stale").
+		Where("is_stale = ?", false).Find(&videos).Error; err != nil {
+		result.recordError("load_orphans", "", "", err)
+		return
+	}
+	orphanIDs := make([]uint, 0)
+	for _, video := range videos {
+		if len(configuredRoots) > 0 && videoBelongsToRoots(video, configuredRoots) {
+			continue
+		}
+		orphanIDs = append(orphanIDs, video.ID)
+	}
+	if len(orphanIDs) == 0 {
+		return
+	}
+	const batchSize = 500
+	for start := 0; start < len(orphanIDs); start += batchSize {
+		end := start + batchSize
+		if end > len(orphanIDs) {
+			end = len(orphanIDs)
+		}
+		update := database.DB.Model(&models.Video{}).
+			Where("id IN ? AND is_stale = ?", orphanIDs[start:end], false).
+			Update("is_stale", true)
+		if update.Error != nil {
+			result.recordError("orphan_stale", "", "", update.Error)
+			return
+		}
+		result.Stale += int(update.RowsAffected)
+	}
+	log.Printf("对账发现不属于任何扫描目录的记录，已标失效 count=%d", len(orphanIDs))
+}
+
+// MarkVideosStaleUnderRemovedRoot 把只属于被移除扫描根的活跃视频标成失效（D-S01）。
+//
+// 为什么是标失效而不是删：视频的软删走 deleteVideoRecord，每条都会建一个回收站条目，
+// 删一个目录就往回收站灌上千条。标失效之后这批记录从默认列表消失（见 library_service.go
+// 里的 D-S02 那一条）、留在「路径失效」视图里，标签与评分一个不丢；路径加回来时由扫描
+// 的 clear_stale 分支把标记清掉，数据自动回来。磁盘文件全程不动。
+//
+// 嵌套目录是这里唯一的要害：/media 与 /media/movies 同时配着、用户删掉 /media 时，
+// /media/movies 下的视频仍归另一个根管，不能跟着标失效。所以判断的是"属于被移除的根，
+// 且不属于任何剩余的根"。
+//
+// 返回实际标记的条数。
+func (s *VideoService) MarkVideosStaleUnderRemovedRoot(removedRoot string, remainingRoots []string) (int64, error) {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
+
+	root := filepath.Clean(strings.TrimSpace(removedRoot))
+	if root == "" || root == "." {
+		return 0, fmt.Errorf("扫描目录为空")
+	}
+	remaining := make([]string, 0, len(remainingRoots))
+	for _, candidate := range remainingRoots {
+		cleaned := filepath.Clean(strings.TrimSpace(candidate))
+		if cleaned == "" || cleaned == "." || cleaned == root {
+			continue
+		}
+		remaining = append(remaining, cleaned)
+	}
+
+	candidates, err := s.getActiveVideosUnderRoots([]string{root})
+	if err != nil {
+		return 0, fmt.Errorf("读取该目录下的视频失败: %w", err)
+	}
+
+	ids := make([]uint, 0, len(candidates))
+	for _, video := range candidates {
+		if video.IsStale {
+			continue
+		}
+		if len(remaining) > 0 && videoBelongsToRoots(video, remaining) {
+			// 还归另一个仍在清单里的根管，保持原样。
+			continue
+		}
+		ids = append(ids, video.ID)
+	}
+	if len(ids) == 0 {
+		return 0, nil
+	}
+
+	// 分批更新：一次 IN 里塞几千个参数在 SQLite 上会撞占位符上限。
+	const batchSize = 500
+	var marked int64
+	for start := 0; start < len(ids); start += batchSize {
+		end := start + batchSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		result := database.DB.Model(&models.Video{}).
+			Where("id IN ? AND is_stale = ?", ids[start:end], false).
+			Update("is_stale", true)
+		if result.Error != nil {
+			return marked, fmt.Errorf("标记失效失败: %w", result.Error)
+		}
+		marked += result.RowsAffected
+	}
+	log.Printf("扫描目录移除，标记失效 root=%s marked=%d", root, marked)
+	return marked, nil
 }
 
 func cleanScanRoots(dirs []models.ScanDirectory) []string {

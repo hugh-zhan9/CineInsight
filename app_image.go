@@ -142,7 +142,24 @@ func (a *App) GetAllImageDirectories() ([]models.ImageDirectory, error) {
 func (a *App) AddImageDirectory(path, alias string) (*models.ImageDirectory, error) {
 	dir, err := a.imageService.AddImageDirectory(path, alias)
 	log.Printf("API AddImageDirectory path=%s alias=%s err=%v", path, alias, err)
+	if err == nil {
+		// 加回一个曾经删掉的图片目录时，之前被按失踪对账软删的记录要能自动回来
+		// （D-S03、D-S04）：扫描发现文件还在就由 restoreStaleImage 复活，标签评分都还在。
+		// 放后台跑，别把添加目录的对话框卡住。图片侧只有全量扫描，没有按目录的窄扫描。
+		go a.rescanAfterImageDirectoryAdded(path)
+	}
 	return dir, err
+}
+
+// rescanAfterImageDirectoryAdded 加入图片目录后跑一次对账，把之前失效的记录接回来。
+func (a *App) rescanAfterImageDirectoryAdded(path string) {
+	result, err := a.imageService.SyncImageDirectories()
+	if err != nil {
+		log.Printf("加入图片目录后的恢复扫描失败 path=%s err=%v", path, err)
+		return
+	}
+	log.Printf("加入图片目录后的恢复扫描完成 path=%s added=%d restored=%d",
+		path, result.Added, result.Restored)
 }
 
 // UpdateImageDirectory 更新图片扫描目录
@@ -153,9 +170,39 @@ func (a *App) UpdateImageDirectory(id uint, path, alias string) error {
 }
 
 // DeleteImageDirectory 删除图片扫描目录（软删除）
+// DeleteImageDirectory 删除图片扫描目录。
+//
+// 与视频目录同一口径（D-S04）：删配置行之前先把该目录下的图片按失踪对账处理，
+// 记录留在库里、磁盘文件不动，把同一路径加回来时自动恢复。标记失败就不删配置行。
 func (a *App) DeleteImageDirectory(id uint) error {
-	err := a.imageService.DeleteImageDirectory(id)
-	log.Printf("API DeleteImageDirectory id=%d err=%v", id, err)
+	dirs, err := a.imageService.GetAllImageDirectories()
+	if err != nil {
+		log.Printf("API DeleteImageDirectory load dirs err=%v", err)
+		return err
+	}
+	var removedPath string
+	found := false
+	remaining := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir.ID == id {
+			removedPath = dir.Path
+			found = true
+			continue
+		}
+		remaining = append(remaining, dir.Path)
+	}
+	if !found {
+		return fmt.Errorf("图片扫描目录不存在: %d", id)
+	}
+
+	marked, err := a.imageService.MarkImagesStaleUnderRemovedRoot(removedPath, remaining)
+	if err != nil {
+		log.Printf("API DeleteImageDirectory mark stale id=%d path=%s err=%v", id, removedPath, err)
+		return err
+	}
+
+	err = a.imageService.DeleteImageDirectory(id)
+	log.Printf("API DeleteImageDirectory id=%d path=%s marked_stale=%d err=%v", id, removedPath, marked, err)
 	return err
 }
 

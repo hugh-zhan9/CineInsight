@@ -25,6 +25,9 @@ const (
 	BackgroundTaskCleanup           BackgroundTaskKey = "cleanup"
 	BackgroundTaskCollectionSuggest BackgroundTaskKey = "collection_suggest"
 	BackgroundTaskBackup            BackgroundTaskKey = "backup"
+	// BackgroundTaskBrowserDownload 是浏览器插件桥接推过来的下载任务（D-B04）。
+	// 它不进空闲门——那道门只挡自动触发的任务，而这些是用户在浏览器里点出来的。
+	BackgroundTaskBrowserDownload BackgroundTaskKey = "browser_download"
 )
 
 // backgroundTaskKeyOrder 既是合法 key 的全集，也是 Snapshot 的稳定顺序。
@@ -46,6 +49,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskCleanup,
 	BackgroundTaskCollectionSuggest,
 	BackgroundTaskBackup,
+	BackgroundTaskBrowserDownload,
 }
 
 // IsBackgroundTaskKey 报告字符串是否属于固定 key 集合，供前端传入的 key 校验。

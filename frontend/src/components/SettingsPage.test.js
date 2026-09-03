@@ -24,7 +24,9 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetImageAITaggingStatus', 'StartImageAITagging', 'CancelImageAITagging',
   'GetImageSemanticIndexStatus', 'StartImageSemanticIndex', 'CancelImageSemanticIndex',
   'GetImageEXIFBackfillStatus', 'StartImageEXIFBackfill', 'CancelImageEXIFBackfill',
-  'ListGlossaryEntries', 'UpsertGlossaryEntry', 'DeleteGlossaryEntry'
+  'ListGlossaryEntries', 'UpsertGlossaryEntry', 'DeleteGlossaryEntry',
+  'GetBrowserBridgeStatus', 'RegenerateBrowserBridgeToken', 'SelectBrowserDownloadDirectory',
+  'ListBrowserDownloadTasks', 'CancelBrowserDownloadTask'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -641,7 +643,10 @@ describe('手机端浏览地址', () => {
 
     expect(wrapper.get('[data-test="short-feed-phone-url"]').text()).toBe('http://192.168.162.250:18088/short/');
     expect(wrapper.find('[data-test="short-feed-local-url"]').exists()).toBe(false);
-    expect(wrapper.text()).not.toContain('127.0.0.1');
+    // 只看手机端这一节：环回地址不该出现在"手机上输哪个地址"的位置。
+    // 别的分区（例如浏览器插件桥接）说明自己只绑 127.0.0.1 是正当的，
+    // 断言整页文本会把那种正当说明也一起判错。
+    expect(wrapper.findComponent({ name: 'MobileSection' }).text()).not.toContain('127.0.0.1');
   });
 
   it('多网卡时其余地址作为备用列出', async () => {
@@ -902,4 +907,86 @@ describe('命令面板接线', () => {
     expect(SETTINGS_SECTIONS.length).toBeGreaterThan(0);
     expect(SETTINGS_SECTIONS.every(section => section.key && section.label)).toBe(true);
   });
+});
+
+describe('浏览器插件桥接', () => {
+  async function mountWithBridge({ status, tasks = [] } = {}) {
+    api.GetBrowserBridgeStatus.mockResolvedValue(status || { running: false, enabled: false });
+    api.ListBrowserDownloadTasks.mockResolvedValue(tasks);
+    const wrapper = await mountPage();
+    await flushPromises();
+    return wrapper;
+  }
+
+  // 这条是回归用例：保存设置的载荷是逐字段白名单拼的，漏掉任何一个 browser_ 字段，
+  // 后端都会无条件把它写成零值——开关被写回 false、下载目录被清空，而界面上表单
+  // 还显示着刚设的值，看起来像保存成功了。桥接因此永远起不来。
+  it('保存设置时必须带上桥接三项，否则它们会被静默写成零值', async () => {
+    const wrapper = await mountWithBridge();
+    const section = sectionVm(wrapper, 'BrowserBridgeSection');
+    section.form.browser_bridge_enabled = true;
+    section.form.browser_download_directory = '/library/downloads';
+    section.form.browser_download_concurrency = 3;
+
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+
+    expect(api.UpdateSettings).toHaveBeenCalledWith(expect.objectContaining({
+      browser_bridge_enabled: true,
+      browser_download_directory: '/library/downloads',
+      browser_download_concurrency: 3
+    }));
+    // 令牌有意不走这条路：它只由「生成令牌」按钮写，混进来的话前端某次漏带就会把它抹空
+    expect(api.UpdateSettings.mock.calls.at(-1)[0]).not.toHaveProperty('browser_bridge_token');
+    wrapper.unmount();
+  });
+
+  it('未开启时状态说"未开启"，开启后显示端口', async () => {
+    const off = await mountWithBridge();
+    expect(off.get('[data-test="bridge-status-text"]').text()).toBe('未开启');
+    off.unmount();
+
+    const on = await mountWithBridge({ status: { running: true, enabled: true, port: 18110, url: 'http://127.0.0.1:18110/' } });
+    expect(on.get('[data-test="bridge-status-text"]').text()).toContain('18110');
+    on.unmount();
+  });
+
+  it('开着桥接但没有令牌时，把原因直接显示出来', async () => {
+    const wrapper = await mountWithBridge({
+      status: { running: false, enabled: true, startup_error: '桥接已开启但还没有令牌，先在设置里生成一个' }
+    });
+    expect(wrapper.get('[data-test="bridge-status-error"]').text()).toContain('令牌');
+    wrapper.unmount();
+  });
+
+  it('重新生成令牌会更新表单并说明旧令牌立即失效', async () => {
+    api.RegenerateBrowserBridgeToken.mockResolvedValue('new-token-value');
+    const wrapper = await mountWithBridge();
+
+    await wrapper.get('[data-test="bridge-regenerate"]').trigger('click');
+    await flushPromises();
+
+    expect(api.RegenerateBrowserBridgeToken).toHaveBeenCalled();
+    expect(wrapper.get('[data-test="bridge-token"]').element.value).toBe('new-token-value');
+    expect(wrapper.get('[data-test="bridge-token-message"]').text()).toContain('旧令牌立即失效');
+    wrapper.unmount();
+  });
+
+  it('选择目录时用户取消（返回空串）不会清掉已有目录', async () => {
+    const wrapper = await mountWithBridge();
+    const section = sectionVm(wrapper, 'BrowserBridgeSection');
+    section.form.browser_download_directory = '/library/downloads';
+
+    api.SelectBrowserDownloadDirectory.mockResolvedValue('');
+    await section.chooseDirectory();
+    expect(section.form.browser_download_directory).toBe('/library/downloads');
+
+    api.SelectBrowserDownloadDirectory.mockResolvedValue('/library/new');
+    await section.chooseDirectory();
+    expect(section.form.browser_download_directory).toBe('/library/new');
+    wrapper.unmount();
+  });
+
+
+
 });

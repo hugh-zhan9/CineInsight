@@ -95,6 +95,48 @@ func TestLibraryFiltersCoverBuiltInViewsAndSubtitleKeyword(t *testing.T) {
 	}
 }
 
+// 失效记录只该在「路径失效」视图里露面（D-S02）。删掉扫描目录之后，那批记录正是
+// 靠这一条从默认列表里消失的；随机播放共用同一套筛选，因此也不会再抽中它们。
+func TestLibraryDefaultViewsExcludeStaleVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	live := models.Video{Name: "live.mp4", Path: filepath.Join(root, "live.mp4"), Directory: root, IsFavorite: true}
+	stale := models.Video{Name: "stale.mp4", Path: filepath.Join(root, "stale.mp4"), Directory: root, IsFavorite: true, IsStale: true}
+	for _, video := range []*models.Video{&live, &stale} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatalf("创建视频失败: %v", err)
+		}
+	}
+	svc := &VideoService{}
+
+	// 默认视图：只剩没失效的那条
+	all, err := svc.SearchLibraryVideos(LibraryFilter{}, 0, 0, 0, 20)
+	if err != nil {
+		t.Fatalf("默认视图查询失败: %v", err)
+	}
+	if len(all) != 1 || all[0].ID != live.ID {
+		t.Fatalf("默认视图应当排除失效记录，实际 %+v", all)
+	}
+
+	// 其余每个智能视图同样不该漏出失效记录：两条都是收藏，收藏视图里只能有一条
+	favorites, err := svc.SearchLibraryVideos(LibraryFilter{SmartView: LibraryViewFavorites}, 0, 0, 0, 20)
+	if err != nil {
+		t.Fatalf("收藏视图查询失败: %v", err)
+	}
+	if len(favorites) != 1 || favorites[0].ID != live.ID {
+		t.Fatalf("收藏视图不该带出失效记录，实际 %+v", favorites)
+	}
+
+	// 「路径失效」视图是它们唯一的去处
+	staleOnly, err := svc.SearchLibraryVideos(LibraryFilter{SmartView: LibraryViewStale}, 0, 0, 0, 20)
+	if err != nil {
+		t.Fatalf("路径失效视图查询失败: %v", err)
+	}
+	if len(staleOnly) != 1 || staleOnly[0].ID != stale.ID {
+		t.Fatalf("路径失效视图应当只列失效记录，实际 %+v", staleOnly)
+	}
+}
+
 func TestLibraryFilterRestrictsResultsToPathPrefix(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()

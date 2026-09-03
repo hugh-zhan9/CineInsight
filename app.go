@@ -84,21 +84,26 @@ type App struct {
 	faceReview            *services.FaceReviewService
 	shortFeedServer       *services.ShortFeedHTTPServer
 	shortFeedStartupError string
-	startupError          string
-	logFile               *os.File // 保持日志文件句柄引用，防止泄漏
-	backupCancel          context.CancelFunc
-	backupWG              sync.WaitGroup
-	backupOpMu            sync.Mutex
-	backupOpsClosed       bool
-	semanticMu            sync.RWMutex
-	imageAITagMu          sync.RWMutex
-	imageAITagging        *services.ImageAITaggingService
-	imageAITagAutoMu      sync.Mutex // 串行化自动触发，防止启动与扫描后触发并发
-	imageSemanticMu       sync.RWMutex
-	imageSemanticIndex    *services.ImageSemanticIndexService
-	restoreMu             sync.Mutex
-	restoreTerminal       bool
-	restoreRelease        func()
+	// 浏览器插件桥接（D-B03、D-B04）。与手机端 feed 服务是两条互不相干的通道：
+	// feed 绑 0.0.0.0、只读、无鉴权；桥接只绑 127.0.0.1、要令牌，因为它能让
+	// 桌面端按外部请求去取任意地址并往磁盘写文件。
+	browserDownloads   *services.BrowserDownloadService
+	browserBridge      *services.BrowserBridgeServer
+	startupError       string
+	logFile            *os.File // 保持日志文件句柄引用，防止泄漏
+	backupCancel       context.CancelFunc
+	backupWG           sync.WaitGroup
+	backupOpMu         sync.Mutex
+	backupOpsClosed    bool
+	semanticMu         sync.RWMutex
+	imageAITagMu       sync.RWMutex
+	imageAITagging     *services.ImageAITaggingService
+	imageAITagAutoMu   sync.Mutex // 串行化自动触发，防止启动与扫描后触发并发
+	imageSemanticMu    sync.RWMutex
+	imageSemanticIndex *services.ImageSemanticIndexService
+	restoreMu          sync.Mutex
+	restoreTerminal    bool
+	restoreRelease     func()
 }
 
 // NewApp creates a new App application struct
@@ -174,12 +179,41 @@ func NewApp() *App {
 	app.faceAnalysis = services.NewFaceAnalysisService(dataDir, app.faceRuntime, imageThumbnail)
 	app.faceAnalysis.SetMediaWorkSlot(mediaWorkSlot)
 	app.faceReview = &services.FaceReviewService{}
+	app.wireBrowserBridge()
 	app.wireBackgroundTaskRegistry()
 	app.wireDesktopNotifier()
 	if dataDirErr != nil {
 		app.setStartupError(dataDirErr)
 	}
 	return app
+}
+
+// wireBrowserBridge 构造下载队列与桥接服务（D-B03..D-B06）。
+//
+// 下载队列有意不接空闲门、也不占 MediaWorkSlot：门只挡自动触发的任务，而这些
+// 是用户在浏览器里点出来的；`-c copy` 是网络与 IO 密集，占重媒体槽会被超分、
+// 转封装那类长任务饿死。它自带并发上限。
+func (a *App) wireBrowserBridge() {
+	a.browserDownloads = services.NewBrowserDownloadService(services.BrowserDownloadDeps{
+		Settings: func() (services.BrowserDownloadSettings, error) {
+			settings, err := a.settingsService.GetSettings()
+			if err != nil {
+				return services.BrowserDownloadSettings{}, err
+			}
+			return services.BrowserDownloadSettings{
+				Directory:   settings.BrowserDownloadDirectory,
+				Concurrency: settings.BrowserDownloadConcurrency,
+			}, nil
+		},
+		ImportDirectory: services.BrowserDownloadImporterFromScan(a.videoService, a.directoryService.GetAllDirectories),
+		Tasks:           a.backgroundTasks,
+	})
+	a.browserBridge = services.NewBrowserBridgeServer(a.browserDownloads, settingsBridgeAuth{settings: a.settingsService})
+	// 「用 IINA 播放」：把流直接交给本机播放器，不下载。请求头一起带过去——
+	// 这类站点的 CDN 认 Referer，缺了直接 403。
+	a.browserBridge.SetStreamPlayer(services.LaunchStreamInIINA)
+	// 播放器传不进请求头，所以流先过一道本机代理，由代理去源站时加 Referer。
+	a.browserBridge.SetStreamProxy(services.NewStreamProxy())
 }
 
 // wireBackgroundTaskRegistry 把全部长任务服务接进登记表（D-014）。
@@ -311,6 +345,9 @@ func (a *App) startup(ctx context.Context) {
 		}
 		emit("library-watcher-reconciled", event)
 	})
+	a.browserDownloads.SetEventEmitter(func(tasks []services.BrowserDownloadTask) {
+		emit("browser-download-tasks", tasks)
+	})
 	a.localMetadata.SetBackfillEventEmitter(func(status services.LocalMetadataBackfillStatus) {
 		emit("local-metadata-backfill", status)
 	})
@@ -374,6 +411,7 @@ func (a *App) startup(ctx context.Context) {
 	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。
 	go a.triggerImageAITaggingAuto("startup")
 	a.startShortFeedServer(ctx)
+	a.startBrowserBridge(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
 		a.setLogEnabled(settings.LogEnabled)
@@ -470,6 +508,16 @@ func (a *App) shutdown(ctx context.Context) {
 		if err := a.shortFeedServer.Stop(ctx); err != nil {
 			log.Printf("Short feed server shutdown failed: %v", err)
 		}
+	}
+	if a.browserBridge != nil {
+		if err := a.browserBridge.Stop(ctx); err != nil {
+			log.Printf("Browser bridge shutdown failed: %v", err)
+		}
+	}
+	if a.browserDownloads != nil {
+		// 等在跑的 ffmpeg 收完摊。不等的话，任务的清理（删掉没下完的 .part）
+		// 会和进程退出赛跑，输给它就在下载目录里留下垃圾。
+		a.browserDownloads.Wait()
 	}
 	a.closeLogFile()
 }

@@ -277,6 +277,13 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	case LibraryViewStale:
 		query = query.Where("videos.is_stale = ?", true)
 	}
+
+	// 失效记录只在「路径失效」视图里露面（D-S02）。它们当前指不到文件：留在默认
+	// 列表里只会让人对着一条点开就失败的记录发愣，而随机播放共用这条筛选边界，
+	// 抽中它等于白抽一次。删掉扫描目录后那批记录也是靠这一条从列表里消失的。
+	if filter.SmartView != LibraryViewStale {
+		query = query.Where("videos.is_stale = ?", false)
+	}
 	return query, nil
 }
 

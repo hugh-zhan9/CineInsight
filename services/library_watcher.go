@@ -44,6 +44,7 @@ type LibraryReconcileSummary struct {
 	Added             int `json:"added"`
 	Relocated         int `json:"relocated"`
 	Stale             int `json:"stale"`
+	Restored          int `json:"restored"`
 	MetadataRefreshed int `json:"metadata_refreshed"`
 	Skipped           int `json:"skipped"`
 	ErrorCount        int `json:"error_count"`
@@ -686,6 +687,7 @@ func summarizeLibraryReconciliation(result *ScanSyncResult) *LibraryReconcileSum
 		Added:             result.Added,
 		Relocated:         result.Relocated,
 		Stale:             result.Stale,
+		Restored:          result.Restored,
 		MetadataRefreshed: result.MetadataRefreshed,
 		Skipped:           result.Skipped,
 		ErrorCount:        len(result.Errors),

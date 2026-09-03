@@ -31,6 +31,8 @@
 
     <MobileSection :form="settingsForm" />
 
+    <BrowserBridgeSection :form="settingsForm" @error="reportSettingsError" />
+
     <AITagSection :form="settingsForm" />
 
     <AITagLibrarySection
@@ -95,6 +97,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'enhance', label: '视频超分' },
   { key: 'face', label: '人脸识别' },
   { key: 'mobile', label: '手机端浏览' },
+  { key: 'browser-bridge', label: '浏览器插件' },
   { key: 'ai-tags', label: 'AI 标签' },
   { key: 'ai-tag-library', label: 'AI 标签库' },
   { key: 'random', label: '智能随机播放' },
@@ -115,6 +118,7 @@ import DatabaseSection from './settings/DatabaseSection.vue';
 import EnhanceSection from './settings/EnhanceSection.vue';
 import FaceSection from './settings/FaceSection.vue';
 import IdleSchedulingSection from './settings/IdleSchedulingSection.vue';
+import BrowserBridgeSection from './settings/BrowserBridgeSection.vue';
 import MobileSection from './settings/MobileSection.vue';
 import ProxySection from './settings/ProxySection.vue';
 import RandomAndFormatsSection from './settings/RandomAndFormatsSection.vue';
@@ -124,7 +128,7 @@ import { confirmAction } from '../utils/feedback.js';
 
 export default {
   name: 'SettingsPage',
-  components: { AITagLibrarySection, AITagSection, AutomationSection, BasicSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, MobileSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { AITagLibrarySection, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, MobileSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
@@ -308,6 +312,13 @@ export default {
             library_watch_enabled: this.settingsForm.library_watch_enabled || false,
             local_metadata_enabled: this.settingsForm.local_metadata_enabled || false,
             ai_quality_enabled: this.settingsForm.ai_quality_enabled || false,
+            // 浏览器插件桥接三项。**这里漏了任何一个都会静默把它写成零值**：
+            // 后端是无条件赋值的，开关会被写回 false、下载目录会被清空，而界面上
+            // 表单还显示着你刚设的值，看起来像保存成功了。令牌有意不在这里传，
+            // 它只由「生成令牌」按钮写。
+            browser_bridge_enabled: this.settingsForm.browser_bridge_enabled || false,
+            browser_download_directory: this.settingsForm.browser_download_directory || '',
+            browser_download_concurrency: this.settingsForm.browser_download_concurrency || 2,
             short_feed_max_duration_minutes: this.settingsForm.short_feed_max_duration_minutes || 5,
 			short_feed_feedback_sync_enabled: this.settingsForm.short_feed_feedback_sync_enabled !== false,
             theme: this.settingsForm.theme,

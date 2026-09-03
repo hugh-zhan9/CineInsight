@@ -1,0 +1,12 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>CineInsight 媒体抓取 - 下载执行器</title>
+  </head>
+  <body>
+    <!-- 这个页面不给人看。它存在的唯一理由是：MV3 的 service worker 随时会被回收，
+         长下载不能待在里面。offscreen 文档能一直活着，下载 worker 挂在它下面。 -->
+    <script type="module" src="offscreen.js"></script>
+  </body>
+</html>

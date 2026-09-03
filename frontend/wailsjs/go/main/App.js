@@ -102,6 +102,10 @@ export function BatchRemoveTagFromVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchRemoveTagFromVideos'](arg1, arg2);
 }
 
+export function CancelBrowserDownloadTask(arg1) {
+  return window['go']['main']['App']['CancelBrowserDownloadTask'](arg1);
+}
+
 export function CancelCollectionSuggestionAnalysis() {
   return window['go']['main']['App']['CancelCollectionSuggestionAnalysis']();
 }
@@ -342,6 +346,10 @@ export function GetBackupStatus() {
   return window['go']['main']['App']['GetBackupStatus']();
 }
 
+export function GetBrowserBridgeStatus() {
+  return window['go']['main']['App']['GetBrowserBridgeStatus']();
+}
+
 export function GetCleanupCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetCleanupCandidates'](arg1, arg2, arg3);
 }
@@ -554,6 +562,10 @@ export function ListAITagCandidates(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListAITagCandidates'](arg1, arg2, arg3);
 }
 
+export function ListBrowserDownloadTasks() {
+  return window['go']['main']['App']['ListBrowserDownloadTasks']();
+}
+
 export function ListCollectionSuggestions() {
   return window['go']['main']['App']['ListCollectionSuggestions']();
 }
@@ -692,6 +704,10 @@ export function RefreshVideoMetadata(arg1) {
 
 export function RefreshVideoTechnicalMetadata(arg1) {
   return window['go']['main']['App']['RefreshVideoTechnicalMetadata'](arg1);
+}
+
+export function RegenerateBrowserBridgeToken() {
+  return window['go']['main']['App']['RegenerateBrowserBridgeToken']();
 }
 
 export function RejectAITagCandidate(arg1) {
@@ -860,6 +876,10 @@ export function SearchVideosByTags(arg1, arg2, arg3, arg4, arg5) {
 
 export function SearchVideosWithFilters(arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10) {
   return window['go']['main']['App']['SearchVideosWithFilters'](arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8, arg9, arg10);
+}
+
+export function SelectBrowserDownloadDirectory() {
+  return window['go']['main']['App']['SelectBrowserDownloadDirectory']();
 }
 
 export function SelectCollectionCover() {

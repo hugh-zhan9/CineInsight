@@ -529,7 +529,9 @@ export default {
 
       this.registerRuntimeEvent('library-watcher-reconciled', (event) => {
         const result = event?.result;
-        if (!result || result.error_count > 0 || result.added > 0 || result.relocated > 0 || result.stale > 0 || result.metadata_refreshed > 0) {
+        // restored 这一路是「删掉扫描目录后被标失效的记录又回来了」：只做恢复的那轮
+        // 对账在别的计数上全是 0，漏掉它列表就不刷新，用户会以为数据没回来。
+        if (!result || result.error_count > 0 || result.added > 0 || result.relocated > 0 || result.stale > 0 || result.restored > 0 || result.metadata_refreshed > 0) {
           this.reloadCurrentView();
         }
       });

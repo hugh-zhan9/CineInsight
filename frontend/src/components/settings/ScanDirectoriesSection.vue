@@ -175,7 +175,7 @@ export default {
       } catch (err) {}
     },
     async deleteDirectoryItem(id) {
-      if (!await confirmAction({ title: '删除扫描目录', message: '确定要删除此目录配置吗？库里已有的视频记录不会被删除。', confirmText: '删除', danger: true })) return;
+      if (!await confirmAction({ title: '删除扫描目录', message: '确定要删除此目录配置吗？该目录下的视频记录会保留但从片库列表隐藏（可在「路径失效」视图查看），磁盘文件不受影响。把同一路径再加回来时数据会自动恢复。', confirmText: '删除', danger: true })) return;
       try {
         await DeleteDirectory(id);
         await this.refreshDirectories();
@@ -223,7 +223,7 @@ export default {
       } catch (err) {}
     },
     async deleteImageDirectoryItem(id) {
-      if (!await confirmAction({ title: '删除图片目录', message: '确定要删除此图片目录配置吗？库里已有的图片记录不会被删除。', confirmText: '删除', danger: true })) return;
+      if (!await confirmAction({ title: '删除图片目录', message: '确定要删除此图片目录配置吗？该目录下的图片记录会保留但从图库隐藏，磁盘文件不受影响。把同一路径再加回来时数据会自动恢复。', confirmText: '删除', danger: true })) return;
       try {
         await DeleteImageDirectory(id);
         await this.loadImageDirectories();

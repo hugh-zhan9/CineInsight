@@ -199,6 +199,22 @@ type Settings struct {
 	// 什么时候跑该由用户决定。
 	AutoFrameHashSequence bool `json:"auto_frame_hash_sequence"`
 
+	// 浏览器插件桥接（D-B03、D-B05、D-B06）。
+	//
+	// BrowserBridgeEnabled 默认关，零值即默认，不需要显式迁移，也不用（更不能用）
+	// gorm default 标签：这条通道会让桌面端按外部请求去取任意地址并往磁盘写文件，
+	// 该由用户显式打开。
+	//
+	// BrowserBridgeToken 是配对凭据，由桌面端生成、用户复制进插件；为空时桥接
+	// 不启动。BrowserDownloadDirectory 为空时拒绝建任务——不替用户挑落盘目录。
+	//
+	// BrowserDownloadConcurrency 带 default 是安全的：0 在这里不是"不限"而是非法值，
+	// 读取侧还会再归一化一次，因此不存在双向迁移器把用户设的合法值翻掉的情况。
+	BrowserBridgeEnabled       bool   `json:"browser_bridge_enabled"`
+	BrowserBridgeToken         string `gorm:"type:text;not null;default:''" json:"browser_bridge_token"`
+	BrowserDownloadDirectory   string `gorm:"type:text;not null;default:''" json:"browser_download_directory"`
+	BrowserDownloadConcurrency int    `gorm:"not null;default:2" json:"browser_download_concurrency"`
+
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }
 

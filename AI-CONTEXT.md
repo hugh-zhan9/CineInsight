@@ -98,6 +98,10 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **唯一性:** 在数据库层面通过 `idx_videos_path_active` 唯一索引（结合 `deleted_at IS NULL`）保证路径唯一。
 - **手动增量扫描:** 视频列表工具栏可手动扫描全部已配置目录，复用启动时同步逻辑并展示新增、迁移、移除记录、元数据补全、跳过和失败数量；发现新视频后立即唤醒 AI 打标任务。
 - **扫描目录黑名单:** 设置页按目录维护扫描排除列表；黑名单目录及其全部子目录会在启动扫描、手动目录扫描、增量扫描和迁移候选扫描中跳过。加入黑名单只阻止后续收录，不自动删除已有视频记录。
+- **删除扫描目录 = 标失效，不删记录（D-S01..D-S03）:** `App.DeleteDirectory` 在删配置行**之前**调 `VideoService.MarkVideosStaleUnderRemovedRoot`，把只属于该根的活跃视频置 `is_stale=true`；标记失败就不删配置行（先删配置又没标上，那批记录会掉进"扫描看不见、列表看得见"的夹缝——这正是本次修的毛病，因为两条对账都只在**当前**扫描根之下取候选）。有意不走软删：`deleteVideoRecord` 每条都会建 `VideoTrashEntry`，删一个目录就往回收站灌上千条。嵌套根按"属于被移除根且不属于任何剩余根"判定，`/media` 与 `/media/movies` 同时配着时删前者不牵连后者。
+- **失效记录不进默认列表（D-S02）:** `applyLibraryFilter` 在智能视图不是 `stale` 时一律追加 `is_stale = false`。这条边界是主片库与随机播放共用的，因此随机也不会再抽中指不到文件的记录。连带变化：因播放失败或文件丢失而失效的记录此前显示在主列表里，现在也只在「路径失效」视图里出现。
+- **对账收拾孤儿记录（D-S01/D-S04 的历史遗留补充）:** 只在删目录那一刻处理是不够的——旧版本删目录只删配置行，那批记录已经掉进夹缝。`SyncScanDirectories` / `SyncImageDirectories` 末尾各跑一次 `reconcileOrphanedVideos` / `reconcileOrphanedImages`：不属于任何**已配置**目录的记录，视频标失效、图片按失踪对账软删。判据用配置目录而非本轮扫到的 `roots`——盘没插时根扫不了但仍配置着，底下的记录不能被隐藏；目录清单读失败时直接返回错误、绝不走到这一步，否则会把整库藏起来。
+- **加回目录即恢复（D-S03）:** `App.AddDirectory` 之后后台跑一次 `SyncAffectedDirectories`（窄对账，文件重新出现时清 `is_stale`），完成后复用 `library-watcher-reconciled` 事件通知前端。`ScanSyncResult.Restored` / `LibraryReconcileSummary.Restored` 是为此新增的计数——只做恢复的那一轮在其余计数上全是 0，漏掉它前端不会刷新列表。只恢复真的扫得到的文件，盘没插或路径写错时不会复活任何记录。
 - **删除语义:** 视频记录使用 GORM 软删除。新发生的删除会创建 `video_trash_entries` 可恢复快照；用户选择删除原文件时先持久化 `pending_move` 状态、预定路径和强文件身份，再以不覆盖方式移动文件并以数据库事务清理字幕索引、设置 `deleted_at` 和完成状态。复制回退会校验源文件未变化及内容摘要。恢复使用 `restoring` 状态，字幕索引重建也在恢复事务内；事务返回错误时先确认数据库终态再决定是否补偿，应用启动会对账中断状态。异常状态和最近错误在回收站可见，并可恢复原状态。仅删除记录时磁盘文件保留。首页回收站可恢复到原路径，目标被占用或源文件缺失时失败且保留条目，不覆盖现有文件；历史软删除不猜测回填。增量扫描发现文件缺失且无法判定为迁移时，也只软删除数据库记录。
 
 ### 2.8 文件迁移检测
@@ -186,6 +190,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **图片多选:** 图片流卡片支持复选、全选当前已加载结果、批量添加标签和批量删除；批量接口逐项返回失败，失败项保留选中以便重试。
 - **图片标签搜索:** 单图详情和批量标签工具均使用可搜索组合输入框；输入时直接展示匹配标签，支持方向键选择并按回车添加，不使用独立下拉框或确认按钮。
 - **自动删除恢复:** 图片扫描对账因路径失踪而软删除记录时写入 `is_stale` 恢复标记；同一路径文件重新出现后复活原记录，保留原 ID、标签、收藏、评分等数据。用户主动“仅删除记录”不会写该标记，因此不会被后续扫描自动恢复。
+- **删除图片目录复用这条路（D-S04）:** `App.DeleteImageDirectory` 在删配置行之前调 `ImageService.MarkImagesStaleUnderRemovedRoot`，逐条走既有的 `deleteMissingImageRecord`（软删 + `is_stale`，不动磁盘文件、不建回收站条目）；加回同一路径后由 `restoreStaleImage` 复活同一行。用户可见结果与视频侧一致（从列表消失、记录留着、加回即恢复），但机制沿用图片自己这套，不套视频的标失效——图片的软删本来就不建回收站条目。图片侧只有全量 `SyncImageDirectories()`，没有按目录的窄扫描，因此加回目录触发的是全量对账。
 
 ### 2.18 播放历史账本
 - **表:** `play_events(id, video_id → videos ON DELETE CASCADE, played_at, source, created_at)`，索引 `(video_id, played_at)` 与 `(played_at)`。只追加，应用层没有任何 UPDATE / DELETE 路径；视频软删除时事件保留并继续进聚合，永久删除时级联清除。
@@ -268,6 +273,16 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - `frontend/src/components/CommandPalette.vue`：基于 `BaseModal`，只做过滤 + 视频搜索 + 执行；视频组不入注册表，输入 ≥2 字调 `SearchLibraryVideoPage`（limit 8），回车经 `openVideo` 函数 prop 回到片库页既有 `openPreview`。
 - 页面注册：`VideoListPage`（`video-list`，另提供 `applySmartViewCommand` / `applySavedViewCommand`）、`PhotoLibraryPage`（`photo-library`）、`EntityLibraryPage`（`entity-person` / `entity-collection`，新增可选 prop `focusEntity` 承接跨页落点）、`InsightsPage`（`insights-page`）、`SettingsPage`（`settings-page`）。已知限制：作品集/人物只取前 50 条，不随输入词二次查询。
 
+### 2.27 浏览器插件与桥接下载（D-B01..D-B06）
+- 扩展在 `browser-extension/`（Chrome/Edge MV3，无构建步骤，原生 ESM 直接「加载已解压的扩展程序」）。分两层：`src/common/`、`src/download/` 是不碰 chrome API 的纯逻辑（HLS 解析、AES-128 解密、断点账本、下载主循环、文件名与 ffmpeg 命令拼装），有 Node 内置 test runner 的单测；`src/background/`、`src/offscreen/`、`src/content/` 是与 chrome API 的接线，靠人工验收。
+- 嗅探走 `webRequest` **只读**监听（不阻塞不改写）：`onSendHeaders` 抓 Referer/Origin/User-Agent（事后没有第二次机会），`onHeadersReceived` 按「URL 后缀 + Content-Type」判定，播放列表正文特征（`#EXTM3U`）留到展开时验证。命中按标签页聚合、按去掉 fragment 的 URL 去重、单页上限 200 条；分片不逐条列出，只按所属目录归组，且同目录已看到 m3u8 时不再单列。
+- **Cookie 只留内存**：不进命中记录、不写 chrome.storage、不出现在下载产物里；只有用户在选项页显式打开「推送时附带 Cookie」，它才会随那一次推送发给本机桌面端。
+- 下载器挂在 offscreen 文档下的专用 Worker 里（MV3 的 service worker 随时被回收，长下载放不进去），分片经 OPFS 同步访问句柄增量落盘（几个 GB 不能堆内存），断点账本 `SequentialWriteLedger` 保证并发乱序取回的分片按序写盘——`nextIndex` 与 `bytesWritten` 永远自洽，续跑时按 `bytesWritten` 截断文件再从下一片开始。受限请求头经 `declarativeNetRequest` 会话规则附加，作用域三重限定（`tabIds:[-1]` + 主机 urlFilter + `xmlhttprequest`），任务结束即撤销。
+- **D-B01**：浏览器内不做转封装。TS 流输出 `.ts`，fMP4 输出 `.mp4`；要规范 mp4 走桥接（ffmpeg `-c copy`）。**D-B02**：SAMPLE-AES 与 DRM `KEYFORMAT` 在解析阶段就判为不可下载并给出原因，绝不产出半成品。直播流（无 `EXT-X-ENDLIST`）同样不接。
+- 桥接服务 `services/browser_bridge_server.go`（**D-B03**）：只绑 `127.0.0.1`、端口 18110..18130、除 `ping` 外每请求带 `X-CineInsight-Token` 定长比较、带 Origin 的只放行 `chrome-extension://`；请求体纪律与手机端 feed 同口径（JSON / 1 MiB / 拒绝未知字段）。与 `short_feed_server.go` 是两条边界完全不同的通道，不要照着其中一条理解另一条，对照表见 `docs/browser-extension.md`。
+- 下载队列 `services/browser_download_service.go`（**D-B04**、**D-B05**）：并发 1–4 默认 2，**不进空闲门也不占 `MediaWorkSlot`**（用户显式发起；`-c copy` 是网络/IO 密集，占重媒体槽会被超分饿死），后台任务登记表新 key `browser_download`。入口校验把外部输入一律当不可信：协议只认 http/https（ffmpeg 认得 `file:`/`concat:`/`pipe:`，放任等于交出读本机文件的能力，命令行另带 `-protocol_whitelist`）、请求头值禁 CR/LF、参数直接给 exec 不经 shell、文件名清洗后先用 `O_EXCL` 占住再下载（重名另起名字，绝不覆盖已有文件）。落盘后调既有 `SyncAffectedDirectories` 入库；**下载目录不自动加进扫描目录**，不在扫描范围时如实报「文件已保存但没有入库」——下载失败与入库失败是任务上两个不同字段。
+- 设置四列：`browser_bridge_enabled`（默认 false，零值即默认）、`browser_bridge_token`（**有意不走 `UpdateSettings`**，只由 `RegenerateBrowserBridgeToken` 写——走通用保存的话前端漏带一次就会把令牌抹空、已配对的插件静默断开）、`browser_download_directory`（为空拒绝建任务）、`browser_download_concurrency`（0 在这里是非法值而非"不限"，因此可以带 gorm default）。**D-B06**：令牌由桌面端生成、用户手工复制，不做自动配对与发现广播。
+
 ## 3. 关键目录说明 (Directory Structure)
 
 - `/services`: **核心业务层**（Video, VideoDetail, MediaProbe, TechnicalBackfill, Person, Collection, Subtitle, SubtitleWorkbench, LibraryWatcher, LocalMetadata, AIQuality, Tag, Settings, Directory 服务）。
@@ -283,6 +298,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
   - `services/playback_proxy_*.go` + `models/playback_proxy.go`：播放代理（见 2.23）；`services/frame_hash_service.go`、`clip_match.go`、`clip_cleanup.go` + `models/frame_hash.go`：帧哈希与截取片段（见 2.24）；`services/face_*.go` + `face_worker.py` + `models/face.go`：人脸运行时与分析（见 2.25）；`services/collection_suggestion_*.go`：建议作品集（见 2.22）。
   - `frontend/src/components/settings/`：分区组件现为 13 个（含 `IdleSchedulingSection`、`ProxySection`、`FaceSection`）；`frontend/src/utils/playbackProxy.js` 收口代理结果码与文案。
   - `frontend/scripts/data-test-set.test.mjs` 是 `data-test` 钩子集合守卫（基线 `.loopx/workspace/2026-09-02-capability-batch/baseline/data-test-set-2026-09-02.txt`，允许新增、不允许缺失），已挂进 `npm test`。
+- `/browser-extension`: **Chrome/Edge MV3 扩展**（见 2.27）。纯逻辑在 `src/common`、`src/download` 且有单测；`services/browser_bridge_server.go` 与 `services/browser_download_service.go` 是桌面端这一侧，安全边界写在 `docs/browser-extension.md`。
 - `/frontend/src/utils`: **前端纯函数工具层**（如虚拟列表窗口计算与缓存工具）。
 
 ## 4. 开发与构建指南 (Development & Build)

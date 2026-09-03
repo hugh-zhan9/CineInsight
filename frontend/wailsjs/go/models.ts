@@ -455,6 +455,10 @@ export namespace models {
 	    auto_face_analysis: boolean;
 	    face_model_mirror_url: string;
 	    auto_frame_hash_sequence: boolean;
+	    browser_bridge_enabled: boolean;
+	    browser_bridge_token: string;
+	    browser_download_directory: string;
+	    browser_download_concurrency: number;
 	    updated_at: string;
 	
 	    static createFrom(source: any = {}) {
@@ -521,6 +525,10 @@ export namespace models {
 	        this.auto_face_analysis = source["auto_face_analysis"];
 	        this.face_model_mirror_url = source["face_model_mirror_url"];
 	        this.auto_frame_hash_sequence = source["auto_frame_hash_sequence"];
+	        this.browser_bridge_enabled = source["browser_bridge_enabled"];
+	        this.browser_bridge_token = source["browser_bridge_token"];
+	        this.browser_download_directory = source["browser_download_directory"];
+	        this.browser_download_concurrency = source["browser_download_concurrency"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -1226,6 +1234,68 @@ export namespace services {
 		}
 	}
 	
+	export class BrowserBridgeStatus {
+	    running: boolean;
+	    enabled: boolean;
+	    port: number;
+	    url: string;
+	    startup_error: string;
+	    allowed_access: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BrowserBridgeStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.enabled = source["enabled"];
+	        this.port = source["port"];
+	        this.url = source["url"];
+	        this.startup_error = source["startup_error"];
+	        this.allowed_access = source["allowed_access"];
+	    }
+	}
+	export class BrowserDownloadTask {
+	    id: string;
+	    url: string;
+	    kind: string;
+	    title: string;
+	    filename: string;
+	    output_path: string;
+	    page_url: string;
+	    state: string;
+	    video_id: number;
+	    processed_seconds: number;
+	    bytes_written: number;
+	    error: string;
+	    import_error: string;
+	    created_at: number;
+	    updated_at: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BrowserDownloadTask(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.url = source["url"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.filename = source["filename"];
+	        this.output_path = source["output_path"];
+	        this.page_url = source["page_url"];
+	        this.state = source["state"];
+	        this.video_id = source["video_id"];
+	        this.processed_seconds = source["processed_seconds"];
+	        this.bytes_written = source["bytes_written"];
+	        this.error = source["error"];
+	        this.import_error = source["import_error"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class CleanupClipGroup {
 	    full: models.Video;
 	    clip: models.Video;
@@ -4903,6 +4973,7 @@ export namespace services {
 	    added: number;
 	    deleted: number;
 	    stale: number;
+	    restored: number;
 	    relocated: number;
 	    metadata_refreshed: number;
 	    skipped: number;
@@ -4920,6 +4991,7 @@ export namespace services {
 	        this.added = source["added"];
 	        this.deleted = source["deleted"];
 	        this.stale = source["stale"];
+	        this.restored = source["restored"];
 	        this.relocated = source["relocated"];
 	        this.metadata_refreshed = source["metadata_refreshed"];
 	        this.skipped = source["skipped"];

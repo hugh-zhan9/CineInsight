@@ -169,6 +169,94 @@ func TestAppLibraryWatcherSettingControlsLifecycleAndDirectoryCRUD(t *testing.T)
 	}
 }
 
+// 删掉扫描目录：记录标失效、从默认列表消失、不进回收站、磁盘文件不动；
+// 把同一路径加回来：记录自动恢复，标签评分观看进度原样保留（D-S01..D-S03）。
+func TestDeleteDirectoryMarksStaleAndAddBackRestores(t *testing.T) {
+	setupAppTestDB(t)
+	if err := database.DB.Create(&models.Settings{VideoExtensions: ".mp4", PlayWeight: 2}).Error; err != nil {
+		t.Fatalf("创建设置失败: %v", err)
+	}
+	root := t.TempDir()
+	moviePath := filepath.Join(root, "movie.mp4")
+	if err := os.WriteFile(moviePath, []byte("video"), 0o644); err != nil {
+		t.Fatalf("造视频文件失败: %v", err)
+	}
+	dir := models.ScanDirectory{Path: root, Alias: "lib"}
+	if err := database.DB.Create(&dir).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	rating := 8.5
+	video := models.Video{
+		Name: "movie.mp4", Path: moviePath, Directory: root,
+		IsFavorite: true, PersonalRating: &rating, WatchPositionSeconds: 42,
+	}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+
+	app := NewApp()
+	if err := app.DeleteDirectory(dir.ID); err != nil {
+		t.Fatalf("删除扫描目录失败: %v", err)
+	}
+
+	var afterDelete models.Video
+	if err := database.DB.First(&afterDelete, video.ID).Error; err != nil {
+		t.Fatalf("删目录后记录应当还在: %v", err)
+	}
+	if !afterDelete.IsStale {
+		t.Fatal("删目录后该目录下的视频应当标为失效")
+	}
+	// 磁盘文件不动、回收站不进条目
+	if _, err := os.Stat(moviePath); err != nil {
+		t.Fatalf("磁盘文件不该被动: %v", err)
+	}
+	var trashCount int64
+	if err := database.DB.Model(&models.VideoTrashEntry{}).Count(&trashCount).Error; err != nil {
+		t.Fatalf("统计回收站失败: %v", err)
+	}
+	if trashCount != 0 {
+		t.Fatalf("删目录不该产生回收站条目，实际 %d 条", trashCount)
+	}
+	// 默认列表里看不到它了
+	listed, err := app.videoService.SearchLibraryVideos(services.LibraryFilter{}, 0, 0, 0, 20)
+	if err != nil {
+		t.Fatalf("查询片库失败: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("失效记录不该出现在默认列表里，实际 %+v", listed)
+	}
+
+	// 把同一个路径加回来：后台恢复扫描应当把它接回来
+	if _, err := app.AddDirectory(root, "lib again"); err != nil {
+		t.Fatalf("重新添加扫描目录失败: %v", err)
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	var restored models.Video
+	for time.Now().Before(deadline) {
+		if err := database.DB.First(&restored, video.ID).Error; err != nil {
+			t.Fatalf("读取视频失败: %v", err)
+		}
+		if !restored.IsStale {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if restored.IsStale {
+		t.Fatal("把路径加回来之后记录应当自动恢复")
+	}
+	// 元数据一个都不能丢
+	if !restored.IsFavorite || restored.PersonalRating == nil || *restored.PersonalRating != 8.5 || restored.WatchPositionSeconds != 42 {
+		t.Fatalf("恢复后元数据应当原样保留: %+v", restored)
+	}
+	listed, err = app.videoService.SearchLibraryVideos(services.LibraryFilter{}, 0, 0, 0, 20)
+	if err != nil {
+		t.Fatalf("查询片库失败: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != video.ID {
+		t.Fatalf("恢复后应当回到默认列表，实际 %+v", listed)
+	}
+}
+
 func TestAITaggingReviewAPIsApproveCandidate(t *testing.T) {
 	setupAppTestDB(t)
 	tag := models.Tag{Name: "动作", Color: "#fff", Namespace: "用户分类", IsSystem: true, IsActive: true}
@@ -869,5 +957,40 @@ func TestDesktopNotificationsEnabledReadsCurrentSettings(t *testing.T) {
 	}
 	if app.desktopNotificationsEnabled() {
 		t.Fatal("关掉开关后应立即读到关闭")
+	}
+}
+
+// 走 App 层删除图片目录：该目录下的图片应当从图库消失（记录仍在库里）。
+func TestDeleteImageDirectoryHidesItsImages(t *testing.T) {
+	setupAppTestDB(t)
+	if err := database.DB.Create(&models.Settings{VideoExtensions: ".mp4", PlayWeight: 2}).Error; err != nil {
+		t.Fatalf("创建设置失败: %v", err)
+	}
+	root := t.TempDir()
+	photo := filepath.Join(root, "p.jpg")
+	if err := os.WriteFile(photo, []byte("jpeg"), 0o644); err != nil {
+		t.Fatalf("造图片失败: %v", err)
+	}
+	app := NewApp()
+	dir, err := app.AddImageDirectory(root, "photos")
+	if err != nil {
+		t.Fatalf("添加图片目录失败: %v", err)
+	}
+	if _, err := app.SyncImageDirectories(); err != nil {
+		t.Fatalf("图片对账失败: %v", err)
+	}
+	var before int64
+	database.DB.Model(&models.Image{}).Count(&before)
+	if before != 1 {
+		t.Fatalf("应当先收录 1 张，实际 %d", before)
+	}
+
+	if err := app.DeleteImageDirectory(dir.ID); err != nil {
+		t.Fatalf("删除图片目录失败: %v", err)
+	}
+	var after int64
+	database.DB.Model(&models.Image{}).Count(&after)
+	if after != 0 {
+		t.Fatalf("删除图片目录后该目录下的图片应当从图库消失，实际还有 %d 张", after)
 	}
 }

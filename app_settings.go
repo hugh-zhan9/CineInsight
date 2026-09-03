@@ -68,6 +68,11 @@ func (a *App) GetSettings() (*models.Settings, error) {
 
 // UpdateSettings 更新设置
 func (a *App) UpdateSettings(input models.Settings) error {
+	// 桥接只在它自己的字段变了的时候才重开。每次保存都重启的话，端口会在
+	// 18110..18130 之间来回换，已经配好的插件每次都要重新探测；服务本身也要
+	// 重新监听一次，纯属白折腾。读不出旧值时按"变了"处理，宁可多重启一次。
+	bridgeBefore, bridgeErr := a.settingsService.GetSettings()
+
 	err := a.settingsService.UpdateSettings(input)
 	if err == nil {
 		// 空闲调度改了要立刻生效：门自己 30 秒才刷一次快照，用户关掉开关后
@@ -82,6 +87,12 @@ func (a *App) UpdateSettings(input models.Settings) error {
 		// 不把已成功的设置保存报成失败。
 		if _, syncErr := a.shortFeedService.SyncFeedback(); syncErr != nil {
 			log.Printf("Short-feed feedback settings apply failed err=%v", syncErr)
+		}
+		// 桥接开关或下载目录改了要立刻生效：关掉之后端口必须马上不再监听，
+		// 开启之后不该等到下次重启应用才能配对。
+		if bridgeErr != nil || bridgeBefore == nil ||
+			bridgeBefore.BrowserBridgeEnabled != input.BrowserBridgeEnabled {
+			a.restartBrowserBridge()
 		}
 	}
 	log.Printf("API UpdateSettings err=%v", err)
@@ -251,13 +262,60 @@ func (a *App) GetAllDirectories() ([]models.ScanDirectory, error) {
 	return dirs, err
 }
 
-// AddDirectory 添加扫描目录
+// AddDirectory 添加扫描目录。
+//
+// 加完立刻对这一个目录跑一次窄扫描（D-S03）：之前删掉这个目录时被标失效的记录，
+// 会在扫描发现文件还在时自动清掉标记回到列表，标签、评分、观看进度原样保留。
+// 只有真的扫得到的文件才恢复——盘没插、路径写错时不会有任何记录被复活。
+//
+// 扫描放后台跑：添加目录的对话框不该被一次可能几分钟的扫描卡住，完成后复用既有的
+// library-watcher-reconciled 事件让片库页自己刷新。
 func (a *App) AddDirectory(path, alias string) (*models.ScanDirectory, error) {
 	dir, err := a.directoryService.AddDirectory(path, alias)
 	if err == nil {
 		a.reconfigureLibraryWatcher()
+		if dir != nil {
+			go a.rescanAddedDirectory(*dir)
+		}
 	}
 	return dir, err
+}
+
+// rescanAddedDirectory 对刚加入的目录做一次窄对账，把之前标失效的记录接回来。
+func (a *App) rescanAddedDirectory(added models.ScanDirectory) {
+	dirs, err := a.directoryService.GetAllDirectories()
+	if err != nil {
+		log.Printf("加入扫描目录后的恢复扫描读取目录失败 path=%s err=%v", added.Path, err)
+		return
+	}
+	result := a.videoService.SyncAffectedDirectories(dirs, []string{added.Path})
+	if result == nil {
+		return
+	}
+	log.Printf("加入扫描目录后的恢复扫描完成 path=%s scanned=%d added=%d restored=%d errors=%d",
+		added.Path, result.Scanned, result.Added, result.Restored, len(result.Errors))
+
+	if a.cleanupService != nil && (result.Added > 0 || result.Restored > 0 || result.Relocated > 0) {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	if a.ctx == nil {
+		return
+	}
+	runtime.EventsEmit(a.ctx, "library-watcher-reconciled", services.LibraryReconcileEvent{
+		DirectoryID: added.ID,
+		Affected:    1,
+		Result: &services.LibraryReconcileSummary{
+			Scanned:           result.Scanned,
+			Added:             result.Added,
+			Relocated:         result.Relocated,
+			Stale:             result.Stale,
+			Restored:          result.Restored,
+			MetadataRefreshed: result.MetadataRefreshed,
+			Skipped:           result.Skipped,
+			ErrorCount:        len(result.Errors),
+		},
+		CompletedAt: time.Now(),
+	})
 }
 
 // UpdateDirectory 更新目录
@@ -269,12 +327,45 @@ func (a *App) UpdateDirectory(id uint, path, alias string) error {
 	return err
 }
 
-// DeleteDirectory 删除扫描目录
+// DeleteDirectory 删除扫描目录。
+//
+// 删配置行之前先把该目录下的视频标成失效（D-S01）：记录留着、不软删、不进回收站，
+// 它们从默认列表消失但留在「路径失效」视图里，把同一个路径加回来时由扫描自动恢复。
+//
+// 顺序不能反：标记失败就不删配置行并把错误交回给用户。先删了配置又没标上的话，
+// 那批记录会掉进"扫描看不见、列表看得见"的夹缝——正是这次要修的毛病。
 func (a *App) DeleteDirectory(id uint) error {
-	err := a.directoryService.DeleteDirectory(id)
+	dirs, err := a.directoryService.GetAllDirectories()
+	if err != nil {
+		log.Printf("API DeleteDirectory load dirs err=%v", err)
+		return err
+	}
+	var removedPath string
+	found := false
+	remaining := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir.ID == id {
+			removedPath = dir.Path
+			found = true
+			continue
+		}
+		remaining = append(remaining, dir.Path)
+	}
+	if !found {
+		return fmt.Errorf("扫描目录不存在: %d", id)
+	}
+
+	marked, err := a.videoService.MarkVideosStaleUnderRemovedRoot(removedPath, remaining)
+	if err != nil {
+		log.Printf("API DeleteDirectory mark stale id=%d path=%s err=%v", id, removedPath, err)
+		return err
+	}
+
+	err = a.directoryService.DeleteDirectory(id)
 	if err == nil {
 		a.reconfigureLibraryWatcher()
 	}
+	log.Printf("API DeleteDirectory id=%d path=%s marked_stale=%d err=%v", id, removedPath, marked, err)
 	return err
 }
 

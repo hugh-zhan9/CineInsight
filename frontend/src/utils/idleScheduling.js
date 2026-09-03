@@ -18,7 +18,8 @@ export const BACKGROUND_TASK_LABELS = {
   exif: '图片 EXIF',
   cleanup: '清理分析',
   collection_suggest: '建议作品集',
-  backup: '数据库备份'
+  backup: '数据库备份',
+  browser_download: '插件下载'
 };
 
 const IDLE_WAIT_REASON_LABELS = {

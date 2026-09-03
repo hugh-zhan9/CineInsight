@@ -27,6 +27,11 @@ const DefaultImageExtensions = ".jpg,.jpeg,.png,.gif,.webp,.heic,.heif,.dng,.cr2
 // migrateProxyCacheLimitSetting 给出。
 const DefaultProxyCacheLimitBytes int64 = 50 << 30
 
+// DefaultBrowserDownloadConcurrency 是浏览器插件桥接下载队列的默认并发（D-B04）。
+// 与代理上限不同，0 在这里不是有意义的取值而是非法值，所以这一列可以带
+// gorm default 标签，读取侧还会再归一化一次。
+const DefaultBrowserDownloadConcurrency = 2
+
 // PostgresCLIConfig contains the connection fields needed by PostgreSQL client
 // tools. Passwords are intentionally exposed only as environment values so
 // callers never need to place credentials in process arguments.
@@ -397,6 +402,7 @@ func ApplySchema(db *gorm.DB) error {
 			IdleThresholdMinutes:         5,
 			DesktopNotificationsEnabled:  true,
 			ProxyCacheLimitBytes:         DefaultProxyCacheLimitBytes,
+			BrowserDownloadConcurrency:   DefaultBrowserDownloadConcurrency,
 		}
 		if err := db.Create(&settings).Error; err != nil {
 			return fmt.Errorf("初始化默认设置失败: %w", err)

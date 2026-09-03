@@ -129,12 +129,17 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 	result := &ImageScanResult{Errors: make([]ImageScanError, 0)}
 	scannedByPath := make(map[string]ScannedFile)
 	roots := make([]string, 0, len(dirs))
+	// configuredRoots 是"当前配置了哪些目录"，与 roots（本轮成功扫到的根）有意分开：
+	// 移动硬盘没插时那个根扫不了、进不了 roots，但它仍然配置着，底下的记录不能
+	// 因此被当成孤儿隐藏掉。
+	configuredRoots := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
 		root := filepath.Clean(strings.TrimSpace(dir.Path))
 		if root == "" || root == "." {
 			result.recordError("scan", dir.Path, "", fmt.Errorf("扫描目录为空"))
 			continue
 		}
+		configuredRoots = append(configuredRoots, root)
 		scannedFiles, scanErr := scanImageDirectory(root, extensions, excludedPaths)
 		if scanErr != nil {
 			result.recordError("scan", root, "", scanErr)
@@ -240,6 +245,8 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 		result.Added++
 	}
 
+	s.reconcileOrphanedImages(configuredRoots, result)
+
 	for _, image := range append(duplicateImages, missingImages...) {
 		if _, relocated := relocatedImageIDs[image.ID]; relocated {
 			continue
@@ -337,6 +344,83 @@ func parseImageExtensions(raw string) []string {
 
 func fingerprintImage(image models.Image) scanFileFingerprint {
 	return scanFileFingerprint{Name: image.Name, Size: image.Size}
+}
+
+// reconcileOrphanedImages 处理"不属于任何已配置图片目录"的记录。
+//
+// 这类记录从哪来：用户删掉过某个图片目录（旧版本只删配置行、不动记录），或者把
+// 目录改成了别的路径。而两条对账都只在配置目录之下取候选，所以它们过去永远碰不到，
+// 记录就停在"扫描看不见、图库看得见"的夹缝里——删了目录图片还在列表上就是这么来的。
+//
+// 处理方式与失踪对账一致（软删 + is_stale，不动磁盘文件、不建回收站条目），
+// 把那个目录加回来时同样由 restoreStaleImage 复活。
+//
+// 一个目录都没配置时，所有记录都是孤儿、全部隐藏——这正是"没有扫描目录就不该有内容"
+// 的应有之义。调用方必须先确认目录清单是读成功的：读失败时绝不能走到这里，
+// 否则会把整库藏起来。
+func (s *ImageService) reconcileOrphanedImages(configuredRoots []string, result *ImageScanResult) {
+	var images []models.Image
+	if err := database.DB.Select("id", "path", "directory").Find(&images).Error; err != nil {
+		result.recordError("load_orphans", "", "", err)
+		return
+	}
+	for _, image := range images {
+		if len(configuredRoots) > 0 && imageBelongsToRoots(image, configuredRoots) {
+			continue
+		}
+		if err := s.deleteMissingImageRecord(image.ID); err != nil {
+			result.recordError("orphan_hide", image.Directory, image.Path, err)
+			continue
+		}
+		result.Removed++
+	}
+}
+
+// MarkImagesStaleUnderRemovedRoot 把只属于被移除扫描根的图片按"失踪对账"处理（D-S04）。
+//
+// 图片侧沿用它自己那套已有机制：软删 + is_stale 标记（deleteMissingImageRecord），
+// 不动磁盘文件、不建回收站条目；把同一路径加回来时由 restoreStaleImage 复活，
+// 标签、评分这些都还在。视频那边不软删是因为它的软删每条都会建回收站条目，
+// 图片这条路本来就不建，所以不必改。
+//
+// 嵌套目录同视频：同时落在另一个仍配置着的根之下的图片保持原样。
+// 返回实际处理的条数。
+func (s *ImageService) MarkImagesStaleUnderRemovedRoot(removedRoot string, remainingRoots []string) (int, error) {
+	imagePathMutationMu.RLock()
+	defer imagePathMutationMu.RUnlock()
+
+	root := filepath.Clean(strings.TrimSpace(removedRoot))
+	if root == "" || root == "." {
+		return 0, fmt.Errorf("图片扫描目录为空")
+	}
+	remaining := make([]string, 0, len(remainingRoots))
+	for _, candidate := range remainingRoots {
+		cleaned := filepath.Clean(strings.TrimSpace(candidate))
+		if cleaned == "" || cleaned == "." || cleaned == root {
+			continue
+		}
+		remaining = append(remaining, cleaned)
+	}
+
+	candidates, err := s.getActiveImagesUnderRoots([]string{root})
+	if err != nil {
+		return 0, fmt.Errorf("读取该目录下的图片失败: %w", err)
+	}
+
+	marked := 0
+	for _, image := range candidates {
+		if len(remaining) > 0 && imageBelongsToRoots(image, remaining) {
+			continue
+		}
+		if err := s.deleteMissingImageRecord(image.ID); err != nil {
+			return marked, fmt.Errorf("标记图片失效失败: %w", err)
+		}
+		marked++
+	}
+	if marked > 0 {
+		log.Printf("图片扫描目录移除，按失踪对账处理 root=%s marked=%d", root, marked)
+	}
+	return marked, nil
 }
 
 func (s *ImageService) getActiveImagesUnderRoots(roots []string) ([]models.Image, error) {

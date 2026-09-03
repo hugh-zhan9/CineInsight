@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>选项 - CineInsight 媒体抓取</title>
+    <link rel="stylesheet" href="../common/ui.css" />
+    <style>
+      body { max-width: 640px; margin: 0 auto; padding-bottom: 32px; }
+      .section { padding: 12px; border-bottom: 1px solid var(--border); }
+      .narrow { max-width: 140px; }
+    </style>
+  </head>
+  <body>
+    <div class="topbar">
+      <h1>选项</h1>
+      <button id="save" class="primary">保存</button>
+    </div>
+    <div id="message" class="notice small" hidden></div>
+
+    <div class="section">
+      <h2>下载</h2>
+      <div class="field">
+        <label for="concurrency">分片并发数</label>
+        <input class="narrow" id="concurrency" type="number" min="1" max="16" step="1" />
+        <p class="help">同时取几个分片。调太高容易被 CDN 限速甚至临时封禁，默认 6。</p>
+      </div>
+      <div class="field">
+        <label for="retries">单个分片重试次数</label>
+        <input class="narrow" id="retries" type="number" min="0" max="10" step="1" />
+        <p class="help">重试用尽后整个任务失败，但已下载的部分会留着，可以从断点继续。</p>
+      </div>
+      <div class="field">
+        <label for="chunkSizeMB">直链分块大小（MB）</label>
+        <input class="narrow" id="chunkSizeMB" type="number" min="1" max="64" step="1" />
+        <p class="help">只对支持范围请求的直链有效。不支持的服务端会整取，且没有断点续传。</p>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>CineInsight 桥接</h2>
+      <div id="bridge-status" class="notice small">正在检测…</div>
+      <div class="field">
+        <label for="bridgeToken">配对令牌</label>
+        <input id="bridgeToken" type="password" autocomplete="off" spellcheck="false" />
+        <p class="help">
+          在桌面端「设置 → 浏览器插件」里生成并复制过来。桌面端只在 127.0.0.1 上监听，
+          没有令牌的请求一律拒绝。
+        </p>
+      </div>
+      <div class="field">
+        <label class="check">
+          <input id="attachCookieOnPush" type="checkbox" />
+          <span>
+            推送时附带 Cookie
+            <span class="help" style="display:block">
+              需要登录才能取的流会用到它。这等于把这个站点的登录凭据交给桌面端进程，
+              而桌面端要把它作为命令行参数传给 ffmpeg——同一台电脑上的其他程序能通过
+              进程列表看到它。默认关闭，只在确有需要时打开。
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>列表</h2>
+      <div class="field">
+        <label class="check">
+          <input id="showUndownloadable" type="checkbox" />
+          <span>
+            显示无法直接下载的条目
+            <span class="help" style="display:block">
+              指「页面内嵌流」（数据直接喂给播放器，没有可下载的地址）和「缺清单的分片」
+              （抓到分片但没抓到 .m3u8）。它们点了也下不了，默认不显示。
+              要用 MSE 捕获功能时打开它。
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <div class="section">
+      <h2>MSE 捕获</h2>
+      <div class="field">
+        <label class="check">
+          <input id="captureByDefault" type="checkbox" />
+          <span>
+            新页面默认开启捕获
+            <span class="help" style="display:block">
+              捕获会把整段媒体攒在页面内存里（上限 2 GB），大片子很吃内存。
+              默认关闭，需要时在弹窗里逐个页面开。
+            </span>
+          </span>
+        </label>
+      </div>
+    </div>
+
+    <script type="module" src="options.js"></script>
+  </body>
+</html>
