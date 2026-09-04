@@ -3,7 +3,9 @@
       <div class="ai-tag-review-header">
         <div>
           <h3>AI 标签管理</h3>
-          <p class="help-text">AI 标签待审 {{ candidates.length }} 条，视频同源待审 {{ sameSourceRelations.length }} 条<span v-if="reviewSection === 'tags' && reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条标签</span>。</p>
+          <!-- 分页之后 candidates 是"已加载的"，不是总数：还有下一页时必须说清楚，
+               否则这个数字看起来就是全部待审。 -->
+          <p class="help-text">AI 标签待审 {{ candidates.length }} 条<span v-if="candidateCursor">（已加载，还有更多）</span>，视频同源待审 {{ sameSourceRelations.length }} 条<span v-if="reviewSection === 'tags' && reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条标签</span>。</p>
           <p v-if="summary && !summary.config_available" class="ai-tag-warning">AI 配置不可用，后台分析已暂停。</p>
         </div>
         <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
@@ -14,7 +16,7 @@
       <div :class="['ai-review-split', { 'ai-review-split--with-quality': qualityEnabled }]">
         <div class="ai-review-main">
         <nav class="ai-review-type-tabs" aria-label="待审工作台类型">
-          <button type="button" :class="{ active: reviewSection === 'tags' }" data-test="ai-candidate-review-tab" @click="reviewSection = 'tags'">AI 标签待审 <span>{{ candidates.length }}</span></button>
+          <button type="button" :class="{ active: reviewSection === 'tags' }" data-test="ai-candidate-review-tab" @click="reviewSection = 'tags'">AI 标签待审 <span>{{ candidates.length }}{{ candidateCursor ? '+' : '' }}</span></button>
           <button type="button" :class="{ active: reviewSection === 'same-source' }" data-test="same-source-review-tab" @click="reviewSection = 'same-source'">视频同源待审 <span>{{ sameSourceRelations.length }}</span></button>
           <button type="button" :class="{ active: reviewSection === 'face' }" data-test="face-cluster-review-tab" @click="reviewSection = 'face'">人物候选</button>
         </nav>
@@ -90,10 +92,23 @@
             <div v-else class="ai-tag-review-empty">暂无待处理的视频同源关系</div>
           </template>
           <template v-else>
-            <div v-if="groups.length === 0" class="ai-tag-review-empty">{{ reviewSearch.trim() ? '没有匹配的待审 AI 标签' : '暂无待审 AI 标签' }}</div>
-            <div v-else class="ai-tag-review-list">
+            <!-- 还有下一页时不能说"暂无"：那只是当页被处理空了。 -->
+            <div v-if="groups.length === 0 && !candidateCursor" class="ai-tag-review-empty">{{ reviewSearch.trim() ? '没有匹配的待审 AI 标签' : '暂无待审 AI 标签' }}</div>
+            <div v-if="groups.length" class="ai-tag-review-list">
               <section v-for="group in groups" :key="group.videoId" class="ai-video-group">
                 <div class="ai-video-title">
+                  <!-- 光看文件名判断不了一条标签候选对不对，缩略图是最便宜的证据。
+                       复用同源审阅那一套：/preview/thumbnail 路由 + 本地失败占位。 -->
+                  <div :class="['ai-video-thumbnail', { 'ai-video-thumbnail--failed': thumbnailFailed(group.videoId) }]">
+                    <img
+                      v-if="!thumbnailFailed(group.videoId)"
+                      :src="thumbnailURL(group.videoId)"
+                      :alt="`${group.videoName} 缩略图`"
+                      loading="lazy"
+                      @error="markThumbnailFailed(group.videoId)"
+                    />
+                    <span v-else aria-hidden="true">▶</span>
+                  </div>
                   <div class="ai-video-name">
                     <span>{{ group.videoName }}</span>
                     <span v-if="group.videoDeleted" class="ai-video-deleted-badge">已删除</span>
@@ -147,6 +162,16 @@
                 </div>
               </section>
             </div>
+            <div v-if="candidateCursor" class="ai-review-load-more">
+              <button
+                type="button"
+                class="btn-secondary btn-compact"
+                data-test="ai-candidate-load-more"
+                :disabled="loadingMore || loading"
+                @click="loadMoreCandidates()"
+              >{{ loadingMore ? '加载中…' : '加载更多候选' }}</button>
+              <span>已加载 {{ candidates.length }} 条，还有更多</span>
+            </div>
           </template>
         </div>
         </div>
@@ -159,7 +184,9 @@
       <div v-if="rejectConfirm.show" class="ai-confirm-overlay">
         <div class="ai-confirm-dialog glass-surface">
           <h4>确认全部拒绝</h4>
-          <p>将拒绝这个视频下的 {{ rejectConfirm.count }} 个 AI 标签候选。</p>
+          <!-- 后端按视频拒绝全部待审候选，不只是当前已加载的这几条：分页之后
+               这两个数可能不一样，文案不能只报已加载的条数。 -->
+          <p>将拒绝这个视频下全部待审 AI 标签候选（当前已加载 {{ rejectConfirm.count }} 个）。</p>
           <p class="ai-confirm-video">{{ rejectConfirm.videoName }}</p>
           <div class="ai-confirm-actions">
             <button type="button" class="btn-secondary" @click="cancelRejectVideoGroup">取消</button>
@@ -212,12 +239,12 @@
 </template>
 
 <script>
-import { ApproveAITagCandidate, ConfirmSameSourceRelation, DeleteVideo, GetAITaggingStatusSummary, ListAITagCandidates, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import { ApproveAITagCandidate, ConfirmSameSourceRelation, DeleteVideo, GetAITaggingStatusSummary, ListAITagCandidatePage, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import AddTagDialog from './AddTagDialog.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import BaseModal from './ui/BaseModal.vue';
-import { confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById } from '../utils/aiTagReview.js';
+import { appendCandidates, confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia } from '../utils/aiTagReview.js';
 
 export default {
   name: 'AITagReviewDialog',
@@ -231,6 +258,14 @@ export default {
   data() {
     return {
       candidates: [],
+      // 候选按 id 游标分页：candidateCursor 非 0 表示后端还有下一页。
+      candidateCursor: 0,
+      loadingMore: false,
+      // 两次"回到第一页"竞速时，用 token 保证只有最后一次的结果落到界面上
+      // （在途的翻页请求由 loadMoreCandidates 自己按游标判定，见那里的注释）。
+      candidateLoadToken: 0,
+      // 在途的那一次翻页请求，供搜索时的连续翻页等待它完成。
+      pendingMore: null,
       reviewSection: 'tags',
       sameSourceRelations: [],
       summary: null,
@@ -254,8 +289,14 @@ export default {
     },
   },
   watch: {
+    // 搜索的口径是全部待审候选，不是"已加载的那几页"。
+    reviewSearch(value) {
+      if (String(value || '').trim()) this.loadAllCandidatesForSearch();
+    },
     visible(value) {
       if (value) {
+        // 弹窗是常驻挂载的：不在每次打开时清掉，缩略图一次失败就会占位到重启应用。
+        this.thumbnailFailures = {};
         this.reviewSection = 'tags';
         this.reviewSearch = '';
         this.loadCandidates();
@@ -275,16 +316,21 @@ export default {
     },
     async loadCandidates(options = {}) {
       const silent = !!options.silent;
+      const token = ++this.candidateLoadToken;
       if (!silent) this.loading = true;
       this.error = '';
       try {
-        const [summary, candidates, relations] = await Promise.all([
+        const [summary, candidatePage, relations] = await Promise.all([
           GetAITaggingStatusSummary(),
-          ListAITagCandidates(0, '', 'pending'),
+          ListAITagCandidatePage(0, '', 'pending', 0, 0),
           ListSameSourceRelations('detected', false),
         ]);
+        if (token !== this.candidateLoadToken) return;
         this.summary = summary;
-        this.candidates = Array.isArray(candidates) ? candidates : [];
+        // 这是"回到第一页"，不是追加：刷新、重命名、手动加标签等需要重新取数的
+        // 动作都走这里，已经翻出来的后续页会被丢掉（换取的是列表与库一致）。
+        this.candidates = Array.isArray(candidatePage?.items) ? candidatePage.items : [];
+        this.candidateCursor = Number(candidatePage?.next_id || 0);
         this.sameSourceRelations = Array.isArray(relations) ? relations : [];
         const unread = this.sameSourceRelations.filter(relation => relation.is_unread);
         if (unread.length) {
@@ -294,25 +340,72 @@ export default {
           this.$emit('changed');
         }
       } catch (err) {
+        if (token !== this.candidateLoadToken) return;
         this.error = '加载 AI 标签候选失败: ' + err;
       } finally {
         if (!silent) this.loading = false;
       }
     },
+    // 取下一页并追加。返回 true 表示这次真的取到了数据，供搜索时的连续翻页判断收敛。
+    // 用请求自身的身份（发出时的游标）判断结果还能不能用，而不是 loadCandidates 里那个
+    // 自增计数器：在一次（可能是静默的）重新加载在途时点"加载更多"，计数器已经是新值，
+    // 旧游标的结果会被当成当前结果追加——列表跳过中间一整段候选，游标还越过了它们。
+    // 反过来，重新加载后列表末尾仍停在同一个游标时，这一页正好接得上，照常追加。
+    async loadMoreCandidates(limit = 0) {
+      if (!this.candidateCursor || this.loadingMore) return false;
+      const cursor = this.candidateCursor;
+      this.loadingMore = true;
+      this.error = '';
+      const request = ListAITagCandidatePage(0, '', 'pending', cursor, limit);
+      this.pendingMore = request;
+      try {
+        const page = await request;
+        if (this.candidateCursor !== cursor) return false;
+        this.candidates = appendCandidates(this.candidates, page?.items);
+        this.candidateCursor = Number(page?.next_id || 0);
+        return true;
+      } catch (err) {
+        if (this.candidateCursor === cursor) this.error = '加载更多 AI 标签候选失败: ' + err;
+        return false;
+      } finally {
+        this.loadingMore = false;
+        if (this.pendingMore === request) this.pendingMore = null;
+      }
+    },
+    // 搜索的口径一直是"全部待审候选"，只筛已加载的页会漏掉后面的结果。
+    // 所以输入关键词时把剩下的页一次翻完——这是用户明确要求的检索，不是默认路径。
+    // 用服务端上限（200）翻，少发几倍请求；已有翻页在途时先等它，
+    // 否则这一趟会因为 loadingMore 提前退出，搜索就悄悄只覆盖了已加载的页。
+    async loadAllCandidatesForSearch() {
+      while (this.candidateCursor) {
+        if (this.loadingMore) {
+          await this.pendingMore?.catch(() => {});
+          continue;
+        }
+        if (!(await this.loadMoreCandidates(200))) return;
+      }
+    },
+    // 局部移除后如果当页空了但后端还有下一页，直接补上，否则用户会看到
+    // 一个"空列表 + 加载更多"的假空态。
+    async fillEmptyCandidatePage() {
+      if (this.candidates.length || !this.candidateCursor) return;
+      await this.loadMoreCandidates();
+    },
     async approve(candidate) {
       await this.withProcessing(candidate.id, async () => {
         const item = await ApproveAITagCandidate(candidate.id);
-        this.candidates = removeCandidateById(this.candidates, candidate.id);
-        if (item?.status === 'superseded') {
-          await this.loadCandidates({ silent: true });
-        }
+        // 后端同时作废同视频同名候选，手工标签冲突时整视频作废：按同一规则局部移除，
+        // 不再整表重拉（重拉会把已翻出来的页丢掉）。
+        this.candidates = removeCandidatesAfterApproval(this.candidates, candidate, item, 'video_id');
         this.$emit('changed');
+        await this.fillEmptyCandidatePage();
       });
     },
     async reject(candidate) {
       await this.withProcessing(candidate.id, async () => {
         await RejectAITagCandidate(candidate.id);
         this.candidates = removeCandidateById(this.candidates, candidate.id);
+        await this.fillEmptyCandidatePage();
       });
     },
     async rejectSameSource(relation) {
@@ -347,12 +440,16 @@ export default {
         this.candidates = this.candidates.filter(candidate => !rejectedIds.has(Number(candidate.id)));
         this.cancelRejectVideoGroup();
         this.$emit('changed');
+        await this.fillEmptyCandidatePage();
       });
     },
     async retryVideo(videoId) {
       await this.withProcessing(videoId, async () => {
         await RetryAITagging(videoId);
-        await this.loadCandidates({ silent: true });
+        // RetryVideo 把这个视频的待审候选全部置 superseded，局部移除就够，
+        // 不必回到第一页；新一轮候选要等后台分析跑完才出现。
+        this.candidates = removeCandidatesByMedia(this.candidates, 'video_id', videoId);
+        await this.fillEmptyCandidatePage();
       });
     },
     async previewVideo(videoId) {
@@ -778,6 +875,16 @@ export default {
   margin-top: 2px;
 }
 
+.ai-review-load-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 14px 0 4px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .ai-video-group {
   border-top: 1px solid var(--border-color);
   padding: 14px 0;
@@ -798,6 +905,31 @@ export default {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ai-video-thumbnail {
+  display: grid;
+  flex: 0 0 auto;
+  width: 96px;
+  aspect-ratio: 16 / 9;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--thumb-bg);
+  color: var(--thumb-fg);
+  font-size: 18px;
+}
+
+.ai-video-thumbnail img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.ai-video-thumbnail--failed {
+  background: var(--thumb-fallback-bg);
 }
 
 .ai-video-name > span:first-child {

@@ -932,28 +932,6 @@ export namespace services {
 	
 	
 	
-	export class AITagLibraryInput {
-	    id: number;
-	    namespace: string;
-	    name: string;
-	    color: string;
-	    review_required: boolean;
-	    is_active: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new AITagLibraryInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.namespace = source["namespace"];
-	        this.name = source["name"];
-	        this.color = source["color"];
-	        this.review_required = source["review_required"];
-	        this.is_active = source["is_active"];
-	    }
-	}
 	export class AITaggingReviewItem {
 	    id: number;
 	    video_id: number;
@@ -1010,6 +988,61 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class AITagCandidatePage {
+	    items: AITaggingReviewItem[];
+	    next_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AITagCandidatePage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], AITaggingReviewItem);
+	        this.next_id = source["next_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AITagLibraryInput {
+	    id: number;
+	    namespace: string;
+	    name: string;
+	    color: string;
+	    review_required: boolean;
+	    is_active: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AITagLibraryInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.namespace = source["namespace"];
+	        this.name = source["name"];
+	        this.color = source["color"];
+	        this.review_required = source["review_required"];
+	        this.is_active = source["is_active"];
+	    }
+	}
+	
 	export class AITaggingStatusSummary {
 	    config_available: boolean;
 	    pending: number;
@@ -2425,24 +2458,6 @@ export namespace services {
 		}
 	}
 	
-	export class ImageAITaggingFailure {
-	    image_id: number;
-	    name: string;
-	    code: string;
-	    error: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImageAITaggingFailure(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.image_id = source["image_id"];
-	        this.name = source["name"];
-	        this.code = source["code"];
-	        this.error = source["error"];
-	    }
-	}
 	export class ImageAITaggingReviewItem {
 	    id: number;
 	    image_id: number;
@@ -2499,6 +2514,57 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class ImageAITagCandidatePage {
+	    items: ImageAITaggingReviewItem[];
+	    next_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAITagCandidatePage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], ImageAITaggingReviewItem);
+	        this.next_id = source["next_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImageAITaggingFailure {
+	    image_id: number;
+	    name: string;
+	    code: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageAITaggingFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.name = source["name"];
+	        this.code = source["code"];
+	        this.error = source["error"];
+	    }
+	}
+	
 	export class ImageAITaggingStatus {
 	    running: boolean;
 	    cancelled: boolean;

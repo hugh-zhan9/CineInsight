@@ -2,7 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'ApproveAITagCandidate', 'ConfirmSameSourceRelation', 'DeleteVideo', 'GetAITaggingStatusSummary', 'ListAITagCandidates', 'ListSameSourceRelations',
+  'ApproveAITagCandidate', 'ConfirmSameSourceRelation', 'DeleteVideo', 'GetAITaggingStatusSummary', 'ListAITagCandidatePage', 'ListSameSourceRelations',
   'MarkSameSourceRelationRead', 'PreviewExternally', 'RejectAITagCandidate', 'RejectAITagCandidatesByVideo',
   'RejectSameSourceRelation', 'RenameVideo', 'RetryAITagging',
 ].map(name => [name, vi.fn()])));
@@ -13,10 +13,24 @@ vi.mock('./FaceClusterReviewPanel.vue', () => ({ default: { template: '<div data
 
 import AITagReviewDialog from './AITagReviewDialog.vue';
 
+// 后端按 id 游标分页：next_id 只在这一页满员时出现。
+const candidatePage = (items, nextID = 0) => ({ items, next_id: nextID });
+
+const tagCandidate = (overrides = {}) => ({
+  id: 1,
+  video_id: 10,
+  video: { id: 10, name: 'fight.mp4', path: '/library/fight.mp4', tags: [] },
+  suggested_name: '动作',
+  confidence: 'high',
+  reasoning: 'fast cuts',
+  status: 'pending',
+  ...overrides,
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   api.GetAITaggingStatusSummary.mockResolvedValue({ config_available: true });
-  api.ListAITagCandidates.mockResolvedValue([]);
+  api.ListAITagCandidatePage.mockResolvedValue(candidatePage([]));
   api.ListSameSourceRelations.mockResolvedValue([]);
 });
 
@@ -141,7 +155,7 @@ describe('AITagReviewDialog face cluster review section', () => {
 
   // AI 标签候选加载失败不该把人物候选一起挡掉：两批数据来自不同的接口。
   it('keeps the face section usable when loading tag candidates failed', async () => {
-    api.ListAITagCandidates.mockRejectedValueOnce(new Error('boom'));
+    api.ListAITagCandidatePage.mockRejectedValueOnce(new Error('boom'));
     const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
     await wrapper.vm.loadCandidates();
     await flushPromises();
@@ -150,5 +164,163 @@ describe('AITagReviewDialog face cluster review section', () => {
     await wrapper.find('[data-test="face-cluster-review-tab"]').trigger('click');
     expect(wrapper.find('[data-test="face-panel-stub"]').exists()).toBe(true);
     expect(wrapper.find('.ai-tag-review-error').exists()).toBe(false);
+  });
+});
+
+// 待审候选没有上限，全量下发在大库上既压 IPC 又要一次渲染上千行。
+// 现在按 id 游标翻页；搜索的口径仍是"全部待审候选"，所以输入关键词会把剩下的页翻完。
+describe('AITagReviewDialog pagination', () => {
+  it('loads the first page and appends the next one on demand', async () => {
+    api.ListAITagCandidatePage
+      .mockResolvedValueOnce(candidatePage([tagCandidate({ id: 9 })], 9))
+      .mockResolvedValueOnce(candidatePage([
+        tagCandidate({ id: 8, video_id: 11, video: { id: 11, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, suggested_name: '舞蹈' }),
+      ]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+
+    expect(api.ListAITagCandidatePage).toHaveBeenLastCalledWith(0, '', 'pending', 0, 0);
+    expect(wrapper.findAll('.ai-video-group')).toHaveLength(1);
+
+    await wrapper.get('[data-test="ai-candidate-load-more"]').trigger('click');
+    await flushPromises();
+
+    expect(api.ListAITagCandidatePage).toHaveBeenLastCalledWith(0, '', 'pending', 9, 0);
+    expect(wrapper.findAll('.ai-video-group')).toHaveLength(2);
+    expect(wrapper.text()).toContain('dance.mp4');
+    // 末页没有游标，按钮随之消失。
+    expect(wrapper.find('[data-test="ai-candidate-load-more"]').exists()).toBe(false);
+  });
+
+  it('waits for an in-flight page instead of silently searching only what is loaded', async () => {
+    let resolveInFlight;
+    api.ListAITagCandidatePage
+      .mockResolvedValueOnce(candidatePage([tagCandidate({ id: 9 })], 9))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveInFlight = resolve; }))
+      .mockResolvedValueOnce(candidatePage([
+        tagCandidate({ id: 7, video_id: 12, video: { id: 12, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, suggested_name: '舞蹈' }),
+      ]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+
+    const inFlight = wrapper.vm.loadMoreCandidates();
+    wrapper.vm.reviewSearch = 'dance';
+    await flushPromises();
+
+    resolveInFlight(candidatePage([tagCandidate({ id: 8, suggested_name: '日落' })], 8));
+    await inFlight;
+    await flushPromises();
+
+    // 关键词命中的候选在最后一页：搜索必须等在途那一页翻完后继续翻，而不是就此收手。
+    expect(wrapper.vm.candidateCursor).toBe(0);
+    const groups = wrapper.findAll('.ai-video-group');
+    expect(groups).toHaveLength(1);
+    expect(groups[0].text()).toContain('dance.mp4');
+  });
+
+  it('loads every remaining page before filtering by keyword', async () => {
+    api.ListAITagCandidatePage
+      .mockResolvedValueOnce(candidatePage([tagCandidate({ id: 9 })], 9))
+      .mockResolvedValueOnce(candidatePage([
+        tagCandidate({ id: 8, video_id: 11, video: { id: 11, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, suggested_name: '舞蹈' }),
+      ], 8))
+      .mockResolvedValueOnce(candidatePage([]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    expect(wrapper.findAll('.ai-video-group')).toHaveLength(1);
+
+    wrapper.vm.reviewSearch = 'dance';
+    await flushPromises();
+
+    // 关键词命中的候选在第二页上：只筛已加载的页会把它漏掉。
+    expect(api.ListAITagCandidatePage).toHaveBeenCalledTimes(3);
+    // 搜索那一趟按服务端上限翻，少发几倍请求。
+    expect(api.ListAITagCandidatePage).toHaveBeenNthCalledWith(2, 0, '', 'pending', 9, 200);
+    const groups = wrapper.findAll('.ai-video-group');
+    expect(groups).toHaveLength(1);
+    expect(groups[0].text()).toContain('dance.mp4');
+  });
+
+  it('removes an approved candidate locally instead of reloading the pages', async () => {
+    api.ListAITagCandidatePage.mockResolvedValue(candidatePage([
+      tagCandidate({ id: 1, suggested_name: '动作', normalized_name: '动作' }),
+      tagCandidate({ id: 2, suggested_name: '打斗', normalized_name: '动作' }),
+      tagCandidate({ id: 3, video_id: 11, video: { id: 11, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, suggested_name: '舞蹈' }),
+    ]));
+    api.ApproveAITagCandidate.mockResolvedValue({ id: 1, status: 'approved' });
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+
+    const approve = wrapper.findAll('.ai-candidate-row button').find(button => button.text() === '批准');
+    await approve.trigger('click');
+    await flushPromises();
+
+    expect(api.ListAITagCandidatePage).toHaveBeenCalledTimes(1);
+    // 后端把同视频同名的另一条候选一并置 superseded，前端按同一规则移除。
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([3]);
+  });
+});
+
+// 刷新与在途翻页的竞态：上一批查询的下一页在刷新之后才回来，不能追加进新列表。
+describe('AITagReviewDialog stale page guard', () => {
+  // 危险的那个顺序：先开始（静默）重新加载，再点"加载更多"。此时任何"重新加载计数器"
+  // 都已经是新值，旧游标的那一页会被当成当前结果追加——列表跳过中间一整段候选，
+  // 游标还越过了它们。判定必须按请求自身的游标，而不是计数器。
+  it('drops a page requested after a silent reload had already started', async () => {
+    let resolveReload;
+    let resolveStalePage;
+    api.ListAITagCandidatePage
+      .mockResolvedValueOnce(candidatePage([
+        tagCandidate({ id: 9 }),
+        tagCandidate({ id: 8, suggested_name: '舞蹈' }),
+      ], 8))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveReload = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveStalePage = resolve; }));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    expect(wrapper.vm.candidateCursor).toBe(8);
+
+    const reload = wrapper.vm.loadCandidates({ silent: true });
+    const stale = wrapper.vm.loadMoreCandidates();
+
+    resolveReload(candidatePage([tagCandidate({ id: 5, suggested_name: '重新取数' })], 4));
+    await reload;
+    await flushPromises();
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([5]);
+
+    resolveStalePage(candidatePage([tagCandidate({ id: 20, suggested_name: '陈旧页' })], 19));
+    await stale;
+    await flushPromises();
+
+    // 旧游标那一页不能进来，游标也不能被它推到 19（19 到 5 之间的候选会永远翻不到）。
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([5]);
+    expect(wrapper.vm.candidateCursor).toBe(4);
+  });
+
+  it('drops an in-flight page when the list was reloaded', async () => {
+    let resolveStalePage;
+    api.ListAITagCandidatePage
+      .mockResolvedValueOnce(candidatePage([tagCandidate({ id: 9 })], 9))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveStalePage = resolve; }))
+      .mockResolvedValueOnce(candidatePage([tagCandidate({ id: 4, suggested_name: '重新取数' })]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+
+    wrapper.vm.loadMoreCandidates();
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([4]);
+
+    resolveStalePage(candidatePage([tagCandidate({ id: 8, suggested_name: '陈旧页' })], 8));
+    await flushPromises();
+
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([4]);
+    expect(wrapper.vm.candidateCursor).toBe(0);
   });
 });

@@ -324,3 +324,111 @@ func TestImageAITagCandidatesFollowTagLibraryChanges(t *testing.T) {
 		t.Fatalf("待审列表应清空，实际 %+v", items)
 	}
 }
+
+// TestImageAITagCandidatePageWalksEveryCandidateOnce 钉住游标翻页：满员页才给
+// NextID、翻完不重不漏、按 id 降序，短页即末页。审阅面板靠这套语义决定还有没有下一页。
+func TestImageAITagCandidatePageWalksEveryCandidateOnce(t *testing.T) {
+	svc := newImageAITaggingReviewTestService(t)
+	library := imageAITaggingTestLibrary(t, "海边", "日落", "雪山")
+	first := imageAITaggingTestImage(t, "heic")
+	second := imageAITaggingTestImage(t, "heic")
+	seeded := make([]uint, 0, 4)
+	for _, tag := range library {
+		seeded = append(seeded, seedImageAITagCandidate(t, first.ID, tag, models.AITagConfidenceHigh).ID)
+	}
+	seeded = append(seeded, seedImageAITagCandidate(t, second.ID, library[0], models.AITagConfidenceMedium).ID)
+
+	walked := make([]uint, 0, len(seeded))
+	pageSizes := make([]int, 0, 3)
+	cursor := uint(0)
+	for round := 0; ; round++ {
+		if round > len(seeded) {
+			t.Fatalf("翻页没有收敛，已走 %d 轮", round)
+		}
+		page, err := svc.ListImageAITagCandidatePage(0, "", "", cursor, 2)
+		if err != nil {
+			t.Fatalf("翻页失败: %v", err)
+		}
+		pageSizes = append(pageSizes, len(page.Items))
+		for index, item := range page.Items {
+			if index > 0 && page.Items[index-1].ID <= item.ID {
+				t.Fatalf("同一页必须按 id 降序: %+v", page.Items)
+			}
+			walked = append(walked, item.ID)
+		}
+		if page.NextID == 0 {
+			break
+		}
+		if len(page.Items) != 2 {
+			t.Fatalf("短页不该给下一页游标: size=%d next=%d", len(page.Items), page.NextID)
+		}
+		if page.NextID != page.Items[len(page.Items)-1].ID {
+			t.Fatalf("游标应是本页最后一条: next=%d last=%d", page.NextID, page.Items[len(page.Items)-1].ID)
+		}
+		cursor = page.NextID
+	}
+
+	// 4 条候选、每页 2 条：第二页仍然满员，所以还会给一个游标，第三页才是空的末页。
+	if want := []int{2, 2, 0}; len(pageSizes) != len(want) {
+		t.Fatalf("翻页页数不符: %v", pageSizes)
+	}
+	if len(walked) != len(seeded) {
+		t.Fatalf("翻页共取到 %d 条，应为 %d 条", len(walked), len(seeded))
+	}
+	seen := make(map[uint]int, len(walked))
+	for _, id := range walked {
+		seen[id]++
+	}
+	for _, id := range seeded {
+		if seen[id] != 1 {
+			t.Fatalf("候选 %d 出现 %d 次，翻页有重复或遗漏: %v", id, seen[id], walked)
+		}
+	}
+}
+
+// TestImageAITagCandidatePageKeepsFiltersAndDefaults 钉住筛选与默认页大小：
+// 游标必须只在同一批筛选结果里推进，limit<=0 时退回服务端默认（远大于这里的条数）。
+func TestImageAITagCandidatePageKeepsFiltersAndDefaults(t *testing.T) {
+	svc := newImageAITaggingReviewTestService(t)
+	library := imageAITaggingTestLibrary(t, "海边", "日落")
+	first := imageAITaggingTestImage(t, "heic")
+	second := imageAITaggingTestImage(t, "heic")
+	highOne := seedImageAITagCandidate(t, first.ID, library[0], models.AITagConfidenceHigh)
+	seedImageAITagCandidate(t, first.ID, library[1], models.AITagConfidenceMedium)
+	highTwo := seedImageAITagCandidate(t, second.ID, library[0], models.AITagConfidenceHigh)
+
+	all, err := svc.ListImageAITagCandidatePage(0, "", "", 0, 0)
+	if err != nil {
+		t.Fatalf("默认页大小取数失败: %v", err)
+	}
+	if len(all.Items) != 3 || all.NextID != 0 {
+		t.Fatalf("默认页应一次装下 3 条且没有下一页: %d next=%d", len(all.Items), all.NextID)
+	}
+	if all.Items[0].Image == nil || all.Items[0].Image.ID == 0 {
+		t.Fatalf("翻页结果同样要预载图片信息: %+v", all.Items[0])
+	}
+
+	high, err := svc.ListImageAITagCandidatePage(0, models.AITagConfidenceHigh, "", 0, 1)
+	if err != nil {
+		t.Fatalf("按置信度翻页失败: %v", err)
+	}
+	if len(high.Items) != 1 || high.Items[0].ID != highTwo.ID {
+		t.Fatalf("high 首页应是最新的一条 high 候选: %+v", high.Items)
+	}
+	next, err := svc.ListImageAITagCandidatePage(0, models.AITagConfidenceHigh, "", high.NextID, 1)
+	if err != nil {
+		t.Fatalf("按置信度续页失败: %v", err)
+	}
+	// 中置信那条 id 落在两条 high 之间：游标必须跳过它，而不是把它带进来。
+	if len(next.Items) != 1 || next.Items[0].ID != highOne.ID {
+		t.Fatalf("续页应只在 high 结果里推进: %+v", next.Items)
+	}
+
+	byImage, err := svc.ListImageAITagCandidatePage(second.ID, "", "", 0, 10)
+	if err != nil {
+		t.Fatalf("按图片翻页失败: %v", err)
+	}
+	if len(byImage.Items) != 1 || byImage.Items[0].ImageID != second.ID || byImage.NextID != 0 {
+		t.Fatalf("按图片筛选结果不符: %+v next=%d", byImage.Items, byImage.NextID)
+	}
+}

@@ -468,11 +468,47 @@ input:checked + .slider::before {
 .video-item--narrow .video-info { gap: 4px; }
 .video-item--narrow .video-tags--keep { display: flex; }
 
-.video-tags { display: flex; align-items: center; gap: 5px; min-width: 0; }
+/* position 是给展开浮层当锚点用的（.video-tags__strip--expanded）。 */
+.video-tags { position: relative; display: flex; align-items: center; gap: 5px; min-width: 0; }
 /* 列表行的高度是固定估算值（utils/virtualList.js），标签不能换行撑高，
-   所以横向滚动而不是截断——每个标签都还够得着。滚动条藏起来免得吃掉行高。 */
+   所以横向滚动而不是截断——每个标签都还够得着。滚动条藏起来免得吃掉行高。
+   代价是溢出没有任何提示，所以溢出时由 .video-tags__more 给出 +N 入口。 */
 .video-tags__strip { display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .video-tags__strip::-webkit-scrollbar { display: none; }
+/* 展开态：绝对定位的换行浮层。不改行高，虚拟列表的行测量与滚动锚点都不受影响；
+   .video-item 与 .video-info 都没有 overflow: hidden，所以浮层可以盖到行外面。 */
+.video-tags__strip--expanded {
+  position: absolute;
+  left: 0;
+  top: -5px;
+  z-index: 5;
+  width: max-content;
+  max-width: min(560px, 92vw);
+  flex-wrap: wrap;
+  row-gap: 5px;
+  padding: 5px 7px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-modal);
+  overflow: visible;
+}
+.video-tags__more {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px dashed var(--border-strong);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.video-tags__more:hover { border-style: solid; color: var(--text-primary); }
+/* 网格卡的标签本来就换行铺开，没有藏起来的标签，也就不需要这个入口。 */
+.video-item--grid .video-tags__more { display: none; }
 
 .video-subtitle-hit {
   margin-left: 6px; max-width: 440px; padding: 1px 8px;

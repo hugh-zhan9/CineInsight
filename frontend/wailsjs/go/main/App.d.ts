@@ -282,6 +282,8 @@ export function IgnoreFaceCluster(arg1:number):Promise<void>;
 
 export function LinkFaceCluster(arg1:number,arg2:number):Promise<services.FaceClusterView>;
 
+export function ListAITagCandidatePage(arg1:number,arg2:string,arg3:string,arg4:number,arg5:number):Promise<services.AITagCandidatePage>;
+
 export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
 
 export function ListBrowserDownloadTasks():Promise<Array<services.BrowserDownloadTask>>;
@@ -297,6 +299,8 @@ export function ListEnhancementTasks(arg1:number):Promise<Array<services.Enhance
 export function ListFaceClusters(arg1:services.FaceClusterFilter):Promise<Array<services.FaceClusterView>>;
 
 export function ListGlossaryEntries(arg1:number):Promise<Array<models.TranslationGlossaryEntry>>;
+
+export function ListImageAITagCandidatePage(arg1:number,arg2:string,arg3:string,arg4:number,arg5:number):Promise<services.ImageAITagCandidatePage>;
 
 export function ListImageAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.ImageAITaggingReviewItem>>;
 

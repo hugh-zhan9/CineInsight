@@ -94,3 +94,32 @@ describe('teleport 的浮层面板类必须有全局样式', () => {
     expect(problems).toEqual([]);
   });
 });
+
+// BaseModal 的 scope id 只挂在它的根节点（遮罩层），传进去的 class 却落在内层
+// .modal 面板上。所以 <BaseModal class="x"> 的面板级规则写成普通 scoped 选择器
+// （编译成 .x[data-v-y]）时整条失效——面板会退回全局 .modal 的 500px 宽且不封高，
+// 内容一多就撑出应用窗口。这类规则必须写成 :deep(.x)。
+describe('传给 BaseModal 的面板类必须用 :deep 才能落到内层面板上', () => {
+  it('每个 <BaseModal class="x"> 的 .x 都不是普通 scoped 选择器', () => {
+    const problems = [];
+    for (const file of listVueFiles(SRC)) {
+      const source = readFileSync(file, 'utf8');
+      const firstStyle = source.indexOf('<style');
+      const template = firstStyle === -1 ? source : source.slice(0, firstStyle);
+      const styles = firstStyle === -1 ? '' : source.slice(firstStyle);
+      for (const tag of template.matchAll(/<BaseModal\b[^>]*>/gs)) {
+        const classAttr = /\sclass="([^"]+)"/.exec(tag[0]);
+        if (!classAttr) continue;
+        for (const name of classAttr[1].split(/\s+/).filter(Boolean)) {
+          const escaped = name.replace(/[-]/g, '\\-');
+          const plain = new RegExp(`(?<![\\w:(\\-])\\.${escaped}\\s*\\{`).test(styles);
+          if (plain) {
+            problems.push(`${relative(SRC, file)} 把 .${name} 写成了普通 scoped 选择器，应该用 :deep(.${name})`);
+          }
+        }
+      }
+    }
+
+    expect(problems).toEqual([]);
+  });
+});

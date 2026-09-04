@@ -103,6 +103,18 @@ func (a *App) ListAITagCandidates(videoID uint, confidence string, status string
 	return items, err
 }
 
+// ListAITagCandidatePage 是审阅工作台的取数入口：候选没有上限，一次全量下发
+// 在大库上既压 IPC 又要前端渲染上千行。cursorID 为 0 取第一页，limit<=0 用服务端默认。
+func (a *App) ListAITagCandidatePage(videoID uint, confidence string, status string, cursorID uint, limit int) (*services.AITagCandidatePage, error) {
+	page, err := a.aiTaggingService.ListCandidatePage(videoID, confidence, status, cursorID, limit)
+	count, next := 0, uint(0)
+	if page != nil {
+		count, next = len(page.Items), page.NextID
+	}
+	log.Printf("API ListAITagCandidatePage videoID=%d confidence=%s status=%s cursor=%d limit=%d result=%d next=%d err=%v", videoID, confidence, status, cursorID, limit, count, next, err)
+	return page, err
+}
+
 func (a *App) ApproveAITagCandidate(candidateID uint) (*services.AITaggingReviewItem, error) {
 	item, err := a.aiTaggingService.ApproveCandidate(candidateID)
 	log.Printf("API ApproveAITagCandidate candidateID=%d err=%v", candidateID, err)

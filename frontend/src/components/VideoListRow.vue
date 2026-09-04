@@ -61,9 +61,16 @@
       </div>
 
       <div class="video-tags">
-        <!-- 标签全部展示，一个都不折叠：网格卡换行长高，列表行高是固定估算值不能换行，
-             所以改成横向滚动，滚过去仍然看得到每一个。"+ 标签"留在滚动区外面常驻。 -->
-        <div class="video-tags__strip" data-test="row-tag-strip">
+        <!-- 标签全部渲染，一个都不折叠：网格卡换行长高，列表行高是固定估算值不能换行，
+             所以列表里是横向滚动的条带。"+ 标签"留在滚动区外面常驻。
+             但横向溢出的部分既没有滚动条也没有提示，看起来就是"标签没显示全"，
+             所以溢出时给一个 +N 按钮，点开把条带就地展开成换行浮层（绝对定位，
+             不改行高、不影响虚拟列表的测量）。 -->
+        <div
+          ref="tagStrip"
+          :class="['video-tags__strip', { 'video-tags__strip--expanded': tagsExpanded }]"
+          data-test="row-tag-strip"
+        >
           <span
             v-for="tag in (video.tags || [])"
             :key="tag.id"
@@ -74,6 +81,15 @@
             <button v-if="!tag.automatic_kind" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
           </span>
         </div>
+        <button
+          v-if="tagsExpanded || hiddenTagCount > 0"
+          type="button"
+          class="video-tags__more"
+          :title="tagsExpanded ? '收起标签' : `还有 ${hiddenTagCount} 个标签没显示，点开看全部`"
+          :aria-expanded="tagsExpanded"
+          data-test="row-tag-overflow"
+          @click.stop="toggleTags"
+        >{{ tagsExpanded ? '收起' : `+${hiddenTagCount}` }}</button>
         <button @click="$emit('open-add-tag', video)" class="btn-add-tag">+ 标签</button>
         <button
           v-if="video._subtitleMatchText"
@@ -116,6 +132,8 @@
 </template>
 
 <script>
+import { countHiddenTagBadges } from '../utils/rowTags.js';
+
 export default {
   name: 'VideoListRow',
   props: {
@@ -133,7 +151,13 @@ export default {
   },
   emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select', 'open-row-menu'],
   data() {
-    return { thumbnailFailed: false };
+    return {
+      thumbnailFailed: false,
+      // 横向溢出被藏起来的标签数，按几何测量得出（见 utils/rowTags.js）。
+      hiddenTagCount: 0,
+      tagsExpanded: false,
+      tagStripObserver: null
+    };
   },
   computed: {
     thumbnailURL() {
@@ -152,16 +176,52 @@ export default {
     },
     watchProgressLabel() {
       return `看到 ${this.formatDuration(this.video.watch_position_seconds)} / ${this.formatDuration(this.video.duration)}`;
+    },
+    // 标签集合变了就要重新量：数量、名字长度都会改变溢出情况。
+    tagSignature() {
+      return (this.video.tags || []).map(tag => `${tag.id}:${tag.name}`).join('|');
     }
   },
   watch: {
     // 虚拟列表会复用行组件：换了视频必须重置失败标记，
     // 否则一次缩略图失败会让后面复用到这一行的视频都显示占位。
+    // 展开态同理——复用到下一个视频时必须收起，不然浮层会挂在错的行上。
     'video.id'() {
       this.thumbnailFailed = false;
+      this.tagsExpanded = false;
+    },
+    tagSignature() {
+      this.$nextTick(this.measureHiddenTags);
+    },
+    layoutMode() {
+      // 网格卡本来就换行铺开，不需要 +N；切回列表时重新量。
+      this.tagsExpanded = false;
+      this.$nextTick(this.measureHiddenTags);
     }
   },
+  mounted() {
+    this.$nextTick(this.measureHiddenTags);
+    // 列宽变化（抽屉开合、窗口缩放）会改变溢出情况；jsdom 等没有 ResizeObserver 的环境跳过。
+    if (typeof ResizeObserver === 'undefined' || !this.$refs.tagStrip) return;
+    this.tagStripObserver = new ResizeObserver(() => this.measureHiddenTags());
+    this.tagStripObserver.observe(this.$refs.tagStrip);
+  },
+  beforeUnmount() {
+    this.tagStripObserver?.disconnect();
+    this.tagStripObserver = null;
+  },
   methods: {
+    measureHiddenTags() {
+      const strip = this.$refs.tagStrip;
+      // 展开态是换行浮层，量出来的"溢出"没有意义；网格卡也不走这条。
+      if (!strip || this.tagsExpanded || this.layoutMode === 'grid') return;
+      const edges = Array.from(strip.children).map(node => node.offsetLeft + node.offsetWidth);
+      this.hiddenTagCount = countHiddenTagBadges(strip.clientWidth, edges);
+    },
+    toggleTags() {
+      this.tagsExpanded = !this.tagsExpanded;
+      if (!this.tagsExpanded) this.$nextTick(this.measureHiddenTags);
+    },
     formatSemanticScore(value) {
       return `${Math.round(Math.max(-1, Math.min(1, Number(value) || 0)) * 100)}%`;
     },

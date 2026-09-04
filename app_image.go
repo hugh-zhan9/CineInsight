@@ -506,6 +506,22 @@ func (a *App) ListImageAITagCandidates(imageID uint, confidence string, status s
 	return svc.ListImageAITagCandidates(imageID, confidence, status)
 }
 
+// ListImageAITagCandidatePage 是图片审阅面板的取数入口，语义与视频侧同名方法一致：
+// cursorID 为 0 取第一页，limit<=0 用服务端默认，NextID 为 0 表示已到末页。
+func (a *App) ListImageAITagCandidatePage(imageID uint, confidence string, status string, cursorID uint, limit int) (*services.ImageAITagCandidatePage, error) {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return nil, fmt.Errorf("数据库未初始化")
+	}
+	page, err := svc.ListImageAITagCandidatePage(imageID, confidence, status, cursorID, limit)
+	count, next := 0, uint(0)
+	if page != nil {
+		count, next = len(page.Items), page.NextID
+	}
+	log.Printf("API ListImageAITagCandidatePage imageID=%d confidence=%s status=%s cursor=%d limit=%d result=%d next=%d err=%v", imageID, confidence, status, cursorID, limit, count, next, err)
+	return page, err
+}
+
 // ApproveImageAITagCandidate 接受一个图片标签候选，写入官方标签
 func (a *App) ApproveImageAITagCandidate(candidateID uint) (*services.ImageAITaggingReviewItem, error) {
 	svc := a.imageAITaggingService()

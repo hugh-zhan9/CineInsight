@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 
+import { countHiddenTagBadges } from '../src/utils/rowTags.js';
+
 const appSource = readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
 const videoListSource = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
 const mainSource = readFileSync(new URL('../src/main.js', import.meta.url), 'utf8');
@@ -218,5 +220,24 @@ const iinaHandler = videoListSource.match(/registerRuntimeEvent\('iina-progress-
 assert.ok(iinaHandler, 'IINA sync handler should exist');
 assert.doesNotMatch(iinaHandler[0], /reloadCurrentView/, 'IINA sync must not reload the whole list');
 assert.match(iinaHandler[0], /applyWatchProgressUpdates/, 'IINA sync should patch affected rows in place');
+
+// 行内标签条带：溢出多少个只能按几何算（行高固定，标签不能换行）。
+assert.equal(countHiddenTagBadges(200, [40, 90, 140, 190]), 0, 'nothing is hidden while every badge fits');
+assert.equal(countHiddenTagBadges(200, [40, 90, 140, 260, 330]), 2, 'badges past the strip edge count as hidden');
+assert.equal(countHiddenTagBadges(200, [201]), 0, '1px 容差：刚好贴边的不算隐藏');
+assert.equal(countHiddenTagBadges(200, [202]), 1);
+assert.equal(countHiddenTagBadges(0, [40, 90]), 0, '还没测到宽度时不报隐藏，免得空列表也挂一个 +N');
+assert.equal(countHiddenTagBadges(200, null), 0);
+
+// 溢出入口与展开浮层：入口在条带外面，浮层是绝对定位的，不改行高（虚拟列表按行高定位）。
+assert.match(videoRowSource, /data-test="row-tag-overflow"/, 'the row needs an overflow entry for hidden tags');
+assert.match(videoRowSource, /countHiddenTagBadges\(strip\.clientWidth, edges\)/, 'the hidden count must come from real geometry');
+assert.match(
+  componentCss,
+  /\.video-tags__strip--expanded\s*\{[^}]*position:\s*absolute;[^}]*flex-wrap:\s*wrap;/s,
+  'the expanded tag strip must overlay instead of growing the fixed-height row'
+);
+assert.match(componentCss, /\.video-tags\s*\{[^}]*position:\s*relative;/s, 'the tag row anchors the expanded overlay');
+assert.match(componentCss, /\.video-item--grid \.video-tags__more\s*\{[^}]*display:\s*none;/s, 'grid cards wrap every tag, so they need no +N entry');
 
 console.log('video-list-ui tests passed');

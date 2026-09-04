@@ -51,9 +51,17 @@ func imageAITagCandidateReviewItem(candidate models.ImageAITagCandidate) ImageAI
 	return item
 }
 
-// ListImageAITagCandidates 列出候选。imageID 为 0 表示不限图片；
-// status 为空默认只看待审。Image 用 Unscoped 预载，软删的图片也要能在审阅界面看到来龙去脉。
-func (s *ImageAITaggingService) ListImageAITagCandidates(imageID uint, confidence string, status string) ([]ImageAITaggingReviewItem, error) {
+// ImageAITagCandidatePage 是图片审阅面板的一页候选，形态镜像 AITagCandidatePage。
+type ImageAITagCandidatePage struct {
+	Items  []ImageAITaggingReviewItem `json:"items"`
+	NextID uint                       `json:"next_id"`
+}
+
+// candidateQuery 是全量列表与游标翻页共用的查询：预载、筛选与排序只有一份。
+// 排序从 (created_at desc, id desc) 收成单键 id desc——键集分页需要单一稳定键，
+// 而 id 自增、与 created_at 同向增长，用户看到的顺序不变。
+// Image 用 Unscoped 预载，软删的图片也要能在审阅界面看到来龙去脉。
+func (s *ImageAITaggingService) candidateQuery(imageID uint, confidence string, status string) *gorm.DB {
 	query := s.db.
 		Model(&models.ImageAITagCandidate{}).
 		Preload("Image", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
@@ -69,16 +77,45 @@ func (s *ImageAITaggingService) ListImageAITagCandidates(imageID uint, confidenc
 	if status == "" {
 		status = models.AITagCandidateStatusPending
 	}
-	query = query.Where("image_ai_tag_candidates.status = ?", status)
-	var candidates []models.ImageAITagCandidate
-	if err := query.Order("image_ai_tag_candidates.created_at desc, image_ai_tag_candidates.id desc").Find(&candidates).Error; err != nil {
-		return nil, err
-	}
+	return query.Where("image_ai_tag_candidates.status = ?", status).Order("image_ai_tag_candidates.id desc")
+}
+
+func imageAITagCandidateReviewItems(candidates []models.ImageAITagCandidate) []ImageAITaggingReviewItem {
 	items := make([]ImageAITaggingReviewItem, 0, len(candidates))
 	for _, candidate := range candidates {
 		items = append(items, imageAITagCandidateReviewItem(candidate))
 	}
-	return items, nil
+	return items
+}
+
+// ListImageAITagCandidates 列出候选。imageID 为 0 表示不限图片；
+// status 为空默认只看待审。单图视图用它（一张图的候选本来就是个位数），
+// 审阅面板走 ListImageAITagCandidatePage。
+func (s *ImageAITaggingService) ListImageAITagCandidates(imageID uint, confidence string, status string) ([]ImageAITaggingReviewItem, error) {
+	var candidates []models.ImageAITagCandidate
+	if err := s.candidateQuery(imageID, confidence, status).Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+	return imageAITagCandidateReviewItems(candidates), nil
+}
+
+// ListImageAITagCandidatePage 按候选 id 游标取一页，语义与视频侧 ListCandidatePage 一致。
+// cursorID 为 0 表示第一页；NextID 只在这一页满员时给出。
+func (s *ImageAITaggingService) ListImageAITagCandidatePage(imageID uint, confidence string, status string, cursorID uint, limit int) (*ImageAITagCandidatePage, error) {
+	limit = normalizeEntityPageLimit(limit)
+	query := s.candidateQuery(imageID, confidence, status)
+	if cursorID > 0 {
+		query = query.Where("image_ai_tag_candidates.id < ?", cursorID)
+	}
+	var candidates []models.ImageAITagCandidate
+	if err := query.Limit(limit).Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+	page := &ImageAITagCandidatePage{Items: imageAITagCandidateReviewItems(candidates)}
+	if len(candidates) == limit {
+		page.NextID = candidates[len(candidates)-1].ID
+	}
+	return page, nil
 }
 
 // activeImageExistsInTx 拒绝对已软删/不存在的图片做审批动作。

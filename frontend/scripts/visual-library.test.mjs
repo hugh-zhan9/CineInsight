@@ -9,6 +9,7 @@ const previewDrawer = fs.readFileSync(new URL('../src/components/PreviewDrawer.v
 const handler = fs.readFileSync(new URL('../../preview_asset_handler.go', import.meta.url), 'utf8');
 const photoPage = fs.readFileSync(new URL('../src/components/PhotoLibraryPage.vue', import.meta.url), 'utf8');
 const appShell = fs.readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
+const imageReview = fs.readFileSync(new URL('../src/components/ImageAITagReviewPanel.vue', import.meta.url), 'utf8');
 
 assert.match(page, /cineinsight-library-layout/, 'layout choice should persist');
 assert.match(page, /homeListVirtualizationEnabled && viewMode === 'list'/, 'default list virtualization must remain enabled');
@@ -46,5 +47,29 @@ assert.match(photoPage, /restoreScrollPosition\(\)\s*{/, 'photo page should rest
 // 勾选之后往下滚，批量操作条必须跟着吸顶，否则要滚回顶部才能点"删除所选"。
 assert.match(photoPage, /\.photo-toolbar\s*{[^}]*position:\s*sticky/s, 'photo toolbar should stick so batch actions stay reachable');
 assert.match(photoPage, /\.photo-selection-tools\b/, 'batch actions live inside the sticky toolbar');
+
+// 图片 AI 标签审阅弹窗：scoped 选择器落不到 BaseModal 内层面板上，必须走 :deep，
+// 否则整条规则失效——宽度停在全局 .modal 的 500px，而且完全不封高，候选一多就撑出窗口。
+assert.match(
+  imageReview,
+  /:deep\(\.image-ai-tag-review\)\s*{[^}]*max-height:\s*min\(720px,\s*calc\(100vh - 48px\)\);[^}]*overflow:\s*hidden;/s,
+  'image AI review modal must cap its own height instead of growing past the window'
+);
+assert.match(
+  imageReview,
+  /\.image-ai-tag-review__content\s*{[^}]*min-height:\s*0;[^}]*overflow-y:\s*auto;/s,
+  'image AI review should own a vertically scrollable content area'
+);
+assert.match(
+  imageReview,
+  /\/preview\/image-thumbnail\/\$\{imageID\}/,
+  'image AI review groups should show the shared image thumbnail'
+);
+assert.match(imageReview, /image-ai-tag-review__thumb--failed/, 'image AI review thumbnails need a local failure placeholder');
+// 候选没有上限：面板必须走分页接口，并给出显式的"加载更多"入口。
+assert.match(imageReview, /ListImageAITagCandidatePage\(0, this\.confidence, '', 0, 0\)/, 'image AI review should load the first candidate page');
+assert.match(imageReview, /ListImageAITagCandidatePage\(0, confidence, '', cursor, 0\)/, 'image AI review load-more should continue from the page cursor');
+assert.match(imageReview, /data-test="image-ai-tag-load-more"/, 'image AI review needs an explicit load-more entry');
+assert.doesNotMatch(imageReview, /ListImageAITagCandidates\(/, 'image AI review should no longer pull the unbounded candidate list');
 
 console.log('visual-library tests passed');

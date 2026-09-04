@@ -27,10 +27,7 @@
       >人物候选</button>
     </nav>
 
-    <FaceClusterReviewPanel v-if="section === 'face'" />
-
-    <template v-else>
-    <div class="image-ai-tag-review__toolbar">
+    <div v-if="section === 'tags'" class="image-ai-tag-review__toolbar">
       <div class="image-ai-tag-review__filters" role="group" aria-label="置信度筛选">
         <button
           v-for="option in confidenceOptions"
@@ -41,73 +38,118 @@
           @click="setConfidence(option.value)"
         >{{ option.label }}</button>
       </div>
+      <button
+        type="button"
+        class="btn-secondary btn-compact"
+        data-test="image-ai-tag-review-refresh"
+        :disabled="loading || busy"
+        @click="load"
+      >刷新</button>
       <span class="image-ai-tag-review__count" data-test="image-ai-tag-review-count">
-        待审 {{ candidates.length }} 条 · 涉及 {{ groups.length }} 张图片
+        待审 {{ candidates.length }} 条 · 涉及 {{ groups.length }} 张图片<template v-if="cursor">（还有更多未加载）</template>
       </span>
     </div>
 
+    <!-- 报错与说明留在滚动区之外：用户可能正停在列表深处，
+         放进滚动区顶部等于看不见。 -->
     <p v-if="error" class="image-ai-tag-review__error" role="alert" data-test="image-ai-tag-review-error">{{ error }}</p>
     <p v-if="notice" class="image-ai-tag-review__notice" role="status" data-test="image-ai-tag-review-notice">{{ notice }}</p>
-    <p v-if="loading" class="image-ai-tag-review__status" role="status">正在加载候选…</p>
-    <p
-      v-else-if="!candidates.length"
-      class="image-ai-tag-review__status"
-      role="status"
-      data-test="image-ai-tag-review-empty"
-    >没有待审候选。AI 打标跑完后，候选会出现在这里。</p>
 
-    <section
-      v-for="group in groups"
-      :key="group.imageID"
-      class="image-ai-tag-review__group glass-surface"
-      data-test="image-ai-tag-group"
-    >
-      <div class="image-ai-tag-review__group-head">
-        <strong :title="group.name">{{ group.name }}</strong>
-        <span v-if="group.deleted" class="image-ai-tag-review__deleted" data-test="image-ai-tag-deleted">图片已删除</span>
-        <button
-          type="button"
-          class="btn-secondary btn-compact"
-          :disabled="busy"
-          :data-test="`image-ai-tag-reject-all-${group.imageID}`"
-          @click="rejectAll(group)"
-        >全部拒绝</button>
-      </div>
-      <ul class="image-ai-tag-review__list">
-        <li v-for="candidate in group.items" :key="candidate.id" class="image-ai-tag-review__item">
-          <span class="tag-chip" :style="{ '--tag-color': candidate.matched_tag?.color }">{{ candidate.suggested_name }}</span>
-          <span :class="['image-ai-tag-review__confidence', `is-${candidate.confidence}`]">{{ confidenceLabel(candidate.confidence) }}</span>
-          <span class="image-ai-tag-review__reason" :title="candidate.reasoning">{{ candidate.reasoning }}</span>
-          <span class="image-ai-tag-review__actions">
-            <button
-              type="button"
-              class="btn-primary btn-compact"
-              :disabled="busy || group.deleted"
-              :data-test="`image-ai-tag-approve-${candidate.id}`"
-              @click="approve(candidate)"
-            >接受</button>
+    <!-- 一页候选也可能几十条，加上翻页会越滚越长。滚动条必须在这一层、弹窗自身封高，
+         否则内容会把 BaseModal 的面板撑出应用窗口，底部的候选点都点不到。 -->
+    <div class="image-ai-tag-review__content" data-test="image-ai-tag-review-scroll-area">
+      <FaceClusterReviewPanel v-if="section === 'face'" />
+
+      <template v-else>
+        <p v-if="loading" class="image-ai-tag-review__status" role="status">正在加载候选…</p>
+        <!-- 还有下一页时不能说"没有待审候选"：那只是当页被处理空了，
+             自动补页失败时更要留着「加载更多」而不是给一句假的空态。 -->
+        <p
+          v-else-if="!candidates.length && !cursor"
+          class="image-ai-tag-review__status"
+          role="status"
+          data-test="image-ai-tag-review-empty"
+        >没有待审候选。AI 打标跑完后，候选会出现在这里。</p>
+
+        <section
+          v-for="group in groups"
+          :key="group.imageID"
+          class="image-ai-tag-review__group glass-surface"
+          data-test="image-ai-tag-group"
+        >
+          <div class="image-ai-tag-review__group-head">
+            <!-- 审阅图片标签只看文件名判断不了对错，缩略图才是证据。
+                 走和图片流同一条 /preview/image-thumbnail 路由，失败就地占位。 -->
+            <div :class="['image-ai-tag-review__thumb', { 'image-ai-tag-review__thumb--failed': thumbFailed(group.imageID) }]">
+              <img
+                v-if="!thumbFailed(group.imageID)"
+                :src="thumbnailURL(group.imageID)"
+                :alt="`${group.name} 缩略图`"
+                loading="lazy"
+                :data-test="`image-ai-tag-thumb-${group.imageID}`"
+                @error="markThumbFailed(group.imageID)"
+              />
+              <span v-else aria-hidden="true" :data-test="`image-ai-tag-thumb-fallback-${group.imageID}`">🖼</span>
+            </div>
+            <strong :title="group.name">{{ group.name }}</strong>
+            <span v-if="group.deleted" class="image-ai-tag-review__deleted" data-test="image-ai-tag-deleted">图片已删除</span>
             <button
               type="button"
               class="btn-secondary btn-compact"
               :disabled="busy"
-              :data-test="`image-ai-tag-reject-${candidate.id}`"
-              @click="reject(candidate)"
-            >拒绝</button>
-          </span>
-        </li>
-      </ul>
-    </section>
-    </template>
+              title="拒绝这张图片的全部待审候选，包括当前置信度筛选之外的"
+              :data-test="`image-ai-tag-reject-all-${group.imageID}`"
+              @click="rejectAll(group)"
+            >全部拒绝</button>
+          </div>
+          <ul class="image-ai-tag-review__list">
+            <li v-for="candidate in group.items" :key="candidate.id" class="image-ai-tag-review__item">
+              <span class="tag-chip" :style="{ '--tag-color': candidate.matched_tag?.color }">{{ candidate.suggested_name }}</span>
+              <span :class="['image-ai-tag-review__confidence', `is-${candidate.confidence}`]">{{ confidenceLabel(candidate.confidence) }}</span>
+              <span class="image-ai-tag-review__reason" :title="candidate.reasoning">{{ candidate.reasoning }}</span>
+              <span class="image-ai-tag-review__actions">
+                <button
+                  type="button"
+                  class="btn-primary btn-compact"
+                  :disabled="busy || group.deleted"
+                  :data-test="`image-ai-tag-approve-${candidate.id}`"
+                  @click="approve(candidate)"
+                >接受</button>
+                <button
+                  type="button"
+                  class="btn-secondary btn-compact"
+                  :disabled="busy"
+                  :data-test="`image-ai-tag-reject-${candidate.id}`"
+                  @click="reject(candidate)"
+                >拒绝</button>
+              </span>
+            </li>
+          </ul>
+        </section>
+
+        <div v-if="cursor" class="image-ai-tag-review__more">
+          <button
+            type="button"
+            class="btn-secondary btn-compact"
+            data-test="image-ai-tag-load-more"
+            :disabled="loadingMore || loading"
+            @click="loadMore"
+          >{{ loadingMore ? '加载中…' : '加载更多候选' }}</button>
+          <span>已加载 {{ candidates.length }} 条，还有更多</span>
+        </div>
+      </template>
+    </div>
   </BaseModal>
 </template>
 
 <script>
 import {
-  ApproveImageAITagCandidate, ListImageAITagCandidates,
+  ApproveImageAITagCandidate, ListImageAITagCandidatePage,
   RejectImageAITagCandidate, RejectImageAITagCandidatesByImage
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
+import { appendCandidates, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia } from '../utils/aiTagReview.js';
 
 export default {
   name: 'ImageAITagReviewPanel',
@@ -119,14 +161,23 @@ export default {
   data() {
     return {
       candidates: [],
+      // 候选按 id 游标分页：cursor 非 0 表示后端还有下一页。
+      cursor: 0,
+      // 两次"回到第一页"竞速时，用 token 保证只有最后一次的结果落到界面上
+      // （在途的翻页请求由 loadMore 自己按游标 + 筛选判定，见那里的注释）。
+      loadToken: 0,
       section: 'tags',
       confidence: '',
       loading: false,
+      loadingMore: false,
       busy: false,
       error: '',
       // notice 与 error 分开：接受候选被整体作废是"说明为什么没挂上标签"，不是调用失败，
       // 而且 load() 会清空 error，混用会让这条说明在紧随其后的刷新里被冲掉。
       notice: '',
+      // 缩略图失败在一次打开内是黏的：文件真的没了的时候，每次审批后的重新加载
+      // 都去重试等于白发请求。重新打开面板时清空，给临时失败一次重试机会。
+      failedThumbs: {},
       confidenceOptions: [
         { value: '', label: '全部' },
         { value: 'high', label: '高' },
@@ -157,6 +208,7 @@ export default {
     visible(value) {
       if (value) {
         this.section = 'tags';
+        this.failedThumbs = {};
         this.load();
       }
     }
@@ -168,22 +220,66 @@ export default {
     confidenceLabel(value) {
       return { high: '高', medium: '中', low: '低' }[value] || value;
     },
+    thumbnailURL(imageID) {
+      return `/preview/image-thumbnail/${imageID}`;
+    },
+    thumbFailed(imageID) {
+      return !!this.failedThumbs[imageID];
+    },
+    markThumbFailed(imageID) {
+      this.failedThumbs = { ...this.failedThumbs, [imageID]: true };
+    },
     setConfidence(value) {
       if (this.confidence === value) return;
       this.confidence = value;
       this.load();
     },
+    // load() 是"回到第一页"：打开面板与切换置信度筛选走它，已翻出来的后续页会被丢掉。
     async load() {
+      const token = ++this.loadToken;
       this.loading = true;
       this.error = '';
       try {
-        this.candidates = (await ListImageAITagCandidates(0, this.confidence, '')) || [];
+        const page = await ListImageAITagCandidatePage(0, this.confidence, '', 0, 0);
+        if (token !== this.loadToken) return;
+        this.candidates = Array.isArray(page?.items) ? page.items : [];
+        this.cursor = Number(page?.next_id || 0);
       } catch (err) {
+        if (token !== this.loadToken) return;
         this.error = `加载候选失败: ${err}`;
         this.candidates = [];
+        this.cursor = 0;
       } finally {
-        this.loading = false;
+        if (token === this.loadToken) this.loading = false;
       }
+    },
+    // 用请求自身的身份（发出时的游标 + 筛选）判断结果还能不能用，而不是 load() 里那个
+    // 自增计数器：在 load() 在途时点"加载更多"，计数器已经是新值，旧游标的结果会被当成
+    // 当前结果追加进去——列表会跳过中间一整段候选，游标还越过了它们，那段再也翻不到。
+    // 反过来，如果重新加载后列表末尾仍停在同一个游标、筛选也没变，这一页正好接得上，照常追加。
+    async loadMore() {
+      if (!this.cursor || this.loadingMore || this.loading) return;
+      const cursor = this.cursor;
+      const confidence = this.confidence;
+      this.loadingMore = true;
+      this.error = '';
+      try {
+        const page = await ListImageAITagCandidatePage(0, confidence, '', cursor, 0);
+        if (this.cursor !== cursor || this.confidence !== confidence) return;
+        this.candidates = appendCandidates(this.candidates, page?.items);
+        this.cursor = Number(page?.next_id || 0);
+      } catch (err) {
+        if (this.cursor !== cursor || this.confidence !== confidence) return;
+        this.error = `加载更多候选失败: ${err}`;
+      } finally {
+        this.loadingMore = false;
+      }
+    },
+    // 局部移除后当页可能空了，但后端还有下一页：直接补一页，
+    // 否则用户会看到"没有待审候选"这个假空态。
+    async fillEmptyPage() {
+      if (this.candidates.length || !this.cursor) return;
+      await this.loadMore();
     },
     async approve(candidate) {
       if (this.busy) return;
@@ -197,8 +293,11 @@ export default {
         if (item && item.status === 'superseded') {
           this.notice = '这张图片已经有你手工打的标签，AI 候选已整体作废，没有写入标签。';
         }
+        // 后端同时作废同图同名候选（手工标签冲突时整图作废）：按同一规则局部移除，
+        // 不整表重拉——分页之后重拉会把已加载的页丢掉，还会把用户拉回列表顶部。
+        this.candidates = removeCandidatesAfterApproval(this.candidates, candidate, item, 'image_id');
         this.$emit('changed');
-        await this.load();
+        await this.fillEmptyPage();
       } catch (err) {
         this.error = `接受候选失败: ${err}`;
       } finally {
@@ -212,7 +311,8 @@ export default {
       this.notice = '';
       try {
         await RejectImageAITagCandidate(candidate.id);
-        await this.load();
+        this.candidates = removeCandidateById(this.candidates, candidate.id);
+        await this.fillEmptyPage();
       } catch (err) {
         this.error = `拒绝候选失败: ${err}`;
       } finally {
@@ -226,7 +326,8 @@ export default {
       this.notice = '';
       try {
         await RejectImageAITagCandidatesByImage(group.imageID);
-        await this.load();
+        this.candidates = removeCandidatesByMedia(this.candidates, 'image_id', group.imageID);
+        await this.fillEmptyPage();
       } catch (err) {
         this.error = `批量拒绝失败: ${err}`;
       } finally {
@@ -238,10 +339,16 @@ export default {
 </script>
 
 <style scoped>
-.image-ai-tag-review {
-  width: min(920px, 92vw);
-  max-height: 82vh;
-  overflow-y: auto;
+/* 这条规则必须走 :deep：scoped 的 data-v 只挂在 BaseModal 的根节点（遮罩层），
+   class 却落在内层 .modal 面板上。之前写成普通 scoped 选择器等于整条没生效——
+   宽度停在全局 .modal 的 500px，而且完全不封高，候选一多就把弹窗撑出应用窗口。 */
+:deep(.image-ai-tag-review) {
+  display: flex;
+  flex-direction: column;
+  width: min(920px, calc(100vw - 40px));
+  max-width: min(920px, calc(100vw - 40px));
+  max-height: min(720px, calc(100vh - 48px));
+  overflow: hidden;
 }
 
 .image-ai-tag-review__header {
@@ -302,6 +409,15 @@ export default {
   color: var(--text-secondary);
 }
 
+.image-ai-tag-review__content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
+}
+
 .image-ai-tag-review__error {
   margin: 0 0 12px;
   color: var(--danger-color);
@@ -319,6 +435,16 @@ export default {
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.image-ai-tag-review__more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 4px 0 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
 }
 
 .image-ai-tag-review__group {
@@ -339,6 +465,30 @@ export default {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.image-ai-tag-review__thumb {
+  display: grid;
+  flex: 0 0 auto;
+  width: 64px;
+  aspect-ratio: 1;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--thumb-bg);
+  color: var(--thumb-fg);
+  font-size: 20px;
+}
+
+.image-ai-tag-review__thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.image-ai-tag-review__thumb--failed {
+  background: var(--thumb-fallback-bg);
 }
 
 .image-ai-tag-review__deleted {

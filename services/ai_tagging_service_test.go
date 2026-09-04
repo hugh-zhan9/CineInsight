@@ -1105,3 +1105,59 @@ func TestAITaggingFingerprintChangeAllowsReanalysis(t *testing.T) {
 		t.Fatalf("重分析后应只有 1 条 pending 候选，实际 %d", pending)
 	}
 }
+
+// TestListAITagCandidatePagePagesPendingCandidates 钉住视频侧游标翻页与图片侧同语义：
+// 满员页给游标、续页从游标之后继续、末页短页且不再给游标。
+func TestListAITagCandidatePagePagesPendingCandidates(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := models.Video{Name: "paged.mp4", Path: "/tmp/ai-paged.mp4", Directory: "/tmp"}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	names := []string{"动作", "舞蹈", "风景"}
+	created := make([]uint, 0, len(names))
+	for _, name := range names {
+		candidate := models.AITagCandidate{
+			VideoID: video.ID, SuggestedName: name, NormalizedName: name,
+			Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusPending,
+		}
+		if err := database.DB.Create(&candidate).Error; err != nil {
+			t.Fatalf("创建候选失败: %v", err)
+		}
+		created = append(created, candidate.ID)
+	}
+	// 已处理的候选不该出现在待审页里。
+	done := models.AITagCandidate{
+		VideoID: video.ID, SuggestedName: "已批准", NormalizedName: "已批准",
+		Confidence: models.AITagConfidenceHigh, Status: models.AITagCandidateStatusApproved,
+	}
+	if err := database.DB.Create(&done).Error; err != nil {
+		t.Fatalf("创建已批准候选失败: %v", err)
+	}
+
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
+	first, err := svc.ListCandidatePage(0, "", models.AITagCandidateStatusPending, 0, 2)
+	if err != nil {
+		t.Fatalf("首页失败: %v", err)
+	}
+	if len(first.Items) != 2 {
+		t.Fatalf("首页应有 2 条，实际 %d", len(first.Items))
+	}
+	if first.Items[0].ID != created[2] || first.Items[1].ID != created[1] {
+		t.Fatalf("首页应按 id 降序给最新两条: %+v", first.Items)
+	}
+	if first.NextID != created[1] {
+		t.Fatalf("首页游标 = %d，应为 %d", first.NextID, created[1])
+	}
+
+	second, err := svc.ListCandidatePage(0, "", models.AITagCandidateStatusPending, first.NextID, 2)
+	if err != nil {
+		t.Fatalf("续页失败: %v", err)
+	}
+	if len(second.Items) != 1 || second.Items[0].ID != created[0] {
+		t.Fatalf("续页应只剩最早那条待审: %+v", second.Items)
+	}
+	if second.NextID != 0 {
+		t.Fatalf("末页不该给游标: next=%d", second.NextID)
+	}
+}

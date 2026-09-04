@@ -22,6 +22,13 @@ type AITaggingReviewItem struct {
 	UpdatedAt      string        `json:"updated_at"`
 }
 
+// AITagCandidatePage 是审阅工作台的一页候选。NextID 只在这一页满员时给出，
+// 与 PersonImagePage.NextImageID 同一套游标约定。
+type AITagCandidatePage struct {
+	Items  []AITaggingReviewItem `json:"items"`
+	NextID uint                  `json:"next_id"`
+}
+
 type AITaggingStatusSummary struct {
 	ConfigAvailable  bool  `json:"config_available"`
 	Pending          int64 `json:"pending"`

@@ -512,7 +512,10 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 	return created, nil
 }
 
-func (s *AITaggingService) ListCandidates(videoID uint, confidence string, status string) ([]AITaggingReviewItem, error) {
+// aiTagCandidateQuery 是全量列表与游标翻页共用的查询：预载、筛选与排序只有一份。
+// 排序从 (created_at desc, id desc) 收成单键 id desc——键集分页需要单一稳定键，
+// 而 id 自增、与 created_at 同向增长，用户看到的顺序不变。
+func aiTagCandidateQuery(videoID uint, confidence string, status string) *gorm.DB {
 	query := database.DB.
 		Model(&models.AITagCandidate{}).
 		Preload("Video", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
@@ -528,16 +531,43 @@ func (s *AITaggingService) ListCandidates(videoID uint, confidence string, statu
 	if status == "" {
 		status = models.AITagCandidateStatusPending
 	}
-	query = query.Where("ai_tag_candidates.status = ?", status)
-	var candidates []models.AITagCandidate
-	if err := query.Order("ai_tag_candidates.created_at desc, ai_tag_candidates.id desc").Find(&candidates).Error; err != nil {
-		return nil, err
-	}
+	return query.Where("ai_tag_candidates.status = ?", status).Order("ai_tag_candidates.id desc")
+}
+
+func aiTagCandidateReviewItems(candidates []models.AITagCandidate) []AITaggingReviewItem {
 	items := make([]AITaggingReviewItem, 0, len(candidates))
 	for _, candidate := range candidates {
 		items = append(items, aiTagCandidateReviewItem(candidate))
 	}
-	return items, nil
+	return items
+}
+
+func (s *AITaggingService) ListCandidates(videoID uint, confidence string, status string) ([]AITaggingReviewItem, error) {
+	var candidates []models.AITagCandidate
+	if err := aiTagCandidateQuery(videoID, confidence, status).Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+	return aiTagCandidateReviewItems(candidates), nil
+}
+
+// ListCandidatePage 按候选 id 游标取一页。待审候选没有上限，全量下发在大库上
+// 既压 IPC 又要前端一次渲染上千行；审阅工作台改走这条。cursorID 为 0 表示第一页。
+func (s *AITaggingService) ListCandidatePage(videoID uint, confidence string, status string, cursorID uint, limit int) (*AITagCandidatePage, error) {
+	limit = normalizeEntityPageLimit(limit)
+	query := aiTagCandidateQuery(videoID, confidence, status)
+	if cursorID > 0 {
+		query = query.Where("ai_tag_candidates.id < ?", cursorID)
+	}
+	var candidates []models.AITagCandidate
+	if err := query.Limit(limit).Find(&candidates).Error; err != nil {
+		return nil, err
+	}
+	page := &AITagCandidatePage{Items: aiTagCandidateReviewItems(candidates)}
+	// 只有这一页满员才给下一页游标：短页即末页，不用再多发一次空请求。
+	if len(candidates) == limit {
+		page.NextID = candidates[len(candidates)-1].ID
+	}
+	return page, nil
 }
 
 func activeVideoExistsInTx(tx *gorm.DB, videoID uint) error {
