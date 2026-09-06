@@ -29,6 +29,18 @@
         class="text-input"
       />
     </div>
+    <div class="setting-item ai-connection-test">
+      <div class="ai-connection-test__row">
+        <button type="button" class="btn-secondary" :disabled="connectionTesting" data-test="ai-connection-test" @click="testConnection">{{ connectionTesting ? '测试中…' : '测试连接' }}</button>
+        <span
+          v-if="connectionResult"
+          :class="['ai-connection-test__result', connectionResult.ok ? 'ai-connection-test__result--ok' : 'ai-connection-test__result--error']"
+          data-test="ai-connection-result"
+          role="status"
+        >{{ connectionResult.message }}<template v-if="connectionResult.ok && connectionResult.reply">，回复「{{ connectionResult.reply }}」</template></span>
+      </div>
+      <p class="help-text">用上面填写的地址、Key 与模型发一条极短的文本请求，只验证接口与模型可达（不验证图像输入）。打标失败率高时先据此排除接口问题，剩下的就是抽帧或扫描那一侧。留空字段按已保存或环境变量配置。</p>
+    </div>
     <div class="setting-grid">
       <div class="setting-item">
         <label>单次请求图片上限</label>
@@ -100,7 +112,7 @@
 </template>
 
 <script>
-import { GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex } from '../../../wailsjs/go/main/App';
+import { GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, TestAITaggingConnection } from '../../../wailsjs/go/main/App';
 import PhotoAITaskPanel from '../PhotoAITaskPanel.vue';
 import { confirmAction, notifyError } from '../../utils/feedback.js';
 
@@ -115,7 +127,9 @@ export default {
   data() {
     return {
       semanticIndexStatus: null,
-      semanticIndexStatusOff: null
+      semanticIndexStatusOff: null,
+      connectionTesting: false,
+      connectionResult: null
     };
   },
   mounted() {
@@ -143,6 +157,22 @@ export default {
     }
   },
   methods: {
+    // 用表单当前值测，不要求先保存；返回值只回显地址与模型，不含 Key。
+    async testConnection() {
+      this.connectionTesting = true;
+      this.connectionResult = null;
+      try {
+        this.connectionResult = await TestAITaggingConnection({
+          base_url: this.form.ai_tagging_base_url || '',
+          api_key: this.form.ai_tagging_api_key || '',
+          model: this.form.ai_tagging_model || ''
+        });
+      } catch (err) {
+        this.connectionResult = { ok: false, message: '测试失败：' + err };
+      } finally {
+        this.connectionTesting = false;
+      }
+    },
     async loadSemanticIndexStatus() {
       try {
         this.semanticIndexStatus = await GetSemanticIndexStatus();
@@ -170,3 +200,21 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.ai-connection-test__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.ai-connection-test__result {
+  min-width: 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.ai-connection-test__result--ok { color: var(--success-color); }
+.ai-connection-test__result--error { color: var(--danger-color); }
+</style>

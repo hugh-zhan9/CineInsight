@@ -324,3 +324,64 @@ describe('AITagReviewDialog stale page guard', () => {
     expect(wrapper.vm.candidateCursor).toBe(0);
   });
 });
+
+// 截图里的问题：右侧质量面板占掉 352px 后弹窗没有加宽，左侧待审流里五个动作按钮
+// 又和缩略图挤在标题同一行，标题被压成一个字一行；同源与候选卡片也都没给文件大小，
+// 删 A 还是删 B 无从判断。这里钉住加宽、元信息行和动作独占一行三件事。
+describe('AITagReviewDialog layout and media meta', () => {
+  it('widens the modal only when the quality panel is shown', async () => {
+    const wide = mount(AITagReviewDialog, { props: { visible: true, qualityEnabled: true } });
+    await flushPromises();
+    expect(wide.get('.modal').classes()).toContain('ai-tag-review-modal--wide');
+    wide.unmount();
+
+    const narrow = mount(AITagReviewDialog, { props: { visible: true, qualityEnabled: false } });
+    await flushPromises();
+    expect(narrow.get('.modal').classes()).toContain('ai-tag-review-modal');
+    expect(narrow.get('.modal').classes()).not.toContain('ai-tag-review-modal--wide');
+    narrow.unmount();
+  });
+
+  it('shows size, duration and resolution for each candidate video and keeps actions out of the title row', async () => {
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([
+      tagCandidate({ video: { id: 10, name: 'fight.mp4', path: '/library/fight.mp4', size: 1.5 * 1024 * 1024 * 1024, duration: 3723, width: 1920, height: 1080, tags: [] } }),
+    ]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+
+    const meta = wrapper.get('[data-test="ai-video-meta"]');
+    expect(meta.text()).toContain('1.5 GB');
+    expect(meta.text()).toContain('01:02:03');
+    expect(meta.text()).toContain('1920×1080');
+    expect(wrapper.get('.ai-video-name-text').attributes('title')).toBe('fight.mp4');
+    expect(wrapper.get('.ai-video-path').attributes('title')).toBe('/library/fight.mp4');
+    expect(wrapper.find('.ai-video-title .ai-video-actions').exists()).toBe(false);
+    expect(wrapper.find('.ai-video-group .ai-video-actions').exists()).toBe(true);
+  });
+
+  it('omits the meta line when the payload carries no size or duration', async () => {
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate()]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    expect(wrapper.find('[data-test="ai-video-meta"]').exists()).toBe(false);
+  });
+
+  it('shows file size on both sides of a same-source pair', async () => {
+    api.ListSameSourceRelations.mockResolvedValue([{
+      id: 5, video_a_id: 1, video_b_id: 2,
+      video_a: { id: 1, name: 'A.mp4', path: '/library/original/A.mp4', size: 4 * 1024 * 1024 * 1024, duration: 60 },
+      video_b: { id: 2, name: 'B.mp4', path: '/library/alternate/B.mp4', size: 700 * 1024 * 1024, duration: 60 },
+    }]);
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+
+    const metas = wrapper.findAll('[data-test="same-source-meta"]');
+    expect(metas).toHaveLength(2);
+    expect(metas[0].text()).toBe('4.0 GB · 01:00');
+    expect(metas[1].text()).toBe('700.0 MB · 01:00');
+  });
+});

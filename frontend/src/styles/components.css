@@ -375,6 +375,30 @@ input:checked + .slider::before {
   line-height: 1.5;
 }
 
+.settings-error { color: var(--danger-color); }
+
+/* 弹窗里的一组勾选项（删除确认等）：竖排、行内勾选框。 */
+.form-group {
+  display: grid;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.form-group label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.form-group input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
+
+.empty-hint {
+  padding: 8px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .video-list { display: flex; flex-direction: column; gap: 6px; }
 
 /* 列表行（原型 A1）：88px 紧凑档承载了原来两排按钮才装下的内容。
@@ -574,6 +598,9 @@ input:checked + .slider::before {
 .setting-item { margin-bottom: 24px; }
 .setting-item label { display: block; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .setting-item label.switch { display: inline-flex; margin-bottom: 0; font-weight: 400; }
+/* 普通勾选行：与 .switch 同级的行内控件，不该继承设置项标题的粗体块级样式。 */
+.setting-item label.checkbox-label { display: inline-flex; align-items: center; gap: 8px; margin-bottom: 6px; font-size: 13px; font-weight: 500; }
+.checkbox-label input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
 
 .divider { height: 1px; background: var(--border-color); margin: 24px 0; }
 
@@ -709,7 +736,14 @@ input:checked + .slider::before {
   min-width: 0;
 }
 
-.short-feed-status-main span,
+/* 状态卡里的文字是给人读的报错与说明，得能换行；只有地址一行保留单行省略。 */
+.short-feed-status-main span {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
 .short-feed-url {
   overflow: hidden;
   color: var(--text-secondary);

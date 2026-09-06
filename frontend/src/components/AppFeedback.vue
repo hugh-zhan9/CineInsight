@@ -64,6 +64,8 @@ export default {
   flex-direction: column;
   gap: 8px;
   max-width: min(420px, calc(100vw - 32px));
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
 }
 
 .app-toast {
@@ -92,10 +94,14 @@ export default {
   color: var(--accent-text);
 }
 
+/* 批量结果用 \n 拼多行；单条太长也不能把关闭按钮顶出屏幕。 */
 .app-toast__text {
   flex: 1;
   min-width: 0;
+  max-height: 40vh;
+  overflow-y: auto;
   overflow-wrap: anywhere;
+  white-space: pre-line;
 }
 
 .app-toast__close {

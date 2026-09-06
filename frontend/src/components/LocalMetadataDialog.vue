@@ -14,18 +14,23 @@
           <h3>视频 #{{ form.diff.video_id }}</h3>
           <p v-if="form.diff.status === 'missing'" class="local-metadata-empty">未发现同名 NFO 或本地图片。</p>
           <template v-else>
-            <label v-for="field in scalarFields(form)" :key="field.name" class="local-metadata-field" :data-test="`metadata-field-${form.diff.video_id}-${field.name}`">
-              <input type="checkbox" v-model="form.selected[field.name]" :disabled="!isExecutable(field.diff)" />
-              <span><strong>{{ field.label }}</strong><small>当前：{{ field.diff.current_value || '空' }}</small><small>来源：{{ field.diff.source_value || '空' }}</small></span>
+            <!-- 外层不能是 label：里面还有一个「确认覆盖」的 label，嵌套时点内层会把两个勾选框一起翻。 -->
+            <div v-for="field in scalarFields(form)" :key="field.name" class="local-metadata-field" :data-test="`metadata-field-${form.diff.video_id}-${field.name}`">
+              <label class="local-metadata-field__main">
+                <input type="checkbox" v-model="form.selected[field.name]" :disabled="!isExecutable(field.diff)" />
+                <span><strong>{{ field.label }}</strong><small>当前：{{ field.diff.current_value || '空' }}</small><small>来源：{{ field.diff.source_value || '空' }}</small></span>
+              </label>
               <label v-if="field.diff.requires_overwrite && form.selected[field.name]" class="local-metadata-overwrite"><input type="checkbox" v-model="form.overwrite[field.name]" />确认覆盖</label>
-            </label>
+            </div>
 
             <div v-for="relation in relationFields(form)" :key="relation.name" class="local-metadata-relation">
-              <label class="local-metadata-field">
-                <input type="checkbox" v-model="form.selected[relation.name]" :disabled="!isExecutable(relation.diff)" />
-                <span><strong>{{ relation.label }}</strong><small>当前 {{ relation.diff.current?.length || 0 }} 项，来源 {{ relation.diff.source?.length || 0 }} 项</small></span>
+              <div class="local-metadata-field">
+                <label class="local-metadata-field__main">
+                  <input type="checkbox" v-model="form.selected[relation.name]" :disabled="!isExecutable(relation.diff)" />
+                  <span><strong>{{ relation.label }}</strong><small>当前 {{ relation.diff.current?.length || 0 }} 项，来源 {{ relation.diff.source?.length || 0 }} 项</small></span>
+                </label>
                 <label v-if="relation.diff.requires_overwrite && form.selected[relation.name]" class="local-metadata-overwrite"><input type="checkbox" v-model="form.overwrite[relation.name]" />确认覆盖</label>
-              </label>
+              </div>
               <div v-if="form.selected[relation.name]" class="local-metadata-mappings">
                 <label v-for="candidate in relation.diff.source" :key="candidate.normalized_name">
                   <span>{{ candidate.source_name }}</span>
@@ -154,7 +159,7 @@ export default {
 .local-metadata-dialog header { position: sticky; top: -20px; z-index: 2; padding: 16px 0; background: var(--panel-bg); }
 .local-metadata-dialog h2,.local-metadata-dialog h3,.local-metadata-dialog p { margin: 0; }.local-metadata-dialog header p { color: var(--text-secondary); }
 .local-metadata-video { margin: 14px 0; padding: 14px; border: 1px solid var(--border-color); border-radius: 12px; }
-.local-metadata-field { margin-top: 10px; padding: 10px; border-radius: 8px; background: var(--bg-color); }.local-metadata-field > span { flex: 1; min-width: 0; }.local-metadata-field strong,.local-metadata-field small { display: block; }.local-metadata-field small { margin-top: 3px; color: var(--text-secondary); overflow-wrap: anywhere; }
+.local-metadata-field { margin-top: 10px; padding: 10px; border-radius: 8px; background: var(--bg-color); }.local-metadata-field__main { display: flex; flex: 1; min-width: 0; align-items: flex-start; gap: 14px; cursor: pointer; }.local-metadata-field__main > span { flex: 1; min-width: 0; }.local-metadata-field strong,.local-metadata-field small { display: block; }.local-metadata-field small { margin-top: 3px; color: var(--text-secondary); overflow-wrap: anywhere; }
 .local-metadata-overwrite { color: var(--danger-color); font-size: 12px; white-space: nowrap; }.local-metadata-mappings { display: grid; gap: 8px; margin: 8px 0 0 30px; }.local-metadata-mappings label { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(180px, 1.5fr); gap: 10px; }.local-metadata-mappings select { min-width: 0; }
 .local-metadata-error { margin: 12px 0; color: var(--danger-color); }.local-metadata-empty { padding: 18px; color: var(--text-secondary); text-align: center; }.local-metadata-result { margin: 12px 0; color: var(--success-color); }.local-metadata-warnings { color: var(--warning-strong); font-size: 12px; }.local-metadata-dialog footer { position: sticky; bottom: -20px; justify-content: flex-end; padding: 14px 0; background: var(--panel-bg); }
 @media (max-width: 640px) { .local-metadata-overlay { padding: 0; }.local-metadata-dialog { width: 100vw; max-height: 100vh; min-height: 100vh; border-radius: 0; }.local-metadata-field { flex-wrap: wrap; }.local-metadata-mappings label { grid-template-columns: 1fr; } }

@@ -113,7 +113,24 @@ assert.match(source, /replaceCurrent\(await setItemTag/, 'tag writes should adop
 assert.match(source, /this\.items = \[\];[\s\S]{0,120}this\.recentKeys = \[\];/, 'switching scope should reset the timeline');
 
 assert.match(sheet, /Escape/, 'bottom sheets should close on Escape');
-for (const fn of ['getScopes', 'getFeedTags', 'setRating', 'setWatched', 'setItemTag', 'restoreItem']) {
+// 资源类型筛选：全部 / 仅视频 / 仅图片，随下一条请求一起发给后端，换类型重开时间线。
+assert.match(source, /short-feed-media-kind/, 'scope sheet should offer a media kind switch');
+assert.match(source, /getNextItem\(this\.recentKeys\.slice\(-12\), this\.scope, this\.mediaKind\)/, 'the main next-item request should carry the media kind');
+assert.match(source, /getNextItem\(excludeKeys, this\.scope, this\.mediaKind\)/, 'the prefetch request should carry the media kind');
+assert.match(source, /getScopes\(this\.mediaKind\)/, 'scope counts should follow the media kind');
+assert.match(source, /touchBeganZoomed/, 'a touch that began while zoomed must not be re-interpreted as a swipe or tap on touchend');
+assert.match(api, /if \(media && media !== 'all'\) params\.set\('media', media\)/, 'api client should send the media filter');
+// 面板要能在浏览器里关掉：显式关闭按钮 + 舞台不拦截面板层的触摸。
+assert.match(sheet, /data-test="sheet-close"/, 'bottom sheets need an explicit close button');
+assert.match(source, /\.sheet-layer'\)/, 'stage touch handling must leave the sheet layer alone');
+// 图片放大后必须能回来，否则上下滑切换被原生平移卡死。
+assert.match(stage, /photo-zoom-reset/, 'zoomed photo needs an explicit reset control');
+assert.match(source, /event\.pointerType !== 'touch' \|\| this\.photoZoomed/, 'double tap must exit zoom on touch too');
+// 搜不到的标签要能就地新建，并且每次打开面板都重拉列表（桌面端刚建的标签不该等刷新）。
+assert.match(source, /short-feed-create-tag/, 'tag sheet should offer creating the searched tag');
+assert.match(source, /createFeedTag\(name\)/, 'creating a tag should go through the api client');
+assert.doesNotMatch(source, /if \(this\.feedTags\.length === 0\) await this\.loadFeedTags\(\)/, 'tag sheet must reload tags on every open');
+for (const fn of ['getScopes', 'getFeedTags', 'createFeedTag', 'setRating', 'setWatched', 'setItemTag', 'restoreItem']) {
   assert.match(api, new RegExp(`export function ${fn}\\b`), `api client should expose ${fn}`);
 }
 assert.match(api, /if \(scope && scope !== 'all'\) params\.set\('scope', scope\)/, 'next-item requests should carry the scope');

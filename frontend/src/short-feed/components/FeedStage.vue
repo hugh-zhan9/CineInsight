@@ -45,6 +45,8 @@
         @load="$emit('media-loaded')"
         @error="$emit('media-error')"
       />
+      <!-- 放大后舞台交给原生平移，双击之外再给一个明确的出口，不然上下滑切换就被卡住。 -->
+      <button v-if="zoomed" type="button" class="photo-zoom-reset" data-test="photo-zoom-reset" @click.stop="$emit('zoom-reset')">恢复适屏</button>
     </div>
 
     <video
@@ -81,7 +83,7 @@ export default {
   },
   emits: [
     'press-start', 'press-move', 'press-end', 'press-cancel',
-    'media-loaded', 'time-update', 'play', 'pause', 'playing', 'media-error', 'stage-tap'
+    'media-loaded', 'time-update', 'play', 'pause', 'playing', 'media-error', 'stage-tap', 'zoom-reset'
   ],
   computed: {
     isVideo() { return this.item?.media_kind !== 'image'; },

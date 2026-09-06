@@ -230,6 +230,9 @@ func TestImageFolderGroupsUseDirectDirectoriesAndCurrentFilters(t *testing.T) {
 	if got := len(byDirectory["/tmp/image-library/child"].Covers); got != 2 {
 		t.Fatalf("图集封面应返回组内图片，实际 %d", got)
 	}
+	if got := byDirectory["/tmp/image-library/child"].TotalSize; got != 50 {
+		t.Fatalf("文件夹总大小应为组内图片之和，实际 %d: %+v", got, byDirectory["/tmp/image-library/child"])
+	}
 
 	filtered, err := svc.ListImageFolderGroups(ImageFilter{Keyword: "child-b"})
 	if err != nil {

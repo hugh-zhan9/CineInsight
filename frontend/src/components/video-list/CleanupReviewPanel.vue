@@ -108,7 +108,7 @@
                     <CleanupThumbnail :video="entry.keeper" @preview="previewCleanupVideo" />
                     <strong>建议保留：</strong>
                     <div class="cleanup-item-text">
-                      <span class="cleanup-item-main">{{ entry.keeper?.name }} · {{ entry.keeper?.resolution || '未知分辨率' }} · {{ formatDuration(entry.keeper?.duration) || '00:00' }}</span>
+                      <span class="cleanup-item-main">{{ cleanupItemSummary(entry.keeper) }}</span>
                       <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
                     </div>
                     <div class="cleanup-item-actions">
@@ -145,7 +145,7 @@
                       <div class="cleanup-select-row cleanup-select-row--original">
                         <CleanupThumbnail :video="entry.group.full" @preview="previewCleanupVideo" />
                         <div class="cleanup-item-text">
-                          <span class="cleanup-item-main">{{ entry.group.full?.name }} · {{ entry.group.full?.resolution || '未知分辨率' }} · {{ formatDuration(entry.group.full?.duration) || '00:00' }}</span>
+                          <span class="cleanup-item-main">{{ cleanupItemSummary(entry.group.full) }}</span>
                           <span v-if="entry.group.full?.path" class="cleanup-item-path" :title="entry.group.full.path">{{ entry.group.full.path }}</span>
                         </div>
                       </div>
@@ -165,7 +165,7 @@
                         />
                         <CleanupThumbnail :video="entry.group.clip" @preview="previewCleanupVideo" />
                         <div class="cleanup-item-text">
-                          <span class="cleanup-item-main">{{ entry.group.clip?.name }} · {{ entry.group.clip?.resolution || '未知分辨率' }} · {{ formatDuration(entry.group.clip?.duration) || '00:00' }}</span>
+                          <span class="cleanup-item-main">{{ cleanupItemSummary(entry.group.clip) }}</span>
                           <span v-if="entry.group.clip?.path" class="cleanup-item-path" :title="entry.group.clip.path">{{ entry.group.clip.path }}</span>
                           <span v-if="cleanupVideoDirectory(entry.group.clip) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(entry.group.clip) }}</span>
                         </div>
@@ -194,7 +194,7 @@
                     <CleanupThumbnail :video="entry.keeper" @preview="previewCleanupVideo" />
                     <strong>建议保留：</strong>
                     <div class="cleanup-item-text">
-                      <span class="cleanup-item-main">{{ entry.keeper?.name }} · {{ entry.keeper?.resolution || '未知分辨率' }} · {{ formatDuration(entry.keeper?.duration) || '00:00' }}</span>
+                      <span class="cleanup-item-main">{{ cleanupItemSummary(entry.keeper) }}</span>
                       <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
                     </div>
                     <div class="cleanup-item-actions">
@@ -214,7 +214,7 @@
                         />
                         <CleanupThumbnail :video="candidate" @preview="previewCleanupVideo" />
                         <span class="cleanup-item-text">
-                          <span class="cleanup-item-main">{{ candidate.name }} · {{ candidate.resolution || '未知分辨率' }} · {{ formatDuration(candidate.duration) || '00:00' }}</span>
+                          <span class="cleanup-item-main">{{ cleanupItemSummary(candidate) }}</span>
                           <span v-if="candidate.path" class="cleanup-item-path" :title="candidate.path">{{ candidate.path }}</span>
                           <span v-if="cleanupVideoDirectory(candidate) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(candidate) }}</span>
                         </span>
@@ -237,7 +237,7 @@
                     />
                     <CleanupThumbnail :video="entry.keeper" @preview="previewCleanupVideo" />
                     <span class="cleanup-item-text">
-                      <span class="cleanup-item-main">{{ entry.keeper?.name }} · {{ entry.keeper?.resolution || '未知分辨率' }} · {{ formatDuration(entry.keeper?.duration) || '00:00' }}</span>
+                      <span class="cleanup-item-main">{{ cleanupItemSummary(entry.keeper) }}</span>
                       <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
                     </span>
                     <span class="cleanup-item-actions">
@@ -450,7 +450,7 @@ export default {
           }
         }
       }
-      return bytes > 0 ? this.formatBytesShort(bytes) : '';
+      return bytes > 0 ? this.formatFileSize(bytes) : '';
     },
     cleanupReleasableText() {
       let bytes = 0;
@@ -463,7 +463,7 @@ export default {
           }
         }
       }
-      return bytes > 0 ? this.formatBytesShort(bytes) : '';
+      return bytes > 0 ? this.formatFileSize(bytes) : '';
     },
     // 后台跑完不自动重来，按钮徽标直接报出待审阅项数，提醒去处理。
     cleanupBadgeCount() {
@@ -801,14 +801,6 @@ export default {
         this.$emit('trash-settled', selectedIDs);
       }
     },
-    formatBytesShort(bytes) {
-      const size = Number(bytes || 0);
-      if (size <= 0) return '0 B';
-      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-      const index = Math.min(units.length - 1, Math.floor(Math.log(size) / Math.log(1024)));
-      const value = size / Math.pow(1024, index);
-      return `${value.toFixed(value >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
-    },
     // 「按建议勾选本组」只勾非保留项；默认零选中这条边界不受影响，
     // 用户必须显式点一次才会有选中项。
     selectSuggestedInSection(section) {
@@ -838,6 +830,17 @@ export default {
       parts.push(m.toString().padStart(2, '0'));
       parts.push(s.toString().padStart(2, '0'));
       return parts.join(':');
+    },
+    // 清理行的一句话摘要：名字 · 分辨率 · 时长 · 大小。留哪个删哪个首先是个体积问题，
+    // 以前这一行偏偏没有大小，只能去看"预计释放"倒推。
+    cleanupItemSummary(video) {
+      const size = Number(video?.size || 0);
+      return [
+        video?.name,
+        video?.resolution || '未知分辨率',
+        this.formatDuration(video?.duration) || '00:00',
+        size > 0 ? this.formatFileSize(size) : '',
+      ].filter(Boolean).join(' · ');
     },
     formatFileSize(bytes) {
       const value = Number(bytes || 0);
@@ -1008,15 +1011,6 @@ export default {
 .cleanup-section {
   margin-top: 18px;
 }
-.cleanup-outdated {
-  margin: 0 0 12px;
-  padding: 8px 12px;
-  border: 1px solid var(--accent-color);
-  border-radius: 8px;
-  background: var(--review-subtle-bg);
-  color: var(--review-text-strong);
-  font-size: 12px;
-}
 .cleanup-dir-toggle {
   display: flex;
   align-items: center;
@@ -1127,9 +1121,11 @@ export default {
   gap: 2px;
 }
 .cleanup-item-main {
+  min-width: 0;
   color: var(--review-text-strong);
   font-size: 13px;
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 .cleanup-item-path {
   font-size: 11px;

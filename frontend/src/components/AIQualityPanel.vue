@@ -201,14 +201,16 @@ export default {
 </script>
 
 <style scoped>
-.ai-quality-panel { min-height: 280px; overflow-y: auto; padding-top: 12px; }
-.ai-quality-filters { display: grid; grid-template-columns: repeat(4, minmax(130px, 1fr)); gap: 10px; align-items: end; }
-.ai-quality-filters label { display: grid; gap: 5px; color: var(--text-muted); font-size: 12px; }
-.ai-quality-filters select, .ai-quality-filters input { min-width: 0; height: 34px; padding: 0 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); color: var(--text-primary); }
-.ai-quality-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 16px 0; }
-.ai-quality-cards article { display: grid; gap: 5px; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent-color) 5%, var(--panel-bg)); }
-.ai-quality-cards span, .ai-quality-cards small { color: var(--text-muted); }
-.ai-quality-cards strong { color: var(--text-primary); font-size: 19px; }
+/* 这块面板既在 AI 标签管理弹窗右侧 352px 的常驻栏里用，容器宽度不由它决定：
+   筛选与统计卡都按容器自适应列数，不写死 4 列。 */
+.ai-quality-panel { padding-top: 12px; }
+.ai-quality-filters { display: grid; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: 10px; align-items: end; }
+.ai-quality-filters label { display: grid; gap: 5px; min-width: 0; color: var(--text-muted); font-size: 12px; }
+.ai-quality-filters select, .ai-quality-filters input { min-width: 0; width: 100%; height: 34px; padding: 0 8px; border: 1px solid var(--border-color); border-radius: 6px; background: var(--panel-bg); color: var(--text-primary); }
+.ai-quality-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: 10px; margin: 16px 0; }
+.ai-quality-cards article { display: grid; gap: 5px; min-width: 0; padding: 12px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: color-mix(in srgb, var(--accent-color) 5%, var(--panel-bg)); }
+.ai-quality-cards span, .ai-quality-cards small { color: var(--text-muted); font-size: 12px; line-height: 1.4; }
+.ai-quality-cards strong { color: var(--text-primary); font-size: 18px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .ai-quality-state { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 36px 0; color: var(--text-muted); }
 .ai-quality-error { color: var(--danger-color); }
 .ai-quality-table-section { margin-top: 18px; }
@@ -216,10 +218,9 @@ export default {
 .ai-quality-table-wrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 12px; }
 th, td { padding: 8px; border-bottom: 1px solid var(--border-color); text-align: left; vertical-align: top; }
-th { color: var(--text-muted); font-weight: 600; }
-td { color: var(--text-primary); }
+/* 表头不许逐字换行：窄栏里"置信度"竖成三行，列宽全乱。数字列同理。 */
+th { color: var(--text-muted); font-weight: 600; white-space: nowrap; }
+td { color: var(--text-primary); overflow-wrap: anywhere; }
+td:nth-last-child(-n + 2) { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .ai-quality-note { margin: 18px 0 0; color: var(--text-muted); font-size: 12px; }
-@media (max-width: 760px) {
-  .ai-quality-filters, .ai-quality-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 </style>

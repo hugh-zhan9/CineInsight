@@ -307,7 +307,7 @@
           </div>
           <div class="photo-folder-card__meta">
             <strong :title="folder.name">{{ folder.name }}</strong>
-            <small>{{ folder.count }} 张图片</small>
+            <small>{{ folder.count }} 张图片<template v-if="folder.total_size > 0"> · {{ formatBytes(folder.total_size) }}</template></small>
             <span :title="folder.directory">{{ folder.directory }}</span>
           </div>
         </button>
@@ -671,7 +671,7 @@
 
     <BaseModal v-if="deleteTarget" close-on-overlay stop-modal-clicks @close="deleteTarget = null">
       <h2>确认删除</h2>
-      <p>确定要删除图片 "{{ deleteTarget.name }}" 吗？</p>
+      <p>确定要删除图片 "{{ deleteTarget.name }}"<template v-if="deleteTarget.size > 0">（{{ formatBytes(deleteTarget.size) }}）</template> 吗？</p>
       <div class="photo-delete__options">
         <label>
           <input v-model="deleteFileChoice" type="checkbox" data-test="photo-delete-file" />

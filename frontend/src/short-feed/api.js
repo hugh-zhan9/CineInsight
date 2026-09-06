@@ -32,10 +32,11 @@ function itemPath(item, action) {
   return `/short-api/items/${item.media_kind}/${item.id}/${action}`;
 }
 
-export function getNextItem(excludeKeys = [], scope = 'all') {
+export function getNextItem(excludeKeys = [], scope = 'all', media = 'all') {
   const params = new URLSearchParams();
   if (excludeKeys.length > 0) params.set('exclude', excludeKeys.join(','));
   if (scope && scope !== 'all') params.set('scope', scope);
+  if (media && media !== 'all') params.set('media', media);
   const query = params.toString();
   return requestJSON(`/short-api/feed/next${query ? `?${query}` : ''}`);
 }
@@ -60,12 +61,17 @@ export function getFavorites() {
   return requestJSON('/short-api/favorites');
 }
 
-export function getScopes() {
-  return requestJSON('/short-api/feed/scopes');
+export function getScopes(media = 'all') {
+  const query = media && media !== 'all' ? `?media=${encodeURIComponent(media)}` : '';
+  return requestJSON(`/short-api/feed/scopes${query}`);
 }
 
 export function getFeedTags() {
   return requestJSON('/short-api/tags');
+}
+
+export function createFeedTag(name) {
+  return postJSON('/short-api/tags', { name });
 }
 
 export function setRating(item, rating) {

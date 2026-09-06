@@ -120,4 +120,13 @@ export default {
   background: var(--bg-color);
 }
 
+.short-feed-url--primary {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
+.short-feed-hint {
+  color: var(--warning-text);
+}
+
 </style>

@@ -66,3 +66,15 @@ describe('超分弹窗', () => {
     wrapper.unmount();
   });
 });
+
+describe('超分弹窗源文件元信息', () => {
+  it('显示源文件大小、时长与分辨率，好估这次要吃多少磁盘', async () => {
+    const wrapper = mount(EnhanceDialog, { attachTo: document.body });
+    await flushPromises();
+    wrapper.vm.enhanceCapability = { available: true };
+    await wrapper.vm.open({ id: 7, name: 'a.mkv', path: '/v/a.mkv', size: 3 * 1024 * 1024 * 1024, duration: 125, width: 1920, height: 1080 });
+    await flushPromises();
+    expect(wrapper.get('[data-test="enhance-source-meta"]').text()).toBe('3.0 GB · 02:05 · 1920×1080');
+    wrapper.unmount();
+  });
+});

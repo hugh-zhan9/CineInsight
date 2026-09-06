@@ -1,5 +1,5 @@
 <template>
-  <BaseModal v-if="visible" class="ai-tag-review-modal">
+  <BaseModal v-if="visible" class="ai-tag-review-modal" :class="{ 'ai-tag-review-modal--wide': qualityEnabled }">
       <div class="ai-tag-review-header">
         <div>
           <h3>AI 标签管理</h3>
@@ -56,7 +56,8 @@
                         />
                         <span v-else aria-hidden="true">▶</span>
                       </div>
-                      <div class="same-source-video-title"><span>A</span><strong>{{ relation.video_a?.name || `视频 ${relation.video_a_id}` }}</strong></div>
+                      <div class="same-source-video-title"><span>A</span><strong :title="relation.video_a?.name || ''">{{ relation.video_a?.name || `视频 ${relation.video_a_id}` }}</strong></div>
+                      <p v-if="formatMediaMeta(relation.video_a).length" class="same-source-meta" data-test="same-source-meta">{{ formatMediaMeta(relation.video_a).join(' · ') }}</p>
                       <p class="same-source-path" :title="relation.video_a?.path || ''">{{ relation.video_a?.path || '原始路径不可用' }}</p>
                     </article>
                     <span class="same-source-link" aria-hidden="true">↔</span>
@@ -71,7 +72,8 @@
                         />
                         <span v-else aria-hidden="true">▶</span>
                       </div>
-                      <div class="same-source-video-title"><span>B</span><strong>{{ relation.video_b?.name || `视频 ${relation.video_b_id}` }}</strong></div>
+                      <div class="same-source-video-title"><span>B</span><strong :title="relation.video_b?.name || ''">{{ relation.video_b?.name || `视频 ${relation.video_b_id}` }}</strong></div>
+                      <p v-if="formatMediaMeta(relation.video_b).length" class="same-source-meta" data-test="same-source-meta">{{ formatMediaMeta(relation.video_b).join(' · ') }}</p>
                       <p class="same-source-path" :title="relation.video_b?.path || ''">{{ relation.video_b?.path || '原始路径不可用' }}</p>
                     </article>
                   </div>
@@ -109,19 +111,26 @@
                     />
                     <span v-else aria-hidden="true">▶</span>
                   </div>
+                  <!-- 标题列自己占满剩余宽度，动作按钮另起一行：五个按钮和缩略图
+                       挤在同一行时，标题会被压到一个字一行。 -->
                   <div class="ai-video-name">
-                    <span>{{ group.videoName }}</span>
-                    <span v-if="group.videoDeleted" class="ai-video-deleted-badge">已删除</span>
-                  </div>
-                  <div class="ai-video-actions">
-                    <button type="button" class="btn-secondary btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
-                    <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
-                    <button type="button" class="btn-secondary btn-compact" @click="openManualTagDialog(group)" :disabled="group.videoDeleted">手动添加标签</button>
-                    <button type="button" class="btn-secondary btn-compact" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
-                    <button type="button" class="btn-secondary btn-compact" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
+                    <div class="ai-video-name-row">
+                      <span class="ai-video-name-text" :title="group.videoName">{{ group.videoName }}</span>
+                      <span v-if="group.videoDeleted" class="ai-video-deleted-badge">已删除</span>
+                    </div>
+                    <div v-if="formatMediaMeta(group.video).length" class="ai-video-meta" data-test="ai-video-meta">
+                      <span v-for="part in formatMediaMeta(group.video)" :key="part">{{ part }}</span>
+                    </div>
+                    <div v-if="group.videoPath" class="ai-video-path" :title="group.videoPath">{{ group.videoPath }}</div>
                   </div>
                 </div>
-                <div v-if="group.videoPath" class="ai-video-path">{{ group.videoPath }}</div>
+                <div class="ai-video-actions">
+                  <button type="button" class="btn-secondary btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
+                  <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
+                  <button type="button" class="btn-secondary btn-compact" @click="openManualTagDialog(group)" :disabled="group.videoDeleted">手动添加标签</button>
+                  <button type="button" class="btn-secondary btn-compact" @click="rejectVideoGroup(group)" :disabled="processingIds.includes(`reject-video-${group.videoId}`)">全部拒绝</button>
+                  <button type="button" class="btn-secondary btn-compact" @click="retryVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(group.videoId)">重新分析</button>
+                </div>
                 <div class="ai-video-existing-tags">
                   <span class="ai-video-existing-tags-label">已有标签</span>
                   <div v-if="group.videoTags.length" class="ai-video-existing-tag-list">
@@ -177,6 +186,7 @@
         </div>
 
         <aside v-if="qualityEnabled" class="ai-review-quality" data-test="ai-quality-tab">
+          <h4 class="ai-review-quality-title">质量评估</h4>
           <AIQualityPanel :tags="tags" />
         </aside>
       </div>
@@ -219,7 +229,7 @@
         <div class="ai-confirm-dialog glass-surface">
           <h4>删除视频 {{ sameSourceDeleteConfirm.side.toUpperCase() }}</h4>
           <p>将从片库删除这条视频记录，磁盘上的原文件会保留；记录可在回收站中恢复。</p>
-          <p class="ai-confirm-video">{{ sameSourceDeleteConfirm.videoName }}</p>
+          <p class="ai-confirm-video">{{ sameSourceDeleteConfirm.videoName }}<span v-if="sameSourceDeleteConfirm.videoMeta" class="ai-confirm-meta">{{ sameSourceDeleteConfirm.videoMeta }}</span></p>
           <p class="ai-confirm-path">{{ sameSourceDeleteConfirm.videoPath || '原始路径不可用' }}</p>
           <div class="ai-confirm-actions">
             <button type="button" class="btn-secondary" @click="cancelSameSourceDelete">取消</button>
@@ -245,6 +255,7 @@ import AIQualityPanel from './AIQualityPanel.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import BaseModal from './ui/BaseModal.vue';
 import { appendCandidates, confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia } from '../utils/aiTagReview.js';
+import { formatMediaMeta } from '../utils/mediaDetails.js';
 
 export default {
   name: 'AITagReviewDialog',
@@ -305,6 +316,7 @@ export default {
   },
   methods: {
     confidenceMeta,
+    formatMediaMeta,
     thumbnailURL(videoId) {
       return `/preview/thumbnail/${videoId}`;
     },
@@ -478,6 +490,7 @@ export default {
         videoId,
         videoName: video?.name || `视频 ${videoId}`,
         videoPath: video?.path || '',
+        videoMeta: formatMediaMeta(video).join(' · '),
       };
     },
     cancelSameSourceDelete() {
@@ -615,6 +628,12 @@ export default {
   flex-direction: column;
 }
 
+/* 右侧常驻质量面板要吃掉 352px，弹窗不加宽的话左侧待审流只剩三百多像素。 */
+:deep(.ai-tag-review-modal--wide) {
+  width: min(1120px, calc(100vw - 40px));
+  max-width: 1120px;
+}
+
 .ai-tag-review-header {
   display: flex;
   justify-content: space-between;
@@ -639,7 +658,7 @@ export default {
 
 .ai-review-type-tabs {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   padding-top: 12px;
 }
@@ -649,7 +668,10 @@ export default {
   align-items: center;
   justify-content: center;
   gap: 7px;
+  min-width: 0;
   min-height: 38px;
+  padding: 0 10px;
+  white-space: nowrap;
   border: 1px solid var(--border-color);
   border-radius: 9px;
   background: var(--control-bg);
@@ -693,15 +715,24 @@ export default {
 .ai-review-quality {
   min-width: 0;
   overflow-y: auto;
-  padding-left: 16px;
+  padding: 0 4px 0 16px;
   margin-left: 16px;
   border-left: 1px solid var(--hairline-soft);
   background: var(--panel-subtle-bg);
 }
 
-@media (max-width: 1100px) {
-  /* 窄屏放不下并排：质量面板落到待审流下面，而不是把两边都挤没。 */
-  .ai-review-split--with-quality { grid-template-columns: minmax(0, 1fr); }
+.ai-review-quality-title {
+  margin: 14px 0 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@media (max-width: 960px) {
+  /* 窄屏放不下并排：质量面板落到待审流下面。两行按 fr 分高度，待审流始终占大头，
+     不让质量面板的内容高度把待审流压到只剩一行。（应用窗口最小 1024px，这里
+     只是兜底。） */
+  .ai-review-split--with-quality { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1.6fr) minmax(0, 1fr); }
   .ai-review-quality { padding-left: 0; margin-left: 0; border-left: 0; border-top: 1px solid var(--hairline-soft); }
 }
 
@@ -712,28 +743,6 @@ export default {
   overflow-y: auto;
   padding-right: 4px;
   overscroll-behavior: contain;
-}
-
-.ai-tag-review-tabs {
-  display: flex;
-  gap: 6px;
-  padding-top: 12px;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.ai-tag-review-tabs button {
-  padding: 8px 12px;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.ai-tag-review-tabs button.active {
-  border-bottom-color: var(--accent-color);
-  color: var(--text-primary);
-  font-weight: 700;
 }
 
 .ai-tag-review-search {
@@ -760,17 +769,17 @@ export default {
   margin: 0 0 10px;
 }
 
+/* 一对卡片与五个动作按钮并排时，每张卡只剩一百多像素，路径能竖出七八行；
+   动作按钮改成卡片下面独立一行，两张卡分掉整个宽度。 */
 .same-source-row {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
+  flex-direction: column;
+  gap: 12px;
   padding: 10px 0;
   border-top: 1px solid var(--border-color);
 }
 
 .same-source-row .ai-candidate-actions {
-  max-width: 320px;
   flex-wrap: wrap;
   justify-content: flex-end;
 }
@@ -855,12 +864,27 @@ export default {
   white-space: nowrap;
 }
 
+.same-source-meta {
+  margin: 6px 0 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .same-source-path,
 .ai-confirm-path {
   margin: 7px 0 0;
   color: var(--text-muted);
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+/* 卡片里的路径最多两行，全文在 title 里。 */
+.same-source-path {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
 }
 
 .same-source-evidence {
@@ -892,20 +916,51 @@ export default {
 
 .ai-video-title {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
+  align-items: flex-start;
   gap: 12px;
-  font-weight: 700;
-  color: var(--text-primary);
   min-width: 0;
 }
 
 .ai-video-name {
   display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.ai-video-name-row {
+  display: flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  flex: 1 1 auto;
+}
+
+.ai-video-name-text {
+  min-width: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.ai-video-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-video-meta span + span::before {
+  content: '·';
+  margin-right: 8px;
+  color: var(--border-strong);
 }
 
 .ai-video-thumbnail {
@@ -932,11 +987,6 @@ export default {
   background: var(--thumb-fallback-bg);
 }
 
-.ai-video-name > span:first-child {
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-
 .ai-video-deleted-badge {
   flex: 0 0 auto;
   padding: 2px 6px;
@@ -952,16 +1002,16 @@ export default {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  justify-content: flex-end;
-  flex: 0 0 auto;
-  max-width: 320px;
+  margin-top: 10px;
 }
 
 .ai-video-path {
-  margin-top: 4px;
+  min-width: 0;
   color: var(--text-muted);
   font-size: 12px;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ai-video-existing-tags {
@@ -1120,6 +1170,14 @@ export default {
   overflow-wrap: anywhere;
 }
 
+.ai-confirm-meta {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
 .ai-confirm-actions {
   display: flex;
   justify-content: flex-end;
@@ -1134,14 +1192,8 @@ export default {
   }
 
   .ai-tag-review-header,
-  .ai-tag-review-actions,
-  .ai-video-title {
+  .ai-tag-review-actions {
     flex-wrap: wrap;
-  }
-
-  .ai-video-actions {
-    justify-content: flex-start;
-    max-width: 100%;
   }
 
   .ai-candidate-row {
@@ -1152,20 +1204,12 @@ export default {
     justify-content: flex-start;
   }
 
-  .same-source-row {
-    flex-direction: column;
-  }
-
   .same-source-pair {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .same-source-link {
     display: none;
-  }
-
-  .same-source-row .ai-candidate-actions {
-    max-width: 100%;
   }
 }
 </style>

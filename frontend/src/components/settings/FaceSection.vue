@@ -103,11 +103,7 @@
         data-test="face-run-now"
         @click="runNow"
       >忽略空闲立即运行</button>
-      <ul v-if="analysisFailures.length" class="face-failures" data-test="face-analysis-failures">
-        <li v-for="failure in analysisFailures" :key="`${failure.media_kind}-${failure.media_id}`">
-          {{ failure.name }}：{{ failure.error }}
-        </li>
-      </ul>
+      <TaskFailureList :failures="analysisFailures" key-prefix="face-" data-test="face-analysis-failures" fallback-label="媒体" />
     </div>
 
     <div class="setting-item">
@@ -148,6 +144,7 @@ import {
 } from '../../../wailsjs/go/main/App';
 import { confirmAction, notifyError, notifySuccess } from '../../utils/feedback.js';
 import { idleWaitReasonLabel, isIdleGateNotWaitingError } from '../../utils/idleScheduling.js';
+import TaskFailureList from '../video-list/TaskFailureList.vue';
 
 const RUNTIME_STATE_TEXT = {
   available: '已就绪',
@@ -177,6 +174,7 @@ const PREPARE_STAGE_TEXT = {
 // 因此运行时不可用时这里必须把原因说清楚，而不是只把按钮置灰。
 export default {
   name: 'FaceSection',
+  components: { TaskFailureList },
   props: {
     form: { type: Object, required: true }
   },
@@ -357,8 +355,7 @@ export default {
 
 <style scoped>
 .face-privacy { margin-bottom: 12px; }
-/* 报错要看得出是报错：`settings-error` 在样式表里并不存在（超分分区那处也是空引用），
-   这里直接用危险色令牌。 */
+/* 报错要看得出是报错：直接用危险色令牌（公共的 .settings-error 同义）。 */
 .face-error { color: var(--danger-color); }
 .face-source { word-break: break-all; }
 .face-progress { display: grid; gap: 6px; margin-top: 10px; color: var(--text-secondary); font-size: 12px; }
@@ -369,6 +366,7 @@ export default {
 .face-analysis-status {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 12px;
   padding: 10px 12px;
@@ -378,6 +376,5 @@ export default {
   color: var(--text-secondary);
   font-size: 13px;
 }
-.face-failures { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
 .btn-compact { height: 28px; padding: 0 10px; font-size: 12px; }
 </style>

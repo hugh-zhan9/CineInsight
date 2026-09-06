@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"net"
 	"net/http"
 	"net/netip"
@@ -224,9 +225,10 @@ func (s *ShortFeedHTTPServer) handleNext(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	dto, err := s.feed.NextItemInScope(
+	dto, err := s.feed.NextItemFiltered(
 		parseShortFeedExcludeRefs(r.URL.Query().Get("exclude")),
 		r.URL.Query().Get("scope"),
+		r.URL.Query().Get("media"),
 	)
 	if err != nil {
 		status := http.StatusInternalServerError
@@ -239,6 +241,10 @@ func (s *ShortFeedHTTPServer) handleNext(w http.ResponseWriter, r *http.Request)
 			status = http.StatusBadRequest
 			code = "invalid_scope"
 		}
+		if errors.Is(err, ErrShortFeedInvalidMediaFilter) {
+			status = http.StatusBadRequest
+			code = "invalid_media"
+		}
 		writeShortFeedError(w, status, code, err.Error())
 		return
 	}
@@ -250,8 +256,12 @@ func (s *ShortFeedHTTPServer) handleScopes(w http.ResponseWriter, r *http.Reques
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	scopes, err := s.feed.ScopeCounts()
+	scopes, err := s.feed.ScopeCountsFiltered(r.URL.Query().Get("media"))
 	if err != nil {
+		if errors.Is(err, ErrShortFeedInvalidMediaFilter) {
+			writeShortFeedError(w, http.StatusBadRequest, "invalid_media", err.Error())
+			return
+		}
 		writeShortFeedError(w, http.StatusInternalServerError, "scopes_failed", err.Error())
 		return
 	}
@@ -259,16 +269,46 @@ func (s *ShortFeedHTTPServer) handleScopes(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *ShortFeedHTTPServer) handleTags(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	switch r.Method {
+	case http.MethodGet:
+		tags, err := s.feed.ListFeedTags()
+		if err != nil {
+			writeShortFeedError(w, http.StatusInternalServerError, "tags_failed", err.Error())
+			return
+		}
+		writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"tags": tags})
+	case http.MethodPost:
+		// 新建标签与其他写操作同一套防线：同源校验 + 严格 JSON 体。
+		if !shortFeedSameOriginMutation(r) {
+			writeShortFeedError(w, http.StatusForbidden, "forbidden_origin", "mutation origin must match short feed host")
+			return
+		}
+		var body struct {
+			Name string `json:"name"`
+		}
+		if !decodeShortFeedMutation(w, r, &body) {
+			return
+		}
+		tag, err := s.feed.CreateFeedTag(body.Name)
+		switch {
+		case errors.Is(err, ErrShortFeedTagNameRequired):
+			writeShortFeedError(w, http.StatusBadRequest, "tag_name_required", "标签名不能为空")
+		case errors.Is(err, ErrShortFeedTagNameTooLong):
+			writeShortFeedError(w, http.StatusBadRequest, "tag_name_too_long", fmt.Sprintf("标签名最多 %d 个字符", shortFeedTagNameMaxRunes))
+		case errors.Is(err, ErrShortFeedTagNameInvalid):
+			writeShortFeedError(w, http.StatusBadRequest, "tag_name_invalid", "标签名不能包含控制字符")
+		case errors.Is(err, ErrShortFeedAutomaticTag):
+			writeShortFeedError(w, http.StatusBadRequest, "automatic_tag", "该名称是系统自动标签，不能手动使用")
+		case err != nil:
+			// 数据库错误原文不回给局域网客户端。
+			log.Printf("[ShortFeed] create tag failed: %v", err)
+			writeShortFeedError(w, http.StatusInternalServerError, "tag_create_failed", "创建标签失败")
+		default:
+			writeShortFeedJSON(w, http.StatusOK, tag)
+		}
+	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
-		return
 	}
-	tags, err := s.feed.ListFeedTags()
-	if err != nil {
-		writeShortFeedError(w, http.StatusInternalServerError, "tags_failed", err.Error())
-		return
-	}
-	writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"tags": tags})
 }
 
 func (s *ShortFeedHTTPServer) handleFavorites(w http.ResponseWriter, r *http.Request) {

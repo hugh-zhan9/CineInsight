@@ -27,7 +27,9 @@ export default {
 </script>
 
 <style scoped>
-.insights-panel { border: 1px solid var(--border-color); border-radius: var(--radius-lg); background: var(--panel-bg); padding: 16px; }
+/* 与 InsightsPage 里的面板卡同一组令牌：这里不能省掉（共享类名不能只靠父组件的 scoped 样式），
+   但两处必须一致，否则热力图面板和分桶面板边框、圆角不一样。 */
+.insights-panel { border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); padding: 14px 16px; }
 .insights-panel__heading { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 14px; }
 .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
 .bucket-list { display: grid; gap: 10px; }

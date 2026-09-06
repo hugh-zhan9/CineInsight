@@ -176,6 +176,7 @@ export default {
 
 .glossary-terms {
   display: flex;
+  flex: 1 1 auto;
   align-items: center;
   gap: 8px;
   min-width: 0;
@@ -194,7 +195,8 @@ export default {
 }
 
 .glossary-note {
-  flex: 1;
+  flex: 0 1 auto;
+  max-width: 40%;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

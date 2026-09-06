@@ -22,6 +22,7 @@
 
 <script>
 import BaseModal from './ui/BaseModal.vue';
+import { formatBytes } from '../utils/mediaDetails.js';
 
 export default {
   name: 'DeleteConfirmDialog',
@@ -52,7 +53,10 @@ export default {
       if (this.videoCount > 0) {
         return `确定要删除选中的 ${this.videoCount} 个视频吗？`;
       }
-      return `确定要删除视频 "${this.video?.name || ''}" 吗？`;
+      const size = Number(this.video?.size || 0);
+      const name = this.video?.name || '';
+      if (size > 0) return `确定要删除视频 "${name}"（${formatBytes(size)}）吗？`;
+      return `确定要删除视频 "${name}" 吗？`;
     }
   },
   methods: {

@@ -1042,6 +1042,44 @@ export namespace services {
 	        this.is_active = source["is_active"];
 	    }
 	}
+	export class AITaggingConnectionTestInput {
+	    base_url: string;
+	    api_key: string;
+	    model: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AITaggingConnectionTestInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.base_url = source["base_url"];
+	        this.api_key = source["api_key"];
+	        this.model = source["model"];
+	    }
+	}
+	export class AITaggingConnectionTestResult {
+	    ok: boolean;
+	    base_url: string;
+	    model: string;
+	    latency_ms: number;
+	    reply: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AITaggingConnectionTestResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.base_url = source["base_url"];
+	        this.model = source["model"];
+	        this.latency_ms = source["latency_ms"];
+	        this.reply = source["reply"];
+	        this.message = source["message"];
+	    }
+	}
 	
 	export class AITaggingStatusSummary {
 	    config_available: boolean;
@@ -1657,6 +1695,7 @@ export namespace services {
 	    video_id: number;
 	    name: string;
 	    path: string;
+	    size: number;
 	    season?: number;
 	    episode?: number;
 	    position: number;
@@ -1672,6 +1711,7 @@ export namespace services {
 	        this.video_id = source["video_id"];
 	        this.name = source["name"];
 	        this.path = source["path"];
+	        this.size = source["size"];
 	        this.season = source["season"];
 	        this.episode = source["episode"];
 	        this.position = source["position"];
@@ -3085,6 +3125,7 @@ export namespace services {
 	    directory: string;
 	    name: string;
 	    count: number;
+	    total_size: number;
 	    covers: ImageFolderCover[];
 	
 	    static createFrom(source: any = {}) {
@@ -3096,6 +3137,7 @@ export namespace services {
 	        this.directory = source["directory"];
 	        this.name = source["name"];
 	        this.count = source["count"];
+	        this.total_size = source["total_size"];
 	        this.covers = this.convertValues(source["covers"], ImageFolderCover);
 	    }
 	

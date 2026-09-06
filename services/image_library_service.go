@@ -65,9 +65,11 @@ type ImageFolderCover struct {
 // ImageFolderGroup 是图片库按直属文件夹展示时的一个图集。
 // Images.directory 已经是文件所在的直接父目录，因此同一组不会递归包含子目录。
 type ImageFolderGroup struct {
-	Directory string             `json:"directory"`
-	Name      string             `json:"name"`
-	Count     int                `json:"count"`
+	Directory string `json:"directory"`
+	Name      string `json:"name"`
+	Count     int    `json:"count"`
+	// TotalSize 是组内图片字节数之和：文件夹卡上有"删除文件夹"，总得知道会释放多少。
+	TotalSize int64              `json:"total_size"`
 	Covers    []ImageFolderCover `json:"covers"`
 }
 
@@ -425,6 +427,7 @@ type imageFolderCoverRow struct {
 	Name      string `gorm:"column:name"`
 	Directory string `gorm:"column:directory"`
 	Format    string `gorm:"column:format"`
+	Size      int64  `gorm:"column:size"`
 }
 
 // ListImageFolderGroups 按直属目录汇总当前筛选命中的图片。
@@ -436,7 +439,7 @@ func (s *ImageLibraryService) ListImageFolderGroups(filter ImageFilter) ([]Image
 	}
 
 	query := applyImageFilter(database.DB.Model(&models.Image{}), normalized).
-		Select("images.id, images.name, images.directory, images.format")
+		Select("images.id, images.name, images.directory, images.format, images.size")
 	query = orderImageQuery(query, normalized.SortMode)
 
 	var rows []imageFolderCoverRow
@@ -459,6 +462,7 @@ func (s *ImageLibraryService) ListImageFolderGroups(filter ImageFilter) ([]Image
 		}
 		group := &groups[index]
 		group.Count++
+		group.TotalSize += row.Size
 		if len(group.Covers) < 4 {
 			group.Covers = append(group.Covers, ImageFolderCover{
 				ID: row.ID, Name: row.Name, Format: row.Format,

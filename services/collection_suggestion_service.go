@@ -58,12 +58,14 @@ type CollectionSuggestionStatus struct {
 
 // CollectionSuggestionMemberView 是候选成员在面板上的呈现形态。
 type CollectionSuggestionMemberView struct {
-	VideoID  uint   `json:"video_id"`
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	Season   *int   `json:"season"`
-	Episode  *int   `json:"episode"`
-	Position int    `json:"position"`
+	VideoID uint   `json:"video_id"`
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	// Size 是文件字节数：同集多版本时留哪个删哪个，首先看体积。
+	Size     int64 `json:"size"`
+	Season   *int  `json:"season"`
+	Episode  *int  `json:"episode"`
+	Position int   `json:"position"`
 	// ThumbnailURL 走既有缩略图路由，与片库同一套。
 	ThumbnailURL string `json:"thumbnail_url"`
 	// MultipleVersions 表示同一集还有别的文件（03 与 03v2），面板据此提示。
@@ -603,7 +605,7 @@ func suggestionMemberViews(suggestionID uint) ([]CollectionSuggestionMemberView,
 	videoByID := make(map[uint]models.Video, len(videoIDs))
 	if len(videoIDs) > 0 {
 		var videos []models.Video
-		if err := database.DB.Select("id", "name", "path").Where("id IN ?", videoIDs).Find(&videos).Error; err != nil {
+		if err := database.DB.Select("id", "name", "path", "size").Where("id IN ?", videoIDs).Find(&videos).Error; err != nil {
 			return nil, fmt.Errorf("读取剧集候选成员视频: %w", err)
 		}
 		for _, video := range videos {
@@ -627,6 +629,7 @@ func suggestionMemberViews(suggestionID uint) ([]CollectionSuggestionMemberView,
 			VideoID:          member.VideoID,
 			Name:             video.Name,
 			Path:             video.Path,
+			Size:             video.Size,
 			Season:           member.Season,
 			Episode:          member.Episode,
 			Position:         member.Position,

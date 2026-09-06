@@ -126,6 +126,7 @@
 import { GetDatabaseBackendStatus, PreflightDatabaseSwitch, StartDatabaseSwitch, SelectDirectory, GetBackupStatus, ListDatabaseBackups, CreateDatabaseBackup, RestoreDatabaseBackup } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import { confirmAction } from '../../utils/feedback.js';
+import { formatBytes } from '../../utils/mediaDetails.js';
 
 // 数据库后端切换与数据库备份两个分区，连同「选择备份 / 确认恢复」弹窗。
 // 备份目录、保留份数与间隔仍是设置表单字段，由设置页统一保存。
@@ -298,10 +299,7 @@ export default {
       return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString();
     },
     formatBackupSize(value) {
-      const bytes = Number(value) || 0;
-      if (bytes < 1024) return `${bytes} B`;
-      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-      return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
+      return formatBytes(Number(value) || 0);
     },
   }
 };

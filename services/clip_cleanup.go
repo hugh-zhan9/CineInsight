@@ -59,14 +59,14 @@ func loadCleanupClipGroups(excluded map[[2]uint]struct{}) ([]CleanupClipGroup, i
 	if err != nil {
 		return nil, 0, err
 	}
-	roots, err := loadScanRootScope()
+	scope, err := loadCleanupPathScope()
 	if err != nil {
 		return nil, 0, err
 	}
 	sequences := make([]clipSequence, 0, len(rows))
 	usable := make(map[uint]clipSequence, len(rows))
 	for _, row := range rows {
-		if row.Video.ID == 0 || !pathWithinScanRoots(row.Video.Path, roots) {
+		if row.Video.ID == 0 || !scope.contains(row.Video.Path) {
 			continue
 		}
 		// 与回填的新鲜判定同一套口径（frameHashSequenceMatchesFile）：带 last_error、
@@ -100,7 +100,7 @@ func loadCleanupClipGroups(excluded map[[2]uint]struct{}) ([]CleanupClipGroup, i
 	// 放掉引用，别在后面的两两比较期间白占一倍内存。
 	rows = nil
 
-	staleCount, err := countVideosWithoutUsableFrameHash(roots, usable)
+	staleCount, err := countVideosWithoutUsableFrameHash(scope, usable)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -208,7 +208,7 @@ func clipDismissalStillApplies(dismissed map[[2]uint]models.ClipDismissal, full,
 //
 // 没回填过与失效待重算合成一个数：对用户来说这两种情况的动作完全一样——点一次
 // "补全帧哈希"。分开报两个数字只会让面板上多一行没人看的统计。
-func countVideosWithoutUsableFrameHash(roots []string, usable map[uint]clipSequence) (int64, error) {
+func countVideosWithoutUsableFrameHash(scope cleanupPathScope, usable map[uint]clipSequence) (int64, error) {
 	scoped, err := applyScanRootScope(database.DB.Model(&models.Video{}).Select("id", "path"))
 	if err != nil {
 		return 0, err
@@ -219,7 +219,7 @@ func countVideosWithoutUsableFrameHash(roots []string, usable map[uint]clipSeque
 	}
 	var missing int64
 	for _, video := range videos {
-		if !pathWithinScanRoots(video.Path, roots) {
+		if !scope.contains(video.Path) {
 			continue
 		}
 		if _, ok := usable[video.ID]; !ok {

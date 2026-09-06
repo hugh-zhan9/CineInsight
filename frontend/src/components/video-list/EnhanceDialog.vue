@@ -8,6 +8,8 @@
     </template>
     <template v-else-if="enhanceDialog.video">
       <p class="enhance-source-name" :title="enhanceDialog.video.path">{{ enhanceDialog.video.name }}</p>
+      <!-- 2× 超分产物体积是源的数倍量级，源文件多大直接决定这次要吃多少磁盘。 -->
+      <p v-if="formatMediaMeta(enhanceDialog.video).length" class="enhance-source-meta" data-test="enhance-source-meta">{{ formatMediaMeta(enhanceDialog.video).join(' · ') }}</p>
       <div class="setting-item">
         <label>内容类型（决定模型，不会自动判断）</label>
         <div class="merge-type-switch" role="group" aria-label="超分内容类型">
@@ -50,6 +52,7 @@
 import { GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import { notifyError } from '../../utils/feedback.js';
+import { formatMediaMeta } from '../../utils/mediaDetails.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 
 // 视频超分弹窗：能力探测、单个任务创建与最近任务列表。由父组件通过 ref 调用 open()
@@ -84,6 +87,7 @@ export default {
     }
   },
   methods: {
+    formatMediaMeta,
     open(video) {
       return this.openEnhanceDialog(video);
     },
@@ -152,7 +156,8 @@ export default {
 </script>
 
 <style scoped>
-.enhance-source-name { font-weight: 650; margin-bottom: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enhance-source-name { font-weight: 650; margin-bottom: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enhance-source-meta { margin-bottom: 10px; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .enhance-task-heading { font-size: 14px; margin-bottom: 8px; }
 .enhance-task-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 12px; }
 .enhance-task-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

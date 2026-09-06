@@ -5,9 +5,11 @@ import (
 	"math"
 	"os"
 	"sort"
+	"time"
 	"video-master/database"
 	"video-master/models"
 
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -21,7 +23,7 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}) ([]CleanupDup
 	if err := database.DB.Preload("Video.Tags").Order("video_id ASC").Find(&rows).Error; err != nil {
 		return nil, nil, 0, err
 	}
-	roots, err := loadScanRootScope()
+	scope, err := loadCleanupPathScope()
 	if err != nil {
 		return nil, nil, 0, err
 	}
@@ -31,7 +33,7 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}) ([]CleanupDup
 		if row.HashEarly == "" || row.HashMiddle == "" || row.HashLate == "" {
 			continue
 		}
-		if !pathWithinScanRoots(row.Video.Path, roots) {
+		if !scope.contains(row.Video.Path) {
 			continue
 		}
 		info, err := os.Stat(row.Video.Path)
@@ -193,7 +195,20 @@ func DismissNearDuplicateGroup(videoIDs []uint) error {
 			dismissals = append(dismissals, models.NearDuplicateDismissal{VideoLowID: pair[0], VideoHighID: pair[1]})
 		}
 	}
-	return database.DB.Clauses(clause.OnConflict{DoNothing: true}).Create(&dismissals).Error
+	// "不是同片"也是对同源判断的否决：这些对上还在待审的同源关系一并判掉，
+	// 否则 AI 标签管理里的"视频同源待审"会继续拿同一对来问。两步同一事务：
+	// 只写了忽略表而没判关系，清理面板与同源待审就会各说各话。
+	pairs := make([][2]uint, 0, len(dismissals))
+	for _, dismissal := range dismissals {
+		pairs = append(pairs, [2]uint{dismissal.VideoLowID, dismissal.VideoHighID})
+	}
+	now := time.Now()
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&dismissals).Error; err != nil {
+			return err
+		}
+		return rejectDetectedSameSourceRelationsForPairsTx(tx, pairs, now)
+	})
 }
 
 func perceptualBandKeys(row models.VideoPerceptualHash) []string {

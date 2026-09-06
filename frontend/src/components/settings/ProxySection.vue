@@ -77,11 +77,7 @@
         data-test="proxy-task-cancel"
         @click="cancelTask"
       >取消</button>
-      <ul v-if="failedResults.length" class="proxy-failures" data-test="proxy-failures">
-        <li v-for="item in failedResults" :key="item.video_id">
-          {{ item.name || `视频 ${item.video_id}` }}：{{ codeLabel(item.code) }}
-        </li>
-      </ul>
+      <TaskFailureList :failures="failedResultItems" key-prefix="proxy-" data-test="proxy-failures" />
     </div>
   </div>
 </template>
@@ -97,6 +93,7 @@ import {
 import { confirmAction, notifyError } from '../../utils/feedback.js';
 import { formatBytes } from '../../utils/mediaDetails.js';
 import { PLAYBACK_PROXY_CODE_LABELS } from '../../utils/playbackProxy.js';
+import TaskFailureList from '../video-list/TaskFailureList.vue';
 
 const BYTES_PER_GIB = 1024 * 1024 * 1024;
 
@@ -104,6 +101,7 @@ const BYTES_PER_GIB = 1024 * 1024 * 1024;
 // 上限在设置表单里是字节，界面上按 GiB 填——用字节填 50 GiB 要数 11 位数。
 export default {
   name: 'ProxySection',
+  components: { TaskFailureList },
   props: {
     form: { type: Object, required: true }
   },
@@ -132,6 +130,9 @@ export default {
     failedResults() {
       const skipped = ['created', 'already_exists', 'in_progress'];
       return (this.status?.results || []).filter(item => item.code && !skipped.includes(item.code));
+    },
+    failedResultItems() {
+      return this.failedResults.map(item => ({ video_id: item.video_id, name: item.name, error: this.codeLabel(item.code) }));
     },
     taskText() {
       const status = this.status;
@@ -239,6 +240,7 @@ export default {
 .proxy-task {
   display: flex;
   flex-direction: column;
+  align-items: flex-start;
   gap: 8px;
   margin-top: 16px;
   padding: 10px 12px;
@@ -249,6 +251,5 @@ export default {
   font-size: 13px;
 }
 .proxy-actions { display: flex; flex-wrap: wrap; gap: 8px; }
-.proxy-failures { display: grid; gap: 4px; margin: 0; padding-left: 18px; }
 .btn-compact { height: 28px; padding: 0 10px; font-size: 12px; }
 </style>

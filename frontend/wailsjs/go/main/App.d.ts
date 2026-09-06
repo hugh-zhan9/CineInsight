@@ -512,6 +512,8 @@ export function SyncImageDirectories():Promise<services.ImageScanResult>;
 
 export function SyncScanDirectories():Promise<services.ScanSyncResult>;
 
+export function TestAITaggingConnection(arg1:services.AITaggingConnectionTestInput):Promise<services.AITaggingConnectionTestResult>;
+
 export function TriggerAITagging():Promise<boolean>;
 
 export function UpdateCollection(arg1:number,arg2:string,arg3:string):Promise<models.MediaCollection>;

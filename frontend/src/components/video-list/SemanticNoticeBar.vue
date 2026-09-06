@@ -3,7 +3,7 @@
     {{ semanticUnavailableNotice }}
   </div>
 
-  <div v-else-if="searchMode === 'semantic'" class="scan-sync-status" :role="semanticSearchError ? 'alert' : 'status'">
+  <div v-else-if="searchMode === 'semantic'" :class="['scan-sync-status', { 'scan-sync-status--error': semanticSearchError }]" :role="semanticSearchError ? 'alert' : 'status'">
     <span v-if="semanticSearchError">语义搜索失败：{{ semanticSearchErrorText }}</span>
     <span v-else-if="semanticCoverage">语义索引覆盖 {{ semanticCoverage.indexed || 0 }}/{{ semanticCoverage.total || 0 }}；未建立索引的视频不会出现在结果中。</span>
     <span v-else>用自然语言描述想找的内容，回车开始搜索；未建立索引的视频不会出现在结果中。</span>

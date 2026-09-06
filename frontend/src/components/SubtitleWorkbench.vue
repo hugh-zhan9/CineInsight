@@ -2,9 +2,9 @@
   <div class="subtitle-workbench-overlay" @click.self="requestClose">
     <section class="subtitle-workbench" role="dialog" aria-modal="true" aria-label="字幕编辑工作台">
       <header class="subtitle-workbench__header">
-        <div>
+        <div class="subtitle-workbench__title">
           <p class="subtitle-workbench__eyebrow">字幕编辑工作台</p>
-          <h2>{{ video.name }}</h2>
+          <h2 :title="video.name">{{ video.name }}</h2>
         </div>
         <div class="subtitle-workbench__header-actions">
           <span :class="['subtitle-workbench__dirty', { 'subtitle-workbench__dirty--active': isDirty }]">
@@ -698,6 +698,10 @@ export default {
   box-shadow: var(--shadow-modal);
 }
 
+.subtitle-workbench__title { min-width: 0; }
+.subtitle-workbench__title h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.subtitle-workbench__header-actions { flex: none; }
+
 .subtitle-workbench__header,
 .subtitle-workbench__footer,
 .subtitle-workbench__editor-toolbar {
@@ -904,9 +908,12 @@ export default {
   line-height: 1.45;
 }
 
+/* 条目行高固定（虚拟滚动），问题多于两条时在行内滚动而不是被裁掉。 */
 .subtitle-workbench__entry-errors {
   margin: 5px 0 0;
   padding-left: 18px;
+  max-height: 36px;
+  overflow-y: auto;
   font-size: 11px;
 }
 

@@ -84,7 +84,7 @@
               <div class="suggestion-member__info">
                 <span class="suggestion-member__name" :title="member.path">{{ member.name }}</span>
                 <span class="suggestion-member__meta">
-                  {{ episodeLabel(member) }}
+                  {{ episodeLabel(member) }}<template v-if="member.size > 0"> · {{ formatBytes(member.size) }}</template>
                   <span v-if="member.multiple_versions" class="suggestion-member__badge">同集多版本</span>
                 </span>
               </div>
@@ -134,6 +134,7 @@ import {
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import { confirmAction, notifyError, notifySuccess } from '../utils/feedback.js';
+import { formatBytes } from '../utils/mediaDetails.js';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 
 // 建议作品集面板（D-023..D-025）。
@@ -182,6 +183,7 @@ export default {
     await this.refresh();
   },
   methods: {
+    formatBytes,
     applyStatus(data) {
       this.status = {
         running: Boolean(data?.running),
@@ -326,6 +328,9 @@ export default {
 
 .suggestion-progress {
   flex: none;
+  max-height: 96px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   padding: 8px 18px;
   border-bottom: 1px solid var(--hairline-faint);
   background: var(--panel-subtle-bg);

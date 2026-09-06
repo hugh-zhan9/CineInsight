@@ -831,3 +831,29 @@ describe('播放代理入口（D-006）', () => {
     wrapper.unmount();
   });
 });
+
+// 收藏 / 已看只改一列，返回值却要整行覆盖列表项；后端不带 tags 时一次收藏就把标签"清空"了。
+describe('VideoListPage state toggles keep row tags', () => {
+  it('preserves existing tags when the favorite response carries no tag array', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 2, name: 'two.mp4', is_favorite: false, tags: [{ id: 1, name: '保留' }] }];
+    api.SetVideoFavorite.mockResolvedValueOnce({ id: 2, name: 'two.mp4', is_favorite: true, tags: null });
+
+    await wrapper.vm.toggleVideoFavorite(wrapper.vm.videos[0]);
+    await flushPromises();
+
+    expect(wrapper.vm.videos[0].is_favorite).toBe(true);
+    expect(wrapper.vm.videos[0].tags).toEqual([{ id: 1, name: '保留' }]);
+  });
+
+  it('adopts the tag array when the response does carry one', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 2, name: 'two.mp4', is_favorite: false, tags: [{ id: 1, name: '保留' }] }];
+    api.SetVideoFavorite.mockResolvedValueOnce({ id: 2, name: 'two.mp4', is_favorite: true, tags: [] });
+
+    await wrapper.vm.toggleVideoFavorite(wrapper.vm.videos[0]);
+    await flushPromises();
+
+    expect(wrapper.vm.videos[0].tags).toEqual([]);
+  });
+});

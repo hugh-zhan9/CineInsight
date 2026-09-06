@@ -45,6 +45,8 @@
 </template>
 
 <script>
+import { formatBytes } from '../../utils/mediaDetails.js';
+
 const STATE_LABELS = {
   queued: '排队中',
   running: '下载中',
@@ -95,14 +97,7 @@ export default {
         : `${minutes}:${secs}`;
     },
     formatBytes(bytes) {
-      const units = ['B', 'KB', 'MB', 'GB'];
-      let size = Number(bytes) || 0;
-      let unit = 0;
-      while (size >= 1024 && unit < units.length - 1) {
-        size /= 1024;
-        unit += 1;
-      }
-      return `${size.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
+      return formatBytes(Number(bytes) || 0);
     }
   }
 };

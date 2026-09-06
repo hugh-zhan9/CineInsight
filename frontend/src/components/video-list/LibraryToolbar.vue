@@ -853,40 +853,9 @@ export default {
   font-weight: 700;
 }
 
-.page-content--with-preview .toolbar .search-group {
-  flex-basis: 100%;
-}
-
-.page-content--with-preview .toolbar-management {
-  justify-content: flex-start;
-}
-
 @media (max-width: 920px) {
-  .toolbar .search-group {
-    flex-basis: 100%;
-  }
-
-  .filter-group,
-  .toolbar-secondary,
-  .toolbar-management,
   .selection-toolbar {
     flex-wrap: wrap;
-  }
-
-  .toolbar-secondary,
-  .toolbar-management {
-    justify-content: flex-start;
-  }
-}
-
-@media (max-width: 620px) {
-  .toolbar .search-group,
-  .toolbar-cluster {
-    flex-wrap: wrap;
-  }
-
-  .toolbar .search-group .search-input {
-    flex-basis: 100%;
   }
 }
 .btn-compact {

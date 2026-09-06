@@ -27,7 +27,7 @@
       </span>
       <span class="related-video-card__copy">
         <strong>{{ positionLabel }}{{ video.display_title || video.name }}</strong>
-        <small>{{ video.name }}</small>
+        <small :title="metaText ? `${video.name} · ${metaText}` : video.name">{{ video.name }}<template v-if="metaText"> · {{ metaText }}</template></small>
       </span>
     </button>
     <button
@@ -43,6 +43,8 @@
 </template>
 
 <script>
+import { formatMediaMeta } from '../utils/mediaDetails.js';
+
 export default {
   name: 'RelatedVideoItem',
   props: {
@@ -58,7 +60,8 @@ export default {
   emits: ['open', 'action', 'select', 'dragstart', 'drop'],
   data() { return { thumbnailFailed: false }; },
   computed: {
-    thumbnailURL() { return `/preview/thumbnail/${this.video.id}`; }
+    thumbnailURL() { return `/preview/thumbnail/${this.video.id}`; },
+    metaText() { return formatMediaMeta(this.video).join(' · '); }
   },
   watch: {
     'video.id'() { this.thumbnailFailed = false; }

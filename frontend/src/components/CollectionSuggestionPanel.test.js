@@ -48,6 +48,7 @@ function member(videoID, episode, overrides = {}) {
     episode,
     position: episode,
     thumbnail_url: `/preview/thumbnail/${videoID}`,
+    size: 700 * 1024 * 1024,
     multiple_versions: false,
     ...overrides
   };
@@ -200,5 +201,7 @@ describe('建议作品集面板', () => {
     expect(members.length).toBe(2);
     expect(members[0].text()).toContain('同集多版本');
     expect(members[1].text()).toContain('同集多版本');
+    // 多版本要挑一个去掉，体积是最直接的依据。
+    expect(members[0].text()).toContain('700.0 MB');
   });
 });

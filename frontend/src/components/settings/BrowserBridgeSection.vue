@@ -174,15 +174,17 @@ export default {
 .bridge-status-main {
   display: grid;
   gap: 4px;
+  min-width: 0;
 }
+
+.bridge-actions { flex: none; }
 
 .bridge-url {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--text-secondary);
 }
 
-.bridge-error { color: var(--danger-color, #c0392b); }
-.bridge-warn { color: var(--warning-color, #b26a00); }
+.bridge-error { color: var(--danger-color); overflow-wrap: anywhere; }
 .bridge-hint { color: var(--text-secondary); margin: 6px 0 0; }
 
 .bridge-token-row {

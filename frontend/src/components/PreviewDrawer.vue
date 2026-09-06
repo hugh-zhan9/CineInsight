@@ -262,6 +262,7 @@
             <figure v-for="image in personImages" :key="image.id" class="person-image-card">
               <img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" />
               <figcaption :title="image.name">{{ image.name }}</figcaption>
+              <small v-if="image.size > 0" class="person-image-card__size">{{ formatBytes(image.size) }}</small>
               <button
                 type="button"
                 class="btn-secondary btn-compact"
@@ -368,7 +369,7 @@ import {
   SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails,
   CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy
 } from '../../wailsjs/go/main/App';
-import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
+import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
 import GlossaryEditor from './GlossaryEditor.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
@@ -960,7 +961,7 @@ export default {
       video.defaultMuted = true; video.muted = true; this.appliedSeekKey = ''; video.removeAttribute('src'); const source = video.querySelector('source'); if (source) source.removeAttribute('src'); video.load();
       this.lastProgressEmittedAt = 0; this.hasPlaybackStarted = false; this.seekPreview = null; this.resettingVideo = false;
     },
-    formatBytes(value) { const bytes = Number(value); if (!Number.isFinite(bytes)) return '未知'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; let size = bytes; let unit = 0; while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit++; } return `${size.toFixed(unit ? 1 : 0)} ${units[unit]}`; },
+    formatBytes,
     formatDuration(seconds) { const value = Number(seconds); if (!value) return ''; const h = Math.floor(value / 3600); const m = Math.floor((value % 3600) / 60); const s = Math.floor(value % 60); return [h, m, s].filter((_, i) => i > 0 || h > 0).map(v => String(v).padStart(2, '0')).join(':'); },
     formatBitRate(value) { const bitrate = Number(value); return Number.isFinite(bitrate) && bitrate > 0 ? `${(bitrate / 1000000).toFixed(2)} Mbps` : '未知'; },
     formatFrameRate(avgFrameRate, realFrameRate) { return formatFrameRateValue(avgFrameRate, realFrameRate); },
@@ -1010,6 +1011,7 @@ export default {
 .person-image-card { margin: 0; display: grid; gap: 6px; justify-items: stretch; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--control-hover-bg); }
 .person-image-card img { width: 100%; aspect-ratio: 1; display: block; object-fit: cover; border-radius: 8px; background: var(--thumb-bg); }
 .person-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
+.person-image-card__size { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }.selection-row button { background: transparent; border: 0; color: var(--text-primary); text-align: left; cursor: pointer; }.selection-row small { color: var(--text-muted); }
 .technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: 12px; }.technical-status--current { color: var(--success-color); }.technical-status--stale,.technical-status--error { color: var(--warning-strong); }
 .proxy-block { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }.proxy-block__status { margin: 0; color: var(--text-secondary); font-size: 12px; }

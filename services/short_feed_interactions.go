@@ -1,9 +1,13 @@
 package services
 
 import (
+	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 	"video-master/database"
 	"video-master/models"
 )
@@ -42,6 +46,27 @@ var shortFeedScopeOrder = []string{
 	ShortFeedScopeRecent,
 	ShortFeedScopeUntagged,
 }
+
+// 资源类型筛选：与播放范围正交，只按媒体种类收窄候选池。
+const (
+	ShortFeedMediaFilterAll   = "all"
+	ShortFeedMediaFilterVideo = "video"
+	ShortFeedMediaFilterImage = "image"
+)
+
+func normalizeShortFeedMediaFilter(kind string) (string, error) {
+	switch kind {
+	case "", ShortFeedMediaFilterAll:
+		return ShortFeedMediaFilterAll, nil
+	case ShortFeedMediaFilterVideo, ShortFeedMediaFilterImage:
+		return kind, nil
+	default:
+		return "", fmt.Errorf("%w: %s", ErrShortFeedInvalidMediaFilter, kind)
+	}
+}
+
+// shortFeedTagNameMaxRunes 与桌面端标签名的常规长度一致；再长的名字在徽标上根本显示不下。
+const shortFeedTagNameMaxRunes = 64
 
 func normalizeShortFeedScope(scope string) (string, error) {
 	if scope == "" {
@@ -161,10 +186,20 @@ func (s *ShortFeedService) filterCandidatesByScope(all []shortFeedCandidate, sco
 
 // ScopeCounts 返回五个播放范围各自的候选条数，供手机端的范围面板显示。
 func (s *ShortFeedService) ScopeCounts() ([]ShortFeedScopeCount, error) {
+	return s.ScopeCountsFiltered(ShortFeedMediaFilterAll)
+}
+
+// ScopeCountsFiltered 按当前资源类型统计各范围条数：选了「仅图片」还把视频算进去，数字就对不上流。
+func (s *ShortFeedService) ScopeCountsFiltered(mediaFilter string) ([]ShortFeedScopeCount, error) {
+	normalizedMedia, err := normalizeShortFeedMediaFilter(mediaFilter)
+	if err != nil {
+		return nil, err
+	}
 	all, _, err := s.cachedCandidates()
 	if err != nil {
 		return nil, err
 	}
+	all = filterCandidatesByMedia(all, normalizedMedia)
 	facts, err := s.loadShortFeedScopeFacts(true, true)
 	if err != nil {
 		return nil, err
@@ -254,6 +289,40 @@ func (s *ShortFeedService) ListFeedTags() ([]ShortFeedTagDTO, error) {
 		result = append(result, ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color})
 	}
 	return result, nil
+}
+
+// CreateFeedTag 在手机端新建一个手工标签。同名标签已存在时直接返回那一条：手机上
+// 打字容易重名，报错只会逼用户回去搜一遍。名字撞上自动标签则拒绝，与 ListFeedTags 的
+// 口径一致。
+func (s *ShortFeedService) CreateFeedTag(name string) (ShortFeedTagDTO, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ShortFeedTagDTO{}, ErrShortFeedTagNameRequired
+	}
+	if utf8.RuneCountInString(name) > shortFeedTagNameMaxRunes {
+		return ShortFeedTagDTO{}, ErrShortFeedTagNameTooLong
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return ShortFeedTagDTO{}, ErrShortFeedTagNameInvalid
+		}
+	}
+	tag, err := (&TagService{}).CreateTag(name, "")
+	if err != nil && !errors.Is(err, ErrTagExists) {
+		return ShortFeedTagDTO{}, err
+	}
+	if tag.ID == 0 {
+		// 两个客户端同时建同名标签时，输掉唯一约束的那一方拿到的是没入库的空壳；按名字把赢家读回来。
+		var existing models.Tag
+		if err := database.DB.Where("name = ?", name).First(&existing).Error; err != nil {
+			return ShortFeedTagDTO{}, err
+		}
+		tag = &existing
+	}
+	if tag.AutomaticKind != "" {
+		return ShortFeedTagDTO{}, ErrShortFeedAutomaticTag
+	}
+	return ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color}, nil
 }
 
 // RestoreDeleted 撤销刚才那一次删除。回收站里每个媒体最多一条记录（video_id /

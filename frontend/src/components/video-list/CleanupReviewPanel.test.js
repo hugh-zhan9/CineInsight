@@ -477,3 +477,23 @@ describe('截取片段类别', () => {
     wrapper.unmount();
   });
 });
+
+// 清理面板的每一行是"留哪个删哪个"的决策现场，以前只给分辨率和时长，唯独没有大小。
+describe('清理行元信息', () => {
+  it('每一行都带文件大小，没有大小的行则不留空位', async () => {
+    const wrapper = await openCleanupReview();
+    wrapper.vm.cleanupDialog.analysis = {
+      duplicate_groups: [{
+        original: { id: 41, name: 'IMG_4973.MOV', path: '/v/IMG_4973.MOV', duration: 1, resolution: '1920x1440', size: 2.5 * 1024 * 1024 * 1024 },
+        candidates: [{ id: 42, name: 'IMG_4973 2.MOV', path: '/v/IMG_4973 2.MOV', duration: 1, resolution: '1920x1440' }],
+        reason: '文件大小和采样哈希一致'
+      }],
+      near_duplicate_groups: [], same_source_groups: [], low_duration: [], low_resolution: []
+    };
+    await flushPromises();
+    const mains = wrapper.findAll('.cleanup-item-main').map(node => node.text());
+    expect(mains.some(text => text === 'IMG_4973.MOV · 1920x1440 · 00:01 · 2.5 GB')).toBe(true);
+    expect(mains.some(text => text === 'IMG_4973 2.MOV · 1920x1440 · 00:01')).toBe(true);
+    wrapper.unmount();
+  });
+});

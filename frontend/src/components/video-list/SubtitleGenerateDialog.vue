@@ -569,6 +569,7 @@ export default {
 .dialog-field-label {
   display: block;
   margin-bottom: 8px;
+  text-align: left;
   color: var(--text-secondary);
   font-size: 13px;
 }
@@ -576,8 +577,9 @@ export default {
   margin-top: 12px;
 }
 .dialog-select {
-  height: 36px;
+  height: var(--h-unit);
   padding: 0 10px;
+  text-align: left;
 }
 .dialog-field-hint {
   margin-top: 5px;
@@ -631,6 +633,14 @@ export default {
   min-height: 32px;
   border-top: 1px solid var(--neutral-soft);
   font-size: 13px;
+}
+.subtitle-queue-task--active {
+  padding: 0 8px;
+  border-radius: var(--radius);
+  background: var(--review-accent-soft);
+}
+.subtitle-queue-task--active .subtitle-queue-status {
+  font-weight: 700;
 }
 .subtitle-queue-status {
   flex: 0 0 70px;

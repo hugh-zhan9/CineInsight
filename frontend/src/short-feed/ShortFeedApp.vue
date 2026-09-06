@@ -29,6 +29,7 @@
         @playing="onVideoPlaying"
         @media-error="onMediaError"
         @stage-tap="handleStageTap"
+        @zoom-reset="resetPhotoZoom"
       />
 
       <FeedTopBar
@@ -100,7 +101,7 @@
     </FeedSheet>
 
     <FeedSheet v-if="sheet === 'tags'" title="标签" hint="点击切换，改动即时写入本地库" @close="sheet = null">
-      <input v-model="tagKeyword" class="sheet-input" type="text" placeholder="搜索标签…" aria-label="搜索标签" />
+      <input v-model="tagKeyword" class="sheet-input" type="text" maxlength="64" placeholder="搜索或新建标签…" aria-label="搜索或新建标签" />
       <div class="tag-picker">
         <button
           v-for="tag in visibleFeedTags"
@@ -113,7 +114,16 @@
         >
           <span class="tag-option__dot" :style="{ backgroundColor: tag.color || '#8fa0a5' }"></span>{{ tag.name }}
         </button>
-        <p v-if="visibleFeedTags.length === 0" class="sheet__empty">没有匹配的标签。标签在桌面端「标签管理」里新建。</p>
+        <!-- 搜不到就地新建：手机上不该为一个新标签回到桌面端。 -->
+        <button
+          v-if="canCreateTag"
+          type="button"
+          class="tag-option tag-option--create"
+          data-test="short-feed-create-tag"
+          :disabled="creatingTag"
+          @click="createTagFromKeyword"
+        >{{ creatingTag ? '新建中…' : `＋ 新建「${tagKeyword.trim()}」并添加` }}</button>
+        <p v-if="visibleFeedTags.length === 0 && !canCreateTag" class="sheet__empty">还没有标签，输入名称即可新建。</p>
       </div>
       <template #footer>
         <button type="button" class="sheet-btn sheet-btn--primary sheet-btn--wide" @click="sheet = null">完成</button>
@@ -121,6 +131,15 @@
     </FeedSheet>
 
     <FeedSheet v-if="sheet === 'scope'" title="播放范围" @close="sheet = null">
+      <div class="media-kind-switch" role="group" aria-label="资源类型" data-test="short-feed-media-kind">
+        <button
+          v-for="option in mediaKindOptions"
+          :key="option.kind"
+          type="button"
+          :class="{ active: option.kind === mediaKind }"
+          @click="applyMediaKind(option.kind)"
+        >{{ option.name }}</button>
+      </div>
       <button
         v-for="option in scopes"
         :key="option.scope"
@@ -151,10 +170,28 @@
 </template>
 
 <script>
-import {
-  deleteItem, getFavorites, getFeedTags, getNextItem, getScopes, itemKey, recordPlay,
-  restoreItem, setFavorited, setItemTag, setLiked, setRating, setWatched
-} from './api.js';
+import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, restoreItem, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
+
+// 资源类型筛选与播放范围正交，记在本机：手机上选过"仅图片"，下次打开还是。
+const MEDIA_KIND_STORAGE_KEY = 'short-feed-media-kind';
+const MEDIA_KIND_OPTIONS = [
+  { kind: 'all', name: '全部资源' },
+  { kind: 'video', name: '仅视频' },
+  { kind: 'image', name: '仅图片' }
+];
+function readStoredMediaKind() {
+  try {
+    const stored = window.localStorage?.getItem(MEDIA_KIND_STORAGE_KEY);
+    return MEDIA_KIND_OPTIONS.some(option => option.kind === stored) ? stored : 'all';
+  } catch (_err) {
+    return 'all';
+  }
+}
+function storeMediaKind(kind) {
+  try {
+    window.localStorage?.setItem(MEDIA_KIND_STORAGE_KEY, kind);
+  } catch (_err) {}
+}
 import { createSwipeTracker, keyboardDirection, wheelDirection } from './gesture.js';
 import { unsupportedStatusText } from './videoState.js';
 import { createWakeLock } from './useWakeLock.js';
@@ -185,8 +222,14 @@ export default {
       index: -1,
       scope: 'all',
       scopes: [],
+      mediaKind: readStoredMediaKind(),
+      mediaKindOptions: MEDIA_KIND_OPTIONS,
       feedTags: [],
       tagKeyword: '',
+      creatingTag: false,
+      // 这一段触摸是在图片放大态开始的：touchstart 那一刻已经让给了原生平移与 pointer 路径，
+      // 就算中途双击退出了放大，收尾的 touchend 也不能再当成手势处理。
+      touchBeganZoomed: false,
       sheet: null,
       toast: null,
       toastTimer: null,
@@ -228,7 +271,9 @@ export default {
       return `${this.index + 1} / ${this.items.length}`;
     },
     scopeLabel() {
-      return this.scopes.find(item => item.scope === this.scope)?.name || '全部短视频';
+      const scopeName = this.scopes.find(item => item.scope === this.scope)?.name || '全部短视频';
+      const kindName = this.mediaKind === 'all' ? '' : (MEDIA_KIND_OPTIONS.find(option => option.kind === this.mediaKind)?.name || '');
+      return kindName ? `${scopeName} · ${kindName}` : scopeName;
     },
     currentRatingText() {
       const rating = this.currentVideo?.personal_rating;
@@ -241,6 +286,11 @@ export default {
       const keyword = this.tagKeyword.trim().toLowerCase();
       if (!keyword) return this.feedTags;
       return this.feedTags.filter(tag => tag.name.toLowerCase().includes(keyword));
+    },
+    canCreateTag() {
+      const keyword = this.tagKeyword.trim().toLowerCase();
+      if (!keyword) return false;
+      return !this.feedTags.some(tag => tag.name.toLowerCase() === keyword);
     },
     isImageItem() {
       return this.currentVideo?.media_kind === 'image';
@@ -286,7 +336,7 @@ export default {
       this.loading = true;
       this.statusText = '加载中';
       try {
-        const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12), this.scope);
+        const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12), this.scope, this.mediaKind);
         this.appendItem(video);
       } catch (err) {
         this.items = [];
@@ -349,7 +399,7 @@ export default {
       this.prefetching = true;
       try {
         const excludeKeys = [...new Set([...this.recentKeys.slice(-12), itemKey(this.currentVideo)])];
-        const video = await getNextItem(excludeKeys, this.scope);
+        const video = await getNextItem(excludeKeys, this.scope, this.mediaKind);
         if (video?.id && video.id !== this.currentVideo?.id) {
           this.prefetchedVideo = video;
         }
@@ -369,6 +419,9 @@ export default {
       this.lastStageTapAt = now;
       this.lastStageTapPoint = point;
       if (isDoubleTap) {
+        // 双击已消费：清掉记录，免得同一下触摸的另一条事件路径把它凑成第三击。
+        this.lastStageTapAt = 0;
+        this.lastStageTapPoint = null;
         if (this.isImageItem) {
           this.photoZoomed = !this.photoZoomed;
           this.showControls();
@@ -476,7 +529,9 @@ export default {
     finishPointerPress(event) {
       const wasLongPress = this.longPressTriggered;
       this.cancelLongPress();
-      if (!wasLongPress && event.pointerType !== 'touch') {
+      // 触屏平时由舞台的 touch 事件识别点击；图片放大后那一路整体让给了原生平移，
+      // 双击退出放大只能从这里的 pointer 事件走，否则放大就回不来、上下滑也切不了。
+      if (!wasLongPress && (event.pointerType !== 'touch' || this.photoZoomed)) {
         this.handleStageTap(event);
       }
     },
@@ -701,7 +756,8 @@ export default {
       this.tagKeyword = '';
       this.showControls();
       this.clearControlsHideTimer();
-      if (this.feedTags.length === 0) await this.loadFeedTags();
+      // 每次打开都重拉：桌面端刚建的标签不该等到刷新页面才出现。
+      await this.loadFeedTags();
     },
     async openScopeSheet() {
       this.sheet = 'scope';
@@ -714,12 +770,30 @@ export default {
         const payload = await getFeedTags();
         this.feedTags = payload?.tags || [];
       } catch (err) {
-        this.feedTags = [];
+        // 拉不到就沿用上一次的列表，别把面板清空；但要说一声，否则空面板像是真没标签。
+        this.flashToast(`标签列表加载失败：${String(err.message || err)}`);
+      }
+    },
+    async createTagFromKeyword() {
+      const name = this.tagKeyword.trim();
+      if (!name || !this.currentVideo || this.creatingTag) return;
+      this.creatingTag = true;
+      try {
+        const tag = await createFeedTag(name);
+        if (!this.feedTags.some(item => item.id === tag.id)) {
+          this.feedTags = [...this.feedTags, tag].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
+        }
+        this.tagKeyword = '';
+        if (!this.isTagAttached(tag.id)) await this.toggleTag(tag);
+      } catch (err) {
+        this.flashToast(`新建标签失败：${String(err.message || err)}`);
+      } finally {
+        this.creatingTag = false;
       }
     },
     async loadScopes() {
       try {
-        const payload = await getScopes();
+        const payload = await getScopes(this.mediaKind);
         this.scopes = payload?.scopes || [];
       } catch (err) {
         this.scopes = [];
@@ -729,12 +803,26 @@ export default {
       this.sheet = null;
       if (scope === this.scope) return;
       this.scope = scope;
-      // 换了范围就重开一条时间线：旧历史属于旧范围，留着会前后矛盾。
+      await this.restartTimeline();
+    },
+    async applyMediaKind(kind) {
+      if (!MEDIA_KIND_OPTIONS.some(option => option.kind === kind) || kind === this.mediaKind) return;
+      this.mediaKind = kind;
+      storeMediaKind(kind);
+      this.sheet = null;
+      await this.restartTimeline();
+    },
+    // 换了范围或资源类型就重开一条时间线：旧历史属于旧筛选，留着会前后矛盾。
+    async restartTimeline() {
       this.items = [];
       this.index = -1;
       this.prefetchedVideo = null;
       this.recentKeys = [];
       await this.nextVideo();
+    },
+    resetPhotoZoom() {
+      this.photoZoomed = false;
+      this.showControls();
     },
     async applyRating(rating) {
       if (!this.currentVideo) return;
@@ -781,6 +869,7 @@ export default {
       this.appendItem(video);
     },
     onTouchStart(event) {
+      this.touchBeganZoomed = this.photoZoomed;
       if (this.isInteractiveControl(event.target)) return;
       event.preventDefault();
       swipeTracker.start(event);
@@ -798,6 +887,12 @@ export default {
       }
     },
     onTouchEnd(event) {
+      if (this.touchBeganZoomed) {
+        // 放大态里开始的触摸由 pointer 路径处理完了（双击退出放大也在那边），
+        // 这里没有对应的 start，拿陈旧的起点算手势只会误翻页或再放大。
+        this.touchBeganZoomed = false;
+        return;
+      }
       if (this.isInteractiveControl(event.target)) return;
       event.preventDefault();
       const wasLongPress = this.longPressTriggered;
@@ -811,6 +906,7 @@ export default {
       this.nextVideo(direction);
     },
     onTouchCancel(event) {
+      this.touchBeganZoomed = false;
       if (!this.isInteractiveControl(event.target)) {
         event.preventDefault();
       }
@@ -819,7 +915,9 @@ export default {
     isInteractiveControl(target) {
       // 图片放大时整个舞台交给浏览器原生平移，不再拦截为翻页手势。
       if (this.photoZoomed) return true;
-      return !!target?.closest?.('button, [role="slider"], .progress-dock, .modal-backdrop, .favorites-view');
+      // 底部面板整层（含遮罩、输入框）都不归舞台管：舞台一 preventDefault，
+      // 点遮罩关闭的合成 click 与输入框聚焦就都没了。
+      return !!target?.closest?.('button, input, textarea, select, [role="slider"], .progress-dock, .modal-backdrop, .favorites-view, .sheet-layer');
     },
     onWheel(event) {
       this.nextVideo(wheelDirection(event.deltaY, Date.now(), this.wheelState));

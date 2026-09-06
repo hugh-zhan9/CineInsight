@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"video-master/database"
@@ -490,5 +491,178 @@ func TestCleanupAnalysisSkipsVideosOutsideScanRoots(t *testing.T) {
 	}
 	if len(analysis.DuplicateGroups) != 0 {
 		t.Fatalf("范围外的重复不该再是候选: %+v", analysis.DuplicateGroups)
+	}
+}
+
+// 扫描黑名单里的旧记录不该再被列成清理候选：用户已经声明不管这一片了。
+func TestCleanupAnalysisSkipsBlacklistedPaths(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	mockFFProbe(t, root)
+	keptDir := filepath.Join(root, "kept")
+	blockedDir := filepath.Join(root, "blocked")
+	for _, dir := range []string{keptDir, blockedDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("建目录失败: %v", err)
+		}
+	}
+	payload := []byte("same-content-payload")
+	blockedA := filepath.Join(blockedDir, "a.mp4")
+	blockedB := filepath.Join(blockedDir, "b.mp4")
+	for _, path := range []string{blockedA, blockedB} {
+		if err := os.WriteFile(path, payload, 0o644); err != nil {
+			t.Fatalf("写文件失败: %v", err)
+		}
+	}
+	keptPath := filepath.Join(keptDir, "kept.mp4")
+	if err := os.WriteFile(keptPath, []byte("unique"), 0o644); err != nil {
+		t.Fatalf("写文件失败: %v", err)
+	}
+	videos := []models.Video{
+		{Name: "a.mp4", Path: blockedA, Directory: blockedDir, Size: int64(len(payload)), Duration: 600, Width: 1920, Height: 1080},
+		{Name: "b.mp4", Path: blockedB, Directory: blockedDir, Size: int64(len(payload)), Duration: 600, Width: 1920, Height: 1080},
+		{Name: "kept.mp4", Path: keptPath, Directory: keptDir, Size: 6, Duration: 600, Width: 1920, Height: 1080},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatalf("创建扫描目录失败: %v", err)
+	}
+	settings := models.Settings{VideoExtensions: ".mp4", PlayWeight: 2.0, ScanExcludePaths: blockedDir}
+	if err := database.DB.Create(&settings).Error; err != nil {
+		t.Fatalf("创建设置失败: %v", err)
+	}
+
+	analysis, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 0 {
+		t.Fatalf("黑名单目录里的重复不该是候选: %+v", analysis.DuplicateGroups)
+	}
+
+	// 黑名单清空后，那一对重新成为候选。
+	if err := database.DB.Model(&settings).Update("scan_exclude_paths", "").Error; err != nil {
+		t.Fatalf("清空黑名单失败: %v", err)
+	}
+	analysis, err = (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("清空黑名单后分析失败: %v", err)
+	}
+	if len(analysis.DuplicateGroups) != 1 {
+		t.Fatalf("清空黑名单后应认出一组精确重复: %+v", analysis.DuplicateGroups)
+	}
+}
+
+// "不是同片"与"不是同源"是同一个判断：忽略过的近似重复对不再以"疑似同源"回来，
+// 而且这一对上还在待审的同源关系一并判掉。
+func TestDismissNearDuplicateGroupAlsoRejectsSameSourceAndHidesThePair(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	mockFFProbe(t, root)
+
+	makeVideo := func(name, content string) models.Video {
+		path := filepath.Join(root, name)
+		mustWriteSizedFile(t, path, []byte(content))
+		video := models.Video{Name: name, Path: path, Directory: root, Size: int64(len(content))}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建视频 %s 失败: %v", name, err)
+		}
+		return video
+	}
+	a := makeVideo("a.mp4", "aaa")
+	b := makeVideo("b.mp4", "bbb")
+	c := makeVideo("c.mp4", "ccc")
+	d := makeVideo("d.mp4", "ddd")
+
+	evaluationID := uint(0)
+	relations := []models.VideoSameSourceRelation{
+		{VideoAID: a.ID, VideoBID: b.ID, Status: models.VideoSameSourceStatusDetected, Confidence: "high", Reasoning: "AB", DetectionVersion: "test", IsUnread: true},
+		{VideoAID: c.ID, VideoBID: d.ID, Status: models.VideoSameSourceStatusDetected, Confidence: "high", Reasoning: "CD", DetectionVersion: "test", IsUnread: true},
+	}
+	if err := database.DB.Create(&relations).Error; err != nil {
+		t.Fatalf("创建同源关系失败: %v", err)
+	}
+	evaluation := models.AISameSourceEvaluation{RelationID: relations[0].ID, LeftVideoID: a.ID, RightVideoID: b.ID, LeftFingerprint: "fa", RightFingerprint: "fb", Status: models.VideoSameSourceStatusDetected}
+	if err := database.DB.Create(&evaluation).Error; err != nil {
+		t.Fatalf("创建评估样本失败: %v", err)
+	}
+	evaluationID = evaluation.ID
+	if err := database.DB.Model(&relations[0]).Update("current_evaluation_id", evaluationID).Error; err != nil {
+		t.Fatalf("回填评估 ID 失败: %v", err)
+	}
+
+	// 用户在近似重复里对 A/B 点了"不是同片"。
+	if err := DismissNearDuplicateGroup([]uint{b.ID, a.ID}); err != nil {
+		t.Fatalf("忽略近似重复失败: %v", err)
+	}
+	var ab models.VideoSameSourceRelation
+	if err := database.DB.First(&ab, relations[0].ID).Error; err != nil {
+		t.Fatalf("读回关系失败: %v", err)
+	}
+	if ab.Status != models.VideoSameSourceStatusRejected || ab.IsUnread || ab.RejectedAt == nil || ab.ReviewedAt == nil {
+		t.Fatalf("忽略近似重复后同源关系应判为 rejected: %+v", ab)
+	}
+	var sample models.AISameSourceEvaluation
+	if err := database.DB.First(&sample, evaluationID).Error; err != nil || sample.Status != models.VideoSameSourceStatusRejected {
+		t.Fatalf("当前评估样本也应判为 rejected: %+v err=%v", sample, err)
+	}
+	var cd models.VideoSameSourceRelation
+	if err := database.DB.First(&cd, relations[1].ID).Error; err != nil || cd.Status != models.VideoSameSourceStatusDetected {
+		t.Fatalf("没被忽略的那一对不该受影响: %+v err=%v", cd, err)
+	}
+
+	// 就算检测器后来又把 A/B 写成 detected（比如老版本没查忽略表），清理分析也不该再列出这一对。
+	if err := database.DB.Model(&ab).Update("status", models.VideoSameSourceStatusDetected).Error; err != nil {
+		t.Fatalf("重置关系状态失败: %v", err)
+	}
+	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("分析清理候选失败: %v", err)
+	}
+	if len(result.SameSourceGroups) != 1 || result.SameSourceGroups[0].RelationID != relations[1].ID {
+		t.Fatalf("忽略过的近似重复对不该以疑似同源回来，实际 %+v", result.SameSourceGroups)
+	}
+}
+
+// "不是同源"的判断也要挡住近似重复：同一对被 AI 同源否认过，感知哈希再接近也不再列成近似重复组。
+func TestCleanupNearDuplicateSkipsPairsRejectedAsSameSource(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	mockFFProbe(t, root)
+	makeVideo := func(name, content string) models.Video {
+		path := filepath.Join(root, name)
+		mustWriteSizedFile(t, path, []byte(content))
+		video := models.Video{Name: name, Path: path, Directory: root, Size: int64(len(content)), Duration: 100, Width: 1920, Height: 1080}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatalf("创建视频 %s 失败: %v", name, err)
+		}
+		return video
+	}
+	a := makeVideo("near-a.mp4", "aaaa")
+	b := makeVideo("near-b.mp4", "bbbbbb")
+	hash := strings.Repeat("0", 16)
+	seedPerceptualHashRow(t, a, hash)
+	seedPerceptualHashRow(t, b, hash)
+
+	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if len(result.NearDuplicateGroups) != 1 {
+		t.Fatalf("哈希一致的一对应先被认成近似重复: %+v", result.NearDuplicateGroups)
+	}
+
+	relation := models.VideoSameSourceRelation{VideoAID: a.ID, VideoBID: b.ID, Status: models.VideoSameSourceStatusRejected, Confidence: "medium", Reasoning: "已否认", DetectionVersion: "test"}
+	if err := database.DB.Create(&relation).Error; err != nil {
+		t.Fatalf("创建已否认同源关系失败: %v", err)
+	}
+	result, err = (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("再次分析失败: %v", err)
+	}
+	if len(result.NearDuplicateGroups) != 0 {
+		t.Fatalf("已否认同源的一对不该再以近似重复回来: %+v", result.NearDuplicateGroups)
 	}
 }

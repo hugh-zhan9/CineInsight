@@ -4,6 +4,7 @@ import {
   createVideoDetailsDraft,
   detailPlaybackStartMs,
   formatFrameRate,
+  formatMediaMeta,
   mergeCollectionCandidates,
   mergePersonCandidates,
   moveCollectionMember,
@@ -65,5 +66,12 @@ assert.deepEqual(patched.tags, [{ id: 1 }], 'narrow detail patch preserves loade
 assert.equal(detailPlaybackStartMs({ entryID: 7, rootVideoID: 7, explicitStartTimeMs: 4200, rootResumePositionSeconds: 30, nestedResumePositionSeconds: 90 }), 4200);
 assert.equal(detailPlaybackStartMs({ entryID: 8, rootVideoID: 7, explicitStartTimeMs: 4200, rootResumePositionSeconds: 30, nestedResumePositionSeconds: 90 }), 90000);
 assert.equal(detailPlaybackStartMs({ entryID: 8, rootVideoID: 0, explicitStartTimeMs: null, rootResumePositionSeconds: 0, nestedResumePositionSeconds: 12.5 }), 12500);
+
+// 媒体元信息行：缺哪项省哪项，不用"未知"占位；0 字节等同缺失。
+assert.deepEqual(formatMediaMeta({ size: 1.5 * 1024 * 1024 * 1024, duration: 3723, width: 1920, height: 1080 }), ['1.5 GB', '01:02:03', '1920×1080']);
+assert.deepEqual(formatMediaMeta({ size: 0, duration: 0, width: 0, height: 1080 }), []);
+assert.deepEqual(formatMediaMeta({ size: 2048 }), ['2.0 KB']);
+assert.deepEqual(formatMediaMeta(undefined), []);
+assert.deepEqual(formatMediaMeta({ size: 2048, duration: -5, width: Infinity, height: 1080 }), ['2.0 KB']);
 
 console.log('media details behavior tests passed');

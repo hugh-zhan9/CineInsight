@@ -1018,6 +1018,10 @@ export function SyncScanDirectories() {
   return window['go']['main']['App']['SyncScanDirectories']();
 }
 
+export function TestAITaggingConnection(arg1) {
+  return window['go']['main']['App']['TestAITaggingConnection'](arg1);
+}
+
 export function TriggerAITagging() {
   return window['go']['main']['App']['TriggerAITagging']();
 }

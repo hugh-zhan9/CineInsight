@@ -1046,6 +1046,38 @@ func TestShortFeedRatingWatchedAndTagRoundTrip(t *testing.T) {
 		t.Fatalf("标签列表错误: %+v %v", tags, err)
 	}
 
+	// 手机端新建标签：去掉首尾空白、同名直接复用、空名与自动标签名拒绝。
+	created, err := svc.CreateFeedTag("  街拍 ")
+	if err != nil || created.ID == 0 || created.Name != "街拍" || created.Color == "" {
+		t.Fatalf("新建标签失败: %+v %v", created, err)
+	}
+	again, err := svc.CreateFeedTag("街拍")
+	if err != nil || again.ID != created.ID {
+		t.Fatalf("同名标签应复用同一条: %+v %v", again, err)
+	}
+	if _, err := svc.CreateFeedTag("   "); !errors.Is(err, ErrShortFeedTagNameRequired) {
+		t.Fatalf("空名应被拒绝: %v", err)
+	}
+	if _, err := svc.CreateFeedTag(strings.Repeat("长", shortFeedTagNameMaxRunes+1)); !errors.Is(err, ErrShortFeedTagNameTooLong) {
+		t.Fatalf("超长名应被拒绝: %v", err)
+	}
+	if _, err := svc.CreateFeedTag(strings.Repeat("长", shortFeedTagNameMaxRunes)); err != nil {
+		t.Fatalf("恰好到上限的名字应放行: %v", err)
+	}
+	if _, err := svc.CreateFeedTag("带\n换行"); !errors.Is(err, ErrShortFeedTagNameInvalid) {
+		t.Fatalf("控制字符应被拒绝: %v", err)
+	}
+	if err := database.DB.Create(&models.Tag{Name: "短视频", Color: "#000000", AutomaticKind: "short_video"}).Error; err != nil {
+		t.Fatalf("创建自动标签失败: %v", err)
+	}
+	if _, err := svc.CreateFeedTag("短视频"); !errors.Is(err, ErrShortFeedAutomaticTag) {
+		t.Fatalf("撞上自动标签名应被拒绝: %v", err)
+	}
+	tags, err = svc.ListFeedTags()
+	if err != nil || len(tags) != 3 {
+		t.Fatalf("新建后的手工标签应进入列表、自动标签仍排除: %+v %v", tags, err)
+	}
+
 	// 图片没有观看状态，明确拒绝而不是假装成功。
 	if _, err := svc.SetWatched(ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: 1}, true); err == nil {
 		t.Fatalf("图片不应支持已看状态")
@@ -1126,5 +1158,112 @@ func TestShortFeedPlaybackCountSurvivesConcurrentWrites(t *testing.T) {
 	// 丢更新的表现就是这个数小于并发数。
 	if interaction.ViewCount != writers {
 		t.Fatalf("并发写出现丢更新: got=%d want=%d", interaction.ViewCount, writers)
+	}
+}
+
+// 资源类型筛选与播放范围正交：仅视频 / 仅图片各自只抽到自己那一类，非法值直接拒绝。
+func TestShortFeedMediaFilterNarrowsToVideosOrImages(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+	video := createShortFeedVideo(t, root, "clip.mp4", 20, false)
+	image := createShortFeedImage(t, root, "photo.jpg", "jpg", false)
+	svc.invalidateCandidates()
+
+	for attempt := 0; attempt < 12; attempt++ {
+		dto, err := svc.NextItemFiltered(nil, ShortFeedScopeAll, ShortFeedMediaFilterVideo)
+		if err != nil {
+			t.Fatalf("仅视频取下一条失败: %v", err)
+		}
+		if dto.MediaKind != ShortFeedMediaVideo || dto.ID != video.ID {
+			t.Fatalf("仅视频不该抽到图片: %+v", dto)
+		}
+		dto, err = svc.NextItemFiltered(nil, ShortFeedScopeAll, ShortFeedMediaFilterImage)
+		if err != nil {
+			t.Fatalf("仅图片取下一条失败: %v", err)
+		}
+		if dto.MediaKind != ShortFeedMediaImage || dto.ID != image.ID {
+			t.Fatalf("仅图片不该抽到视频: %+v", dto)
+		}
+	}
+	// 空值与 all 等价，走旧入口的调用方行为不变。
+	if _, err := svc.NextItemFiltered(nil, ShortFeedScopeAll, ""); err != nil {
+		t.Fatalf("空资源类型应等于全部: %v", err)
+	}
+	if _, err := svc.NextItemFiltered(nil, ShortFeedScopeAll, "audio"); !errors.Is(err, ErrShortFeedInvalidMediaFilter) {
+		t.Fatalf("非法资源类型应被拒绝: %v", err)
+	}
+	// 范围计数跟着资源类型走：选了仅图片，"全部"就只该数图片。
+	counts, err := svc.ScopeCountsFiltered(ShortFeedMediaFilterImage)
+	if err != nil {
+		t.Fatalf("按资源类型统计范围失败: %v", err)
+	}
+	for _, count := range counts {
+		if count.Scope == ShortFeedScopeAll && count.Count != 1 {
+			t.Fatalf("仅图片时全部范围应只数图片: %+v", counts)
+		}
+	}
+	if _, err := svc.ScopeCountsFiltered("audio"); !errors.Is(err, ErrShortFeedInvalidMediaFilter) {
+		t.Fatalf("范围计数也应拒绝非法资源类型: %v", err)
+	}
+}
+
+// 局域网入口的防线要在 HTTP 层验证：同源校验、严格 JSON、名字限制的状态码，以及 media 参数。
+func TestShortFeedTagAndMediaHandlers(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewShortFeedService(&VideoService{})
+	server := NewShortFeedHTTPServer(svc, nil, ShortFeedHTTPServerConfig{})
+
+	post := func(body string, origin string, contentType string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/short-api/tags", strings.NewReader(body))
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		server.handleTags(rec, req)
+		return rec
+	}
+	if rec := post(`{"name":"街拍"}`, "http://evil.example", "application/json"); rec.Code != http.StatusForbidden {
+		t.Fatalf("异源写入应 403，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(`name=街拍`, "http://example.com", "text/plain"); rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("非 JSON 体应 415，实际 %d", rec.Code)
+	}
+	if rec := post(`{"name":"街拍","extra":1}`, "http://example.com", "application/json"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("未知字段应 400，实际 %d", rec.Code)
+	}
+	if rec := post(`{"name":"`+strings.Repeat("长", shortFeedTagNameMaxRunes+1)+`"}`, "http://example.com", "application/json"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "tag_name_too_long") {
+		t.Fatalf("超长名应 400 tag_name_too_long，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	rec := post(`{"name":" 街拍 "}`, "http://example.com", "application/json")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"街拍"`) {
+		t.Fatalf("合法新建应 200 并回传标签，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := post(`{"name":"街拍"}`, "", "application/json"); rec.Code != http.StatusOK {
+		t.Fatalf("同名再建应复用并 200，实际 %d %s", rec.Code, rec.Body.String())
+	}
+
+	get := func(target string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, target, nil)
+		rec := httptest.NewRecorder()
+		if strings.HasPrefix(target, "/short-api/feed/scopes") {
+			server.handleScopes(rec, req)
+		} else {
+			server.handleNext(rec, req)
+		}
+		return rec
+	}
+	if rec := get("/short-api/feed/next?media=audio"); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "invalid_media") {
+		t.Fatalf("非法 media 应 400 invalid_media，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := get("/short-api/feed/scopes?media=audio"); rec.Code != http.StatusBadRequest {
+		t.Fatalf("范围计数的非法 media 也应 400，实际 %d", rec.Code)
+	}
+	if rec := get("/short-api/feed/next?media=image"); rec.Code != http.StatusNotFound {
+		t.Fatalf("库里没有图片时仅图片应 404 no_eligible_videos，实际 %d %s", rec.Code, rec.Body.String())
 	}
 }

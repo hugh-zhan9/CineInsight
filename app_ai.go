@@ -77,6 +77,19 @@ func (a *App) FindSimilarVideos(request services.SemanticSimilarRequest) (*servi
 	return svc.FindSimilar(ctx, request)
 }
 
+// TestAITaggingConnection 用设置页当前填写的接口地址 / API Key / 模型发一条极短请求，
+// 分清"接口不通"与"抽帧 / 扫描失败"。留空的字段回退到已保存或环境变量配置。
+// 日志里不落地址与 Key。
+func (a *App) TestAITaggingConnection(input services.AITaggingConnectionTestInput) services.AITaggingConnectionTestResult {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := services.ProbeAITaggingConnection(ctx, input)
+	log.Printf("API TestAITaggingConnection ok=%v model=%q latency_ms=%d", result.OK, result.Model, result.LatencyMS)
+	return result
+}
+
 func (a *App) GetAITagLibrary() ([]models.Tag, error) {
 	tags, err := a.tagService.GetAITagLibrary()
 	log.Printf("API GetAITagLibrary result=%d err=%v", len(tags), err)

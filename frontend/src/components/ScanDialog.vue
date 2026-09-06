@@ -1,7 +1,7 @@
 <template>
   <BaseModal v-if="visible" close-on-overlay stop-modal-clicks @close="$emit('close')">
       <h2>扫描视频目录</h2>
-      <div class="form-group">
+      <div class="scan-dir-group">
         <button @click="selectDir" class="btn-primary">选择目录</button>
         <p v-if="scanDirectory" class="selected-dir">{{ scanDirectory }}</p>
       </div>
@@ -11,7 +11,7 @@
         <p>正在处理 {{ scanProgress.processed }}/{{ scanProgress.total }}</p>
         <p>新增 {{ scanProgress.imported }} 个，删除 {{ scanProgress.deleted }} 个，跳过 {{ scanProgress.skipped }} 个</p>
       </div>
-      <div v-if="!scanProgress.scanning && scanProgress.statusMessage" class="scan-result" style="margin-top: 15px; color: var(--success-bright); font-weight: bold;">
+      <div v-if="!scanProgress.scanning && scanProgress.statusMessage" :class="['scan-result', { 'scan-result--error': scanProgress.failed }]" :role="scanProgress.failed ? 'alert' : 'status'" data-test="scan-result">
         <p>{{ scanProgress.statusMessage }}</p>
       </div>
       <div class="modal-actions">
@@ -50,7 +50,8 @@ export default {
         deleted: 0,
         skipped: 0,
         total: 0,
-        statusMessage: ''
+        statusMessage: '',
+        failed: false
       }
     };
   },
@@ -67,7 +68,7 @@ export default {
       this.scanProgress = {
         scanning: false, found: 0, processed: 0,
         imported: 0, deleted: 0, skipped: 0, total: 0,
-        statusMessage: ''
+        statusMessage: '', failed: false
       };
     },
     async selectDir() {
@@ -89,6 +90,8 @@ export default {
       }
 
       this.scanProgress.scanning = true;
+      this.scanProgress.failed = false;
+      this.scanProgress.statusMessage = '';
       this.scanProgress.found = 0;
       this.scanProgress.processed = 0;
       this.scanProgress.imported = 0;
@@ -164,6 +167,7 @@ export default {
         // 不自动关闭，让用户确认结果
       } catch (err) {
         this.scanProgress.statusMessage = '扫描失败: ' + err;
+        this.scanProgress.failed = true;
         console.error('扫描失败:', err);
       } finally {
         this.scanProgress.scanning = false;
@@ -187,3 +191,41 @@ export default {
   }
 };
 </script>
+
+<style scoped>
+.scan-dir-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.selected-dir {
+  margin: 0;
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.scan-progress {
+  display: grid;
+  gap: 4px;
+  margin-top: 14px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.scan-progress p { margin: 0; }
+
+.scan-result {
+  margin-top: 14px;
+  color: var(--success-color);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.scan-result p { margin: 0; }
+
+.scan-result--error { color: var(--danger-color); }
+</style>

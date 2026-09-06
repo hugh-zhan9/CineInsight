@@ -67,6 +67,7 @@
           <figure v-for="image in entityImages" :key="image.id" class="entity-image-card glass-surface">
             <img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" />
             <figcaption :title="image.name">{{ image.name }}</figcaption>
+            <small v-if="image.size > 0" class="entity-image-card__size">{{ formatBytes(image.size) }}</small>
           </figure>
         </div>
         <div v-else class="empty-state">当前还没有关联图片。在照片页的单图详情里可以维护人物。</div>
@@ -362,6 +363,7 @@ export default {
 .entity-image-card { margin: 0; min-width: 0; overflow: hidden; display: grid; gap: 6px; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
 .entity-image-card img { width: 100%; aspect-ratio: 1; display: block; object-fit: cover; border-radius: 8px; background: var(--thumb-bg); }
 .entity-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
+.entity-image-card__size { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .entity-library__more { align-self: center; }.entity-library__sentinel { height: 1px; }.entity-library__error { color: var(--danger-color); }
 @media (max-width: 1100px) { .entity-library--with-drawer { padding-right: 18px; } }
 @media (max-width: 900px) {.entity-library__toolbar,.entity-library__create { align-items: stretch; flex-direction: column; }.entity-library__title { align-items: flex-start; }.entity-library__search { display: flex; }.entity-video-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); } }

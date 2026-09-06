@@ -21,6 +21,20 @@ var ErrShortFeedNoEligibleVideos = errors.New("no eligible short-feed videos")
 // ErrShortFeedUnsupportedMedia 表示这个媒体类型在当前构建下还没有实现。
 var ErrShortFeedUnsupportedMedia = errors.New("unsupported short-feed media kind")
 
+// ErrShortFeedTagNameRequired 是手机端新建标签时名字为空。
+var ErrShortFeedTagNameRequired = errors.New("tag name is required")
+
+// ErrShortFeedAutomaticTag 是新建的名字撞上了系统自动标签：自动标签不给手动增删。
+var ErrShortFeedAutomaticTag = errors.New("automatic tags cannot be attached manually")
+
+// ErrShortFeedTagNameTooLong / ErrShortFeedTagNameInvalid：这是第一个由局域网客户端往全局表里
+// 写任意字符串的入口，名字必须有长度上限、不能带控制字符。
+var ErrShortFeedTagNameTooLong = errors.New("tag name too long")
+var ErrShortFeedTagNameInvalid = errors.New("tag name contains control characters")
+
+// ErrShortFeedInvalidMediaFilter 是 media 查询参数不在 all / video / image 之内。
+var ErrShortFeedInvalidMediaFilter = errors.New("不支持的资源类型")
+
 // shortFeedInlineImageMaxBytes 是直接把原图发给手机的体积上限。超过它就发降采样后的
 // JPEG：手机屏幕用不上原始分辨率，而几十 MB 走 WiFi 要好几秒。
 const shortFeedInlineImageMaxBytes int64 = 3 << 20
@@ -196,7 +210,17 @@ func (s *ShortFeedService) NextItem(exclude []ShortFeedMediaRef) (*ShortFeedItem
 // NextItemInScope 在指定播放范围内抽下一条。范围只收窄候选池，
 // 加权抽取本身与全部范围完全一致。
 func (s *ShortFeedService) NextItemInScope(exclude []ShortFeedMediaRef, scope string) (*ShortFeedItemDTO, error) {
+	return s.NextItemFiltered(exclude, scope, ShortFeedMediaFilterAll)
+}
+
+// NextItemFiltered 在播放范围之上再按资源类型（全部 / 仅视频 / 仅图片）收窄候选池。
+// 两个维度正交：范围管"看过没、收藏没"，类型管"是视频还是图片"。
+func (s *ShortFeedService) NextItemFiltered(exclude []ShortFeedMediaRef, scope string, mediaFilter string) (*ShortFeedItemDTO, error) {
 	normalizedScope, err := normalizeShortFeedScope(scope)
+	if err != nil {
+		return nil, err
+	}
+	normalizedMedia, err := normalizeShortFeedMediaFilter(mediaFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -207,10 +231,12 @@ func (s *ShortFeedService) NextItemInScope(exclude []ShortFeedMediaRef, scope st
 	if all, err = s.filterCandidatesByScope(all, normalizedScope); err != nil {
 		return nil, err
 	}
+	all = filterCandidatesByMedia(all, normalizedMedia)
 	if len(all) == 0 {
 		// 一条能播/能显示的都没有：如果还有存在但不可内联播放的视频，
-		// 就把它连同原因一起给出去，让手机端能显示"这个格式放不了"。
-		if unsupportedVideo != nil {
+		// 就把它连同原因一起给出去，让手机端能显示"这个格式放不了"。只看图片时
+		// 这个提示没有意义。
+		if unsupportedVideo != nil && normalizedMedia != ShortFeedMediaFilterImage {
 			return s.videoDTO(unsupportedVideo, "inline_not_supported", "当前文件格式不适合浏览器内播放。")
 		}
 		return nil, ErrShortFeedNoEligibleVideos
@@ -256,6 +282,27 @@ func (s *ShortFeedService) NextItemInScope(exclude []ShortFeedMediaRef, scope st
 
 // cachedCandidates 返回候选快照。Feed 是近似的随机抽取，没必要每划一次就把整库
 // 重读一遍；快照过期或被主动失效后才重建。
+// filterCandidatesByMedia 按资源类型收窄；全部时原样返回，不复制。
+func filterCandidatesByMedia(candidates []shortFeedCandidate, mediaFilter string) []shortFeedCandidate {
+	if mediaFilter == ShortFeedMediaFilterAll {
+		return candidates
+	}
+	filtered := make([]shortFeedCandidate, 0, len(candidates))
+	for _, candidate := range candidates {
+		switch mediaFilter {
+		case ShortFeedMediaFilterVideo:
+			if candidate.video != nil {
+				filtered = append(filtered, candidate)
+			}
+		case ShortFeedMediaFilterImage:
+			if candidate.image != nil {
+				filtered = append(filtered, candidate)
+			}
+		}
+	}
+	return filtered
+}
+
 func (s *ShortFeedService) cachedCandidates() ([]shortFeedCandidate, *models.Video, error) {
 	s.candidateMu.Lock()
 	if s.candidates != nil && s.now().Sub(s.candidatesAt) < shortFeedCandidateTTL {

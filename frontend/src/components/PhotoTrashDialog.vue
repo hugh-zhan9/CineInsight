@@ -14,9 +14,9 @@
       <div v-else class="photo-trash-list">
         <div v-for="entry in entries" :key="entry.id" class="photo-trash-entry">
           <div class="photo-trash-entry__body">
-            <strong>{{ entry.image_name }}</strong>
+            <strong :title="entry.image_name">{{ entry.image_name }}</strong>
             <span>{{ entry.original_path }}</span>
-            <small>{{ entryStatus(entry) }} · {{ formatDate(entry.created_at) }}</small>
+            <small>{{ entryStatus(entry) }}<template v-if="entry.file_size > 0"> · {{ formatBytes(entry.file_size) }}</template> · {{ formatDate(entry.created_at) }}</small>
             <small v-if="entry.last_error" class="photo-trash-entry__error">上次处理失败：{{ entry.last_error }}</small>
             <small v-if="entry.error" class="photo-trash-entry__error">{{ entry.error }}</small>
           </div>
@@ -39,6 +39,7 @@
 
 <script>
 import { ListImageTrashEntries, RestoreImageTrashEntry } from '../../wailsjs/go/main/App';
+import { formatBytes } from '../utils/mediaDetails.js';
 import BaseModal from './ui/BaseModal.vue';
 
 export default {
@@ -67,6 +68,7 @@ export default {
     }
   },
   methods: {
+    formatBytes,
     async loadEntries() {
       const token = ++this.loadToken;
       this.loading = true;
@@ -168,6 +170,7 @@ export default {
   gap: 4px;
 }
 
+.photo-trash-entry__body strong,
 .photo-trash-entry__body span,
 .photo-trash-entry__body small {
   overflow: hidden;

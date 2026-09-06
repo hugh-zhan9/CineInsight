@@ -335,6 +335,7 @@ describe('PhotoLibraryPage folder display', () => {
         directory: '/photos',
         name: 'photos',
         count: 2,
+        total_size: 3 * 1024 * 1024,
         covers: [{ id: 1, name: 'one.jpg', format: 'jpg' }, { id: 2, name: 'two.jpg', format: 'jpg' }]
       },
       {
@@ -351,7 +352,7 @@ describe('PhotoLibraryPage folder display', () => {
 
     expect(api.ListImageFolderGroups).toHaveBeenCalledWith(expect.objectContaining({ directory: '' }));
     expect(wrapper.findAll('.photo-folder-card')).toHaveLength(2);
-    expect(wrapper.find('[data-test="photo-folder-grid"]').text()).toContain('2 张图片');
+    expect(wrapper.find('[data-test="photo-folder-grid"]').text()).toContain('2 张图片 · 3.0 MB');
     expect(wrapper.findAll('.photo-folder-card__covers img')).toHaveLength(3);
 
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(7, { directory: '/photos' })]));

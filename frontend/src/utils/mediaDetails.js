@@ -118,6 +118,22 @@ export function formatDuration(seconds) {
     .join(':');
 }
 
+// 一行媒体元信息：大小 · 时长 · 分辨率。删除/同源/审阅这类"值不值得留"的判断
+// 都靠它，所以缺哪一项就省哪一项，不用"未知"占位。
+export function formatMediaMeta(media) {
+  const parts = [];
+  const size = Number(media?.size);
+  if (Number.isFinite(size) && size > 0) parts.push(formatBytes(size));
+  const seconds = Number(media?.duration);
+  if (Number.isFinite(seconds) && seconds > 0) parts.push(formatDuration(seconds));
+  const width = Number(media?.width);
+  const height = Number(media?.height);
+  if (Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0) {
+    parts.push(`${Math.round(width)}×${Math.round(height)}`);
+  }
+  return parts;
+}
+
 export function moveCollectionMember(members, fromIndex, toIndex) {
   const result = [...(members || [])];
   if (fromIndex < 0 || toIndex < 0 || fromIndex >= result.length || toIndex >= result.length || fromIndex === toIndex) {

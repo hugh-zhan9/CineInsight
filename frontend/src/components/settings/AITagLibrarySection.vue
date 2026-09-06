@@ -76,7 +76,7 @@ export default {
 
 .ai-tag-library-group-heading {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
   align-content: start;
   align-items: center;
   gap: 8px;
@@ -90,10 +90,6 @@ export default {
   color: var(--text-secondary);
   font-size: 12px;
   white-space: nowrap;
-}
-
-.ai-tag-library-group-heading .btn-compact {
-  width: 100%;
 }
 
 .ai-tag-library-group-tags {

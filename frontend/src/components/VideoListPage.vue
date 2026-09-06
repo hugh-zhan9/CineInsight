@@ -327,6 +327,16 @@
   font-weight: 600;
 }
 
+.loading-indicator,
+.no-more-indicator {
+  padding: 14px 0;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.loading-indicator p,
+.no-more-indicator p { margin: 0; }
 </style>
 
 <script>
@@ -1569,7 +1579,10 @@ export default {
       if (!updatedVideo) return;
       const index = this.videos.findIndex(video => video.id === updatedVideo.id);
       if (index !== -1) {
-        this.videos.splice(index, 1, { ...this.videos[index], ...updatedVideo });
+        const current = this.videos[index];
+        // 状态切换接口若没带 tags（旧后端回 null），沿用行上已有的标签：null 盖上去标签就"没了"。
+        const tags = Array.isArray(updatedVideo.tags) ? updatedVideo.tags : current.tags;
+        this.videos.splice(index, 1, { ...current, ...updatedVideo, tags });
       }
       if (this.selectedPreviewVideoId === updatedVideo.id) {
         this.previewVideoSnapshot = {

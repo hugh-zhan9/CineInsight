@@ -166,6 +166,9 @@ func TestCollectionSuggestionSortsBySeasonEpisodeAndSharesPositionForVersions(t 
 	if !views[0].Members[0].MultipleVersions || !views[0].Members[1].MultipleVersions {
 		t.Fatalf("同集多版本应被标注: %#v", views[0].Members)
 	}
+	if views[0].Members[0].Size != 1 {
+		t.Fatalf("成员视图应带文件大小: %#v", views[0].Members[0])
+	}
 	if views[0].Members[2].MultipleVersions {
 		t.Fatalf("单版本不该标注同集多版本: %#v", views[0].Members[2])
 	}

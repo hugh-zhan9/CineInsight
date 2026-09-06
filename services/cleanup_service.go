@@ -234,6 +234,18 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	if err := scopedQuery.Find(&videos).Error; err != nil {
 		return nil, 0, err
 	}
+	// SQL 只裁到扫描根；黑名单是路径前缀集合，在 Go 侧过滤。
+	scope, err := loadCleanupPathScope()
+	if err != nil {
+		return nil, 0, err
+	}
+	inScope := videos[:0]
+	for _, video := range videos {
+		if scope.contains(video.Path) {
+			inScope = append(inScope, video)
+		}
+	}
+	videos = inScope
 	videoService := &VideoService{}
 
 	log.Printf("[Cleanup] analysis started total_videos=%d criteria={min_duration=%s min_width=%d min_height=%d}",
@@ -335,15 +347,25 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 			}
 		}
 	}
+	// 用户对一对视频说过"不是同片"或"不是同源"，两种说法表达的是同一个判断：
+	// 这一对别再以任何类别冒出来。所以两张否决表合成一个排除集，近似重复与同源
+	// 两类都拿它过滤；否则在近似重复里忽略掉的一对，下一轮会换成"疑似同源"再回来。
 	dismissed, err := loadNearDuplicateDismissals()
 	if err != nil {
 		return nil, 0, err
 	}
-	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed))
+	rejectedSameSource, err := loadRejectedSameSourcePairs()
+	if err != nil {
+		return nil, 0, err
+	}
+	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed)+len(rejectedSameSource))
 	for pair := range exactPairs {
 		excludedPairs[pair] = struct{}{}
 	}
 	for pair := range dismissed {
+		excludedPairs[pair] = struct{}{}
+	}
+	for pair := range rejectedSameSource {
 		excludedPairs[pair] = struct{}{}
 	}
 	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(excludedPairs)
@@ -353,9 +375,9 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	result.NearDuplicateGroups = nearDuplicateGroups
 	result.StaleHashCount = staleHashCount
 	for pair := range nearPairs {
-		exactPairs[pair] = struct{}{}
+		excludedPairs[pair] = struct{}{}
 	}
-	sameSourceGroups, err := loadCleanupSameSourceGroups(exactPairs)
+	sameSourceGroups, err := loadCleanupSameSourceGroups(excludedPairs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -401,7 +423,23 @@ func (s *CleanupService) emitDoneForRun(runID uint64, total int, message string)
 	wailsRuntime.EventsEmit(s.ctx, "cleanup-progress", progress)
 }
 
-func loadCleanupSameSourceGroups(exactPairs map[[2]uint]struct{}) ([]CleanupSameSourceGroup, error) {
+// loadRejectedSameSourcePairs 返回用户已判"不是同源"的视频对。
+func loadRejectedSameSourcePairs() (map[[2]uint]struct{}, error) {
+	var relations []models.VideoSameSourceRelation
+	if err := database.DB.Select("video_a_id", "video_b_id").
+		Where("status = ?", models.VideoSameSourceStatusRejected).
+		Find(&relations).Error; err != nil {
+		return nil, err
+	}
+	pairs := make(map[[2]uint]struct{}, len(relations))
+	for _, relation := range relations {
+		pairs[cleanupVideoPairKey(relation.VideoAID, relation.VideoBID)] = struct{}{}
+	}
+	return pairs, nil
+}
+
+// excludedPairs 里是精确重复、近似重复已认领的对，以及用户忽略过的对。
+func loadCleanupSameSourceGroups(excludedPairs map[[2]uint]struct{}) ([]CleanupSameSourceGroup, error) {
 	var relations []models.VideoSameSourceRelation
 	err := database.DB.Model(&models.VideoSameSourceRelation{}).
 		Joins("INNER JOIN videos AS same_source_video_a ON same_source_video_a.id = video_same_source_relations.video_a_id AND same_source_video_a.deleted_at IS NULL").
@@ -415,17 +453,17 @@ func loadCleanupSameSourceGroups(exactPairs map[[2]uint]struct{}) ([]CleanupSame
 		return nil, err
 	}
 
-	roots, err := loadScanRootScope()
+	scope, err := loadCleanupPathScope()
 	if err != nil {
 		return nil, err
 	}
 	groups := make([]CleanupSameSourceGroup, 0, len(relations))
 	for _, relation := range relations {
-		if _, duplicate := exactPairs[cleanupVideoPairKey(relation.VideoAID, relation.VideoBID)]; duplicate {
+		if _, excluded := excludedPairs[cleanupVideoPairKey(relation.VideoAID, relation.VideoBID)]; excluded {
 			continue
 		}
-		// 任一侧落在扫描根之外，这一对就不该出现在清理候选里。
-		if !pathWithinScanRoots(relation.VideoA.Path, roots) || !pathWithinScanRoots(relation.VideoB.Path, roots) {
+		// 任一侧落在扫描根之外或黑名单里，这一对就不该出现在清理候选里。
+		if !scope.contains(relation.VideoA.Path) || !scope.contains(relation.VideoB.Path) {
 			continue
 		}
 		preferred, alternative := relation.VideoA, relation.VideoB

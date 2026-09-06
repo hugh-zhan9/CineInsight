@@ -782,7 +782,9 @@ export default {
 .cleanup-member__meta { display: flex; flex-wrap: wrap; gap: 4px; }
 .cleanup-member__badge { padding: 1px 7px; border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 10px; }
 .cleanup-member__badge--keepish { border: 1px solid var(--accent-color); color: var(--accent-color); }
-.cleanup-member__badge--tag { background: var(--tag-color, var(--control-bg)); color: #fff; }
+/* 与片库行的标签徽标同一做法：标签色只做 35% 底色，文字用正文色，浅色标签也读得清。 */
+.cleanup-member__badge--tag { background: color-mix(in srgb, var(--tag-color, var(--control-bg)) 35%, transparent); color: var(--text-primary); }
+.cleanup-member__locked { color: var(--warning-text); font-size: 12px; font-weight: 400; }
 .cleanup-member__badge--empty { color: var(--text-muted); }
 .cleanup-member__actions { margin-top: auto; }
 

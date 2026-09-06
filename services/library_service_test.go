@@ -18,10 +18,21 @@ func TestLibraryStateUpdatesAreAdditiveAndIdempotent(t *testing.T) {
 		t.Fatalf("创建视频失败: %v", err)
 	}
 	svc := &VideoService{}
+	tag := models.Tag{Name: "保留", Color: "#123456"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatalf("创建标签失败: %v", err)
+	}
+	if err := database.DB.Model(&video).Association("Tags").Append(&tag); err != nil {
+		t.Fatalf("挂标签失败: %v", err)
+	}
 
 	updated, err := svc.SetVideoFavorite(video.ID, true)
 	if err != nil || !updated.IsFavorite {
 		t.Fatalf("收藏失败 video=%+v err=%v", updated, err)
+	}
+	// 前端拿返回值整行覆盖列表项：不带 tags 的话一次收藏就把标签"清空"了。
+	if len(updated.Tags) != 1 || updated.Tags[0].ID != tag.ID {
+		t.Fatalf("状态切换的返回值必须带标签，实际 %+v", updated.Tags)
 	}
 	updated, err = svc.UpdateVideoWatchProgress(video.ID, 125, false)
 	if err != nil || updated.WatchPositionSeconds != 100 || updated.IsWatched {

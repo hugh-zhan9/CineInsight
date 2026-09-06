@@ -176,6 +176,31 @@ func pathWithinScanRoots(path string, roots []string) bool {
 	return false
 }
 
+// cleanupPathScope 是清理候选统一的路径口径：扫描根之内、且不在扫描黑名单里。
+// 黑名单目录里的旧记录在片库里可能还看得见（扫描只是不再进去），但拿它们来做
+// "留哪个删哪个"的决定没有意义——用户已经声明不管这一片了。
+type cleanupPathScope struct {
+	roots    []string
+	excluded []string
+}
+
+func loadCleanupPathScope() (cleanupPathScope, error) {
+	roots, err := loadScanRootScope()
+	if err != nil {
+		return cleanupPathScope{}, err
+	}
+	var settings models.Settings
+	err = database.DB.Select("scan_exclude_paths").First(&settings).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return cleanupPathScope{}, fmt.Errorf("加载扫描黑名单失败: %w", err)
+	}
+	return cleanupPathScope{roots: roots, excluded: parseScanExcludePaths(settings.ScanExcludePaths)}, nil
+}
+
+func (scope cleanupPathScope) contains(path string) bool {
+	return pathWithinScanRoots(path, scope.roots) && !isScanPathExcluded(path, scope.excluded)
+}
+
 func applyScanRootScope(query *gorm.DB) (*gorm.DB, error) {
 	roots, err := loadScanRootScope()
 	if err != nil {
@@ -299,7 +324,17 @@ func (s *VideoService) SetVideoFavorite(videoID uint, favorite bool) (*models.Vi
 	if result.RowsAffected != 1 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return s.GetVideo(videoID)
+	return s.getVideoWithTags(videoID)
+}
+
+// getVideoWithTags 给状态切换接口回传完整行。前端拿返回值整行覆盖列表项，
+// 不带 tags 的话一次收藏就会把行上的标签"清空"——库里其实还在，只是被 null 盖掉了。
+func (s *VideoService) getVideoWithTags(videoID uint) (*models.Video, error) {
+	var video models.Video
+	if err := database.DB.Preload("Tags").First(&video, videoID).Error; err != nil {
+		return nil, err
+	}
+	return &video, nil
 }
 
 // SetVideoWatched 更新主片库已看状态。
@@ -321,7 +356,7 @@ func (s *VideoService) SetVideoWatched(videoID uint, watched bool) (*models.Vide
 	if result.RowsAffected != 1 {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return s.GetVideo(videoID)
+	return s.getVideoWithTags(videoID)
 }
 
 // UpdateVideoWatchProgress 保存内嵌播放器观看位置。
@@ -354,7 +389,7 @@ func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds fl
 	if err := database.DB.Model(&video).Updates(updates).Error; err != nil {
 		return nil, err
 	}
-	return s.GetVideo(videoID)
+	return s.getVideoWithTags(videoID)
 }
 
 // ListSavedLibraryViews 返回所有活跃保存视图。

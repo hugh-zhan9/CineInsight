@@ -7,6 +7,8 @@
         <p v-if="hint" class="sheet__hint">{{ hint }}</p>
         <div class="sheet__spacer"></div>
         <slot name="head" />
+        <!-- 显式关闭：点遮罩关闭依赖合成 click，浏览器里被舞台的 touch 拦截过一次就没了。 -->
+        <button type="button" class="sheet__close" aria-label="关闭" data-test="sheet-close" @click="$emit('close')">✕</button>
       </header>
       <div class="sheet__body">
         <slot />

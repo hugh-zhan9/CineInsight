@@ -73,10 +73,19 @@ func (s *AISameSourceService) FindSameSource(ctx context.Context, video models.V
 	if err != nil {
 		return AISameSourceEvidence{}, &AITaggingFatalError{Err: err}
 	}
+	// 用户在清理面板对一对视频点过"不是同片"，就不再拿这一对去问 AI：省一次请求，
+	// 也免得判过的对以"疑似同源"的身份再回到待审里。
+	dismissedPairs, err := loadNearDuplicateDismissals()
+	if err != nil {
+		return AISameSourceEvidence{}, &AITaggingFatalError{Err: err}
+	}
 	scored := make([]scoredSameSourceCandidate, 0)
 	for _, candidate := range candidates {
 		if ctx.Err() != nil {
 			return AISameSourceEvidence{}, ctx.Err()
+		}
+		if _, dismissed := dismissedPairs[cleanupVideoPairKey(video.ID, candidate.ID)]; dismissed {
+			continue
 		}
 		candidateFingerprint, _, fingerprintErr := s.ensureFingerprint(ctx, candidate, false)
 		if fingerprintErr != nil {
@@ -450,20 +459,60 @@ func (s *AISameSourceService) RejectRelation(relationID uint) error {
 		if relation.Status != models.VideoSameSourceStatusDetected {
 			return errors.New("same-source relation is not detected")
 		}
-		if err := tx.Model(&relation).Updates(map[string]interface{}{
-			"status": models.VideoSameSourceStatusRejected, "is_unread": false, "reviewed_at": &now, "rejected_at": &now,
-		}).Error; err != nil {
+		return rejectDetectedSameSourceRelationTx(tx, &relation, now)
+	})
+}
+
+// rejectDetectedSameSourceRelationTx 把一条 detected 关系及其当前评估样本判为 rejected。
+func rejectDetectedSameSourceRelationTx(tx *gorm.DB, relation *models.VideoSameSourceRelation, now time.Time) error {
+	if err := tx.Model(relation).Updates(map[string]interface{}{
+		"status": models.VideoSameSourceStatusRejected, "is_unread": false, "reviewed_at": &now, "rejected_at": &now,
+	}).Error; err != nil {
+		return err
+	}
+	if relation.CurrentEvaluationID != nil {
+		if err := tx.Model(&models.AISameSourceEvaluation{}).
+			Where("id = ? AND status = ?", *relation.CurrentEvaluationID, models.VideoSameSourceStatusDetected).
+			Updates(map[string]interface{}{"status": models.VideoSameSourceStatusRejected, "rejected_at": &now}).Error; err != nil {
 			return err
 		}
-		if relation.CurrentEvaluationID != nil {
-			if err := tx.Model(&models.AISameSourceEvaluation{}).
-				Where("id = ? AND status = ?", *relation.CurrentEvaluationID, models.VideoSameSourceStatusDetected).
-				Updates(map[string]interface{}{"status": models.VideoSameSourceStatusRejected, "rejected_at": &now}).Error; err != nil {
-				return err
-			}
-		}
+	}
+	return nil
+}
+
+// rejectDetectedSameSourceRelationsForPairs 把这些视频对上仍待审的同源关系判为"不是同源"。
+// 清理面板的"不是同片"走这里：两种否决表达的是同一个判断，不同步的话同一对会换个
+// 类别再冒出来。已决（confirmed / rejected）或不存在的关系原样不动。
+func rejectDetectedSameSourceRelationsForPairs(pairs [][2]uint, now time.Time) error {
+	if len(pairs) == 0 {
 		return nil
+	}
+	return database.Transaction(func(tx *gorm.DB) error {
+		return rejectDetectedSameSourceRelationsForPairsTx(tx, pairs, now)
 	})
+}
+
+func rejectDetectedSameSourceRelationsForPairsTx(tx *gorm.DB, pairs [][2]uint, now time.Time) error {
+	for _, pair := range pairs {
+		videoAID, videoBID := pair[0], pair[1]
+		if videoAID > videoBID {
+			videoAID, videoBID = videoBID, videoAID
+		}
+		var relation models.VideoSameSourceRelation
+		err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("video_a_id = ? AND video_b_id = ? AND status = ?", videoAID, videoBID, models.VideoSameSourceStatusDetected).
+			First(&relation).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if err := rejectDetectedSameSourceRelationTx(tx, &relation, now); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *AISameSourceService) UnreadCount() (int64, error) {
