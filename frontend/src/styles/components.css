@@ -402,7 +402,8 @@ input:checked + .slider::before {
 .video-list { display: flex; flex-direction: column; gap: 6px; }
 
 /* 列表行（原型 A1）：88px 紧凑档承载了原来两排按钮才装下的内容。
-   舒适档只加纵向留白，不减信息。 */
+   舒适档只加纵向留白，不减信息。高度是下限而不是定值：标签多了要换行铺开，
+   行随内容长高，虚拟列表按实测行高定位（VirtualVideoList 的 heightCache）。 */
 .video-item {
   background: var(--row-bg);
   border: 1px solid var(--hairline);
@@ -410,12 +411,12 @@ input:checked + .slider::before {
   display: flex;
   align-items: center;
   gap: 12px;
-  height: 88px;
-  padding: 0 12px;
+  min-height: 88px;
+  padding: 7px 12px;
   transition: border-color var(--transition), background var(--transition);
 }
-.video-item--comfortable { height: 104px; }
-.video-item--narrow { height: 68px; gap: 10px; padding: 0 10px; }
+.video-item--comfortable { min-height: 104px; }
+.video-item--narrow { min-height: 68px; gap: 10px; padding: 6px 10px; }
 .video-item:hover { border-color: var(--border-strong); background: var(--row-hover-bg); }
 .video-item--selected { border-color: var(--row-selected-border); background: var(--row-selected-bg); }
 .video-item--focused { outline: 2px solid var(--accent-color); outline-offset: -2px; }
@@ -492,47 +493,11 @@ input:checked + .slider::before {
 .video-item--narrow .video-info { gap: 4px; }
 .video-item--narrow .video-tags--keep { display: flex; }
 
-/* position 是给展开浮层当锚点用的（.video-tags__strip--expanded）。 */
-.video-tags { position: relative; display: flex; align-items: center; gap: 5px; min-width: 0; }
-/* 列表行的高度是固定估算值（utils/virtualList.js），标签不能换行撑高，
-   所以横向滚动而不是截断——每个标签都还够得着。滚动条藏起来免得吃掉行高。
-   代价是溢出没有任何提示，所以溢出时由 .video-tags__more 给出 +N 入口。 */
-.video-tags__strip { display: flex; align-items: center; gap: 5px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.video-tags__strip::-webkit-scrollbar { display: none; }
-/* 展开态：绝对定位的换行浮层。不改行高，虚拟列表的行测量与滚动锚点都不受影响；
-   .video-item 与 .video-info 都没有 overflow: hidden，所以浮层可以盖到行外面。 */
-.video-tags__strip--expanded {
-  position: absolute;
-  left: 0;
-  top: -5px;
-  z-index: 5;
-  width: max-content;
-  max-width: min(560px, 92vw);
-  flex-wrap: wrap;
-  row-gap: 5px;
-  padding: 5px 7px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  background: var(--panel-bg);
-  box-shadow: var(--shadow-modal);
-  overflow: visible;
-}
-.video-tags__more {
-  flex: 0 0 auto;
-  height: 22px;
-  padding: 0 7px;
-  border: 1px dashed var(--border-strong);
-  border-radius: 11px;
-  background: transparent;
-  color: var(--text-secondary);
-  font-size: 11px;
-  line-height: 1;
-  cursor: pointer;
-  white-space: nowrap;
-}
-.video-tags__more:hover { border-style: solid; color: var(--text-primary); }
-/* 网格卡的标签本来就换行铺开，没有藏起来的标签，也就不需要这个入口。 */
-.video-item--grid .video-tags__more { display: none; }
+/* 标签照实换行铺开，一个都不藏：行高不是定值（见 .video-item），虚拟列表按实测高度定位，
+   所以不再需要横向滚动条带和 +N 浮层。条带用 display: contents 让徽标与「+ 标签」按钮
+   在同一个换行流里排布，按钮紧跟最后一个标签，而不是独占一行。 */
+.video-tags { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; min-width: 0; }
+.video-tags__strip { display: contents; }
 
 .video-subtitle-hit {
   margin-left: 6px; max-width: 440px; padding: 1px 8px;
@@ -589,9 +554,6 @@ input:checked + .slider::before {
 /* 信息区下内边距是 0，动作行上内边距也是 0，两行会直接贴在一起（标签行尤其明显）。
    动作行自己补上间距，标签多到换行时也不会糊成一片。 */
 .video-item--grid .video-actions { padding: 9px 9px; margin-top: auto; }
-/* 网格卡高度自适应且不参与虚拟化，标签可以照实换行铺开，不折叠也不截断。 */
-.video-item--grid .video-tags,
-.video-item--grid .video-tags__strip { flex-wrap: wrap; row-gap: 5px; overflow: visible; }
 .video-item--grid .row-btn { flex: 1; height: 26px; padding: 0; font-size: 11.5px; }
 .video-item--grid .row-btn--icon { flex: 0 0 28px; }
 

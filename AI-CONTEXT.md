@@ -61,7 +61,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 收藏每次手机端动作只投影一次（不覆盖主片库里的手工取消），点赞完全由投影拥有、双向对账。
 升级时 `migrateShortFeedLikedTagToColumn` 一次性把已有标签关联转成列值并硬删该自动标签、
 其关联与偏好分；用户自己建的同名标签不在范围内、不受影响。
-- **列表行标签溢出入口（2026-09-04）:** 列表行高是虚拟列表的估算值，标签条带是单行横向滚动且藏了滚动条的，溢出的部分此前没有任何提示——看起来就是"标签没显示全"。现在按几何测量给出 `+N` 入口（`utils/rowTags.js` 的 `countHiddenTagBadges`：右边缘超出条带可视宽度即算隐藏，留 1px 亚像素容差），点开把条带就地展开成绝对定位的换行浮层：不改行高，`VirtualVideoList` 的行测量与滚动锚点都不受影响（`.video-item` / `.video-info` 都没有 `overflow: hidden`，浮层可以盖到行外）。行被复用到另一个视频、标签集合变化、切换布局都会收起并重量；`ResizeObserver` 跟随列宽变化（抽屉开合、窗口缩放），没有该 API 的环境只是不显示入口。网格卡的标签本来就换行铺开，不显示这个入口。
+- **列表行标签换行铺开（2026-09-07，替代 09-04 的 +N 溢出入口）:** 用户裁决"只展示一行不行"。`.video-item` 的高度改为下限（`min-height` 88/104/68 + 上下内边距），`.video-tags` / `.video-tags__strip` 直接 `flex-wrap: wrap`，标签一个不藏、行随内容长高；`VirtualVideoList` 本就按 `heightCache` 里的实测行高定位并在高度变化后重新锚定滚动，所以不需要额外机制。`utils/virtualList.estimateVideoRowHeight` 只是首屏前的预估，现在按标签数与列宽估行数（`estimateTagLines`：徽标约 69px、可用宽 = 列宽 − 缩略图 − 行内动作 − 间距），实测出来后覆盖。原 `+N` 入口、绝对定位展开浮层、`utils/rowTags.js` 与 `ResizeObserver` 测量一并删除。窄变体（详情抽屉打开）仍不显示标签。
 - **短视频自动标签:** 复用“短视频 Feed 最大时长”设置维护带持久 `automatic_kind=short_video` 身份且固定显示名为“短视频”的自动标签；新增、迁移、元数据刷新、增量扫描、启动和阈值变更都会同步。若已有同名人工/AI 标签，旧标签保留 ID 和全部关联并安全改名为“短视频（原标签）”（必要时追加序号），不会被自动规则接管；AI 打标判断会忽略自动标签。
 - **用户配置闭集标签库:** 不内置或 seed 任何标签和分类；设置页按“每分类一行”维护分类及其多个标签、颜色和启用状态。已有普通标签可原地加入 AI 标签库并保留全部视频关联；用现有名称替换一个 AI 标签库条目时复用该普通标签，旧条目退出标签库但不删除。AI 只从 `is_system=true AND is_active=true` 标签中选择，标签库为空时暂停分析，出集结果服务端丢弃。标签库或 AI 配置保存后会立即唤醒后台任务；标签库变更时仅让已移除、停用或无法匹配的待审候选失效，仍匹配有效标签的候选会保留，标签改名时同步候选名称；没有有效待审候选且无正式标签的视频会按新库重跑。
 - **AI 标签库防误清空:** 设置页只有在标签库成功加载后才允许保存全部设置，加载失败时保留错误并提供重新加载；普通 `SaveAITagLibrary([])` 不能清空一个已有标签库，必须由前端二次确认后调用独立 `ClearAITagLibrary`。该双层保护避免数据库短暂断连把前端空状态误写为用户主动清空，并连带使待审候选失效。
@@ -265,7 +265,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **候选漂移:** `face_person_candidates` 只增不删（分析侧刻意如此），`ListFaceClusters` 用簇当前代表向量与人物头像种子重算相似度，<0.6 的不展示；人物头像换掉/没了的候选同样不展示。
 - **软删除媒体:** 写关系时用 `Unscoped` 校验媒体行存在——软删除媒体照样建关系（与 `personHasRemainingRelations` 口径一致），只跳过已永久删除的。
 - **绑定与事件:** `app_ai.go` 六个方法；成功后发 `face-review-changed`（无载荷）。
-- **前端:** `FaceClusterReviewPanel.vue` 一个组件两处复用——视频侧 `AITagReviewDialog.vue` 第三个页签「人物候选」（`face-cluster-review-tab`），图片侧 `ImageAITagReviewPanel.vue` 顶部页签（`image-ai-tag-review-tab` / `image-face-cluster-review-tab`）。未命名簇三动作（命名新人物 / 关联现有人物（候选人物置顶）/ 忽略）；已命名簇只在有 pending 追加时出现（确认追加 / 忽略追加）。订阅 `face-review-changed` 与 `face-analysis-state` 局部刷新，刷新失败保留已有卡片。已知限制：无分页、每次动作后整体重拉、没有「预览这一簇里的媒体」入口。
+- **前端:** `FaceClusterReviewPanel.vue` 一个组件两处复用——视频侧 `AITagReviewDialog.vue` 第三个页签「人物候选」（`face-cluster-review-tab`），图片侧 `ImageAITagReviewPanel.vue` 顶部页签（`image-ai-tag-review-tab` / `image-face-cluster-review-tab`）。未命名簇三动作（命名新人物 / 关联现有人物（候选人物置顶）/ 忽略）；已命名簇只在有 pending 追加时出现（确认追加 / 忽略追加）。订阅 `face-review-changed` 与 `face-analysis-state` 局部刷新，刷新失败保留已有卡片。已知限制：无分页、每次动作后整体重拉、没有「预览这一簇里的媒体」入口。**第三个入口（用户裁决 2026-09-07）**：人物页（`EntityLibraryPage`，`entityType=person`）列表视图顶部常驻「待命名人脸」分区，复用同一面板；面板加载后 `emit('loaded', { unnamed, appendPending })`，宿主据此写摘要、在没有待处理项时默认收起（用户手动切换过就不再自动收），面板 `changed` 触发人物列表重拉——命名/关联出来的人物立刻出现在下面的列表。
 - **既有对照:** 扫描到新视频时 NFO 导入会按 2.15 语义自动写 `video_people`——那是既有的本地资料填空路径，与人脸链路无关。
 
 ### 2.20 桌面通知与 Dock 角标

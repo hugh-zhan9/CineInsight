@@ -16,6 +16,13 @@ const api = vi.hoisted(() => ({
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
+vi.mock('./FaceClusterReviewPanel.vue', () => ({
+  default: {
+    name: 'FaceClusterReviewPanel',
+    emits: ['changed', 'loaded'],
+    template: '<div class="face-panel-stub" />'
+  }
+}));
 vi.mock('./PreviewDrawer.vue', () => ({
   default: {
     name: 'PreviewDrawer',
@@ -200,5 +207,53 @@ describe('EntityLibraryPage 命令面板落点', () => {
 
     wrapper.unmount();
     expect(commandList().map(command => command.id)).not.toContain('action:collection-reload');
+  });
+});
+
+// 用户裁决（2026-09-07）：人脸分析认出的面孔要在人物页顶部就能看到、命名，不必去 AI 标签管理里找。
+describe('EntityLibraryPage 待命名人脸分区', () => {
+  it('只在人物列表视图渲染，作品集页没有', async () => {
+    const people = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    expect(people.find('[data-test="people-face-review"]').exists()).toBe(true);
+    expect(people.find('.face-panel-stub').exists()).toBe(true);
+
+    const collections = mount(EntityLibraryPage, { props: { entityType: 'collection' } });
+    await flushPromises();
+    expect(collections.find('[data-test="people-face-review"]').exists()).toBe(false);
+  });
+
+  it('按面板回报的数量写摘要，没有待处理项时默认收起，手动展开后不再自动收', async () => {
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    const panel = wrapper.findComponent({ name: 'FaceClusterReviewPanel' });
+    // v-show 只改内联 display；这里直接看它，不依赖 test-utils 对脱离文档节点的可见性推断。
+    const panelHidden = () => String(wrapper.get('.face-panel-stub').attributes('style') || '').includes('display: none');
+
+    panel.vm.$emit('loaded', { unnamed: 2, appendPending: 1 });
+    await flushPromises();
+    expect(wrapper.get('[data-test="people-face-review-summary"]').text()).toContain('2 组未命名 · 1 组待确认追加');
+    expect(panelHidden()).toBe(false);
+
+    panel.vm.$emit('loaded', { unnamed: 0, appendPending: 0 });
+    await flushPromises();
+    expect(wrapper.get('[data-test="people-face-review-summary"]').text()).toContain('暂无待处理的人脸候选');
+    expect(panelHidden()).toBe(true);
+
+    await wrapper.get('[data-test="people-face-review-toggle"]').trigger('click');
+    expect(panelHidden()).toBe(false);
+    panel.vm.$emit('loaded', { unnamed: 0, appendPending: 0 });
+    await flushPromises();
+    expect(panelHidden()).toBe(false);
+  });
+
+  it('面板命名或关联成功后重新拉人物列表', async () => {
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    expect(api.ListPeople).toHaveBeenCalledTimes(1);
+
+    wrapper.findComponent({ name: 'FaceClusterReviewPanel' }).vm.$emit('changed');
+    await flushPromises();
+    expect(api.ListPeople).toHaveBeenCalledTimes(2);
   });
 });

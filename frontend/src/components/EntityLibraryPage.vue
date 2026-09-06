@@ -26,6 +26,19 @@
 
     <p v-if="error" class="entity-library__error" role="alert">{{ error }}</p>
 
+    <!-- 人脸分析认出来但还没命名的面孔就在这里等着：命名或关联之后它们才成为下面列表里的人物。
+         面板与 AI 标签管理里的「人物候选」是同一个组件、同一批簇。 -->
+    <section v-if="isPeople && !selectedEntity" class="entity-face-review glass-surface" data-test="people-face-review">
+      <div class="entity-face-review__head">
+        <div>
+          <h3>待命名人脸</h3>
+          <p data-test="people-face-review-summary">{{ faceReviewSummary }}</p>
+        </div>
+        <button type="button" class="btn-secondary btn-compact" data-test="people-face-review-toggle" @click="toggleFaceReview">{{ faceReviewCollapsed ? '展开' : '收起' }}</button>
+      </div>
+      <FaceClusterReviewPanel v-show="!faceReviewCollapsed" @changed="reload" @loaded="onFaceReviewLoaded" />
+    </section>
+
     <template v-if="!selectedEntity">
       <section class="entity-library__grid">
         <button v-for="item in items" :key="entityID(item)" type="button" class="entity-card glass-surface" @click="openEntity(item)">
@@ -111,13 +124,14 @@ import {
   CreateCollection, CreatePerson, GetCollectionDetail, GetPersonDetail, GetPersonImages, ListCollections, ListPeople, OpenDirectory, PlayVideo,
   PreviewExternally, UpdateVideoWatchProgress
 } from '../../wailsjs/go/main/App';
+import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import { formatBytes, formatDuration } from '../utils/mediaDetails.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
 export default {
   name: 'EntityLibraryPage',
-  components: { PreviewDrawer },
+  components: { FaceClusterReviewPanel, PreviewDrawer },
   props: {
     entityType: { type: String, required: true },
     // 命令面板「作品集 · X」/「人物 · X」的落点（D-029）：{ id, name }，置一次即消费。
@@ -130,14 +144,26 @@ export default {
       entityVideos: [], entityVideosHasMore: false, entityVideosLoading: false, entityVideoCursor: 0, collectionVideoPool: [],
       // 人物详情的图片区块独立分页、不与视频混排（D-021）；作品集不覆盖图片。
       entityImages: [], entityImageCursor: 0, entityImagesLoading: false, entityImagesError: '',
-      playingVideoIDs: []
+      playingVideoIDs: [],
+      // 待命名人脸分区：面板自己拉数据，这里只记摘要与收起状态。没有待处理项时默认收起，
+      // 用户手动点过展开/收起之后就不再替他做主。
+      faceReviewCounts: null, faceReviewCollapsed: false, faceReviewToggled: false
     };
   },
   computed: {
     isPeople() { return this.entityType === 'person'; },
     selectedEntityName() { return this.selectedItem ? this.entityName(this.selectedItem) : (this.isPeople ? '人物作品' : '作品集成员'); },
     selectedEntityVideoCount() { return Number(this.selectedItem?.active_video_count || this.entityVideos.length); },
-    selectedEntityImageCount() { return Number(this.selectedItem?.active_image_count || this.entityImages.length); }
+    selectedEntityImageCount() { return Number(this.selectedItem?.active_image_count || this.entityImages.length); },
+    faceReviewSummary() {
+      const counts = this.faceReviewCounts;
+      if (!counts) return '正在读取人脸候选…';
+      const parts = [];
+      if (counts.unnamed) parts.push(`${counts.unnamed} 组未命名`);
+      if (counts.appendPending) parts.push(`${counts.appendPending} 组待确认追加`);
+      if (!parts.length) return '暂无待处理的人脸候选。人脸分析在设置页启动，认出的面孔会出现在这里。';
+      return `${parts.join(' · ')}；命名或关联后会成为下面列表里的人物。`;
+    }
   },
   watch: {
     entityType() { this.closeEntity(); this.reload(); },
@@ -164,6 +190,16 @@ export default {
   methods: {
     formatBytes,
     formatDuration,
+    onFaceReviewLoaded(counts) {
+      this.faceReviewCounts = { unnamed: Number(counts?.unnamed || 0), appendPending: Number(counts?.appendPending || 0) };
+      if (!this.faceReviewToggled) {
+        this.faceReviewCollapsed = this.faceReviewCounts.unnamed + this.faceReviewCounts.appendPending === 0;
+      }
+    },
+    toggleFaceReview() {
+      this.faceReviewToggled = true;
+      this.faceReviewCollapsed = !this.faceReviewCollapsed;
+    },
     setupInfiniteLoading() {
       if (typeof IntersectionObserver === 'undefined') return;
       const root = this.$el?.closest?.('.main-view') || null;
@@ -345,6 +381,7 @@ export default {
 .entity-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }.entity-library--with-drawer { padding-right: calc(18px + 520px); }
 .entity-library__toolbar,.entity-library__create { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; gap: 12px; align-items: center; justify-content: space-between; }.entity-library__toolbar h2 { margin: 0 0 3px; font-size: 18px; }.entity-library__toolbar p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .entity-library__title { display: flex; align-items: center; gap: 12px; min-width: 0; }.entity-library__title > div { min-width: 0; }.entity-library__title h2,.entity-library__title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.entity-face-review { display: grid; gap: 10px; padding: 12px 14px; border-radius: var(--radius-md); }.entity-face-review__head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }.entity-face-review__head h3 { margin: 0; font-size: 14px; }.entity-face-review__head p { margin: 3px 0 0; color: var(--text-secondary); font-size: 12px; }
 .entity-library__search,.entity-library__create { display: flex; gap: 8px; }.entity-library input { min-width: 180px; border: 1px solid var(--border-color); border-radius: 8px; padding: 9px 10px; color: var(--text-primary); background: var(--control-bg); }.entity-library__create { justify-content: flex-start; }.entity-library__create input:nth-child(2) { flex: 1; }
 /* 原型 A9：卡片改成竖版，封面在上、名称与作品数在下；列宽随窗口自增。 */
 .entity-library__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 12px; }

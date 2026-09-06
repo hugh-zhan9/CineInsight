@@ -4,6 +4,7 @@ import {
   calculateVirtualWindow,
   createHeightCacheKey,
   defaultRangeEngine,
+  estimateTagLines,
   estimateVideoRowHeight,
   getWidthBucket,
   resolveScrollOwnerDescriptor
@@ -24,11 +25,17 @@ function runTests() {
   assert.equal(getWidthBucket(0), 1);
   assert.equal(getWidthBucket(320), 4);
 
-  // 2026-09-01 重构后行高固定：标签与字幕命中都压在同一行横向溢出隐藏，
-  // 不再换行撑高，所以预估只随档位与窄变体变化。三档必须互不相同且递增，
-  // 否则切档位后滚动条长度会算错。
+  // 行高是下限，标签换行撑高：预估按标签数与列宽估行数，实测由 VirtualVideoList 覆盖。
+  // 三档基础值必须互不相同且递增，否则切档位后滚动条长度会算错。
   const simpleVideo = { id: 1, tags: [], is_stale: false };
   const subtitleVideo = { id: 2, tags: [{ id: 1 }], is_stale: true, _subtitleMatchText: 'match' };
+  const taggedVideo = { id: 3, tags: Array.from({ length: 12 }, (_, index) => ({ id: index + 1 })) };
+  assert.equal(estimateTagLines(simpleVideo, 10), 1);
+  assert.equal(estimateTagLines(taggedVideo, 10), 3, '800px 列宽减去缩略图与动作后约 350px，12 个标签要三行');
+  assert.equal(estimateTagLines(taggedVideo, 20), 1, '够宽时一行放得下');
+  assert.equal(estimateTagLines(taggedVideo, 10, 'narrow'), 1, '窄变体不显示标签');
+  assert.equal(estimateVideoRowHeight(taggedVideo, 10, false), 94 + 2 * 27);
+  assert.equal(estimateVideoRowHeight(taggedVideo, 10, false, 'narrow'), 74);
   assert.equal(estimateVideoRowHeight(simpleVideo, 10, false), 94);
   assert.equal(estimateVideoRowHeight(subtitleVideo, 10, true), 94);
   assert.equal(estimateVideoRowHeight(simpleVideo, 10, false, 'comfortable'), 110);

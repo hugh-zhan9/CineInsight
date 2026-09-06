@@ -208,7 +208,7 @@ const STALE_CODES = ['cluster_not_unnamed', 'cluster_not_found'];
 // 一个簇可能同时含视频与图片观测，因此这里不按媒体类型筛。
 export default {
   name: 'FaceClusterReviewPanel',
-  emits: ['changed'],
+  emits: ['changed', 'loaded'],
   data() {
     return {
       unnamedClusters: [],
@@ -312,6 +312,8 @@ export default {
         this.appendClusters = this.normalize(named).filter(card => card.append_pending_count > 0);
         if (!this.cards.some(card => card.id === this.nameForm.clusterID)) this.nameForm.clusterID = 0;
         if (!this.cards.some(card => card.id === this.linkForm.clusterID)) this.linkForm.clusterID = 0;
+        // 宿主页（人物页）据此写摘要、决定默认收起还是展开。
+        this.$emit('loaded', { unnamed: this.unnamedClusters.length, appendPending: this.appendClusters.length });
       } catch (err) {
         // 刷新失败时保留已有卡片：把面板清空只会让用户以为候选没了。
         this.error = `加载人物候选失败：${err}`;
