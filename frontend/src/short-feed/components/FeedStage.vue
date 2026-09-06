@@ -17,6 +17,7 @@
       @pointerleave.prevent="$emit('press-cancel', $event)"
       @contextmenu.prevent
       @loadedmetadata="$emit('media-loaded')"
+      @canplaythrough="$emit('buffered')"
       @timeupdate="$emit('time-update')"
       @play="$emit('play')"
       @pause="$emit('pause')"
@@ -49,12 +50,14 @@
       <button v-if="zoomed" type="button" class="photo-zoom-reset" data-test="photo-zoom-reset" @click.stop="$emit('zoom-reset')">恢复适屏</button>
     </div>
 
+    <!-- 预取的下一条不能一上来就整只下载：它会和正在播的这条抢带宽，短视频也会卡。
+         当前条缓冲够了（canplaythrough）宿主才把 preload 升到 auto。 -->
     <video
       v-if="prefetched && prefetched.media_kind === 'video' && prefetched.media_url"
       class="preload-video"
       :src="prefetched.media_url"
       muted
-      preload="auto"
+      :preload="prefetchPreload"
       playsinline
     ></video>
     <img
@@ -79,11 +82,13 @@ export default {
     prefetched: { type: Object, default: null },
     muted: { type: Boolean, default: true },
     zoomed: { type: Boolean, default: false },
-    statusText: { type: String, default: '' }
+    statusText: { type: String, default: '' },
+    // 预取视频的 preload 档位：metadata 只拿头部，auto 才整只下载。
+    prefetchPreload: { type: String, default: 'metadata' }
   },
   emits: [
     'press-start', 'press-move', 'press-end', 'press-cancel',
-    'media-loaded', 'time-update', 'play', 'pause', 'playing', 'media-error', 'stage-tap', 'zoom-reset'
+    'media-loaded', 'buffered', 'time-update', 'play', 'pause', 'playing', 'media-error', 'stage-tap', 'zoom-reset'
   ],
   computed: {
     isVideo() { return this.item?.media_kind !== 'image'; },

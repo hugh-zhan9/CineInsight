@@ -113,6 +113,11 @@ assert.match(source, /replaceCurrent\(await setItemTag/, 'tag writes should adop
 assert.match(source, /this\.items = \[\];[\s\S]{0,120}this\.recentKeys = \[\];/, 'switching scope should reset the timeline');
 
 assert.match(sheet, /Escape/, 'bottom sheets should close on Escape');
+// 预取不能与正在播的视频抢带宽：预取的 <video> 先只拿元数据，当前条 canplaythrough 后才整只下载。
+assert.match(stage, /:preload="prefetchPreload"/, 'prefetched video must not hardcode preload=auto');
+assert.doesNotMatch(stage, /class="preload-video"[^>]*\spreload="auto"/s, 'prefetched video must not download in full up front');
+assert.match(stage, /@canplaythrough="\$emit\('buffered'\)"/, 'stage must report when the current video has buffered enough');
+assert.match(source, /onVideoBuffered\(\) \{\s*this\.prefetchPreload = 'auto';/s, 'host upgrades prefetch to auto only after buffering');
 // 资源类型筛选：全部 / 仅视频 / 仅图片，随下一条请求一起发给后端，换类型重开时间线。
 assert.match(source, /short-feed-media-kind/, 'scope sheet should offer a media kind switch');
 assert.match(source, /getNextItem\(this\.recentKeys\.slice\(-12\), this\.scope, this\.mediaKind\)/, 'the main next-item request should carry the media kind');

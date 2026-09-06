@@ -60,8 +60,12 @@ type ShortFeedService struct {
 	// 后才可在浏览器显示，因此"能不能显示"这件事由它裁定，而不是另立一张白名单。
 	// 为 nil 时图片一律不入选（测试与降级路径）。
 	imageThumbnail *ImageThumbnailService
-	now            func() time.Time
-	randFloat64    func() float64
+	// 手机端直连上限的判定缓存与自动代理请求节流（short_feed_mobile_fit.go）。
+	mobileFitMu          sync.Mutex
+	heavyVerdicts        map[uint]shortFeedHeavyVerdict
+	autoProxyRequestedAt map[uint]time.Time
+	now                  func() time.Time
+	randFloat64          func() float64
 	// statFile 可注入，测试用它统计"一次抽取到底 stat 了几个文件"。
 	statFile func(string) (os.FileInfo, error)
 
@@ -1029,6 +1033,23 @@ func (s *ShortFeedService) ResolveMedia(ref ShortFeedMediaRef) (*ShortFeedMedia,
 		// 这一条也兜住"抽签时代理还有效、下发时刚失效"的窗口：抽签阶段只看
 		// 有没有 ready 行，指纹校验落在 resolveValidProxy 里，就是上面那一步。
 		return nil, ErrShortFeedNoEligibleVideos
+	}
+	// 白名单命中但源文件超出手机端直连上限（4K、高码率）：有代理就发代理，
+	// 没有就照发源文件——总比放不了强——同时请求后台生成，下次就能换上。
+	if s.sourceTooHeavyForMobileCached(video, info) {
+		if proxies := s.videoService.playbackProxies(); proxies != nil {
+			if proxy := proxies.resolveValidProxy(video.ID, playbackProxyFingerprintOf(info), true); proxy != nil {
+				if proxyInfo, statErr := s.stat(proxy.Path); statErr == nil {
+					return &ShortFeedMedia{
+						Path:        proxy.Path,
+						DisplayName: video.Name,
+						MIME:        playbackProxyMIME,
+						ModTime:     proxyInfo.ModTime(),
+					}, nil
+				}
+			}
+			s.requestMobileFitProxy(proxies, video.ID)
+		}
 	}
 	return &ShortFeedMedia{
 		Path:        video.Path,

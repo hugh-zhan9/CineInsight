@@ -18,6 +18,8 @@
         :muted="muted"
         :zoomed="photoZoomed"
         :status-text="statusText"
+        :prefetch-preload="prefetchPreload"
+        @buffered="onVideoBuffered"
         @press-start="startLongPress"
         @press-move="trackLongPressMove"
         @press-end="finishPointerPress"
@@ -235,6 +237,8 @@ export default {
       toastTimer: null,
       pendingUndo: null,
       prefetchedVideo: null,
+      // 预取视频的下载档位：换到新的一条先回到 metadata，当前条缓冲够了再放开。
+      prefetchPreload: 'metadata',
       prefetching: false,
       recentKeys: [],
       favorites: [],
@@ -374,7 +378,12 @@ export default {
         this.applyPlaybackRate();
         if (player?.play) player.play().catch(() => {});
       });
+      // 图片没有缓冲过程，也不占带宽，预取可以直接整只下载。
+      this.prefetchPreload = this.isImageItem ? 'auto' : 'metadata';
       this.prefetchNextVideo();
+    },
+    onVideoBuffered() {
+      this.prefetchPreload = 'auto';
     },
     // 改动后的整条 DTO 由后端回来，就地换掉，不猜写入结果。
     replaceCurrent(updated) {

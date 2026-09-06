@@ -245,9 +245,11 @@ func collectPlaybackProxyFilterIDs(filter LibraryFilter) ([]uint, error) {
 // 只挑本次新增视频里内嵌白名单不命中的那些——白名单命中的本来就能直接内嵌播放，
 // 给它们做代理纯属浪费。被 LRU 淘汰过的代理不在这里重建：候选集是"本次新增"，
 // 淘汰过的视频不会再出现在里面，抖动天然不存在。
+var errPlaybackProxyServiceMissing = errors.New("播放代理服务未初始化")
+
 func (s *PlaybackProxyService) EnqueueAutoCandidates(parent context.Context, videoIDs []uint) (PlaybackProxyStatus, error) {
 	if s == nil {
-		return PlaybackProxyStatus{}, errors.New("播放代理服务未初始化")
+		return PlaybackProxyStatus{}, errPlaybackProxyServiceMissing
 	}
 	candidates, err := filterPlaybackProxyCandidates(videoIDs)
 	if err != nil {
@@ -259,19 +261,20 @@ func (s *PlaybackProxyService) EnqueueAutoCandidates(parent context.Context, vid
 	return s.enqueue(parent, candidates)
 }
 
-// filterPlaybackProxyCandidates 留下内嵌白名单不命中的活跃视频。
-// 白名单本身一个字都不改（4.1.5 不变行为）。
+// filterPlaybackProxyCandidates 留下两类活跃视频：内嵌白名单不命中的，以及白名单命中
+// 但超出手机端直连上限的（长边 >1920 或码率 >8 Mbps；扫描刚结束还没有技术快照，
+// 码率按 大小 × 8 / 时长 估）。白名单本身一个字都不改（4.1.5 不变行为）。
 func filterPlaybackProxyCandidates(videoIDs []uint) ([]uint, error) {
 	if len(videoIDs) == 0 || database.DB == nil {
 		return nil, nil
 	}
 	var videos []models.Video
-	if err := database.DB.Select("id", "path").Where("id IN ?", videoIDs).Order("id ASC").Find(&videos).Error; err != nil {
+	if err := database.DB.Select("id", "path", "size", "duration", "width", "height").Where("id IN ?", videoIDs).Order("id ASC").Find(&videos).Error; err != nil {
 		return nil, fmt.Errorf("读取代理候选视频失败: %w", err)
 	}
 	candidates := make([]uint, 0, len(videos))
 	for _, video := range videos {
-		if _, inline := inlinePreviewMIME(video.Path); inline {
+		if _, inline := inlinePreviewMIME(video.Path); inline && !sourceTooHeavyForMobile(video, video.Size, 0) {
 			continue
 		}
 		candidates = append(candidates, video.ID)

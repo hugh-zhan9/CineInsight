@@ -76,9 +76,9 @@
       <label class="switch">
         <input data-test="auto-compatibility-proxy-toggle" type="checkbox" v-model="form.auto_compatibility_proxy" />
         <span class="slider"></span>
-        <span>扫描后自动为不能内嵌播放的新视频生成播放代理</span>
+        <span>自动为不能内嵌播放、或手机端直连会卡的视频生成播放代理</span>
       </label>
-      <p class="help-text">只对本次新增的 mkv、avi 这类视频下手，生成一份 mp4 代理让预览与手机端能播。源文件不会被改写或替换；被体积上限淘汰过的代理不会自动重建。上限与占用在「播放代理」分区。</p>
+      <p class="help-text">扫描后对本次新增的 mkv、avi 这类视频，以及长边超过 1920 或码率超过 8 Mbps 的视频生成一份 ≤1080p 的 mp4 代理；手机端实际播到这类视频而代理还没有时也会自动排队。源文件不会被改写或替换；被体积上限淘汰过的代理不会自动重建。上限与占用在「播放代理」分区。</p>
     </div>
     <div class="setting-item">
       <label class="switch">
