@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
+<!-- 扩展图标源文件。沿用桌面端 build/appicon.svg 的品牌语言：深蓝→青绿渐变圆角方块、白色圆头描边播放键、青色光点；
+     播放键尖端外的两道信号弧表示「嗅探网页上的媒体流」。四档 PNG 由 make-icons.py 从这份文件逐档渲染。 -->
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0F172A"/><stop offset="1" stop-color="#0D9488"/></linearGradient>
+  <radialGradient id="glow"><stop offset="0" stop-color="#2DD4BF" stop-opacity="1"/><stop offset="1" stop-color="#2DD4BF" stop-opacity="0"/></radialGradient>
+</defs>
+<rect width="128" height="128" rx="28" fill="url(#bg)"/>
+<path d="M28 0 H100 Q128 0 128 28 V42 Q64 52 0 42 V28 Q0 0 28 0Z" fill="#fff" opacity=".06"/>
+<g fill="none" stroke="#fff" stroke-width="11" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M30 34 L78 64 L30 94" opacity=".93"/>
+  <path d="M22 49 V79" opacity=".93"/>
+  <path d="M92.1 49.9 A20 20 0 0 1 92.1 78.1" stroke-width="9" opacity=".75"/>
+  <path d="M100.6 41.4 A32 32 0 0 1 100.6 86.6" stroke-width="9" opacity=".45"/>
+</g>
+<circle cx="42" cy="64" r="14" fill="url(#glow)" opacity=".85"/>
+<circle cx="42" cy="64" r="5" fill="#5EEAD4"/>
+</svg>

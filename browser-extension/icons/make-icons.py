@@ -1,87 +1,152 @@
 #!/usr/bin/env python3
-"""生成扩展图标。
+"""从 icon.svg 渲染扩展图标。
 
-不引第三方依赖：直接按 PNG 规范写 RGBA 位图。图案是一个圆角方块加一个向下的箭头，
-四个尺寸同一套几何，按比例缩放，不做位图放大。
+四档 PNG 都由同一份 icon.svg 用 Chrome 无头模式逐档渲染（矢量直接光栅化），不做位图缩放。
+机器上要有 Chrome / Edge / Chromium，也可以用环境变量 CHROME 指定可执行文件。
+
+已知的 Chrome 行为，脚本里都处理了：
+- `--screenshot` 把文件写完后进程不会自己退出，所以轮询到输出文件大小稳定后主动结束整个进程组；
+- 多个实例复用同一个 --user-data-dir 会互相等待卡死，所以每一档用独立的临时 profile。
 """
 
+import os
+import shutil
+import signal
 import struct
-import zlib
+import subprocess
+import sys
+import tempfile
+import time
 from pathlib import Path
 
-BG = (47, 111, 235, 255)      # --accent
-FG = (255, 255, 255, 255)
-TRANSPARENT = (0, 0, 0, 0)
+HERE = Path(__file__).resolve().parent
+SOURCE = HERE / "icon.svg"
+SIZES = (16, 32, 48, 128)
+TIMEOUT_SECONDS = 60
+
+CHROME_CANDIDATES = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "google-chrome",
+    "chromium",
+    "chromium-browser",
+    "microsoft-edge",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+)
 
 
-def rounded_rect_alpha(x, y, size, radius):
-    """点 (x, y) 落在圆角方块内的覆盖度（0..1），四角做一点抗锯齿。"""
-    left, top, right, bottom = 0.0, 0.0, float(size), float(size)
-    cx = min(max(x, left + radius), right - radius)
-    cy = min(max(y, top + radius), bottom - radius)
-    dx, dy = x - cx, y - cy
-    distance = (dx * dx + dy * dy) ** 0.5
-    return max(0.0, min(1.0, radius - distance + 0.5))
+def find_chrome():
+    override = os.environ.get("CHROME")
+    if override:
+        if Path(override).is_file():
+            return override
+        sys.exit(f"环境变量 CHROME 指向的文件不存在：{override}")
+    for candidate in CHROME_CANDIDATES:
+        if Path(candidate).is_file():
+            return candidate
+        found = shutil.which(candidate)
+        if found:
+            return found
+    sys.exit("找不到 Chrome / Edge / Chromium；用环境变量 CHROME 指定可执行文件路径")
 
 
-def arrow_alpha(x, y, size):
-    """向下的箭头：一根竖杆加一个三角头。"""
-    unit = size / 16.0
-    # 竖杆
-    if abs(x - size / 2) <= 1.6 * unit and 3.4 * unit <= y <= 9.2 * unit:
-        return 1.0
-    # 三角头：宽度随 y 线性收窄
-    head_top, head_bottom = 8.2 * unit, 12.4 * unit
-    if head_top <= y <= head_bottom:
-        progress = (y - head_top) / (head_bottom - head_top)
-        half_width = 4.2 * unit * (1.0 - progress)
-        if abs(x - size / 2) <= half_width:
-            return 1.0
-    # 底托
-    if 13.0 * unit <= y <= 14.2 * unit and abs(x - size / 2) <= 4.6 * unit:
-        return 1.0
-    return 0.0
+def start_render(chrome, size, workdir):
+    """起一个无头 Chrome 把 SVG 按 size 截成透明底 PNG，返回 (进程, 输出路径)。"""
+    page = workdir / f"page-{size}.html"
+    page.write_text(
+        "<!doctype html><meta charset=\"utf-8\">"
+        "<style>html,body{margin:0;background:transparent;overflow:hidden}"
+        f"img{{display:block;width:{size}px;height:{size}px}}</style>"
+        f"<img src=\"{SOURCE.as_uri()}\">",
+        encoding="utf-8",
+    )
+    out = workdir / f"icon{size}.png"
+    cmd = [
+        chrome,
+        "--headless=new",
+        "--disable-gpu",
+        "--no-first-run",
+        "--hide-scrollbars",
+        f"--user-data-dir={workdir / f'profile-{size}'}",
+        "--default-background-color=00000000",
+        "--force-device-scale-factor=1",
+        f"--window-size={size},{size}",
+        f"--screenshot={out}",
+        page.as_uri(),
+    ]
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=(os.name != "nt"),
+    )
+    return proc, out
 
 
-def blend(base, top, alpha):
-    return tuple(round(base[i] * (1 - alpha) + top[i] * alpha) for i in range(4))
+def wait_until_written(proc, out):
+    """输出文件出现且 0.5 秒内大小不再变化即视为写完；Chrome 自己退出了也算。"""
+    deadline = time.monotonic() + TIMEOUT_SECONDS
+    last_size = -1
+    while time.monotonic() < deadline:
+        if out.is_file() and out.stat().st_size > 0:
+            size_now = out.stat().st_size
+            if size_now == last_size:
+                return True
+            last_size = size_now
+        elif proc.poll() is not None:
+            return False
+        time.sleep(0.5)
+    return out.is_file() and out.stat().st_size > 0
 
 
-def render(size):
-    radius = size * 0.22
-    rows = []
-    for py in range(size):
-        row = bytearray()
-        for px in range(size):
-            x, y = px + 0.5, py + 0.5
-            coverage = rounded_rect_alpha(x, y, size, radius)
-            pixel = blend(TRANSPARENT, BG, coverage)
-            mark = arrow_alpha(x, y, size)
-            if mark > 0 and coverage > 0:
-                pixel = blend(pixel, FG, mark * coverage)
-            row.extend(pixel)
-        rows.append(bytes(row))
-    return rows
+def stop(proc):
+    if proc.poll() is not None:
+        return
+    if os.name != "nt":
+        os.killpg(proc.pid, signal.SIGTERM)
+    else:
+        proc.kill()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        if os.name != "nt":
+            os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait()
 
 
-def write_png(path, size):
-    rows = render(size)
-    raw = b"".join(b"\x00" + row for row in rows)
+def verify_png(path, size):
+    data = path.read_bytes()
+    if data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        sys.exit(f"{path.name} 不是 PNG")
+    width, height = struct.unpack(">II", data[16:24])
+    if (width, height) != (size, size):
+        sys.exit(f"{path.name} 尺寸是 {width}x{height}，期望 {size}x{size}")
+    if data[25] != 6:
+        sys.exit(f"{path.name} 颜色类型是 {data[25]}，期望 6（RGBA）")
+    return len(data)
 
-    def chunk(tag, payload):
-        body = tag + payload
-        return struct.pack(">I", len(payload)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
 
-    png = b"\x89PNG\r\n\x1a\n"
-    png += chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0))
-    png += chunk(b"IDAT", zlib.compress(raw, 9))
-    png += chunk(b"IEND", b"")
-    path.write_bytes(png)
-    return len(png)
+def main():
+    if not SOURCE.is_file():
+        sys.exit(f"缺少源文件 {SOURCE}")
+    chrome = find_chrome()
+    with tempfile.TemporaryDirectory(prefix="cineinsight-icons-") as tmp:
+        workdir = Path(tmp)
+        jobs = [(size, *start_render(chrome, size, workdir)) for size in SIZES]
+        try:
+            for size, proc, out in jobs:
+                if not wait_until_written(proc, out):
+                    sys.exit(f"渲染 {size}px 失败：Chrome 没有写出截图")
+        finally:
+            for _, proc, _ in jobs:
+                stop(proc)
+        for size, _, out in jobs:
+            written = verify_png(out, size)
+            shutil.copyfile(out, HERE / f"icon{size}.png")
+            print(f"icon{size}.png  {written} bytes")
 
 
 if __name__ == "__main__":
-    here = Path(__file__).parent
-    for size in (16, 32, 48, 128):
-        written = write_png(here / f"icon{size}.png", size)
-        print(f"icon{size}.png  {written} bytes")
+    main()

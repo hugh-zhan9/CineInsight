@@ -13,7 +13,7 @@
 2. 打开右上角的「开发者模式」；
 3. 点「加载已解压的扩展程序」，选中本目录（`browser-extension/`）。
 
-图标是脚本生成的，改了想重新生成就跑 `python3 icons/make-icons.py`。
+图标源文件是 `icons/icon.svg`，四档 PNG 由 `python3 icons/make-icons.py` 用本机的 Chrome / Edge 逐档渲染出来；改了 SVG 就重跑一次（找不到浏览器时用环境变量 `CHROME` 指定可执行文件）。
 
 ## 用法
 

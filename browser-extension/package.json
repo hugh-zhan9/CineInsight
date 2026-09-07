@@ -10,6 +10,6 @@
     "test:download": "node --test \"test/download/*.test.js\"",
     "test:ui": "node --test \"test/ui/*.test.js\"",
     "test:bridge": "node --test \"test/bridge/*.test.js\"",
-    "package": "rm -f ../build/bin/cineinsight-media-grabber-$npm_package_version.zip && zip -r -q ../build/bin/cineinsight-media-grabber-$npm_package_version.zip manifest.json src icons vendor README.md -x 'icons/make-icons.py' && echo packaged: build/bin/cineinsight-media-grabber-$npm_package_version.zip"
+    "package": "rm -f ../build/bin/cineinsight-media-grabber-$npm_package_version.zip && zip -r -q ../build/bin/cineinsight-media-grabber-$npm_package_version.zip manifest.json src icons vendor README.md -x 'icons/make-icons.py' 'icons/icon.svg' && echo packaged: build/bin/cineinsight-media-grabber-$npm_package_version.zip"
   }
 }
