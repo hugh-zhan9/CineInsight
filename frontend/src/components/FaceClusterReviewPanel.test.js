@@ -244,3 +244,57 @@ describe('FaceClusterReviewPanel', () => {
     expect(wrapper.find('[data-test="face-cluster-card-1"]').exists()).toBe(true);
   });
 });
+
+// 簇的数量没有上限：大库跑完人脸分析可能有成千上万个未命名簇，人物页顶部常驻这个面板后
+// 一次全渲染会把整页卡死。这里只渲染前一页，其余靠「显示更多」放出；回报宿主的计数仍是全部。
+describe('FaceClusterReviewPanel 卡片分批渲染', () => {
+  const many = (count, firstID = 1) => Array.from({ length: count }, (_, index) => cluster({
+    id: firstID + index,
+    representative_observation_id: 1000 + firstID + index,
+  }));
+
+  it('只渲染前 20 张卡片，计数按全部簇回报，「显示更多」逐页放出', async () => {
+    setClusters({ unnamed: many(45), named: [cluster({ id: 99, status: 'named', person_id: 5, person_name: '周迅', append_pending_count: 1 })] });
+    const wrapper = mount(FaceClusterReviewPanel);
+    await flushPromises();
+
+    expect(wrapper.findAll('.face-review__card')).toHaveLength(20);
+    expect(wrapper.emitted('loaded')[0][0]).toEqual({ unnamed: 45, appendPending: 1 });
+    const more = wrapper.get('[data-test="face-cluster-show-more"]');
+    expect(more.text()).toContain('还有 26 组');
+
+    await more.trigger('click');
+    expect(wrapper.findAll('.face-review__card')).toHaveLength(40);
+    await wrapper.get('[data-test="face-cluster-show-more"]').trigger('click');
+    expect(wrapper.findAll('.face-review__card')).toHaveLength(46);
+    // 未命名簇排在追加候选前面，最后一张才是已命名簇的追加候选。
+    expect(wrapper.findAll('.face-review__card').at(-1).attributes('data-test')).toBe('face-cluster-card-99');
+    expect(wrapper.find('[data-test="face-cluster-show-more"]').exists()).toBe(false);
+  });
+
+  it('不足一页时没有「显示更多」', async () => {
+    setClusters({ unnamed: many(20) });
+    const wrapper = mount(FaceClusterReviewPanel);
+    await flushPromises();
+    expect(wrapper.findAll('.face-review__card')).toHaveLength(20);
+    expect(wrapper.find('[data-test="face-cluster-show-more"]').exists()).toBe(false);
+  });
+
+  it('动作后重拉不把展开过的窗口缩回去', async () => {
+    setClusters({ unnamed: many(45) });
+    api.IgnoreFaceCluster.mockResolvedValue(undefined);
+    const wrapper = mount(FaceClusterReviewPanel);
+    await flushPromises();
+    await wrapper.get('[data-test="face-cluster-show-more"]').trigger('click');
+    expect(wrapper.findAll('.face-review__card')).toHaveLength(40);
+
+    // 忽略第 1 簇之后后端少一簇：窗口仍是 40 张，第 41 簇补进来。
+    setClusters({ unnamed: many(44, 2) });
+    await wrapper.find('[data-test="face-cluster-ignore-1"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="face-cluster-card-1"]').exists()).toBe(false);
+    expect(wrapper.findAll('.face-review__card')).toHaveLength(40);
+    expect(wrapper.find('[data-test="face-cluster-card-41"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="face-cluster-show-more"]').text()).toContain('还有 4 组');
+  });
+});

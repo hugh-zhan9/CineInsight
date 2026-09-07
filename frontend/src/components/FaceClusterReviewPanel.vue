@@ -25,7 +25,7 @@
     >暂无人物候选。人脸分析跑完后，认得出的面孔会在这里等你命名。</p>
 
     <article
-      v-for="card in cards"
+      v-for="card in visibleCards"
       :key="card.id"
       class="face-review__card glass-surface"
       :data-test="`face-cluster-card-${card.id}`"
@@ -182,6 +182,16 @@
         >取消</button>
       </div>
     </article>
+
+    <!-- 簇的数量没有上限（每张没匹配上的脸都是一簇），全部铺开会把 WebView 卡死：
+         一次只放出一页卡片，其余靠这个按钮继续放。回报给宿主的计数按全部簇算，不受窗口影响。 -->
+    <button
+      v-if="hiddenCardCount > 0"
+      type="button"
+      class="btn-secondary face-review__more"
+      data-test="face-cluster-show-more"
+      @click="showMoreCards"
+    >显示更多（还有 {{ hiddenCardCount }} 组）</button>
   </section>
 </template>
 
@@ -203,6 +213,10 @@ const ERROR_TEXT = {
 };
 const STALE_CODES = ['cluster_not_unnamed', 'cluster_not_found'];
 
+// 一次渲染的卡片数。大库跑完人脸分析会有成千上万个未命名簇，一次全部渲染会把
+// WebView 卡死几秒到几十秒——人物页顶部常驻这个面板之后尤其明显。
+const CARD_PAGE_SIZE = 20;
+
 // 人物候选（D-019）：未命名簇给三个动作，已命名簇的追加候选给两个动作。
 // 视频侧待审工作台与图片侧审阅面板共用这一个组件——两边看到的是同一批簇，
 // 一个簇可能同时含视频与图片观测，因此这里不按媒体类型筛。
@@ -215,6 +229,8 @@ export default {
       appendClusters: [],
       people: [],
       cropFailed: {},
+      // 当前放出的卡片数；刷新与动作后都不缩回，用户展开过的不会被折回去。
+      visibleCardLimit: CARD_PAGE_SIZE,
       // initialLoading 只在第一次加载时为真：事件驱动的刷新不该把用户正在看的
       // 卡片换成"加载中"。
       initialLoading: true,
@@ -232,6 +248,12 @@ export default {
     // 未命名簇在前（要动作的），已命名簇的追加候选在后。
     cards() {
       return [...this.unnamedClusters, ...this.appendClusters];
+    },
+    visibleCards() {
+      return this.cards.slice(0, this.visibleCardLimit);
+    },
+    hiddenCardCount() {
+      return Math.max(0, this.cards.length - this.visibleCardLimit);
     },
     // 候选人物置顶：算出来的"可能是谁"排在搜索结果之前，用户不用自己打字。
     linkOptions() {
@@ -328,6 +350,9 @@ export default {
         append_pending_media: card.append_pending_media || [],
         append_pending_count: Number(card.append_pending_count || 0)
       }));
+    },
+    showMoreCards() {
+      this.visibleCardLimit += CARD_PAGE_SIZE;
     },
     closeForms() {
       this.nameForm = { clusterID: 0, displayName: '', originalName: '' };
@@ -483,6 +508,10 @@ export default {
   text-align: center;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.face-review__more {
+  align-self: center;
 }
 
 .face-review__card {
