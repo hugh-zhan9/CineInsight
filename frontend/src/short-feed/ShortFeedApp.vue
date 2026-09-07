@@ -924,6 +924,7 @@ export default {
     isInteractiveControl(target) {
       // 图片放大时整个舞台交给浏览器原生平移，不再拦截为翻页手势。
       if (this.photoZoomed) return true;
+      if (target?.closest?.('.tag-row')) return true;
       // 底部面板整层（含遮罩、输入框）都不归舞台管：舞台一 preventDefault，
       // 点遮罩关闭的合成 click 与输入框聚焦就都没了。
       return !!target?.closest?.('button, input, textarea, select, [role="slider"], .progress-dock, .modal-backdrop, .favorites-view, .sheet-layer');

@@ -83,6 +83,7 @@ type App struct {
 	// 且只由用户的审阅动作驱动（D-019）。
 	faceReview            *services.FaceReviewService
 	shortFeedServer       *services.ShortFeedHTTPServer
+	jellyfinServer        *services.JellyfinServer
 	shortFeedStartupError string
 	// 浏览器插件桥接（D-B03、D-B04）。与手机端 feed 服务是两条互不相干的通道：
 	// feed 绑 0.0.0.0、只读、无鉴权；桥接只绑 127.0.0.1、要令牌，因为它能让
@@ -180,6 +181,7 @@ func NewApp() *App {
 	app.faceAnalysis.SetMediaWorkSlot(mediaWorkSlot)
 	app.faceReview = &services.FaceReviewService{}
 	app.wireBrowserBridge()
+	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService)
 	app.wireBackgroundTaskRegistry()
 	app.wireDesktopNotifier()
 	if dataDirErr != nil {
@@ -411,6 +413,7 @@ func (a *App) startup(ctx context.Context) {
 	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。
 	go a.triggerImageAITaggingAuto("startup")
 	a.startShortFeedServer(ctx)
+	a.jellyfinServer.Start()
 	a.startBrowserBridge(ctx)
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		log.Printf("App startup settings loaded %s", summarizeSettings(settings))
@@ -446,6 +449,9 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	a.restoreMu.Lock()
+	a.restoreTerminal = true
+	a.restoreMu.Unlock()
 	if a.iinaProgress != nil {
 		a.iinaProgress.StopWatching()
 	}
@@ -513,6 +519,9 @@ func (a *App) shutdown(ctx context.Context) {
 		if err := a.browserBridge.Stop(ctx); err != nil {
 			log.Printf("Browser bridge shutdown failed: %v", err)
 		}
+	}
+	if a.jellyfinServer != nil {
+		a.jellyfinServer.Stop()
 	}
 	if a.browserDownloads != nil {
 		// 等在跑的 ffmpeg 收完摊。不等的话，任务的清理（删掉没下完的 .part）

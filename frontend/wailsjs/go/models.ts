@@ -397,6 +397,9 @@ export namespace models {
 	    }
 	}
 	export class Settings {
+	    jellyfin_enabled: boolean;
+	    jellyfin_port: number;
+	    jellyfin_username: string;
 	    id: number;
 	    confirm_before_delete: boolean;
 	    delete_original_file: boolean;
@@ -467,6 +470,9 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.jellyfin_enabled = source["jellyfin_enabled"];
+	        this.jellyfin_port = source["jellyfin_port"];
+	        this.jellyfin_username = source["jellyfin_username"];
 	        this.id = source["id"];
 	        this.confirm_before_delete = source["confirm_before_delete"];
 	        this.delete_original_file = source["delete_original_file"];
@@ -3585,6 +3591,48 @@ export namespace services {
 	        this.year = source["year"];
 	        this.month = source["month"];
 	        this.count = source["count"];
+	    }
+	}
+	export class JellyfinConfigInput {
+	    enabled: boolean;
+	    port: number;
+	    username: string;
+	    password: string;
+
+	    static createFrom(source: any = {}) {
+	        return new JellyfinConfigInput(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.password = source["password"];
+	    }
+	}
+	export class JellyfinStatus {
+	    enabled: boolean;
+	    running: boolean;
+	    port: number;
+	    username: string;
+	    password_set: boolean;
+	    lan_urls: string[];
+	    startup_error: string;
+
+	    static createFrom(source: any = {}) {
+	        return new JellyfinStatus(source);
+	    }
+
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.enabled = source["enabled"];
+	        this.running = source["running"];
+	        this.port = source["port"];
+	        this.username = source["username"];
+	        this.password_set = source["password_set"];
+	        this.lan_urls = source["lan_urls"];
+	        this.startup_error = source["startup_error"];
 	    }
 	}
 	export class LibraryCounts {

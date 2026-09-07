@@ -222,26 +222,29 @@ button {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-  max-height: 58px;
-  overflow: hidden;
+  max-height: 30vh;
+  max-height: 30dvh;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   pointer-events: auto;
 }
 
 .tag-chip {
-  max-width: 140px;
-  height: 24px;
-  padding: 0 10px;
+  max-width: 100%;
+  min-height: 24px;
+  flex-shrink: 0;
+  padding: 4px 10px;
   display: inline-flex;
   align-items: center;
-  overflow: hidden;
   border: 1px solid rgba(255, 255, 255, 0.2);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.12);
   color: #fff;
   font-size: 11.5px;
   font-weight: 600;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .tag-chip--add {
@@ -334,7 +337,7 @@ button {
 
 /* 底部动作面板 */
 .sheet-layer {
-  position: absolute;
+  position: fixed;
   inset: 0;
   z-index: 6;
   display: flex;
@@ -374,6 +377,8 @@ button {
 }
 .sheet__value { font-size: 20px; font-weight: 700; color: #5fd0c2; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .sheet__body { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.sheet__body { overscroll-behavior: contain; touch-action: pan-y; }
+.sheet__body > *, .sheet__head, .sheet__footer, .sheet__grip { flex-shrink: 0; }
 .sheet__footer { display: flex; gap: 8px; }
 .sheet__empty { margin: 0; font-size: 12px; color: #8fa0a5; }
 
@@ -431,11 +436,13 @@ button {
 .tag-picker { display: flex; flex-wrap: wrap; gap: 7px; }
 
 .tag-option {
-  height: 34px;
+  min-height: 34px;
+  max-width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 0 12px;
+  padding: 7px 12px;
+  overflow-wrap: anywhere;
   border: 1px solid #2a3234;
   border-radius: 17px;
   background: rgba(255, 255, 255, 0.05);
@@ -447,7 +454,7 @@ button {
 .tag-option.active { color: #e8eeee; }
 .tag-option--create { border-style: dashed; border-color: #2f6b63; color: #5fd0c2; }
 .tag-option--create:disabled { opacity: 0.6; }
-.tag-option__dot { width: 8px; height: 8px; border-radius: 2px; }
+.tag-option__dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 2px; }
 
 .media-kind-switch {
   display: grid;

@@ -98,7 +98,8 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.BrowserDownloadDirectory = strings.TrimSpace(input.BrowserDownloadDirectory)
 		settings.BrowserDownloadConcurrency = NormalizeBrowserDownloadConcurrency(input.BrowserDownloadConcurrency)
 
-		if err := tx.Save(&settings).Error; err != nil {
+		// 独立配置可能在读取 settings 后更新，禁止旧快照覆盖其所属字段。
+		if err := tx.Omit("JellyfinEnabled", "JellyfinPort", "JellyfinUsername", "JellyfinPasswordHash", "JellyfinServerID").Save(&settings).Error; err != nil {
 			return err
 		}
 		return syncShortVideoTags(tx)

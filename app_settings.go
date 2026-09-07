@@ -158,6 +158,9 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 }
 
 func (a *App) enterDatabaseRestoreMode() error {
+	if a.jellyfinServer != nil {
+		a.jellyfinServer.Stop()
+	}
 	if a.aiTaggingService != nil {
 		a.aiTaggingService.StopAndWait()
 	}
@@ -226,6 +229,9 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	a.resetImageSemanticIndexService()
 	a.resetImageAITaggingService()
 	a.startShortFeedServer(a.ctx)
+	if a.jellyfinServer != nil {
+		a.jellyfinServer.Start()
+	}
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		_ = a.configureLibraryWatcher(settings.LibraryWatchEnabled)
 		a.configureLocalMetadata(settings.LocalMetadataEnabled)

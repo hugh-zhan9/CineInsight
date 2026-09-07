@@ -98,6 +98,8 @@ export function ClearFaceData():Promise<services.FaceDataUsage>;
 
 export function ClearPlaybackProxies():Promise<services.PlaybackProxyUsage>;
 
+export function ConfigureJellyfin(arg1:services.JellyfinConfigInput):Promise<services.JellyfinStatus>;
+
 export function ConfirmCollectionSuggestion(arg1:number,arg2:string,arg3:Array<number>):Promise<services.CollectionDetail>;
 
 export function ConfirmFaceClusterAppend(arg1:number):Promise<void>;
@@ -223,6 +225,8 @@ export function GetImageInsights():Promise<services.ImageStats>;
 export function GetImageSemanticIndexStatus():Promise<services.ImageSemanticIndexStatus>;
 
 export function GetImageTags():Promise<Array<models.Tag>>;
+
+export function GetJellyfinStatus():Promise<services.JellyfinStatus>;
 
 export function GetLibraryCounts():Promise<services.LibraryCounts>;
 

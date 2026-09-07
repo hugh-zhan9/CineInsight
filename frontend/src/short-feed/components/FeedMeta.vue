@@ -3,7 +3,7 @@
     <h1>{{ item.name }}</h1>
     <p v-if="item.description" class="meta-description">{{ item.description }}</p>
     <p class="meta-line">{{ metaLine }}</p>
-    <div class="tag-row">
+    <div class="tag-row" role="region" aria-label="视频标签" tabindex="0" @wheel.stop @keydown.stop>
       <span
         v-for="tag in (item.tags || [])"
         :key="tag.id"

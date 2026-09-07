@@ -190,6 +190,10 @@ export function ClearPlaybackProxies() {
   return window['go']['main']['App']['ClearPlaybackProxies']();
 }
 
+export function ConfigureJellyfin(arg1) {
+  return window['go']['main']['App']['ConfigureJellyfin'](arg1);
+}
+
 export function ConfirmCollectionSuggestion(arg1, arg2, arg3) {
   return window['go']['main']['App']['ConfirmCollectionSuggestion'](arg1, arg2, arg3);
 }
@@ -440,6 +444,10 @@ export function GetImageSemanticIndexStatus() {
 
 export function GetImageTags() {
   return window['go']['main']['App']['GetImageTags']();
+}
+
+export function GetJellyfinStatus() {
+  return window['go']['main']['App']['GetJellyfinStatus']();
 }
 
 export function GetLibraryCounts() {

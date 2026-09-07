@@ -53,15 +53,18 @@
 	  </div>
     <p class="help-text">手机端 Feed 混编视频与图片：视频自动播放并有进度条，图片停在原地直到你划走，双击可在适屏与原图之间切换。</p>
     <p class="help-text">此页面仅面向本机/局域网直接访问，当前版本不启用登录或 PIN。</p>
+    <JellyfinSection />
   </div>
 </template>
 
 <script>
 import { GetShortFeedServerStatus } from '../../../wailsjs/go/main/App';
+import JellyfinSection from './JellyfinSection.vue';
 
 // 手机端浏览分区：短视频流服务的运行状态与局域网地址。
 export default {
   name: 'MobileSection',
+  components: { JellyfinSection },
   props: {
     form: { type: Object, required: true }
   },

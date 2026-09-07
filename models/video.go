@@ -103,6 +103,12 @@ type Tag struct {
 
 // Settings 应用设置
 type Settings struct {
+	// Jellyfin 配置只由独立配置入口维护，不进入通用设置写回。
+	JellyfinEnabled       bool    `json:"jellyfin_enabled"`
+	JellyfinPort          int     `json:"jellyfin_port"`
+	JellyfinUsername      string  `json:"jellyfin_username"`
+	JellyfinPasswordHash  string  `json:"-"`
+	JellyfinServerID      string  `json:"-"`
 	ID                    uint    `gorm:"primarykey" json:"id"`
 	ConfirmBeforeDelete   bool    `json:"confirm_before_delete"` // 删除前确认
 	DeleteOriginalFile    bool    `json:"delete_original_file"`  // 是否删除原始文件

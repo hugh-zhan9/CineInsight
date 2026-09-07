@@ -1,5 +1,6 @@
 <template>
-  <div class="sheet-layer" @click.self="$emit('close')">
+  <Teleport to="body">
+  <div class="sheet-layer" :style="viewportStyle" @click.self="$emit('close')">
     <section class="sheet" role="dialog" :aria-label="title" @click.stop>
       <span class="sheet__grip" aria-hidden="true"></span>
       <header class="sheet__head">
@@ -18,6 +19,7 @@
       </footer>
     </section>
   </div>
+  </Teleport>
 </template>
 
 <script>
@@ -29,14 +31,37 @@ export default {
     hint: { type: String, default: '' }
   },
   emits: ['close'],
+  data() {
+    return { viewportStyle: {} };
+  },
   mounted() {
     this.onKey = event => {
       if (event.key === 'Escape') this.$emit('close');
     };
     window.addEventListener('keydown', this.onKey);
+    // iOS 的软键盘只缩小 visualViewport，布局视口和 vh 不一定变化。
+    this.viewport = window.visualViewport;
+    this.updateViewport();
+    this.viewport?.addEventListener('resize', this.updateViewport);
+    this.viewport?.addEventListener('scroll', this.updateViewport);
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onKey);
+    this.viewport?.removeEventListener('resize', this.updateViewport);
+    this.viewport?.removeEventListener('scroll', this.updateViewport);
+  },
+  methods: {
+    updateViewport() {
+      if (!this.viewport) return;
+      this.viewportStyle = {
+        top: `${this.viewport.offsetTop}px`,
+        left: `${this.viewport.offsetLeft}px`,
+        width: `${this.viewport.width}px`,
+        height: `${this.viewport.height}px`,
+        bottom: 'auto',
+        right: 'auto'
+      };
+    }
   }
 };
 </script>

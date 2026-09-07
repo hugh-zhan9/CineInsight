@@ -295,6 +295,12 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - 下载队列 `services/browser_download_service.go`（**D-B04**、**D-B05**）：并发 1–4 默认 2，**不进空闲门也不占 `MediaWorkSlot`**（用户显式发起；`-c copy` 是网络/IO 密集，占重媒体槽会被超分饿死），后台任务登记表新 key `browser_download`。入口校验把外部输入一律当不可信：协议只认 http/https（ffmpeg 认得 `file:`/`concat:`/`pipe:`，放任等于交出读本机文件的能力，命令行另带 `-protocol_whitelist`）、请求头值禁 CR/LF、参数直接给 exec 不经 shell、文件名清洗后先用 `O_EXCL` 占住再下载（重名另起名字，绝不覆盖已有文件）。落盘后调既有 `SyncAffectedDirectories` 入库；**下载目录不自动加进扫描目录**，不在扫描范围时如实报「文件已保存但没有入库」——下载失败与入库失败是任务上两个不同字段。
 - 设置四列：`browser_bridge_enabled`（默认 false，零值即默认）、`browser_bridge_token`（**有意不走 `UpdateSettings`**，只由 `RegenerateBrowserBridgeToken` 写——走通用保存的话前端漏带一次就会把令牌抹空、已配对的插件静默断开）、`browser_download_directory`（为空拒绝建任务）、`browser_download_concurrency`（0 在这里是非法值而非"不限"，因此可以带 gorm default）。**D-B06**：令牌由桌面端生成、用户手工复制，不做自动配对与发现广播。
 
+### 2.28 Jellyfin 兼容入口与手机标签可见性（2026-09-07）
+- **范围由用户确认：** 局域网单账号、独立开关默认关闭、视频及标签/作品集/保存视图、原片直播放与收藏/进度同步；图片与实时转码不在首期。实现 `services/jellyfin_{server,auth,library,playback}.go`，App 生命周期及独立配置在 `app_jellyfin.go`，设置入口嵌入手机端浏览分区。完整边界见 `docs/jellyfin.md` 与 `docs/loopx/design/2026-09-07-jellyfin/需求设计文档.md`。
+- **身份与生命周期：** Settings 只存账号和 bcrypt 哈希等配置，通用保存显式 Omit Jellyfin 全部列；独立配置串行持久化/停服/启动。所有媒体入口都校验令牌和内网来源；会话内存有界，重启/关闭/配置变更失效。停服先关准入再取消连接并等待 handler 退出，数据库恢复前停服。默认端口 8096，冲突明确失败。
+- **所有权：** 复用 `applyLibraryFilter` 和 VideoService setter，外部 offset 分页只在适配层；没有扫描根时不暴露历史记录。HTTP 查询不补字幕索引、不扫全盘、不触发代理。播放协商校验客户端 direct-play profile；不支持/无法判断的条件不给可播放承诺。进度回报不增加播放账本事件。
+- **手机网页：** FeedSheet Teleport 到 body，按 visualViewport 缩放和平移定位，关闭时清理监听；输入和页脚不随内容 flex 压缩。FeedMeta 标签多行、长名换行、超出约三成视口可滚动，滚动手势不切换视频。组件回归通过；软键盘实际视觉与 Fileball 真机闭环尚未验收，不可称已验证客户端兼容。
+
 ## 3. 关键目录说明 (Directory Structure)
 
 - `/services`: **核心业务层**（Video, VideoDetail, MediaProbe, TechnicalBackfill, Person, Collection, Subtitle, SubtitleWorkbench, LibraryWatcher, LocalMetadata, AIQuality, Tag, Settings, Directory 服务）。
