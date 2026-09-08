@@ -28,14 +28,20 @@ func jellyfinToken(r *http.Request) string {
 			}
 		}
 	}
+	token := ""
 	for key, values := range r.URL.Query() {
-		if strings.EqualFold(key, "api_key") || strings.EqualFold(key, "ApiKey") {
-			if len(values) == 1 {
-				return values[0]
+		if !strings.EqualFold(key, "api_key") && !strings.EqualFold(key, "ApiKey") {
+			continue
+		}
+		for _, value := range values {
+			// Two different keys are ambiguous, so neither counts as a credential.
+			if token != "" && value != token {
+				return ""
 			}
+			token = value
 		}
 	}
-	return ""
+	return token
 }
 
 func (s *JellyfinServer) login(w http.ResponseWriter, r *http.Request, config models.Settings, generation uint64) {

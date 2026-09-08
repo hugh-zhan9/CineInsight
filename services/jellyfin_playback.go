@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
+	"log"
 	"math"
 	"mime"
 	"net/http"
@@ -29,6 +30,7 @@ func (s *JellyfinServer) mediaSources(r *http.Request, video models.Video) ([]ma
 	streams := []map[string]interface{}{}
 	nextIndex := 0
 	var audioIndex *int
+	audioDefault := false
 	for _, row := range rows {
 		streamType := map[string]string{"video": "Video", "audio": "Audio", "subtitle": "Subtitle"}[row.StreamType]
 		if streamType == "" {
@@ -39,9 +41,10 @@ func (s *JellyfinServer) mediaSources(r *http.Request, video models.Video) ([]ma
 		}
 		stream := map[string]interface{}{"Index": row.StreamIndex, "Type": streamType, "Codec": row.CodecName, "Language": row.Language, "Title": row.Title, "DisplayTitle": row.Title, "IsDefault": row.IsDefault, "IsExternal": false, "IsTextSubtitleStream": streamType == "Subtitle" && (row.CodecName == "subrip" || row.CodecName == "ass" || row.CodecName == "webvtt"), "Width": row.Width, "Height": row.Height, "Channels": row.Channels, "SampleRate": row.SampleRate, "BitRate": row.BitRate, "Profile": row.Profile, "PixelFormat": row.PixelFormat}
 		streams = append(streams, stream)
-		if streamType == "Audio" && (audioIndex == nil || row.IsDefault) {
+		// Like Jellyfin, the first default-flagged track is the primary audio track.
+		if streamType == "Audio" && (audioIndex == nil || (row.IsDefault && !audioDefault)) {
 			index := row.StreamIndex
-			audioIndex = &index
+			audioIndex, audioDefault = &index, row.IsDefault
 		}
 	}
 	id := jellyfinID(jellyVideo, video.ID)
@@ -153,7 +156,8 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 		if err := database.DB.WithContext(r.Context()).Where("video_id = ?", id).Order("stream_index").Find(&streams).Error; s.libraryError(w, err) {
 			return
 		}
-		if !jellyfinCanDirectPlay(*video, snapshot, streams, input.DeviceProfile, input.MaxStreamingBitrate) {
+		if ok, reason := jellyfinCanDirectPlay(*video, snapshot, streams, input.DeviceProfile, input.MaxStreamingBitrate); !ok {
+			log.Printf("[Jellyfin] PlaybackInfo 视频 %d 不可直放：%s", id, jellyfinLogSafe(reason, 240))
 			jellyfinNoCompatibleStream(w)
 			return
 		}
@@ -184,7 +188,16 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			jellyfinError(w, 404, "封面不可用")
 			return
 		}
-		jellyfinServeFile(w, r, media.Path, "image/jpeg")
+		jellyfinServeFile(w, r, media.Path, "image/jpeg", "")
+		return
+	}
+	if parts[0] == "items" && len(parts) == 3 && parts[2] == "download" {
+		// Fileball's download/"play via path" action fetches the original through this route.
+		contentType := mime.TypeByExtension(strings.ToLower(filepath.Ext(video.Path)))
+		if contentType == "" {
+			contentType = "application/octet-stream"
+		}
+		jellyfinServeFile(w, r, video.Path, contentType, filepath.Base(video.Path))
 		return
 	}
 	if parts[0] == "videos" && len(parts) == 3 && (parts[2] == "stream" || strings.HasPrefix(parts[2], "stream.")) {
@@ -204,7 +217,7 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 		if contentType == "" {
 			contentType = "application/octet-stream"
 		}
-		jellyfinServeFile(w, r, video.Path, contentType)
+		jellyfinServeFile(w, r, video.Path, contentType, "")
 		return
 	}
 	if parts[0] == "videos" && len(parts) == 6 && parts[2] == jellyfinID(jellyVideo, id) && parts[3] == "subtitles" && parts[5] == "stream.srt" {
@@ -227,13 +240,15 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			jellyfinError(w, 404, "字幕不存在")
 			return
 		}
-		jellyfinServeFile(w, r, jellyfinSubtitlePath(*video), "application/x-subrip; charset=utf-8")
+		jellyfinServeFile(w, r, jellyfinSubtitlePath(*video), "application/x-subrip; charset=utf-8", "")
 		return
 	}
 	jellyfinError(w, 404, "不支持的播放接口")
 }
 
-func jellyfinServeFile(w http.ResponseWriter, r *http.Request, path, contentType string) {
+// jellyfinServeFile streams one local file; a non-empty attachment name adds a download disposition
+// only once the file is known to be readable, so error bodies never carry it.
+func jellyfinServeFile(w http.ResponseWriter, r *http.Request, path, contentType, attachment string) {
 	file, err := os.Open(path)
 	if err != nil {
 		jellyfinError(w, 404, "媒体文件不可用")
@@ -244,6 +259,9 @@ func jellyfinServeFile(w http.ResponseWriter, r *http.Request, path, contentType
 	if err != nil || !info.Mode().IsRegular() {
 		jellyfinError(w, 404, "媒体文件不可用")
 		return
+	}
+	if attachment != "" {
+		w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": attachment}))
 	}
 	w.Header().Set("Content-Type", contentType)
 	http.ServeContent(w, r, info.Name(), info.ModTime(), file)
@@ -325,11 +343,12 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 
 // Profile negotiation is deliberately limited to original files. An unknown
 // condition is not evidence that the client can decode the source.
+// IsRequired defaults to true, matching Jellyfin's ProfileCondition constructor.
 type jellyfinProfileCondition struct {
 	Condition  string
 	Property   string
 	Value      string
-	IsRequired bool
+	IsRequired *bool
 }
 type jellyfinCodecProfile struct {
 	Type            string
@@ -350,22 +369,48 @@ type jellyfinDeviceProfile struct {
 func jellyfinNoCompatibleStream(w http.ResponseWriter) {
 	jellyfinJSON(w, map[string]interface{}{"MediaSources": []interface{}{}, "ErrorCode": "NoCompatibleStream"})
 }
-func jellyfinCodecMatches(list, value string) bool {
-	return list == "" || jellyfinCSVContains(list, value)
+
+// jellyfinCodecName folds Jellyfin's codec aliases so client profiles and ffprobe names compare.
+func jellyfinCodecName(name string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "h265" {
+		return "hevc"
+	}
+	return name
 }
-func jellyfinCanDirectPlay(video models.Video, snapshot models.VideoTechnicalMetadata, streams []models.MediaStream, profile *jellyfinDeviceProfile, maxBitrate *int64) bool {
+
+// jellyfinCodecMatches follows ContainerHelper.ContainsContainer: an empty list matches
+// everything and a leading "-" turns the list into an exclusion list.
+func jellyfinCodecMatches(list, value string) bool {
+	if list == "" {
+		return true
+	}
+	negative := strings.HasPrefix(list, "-")
+	value = jellyfinCodecName(value)
+	for _, entry := range strings.Split(strings.TrimPrefix(list, "-"), ",") {
+		if jellyfinCodecName(entry) == value {
+			return !negative
+		}
+	}
+	return negative
+}
+
+// jellyfinCanDirectPlay reports whether the original file satisfies the client profile and,
+// when it does not, a reason built only from codec, container and condition names (D-03).
+func jellyfinCanDirectPlay(video models.Video, snapshot models.VideoTechnicalMetadata, streams []models.MediaStream, profile *jellyfinDeviceProfile, maxBitrate *int64) (bool, string) {
 	var mainVideo, mainAudio *models.MediaStream
 	for i := range streams {
 		stream := &streams[i]
 		if stream.StreamType == "video" && !stream.IsAttachedPic && mainVideo == nil {
 			mainVideo = stream
 		}
-		if stream.StreamType == "audio" && (mainAudio == nil || stream.IsDefault) {
+		// Like Jellyfin, the first default-flagged track is the primary audio track.
+		if stream.StreamType == "audio" && (mainAudio == nil || (stream.IsDefault && !mainAudio.IsDefault)) {
 			mainAudio = stream
 		}
 	}
 	if mainVideo == nil {
-		return false
+		return false, "技术快照中没有视频流"
 	}
 	bitrate := int64(0)
 	if snapshot.TotalBitRate != nil {
@@ -379,57 +424,94 @@ func jellyfinCanDirectPlay(video models.Video, snapshot models.VideoTechnicalMet
 	}
 	for _, limit := range limits {
 		if limit != nil && (*limit < 0 || (*limit > 0 && (bitrate <= 0 || bitrate > *limit))) {
-			return false
+			return false, fmt.Sprintf("码率 %d 不满足客户端上限 %d", bitrate, *limit)
 		}
 	}
 	if profile == nil {
-		return true
+		return true, ""
 	}
 	container := strings.TrimPrefix(strings.ToLower(filepath.Ext(video.Path)), ".")
+	audioCodec := ""
+	if mainAudio != nil {
+		audioCodec = mainAudio.CodecName
+	}
 	matched := false
 	for _, direct := range profile.DirectPlayProfiles {
 		if !strings.EqualFold(direct.Type, "Video") || !jellyfinCodecMatches(direct.Container, container) || !jellyfinCodecMatches(direct.VideoCodec, mainVideo.CodecName) {
 			continue
 		}
-		if mainAudio != nil && !jellyfinCodecMatches(direct.AudioCodec, mainAudio.CodecName) {
+		if mainAudio != nil && !jellyfinCodecMatches(direct.AudioCodec, audioCodec) {
 			continue
 		}
 		matched = true
 		break
 	}
 	if !matched {
-		return false
+		return false, fmt.Sprintf("DirectPlayProfiles 不含 container=%s video=%s audio=%s", container, mainVideo.CodecName, audioCodec)
 	}
 	for _, restriction := range append(append([]jellyfinCodecProfile{}, profile.CodecProfiles...), profile.ContainerProfiles...) {
 		if !jellyfinCodecMatches(restriction.Container, container) {
 			continue
 		}
+		// Jellyfin consults only Video and VideoAudio profiles for video items; SubContainer only
+		// replaces Container for hls transcoding profiles, so the Container check above already decides.
 		stream := mainVideo
-		if strings.EqualFold(restriction.Type, "VideoAudio") || strings.EqualFold(restriction.Type, "Audio") {
+		switch {
+		case strings.EqualFold(restriction.Type, "VideoAudio"):
 			stream = mainAudio
+		case restriction.Type == "" || strings.EqualFold(restriction.Type, "Video"):
+		default:
+			continue
 		}
 		if stream == nil || !jellyfinCodecMatches(restriction.Codec, stream.CodecName) {
 			continue
 		}
-		if restriction.SubContainer != "" {
-			return false
+		// ApplyConditions decide whether the profile applies, using the same unknown-value rules.
+		applies := true
+		for _, condition := range restriction.ApplyConditions {
+			if !jellyfinMeetsCondition(video, *stream, streams, condition) {
+				applies = false
+				break
+			}
 		}
-		// Conditional-profile predicates require metadata that this model may not store.
-		// Unsupported predicates must fail closed rather than silently skipping a limit.
-		if len(restriction.ApplyConditions) > 0 {
-			return false
+		if !applies {
+			continue
 		}
 		for _, condition := range restriction.Conditions {
-			if !jellyfinMeetsCondition(video, *stream, condition) {
-				return false
+			if !jellyfinMeetsCondition(video, *stream, streams, condition) {
+				return false, fmt.Sprintf("%s profile codec=%s 条件不成立：%s %s %s", restriction.Type, stream.CodecName, condition.Property, condition.Condition, condition.Value)
 			}
 		}
 	}
-	return true
+	return true, ""
 }
-func jellyfinMeetsCondition(video models.Video, stream models.MediaStream, c jellyfinProfileCondition) bool {
+
+// jellyfinMeetsCondition mirrors Jellyfin's ConditionProcessor: a value this model cannot
+// determine satisfies the condition only when the client marked it IsRequired=false.
+func jellyfinMeetsCondition(video models.Video, stream models.MediaStream, streams []models.MediaStream, c jellyfinProfileCondition) bool {
+	required := c.IsRequired == nil || *c.IsRequired
 	var value string
-	switch strings.ToLower(c.Property) {
+	switch property := strings.ToLower(c.Property); property {
+	case "numaudiostreams", "numvideostreams":
+		count := 0
+		for _, s := range streams {
+			if (property == "numaudiostreams" && s.StreamType == "audio") || (property == "numvideostreams" && s.StreamType == "video" && !s.IsAttachedPic) {
+				count++
+			}
+		}
+		value = strconv.Itoa(count)
+	case "issecondaryaudio":
+		// Only the default audio track is negotiated, so it is never the secondary one.
+		value = "false"
+	case "videorange":
+		if stream.IsHDR != nil {
+			value = map[bool]string{true: "HDR", false: "SDR"}[*stream.IsHDR]
+		}
+	case "videorangetype":
+		// The HDR flavour (HDR10/HLG/DOVI) is not stored, so only SDR is a known value.
+		if stream.IsHDR != nil && !*stream.IsHDR {
+			value = "SDR"
+		}
 	case "width":
 		if stream.Width != nil {
 			value = strconv.Itoa(*stream.Width)
@@ -470,10 +552,10 @@ func jellyfinMeetsCondition(video models.Video, stream models.MediaStream, c jel
 			}
 		}
 	default:
-		return false
+		// Properties this model does not store (IsAnamorphic, VideoLevel, …) stay unknown.
 	}
 	if value == "" {
-		return !c.IsRequired
+		return !required
 	}
 	switch strings.ToLower(c.Condition) {
 	case "equals":

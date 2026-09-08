@@ -103,9 +103,16 @@ func (s *JellyfinServer) views(r *http.Request) ([]map[string]interface{}, error
 func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if user := jellyfinParam(r.URL.Query(), "UserId"); user != "" && strings.ReplaceAll(user, "-", "") != jellyfinUserID {
-		jellyfinError(w, 403, "用户无效")
-		return
+	for key, users := range r.URL.Query() {
+		if !strings.EqualFold(key, "UserId") {
+			continue
+		}
+		for _, user := range users {
+			if user != "" && strings.ReplaceAll(user, "-", "") != jellyfinUserID {
+				jellyfinError(w, 403, "用户无效")
+				return
+			}
+		}
 	}
 	if len(parts) > 1 && parts[0] == "users" {
 		if strings.ReplaceAll(parts[1], "-", "") != jellyfinUserID {
@@ -129,12 +136,26 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 			path = "/" + strings.Join(parts, "/")
 		}
 	}
-	if strings.HasPrefix(path, "/sessions/playing") || strings.HasPrefix(path, "/videos/") || (len(parts) >= 3 && parts[0] == "items" && (parts[2] == "playbackinfo" || parts[2] == "images")) {
+	if strings.HasPrefix(path, "/sessions/playing") || strings.HasPrefix(path, "/videos/") || (len(parts) >= 3 && parts[0] == "items" && (parts[2] == "playbackinfo" || parts[2] == "images" || parts[2] == "download")) {
 		s.servePlayback(w, r, parts)
+		return
+	}
+	if len(parts) == 2 && parts[0] == "displaypreferences" {
+		s.serveDisplayPreferences(w, r, parts[1])
 		return
 	}
 	if r.Method != "GET" && r.Method != "HEAD" {
 		jellyfinError(w, 405, "此接口不支持该方法")
+		return
+	}
+	// Fileball's home and detail screens query these; this library has no series, studios or
+	// exposed people, so they get Jellyfin's empty answers rather than a 404.
+	if path == "/shows/nextup" || path == "/studios" || path == "/persons" || path == "/artists" || path == "/artists/albumartists" {
+		jellyfinJSON(w, jellyfinResult([]map[string]interface{}{}, 0, 0))
+		return
+	}
+	if path == "/movies/recommendations" {
+		jellyfinJSON(w, []interface{}{})
 		return
 	}
 	if path == "/quickconnect/enabled" {
@@ -148,14 +169,17 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 	if path == "/items" || path == "/items/latest" || path == "/items/resume" || path == "/genres" || path == "/tags" {
 		q := r.URL.Query()
 		if path == "/items/latest" {
-			q.Set("SortBy", "DateCreated")
-			q.Set("SortOrder", "Descending")
+			jellyfinSetParam(q, "SortBy", "DateCreated")
+			jellyfinSetParam(q, "SortOrder", "Descending")
 		}
 		if path == "/items/resume" {
-			q.Set("IsResumable", "true")
+			jellyfinSetParam(q, "IsResumable", "true")
 		}
 		if path == "/genres" || path == "/tags" {
-			q.Set("ParentId", jellyfinID(jellyGroup, 2))
+			// These endpoints enumerate tag folders; Recursive/IncludeItemTypes describe their contents.
+			jellyfinSetParam(q, "ParentId", jellyfinID(jellyGroup, 2))
+			jellyfinDeleteParam(q, "Recursive")
+			jellyfinDeleteParam(q, "IncludeItemTypes")
 		}
 		items, total, start, err := s.listItems(r, q)
 		if s.libraryError(w, err) {
@@ -193,6 +217,23 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jellyfinError(w, 404, "不支持的 Jellyfin 接口")
+}
+
+// serveDisplayPreferences answers the per-client view settings Jellyfin stores for a user. The
+// desktop app owns view settings, so GET returns Jellyfin's defaults and POST is acknowledged
+// without being stored (D-02 V1.0.2).
+func (s *JellyfinServer) serveDisplayPreferences(w http.ResponseWriter, r *http.Request, id string) {
+	switch r.Method {
+	case "GET":
+		jellyfinJSON(w, map[string]interface{}{"Id": id, "SortBy": "SortName", "SortOrder": "Ascending", "RememberIndexing": false, "RememberSorting": false, "PrimaryImageHeight": 250, "PrimaryImageWidth": 250, "ScrollDirection": "Horizontal", "ShowBackdrop": true, "ShowSidebar": false, "CustomPrefs": map[string]string{}, "Client": jellyfinParam(r.URL.Query(), "client")})
+	case "POST":
+		var body map[string]interface{}
+		if jellyfinDecode(w, r, &body) {
+			w.WriteHeader(204)
+		}
+	default:
+		jellyfinError(w, 405, "此接口不支持该方法")
+	}
 }
 
 func (s *JellyfinServer) libraryError(w http.ResponseWriter, err error) bool {
@@ -249,7 +290,8 @@ func (s *JellyfinServer) folderByID(r *http.Request, kind string, id uint) (map[
 }
 
 func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]interface{}, int64, int, error) {
-	if err := jellyfinValidateQuery(q); err != nil {
+	q, err := jellyfinNormalizeQuery(q)
+	if err != nil {
 		return nil, 0, 0, err
 	}
 	start, limit, err := jellyfinPage(q)
@@ -270,10 +312,13 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 	if include == "boxset" && jellyfinParam(q, "ParentId") == "" {
 		kind, id = jellyGroup, 1
 	}
-	if kind == jellyGroup {
+	recursive, _ := strconv.ParseBool(jellyfinParam(q, "Recursive"))
+	wantsVideos := include == "" || jellyfinCSVContains(include, "movie") || jellyfinCSVContains(include, "video")
+	// Group folders list their children unless the client asks for the leaf videos underneath.
+	if kind == jellyGroup && !(recursive && wantsVideos) {
 		return s.listFolders(r, q, id, start, limit)
 	}
-	if include != "" && !jellyfinCSVContains(include, "movie") && !jellyfinCSVContains(include, "video") {
+	if !wantsVideos || jellyfinScopeEmpty(q, false) {
 		return []map[string]interface{}{}, 0, start, nil
 	}
 	filter := LibraryFilter{}
@@ -294,7 +339,7 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 		if err := json.Unmarshal([]byte(view.TagIDsJSON), &filter.TagIDs); err != nil {
 			return nil, 0, start, err
 		}
-	case jellyCollection:
+	case jellyCollection, jellyGroup:
 	default:
 		return nil, 0, start, errJellyfinQuery
 	}
@@ -303,8 +348,13 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 	if err != nil {
 		return nil, 0, start, err
 	}
-	if kind == jellyCollection {
+	switch {
+	case kind == jellyCollection:
 		query = query.Where("videos.id IN (?)", database.DB.Model(&models.CollectionVideo{}).Select("video_id").Where("collection_id = ?", id))
+	case kind == jellyGroup && id == 1:
+		query = query.Where("videos.id IN (?)", database.DB.Model(&models.CollectionVideo{}).Select("video_id"))
+	case kind == jellyGroup:
+		query = query.Where("videos.id IN (?)", database.DB.Table("video_tags").Select("video_id").Joins("JOIN tags ON tags.id = video_tags.tag_id").Where("tags.deleted_at IS NULL"))
 	}
 	// Additional client filters intersect the saved view instead of replacing it.
 	if search := jellyfinParam(q, "SearchTerm"); search != "" {
@@ -334,7 +384,7 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 		}
 	}
 	for _, f := range strings.Split(strings.ToLower(jellyfinParam(q, "Filters")), ",") {
-		switch f {
+		switch strings.TrimSpace(f) {
 		case "":
 		case "isfavorite":
 			query = query.Where("videos.is_favorite = ?", true)
@@ -344,15 +394,17 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 			query = query.Where("videos.is_watched = ?", false)
 		case "isresumable":
 			query = query.Where("videos.is_watched = ? AND videos.watch_position_seconds > 0", false)
+		case "isnotfolder":
+		case "isfolder":
+			query = query.Where("1 = 0")
 		default:
 			return nil, 0, start, errJellyfinQuery
 		}
 	}
+	// Several tag/genre names select the union, as Jellyfin's GetWhereClauses does.
 	for _, name := range []string{"Tags", "Genres"} {
 		if raw := jellyfinParam(q, name); raw != "" {
-			for _, tag := range strings.Split(raw, "|") {
-				query = query.Where("videos.id IN (?)", database.DB.Table("video_tags").Select("video_id").Joins("JOIN tags ON tags.id = video_tags.tag_id").Where("tags.deleted_at IS NULL AND tags.name = ?", tag))
-			}
+			query = query.Where("videos.id IN (?)", database.DB.Table("video_tags").Select("video_id").Joins("JOIN tags ON tags.id = video_tags.tag_id").Where("tags.deleted_at IS NULL AND tags.name IN ?", strings.Split(raw, "|")))
 		}
 	}
 	if raw := jellyfinParam(q, "TagIds"); raw != "" {
@@ -434,25 +486,30 @@ func (s *JellyfinServer) visibleVideo(r *http.Request, id uint) (*models.Video, 
 }
 
 func (s *JellyfinServer) orderVideos(query *gorm.DB, q url.Values, filter LibraryFilter, kind string, id uint) (*gorm.DB, error) {
-	sortBy := jellyfinParam(q, "SortBy")
-	direction := strings.ToLower(jellyfinParam(q, "SortOrder"))
-	if direction != "" && direction != "ascending" && direction != "descending" {
-		return nil, errJellyfinQuery
+	orders, err := jellyfinSortOrders(q)
+	if err != nil {
+		return nil, err
 	}
-	sqlDirection := " ASC"
-	if direction == "descending" {
-		sqlDirection = " DESC"
-	}
-	if sortBy != "" {
-		columns := map[string]string{"sortname": "LOWER(CASE WHEN videos.display_title <> '' THEN videos.display_title ELSE videos.name END)", "name": "LOWER(videos.name)", "datecreated": "videos.created_at", "dateplayed": "videos.last_played_at", "playcount": "videos.play_count", "runtime": "videos.duration", "communityrating": "videos.personal_rating"}
-		for _, sortKey := range strings.Split(strings.ToLower(sortBy), ",") {
-			column, ok := columns[sortKey]
+	if sortBy := jellyfinParam(q, "SortBy"); sortBy != "" {
+		// Keys with no counterpart in this model (ProductionYear, IsFolder, …) are ignored per D-02;
+		// every accepted key maps through this table, so client text never reaches the SQL.
+		columns := map[string]string{"sortname": "LOWER(CASE WHEN videos.display_title <> '' THEN videos.display_title ELSE videos.name END)", "name": "LOWER(videos.name)", "datecreated": "videos.created_at", "datelastcontentadded": "videos.created_at", "dateplayed": "videos.last_played_at", "playcount": "videos.play_count", "runtime": "videos.duration", "communityrating": "videos.personal_rating", "random": "RANDOM()"}
+		ordered := false
+		for i, sortKey := range strings.Split(strings.ToLower(sortBy), ",") {
+			column, ok := columns[strings.TrimSpace(sortKey)]
 			if !ok {
-				return nil, errJellyfinQuery
+				continue
 			}
-			query = query.Order(column + sqlDirection)
+			ordered = true
+			if column == "RANDOM()" {
+				query = query.Order(column)
+				continue
+			}
+			query = query.Order(column + jellyfinSortDirection(orders, i))
 		}
-		return query.Order("videos.id ASC"), nil
+		if ordered {
+			return query.Order("videos.id ASC"), nil
+		}
 	}
 	if kind == jellyCollection {
 		return query.Order(fmt.Sprintf("(SELECT position FROM collection_videos WHERE collection_id = %d AND video_id = videos.id) ASC", id)).Order("videos.id ASC"), nil
@@ -479,14 +536,49 @@ func (s *JellyfinServer) orderVideos(query *gorm.DB, q url.Values, filter Librar
 
 func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, start, limit int) ([]map[string]interface{}, int64, int, error) {
 	items := []map[string]interface{}{}
-	if sortBy := strings.ToLower(jellyfinParam(q, "SortBy")); sortBy != "" && sortBy != "sortname" && sortBy != "name" {
-		return nil, 0, start, errJellyfinQuery
+	orders, err := jellyfinSortOrders(q)
+	if err != nil {
+		return nil, 0, start, err
 	}
-	// Folder lists only support folder selection; reject video-only filters explicitly.
-	for _, key := range []string{"IsFavorite", "IsPlayed", "IsResumable", "Filters", "Tags", "Genres", "TagIds", "Ids", "ExcludeItemIds"} {
+	// Folders sort by name only; the SortOrder paired with the name key decides the direction.
+	// Without SortBy, SortOrder is a no-op, as in Jellyfin's GetOrderBy.
+	nameIndex := -1
+	for i, key := range strings.Split(strings.ToLower(jellyfinParam(q, "SortBy")), ",") {
+		if key = strings.TrimSpace(key); key == "sortname" || key == "name" {
+			nameIndex = i
+			break
+		}
+	}
+	// Tag and video ID selections do not apply to folders; reject them explicitly.
+	for _, key := range []string{"Tags", "Genres", "TagIds", "Ids", "ExcludeItemIds"} {
 		if jellyfinParam(q, key) != "" {
 			return nil, 0, start, errJellyfinQuery
 		}
+	}
+	// Folder DTOs always report IsFavorite=false and Played=false, so these selections resolve
+	// deterministically to the empty set or the whole list.
+	for _, key := range []string{"IsFavorite", "IsPlayed", "IsResumable"} {
+		if raw := jellyfinParam(q, key); raw != "" {
+			selected, err := strconv.ParseBool(raw)
+			if err != nil {
+				return nil, 0, start, errJellyfinQuery
+			}
+			if selected {
+				return items, 0, start, nil
+			}
+		}
+	}
+	for _, f := range strings.Split(strings.ToLower(jellyfinParam(q, "Filters")), ",") {
+		switch strings.TrimSpace(f) {
+		case "", "isfolder", "isunplayed":
+		case "isnotfolder", "isfavorite", "isplayed", "isresumable":
+			return items, 0, start, nil
+		default:
+			return nil, 0, start, errJellyfinQuery
+		}
+	}
+	if jellyfinScopeEmpty(q, true) {
+		return items, 0, start, nil
 	}
 	switch group {
 	case 1:
@@ -509,10 +601,11 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 		return nil, 0, start, gorm.ErrRecordNotFound
 	}
 	search := strings.ToLower(jellyfinParam(q, "SearchTerm"))
-	include := jellyfinParam(q, "IncludeItemTypes")
+	include, exclude := jellyfinParam(q, "IncludeItemTypes"), jellyfinParam(q, "ExcludeItemTypes")
 	filtered := items[:0]
 	for _, item := range items {
-		if include != "" && !jellyfinCSVContains(include, item["Type"].(string)) {
+		itemType := item["Type"].(string)
+		if (include != "" && !jellyfinCSVContains(include, itemType)) || jellyfinCSVContains(exclude, itemType) {
 			continue
 		}
 		if strings.Contains(strings.ToLower(item["Name"].(string)), search) {
@@ -520,11 +613,19 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 		}
 	}
 	items = filtered
-	if order := jellyfinParam(q, "SortOrder"); strings.EqualFold(order, "Descending") {
-		sort.SliceStable(items, func(i, j int) bool { return items[i]["Name"].(string) > items[j]["Name"].(string) })
-	} else if order != "" && !strings.EqualFold(order, "Ascending") {
-		return nil, 0, start, errJellyfinQuery
-	}
+	// Both directions use one comparator here, so DESC is the exact inverse of ASC regardless of
+	// the database collation; fixed-width hex IDs compare like the integers.
+	descending := nameIndex >= 0 && jellyfinSortDirection(orders, nameIndex) == " DESC"
+	sort.SliceStable(items, func(i, j int) bool {
+		a, b := strings.ToLower(items[i]["Name"].(string)), strings.ToLower(items[j]["Name"].(string))
+		if a == b {
+			a, b = items[i]["Id"].(string), items[j]["Id"].(string)
+		}
+		if descending {
+			return a > b
+		}
+		return a < b
+	})
 	total := len(items)
 	if start >= total || limit == 0 {
 		return []map[string]interface{}{}, int64(total), start, nil
@@ -572,31 +673,117 @@ func jellyfinCSVContains(list, value string) bool {
 	return false
 }
 
-func jellyfinValidateQuery(q url.Values) error {
-	// Metadata projection hints may be ignored because the DTO includes those fields.
-	allowed := strings.Fields("parentid startindex limit sortby sortorder searchterm includeitemtypes recursive isfavorite isplayed isresumable filters tags genres tagids ids excludeitemids userid fields enableimages imagetypelimit enableimagetypes enableuserdata enabletotalrecordcount api_key apikey")
-	seen := map[string]bool{}
-	for key, values := range q {
+// Projection hints only shape the DTO, which already carries every field; their values are ignored.
+var jellyfinHintParams = map[string]bool{"fields": true, "enableimages": true, "imagetypelimit": true, "enableimagetypes": true, "enableuserdata": true, "enabletotalrecordcount": true, "groupitems": true, "api_key": true, "apikey": true, "userid": true}
+
+// Semantic parameters are implemented by listItems/listFolders; anything else stays a 400 (D-02).
+var jellyfinSemanticParams = map[string]bool{"parentid": true, "startindex": true, "limit": true, "sortby": true, "sortorder": true, "searchterm": true, "includeitemtypes": true, "excludeitemtypes": true, "recursive": true, "isfavorite": true, "isplayed": true, "isresumable": true, "filters": true, "tags": true, "genres": true, "tagids": true, "ids": true, "excludeitemids": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "ismissing": true, "collapseboxsetitems": true}
+
+// List parameters may arrive as one delimited value or as repeated keys, like Jellyfin's
+// CommaDelimitedCollectionModelBinder accepts; the separator matches how each one is parsed.
+var jellyfinListParams = map[string]string{"includeitemtypes": ",", "excludeitemtypes": ",", "sortby": ",", "sortorder": ",", "filters": ",", "mediatypes": ",", "excludelocationtypes": ",", "locationtypes": ",", "tagids": ",", "ids": ",", "excludeitemids": ",", "fields": ",", "enableimagetypes": ",", "tags": "|", "genres": "|"}
+
+// jellyfinNormalizeQuery folds keys to lower case, merges repeated list parameters and rejects
+// unknown parameters or scalar parameters given twice with different values.
+func jellyfinNormalizeQuery(q url.Values) (url.Values, error) {
+	// Keys are visited in sorted order so case variants of one list parameter merge deterministically.
+	keys := make([]string, 0, len(q))
+	for key := range q {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	merged := url.Values{}
+	for _, key := range keys {
 		lower := strings.ToLower(key)
-		if seen[lower] || len(values) != 1 {
-			return errJellyfinQuery
+		if !jellyfinHintParams[lower] && !jellyfinSemanticParams[lower] {
+			return nil, errJellyfinQuery
 		}
-		seen[lower] = true
-		found := false
-		for _, candidate := range allowed {
-			if lower == candidate {
-				found = true
-				break
+		merged[lower] = append(merged[lower], q[key]...)
+	}
+	for key, values := range merged {
+		if separator, ok := jellyfinListParams[key]; ok {
+			merged[key] = []string{strings.Join(values, separator)}
+			continue
+		}
+		for _, value := range values[1:] {
+			if value != values[0] {
+				return nil, errJellyfinQuery
 			}
 		}
-		if !found {
-			return errJellyfinQuery
+		merged[key] = values[:1]
+	}
+	for _, name := range []string{"recursive", "ismissing", "collapseboxsetitems"} {
+		if value := merged.Get(name); value != "" {
+			if _, err := strconv.ParseBool(value); err != nil {
+				return nil, errJellyfinQuery
+			}
 		}
 	}
-	if value := jellyfinParam(q, "Recursive"); value != "" {
-		if _, err := strconv.ParseBool(value); err != nil {
-			return errJellyfinQuery
+	return merged, nil
+}
+
+func jellyfinDeleteParam(q url.Values, name string) {
+	for key := range q {
+		if strings.EqualFold(key, name) {
+			delete(q, key)
 		}
 	}
-	return nil
+}
+
+// jellyfinSetParam replaces every case variant of a parameter with one server-side value.
+func jellyfinSetParam(q url.Values, name, value string) {
+	jellyfinDeleteParam(q, name)
+	q.Set(name, value)
+}
+
+// jellyfinScopeEmpty evaluates the Jellyfin scope parameters this model can only satisfy
+// trivially: every exposed item is a present FileSystem video, and folders have no MediaType.
+func jellyfinScopeEmpty(q url.Values, folders bool) bool {
+	if raw := jellyfinParam(q, "MediaTypes"); raw != "" && (folders || !jellyfinCSVContains(raw, "Video")) {
+		return true
+	}
+	if raw := jellyfinParam(q, "LocationTypes"); raw != "" && !jellyfinCSVContains(raw, "FileSystem") {
+		return true
+	}
+	if jellyfinCSVContains(jellyfinParam(q, "ExcludeLocationTypes"), "FileSystem") {
+		return true
+	}
+	if missing, _ := strconv.ParseBool(jellyfinParam(q, "IsMissing")); missing {
+		return true
+	}
+	if exclude := jellyfinParam(q, "ExcludeItemTypes"); !folders && (jellyfinCSVContains(exclude, "Movie") || jellyfinCSVContains(exclude, "Video")) {
+		return true
+	}
+	return false
+}
+
+// jellyfinSortOrders validates SortOrder; entries pair with SortBy keys by position.
+func jellyfinSortOrders(q url.Values) ([]string, error) {
+	raw := jellyfinParam(q, "SortOrder")
+	if raw == "" {
+		return nil, nil
+	}
+	orders := strings.Split(strings.ToLower(raw), ",")
+	for i, order := range orders {
+		orders[i] = strings.TrimSpace(order)
+		if orders[i] != "ascending" && orders[i] != "descending" {
+			return nil, errJellyfinQuery
+		}
+	}
+	return orders, nil
+}
+
+// jellyfinSortDirection mirrors Jellyfin's RequestHelpers.GetOrderBy: the order at the same
+// position, else the first order, else ascending.
+func jellyfinSortDirection(orders []string, index int) string {
+	order := "ascending"
+	if index < len(orders) {
+		order = orders[index]
+	} else if len(orders) > 0 {
+		order = orders[0]
+	}
+	if order == "descending" {
+		return " DESC"
+	}
+	return " ASC"
 }

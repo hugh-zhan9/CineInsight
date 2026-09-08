@@ -76,9 +76,15 @@ func TestJellyfinBrowsePagingAndVisibility(t *testing.T) {
 	if len(items) != 0 {
 		t.Fatal("zero limit")
 	}
-	for _, query := range []string{"Limit=-1", "SortBy=name%3BDELETE", "Limit=0&SortBy=unsupported", "SortOrder=garbage", "IsFavorite=invalid", "StartIndex=999999999999999999999999"} {
+	for _, query := range []string{"Limit=-1", "SortOrder=garbage", "IsFavorite=invalid", "Recursive=maybe", "Unknown=1", "StartIndex=999999999999999999999999"} {
 		if w := jellyfinRequest(s, "GET", "/Items?"+query, token, ""); w.Code != 400 {
 			t.Fatalf("accepted %s: %d", query, w.Code)
+		}
+	}
+	// Unknown sort keys are ignored (D-02 V1.0.2); only the column table can reach ORDER BY.
+	for _, query := range []string{"SortBy=name%3BDELETE", "Limit=0&SortBy=unsupported"} {
+		if w := jellyfinRequest(s, "GET", "/Items?"+query, token, ""); w.Code != 200 {
+			t.Fatalf("rejected %s: %d %s", query, w.Code, w.Body)
 		}
 	}
 	w := jellyfinRequest(s, "GET", "/Items/"+jellyfinID(jellyVideo, first.ID), token, "")
@@ -296,9 +302,9 @@ func TestReviewJellyfinFilterContract(t *testing.T) {
 			}
 		}
 	}
-	w := jellyfinRequest(s, "GET", "/Items?ParentId="+jellyfinID(jellyGroup, 2)+"&SortBy=unsupported", token, "")
+	w := jellyfinRequest(s, "GET", "/Items?ParentId="+jellyfinID(jellyGroup, 2)+"&SortOrder=sideways", token, "")
 	if w.Code != 400 {
-		t.Errorf("unsupported folder sort accepted: %d", w.Code)
+		t.Errorf("invalid folder sort order accepted: %d", w.Code)
 	}
 	tag := models.Tag{Name: "folder-type-check"}
 	if err := database.DB.Create(&tag).Error; err != nil {

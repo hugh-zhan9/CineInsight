@@ -9,8 +9,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -226,12 +229,23 @@ type jellyfinIdentityKey struct{}
 // Handler puts the same authentication boundary around every resource route.
 func (s *JellyfinServer) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		recorder := &jellyfinStatusWriter{ResponseWriter: w}
+		w = recorder
+		path := strings.ToLower(strings.TrimSuffix(r.URL.Path, "/"))
+		for _, prefix := range []string{"/jellyfin", "/emby"} {
+			if strings.HasPrefix(path, prefix+"/") {
+				path = strings.TrimPrefix(path, prefix)
+				break
+			}
+		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Cache-Control", "no-store")
 		if !shortFeedRemoteAllowed(r.RemoteAddr) || !shortFeedSameOriginMutation(r) {
 			jellyfinError(w, 403, "访问来源不允许")
 			return
 		}
+		// Logging starts inside the LAN boundary so outside hosts cannot fill app.log.
+		defer jellyfinLogRequest(r.Method, path, r.URL.Query(), recorder)
 		s.mu.Lock()
 		config, generation := s.config, s.generation
 		if config.JellyfinEnabled {
@@ -243,13 +257,6 @@ func (s *JellyfinServer) Handler() http.Handler {
 			return
 		}
 		defer s.requests.Done()
-		path := strings.ToLower(strings.TrimSuffix(r.URL.Path, "/"))
-		for _, prefix := range []string{"/jellyfin", "/emby"} {
-			if strings.HasPrefix(path, prefix+"/") {
-				path = strings.TrimPrefix(path, prefix)
-				break
-			}
-		}
 		if path == "/system/info/public" && (r.Method == "GET" || r.Method == "HEAD") {
 			jellyfinJSON(w, s.systemInfo(config, r.Host))
 			return
@@ -321,7 +328,8 @@ func jellyfinError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{"Message": message})
 }
 func jellyfinDecode(w http.ResponseWriter, r *http.Request, out interface{}) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	// The raw writer lets MaxBytesReader keep its close-after-reply hint; errors still go through w.
+	r.Body = http.MaxBytesReader(jellyfinUnwrap(w), r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	if err := decoder.Decode(out); err != nil {
 		jellyfinError(w, 400, "请求 JSON 无效或超过 1 MiB")
@@ -332,4 +340,95 @@ func jellyfinDecode(w http.ResponseWriter, r *http.Request, out interface{}) boo
 		return false
 	}
 	return true
+}
+
+// jellyfinStatusWriter records the response status for the request log.
+type jellyfinStatusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *jellyfinStatusWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+func (w *jellyfinStatusWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(p)
+}
+
+// ReadFrom keeps http.ServeContent on the underlying sendfile path.
+func (w *jellyfinStatusWriter) ReadFrom(src io.Reader) (int64, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	if from, ok := w.ResponseWriter.(io.ReaderFrom); ok {
+		return from.ReadFrom(src)
+	}
+	return io.Copy(w.ResponseWriter, src)
+}
+
+// Unwrap follows the http.ResponseController convention.
+func (w *jellyfinStatusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func jellyfinUnwrap(w http.ResponseWriter) http.ResponseWriter {
+	if recorder, ok := w.(*jellyfinStatusWriter); ok {
+		return recorder.ResponseWriter
+	}
+	return w
+}
+
+// jellyfinLogSafe keeps one record on one line: control and non-printable runes become '?'
+// and the text is capped so a client cannot pad or forge log lines.
+func jellyfinLogSafe(text string, max int) string {
+	runes := []rune(text)
+	if len(runes) > max {
+		runes = append(runes[:max], '…')
+	}
+	for i, r := range runes {
+		if r < 0x20 || r == 0x7f || !unicode.IsPrint(r) {
+			runes[i] = '?'
+		}
+	}
+	return string(runes)
+}
+
+// Only enumerated parameters are logged with their values; everything else is logged by name.
+var jellyfinLoggedValues = map[string]bool{"sortby": true, "sortorder": true, "includeitemtypes": true, "excludeitemtypes": true, "filters": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "recursive": true, "limit": true, "startindex": true, "fields": true, "isfavorite": true, "isplayed": true, "isresumable": true, "ismissing": true, "collapseboxsetitems": true, "static": true, "enabledirectplay": true, "maxstreamingbitrate": true, "enableimages": true, "imagetypelimit": true, "enableimagetypes": true, "enabletotalrecordcount": true, "enableuserdata": true, "groupitems": true}
+
+// jellyfinLogRequest writes the route shape, status and parameter names (§九): IDs are masked,
+// and tokens, search terms and media paths never appear. Successful media transfers and
+// progress reports are too frequent to log; every rejected request is logged.
+func jellyfinLogRequest(method, path string, query url.Values, recorder *jellyfinStatusWriter) {
+	status := recorder.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if status < 400 && (strings.HasPrefix(path, "/videos/") || strings.Contains(path, "/images/") || strings.HasSuffix(path, "/download") || strings.HasPrefix(path, "/sessions/playing")) {
+		return
+	}
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		if compact := strings.ReplaceAll(segment, "-", ""); len(compact) == 32 && strings.Trim(compact, "0123456789abcdef") == "" {
+			segments[i] = "{id}"
+		}
+	}
+	params := make([]string, 0, len(query))
+	for key, values := range query {
+		if jellyfinLoggedValues[strings.ToLower(key)] {
+			params = append(params, jellyfinLogSafe(key+"="+strings.Join(values, "|"), 120))
+		} else {
+			params = append(params, jellyfinLogSafe(key, 40))
+		}
+	}
+	sort.Strings(params)
+	summary := jellyfinLogSafe(strings.Join(params, ","), 400)
+	if summary == "" {
+		summary = "-"
+	}
+	log.Printf("[Jellyfin] %s %s %d 参数=%s", jellyfinLogSafe(method, 16), jellyfinLogSafe(strings.Join(segments, "/"), 120), status, summary)
 }

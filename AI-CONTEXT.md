@@ -298,6 +298,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 ### 2.28 Jellyfin 兼容入口与手机标签可见性（2026-09-07）
 - **范围由用户确认：** 局域网单账号、独立开关默认关闭、视频及标签/作品集/保存视图、原片直播放与收藏/进度同步；图片与实时转码不在首期。实现 `services/jellyfin_{server,auth,library,playback}.go`，App 生命周期及独立配置在 `app_jellyfin.go`，设置入口嵌入手机端浏览分区。完整边界见 `docs/jellyfin.md` 与 `docs/loopx/design/2026-09-07-jellyfin/需求设计文档.md`。
 - **身份与生命周期：** Settings 只存账号和 bcrypt 哈希等配置，通用保存显式 Omit Jellyfin 全部列；独立配置串行持久化/停服/启动。所有媒体入口都校验令牌和内网来源；会话内存有界，重启/关闭/配置变更失效。停服先关准入再取消连接并等待 handler 退出，数据库恢复前停服。默认端口 8096，冲突明确失败。
+- **客户端兼容口径（2026-09-08，设计 V1.0.2）：** 真实客户端会带 `ExcludeLocationTypes`/`CollapseBoxSetItems`/`SortBy=…,ProductionYear` 等参数，也会在 CodecProfiles 里写本模型没有的属性；因此查询参数分投影提示（忽略）、语义参数（按 Jellyfin 语义实现，含空集情形；列表参数重复键合并）和未知参数（仍 400）三类，未知排序键忽略；profile 条件按 Jellyfin ConditionProcessor 语义（IsRequired 缺省 true、未知值看 IsRequired、ApplyConditions 决定适用、SubContainer 仅 hls 生效、Type=Audio 不生效、h265=hevc、「-」排除表）；标签/作品集组 Recursive 返回叶子视频。据 Fileball 1.4.13 二进制与本机真机回放补齐其首页/详情会调的 Items/{id}/Download（原片）、Shows/NextUp·Studios·Persons·Artists（空页）、Movies/Recommendations（空数组）、DisplayPreferences（GET 默认值、POST 204 不持久化）。来自内网的 Jellyfin API 请求（不含成功的流/图片/进度）记录路由形状+状态+参数名到 app.log，路径 ID 掩码、令牌/搜索词/路径不记录、控制字符与长度脱敏，用于取得 Fileball 真实调用清单。
 - **所有权：** 复用 `applyLibraryFilter` 和 VideoService setter，外部 offset 分页只在适配层；没有扫描根时不暴露历史记录。HTTP 查询不补字幕索引、不扫全盘、不触发代理。播放协商校验客户端 direct-play profile；不支持/无法判断的条件不给可播放承诺。进度回报不增加播放账本事件。
 - **手机网页：** FeedSheet Teleport 到 body，按 visualViewport 缩放和平移定位，关闭时清理监听；输入和页脚不随内容 flex 压缩。FeedMeta 标签多行、长名换行、超出约三成视口可滚动，滚动手势不切换视频。组件回归通过；软键盘实际视觉与 Fileball 真机闭环尚未验收，不可称已验证客户端兼容。
 
