@@ -32,6 +32,7 @@
         @media-error="onMediaError"
         @stage-tap="handleStageTap"
         @zoom-reset="resetPhotoZoom"
+        @native-fullscreen="isFullscreen = $event"
       />
 
       <FeedTopBar
@@ -39,9 +40,12 @@
         :muted="muted"
         :counter="counterText"
         :scope-label="scopeLabel"
+        :fullscreen-available="fullscreenAvailable"
+        :fullscreen="isFullscreen"
         @open-favorites="openFavorites"
         @toggle-muted="muted = !muted"
         @open-scope="openScopeSheet"
+        @toggle-fullscreen="toggleFullscreen"
       />
       <FeedMeta :visible="chromeVisible" :item="currentVideo" @open-tags="openTagSheet" />
       <FeedActionRail
@@ -102,19 +106,22 @@
       </template>
     </FeedSheet>
 
-    <FeedSheet v-if="sheet === 'tags'" title="标签" hint="点击切换，改动即时写入本地库" @close="sheet = null">
+    <FeedSheet v-if="sheet === 'tags'" title="标签" hint="点击切换，改动即时写入本地库" tall @close="sheet = null">
       <input v-model="tagKeyword" class="sheet-input" type="text" maxlength="64" placeholder="搜索或新建标签…" aria-label="搜索或新建标签" />
       <div class="tag-picker">
+        <!-- 自动标签（如「短视频」）只读展示：与桌面端看到同一套标签，但不能手动增删。 -->
         <button
           v-for="tag in visibleFeedTags"
           :key="tag.id"
           type="button"
           class="tag-option"
-          :class="{ active: isTagAttached(tag.id) }"
+          :class="{ active: isTagAttached(tag.id), 'tag-option--auto': tag.automatic }"
           :style="isTagAttached(tag.id) ? { backgroundColor: `${tag.color}44`, borderColor: `${tag.color}aa` } : null"
+          :disabled="tag.automatic"
+          :title="tag.automatic ? '自动标签，由系统维护' : null"
           @click="toggleTag(tag)"
         >
-          <span class="tag-option__dot" :style="{ backgroundColor: tag.color || '#8fa0a5' }"></span>{{ tag.name }}
+          <span class="tag-option__dot" :style="{ backgroundColor: tag.color || '#8fa0a5' }"></span>{{ tag.name }}<span v-if="tag.automatic" class="tag-option__auto">自动</span>
         </button>
         <!-- 搜不到就地新建：手机上不该为一个新标签回到桌面端。 -->
         <button
@@ -217,6 +224,14 @@ const FEED_HISTORY_LIMIT = 40;
 export default {
   name: 'ShortFeedApp',
   components: { FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, DeleteDialog, FeedSheet, FeedDots },
+  watch: {
+    // 标签搜索实时查服务端：每次输入变化都重新拉一次（100ms 内的连续按键合并成一次）。
+    tagKeyword(value) {
+      if (this.sheet !== 'tags') return;
+      clearTimeout(this.tagSearchTimer);
+      this.tagSearchTimer = setTimeout(() => this.loadFeedTags(value), 100);
+    }
+  },
   data() {
     return {
       // 保留浏览历史而不是只留当前一条：能往回划，右侧圆点的位置才是个真实的东西。
@@ -228,6 +243,9 @@ export default {
       mediaKindOptions: MEDIA_KIND_OPTIONS,
       feedTags: [],
       tagKeyword: '',
+      // 标签搜索实时查服务端：序号丢弃过期响应，定时器合并连续按键。
+      tagQuerySeq: 0,
+      tagSearchTimer: null,
       creatingTag: false,
       // 这一段触摸是在图片放大态开始的：touchstart 那一刻已经让给了原生平移与 pointer 路径，
       // 就算中途双击退出了放大，收尾的 touchend 也不能再当成手势处理。
@@ -263,7 +281,12 @@ export default {
       longPressActionInFlight: false,
       lastStageTapAt: 0,
       lastStageTapPoint: null,
-      photoZoomed: false
+      photoZoomed: false,
+      // 全屏：能用元素全屏（安卓 Chrome、iPad、桌面）就整页进全屏，滑动切换照常；
+      // iPhone Safari 只有 <video> 的系统播放器全屏，元数据到了才知道当前条目能不能进。
+      isFullscreen: false,
+      fullscreenSupported: false,
+      nativeFullscreenAvailable: false
     };
   },
   computed: {
@@ -287,9 +310,13 @@ export default {
       return Array.from({ length: 21 }, (_, step) => step * 0.5);
     },
     visibleFeedTags() {
+      // 服务端已按关键词筛过；这里再做一次即时预筛（等待响应期间不闪旧结果），
+      // 并把已打在当前条目上的标签排到最前，其余保持服务端的名字序。
       const keyword = this.tagKeyword.trim().toLowerCase();
-      if (!keyword) return this.feedTags;
-      return this.feedTags.filter(tag => tag.name.toLowerCase().includes(keyword));
+      const matched = keyword ? this.feedTags.filter(tag => tag.name.toLowerCase().includes(keyword)) : this.feedTags;
+      const attached = matched.filter(tag => this.isTagAttached(tag.id));
+      if (attached.length === 0) return matched;
+      return [...attached, ...matched.filter(tag => !this.isTagAttached(tag.id))];
     },
     canCreateTag() {
       const keyword = this.tagKeyword.trim().toLowerCase();
@@ -309,15 +336,25 @@ export default {
       if (!this.videoDuration) return 0;
       return Math.round((this.videoCurrentTime / this.videoDuration) * 1000);
     },
+    fullscreenAvailable() {
+      return this.fullscreenSupported || this.nativeFullscreenAvailable;
+    }
   },
   beforeUnmount() {
     this.clearControlsHideTimer();
     this.clearLongPressTimer();
     this.releaseWakeLock();
     document.removeEventListener('visibilitychange', this.handleVisibilityChange);
+    document.removeEventListener('fullscreenchange', this.syncFullscreen);
+    document.removeEventListener('webkitfullscreenchange', this.syncFullscreen);
+    clearTimeout(this.tagSearchTimer);
   },
   async mounted() {
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
+    this.fullscreenSupported = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
+    document.addEventListener('fullscreenchange', this.syncFullscreen);
+    document.addEventListener('webkitfullscreenchange', this.syncFullscreen);
+    this.syncFullscreen();
     await this.nextVideo();
     this.$el.focus();
   },
@@ -367,6 +404,7 @@ export default {
       this.scrubValue = 0;
       this.controlsVisible = false;
       this.photoZoomed = false;
+      this.nativeFullscreenAvailable = false;
       this.clearControlsHideTimer();
       const key = itemKey(video);
       if (!this.recentKeys.includes(key)) {
@@ -590,6 +628,40 @@ export default {
     onMediaLoaded() {
       if (this.isImageItem) return;
       this.syncVideoTime();
+      // iPhone Safari：没有元素全屏，但 <video> 元数据到了就能进系统播放器全屏。
+      this.nativeFullscreenAvailable = !this.fullscreenSupported && typeof this.player()?.webkitEnterFullscreen === 'function';
+    },
+    syncFullscreen() {
+      this.isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement);
+    },
+    async toggleFullscreen() {
+      this.showControls();
+      try {
+        if (document.fullscreenElement || document.webkitFullscreenElement) {
+          await (document.exitFullscreen?.() ?? document.webkitExitFullscreen?.());
+          return;
+        }
+        // 整页进全屏而不是只把 <video> 放大：面板、动作栏与滑动切换都要留在里面。
+        // 以 fullscreenEnabled 为准而不是方法存在与否：iPhone 上方法可能存在但永远被拒。
+        if (this.fullscreenSupported) {
+          const root = document.documentElement;
+          if (root.requestFullscreen) {
+            await root.requestFullscreen({ navigationUI: 'hide' });
+          } else if (root.webkitRequestFullscreen) {
+            root.webkitRequestFullscreen();
+          }
+          return;
+        }
+        // iPhone 只能进系统播放器：退出后回到本页，暂停态会把控件带出来。
+        const player = this.player();
+        if (typeof player?.webkitEnterFullscreen === 'function') {
+          player.webkitEnterFullscreen();
+        }
+      } catch (_err) {
+        // 浏览器拒绝（没有用户手势、iframe 策略等）时保持原样，不弹错误。
+      } finally {
+        if (this.isPlaying) this.scheduleControlsHide();
+      }
     },
     onMediaError() {
       if (!this.currentVideo) return;
@@ -774,11 +846,15 @@ export default {
       this.clearControlsHideTimer();
       await this.loadScopes();
     },
-    async loadFeedTags() {
+    async loadFeedTags(keyword = this.tagKeyword) {
+      const seq = ++this.tagQuerySeq;
       try {
-        const payload = await getFeedTags();
+        const payload = await getFeedTags(keyword);
+        // 更新的查询已经发出，这份结果过期了。
+        if (seq !== this.tagQuerySeq) return;
         this.feedTags = payload?.tags || [];
       } catch (err) {
+        if (seq !== this.tagQuerySeq) return;
         // 拉不到就沿用上一次的列表，别把面板清空；但要说一声，否则空面板像是真没标签。
         this.flashToast(`标签列表加载失败：${String(err.message || err)}`);
       }
@@ -853,7 +929,8 @@ export default {
       return (this.currentVideo?.tags || []).some(tag => tag.id === tagID);
     },
     async toggleTag(tag) {
-      if (!this.currentVideo) return;
+      // 自动标签由系统维护，面板只读展示。
+      if (!this.currentVideo || tag.automatic) return;
       const attached = !this.isTagAttached(tag.id);
       try {
         this.replaceCurrent(await setItemTag(this.currentVideo, tag.id, attached));

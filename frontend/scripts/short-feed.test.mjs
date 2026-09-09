@@ -135,9 +135,34 @@ assert.match(source, /event\.pointerType !== 'touch' \|\| this\.photoZoomed/, 'd
 assert.match(source, /short-feed-create-tag/, 'tag sheet should offer creating the searched tag');
 assert.match(source, /createFeedTag\(name\)/, 'creating a tag should go through the api client');
 assert.doesNotMatch(source, /if \(this\.feedTags\.length === 0\) await this\.loadFeedTags\(\)/, 'tag sheet must reload tags on every open');
+// 标签搜索实时查服务端：关键词随每次输入发出，过期响应按序号丢弃；自动标签只读展示。
+assert.match(api, /q=\$\{encodeURIComponent\(trimmed\)\}/, 'api client should send the tag search keyword');
+assert.match(source, /tagKeyword\(value\)\s*{[\s\S]*?loadFeedTags\(value\)/, 'typing in the tag search must query the server');
+assert.match(source, /seq !== this\.tagQuerySeq/, 'stale tag query responses must be discarded');
+assert.match(source, /:disabled="tag\.automatic"/, 'automatic tags are shown read-only');
+assert.match(source, /tall @close="sheet = null"/, 'tag sheet should use the tall variant');
+assert.match(sheet, /data-test="sheet-more"/, 'sheets must hint when more content is below the fold');
 for (const fn of ['getScopes', 'getFeedTags', 'createFeedTag', 'setRating', 'setWatched', 'setItemTag', 'restoreItem']) {
   assert.match(api, new RegExp(`export function ${fn}\\b`), `api client should expose ${fn}`);
 }
 assert.match(api, /if \(scope && scope !== 'all'\) params\.set\('scope', scope\)/, 'next-item requests should carry the scope');
+
+// ---- 2026-09-09 横屏素材 / 全屏 / 主屏幕启动 ----
+// 横屏素材完整显示：竖屏 feed 的 cover 裁切只会剩中间三分之一；方向以解码后的实际尺寸为准（含旋转元数据）。
+assert.match(stage, /'feed-video--landscape': landscape/, 'landscape videos need their own class');
+assert.match(stage, /el\.videoWidth > el\.videoHeight/, 'orientation should come from the decoded frame size, which honours rotation metadata');
+assert.match(css, /\.feed-video--landscape\s*{[^}]*object-fit:\s*contain;/s, 'landscape videos must be letterboxed, not cropped');
+assert.match(css, /@media \(orientation: landscape\) and \(pointer: coarse\)\s*{\s*\.feed-video\s*{[^}]*object-fit:\s*contain;/s, 'a rotated phone must not crop portrait videos either, while desktop keeps its rule');
+assert.match(stage, /webkitendfullscreen/, 'iPhone native fullscreen must report its exit so the toggle state follows');
+// 全屏：有元素全屏就整页进全屏（面板与滑动都留在里面），iPhone 只能走系统播放器全屏。
+assert.match(topBar, /toggle-fullscreen/, 'top bar should offer a fullscreen toggle');
+assert.match(topBar, /v-if="fullscreenAvailable"/, 'the toggle only shows where some fullscreen path exists');
+assert.match(source, /documentElement;[\s\S]{0,80}requestFullscreen/, 'fullscreen should target the whole page, not just the video');
+assert.match(source, /webkitEnterFullscreen/, 'iPhone Safari falls back to the native video fullscreen');
+assert.match(source, /addEventListener\('fullscreenchange', this\.syncFullscreen\)/, 'fullscreen state must follow the browser, not the button');
+assert.match(source, /removeEventListener\('fullscreenchange', this\.syncFullscreen\)/, 'fullscreen listener must be released on unmount');
+const shortHTML = readFileSync(new URL('../short.html', import.meta.url), 'utf8');
+assert.match(shortHTML, /apple-mobile-web-app-capable/, 'home-screen launch on iPhone needs the standalone meta tag');
+assert.match(shortHTML, /viewport-fit=cover/, 'standalone mode must keep drawing under the notch');
 
 console.log('short-feed tests passed');

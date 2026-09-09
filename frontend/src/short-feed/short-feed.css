@@ -741,3 +741,47 @@ button {
     right: 0;
   }
 }
+
+/* 列表型面板近全屏；滚动区外包一层以便叠放「还有更多」提示；滚动条常驻可见 */
+.sheet--tall { max-height: 94%; }
+.sheet__scroll { position: relative; min-height: 0; display: flex; flex-direction: column; }
+.sheet__body { flex: 1 1 auto; scrollbar-width: thin; scrollbar-color: #3a4547 transparent; }
+.sheet__body::-webkit-scrollbar { width: 6px; }
+.sheet__body::-webkit-scrollbar-thumb { background: #3a4547; border-radius: 3px; }
+.sheet__more {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 28px 0 6px;
+  text-align: center;
+  font-size: 12px;
+  color: #9fb0b3;
+  background: linear-gradient(to bottom, rgba(23, 29, 30, 0), #171d1e 62%);
+  pointer-events: none;
+}
+
+/* 自动标签只读：虚线边、稍暗、带「自动」角标 */
+.tag-option--auto { border-style: dashed; opacity: 0.72; cursor: default; }
+.tag-option__auto { margin-left: 2px; padding: 1px 5px; border: 1px solid #2a3234; border-radius: 6px; font-size: 10px; color: #8fa0a5; }
+
+/* 舞台标签行溢出提示 */
+.tag-row-wrap { position: relative; }
+.tag-row__more {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 14px 8px 2px 18px;
+  font-size: 11px;
+  color: #d7e0e2;
+  background: linear-gradient(to bottom, rgba(5, 5, 5, 0), rgba(5, 5, 5, 0.85) 60%);
+  pointer-events: none;
+}
+
+/* 横屏素材：竖屏 feed 默认的 cover 会把 16:9 画面裁到只剩中间三分之一，改为完整显示、上下留黑。
+   手机/平板转成横屏后，竖屏素材同理不能再左右裁掉大半；只限触屏设备（pointer: coarse），
+   桌面窗口几乎总是横向的，那里 ≥760px 的 cover 规则保持不变。放在文件末尾，压过上面的规则。 */
+.feed-video--landscape { object-fit: contain; }
+@media (orientation: landscape) and (pointer: coarse) {
+  .feed-video { object-fit: contain; }
+}

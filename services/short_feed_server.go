@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
@@ -271,7 +272,13 @@ func (s *ShortFeedHTTPServer) handleScopes(w http.ResponseWriter, r *http.Reques
 func (s *ShortFeedHTTPServer) handleTags(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
-		tags, err := s.feed.ListFeedTags()
+		// 搜索框每次输入都实时查这里；搜索词与标签名同一长度上限。
+		keyword := strings.TrimSpace(r.URL.Query().Get("q"))
+		if utf8.RuneCountInString(keyword) > shortFeedTagNameMaxRunes {
+			writeShortFeedError(w, http.StatusBadRequest, "tag_query_too_long", fmt.Sprintf("搜索词最多 %d 个字符", shortFeedTagNameMaxRunes))
+			return
+		}
+		tags, err := s.feed.ListFeedTags(keyword)
 		if err != nil {
 			writeShortFeedError(w, http.StatusInternalServerError, "tags_failed", err.Error())
 			return

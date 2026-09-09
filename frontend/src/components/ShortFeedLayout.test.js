@@ -69,4 +69,39 @@ describe('手机标签布局', () => {
     expect(preventDefault).not.toHaveBeenCalled();
     wrapper.unmount();
   });
+
+  it('面板内容超出可视区时提示还有更多，滚到底消失', async () => {
+    vi.stubGlobal('visualViewport', undefined);
+    const wrapper = mount(FeedSheet, { props: { title: '标签', tall: true }, slots: { default: '<div class="tag-picker"></div>' } });
+    const sheet = document.querySelector('.sheet');
+    expect(sheet.classList.contains('sheet--tall')).toBe(true);
+    const body = document.querySelector('.sheet__body');
+    expect(document.querySelector('[data-test="sheet-more"]')).toBeNull();
+    Object.defineProperty(body, 'scrollHeight', { configurable: true, value: 1200 });
+    Object.defineProperty(body, 'clientHeight', { configurable: true, value: 500 });
+    body.scrollTop = 0;
+    body.dispatchEvent(new Event('scroll'));
+    await nextTick();
+    expect(document.querySelector('[data-test="sheet-more"]')).not.toBeNull();
+    Object.defineProperty(body, 'scrollTop', { configurable: true, value: 700 });
+    body.dispatchEvent(new Event('scroll'));
+    await nextTick();
+    expect(document.querySelector('[data-test="sheet-more"]')).toBeNull();
+    wrapper.unmount();
+  });
+
+  it('舞台标签行溢出时提示更多标签', async () => {
+    const tags = Array.from({ length: 30 }, (_, id) => ({ id, name: `标签${id}` }));
+    const wrapper = mount(FeedMeta, { props: { item: { name: '视频', tags } } });
+    const row = wrapper.get('.tag-row').element;
+    expect(wrapper.find('[data-test="tag-row-more"]').exists()).toBe(false);
+    Object.defineProperty(row, 'scrollHeight', { configurable: true, value: 600 });
+    Object.defineProperty(row, 'clientHeight', { configurable: true, value: 200 });
+    await wrapper.get('.tag-row').trigger('scroll');
+    expect(wrapper.find('[data-test="tag-row-more"]').exists()).toBe(true);
+    Object.defineProperty(row, 'scrollTop', { configurable: true, value: 400 });
+    await wrapper.get('.tag-row').trigger('scroll');
+    expect(wrapper.find('[data-test="tag-row-more"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
 });

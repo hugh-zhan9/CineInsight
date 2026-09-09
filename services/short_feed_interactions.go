@@ -278,15 +278,22 @@ func (s *ShortFeedService) SetItemTag(ref ShortFeedMediaRef, tagID uint, attache
 	return s.reloadItem(ref)
 }
 
-// ListFeedTags 返回手机端标签面板可选的标签。自动标签不给手动增删，直接排除。
-func (s *ShortFeedService) ListFeedTags() ([]ShortFeedTagDTO, error) {
+// ListFeedTags 返回手机端标签面板的标签；keyword 非空时按名字子串（不区分大小写）实时筛选。
+// 自动标签也返回但标记 Automatic：面板只读展示、不给手动增删，这样手机端与桌面端看到的
+// 标签集合一致。automatic_kind 是后加的可空列，老标签这一列是 NULL，扫成 Go 零值即视为手工，
+// 不再用 automatic_kind = ” 过滤（那会把整批老标签漏掉）。
+func (s *ShortFeedService) ListFeedTags(keyword string) ([]ShortFeedTagDTO, error) {
+	query := database.DB.Order("name ASC")
+	if keyword = strings.TrimSpace(keyword); keyword != "" {
+		query = query.Where(`LOWER(name) LIKE ? ESCAPE '\'`, "%"+strings.ToLower(escapeSQLLike(keyword))+"%")
+	}
 	var tags []models.Tag
-	if err := database.DB.Where("automatic_kind = ?", "").Order("name ASC").Find(&tags).Error; err != nil {
+	if err := query.Find(&tags).Error; err != nil {
 		return nil, err
 	}
 	result := make([]ShortFeedTagDTO, 0, len(tags))
 	for _, tag := range tags {
-		result = append(result, ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color})
+		result = append(result, ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color, Automatic: tag.AutomaticKind != ""})
 	}
 	return result, nil
 }

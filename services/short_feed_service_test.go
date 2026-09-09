@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -1041,7 +1042,7 @@ func TestShortFeedRatingWatchedAndTagRoundTrip(t *testing.T) {
 		t.Fatalf("摘标签失败: %+v %v", dto, err)
 	}
 
-	tags, err := svc.ListFeedTags()
+	tags, err := svc.ListFeedTags("")
 	if err != nil || len(tags) != 1 || tags[0].Name != "夜景" {
 		t.Fatalf("标签列表错误: %+v %v", tags, err)
 	}
@@ -1073,9 +1074,59 @@ func TestShortFeedRatingWatchedAndTagRoundTrip(t *testing.T) {
 	if _, err := svc.CreateFeedTag("短视频"); !errors.Is(err, ErrShortFeedAutomaticTag) {
 		t.Fatalf("撞上自动标签名应被拒绝: %v", err)
 	}
-	tags, err = svc.ListFeedTags()
-	if err != nil || len(tags) != 3 {
-		t.Fatalf("新建后的手工标签应进入列表、自动标签仍排除: %+v %v", tags, err)
+	// 自动标签也进列表，但带 Automatic 标记供面板只读展示。
+	tags, err = svc.ListFeedTags("")
+	if err != nil || len(tags) != 4 {
+		t.Fatalf("新建后的手工标签应进入列表、自动标签只读出现: %+v %v", tags, err)
+	}
+	for _, tag := range tags {
+		if (tag.Name == "短视频") != tag.Automatic {
+			t.Fatalf("Automatic 标记错误: %+v", tag)
+		}
+	}
+	// automatic_kind 是后加的列：老库里早期标签这一列是 NULL，不能因此从手机端消失，也不算自动标签。
+	if err := database.DB.Exec("UPDATE tags SET automatic_kind = NULL WHERE name = ?", "街拍").Error; err != nil {
+		t.Fatalf("模拟老库 NULL 失败: %v", err)
+	}
+	tags, err = svc.ListFeedTags("")
+	if err != nil || len(tags) != 4 {
+		t.Fatalf("automatic_kind 为 NULL 的老标签应仍在列表中: %+v %v", tags, err)
+	}
+	found := false
+	for _, tag := range tags {
+		if tag.Name == "街拍" {
+			found = true
+			if tag.Automatic {
+				t.Fatalf("NULL automatic_kind 不是自动标签: %+v", tag)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("老标签「街拍」被 NULL 过滤掉了: %+v", tags)
+	}
+	// 关键词实时筛选：子串、不区分大小写、首尾空白忽略、LIKE 通配符按字面匹配。
+	for _, entry := range []struct {
+		keyword string
+		names   []string
+	}{
+		{"街", []string{"街拍"}},
+		{"  街拍  ", []string{"街拍"}},
+		{"视", []string{"短视频"}},
+		{"%", nil},
+		{"_", nil},
+		{"没有这个", nil},
+	} {
+		tags, err = svc.ListFeedTags(entry.keyword)
+		if err != nil {
+			t.Fatalf("按 %q 查询失败: %v", entry.keyword, err)
+		}
+		names := []string{}
+		for _, tag := range tags {
+			names = append(names, tag.Name)
+		}
+		if strings.Join(names, ",") != strings.Join(entry.names, ",") {
+			t.Fatalf("按 %q 查询得到 %v，期望 %v", entry.keyword, names, entry.names)
+		}
 	}
 
 	// 图片没有观看状态，明确拒绝而不是假装成功。
@@ -1243,6 +1294,22 @@ func TestShortFeedTagAndMediaHandlers(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"街拍"`) {
 		t.Fatalf("合法新建应 200 并回传标签，实际 %d %s", rec.Code, rec.Body.String())
 	}
+	// GET 支持 q 实时筛选；搜索词长度与标签名同一上限。
+	getTags := func(query string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodGet, "/short-api/tags"+query, nil)
+		rec := httptest.NewRecorder()
+		server.handleTags(rec, req)
+		return rec
+	}
+	if rec := getTags("?q=拍"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"name":"街拍"`) || !strings.Contains(rec.Body.String(), `"automatic":false`) {
+		t.Fatalf("按关键词查询应回传匹配标签，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := getTags("?q=" + url.QueryEscape("没有这个")); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"tags":[]`) {
+		t.Fatalf("无匹配应回空列表，实际 %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := getTags("?q=" + url.QueryEscape(strings.Repeat("长", shortFeedTagNameMaxRunes+1))); rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "tag_query_too_long") {
+		t.Fatalf("超长搜索词应 400，实际 %d %s", rec.Code, rec.Body.String())
+	}
 	if rec := post(`{"name":"街拍"}`, "", "application/json"); rec.Code != http.StatusOK {
 		t.Fatalf("同名再建应复用并 200，实际 %d %s", rec.Code, rec.Body.String())
 	}
@@ -1265,5 +1332,41 @@ func TestShortFeedTagAndMediaHandlers(t *testing.T) {
 	}
 	if rec := get("/short-api/feed/next?media=image"); rec.Code != http.StatusNotFound {
 		t.Fatalf("库里没有图片时仅图片应 404 no_eligible_videos，实际 %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// GIF 多半是动图：超过直出阈值后再降采样成 JPEG，手机端看到的就是一张不会动的静态图。
+// 不论大小，GIF 都要原样直出，并带正确的 Content-Type。
+func TestShortFeedAnimatedGIFIsAlwaysServedAsOriginal(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	svc := NewShortFeedService(&VideoService{})
+	svc.SetImageThumbnailService(NewImageThumbnailService(t.TempDir()))
+
+	bigPath := filepath.Join(root, "loop.gif")
+	if err := os.WriteFile(bigPath, make([]byte, shortFeedInlineImageMaxBytes+1024), 0644); err != nil {
+		t.Fatalf("写入大 GIF 失败: %v", err)
+	}
+	big := models.Image{Name: "loop.gif", Path: bigPath, Directory: root, Size: shortFeedInlineImageMaxBytes + 1024, Format: "gif"}
+	if err := database.DB.Create(&big).Error; err != nil {
+		t.Fatalf("创建 GIF 记录失败: %v", err)
+	}
+	media, err := svc.ResolveMedia(imageRef(big.ID))
+	if err != nil {
+		t.Fatalf("解析 GIF 失败: %v", err)
+	}
+	if media.Path != bigPath || media.MIME != "image/gif" {
+		t.Fatalf("大 GIF 应原样直出，实际 path=%q mime=%q", media.Path, media.MIME)
+	}
+	// 老库记录 Format 为空时按扩展名判定，结论一致。
+	legacy := models.Image{Name: "legacy.gif", Path: filepath.Join(root, "legacy.gif"), Directory: root, Size: shortFeedInlineImageMaxBytes + 1024}
+	if err := os.WriteFile(legacy.Path, make([]byte, shortFeedInlineImageMaxBytes+1024), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if media, err = svc.ResolveMedia(imageRef(legacy.ID)); err != nil || media.Path != legacy.Path || media.MIME != "image/gif" {
+		t.Fatalf("按扩展名判定的 GIF 也应直出: err=%v media=%+v", err, media)
 	}
 }

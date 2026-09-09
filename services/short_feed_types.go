@@ -73,6 +73,8 @@ type ShortFeedTagDTO struct {
 	ID    uint   `json:"id"`
 	Name  string `json:"name"`
 	Color string `json:"color"`
+	// Automatic 标签由系统维护（如「短视频」），面板只读展示、不能手动增删。
+	Automatic bool `json:"automatic"`
 }
 
 // ShortFeedItemDTO 是手机端拿到的一条内容。Duration 只对视频有意义，图片为 0。

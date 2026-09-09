@@ -93,7 +93,7 @@
 
       <div class="toolbar-row toolbar-row--tags">
         <span class="toolbar-row__label">标签</span>
-        <div class="tags-scroll-container">
+        <div class="tags-wrap">
           <button
             @click="$emit('clear-tags')"
             :class="['tag-chip', { active: selectedTags.length === 0 }]"
@@ -644,8 +644,10 @@ export default {
   flex-wrap: wrap;
 }
 
+/* 标签行：标签芯片多行铺开、全部可见；标签文字和两个按钮停在第一行 */
 .toolbar-row--tags {
   flex-wrap: nowrap;
+  align-items: flex-start;
 }
 
 .toolbar-row__label {
@@ -654,17 +656,17 @@ export default {
   font-size: 12px;
 }
 
-.tags-scroll-container {
+.toolbar-row--tags .toolbar-row__label { line-height: 26px; }
+
+.tags-wrap {
   display: flex;
   flex: 1;
+  flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
-  overflow-x: auto;
+  min-height: 26px;
   align-items: center;
-  scrollbar-width: none;
 }
-
-.tags-scroll-container::-webkit-scrollbar { display: none; }
 
 /* 三段器：搜索模式、列表/网格、行高共用 */
 .segmented {

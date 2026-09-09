@@ -254,7 +254,8 @@ func (s *ImageThumbnailService) ResolveImageFeedView(ctx context.Context, imageI
 
 	original := &ImageMedia{Path: img.Path, ModTime: sourceInfo.ModTime(), MIME: mimeByImageFormatAndPath(img.Format, img.Path)}
 	// 小图直出：为了省几十 KB 去转码反而更慢。
-	if decoder == imageDecoderFFmpeg && inlineOriginalMaxBytes > 0 && sourceInfo.Size() <= inlineOriginalMaxBytes {
+	// GIF 不论大小都直出：它多半是动图，降采样成 JPEG 只剩第一帧，手机上看到的就是"GIF 不会动"。
+	if decoder == imageDecoderFFmpeg && (original.MIME == "image/gif" || (inlineOriginalMaxBytes > 0 && sourceInfo.Size() <= inlineOriginalMaxBytes)) {
 		return original, nil
 	}
 

@@ -66,8 +66,11 @@ export function getScopes(media = 'all') {
   return requestJSON(`/short-api/feed/scopes${query}`);
 }
 
-export function getFeedTags() {
-  return requestJSON('/short-api/tags');
+// 标签搜索实时查服务端：关键词随每次输入一起发过去，由服务端在全量标签上筛。
+export function getFeedTags(keyword = '') {
+  const trimmed = String(keyword || '').trim();
+  const query = trimmed ? `?q=${encodeURIComponent(trimmed)}` : '';
+  return requestJSON(`/short-api/tags${query}`);
 }
 
 export function createFeedTag(name) {

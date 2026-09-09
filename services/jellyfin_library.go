@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -144,8 +145,16 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 		s.serveDisplayPreferences(w, r, parts[1])
 		return
 	}
+	if len(parts) == 2 && parts[0] == "items" && r.Method == "DELETE" {
+		s.deleteItem(w, r, parts[1])
+		return
+	}
 	if r.Method != "GET" && r.Method != "HEAD" {
 		jellyfinError(w, 405, "此接口不支持该方法")
+		return
+	}
+	if path == "/search/hints" {
+		s.searchHints(w, r)
 		return
 	}
 	// Fileball's home and detail screens query these; this library has no series, studios or
@@ -216,7 +225,108 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 		jellyfinJSON(w, item)
 		return
 	}
+	// Detail screens ask for extras this library does not model; Jellyfin answers these with
+	// empty collections for any visible item, never 404, so the client keeps rendering the item.
+	// Query parameters are not validated here: the answer is empty whatever they say, so there
+	// is no wrong-scope result to guard against (the D-02 concern).
+	if len(parts) == 3 && (parts[0] == "items" || parts[0] == "movies" || parts[0] == "shows") {
+		switch parts[2] {
+		case "specialfeatures", "localtrailers", "additionalparts", "themesongs", "themevideos", "similar", "intros":
+			kind, id, err := jellyfinParseID(parts[1])
+			if s.libraryError(w, err) {
+				return
+			}
+			if kind == jellyVideo {
+				_, err = s.visibleVideo(r, id)
+			} else {
+				_, err = s.folderByID(r, kind, id)
+			}
+			if s.libraryError(w, err) {
+				return
+			}
+			if parts[2] == "similar" || parts[2] == "intros" {
+				jellyfinJSON(w, jellyfinResult([]map[string]interface{}{}, 0, 0))
+			} else {
+				jellyfinJSON(w, []interface{}{})
+			}
+			return
+		}
+	}
 	jellyfinError(w, 404, "不支持的 Jellyfin 接口")
+}
+
+// searchHints answers Jellyfin's Search/Hints with the same visible videos and folders the item
+// list would return for the term; the hint shape is what search screens render.
+func (s *JellyfinServer) searchHints(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	term := strings.TrimSpace(jellyfinParam(q, "SearchTerm"))
+	if term == "" {
+		jellyfinError(w, 400, "缺少搜索词")
+		return
+	}
+	if raw := jellyfinParam(q, "IncludeMedia"); raw != "" {
+		includeMedia, err := strconv.ParseBool(raw)
+		if err != nil {
+			jellyfinError(w, 400, "不支持或无效的查询参数")
+			return
+		}
+		if !includeMedia {
+			jellyfinJSON(w, map[string]interface{}{"SearchHints": []interface{}{}, "TotalRecordCount": 0})
+			return
+		}
+	}
+	jellyfinSetParam(q, "SearchTerm", term)
+	jellyfinSetParam(q, "Recursive", "true")
+	items, total, _, err := s.listItems(r, q)
+	if s.libraryError(w, err) {
+		return
+	}
+	hints := make([]map[string]interface{}, 0, len(items))
+	for _, item := range items {
+		hint := map[string]interface{}{"Id": item["Id"], "ItemId": item["Id"], "Name": item["Name"], "MatchedTerm": term, "Type": item["Type"], "IsFolder": item["IsFolder"], "Artists": []interface{}{}, "PrimaryImageAspectRatio": item["PrimaryImageAspectRatio"]}
+		if item["IsFolder"] == false {
+			hint["MediaType"] = item["MediaType"]
+			hint["RunTimeTicks"] = item["RunTimeTicks"]
+			if tags, ok := item["ImageTags"].(map[string]string); ok {
+				hint["PrimaryImageTag"] = tags["Primary"]
+			}
+		}
+		hints = append(hints, hint)
+	}
+	jellyfinJSON(w, map[string]interface{}{"SearchHints": hints, "TotalRecordCount": total})
+}
+
+// deleteItem implements DELETE Items/{id} for videos (V1.0.3): the file moves to the library's
+// trash folder through the same VideoService path the desktop and phone feed use, so it stays
+// recoverable from the desktop trash view. Folders, views and tags cannot be deleted here.
+func (s *JellyfinServer) deleteItem(w http.ResponseWriter, r *http.Request, raw string) {
+	kind, id, err := jellyfinParseID(raw)
+	if s.libraryError(w, err) {
+		return
+	}
+	if kind != jellyVideo {
+		jellyfinError(w, 403, "只能删除视频，视图、标签与作品集不可删除")
+		return
+	}
+	// Not under s.writes: that lock keeps progress/favorite writes in arrival order, and moving a
+	// multi-GB file to the trash hashes the whole file first. VideoService serializes deletions
+	// itself (libraryPathMutationMu), so holding s.writes here would only stall other clients'
+	// progress reports. The session is re-checked so a revoked token cannot delete.
+	identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)
+	if !s.authorized(identity) {
+		jellyfinError(w, 401, "会话已失效")
+		return
+	}
+	if _, err := s.visibleVideo(r, id); s.libraryError(w, err) {
+		return
+	}
+	if err := s.video.DeleteVideo(id, true); err != nil {
+		// The error text can carry the media path; the desktop trash view shows the recorded reason.
+		log.Printf("[Jellyfin] 删除视频 %d 失败，详情见桌面回收站", id)
+		jellyfinError(w, 500, "删除失败，请在桌面端查看回收站状态")
+		return
+	}
+	w.WriteHeader(204)
 }
 
 // serveDisplayPreferences answers the per-client view settings Jellyfin stores for a user. The
@@ -401,6 +511,28 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 			return nil, 0, start, errJellyfinQuery
 		}
 	}
+	// Every exposed leaf is a Movie, so the item-kind flags resolve to the whole list or nothing.
+	for _, entry := range jellyfinKindFlags {
+		if raw := jellyfinParam(q, entry.name); raw != "" {
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				return nil, 0, start, errJellyfinQuery
+			}
+			if b != entry.movie {
+				query = query.Where("1 = 0")
+			}
+		}
+	}
+	// Alphabet-index parameters compare against the lower-cased sort name, like Jellyfin's SortName.
+	if raw := jellyfinParam(q, "NameStartsWith"); raw != "" {
+		query = query.Where(jellyfinSortNameExpr+" LIKE ? ESCAPE '\\'", strings.ToLower(escapeSQLLike(raw))+"%")
+	}
+	if raw := jellyfinParam(q, "NameStartsWithOrGreater"); raw != "" {
+		query = query.Where(jellyfinSortNameExpr+" >= ?", strings.ToLower(raw))
+	}
+	if raw := jellyfinParam(q, "NameLessThan"); raw != "" {
+		query = query.Where(jellyfinSortNameExpr+" < ?", strings.ToLower(raw))
+	}
 	// Several tag/genre names select the union, as Jellyfin's GetWhereClauses does.
 	for _, name := range []string{"Tags", "Genres"} {
 		if raw := jellyfinParam(q, name); raw != "" {
@@ -493,7 +625,7 @@ func (s *JellyfinServer) orderVideos(query *gorm.DB, q url.Values, filter Librar
 	if sortBy := jellyfinParam(q, "SortBy"); sortBy != "" {
 		// Keys with no counterpart in this model (ProductionYear, IsFolder, …) are ignored per D-02;
 		// every accepted key maps through this table, so client text never reaches the SQL.
-		columns := map[string]string{"sortname": "LOWER(CASE WHEN videos.display_title <> '' THEN videos.display_title ELSE videos.name END)", "name": "LOWER(videos.name)", "datecreated": "videos.created_at", "datelastcontentadded": "videos.created_at", "dateplayed": "videos.last_played_at", "playcount": "videos.play_count", "runtime": "videos.duration", "communityrating": "videos.personal_rating", "random": "RANDOM()"}
+		columns := map[string]string{"sortname": jellyfinSortNameExpr, "name": "LOWER(videos.name)", "datecreated": "videos.created_at", "datelastcontentadded": "videos.created_at", "dateplayed": "videos.last_played_at", "playcount": "videos.play_count", "runtime": "videos.duration", "communityrating": "videos.personal_rating", "random": "RANDOM()"}
 		ordered := false
 		for i, sortKey := range strings.Split(strings.ToLower(sortBy), ",") {
 			column, ok := columns[strings.TrimSpace(sortKey)]
@@ -577,6 +709,18 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 			return nil, 0, start, errJellyfinQuery
 		}
 	}
+	// Folders are neither movies nor series, so any item-kind flag set to true empties the list.
+	for _, entry := range jellyfinKindFlags {
+		if raw := jellyfinParam(q, entry.name); raw != "" {
+			selected, err := strconv.ParseBool(raw)
+			if err != nil {
+				return nil, 0, start, errJellyfinQuery
+			}
+			if selected {
+				return items, 0, start, nil
+			}
+		}
+	}
 	if jellyfinScopeEmpty(q, true) {
 		return items, 0, start, nil
 	}
@@ -601,6 +745,7 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 		return nil, 0, start, gorm.ErrRecordNotFound
 	}
 	search := strings.ToLower(jellyfinParam(q, "SearchTerm"))
+	startsWith, orGreater, lessThan := strings.ToLower(jellyfinParam(q, "NameStartsWith")), strings.ToLower(jellyfinParam(q, "NameStartsWithOrGreater")), strings.ToLower(jellyfinParam(q, "NameLessThan"))
 	include, exclude := jellyfinParam(q, "IncludeItemTypes"), jellyfinParam(q, "ExcludeItemTypes")
 	filtered := items[:0]
 	for _, item := range items {
@@ -608,9 +753,11 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 		if (include != "" && !jellyfinCSVContains(include, itemType)) || jellyfinCSVContains(exclude, itemType) {
 			continue
 		}
-		if strings.Contains(strings.ToLower(item["Name"].(string)), search) {
-			filtered = append(filtered, item)
+		name := strings.ToLower(item["Name"].(string))
+		if !strings.Contains(name, search) || !strings.HasPrefix(name, startsWith) || (orGreater != "" && name < orGreater) || (lessThan != "" && name >= lessThan) {
+			continue
 		}
+		filtered = append(filtered, item)
 	}
 	items = filtered
 	// Both directions use one comparator here, so DESC is the exact inverse of ASC regardless of
@@ -649,19 +796,40 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[stri
 	for _, tag := range video.Tags {
 		tags = append(tags, tag.Name)
 	}
-	item := map[string]interface{}{"Id": jellyfinID(jellyVideo, video.ID), "ServerId": serverID, "Name": name, "SortName": name, "OriginalTitle": video.OriginalTitle, "Type": "Movie", "MediaType": "Video", "IsFolder": false, "LocationType": "FileSystem", "RunTimeTicks": int64(video.Duration * 1e7), "Size": video.Size, "Overview": video.Description, "Tags": tags, "Genres": tags, "DateCreated": video.CreatedAt.UTC().Format(time.RFC3339), "UserData": jellyfinUserData(video), "ImageTags": map[string]string{"Primary": strconv.FormatInt(video.UpdatedAt.UnixNano(), 16)}, "PrimaryImageAspectRatio": 16.0 / 9.0}
+	// CanDelete/CanDownload are what clients gate their delete and download actions on; deletion
+	// moves the file to the library trash (V1.0.3), the same path the desktop and phone feed use.
+	item := map[string]interface{}{"Id": jellyfinID(jellyVideo, video.ID), "ServerId": serverID, "Name": name, "SortName": name, "OriginalTitle": video.OriginalTitle, "Type": "Movie", "MediaType": "Video", "VideoType": "VideoFile", "IsFolder": false, "LocationType": "FileSystem", "PlayAccess": "Full", "CanDelete": true, "CanDownload": true, "RunTimeTicks": int64(video.Duration * 1e7), "Size": video.Size, "Overview": video.Description, "Tags": tags, "Genres": tags, "DateCreated": video.CreatedAt.UTC().Format(time.RFC3339), "UserData": jellyfinUserData(video), "ImageTags": map[string]string{"Primary": strconv.FormatInt(video.UpdatedAt.UnixNano(), 16)}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 16.0 / 9.0, "People": []interface{}{}, "Studios": []interface{}{}, "Chapters": []interface{}{}, "Taglines": []interface{}{}, "ExternalUrls": []interface{}{}, "ProviderIds": map[string]string{}, "MediaSourceCount": 1}
 	if video.PersonalRating != nil {
 		item["CommunityRating"] = *video.PersonalRating
 	}
-	sources, err := s.mediaSources(r, video)
+	sources, summary, err := s.mediaSources(r, video)
 	if err != nil {
 		return nil, err
 	}
+	// Jellyfin repeats the stream list and its derived facts at the top level; Fileball's detail
+	// screen reads MediaStreams from the item, not from MediaSources.
 	item["MediaSources"] = sources
+	item["MediaStreams"] = summary.streams
+	item["Container"] = sources[0]["Container"]
+	item["HasSubtitles"] = summary.hasSubtitles
+	if summary.width > 0 && summary.height > 0 {
+		item["Width"], item["Height"] = summary.width, summary.height
+		item["AspectRatio"] = jellyfinAspectRatio(summary.width, summary.height)
+		// Jellyfin's IsHD is Height >= 720; the short side plays that role so portrait clips agree.
+		short := summary.width
+		if summary.height < short {
+			short = summary.height
+		}
+		item["IsHD"] = short >= 720
+	}
 	return item, nil
 }
 func jellyfinUserData(video models.Video) map[string]interface{} {
-	return map[string]interface{}{"Key": jellyfinID(jellyVideo, video.ID), "ItemId": jellyfinID(jellyVideo, video.ID), "IsFavorite": video.IsFavorite, "Played": video.IsWatched, "PlaybackPositionTicks": int64(video.WatchPositionSeconds * 1e7), "PlayCount": video.PlayCount}
+	data := map[string]interface{}{"Key": jellyfinID(jellyVideo, video.ID), "ItemId": jellyfinID(jellyVideo, video.ID), "IsFavorite": video.IsFavorite, "Played": video.IsWatched, "PlaybackPositionTicks": int64(video.WatchPositionSeconds * 1e7), "PlayCount": video.PlayCount}
+	if video.LastPlayedAt != nil {
+		data["LastPlayedDate"] = video.LastPlayedAt.UTC().Format(time.RFC3339)
+	}
+	return data
 }
 
 func jellyfinCSVContains(list, value string) bool {
@@ -674,10 +842,21 @@ func jellyfinCSVContains(list, value string) bool {
 }
 
 // Projection hints only shape the DTO, which already carries every field; their values are ignored.
-var jellyfinHintParams = map[string]bool{"fields": true, "enableimages": true, "imagetypelimit": true, "enableimagetypes": true, "enableuserdata": true, "enabletotalrecordcount": true, "groupitems": true, "api_key": true, "apikey": true, "userid": true}
+// The Search/Hints Include* switches are hints too: this library has no people, genres, studios or
+// artists to offer, and IncludeMedia is evaluated by searchHints before the list runs.
+var jellyfinHintParams = map[string]bool{"fields": true, "enableimages": true, "imagetypelimit": true, "enableimagetypes": true, "enableuserdata": true, "enabletotalrecordcount": true, "groupitems": true, "api_key": true, "apikey": true, "userid": true, "includepeople": true, "includemedia": true, "includegenres": true, "includestudios": true, "includeartists": true}
 
 // Semantic parameters are implemented by listItems/listFolders; anything else stays a 400 (D-02).
-var jellyfinSemanticParams = map[string]bool{"parentid": true, "startindex": true, "limit": true, "sortby": true, "sortorder": true, "searchterm": true, "includeitemtypes": true, "excludeitemtypes": true, "recursive": true, "isfavorite": true, "isplayed": true, "isresumable": true, "filters": true, "tags": true, "genres": true, "tagids": true, "ids": true, "excludeitemids": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "ismissing": true, "collapseboxsetitems": true}
+var jellyfinSemanticParams = map[string]bool{"parentid": true, "startindex": true, "limit": true, "sortby": true, "sortorder": true, "searchterm": true, "includeitemtypes": true, "excludeitemtypes": true, "recursive": true, "isfavorite": true, "isplayed": true, "isresumable": true, "filters": true, "tags": true, "genres": true, "tagids": true, "ids": true, "excludeitemids": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "ismissing": true, "collapseboxsetitems": true, "ismovie": true, "isseries": true, "isnews": true, "iskids": true, "issports": true, "namestartswith": true, "namestartswithorgreater": true, "namelessthan": true}
+
+// jellyfinKindFlags are Jellyfin's item-kind switches; only IsMovie describes this library's leaves.
+var jellyfinKindFlags = []struct {
+	name  string
+	movie bool
+}{{"IsMovie", true}, {"IsSeries", false}, {"IsNews", false}, {"IsKids", false}, {"IsSports", false}}
+
+// jellyfinSortNameExpr is the SQL for Jellyfin's SortName: the user title when set, else the file name.
+const jellyfinSortNameExpr = "LOWER(CASE WHEN videos.display_title <> '' THEN videos.display_title ELSE videos.name END)"
 
 // List parameters may arrive as one delimited value or as repeated keys, like Jellyfin's
 // CommaDelimitedCollectionModelBinder accepts; the separator matches how each one is parsed.

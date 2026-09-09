@@ -22,40 +22,61 @@ func jellyfinSubtitlePath(video models.Video) string {
 	return strings.TrimSuffix(video.Path, filepath.Ext(video.Path)) + ".srt"
 }
 
-func (s *JellyfinServer) mediaSources(r *http.Request, video models.Video) ([]map[string]interface{}, error) {
+// jellyfinStreamSummary is what the stream snapshot contributes to the item DTO besides the
+// MediaSource itself: Jellyfin repeats MediaStreams, Width/Height and HasSubtitles at the top level.
+type jellyfinStreamSummary struct {
+	streams      []map[string]interface{}
+	width        int
+	height       int
+	hasSubtitles bool
+}
+
+func (s *JellyfinServer) mediaSources(r *http.Request, video models.Video) ([]map[string]interface{}, jellyfinStreamSummary, error) {
 	var rows []models.MediaStream
 	if err := database.DB.WithContext(r.Context()).Where("video_id = ?", video.ID).Order("stream_index").Find(&rows).Error; err != nil {
-		return nil, err
+		return nil, jellyfinStreamSummary{}, err
 	}
-	streams := []map[string]interface{}{}
+	summary := jellyfinStreamSummary{streams: []map[string]interface{}{}}
 	nextIndex := 0
 	var audioIndex *int
 	audioDefault := false
 	for _, row := range rows {
-		streamType := map[string]string{"video": "Video", "audio": "Audio", "subtitle": "Subtitle"}[row.StreamType]
-		if streamType == "" {
+		stream := jellyfinStreamDTO(row)
+		if stream == nil {
 			continue
 		}
 		if row.StreamIndex >= nextIndex {
 			nextIndex = row.StreamIndex + 1
 		}
-		stream := map[string]interface{}{"Index": row.StreamIndex, "Type": streamType, "Codec": row.CodecName, "Language": row.Language, "Title": row.Title, "DisplayTitle": row.Title, "IsDefault": row.IsDefault, "IsExternal": false, "IsTextSubtitleStream": streamType == "Subtitle" && (row.CodecName == "subrip" || row.CodecName == "ass" || row.CodecName == "webvtt"), "Width": row.Width, "Height": row.Height, "Channels": row.Channels, "SampleRate": row.SampleRate, "BitRate": row.BitRate, "Profile": row.Profile, "PixelFormat": row.PixelFormat}
-		streams = append(streams, stream)
-		// Like Jellyfin, the first default-flagged track is the primary audio track.
-		if streamType == "Audio" && (audioIndex == nil || (row.IsDefault && !audioDefault)) {
-			index := row.StreamIndex
-			audioIndex, audioDefault = &index, row.IsDefault
+		summary.streams = append(summary.streams, stream)
+		switch row.StreamType {
+		case "video":
+			if !row.IsAttachedPic && summary.width == 0 && row.Width != nil && row.Height != nil {
+				summary.width, summary.height = *row.Width, *row.Height
+			}
+		case "audio":
+			// Like Jellyfin, the first default-flagged track is the primary audio track.
+			if audioIndex == nil || (row.IsDefault && !audioDefault) {
+				index := row.StreamIndex
+				audioIndex, audioDefault = &index, row.IsDefault
+			}
+		case "subtitle":
+			summary.hasSubtitles = true
 		}
+	}
+	if summary.width == 0 {
+		summary.width, summary.height = video.Width, video.Height
 	}
 	id := jellyfinID(jellyVideo, video.ID)
 	if info, err := os.Lstat(jellyfinSubtitlePath(video)); err == nil && info.Mode().IsRegular() {
-		streams = append(streams, map[string]interface{}{"Index": nextIndex, "Type": "Subtitle", "Codec": "srt", "IsDefault": false, "IsExternal": true, "IsTextSubtitleStream": true, "SupportsExternalStream": true, "DeliveryMethod": "External", "DeliveryUrl": fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/Stream.srt", id, id, nextIndex), "DisplayTitle": "外置字幕"})
+		summary.hasSubtitles = true
+		summary.streams = append(summary.streams, map[string]interface{}{"Index": nextIndex, "Type": "Subtitle", "Codec": "srt", "IsDefault": false, "IsForced": false, "IsExternal": true, "IsTextSubtitleStream": true, "SupportsExternalStream": true, "DeliveryMethod": "External", "DeliveryUrl": fmt.Sprintf("/Videos/%s/%s/Subtitles/%d/Stream.srt", id, id, nextIndex), "DisplayTitle": "外置字幕"})
 	}
-	source := map[string]interface{}{"Id": id, "Name": video.Name, "Path": video.Name, "Protocol": "File", "Type": "Default", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(video.Path)), "."), "Size": video.Size, "RunTimeTicks": int64(video.Duration * 1e7), "SupportsDirectPlay": true, "SupportsDirectStream": false, "SupportsTranscoding": false, "IsRemote": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": streams, "DirectStreamUrl": "/Videos/" + id + "/stream?Static=true", "DefaultAudioStreamIndex": audioIndex}
+	source := map[string]interface{}{"Id": id, "Name": video.Name, "Path": video.Name, "Protocol": "File", "Type": "Default", "Container": strings.TrimPrefix(strings.ToLower(filepath.Ext(video.Path)), "."), "Size": video.Size, "RunTimeTicks": int64(video.Duration * 1e7), "SupportsDirectPlay": true, "SupportsDirectStream": false, "SupportsTranscoding": false, "IsRemote": false, "RequiresOpening": false, "RequiresClosing": false, "MediaStreams": summary.streams, "DirectStreamUrl": "/Videos/" + id + "/stream?Static=true", "DefaultAudioStreamIndex": audioIndex}
 	if video.Duration > 0 {
 		source["Bitrate"] = int64(float64(video.Size) * 8 / video.Duration)
 	}
-	return []map[string]interface{}{source}, nil
+	return []map[string]interface{}{source}, summary, nil
 }
 
 func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, parts []string) {
@@ -161,7 +182,7 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			jellyfinNoCompatibleStream(w)
 			return
 		}
-		sources, err := s.mediaSources(r, *video)
+		sources, _, err := s.mediaSources(r, *video)
 		if s.libraryError(w, err) {
 			return
 		}
@@ -226,7 +247,7 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 			jellyfinError(w, 404, "字幕不存在")
 			return
 		}
-		sources, err := s.mediaSources(r, *video)
+		sources, _, err := s.mediaSources(r, *video)
 		if s.libraryError(w, err) {
 			return
 		}

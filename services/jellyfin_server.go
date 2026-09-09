@@ -309,7 +309,7 @@ func (s *JellyfinServer) systemInfo(config models.Settings, host string) map[str
 	return map[string]interface{}{"Id": config.JellyfinServerID, "ServerName": "CineInsight", "ProductName": "Jellyfin Server", "Version": "10.10.7", "StartupWizardCompleted": true, "LocalAddress": "http://" + host}
 }
 func (s *JellyfinServer) userDTO(config models.Settings) map[string]interface{} {
-	return map[string]interface{}{"Id": jellyfinUserID, "Name": config.JellyfinUsername, "ServerId": config.JellyfinServerID, "HasPassword": true, "HasConfiguredPassword": true, "EnableAutoLogin": false, "Configuration": map[string]interface{}{"SubtitleMode": "Default", "PlayDefaultAudioTrack": true}, "Policy": map[string]interface{}{"IsAdministrator": false, "IsDisabled": false, "EnableMediaPlayback": true, "EnableContentDeletion": false, "EnableAudioPlaybackTranscoding": false, "EnableVideoPlaybackTranscoding": false, "EnablePlaybackRemuxing": false, "EnableAllFolders": true}}
+	return map[string]interface{}{"Id": jellyfinUserID, "Name": config.JellyfinUsername, "ServerId": config.JellyfinServerID, "HasPassword": true, "HasConfiguredPassword": true, "EnableAutoLogin": false, "Configuration": map[string]interface{}{"SubtitleMode": "Default", "PlayDefaultAudioTrack": true}, "Policy": map[string]interface{}{"IsAdministrator": false, "IsDisabled": false, "EnableMediaPlayback": true, "EnableContentDeletion": true, "EnableContentDeletionFromFolders": []string{}, "EnableContentDownloading": true, "EnableAudioPlaybackTranscoding": false, "EnableVideoPlaybackTranscoding": false, "EnablePlaybackRemuxing": false, "EnableAllFolders": true}}
 }
 func jellyfinRandom(bytes int) (string, error) {
 	raw := make([]byte, bytes)
@@ -398,7 +398,7 @@ func jellyfinLogSafe(text string, max int) string {
 }
 
 // Only enumerated parameters are logged with their values; everything else is logged by name.
-var jellyfinLoggedValues = map[string]bool{"sortby": true, "sortorder": true, "includeitemtypes": true, "excludeitemtypes": true, "filters": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "recursive": true, "limit": true, "startindex": true, "fields": true, "isfavorite": true, "isplayed": true, "isresumable": true, "ismissing": true, "collapseboxsetitems": true, "static": true, "enabledirectplay": true, "maxstreamingbitrate": true, "enableimages": true, "imagetypelimit": true, "enableimagetypes": true, "enabletotalrecordcount": true, "enableuserdata": true, "groupitems": true}
+var jellyfinLoggedValues = map[string]bool{"sortby": true, "sortorder": true, "includeitemtypes": true, "excludeitemtypes": true, "filters": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "recursive": true, "limit": true, "startindex": true, "fields": true, "isfavorite": true, "isplayed": true, "isresumable": true, "ismissing": true, "collapseboxsetitems": true, "static": true, "enabledirectplay": true, "maxstreamingbitrate": true, "enableimages": true, "imagetypelimit": true, "enableimagetypes": true, "enabletotalrecordcount": true, "enableuserdata": true, "groupitems": true, "ismovie": true, "isseries": true, "isnews": true, "iskids": true, "issports": true, "includepeople": true, "includemedia": true, "includegenres": true, "includestudios": true, "includeartists": true}
 
 // jellyfinLogRequest writes the route shape, status and parameter names (§九): IDs are masked,
 // and tokens, search terms and media paths never appear. Successful media transfers and

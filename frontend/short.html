@@ -3,6 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <!-- iPhone：从主屏幕图标打开时去掉 Safari 地址栏，这是它唯一的整页全屏方式（安卓 Chrome 有元素全屏 API，
+       独立窗口另需 manifest，这里不做）。mobile-web-app-capable 只为让 Chrome 不再对 apple- 前缀告警。 -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="短视频" />
+  <meta name="theme-color" content="#050505" />
   <title>短视频 Feed</title>
 </head>
 <body>

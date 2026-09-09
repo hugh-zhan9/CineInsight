@@ -1,7 +1,7 @@
 <template>
   <Teleport to="body">
   <div class="sheet-layer" :style="viewportStyle" @click.self="$emit('close')">
-    <section class="sheet" role="dialog" :aria-label="title" @click.stop>
+    <section class="sheet" :class="{ 'sheet--tall': tall }" role="dialog" :aria-label="title" @click.stop>
       <span class="sheet__grip" aria-hidden="true"></span>
       <header class="sheet__head">
         <h2>{{ title }}</h2>
@@ -11,8 +11,12 @@
         <!-- 显式关闭：点遮罩关闭依赖合成 click，浏览器里被舞台的 touch 拦截过一次就没了。 -->
         <button type="button" class="sheet__close" aria-label="关闭" data-test="sheet-close" @click="$emit('close')">✕</button>
       </header>
-      <div class="sheet__body">
-        <slot />
+      <div class="sheet__scroll">
+        <div ref="body" class="sheet__body" @scroll.passive="updateOverflow">
+          <slot />
+        </div>
+        <!-- 深色面板里滚动条几乎看不见，最后一行又正好被按钮切掉：明确说一声下面还有。 -->
+        <div v-if="hasMoreBelow" class="sheet__more" data-test="sheet-more" aria-hidden="true">还有更多，向上滑动查看</div>
       </div>
       <footer v-if="$slots.footer" class="sheet__footer">
         <slot name="footer" />
@@ -28,11 +32,13 @@ export default {
   name: 'FeedSheet',
   props: {
     title: { type: String, required: true },
-    hint: { type: String, default: '' }
+    hint: { type: String, default: '' },
+    // 列表型面板（标签）几乎占满屏幕，少滚动。
+    tall: { type: Boolean, default: false }
   },
   emits: ['close'],
   data() {
-    return { viewportStyle: {} };
+    return { viewportStyle: {}, hasMoreBelow: false };
   },
   mounted() {
     this.onKey = event => {
@@ -44,6 +50,11 @@ export default {
     this.updateViewport();
     this.viewport?.addEventListener('resize', this.updateViewport);
     this.viewport?.addEventListener('scroll', this.updateViewport);
+    this.$nextTick(this.updateOverflow);
+  },
+  updated() {
+    // 插槽内容（标签列表）变了要重新判断是否溢出；值不变时 Vue 不会再触发更新。
+    this.updateOverflow();
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.onKey);
@@ -61,6 +72,13 @@ export default {
         bottom: 'auto',
         right: 'auto'
       };
+      this.$nextTick(this.updateOverflow);
+    },
+    updateOverflow() {
+      const body = this.$refs.body;
+      if (!body) return;
+      // 只有确实还有内容在可视区之下才提示；滚到底自动消失。
+      this.hasMoreBelow = body.scrollHeight - body.clientHeight - body.scrollTop > 4;
     }
   }
 };

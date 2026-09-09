@@ -1,9 +1,11 @@
 <template>
   <div class="feed-media">
+    <!-- 横屏素材加 landscape 类改为完整显示：竖屏 feed 默认的 cover 裁切只会剩下画面中间三分之一。 -->
     <video
       v-if="isVideo && item && item.media_url"
       ref="videoEl"
       class="feed-video"
+      :class="{ 'feed-video--landscape': landscape }"
       :src="item.media_url"
       :muted="muted"
       preload="auto"
@@ -16,13 +18,15 @@
       @pointercancel.prevent="$emit('press-cancel', $event)"
       @pointerleave.prevent="$emit('press-cancel', $event)"
       @contextmenu.prevent
-      @loadedmetadata="$emit('media-loaded')"
+      @loadedmetadata="onVideoMetadata"
       @canplaythrough="$emit('buffered')"
       @timeupdate="$emit('time-update')"
       @play="$emit('play')"
       @pause="$emit('pause')"
       @playing="$emit('playing')"
       @error="$emit('media-error')"
+      @webkitbeginfullscreen="$emit('native-fullscreen', true)"
+      @webkitendfullscreen="$emit('native-fullscreen', false)"
     ></video>
 
     <!-- 图片没有播放态，也不自动翻页；双击在适屏与原图之间切换，放大后交给浏览器原生平移。 -->
@@ -88,15 +92,45 @@ export default {
   },
   emits: [
     'press-start', 'press-move', 'press-end', 'press-cancel',
-    'media-loaded', 'buffered', 'time-update', 'play', 'pause', 'playing', 'media-error', 'stage-tap', 'zoom-reset'
+    'media-loaded', 'buffered', 'time-update', 'play', 'pause', 'playing', 'media-error', 'stage-tap', 'zoom-reset',
+    // iPhone 系统播放器全屏只在 <video> 上发 webkitbegin/endfullscreen，宿主靠它同步全屏态。
+    'native-fullscreen'
   ],
+  data() {
+    return {
+      // 解码后的实际横竖屏结论；null 表示还没拿到元数据。
+      intrinsicLandscape: null
+    };
+  },
   computed: {
     isVideo() { return this.item?.media_kind !== 'image'; },
-    isImage() { return this.item?.media_kind === 'image'; }
+    isImage() { return this.item?.media_kind === 'image'; },
+    itemKey() { return this.item ? `${this.item.media_kind}:${this.item.id}` : ''; },
+    // 浏览器给出的实际尺寸已经把旋转元数据算进去，优先用它；加载前先按后端记录的宽高预判，
+    // 避免首帧先裁一下再跳成完整画面。
+    landscape() {
+      if (this.intrinsicLandscape !== null) return this.intrinsicLandscape;
+      const width = Number(this.item?.width) || 0;
+      const height = Number(this.item?.height) || 0;
+      return width > 0 && height > 0 && width > height;
+    }
+  },
+  watch: {
+    // 换了条目就忘掉上一条的实际尺寸；同一条目被后端回传覆盖（评分、标签）时不重置。
+    itemKey() {
+      this.intrinsicLandscape = null;
+    }
   },
   methods: {
     // 父组件的进度条与播放控制仍直接操作 <video>，通过它拿到元素。
-    player() { return this.$refs.videoEl || null; }
+    player() { return this.$refs.videoEl || null; },
+    onVideoMetadata(event) {
+      const el = event?.target || this.$refs.videoEl;
+      if (el?.videoWidth > 0 && el?.videoHeight > 0) {
+        this.intrinsicLandscape = el.videoWidth > el.videoHeight;
+      }
+      this.$emit('media-loaded');
+    }
   }
 };
 </script>
