@@ -352,6 +352,10 @@ func TestMigrateRoundTripPreservesRowCountsAndKeys(t *testing.T) {
 	middle := dbtest.Open(t)
 	back := dbtest.Open(t)
 	videoIDs, _ := seedSource(t, source)
+	wish := models.WatchlistEntry{Title: "沙丘（1984）", CreatedAt: time.Date(2026, 9, 10, 1, 2, 3, 0, time.UTC)}
+	if err := source.Create(&wish).Error; err != nil {
+		t.Fatal(err)
+	}
 
 	for _, step := range []struct{ from, to *gorm.DB }{{source, middle}, {middle, back}} {
 		if _, err := Migrate(context.Background(), Options{
@@ -362,6 +366,13 @@ func TestMigrateRoundTripPreservesRowCountsAndKeys(t *testing.T) {
 	}
 
 	// 往返之后逐表比对行数与主键集合。
+	var restoredWish models.WatchlistEntry
+	if err := back.First(&restoredWish, wish.ID).Error; err != nil {
+		t.Fatalf("往返后想看记录丢失: %v", err)
+	}
+	if restoredWish.Title != wish.Title || !restoredWish.CreatedAt.Equal(wish.CreatedAt) {
+		t.Fatalf("往返后想看片名或添加时间变化: got=%+v want=%+v", restoredWish, wish)
+	}
 	//
 	// 先钉住"每张表都非空"：行数比对在空表上是 0 == 0，永远成立——一张表整张
 	// 被迁移器漏掉也照样通过。这一条让夹具的覆盖面本身成为断言的一部分，

@@ -120,6 +120,8 @@ export function CreatePlaybackProxy(arg1:number):Promise<services.PlaybackProxyS
 
 export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
 
+export function CreateWatchlistEntry(arg1:string):Promise<models.WatchlistEntry>;
+
 export function DeleteCollection(arg1:number):Promise<void>;
 
 export function DeleteDirectory(arg1:number):Promise<void>;
@@ -137,6 +139,8 @@ export function DeleteSavedLibraryView(arg1:number):Promise<void>;
 export function DeleteTag(arg1:number):Promise<void>;
 
 export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
+
+export function DeleteWatchlistEntry(arg1:number):Promise<void>;
 
 export function DismissClipCandidate(arg1:number,arg2:number):Promise<void>;
 
@@ -325,6 +329,8 @@ export function ListSameSourceRelations(arg1:string,arg2:boolean):Promise<Array<
 export function ListSavedLibraryViews():Promise<Array<models.SavedLibraryView>>;
 
 export function ListTrashEntries():Promise<Array<models.VideoTrashEntry>>;
+
+export function ListWatchlist(arg1:string,arg2:number,arg3:number):Promise<services.WatchlistPage>;
 
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
@@ -535,6 +541,8 @@ export function UpdateTag(arg1:number,arg2:string,arg3:string):Promise<void>;
 export function UpdateVideoDetails(arg1:services.VideoDetailsUpdate):Promise<services.VideoDetails>;
 
 export function UpdateVideoWatchProgress(arg1:number,arg2:number,arg3:boolean):Promise<models.Video>;
+
+export function UpdateWatchlistEntry(arg1:number,arg2:string):Promise<void>;
 
 export function UpsertGlossaryEntry(arg1:models.TranslationGlossaryEntry):Promise<models.TranslationGlossaryEntry>;
 

@@ -17,6 +17,9 @@
         <button @click="currentPage = 'collections'" :class="['nav-btn', { active: currentPage === 'collections' }]">
           作品集
         </button>
+        <button @click="currentPage = 'watchlist'" :class="['nav-btn', { active: currentPage === 'watchlist' }]" data-test="nav-watchlist">
+          想看
+        </button>
 		<button @click="currentPage = 'insights'" :class="['nav-btn', { active: currentPage === 'insights' }]">
 		  洞察
 		</button>
@@ -63,6 +66,7 @@
       />
 
       <DownloadsPage v-if="currentPage === 'downloads'" />
+      <WatchlistPage v-if="currentPage === 'watchlist'" />
 
       <SettingsPage
         ref="settingsPage"
@@ -109,6 +113,7 @@ import EntityLibraryPage from './components/EntityLibraryPage.vue';
 import InsightsPage from './components/InsightsPage.vue';
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
 import DownloadsPage from './components/DownloadsPage.vue';
+import WatchlistPage from './components/WatchlistPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import { logFrontend } from './utils/frontendLog.js';
@@ -123,7 +128,7 @@ export default {
   name: 'App',
   // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
   mixins: [appCommandsMixin],
-  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, AppFeedback, CommandPalette },
+  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage, AppFeedback, CommandPalette },
   data() {
     return {
       currentPage: 'videos',

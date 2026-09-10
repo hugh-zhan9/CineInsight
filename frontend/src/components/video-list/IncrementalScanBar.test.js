@@ -25,7 +25,7 @@ function mountBar(props = {}) {
 
 describe('增量扫描状态条', () => {
   it('扫描完成后报出各项计数，并请片库页刷新目录与列表', async () => {
-    api.SyncScanDirectories.mockResolvedValue({ scanned: 5, added: 1, relocated: 0, deleted: 0, metadata_refreshed: 2, skipped: 1, errors: [] });
+    api.SyncScanDirectories.mockResolvedValue({ scanned: 5, added: 1, restored: 2, relocated: 0, deleted: 0, metadata_refreshed: 2, skipped: 1, errors: [] });
     const reloadView = vi.fn().mockResolvedValue();
     const wrapper = mountBar({ reloadView });
 
@@ -35,6 +35,7 @@ describe('增量扫描状态条', () => {
     expect(api.SyncScanDirectories).toHaveBeenCalledOnce();
     expect(wrapper.vm.incrementalScan.state).toBe('success');
     expect(wrapper.vm.incrementalScan.message).toContain('扫描 5 个文件');
+    expect(wrapper.vm.incrementalScan.message).toContain('恢复显示 2');
     expect(wrapper.emitted('reload-directories')).toHaveLength(1);
     expect(reloadView).toHaveBeenCalledOnce();
     expect(wrapper.text()).toContain('增量扫描完成');
@@ -42,15 +43,17 @@ describe('增量扫描状态条', () => {
   });
 
   it('有失败项时降级为 warning，整个失败时是 error', async () => {
-    api.SyncScanDirectories.mockResolvedValueOnce({ scanned: 1, errors: [{ path: '/x' }] });
+    api.SyncScanDirectories.mockResolvedValueOnce({ scanned: 1, errors: [{ path: '/x', error: 'permission denied' }] });
     const wrapper = mountBar();
     await wrapper.vm.runIncrementalScan();
     expect(wrapper.vm.incrementalScan.state).toBe('warning');
+    expect(wrapper.text()).toContain('/x：permission denied');
 
     api.SyncScanDirectories.mockRejectedValueOnce(new Error('磁盘不可用'));
     await wrapper.vm.runIncrementalScan();
     expect(wrapper.vm.incrementalScan.state).toBe('error');
     expect(wrapper.vm.incrementalScan.message).toContain('增量扫描失败');
+    expect(wrapper.text()).not.toContain('permission denied');
     wrapper.unmount();
   });
 

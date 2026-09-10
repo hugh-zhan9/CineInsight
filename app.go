@@ -48,6 +48,7 @@ type App struct {
 	shortFeedService      *services.ShortFeedService
 	personService         *services.PersonService
 	collectionService     *services.CollectionService
+	watchlistService      *services.WatchlistService
 	collectionSuggestions *services.CollectionSuggestionService
 	videoDetailService    *services.VideoDetailService
 	libraryStatsService   *services.LibraryStatsService
@@ -150,6 +151,7 @@ func NewApp() *App {
 		shortFeedService:      shortFeedService,
 		personService:         personService,
 		collectionService:     collectionService,
+		watchlistService:      &services.WatchlistService{},
 		collectionSuggestions: services.NewCollectionSuggestionService(collectionService),
 		videoDetailService:    services.NewVideoDetailService(personService, collectionService),
 		libraryStatsService:   services.NewLibraryStatsService(),

@@ -234,6 +234,10 @@ export function CreateTag(arg1, arg2) {
   return window['go']['main']['App']['CreateTag'](arg1, arg2);
 }
 
+export function CreateWatchlistEntry(arg1) {
+  return window['go']['main']['App']['CreateWatchlistEntry'](arg1);
+}
+
 export function DeleteCollection(arg1) {
   return window['go']['main']['App']['DeleteCollection'](arg1);
 }
@@ -268,6 +272,10 @@ export function DeleteTag(arg1) {
 
 export function DeleteVideo(arg1, arg2) {
   return window['go']['main']['App']['DeleteVideo'](arg1, arg2);
+}
+
+export function DeleteWatchlistEntry(arg1) {
+  return window['go']['main']['App']['DeleteWatchlistEntry'](arg1);
 }
 
 export function DismissClipCandidate(arg1, arg2) {
@@ -644,6 +652,10 @@ export function ListSavedLibraryViews() {
 
 export function ListTrashEntries() {
   return window['go']['main']['App']['ListTrashEntries']();
+}
+
+export function ListWatchlist(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ListWatchlist'](arg1, arg2, arg3);
 }
 
 export function LogFrontend(arg1, arg2, arg3) {
@@ -1064,6 +1076,10 @@ export function UpdateVideoDetails(arg1) {
 
 export function UpdateVideoWatchProgress(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateVideoWatchProgress'](arg1, arg2, arg3);
+}
+
+export function UpdateWatchlistEntry(arg1, arg2) {
+  return window['go']['main']['App']['UpdateWatchlistEntry'](arg1, arg2);
 }
 
 export function UpsertGlossaryEntry(arg1) {

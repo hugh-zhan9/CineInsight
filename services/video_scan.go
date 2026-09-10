@@ -130,27 +130,29 @@ func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool
 	}
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil // 跳过错误的文件
-		}
 		if isScanPathExcluded(path, excludedPaths) {
+			if info != nil && info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		// Walk 在回调之前读取目录，隐藏/排除目录的读取失败仍应按原规则跳过。
+		if info != nil && shouldSkipHiddenPath(info) {
 			if info.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
 
-		if shouldSkipHiddenPath(info) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
+		if info != nil && info.IsDir() && isTrashDirName(info.Name()) {
+			return filepath.SkipDir
 		}
-
+		if err != nil {
+			// 扫描范围内的读取失败不能当成空目录，必须阻止后续缺失对账。
+			return err
+		}
 		if info.IsDir() {
-			if isTrashDirName(info.Name()) {
-				return filepath.SkipDir
-			}
 			return nil
 		}
 
@@ -264,8 +266,18 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 	missingVideos := make([]models.Video, 0)
 	for _, video := range allExisting {
 		if _, exists := scannedByPath[video.Path]; !exists {
-			missingVideos = append(missingVideos, video)
+			if scanCandidateIsMissing(video, result) {
+				missingVideos = append(missingVideos, video)
+			}
 			continue
+		}
+		if video.IsStale {
+			if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_stale", false).Error; err != nil {
+				result.recordError("clear_stale", video.Directory, video.Path, err)
+			} else {
+				video.IsStale = false
+				result.Restored++
+			}
 		}
 		needsRefresh, refreshCheckErr := s.needsTechnicalRefreshDuringScan(video, scannedByPath[video.Path])
 		if refreshCheckErr != nil {
@@ -416,8 +428,10 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		}
 		file, exists := scannedByPath[path]
 		if !exists {
-			missingCandidates = append(missingCandidates, video)
-			missingIDs[video.ID] = struct{}{}
+			if scanCandidateIsMissing(video, result) {
+				missingCandidates = append(missingCandidates, video)
+				missingIDs[video.ID] = struct{}{}
+			}
 			continue
 		}
 		if video.IsStale {
@@ -506,6 +520,21 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		result.recordError("short-video-tag", "", "", err)
 	}
 	return result
+}
+
+// scanCandidateIsMissing 区分磁盘丢失和扫描过滤；活跃窗口、黑名单等只限制扫描收录。
+// 只有明确不存在的文件才能进入迁移、删除或标失效路径，权限/IO 失败保留原记录并报错。
+func scanCandidateIsMissing(video models.Video, result *ScanSyncResult) bool {
+	_, err := os.Stat(video.Path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true
+	}
+	if err != nil {
+		result.recordError("check_missing", video.Directory, video.Path, err)
+	} else {
+		result.Skipped++
+	}
+	return false
 }
 
 // reconcileOrphanedVideos 处理"不属于任何已配置扫描目录"的记录。
@@ -727,6 +756,10 @@ func matchWatcherRelocations(service *VideoService, result *ScanSyncResult, newF
 		}
 		file := matchingFiles[0]
 		video := matchingCandidates[0]
+		// 跨目录的失效候选只在真实匹配时核验，避免每个本地事件都访问无关离线磁盘。
+		if !scanCandidateIsMissing(video, result) {
+			continue
+		}
 		if err := service.relocateVideo(video.ID, file.Path); err != nil {
 			result.recordError("relocate", video.Directory, file.Path, err)
 			continue

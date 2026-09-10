@@ -55,6 +55,14 @@ async function mountApp() {
   return wrapper;
 }
 
+it('顶栏想看入口按需挂载独立片单页', async () => {
+  const wrapper = await mountApp();
+  expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(false);
+  await wrapper.get('[data-test="nav-watchlist"]').trigger('click');
+  expect(wrapper.vm.currentPage).toBe('watchlist');
+  expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(true);
+});
+
 describe('扫描目录配置变更', () => {
   it('保存目录配置后自动对一次账', async () => {
     const wrapper = await mountApp();

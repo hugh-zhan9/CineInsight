@@ -61,7 +61,7 @@ function host() {
 }
 
 describe('应用级命令注册', () => {
-  it('六个页面各有一条导航命令，执行即切页', () => {
+  it('注册的页面各有一条导航命令，执行即切页', () => {
     const wrapper = host();
 
     for (const page of COMMAND_PALETTE_PAGES) {
@@ -72,6 +72,8 @@ describe('应用级命令注册', () => {
 
     commandByID('nav:page:photos').run();
     expect(wrapper.vm.currentPage).toBe('photos');
+    commandByID('nav:page:watchlist').run();
+    expect(wrapper.vm.currentPage).toBe('watchlist');
   });
 
   it('智能视图逐条注册为导航命令', () => {

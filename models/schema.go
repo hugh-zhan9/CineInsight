@@ -31,6 +31,7 @@ func AllModels() []interface{} {
 		&Settings{},
 		&ScanDirectory{},
 		&SavedLibraryView{},
+		&WatchlistEntry{},
 		&Person{},
 		&VideoPerson{},
 		&MediaCollection{},

@@ -15,11 +15,12 @@ import { SETTINGS_SECTIONS } from '../components/SettingsPage.vue';
 import { registerCommands, unregisterCommands } from './commandRegistry.js';
 import { buildTaskCommands } from './taskCommands.js';
 
-// 顶栏六个页面，key 与 App.vue 的 currentPage 一致。
+// 页面导航，key 与 App.vue 的 currentPage 一致。
 const COMMAND_PAGES = [
   { key: 'videos', label: '视频', keywords: ['video', 'library', 'shipin'] },
   { key: 'people', label: '人物', keywords: ['person', 'people', 'renwu'] },
   { key: 'collections', label: '作品集', keywords: ['collection', 'zuopinji'] },
+  { key: 'watchlist', label: '想看', keywords: ['watchlist', 'xiangkan', '片单', '待下载'] },
   { key: 'insights', label: '洞察', keywords: ['insights', 'stats', 'dongcha'] },
   { key: 'photos', label: '图片', keywords: ['photo', 'image', 'tupian'] },
   { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] }
