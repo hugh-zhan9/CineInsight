@@ -116,7 +116,7 @@
         </div>
       </div>
       <p v-else class="help-text">尚未设置黑名单目录。</p>
-      <p class="help-text">黑名单目录及其全部子目录不会被后续扫描收录；已有视频记录不会自动删除。</p>
+      <p class="help-text">黑名单目录及其全部子目录不再收录，已有视频从片库隐藏但不删除；移除黑名单后恢复显示。</p>
     </div>
     <div class="setting-item scan-blacklist-setting">
       <div class="settings-section-heading">
@@ -130,7 +130,7 @@
         </div>
       </div>
       <p v-else class="help-text">未单独设置，沿用上方扫描目录黑名单。</p>
-      <p class="help-text">图片扫描专用黑名单；设置后仅对图片扫描生效，与视频扫描互不影响。</p>
+      <p class="help-text">图片专用黑名单：停止收录并隐藏已有图片，不删除记录；移除后恢复显示。单独设置时不影响视频。</p>
     </div>
   </div>
 </template>

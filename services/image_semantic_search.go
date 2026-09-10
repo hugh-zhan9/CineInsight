@@ -202,6 +202,7 @@ func (s *ImageSemanticIndexService) imageSemanticDistanceQuery(ctx context.Conte
 		Joins("JOIN image_semantic_vectors ON image_semantic_vectors.image_id = images.id").
 		Where("image_semantic_vectors.model_identifier = ? AND image_semantic_vectors.dimension = ? AND image_semantic_vectors.generation = ?", profile.ActiveModel, profile.Dimension, profile.Generation).
 		Where("images.deleted_at IS NULL")
+	query = applyImageVisibility(query, s.db)
 	query = s.applyImageSemanticFilter(query, filter)
 	return query.Order("distance ASC, images.id ASC").Offset(offset).Limit(limit + 1)
 }

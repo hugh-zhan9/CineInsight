@@ -16,16 +16,25 @@ func TestWatchlistCRUDAndMediaIsolation(t *testing.T) {
 	if err != nil || entry.Title != "沙丘（1984）" || entry.ID == 0 || entry.CreatedAt.IsZero() {
 		t.Fatalf("添加失败: %+v %v", entry, err)
 	}
-	duplicate, err := svc.Create(entry.Title)
-	if err != nil || duplicate.ID == entry.ID {
-		t.Fatalf("同名片名应独立保存: %+v %v", duplicate, err)
+	if _, err := svc.Create(" " + entry.Title + " "); !errors.Is(err, ErrWatchlistTitleExists) {
+		t.Fatalf("去掉首尾空白后的同名片名应拒绝: %v", err)
+	}
+	duplicate, err := svc.Create("另一部片")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Update(duplicate.ID, entry.Title); !errors.Is(err, ErrWatchlistTitleExists) {
+		t.Fatalf("改名冲突应拒绝: %v", err)
+	}
+	if err := svc.Update(entry.ID, entry.Title); err != nil {
+		t.Fatalf("保留自身名称应成功: %v", err)
 	}
 	video := models.Video{Name: entry.Title, Path: "/movies/dune.mp4"}
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatal(err)
 	}
 	// 重新构造服务，并创建同名本地视频，片单仍保持两条。
-	page, err := (&WatchlistService{}).List("沙丘", 0, 50)
+	page, err := (&WatchlistService{}).List("", 0, 50)
 	if err != nil || len(page.Entries) != 2 || page.Entries[0].ID != duplicate.ID {
 		t.Fatalf("持久记录或顺序错误: %+v %v", page, err)
 	}

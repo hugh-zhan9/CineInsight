@@ -4,6 +4,7 @@ import "time"
 
 // Image 图片文件模型，作为与视频并行的一等实体（设计 5.1.2）。
 type Image struct {
+	DeletedBy           string   `gorm:"not null;default:''" json:"deleted_by"` // user / scanner；空值为历史未知
 	ID                  uint     `gorm:"primarykey" json:"id"`
 	Name                string   `json:"name"`                                                                    // 文件名
 	Path                string   `gorm:"uniqueIndex:idx_images_path_active,where:deleted_at IS NULL" json:"path"` // 完整路径
@@ -53,6 +54,7 @@ type ImageDirectory struct {
 
 // ImageTrashEntry 记录恢复软删除图片所需的信息，镜像 VideoTrashEntry。
 type ImageTrashEntry struct {
+	DeletedBy    string    `gorm:"not null;default:''" json:"deleted_by"` // user / scanner；空值为历史未知
 	ID           uint      `gorm:"primarykey" json:"id"`
 	ImageID      uint      `gorm:"uniqueIndex;not null" json:"image_id"`
 	ImageName    string    `gorm:"not null" json:"image_name"`

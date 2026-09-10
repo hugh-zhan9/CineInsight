@@ -6,6 +6,7 @@ import (
 
 // Video 视频文件模型
 type Video struct {
+	DeletedBy              string         `gorm:"not null;default:''" json:"deleted_by"` // user / scanner；空值为历史未知
 	ID                     uint           `gorm:"primarykey" json:"id"`
 	Name                   string         `json:"name"`                                               // 文件名
 	DisplayTitle           string         `gorm:"size:255;not null;default:''" json:"display_title"`  // 用户维护的显示标题
@@ -39,6 +40,7 @@ type Video struct {
 
 // VideoTrashEntry 记录恢复软删除视频所需的信息。
 type VideoTrashEntry struct {
+	DeletedBy    string    `gorm:"not null;default:''" json:"deleted_by"` // user / scanner；空值为历史未知
 	ID           uint      `gorm:"primarykey" json:"id"`
 	VideoID      uint      `gorm:"uniqueIndex;not null" json:"video_id"`
 	VideoName    string    `gorm:"not null" json:"video_name"`

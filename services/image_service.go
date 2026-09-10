@@ -128,6 +128,7 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 
 	result := &ImageScanResult{Errors: make([]ImageScanError, 0)}
 	scannedByPath := make(map[string]ScannedFile)
+	removalGuard := make(scanRemovalGuard)
 	roots := make([]string, 0, len(dirs))
 	// configuredRoots 是"当前配置了哪些目录"，与 roots（本轮成功扫到的根）有意分开：
 	// 移动硬盘没插时那个根扫不了、进不了 roots，但它仍然配置着，底下的记录不能
@@ -140,9 +141,28 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 			continue
 		}
 		configuredRoots = append(configuredRoots, root)
+		if isScanPathExcluded(root, excludedPaths) {
+			continue
+		}
+		if err := removalGuard.capture(root); err != nil {
+			result.recordError("scan", root, "", err)
+			if errors.Is(err, os.ErrNotExist) {
+				images, loadErr := s.getActiveImagesUnderRoots([]string{root})
+				if loadErr != nil {
+					result.recordError("load_offline", root, "", loadErr)
+				}
+				for _, image := range images {
+					if err := s.markMissingImageStale(image.ID); err != nil {
+						result.recordError("mark_stale", root, image.Path, err)
+					}
+				}
+			}
+			continue
+		}
 		scannedFiles, scanErr := scanImageDirectory(root, extensions, excludedPaths)
 		if scanErr != nil {
 			result.recordError("scan", root, "", scanErr)
+			delete(removalGuard, root)
 			continue
 		}
 		roots = append(roots, root)
@@ -176,7 +196,26 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 	missingImages := make([]models.Image, 0)
 	for _, image := range allExisting {
 		if _, exists := scannedByPath[image.Path]; !exists {
-			missingImages = append(missingImages, image)
+			if _, statErr := os.Stat(image.Path); errors.Is(statErr, os.ErrNotExist) {
+				if missing, guardErr := removalGuard.missing(image.Path, excludedPaths); guardErr != nil {
+					result.recordError("check_missing_root", image.Directory, image.Path, guardErr)
+					if err := s.markMissingImageStale(image.ID); err != nil {
+						result.recordError("mark_stale", image.Directory, image.Path, err)
+					}
+				} else if missing {
+					missingImages = append(missingImages, image)
+				}
+			} else if statErr != nil {
+				result.recordError("check_missing", image.Directory, image.Path, statErr)
+			}
+			continue
+		}
+		if image.IsStale {
+			if err := database.DB.Model(&models.Image{}).Where("id = ?", image.ID).Update("is_stale", false).Error; err != nil {
+				result.recordError("clear_stale", image.Directory, image.Path, err)
+			} else {
+				result.Restored++
+			}
 		}
 	}
 
@@ -247,8 +286,27 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 
 	s.reconcileOrphanedImages(configuredRoots, result)
 
+	if err := database.DB.Select("scan_exclude_paths, image_scan_exclude_paths").First(&settings).Error; err != nil {
+		result.recordError("reload_scan_blacklist", "", "", err)
+		return result, nil
+	}
+	excludedPaths = parseScanExcludePaths(settings.ImageScanExcludePaths)
+	if len(excludedPaths) == 0 {
+		excludedPaths = parseScanExcludePaths(settings.ScanExcludePaths)
+	}
 	for _, image := range append(duplicateImages, missingImages...) {
 		if _, relocated := relocatedImageIDs[image.ID]; relocated {
+			continue
+		}
+		missing, guardErr := removalGuard.missing(image.Path, excludedPaths)
+		if guardErr != nil {
+			result.recordError("check_delete", image.Directory, image.Path, guardErr)
+			if err := s.markMissingImageStale(image.ID); err != nil {
+				result.recordError("mark_stale", image.Directory, image.Path, err)
+			}
+			continue
+		}
+		if !missing {
 			continue
 		}
 		if err := s.deleteMissingImageRecord(image.ID); err != nil {
@@ -256,6 +314,21 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 			continue
 		}
 		result.Removed++
+	}
+
+	for root := range removalGuard {
+		if err := removalGuard.verify(root); err != nil {
+			result.recordError("verify_root", root, "", err)
+			images, loadErr := s.getActiveImagesUnderRoots([]string{root})
+			if loadErr != nil {
+				result.recordError("load_offline", root, "", loadErr)
+			}
+			for _, image := range images {
+				if err := s.markMissingImageStale(image.ID); err != nil {
+					result.recordError("mark_stale", root, image.Path, err)
+				}
+			}
+		}
 	}
 
 	log.Printf("图片目录对账完成 dirs=%d scanned=%d added=%d restored=%d relocated=%d removed=%d skipped=%d errors=%d",
@@ -284,28 +357,16 @@ func scanImageDirectory(dir string, extensions []string, excludedPaths []string)
 	}
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if isScanPathExcluded(path, excludedPaths) || (info != nil && (shouldSkipHiddenPath(info) || (info.IsDir() && isTrashDirName(info.Name())))) {
+			if info != nil && info.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if err != nil {
-			return nil // 跳过错误的文件
+			return err
 		}
-		if isScanPathExcluded(path, excludedPaths) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if shouldSkipHiddenPath(info) {
-			if info.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if info.IsDir() {
-			if isTrashDirName(info.Name()) {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if isTrashPath(path) {
+		if info.IsDir() || isTrashPath(path) {
 			return nil
 		}
 
@@ -352,15 +413,15 @@ func fingerprintImage(image models.Image) scanFileFingerprint {
 // 目录改成了别的路径。而两条对账都只在配置目录之下取候选，所以它们过去永远碰不到，
 // 记录就停在"扫描看不见、图库看得见"的夹缝里——删了目录图片还在列表上就是这么来的。
 //
-// 处理方式与失踪对账一致（软删 + is_stale，不动磁盘文件、不建回收站条目），
-// 把那个目录加回来时同样由 restoreStaleImage 复活。
+// 处理方式与失踪对账一致（只标 is_stale，不软删、不动磁盘文件、不建回收站条目），
+// 把那个目录加回来时扫描清除 is_stale。
 //
 // 一个目录都没配置时，所有记录都是孤儿、全部隐藏——这正是"没有扫描目录就不该有内容"
 // 的应有之义。调用方必须先确认目录清单是读成功的：读失败时绝不能走到这里，
 // 否则会把整库藏起来。
 func (s *ImageService) reconcileOrphanedImages(configuredRoots []string, result *ImageScanResult) {
 	var images []models.Image
-	if err := database.DB.Select("id", "path", "directory").Find(&images).Error; err != nil {
+	if err := database.DB.Select("id", "path", "directory", "is_stale").Find(&images).Error; err != nil {
 		result.recordError("load_orphans", "", "", err)
 		return
 	}
@@ -368,7 +429,10 @@ func (s *ImageService) reconcileOrphanedImages(configuredRoots []string, result 
 		if len(configuredRoots) > 0 && imageBelongsToRoots(image, configuredRoots) {
 			continue
 		}
-		if err := s.deleteMissingImageRecord(image.ID); err != nil {
+		if image.IsStale {
+			continue
+		}
+		if err := s.markMissingImageStale(image.ID); err != nil {
 			result.recordError("orphan_hide", image.Directory, image.Path, err)
 			continue
 		}
@@ -378,10 +442,7 @@ func (s *ImageService) reconcileOrphanedImages(configuredRoots []string, result 
 
 // MarkImagesStaleUnderRemovedRoot 把只属于被移除扫描根的图片按"失踪对账"处理（D-S04）。
 //
-// 图片侧沿用它自己那套已有机制：软删 + is_stale 标记（deleteMissingImageRecord），
-// 不动磁盘文件、不建回收站条目；把同一路径加回来时由 restoreStaleImage 复活，
-// 标签、评分这些都还在。视频那边不软删是因为它的软删每条都会建回收站条目，
-// 图片这条路本来就不建，所以不必改。
+// 与视频一致：只标失效，查询过滤；目录加回后扫描恢复原记录。
 //
 // 嵌套目录同视频：同时落在另一个仍配置着的根之下的图片保持原样。
 // 返回实际处理的条数。
@@ -412,7 +473,10 @@ func (s *ImageService) MarkImagesStaleUnderRemovedRoot(removedRoot string, remai
 		if len(remaining) > 0 && imageBelongsToRoots(image, remaining) {
 			continue
 		}
-		if err := s.deleteMissingImageRecord(image.ID); err != nil {
+		if image.IsStale {
+			continue
+		}
+		if err := s.markMissingImageStale(image.ID); err != nil {
 			return marked, fmt.Errorf("标记图片失效失败: %w", err)
 		}
 		marked++
@@ -520,7 +584,7 @@ func (s *ImageService) restoreStaleImage(path string, size int64) (bool, error) 
 		}
 		return false, err
 	}
-	if !image.IsStale {
+	if !image.IsStale || image.DeletedBy == "user" {
 		return false, nil
 	}
 	result := database.DB.Unscoped().Model(&models.Image{}).Where("id = ? AND deleted_at IS NOT NULL AND is_stale = ?", image.ID, true).Updates(map[string]interface{}{
@@ -555,6 +619,7 @@ func (s *ImageService) relocateImage(id uint, newPath string) error {
 	result := database.DB.Model(&models.Image{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"path":      newPath,
 		"directory": filepath.Dir(newPath),
+		"is_stale":  false,
 	})
 	if result.Error != nil {
 		return result.Error
@@ -573,7 +638,7 @@ func (s *ImageService) deleteMissingImageRecord(id uint) error {
 	// volume disappears temporarily, the next scan can revive the same row and
 	// retain its tags, rating, and other curated metadata.
 	if err := database.Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&models.Image{}).Where("id = ?", id).Update("is_stale", true)
+		result := tx.Model(&models.Image{}).Where("id = ?", id).Updates(map[string]interface{}{"is_stale": true, "deleted_by": "scanner"})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -584,15 +649,20 @@ func (s *ImageService) deleteMissingImageRecord(id uint) error {
 	}); err != nil {
 		return err
 	}
-	log.Printf("图片记录软删除（失踪对账，不动文件） id=%d", id)
+	log.Printf("图片记录软删除 id=%d deleted_by=scanner delete_file=false", id)
 	return nil
+}
+
+// markMissingImageStale 对离线磁盘或移除的扫描范围只做隐藏。
+func (s *ImageService) markMissingImageStale(id uint) error {
+	return database.DB.Model(&models.Image{}).Where("id = ?", id).Update("is_stale", true).Error
 }
 
 // deleteImageRecord is an intentional user deletion. It explicitly clears the
 // scanner recovery marker so a later scan cannot undo that choice.
 func (s *ImageService) deleteImageRecord(id uint) error {
 	return database.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.Image{}).Where("id = ?", id).Update("is_stale", false).Error; err != nil {
+		if err := tx.Model(&models.Image{}).Where("id = ?", id).Updates(map[string]interface{}{"is_stale": false, "deleted_by": "user"}).Error; err != nil {
 			return err
 		}
 		result := tx.Delete(&models.Image{}, id)
@@ -772,6 +842,7 @@ func (s *ImageService) deleteImage(id uint, deleteFile bool) error {
 	}
 
 	entry := models.ImageTrashEntry{
+		DeletedBy:    "user",
 		ImageID:      image.ID,
 		ImageName:    image.Name,
 		OriginalPath: image.Path,
@@ -799,6 +870,9 @@ func (s *ImageService) deleteImage(id uint, deleteFile bool) error {
 	if !shouldMoveFile {
 		return database.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&entry).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&image).Update("deleted_by", entry.DeletedBy).Error; err != nil {
 				return err
 			}
 			return tx.Delete(&image).Error
@@ -837,6 +911,9 @@ func (s *ImageService) deleteImage(id uint, deleteFile bool) error {
 		}
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("待删除条目状态已变化: %d", entry.ID)
+		}
+		if err := tx.Model(&image).Update("deleted_by", entry.DeletedBy).Error; err != nil {
+			return err
 		}
 		return tx.Delete(&image).Error
 	})
@@ -929,7 +1006,7 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		result := tx.Model(&models.Image{}).
 			Unscoped().
 			Where("id = ? AND deleted_at IS NOT NULL", image.ID).
-			Update("deleted_at", nil)
+			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": false})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -1059,6 +1136,9 @@ func (s *ImageService) reconcileImagePendingDelete(entry *models.ImageTrashEntry
 	}
 	err = database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "file_moved": true, "last_error": ""}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&image).Update("deleted_by", entry.DeletedBy).Error; err != nil {
 			return err
 		}
 		return tx.Delete(&image).Error

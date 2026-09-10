@@ -549,3 +549,5 @@ export function UpdateWatchlistEntry(arg1:number,arg2:string):Promise<void>;
 export function UpsertGlossaryEntry(arg1:models.TranslationGlossaryEntry):Promise<models.TranslationGlossaryEntry>;
 
 export function ValidateSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleValidationResult>;
+
+export function SyncDirectoryWithProgress(arg1:string, arg2:string):Promise<services.ScanSyncResult>;

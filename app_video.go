@@ -69,6 +69,25 @@ func (a *App) ScanDirectoryWithProgress(dir, requestID string) ([]string, error)
 	return files, err
 }
 
+// SyncDirectoryWithProgress runs manual discovery and reconciliation in the backend.
+func (a *App) SyncDirectoryWithProgress(dir, requestID string) *services.ScanSyncResult {
+	result := a.videoService.SyncDirectoryWithProgress(dir, func(progress services.DirectoryScanProgress) {
+		runtime.EventsEmit(a.ctx, "directory-scan-progress", struct {
+			services.DirectoryScanProgress
+			RequestID string `json:"request_id"`
+		}{progress, requestID})
+	})
+	log.Printf("API SyncDirectoryWithProgress dir=%s added=%d restored=%d deleted=%d stale=%d errors=%d", dir, result.Added, result.Restored, result.Deleted, result.Stale, len(result.Errors))
+	if a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	if result.Added > 0 && a.aiTaggingService != nil {
+		go a.triggerAITaggingAuto("scan")
+	}
+	a.runPostScanAutomation(result)
+	return result
+}
+
 // ScanDirectoryWithInfo 扫描目录（附带文件大小，用于迁移检测）
 func (a *App) ScanDirectoryWithInfo(dir string) ([]services.ScannedFile, error) {
 	files, err := a.videoService.ScanDirectoryWithInfo(dir)

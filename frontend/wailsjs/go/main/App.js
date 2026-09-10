@@ -1093,3 +1093,7 @@ export function UpsertGlossaryEntry(arg1) {
 export function ValidateSubtitleEditDocument(arg1) {
   return window['go']['main']['App']['ValidateSubtitleEditDocument'](arg1);
 }
+
+export function SyncDirectoryWithProgress(arg1, arg2) {
+  return window['go']['main']['App']['SyncDirectoryWithProgress'](arg1, arg2);
+}

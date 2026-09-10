@@ -7,8 +7,14 @@ import (
 	"time"
 )
 
-// DirectoryScanProgress reports discovery, before any library records are changed.
+// DirectoryScanProgress reports discovery and guarded reconciliation progress.
 type DirectoryScanProgress struct {
+	Added       int    `json:"added"`
+	Restored    int    `json:"restored"`
+	Deleted     int    `json:"deleted"`
+	Skipped     int    `json:"skipped"`
+	Processed   int    `json:"processed"`
+	Total       int    `json:"total"`
 	Phase       string `json:"phase"`
 	CurrentPath string `json:"current_path"`
 	Visited     int    `json:"visited"`

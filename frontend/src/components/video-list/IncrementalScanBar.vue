@@ -62,6 +62,7 @@ export default {
           `恢复显示 ${Number(result?.restored || 0)}`,
           `迁移 ${Number(result?.relocated || 0)}`,
           `移除记录 ${Number(result?.deleted || 0)}`,
+          `暂不可用 ${Number(result?.stale || 0)}`,
           `补全元数据 ${Number(result?.metadata_refreshed || 0)}`,
           `跳过 ${Number(result?.skipped || 0)}`
         ];

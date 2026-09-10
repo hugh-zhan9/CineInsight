@@ -16,7 +16,7 @@
         <p v-if="waitingForProgress" data-test="scan-waiting">{{ waitingMessage }}</p>
         <template v-if="scanProgress.phase === 'processing'">
           <p>正在处理 {{ scanProgress.processed }}/{{ scanProgress.total }} · 共发现 {{ scanProgress.found }} 个视频</p>
-          <p>新增 {{ scanProgress.imported }} 个，删除 {{ scanProgress.deleted }} 个，跳过 {{ scanProgress.skipped }} 个</p>
+          <p>新增 {{ scanProgress.imported }} 个，恢复 {{ scanProgress.restored }} 个，删除 {{ scanProgress.deleted }} 个，跳过 {{ scanProgress.skipped }} 个</p>
         </template>
       </div>
       <div v-if="!scanProgress.scanning && scanProgress.statusMessage" :class="['scan-result', { 'scan-result--error': scanProgress.failed }]" :role="scanProgress.failed ? 'alert' : 'status'" data-test="scan-result">
@@ -34,7 +34,7 @@
 </template>
 
 <script>
-import { SelectDirectory, ScanDirectoryWithProgress, AddVideo, DeleteVideo, GetVideosByDirectory, AddDirectory } from '../../wailsjs/go/main/App';
+import { SelectDirectory, SyncDirectoryWithProgress, AddDirectory } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import { notify, notifyError } from '../utils/feedback.js';
 
@@ -64,6 +64,7 @@ export default {
         found: 0,
         processed: 0,
         imported: 0,
+        restored: 0,
         deleted: 0,
         skipped: 0,
         total: 0,
@@ -115,7 +116,8 @@ export default {
       this.scanProgress = {
         scanning: false, found: 0, processed: 0,
         phase: '', visited: 0, currentPath: '',
-        imported: 0, deleted: 0, skipped: 0, total: 0,
+        imported: 0,
+        restored: 0, deleted: 0, skipped: 0, total: 0,
         statusMessage: '', failed: false
       };
     },
@@ -147,79 +149,45 @@ export default {
         this.setPhase('checking');
         this.scanProgress.currentPath = this.scanDirectory;
         this.scanProgressOff = window.runtime.EventsOn('directory-scan-progress', progress => {
-          if (progress.request_id !== this.scanRequestID || !this.scanProgress.scanning || !['checking', 'settings', 'reading'].includes(this.scanProgress.phase)) return;
+          if (progress.request_id !== this.scanRequestID || !this.scanProgress.scanning) return;
+          const phases = ['checking', 'settings', 'reading', 'reconciling', 'processing', 'saving'];
+          if (phases.indexOf(progress.phase) < phases.indexOf(this.scanProgress.phase)) return;
           this.setPhase(progress.phase);
           this.scanProgress.visited = progress.visited;
           this.scanProgress.found = progress.found;
           this.scanProgress.currentPath = progress.current_path;
+          this.scanProgress.processed = progress.processed || 0;
+          this.scanProgress.total = progress.total || 0;
+          this.scanProgress.imported = progress.added || 0;
+          this.scanProgress.restored = progress.restored || 0;
+          this.scanProgress.deleted = progress.deleted || 0;
+          this.scanProgress.skipped = progress.skipped || 0;
         });
         this.scanClock = setInterval(() => { this.clockNow = Date.now(); }, 1000);
-        const files = await ScanDirectoryWithProgress(this.scanDirectory, this.scanRequestID) || [];
-        this.scanProgress.found = files.length;
-        this.setPhase('reconciling');
-        const existingVideos = (await GetVideosByDirectory(this.scanDirectory) || []).filter(video => !this.isExcludedPath(video.path));
-        const scannedSet = new Set(files);
-        const keptByPath = new Map();
-        const duplicateVideos = [];
-
-        for (const video of existingVideos) {
-          if (!keptByPath.has(video.path)) {
-            keptByPath.set(video.path, video);
-          } else {
-            duplicateVideos.push(video);
-          }
-        }
-
-        const duplicateIDSet = new Set(duplicateVideos.map(video => video.id));
-        const staleVideos = existingVideos.filter(video => !duplicateIDSet.has(video.id) && !scannedSet.has(video.path));
-        const toDelete = [...duplicateVideos, ...staleVideos];
-        const toAdd = files.filter(file => !keptByPath.has(file));
-
-        this.scanProgress.found = files.length;
-        this.scanProgress.total = toAdd.length + toDelete.length;
-        this.setPhase('processing');
-
-        for (const file of toAdd) {
-          try {
-            await AddVideo(file);
-            this.scanProgress.imported++;
-          } catch (err) {
-            this.scanProgress.skipped++;
-          } finally {
-            this.scanProgress.processed++;
-            await this.flushProgress();
-          }
-        }
-
-        for (const video of toDelete) {
-          try {
-            await DeleteVideo(video.id, false);
-            this.scanProgress.deleted++;
-          } catch (err) {
-            this.scanProgress.skipped++;
-          } finally {
-            this.scanProgress.processed++;
-            await this.flushProgress();
-          }
-        }
-
+        const result = await SyncDirectoryWithProgress(this.scanDirectory, this.scanRequestID);
+        this.scanProgress.found = Number(result.scanned || 0);
+        this.scanProgress.imported = Number(result.added || 0);
+        this.scanProgress.restored = Number(result.restored || 0);
+        this.scanProgress.deleted = Number(result.deleted || 0);
+        this.scanProgress.skipped = Number(result.skipped || 0);
+        const errors = result.errors || [];
         // 自动加入目录配置
         this.setPhase('saving');
         const exists = (this.directories || []).some(d => d.path === this.scanDirectory);
-        if (!exists) {
+        if (!exists && (result.scanned > 0 || !errors.length)) {
           const alias = this.scanDirectory.split(/[/\\]/).filter(Boolean).pop() || this.scanDirectory;
           try {
             await AddDirectory(this.scanDirectory, alias);
           } catch (err) {
             console.warn('保存扫描目录失败:', err);
-            notifyError('保存扫描目录失败: ' + err);
+            errors.push({ error: '保存扫描目录失败: ' + err });
           }
         }
 
-        if (this.scanProgress.total === 0) {
-          this.scanProgress.statusMessage = '扫描完成：未发现新视频或变动。';
-        } else {
-          this.scanProgress.statusMessage = `扫描完成：新增 ${this.scanProgress.imported} 个，删除 ${this.scanProgress.deleted} 个。`;
+        this.scanProgress.statusMessage = `扫描完成：新增 ${this.scanProgress.imported} 个，恢复 ${this.scanProgress.restored} 个，删除 ${this.scanProgress.deleted} 个，暂不可用 ${Number(result.stale || 0)} 个。`;
+        if (errors.length) {
+          this.scanProgress.failed = true;
+          this.scanProgress.statusMessage += ` 有 ${errors.length} 项失败：${errors[0].error}`;
         }
         this.$emit('scan-complete');
         // 不自动关闭，让用户确认结果
@@ -231,11 +199,6 @@ export default {
         this.scanProgress.scanning = false;
         this.stopProgressUpdates();
       }
-    },
-    async flushProgress() {
-      this.lastProgressAt = Date.now();
-      await this.$nextTick();
-      await new Promise(resolve => setTimeout(resolve, 0));
     },
     excludedPaths() {
       return String(this.settings?.scan_exclude_paths || '').split(/\r?\n/).map(path => path.trim()).filter(Boolean);

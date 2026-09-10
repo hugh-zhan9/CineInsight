@@ -177,9 +177,9 @@ func TestMarkImagesStaleUnderRemovedRootHidesAndRestores(t *testing.T) {
 		t.Fatalf("应当处理 1 张，实际 %d", marked)
 	}
 
-	// 从图库消失（软删），但记录还在库里
+	// 从图库消失（查询过滤），但记录还在库里
 	var visible int64
-	if err := database.DB.Model(&models.Image{}).Where("id = ?", original.ID).Count(&visible).Error; err != nil {
+	if err := applyImageFilter(database.DB.Model(&models.Image{}), ImageFilter{}).Where("id = ?", original.ID).Count(&visible).Error; err != nil {
 		t.Fatalf("统计图片失败: %v", err)
 	}
 	if visible != 0 {
@@ -190,7 +190,7 @@ func TestMarkImagesStaleUnderRemovedRootHidesAndRestores(t *testing.T) {
 		t.Fatalf("记录应当留在库里: %v", err)
 	}
 	if !kept.IsStale {
-		t.Fatal("软删的同时必须打上 is_stale，否则后续扫描不会自动恢复它")
+		t.Fatal("隐藏时必须打上 is_stale，否则后续扫描不会自动恢复它")
 	}
 	// 磁盘文件不动
 	if content, err := os.ReadFile(imagePath); err != nil || string(content) != "jpeg-bytes" {
@@ -298,8 +298,8 @@ func TestSyncScanDirectoriesKeepsVideosUnderUnreachableRoot(t *testing.T) {
 	svc := &VideoService{}
 	result := svc.SyncScanDirectories([]models.ScanDirectory{{Path: missingRoot}})
 
-	if reloadVideo(t, video.ID).IsStale {
-		t.Fatal("目录仍配置着、只是扫不到时，底下的记录不能被当成孤儿标失效")
+	if !reloadVideo(t, video.ID).IsStale {
+		t.Fatal("离线目录必须隐藏，但保留未删除记录")
 	}
 	if len(result.Errors) == 0 {
 		t.Fatal("扫不到的根应当如实记一条错误")
@@ -332,7 +332,7 @@ func TestSyncImageDirectoriesHidesOrphanedImages(t *testing.T) {
 	imageTestMustSync(t, svc)
 
 	var visible int64
-	if err := database.DB.Model(&models.Image{}).Where("id = ?", orphan.ID).Count(&visible).Error; err != nil {
+	if err := applyImageFilter(database.DB.Model(&models.Image{}), ImageFilter{}).Where("id = ?", orphan.ID).Count(&visible).Error; err != nil {
 		t.Fatalf("统计失败: %v", err)
 	}
 	if visible != 0 {

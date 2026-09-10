@@ -304,6 +304,9 @@ func Init() error {
 // （ensureMediaDetailConstraints 里的 Postgres DO 块），而两个后端的全套测试都没
 // 拦住——测试根本没跑到这条路径上。
 func ApplySchema(db *gorm.DB) error {
+	if err := migrateWatchlistTitleUniqueness(db); err != nil {
+		return fmt.Errorf("迁移想看片名唯一约束失败: %w", err)
+	}
 	// 如果表存在，先清理重复数据，避免 AutoMigrate 创建唯一索引失败
 	if db.Migrator().HasTable(&models.Video{}) {
 		if err := cleanupReimportedSoftDeletedVideos(db); err != nil {

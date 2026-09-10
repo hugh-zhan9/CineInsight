@@ -19,6 +19,8 @@ type WatchlistPage struct {
 	NextID  uint                    `json:"next_id"`
 }
 
+var ErrWatchlistTitleExists = errors.New("该片名已在想看片单中")
+
 var ErrWatchlistEntryNotFound = errors.New("这条想看记录已不存在，请刷新列表")
 
 func validateWatchlistText(text string, required bool) (string, error) {
@@ -60,7 +62,7 @@ func (s *WatchlistService) List(keyword string, cursorID uint, limit int) (*Watc
 	return page, nil
 }
 
-// Create 保存独立片名；同名并不意味着同一部影片。
+// Create 保存唯一片名，首尾空白由校验统一移除。
 func (s *WatchlistService) Create(title string) (*models.WatchlistEntry, error) {
 	title, err := validateWatchlistText(title, true)
 	if err != nil {
@@ -68,6 +70,9 @@ func (s *WatchlistService) Create(title string) (*models.WatchlistEntry, error) 
 	}
 	entry := &models.WatchlistEntry{Title: title}
 	if err := database.DB.Create(entry).Error; err != nil {
+		if watchlistTitleConflict(err) {
+			return nil, ErrWatchlistTitleExists
+		}
 		return nil, fmt.Errorf("添加想看记录失败: %w", err)
 	}
 	return entry, nil
@@ -81,6 +86,9 @@ func (s *WatchlistService) Update(id uint, title string) error {
 	}
 	result := database.DB.Model(&models.WatchlistEntry{}).Where("id = ?", id).Update("title", title)
 	if result.Error != nil {
+		if watchlistTitleConflict(result.Error) {
+			return ErrWatchlistTitleExists
+		}
 		return fmt.Errorf("修改想看记录失败: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
@@ -99,4 +107,9 @@ func (s *WatchlistService) Delete(id uint) error {
 		return ErrWatchlistEntryNotFound
 	}
 	return nil
+}
+
+// Both PostgreSQL and SQLite identify the violated title constraint in errors.
+func watchlistTitleConflict(err error) bool {
+	return strings.Contains(err.Error(), "idx_watchlist_title") || strings.Contains(err.Error(), "UNIQUE constraint failed: watchlist_entries.title")
 }

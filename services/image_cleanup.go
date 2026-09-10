@@ -264,7 +264,7 @@ func (s *ImageCleanupService) emitDoneForRun(runID uint64, total int, message st
 func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnalysis, int, error) {
 	startedAt := time.Now()
 	var images []models.Image
-	if err := database.DB.Order("id asc").Find(&images).Error; err != nil {
+	if err := applyImageVisibility(database.DB.Model(&models.Image{}), database.DB).Order("id asc").Find(&images).Error; err != nil {
 		return nil, 0, err
 	}
 

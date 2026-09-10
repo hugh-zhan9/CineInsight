@@ -13,7 +13,7 @@ describe('回收站弹窗文件大小', () => {
 
   it('视频回收站每条记录带文件大小，0 字节的旧记录不显示', async () => {
     api.ListTrashEntries.mockResolvedValue([
-      { id: 1, video_name: 'a.mp4', original_path: '/v/a.mp4', file_size: 1.5 * 1024 * 1024 * 1024, status: 'trashed', created_at: '2026-09-01T00:00:00Z' },
+      { deleted_by: 'scanner', id: 1, video_name: 'a.mp4', original_path: '/v/a.mp4', file_size: 1.5 * 1024 * 1024 * 1024, status: 'trashed', created_at: '2026-09-01T00:00:00Z' },
       { id: 2, video_name: 'b.mp4', original_path: '/v/b.mp4', file_size: 0, status: 'trashed', created_at: '2026-09-01T00:00:00Z' },
     ]);
     const wrapper = mount(TrashRestoreDialog, { props: { visible: true } });
@@ -22,6 +22,8 @@ describe('回收站弹窗文件大小', () => {
     const entries = wrapper.findAll('.trash-restore-entry');
     expect(entries).toHaveLength(2);
     expect(entries[0].text()).toContain('1.5 GB');
+    expect(entries[0].text()).toContain('删除人：程序（扫描）');
+    expect(entries[1].text()).toContain('删除人：历史未知');
     expect(entries[1].text()).not.toContain(' B ·');
   });
 

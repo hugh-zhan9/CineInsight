@@ -133,8 +133,7 @@ func (s *ShortFeedService) loadEligibleImages(excludeIDs []uint) ([]models.Image
 	// 刻意不 Preload("Tags")：GORM 会按加载条数生成 IN 参数，整库预载会撑爆
 	// Postgres extended protocol 的 65535 参数上限（那是线路协议的硬限制）。
 	// 权重需要的标签信息改由 tagBoostMap 精确取，展示需要的标签只为选中项再查。
-	query := database.DB.Model(&models.Image{}).
-		Where("is_stale = ?", false).
+	query := applyImageVisibility(database.DB.Model(&models.Image{}), database.DB).
 		Order("id ASC")
 	if len(excludeIDs) > 0 {
 		query = query.Where("id NOT IN ?", excludeIDs)

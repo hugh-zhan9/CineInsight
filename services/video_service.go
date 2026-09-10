@@ -359,7 +359,8 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		restoreErr := fmt.Errorf("原路径不是视频文件: %s", entry.OriginalPath)
 		_ = markTrashEntryRecoverable(entry.ID, restoreErr)
 		return nil, restoreErr
-	} else if !trashEntryFileMatches(entry.OriginalPath, info, *entry) {
+	} else if !trashEntryFileMatches(entry.OriginalPath, info, *entry) &&
+		!(entry.DeletedBy == "scanner" && entry.FileIdentity == "" && entry.FileSHA256 == "" && info.Size() == video.Size) {
 		restoreErr := fmt.Errorf("原路径文件与删除记录不一致: %s", entry.OriginalPath)
 		_ = markTrashEntryRecoverable(entry.ID, restoreErr)
 		return nil, restoreErr
@@ -370,7 +371,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		result := tx.Model(&models.Video{}).
 			Unscoped().
 			Where("id = ? AND deleted_at IS NOT NULL", video.ID).
-			Update("deleted_at", nil)
+			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": false})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -410,6 +411,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		_ = database.DB.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": err.Error()}).Error
 		return nil, fmt.Errorf("恢复数据库记录失败: %w", err)
 	}
+	log.Printf("视频恢复 video_id=%d original_deleted_by=%s", restored.ID, entry.DeletedBy)
 	return &restored, nil
 }
 
@@ -419,14 +421,23 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 // 那些视频的代理同样该跟着走。软删除与永久删除在这里是同一条路——回收站里的
 // 视频不需要代理，恢复之后要用再重新触发一次。
 func (s *VideoService) deleteVideo(id uint, deleteFile bool) error {
-	if err := s.deleteVideoRecord(id, deleteFile); err != nil {
+	return s.deleteVideoBy(id, deleteFile, "user")
+}
+
+func (s *VideoService) deleteVideoBy(id uint, deleteFile bool, deletedBy string) error {
+	if err := s.deleteVideoRecordBy(id, deleteFile, deletedBy); err != nil {
 		return err
 	}
 	s.playbackProxies().DeleteForVideo(id)
+	log.Printf("视频软删除 video_id=%d deleted_by=%s delete_file=%t", id, deletedBy, deleteFile)
 	return nil
 }
 
 func (s *VideoService) deleteVideoRecord(id uint, deleteFile bool) error {
+	return s.deleteVideoRecordBy(id, deleteFile, "user")
+}
+
+func (s *VideoService) deleteVideoRecordBy(id uint, deleteFile bool, deletedBy string) error {
 	var video models.Video
 	if err := database.DB.First(&video, id).Error; err != nil {
 		return err
@@ -455,6 +466,8 @@ func (s *VideoService) deleteVideoRecord(id uint, deleteFile bool) error {
 	}
 
 	entry := models.VideoTrashEntry{
+		DeletedBy:    deletedBy,
+		FileSize:     video.Size,
 		VideoID:      video.ID,
 		VideoName:    video.Name,
 		OriginalPath: video.Path,
@@ -485,7 +498,7 @@ func (s *VideoService) deleteVideoRecord(id uint, deleteFile bool) error {
 			if err := tx.Create(&entry).Error; err != nil {
 				return err
 			}
-			return finalizeVideoDeletionTx(tx, &video)
+			return finalizeVideoDeletionTx(tx, &video, entry.DeletedBy)
 		})
 	}
 
@@ -522,7 +535,7 @@ func (s *VideoService) deleteVideoRecord(id uint, deleteFile bool) error {
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("待删除条目状态已变化: %d", entry.ID)
 		}
-		return finalizeVideoDeletionTx(tx, &video)
+		return finalizeVideoDeletionTx(tx, &video, entry.DeletedBy)
 	})
 	if err == nil {
 		return nil
@@ -552,7 +565,10 @@ func (s *VideoService) deleteVideoRecord(id uint, deleteFile bool) error {
 	return fmt.Errorf("删除数据库记录失败: %w", err)
 }
 
-func finalizeVideoDeletionTx(tx *gorm.DB, video *models.Video) error {
+func finalizeVideoDeletionTx(tx *gorm.DB, video *models.Video, deletedBy string) error {
+	if err := tx.Model(video).Update("deleted_by", deletedBy).Error; err != nil {
+		return err
+	}
 	if err := tx.Where("video_id = ?", video.ID).Delete(&models.SubtitleSegment{}).Error; err != nil {
 		return err
 	}
@@ -893,7 +909,7 @@ func (s *VideoService) reconcilePendingDelete(entry *models.VideoTrashEntry) err
 		if err := tx.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "file_moved": true, "last_error": ""}).Error; err != nil {
 			return err
 		}
-		return finalizeVideoDeletionTx(tx, &video)
+		return finalizeVideoDeletionTx(tx, &video, entry.DeletedBy)
 	})
 }
 

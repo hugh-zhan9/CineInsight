@@ -33,6 +33,7 @@ export namespace models {
 	    }
 	}
 	export class Image {
+	    deleted_by: string;
 	    id: number;
 	    name: string;
 	    path: string;
@@ -70,6 +71,7 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deleted_by = source["deleted_by"];
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.path = source["path"];
@@ -199,6 +201,7 @@ export namespace models {
 	    }
 	}
 	export class ImageTrashEntry {
+	    deleted_by: string;
 	    id: number;
 	    image_id: number;
 	    image_name: string;
@@ -218,6 +221,7 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deleted_by = source["deleted_by"];
 	        this.id = source["id"];
 	        this.image_id = source["image_id"];
 	        this.image_name = source["image_name"];
@@ -568,6 +572,7 @@ export namespace models {
 	    }
 	}
 	export class Video {
+	    deleted_by: string;
 	    id: number;
 	    name: string;
 	    display_title: string;
@@ -601,6 +606,7 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deleted_by = source["deleted_by"];
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.display_title = source["display_title"];
@@ -684,6 +690,7 @@ export namespace models {
 	    }
 	}
 	export class VideoTrashEntry {
+	    deleted_by: string;
 	    id: number;
 	    video_id: number;
 	    video_name: string;
@@ -703,6 +710,7 @@ export namespace models {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deleted_by = source["deleted_by"];
 	        this.id = source["id"];
 	        this.video_id = source["video_id"];
 	        this.video_name = source["video_name"];

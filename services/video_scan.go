@@ -217,6 +217,16 @@ func fingerprintVideo(video models.Video) scanFileFingerprint {
 
 // SyncScanDirectories performs an incremental database sync for configured scan directories.
 func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyncResult {
+	return s.syncScanDirectories(dirs, true, nil)
+}
+
+// SyncDirectoryWithProgress gives the manual dialog the same guarded deletion
+// and restoration rules as startup scans, without touching other scan roots.
+func (s *VideoService) SyncDirectoryWithProgress(dir string, progress func(DirectoryScanProgress)) *ScanSyncResult {
+	return s.syncScanDirectories([]models.ScanDirectory{{Path: dir}}, false, progress)
+}
+
+func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcileOrphans bool, progress func(DirectoryScanProgress)) *ScanSyncResult {
 	libraryPathMutationMu.RLock()
 	defer libraryPathMutationMu.RUnlock()
 	s.scanSyncMu.Lock()
@@ -226,19 +236,21 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 	scannedByPath := make(map[string]ScannedFile)
 	existingByPath := make(map[string]models.Video)
 	roots := make([]string, 0, len(dirs))
+	removalGuard := make(scanRemovalGuard)
 	allExisting := make([]models.Video, 0)
 	duplicateVideos := make([]models.Video, 0)
 	var settings models.Settings
 	excludedPaths := make([]string, 0)
 	if err := database.DB.Select("scan_exclude_paths").First(&settings).Error; err != nil {
 		result.recordError("load_scan_blacklist", "", "", err)
+		return result
 	} else {
 		excludedPaths = parseScanExcludePaths(settings.ScanExcludePaths)
 	}
 
 	// configuredRoots 是"当前配置了哪些目录"，与 roots（本轮成功扫到的根）有意分开：
 	// 移动硬盘没插时那个根扫不了、进不了 roots，但它仍然配置着，底下的记录不能
-	// 因此被当成孤儿标失效。
+	// 因此被当成孤儿处理；离线根单独标失效，不进入软删除。
 	configuredRoots := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
 		root := filepath.Clean(strings.TrimSpace(dir.Path))
@@ -249,9 +261,25 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		configuredRoots = append(configuredRoots, root)
 		result.Directories++
 
-		scannedFiles, err := s.ScanDirectoryWithInfo(root)
+		if isScanPathExcluded(root, excludedPaths) {
+			continue
+		}
+		if err := removalGuard.capture(root); err != nil {
+			result.recordError("scan", root, "", err)
+			if errors.Is(err, os.ErrNotExist) {
+				s.markUnavailableScanRoot(root, result)
+			}
+			continue
+		}
+		scannedFiles, err := s.scanDirectoryWithProgress(root, true, progress)
 		if err != nil {
 			result.recordError("scan", root, "", err)
+			delete(removalGuard, root)
+			if errors.Is(err, os.ErrNotExist) {
+				if _, rootErr := os.Stat(root); errors.Is(rootErr, os.ErrNotExist) {
+					s.markUnavailableScanRoot(root, result)
+				}
+			}
 			continue
 		}
 		roots = append(roots, root)
@@ -261,6 +289,9 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		}
 	}
 
+	reporter := directoryScanReporter{callback: progress}
+	reporter.state.Found = result.Scanned
+	reporter.update("reconciling", "", true)
 	loadedExisting, err := s.getActiveVideosUnderRoots(roots)
 	if err != nil {
 		result.recordError("load_existing", "", "", err)
@@ -287,7 +318,17 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 	for _, video := range allExisting {
 		if _, exists := scannedByPath[video.Path]; !exists {
 			if scanCandidateIsMissing(video, result) {
-				missingVideos = append(missingVideos, video)
+				if missing, err := removalGuard.missing(video.Path, excludedPaths); err != nil {
+					result.recordError("check_missing_root", video.Directory, video.Path, err)
+					update := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true)
+					if update.Error != nil {
+						result.recordError("mark_stale", video.Directory, video.Path, update.Error)
+					} else {
+						result.Stale += int(update.RowsAffected)
+					}
+				} else if missing {
+					missingVideos = append(missingVideos, video)
+				}
 			}
 			continue
 		}
@@ -351,11 +392,20 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 		consumedNewPaths[file.Path] = struct{}{}
 	}
 
-	for _, file := range newFiles {
+	reporter.state.Total = len(newFiles) + len(missingVideos) + len(duplicateVideos)
+	reportProcessing := func(path string, force bool) {
+		reporter.state.Added, reporter.state.Restored = result.Added, result.Restored
+		reporter.state.Deleted, reporter.state.Skipped = result.Deleted, result.Skipped
+		reporter.update("processing", path, force)
+	}
+	reportProcessing("", true)
+	for index, file := range newFiles {
+		reporter.state.Processed = index
+		reportProcessing(file.Path, false)
 		if _, consumed := consumedNewPaths[file.Path]; consumed {
 			continue
 		}
-		added, err := s.addVideo(file.Path)
+		added, restored, err := s.addScannedVideo(file.Path)
 		if err != nil {
 			if errors.Is(err, ErrVideoExists) {
 				result.Skipped++
@@ -364,31 +414,83 @@ func (s *VideoService) SyncScanDirectories(dirs []models.ScanDirectory) *ScanSyn
 			result.recordError("add", filepath.Dir(file.Path), file.Path, err)
 			continue
 		}
+		if restored {
+			result.Restored++
+			continue
+		}
 		result.Added++
 		if added != nil {
 			result.AddedVideoIDs = append(result.AddedVideoIDs, added.ID)
 		}
 	}
 
-	for _, video := range append(duplicateVideos, missingVideos...) {
+	// Settings may have changed while a slow network traversal was running.
+	if err := database.DB.Select("scan_exclude_paths").First(&settings).Error; err != nil {
+		result.recordError("reload_scan_blacklist", "", "", err)
+		return result
+	}
+	excludedPaths = parseScanExcludePaths(settings.ScanExcludePaths)
+	for index, video := range append(duplicateVideos, missingVideos...) {
+		reporter.state.Processed = len(newFiles) + index
+		reportProcessing(video.Path, false)
 		if _, relocated := relocatedVideoIDs[video.ID]; relocated {
 			continue
 		}
-		if err := s.deleteVideo(video.ID, false); err != nil {
+		missing, guardErr := removalGuard.missing(video.Path, excludedPaths)
+		if guardErr != nil {
+			result.recordError("check_delete", video.Directory, video.Path, guardErr)
+			if update := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true); update.Error != nil {
+				result.recordError("mark_stale", video.Directory, video.Path, update.Error)
+			} else {
+				result.Stale += int(update.RowsAffected)
+			}
+			continue
+		}
+		if !missing {
+			continue
+		}
+		if err := s.deleteVideoBy(video.ID, false, "scanner"); err != nil {
 			result.recordError("delete", video.Directory, video.Path, err)
 			continue
 		}
 		result.Deleted++
 	}
 
-	s.reconcileOrphanedVideos(configuredRoots, result)
+	reporter.state.Processed = reporter.state.Total
+	reportProcessing("", true)
+	for root := range removalGuard {
+		if err := removalGuard.verify(root); err != nil {
+			result.recordError("verify_root", root, "", err)
+			s.markUnavailableScanRoot(root, result)
+		}
+	}
+	if reconcileOrphans {
+		s.reconcileOrphanedVideos(configuredRoots, result)
+	}
 	if err := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTags(tx) }); err != nil {
 		result.recordError("short-video-tag", "", "", err)
 	}
 
-	log.Printf("增量扫描同步完成 dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d",
-		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors))
+	log.Printf("增量扫描同步完成 dirs=%d scanned=%d added=%d relocated=%d deleted=%d stale=%d restored=%d refreshed=%d skipped=%d errors=%d",
+		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.Stale, result.Restored, result.MetadataRefreshed, result.Skipped, len(result.Errors))
 	return result
+}
+
+// markUnavailableScanRoot hides an offline root without entering the trash flow.
+func (s *VideoService) markUnavailableScanRoot(root string, result *ScanSyncResult) {
+	videos, err := s.getActiveVideosUnderRoots([]string{root})
+	if err != nil {
+		result.recordError("load_offline", root, "", err)
+		return
+	}
+	for _, video := range videos {
+		update := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true)
+		if update.Error != nil {
+			result.recordError("mark_stale", root, video.Path, update.Error)
+		} else {
+			result.Stale += int(update.RowsAffected)
+		}
+	}
 }
 
 // SyncAffectedDirectories reconciles only stable watcher-affected subtrees.
@@ -505,13 +607,17 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		if _, consumed := consumedPaths[file.Path]; consumed {
 			continue
 		}
-		video, addErr := s.addVideo(file.Path)
+		video, restored, addErr := s.addScannedVideo(file.Path)
 		if addErr != nil {
 			if errors.Is(addErr, ErrVideoExists) {
 				result.Skipped++
 				continue
 			}
 			result.recordError("add", filepath.Dir(file.Path), file.Path, addErr)
+			continue
+		}
+		if restored {
+			result.Restored++
 			continue
 		}
 		result.Added++

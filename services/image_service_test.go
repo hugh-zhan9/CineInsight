@@ -422,18 +422,18 @@ func TestImageSyncExtensionFallbackAndOverride(t *testing.T) {
 		t.Fatalf("默认扩展名清单应命中 3 个文件: %+v", result)
 	}
 
-	// 显式收窄为 .png：既有 jpg/nef 记录按失踪清理，仅 png 保留。
+	// 收窄扩展名只限制收录；原文件仍存在，不能把 jpg/nef 当成丢失删除。
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").
 		Update("image_extensions", ".png").Error; err != nil {
 		t.Fatalf("更新扩展名设置失败: %v", err)
 	}
 	result = imageTestMustSync(t, svc)
-	if result.Removed != 2 || result.Added != 0 {
+	if result.Removed != 0 || result.Added != 0 {
 		t.Fatalf("收窄扩展名后对账不符: %+v", result)
 	}
 	var images []models.Image
-	if err := database.DB.Find(&images).Error; err != nil || len(images) != 1 || images[0].Name != "b.png" {
-		t.Fatalf("收窄后仅应保留 png: images=%+v err=%v", images, err)
+	if err := database.DB.Find(&images).Error; err != nil || len(images) != 3 {
+		t.Fatalf("收窄后仍须保留所有现存文件记录: images=%+v err=%v", images, err)
 	}
 }
 

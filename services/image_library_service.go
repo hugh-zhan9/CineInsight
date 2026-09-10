@@ -206,6 +206,7 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 
 // applyImageFilter 假设 filter 已经 normalizeImageFilter；只查活跃行由软删除默认作用域保证。
 func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
+	query = applyImageVisibility(query, database.DB)
 	if filter.Keyword != "" {
 		pattern := "%" + strings.ToLower(escapeSQLLike(filter.Keyword)) + "%"
 		query = query.Where("LOWER(images.name) LIKE ? ESCAPE '\\'", pattern)

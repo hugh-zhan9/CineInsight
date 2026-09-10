@@ -177,8 +177,7 @@ func pathWithinScanRoots(path string, roots []string) bool {
 }
 
 // cleanupPathScope 是清理候选统一的路径口径：扫描根之内、且不在扫描黑名单里。
-// 黑名单目录里的旧记录在片库里可能还看得见（扫描只是不再进去），但拿它们来做
-// "留哪个删哪个"的决定没有意义——用户已经声明不管这一片了。
+// 主片库与清理候选共用黑名单过滤，已有记录不删除，取消排除后重新可见。
 type cleanupPathScope struct {
 	roots    []string
 	excluded []string
@@ -202,10 +201,14 @@ func (scope cleanupPathScope) contains(path string) bool {
 }
 
 func applyScanRootScope(query *gorm.DB) (*gorm.DB, error) {
-	roots, err := loadScanRootScope()
+	scope, err := loadCleanupPathScope()
 	if err != nil {
 		return nil, err
 	}
+	for _, excluded := range scope.excluded {
+		query = query.Where(`NOT (videos.path = ? OR videos.path LIKE ? ESCAPE '\')`, excluded, escapeSQLLikePrefix(scanRootChildPrefix(excluded))+"%")
+	}
+	roots := scope.roots
 	if len(roots) == 0 {
 		return query, nil
 	}
