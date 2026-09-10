@@ -436,6 +436,8 @@ export function ScanDirectory(arg1:string):Promise<Array<string>>;
 
 export function ScanDirectoryWithInfo(arg1:string):Promise<Array<services.ScannedFile>>;
 
+export function ScanDirectoryWithProgress(arg1:string,arg2:string):Promise<Array<string>>;
+
 export function SearchImagePage(arg1:services.ImagePageRequest):Promise<services.ImagePage>;
 
 export function SearchImagesSemantic(arg1:services.ImageSemanticSearchRequest):Promise<services.ImageSemanticSearchPage>;

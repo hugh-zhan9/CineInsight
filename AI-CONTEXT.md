@@ -105,6 +105,8 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **事件产生点:** 只有桌面正式播放（`desktop_play`）、桌面随机播放（`desktop_random`）与手机端信息流播放（`mobile_feed`）产生事件；内嵌预览、观看进度更新与 IINA 断点回读都不产生。
 
 ### 2.7 视频扫描与路径管理
+- **手动目录扫描进度（2026-09-10）：** `ScanDialog` 通过 `ScanDirectoryWithProgress(dir, requestID)` 与 `directory-scan-progress` 事件显示检查目录、读取设置、读取目录、核对片库、处理文件和保存目录阶段。发现数量与已检查文件数在遍历途中更新（文件事件约 250ms 合并，进入目录前立即上报），附当前目录和已用时间；8 秒无新进度明确提示仍在等待，不把初始 0 当最终结果。事件按请求 ID 隔离，遍历结束后的迟到事件不回退阶段；运行中禁换目录、重复启动，关闭按钮标为「后台继续」，重开保留任务。手动路径分批读取目录名（128 条/批、不全量排序），复用既有过滤；读取错误返回失败、禁止用不完整结果进入增删对账。自动扫描仍沿用原遍历策略。
+- **TS 文件头检测上限（2026-09-10）：** `.ts` 与 TypeScript 源码扩展名冲突，`isKnownNonVideoSourcePath` 原先误用 `os.ReadFile`，扫描一个 5.6 GB 的 TS 视频就会完整读入内存，在 SMB 上造成持续大流量和长时间无进展。现由 `isTypeScriptSource` 只读取前 64 KiB（`io.LimitReader`），含 NUL 的二进制样本不按源码排除；`.d.ts` / `node_modules` 路径排除保留。此修复同时覆盖手动/自动扫描与 `AddVideo`；不可回退成整文件读取。本机真机日志已确认共享目录发现完成（1072 个视频），不代表另一台机器上所有文件可见性问题都已验收。
 - **扫描机制:** 递归遍历目录，基于 `Settings` 中的 `VideoExtensions` 过滤。
 - **附带大小:** `ScanDirectoryWithInfo` 返回 `[]ScannedFile`（含 path+size），用于迁移检测。
 - **唯一性:** 在数据库层面通过 `idx_videos_path_active` 唯一索引（结合 `deleted_at IS NULL`）保证路径唯一。

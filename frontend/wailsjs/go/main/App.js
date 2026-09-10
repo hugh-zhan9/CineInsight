@@ -866,6 +866,10 @@ export function ScanDirectoryWithInfo(arg1) {
   return window['go']['main']['App']['ScanDirectoryWithInfo'](arg1);
 }
 
+export function ScanDirectoryWithProgress(arg1, arg2) {
+  return window['go']['main']['App']['ScanDirectoryWithProgress'](arg1, arg2);
+}
+
 export function SearchImagePage(arg1) {
   return window['go']['main']['App']['SearchImagePage'](arg1);
 }

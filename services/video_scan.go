@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -90,11 +91,17 @@ func (s *VideoService) ScanDirectoryWithInfo(dir string) ([]ScannedFile, error) 
 }
 
 func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool) ([]ScannedFile, error) {
+	return s.scanDirectoryWithProgress(dir, skipRecentlyActive, nil)
+}
+
+func (s *VideoService) scanDirectoryWithProgress(dir string, skipRecentlyActive bool, progress func(DirectoryScanProgress)) ([]ScannedFile, error) {
 	var videoFiles []ScannedFile
+	reporter := directoryScanReporter{callback: progress}
 	dir = filepath.Clean(strings.TrimSpace(dir))
 	if dir == "" || dir == "." {
 		return nil, fmt.Errorf("扫描根目录为空")
 	}
+	reporter.update("checking", dir, true)
 	rootInfo, err := os.Stat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("扫描根目录不可用: %w", err)
@@ -104,6 +111,7 @@ func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool
 	}
 
 	// 从设置中获取支持的视频格式
+	reporter.update("settings", dir, true)
 	var settings models.Settings
 	if err := database.DB.First(&settings).Error; err != nil {
 		return nil, fmt.Errorf("获取设置失败: %w", err)
@@ -129,7 +137,11 @@ func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool
 		}
 	}
 
-	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	walk := filepath.Walk
+	if progress != nil {
+		walk = walkDirectoryInBatches
+	}
+	err = walk(dir, func(path string, info os.FileInfo, err error) error {
 		if isScanPathExcluded(path, excludedPaths) {
 			if info != nil && info.IsDir() {
 				return filepath.SkipDir
@@ -153,8 +165,11 @@ func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool
 			return err
 		}
 		if info.IsDir() {
+			reporter.update("reading", path, true)
 			return nil
 		}
+		reporter.state.Visited++
+		defer func() { reporter.update("reading", reporter.state.CurrentPath, false) }()
 
 		if isTrashPath(path) || hasTempVideoSuffix(path) || (skipRecentlyActive && isRecentlyActiveFile(info)) || isKnownNonVideoSourcePath(path) {
 			return nil
@@ -164,12 +179,17 @@ func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool
 		for _, videoExt := range videoExts {
 			if ext == strings.ToLower(videoExt) {
 				videoFiles = append(videoFiles, ScannedFile{Path: path, Size: info.Size()})
+				reporter.state.Found = len(videoFiles)
+				if len(videoFiles) == 1 {
+					reporter.update("reading", reporter.state.CurrentPath, true)
+				}
 				break
 			}
 		}
 
 		return nil
 	})
+	reporter.update("reading", reporter.state.CurrentPath, true)
 	log.Printf("扫描目录完成 dir=%s files=%d", dir, len(videoFiles))
 
 	return videoFiles, err
@@ -954,8 +974,21 @@ func isKnownNonVideoSourcePath(path string) bool {
 			return true
 		}
 	}
-	data, err := os.ReadFile(path)
+	file, err := os.Open(path)
 	if err != nil {
+		return false
+	}
+	defer file.Close()
+	return isTypeScriptSource(file)
+}
+
+const typeScriptSampleLimit = 64 * 1024
+
+func isTypeScriptSource(reader io.Reader) bool {
+	// .ts also means MPEG transport stream. Never read an entire multi-GB video
+	// just to exclude source code: this runs during discovery, including on SMB.
+	data, err := io.ReadAll(io.LimitReader(reader, typeScriptSampleLimit))
+	if err != nil || bytes.IndexByte(data, 0) >= 0 {
 		return false
 	}
 	sample := strings.ToLower(string(bytes.TrimSpace(data)))

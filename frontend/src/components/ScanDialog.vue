@@ -2,14 +2,22 @@
   <BaseModal v-if="visible" close-on-overlay stop-modal-clicks @close="$emit('close')">
       <h2>扫描视频目录</h2>
       <div class="scan-dir-group">
-        <button @click="selectDir" class="btn-primary">选择目录</button>
+        <button @click="selectDir" :disabled="scanProgress.scanning" class="btn-primary">选择目录</button>
         <p v-if="scanDirectory" class="selected-dir">{{ scanDirectory }}</p>
       </div>
 
       <div v-if="scanProgress.scanning" class="scan-progress">
-        <p>正在扫描... 已发现 {{ scanProgress.found }} 个视频</p>
-        <p>正在处理 {{ scanProgress.processed }}/{{ scanProgress.total }}</p>
-        <p>新增 {{ scanProgress.imported }} 个，删除 {{ scanProgress.deleted }} 个，跳过 {{ scanProgress.skipped }} 个</p>
+        <p data-test="scan-phase">{{ phaseLabel }} · 已用时 {{ elapsedSeconds }} 秒</p>
+        <template v-if="scanProgress.phase === 'reading'">
+          <p data-test="scan-discovery">已检查 {{ scanProgress.visited }} 个文件，已发现 {{ scanProgress.found }} 个视频</p>
+          <p class="scan-current-path">当前目录：{{ scanProgress.currentPath }}</p>
+        </template>
+        <p v-if="scanProgress.phase === 'reconciling'">共发现 {{ scanProgress.found }} 个视频，正在核对已有记录。</p>
+        <p v-if="waitingForProgress" data-test="scan-waiting">{{ waitingMessage }}</p>
+        <template v-if="scanProgress.phase === 'processing'">
+          <p>正在处理 {{ scanProgress.processed }}/{{ scanProgress.total }} · 共发现 {{ scanProgress.found }} 个视频</p>
+          <p>新增 {{ scanProgress.imported }} 个，删除 {{ scanProgress.deleted }} 个，跳过 {{ scanProgress.skipped }} 个</p>
+        </template>
       </div>
       <div v-if="!scanProgress.scanning && scanProgress.statusMessage" :class="['scan-result', { 'scan-result--error': scanProgress.failed }]" :role="scanProgress.failed ? 'alert' : 'status'" data-test="scan-result">
         <p>{{ scanProgress.statusMessage }}</p>
@@ -19,16 +27,18 @@
           {{ scanProgress.statusMessage ? '重新扫描' : '开始扫描' }}
         </button>
         <button @click="$emit('close')" class="btn-secondary">
-          {{ scanProgress.statusMessage ? '关闭' : '取消' }}
+          {{ scanProgress.scanning ? '后台继续' : scanProgress.statusMessage ? '关闭' : '取消' }}
         </button>
       </div>
   </BaseModal>
 </template>
 
 <script>
-import { SelectDirectory, ScanDirectory, AddVideo, DeleteVideo, GetVideosByDirectory, AddDirectory } from '../../wailsjs/go/main/App';
+import { SelectDirectory, ScanDirectoryWithProgress, AddVideo, DeleteVideo, GetVideosByDirectory, AddDirectory } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import { notify, notifyError } from '../utils/feedback.js';
+
+let scanRequestSequence = 0;
 
 export default {
   name: 'ScanDialog',
@@ -42,8 +52,15 @@ export default {
   data() {
     return {
       scanDirectory: '',
+      scanRequestID: '',
+      scanStartedAt: 0,
+      lastProgressAt: 0,
+      clockNow: 0,
       scanProgress: {
         scanning: false,
+        phase: '',
+        visited: 0,
+        currentPath: '',
         found: 0,
         processed: 0,
         imported: 0,
@@ -55,18 +72,49 @@ export default {
       }
     };
   },
+  computed: {
+    phaseLabel() {
+      return ({ checking: '正在检查目录', settings: '正在读取扫描设置', reading: '正在读取目录', reconciling: '正在核对片库记录', processing: '正在处理文件', saving: '正在保存扫描目录' })[this.scanProgress.phase] || '正在启动扫描';
+    },
+    elapsedSeconds() {
+      return Math.max(0, Math.floor((this.clockNow - this.scanStartedAt) / 1000));
+    },
+    waitingForProgress() {
+      return this.clockNow - this.lastProgressAt >= 8000;
+    },
+    waitingMessage() {
+      if (['checking', 'reading'].includes(this.scanProgress.phase)) {
+        return '仍在等待目录读取返回，暂未收到新进度；当前计数不是最终结果。';
+      }
+      return '当前操作尚未返回，正在等待新进度。';
+    }
+  },
   watch: {
     visible(val) {
-      if (val) {
+      if (val && !this.scanProgress.scanning) {
         this.scanDirectory = '';
         this.resetProgress();
       }
     }
   },
+  beforeUnmount() {
+    this.stopProgressUpdates();
+  },
   methods: {
+    stopProgressUpdates() {
+      this.scanProgressOff?.();
+      this.scanProgressOff = null;
+      clearInterval(this.scanClock);
+      this.scanClock = null;
+    },
+    setPhase(phase) {
+      this.scanProgress.phase = phase;
+      this.lastProgressAt = Date.now();
+    },
     resetProgress() {
       this.scanProgress = {
         scanning: false, found: 0, processed: 0,
+        phase: '', visited: 0, currentPath: '',
         imported: 0, deleted: 0, skipped: 0, total: 0,
         statusMessage: '', failed: false
       };
@@ -80,6 +128,7 @@ export default {
       }
     },
     async startScan() {
+      if (this.scanProgress.scanning) return;
       if (!this.scanDirectory) {
         notify('请先选择目录');
         return;
@@ -89,18 +138,25 @@ export default {
         return;
       }
 
+      this.resetProgress();
       this.scanProgress.scanning = true;
-      this.scanProgress.failed = false;
-      this.scanProgress.statusMessage = '';
-      this.scanProgress.found = 0;
-      this.scanProgress.processed = 0;
-      this.scanProgress.imported = 0;
-      this.scanProgress.deleted = 0;
-      this.scanProgress.skipped = 0;
-      this.scanProgress.total = 0;
 
       try {
-        const files = await ScanDirectory(this.scanDirectory) || [];
+        this.scanRequestID = `${Date.now()}-${++scanRequestSequence}`;
+        this.scanStartedAt = this.clockNow = Date.now();
+        this.setPhase('checking');
+        this.scanProgress.currentPath = this.scanDirectory;
+        this.scanProgressOff = window.runtime.EventsOn('directory-scan-progress', progress => {
+          if (progress.request_id !== this.scanRequestID || !this.scanProgress.scanning || !['checking', 'settings', 'reading'].includes(this.scanProgress.phase)) return;
+          this.setPhase(progress.phase);
+          this.scanProgress.visited = progress.visited;
+          this.scanProgress.found = progress.found;
+          this.scanProgress.currentPath = progress.current_path;
+        });
+        this.scanClock = setInterval(() => { this.clockNow = Date.now(); }, 1000);
+        const files = await ScanDirectoryWithProgress(this.scanDirectory, this.scanRequestID) || [];
+        this.scanProgress.found = files.length;
+        this.setPhase('reconciling');
         const existingVideos = (await GetVideosByDirectory(this.scanDirectory) || []).filter(video => !this.isExcludedPath(video.path));
         const scannedSet = new Set(files);
         const keptByPath = new Map();
@@ -121,6 +177,7 @@ export default {
 
         this.scanProgress.found = files.length;
         this.scanProgress.total = toAdd.length + toDelete.length;
+        this.setPhase('processing');
 
         for (const file of toAdd) {
           try {
@@ -147,6 +204,7 @@ export default {
         }
 
         // 自动加入目录配置
+        this.setPhase('saving');
         const exists = (this.directories || []).some(d => d.path === this.scanDirectory);
         if (!exists) {
           const alias = this.scanDirectory.split(/[/\\]/).filter(Boolean).pop() || this.scanDirectory;
@@ -171,9 +229,11 @@ export default {
         console.error('扫描失败:', err);
       } finally {
         this.scanProgress.scanning = false;
+        this.stopProgressUpdates();
       }
     },
     async flushProgress() {
+      this.lastProgressAt = Date.now();
       await this.$nextTick();
       await new Promise(resolve => setTimeout(resolve, 0));
     },
@@ -217,6 +277,8 @@ export default {
 }
 
 .scan-progress p { margin: 0; }
+
+.scan-current-path { overflow-wrap: anywhere; }
 
 .scan-result {
   margin-top: 14px;

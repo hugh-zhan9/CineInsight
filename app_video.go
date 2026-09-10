@@ -55,6 +55,20 @@ func (a *App) ScanDirectory(dir string) ([]string, error) {
 	return files, err
 }
 
+// ScanDirectoryWithProgress scopes events to this invocation, so late events
+// or other scans cannot overwrite the dialog's current discovery state.
+func (a *App) ScanDirectoryWithProgress(dir, requestID string) ([]string, error) {
+	log.Printf("API ScanDirectoryWithProgress begin dir=%s", dir)
+	files, err := a.videoService.ScanDirectoryWithProgress(dir, func(progress services.DirectoryScanProgress) {
+		runtime.EventsEmit(a.ctx, "directory-scan-progress", struct {
+			services.DirectoryScanProgress
+			RequestID string `json:"request_id"`
+		}{progress, requestID})
+	})
+	log.Printf("API ScanDirectoryWithProgress end dir=%s result=%d err=%v", dir, len(files), err)
+	return files, err
+}
+
 // ScanDirectoryWithInfo 扫描目录（附带文件大小，用于迁移检测）
 func (a *App) ScanDirectoryWithInfo(dir string) ([]services.ScannedFile, error) {
 	files, err := a.videoService.ScanDirectoryWithInfo(dir)
