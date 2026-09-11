@@ -551,3 +551,5 @@ export function UpsertGlossaryEntry(arg1:models.TranslationGlossaryEntry):Promis
 export function ValidateSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleValidationResult>;
 
 export function SyncDirectoryWithProgress(arg1:string, arg2:string):Promise<services.ScanSyncResult>;
+
+export function GetFaceClusterObservations(arg1:number,arg2:number,arg3:number):Promise<services.FaceClusterObservationPage>;

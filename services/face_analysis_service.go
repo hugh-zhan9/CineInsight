@@ -1433,11 +1433,15 @@ type FaceCropAsset struct {
 // ResolveFaceCrop 解析裁剪图路由（`/preview/face-crop/{observationID}`，D-020）。
 // 只认 faces 目录内的文件：库里的 crop_path 被写成 `../secrets` 也出不了这个目录。
 func (s *FaceAnalysisService) ResolveFaceCrop(observationID uint) (*FaceCropAsset, error) {
+	return s.resolveFaceCrop(database.DB, observationID)
+}
+
+func (s *FaceAnalysisService) resolveFaceCrop(db *gorm.DB, observationID uint) (*FaceCropAsset, error) {
 	if s == nil {
 		return nil, os.ErrNotExist
 	}
 	var observation models.FaceObservation
-	if err := database.DB.Select("id", "crop_path").First(&observation, observationID).Error; err != nil {
+	if err := db.Select("id", "crop_path").First(&observation, observationID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, os.ErrNotExist
 		}

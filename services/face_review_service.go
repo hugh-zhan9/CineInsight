@@ -84,7 +84,14 @@ type FaceClusterView struct {
 }
 
 // FaceReviewService 把审阅动作转成关系写入。无状态：每个动作一个事务。
-type FaceReviewService struct{}
+type FaceReviewService struct {
+	images      *ManagedImageService
+	resolveCrop func(*gorm.DB, uint) (*FaceCropAsset, error)
+}
+
+func NewFaceReviewService(dataDir string, analysis *FaceAnalysisService) *FaceReviewService {
+	return &FaceReviewService{images: NewManagedImageService(dataDir), resolveCrop: analysis.resolveFaceCrop}
+}
 
 // ListFaceClusters 返回簇视图，按观测数降序（观测多的簇先看，命名一次收益最大）。
 func (s *FaceReviewService) ListFaceClusters(ctx context.Context, filter FaceClusterFilter) ([]FaceClusterView, error) {
@@ -182,6 +189,7 @@ func (s *FaceReviewService) NameFaceCluster(ctx context.Context, clusterID uint,
 	}
 
 	var personID uint
+	var imported managedImageImport
 	var written int64
 	err = database.Transaction(func(tx *gorm.DB) error {
 		cluster, err := lockFaceCluster(ctx, tx, clusterID)
@@ -196,6 +204,15 @@ func (s *FaceReviewService) NameFaceCluster(ctx context.Context, clusterID uint,
 			return err
 		}
 		personID = person.ID
+		imported, err = s.importClusterAvatar(tx.WithContext(ctx), cluster, person.ID)
+		if err != nil {
+			return err
+		}
+		if imported.RelativePath != "" {
+			if err := tx.Model(&person).Update("avatar_path", imported.RelativePath).Error; err != nil {
+				return err
+			}
+		}
 		written, err = writeFaceClusterRelations(ctx, tx, cluster.ID, person.ID, false)
 		if err != nil {
 			return err
@@ -203,6 +220,7 @@ func (s *FaceReviewService) NameFaceCluster(ctx context.Context, clusterID uint,
 		return claimFaceCluster(ctx, tx, cluster.ID, person.ID)
 	})
 	if err != nil {
+		s.cleanupUnreferencedAvatar(imported)
 		return FaceClusterView{}, err
 	}
 	log.Printf("Face cluster named cluster_id=%d person_id=%d relations=%d", clusterID, personID, written)

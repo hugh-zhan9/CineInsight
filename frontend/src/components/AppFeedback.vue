@@ -1,5 +1,5 @@
 <template>
-  <div>
+  <div class="app-feedback">
     <div v-if="toasts.length" class="app-toasts" role="status" aria-live="polite" data-test="app-toasts">
       <div
         v-for="toast in toasts"
@@ -54,6 +54,8 @@ export default {
 </script>
 
 <style scoped>
+/* Confirmations must remain above teleported image and face previews. */
+.app-feedback :deep(.modal-overlay) { z-index: 1500; }
 /* 盖在弹窗（1000）和浮层（1200）之上：弹窗里触发的错误也必须能看见。 */
 .app-toasts {
   position: fixed;

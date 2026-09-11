@@ -62,6 +62,7 @@
         </div>
       </div>
 
+      <button type="button" class="btn-secondary btn-compact" :data-test="`face-cluster-detail-${card.id}`" @click="detailCluster = card">查看来源详情</button>
       <div v-if="card.status === 'unnamed'" class="face-review__actions">
         <button
           type="button"
@@ -192,10 +193,12 @@
       data-test="face-cluster-show-more"
       @click="showMoreCards"
     >显示更多（还有 {{ hiddenCardCount }} 组）</button>
+    <FaceClusterDetailDialog v-if="detailCluster" :cluster="detailCluster" @close="detailCluster = null" @name="card => { detailCluster = null; openNameForm(card); }" @link="card => { detailCluster = null; openLinkForm(card); }" />
   </section>
 </template>
 
 <script>
+import FaceClusterDetailDialog from './FaceClusterDetailDialog.vue';
 import {
   ConfirmFaceClusterAppend, DismissFaceClusterAppend, IgnoreFaceCluster,
   LinkFaceCluster, ListFaceClusters, ListPeople, NameFaceCluster
@@ -222,9 +225,11 @@ const CARD_PAGE_SIZE = 20;
 // 一个簇可能同时含视频与图片观测，因此这里不按媒体类型筛。
 export default {
   name: 'FaceClusterReviewPanel',
+  components: { FaceClusterDetailDialog },
   emits: ['changed', 'loaded'],
   data() {
     return {
+      detailCluster: null,
       unnamedClusters: [],
       appendClusters: [],
       people: [],

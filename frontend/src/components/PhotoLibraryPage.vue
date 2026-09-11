@@ -103,8 +103,11 @@
             {{ allLoadedSelected ? '取消全选' : '全选已加载' }}
           </button>
           <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" data-test="photo-clear-selection" @click="clearSelection">清除选择</button>
+          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" :disabled="batchBusy" data-test="photo-batch-tag-open" @click="openBatchTagPicker">批量添加标签</button>
           <div v-if="selectedImageIDs.length" class="photo-tag-combobox photo-batch-tag-search">
             <input
+              ref="batchTagInput"
+              :disabled="batchBusy"
               v-model="batchTagKeyword"
               type="search"
               class="search-input"
@@ -279,6 +282,7 @@
       <button type="button" class="btn-secondary btn-compact" data-test="photo-folder-back" @click="leaveFolder">← 文件夹</button>
       <div class="photo-folder-breadcrumb__text">
         <strong>{{ activeFolder.name }}</strong>
+        <button type="button" class="btn-secondary btn-compact" @click="openSystemFolder(activeFolder.directory)">打开目录</button>
         <span :title="activeFolder.directory">{{ activeFolder.directory }} · {{ activeFolder.count }} 张图片</span>
       </div>
     </div>
@@ -311,6 +315,7 @@
             <span :title="folder.directory">{{ folder.directory }}</span>
           </div>
         </button>
+        <button type="button" class="btn-secondary btn-compact" data-test="photo-folder-system-open" @click="openSystemFolder(folder.directory)">打开目录</button>
         <button
           type="button"
           class="btn-danger btn-compact photo-folder-card__delete"
@@ -491,6 +496,8 @@
 
       <aside class="photo-viewer__sidebar glass-surface">
         <h3 :title="viewerImage.name">{{ viewerImage.name }}</h3>
+        <button type="button" class="btn-secondary btn-compact" data-test="photo-viewer-directory" @click="revealViewerImage">打开所在目录</button>
+        <p v-if="viewerDirectoryError" role="alert">{{ viewerDirectoryError }}</p>
         <dl class="photo-viewer__facts">
           <dt>路径</dt><dd :title="viewerImage.path">{{ viewerImage.path }}</dd>
           <dt>尺寸</dt><dd>{{ viewerImage.width && viewerImage.height ? `${viewerImage.width}×${viewerImage.height}` : '未探测' }}</dd>
@@ -664,7 +671,7 @@
         </div>
 
         <div class="photo-viewer__block">
-          <button type="button" class="btn-danger" data-test="photo-viewer-delete" @click="requestDelete(viewerImage)">删除这张图片</button>
+          <button type="button" class="btn-danger" data-test="photo-viewer-delete" :disabled="deletingImageIDs.includes(viewerImage.id)" @click="requestDelete(viewerImage)">删除这张图片</button>
         </div>
       </aside>
     </div>
@@ -713,7 +720,7 @@
 <script>
 import {
   AddPersonImages, AddTagToImage, BatchAddTagToImages, BatchDeleteImages, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
-  ListPeople, RemovePersonImage,
+  ListPeople, RemovePersonImage, OpenImageDirectory, RevealImage,
   ApproveImageAITagCandidate, GetImageAITaggingSummary, ListImageAITagCandidates, RejectImageAITagCandidate, RetagImage,
   BatchDeleteImagesInDirectory,
   ListImageFolderGroups, ListImageTimelineBuckets, RemoveTagFromImage, SearchImagePage,
@@ -763,6 +770,8 @@ export default {
   emits: ['open-settings'],
   data() {
     return {
+      viewerDirectoryError: '',
+      deletingImageIDs: [],
       photoMenu: null,
       photoMenuAnchor: null,
       images: [],
@@ -1024,6 +1033,7 @@ export default {
     }
   },
   watch: {
+    'viewerImage.id'() { this.viewerDirectoryError = ''; },
     'filters.keyword'() {
       clearTimeout(this._keywordTimer);
       this._keywordTimer = setTimeout(() => this.reload(), 300);
@@ -1086,6 +1096,16 @@ export default {
     stopPhotoCleanupPolling();
   },
   methods: {
+    async openSystemFolder(directory) {
+      try { await OpenImageDirectory(directory); }
+      catch (err) { this.error = `打开目录失败：${err}`; }
+    },
+    async revealViewerImage() {
+      const id = this.viewerImage?.id; if (!id) return;
+      this.viewerDirectoryError = '';
+      try { await RevealImage(Number(id)); }
+      catch (err) { if (this.viewerImage?.id === id) this.viewerDirectoryError = `打开目录失败：${err}`; }
+    },
     togglePhotoMenu(name, triggerRef) {
       if (this.photoMenu === name) {
         this.closePhotoMenu();
@@ -1762,6 +1782,7 @@ export default {
       this.batchTagMenuOpen = false;
       this.batchTagActiveIndex = 0;
     },
+    openBatchTagPicker() { this.openBatchTagMenu(); this.$nextTick(() => this.$refs.batchTagInput?.focus()); },
     openBatchTagMenu() {
       this.batchTagMenuOpen = true;
       this.batchTagActiveIndex = 0;
@@ -2232,23 +2253,31 @@ export default {
       if (!this.deleteTarget || this.deleting) return;
       this.deleting = true;
       try {
-        await this.performDelete(this.deleteTarget, this.deleteFileChoice);
-        this.deleteTarget = null;
+        if (await this.performDelete(this.deleteTarget, this.deleteFileChoice)) this.deleteTarget = null;
       } finally {
         this.deleting = false;
       }
     },
     async performDelete(image, deleteFile) {
+      if (this.deletingImageIDs.includes(image.id)) return false;
+      this.deletingImageIDs.push(image.id);
       try {
         await DeleteImage(image.id, deleteFile);
+        // If this is the last loaded picture, fetch the next page before choosing
+        // the replacement so an unloaded next picture wins over the previous one.
+        if (this.viewerImage?.id === image.id && this.viewerIndex === this.images.length - 1 && this.hasMore) await this.loadMore();
         const index = this.images.findIndex(item => Number(item.id) === Number(image.id));
         if (index >= 0) {
           this.images.splice(index, 1);
           if (this.viewerIndex >= 0) {
-            if (index === this.viewerIndex) this.closeViewer();
+            if (index === this.viewerIndex) {
+              if (this.images.length) this.openViewer(Math.min(index, this.images.length - 1));
+              else this.closeViewer();
+            }
             else if (index < this.viewerIndex) this.viewerIndex -= 1;
           }
         }
+        this.selectedImageIDs = this.selectedImageIDs.filter(id => Number(id) !== Number(image.id));
         // 分组头显示的是后端整组总数，删掉一张后要同步减一，否则计数长期偏大。
         this.adjustTimelineBucket(image, -1);
         if (this.folderModeActive && this.activeFolder?.directory === image.directory) {
@@ -2258,8 +2287,13 @@ export default {
         }
         // 后端已把清理分析标记为过期，空闲时不轮询，得主动同步一次。
         refreshPhotoCleanupStatus();
+        return true;
       } catch (err) {
         this.error = `删除图片失败：${err}`;
+        if (this.viewerImage?.id === image.id) this.viewerDetailError = this.error;
+        return false;
+      } finally {
+        this.deletingImageIDs = this.deletingImageIDs.filter(id => id !== image.id);
       }
     },
     handleRestored(image) {

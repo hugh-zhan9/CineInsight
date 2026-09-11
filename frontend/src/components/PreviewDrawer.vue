@@ -258,9 +258,11 @@
         <section class="detail-section" data-test="person-image-section">
           <div class="detail-section__heading"><h4>关联图片（{{ personDetail.person.active_image_count || 0 }}）</h4><span>与视频分开分页</span></div>
           <p v-if="personImageError" class="detail-error-text">{{ personImageError }}</p>
+          <ImageBatchTagControls v-if="personImages.length" :key="currentEntry.id" v-model:selectedIDs="selectedPersonImageIDs" :image-i-ds="personImages.map(image => image.id)" />
           <div v-if="personImages.length" class="person-image-grid">
             <figure v-for="image in personImages" :key="image.id" class="person-image-card">
-              <img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" />
+              <label class="person-image-card__select"><input v-model="selectedPersonImageIDs" type="checkbox" :value="image.id" :aria-label="`选择 ${image.name}`" />选择</label>
+              <button type="button" class="person-image-card__preview" :aria-label="`放大 ${image.name}`" @click="imagePreview = image"><img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /></button>
               <figcaption :title="image.name">{{ image.name }}</figcaption>
               <small v-if="image.size > 0" class="person-image-card__size">{{ formatBytes(image.size) }}</small>
               <button
@@ -359,6 +361,7 @@
         </section>
       </template>
     </div>
+    <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink :busy="isPersonImageUpdating(imagePreview.id)" :action-error="personImageError" @close="imagePreview = null" @unlink="removePersonImageRelation" />
   </aside>
 </template>
 
@@ -371,6 +374,8 @@ import {
 } from '../../wailsjs/go/main/App';
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
 import GlossaryEditor from './GlossaryEditor.vue';
+import ImageSourceDialog from './ImageSourceDialog.vue';
+import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 import { confirmAction } from '../utils/feedback.js';
@@ -378,7 +383,7 @@ import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyStrategyLabel } from '../utils
 
 export default {
   name: 'PreviewDrawer',
-  components: { GlossaryEditor, RelatedVideoItem },
+  components: { GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
@@ -390,6 +395,7 @@ export default {
   emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale'],
   data() {
     return {
+      selectedPersonImageIDs: [], imagePreview: null,
       navigator: null, currentEntry: null, canGoBack: false,
       loading: false, error: '', saving: false, refreshingTechnical: false,
       details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', personalRating: '', personIDs: [], collectionIDs: [] },
@@ -528,6 +534,7 @@ export default {
       this.resetRelatedVideoEditor(); this.navigator = createDetailNavigator(root); this.currentEntry = root; this.canGoBack = false; this.loadCurrentEntry();
     },
     async loadCurrentEntry() {
+      this.imagePreview = null; this.selectedPersonImageIDs = [];
       if (!this.currentEntry) return;
       const entry = { ...this.currentEntry };
       const requestToken = Symbol('detail-entry');
@@ -750,6 +757,7 @@ export default {
       this.personImageUpdatingIDs = [...new Set([...this.personImageUpdatingIDs, imageID])]; this.personImageError = '';
       try {
         const personDeleted = await RemovePersonImage(personID, imageID);
+        if (this.isCurrentEntity('person', personID)) this.imagePreview = null;
         if (personDeleted) {
           this.$emit('person-deleted', personID);
           if (this.isCurrentEntity('person', personID)) {
@@ -973,6 +981,7 @@ export default {
 </script>
 
 <style scoped>
+.person-image-card__preview { border: 0; padding: 0; background: transparent; cursor: zoom-in; }
 /* 这一排动作按钮原本没有任何样式：靠行内空白撑横向间隙，换行后两行会贴死。 */
 .detail-inline-actions {
   display: flex;

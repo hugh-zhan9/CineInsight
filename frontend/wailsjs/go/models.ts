@@ -747,6 +747,34 @@ export namespace models {
 }
 
 export namespace services {
+
+	export class FaceClusterObservationView {
+		observation_id: number;
+		media_kind: string;
+		media_id: number;
+		name: string;
+		path: string;
+		size: number;
+		frame_ms: number;
+		bbox: string;
+		unavailable: string;
+		static createFrom(source: any = {}) { return new FaceClusterObservationView(source); }
+		constructor(source: any = {}) {
+			if ('string' === typeof source) source = JSON.parse(source);
+			Object.assign(this, source);
+		}
+	}
+	export class FaceClusterObservationPage {
+		observations: FaceClusterObservationView[];
+		next_id: number;
+		static createFrom(source: any = {}) { return new FaceClusterObservationPage(source); }
+		constructor(source: any = {}) {
+			if ('string' === typeof source) source = JSON.parse(source);
+			this.observations = (source.observations || []).map((item: any) => FaceClusterObservationView.createFrom(item));
+			this.next_id = source.next_id;
+		}
+	}
+
 	
 	export class AIQualityDecisionMetrics {
 	    decided: number;

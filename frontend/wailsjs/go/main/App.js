@@ -1097,3 +1097,7 @@ export function ValidateSubtitleEditDocument(arg1) {
 export function SyncDirectoryWithProgress(arg1, arg2) {
   return window['go']['main']['App']['SyncDirectoryWithProgress'](arg1, arg2);
 }
+
+export function GetFaceClusterObservations(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetFaceClusterObservations'](arg1, arg2, arg3);
+}

@@ -319,6 +319,11 @@ func (a *App) ListFaceClusters(filter services.FaceClusterFilter) ([]services.Fa
 	return views, err
 }
 
+// GetFaceClusterObservations returns source media for an on-demand review page.
+func (a *App) GetFaceClusterObservations(clusterID, cursorID uint, limit int) (*services.FaceClusterObservationPage, error) {
+	return a.faceReview.GetFaceClusterObservations(a.backgroundContext(), clusterID, cursorID, limit)
+}
+
 // NameFaceCluster 命名未命名簇：建人物并把簇内媒体关联上去（7.3.1）。
 func (a *App) NameFaceCluster(clusterID uint, displayName, originalName string) (services.FaceClusterView, error) {
 	view, err := a.faceReview.NameFaceCluster(a.backgroundContext(), clusterID, displayName, originalName)

@@ -76,11 +76,17 @@
       <section v-if="isPeople" class="entity-image-section" aria-label="相关图片" data-test="person-image-section">
         <h3>图片（{{ selectedEntityImageCount }}）</h3>
         <p v-if="entityImagesError" class="entity-library__error" role="alert">{{ entityImagesError }}</p>
+        <ImageBatchTagControls v-if="entityImages.length" :key="selectedEntity.id" v-model:selectedIDs="selectedPersonImageIDs" :image-i-ds="entityImages.map(image => image.id)" />
         <div v-if="entityImages.length" class="entity-image-grid">
           <figure v-for="image in entityImages" :key="image.id" class="entity-image-card glass-surface">
-            <img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" />
+            <label class="entity-image-card__select"><input v-model="selectedPersonImageIDs" type="checkbox" :value="image.id" :aria-label="`选择 ${image.name}`" />选择</label>
+            <button type="button" class="entity-image-card__preview" :aria-label="`放大 ${image.name}`" @click="imagePreview = image"><img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /></button>
             <figcaption :title="image.name">{{ image.name }}</figcaption>
             <small v-if="image.size > 0" class="entity-image-card__size">{{ formatBytes(image.size) }}</small>
+            <div class="entity-image-card__actions">
+              <button type="button" class="btn-secondary btn-compact" @click="revealPersonImage(image)">目录</button>
+              <button type="button" class="btn-secondary btn-compact" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`entity-image-unlink-${image.id}`" @click="unlinkPersonImage(image)">解绑</button>
+            </div>
           </figure>
         </div>
         <div v-else class="empty-state">当前还没有关联图片。在照片页的单图详情里可以维护人物。</div>
@@ -106,6 +112,8 @@
       {{ (selectedEntity ? entityVideosLoading : loading) ? '加载中...' : (selectedEntity ? '加载更多相关视频' : `加载更多${isPeople ? '人物' : '作品集'}`) }}
     </button>
 
+    <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink :busy="unlinkingImageIDs.includes(imagePreview.id)" :action-error="entityImagesError" @close="imagePreview = null" @unlink="unlinkPersonImage" />
+
     <PreviewDrawer
       v-if="drawerEntity"
       :initial-entity="drawerEntity"
@@ -122,16 +130,19 @@
 <script>
 import {
   CreateCollection, CreatePerson, GetCollectionDetail, GetPersonDetail, GetPersonImages, ListCollections, ListPeople, OpenDirectory, PlayVideo,
-  PreviewExternally, UpdateVideoWatchProgress
+  PreviewExternally, UpdateVideoWatchProgress, RevealImage, RemovePersonImage
 } from '../../wailsjs/go/main/App';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
+import ImageSourceDialog from './ImageSourceDialog.vue';
+import ImageBatchTagControls from './ImageBatchTagControls.vue';
+import { confirmAction } from '../utils/feedback.js';
 import { formatBytes, formatDuration } from '../utils/mediaDetails.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
 export default {
   name: 'EntityLibraryPage',
-  components: { FaceClusterReviewPanel, PreviewDrawer },
+  components: { FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls },
   props: {
     entityType: { type: String, required: true },
     // 命令面板「作品集 · X」/「人物 · X」的落点（D-029）：{ id, name }，置一次即消费。
@@ -144,7 +155,7 @@ export default {
       entityVideos: [], entityVideosHasMore: false, entityVideosLoading: false, entityVideoCursor: 0, collectionVideoPool: [],
       // 人物详情的图片区块独立分页、不与视频混排（D-021）；作品集不覆盖图片。
       entityImages: [], entityImageCursor: 0, entityImagesLoading: false, entityImagesError: '',
-      playingVideoIDs: [],
+      playingVideoIDs: [], selectedPersonImageIDs: [], imagePreview: null, unlinkingImageIDs: [],
       // 待命名人脸分区：面板自己拉数据，这里只记摘要与收起状态。没有待处理项时默认收起，
       // 用户手动点过展开/收起之后就不再替他做主。
       faceReviewCounts: null, faceReviewCollapsed: false, faceReviewToggled: false
@@ -188,6 +199,34 @@ export default {
     this._intersectionObserver?.disconnect();
   },
   methods: {
+    async revealPersonImage(image) {
+      try { await RevealImage(Number(image.id)); }
+      catch (err) { this.entityImagesError = `打开目录失败：${err}`; }
+    },
+    async unlinkPersonImage(image) {
+      const personID = Number(this.selectedEntity?.id); const imageID = Number(image.id);
+      if (!this.isPeople || !personID || this.unlinkingImageIDs.includes(imageID)) return;
+      this.unlinkingImageIDs.push(imageID); this.entityImagesError = '';
+      try {
+        const last = Number(this.selectedItem?.active_video_count || 0) === 0 && Number(this.selectedItem?.active_image_count || 0) <= 1;
+        if (last && !await confirmAction({ title: '解除关联', message: '这是该人物最后一个活跃关联媒体。若没有软删除媒体保留的关系，解除后人物也会被删除，确定继续吗？图片文件和图库记录会保留。', confirmText: '解除', danger: true })) return;
+        const deleted = await RemovePersonImage(personID, imageID);
+        if (Number(this.selectedEntity?.id) !== personID) return;
+        this.imagePreview = null;
+        if (deleted) { this.closeEntity(); await this.reload(); return; }
+        this._entityImagesToken = null; this.entityImagesLoading = false;
+        this.entityImages = this.entityImages.filter(item => Number(item.id) !== imageID);
+        this.selectedPersonImageIDs = this.selectedPersonImageIDs.filter(id => id !== imageID);
+        if (this.selectedItem) this.selectedItem.active_image_count = Math.max(0, Number(this.selectedItem.active_image_count || 0) - 1);
+        this.patchSelectedItem();
+        // Refresh an open person drawer so its relation list agrees with the page.
+        if (this.drawerEntity?.type === 'person' && Number(this.drawerEntity.id) === personID) {
+          this.drawerEntity = null; await this.$nextTick();
+          if (Number(this.selectedEntity?.id) === personID) this.drawerEntity = { type: 'person', id: personID };
+        }
+      } catch (err) { if (Number(this.selectedEntity?.id) === personID) this.entityImagesError = `解绑失败：${err}`; }
+      finally { this.unlinkingImageIDs = this.unlinkingImageIDs.filter(id => id !== imageID); }
+    },
     formatBytes,
     formatDuration,
     onFaceReviewLoaded(counts) {
@@ -317,6 +356,7 @@ export default {
       finally { if (this._entityVideosToken === token) this.entityVideosLoading = false; }
     },
     resetEntityImages() {
+      this._entityImagesToken = null; this.imagePreview = null; this.selectedPersonImageIDs = [];
       this.entityImages = []; this.entityImageCursor = 0; this.entityImagesLoading = false; this.entityImagesError = '';
     },
     async loadMoreEntityImages() {
@@ -378,6 +418,10 @@ export default {
 </script>
 
 <style scoped>
+.entity-image-card__select { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.entity-image-card__select input { min-width: 0; width: auto; padding: 0; }
+.entity-image-card__preview { padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.entity-image-card__actions { display: flex; gap: 8px; justify-content: flex-end; }
 .entity-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }.entity-library--with-drawer { padding-right: calc(18px + 520px); }
 .entity-library__toolbar,.entity-library__create { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; gap: 12px; align-items: center; justify-content: space-between; }.entity-library__toolbar h2 { margin: 0 0 3px; font-size: 18px; }.entity-library__toolbar p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .entity-library__title { display: flex; align-items: center; gap: 12px; min-width: 0; }.entity-library__title > div { min-width: 0; }.entity-library__title h2,.entity-library__title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

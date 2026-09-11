@@ -10,6 +10,10 @@ const api = vi.hoisted(() => ({
   ListCollections: vi.fn(),
   ListPeople: vi.fn(),
   OpenDirectory: vi.fn(),
+  RevealImage: vi.fn(),
+  RemovePersonImage: vi.fn(),
+  GetAllTags: vi.fn(),
+  BatchAddTagToImages: vi.fn(),
   PlayVideo: vi.fn(),
   PreviewExternally: vi.fn(),
   UpdateVideoWatchProgress: vi.fn()
@@ -54,6 +58,32 @@ beforeEach(() => {
 });
 
 describe('EntityLibraryPage', () => {
+  it('enlarges and unlinks a person image while preserving the other media', async () => {
+    api.ListPeople.mockResolvedValueOnce([{ person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 2 }]);
+    api.GetPersonDetail.mockResolvedValueOnce({ person: { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 2 }, videos: [], images: [{ id: 11, name: 'a.jpg' }, { id: 12, name: 'b.jpg' }] });
+    api.RemovePersonImage.mockResolvedValueOnce(false);
+    const w = mount(EntityLibraryPage, { props: { entityType: 'person' }, global: { stubs: { teleport: true } } }); await flushPromises();
+    await w.get('.entity-card').trigger('click'); await flushPromises();
+    await w.findAll('.entity-image-card__preview')[0].trigger('click');
+    expect(w.findComponent({ name: 'ImageSourceDialog' }).props('image').id).toBe(11);
+    await w.get('[data-test="image-source-unlink"]').trigger('click'); await flushPromises();
+    expect(api.RemovePersonImage).toHaveBeenCalledWith(7, 11);
+    expect(w.vm.entityImages.map(i => i.id)).toEqual([12]); expect(w.vm.selectedItem.active_image_count).toBe(1);
+    expect(w.vm.selectedEntity.id).toBe(7); w.unmount();
+  });
+  it('offers batch tags for selected related pictures', async () => {
+    api.ListPeople.mockResolvedValueOnce([{ person: { id: 7, display_name: '人物' } }]);
+    api.GetPersonDetail.mockResolvedValueOnce({ person: { person: { id: 7 }, active_image_count: 2 }, videos: [], images: [{ id: 11 }, { id: 12 }] });
+    api.GetAllTags.mockResolvedValueOnce([{ id: 3, name: '合照' }]);
+    api.BatchAddTagToImages.mockResolvedValueOnce({ succeeded: 2, failed: 0 });
+    const w = mount(EntityLibraryPage, { props: { entityType: 'person' } }); await flushPromises();
+    await w.get('.entity-card').trigger('click'); await flushPromises();
+    await w.get('[data-test="image-batch-select-all"]').trigger('click');
+    await w.get('[data-test="image-batch-tag-open"]').trigger('click'); await flushPromises();
+    await w.get('.image-batch-tags__options button').trigger('click'); await flushPromises();
+    expect(api.BatchAddTagToImages).toHaveBeenCalledWith([11, 12], 3); w.unmount();
+  });
+
   it('loads people and opens the selected entity drawer', async () => {
     api.ListPeople.mockResolvedValueOnce([{
       person: { id: 7, display_name: 'Actor Seven', original_name: 'Seven' },

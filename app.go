@@ -181,7 +181,7 @@ func NewApp() *App {
 	app.faceRuntime = services.NewFaceRuntime(dataDir, app.faceModelMirrorURL)
 	app.faceAnalysis = services.NewFaceAnalysisService(dataDir, app.faceRuntime, imageThumbnail)
 	app.faceAnalysis.SetMediaWorkSlot(mediaWorkSlot)
-	app.faceReview = &services.FaceReviewService{}
+	app.faceReview = services.NewFaceReviewService(dataDir, app.faceAnalysis)
 	app.wireBrowserBridge()
 	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService)
 	app.wireBackgroundTaskRegistry()

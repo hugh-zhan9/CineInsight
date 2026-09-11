@@ -874,6 +874,43 @@ describe('PhotoLibraryPage semantic search', () => {
 });
 
 describe('PhotoLibraryPage delete', () => {
+  it('keeps preview on the next image, then the previous, and closes only when empty', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2), makeImage(3)]));
+    const wrapper = await mountPage();
+    wrapper.vm.openViewer(1); await flushPromises();
+    await wrapper.get('[data-test="photo-viewer-delete"]').trigger('click'); await flushPromises();
+    expect(wrapper.vm.viewerImage.id).toBe(3);
+    expect(api.GetImageDetail).toHaveBeenLastCalledWith(3);
+    await wrapper.get('[data-test="photo-viewer-delete"]').trigger('click'); await flushPromises();
+    expect(wrapper.vm.viewerImage.id).toBe(1);
+    await wrapper.get('[data-test="photo-viewer-delete"]').trigger('click'); await flushPromises();
+    expect(wrapper.vm.viewerImage).toBeNull(); wrapper.unmount();
+  });
+  it('loads the next page when deleting the last loaded picture', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1)], { id: 1 })).mockResolvedValueOnce(makePage([makeImage(2)]));
+    const wrapper = await mountPage(); wrapper.vm.openViewer(0); await flushPromises();
+    await wrapper.get('[data-test="photo-viewer-delete"]').trigger('click'); await flushPromises();
+    expect(wrapper.vm.viewerImage.id).toBe(2);
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(2); wrapper.unmount();
+  });
+  it('keeps the current preview and shows an error when deletion fails', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
+    api.DeleteImage.mockRejectedValueOnce('busy');
+    const wrapper = await mountPage(); wrapper.vm.openViewer(0); await flushPromises();
+    await wrapper.get('[data-test="photo-viewer-delete"]').trigger('click'); await flushPromises();
+    expect(wrapper.vm.viewerImage.id).toBe(1); expect(wrapper.vm.images).toHaveLength(2);
+    expect(wrapper.get('.photo-viewer').text()).toContain('busy'); wrapper.unmount();
+  });
+  it('reveals the previewed image and exposes an explicit batch tag button', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-select-all"]').trigger('click');
+    expect(wrapper.get('[data-test="photo-batch-tag-open"]').text()).toBe('批量添加标签');
+    wrapper.vm.openViewer(0); await flushPromises();
+    await wrapper.get('[data-test="photo-viewer-directory"]').trigger('click'); await flushPromises();
+    expect(api.RevealImage).toHaveBeenCalledWith(1); wrapper.unmount();
+  });
+
   it('multi-selects images and applies a tag in one batch', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
     api.BatchAddTagToImages.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });
