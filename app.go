@@ -151,7 +151,7 @@ func NewApp() *App {
 		shortFeedService:      shortFeedService,
 		personService:         personService,
 		collectionService:     collectionService,
-		watchlistService:      &services.WatchlistService{},
+		watchlistService:      services.NewWatchlistService(dataDir),
 		collectionSuggestions: services.NewCollectionSuggestionService(collectionService),
 		videoDetailService:    services.NewVideoDetailService(personService, collectionService),
 		libraryStatsService:   services.NewLibraryStatsService(),
@@ -237,6 +237,9 @@ func (a *App) wireBackgroundTaskRegistry() {
 	a.frameHash.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.playbackProxies.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.faceAnalysis.SetBackgroundTaskRegistry(a.backgroundTasks)
+	// 想看片单的在线补全（D-WM13）。它有意不接空闲门：补全由用户添加条目或点
+	// 重试触发，属用户显式动作，与浏览器下载队列同口径。
+	a.watchlistService.SetBackgroundTaskRegistry(a.backgroundTasks)
 }
 
 // wireDesktopNotifier 把本切片接入的长任务终态接到桌面通知（D-013）。
@@ -352,6 +355,9 @@ func (a *App) startup(ctx context.Context) {
 	a.browserDownloads.SetEventEmitter(func(tasks []services.BrowserDownloadTask) {
 		emit("browser-download-tasks", tasks)
 	})
+	a.watchlistService.SetEnrichmentEventEmitter(func(progress services.WatchlistEnrichProgress) {
+		emit("watchlist-enrich-progress", progress)
+	})
 	a.localMetadata.SetBackfillEventEmitter(func(status services.LocalMetadataBackfillStatus) {
 		emit("local-metadata-backfill", status)
 	})
@@ -412,6 +418,8 @@ func (a *App) startup(ctx context.Context) {
 			result.ImageLikesAdded, result.ImageLikesRemoved, result.ImageFavoritesAdded)
 	}
 	a.aiTaggingService.Start(ctx)
+	// 想看片单的在线补全：先把进程重启后残留的 running 刷回 pending，再起 worker。
+	a.watchlistService.StartEnrichment(ctx)
 	// 启动时后台增量生成图片描述（仅处理尚无描述的图，配置缺失则静默跳过）。
 	go a.triggerImageAITaggingAuto("startup")
 	a.startShortFeedServer(ctx)
@@ -511,6 +519,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.aiTaggingService != nil {
 		a.aiTaggingService.StopAndWait()
+	}
+	if a.watchlistService != nil {
+		a.watchlistService.StopEnrichmentAndWait()
 	}
 	if a.shortFeedServer != nil {
 		if err := a.shortFeedServer.Stop(ctx); err != nil {

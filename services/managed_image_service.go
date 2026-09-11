@@ -42,7 +42,9 @@ func (s *ManagedImageService) Import(entityType string, entityID uint, sourcePat
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if entityType != "people" && entityType != "collections" && entityType != "videos" {
+	// watchlist 是想看条目的海报（D-WM09）：落到 watchlist/<id>/<sha256>.<ext>，
+	// 与人物头像、合集封面共用同一套内容寻址、原子发布、体积与格式约束。
+	if entityType != "people" && entityType != "collections" && entityType != "videos" && entityType != "watchlist" {
 		return managedImageImport{}, fmt.Errorf("unsupported managed image entity %q", entityType)
 	}
 	file, err := os.Open(sourcePath)

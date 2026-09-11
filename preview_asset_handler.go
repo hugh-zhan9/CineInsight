@@ -32,6 +32,15 @@ func newAssetHandler(app *App) http.Handler {
 			app.serveCollectionCover(w, r)
 			return
 		}
+		if strings.HasPrefix(r.URL.Path, "/preview/watchlist-poster/") {
+			if r.Method != http.MethodGet && r.Method != http.MethodHead {
+				w.Header().Set("Allow", "GET, HEAD")
+				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+				return
+			}
+			app.serveWatchlistPoster(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/preview/face-crop/") {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				w.Header().Set("Allow", "GET, HEAD")
@@ -122,6 +131,34 @@ func (a *App) servePersonAvatar(w http.ResponseWriter, r *http.Request) {
 	file, err := os.Open(asset.Path)
 	if err != nil {
 		http.Error(w, "person avatar not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", asset.MIME)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, asset.DisplayName, asset.ModTime, file)
+}
+
+// serveWatchlistPoster 取想看条目补全下来的海报（D-WM09），形态照
+// servePersonAvatar：条目不存在、没有海报、文件已丢都是 404，其余是 500。
+func (a *App) serveWatchlistPoster(w http.ResponseWriter, r *http.Request) {
+	entryID, err := assetVideoIDFromPath(r.URL.Path, "/preview/watchlist-poster/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	asset, err := a.watchlistService.ResolveWatchlistPoster(entryID)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			http.Error(w, "watchlist poster not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "watchlist poster unavailable", http.StatusInternalServerError)
+		return
+	}
+	file, err := os.Open(asset.Path)
+	if err != nil {
+		http.Error(w, "watchlist poster not found", http.StatusNotFound)
 		return
 	}
 	defer file.Close()

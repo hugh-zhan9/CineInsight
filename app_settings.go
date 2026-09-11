@@ -99,6 +99,22 @@ func (a *App) UpdateSettings(input models.Settings) error {
 	return err
 }
 
+// TestWatchlistMetadataConnection 用设置页当前填写的代理与凭证向一个在线资料源发一次
+// 真实请求，分清「凭证缺失 / 凭证无效 / 代理不通 / 网络不可达」。留空的字段回退到已保存
+// 或环境变量配置，所以不必先保存再测。
+//
+// 日志里**只记源名、分类码与耗时**：凭证不能落地，代理地址也不能——它常带口令。
+func (a *App) TestWatchlistMetadataConnection(input services.WatchlistMetadataProbeInput) services.WatchlistMetadataProbeResult {
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := services.ProbeWatchlistMetadataSource(ctx, input)
+	log.Printf("API TestWatchlistMetadataConnection source=%q ok=%v failure=%q status=%d latency_ms=%d",
+		result.Source, result.OK, result.Failure, result.HTTPStatus, result.LatencyMS)
+	return result
+}
+
 func (a *App) GetBackupStatus() services.BackupStatus {
 	return a.backupService.GetStatus()
 }

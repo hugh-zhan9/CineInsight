@@ -28,6 +28,8 @@ export function ApplyLocalMetadata(arg1:services.LocalMetadataApplyRequest):Prom
 
 export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyRequest):Promise<services.LocalMetadataBatchResult>;
 
+export function ApplyWatchlistCandidate(arg1:number,arg2:string):Promise<void>;
+
 export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
 
 export function ApproveImageAITagCandidate(arg1:number):Promise<services.ImageAITaggingReviewItem>;
@@ -120,7 +122,7 @@ export function CreatePlaybackProxy(arg1:number):Promise<services.PlaybackProxyS
 
 export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
 
-export function CreateWatchlistEntry(arg1:string):Promise<models.WatchlistEntry>;
+export function CreateWatchlistEntry(arg1:string,arg2:string):Promise<models.WatchlistEntry>;
 
 export function DeleteCollection(arg1:number):Promise<void>;
 
@@ -203,6 +205,8 @@ export function GetEnhancementModelStatus():Promise<services.EnhancementModelSta
 export function GetEnhancementVideoPreflight(arg1:number):Promise<services.EnhancementVideoPreflight>;
 
 export function GetFaceAnalysisStatus():Promise<services.FaceAnalysisStatus>;
+
+export function GetFaceClusterObservations(arg1:number,arg2:number,arg3:number):Promise<services.FaceClusterObservationPage>;
 
 export function GetFaceDataUsage():Promise<services.FaceDataUsage>;
 
@@ -332,6 +336,8 @@ export function ListTrashEntries():Promise<Array<models.VideoTrashEntry>>;
 
 export function ListWatchlist(arg1:string,arg2:number,arg3:number):Promise<services.WatchlistPage>;
 
+export function ListWatchlistCandidates(arg1:number):Promise<Array<services.WatchlistCandidateView>>;
+
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
 
 export function MarkSameSourceRelationRead(arg1:number):Promise<void>;
@@ -421,6 +427,8 @@ export function RetryAITagging(arg1:number):Promise<void>;
 export function RetryEnhancementTask(arg1:number):Promise<services.EnhancementTaskView>;
 
 export function RetryLibraryWatcherRoot(arg1:number):Promise<services.LibraryWatchRootStatus>;
+
+export function RetryWatchlistEnrichment(arg1:number):Promise<void>;
 
 export function RevealImage(arg1:number):Promise<void>;
 
@@ -518,6 +526,8 @@ export function StartSemanticIndex(arg1:services.SemanticIndexBuildRequest):Prom
 
 export function StartTechnicalBackfill():Promise<services.TechnicalBackfillStatus>;
 
+export function SyncDirectoryWithProgress(arg1:string,arg2:string):Promise<services.ScanSyncResult>;
+
 export function SyncIINAProgress():Promise<services.IINAProgressSyncResult>;
 
 export function SyncImageDirectories():Promise<services.ImageScanResult>;
@@ -525,6 +535,8 @@ export function SyncImageDirectories():Promise<services.ImageScanResult>;
 export function SyncScanDirectories():Promise<services.ScanSyncResult>;
 
 export function TestAITaggingConnection(arg1:services.AITaggingConnectionTestInput):Promise<services.AITaggingConnectionTestResult>;
+
+export function TestWatchlistMetadataConnection(arg1:services.WatchlistMetadataProbeInput):Promise<services.WatchlistMetadataProbeResult>;
 
 export function TriggerAITagging():Promise<boolean>;
 
@@ -549,7 +561,3 @@ export function UpdateWatchlistEntry(arg1:number,arg2:string):Promise<void>;
 export function UpsertGlossaryEntry(arg1:models.TranslationGlossaryEntry):Promise<models.TranslationGlossaryEntry>;
 
 export function ValidateSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleValidationResult>;
-
-export function SyncDirectoryWithProgress(arg1:string, arg2:string):Promise<services.ScanSyncResult>;
-
-export function GetFaceClusterObservations(arg1:number,arg2:number,arg3:number):Promise<services.FaceClusterObservationPage>;

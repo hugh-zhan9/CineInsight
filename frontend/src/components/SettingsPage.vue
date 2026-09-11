@@ -47,6 +47,8 @@
       @remove-tag="removeAITagFromGroup"
     />
 
+    <OnlineSourceSection :form="settingsForm" />
+
     <RandomAndFormatsSection :form="settingsForm" />
 
     <SubtitleSection :form="settingsForm" />
@@ -100,6 +102,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'browser-bridge', label: '浏览器插件' },
   { key: 'ai-tags', label: 'AI 标签' },
   { key: 'ai-tag-library', label: 'AI 标签库' },
+  { key: 'online-sources', label: '在线资料源' },
   { key: 'random', label: '智能随机播放' },
   { key: 'video-formats', label: '支持的视频格式' },
   { key: 'image-formats', label: '支持的图片格式' },
@@ -120,6 +123,7 @@ import FaceSection from './settings/FaceSection.vue';
 import IdleSchedulingSection from './settings/IdleSchedulingSection.vue';
 import BrowserBridgeSection from './settings/BrowserBridgeSection.vue';
 import MobileSection from './settings/MobileSection.vue';
+import OnlineSourceSection from './settings/OnlineSourceSection.vue';
 import ProxySection from './settings/ProxySection.vue';
 import RandomAndFormatsSection from './settings/RandomAndFormatsSection.vue';
 import ScanDirectoriesSection from './settings/ScanDirectoriesSection.vue';
@@ -128,7 +132,7 @@ import { confirmAction } from '../utils/feedback.js';
 
 export default {
   name: 'SettingsPage',
-  components: { AITagLibrarySection, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, MobileSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { AITagLibrarySection, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
@@ -341,6 +345,16 @@ export default {
             ai_tagging_subtitle_char_limit: this.settingsForm.ai_tagging_subtitle_char_limit || 4000,
             ai_tagging_startup_batch_size: this.settingsForm.ai_tagging_startup_batch_size || 10,
             ai_tagging_max_extra_frames: this.settingsForm.ai_tagging_max_extra_frames || 20,
+            // 在线资料源的出网代理与三家凭证。**漏掉任何一个都会静默清空它**：
+            // 服务端照白名单无条件赋值，漏传的字段会被写成空串，而界面上表单还
+            // 显示着你刚填的值，看起来像保存成功了。这与上面桥接三项是同一类事故，
+            // 而且这里更隐蔽——在别的分区改一项设置再保存，就足以把配好的代理和
+            // 凭证全部抹掉。保存路径只有这一条，新增字段务必加进这个字面量。
+            metadata_proxy_url: this.settingsForm.metadata_proxy_url || '',
+            tmdb_api_key: this.settingsForm.tmdb_api_key || '',
+            bangumi_access_token: this.settingsForm.bangumi_access_token || '',
+            fanza_api_id: this.settingsForm.fanza_api_id || '',
+            fanza_affiliate_id: this.settingsForm.fanza_affiliate_id || '',
             backup_directory: this.settingsForm.backup_directory || '',
             backup_retention_count: this.settingsForm.backup_retention_count || 7,
             backup_interval_hours: Math.max(0, Number(this.settingsForm.backup_interval_hours) || 0)

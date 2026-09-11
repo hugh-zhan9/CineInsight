@@ -466,6 +466,11 @@ export namespace models {
 	    browser_bridge_token: string;
 	    browser_download_directory: string;
 	    browser_download_concurrency: number;
+	    metadata_proxy_url: string;
+	    tmdb_api_key: string;
+	    bangumi_access_token: string;
+	    fanza_api_id: string;
+	    fanza_affiliate_id: string;
 	    updated_at: string;
 	
 	    static createFrom(source: any = {}) {
@@ -539,6 +544,11 @@ export namespace models {
 	        this.browser_bridge_token = source["browser_bridge_token"];
 	        this.browser_download_directory = source["browser_download_directory"];
 	        this.browser_download_concurrency = source["browser_download_concurrency"];
+	        this.metadata_proxy_url = source["metadata_proxy_url"];
+	        this.tmdb_api_key = source["tmdb_api_key"];
+	        this.bangumi_access_token = source["bangumi_access_token"];
+	        this.fanza_api_id = source["fanza_api_id"];
+	        this.fanza_affiliate_id = source["fanza_affiliate_id"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -728,17 +738,39 @@ export namespace models {
 	export class WatchlistEntry {
 	    id: number;
 	    title: string;
+	    kind: string;
+	    enrichment_status: string;
+	    enrichment_error: string;
+	    source_name: string;
+	    source_item_id: string;
+	    enriched_at?: string;
+	    year: number;
+	    overview: string;
+	    genres: string;
+	    credits: string;
+	    rating: number;
 	    created_at: string;
 	    updated_at: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new WatchlistEntry(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
 	        this.title = source["title"];
+	        this.kind = source["kind"];
+	        this.enrichment_status = source["enrichment_status"];
+	        this.enrichment_error = source["enrichment_error"];
+	        this.source_name = source["source_name"];
+	        this.source_item_id = source["source_item_id"];
+	        this.enriched_at = source["enriched_at"];
+	        this.year = source["year"];
+	        this.overview = source["overview"];
+	        this.genres = source["genres"];
+	        this.credits = source["credits"];
+	        this.rating = source["rating"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	    }
@@ -747,34 +779,6 @@ export namespace models {
 }
 
 export namespace services {
-
-	export class FaceClusterObservationView {
-		observation_id: number;
-		media_kind: string;
-		media_id: number;
-		name: string;
-		path: string;
-		size: number;
-		frame_ms: number;
-		bbox: string;
-		unavailable: string;
-		static createFrom(source: any = {}) { return new FaceClusterObservationView(source); }
-		constructor(source: any = {}) {
-			if ('string' === typeof source) source = JSON.parse(source);
-			Object.assign(this, source);
-		}
-	}
-	export class FaceClusterObservationPage {
-		observations: FaceClusterObservationView[];
-		next_id: number;
-		static createFrom(source: any = {}) { return new FaceClusterObservationPage(source); }
-		constructor(source: any = {}) {
-			if ('string' === typeof source) source = JSON.parse(source);
-			this.observations = (source.observations || []).map((item: any) => FaceClusterObservationView.createFrom(item));
-			this.next_id = source.next_id;
-		}
-	}
-
 	
 	export class AIQualityDecisionMetrics {
 	    decided: number;
@@ -2210,6 +2214,67 @@ export namespace services {
 	        this.name = source["name"];
 	    }
 	}
+	export class FaceClusterObservationView {
+	    observation_id: number;
+	    media_kind: string;
+	    media_id: number;
+	    name: string;
+	    path: string;
+	    size: number;
+	    frame_ms: number;
+	    bbox: string;
+	    unavailable: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FaceClusterObservationView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.observation_id = source["observation_id"];
+	        this.media_kind = source["media_kind"];
+	        this.media_id = source["media_id"];
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.size = source["size"];
+	        this.frame_ms = source["frame_ms"];
+	        this.bbox = source["bbox"];
+	        this.unavailable = source["unavailable"];
+	    }
+	}
+	export class FaceClusterObservationPage {
+	    observations: FaceClusterObservationView[];
+	    next_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FaceClusterObservationPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.observations = this.convertValues(source["observations"], FaceClusterObservationView);
+	        this.next_id = source["next_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class FaceClusterView {
 	    id: number;
 	    status: string;
@@ -2738,6 +2803,7 @@ export namespace services {
 	    }
 	}
 	export class ImageCleanupMember {
+	    deleted_by: string;
 	    id: number;
 	    name: string;
 	    path: string;
@@ -2777,6 +2843,7 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deleted_by = source["deleted_by"];
 	        this.id = source["id"];
 	        this.name = source["name"];
 	        this.path = source["path"];
@@ -3652,11 +3719,11 @@ export namespace services {
 	    port: number;
 	    username: string;
 	    password: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new JellyfinConfigInput(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -3673,11 +3740,11 @@ export namespace services {
 	    password_set: boolean;
 	    lan_urls: string[];
 	    startup_error: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new JellyfinStatus(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.enabled = source["enabled"];
@@ -6179,20 +6246,90 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class WatchlistCandidateView {
+	    source_name: string;
+	    source_item_id: string;
+	    title: string;
+	    original_title: string;
+	    year: number;
+	    overview: string;
+	    rating: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new WatchlistCandidateView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source_name = source["source_name"];
+	        this.source_item_id = source["source_item_id"];
+	        this.title = source["title"];
+	        this.original_title = source["original_title"];
+	        this.year = source["year"];
+	        this.overview = source["overview"];
+	        this.rating = source["rating"];
+	    }
+	}
+	export class WatchlistMetadataProbeInput {
+	    source: string;
+	    proxy_url: string;
+	    tmdb_api_key: string;
+	    bangumi_access_token: string;
+	    fanza_api_id: string;
+	    fanza_affiliate_id: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WatchlistMetadataProbeInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.source = source["source"];
+	        this.proxy_url = source["proxy_url"];
+	        this.tmdb_api_key = source["tmdb_api_key"];
+	        this.bangumi_access_token = source["bangumi_access_token"];
+	        this.fanza_api_id = source["fanza_api_id"];
+	        this.fanza_affiliate_id = source["fanza_affiliate_id"];
+	    }
+	}
+	export class WatchlistMetadataProbeResult {
+	    ok: boolean;
+	    source: string;
+	    failure: string;
+	    proxy_url: string;
+	    http_status: number;
+	    latency_ms: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WatchlistMetadataProbeResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ok = source["ok"];
+	        this.source = source["source"];
+	        this.failure = source["failure"];
+	        this.proxy_url = source["proxy_url"];
+	        this.http_status = source["http_status"];
+	        this.latency_ms = source["latency_ms"];
+	        this.message = source["message"];
+	    }
+	}
 	export class WatchlistPage {
 	    entries: models.WatchlistEntry[];
 	    next_id: number;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new WatchlistPage(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.entries = this.convertValues(source["entries"], models.WatchlistEntry);
 	        this.next_id = source["next_id"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;

@@ -50,6 +50,10 @@ export function ApplyLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['ApplyLocalMetadataBatch'](arg1);
 }
 
+export function ApplyWatchlistCandidate(arg1, arg2) {
+  return window['go']['main']['App']['ApplyWatchlistCandidate'](arg1, arg2);
+}
+
 export function ApproveAITagCandidate(arg1) {
   return window['go']['main']['App']['ApproveAITagCandidate'](arg1);
 }
@@ -234,8 +238,8 @@ export function CreateTag(arg1, arg2) {
   return window['go']['main']['App']['CreateTag'](arg1, arg2);
 }
 
-export function CreateWatchlistEntry(arg1) {
-  return window['go']['main']['App']['CreateWatchlistEntry'](arg1);
+export function CreateWatchlistEntry(arg1, arg2) {
+  return window['go']['main']['App']['CreateWatchlistEntry'](arg1, arg2);
 }
 
 export function DeleteCollection(arg1) {
@@ -400,6 +404,10 @@ export function GetEnhancementVideoPreflight(arg1) {
 
 export function GetFaceAnalysisStatus() {
   return window['go']['main']['App']['GetFaceAnalysisStatus']();
+}
+
+export function GetFaceClusterObservations(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetFaceClusterObservations'](arg1, arg2, arg3);
 }
 
 export function GetFaceDataUsage() {
@@ -658,6 +666,10 @@ export function ListWatchlist(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListWatchlist'](arg1, arg2, arg3);
 }
 
+export function ListWatchlistCandidates(arg1) {
+  return window['go']['main']['App']['ListWatchlistCandidates'](arg1);
+}
+
 export function LogFrontend(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontend'](arg1, arg2, arg3);
 }
@@ -836,6 +848,10 @@ export function RetryEnhancementTask(arg1) {
 
 export function RetryLibraryWatcherRoot(arg1) {
   return window['go']['main']['App']['RetryLibraryWatcherRoot'](arg1);
+}
+
+export function RetryWatchlistEnrichment(arg1) {
+  return window['go']['main']['App']['RetryWatchlistEnrichment'](arg1);
 }
 
 export function RevealImage(arg1) {
@@ -1030,6 +1046,10 @@ export function StartTechnicalBackfill() {
   return window['go']['main']['App']['StartTechnicalBackfill']();
 }
 
+export function SyncDirectoryWithProgress(arg1, arg2) {
+  return window['go']['main']['App']['SyncDirectoryWithProgress'](arg1, arg2);
+}
+
 export function SyncIINAProgress() {
   return window['go']['main']['App']['SyncIINAProgress']();
 }
@@ -1044,6 +1064,10 @@ export function SyncScanDirectories() {
 
 export function TestAITaggingConnection(arg1) {
   return window['go']['main']['App']['TestAITaggingConnection'](arg1);
+}
+
+export function TestWatchlistMetadataConnection(arg1) {
+  return window['go']['main']['App']['TestWatchlistMetadataConnection'](arg1);
 }
 
 export function TriggerAITagging() {
@@ -1092,12 +1116,4 @@ export function UpsertGlossaryEntry(arg1) {
 
 export function ValidateSubtitleEditDocument(arg1) {
   return window['go']['main']['App']['ValidateSubtitleEditDocument'](arg1);
-}
-
-export function SyncDirectoryWithProgress(arg1, arg2) {
-  return window['go']['main']['App']['SyncDirectoryWithProgress'](arg1, arg2);
-}
-
-export function GetFaceClusterObservations(arg1, arg2, arg3) {
-  return window['go']['main']['App']['GetFaceClusterObservations'](arg1, arg2, arg3);
 }

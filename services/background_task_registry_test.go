@@ -102,8 +102,8 @@ func TestBackgroundTaskRegistryRejectsUnknownKey(t *testing.T) {
 	if IsBackgroundTaskKey("not_a_task") {
 		t.Fatal("未知 key 不该被认作合法")
 	}
-	if len(BackgroundTaskKeys()) != 17 {
-		t.Fatalf("固定 key 集合应有 17 项，实际 %d", len(BackgroundTaskKeys()))
+	if len(BackgroundTaskKeys()) != 18 {
+		t.Fatalf("固定 key 集合应有 18 项，实际 %d", len(BackgroundTaskKeys()))
 	}
 	// 新 key 必须同时进 IsBackgroundTaskKey 与 BackgroundTaskKeys，
 	// 只加一处的话前端任务面板会认不出它。

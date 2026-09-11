@@ -223,6 +223,27 @@ type Settings struct {
 	BrowserDownloadDirectory   string `gorm:"type:text;not null;default:''" json:"browser_download_directory"`
 	BrowserDownloadConcurrency int    `gorm:"not null;default:2" json:"browser_download_concurrency"`
 
+	// 在线资料源：想看片单补全的出网配置（D-WM10）。五列都是字符串，
+	// AutoMigrate 直接补上，不需要迁移函数。
+	//
+	// MetadataProxyURL 是**资料源出网代理**，与上面的 AutoCompatibilityProxy /
+	// ProxyCacheLimitBytes 无关——那两个是播放用的本地转码缓存代理。两者不要混：
+	// 设置页里它们也分属不同分区，标题分别是「资料源出网代理」与「播放代理」。
+	// 支持 http / https / socks5 / socks5h；为空即直连，不去读环境里的
+	// HTTP_PROXY（那是没人要求过的隐式回退）。
+	//
+	// 三家凭证沿用 AITaggingAPIKey 的形态：明文列 + 环境变量兜底，且**设置里的
+	// 非空值覆盖环境变量**（读取见 services/watchlist_metadata_config.go）。
+	// FANZA 要两列：DMM 联盟 API 的 api_id 与 affiliate_id 都是必传参数。
+	//
+	// 五列的默认值都是零值，因此不需要显式迁移，也不用（更不能用）带默认值的
+	// gorm 布尔标签——参见上面 IdleSchedulingEnabled 的注释。
+	MetadataProxyURL   string `gorm:"type:text;not null;default:''" json:"metadata_proxy_url"`
+	TMDBAPIKey         string `gorm:"type:text;not null;default:''" json:"tmdb_api_key"`
+	BangumiAccessToken string `gorm:"type:text;not null;default:''" json:"bangumi_access_token"`
+	FANZAAPIID         string `gorm:"type:text;not null;default:''" json:"fanza_api_id"`
+	FANZAAffiliateID   string `gorm:"type:text;not null;default:''" json:"fanza_affiliate_id"`
+
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }
 

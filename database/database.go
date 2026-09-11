@@ -304,8 +304,11 @@ func Init() error {
 // （ensureMediaDetailConstraints 里的 Postgres DO 块），而两个后端的全套测试都没
 // 拦住——测试根本没跑到这条路径上。
 func ApplySchema(db *gorm.DB) error {
-	if err := migrateWatchlistTitleUniqueness(db); err != nil {
-		return fmt.Errorf("迁移想看片名唯一约束失败: %w", err)
+	// 想看片单的唯一键是 (title, kind)，索引由 AutoMigrate 建。这里只负责在建索引
+	// 之前把老库里重复的片名合并掉；补齐 kind 与删掉旧的单列索引在 AutoMigrate
+	// 之后由 migrateWatchlistKind 收尾。
+	if err := dedupeWatchlistTitlesBeforeSchema(db); err != nil {
+		return fmt.Errorf("合并重复想看片名失败: %w", err)
 	}
 	// 如果表存在，先清理重复数据，避免 AutoMigrate 创建唯一索引失败
 	if db.Migrator().HasTable(&models.Video{}) {
@@ -324,10 +327,18 @@ func ApplySchema(db *gorm.DB) error {
 	idleSchedulingColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "idle_scheduling_enabled")
 	desktopNotificationsColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "desktop_notifications_enabled")
 	proxyCacheLimitColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "proxy_cache_limit_bytes")
+	// enrichment_status 是 NOT NULL DEFAULT 'pending'，AutoMigrate 加列时会把存量行
+	// 一并刷成 'pending'，加完就分不出谁是升级前的老条目了。这里先记下来。
+	watchlistEnrichmentColumnExisted := db.Migrator().HasTable(&models.WatchlistEntry{}) &&
+		db.Migrator().HasColumn(&models.WatchlistEntry{}, "enrichment_status")
 
 	// 自动迁移数据表
 	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
+	}
+	// 紧跟 AutoMigrate：它依赖刚建出的 kind 列与 idx_watchlist_title_kind。
+	if err := migrateWatchlistKind(db, !watchlistEnrichmentColumnExisted); err != nil {
+		return fmt.Errorf("迁移想看片单类型失败: %w", err)
 	}
 	if err := migrateLibraryWatchSetting(db, settingsTableExisted, libraryWatchColumnExisted); err != nil {
 		return fmt.Errorf("迁移实时同步设置失败: %w", err)

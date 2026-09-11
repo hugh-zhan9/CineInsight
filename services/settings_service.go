@@ -97,6 +97,17 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.BrowserBridgeEnabled = input.BrowserBridgeEnabled
 		settings.BrowserDownloadDirectory = strings.TrimSpace(input.BrowserDownloadDirectory)
 		settings.BrowserDownloadConcurrency = NormalizeBrowserDownloadConcurrency(input.BrowserDownloadConcurrency)
+		// 在线资料源（D-WM10）：出网代理与三家凭证，存进去的就是生效值（去空白，
+		// 粘贴凭证时带上的空格不该算进 Key 里）。这里是**唯一**的保存路径，漏一行
+		// 前端发过来也存不下——见本文件 :39 那条事故记录。
+		//
+		// 代理地址不在这里校验：设置页要能存下一个当时还没起来的代理，校验属于
+		// 出网那一刻（NewWatchlistMetadataHTTPClient）和连接探测。
+		settings.MetadataProxyURL = strings.TrimSpace(input.MetadataProxyURL)
+		settings.TMDBAPIKey = strings.TrimSpace(input.TMDBAPIKey)
+		settings.BangumiAccessToken = strings.TrimSpace(input.BangumiAccessToken)
+		settings.FANZAAPIID = strings.TrimSpace(input.FANZAAPIID)
+		settings.FANZAAffiliateID = strings.TrimSpace(input.FANZAAffiliateID)
 
 		// 独立配置可能在读取 settings 后更新，禁止旧快照覆盖其所属字段。
 		if err := tx.Omit("JellyfinEnabled", "JellyfinPort", "JellyfinUsername", "JellyfinPasswordHash", "JellyfinServerID").Save(&settings).Error; err != nil {
