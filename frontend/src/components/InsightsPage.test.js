@@ -16,7 +16,7 @@ function mountWith(stats, directories = []) {
 
 const baseStats = {
   generated_at: '2026-09-01T12:00:00Z',
-  summary: { video_count: 4, total_duration: 4 * 3600, total_size: 10, watched_count: 1, watched_percent: 25, recent_added_count: 2 },
+  summary: { video_count: 4, viewed_count: 3, viewed_percent: 75, total_duration: 4 * 3600, total_size: 10, watched_count: 1, watched_percent: 25, recent_added_count: 2 },
   watch_heatmap: [],
   rating_distribution: [{ rating: 7, count: 1 }, { rating: 8.5, count: 3 }],
   total_play_events: 0,
@@ -24,6 +24,27 @@ const baseStats = {
 };
 
 describe('InsightsPage 摘要副行', () => {
+  it('shows distinct viewed coverage separately from completed/manual marks and play events', async () => {
+    const wrapper = mountWith({ ...baseStats, total_play_events: 1217,
+      summary: { ...baseStats.summary, video_count: 13237, viewed_count: 1510, viewed_percent: 1510 / 13237 * 100, watched_count: 1, watched_percent: 1 / 13237 * 100 }
+    });
+    await wrapper.vm.$nextTick();
+    const coverage = wrapper.get('[data-test="insights-viewed-coverage"]');
+    expect(coverage.text()).toContain('11.4%'); expect(coverage.text()).toContain('1,510 / 13,237 部');
+    expect(wrapper.get('[data-test="insights-watched-marks"]').text()).toBe('标记已看 1 部（<0.1%）');
+    expect(wrapper.get('.insights-panel--wide').text()).toContain('播放事件 1,217');
+    expect(wrapper.get('.insights-panel--wide').text()).toContain('重复播放及已删除影片');
+    expect(wrapper.get('.insights-summary').text()).not.toContain('播放事件');
+    wrapper.unmount();
+  });
+  it('distinguishes zero coverage from a small positive percentage', () => {
+    const wrapper = mountWith(baseStats);
+    expect(wrapper.vm.formatPercent(0)).toBe('0.0%');
+    expect(wrapper.vm.formatPercent(0.0076)).toBe('<0.1%');
+    expect(wrapper.vm.formatPercent(100)).toBe('100.0%');
+    wrapper.unmount();
+  });
+
   it('平均单片时长由总时长除以条数推出，不另开后端查询', () => {
     const wrapper = mountWith(baseStats);
     expect(wrapper.vm.averageDurationText).toBe('1.0 小时');
@@ -64,7 +85,7 @@ describe('InsightsPage 摘要副行', () => {
     wrapper.unmount();
   });
 
-  it('播放事件总数与来源拆分显示在摘要副行', () => {
+  it('播放事件总数与来源拆分独立于覆盖率', () => {
     const wrapper = mountWith({
       ...baseStats,
       total_play_events: 1234,

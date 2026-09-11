@@ -3782,6 +3782,8 @@ export namespace services {
 	    }
 	}
 	export class LibraryStatsSummary {
+	    viewed_count: number;
+	    viewed_percent: number;
 	    video_count: number;
 	    total_duration: number;
 	    total_size: number;
@@ -3795,6 +3797,8 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.viewed_count = source["viewed_count"];
+	        this.viewed_percent = source["viewed_percent"];
 	        this.video_count = source["video_count"];
 	        this.total_duration = source["total_duration"];
 	        this.total_size = source["total_size"];

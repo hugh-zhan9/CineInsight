@@ -27,13 +27,14 @@
           <small>{{ volumeSummaryText }}</small>
         </article>
         <article>
-          <span>已看比例</span>
-          <div class="insights-summary__inline">
-            <strong>{{ Number(stats.summary.watched_percent || 0).toFixed(1) }}%</strong>
-            <small>{{ formatNumber(stats.summary.watched_count) }} / {{ formatNumber(stats.summary.video_count) }}</small>
+          <span>观看覆盖率</span>
+          <div class="insights-summary__inline" data-test="insights-viewed-coverage">
+            <strong>{{ formatPercent(stats.summary.viewed_percent) }}</strong>
+            <small>{{ formatNumber(stats.summary.viewed_count) }} / {{ formatNumber(stats.summary.video_count) }} 部</small>
           </div>
-          <div class="insights-progress"><i :style="{ width: `${Math.min(100, Number(stats.summary.watched_percent || 0))}%` }"></i></div>
-          <small data-test="insights-play-events">{{ playEventsSummaryText }}</small>
+          <div class="insights-progress"><i :style="{ width: `${Math.min(100, Math.max(0, Number(stats.summary.viewed_percent || 0)))}%` }"></i></div>
+          <small>播放过、有观看进度或已标记，每部只计一次</small>
+          <small data-test="insights-watched-marks">标记已看 {{ formatNumber(stats.summary.watched_count) }} 部（{{ formatPercent(stats.summary.watched_percent) }}）</small>
         </article>
       </div>
 
@@ -46,6 +47,8 @@
               少<i class="heat-0"></i><i class="heat-1"></i><i class="heat-2"></i><i class="heat-3"></i><i class="heat-4"></i>多
             </div>
           </div>
+          <p data-test="insights-play-events">{{ playEventsSummaryText }}</p>
+          <p class="insights-play-events-note">累计事件包含重复播放及已删除影片；历史事件每部仅补记一次。热力图仅展示近一年。</p>
           <div class="watch-heatmap" aria-label="近一年观看热力图">
             <span v-for="day in heatmapDays" :key="day.date" :class="`heat-${day.level}`" :title="`${day.date} · ${day.count} 次播放`"></span>
           </div>
@@ -222,6 +225,11 @@ export default {
   },
   beforeUnmount() { unregisterCommands('insights-page'); },
   methods: {
+    formatPercent(value) {
+      const percent = Number(value || 0);
+      if (percent > 0 && percent < 0.1) return '<0.1%';
+      return `${percent.toFixed(1)}%`;
+    },
     // 视频与图片分区各自独立加载：任一侧失败只影响自己的分区。
     refresh() { this.loadStats(); this.loadImageStats(); },
     async loadStats() {
@@ -257,6 +265,7 @@ export default {
 </script>
 
 <style scoped>
+.insights-play-events-note { color: var(--text-muted); font-size: 12px; margin: 6px 0 12px; }
 .insights-page { display: grid; gap: 18px; }
 .insights-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .insights-heading p, .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }

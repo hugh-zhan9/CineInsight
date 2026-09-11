@@ -102,7 +102,7 @@ func TestLibraryStatsEmptyLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Summary.VideoCount != 0 || stats.Summary.WatchedPercent != 0 || len(stats.WatchHeatmap) != 0 {
+	if stats.Summary.VideoCount != 0 || stats.Summary.ViewedCount != 0 || stats.Summary.ViewedPercent != 0 || stats.Summary.WatchedPercent != 0 || len(stats.WatchHeatmap) != 0 {
 		t.Fatalf("empty stats=%#v", stats)
 	}
 }
@@ -204,5 +204,50 @@ func TestLibraryWatchHeatmapGroupsByLocalDateOnBothBackends(t *testing.T) {
 	// 顺序必须递增，前端按这个顺序填坐标轴。
 	if heatmap[0].Date > heatmap[1].Date {
 		t.Fatalf("分组应按日期升序：%+v", heatmap)
+	}
+}
+
+func TestLibraryStatsViewedCoverageDeduplicatesAllEvidence(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	now := time.Now()
+	videos := []models.Video{
+		{Name: "marked", Path: "/marked", IsWatched: true},
+		{Name: "desktop", Path: "/desktop", PlayCount: 3},
+		{Name: "random", Path: "/random", RandomPlayCount: 2},
+		{Name: "legacy", Path: "/legacy", LastPlayedAt: &now},
+		{Name: "progress", Path: "/progress", WatchPositionSeconds: 12},
+		{Name: "event-only", Path: "/event-only"},
+		{Name: "unseen", Path: "/unseen"},
+		// A progress callback at zero does not prove that any content was watched.
+		{Name: "zero-progress", Path: "/zero-progress", WatchProgressUpdatedAt: &now},
+		{Name: "deleted", Path: "/deleted", IsWatched: true, PlayCount: 5, WatchPositionSeconds: 20},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, i := range []int{0, 1, 1, 5, 5, 8} {
+		if err := database.DB.Create(&models.PlayEvent{VideoID: videos[i].ID, Source: models.PlayEventSourceDesktopPlay, PlayedAt: now}).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.DB.Delete(&videos[8]).Error; err != nil {
+		t.Fatal(err)
+	}
+	stats, err := NewLibraryStatsService().GetStats()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Summary.VideoCount != 8 || stats.Summary.ViewedCount != 6 || stats.Summary.ViewedPercent != 75 {
+		t.Fatalf("coverage must count each active video once: %+v", stats.Summary)
+	}
+	if stats.Summary.WatchedCount != 1 || stats.Summary.WatchedPercent != 12.5 {
+		t.Fatalf("completion marks changed: %+v", stats.Summary)
+	}
+	if stats.TotalPlayEvents != 6 {
+		t.Fatalf("historical ledger scope changed: %d", stats.TotalPlayEvents)
+	}
+	var watched int64
+	if err := database.DB.Model(&models.Video{}).Where("is_watched = ?", true).Count(&watched).Error; err != nil || watched != 1 {
+		t.Fatalf("read-only stats mutated watched flags: %d %v", watched, err)
 	}
 }

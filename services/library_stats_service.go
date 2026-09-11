@@ -9,6 +9,10 @@ import (
 )
 
 type LibraryStatsSummary struct {
+	// Viewed counts distinct non-deleted videos with playback/progress evidence or
+	// an explicit watched mark. Watched remains the completion/manual mark only.
+	ViewedCount    int64   `json:"viewed_count"`
+	ViewedPercent  float64 `json:"viewed_percent"`
 	VideoCount     int64   `json:"video_count"`
 	TotalDuration  float64 `json:"total_duration"`
 	TotalSize      int64   `json:"total_size"`
@@ -70,12 +74,17 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 		COUNT(*) AS video_count,
 		COALESCE(SUM(duration), 0) AS total_duration,
 		COALESCE(SUM(size), 0) AS total_size,
-		COALESCE(SUM(CASE WHEN is_watched THEN 1 ELSE 0 END), 0) AS watched_count
+		COALESCE(SUM(CASE WHEN is_watched THEN 1 ELSE 0 END), 0) AS watched_count,
+		COALESCE(SUM(CASE WHEN is_watched OR play_count > 0 OR random_play_count > 0
+			OR last_played_at IS NOT NULL OR watch_position_seconds > 0
+			OR EXISTS (SELECT 1 FROM play_events WHERE play_events.video_id = videos.id)
+			THEN 1 ELSE 0 END), 0) AS viewed_count
 	`).Scan(&stats.Summary).Error; err != nil {
 		return nil, err
 	}
 	if stats.Summary.VideoCount > 0 {
 		stats.Summary.WatchedPercent = float64(stats.Summary.WatchedCount) * 100 / float64(stats.Summary.VideoCount)
+		stats.Summary.ViewedPercent = float64(stats.Summary.ViewedCount) * 100 / float64(stats.Summary.VideoCount)
 	}
 	if err := database.DB.Model(&models.Video{}).
 		Where("created_at >= ?", now.AddDate(0, 0, -30)).

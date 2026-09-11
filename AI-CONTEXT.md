@@ -214,7 +214,8 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 ### 2.18 播放历史账本
 - **表:** `play_events(id, video_id → videos ON DELETE CASCADE, played_at, source, created_at)`，索引 `(video_id, played_at)` 与 `(played_at)`。只追加，应用层没有任何 UPDATE / DELETE 路径；视频软删除时事件保留并继续进聚合，永久删除时级联清除。
 - **迁移:** `ApplySchema` 内的 `backfillLegacyPlayEvents` 对 `last_played_at` 非空的视频各回填一条 `legacy` 事件，`NOT EXISTS` 保证幂等，两后端共用同一条 SQL；不按 `play_count` 合成多条（库里没有那些时间点）。实际插入行数大于 0 时打一行启动日志。
-- **洞察改读:** `libraryWatchHeatmap` 改查 `play_events.played_at >= now-1y`，仍在 Go 侧按 `time.Local` 归并（SQLite 无 DATE 类型的老教训不变）。热力图口径由「每日有多少部片的最后播放落在这天」变成「每日播放次数」，同一部片一天播两次现在计两次。`services.LibraryStats` 新增 `total_play_events` 与 `plays_by_source`（不限一年窗口），洞察页在「已看比例」卡片副行展示。
+- **洞察改读:** `libraryWatchHeatmap` 改查 `play_events.played_at >= now-1y`，仍在 Go 侧按 `time.Local` 归并（SQLite 无 DATE 类型的老教训不变）。热力图口径由「每日有多少部片的最后播放落在这天」变成「每日播放次数」，同一部片一天播两次现在计两次。`services.LibraryStats` 新增 `total_play_events` 与 `plays_by_source`（不限一年窗口），洞察页在观看热力图旁展示，并说明累计流水包含重复播放和已软删除影片。
+- **观看覆盖率（2026-09-11）:** 原「已看比例」仅统计 `is_watched`，与播放事件放在同卡会误导用户。主卡改为 `viewed_count / video_count`：非软删除视频中，已标记、正式/随机播放计数 >0、最后播放时间非空、观看位置 >0 或有播放账本事件者，每部只计一次（EXISTS 避免重复事件放大）。仅零秒进度回报不算；分子分母沿用视频总数的非软删除范围。`watched_count / watched_percent` 保持完成/手动标记口径，另显示「标记已看」。统计只读，不回填或覆盖人物/媒体观看标记；小于 0.1% 的正比例显示 `<0.1%`，避免显示为 0.0%。
 - **与算法的关系:** 账本不参与随机算法，打分仍只读 `videos` 的三列（`ALGORITHM.md` 已注明）；`services/random_score_order_test.go` 用固定夹具把分数序钉死。
 
 ### 2.19 后台任务登记表与空闲调度
