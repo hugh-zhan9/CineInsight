@@ -32,6 +32,9 @@ const iinaWatchLaterRelativeDir = "Library/Application Support/com.colliderli.ii
 type IINAProgressUpdate struct {
 	VideoID              uint    `json:"video_id"`
 	WatchPositionSeconds float64 `json:"watch_position_seconds"`
+	// Watched 表示这次同步把它判成了看完。前端据此就地补上「已看」徽标，
+	// 否则行上只会看到进度条消失，徽标要等下一次整页重载才出现。
+	Watched bool `json:"watched"`
 }
 
 // IINAProgressSyncResult 汇总一次同步的结果。
@@ -207,8 +210,12 @@ func (s *IINAProgressService) watchLoop(watcher *fsnotify.Watcher, stop chan str
 
 // Sync 遍历库内视频，把 IINA 记下的断点补进 watch_position_seconds。
 // 只往前推进进度，不回退：用户可能在应用内看得更远，那份记录更新。
-// 不动 is_watched——"已看"是用户手动维护的状态，断点文件消失既可能是看完了，
-// 也可能是用户清了 IINA 的记录，不该替他判定。
+//
+// 断点文件"消失"仍然不据此判已看（可能是用户自己清了 IINA 的记录）；但断点位置
+// 停在片尾是明确信号，与应用内播放同一口径判为看完（2026-09-13 裁决）。桌面「播放」
+// 按钮走的就是 IINA，这条路不判的话，用户看到的还是「看到 00:28 / 00:28」却没标已看。
+// 已经标记已看的视频直接跳过：看完了就没有断点可续，一份陈旧的 watch_later 记录
+// 不该再把它拉回"在看"。
 func (s *IINAProgressService) Sync() (IINAProgressSyncResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -239,18 +246,36 @@ func (s *IINAProgressService) Sync() (IINAProgressSyncResult, error) {
 		if video.Duration > 0 && seconds > video.Duration {
 			seconds = video.Duration
 		}
-		// 只前进不后退，且忽略毫秒级抖动
-		if seconds <= video.WatchPositionSeconds+1 {
+		// 看完的不再回写：位置被清成 0 之后，"只前进不后退"这条防线就挡不住
+		// 陈旧断点了，会把已看的片子重新变成"看到一半"。
+		if video.IsWatched {
 			result.Skipped++
 			continue
 		}
+		// 完成判定必须排在前向守卫之前。两者幅度同为 1 秒，放在后面会有一段死区：
+		// 库里存着 26.6 的 28 秒片子，用户续播到 27.3 退出，27.3 <= 26.6+1 先被跳过，
+		// 判定根本跑不到。历史遗留行（位置已顶到片尾、is_watched 仍为 false）更是
+		// 恒满足 seconds <= position+1，放在后面就永远不会自愈——而「不回填」这条
+		// 裁决正是建立在"再播一次自然就好"上的。
+		completed := isWatchedCompletionPosition(video.Duration, seconds)
+		// 只前进不后退，且忽略毫秒级抖动
+		if !completed && seconds <= video.WatchPositionSeconds+1 {
+			result.Skipped++
+			continue
+		}
+		updates := map[string]interface{}{"watch_position_seconds": seconds}
+		recorded := seconds
+		if completed {
+			applyWatchedCompletionUpdates(updates, &video, time.Now())
+			recorded = 0
+		}
 		if err := database.DB.Model(&models.Video{}).
 			Where("id = ?", video.ID).
-			Updates(map[string]interface{}{"watch_position_seconds": seconds}).Error; err != nil {
+			Updates(updates).Error; err != nil {
 			return result, err
 		}
 		result.Updated++
-		result.Changes = append(result.Changes, IINAProgressUpdate{VideoID: video.ID, WatchPositionSeconds: seconds})
+		result.Changes = append(result.Changes, IINAProgressUpdate{VideoID: video.ID, WatchPositionSeconds: recorded, Watched: completed})
 	}
 	if result.Updated > 0 {
 		log.Printf("[IINA] 同步播放进度 scanned=%d updated=%d skipped=%d", result.Scanned, result.Updated, result.Skipped)

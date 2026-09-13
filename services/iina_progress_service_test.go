@@ -92,13 +92,63 @@ func TestIINAProgressSyncWritesPositionsForwardOnly(t *testing.T) {
 	if refreshed[2].WatchPositionSeconds != 0 {
 		t.Fatalf("没有 start 的条目不该改动: %v", refreshed[2].WatchPositionSeconds)
 	}
-	if refreshed[3].WatchPositionSeconds != 100 {
-		t.Fatalf("超过时长的断点应当夹到时长: %v", refreshed[3].WatchPositionSeconds)
+	// 2026-09-13 裁决：断点夹到片尾就是看完了，标已看并清掉断点（下次从头播）。
+	if !refreshed[3].IsWatched || refreshed[3].WatchPositionSeconds != 0 {
+		t.Fatalf("停在片尾的断点应当判为看完并清零: %+v", refreshed[3])
 	}
-	// 同步不碰"已看"：断点消失既可能是看完，也可能是用户清了记录，不替他判定
-	for _, video := range refreshed {
+	// 断点"消失"仍不据此判已看：可能是用户自己清了 IINA 的记录。
+	for _, video := range refreshed[:3] {
 		if video.IsWatched {
-			t.Fatalf("同步不应当自动标记已看: %s", video.Name)
+			t.Fatalf("看到中途不应当自动标记已看: %s", video.Name)
+		}
+	}
+}
+
+// 桌面「播放」按钮走的就是 IINA，这条路要是不判，用户看到的还是
+// 「看到 00:28 / 00:28」却没标已看。
+func TestIINAProgressSyncMarksWatchedAtEndAndSkipsWatchedVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	home := t.TempDir()
+	dir := filepath.Join(home, iinaWatchLaterRelativeDir)
+
+	videos := []models.Video{
+		{Name: "ended.mp4", Path: "/media/ended.mp4", Directory: "/media", Duration: 28},
+		{Name: "midway.mp4", Path: "/media/midway.mp4", Directory: "/media", Duration: 28},
+		{Name: "already.mp4", Path: "/media/already.mp4", Directory: "/media", Duration: 28, IsWatched: true},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatal(err)
+	}
+	writeIINAEntry(t, dir, "/media/ended.mp4", "start=27.6\n")
+	writeIINAEntry(t, dir, "/media/midway.mp4", "start=14.0\n")
+	// 已看的片子还留着一份陈旧断点：位置被清零之后，「只前进不后退」挡不住它。
+	writeIINAEntry(t, dir, "/media/already.mp4", "start=14.0\n")
+
+	result, err := NewIINAProgressService(home).Sync()
+	if err != nil {
+		t.Fatalf("同步失败: %v", err)
+	}
+	if result.Updated != 2 || result.Skipped != 1 {
+		t.Fatalf("已看的应当被跳过: %+v", result)
+	}
+
+	var refreshed []models.Video
+	if err := database.DB.Order("id ASC").Find(&refreshed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed[0].IsWatched || refreshed[0].WatchPositionSeconds != 0 || refreshed[0].WatchedAt == nil {
+		t.Fatalf("停在片尾应判看完并清零: %+v", refreshed[0])
+	}
+	if refreshed[1].IsWatched || refreshed[1].WatchPositionSeconds != 14 {
+		t.Fatalf("看到一半应当照旧记断点: %+v", refreshed[1])
+	}
+	if refreshed[2].WatchPositionSeconds != 0 {
+		t.Fatalf("已看的不该被陈旧断点拉回「在看」: %+v", refreshed[2])
+	}
+	// 回报给前端的位置要和落库的一致，否则列表会先显示成还在看。
+	for _, change := range result.Changes {
+		if change.VideoID == refreshed[0].ID && change.WatchPositionSeconds != 0 {
+			t.Fatalf("判为看完后回报的位置应当是 0: %+v", change)
 		}
 	}
 }
@@ -171,4 +221,46 @@ func TestIINAProgressStopWatchingIsIdempotent(t *testing.T) {
 	}
 	service.StopWatching()
 	service.StopWatching()
+}
+
+// 完成判定必须排在抗抖动守卫之前，否则两者同为 1 秒会形成死区：
+// 既吞掉正常的完成，也让历史遗留行在 IINA 这条主力路径上永远不自愈
+// ——而「不回填」的裁决正是建立在"再播一次自然就好"上的。
+func TestIINAProgressSyncCompletionBeatsForwardOnlyGuard(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	home := t.TempDir()
+	dir := filepath.Join(home, iinaWatchLaterRelativeDir)
+
+	videos := []models.Video{
+		// 历史遗留行：位置已顶到片尾，但没标已看。seconds 被夹到 28，
+		// 恒满足 28 <= 28+1，判定排在守卫之后就永远跳过。
+		{Name: "legacy.mp4", Path: "/media/legacy.mp4", Directory: "/media", Duration: 28, WatchPositionSeconds: 28},
+		// 死区：库里存 26.6，这次到 27.3，27.3 <= 27.6 会被守卫吞掉。
+		{Name: "deadzone.mp4", Path: "/media/deadzone.mp4", Directory: "/media", Duration: 28, WatchPositionSeconds: 26.6},
+		// 正常的往回拽仍要被守卫挡住。
+		{Name: "backwards.mp4", Path: "/media/backwards.mp4", Directory: "/media", Duration: 3600, WatchPositionSeconds: 1200},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatal(err)
+	}
+	writeIINAEntry(t, dir, "/media/legacy.mp4", "start=27.9\n")
+	writeIINAEntry(t, dir, "/media/deadzone.mp4", "start=27.3\n")
+	writeIINAEntry(t, dir, "/media/backwards.mp4", "start=300.0\n")
+
+	if _, err := NewIINAProgressService(home).Sync(); err != nil {
+		t.Fatalf("同步失败: %v", err)
+	}
+	var refreshed []models.Video
+	if err := database.DB.Order("id ASC").Find(&refreshed).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !refreshed[0].IsWatched || refreshed[0].WatchPositionSeconds != 0 {
+		t.Fatalf("历史遗留行应当在重播后自愈: %+v", refreshed[0])
+	}
+	if !refreshed[1].IsWatched || refreshed[1].WatchPositionSeconds != 0 {
+		t.Fatalf("死区内的完成不该被抗抖动守卫吞掉: %+v", refreshed[1])
+	}
+	if refreshed[2].IsWatched || refreshed[2].WatchPositionSeconds != 1200 {
+		t.Fatalf("往回拽的断点仍要被挡住: %+v", refreshed[2])
+	}
 }

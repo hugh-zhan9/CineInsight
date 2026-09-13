@@ -147,6 +147,8 @@ export default {
       return `评分 ${rating}/10`;
     },
     watchProgressPercent() {
+      // 已看的不再显示「在看」：看完会把断点清掉，手动标已看的也不该还挂着进度条。
+      if (this.video.is_watched) return 0;
       const duration = Number(this.video.duration || 0);
       const position = Number(this.video.watch_position_seconds || 0);
       if (duration <= 0 || position <= 0) return 0;

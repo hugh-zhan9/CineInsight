@@ -20,7 +20,10 @@ assert.match(page, /activeTagIDs\.has\(id\)/, 'saved views should ignore deleted
 assert.match(page, /PlayRandomVideoWithFilter/, 'random play should use the current filter contract');
 assert.match(page, /exclude_ids: this\.recentRandomVideoIDs\.slice\(-12\)/, 'random play should avoid recent repeats');
 assert.match(page, /@watch-progress="handlePreviewWatchProgress"/, 'preview progress should be persisted by the page');
-assert.match(page, /position >= Math\.max\(duration - 5, duration \* 0\.98\)/, 'completed or near-end positions should restart instead of immediately ending');
+assert.match(page, /position >= duration - watchedCompletionTolerance\(duration\)/, 'near-end positions should restart instead of immediately ending');
+// 这两个常量必须和后端的 watchedCompletionToleranceSeconds / watchedCompletionShortClipRatio 同值
+assert.match(page, /const WATCHED_COMPLETION_TOLERANCE_SECONDS = 1;/, 'resume tolerance must stay in step with the backend watchedCompletionToleranceSeconds');
+assert.match(page, /const WATCHED_COMPLETION_SHORT_CLIP_RATIO = 0\.05;/, 'short-clip ratio must stay in step with the backend watchedCompletionShortClipRatio');
 assert.match(row, /toggle-favorite/, 'library rows should expose favorite state');
 assert.match(row, /toggle-watched/, 'library rows should expose watched state');
 assert.match(row, /watch_position_seconds/, 'library rows should show resume progress');

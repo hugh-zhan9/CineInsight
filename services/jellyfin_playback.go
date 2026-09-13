@@ -348,14 +348,16 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 		jellyfinError(w, 401, "会话已失效")
 		return
 	}
-	video, err := s.visibleVideo(r, id)
-	if s.libraryError(w, err) {
+	// 仍要走一遍可见性校验：看不见的视频不该被它的进度上报改状态。
+	if _, err := s.visibleVideo(r, id); s.libraryError(w, err) {
 		return
 	}
 	if input.PositionTicks != nil {
 		seconds := float64(*input.PositionTicks) / 1e7
-		completed := video.Duration > 0 && seconds >= video.Duration
-		if _, err = s.video.UpdateVideoWatchProgress(id, seconds, completed); s.libraryError(w, err) {
+		// 「算不算看完」统一由服务层按同一个容差判，这里只负责把位置报上去：
+		// 早先这里自己要求 seconds >= duration，比内嵌播放器那条路严，同一部片
+		// 在两个客户端上会得出不同的已看结论。
+		if _, err = s.video.UpdateVideoWatchProgress(id, seconds, false); s.libraryError(w, err) {
 			return
 		}
 	}

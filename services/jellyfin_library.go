@@ -825,7 +825,14 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[stri
 	return item, nil
 }
 func jellyfinUserData(video models.Video) map[string]interface{} {
-	data := map[string]interface{}{"Key": jellyfinID(jellyVideo, video.ID), "ItemId": jellyfinID(jellyVideo, video.ID), "IsFavorite": video.IsFavorite, "Played": video.IsWatched, "PlaybackPositionTicks": int64(video.WatchPositionSeconds * 1e7), "PlayCount": video.PlayCount}
+	// 已看就不报续播位置：手动标已看不动断点（误点可撤销），自动判完成才清零，
+	// 两种情况下客户端都不该给一个「已播完」的条目挂续播条并从中途接着播。
+	// 这也和 IsResumable 的筛选口径（is_watched=false AND position>0）对得上。
+	positionTicks := int64(video.WatchPositionSeconds * 1e7)
+	if video.IsWatched {
+		positionTicks = 0
+	}
+	data := map[string]interface{}{"Key": jellyfinID(jellyVideo, video.ID), "ItemId": jellyfinID(jellyVideo, video.ID), "IsFavorite": video.IsFavorite, "Played": video.IsWatched, "PlaybackPositionTicks": positionTicks, "PlayCount": video.PlayCount}
 	if video.LastPlayedAt != nil {
 		data["LastPlayedDate"] = video.LastPlayedAt.UTC().Format(time.RFC3339)
 	}

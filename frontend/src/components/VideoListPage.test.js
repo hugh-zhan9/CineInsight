@@ -723,6 +723,58 @@ describe('命令面板接线', () => {
   });
 });
 
+describe('续播位置', () => {
+  it('离片尾不到 1 秒就从头播，口径与后端一致', async () => {
+    const wrapper = await mountPage();
+    const at = (position, extra = {}) => wrapper.vm.resumePositionFor({
+      id: 1, duration: 28, watch_position_seconds: position, is_watched: false, ...extra
+    });
+
+    expect(at(14)).toBe(14);
+    expect(at(26.9)).toBe(26.9);
+    expect(at(28)).toBe(0);
+    expect(at(14, { is_watched: true })).toBe(0);
+
+    // 旧阈值是 max(duration - 5, duration * 0.98)，28 秒的片子门槛落在 27.44：
+    // 27.2 旧的会从这里续播，新的按 1 秒容差判为看完，从头。
+    expect(at(27.2)).toBe(0);
+
+    // 反方向：长片上旧阈值反而更宽松。7200 秒的片子旧门槛是 7195，停在 7196 会被
+    // 丢掉断点从头播；新口径只在最后 1 秒内才算看完，7196 该老实续播。
+    const longFilm = position => wrapper.vm.resumePositionFor({
+      id: 2, duration: 7200, watch_position_seconds: position, is_watched: false
+    });
+    expect(longFilm(7196)).toBe(7196);
+    expect(longFilm(7199.5)).toBe(0);
+
+    // 短片按时长 5% 收紧：固定 1 秒在 3 秒的片子上等于「过了 2/3 就算看完」。
+    const shortClip = position => wrapper.vm.resumePositionFor({
+      id: 3, duration: 3, watch_position_seconds: position, is_watched: false
+    });
+    expect(shortClip(2.6)).toBe(2.6);
+    expect(shortClip(2.9)).toBe(0);
+    wrapper.unmount();
+  });
+
+  it('IINA 判成看完时就地补上已看，而不是只让进度条消失', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [
+      { id: 1, name: 'a.mp4', tags: [], watch_position_seconds: 26, is_watched: false },
+      { id: 2, name: 'b.mp4', tags: [], watch_position_seconds: 0, is_watched: false }
+    ];
+    wrapper.vm.applyWatchProgressUpdates([
+      { video_id: 1, watch_position_seconds: 0, watched: true },
+      { video_id: 2, watch_position_seconds: 14, watched: false }
+    ]);
+
+    expect(wrapper.vm.videos[0].is_watched).toBe(true);
+    expect(wrapper.vm.videos[0].watch_position_seconds).toBe(0);
+    expect(wrapper.vm.videos[1].is_watched).toBe(false);
+    expect(wrapper.vm.videos[1].watch_position_seconds).toBe(14);
+    wrapper.unmount();
+  });
+});
+
 describe('字幕翻译入口', () => {
   it('翻译进行中整条入口置灰，而不是点了没反应', async () => {
     const wrapper = await mountPage();

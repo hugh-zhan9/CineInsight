@@ -206,7 +206,9 @@ func TestJellyfinOriginalRangeSubtitleAndWatchState(t *testing.T) {
 		t.Fatal(w.Code)
 	}
 	database.DB.First(&video, first.ID)
-	if !video.IsWatched || video.IsFavorite || video.WatchPositionSeconds != 100 {
+	// 2026-09-13 裁决：看完就清掉断点，下次从头播。Jellyfin 自己也是这个语义
+	// （Played=true 配 PlaybackPositionTicks=0）。
+	if !video.IsWatched || video.IsFavorite || video.WatchPositionSeconds != 0 {
 		t.Fatalf("completed %+v", video)
 	}
 	var events int64
@@ -352,5 +354,35 @@ func TestReviewJellyfinHashLogOnSaveFailure(t *testing.T) {
 	}
 	if strings.Contains(buf.String(), "$2a$") || strings.Contains(buf.String(), "$2b$") {
 		t.Error("failed Configure wrote bcrypt credential hash into SQL log")
+	}
+}
+
+// 客户端很少正好停在整时长上。停在 99.5 秒（时长 100）旧代码要求 seconds >= duration，
+// 判不出看完；现在与应用内同一口径，1 秒容差内就算看完。
+func TestJellyfinProgressNearEndMarksWatched(t *testing.T) {
+	s, token, first, _ := jellyfinLibraryFixture(t)
+	id := jellyfinID(jellyVideo, first.ID)
+
+	if w := jellyfinRequest(s, "POST", "/Sessions/Playing/Progress", token,
+		fmt.Sprintf(`{"ItemId":%q,"PositionTicks":995000000}`, id)); w.Code != 204 {
+		t.Fatalf("进度上报失败: %d", w.Code)
+	}
+	var video models.Video
+	database.DB.First(&video, first.ID)
+	if !video.IsWatched || video.WatchPositionSeconds != 0 {
+		t.Fatalf("停在片尾 0.5 秒内应判看完并清断点: %+v", video)
+	}
+
+	// 看到一半照旧只记断点。
+	second := models.Video{Name: "half.mkv", Path: filepath.Join(t.TempDir(), "half.mkv"), Directory: "/tmp", Duration: 100}
+	if err := database.DB.Create(&second).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.video.UpdateVideoWatchProgress(second.ID, 50, false); err != nil {
+		t.Fatalf("记录断点失败: %v", err)
+	}
+	database.DB.First(&second, second.ID)
+	if second.IsWatched || second.WatchPositionSeconds != 50 {
+		t.Fatalf("看到一半不该判看完: %+v", second)
 	}
 }

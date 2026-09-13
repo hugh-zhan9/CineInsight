@@ -383,6 +383,13 @@ import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyBatchSummary } from '../utils/
 
 // 「随机 N 部」一次抽取的条数。
 const RANDOM_PICK_SIZE = 10;
+// 与后端 watchedCompletionToleranceSeconds / watchedCompletionShortClipRatio 同口径：
+// 离片尾不到 1 秒就当看完了，20 秒以下的短片按时长 5% 收紧。
+const WATCHED_COMPLETION_TOLERANCE_SECONDS = 1;
+const WATCHED_COMPLETION_SHORT_CLIP_RATIO = 0.05;
+function watchedCompletionTolerance(duration) {
+  return Math.min(WATCHED_COMPLETION_TOLERANCE_SECONDS, duration * WATCHED_COMPLETION_SHORT_CLIP_RATIO);
+}
 
 export default {
   name: 'VideoListPage',
@@ -926,18 +933,27 @@ export default {
     // 就地把同步回来的观看进度写到已加载的行上；不在当前列表里的忽略。
     applyWatchProgressUpdates(changes) {
       if (!Array.isArray(changes) || changes.length === 0) return 0;
-      const byID = new Map(changes.map(item => [Number(item.video_id), Number(item.watch_position_seconds) || 0]));
+      // 同步可能把断点判成了看完：那时位置回 0 且带 watched，行上要同时补「已看」，
+      // 否则只看到进度条消失、徽标要等下次整页重载才出现。
+      const byID = new Map(changes.map(item => [
+        Number(item.video_id),
+        { position: Number(item.watch_position_seconds) || 0, watched: !!item.watched }
+      ]));
       let applied = 0;
       for (const video of this.videos) {
-        const position = byID.get(Number(video.id));
-        if (position === undefined || video.watch_position_seconds === position) continue;
-        video.watch_position_seconds = position;
+        const change = byID.get(Number(video.id));
+        if (!change) continue;
+        if (video.watch_position_seconds === change.position && (!change.watched || video.is_watched)) continue;
+        video.watch_position_seconds = change.position;
+        if (change.watched) video.is_watched = true;
         applied++;
       }
-      if (this.previewVideoSnapshot && byID.has(Number(this.previewVideoSnapshot.id))) {
+      const snapshotChange = this.previewVideoSnapshot ? byID.get(Number(this.previewVideoSnapshot.id)) : null;
+      if (snapshotChange) {
         this.previewVideoSnapshot = {
           ...this.previewVideoSnapshot,
-          watch_position_seconds: byID.get(Number(this.previewVideoSnapshot.id))
+          watch_position_seconds: snapshotChange.position,
+          is_watched: snapshotChange.watched || this.previewVideoSnapshot.is_watched
         };
       }
       return applied;
@@ -1633,7 +1649,9 @@ export default {
       const position = Number(video.watch_position_seconds || 0);
       const duration = Number(video.duration || 0);
       if (!Number.isFinite(position) || position <= 0) return 0;
-      if (duration > 0 && position >= Math.max(duration - 5, duration * 0.98)) return 0;
+      // 容差跟后端的「算看完」口径保持一致。早先这里是 5 秒 / 98%，会出现后端认为
+      // 还没看完、记着断点，前端却已经从头播的割裂。短片同样按比例收紧。
+      if (duration > 0 && position >= duration - watchedCompletionTolerance(duration)) return 0;
       return position;
     },
     async applyVideoStateChange(updatedVideo) {

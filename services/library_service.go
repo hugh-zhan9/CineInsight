@@ -349,6 +349,9 @@ func (s *VideoService) SetVideoWatched(videoID uint, watched bool) (*models.Vide
 	if watched {
 		now := time.Now()
 		updates["watched_at"] = &now
+		// 有意不动 watch_position_seconds：手动标已看可能只是误点，销毁断点撤不回来
+		// （看到 40 分钟的两小时电影点一下就没了）。「已看就从头播」由前端的
+		// resumePositionFor 保证，对外自洽由 jellyfinUserData 在 Played 时报 0 保证。
 	} else {
 		updates["watched_at"] = nil
 	}
@@ -363,6 +366,42 @@ func (s *VideoService) SetVideoWatched(videoID uint, watched bool) (*models.Vide
 }
 
 // UpdateVideoWatchProgress 保存内嵌播放器观看位置。
+// watchedCompletionToleranceSeconds 是「算看完」的容差：位置离片尾不到这么多秒就
+// 视为播完。用户裁决要严格，所以只给 1 秒，而不是常见的百分比阈值。
+const watchedCompletionToleranceSeconds = 1.0
+
+// watchedCompletionShortClipRatio 是短片上的容差比例：时长 × 5% 小于 1 秒时用它。
+// 20 秒以下的片子按比例算，保证「严格」这条裁决在短内容上同样成立。
+const watchedCompletionShortClipRatio = 0.05
+
+// isWatchedCompletionPosition 判断这个位置算不算把片子看完了。短片上容差按时长
+// 比例收紧：固定 1 秒用在 0.8 秒的片段上会让位置 0 也算看完，而取一半又等于
+// 「看过一半就算看完」——比用户明确否决掉的 95% 阈值还松。位置必须真的往前走过。
+func isWatchedCompletionPosition(duration, position float64) bool {
+	if duration <= 0 || position <= 0 {
+		return false
+	}
+	tolerance := watchedCompletionToleranceSeconds
+	if scaled := duration * watchedCompletionShortClipRatio; scaled < tolerance {
+		tolerance = scaled
+	}
+	return position >= duration-tolerance
+}
+
+// applyWatchedCompletionUpdates 把「判为看完」要写的那组字段填进 updates。
+// 内嵌播放器 / Jellyfin 走的 UpdateVideoWatchProgress 与 IINA 断点同步共用它，
+// 免得两处各自漂移。
+func applyWatchedCompletionUpdates(updates map[string]interface{}, video *models.Video, now time.Time) {
+	updates["is_watched"] = true
+	// 只记第一次看完的时间：把一部早就看完的片子再拖到片尾，不该改写它。
+	if !video.IsWatched || video.WatchedAt == nil {
+		updates["watched_at"] = &now
+	}
+	// 看完就把断点清掉：留着它下次播放会从片尾接着播，列表里也会一直挂着
+	// 「看到 X / Y」当成还在看。
+	updates["watch_position_seconds"] = float64(0)
+}
+
 func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds float64, completed bool) (*models.Video, error) {
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
@@ -377,17 +416,19 @@ func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds fl
 	if video.Duration > 0 && positionSeconds > video.Duration {
 		positionSeconds = video.Duration
 	}
+	// 调用方给的 completed 只覆盖一部分情况（内嵌播放器的 ended、Jellyfin 的停止
+	// 上报），而暂停在片尾、拖到末尾、直接关掉抽屉同样是看完了。容差取得很紧，
+	// 避免把"还差一点"算成看完。
+	if !completed && isWatchedCompletionPosition(video.Duration, positionSeconds) {
+		completed = true
+	}
 	now := time.Now()
 	updates := map[string]interface{}{
 		"watch_position_seconds":    positionSeconds,
 		"watch_progress_updated_at": &now,
 	}
 	if completed {
-		updates["is_watched"] = true
-		updates["watched_at"] = &now
-		if video.Duration > 0 {
-			updates["watch_position_seconds"] = video.Duration
-		}
+		applyWatchedCompletionUpdates(updates, &video, now)
 	}
 	if err := database.DB.Model(&video).Updates(updates).Error; err != nil {
 		return nil, err

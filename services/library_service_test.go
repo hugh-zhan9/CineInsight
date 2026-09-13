@@ -34,17 +34,22 @@ func TestLibraryStateUpdatesAreAdditiveAndIdempotent(t *testing.T) {
 	if len(updated.Tags) != 1 || updated.Tags[0].ID != tag.ID {
 		t.Fatalf("状态切换的返回值必须带标签，实际 %+v", updated.Tags)
 	}
-	updated, err = svc.UpdateVideoWatchProgress(video.ID, 125, false)
-	if err != nil || updated.WatchPositionSeconds != 100 || updated.IsWatched {
-		t.Fatalf("进度应夹紧且不自动已看 video=%+v err=%v", updated, err)
+	updated, err = svc.UpdateVideoWatchProgress(video.ID, 40, false)
+	if err != nil || updated.WatchPositionSeconds != 40 || updated.IsWatched {
+		t.Fatalf("看到中途不应自动已看 video=%+v err=%v", updated, err)
 	}
-	updated, err = svc.UpdateVideoWatchProgress(video.ID, 99, true)
-	if err != nil || !updated.IsWatched || updated.WatchedAt == nil || updated.WatchPositionSeconds != 100 {
-		t.Fatalf("完成播放应标记已看 video=%+v err=%v", updated, err)
+	// 2026-09-13 裁决：位置夹紧到片尾就是看完了，不再要求前端非得给 completed。
+	updated, err = svc.UpdateVideoWatchProgress(video.ID, 125, false)
+	if err != nil || !updated.IsWatched || updated.WatchedAt == nil || updated.WatchPositionSeconds != 0 {
+		t.Fatalf("进度夹紧到片尾应标记已看并清掉断点 video=%+v err=%v", updated, err)
 	}
 	updated, err = svc.SetVideoWatched(video.ID, false)
-	if err != nil || updated.IsWatched || updated.WatchedAt != nil || updated.WatchPositionSeconds != 100 {
-		t.Fatalf("标记未看不应清空位置 video=%+v err=%v", updated, err)
+	if err != nil || updated.IsWatched || updated.WatchedAt != nil {
+		t.Fatalf("标记未看应清掉已看状态 video=%+v err=%v", updated, err)
+	}
+	updated, err = svc.UpdateVideoWatchProgress(video.ID, 99, true)
+	if err != nil || !updated.IsWatched || updated.WatchedAt == nil || updated.WatchPositionSeconds != 0 {
+		t.Fatalf("完成播放应标记已看并清掉断点 video=%+v err=%v", updated, err)
 	}
 	if _, err := svc.UpdateVideoWatchProgress(video.ID, math.NaN(), false); err == nil {
 		t.Fatalf("NaN 进度应被拒绝")
@@ -791,5 +796,213 @@ func TestLibraryCountsMatchScopedListing(t *testing.T) {
 	}
 	if counts.VideoCount != 1 {
 		t.Fatalf("范围外记录不该计入 header=%d", counts.VideoCount)
+	}
+}
+
+// 2026-09-13 裁决：「看到 00:28 / 00:28 不就是已播完吗」。判定要严格（容差 1 秒），
+// 判定成立就清掉断点，这样下次播放从头开始，列表也不再当它还在看。
+func TestUpdateVideoWatchProgressTreatsNearEndAsWatched(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+
+	cases := []struct {
+		name     string
+		duration float64
+		position float64
+		watched  bool
+	}{
+		{"停在片尾", 28, 28, true},
+		{"差半秒", 28, 27.5, true},
+		{"差满一秒", 28, 27, true},
+		{"差一秒多一点", 28, 26.9, false},
+		{"刚过一半", 28, 15, false},
+		{"长片差两秒", 7200, 7198, false},
+		{"长片停在片尾", 7200, 7200, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			video := models.Video{
+				Name:      fmt.Sprintf("%s.mp4", testCase.name),
+				Path:      filepath.Join(t.TempDir(), "clip.mp4"),
+				Directory: "/tmp",
+				Duration:  testCase.duration,
+			}
+			if err := database.DB.Create(&video).Error; err != nil {
+				t.Fatalf("创建视频失败: %v", err)
+			}
+			updated, err := svc.UpdateVideoWatchProgress(video.ID, testCase.position, false)
+			if err != nil {
+				t.Fatalf("更新观看进度失败: %v", err)
+			}
+			if updated.IsWatched != testCase.watched {
+				t.Fatalf("时长 %.0f 看到 %.1f 应当 watched=%v，实际 %v",
+					testCase.duration, testCase.position, testCase.watched, updated.IsWatched)
+			}
+			if testCase.watched && updated.WatchPositionSeconds != 0 {
+				t.Fatalf("看完后应清掉断点，实际停在 %.1f", updated.WatchPositionSeconds)
+			}
+			if !testCase.watched && updated.WatchPositionSeconds != testCase.position {
+				t.Fatalf("没看完应保留断点 got=%.1f want=%.1f", updated.WatchPositionSeconds, testCase.position)
+			}
+		})
+	}
+}
+
+// 时长未知（元数据没补全）时不能瞎判：没有片尾可言，一律按没看完处理。
+func TestUpdateVideoWatchProgressWithoutDurationNeverAutoWatches(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := models.Video{Name: "unknown.mp4", Path: filepath.Join(t.TempDir(), "unknown.mp4"), Directory: "/tmp"}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	updated, err := (&VideoService{}).UpdateVideoWatchProgress(video.ID, 9999, false)
+	if err != nil {
+		t.Fatalf("更新观看进度失败: %v", err)
+	}
+	if updated.IsWatched || updated.WatchPositionSeconds != 9999 {
+		t.Fatalf("时长未知不应自动已看 video=%+v", updated)
+	}
+}
+
+// 亚秒片段上固定 1 秒容差会退化成「一打开就算看完」：位置 0 也满足 position >= duration-1。
+func TestUpdateVideoWatchProgressDoesNotAutoWatchVeryShortClips(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	cases := []struct {
+		name     string
+		duration float64
+		position float64
+		watched  bool
+	}{
+		{"亚秒片段刚开始", 0.8, 0.01, false},
+		// 取时长一半当容差等于「看过一半就算看完」，比用户否决掉的 95% 还松。
+		{"亚秒片段过半不算看完", 0.8, 0.5, false},
+		{"亚秒片段到片尾", 0.8, 0.79, true},
+		{"两秒片刚过半", 2, 1.2, false},
+		{"两秒片到片尾", 2, 1.95, true},
+		{"三秒片刚开始", 3, 0.2, false},
+		{"三秒片过大半不算看完", 3, 2.6, false},
+		{"三秒片到片尾", 3, 2.9, true},
+		{"二十秒片是比例与绝对值的交接点", 20, 19.1, true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			video := models.Video{Name: testCase.name, Path: filepath.Join(t.TempDir(), "tiny.mp4"), Directory: "/tmp", Duration: testCase.duration}
+			if err := database.DB.Create(&video).Error; err != nil {
+				t.Fatalf("创建视频失败: %v", err)
+			}
+			updated, err := svc.UpdateVideoWatchProgress(video.ID, testCase.position, false)
+			if err != nil {
+				t.Fatalf("更新观看进度失败: %v", err)
+			}
+			if updated.IsWatched != testCase.watched {
+				t.Fatalf("时长 %.2f 看到 %.2f 应当 watched=%v，实际 %v",
+					testCase.duration, testCase.position, testCase.watched, updated.IsWatched)
+			}
+		})
+	}
+}
+
+// completed 入参仍要能独立生效：内嵌播放器的 ended 是它唯一的生产者，
+// 而 ended 可能发生在离片尾很远的地方（时长元数据不准）。
+func TestUpdateVideoWatchProgressHonoursExplicitCompletedFarFromEnd(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := models.Video{Name: "short.mp4", Path: filepath.Join(t.TempDir(), "short.mp4"), Directory: "/tmp", Duration: 600}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	updated, err := (&VideoService{}).UpdateVideoWatchProgress(video.ID, 120, true)
+	if err != nil {
+		t.Fatalf("更新观看进度失败: %v", err)
+	}
+	if !updated.IsWatched || updated.WatchPositionSeconds != 0 {
+		t.Fatalf("显式 completed 应当照样标已看并清断点: %+v", updated)
+	}
+}
+
+// 看完的时间只记第一次：把一部早就看完的片子再拖到片尾，不该改写它。
+func TestUpdateVideoWatchProgressKeepsFirstWatchedAt(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	video := models.Video{Name: "rewatch.mp4", Path: filepath.Join(t.TempDir(), "rewatch.mp4"), Directory: "/tmp", Duration: 100}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	first, err := svc.UpdateVideoWatchProgress(video.ID, 100, false)
+	if err != nil || first.WatchedAt == nil {
+		t.Fatalf("首次看完失败: %+v err=%v", first, err)
+	}
+	firstWatchedAt := *first.WatchedAt
+	time.Sleep(5 * time.Millisecond)
+	again, err := svc.UpdateVideoWatchProgress(video.ID, 100, false)
+	if err != nil {
+		t.Fatalf("再次上报失败: %v", err)
+	}
+	if again.WatchedAt == nil || !again.WatchedAt.Equal(firstWatchedAt) {
+		t.Fatalf("看完时间被改写了 first=%v again=%v", firstWatchedAt, again.WatchedAt)
+	}
+}
+
+// 手动标已看有意不动断点：误点一下就把两小时电影的断点抹了，撤不回来。
+// 「已看就从头播」由前端保证，对外自洽由 jellyfinUserData 报 0 保证。
+func TestSetVideoWatchedKeepsResumePoint(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	video := models.Video{Name: "manual.mp4", Path: filepath.Join(t.TempDir(), "manual.mp4"), Directory: "/tmp", Duration: 100}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if _, err := svc.UpdateVideoWatchProgress(video.ID, 40, false); err != nil {
+		t.Fatalf("记录断点失败: %v", err)
+	}
+	watched, err := svc.SetVideoWatched(video.ID, true)
+	if err != nil || !watched.IsWatched || watched.WatchPositionSeconds != 40 {
+		t.Fatalf("手动标已看不该销毁断点: %+v err=%v", watched, err)
+	}
+	// 误点之后标回未看，断点还在，接着看得下去。
+	restored, err := svc.SetVideoWatched(video.ID, false)
+	if err != nil || restored.IsWatched || restored.WatchPositionSeconds != 40 {
+		t.Fatalf("标回未看应当还能接着看: %+v err=%v", restored, err)
+	}
+
+	// 看到一半直接标未看：这条路不经过已看，位置必须原样保留。
+	other := models.Video{Name: "keep.mp4", Path: filepath.Join(t.TempDir(), "keep.mp4"), Directory: "/tmp", Duration: 100}
+	if err := database.DB.Create(&other).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if _, err := svc.UpdateVideoWatchProgress(other.ID, 40, false); err != nil {
+		t.Fatalf("记录断点失败: %v", err)
+	}
+	unwatched, err := svc.SetVideoWatched(other.ID, false)
+	if err != nil || unwatched.IsWatched || unwatched.WatchedAt != nil || unwatched.WatchPositionSeconds != 40 {
+		t.Fatalf("标记未看不应清空位置: %+v err=%v", unwatched, err)
+	}
+}
+
+// 已看的视频上报中途位置：位置照记（手动标已看可能只是误点，断点要留着），
+// 但 Jellyfin 那边不能同时报 Played=true 和非零续播位置。
+func TestJellyfinUserDataHidesResumePointForWatchedVideo(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &VideoService{}
+	video := models.Video{Name: "rewatch.mp4", Path: filepath.Join(t.TempDir(), "rewatch.mp4"), Directory: "/tmp", Duration: 7200}
+	if err := database.DB.Create(&video).Error; err != nil {
+		t.Fatalf("创建视频失败: %v", err)
+	}
+	if _, err := svc.SetVideoWatched(video.ID, true); err != nil {
+		t.Fatalf("标已看失败: %v", err)
+	}
+	updated, err := svc.UpdateVideoWatchProgress(video.ID, 1800, false)
+	if err != nil {
+		t.Fatalf("更新观看进度失败: %v", err)
+	}
+	if !updated.IsWatched || updated.WatchPositionSeconds != 1800 {
+		t.Fatalf("重看已看的片子应当照常记断点: %+v", updated)
+	}
+	data := jellyfinUserData(*updated)
+	if data["Played"] != true {
+		t.Fatalf("已看应当报 Played=true: %+v", data)
+	}
+	if ticks, _ := data["PlaybackPositionTicks"].(int64); ticks != 0 {
+		t.Fatalf("已看不该再报续播位置，否则客户端会从中途接着播: %v", ticks)
 	}
 }
