@@ -193,7 +193,7 @@
       data-test="face-cluster-show-more"
       @click="showMoreCards"
     >显示更多（还有 {{ hiddenCardCount }} 组）</button>
-    <FaceClusterDetailDialog v-if="detailCluster" :cluster="detailCluster" @close="detailCluster = null" @name="card => { detailCluster = null; openNameForm(card); }" @link="card => { detailCluster = null; openLinkForm(card); }" />
+    <FaceClusterDetailDialog v-if="detailCluster" :cluster="detailCluster" @close="detailCluster = null" @removed="load()" @name="card => { detailCluster = null; openNameForm(card); }" @link="card => { detailCluster = null; openLinkForm(card); }" />
   </section>
 </template>
 
@@ -337,6 +337,7 @@ export default {
         this.unnamedClusters = this.normalize(unnamed);
         // 已命名的簇只有在有待确认的追加候选时才值得占面板位置。
         this.appendClusters = this.normalize(named).filter(card => card.append_pending_count > 0);
+        if (this.detailCluster) this.detailCluster = this.cards.find(card => card.id === this.detailCluster.id) || null;
         if (!this.cards.some(card => card.id === this.nameForm.clusterID)) this.nameForm.clusterID = 0;
         if (!this.cards.some(card => card.id === this.linkForm.clusterID)) this.linkForm.clusterID = 0;
         // 宿主页（人物页）据此写摘要、决定默认收起还是展开。

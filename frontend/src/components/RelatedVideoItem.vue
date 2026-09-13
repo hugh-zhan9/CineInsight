@@ -39,6 +39,7 @@
     >
       {{ actionLabel }}
     </button>
+    <slot name="actions" />
   </div>
 </template>
 

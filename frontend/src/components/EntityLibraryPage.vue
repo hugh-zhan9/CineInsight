@@ -5,7 +5,8 @@
         <button v-if="selectedEntity" type="button" class="btn-secondary btn-compact" @click="closeEntity">返回{{ isPeople ? '人物' : '作品集' }}列表</button>
         <div>
           <h2>{{ selectedEntity ? selectedEntityName : (isPeople ? '人物' : '作品集') }}</h2>
-          <p v-if="selectedEntity">{{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部已加载，可直接预览、播放或打开目录。</p>
+          <p v-if="selectedEntity && isPeople">已加载：视频 {{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部 · 图片 {{ entityImages.length }} / {{ selectedEntityImageCount }} 张。</p>
+          <p v-else-if="selectedEntity">{{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部已加载，可直接预览、播放或打开目录。</p>
           <p v-else>{{ isPeople ? '本地维护的演员实体；同名人物会保持独立。' : '手工编排的视频集合；一个视频可以属于多个作品集。' }}</p>
         </div>
       </div>
@@ -47,7 +48,8 @@
           <div>
             <strong>{{ entityName(item) }}</strong>
             <span>{{ entitySecondary(item) }}</span>
-            <small>{{ item.active_video_count || 0 }} 部活跃作品</small>
+            <small v-if="isPeople" class="entity-card__media-count">{{ item.active_video_count || 0 }} 部视频 · {{ item.active_image_count || 0 }} 张图片</small>
+            <small v-else>{{ item.active_video_count || 0 }} 部活跃作品</small>
           </div>
         </button>
       </section>
@@ -69,6 +71,7 @@
             <button type="button" class="btn-secondary btn-compact" @click="openVideoDetails(video)">预览</button>
             <button type="button" class="btn-primary btn-compact" :disabled="playingVideoIDs.includes(Number(video.id))" @click="playEntityVideo(video)">{{ playingVideoIDs.includes(Number(video.id)) ? '启动中...' : '播放' }}</button>
             <button type="button" class="btn-secondary btn-compact" @click="openVideoDirectory(video)">目录</button>
+            <button v-if="isPeople" type="button" class="btn-danger btn-compact" :data-test="`person-video-delete-${video.id}`" @click="requestPersonMediaDelete('video', video)">删除</button>
           </div>
         </article>
       </section>
@@ -86,6 +89,7 @@
             <div class="entity-image-card__actions">
               <button type="button" class="btn-secondary btn-compact" @click="revealPersonImage(image)">目录</button>
               <button type="button" class="btn-secondary btn-compact" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`entity-image-unlink-${image.id}`" @click="unlinkPersonImage(image)">解绑</button>
+              <button type="button" class="btn-danger btn-compact" :disabled="unlinkingImageIDs.includes(image.id)" :data-test="`person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">删除</button>
             </div>
           </figure>
         </div>
@@ -112,10 +116,12 @@
       {{ (selectedEntity ? entityVideosLoading : loading) ? '加载中...' : (selectedEntity ? '加载更多相关视频' : `加载更多${isPeople ? '人物' : '作品集'}`) }}
     </button>
 
-    <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink :busy="unlinkingImageIDs.includes(imagePreview.id)" :action-error="entityImagesError" @close="imagePreview = null" @unlink="unlinkPersonImage" />
+    <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="unlinkingImageIDs.includes(imagePreview.id)" :action-error="entityImagesError" @close="imagePreview = null" @unlink="unlinkPersonImage" @delete="requestPersonMediaDelete('image', $event)" />
+    <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" />
 
     <PreviewDrawer
       v-if="drawerEntity"
+      ref="personDrawer"
       :initial-entity="drawerEntity"
       @close="drawerEntity = null"
       @preview-externally="previewExternally"
@@ -123,6 +129,7 @@
       @collection-deleted="handleCollectionDeleted"
       @person-deleted="handlePersonDeleted"
       @relations-updated="handleRelationsUpdated"
+      @media-deleted="handlePersonMediaDeleted($event, true)"
     />
   </main>
 </template>
@@ -135,6 +142,7 @@ import {
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
+import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import { confirmAction } from '../utils/feedback.js';
 import { formatBytes, formatDuration } from '../utils/mediaDetails.js';
@@ -142,7 +150,7 @@ import { registerCommands, unregisterCommands } from '../utils/commandRegistry.j
 
 export default {
   name: 'EntityLibraryPage',
-  components: { FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls },
+  components: { FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog },
   props: {
     entityType: { type: String, required: true },
     // 命令面板「作品集 · X」/「人物 · X」的落点（D-029）：{ id, name }，置一次即消费。
@@ -156,6 +164,7 @@ export default {
       // 人物详情的图片区块独立分页、不与视频混排（D-021）；作品集不覆盖图片。
       entityImages: [], entityImageCursor: 0, entityImagesLoading: false, entityImagesError: '',
       playingVideoIDs: [], selectedPersonImageIDs: [], imagePreview: null, unlinkingImageIDs: [],
+      personMediaDeleteTarget: null,
       // 待命名人脸分区：面板自己拉数据，这里只记摘要与收起状态。没有待处理项时默认收起，
       // 用户手动点过展开/收起之后就不再替他做主。
       faceReviewCounts: null, faceReviewCollapsed: false, faceReviewToggled: false
@@ -199,6 +208,32 @@ export default {
     this._intersectionObserver?.disconnect();
   },
   methods: {
+    requestPersonMediaDelete(kind, media) {
+      if (!this.isPeople || !this.selectedEntity) return;
+      this.imagePreview = null;
+      this.personMediaDeleteTarget = { kind, media, personID: Number(this.selectedEntity.id) };
+    },
+    handlePersonMediaDeleted(target, fromDrawer = false) {
+      const id = Number(target.media.id);
+      if (!this.isPeople || Number(this.selectedEntity?.id) !== target.personID) return;
+      // Discard in-flight pages which could still contain the deleted media.
+      this._entityVideosToken = Symbol('media-deleted'); this.entityVideosLoading = false;
+      this._entityImagesToken = null; this.entityImagesLoading = false;
+      if (target.kind === 'video') {
+        this.entityVideos = this.entityVideos.filter(item => Number(item.id) !== id);
+        if (this.drawerEntity?.type === 'video' && Number(this.drawerEntity.id) === id) this.drawerEntity = null;
+      } else {
+        this.entityImages = this.entityImages.filter(item => Number(item.id) !== id);
+        this.selectedPersonImageIDs = this.selectedPersonImageIDs.filter(value => Number(value) !== id);
+        if (Number(this.imagePreview?.id) === id) this.imagePreview = null;
+      }
+      const field = target.kind === 'video' ? 'active_video_count' : 'active_image_count';
+      if (this.selectedItem) this.selectedItem[field] = Math.max(0, Number(this.selectedItem[field] || 0) - 1);
+      this.patchSelectedItem();
+      if (!fromDrawer) this.$refs.personDrawer?.handlePersonMediaDeleted?.(target, false);
+      if (target.kind === 'image' && !this.entityImages.length && this.entityImageCursor) this.loadMoreEntityImages();
+      if (target.kind === 'video' && !this.entityVideos.length && this.entityVideosHasMore) this.loadEntityVideos(false);
+    },
     async revealPersonImage(image) {
       try { await RevealImage(Number(image.id)); }
       catch (err) { this.entityImagesError = `打开目录失败：${err}`; }
@@ -420,8 +455,8 @@ export default {
 <style scoped>
 .entity-image-card__select { display: flex; align-items: center; gap: 6px; font-size: 12px; }
 .entity-image-card__select input { min-width: 0; width: auto; padding: 0; }
-.entity-image-card__preview { padding: 0; border: 0; background: transparent; cursor: zoom-in; }
-.entity-image-card__actions { display: flex; gap: 8px; justify-content: flex-end; }
+.entity-image-card__preview { display: block; width: 100%; min-width: 0; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+.entity-image-card__actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
 .entity-library { padding: 14px 18px 28px; display: flex; flex-direction: column; gap: 14px; }.entity-library--with-drawer { padding-right: calc(18px + 520px); }
 .entity-library__toolbar,.entity-library__create { padding: 10px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); display: flex; gap: 12px; align-items: center; justify-content: space-between; }.entity-library__toolbar h2 { margin: 0 0 3px; font-size: 18px; }.entity-library__toolbar p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .entity-library__title { display: flex; align-items: center; gap: 12px; min-width: 0; }.entity-library__title > div { min-width: 0; }.entity-library__title h2,.entity-library__title p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -437,12 +472,14 @@ export default {
 .entity-card strong { font-size: 13px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .entity-card span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
 .entity-card small { color: var(--accent-text); font-size: 11.5px; font-weight: 600; }
+.entity-card .entity-card__media-count { white-space: normal; overflow-wrap: anywhere; line-height: 1.5; }
 .entity-video-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }.entity-video-card { min-width: 0; overflow: hidden; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }.entity-video-card__preview { width: 100%; aspect-ratio: 16 / 9; overflow: hidden; border: 0; background: var(--thumb-bg); cursor: pointer; }.entity-video-card__preview img { width: 100%; height: 100%; display: block; object-fit: cover; }.entity-video-card__copy { display: grid; gap: 4px; min-width: 0; padding: 11px 12px 7px; }.entity-video-card__copy strong,.entity-video-card__copy span,.entity-video-card__copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.entity-video-card__copy span,.entity-video-card__copy small { color: var(--text-muted); font-size: 11px; }.entity-video-card__actions { display: flex; justify-content: flex-end; gap: 7px; padding: 0 12px 11px; }
 .entity-image-section { display: grid; gap: 10px; }
+.entity-video-card__actions { flex-wrap: wrap; }
 .entity-image-section h3 { margin: 0; font-size: 15px; }
-.entity-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
-.entity-image-card { margin: 0; min-width: 0; overflow: hidden; display: grid; gap: 6px; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
-.entity-image-card img { width: 100%; aspect-ratio: 1; display: block; object-fit: cover; border-radius: 8px; background: var(--thumb-bg); }
+.entity-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); align-items: start; gap: 12px; }
+.entity-image-card { margin: 0; min-width: 0; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.entity-image-card img { width: 100%; height: auto; display: block; object-fit: contain; border-radius: 8px; background: var(--thumb-bg); }
 .entity-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
 .entity-image-card__size { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .entity-library__more { align-self: center; }.entity-library__sentinel { height: 1px; }.entity-library__error { color: var(--danger-color); }

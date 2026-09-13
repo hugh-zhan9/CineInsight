@@ -210,6 +210,8 @@ export function GetFaceAnalysisStatus():Promise<services.FaceAnalysisStatus>;
 
 export function GetFaceClusterObservations(arg1:number,arg2:number,arg3:number):Promise<services.FaceClusterObservationPage>;
 
+export function RemoveFaceClusterObservation(arg1:number,arg2:number):Promise<boolean>;
+
 export function GetFaceDataUsage():Promise<services.FaceDataUsage>;
 
 export function GetFaceRuntimeStatus():Promise<services.FaceRuntimeStatus>;

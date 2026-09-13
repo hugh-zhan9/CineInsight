@@ -251,7 +251,9 @@
               destructive
               @open="openVideo(related.id)"
               @action="removeRelatedVideo(related)"
-            />
+            >
+              <template #actions><button type="button" class="btn-danger btn-compact" :disabled="isRelatedVideoUpdating(related.id)" :data-test="`drawer-person-video-delete-${related.id}`" @click="requestPersonMediaDelete('video', related)">删除</button></template>
+            </RelatedVideoItem>
           </div>
           <p v-if="!(personDetail.videos || []).length" class="detail-empty">当前没有活跃关联视频。软删除视频的关系仍会保留。</p>
         </section>
@@ -272,6 +274,7 @@
                 :data-test="`person-image-remove-${image.id}`"
                 @click="removePersonImageRelation(image)"
               >{{ isPersonImageUpdating(image.id) ? '处理中...' : '解除关联' }}</button>
+              <button type="button" class="btn-danger btn-compact" :disabled="isPersonImageUpdating(image.id)" :data-test="`drawer-person-image-delete-${image.id}`" @click="requestPersonMediaDelete('image', image)">删除图片</button>
             </figure>
           </div>
           <p v-else class="detail-empty">当前没有活跃关联图片。软删除图片的关系仍会保留。</p>
@@ -361,7 +364,8 @@
         </section>
       </template>
     </div>
-    <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink :busy="isPersonImageUpdating(imagePreview.id)" :action-error="personImageError" @close="imagePreview = null" @unlink="removePersonImageRelation" />
+    <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="isPersonImageUpdating(imagePreview.id)" :action-error="personImageError" @close="imagePreview = null" @unlink="removePersonImageRelation" @delete="requestPersonMediaDelete('image', $event)" />
+    <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" />
   </aside>
 </template>
 
@@ -375,6 +379,7 @@ import {
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
 import GlossaryEditor from './GlossaryEditor.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
+import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
@@ -383,7 +388,7 @@ import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyStrategyLabel } from '../utils
 
 export default {
   name: 'PreviewDrawer',
-  components: { GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls },
+  components: { GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
@@ -392,10 +397,11 @@ export default {
     resumePositionSeconds: { type: Number, default: 0 },
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale'],
+  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale'],
   data() {
     return {
       selectedPersonImageIDs: [], imagePreview: null,
+      personMediaDeleteTarget: null,
       navigator: null, currentEntry: null, canGoBack: false,
       loading: false, error: '', saving: false, refreshingTechnical: false,
       details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', personalRating: '', personIDs: [], collectionIDs: [] },
@@ -503,6 +509,31 @@ export default {
   mounted() { this.loadRelatedVideoDirectories(); this.resetRootEntry(); window.addEventListener('keydown', this.handleReviewShortcut); },
   beforeUnmount() { window.removeEventListener('keydown', this.handleReviewShortcut); this.clearSeekSpriteRetry(); this.emitWatchProgress(true, false); this.resetVideoElement(); },
   methods: {
+    requestPersonMediaDelete(kind, media) {
+      if (this.currentEntry?.type !== 'person') return;
+      this.imagePreview = null;
+      this.personMediaDeleteTarget = { kind, media, personID: Number(this.currentEntry.id) };
+    },
+    handlePersonMediaDeleted(target, notify = true) {
+      const id = Number(target.media.id);
+      if (this.isCurrentEntity('person', target.personID) && this.personDetail) {
+        this._entryLoadToken = Symbol('media-deleted'); this.loading = false; this.personImagesLoading = false;
+        if (target.kind === 'video') {
+          this._relatedVideoSearchToken = Symbol('media-deleted'); this.relatedVideoSearching = false;
+          this.personDetail.videos = (this.personDetail.videos || []).filter(item => Number(item.id) !== id);
+          this.relatedVideoCandidates = this.relatedVideoCandidates.filter(item => Number(item.id) !== id);
+          this.relatedVideoSelection = this.relatedVideoSelection.filter(value => Number(value) !== id);
+        } else {
+          this.personImages = this.personImages.filter(item => Number(item.id) !== id);
+          this.selectedPersonImageIDs = this.selectedPersonImageIDs.filter(value => Number(value) !== id);
+          if (Number(this.imagePreview?.id) === id) this.imagePreview = null;
+        }
+        const field = target.kind === 'video' ? 'active_video_count' : 'active_image_count';
+        this.personDetail.person[field] = Math.max(0, Number(this.personDetail.person[field] || 0) - 1);
+        if (target.kind === 'image' && !this.personImages.length && this.personImageCursor) this.loadMorePersonImages();
+      }
+      if (notify) this.$emit('media-deleted', target);
+    },
 	handleReviewShortcut(event) {
 	  if (!this.pageActive) return;
 	  if (this.currentEntry?.type !== 'video') return;
@@ -981,7 +1012,7 @@ export default {
 </script>
 
 <style scoped>
-.person-image-card__preview { border: 0; padding: 0; background: transparent; cursor: zoom-in; }
+.person-image-card__preview { display: block; width: 100%; min-width: 0; border: 0; padding: 0; background: transparent; cursor: zoom-in; }
 /* 这一排动作按钮原本没有任何样式：靠行内空白撑横向间隙，换行后两行会贴死。 */
 .detail-inline-actions {
   display: flex;
@@ -1016,9 +1047,9 @@ export default {
 .related-video-editor { display: grid; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }.related-video-results,.related-video-list { display: grid; gap: 8px; }
 .related-video-directory-filter { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }.related-video-directory-filter select { min-width: 0; }.related-video-directory-hint { margin: -3px 0 0; color: var(--text-muted); font-size: 11px; }
 .related-video-batch-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.person-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; }
-.person-image-card { margin: 0; display: grid; gap: 6px; justify-items: stretch; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--control-hover-bg); }
-.person-image-card img { width: 100%; aspect-ratio: 1; display: block; object-fit: cover; border-radius: 8px; background: var(--thumb-bg); }
+.person-image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); align-items: start; gap: 8px; }
+.person-image-card { margin: 0; min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; justify-items: stretch; padding: 8px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--control-hover-bg); }
+.person-image-card img { width: 100%; height: auto; display: block; object-fit: contain; border-radius: 8px; background: var(--thumb-bg); }
 .person-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
 .person-image-card__size { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }.selection-row button { background: transparent; border: 0; color: var(--text-primary); text-align: left; cursor: pointer; }.selection-row small { color: var(--text-muted); }

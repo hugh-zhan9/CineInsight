@@ -20,6 +20,8 @@ const api = vi.hoisted(() => ({
   AddPersonVideos: vi.fn(),
   CreatePerson: vi.fn(),
   DeleteCollection: vi.fn(),
+  DeleteVideo: vi.fn(),
+  DeleteImage: vi.fn(),
   DeleteGlossaryEntry: vi.fn(),
   ListGlossaryEntries: vi.fn(() => Promise.resolve([])),
   UpsertGlossaryEntry: vi.fn(),
@@ -113,6 +115,24 @@ beforeEach(() => {
 });
 
 describe('PreviewDrawer', () => {
+  it('deletes person media with confirmation and keeps the person and remaining sources', async () => {
+    api.GetPersonDetail.mockResolvedValueOnce({
+      person: { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 2 },
+      videos: [{ id: 1, name: 'clip.mp4' }], images: [{ id: 11, name: 'a.jpg' }, { id: 12, name: 'b.jpg' }]
+    });
+    api.DeleteVideo.mockResolvedValue(); api.DeleteImage.mockResolvedValue();
+    const w = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } }, global: { stubs: { teleport: true } } }); await flushPromises();
+    await w.get('[data-test="drawer-person-video-delete-1"]').trigger('click');
+    await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    expect(api.DeleteVideo).toHaveBeenCalledWith(1, false);
+    expect(w.vm.personDetail.videos).toHaveLength(0); expect(w.vm.personDetail.person.active_video_count).toBe(0);
+    await w.get('[data-test="drawer-person-image-delete-11"]').trigger('click');
+    await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    expect(api.DeleteImage).toHaveBeenCalledWith(11, false);
+    expect(w.vm.personImages.map(image => image.id)).toEqual([12]); expect(w.vm.personDetail.person.active_image_count).toBe(1);
+    expect(w.emitted('media-deleted')).toHaveLength(2); expect(w.emitted('person-deleted')).toBeUndefined();
+    expect(api.GetPersonDetail).toHaveBeenCalledTimes(1); w.unmount();
+  });
   it('mounts and loads the root video details', async () => {
     const wrapper = await mountDrawer();
 

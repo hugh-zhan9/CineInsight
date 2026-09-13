@@ -6,7 +6,11 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"sync"
 )
+
+// Serialise source exclusions with assignment of newly detected faces.
+var faceClusterAssignmentMu sync.Mutex
 
 // 相似度与聚类阈值（D-017）。都是常量：fixture 钉住，允许在 ±20% 内校准，
 // 超出这个范围就不是调参而是换设计，要回 spec。

@@ -1,6 +1,6 @@
 import { mount, flushPromises } from '@vue/test-utils';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-const api = vi.hoisted(() => ({ GetFaceClusterObservations: vi.fn(), PreviewExternally: vi.fn(), RevealImage: vi.fn() }));
+const api = vi.hoisted(() => ({ GetFaceClusterObservations: vi.fn(), RemoveFaceClusterObservation: vi.fn(), PreviewExternally: vi.fn(), RevealImage: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('./PreviewDrawer.vue', () => ({ default: { name: 'PreviewDrawer', props: ['initialEntity', 'startTimeMs'], template: '<aside />' } }));
 import FaceClusterDetailDialog from './FaceClusterDetailDialog.vue';
@@ -10,6 +10,47 @@ const source = (id, kind = 'image', more = {}) => ({ observation_id: id, media_i
 const cluster = { id: 1, status: 'unnamed' };
 beforeEach(() => vi.resetAllMocks());
 describe('FaceClusterDetailDialog', () => {
+ it('removes one unavailable source, retains the loaded page and signals refresh', async () => {
+  api.GetFaceClusterObservations.mockResolvedValue({ observations: [source(1, 'image', { unavailable: '已删除' }), source(2)], next_id: 2 });
+  api.RemoveFaceClusterObservation.mockResolvedValue(false);
+  const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body }); await flushPromises();
+  await w.getComponent({ name: 'BaseModal' }).get('[data-test="face-source-remove-1"]').trigger('click'); await flushPromises();
+  expect(api.RemoveFaceClusterObservation).toHaveBeenCalledWith(1, 1);
+  expect(w.vm.sources.map(s => s.observation_id)).toEqual([2]); expect(w.vm.nextID).toBe(2);
+  expect(api.GetFaceClusterObservations).toHaveBeenCalledTimes(1);
+  expect(w.emitted('removed')).toHaveLength(1); expect(w.emitted('close')).toBeUndefined(); w.unmount();
+ });
+ it('keeps failed removals visible and disables duplicate operations while pending', async () => {
+  api.GetFaceClusterObservations.mockResolvedValue({ observations: [source(1), source(2)] });
+  let reject; api.RemoveFaceClusterObservation.mockImplementation(() => new Promise((_, fail) => { reject = fail; }));
+  const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body }); await flushPromises();
+  const modal = w.getComponent({ name: 'BaseModal' });
+  await modal.get('[data-test="face-source-remove-1"]').trigger('click');
+  expect(modal.get('[data-test="face-source-remove-2"]').element.disabled).toBe(true);
+  expect(modal.findAll('button').find(b => b.text() === '命名为新人物').element.disabled).toBe(true);
+  reject('offline'); await flushPromises();
+  expect(w.vm.sources).toHaveLength(2); expect(modal.text()).toContain('移除来源失败：offline');
+  expect(w.emitted('removed')).toBeUndefined(); expect(w.vm.removingID).toBeNull(); w.unmount();
+ });
+ it('loads the next page when the visible page is emptied and closes when the cluster is empty', async () => {
+  api.GetFaceClusterObservations.mockResolvedValueOnce({ observations: [source(1)], next_id: 1 }).mockResolvedValueOnce({ observations: [source(2)] });
+  api.RemoveFaceClusterObservation.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+  const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body }); await flushPromises();
+  await w.getComponent({ name: 'BaseModal' }).get('[data-test="face-source-remove-1"]').trigger('click'); await flushPromises();
+  expect(api.GetFaceClusterObservations).toHaveBeenLastCalledWith(1, 1, 30); expect(w.vm.sources.map(s => s.observation_id)).toEqual([2]);
+  await w.getComponent({ name: 'BaseModal' }).get('[data-test="face-source-remove-2"]').trigger('click'); await flushPromises();
+  expect(w.emitted('close')).toHaveLength(1); w.unmount();
+ });
+ it('does not apply a late removal to a different cluster or offer removal for named clusters', async () => {
+  api.GetFaceClusterObservations.mockResolvedValue({ observations: [source(1)] });
+  let finish; api.RemoveFaceClusterObservation.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body }); await flushPromises();
+  await w.getComponent({ name: 'BaseModal' }).get('[data-test="face-source-remove-1"]').trigger('click');
+  await w.setProps({ cluster: { id: 2, status: 'named' } }); await flushPromises();
+  finish(true); await flushPromises();
+  expect(w.vm.sources).toHaveLength(1); expect(w.emitted('close')).toBeUndefined();
+  expect(w.getComponent({ name: 'BaseModal' }).find('[data-test="face-source-remove-1"]').exists()).toBe(false); w.unmount();
+ });
  it('paginates sources and opens the original image or video at frame zero', async () => {
   api.GetFaceClusterObservations.mockResolvedValueOnce({ observations: [source(1)], next_id: 1 }).mockResolvedValueOnce({ observations: [source(2, 'video')], next_id: 0 });
   const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body });

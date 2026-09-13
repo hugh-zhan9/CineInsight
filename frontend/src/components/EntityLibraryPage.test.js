@@ -12,6 +12,8 @@ const api = vi.hoisted(() => ({
   OpenDirectory: vi.fn(),
   RevealImage: vi.fn(),
   RemovePersonImage: vi.fn(),
+  DeleteImage: vi.fn(),
+  DeleteVideo: vi.fn(),
   GetAllTags: vi.fn(),
   BatchAddTagToImages: vi.fn(),
   PlayVideo: vi.fn(),
@@ -58,6 +60,34 @@ beforeEach(() => {
 });
 
 describe('EntityLibraryPage', () => {
+  it.each([[0, 24], [3, 12], [0, 0]])('shows both person media counts (%s videos, %s images)', async (videos, images) => {
+    api.ListPeople.mockResolvedValueOnce([{ person: { id: 7, display_name: '人物' }, active_video_count: videos, active_image_count: images }]);
+    const w = mount(EntityLibraryPage, { props: { entityType: 'person' } }); await flushPromises();
+    expect(w.get('.entity-card').text()).toContain(`${videos} 部视频 · ${images} 张图片`);
+    expect(w.get('.entity-card').text()).not.toContain('部活跃作品'); w.unmount();
+  });
+  it('deletes related media after confirmation and updates the card counts without deleting the person', async () => {
+    const person = { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 1 };
+    api.ListPeople.mockResolvedValueOnce([person]);
+    api.GetPersonDetail.mockResolvedValueOnce({ person, videos: [{ id: 21, name: 'clip.mp4', size: 100 }], images: [{ id: 11, name: 'a.jpg', size: 200 }] });
+    api.DeleteImage.mockResolvedValue(); api.DeleteVideo.mockResolvedValue();
+    const w = mount(EntityLibraryPage, { props: { entityType: 'person' }, global: { stubs: { teleport: true } } }); await flushPromises();
+    await w.get('.entity-card').trigger('click'); await flushPromises();
+    expect(w.get('.entity-library__toolbar').text()).toContain('视频 1 / 1 部 · 图片 1 / 1 张');
+    await w.get('[data-test="person-image-delete-11"]').trigger('click');
+    expect(api.DeleteImage).not.toHaveBeenCalled();
+    await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    expect(api.DeleteImage).toHaveBeenCalledWith(11, false);
+    expect(w.vm.entityImages).toHaveLength(0); expect(w.vm.selectedItem.active_image_count).toBe(0);
+    await w.get('[data-test="person-video-delete-21"]').trigger('click');
+    await w.get('[data-test="person-media-delete-file"]').setValue(true);
+    await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
+    expect(api.DeleteVideo).toHaveBeenCalledWith(21, true);
+    expect(w.vm.entityVideos).toHaveLength(0); expect(w.vm.selectedItem.active_video_count).toBe(0);
+    expect(w.vm.selectedEntity.id).toBe(7);
+    w.vm.closeEntity(); await w.vm.$nextTick();
+    expect(w.get('.entity-card').text()).toContain('0 部视频 · 0 张图片'); w.unmount();
+  });
   it('enlarges and unlinks a person image while preserving the other media', async () => {
     api.ListPeople.mockResolvedValueOnce([{ person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 2 }]);
     api.GetPersonDetail.mockResolvedValueOnce({ person: { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 2 }, videos: [], images: [{ id: 11, name: 'a.jpg' }, { id: 12, name: 'b.jpg' }] });

@@ -324,6 +324,15 @@ func (a *App) GetFaceClusterObservations(clusterID, cursorID uint, limit int) (*
 	return a.faceReview.GetFaceClusterObservations(a.backgroundContext(), clusterID, cursorID, limit)
 }
 
+// RemoveFaceClusterObservation removes one source from an unnamed face cluster.
+func (a *App) RemoveFaceClusterObservation(clusterID, observationID uint) (bool, error) {
+	removed, err := a.faceReview.RemoveFaceClusterObservation(a.backgroundContext(), clusterID, observationID)
+	if err == nil {
+		a.emitFaceReviewChanged()
+	}
+	return removed, err
+}
+
 // NameFaceCluster 命名未命名簇：建人物并把簇内媒体关联上去（7.3.1）。
 func (a *App) NameFaceCluster(clusterID uint, displayName, originalName string) (services.FaceClusterView, error) {
 	view, err := a.faceReview.NameFaceCluster(a.backgroundContext(), clusterID, displayName, originalName)

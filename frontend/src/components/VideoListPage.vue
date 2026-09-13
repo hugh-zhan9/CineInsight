@@ -180,6 +180,7 @@
       @preview-externally="previewExternally"
       @watch-progress="handlePreviewWatchProgress"
       @details-updated="handleVideoDetailsUpdated"
+      @media-deleted="handlePersonMediaDeleted"
       @open-local-metadata="openLocalMetadataDialog([$event.id])"
 	  @export-local-metadata="exportLocalMetadataNFO"
 	  @enhance="openEnhanceDialog"
@@ -1629,6 +1630,13 @@ export default {
           tags: Array.isArray(updatedVideo.tags) ? [...updatedVideo.tags] : (this.previewVideoSnapshot?.tags || [])
         };
       }
+    },
+    async handlePersonMediaDeleted(target) {
+      if (target.kind !== 'video') return;
+      const id = Number(target.media.id);
+      this.videos = this.videos.filter(video => Number(video.id) !== id);
+      if (Number(this.selectedPreviewVideoId) === id) this.closePreview();
+      await this.reloadCurrentView();
     },
     async handleVideoDetailsUpdated(details) {
       const updatedVideoID = Number(details?.video?.id || 0);

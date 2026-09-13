@@ -968,6 +968,15 @@ func (s *FaceAnalysisService) cropFilePath(cropPath string) (string, bool) {
 // 否则新建一个未命名簇。归入已命名簇的新观测标 pending，等用户确认追加（D-019）——
 // 这里绝不写 video_people / image_people。
 func (s *FaceAnalysisService) clusterObservations(ctx context.Context, observations []models.FaceObservation, clusters *[]faceClusterCentroid) (int, error) {
+	faceClusterAssignmentMu.Lock()
+	defer faceClusterAssignmentMu.Unlock()
+	// Review can remove a cluster or change its centroid while detection runs.
+	// Refresh before assignment so an old snapshot cannot resurrect that state.
+	current, err := loadFaceClusterCentroids(ctx)
+	if err != nil {
+		return 0, err
+	}
+	*clusters = current
 	created := 0
 	// 质量高的先聚：让簇代表从一开始就是清楚的那张脸。
 	ordered := append([]models.FaceObservation(nil), observations...)

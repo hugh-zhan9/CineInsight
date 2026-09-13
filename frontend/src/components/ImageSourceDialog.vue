@@ -16,6 +16,7 @@
       <div class="image-source-dialog__actions">
         <button type="button" class="btn-secondary" data-test="image-source-directory" @click="reveal">打开所在目录</button>
         <button v-if="allowUnlink" type="button" class="btn-secondary" :disabled="busy" data-test="image-source-unlink" @click="$emit('unlink', image)">{{ busy ? '处理中…' : '解除人物关联' }}</button>
+        <button v-if="allowDelete" type="button" class="btn-danger" :disabled="busy" data-test="image-source-delete" @click="$emit('delete', image)">删除图片</button>
       </div>
     </BaseModal>
     </div>
@@ -28,8 +29,8 @@ import { formatBytes } from '../utils/mediaDetails.js';
 import { feedbackState, resolveConfirm } from '../utils/feedback.js';
 export default {
   name: 'ImageSourceDialog', components: { BaseModal },
-  props: { image: { type: Object, required: true }, allowUnlink: Boolean, busy: Boolean, actionError: { type: String, default: '' } },
-  emits: ['close', 'unlink'],
+  props: { image: { type: Object, required: true }, allowUnlink: Boolean, allowDelete: Boolean, busy: Boolean, actionError: { type: String, default: '' } },
+  emits: ['close', 'unlink', 'delete'],
   data: () => ({ failed: false, error: '' }),
   watch: { 'image.id'() { this.failed = false; this.error = ''; } },
   mounted() { window.addEventListener('keydown', this.escape, true); },
@@ -54,6 +55,7 @@ export default {
 .image-source-layer { position: fixed; inset: 0; z-index: 1300; }
 :deep(.image-source-dialog) { width: min(1100px, 94vw); max-width: 94vw; max-height: 92vh; display: flex; flex-direction: column; gap: 10px; overflow: auto; }
 .image-source-dialog__header,.image-source-dialog__actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.image-source-dialog__actions { flex-wrap: wrap; }
 .image-source-dialog__header h3 { margin: 0; overflow-wrap: anywhere; }
 .image-source-dialog__stage { display: grid; place-items: center; min-height: 160px; background: var(--thumb-bg); }
 .image-source-dialog__stage img { max-width: 100%; max-height: 65vh; object-fit: contain; }

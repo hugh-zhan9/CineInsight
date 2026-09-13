@@ -25,6 +25,68 @@ type FaceClusterObservationPage struct {
 	NextID       uint                         `json:"next_id"`
 }
 
+var ErrFaceObservationNotInCluster = errors.New("face_observation_not_in_cluster")
+
+// RemoveFaceClusterObservation excludes one mistaken source before naming.
+// Keep the observation/fingerprint so unchanged media is not analysed again.
+// No media files, library records or person relationships are removed.
+// The result reports whether the now-empty cluster was removed.
+func (s *FaceReviewService) RemoveFaceClusterObservation(ctx context.Context, clusterID, observationID uint) (bool, error) {
+	faceClusterAssignmentMu.Lock()
+	defer faceClusterAssignmentMu.Unlock()
+	removed := false
+	err := database.Transaction(func(tx *gorm.DB) error {
+		cluster, err := lockFaceCluster(ctx, tx, clusterID)
+		if err != nil {
+			return err
+		}
+		if cluster.Status != models.FaceClusterStatusUnnamed {
+			return ErrFaceClusterNotUnnamed
+		}
+		result := tx.WithContext(ctx).Model(&models.FaceObservation{}).
+			Where("id = ? AND cluster_id = ? AND media_kind IN ?", observationID, clusterID, []string{models.FaceMediaKindVideo, models.FaceMediaKindImage}).
+			Updates(map[string]interface{}{"cluster_id": nil, "append_status": models.FaceAppendStatusDismissed})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return ErrFaceObservationNotInCluster
+		}
+		dropped, err := recomputeFaceClustersTx(ctx, tx, []uint{clusterID})
+		if err != nil {
+			return err
+		}
+		removed = len(dropped) > 0
+		if removed {
+			return nil
+		}
+		// The excluded face must no longer influence future similarity matching.
+		var remaining []models.FaceObservation
+		if err := tx.WithContext(ctx).Select("embedding").Where("cluster_id = ?", clusterID).Find(&remaining).Error; err != nil {
+			return err
+		}
+		var sum []float32
+		for _, observation := range remaining {
+			vector, err := decodeFaceEmbedding(observation.Embedding)
+			if err != nil {
+				return err
+			}
+			if sum == nil {
+				sum = make([]float32, len(vector))
+			}
+			for i, value := range vector {
+				sum[i] += value
+			}
+		}
+		centroid, ok := normalizeFaceEmbedding(sum)
+		if !ok {
+			return errors.New("face_cluster_invalid_centroid")
+		}
+		return tx.WithContext(ctx).Model(&models.FaceCluster{}).Where("id = ?", clusterID).Update("centroid", encodeFaceEmbedding(centroid)).Error
+	})
+	return removed && err == nil, err
+}
+
 // Read one bounded page on demand. No embeddings or crop filesystem paths are
 // exposed, and media references are resolved separately by kind (IDs overlap).
 func (s *FaceReviewService) GetFaceClusterObservations(ctx context.Context, clusterID, cursorID uint, limit int) (*FaceClusterObservationPage, error) {
