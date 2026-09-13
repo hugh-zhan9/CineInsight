@@ -738,7 +738,11 @@ func TestWatchlistEnrichLookupSharesChainWalkerFallbackRule(t *testing.T) {
 			walkChain := recordingWatchlistChain(testCase.firstFailure, &walkAsked)
 			registry := newWatchlistMetadataRegistry(map[WatchlistMetadataKind][]WatchlistMetadataSource{kind: lookupChain})
 
-			lookupDetail, lookupErr := lookupWatchlistDetail(context.Background(), registry, kind, "待补全")
+			lookupDetail, lookupFields, lookupErr := lookupWatchlistDetail(context.Background(), registry, kind, "待补全")
+			// movie 走链不走聚合，没有字段级归属可言（D7：两个新列只对 av 写）。
+			if lookupFields != nil {
+				t.Errorf("movie 的归属表 = %v，期望 nil", lookupFields)
+			}
 			walkDetail, walkErr := walkWatchlistMetadataChain(walkChain, func(source WatchlistMetadataSource) (*WatchlistMetadataDetail, error) {
 				return watchlistSourceDetail(context.Background(), source, kind, "待补全")
 			})
@@ -792,7 +796,10 @@ func TestWatchlistEnrichLookupReportsLastHopWhenChainExhausted(t *testing.T) {
 	}
 	registry := newWatchlistMetadataRegistry(map[WatchlistMetadataKind][]WatchlistMetadataSource{kind: chain})
 
-	detail, err := lookupWatchlistDetail(context.Background(), registry, kind, "查无此片")
+	detail, fields, err := lookupWatchlistDetail(context.Background(), registry, kind, "查无此片")
+	if fields != nil {
+		t.Errorf("movie 的归属表 = %v，期望 nil", fields)
+	}
 
 	if detail != nil {
 		t.Fatalf("链走完应当无详情，实际 %+v", detail)
@@ -1282,4 +1289,137 @@ func closedLocalAddress(t *testing.T) string {
 		t.Fatalf("释放临时端口失败: %v", err)
 	}
 	return address
+}
+
+// ---------- 两个新列的 kind 边界（requirements D7 / D-AVM11） ----------
+
+// av 条目：源站片名与字段归属都落库，而用户手输的番号一字不动。
+func TestWatchlistEnrichAVWritesSourceTitleWithoutTouchingUserTitle(t *testing.T) {
+	poster, _ := posterServer(t, 0x21)
+	harness := newEnrichHarness(t, map[WatchlistMetadataKind][]WatchlistMetadataSource{
+		WatchlistMetadataKindAV: {
+			staticWatchlistSource(WatchlistMetadataSourceJavBus, WatchlistMetadataDetail{
+				WatchlistMetadataCandidate: WatchlistMetadataCandidate{
+					Title: "日文標題", Year: 2021, PosterURL: poster.URL + "/cover.png",
+				},
+				Directors: []string{"苺原"},
+			}),
+			staticWatchlistSource(WatchlistMetadataSourceAirav, WatchlistMetadataDetail{
+				WatchlistMetadataCandidate: WatchlistMetadataCandidate{Title: "中文片名", Overview: "中文簡介"},
+			}),
+		},
+	}, poster.Client())
+	entry := mustCreateWatchlistEntry(t, "abc-123", models.WatchlistKindAV)
+
+	harness.service.runEnrichmentOnce(context.Background())
+
+	saved := reloadWatchlistEntry(t, entry.ID)
+	if saved.EnrichmentStatus != models.WatchlistEnrichmentSucceeded {
+		t.Fatalf("补全后状态应为 succeeded，实际 %q（错误码 %q）", saved.EnrichmentStatus, saved.EnrichmentError)
+	}
+	// 承重：用户敲进去的番号不被覆盖，源站片名另存一列。
+	if saved.Title != "abc-123" {
+		t.Errorf("补全不得覆盖用户手输的番号，实际 %q", saved.Title)
+	}
+	if saved.SourceTitle != "中文片名" {
+		t.Errorf("SourceTitle = %q，期望取 airav 的中文片名", saved.SourceTitle)
+	}
+	// 聚合结果不归属单一源，源侧 ID 是归一化后的番号。
+	if saved.SourceName != WatchlistMetadataSourceAggregate {
+		t.Errorf("SourceName = %q，期望 %q", saved.SourceName, WatchlistMetadataSourceAggregate)
+	}
+	if saved.SourceItemID != "ABC-123" {
+		t.Errorf("SourceItemID = %q，期望归一化后的 ABC-123", saved.SourceItemID)
+	}
+	// 简介来自 airav（JavBus 给不了），封面与导演来自 JavBus。
+	if saved.Overview != "中文簡介" {
+		t.Errorf("Overview = %q，期望由 airav 补上", saved.Overview)
+	}
+	var fields map[string]string
+	if err := json.Unmarshal([]byte(saved.SourceFields), &fields); err != nil {
+		t.Fatalf("字段归属解码失败 %q: %v", saved.SourceFields, err)
+	}
+	if fields[watchlistAVFieldSourceTitle] != WatchlistMetadataSourceAirav ||
+		fields[watchlistAVFieldOverview] != WatchlistMetadataSourceAirav ||
+		fields[watchlistAVFieldDirectors] != WatchlistMetadataSourceJavBus {
+		t.Errorf("字段归属 = %v，期望片名/简介归 airav、导演归 javbus", fields)
+	}
+}
+
+// movie 条目：两个新列必须保持空串。
+//
+// 这是本次最容易被漏掉的一条。写这两列的路径（settleEnrichmentSuccess）
+// 是**全类型共用**的，没有类型分支；不判 kind 的话一条电影条目也会跟着多出
+// 源站片名，界面上从「沙丘」变成「沙丘 · Dune」——那是本次明确保证零变化的
+// 四个类型之一，而且其余 movie 断言一条都抓不到（新列不在它们的检查里）。
+func TestWatchlistEnrichNonAVLeavesNewColumnsEmpty(t *testing.T) {
+	poster, _ := posterServer(t, 0x22)
+	harness := newEnrichHarness(t, map[WatchlistMetadataKind][]WatchlistMetadataSource{
+		WatchlistMetadataKindMovie: {staticWatchlistSource("tmdb", WatchlistMetadataDetail{
+			WatchlistMetadataCandidate: WatchlistMetadataCandidate{
+				SourceItemID: "438631", Title: "Dune", Year: 2021, PosterURL: poster.URL + "/dune.png",
+			},
+		})},
+	}, poster.Client())
+	entry := mustCreateWatchlistEntry(t, "沙丘", models.WatchlistKindMovie)
+
+	harness.service.runEnrichmentOnce(context.Background())
+
+	saved := reloadWatchlistEntry(t, entry.ID)
+	if saved.EnrichmentStatus != models.WatchlistEnrichmentSucceeded {
+		t.Fatalf("补全后状态应为 succeeded，实际 %q", saved.EnrichmentStatus)
+	}
+	if saved.SourceTitle != "" {
+		t.Errorf("movie 的 SourceTitle = %q，期望空串（两个新列只对 av 写）", saved.SourceTitle)
+	}
+	if saved.SourceFields != "" {
+		t.Errorf("movie 的 SourceFields = %q，期望空串", saved.SourceFields)
+	}
+	// 顺带确认走链路径本身没被改动：源名仍是那个具体的源，不是 aggregate。
+	if saved.SourceName != "tmdb" {
+		t.Errorf("movie 的 SourceName = %q，期望仍是具体源名", saved.SourceName)
+	}
+}
+
+// 手动重选后字段归属必须清空：它记的是上一次聚合各字段采纳了谁，
+// 与这次的单源结果并存会自相矛盾（D-AVM08）。
+func TestWatchlistApplyCandidateClearsSourceFields(t *testing.T) {
+	poster, _ := posterServer(t, 0x23)
+	harness := newEnrichHarness(t, map[WatchlistMetadataKind][]WatchlistMetadataSource{
+		WatchlistMetadataKindAV: {
+			staticWatchlistSource(WatchlistMetadataSourceJavBus, WatchlistMetadataDetail{
+				WatchlistMetadataCandidate: WatchlistMetadataCandidate{Title: "日文標題"},
+			}),
+			staticWatchlistSource(WatchlistMetadataSourceAirav, WatchlistMetadataDetail{
+				WatchlistMetadataCandidate: WatchlistMetadataCandidate{Title: "中文片名", Overview: "中文簡介"},
+			}),
+		},
+	}, poster.Client())
+	entry := mustCreateWatchlistEntry(t, "ABC-123", models.WatchlistKindAV)
+
+	// 先让聚合补全跑一轮，把归属写进去。
+	harness.service.runEnrichmentOnce(context.Background())
+	if saved := reloadWatchlistEntry(t, entry.ID); saved.SourceFields == "" {
+		t.Fatalf("前置条件不成立：聚合补全应当写入字段归属")
+	}
+
+	// 用户手动挑了 JavBus 那条候选。
+	if err := harness.service.ApplyCandidate(entry.ID, "ABC-123"); err != nil {
+		t.Fatalf("应用候选失败: %v", err)
+	}
+
+	saved := reloadWatchlistEntry(t, entry.ID)
+	if saved.SourceFields != "" {
+		t.Errorf("手动重选后 SourceFields = %q，期望清空", saved.SourceFields)
+	}
+	if saved.EnrichmentStatus != models.WatchlistEnrichmentManual {
+		t.Errorf("手动重选后状态 = %q，期望 manual", saved.EnrichmentStatus)
+	}
+	// 单源语义：源名是用户选中的那个具体源，不是 aggregate。
+	if saved.SourceName == WatchlistMetadataSourceAggregate {
+		t.Errorf("手动重选后 SourceName 不该是 aggregate")
+	}
+	if saved.Title != "ABC-123" {
+		t.Errorf("手动重选同样不得覆盖用户手输的番号，实际 %q", saved.Title)
+	}
 }

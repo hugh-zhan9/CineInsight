@@ -469,8 +469,6 @@ export namespace models {
 	    metadata_proxy_url: string;
 	    tmdb_api_key: string;
 	    bangumi_access_token: string;
-	    fanza_api_id: string;
-	    fanza_affiliate_id: string;
 	    updated_at: string;
 	
 	    static createFrom(source: any = {}) {
@@ -547,8 +545,6 @@ export namespace models {
 	        this.metadata_proxy_url = source["metadata_proxy_url"];
 	        this.tmdb_api_key = source["tmdb_api_key"];
 	        this.bangumi_access_token = source["bangumi_access_token"];
-	        this.fanza_api_id = source["fanza_api_id"];
-	        this.fanza_affiliate_id = source["fanza_affiliate_id"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -743,6 +739,8 @@ export namespace models {
 	    enrichment_error: string;
 	    source_name: string;
 	    source_item_id: string;
+	    source_title: string;
+	    source_fields: string;
 	    enriched_at?: string;
 	    year: number;
 	    overview: string;
@@ -765,6 +763,8 @@ export namespace models {
 	        this.enrichment_error = source["enrichment_error"];
 	        this.source_name = source["source_name"];
 	        this.source_item_id = source["source_item_id"];
+	        this.source_title = source["source_title"];
+	        this.source_fields = source["source_fields"];
 	        this.enriched_at = source["enriched_at"];
 	        this.year = source["year"];
 	        this.overview = source["overview"];
@@ -2504,6 +2504,7 @@ export namespace services {
 	export class IINAProgressUpdate {
 	    video_id: number;
 	    watch_position_seconds: number;
+	    watched: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new IINAProgressUpdate(source);
@@ -2513,6 +2514,7 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.video_id = source["video_id"];
 	        this.watch_position_seconds = source["watch_position_seconds"];
+	        this.watched = source["watched"];
 	    }
 	}
 	export class IINAProgressSyncResult {
@@ -6315,8 +6317,6 @@ export namespace services {
 	    proxy_url: string;
 	    tmdb_api_key: string;
 	    bangumi_access_token: string;
-	    fanza_api_id: string;
-	    fanza_affiliate_id: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new WatchlistMetadataProbeInput(source);
@@ -6328,8 +6328,6 @@ export namespace services {
 	        this.proxy_url = source["proxy_url"];
 	        this.tmdb_api_key = source["tmdb_api_key"];
 	        this.bangumi_access_token = source["bangumi_access_token"];
-	        this.fanza_api_id = source["fanza_api_id"];
-	        this.fanza_affiliate_id = source["fanza_affiliate_id"];
 	    }
 	}
 	export class WatchlistMetadataProbeResult {

@@ -234,15 +234,13 @@ type Settings struct {
 	//
 	// 三家凭证沿用 AITaggingAPIKey 的形态：明文列 + 环境变量兜底，且**设置里的
 	// 非空值覆盖环境变量**（读取见 services/watchlist_metadata_config.go）。
-	// FANZA 要两列：DMM 联盟 API 的 api_id 与 affiliate_id 都是必传参数。
+	// FANZA 退场后它的两列仍留在库里（迁移器不删列，删列会破坏回退），只是程序不再读写。
 	//
 	// 五列的默认值都是零值，因此不需要显式迁移，也不用（更不能用）带默认值的
 	// gorm 布尔标签——参见上面 IdleSchedulingEnabled 的注释。
 	MetadataProxyURL   string `gorm:"type:text;not null;default:''" json:"metadata_proxy_url"`
 	TMDBAPIKey         string `gorm:"type:text;not null;default:''" json:"tmdb_api_key"`
 	BangumiAccessToken string `gorm:"type:text;not null;default:''" json:"bangumi_access_token"`
-	FANZAAPIID         string `gorm:"type:text;not null;default:''" json:"fanza_api_id"`
-	FANZAAffiliateID   string `gorm:"type:text;not null;default:''" json:"fanza_affiliate_id"`
 
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }

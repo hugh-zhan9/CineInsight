@@ -44,6 +44,17 @@ const (
 	// 按上面的规矩落 source_error。要调整就改这一个常量。
 	javbusUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+	// javbusAgeGateCookie 是绕过年龄验证门的 cookie。**缺了它这个适配器完全不工作**。
+	//
+	// 源站对不带它的请求回 302，Location 指向 /doc/driver-verify（年龄验证页）。
+	// Go 的 http.Client 默认跟随重定向，于是落在验证页上拿到一个 200——状态码没问题，
+	// 但页面里没有 <h3> 也没有 bigImage，两条承重正则同时失效，按本文件开头的规矩
+	// 落 source_error。也就是说：**没有这个 cookie，每一次查询都返回 source_error。**
+	//
+	// 2026-09-13 用真实请求逐个试过，只有 dv=1 有效；age=verified、existmag=all、
+	// existmag=mag 都仍然 302。这是本文件唯一经过真实请求验证的常量。
+	javbusAgeGateCookie = "dv=1"
+
 	// javbusInfoMarker 是详情页右侧信息栏的容器标记。识別碼、發行日期、導演、
 	// 類別、演員全在它下面。它同时充当「页面结构还对得上」的锚点之一。
 	javbusInfoMarker = `col-md-3 info`
@@ -305,6 +316,9 @@ func (s *JavBusWatchlistMetadataSource) fetch(ctx context.Context, path string) 
 	}
 	request.Header.Set("Accept", "text/html,application/xhtml+xml")
 	request.Header.Set("User-Agent", javbusUserAgent)
+	// 年龄门：不带这个 cookie 会被 302 到验证页，而 Go 会跟过去并拿回一个解析不了的
+	// 200。详见 javbusAgeGateCookie 的说明。
+	request.Header.Set("Cookie", javbusAgeGateCookie)
 
 	started := time.Now()
 	response, err := s.client.Do(request)

@@ -13,26 +13,22 @@ import (
 	"video-master/models"
 )
 
-// 想看片单补全的出网配置（D-WM10）。三家源的凭证与资料源出网代理沿用
+// 想看片单补全的出网配置（D-WM10）。各源凭证与资料源出网代理沿用
 // AITaggingAPIKey 的既有形态：明文列 + 环境变量兜底。
 const (
 	envWatchlistMetadataProxyURL = "WATCHLIST_METADATA_PROXY_URL"
 	envTMDBAPIKey                = "TMDB_API_KEY"
 	envBangumiAccessToken        = "BANGUMI_ACCESS_TOKEN"
-	envFANZAAPIID                = "FANZA_API_ID"
-	envFANZAAffiliateID          = "FANZA_AFFILIATE_ID"
 )
 
-// WatchlistMetadataConfig 是补全链路唯一的出网配置来源：代理地址加三家源的凭证。
+// WatchlistMetadataConfig 是补全链路唯一的出网配置来源：代理地址加各源的凭证。
+// av 的两个源（JavBus、jav321）都是零认证，因此这里只剩 TMDB 与 Bangumi 两项。
 // 适配器、海报下载与连接探测都只读它，不各自去翻设置或环境变量。
 type WatchlistMetadataConfig struct {
 	// ProxyURL 为空表示直连。非空时必须是 http / https / socks5 / socks5h。
 	ProxyURL           string
 	TMDBAPIKey         string
 	BangumiAccessToken string
-	// FANZA 要两个：DMM 联盟 API 的 api_id 与 affiliate_id 都是必传参数。
-	FANZAAPIID       string
-	FANZAAffiliateID string
 }
 
 // ErrWatchlistMetadataProxyInvalid 标记「代理地址填错了」，与「代理连不上」和
@@ -54,8 +50,6 @@ func LoadWatchlistMetadataConfig() WatchlistMetadataConfig {
 		ProxyURL:           strings.TrimSpace(os.Getenv(envWatchlistMetadataProxyURL)),
 		TMDBAPIKey:         strings.TrimSpace(os.Getenv(envTMDBAPIKey)),
 		BangumiAccessToken: strings.TrimSpace(os.Getenv(envBangumiAccessToken)),
-		FANZAAPIID:         strings.TrimSpace(os.Getenv(envFANZAAPIID)),
-		FANZAAffiliateID:   strings.TrimSpace(os.Getenv(envFANZAAffiliateID)),
 	}
 
 	if database.DB == nil {
@@ -73,12 +67,6 @@ func LoadWatchlistMetadataConfig() WatchlistMetadataConfig {
 	}
 	if value := strings.TrimSpace(settings.BangumiAccessToken); value != "" {
 		config.BangumiAccessToken = value
-	}
-	if value := strings.TrimSpace(settings.FANZAAPIID); value != "" {
-		config.FANZAAPIID = value
-	}
-	if value := strings.TrimSpace(settings.FANZAAffiliateID); value != "" {
-		config.FANZAAffiliateID = value
 	}
 	return config
 }

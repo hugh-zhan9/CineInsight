@@ -40,6 +40,10 @@
             :data-test="`watchlist-poster-${entry.id}`" @error="hidePoster(entry)" />
           <div class="watchlist-entry-info">
             <strong>{{ entry.title }}</strong>
+            <!-- 源站片名是只读补充：用户手输的番号永远是主标题，补全不覆盖它。
+                 取不到时整段不渲染，不留分隔符也不占位。 -->
+            <span v-if="sourceTitleOf(entry)" class="watchlist-source-title"
+              :data-test="`watchlist-source-title-${entry.id}`">{{ sourceTitleOf(entry) }}</span>
             <div class="watchlist-entry-meta">
               <span class="watchlist-kind-tag" :data-test="`watchlist-kind-${entry.id}`">{{ kindLabel(entry.kind) }}</span>
               <span class="watchlist-status" :data-test="`watchlist-status-${entry.id}`">{{ statusLabel(entry.enrichment_status) }}</span>
@@ -136,7 +140,9 @@ const STATUS_LABELS = {
 };
 
 // 资料源的展示名。条目只在补全成功后才有 source_name，失败时退回按类型推断该问谁。
-const SOURCE_LABELS = { tmdb: 'TMDB', bangumi: 'Bangumi', fanza: 'FANZA', javbus: 'JavBus' };
+// aggregate 是多源合并的保留源名——逐字段择优之后，一条记录本就不归属任何单一源。
+// fanza 保留着：FANZA 已经退场，但存量条目的 source_name 仍是它，删掉键会让它们显示成裸字符串。
+const SOURCE_LABELS = { tmdb: 'TMDB', bangumi: 'Bangumi', fanza: 'FANZA', javbus: 'JavBus', jav321: 'jav321', airav: 'airav', aggregate: '多源合并' };
 const KIND_SOURCE_LABELS = { movie: 'TMDB', tv: 'TMDB', show: 'TMDB', anime: 'Bangumi', av: 'AV 资料源' };
 
 // D-WM14 的六个失败分类码各有各的文案，**不合并**：把凭证没配和「查无此片」写成
@@ -364,6 +370,12 @@ export default {
     sourceLabelOf(sourceName) {
       return SOURCE_LABELS[sourceName] || sourceName || '资料源';
     },
+    // 源站片名只在它确实带来新信息时才显示：与用户手输的标题相同就没必要重复一遍。
+    sourceTitleOf(entry) {
+      const sourceTitle = (entry.source_title || '').trim();
+      if (!sourceTitle) return '';
+      return sourceTitle === (entry.title || '').trim() ? '' : sourceTitle;
+    },
     failureText(entry) {
       const code = entry.enrichment_error;
       if (!code || entry.enrichment_status !== 'failed') return '';
@@ -435,6 +447,10 @@ export default {
 .watchlist-poster { flex: 0 0 auto; align-self: flex-start; width: 64px; aspect-ratio: 2 / 3; border-radius: var(--radius-sm); object-fit: cover; background: var(--surface-muted, transparent); }
 .watchlist-entry-info { flex: 1; min-width: 0; display: grid; gap: 6px; align-content: start; }
 .watchlist-entry-info strong { overflow-wrap: anywhere; font-size: 15px; }
+/* 源站片名：只读补充，视觉上明确弱于用户手输的主标题。
+   长片名在窄屏上会占掉整行，所以允许换行而不是省略号——它本身就是信息。 */
+.watchlist-source-title { color: var(--text-secondary); font-size: 13px; line-height: 1.4; word-break: break-word; }
+
 .watchlist-entry-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
 .watchlist-kind-tag, .watchlist-status { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; }
 .watchlist-failure { margin: 0; color: var(--danger-color); font-size: 12px; overflow-wrap: anywhere; }

@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -239,4 +240,21 @@ func redactWatchlistMetadataSecret(err error, secret string) error {
 		return &watchlistMetadataRedactedError{message: strings.ReplaceAll(message, secret, watchlistMetadataSecretMask), err: err}
 	}
 	return err
+}
+
+// watchlistMetadataYearOf 从 YYYY-MM-DD 或 "YYYY-MM-DD HH:MM:SS" 取年份。
+// 取不到时返回 0——不猜一个年份出来，界面上「没有年份」比「错的年份」好。
+//
+// 各适配器共用。它原先寄居在 FANZA 适配器里，那个源退场时一并搬到了这里——
+// 它本来就不属于任何单一源。
+func watchlistMetadataYearOf(date string) int {
+	date = strings.TrimSpace(date)
+	if len(date) < 4 {
+		return 0
+	}
+	year, err := strconv.Atoi(date[:4])
+	if err != nil {
+		return 0
+	}
+	return year
 }

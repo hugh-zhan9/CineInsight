@@ -20,6 +20,7 @@ const entry = (id, title, extra = {}) => ({
   enrichment_error: '',
   source_name: '',
   source_item_id: '',
+  source_title: '',
   year: 0,
   overview: '',
   genres: '',
@@ -433,5 +434,76 @@ describe('海报样式', () => {
     const rule = watchlistPageSource.match(/\.watchlist-poster \{[^}]*\}/)?.[0] || '';
     expect(rule).toContain('align-self: flex-start');
     expect(rule).toContain('aspect-ratio: 2 / 3');
+  });
+});
+
+// 源站片名是只读补充：用户手输的番号永远是主标题（AC-09 / D-AVM11）。
+describe('想看片单的源站片名', () => {
+  const mountList = async () => {
+    const wrapper = mount(WatchlistPage);
+    wrappers.push(wrapper);
+    await flushPromises();
+    return wrapper;
+  };
+
+  it('番号与中文片名并列展示，用户手输的番号仍是主标题', async () => {
+    api.ListWatchlist.mockResolvedValue({
+      entries: [entry(1, 'ABC-123', {
+        kind: 'av', enrichment_status: 'succeeded',
+        source_name: 'aggregate', source_title: '中文片名'
+      })],
+      next_cursor_id: 0
+    });
+    const wrapper = await mountList();
+
+    expect(wrapper.text()).toContain('ABC-123');
+    expect(find(wrapper, 'source-title-1').text()).toBe('中文片名');
+  });
+
+  it('源站片名取不到时不渲染，不留空位', async () => {
+    api.ListWatchlist.mockResolvedValue({
+      entries: [entry(1, 'ABC-123', { kind: 'av', enrichment_status: 'succeeded', source_title: '' })],
+      next_cursor_id: 0
+    });
+    const wrapper = await mountList();
+
+    expect(wrapper.find('[data-test="watchlist-source-title-1"]').exists()).toBe(false);
+  });
+
+  it('源站片名与用户标题相同时不重复显示一遍', async () => {
+    api.ListWatchlist.mockResolvedValue({
+      entries: [entry(1, '沙丘', { enrichment_status: 'succeeded', source_title: '沙丘' })],
+      next_cursor_id: 0
+    });
+    const wrapper = await mountList();
+
+    expect(wrapper.find('[data-test="watchlist-source-title-1"]').exists()).toBe(false);
+  });
+
+  it('多源合并的条目显示成「多源合并」而不是裸的 aggregate', async () => {
+    api.ListWatchlist.mockResolvedValue({
+      entries: [entry(1, 'ABC-123', {
+        kind: 'av', enrichment_status: 'failed', enrichment_error: 'not_found', source_name: 'aggregate'
+      })],
+      next_cursor_id: 0
+    });
+    const wrapper = await mountList();
+
+    expect(wrapper.text()).toContain('多源合并');
+    expect(wrapper.text()).not.toContain('aggregate');
+  });
+
+  // FANZA 已退场，但存量条目的 source_name 仍是它——展示名必须保留，
+  // 否则那些历史条目会显示成裸字符串。
+  it('存量 FANZA 条目仍显示为 FANZA', async () => {
+    api.ListWatchlist.mockResolvedValue({
+      entries: [entry(1, 'ABC-123', {
+        kind: 'av', enrichment_status: 'failed', enrichment_error: 'not_found', source_name: 'fanza'
+      })],
+      next_cursor_id: 0
+    });
+    const wrapper = await mountList();
+
+    expect(wrapper.text()).toContain('FANZA');
   });
 });

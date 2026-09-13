@@ -353,8 +353,6 @@ export default {
             metadata_proxy_url: this.settingsForm.metadata_proxy_url || '',
             tmdb_api_key: this.settingsForm.tmdb_api_key || '',
             bangumi_access_token: this.settingsForm.bangumi_access_token || '',
-            fanza_api_id: this.settingsForm.fanza_api_id || '',
-            fanza_affiliate_id: this.settingsForm.fanza_affiliate_id || '',
             backup_directory: this.settingsForm.backup_directory || '',
             backup_retention_count: this.settingsForm.backup_retention_count || 7,
             backup_interval_hours: Math.max(0, Number(this.settingsForm.backup_interval_hours) || 0)

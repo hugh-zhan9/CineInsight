@@ -18,6 +18,8 @@ func assertWatchlistSchemaUpgraded(t *testing.T, db *gorm.DB) {
 	for _, column := range []string{
 		"kind", "enrichment_status", "enrichment_error",
 		"source_name", "source_item_id", "enrichment_claim", "enriched_at",
+		// 多源聚合新增的两列：源站片名与字段级归属。
+		"source_title", "source_fields",
 	} {
 		if !migrator.HasColumn(&models.WatchlistEntry{}, column) {
 			t.Fatalf("升级后缺少列 %s", column)

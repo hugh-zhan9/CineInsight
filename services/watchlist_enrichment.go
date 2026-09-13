@@ -419,7 +419,7 @@ func (s *WatchlistService) writeBackEnrichment(id uint, claim string, fields map
 
 // enrichClaimedEntry 处理一条已经认领到的条目：问源、下海报、写回。
 func (s *WatchlistService) enrichClaimedEntry(ctx context.Context, entry models.WatchlistEntry, sources watchlistEnrichmentSources) {
-	detail, err := lookupWatchlistDetail(ctx, sources.registry, WatchlistMetadataKind(entry.Kind), entry.Title)
+	detail, fieldSources, err := lookupWatchlistDetail(ctx, sources.registry, WatchlistMetadataKind(entry.Kind), entry.Title)
 	if err != nil {
 		s.settleEnrichmentFailure(entry, watchlistEnrichmentFailureFor(err), err)
 		return
@@ -444,25 +444,30 @@ func (s *WatchlistService) enrichClaimedEntry(ctx context.Context, entry models.
 			poster = imported
 		}
 	}
-	s.settleEnrichmentSuccess(entry, detail, poster)
+	s.settleEnrichmentSuccess(entry, detail, fieldSources, poster)
 }
 
 // watchlistSourceItemIDLimit 是 SourceItemID 列的 size:64。
 const watchlistSourceItemIDLimit = 64
 
 // settleEnrichmentSuccess 写回补全结果。守卫不成立时丢弃并清理刚落盘的图片。
-func (s *WatchlistService) settleEnrichmentSuccess(entry models.WatchlistEntry, detail *WatchlistMetadataDetail, poster managedImageImport) {
+func (s *WatchlistService) settleEnrichmentSuccess(entry models.WatchlistEntry, detail *WatchlistMetadataDetail, fieldSources map[string]string, poster managedImageImport) {
 	enrichedAt := time.Now()
 	posterPath := entry.PosterPath
 	if poster.RelativePath != "" {
 		posterPath = poster.RelativePath
 	}
+	// 两个新列只对 av 有意义，其余类型写空串（D7）。这条路径是**全类型共用**的，
+	// 不判类型的话一条 movie 条目也会跟着多出源站片名——那是本次明确保证不动的东西。
+	sourceTitle, sourceFields := watchlistAVSourceColumns(WatchlistMetadataKind(entry.Kind), detail, fieldSources)
 	written, err := s.writeBackEnrichment(entry.ID, entry.EnrichmentClaim, map[string]any{
 		"enrichment_status": models.WatchlistEnrichmentSucceeded,
 		"enrichment_error":  "",
 		"enrichment_claim":  "",
 		"source_name":       detail.SourceName,
 		"source_item_id":    detail.SourceItemID,
+		"source_title":      sourceTitle,
+		"source_fields":     sourceFields,
 		"enriched_at":       &enrichedAt,
 		"year":              detail.Year,
 		"overview":          detail.Overview,
@@ -537,28 +542,37 @@ func (s *WatchlistService) discardEnrichmentResult(entry models.WatchlistEntry, 
 	}
 }
 
-// lookupWatchlistDetail 按类型走适配器链，返回排在最前那个候选的详情。
+// lookupWatchlistDetail 按类型取详情，另回一张**字段级归属表**。
 //
-// 链的走法就是 D-WM07，规则只有 walkWatchlistMetadataChain 一份：只有前一个源
-// **明确说没有收录**（not_found）才问下一个；凭证错误、网络错误、超时都直接
-// 返回——那会把一次配置问题伪装成「查无此片」，还在每次失败时多打一次抓取请求。
+// 两种策略并存，分流点只有这一处（D-AVM01）：
 //
-// 这里的一跳是 watchlistSourceDetail（**同一个源**上搜索 + 取详情），不是
+//   - **av 走聚合**：并发问链上所有源、逐字段择优。归属表非空，记着每个字段
+//     采纳了谁。理由是没有任何一家能填满这张表——JavBus 压根没有简介。
+//   - **其余类型走链**：规则就是 D-WM07，只有前一个源**明确说没有收录**
+//     （not_found）才问下一个；凭证错误、网络错误、超时都直接返回——那会把一次
+//     配置问题伪装成「查无此片」，还在每次失败时多打一次抓取请求。归属表为 nil。
+//
+// 走链的一跳是 watchlistSourceDetail（**同一个源**上搜索 + 取详情），不是
 // SearchWatchlistMetadataChain / DetailWatchlistMetadataChain 那种搜索与详情各走
 // 一遍链：自动补全要把 SourceName 与 SourceItemID 一起写回条目，两者必须出自
-// 同一个源，之后才能拿这个 ID 回到那个源重查。
-func lookupWatchlistDetail(ctx context.Context, registry *WatchlistMetadataRegistry, kind WatchlistMetadataKind, title string) (*WatchlistMetadataDetail, error) {
+// 同一个源，之后才能拿这个 ID 回到那个源重查。聚合则用归一化后的番号作为
+// 跨源主键，不存在这个问题。
+func lookupWatchlistDetail(ctx context.Context, registry *WatchlistMetadataRegistry, kind WatchlistMetadataKind, title string) (*WatchlistMetadataDetail, map[string]string, error) {
 	chain, err := registry.Chain(kind)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return walkWatchlistMetadataChain(chain, func(source WatchlistMetadataSource) (*WatchlistMetadataDetail, error) {
+	if kind == WatchlistMetadataKindAV {
+		return AggregateWatchlistMetadataDetail(ctx, chain, kind, title)
+	}
+	detail, err := walkWatchlistMetadataChain(chain, func(source WatchlistMetadataSource) (*WatchlistMetadataDetail, error) {
 		detail, err := watchlistSourceDetail(ctx, source, kind, title)
 		if err != nil && WatchlistMetadataFailureOf(err) == WatchlistMetadataFailureNotFound {
 			log.Printf("[WatchlistEnrich] source=%s reported not_found kind=%s, trying next in chain", source.Name(), kind)
 		}
 		return detail, err
 	})
+	return detail, nil, err
 }
 
 // watchlistSourceDetail 在一个源上完成「搜索 → 取排第一的候选 → 取详情」。

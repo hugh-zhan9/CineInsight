@@ -106,8 +106,6 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.MetadataProxyURL = strings.TrimSpace(input.MetadataProxyURL)
 		settings.TMDBAPIKey = strings.TrimSpace(input.TMDBAPIKey)
 		settings.BangumiAccessToken = strings.TrimSpace(input.BangumiAccessToken)
-		settings.FANZAAPIID = strings.TrimSpace(input.FANZAAPIID)
-		settings.FANZAAffiliateID = strings.TrimSpace(input.FANZAAffiliateID)
 
 		// 独立配置可能在读取 settings 后更新，禁止旧快照覆盖其所属字段。
 		if err := tx.Omit("JellyfinEnabled", "JellyfinPort", "JellyfinUsername", "JellyfinPasswordHash", "JellyfinServerID").Save(&settings).Error; err != nil {

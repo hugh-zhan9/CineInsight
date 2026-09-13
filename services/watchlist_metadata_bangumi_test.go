@@ -702,16 +702,16 @@ func TestWatchlistMetadataRegistryKeepsTMDBRoutesAfterBangumi(t *testing.T) {
 		}
 	}
 
-	// av 自 P-005 起是 FANZA + JavBus 的两跳链，不再是「尚无适配器」。
-	// 这里仍然断言它，是为了守住「注册新源不得动到别人的链」这条规矩。
+	// av 改走聚合后链上只剩 JavBus（FANZA 已退场）。这里仍然断言它，
+	// 是为了守住「注册新源不得动到别人的链」这条规矩。
 	avChain, err := registry.Chain(WatchlistMetadataKindAV)
 	if err != nil {
 		t.Fatalf("Chain(av) 失败: %v", err)
 	}
 	if len(avChain) != 2 ||
-		avChain[0].Name() != WatchlistMetadataSourceFANZA ||
-		avChain[1].Name() != WatchlistMetadataSourceJavBus {
-		t.Errorf("Chain(av) = %v，期望 FANZA 在前、JavBus 兜底在后", avChain)
+		avChain[0].Name() != WatchlistMetadataSourceJavBus ||
+		avChain[1].Name() != WatchlistMetadataSourceJav321 {
+		t.Errorf("Chain(av) = %v，期望 JavBus + jav321", avChain)
 	}
 }
 

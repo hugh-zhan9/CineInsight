@@ -34,9 +34,7 @@ import SettingsPage from '../SettingsPage.vue';
 const SOURCE_CREDENTIALS = {
   metadata_proxy_url: 'socks5://127.0.0.1:1080',
   tmdb_api_key: 'tmdb-key',
-  bangumi_access_token: 'bangumi-token',
-  fanza_api_id: 'fanza-id',
-  fanza_affiliate_id: 'fanza-affiliate-990'
+  bangumi_access_token: 'bangumi-token'
 };
 
 function mountSection(form = {}) {
@@ -55,13 +53,17 @@ beforeEach(() => {
 });
 
 describe('OnlineSourceSection', () => {
-  it('四个源各有一个测试按钮，代理与三家凭证各有一个输入框', () => {
+  it('每个源一个测试按钮；只有需要凭证的源才有输入框', () => {
     const wrapper = mountSection();
-    for (const source of ['tmdb', 'bangumi', 'fanza', 'javbus']) {
+    for (const source of ['tmdb', 'bangumi', 'javbus', 'jav321']) {
       expect(wrapper.find(`[data-test="online-source-test-${source}"]`).exists(), source).toBe(true);
     }
-    for (const field of ['proxy-url', 'tmdb-api-key', 'bangumi-access-token', 'fanza-api-id', 'fanza-affiliate-id']) {
+    for (const field of ['proxy-url', 'tmdb-api-key', 'bangumi-access-token']) {
       expect(wrapper.find(`[data-test="online-source-${field}"]`).exists(), field).toBe(true);
+    }
+    // FANZA 已退场：它的凭证输入框与测试按钮都不该再出现。AV 的源全是零认证。
+    for (const gone of ['test-fanza', 'fanza-api-id', 'fanza-affiliate-id']) {
+      expect(wrapper.find(`[data-test="online-source-${gone}"]`).exists(), gone).toBe(false);
     }
   });
 
@@ -134,17 +136,13 @@ describe('OnlineSourceSection', () => {
       source: 'bangumi', proxy_url: SOURCE_CREDENTIALS.metadata_proxy_url, bangumi_access_token: 'bangumi-token'
     });
 
-    await clickTest(wrapper, 'fanza');
-    expect(api.TestWatchlistMetadataConnection).toHaveBeenLastCalledWith({
-      source: 'fanza', proxy_url: SOURCE_CREDENTIALS.metadata_proxy_url,
-      fanza_api_id: 'fanza-id', fanza_affiliate_id: 'fanza-affiliate-990'
-    });
-
-    // JavBus 不要凭证，一个都不该带。
-    await clickTest(wrapper, 'javbus');
-    expect(api.TestWatchlistMetadataConnection).toHaveBeenLastCalledWith({
-      source: 'javbus', proxy_url: SOURCE_CREDENTIALS.metadata_proxy_url
-    });
+    // AV 的两个源都不要凭证，一个都不该带。
+    for (const source of ['javbus', 'jav321']) {
+      await clickTest(wrapper, source);
+      expect(api.TestWatchlistMetadataConnection).toHaveBeenLastCalledWith({
+        source, proxy_url: SOURCE_CREDENTIALS.metadata_proxy_url
+      });
+    }
   });
 
   // 后端压根没答话时不能说"直连"——我们并不知道这次走的哪条路。

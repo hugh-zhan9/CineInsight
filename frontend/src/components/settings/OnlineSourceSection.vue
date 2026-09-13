@@ -3,8 +3,9 @@
     <h3>在线资料源</h3>
     <p class="help-text">
       想看片单靠这几个源补全标题、年份、简介与海报。每个源按条目类型分工：
-      TMDB 管电影 / 电视剧 / 综艺，Bangumi 管动画，AV 先问 FANZA、查不到再兜底到 JavBus。
-      凭证留空的源只会让对应类型补全不了，片单本身照常增删改查。
+      TMDB 管电影 / 电视剧 / 综艺，Bangumi 管动画。AV 不走「先问谁、再兜底谁」，
+      而是按番号**同时问多个源，再逐字段取最好的那份**——比如简介取中文的那家，封面取图最全的那家。
+      AV 的源都不需要凭证。凭证留空的源只会让对应类型补全不了，片单本身照常增删改查。
     </p>
 
     <div class="setting-item">
@@ -88,50 +89,8 @@
     </div>
 
     <div class="online-source">
-      <h4>FANZA<span class="online-source__scope">AV</span></h4>
-      <div class="setting-item">
-        <label>API ID</label>
-        <input
-          data-test="online-source-fanza-api-id"
-          type="password"
-          v-model.trim="form.fanza_api_id"
-          placeholder="DMM 联盟后台的 api_id"
-          class="text-input"
-          autocomplete="off"
-        />
-      </div>
-      <div class="setting-item">
-        <label>Affiliate ID</label>
-        <input
-          data-test="online-source-fanza-affiliate-id"
-          type="text"
-          v-model.trim="form.fanza_affiliate_id"
-          placeholder="DMM 联盟后台的 affiliate_id，形如 xxxxx-990"
-          class="text-input"
-          autocomplete="off"
-        />
-        <p class="help-text">两项都是 FANZA 接口的必传参数，缺一个就不会发请求。</p>
-      </div>
-      <div class="online-source__test">
-        <button
-          data-test="online-source-test-fanza"
-          type="button"
-          class="btn-secondary"
-          :disabled="testing.fanza"
-          @click="testConnection('fanza')"
-        >{{ testing.fanza ? '测试中…' : '测试连接' }}</button>
-        <span
-          v-if="results.fanza"
-          data-test="online-source-result-fanza"
-          :class="['online-source__result', results.fanza.ok ? 'online-source__result--ok' : 'online-source__result--error']"
-          role="status"
-        >{{ resultText('fanza') }}</span>
-      </div>
-    </div>
-
-    <div class="online-source">
-      <h4>JavBus<span class="online-source__scope">AV 兜底</span></h4>
-      <p class="help-text">不需要凭证，只在 FANZA 明确查不到时才问它。它抓的是网页，所以更容易被反爬挡住——测一下就知道现在通不通。</p>
+      <h4>JavBus<span class="online-source__scope">AV</span></h4>
+      <p class="help-text">不需要凭证。AV 条目按番号同时问多个源，再逐字段取最好的那份——JavBus 主要贡献封面、导演与年份，它的详情页没有简介。它抓的是网页，容易被反爬挡住，测一下就知道现在通不通。</p>
       <div class="online-source__test">
         <button
           data-test="online-source-test-javbus"
@@ -146,6 +105,26 @@
           :class="['online-source__result', results.javbus.ok ? 'online-source__result--ok' : 'online-source__result--error']"
           role="status"
         >{{ resultText('javbus') }}</span>
+      </div>
+    </div>
+
+    <div class="online-source">
+      <h4>jav321<span class="online-source__scope">AV</span></h4>
+      <p class="help-text">不需要凭证。它主要贡献<strong>简介</strong>——JavBus 的详情页没有简介，这是接它的主要理由——另外给演员、发行日期与评分。同样是抓网页。</p>
+      <div class="online-source__test">
+        <button
+          data-test="online-source-test-jav321"
+          type="button"
+          class="btn-secondary"
+          :disabled="testing.jav321"
+          @click="testConnection('jav321')"
+        >{{ testing.jav321 ? '测试中…' : '测试连接' }}</button>
+        <span
+          v-if="results.jav321"
+          data-test="online-source-result-jav321"
+          :class="['online-source__result', results.jav321.ok ? 'online-source__result--ok' : 'online-source__result--error']"
+          role="status"
+        >{{ resultText('jav321') }}</span>
       </div>
     </div>
 
@@ -168,8 +147,8 @@ export default {
   },
   data() {
     return {
-      testing: { tmdb: false, bangumi: false, fanza: false, javbus: false },
-      results: { tmdb: null, bangumi: null, fanza: null, javbus: null }
+      testing: { tmdb: false, bangumi: false, javbus: false, jav321: false },
+      results: { tmdb: null, bangumi: null, javbus: null, jav321: null }
     };
   },
   methods: {
@@ -192,10 +171,7 @@ export default {
       const payload = { source, proxy_url: this.form.metadata_proxy_url || '' };
       if (source === 'tmdb') payload.tmdb_api_key = this.form.tmdb_api_key || '';
       if (source === 'bangumi') payload.bangumi_access_token = this.form.bangumi_access_token || '';
-      if (source === 'fanza') {
-        payload.fanza_api_id = this.form.fanza_api_id || '';
-        payload.fanza_affiliate_id = this.form.fanza_affiliate_id || '';
-      }
+      // AV 的源都不要凭证，所以没有对应分支。
       return payload;
     },
     // 结果里带上这次到底走没走代理：同一句"网络不可达"，直连和走代理的下一步完全不同。

@@ -30,7 +30,7 @@ func TestWatchlistMetadataRegistryRoutesKindsToExpectedChains(t *testing.T) {
 		{WatchlistMetadataKindTV, []string{WatchlistMetadataSourceTMDB}},
 		{WatchlistMetadataKindShow, []string{WatchlistMetadataSourceTMDB}},
 		{WatchlistMetadataKindAnime, []string{WatchlistMetadataSourceBangumi}},
-		{WatchlistMetadataKindAV, []string{WatchlistMetadataSourceFANZA, WatchlistMetadataSourceJavBus}},
+		{WatchlistMetadataKindAV, []string{WatchlistMetadataSourceJavBus, WatchlistMetadataSourceJav321}},
 	} {
 		t.Run(string(routed.kind), func(t *testing.T) {
 			chain, err := registry.Chain(routed.kind)
@@ -173,40 +173,28 @@ func TestWatchlistMetadataRegistryBuildsWithoutCredentials(t *testing.T) {
 // av 这条链是本仓库第一条多跳链，装配上有两件事要钉死：顺序（FANZA 在前）
 // 与共用同一个出网客户端。
 func TestWatchlistMetadataRegistryWiresAVChain(t *testing.T) {
-	registry := newTestRegistry(t, WatchlistMetadataConfig{
-		TMDBAPIKey:       tmdbTestAPIKey,
-		FANZAAPIID:       fanzaTestAPIID,
-		FANZAAffiliateID: fanzaTestAffiliateID,
-	})
+	registry := newTestRegistry(t, WatchlistMetadataConfig{TMDBAPIKey: tmdbTestAPIKey})
 
 	chain, err := registry.Chain(WatchlistMetadataKindAV)
 	if err != nil {
 		t.Fatalf("Chain(av) 失败: %v", err)
 	}
+	// av 走聚合不走链，这一行的顺序是择优兜底序（真正的字段优先级在择优表里）。
 	if len(chain) != 2 {
-		t.Fatalf("链长 = %d，期望 2（FANZA 首选 + JavBus 兜底）", len(chain))
+		t.Fatalf("链长 = %d，期望 2（JavBus + jav321）", len(chain))
 	}
-
-	fanza, ok := chain[0].(*FANZAWatchlistMetadataSource)
+	javbus, ok := chain[0].(*JavBusWatchlistMetadataSource)
 	if !ok {
-		t.Fatalf("链首类型 = %T，期望 *FANZAWatchlistMetadataSource", chain[0])
+		t.Fatalf("链上第 1 个类型 = %T，期望 *JavBusWatchlistMetadataSource", chain[0])
 	}
-	javbus, ok := chain[1].(*JavBusWatchlistMetadataSource)
-	if !ok {
-		t.Fatalf("链尾类型 = %T，期望 *JavBusWatchlistMetadataSource", chain[1])
-	}
-
-	if fanza.apiID != fanzaTestAPIID || fanza.affiliateID != fanzaTestAffiliateID {
-		t.Errorf("FANZA 凭证 = %q/%q，期望从配置里取到", fanza.apiID, fanza.affiliateID)
-	}
-	if fanza.baseURL != fanzaAPIBaseURL {
-		t.Errorf("FANZA baseURL = %q，期望生产地址 %q", fanza.baseURL, fanzaAPIBaseURL)
+	if _, ok := chain[1].(*Jav321WatchlistMetadataSource); !ok {
+		t.Fatalf("链上第 2 个类型 = %T，期望 *Jav321WatchlistMetadataSource", chain[1])
 	}
 	if javbus.baseURL != javbusBaseURL {
 		t.Errorf("JavBus baseURL = %q，期望生产地址 %q", javbus.baseURL, javbusBaseURL)
 	}
 
-	// 出网客户端建一次共用：链上两个源以及既有的 TMDB 必须是同一个实例，
+	// 出网客户端建一次共用：av 源与既有的 TMDB 必须是同一个实例，
 	// 否则连接池和代理配置就散成了好几份。
 	movie, err := registry.Chain(WatchlistMetadataKindMovie)
 	if err != nil {
@@ -216,11 +204,11 @@ func TestWatchlistMetadataRegistryWiresAVChain(t *testing.T) {
 	if !ok {
 		t.Fatalf("链首类型 = %T，期望 *TMDBWatchlistMetadataSource", movie[0])
 	}
-	if fanza.client == nil || javbus.client == nil {
-		t.Fatal("av 链上的适配器没有拿到出网客户端")
+	if javbus.client == nil {
+		t.Fatal("av 源没有拿到出网客户端")
 	}
-	if fanza.client != tmdb.client || javbus.client != tmdb.client {
-		t.Error("av 链与 TMDB 拿到了不同的出网客户端，路由表建了多份")
+	if javbus.client != tmdb.client {
+		t.Error("av 源与 TMDB 拿到了不同的出网客户端，路由表建了多份")
 	}
 }
 
@@ -250,7 +238,11 @@ func TestWatchlistMetadataRegistryKeepsExistingRoutesAfterAV(t *testing.T) {
 // FANZA 凭证为空照样能装配出 av 链：credential_missing 是运行期分类，
 // 装配期就把源摘掉会让「哪个源没配」彻底看不见，也会让 JavBus 顶上去
 // 变成静默的首选源。
-func TestWatchlistMetadataRegistryKeepsAVChainWithoutFANZACredentials(t *testing.T) {
+// av 链不依赖任何凭证：三家源都是零认证，配置全空时照常装配可用。
+//
+// 这条测试原本钉的是「缺 FANZA 凭证时链首仍是 FANZA」。FANZA 退场后，
+// 它要钉的变成更直白的一件事：av 补全不再需要用户配任何东西。
+func TestWatchlistMetadataRegistryAVChainNeedsNoCredentials(t *testing.T) {
 	registry := newTestRegistry(t, WatchlistMetadataConfig{})
 
 	chain, err := registry.Chain(WatchlistMetadataKindAV)
@@ -260,7 +252,9 @@ func TestWatchlistMetadataRegistryKeepsAVChainWithoutFANZACredentials(t *testing
 	if len(chain) != 2 {
 		t.Fatalf("链长 = %d，期望 2", len(chain))
 	}
-	if chain[0].Name() != WatchlistMetadataSourceFANZA {
-		t.Errorf("链首 = %q，期望仍是 %q", chain[0].Name(), WatchlistMetadataSourceFANZA)
+	for index, want := range []string{WatchlistMetadataSourceJavBus, WatchlistMetadataSourceJav321} {
+		if got := chain[index].Name(); got != want {
+			t.Errorf("av 第 %d 个源 = %q，期望 %q", index+1, got, want)
+		}
 	}
 }

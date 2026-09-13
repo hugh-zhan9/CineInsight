@@ -18,8 +18,6 @@ func TestUpdateSettingsPersistsOnlineMetadataSourceColumns(t *testing.T) {
 		MetadataProxyURL:   "socks5://127.0.0.1:1080",
 		TMDBAPIKey:         "tmdb-key",
 		BangumiAccessToken: "bangumi-token",
-		FANZAAPIID:         "fanza-api-id",
-		FANZAAffiliateID:   "fanza-affiliate-id",
 	}); err != nil {
 		t.Fatalf("保存设置失败: %v", err)
 	}
@@ -37,12 +35,6 @@ func TestUpdateSettingsPersistsOnlineMetadataSourceColumns(t *testing.T) {
 	if saved.BangumiAccessToken != "bangumi-token" {
 		t.Fatalf("Bangumi 凭证未保存，实际 %q", saved.BangumiAccessToken)
 	}
-	if saved.FANZAAPIID != "fanza-api-id" {
-		t.Fatalf("FANZA API ID 未保存，实际 %q", saved.FANZAAPIID)
-	}
-	if saved.FANZAAffiliateID != "fanza-affiliate-id" {
-		t.Fatalf("FANZA 联盟 ID 未保存，实际 %q", saved.FANZAAffiliateID)
-	}
 
 	// 保存链路与读取链路要对得上：存进去的就是 LoadWatchlistMetadataConfig 拿到的。
 	config := LoadWatchlistMetadataConfig()
@@ -50,8 +42,6 @@ func TestUpdateSettingsPersistsOnlineMetadataSourceColumns(t *testing.T) {
 		ProxyURL:           "socks5://127.0.0.1:1080",
 		TMDBAPIKey:         "tmdb-key",
 		BangumiAccessToken: "bangumi-token",
-		FANZAAPIID:         "fanza-api-id",
-		FANZAAffiliateID:   "fanza-affiliate-id",
 	}
 	if config != want {
 		t.Fatalf("保存后读取到的配置不一致，实际: %+v", config)
@@ -92,8 +82,6 @@ func TestUpdateSettingsTrimsOnlineMetadataSourceColumns(t *testing.T) {
 		MetadataProxyURL:   "  http://127.0.0.1:8080  ",
 		TMDBAPIKey:         "  tmdb-key\n",
 		BangumiAccessToken: "\tbangumi-token ",
-		FANZAAPIID:         " fanza-api-id ",
-		FANZAAffiliateID:   " fanza-affiliate-id ",
 	}); err != nil {
 		t.Fatalf("保存设置失败: %v", err)
 	}
@@ -104,9 +92,7 @@ func TestUpdateSettingsTrimsOnlineMetadataSourceColumns(t *testing.T) {
 	}
 	if saved.MetadataProxyURL != "http://127.0.0.1:8080" ||
 		saved.TMDBAPIKey != "tmdb-key" ||
-		saved.BangumiAccessToken != "bangumi-token" ||
-		saved.FANZAAPIID != "fanza-api-id" ||
-		saved.FANZAAffiliateID != "fanza-affiliate-id" {
+		saved.BangumiAccessToken != "bangumi-token" {
 		t.Fatalf("期望存入去空白后的值，实际: %+v", saved)
 	}
 }

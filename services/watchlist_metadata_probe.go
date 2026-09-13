@@ -32,8 +32,6 @@ type WatchlistMetadataProbeInput struct {
 	ProxyURL           string `json:"proxy_url"`
 	TMDBAPIKey         string `json:"tmdb_api_key"`
 	BangumiAccessToken string `json:"bangumi_access_token"`
-	FANZAAPIID         string `json:"fanza_api_id"`
-	FANZAAffiliateID   string `json:"fanza_affiliate_id"`
 }
 
 // WatchlistMetadataProbeResult 是一次探测的结果。
@@ -65,16 +63,17 @@ type watchlistMetadataProbeTarget struct {
 	credentialHint string
 }
 
-// watchlistMetadataProbeTargets 是四个源各自的探测目标。
+// watchlistMetadataProbeTargets 是各个源的探测目标。
 //
 // 关键词挑的都是长期存在的条目，好让「连接正常且取到结果」成为常态；但探测的
 // 判据不依赖它们——见 query 的说明。
 var watchlistMetadataProbeTargets = []watchlistMetadataProbeTarget{
 	{source: WatchlistMetadataSourceTMDB, kind: WatchlistMetadataKindMovie, query: "Dune", credentialHint: "TMDB API Key"},
 	{source: WatchlistMetadataSourceBangumi, kind: WatchlistMetadataKindAnime, query: "攻殻機動隊", credentialHint: "Bangumi Access Token"},
-	{source: WatchlistMetadataSourceFANZA, kind: WatchlistMetadataKindAV, query: "SSIS-001", credentialHint: "FANZA API ID 与 Affiliate ID"},
 	// JavBus 按番号直接打详情页，没有关键词搜索；这里给的就是一个番号。
+	// av 的源都不要凭证，所以没有 credentialHint。
 	{source: WatchlistMetadataSourceJavBus, kind: WatchlistMetadataKindAV, query: "SSIS-001"},
+	{source: WatchlistMetadataSourceJav321, kind: WatchlistMetadataKindAV, query: "SSIS-001"},
 }
 
 // AllWatchlistMetadataProbeSources 返回可探测的源名，顺序即设置页的展示顺序。
@@ -182,12 +181,6 @@ func mergeWatchlistMetadataProbeConfig(input WatchlistMetadataProbeInput) Watchl
 	}
 	if value := strings.TrimSpace(input.BangumiAccessToken); value != "" {
 		config.BangumiAccessToken = value
-	}
-	if value := strings.TrimSpace(input.FANZAAPIID); value != "" {
-		config.FANZAAPIID = value
-	}
-	if value := strings.TrimSpace(input.FANZAAffiliateID); value != "" {
-		config.FANZAAffiliateID = value
 	}
 	return config
 }

@@ -27,15 +27,11 @@ func TestLoadWatchlistMetadataConfigPrefersSettingsOverEnv(t *testing.T) {
 	t.Setenv(envWatchlistMetadataProxyURL, "http://env.example:8080")
 	t.Setenv(envTMDBAPIKey, "env-tmdb")
 	t.Setenv(envBangumiAccessToken, "env-bangumi")
-	t.Setenv(envFANZAAPIID, "env-fanza-api")
-	t.Setenv(envFANZAAffiliateID, "env-fanza-affiliate")
 
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Updates(models.Settings{
 		MetadataProxyURL:   "socks5://db.example:1080",
 		TMDBAPIKey:         "db-tmdb",
 		BangumiAccessToken: "db-bangumi",
-		FANZAAPIID:         "db-fanza-api",
-		FANZAAffiliateID:   "db-fanza-affiliate",
 	}).Error; err != nil {
 		t.Fatalf("更新设置失败: %v", err)
 	}
@@ -45,8 +41,6 @@ func TestLoadWatchlistMetadataConfigPrefersSettingsOverEnv(t *testing.T) {
 		ProxyURL:           "socks5://db.example:1080",
 		TMDBAPIKey:         "db-tmdb",
 		BangumiAccessToken: "db-bangumi",
-		FANZAAPIID:         "db-fanza-api",
-		FANZAAffiliateID:   "db-fanza-affiliate",
 	}
 	if config != want {
 		t.Fatalf("期望优先读取数据库配置，实际: %+v", config)
@@ -59,8 +53,6 @@ func TestLoadWatchlistMetadataConfigFallsBackToEnvPerField(t *testing.T) {
 	t.Setenv(envWatchlistMetadataProxyURL, "http://env.example:8080")
 	t.Setenv(envTMDBAPIKey, "env-tmdb")
 	t.Setenv(envBangumiAccessToken, "env-bangumi")
-	t.Setenv(envFANZAAPIID, "env-fanza-api")
-	t.Setenv(envFANZAAffiliateID, "env-fanza-affiliate")
 
 	// 只有 TMDB 在设置页填了；其余四项留空。
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").
@@ -73,8 +65,6 @@ func TestLoadWatchlistMetadataConfigFallsBackToEnvPerField(t *testing.T) {
 		ProxyURL:           "http://env.example:8080",
 		TMDBAPIKey:         "db-tmdb",
 		BangumiAccessToken: "env-bangumi",
-		FANZAAPIID:         "env-fanza-api",
-		FANZAAffiliateID:   "env-fanza-affiliate",
 	}
 	if config != want {
 		t.Fatalf("期望逐项回落环境变量，实际: %+v", config)

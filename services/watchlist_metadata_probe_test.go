@@ -15,8 +15,6 @@ import (
 const (
 	probeTestTMDBKey         = "tmdb-key-do-not-log"
 	probeTestBangumiToken    = "bangumi-token-do-not-log"
-	probeTestFANZAAPIID      = "fanza-api-id-do-not-log"
-	probeTestFANZAAffiliate  = "fanza-affiliate-do-not-log"
 	probeTestProxyCredential = "proxy-password-do-not-log"
 )
 
@@ -30,8 +28,6 @@ func clearWatchlistMetadataProbeEnv(t *testing.T) {
 		envWatchlistMetadataProxyURL,
 		envTMDBAPIKey,
 		envBangumiAccessToken,
-		envFANZAAPIID,
-		envFANZAAffiliateID,
 	} {
 		t.Setenv(name, "")
 	}
@@ -98,8 +94,6 @@ func TestMergeWatchlistMetadataProbeConfigOverridesSavedPerField(t *testing.T) {
 		MetadataProxyURL:   "socks5://saved.example:1080",
 		TMDBAPIKey:         "saved-tmdb",
 		BangumiAccessToken: "saved-bangumi",
-		FANZAAPIID:         "saved-fanza-api",
-		FANZAAffiliateID:   "saved-fanza-affiliate",
 	}).Error; err != nil {
 		t.Fatalf("更新设置失败: %v", err)
 	}
@@ -109,8 +103,7 @@ func TestMergeWatchlistMetadataProbeConfigOverridesSavedPerField(t *testing.T) {
 	if config.TMDBAPIKey != probeTestTMDBKey {
 		t.Fatalf("表单值应当覆盖已保存值并去空白，实际: %q", config.TMDBAPIKey)
 	}
-	if config.ProxyURL != "socks5://saved.example:1080" || config.BangumiAccessToken != "saved-bangumi" ||
-		config.FANZAAPIID != "saved-fanza-api" || config.FANZAAffiliateID != "saved-fanza-affiliate" {
+	if config.ProxyURL != "socks5://saved.example:1080" || config.BangumiAccessToken != "saved-bangumi" {
 		t.Fatalf("留空的字段应当逐项回落到已保存值，实际: %+v", config)
 	}
 }
@@ -201,7 +194,8 @@ func TestProbeWatchlistMetadataSourceReportsMissingCredential(t *testing.T) {
 		hint   string
 	}{
 		{WatchlistMetadataSourceTMDB, "TMDB API Key"},
-		{WatchlistMetadataSourceFANZA, "FANZA API ID"},
+		// av 的源全是零认证，没有「缺凭证」这种状态；Bangumi 的 token 可空。
+		// 于是 TMDB 是目前唯一会落 credential_missing 的源。
 	} {
 		result := ProbeWatchlistMetadataSource(context.Background(), WatchlistMetadataProbeInput{Source: testCase.source})
 		if result.OK {
@@ -258,8 +252,6 @@ func assertNoWatchlistMetadataProbeSecret(t *testing.T, result WatchlistMetadata
 	for _, secret := range []string{
 		probeTestTMDBKey,
 		probeTestBangumiToken,
-		probeTestFANZAAPIID,
-		probeTestFANZAAffiliate,
 		probeTestProxyCredential,
 	} {
 		if strings.Contains(rendered, secret) {
@@ -291,8 +283,6 @@ func TestProbeWatchlistMetadataSourceNeverLeaksCredentials(t *testing.T) {
 			ProxyURL:           deadProxy,
 			TMDBAPIKey:         probeTestTMDBKey,
 			BangumiAccessToken: probeTestBangumiToken,
-			FANZAAPIID:         probeTestFANZAAPIID,
-			FANZAAffiliateID:   probeTestFANZAAffiliate,
 		})
 		if result.OK {
 			t.Fatalf("%s 走死代理不该判成功", source)

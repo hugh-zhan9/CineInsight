@@ -52,12 +52,28 @@ type WatchlistEntry struct {
 	// 长度上限 32 是硬的：标识要用 32 个十六进制字符（hex.EncodeToString 于 16 字节）
 	// 这类写法。uuid.NewString() 是 36 字符，SQLite 不校验长度会默默存下，Postgres
 	// 直接报 value too long——正是 internal/dbtest 要拦的那类「改 A 坏 B」。
-	EnrichmentStatus string     `gorm:"size:16;not null;default:'pending';index:idx_watchlist_enrichment,priority:1" json:"enrichment_status"`
-	EnrichmentError  string     `gorm:"size:32;not null;default:''" json:"enrichment_error"`
-	SourceName       string     `gorm:"size:16;not null;default:''" json:"source_name"`
-	SourceItemID     string     `gorm:"size:64;not null;default:''" json:"source_item_id"`
-	EnrichmentClaim  string     `gorm:"size:32;not null;default:''" json:"-"`
-	EnrichedAt       *time.Time `json:"enriched_at" ts_type:"string"`
+	EnrichmentStatus string `gorm:"size:16;not null;default:'pending';index:idx_watchlist_enrichment,priority:1" json:"enrichment_status"`
+	EnrichmentError  string `gorm:"size:32;not null;default:''" json:"enrichment_error"`
+	SourceName       string `gorm:"size:16;not null;default:''" json:"source_name"`
+	SourceItemID     string `gorm:"size:64;not null;default:''" json:"source_item_id"`
+
+	// SourceTitle 是源站给的片名，**只读补充**，不覆盖用户手输的 Title。
+	//
+	// av 条目的 Title 是用户敲进去的番号（ABC-123），补全一律不写它——那是
+	// 「用户输入永远优先」的既有约定，全仓唯一写 watchlist 标题的地方是用户手动改名。
+	// 源站片名因此需要自己的位置，界面并列展示（ABC-123 · 中文片名）。
+	//
+	// SourceFields 记录每个字段最终采纳了哪个源，形如
+	// {"source_title":"airav","overview":"airav","poster_path":"javbus"}。
+	// 键名以**本结构体的列名**为准，不是适配器结构体的字段名。
+	//
+	// 两列都**只在 kind == av 时写**，其余类型恒为空串：写它们的两条路径
+	// （settleEnrichmentSuccess 与 ApplyCandidate）全类型共用、没有类型分支，
+	// 不判类型的话一条 movie 条目也会跟着变样。
+	SourceTitle     string     `gorm:"type:text;not null;default:''" json:"source_title"`
+	SourceFields    string     `gorm:"type:text;not null;default:''" json:"source_fields"`
+	EnrichmentClaim string     `gorm:"size:32;not null;default:''" json:"-"`
+	EnrichedAt      *time.Time `json:"enriched_at" ts_type:"string"`
 
 	// 补全结果，用户可改。Year 为 0、Rating 为 0 表示未知；PosterPath 是托管
 	// 图片目录下的相对路径，对外经 /preview/watchlist-poster/<id> 取图。

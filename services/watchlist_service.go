@@ -342,12 +342,20 @@ func (s *WatchlistService) ApplyCandidate(id uint, sourceItemID string) error {
 		posterPath = poster.RelativePath
 	}
 	enrichedAt := time.Now()
+	// 手动重选是**单源**结果（D-AVM08）：SourceName 写用户选中的那个源，
+	// 字段级归属必须清空——它记的是上一次聚合补全各字段采纳了谁，与这次的
+	// 单源结果并存会自相矛盾。源站片名照写，仍不覆盖用户手输的 Title。
+	//
+	// kind 边界同 settleEnrichmentSuccess：这条路径也是全类型共用的。
+	sourceTitle, _ := watchlistAVSourceColumns(WatchlistMetadataKind(entry.Kind), detail, nil)
 	result := database.DB.Model(&models.WatchlistEntry{}).Where("id = ?", id).Updates(map[string]any{
 		"enrichment_status": models.WatchlistEnrichmentManual,
 		"enrichment_error":  "",
 		"enrichment_claim":  "",
 		"source_name":       detail.SourceName,
 		"source_item_id":    detail.SourceItemID,
+		"source_title":      sourceTitle,
+		"source_fields":     "",
 		"enriched_at":       &enrichedAt,
 		"year":              detail.Year,
 		"overview":          detail.Overview,

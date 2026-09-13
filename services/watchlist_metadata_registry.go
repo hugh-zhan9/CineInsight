@@ -17,10 +17,11 @@ var ErrWatchlistMetadataKindUnsupported = errors.New("该类型尚无在线资�
 
 // WatchlistMetadataRegistry 是按类型选链的路由表（D-WM01）。
 //
-// 链是**有序**的：排在前面的源先问。movie / tv / show / anime 各是单跳；av 是
-// FANZA 在前、JavBus 兜底在后，且兜底只在前一个返回 not_found 时才走（D-WM07）。
-// 路由表只回答「这个类型该问谁、按什么顺序」，走链的策略在
-// SearchWatchlistMetadataChain / DetailWatchlistMetadataChain 里。
+// movie / tv / show / anime 各是单跳的链，排在前面的源先问（D-WM07）。
+// av 不走链走聚合：链上所有源会被**并发全问一遍**，再逐字段择优，
+// 所以那一行的顺序是择优兜底序而非询问序（见 watchlist_metadata_aggregate.go）。
+//
+// 路由表只回答「这个类型该问谁」，怎么走由 lookupWatchlistDetail 按类型分流。
 type WatchlistMetadataRegistry struct {
 	chains map[WatchlistMetadataKind][]WatchlistMetadataSource
 }
@@ -44,22 +45,24 @@ func NewWatchlistMetadataRegistry(config WatchlistMetadataConfig, timeout time.D
 	// Bangumi 的 token 允许为空：它的读接口匿名可读，缺 token 不妨碍装配，也不妨碍
 	// 发请求（见 BangumiWatchlistMetadataSource.do）。
 	bangumi := NewBangumiWatchlistMetadataSource(config.BangumiAccessToken, client)
-	// FANZA 的两个凭证允许为空，缺了在运行期判 credential_missing（D-WM14）；
-	// JavBus 不需要任何凭证。两者都照常装配，否则用户连「哪个源没配」都看不到。
-	fanza := NewFANZAWatchlistMetadataSource(config.FANZAAPIID, config.FANZAAffiliateID, client)
+	// av 的源都不需要凭证。
 	javbus := NewJavBusWatchlistMetadataSource(client)
+	jav321 := NewJav321WatchlistMetadataSource(client)
 	// 这张表就是路由合同本身。接入新源时在这里加一行，不需要改 Chain，也不需要
 	// 改任何适配器。
 	//
-	// av 是目前唯一的多跳链：FANZA 在前、JavBus 兜底在后。**顺序即合同**，而且
-	// 兜底只在 FANZA 明确返回 not_found 时才走——那条策略在
-	// walkWatchlistMetadataChain 里，不在这张表上，这里只负责把顺序排对。
+	// **av 与其余类型的走法不同**：av 走聚合（并发问所有源、逐字段择优），
+	// 其余走链（第一个成功就停）。分流在 lookupWatchlistDetail 里，不在这张表上。
+	// 因此 av 这一行的顺序不是「询问顺序」，而是逐字段择优表没覆盖到的字段的
+	// **兜底优先级**——择优表本身在 watchlist_metadata_aggregate.go。
+	//
+	// av 当前是 JavBus + jav321；airav 随后接入时在这一行追加。
 	return newWatchlistMetadataRegistry(map[WatchlistMetadataKind][]WatchlistMetadataSource{
 		WatchlistMetadataKindMovie: {tmdb},
 		WatchlistMetadataKindTV:    {tmdb},
 		WatchlistMetadataKindShow:  {tmdb},
 		WatchlistMetadataKindAnime: {bangumi},
-		WatchlistMetadataKindAV:    {fanza, javbus},
+		WatchlistMetadataKindAV:    {javbus, jav321},
 	}), nil
 }
 
