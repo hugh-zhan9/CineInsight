@@ -10,6 +10,7 @@ vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('../utils/feedback.js', () => feedback);
 
 import WatchlistPage from './WatchlistPage.vue';
+import watchlistPageSource from './WatchlistPage.vue?raw';
 
 const entry = (id, title, extra = {}) => ({
   id,
@@ -422,5 +423,15 @@ describe('想看片单的候选重选', () => {
     expect(find(wrapper, 'candidate-empty').text()).toContain('没有给出候选');
     await find(wrapper, 'candidate-close').trigger('click');
     expect(wrapper.find('[data-test="watchlist-candidate-panel"]').exists()).toBe(false);
+  });
+});
+
+describe('海报样式', () => {
+  it('海报不跟着简介一起被拉高', () => {
+    // 父级 .watchlist-entry-main 是 flex 且默认 align-items: stretch，海报一旦被拉到
+    // 跟长简介等高，object-fit: cover 就只给你留中间一条。这两个属性缺一不可。
+    const rule = watchlistPageSource.match(/\.watchlist-poster \{[^}]*\}/)?.[0] || '';
+    expect(rule).toContain('align-self: flex-start');
+    expect(rule).toContain('aspect-ratio: 2 / 3');
   });
 });

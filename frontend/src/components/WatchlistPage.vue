@@ -430,7 +430,9 @@ export default {
 .watchlist-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 10px; }
 .watchlist-entry { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 16px; padding: 14px 16px; border: 1px solid var(--border-color); border-radius: var(--radius-md); background: var(--surface-faint); }
 .watchlist-entry-main { flex: 1; min-width: 0; display: flex; gap: 14px; }
-.watchlist-poster { flex: 0 0 auto; width: 64px; border-radius: var(--radius-sm); object-fit: cover; background: var(--surface-muted, transparent); }
+/* align-self 不能省：父级是 flex 且默认 stretch，海报会被拉到跟简介一样高，
+   再配 object-fit: cover 就只剩中间一条。aspect-ratio 给它海报该有的 2:3。 */
+.watchlist-poster { flex: 0 0 auto; align-self: flex-start; width: 64px; aspect-ratio: 2 / 3; border-radius: var(--radius-sm); object-fit: cover; background: var(--surface-muted, transparent); }
 .watchlist-entry-info { flex: 1; min-width: 0; display: grid; gap: 6px; align-content: start; }
 .watchlist-entry-info strong { overflow-wrap: anywhere; font-size: 15px; }
 .watchlist-entry-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
