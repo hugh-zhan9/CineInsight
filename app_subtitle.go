@@ -103,6 +103,29 @@ func subtitleGenerateOptionsFromSettings(settings *models.Settings, force bool) 
 	return options
 }
 
+// TranslateSubtitle 翻译视频已有的外挂字幕，按请求的形态覆盖回同一个 .srt。
+func (a *App) TranslateSubtitle(req services.SubtitleTranslateRequest) (*services.SubtitleTranslateResult, error) {
+	video, err := a.videoService.GetVideo(req.VideoID)
+	if err != nil {
+		log.Printf("API TranslateSubtitle id=%d failed to get video: %v", req.VideoID, err)
+		return nil, err
+	}
+	settings, err := a.settingsService.GetSettings()
+	if err != nil {
+		return nil, err
+	}
+	config := subtitleGenerateOptionsFromSettings(settings, false).TranslationConfig
+	result, err := a.subtitleService.TranslateSubtitleFile(a.backgroundContext(), video.Path, req, config)
+	log.Printf("API TranslateSubtitle id=%d target=%s mode=%s provider=%s err=%v", req.VideoID, req.TargetLang, req.Mode, config.Provider, err)
+	return result, err
+}
+
+// CancelSubtitleTranslation 取消某个视频正在跑的字幕翻译。
+func (a *App) CancelSubtitleTranslation(videoID uint) {
+	a.subtitleService.CancelSubtitleTranslation(videoID)
+	log.Printf("API CancelSubtitleTranslation id=%d", videoID)
+}
+
 // GetSubtitleSegments 获取已生成字幕的结构化片段
 func (a *App) GetSubtitleSegments(videoID uint) ([]subtitleparser.Segment, error) {
 	video, err := a.videoService.GetVideo(videoID)

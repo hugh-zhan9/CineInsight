@@ -103,6 +103,12 @@
       @generating-change="generatingSubtitleIds = $event"
     />
 
+    <SubtitleTranslateDialog
+      ref="subtitleTranslate"
+      @translated="handleSubtitleTranslated"
+      @translating-change="translatingSubtitleVideoId = $event"
+    />
+
     <RandomPickBanner
       :random-pick="randomPick"
       :random-pick-size="randomPickSize"
@@ -364,6 +370,7 @@ import SaveViewDialog from './video-list/SaveViewDialog.vue';
 import SubtitlePreviewModal from './video-list/SubtitlePreviewModal.vue';
 import CleanupReviewPanel from './video-list/CleanupReviewPanel.vue';
 import SubtitleGenerateDialog from './video-list/SubtitleGenerateDialog.vue';
+import SubtitleTranslateDialog from './video-list/SubtitleTranslateDialog.vue';
 import EnhanceDialog from './video-list/EnhanceDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
@@ -380,7 +387,7 @@ const RANDOM_PICK_SIZE = 10;
 export default {
   name: 'VideoListPage',
   mixins: [wheelForwardingMixin],
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitlePreviewModal, EnhanceDialog, BaseMenu },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, BaseMenu },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -483,6 +490,8 @@ export default {
       homeListVirtualizationEnabled: true,
       // 行菜单要知道哪些视频正在生成字幕；值由字幕任务组件镜像过来。
       generatingSubtitleIds: [],
+      // 翻译弹窗是单例，正在翻译哪个视频由它镜像过来，供行菜单禁用入口。
+      translatingSubtitleVideoId: null,
       runtimeOffHandlers: [],
       searchDebounceTimer: null,
     };
@@ -613,6 +622,10 @@ export default {
       const video = this.rowMenu.video;
       if (!video) return [];
       const generating = this.generatingSubtitleIds.includes(video.id);
+      // 翻译弹窗一次只跑一个，所以翻译期间整条入口都禁用，而不是点了没反应。
+      // 但「进行中」只标在真正在翻译的那一行，否则每一行都像是自己在翻译。
+      const translating = this.translatingSubtitleVideoId !== null;
+      const translatingThisVideo = this.translatingSubtitleVideoId === video.id;
       return [
         { heading: '文件' },
         { id: 'directory', label: '打开目录' },
@@ -621,6 +634,7 @@ export default {
         { id: 'export-nfo', label: '写出 NFO' },
         { heading: '字幕' },
         { id: 'subtitle', label: generating ? '生成字幕（进行中）' : '生成字幕', disabled: generating },
+        { id: 'subtitle-translate', label: translatingThisVideo ? '翻译字幕（进行中）' : '翻译字幕…', disabled: generating || translating },
         { id: 'subtitle-edit', label: '编辑字幕' },
         { id: 'subtitle-preview', label: '预览字幕' },
         { heading: '增强' },
@@ -968,6 +982,13 @@ export default {
     openSubtitlePreview(video) {
       return this.$refs.subtitlePreview?.open(video);
     },
+    openSubtitleTranslate(video) {
+      return this.$refs.subtitleTranslate?.translate(video);
+    },
+    async handleSubtitleTranslated() {
+      // 译文覆盖了同一个 .srt，字幕索引已经重建，列表里的字幕命中要跟着刷新。
+      await this.reloadCurrentView();
+    },
     openSubtitleWorkbench(video) {
       this.subtitleWorkbench = { show: true, video };
     },
@@ -1207,6 +1228,7 @@ export default {
         case 'move': this.moveVideo(video); break;
         case 'export-nfo': this.exportLocalMetadataNFO(video); break;
         case 'subtitle': this.generateSubtitle(video); break;
+        case 'subtitle-translate': this.openSubtitleTranslate(video); break;
         case 'subtitle-edit': this.openSubtitleWorkbench(video); break;
         case 'subtitle-preview': this.openSubtitlePreview(video); break;
         case 'enhance': this.openEnhanceDialog(video); break;

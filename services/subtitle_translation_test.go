@@ -136,7 +136,7 @@ func TestTranslateSRTUsesInjectedSubtitleTranslator(t *testing.T) {
 	}
 	translator := &fakeSubtitleTranslator{result: []string{"你好，世界", "第二句"}}
 
-	if err := svc.translateSRT(context.Background(), inputPath, outputPath, "en", "zh", translator, nil); err != nil {
+	if _, err := svc.translateSRTWithProgress(context.Background(), inputPath, outputPath, "en", "zh", translator, nil, nil); err != nil {
 		t.Fatalf("翻译 SRT 失败: %v", err)
 	}
 
@@ -544,7 +544,7 @@ func TestTranslateSRTKeepsGlossaryAndSlidesContextWindowAcrossBatches(t *testing
 	translator := &recordingContextualTranslator{reply: echoTranslationReply("译:")}
 	glossary := []GlossaryTerm{{SourceTerm: "Neo", TargetTerm: "尼奥"}}
 
-	if err := service.translateSRT(context.Background(), inputPath, outputPath, "en", "zh", translator, glossary); err != nil {
+	if _, err := service.translateSRTWithProgress(context.Background(), inputPath, outputPath, "en", "zh", translator, glossary, nil); err != nil {
 		t.Fatalf("翻译 SRT 失败: %v", err)
 	}
 
@@ -572,7 +572,7 @@ func TestTranslateSRTFallsBackToPlainTranslatorWithoutContextualSupport(t *testi
 	}
 	translator := &fakeSubtitleTranslator{result: []string{"你好，世界"}}
 
-	if err := service.translateSRT(context.Background(), inputPath, outputPath, "en", "zh", translator, []GlossaryTerm{{SourceTerm: "Hello", TargetTerm: "你好"}}); err != nil {
+	if _, err := service.translateSRTWithProgress(context.Background(), inputPath, outputPath, "en", "zh", translator, []GlossaryTerm{{SourceTerm: "Hello", TargetTerm: "你好"}}, nil); err != nil {
 		t.Fatalf("翻译 SRT 失败: %v", err)
 	}
 	if !reflect.DeepEqual(translator.texts, []string{"Hello world"}) {

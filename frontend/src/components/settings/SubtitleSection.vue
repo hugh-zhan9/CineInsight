@@ -3,62 +3,62 @@
   <div :id="`settings-subtitle-translate`" class="settings-section">
     <h3>字幕翻译</h3>
     <div class="setting-item">
+      <label>翻译服务</label>
+      <select v-model="form.subtitle_translation_provider" class="select-input">
+        <option value="deepl">DeepL</option>
+        <option value="llm">OpenAI 兼容接口（本地 / 远程）</option>
+      </select>
+      <p class="help-text">生成字幕时的自动双语翻译，和片库里手动发起的「翻译字幕」，共用这一份翻译服务配置。</p>
+    </div>
+    <div v-if="!isLLMProvider" class="setting-item">
+      <label>DeepL API Key</label>
+      <input 
+        type="password" 
+        v-model="form.deepl_api_key" 
+        placeholder="填入 DeepL API Key" 
+        class="text-input"
+        autocomplete="off"
+      />
+      <p class="help-text">免费版 Key 通常以 :fx 结尾。额度 50 万字符/月。</p>
+    </div>
+    <template v-else>
+      <div class="setting-item">
+        <label>字幕翻译接口地址</label>
+        <input type="url" v-model.trim="form.subtitle_translation_base_url" class="text-input" placeholder="https://api.example.com/v1 或 http://127.0.0.1:1234/v1" />
+      </div>
+      <div class="setting-item">
+        <label>字幕翻译 API Key</label>
+        <input type="password" v-model="form.subtitle_translation_api_key" class="text-input" autocomplete="off" />
+        <p class="help-text">本地服务可留空；远程服务按提供商要求填写。此配置不会复用 AI 标签接口。</p>
+      </div>
+      <div class="setting-item">
+        <label>字幕翻译模型</label>
+        <input type="text" v-model.trim="form.subtitle_translation_model" class="text-input" placeholder="gpt-4o-mini 或本地兼容模型" />
+      </div>
+    </template>
+    <div class="setting-item">
       <label class="switch">
         <input type="checkbox" v-model="form.bilingual_enabled" />
         <span class="slider"></span>
-        <span>启用双语字幕翻译</span>
+        <span>生成字幕后自动翻译为双语</span>
       </label>
+      <p class="help-text">只影响新生成的字幕。已有字幕随时可以在片库的行菜单里选「翻译字幕」。</p>
     </div>
-    <template v-if="form.bilingual_enabled">
-      <div class="setting-item">
-        <label>目标翻译语言</label>
-        <select v-model="form.bilingual_lang" class="select-input">
-          <option value="zh">中文</option>
-          <option value="en">英语</option>
-          <option value="ja">日语</option>
-          <option value="ko">韩语</option>
-          <option value="fr">法语</option>
-          <option value="de">德语</option>
-          <option value="es">西班牙语</option>
-          <option value="pt">葡萄牙语</option>
-          <option value="ru">俄语</option>
-          <option value="it">意大利语</option>
-        </select>
-      </div>
-      <div class="setting-item">
-        <label>翻译服务</label>
-        <select v-model="form.subtitle_translation_provider" class="select-input">
-          <option value="deepl">DeepL</option>
-          <option value="llm">OpenAI 兼容接口（本地 / 远程）</option>
-        </select>
-      </div>
-      <div v-if="form.subtitle_translation_provider !== 'llm'" class="setting-item">
-        <label>DeepL API Key</label>
-        <input 
-          type="password" 
-          v-model="form.deepl_api_key" 
-          placeholder="填入 DeepL API Key" 
-          class="text-input"
-          autocomplete="off"
-        />
-        <p class="help-text">免费版 Key 通常以 :fx 结尾。额度 50 万字符/月。</p>
-      </div>
-      <template v-else>
-        <div class="setting-item">
-          <label>字幕翻译接口地址</label>
-          <input type="url" v-model.trim="form.subtitle_translation_base_url" class="text-input" placeholder="https://api.example.com/v1 或 http://127.0.0.1:1234/v1" />
-        </div>
-        <div class="setting-item">
-          <label>字幕翻译 API Key</label>
-          <input type="password" v-model="form.subtitle_translation_api_key" class="text-input" autocomplete="off" />
-          <p class="help-text">本地服务可留空；远程服务按提供商要求填写。此配置不会复用 AI 标签接口。</p>
-        </div>
-        <div class="setting-item">
-          <label>字幕翻译模型</label>
-          <input type="text" v-model.trim="form.subtitle_translation_model" class="text-input" placeholder="gpt-4o-mini 或本地兼容模型" />
-        </div>
-      </template>
-    </template>
+    <div v-if="form.bilingual_enabled" class="setting-item">
+      <label>自动双语的目标语言</label>
+      <select v-model="form.bilingual_lang" class="select-input">
+        <option value="zh">中文</option>
+        <option value="en">英语</option>
+        <option value="ja">日语</option>
+        <option value="ko">韩语</option>
+        <option value="fr">法语</option>
+        <option value="de">德语</option>
+        <option value="es">西班牙语</option>
+        <option value="pt">葡萄牙语</option>
+        <option value="ru">俄语</option>
+        <option value="it">意大利语</option>
+      </select>
+    </div>
     <div class="setting-item">
       <label>术语表（全局）</label>
       <p v-if="!isLLMProvider" class="help-text" data-test="glossary-deepl-notice">术语表不适用于 DeepL：DeepL 走它自己的翻译接口，术语只注入 OpenAI 兼容接口的提示词。</p>

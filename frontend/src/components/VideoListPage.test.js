@@ -723,6 +723,32 @@ describe('命令面板接线', () => {
   });
 });
 
+describe('字幕翻译入口', () => {
+  it('翻译进行中整条入口置灰，而不是点了没反应', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.rowMenu = { video: { id: 7, name: 'seven.mkv' }, anchor: null, position: null };
+    await wrapper.vm.$nextTick();
+    const idle = wrapper.vm.rowMenuItems.find(entry => entry.id === 'subtitle-translate');
+    expect(idle).toBeTruthy();
+    expect(idle.disabled).toBe(false);
+
+    // 翻译弹窗是单例：别的视频正在翻译时，这一项点了也只会被早返回吃掉。
+    wrapper.vm.translatingSubtitleVideoId = 9;
+    await wrapper.vm.$nextTick();
+    const busyOther = wrapper.vm.rowMenuItems.find(entry => entry.id === 'subtitle-translate');
+    expect(busyOther.disabled).toBe(true);
+    // 「进行中」只该标在真正在翻译的那一行。
+    expect(busyOther.label).not.toContain('进行中');
+
+    wrapper.vm.translatingSubtitleVideoId = 7;
+    await wrapper.vm.$nextTick();
+    const busySelf = wrapper.vm.rowMenuItems.find(entry => entry.id === 'subtitle-translate');
+    expect(busySelf.disabled).toBe(true);
+    expect(busySelf.label).toContain('进行中');
+    wrapper.unmount();
+  });
+});
+
 describe('播放代理入口（D-006）', () => {
   it('行菜单在「增强」组里追加生成播放代理', async () => {
     const wrapper = await mountPage();

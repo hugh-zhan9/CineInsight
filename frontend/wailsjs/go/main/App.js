@@ -174,6 +174,10 @@ export function CancelSubtitleTask(arg1) {
   return window['go']['main']['App']['CancelSubtitleTask'](arg1);
 }
 
+export function CancelSubtitleTranslation(arg1) {
+  return window['go']['main']['App']['CancelSubtitleTranslation'](arg1);
+}
+
 export function CancelTechnicalBackfill() {
   return window['go']['main']['App']['CancelTechnicalBackfill']();
 }
@@ -1068,6 +1072,10 @@ export function TestAITaggingConnection(arg1) {
 
 export function TestWatchlistMetadataConnection(arg1) {
   return window['go']['main']['App']['TestWatchlistMetadataConnection'](arg1);
+}
+
+export function TranslateSubtitle(arg1) {
+  return window['go']['main']['App']['TranslateSubtitle'](arg1);
 }
 
 export function TriggerAITagging() {

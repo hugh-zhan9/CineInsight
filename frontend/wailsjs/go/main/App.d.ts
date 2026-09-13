@@ -90,6 +90,8 @@ export function CancelSubtitle():Promise<void>;
 
 export function CancelSubtitleTask(arg1:number):Promise<void>;
 
+export function CancelSubtitleTranslation(arg1:number):Promise<void>;
+
 export function CancelTechnicalBackfill():Promise<void>;
 
 export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
@@ -537,6 +539,8 @@ export function SyncScanDirectories():Promise<services.ScanSyncResult>;
 export function TestAITaggingConnection(arg1:services.AITaggingConnectionTestInput):Promise<services.AITaggingConnectionTestResult>;
 
 export function TestWatchlistMetadataConnection(arg1:services.WatchlistMetadataProbeInput):Promise<services.WatchlistMetadataProbeResult>;
+
+export function TranslateSubtitle(arg1:services.SubtitleTranslateRequest):Promise<services.SubtitleTranslateResult>;
 
 export function TriggerAITagging():Promise<boolean>;
 

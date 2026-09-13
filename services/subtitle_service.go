@@ -47,9 +47,12 @@ type SubtitleService struct {
 	// glossaryResolver 解析视频的术语生效集（D-033）。可替换是为了让翻译流程的
 	// 测试不必先造出作品集与库表。
 	glossaryResolver func(videoID uint) ([]GlossaryTerm, error)
-	BaseDir          string
-	BinDir           string
-	ModelDir         string
+	// translationCancels 按视频登记正在跑的「翻译已有字幕」任务，让前端能中途叫停。
+	// 字幕生成走队列自带取消，这条路径不进队列，所以自己记一份。
+	translationCancels map[uint][]*translationCancelEntry
+	BaseDir            string
+	BinDir             string
+	ModelDir           string
 }
 
 type subtitleLocalOnlyASRContextKey struct{}
@@ -652,17 +655,17 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 			if sourceLang == "auto" || sourceLang == "unknown" {
 				sourceLang = ""
 			}
-			if err := s.translateSRT(ctx, srtPath, translatedSrtPath, sourceLang, targetLang, translator, glossary); err != nil {
+			fallbackCount, translateErr := s.translateSRTWithProgress(ctx, srtPath, translatedSrtPath, sourceLang, targetLang, translator, glossary, nil)
+			if translateErr != nil {
 				if ctx.Err() != nil {
 					s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
 					return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
 				}
 				translationStatus = "failed"
-				warnings = append(warnings, fmt.Sprintf("双语翻译失败，已保留原文字幕：%v", err))
-				log.Printf("[Subtitle] subtitle translate failed via %s: %v, keeping original SRT", provider, err)
+				warnings = append(warnings, fmt.Sprintf("双语翻译失败，已保留原文字幕：%v", translateErr))
+				log.Printf("[Subtitle] subtitle translate failed via %s: %v, keeping original SRT", provider, translateErr)
 				goto done
 			}
-
 			s.emitGenerateProgress(taskID, req, "merging", 85, "合并双语字幕...")
 			if err := s.mergeBilingualSRT(srtPath, translatedSrtPath, srtPath); err != nil {
 				translationStatus = "failed"
@@ -670,6 +673,10 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 				log.Printf("[Subtitle] merge failed: %v", err)
 			} else {
 				translationStatus = "translated"
+				// 回退提示只在译文真的写进去之后才说得通：合并失败时那份译文已经丢弃了。
+				if fallbackCount > 0 {
+					warnings = append(warnings, subtitleFallbackWarning(fallbackCount))
+				}
 			}
 		}
 	}
@@ -1027,17 +1034,19 @@ func (s *SubtitleService) translateDeepL(ctx context.Context, texts []string, so
 	return results, nil
 }
 
-// translateSRT 翻译 SRT 文件中的所有文本行
-func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPath, sourceLang, targetLang string, translator SubtitleTranslator, glossary []GlossaryTerm) error {
+// translateSRTWithProgress 翻译 SRT 文件中的所有文本行，每翻完一批回报一次进度，
+// 并返回有多少条字幕因为译文为空而回退成了原文。onBatch 可以为 nil；空译文回退是
+// 手动翻译与字幕生成自动双语共同的行为，两条路径都走这里。
+func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPath, outputPath, sourceLang, targetLang string, translator SubtitleTranslator, glossary []GlossaryTerm, onBatch func(done, total int)) (int, error) {
 	if translator == nil {
-		return fmt.Errorf("subtitle translator is nil")
+		return 0, fmt.Errorf("subtitle translator is nil")
 	}
 	entries, err := parseSRTEntries(inputPath)
 	if err != nil {
-		return fmt.Errorf("读取字幕文件失败: %v", err)
+		return 0, fmt.Errorf("读取字幕文件失败: %v", err)
 	}
 	if len(entries) == 0 {
-		return fmt.Errorf("字幕文件为空")
+		return 0, fmt.Errorf("字幕文件为空")
 	}
 
 	// 收集文本行（DeepL 一次最多翻译 50 条）
@@ -1046,6 +1055,7 @@ func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPat
 	// 滑动窗口：上一批尾部若干条 (原文, 译文) 作为只读上文，首批为空（D-035）。
 	contextual, _ := translator.(ContextualTranslator)
 	var preceding []ContextPair
+	fallbackCount := 0
 
 	for i := 0; i < len(entries); i += batchSize {
 		end := i + batchSize
@@ -1067,18 +1077,35 @@ func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPat
 			PrecedingContext: preceding,
 		})
 		if err != nil {
-			return err
+			return fallbackCount, err
 		}
 		if len(translated) != len(batch) {
-			return fmt.Errorf("字幕翻译返回 %d 条，期望 %d 条", len(translated), len(batch))
+			return fallbackCount, fmt.Errorf("字幕翻译返回 %d 条，期望 %d 条", len(translated), len(batch))
 		}
+
+		// 空译文写出去就是一个只有序号和时间轴的块，parseSRTEntries 与编辑器解析器
+		// 都会把它整条丢掉：仅译文模式下这条字幕被永久删除，双语合并则因为两边条数
+		// 对不上而让其后所有译文错位。保留原文既保住了条目，也保住了对齐。回退必须
+		// 赶在喂给上文窗口之前，否则「原文 → 空」会作为示范样本进入下一批的提示词。
+		for j := range translated {
+			text := strings.TrimSpace(translated[j])
+			if text == "" {
+				text = batch[j].Text
+				fallbackCount++
+			}
+			translated[j] = text
+		}
+
 		preceding = trailingContextPairs(texts, translated, subtitleTranslationContextWindow)
+		if onBatch != nil {
+			onBatch(end, len(entries))
+		}
 
 		for j, e := range batch {
 			translatedEntries = append(translatedEntries, SRTEntry{
 				Index: e.Index,
 				Time:  e.Time,
-				Text:  strings.TrimSpace(translated[j]),
+				Text:  translated[j],
 			})
 		}
 	}
@@ -1091,7 +1118,13 @@ func (s *SubtitleService) translateSRT(ctx context.Context, inputPath, outputPat
 		buf.WriteString(e.Text + "\n\n")
 	}
 
-	return os.WriteFile(outputPath, []byte(buf.String()), 0644)
+	return fallbackCount, os.WriteFile(outputPath, []byte(buf.String()), 0644)
+}
+
+// subtitleFallbackWarning 是「译文为空、已保留原文」的统一措辞：手动翻译与生成流程
+// 的自动双语走同一套回退，就不该有两种口径。
+func subtitleFallbackWarning(count int) string {
+	return fmt.Sprintf("有 %d 条字幕没有返回译文，这些条目保留了原文。", count)
 }
 
 // mergeBilingualSRT 合并两个 SRT 文件为双语 SRT（每条字幕上行原文、下行翻译）
@@ -1128,7 +1161,11 @@ func (s *SubtitleService) mergeBilingualSRT(originalPath, translatedPath, output
 
 		buf.WriteString(idx + "\n")
 		buf.WriteString(timeLine + "\n")
-		// 原文在上，翻译在下
+		// 原文在上，翻译在下。译文与原文相同时只写一行：空译文会被回退成原文
+		// （见 translateSRTWithProgress），照双行写就成了同一句话叠两遍。
+		if origText == transText {
+			transText = ""
+		}
 		if origText != "" && transText != "" {
 			buf.WriteString(origText + "\n" + transText + "\n\n")
 		} else if origText != "" {

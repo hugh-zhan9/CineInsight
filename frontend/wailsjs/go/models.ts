@@ -5967,6 +5967,46 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class SubtitleTranslateRequest {
+	    video_id: number;
+	    source_lang: string;
+	    target_lang: string;
+	    mode: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SubtitleTranslateRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source_lang = source["source_lang"];
+	        this.target_lang = source["target_lang"];
+	        this.mode = source["mode"];
+	    }
+	}
+	export class SubtitleTranslateResult {
+	    video_id: number;
+	    path: string;
+	    mode: string;
+	    target_lang: string;
+	    entries: number;
+	    warnings?: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SubtitleTranslateResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.path = source["path"];
+	        this.mode = source["mode"];
+	        this.target_lang = source["target_lang"];
+	        this.entries = source["entries"];
+	        this.warnings = source["warnings"];
+	    }
+	}
 	export class SubtitleValidationResult {
 	    valid: boolean;
 	    issues: subtitleparser.EditorValidationIssue[];
