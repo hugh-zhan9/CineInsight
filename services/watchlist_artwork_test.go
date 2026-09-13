@@ -380,3 +380,70 @@ func (b endlessByte) Read(p []byte) (int, error) {
 func itoaUint(value uint) string {
 	return strconv.FormatUint(uint64(value), 10)
 }
+
+// 防盗链回归：图床对不带 Referer 的请求回 403，带上图片自身站点的根地址才放行。
+//
+// 这是 2026-09-13 的真实缺陷：JavBus 的封面挡在 Cloudflare 后面，详情页能取、
+// 图取不到，补全出来的 av 条目全都没有封面。实测 Referer 必须带末尾斜杠——
+// https://www.javbus.com/ 放行，https://www.javbus.com 仍 403。
+func TestWatchlistPosterDownloadSendsRefererForHotlinkProtection(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dataDir := t.TempDir()
+	svc := NewWatchlistService(dataDir)
+	entry, err := svc.Create("ABC-123", "av")
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := posterPNG(t, 20)
+
+	var gotReferer, gotUA string
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotReferer = r.Header.Get("Referer")
+		gotUA = r.Header.Get("User-Agent")
+		// 模拟防盗链：没有同源 Referer 一律 403。
+		if gotReferer == "" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_, _ = w.Write(content)
+	}))
+	defer origin.Close()
+	client := newPosterTestClient(t, WatchlistMetadataConfig{})
+
+	if _, err := svc.DownloadPoster(context.Background(), client, entry.ID, origin.URL+"/pics/cover/x.png"); err != nil {
+		t.Fatalf("带 Referer 的下载不该失败: %v", err)
+	}
+	// Referer 是**图片自身站点的根**，带末尾斜杠。
+	if gotReferer != origin.URL+"/" {
+		t.Errorf("Referer = %q，期望 %q（图片站点根，末尾斜杠不能少）", gotReferer, origin.URL+"/")
+	}
+	// Go 默认的 UA 在抓取型源站上等于自报家门，必须覆盖。
+	if gotUA != watchlistPosterUserAgent {
+		t.Errorf("User-Agent = %q，期望浏览器标识", gotUA)
+	}
+}
+
+// 校验函数同时给出下载地址与它的站点根。
+func TestValidateWatchlistPosterURLDerivesReferer(t *testing.T) {
+	for _, tc := range []struct {
+		in          string
+		wantAddress string
+		wantReferer string
+	}{
+		{"https://www.javbus.com/pics/cover/83ie_b.jpg", "https://www.javbus.com/pics/cover/83ie_b.jpg", "https://www.javbus.com/"},
+		{"http://pics.dmm.co.jp/digital/video/x/xpl.jpg", "http://pics.dmm.co.jp/digital/video/x/xpl.jpg", "http://pics.dmm.co.jp/"},
+		{"  https://a.example/p.png  ", "https://a.example/p.png", "https://a.example/"},
+	} {
+		address, referer, err := validateWatchlistPosterURL(tc.in)
+		if err != nil {
+			t.Errorf("%q 校验失败: %v", tc.in, err)
+			continue
+		}
+		if address != tc.wantAddress {
+			t.Errorf("%q → 地址 %q，期望 %q", tc.in, address, tc.wantAddress)
+		}
+		if referer != tc.wantReferer {
+			t.Errorf("%q → Referer %q，期望 %q", tc.in, referer, tc.wantReferer)
+		}
+	}
+}

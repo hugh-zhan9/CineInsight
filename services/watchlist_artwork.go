@@ -23,6 +23,12 @@ const watchlistPosterDownloadTimeout = 60 * time.Second
 // 字节就够判「超了」，超出部分不必落盘。
 const watchlistPosterMaxBytes = managedImageMaxBytes
 
+// watchlistPosterUserAgent 是下载海报时报的浏览器标识。
+//
+// 与各抓取型适配器同一个理由：Go 默认的 "Go-http-client/1.1" 在这类源站上
+// 基本等于自报家门。图床与详情页往往是同一套防护，UA 也一起给。
+const watchlistPosterUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
 // ErrWatchlistPosterTooLarge 标记「响应超过下载上限」。与格式不符、网络失败分开，
 // 调用方据此给用户「海报太大」而不是一句笼统的下载失败。
 var ErrWatchlistPosterTooLarge = errors.New("海报超过下载体积上限")
@@ -55,7 +61,7 @@ func (s *WatchlistService) DownloadPoster(ctx context.Context, client *http.Clie
 	if client == nil {
 		return managedImageImport{}, errors.New("海报下载缺少 HTTP 客户端")
 	}
-	address, err := validateWatchlistPosterURL(posterURL)
+	address, referer, err := validateWatchlistPosterURL(posterURL)
 	if err != nil {
 		return managedImageImport{}, err
 	}
@@ -63,6 +69,14 @@ func (s *WatchlistService) DownloadPoster(ctx context.Context, client *http.Clie
 	if err != nil {
 		return managedImageImport{}, fmt.Errorf("构造海报请求失败: %w", err)
 	}
+	// 防盗链：JavBus 的图床（Cloudflare 后面）对不带 Referer 的请求回 403，
+	// 带上图片自身站点的根地址就放行（2026-09-13 实测：188KB jpeg）。
+	// 用**图片自己的站点根**而不是某个详情页地址，是因为这里拿不到也不该关心
+	// 是哪一条详情页——同源 Referer 对这类保护已经够，而且对任何源都通用。
+	request.Header.Set("Referer", referer)
+	// Go 默认的 "Go-http-client/1.1" 在抓取型源站上基本等于自报家门。
+	request.Header.Set("User-Agent", watchlistPosterUserAgent)
+	request.Header.Set("Accept", "image/avif,image/webp,image/*,*/*;q=0.8")
 	response, err := client.Do(request)
 	if err != nil {
 		return managedImageImport{}, fmt.Errorf("下载海报失败: %w", err)
@@ -109,22 +123,25 @@ func (s *WatchlistService) RemovePoster(relativePath string) error {
 
 // validateWatchlistPosterURL 只放行 http 与 https。资料源给回来的地址是外部输入，
 // 不挡住 file:// 这类协议就等于把本地文件读进托管目录。
-func validateWatchlistPosterURL(posterURL string) (string, error) {
+func validateWatchlistPosterURL(posterURL string) (string, string, error) {
 	address := strings.TrimSpace(posterURL)
 	if address == "" {
-		return "", errors.New("海报地址为空")
+		return "", "", errors.New("海报地址为空")
 	}
 	parsed, err := url.Parse(address)
 	if err != nil {
-		return "", fmt.Errorf("海报地址无效: %w", err)
+		return "", "", fmt.Errorf("海报地址无效: %w", err)
 	}
 	switch strings.ToLower(parsed.Scheme) {
 	case "http", "https":
 	default:
-		return "", fmt.Errorf("海报地址无效：只支持 http 与 https，收到 %q", parsed.Scheme)
+		return "", "", fmt.Errorf("海报地址无效：只支持 http 与 https，收到 %q", parsed.Scheme)
 	}
 	if parsed.Host == "" {
-		return "", errors.New("海报地址无效：没有主机名")
+		return "", "", errors.New("海报地址无效：没有主机名")
 	}
-	return address, nil
+	// 第二个返回值是图片自身站点的根地址，发请求时当 Referer 用（见 DownloadPoster）。
+	// **末尾的斜杠是必须的**：JavBus 的防盗链认 https://www.javbus.com/ 而拒
+	// https://www.javbus.com（2026-09-13 实测，后者 403）。
+	return address, parsed.Scheme + "://" + parsed.Host + "/", nil
 }
