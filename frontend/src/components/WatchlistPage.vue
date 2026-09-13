@@ -444,7 +444,26 @@ export default {
 .watchlist-entry-main { flex: 1; min-width: 0; display: flex; gap: 14px; }
 /* align-self 不能省：父级是 flex 且默认 stretch，海报会被拉到跟简介一样高，
    再配 object-fit: cover 就只剩中间一条。aspect-ratio 给它海报该有的 2:3。 */
-.watchlist-poster { flex: 0 0 auto; align-self: flex-start; width: 64px; aspect-ratio: 2 / 3; border-radius: var(--radius-sm); object-fit: cover; background: var(--surface-muted, transparent); }
+/* 封面按**高度**定尺寸，宽度随图片自身比例走。
+   不能写死 aspect-ratio：TMDB 的电影海报是 2:3 竖版，而 AV 封面是 800×538 的
+   横版整幅封套（正面+背面）。此前固定成 2/3 再 object-fit: cover，等于把横版
+   封套从中间裁出一条窄竖条——放大也只是更大的窄竖条。
+   contain + 自动宽度让两种比例都完整显示，且行高统一。 */
+.watchlist-poster {
+  flex: 0 0 auto;
+  align-self: flex-start;
+  height: 128px;
+  width: auto;
+  max-width: 200px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+  background: var(--surface-muted, transparent);
+}
+
+/* 窄屏上封面让位给文字：横版封套在 400px 宽的屏幕上会挤掉标题。 */
+@media (max-width: 560px) {
+  .watchlist-poster { height: 92px; max-width: 140px; }
+}
 .watchlist-entry-info { flex: 1; min-width: 0; display: grid; gap: 6px; align-content: start; }
 .watchlist-entry-info strong { overflow-wrap: anywhere; font-size: 15px; }
 /* 源站片名：只读补充，视觉上明确弱于用户手输的主标题。

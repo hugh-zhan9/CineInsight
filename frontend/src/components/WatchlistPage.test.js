@@ -430,10 +430,24 @@ describe('想看片单的候选重选', () => {
 describe('海报样式', () => {
   it('海报不跟着简介一起被拉高', () => {
     // 父级 .watchlist-entry-main 是 flex 且默认 align-items: stretch，海报一旦被拉到
-    // 跟长简介等高，object-fit: cover 就只给你留中间一条。这两个属性缺一不可。
+    // 跟长简介等高就会变形。挡住它需要两样：align-self 不吃 stretch，以及一个
+    // 确定的高度。
+    //
+    // 原先第二样是 aspect-ratio: 2 / 3，已换成固定 height——因为 2:3 只适合
+    // TMDB 的竖版电影海报，AV 封面是 800×538 的横版整幅封套，按 2:3 裁只剩
+    // 中间一条窄竖条。现在高度定死、宽度随图片自身比例走。
     const rule = watchlistPageSource.match(/\.watchlist-poster \{[^}]*\}/)?.[0] || '';
     expect(rule).toContain('align-self: flex-start');
-    expect(rule).toContain('aspect-ratio: 2 / 3');
+    expect(rule).toMatch(/height:\s*\d+px/);
+  });
+
+  it('封面不裁切，宽度随图片自身比例走', () => {
+    // AV 封面（800×538 横版）与电影海报（2:3 竖版）比例相差很远，写死任何一个
+    // 比例都会把另一种裁坏。contain + auto 宽度让两种都完整显示。
+    const rule = watchlistPageSource.match(/\.watchlist-poster \{[^}]*\}/)?.[0] || '';
+    expect(rule).toContain('object-fit: contain');
+    expect(rule).toContain('width: auto');
+    expect(rule).not.toContain('aspect-ratio');
   });
 });
 
