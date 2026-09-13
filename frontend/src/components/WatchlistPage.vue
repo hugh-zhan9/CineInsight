@@ -448,13 +448,17 @@ export default {
    不能写死 aspect-ratio：TMDB 的电影海报是 2:3 竖版，而 AV 封面是 800×538 的
    横版整幅封套（正面+背面）。此前固定成 2/3 再 object-fit: cover，等于把横版
    封套从中间裁出一条窄竖条——放大也只是更大的窄竖条。
-   contain + 自动宽度让两种比例都完整显示，且行高统一。 */
+   contain + 自动宽度让两种比例都完整显示，且行高统一。
+
+   按 168px 高算：竖版海报 112×168，横版封套 250×168（max-width 260 兜住更宽的）。
+   高度定得比一行文字高不少，是因为横版封套按高度缩放后本来就矮——要让竖版
+   海报也够看，只能把共同的高度抬上去。 */
 .watchlist-poster {
   flex: 0 0 auto;
   align-self: flex-start;
-  height: 128px;
+  height: 168px;
   width: auto;
-  max-width: 200px;
+  max-width: 260px;
   border-radius: var(--radius-sm);
   object-fit: contain;
   background: var(--surface-muted, transparent);
@@ -462,7 +466,7 @@ export default {
 
 /* 窄屏上封面让位给文字：横版封套在 400px 宽的屏幕上会挤掉标题。 */
 @media (max-width: 560px) {
-  .watchlist-poster { height: 92px; max-width: 140px; }
+  .watchlist-poster { height: 120px; max-width: 190px; }
 }
 .watchlist-entry-info { flex: 1; min-width: 0; display: grid; gap: 6px; align-content: start; }
 .watchlist-entry-info strong { overflow-wrap: anywhere; font-size: 15px; }
