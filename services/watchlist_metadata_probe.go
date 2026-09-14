@@ -68,6 +68,7 @@ type watchlistMetadataProbeTarget struct {
 // 关键词挑的都是长期存在的条目，好让「连接正常且取到结果」成为常态；但探测的
 // 判据不依赖它们——见 query 的说明。
 var watchlistMetadataProbeTargets = []watchlistMetadataProbeTarget{
+	{source: WatchlistMetadataSourceDouban, kind: WatchlistMetadataKindMovie, query: "肖申克的救赎"},
 	{source: WatchlistMetadataSourceTMDB, kind: WatchlistMetadataKindMovie, query: "Dune", credentialHint: "TMDB API Key"},
 	{source: WatchlistMetadataSourceBangumi, kind: WatchlistMetadataKindAnime, query: "攻殻機動隊", credentialHint: "Bangumi Access Token"},
 	// JavBus 按番号直接打详情页，没有关键词搜索；这里给的就是一个番号。
@@ -137,6 +138,10 @@ func ProbeWatchlistMetadataSource(ctx context.Context, input WatchlistMetadataPr
 	defer cancel()
 	started := time.Now()
 	candidates, err := source.Search(ctx, target.kind, target.query)
+	// 豆瓣搜索可用时详情仍可能被验证页拦截，因此探测必须覆盖详情。
+	if err == nil && target.source == WatchlistMetadataSourceDouban && len(candidates) > 0 {
+		_, err = source.Detail(ctx, target.kind, candidates[0].SourceItemID)
+	}
 	result.LatencyMS = time.Since(started).Milliseconds()
 	if err == nil {
 		result.OK = true

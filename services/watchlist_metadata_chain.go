@@ -3,7 +3,33 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 )
+
+// 电影候选的选择标识携带来源，数据库仍只保存来源内的原始 ID。
+// 豆瓣与 TMDB 都使用数字 ID，不能把一家的 ID 沿链交给另一家猜。
+func selectedWatchlistMetadataDetail(ctx context.Context, chain []WatchlistMetadataSource, kind WatchlistMetadataKind, selectionID string) (*WatchlistMetadataDetail, error) {
+	if kind == WatchlistMetadataKindMovie {
+		if sourceName, itemID, qualified := strings.Cut(selectionID, ":"); qualified {
+			if itemID == "" || len(itemID) > watchlistSourceItemIDLimit {
+				return nil, fmt.Errorf("候选标识无效，请刷新候选列表")
+			}
+			for _, source := range chain {
+				if source.Name() == sourceName {
+					return source.Detail(ctx, kind, itemID)
+				}
+			}
+			return nil, fmt.Errorf("候选资料源已不可用，请刷新候选列表")
+		}
+		if len(chain) > 1 {
+			return nil, fmt.Errorf("候选缺少资料源，请刷新候选列表后重新选择")
+		}
+	}
+	if len(selectionID) > watchlistSourceItemIDLimit {
+		return nil, fmt.Errorf("源条目 ID 超过 %d 字节", watchlistSourceItemIDLimit)
+	}
+	return DetailWatchlistMetadataChain(ctx, chain, kind, selectionID)
+}
 
 // 有序兜底的走链策略（D-WM07）。
 //
@@ -38,7 +64,8 @@ func SearchWatchlistMetadataChain(ctx context.Context, chain []WatchlistMetadata
 
 // DetailWatchlistMetadataChain 按链上顺序取详情，返回第一个成功的源给出的详情。
 //
-// 详情也走同一条链，规则一字不变。这一点值得说明：sourceItemID 是**某一个源**给的
+// 兼容既有单源或 AV 调用；多源电影的人工选择必须使用 selectedWatchlistMetadataDetail。
+// sourceItemID 是**某一个源**给的
 // ID，拿去问另一个源通常对不上。但对不上的结果就是那个源说 not_found——代价是一次
 // 白跑的请求，换来的是链对 ID 形态的宽容：FANZA 的 content_id（abc00123）与 JavBus
 // 的番号（ABC-123）是两套写法，谁先认出来就由谁出详情，不需要在这里编一套没有

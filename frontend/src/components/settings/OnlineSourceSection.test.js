@@ -55,7 +55,7 @@ beforeEach(() => {
 describe('OnlineSourceSection', () => {
   it('每个源一个测试按钮；只有需要凭证的源才有输入框', () => {
     const wrapper = mountSection();
-    for (const source of ['tmdb', 'bangumi', 'javbus', 'jav321', 'fc2']) {
+    for (const source of ['douban', 'tmdb', 'bangumi', 'javbus', 'jav321', 'fc2']) {
       expect(wrapper.find(`[data-test="online-source-test-${source}"]`).exists(), source).toBe(true);
     }
     for (const field of ['proxy-url', 'tmdb-api-key', 'bangumi-access-token']) {

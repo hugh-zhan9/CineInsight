@@ -218,7 +218,8 @@ func (s *WatchlistService) ResolveWatchlistPoster(entryID uint) (ManagedImageAss
 
 // WatchlistCandidateView 是回给前端的一条候选（D-WM13 的重选入口）。
 //
-// 只给挑选时真要看的字段：SourceItemID 是 ApplyCandidate 的入参，其余供用户辨认
+// 只给挑选时真要看的字段：SourceItemID 是 ApplyCandidate 的选择标识，多源电影
+// 携带 source:id 前缀（不是落库的原始源 ID），其余供用户辨认
 // 是不是同一部片。**不透传源站的海报外链**——那是一条绕过用户所配资料源代理的
 // 出网请求，从界面上发出去既可能加载不出来，也违背「所有外部资料源请求经代理
 // 客户端发出」（AC-06）。
@@ -280,9 +281,13 @@ func (s *WatchlistService) ListCandidates(id uint) ([]WatchlistCandidateView, er
 	}
 	views := make([]WatchlistCandidateView, 0, len(candidates))
 	for _, candidate := range candidates {
+		selectionID := candidate.SourceItemID
+		if entry.Kind == models.WatchlistKindMovie && len(chain) > 1 {
+			selectionID = candidate.SourceName + ":" + selectionID
+		}
 		views = append(views, WatchlistCandidateView{
 			SourceName:    candidate.SourceName,
-			SourceItemID:  candidate.SourceItemID,
+			SourceItemID:  selectionID,
 			Title:         candidate.Title,
 			OriginalTitle: candidate.OriginalTitle,
 			Year:          candidate.Year,
@@ -305,8 +310,8 @@ func (s *WatchlistService) ApplyCandidate(id uint, sourceItemID string) error {
 	if sourceItemID == "" {
 		return errors.New("请选择要应用的候选")
 	}
-	if len(sourceItemID) > watchlistSourceItemIDLimit {
-		return fmt.Errorf("源条目 ID 超过 %d 字节", watchlistSourceItemIDLimit)
+	if len(sourceItemID) > watchlistSourceItemIDLimit+32 {
+		return errors.New("候选标识过长，请刷新候选列表")
 	}
 	entry, err := s.loadWatchlistEntry(id)
 	if err != nil {
@@ -318,7 +323,7 @@ func (s *WatchlistService) ApplyCandidate(id uint, sourceItemID string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), watchlistEnrichRequestTimeout)
 	defer cancel()
-	detail, err := DetailWatchlistMetadataChain(ctx, chain, WatchlistMetadataKind(entry.Kind), sourceItemID)
+	detail, err := selectedWatchlistMetadataDetail(ctx, chain, WatchlistMetadataKind(entry.Kind), sourceItemID)
 	if err != nil {
 		return fmt.Errorf("应用候选失败: %w", err)
 	}

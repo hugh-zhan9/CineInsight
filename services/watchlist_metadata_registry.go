@@ -17,7 +17,7 @@ var ErrWatchlistMetadataKindUnsupported = errors.New("该类型尚无在线资�
 
 // WatchlistMetadataRegistry 是按类型选链的路由表（D-WM01）。
 //
-// movie / tv / show / anime 各是单跳的链，排在前面的源先问（D-WM07）。
+// movie 按豆瓣 → TMDB 走链，其余非 av 类型为单跳；只有 not_found 触发兜底。
 // av 不走链走聚合：链上所有源会被**并发全问一遍**，再逐字段择优，
 // 所以那一行的顺序是择优兜底序而非询问序（见 watchlist_metadata_aggregate.go）。
 //
@@ -64,7 +64,7 @@ func NewWatchlistMetadataRegistry(config WatchlistMetadataConfig, timeout time.D
 	// FC2 番号自然 404。聚合器既有的「单源失败不阻断其余源」原样处理，不需要第二张
 	// 路由表。代价是一次查询会白跑两个必然失败的请求，换掉了一处隐藏的分流判断。
 	return newWatchlistMetadataRegistry(map[WatchlistMetadataKind][]WatchlistMetadataSource{
-		WatchlistMetadataKindMovie: {tmdb},
+		WatchlistMetadataKindMovie: {NewDoubanWatchlistMetadataSource(client), tmdb},
 		WatchlistMetadataKindTV:    {tmdb},
 		WatchlistMetadataKindShow:  {tmdb},
 		WatchlistMetadataKindAnime: {bangumi},

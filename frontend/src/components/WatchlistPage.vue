@@ -150,8 +150,8 @@ const STATUS_LABELS = {
 // 资料源的展示名。条目只在补全成功后才有 source_name，失败时退回按类型推断该问谁。
 // aggregate 是多源合并的保留源名——逐字段择优之后，一条记录本就不归属任何单一源。
 // fanza 保留着：FANZA 已经退场，但存量条目的 source_name 仍是它，删掉键会让它们显示成裸字符串。
-const SOURCE_LABELS = { tmdb: 'TMDB', bangumi: 'Bangumi', fanza: 'FANZA', javbus: 'JavBus', jav321: 'jav321', airav: 'airav', fc2: 'FC2', aggregate: '多源合并' };
-const KIND_SOURCE_LABELS = { movie: 'TMDB', tv: 'TMDB', show: 'TMDB', anime: 'Bangumi', av: 'AV 资料源' };
+const SOURCE_LABELS = { douban: '豆瓣', tmdb: 'TMDB', bangumi: 'Bangumi', fanza: 'FANZA', javbus: 'JavBus', jav321: 'jav321', airav: 'airav', fc2: 'FC2', aggregate: '多源合并' };
+const KIND_SOURCE_LABELS = { movie: '豆瓣 / TMDB', tv: 'TMDB', show: 'TMDB', anime: 'Bangumi', av: 'AV 资料源' };
 
 // D-WM14 的六个失败分类码各有各的文案，**不合并**：把凭证没配和「查无此片」写成
 // 同一句，用户会照着换片名的方向排查，而真正要做的是去填凭证。
@@ -388,7 +388,11 @@ export default {
     failureText(entry) {
       const code = entry.enrichment_error;
       if (!code || entry.enrichment_status !== 'failed') return '';
-      const source = SOURCE_LABELS[entry.source_name] || KIND_SOURCE_LABELS[entry.kind] || '资料源';
+      // 失败行的 source_name 可能仍是上次成功的源，不能据此归因这次失败。
+      // 电影链里只有 TMDB 使用凭证，其余失败可能来自链上的任一家。
+      const source = entry.kind === 'movie'
+        ? (code === 'credential_missing' || code === 'credential_invalid' ? 'TMDB' : KIND_SOURCE_LABELS.movie)
+        : (SOURCE_LABELS[entry.source_name] || KIND_SOURCE_LABELS[entry.kind] || '资料源');
       const build = FAILURE_TEXTS[code];
       // 认不出来的分类码原样带出去，别让一条失败在界面上消失得无影无踪。
       return build ? build(source) : `补全失败（${code}）`;

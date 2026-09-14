@@ -26,7 +26,7 @@ func TestWatchlistMetadataRegistryRoutesKindsToExpectedChains(t *testing.T) {
 		kind    WatchlistMetadataKind
 		sources []string
 	}{
-		{WatchlistMetadataKindMovie, []string{WatchlistMetadataSourceTMDB}},
+		{WatchlistMetadataKindMovie, []string{WatchlistMetadataSourceDouban, WatchlistMetadataSourceTMDB}},
 		{WatchlistMetadataKindTV, []string{WatchlistMetadataSourceTMDB}},
 		{WatchlistMetadataKindShow, []string{WatchlistMetadataSourceTMDB}},
 		{WatchlistMetadataKindAnime, []string{WatchlistMetadataSourceBangumi}},
@@ -105,13 +105,13 @@ func TestWatchlistMetadataRegistryReusesOneSourceInstance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chain(show) 失败: %v", err)
 	}
-	if movie[0] != tv[0] || tv[0] != show[0] {
+	if movie[1] != tv[0] || tv[0] != show[0] {
 		t.Fatal("三条链拿到了不同的适配器实例，出网客户端就被建了多份")
 	}
 
-	tmdb, ok := movie[0].(*TMDBWatchlistMetadataSource)
+	tmdb, ok := movie[1].(*TMDBWatchlistMetadataSource)
 	if !ok {
-		t.Fatalf("链首类型 = %T，期望 *TMDBWatchlistMetadataSource", movie[0])
+		t.Fatalf("链首类型 = %T，期望 *TMDBWatchlistMetadataSource", movie[1])
 	}
 	// 客户端必须来自 NewWatchlistMetadataHTTPClient，不能是 nil 或自建的。
 	if tmdb.client == nil {
@@ -165,8 +165,8 @@ func TestWatchlistMetadataRegistryBuildsWithoutCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chain 失败: %v", err)
 	}
-	if len(chain) != 1 {
-		t.Fatalf("链长 = %d，期望 1", len(chain))
+	if len(chain) != 2 {
+		t.Fatalf("链长 = %d，期望 2", len(chain))
 	}
 }
 
@@ -205,9 +205,9 @@ func TestWatchlistMetadataRegistryWiresAVChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chain(movie) 失败: %v", err)
 	}
-	tmdb, ok := movie[0].(*TMDBWatchlistMetadataSource)
+	tmdb, ok := movie[1].(*TMDBWatchlistMetadataSource)
 	if !ok {
-		t.Fatalf("链首类型 = %T，期望 *TMDBWatchlistMetadataSource", movie[0])
+		t.Fatalf("链首类型 = %T，期望 *TMDBWatchlistMetadataSource", movie[1])
 	}
 	if javbus.client == nil {
 		t.Fatal("av 源没有拿到出网客户端")
@@ -225,7 +225,6 @@ func TestWatchlistMetadataRegistryKeepsExistingRoutesAfterAV(t *testing.T) {
 		kind   WatchlistMetadataKind
 		source string
 	}{
-		{WatchlistMetadataKindMovie, WatchlistMetadataSourceTMDB},
 		{WatchlistMetadataKindTV, WatchlistMetadataSourceTMDB},
 		{WatchlistMetadataKindShow, WatchlistMetadataSourceTMDB},
 		{WatchlistMetadataKindAnime, WatchlistMetadataSourceBangumi},

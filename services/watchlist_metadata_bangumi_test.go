@@ -672,9 +672,9 @@ func TestWatchlistMetadataRegistryRoutesAnimeToBangumi(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chain(movie) 失败: %v", err)
 	}
-	tmdb, ok := movie[0].(*TMDBWatchlistMetadataSource)
+	tmdb, ok := movie[1].(*TMDBWatchlistMetadataSource)
 	if !ok {
-		t.Fatalf("链首类型 = %T，期望 *TMDBWatchlistMetadataSource", movie[0])
+		t.Fatalf("链首类型 = %T，期望 *TMDBWatchlistMetadataSource", movie[1])
 	}
 	if bangumi.client == nil {
 		t.Fatal("Bangumi 适配器没有拿到出网客户端")
@@ -697,8 +697,8 @@ func TestWatchlistMetadataRegistryKeepsTMDBRoutesAfterBangumi(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Chain(%s) 失败: %v", kind, err)
 		}
-		if len(chain) != 1 || chain[0].Name() != WatchlistMetadataSourceTMDB {
-			t.Errorf("Chain(%s) = %v，期望仍是单跳 TMDB", kind, chain)
+		if len(chain) == 0 || chain[len(chain)-1].Name() != WatchlistMetadataSourceTMDB {
+			t.Errorf("Chain(%s) = %v，期望保留 TMDB", kind, chain)
 		}
 	}
 

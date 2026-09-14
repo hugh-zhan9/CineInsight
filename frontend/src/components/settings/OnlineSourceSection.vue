@@ -3,7 +3,7 @@
     <h3>在线资料源</h3>
     <p class="help-text">
       想看片单靠这几个源补全标题、年份、简介与海报。每个源按条目类型分工：
-      TMDB 管电影 / 电视剧 / 综艺，Bangumi 管动画。AV 不走「先问谁、再兜底谁」，
+      电影优先查豆瓣，未找到时再查 TMDB；电视剧 / 综艺用 TMDB，动画用 Bangumi。AV 不走「先问谁、再兜底谁」，
       而是按番号**同时问多个源，再逐字段取最好的那份**（FC2-PPV 由 FC2 官方站单独负责）——比如简介取中文的那家，封面取图最全的那家。
       AV 的源都不需要凭证。凭证留空的源只会让对应类型补全不了，片单本身照常增删改查。
     </p>
@@ -21,10 +21,24 @@
       <!-- 本页另有一个「播放代理」分区，指的是本地转码缓存，跟出网没有半点关系。
            两者同名会造成真实误解，所以这一栏的名字必须带「资料源出网」四个字。 -->
       <p class="help-text">
-        这四个源在国内大多直连不上。这里填的代理**只用于向资料源发请求**，与本页
+        部分资料源需要代理才能访问。这里填的代理**只用于向资料源发请求**，与本页
         「播放代理」分区无关——那个说的是本地转码缓存。支持 http、https、socks5、socks5h；
         填错不会悄悄退回直连，而是直接报错。
       </p>
+    </div>
+
+    <div class="online-source">
+      <h4>豆瓣<span class="online-source__scope">电影 · 首选</span></h4>
+      <p class="help-text">无需 API Key。补全中文简介、评分、导演、演员与海报。豆瓣未找到电影时再查 TMDB；访问验证、限流和网络错误会单独提示。测试连接同时检查搜索与详情。</p>
+      <div class="online-source__test">
+        <button data-test="online-source-test-douban" type="button" class="btn-secondary"
+          :disabled="testing.douban" @click="testConnection('douban')"
+        >{{ testing.douban ? '测试中…' : '测试连接' }}</button>
+        <span v-if="results.douban" data-test="online-source-result-douban"
+          :class="['online-source__result', results.douban.ok ? 'online-source__result--ok' : 'online-source__result--error']"
+          role="status"
+        >{{ resultText('douban') }}</span>
+      </div>
     </div>
 
     <div class="online-source">
@@ -167,8 +181,8 @@ export default {
   },
   data() {
     return {
-      testing: { tmdb: false, bangumi: false, javbus: false, jav321: false, fc2: false },
-      results: { tmdb: null, bangumi: null, javbus: null, jav321: null, fc2: null }
+      testing: { douban: false, tmdb: false, bangumi: false, javbus: false, jav321: false, fc2: false },
+      results: { douban: null, tmdb: null, bangumi: null, javbus: null, jav321: null, fc2: null }
     };
   },
   methods: {
