@@ -4,7 +4,7 @@
     <p class="help-text">
       想看片单靠这几个源补全标题、年份、简介与海报。每个源按条目类型分工：
       TMDB 管电影 / 电视剧 / 综艺，Bangumi 管动画。AV 不走「先问谁、再兜底谁」，
-      而是按番号**同时问多个源，再逐字段取最好的那份**——比如简介取中文的那家，封面取图最全的那家。
+      而是按番号**同时问多个源，再逐字段取最好的那份**（FC2-PPV 由 FC2 官方站单独负责）——比如简介取中文的那家，封面取图最全的那家。
       AV 的源都不需要凭证。凭证留空的源只会让对应类型补全不了，片单本身照常增删改查。
     </p>
 
@@ -128,6 +128,26 @@
       </div>
     </div>
 
+    <div class="online-source">
+      <h4>FC2<span class="online-source__scope">AV · FC2-PPV</span></h4>
+      <p class="help-text">不需要凭证。FC2 是用户投稿平台，作品不在片商目录里——JavBus 与 jav321 都查不到它。这里取的是 <strong>FC2 官方商品页</strong>，标题、简介、标签、封面都最权威。只对 <code>FC2-PPV-4976527</code> 这种形态的番号生效，片商番号不会打到它。</p>
+      <div class="online-source__test">
+        <button
+          data-test="online-source-test-fc2"
+          type="button"
+          class="btn-secondary"
+          :disabled="testing.fc2"
+          @click="testConnection('fc2')"
+        >{{ testing.fc2 ? '测试中…' : '测试连接' }}</button>
+        <span
+          v-if="results.fc2"
+          data-test="online-source-result-fc2"
+          :class="['online-source__result', results.fc2.ok ? 'online-source__result--ok' : 'online-source__result--error']"
+          role="status"
+        >{{ resultText('fc2') }}</span>
+      </div>
+    </div>
+
     <p class="help-text">测试连接用的是上面**当前填写的值**，不必先保存；留空的字段按已保存或环境变量配置。</p>
   </div>
 </template>
@@ -147,8 +167,8 @@ export default {
   },
   data() {
     return {
-      testing: { tmdb: false, bangumi: false, javbus: false, jav321: false },
-      results: { tmdb: null, bangumi: null, javbus: null, jav321: null }
+      testing: { tmdb: false, bangumi: false, javbus: false, jav321: false, fc2: false },
+      results: { tmdb: null, bangumi: null, javbus: null, jav321: null, fc2: null }
     };
   },
   methods: {

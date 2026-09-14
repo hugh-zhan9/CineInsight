@@ -74,6 +74,8 @@ var watchlistMetadataProbeTargets = []watchlistMetadataProbeTarget{
 	// av 的源都不要凭证，所以没有 credentialHint。
 	{source: WatchlistMetadataSourceJavBus, kind: WatchlistMetadataKindAV, query: "SSIS-001"},
 	{source: WatchlistMetadataSourceJav321, kind: WatchlistMetadataKindAV, query: "SSIS-001"},
+	// FC2 只认自己的番号形态，探测查询必须给一个 FC2 商品号，不能用片商番号。
+	{source: WatchlistMetadataSourceFC2, kind: WatchlistMetadataKindAV, query: "FC2-PPV-4976527"},
 }
 
 // AllWatchlistMetadataProbeSources 返回可探测的源名，顺序即设置页的展示顺序。

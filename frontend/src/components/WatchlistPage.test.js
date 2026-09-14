@@ -521,3 +521,44 @@ describe('想看片单的源站片名', () => {
     expect(wrapper.text()).toContain('FANZA');
   });
 });
+
+// FC2 番号是另一套形态，下拉框要认得出来（AC：输 FC2-PPV 不该停在「电影」）。
+describe('想看片单的 FC2 番号识别', () => {
+  const typeTitle = async (wrapper, value) => {
+    await find(wrapper, 'title').setValue(value);
+    await flushPromises();
+  };
+
+  it('FC2 的几种写法都自动切到 AV', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [], next_cursor_id: 0 });
+    for (const code of ['FC2-PPV-4976527', 'FC2PPV-4976527', 'FC2-4976527', 'fc2-ppv-4976527']) {
+      const wrapper = mount(WatchlistPage);
+      wrappers.push(wrapper);
+      await flushPromises();
+      await typeTitle(wrapper, code);
+      expect(find(wrapper, 'kind').element.value, code).toBe('av');
+    }
+  });
+
+  it('光秃秃的商品号不自动切——一串数字同样可能是片名', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [], next_cursor_id: 0 });
+    const wrapper = mount(WatchlistPage);
+    wrappers.push(wrapper);
+    await flushPromises();
+    await typeTitle(wrapper, '4976527');
+    expect(find(wrapper, 'kind').element.value).toBe('movie');
+  });
+
+  it('FC2 源名显示为 FC2，不是裸字符串', async () => {
+    api.ListWatchlist.mockResolvedValue({
+      entries: [entry(1, 'FC2-PPV-4976527', {
+        kind: 'av', enrichment_status: 'failed', enrichment_error: 'not_found', source_name: 'fc2'
+      })],
+      next_cursor_id: 0
+    });
+    const wrapper = mount(WatchlistPage);
+    wrappers.push(wrapper);
+    await flushPromises();
+    expect(wrapper.text()).toContain('FC2');
+  });
+});

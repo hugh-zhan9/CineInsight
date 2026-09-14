@@ -30,7 +30,7 @@ func TestWatchlistMetadataRegistryRoutesKindsToExpectedChains(t *testing.T) {
 		{WatchlistMetadataKindTV, []string{WatchlistMetadataSourceTMDB}},
 		{WatchlistMetadataKindShow, []string{WatchlistMetadataSourceTMDB}},
 		{WatchlistMetadataKindAnime, []string{WatchlistMetadataSourceBangumi}},
-		{WatchlistMetadataKindAV, []string{WatchlistMetadataSourceJavBus, WatchlistMetadataSourceJav321}},
+		{WatchlistMetadataKindAV, []string{WatchlistMetadataSourceJavBus, WatchlistMetadataSourceJav321, WatchlistMetadataSourceFC2}},
 	} {
 		t.Run(string(routed.kind), func(t *testing.T) {
 			chain, err := registry.Chain(routed.kind)
@@ -180,8 +180,10 @@ func TestWatchlistMetadataRegistryWiresAVChain(t *testing.T) {
 		t.Fatalf("Chain(av) 失败: %v", err)
 	}
 	// av 走聚合不走链，这一行的顺序是择优兜底序（真正的字段优先级在择优表里）。
-	if len(chain) != 2 {
-		t.Fatalf("链长 = %d，期望 2（JavBus + jav321）", len(chain))
+	// 三个源：JavBus + jav321 管片商番号，FC2 管 FC2-PPV。形态分流由各源自己认，
+	// 不在这张表上。
+	if len(chain) != 3 {
+		t.Fatalf("链长 = %d，期望 3（JavBus + jav321 + FC2）", len(chain))
 	}
 	javbus, ok := chain[0].(*JavBusWatchlistMetadataSource)
 	if !ok {
@@ -189,6 +191,9 @@ func TestWatchlistMetadataRegistryWiresAVChain(t *testing.T) {
 	}
 	if _, ok := chain[1].(*Jav321WatchlistMetadataSource); !ok {
 		t.Fatalf("链上第 2 个类型 = %T，期望 *Jav321WatchlistMetadataSource", chain[1])
+	}
+	if _, ok := chain[2].(*FC2WatchlistMetadataSource); !ok {
+		t.Fatalf("链上第 3 个类型 = %T，期望 *FC2WatchlistMetadataSource", chain[2])
 	}
 	if javbus.baseURL != javbusBaseURL {
 		t.Errorf("JavBus baseURL = %q，期望生产地址 %q", javbus.baseURL, javbusBaseURL)
@@ -249,10 +254,10 @@ func TestWatchlistMetadataRegistryAVChainNeedsNoCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chain(av) 失败: %v", err)
 	}
-	if len(chain) != 2 {
-		t.Fatalf("链长 = %d，期望 2", len(chain))
+	if len(chain) != 3 {
+		t.Fatalf("链长 = %d，期望 3", len(chain))
 	}
-	for index, want := range []string{WatchlistMetadataSourceJavBus, WatchlistMetadataSourceJav321} {
+	for index, want := range []string{WatchlistMetadataSourceJavBus, WatchlistMetadataSourceJav321, WatchlistMetadataSourceFC2} {
 		if got := chain[index].Name(); got != want {
 			t.Errorf("av 第 %d 个源 = %q，期望 %q", index+1, got, want)
 		}

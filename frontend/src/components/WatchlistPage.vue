@@ -131,6 +131,14 @@ const KIND_LABELS = Object.fromEntries(KIND_OPTIONS.map(option => [option.value,
 // 片名再判一次类型——用户改回去就是改回去了。
 const AV_CODE_PATTERN = /^[0-9]{0,4}[A-Za-z]{2,6}-[0-9]{3,5}$/;
 
+// FC2 番号是另一套形态：FC2-PPV-4976527 / FC2PPV-4976527 / FC2-4976527。
+// 商品号 6~10 位，与片商番号的 3~5 位区分得开。
+//
+// **只认带 FC2 前缀的写法**：后端适配器也接受光秃秃的商品号（4976527），
+// 但那在界面上无从判断——一串纯数字同样可能是用户随手写的片名。
+// 自动识别是便利，不是判据；用户手选 AV 之后照样能补全。
+const FC2_CODE_PATTERN = /^FC2-?(?:PPV-?)?[0-9]{6,10}$/i;
+
 const STATUS_LABELS = {
   pending: '待补全',
   running: '补全中…',
@@ -142,7 +150,7 @@ const STATUS_LABELS = {
 // 资料源的展示名。条目只在补全成功后才有 source_name，失败时退回按类型推断该问谁。
 // aggregate 是多源合并的保留源名——逐字段择优之后，一条记录本就不归属任何单一源。
 // fanza 保留着：FANZA 已经退场，但存量条目的 source_name 仍是它，删掉键会让它们显示成裸字符串。
-const SOURCE_LABELS = { tmdb: 'TMDB', bangumi: 'Bangumi', fanza: 'FANZA', javbus: 'JavBus', jav321: 'jav321', airav: 'airav', aggregate: '多源合并' };
+const SOURCE_LABELS = { tmdb: 'TMDB', bangumi: 'Bangumi', fanza: 'FANZA', javbus: 'JavBus', jav321: 'jav321', airav: 'airav', fc2: 'FC2', aggregate: '多源合并' };
 const KIND_SOURCE_LABELS = { movie: 'TMDB', tv: 'TMDB', show: 'TMDB', anime: 'Bangumi', av: 'AV 资料源' };
 
 // D-WM14 的六个失败分类码各有各的文案，**不合并**：把凭证没配和「查无此片」写成
@@ -176,7 +184,8 @@ export default {
       // 输入辅助：用户没动过下拉框时，类型跟着输入走；动过之后就完全交给用户，
       // 再怎么改片名也不再自动覆盖他选的那个值。
       if (this.editID || this.kindTouched) return;
-      this.kind = AV_CODE_PATTERN.test(value.trim()) ? 'av' : DEFAULT_KIND;
+      const code = value.trim();
+      this.kind = (AV_CODE_PATTERN.test(code) || FC2_CODE_PATTERN.test(code)) ? 'av' : DEFAULT_KIND;
     }
   },
   mounted() {

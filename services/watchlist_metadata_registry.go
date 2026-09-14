@@ -48,6 +48,7 @@ func NewWatchlistMetadataRegistry(config WatchlistMetadataConfig, timeout time.D
 	// av 的源都不需要凭证。
 	javbus := NewJavBusWatchlistMetadataSource(client)
 	jav321 := NewJav321WatchlistMetadataSource(client)
+	fc2 := NewFC2WatchlistMetadataSource(client)
 	// 这张表就是路由合同本身。接入新源时在这里加一行，不需要改 Chain，也不需要
 	// 改任何适配器。
 	//
@@ -56,13 +57,18 @@ func NewWatchlistMetadataRegistry(config WatchlistMetadataConfig, timeout time.D
 	// 因此 av 这一行的顺序不是「询问顺序」，而是逐字段择优表没覆盖到的字段的
 	// **兜底优先级**——择优表本身在 watchlist_metadata_aggregate.go。
 	//
-	// av 当前是 JavBus + jav321；airav 随后接入时在这一行追加。
+	// av 上挂三个源：JavBus + jav321 管片商番号，FC2 管 FC2-PPV。
+	//
+	// **番号形态的分流不在这里，也不在聚合器里**——三个源都会被问到，各自认自己的
+	// 番号：FC2 适配器见到片商番号当场 not_found 且不发请求，JavBus / jav321 遇到
+	// FC2 番号自然 404。聚合器既有的「单源失败不阻断其余源」原样处理，不需要第二张
+	// 路由表。代价是一次查询会白跑两个必然失败的请求，换掉了一处隐藏的分流判断。
 	return newWatchlistMetadataRegistry(map[WatchlistMetadataKind][]WatchlistMetadataSource{
 		WatchlistMetadataKindMovie: {tmdb},
 		WatchlistMetadataKindTV:    {tmdb},
 		WatchlistMetadataKindShow:  {tmdb},
 		WatchlistMetadataKindAnime: {bangumi},
-		WatchlistMetadataKindAV:    {javbus, jav321},
+		WatchlistMetadataKindAV:    {javbus, jav321, fc2},
 	}), nil
 }
 

@@ -55,7 +55,7 @@ beforeEach(() => {
 describe('OnlineSourceSection', () => {
   it('每个源一个测试按钮；只有需要凭证的源才有输入框', () => {
     const wrapper = mountSection();
-    for (const source of ['tmdb', 'bangumi', 'javbus', 'jav321']) {
+    for (const source of ['tmdb', 'bangumi', 'javbus', 'jav321', 'fc2']) {
       expect(wrapper.find(`[data-test="online-source-test-${source}"]`).exists(), source).toBe(true);
     }
     for (const field of ['proxy-url', 'tmdb-api-key', 'bangumi-access-token']) {
@@ -137,7 +137,7 @@ describe('OnlineSourceSection', () => {
     });
 
     // AV 的两个源都不要凭证，一个都不该带。
-    for (const source of ['javbus', 'jav321']) {
+    for (const source of ['javbus', 'jav321', 'fc2']) {
       await clickTest(wrapper, source);
       expect(api.TestWatchlistMetadataConnection).toHaveBeenLastCalledWith({
         source, proxy_url: SOURCE_CREDENTIALS.metadata_proxy_url

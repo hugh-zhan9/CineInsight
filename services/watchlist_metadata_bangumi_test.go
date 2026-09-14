@@ -708,10 +708,11 @@ func TestWatchlistMetadataRegistryKeepsTMDBRoutesAfterBangumi(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Chain(av) 失败: %v", err)
 	}
-	if len(avChain) != 2 ||
+	if len(avChain) != 3 ||
 		avChain[0].Name() != WatchlistMetadataSourceJavBus ||
-		avChain[1].Name() != WatchlistMetadataSourceJav321 {
-		t.Errorf("Chain(av) = %v，期望 JavBus + jav321", avChain)
+		avChain[1].Name() != WatchlistMetadataSourceJav321 ||
+		avChain[2].Name() != WatchlistMetadataSourceFC2 {
+		t.Errorf("Chain(av) = %v，期望 JavBus + jav321 + FC2", avChain)
 	}
 }
 
