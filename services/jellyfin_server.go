@@ -71,13 +71,15 @@ type JellyfinServer struct {
 	video         *VideoService
 	thumbnail     *ThumbnailService
 	probe         *MediaProbeService
+	people        *PersonService
+	collections   *CollectionService
 	// Set by the library adapter; authentication always runs before dispatch.
 	api http.Handler
 }
 
 // NewJellyfinServer creates a disabled server without opening a port.
-func NewJellyfinServer(video *VideoService, thumbnail *ThumbnailService, probe *MediaProbeService) *JellyfinServer {
-	s := &JellyfinServer{video: video, thumbnail: thumbnail, probe: probe, sessions: make(map[[32]byte]jellyfinSession), loginSlot: make(chan struct{}, 1)}
+func NewJellyfinServer(video *VideoService, thumbnail *ThumbnailService, probe *MediaProbeService, people *PersonService, collections *CollectionService) *JellyfinServer {
+	s := &JellyfinServer{video: video, thumbnail: thumbnail, probe: probe, people: people, collections: collections, sessions: make(map[[32]byte]jellyfinSession), loginSlot: make(chan struct{}, 1)}
 	s.api = http.HandlerFunc(s.serveLibrary)
 	return s
 }

@@ -217,6 +217,7 @@ export default {
     toggleTag(tag) {
       if (!tag) return;
       this.selectedTagIds = toggleSelectedTagId(this.selectedTagIds, tag.id);
+      if (this.isTagSelected(tag)) this.newTagName = '';
     },
     isTagSelected(tag) {
       return this.selectedTagIds.includes(Number(tag?.id));

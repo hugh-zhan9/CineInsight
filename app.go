@@ -183,7 +183,7 @@ func NewApp() *App {
 	app.faceAnalysis.SetMediaWorkSlot(mediaWorkSlot)
 	app.faceReview = services.NewFaceReviewService(dataDir, app.faceAnalysis)
 	app.wireBrowserBridge()
-	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService)
+	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService, personService, collectionService)
 	app.wireBackgroundTaskRegistry()
 	app.wireDesktopNotifier()
 	if dataDirErr != nil {

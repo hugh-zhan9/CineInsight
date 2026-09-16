@@ -41,6 +41,7 @@ const api = vi.hoisted(() => ({
   RemovePersonVideo: vi.fn(),
   ReorderCollectionVideos: vi.fn(),
   SearchLibraryVideoPage: vi.fn(),
+  SearchImagePage: vi.fn(),
   SelectCollectionCover: vi.fn(),
   SelectDirectory: vi.fn(),
   SelectPersonAvatar: vi.fn(),
@@ -684,5 +685,26 @@ describe('PreviewDrawer 作品集术语表（P-010）', () => {
     expect(api.DeletePlaybackProxy).toHaveBeenCalledWith(1);
     expect(wrapper.vm.playbackProxy).toBeNull();
     expect(wrapper.emitted('preview-session-stale')?.[0]).toEqual([1]);
+  });
+});
+
+
+describe('person avatar from library images', () => {
+  const person = { person: { person: { id: 7, display_name: 'Person' }, avatar_url: '' }, videos: [], images: [{ id: 12, name: 'portrait', path: '/portrait.png' }] };
+  it('sets a linked image as the avatar and refreshes the detail', async () => {
+    api.GetPersonDetail.mockResolvedValue(person); api.SetPersonAvatar.mockResolvedValue({});
+    const w = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } } }); await flushPromises();
+    await w.find('[data-test="person-image-avatar-12"]').trigger('click'); await flushPromises();
+    expect(api.SetPersonAvatar).toHaveBeenCalledWith(7, '/portrait.png'); expect(api.GetPersonDetail).toHaveBeenCalledTimes(2); w.unmount();
+  });
+  it('keeps picker on failure and does not refresh a different person', async () => {
+    api.GetPersonDetail.mockResolvedValue(person); api.SearchImagePage.mockResolvedValue({ images: person.images });
+    api.SetPersonAvatar.mockRejectedValueOnce(new Error('unsupported'));
+    const w = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } }, global: { stubs: { teleport: true } } }); await flushPromises();
+    w.vm.avatarPickerOpen = true; await flushPromises(); await w.vm.setAvatarFromImage(person.images[0]);
+    expect(w.vm.avatarPickerOpen).toBe(true); expect(w.vm.avatarError).toContain('unsupported');
+    const pending = deferred(); api.SetPersonAvatar.mockReturnValueOnce(pending.promise);
+    const saving = w.vm.setAvatarFromImage(person.images[0]); w.vm.currentEntry = { type: 'person', id: 8 }; pending.resolve({}); await saving;
+    expect(api.SetPersonAvatar).toHaveBeenLastCalledWith(7, '/portrait.png'); expect(api.GetPersonDetail).toHaveBeenCalledTimes(1); w.unmount();
   });
 });

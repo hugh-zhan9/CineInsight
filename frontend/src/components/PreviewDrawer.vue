@@ -202,10 +202,12 @@
           <label class="detail-field">原始姓名<input v-model="personEdit.originalName" maxlength="200" /></label>
           <div class="detail-action-row">
             <button type="button" class="btn-primary" @click="savePerson">保存姓名</button>
-            <button type="button" class="btn-secondary" @click="replacePersonAvatar">更换头像</button>
-            <button v-if="personDetail.person.avatar_url" type="button" class="btn-secondary" @click="removePersonAvatar">移除头像</button>
+            <button type="button" class="btn-secondary" @click="replacePersonAvatar" :disabled="avatarSaving">从文件选择头像</button>
+            <button type="button" class="btn-secondary" :disabled="avatarSaving" @click="avatarPickerOpen = true; avatarError = ''">从图片库选择头像</button>
+            <button v-if="personDetail.person.avatar_url" type="button" class="btn-secondary" @click="removePersonAvatar" :disabled="avatarSaving">移除头像</button>
           </div>
         </section>
+        <p v-if="avatarError" role="alert" class="detail-error-text">{{ avatarError }}</p>
         <section class="detail-section">
           <div class="detail-section__heading"><h4>关联视频（{{ personDetail.person.active_video_count }}）</h4><span>点击卡片查看详情</span></div>
           <div class="related-video-editor">
@@ -266,6 +268,7 @@
               <label class="person-image-card__select"><input v-model="selectedPersonImageIDs" type="checkbox" :value="image.id" :aria-label="`选择 ${image.name}`" />选择</label>
               <button type="button" class="person-image-card__preview" :aria-label="`放大 ${image.name}`" @click="imagePreview = image"><img :src="`/preview/image-thumbnail/${image.id}`" :alt="image.name" loading="lazy" /></button>
               <figcaption :title="image.name">{{ image.name }}</figcaption>
+              <button type="button" class="btn-secondary btn-compact" :disabled="avatarSaving" :data-test="`person-image-avatar-${image.id}`" @click="setAvatarFromImage(image)">设为头像</button>
               <small v-if="image.size > 0" class="person-image-card__size">{{ formatBytes(image.size) }}</small>
               <button
                 type="button"
@@ -364,6 +367,7 @@
         </section>
       </template>
     </div>
+    <ImageLibraryPicker v-if="avatarPickerOpen" :busy="avatarSaving" :action-error="avatarError" @close="avatarPickerOpen = false" @select="setAvatarFromImage" />
     <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="isPersonImageUpdating(imagePreview.id)" :action-error="personImageError" @close="imagePreview = null" @unlink="removePersonImageRelation" @delete="requestPersonMediaDelete('image', $event)" />
     <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" />
   </aside>
@@ -379,6 +383,7 @@ import {
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
 import GlossaryEditor from './GlossaryEditor.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
+import ImageLibraryPicker from './ImageLibraryPicker.vue';
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
@@ -388,7 +393,7 @@ import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyStrategyLabel } from '../utils
 
 export default {
   name: 'PreviewDrawer',
-  components: { GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog },
+  components: { ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
@@ -400,7 +405,7 @@ export default {
   emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale'],
   data() {
     return {
-      selectedPersonImageIDs: [], imagePreview: null,
+      selectedPersonImageIDs: [], imagePreview: null, avatarPickerOpen: false, avatarSaving: false, avatarError: '',
       personMediaDeleteTarget: null,
       navigator: null, currentEntry: null, canGoBack: false,
       loading: false, error: '', saving: false, refreshingTechnical: false,
@@ -565,7 +570,7 @@ export default {
       this.resetRelatedVideoEditor(); this.navigator = createDetailNavigator(root); this.currentEntry = root; this.canGoBack = false; this.loadCurrentEntry();
     },
     async loadCurrentEntry() {
-      this.imagePreview = null; this.selectedPersonImageIDs = [];
+      this.imagePreview = null; this.selectedPersonImageIDs = []; this.avatarPickerOpen = false; this.avatarError = '';
       if (!this.currentEntry) return;
       const entry = { ...this.currentEntry };
       const requestToken = Symbol('detail-entry');
@@ -919,6 +924,18 @@ export default {
       }
     },
     async savePerson() { try { await UpdatePerson(this.currentEntry.id, this.personEdit.displayName, this.personEdit.originalName); await this.loadCurrentEntry(); } catch (err) { this.error = String(err); } },
+    async setAvatarFromImage(image) {
+      if (this.avatarSaving || this.currentEntry?.type !== 'person') return;
+      const personID = Number(this.currentEntry.id);
+      this.avatarSaving = true; this.avatarError = '';
+      try {
+        if (!image.path) throw new Error('图片路径不可用');
+        await SetPersonAvatar(personID, image.path);
+        if (this.isCurrentEntity('person', personID)) await this.loadCurrentEntry();
+      } catch (err) {
+        if (this.isCurrentEntity('person', personID)) this.avatarError = `设置头像失败：${err}`;
+      } finally { this.avatarSaving = false; }
+    },
     async replacePersonAvatar() { try { const path = await SelectPersonAvatar(); if (path) { await SetPersonAvatar(this.currentEntry.id, path); await this.loadCurrentEntry(); } } catch (err) { this.error = String(err); } },
     async removePersonAvatar() { try { await RemovePersonAvatar(this.currentEntry.id); await this.loadCurrentEntry(); } catch (err) { this.error = String(err); } },
     async saveCollection() { try { await UpdateCollection(this.currentEntry.id, this.collectionEdit.name, this.collectionEdit.description); await this.loadCurrentEntry(); } catch (err) { this.error = String(err); } },

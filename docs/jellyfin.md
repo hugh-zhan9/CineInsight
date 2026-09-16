@@ -8,7 +8,7 @@
 
 仅提供原片直播放及同名外置 SRT，不提供图片库、实时转码、转封装、远程控制或管理接口。客户端提交播放能力时按 Jellyfin 服务端相同的规则校验容器、音视频编码、码率和 profile 条件：能判断的属性（宽高、码率、音频声道/采样率、帧率、位深、视频 profile、音轨数、视频流数、是否次音轨、SDR/HDR）逐条比较；本应用无法判断的属性（如 IsAnamorphic、VideoLevel）只在客户端标记 IsRequired=false 时视为通过，`h265` 与 `hevc` 互认。不可直放时应用日志记录原因。没有技术快照时，在开始播放时调用本地 ffprobe；缺少 ffprobe 会报错，不隐式安装。
 
-字幕保存视图只读现有字幕索引，索引补全仍从桌面发起。标签及作品集既可作为文件夹逐层浏览，客户端请求 Recursive 时也直接列出其中全部视频；列表每页默认 100，最多 200，支持分页、名称搜索、标签、收藏、已看与可续播筛选。常见客户端附带的投影和范围参数（Fields、ExcludeLocationTypes、CollapseBoxSetItems、MediaTypes、IsMissing 等）按 Jellyfin 语义处理，本应用没有对应数据的排序键（ProductionYear、IsFolder 等）被忽略；其余未知参数仍返回 400，避免给出错误范围的结果。Fileball 首页会请求的「接下来看」「推荐」「工作室」「人物」返回空结果，详情页会请求的「特别收录」「预告片」「相似」「片头」同样返回空集而不是 404；显示偏好不保存，重新登录后回到默认排序；下载接口返回原片。搜索走 Jellyfin 的 `Search/Hints`（也可直接用列表接口的 `SearchTerm`），关键词不区分大小写地匹配显示标题、原始标题、文件名与路径；`IsMovie`/`IsSeries` 一类的类型开关与 `NameStartsWith` 一类的字母索引参数按 Jellyfin 语义生效。条目详情带完整的流信息（每条流的 `DisplayTitle`，如「1080p HEVC SDR」「AAC - Stereo - Default」，以及容器、宽高、是否高清、是否有字幕），没有技术快照的视频这些字段为空，播放一次或在桌面端探测后即补齐。
+字幕保存视图只读现有字幕索引，索引补全仍从桌面发起。标签及作品集既可作为文件夹逐层浏览，客户端请求 Recursive 时也直接列出其中全部视频；列表每页默认 100，最多 200，支持分页、名称搜索、标签、收藏、已看与可续播筛选。常见客户端附带的投影和范围参数（Fields、ExcludeLocationTypes、CollapseBoxSetItems、MediaTypes、IsMissing 等）按 Jellyfin 语义处理，本应用没有对应数据的排序键（ProductionYear、IsFolder 等）被忽略；其余未知参数仍返回 400，避免给出错误范围的结果。Fileball 首页会请求的「接下来看」「推荐」「工作室」返回空结果，详情页会请求的「特别收录」「预告片」「片头」同样返回空集而不是 404；显示偏好不保存，重新登录后回到默认排序；下载接口返回原片。搜索走 Jellyfin 的 `Search/Hints`（也可直接用列表接口的 `SearchTerm`），关键词不区分大小写地匹配显示标题、原始标题、文件名与路径；`IsMovie`/`IsSeries` 一类的类型开关与 `NameStartsWith` 一类的字母索引参数按 Jellyfin 语义生效。条目详情带完整的流信息（每条流的 `DisplayTitle`，如「1080p HEVC SDR」「AAC - Stereo - Default」，以及容器、宽高、是否高清、是否有字幕），没有技术快照的视频这些字段为空，播放一次或在桌面端探测后即补齐。
 
 ## 排查客户端问题
 
@@ -25,3 +25,8 @@ Fileball 真机流程尚待执行，需记录客户端版本：登录 → 打开
 手机网页标签修复有视口事件及组件回归；当前浏览器工具因认证方式不支持未能完成视觉检查，iPhone/Android 软键盘效果仍需真机核对。
 
 开发依据：[Jellyfin 官方登录说明](https://kotlin-sdk.jellyfin.org/guide/authentication.html)、[DeviceProfile](https://typescript-sdk.jellyfin.org/interfaces/generated-client.DeviceProfile.html)、[Fileball 更新记录](https://fileball.app/changelog/)。兼容目标是本页列出的流程，不是完整 Jellyfin 服务端 API。
+
+
+2026-09-16 详情扩展：详情提供可点击的标签、现有人物和所属作品集，个人评分映射为详情星标分数。人物页可浏览关联视频，人物头像及作品集封面读取既有托管图片。`Similar` 返回共享人物、活跃作品集、非自动标签或已检测同源关系的视频，排除当前视频并沿用扫描范围/删除/失效限制，不发起 AI 请求。
+
+本机 Filebar 1.4.13 已验证详情标签、人物、所属作品集和 8.5 分显示，人物、标签及作品集点击均可列出对应视频。当前详情没有数值打分控件，也未请求 Similar，因此不能把服务端 Similar 支持等同于 Filebar 已有相关视频推荐区。评分仍在析微影策修改。搜索建议由客户端进入片库时重新请求随机列表；切换标签页、下拉与 ⌘R 未触发重新请求，退出片库再进入会更新。

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"video-master/database"
@@ -24,6 +26,75 @@ func jellyfinObject(t *testing.T, w *httptest.ResponseRecorder) map[string]inter
 		t.Fatal(err)
 	}
 	return body
+}
+
+func TestJellyfinDetailTagItems(t *testing.T) {
+	s, token, video, _ := jellyfinLibraryFixture(t)
+	id := jellyfinID(jellyVideo, video.ID)
+	tags := []models.Tag{{Name: "旅行 & <风景>"}, {Name: "短视频", AutomaticKind: "short_video"}, {Name: "已删除"}}
+	for i := range tags {
+		if err := database.DB.Create(&tags[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	wantNames, wantItems, wantTagItems := []interface{}{}, []interface{}{}, []interface{}{}
+	check := func(t *testing.T) {
+		t.Helper()
+		detail := jellyfinObject(t, jellyfinRequest(s, "GET", "/Users/"+jellyfinUserID+"/Items/"+id, token, ""))
+		list, total := jellyfinItems(t, jellyfinRequest(s, "GET", "/Items?Ids="+id, token, ""))
+		if total != 1 || len(list) != 1 {
+			t.Fatalf("list count: %d / %d", total, len(list))
+		}
+		for _, item := range []map[string]interface{}{detail, list[0]} {
+			for _, key := range []string{"Tags", "Genres"} {
+				if !reflect.DeepEqual(item[key], wantNames) {
+					t.Errorf("%s = %#v, want %#v", key, item[key], wantNames)
+				}
+			}
+			for _, key := range []string{"TagItems", "GenreItems"} {
+				want := wantItems
+				if key == "TagItems" {
+					want = wantTagItems
+				}
+				if !reflect.DeepEqual(item[key], want) {
+					t.Errorf("%s = %#v, want %#v", key, item[key], want)
+				}
+			}
+		}
+	}
+	t.Run("empty", check)
+	for i := range tags[:2] {
+		tag := tags[i]
+		if err := database.DB.Model(&video).Association("Tags").Append(&tag); err != nil {
+			t.Fatal(err)
+		}
+		tagID := jellyfinID(jellyTag, tag.ID)
+		wantNames = append(wantNames, tag.Name)
+		wantItems = append(wantItems, map[string]interface{}{"Id": tagID, "Name": tag.Name})
+		wantTagItems = append(wantTagItems, map[string]interface{}{"Id": float64(tag.ID), "Name": tag.Name})
+		for _, raw := range []string{tagID, fmt.Sprint(tag.ID)} {
+			items, total := jellyfinItems(t, jellyfinRequest(s, "GET", "/Items?TagIds="+raw, token, ""))
+			if total != 1 || items[0]["Id"] != id {
+				t.Fatalf("tag click: %v", items)
+			}
+		}
+		t.Run(tag.Name, check)
+		folder := jellyfinObject(t, jellyfinRequest(s, "GET", "/Items/"+tagID, token, ""))
+		if folder["Name"] != tag.Name {
+			t.Fatalf("tag identity does not resolve: %v", folder)
+		}
+		items, total := jellyfinItems(t, jellyfinRequest(s, "GET", "/Items?ParentId="+tagID, token, ""))
+		if total != 1 || items[0]["Id"] != id {
+			t.Fatalf("tag does not browse its video: %v", items)
+		}
+	}
+	if err := database.DB.Model(&video).Association("Tags").Append(&tags[2]); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Delete(&tags[2]).Error; err != nil {
+		t.Fatal(err)
+	}
+	t.Run("deleted tags excluded", check)
 }
 
 // Fileball's detail screen prints each stream's DisplayTitle under "视频:" / "音频:" and reads the

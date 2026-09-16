@@ -89,6 +89,10 @@ func (s *JellyfinServer) servePlayback(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	kind, id, err := jellyfinParseID(parts[1])
+	if err == nil && (kind == jellyPerson || kind == jellyCollection) && parts[0] == "items" && (len(parts) == 4 || len(parts) == 5) && parts[2] == "images" && parts[3] == "primary" {
+		s.serveEntityImage(w, r, kind, id)
+		return
+	}
 	if err != nil || kind != jellyVideo {
 		jellyfinError(w, 404, "视频不存在")
 		return

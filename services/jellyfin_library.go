@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 	"log"
 	"net/http"
@@ -24,6 +25,7 @@ const (
 	jellySaved      = "04"
 	jellyView       = "05"
 	jellyGroup      = "06"
+	jellyPerson     = "07"
 )
 
 var jellyfinViews = []struct{ name, view string }{
@@ -42,11 +44,30 @@ func jellyfinParseID(raw string) (string, uint, error) {
 		return "", 0, fmt.Errorf("%w: 资源 ID 无效", errJellyfinQuery)
 	}
 	switch raw[:2] {
-	case jellyVideo, jellyCollection, jellyTag, jellySaved, jellyView, jellyGroup:
+	case jellyVideo, jellyCollection, jellyTag, jellySaved, jellyView, jellyGroup, jellyPerson:
 		return raw[:2], uint(id), nil
 	}
 	return "", 0, fmt.Errorf("%w: 资源类型无效", errJellyfinQuery)
 }
+
+// TagItems uses Emby's numeric tag identity; Jellyfin GenreItems and folder IDs use GUIDs.
+func jellyfinTagQueryID(raw string) (uint, error) {
+	if kind, id, err := jellyfinParseID(raw); err == nil {
+		if kind == jellyTag {
+			return id, nil
+		}
+		return 0, errJellyfinQuery
+	}
+	if raw == "" || strings.Trim(raw, "0123456789") != "" {
+		return 0, errJellyfinQuery
+	}
+	id, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || id == 0 || uint64(uint(id)) != id {
+		return 0, errJellyfinQuery
+	}
+	return uint(id), nil
+}
+
 func jellyfinParam(q url.Values, name string) string {
 	for key, values := range q {
 		if strings.EqualFold(key, name) && len(values) > 0 {
@@ -157,9 +178,18 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 		s.searchHints(w, r)
 		return
 	}
-	// Fileball's home and detail screens query these; this library has no series, studios or
-	// exposed people, so they get Jellyfin's empty answers rather than a 404.
-	if path == "/shows/nextup" || path == "/studios" || path == "/persons" || path == "/artists" || path == "/artists/albumartists" {
+	if path == "/persons" {
+		q := r.URL.Query()
+		jellyfinSetParam(q, "IncludeItemTypes", "Person")
+		items, total, start, err := s.listItems(r, q)
+		if !s.libraryError(w, err) {
+			jellyfinJSON(w, jellyfinResult(items, total, start))
+		}
+		return
+	}
+	// Fileball queries these unsupported series, studio and artist resources;
+	// return Jellyfin's empty answers rather than a 404.
+	if path == "/shows/nextup" || path == "/studios" || path == "/artists" || path == "/artists/albumartists" {
 		jellyfinJSON(w, jellyfinResult([]map[string]interface{}{}, 0, 0))
 		return
 	}
@@ -215,6 +245,9 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 			if s.libraryError(w, err) {
 				return
 			}
+			if s.libraryError(w, s.addDetailPeople(r, item, video.ID)) {
+				return
+			}
 			jellyfinJSON(w, item)
 			return
 		}
@@ -227,8 +260,7 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 	}
 	// Detail screens ask for extras this library does not model; Jellyfin answers these with
 	// empty collections for any visible item, never 404, so the client keeps rendering the item.
-	// Query parameters are not validated here: the answer is empty whatever they say, so there
-	// is no wrong-scope result to guard against (the D-02 concern).
+	// Similar videos are the exception: they validate filters and read existing relationships.
 	if len(parts) == 3 && (parts[0] == "items" || parts[0] == "movies" || parts[0] == "shows") {
 		switch parts[2] {
 		case "specialfeatures", "localtrailers", "additionalparts", "themesongs", "themevideos", "similar", "intros":
@@ -242,6 +274,13 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 				_, err = s.folderByID(r, kind, id)
 			}
 			if s.libraryError(w, err) {
+				return
+			}
+			if parts[2] == "similar" && kind == jellyVideo {
+				items, total, start, err := s.queryItems(r, r.URL.Query(), id)
+				if !s.libraryError(w, err) {
+					jellyfinJSON(w, jellyfinResult(items, total, start))
+				}
 				return
 			}
 			if parts[2] == "similar" || parts[2] == "intros" {
@@ -364,6 +403,12 @@ var errJellyfinQuery = errors.New("invalid_jellyfin_query")
 
 func (s *JellyfinServer) folderByID(r *http.Request, kind string, id uint) (map[string]interface{}, error) {
 	switch kind {
+	case jellyPerson:
+		person, err := s.visiblePerson(r, id)
+		if err != nil {
+			return nil, err
+		}
+		return s.personDTO(person), nil
 	case jellyView:
 		if id <= uint(len(jellyfinViews)) {
 			return s.folder(kind, id, jellyfinViews[id-1].name, "CollectionFolder", "movies"), nil
@@ -382,6 +427,9 @@ func (s *JellyfinServer) folderByID(r *http.Request, kind string, id uint) (map[
 		}
 		item := s.folder(kind, id, row.Name, "BoxSet", "")
 		item["Overview"] = row.Description
+		if row.CoverPath != "" {
+			item["ImageTags"] = map[string]string{"Primary": jellyfinArtworkTag(row.CoverPath)}
+		}
 		return item, nil
 	case jellyTag:
 		var row models.Tag
@@ -400,6 +448,10 @@ func (s *JellyfinServer) folderByID(r *http.Request, kind string, id uint) (map[
 }
 
 func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]interface{}, int64, int, error) {
+	return s.queryItems(r, q, 0)
+}
+
+func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uint) ([]map[string]interface{}, int64, int, error) {
 	q, err := jellyfinNormalizeQuery(q)
 	if err != nil {
 		return nil, 0, 0, err
@@ -419,6 +471,18 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 		}
 	}
 	include := strings.ToLower(jellyfinParam(q, "IncludeItemTypes"))
+	if include == "person" {
+		if relatedTo != 0 {
+			return []map[string]interface{}{}, 0, start, nil
+		}
+		return s.listPeople(r, q, start, limit)
+	}
+	if jellyfinParam(q, "ListItemIds") != "" {
+		if relatedTo != 0 {
+			return nil, 0, start, errJellyfinQuery
+		}
+		return s.containingCollections(r, q, start, limit)
+	}
 	if include == "boxset" && jellyfinParam(q, "ParentId") == "" {
 		kind, id = jellyGroup, 1
 	}
@@ -426,6 +490,9 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 	wantsVideos := include == "" || jellyfinCSVContains(include, "movie") || jellyfinCSVContains(include, "video")
 	// Group folders list their children unless the client asks for the leaf videos underneath.
 	if kind == jellyGroup && !(recursive && wantsVideos) {
+		if relatedTo != 0 {
+			return []map[string]interface{}{}, 0, start, nil
+		}
 		return s.listFolders(r, q, id, start, limit)
 	}
 	if !wantsVideos || jellyfinScopeEmpty(q, false) {
@@ -449,7 +516,7 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 		if err := json.Unmarshal([]byte(view.TagIDsJSON), &filter.TagIDs); err != nil {
 			return nil, 0, start, err
 		}
-	case jellyCollection, jellyGroup:
+	case jellyCollection, jellyGroup, jellyPerson:
 	default:
 		return nil, 0, start, errJellyfinQuery
 	}
@@ -457,6 +524,19 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 	query, err := s.videoQuery(r, filter)
 	if err != nil {
 		return nil, 0, start, err
+	}
+	if relatedTo != 0 {
+		query = s.relatedVideoQuery(query, relatedTo)
+	}
+	if kind == jellyPerson {
+		query = query.Where("videos.id IN (?)", database.DB.Model(&models.VideoPerson{}).Select("video_id").Where("person_id = ?", id))
+	}
+	if raw := jellyfinParam(q, "PersonIds"); raw != "" {
+		ids, err := jellyfinTypedIDs(raw, jellyPerson)
+		if err != nil {
+			return nil, 0, start, err
+		}
+		query = query.Where("videos.id IN (?)", database.DB.Model(&models.VideoPerson{}).Select("video_id").Where("person_id IN ?", ids))
 	}
 	switch {
 	case kind == jellyCollection:
@@ -541,8 +621,8 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 	}
 	if raw := jellyfinParam(q, "TagIds"); raw != "" {
 		for _, rawID := range strings.Split(raw, ",") {
-			k, tagID, err := jellyfinParseID(rawID)
-			if err != nil || k != jellyTag {
+			tagID, err := jellyfinTagQueryID(rawID)
+			if err != nil {
 				return nil, 0, start, errJellyfinQuery
 			}
 			query = query.Where("videos.id IN (?)", database.DB.Table("video_tags").Select("video_id").Where("tag_id = ?", tagID))
@@ -573,6 +653,9 @@ func (s *JellyfinServer) listItems(r *http.Request, q url.Values) ([]map[string]
 	query, err = s.orderVideos(query, q, filter, kind, id)
 	if err != nil {
 		return nil, 0, start, err
+	}
+	if relatedTo != 0 && jellyfinParam(q, "SortBy") == "" {
+		query = query.Clauses(clause.OrderBy{Columns: []clause.OrderByColumn{{Column: clause.Column{Name: "videos.id"}, Desc: true, Reorder: true}}})
 	}
 	if limit == 0 {
 		return items, total, start, nil
@@ -682,7 +765,7 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 		}
 	}
 	// Tag and video ID selections do not apply to folders; reject them explicitly.
-	for _, key := range []string{"Tags", "Genres", "TagIds", "Ids", "ExcludeItemIds"} {
+	for _, key := range []string{"Tags", "Genres", "TagIds", "Ids", "ExcludeItemIds", "PersonIds"} {
 		if jellyfinParam(q, key) != "" {
 			return nil, 0, start, errJellyfinQuery
 		}
@@ -702,8 +785,16 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 	}
 	for _, f := range strings.Split(strings.ToLower(jellyfinParam(q, "Filters")), ",") {
 		switch strings.TrimSpace(f) {
-		case "", "isfolder", "isunplayed":
-		case "isnotfolder", "isfavorite", "isplayed", "isresumable":
+		case "", "isunplayed":
+		case "isfolder":
+			if group == 3 {
+				return items, 0, start, nil
+			}
+		case "isnotfolder":
+			if group != 3 {
+				return items, 0, start, nil
+			}
+		case "isfavorite", "isplayed", "isresumable":
 			return items, 0, start, nil
 		default:
 			return nil, 0, start, errJellyfinQuery
@@ -727,11 +818,40 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 	switch group {
 	case 1:
 		var rows []models.MediaCollection
-		if err := database.DB.WithContext(r.Context()).Order("LOWER(name), id").Find(&rows).Error; err != nil {
+		query := database.DB.WithContext(r.Context()).Model(&models.MediaCollection{})
+		if raw := jellyfinParam(q, "ListItemIds"); raw != "" {
+			ids, err := jellyfinTypedIDs(raw, jellyVideo)
+			if err != nil {
+				return nil, 0, start, err
+			}
+			for _, id := range ids {
+				if _, err := s.visibleVideo(r, id); err != nil {
+					return nil, 0, start, err
+				}
+			}
+			query = query.Where("media_collections.id IN (?)", database.DB.Model(&models.CollectionVideo{}).Select("collection_id").Where("video_id IN ?", ids))
+		}
+		if err := query.Order("LOWER(name), id").Find(&rows).Error; err != nil {
 			return nil, 0, start, err
 		}
 		for _, row := range rows {
-			items = append(items, s.folder(jellyCollection, row.ID, row.Name, "BoxSet", ""))
+			item := s.folder(jellyCollection, row.ID, row.Name, "BoxSet", "")
+			if row.CoverPath != "" {
+				item["ImageTags"] = map[string]string{"Primary": jellyfinArtworkTag(row.CoverPath)}
+			}
+			items = append(items, item)
+		}
+	case 3:
+		query, err := s.peopleQuery(r)
+		if err != nil {
+			return nil, 0, start, err
+		}
+		var rows []models.Person
+		if err := query.Find(&rows).Error; err != nil {
+			return nil, 0, start, err
+		}
+		for _, row := range rows {
+			items = append(items, s.personDTO(row))
 		}
 	case 2:
 		var rows []models.Tag
@@ -793,12 +913,19 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[stri
 		name = video.Name
 	}
 	tags := []string{}
+	tagItems := []map[string]interface{}{}
+	genreItems := []map[string]string{}
 	for _, tag := range video.Tags {
 		tags = append(tags, tag.Name)
+		tagItems = append(tagItems, map[string]interface{}{"Id": tag.ID, "Name": tag.Name})
+		genreItems = append(genreItems, map[string]string{"Id": jellyfinID(jellyTag, tag.ID), "Name": tag.Name})
 	}
 	// CanDelete/CanDownload are what clients gate their delete and download actions on; deletion
 	// moves the file to the library trash (V1.0.3), the same path the desktop and phone feed use.
 	item := map[string]interface{}{"Id": jellyfinID(jellyVideo, video.ID), "ServerId": serverID, "Name": name, "SortName": name, "OriginalTitle": video.OriginalTitle, "Type": "Movie", "MediaType": "Video", "VideoType": "VideoFile", "IsFolder": false, "LocationType": "FileSystem", "PlayAccess": "Full", "CanDelete": true, "CanDownload": true, "RunTimeTicks": int64(video.Duration * 1e7), "Size": video.Size, "Overview": video.Description, "Tags": tags, "Genres": tags, "DateCreated": video.CreatedAt.UTC().Format(time.RFC3339), "UserData": jellyfinUserData(video), "ImageTags": map[string]string{"Primary": strconv.FormatInt(video.UpdatedAt.UnixNano(), 16)}, "BackdropImageTags": []string{}, "PrimaryImageAspectRatio": 16.0 / 9.0, "People": []interface{}{}, "Studios": []interface{}{}, "Chapters": []interface{}{}, "Taglines": []interface{}{}, "ExternalUrls": []interface{}{}, "ProviderIds": map[string]string{}, "MediaSourceCount": 1}
+	// Filebar's detail chips consume named IDs, not only the legacy name arrays.
+	item["TagItems"] = tagItems
+	item["GenreItems"] = genreItems
 	if video.PersonalRating != nil {
 		item["CommunityRating"] = *video.PersonalRating
 	}
@@ -849,12 +976,12 @@ func jellyfinCSVContains(list, value string) bool {
 }
 
 // Projection hints only shape the DTO, which already carries every field; their values are ignored.
-// The Search/Hints Include* switches are hints too: this library has no people, genres, studios or
+// The Search/Hints Include* switches are hints too: this search projection does not include people, genres, studios or
 // artists to offer, and IncludeMedia is evaluated by searchHints before the list runs.
 var jellyfinHintParams = map[string]bool{"fields": true, "enableimages": true, "imagetypelimit": true, "enableimagetypes": true, "enableuserdata": true, "enabletotalrecordcount": true, "groupitems": true, "api_key": true, "apikey": true, "userid": true, "includepeople": true, "includemedia": true, "includegenres": true, "includestudios": true, "includeartists": true}
 
 // Semantic parameters are implemented by listItems/listFolders; anything else stays a 400 (D-02).
-var jellyfinSemanticParams = map[string]bool{"parentid": true, "startindex": true, "limit": true, "sortby": true, "sortorder": true, "searchterm": true, "includeitemtypes": true, "excludeitemtypes": true, "recursive": true, "isfavorite": true, "isplayed": true, "isresumable": true, "filters": true, "tags": true, "genres": true, "tagids": true, "ids": true, "excludeitemids": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "ismissing": true, "collapseboxsetitems": true, "ismovie": true, "isseries": true, "isnews": true, "iskids": true, "issports": true, "namestartswith": true, "namestartswithorgreater": true, "namelessthan": true}
+var jellyfinSemanticParams = map[string]bool{"personids": true, "listitemids": true, "parentid": true, "startindex": true, "limit": true, "sortby": true, "sortorder": true, "searchterm": true, "includeitemtypes": true, "excludeitemtypes": true, "recursive": true, "isfavorite": true, "isplayed": true, "isresumable": true, "filters": true, "tags": true, "genres": true, "tagids": true, "ids": true, "excludeitemids": true, "mediatypes": true, "excludelocationtypes": true, "locationtypes": true, "ismissing": true, "collapseboxsetitems": true, "groupprogramsbyseries": true, "ismovie": true, "isseries": true, "isnews": true, "iskids": true, "issports": true, "namestartswith": true, "namestartswithorgreater": true, "namelessthan": true}
 
 // jellyfinKindFlags are Jellyfin's item-kind switches; only IsMovie describes this library's leaves.
 var jellyfinKindFlags = []struct {
@@ -867,7 +994,7 @@ const jellyfinSortNameExpr = "LOWER(CASE WHEN videos.display_title <> '' THEN vi
 
 // List parameters may arrive as one delimited value or as repeated keys, like Jellyfin's
 // CommaDelimitedCollectionModelBinder accepts; the separator matches how each one is parsed.
-var jellyfinListParams = map[string]string{"includeitemtypes": ",", "excludeitemtypes": ",", "sortby": ",", "sortorder": ",", "filters": ",", "mediatypes": ",", "excludelocationtypes": ",", "locationtypes": ",", "tagids": ",", "ids": ",", "excludeitemids": ",", "fields": ",", "enableimagetypes": ",", "tags": "|", "genres": "|"}
+var jellyfinListParams = map[string]string{"personids": ",", "listitemids": ",", "includeitemtypes": ",", "excludeitemtypes": ",", "sortby": ",", "sortorder": ",", "filters": ",", "mediatypes": ",", "excludelocationtypes": ",", "locationtypes": ",", "tagids": ",", "ids": ",", "excludeitemids": ",", "fields": ",", "enableimagetypes": ",", "tags": "|", "genres": "|"}
 
 // jellyfinNormalizeQuery folds keys to lower case, merges repeated list parameters and rejects
 // unknown parameters or scalar parameters given twice with different values.
@@ -898,7 +1025,7 @@ func jellyfinNormalizeQuery(q url.Values) (url.Values, error) {
 		}
 		merged[key] = values[:1]
 	}
-	for _, name := range []string{"recursive", "ismissing", "collapseboxsetitems"} {
+	for _, name := range []string{"recursive", "ismissing", "collapseboxsetitems", "groupprogramsbyseries"} {
 		if value := merged.Get(name); value != "" {
 			if _, err := strconv.ParseBool(value); err != nil {
 				return nil, errJellyfinQuery

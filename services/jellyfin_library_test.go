@@ -347,7 +347,7 @@ func TestReviewJellyfinHashLogOnSaveFailure(t *testing.T) {
 	}
 	var buf bytes.Buffer
 	database.DB.Logger = logger.New(log.New(&buf, "", 0), logger.Config{LogLevel: logger.Warn})
-	s := NewJellyfinServer(&VideoService{}, nil, nil)
+	s := NewJellyfinServer(&VideoService{}, nil, nil, nil, nil)
 	_, err := s.Configure(JellyfinConfigInput{Username: "viewer", Password: "test-password"})
 	if err == nil {
 		t.Fatal("expected rejected write")

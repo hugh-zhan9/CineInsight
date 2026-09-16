@@ -868,8 +868,8 @@ export default {
         if (!this.feedTags.some(item => item.id === tag.id)) {
           this.feedTags = [...this.feedTags, tag].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN'));
         }
-        this.tagKeyword = '';
         if (!this.isTagAttached(tag.id)) await this.toggleTag(tag);
+        else this.tagKeyword = '';
       } catch (err) {
         this.flashToast(`新建标签失败：${String(err.message || err)}`);
       } finally {
@@ -934,6 +934,7 @@ export default {
       const attached = !this.isTagAttached(tag.id);
       try {
         this.replaceCurrent(await setItemTag(this.currentVideo, tag.id, attached));
+        if (attached) this.tagKeyword = '';
       } catch (err) {
         this.flashToast(`标签写入失败：${String(err.message || err)}`);
       }

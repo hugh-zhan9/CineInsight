@@ -23,7 +23,7 @@ func jellyfinTestServer(t *testing.T) *JellyfinServer {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := NewJellyfinServer(&VideoService{}, nil, nil)
+	s := NewJellyfinServer(&VideoService{}, nil, nil, nil, nil)
 	s.config = models.Settings{JellyfinEnabled: true, JellyfinPort: 8096, JellyfinUsername: "viewer", JellyfinPasswordHash: string(hash), JellyfinServerID: strings.Repeat("a", 32)}
 	return s
 }
@@ -142,7 +142,7 @@ func TestJellyfinExpiredRevokedAndBoundedSessions(t *testing.T) {
 }
 func TestJellyfinConfigureAndGenericSavePreserveCredentials(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	s := NewJellyfinServer(&VideoService{}, nil, nil)
+	s := NewJellyfinServer(&VideoService{}, nil, nil, nil, nil)
 	defer s.Stop()
 	status, err := s.Configure(JellyfinConfigInput{Username: "viewer", Password: "test-password"})
 	if err != nil {
@@ -194,7 +194,7 @@ func TestJellyfinConfigureAndGenericSavePreserveCredentials(t *testing.T) {
 }
 func TestJellyfinConcurrentConfigurationMatchesListener(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	s := NewJellyfinServer(&VideoService{}, nil, nil)
+	s := NewJellyfinServer(&VideoService{}, nil, nil, nil, nil)
 	defer s.Stop()
 	var wg sync.WaitGroup
 	for _, name := range []string{"first", "second"} {
@@ -221,7 +221,7 @@ func TestJellyfinPortConflictIsVisibleAndNeverFallsBack(t *testing.T) {
 	}
 	defer listener.Close()
 	port := listener.Addr().(*net.TCPAddr).Port
-	s := NewJellyfinServer(&VideoService{}, nil, nil)
+	s := NewJellyfinServer(&VideoService{}, nil, nil, nil, nil)
 	defer s.Stop()
 	status, err := s.Configure(JellyfinConfigInput{Enabled: true, Port: port, Username: "viewer", Password: "test-password"})
 	if err != nil {
