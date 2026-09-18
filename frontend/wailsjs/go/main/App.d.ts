@@ -210,8 +210,6 @@ export function GetFaceAnalysisStatus():Promise<services.FaceAnalysisStatus>;
 
 export function GetFaceClusterObservations(arg1:number,arg2:number,arg3:number):Promise<services.FaceClusterObservationPage>;
 
-export function RemoveFaceClusterObservation(arg1:number,arg2:number):Promise<boolean>;
-
 export function GetFaceDataUsage():Promise<services.FaceDataUsage>;
 
 export function GetFaceRuntimeStatus():Promise<services.FaceRuntimeStatus>;
@@ -397,6 +395,8 @@ export function RelocateVideo(arg1:number,arg2:string):Promise<void>;
 export function RemoveCollectionCover(arg1:number):Promise<void>;
 
 export function RemoveCollectionVideo(arg1:number,arg2:number):Promise<void>;
+
+export function RemoveFaceClusterObservation(arg1:number,arg2:number):Promise<boolean>;
 
 export function RemovePersonAvatar(arg1:number):Promise<void>;
 

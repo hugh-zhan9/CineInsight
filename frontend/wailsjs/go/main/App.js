@@ -414,10 +414,6 @@ export function GetFaceClusterObservations(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetFaceClusterObservations'](arg1, arg2, arg3);
 }
 
-export function RemoveFaceClusterObservation(arg1, arg2) {
-  return window['go']['main']['App']['RemoveFaceClusterObservation'](arg1, arg2);
-}
-
 export function GetFaceDataUsage() {
   return window['go']['main']['App']['GetFaceDataUsage']();
 }
@@ -788,6 +784,10 @@ export function RemoveCollectionCover(arg1) {
 
 export function RemoveCollectionVideo(arg1, arg2) {
   return window['go']['main']['App']['RemoveCollectionVideo'](arg1, arg2);
+}
+
+export function RemoveFaceClusterObservation(arg1, arg2) {
+  return window['go']['main']['App']['RemoveFaceClusterObservation'](arg1, arg2);
 }
 
 export function RemovePersonAvatar(arg1) {
