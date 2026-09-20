@@ -16,6 +16,7 @@ export const BACKGROUND_TASK_LABELS = {
   ai_tagging: 'AI 打标',
   image_ai_tagging: '图片 AI 打标',
   exif: '图片 EXIF',
+  image_phash: '图片指纹',
   cleanup: '清理分析',
   collection_suggest: '建议作品集',
   backup: '数据库备份',

@@ -307,7 +307,40 @@ describe('面板与片库页之间的接口', () => {
     wrapper.unmount();
   });
 
-  it('「重算感知哈希」不自己发起任务，交给片库页的补全状态条', async () => {
+  // 外置盘没挂载时本轮会静默跳过大半个库。没有这行提示，界面和插着盘跑出来的
+  // 结果长得一模一样，用户只会觉得"检测不准"。
+  it('本轮跳过的条目要有可见计数', async () => {
+    const wrapper = mountPanel({ deep: true, attachTo: document.body, props: { trashVideos: makeTrashVideos(), afterTrashVideos: vi.fn() } });
+    await flushPromises();
+    wrapper.vm.cleanupDialog.show = true;
+    wrapper.vm.cleanupDialog.analysis = {
+      skipped_unavailable: 1316, skipped_metadata: 4,
+      duplicate_groups: [], near_duplicate_groups: [], same_source_groups: [], low_duration: [], low_resolution: []
+    };
+    await flushPromises();
+
+    const hint = wrapper.find('[data-test="cleanup-skipped-hint"]');
+    expect(hint.exists()).toBe(true);
+    expect(hint.text()).toContain('1316');
+    expect(hint.text()).toContain('4');
+    wrapper.unmount();
+  });
+
+  it('两个跳过计数都是 0 时不出提示', async () => {
+    const wrapper = mountPanel({ deep: true, attachTo: document.body, props: { trashVideos: makeTrashVideos(), afterTrashVideos: vi.fn() } });
+    await flushPromises();
+    wrapper.vm.cleanupDialog.show = true;
+    wrapper.vm.cleanupDialog.analysis = {
+      skipped_unavailable: 0, skipped_metadata: 0,
+      duplicate_groups: [], near_duplicate_groups: [], same_source_groups: [], low_duration: [], low_resolution: []
+    };
+    await flushPromises();
+
+    expect(wrapper.find('[data-test="cleanup-skipped-hint"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('「补全感知哈希」不自己发起任务，交给片库页的补全状态条', async () => {
     const wrapper = mountPanel({ deep: true, attachTo: document.body, props: { trashVideos: makeTrashVideos(), afterTrashVideos: vi.fn(), perceptualHashRunning: false } });
     await flushPromises();
     wrapper.vm.cleanupDialog.show = true;
@@ -317,7 +350,7 @@ describe('面板与片库页之间的接口', () => {
     };
     await flushPromises();
 
-    const button = wrapper.findAll('button').find(item => item.text().includes('重算感知哈希'));
+    const button = wrapper.findAll('button').find(item => item.text().includes('补全感知哈希'));
     expect(button).toBeTruthy();
     await button.trigger('click');
     expect(wrapper.emitted('start-perceptual-hash')).toHaveLength(1);

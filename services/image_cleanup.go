@@ -18,9 +18,10 @@ import (
 const (
 	// imageCleanupHammingThreshold 64 位 dHash 判定近似重复的最大汉明距离（设计 4.8.2 / D-012）。
 	imageCleanupHammingThreshold = 8
-	// imageCleanupBandPrefixLen 近似重复分桶使用的哈希 hex 前缀长度（16 位 hex 取前 4 字符）。
-	imageCleanupBandPrefixLen = 4
-	// imageCleanupMaxBandNeighbors 每个前缀桶保留的邻居上限，巨型桶（连拍）截断保护，
+	// imageCleanupBandCount 近似重复分桶的段数：64 位 dHash 切成 8 段、每段 8 位，
+	// 任一段完全相同即进入逐对比对（镜像视频侧 perceptualBandKeys 的分段方式）。
+	imageCleanupBandCount = 8
+	// imageCleanupMaxBandNeighbors 每个段桶保留的邻居上限，巨型桶（连拍）截断保护，
 	// 镜像 perceptualHashMaxBandNeighbors 的常量思路。
 	imageCleanupMaxBandNeighbors = 64
 	// imageCleanupMaxCandidates 单张图片参与逐对比对的候选上限，镜像 perceptualHashMaxCandidates。
@@ -71,9 +72,11 @@ type ImageCleanupDuplicateGroup struct {
 type ImageCleanupAnalysis struct {
 	DuplicateGroups     []ImageCleanupDuplicateGroup `json:"duplicate_groups"`
 	NearDuplicateGroups []ImageCleanupDuplicateGroup `json:"near_duplicate_groups"`
-	// StaleHashCount 是源文件已变更、感知哈希失效待重算的图片数；这些图片
-	// 暂不参与近似重复检测，浏览图片可自动刷新缩略图与指纹。
+	// StaleHashCount 是没有可用感知哈希的图片数：从没回填过的、源文件变过失效的、
+	// 以及哈希畸形的。这些图片暂不参与近似重复检测，可通过"补全指纹"一键补齐。
 	StaleHashCount int64 `json:"stale_hash_count"`
+	// SkippedUnavailable 是本轮 os.Stat 失败或不是普通文件的图片数。
+	SkippedUnavailable int `json:"skipped_unavailable"`
 }
 
 // ImageCleanupProgress 分析进度快照，镜像 CleanupProgress。
@@ -235,10 +238,14 @@ func (s *ImageCleanupService) AnalyzeImageCleanupCandidates() (*ImageCleanupAnal
 }
 
 func imageCleanupDoneMessage(result *ImageCleanupAnalysis) string {
-	return fmt.Sprintf(
-		"分析完成：精确重复组 %d，近似重复组 %d，指纹过期 %d。",
+	message := fmt.Sprintf(
+		"分析完成：精确重复组 %d，近似重复组 %d，待补全指纹 %d。",
 		len(result.DuplicateGroups), len(result.NearDuplicateGroups), result.StaleHashCount,
 	)
+	if result.SkippedUnavailable > 0 {
+		message += fmt.Sprintf("跳过 %d 张（文件不可访问）。", result.SkippedUnavailable)
+	}
+	return message
 }
 
 // emitDoneForRun 只在自己仍是当前这轮分析时写入 done 进度并回调事件。
@@ -268,23 +275,17 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 		return nil, 0, err
 	}
 
-	// 黑名单目录不参与清理审阅：图片黑名单优先，空则回退通用黑名单（与扫描行为一致）。
-	var settings models.Settings
-	if err := database.DB.Select("scan_exclude_paths", "image_scan_exclude_paths").First(&settings).Error; err == nil {
-		excluded := parseScanExcludePaths(settings.ImageScanExcludePaths)
-		if len(excluded) == 0 {
-			excluded = parseScanExcludePaths(settings.ScanExcludePaths)
-		}
-		if len(excluded) > 0 {
-			filtered := images[:0]
-			for _, img := range images {
-				if isScanPathExcluded(img.Path, excluded) {
-					continue
-				}
-				filtered = append(filtered, img)
+	// 黑名单目录不参与清理审阅。上面的 applyImageVisibility 已经在 SQL 里滤过一道，
+	// 这里再按路径滤一次：SQL 那道是 LIKE 前缀匹配，路径写法有出入时会漏。
+	if excluded, err := imageScanExcludedPaths(database.DB); err == nil && len(excluded) > 0 {
+		filtered := images[:0]
+		for _, img := range images {
+			if isScanPathExcluded(img.Path, excluded) {
+				continue
 			}
-			images = filtered
+			filtered = append(filtered, img)
 		}
+		images = filtered
 	}
 
 	log.Printf("[ImageCleanup] analysis started total_images=%d", len(images))
@@ -292,6 +293,7 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 
 	states := make([]imageCleanupFileState, 0, len(images))
 	sizeBuckets := make(map[int64][]int)
+	skippedUnavailable := 0
 	for idx, img := range images {
 		info, err := os.Stat(img.Path)
 		if err != nil {
@@ -300,10 +302,12 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 			} else {
 				log.Printf("[ImageCleanup] skip unreadable image id=%d path=%s err=%v", img.ID, img.Path, err)
 			}
+			skippedUnavailable++
 			continue
 		}
 		if !info.Mode().IsRegular() {
 			log.Printf("[ImageCleanup] skip non-regular image id=%d path=%s", img.ID, img.Path)
+			skippedUnavailable++
 			continue
 		}
 		sizeBuckets[info.Size()] = append(sizeBuckets[info.Size()], len(states))
@@ -340,7 +344,7 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 		}
 	}
 
-	result := &ImageCleanupAnalysis{}
+	result := &ImageCleanupAnalysis{SkippedUnavailable: skippedUnavailable}
 	for _, bucket := range duplicateBuckets {
 		if len(bucket) < 2 {
 			continue
@@ -393,9 +397,9 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates() (*ImageCleanupAnal
 		log.Printf("[ImageCleanup] enrich members failed (结果仍可用) err=%v", err)
 	}
 
-	log.Printf("[ImageCleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d stale_hash_count=%d hash_candidates=%d",
+	log.Printf("[ImageCleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d stale_hash_count=%d hash_candidates=%d skipped_unavailable=%d",
 		time.Since(startedAt).Round(time.Millisecond),
-		len(result.DuplicateGroups), len(result.NearDuplicateGroups), result.StaleHashCount, len(hashCandidates),
+		len(result.DuplicateGroups), len(result.NearDuplicateGroups), result.StaleHashCount, len(hashCandidates), result.SkippedUnavailable,
 	)
 	// done 事件由调用方在写完状态后发出。
 	return result, len(states), nil
@@ -461,15 +465,39 @@ func forEachImageCleanupMember(result *ImageCleanupAnalysis, visit func(*ImageCl
 	}
 }
 
-// buildNearDuplicateGroups 库内 dHash 近似重复检测：stale 指纹跳过计数、
-// 哈希前缀分桶 + 邻居/候选上限、汉明距离 ≤ 阈值成边、连通分量成组。
+// imageCleanupBandKeys 把 16 位 hex 的 dHash 切成 8 段、每段 8 位，任一段相同即
+// 成为候选对。与视频侧的 perceptualBandKeys 同一套分段，只是图片没有帧维度。
+//
+// 早先这里只用哈希的前 4 个 hex 当唯一一段，等于要求两张图的高 16 位完全一致才肯
+// 比。实测库内距离 2~8 的图片对里只有 60% 能进入比对，另外四成连比都没比；理论上
+// 一对距离恰好为 8 的图只有约 8.5% 的命中率。改成 8 段后同一批数据的覆盖是 100%。
+// 顺带一提，前 4 个 hex 对应的是 8×8 网格最下面两行——裁剪或改比例时最不稳定的
+// 那块，作为唯一的一段尤其不合适。
+func imageCleanupBandKeys(hash string) []string {
+	if len(hash) != imageCleanupBandCount*2 {
+		return nil
+	}
+	keys := make([]string, 0, imageCleanupBandCount)
+	for band := 0; band < imageCleanupBandCount; band++ {
+		keys = append(keys, fmt.Sprintf("%d:%s", band, hash[band*2:band*2+2]))
+	}
+	return keys
+}
+
+// buildNearDuplicateGroups 库内 dHash 近似重复检测：无可用指纹的计数、
+// 8 段分桶 + 邻居/候选上限、汉明距离 ≤ 阈值成边、连通分量成组。
 func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFileState, excluded map[[2]uint]struct{}) ([]ImageCleanupDuplicateGroup, int64) {
 	var staleCount int64
 	valid := make([]imageCleanupHashEntry, 0, len(states))
+	// 四种情况都算"没有可用指纹"（D-CD04）：未回填、源文件变过、哈希畸形。早先只
+	// 数中间那一种，于是一个从没回填过指纹的图库会显示"指纹过期 0"，界面既不提示也
+	// 不给补全入口，近似重复永远是空的，用户看不出为什么。口径与视频侧的
+	// stale_frame_hash_count 一致。
 	for _, state := range states {
 		raw := state.image.PerceptualHash
 		if raw == "" {
-			continue // 哈希未回填不参与近似分析，也不计 stale（无哈希≠stale）
+			staleCount++
+			continue
 		}
 		if state.image.HashSourceSize != state.size || state.image.HashSourceModTimeNS != state.modTimeNS {
 			staleCount++
@@ -477,11 +505,13 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 		}
 		if len(raw) != 16 {
 			log.Printf("[ImageCleanup] skip malformed perceptual hash id=%d hash=%q", state.image.ID, raw)
+			staleCount++
 			continue
 		}
 		hash, err := strconv.ParseUint(raw, 16, 64)
 		if err != nil {
 			log.Printf("[ImageCleanup] skip malformed perceptual hash id=%d hash=%q err=%v", state.image.ID, raw, err)
+			staleCount++
 			continue
 		}
 		valid = append(valid, imageCleanupHashEntry{state: state, hash: hash})
@@ -495,21 +525,24 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(states []imageCleanupFile
 	bands := make(map[string][]int)
 	adjacency := make(map[int]map[int]struct{})
 	for index, entry := range valid {
-		key := entry.state.image.PerceptualHash[:imageCleanupBandPrefixLen]
-		candidates := make([]int, 0, len(bands[key]))
-		for _, other := range bands[key] {
-			if len(candidates) >= imageCleanupMaxCandidates {
-				break
+		candidates := make(map[int]struct{})
+		for _, key := range imageCleanupBandKeys(entry.state.image.PerceptualHash) {
+			if len(candidates) < imageCleanupMaxCandidates {
+				for _, other := range bands[key] {
+					candidates[other] = struct{}{}
+					if len(candidates) >= imageCleanupMaxCandidates {
+						break
+					}
+				}
 			}
-			candidates = append(candidates, other)
+			bucket := append(bands[key], index)
+			if len(bucket) > imageCleanupMaxBandNeighbors {
+				bucket = bucket[len(bucket)-imageCleanupMaxBandNeighbors:]
+			}
+			bands[key] = bucket
 		}
-		bucket := append(bands[key], index)
-		if len(bucket) > imageCleanupMaxBandNeighbors {
-			bucket = bucket[len(bucket)-imageCleanupMaxBandNeighbors:]
-		}
-		bands[key] = bucket
 
-		for _, other := range candidates {
+		for other := range candidates {
 			left := valid[other]
 			pair := imageCleanupPairKey(left.image().ID, entry.image().ID)
 			if _, skip := excluded[pair]; skip {

@@ -201,6 +201,12 @@ func (a *App) enterDatabaseRestoreMode() error {
 	if a.imageEXIFBackfill != nil {
 		a.imageEXIFBackfill.StopAndWait()
 	}
+	// 与上面几个后台任务同理：恢复备份会 Close 掉旧连接再把 database.DB 换成新库。
+	// 这个任务还跑着的话，它会拿旧行的路径去 stat、拿新库的行去判新鲜度，记出一堆
+	// 与两边都对不上的成功/失败，同时并发读写包级 *gorm.DB。
+	if a.imagePHashBackfill != nil {
+		a.imagePHashBackfill.StopAndWait()
+	}
 	if svc := a.semanticIndexService(); svc != nil {
 		svc.StopAndWait()
 	}

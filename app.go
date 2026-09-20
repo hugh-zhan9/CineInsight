@@ -69,6 +69,7 @@ type App struct {
 	libraryWatcher      *services.LibraryWatcherService
 	imageService        *services.ImageService
 	imageEXIFBackfill   *services.ImageEXIFBackfillService
+	imagePHashBackfill  *services.ImagePerceptualHashBackfillService
 	imageThumbnail      *services.ImageThumbnailService
 	imageLibraryService *services.ImageLibraryService
 	imageStatsService   *services.ImageStatsService
@@ -168,6 +169,7 @@ func NewApp() *App {
 		libraryWatcher:        libraryWatcher,
 		imageService:          services.NewImageService(),
 		imageEXIFBackfill:     services.NewImageEXIFBackfillService(),
+		imagePHashBackfill:    services.NewImagePerceptualHashBackfillService(imageThumbnail),
 		imageThumbnail:        imageThumbnail,
 		imageLibraryService:   services.NewImageLibraryService(),
 		imageStatsService:     services.NewImageStatsService(),
@@ -228,6 +230,7 @@ func (a *App) wireBackgroundTaskRegistry() {
 	a.perceptualHash.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.cleanupService.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.imageEXIFBackfill.SetBackgroundTaskRegistry(a.backgroundTasks)
+	a.imagePHashBackfill.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.localMetadata.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.aiTaggingService.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.subtitleService.SetBackgroundTaskRegistry(a.backgroundTasks)
@@ -325,6 +328,13 @@ func (a *App) startup(ctx context.Context) {
 	})
 	a.imageEXIFBackfill.SetEventEmitter(func(status services.ImageEXIFBackfillStatus) {
 		emit("image-exif-backfill-progress", status)
+	})
+	a.imagePHashBackfill.SetEventEmitter(func(status services.ImagePerceptualHashBackfillStatus) {
+		// 补出新指纹意味着近似重复的输入变了，缓存的清理结果要标为可能过期。
+		if status.Completed && status.Succeeded > 0 {
+			a.imageCleanupService.InvalidateAnalysis()
+		}
+		emit("image-perceptual-hash-backfill-progress", status)
 	})
 	a.perceptualHash.SetEventEmitter(func(status services.PerceptualHashStatus) {
 		if status.Completed && status.Succeeded > 0 {
@@ -504,6 +514,9 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.imageEXIFBackfill != nil {
 		a.imageEXIFBackfill.StopAndWait()
+	}
+	if a.imagePHashBackfill != nil {
+		a.imagePHashBackfill.StopAndWait()
 	}
 	if svc := a.semanticIndexService(); svc != nil {
 		svc.StopAndWait()

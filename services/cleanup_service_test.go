@@ -666,3 +666,43 @@ func TestCleanupNearDuplicateSkipsPairsRejectedAsSameSource(t *testing.T) {
 		t.Fatalf("已否认同源的一对不该再以近似重复回来: %+v", result.NearDuplicateGroups)
 	}
 }
+
+// 完成消息里的两个跳过计数各自成句：只有一项非零时摆一个 0 出来，会让人以为
+// 分析哪里没跑对（外置盘插着跑完，"跳过 0 个（文件不可访问）"尤其刺眼）。
+func TestCleanupDoneMessageOmitsZeroSkipCounts(t *testing.T) {
+	cases := []struct {
+		name        string
+		unavailable int
+		metadata    int
+		mustContain []string
+		mustNotHave []string
+	}{
+		{name: "都为零", mustNotHave: []string{"跳过", "取不到元数据"}},
+		{name: "只有取不到元数据", metadata: 2,
+			mustContain: []string{"2 个取不到元数据"},
+			mustNotHave: []string{"跳过 0 个"}},
+		{name: "只有文件不可访问", unavailable: 1316,
+			mustContain: []string{"跳过 1316 个（文件不可访问）"},
+			mustNotHave: []string{"0 个取不到元数据"}},
+		{name: "两项都有", unavailable: 1316, metadata: 4,
+			mustContain: []string{"跳过 1316 个（文件不可访问）", "4 个取不到元数据"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			message := cleanupDoneMessage(&CleanupAnalysis{
+				SkippedUnavailable: tc.unavailable,
+				SkippedMetadata:    tc.metadata,
+			})
+			for _, want := range tc.mustContain {
+				if !strings.Contains(message, want) {
+					t.Fatalf("消息里应含 %q，实际 %q", want, message)
+				}
+			}
+			for _, unwanted := range tc.mustNotHave {
+				if strings.Contains(message, unwanted) {
+					t.Fatalf("消息里不该含 %q，实际 %q", unwanted, message)
+				}
+			}
+		})
+	}
+}

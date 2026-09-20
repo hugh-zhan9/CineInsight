@@ -9,22 +9,23 @@ import (
 type BackgroundTaskKey string
 
 const (
-	BackgroundTaskSubtitle          BackgroundTaskKey = "subtitle"
-	BackgroundTaskEnhancement       BackgroundTaskKey = "enhancement"
-	BackgroundTaskProxy             BackgroundTaskKey = "proxy"
-	BackgroundTaskFace              BackgroundTaskKey = "face"
-	BackgroundTaskFrameHash         BackgroundTaskKey = "frame_hash"
-	BackgroundTaskPerceptualHash    BackgroundTaskKey = "phash"
-	BackgroundTaskTechnical         BackgroundTaskKey = "technical"
-	BackgroundTaskLocalMetadata     BackgroundTaskKey = "local_metadata"
-	BackgroundTaskSemantic          BackgroundTaskKey = "semantic"
-	BackgroundTaskImageSemantic     BackgroundTaskKey = "image_semantic"
-	BackgroundTaskAITagging         BackgroundTaskKey = "ai_tagging"
-	BackgroundTaskImageAITagging    BackgroundTaskKey = "image_ai_tagging"
-	BackgroundTaskEXIF              BackgroundTaskKey = "exif"
-	BackgroundTaskCleanup           BackgroundTaskKey = "cleanup"
-	BackgroundTaskCollectionSuggest BackgroundTaskKey = "collection_suggest"
-	BackgroundTaskBackup            BackgroundTaskKey = "backup"
+	BackgroundTaskSubtitle            BackgroundTaskKey = "subtitle"
+	BackgroundTaskEnhancement         BackgroundTaskKey = "enhancement"
+	BackgroundTaskProxy               BackgroundTaskKey = "proxy"
+	BackgroundTaskFace                BackgroundTaskKey = "face"
+	BackgroundTaskFrameHash           BackgroundTaskKey = "frame_hash"
+	BackgroundTaskPerceptualHash      BackgroundTaskKey = "phash"
+	BackgroundTaskTechnical           BackgroundTaskKey = "technical"
+	BackgroundTaskLocalMetadata       BackgroundTaskKey = "local_metadata"
+	BackgroundTaskSemantic            BackgroundTaskKey = "semantic"
+	BackgroundTaskImageSemantic       BackgroundTaskKey = "image_semantic"
+	BackgroundTaskAITagging           BackgroundTaskKey = "ai_tagging"
+	BackgroundTaskImageAITagging      BackgroundTaskKey = "image_ai_tagging"
+	BackgroundTaskEXIF                BackgroundTaskKey = "exif"
+	BackgroundTaskImagePerceptualHash BackgroundTaskKey = "image_phash"
+	BackgroundTaskCleanup             BackgroundTaskKey = "cleanup"
+	BackgroundTaskCollectionSuggest   BackgroundTaskKey = "collection_suggest"
+	BackgroundTaskBackup              BackgroundTaskKey = "backup"
 	// BackgroundTaskBrowserDownload 是浏览器插件桥接推过来的下载任务（D-B04）。
 	// 它不进空闲门——那道门只挡自动触发的任务，而这些是用户在浏览器里点出来的。
 	BackgroundTaskBrowserDownload BackgroundTaskKey = "browser_download"
@@ -49,6 +50,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskAITagging,
 	BackgroundTaskImageAITagging,
 	BackgroundTaskEXIF,
+	BackgroundTaskImagePerceptualHash,
 	BackgroundTaskCleanup,
 	BackgroundTaskCollectionSuggest,
 	BackgroundTaskBackup,

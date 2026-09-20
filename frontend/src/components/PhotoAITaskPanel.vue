@@ -100,6 +100,55 @@
       </div>
     </div>
 
+    <div class="setting-item image-phash-backfill-controls">
+      <label>图片指纹补全</label>
+      <p class="help-text">
+        清理审阅里的「近似重复」靠这份指纹。不补的话只能靠翻相册时顺带生成，近似重复会一直是空的。已经有新鲜指纹的图片会直接跳过。
+      </p>
+      <div class="image-task-status" :class="{ 'image-task-status--error': Boolean(phashError) }" data-test="image-phash-backfill-status">
+        <strong>{{ phashStatusText }}</strong>
+        <span v-if="phashStatus?.running || phashStatus?.completed || phashStatus?.cancelled">
+          进度 {{ phashStatus.processed || 0 }}/{{ phashStatus.total || 0 }}
+          · 已补 {{ phashStatus.succeeded || 0 }}
+          · 已是最新 {{ phashStatus.skipped || 0 }}
+          · 失败 {{ phashStatus.failed || 0 }}
+        </span>
+        <div v-if="phashProgressRatio !== null" class="image-task-bar" role="progressbar" :aria-valuenow="phashStatus.processed || 0" :aria-valuemin="0" :aria-valuemax="phashStatus.total || 0">
+          <i :style="{ width: phashProgressRatio + '%' }"></i>
+        </div>
+        <span v-if="phashWaitingText" class="image-task-waiting-idle" data-test="image-phash-backfill-waiting-idle">{{ phashWaitingText }}</span>
+        <span v-if="phashError" data-test="image-phash-backfill-error">{{ phashError }}</span>
+        <ul v-if="phashFailures.length" class="image-task-failures" data-test="image-phash-backfill-failures">
+          <li v-for="failure in phashFailures" :key="`phash-${failure.image_id}`">
+            {{ failure.name || `图片 ${failure.image_id}` }}（{{ failure.error || '未知错误' }}）
+          </li>
+        </ul>
+      </div>
+      <div class="image-task-actions">
+        <button
+          type="button"
+          class="btn-primary"
+          :disabled="phashStatus?.running"
+          data-test="image-phash-backfill-start"
+          @click="startPHashBackfill"
+        >开始/继续补全</button>
+        <button
+          v-if="phashWaitingText"
+          type="button"
+          class="btn-secondary"
+          data-test="image-phash-backfill-run-now"
+          @click="runGatedTaskNow('image_phash')"
+        >忽略空闲立即运行</button>
+        <button
+          v-if="phashStatus?.running"
+          type="button"
+          class="btn-secondary"
+          data-test="image-phash-backfill-cancel"
+          @click="cancelPHashBackfill"
+        >取消</button>
+      </div>
+    </div>
+
     <div class="setting-item image-semantic-index-controls">
       <label>图片语义索引</label>
       <p class="help-text">
@@ -152,9 +201,11 @@
 
 <script>
 import {
-  CancelImageAITagging, CancelImageEXIFBackfill, CancelImageSemanticIndex,
-  GetIdleSchedulerStatus, GetImageAITaggingStatus, GetImageEXIFBackfillStatus, GetImageSemanticIndexStatus,
-  RunGatedTaskNow, StartImageAITagging, StartImageEXIFBackfill, StartImageSemanticIndex
+  CancelImageAITagging, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill, CancelImageSemanticIndex,
+  GetIdleSchedulerStatus, GetImageAITaggingStatus, GetImageEXIFBackfillStatus,
+  GetImagePerceptualHashBackfillStatus, GetImageSemanticIndexStatus,
+  RunGatedTaskNow, StartImageAITagging, StartImageEXIFBackfill,
+  StartImagePerceptualHashBackfill, StartImageSemanticIndex
 } from '../../wailsjs/go/main/App';
 import { idleGateWaitingText, isIdleGateNotWaitingError } from '../utils/idleScheduling.js';
 
@@ -175,12 +226,15 @@ export default {
       taggingStatus: null,
       semanticStatus: null,
       exifStatus: null,
+      phashStatus: null,
       taggingError: '',
       semanticError: '',
       exifError: '',
+      phashError: '',
       taggingOff: null,
       semanticOff: null,
       exifOff: null,
+      phashOff: null,
       // 空闲门里"还没开始就在排队"的任务：任务本身尚未运行，状态里读不到 gate 字段，
       // 只能从门的总览里拿（跑到一半被拦住则读各自的 gate）。
       idleWaitingReasons: {},
@@ -214,22 +268,34 @@ export default {
       if (status.completed) return 'EXIF 补全任务已完成';
       return 'EXIF 补全任务未运行';
     },
+    phashStatusText() {
+      const status = this.phashStatus;
+      if (!status) return '正在读取指纹补全任务状态...';
+      if (status.running) return '指纹补全中';
+      if (status.cancelled) return '指纹补全任务已取消，可继续';
+      if (status.completed) return '指纹补全任务已完成';
+      return '指纹补全任务未运行';
+    },
     // 自动触发的那一轮被空闲门挡住时，面板上直接说明原因并给一条出路；
     // 用户自己点「开始」的那一轮不会有 gate.waiting_idle，这两个元素也就不出现。
     taggingWaitingText() { return this.waitingTextFor('image_ai_tagging', this.taggingStatus?.gate); },
     exifWaitingText() { return this.waitingTextFor('exif', this.exifStatus?.gate); },
+    phashWaitingText() { return this.waitingTextFor('image_phash', this.phashStatus?.gate); },
     taggingProgressRatio() { return progressRatio(this.taggingStatus); },
     semanticProgressRatio() { return progressRatio(this.semanticStatus); },
     exifProgressRatio() { return progressRatio(this.exifStatus); },
+    phashProgressRatio() { return progressRatio(this.phashStatus); },
     taggingFailures() { return (this.taggingStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
     semanticFailures() { return (this.semanticStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
-    exifFailures() { return (this.exifStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); }
+    exifFailures() { return (this.exifStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); },
+    phashFailures() { return (this.phashStatus?.failures || []).slice(0, MAX_FAILURES_SHOWN); }
   },
   mounted() {
     this._alive = true;
     this.loadTaggingStatus();
     this.loadSemanticStatus();
     this.loadEXIFStatus();
+    this.loadPHashStatus();
     this.loadIdleSchedulerStatus();
     if (window.runtime?.EventsOn) {
       const idleOff = window.runtime.EventsOn('idle-scheduler-state', status => {
@@ -248,6 +314,10 @@ export default {
         this.exifStatus = { ...(this.exifStatus || {}), ...(status || {}) };
       });
       if (typeof exifOff === 'function') this.exifOff = exifOff;
+      const phashOff = window.runtime.EventsOn('image-perceptual-hash-backfill-progress', status => {
+        this.phashStatus = { ...(this.phashStatus || {}), ...(status || {}) };
+      });
+      if (typeof phashOff === 'function') this.phashOff = phashOff;
     }
   },
   beforeUnmount() {
@@ -256,6 +326,7 @@ export default {
     this.taggingOff?.();
     this.semanticOff?.();
     this.exifOff?.();
+    this.phashOff?.();
     this.idleOff?.();
   },
   methods: {
@@ -287,6 +358,7 @@ export default {
         if (!isIdleGateNotWaitingError(err)) {
           const message = `忽略空闲立即运行失败：${String(err?.message || err)}`;
           if (taskKey === 'exif') this.exifError = message;
+          else if (taskKey === 'image_phash') this.phashError = message;
           else this.taggingError = message;
         }
       }
@@ -295,12 +367,14 @@ export default {
     schedulePoll() {
       clearTimeout(this._pollTimer);
       if (!this._alive) return;
-      if (!this.taggingStatus?.running && !this.semanticStatus?.running && !this.exifStatus?.running) return;
+      if (!this.taggingStatus?.running && !this.semanticStatus?.running &&
+        !this.exifStatus?.running && !this.phashStatus?.running) return;
       this._pollTimer = setTimeout(async () => {
         if (!this._alive) return;
         if (this.taggingStatus?.running) await this.loadTaggingStatus();
         if (this.semanticStatus?.running) await this.loadSemanticStatus();
         if (this.exifStatus?.running) await this.loadEXIFStatus();
+        if (this.phashStatus?.running) await this.loadPHashStatus();
         this.schedulePoll();
       }, POLL_INTERVAL_MS);
     },
@@ -330,6 +404,36 @@ export default {
         return;
       }
       this.schedulePoll();
+    },
+    async loadPHashStatus() {
+      try {
+        this.phashStatus = await GetImagePerceptualHashBackfillStatus() || null;
+      } catch (err) {
+        this.phashError = `读取指纹补全任务状态失败：${String(err?.message || err)}`;
+        return;
+      }
+      this.schedulePoll();
+    },
+    async startPHashBackfill() {
+      if (this.phashStatus?.running) return;
+      this.phashError = '';
+      try {
+        this.phashStatus = { ...(this.phashStatus || {}), ...(await StartImagePerceptualHashBackfill() || {}) };
+      } catch (err) {
+        this.phashError = `启动指纹补全任务失败：${String(err?.message || err)}`;
+        await this.loadPHashStatus();
+        return;
+      }
+      this.schedulePoll();
+    },
+    async cancelPHashBackfill() {
+      this.phashError = '';
+      try {
+        await CancelImagePerceptualHashBackfill();
+      } catch (err) {
+        this.phashError = `取消指纹补全任务失败：${String(err?.message || err)}`;
+      }
+      await this.loadPHashStatus();
     },
     async startEXIFBackfill() {
       if (this.exifStatus?.running) return;

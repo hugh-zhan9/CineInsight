@@ -18,7 +18,9 @@ const (
 	perceptualHashMaxCandidates    = 256
 )
 
-func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}) ([]CleanupDuplicateGroup, map[[2]uint]struct{}, int64, error) {
+// presentVideoIDs 是调用方本轮已确认在扫描范围内、文件也读得到的视频集合。
+// 它只用来数出"连感知哈希行都没有"的视频——那部分早先完全不进任何计数。
+func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupDuplicateGroup, map[[2]uint]struct{}, int64, error) {
 	var rows []models.VideoPerceptualHash
 	if err := database.DB.Preload("Video.Tags").Order("video_id ASC").Find(&rows).Error; err != nil {
 		return nil, nil, 0, err
@@ -28,16 +30,20 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}) ([]CleanupDup
 		return nil, nil, 0, err
 	}
 	var staleCount int64
+	hashedVideoIDs := make(map[uint]struct{}, len(rows))
 	valid := rows[:0]
 	for _, row := range rows {
-		if row.HashEarly == "" || row.HashMiddle == "" || row.HashLate == "" {
-			continue
-		}
 		if !scope.contains(row.Video.Path) {
 			continue
 		}
+		hashedVideoIDs[row.VideoID] = struct{}{}
 		info, err := os.Stat(row.Video.Path)
 		if err != nil || !info.Mode().IsRegular() {
+			// 文件读不到是另一回事，由 SkippedUnavailable 负责报，不算指纹问题。
+			continue
+		}
+		if row.HashEarly == "" || row.HashMiddle == "" || row.HashLate == "" {
+			staleCount++
 			continue
 		}
 		if info.Size() != row.SourceSize || info.ModTime().UnixNano() != row.SourceModTimeNS {
@@ -45,6 +51,15 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}) ([]CleanupDup
 			continue
 		}
 		valid = append(valid, row)
+	}
+	// 从没回填过的视频在这张表里根本没有行，早先因此一个都不进计数：一个没跑过
+	// 补全的库会显示"感知哈希待重算 0"，提示与「重算感知哈希」按钮永不出现，而
+	// 近似重复恒为空——用户看到的是"功能不准"，实际是从没启动过。口径与
+	// stale_frame_hash_count 对齐（D-CD04）。
+	for id := range presentVideoIDs {
+		if _, hashed := hashedVideoIDs[id]; !hashed {
+			staleCount++
+		}
 	}
 	if len(valid) < 2 {
 		return []CleanupDuplicateGroup{}, map[[2]uint]struct{}{}, staleCount, nil

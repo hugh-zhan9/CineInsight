@@ -74,6 +74,8 @@ export function CancelImageAITagging():Promise<void>;
 
 export function CancelImageEXIFBackfill():Promise<void>;
 
+export function CancelImagePerceptualHashBackfill():Promise<void>;
+
 export function CancelImageSemanticIndex():Promise<void>;
 
 export function CancelLocalMetadataBackfill():Promise<void>;
@@ -231,6 +233,8 @@ export function GetImageDetail(arg1:number):Promise<services.ImageDetail>;
 export function GetImageEXIFBackfillStatus():Promise<services.ImageEXIFBackfillStatus>;
 
 export function GetImageInsights():Promise<services.ImageStats>;
+
+export function GetImagePerceptualHashBackfillStatus():Promise<services.ImagePerceptualHashBackfillStatus>;
 
 export function GetImageSemanticIndexStatus():Promise<services.ImageSemanticIndexStatus>;
 
@@ -517,6 +521,8 @@ export function StartImageAITagging():Promise<services.ImageAITaggingStatus>;
 export function StartImageCleanupAnalysis():Promise<services.ImageCleanupStatus>;
 
 export function StartImageEXIFBackfill():Promise<services.ImageEXIFBackfillStatus>;
+
+export function StartImagePerceptualHashBackfill():Promise<services.ImagePerceptualHashBackfillStatus>;
 
 export function StartImageSemanticIndex():Promise<services.ImageSemanticIndexStatus>;
 

@@ -9,6 +9,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"video-master/database"
@@ -46,15 +47,23 @@ type CleanupAnalysis struct {
 	SameSourceGroups    []CleanupSameSourceGroup `json:"same_source_groups"`
 	LowDuration         []models.Video           `json:"low_duration"`
 	LowResolution       []models.Video           `json:"low_resolution"`
-	// StaleHashCount 是源文件已变更、感知哈希失效待重算的视频数；这些视频
-	// 暂不参与近似重复检测，可通过"补全感知哈希"一键重算。
+	// StaleHashCount 是还没有可用感知哈希的视频数（没回填过的 + 源文件变过失效的，
+	// D-CD04）；这些视频暂不参与近似重复检测，可通过"补全感知哈希"一键补齐。
+	// 与 StaleFrameHashCount 同口径：都只数本轮文件确实读得到的视频。
 	StaleHashCount int64 `json:"stale_hash_count"`
 	// ClipGroups 是"完整片 + 从它里面截下来的片段"候选（D-028）。
 	// 建议保留完整片，前端默认不勾选，删除走回收站。
 	ClipGroups []CleanupClipGroup `json:"clip_groups"`
 	// StaleFrameHashCount 是还没有可用帧哈希序列的视频数（没回填过的 + 源文件
 	// 变过失效的）；这些视频暂不参与截取片段识别，可通过"补全帧哈希"一键补齐。
+	// 同样只数本轮文件读得到的视频——读不到的归 SkippedUnavailable 报。
 	StaleFrameHashCount int64 `json:"stale_frame_hash_count"`
+	// SkippedUnavailable 是本轮 os.Stat 失败或指向目录的视频数。外置盘没挂载时
+	// 这个数会很大，而在有这个字段之前界面与插着盘跑出来的结果长得一模一样。
+	SkippedUnavailable int `json:"skipped_unavailable"`
+	// SkippedMetadata 是文件在、但时长或分辨率取不到的视频数。它们仍然参与精确
+	// 重复（那只需要大小与采样哈希），只是不进低清与短视频两类。
+	SkippedMetadata int `json:"skipped_metadata"`
 }
 
 type CleanupProgress struct {
@@ -215,10 +224,33 @@ func (s *CleanupService) AnalyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 }
 
 func cleanupDoneMessage(result *CleanupAnalysis) string {
-	return fmt.Sprintf(
+	message := fmt.Sprintf(
 		"分析完成：重复组 %d，近似重复 %d，同源候选 %d，短视频 %d，低清视频 %d。",
 		len(result.DuplicateGroups), len(result.NearDuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution),
 	)
+	// 两项各自成句：只有一项非零时凑在一起会读成"跳过 0 个（文件不可访问），2 个
+	// 取不到元数据"，一条报完成的消息里摆个 0 只会让人以为哪里没跑对。
+	parts := make([]string, 0, 2)
+	if result.SkippedUnavailable > 0 {
+		parts = append(parts, fmt.Sprintf("跳过 %d 个（文件不可访问）", result.SkippedUnavailable))
+	}
+	if result.SkippedMetadata > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个取不到元数据、只参与精确重复", result.SkippedMetadata))
+	}
+	if len(parts) > 0 {
+		message += strings.Join(parts, "，") + "。"
+	}
+	return message
+}
+
+// cleanupHasStoredMetadata 报告库里这条记录是否曾经被成功探测过。判据取自扫描侧的
+// needsTechnicalRefreshDuringScan（services/video_scan.go），两处必须同口径，否则同一
+// 个视频会在扫描看来是新鲜的、在清理看来要重探。额外多要一个 Width > 0：低清判定
+// 读的是宽高两项，而扫描那条判据只看 Height。
+//
+// 它同时承担第二个职责：区分"真视频但此刻探不到"与"这条记录根本不是视频"。
+func cleanupHasStoredMetadata(video models.Video) bool {
+	return video.Duration > 0 && video.Resolution != "" && video.Width > 0 && video.Height > 0
 }
 
 // analyzeCleanupCandidates 返回分析结果和参与哈希比对的候选数；不发终止事件。
@@ -255,6 +287,9 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 
 	result := &CleanupAnalysis{}
 	sizeBuckets := make(map[int64][]models.Video)
+	// presentVideoIDs 是本轮确认在范围内、文件也确实读得到的视频。近似重复那一步
+	// 要用它数出"连感知哈希行都没有"的视频，而不是再把整库查一遍。
+	presentVideoIDs := make(map[uint]struct{}, len(videos))
 
 	for idx, video := range videos {
 		info, err := os.Stat(video.Path)
@@ -264,32 +299,53 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 			} else {
 				log.Printf("[Cleanup] skip unreadable video id=%d path=%s err=%v", video.ID, video.Path, err)
 			}
+			result.SkippedUnavailable++
 			continue
 		}
 		if info.IsDir() {
 			log.Printf("[Cleanup] skip directory video id=%d path=%s", video.ID, video.Path)
+			result.SkippedUnavailable++
 			continue
 		}
+		presentVideoIDs[video.ID] = struct{}{}
 
 		workingVideo := video
-		freshDuration, freshResolution, freshWidth, freshHeight := videoService.getVideoMetadata(video.Path)
-		hasFreshMetadata := freshDuration > 0 && freshResolution != "" && freshWidth > 0 && freshHeight > 0
-		if hasFreshMetadata {
-			workingVideo.Duration = freshDuration
-			workingVideo.Resolution = freshResolution
-			workingVideo.Width = freshWidth
-			workingVideo.Height = freshHeight
-		} else {
-			log.Printf("[Cleanup] metadata unavailable for candidate id=%d path=%s", video.ID, video.Path)
-			continue
+		// 大小一律以磁盘实测为准：库里的值可能滞后，而它正是精确重复的分桶键。
+		workingVideo.Size = info.Size()
+		hasStoredMetadata := cleanupHasStoredMetadata(video)
+		hasMetadata := hasStoredMetadata && info.Size() == video.Size
+		if !hasMetadata {
+			// 只在库里这条不新鲜时才探测。早先是每轮对整库无条件跑一遍 ffprobe，
+			// 既慢（本机 1439 个视频、大半在外置盘上），又让一次探测失败就把视频
+			// 整条踢出所有类别——包括根本不需要元数据的精确重复。
+			freshDuration, freshResolution, freshWidth, freshHeight := videoService.getVideoMetadata(video.Path)
+			if freshDuration > 0 && freshResolution != "" && freshWidth > 0 && freshHeight > 0 {
+				workingVideo.Duration = freshDuration
+				workingVideo.Resolution = freshResolution
+				workingVideo.Width = freshWidth
+				workingVideo.Height = freshHeight
+				hasMetadata = true
+			} else {
+				log.Printf("[Cleanup] metadata unavailable for candidate id=%d path=%s", video.ID, video.Path)
+				result.SkippedMetadata++
+				if !hasStoredMetadata {
+					// 库里也从来没有过元数据，探测又失败：这条记录根本不是视频
+					// （历史上误入库的源码文件之类）。它不该出现在任何候选里，
+					// 否则用户会被引导去删一批自己的源文件。
+					continue
+				}
+				// 库里有过元数据、只是此刻探测不到（文件损坏、外置盘抖动）：
+				// 这是真视频，继续参与精确重复——那一类只看大小与采样哈希。
+			}
 		}
 
-		if hasFreshMetadata && criteria.MinDuration > 0 && time.Duration(workingVideo.Duration*float64(time.Second)) < criteria.MinDuration {
+		if hasMetadata && criteria.MinDuration > 0 && time.Duration(workingVideo.Duration*float64(time.Second)) < criteria.MinDuration {
 			result.LowDuration = append(result.LowDuration, workingVideo)
 		}
-		if hasFreshMetadata && criteria.MinWidth > 0 && criteria.MinHeight > 0 && (workingVideo.Width < criteria.MinWidth || workingVideo.Height < criteria.MinHeight) {
+		if hasMetadata && criteria.MinWidth > 0 && criteria.MinHeight > 0 && (workingVideo.Width < criteria.MinWidth || workingVideo.Height < criteria.MinHeight) {
 			result.LowResolution = append(result.LowResolution, workingVideo)
 		}
+		// 元数据取不到的视频照样入桶：精确重复只看文件大小与采样哈希。
 		sizeBuckets[workingVideo.Size] = append(sizeBuckets[workingVideo.Size], workingVideo)
 
 		if shouldEmitCleanupProgress(idx+1, len(videos), 400) {
@@ -368,7 +424,7 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	for pair := range rejectedSameSource {
 		excludedPairs[pair] = struct{}{}
 	}
-	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(excludedPairs)
+	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(excludedPairs, presentVideoIDs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -385,7 +441,7 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 
 	// 截取片段是最后一步（D-028）：它只读帧哈希序列表，与上面四类的计算路径互不
 	// 相交。排除集只用精确重复的两两配对，近似重复与同源另有各自的语义。
-	clipGroups, staleFrameHashCount, err := loadCleanupClipGroups(cleanupExactDuplicatePairs(result.DuplicateGroups))
+	clipGroups, staleFrameHashCount, err := loadCleanupClipGroups(cleanupExactDuplicatePairs(result.DuplicateGroups), presentVideoIDs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -396,9 +452,10 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 		return result.DuplicateGroups[i].Original.ID < result.DuplicateGroups[j].Original.ID
 	})
 
-	log.Printf("[Cleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d same_source_groups=%d low_duration=%d low_resolution=%d hash_candidates=%d",
+	log.Printf("[Cleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d same_source_groups=%d low_duration=%d low_resolution=%d hash_candidates=%d stale_hash=%d skipped_unavailable=%d skipped_metadata=%d",
 		time.Since(startedAt).Round(time.Millisecond),
 		len(result.DuplicateGroups), len(result.NearDuplicateGroups), len(result.SameSourceGroups), len(result.LowDuration), len(result.LowResolution), len(hashCandidates),
+		result.StaleHashCount, result.SkippedUnavailable, result.SkippedMetadata,
 	)
 	// done 事件由调用方在写完状态后发出，这里不发，避免前端收到 done 时回读到尚未写入结果的状态。
 	return result, len(hashCandidates), nil

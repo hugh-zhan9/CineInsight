@@ -999,15 +999,16 @@ describe('PhotoLibraryPage cleanup review', () => {
     reason: '感知哈希相近，可能是同图不同尺寸或压缩（不会默认选中）'
   });
 
-  async function openCleanup(analysis, { staleHashCount = 0 } = {}) {
+  async function openCleanup(analysis, { staleHashCount = 0, skippedUnavailable = 0 } = {}) {
     api.SearchImagePage.mockResolvedValue(makePage([]));
     const wrapper = await mountPage();
-    api.StartImageCleanupAnalysis.mockResolvedValue(
-      completedCleanupStatus({ ...analysis, stale_hash_count: staleHashCount })
-    );
-    api.GetImageCleanupStatus.mockResolvedValue(
-      completedCleanupStatus({ ...analysis, stale_hash_count: staleHashCount })
-    );
+    const status = () => completedCleanupStatus({
+      ...analysis,
+      stale_hash_count: staleHashCount,
+      skipped_unavailable: skippedUnavailable
+    });
+    api.StartImageCleanupAnalysis.mockResolvedValue(status());
+    api.GetImageCleanupStatus.mockResolvedValue(status());
     await openPhotoManageItem(wrapper, 'cleanup');
     await flushPromises();
     return wrapper;
@@ -1061,8 +1062,31 @@ describe('PhotoLibraryPage cleanup review', () => {
     expect(wrapper.text()).toContain('4000×3000');
 
     expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('7');
-    expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('浏览图片可自动刷新缩略图与指纹');
+    // 口径改成「未回填 + 失效」之后，提示旁边必须给出补全入口——只报数字而没有
+    // 任何办法，正是这条链路以前的样子。
+    expect(wrapper.get('[data-test="cleanup-stale-hint"]').text()).toContain('还没有可用的指纹');
+    expect(wrapper.get('[data-test="cleanup-start-image-phash"]').exists()).toBe(true);
     expect(wrapper.get('[data-test="cleanup-delete-selected"]').text()).toContain('(2)');
+  });
+
+  it('reports images skipped this round and stays quiet when none were', async () => {
+    // 外置盘没挂载时这个数会很大。没有它，插着盘和不插盘跑出来的界面一模一样，
+    // 用户只会觉得"检测不准"。
+    const wrapper = await openCleanup(
+      { duplicate_groups: [exactGroup()], near_duplicate_groups: [] },
+      { skippedUnavailable: 1969 }
+    );
+    await wrapper.get('[data-test="cleanup-start"]').trigger('click');
+    await flushPromises();
+
+    const hint = wrapper.get('[data-test="image-cleanup-skipped-hint"]');
+    expect(hint.text()).toContain('1969');
+    expect(hint.text()).toContain('文件不可访问');
+
+    const clean = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
+    await clean.get('[data-test="cleanup-start"]').trigger('click');
+    await flushPromises();
+    expect(clean.find('[data-test="image-cleanup-skipped-hint"]').exists()).toBe(false);
   });
 
   it('collapses and expands a directory group', async () => {

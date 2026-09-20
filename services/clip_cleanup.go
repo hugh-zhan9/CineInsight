@@ -43,7 +43,7 @@ type clipSequence struct {
 //
 // excluded 里是已经被别的类别认领的视频对（精确重复）与用户忽略过的对，
 // 它们不再作为截取候选出现。
-func loadCleanupClipGroups(excluded map[[2]uint]struct{}) ([]CleanupClipGroup, int64, error) {
+func loadCleanupClipGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, error) {
 	startedAt := time.Now()
 	// 只取用得上的列，且不预载标签：一行序列的 blob 就有 ~30 KB，整库读一遍已经
 	// 是这一步的内存峰值，没必要再把标签关联和其余列拖进来。截取候选的保留项由
@@ -100,10 +100,7 @@ func loadCleanupClipGroups(excluded map[[2]uint]struct{}) ([]CleanupClipGroup, i
 	// 放掉引用，别在后面的两两比较期间白占一倍内存。
 	rows = nil
 
-	staleCount, err := countVideosWithoutUsableFrameHash(scope, usable)
-	if err != nil {
-		return nil, 0, err
-	}
+	staleCount := countVideosWithoutUsableFrameHash(presentVideoIDs, usable)
 	if len(sequences) < 2 {
 		return []CleanupClipGroup{}, staleCount, nil
 	}
@@ -204,29 +201,24 @@ func clipDismissalStillApplies(dismissed map[[2]uint]models.ClipDismissal, full,
 		record.ClipSourceSize == clip.sourceSize && record.ClipSourceModTimeNS == clip.sourceMod
 }
 
-// countVideosWithoutUsableFrameHash 统计扫描根之内还没有可用序列的活跃视频数。
+// countVideosWithoutUsableFrameHash 统计本轮范围内、文件确实读得到、却还没有可用
+// 序列的视频数。
 //
 // 没回填过与失效待重算合成一个数：对用户来说这两种情况的动作完全一样——点一次
 // "补全帧哈希"。分开报两个数字只会让面板上多一行没人看的统计。
-func countVideosWithoutUsableFrameHash(scope cleanupPathScope, usable map[uint]clipSequence) (int64, error) {
-	scoped, err := applyScanRootScope(database.DB.Model(&models.Video{}).Select("id", "path"))
-	if err != nil {
-		return 0, err
-	}
-	var videos []models.Video
-	if err := scoped.Find(&videos).Error; err != nil {
-		return 0, err
-	}
+//
+// 只数 presentVideoIDs（用户裁决 2026-09-20）：早先是把扫描根内的视频整个查一遍、
+// 一个 os.Stat 都不做，于是外置盘没插时同一个面板会并排出现"123 个没有感知哈希"
+// （那一侧按可访问性过滤了）和"1439 个没有帧哈希"。文件读不到是另一回事，由
+// SkippedUnavailable 负责报。顺带省掉这里原本整库再读一遍视频表的开销。
+func countVideosWithoutUsableFrameHash(presentVideoIDs map[uint]struct{}, usable map[uint]clipSequence) int64 {
 	var missing int64
-	for _, video := range videos {
-		if !scope.contains(video.Path) {
-			continue
-		}
-		if _, ok := usable[video.ID]; !ok {
+	for id := range presentVideoIDs {
+		if _, ok := usable[id]; !ok {
 			missing++
 		}
 	}
-	return missing, nil
+	return missing
 }
 
 func loadClipDismissals() (map[[2]uint]models.ClipDismissal, error) {

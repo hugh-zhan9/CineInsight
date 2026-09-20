@@ -147,8 +147,13 @@ func TestImageCleanupExactDuplicateGroupAndOriginalSelection(t *testing.T) {
 	if imageCleanupContainsID(ids, sizeOnly.ID) || imageCleanupContainsID(ids, unrelated.ID) {
 		t.Fatalf("同大小不同内容/无关图片不应进组: %v", ids)
 	}
-	if len(analysis.NearDuplicateGroups) != 0 || analysis.StaleHashCount != 0 {
-		t.Fatalf("无哈希图片不应产出近似组或 stale 计数，实际 %+v", analysis)
+	if len(analysis.NearDuplicateGroups) != 0 {
+		t.Fatalf("无哈希图片不应产出近似组，实际 %+v", analysis.NearDuplicateGroups)
+	}
+	// 四张夹具都没有指纹，四张都计入待补全（D-CD04）。早先"无哈希不计"使一个
+	// 从没回填过的图库显示"指纹过期 0"，用户看不出近似重复为什么是空的。
+	if analysis.StaleHashCount != 4 {
+		t.Fatalf("四张无指纹图片都应计入待补全，实际 %d", analysis.StaleHashCount)
 	}
 }
 
@@ -199,15 +204,22 @@ func TestImageCleanupNearDuplicateGroupsByHammingDistance(t *testing.T) {
 	if group.Original.ID != big.ID {
 		t.Fatalf("近似组 Original 应按像素数选中 %d，实际 %d", big.ID, group.Original.ID)
 	}
-	if len(group.Candidates) != 1 || group.Candidates[0].ID != smallVariant.ID {
-		t.Fatalf("近似组候选应为 %d，实际 %+v", smallVariant.ID, group.Candidates)
-	}
 	if !strings.Contains(group.Reason, "感知哈希") {
 		t.Fatalf("近似重复 Reason 不符: %q", group.Reason)
 	}
 	ids := imageCleanupGroupIDs(group)
-	if imageCleanupContainsID(ids, farSameBand.ID) || imageCleanupContainsID(ids, closeOtherBand.ID) {
-		t.Fatalf("汉明距离超阈值或不同分桶的图片不应进组: %v", ids)
+	// closeOtherBand 与 big 的距离只有 2，本来就该是近似重复。单段前缀分桶时它因为
+	// 高 16 位不同而永远进不了比对——那正是 D-CD03 要修的漏检。改成 8 段之后
+	// 它们共享低 6 段，能比上了。
+	if !imageCleanupContainsID(ids, smallVariant.ID) || !imageCleanupContainsID(ids, closeOtherBand.ID) {
+		t.Fatalf("距离 ≤8 的两张都应进组（含跨段命中的 close-other-band）: %v", ids)
+	}
+	if len(group.Candidates) != 2 {
+		t.Fatalf("近似组候选应为 2 张，实际 %+v", group.Candidates)
+	}
+	// farSameBand 同段但距离 32，仍然必须被阈值挡住：放宽分桶不等于放宽判定。
+	if imageCleanupContainsID(ids, farSameBand.ID) {
+		t.Fatalf("汉明距离超阈值的图片不应进组: %v", ids)
 	}
 }
 
@@ -353,8 +365,9 @@ func TestImageCleanupStaleHashCountedAndSkipped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
-	if analysis.StaleHashCount != 1 {
-		t.Fatalf("StaleHashCount 应为 1（无哈希不计），实际 %d", analysis.StaleHashCount)
+	// 失效的 stale.jpg 与从未回填的 no-hash.jpg 都算"没有可用指纹"（D-CD04）。
+	if analysis.StaleHashCount != 2 {
+		t.Fatalf("StaleHashCount 应为 2（失效 1 + 未回填 1），实际 %d", analysis.StaleHashCount)
 	}
 	if len(analysis.NearDuplicateGroups) != 0 {
 		t.Fatalf("stale 指纹图片不应参与近似检测，实际 %+v", analysis.NearDuplicateGroups)
@@ -435,11 +448,15 @@ func TestImageCleanupDismissalExcludesGroupAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestImageCleanupGiantBandBucketTruncatesNeighbors(t *testing.T) {
+// 巨型桶的邻居上限仍然生效，但多段分桶让它不再吞掉本该命中的对（D-CD03）。
+//
+// A 先入桶，随后 65 个 filler 把 A 挤出"高两段"那几个桶的邻居窗口。单段分桶时
+// 这就意味着与 A 哈希完全相同的 Z 永远看不到 A——一条纯粹由实现上限造成的漏检。
+// 改成 8 段之后 A 与 Z 还共享 filler 不在的那几段，桶里只有它们俩，从不溢出，
+// 于是照样成组。这正是多段冗余要买的东西。
+func TestImageCleanupGiantBandBucketKeepsPairsFoundByOtherBands(t *testing.T) {
 	setupImageServiceTestDB(t)
 	dir := t.TempDir()
-	// A 先入桶，随后 65 个同前缀但距离远（>8）的 filler 把 A 挤出邻居窗口，
-	// 最后与 A 哈希完全相同的 Z 到达时已看不到 A。
 	first := imageCleanupCreateImage(t, filepath.Join(dir, "victim-a.jpg"), bytes.Repeat([]byte("a"), 1000), "abcd000000000000", 100, 100)
 	fillerCount := imageCleanupMaxBandNeighbors + 1
 	for i := 0; i < fillerCount; i++ {
@@ -453,17 +470,32 @@ func TestImageCleanupGiantBandBucketTruncatesNeighbors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
-	// filler 之间距离 0，分组仍产出（边界表：巨型桶截断后分组仍产出）。
-	if len(analysis.NearDuplicateGroups) != 1 {
-		t.Fatalf("应产出 1 个 filler 近似重复组，实际 %d", len(analysis.NearDuplicateGroups))
+	// filler 彼此距离 0 成一组；A 与 Z 距离 0 另成一组。
+	if len(analysis.NearDuplicateGroups) != 2 {
+		t.Fatalf("应产出 2 个近似重复组（filler 一组、A/Z 一组），实际 %d", len(analysis.NearDuplicateGroups))
 	}
-	group := analysis.NearDuplicateGroups[0]
-	if len(group.Candidates)+1 != fillerCount {
-		t.Fatalf("filler 组应含 %d 张图片，实际 %d", fillerCount, len(group.Candidates)+1)
+	var fillerGroup, victimGroup *ImageCleanupDuplicateGroup
+	for i := range analysis.NearDuplicateGroups {
+		group := &analysis.NearDuplicateGroups[i]
+		if imageCleanupContainsID(imageCleanupGroupIDs(*group), first.ID) {
+			victimGroup = group
+			continue
+		}
+		fillerGroup = group
 	}
-	ids := imageCleanupGroupIDs(group)
-	if imageCleanupContainsID(ids, first.ID) || imageCleanupContainsID(ids, last.ID) {
-		t.Fatalf("被邻居上限截断的 A/Z 不应进 filler 组: %v", ids)
+	if fillerGroup == nil || victimGroup == nil {
+		t.Fatalf("两组应当一组是 filler、一组是 A/Z，实际 %+v", analysis.NearDuplicateGroups)
+	}
+	if len(fillerGroup.Candidates)+1 != fillerCount {
+		t.Fatalf("filler 组应含 %d 张图片，实际 %d", fillerCount, len(fillerGroup.Candidates)+1)
+	}
+	victimIDs := imageCleanupGroupIDs(*victimGroup)
+	if len(victimIDs) != 2 || !imageCleanupContainsID(victimIDs, last.ID) {
+		t.Fatalf("A/Z 应当各自成对（距离 0，靠 filler 不占的那几段命中）: %v", victimIDs)
+	}
+	// 距离 32 的 filler 不许混进 A/Z 那一组：放宽分桶不等于放宽判定。
+	if len(fillerGroup.Candidates)+1+len(victimIDs) != fillerCount+2 {
+		t.Fatalf("两组成员总数不对: filler=%d victim=%d", len(fillerGroup.Candidates)+1, len(victimIDs))
 	}
 }
 
@@ -570,5 +602,69 @@ func TestImageCleanupStartStatusProgressAndInvalidate(t *testing.T) {
 	}
 	if len(analysis.DuplicateGroups) != 0 {
 		t.Fatalf("删除候选后重新分析不应再成组，实际 %+v", analysis.DuplicateGroups)
+	}
+}
+
+// imageCleanupHashState 造一个只为走分桶/成组的内存条目：不落盘、不进库，
+// 因为 buildNearDuplicateGroups 只读 image 的哈希三件套与 state 的实测大小。
+func imageCleanupHashState(id uint, name string, hash string) imageCleanupFileState {
+	return imageCleanupFileState{
+		image: models.Image{
+			ID: id, Name: name, Path: "/tmp/" + name, Directory: "/tmp",
+			Size: 100, PerceptualHash: hash,
+			HashSourceSize: 100, HashSourceModTimeNS: 1,
+		},
+		size:      100,
+		modTimeNS: 1,
+	}
+}
+
+// imageCleanupBandFiller 造一张"只在第 band 段与全零哈希相同、其余段全是 ff"的图：
+// 会跟全零哈希落进同一个桶，但汉明距离 56，永远不成边。
+func imageCleanupBandFiller(band int) string {
+	pairs := make([]string, imageCleanupBandCount)
+	for i := range pairs {
+		pairs[i] = "ff"
+	}
+	pairs[band] = "00"
+	return strings.Join(pairs, "")
+}
+
+// 候选上限（256）仍然生效：前几段把名额占满之后，后面几段根本不扫，真正的近似
+// 重复因此被漏掉。这是上限换来的代价，也是 TC-05 要钉住的东西——分桶从 1 段放宽到
+// 8 段之后，一张图最多能攒 8×64 个候选，上限第一次真的够得着了。
+func TestImageCleanupCandidateCapStopsScanningLaterBands(t *testing.T) {
+	// 前 4 段各塞满一桶（64 张），刚好把 256 个候选名额占光。
+	states := make([]imageCleanupFileState, 0, imageCleanupMaxCandidates+2)
+	var id uint = 1
+	for band := 0; band < imageCleanupMaxCandidates/imageCleanupMaxBandNeighbors; band++ {
+		for i := 0; i < imageCleanupMaxBandNeighbors; i++ {
+			states = append(states, imageCleanupHashState(id, fmt.Sprintf("filler-%d-%02d.jpg", band, i), imageCleanupBandFiller(band)))
+			id++
+		}
+	}
+	// 只在最后一段与受害者相同、距离 7（阈值内）的真近似重复。
+	const nearHash = "0101010101010100"
+	near := imageCleanupHashState(id, "near.jpg", nearHash)
+	id++
+	victim := imageCleanupHashState(id, "victim.jpg", "0000000000000000")
+	states = append(states, near, victim)
+
+	svc := NewImageCleanupService()
+	groups, stale := svc.buildNearDuplicateGroups(states, nil)
+	if stale != 0 {
+		t.Fatalf("全部条目都有可用指纹，stale 应为 0，实际 %d", stale)
+	}
+	for _, group := range groups {
+		if imageCleanupContainsID(imageCleanupGroupIDs(group), victim.image.ID) {
+			t.Fatalf("候选上限没生效：受害者本不该扫到第 8 段的邻居，却成了组 %v", imageCleanupGroupIDs(group))
+		}
+	}
+
+	// 对照组：把占名额的 filler 去掉，同一对必须能成组——证明上面漏掉那一对确实是
+	// 上限造成的，而不是哈希或阈值构造错了。
+	controlGroups, _ := svc.buildNearDuplicateGroups([]imageCleanupFileState{near, victim}, nil)
+	if len(controlGroups) != 1 || len(imageCleanupGroupIDs(controlGroups[0])) != 2 {
+		t.Fatalf("对照组应当成一对（距离 7，在阈值 %d 内），实际 %+v", imageCleanupHammingThreshold, controlGroups)
 	}
 }

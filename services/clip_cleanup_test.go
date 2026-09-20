@@ -375,8 +375,12 @@ func TestCleanupAnalysisLegacyCategoriesSnapshot(t *testing.T) {
 	if !sameUintSet(videoIDs(result.LowResolution), []uint{small.ID}) {
 		t.Fatalf("低清候选不对（根外的 small.mp4 应被裁掉）: %v", videoIDs(result.LowResolution))
 	}
-	if result.StaleHashCount != 0 {
-		t.Fatalf("感知哈希待重算数应为 0，实际 %d", result.StaleHashCount)
+	// 根内八个视频里只有 near-a / near-b 播了感知哈希行，其余六个一行都没有。
+	// 口径改为"未回填 + 失效"之后（D-CD04），这六个要如实计入——早先未回填的
+	// 一个都不数，界面于是永远显示 0、不给补全入口。
+	// 这里同时还钉住扫描根裁剪：根外那八个若漏进来，计数会是 14 而不是 6。
+	if result.StaleHashCount != 6 {
+		t.Fatalf("感知哈希待补全数应为 6（根内未回填的六个），实际 %d", result.StaleHashCount)
 	}
 
 	// 逐个点名：根外的八个视频一个都不许出现在任何类别里。
@@ -452,4 +456,35 @@ func sameUintSet(left, right []uint) bool {
 		}
 	}
 	return true
+}
+
+// 文件读不到的视频不计入任何"待补全"数（用户裁决 2026-09-20）。
+//
+// 外置盘没插时这个差别很大：感知哈希那一侧本来就只数 os.Stat 过得去的视频，帧哈希
+// 这一侧早先一个都不过滤，于是同一个面板会并排出现"123 个没有感知哈希"和"1439 个
+// 没有帧哈希"。文件读不到是另一回事，由 SkippedUnavailable 负责报。
+func TestCleanupAnalysisExcludesUnavailableVideosFromStaleCounts(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	mockFFProbe(t, root)
+	present := clipFixtureVideo(t, root, "present.mp4", "present-content")
+	missing := clipFixtureVideo(t, root, "missing.mp4", "missing-content")
+	// 模拟外置盘没挂载：库里有行，文件没了。
+	if err := os.Remove(missing.Path); err != nil {
+		t.Fatalf("删除文件失败: %v", err)
+	}
+
+	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil {
+		t.Fatalf("分析失败: %v", err)
+	}
+	if result.SkippedUnavailable != 1 {
+		t.Fatalf("读不到的那个应计入本轮跳过，实际 %d", result.SkippedUnavailable)
+	}
+	if result.StaleFrameHashCount != 1 {
+		t.Fatalf("待补全帧哈希数应只数读得到的那个（id=%d），实际 %d", present.ID, result.StaleFrameHashCount)
+	}
+	if result.StaleHashCount != 1 {
+		t.Fatalf("待补全感知哈希数应与帧哈希同口径，实际 %d", result.StaleHashCount)
+	}
 }

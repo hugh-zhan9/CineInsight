@@ -129,10 +129,11 @@ type Settings struct {
 
 	// 扫描完成后自动接着跑的后台任务。默认全关：这些都吃 CPU/IO，
 	// 什么时候跑该由用户决定，不能装完就替他占着机器。
-	AutoTechnicalBackfill        bool       `json:"auto_technical_backfill"`  // 补全分辨率/时长等技术元数据
-	AutoPerceptualHash           bool       `json:"auto_perceptual_hash"`     // 补全感知哈希（近似重复检测的前提）
-	AutoCleanupAnalysis          bool       `json:"auto_cleanup_analysis"`    // 扫描后重算清理候选
-	AutoImageEXIFBackfill        bool       `json:"auto_image_exif_backfill"` // 图片 EXIF/GPS 补全
+	AutoTechnicalBackfill        bool       `json:"auto_technical_backfill"`    // 补全分辨率/时长等技术元数据
+	AutoPerceptualHash           bool       `json:"auto_perceptual_hash"`       // 补全感知哈希（近似重复检测的前提）
+	AutoCleanupAnalysis          bool       `json:"auto_cleanup_analysis"`      // 扫描后重算清理候选
+	AutoImageEXIFBackfill        bool       `json:"auto_image_exif_backfill"`   // 图片 EXIF/GPS 补全
+	AutoImagePerceptualHash      bool       `json:"auto_image_perceptual_hash"` // 图片感知哈希补全（近似重复检测的前提）
 	AutoCollectionSuggestions    bool       `json:"auto_collection_suggestions"`
 	AIQualityEnabled             bool       `json:"ai_quality_enabled"` // 显示 AI 质量评估入口
 	ShortFeedMaxDurationMinutes  int        `gorm:"default:5" json:"short_feed_max_duration_minutes"`

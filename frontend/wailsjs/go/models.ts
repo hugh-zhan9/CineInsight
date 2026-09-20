@@ -421,6 +421,7 @@ export namespace models {
 	    auto_perceptual_hash: boolean;
 	    auto_cleanup_analysis: boolean;
 	    auto_image_exif_backfill: boolean;
+	    auto_image_perceptual_hash: boolean;
 	    auto_collection_suggestions: boolean;
 	    ai_quality_enabled: boolean;
 	    short_feed_max_duration_minutes: number;
@@ -497,6 +498,7 @@ export namespace models {
 	        this.auto_perceptual_hash = source["auto_perceptual_hash"];
 	        this.auto_cleanup_analysis = source["auto_cleanup_analysis"];
 	        this.auto_image_exif_backfill = source["auto_image_exif_backfill"];
+	        this.auto_image_perceptual_hash = source["auto_image_perceptual_hash"];
 	        this.auto_collection_suggestions = source["auto_collection_suggestions"];
 	        this.ai_quality_enabled = source["ai_quality_enabled"];
 	        this.short_feed_max_duration_minutes = source["short_feed_max_duration_minutes"];
@@ -1552,6 +1554,8 @@ export namespace services {
 	    stale_hash_count: number;
 	    clip_groups: CleanupClipGroup[];
 	    stale_frame_hash_count: number;
+	    skipped_unavailable: number;
+	    skipped_metadata: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new CleanupAnalysis(source);
@@ -1567,6 +1571,8 @@ export namespace services {
 	        this.stale_hash_count = source["stale_hash_count"];
 	        this.clip_groups = this.convertValues(source["clip_groups"], CleanupClipGroup);
 	        this.stale_frame_hash_count = source["stale_frame_hash_count"];
+	        this.skipped_unavailable = source["skipped_unavailable"];
+	        this.skipped_metadata = source["skipped_metadata"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -2938,6 +2944,7 @@ export namespace services {
 	    duplicate_groups: ImageCleanupDuplicateGroup[];
 	    near_duplicate_groups: ImageCleanupDuplicateGroup[];
 	    stale_hash_count: number;
+	    skipped_unavailable: number;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImageCleanupAnalysis(source);
@@ -2948,6 +2955,7 @@ export namespace services {
 	        this.duplicate_groups = this.convertValues(source["duplicate_groups"], ImageCleanupDuplicateGroup);
 	        this.near_duplicate_groups = this.convertValues(source["near_duplicate_groups"], ImageCleanupDuplicateGroup);
 	        this.stale_hash_count = source["stale_hash_count"];
+	        this.skipped_unavailable = source["skipped_unavailable"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -3334,6 +3342,76 @@ export namespace services {
 	        this.filter = this.convertValues(source["filter"], ImageFilter);
 	        this.cursor = this.convertValues(source["cursor"], ImageCursor);
 	        this.limit = source["limit"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ImagePerceptualHashBackfillFailure {
+	    image_id: number;
+	    name: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImagePerceptualHashBackfillFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.name = source["name"];
+	        this.error = source["error"];
+	    }
+	}
+	export class ImagePerceptualHashBackfillStatus {
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    current_image_id: number;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: ImagePerceptualHashBackfillFailure[];
+	    gate: TaskGateState;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImagePerceptualHashBackfillStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.current_image_id = source["current_image_id"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], ImagePerceptualHashBackfillFailure);
+	        this.gate = this.convertValues(source["gate"], TaskGateState);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

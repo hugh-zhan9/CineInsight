@@ -13,10 +13,24 @@ import (
 )
 
 const (
-	sameSourceFingerprintVersion = "same-source-dhash-v1"
+	// sameSourceFingerprintVersion 在 v2 上是因为 differenceHash 由点采样改成了面积
+	// 平均（D-CD01）。ensureFingerprint 的 cacheValid 带版本比较，旧行因此自动失效
+	// 重算，不需要迁移。
+	sameSourceFingerprintVersion = "same-source-dhash-v2"
 	sameSourceHashMatchDistance  = 14
 	sameSourceHashMedianDistance = 12
 	sameSourceContentChunkSize   = 64 * 1024
+)
+
+const (
+	// differenceHash 的采样网格：9 列相邻两两比较，每行得到 8 位。
+	differenceHashGridWidth  = 9
+	differenceHashGridHeight = 8
+	// differenceHashMaxSamplesPerAxis 是单个格子在一个轴上的取样上限。两个调用点的
+	// 格子都远小于它——长边 480 的图片缩略图约 60 像素，宽度上限 512 的 AI 抽帧约
+	// 57 像素——所以它在当前代码里从不触发，只是给将来传进超大图的调用方兜住
+	// O(像素数) 的代价。
+	differenceHashMaxSamplesPerAxis = 64
 )
 
 type sameSourceFingerprintPayload struct {
@@ -93,13 +107,33 @@ func anchoredCrop(bounds image.Rectangle, widthRatio, heightRatio, anchorX, anch
 	return image.Rect(x, y, x+width, y+height)
 }
 
+// differenceHash 计算 64 位 dHash：把 region 切成 9×8 个格子，取每格的亮度均值，
+// 同一行内相邻两格比大小得出一位。位序（y*8+x）是既有契约，不能改。
+//
+// 每格取均值而不是取一个像素，是这里的要害。早先的实现每格只采一个点，等于完全
+// 没有低通：实测同一张图的 480px 与 2560px 两个版本会差出 4 位，而近似重复的判定
+// 阈值总共才 8——光是"同图不同尺寸"就吃掉一半预算，再叠一点压缩或裁剪就越过阈值
+// 报不出来。改成面积平均后同样这两版的距离中位数是 0。视频侧的两条哈希流水线本来
+// 就让 ffmpeg 用 scale=9:8:flags=lanczos / flags=area 做同一件事，这里是它们在 Go
+// 侧的对应物。
 func differenceHash(src image.Image, region image.Rectangle) uint64 {
+	if region.Dx() < 1 || region.Dy() < 1 {
+		return 0
+	}
+	var cells [differenceHashGridWidth * differenceHashGridHeight]uint64
+	for y := 0; y < differenceHashGridHeight; y++ {
+		top, bottom := hashCellBounds(region.Min.Y, region.Dy(), y, differenceHashGridHeight, region.Max.Y)
+		for x := 0; x < differenceHashGridWidth; x++ {
+			left, right := hashCellBounds(region.Min.X, region.Dx(), x, differenceHashGridWidth, region.Max.X)
+			cells[y*differenceHashGridWidth+x] = averageLuma(src, left, right, top, bottom)
+		}
+	}
+
 	var result uint64
-	for y := 0; y < 8; y++ {
-		for x := 0; x < 8; x++ {
-			left := sampledLuma(src, region, x, y, 9, 8)
-			right := sampledLuma(src, region, x+1, y, 9, 8)
-			if left > right {
+	for y := 0; y < differenceHashGridHeight; y++ {
+		row := y * differenceHashGridWidth
+		for x := 0; x < differenceHashGridWidth-1; x++ {
+			if cells[row+x] > cells[row+x+1] {
 				result |= uint64(1) << uint(y*8+x)
 			}
 		}
@@ -107,11 +141,51 @@ func differenceHash(src image.Image, region image.Rectangle) uint64 {
 	return result
 }
 
-func sampledLuma(src image.Image, region image.Rectangle, x, y, width, height int) uint32 {
-	px := region.Min.X + minInt(region.Dx()-1, x*region.Dx()/width)
-	py := region.Min.Y + minInt(region.Dy()-1, y*region.Dy()/height)
-	r, g, b, _ := src.At(px, py).RGBA()
-	return (299*r + 587*g + 114*b) / 1000
+// hashCellBounds 给出第 index 个格子在一个轴上的 [lo, hi) 像素区间。图比网格还小时
+// 格子会退化成单个像素——夹紧而不是返回空区间，8×7 的小图同样要能出哈希。
+func hashCellBounds(start, span, index, divisions, limit int) (int, int) {
+	lo := start + index*span/divisions
+	if lo >= limit {
+		lo = limit - 1
+	}
+	if lo < start {
+		lo = start
+	}
+	hi := start + (index+1)*span/divisions
+	if hi <= lo {
+		hi = lo + 1
+	}
+	if hi > limit {
+		hi = limit
+	}
+	return lo, hi
+}
+
+// averageLuma 求 [x0,x1)×[y0,y1) 的平均亮度。格子边长不超过采样上限时逐像素全取，
+// 也就是精确的面积平均；超过时按等距位置抽，代价封顶。
+func averageLuma(src image.Image, x0, x1, y0, y1 int) uint64 {
+	spanX, spanY := x1-x0, y1-y0
+	countX, countY := hashAxisSampleCount(spanX), hashAxisSampleCount(spanY)
+	var total uint64
+	for j := 0; j < countY; j++ {
+		py := y0 + j*spanY/countY
+		for i := 0; i < countX; i++ {
+			px := x0 + i*spanX/countX
+			r, g, b, _ := src.At(px, py).RGBA()
+			total += uint64((299*r + 587*g + 114*b) / 1000)
+		}
+	}
+	return total / uint64(countX*countY)
+}
+
+func hashAxisSampleCount(span int) int {
+	if span < 1 {
+		return 1
+	}
+	if span > differenceHashMaxSamplesPerAxis {
+		return differenceHashMaxSamplesPerAxis
+	}
+	return span
 }
 
 func scoreSameSourceFingerprints(left, right sameSourceFingerprintPayload) (medianDistance, matchedAnchors int, ok bool) {

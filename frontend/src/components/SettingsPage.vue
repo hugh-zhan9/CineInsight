@@ -301,6 +301,7 @@ export default {
             auto_perceptual_hash: this.settingsForm.auto_perceptual_hash,
             auto_cleanup_analysis: this.settingsForm.auto_cleanup_analysis,
             auto_image_exif_backfill: this.settingsForm.auto_image_exif_backfill,
+            auto_image_perceptual_hash: this.settingsForm.auto_image_perceptual_hash || false,
             auto_collection_suggestions: this.settingsForm.auto_collection_suggestions || false,
             auto_frame_hash_sequence: this.settingsForm.auto_frame_hash_sequence || false,
             idle_scheduling_enabled: this.settingsForm.idle_scheduling_enabled !== false,

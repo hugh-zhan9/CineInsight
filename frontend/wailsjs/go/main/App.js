@@ -142,6 +142,10 @@ export function CancelImageEXIFBackfill() {
   return window['go']['main']['App']['CancelImageEXIFBackfill']();
 }
 
+export function CancelImagePerceptualHashBackfill() {
+  return window['go']['main']['App']['CancelImagePerceptualHashBackfill']();
+}
+
 export function CancelImageSemanticIndex() {
   return window['go']['main']['App']['CancelImageSemanticIndex']();
 }
@@ -456,6 +460,10 @@ export function GetImageEXIFBackfillStatus() {
 
 export function GetImageInsights() {
   return window['go']['main']['App']['GetImageInsights']();
+}
+
+export function GetImagePerceptualHashBackfillStatus() {
+  return window['go']['main']['App']['GetImagePerceptualHashBackfillStatus']();
 }
 
 export function GetImageSemanticIndexStatus() {
@@ -1028,6 +1036,10 @@ export function StartImageCleanupAnalysis() {
 
 export function StartImageEXIFBackfill() {
   return window['go']['main']['App']['StartImageEXIFBackfill']();
+}
+
+export function StartImagePerceptualHashBackfill() {
+  return window['go']['main']['App']['StartImagePerceptualHashBackfill']();
 }
 
 export function StartImageSemanticIndex() {

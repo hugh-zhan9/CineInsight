@@ -36,12 +36,13 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.AutoScanOnStartup = input.AutoScanOnStartup
 		settings.LibraryWatchEnabled = input.LibraryWatchEnabled
 		settings.LocalMetadataEnabled = input.LocalMetadataEnabled
-		// 扫描后自动任务的四个开关：前端一直在发，这里此前漏了赋值，
+		// 扫描后自动任务的开关（下面连着这一串）：前端一直在发，这里此前漏了赋值，
 		// tx.Save 于是保留旧值——用户拨了开关、提示保存成功、重开设置页又变回去。
 		settings.AutoTechnicalBackfill = input.AutoTechnicalBackfill
 		settings.AutoPerceptualHash = input.AutoPerceptualHash
 		settings.AutoCleanupAnalysis = input.AutoCleanupAnalysis
 		settings.AutoImageEXIFBackfill = input.AutoImageEXIFBackfill
+		settings.AutoImagePerceptualHash = input.AutoImagePerceptualHash
 		settings.AutoCollectionSuggestions = input.AutoCollectionSuggestions
 		settings.AIQualityEnabled = input.AIQualityEnabled
 		settings.ShortFeedMaxDurationMinutes = positiveOrDefault(input.ShortFeedMaxDurationMinutes, DefaultShortFeedMaxDurationMinutes)

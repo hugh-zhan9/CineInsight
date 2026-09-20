@@ -5,9 +5,11 @@
 // 放在这里而不是面板里：面板只渲染注册表，任务与绑定的对应关系是业务知识。
 
 import {
-  CancelFaceAnalysis, CancelImageAITagging, CancelImageEXIFBackfill, CancelImageSemanticIndex, CancelLocalMetadataBackfill,
+  CancelFaceAnalysis, CancelImageAITagging, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
+  CancelImageSemanticIndex, CancelLocalMetadataBackfill,
   CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
-  CreateDatabaseBackup, RunGatedTaskNow, StartImageAITagging, StartImageEXIFBackfill, StartImageSemanticIndex,
+  CreateDatabaseBackup, RunGatedTaskNow, StartImageAITagging, StartImageEXIFBackfill,
+  StartImagePerceptualHashBackfill, StartImageSemanticIndex,
   StartFrameHashBackfill, StartLocalMetadataBackfill, StartPerceptualHashBackfill, StartTechnicalBackfill, TriggerAITagging
 } from '../../wailsjs/go/main/App';
 import { BACKGROUND_TASK_LABELS, idleWaitReasonLabel, isIdleGateNotWaitingError } from './idleScheduling.js';
@@ -38,6 +40,7 @@ const TASK_BINDINGS = {
   ai_tagging: { start: () => TriggerAITagging() },
   image_ai_tagging: { start: () => StartImageAITagging(), cancel: () => CancelImageAITagging() },
   exif: { start: () => StartImageEXIFBackfill(), cancel: () => CancelImageEXIFBackfill() },
+  image_phash: { start: () => StartImagePerceptualHashBackfill(), cancel: () => CancelImagePerceptualHashBackfill() },
   backup: { start: () => CreateDatabaseBackup() }
 };
 

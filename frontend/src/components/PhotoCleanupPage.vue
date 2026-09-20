@@ -33,7 +33,17 @@
       图片库在本次分析之后发生过变化，下面的结果可能已过期。可以继续审阅，也可以点「重新分析」刷新候选。
     </p>
     <p v-if="analysis && analysis.stale_hash_count > 0" class="cleanup-page__notice" data-test="cleanup-stale-hint">
-      有 {{ analysis.stale_hash_count }} 张图片的指纹已过期，暂未参与近似重复检测。浏览图片可自动刷新缩略图与指纹。
+      有 {{ analysis.stale_hash_count }} 张图片还没有可用的指纹（未回填或源文件已变更），暂未参与近似重复检测。
+      <button
+        type="button"
+        class="btn-secondary btn-compact"
+        data-test="cleanup-start-image-phash"
+        :disabled="perceptualHashRunning"
+        @click="startPerceptualHashBackfill"
+      >{{ perceptualHashRunning ? '补全中…' : '补全指纹' }}</button>
+    </p>
+    <p v-if="analysis && analysis.skipped_unavailable > 0" class="cleanup-page__notice" data-test="image-cleanup-skipped-hint">
+      本轮跳过 {{ analysis.skipped_unavailable }} 张图片（文件不可访问，如外置盘未挂载）。
     </p>
 
     <div v-if="running" class="cleanup-page__state" data-test="cleanup-progress">
@@ -268,7 +278,9 @@ import {
   DismissImageNearDuplicateGroup,
   BatchDeleteImages,
   OpenImageDirectory,
-  RevealImage
+  RevealImage,
+  StartImagePerceptualHashBackfill,
+  GetImagePerceptualHashBackfillStatus
 } from '../../wailsjs/go/main/App';
 import { formatBytes } from '../utils/mediaDetails.js';
 import {
@@ -301,6 +313,9 @@ export default {
       localError: '',
       processing: false,
       dismissing: false,
+      // 指纹补全任务的状态：没有它，用户看到"还有 N 张没指纹"却没有任何办法。
+      perceptualHashStatus: null,
+      unsubscribePerceptualHash: null,
       viewer: { members: [], index: -1, member: null }
     };
   },
@@ -317,6 +332,7 @@ export default {
     running() { return !!this.status?.running; },
     analysis() { return (this.status?.completed && this.status.analysis) || null; },
     resultStale() { return Boolean(this.analysis && (this.status?.stale || this.deletedIDs.length)); },
+    perceptualHashRunning() { return !!this.perceptualHashStatus?.running; },
     progress() { return this.status?.progress || {}; },
     stageLabel() { return STAGE_LABELS[this.progress.stage] || '准备中'; },
     displayError() { return this.localError || this.status?.error || ''; },
@@ -411,6 +427,7 @@ export default {
   async mounted() {
     startPhotoCleanupPolling();
     window.addEventListener('keydown', this.handleKeydown);
+    this.subscribePerceptualHash();
     await refreshPhotoCleanupStatus();
     // 与视频侧的清理审阅同构：进来时后端既没在跑、也没有可用结果，就直接发起一次分析，
     // 不用再多点一次"开始分析"。已有结果（哪怕已标记过期）保留下来，要不要重跑由用户决定。
@@ -421,9 +438,42 @@ export default {
   },
   beforeUnmount() {
     window.removeEventListener('keydown', this.handleKeydown);
+    if (this.unsubscribePerceptualHash) {
+      this.unsubscribePerceptualHash();
+      this.unsubscribePerceptualHash = null;
+    }
   },
   methods: {
     formatBytes,
+    async subscribePerceptualHash() {
+      // 先挂监听再取状态：取状态要等一个来回，这期间用户可能已经离开本页，
+      // 那时才挂上的监听就没人摘得掉了（顺序与 PhotoAITaskPanel 一致）。
+      if (window.runtime?.EventsOn) {
+        const off = window.runtime.EventsOn(
+          'image-perceptual-hash-backfill-progress',
+          status => { this.perceptualHashStatus = status; }
+        );
+        if (typeof off === 'function') this.unsubscribePerceptualHash = off;
+      }
+      try {
+        const status = await GetImagePerceptualHashBackfillStatus();
+        // 本页不轮询：等待期间已经收到事件的话，回来的这份是旧的，
+        // 盖回去会把按钮永久停在"补全中"。
+        if (!this.perceptualHashStatus) this.perceptualHashStatus = status;
+      } catch (err) {
+        // 取不到状态只影响按钮的运行态显示，不该挡住整个审阅页。
+        console.warn('读取图片指纹补全状态失败', err);
+      }
+    },
+    async startPerceptualHashBackfill() {
+      if (this.perceptualHashRunning) return;
+      this.localError = '';
+      try {
+        this.perceptualHashStatus = await StartImagePerceptualHashBackfill();
+      } catch (err) {
+        this.localError = String(err?.message || err || '补全指纹失败');
+      }
+    },
     directoryOf(image) {
       return String(image?.directory || '').trim() || UNKNOWN_DIRECTORY;
     },

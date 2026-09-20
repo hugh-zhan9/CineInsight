@@ -222,7 +222,8 @@ func (a *App) SyncImageDirectories() (*services.ImageScanResult, error) {
 	// EXIF/GPS 补全同样按设置决定要不要自动接着跑。自动路径经空闲门，
 	// 与用户显式点的 StartImageEXIFBackfill 走两条不同的入口（D-030）。
 	if result.Added > 0 || result.Relocated > 0 {
-		if settings, err := a.settingsService.GetSettings(); err == nil && settings.AutoImageEXIFBackfill {
+		settings, settingsErr := a.settingsService.GetSettings()
+		if settingsErr == nil && settings.AutoImageEXIFBackfill {
 			go func() {
 				if err := a.runGatedAutoTask(
 					string(services.BackgroundTaskEXIF),
@@ -232,6 +233,22 @@ func (a *App) SyncImageDirectories() (*services.ImageScanResult, error) {
 					},
 				); err != nil {
 					log.Printf("扫描后自动补全图片 EXIF 失败 err=%v", err)
+				}
+			}()
+		}
+		// 指纹补全与 EXIF 同一个触发时机、各自一个开关：两者的目标集判据不同
+		// （EXIF 看 exif_parsed_at，指纹要 os.Stat 比源文件），绑同一个开关只会
+		// 让其中一个白跑。
+		if settingsErr == nil && settings.AutoImagePerceptualHash {
+			go func() {
+				if err := a.runGatedAutoTask(
+					string(services.BackgroundTaskImagePerceptualHash),
+					func(ctx context.Context, hook services.TaskPauseHook) error {
+						_, err := a.imagePHashBackfill.StartImagePerceptualHashBackfillWithPauseHook(ctx, hook)
+						return err
+					},
+				); err != nil {
+					log.Printf("扫描后自动补全图片指纹失败 err=%v", err)
 				}
 			}()
 		}
@@ -603,6 +620,35 @@ func (a *App) CancelImageEXIFBackfill() error {
 	}
 	err := a.imageEXIFBackfill.CancelImageEXIFBackfill()
 	log.Printf("API CancelImageEXIFBackfill err=%v", err)
+	return err
+}
+
+// StartImagePerceptualHashBackfill 批量补全图片感知哈希（近似重复检测的前提）。
+func (a *App) StartImagePerceptualHashBackfill() (services.ImagePerceptualHashBackfillStatus, error) {
+	if a.imagePHashBackfill == nil {
+		return services.ImagePerceptualHashBackfillStatus{}, fmt.Errorf("数据库未初始化")
+	}
+	// 显式启动会在服务锁内摘掉当前这一轮的项间检查点（D-030）。
+	status, err := a.imagePHashBackfill.StartImagePerceptualHashBackfill(a.ctx)
+	log.Printf("API StartImagePerceptualHashBackfill total=%d err=%v", status.Total, err)
+	return status, err
+}
+
+// GetImagePerceptualHashBackfillStatus 返回图片指纹补全任务状态
+func (a *App) GetImagePerceptualHashBackfillStatus() services.ImagePerceptualHashBackfillStatus {
+	if a.imagePHashBackfill == nil {
+		return services.ImagePerceptualHashBackfillStatus{}
+	}
+	return a.imagePHashBackfill.GetImagePerceptualHashBackfillStatus()
+}
+
+// CancelImagePerceptualHashBackfill 取消图片指纹补全任务
+func (a *App) CancelImagePerceptualHashBackfill() error {
+	if a.imagePHashBackfill == nil {
+		return fmt.Errorf("数据库未初始化")
+	}
+	err := a.imagePHashBackfill.CancelImagePerceptualHashBackfill()
+	log.Printf("API CancelImagePerceptualHashBackfill err=%v", err)
 	return err
 }
 

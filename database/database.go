@@ -327,6 +327,9 @@ func ApplySchema(db *gorm.DB) error {
 	idleSchedulingColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "idle_scheduling_enabled")
 	desktopNotificationsColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "desktop_notifications_enabled")
 	proxyCacheLimitColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "proxy_cache_limit_bytes")
+	// 这一列是"图片 dHash 换算法"那一版才加的，因此"它在 AutoMigrate 之前还不存在"
+	// 正好等价于"这个库第一次跑到新版本"，可以拿来当清空旧指纹的一次性判据。
+	imagePerceptualHashColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "auto_image_perceptual_hash")
 	// enrichment_status 是 NOT NULL DEFAULT 'pending'，AutoMigrate 加列时会把存量行
 	// 一并刷成 'pending'，加完就分不出谁是升级前的老条目了。这里先记下来。
 	watchlistEnrichmentColumnExisted := db.Migrator().HasTable(&models.WatchlistEntry{}) &&
@@ -335,6 +338,13 @@ func ApplySchema(db *gorm.DB) error {
 	// 自动迁移数据表
 	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		return fmt.Errorf("数据库迁移失败: %w", err)
+	}
+	// 紧贴 AutoMigrate，排在其余迁移之前：判据"列刚建出来"在 AutoMigrate 提交那一刻
+	// 就被消费掉了，中间每多一个可失败的步骤，就多一次"列已建好但指纹没清、启动失败、
+	// 重启后判据恒为假"的机会。别的迁移漏一次只是某个开关取错默认值，这一条漏一次是
+	// 新旧两代哈希混在一起比汉明距离——图片侧没有版本列，这状态不报错也看不出来。
+	if err := resetImagePerceptualHashesForAlgorithmChange(db, settingsTableExisted, imagePerceptualHashColumnExisted); err != nil {
+		return fmt.Errorf("清空旧版图片指纹失败: %w", err)
 	}
 	// 紧跟 AutoMigrate：它依赖刚建出的 kind 列与 idx_watchlist_title_kind。
 	if err := migrateWatchlistKind(db, !watchlistEnrichmentColumnExisted); err != nil {
@@ -474,6 +484,44 @@ func migrateDesktopNotificationsSetting(db *gorm.DB, settingsTableExisted, deskt
 		return nil
 	}
 	return db.Model(&models.Settings{}).Where("1 = 1").Update("desktop_notifications_enabled", true).Error
+}
+
+// resetImagePerceptualHashesForAlgorithmChange 把老库里按旧算法算出的图片 dHash
+// 一次性清空，交给图片指纹补全任务重算（D-CD02）。
+//
+// 旧实现每个格子只采一个像素，新实现取格子均值，两代哈希的数值不可比：混在一起比
+// 汉明距离只会得出一堆无意义的结论。图片侧没有算法版本列（视频同源侧有，靠
+// sameSourceFingerprintVersion 自然失效），所以只能显式清。代价可接受——缩略图都在
+// 本地缓存里，重算不碰原文件、也不需要外置盘在线。
+//
+// 触发判据与上面几个设置迁移同一套路：只在"settings 表已存在、而
+// auto_image_perceptual_hash 是这一轮才建出来的"时执行一次。全新库没有存量指纹，空转。
+//
+// 刻意用 Unscoped 且不按 is_stale 过滤：软删或失效的图片将来可能恢复，给它们留着
+// 一份旧算法的指纹比清掉更糟——恢复之后它永远和新指纹比不上，还不报任何异常。
+func resetImagePerceptualHashesForAlgorithmChange(db *gorm.DB, settingsTableExisted, imagePerceptualHashColumnExisted bool) error {
+	if !settingsTableExisted || imagePerceptualHashColumnExisted {
+		return nil
+	}
+	if !db.Migrator().HasTable(&models.Image{}) {
+		return nil
+	}
+	// UpdateColumns 而不是 Updates：后者会顺手刷 images.updated_at，而 D-CD02 授权
+	// 清空的只有这三列。破坏性迁移多写一列是多一份将来没人说得清的改动。
+	result := db.Unscoped().Model(&models.Image{}).
+		Where("perceptual_hash <> ? OR hash_source_size <> ? OR hash_source_mod_time_ns <> ?", "", 0, 0).
+		UpdateColumns(map[string]interface{}{
+			"perceptual_hash":         "",
+			"hash_source_size":        0,
+			"hash_source_mod_time_ns": 0,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		log.Printf("[Migration] 图片 dHash 换算法：已清空 %d 行旧指纹，等待补全任务重算", result.RowsAffected)
+	}
+	return nil
 }
 
 // migrateProxyCacheLimitSetting 把老库的播放代理上限刷成 50 GiB（D-005）。

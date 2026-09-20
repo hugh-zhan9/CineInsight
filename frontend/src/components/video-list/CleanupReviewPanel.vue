@@ -45,11 +45,14 @@
         </div>
         <div v-else-if="cleanupDialog.error" class="cleanup-error">{{ cleanupDialog.error }}</div>
         <div v-else-if="cleanupDialog.analysis" class="cleanup-body">
-          <div v-if="cleanupDialog.analysis.stale_hash_count" class="cleanup-section cleanup-stale-hash-hint">
-            <span>有 {{ cleanupDialog.analysis.stale_hash_count }} 个视频的源文件已变更，感知哈希待重算，暂未参与近似重复检测。</span>
+          <div v-if="cleanupDialog.analysis.stale_hash_count" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-stale-hash-hint">
+            <span>有 {{ cleanupDialog.analysis.stale_hash_count }} 个视频还没有可用的感知哈希（未回填或源文件已变更），暂未参与近似重复检测。</span>
             <button type="button" class="btn-secondary btn-compact" :disabled="perceptualHashRunning" @click="$emit('start-perceptual-hash')">
-              {{ perceptualHashRunning ? '重算中...' : '重算感知哈希' }}
+              {{ perceptualHashRunning ? '补全中...' : '补全感知哈希' }}
             </button>
+          </div>
+          <div v-if="cleanupSkippedText" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-skipped-hint">
+            <span>{{ cleanupSkippedText }}</span>
           </div>
           <div v-if="cleanupDialog.analysis.stale_frame_hash_count" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-stale-frame-hash-hint">
             <span>有 {{ cleanupDialog.analysis.stale_frame_hash_count }} 个视频还没有帧哈希（或源文件已变更），暂未参与截取片段识别。</span>
@@ -406,6 +409,19 @@ export default {
         push('low-duration', `dur-${video.id}`, null, video, [video]);
       }
       return [...buckets.values()].sort((a, b) => a.directory.localeCompare(b.directory));
+    },
+    // 本轮被跳过的条目。外置盘没挂载时这个数会很大，而在有它之前，插着盘和
+    // 不插盘跑出来的界面长得一模一样——用户只会觉得"检测不准"。
+    cleanupSkippedText() {
+      const analysis = this.cleanupDialog.analysis;
+      if (!analysis) return '';
+      const unavailable = analysis.skipped_unavailable || 0;
+      const metadata = analysis.skipped_metadata || 0;
+      if (!unavailable && !metadata) return '';
+      const parts = [];
+      if (unavailable) parts.push(`本轮跳过 ${unavailable} 个视频（文件不可访问，如外置盘未挂载）`);
+      if (metadata) parts.push(`另有 ${metadata} 个取不到时长或分辨率，只参与精确重复`);
+      return `${parts.join('，')}。`;
     },
     cleanupCategoryOptions() {
       const analysis = this.cleanupDialog.analysis;

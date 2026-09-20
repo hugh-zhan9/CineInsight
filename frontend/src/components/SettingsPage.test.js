@@ -828,8 +828,8 @@ describe('后台任务空闲调度（P-003）', () => {
   });
 
   // 载荷里少一个键，后端就会拿 Go 的零值覆盖用户的选择（四个自动开关此前正是
-  // 因为后端漏赋值而永远存不下来）。这里把九个键的存在性钉住。
-  it('保存载荷同时带上四个自动开关与五个空闲调度字段', async () => {
+  // 因为后端漏赋值而永远存不下来）。这里把十个键的存在性钉住。
+  it('保存载荷同时带上五个自动开关与五个空闲调度字段', async () => {
     const wrapper = await mountPage();
     await wrapper.vm.saveSettings();
     await flushPromises();
@@ -837,6 +837,7 @@ describe('后台任务空闲调度（P-003）', () => {
     const payload = api.UpdateSettings.mock.calls.at(-1)[0];
     for (const key of [
       'auto_technical_backfill', 'auto_perceptual_hash', 'auto_cleanup_analysis', 'auto_image_exif_backfill',
+      'auto_image_perceptual_hash',
       'idle_scheduling_enabled', 'idle_threshold_minutes', 'idle_require_ac_power', 'idle_window_start', 'idle_window_end'
     ]) {
       expect(Object.prototype.hasOwnProperty.call(payload, key)).toBe(true);

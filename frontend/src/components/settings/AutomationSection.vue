@@ -58,6 +58,14 @@
     </div>
     <div class="setting-item">
       <label class="switch">
+        <input data-test="auto-image-perceptual-hash-toggle" type="checkbox" v-model="form.auto_image_perceptual_hash" />
+        <span class="slider"></span>
+        <span>图片扫描后自动补全指纹</span>
+      </label>
+      <p class="help-text">图片的近似重复检测靠这份指纹。不开的话只能靠翻相册时顺带生成，清理审阅里会一直显示「还有 N 张没有指纹」。</p>
+    </div>
+    <div class="setting-item">
+      <label class="switch">
         <input data-test="auto-collection-suggestions-toggle" type="checkbox" v-model="form.auto_collection_suggestions" />
         <span class="slider"></span>
         <span>扫描后自动分析剧集，生成建议作品集</span>
