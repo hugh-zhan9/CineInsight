@@ -25,6 +25,9 @@ type CleanupClipGroup struct {
 	OffsetSeconds    float64      `json:"offset_seconds"`
 	MatchRate        float64      `json:"match_rate"`
 	EstimatedSavings int64        `json:"estimated_savings"`
+	// 缓存结果保留计算时的源指纹；读取旧结果时不能拿后来重算的指纹冒充旧版本。
+	fullFingerprint mediaProbeFingerprint
+	clipFingerprint mediaProbeFingerprint
 }
 
 // clipSequence 是一条参与匹配的有效序列：指纹与磁盘上的文件一致、帧数够、能解码。
@@ -187,6 +190,8 @@ func evaluateClipPair(full, clip clipSequence, excluded map[[2]uint]struct{}, di
 		OffsetSeconds:    float64(offset) * clipFrameIntervalSeconds(full.intervalMS),
 		MatchRate:        rate,
 		EstimatedSavings: clip.video.Size,
+		fullFingerprint:  mediaProbeFingerprint{size: full.sourceSize, modTimeNS: full.sourceMod},
+		clipFingerprint:  mediaProbeFingerprint{size: clip.sourceSize, modTimeNS: clip.sourceMod},
 	}, true
 }
 
@@ -284,7 +289,7 @@ func loadFrameHashFingerprint(videoID uint) (models.VideoFrameHashSequence, erro
 // cleanupExactDuplicatePairs 把精确重复组摊成两两配对，供截取候选排除使用。
 //
 // 只看精确重复：近似重复与同源是"同一部片的不同版本"，与"A 里截了一段成了 B"
-// 是不同的判断，那两类不参与排除（设计 4.6.4 只点了 DuplicateGroups）。
+// 是不同的判断，那两类未否决的候选不参与排除；用户否决另由调用方合并进排除集。
 func cleanupExactDuplicatePairs(groups []CleanupDuplicateGroup) map[[2]uint]struct{} {
 	pairs := make(map[[2]uint]struct{})
 	for _, group := range groups {

@@ -55,6 +55,7 @@ beforeEach(() => {
   document.body.innerHTML = '';
   resetFeedback();
   feedback.confirmAction.mockResolvedValue(true);
+  api.GetCleanupStatus.mockResolvedValue(null);
 });
 
 async function openCleanupReview() {
@@ -77,6 +78,38 @@ async function openCleanupReview() {
 }
 
 describe('清理候选审阅', () => {
+  it.each(['near', 'same-source', 'clip'])('保存 %s 决策后，重开与迟到的旧回读都不能恢复候选', async (kind) => {
+    const wrapper = mountPanel();
+    await flushPromises();
+    const a = { id: 11, name: 'full.mp4' };
+    const b = { id: 12, name: 'clip.mp4' };
+    const group = kind === 'near' ? { original: a, candidates: [b] }
+      : kind === 'clip' ? { full: a, clip: b }
+        : { relation_id: 8, preferred: a, alternative: b };
+    const key = kind === 'near' ? 'near_duplicate_groups' : kind === 'clip' ? 'clip_groups' : 'same_source_groups';
+    const oldStatus = { completed: true, analysis: { [key]: [group] } };
+    wrapper.vm.applyCleanupStatus(oldStatus);
+    wrapper.vm.cleanupSelection = [12];
+
+    let resolveOld;
+    api.GetCleanupStatus.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    const pendingRead = wrapper.vm.refreshStatus();
+    // 服务端已按落库决策过滤，成功后的回读以及重新打开拿到同一份结果。
+    api.GetCleanupStatus.mockResolvedValue({ completed: true, analysis: { [key]: [] } });
+    const method = kind === 'near' ? 'dismissNearDuplicateGroup' : kind === 'clip' ? 'dismissClipCandidate' : 'rejectCleanupSameSource';
+    await wrapper.vm[method](group);
+    expect(wrapper.vm.cleanupDialog.analysis[key]).toEqual([]);
+    expect(feedback.notifySuccess).toHaveBeenCalledOnce();
+
+    resolveOld(oldStatus);
+    await pendingRead;
+    await wrapper.vm.open();
+    expect(wrapper.vm.cleanupDialog.analysis[key]).toEqual([]);
+    expect(wrapper.vm.cleanupSelection).toEqual([]);
+    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
   it('每个候选都给出缩略图，光看文件名判断不了是不是真重复', async () => {
     const wrapper = await openCleanupReview();
 

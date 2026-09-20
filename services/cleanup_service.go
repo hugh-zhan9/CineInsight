@@ -181,8 +181,16 @@ func (s *CleanupService) StartAnalysis(criteria CleanupCriteria) (*CleanupStatus
 
 func (s *CleanupService) Status() *CleanupStatus {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	status := s.statusSnapshotLocked()
+	s.mu.Unlock()
+	analysis, err := filterCleanupReviewDecisions(status.Analysis)
+	if err != nil {
+		// 读不到决策时不能把未经核对的旧候选交给用户；底层缓存保留供下次重试。
+		status.Analysis = nil
+		status.Error = fmt.Sprintf("读取清理审阅决定失败：%v", err)
+		return &status
+	}
+	status.Analysis = analysis
 	return &status
 }
 
@@ -404,24 +412,17 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 		}
 	}
 	// 用户对一对视频说过"不是同片"或"不是同源"，两种说法表达的是同一个判断：
-	// 这一对别再以任何类别冒出来。所以两张否决表合成一个排除集，近似重复与同源
-	// 两类都拿它过滤；否则在近似重复里忽略掉的一对，下一轮会换成"疑似同源"再回来。
-	dismissed, err := loadNearDuplicateDismissals()
+	// 这一对别再换一种相似关系冒出来。两张否决表合成一个排除集，近似重复、同源
+	// 和截取三类共用；只有“忽略截取”仍按它自己的方向与文件版本规则处理。
+	dismissed, err := loadCleanupReviewPairs()
 	if err != nil {
 		return nil, 0, err
 	}
-	rejectedSameSource, err := loadRejectedSameSourcePairs()
-	if err != nil {
-		return nil, 0, err
-	}
-	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed)+len(rejectedSameSource))
+	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed))
 	for pair := range exactPairs {
 		excludedPairs[pair] = struct{}{}
 	}
 	for pair := range dismissed {
-		excludedPairs[pair] = struct{}{}
-	}
-	for pair := range rejectedSameSource {
 		excludedPairs[pair] = struct{}{}
 	}
 	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(excludedPairs, presentVideoIDs)
@@ -439,9 +440,12 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	}
 	result.SameSourceGroups = sameSourceGroups
 
-	// 截取片段是最后一步（D-028）：它只读帧哈希序列表，与上面四类的计算路径互不
-	// 相交。排除集只用精确重复的两两配对，近似重复与同源另有各自的语义。
-	clipGroups, staleFrameHashCount, err := loadCleanupClipGroups(cleanupExactDuplicatePairs(result.DuplicateGroups), presentVideoIDs)
+	// 已否认同片/同源的对也不能换成截取候选再问；尚未否认的近似/同源候选不排除。
+	clipExcluded := cleanupExactDuplicatePairs(result.DuplicateGroups)
+	for pair := range dismissed {
+		clipExcluded[pair] = struct{}{}
+	}
+	clipGroups, staleFrameHashCount, err := loadCleanupClipGroups(clipExcluded, presentVideoIDs)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -451,6 +455,11 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	sort.Slice(result.DuplicateGroups, func(i, j int) bool {
 		return result.DuplicateGroups[i].Original.ID < result.DuplicateGroups[j].Original.ID
 	})
+	// 匹配可能耗时较长，完成前再读决定，避免这期间刚忽略的项进入新结果。
+	result, err = filterCleanupReviewDecisions(result)
+	if err != nil {
+		return nil, 0, err
+	}
 
 	log.Printf("[Cleanup] analysis completed elapsed=%s duplicate_groups=%d near_duplicate_groups=%d same_source_groups=%d low_duration=%d low_resolution=%d hash_candidates=%d stale_hash=%d skipped_unavailable=%d skipped_metadata=%d",
 		time.Since(startedAt).Round(time.Millisecond),

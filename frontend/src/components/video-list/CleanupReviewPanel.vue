@@ -285,7 +285,7 @@
 import { GetCleanupStatus, StartCleanupAnalysis, DismissNearDuplicateGroup, DismissClipCandidate, RejectSameSourceRelation, PreviewExternally } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import CleanupThumbnail from '../CleanupThumbnail.vue';
-import { confirmAction, notifyError } from '../../utils/feedback.js';
+import { confirmAction, notifyError, notifySuccess } from '../../utils/feedback.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import { formatElapsedDuration } from './format.js';
 
@@ -319,6 +319,7 @@ export default {
         progress: { stage: '', message: '', current: 0, total: 0, path: '' }
       },
       cleanupSelection: [],
+      cleanupStatusRequestID: 0,
       cleanupCategory: 'all',
       activeCleanupDirectory: '',
       cleanupCollapsedDirs: {},
@@ -347,7 +348,8 @@ export default {
       if (data?.stage === 'done') {
         // 回读失败也必须收尾，否则 1 秒计时器和"分析中"徽标会一直挂着。
         try {
-          const status = await GetCleanupStatus();
+          const { status, current } = await this.readCleanupStatus();
+          if (!current) return;
           this.applyCleanupStatus(status);
         } catch (err) {
           console.error('读取清理分析结果失败:', err);
@@ -589,6 +591,8 @@ export default {
       this.cleanupDialog.error = status.error || '';
       this.cleanupDialog.stale = !!status.stale;
       this.cleanupDialog.analysis = status.analysis || null;
+      const remainingIDs = new Set(this.getAllCleanupCandidates().map(video => video.id));
+      this.cleanupSelection = this.cleanupSelection.filter(id => remainingIDs.has(id));
       this.cleanupDialog.progress = status.progress || { stage: '', message: '', current: 0, total: 0, path: '' };
       if (status.running) {
         this.startCleanupProgressTracking(status.started_at);
@@ -597,10 +601,22 @@ export default {
         this.cleanupDialog.progress = status.progress || this.cleanupDialog.progress;
       }
     },
+    // 决策保存后，之前发出的回读不能把已处理的行重新盖回来。
+    async readCleanupStatus() {
+      const requestID = ++this.cleanupStatusRequestID;
+      try {
+        const status = await GetCleanupStatus();
+        return { status, current: requestID === this.cleanupStatusRequestID };
+      } catch (err) {
+        if (requestID !== this.cleanupStatusRequestID) return { current: false };
+        throw err;
+      }
+    },
     // 只读地同步一次后端状态，用于按钮徽标；不打开面板、不触发分析。
     async refreshCleanupStatus() {
       try {
-        const status = await GetCleanupStatus();
+        const { status, current } = await this.readCleanupStatus();
+        if (!current) return;
         if (status?.running || status?.completed) {
           this.applyCleanupStatus(status);
         }
@@ -611,7 +627,8 @@ export default {
     async openCleanupDialog() {
       this.cleanupDialog.show = true;
       try {
-        const status = await GetCleanupStatus();
+        const { status, current } = await this.readCleanupStatus();
+        if (!current) return;
         if (status?.running || status?.completed) {
           this.applyCleanupStatus(status);
           return;
@@ -634,6 +651,7 @@ export default {
       }
     },
     async startNewCleanupAnalysis() {
+      const requestID = ++this.cleanupStatusRequestID;
       this.cleanupSelection = [];
       this.cleanupCollapsedDirs = {};
       this.cleanupTrashedIDs = [];
@@ -645,7 +663,7 @@ export default {
       this.cleanupDialog.progress = { stage: 'load', message: '正在准备清理候选分析…', current: 0, total: 0, path: '' };
       this.startCleanupProgressTracking();
       const started = await StartCleanupAnalysis(5, 480, 320);
-      this.applyCleanupStatus(started);
+      if (requestID === this.cleanupStatusRequestID) this.applyCleanupStatus(started);
     },
     getAllCleanupCandidates() {
       const analysis = this.cleanupDialog.analysis || {};
@@ -744,9 +762,15 @@ export default {
       if (ids.length < 2) return;
       try {
         await DismissNearDuplicateGroup(ids);
-        this.cleanupDialog.analysis.near_duplicate_groups = (this.cleanupDialog.analysis.near_duplicate_groups || [])
-          .filter(item => item !== group);
+        this.cleanupStatusRequestID++;
+        const analysis = this.cleanupDialog.analysis;
+        if (analysis) {
+          analysis.near_duplicate_groups = (analysis.near_duplicate_groups || [])
+            .filter(item => ![item.original?.id, ...(item.candidates || []).map(video => video.id)].every(id => ids.includes(id)));
+        }
         this.cleanupSelection = this.cleanupSelection.filter(id => !ids.includes(id));
+        notifySuccess('已记录“不是同片”，这组视频之间的配对不再作为相似关系候选。');
+        await this.refreshCleanupStatus();
       } catch (err) {
         notifyError('忽略近似重复组失败: ' + err);
       }
@@ -758,9 +782,15 @@ export default {
       if (!fullID || !clipID) return;
       try {
         await DismissClipCandidate(fullID, clipID);
-        this.cleanupDialog.analysis.clip_groups = (this.cleanupDialog.analysis.clip_groups || [])
-          .filter(item => item !== group);
+        this.cleanupStatusRequestID++;
+        const analysis = this.cleanupDialog.analysis;
+        if (analysis) {
+          analysis.clip_groups = (analysis.clip_groups || [])
+            .filter(item => item.full?.id !== fullID || item.clip?.id !== clipID);
+        }
         this.cleanupSelection = this.cleanupSelection.filter(id => id !== clipID);
+        notifySuccess('已记录忽略；双方文件未变时，这对截取候选不会再次出现。');
+        await this.refreshCleanupStatus();
       } catch (err) {
         notifyError('忽略截取片段失败: ' + err);
       }
@@ -769,12 +799,18 @@ export default {
       if (!group?.relation_id) return;
       try {
         await RejectSameSourceRelation(group.relation_id);
-        this.cleanupDialog.analysis.same_source_groups = (this.cleanupDialog.analysis.same_source_groups || [])
-          .filter(item => item.relation_id !== group.relation_id);
+        this.cleanupStatusRequestID++;
+        const analysis = this.cleanupDialog.analysis;
+        if (analysis) {
+          analysis.same_source_groups = (analysis.same_source_groups || [])
+            .filter(item => item.relation_id !== group.relation_id);
+        }
         if (group.alternative?.id) {
           this.cleanupSelection = this.cleanupSelection.filter(id => id !== group.alternative.id);
         }
         this.$emit('same-source-rejected');
+        notifySuccess('已记录“不是同源”，双方内容未变时不再作为相似关系候选。');
+        await this.refreshCleanupStatus();
       } catch (err) {
         notifyError('更新同源判断失败: ' + err);
       }
