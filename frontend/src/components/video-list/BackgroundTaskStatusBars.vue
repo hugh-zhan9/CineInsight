@@ -22,11 +22,13 @@
   </div>
 
   <div v-if="perceptualHash.running || perceptualHash.completed || perceptualHashWaitingText" :class="['scan-sync-status', barStateClass(perceptualHash)]" :role="perceptualHash.failed ? 'alert' : 'status'">
-    <span v-if="perceptualHash.running">近重复指纹 {{ perceptualHash.processed }}/{{ perceptualHash.total }}</span>
-    <span v-else-if="!perceptualHash.completed">近重复指纹</span>
-    <span v-else>
-      近重复指纹：成功 {{ perceptualHash.succeeded }}，跳过 {{ perceptualHash.skipped }}，失败 {{ perceptualHash.failed }}
-      <span v-if="perceptualHash.cancelled">（已取消）</span><span v-else-if="perceptualHash.completed">（已完成）</span>
+    <span v-if="perceptualHash.running">近重复指纹补全：已检查 {{ perceptualHash.processed }}/{{ perceptualHash.total }} 部；</span>
+    <span v-else-if="!perceptualHash.completed">近重复指纹补全</span>
+    <span v-if="perceptualHash.running || perceptualHash.completed">
+      <template v-if="!perceptualHash.running">近重复指纹补全：</template>
+      本轮新生成 {{ perceptualHash.succeeded }} 部，已有指纹复用 {{ perceptualHash.reused }} 部，处理失败 {{ perceptualHash.failed }} 部
+      <template v-if="perceptualHash.out_of_scope">，已移出处理范围 {{ perceptualHash.out_of_scope }} 部</template>
+      <span v-if="perceptualHash.cancelled">（已取消）</span><span v-else-if="perceptualHash.completed">{{ perceptualHash.failed ? '（本轮结束，有失败项）' : '（已完成）' }}</span>
     </span>
     <span v-if="perceptualHashWaitingText" class="status-waiting-idle" data-test="phash-waiting-idle">{{ perceptualHashWaitingText }}</span>
     <button
@@ -37,6 +39,8 @@
       @click="runGatedTaskNow('phash')"
     >忽略空闲立即运行</button>
     <button v-if="perceptualHash.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelPerceptualHashBackfill">取消</button>
+    <span class="phash-status-help">指纹用于后续查找近重复视频，候选结果请在清理中心查看。</span>
+    <span v-if="perceptualHash.failed" class="phash-status-help">处理失败表示未能生成指纹，部分视频仍可播放；具体原因见下方。</span>
     <TaskFailureList :failures="perceptualHash.failures || []" key-prefix="phash-" data-test="phash-failures" />
   </div>
 
@@ -98,7 +102,7 @@ export default {
   data() {
     return {
       technicalBackfill: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
-      perceptualHash: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
+      perceptualHash: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, reused: 0, out_of_scope: 0, failed: 0, failures: [] },
       frameHash: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
       localMetadataBackfill: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
 	  localMetadataExport: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, failed: 0, failures: [] },
@@ -354,6 +358,11 @@ export default {
 
 .scan-sync-status--running {
   border-color: var(--border-strong);
+}
+
+.phash-status-help {
+  flex-basis: 100%;
+  margin-top: 4px;
 }
 
 .scan-sync-status--success {

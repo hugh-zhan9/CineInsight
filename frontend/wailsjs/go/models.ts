@@ -4765,6 +4765,8 @@ export namespace services {
 	    processed: number;
 	    succeeded: number;
 	    skipped: number;
+	    reused: number;
+	    out_of_scope: number;
 	    failed: number;
 	    current_video_id: number;
 	    started_at?: string;
@@ -4785,6 +4787,8 @@ export namespace services {
 	        this.processed = source["processed"];
 	        this.succeeded = source["succeeded"];
 	        this.skipped = source["skipped"];
+	        this.reused = source["reused"];
+	        this.out_of_scope = source["out_of_scope"];
 	        this.failed = source["failed"];
 	        this.current_video_id = source["current_video_id"];
 	        this.started_at = source["started_at"];

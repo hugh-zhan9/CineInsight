@@ -155,6 +155,43 @@ func TestPerceptualHashRefreshPersistsAndSourceChangeInvalidates(t *testing.T) {
 	}
 }
 
+func TestPerceptualHashBackfillDistinguishesReuseFromScopeChanges(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	reused := seedScopedBackfillVideo(t, filepath.Join(root, "cached.mp4"), false)
+	seedScopedBackfillVideo(t, filepath.Join(root, "new.mp4"), false)
+	removed := seedScopedBackfillVideo(t, filepath.Join(root, "removed.mp4"), false)
+	runner := &fakePerceptualFrameRunner{frames: [][]byte{gradientPerceptualFrame(false)}}
+	service := NewPerceptualHashService()
+	service.runner = runner
+	defer service.StopAndWait()
+	if err := service.Refresh(context.Background(), reused); err != nil {
+		t.Fatal(err)
+	}
+	changed := false
+	var scopeErr error
+	service.SetEventEmitter(func(status PerceptualHashStatus) {
+		if status.CurrentVideoID == removed.ID && !changed {
+			changed = true
+			scopeErr = database.DB.Model(&removed).Update("is_stale", true).Error
+		}
+	})
+	if _, err := service.Start(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	status := waitForPerceptualHashStatus(t, service, func(s PerceptualHashStatus) bool { return !s.Running })
+	service.StopAndWait()
+	if scopeErr != nil {
+		t.Fatal(scopeErr)
+	}
+	if status.Total != 3 || status.Processed != 3 || status.Succeeded != 1 || status.Reused != 1 || status.OutOfScope != 1 || status.Skipped != 2 || status.Failed != 0 {
+		t.Fatalf("unexpected status: %+v", status)
+	}
+	if runner.calls != 6 {
+		t.Fatalf("cached and out-of-scope videos must not be decoded again; calls=%d", runner.calls)
+	}
+}
+
 func TestPerceptualHashStopRejectsConcurrentStartAndDoesNotPersistCancellation(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()

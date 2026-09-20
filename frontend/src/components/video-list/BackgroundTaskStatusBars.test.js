@@ -44,6 +44,28 @@ async function mountBars() {
 }
 
 describe('后台任务状态条', () => {
+  it('separates reused fingerprints from scope changes and explains failures', async () => {
+    const wrapper = await mountBars();
+    wrapper.vm.perceptualHash = {
+      ...wrapper.vm.perceptualHash, completed: true, succeeded: 0, skipped: 10728,
+      reused: 10726, out_of_scope: 2, failed: 66
+    };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).toContain('本轮新生成 0 部，已有指纹复用 10726 部，处理失败 66 部');
+    expect(wrapper.text()).toContain('已移出处理范围 2 部');
+    expect(wrapper.text()).toContain('本轮结束，有失败项');
+    expect(wrapper.text()).toContain('候选结果请在清理中心查看');
+    expect(wrapper.text()).toContain('部分视频仍可播放');
+    expect(wrapper.text()).not.toContain('跳过 10728');
+
+    wrapper.vm.perceptualHash = { ...wrapper.vm.perceptualHash, out_of_scope: 0, failed: 0 };
+    await wrapper.vm.$nextTick();
+    expect(wrapper.text()).not.toContain('已移出处理范围');
+    expect(wrapper.text()).not.toContain('部分视频仍可播放');
+    expect(wrapper.text()).toContain('已完成');
+    wrapper.unmount();
+  });
+
   it('renders preparing, empty, failure, and failure-summary backfill states', async () => {
     const wrapper = await mountBars();
 

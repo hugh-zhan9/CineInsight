@@ -37,6 +37,8 @@ type PerceptualHashStatus struct {
 	Processed      int                     `json:"processed"`
 	Succeeded      int                     `json:"succeeded"`
 	Skipped        int                     `json:"skipped"`
+	Reused         int                     `json:"reused"`
+	OutOfScope     int                     `json:"out_of_scope"`
 	Failed         int                     `json:"failed"`
 	CurrentVideoID uint                    `json:"current_video_id"`
 	StartedAt      *time.Time              `json:"started_at" ts_type:"string"`
@@ -236,14 +238,14 @@ func (s *PerceptualHashService) run(ctx context.Context, videos []models.Video, 
 		var currentVideo models.Video
 		err := videoBackfillQuery(ctx).Select("id", "name", "path", "duration").First(&currentVideo, video.ID).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			s.update(func(status *PerceptualHashStatus) { status.Processed++; status.Skipped++ })
+			s.update(func(status *PerceptualHashStatus) { status.Processed++; status.Skipped++; status.OutOfScope++ })
 			continue
 		}
 		if err == nil {
 			var current bool
 			current, err = perceptualHashCurrent(currentVideo)
 			if err == nil && current {
-				s.update(func(status *PerceptualHashStatus) { status.Processed++; status.Skipped++ })
+				s.update(func(status *PerceptualHashStatus) { status.Processed++; status.Skipped++; status.Reused++ })
 				continue
 			}
 			if err == nil {
