@@ -167,7 +167,7 @@ func (s *PerceptualHashService) start(parent context.Context, hook TaskPauseHook
 		return status, nil
 	}
 	var videos []models.Video
-	if err := database.DB.WithContext(parent).Select("id", "name", "path", "duration").Order("id ASC").Find(&videos).Error; err != nil {
+	if err := videoBackfillQuery(parent).Select("id", "name", "path", "duration").Order("id ASC").Find(&videos).Error; err != nil {
 		s.mu.Unlock()
 		releaseTaskPauseHook(releasing)
 		return PerceptualHashStatus{}, err
@@ -232,12 +232,25 @@ func (s *PerceptualHashService) run(ctx context.Context, videos []models.Video, 
 			break
 		}
 		s.update(func(status *PerceptualHashStatus) { status.CurrentVideoID = video.ID })
-		current, err := perceptualHashCurrent(video)
-		if err == nil && current {
+		// 重读最新路径和范围，排队期间删除、移出范围或加入黑名单的项只跳过。
+		var currentVideo models.Video
+		err := videoBackfillQuery(ctx).Select("id", "name", "path", "duration").First(&currentVideo, video.ID).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			s.update(func(status *PerceptualHashStatus) { status.Processed++; status.Skipped++ })
 			continue
 		}
-		if err := s.Refresh(ctx, video); err != nil {
+		if err == nil {
+			var current bool
+			current, err = perceptualHashCurrent(currentVideo)
+			if err == nil && current {
+				s.update(func(status *PerceptualHashStatus) { status.Processed++; status.Skipped++ })
+				continue
+			}
+			if err == nil {
+				err = s.Refresh(ctx, currentVideo)
+			}
+		}
+		if err != nil {
 			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				break
 			}

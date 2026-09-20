@@ -107,8 +107,8 @@ func TestTechnicalBackfillCandidateDiscoveryLoadsMetadataInBulk(t *testing.T) {
 	if err != nil {
 		t.Fatalf("批量加载技术补全候选失败: %v", err)
 	}
-	if len(candidates) != 8 || queryCount != 2 {
-		t.Fatalf("候选发现应固定为视频与快照两次查询: candidates=%d queries=%d", len(candidates), queryCount)
+	if len(candidates) != 8 || queryCount != 4 {
+		t.Fatalf("候选发现应固定为扫描范围、黑名单、视频与快照四次查询: candidates=%d queries=%d", len(candidates), queryCount)
 	}
 }
 

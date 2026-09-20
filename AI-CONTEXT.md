@@ -169,6 +169,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **托管图片:** 头像和封面仅接受不超过 20 MiB 的 JPEG/PNG/WebP，复制到 `~/.CineInsight/media-details/{people|collections}/{id}/`；WebView 只通过实体 ID 资源路由访问，不暴露数据库路径。
 - **技术快照:** `MediaProbeService` 以参数数组执行本地 `ffprobe -v error -show_format -show_streams -print_format json <path>`，限制输出并在探测前后核对 size+mtime。成功事务替换 `video_technical_metadata/media_streams` 并同步基础元数据；失败只更新尝试状态，保留最后成功快照。
 - **显式补全:** `TechnicalBackfillService` 只有一个串行 worker，只由 Wails 操作显式启动，可取消并通过 `technical-backfill-state` 事件/轮询展示状态。应用启动和详情读取都不会隐式全库探测；再次运行依靠成功指纹跳过有效项。
+- **视频补全范围（2026-09-20）：** 技术信息、近重复指纹和帧哈希三类批量任务统一走 `videoBackfillQuery`：复用片库扫描根与 `scan_exclude_paths` 黑名单过滤，并排除 `is_stale`。发现候选时先过滤，实际处理前再次读取当前范围和视频记录；排队期间被排除、标失效或删除的项计跳过，不再访问源文件，范围读取失败不能退回全库。黑名单不删除记录或已有指纹，解除后可继续复用。此前只有清理结果过滤，计算任务仍处理全库，导致大量缺失路径被计为失败。近重复指纹的成功数仅指本轮新生成，已有有效指纹计跳过。
 - **本地边界:** 本期详情信息只来自用户输入、现有数据库和本地文件/ffprobe，不调用在线影视资料源。
 
 ### 2.13 字幕编辑工作台

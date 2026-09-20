@@ -153,7 +153,7 @@ func (s *TechnicalBackfillService) start(parent context.Context, hook TaskPauseH
 
 func loadTechnicalBackfillCandidates(ctx context.Context) ([]technicalBackfillCandidate, error) {
 	var videos []models.Video
-	if err := database.DB.WithContext(ctx).Select("id", "name", "path").Order("id ASC").Find(&videos).Error; err != nil {
+	if err := videoBackfillQuery(ctx).Select("id", "name", "path").Order("id ASC").Find(&videos).Error; err != nil {
 		return nil, fmt.Errorf("load technical backfill videos: %w", err)
 	}
 	metadataByVideoID := make(map[uint]models.VideoTechnicalMetadata, len(videos))
@@ -264,7 +264,7 @@ func (s *TechnicalBackfillService) run(ctx context.Context, candidates []technic
 		}
 		s.setCurrent(candidate)
 		var video models.Video
-		if err := database.DB.Select("id", "name", "path").First(&video, candidate.ID).Error; err != nil {
+		if err := videoBackfillQuery(ctx).Select("id", "name", "path").First(&video, candidate.ID).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				s.recordSkipped()
 				continue

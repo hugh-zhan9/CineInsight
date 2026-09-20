@@ -310,7 +310,7 @@ func (s *FrameHashService) processCandidate(ctx context.Context, candidate frame
 	s.setCurrent(candidate)
 
 	var video models.Video
-	if err := database.DB.WithContext(ctx).Select("id", "name", "path").First(&video, candidate.ID).Error; err != nil {
+	if err := videoBackfillQuery(ctx).Select("id", "name", "path").First(&video, candidate.ID).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			// 排好候选之后视频被删了：跳过，不算失败。
 			s.recordSkipped()
@@ -412,7 +412,7 @@ func (s *FrameHashService) recordSequenceFailure(parent context.Context, videoID
 // loadFrameHashCandidates 挑出需要回填的活跃视频：没有序列的，或者源文件变过的。
 func loadFrameHashCandidates(ctx context.Context) ([]frameHashCandidate, error) {
 	var videos []models.Video
-	if err := database.DB.WithContext(ctx).Select("id", "name", "path").Order("id ASC").Find(&videos).Error; err != nil {
+	if err := videoBackfillQuery(ctx).Select("id", "name", "path").Order("id ASC").Find(&videos).Error; err != nil {
 		return nil, fmt.Errorf("load frame hash videos: %w", err)
 	}
 	sequences, err := loadFrameHashFingerprints(ctx)
