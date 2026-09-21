@@ -20,12 +20,12 @@ const (
 	// 判定不可靠，一律不进候选。
 	clipMinDurationSeconds = 10
 	// clipHammingThreshold：单帧 dHash 的汉明距离容差。转码、缩放、码率变化会让
-	// 同一帧的 dHash 差几位，10 位是既能容忍转码又不会把不同画面判成同帧的位置。
-	clipHammingThreshold = 10
-	// clipMatchRateThreshold：整段序列的命中率下限。要求 70% 的帧都对上，黑场或
-	// 静态画面撞出来的零星巧合就翻不过这道门。
-	clipMatchRateThreshold = 0.70
-	// clipCoarseProbeFrames / clipCoarseProbeHits：粗筛用 B 的前 16 帧在 A 上找
+	// 同一帧的 dHash 差几位，8 位保留少量转码误差；哈希命中还需画面结构复核。
+	clipHammingThreshold = 8
+	// clipMatchRateThreshold：整段序列的命中率下限。要求 80% 的帧提供有效证据，
+	// 低信息帧不计命中，但仍留在分母，不能靠黑场撑高分数。
+	clipMatchRateThreshold = 0.80
+	// clipCoarseProbeFrames / clipCoarseProbeHits：粗筛均匀取 B 的最多 16 帧在 A 上找
 	// 命中 ≥ 12 帧的偏移，只有这些偏移才做全序列验证。全量对每个偏移都比 len(B)
 	// 帧是 O(N·M)，粗筛把常数从"片段长度"降到 16。
 	clipCoarseProbeFrames = 16
@@ -94,26 +94,28 @@ func clipLengthsComparable(fullFrames, clipFrames, intervalMS int) bool {
 	return float64(clipFrames) <= clipMaxDurationRatio*float64(fullFrames)
 }
 
-// clipCoarseOffsets 用片段开头的若干帧筛出值得全量验证的偏移。
-//
-// 这是剪枝而不是等价变换：粗筛门槛（12/16 = 0.75）高于整段门槛（0.70），理论上
-// 存在"开头几帧不巧、整段却过线"的偏移会被剪掉。真实的截取片段在开头这几帧上
-// 本来就是逐帧命中的，fixture 用暴力解逐一比对钉住了这一点；把粗筛放宽到 0.70
-// 会让偏移集合膨胀，剪枝也就白做了。
+// clipHashInformative 只把有足够明暗变化的指纹当成证据。全黑、全白和
+// 单向渐变可能有完全相同的指纹，不能据此认定两帧相同。
+func clipHashInformative(hash uint64) bool {
+	ones := bits.OnesCount64(hash)
+	return ones >= 8 && ones <= 56
+}
+
+func clipFrameMatches(left, right uint64) bool {
+	return clipHashInformative(left) && clipHashInformative(right) &&
+		bits.OnesCount64(left^right) <= clipHammingThreshold
+}
+
+// clipCoarseOffsets 均匀检查整段，避免只凭共用片头进入全量比较。
 func clipCoarseOffsets(full, clip []uint64) []int {
-	probe := clipCoarseProbeFrames
-	if probe > len(clip) {
-		probe = len(clip)
-	}
+	probe := min(clipCoarseProbeFrames, len(clip))
 	required := int(math.Ceil(float64(probe) * float64(clipCoarseProbeHits) / float64(clipCoarseProbeFrames)))
-	if required < 1 {
-		required = 1
-	}
 	offsets := make([]int, 0, 8)
 	for offset := 0; offset <= len(full)-len(clip); offset++ {
 		hits := 0
 		for index := 0; index < probe; index++ {
-			if bits.OnesCount64(full[offset+index]^clip[index]) <= clipHammingThreshold {
+			position := index * (len(clip) - 1) / max(1, probe-1)
+			if clipFrameMatches(full[offset+position], clip[position]) {
 				hits++
 			}
 		}
@@ -124,15 +126,42 @@ func clipCoarseOffsets(full, clip []uint64) []int {
 	return offsets
 }
 
-// clipMatchRateAt 是 clip 整段贴在 full 的 offset 处时的命中率。
+// clipMatchRateAt 要求证据分布在全段，并包含不同画面；一个静态背景重复
+// 一千次也不等于一千份独立证据。三个代表指纹各自至少相差 9 位。
 func clipMatchRateAt(full, clip []uint64, offset int) float64 {
 	if offset < 0 || offset+len(clip) > len(full) || len(clip) == 0 {
 		return 0
 	}
 	hits := 0
-	for index := range clip {
-		if bits.OnesCount64(full[offset+index]^clip[index]) <= clipHammingThreshold {
-			hits++
+	var sectionHits, sectionCounts [4]int
+	representatives := make([]uint64, 0, 3)
+	for index, hash := range clip {
+		section := index * 4 / len(clip)
+		sectionCounts[section]++
+		if !clipFrameMatches(full[offset+index], hash) {
+			continue
+		}
+		hits++
+		sectionHits[section]++
+		if len(representatives) < 3 {
+			distinct := true
+			for _, existing := range representatives {
+				if bits.OnesCount64(existing^hash) <= clipHammingThreshold {
+					distinct = false
+					break
+				}
+			}
+			if distinct {
+				representatives = append(representatives, hash)
+			}
+		}
+	}
+	if len(representatives) < 3 {
+		return 0
+	}
+	for section, count := range sectionCounts {
+		if sectionHits[section]*2 < count {
+			return 0
 		}
 	}
 	return float64(hits) / float64(len(clip))

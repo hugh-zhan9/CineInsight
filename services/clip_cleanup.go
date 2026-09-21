@@ -46,7 +46,7 @@ type clipSequence struct {
 //
 // excluded 里是已经被别的类别认领的视频对（精确重复）与用户忽略过的对，
 // 它们不再作为截取候选出现。
-func loadCleanupClipGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, error) {
+func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, error) {
 	startedAt := time.Now()
 	// 只取用得上的列，且不预载标签：一行序列的 blob 就有 ~30 KB，整库读一遍已经
 	// 是这一步的内存峰值，没必要再把标签关联和其余列拖进来。截取候选的保留项由
@@ -144,6 +144,13 @@ func loadCleanupClipGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[ui
 			}
 			existing, exists := best[sequences[clip].video.ID]
 			if !exists || candidate.MatchRate > existing.MatchRate {
+				verified, err := s.verifyClipPair(sequences[full], sequences[clip], candidate)
+				if err != nil {
+					return nil, 0, err
+				}
+				if !verified {
+					continue
+				}
 				best[sequences[clip].video.ID] = candidate
 			}
 		}

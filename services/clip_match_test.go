@@ -1,7 +1,6 @@
 package services
 
 import (
-	"math/bits"
 	"math/rand"
 	"testing"
 )
@@ -46,13 +45,7 @@ func bruteForceMatchClip(full, clip []uint64, intervalMS int) (int, float64, boo
 	}
 	bestOffset, bestRate := 0, 0.0
 	for offset := 0; offset <= len(full)-len(clip); offset++ {
-		hits := 0
-		for index := range clip {
-			if bits.OnesCount64(full[offset+index]^clip[index]) <= clipHammingThreshold {
-				hits++
-			}
-		}
-		rate := float64(hits) / float64(len(clip))
+		rate := clipMatchRateAt(full, clip, offset)
 		if rate > bestRate {
 			bestOffset, bestRate = offset, rate
 		}
@@ -176,27 +169,27 @@ func TestMatchClipIdentifiesLeadingSegment(t *testing.T) {
 	}
 }
 
-// 命中率刚好跨过 0.70 这条线的两侧：阈值是判定的核心，不能只靠"随机序列不中"来间接覆盖。
+// 命中率刚好跨过 0.80 这条线的两侧：阈值是判定的核心，不能只靠"随机序列不中"来间接覆盖。
 func TestMatchClipHonorsMatchRateThreshold(t *testing.T) {
 	source := rand.New(rand.NewSource(7))
 	full := make([]uint64, 200)
 	for index := range full {
 		full[index] = source.Uint64()
 	}
-	// 20 帧的片段：14/20 = 0.70 刚好达标，13/20 = 0.65 不达标。
+	// 20 帧的片段：16/20 = 0.80 刚好达标，15/20 = 0.75 不达标。
 	// 被替换掉的帧用与 A 无关的随机值，等价于"这一帧没对上"。
 	buildClip := func(mismatches int) []uint64 {
 		clip := append([]uint64(nil), full[50:70]...)
 		for index := 0; index < mismatches; index++ {
-			clip[len(clip)-1-index] = source.Uint64()
+			clip[index*4] = source.Uint64()
 		}
 		return clip
 	}
-	if _, rate, ok := MatchClip(full, buildClip(6), clipFrameIntervalMS); !ok || rate < clipMatchRateThreshold {
-		t.Fatalf("14/20 = 0.70 应当达标，实际 rate=%.3f ok=%v", rate, ok)
+	if _, rate, ok := MatchClip(full, buildClip(4), clipFrameIntervalMS); !ok || rate < clipMatchRateThreshold {
+		t.Fatalf("16/20 = 0.80 应当达标，实际 rate=%.3f ok=%v", rate, ok)
 	}
-	if _, rate, ok := MatchClip(full, buildClip(7), clipFrameIntervalMS); ok {
-		t.Fatalf("13/20 = 0.65 不该达标，实际 rate=%.3f", rate)
+	if _, rate, ok := MatchClip(full, buildClip(5), clipFrameIntervalMS); ok {
+		t.Fatalf("15/20 = 0.75 不该达标，实际 rate=%.3f", rate)
 	}
 }
 
@@ -225,5 +218,46 @@ func TestFrameHashesRoundTripThroughBigEndianBlob(t *testing.T) {
 	}
 	if decodeFrameHashes(nil) != nil {
 		t.Fatal("空字节应返回空序列")
+	}
+}
+
+func TestMatchClipRejectsUninformativeAndRepeatedEvidence(t *testing.T) {
+	for _, hash := range []uint64{0, ^uint64(0), 0x5555555555555555} {
+		full, clip := make([]uint64, 100), make([]uint64, 20)
+		for index := range full {
+			full[index] = hash
+		}
+		for index := range clip {
+			clip[index] = hash
+		}
+		if _, _, ok := MatchClip(full, clip, 2000); ok {
+			t.Fatalf("constant hash %x must not be evidence", hash)
+		}
+	}
+	// 有丰富指纹的静态背景加少量压缩噪声，也不能当成多份独立证据。
+	full, clip := make([]uint64, 100), make([]uint64, 20)
+	for index := range full {
+		full[index] = 0x5555555555555555 ^ (1 << uint(index%64))
+	}
+	copy(clip, full[30:50])
+	if _, _, ok := MatchClip(full, clip, 2000); ok {
+		t.Fatal("near-static background accepted")
+	}
+	// 前 80% 相同但最后 20% 完全无关，不应凭整体比例认作完整截取。
+	full = randomFrameHashes(900, 100)
+	clip = append([]uint64(nil), full[30:50]...)
+	copy(clip[16:], randomFrameHashes(901, 4))
+	if _, _, ok := MatchClip(full, clip, 2000); ok {
+		t.Fatal("shared prefix with unrelated ending accepted")
+	}
+}
+
+func TestMatchClipKeepsShortBlackTransitionAndDoesNotCountItAsEvidence(t *testing.T) {
+	full := randomFrameHashes(902, 100)
+	full[34], full[35] = 0, 0
+	clip := append([]uint64(nil), full[30:50]...)
+	offset, rate, ok := MatchClip(full, clip, 2000)
+	if !ok || offset != 30 || rate != .9 {
+		t.Fatalf("offset=%d rate=%v ok=%v", offset, rate, ok)
 	}
 }

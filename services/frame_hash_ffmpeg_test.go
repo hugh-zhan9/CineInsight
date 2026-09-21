@@ -79,6 +79,38 @@ func TestFrameHashRealFFmpegClipFixture(t *testing.T) {
 		t.Fatalf("对齐偏移应落在 10 秒附近，实际 %.1f 秒（offset=%d 帧，rate=%.3f）", offsetSeconds, offset, rate)
 	}
 	t.Logf("真实截取片段命中：偏移 %.1f 秒，命中率 %.3f", offsetSeconds, rate)
+	sequence := func(video models.Video, row models.VideoFrameHashSequence) clipSequence {
+		return clipSequence{video: video, hashes: decodeFrameHashes(row.Hashes), intervalMS: row.IntervalMS, sourceSize: row.SourceSize, sourceMod: row.SourceModTimeNS}
+	}
+	verify := func(video models.Video, row models.VideoFrameHashSequence) {
+		t.Helper()
+		fullSequence, clipSequence := sequence(full, fullRow), sequence(video, row)
+		candidate, ok := evaluateClipPair(fullSequence, clipSequence, nil, nil)
+		if !ok {
+			t.Fatal("真实片段未通过哈希筛选")
+		}
+		verified, err := (&CleanupService{}).verifyClipPair(fullSequence, clipSequence, candidate)
+		if err != nil || !verified {
+			t.Fatalf("真实片段复核失败: verified=%v err=%v", verified, err)
+		}
+	}
+	verify(clip, clipRow)
+	for _, variant := range []struct{ name, filter string }{
+		{"scaled", "scale=160:120"},
+		{"graded", "eq=brightness=0.08:contrast=1.15:saturation=0.5:gamma=1.2,hue=h=35,scale=160:120"},
+		{"monochrome", "hue=s=0,eq=contrast=0.85:brightness=-0.03"},
+		{"warm", "colorbalance=rs=0.2:bs=-0.1:gm=0.1,eq=gamma=1.4:saturation=1.3"},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			path := filepath.Join(root, variant.name+".mp4")
+			runFFmpeg(t, ffmpegBin, "-v", "error", "-i", clipPath, "-vf", variant.filter, "-c:v", "libx264", "-crf", "28", path)
+			video := registerFFmpegFixtureVideo(t, root, variant.name+".mp4", path)
+			if err := service.Refresh(context.Background(), video); err != nil {
+				t.Fatal(err)
+			}
+			verify(video, frameHashSequenceRow(t, video.ID))
+		})
+	}
 }
 
 func runFFmpeg(t *testing.T, ffmpegBin string, args ...string) {

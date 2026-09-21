@@ -89,6 +89,7 @@ type CleanupStatus struct {
 
 type CleanupService struct {
 	ctx                  context.Context
+	clipFrame            clipFrameReader
 	mu                   sync.Mutex
 	status               CleanupStatus
 	invalidatedDuringRun bool
@@ -445,7 +446,7 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	for pair := range dismissed {
 		clipExcluded[pair] = struct{}{}
 	}
-	clipGroups, staleFrameHashCount, err := loadCleanupClipGroups(clipExcluded, presentVideoIDs)
+	clipGroups, staleFrameHashCount, err := s.loadCleanupClipGroups(clipExcluded, presentVideoIDs)
 	if err != nil {
 		return nil, 0, err
 	}

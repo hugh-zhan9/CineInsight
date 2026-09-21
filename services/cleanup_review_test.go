@@ -20,7 +20,7 @@ func TestCleanupCachedClipUsesReviewedSourceVersion(t *testing.T) {
 	hashes := randomFrameHashes(83, 40)
 	seedFrameHashSequence(t, full, hashes)
 	seedFrameHashSequence(t, clip, hashes[8:24])
-	analysis, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	analysis, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestCleanupCachedClipUsesReviewedSourceVersion(t *testing.T) {
 	if got := oldCache.Status(); got.Error != "" || len(got.Analysis.ClipGroups) != 0 {
 		t.Fatalf("old candidate returned after source changed: %+v", got)
 	}
-	fresh, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	fresh, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil || len(fresh.ClipGroups) != 1 {
 		t.Fatalf("changed source must remain eligible: %+v err=%v", fresh, err)
 	}
@@ -97,7 +97,7 @@ func TestCleanupAnalysisHonorsDecisionSavedDuringMatching(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer database.DB.Callback().Query().Remove(callback)
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil || saveErr != nil || !saved {
 		t.Fatalf("analysis=%v decision=%v saved=%v", err, saveErr, saved)
 	}
@@ -119,7 +119,7 @@ func TestCleanupStatusHonorsPersistedReviewDecisions(t *testing.T) {
 			seedFrameHashSequence(t, clip, hashes[8:24])
 			seedPerceptualHashRow(t, full, strings.Repeat("0", 16))
 			seedPerceptualHashRow(t, clip, strings.Repeat("0", 16))
-			analysis, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+			analysis, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -157,7 +157,7 @@ func TestCleanupStatusHonorsPersistedReviewDecisions(t *testing.T) {
 				}
 			}
 			// 新服务重新分析（重启），以及分析完成前已保存的决定，仍沿用相同口径。
-			fresh, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+			fresh, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 			if err != nil || len(fresh.ClipGroups) != 0 {
 				t.Fatalf("reviewed clip returned after reanalysis: %+v err=%v", fresh, err)
 			}

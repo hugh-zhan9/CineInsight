@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -72,7 +73,7 @@ func TestCleanupAnalysisReportsClipCandidate(t *testing.T) {
 	seedFrameHashSequence(t, clip, fullHashes[10:25])
 	seedFrameHashSequence(t, unrelated, randomFrameHashes(2, 15))
 
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestCleanupAnalysisCountsPendingAndStaleFrameHashes(t *testing.T) {
 	// 源文件重编码：这一行的指纹失效。
 	mustWriteSizedFile(t, stale.Path, []byte("stale-content-re-encoded"))
 
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestCleanupAnalysisExcludesExactDuplicatePairsFromClips(t *testing.T) {
 	seedFrameHashSequence(t, left, fullHashes)
 	seedFrameHashSequence(t, right, fullHashes[5:25])
 
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -164,7 +165,7 @@ func TestDismissClipCandidateHidesPairUntilFingerprintChanges(t *testing.T) {
 	seedFrameHashSequence(t, full, fullHashes)
 	seedFrameHashSequence(t, clip, fullHashes[8:24])
 
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestDismissClipCandidateHidesPairUntilFingerprintChanges(t *testing.T) {
 		t.Fatalf("同一对只该有一条忽略记录，实际 %d", dismissals)
 	}
 
-	result, err = (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err = newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -198,7 +199,7 @@ func TestDismissClipCandidateHidesPairUntilFingerprintChanges(t *testing.T) {
 	// 片段重编码：指纹变了，这是一份新素材，候选重新出现。
 	mustWriteSizedFile(t, clip.Path, []byte("cut-re-encoded"))
 	seedFrameHashSequenceReplacing(t, clip, fullHashes[8:24])
-	result, err = (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err = newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -242,7 +243,7 @@ func TestCleanupAnalysisReportsOneCandidatePerClip(t *testing.T) {
 	seedFrameHashSequence(t, second, fullHashes)
 	seedFrameHashSequence(t, clip, fullHashes[12:30])
 
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -251,6 +252,19 @@ func TestCleanupAnalysisReportsOneCandidatePerClip(t *testing.T) {
 	}
 	if result.ClipGroups[0].Clip.ID != clip.ID {
 		t.Fatalf("被报出的片段应是 shared-cut.mp4，实际 %d", result.ClipGroups[0].Clip.ID)
+	}
+	// 哈希同分但第一个完整片复核失败时，第二个仍可成为最佳候选。
+	svc := newClipFixtureCleanupService()
+	svc.clipFrame = func(_ context.Context, path string, _ float64) ([]byte, error) {
+		frame := clipTestRGB(120, 80, 40)
+		if path == first.Path {
+			return clipDifferentStructure(frame), nil
+		}
+		return frame, nil
+	}
+	result, err = svc.AnalyzeCleanupCandidates(CleanupCriteria{})
+	if err != nil || len(result.ClipGroups) != 1 || result.ClipGroups[0].Full.ID != second.ID {
+		t.Fatalf("应选择通过复核的另一完整片: %+v err=%v", result, err)
 	}
 }
 
@@ -326,7 +340,7 @@ func TestCleanupAnalysisLegacyCategoriesSnapshot(t *testing.T) {
 		t.Fatalf("创建根外同源关系失败: %v", err)
 	}
 
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{
 		MinDuration: 5 * time.Second, MinWidth: 480, MinHeight: 320,
 	})
 	if err != nil {
@@ -474,7 +488,7 @@ func TestCleanupAnalysisExcludesUnavailableVideosFromStaleCounts(t *testing.T) {
 		t.Fatalf("删除文件失败: %v", err)
 	}
 
-	result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+	result, err := newClipFixtureCleanupService().AnalyzeCleanupCandidates(CleanupCriteria{})
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
