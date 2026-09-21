@@ -63,6 +63,34 @@ it('顶栏想看入口按需挂载独立片单页', async () => {
   expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(true);
 });
 
+// 榜单页一挂载就会报一次 OpenMovieChartYear（可能起后台抓取），所以必须是
+// 点进去才挂载：留在别的页面上不该有那个副作用。
+it('顶栏榜单入口按需挂载年度榜单页，切走即卸载', async () => {
+  const wrapper = await mountApp();
+  expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(false);
+
+  await wrapper.get('[data-test="nav-movie-chart"]').trigger('click');
+  expect(wrapper.vm.currentPage).toBe('movie-chart');
+  expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(true);
+
+  await wrapper.get('[data-test="nav-watchlist"]').trigger('click');
+  expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(false);
+});
+
+// 已看页每次挂载都重读一次本地标记表，所以同样按需挂载：切走卸载、切回来重新读，
+// 不用自己维护失效。
+it('顶栏已看入口按需挂载已看页，切走即卸载', async () => {
+  const wrapper = await mountApp();
+  expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(false);
+
+  await wrapper.get('[data-test="nav-watched-movies"]').trigger('click');
+  expect(wrapper.vm.currentPage).toBe('watched-movies');
+  expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(true);
+
+  await wrapper.get('[data-test="nav-movie-chart"]').trigger('click');
+  expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(false);
+});
+
 describe('扫描目录配置变更', () => {
   it('保存目录配置后自动对一次账', async () => {
     const wrapper = await mountApp();

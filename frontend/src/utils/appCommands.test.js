@@ -76,6 +76,35 @@ describe('应用级命令注册', () => {
     expect(wrapper.vm.currentPage).toBe('watchlist');
   });
 
+  // 榜单页与已看页是 P-007 / P-008 新增的两个页面。P-007 改不到这个文件（不在它的
+  // 写入清单里），所以两条一起在这里补上：少了它们，命令面板列得出其余每一个页面，
+  // 唯独这两个只能靠顶栏点进去。key 必须与 App.vue 的 currentPage 逐字一致。
+  it('榜单与已看两页也在导航组里，执行即切到对应页面', () => {
+    const wrapper = host();
+
+    expect(commandByID('nav:page:movie-chart').label).toBe('打开榜单');
+    commandByID('nav:page:movie-chart').run();
+    expect(wrapper.vm.currentPage).toBe('movie-chart');
+
+    expect(commandByID('nav:page:watched-movies').label).toBe('打开已看');
+    commandByID('nav:page:watched-movies').run();
+    expect(wrapper.vm.currentPage).toBe('watched-movies');
+  });
+
+  // 顶栏有入口、命令面板没有，是这两页当初漏掉的那种失配。这条按 App.vue 的顶栏
+  // 按钮反查：nav-movie-chart / nav-watched-movies 两个钩子对应的页面 key 必须在
+  // COMMAND_PAGES 里各有一条。
+  it('App.vue 顶栏的榜单与已看按钮，其页面 key 在 COMMAND_PAGES 里都有条目', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/App.vue'), 'utf8');
+    const keys = COMMAND_PALETTE_PAGES.map(page => page.key);
+
+    for (const hook of ['nav-movie-chart', 'nav-watched-movies']) {
+      const button = new RegExp(`currentPage = '([^']+)'[^>]*data-test="${hook}"`).exec(source);
+      expect(button, `App.vue 里应当能找到 data-test="${hook}" 的顶栏按钮`).not.toBeNull();
+      expect(keys, hook).toContain(button[1]);
+    }
+  });
+
   it('智能视图逐条注册为导航命令', () => {
     host();
     for (const view of COMMAND_PALETTE_SMART_VIEWS) {

@@ -102,13 +102,16 @@ func TestBackgroundTaskRegistryRejectsUnknownKey(t *testing.T) {
 	if IsBackgroundTaskKey("not_a_task") {
 		t.Fatal("未知 key 不该被认作合法")
 	}
-	if len(BackgroundTaskKeys()) != 19 {
-		t.Fatalf("固定 key 集合应有 19 项，实际 %d", len(BackgroundTaskKeys()))
+	if len(BackgroundTaskKeys()) != 20 {
+		t.Fatalf("固定 key 集合应有 20 项，实际 %d", len(BackgroundTaskKeys()))
 	}
 	// 新 key 必须同时进 IsBackgroundTaskKey 与 BackgroundTaskKeys，
 	// 只加一处的话前端任务面板会认不出它。
 	if !IsBackgroundTaskKey(string(BackgroundTaskBrowserDownload)) {
 		t.Fatal("插件下载任务的 key 没有进合法集合")
+	}
+	if !IsBackgroundTaskKey(string(BackgroundTaskMovieChart)) {
+		t.Fatal("年度电影榜单任务的 key 没有进合法集合")
 	}
 	if !IsBackgroundTaskKey(string(BackgroundTaskImagePerceptualHash)) {
 		t.Fatal("图片指纹补全任务的 key 没有进合法集合")

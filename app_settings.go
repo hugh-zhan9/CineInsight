@@ -216,6 +216,13 @@ func (a *App) enterDatabaseRestoreMode() error {
 	if svc := a.imageSemanticIndexService(); svc != nil {
 		svc.StopAndWait()
 	}
+	// 年度榜单抓取与上面几个同理，而且更急：它握着的是**构造时注入**的那个
+	// *gorm.DB，恢复会 Close 掉它再把 database.DB 换成新库。不等它收摊，一轮
+	// 正在跑的抓取就会拿着已经关掉的连接继续 upsert 与写回。详情阶段还是
+	// 1 次/秒的限速循环，一年能跑约 25 分钟，靠「大概跑完了」赌不过去。
+	if svc := a.movieChartService(); svc != nil {
+		svc.StopRefreshAndWait()
+	}
 	if a.subtitleService != nil {
 		a.subtitleService.QuiesceGeneration()
 	}
@@ -250,6 +257,10 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	a.resetSemanticIndexService()
 	a.resetImageSemanticIndexService()
 	a.resetImageAITaggingService()
+	// 恢复失败续跑：database.Init 已经把 database.DB 换成了新的连接，而榜单服务
+	// 握的是进入恢复模式之前那一个（已 Close）。不重建的话榜单页从此每次读都报
+	// 「sql: database is closed」，而且只在这条失败续跑的路径上出现。
+	a.resetMovieChartService()
 	a.startShortFeedServer(a.ctx)
 	if a.jellyfinServer != nil {
 		a.jellyfinServer.Start()

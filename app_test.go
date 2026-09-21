@@ -988,9 +988,33 @@ func TestDeleteImageDirectoryHidesItsImages(t *testing.T) {
 	if err := app.DeleteImageDirectory(dir.ID); err != nil {
 		t.Fatalf("删除图片目录失败: %v", err)
 	}
-	var after int64
-	database.DB.Model(&models.Image{}).Count(&after)
-	if after != 0 {
-		t.Fatalf("删除图片目录后该目录下的图片应当从图库消失，实际还有 %d 张", after)
+
+	// 图库列表里看不到它了。这里查的是照片页本身，而不是 images 表的行数：
+	// 删除扫描目录只标 is_stale 不软删，行本来就该留着，能不能恢复全靠它。
+	page, err := app.SearchImagePage(services.ImagePageRequest{Limit: 20})
+	if err != nil {
+		t.Fatalf("查询照片页失败: %v", err)
+	}
+	if len(page.Images) != 0 {
+		t.Fatalf("删除图片目录后该目录下的图片应当从图库消失，实际还有 %d 张", len(page.Images))
+	}
+	groups, err := app.ListImageFolderGroups(services.ImageFilter{})
+	if err != nil {
+		t.Fatalf("查询文件夹图集失败: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("删除图片目录后不该再有文件夹图集: %+v", groups)
+	}
+
+	// 记录仍在库里，且带着 is_stale 这枚恢复用的标记。
+	var afterDelete models.Image
+	if err := database.DB.First(&afterDelete, "directory = ?", root).Error; err != nil {
+		t.Fatalf("删目录后图片记录应当还在: %v", err)
+	}
+	if !afterDelete.IsStale {
+		t.Fatal("删目录后该目录下的图片应当标为失效，否则目录加回来不会自动恢复")
+	}
+	if _, err := os.Stat(photo); err != nil {
+		t.Fatalf("磁盘文件不该被动: %v", err)
 	}
 }

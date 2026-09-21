@@ -204,7 +204,10 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 	return filter, nil
 }
 
-// applyImageFilter 假设 filter 已经 normalizeImageFilter；只查活跃行由软删除默认作用域保证。
+// applyImageFilter 假设 filter 已经 normalizeImageFilter。「哪些图片算数」不在这里判断：
+// 软删除默认作用域之外还有两项由 applyImageVisibility 一并盖住——is_stale（失踪只标记
+// 不软删，见 ImageService.markMissingImageStale）与扫描黑名单目录。照片页、文件夹图集、
+// 时间线分组都经由这里取活跃集，改口径只改 applyImageVisibility 一处。
 func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 	query = applyImageVisibility(query, database.DB)
 	if filter.Keyword != "" {

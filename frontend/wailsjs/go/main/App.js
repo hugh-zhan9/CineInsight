@@ -158,6 +158,10 @@ export function CancelLocalMetadataExport() {
   return window['go']['main']['App']['CancelLocalMetadataExport']();
 }
 
+export function CancelMovieChartRefresh() {
+  return window['go']['main']['App']['CancelMovieChartRefresh']();
+}
+
 export function CancelPerceptualHashBackfill() {
   return window['go']['main']['App']['CancelPerceptualHashBackfill']();
 }
@@ -196,6 +200,10 @@ export function ClearAITagLibrary() {
 
 export function ClearFaceData() {
   return window['go']['main']['App']['ClearFaceData']();
+}
+
+export function ClearMovieChartMark(arg1) {
+  return window['go']['main']['App']['ClearMovieChartMark'](arg1);
 }
 
 export function ClearPlaybackProxies() {
@@ -650,6 +658,14 @@ export function ListImageTrashEntries() {
   return window['go']['main']['App']['ListImageTrashEntries']();
 }
 
+export function ListMovieChart(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['ListMovieChart'](arg1, arg2, arg3, arg4);
+}
+
+export function ListMovieChartYears() {
+  return window['go']['main']['App']['ListMovieChartYears']();
+}
+
 export function ListPeople(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListPeople'](arg1, arg2, arg3, arg4);
 }
@@ -674,6 +690,10 @@ export function ListTrashEntries() {
   return window['go']['main']['App']['ListTrashEntries']();
 }
 
+export function ListWatchedMovies() {
+  return window['go']['main']['App']['ListWatchedMovies']();
+}
+
 export function ListWatchlist(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListWatchlist'](arg1, arg2, arg3);
 }
@@ -684,6 +704,10 @@ export function ListWatchlistCandidates(arg1) {
 
 export function LogFrontend(arg1, arg2, arg3) {
   return window['go']['main']['App']['LogFrontend'](arg1, arg2, arg3);
+}
+
+export function MarkMovieChartEntry(arg1, arg2) {
+  return window['go']['main']['App']['MarkMovieChartEntry'](arg1, arg2);
 }
 
 export function MarkSameSourceRelationRead(arg1) {
@@ -712,6 +736,10 @@ export function OpenDirectory(arg1) {
 
 export function OpenImageDirectory(arg1) {
   return window['go']['main']['App']['OpenImageDirectory'](arg1);
+}
+
+export function OpenMovieChartYear(arg1) {
+  return window['go']['main']['App']['OpenMovieChartYear'](arg1);
 }
 
 export function PickRandomVideos(arg1, arg2) {
@@ -748,6 +776,10 @@ export function PreviewExternally(arg1) {
 
 export function PreviewLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['PreviewLocalMetadataBatch'](arg1);
+}
+
+export function RefreshMovieChart(arg1) {
+  return window['go']['main']['App']['RefreshMovieChart'](arg1);
 }
 
 export function RefreshVideoMetadata(arg1) {

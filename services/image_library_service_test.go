@@ -358,6 +358,71 @@ func TestImagePageExcludesSoftDeletedRows(t *testing.T) {
 	}
 }
 
+// 图片失踪只标 is_stale、不软删（删除扫描目录、外置磁盘离线都走这条路），
+// 所以照片页三个视图必须自己把 is_stale 滤掉；标记解除后要原样回到库里，
+// 标签与评分这些人工维护的字段一并保留。
+func TestImageLibraryHidesStaleRowsUntilFlagCleared(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewImageLibraryService()
+
+	kept := mustCreateTestImage(t, "kept.jpg", 10)
+	offline := mustCreateTestImage(t, "offline.jpg", 20)
+	tag := mustCreateImageTag(t, "旅行")
+	if err := svc.AddTagToImage(offline.ID, tag.ID); err != nil {
+		t.Fatalf("打标失败: %v", err)
+	}
+	rating := 8.0
+	if _, err := svc.SetImageRating(offline.ID, &rating); err != nil {
+		t.Fatalf("评分失败: %v", err)
+	}
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", offline.ID).
+		Update("is_stale", true).Error; err != nil {
+		t.Fatalf("标记 is_stale 失败: %v", err)
+	}
+
+	if got := searchImageIDs(t, ImageFilter{}); len(got) != 1 || got[0] != kept.ID {
+		t.Fatalf("is_stale 的图片不应出现在照片页: %v", got)
+	}
+	groups, err := svc.ListImageFolderGroups(ImageFilter{})
+	if err != nil {
+		t.Fatalf("文件夹图集查询失败: %v", err)
+	}
+	if len(groups) != 1 || groups[0].Count != 1 || groups[0].TotalSize != kept.Size {
+		t.Fatalf("文件夹图集必须与照片页同口径排除 is_stale: %+v", groups)
+	}
+	buckets, err := svc.ListImageTimelineBuckets(ImageFilter{})
+	if err != nil {
+		t.Fatalf("时间线分组查询失败: %v", err)
+	}
+	staleCount := 0
+	for _, bucket := range buckets {
+		staleCount += bucket.Count
+	}
+	if staleCount != 1 {
+		t.Fatalf("时间线分组必须与照片页同口径排除 is_stale: %+v", buckets)
+	}
+
+	// 磁盘插回来或目录加回来：下一轮扫描清掉 is_stale，图片带着标签评分一起回来。
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", offline.ID).
+		Update("is_stale", false).Error; err != nil {
+		t.Fatalf("清除 is_stale 失败: %v", err)
+	}
+	restored := searchImageIDs(t, ImageFilter{})
+	if len(restored) != 2 {
+		t.Fatalf("清掉 is_stale 后图片应当回到照片页: %v", restored)
+	}
+	detail, err := svc.GetImageDetail(offline.ID)
+	if err != nil {
+		t.Fatalf("读取图片详情失败: %v", err)
+	}
+	if len(detail.Image.Tags) != 1 || detail.Image.Tags[0].ID != tag.ID {
+		t.Fatalf("恢复后标签应原样保留: %+v", detail.Image.Tags)
+	}
+	if detail.Image.PersonalRating == nil || *detail.Image.PersonalRating != rating {
+		t.Fatalf("恢复后评分应原样保留: %+v", detail.Image.PersonalRating)
+	}
+}
+
 func TestImagePageRecentCursorPaginationTieBreaksByID(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := NewImageLibraryService()

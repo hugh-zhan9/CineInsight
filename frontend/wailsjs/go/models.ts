@@ -4741,6 +4741,130 @@ export namespace services {
 	        this.image_links_moved = source["image_links_moved"];
 	    }
 	}
+	export class MovieChartBackfill {
+	    pending: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MovieChartBackfill(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.pending = source["pending"];
+	        this.total = source["total"];
+	    }
+	}
+	export class MovieChartCacheState {
+	    last_refreshed_at?: string;
+	    last_failure: string;
+	    refreshing: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MovieChartCacheState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.last_refreshed_at = source["last_refreshed_at"];
+	        this.last_failure = source["last_failure"];
+	        this.refreshing = source["refreshing"];
+	    }
+	}
+	export class MovieChartItemView {
+	    douban_id: string;
+	    title: string;
+	    original_title: string;
+	    card_subtitle: string;
+	    release_date: string;
+	    release_scope: string;
+	    rating: number;
+	    rating_count: number;
+	    has_poster: boolean;
+	    mark: string;
+	    detail_status: string;
+	    detail_error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MovieChartItemView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.douban_id = source["douban_id"];
+	        this.title = source["title"];
+	        this.original_title = source["original_title"];
+	        this.card_subtitle = source["card_subtitle"];
+	        this.release_date = source["release_date"];
+	        this.release_scope = source["release_scope"];
+	        this.rating = source["rating"];
+	        this.rating_count = source["rating_count"];
+	        this.has_poster = source["has_poster"];
+	        this.mark = source["mark"];
+	        this.detail_status = source["detail_status"];
+	        this.detail_error = source["detail_error"];
+	    }
+	}
+	export class MovieChartMarkResult {
+	    mark: string;
+	    watchlist_created: boolean;
+	    watchlist_conflict: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MovieChartMarkResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.mark = source["mark"];
+	        this.watchlist_created = source["watchlist_created"];
+	        this.watchlist_conflict = source["watchlist_conflict"];
+	    }
+	}
+	export class MovieChartPage {
+	    year: number;
+	    sort: string;
+	    page: number;
+	    page_size: number;
+	    total: number;
+	    items: MovieChartItemView[];
+	    cache: MovieChartCacheState;
+	    backfill: MovieChartBackfill;
+	
+	    static createFrom(source: any = {}) {
+	        return new MovieChartPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.year = source["year"];
+	        this.sort = source["sort"];
+	        this.page = source["page"];
+	        this.page_size = source["page_size"];
+	        this.total = source["total"];
+	        this.items = this.convertValues(source["items"], MovieChartItemView);
+	        this.cache = this.convertValues(source["cache"], MovieChartCacheState);
+	        this.backfill = this.convertValues(source["backfill"], MovieChartBackfill);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class PerceptualHashFailure {
 	    video_id: number;
 	    name: string;
@@ -6350,6 +6474,56 @@ export namespace services {
 	        this.is_unread = source["is_unread"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class WatchedMovieView {
+	    douban_id: string;
+	    title: string;
+	    has_poster: boolean;
+	    marked_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WatchedMovieView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.douban_id = source["douban_id"];
+	        this.title = source["title"];
+	        this.has_poster = source["has_poster"];
+	        this.marked_at = source["marked_at"];
+	    }
+	}
+	export class WatchedMovieYearGroup {
+	    year: number;
+	    items: WatchedMovieView[];
+	
+	    static createFrom(source: any = {}) {
+	        return new WatchedMovieYearGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.year = source["year"];
+	        this.items = this.convertValues(source["items"], WatchedMovieView);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

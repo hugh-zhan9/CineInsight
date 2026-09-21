@@ -21,6 +21,8 @@ const COMMAND_PAGES = [
   { key: 'people', label: '人物', keywords: ['person', 'people', 'renwu'] },
   { key: 'collections', label: '作品集', keywords: ['collection', 'zuopinji'] },
   { key: 'watchlist', label: '想看', keywords: ['watchlist', 'xiangkan', '片单', '待下载'] },
+  { key: 'movie-chart', label: '榜单', keywords: ['chart', 'movie chart', 'bangdan', '年度', '豆瓣'] },
+  { key: 'watched-movies', label: '已看', keywords: ['watched', 'yikan', 'kanguo', '看过', '榜单已看'] },
   { key: 'insights', label: '洞察', keywords: ['insights', 'stats', 'dongcha'] },
   { key: 'photos', label: '图片', keywords: ['photo', 'image', 'tupian'] },
   { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] }

@@ -1088,14 +1088,20 @@ func TestWatchlistEnrichDoesNotBlockWatchlistCRUD(t *testing.T) {
 
 // ---------- 后台任务登记 ----------
 
+// 这里要的性质只有两条：watchlist_enrich 在固定 key 集合里，且在面板顺序里恰好
+// 出现一次。
+//
+// 曾经还有第三条「它必须排在顺序表末尾」，那是本条 key 刚加进来时它恰好是最新的
+// 一个，不是任何人的要求。下一个切片一往末尾追加 key（2026-09-21 的 movie_chart
+// 就是），这条断言必然假红，而唯一「修好」它的办法是把新 key 插到本条前面——为了
+// 一句快照去拧设置页的面板顺序。**不要给新 key 再写一条同形的末尾断言**，那只是
+// 把同一个雷往后挪一个切片。面板顺序本身由
+// TestBackgroundTaskRegistrySnapshotOrderIsStable 守着。
 func TestWatchlistEnrichBackgroundTaskKeyIsRegistered(t *testing.T) {
 	if !IsBackgroundTaskKey(string(BackgroundTaskWatchlistEnrich)) {
 		t.Fatalf("watchlist_enrich 必须在固定 key 集合里")
 	}
 	keys := BackgroundTaskKeys()
-	if keys[len(keys)-1] != string(BackgroundTaskWatchlistEnrich) {
-		t.Errorf("新 key 应追加在面板顺序末尾，实际顺序尾部是 %q", keys[len(keys)-1])
-	}
 	seen := 0
 	for _, key := range keys {
 		if key == string(BackgroundTaskWatchlistEnrich) {

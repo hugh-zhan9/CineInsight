@@ -338,6 +338,17 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 
 - **豆瓣电影源（2026-09-14 用户裁决）：** 电影优先豆瓣，明确 `not_found` 才查 TMDB，凭证/代理/网络/验证拦截仍按原有六类错误直接报告。`services/watchlist_metadata_douban.go` 使用电影站 `/j/subject_suggest` 搜索、移动网页 `/rexxar/api/v2/movie/<id>` 取详情，均无需凭证、共用资料源出网代理客户端；网页数据接口无稳定性承诺。搜索里的剧集也可能标 `type=movie`，先按 `episode` 排除，详情再按 `is_tv/type` 确认。数字 ID、返回 ID 与标题必须校验；空数组才是无搜索结果，`null`、验证页、未知 404 均不能当未收录。详情仅业务 404 `traversal_error` 判未收录。电影「重选结果」向前端传 `source:id` 选择标识，`ApplyCandidate` 定向询问该源，数据库仍存原始 ID；缺来源的旧多源候选要求刷新，避免把豆瓣 ID 交给 TMDB 查成另一部电影。设置页新增豆瓣测试，同时覆盖搜索和详情。实测《沙丘》《肖申克的救赎》中文详情成功，后者海报保存成功；前者图床对 Go 请求返回 200 验证页，按既有规则保留文字、海报缺失。已配置代理下有详情成功也有超时，不保证稳定可达。验证记录见 `docs/loopx/design/2026-09-14-watchlist-douban.md`。
 
+### 2.30 年度电影榜单与已看页（2026-09-21）
+- 按年份浏览在内地公映的电影（含尚未上映的），每条可一键「想看 / 不想看 / 已看」；已看页按**影片上映年份**分组回看。顶栏与命令面板各有入口（`movie-chart` / `watched-movies`）。设计见 `docs/loopx/design/2026-09-21-movie-year-chart/`。
+- **数据源只有豆瓣**，两个端点都无需凭证：列表 `m.douban.com/rexxar/api/v2/movie/recommend`，详情 `m.douban.com/rexxar/api/v2/movie/<id>`。出网一律经 `NewWatchlistMetadataHTTPClient`（用户配的资料源代理），失败沿用既有六类分类且**互不合并**。`services/movie_chart_douban.go` 对 401/403 判 `source_error` 而非 `credential_invalid`——本源没有凭证，说「凭证无效」会让用户去查一个不存在的配置项；姊妹适配器 `watchlist_metadata_douban.go` 对同一主机早已是这个口径。
+- **端点的三个硬约束（实测，改代码前先看设计 §2）**：①`total` 恒为 500 是占位值，分页只能固定翻 25 页（`start=0,20,…,480`）；②`selected_categories` 不起过滤作用，真正过滤的是 `tags=<年份>`；③**HTTP 200 + 空 `items` 数组是瞬时现象，既不是「到底了」也不是 `not_found`**，但 `items` 键缺失或为 `null` 判 `source_error`——两者混为一谈会让一次限流变成「整年抓取成功但没有数据」。
+- **取数口径＝在内地公映（含引进片）**，因此 `tags` 只带年份不带地区（地区是产地维度，带上会滤掉全部引进片）。判定读详情 `pubdate`：括号内按 `/` 拆分后**精确相等**匹配「中国大陆」；`strings.Contains` 会把 `2026(中国大陆网络)` 误判成院线。覆盖靠四种排序（T/U/R/S）合并去重，约 1500 条/年，**非全量**，界面明说。
+- 三张表 `movie_chart_entries` / `movie_chart_marks` / `movie_chart_year_states`，彼此与既有表**都没有外键**：标记按豆瓣 ID 字符串关联条目，并快照片名/上映年份/海报地址，缓存重建或条目下架后已看页仍完整。列表 upsert 的 `DoUpdates` **绝不能包含 `detail_*` 与 `release_*`**，否则每次刷新把已补全条目打回 pending、一年白跑约 1500 次详情。
+- 详情补全走后台任务 `movie_chart`（**不进空闲门**），认领与写回沿用 `watchlist_enrichment.go` 的条件更新 + 32 位十六进制 claim（**禁用 `uuid.NewString()`**，36 字符会让 Postgres 报 22001），限速 1 次/秒、可取消、可断点续跑。年状态的三个落定路径统一经 `writeYearState` 且包 `context.WithoutCancel`——落定的结果是已发生的事实，取消意味着「别再抓了」而不是「忘掉刚才发生的事」。
+- 刷新时机（D-MC12）：当年在打开榜单页、距上次**成功**刷新 ≥30 天、**且上一次尝试没有失败**时后台自动抓；往年只在从未尝试过时抓一次；手动刷新随时可用。触发点是独立绑定 `OpenMovieChartYear`，**只在页面挂载与切换年份时调用**——放进 `ListPage` 会让取消的刷新被下一次读立刻重启。
+- 海报**不落盘**，经只读路由 `/preview/douban-chart-poster/<豆瓣ID>` 即时转发：地址只从本地两张表取、不接受调用方传 URL，取出后仍校验 https + `doubanio.com` 域，同一套校验挂在 `CheckRedirect` 上**逐跳执行**。图床实测无 Referer 返回 418、对 `localhost` / `wails://` 返回 403，所以前端 `<img>` 直连远程地址不可行。
+- **Postgres 独有的三个陷阱**：批内重复 `douban_id` 报 21000（SQLite 不报，去重守卫在 SQLite 上天然空转）、`ON CONFLICT` 的 SET 右侧未加表名限定报 42702、片名超 `varchar(200)` 报 22001（已按 rune 截断）。**任何改动 `upsertListPage` 或 `movieChartListDoUpdateColumns` 的人必须跑 `CINEINSIGHT_TEST_PG_DSN` 那条腿**，只跑默认后端看到全绿等于没测。
+
 ## 3. 关键目录说明 (Directory Structure)
 
 - `/services`: **核心业务层**（Video, VideoDetail, MediaProbe, TechnicalBackfill, Person, Collection, Subtitle, SubtitleWorkbench, LibraryWatcher, LocalMetadata, AIQuality, Tag, Settings, Directory 服务）。

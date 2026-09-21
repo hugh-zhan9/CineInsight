@@ -107,6 +107,11 @@ type App struct {
 	restoreMu          sync.Mutex
 	restoreTerminal    bool
 	restoreRelease     func()
+
+	// 年度电影榜单（D-MC01..D-MC13）。与上面几个握着 *gorm.DB 的服务同理，它在
+	// 数据库就绪后由 resetMovieChartService 构造、用锁换上，不在 NewApp 里建。
+	movieChartMu sync.RWMutex
+	movieChart   *services.MovieChartService
 }
 
 // NewApp creates a new App application struct
@@ -317,6 +322,9 @@ func (a *App) startup(ctx context.Context) {
 	a.resetSemanticIndexService()
 	a.resetImageSemanticIndexService()
 	a.resetImageAITaggingService()
+	// 年度电影榜单：读接口不出网，但它得握着数据库连接才能读缓存，所以与上面
+	// 几个一样等数据库就绪后再构造。
+	a.resetMovieChartService()
 	a.technicalBackfill.SetEventEmitter(func(status services.TechnicalBackfillStatus) {
 		emit("technical-backfill-state", status)
 	})
@@ -535,6 +543,12 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.watchlistService != nil {
 		a.watchlistService.StopEnrichmentAndWait()
+	}
+	if svc := a.movieChartService(); svc != nil {
+		// 必须等它真的收摊：详情阶段是 1 次/秒的限速循环，不取消就会在退出途中
+		// 继续把整年剩下的请求发出去；半途被杀还会在库里留下 running 的认领行，
+		// 要等下一次刷新的 resetYearDetailBacklog 才放得回队列。
+		svc.StopRefreshAndWait()
 	}
 	if a.shortFeedServer != nil {
 		if err := a.shortFeedServer.Stop(ctx); err != nil {

@@ -17,6 +17,14 @@ import (
 
 const managedImageMaxBytes int64 = 20 << 20
 
+// ManagedImageMaxBytes 是 managedImageMaxBytes 的导出别名，给 main 包用。
+//
+// 只加别名、**不**把原来那个未导出的常量改名：它在本包里有十来个调用点，改名
+// 等于为了一个跨包引用去动一片与本次改动无关的代码。root 包的海报代理路由
+// （preview_asset_handler.go）此前把 20 MiB 这个字面量重述了一遍，别名让两处
+// 重新变回同一个来源——上限一改，两边一起跟着变。
+const ManagedImageMaxBytes = managedImageMaxBytes
+
 type ManagedImageAsset struct {
 	Path        string
 	DisplayName string

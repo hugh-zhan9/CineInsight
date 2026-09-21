@@ -82,6 +82,8 @@ export function CancelLocalMetadataBackfill():Promise<void>;
 
 export function CancelLocalMetadataExport():Promise<void>;
 
+export function CancelMovieChartRefresh():Promise<void>;
+
 export function CancelPerceptualHashBackfill():Promise<void>;
 
 export function CancelPlaybackProxyTask():Promise<void>;
@@ -101,6 +103,8 @@ export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
 export function ClearAITagLibrary():Promise<Array<models.Tag>>;
 
 export function ClearFaceData():Promise<services.FaceDataUsage>;
+
+export function ClearMovieChartMark(arg1:string):Promise<void>;
 
 export function ClearPlaybackProxies():Promise<services.PlaybackProxyUsage>;
 
@@ -328,6 +332,10 @@ export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Arra
 
 export function ListImageTrashEntries():Promise<Array<models.ImageTrashEntry>>;
 
+export function ListMovieChart(arg1:number,arg2:string,arg3:number,arg4:boolean):Promise<services.MovieChartPage>;
+
+export function ListMovieChartYears():Promise<Array<number>>;
+
 export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;
 
 export function ListRecentlyPlayed(arg1:number):Promise<Array<models.Video>>;
@@ -340,11 +348,15 @@ export function ListSavedLibraryViews():Promise<Array<models.SavedLibraryView>>;
 
 export function ListTrashEntries():Promise<Array<models.VideoTrashEntry>>;
 
+export function ListWatchedMovies():Promise<Array<services.WatchedMovieYearGroup>>;
+
 export function ListWatchlist(arg1:string,arg2:number,arg3:number):Promise<services.WatchlistPage>;
 
 export function ListWatchlistCandidates(arg1:number):Promise<Array<services.WatchlistCandidateView>>;
 
 export function LogFrontend(arg1:string,arg2:string,arg3:string):Promise<void>;
+
+export function MarkMovieChartEntry(arg1:string,arg2:string):Promise<services.MovieChartMarkResult>;
 
 export function MarkSameSourceRelationRead(arg1:number):Promise<void>;
 
@@ -359,6 +371,8 @@ export function NameFaceCluster(arg1:number,arg2:string,arg3:string):Promise<ser
 export function OpenDirectory(arg1:number):Promise<void>;
 
 export function OpenImageDirectory(arg1:string):Promise<void>;
+
+export function OpenMovieChartYear(arg1:number):Promise<boolean>;
 
 export function PickRandomVideos(arg1:services.RandomPlayRequest,arg2:number):Promise<services.RandomPickResult>;
 
@@ -377,6 +391,8 @@ export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void
 export function PreviewExternally(arg1:number):Promise<void>;
 
 export function PreviewLocalMetadataBatch(arg1:Array<number>):Promise<services.LocalMetadataBatchPreview>;
+
+export function RefreshMovieChart(arg1:number):Promise<void>;
 
 export function RefreshVideoMetadata(arg1:number):Promise<void>;
 

@@ -29,6 +29,14 @@ const watchlistPosterMaxBytes = managedImageMaxBytes
 // 基本等于自报家门。图床与详情页往往是同一套防护，UA 也一起给。
 const watchlistPosterUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
+// WatchlistPosterUserAgent 是 watchlistPosterUserAgent 的导出别名，给 main 包用。
+//
+// 榜单海报代理路由（preview_asset_handler.go）要报同一个标识。原先它抄了一份
+// 同样的字面量，两处会各自漂移：改了这里、忘了那里，同一套防盗链下一半请求
+// 通、一半被拦，还很难看出为什么。别名让 UA 只有这一个来源；原常量不改名，
+// 本包里的调用点一个都不动。
+const WatchlistPosterUserAgent = watchlistPosterUserAgent
+
 // ErrWatchlistPosterTooLarge 标记「响应超过下载上限」。与格式不符、网络失败分开，
 // 调用方据此给用户「海报太大」而不是一句笼统的下载失败。
 var ErrWatchlistPosterTooLarge = errors.New("海报超过下载体积上限")

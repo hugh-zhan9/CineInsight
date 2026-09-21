@@ -20,6 +20,12 @@
         <button @click="currentPage = 'watchlist'" :class="['nav-btn', { active: currentPage === 'watchlist' }]" data-test="nav-watchlist">
           想看
         </button>
+        <button @click="currentPage = 'movie-chart'" :class="['nav-btn', { active: currentPage === 'movie-chart' }]" data-test="nav-movie-chart">
+          榜单
+        </button>
+        <button @click="currentPage = 'watched-movies'" :class="['nav-btn', { active: currentPage === 'watched-movies' }]" data-test="nav-watched-movies">
+          已看
+        </button>
 		<button @click="currentPage = 'insights'" :class="['nav-btn', { active: currentPage === 'insights' }]">
 		  洞察
 		</button>
@@ -67,6 +73,11 @@
 
       <DownloadsPage v-if="currentPage === 'downloads'" />
       <WatchlistPage v-if="currentPage === 'watchlist'" />
+      <!-- 按需挂载：榜单页一挂载就会报一次 OpenMovieChartYear（可能起后台抓取），
+           不在这个页面时不该有那个副作用，所以用 v-if 而不是 v-show。 -->
+      <MovieChartPage v-if="currentPage === 'movie-chart'" />
+      <!-- 已看页只读一次本地标记表，进页面才挂载就够了；切回来重新读，不用自己做失效。 -->
+      <WatchedMoviesPage v-if="currentPage === 'watched-movies'" />
 
       <SettingsPage
         ref="settingsPage"
@@ -114,6 +125,8 @@ import InsightsPage from './components/InsightsPage.vue';
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
 import DownloadsPage from './components/DownloadsPage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
+import MovieChartPage from './components/MovieChartPage.vue';
+import WatchedMoviesPage from './components/WatchedMoviesPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import { logFrontend } from './utils/frontendLog.js';
@@ -128,7 +141,7 @@ export default {
   name: 'App',
   // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
   mixins: [appCommandsMixin],
-  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage, AppFeedback, CommandPalette },
+  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage, MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette },
   data() {
     return {
       currentPage: 'videos',
