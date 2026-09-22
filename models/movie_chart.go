@@ -85,9 +85,21 @@ type MovieChartEntry struct {
 	Directors string `gorm:"type:text;not null;default:''" json:"directors"`
 	Cast      string `gorm:"type:text;not null;default:''" json:"cast"`
 	Overview  string `gorm:"type:text;not null;default:''" json:"overview"`
-	// PosterURL 是豆瓣的远程地址，只给海报代理路由用，不下发给前端——前端拿到的是
-	// HasPoster 布尔与代理路径。与 WatchlistEntry.PosterPath 同样的态度。
+	// PosterURL 是豆瓣的远程地址。它**只给补全 worker 下载海报用**，不下发给前端，
+	// 也不再给任何渲染路径用（D-MC14）。与 WatchlistEntry.PosterPath 同样的态度。
 	PosterURL string `gorm:"type:text;not null;default:''" json:"-"`
+	// PosterPath 是海报落盘之后的托管相对路径（media-details 根之下，形如
+	// movie_chart/<条目 id>/<sha256>.jpg），形态与 WatchlistEntry.PosterPath 一致。
+	//
+	// D-MC14 之后它是渲染路径唯一的海报来源：只读路由拿它取本地文件，取不到就是
+	// 404（前端显示占位），**不回源**。空串有三种成因，对补全侧是同一件事——
+	// 「这条还缺图」：从未下过、下过但失败、被磁盘上限 LRU 淘汰掉了。因此补全的
+	// 取件条件只看 poster_url 非空且本列为空，不看 detail_status。
+	//
+	// 类型取 text 而不是定长：托管路径长度由内容寻址的摘要与条目 id 共同决定，
+	// 给一个会被 Postgres 的 22001 卡住的上限没有任何好处（models/watchlist.go:52-55
+	// 记过那个坑）。
+	PosterPath string `gorm:"type:text;not null;default:''" json:"-"`
 
 	// 详情补全状态族。idx_movie_chart_entry_detail(detail_status, id) 是补全 worker
 	// 取待办的访问路径。

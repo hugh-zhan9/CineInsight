@@ -30,6 +30,10 @@ const (
 	// MovieChartPageSize 恒为 20（D-MC10），不接受调用方指定。
 	MovieChartPageSize = 20
 
+	// movieChartPosterLookupBatch 是已看页查海报时每批的 ID 数量上限，
+	// 见 loadPosterPresence。
+	movieChartPosterLookupBatch = 500
+
 	// movieChartMinYear / movieChartMaxYearAhead 是年份入参的合法区间
 	// [1900, 当前年+5]（需求设计文档 §6.1）。
 	//
@@ -93,8 +97,11 @@ type MovieChartPage struct {
 // 类型与导演。将来要详情弹窗时再加一个方法，不在列表里预先透传。
 //
 // 也没有海报地址：前端拿到的是 HasPoster 布尔，图走 /preview/douban-chart-poster/
-// 代理路由（D-MC09）。HasPoster 为假时前端不发请求，省下一次
+// 这条**纯本地读**的路由（D-MC14）。HasPoster 为假时前端不发请求，省下一次
 // 必然 404 的往返。
+//
+// HasPoster 看的是 poster_path（海报已经落盘）而不是 poster_url（豆瓣上有这张图）：
+// 落盘之后路由不再回源，库里有远程地址但本地还没下到的条目，请求过去只会是 404。
 type MovieChartItemView struct {
 	DoubanID      string  `json:"douban_id"`
 	Title         string  `json:"title"`
@@ -136,10 +143,16 @@ type WatchedMovieYearGroup struct {
 	Items []WatchedMovieView `json:"items"`
 }
 
-// WatchedMovieView 是已看页的一张卡片，字段全部取自标记行的**快照**。
+// WatchedMovieView 是已看页的一张卡片，文字字段全部取自标记行的**快照**。
 //
-// 不去 join 缓存表：已看记录是用户产生的事实，缓存被整年重建、条目从豆瓣下架之后
-// 都必须照常显示（D-MC05）。
+// 标题与上映年份不去 join 缓存表：已看记录是用户产生的事实，缓存被整年重建、
+// 条目从豆瓣下架之后都必须照常显示（D-MC05）。
+//
+// HasPoster 是唯一的例外，而且是被 D-MC14 逼出来的：海报落盘之后，图是一个由
+// **缓存表那一行**（movie_chart_entries.poster_path）引用的本地文件，标记行里
+// 那个 poster_url 快照已经没有任何渲染路径会用——用它算 HasPoster 就是在说谎，
+// 前端据此发的每一次请求都只能得到 404。缓存里没有那一行时这张卡片显示占位，
+// 其余内容照常完整。
 type WatchedMovieView struct {
 	DoubanID  string    `json:"douban_id"`
 	Title     string    `json:"title"`
@@ -266,7 +279,7 @@ func (s *MovieChartService) ListPage(year int, sort string, page int, showMarked
 			ReleaseScope:  row.ReleaseScope,
 			Rating:        row.Rating,
 			RatingCount:   row.RatingCount,
-			HasPoster:     row.PosterURL != "",
+			HasPoster:     row.PosterPath != "",
 			Mark:          marks[row.DoubanID],
 			DetailStatus:  row.DetailStatus,
 			DetailError:   row.DetailError,
@@ -323,6 +336,40 @@ func (s *MovieChartService) loadMarksFor(rows []models.MovieChartEntry) (map[str
 		marks[mark.DoubanID] = mark.Mark
 	}
 	return marks, nil
+}
+
+// loadPosterPresence 查这一批豆瓣 ID 里哪些**已经有落盘的海报**。
+//
+// 只取 douban_id 与 poster_path 两列，不把整行读回来：已看页只需要知道有没有图。
+// 分批查是因为已看记录没有上限，一次 IN 上千个占位符在 Postgres 上会撞
+// 「extended protocol 最多 65535 个参数」，而这条查询是页面每次打开都要跑的。
+func (s *MovieChartService) loadPosterPresence(rows []models.MovieChartMark) (map[string]bool, error) {
+	presence := make(map[string]bool, len(rows))
+	if len(rows) == 0 {
+		return presence, nil
+	}
+	ids := make([]string, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.DoubanID)
+	}
+	for start := 0; start < len(ids); start += movieChartPosterLookupBatch {
+		end := start + movieChartPosterLookupBatch
+		if end > len(ids) {
+			end = len(ids)
+		}
+		var found []models.MovieChartEntry
+		err := s.db.Model(&models.MovieChartEntry{}).
+			Select([]string{"douban_id", "poster_path"}).
+			Where("douban_id IN ? AND poster_path <> ?", ids[start:end], "").
+			Find(&found).Error
+		if err != nil {
+			return nil, fmt.Errorf("读取已看影片海报失败: %w", err)
+		}
+		for _, entry := range found {
+			presence[entry.DoubanID] = true
+		}
+	}
+	return presence, nil
 }
 
 // cacheState 把年状态表翻成页面顶部状态条要用的三个字段。
@@ -384,12 +431,16 @@ func (s *MovieChartService) ListWatched() ([]WatchedMovieYearGroup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("读取已看影片失败: %w", err)
 	}
+	posters, err := s.loadPosterPresence(rows)
+	if err != nil {
+		return nil, err
+	}
 	groups := make([]WatchedMovieYearGroup, 0)
 	for _, row := range rows {
 		view := WatchedMovieView{
 			DoubanID:  row.DoubanID,
 			Title:     row.Title,
-			HasPoster: row.PosterURL != "",
+			HasPoster: posters[row.DoubanID],
 			MarkedAt:  row.MarkedAt,
 		}
 		// 行已经按年份倒序排好，所以只要和上一组比一次年份就够，不用先建 map 再排序。

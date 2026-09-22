@@ -1,7 +1,7 @@
 ---
 schema: loopx-plan/v1
 source: docs/loopx/design/2026-09-21-movie-year-chart/需求设计文档.md
-status: ready   # P-001…P-008 done；P-009 仅文档部分完成，真机验收待用户在另一台机器执行
+status: ready   # P-001…P-008、P-010 done；P-009 仅文档部分完成，真机验收待用户在另一台机器执行
 slices:
   - id: P-001
     status: done
@@ -30,6 +30,9 @@ slices:
   - id: P-009
     status: in_progress
     depends: [P-007, P-008]
+  - id: P-010
+    status: done
+    depends: [P-005, P-006]
 ---
 
 # 年度电影榜单
@@ -252,6 +255,20 @@ host 等于或以 `.doubanio.com` 结尾。
 > architecture: `not_applicable —— 仅文档与人工验收，不改代码、不动模块边界；证据：本切片 writes 中无 .go / .vue 文件`
 > verify: `人工：当前年与一个往年各跑一次完整闭环，记录实际观察；断网场景须真的断网而不是 mock`
 > review: `确认回填的是真实命令输出与真实观察，未把待执行写成通过`
+
+## P-010 海报落盘，渲染路径零出网
+
+2026-09-22 真机暴露：用户测试中豆瓣图床开始返回 403/418。根因有两层——海报按 [D-MC09](../design/2026-09-21-movie-year-chart/概要设计.md#D-MC09) 不落盘、每次渲染回源；而那条决定所依赖的缓解手段**从一开始就无效**，因为海报经 Wails `AssetServer.Handler`（`main.go:41`）即自定义协议提供，WKWebView 不对自定义协议响应做 HTTP 缓存，`Cache-Control: max-age=604800` 从未生效。用户裁决改为落盘，[D-MC14](../design/2026-09-21-movie-year-chart/概要设计.md#D-MC14) 取代 D-MC09。
+
+交付后：海报由详情补全 worker 随详情一并下载落盘，复用它已有的 1 次/秒限速、取消与断点续跑；只读路由 `/preview/douban-chart-poster/<豆瓣ID>` 变成**纯本地磁盘读，零出网**，未命中返回 404 让前端显示占位，**不即时回源**。UI 渲染路径上不再有任何出网，这是本切片的全部意义。
+
+做完的标志：路由的实现里不存在任何 HTTP 客户端调用（可 grep 证明）；`movie_chart_entries` 新增 `poster_path` 列存托管相对路径；已补全但无 `poster_path` 的存量条目会被后续刷新拾起补图；落盘遵循既有的**先落盘再写库、写回失败即删图**顺序；`ManagedImageService` 的 entityType 白名单加 `movie_chart`；磁盘有上限与 LRU 清理，不会逐年无限增长。
+
+> writes: `services/movie_chart_refresh.go`, `services/movie_chart_refresh_test.go`, `services/movie_chart_service.go`, `services/movie_chart_artwork.go`, `services/movie_chart_artwork_test.go`, `services/movie_chart_query.go`, `services/movie_chart_query_test.go`, `services/managed_image_service.go`, `models/movie_chart.go`, `database/movie_chart_schema_test.go`, `preview_asset_handler.go`, `preview_asset_handler_test.go`
+> anchors: `D-MC14（取代 D-MC09）; TC-11（重新界定：白名单仍在，但断言对象从「代理转发」变成「本地读」）; TC-06 真机的海报一项`
+> architecture: `复用 ManagedImageService（内容寻址、原子发布、体积与格式约束，entityType 白名单加一项即可），复用 services/watchlist_artwork.go:68 DownloadPoster 已确立的「先落盘再写库、写回失败即删图」顺序与 Referer 取图片站点根的做法；下载归详情补全 worker 所有，因此自动继承它的限速/取消/续跑，不新建第二套调度；路由退化为磁盘读，依赖方向由「路由 → 出网客户端」缩为「路由 → 磁盘」，故障面从「外部 CDN」缩到「本地文件缺失」；维护检查＝grep 证明路由无出网，且磁盘上限有测试`
+> verify: `go build ./... && go test -count=1 ./services/... ./`；`CINEINSIGHT_TEST_PG_DSN=<dsn> go test -count=1 ./services ./database -timeout 40m`（新增列走 AutoMigrate，双后端必跑）；`cd frontend && npm run test:components`
+> review: `必须 grep 证明渲染路径零出网；落盘顺序（先盘后库）与写回失败删图；SSRF 白名单与逐跳重定向校验在下载侧仍然成立；磁盘上限与清理；存量已补全条目的补图路径`
 
 ## Integration And Final Verification
 

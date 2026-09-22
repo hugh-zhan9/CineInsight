@@ -17,14 +17,6 @@ import (
 
 const managedImageMaxBytes int64 = 20 << 20
 
-// ManagedImageMaxBytes 是 managedImageMaxBytes 的导出别名，给 main 包用。
-//
-// 只加别名、**不**把原来那个未导出的常量改名：它在本包里有十来个调用点，改名
-// 等于为了一个跨包引用去动一片与本次改动无关的代码。root 包的海报代理路由
-// （preview_asset_handler.go）此前把 20 MiB 这个字面量重述了一遍，别名让两处
-// 重新变回同一个来源——上限一改，两边一起跟着变。
-const ManagedImageMaxBytes = managedImageMaxBytes
-
 type ManagedImageAsset struct {
 	Path        string
 	DisplayName string
@@ -46,13 +38,84 @@ func NewManagedImageService(dataDir string) *ManagedImageService {
 	return &ManagedImageService{root: filepath.Join(dataDir, "media-details")}
 }
 
+// managedImageEntities 是允许落进托管目录的实体类型白名单。
+//
+// watchlist 是想看条目的海报（D-WM09），movie_chart 是年度榜单条目的海报
+// （D-MC14）：两者都落到 <entityType>/<id>/<sha256>.<ext>，与人物头像、合集封面
+// 共用同一套内容寻址、原子发布、体积与格式约束。
+//
+// 白名单本身是安全控制：entityType 会直接进路径，放开任意取值等于让调用方指定
+// 托管根之下的任意目录名。
+var managedImageEntities = map[string]struct{}{
+	"people":      {},
+	"collections": {},
+	"videos":      {},
+	"watchlist":   {},
+	"movie_chart": {},
+}
+
+func managedImageEntityAllowed(entityType string) bool {
+	_, ok := managedImageEntities[entityType]
+	return ok
+}
+
+// managedImageFile 是托管目录里的一个文件，供按体积做 LRU 的调用方排序用。
+type managedImageFile struct {
+	RelativePath string
+	Size         int64
+	ModTime      time.Time
+}
+
+// listEntityFiles 列出某个实体类型下已落盘的全部图片，返回托管相对路径、体积与
+// 修改时间。目录不存在时返回空列表而不是错误——「一张都还没落盘」不是故障。
+//
+// 点开头的文件跳过：Import 的临时文件叫 .image-import-*，正在发布的那一份不能被
+// 当成可淘汰的缓存文件删掉（镜像 pruneImageCacheLocked 的同一条处置）。
+func (s *ManagedImageService) listEntityFiles(entityType string) ([]managedImageFile, error) {
+	if !managedImageEntityAllowed(entityType) {
+		return nil, fmt.Errorf("unsupported managed image entity %q", entityType)
+	}
+	root := filepath.Join(s.root, entityType)
+	var files []managedImageFile
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if errors.Is(walkErr, os.ErrNotExist) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(entry.Name(), ".") {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil || !info.Mode().IsRegular() {
+			return nil
+		}
+		relative, err := filepath.Rel(s.root, path)
+		if err != nil {
+			return nil
+		}
+		files = append(files, managedImageFile{
+			RelativePath: filepath.ToSlash(relative),
+			Size:         info.Size(),
+			ModTime:      info.ModTime(),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list managed images: %w", err)
+	}
+	return files, nil
+}
+
 func (s *ManagedImageService) Import(entityType string, entityID uint, sourcePath string) (managedImageImport, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// watchlist 是想看条目的海报（D-WM09）：落到 watchlist/<id>/<sha256>.<ext>，
-	// 与人物头像、合集封面共用同一套内容寻址、原子发布、体积与格式约束。
-	if entityType != "people" && entityType != "collections" && entityType != "videos" && entityType != "watchlist" {
+	if !managedImageEntityAllowed(entityType) {
 		return managedImageImport{}, fmt.Errorf("unsupported managed image entity %q", entityType)
 	}
 	file, err := os.Open(sourcePath)

@@ -75,6 +75,13 @@ func newMovieChartHarnessWithWatchlist(t *testing.T, source MovieChartSource, wa
 	})
 	service := NewMovieChartService(harness.db, watchlist)
 	service.newSource = func() (MovieChartSource, error) { return source, nil }
+	// 海报客户端默认是一个**陷阱**：本仓库不对豆瓣图床发真实请求（用户机器正被
+	// 限流），需要海报的用例用 newMovieChartPosterHarness 显式装桩。注入 nil 的
+	// watchlist 时托管图片服务本来就是 nil、海报阶段直接跳过，这道只是第二层。
+	service.newPosterClient = func() (*http.Client, error) {
+		t.Errorf("本用例没有装配海报客户端，却要出网下载海报")
+		return nil, errors.New("测试未装配海报客户端")
+	}
 	service.now = harness.now
 	service.sleep = harness.sleep
 	service.SetBackgroundTaskRegistry(harness.registry)
@@ -1149,7 +1156,7 @@ func TestMovieChartClaimRejectsRowChangedBeforeReadBack(t *testing.T) {
 		})
 	})
 	source.reset()
-	harness.service.runDetailPhase(context.Background(), 2026, source)
+	harness.service.runDetailPhase(context.Background(), 2026, source, &movieChartRequestPacer{})
 
 	_, detailCalls := source.calls()
 	if len(detailCalls) != 0 {
@@ -1189,7 +1196,7 @@ func TestMovieChartDetailLoopStopsIssuingClaimsAfterCancel(t *testing.T) {
 		}
 	})
 	source.reset()
-	harness.service.runDetailPhase(ctx, 2026, source)
+	harness.service.runDetailPhase(ctx, 2026, source, &movieChartRequestPacer{})
 
 	if got := updates.Load(); got != 0 {
 		t.Fatalf("取消之后不该再对 movie_chart_entries 发任何 UPDATE，实际发了 %d 条", got)
@@ -1540,4 +1547,524 @@ func TestMovieChartEnsureYearRefreshedSkipsWhileRunning(t *testing.T) {
 	}
 	close(release)
 	harness.service.StopRefreshAndWait()
+}
+
+// ---------- 海报阶段（D-MC14） ----------
+
+// waitRoundFinished 等当前这一轮**自然跑完**，不取消它。
+//
+// 与 StopRefreshAndWait 的区别正是本节要的：那个会先取消，用它来等就永远看不到
+// 一轮完整跑完的结果。
+func (h *movieChartHarness) waitRoundFinished() {
+	h.t.Helper()
+	h.service.mu.Lock()
+	done := h.service.refreshDone
+	h.service.mu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-time.After(movieChartHarnessStopBudget):
+		h.t.Fatalf("后台轮次没有在 %v 内结束", movieChartHarnessStopBudget)
+	}
+}
+
+// seedChartEntry 按给定字段写一条缓存条目，未指定的取一组可用默认值。
+func (h *movieChartPosterHarness) seedChartEntry(entry models.MovieChartEntry) models.MovieChartEntry {
+	h.t.Helper()
+	if entry.Year == 0 {
+		entry.Year = 2026
+	}
+	if entry.Title == "" {
+		entry.Title = "片" + entry.DoubanID
+	}
+	if entry.DetailStatus == "" {
+		entry.DetailStatus = models.MovieChartDetailSucceeded
+	}
+	// ReleaseScope **不给默认值**：空串是「详情还没补全」这个真实状态，补图的取件
+	// 条件必须照收（它只排除 excluded），默认成 theatrical 会把这一面遮住。
+	if err := h.db.Create(&entry).Error; err != nil {
+		h.t.Fatalf("写入条目 %s 失败: %v", entry.DoubanID, err)
+	}
+	return entry
+}
+
+// seedWatchedMark 直接写一条「已看」标记，供 excluded 但被标记过的用例用。
+func (h *movieChartPosterHarness) seedWatchedMark(doubanID string, releaseYear int) {
+	h.t.Helper()
+	row := models.MovieChartMark{
+		DoubanID:    doubanID,
+		Mark:        models.MovieChartMarkWatched,
+		ReleaseYear: releaseYear,
+		Title:       "片" + doubanID,
+		MarkedAt:    movieChartTestNow,
+	}
+	if err := h.db.Create(&row).Error; err != nil {
+		h.t.Fatalf("写入标记 %s 失败: %v", doubanID, err)
+	}
+}
+
+func movieChartPosterAddress(doubanID string) string {
+	return "https://img2.doubanio.com/view/photo/l/public/" + doubanID + ".jpg"
+}
+
+// TestMovieChartPosterPhaseCoversEveryMissingPoster 钉住补图的取件条件：
+// **poster_url 非空、poster_path 为空**，与 detail_status 无关。
+//
+// 三种「缺图」因此是同一件事，都被这一条捞起来：从未下过、上次下失败、被 LRU
+// 淘汰；2026-09-22 之前落库、detail_status 早已是 succeeded 的存量条目（8001）
+// 正是用户机器上的那一批，不必清任何东西就会被补上。
+//
+// 反面同样钉死：已经有图的不重下（8006），没有远程地址的不下（8005），
+// 判定为不在内地院线上映的不下（8004——它在榜单页与已看页都永远不渲染，
+// 给它花一次限速请求没有任何人会看到），别的年份不下（8007）。
+func TestMovieChartPosterPhaseCoversEveryMissingPoster(t *testing.T) {
+	harness := newMovieChartPosterHarness(t, &fakeMovieChartSource{}, movieChartJPEGHandler('p', 64))
+	// 8001 是存量条目的形态：详情早就补全了，只是那时候海报不落盘。
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8001", PosterURL: movieChartPosterAddress("8001"),
+		ReleaseScope: models.MovieChartScopeTheatrical,
+	})
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8002", PosterURL: movieChartPosterAddress("8002"),
+		ReleaseScope: models.MovieChartScopeUndetermined,
+		DetailStatus: models.MovieChartDetailFailed,
+		DetailError:  string(WatchlistMetadataFailureNetworkUnreachable),
+	})
+	// 8003 的 release_scope 是空串：详情还没补全，照样该有图（榜单里它以
+	// 「上映信息待确认」出现，是看得见的卡片）。
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8003", PosterURL: movieChartPosterAddress("8003"),
+		DetailStatus: models.MovieChartDetailPending,
+	})
+	// 8004 判定为不在内地院线上映、又**没有任何标记**：两个页面都不会渲染它，
+	// 不下。
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8004", PosterURL: movieChartPosterAddress("8004"),
+		ReleaseScope: models.MovieChartScopeExcluded,
+	})
+	// 8008 是同样的 excluded，但用户**标过已看**——已看页读的是标记表，一个字的
+	// release_scope 过滤都没有，所以这张卡片会渲染，必须有图。
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8008", PosterURL: movieChartPosterAddress("8008"),
+		ReleaseScope: models.MovieChartScopeExcluded,
+	})
+	harness.seedWatchedMark("8008", 2026)
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8005", ReleaseScope: models.MovieChartScopeTheatrical,
+	})
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8006", PosterURL: movieChartPosterAddress("8006"),
+		ReleaseScope: models.MovieChartScopeTheatrical,
+		PosterPath:   "movie_chart/6/already.jpg",
+	})
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8007", Year: 2025, PosterURL: movieChartPosterAddress("8007"),
+	})
+
+	harness.service.runPosterPhase(context.Background(), 2026, &movieChartRequestPacer{})
+
+	for _, id := range []string{"8001", "8002", "8003", "8008"} {
+		if got := harness.entry(id).PosterPath; got == "" {
+			t.Fatalf("%s 缺图且有远程地址，必须被补上（与 detail_status 无关）", id)
+		}
+	}
+	for _, id := range []string{"8004", "8005", "8007"} {
+		if got := harness.entry(id).PosterPath; got != "" {
+			t.Fatalf("%s 不该被补图，实际 %q", id, got)
+		}
+	}
+	if got := harness.entry("8006").PosterPath; got != "movie_chart/6/already.jpg" {
+		t.Fatalf("已经有图的条目不该重下，实际 %q", got)
+	}
+	if seen := harness.stub.seen(); len(seen) != 4 {
+		t.Fatalf("应当只发四次取图请求，实际 %d 次: %v", len(seen), seen)
+	}
+
+	// 补图**不碰详情状态族**：条目的文字内容是完整的，只是没有图。
+	if got := harness.entry("8002"); got.DetailStatus != models.MovieChartDetailFailed ||
+		got.DetailError != string(WatchlistMetadataFailureNetworkUnreachable) {
+		t.Fatalf("补图不得改写详情状态族: status=%q error=%q", got.DetailStatus, got.DetailError)
+	}
+	if got := harness.entry("8003").DetailStatus; got != models.MovieChartDetailPending {
+		t.Fatalf("补图不得改写详情状态: %q", got)
+	}
+}
+
+// TestMovieChartPosterFailureStaysQuiet 钉住失败的处置：403 是用户机器 2026-09-22
+// 真实收到的响应。
+//
+// 四条一起钉：poster_path 留空（下一轮还会再试）、**不把条目标成详情失败**、
+// 本轮**不重试**、后面的条目照常继续。
+func TestMovieChartPosterFailureStaysQuiet(t *testing.T) {
+	harness := newMovieChartPosterHarness(t, &fakeMovieChartSource{}, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "8101") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(movieChartJPEGBytes('q', 64))
+	})
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "8101", PosterURL: movieChartPosterAddress("8101")})
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "8102", PosterURL: movieChartPosterAddress("8102")})
+
+	harness.service.runPosterPhase(context.Background(), 2026, &movieChartRequestPacer{})
+
+	failed := harness.entry("8101")
+	if failed.PosterPath != "" {
+		t.Fatalf("下载失败不得写 poster_path: %q", failed.PosterPath)
+	}
+	if failed.DetailStatus != models.MovieChartDetailSucceeded || failed.DetailError != "" {
+		t.Fatalf("海报失败不该让条目变成详情失败: status=%q error=%q", failed.DetailStatus, failed.DetailError)
+	}
+	if got := harness.entry("8102").PosterPath; got == "" {
+		t.Fatal("一条失败不得让后面的条目跟着不下")
+	}
+	seen := harness.stub.seen()
+	if len(seen) != 2 {
+		t.Fatalf("每条一轮最多试一次，实际发了 %d 次: %v", len(seen), seen)
+	}
+	if files := harness.posterFiles(); len(files) != 1 {
+		t.Fatalf("只有成功的那一张该落盘，实际 %v", files)
+	}
+}
+
+// TestMovieChartPosterPhaseSharesRateLimitWithDetails 钉住海报请求与详情请求共用
+// 同一条 1 次/秒的节流（D-MC06）：各记各的话实际速率就是 2 次/秒。
+func TestMovieChartPosterPhaseSharesRateLimitWithDetails(t *testing.T) {
+	source := &fakeMovieChartSource{
+		page: func(req movieChartPageRequest) (MovieChartListPage, error) {
+			if req.Sort == MovieChartSortComprehensive && req.Start == 0 {
+				return movieChartFakePage("9201", "9202"), nil
+			}
+			return MovieChartListPage{}, nil
+		},
+	}
+	harness := newMovieChartPosterHarness(t, source, movieChartJPEGHandler('r', 64))
+
+	if err := harness.service.refreshYear(context.Background(), 2026); err != nil {
+		t.Fatalf("刷新失败: %v", err)
+	}
+
+	_, detailCalls := source.calls()
+	if len(detailCalls) != 2 {
+		t.Fatalf("详情请求 %d 次，期望 2 次", len(detailCalls))
+	}
+	if seen := harness.stub.seen(); len(seen) != 2 {
+		t.Fatalf("取图请求 %d 次，期望 2 次: %v", len(seen), seen)
+	}
+	// 2 次详情 + 2 次取图 = 4 次出网，之间等 3 次。
+	if got := harness.sleepCount(); got != 3 {
+		t.Fatalf("限速等待 %d 次，期望 3 次（4 次出网之间）", got)
+	}
+	for _, d := range harness.sleeps {
+		if d != movieChartDetailInterval {
+			t.Fatalf("限速间隔 = %v，期望 %v", d, movieChartDetailInterval)
+		}
+	}
+	for _, id := range []string{"9201", "9202"} {
+		if got := harness.entry(id).PosterPath; got == "" {
+			t.Fatalf("%s 的海报应当随这一轮落盘", id)
+		}
+	}
+}
+
+// TestMovieChartPosterPhaseResumesAfterCancel 钉住取消与断点续跑：取消时已经落盘的
+// 保留，没轮到的下一轮接着补。
+//
+// 取消点做成确定的——注入的 sleep 在第一次限速等待时取消：那一刻第一条已经下完、
+// 第二条还没发请求。
+func TestMovieChartPosterPhaseResumesAfterCancel(t *testing.T) {
+	harness := newMovieChartPosterHarness(t, &fakeMovieChartSource{}, movieChartJPEGHandler('s', 64))
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "9301", PosterURL: movieChartPosterAddress("9301")})
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "9302", PosterURL: movieChartPosterAddress("9302")})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	original := harness.service.sleep
+	harness.service.sleep = func(context.Context, time.Duration) error {
+		cancel()
+		return context.Canceled
+	}
+	harness.service.runPosterPhase(ctx, 2026, &movieChartRequestPacer{})
+	harness.service.sleep = original
+
+	if got := harness.entry("9301").PosterPath; got == "" {
+		t.Fatal("取消前已经落盘的那一张必须保留")
+	}
+	if got := harness.entry("9302").PosterPath; got != "" {
+		t.Fatalf("取消之后不该再补图: %q", got)
+	}
+	if seen := harness.stub.seen(); len(seen) != 1 {
+		t.Fatalf("取消后不得再发请求，实际 %v", seen)
+	}
+
+	// 取消之后**不再自动**补：打开页面是补图的触发点，不挡住的话切个年份再切回来
+	// 就把这一轮原样重启了，取消按钮形同虚设。
+	//
+	// 先把这一年记成刚刚成功刷新过，让整轮刷新不到期——否则 EnsureYearRefreshed
+	// 走的是 D-MC12 的那一支，测的就不是补图这条路径了。
+	fresh := movieChartTestNow
+	if err := harness.db.Create(&models.MovieChartYearState{
+		Year: 2026, LastRefreshedAt: &fresh, LastAttemptAt: &fresh,
+	}).Error; err != nil {
+		t.Fatalf("准备年状态失败: %v", err)
+	}
+	started, err := harness.service.EnsureYearRefreshed(2026)
+	if err != nil {
+		t.Fatalf("判定刷新时机失败: %v", err)
+	}
+	if started {
+		t.Fatal("用户取消之后，打开页面不该自动把补图重启")
+	}
+
+	// 手动重来照常：下一轮从没补到的那一条接着跑，续跑靠的就是「poster_path 为空」
+	// 这个条件本身。
+	harness.service.runPosterPhase(context.Background(), 2026, &movieChartRequestPacer{})
+	if got := harness.entry("9302").PosterPath; got == "" {
+		t.Fatal("下一轮应当把剩下的补上")
+	}
+}
+
+// TestMovieChartEnsureYearRefreshedStartsPosterOnlyPass 钉住 D-MC14 加的第三条
+// 刷新时机：**整轮刷新不到期、但这一年还有条目缺图时，起一轮只补海报的**。
+//
+// 没有它，往年的缺图永远补不回来——refreshDue 一旦看到 last_attempt_at 就恒为
+// false，而界面上没有「只补图」的按钮。用例用的正是这个前提：2019 年已经抓过，
+// 整轮刷新不到期，适配器是陷阱（一次列表或详情请求都不许发）。
+//
+// 把 EnsureYearRefreshed 里的 ensureYearPosters 那一支删掉，本用例立刻红：
+// started 变成 false，poster_path 一个都不会填。
+func TestMovieChartEnsureYearRefreshedStartsPosterOnlyPass(t *testing.T) {
+	source := &fakeMovieChartSource{
+		page: func(req movieChartPageRequest) (MovieChartListPage, error) {
+			t.Errorf("只补海报的一轮不得发列表请求: %+v", req)
+			return MovieChartListPage{}, nil
+		},
+		detail: func(ctx context.Context, doubanID string) (*MovieChartDetail, error) {
+			t.Errorf("只补海报的一轮不得发详情请求: %s", doubanID)
+			return nil, errors.New("不该发详情请求")
+		},
+	}
+	harness := newMovieChartPosterHarness(t, source, movieChartJPEGHandler('t', 64))
+	attempted := movieChartTestNow.Add(-365 * 24 * time.Hour)
+	if err := harness.db.Create(&models.MovieChartYearState{
+		Year: 2019, LastRefreshedAt: &attempted, LastAttemptAt: &attempted,
+	}).Error; err != nil {
+		t.Fatalf("准备年状态失败: %v", err)
+	}
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "9401", Year: 2019, PosterURL: movieChartPosterAddress("9401")})
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "9402", Year: 2019, PosterURL: movieChartPosterAddress("9402")})
+
+	started, err := harness.service.EnsureYearRefreshed(2019)
+	if err != nil {
+		t.Fatalf("判定刷新时机失败: %v", err)
+	}
+	if !started {
+		t.Fatal("往年缺图时应当起一轮只补海报的")
+	}
+	harness.waitRoundFinished()
+
+	for _, id := range []string{"9401", "9402"} {
+		if got := harness.entry(id).PosterPath; got == "" {
+			t.Fatalf("%s 的海报应当被补上", id)
+		}
+	}
+	listCalls, detailCalls := source.calls()
+	if len(listCalls) != 0 || len(detailCalls) != 0 {
+		t.Fatalf("只补海报的一轮不得出网抓列表或详情: list=%v detail=%v", listCalls, detailCalls)
+	}
+	if !harness.taskSeen(BackgroundTaskMovieChart) {
+		t.Fatal("只补海报的一轮也要进后台任务登记表，否则用户看不到、也取消不了")
+	}
+	// 补完之后没有缺图了，再打开页面不该再起一轮。
+	started, err = harness.service.EnsureYearRefreshed(2019)
+	if err != nil {
+		t.Fatalf("判定刷新时机失败: %v", err)
+	}
+	if started {
+		t.Fatal("没有缺图时不该起任何一轮")
+	}
+}
+
+// TestMovieChartEnsureYearRefreshedStopsPosterPassAfterTotalFailure 钉住自动路径的
+// 自我约束：一轮海报**一张都没成功**之后，打开页面不再自动重来一轮。
+//
+// 口径与 D-MC12「上一次尝试失败就不再自动出网」一致。用户机器此刻正被豆瓣限流，
+// 没有这一条，每打开一次榜单页就是从头再打一遍约 1500 张图。
+func TestMovieChartEnsureYearRefreshedStopsPosterPassAfterTotalFailure(t *testing.T) {
+	harness := newMovieChartPosterHarness(t, &fakeMovieChartSource{}, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "forbidden", http.StatusForbidden)
+	})
+	attempted := movieChartTestNow.Add(-365 * 24 * time.Hour)
+	if err := harness.db.Create(&models.MovieChartYearState{
+		Year: 2019, LastRefreshedAt: &attempted, LastAttemptAt: &attempted,
+	}).Error; err != nil {
+		t.Fatalf("准备年状态失败: %v", err)
+	}
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "9501", Year: 2019, PosterURL: movieChartPosterAddress("9501")})
+
+	started, err := harness.service.EnsureYearRefreshed(2019)
+	if err != nil {
+		t.Fatalf("判定刷新时机失败: %v", err)
+	}
+	if !started {
+		t.Fatal("第一次应当起一轮")
+	}
+	harness.waitRoundFinished()
+	if got := harness.entry("9501").PosterPath; got != "" {
+		t.Fatalf("全部失败时不该写 poster_path: %q", got)
+	}
+
+	started, err = harness.service.EnsureYearRefreshed(2019)
+	if err != nil {
+		t.Fatalf("判定刷新时机失败: %v", err)
+	}
+	if started {
+		t.Fatal("上一轮一张都没成功之后，打开页面不该再自动补一轮")
+	}
+	if got := len(harness.stub.seen()); got != 1 {
+		t.Fatalf("第二次打开页面不该再出网，累计请求 %d 次", got)
+	}
+}
+
+// TestMovieChartEnsureYearRefreshedKeepsGoingAfterPartialSuccess 是上一条的另一面：
+// 只要这一轮下成了一张，说明源是通的，下一次打开页面照常把剩下的接着补。
+func TestMovieChartEnsureYearRefreshedKeepsGoingAfterPartialSuccess(t *testing.T) {
+	harness := newMovieChartPosterHarness(t, &fakeMovieChartSource{}, func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "9602") {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "image/jpeg")
+		_, _ = w.Write(movieChartJPEGBytes('u', 64))
+	})
+	attempted := movieChartTestNow.Add(-365 * 24 * time.Hour)
+	if err := harness.db.Create(&models.MovieChartYearState{
+		Year: 2019, LastRefreshedAt: &attempted, LastAttemptAt: &attempted,
+	}).Error; err != nil {
+		t.Fatalf("准备年状态失败: %v", err)
+	}
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "9601", Year: 2019, PosterURL: movieChartPosterAddress("9601")})
+	harness.seedChartEntry(models.MovieChartEntry{DoubanID: "9602", Year: 2019, PosterURL: movieChartPosterAddress("9602")})
+
+	started, err := harness.service.EnsureYearRefreshed(2019)
+	if err != nil || !started {
+		t.Fatalf("第一次应当起一轮: started=%v err=%v", started, err)
+	}
+	harness.waitRoundFinished()
+
+	started, err = harness.service.EnsureYearRefreshed(2019)
+	if err != nil {
+		t.Fatalf("判定刷新时机失败: %v", err)
+	}
+	if !started {
+		t.Fatal("上一轮下成过图，剩下的缺图应当继续补")
+	}
+	harness.waitRoundFinished()
+	if got := len(harness.stub.seen()); got != 3 {
+		t.Fatalf("累计请求 %d 次，期望 3 次（第一轮两条 + 第二轮重试失败的那一条）", got)
+	}
+}
+
+// TestMovieChartPosterBacklogSkipsRowsWithoutRemoteAddress 钉住取件条件里的
+// **poster_url 非空**这一项，而且钉的是**计数**那一侧。
+//
+// 下载侧那道地址校验挡得住请求（空地址过不了白名单），所以少了这一项，
+// 「下载」与「落盘」两类断言都照样绿——空转发生在更上游：没有远程地址的行永远
+// 拿不到 poster_path，于是永远留在 countPosterBacklog 里，打开一次页面就起一轮
+// 补图，每行还记一条被拒的日志；只要同一年里有一张真下成了，「全军覆没」的抑制
+// 也不会触发。这条用例直接断言计数为 0，并断言打开页面不起轮次。
+func TestMovieChartPosterBacklogSkipsRowsWithoutRemoteAddress(t *testing.T) {
+	source := &fakeMovieChartSource{
+		page: func(req movieChartPageRequest) (MovieChartListPage, error) {
+			t.Errorf("不该起任何抓取: %+v", req)
+			return MovieChartListPage{}, nil
+		},
+	}
+	harness := newMovieChartPosterHarness(t, source, func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("没有远程地址的条目不该发出取图请求: %s", r.URL)
+	})
+	attempted := movieChartTestNow.Add(-365 * 24 * time.Hour)
+	if err := harness.db.Create(&models.MovieChartYearState{
+		Year: 2019, LastRefreshedAt: &attempted, LastAttemptAt: &attempted,
+	}).Error; err != nil {
+		t.Fatalf("准备年状态失败: %v", err)
+	}
+	// 这一年只有「没有远程地址」与「excluded 且没被标记」两种永远补不了的行。
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8301", Year: 2019, ReleaseScope: models.MovieChartScopeTheatrical,
+	})
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8302", Year: 2019, PosterURL: movieChartPosterAddress("8302"),
+		ReleaseScope: models.MovieChartScopeExcluded,
+	})
+
+	backlog, err := harness.service.countPosterBacklog(2019)
+	if err != nil {
+		t.Fatalf("统计缺图条目失败: %v", err)
+	}
+	if backlog != 0 {
+		t.Fatalf("永远补不了的行不得留在缺图计数里，实际 %d 条", backlog)
+	}
+	started, err := harness.service.EnsureYearRefreshed(2019)
+	if err != nil {
+		t.Fatalf("判定刷新时机失败: %v", err)
+	}
+	if started {
+		t.Fatal("没有可补的图就不该起一轮——否则每打开一次页面就空转一轮")
+	}
+	// 再打开一次也一样：这条路径必须是稳定的空操作，不是靠某个一次性标记挡住的。
+	if started, _ := harness.service.EnsureYearRefreshed(2019); started {
+		t.Fatal("第二次打开页面同样不该起一轮")
+	}
+	if seen := harness.stub.seen(); len(seen) != 0 {
+		t.Fatalf("不得发出任何取图请求，实际 %v", seen)
+	}
+}
+
+// TestMovieChartPosterBacklogCoversMarkedExcludedEntries 单钉「excluded 但被标记过
+// 的条目照样补图」这一条边界，两面都有：
+//
+// 判定为 excluded 的条目不进榜单页，但**已看页会渲染它**——ListWatched 读的是
+// movie_chart_marks，没有任何 release_scope 过滤。真实路径是：条目以「上映信息
+// 待确认」出现在榜单里、用户标了已看，随后的详情补全把它判成 excluded（剧集或
+// 非内地院线）。把 excluded 一刀切排除，这张已看卡片就**永远**只有占位图。
+func TestMovieChartPosterBacklogCoversMarkedExcludedEntries(t *testing.T) {
+	harness := newMovieChartPosterHarness(t, &fakeMovieChartSource{}, movieChartJPEGHandler('w', 64))
+	marked := harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8401", PosterURL: movieChartPosterAddress("8401"),
+		ReleaseScope: models.MovieChartScopeExcluded,
+	})
+	harness.seedWatchedMark("8401", 2026)
+	harness.seedChartEntry(models.MovieChartEntry{
+		DoubanID: "8402", PosterURL: movieChartPosterAddress("8402"),
+		ReleaseScope: models.MovieChartScopeExcluded,
+	})
+	_ = marked
+
+	harness.service.runPosterPhase(context.Background(), 2026, &movieChartRequestPacer{})
+
+	if got := harness.entry("8401").PosterPath; got == "" {
+		t.Fatal("标记过的 excluded 条目会在已看页渲染，必须有图")
+	}
+	if got := harness.entry("8402").PosterPath; got != "" {
+		t.Fatalf("没有标记的 excluded 条目两个页面都不渲染，不该下载: %q", got)
+	}
+	if seen := harness.stub.seen(); len(seen) != 1 {
+		t.Fatalf("只该为被标记的那一条取图，实际 %v", seen)
+	}
+
+	// 已看页据此报 HasPoster=true：这正是这条取件规则要保住的用户可见结果。
+	groups, err := harness.service.ListWatched()
+	if err != nil {
+		t.Fatalf("读已看页失败: %v", err)
+	}
+	if len(groups) != 1 || len(groups[0].Items) != 1 {
+		t.Fatalf("已看页应当只有这一条: %+v", groups)
+	}
+	if !groups[0].Items[0].HasPoster {
+		t.Fatal("已看卡片必须报「有海报」，否则前端连请求都不会发，永远是占位图")
+	}
 }

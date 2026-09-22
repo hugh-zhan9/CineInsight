@@ -69,7 +69,24 @@ func (s *MovieChartService) refreshYear(ctx context.Context, year int) error {
 	if err := s.resetYearDetailBacklog(ctx, year); err != nil {
 		log.Printf("[MovieChart] reset detail backlog year=%d failed err=%v", year, err)
 	}
-	s.runDetailPhase(ctx, year, source)
+	// 详情与海报共用**同一个节流器**：两者都是对豆瓣的出网请求，各记各的就会让
+	// 实际速率变成 2 次/秒，而 D-MC06 的 1 次/秒是按整条链路定的。
+	pacer := &movieChartRequestPacer{}
+	s.runDetailPhase(ctx, year, source, pacer)
+	s.runPosterPhase(ctx, year, pacer)
+	return nil
+}
+
+// refreshYearPosters 是**只补海报**的一轮（D-MC14）：不发列表请求、不发详情请求，
+// 只把这一年缺图的条目补上。
+//
+// 由 EnsureYearRefreshed 在「整轮刷新不到期、但这一年还有条目缺图」时起，
+// 走 startRound，因此与整轮刷新共用并发拒绝、取消与后台任务登记。
+func (s *MovieChartService) refreshYearPosters(ctx context.Context, year int) error {
+	tasks := s.backgroundTasks()
+	tasks.Begin(BackgroundTaskMovieChart)
+	defer tasks.End(BackgroundTaskMovieChart)
+	s.runPosterPhase(ctx, year, &movieChartRequestPacer{})
 	return nil
 }
 
@@ -220,7 +237,7 @@ func (s *MovieChartService) resetYearDetailBacklog(ctx context.Context, year int
 //
 // 与列表阶段相反，**单条失败只影响该条**：详情天然逐条独立，失败的条目留在
 // failed，榜单里标「上映信息待确认」，下次刷新由 resetYearDetailBacklog 放回队列。
-func (s *MovieChartService) runDetailPhase(ctx context.Context, year int, source MovieChartSource) {
+func (s *MovieChartService) runDetailPhase(ctx context.Context, year int, source MovieChartSource, pacer *movieChartRequestPacer) {
 	var ids []uint
 	// 按 detail_status 过滤、按 id 升序，正好走 idx_movie_chart_entry_detail，
 	// 认领顺序也因此是确定的。
@@ -235,7 +252,6 @@ func (s *MovieChartService) runDetailPhase(ctx context.Context, year int, source
 	}
 	log.Printf("[MovieChart] detail phase start year=%d pending=%d", year, len(ids))
 
-	requested := false
 	for _, id := range ids {
 		if ctx.Err() != nil {
 			return
@@ -250,13 +266,10 @@ func (s *MovieChartService) runDetailPhase(ctx context.Context, year int, source
 			// **不报错**——这是需求设计文档 §5 转换表里的正常分支。
 			continue
 		}
-		if requested {
-			if err := s.sleepBetweenDetails(ctx); err != nil {
-				s.releaseEntryClaim(ctx, entry.ID, claim)
-				return
-			}
+		if err := s.waitBeforeRequest(ctx, pacer); err != nil {
+			s.releaseEntryClaim(ctx, entry.ID, claim)
+			return
 		}
-		requested = true
 		detail, detailErr := source.Detail(ctx, entry.DoubanID)
 		if ctx.Err() != nil {
 			// 取消不是失败：把认领退回 pending，下一轮从这一条接着跑（可断点续跑）。
@@ -271,12 +284,149 @@ func (s *MovieChartService) runDetailPhase(ctx context.Context, year int, source
 	}
 }
 
+// movieChartRequestPacer 记着「这一轮已经发过一次出网请求了」。
+//
+// 一轮刷新里的**所有**出网请求共用一个实例：详情与海报各自记账的话，实际速率
+// 就是 2 次/秒，而 D-MC06 的 1 次/秒是按整条链路定的——限的是我们对豆瓣的压力，
+// 不是某一类请求的压力。
+type movieChartRequestPacer struct {
+	started bool
+}
+
+// waitBeforeRequest 在发出网请求之前按 D-MC06 等一拍，本轮第一次请求不等。
+func (s *MovieChartService) waitBeforeRequest(ctx context.Context, pacer *movieChartRequestPacer) error {
+	if pacer == nil {
+		return ctx.Err()
+	}
+	if !pacer.started {
+		pacer.started = true
+		return ctx.Err()
+	}
+	return s.sleepBetweenDetails(ctx)
+}
+
 // sleepBetweenDetails 是 D-MC06 的 1 次/秒限速。detailInterval 非正即不限速。
 func (s *MovieChartService) sleepBetweenDetails(ctx context.Context) error {
 	if s.detailInterval <= 0 {
 		return ctx.Err()
 	}
 	return s.sleep(ctx, s.detailInterval)
+}
+
+// runPosterPhase 把这一年缺图的条目逐条补上（D-MC14）。
+//
+// 取件条件见 movieChartPosterBacklog：**poster_url 非空、poster_path 为空**，
+// 不看 detail_status，这样三种「缺图」在这里就是同一件事——从未下过、上次下失败、
+// 被磁盘上限淘汰；2026-09-22 之前落库、detail_status 早已是 succeeded 的存量条目
+// 也自动落在里面，用户不用清任何东西。
+//
+// 与详情阶段一样**单条失败只影响该条**，而且比详情更轻：海报失败连
+// detail_status 都不碰（条目的文字内容是完整的，只是没有图），也不在本轮重试
+// ——取件列表是进入本阶段时一次取定的，同一条在一轮里最多试一次。
+func (s *MovieChartService) runPosterPhase(ctx context.Context, year int, pacer *movieChartRequestPacer) {
+	if s.posterImages() == nil {
+		// 没有托管图片服务（片单服务未注入）：不是故障，这一轮就是没有图。
+		return
+	}
+	var rows []models.MovieChartEntry
+	err := movieChartPosterBacklog(s.db.WithContext(ctx), year).
+		Select([]string{"id", "douban_id", "poster_url"}).Order("id ASC").Find(&rows).Error
+	if err != nil {
+		// 取消时这条查询也会报错，但那不是故障：只在真出问题时记一行。
+		if ctx.Err() == nil {
+			log.Printf("[MovieChart] list poster backlog year=%d failed err=%v", year, err)
+		}
+		return
+	}
+	if len(rows) == 0 {
+		return
+	}
+	client, err := s.newPosterClient()
+	if err != nil {
+		// 多半是资料源出网代理地址填错。不退回直连，也不影响这一轮的其它部分。
+		log.Printf("[MovieChart] poster client unavailable year=%d err=%v", year, err)
+		return
+	}
+	log.Printf("[MovieChart] poster phase start year=%d pending=%d", year, len(rows))
+
+	succeeded, failed, canceled := 0, 0, false
+	for _, row := range rows {
+		if ctx.Err() != nil {
+			canceled = true
+			break
+		}
+		if err := s.waitBeforeRequest(ctx, pacer); err != nil {
+			canceled = true
+			break
+		}
+		if err := s.storeEntryPoster(ctx, client, row.ID, row.PosterURL); err != nil {
+			if ctx.Err() != nil {
+				canceled = true
+				break
+			}
+			failed++
+			log.Printf("[MovieChart] poster id=%d douban=%s failed err=%v", row.ID, row.DoubanID, err)
+			continue
+		}
+		succeeded++
+	}
+	if canceled {
+		// 取消不是失败：已经落盘的保留，剩下的**下一轮**接着补（断点续跑靠的就是
+		// poster_path 为空这个条件本身，不需要额外的进度记录）。
+		//
+		// 但那一轮不能是打开页面自动起的：用户按的取消是「别再下了」，而补图的
+		// 触发点正是打开页面，不挡住的话切个年份再切回来就把它原样重启了，取消
+		// 按钮形同虚设——与 D-MC12 把触发点从读接口挪出去时记的是同一条。
+		// 手动点刷新照常重来（startRound 会清掉这条抑制）。
+		s.suppressAutomaticPosterPass(year)
+		log.Printf("[MovieChart] poster phase canceled year=%d ok=%d failed=%d", year, succeeded, failed)
+		return
+	}
+	s.notePosterPassResult(year, succeeded, failed)
+	log.Printf("[MovieChart] poster phase done year=%d ok=%d failed=%d", year, succeeded, failed)
+}
+
+// movieChartPosterBacklog 是「这一年还缺哪些海报」的唯一判据。
+//
+// 取件与计数必须共用它：两处各写一套谓词一旦对不上，EnsureYearRefreshed 就会
+// 因为「还有缺图」起一轮、而那一轮又什么都取不到，于是每打开一次页面空转一轮。
+//
+// 三条判据，每条都承重：
+//
+//   - **poster_path 为空**＝这条还缺图。三种成因（从未下过、下过但失败、被 LRU
+//     淘汰）在这里是同一件事。
+//   - **poster_url 非空**＝有地方可下。少了这一条，没有远程地址的行会永远留在
+//     countPosterBacklog 里——它们拿不到 poster_path，于是每打开一次页面就起一轮
+//     空转的补图（每行还记一条地址被拒的日志），而只要同一年里有一张真的下成了，
+//     「全军覆没」的抑制也不会触发。下载侧那道地址校验挡得住请求，挡不住这个循环。
+//   - **excluded 的条目只在被标记过时才补图**。excluded 是判定过、确定不在内地
+//     院线上映的条目（含剧集），榜单页永远不渲染它（movieChartVisibleScopes 不含
+//     excluded，「不过滤」开关也只解除标记造成的隐藏），给它花一次限速请求加一份
+//     磁盘没人看得到；**但已看页会渲染它**——ListWatched 读的是 movie_chart_marks，
+//     一个字的 release_scope 过滤都没有。真实路径是：条目以「上映信息待确认」
+//     （release_scope 空串）出现在榜单里，用户标了已看，随后的详情补全把它判成
+//     excluded。一刀切排除会让这张已看卡片**永远**显示占位。
+//
+// 这三条看的都不是「详情补全到哪一步」——detail_status 在这个判据里一个字都没有。
+func movieChartPosterBacklog(db *gorm.DB, year int) *gorm.DB {
+	// 子查询与 chartQuery 里那条隐藏标记的 NOT IN 同形：两处都不用 join，
+	// join 会让 douban_id 在别处变成有歧义的列名，两个后端的报错形态还不一样。
+	marked := db.Model(&models.MovieChartMark{}).Select("douban_id")
+	return db.Model(&models.MovieChartEntry{}).
+		Where("year = ? AND poster_path = ? AND poster_url <> ?", year, "", "").
+		// 括号自己写死：GORM 会给含 OR 的裸表达式补括号，但这一条的正确性太贵，
+		// 不押在那个实现细节上。
+		Where("(release_scope <> ? OR douban_id IN (?))", models.MovieChartScopeExcluded, marked)
+}
+
+// countPosterBacklog 数这一年还缺几张海报，供 EnsureYearRefreshed 决定要不要起
+// 只补海报的一轮。
+func (s *MovieChartService) countPosterBacklog(year int) (int64, error) {
+	var pending int64
+	if err := movieChartPosterBacklog(s.db, year).Count(&pending).Error; err != nil {
+		return 0, fmt.Errorf("统计 %d 年缺图条目失败: %w", year, err)
+	}
+	return pending, nil
 }
 
 // claimEntryDetail 用条件更新认领一条 pending，返回认领成功后的条目与本次认领标识。

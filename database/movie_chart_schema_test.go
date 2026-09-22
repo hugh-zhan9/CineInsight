@@ -86,6 +86,12 @@ func TestMovieChartSchemaOnBothBackends(t *testing.T) {
 		}
 	}
 
+	// poster_path 是 D-MC14 新加的列，走 AutoMigrate 加到既有表上（不写迁移脚本）。
+	// 老库升级就是靠这一句：列没加上，海报永远落不了盘，而渲染路径已经不回源了。
+	if !db.Migrator().HasColumn(&models.MovieChartEntry{}, "poster_path") {
+		t.Fatalf("movie_chart_entries 缺少 poster_path 列(%s)", dbtest.Backend())
+	}
+
 	assertMovieChartIndex(t, db, "idx_movie_chart_entry_douban", true, "douban_id")
 	assertMovieChartIndex(t, db, "idx_movie_chart_entry_list", false, "year", "release_scope")
 	assertMovieChartIndex(t, db, "idx_movie_chart_entry_detail", false, "detail_status", "id")
@@ -114,6 +120,10 @@ func TestMovieChartUniqueKeysRejectDuplicates(t *testing.T) {
 		ReleaseDate: "2026-03-20", ReleasePubdate: "2026-03-20(美国/中国大陆)",
 		Directors: "甲", Cast: "乙\n丙", Countries: "中国大陆",
 		DetailStatus: models.MovieChartDetailRunning, DetailClaim: claim,
+		// poster_path 存的是内容寻址之后的托管相对路径（64 个十六进制字符的摘要
+		// 加目录），原样往返：它是渲染路径唯一的海报来源，截断或丢失就是破图。
+		PosterURL:     "https://img2.doubanio.com/view/photo/l/public/p1.jpg",
+		PosterPath:    "movie_chart/12/" + strings.Repeat("ab", 32) + ".jpg",
 		ListFetchedAt: &now,
 	}
 	if err := db.Create(&entry).Error; err != nil {
@@ -125,6 +135,25 @@ func TestMovieChartUniqueKeysRejectDuplicates(t *testing.T) {
 	}
 	if loaded.Cast != "乙\n丙" || loaded.DetailClaim != claim || loaded.ReleaseDate != "2026-03-20" {
 		t.Fatalf("条目内容应原样读回(%s): %+v", dbtest.Backend(), loaded)
+	}
+	if loaded.PosterPath != entry.PosterPath {
+		t.Fatalf("poster_path 应原样读回(%s): %q", dbtest.Backend(), loaded.PosterPath)
+	}
+	// 默认值必须是空串而不是 NULL：补图的取件条件是 poster_path = ''，
+	// 一列 NULL 会让缺图的条目从取件清单里整批消失（两个后端都是）。
+	if err := db.Create(&models.MovieChartEntry{
+		DoubanID: "36191699", Year: 2026, Title: "没有海报的",
+		DetailStatus: models.MovieChartDetailPending,
+	}).Error; err != nil {
+		t.Fatalf("写入无海报条目失败(%s): %v", dbtest.Backend(), err)
+	}
+	var missing int64
+	if err := db.Model(&models.MovieChartEntry{}).
+		Where("douban_id = ? AND poster_path = ?", "36191699", "").Count(&missing).Error; err != nil {
+		t.Fatalf("统计缺图条目失败(%s): %v", dbtest.Backend(), err)
+	}
+	if missing != 1 {
+		t.Fatalf("没写 poster_path 的条目必须以空串落库、被补图条件捞得到(%s)", dbtest.Backend())
 	}
 	if err := db.Create(&models.MovieChartEntry{
 		DoubanID: "36191693", Year: 2026, Title: "重复",

@@ -283,7 +283,11 @@ func TestMovieChartListPageMarkFiltering(t *testing.T) {
 }
 
 // TestMovieChartListPageItemFields 钉住卡片字段的取值，尤其是 HasPoster：
-// 前端据它决定要不要请求海报代理，取错就是每张卡片一次必然 404 的往返。
+// 前端据它决定要不要请求海报路由，取错就是每张卡片一次必然 404 的往返。
+//
+// D-MC14 之后 HasPoster 看的是 **poster_path（已经落盘）**，不是 poster_url
+// （豆瓣上有这张图）：路由改成纯本地读之后，只有远程地址的条目请求过去只会是 404。
+// 703 就是这一条的反例——它有地址、没落盘，HasPoster 必须为假。
 func TestMovieChartListPageItemFields(t *testing.T) {
 	h := newMovieChartQueryHarness(t)
 	h.seed(models.MovieChartEntry{
@@ -296,6 +300,7 @@ func TestMovieChartListPageItemFields(t *testing.T) {
 		Rating:        8.2,
 		RatingCount:   4200,
 		PosterURL:     "https://img2.doubanio.com/view/photo/l/public/701.jpg",
+		PosterPath:    "movie_chart/1/701.jpg",
 		DetailError:   "",
 	})
 	h.seed(models.MovieChartEntry{
@@ -303,6 +308,12 @@ func TestMovieChartListPageItemFields(t *testing.T) {
 		ReleaseScope: models.MovieChartScopeUndetermined,
 		DetailStatus: models.MovieChartDetailFailed,
 		DetailError:  string(WatchlistMetadataFailureNetworkUnreachable),
+	})
+	h.seed(models.MovieChartEntry{
+		DoubanID:     "703",
+		ReleaseScope: models.MovieChartScopeTheatrical,
+		ReleaseDate:  "2026-03-21",
+		PosterURL:    "https://img2.doubanio.com/view/photo/l/public/703.jpg",
 	})
 
 	page, err := h.service.ListPage(movieChartQueryYear, MovieChartOrderRelease, 1, false)
@@ -325,13 +336,25 @@ func TestMovieChartListPageItemFields(t *testing.T) {
 	if first != want {
 		t.Fatalf("卡片字段 = %+v，期望 %+v", first, want)
 	}
-	second := page.Items[1]
-	if second.HasPoster {
-		t.Fatalf("没有海报地址的条目 HasPoster 必须为假: %+v", second)
+	var undetermined, remoteOnly MovieChartItemView
+	for _, item := range page.Items {
+		switch item.DoubanID {
+		case "702":
+			undetermined = item
+		case "703":
+			remoteOnly = item
+		}
+	}
+	if undetermined.HasPoster {
+		t.Fatalf("没有海报的条目 HasPoster 必须为假: %+v", undetermined)
+	}
+	// 有远程地址、还没落盘：路由是纯本地读，请求过去必然 404，所以也是假。
+	if remoteOnly.DoubanID != "703" || remoteOnly.HasPoster {
+		t.Fatalf("只有远程地址、没有落盘的条目 HasPoster 必须为假: %+v", remoteOnly)
 	}
 	// 失败分类码要原样带给界面，否则「上映信息待确认」下面那行原因就没了。
-	if second.DetailError != string(WatchlistMetadataFailureNetworkUnreachable) {
-		t.Fatalf("失败分类码 = %q", second.DetailError)
+	if undetermined.DetailError != string(WatchlistMetadataFailureNetworkUnreachable) {
+		t.Fatalf("失败分类码 = %q", undetermined.DetailError)
 	}
 }
 
@@ -626,8 +649,15 @@ func TestMovieChartListWatchedGroupsByReleaseYear(t *testing.T) {
 	h := newMovieChartQueryHarness(t)
 	older := movieChartTestNow.Add(-48 * time.Hour)
 	newer := movieChartTestNow.Add(-time.Hour)
-	// 1301 有意不带海报快照：seedMark 会写一个地址，这里单独写一条空的。
+	// 1301 有意不带海报：既没有快照地址，缓存表里也没有落盘的图。
 	h.seedMarkWithPoster("1301", models.MovieChartMarkWatched, 2019, older, "")
+	// D-MC14：已看卡片的图是**缓存行**引用的本地文件，所以 HasPoster 由
+	// movie_chart_entries.poster_path 决定，标记行里的 poster_url 快照不再参与。
+	h.seed(models.MovieChartEntry{DoubanID: "1303", PosterPath: "movie_chart/3/1303.jpg"})
+	h.seed(models.MovieChartEntry{
+		DoubanID:  "1302",
+		PosterURL: "https://img2.doubanio.com/view/photo/l/public/1302.jpg",
+	})
 	h.seedMark("1302", models.MovieChartMarkWatched, 2026, older)
 	h.seedMark("1303", models.MovieChartMarkWatched, 2026, newer)
 	h.seedMark("1304", models.MovieChartMarkWatched, 0, newer)
@@ -651,13 +681,17 @@ func TestMovieChartListWatchedGroupsByReleaseYear(t *testing.T) {
 		t.Fatalf("组内应按标记时间倒序: %+v", groups[0].Items)
 	}
 	if groups[0].Items[0].Title != "片1303" || !groups[0].Items[0].HasPoster {
-		t.Fatalf("已看卡片取的是标记时的快照: %+v", groups[0].Items[0])
+		t.Fatalf("已看卡片的标题取标记快照、海报取缓存行的落盘文件: %+v", groups[0].Items[0])
+	}
+	// 1302 在缓存里只有远程地址、没有落盘：标记行里有 poster_url 快照也不算数。
+	if groups[0].Items[1].DoubanID != "1302" || groups[0].Items[1].HasPoster {
+		t.Fatalf("缓存里没有落盘的图时 HasPoster 必须为假: %+v", groups[0].Items[1])
 	}
 	if !groups[0].Items[0].MarkedAt.Equal(newer) {
 		t.Fatalf("标记时间 = %v，期望 %v", groups[0].Items[0].MarkedAt, newer)
 	}
-	// 没有海报快照的已看条目必须报 HasPoster=false：这张卡片一旦让前端去请求
-	// 海报代理，那就是一次必然 404 的往返，而这个字段存在的全部意义就是省掉它。
+	// 没有落盘海报的已看条目必须报 HasPoster=false：这张卡片一旦让前端去请求
+	// 海报路由，那就是一次必然 404 的往返，而这个字段存在的全部意义就是省掉它。
 	if groups[1].Items[0].DoubanID != "1301" || groups[1].Items[0].HasPoster {
 		t.Fatalf("没有海报快照的已看条目 HasPoster 必须为假: %+v", groups[1].Items[0])
 	}
@@ -679,6 +713,14 @@ func TestMovieChartListWatchedGroupsByReleaseYear(t *testing.T) {
 	}
 	if len(after) != 3 {
 		t.Fatalf("清空缓存后仍应有 3 组: %+v", after)
+	}
+	// 快照三列自立门户；海报是缓存行引用的本地文件，缓存没了就只剩占位——
+	// 这是 D-MC14 明码标价的代价，卡片其余内容照常完整。
+	if after[0].Items[0].Title != "片1303" {
+		t.Fatalf("清空缓存后标题仍应来自快照: %+v", after[0].Items[0])
+	}
+	if after[0].Items[0].HasPoster {
+		t.Fatalf("缓存行没了就没有本地海报可发: %+v", after[0].Items[0])
 	}
 }
 

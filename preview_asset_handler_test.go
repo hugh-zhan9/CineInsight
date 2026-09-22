@@ -7,11 +7,9 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 	"video-master/database"
@@ -300,55 +298,67 @@ func TestFaceCropRouteServesCropAndRefusesEscapes(t *testing.T) {
 	}
 }
 
-// ---- 年度电影榜单海报代理（需求设计文档 §6.2，D-MC09）----
+// ---- 年度电影榜单海报（需求设计文档 §6.2，D-MC14 取代 D-MC09）----
 //
-// 全部用例都对着 httptest 桩服务跑，**不向 douban.com / doubanio.com 发真实请求**。
-// 注入点只有「客户端怎么把请求发出去」这一层：库里存的仍是真实的
-// https://img2.doubanio.com/... 形态，域名白名单照常在发请求之前跑一遍。
+// 这条路由现在是**纯本地磁盘读**，实现里没有任何 HTTP 客户端。本节的用例因此不再
+// 装桩服务，而是反过来：把 http.DefaultTransport 换成一个一被用到就判失败的陷阱，
+// 再让路由去取一张**库里有远程地址、本地却没有文件**的海报——改回即时回源的实现，
+// 这两条会同时红（一条是陷阱被触发，一条是它没有回 404）。
 
-// doubanChartPosterStubTransport 把已经通过校验的请求改投到桩服务，并按序记下
-// 原始地址，供用例断言路由到底要去取哪一个 URL。
-type doubanChartPosterStubTransport struct {
-	base  *url.URL
-	mu    sync.Mutex
-	calls []string
+// noEgressTransport 是「渲染路径不许出网」的陷阱：被调用就判用例失败。
+type noEgressTransport struct {
+	t *testing.T
 }
 
-func (s *doubanChartPosterStubTransport) RoundTrip(request *http.Request) (*http.Response, error) {
-	s.mu.Lock()
-	s.calls = append(s.calls, request.URL.String())
-	s.mu.Unlock()
-	routed := request.Clone(request.Context())
-	routed.URL.Scheme = s.base.Scheme
-	routed.URL.Host = s.base.Host
-	routed.Host = ""
-	return http.DefaultTransport.RoundTrip(routed)
+func (n *noEgressTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	n.t.Errorf("渲染路径不得出网，却发起了请求: %s", request.URL)
+	return nil, fmt.Errorf("渲染路径不得出网")
 }
 
-func (s *doubanChartPosterStubTransport) requested() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return append([]string(nil), s.calls...)
-}
-
-func useDoubanChartPosterStub(t *testing.T, handler http.HandlerFunc) *doubanChartPosterStubTransport {
+// forbidEgress 在用例期间掐掉进程默认的出网能力。
+//
+// 它盯的不只是这条路由自己写没写客户端：http.Get / http.DefaultClient 这类「顺手
+// 一句」的出网同样走 DefaultTransport，换掉它之后任何一处都会当场暴露。
+func forbidEgress(t *testing.T) {
 	t.Helper()
-	server := httptest.NewServer(handler)
-	t.Cleanup(server.Close)
-	base, err := url.Parse(server.URL)
-	if err != nil {
-		t.Fatalf("解析桩服务地址失败: %v", err)
-	}
-	transport := &doubanChartPosterStubTransport{base: base}
-	previous := doubanChartPosterClientProvider
-	doubanChartPosterClientProvider = func() (*http.Client, error) {
-		return &http.Client{Transport: transport}, nil
-	}
-	t.Cleanup(func() { doubanChartPosterClientProvider = previous })
-	return transport
+	previous := http.DefaultTransport
+	http.DefaultTransport = &noEgressTransport{t: t}
+	t.Cleanup(func() { http.DefaultTransport = previous })
 }
 
-func createChartEntryForTest(t *testing.T, doubanID, posterURL string) {
+// newChartPosterApp 起一个海报落在临时目录里的应用实例。
+//
+// 照 TestPersonAvatarHandlerServesOnlyManagedEntityAsset 的做法换掉服务字段：
+// NewApp 里的那个指向用户真实的数据目录，用例不能往那里写东西。
+func newChartPosterApp(t *testing.T) (*App, string) {
+	t.Helper()
+	dataDir := t.TempDir()
+	app := NewApp()
+	app.movieChart = services.NewMovieChartService(database.DB, services.NewWatchlistService(dataDir))
+	return app, dataDir
+}
+
+// writeChartPosterFile 往托管目录里放一张海报，返回托管相对路径。
+func writeChartPosterFile(t *testing.T, dataDir string, entryID uint, name string, content []byte) string {
+	t.Helper()
+	relative := filepath.Join("movie_chart", fmt.Sprintf("%d", entryID), name)
+	full := filepath.Join(dataDir, "media-details", relative)
+	if err := os.MkdirAll(filepath.Dir(full), 0755); err != nil {
+		t.Fatalf("建立海报目录失败: %v", err)
+	}
+	if err := os.WriteFile(full, content, 0644); err != nil {
+		t.Fatalf("写入海报文件失败: %v", err)
+	}
+	return filepath.ToSlash(relative)
+}
+
+func chartPosterJPEG(filler byte) []byte {
+	return append([]byte{0xFF, 0xD8, 0xFF, 0xE0}, bytes.Repeat([]byte{filler}, 60)...)
+}
+
+// createChartEntryForTest 写一条缓存条目。签名保持两个值参不变——
+// app_movie_chart_test.go 也在用它，那个文件不属于本切片。
+func createChartEntryForTest(t *testing.T, doubanID, posterURL string) models.MovieChartEntry {
 	t.Helper()
 	entry := models.MovieChartEntry{
 		DoubanID:     doubanID,
@@ -359,6 +369,16 @@ func createChartEntryForTest(t *testing.T, doubanID, posterURL string) {
 	}
 	if err := database.DB.Create(&entry).Error; err != nil {
 		t.Fatalf("创建榜单条目失败: %v", err)
+	}
+	return entry
+}
+
+// setChartPosterPathForTest 给条目写上托管相对路径。
+func setChartPosterPathForTest(t *testing.T, entry models.MovieChartEntry, posterPath string) {
+	t.Helper()
+	if err := database.DB.Model(&models.MovieChartEntry{}).
+		Where("id = ?", entry.ID).Update("poster_path", posterPath).Error; err != nil {
+		t.Fatalf("写入托管路径失败: %v", err)
 	}
 }
 
@@ -379,7 +399,7 @@ func createChartMarkForTest(t *testing.T, doubanID, posterURL string) {
 
 func TestDoubanChartPosterRouteMethodAndIDBoundaries(t *testing.T) {
 	setupAppTestDB(t)
-	app := NewApp()
+	app, _ := newChartPosterApp(t)
 	handler := newAssetHandler(app)
 
 	req := httptest.NewRequest(http.MethodPost, "/preview/douban-chart-poster/1292052", nil)
@@ -412,519 +432,151 @@ func TestDoubanChartPosterRouteMethodAndIDBoundaries(t *testing.T) {
 	}
 }
 
-func TestDoubanChartPosterRouteMissingAddressReturns404(t *testing.T) {
+// TestDoubanChartPosterRouteServesLocalFile 钉住命中的那一面：图来自本地托管目录，
+// 一次出网都没有。
+func TestDoubanChartPosterRouteServesLocalFile(t *testing.T) {
 	setupAppTestDB(t)
-	transport := useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("库里没有地址时不应发出上游请求: %s", r.URL)
-	})
-	// 条目在库里但 poster_url 为空，同样是「没有这张图」。
-	createChartEntryForTest(t, "1000001", "")
-	handler := newAssetHandler(NewApp())
+	forbidEgress(t)
+	app, dataDir := newChartPosterApp(t)
+	content := chartPosterJPEG('a')
+	entry := createChartEntryForTest(t, "1292052",
+		"https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2900000.jpg")
+	setChartPosterPathForTest(t, entry, writeChartPosterFile(t, dataDir, entry.ID, "poster.jpg", content))
 
-	for _, path := range []string{
-		"/preview/douban-chart-poster/9999999", // 两张表都没有这一行
-		"/preview/douban-chart-poster/1000001", // 有行但地址为空
-	} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s 期望 404，实际 %d body=%s", path, rec.Code, rec.Body.String())
-		}
-	}
-	if calls := transport.requested(); len(calls) != 0 {
-		t.Fatalf("不应发出上游请求，实际: %v", calls)
-	}
-}
-
-// TestDoubanChartPosterRouteRejectsAddressesOutsideWhitelist 是这条路由的安全用例
-// （TC-11）：库里的地址来自豆瓣响应，仍是外部输入，取出来之后必须再过一次白名单。
-// 其中 evildoubanio.com 一条专门钉住「裸 HasSuffix(host, "doubanio.com")」这个经典
-// 错误——把这个判定换成裸 HasSuffix，本用例立刻失败。
-func TestDoubanChartPosterRouteRejectsAddressesOutsideWhitelist(t *testing.T) {
-	setupAppTestDB(t)
-	transport := useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		t.Errorf("白名单外的地址不应发出上游请求: %s", r.URL)
-	})
-
-	cases := []struct {
-		id      string
-		address string
-		reason  string
-	}{
-		{"2000001", "https://evildoubanio.com/p1.jpg", "后缀近似的外部域名"},
-		{"2000002", "https://doubanio.com.evil.com/p1.jpg", "域名前缀伪装"},
-		{"2000003", "http://img2.doubanio.com/p1.jpg", "明文 http"},
-		{"2000004", "https://user:pass@img2.doubanio.com/p1.jpg", "地址内嵌凭证"},
-		{"2000005", "https://img2.doubanio.com:8080/p1.jpg", "显式端口"},
-		{"2000006", "file:///etc/passwd", "本地文件协议"},
-		{"2000007", "https://127.0.0.1/p1.jpg", "回环地址"},
-		{"2000008", "https://169.254.169.254/latest/meta-data/", "元数据服务"},
-		{"2000009", "   ", "空白地址"},
-		{"2000010", "https:///p1.jpg", "没有主机名"},
-	}
-	for _, testCase := range cases {
-		createChartEntryForTest(t, testCase.id, testCase.address)
-	}
-	handler := newAssetHandler(NewApp())
-
-	for _, testCase := range cases {
-		req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/"+testCase.id, nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusNotFound {
-			t.Fatalf("%s（%s）期望 404，实际 %d body=%s", testCase.address, testCase.reason, rec.Code, rec.Body.String())
-		}
-	}
-	if calls := transport.requested(); len(calls) != 0 {
-		t.Fatalf("白名单外的地址不应发出任何上游请求，实际: %v", calls)
-	}
-}
-
-func TestDoubanChartPosterRouteProxiesStoredAddress(t *testing.T) {
-	setupAppTestDB(t)
-	const stored = "https://img2.doubanio.com/view/photo/s_ratio_poster/public/p2900000.jpg"
-	createChartEntryForTest(t, "1292052", stored)
-
-	transport := useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Referer"); got != "https://img2.doubanio.com/" {
-			t.Errorf("Referer 错误（末尾斜杠是必须的）: %q", got)
-		}
-		if got := r.Header.Get("User-Agent"); got != services.WatchlistPosterUserAgent {
-			t.Errorf("User-Agent 错误: %q", got)
-		}
-		if r.URL.Path != "/view/photo/s_ratio_poster/public/p2900000.jpg" {
-			t.Errorf("上游路径错误: %q", r.URL.Path)
-		}
-		if r.URL.RawQuery != "" {
-			t.Errorf("上游不应带查询串: %q", r.URL.RawQuery)
-		}
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write([]byte("jpeg-chart-poster"))
-	})
-
-	handler := newAssetHandler(NewApp())
-	req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/1292052", nil)
+	handler := newAssetHandler(app)
+	req := httptest.NewRequest(http.MethodGet,
+		"/preview/douban-chart-poster/1292052?url=http://127.0.0.1:9/evil.jpg", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("期望 200，实际 %d body=%s", rec.Code, rec.Body.String())
 	}
+	if got := rec.Body.Bytes(); !bytes.Equal(got, content) {
+		t.Fatalf("响应体不是本地那张图: %d 字节", len(got))
+	}
 	if got := rec.Header().Get("Content-Type"); got != "image/jpeg" {
-		t.Fatalf("content-type 未透传: %q", got)
+		t.Fatalf("content-type = %q", got)
 	}
-	if got := rec.Header().Get("Cache-Control"); got != "public, max-age=604800" {
-		t.Fatalf("cache-control 错误: %q", got)
+	// 落盘之后不再有「用 HTTP 缓存挡住重复回源」这回事：文件就在本地，而 URL 是按
+	// 豆瓣 ID 给的、不带内容摘要，缓存住只会在换图之后继续发旧图。
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("cache-control = %q，期望 no-store", got)
 	}
-	// 上游的 Content-Type 是原样透传的，必须同时禁掉浏览器的类型嗅探——这条路由
-	// 与应用自己的页面同源，一份伪装成图片的 HTML 被嗅探成文档就等于同源执行。
 	if got := rec.Header().Get("X-Content-Type-Options"); got != "nosniff" {
 		t.Fatalf("必须带 nosniff，实际 %q", got)
 	}
-	if rec.Body.String() != "jpeg-chart-poster" {
-		t.Fatalf("响应体错误: %q", rec.Body.String())
-	}
-
-	// 调用方塞进来的查询串一概不参与取图：地址只从库里来。
-	evil := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/1292052?url=http://127.0.0.1:9/evil.jpg&host=evil.com", nil)
-	evilRec := httptest.NewRecorder()
-	handler.ServeHTTP(evilRec, evil)
-	if evilRec.Code != http.StatusOK {
-		t.Fatalf("带查询串的请求期望 200，实际 %d", evilRec.Code)
-	}
-
-	calls := transport.requested()
-	if len(calls) != 2 {
-		t.Fatalf("期望两次上游请求，实际 %v", calls)
-	}
-	for _, call := range calls {
-		if call != stored {
-			t.Fatalf("上游地址必须与库里存的一致，实际 %q", call)
-		}
-	}
 }
 
-// TestDoubanChartPosterRouteRejectsSVG 钉住 SVG 不当海报发：它是 image/*，但能内嵌
-// <script>，而这条路由与应用自己的页面同源。真实海报是 CDN 上的位图，排除 SVG
-// 不损失任何用例。
-func TestDoubanChartPosterRouteRejectsSVG(t *testing.T) {
-	setupAppTestDB(t)
-	createChartEntryForTest(t, "1292052", "https://img2.doubanio.com/view/photo/l/public/p1.svg")
-	useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/svg+xml")
-		_, _ = w.Write([]byte(`<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>`))
-	})
-
-	handler := newAssetHandler(NewApp())
-	req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/1292052", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("SVG 期望 502，实际 %d body=%s", rec.Code, rec.Body.String())
-	}
-	if strings.Contains(rec.Body.String(), "<script") {
-		t.Fatalf("响应体不得回显上游内容: %q", rec.Body.String())
-	}
-
-	// 带参数段的写法一样要挡住，别让 charset 绕过判定。
-	for _, contentType := range []string{"image/svg+xml; charset=utf-8", "IMAGE/SVG+XML"} {
-		if doubanChartPosterServableImage(contentType) {
-			t.Fatalf("%q 不该被当成可发的海报", contentType)
-		}
-	}
-	for _, contentType := range []string{"image/jpeg", "image/webp; charset=binary", "IMAGE/PNG"} {
-		if !doubanChartPosterServableImage(contentType) {
-			t.Fatalf("%q 是正常位图，应当放行", contentType)
-		}
-	}
-}
-
-// TestDoubanChartPosterRoutePrefersEntryAddress 钉住取址顺序：缓存表在前、标记表
-// 兜底。两张表都有地址时必须用缓存表那一个——它是最近一次抓取的结果，标记表存的
-// 是**标记那一刻的快照**，可能已经是失效的旧地址。
-func TestDoubanChartPosterRoutePrefersEntryAddress(t *testing.T) {
-	setupAppTestDB(t)
-	const fresh = "https://img2.doubanio.com/view/photo/l/public/fresh.jpg"
-	const snapshot = "https://img9.doubanio.com/view/photo/l/public/stale.jpg"
-	createChartEntryForTest(t, "1292052", fresh)
-	createChartMarkForTest(t, "1292052", snapshot)
-
-	transport := useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write([]byte("jpeg-chart-poster"))
-	})
-	handler := newAssetHandler(NewApp())
-	req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/1292052", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("期望 200，实际 %d", rec.Code)
-	}
-	calls := transport.requested()
-	if len(calls) != 1 || calls[0] != fresh {
-		t.Fatalf("两张表都有地址时必须用缓存表的那一个，实际 %v", calls)
-	}
-}
-
-// TestDefaultDoubanChartPosterClientRebuildsOnProxyChange 钉住取图客户端按代理地址
-// 缓存、**代理一改立刻重建**。
+// TestDoubanChartPosterRouteNeverFetchesOnMiss 是本切片最要紧的一条：
+// **未命中就是 404，绝不即时回源**。
 //
-// 不重建的后果不是性能问题而是语义问题：用户在设置页配上代理之后，海报请求还在
-// 用之前那个直连客户端出去，直到重启应用为止——而 NewWatchlistMetadataHTTPClient
-// 存在的全部意义就是「配了代理就绝不静默直连」。
-func TestDefaultDoubanChartPosterClientRebuildsOnProxyChange(t *testing.T) {
+// 三种未命中都在这里：库里有合法的豆瓣图床地址但还没落盘（回源实现会去取它，
+// 因此这一条同时钉住「渲染路径零出网」）、poster_path 指向已经不存在的文件
+// （被 LRU 淘汰或手工删了）、以及库里压根没有这一行。
+// 标记表那一行也不再兜底取图：已看页的图同样只来自缓存行引用的本地文件。
+func TestDoubanChartPosterRouteNeverFetchesOnMiss(t *testing.T) {
 	setupAppTestDB(t)
-	resetDoubanChartPosterClientCache(t)
-	if err := database.DB.Create(&models.Settings{PlayWeight: 2}).Error; err != nil {
-		t.Fatalf("写入设置失败: %v", err)
-	}
+	forbidEgress(t)
+	app, dataDir := newChartPosterApp(t)
 
-	direct, err := defaultDoubanChartPosterClient()
-	if err != nil {
-		t.Fatalf("装配直连客户端失败: %v", err)
-	}
-	again, err := defaultDoubanChartPosterClient()
-	if err != nil {
-		t.Fatalf("再次装配失败: %v", err)
-	}
-	if again != direct {
-		t.Fatal("代理没变时应当复用同一个客户端，否则每张海报都要重做一次 TLS 握手")
-	}
+	// 1) 有合法远程地址、没有本地文件。
+	createChartEntryForTest(t, "1000001",
+		"https://img2.doubanio.com/view/photo/l/public/p1.jpg")
+	// 2) poster_path 指向已经不在的文件。
+	setChartPosterPathForTest(t, createChartEntryForTest(t, "1000002", ""), "movie_chart/77/gone.jpg")
+	// 3) poster_path 想跑出托管根。
+	setChartPosterPathForTest(t, createChartEntryForTest(t, "1000003", ""), "../../../etc/passwd")
+	// 4) 只有标记行的快照地址（缓存被清空后的已看条目）。
+	createChartMarkForTest(t, "1000004", "https://img9.doubanio.com/view/photo/l/public/p4.jpg")
+	// 5) 两张表都没有这一行。
+	_ = dataDir
 
-	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").
-		Update("metadata_proxy_url", "http://127.0.0.1:18080").Error; err != nil {
-		t.Fatalf("改代理设置失败: %v", err)
-	}
-	proxied, err := defaultDoubanChartPosterClient()
-	if err != nil {
-		t.Fatalf("装配走代理的客户端失败: %v", err)
-	}
-	if proxied == direct {
-		t.Fatal("代理改了必须换客户端，否则海报请求会继续从旧的直连客户端裸奔出去")
-	}
-	if proxied.CheckRedirect == nil {
-		t.Fatal("重建出来的客户端也要带跳转白名单策略")
-	}
-
-	// 代理地址填错时报错、**不退回直连**：这条与 D-MC01 是同一条语义。
-	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").
-		Update("metadata_proxy_url", "ftp://127.0.0.1:9").Error; err != nil {
-		t.Fatalf("改代理设置失败: %v", err)
-	}
-	if _, err := defaultDoubanChartPosterClient(); err == nil {
-		t.Fatal("代理地址非法时必须报错，不能静默直连")
-	}
-}
-
-// resetDoubanChartPosterClientCache 清掉进程级的取图客户端缓存，用完恢复。
-// 这个缓存是包级变量，别的用例先跑过就会把它填上，不清的话本用例断言的
-// 「同一个实例」「换了实例」都可能是上一个用例留下的。
-func resetDoubanChartPosterClientCache(t *testing.T) {
-	t.Helper()
-	doubanChartPosterClientMu.Lock()
-	previousClient, previousProxy := doubanChartPosterClient, doubanChartPosterClientProxy
-	doubanChartPosterClient, doubanChartPosterClientProxy = nil, ""
-	doubanChartPosterClientMu.Unlock()
-	t.Cleanup(func() {
-		doubanChartPosterClientMu.Lock()
-		doubanChartPosterClient, doubanChartPosterClientProxy = previousClient, previousProxy
-		doubanChartPosterClientMu.Unlock()
-	})
-}
-
-func TestDoubanChartPosterRouteFallsBackToMarkTable(t *testing.T) {
-	setupAppTestDB(t)
-	useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/webp")
-		_, _ = w.Write([]byte("webp-chart-poster"))
-	})
-
-	// 缓存被清空后只剩标记行；以及缓存行在但地址为空、标记行有地址。
-	createChartMarkForTest(t, "3000001", "https://img1.doubanio.com/view/photo/l/public/p1.jpg")
-	createChartEntryForTest(t, "3000002", "")
-	createChartMarkForTest(t, "3000002", "https://img9.doubanio.com/view/photo/l/public/p2.jpg")
-
-	handler := newAssetHandler(NewApp())
-	for _, id := range []string{"3000001", "3000002"} {
-		req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/"+id, nil)
+	handler := newAssetHandler(app)
+	for _, doubanID := range []string{"1000001", "1000002", "1000003", "1000004", "9999999"} {
+		req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/"+doubanID, nil)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusOK {
-			t.Fatalf("%s 期望 200，实际 %d body=%s", id, rec.Code, rec.Body.String())
-		}
-		if got := rec.Header().Get("Content-Type"); got != "image/webp" {
-			t.Fatalf("%s content-type 未透传: %q", id, got)
-		}
-		if rec.Body.String() != "webp-chart-poster" {
-			t.Fatalf("%s 响应体错误: %q", id, rec.Body.String())
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s 期望 404（未命中不回源），实际 %d body=%s", doubanID, rec.Code, rec.Body.String())
 		}
 	}
 }
 
-func TestDoubanChartPosterRouteUpstreamFailuresReturn502(t *testing.T) {
+// TestDoubanChartPosterRouteRejectsForeignManagedPath 钉住托管路径的越界判定：
+// poster_path 来自本地库，但它终归是一个字符串，指到托管根之外就是 404。
+func TestDoubanChartPosterRouteRejectsForeignManagedPath(t *testing.T) {
 	setupAppTestDB(t)
-	createChartEntryForTest(t, "4000001", "https://img2.doubanio.com/view/photo/l/public/p1.jpg")
-
-	mode := "status"
-	useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		switch mode {
-		case "status":
-			http.Error(w, "forbidden", http.StatusForbidden)
-		case "html":
-			// 防盗链页与验证页都是 200 + text/html。
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte("<html>418</html>"))
-		case "oversize":
-			w.Header().Set("Content-Type", "image/jpeg")
-			_, _ = w.Write(make([]byte, services.ManagedImageMaxBytes+1))
-		case "empty":
-			w.Header().Set("Content-Type", "image/jpeg")
-		case "notype":
-			_, _ = w.Write([]byte("jpeg-without-content-type"))
-		}
-	})
-
-	handler := newAssetHandler(NewApp())
-	for _, name := range []string{"status", "html", "oversize", "empty", "notype"} {
-		mode = name
-		req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/4000001", nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-		if rec.Code != http.StatusBadGateway {
-			// 不打印响应体：oversize 一支带着 20 MiB。
-			t.Fatalf("%s 期望 502，实际 %d（响应体 %d 字节）", name, rec.Code, rec.Body.Len())
-		}
+	forbidEgress(t)
+	app, dataDir := newChartPosterApp(t)
+	outside := filepath.Join(t.TempDir(), "secret.jpg")
+	if err := os.WriteFile(outside, chartPosterJPEG('b'), 0644); err != nil {
+		t.Fatalf("写入外部文件失败: %v", err)
 	}
-
-	// 刚好压线的响应体仍然放行：上限是「超过才拒」。
-	mode = "limit"
-	limitBody := make([]byte, 1024)
-	useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write(limitBody)
-	})
-	req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/4000001", nil)
-	rec := httptest.NewRecorder()
-	newAssetHandler(NewApp()).ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK {
-		t.Fatalf("正常响应期望 200，实际 %d body=%s", rec.Code, rec.Body.String())
-	}
-	if rec.Body.Len() != len(limitBody) {
-		t.Fatalf("响应体长度错误: %d", rec.Body.Len())
-	}
-}
-
-// 出网客户端装配失败（多半是资料源出网代理地址填错）不退回直连，也不当成上游故障。
-func TestDoubanChartPosterRouteClientFailureReturns500(t *testing.T) {
-	setupAppTestDB(t)
-	createChartEntryForTest(t, "5000001", "https://img2.doubanio.com/view/photo/l/public/p1.jpg")
-
-	previous := doubanChartPosterClientProvider
-	doubanChartPosterClientProvider = func() (*http.Client, error) {
-		return nil, services.ErrWatchlistMetadataProxyInvalid
-	}
-	t.Cleanup(func() { doubanChartPosterClientProvider = previous })
-
-	req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/5000001", nil)
-	rec := httptest.NewRecorder()
-	newAssetHandler(NewApp()).ServeHTTP(rec, req)
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("期望 500，实际 %d body=%s", rec.Code, rec.Body.String())
-	}
-}
-
-// 跳转也必须受白名单约束：否则上游一个 302 就能把这条路由变成跳板。
-func TestDoubanChartPosterRedirectPolicyKeepsWhitelist(t *testing.T) {
-	allowed := []string{
-		"https://img1.doubanio.com/view/photo/l/public/p1.jpg",
-		"https://doubanio.com/p1.jpg",
-	}
-	for _, address := range allowed {
-		request := httptest.NewRequest(http.MethodGet, address, nil)
-		if err := doubanChartPosterRedirectPolicy(request, nil); err != nil {
-			t.Fatalf("%s 应放行，实际 %v", address, err)
-		}
-	}
-
-	refused := []string{
-		"http://169.254.169.254/latest/meta-data/",
-		"https://evildoubanio.com/p1.jpg",
-		"http://img2.doubanio.com/p1.jpg",
-		"https://127.0.0.1:8080/p1.jpg",
-	}
-	for _, address := range refused {
-		request := httptest.NewRequest(http.MethodGet, address, nil)
-		if err := doubanChartPosterRedirectPolicy(request, nil); err == nil {
-			t.Fatalf("%s 应被拒绝", address)
-		}
-	}
-
-	// 跳转次数上限。
-	loop := httptest.NewRequest(http.MethodGet, "https://img1.doubanio.com/p1.jpg", nil)
-	via := make([]*http.Request, doubanChartPosterMaxRedirects)
-	if err := doubanChartPosterRedirectPolicy(loop, via); err == nil {
-		t.Fatal("超过跳转上限应被拒绝")
-	}
-}
-
-// 生产客户端确实装上了跳转策略，且超时按海报用途给。
-func TestDefaultDoubanChartPosterClientCarriesRedirectPolicy(t *testing.T) {
-	setupAppTestDB(t)
-	client, err := defaultDoubanChartPosterClient()
+	relative, err := filepath.Rel(filepath.Join(dataDir, "media-details"), outside)
 	if err != nil {
-		t.Fatalf("装配取图客户端失败: %v", err)
+		t.Fatalf("计算相对路径失败: %v", err)
 	}
-	if client.CheckRedirect == nil {
-		t.Fatal("取图客户端必须带跳转白名单策略")
-	}
-	if client.Timeout != doubanChartPosterTimeout {
-		t.Fatalf("超时错误: %v", client.Timeout)
+	setChartPosterPathForTest(t, createChartEntryForTest(t, "1100001", ""), filepath.ToSlash(relative))
+
+	req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/1100001", nil)
+	rec := httptest.NewRecorder()
+	newAssetHandler(app).ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("越界的 poster_path 期望 404，实际 %d", rec.Code)
 	}
 }
 
-// 失败时必须留下一行可 grep 的诊断，成功时必须一行都不留。
-//
-// 这条路由的失败全发生在远端（第三方 CDN 的防盗链、用户自配的出网代理），海报又
-// 不落盘，日志是「封面不显示」唯一的排查入口。同时钉住不该出现的东西：海报地址、
-// 主机名与查询串一律不得进日志。
-func TestDoubanChartPosterFailureLogging(t *testing.T) {
+// TestDoubanChartPosterRouteLogsOnlyRealFailures 钉住诊断出口：
+// 只有库或托管目录真的出问题才记一行，寻常的「没有这张图」保持安静
+// ——一页榜单几十张卡片，把未命中也记上就只是噪声。
+func TestDoubanChartPosterRouteLogsOnlyRealFailures(t *testing.T) {
 	setupAppTestDB(t)
-	createChartEntryForTest(t, "4100001", "https://img2.doubanio.com/view/photo/l/public/p1.jpg")
-	createChartEntryForTest(t, "4100002", "https://evildoubanio.com/p1.jpg") // 过不了白名单
-	createChartEntryForTest(t, "4100003", "")                                // 库里没有地址
-
-	mode := "status"
-	useDoubanChartPosterStub(t, func(w http.ResponseWriter, r *http.Request) {
-		switch mode {
-		case "status":
-			http.Error(w, "forbidden", http.StatusForbidden)
-		case "html":
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = w.Write([]byte("<html>418</html>"))
-		default:
-			w.Header().Set("Content-Type", "image/jpeg")
-			_, _ = w.Write([]byte("jpeg-chart-poster"))
-		}
-	})
-	handler := newAssetHandler(NewApp())
+	forbidEgress(t)
+	app, dataDir := newChartPosterApp(t)
+	entry := createChartEntryForTest(t, "4100001", "")
+	setChartPosterPathForTest(t, entry, writeChartPosterFile(t, dataDir, entry.ID, "poster.jpg", chartPosterJPEG('c')))
+	handler := newAssetHandler(app)
 
 	var logs bytes.Buffer
 	previous := log.Writer()
 	log.SetOutput(&logs)
 	t.Cleanup(func() { log.SetOutput(previous) })
 
-	fetch := func(doubanID string) {
-		req := httptest.NewRequest(http.MethodGet, "/preview/douban-chart-poster/"+doubanID+"?url=http://127.0.0.1:9/evil.jpg", nil)
-		handler.ServeHTTP(httptest.NewRecorder(), req)
+	fetch := func(doubanID string) int {
+		req := httptest.NewRequest(http.MethodGet,
+			"/preview/douban-chart-poster/"+doubanID+"?url=http://127.0.0.1:9/evil.jpg", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec.Code
 	}
 
-	for _, expectation := range []struct {
-		mode   string
-		wanted []string
-	}{
-		{"status", []string{"[MovieChart] source=douban_poster", "douban_id=4100001", "status=403", "bytes=0", "elapsed_ms=", "reason=upstream_status"}},
-		{"html", []string{"douban_id=4100001", "status=200", "reason=not_image"}},
-	} {
-		logs.Reset()
-		mode = expectation.mode
-		fetch("4100001")
-		line := logs.String()
-		for _, want := range expectation.wanted {
-			if !strings.Contains(line, want) {
-				t.Fatalf("%s 的日志缺少 %q，实际: %q", expectation.mode, want, line)
-			}
-		}
-		// 出网地址、主机名与调用方查询串都不得落进日志。
-		for _, forbidden := range []string{"doubanio.com", "view/photo", "127.0.0.1", "url="} {
-			if strings.Contains(line, forbidden) {
-				t.Fatalf("%s 的日志泄露了 %q: %q", expectation.mode, forbidden, line)
-			}
-		}
+	// 命中、未命中、非法 ID 都不记。
+	if code := fetch("4100001"); code != http.StatusOK {
+		t.Fatalf("命中期望 200，实际 %d", code)
 	}
-
-	// 出网客户端装配失败（代理地址填错）同样要留一行。
-	logs.Reset()
-	restore := doubanChartPosterClientProvider
-	doubanChartPosterClientProvider = func() (*http.Client, error) {
-		return nil, services.ErrWatchlistMetadataProxyInvalid
-	}
-	fetch("4100001")
-	doubanChartPosterClientProvider = restore
-	if !strings.Contains(logs.String(), "reason=client_unavailable") {
-		t.Fatalf("装配失败应记 client_unavailable，实际: %q", logs.String())
-	}
-
-	// 库里的地址没过白名单：这不是「没有这张图」，是缓存里存着一个不该存在的地址，
-	// 也是一道安全控制真的触发了，必须留痕——但被拒的地址本身一个字都不能进日志。
-	logs.Reset()
-	mode = "ok"
-	fetch("4100002")
-	rejected := logs.String()
-	for _, want := range []string{"douban_id=4100002", "status=0", "bytes=0", "elapsed_ms=", "reason=address_rejected"} {
-		if !strings.Contains(rejected, want) {
-			t.Fatalf("白名单拒绝的日志缺少 %q，实际: %q", want, rejected)
-		}
-	}
-	for _, forbidden := range []string{"evildoubanio", "doubanio.com", "https", "p1.jpg", "://"} {
-		if strings.Contains(rejected, forbidden) {
-			t.Fatalf("白名单拒绝的日志泄露了 %q: %q", forbidden, rejected)
-		}
-	}
-
-	// 另外两种「没有这张图」保持安静：库里压根没有地址，以及 ID 本身不合法。
-	logs.Reset()
-	fetch("4100003")
 	fetch("9999999")
 	fetch("abc")
 	if logs.Len() != 0 {
-		t.Fatalf("空结果与非法 ID 不应记日志，实际: %q", logs.String())
+		t.Fatalf("成功与寻常未命中都不该记日志，实际: %q", logs.String())
 	}
 
-	// 成功路径一行都不记：一页榜单几十张图。
+	// 库本身出问题才记：把表摘掉制造一次读取失败。
+	if err := database.DB.Migrator().DropTable(&models.MovieChartEntry{}); err != nil {
+		t.Fatalf("删表失败: %v", err)
+	}
 	logs.Reset()
-	fetch("4100001")
-	if logs.Len() != 0 {
-		t.Fatalf("成功路径不应记日志，实际: %q", logs.String())
+	if code := fetch("4100001"); code != http.StatusInternalServerError {
+		t.Fatalf("读库失败期望 500，实际 %d", code)
+	}
+	line := logs.String()
+	for _, want := range []string{"[MovieChart] source=douban_poster", "douban_id=4100001", "elapsed_ms=", "reason=resolve_failed"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("故障日志缺少 %q，实际: %q", want, line)
+		}
+	}
+	// 调用方塞进来的查询串不得进日志。
+	if strings.Contains(line, "url=") || strings.Contains(line, "127.0.0.1") {
+		t.Fatalf("日志泄露了调用方查询串: %q", line)
 	}
 }

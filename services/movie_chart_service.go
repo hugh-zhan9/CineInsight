@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"sync"
 	"time"
 
@@ -39,6 +40,32 @@ type MovieChartService struct {
 	// 不可用」。收成字段之后，忘记注入在构造点就只有一处可看。
 	watchlist *WatchlistService
 
+	// images 是海报落盘用的托管图片服务（D-MC14）。
+	//
+	// 构造时从想看片单服务**借同一个实例**而不是另建一个：托管根目录只应该有一个
+	// 来源（dataDir/media-details），两处各建一个就等于把「图片落在哪里」这件事
+	// 复制了一份，将来改数据目录会漏掉一边。两族海报靠 entityType 分目录，互不
+	// 干扰（watchlist/ 与 movie_chart/）。
+	//
+	// 允许为 nil（片单服务没注入时）：海报是锦上添花，没有它刷新照跑、读路径照读，
+	// 只是没有图。
+	images *ManagedImageService
+
+	// posterCacheLimit 是海报缓存的磁盘上限（movieChartPosterCacheMaxBytes）。
+	// 收成字段而不是直接用常量，是为了让 LRU 用例能给一个几百字节的上限——
+	// 真按 1 GiB 测就得往磁盘上写 1 GiB。
+	posterCacheLimit int64
+
+	// posterCacheBytes 是海报缓存已占字节数的增量记账，-1 表示本进程还没量过。
+	// 它让「每存一张就走一遍托管目录树」变成「只有可能超限时才走一遍」，
+	// 理由与并发前提见 prunePosterCache。
+	posterCacheBytes int64
+
+	// newPosterClient 每轮刷新调**一次**，装配这一轮下载海报用的出网客户端。
+	// 与 newSource 同一个理由：代理是用户随时可改的设置，装配一次存起来会让改完
+	// 设置之后的下载仍然走旧代理。
+	newPosterClient func() (*http.Client, error)
+
 	// newSource 每轮刷新调**一次**，装配这一轮用的适配器。
 	//
 	// 不在构造时装配好：出网代理是用户随时可改的设置，装配一次存起来会让改完设置
@@ -64,6 +91,19 @@ type MovieChartService struct {
 	refreshCancel  context.CancelFunc
 	refreshDone    chan struct{}
 	refreshingYear int
+
+	// posterPassIdle 记着「这一年不要再自动补图了」，两种成因：上一轮一张都没
+	// 成功，或者用户把上一轮取消了。
+	//
+	// 它挡的是自动路径：海报补件由打开榜单页触发（见 EnsureYearRefreshed）。
+	// 源持续不可用时（用户机器 2026-09-22 正在被豆瓣限流），不挡就是每打开一次
+	// 页面都从头再下一遍约 1500 张，正是这种打法把客户端打进黑名单；用户点了取消
+	// 之后不挡，切个年份再切回来就把那一轮原样重启了。口径与 D-MC12「上一次尝试
+	// 失败就不再自动出网」一致：用户点刷新照常重试（startRound 会清掉它）。
+	//
+	// 只存在进程内、不落库：它是「这次运行里已经试过并且全军覆没」的短期事实，
+	// 落库会让一次临时的网络故障在重启之后继续挡着补图。
+	posterPassIdle map[int]bool
 
 	// markMu 把标记的「读当前状态 → 动片单 → 落标记行」整段串起来，让本服务对
 	// movie_chart_marks 成为**事实上的单写者**。它与 mu 各管各的，不嵌套。
@@ -110,14 +150,22 @@ var ErrMovieChartRefreshRunning = errors.New("年度榜单正在刷新，请稍�
 // NewMovieChartService 构造服务。db 为三张新表所在的连接，watchlist 是「想看」
 // 标记要联动的想看片单服务（D-MC13），两者都是永久依赖。
 func NewMovieChartService(db *gorm.DB, watchlist *WatchlistService) *MovieChartService {
-	return &MovieChartService{
-		db:             db,
-		watchlist:      watchlist,
-		newSource:      loadMovieChartSource,
-		now:            time.Now,
-		detailInterval: movieChartDetailInterval,
-		sleep:          movieChartSleep,
+	service := &MovieChartService{
+		db:               db,
+		watchlist:        watchlist,
+		newSource:        loadMovieChartSource,
+		newPosterClient:  newMovieChartPosterClient,
+		now:              time.Now,
+		detailInterval:   movieChartDetailInterval,
+		sleep:            movieChartSleep,
+		posterCacheLimit: movieChartPosterCacheMaxBytes,
+		posterCacheBytes: -1,
+		posterPassIdle:   make(map[int]bool),
 	}
+	if watchlist != nil {
+		service.images = watchlist.images
+	}
+	return service
 }
 
 // loadMovieChartSource 按当前设置装配豆瓣适配器。
@@ -174,6 +222,15 @@ func (s *MovieChartService) StartRefresh(year int) error {
 	if s == nil {
 		return errors.New("年度榜单服务不可用")
 	}
+	return s.startRound(year, func(ctx context.Context) error { return s.refreshYear(ctx, year) })
+}
+
+// startRound 起一轮后台任务并占住「同时只有一轮」的位子。
+//
+// 两种轮次共用它：整轮刷新（列表 + 详情 + 海报）与只补海报的那一轮。共用的是
+// 取消入口、并发拒绝与 RefreshStatus 三件事——分开各写一套的话，
+// StopRefreshAndWait 只会等其中一种，退出时另一种还在往库里写。
+func (s *MovieChartService) startRound(year int, run func(ctx context.Context) error) error {
 	s.mu.Lock()
 	if s.refreshCancel != nil {
 		busy := s.refreshingYear
@@ -183,6 +240,14 @@ func (s *MovieChartService) StartRefresh(year int) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	s.refreshCancel, s.refreshDone, s.refreshingYear = cancel, done, year
+	// 新的一轮开始就解除这一年的自动补图封印。
+	//
+	// 说清楚它**不是**什么：手动刷新从来不看这个标记（StartRefresh 直接进
+	// startRound，runPosterPhase 也不读它），所以清它不是「让手动刷新跑得起来」。
+	// 它清的是**这一轮之后的自动路径**：用户主动重来一轮（或往年那一轮真的起来
+	// 了），就该重新给打开页面触发的补图一次机会，封不封由这一轮自己的结果重写
+	// （notePosterPassResult / 取消时的 suppressAutomaticPosterPass）。
+	delete(s.posterPassIdle, year)
 	s.mu.Unlock()
 
 	go func() {
@@ -193,11 +258,35 @@ func (s *MovieChartService) StartRefresh(year int) error {
 			s.refreshCancel, s.refreshDone, s.refreshingYear = nil, nil, 0
 			s.mu.Unlock()
 		}()
-		if err := s.refreshYear(ctx, year); err != nil {
+		if err := run(ctx); err != nil {
 			log.Printf("[MovieChart] refresh year=%d ended err=%v", year, err)
 		}
 	}()
 	return nil
+}
+
+// notePosterPassResult 记下一轮海报下载的成败，供自动路径决定要不要再起一轮。
+func (s *MovieChartService) notePosterPassResult(year int, succeeded, failed int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if succeeded == 0 && failed > 0 {
+		s.posterPassIdle[year] = true
+		return
+	}
+	delete(s.posterPassIdle, year)
+}
+
+// suppressAutomaticPosterPass 挡住这一年下一次**自动**的补图轮次（取消之后）。
+func (s *MovieChartService) suppressAutomaticPosterPass(year int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.posterPassIdle[year] = true
+}
+
+func (s *MovieChartService) posterPassSuppressed(year int) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.posterPassIdle[year]
 }
 
 // CancelRefresh 请求中止当前这一轮。没有在跑时是空操作。
@@ -272,15 +361,55 @@ func (s *MovieChartService) RefreshStatus() (year int, running bool) {
 // 已经有一轮在跑时返回 (false, nil) 而不是错误：这是页面打开的自动路径，不是
 // 用户点的刷新按钮，把「已经在刷了」弹成错误没有意义。手动刷新走 StartRefresh，
 // 那里照常返回 ErrMovieChartRefreshRunning。
+// 第三条规则是 D-MC14 加的，与前两条正交：**整轮刷新不到期时，若这一年还有条目
+// 缺海报，就起一轮只补海报的**。
+//
+// 没有它，海报补件对往年是够不着的：refreshDue 一旦看到 last_attempt_at 就永远
+// 返回 false，于是 2024 年被 LRU 淘汰掉的一张海报再也回不来，而用户在界面上没有
+// 任何「只补图」的按钮。这一轮走同一个 1 次/秒的 worker、同一个取消入口，
+// **一次列表请求、一次详情请求都不发**。它仍然是打开页面触发的后台任务，
+// 不违反「HTTP 处理器不出网」——那条约束管的是渲染路径，不是后台任务。
 func (s *MovieChartService) EnsureYearRefreshed(year int) (bool, error) {
 	if s == nil {
 		return false, errors.New("年度榜单服务不可用")
 	}
 	due, err := s.refreshDue(year)
-	if err != nil || !due {
+	if err != nil {
 		return false, err
 	}
+	if !due {
+		return s.ensureYearPosters(year)
+	}
 	if err := s.StartRefresh(year); err != nil {
+		if errors.Is(err, ErrMovieChartRefreshRunning) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// ensureYearPosters 在整轮刷新不到期时补这一年缺的海报，返回是否真起了一轮。
+//
+// 三种「缺图」在这里是同一件事，因为取件条件只看 poster_url 非空、poster_path
+// 为空（见 movieChartPosterBacklog）：从未下过、上次下失败、被 LRU 淘汰。
+// 存量条目——2026-09-22 之前落库、detail_status 已经是 succeeded 的那一批——
+// 同样落在这个条件里，用户不必清任何东西。
+func (s *MovieChartService) ensureYearPosters(year int) (bool, error) {
+	if s.posterImages() == nil {
+		return false, nil
+	}
+	if s.posterPassSuppressed(year) {
+		return false, nil
+	}
+	backlog, err := s.countPosterBacklog(year)
+	if err != nil {
+		return false, err
+	}
+	if backlog == 0 {
+		return false, nil
+	}
+	if err := s.startRound(year, func(ctx context.Context) error { return s.refreshYearPosters(ctx, year) }); err != nil {
 		if errors.Is(err, ErrMovieChartRefreshRunning) {
 			return false, nil
 		}
