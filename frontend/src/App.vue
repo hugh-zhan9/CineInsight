@@ -86,7 +86,6 @@
         :directories="directories"
         @settings-saved="handleSettingsUpdate"
         @directories-changed="handleDirectoriesChanged"
-        @tags-changed="loadTags"
       />
 
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" />

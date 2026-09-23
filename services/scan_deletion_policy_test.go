@@ -67,7 +67,8 @@ func TestScanDeletionSourceAndAutomaticRestore(t *testing.T) {
 			if err := database.DB.Preload("Tags").First(&restored, auto.ID).Error; err != nil {
 				t.Fatal(err)
 			}
-			if restored.IsStale || len(restored.Tags) != 1 || restored.Tags[0].ID != tag.ID {
+			if restored.IsStale || len(restored.Tags) != 2 ||
+				!scanHasTag(restored.Tags, tag.ID, "") || !scanHasTag(restored.Tags, 0, lowResolutionAutomaticTagKind) {
 				t.Fatalf("lost metadata: %+v", restored)
 			}
 			for _, id := range []uint{user.ID, unknown.ID} {

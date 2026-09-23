@@ -71,7 +71,7 @@
             :style="{ backgroundColor: tagBgColor(tag.color) }"
           >
             <span class="tag-badge__name">{{ tag.name }}</span>
-            <button v-if="!tag.automatic_kind" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
+            <button v-if="!tag.automatic_kind || ['short_video', 'low_resolution'].includes(tag.automatic_kind)" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
           </span>
         </div>
         <button @click="$emit('open-add-tag', video)" class="btn-add-tag">+ 标签</button>

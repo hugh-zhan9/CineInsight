@@ -254,6 +254,14 @@ export function CreateTag(arg1, arg2) {
   return window['go']['main']['App']['CreateTag'](arg1, arg2);
 }
 
+export function CreateTagCategory(arg1, arg2) {
+  return window['go']['main']['App']['CreateTagCategory'](arg1, arg2);
+}
+
+export function CreateTagWithCategory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['CreateTagWithCategory'](arg1, arg2, arg3);
+}
+
 export function CreateWatchlistEntry(arg1, arg2) {
   return window['go']['main']['App']['CreateWatchlistEntry'](arg1, arg2);
 }
@@ -288,6 +296,10 @@ export function DeleteSavedLibraryView(arg1) {
 
 export function DeleteTag(arg1) {
   return window['go']['main']['App']['DeleteTag'](arg1);
+}
+
+export function DeleteTagCategory(arg1) {
+  return window['go']['main']['App']['DeleteTagCategory'](arg1);
 }
 
 export function DeleteVideo(arg1, arg2) {
@@ -854,6 +866,10 @@ export function RenameDirectory(arg1, arg2) {
   return window['go']['main']['App']['RenameDirectory'](arg1, arg2);
 }
 
+export function RenameTagCategory(arg1, arg2) {
+  return window['go']['main']['App']['RenameTagCategory'](arg1, arg2);
+}
+
 export function RenameVideo(arg1, arg2) {
   return window['go']['main']['App']['RenameVideo'](arg1, arg2);
 }
@@ -1152,6 +1168,10 @@ export function UpdateSettings(arg1) {
 
 export function UpdateTag(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateTag'](arg1, arg2, arg3);
+}
+
+export function UpdateTagWithCategory(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UpdateTagWithCategory'](arg1, arg2, arg3, arg4);
 }
 
 export function UpdateVideoDetails(arg1) {

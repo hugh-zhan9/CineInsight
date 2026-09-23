@@ -65,4 +65,21 @@ describe('添加标签输入', () => {
     expect(input.element.value).toBe('');
     expect(wrapper.get('.selected-tag-pill').text()).toContain('新标签');
   });
+
+  it('offers short-video and low-resolution automatic tags for manual video assignment', async () => {
+    wrapper = mount(AddTagDialog, { props: {
+      visible: true,
+      video: { id: 10, tags: [] },
+      tags: [
+        { id: 3, name: '短视频', automatic_kind: 'short_video' },
+        { id: 4, name: '低清', automatic_kind: 'low_resolution' },
+        { id: 5, name: '其他自动', automatic_kind: 'other' }
+      ]
+    } });
+    expect(wrapper.findAll('.clickable-tag-item').map(tag => tag.text())).toEqual(['短视频+', '低清+']);
+    await wrapper.findAll('.clickable-tag-item')[1].trigger('click');
+    await wrapper.get('.modal-actions .btn-primary').trigger('click');
+    await flushPromises();
+    expect(api.AddTagToVideo).toHaveBeenCalledWith(10, 4);
+  });
 });

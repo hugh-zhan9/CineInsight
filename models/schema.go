@@ -17,6 +17,7 @@ func AllModels() []interface{} {
 		&SubtitleSegment{},
 		&SubtitleIndexState{},
 		&Tag{},
+		&VideoAutomaticTagOverride{},
 		&AITaggingRun{},
 		&AITagCandidate{},
 		&AITagApprovalRecord{},

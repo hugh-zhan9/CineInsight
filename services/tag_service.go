@@ -17,8 +17,11 @@ type TagService struct{}
 var ErrAITagLibraryEmptyConfirmationRequired = errors.New("AI 标签库非空，拒绝未经确认的空保存")
 
 const (
-	ShortVideoTagName          = "短视频"
-	shortVideoAutomaticTagKind = "short_video"
+	ShortVideoTagName             = "短视频"
+	LowResolutionTagName          = "低清"
+	shortVideoAutomaticTagKind    = "short_video"
+	lowResolutionAutomaticTagKind = "low_resolution"
+	automaticTagNamespace         = "自动"
 )
 
 type MergeTagsResult struct {
@@ -59,8 +62,8 @@ func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty boo
 		inputs[i].Name = strings.TrimSpace(inputs[i].Name)
 		inputs[i].Namespace = strings.TrimSpace(inputs[i].Namespace)
 		inputs[i].Color = strings.TrimSpace(inputs[i].Color)
-		if inputs[i].Name == "" || inputs[i].Namespace == "" {
-			return nil, fmt.Errorf("标签名称和分类不能为空")
+		if inputs[i].Name == "" {
+			return nil, fmt.Errorf("标签名称不能为空")
 		}
 		normalized := normalizeAITagName(inputs[i].Name)
 		if _, exists := normalizedNames[normalized]; exists {
@@ -126,6 +129,9 @@ func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty boo
 			if tag.AutomaticKind != "" {
 				return fmt.Errorf("自动标签不能加入 AI 标签库: %s", tag.Name)
 			}
+			if input.Namespace == automaticTagNamespace && tag.Namespace != automaticTagNamespace {
+				return fmt.Errorf("自动是系统分类，不能手动分配")
+			}
 
 			sortOrder := namespaceOrders[input.Namespace]
 			nameChanged := tag.ID != 0 && tag.Name != input.Name
@@ -189,7 +195,6 @@ func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty boo
 			if err := tx.Model(&tag).Updates(map[string]interface{}{
 				"is_system":       false,
 				"is_active":       true,
-				"namespace":       "",
 				"review_required": false,
 				"sort_order":      0,
 			}).Error; err != nil {
@@ -200,52 +205,164 @@ func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty boo
 		if !libraryChanged {
 			return nil
 		}
-		if err := tx.Model(&models.AITagCandidate{}).
-			Where("status = ?", models.AITagCandidateStatusPending).
-			Where(`matched_tag_id IS NULL OR NOT EXISTS (
+		return resetAITaggingAfterLibraryChange(tx)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetAITagLibrary()
+}
+
+func resetAITaggingAfterLibraryChange(tx *gorm.DB) error {
+	if err := tx.Model(&models.AITagCandidate{}).
+		Where("status = ?", models.AITagCandidateStatusPending).
+		Where(`matched_tag_id IS NULL OR NOT EXISTS (
 				SELECT 1 FROM tags
 				WHERE tags.id = ai_tag_candidates.matched_tag_id
 					AND tags.deleted_at IS NULL
 					AND tags.is_system = ?
 					AND tags.is_active = ?
 			)`, true, true).
-			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
-			return err
-		}
-		// 图片侧同理：标签被移出词表或停用后，指向它的待审候选不该继续挂着等人处理。
-		if err := tx.Model(&models.ImageAITagCandidate{}).
-			Where("status = ?", models.AITagCandidateStatusPending).
-			Where(`matched_tag_id IS NULL OR NOT EXISTS (
+		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+		return err
+	}
+	// 图片侧同理：标签被移出词表或停用后，指向它的待审候选不该继续挂着等人处理。
+	if err := tx.Model(&models.ImageAITagCandidate{}).
+		Where("status = ?", models.AITagCandidateStatusPending).
+		Where(`matched_tag_id IS NULL OR NOT EXISTS (
 				SELECT 1 FROM tags
 				WHERE tags.id = image_ai_tag_candidates.matched_tag_id
 					AND tags.deleted_at IS NULL
 					AND tags.is_system = ?
 					AND tags.is_active = ?
 			)`, true, true).
-			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&models.AITaggingState{}).
-			Where(`NOT EXISTS (
+		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&models.AITaggingState{}).
+		Where(`NOT EXISTS (
 				SELECT 1 FROM video_tags
 				INNER JOIN tags ON tags.id = video_tags.tag_id
 				WHERE video_tags.video_id = ai_tagging_states.video_id
 					AND COALESCE(tags.automatic_kind, '') = ''
 			)`).
-			Updates(map[string]interface{}{
-				"status":               models.AITaggingStateStatusPending,
-				"skip_reason":          "",
-				"evidence_fingerprint": "",
-				"last_error":           "",
-			}).Error; err != nil {
+		Updates(map[string]interface{}{
+			"status":               models.AITaggingStateStatusPending,
+			"skip_reason":          "",
+			"evidence_fingerprint": "",
+			"last_error":           "",
+		}).Error; err != nil {
+		return err
+	}
+	return nil
+}
+
+// Category names are derived from tags; no empty category is persisted.
+func (s *TagService) CreateTagCategory(name string, tagIDs []uint) error {
+	name = strings.TrimSpace(name)
+	if name == "" || len(tagIDs) == 0 {
+		return fmt.Errorf("分类名称和至少一个标签不能为空")
+	}
+	if name == automaticTagNamespace {
+		return fmt.Errorf("自动是系统分类，不能手动创建")
+	}
+	return database.Transaction(func(tx *gorm.DB) error {
+		if exists, err := tagCategoryExists(tx, name); err != nil {
 			return err
+		} else if exists {
+			return fmt.Errorf("分类已存在: %s", name)
+		}
+		ids := make(map[uint]struct{}, len(tagIDs))
+		for _, id := range tagIDs {
+			if id == 0 {
+				return fmt.Errorf("标签不存在")
+			}
+			ids[id] = struct{}{}
+		}
+		var tags []models.Tag
+		if err := tx.Where("id IN ?", tagIDs).Find(&tags).Error; err != nil {
+			return err
+		}
+		if len(tags) != len(ids) {
+			return fmt.Errorf("标签不存在")
+		}
+		affectedAI := false
+		for _, tag := range tags {
+			if tag.AutomaticKind != "" {
+				return fmt.Errorf("自动标签不能加入分类")
+			}
+			if tag.IsSystem {
+				affectedAI = true
+			}
+		}
+		if err := tx.Model(&models.Tag{}).Where("id IN ?", tagIDs).Update("namespace", name).Error; err != nil {
+			return err
+		}
+		if affectedAI {
+			return resetAITaggingAfterLibraryChange(tx)
 		}
 		return nil
 	})
-	if err != nil {
-		return nil, err
+}
+
+func (s *TagService) RenameTagCategory(oldName, newName string) error {
+	oldName, newName = strings.TrimSpace(oldName), strings.TrimSpace(newName)
+	if oldName == "" || newName == "" || oldName == newName {
+		return fmt.Errorf("分类名称无效")
 	}
-	return s.GetAITagLibrary()
+	if oldName == automaticTagNamespace || newName == automaticTagNamespace {
+		return fmt.Errorf("自动是系统分类，不能手动改名")
+	}
+	return s.changeTagCategory(oldName, newName, false)
+}
+
+func (s *TagService) DeleteTagCategory(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("分类名称不能为空")
+	}
+	if name == automaticTagNamespace {
+		return fmt.Errorf("自动是系统分类，不能手动删除")
+	}
+	return s.changeTagCategory(name, "", true)
+}
+
+func (s *TagService) changeTagCategory(oldName, newName string, deleting bool) error {
+	return database.Transaction(func(tx *gorm.DB) error {
+		var tags []models.Tag
+		if err := tx.Where("namespace = ? AND COALESCE(automatic_kind, '') = ''", oldName).Find(&tags).Error; err != nil {
+			return err
+		}
+		if len(tags) == 0 {
+			return fmt.Errorf("分类不存在: %s", oldName)
+		}
+		if !deleting {
+			if exists, err := tagCategoryExists(tx, newName); err != nil {
+				return err
+			} else if exists {
+				return fmt.Errorf("分类已存在: %s", newName)
+			}
+		}
+		ids := make([]uint, 0, len(tags))
+		affectedAI := false
+		for _, tag := range tags {
+			ids = append(ids, tag.ID)
+			affectedAI = affectedAI || tag.IsSystem
+		}
+		if err := tx.Model(&models.Tag{}).Where("id IN ?", ids).Update("namespace", newName).Error; err != nil {
+			return err
+		}
+		if affectedAI {
+			return resetAITaggingAfterLibraryChange(tx)
+		}
+		return nil
+	})
+}
+
+func tagCategoryExists(tx *gorm.DB, name string) (bool, error) {
+	var count int64
+	err := tx.Model(&models.Tag{}).Where("LOWER(namespace) = LOWER(?) AND COALESCE(automatic_kind, '') = ''", name).Count(&count).Error
+	return count > 0, err
 }
 
 // GetAllTags 获取所有标签
@@ -436,46 +553,48 @@ func syncShortVideoTagsWithResult(tx *gorm.DB, result *ShortVideoTagSyncResult) 
 	if err != nil {
 		return err
 	}
-
-	var eligibleCount int64
-	if err := tx.Model(&models.Video{}).
-		Where("is_stale = ? AND duration > ? AND duration < ?", false, 0, maxDurationSeconds).
-		Count(&eligibleCount).Error; err != nil {
-		return err
-	}
-
-	tag, err := ensureShortVideoAutomaticTag(tx, eligibleCount > 0)
+	shortTag, err := ensureShortVideoAutomaticTag(tx, true)
 	if err != nil {
 		return err
 	}
-	if tag == nil {
-		return nil
+	lowTag, err := ensureLowResolutionAutomaticTag(tx, true)
+	if err != nil {
+		return err
 	}
-	result.TagID = tag.ID
+	result.TagID = shortTag.ID
+	result.Added, result.Removed, err = syncAutomaticTagBulk(tx, shortTag, "v.is_stale = ? AND v.duration > ? AND v.duration < ?", false, 0, maxDurationSeconds)
+	if err != nil {
+		return err
+	}
+	_, _, err = syncAutomaticTagBulk(tx, lowTag, "v.is_stale = ? AND v.height > ? AND v.height < ?", false, 0, 1080)
+	return err
+}
 
+// Sync one rule without changing rows for which the user recorded a decision.
+func syncAutomaticTagBulk(tx *gorm.DB, tag *models.Tag, eligibility string, args ...interface{}) (int64, int64, error) {
+	addArgs := append([]interface{}{tag.ID, tag.AutomaticKind, true}, args...)
 	added := tx.Exec(`
-		INSERT INTO video_tags(video_id, tag_id)
-		SELECT id, ? FROM videos
-		WHERE deleted_at IS NULL AND is_stale = ? AND duration > ? AND duration < ?
-		ON CONFLICT DO NOTHING
-	`, tag.ID, false, 0, maxDurationSeconds)
+        INSERT INTO video_tags(video_id, tag_id)
+        SELECT v.id, ? FROM videos v
+        LEFT JOIN video_automatic_tag_overrides o ON o.video_id = v.id AND o.automatic_kind = ?
+        WHERE v.deleted_at IS NULL AND ((o.id IS NOT NULL AND o.present = ?) OR (o.id IS NULL AND (`+eligibility+`)))
+        ON CONFLICT DO NOTHING
+    `, addArgs...)
 	if added.Error != nil {
-		return added.Error
+		return 0, 0, added.Error
 	}
-	result.Added = added.RowsAffected
-
+	removeArgs := append([]interface{}{tag.ID, tag.AutomaticKind, false}, args...)
 	removed := tx.Exec(`
-		DELETE FROM video_tags
-		WHERE tag_id = ? AND video_id IN (
-			SELECT id FROM videos
-			WHERE deleted_at IS NULL AND (is_stale = ? OR duration <= ? OR duration >= ?)
-		)
-	`, tag.ID, true, 0, maxDurationSeconds)
+        DELETE FROM video_tags WHERE tag_id = ? AND video_id IN (
+            SELECT v.id FROM videos v
+            LEFT JOIN video_automatic_tag_overrides o ON o.video_id = v.id AND o.automatic_kind = ?
+            WHERE v.deleted_at IS NULL AND ((o.id IS NOT NULL AND o.present = ?) OR (o.id IS NULL AND NOT (`+eligibility+`)))
+        )
+    `, removeArgs...)
 	if removed.Error != nil {
-		return removed.Error
+		return 0, 0, removed.Error
 	}
-	result.Removed = removed.RowsAffected
-	return nil
+	return added.RowsAffected, removed.RowsAffected, nil
 }
 
 func syncShortVideoTagForVideo(tx *gorm.DB, videoID uint) error {
@@ -487,14 +606,27 @@ func syncShortVideoTagForVideo(tx *gorm.DB, videoID uint) error {
 	if err := tx.First(&video, videoID).Error; err != nil {
 		return err
 	}
-	eligible := !video.IsStale && video.Duration > 0 && video.Duration < maxDurationSeconds
-
-	tag, err := ensureShortVideoAutomaticTag(tx, eligible)
+	shortTag, err := ensureShortVideoAutomaticTag(tx, true)
 	if err != nil {
 		return err
 	}
-	if tag == nil {
-		return nil
+	lowTag, err := ensureLowResolutionAutomaticTag(tx, true)
+	if err != nil {
+		return err
+	}
+	if err := syncAutomaticTagForVideo(tx, &video, shortTag, !video.IsStale && video.Duration > 0 && video.Duration < maxDurationSeconds); err != nil {
+		return err
+	}
+	return syncAutomaticTagForVideo(tx, &video, lowTag, !video.IsStale && video.Height > 0 && video.Height < 1080)
+}
+
+func syncAutomaticTagForVideo(tx *gorm.DB, video *models.Video, tag *models.Tag, eligible bool) error {
+	var override models.VideoAutomaticTagOverride
+	err := tx.Where("video_id = ? AND automatic_kind = ?", video.ID, tag.AutomaticKind).First(&override).Error
+	if err == nil {
+		eligible = override.Present
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
 	}
 	if eligible {
 		return tx.Exec("INSERT INTO video_tags(video_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", video.ID, tag.ID).Error
@@ -503,15 +635,23 @@ func syncShortVideoTagForVideo(tx *gorm.DB, videoID uint) error {
 }
 
 func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error) {
+	return ensureAutomaticTag(tx, shortVideoAutomaticTagKind, ShortVideoTagName, tagColorPalette[0], create)
+}
+
+func ensureLowResolutionAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error) {
+	return ensureAutomaticTag(tx, lowResolutionAutomaticTagKind, LowResolutionTagName, tagColorPalette[1], create)
+}
+
+func ensureAutomaticTag(tx *gorm.DB, kind, name, color string, create bool) (*models.Tag, error) {
 	var tag models.Tag
-	err := tx.Unscoped().Where("automatic_kind = ?", shortVideoAutomaticTagKind).Order("id").First(&tag).Error
+	err := tx.Unscoped().Where("automatic_kind = ?", kind).Order("id").First(&tag).Error
 	if err == nil {
-		if err := reserveShortVideoTagName(tx, tag.ID); err != nil {
+		if err := reserveAutomaticTagName(tx, name, tag.ID); err != nil {
 			return nil, err
 		}
-		if tag.Name != ShortVideoTagName {
-			tag.Name = ShortVideoTagName
-			if err := tx.Unscoped().Model(&tag).Update("name", tag.Name).Error; err != nil {
+		if tag.Name != name {
+			tag.Name = name
+			if err := tx.Unscoped().Model(&tag).Update("name", name).Error; err != nil {
 				return nil, err
 			}
 		}
@@ -533,18 +673,11 @@ func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error)
 	if !create {
 		return nil, nil
 	}
-
 	for attempts := 0; attempts < 5; attempts++ {
-		if err := reserveShortVideoTagName(tx, 0); err != nil {
+		if err := reserveAutomaticTagName(tx, name, 0); err != nil {
 			return nil, err
 		}
-		tag = models.Tag{
-			Name:          ShortVideoTagName,
-			Color:         tagColorPalette[0],
-			Namespace:     "自动",
-			AutomaticKind: shortVideoAutomaticTagKind,
-			IsActive:      true,
-		}
+		tag = models.Tag{Name: name, Color: color, Namespace: automaticTagNamespace, AutomaticKind: kind, IsActive: true}
 		createResult := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&tag)
 		if createResult.Error != nil {
 			return nil, createResult.Error
@@ -552,13 +685,13 @@ func ensureShortVideoAutomaticTag(tx *gorm.DB, create bool) (*models.Tag, error)
 		if createResult.RowsAffected == 1 {
 			return &tag, nil
 		}
-		if err := tx.Where("automatic_kind = ?", shortVideoAutomaticTagKind).First(&tag).Error; err == nil {
+		if err := tx.Where("automatic_kind = ?", kind).First(&tag).Error; err == nil {
 			return &tag, nil
 		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, err
 		}
 	}
-	return nil, fmt.Errorf("创建短视频自动标签时发生并发冲突")
+	return nil, fmt.Errorf("创建%s自动标签时发生并发冲突", name)
 }
 
 func reserveAutomaticTagName(tx *gorm.DB, name string, automaticTagID uint) error {
@@ -575,25 +708,6 @@ func reserveAutomaticTagName(tx *gorm.DB, name string, automaticTagID uint) erro
 		return err
 	}
 	return tx.Unscoped().Model(&conflict).Update("name", replacement).Error
-}
-
-// reserveShortVideoTagName keeps the automatic label's public name stable.
-// A pre-existing manual label is renamed without changing its ID or video
-// relationships, so the automatic rule never takes ownership of those links.
-func reserveShortVideoTagName(tx *gorm.DB, automaticTagID uint) error {
-	var conflict models.Tag
-	err := tx.Unscoped().Where("name = ? AND id <> ?", ShortVideoTagName, automaticTagID).First(&conflict).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	name, err := availableTagName(tx, ShortVideoTagName+"（原标签）", conflict.ID)
-	if err != nil {
-		return err
-	}
-	return tx.Unscoped().Model(&conflict).Update("name", name).Error
 }
 
 func availableTagName(tx *gorm.DB, preferred string, excludeID uint) (string, error) {
@@ -643,6 +757,18 @@ var tagColorPalette = []string{
 
 // CreateTag 创建标签
 func (s *TagService) CreateTag(name, color string) (*models.Tag, error) {
+	return s.createTag(name, color, nil)
+}
+
+func (s *TagService) CreateTagWithCategory(name, color, category string) (*models.Tag, error) {
+	category = strings.TrimSpace(category)
+	if category == automaticTagNamespace {
+		return nil, fmt.Errorf("自动是系统分类，不能手动分配")
+	}
+	return s.createTag(name, color, &category)
+}
+
+func (s *TagService) createTag(name, color string, category *string) (*models.Tag, error) {
 	// 先检查是否存在活跃的同名标签
 	var existing models.Tag
 	if err := database.DB.Where("name = ?", name).First(&existing).Error; err == nil {
@@ -661,6 +787,9 @@ func (s *TagService) CreateTag(name, color string) (*models.Tag, error) {
 	if err := database.DB.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).First(&softDeleted).Error; err == nil {
 		// 恢复软删除的标签
 		softDeleted.Color = color
+		if category != nil {
+			softDeleted.Namespace = *category
+		}
 		softDeleted.IsActive = true
 		softDeleted.DeletedAt.Clear()
 		if err := database.DB.Unscoped().Save(&softDeleted).Error; err != nil {
@@ -676,6 +805,9 @@ func (s *TagService) CreateTag(name, color string) (*models.Tag, error) {
 		Color:    color,
 		IsActive: true,
 	}
+	if category != nil {
+		tag.Namespace = *category
+	}
 	err := database.DB.Create(tag).Error
 	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
 		return tag, ErrTagExists
@@ -685,15 +817,29 @@ func (s *TagService) CreateTag(name, color string) (*models.Tag, error) {
 
 // UpdateTag 更新标签
 func (s *TagService) UpdateTag(id uint, name, color string) error {
+	return s.updateTag(id, name, color, nil)
+}
+
+// UpdateTagWithCategory edits an ordinary tag's display category together with
+// its name and color, so the tag manager saves the row as one operation.
+func (s *TagService) UpdateTagWithCategory(id uint, name, color, category string) error {
+	category = strings.TrimSpace(category)
+	return s.updateTag(id, name, color, &category)
+}
+
+func (s *TagService) updateTag(id uint, name, color string, category *string) error {
 	var current models.Tag
 	if err := database.DB.First(&current, id).Error; err != nil {
 		return err
 	}
 	if current.IsSystem {
-		return fmt.Errorf("系统标签请在设置中的 AI 标签库维护")
+		return fmt.Errorf("AI 标签请在标签管理中的 AI 标签库维护")
 	}
 	if current.AutomaticKind != "" {
 		return fmt.Errorf("自动标签由应用维护，不能手动修改")
+	}
+	if category != nil && *category == automaticTagNamespace && current.Namespace != automaticTagNamespace {
+		return fmt.Errorf("自动是系统分类，不能手动分配")
 	}
 	// 检查是否存在同名的活跃标签（排除自身）
 	var existing models.Tag
@@ -704,10 +850,14 @@ func (s *TagService) UpdateTag(id uint, name, color string) error {
 	// 如果存在被软删除的同名标签，先彻底删除它以避免唯一约束冲突
 	database.DB.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).Delete(&models.Tag{})
 
-	return database.DB.Model(&models.Tag{}).Where("id = ?", id).Updates(map[string]interface{}{
+	updates := map[string]interface{}{
 		"name":  name,
 		"color": color,
-	}).Error
+	}
+	if category != nil {
+		updates["namespace"] = *category
+	}
+	return database.DB.Model(&models.Tag{}).Where("id = ?", id).Updates(updates).Error
 }
 
 // DeleteTag 删除标签
@@ -718,7 +868,7 @@ func (s *TagService) DeleteTag(id uint) error {
 		return err
 	}
 	if tag.IsSystem {
-		return fmt.Errorf("系统标签请在设置中的 AI 标签库维护")
+		return fmt.Errorf("AI 标签请在标签管理中的 AI 标签库维护")
 	}
 	if tag.AutomaticKind != "" {
 		return fmt.Errorf("自动标签由应用维护，不能手动删除")

@@ -36,7 +36,6 @@ export function validateAITagGroups(groups) {
 
   for (const group of Array.isArray(groups) ? groups : []) {
     const namespace = String(group?.namespace || '').trim();
-    if (!namespace) return '标签分类名称不能为空';
     const normalizedNamespace = namespace.toLocaleLowerCase();
     if (namespaces.has(normalizedNamespace)) return `标签分类重复：${namespace}`;
     namespaces.add(normalizedNamespace);

@@ -93,22 +93,35 @@
 
       <div class="toolbar-row toolbar-row--tags">
         <span class="toolbar-row__label">标签</span>
-        <div class="tags-wrap">
-          <button
-            @click="$emit('clear-tags')"
-            :class="['tag-chip', { active: selectedTags.length === 0 }]"
-          >全部</button>
-          <div
-            v-for="tag in tags"
-            :key="tag.id"
-            class="tag-chip tag-chip-wrap"
-            :class="{ active: isTagSelected(tag.id) }"
-            :style="{ backgroundColor: tagBgColor(tag.color) }"
-            @click="$emit('toggle-tag', tag.id)"
-          >
-            <span class="tag-chip-name">{{ tag.name }}</span>
-            <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
-            <button v-if="!tag.automatic_kind" type="button" class="tag-chip-delete" @click.stop="$emit('delete-tag', tag)">×</button>
+        <div class="tag-browser">
+          <div v-if="tagGroups.length > 1" class="tag-category-tabs" role="group" aria-label="标签主题分类">
+            <button
+              v-for="group in tagGroups"
+              :key="group.key"
+              type="button"
+              :class="['tag-category-tab', { active: currentTagCategory === group.key }]"
+              :aria-pressed="currentTagCategory === group.key"
+              @click="activeTagCategory = group.key"
+            >{{ group.label }} <span class="tag-category-tab__count">{{ group.tags.length }}</span><span v-if="groupSelectedCount(group)" class="tag-category-tab__selected"> · 已选 {{ groupSelectedCount(group) }}</span></button>
+          </div>
+          <div class="tags-wrap">
+            <button
+              @click="$emit('clear-tags')"
+              :class="['tag-chip', { active: selectedTags.length === 0 }]"
+            >全部</button>
+            <div
+              v-for="tag in visibleCategoryTags"
+              :key="tag.id"
+              class="tag-chip tag-chip-wrap"
+              :class="{ active: isTagSelected(tag.id) }"
+              :style="{ backgroundColor: tagBgColor(tag.color) }"
+              @click="$emit('toggle-tag', tag.id)"
+            >
+              <span class="tag-chip-name">{{ tag.name }}</span>
+              <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
+              <button v-if="!tag.automatic_kind" type="button" class="tag-chip-delete" @click.stop="$emit('delete-tag', tag)">×</button>
+            </div>
+            <span v-if="tags.length === 0" class="tag-browser__empty">暂无标签</span>
           </div>
         </div>
         <button type="button" class="toolbar-btn toolbar-btn--compact" @click="$emit('open-tag-manager')">标签管理</button>
@@ -328,6 +341,7 @@ export default {
       ],
       toolbarMenu: null,
       toolbarMenuAnchor: null,
+	  activeTagCategory: null,
       filterDraft: { sizeRange: 'all', resRange: 'all', minRating: '', maxRating: '' },
       filterPreviewCount: null,
       filterPreviewTimer: null,
@@ -344,6 +358,28 @@ export default {
     });
   },
   computed: {
+	tagGroups() {
+	  const groups = new Map();
+	  for (const tag of this.tags) {
+		const key = String(tag.namespace || '').trim();
+		if (!groups.has(key)) groups.set(key, { key, label: key || '未分类', tags: [] });
+		groups.get(key).tags.push(tag);
+	  }
+	  return [...groups.values()].sort((a, b) => {
+		if (!a.key) return 1;
+		if (!b.key) return -1;
+		return a.label.localeCompare(b.label, 'zh-Hans-CN');
+	  });
+	},
+	currentTagCategory() {
+	  if (this.tagGroups.some(group => group.key === this.activeTagCategory)) return this.activeTagCategory;
+	  const selected = new Set(this.selectedTags.map(Number));
+	  return this.tagGroups.find(group => group.tags.some(tag => selected.has(Number(tag.id))))?.key
+		?? this.tagGroups[0]?.key ?? null;
+	},
+	visibleCategoryTags() {
+	  return this.tagGroups.find(group => group.key === this.currentTagCategory)?.tags || [];
+	},
     // 查询条件归片库页持有，这里用 getter/setter 计算属性接回 v-model：
     // 必须是真的 v-model，否则中文输入法的组词保护（el.composing）就没了。
     searchKeywordModel: {
@@ -514,6 +550,10 @@ export default {
     },
   },
   methods: {
+	groupSelectedCount(group) {
+	  const selected = new Set(this.selectedTags.map(Number));
+	  return group.tags.filter(tag => selected.has(Number(tag.id))).length;
+	},
     // 管理菜单里只有「建议作品集」由工具栏自己处理，其余照旧交回片库页。
     onManageSelect(id) {
       if (id === 'collection-suggestions') {
@@ -660,13 +700,27 @@ export default {
 
 .tags-wrap {
   display: flex;
-  flex: 1;
   flex-wrap: wrap;
   gap: 6px;
   min-width: 0;
   min-height: 26px;
   align-items: center;
 }
+
+.tag-browser { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; }
+.tag-category-tabs { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+.tag-category-tab {
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.tag-category-tab.active { border-color: var(--accent-color); color: var(--text-primary); background: var(--panel-muted-bg); font-weight: 650; }
+.tag-category-tab__count, .tag-category-tab__selected { color: var(--text-muted); font-weight: 400; }
+.tag-browser__empty { color: var(--text-muted); font-size: 11px; }
 
 /* 三段器：搜索模式、列表/网格、行高共用 */
 .segmented {

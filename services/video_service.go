@@ -1010,7 +1010,7 @@ func (s *VideoService) AddTagToVideo(videoID uint, tagID uint) error {
 		return err
 	}
 	if tag.AutomaticKind != "" {
-		return fmt.Errorf("自动标签由应用维护，不能手动添加")
+		return setManualAutomaticVideoTag(videoID, tag, true)
 	}
 
 	return database.DB.Model(&video).Association("Tags").Append(&tag)
@@ -1028,10 +1028,32 @@ func (s *VideoService) RemoveTagFromVideo(videoID uint, tagID uint) error {
 		return err
 	}
 	if tag.AutomaticKind != "" {
-		return fmt.Errorf("自动标签由应用维护，不能手动移除")
+		return setManualAutomaticVideoTag(videoID, tag, false)
 	}
 
 	return database.DB.Model(&video).Association("Tags").Delete(&tag)
+}
+
+func setManualAutomaticVideoTag(videoID uint, tag models.Tag, present bool) error {
+	if tag.AutomaticKind != shortVideoAutomaticTagKind && tag.AutomaticKind != lowResolutionAutomaticTagKind {
+		return fmt.Errorf("该自动标签不能手动修改")
+	}
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&models.Video{}, videoID).Error; err != nil {
+			return err
+		}
+		if err := tx.First(&models.Tag{}, tag.ID).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec(`INSERT INTO video_automatic_tag_overrides(video_id, automatic_kind, present)
+			VALUES (?, ?, ?) ON CONFLICT(video_id, automatic_kind) DO UPDATE SET present = excluded.present`, videoID, tag.AutomaticKind, present).Error; err != nil {
+			return err
+		}
+		if present {
+			return tx.Exec("INSERT INTO video_tags(video_id, tag_id) VALUES (?, ?) ON CONFLICT DO NOTHING", videoID, tag.ID).Error
+		}
+		return tx.Exec("DELETE FROM video_tags WHERE video_id = ? AND tag_id = ?", videoID, tag.ID).Error
+	})
 }
 
 // RefreshVideoMetadata 刷新并修复视频的元数据

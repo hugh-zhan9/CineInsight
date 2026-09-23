@@ -22,6 +22,15 @@ func createScanVisibilityVideo(t *testing.T, path string, stale bool) models.Vid
 	return video
 }
 
+func scanHasTag(tags []models.Tag, id uint, kind string) bool {
+	for _, tag := range tags {
+		if (kind != "" && tag.AutomaticKind == kind) || (kind == "" && tag.ID == id) {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFullScanRestoresExistingStaleVideo(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()
@@ -38,7 +47,8 @@ func TestFullScanRestoresExistingStaleVideo(t *testing.T) {
 	if err := database.DB.Preload("Tags").First(&restored, video.ID).Error; err != nil {
 		t.Fatal(err)
 	}
-	if restored.IsStale || len(restored.Tags) != 1 || restored.Tags[0].ID != tag.ID {
+	if restored.IsStale || len(restored.Tags) != 2 ||
+		!scanHasTag(restored.Tags, tag.ID, "") || !scanHasTag(restored.Tags, 0, lowResolutionAutomaticTagKind) {
 		t.Fatalf("恢复必须保留原 ID 与标签: %+v", restored)
 	}
 	if again := (&VideoService{}).SyncScanDirectories([]models.ScanDirectory{{Path: root}}); again.Restored != 0 {

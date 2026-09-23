@@ -22,7 +22,7 @@ assert.deepEqual(flattenAITagGroups(groups), [
 assert.deepEqual(flattenAITagGroups([{ namespace: '空分类', tags: [] }]), []);
 assert.deepEqual(groupAITagsByNamespace(null), []);
 assert.equal(validateAITagGroups(groups), '');
-assert.equal(validateAITagGroups([{ namespace: '', tags: [{ name: '标签' }] }]), '标签分类名称不能为空');
+assert.equal(validateAITagGroups([{ namespace: '', tags: [{ name: '标签' }] }]), '');
 assert.equal(validateAITagGroups([{ namespace: '内容', tags: [] }]), '分类“内容”至少需要一个标签');
 assert.equal(validateAITagGroups([
   { namespace: '内容', tags: [{ name: '访谈' }] },
@@ -30,11 +30,13 @@ assert.equal(validateAITagGroups([
 ]), '标签名称重复：访谈');
 
 const settingsSource = readFileSync(new URL('../src/components/SettingsPage.vue', import.meta.url), 'utf8');
+const tagManagerSource = readFileSync(new URL('../src/components/TagManagerDialog.vue', import.meta.url), 'utf8');
 // P-002 把设置分区拆成了 components/settings/** 的子组件，分区内的断言跟着搬。
-const aiTagLibrarySource = readFileSync(new URL('../src/components/settings/AITagLibrarySection.vue', import.meta.url), 'utf8');
+const aiTagLibrarySource = readFileSync(new URL('../src/components/AITagLibrarySection.vue', import.meta.url), 'utf8');
 const aiTagSource = readFileSync(new URL('../src/components/settings/AITagSection.vue', import.meta.url), 'utf8');
 assert.match(aiTagLibrarySource, /v-for="\(group, groupIndex\) in groups"/);
-assert.match(settingsSource, /:groups="localAITagGroups"/, '标签组数组仍由设置页持有并传给编辑器');
+assert.match(tagManagerSource, /:groups="localAITagGroups"/, '标签组数组由标签管理持有并传给编辑器');
+assert.doesNotMatch(settingsSource, /AITagLibrarySection/, '设置页不再编辑 AI 标签库');
 assert.match(aiTagLibrarySource, /class="ai-tag-library-group"/);
 assert.match(settingsSource, /class="settings-save-status"/);
 assert.match(settingsSource, /设置保存成功，已触发 AI 自动打标/);

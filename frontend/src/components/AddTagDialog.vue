@@ -146,11 +146,11 @@ export default {
       return Array.from(counts.entries())
         .filter(([, count]) => count === selectedCount)
         .map(([id]) => byId.get(id))
-        .filter(tag => tag && !tag.automatic_kind)
+        .filter(tag => tag && (!tag.automatic_kind || ['short_video', 'low_resolution'].includes(tag.automatic_kind)))
         .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN'));
     },
     allTags() {
-      return uniqueTagsById([...this.tags, ...this.createdTags]).filter(tag => !tag.automatic_kind);
+      return uniqueTagsById([...this.tags, ...this.createdTags]).filter(tag => !tag.automatic_kind || ['short_video', 'low_resolution'].includes(tag.automatic_kind));
     },
     availableTags() {
       if (this.isBatchMode) {

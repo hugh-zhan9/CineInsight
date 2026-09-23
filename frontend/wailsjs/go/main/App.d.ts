@@ -130,6 +130,10 @@ export function CreatePlaybackProxy(arg1:number):Promise<services.PlaybackProxyS
 
 export function CreateTag(arg1:string,arg2:string):Promise<models.Tag>;
 
+export function CreateTagCategory(arg1:string,arg2:Array<number>):Promise<void>;
+
+export function CreateTagWithCategory(arg1:string,arg2:string,arg3:string):Promise<models.Tag>;
+
 export function CreateWatchlistEntry(arg1:string,arg2:string):Promise<models.WatchlistEntry>;
 
 export function DeleteCollection(arg1:number):Promise<void>;
@@ -147,6 +151,8 @@ export function DeletePlaybackProxy(arg1:number):Promise<void>;
 export function DeleteSavedLibraryView(arg1:number):Promise<void>;
 
 export function DeleteTag(arg1:number):Promise<void>;
+
+export function DeleteTagCategory(arg1:string):Promise<void>;
 
 export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
 
@@ -430,6 +436,8 @@ export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
 
 export function RenameDirectory(arg1:string,arg2:string):Promise<services.FolderMigrationResult>;
 
+export function RenameTagCategory(arg1:string,arg2:string):Promise<void>;
+
 export function RenameVideo(arg1:number,arg2:string):Promise<void>;
 
 export function ReorderCollectionVideos(arg1:number,arg2:Array<number>):Promise<void>;
@@ -579,6 +587,8 @@ export function UpdatePerson(arg1:number,arg2:string,arg3:string):Promise<models
 export function UpdateSettings(arg1:models.Settings):Promise<void>;
 
 export function UpdateTag(arg1:number,arg2:string,arg3:string):Promise<void>;
+
+export function UpdateTagWithCategory(arg1:number,arg2:string,arg3:string,arg4:string):Promise<void>;
 
 export function UpdateVideoDetails(arg1:services.VideoDetailsUpdate):Promise<services.VideoDetails>;
 

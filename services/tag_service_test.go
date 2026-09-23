@@ -5,7 +5,144 @@ import (
 	"testing"
 	"video-master/database"
 	"video-master/models"
+
+	"gorm.io/gorm"
 )
+
+func TestTagCategoryEditingPreservesExistingCallers(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &TagService{}
+	tag, err := svc.CreateTagWithCategory("旅行", "#111111", "  场景  ")
+	if err != nil || tag.Namespace != "场景" {
+		t.Fatalf("创建主题标签失败: tag=%+v err=%v", tag, err)
+	}
+	if err := svc.UpdateTag(tag.ID, "出游", "#222222"); err != nil {
+		t.Fatalf("旧改名入口失败: %v", err)
+	}
+	var stored models.Tag
+	if err := database.DB.First(&stored, tag.ID).Error; err != nil || stored.Namespace != "场景" {
+		t.Fatalf("旧改名入口不应清除分类: tag=%+v err=%v", stored, err)
+	}
+	if err := svc.UpdateTagWithCategory(tag.ID, "出游", "#222222", "  心情 "); err != nil {
+		t.Fatalf("更新分类失败: %v", err)
+	}
+	if err := database.DB.First(&stored, tag.ID).Error; err != nil || stored.Namespace != "心情" {
+		t.Fatalf("分类未保存: tag=%+v err=%v", stored, err)
+	}
+	if err := svc.UpdateTagWithCategory(tag.ID, "出游", "#222222", ""); err != nil {
+		t.Fatalf("清空分类失败: %v", err)
+	}
+	if err := database.DB.First(&stored, tag.ID).Error; err != nil || stored.Namespace != "" {
+		t.Fatalf("清空分类后应归入未分类: tag=%+v err=%v", stored, err)
+	}
+}
+
+func TestTagCategoryCannotBeEditedForAIOrAutomaticTag(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tags := []models.Tag{
+		{Name: "AI", Namespace: "题材", IsSystem: true, IsActive: true},
+		{Name: "短视频", Namespace: "自动", AutomaticKind: "short_video", IsActive: true},
+	}
+	if err := database.DB.Create(&tags).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range tags {
+		if err := (&TagService{}).UpdateTagWithCategory(tag.ID, tag.Name, tag.Color, "其他"); err == nil {
+			t.Fatalf("标签 %s 的分类不应在普通标签入口修改", tag.Name)
+		}
+		var stored models.Tag
+		if err := database.DB.First(&stored, tag.ID).Error; err != nil || stored.Namespace != tag.Namespace {
+			t.Fatalf("受保护标签分类被修改: tag=%+v err=%v", stored, err)
+		}
+	}
+}
+
+func TestSharedTagCategoryLifecycle(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := &TagService{}
+	ordinary := models.Tag{Name: "访谈", IsActive: true}
+	ai := models.Tag{Name: "剧情", IsSystem: true, IsActive: true}
+	automatic := models.Tag{Name: "短视频", Namespace: "自动", AutomaticKind: "short_video", IsActive: true}
+	if err := database.DB.Create(&[]*models.Tag{&ordinary, &ai, &automatic}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CreateTagCategory("内容", []uint{ordinary.ID, ai.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RenameTagCategory("内容", "题材"); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []uint{ordinary.ID, ai.ID} {
+		var tag models.Tag
+		if err := database.DB.First(&tag, id).Error; err != nil || tag.Namespace != "题材" {
+			t.Fatalf("共享分类未改名: %+v err=%v", tag, err)
+		}
+	}
+	if err := svc.CreateTagCategory("其他", []uint{ordinary.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RenameTagCategory("题材", "其他"); err == nil {
+		t.Fatal("改名不应隐式合并现有分类")
+	}
+	if err := svc.CreateTagCategory("自动", []uint{automatic.ID}); err == nil {
+		t.Fatal("自动标签不能参与分类管理")
+	}
+	if err := svc.CreateTagCategory("自动", []uint{ordinary.ID}); err == nil {
+		t.Fatal("自动系统分类名不能用于普通标签")
+	}
+	if _, err := svc.CreateTagWithCategory("新增", "", "自动"); err == nil {
+		t.Fatal("普通标签不能直接分配到自动系统分类")
+	}
+	if err := svc.UpdateTagWithCategory(ordinary.ID, ordinary.Name, ordinary.Color, "自动"); err == nil {
+		t.Fatal("普通标签编辑不能绕过自动系统分类限制")
+	}
+	if _, err := svc.SaveAITagLibrary([]AITagLibraryInput{{ID: ai.ID, Name: ai.Name, Namespace: "自动", IsActive: true}}); err == nil {
+		t.Fatal("AI 标签编辑不能绕过自动系统分类限制")
+	}
+	if err := svc.RenameTagCategory("其他", "自动"); err == nil {
+		t.Fatal("不能改名到自动系统分类")
+	}
+	if err := svc.DeleteTagCategory("自动"); err == nil {
+		t.Fatal("自动系统分类不能删除")
+	}
+	if err := svc.DeleteTagCategory("题材"); err != nil {
+		t.Fatal(err)
+	}
+	var storedAI, storedAutomatic models.Tag
+	if err := database.DB.First(&storedAI, ai.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.First(&storedAutomatic, automatic.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if storedAI.Namespace != "" || !storedAI.IsSystem || !storedAI.IsActive {
+		t.Fatalf("AI 标签删除分类后应保留身份: %+v", storedAI)
+	}
+	if storedAutomatic.Namespace != "自动" {
+		t.Fatalf("自动标签分类不能改变: %+v", storedAutomatic)
+	}
+	if err := svc.DeleteTagCategory("题材"); err == nil {
+		t.Fatal("不存在的分类不应静默成功")
+	}
+	if err := svc.CreateTagCategory("空分类", nil); err == nil {
+		t.Fatal("不应创建空分类")
+	}
+	if err := svc.CreateTagCategory("不存在", []uint{ordinary.ID, 999999}); err == nil {
+		t.Fatal("无效标签应回滚整批")
+	}
+	var storedOrdinary models.Tag
+	if err := database.DB.First(&storedOrdinary, ordinary.ID).Error; err != nil || storedOrdinary.Namespace != "其他" {
+		t.Fatalf("无效批次修改了有效标签: %+v err=%v", storedOrdinary, err)
+	}
+}
+
+func TestAITagLibraryAllowsUnclassifiedTags(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	saved, err := (&TagService{}).SaveAITagLibrary([]AITagLibraryInput{{Name: "夜景", Namespace: "", Color: "#123456", IsActive: true}})
+	if err != nil || len(saved) != 1 || saved[0].Namespace != "" || !saved[0].IsSystem {
+		t.Fatalf("未分类 AI 标签应可保存: %+v err=%v", saved, err)
+	}
+}
 
 func TestMergeTagsUnionsAssociationsAndSoftDeletesSources(t *testing.T) {
 	setupVideoServiceTestDB(t)
@@ -114,6 +251,83 @@ func TestSyncShortVideoTagsReconcilesAgainstConfiguredDuration(t *testing.T) {
 	}
 	if len(tagged.Tags) != 0 {
 		t.Fatalf("时长阈值缩短后应移除自动标签: %+v", tagged.Tags)
+	}
+}
+
+func TestAutomaticVideoTagsRespectManualOverridesAndLowResolutionBoundary(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	tagService := &TagService{}
+	videoService := &VideoService{}
+	videos := []models.Video{
+		{Name: "both.mp4", Path: "/tmp/auto-both.mp4", Duration: 30, Height: 1079},
+		{Name: "boundary.mp4", Path: "/tmp/auto-boundary.mp4", Duration: 600, Height: 1080},
+		{Name: "unknown.mp4", Path: "/tmp/auto-unknown.mp4", Duration: 600, Height: 0},
+	}
+	if err := database.DB.Create(&videos).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tagService.SyncShortVideoTags(); err != nil {
+		t.Fatal(err)
+	}
+	var short, low models.Tag
+	if err := database.DB.Where("automatic_kind = ?", shortVideoAutomaticTagKind).First(&short).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Where("automatic_kind = ?", lowResolutionAutomaticTagKind).First(&low).Error; err != nil {
+		t.Fatal(err)
+	}
+	linked := func(videoID, tagID uint) bool {
+		var count int64
+		if err := database.DB.Table("video_tags").Where("video_id = ? AND tag_id = ?", videoID, tagID).Count(&count).Error; err != nil {
+			t.Fatal(err)
+		}
+		return count == 1
+	}
+	if !linked(videos[0].ID, short.ID) || !linked(videos[0].ID, low.ID) {
+		t.Fatal("短且 1079p 应自动打两种标签")
+	}
+	if linked(videos[1].ID, low.ID) || linked(videos[2].ID, low.ID) {
+		t.Fatal("1080p 和未知高度不应自动标低清")
+	}
+	if err := videoService.RemoveTagFromVideo(videos[0].ID, short.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := videoService.RemoveTagFromVideo(videos[0].ID, low.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := videoService.AddTagToVideo(videos[1].ID, short.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := videoService.AddTagToVideo(videos[1].ID, low.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tagService.SyncShortVideoTags(); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, videos[0].ID) }); err != nil {
+		t.Fatal(err)
+	}
+	if linked(videos[0].ID, short.ID) || linked(videos[0].ID, low.ID) {
+		t.Fatal("扫描后应保留人工移除")
+	}
+	if !linked(videos[1].ID, short.ID) || !linked(videos[1].ID, low.ID) {
+		t.Fatal("扫描后应保留人工添加")
+	}
+	if err := videoService.AddTagToVideo(videos[0].ID, short.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := videoService.RemoveTagFromVideo(videos[1].ID, low.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tagService.SyncShortVideoTags(); err != nil {
+		t.Fatal(err)
+	}
+	if !linked(videos[0].ID, short.ID) || linked(videos[1].ID, low.ID) {
+		t.Fatal("再次手动改动应覆盖之前的决定")
+	}
+	var overrideCount int64
+	if err := database.DB.Model(&models.VideoAutomaticTagOverride{}).Count(&overrideCount).Error; err != nil || overrideCount != 4 {
+		t.Fatalf("覆盖记录应逐视频逐种类唯一: %d %v", overrideCount, err)
 	}
 }
 
@@ -356,8 +570,8 @@ func TestSaveAITagLibraryPreservesValidCandidatesAndSupersedesInvalidOnes(t *tes
 	if err := database.DB.First(&removed, existing[1].ID).Error; err != nil {
 		t.Fatalf("读取移出标签失败: %v", err)
 	}
-	if removed.IsSystem || !removed.IsActive || removed.Name != "站立" {
-		t.Fatalf("移出标签应保留为普通标签: %+v", removed)
+	if removed.IsSystem || !removed.IsActive || removed.Name != "站立" || removed.Namespace != "姿态" {
+		t.Fatalf("移出标签应保留分类并转为普通标签: %+v", removed)
 	}
 	if err := database.DB.First(&retainedCandidate, retainedCandidate.ID).Error; err != nil {
 		t.Fatalf("读取保留候选失败: %v", err)
@@ -428,6 +642,9 @@ func TestSaveAITagLibraryProtectsExistingLibraryFromAccidentalEmptySave(t *testi
 	if err := database.DB.First(&candidate, candidate.ID).Error; err != nil || candidate.Status != models.AITagCandidateStatusSuperseded {
 		t.Fatalf("显式清空应使待审候选失效: candidate=%+v err=%v", candidate, err)
 	}
+	if err := database.DB.First(&tag, tag.ID).Error; err != nil || tag.IsSystem || tag.Namespace != "分类" {
+		t.Fatalf("清空词表不应清除标签的分类: tag=%+v err=%v", tag, err)
+	}
 }
 
 func TestSaveAITagLibraryRejectsDuplicateNames(t *testing.T) {
@@ -476,8 +693,8 @@ func TestSaveAITagLibraryReusesExistingManualTagAndPreservesVideoLinks(t *testin
 	if err := database.DB.First(&oldTag, previousLibraryTag.ID).Error; err != nil {
 		t.Fatalf("读取被替换的旧 AI 标签失败: %v", err)
 	}
-	if oldTag.IsSystem || !oldTag.IsActive || oldTag.Namespace != "" {
-		t.Fatalf("旧 AI 标签应退出标签库但保留为普通标签: %+v", oldTag)
+	if oldTag.IsSystem || !oldTag.IsActive || oldTag.Namespace != "人物" {
+		t.Fatalf("旧 AI 标签应退出标签库、保留分类并转为普通标签: %+v", oldTag)
 	}
 }
 

@@ -1,10 +1,10 @@
 <template>
-	<div :id="`settings-ai-tag-library`" class="settings-section ai-tag-library-section">
+	<div class="ai-tag-library-section">
 	  <div class="settings-section-heading">
 		<h3>AI 标签库</h3>
-		<button type="button" class="btn-secondary" :disabled="loading || !loaded" @click="$emit('add-group')">添加分类</button>
+		<button type="button" class="btn-secondary" :disabled="loading || !loaded" @click="$emit('add-group')">添加 AI 分组</button>
 	  </div>
-	  <p class="help-text">每个分类占一行，可在分类内维护多个标签；只有启用的标签会发送给模型。可直接填写已有普通标签的名称，保存后会保留它现有的视频关联并加入 AI 标签库。</p>
+	  <p class="help-text">分类与普通标签共用，在「分类管理」中统一新建、改名或删除。只有启用的 AI 标签会发送给模型；填写已有普通标签的名称可保留原视频关联并加入 AI 标签库。移出 AI 标签库后，标签仍保留原分类和视频关联。</p>
 	  <div v-if="loading" class="empty-hint">正在加载标签库...</div>
 	  <div v-else-if="errorMessage" class="ai-tag-library-error">
 		<span>{{ errorMessage }}</span>
@@ -13,10 +13,13 @@
 	  <div v-else class="ai-tag-library-list">
 		<div v-for="(group, groupIndex) in groups" :key="group._key" class="ai-tag-library-group">
 		  <div class="ai-tag-library-group-heading">
-			<input v-model.trim="group.namespace" type="text" class="text-input ai-tag-namespace-input" placeholder="分类名称" aria-label="标签分类名称" />
+			<select v-model="group.namespace" class="select-input ai-tag-namespace-input" aria-label="AI 标签分组分类">
+			  <option value="">未分类</option>
+			  <option v-for="category in categories" :key="category" :value="category">{{ category }}</option>
+			</select>
 			<span class="ai-tag-count">{{ group.tags.length }} 个标签</span>
 			<button type="button" class="btn-secondary btn-compact" @click="$emit('add-tag', groupIndex)">添加标签</button>
-			<button type="button" class="btn-danger btn-compact" @click="$emit('remove-group', groupIndex)">删除分类</button>
+			<button type="button" class="btn-danger btn-compact" @click="$emit('remove-group', groupIndex)">移出本组</button>
 		  </div>
 		  <div class="ai-tag-library-group-tags">
 			<div v-for="(tag, tagIndex) in group.tags" :key="tag._key" class="ai-tag-library-tag">
@@ -34,12 +37,13 @@
 </template>
 
 <script>
-// AI 标签库编辑器。标签组数组由 SettingsPage 持有（保存流程要用它做校验与提交），
+// AI 标签库编辑器。标签组数组由 TagManagerDialog 持有，
 // 这里只呈现并把增删动作发回去。
 export default {
   name: 'AITagLibrarySection',
   props: {
     groups: { type: Array, default: () => [] },
+	categories: { type: Array, default: () => [] },
     loading: { type: Boolean, default: false },
     loaded: { type: Boolean, default: false },
     errorMessage: { type: String, default: '' }

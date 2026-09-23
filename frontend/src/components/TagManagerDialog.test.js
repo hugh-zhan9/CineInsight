@@ -1,4 +1,4 @@
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 
 // 应用内确认框取代了失效的 window.confirm：默认答"确定"，需要"取消"的用例单独覆盖。
 const feedback = vi.hoisted(() => ({
@@ -14,9 +14,16 @@ vi.mock('../utils/feedback.js', async (importOriginal) => ({
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
-  CreateTag: vi.fn(),
+  CreateTagWithCategory: vi.fn(),
   MergeTags: vi.fn(),
-  UpdateTag: vi.fn()
+  UpdateTagWithCategory: vi.fn(),
+  GetAITagLibrary: vi.fn(),
+  SaveAITagLibrary: vi.fn(),
+  ClearAITagLibrary: vi.fn(),
+  TriggerAITagging: vi.fn(),
+  CreateTagCategory: vi.fn(),
+  RenameTagCategory: vi.fn(),
+  DeleteTagCategory: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -34,10 +41,38 @@ const tags = [
 beforeEach(() => {
   vi.clearAllMocks();
   api.MergeTags.mockResolvedValue({ target_tag_id: 1, merged_tag_count: 1 });
+  api.GetAITagLibrary.mockResolvedValue([]);
+  api.SaveAITagLibrary.mockResolvedValue([]);
+  api.ClearAITagLibrary.mockResolvedValue([]);
+  api.TriggerAITagging.mockResolvedValue(false);
   feedback.confirmAction.mockResolvedValue(true);
 });
 
 describe('TagManagerDialog merge picker', () => {
+  it('reloads the AI draft after an AI source is merged away', async () => {
+    api.GetAITagLibrary.mockResolvedValueOnce([{ id: 3, namespace: '题材', name: '动作', color: '#333333', is_active: true }]).mockResolvedValueOnce([]);
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+    await wrapper.get('.merge-target-select').setValue('1');
+    await wrapper.findAll('.merge-source-option').find(row => row.text().includes('动作')).get('input').setValue(true);
+    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await flushPromises();
+    expect(api.MergeTags).toHaveBeenCalledWith([3], 1);
+    expect(api.GetAITagLibrary).toHaveBeenCalledTimes(2);
+    expect(wrapper.vm.localAITagGroups).toEqual([]);
+  });
+
+  it('does not merge while the AI library has unsaved edits', async () => {
+    api.GetAITagLibrary.mockResolvedValue([{ id: 3, namespace: '题材', name: '动作', color: '#333333', is_active: true }]);
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+    wrapper.vm.localAITagGroups[0].tags[0].name = '改名草稿';
+    await wrapper.get('.merge-target-select').setValue('1');
+    await wrapper.findAll('.merge-source-option').find(row => row.text().includes('动作')).get('input').setValue(true);
+    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    expect(api.MergeTags).not.toHaveBeenCalled();
+    expect(wrapper.text()).toContain('请先保存 AI 标签库中的修改');
+  });
   it('filters ordinary source labels and merges checkbox-selected sources', async () => {
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
     const target = wrapper.get('.merge-target-select');
@@ -193,5 +228,92 @@ describe('TagManagerDialog tag list search', () => {
 
     expect(wrapper.vm.tagKeyword).toBe('');
     expect(listNames(wrapper)).toHaveLength(tags.length);
+  });
+});
+
+describe('TagManagerDialog categories', () => {
+  it('creates a tag with a category and clears both inputs after success', async () => {
+    api.CreateTagWithCategory.mockResolvedValue({ id: 6, name: '夜景', namespace: '场景' });
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: tags.map(t => t.id === 1 ? { ...t, namespace: '场景' } : t) } });
+    await wrapper.get('input[placeholder="输入标签名称..."]').setValue('夜景');
+    await wrapper.get('[aria-label="新标签的主题分类"]').setValue('场景');
+    await wrapper.get('.setting-item .btn-primary').trigger('click');
+    expect(api.CreateTagWithCategory).toHaveBeenCalledWith('夜景', '', '场景');
+    expect(wrapper.get('input[placeholder="输入标签名称..."]').element.value).toBe('');
+    expect(wrapper.get('[aria-label="新标签的主题分类"]').element.value).toBe('');
+    expect(wrapper.emitted('tags-changed')).toHaveLength(1);
+  });
+
+  it('saves ordinary category changes and keeps AI and automatic categories read-only', async () => {
+    api.UpdateTagWithCategory.mockResolvedValue();
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: tags.map(t => t.id === 2 ? { ...t, namespace: '旅行主题' } : t) } });
+    const rows = wrapper.findAll('.tag-edit-row');
+    await rows[0].get('.tag-category-edit').setValue('旅行主题');
+    await rows[0].get('button').trigger('click');
+    expect(api.UpdateTagWithCategory).toHaveBeenCalledWith(1, '旅行', '#111111', '旅行主题');
+    expect(rows[2].get('.tag-category-edit').element.disabled).toBe(true);
+    expect(rows[4].get('.tag-category-edit').element.disabled).toBe(true);
+  });
+
+  it('creates, renames and deletes a shared category for ordinary and AI tags', async () => {
+    api.CreateTagCategory.mockResolvedValue();
+    api.RenameTagCategory.mockResolvedValue();
+    api.DeleteTagCategory.mockResolvedValue();
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+    await wrapper.findAll('[role="tab"]')[2].trigger('click');
+    await wrapper.get('[aria-label="新分类名称"]').setValue('题材');
+    const choices = wrapper.findAll('.category-tag-picker input[type="checkbox"]');
+    await choices[0].setValue(true);
+    await choices[2].setValue(true);
+    await wrapper.get('.category-create button').trigger('click');
+    await flushPromises();
+    expect(api.CreateTagCategory).toHaveBeenCalledWith('题材', [1, 3]);
+    expect(wrapper.text()).toContain('题材 · 2 个标签');
+    await wrapper.get('[aria-label="重命名分类 题材"]').setValue('内容');
+    await wrapper.get('.category-row .btn-secondary').trigger('click');
+    await flushPromises();
+    expect(api.RenameTagCategory).toHaveBeenCalledWith('题材', '内容');
+    await wrapper.get('.category-delete').trigger('click');
+    await flushPromises();
+    expect(api.DeleteTagCategory).toHaveBeenCalledWith('内容');
+    expect(wrapper.vm.localTags.filter(tag => [1, 3].includes(tag.id)).every(tag => tag.namespace === '')).toBe(true);
+  });
+
+  it('loads and saves the AI library only from tag management and confirms full clear', async () => {
+    const aiTags = [{ id: 3, namespace: '题材', name: '动作', color: '#333333', is_system: true, is_active: true }];
+    api.GetAITagLibrary.mockResolvedValue(aiTags);
+    api.ClearAITagLibrary.mockResolvedValue([]);
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+    await wrapper.findAll('[role="tab"]')[1].trigger('click');
+    expect(wrapper.get('.ai-tag-library-tag input[type="text"]').element.value).toBe('动作');
+    await wrapper.get('.ai-tag-remove').trigger('click');
+    await wrapper.get('.ai-library-actions button').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '清空 AI 标签库' }));
+    expect(api.ClearAITagLibrary).toHaveBeenCalledOnce();
+    expect(api.SaveAITagLibrary).not.toHaveBeenCalled();
+  });
+
+  it('blocks an empty AI save after library load fails', async () => {
+    api.GetAITagLibrary.mockRejectedValue('database unavailable');
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+    await wrapper.findAll('[role="tab"]')[1].trigger('click');
+    expect(wrapper.get('.ai-library-actions button').attributes('disabled')).toBeDefined();
+    expect(wrapper.text()).toContain('重新加载');
+    await wrapper.vm.saveAITagLibrary();
+    expect(api.SaveAITagLibrary).not.toHaveBeenCalled();
+  });
+
+  it('shows the automatic category as read-only and excludes it from new tag choices', async () => {
+    const withAutomaticCategory = tags.map(tag => tag.id === 5 ? { ...tag, namespace: '自动' } : tag);
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: withAutomaticCategory } });
+    expect(wrapper.get('[aria-label="新标签的主题分类"]').findAll('option').map(option => option.text())).not.toContain('自动');
+    await wrapper.findAll('[role="tab"]')[2].trigger('click');
+    expect(wrapper.text()).toContain('系统分类，不可改名或删除');
+    expect(wrapper.find('.category-row input').exists()).toBe(false);
+    expect(wrapper.find('.category-delete').exists()).toBe(false);
   });
 });

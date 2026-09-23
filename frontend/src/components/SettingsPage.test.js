@@ -120,35 +120,29 @@ beforeEach(() => {
 });
 
 describe('SettingsPage library watcher', () => {
-	it('blocks all settings saves when the AI tag library failed to load', async () => {
+  it('saves settings independently of the AI tag library', async () => {
 	  const wrapper = await mountPage(undefined, { aiTagLibraryError: 'database unavailable' });
 
-	  expect(wrapper.get('.settings-save-button').attributes('disabled')).toBeDefined();
-	  expect(wrapper.get('[data-test="reload-ai-tag-library"]').text()).toContain('重新加载');
+	  expect(wrapper.get('.settings-save-button').attributes('disabled')).toBeUndefined();
+	  expect(wrapper.text()).not.toContain('AI 标签库');
 	  await wrapper.vm.saveSettings();
 	  await flushPromises();
 
 	  expect(api.SaveAITagLibrary).not.toHaveBeenCalled();
 	  expect(api.ClearAITagLibrary).not.toHaveBeenCalled();
-	  expect(api.UpdateSettings).not.toHaveBeenCalled();
-	  expect(wrapper.text()).toContain('AI 标签库尚未成功加载');
+	  expect(api.UpdateSettings).toHaveBeenCalledTimes(1);
 	});
 
-	it('requires explicit confirmation and the dedicated API to clear a loaded library', async () => {
+  it('does not clear the AI library when saving unrelated settings', async () => {
 	  const wrapper = await mountPage(undefined, {
 		aiTags: [{ id: 7, namespace: '行为', name: '动作', color: '#123456', is_active: true }]
 	  });
-	  wrapper.vm.localAITagGroups = [];
-	  await wrapper.vm.$nextTick();
-	  const confirm = vi.spyOn(window, 'confirm').mockReturnValueOnce(true);
-
 	  await wrapper.get('.settings-save-button').trigger('click');
 	  await flushPromises();
 
-	  expect(api.ClearAITagLibrary).toHaveBeenCalledTimes(1);
+	  expect(api.ClearAITagLibrary).not.toHaveBeenCalled();
 	  expect(api.SaveAITagLibrary).not.toHaveBeenCalled();
 	  expect(api.UpdateSettings).toHaveBeenCalledTimes(1);
-	  confirm.mockRestore();
 	});
 
 	it('starts and explicitly confirms semantic index rebuilds', async () => {

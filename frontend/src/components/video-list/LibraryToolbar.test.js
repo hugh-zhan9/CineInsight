@@ -93,6 +93,43 @@ describe('多选批量栏', () => {
 });
 
 describe('工具栏三层重排', () => {
+	it('按主题显示标签并保留跨分类的筛选选择', async () => {
+	  const tags = [
+		{ id: 1, name: '科幻', namespace: '题材', color: '#111111' },
+		{ id: 2, name: '悬疑', namespace: '题材', color: '#222222' },
+		{ id: 3, name: '旅行', namespace: '场景', color: '#333333' },
+		{ id: 4, name: '自定义', namespace: '', color: '#444444' }
+	  ];
+	  const wrapper = mountToolbar({ tags, selectedTags: [3] });
+	  expect(wrapper.findAll('.tag-category-tab').map(tab => tab.text())).toEqual(['场景 1 · 已选 1', '题材 2', '未分类 1']);
+	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['旅行']);
+	  await wrapper.findAll('.tag-category-tab')[1].trigger('click');
+	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['科幻', '悬疑']);
+	  await wrapper.findAll('.tag-chip-wrap')[0].trigger('click');
+	  expect(wrapper.emitted('toggle-tag')[0]).toEqual([1]);
+	  await wrapper.setProps({ selectedTags: [1, 3] });
+	  expect(wrapper.findAll('.tag-category-tab').map(tab => tab.text())).toEqual(['场景 1 · 已选 1', '题材 2 · 已选 1', '未分类 1']);
+	  await wrapper.findAll('.tag-category-tab')[2].trigger('click');
+	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['自定义']);
+	  await wrapper.get('.tags-wrap > .tag-chip').trigger('click');
+	  expect(wrapper.emitted('clear-tags')).toHaveLength(1);
+	  wrapper.unmount();
+	});
+
+	it('仅一个分类时直接显示标签，分类移除后回到仍存在的分类', async () => {
+	  const wrapper = mountToolbar({ tags: [{ id: 1, name: '旅行', namespace: '' }] });
+	  expect(wrapper.find('.tag-category-tabs').exists()).toBe(false);
+	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['旅行']);
+	  await wrapper.setProps({ tags: [{ id: 1, name: '旅行', namespace: '' }, { id: 2, name: '悬疑', namespace: '题材' }] });
+	  await wrapper.findAll('.tag-category-tab')[1].trigger('click');
+	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['旅行']);
+	  await wrapper.setProps({ tags: [{ id: 2, name: '悬疑', namespace: '题材' }] });
+	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['悬疑']);
+	  await wrapper.setProps({ tags: [] });
+	  expect(wrapper.text()).toContain('暂无标签');
+	  wrapper.unmount();
+	});
+
   it('结果条用后端计数回显命中数与全库总数', async () => {
     const wrapper = mount(LibraryToolbar, { props: baseProps({ filteredCount: 218, libraryTotalCount: 3482 }) });
     await wrapper.vm.$nextTick();

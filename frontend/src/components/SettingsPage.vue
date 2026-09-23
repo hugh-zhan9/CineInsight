@@ -35,18 +35,6 @@
 
     <AITagSection :form="settingsForm" />
 
-    <AITagLibrarySection
-      :groups="localAITagGroups"
-      :loading="aiTagLibraryLoading"
-      :loaded="aiTagLibraryLoaded"
-      :error-message="aiTagLibraryError"
-      @reload="loadAITagLibrary"
-      @add-group="addAITagLibraryGroup"
-      @remove-group="removeAITagLibraryGroup"
-      @add-tag="addAITagToGroup"
-      @remove-tag="removeAITagFromGroup"
-    />
-
     <OnlineSourceSection :form="settingsForm" />
 
     <RandomAndFormatsSection :form="settingsForm" />
@@ -73,7 +61,7 @@
       >
         {{ saveMessage }}
       </div>
-      <button @click="saveSettings" class="btn-primary settings-save-button" :disabled="settingsSaving || aiTagLibraryLoading || !aiTagLibraryLoaded">
+      <button @click="saveSettings" class="btn-primary settings-save-button" :disabled="settingsSaving">
         {{ settingsSaving ? '正在保存...' : '保存所有设置' }}
       </button>
     </div>
@@ -83,8 +71,7 @@
 </template>
 
 <script>
-import { UpdateSettings, GetAITagLibrary, SaveAITagLibrary, ClearAITagLibrary, TriggerAITagging, GetLibraryWatcherStatus } from '../../wailsjs/go/main/App';
-import { flattenAITagGroups, groupAITagsByNamespace, validateAITagGroups } from '../utils/aiTagLibrary.js';
+import { UpdateSettings, TriggerAITagging, GetLibraryWatcherStatus } from '../../wailsjs/go/main/App';
 import { normalizeIdleThresholdMinutes, normalizeIdleWindowBound } from '../utils/idleScheduling.js';
 import { normalizeProxyCacheLimitBytes } from '../utils/playbackProxy.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
@@ -101,7 +88,6 @@ export const SETTINGS_SECTIONS = [
   { key: 'mobile', label: '手机端浏览' },
   { key: 'browser-bridge', label: '浏览器插件' },
   { key: 'ai-tags', label: 'AI 标签' },
-  { key: 'ai-tag-library', label: 'AI 标签库' },
   { key: 'online-sources', label: '在线资料源' },
   { key: 'random', label: '智能随机播放' },
   { key: 'video-formats', label: '支持的视频格式' },
@@ -113,7 +99,6 @@ export const SETTINGS_SECTIONS = [
   { key: 'database', label: '数据库' },
   { key: 'backup', label: '数据库备份' }
 ];
-import AITagLibrarySection from './settings/AITagLibrarySection.vue';
 import AITagSection from './settings/AITagSection.vue';
 import AutomationSection from './settings/AutomationSection.vue';
 import BasicSection from './settings/BasicSection.vue';
@@ -128,16 +113,15 @@ import ProxySection from './settings/ProxySection.vue';
 import RandomAndFormatsSection from './settings/RandomAndFormatsSection.vue';
 import ScanDirectoriesSection from './settings/ScanDirectoriesSection.vue';
 import SubtitleSection from './settings/SubtitleSection.vue';
-import { confirmAction } from '../utils/feedback.js';
 
 export default {
   name: 'SettingsPage',
-  components: { AITagLibrarySection, AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }
   },
-  emits: ['settings-saved', 'directories-changed', 'tags-changed'],
+  emits: ['settings-saved', 'directories-changed'],
   data() {
     return {
       settingsForm: { ...this.settings },
@@ -146,12 +130,6 @@ export default {
       sectionObserver: null,
       watcherStatus: null,
       watcherStatusOff: null,
-      localAITagGroups: [],
-      aiTagLibraryLoading: false,
-      aiTagLibraryLoaded: false,
-      aiTagLibraryBaselineCount: 0,
-      aiTagLibraryError: '',
-      nextAITagLibraryKey: 1,
       settingsSaving: false,
       saveState: 'idle',
       saveMessage: ''
@@ -201,7 +179,6 @@ export default {
     }
   },
   mounted() {
-    this.loadAITagLibrary();
     this.loadLibraryWatcherStatus();
     this.observeSections();
     // 命令面板的本页动作（D-029）：保存设置。分区锚点是全局动作，由 App 注册。
@@ -210,7 +187,7 @@ export default {
       group: 'action',
       label: '保存所有设置',
       keywords: ['save settings', '保存设置'],
-      enabled: () => !this.settingsSaving && this.aiTagLibraryLoaded && !this.aiTagLibraryLoading,
+      enabled: () => !this.settingsSaving,
       run: () => this.saveSettings()
     }]);
     if (window.runtime?.EventsOn) {
@@ -262,31 +239,11 @@ export default {
     },
     async saveSettings() {
       if (this.settingsSaving) return;
-      if (!this.aiTagLibraryLoaded) {
-        this.saveState = 'error';
-        this.saveMessage = 'AI 标签库尚未成功加载，请重新加载后再保存。';
-        return;
-      }
-      const validationError = validateAITagGroups(this.localAITagGroups);
-      if (validationError) {
-        this.saveState = 'error';
-        this.saveMessage = '设置保存失败：' + validationError;
-        return;
-      }
-      const tagInputs = flattenAITagGroups(this.localAITagGroups);
-      const clearingExistingLibrary = tagInputs.length === 0 && this.aiTagLibraryBaselineCount > 0;
-      if (clearingExistingLibrary && !await confirmAction({ title: '清空 AI 标签库', message: '这会清空整个 AI 标签库，并使相关待审候选失效。确认继续吗？', confirmText: '清空', danger: true })) {
-        this.saveState = 'idle';
-        this.saveMessage = '已取消保存，AI 标签库未更改。';
-        return;
-      }
       this.settingsSaving = true;
       this.saveState = 'saving';
       this.saveMessage = '正在保存设置...';
       try {
-        const [savedTags] = await Promise.all([
-          clearingExistingLibrary ? ClearAITagLibrary() : SaveAITagLibrary(tagInputs),
-          UpdateSettings({
+        await UpdateSettings({
             confirm_before_delete: this.settingsForm.confirm_before_delete,
             delete_original_file: this.settingsForm.delete_original_file,
             video_extensions: this.settingsForm.video_extensions,
@@ -357,20 +314,13 @@ export default {
             backup_directory: this.settingsForm.backup_directory || '',
             backup_retention_count: this.settingsForm.backup_retention_count || 7,
             backup_interval_hours: Math.max(0, Number(this.settingsForm.backup_interval_hours) || 0)
-          })
-        ]);
+          });
         const aiTriggered = await TriggerAITagging();
         await this.loadLibraryWatcherStatus();
-        this.localAITagGroups = this.withAITagLibraryKeys(savedTags);
-        this.aiTagLibraryBaselineCount = savedTags.length;
         this.$emit('settings-saved', { ...this.settingsForm });
-        this.$emit('tags-changed');
-        const hasActiveTags = tagInputs.some(tag => tag.is_active);
         const hasAIConfig = Boolean(String(this.settingsForm.ai_tagging_base_url || '').trim() && String(this.settingsForm.ai_tagging_model || '').trim());
         this.saveState = 'success';
-        if (!hasActiveTags) {
-          this.saveMessage = '设置保存成功；AI 标签库没有启用标签，自动打标已暂停。';
-        } else if (!hasAIConfig) {
+        if (!hasAIConfig) {
           this.saveMessage = '设置保存成功；AI 接口或模型未配置，自动打标已暂停。';
         } else if (!aiTriggered) {
           this.saveMessage = '设置保存成功；AI 后台任务未运行，自动打标暂未启动。';
@@ -386,64 +336,12 @@ export default {
         this.settingsSaving = false;
       }
     },
-    async loadAITagLibrary() {
-      this.aiTagLibraryLoading = true;
-      this.aiTagLibraryLoaded = false;
-      this.aiTagLibraryError = '';
-      try {
-        const tags = await GetAITagLibrary();
-        this.localAITagGroups = this.withAITagLibraryKeys(tags);
-        this.aiTagLibraryBaselineCount = tags.length;
-        this.aiTagLibraryLoaded = true;
-      } catch (err) {
-        this.aiTagLibraryError = '加载 AI 标签库失败: ' + err;
-      } finally {
-        this.aiTagLibraryLoading = false;
-      }
-    },
     async loadLibraryWatcherStatus() {
       try {
         this.watcherStatus = await GetLibraryWatcherStatus();
       } catch (_err) {
         this.watcherStatus = null;
       }
-    },
-    withAITagLibraryKeys(tags) {
-      return groupAITagsByNamespace(tags).map(group => ({
-        ...group,
-        _key: `ai-tag-group-${this.nextAITagLibraryKey++}`,
-        tags: group.tags.map(tag => ({ ...tag, _key: `ai-tag-${tag.id || 'new'}-${this.nextAITagLibraryKey++}` }))
-      }));
-    },
-    newAITagLibraryItem() {
-      return {
-        id: 0,
-        name: '',
-        color: '#0D9488',
-        review_required: false,
-        is_active: true,
-        _key: `ai-tag-new-${this.nextAITagLibraryKey++}`
-      };
-    },
-    addAITagLibraryGroup() {
-      this.localAITagGroups = [...this.localAITagGroups, {
-        namespace: '',
-        tags: [this.newAITagLibraryItem()],
-        _key: `ai-tag-group-new-${this.nextAITagLibraryKey++}`
-      }];
-    },
-    removeAITagLibraryGroup(groupIndex) {
-      this.localAITagGroups = this.localAITagGroups.filter((_, index) => index !== groupIndex);
-    },
-    addAITagToGroup(groupIndex) {
-      const group = this.localAITagGroups[groupIndex];
-      if (!group) return;
-      group.tags = [...group.tags, this.newAITagLibraryItem()];
-    },
-    removeAITagFromGroup(groupIndex, tagIndex) {
-      const group = this.localAITagGroups[groupIndex];
-      if (!group) return;
-      group.tags = group.tags.filter((_, index) => index !== tagIndex);
     }
   }
 };

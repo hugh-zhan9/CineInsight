@@ -205,11 +205,39 @@ func (a *App) CreateTag(name, color string) (*models.Tag, error) {
 	return tag, err
 }
 
+func (a *App) CreateTagWithCategory(name, color, category string) (*models.Tag, error) {
+	tag, err := a.tagService.CreateTagWithCategory(name, color, category)
+	if tag != nil {
+		log.Printf("API CreateTagWithCategory name=%s category=%s id=%d err=%v", name, category, tag.ID, err)
+	} else {
+		log.Printf("API CreateTagWithCategory name=%s category=%s id=0 err=%v", name, category, err)
+	}
+	return tag, err
+}
+
 // UpdateTag 更新标签
 func (a *App) UpdateTag(id uint, name, color string) error {
 	err := a.tagService.UpdateTag(id, name, color)
 	log.Printf("API UpdateTag id=%d name=%s color=%s err=%v", id, name, color, err)
 	return err
+}
+
+func (a *App) UpdateTagWithCategory(id uint, name, color, category string) error {
+	err := a.tagService.UpdateTagWithCategory(id, name, color, category)
+	log.Printf("API UpdateTagWithCategory id=%d name=%s category=%s err=%v", id, name, category, err)
+	return err
+}
+
+func (a *App) CreateTagCategory(name string, tagIDs []uint) error {
+	return a.tagService.CreateTagCategory(name, tagIDs)
+}
+
+func (a *App) RenameTagCategory(oldName, newName string) error {
+	return a.tagService.RenameTagCategory(oldName, newName)
+}
+
+func (a *App) DeleteTagCategory(name string) error {
+	return a.tagService.DeleteTagCategory(name)
 }
 
 // DeleteTag 删除标签
