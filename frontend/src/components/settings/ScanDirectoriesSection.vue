@@ -142,7 +142,7 @@ export default {
       if (!this.form.library_watch_enabled) return '实时同步已关闭';
       const status = this.directoryWatchStatus(directoryID);
       if (!status) return '实时同步状态未知';
-      if (status.state === 'watching') return `实时同步中（${status.watch_count || 0} 个目录）`;
+      if (status.state === 'watching') return '实时同步中（含子目录）';
       return status.message || (status.state === 'unavailable' ? '当前不可用' : '监听错误');
     },
     async retryDirectoryWatch(directoryID) {

@@ -461,14 +461,18 @@ func (a *App) configureLibraryWatcher(enabled bool) error {
 	if err != nil {
 		return err
 	}
+	settings, err := a.settingsService.GetSettings()
+	if err != nil {
+		return err
+	}
 	if a.libraryWatcher.Snapshot().Running {
-		err = a.libraryWatcher.Reconfigure(dirs)
+		err = a.libraryWatcher.Reconfigure(dirs, settings.ScanExcludePaths)
 	} else {
 		ctx := a.ctx
 		if ctx == nil {
 			ctx = context.Background()
 		}
-		err = a.libraryWatcher.Start(ctx, dirs)
+		err = a.libraryWatcher.Start(ctx, dirs, settings.ScanExcludePaths)
 	}
 	a.emitLibraryWatcherStatus()
 	return err

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -99,6 +100,7 @@ type LibraryWatcherService struct {
 	emitReconcile       func(LibraryReconcileEvent)
 	roots               map[uint]*libraryWatchRoot
 	watchRefs           map[string]int
+	excludedPaths       []string
 	ctx                 context.Context
 	cancel              context.CancelFunc
 	running             bool
@@ -122,13 +124,7 @@ func NewLibraryWatcherService(videoService *VideoService) *LibraryWatcherService
 		stabilityTimeout:  30 * time.Second,
 		tickInterval:      100 * time.Millisecond,
 	}
-	service.backendFactory = func() (libraryWatchBackend, error) {
-		watcher, err := fsnotify.NewWatcher()
-		if err != nil {
-			return nil, err
-		}
-		return &fsnotifyLibraryWatchBackend{watcher: watcher}, nil
-	}
+	service.backendFactory = newLibraryWatchBackend
 	service.rootSupport = classifyLibraryWatchRoot
 	service.reconcile = func(dirs []models.ScanDirectory, affected []string) *ScanSyncResult {
 		if service.videoService == nil {
@@ -146,7 +142,7 @@ func (s *LibraryWatcherService) SetEventEmitters(status func(LibraryWatcherStatu
 	s.mu.Unlock()
 }
 
-func (s *LibraryWatcherService) Start(parent context.Context, dirs []models.ScanDirectory) error {
+func (s *LibraryWatcherService) Start(parent context.Context, dirs []models.ScanDirectory, excludeRules ...string) error {
 	// Serialize against Close: a restart that slips into an in-flight shutdown would be
 	// torn down by it, and both would contend for the same wait groups.
 	s.lifecycleMu.Lock()
@@ -154,7 +150,7 @@ func (s *LibraryWatcherService) Start(parent context.Context, dirs []models.Scan
 	s.mu.Lock()
 	if s.running {
 		s.mu.Unlock()
-		return s.Reconfigure(dirs)
+		return s.Reconfigure(dirs, excludeRules...)
 	}
 	backend, err := s.backendFactory()
 	if err != nil {
@@ -173,18 +169,35 @@ func (s *LibraryWatcherService) Start(parent context.Context, dirs []models.Scan
 	go s.eventLoop(s.ctx, backend)
 	s.mu.Unlock()
 
-	if err := s.Reconfigure(dirs); err != nil {
+	if err := s.Reconfigure(dirs, excludeRules...); err != nil {
 		_ = s.closeLocked()
 		return err
 	}
 	return nil
 }
 
-func (s *LibraryWatcherService) Reconfigure(dirs []models.ScanDirectory) error {
+// excludeRules uses the same newline-separated paths as Settings.ScanExcludePaths.
+func (s *LibraryWatcherService) Reconfigure(dirs []models.ScanDirectory, excludeRules ...string) error {
 	s.mu.Lock()
 	if !s.running || s.backend == nil {
 		s.mu.Unlock()
 		return fmt.Errorf("library watcher is not running")
+	}
+	excluded := parseScanExcludePaths(strings.Join(excludeRules, "\n"))
+	sort.Strings(excluded)
+	exclusionsChanged := !slices.Equal(s.excludedPaths, excluded)
+	s.excludedPaths = excluded
+	if exclusionsChanged {
+		// Exclusions must take effect even if registering the replacement fails.
+		for _, root := range s.roots {
+			for path := range root.watches {
+				if isScanPathExcluded(path, excluded) {
+					s.removeWatchRefLocked(path)
+					delete(root.watches, path)
+				}
+			}
+			root.status.WatchCount = len(root.watches)
+		}
 	}
 	desired := make(map[uint]models.ScanDirectory, len(dirs))
 	for _, dir := range dirs {
@@ -202,7 +215,7 @@ func (s *LibraryWatcherService) Reconfigure(dirs []models.ScanDirectory) error {
 		}
 	}
 	for id, dir := range desired {
-		if current := s.roots[id]; current != nil && dir.Path == current.directory.Path {
+		if current := s.roots[id]; current != nil && dir.Path == current.directory.Path && !exclusionsChanged {
 			current.directory = dir
 			if current.pendingDirectory != nil {
 				current.pendingDirectory = nil
@@ -230,9 +243,14 @@ func (s *LibraryWatcherService) Reconfigure(dirs []models.ScanDirectory) error {
 			current.pending = make(map[string]struct{})
 			current.due = time.Time{}
 			if err := s.registerRootLocked(candidate); err != nil {
-				pending := dir
-				current.pendingDirectory = &pending
-				s.setRootErrorLocked(current, "path_update_failed", "新目录监听注册失败，仍保留原目录监听")
+				if dir.Path == current.directory.Path {
+					current.status = candidate.status
+					current.status.WatchCount = len(current.watches)
+				} else {
+					pending := dir
+					current.pendingDirectory = &pending
+					s.setRootErrorLocked(current, "path_update_failed", "新目录监听注册失败，仍保留原目录监听")
+				}
 				continue
 			}
 			s.roots[id] = candidate
@@ -341,6 +359,13 @@ func (s *LibraryWatcherService) closeLocked() error {
 
 func (s *LibraryWatcherService) registerRootLocked(root *libraryWatchRoot) error {
 	path := filepath.Clean(root.directory.Path)
+	if isScanPathExcluded(path, s.excludedPaths) {
+		root.status = LibraryWatchRootStatus{
+			DirectoryID: root.directory.ID, State: LibraryWatchStateDisabled,
+			ReasonCode: "excluded", Message: "目录已加入扫描黑名单", UpdatedAt: time.Now(),
+		}
+		return nil
+	}
 	info, err := os.Stat(path)
 	if err != nil {
 		s.setRootUnavailableLocked(root, "root_unavailable", "扫描目录当前不可用")
@@ -366,30 +391,43 @@ func (s *LibraryWatcherService) registerRootLocked(root *libraryWatchRoot) error
 		}
 	}
 	added := make([]string, 0)
-	err = filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			if entry.IsDir() {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !entry.IsDir() {
-			return nil
-		}
-		if current != path && (strings.HasPrefix(entry.Name(), ".") || isTrashDirName(entry.Name())) {
-			return filepath.SkipDir
-		}
-		current = filepath.Clean(current)
+	register := func(current string) error {
 		if err := s.addWatchRefLocked(current); err != nil {
 			return err
 		}
 		root.watches[current] = struct{}{}
 		added = append(added, current)
 		return nil
-	})
+	}
+	if libraryBackendRecursive(s.backend) {
+		err = register(path)
+	} else {
+		err = filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
+			if isScanPathExcluded(current, s.excludedPaths) {
+				if entry != nil && !entry.IsDir() {
+					return nil
+				}
+				return filepath.SkipDir
+			}
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.Type()&os.ModeSymlink != 0 {
+				if entry.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !entry.IsDir() {
+				return nil
+			}
+			if current != path && (strings.HasPrefix(entry.Name(), ".") || isTrashDirName(entry.Name())) {
+				return filepath.SkipDir
+			}
+			current = filepath.Clean(current)
+			return register(current)
+		})
+	}
 	if err != nil {
 		for _, current := range added {
 			s.removeWatchRefLocked(current)
@@ -410,8 +448,17 @@ func (s *LibraryWatcherService) registerRootLocked(root *libraryWatchRoot) error
 }
 
 func (s *LibraryWatcherService) registerCreatedSubtreeLocked(root *libraryWatchRoot, path string) error {
+	if libraryBackendRecursive(s.backend) {
+		return nil // The root stream already covers future subdirectories.
+	}
 	path = filepath.Clean(path)
 	return filepath.WalkDir(path, func(current string, entry fs.DirEntry, walkErr error) error {
+		if isScanPathExcluded(current, s.excludedPaths) {
+			if entry != nil && !entry.IsDir() {
+				return nil
+			}
+			return filepath.SkipDir
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -512,21 +559,25 @@ func (s *LibraryWatcherService) handleEvent(event fsnotify.Event) {
 	if strings.HasPrefix(base, ".") || isTrashPath(path) {
 		return
 	}
-	// Stat once per event rather than once per root.
+	s.mu.Lock()
+	if !s.running || isScanPathExcluded(path, s.excludedPaths) {
+		s.mu.Unlock()
+		return
+	}
+	// Stat once per event rather than once per root, after checking exclusions.
 	createdDirectory := false
 	if event.Op&fsnotify.Create != 0 {
 		if info, err := os.Stat(path); err == nil && info.IsDir() {
 			createdDirectory = true
 		}
 	}
-	s.mu.Lock()
-	if !s.running {
-		s.mu.Unlock()
-		return
-	}
 	now := time.Now()
 	for _, root := range s.roots {
 		if !pathBelongsToAny(path, []string{root.directory.Path}) {
+			continue
+		}
+		if len(root.watches) == 0 || root.status.State == LibraryWatchStateDisabled || root.status.State == LibraryWatchStateUnavailable ||
+			libraryWatchHiddenDescendant(path, root.directory.Path) {
 			continue
 		}
 		if path == filepath.Clean(root.directory.Path) && event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
@@ -539,6 +590,9 @@ func (s *LibraryWatcherService) handleEvent(event fsnotify.Event) {
 			continue
 		}
 		affected := filepath.Dir(path)
+		if event.Op&libraryWatchRescan != 0 || path == filepath.Clean(root.directory.Path) {
+			affected = path
+		}
 		if createdDirectory {
 			if err := s.registerCreatedSubtreeLocked(root, path); err != nil {
 				s.setRootErrorLocked(root, "watch_add_failed", fmt.Sprintf("新目录监听注册失败：%s", libraryWatchReason(err)))
@@ -563,13 +617,43 @@ func (s *LibraryWatcherService) handleEvent(event fsnotify.Event) {
 func (s *LibraryWatcherService) handleBackendError(err error) {
 	s.mu.Lock()
 	for _, root := range s.roots {
+		if len(root.watches) == 0 || root.status.State == LibraryWatchStateDisabled || root.status.State == LibraryWatchStateUnavailable {
+			continue
+		}
 		s.setRootErrorLocked(root, "watch_backend_error", fmt.Sprintf("文件监听错误：%v", err))
+		if errors.Is(err, errLibraryWatchOverflow) {
+			root.pending[root.directory.Path] = struct{}{}
+			root.due = time.Now().Add(s.coalesceWindow)
+		}
 	}
 	snapshot, emitter := s.statusEmitLocked()
 	s.mu.Unlock()
 	if emitter != nil {
 		emitter(snapshot)
 	}
+}
+
+// Native recursive backends don't require walking/registering every directory.
+func libraryBackendRecursive(backend libraryWatchBackend) bool {
+	capability, ok := backend.(interface{ Recursive() bool })
+	return ok && capability.Recursive()
+}
+
+const libraryWatchRescan fsnotify.Op = 1 << 16
+
+var errLibraryWatchOverflow = errors.New("监听事件有遗漏，正在重新核对扫描目录")
+
+func libraryWatchHiddenDescendant(path, root string) bool {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." {
+		return false
+	}
+	for _, part := range strings.Split(rel, string(filepath.Separator)) {
+		if strings.HasPrefix(part, ".") || isTrashDirName(part) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *LibraryWatcherService) dispatchDueBatches(now time.Time) {
@@ -602,17 +686,17 @@ func (s *LibraryWatcherService) dispatchDueBatches(now time.Time) {
 	}
 	for _, item := range batches {
 		s.workerWG.Add(1)
-		go s.processBatch(item.rootID, item.generation, item.dirs, item.affected)
+		go s.processBatch(item.rootID, item.generation, item.dirs, item.affected, s.excludedPaths)
 	}
 	s.mu.Unlock()
 }
 
-func (s *LibraryWatcherService) processBatch(rootID uint, generation uint64, dirs []models.ScanDirectory, affected []string) {
+func (s *LibraryWatcherService) processBatch(rootID uint, generation uint64, dirs []models.ScanDirectory, affected []string, excluded []string) {
 	defer s.workerWG.Done()
 	if !s.batchIsCurrent(rootID, generation) {
 		return
 	}
-	err := waitForStableDirectories(s.ctx, affected, s.stabilityInterval, s.stabilityTimeout)
+	err := waitForStableDirectories(s.ctx, affected, s.stabilityInterval, s.stabilityTimeout, excluded...)
 	var result *ScanSyncResult
 	if err == nil && s.batchIsCurrent(rootID, generation) {
 		result = s.reconcile(dirs, affected)
@@ -769,7 +853,7 @@ type libraryWatchFileSnapshot struct {
 	ModTimeNS int64
 }
 
-func waitForStableDirectories(ctx context.Context, directories []string, interval, timeout time.Duration) error {
+func waitForStableDirectories(ctx context.Context, directories []string, interval, timeout time.Duration, excluded ...string) error {
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -778,7 +862,7 @@ func waitForStableDirectories(ctx context.Context, directories []string, interva
 	}
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
-	previous, err := snapshotWatchDirectories(directories)
+	previous, err := snapshotWatchDirectories(directories, excluded...)
 	if err != nil {
 		return err
 	}
@@ -793,7 +877,7 @@ func waitForStableDirectories(ctx context.Context, directories []string, interva
 			return errLibraryWatchStabilityTimeout
 		case <-timer.C:
 		}
-		current, err := snapshotWatchDirectories(directories)
+		current, err := snapshotWatchDirectories(directories, excluded...)
 		if err != nil {
 			return err
 		}
@@ -804,11 +888,17 @@ func waitForStableDirectories(ctx context.Context, directories []string, interva
 	}
 }
 
-func snapshotWatchDirectories(directories []string) (map[string]libraryWatchFileSnapshot, error) {
+func snapshotWatchDirectories(directories []string, excluded ...string) (map[string]libraryWatchFileSnapshot, error) {
 	snapshot := make(map[string]libraryWatchFileSnapshot)
 	for _, directory := range directories {
 		directory = filepath.Clean(directory)
 		err := filepath.WalkDir(directory, func(path string, entry fs.DirEntry, walkErr error) error {
+			if isScanPathExcluded(path, excluded) {
+				if entry != nil && !entry.IsDir() {
+					return nil
+				}
+				return filepath.SkipDir
+			}
 			if walkErr != nil {
 				return walkErr
 			}

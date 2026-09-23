@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -114,6 +115,56 @@ func TestSubtitleGenerateOptionsUseIndependentTranslationConfig(t *testing.T) {
 		options.TranslationConfig.APIKey == settings.AITaggingAPIKey ||
 		options.TranslationConfig.Model == settings.AITaggingModel {
 		t.Fatalf("字幕翻译错误复用了 AI 标签配置: %+v", options.TranslationConfig)
+	}
+}
+
+func TestAppLibraryWatcherAppliesSavedExclusionsWithoutRestart(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	excluded := filepath.Join(root, "hugh_")
+	if err := os.MkdirAll(filepath.Join(excluded, "child"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	settings := models.Settings{VideoExtensions: ".mp4", PlayWeight: 2, LibraryWatchEnabled: true, ScanExcludePaths: excluded}
+	if err := database.DB.Create(&settings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatal(err)
+	}
+	app := NewApp()
+	defer app.libraryWatcher.Close()
+	if err := app.configureLibraryWatcher(true); err != nil {
+		t.Fatal(err)
+	}
+	assertWatchCount := func(want int) {
+		t.Helper()
+		status := app.GetLibraryWatcherStatus()
+		if !status.Running || len(status.Roots) != 1 || status.Roots[0].State != services.LibraryWatchStateWatching || status.Roots[0].WatchCount != want {
+			t.Fatalf("want %d directory watches, got %+v", want, status)
+		}
+	}
+	assertWatchCount(1)
+	settings.ScanExcludePaths = ""
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "darwin" {
+		assertWatchCount(1) // FSEvents registers the entire root tree once.
+	} else {
+		assertWatchCount(3)
+	}
+	settings.ScanExcludePaths = excluded
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	assertWatchCount(1)
+	settings.ScanExcludePaths = root
+	if err := app.UpdateSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	if status := app.GetLibraryWatcherStatus(); status.Roots[0].ReasonCode != "excluded" || status.Roots[0].WatchCount != 0 {
+		t.Fatalf("excluding the root must release its watcher: %+v", status)
 	}
 }
 

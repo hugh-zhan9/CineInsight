@@ -177,7 +177,7 @@ describe('SettingsPage library watcher', () => {
     const wrapper = await mountPage();
 
     expect(api.GetLibraryWatcherStatus).toHaveBeenCalled();
-    expect(wrapper.text()).toContain('实时同步中（3 个目录）');
+    expect(wrapper.text()).toContain('实时同步中（含子目录）');
     expect(wrapper.find('[data-test="retry-library-watch-7"]').exists()).toBe(false);
   });
 

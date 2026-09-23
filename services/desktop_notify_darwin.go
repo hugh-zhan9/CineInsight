@@ -2,7 +2,7 @@
 
 package services
 
-// darwin 的桌面通知与 Dock 角标（D-012）。这是仓库里唯一的 cgo 文件，
+// darwin 的桌面通知与 Dock 角标（D-012）。此处使用 cgo，
 // 由 build tag 与 desktop_notify_other.go 互斥：其他平台连编译都不会碰到它。
 //
 // 两个刻意的选择：

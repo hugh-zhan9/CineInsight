@@ -185,7 +185,9 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 
 ### 2.14 片库实时监听
 - **开关:** 全局 `library_watch_enabled`。新安装默认开启；已有安装升级后默认关闭，避免大型片库未经确认就持续监听。
-- **事件源:** `fsnotify` 递归注册全部扫描根目录；添加、修改、删除扫描目录时动态重配 watcher，无需重启。
+- **事件源（2026-09-23）：** macOS 改用原生 **FSEvents**（`library_watcher_backend_darwin.go` + `library_fsevents_darwin.h`，CGO / CoreServices），每个扫描根仅注册一个递归事件流，不枚举子目录、不逐文件持有句柄；其他平台保留 `fsnotify` 逐目录注册。macOS 无 CGO 构建明确返回不可用，不回退到 kqueue。添加、修改、删除扫描根时动态重配，无需重启。`watch_count` 表示实际注册数，前端统一显示「实时同步中（含子目录）」。
+- **FSEvents 生命周期与恢复：** 原生回调只复制并投递事件，不做磁盘 IO；通道有界、不阻塞，拥塞或系统丢事件时通知服务对当前有效扫描根补扫，`MustScanSubDirs` 对指定子树补扫。每根启用 `WatchRoot`，根改名/卸载报告不可用；路径从系统真实路径映射回用户配置路径（如 `/private/var` → `/var`）。关闭先停止并排空原生 dispatch 队列，再释放 Go handle，避免回调悬空或关机死锁。FSEvents 接收整树事件，黑名单/隐藏路径在应用层过滤，补扫与稳定探测继续跳过这些子树。
+- **监听黑名单（2026-09-23）：** App 将已保存的 `scan_exclude_paths` 传给 watcher，初始注册、新子树注册、事件入队和稳定探测都复用扫描排除规则。保存黑名单后重建监听范围，撤销已排除子树的监听及待处理批次，解除排除则重新注册；根本身被排除显示 `disabled/excluded`，在访问文件系统前跳过。此前监听未读取黑名单，会进入排除目录；本机 G-DRIVE 的 `hugh_` 内有指向 Docker 容器路径的失效符号链接，macOS fsnotify 注册父目录时触发 ENOENT，导致整根注册回滚。回归包含真实 fsnotify + 失效链接、嵌套扫描根、动态排除/恢复与设置保存接线。
 - **合并与稳定探测:** 同一根目录 750 ms 窗口内合并事件，最多启动一个稳定探测；任何稳定探测最长 30 秒，可取消。
 - **窄范围对账:** 只遍历受影响子树，不做全根目录枚举；复用现有导入、迁移检测、元数据探测和字幕索引逻辑。对账只按根目录范围查询视频记录，不加载全库。
 - **迁移匹配:** 第一趟沿用全量扫描的 (文件名, 大小) 唯一身份规则，候选可覆盖全部可恢复记录；第二趟为支持改名而只按大小匹配，因规则过宽，候选被限制在本批次实际对账过的目录内，避免把无关记录的标签、评分和 AI 数据串到同大小的新文件上。
@@ -290,7 +292,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **既有对照:** 扫描到新视频时 NFO 导入会按 2.15 语义自动写 `video_people`——那是既有的本地资料填空路径，与人脸链路无关。
 
 ### 2.20 桌面通知与 Dock 角标
-- `services/desktop_notify.go` 定义 `DesktopNotifier{Notify, SetBadge}` 与 `DesktopNotificationCenter`；`desktop_notify_darwin.go` 是**仓库唯一的 cgo 文件**（`#cgo CFLAGS: -x objective-c -Wno-deprecated-declarations`、`LDFLAGS: -framework Cocoa`，`NSUserNotificationCenter` + `NSApp.dockTile`，全部 `dispatch_async` 到主队列，NSApp/center 判空不崩），`desktop_notify_other.go` 是 `!darwin` 空实现。`UNUserNotificationCenter` 需授权与 entitlement，有意推迟。
+- `services/desktop_notify.go` 定义 `DesktopNotifier{Notify, SetBadge}` 与 `DesktopNotificationCenter`；`desktop_notify_darwin.go` 使用 cgo（`#cgo CFLAGS: -x objective-c -Wno-deprecated-declarations`、`LDFLAGS: -framework Cocoa`，`NSUserNotificationCenter` + `NSApp.dockTile`，全部 `dispatch_async` 到主队列，NSApp/center 判空不崩），`desktop_notify_other.go` 是 `!darwin` 空实现。`UNUserNotificationCenter` 需授权与 entitlement，有意推迟。
 - 抑制规则集中在 `DesktopNotificationCenter`：窗口在前台不发、`desktop_notifications_enabled` 关掉不发、读不到设置也不发（fail-closed）；**角标不受这两条影响**。前后台由前端 `App.vue` 在 focus/blur/visibilitychange 与挂载时上报 `SetWindowForeground(bool)`，未上报默认按后台。
 - 角标接在 `app.go` `startup` 的 `backgroundTasks.SetOnChange` 里：`BadgeLabelForCount(len(running))`，0 → 空串，与 `background-tasks` 事件并存。
 - 已接入的触发点：字幕（完成/失败/需确认幻觉，`subtitle_queue.go`，取消不发）、超分（completed/failed，`enhancement_service.go`）、备份创建失败（`backup_service.go`，恢复失败与「转储成功但轮转失败」不发）、视频与图片语义索引完成/失败（两个服务的 `finish`）。转封装、帧哈希、人脸由各自切片接入自己的终态。
@@ -362,7 +364,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
   - `settings/`：`SettingsPage.vue` 按分区拆出的 10 个子组件；父组件只留锚点导航、`settingsForm` 与 `saveSettings`，分区通过 `form` prop 改字段。
   - `frontend/src/utils/idleScheduling.js` 收口后台任务名与等待原因的中文口径，设置页与状态条共用。
   - `frontend/src/utils/{commandRegistry,taskCommands,appCommands}.js` 与 `frontend/src/components/CommandPalette.vue`：命令面板（见 2.21）。
-  - `services/desktop_notify*.go`：桌面通知与 Dock 角标，`_darwin.go` 是仓库唯一 cgo 文件（见 2.20）。
+  - `services/desktop_notify*.go`：桌面通知与 Dock 角标，`_darwin.go` 使用 cgo（见 2.20）；另一个 cgo 入口为 FSEvents 的 `library_watcher_backend_darwin.go`（见 2.14）。
   - `services/playback_proxy_*.go` + `models/playback_proxy.go`：播放代理（见 2.23）；`services/frame_hash_service.go`、`clip_match.go`、`clip_cleanup.go` + `models/frame_hash.go`：帧哈希与截取片段（见 2.24）；`services/face_*.go` + `face_worker.py` + `models/face.go`：人脸运行时与分析（见 2.25）；`services/collection_suggestion_*.go`：建议作品集（见 2.22）。
   - `frontend/src/components/settings/`：分区组件现为 13 个（含 `IdleSchedulingSection`、`ProxySection`、`FaceSection`）；`frontend/src/utils/playbackProxy.js` 收口代理结果码与文案。
   - `frontend/scripts/data-test-set.test.mjs` 是 `data-test` 钩子集合守卫（基线 `.loopx/workspace/2026-09-02-capability-batch/baseline/data-test-set-2026-09-02.txt`，允许新增、不允许缺失），已挂进 `npm test`。
