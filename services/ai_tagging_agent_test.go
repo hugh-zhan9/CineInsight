@@ -66,7 +66,11 @@ func TestAgentEvidenceLoopUsesEachExpensiveToolOnceAndDoesNotPersistTranscript(t
 	if strings.Contains(evidence.SummaryJSON(), "private temporary transcript") {
 		t.Fatal("temporary transcript must not be persisted in evidence summary")
 	}
-	if _, err := service.persistSuggestions(video, nil, evidence, []AITagSuggestion{{
+	tag := models.Tag{Name: "temporary-evidence"}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.persistSuggestions(video, []models.Tag{tag}, evidence, []AITagSuggestion{{
 		Label: "temporary-evidence", Confidence: models.AITagConfidenceHigh,
 		Reasoning: "private temporary transcript",
 	}}); err != nil {

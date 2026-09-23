@@ -14,6 +14,48 @@ import (
 
 type TagService struct{}
 
+// isAITagEligible deliberately ignores the legacy type and activation fields.
+func isAITagEligible(tag models.Tag) bool {
+	return tag.AutomaticKind == "" && !tag.DeletedAt.IsValid()
+}
+
+// aiTagMatcher preserves exact names when legacy labels normalize to the same word.
+type aiTagMatcher struct {
+	exact      map[string]models.Tag
+	normalized map[string]models.Tag
+}
+
+func newAITagMatcher(tags []models.Tag) aiTagMatcher {
+	m := aiTagMatcher{exact: make(map[string]models.Tag), normalized: make(map[string]models.Tag)}
+	for _, tag := range tags {
+		if !isAITagEligible(tag) {
+			continue
+		}
+		m.exact[tag.Name] = tag
+		key := normalizeAITagName(tag.Name)
+		if previous, exists := m.normalized[key]; exists && previous.ID != tag.ID {
+			m.normalized[key] = models.Tag{} // Ambiguous: require an exact name.
+		} else if !exists {
+			m.normalized[key] = tag
+		}
+	}
+	return m
+}
+
+func (m aiTagMatcher) match(names ...string) (models.Tag, bool) {
+	for _, name := range names {
+		if tag, ok := m.exact[strings.TrimSpace(name)]; ok {
+			return tag, true
+		}
+	}
+	for _, name := range names {
+		if tag, ok := m.normalized[normalizeAITagName(name)]; ok && tag.ID != 0 {
+			return tag, true
+		}
+	}
+	return models.Tag{}, false
+}
+
 var ErrAITagLibraryEmptyConfirmationRequired = errors.New("AI 标签库非空，拒绝未经确认的空保存")
 
 const (
@@ -37,6 +79,8 @@ type ShortVideoTagSyncResult struct {
 	Removed int64 `json:"removed"`
 }
 
+// GetAITagLibrary reads the legacy library selection for existing bindings.
+// AI inference uses all non-automatic tags, independently of these legacy flags.
 func (s *TagService) GetAITagLibrary() ([]models.Tag, error) {
 	var tags []models.Tag
 	err := database.DB.Where("is_system = ?", true).
@@ -172,11 +216,7 @@ func (s *TagService) saveAITagLibrary(inputs []AITagLibraryInput, allowEmpty boo
 						}).Error; err != nil {
 						return err
 					}
-					// 图片侧候选改为作废而不是就地改名：image_ai_tag_candidates 上有
-					// (image_id, normalized_name) WHERE status='pending' 的部分唯一索引，
-					// 把「日落」改名成「海边」会和同一张图已有的「海边」候选撞键，
-					// 整个保存事务跟着失败。作废是安全的——图片打标的证据指纹含标签名，
-					// 改名本身就会让指纹失配，下一轮会用新名字重新提出候选。
+					// 图片侧沿用改名作废策略：名称属于证据指纹，下一轮按新名称提出候选。
 					if err := tx.Model(&models.ImageAITagCandidate{}).
 						Where("matched_tag_id = ? AND status = ?", tag.ID, models.AITagCandidateStatusPending).
 						Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
@@ -220,22 +260,20 @@ func resetAITaggingAfterLibraryChange(tx *gorm.DB) error {
 				SELECT 1 FROM tags
 				WHERE tags.id = ai_tag_candidates.matched_tag_id
 					AND tags.deleted_at IS NULL
-					AND tags.is_system = ?
-					AND tags.is_active = ?
-			)`, true, true).
+					AND COALESCE(tags.automatic_kind, '') = ''
+			)`).
 		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 		return err
 	}
-	// 图片侧同理：标签被移出词表或停用后，指向它的待审候选不该继续挂着等人处理。
+	// 图片侧同理：标签被删除或成为自动标签后，指向它的待审候选失效。
 	if err := tx.Model(&models.ImageAITagCandidate{}).
 		Where("status = ?", models.AITagCandidateStatusPending).
 		Where(`matched_tag_id IS NULL OR NOT EXISTS (
 				SELECT 1 FROM tags
 				WHERE tags.id = image_ai_tag_candidates.matched_tag_id
 					AND tags.deleted_at IS NULL
-					AND tags.is_system = ?
-					AND tags.is_active = ?
-			)`, true, true).
+					AND COALESCE(tags.automatic_kind, '') = ''
+			)`).
 		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 		return err
 	}
@@ -286,22 +324,15 @@ func (s *TagService) CreateTagCategory(name string, tagIDs []uint) error {
 		if len(tags) != len(ids) {
 			return fmt.Errorf("标签不存在")
 		}
-		affectedAI := false
 		for _, tag := range tags {
 			if tag.AutomaticKind != "" {
 				return fmt.Errorf("自动标签不能加入分类")
-			}
-			if tag.IsSystem {
-				affectedAI = true
 			}
 		}
 		if err := tx.Model(&models.Tag{}).Where("id IN ?", tagIDs).Update("namespace", name).Error; err != nil {
 			return err
 		}
-		if affectedAI {
-			return resetAITaggingAfterLibraryChange(tx)
-		}
-		return nil
+		return resetAITaggingAfterLibraryChange(tx)
 	})
 }
 
@@ -344,18 +375,13 @@ func (s *TagService) changeTagCategory(oldName, newName string, deleting bool) e
 			}
 		}
 		ids := make([]uint, 0, len(tags))
-		affectedAI := false
 		for _, tag := range tags {
 			ids = append(ids, tag.ID)
-			affectedAI = affectedAI || tag.IsSystem
 		}
 		if err := tx.Model(&models.Tag{}).Where("id IN ?", ids).Update("namespace", newName).Error; err != nil {
 			return err
 		}
-		if affectedAI {
-			return resetAITaggingAfterLibraryChange(tx)
-		}
-		return nil
+		return resetAITaggingAfterLibraryChange(tx)
 	})
 }
 
@@ -454,14 +480,10 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 
 		pendingCandidates := tx.Model(&models.AITagCandidate{}).
 			Where("matched_tag_id IN ? AND status = ?", uniqueSources, models.AITagCandidateStatusPending)
-		if target.IsSystem {
-			if err := pendingCandidates.Updates(map[string]interface{}{
-				"suggested_name":  target.Name,
-				"normalized_name": normalizeAITagName(target.Name),
-			}).Error; err != nil {
-				return err
-			}
-		} else if err := pendingCandidates.Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+		if err := pendingCandidates.Updates(map[string]interface{}{
+			"suggested_name":  target.Name,
+			"normalized_name": normalizeAITagName(target.Name),
+		}).Error; err != nil {
 			return err
 		}
 		if err := tx.Model(&models.AITagCandidate{}).
@@ -525,7 +547,7 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 		if err := tx.Where("id IN ?", uniqueSources).Delete(&models.Tag{}).Error; err != nil {
 			return err
 		}
-		return nil
+		return resetAITaggingAfterLibraryChange(tx)
 	})
 	if err != nil {
 		return nil, err
@@ -769,22 +791,35 @@ func (s *TagService) CreateTagWithCategory(name, color, category string) (*model
 }
 
 func (s *TagService) createTag(name, color string, category *string) (*models.Tag, error) {
+	var tag *models.Tag
+	err := database.Transaction(func(tx *gorm.DB) error {
+		var err error
+		tag, err = createTagInTx(tx, name, color, category)
+		if err != nil {
+			return err
+		}
+		return resetAITaggingAfterLibraryChange(tx)
+	})
+	return tag, err
+}
+
+func createTagInTx(tx *gorm.DB, name, color string, category *string) (*models.Tag, error) {
 	// 先检查是否存在活跃的同名标签
 	var existing models.Tag
-	if err := database.DB.Where("name = ?", name).First(&existing).Error; err == nil {
+	if err := tx.Where("name = ?", name).First(&existing).Error; err == nil {
 		return &existing, ErrTagExists
 	}
 
 	// 颜色为空时自动分配
 	if color == "" {
 		var count int64
-		database.DB.Model(&models.Tag{}).Count(&count)
+		tx.Model(&models.Tag{}).Count(&count)
 		color = tagColorPalette[int(count)%len(tagColorPalette)]
 	}
 
 	// 检查是否存在被软删除的同名标签，如果有则恢复
 	var softDeleted models.Tag
-	if err := database.DB.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).First(&softDeleted).Error; err == nil {
+	if err := tx.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).First(&softDeleted).Error; err == nil {
 		// 恢复软删除的标签
 		softDeleted.Color = color
 		if category != nil {
@@ -792,7 +827,7 @@ func (s *TagService) createTag(name, color string, category *string) (*models.Ta
 		}
 		softDeleted.IsActive = true
 		softDeleted.DeletedAt.Clear()
-		if err := database.DB.Unscoped().Save(&softDeleted).Error; err != nil {
+		if err := tx.Unscoped().Save(&softDeleted).Error; err != nil {
 			log.Printf("恢复软删除标签失败: name=%s err=%v", name, err)
 			return nil, err
 		}
@@ -808,7 +843,7 @@ func (s *TagService) createTag(name, color string, category *string) (*models.Ta
 	if category != nil {
 		tag.Namespace = *category
 	}
-	err := database.DB.Create(tag).Error
+	err := tx.Create(tag).Error
 	if err != nil && strings.Contains(strings.ToLower(err.Error()), "unique") {
 		return tag, ErrTagExists
 	}
@@ -820,7 +855,7 @@ func (s *TagService) UpdateTag(id uint, name, color string) error {
 	return s.updateTag(id, name, color, nil)
 }
 
-// UpdateTagWithCategory edits an ordinary tag's display category together with
+// UpdateTagWithCategory edits a tag's display category together with
 // its name and color, so the tag manager saves the row as one operation.
 func (s *TagService) UpdateTagWithCategory(id uint, name, color, category string) error {
 	category = strings.TrimSpace(category)
@@ -828,61 +863,77 @@ func (s *TagService) UpdateTagWithCategory(id uint, name, color, category string
 }
 
 func (s *TagService) updateTag(id uint, name, color string, category *string) error {
-	var current models.Tag
-	if err := database.DB.First(&current, id).Error; err != nil {
-		return err
-	}
-	if current.IsSystem {
-		return fmt.Errorf("AI 标签请在标签管理中的 AI 标签库维护")
-	}
-	if current.AutomaticKind != "" {
-		return fmt.Errorf("自动标签由应用维护，不能手动修改")
-	}
-	if category != nil && *category == automaticTagNamespace && current.Namespace != automaticTagNamespace {
-		return fmt.Errorf("自动是系统分类，不能手动分配")
-	}
-	// 检查是否存在同名的活跃标签（排除自身）
-	var existing models.Tag
-	if err := database.DB.Where("name = ? AND id != ?", name, id).First(&existing).Error; err == nil {
-		return ErrTagExists
-	}
+	return database.Transaction(func(tx *gorm.DB) error {
+		var current models.Tag
+		if err := tx.First(&current, id).Error; err != nil {
+			return err
+		}
+		if current.AutomaticKind != "" {
+			return fmt.Errorf("自动标签由应用维护，不能手动修改")
+		}
+		if category != nil && *category == automaticTagNamespace && current.Namespace != automaticTagNamespace {
+			return fmt.Errorf("自动是系统分类，不能手动分配")
+		}
+		// 检查是否存在同名的活跃标签（排除自身）
+		var existing models.Tag
+		if err := tx.Where("name = ? AND id != ?", name, id).First(&existing).Error; err == nil {
+			return ErrTagExists
+		}
 
-	// 如果存在被软删除的同名标签，先彻底删除它以避免唯一约束冲突
-	database.DB.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).Delete(&models.Tag{})
+		// 如果存在被软删除的同名标签，先彻底删除它以避免唯一约束冲突
+		if err := tx.Unscoped().Where("name = ? AND deleted_at IS NOT NULL", name).Delete(&models.Tag{}).Error; err != nil {
+			return err
+		}
 
-	updates := map[string]interface{}{
-		"name":  name,
-		"color": color,
-	}
-	if category != nil {
-		updates["namespace"] = *category
-	}
-	return database.DB.Model(&models.Tag{}).Where("id = ?", id).Updates(updates).Error
+		updates := map[string]interface{}{
+			"name":  name,
+			"color": color,
+		}
+		if category != nil {
+			updates["namespace"] = *category
+		}
+		if err := tx.Model(&models.Tag{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+			return err
+		}
+		if current.Name != name {
+			if err := tx.Model(&models.AITagCandidate{}).Where("matched_tag_id = ? AND status = ?", id, models.AITagCandidateStatusPending).Updates(map[string]interface{}{
+				"suggested_name": name, "normalized_name": normalizeAITagName(name),
+			}).Error; err != nil {
+				return err
+			}
+			if err := tx.Model(&models.ImageAITagCandidate{}).Where("matched_tag_id = ? AND status = ?", id, models.AITagCandidateStatusPending).Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+				return err
+			}
+		}
+		return resetAITaggingAfterLibraryChange(tx)
+	})
 }
 
 // DeleteTag 删除标签
 func (s *TagService) DeleteTag(id uint) error {
-	var tag models.Tag
-	if err := database.DB.First(&tag, id).Error; err != nil {
-		log.Printf("删除标签失败: 未找到 id=%d err=%v", id, err)
-		return err
-	}
-	if tag.IsSystem {
-		return fmt.Errorf("AI 标签请在标签管理中的 AI 标签库维护")
-	}
-	if tag.AutomaticKind != "" {
-		return fmt.Errorf("自动标签由应用维护，不能手动删除")
-	}
-	// 清理关联关系
-	if err := database.DB.Model(&tag).Association("Videos").Clear(); err != nil {
-		log.Printf("清理标签关联失败 id=%d err=%v", id, err)
-		return err
-	}
-	// D-002: 删除标签时同步清理图片侧关联，视频侧行为不变。
-	if err := database.DB.Exec("DELETE FROM image_tags WHERE tag_id = ?", id).Error; err != nil {
-		log.Printf("清理图片标签关联失败 id=%d err=%v", id, err)
-		return err
-	}
-	log.Printf("删除标签 id=%d name=%s", id, tag.Name)
-	return database.DB.Delete(&tag).Error
+	return database.Transaction(func(tx *gorm.DB) error {
+		var tag models.Tag
+		if err := tx.First(&tag, id).Error; err != nil {
+			log.Printf("删除标签失败: 未找到 id=%d err=%v", id, err)
+			return err
+		}
+		if tag.AutomaticKind != "" {
+			return fmt.Errorf("自动标签由应用维护，不能手动删除")
+		}
+		// 清理关联关系
+		if err := tx.Model(&tag).Association("Videos").Clear(); err != nil {
+			log.Printf("清理标签关联失败 id=%d err=%v", id, err)
+			return err
+		}
+		// D-002: 删除标签时同步清理图片侧关联，视频侧行为不变。
+		if err := tx.Exec("DELETE FROM image_tags WHERE tag_id = ?", id).Error; err != nil {
+			log.Printf("清理图片标签关联失败 id=%d err=%v", id, err)
+			return err
+		}
+		log.Printf("删除标签 id=%d name=%s", id, tag.Name)
+		if err := tx.Delete(&tag).Error; err != nil {
+			return err
+		}
+		return resetAITaggingAfterLibraryChange(tx)
+	})
 }

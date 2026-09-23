@@ -43,7 +43,7 @@ func NewOpenAICompatibleImageTaggingClient(config AITaggingConfig) ImageTaggingC
 }
 
 // buildImageAITaggingPrompt 构造闭合词表提示词。tags 已由调用方过滤为
-// is_system AND is_active，这里复用视频侧的词表呈现（按 namespace 分组）。
+// 全部非自动标签，这里复用视频侧的词表呈现（按 namespace 分组）。
 func buildImageAITaggingPrompt(tags []models.Tag) string {
 	library := formatClosedTagLibraryForPrompt(tags)
 	var b strings.Builder

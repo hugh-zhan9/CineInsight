@@ -151,8 +151,7 @@ func (s *ImageAITaggingService) hasManualOfficialImageTagsInTx(tx *gorm.DB, imag
 	return officialCount > aiApprovedCount, nil
 }
 
-// resolveOfficialImageTagInTx 只接受仍在闭合词表中且启用的标签，防止候选产生后标签被停用
-// 或移出词表还能被写入。
+// resolveOfficialImageTagInTx 只接受仍未删除的非自动标签。
 func (s *ImageAITaggingService) resolveOfficialImageTagInTx(tx *gorm.DB, candidate models.ImageAITagCandidate) (uint, error) {
 	if candidate.MatchedTagID == nil {
 		return 0, fmt.Errorf("候选未命中已配置的标签库")
@@ -161,8 +160,8 @@ func (s *ImageAITaggingService) resolveOfficialImageTagInTx(tx *gorm.DB, candida
 	if err := tx.First(&tag, *candidate.MatchedTagID).Error; err != nil {
 		return 0, err
 	}
-	if !tag.IsSystem || !tag.IsActive {
-		return 0, fmt.Errorf("候选对应的标签已不在启用的标签库中")
+	if !isAITagEligible(tag) {
+		return 0, fmt.Errorf("候选对应的标签已不在可用标签库中")
 	}
 	return tag.ID, nil
 }
@@ -234,7 +233,7 @@ func (s *ImageAITaggingService) ApproveImageAITagCandidate(candidateID uint) (*I
 			return err
 		}
 		if err := tx.Model(&models.ImageAITagCandidate{}).
-			Where("image_id = ? AND normalized_name = ? AND id <> ? AND status = ?", candidate.ImageID, candidate.NormalizedName, candidate.ID, models.AITagCandidateStatusPending).
+			Where("image_id = ? AND matched_tag_id = ? AND id <> ? AND status = ?", candidate.ImageID, candidate.MatchedTagID, candidate.ID, models.AITagCandidateStatusPending).
 			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 			return err
 		}

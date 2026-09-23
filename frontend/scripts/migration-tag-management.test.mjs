@@ -38,7 +38,7 @@ assert.match(tagManagerSource, /selectAllVisibleMergeSources/, 'tag merge should
 assert.match(tagManagerSource, /await MergeTags\(sourceIds, Number\(this\.mergeTargetId\)\)/, 'tag merge should call the backend operation');
 assert.match(tagManagerSource, /confirmAction\(\{ title: '合并标签'/, 'destructive tag merge should require final confirmation');
 assert.match(tagManagerSource, /return this\.mergeableTags\.filter\(tag => Number\(tag\.id\) !== Number\(target\.id\)\)/, 'source choices should include both ordinary and AI-library tags');
-assert.match(tagManagerSource, /mergeType === 'ai'/, 'tag merge should expose a dedicated AI tag type filter');
+assert.doesNotMatch(tagManagerSource, /mergeType/, 'tag merge must not distinguish legacy tag types');
 assert.match(tagManagerSource, /!tag\.automatic_kind/, 'automatic tags should not be manually merged');
 
 console.log('migration and tag-management tests passed');

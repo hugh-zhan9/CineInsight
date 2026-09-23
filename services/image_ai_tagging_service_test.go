@@ -47,7 +47,9 @@ func setupImageAITaggingTestDB(t *testing.T) {
 	db := dbtest.Open(t)
 	// 部分唯一索引 AutoMigrate 建不出来，测试库要和生产建同一套，
 	// 否则并发兜底约束在测试里根本不存在。
-	database.EnsureImageAITaggingIndexes(db)
+	if err := database.EnsureImageAITaggingIndexes(db); err != nil {
+		t.Fatal(err)
+	}
 	database.DB = db
 }
 
@@ -454,10 +456,8 @@ func TestImageAITaggingSendsOnlyStrippedThumbnailAndPrompt(t *testing.T) {
 	}
 }
 
-// TestImageAITaggingPromptExcludesInactiveLibraryTags 钉住词表口径：
-// 只有 is_system && is_active 的标签才进提示词。用 TagService.GetAITagLibrary 的口径
-// （只过滤 is_system）会把停用标签一起喂给模型。
-func TestImageAITaggingPromptExcludesInactiveLibraryTags(t *testing.T) {
+// 统一后历史启用状态不限制 AI 词表。
+func TestImageAITaggingPromptIncludesLegacyInactiveTags(t *testing.T) {
 	var mu sync.Mutex
 	var gotPrompt string
 	client := imageTaggingClientFunc(func(ctx context.Context, imageID uint, prompt string, jpegData []byte) ([]AITagSuggestion, error) {
@@ -485,8 +485,8 @@ func TestImageAITaggingPromptExcludesInactiveLibraryTags(t *testing.T) {
 	if !strings.Contains(prompt, "海边") {
 		t.Fatalf("启用的标签应进提示词: %q", prompt)
 	}
-	if strings.Contains(prompt, "已停用的标签") {
-		t.Fatalf("停用的标签不应进提示词: %q", prompt)
+	if !strings.Contains(prompt, "已停用的标签") {
+		t.Fatalf("历史停用标签也应进提示词: %q", prompt)
 	}
 }
 

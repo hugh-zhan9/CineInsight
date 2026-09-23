@@ -438,7 +438,7 @@ func TestOpenAICompatibleClientPromptPrioritizesFramesAndExistingTags(t *testing
 	messages := body["messages"].([]map[string]interface{})
 	userContent := messages[1]["content"].([]map[string]interface{})
 	text := userContent[0]["text"].(string)
-	if !strings.Contains(text, "必须优先根据画面内容判断") || !strings.Contains(text, "label 必须使用已有标签的原始名称") {
+	if !strings.Contains(text, "必须优先根据画面内容判断") || !strings.Contains(text, "label 与 matched_existing_name 都必须原样使用闭集中的标签名称") {
 		t.Fatalf("prompt 未强调画面优先和已有标签优先: %s", text)
 	}
 	if len(userContent) != 3 {

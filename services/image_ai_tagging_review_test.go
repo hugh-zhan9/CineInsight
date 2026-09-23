@@ -151,8 +151,8 @@ func TestImageAITagApproveRejectsIneligibleCandidates(t *testing.T) {
 	}
 }
 
-// TestImageAITagApproveRejectsWhenTagLeftLibrary 钉住候选产生后标签被停用/移出词表的情况。
-func TestImageAITagApproveRejectsWhenTagLeftLibrary(t *testing.T) {
+// TestImageAITagApproveIgnoresLegacyActivation 历史停用字段不再决定 AI 资格。
+func TestImageAITagApproveIgnoresLegacyActivation(t *testing.T) {
 	svc := newImageAITaggingReviewTestService(t)
 	library := imageAITaggingTestLibrary(t, "海边")
 	img := imageAITaggingTestImage(t, "heic")
@@ -162,11 +162,11 @@ func TestImageAITagApproveRejectsWhenTagLeftLibrary(t *testing.T) {
 		Update("is_active", false).Error; err != nil {
 		t.Fatalf("停用标签失败: %v", err)
 	}
-	if _, err := svc.ApproveImageAITagCandidate(candidate.ID); err == nil {
-		t.Fatal("标签已停用时不应可接受")
+	if _, err := svc.ApproveImageAITagCandidate(candidate.ID); err != nil {
+		t.Fatal("统一后历史停用标签应可接受")
 	}
-	if imageHasTag(t, img.ID, library[0].ID) {
-		t.Fatal("停用标签不应被写入")
+	if !imageHasTag(t, img.ID, library[0].ID) {
+		t.Fatal("标签关联应写入")
 	}
 }
 
@@ -295,11 +295,12 @@ func TestImageAITagCandidatesFollowTagLibraryChanges(t *testing.T) {
 	dropped := seedImageAITagCandidate(t, img.ID, library[1], models.AITagConfidenceHigh)
 
 	tagSvc := &TagService{}
-	// 把「海边」改名，并且只提交它——「日落」因此被移出词表。
-	if _, err := tagSvc.SaveAITagLibrary([]AITagLibraryInput{
-		{ID: library[0].ID, Name: "海滨", Namespace: "场景", IsActive: true},
-	}); err != nil {
-		t.Fatalf("保存标签库失败: %v", err)
+	// 统一管理逐项改名、删除，候选必须随之失效。
+	if err := tagSvc.UpdateTagWithCategory(library[0].ID, "海滨", library[0].Color, "场景"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tagSvc.DeleteTag(library[1].ID); err != nil {
+		t.Fatal(err)
 	}
 
 	var renamedRow, droppedRow models.ImageAITagCandidate
@@ -313,7 +314,7 @@ func TestImageAITagCandidatesFollowTagLibraryChanges(t *testing.T) {
 		t.Fatalf("改名的标签，其待审候选应作废: %+v", renamedRow)
 	}
 	if droppedRow.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("移出词表的标签，其待审候选应作废: %+v", droppedRow)
+		t.Fatalf("删除标签后，其待审候选应作废: %+v", droppedRow)
 	}
 
 	items, err := svc.ListImageAITagCandidates(img.ID, "", "")

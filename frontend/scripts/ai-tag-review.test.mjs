@@ -82,10 +82,10 @@ assert.deepEqual(
 
 // 接受一条候选：后端连同"同媒体同名"的另一条一起置 superseded，别的媒体不动。
 const approvalPool = [
-  { id: 1, image_id: 10, normalized_name: '海边' },
-  { id: 2, image_id: 10, normalized_name: '海边' },
-  { id: 3, image_id: 10, normalized_name: '日落' },
-  { id: 4, image_id: 11, normalized_name: '海边' },
+  { id: 1, image_id: 10, normalized_name: '海边', matched_tag_id: 10 },
+  { id: 2, image_id: 10, normalized_name: '海边', matched_tag_id: 10 },
+  { id: 3, image_id: 10, normalized_name: '日落', matched_tag_id: 11 },
+  { id: 4, image_id: 11, normalized_name: '海边', matched_tag_id: 10 },
 ];
 assert.deepEqual(
   removeCandidatesAfterApproval(approvalPool, approvalPool[0], { status: 'approved' }, 'image_id')
@@ -100,21 +100,20 @@ assert.deepEqual(
   [4],
   'a superseded approval voids every pending candidate of that media'
 );
-// "同名"只按 normalized_name 比，与后端 SQL 一致：显示名不同但归一化同名的要一起移除，
-// 归一化名不同的不能被顺带移除（哪怕显示名看着像）。
+// 同一标签 ID 的候选一起移除，与后端 SQL 一致。
 assert.deepEqual(
   removeCandidatesAfterApproval(
     [
-      { id: 1, video_id: 5, normalized_name: '动作', suggested_name: '动作' },
-      { id: 2, video_id: 5, normalized_name: '动作', suggested_name: '打斗' },
-      { id: 3, video_id: 5, normalized_name: '动作片', suggested_name: '动作片' },
+      { id: 1, video_id: 5, normalized_name: '动作', matched_tag_id: 20, suggested_name: '动作' },
+      { id: 2, video_id: 5, normalized_name: '动作', matched_tag_id: 20, suggested_name: '打斗' },
+      { id: 3, video_id: 5, normalized_name: '动作片', matched_tag_id: 21, suggested_name: '动作片' },
     ],
-    { id: 1, video_id: 5, normalized_name: '动作', suggested_name: '动作' },
+    { id: 1, video_id: 5, normalized_name: '动作', matched_tag_id: 20, suggested_name: '动作' },
     { status: 'approved' },
     'video_id'
   ).map(candidate => candidate.id),
   [3],
-  'the sibling rule must key on normalized_name exactly, like the backend SQL does'
+  'the sibling rule must key on matched_tag_id, like the backend SQL does'
 );
 
 const componentSource = readFileSync(new URL('../src/components/AITagReviewDialog.vue', import.meta.url), 'utf8');
@@ -171,3 +170,9 @@ assert.doesNotMatch(componentSource, /\.btn-small\b/, 'AI review dialog should n
 assert.doesNotMatch(componentSource, /var\(--input-bg\)/, 'AI review dialog should not depend on legacy input background tokens');
 
 console.log('ai-tag-review tests passed');
+
+const caseDistinct = [
+  { id: 101, video_id: 5, matched_tag_id: 30, normalized_name: 'action' },
+  { id: 102, video_id: 5, matched_tag_id: 31, normalized_name: 'action' },
+];
+assert.deepEqual(removeCandidatesAfterApproval(caseDistinct, caseDistinct[0], {status:'approved'}, 'video_id').map(c=>c.id), [102]);

@@ -246,8 +246,8 @@ describe('AITagReviewDialog pagination', () => {
 
   it('removes an approved candidate locally instead of reloading the pages', async () => {
     api.ListAITagCandidatePage.mockResolvedValue(candidatePage([
-      tagCandidate({ id: 1, suggested_name: '动作', normalized_name: '动作' }),
-      tagCandidate({ id: 2, suggested_name: '打斗', normalized_name: '动作' }),
+      tagCandidate({ id: 1, suggested_name: '动作', normalized_name: '动作', matched_tag_id: 10 }),
+      tagCandidate({ id: 2, suggested_name: '打斗', normalized_name: '动作', matched_tag_id: 10 }),
       tagCandidate({ id: 3, video_id: 11, video: { id: 11, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, suggested_name: '舞蹈' }),
     ]));
     api.ApproveAITagCandidate.mockResolvedValue({ id: 1, status: 'approved' });

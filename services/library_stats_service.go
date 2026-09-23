@@ -193,18 +193,18 @@ func libraryStorageByDirectory() ([]LibraryStatsBucket, error) {
 	return buckets, err
 }
 
-func libraryStorageByTag(aiOnly bool) ([]LibraryStatsBucket, error) {
+func libraryStorageByTag(byCount bool) ([]LibraryStatsBucket, error) {
 	var buckets []LibraryStatsBucket
 	query := database.DB.Table("tags").
 		Select("tags.name AS label, COUNT(DISTINCT videos.id) AS count, COALESCE(SUM(videos.size), 0) AS bytes").
 		Joins("JOIN video_tags ON video_tags.tag_id = tags.id").
 		Joins("JOIN videos ON videos.id = video_tags.video_id AND videos.deleted_at IS NULL").
 		Where("tags.deleted_at IS NULL")
-	// AI 标签榜按出现次数排序；普通标签面板展示的是存储字节，排序与
+	// 标签榜按出现次数排序；存储面板展示的是字节，排序与
 	// 展示口径一致，避免 top-N 截断漏掉占用最大的标签。
 	order := "bytes DESC, tags.name ASC"
-	if aiOnly {
-		query = query.Where("tags.is_system = ?", true).Limit(20)
+	if byCount {
+		query = query.Limit(20)
 		order = "count DESC, tags.name ASC"
 	} else {
 		query = query.Limit(50)

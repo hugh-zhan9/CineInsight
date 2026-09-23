@@ -377,7 +377,9 @@ func ApplySchema(db *gorm.DB) error {
 	ensureCoreQueryIndexes(db)
 	ensureImageQueryIndexes(db)
 	ensureAITaggingIndexes(db)
-	EnsureImageAITaggingIndexes(db)
+	if err := EnsureImageAITaggingIndexes(db); err != nil {
+		return fmt.Errorf("迁移图片标签候选索引: %w", err)
+	}
 	ensureShortFeedIndexes(db)
 	ensureSubtitleSearchIndexes(db)
 	// 2026-09-01 裁决：手机端点赞由自动标签改为 videos/images.is_liked 列。
@@ -815,22 +817,36 @@ func ensureAITaggingIndexes(db *gorm.DB) {
 // EnsureImageAITaggingIndexes 与 ensureAITaggingIndexes 同形，只负责图片侧 AI 标签候选表族的
 // 显式索引；照片页查询索引归 ensureImageQueryIndexes，两者职责不同，不要合并。
 // 导出是因为它建的部分唯一索引 AutoMigrate 表达不了，测试库要建出同样的约束才有保真度。
-func EnsureImageAITaggingIndexes(db *gorm.DB) {
-	statements := []string{
-		`CREATE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_image_status ON image_ai_tag_candidates(image_id, status)`,
-		`CREATE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_matched_status ON image_ai_tag_candidates(matched_tag_id, status)`,
-		// 一张图同一个标签只能有一条待审候选。既是 persistImageSuggestions 的 upsert 冲突目标，
-		// 也是批量与单张重跑万一并发时的最后一道兜底，避免插出两条一模一样的待审行。
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_pending_unique ON image_ai_tag_candidates(image_id, normalized_name) WHERE status = 'pending'`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_approval_image_tag ON image_ai_tag_approval_records(image_id, tag_id)`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_approval_records_candidate_id ON image_ai_tag_approval_records(candidate_id)`,
-		`CREATE INDEX IF NOT EXISTS idx_image_ai_tagging_states_status_processed ON image_ai_tagging_states(status, last_processed_at)`,
-	}
-	for _, statement := range statements {
-		if err := db.Exec(statement).Error; err != nil {
-			log.Printf("创建图片 AI 标签索引失败: %v sql=%s", err, statement)
+func EnsureImageAITaggingIndexes(db *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
+		if !tx.Migrator().HasIndex(&models.ImageAITagCandidate{}, "idx_image_ai_tag_candidates_pending_tag") {
+			if err := tx.Exec(`
+				UPDATE image_ai_tag_candidates SET status = 'superseded'
+				WHERE status = 'pending' AND matched_tag_id IS NOT NULL
+				AND id NOT IN (
+					SELECT MAX(id) FROM image_ai_tag_candidates
+					WHERE status = 'pending' AND matched_tag_id IS NOT NULL
+					GROUP BY image_id, matched_tag_id
+				)`).Error; err != nil {
+				return err
+			}
 		}
-	}
+		statements := []string{
+			`CREATE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_image_status ON image_ai_tag_candidates(image_id, status)`,
+			`CREATE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_matched_status ON image_ai_tag_candidates(matched_tag_id, status)`,
+			// 同图同标签 ID 最多一条待审候选；归一化同名的不同标签可并存。
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_candidates_pending_tag ON image_ai_tag_candidates(image_id, matched_tag_id) WHERE status = 'pending' AND matched_tag_id IS NOT NULL`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_approval_image_tag ON image_ai_tag_approval_records(image_id, tag_id)`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_image_ai_tag_approval_records_candidate_id ON image_ai_tag_approval_records(candidate_id)`,
+			`CREATE INDEX IF NOT EXISTS idx_image_ai_tagging_states_status_processed ON image_ai_tagging_states(status, last_processed_at)`,
+		}
+		for _, statement := range statements {
+			if err := tx.Exec(statement).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Exec("DROP INDEX IF EXISTS idx_image_ai_tag_candidates_pending_unique").Error
+	})
 }
 
 func ensureShortFeedIndexes(db *gorm.DB) {

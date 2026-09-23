@@ -33,7 +33,7 @@ func TestLibraryStatsAggregatesFixture(t *testing.T) {
 			t.Fatalf("创建播放事件失败: %v", err)
 		}
 	}
-	tag := models.Tag{Name: "剧情", Color: "#fff", IsSystem: true, IsActive: true}
+	tag := models.Tag{Name: "剧情", Color: "#fff", IsSystem: false, IsActive: true}
 	if err := database.DB.Create(&tag).Error; err != nil {
 		t.Fatal(err)
 	}

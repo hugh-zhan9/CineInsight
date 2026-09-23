@@ -37,7 +37,7 @@ func TestTagCategoryEditingPreservesExistingCallers(t *testing.T) {
 	}
 }
 
-func TestTagCategoryCannotBeEditedForAIOrAutomaticTag(t *testing.T) {
+func TestTagCategoryEditsLegacyAITagButProtectsAutomaticTag(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	tags := []models.Tag{
 		{Name: "AI", Namespace: "题材", IsSystem: true, IsActive: true},
@@ -47,12 +47,23 @@ func TestTagCategoryCannotBeEditedForAIOrAutomaticTag(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tag := range tags {
-		if err := (&TagService{}).UpdateTagWithCategory(tag.ID, tag.Name, tag.Color, "其他"); err == nil {
-			t.Fatalf("标签 %s 的分类不应在普通标签入口修改", tag.Name)
+		err := (&TagService{}).UpdateTagWithCategory(tag.ID, tag.Name, tag.Color, "其他")
+		if tag.AutomaticKind != "" && err == nil {
+			t.Fatal("自动标签分类必须只读")
+		}
+		if tag.AutomaticKind == "" && err != nil {
+			t.Fatal(err)
 		}
 		var stored models.Tag
-		if err := database.DB.First(&stored, tag.ID).Error; err != nil || stored.Namespace != tag.Namespace {
-			t.Fatalf("受保护标签分类被修改: tag=%+v err=%v", stored, err)
+		if err := database.DB.First(&stored, tag.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		want := "其他"
+		if tag.AutomaticKind != "" {
+			want = tag.Namespace
+		}
+		if stored.Namespace != want {
+			t.Fatalf("分类=%q want=%q", stored.Namespace, want)
 		}
 	}
 }
@@ -441,7 +452,7 @@ func TestMergeTagsAllowsCrossTypeSourcesAndPreservesTargetType(t *testing.T) {
 	}
 }
 
-func TestMergeTagsSupersedesPendingCandidatesWhenAITagMergesIntoOrdinaryTarget(t *testing.T) {
+func TestMergeTagsRetainsPendingCandidatesForLegacyOrdinaryTarget(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	target := models.Tag{Name: "普通目标", Color: "#111111", IsActive: true}
 	source := models.Tag{Name: "AI 来源", Color: "#222222", IsSystem: true, IsActive: true}
@@ -470,11 +481,11 @@ func TestMergeTagsSupersedesPendingCandidatesWhenAITagMergesIntoOrdinaryTarget(t
 	if err := database.DB.First(&candidate, candidate.ID).Error; err != nil {
 		t.Fatalf("读取合并后 AI 候选失败: %v", err)
 	}
-	if candidate.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("不再属于 AI 标签库的待审候选应失效: got=%s", candidate.Status)
+	if candidate.Status != models.AITagCandidateStatusPending || candidate.SuggestedName != target.Name {
+		t.Fatalf("统一标签库中的候选应保留并改名: got=%s", candidate.Status)
 	}
 	if candidate.MatchedTagID == nil || *candidate.MatchedTagID != target.ID {
-		t.Fatalf("失效候选的历史引用仍应指向保留目标: %+v", candidate.MatchedTagID)
+		t.Fatalf("候选的引用仍应指向保留目标: %+v", candidate.MatchedTagID)
 	}
 }
 
@@ -582,14 +593,14 @@ func TestSaveAITagLibraryPreservesValidCandidatesAndSupersedesInvalidOnes(t *tes
 	if err := database.DB.First(&removedCandidate, removedCandidate.ID).Error; err != nil {
 		t.Fatalf("读取失效候选失败: %v", err)
 	}
-	if removedCandidate.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("已移出标签库的候选应失效，实际 %s", removedCandidate.Status)
+	if removedCandidate.Status != models.AITagCandidateStatusPending {
+		t.Fatalf("旧类型变化不应使候选失效，实际 %s", removedCandidate.Status)
 	}
 	if err := database.DB.First(&deactivatedCandidate, deactivatedCandidate.ID).Error; err != nil {
 		t.Fatalf("读取停用候选失败: %v", err)
 	}
-	if deactivatedCandidate.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("已停用标签的候选应失效，实际 %s", deactivatedCandidate.Status)
+	if deactivatedCandidate.Status != models.AITagCandidateStatusPending {
+		t.Fatalf("旧启用状态不应使候选失效，实际 %s", deactivatedCandidate.Status)
 	}
 	if err := database.DB.First(&unmatchedCandidate, unmatchedCandidate.ID).Error; err != nil {
 		t.Fatalf("读取未匹配候选失败: %v", err)
@@ -639,8 +650,8 @@ func TestSaveAITagLibraryProtectsExistingLibraryFromAccidentalEmptySave(t *testi
 	if err != nil || len(cleared) != 0 {
 		t.Fatalf("显式清空 AI 标签库应成功，saved=%v err=%v", cleared, err)
 	}
-	if err := database.DB.First(&candidate, candidate.ID).Error; err != nil || candidate.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("显式清空应使待审候选失效: candidate=%+v err=%v", candidate, err)
+	if err := database.DB.First(&candidate, candidate.ID).Error; err != nil || candidate.Status != models.AITagCandidateStatusPending {
+		t.Fatalf("清空历史库标记不应影响统一词表候选: candidate=%+v err=%v", candidate, err)
 	}
 	if err := database.DB.First(&tag, tag.ID).Error; err != nil || tag.IsSystem || tag.Namespace != "分类" {
 		t.Fatalf("清空词表不应清除标签的分类: tag=%+v err=%v", tag, err)

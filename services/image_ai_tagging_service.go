@@ -561,13 +561,11 @@ func (s *ImageAITaggingService) hasManualOfficialImageTags(ctx context.Context, 
 	return s.hasManualOfficialImageTagsInTx(s.db.WithContext(ctx), imageID)
 }
 
-// loadActiveLibraryTags 与视频侧 loadActiveTags 同口径：只取 is_system AND is_active。
-// 注意不要换成 TagService.GetAITagLibrary——那个只过滤 is_system，会把已停用的标签
-// 一起喂给模型。
+// loadActiveLibraryTags 与视频侧共用全部未删除的非自动标签，历史类型和启用字段不再限制词表。
 func (s *ImageAITaggingService) loadActiveLibraryTags(ctx context.Context) ([]models.Tag, error) {
 	var tags []models.Tag
 	if err := s.db.WithContext(ctx).
-		Where("is_system = ? AND is_active = ?", true, true).
+		Where("COALESCE(automatic_kind, '') = ''").
 		Order("namespace asc, sort_order asc, id asc").
 		Find(&tags).Error; err != nil {
 		return nil, err
@@ -604,7 +602,7 @@ func buildImageEvidenceFingerprint(image models.Image, tags []models.Tag) string
 func imagePromptTagTerms(tags []models.Tag) []string {
 	terms := make([]string, 0, len(tags))
 	for _, tag := range tags {
-		if !tag.IsSystem || !tag.IsActive {
+		if !isAITagEligible(tag) {
 			continue
 		}
 		namespace := strings.TrimSpace(tag.Namespace)
@@ -635,15 +633,12 @@ func (s *ImageAITaggingService) shouldSkipForFingerprint(ctx context.Context, im
 }
 
 // persistImageSuggestions 把模型建议落成待审候选，语义逐条镜像视频侧 persistSuggestions：
-// 丢弃 low 置信度；闭合词表下丢弃库外建议；按 (image_id, normalized_name, pending) 幂等 upsert。
+// 丢弃 low 置信度；闭合词表下丢弃库外建议；按 (image_id, matched_tag_id, pending) 幂等 upsert。
 func (s *ImageAITaggingService) persistImageSuggestions(img models.Image, tags []models.Tag, suggestions []AITagSuggestion, config AITaggingConfig) (int, error) {
-	tagsByName := make(map[string]models.Tag, len(tags))
-	for _, tag := range tags {
-		tagsByName[normalizeAITagName(tag.Name)] = tag
-	}
+	matcher := newAITagMatcher(tags)
 
 	// 重打之前先把这张图旧的待审候选整体置 superseded：模型这轮不再建议的标签、
-	// 或者已经被停用/移出词表的标签，不该继续挂在待审列表里等人处理。
+	// 或者已经被删除的标签，不该继续挂在待审列表里等人处理。
 	// 本轮仍然建议的标签会在下面被重新写成 pending。
 	if err := s.db.Model(&models.ImageAITagCandidate{}).
 		Where("image_id = ? AND status = ?", img.ID, models.AITagCandidateStatusPending).
@@ -653,13 +648,13 @@ func (s *ImageAITaggingService) persistImageSuggestions(img models.Image, tags [
 
 	// 用户拒绝过的标签不再重复推送：拒绝就是"这张图不要这个标签"，
 	// 词表一变就把它重新塞回待审列表，等于让用户反复拒同一个东西。
-	rejected, err := s.rejectedCandidateNames(img.ID)
+	rejected, err := s.rejectedCandidateTagIDs(img.ID)
 	if err != nil {
 		return 0, err
 	}
 
 	sourceSummary := buildImageTaggingSourceSummary(img, config)
-	emitted := make(map[string]struct{}, len(suggestions))
+	emitted := make(map[uint]struct{}, len(suggestions))
 	created := 0
 	for _, suggestion := range suggestions {
 		confidence := normalizeAIConfidence(suggestion.Confidence)
@@ -672,12 +667,7 @@ func (s *ImageAITaggingService) persistImageSuggestions(img models.Image, tags [
 			continue
 		}
 		var matchedTagID *uint
-		if matched, ok := tagsByName[normalizeAITagName(suggestion.MatchedExistingName)]; ok {
-			id := matched.ID
-			matchedTagID = &id
-			label = matched.Name
-			normalized = normalizeAITagName(label)
-		} else if matched, ok := tagsByName[normalized]; ok {
+		if matched, ok := matcher.match(suggestion.MatchedExistingName, label); ok {
 			id := matched.ID
 			matchedTagID = &id
 			label = matched.Name
@@ -688,7 +678,7 @@ func (s *ImageAITaggingService) persistImageSuggestions(img models.Image, tags [
 			log.Printf("[ImageAITagging] drop out-of-library suggestion image_id=%d", img.ID)
 			continue
 		}
-		if _, denied := rejected[normalized]; denied {
+		if _, denied := rejected[*matchedTagID]; denied {
 			continue
 		}
 		candidate := models.ImageAITagCandidate{
@@ -704,10 +694,10 @@ func (s *ImageAITaggingService) persistImageSuggestions(img models.Image, tags [
 		// 同一轮里模型重复给出同一个标签只落一行。去重放在内存里而不是靠数据库的
 		// 部分唯一索引：那个索引是并发兜底，不该是正确性的前提——依赖它会让任何
 		// 没建索引的库（比如只跑 AutoMigrate 的测试库）行为不同。
-		if _, seen := emitted[normalized]; seen {
+		if _, seen := emitted[*matchedTagID]; seen {
 			continue
 		}
-		emitted[normalized] = struct{}{}
+		emitted[*matchedTagID] = struct{}{}
 		if err := s.db.Omit(clause.Associations).Create(&candidate).Error; err != nil {
 			return created, err
 		}
@@ -716,17 +706,17 @@ func (s *ImageAITaggingService) persistImageSuggestions(img models.Image, tags [
 	return created, nil
 }
 
-// rejectedCandidateNames 返回这张图被用户明确拒绝过的标签归一化名。
-func (s *ImageAITaggingService) rejectedCandidateNames(imageID uint) (map[string]struct{}, error) {
-	var names []string
+// rejectedCandidateTagIDs keeps rejection attached to the tag through renames.
+func (s *ImageAITaggingService) rejectedCandidateTagIDs(imageID uint) (map[uint]struct{}, error) {
+	var ids []uint
 	if err := s.db.Model(&models.ImageAITagCandidate{}).
-		Where("image_id = ? AND status = ?", imageID, models.AITagCandidateStatusRejected).
-		Distinct().Pluck("normalized_name", &names).Error; err != nil {
+		Where("image_id = ? AND status = ? AND matched_tag_id IS NOT NULL", imageID, models.AITagCandidateStatusRejected).
+		Distinct().Pluck("matched_tag_id", &ids).Error; err != nil {
 		return nil, err
 	}
-	denied := make(map[string]struct{}, len(names))
-	for _, name := range names {
-		denied[name] = struct{}{}
+	denied := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		denied[id] = struct{}{}
 	}
 	return denied, nil
 }

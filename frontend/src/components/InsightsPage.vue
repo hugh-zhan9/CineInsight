@@ -57,7 +57,7 @@
         <BucketChart title="目录存储" :items="stats.storage_by_directory" value-key="bytes" :format-value="formatBytes" />
         <BucketChart title="标签存储" :items="stats.storage_by_tag" value-key="bytes" :format-value="formatBytes" />
         <BucketChart title="分辨率存储" :items="stats.storage_by_resolution" value-key="bytes" :format-value="formatBytes" />
-        <BucketChart title="AI 标签 Top" :items="stats.top_ai_tags" value-key="count" :format-value="formatNumber" />
+        <BucketChart title="标签 Top" :items="stats.top_ai_tags" value-key="count" :format-value="formatNumber" />
 
         <article class="insights-panel insights-panel--wide">
           <div class="insights-panel__heading">

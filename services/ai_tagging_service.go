@@ -328,7 +328,7 @@ func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error)
 func (s *AITaggingService) loadActiveTags() ([]models.Tag, error) {
 	var tags []models.Tag
 	if err := database.DB.
-		Where("is_system = ? AND is_active = ?", true, true).
+		Where("COALESCE(automatic_kind, '') = ''").
 		Order("namespace asc, sort_order asc, id asc").
 		Find(&tags).Error; err != nil {
 		return nil, err
@@ -429,14 +429,7 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 	if len(runIDs) > 0 {
 		runID = runIDs[0]
 	}
-	tagsByName := make(map[string]models.Tag, len(tags))
-	closedOnly := false
-	for _, tag := range tags {
-		tagsByName[normalizeAITagName(tag.Name)] = tag
-		if tag.IsSystem {
-			closedOnly = true
-		}
-	}
+	matcher := newAITagMatcher(tags)
 	created := 0
 	for _, suggestion := range suggestions {
 		confidence := normalizeAIConfidence(suggestion.Confidence)
@@ -449,26 +442,16 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 			continue
 		}
 		var matchedTagID *uint
-		if matched, ok := tagsByName[normalizeAITagName(suggestion.MatchedExistingName)]; ok {
-			id := matched.ID
-			matchedTagID = &id
-			label = matched.Name
-			normalized = normalizeAITagName(label)
-		} else if matched, ok := tagsByName[normalized]; ok {
+		if matched, ok := matcher.match(suggestion.MatchedExistingName, label); ok {
 			id := matched.ID
 			matchedTagID = &id
 			label = matched.Name
 			normalized = normalizeAITagName(label)
 		}
-		// Closed-set mode: never invent tags outside the system library.
+		// AI suggestions must always match the unified, non-automatic tag library.
 		if matchedTagID == nil {
-			if closedOnly {
-				log.Printf("[AITagging] drop out-of-library suggestion video_id=%d", video.ID)
-				continue
-			}
-			if confidence != models.AITagConfidenceHigh {
-				continue
-			}
+			log.Printf("[AITagging] drop out-of-library suggestion video_id=%d", video.ID)
+			continue
 		}
 		reasoning := strings.TrimSpace(suggestion.Reasoning)
 		if evidence.SubtitleTemporary {
@@ -486,7 +469,7 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 			Status:         models.AITagCandidateStatusPending,
 		}
 		var existing models.AITagCandidate
-		err := database.DB.Where("video_id = ? AND normalized_name = ? AND status = ?", candidate.VideoID, candidate.NormalizedName, models.AITagCandidateStatusPending).
+		err := database.DB.Where("video_id = ? AND matched_tag_id = ? AND status = ?", candidate.VideoID, candidate.MatchedTagID, models.AITagCandidateStatusPending).
 			First(&existing).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			if err := database.DB.Create(&candidate).Error; err != nil {
@@ -642,7 +625,7 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 			return err
 		}
 		if err := tx.Model(&models.AITagCandidate{}).
-			Where("video_id = ? AND normalized_name = ? AND id <> ? AND status = ?", candidate.VideoID, candidate.NormalizedName, candidate.ID, models.AITagCandidateStatusPending).
+			Where("video_id = ? AND matched_tag_id = ? AND id <> ? AND status = ?", candidate.VideoID, candidate.MatchedTagID, candidate.ID, models.AITagCandidateStatusPending).
 			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 			return err
 		}
@@ -690,8 +673,8 @@ func (s *AITaggingService) resolveOfficialTagInTx(tx *gorm.DB, candidate models.
 	if err := tx.First(&tag, *candidate.MatchedTagID).Error; err != nil {
 		return 0, err
 	}
-	if !tag.IsSystem || !tag.IsActive {
-		return 0, fmt.Errorf("candidate tag is no longer active in the configured tag library")
+	if !isAITagEligible(tag) {
+		return 0, fmt.Errorf("candidate tag is no longer available in the configured tag library")
 	}
 	return tag.ID, nil
 }

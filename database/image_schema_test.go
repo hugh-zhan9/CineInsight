@@ -337,7 +337,9 @@ func TestImageAITaggingSchemaMirrorsVideoSideIndexShape(t *testing.T) {
 		}
 	}
 	for run := 0; run < 2; run++ {
-		EnsureImageAITaggingIndexes(db)
+		if err := EnsureImageAITaggingIndexes(db); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, expectation := range []struct {
 		index   string
@@ -370,7 +372,9 @@ func TestImageAITaggingUniqueKeysMirrorVideoSide(t *testing.T) {
 	if err := db.AutoMigrate(models.AllModels()...); err != nil {
 		t.Fatalf("automigrate image schema: %v", err)
 	}
-	EnsureImageAITaggingIndexes(db)
+	if err := EnsureImageAITaggingIndexes(db); err != nil {
+		t.Fatal(err)
+	}
 
 	approval := models.ImageAITagApprovalRecord{ImageID: 1, TagID: 2, CandidateID: 3}
 	if err := db.Create(&approval).Error; err != nil {
@@ -587,7 +591,9 @@ func TestImageAITaggingTablesLeaveVideoAITagSchemaUntouched(t *testing.T) {
 		t.Fatalf("automigrate current schema: %v", err)
 	}
 	ensureAITaggingIndexes(current)
-	EnsureImageAITaggingIndexes(current)
+	if err := EnsureImageAITaggingIndexes(current); err != nil {
+		t.Fatal(err)
+	}
 
 	want := dumpSQLiteTableStructure(t, baseline, videoAITagTables)
 	got := dumpSQLiteTableStructure(t, current, videoAITagTables)

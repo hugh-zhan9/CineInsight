@@ -57,6 +57,7 @@ func (c *OpenAICompatibleAITaggingClient) AnalyzeTags(ctx context.Context, req A
 	batches := splitAITaggingFrames(req.Evidence.Frames, c.config.ImagesPerRequest)
 	merged := make([]AITagSuggestion, 0)
 	positionsByKey := make(map[string]int)
+	matcher := newAITagMatcher(req.ExistingTags)
 	for i, frames := range batches {
 		batchReq := req
 		batchReq.Evidence.Frames = frames
@@ -67,7 +68,7 @@ func (c *OpenAICompatibleAITaggingClient) AnalyzeTags(ctx context.Context, req A
 		if err != nil {
 			return nil, fmt.Errorf("AI tagging batch %d/%d: %w", i+1, len(batches), err)
 		}
-		merged = mergeAITagSuggestions(merged, positionsByKey, suggestions)
+		merged = mergeAITagSuggestions(merged, positionsByKey, suggestions, matcher)
 	}
 	return merged, nil
 }
@@ -179,11 +180,15 @@ func splitAITaggingFrames(frames []AITaggingFrame, limit int) [][]AITaggingFrame
 	return batches
 }
 
-func mergeAITagSuggestions(merged []AITagSuggestion, positionsByKey map[string]int, incoming []AITagSuggestion) []AITagSuggestion {
+func mergeAITagSuggestions(merged []AITagSuggestion, positionsByKey map[string]int, incoming []AITagSuggestion, matcher aiTagMatcher) []AITagSuggestion {
 	for _, suggestion := range incoming {
-		key := normalizeAITagName(suggestion.MatchedExistingName)
+		if tag, ok := matcher.match(suggestion.MatchedExistingName, suggestion.Label); ok {
+			suggestion.Label = tag.Name
+			suggestion.MatchedExistingName = tag.Name
+		}
+		key := strings.TrimSpace(suggestion.MatchedExistingName)
 		if key == "" {
-			key = normalizeAITagName(suggestion.Label)
+			key = strings.TrimSpace(suggestion.Label)
 		}
 		if key == "" {
 			continue
@@ -389,8 +394,7 @@ func buildAITaggingPromptText(req AITaggingRequest, subtitleCharLimit int) strin
 		batchContext = fmt.Sprintf("这是第 %d/%d 批画面，本视频共抽取 %d 帧。请只判断当前批次可见的内容；服务端会合并各批结果。\n", req.BatchIndex, req.BatchCount, req.TotalFrames)
 	}
 	closedLibrary := formatClosedTagLibraryForPrompt(req.ExistingTags)
-	if closedLibrary != "" {
-		return fmt.Sprintf(`请为本地视频生成标签候选。当前请求包含 %d 张视频抽帧；如果抽帧可用，必须优先根据画面内容判断，文件名和路径只能作为辅助证据。
+	return fmt.Sprintf(`请为本地视频生成标签候选。当前请求包含 %d 张视频抽帧；如果抽帧可用，必须优先根据画面内容判断，文件名和路径只能作为辅助证据。
 %s
 
 你只能从下列闭集标签库中选择，禁止输出候选集之外的标签，禁止同义改写。
@@ -416,35 +420,6 @@ func buildAITaggingPromptText(req AITaggingRequest, subtitleCharLimit int) strin
 字幕摘要：%s
 Agent 补充证据：%s
 采样警告：%s`, len(evidence.Frames), batchContext, closedLibrary, req.Video.Name, req.Video.Path, truncateLogSnippet(evidence.SubtitleText, subtitleCharLimit), agentEvidence, strings.Join(evidence.Warnings, "; "))
-	}
-
-	existingTagNames := make([]string, 0, len(req.ExistingTags))
-	for _, tag := range req.ExistingTags {
-		existingTagNames = append(existingTagNames, tag.Name)
-	}
-	return fmt.Sprintf(`请为本地视频生成标签候选。当前请求包含 %d 张视频抽帧；如果抽帧可用，必须优先根据画面内容判断，文件名和路径只能作为辅助证据。必须优先从现有标签库中选择，只有画面证据非常明确且现有标签库没有合适标签时，才提出新标签。
-%s
-
-输出 JSON，格式为 {"suggestions":[{"label":"标签名","confidence":"high|medium|low","match_type":"existing_exact|existing_semantic|new_candidate","matched_existing_name":"若匹配已有标签则填写","reasoning":"简短理由"}]}。
-
-证据优先级：
-1. 视频抽帧中的稳定视觉内容优先，尤其是跨多帧重复出现的主体、场景、服装、画质、拍摄方式。
-2. 已有标签库优先。能映射到已有标签时，label 必须使用已有标签的原始名称，matched_existing_name 也填写该已有标签名称。
-3. 文件名、路径、字幕只能用于补充画面判断；不得只因为标题包含某个词就给 high。
-4. 如果画面不可用，再退化为文件名、路径、字幕和已有标签库判断，并在 reasoning 里说明依据不足。
-5. 不要为已有标签创建同义、扩写或缩写的新标签。
-
-置信度规则：
-- high: 多帧画面证据明确，且能匹配已有标签，或文件名和画面共同强确认。
-- medium: 画面证据较强但不是多帧稳定出现，或能语义匹配已有标签但不够直接。
-- low: 主要来自标题/路径、画面证据不足，或与现有标签库风格差别大。
-
-视频文件名：%s
-视频路径：%s
-现有标签库：%s
-字幕摘要：%s
-Agent 补充证据：%s
-采样警告：%s`, len(evidence.Frames), batchContext, req.Video.Name, req.Video.Path, strings.Join(existingTagNames, ", "), truncateLogSnippet(evidence.SubtitleText, subtitleCharLimit), agentEvidence, strings.Join(evidence.Warnings, "; "))
 }
 
 func formatClosedTagLibraryForPrompt(tags []models.Tag) string {
@@ -453,12 +428,12 @@ func formatClosedTagLibraryForPrompt(tags []models.Tag) string {
 	}
 	grouped := map[string][]string{}
 	order := make([]string, 0)
-	systemCount := 0
+	tagCount := 0
 	for _, tag := range tags {
-		if !tag.IsSystem || !tag.IsActive {
+		if !isAITagEligible(tag) {
 			continue
 		}
-		systemCount++
+		tagCount++
 		ns := strings.TrimSpace(tag.Namespace)
 		if ns == "" {
 			ns = "other"
@@ -468,7 +443,7 @@ func formatClosedTagLibraryForPrompt(tags []models.Tag) string {
 		}
 		grouped[ns] = append(grouped[ns], tag.Name)
 	}
-	if systemCount == 0 {
+	if tagCount == 0 {
 		return ""
 	}
 	var b strings.Builder
