@@ -9,6 +9,7 @@ BUILD_APP_PATH="${PROJECT_ROOT}/build/bin/${APP_NAME}.app"
 INSTALL_APP_PATH="/Applications/${APP_NAME}.app"
 TMP_DIR_ROOT="${TMPDIR:-/tmp}"
 SKIP_BUILD=0
+BUILD_ONLY=0
 WAILS_ARGS=()
 
 log() {
@@ -23,17 +24,18 @@ fail() {
 usage() {
   cat <<EOF
 用法:
-  $(basename "$0") [--skip-build] [wails build 参数...]
+  $(basename "$0") [--skip-build | --build-only] [wails build 参数...]
 
 说明:
-  1. 在项目根目录执行 wails build
-  2. 产出 ${BUILD_APP_PATH}
-  3. 关闭正在运行的 ${APP_NAME}
-  4. 将新包替换到 ${INSTALL_APP_PATH}
+  1. 在项目根目录执行 wails build（默认使用 Go 1.24.9）
+  2. 产出 ${BUILD_APP_PATH} 并打包已构建的超分运行时
+  3. 默认关闭正在运行的 ${APP_NAME}，将新包替换到 ${INSTALL_APP_PATH}
+  4. --build-only 在第 2 步结束，不替换已安装应用
 
 示例:
   $(basename "$0")
   $(basename "$0") -clean
+  $(basename "$0") --build-only
   $(basename "$0") --skip-build
 EOF
 }
@@ -71,6 +73,7 @@ run_install_cmd() {
 build_app() {
   local wails_bin="$1"
   local build_ldflags="${CGO_LDFLAGS:-}"
+  local build_toolchain="${GOTOOLCHAIN:-auto}"
 
   if (( SKIP_BUILD == 1 )); then
     log "跳过构建，直接使用现有产物"
@@ -81,10 +84,15 @@ build_app() {
     build_ldflags="${build_ldflags:+${build_ldflags} }-framework UniformTypeIdentifiers"
   fi
 
-  log "开始执行 Wails 构建"
+  if [[ "${build_toolchain}" == "auto" ]]; then
+    build_toolchain="go1.24.9"
+  fi
+
+  log "开始执行 Wails 构建（${build_toolchain}）"
   (
     cd "${PROJECT_ROOT}"
     export CGO_LDFLAGS="${build_ldflags}"
+    export GOTOOLCHAIN="${build_toolchain}"
     if [[ "$(declare -p WAILS_ARGS 2>/dev/null || true)" == "declare -a"* ]] && (( ${#WAILS_ARGS[@]} > 0 )); then
       "${wails_bin}" build "${WAILS_ARGS[@]}"
     else
@@ -176,6 +184,10 @@ main() {
         SKIP_BUILD=1
         shift
         ;;
+      --build-only)
+        BUILD_ONLY=1
+        shift
+        ;;
       -h|--help)
         usage
         exit 0
@@ -187,12 +199,21 @@ main() {
     esac
   done
 
+  if (( SKIP_BUILD == 1 && BUILD_ONLY == 1 )); then
+    fail "--skip-build 与 --build-only 不能同时使用。"
+  fi
+
   wails_bin="$(resolve_wails)"
   build_app "${wails_bin}"
 
   [[ -d "${BUILD_APP_PATH}" ]] || fail "未找到构建产物: ${BUILD_APP_PATH}"
 
   bundle_enhance_runtime
+
+  if (( BUILD_ONLY == 1 )); then
+    log "构建完成：${BUILD_APP_PATH}"
+    return
+  fi
 
   replace_installed_app
   launch_installed_app

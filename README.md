@@ -65,7 +65,7 @@ cd frontend && npm install && cd ..
 
 ```bash
 export PATH=$PATH:$HOME/go/bin
-wails dev
+GOTOOLCHAIN=go1.24.9 wails dev
 ```
 
 ## 构建生产版本
@@ -73,16 +73,21 @@ wails dev
 ```bash
 # 构建桌面应用
 export PATH=$PATH:$HOME/go/bin
-wails build
+GOTOOLCHAIN=go1.24.9 wails build
 
 # 构建产物位于: build/bin/
 ```
+
+当前项目使用 Wails 2.11.0；本机默认 Go 1.27.1 会使其旧版 `go/packages` 在构建扫描阶段报 `package "fmt" without types`。上述命令只为本次 Wails 进程选择已验证的 Go 1.24.9，不修改全局 Go 设置。一键安装脚本在未显式指定工具链时也会自动使用 Go 1.24.9。
 
 ### macOS 一键打包并替换旧应用
 
 ```bash
 # 构建并替换 /Applications/析微影策.app
 bash scripts/build_and_install_app.sh
+
+# 只构建，不替换已安装的应用
+bash scripts/build_and_install_app.sh --build-only
 
 # 仅替换已构建好的产物
 bash scripts/build_and_install_app.sh --skip-build
