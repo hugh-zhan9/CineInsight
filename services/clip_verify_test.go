@@ -123,8 +123,8 @@ func TestCleanupClipRequiresStructureVerification(t *testing.T) {
 		return nil, errors.New("decoder error with /private/media/path")
 	}
 	result, err = svc.AnalyzeCleanupCandidates(CleanupCriteria{})
-	if err == nil || result != nil || strings.Contains(err.Error(), "/private/media") {
-		t.Fatalf("verification error must fail without unchecked candidates or paths: %+v %v", result, err)
+	if err != nil || len(result.ClipGroups) != 0 || result.SkippedClipVerification != 1 {
+		t.Fatalf("verification error must skip without unchecked candidates: %+v %v", result, err)
 	}
 }
 
@@ -173,6 +173,15 @@ func TestVerifyClipPairSamplingAndFailures(t *testing.T) {
 			}
 		})
 	}
+	t.Run("read errors omit source paths", func(t *testing.T) {
+		svc := &CleanupService{clipFrame: func(context.Context, string, float64) ([]byte, error) {
+			return nil, errors.New("decoder error with /private/media/path")
+		}}
+		ok, err := svc.verifyClipPair(full, clip, CleanupClipGroup{OffsetSeconds: 20})
+		if ok || err == nil || strings.Contains(err.Error(), "/private/media") {
+			t.Fatalf("read error must remain sanitized: %v %v", ok, err)
+		}
+	})
 	t.Run("cancelled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()

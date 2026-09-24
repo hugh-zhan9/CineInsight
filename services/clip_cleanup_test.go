@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -500,5 +501,96 @@ func TestCleanupAnalysisExcludesUnavailableVideosFromStaleCounts(t *testing.T) {
 	}
 	if result.StaleHashCount != 1 {
 		t.Fatalf("待补全感知哈希数应与帧哈希同口径，实际 %d", result.StaleHashCount)
+	}
+}
+
+// 单对异常不能抹掉其他类别，或阻止同一片段找到另一个可复核的完整片。
+func TestCleanupAnalysisSkipsClipVerificationErrors(t *testing.T) {
+	for _, failure := range []string{"read", "timeout", "changed", "all_failed"} {
+		t.Run(failure, func(t *testing.T) {
+			setupCleanupServiceTestDB(t)
+			root := t.TempDir()
+			mockFFProbe(t, root)
+			first := clipFixtureVideo(t, root, "first.mp4", "first-full")
+			second := clipFixtureVideo(t, root, "second.mp4", "second-full-content")
+			clip := clipFixtureVideo(t, root, "cut.mp4", "cut")
+			hashes := randomFrameHashes(71, 40)
+			seedFrameHashSequence(t, first, hashes)
+			seedFrameHashSequence(t, second, hashes)
+			seedFrameHashSequence(t, clip, hashes[10:25])
+			svc := newClipFixtureCleanupService()
+			read := svc.clipFrame
+			svc.clipTimeout = 200 * time.Millisecond
+			svc.clipFrame = func(ctx context.Context, path string, second float64) ([]byte, error) {
+				if path == first.Path || failure == "all_failed" {
+					switch failure {
+					case "timeout":
+						<-ctx.Done()
+						return nil, ctx.Err()
+					case "changed":
+						if err := os.WriteFile(path, []byte("changed-source-size"), 0o600); err != nil {
+							t.Fatal(err)
+						}
+					default:
+						return nil, errors.New("decoder failure")
+					}
+				}
+				return read(ctx, path, second)
+			}
+			result, err := svc.AnalyzeCleanupCandidates(CleanupCriteria{MinDuration: time.Hour})
+			if err != nil {
+				t.Fatalf("单对错误不应中止分析: %v", err)
+			}
+			wantSkipped, wantGroups := 1, 1
+			if failure == "all_failed" {
+				wantSkipped, wantGroups = 2, 0
+			}
+			if result.SkippedClipVerification != wantSkipped || len(result.ClipGroups) != wantGroups {
+				t.Fatalf("跳过计数或候选错误: %+v", result)
+			}
+			if wantGroups > 0 && result.ClipGroups[0].Full.ID != second.ID {
+				t.Fatalf("应保留通过复核的第二个完整片: %+v", result.ClipGroups)
+			}
+			if len(result.LowDuration) != 3 {
+				t.Fatalf("其他类别丢失: %+v", result.LowDuration)
+			}
+			svc.status = CleanupStatus{Completed: true, Analysis: result}
+			if svc.Status().Analysis.SkippedClipVerification != wantSkipped {
+				t.Fatal("缓存读取丢失跳过计数")
+			}
+			// 新一轮重新尝试，跳过计数不能沿用上一轮。
+			svc.clipFrame = read
+			again, err := svc.AnalyzeCleanupCandidates(CleanupCriteria{})
+			if err != nil || again.SkippedClipVerification != 0 || len(again.ClipGroups) != 1 {
+				t.Fatalf("重新分析未恢复: %+v err=%v", again, err)
+			}
+		})
+	}
+}
+
+func TestCleanupClipVerificationParentCancellationStopsAnalysis(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	full := clipFixtureVideo(t, root, "full.mp4", "full-content")
+	clip := clipFixtureVideo(t, root, "cut.mp4", "cut")
+	hashes := randomFrameHashes(72, 40)
+	seedFrameHashSequence(t, full, hashes)
+	seedFrameHashSequence(t, clip, hashes[10:25])
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reads := 0
+	svc := &CleanupService{ctx: ctx, clipFrame: func(ctx context.Context, _ string, _ float64) ([]byte, error) {
+		reads++
+		cancel()
+		return nil, ctx.Err()
+	}}
+	groups, _, _, err := svc.loadCleanupClipGroups(nil, nil)
+	if !errors.Is(err, context.Canceled) || groups != nil || reads != 1 {
+		t.Fatalf("父上下文取消必须终止: groups=%+v reads=%d err=%v", groups, reads, err)
+	}
+	// 已取消时也不能继续逐对比较/抽帧。
+	_, _, _, err = svc.loadCleanupClipGroups(nil, nil)
+	if !errors.Is(err, context.Canceled) || reads != 1 {
+		t.Fatalf("取消后仍读取: reads=%d err=%v", reads, err)
 	}
 }

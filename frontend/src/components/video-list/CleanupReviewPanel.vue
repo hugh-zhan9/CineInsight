@@ -54,6 +54,9 @@
           <div v-if="cleanupSkippedText" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-skipped-hint">
             <span>{{ cleanupSkippedText }}</span>
           </div>
+          <div v-if="cleanupDialog.analysis.skipped_clip_verification" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-clip-verification-skipped">
+            <span>有 {{ cleanupDialog.analysis.skipped_clip_verification }} 组截取片段配对因画面复核超时、读取失败或文件变化而跳过，其余分析已完成。可稍后重新分析以重试。</span>
+          </div>
           <div v-if="cleanupDialog.analysis.stale_frame_hash_count" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-stale-frame-hash-hint">
             <span>有 {{ cleanupDialog.analysis.stale_frame_hash_count }} 个视频还没有帧哈希（或源文件已变更），暂未参与截取片段识别。</span>
             <button type="button" class="btn-secondary btn-compact" data-test="cleanup-start-frame-hash" :disabled="frameHashRunning" @click="$emit('start-frame-hash')">

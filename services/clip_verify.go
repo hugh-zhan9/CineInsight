@@ -27,7 +27,11 @@ func (s *CleanupService) verifyClipPair(full, clip clipSequence, candidate Clean
 	if parent == nil {
 		parent = context.Background()
 	}
-	ctx, cancel := context.WithTimeout(parent, clipVerifyTimeout)
+	timeout := s.clipTimeout
+	if timeout <= 0 {
+		timeout = clipVerifyTimeout
+	}
+	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	reader := s.clipFrame
 	if reader == nil {

@@ -347,7 +347,7 @@ describe('面板与片库页之间的接口', () => {
     await flushPromises();
     wrapper.vm.cleanupDialog.show = true;
     wrapper.vm.cleanupDialog.analysis = {
-      skipped_unavailable: 1316, skipped_metadata: 4,
+      skipped_unavailable: 1316, skipped_metadata: 4, skipped_clip_verification: 2,
       duplicate_groups: [], near_duplicate_groups: [], same_source_groups: [], low_duration: [], low_resolution: []
     };
     await flushPromises();
@@ -356,6 +356,7 @@ describe('面板与片库页之间的接口', () => {
     expect(hint.exists()).toBe(true);
     expect(hint.text()).toContain('1316');
     expect(hint.text()).toContain('4');
+    expect(wrapper.find('[data-test="cleanup-clip-verification-skipped"]').text()).toContain('2 组');
     wrapper.unmount();
   });
 
@@ -370,6 +371,7 @@ describe('面板与片库页之间的接口', () => {
     await flushPromises();
 
     expect(wrapper.find('[data-test="cleanup-skipped-hint"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="cleanup-clip-verification-skipped"]').exists()).toBe(false);
     wrapper.unmount();
   });
 

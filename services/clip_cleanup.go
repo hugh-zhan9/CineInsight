@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -42,17 +43,24 @@ type clipSequence struct {
 // loadCleanupClipGroups 用有效的帧哈希序列找出截取片段候选（D-027、D-028）。
 //
 // 返回值第二项是"还没有可用序列的视频数"（没回填过的 + 源文件变过失效的），
-// 清理面板据此提示可以补全帧哈希。
+// 清理面板据此提示可以补全帧哈希。第三项是复核出错而跳过的配对数。
 //
 // excluded 里是已经被别的类别认领的视频对（精确重复）与用户忽略过的对，
 // 它们不再作为截取候选出现。
-func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, error) {
+func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, int, error) {
 	startedAt := time.Now()
+	ctx := s.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, 0, 0, err
+	}
 	// 只取用得上的列，且不预载标签：一行序列的 blob 就有 ~30 KB，整库读一遍已经
 	// 是这一步的内存峰值，没必要再把标签关联和其余列拖进来。截取候选的保留项由
 	// 长度决定，不走 isPreferredCleanupVideo，所以这里不需要 Tags。
 	var rows []models.VideoFrameHashSequence
-	err := database.DB.
+	err := database.DB.WithContext(ctx).
 		Select("video_id", "interval_ms", "hashes", "frame_count", "source_size", "source_mod_time_ns", "last_error").
 		Preload("Video", func(db *gorm.DB) *gorm.DB {
 			return db.Select("id", "name", "path", "directory", "size", "duration", "resolution")
@@ -60,15 +68,18 @@ func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, pr
 		Order("video_id ASC").
 		Find(&rows).Error
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	scope, err := loadCleanupPathScope()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	sequences := make([]clipSequence, 0, len(rows))
 	usable := make(map[uint]clipSequence, len(rows))
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, 0, err
+		}
 		if row.Video.ID == 0 || !scope.contains(row.Video.Path) {
 			continue
 		}
@@ -105,12 +116,12 @@ func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, pr
 
 	staleCount := countVideosWithoutUsableFrameHash(presentVideoIDs, usable)
 	if len(sequences) < 2 {
-		return []CleanupClipGroup{}, staleCount, nil
+		return []CleanupClipGroup{}, staleCount, 0, nil
 	}
 
 	dismissed, err := loadClipDismissals()
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 
 	// 按帧数从多到少排序：候选对只可能是"前面的当完整片、后面的当截取片段"，
@@ -127,7 +138,11 @@ func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, pr
 	// 那一条，命中率相同留更长的完整片（ID 小者优先，结果稳定）。
 	best := make(map[uint]CleanupClipGroup)
 	comparedPairs := 0
+	skippedVerification := 0
 	for full := 0; full < len(sequences); full++ {
+		if ctx.Err() != nil {
+			return nil, 0, 0, ctx.Err()
+		}
 		maxClipFrames := int(clipMaxDurationRatio * float64(len(sequences[full].hashes)))
 		// 序列按帧数降序，第一个满足 len ≤ 0.9·len(A) 的位置之后才可能是候选片段。
 		start := sort.Search(len(sequences), func(index int) bool {
@@ -137,6 +152,9 @@ func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, pr
 			start = full + 1
 		}
 		for clip := start; clip < len(sequences); clip++ {
+			if ctx.Err() != nil {
+				return nil, 0, 0, ctx.Err()
+			}
 			comparedPairs++
 			candidate, ok := evaluateClipPair(sequences[full], sequences[clip], excluded, dismissed)
 			if !ok {
@@ -146,7 +164,13 @@ func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, pr
 			if !exists || candidate.MatchRate > existing.MatchRate {
 				verified, err := s.verifyClipPair(sequences[full], sequences[clip], candidate)
 				if err != nil {
-					return nil, 0, err
+					// 配对自己的期限/读盘失败不终止整轮；应用关闭仍要及时退出。
+					if ctx.Err() != nil {
+						return nil, 0, 0, ctx.Err()
+					}
+					skippedVerification++
+					log.Printf("[Cleanup] clip verification skipped full=%d clip=%d: %v", candidate.Full.ID, candidate.Clip.ID, err)
+					continue
 				}
 				if !verified {
 					continue
@@ -166,9 +190,9 @@ func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, pr
 		}
 		return groups[i].Clip.ID < groups[j].Clip.ID
 	})
-	log.Printf("[Cleanup] clip matching sequences=%d pairs_compared=%d groups=%d pending_frame_hash=%d elapsed=%s",
-		len(sequences), comparedPairs, len(groups), staleCount, time.Since(startedAt).Round(time.Millisecond))
-	return groups, staleCount, nil
+	log.Printf("[Cleanup] clip matching sequences=%d pairs_compared=%d groups=%d skipped_verification=%d pending_frame_hash=%d elapsed=%s",
+		len(sequences), comparedPairs, len(groups), skippedVerification, staleCount, time.Since(startedAt).Round(time.Millisecond))
+	return groups, staleCount, skippedVerification, nil
 }
 
 // evaluateClipPair 判一对是否成候选：排除、间隔一致、逐帧对齐。

@@ -75,11 +75,13 @@ export default {
   padding-left: 18px;
   display: grid;
   gap: 3px;
+  grid-auto-rows: max-content;
   max-height: 168px;
   overflow-y: auto;
 }
 
 .task-failure-list li {
+  line-height: 1.5;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;

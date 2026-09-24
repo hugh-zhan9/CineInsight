@@ -58,6 +58,8 @@ type CleanupAnalysis struct {
 	// 变过失效的）；这些视频暂不参与截取片段识别，可通过"补全帧哈希"一键补齐。
 	// 同样只数本轮文件读得到的视频——读不到的归 SkippedUnavailable 报。
 	StaleFrameHashCount int64 `json:"stale_frame_hash_count"`
+	// SkippedClipVerification 是因超时、读取失败或源变化而未完成复核的配对数。
+	SkippedClipVerification int `json:"skipped_clip_verification"`
 	// SkippedUnavailable 是本轮 os.Stat 失败或指向目录的视频数。外置盘没挂载时
 	// 这个数会很大，而在有这个字段之前界面与插着盘跑出来的结果长得一模一样。
 	SkippedUnavailable int `json:"skipped_unavailable"`
@@ -90,6 +92,7 @@ type CleanupStatus struct {
 type CleanupService struct {
 	ctx                  context.Context
 	clipFrame            clipFrameReader
+	clipTimeout          time.Duration // 为零时使用默认的配对复核期限。
 	mu                   sync.Mutex
 	status               CleanupStatus
 	invalidatedDuringRun bool
@@ -239,12 +242,15 @@ func cleanupDoneMessage(result *CleanupAnalysis) string {
 	)
 	// 两项各自成句：只有一项非零时凑在一起会读成"跳过 0 个（文件不可访问），2 个
 	// 取不到元数据"，一条报完成的消息里摆个 0 只会让人以为哪里没跑对。
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
 	if result.SkippedUnavailable > 0 {
 		parts = append(parts, fmt.Sprintf("跳过 %d 个（文件不可访问）", result.SkippedUnavailable))
 	}
 	if result.SkippedMetadata > 0 {
 		parts = append(parts, fmt.Sprintf("%d 个取不到元数据、只参与精确重复", result.SkippedMetadata))
+	}
+	if result.SkippedClipVerification > 0 {
+		parts = append(parts, fmt.Sprintf("%d 组截取片段配对复核未完成、已跳过", result.SkippedClipVerification))
 	}
 	if len(parts) > 0 {
 		message += strings.Join(parts, "，") + "。"
@@ -446,12 +452,13 @@ func (s *CleanupService) analyzeCleanupCandidates(criteria CleanupCriteria) (*Cl
 	for pair := range dismissed {
 		clipExcluded[pair] = struct{}{}
 	}
-	clipGroups, staleFrameHashCount, err := s.loadCleanupClipGroups(clipExcluded, presentVideoIDs)
+	clipGroups, staleFrameHashCount, skippedClipVerification, err := s.loadCleanupClipGroups(clipExcluded, presentVideoIDs)
 	if err != nil {
 		return nil, 0, err
 	}
 	result.ClipGroups = clipGroups
 	result.StaleFrameHashCount = staleFrameHashCount
+	result.SkippedClipVerification = skippedClipVerification
 
 	sort.Slice(result.DuplicateGroups, func(i, j int) bool {
 		return result.DuplicateGroups[i].Original.ID < result.DuplicateGroups[j].Original.ID

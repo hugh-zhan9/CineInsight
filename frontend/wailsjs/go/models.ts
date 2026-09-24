@@ -1554,6 +1554,7 @@ export namespace services {
 	    stale_hash_count: number;
 	    clip_groups: CleanupClipGroup[];
 	    stale_frame_hash_count: number;
+	    skipped_clip_verification: number;
 	    skipped_unavailable: number;
 	    skipped_metadata: number;
 	
@@ -1571,6 +1572,7 @@ export namespace services {
 	        this.stale_hash_count = source["stale_hash_count"];
 	        this.clip_groups = this.convertValues(source["clip_groups"], CleanupClipGroup);
 	        this.stale_frame_hash_count = source["stale_frame_hash_count"];
+	        this.skipped_clip_verification = source["skipped_clip_verification"];
 	        this.skipped_unavailable = source["skipped_unavailable"];
 	        this.skipped_metadata = source["skipped_metadata"];
 	    }
