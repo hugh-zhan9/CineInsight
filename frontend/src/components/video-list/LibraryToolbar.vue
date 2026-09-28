@@ -100,7 +100,7 @@
               @click="$emit('clear-tags')"
               :class="['tag-chip', { active: selectedTags.length === 0 }]"
             >全部</button>
-            <span v-if="tags.length === 0" class="tag-browser__empty">暂无标签</span>
+            <span v-if="tagGroups.length === 0" class="tag-browser__empty">暂无可选标签</span>
           </div>
           <div v-for="group in tagGroups" :key="group.key" class="tag-category-row" role="group" :aria-label="group.label">
             <div class="tag-category-label">
@@ -360,6 +360,7 @@ export default {
 	  const groups = new Map();
 	  for (const tag of this.tags) {
 		const key = String(tag.namespace || '').trim();
+		if (key === '自动') continue;
 		if (!groups.has(key)) groups.set(key, { key, label: key || '未分类', tags: [] });
 		groups.get(key).tags.push(tag);
 	  }

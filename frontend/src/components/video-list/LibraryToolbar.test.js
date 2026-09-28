@@ -135,24 +135,37 @@ describe('工具栏三层重排', () => {
     expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['悬疑']);
     await wrapper.setProps({ tags: [] });
     expect(wrapper.findAll('.tag-category-row')).toHaveLength(0);
-    expect(wrapper.text()).toContain('暂无标签');
+    expect(wrapper.text()).toContain('暂无可选标签');
     wrapper.unmount();
   });
 
-  it('大量标签不隐藏，删除只发删除事件，自动标签仍不提供删除按钮', async () => {
+  it('普通分类的大量标签不隐藏，删除只发删除事件，自动分类不展示', async () => {
     const tags = Array.from({ length: 80 }, (_, index) => ({ id: index + 1, name: `标签 ${index + 1}`, namespace: '题材' }));
     const automaticTag = { id: 81, name: '短视频', namespace: '自动', automatic_kind: 'short_video' };
     const wrapper = mountToolbar({ tags: [...tags, automaticTag] });
-    expect(wrapper.findAll('.tag-chip-name')).toHaveLength(81);
+    expect(wrapper.findAll('.tag-chip-name')).toHaveLength(80);
+    expect(wrapper.findAll('.tag-category-label__name').map(label => label.text())).toEqual(['题材']);
     const chips = wrapper.findAll('.tag-chip-wrap');
     const automaticChip = chips.find(chip => chip.get('.tag-chip-name').text() === '短视频');
-    expect(automaticChip.find('.tag-chip-delete').exists()).toBe(false);
+    expect(automaticChip).toBeUndefined();
     const manualChip = chips.find(chip => chip.get('.tag-chip-name').text() === '标签 1');
     await manualChip.get('.tag-chip-delete').trigger('click');
     expect(wrapper.emitted('delete-tag')[0]).toEqual([tags[0]]);
     expect(wrapper.emitted('toggle-tag')).toBeUndefined();
-    await automaticChip.trigger('click');
-    expect(wrapper.emitted('toggle-tag')[0]).toEqual([81]);
+    wrapper.unmount();
+  });
+
+  it('只有自动分类时展示空态，已保存的自动标签筛选仍可回显和清除', async () => {
+    const wrapper = mountToolbar({
+      tags: [{ id: 81, name: '短视频', namespace: '自动', automatic_kind: 'short_video' }],
+      selectedTags: [81]
+    });
+    expect(wrapper.findAll('.tag-category-row')).toHaveLength(0);
+    expect(wrapper.findAll('.tag-chip-name')).toHaveLength(0);
+    expect(wrapper.get('.tag-browser__empty').text()).toBe('暂无可选标签');
+    expect(wrapper.get('.result-bar__conditions').text()).toContain('标签 短视频');
+    await wrapper.get('.tag-browser > .tags-wrap > .tag-chip').trigger('click');
+    expect(wrapper.emitted('clear-tags')).toHaveLength(1);
     wrapper.unmount();
   });
 
