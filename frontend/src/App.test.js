@@ -55,6 +55,16 @@ async function mountApp() {
   return wrapper;
 }
 
+it('片库的转换事件同步给已挂载的图片页', async () => {
+  const wrapper = await mountApp();
+  await wrapper.setData({ photosMounted: true });
+  const refresh = vi.fn();
+  wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.handleTagPersonConverted = refresh;
+  const result = { tag_id: 4, person: { id: 9 } };
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.$emit('person-converted', result);
+  expect(refresh).toHaveBeenCalledWith(result);
+});
+
 it('顶栏想看入口按需挂载独立片单页', async () => {
   const wrapper = await mountApp();
   expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(false);

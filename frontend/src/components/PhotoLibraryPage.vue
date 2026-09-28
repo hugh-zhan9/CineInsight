@@ -1454,6 +1454,11 @@ export default {
       if (owner) owner.scrollTop = 0;
       this.syncWindow(true);
     },
+    handleTagPersonConverted(result) {
+      this.filters.tagIDs = this.filters.tagIDs.filter(id => Number(id) !== Number(result.tag_id));
+      this.loadImageTags();
+      this.reload();
+    },
     async reload() {
       const token = Symbol('photo-query');
       this._queryToken = token;

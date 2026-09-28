@@ -68,6 +68,7 @@
         :directories="directories"
         @reload-tags="loadTags"
         @reload-directories="loadDirectories"
+        @person-converted="handleTagPersonConverted"
         @update-settings="handleSettingsUpdate"
       />
 
@@ -93,6 +94,7 @@
 	  <InsightsPage v-if="currentPage === 'insights'" :directories="directories" />
 	  <!-- 首次进入才挂载，之后只隐藏不卸载：切走再切回不会丢已加载的图片和滚动位置。 -->
 	  <PhotoLibraryPage
+	    ref="photoLibrary"
 	    v-if="photosMounted"
 	    v-show="currentPage === 'photos'"
 	    :page-active="currentPage === 'photos'"
@@ -222,6 +224,9 @@ export default {
     }
   },
   methods: {
+    handleTagPersonConverted(result) {
+      this.$refs.photoLibrary?.handleTagPersonConverted(result);
+    },
     // 三个事件报的是同一件事：窗口现在是不是用户正在看的那个。
     // 后端未收到上报时默认按后台处理，所以挂上监听后立刻同步一次当前状态。
     attachForegroundReporting() {

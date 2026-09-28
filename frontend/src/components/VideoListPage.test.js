@@ -54,6 +54,18 @@ async function mountPage(extraProps = {}, extraOptions = {}) {
   return wrapper;
 }
 
+it('标签转为人物后清掉旧标签筛选并重新加载片库', async () => {
+  const wrapper = await mountPage();
+  const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+  wrapper.vm.selectedTags = [4, 5];
+  const result = { tag_id: 4, person: { id: 9 } };
+  wrapper.vm.handleTagPersonConverted(result);
+  expect(wrapper.vm.selectedTags).toEqual([5]);
+  expect(reload).toHaveBeenCalledOnce();
+  expect(wrapper.emitted('person-converted')[0]).toEqual([result]);
+  wrapper.unmount();
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   delete window.runtime;

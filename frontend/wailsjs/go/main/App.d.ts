@@ -116,6 +116,8 @@ export function ConfirmFaceClusterAppend(arg1:number):Promise<void>;
 
 export function ConfirmSameSourceRelation(arg1:number):Promise<void>;
 
+export function ConvertTagToPerson(arg1:services.TagPersonConversionRequest):Promise<services.TagPersonConversionResult>;
+
 export function CountLibraryVideos(arg1:services.LibraryFilter):Promise<number>;
 
 export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCollection>;
@@ -397,6 +399,8 @@ export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void
 export function PreviewExternally(arg1:number):Promise<void>;
 
 export function PreviewLocalMetadataBatch(arg1:Array<number>):Promise<services.LocalMetadataBatchPreview>;
+
+export function PreviewTagPersonConversion(arg1:number):Promise<services.TagPersonConversionPreview>;
 
 export function RefreshMovieChart(arg1:number):Promise<void>;
 

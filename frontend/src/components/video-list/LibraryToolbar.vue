@@ -92,15 +92,24 @@
       </div>
 
       <div class="toolbar-row toolbar-row--tags">
-        <span class="toolbar-row__label">标签</span>
         <div class="tag-browser">
           <div class="tags-wrap">
+            <span class="toolbar-row__label">标签</span>
             <button
               type="button"
               @click="$emit('clear-tags')"
               :class="['tag-chip', { active: selectedTags.length === 0 }]"
             >全部</button>
             <span v-if="tagGroups.length === 0" class="tag-browser__empty">暂无可选标签</span>
+            <div class="tag-browser__actions">
+              <button type="button" class="toolbar-btn toolbar-btn--compact" @click="$emit('open-tag-manager')">标签管理</button>
+              <button
+                type="button"
+                class="toolbar-btn toolbar-btn--compact"
+                :disabled="videos.length === 0"
+                @click="$emit('toggle-select-all')"
+              >{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
+            </div>
           </div>
           <div v-for="group in tagGroups" :key="group.key" class="tag-category-row" role="group" :aria-label="group.label">
             <div class="tag-category-label">
@@ -123,13 +132,6 @@
             </div>
           </div>
         </div>
-        <button type="button" class="toolbar-btn toolbar-btn--compact" @click="$emit('open-tag-manager')">标签管理</button>
-        <button
-          type="button"
-          class="toolbar-btn toolbar-btn--compact"
-          :disabled="videos.length === 0"
-          @click="$emit('toggle-select-all')"
-        >{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
       </div>
     </div>
 
@@ -674,7 +676,7 @@ export default {
   flex-wrap: wrap;
 }
 
-/* 标签行：标签芯片多行铺开、全部可见；标签文字和两个按钮停在第一行 */
+/* 操作按钮只占顶部一行，各分类使用整行宽度，不为按钮预留侧栏。 */
 .toolbar-row--tags {
   flex-wrap: nowrap;
   align-items: flex-start;
@@ -698,16 +700,19 @@ export default {
 }
 
 .tag-browser { display: flex; flex: 1; flex-direction: column; gap: 6px; min-width: 0; }
+.tag-browser__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 .tag-category-row {
-  display: grid;
-  grid-template-columns: minmax(72px, 104px) minmax(0, 1fr);
-  align-items: start;
+  /* WebKit 会在宽度变化后保留嵌套换行 flex 的旧 grid 行高。 */
+  display: flex;
+  align-items: flex-start;
   gap: 12px;
   padding-top: 6px;
   border-top: 1px solid var(--hairline-faint);
 }
+.tag-category-row > .tags-wrap { flex: 1; align-content: flex-start; }
 .tag-category-label {
   display: flex;
+  flex: 0 0 104px;
   flex-direction: column;
   gap: 2px;
   padding: 4px 0;

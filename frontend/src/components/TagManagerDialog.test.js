@@ -23,7 +23,9 @@ const api = vi.hoisted(() => ({
   TriggerAITagging: vi.fn(),
   CreateTagCategory: vi.fn(),
   RenameTagCategory: vi.fn(),
-  DeleteTagCategory: vi.fn()
+  DeleteTagCategory: vi.fn(),
+  PreviewTagPersonConversion: vi.fn(),
+  ConvertTagToPerson: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -45,7 +47,67 @@ beforeEach(() => {
   api.SaveAITagLibrary.mockResolvedValue([]);
   api.ClearAITagLibrary.mockResolvedValue([]);
   api.TriggerAITagging.mockResolvedValue(false);
+  api.PreviewTagPersonConversion.mockResolvedValue({ tag_id: 1, tag_name: '旅行', video_count: 2, image_count: 1, people: [] });
+  api.ConvertTagToPerson.mockResolvedValue({ person: { id: 7, display_name: '旅行' }, video_count: 2, image_count: 1 });
   feedback.confirmAction.mockResolvedValue(true);
+});
+
+describe('标签转为人物入口', () => {
+  const personTags = tags.map(tag => ({ ...tag, namespace: tag.id === 1 ? '人物' : '' }));
+
+  it('人物分类标签可转换，成功后局部移除并通知宿主刷新媒体', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: personTags } });
+    const rows = wrapper.findAll('.tag-edit-row');
+    expect(rows[4].text()).not.toContain('转为人物');
+    await rows[0].findAll('button').find(button => button.text() === '转为人物').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.tag-person-conversion').text()).toContain('2 部视频、1 张图片');
+    await wrapper.get('.tag-person-conversion .btn-primary').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('.tag-person-conversion').exists()).toBe(false);
+    expect(wrapper.findAll('.tag-edit-row')).toHaveLength(tags.length - 1);
+    expect(wrapper.emitted('tags-changed')).toHaveLength(1);
+    expect(wrapper.emitted('person-converted')[0][0]).toMatchObject({ tag_id: 1, person: { id: 7 } });
+    wrapper.unmount();
+  });
+
+  it('未保存的标签修改必须先保存，返回转换页只回标签管理', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: personTags } });
+    const row = wrapper.findAll('.tag-edit-row')[0];
+    await row.get('input[type="text"]').setValue('改名未保存');
+    await row.findAll('button').find(button => button.text() === '转为人物').trigger('click');
+    expect(api.PreviewTagPersonConversion).not.toHaveBeenCalled();
+    expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('先保存'));
+    await row.get('input[type="text"]').setValue('旅行');
+    await row.findAll('button').find(button => button.text() === '转为人物').trigger('click');
+    await flushPromises();
+    await wrapper.get('.tag-person-conversion .btn-secondary').trigger('click');
+    expect(wrapper.emitted('close')).toBeUndefined();
+    expect(wrapper.find('.tag-list-container').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('其他分类和未分类不显示转换入口，也不能直接调用动作', async () => {
+    const categorized = tags.map((tag, index) => ({ ...tag, namespace: ['人物', '场景', '', '人物关系', '人物'][index] }));
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: categorized } });
+    expect(wrapper.findAll('.tag-edit-row').map(row => row.text().includes('转为人物'))).toEqual([true, false, false, false, false]);
+    for (const tag of categorized.slice(1)) wrapper.vm.openPersonConversion(tag);
+    expect(wrapper.vm.conversionTagID).toBe(0);
+    expect(api.PreviewTagPersonConversion).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('刚改为人物分类但尚未保存时不能转换，改出人物分类立即隐藏入口', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags: personTags } });
+    const row = wrapper.findAll('.tag-edit-row')[1];
+    await row.get('.tag-category-edit').setValue('人物');
+    await row.findAll('button').find(button => button.text() === '转为人物').trigger('click');
+    expect(api.PreviewTagPersonConversion).not.toHaveBeenCalled();
+    expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('先保存'));
+    await row.get('.tag-category-edit').setValue('');
+    expect(row.text()).not.toContain('转为人物');
+    wrapper.unmount();
+  });
 });
 
 describe('TagManagerDialog merge picker', () => {
@@ -280,7 +342,7 @@ describe('unified tag management', () => {
 
   it('offers the existing delete confirmation for a legacy AI tag', async () => {
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
-    await wrapper.findAll('.tag-edit-row')[2].findAll('button')[1].trigger('click');
+    await wrapper.findAll('.tag-edit-row')[2].findAll('button').find(button => button.text() === '删除').trigger('click');
     expect(wrapper.emitted('request-delete-tag')[0][0].id).toBe(3);
   });
 });

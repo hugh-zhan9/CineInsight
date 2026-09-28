@@ -226,6 +226,10 @@ export function ConfirmSameSourceRelation(arg1) {
   return window['go']['main']['App']['ConfirmSameSourceRelation'](arg1);
 }
 
+export function ConvertTagToPerson(arg1) {
+  return window['go']['main']['App']['ConvertTagToPerson'](arg1);
+}
+
 export function CountLibraryVideos(arg1) {
   return window['go']['main']['App']['CountLibraryVideos'](arg1);
 }
@@ -788,6 +792,10 @@ export function PreviewExternally(arg1) {
 
 export function PreviewLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['PreviewLocalMetadataBatch'](arg1);
+}
+
+export function PreviewTagPersonConversion(arg1) {
+  return window['go']['main']['App']['PreviewTagPersonConversion'](arg1);
 }
 
 export function RefreshMovieChart(arg1) {

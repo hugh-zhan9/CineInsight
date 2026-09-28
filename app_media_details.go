@@ -253,6 +253,18 @@ func (a *App) MergeTags(sourceTagIDs []uint, targetTagID uint) (*services.MergeT
 	return result, err
 }
 
+func (a *App) PreviewTagPersonConversion(tagID uint) (*services.TagPersonConversionPreview, error) {
+	return a.tagService.PreviewTagPersonConversion(tagID)
+}
+
+func (a *App) ConvertTagToPerson(input services.TagPersonConversionRequest) (*services.TagPersonConversionResult, error) {
+	result, err := a.tagService.ConvertTagToPerson(input)
+	if err == nil && a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	return result, err
+}
+
 // ===== 建议作品集（P-007，D-023..D-025）=====
 
 // StartCollectionSuggestionAnalysis 是用户显式发起的剧集分析，不经空闲门（D-030）。

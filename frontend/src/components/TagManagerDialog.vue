@@ -1,5 +1,7 @@
 <template>
   <BaseModal v-if="visible" close-on-overlay stop-modal-clicks style="max-width: 900px; max-height: 90vh; overflow-y: auto;" @close="handleClose">
+    <TagPersonConversionPanel v-if="conversionTagID" :key="conversionTagID" :tag-id="conversionTagID" @back="handleClose" @busy="conversionBusy = $event" @converted="handlePersonConverted" />
+    <template v-else>
       <h2>标签管理</h2>
       <!-- 创建新标签 -->
       <div class="setting-item">
@@ -99,6 +101,7 @@
             <span v-if="tag.automatic_kind" class="system-tag-note">自动标签</span>
             <template v-else>
               <button @click="saveTag(tag)" class="btn-secondary">保存</button>
+              <button v-if="canConvertToPerson(tag)" type="button" class="btn-secondary" @click="openPersonConversion(tag)">转为人物</button>
               <button @click.stop="$emit('request-delete-tag', tag)" class="btn-secondary" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
             </template>
           </div>
@@ -121,24 +124,28 @@
       <div class="modal-actions">
         <button @click="handleClose" class="btn-secondary">完成</button>
       </div>
+    </template>
   </BaseModal>
 </template>
 
 <script>
 import { CreateTagWithCategory, MergeTags, UpdateTagWithCategory, TriggerAITagging, CreateTagCategory, RenameTagCategory, DeleteTagCategory } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import TagPersonConversionPanel from './TagPersonConversionPanel.vue';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 
 export default {
   name: 'TagManagerDialog',
-  components: { BaseModal },
+  components: { BaseModal, TagPersonConversionPanel },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] }
   },
-  emits: ['close', 'tags-changed', 'request-delete-tag'],
+  emits: ['close', 'tags-changed', 'request-delete-tag', 'person-converted'],
   data() {
     return {
+      conversionTagID: 0,
+      conversionBusy: false,
       newCategoryName: '',
       newCategoryTagIDs: [],
       categoryDrafts: {},
@@ -215,6 +222,8 @@ export default {
     },
     visible(val) {
       if (val) {
+        this.conversionTagID = 0;
+        this.conversionBusy = false;
         this.tagCreateError = '';
         this.mergeError = '';
         this.mergeTargetId = 0;
@@ -231,7 +240,34 @@ export default {
   },
   methods: {
     async handleClose() {
+      if (this.conversionBusy) return;
+      if (this.conversionTagID) { this.conversionTagID = 0; return; }
       this.$emit('close');
+    },
+    canConvertToPerson(tag) {
+      return !tag.automatic_kind && String(tag.namespace || '').trim() === '人物';
+    },
+    openPersonConversion(tag) {
+      if (!this.canConvertToPerson(tag)) return;
+      const saved = this.tags.find(item => Number(item.id) === Number(tag.id));
+      if (!saved || saved.name !== tag.name || saved.namespace !== tag.namespace || saved.color !== tag.color) {
+        notifyError('请先保存该标签的修改，再转为人物。');
+        return;
+      }
+      this.conversionTagID = Number(tag.id);
+    },
+    handlePersonConverted(result) {
+      this.conversionTagID = 0;
+      this.conversionBusy = false;
+      const keep = tag => Number(tag.id) !== Number(result.tag_id);
+      this.localTags = this.localTags.filter(keep);
+      this.categoryTags = this.categoryTags.filter(keep);
+      this.mergeSourceIds = this.mergeSourceIds.filter(id => Number(id) !== Number(result.tag_id));
+      this.newCategoryTagIDs = this.newCategoryTagIDs.filter(id => Number(id) !== Number(result.tag_id));
+      if (Number(this.mergeTargetId) === Number(result.tag_id)) this.mergeTargetId = 0;
+      notify(`已转为人物「${result.person.display_name}」，关联 ${result.video_count} 部视频、${result.image_count} 张图片，原标签已删除。`);
+      this.$emit('tags-changed');
+      this.$emit('person-converted', result);
     },
     categoryCount(name) {
       return this.categoryTags.filter(tag => String(tag.namespace || '').trim() === name).length;

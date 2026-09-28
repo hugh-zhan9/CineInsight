@@ -917,23 +917,23 @@ func (s *TagService) DeleteTag(id uint) error {
 			log.Printf("删除标签失败: 未找到 id=%d err=%v", id, err)
 			return err
 		}
-		if tag.AutomaticKind != "" {
-			return fmt.Errorf("自动标签由应用维护，不能手动删除")
-		}
-		// 清理关联关系
-		if err := tx.Model(&tag).Association("Videos").Clear(); err != nil {
-			log.Printf("清理标签关联失败 id=%d err=%v", id, err)
-			return err
-		}
-		// D-002: 删除标签时同步清理图片侧关联，视频侧行为不变。
-		if err := tx.Exec("DELETE FROM image_tags WHERE tag_id = ?", id).Error; err != nil {
-			log.Printf("清理图片标签关联失败 id=%d err=%v", id, err)
-			return err
-		}
-		log.Printf("删除标签 id=%d name=%s", id, tag.Name)
-		if err := tx.Delete(&tag).Error; err != nil {
-			return err
-		}
-		return resetAITaggingAfterLibraryChange(tx)
+		return deleteTagTx(tx, &tag)
 	})
+}
+
+// Shared by explicit deletion and tag-to-person conversion inside their transaction.
+func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
+	if tag.AutomaticKind != "" {
+		return fmt.Errorf("自动标签由应用维护，不能手动删除")
+	}
+	if err := tx.Model(tag).Association("Videos").Clear(); err != nil {
+		return err
+	}
+	if err := tx.Exec("DELETE FROM image_tags WHERE tag_id = ?", tag.ID).Error; err != nil {
+		return err
+	}
+	if err := tx.Delete(tag).Error; err != nil {
+		return err
+	}
+	return resetAITaggingAfterLibraryChange(tx)
 }

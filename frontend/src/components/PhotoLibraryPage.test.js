@@ -69,6 +69,18 @@ async function mountPage({ settings = baseSettings(), tags = [] } = {}) {
   return wrapper;
 }
 
+it('标签转为人物后移除旧筛选并刷新图片及可用标签', async () => {
+  const wrapper = await mountPage();
+  const reload = vi.spyOn(wrapper.vm, 'reload').mockResolvedValue();
+  const loadTags = vi.spyOn(wrapper.vm, 'loadImageTags').mockResolvedValue();
+  wrapper.vm.filters.tagIDs = [4, 5];
+  wrapper.vm.handleTagPersonConverted({ tag_id: 4, person: { id: 9 } });
+  expect(wrapper.vm.filters.tagIDs).toEqual([5]);
+  expect(reload).toHaveBeenCalledOnce();
+  expect(loadTags).toHaveBeenCalledOnce();
+  wrapper.unmount();
+});
+
 
 // 2026-09-01 起「立即扫描 / 清理审阅 / AI 标签审阅 / 回收站」收进了「管理」菜单，
 // 低频筛选收进了「筛选」浮层，测试需要先把它们打开。

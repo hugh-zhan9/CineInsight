@@ -170,6 +170,7 @@
     </div>
 
     <PreviewDrawer
+      ref="previewDrawer"
       v-if="previewOpen && selectedPreviewVideo"
       :page-active="pageActive"
       :video="selectedPreviewVideo"
@@ -249,6 +250,7 @@
       :tags="tags"
       @close="showTagManagerDialog = false"
       @tags-changed="handleTagsChanged"
+      @person-converted="handleTagPersonConverted"
       @request-delete-tag="requestDeleteTag"
     />
 
@@ -402,7 +404,7 @@ export default {
     directories: { type: Array, default: () => [] },
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['reload-tags', 'update-settings', 'reload-directories'],
+  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted'],
   data() {
     return {
       videos: [],
@@ -2081,6 +2083,12 @@ export default {
     },
     handleTagsChanged() {
       this.$emit('reload-tags');
+    },
+    handleTagPersonConverted(result) {
+      this.selectedTags = this.selectedTags.filter(id => Number(id) !== Number(result.tag_id));
+      this.$emit('person-converted', result);
+      this.reloadCurrentView();
+      this.$refs.previewDrawer?.loadCurrentEntry();
     },
     handleTagAdded() {
       this.$emit('reload-tags');
