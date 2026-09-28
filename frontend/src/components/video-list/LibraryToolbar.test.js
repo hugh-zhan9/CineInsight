@@ -93,42 +93,68 @@ describe('多选批量栏', () => {
 });
 
 describe('工具栏三层重排', () => {
-	it('按主题显示标签并保留跨分类的筛选选择', async () => {
-	  const tags = [
-		{ id: 1, name: '科幻', namespace: '题材', color: '#111111' },
-		{ id: 2, name: '悬疑', namespace: '题材', color: '#222222' },
-		{ id: 3, name: '旅行', namespace: '场景', color: '#333333' },
-		{ id: 4, name: '自定义', namespace: '', color: '#444444' }
-	  ];
-	  const wrapper = mountToolbar({ tags, selectedTags: [3] });
-	  expect(wrapper.findAll('.tag-category-tab').map(tab => tab.text())).toEqual(['场景 1 · 已选 1', '题材 2', '未分类 1']);
-	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['旅行']);
-	  await wrapper.findAll('.tag-category-tab')[1].trigger('click');
-	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['科幻', '悬疑']);
-	  await wrapper.findAll('.tag-chip-wrap')[0].trigger('click');
-	  expect(wrapper.emitted('toggle-tag')[0]).toEqual([1]);
-	  await wrapper.setProps({ selectedTags: [1, 3] });
-	  expect(wrapper.findAll('.tag-category-tab').map(tab => tab.text())).toEqual(['场景 1 · 已选 1', '题材 2 · 已选 1', '未分类 1']);
-	  await wrapper.findAll('.tag-category-tab')[2].trigger('click');
-	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['自定义']);
-	  await wrapper.get('.tags-wrap > .tag-chip').trigger('click');
-	  expect(wrapper.emitted('clear-tags')).toHaveLength(1);
-	  wrapper.unmount();
-	});
+  it('所有分类左侧标注、对应标签同时展示，直接跨分类选择和清除', async () => {
+    const tags = [
+      { id: 1, name: '科幻', namespace: '题材', color: '#111111' },
+      { id: 2, name: '悬疑', namespace: '题材', color: '#222222' },
+      { id: 3, name: '旅行', namespace: '场景', color: '#333333' },
+      { id: 4, name: '自定义', namespace: '', color: '#444444' }
+    ];
+    const wrapper = mountToolbar({ tags, selectedTags: [3] });
+    const groups = wrapper.findAll('.tag-category-row');
+    expect(groups.map(group => group.get('.tag-category-label__name').text())).toEqual(['场景', '题材', '未分类']);
+    expect(groups.map(group => group.findAll('.tag-chip-name').map(chip => chip.text()))).toEqual([
+      ['旅行'], ['科幻', '悬疑'], ['自定义']
+    ]);
+    expect(groups[0].get('.tag-chip-wrap').classes()).toContain('active');
+    await groups[1].findAll('.tag-chip-wrap')[0].trigger('click');
+    expect(wrapper.emitted('toggle-tag')[0]).toEqual([1]);
+    await wrapper.setProps({ selectedTags: [1, 3] });
+    expect(wrapper.findAll('.tag-category-label__count').map(label => label.text())).toEqual(['1 · 已选 1', '2 · 已选 1', '1']);
+    expect(wrapper.findAll('.tag-chip-wrap.active .tag-chip-name').map(chip => chip.text())).toEqual(['旅行', '科幻']);
+    await groups[0].get('.tag-chip-wrap').trigger('click');
+    expect(wrapper.emitted('toggle-tag')[1]).toEqual([3]);
+    await wrapper.setProps({ selectedTags: [1] });
+    expect(wrapper.findAll('.tag-chip-wrap.active .tag-chip-name').map(chip => chip.text())).toEqual(['科幻']);
+    await wrapper.get('.tag-browser > .tags-wrap > .tag-chip').trigger('click');
+    expect(wrapper.emitted('clear-tags')).toHaveLength(1);
+    await wrapper.setProps({ selectedTags: [] });
+    expect(wrapper.findAll('.tag-chip-wrap.active')).toHaveLength(0);
+    expect(wrapper.get('.tag-browser > .tags-wrap > .tag-chip').classes()).toContain('active');
+    wrapper.unmount();
+  });
 
-	it('仅一个分类时直接显示标签，分类移除后回到仍存在的分类', async () => {
-	  const wrapper = mountToolbar({ tags: [{ id: 1, name: '旅行', namespace: '' }] });
-	  expect(wrapper.find('.tag-category-tabs').exists()).toBe(false);
-	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['旅行']);
-	  await wrapper.setProps({ tags: [{ id: 1, name: '旅行', namespace: '' }, { id: 2, name: '悬疑', namespace: '题材' }] });
-	  await wrapper.findAll('.tag-category-tab')[1].trigger('click');
-	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['旅行']);
-	  await wrapper.setProps({ tags: [{ id: 2, name: '悬疑', namespace: '题材' }] });
-	  expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['悬疑']);
-	  await wrapper.setProps({ tags: [] });
-	  expect(wrapper.text()).toContain('暂无标签');
-	  wrapper.unmount();
-	});
+  it('单分类仍显示分类名，分类增删后同步展示，空库保留空态', async () => {
+    const wrapper = mountToolbar({ tags: [{ id: 1, name: '旅行', namespace: '' }] });
+    expect(wrapper.get('.tag-category-label__name').text()).toBe('未分类');
+    expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['旅行']);
+    await wrapper.setProps({ tags: [{ id: 1, name: '旅行', namespace: '' }, { id: 2, name: '悬疑', namespace: '题材' }] });
+    expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['悬疑', '旅行']);
+    await wrapper.setProps({ tags: [{ id: 2, name: '悬疑', namespace: '题材' }] });
+    expect(wrapper.findAll('.tag-category-label__name').map(label => label.text())).toEqual(['题材']);
+    expect(wrapper.findAll('.tag-chip-name').map(chip => chip.text())).toEqual(['悬疑']);
+    await wrapper.setProps({ tags: [] });
+    expect(wrapper.findAll('.tag-category-row')).toHaveLength(0);
+    expect(wrapper.text()).toContain('暂无标签');
+    wrapper.unmount();
+  });
+
+  it('大量标签不隐藏，删除只发删除事件，自动标签仍不提供删除按钮', async () => {
+    const tags = Array.from({ length: 80 }, (_, index) => ({ id: index + 1, name: `标签 ${index + 1}`, namespace: '题材' }));
+    const automaticTag = { id: 81, name: '短视频', namespace: '自动', automatic_kind: 'short_video' };
+    const wrapper = mountToolbar({ tags: [...tags, automaticTag] });
+    expect(wrapper.findAll('.tag-chip-name')).toHaveLength(81);
+    const chips = wrapper.findAll('.tag-chip-wrap');
+    const automaticChip = chips.find(chip => chip.get('.tag-chip-name').text() === '短视频');
+    expect(automaticChip.find('.tag-chip-delete').exists()).toBe(false);
+    const manualChip = chips.find(chip => chip.get('.tag-chip-name').text() === '标签 1');
+    await manualChip.get('.tag-chip-delete').trigger('click');
+    expect(wrapper.emitted('delete-tag')[0]).toEqual([tags[0]]);
+    expect(wrapper.emitted('toggle-tag')).toBeUndefined();
+    await automaticChip.trigger('click');
+    expect(wrapper.emitted('toggle-tag')[0]).toEqual([81]);
+    wrapper.unmount();
+  });
 
   it('结果条用后端计数回显命中数与全库总数', async () => {
     const wrapper = mount(LibraryToolbar, { props: baseProps({ filteredCount: 218, libraryTotalCount: 3482 }) });
