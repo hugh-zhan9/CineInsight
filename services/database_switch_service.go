@@ -28,9 +28,14 @@ type DatabaseBackendStatus struct {
 	// PendingRestart 为真表示配置里的后端与正在使用的后端不一致——
 	// 切换已经写进配置但应用还没重启。
 	PendingRestart bool `json:"pending_restart"`
+	// NextBackend 是下次启动要用的后端，与 PendingRestart 同一判定（I-2）。Backend 取自本进程启动时
+	// 定下的环境，切换之后它仍是旧后端；「待重启」提示条要说「已切换到哪个」，只能看这一项。
+	NextBackend string `json:"next_backend"`
 }
 
-// DatabaseSwitchPreflight 是切换前的检查结果。
+// DatabaseSwitchPreflight 是切换前的检查结果。ReasonCode 为空表示可用，否则取
+// backend_env_locked / same_backend / unreachable / target_half_migrated（残留未完成的迁移）/
+// not_empty（完整的非空库，多半是「切回之前的后端」要用的那个）/ check_failed（检查本身出错）之一。
 type DatabaseSwitchPreflight struct {
 	Target     string `json:"target"`
 	Reachable  bool   `json:"reachable"`
@@ -52,8 +57,9 @@ type DatabaseSwitchStatus struct {
 	Message    string `json:"message"`
 	// Location 是目标库位置。迁移失败时前端据此显示目标库在哪、并提供「清空目标库」（D-PC55）。
 	Location string `json:"location"`
-	// RelaunchRequired 在迁移成功后为真：配置已写入，前端显示「立即重启」（调 RelaunchApp）。
-	// 此后进入「待重启」终态：维护围栏保持、库只读，恢复与再次切换返回 relaunch_pending。
+	// RelaunchRequired 在迁移并切换或只改配置（切回之前的后端）成功后为真：配置已写入，前端显示
+	// 「立即重启」（调 RelaunchApp）。此后进入「待重启」终态：维护围栏保持、库只读，恢复与再次切换
+	// 返回 relaunch_pending。
 	RelaunchRequired bool `json:"relaunch_required"`
 }
 
@@ -152,31 +158,49 @@ func (s *DatabaseSwitchService) SetProgressSink(sink func(DatabaseSwitchStatus))
 // Status 返回当前后端与语义检索能力。
 func (s *DatabaseSwitchService) Status() DatabaseBackendStatus {
 	configured := database.ActiveBackend()
+	next := s.nextBackend(configured)
 	status := DatabaseBackendStatus{
-		Backend:  string(configured),
-		Location: s.locationOf(configured),
+		Backend:     string(configured),
+		Location:    s.locationOf(configured),
+		NextBackend: string(next),
 	}
 	if database.DB != nil {
+		// 配置说 A、句柄连着 B —— 切换已写入但还没重启。
 		live := database.DB.Dialector.Name()
-		// 配置说 A、句柄连着 B —— 切换已写入但还没重启。进程环境变量在启动时就定下了，
-		// 切换只改数据目录下的 .env，所以下次启动的后端要从那份文件读；判定口径与启动时
-		// 加载那份文件的口径一致：DB_BACKEND 来自进程环境时文件压不过它，旧格式文件
-		// （没有 PREVIOUS_BACKEND）启动时不采用。
-		next := configured
-		if !s.backendFromProcessEnv() {
-			if values, err := readBackendConfig(s.dataDir); err == nil && database.BackendConfigAdoptable(values) &&
-				strings.TrimSpace(values[backendConfigKey]) != "" {
-				if persisted, err := database.ResolveBackend(database.BackendEnv{Backend: values[backendConfigKey]}); err == nil {
-					next = persisted
-				}
-			}
-		}
 		status.PendingRestart = live != string(next)
-		capability := database.PrepareSemanticVectorStorage(database.DB)
-		status.SemanticAvailable = capability.Available
-		status.SemanticReason = capability.Message
+		// 语义检索能力的检测要建表（AutoMigrate / DDL），维护围栏期间（迁移、恢复、「待重启」终态）
+		// 那是被拒绝的写入；SQLite 驱动的 HasTable 拿到被拒的空 Row 还会直接 panic，绑定调用在前端
+		// 永远等不到返回——设置页在「待重启」里就读不到 pending_restart / next_backend（I-1 / I-2）。
+		if database.MaintenanceActive() {
+			status.SemanticReason = databaseStatusMaintenanceSemanticReason
+		} else {
+			capability := database.PrepareSemanticVectorStorage(database.DB)
+			status.SemanticAvailable = capability.Available
+			status.SemanticReason = capability.Message
+		}
 	}
 	return status
+}
+
+const databaseStatusMaintenanceSemanticReason = "数据库正在迁移、恢复或等待重启，暂时无法检测"
+
+// nextBackend 返回下次启动要用的后端。进程环境变量在启动时就定下了，切换只改数据目录下的 .env，
+// 所以下次启动的后端要从那份文件读；判定口径与启动时加载那份文件的口径一致：DB_BACKEND 来自进程
+// 环境时文件压不过它，旧格式文件（没有 PREVIOUS_BACKEND）启动时不采用。读不出或取值非法时按
+// configured（本进程的后端）算。
+func (s *DatabaseSwitchService) nextBackend(configured database.Backend) database.Backend {
+	if s.backendFromProcessEnv() {
+		return configured
+	}
+	values, err := readBackendConfig(s.dataDir)
+	if err != nil || !database.BackendConfigAdoptable(values) || strings.TrimSpace(values[backendConfigKey]) == "" {
+		return configured
+	}
+	persisted, err := database.ResolveBackend(database.BackendEnv{Backend: values[backendConfigKey]})
+	if err != nil {
+		return configured
+	}
+	return persisted
 }
 
 // DatabaseSwitchReasonBackendEnvLocked：DB_BACKEND 来自进程环境变量，它压过数据目录下的配置，
@@ -236,8 +260,18 @@ func (s *DatabaseSwitchService) Preflight(target string) (*DatabaseSwitchPreflig
 	defer cleanup()
 	result.Reachable = true
 
+	// 半迁移与完整的非空库分开报（m1）：前者清空后重试即可；后者多半是「切回之前的后端」要用的
+	// 那个库，前端对它的清空要给更重的确认。检查本身出错时两者都不是，不给清空与切回的依据。
 	if err := migrator.Preflight(db); err != nil {
-		result.ReasonCode = "not_empty"
+		var notEmpty *migrator.ErrTargetNotEmpty
+		switch {
+		case errors.Is(err, migrator.ErrTargetHalfMigrated):
+			result.ReasonCode = "target_half_migrated"
+		case errors.As(err, &notEmpty):
+			result.ReasonCode = "not_empty"
+		default:
+			result.ReasonCode = "check_failed"
+		}
 		result.Message = err.Error()
 		return result, nil
 	}
@@ -517,6 +551,14 @@ func (s *DatabaseSwitchService) SwitchBackendConfigOnlyWithLifecycle(target stri
 	result.Switched = true
 	result.RelaunchRequired = true
 	result.Message = fmt.Sprintf("已改为使用 %s，重启应用后生效。切换之后在当前库里产生的改动不会带回 %s。", backend, backend)
+	// 与迁移并切换同一口径发布终态（I-1）：页面重载或设置页重新挂载时靠 SwitchStatus 补读「待重启」，
+	// 否则 WebView 一重载，只改配置之后的只读终态在界面上就没了。先置位再发布，理由同迁移那条路径。
+	s.publish(DatabaseSwitchStatus{
+		Running: false, Target: string(backend), Completed: true,
+		Location:         s.locationOf(backend),
+		RelaunchRequired: true,
+		Message:          result.Message,
+	})
 	return result, nil
 }
 

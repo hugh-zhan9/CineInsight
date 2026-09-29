@@ -623,7 +623,9 @@ describe('SettingsPage 数据库后端切换', () => {
   });
 
   it('配置已切换但未重启时给出明确提示', async () => {
-    api.GetDatabaseBackendStatus.mockResolvedValue({
+    // 只给这一次挂载：pending_restart 会让数据库分区进入「待重启」（I-1），beforeEach 的 clearAllMocks
+    // 不清实现，留着它会把后面用例的数据库操作全部停用。
+    api.GetDatabaseBackendStatus.mockResolvedValueOnce({
       backend: 'sqlite', location: '/tmp/library.db',
       semantic_available: false, semantic_reason: '', pending_restart: true
     });

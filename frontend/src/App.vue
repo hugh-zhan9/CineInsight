@@ -139,6 +139,7 @@
       <div class="relaunch-card">
         <h2>需要重启应用</h2>
         <p class="relaunch-text">{{ relaunchMessage || '数据库后端已切换，重启应用后生效；在此之前数据库保持只读。' }}</p>
+        <p v-if="relaunchDownloadsActive" class="relaunch-note" data-test="relaunch-downloads">进行中的下载会中断，重启后需回浏览器重新推送。</p>
         <p v-if="relaunchError" class="relaunch-error" data-test="relaunch-error">{{ relaunchError }}</p>
         <button type="button" class="btn btn-primary" :disabled="relaunching" data-test="relaunch-now" @click="relaunchNow">
           {{ relaunching ? '正在重启…' : '立即重启' }}
@@ -152,7 +153,7 @@
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, RelaunchApp } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, GetDatabaseSwitchStatus, ListDownloadTasks, RelaunchApp } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
@@ -175,6 +176,11 @@ import { APP_NAV_GROUPS, appCommandsMixin, isNavPageVisible } from './utils/appC
 // 扫描根的身份只由路径集合决定：别名、时间戳变了不影响"扫描范围"。
 function scanRootKey(dirs) {
   return (dirs || []).map(dir => String(dir?.path || '')).sort().join('\n');
+}
+
+// 浏览器插件的下载里还有在跑或排队的：「立即重启」会打断它们（m5）。
+function hasActiveDownloads(tasks) {
+  return (tasks || []).some(task => task?.state === 'running' || task?.state === 'queued');
 }
 
 export default {
@@ -200,6 +206,7 @@ export default {
       relaunchMessage: '',
       relaunching: false,
       relaunchError: '',
+      relaunchDownloadsActive: false,
       systemTheme: 'light',
       libraryCounts: null,
       // 已上报给后端的前后台标记；null = 还没报过。相同值不重复上报。
@@ -242,6 +249,9 @@ export default {
       return;
     }
 
+    // 「待重启」终态的补读（I-1）：切换或切回成功之后 WebView 重载（或别的原因重新挂载）时，事件早已
+    // 发过，靠 GetDatabaseSwitchStatus 把遮罩补回来。不等它：库此时被围栏挡着，下面的读取都会失败。
+    this.recoverRelaunchRequired();
     await this.loadSettings();
     await this.loadDirectories();
     this.loadTags();
@@ -254,6 +264,10 @@ export default {
       if (status?.completed && status?.relaunch_required) {
         this.showRelaunchRequired(status.message);
       }
+    });
+    // 遮罩里的「下载会中断」提示跟着下载任务的推送走（m5）。
+    this.registerRuntimeEvent('browser-download-tasks', tasks => {
+      if (this.relaunchRequired) this.relaunchDownloadsActive = hasActiveDownloads(tasks);
     });
     
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
@@ -307,8 +321,28 @@ export default {
   methods: {
     // 「待重启」终态只进不出：之后再收到事件或 emit 也只更新说明文字。
     showRelaunchRequired(message) {
+      const first = !this.relaunchRequired;
       this.relaunchRequired = true;
       if (message) this.relaunchMessage = String(message);
+      if (first) this.loadRelaunchDownloads();
+    },
+    async recoverRelaunchRequired() {
+      try {
+        const status = await GetDatabaseSwitchStatus();
+        if (status?.completed && status?.relaunch_required) this.showRelaunchRequired(status.message);
+      } catch (err) {
+        // 读不到时事件仍是主通道；设置页的数据库分区挂载时也会再补读一次。
+        this.debugLog('GetDatabaseSwitchStatus failed', { err: String(err) }, true);
+      }
+    },
+    // 有在跑或排队的浏览器插件下载时，遮罩提示重启会打断它们（m5）。下载列表读内存与已缓存的历史，
+    // 围栏期间照样能读；读不到就不提示。
+    async loadRelaunchDownloads() {
+      try {
+        this.relaunchDownloadsActive = hasActiveDownloads(await ListDownloadTasks());
+      } catch {
+        this.relaunchDownloadsActive = false;
+      }
     },
     async relaunchNow() {
       if (this.relaunching) return;
@@ -643,6 +677,12 @@ export default {
 .relaunch-error {
   font-size: 13px;
   color: var(--danger-color);
+  margin-bottom: 12px;
+}
+.relaunch-note {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--warning-text);
   margin-bottom: 12px;
 }
 .startup-error-view {

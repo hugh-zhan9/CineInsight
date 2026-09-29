@@ -6,7 +6,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'SyncScanDirectories', 'SyncImageDirectories', 'GetLibraryCounts', 'LogFrontend',
   'SetWindowForeground', 'GetVideosByIDs',
   'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListSavedLibraryViews', 'ListCollections', 'ListPeople',
-  'GetDatabaseBackendStatus', 'RelaunchApp'
+  'GetDatabaseBackendStatus', 'GetDatabaseSwitchStatus', 'ListDownloadTasks', 'RelaunchApp'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../wailsjs/go/main/App', () => api);
@@ -32,6 +32,8 @@ beforeEach(() => {
   api.ListSavedLibraryViews.mockResolvedValue([]);
   api.ListCollections.mockResolvedValue([]);
   api.ListPeople.mockResolvedValue([]);
+  api.GetDatabaseSwitchStatus.mockResolvedValue({ running: false, completed: false, failed: false });
+  api.ListDownloadTasks.mockResolvedValue([]);
   // jsdom 的 hasFocus 行为随实现变动，前后台用例自己钉住它。
   document.hasFocus = vi.fn(() => true);
   resetFeedback();
@@ -611,6 +613,58 @@ describe('「待重启」遮罩与启动错误页', () => {
     await flushPromises();
     expect(wrapper.get('[data-test="relaunch-error"]').text()).toContain('请手动重新打开应用');
     expect(wrapper.get('[data-test="relaunch-now"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('APP-02 WebView 重载后挂载时补读到「待重启」终态，直接显示全局遮罩', async () => {
+    api.GetDatabaseSwitchStatus.mockResolvedValue({
+      running: false, completed: true, relaunch_required: true, target: 'sqlite',
+      message: '已改为使用 sqlite，重启应用后生效。切换之后在当前库里产生的改动不会带回 sqlite。'
+    });
+    const wrapper = await mountApp();
+    const overlay = wrapper.get('[data-test="relaunch-overlay"]');
+    expect(overlay.text()).toContain('已改为使用 sqlite，重启应用后生效');
+    expect(overlay.findAll('button').map(button => button.text())).toEqual(['立即重启']);
+  });
+
+  it('APP-02 补读到的不是「完成且要求重启」时不显示遮罩；启动错误时不补读', async () => {
+    api.GetDatabaseSwitchStatus.mockResolvedValue({ running: false, failed: true, target: 'sqlite', message: '复制失败' });
+    let wrapper = await mountApp();
+    expect(api.GetDatabaseSwitchStatus).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="relaunch-overlay"]').exists()).toBe(false);
+    wrapper.unmount();
+
+    api.GetDatabaseSwitchStatus.mockClear();
+    api.GetStartupError.mockResolvedValue('打开数据库失败');
+    api.GetDatabaseBackendStatus.mockResolvedValue({ backend: 'sqlite' });
+    wrapper = await mountApp();
+    expect(api.GetDatabaseSwitchStatus).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="relaunch-overlay"]').exists()).toBe(false);
+  });
+
+  it('APP-02 遮罩在有下载在跑或排队时提示「进行中的下载会中断」，下载推送更新它', async () => {
+    api.ListDownloadTasks.mockResolvedValue([{ id: 'a', state: 'queued' }]);
+    const wrapper = await mountApp();
+    expect(wrapper.find('[data-test="relaunch-downloads"]').exists()).toBe(false);
+    handlers['database-switch-state']({ completed: true, relaunch_required: true, message: '迁移完成，请立即重启应用' });
+    await flushPromises();
+    expect(wrapper.get('[data-test="relaunch-downloads"]').text()).toContain('进行中的下载会中断，重启后需回浏览器重新推送');
+
+    handlers['browser-download-tasks']([{ id: 'a', state: 'done' }]);
+    await flushPromises();
+    expect(wrapper.find('[data-test="relaunch-downloads"]').exists()).toBe(false);
+  });
+
+  it('APP-02 没有在跑的下载时遮罩不提示下载', async () => {
+    api.ListDownloadTasks.mockResolvedValue([{ id: 'a', state: 'done' }]);
+    const wrapper = await mountApp();
+    // 遮罩出来之前下载推送不改提示。
+    handlers['browser-download-tasks']([{ id: 'b', state: 'running' }]);
+    await flushPromises();
+    expect(wrapper.find('[data-test="relaunch-downloads"]').exists()).toBe(false);
+    handlers['database-switch-state']({ completed: true, relaunch_required: true, message: '迁移完成' });
+    await flushPromises();
+    expect(wrapper.find('[data-test="relaunch-overlay"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="relaunch-downloads"]').exists()).toBe(false);
   });
 
   it('APP-10 启动错误页按当前后端给出 SQLite 或 Postgres 的排查提示', async () => {

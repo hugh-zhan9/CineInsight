@@ -62,7 +62,9 @@
       </div>
     </div>
 
-    <!-- 访问 PIN（D-PC45）：6–32 个字符；设置、修改、清除都会让已登录的手机重新输入。 -->
+    <!-- 访问 PIN（D-PC45）：6–32 个字符；设置、修改、清除都会让已登录的手机重新输入。
+         输入框不设 maxlength（m6）：粘贴超长的 PIN 会被静默截断，用户以为设的是整串，实际存的是前 32 个字符；
+         超长靠下面的提示与保存时的校验挡住。 -->
     <div class="setting-item short-feed-pin" data-test="short-feed-pin">
       <label for="short-feed-pin-input">访问 PIN</label>
       <p class="help-text" data-test="short-feed-pin-state">{{ pinStateText }}</p>
@@ -73,7 +75,6 @@
           type="password"
           class="text-input"
           autocomplete="new-password"
-          maxlength="32"
           :placeholder="accessStatus?.pin_set ? '输入新的 PIN' : '6–32 个字符'"
           :disabled="pinBusy || !accessLoaded"
           data-test="short-feed-pin-input"
@@ -90,6 +91,7 @@
           @click="clearPIN"
         >清除 PIN</button>
       </div>
+      <p v-if="pinInputTooLong" class="help-text settings-error" role="alert" data-test="short-feed-pin-length-hint">{{ pinInputTooLong }}</p>
       <p v-if="pinMessage" :class="['help-text', { 'settings-error': pinMessageIsError }]" data-test="short-feed-pin-message" :role="pinMessageIsError ? 'alert' : 'status'">{{ pinMessage }}</p>
       <!-- 输错太多次会锁住所有新登录（24 小时后自动解除）；在电脑上可以直接解除。 -->
       <div v-if="accessStatus?.login_locked" class="short-feed-lock" data-test="short-feed-login-locked" role="status">
@@ -125,14 +127,33 @@ import { confirmAction } from '../../utils/feedback.js';
 export const SHORT_FEED_PIN_BANNER_KEY = 'short-feed-pin-banner-dismissed';
 const PIN_MIN_LENGTH = 6;
 const PIN_MAX_LENGTH = 32;
+// bcrypt 只看前 72 字节，后端另设字节上限（short_feed_auth.go 的 shortFeedPINMaxBytes）。
+const PIN_MAX_BYTES = 72;
 
-// 与后端 SetShortFeedPIN 同口径：6–32 个字符，不含控制字符。前端先挡一遍，报错更直接。
+function pinByteLength(text) {
+  return new TextEncoder().encode(text).length;
+}
+
+// 超长的两种情况（按字符数超过 32、按 UTF-8 字节超过 72）；不超长时返回空串。输入框不设 maxlength，
+// 这条提示在输入时就显示（m6），保存时也按它拦下。
+export function shortFeedPINLengthProblem(pin) {
+  const text = String(pin ?? '');
+  const length = Array.from(text).length;
+  if (length > PIN_MAX_LENGTH) return `PIN 最多 ${PIN_MAX_LENGTH} 个字符，当前 ${length} 个`;
+  const bytes = pinByteLength(text);
+  if (bytes > PIN_MAX_BYTES) return `PIN 过长：最多 ${PIN_MAX_BYTES} 字节（约 24 个汉字），当前 ${bytes} 字节`;
+  return '';
+}
+
+// 与后端 SetShortFeedPIN 同口径：6–32 个字符、不超过 72 字节，不含控制字符。前端先挡一遍，报错更直接。
 export function shortFeedPINProblem(pin) {
-  const length = Array.from(String(pin ?? '')).length;
-  if (length < PIN_MIN_LENGTH) return `PIN 至少 ${PIN_MIN_LENGTH} 个字符`;
-  if (length > PIN_MAX_LENGTH) return `PIN 最多 ${PIN_MAX_LENGTH} 个字符`;
+  const text = String(pin ?? '');
+  if (Array.from(text).length < PIN_MIN_LENGTH) return `PIN 至少 ${PIN_MIN_LENGTH} 个字符`;
+  const tooLong = shortFeedPINLengthProblem(text);
+  if (tooLong) return tooLong;
+  // 与后端 unicode.IsControl 一致：C0、DEL 与 C1 控制字符。
   // eslint-disable-next-line no-control-regex
-  if (/[\u0000-\u001f\u007f]/.test(String(pin))) return 'PIN 不能包含控制字符';
+  if (/[\u0000-\u001f\u007f-\u009f]/.test(text)) return 'PIN 不能包含控制字符';
   return '';
 }
 
@@ -185,6 +206,11 @@ export default {
         return this.shortFeedStatus.fallback_used ? '运行中（备用端口）' : '运行中';
       }
       return '未运行';
+    },
+    // 保存时已经把同一句报在 pinMessage 里了，就不再重复显示。
+    pinInputTooLong() {
+      const problem = this.pinInput ? shortFeedPINLengthProblem(this.pinInput) : '';
+      return problem && problem !== this.pinMessage ? problem : '';
     },
     pinBannerVisible() {
       return this.accessLoaded && this.shortFeedEnabled && !this.accessStatus?.pin_set && !this.bannerDismissed;

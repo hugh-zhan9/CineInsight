@@ -29,6 +29,11 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.ConfirmBeforeDelete = input.ConfirmBeforeDelete
 		settings.DeleteOriginalFile = input.DeleteOriginalFile
 		settings.VideoExtensions = input.VideoExtensions
+		// 图片扩展名与续播口径都是设置页的普通字段（格式分区、自动化分区），此前漏在白名单外：
+		// 前端照发，tx.Save 保留旧值，保存「成功」后重开设置页又变回去（m7）。
+		// 图片扩展名与视频扩展名同样原样存（空值由使用方回退默认清单）；续播口径存归一化后的生效值。
+		settings.ImageExtensions = input.ImageExtensions
+		settings.PlaybackResumeMode = normalizePlaybackResumeMode(input.PlaybackResumeMode)
 		settings.ScanExcludePaths = normalizeScanExcludePaths(input.ScanExcludePaths)
 		settings.ImageScanExcludePaths = normalizeScanExcludePaths(input.ImageScanExcludePaths)
 		settings.PlayWeight = input.PlayWeight

@@ -54,3 +54,25 @@ func TestPrepareSemanticVectorStorageDoesNotReturnAvailableWhenExtensionCreation
 		t.Fatal("portable migration should remain available after extension failure")
 	}
 }
+
+// APP-02：维护围栏期间（含「待重启」终态）检测语义检索能力不建表、不 panic，直接报暂时无法检测。
+func TestAPP02SemanticVectorStorageSkipsDuringMaintenance(t *testing.T) {
+	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "semantic-maintenance.db")), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := BeginMaintenance()
+	defer release()
+	for name, prepare := range map[string]func(*gorm.DB) SemanticVectorCapability{
+		"video": PrepareSemanticVectorStorage,
+		"image": PrepareImageSemanticVectorStorage,
+	} {
+		capability := prepare(db)
+		if capability.Available || capability.ReasonCode != "maintenance" {
+			t.Fatalf("%s：维护期间应报 maintenance: %+v", name, capability)
+		}
+	}
+	if db.Migrator().HasTable("semantic_index_profiles") {
+		t.Fatal("维护期间不应建表")
+	}
+}

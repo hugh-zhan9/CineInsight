@@ -19,8 +19,10 @@
       </div>
     </div>
 
+    <!-- 「当前后端」取自本进程启动时的环境，切换之后仍是旧后端；这里要说切到了哪个，看 next_backend
+         （与 pending_restart 同一判定，I-2），读不到时退到本次迁移的目标。 -->
     <p v-if="databaseStatus.pending_restart" class="database-restart-notice" role="status" data-test="db-pending-restart">
-      已切换到 {{ backendLabel(databaseStatus.backend) }}，但当前仍在使用切换前的库。<strong>重启应用后生效。</strong>
+      <template v-if="pendingRestartBackend">已切换到 {{ backendLabel(pendingRestartBackend) }}，</template><template v-else>数据库后端已切换，</template>但当前仍在使用切换前的库。<strong>重启应用后生效。</strong>
     </p>
 
     <!-- 「待重启」终态（APP-02）：迁移或切回已经成功，重启前库保持只读，唯一出口是立即重启。
@@ -30,6 +32,7 @@
       <strong>需要重启应用</strong>
       <p>{{ relaunchMessage }}</p>
       <p class="help-text">重启前数据库保持只读，其他数据库操作都已停用；重启之后才会使用新的数据库。</p>
+      <p v-if="relaunchDownloadsActive" class="help-text" data-test="db-relaunch-downloads">进行中的下载会中断，重启后需回浏览器重新推送。</p>
       <p v-if="relaunch.result" class="help-text" data-test="db-relaunch-result">{{ relaunch.result.message || '应用即将重新启动。' }}</p>
       <p v-if="relaunch.error" class="backup-danger-text" role="alert" data-test="db-relaunch-error">{{ relaunch.error }}</p>
       <div>
@@ -178,9 +181,15 @@
     <h2>清空目标库</h2>
     <p>将清空 <strong>{{ backendLabel(clearDialog.target) }}</strong> 目标库：</p>
     <p><code class="database-clear-location">{{ clearDialog.location || '—' }}</code></p>
+    <!-- 目标是完整的非空库（预检 not_empty）时换成更重的警告（m1）：它很可能就是「切回之前的后端」
+         要用的那个库。半迁移或本次迁移失败时照常。 -->
+    <p v-if="clearDialog.completeLibrary" class="backup-danger-text" data-test="db-clear-complete-warning">
+      <strong>目标库里是一份完整的片库，很可能就是「切回之前的后端」要用的那个库；清空后无法恢复。</strong>
+      如需保留，请先对它做备份或改用「切回之前的后端」。
+    </p>
     <p class="backup-danger-text">
       {{ clearDialog.target === 'sqlite' ? '会删除这个库文件（只限应用数据目录里的库文件）。' : '会删除这个库里本应用建的全部表，库里的其他表不动。' }}
-      目标库里现有的数据会全部丢失，无法撤销。如果这是你以前用过的片库，请改用「切回之前的后端」。当前正在使用的库不受影响。
+      目标库里现有的数据会全部丢失，无法撤销。<template v-if="!clearDialog.completeLibrary">如果这是你以前用过的片库，请改用「切回之前的后端」。</template>当前正在使用的库不受影响。
     </p>
     <label class="database-clear-label" for="db-clear-confirm-input">输入「清空」确认</label>
     <input
@@ -210,7 +219,7 @@
 <script>
 import {
   ClearMigrationTarget, CreateDatabaseBackup, GetBackupStatus, GetDatabaseBackendStatus, GetDatabaseSwitchStatus,
-  ListDatabaseBackups, PreflightDatabaseSwitch, RelaunchApp, RestoreDatabaseBackup, RevealBackupDirectory,
+  ListDatabaseBackups, ListDownloadTasks, PreflightDatabaseSwitch, RelaunchApp, RestoreDatabaseBackup, RevealBackupDirectory,
   SelectDirectory, StartDatabaseSwitch, SwitchBackendConfigOnly
 } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
@@ -222,6 +231,9 @@ const CLEAR_CONFIRM_TEXT = '清空';
 
 const RELAUNCH_PENDING = 'relaunch_pending';
 const BACKEND_ENV_LOCKED = 'backend_env_locked';
+// 预检的两种「非空」（m1）。
+const TARGET_HALF_MIGRATED = 'target_half_migrated';
+const TARGET_NOT_EMPTY = 'not_empty';
 const BACKEND_ENV_LOCKED_TEXT = '当前后端由环境变量 DB_BACKEND 指定，应用内切换在重启后不会生效；请修改这个环境变量后重启应用。';
 
 // 只返回 error 的入口（迁移并切换、恢复备份）用消息开头的原因码表达两种特殊拒绝：
@@ -233,13 +245,22 @@ export function databaseErrorReason(err) {
   return { code: match[1], text: text.slice(match[0].length) };
 }
 
-// SQLite 恢复的两类失败（修复 I-2）：空间不足、复制临时库失败等发生在关闭数据库之前，
-// 是普通失败，当前库没被动过；关闭之后才发现 WAL 没写回之类属于致命错误，
-// 后端会中止恢复并让应用退出。后者的消息都带「应用必须重启 / 请重启应用」。
+// 恢复失败的分类按后端给的原因码前缀（m2，与 relaunch_pending: 同口径），不再靠中文子串：
+//   - restore_committed：数据已经恢复进库，是之后的重连等步骤失败，应用需要重启；
+//   - restore_fatal：没恢复成功，但本进程已不能继续用库（例如 WAL 没写回而中止），应用需要重启；
+//   - 没有前缀：普通失败（空间不足、复制临时库失败等发生在关闭数据库之前），当前库没被动过。
+// 带前缀的两类，后端随后都会让应用自行退出。
 export function restoreErrorKind(err) {
   const text = String(err?.message || err || '').trim();
-  const fatal = /应用必须重启|请重启应用/.test(text);
-  return { fatal, text };
+  const match = /^(restore_fatal|restore_committed)\s*:\s*/.exec(text);
+  if (!match) return { code: '', fatal: false, committed: false, text };
+  const committed = match[1] === 'restore_committed';
+  return { code: match[1], fatal: !committed, committed, text: text.slice(match[0].length) };
+}
+
+// 浏览器插件的下载任务里还有在跑或排队的（m5）：重启会打断它们，而且重启后的任务不能直接重试。
+function hasActiveDownloads(tasks) {
+  return (tasks || []).some(task => task?.state === 'running' || task?.state === 'queued');
 }
 
 // 数据库后端切换与数据库备份两个分区，连同「选择备份 / 确认恢复」「清空目标库」弹窗与
@@ -259,17 +280,19 @@ export default {
   data() {
     return {
       CLEAR_CONFIRM_TEXT,
-      databaseStatus: { backend: '', location: '', semantic_available: false, semantic_reason: '', pending_restart: false },
+      databaseStatus: { backend: '', location: '', semantic_available: false, semantic_reason: '', pending_restart: false, next_backend: '' },
       switchTarget: 'sqlite',
       switchPreflight: null,
       switchStatus: null,
       switchBusy: false,
       switchStatusOff: null,
+      downloadsOff: null,
       switchNotice: null,
       configOnlyBusy: false,
       halfMigratedTarget: '',
-      clearDialog: { show: false, target: '', location: '', confirmText: '', busy: false, error: '' },
+      clearDialog: { show: false, target: '', location: '', completeLibrary: false, confirmText: '', busy: false, error: '' },
       relaunch: { required: false, message: '', busy: false, error: '', result: null },
+      relaunchDownloadsActive: false,
       restoreExit: null,
       backupStatus: null,
       backupFiles: [],
@@ -289,10 +312,16 @@ export default {
         this.applySwitchStatus(status);
       });
       if (typeof switchOff === 'function') this.switchStatusOff = switchOff;
+      // 「待重启」面板里的下载提示跟着下载任务的推送走：下载在面板打开之后才开始或结束也对得上。
+      const downloadsOff = window.runtime.EventsOn('browser-download-tasks', (tasks) => {
+        if (this.relaunchRequired) this.relaunchDownloadsActive = hasActiveDownloads(tasks);
+      });
+      if (typeof downloadsOff === 'function') this.downloadsOff = downloadsOff;
     }
   },
   beforeUnmount() {
     this.switchStatusOff?.();
+    this.downloadsOff?.();
   },
   computed: {
     switchRunning() {
@@ -320,9 +349,15 @@ export default {
     canMigrate() {
       return !this.databaseLocked && !this.switchBusy && this.preflightMatchesTarget && Boolean(this.switchPreflight?.empty);
     },
+    // 预检把两种「非空」分开报（m1）：target_half_migrated 是残留的未完成迁移，清空后重试即可；
+    // not_empty 是一份完整的片库，多半就是「切回之前的后端」要用的那个。
+    targetHalfMigrated() {
+      return this.preflightMatchesTarget && this.switchPreflight?.reason_code === TARGET_HALF_MIGRATED;
+    },
     targetHasData() {
       const preflight = this.switchPreflight;
-      return this.preflightMatchesTarget && Boolean(preflight?.reachable) && !preflight?.empty && !this.envLocked;
+      return this.preflightMatchesTarget && Boolean(preflight?.reachable) && !preflight?.empty
+        && preflight?.reason_code === TARGET_NOT_EMPTY;
     },
     canConfigOnly() {
       return !this.databaseLocked && this.targetHasData;
@@ -333,10 +368,14 @@ export default {
     failedTargetLocation() {
       return this.failedTarget ? (this.switchStatus?.location || '') : '';
     },
-    // 迁移失败、目标库残留半迁移、或检查发现目标库非空时才给「清空目标库」。
+    // 迁移失败、目标库残留半迁移、或检查发现目标库是一份完整的片库时给「清空目标库」；后者的确认更重。
+    // 「待重启」终态里一律不给：那时的目标库就是重启后要用的库。
     canClearTarget() {
       if (this.databaseLocked) return false;
-      return Boolean(this.failedTarget) || this.halfMigratedTarget === this.switchTarget || this.targetHasData;
+      return Boolean(this.failedTarget) || this.halfMigratedTarget === this.switchTarget || this.targetHalfMigrated || this.targetHasData;
+    },
+    pendingRestartBackend() {
+      return this.databaseStatus?.next_backend || this.switchStatus?.target || '';
     },
     preflightText() {
       if (!this.switchPreflight) return '';
@@ -374,8 +413,12 @@ export default {
         // 目标默认选成另一个后端：选中当前后端没有意义，切换按钮也会禁用。
         this.switchTarget = this.databaseStatus.backend === 'sqlite' ? 'postgres' : 'sqlite';
       } catch (err) {
-        this.databaseStatus = { backend: '', location: '', semantic_available: false, semantic_reason: '', pending_restart: false };
+        this.databaseStatus = { backend: '', location: '', semantic_available: false, semantic_reason: '', pending_restart: false, next_backend: '' };
+        return;
       }
+      // 配置已指向另一个后端、本进程还连着旧库：切换已经成功，只是这一页没赶上那次终态（WebView 重载、
+      // 设置页重新挂载，I-1）。与补读到 completed && relaunch_required 同样进入「待重启」。
+      if (this.databaseStatus?.pending_restart) this.openRelaunch();
     },
     // 页面重新挂载时补上错过的迁移终态：迁移在后台跑，事件可能在别的页面时就到了。
     async loadSwitchStatus() {
@@ -389,6 +432,9 @@ export default {
     applySwitchStatus(status) {
       this.switchStatus = status || null;
       this.switchBusy = Boolean(status?.running);
+      // 迁移结束（失败或完成）后之前那次检查结果已经过时（m3）：失败后目标库可能残留半迁移，
+      // 完成后目标库就是重启后要用的库。失败时目标库位置与「清空」入口由失败状态本身提供。
+      if (status?.failed || status?.completed) this.switchPreflight = null;
       if (status?.completed && status?.relaunch_required) {
         this.openRelaunch(status.message);
       }
@@ -404,7 +450,19 @@ export default {
       this.showBackupDialog = false;
       this.clearDialog = { ...this.clearDialog, show: false };
       // 同一次终态只往上报一次（事件与挂载时的补读可能各到一次）。
-      if (first) this.$emit('relaunch-required', { message: this.relaunchMessage });
+      if (first) {
+        this.$emit('relaunch-required', { message: this.relaunchMessage });
+        this.loadRelaunchDownloads();
+      }
+    },
+    // 「立即重启」会打断浏览器插件的下载（m5）：有在跑或排队的才提示。下载列表只读内存与已缓存的历史，
+    // 维护围栏期间照样能读；读不到就不提示。
+    async loadRelaunchDownloads() {
+      try {
+        this.relaunchDownloadsActive = hasActiveDownloads(await ListDownloadTasks());
+      } catch {
+        this.relaunchDownloadsActive = false;
+      }
     },
     // 两种带原因码的拒绝统一在这里处理；返回 true 表示已经处理掉了。
     handleReasonCode(code, text) {
@@ -433,18 +491,23 @@ export default {
         message: `迁移会把当前库的全部数据复制到 ${this.backendLabel(this.switchTarget)}，原库保持不变。`
           + '迁移期间会暂停后台任务并拒绝写入；完成后必须重启应用才会使用新库，重启前数据库保持只读。\n\n'
           + '注意：切换之后在新库里产生的改动不会回到旧库。继续吗？',
-        confirmText: '开始迁移'
+        confirmText: '开始迁移',
+        danger: true
       })) return;
+      const target = this.switchTarget;
+      const location = this.switchPreflight?.location || '';
       this.switchBusy = true;
       this.switchStatus = null;
       this.switchNotice = null;
       try {
-        await StartDatabaseSwitch(this.switchTarget);
+        await StartDatabaseSwitch(target);
       } catch (err) {
         this.switchBusy = false;
         const reason = databaseErrorReason(err);
         if (this.handleReasonCode(reason.code, reason.text)) return;
-        this.switchStatus = { failed: true, target: '', message: reason.text };
+        // 同步报错同样是一次失败（m3）：留住目标与目标库位置，「清空目标库」入口不丢；检查结果作废。
+        this.switchPreflight = null;
+        this.switchStatus = { failed: true, target, location, message: reason.text };
       }
     },
     // 切回之前的后端（D-PC55）：只改配置、不迁移，切换之后的改动不会带回，成功即进入「待重启」。
@@ -482,7 +545,9 @@ export default {
     openClearDialog() {
       const target = this.failedTarget || this.switchTarget;
       const location = this.failedTarget ? this.failedTargetLocation : (this.switchPreflight?.location || '');
-      this.clearDialog = { show: true, target, location, confirmText: '', busy: false, error: '' };
+      // 本次迁移失败、或目标库残留半迁移时照常；检查结果说它是一份完整的片库时换成更重的确认（m1）。
+      const completeLibrary = !this.failedTarget && this.targetHasData && (this.switchPreflight?.target || this.switchTarget) === target;
+      this.clearDialog = { show: true, target, location, completeLibrary, confirmText: '', busy: false, error: '' };
     },
     closeClearDialog() {
       if (this.clearDialog.busy) return;
@@ -603,10 +668,15 @@ export default {
       } catch (err) {
         const reason = databaseErrorReason(err);
         if (this.handleReasonCode(reason.code, reason.text)) return;
-        const kind = restoreErrorKind(reason.text);
+        const kind = restoreErrorKind(err);
         this.showBackupDialog = false;
         this.selectedBackup = null;
-        if (kind.fatal) {
+        if (kind.committed) {
+          // 数据已经恢复进库，是之后的重连等步骤失败：后端同样会让应用退出。
+          this.restoreExit = { fatal: false, committed: true };
+          this.backupMessageIsError = true;
+          this.backupMessage = `数据已恢复，应用需要重启，即将自动退出；重新打开后即可使用恢复的数据。（${kind.text}）`;
+        } else if (kind.fatal) {
           // 致命错误后端同样会让应用退出（正式库没被替换）。
           this.restoreExit = { fatal: true };
           this.backupMessageIsError = true;

@@ -236,12 +236,14 @@ func TestAPP02StartDatabaseSwitchCancelledDuringPreflightDoesNotStartAndReleases
 // APP02 / m11：App 层「切回之前的后端」的接线——与恢复、迁移共用 restoreMu 且用 TryLock（被占用时立即
 // 拒绝、不排队）；成功时经 enterDatabaseRestoreMode 立起维护围栏并停在「待重启」终态。改成传 nil 生命周期
 // 或改用 Lock 都会让这条用例变红。
-func TestAPP02SwitchBackendConfigOnlyWiresMaintenanceAndRejectsWhileBusy(t *testing.T) {
+// prepareConfigOnlySwitchBack 让当前后端是 postgres（源库是 dbtest 的库），上一个后端（SQLite）的库
+// 非空、配置里记着它：「切回之前的后端」的前提。返回数据目录与后端配置文件路径。
+func prepareConfigOnlySwitchBack(t *testing.T) (string, string) {
+	t.Helper()
 	dataDir := t.TempDir()
 	t.Setenv("DB_BACKEND", "postgres")
 	t.Setenv("SQLITE_PATH", "")
 	openAppLiveDatabase(t, func() *gorm.DB { return dbtest.OpenRaw(t) })
-	// 上一个后端（SQLite）的库非空，配置里记着它。
 	target, err := gorm.Open(sqlite.Open(database.SQLiteDSN(database.SQLitePath(dataDir))), &gorm.Config{})
 	if err != nil {
 		t.Fatal(err)
@@ -259,6 +261,11 @@ func TestAPP02SwitchBackendConfigOnlyWiresMaintenanceAndRejectsWhileBusy(t *test
 	if err := os.WriteFile(configPath, []byte("DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	return dataDir, configPath
+}
+
+func TestAPP02SwitchBackendConfigOnlyWiresMaintenanceAndRejectsWhileBusy(t *testing.T) {
+	dataDir, configPath := prepareConfigOnlySwitchBack(t)
 	app := newMaintenanceTestApp(dataDir)
 	t.Cleanup(app.releaseDatabaseRestoreMode)
 
@@ -300,6 +307,55 @@ func TestAPP02SwitchBackendConfigOnlyWiresMaintenanceAndRejectsWhileBusy(t *test
 	}
 	if values, err := godotenv.Read(configPath); err != nil || values["DB_BACKEND"] != "sqlite" || values["PREVIOUS_BACKEND"] != "postgres" {
 		t.Fatalf("配置应改为切回的后端: %#v err=%v", values, err)
+	}
+	// I-1：WebView 重载后前端靠 GetDatabaseSwitchStatus 补读「待重启」，只改配置同样要读得到。
+	if status := app.GetDatabaseSwitchStatus(); !status.Completed || !status.RelaunchRequired || status.Target != "sqlite" {
+		t.Fatalf("只改配置成功后应能补读到待重启终态: %#v", status)
+	}
+	// I-2：提示条要说「已切换到哪个」：Backend 仍是本进程的旧后端，NextBackend 是切换到的后端。
+	if backend := app.GetDatabaseBackendStatus(); backend.Backend != "postgres" || backend.NextBackend != "sqlite" {
+		t.Fatalf("后端状态应报下次启动的后端: %#v", backend)
+	}
+}
+
+// APP02 / m7：ConfigureJellyfin 与恢复、切换共用 restoreMu 但用 TryLock——那两件事可能跑很久，设置页的
+// 保存不能一直挂着等，拿不到锁立即拒绝；「待重启」终态（切换或切回成功）报「后端已切换，请先重启应用」，
+// 恢复备份之后的终态仍报恢复口径。
+func TestAPP02ConfigureJellyfinDoesNotWaitForMaintenanceAndReportsRelaunchPending(t *testing.T) {
+	dataDir, _ := prepareConfigOnlySwitchBack(t)
+	app := newMaintenanceTestApp(dataDir)
+	t.Cleanup(app.releaseDatabaseRestoreMode)
+	input := services.JellyfinConfigInput{Enabled: false}
+
+	app.restoreMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := app.ConfigureJellyfin(input)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		app.restoreMu.Unlock()
+		if !errors.Is(err, errDatabaseMaintenanceBusy) || err.Error() != "数据库恢复或切换正在进行，请稍后再试" {
+			t.Fatalf("恢复或切换进行中应立即拒绝: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		app.restoreMu.Unlock()
+		<-done
+		t.Fatal("restoreMu 被占用时应立即拒绝，而不是排队等锁")
+	}
+
+	app.restoreTerminal = true
+	if _, err := app.ConfigureJellyfin(input); err == nil || err.Error() != "数据库恢复后请先重启应用" {
+		t.Fatalf("恢复备份之后的终态沿用恢复口径: %v", err)
+	}
+	app.restoreTerminal = false
+
+	if result, err := app.SwitchBackendConfigOnly("sqlite"); err != nil || !result.Switched {
+		t.Fatalf("切回上一个后端应成功: %#v err=%v", result, err)
+	}
+	if _, err := app.ConfigureJellyfin(input); !errors.Is(err, errJellyfinRelaunchPending) || err.Error() != "后端已切换，请先重启应用" {
+		t.Fatalf("待重启时应报「后端已切换，请先重启应用」: %v", err)
 	}
 }
 

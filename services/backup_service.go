@@ -53,7 +53,25 @@ type DatabaseRestoreError struct {
 	Err       error
 }
 
-func (err *DatabaseRestoreError) Error() string { return err.Err.Error() }
+// 恢复失败后必须重启的两类错误，消息开头带原因码（m2，与 relaunch_pending: 同口径），前端据此分类，
+// 不再靠中文子串：
+//   - restore_committed：数据已经恢复进库，是之后的重连、状态落库失败，应用需要重启；
+//   - restore_fatal：没有恢复成功（正式库没被替换或恢复本身失败），但本进程已不能继续用库，应用需要重启。
+const (
+	DatabaseRestoreReasonCommitted = "restore_committed"
+	DatabaseRestoreReasonFatal     = "restore_fatal"
+)
+
+func (err *DatabaseRestoreError) Error() string {
+	switch {
+	case err.Committed:
+		return DatabaseRestoreReasonCommitted + ": " + err.Err.Error()
+	case err.Fatal:
+		return DatabaseRestoreReasonFatal + ": " + err.Err.Error()
+	default:
+		return err.Err.Error()
+	}
+}
 func (err *DatabaseRestoreError) Unwrap() error { return err.Err }
 
 func DatabaseRestoreRequiresRestart(err error) bool {

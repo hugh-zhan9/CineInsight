@@ -1341,3 +1341,11 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 路径锁先 TryLock，拿不到再起辅助 goroutine。在「待重启」终态下可能留下个数有上限、且不持锁的阻塞 goroutine。
 
 合入后 SQLite 全量通过（8 个包）。
+
+**修复 M 整合**（2026-09-30）：P-033 评审提出的 I-1、I-2 和 m1–m7 已全部修复。新增原因码 `check_failed`（主代理接受）；`SettingsPage.test.js` 有一行 mock 改为只作用一次（主代理接受）；另外修掉一处早已存在的 panic：维护期间调用 `Status()` 建语义检索表时会崩溃。
+
+主代理整合时把这处防护下沉到 `database` 包，`PrepareSemanticVectorStorage` 和 `PrepareImageSemanticVectorStorage` 在维护期间都直接返回 `maintenance`、不建表。这样 `app_ai` 和 `app_image` 两个调用点也一并兜住，对应测试为 `TestAPP02SemanticVectorStorageSkipsDuringMaintenance`，已做变异验证。设置白名单补上了 `ImageExtensions` 和 `PlaybackResumeMode`。绑定只多出 `next_backend` 一个字段。
+
+合入后 SQLite 全量通过（8 个包），`npm test` 全量通过（81 个文件、1053 条用例）。
+
+**遗留**：恢复失败的提示里会原样带出系统错误文本，可能包含绝对路径。这个问题早已存在，留到收尾时一起清洗。

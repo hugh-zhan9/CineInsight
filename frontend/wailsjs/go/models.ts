@@ -2556,6 +2556,7 @@ export namespace services {
 	    semantic_available: boolean;
 	    semantic_reason: string;
 	    pending_restart: boolean;
+	    next_backend: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new DatabaseBackendStatus(source);
@@ -2568,6 +2569,7 @@ export namespace services {
 	        this.semantic_available = source["semantic_available"];
 	        this.semantic_reason = source["semantic_reason"];
 	        this.pending_restart = source["pending_restart"];
+	        this.next_backend = source["next_backend"];
 	    }
 	}
 	export class DatabaseSwitchConfigResult {

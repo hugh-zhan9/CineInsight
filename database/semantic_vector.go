@@ -29,6 +29,11 @@ func PrepareSemanticVectorStorage(db *gorm.DB) SemanticVectorCapability {
 	if db == nil {
 		return SemanticVectorCapability{ReasonCode: "database_unavailable", Message: "数据库未初始化"}
 	}
+	// 维护围栏期间（恢复备份、切换后端、待重启）不做任何建表：写入会被围栏拒绝，
+	// 后面的 AutoMigrate / DDL 在拒绝之后会让驱动 panic。调用方都传活动库，维护结束后会重新检测。
+	if MaintenanceActive() {
+		return SemanticVectorCapability{Backend: db.Dialector.Name(), ReasonCode: "maintenance", Message: "数据库正在迁移、恢复或等待重启，暂时无法检测"}
+	}
 	if err := db.AutoMigrate(&models.SemanticIndexProfile{}, &models.VideoSemanticIndex{}, &models.SemanticIndexAttempt{}); err != nil {
 		return SemanticVectorCapability{Backend: db.Dialector.Name(), ReasonCode: "metadata_migration_failed", Message: boundedSemanticVectorMessage(err)}
 	}

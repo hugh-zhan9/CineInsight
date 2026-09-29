@@ -279,6 +279,90 @@ func TestBackupServiceFatalMaintenanceEntryStopsBeforeRestore(t *testing.T) {
 	}
 }
 
+// APP01 / m2：恢复之后必须重启的两类错误在消息开头带原因码，与 relaunch_pending: 同口径，前端据此
+// 分类、不再靠中文子串：数据已恢复进库但重连失败是 restore_committed，没恢复成功但本进程已不能继续
+// 用库是 restore_fatal。普通失败（数据库没被动过）不带前缀。
+func TestAPP01RestoreErrorsCarryCommittedOrFatalPrefix(t *testing.T) {
+	cause := errors.New("原因")
+	for _, tc := range []struct {
+		err  *DatabaseRestoreError
+		want string
+	}{
+		{&DatabaseRestoreError{Committed: true, Fatal: true, Err: cause}, "restore_committed: 原因"},
+		{&DatabaseRestoreError{Committed: true, Err: cause}, "restore_committed: 原因"},
+		{&DatabaseRestoreError{Fatal: true, Err: cause}, "restore_fatal: 原因"},
+		{&DatabaseRestoreError{Err: cause}, "原因"},
+	} {
+		if got := tc.err.Error(); got != tc.want {
+			t.Fatalf("Committed=%v Fatal=%v: got %q want %q", tc.err.Committed, tc.err.Fatal, got, tc.want)
+		}
+	}
+
+	service, runner, directory := setupBackupServiceTest(t, 7, 24)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	name := "cineinsight-20260803-120000.000000000.dump"
+	path := filepath.Join(directory, name)
+	content := []byte("valid dump")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := hashFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := BackupRestoreRequest{Name: name, Size: int64(len(content)), Fingerprint: fingerprint}
+
+	// pg_restore 成功、重连失败：数据已经恢复进库。
+	err = service.RestoreBackupWithLifecycle(context.Background(), request, func() error { return nil }, func() error {
+		return errors.New("reconnect failed")
+	})
+	if err == nil || !strings.HasPrefix(err.Error(), DatabaseRestoreReasonCommitted+": ") || !DatabaseRestoreRequiresRestart(err) {
+		t.Fatalf("恢复成功后重连失败应带 restore_committed 前缀: %v", err)
+	}
+
+	// pg_restore 失败、重连也失败：没恢复成功，但本进程已不能继续用库。
+	runner.calls = nil
+	failingRestore := &failingFinalRestoreRunner{fakeBackupRunner: runner}
+	service.runner = failingRestore
+	err = service.RestoreBackupWithLifecycle(context.Background(), request, func() error { return nil }, func() error {
+		return errors.New("reconnect failed")
+	})
+	if err == nil || !strings.HasPrefix(err.Error(), DatabaseRestoreReasonFatal+": ") || strings.HasPrefix(err.Error(), DatabaseRestoreReasonCommitted) {
+		t.Fatalf("恢复失败且重连失败应带 restore_fatal 前缀: %v", err)
+	}
+	service.runner = runner
+
+	// 进维护模式时的致命错误。
+	err = service.RestoreBackupWithLifecycle(context.Background(), request, func() error {
+		return &DatabaseRestoreError{Fatal: true, Err: errors.New("关闭数据库连接失败，应用必须重启")}
+	}, nil)
+	if err == nil || !strings.HasPrefix(err.Error(), DatabaseRestoreReasonFatal+": ") {
+		t.Fatalf("进维护模式的致命错误应带 restore_fatal 前缀: %v", err)
+	}
+
+	// 普通失败：数据库没被动过，不带前缀。
+	runner.failList = true
+	err = service.RestoreBackupWithLifecycle(context.Background(), request, func() error { return nil }, func() error { return nil })
+	if err == nil || strings.HasPrefix(err.Error(), DatabaseRestoreReasonFatal) || strings.HasPrefix(err.Error(), DatabaseRestoreReasonCommitted) || DatabaseRestoreRequiresRestart(err) {
+		t.Fatalf("普通失败不应带前缀: %v", err)
+	}
+}
+
+// failingFinalRestoreRunner 只让真正的恢复（不带 --list 的 pg_restore）失败，校验照常通过。
+type failingFinalRestoreRunner struct {
+	*fakeBackupRunner
+}
+
+func (runner *failingFinalRestoreRunner) Run(ctx context.Context, name string, args []string, env []string) error {
+	if name == "pg_restore" && !containsString(args, "--list") {
+		runner.calls = append(runner.calls, backupRunnerCall{name: name, args: append([]string(nil), args...)})
+		return errors.New("pg_restore failed")
+	}
+	return runner.fakeBackupRunner.Run(ctx, name, args, env)
+}
+
 func TestBackupServiceRestoreRejectsUnlistedPathsWithoutRunningCommands(t *testing.T) {
 	service, runner, _ := setupBackupServiceTest(t, 7, 24)
 	if err := service.RestoreBackup(context.Background(), BackupRestoreRequest{Name: "../outside.dump", Size: 1, Fingerprint: "x"}); err == nil {
@@ -1180,6 +1264,10 @@ func TestAPP01SQLiteRestoreAbortsWhenWALStillHoldsCommits(t *testing.T) {
 		}, nil)
 	if err == nil || !DatabaseRestoreRequiresRestart(err) || !strings.Contains(err.Error(), "WAL") {
 		t.Fatalf("-wal 非空时应中止恢复并要求重启: %v", err)
+	}
+	// m2：正式库没被替换，是致命错误而不是「已恢复」，前端据前缀分类。
+	if !strings.HasPrefix(err.Error(), DatabaseRestoreReasonFatal+": ") {
+		t.Fatalf("WAL 中止应带 restore_fatal 前缀: %v", err)
 	}
 	if got, err := hashFile(livePath); err != nil || got != liveHash {
 		t.Fatalf("正式库文件不得被替换: hash=%s want=%s err=%v", got, liveHash, err)

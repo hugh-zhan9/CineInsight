@@ -302,9 +302,10 @@ func TestAPP02ClearHalfMigratedSQLiteTargetThenRetrySucceeds(t *testing.T) {
 	closeTarget()
 
 	service := NewDatabaseSwitchService(dataDir)
+	// m1 之后半迁移有自己的原因码，不再与完整的非空库一起报 not_empty。
 	preflight, err := service.Preflight("sqlite")
-	if err != nil || preflight.Empty || preflight.ReasonCode != "not_empty" {
-		t.Fatalf("半迁移目标库预检应不通过: %#v err=%v", preflight, err)
+	if err != nil || preflight.Empty || !preflight.Reachable || preflight.ReasonCode != "target_half_migrated" {
+		t.Fatalf("半迁移目标库预检应不通过并报 target_half_migrated: %#v err=%v", preflight, err)
 	}
 
 	var release func()
@@ -791,5 +792,156 @@ func TestAPP02PreflightErrCarriesBackendEnvLockedPrefix(t *testing.T) {
 	notEmpty := (&DatabaseSwitchPreflight{Reachable: true, ReasonCode: "not_empty", Message: "目标库非空"}).Err()
 	if notEmpty == nil || notEmpty.Error() != "目标库非空" {
 		t.Fatalf("其他原因只带说明文字: %v", notEmpty)
+	}
+}
+
+// writeCompleteSQLiteTarget 在数据目录里造一个完整的非空 SQLite 库：「切回之前的后端」要用的那种。
+func writeCompleteSQLiteTarget(t *testing.T, dataDir string) {
+	t.Helper()
+	target, closeTarget := openSQLiteFile(t, database.SQLitePath(dataDir))
+	defer closeTarget()
+	if err := target.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Create(&models.Video{Name: "old.mp4", Path: "/old/old.mp4", Directory: "/old"}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// APP02 / m1：预检把半迁移的目标库与完整的非空库分开报——前者 target_half_migrated（清空后重试），
+// 后者 not_empty（多半就是「切回之前的后端」要用的库，前端对它的清空要给更重的确认）。检查本身出错时
+// 报 check_failed，两者都不算。
+func TestAPP02PreflightSeparatesHalfMigratedTargetFromCompleteLibrary(t *testing.T) {
+	halfDir := useSQLiteAsSwitchTarget(t)
+	source, _ := openSwitchSource(t)
+	half, closeHalf := openSQLiteFile(t, database.SQLitePath(halfDir))
+	makeHalfMigratedTarget(t, source, half, database.BackendSQLite)
+	closeHalf()
+	halfService := NewDatabaseSwitchService(halfDir)
+	halfService.backendFromProcessEnvOverride = func() bool { return false }
+	preflight, err := halfService.Preflight("sqlite")
+	if err != nil || preflight.ReasonCode != "target_half_migrated" || preflight.Empty || !preflight.Reachable {
+		t.Fatalf("半迁移目标库应报 target_half_migrated: %#v err=%v", preflight, err)
+	}
+	if preflight.Location != database.SQLitePath(halfDir) {
+		t.Fatalf("预检结果应带目标库位置: %#v", preflight)
+	}
+
+	completeDir := t.TempDir()
+	writeCompleteSQLiteTarget(t, completeDir)
+	completeService := NewDatabaseSwitchService(completeDir)
+	completeService.backendFromProcessEnvOverride = func() bool { return false }
+	preflight, err = completeService.Preflight("sqlite")
+	if err != nil || preflight.ReasonCode != "not_empty" || preflight.Empty || !preflight.Reachable {
+		t.Fatalf("完整的非空库应报 not_empty: %#v err=%v", preflight, err)
+	}
+
+	// 检查本身出错（这里让计数查询失败）：既不是半迁移也不是完整的库。
+	failing, closeFailing := openSQLiteFile(t, filepath.Join(t.TempDir(), "failing.db"))
+	defer closeFailing()
+	if err := failing.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := failing.Callback().Query().Before("gorm:query").Register("test:fail_preflight_count", func(tx *gorm.DB) {
+		_ = tx.AddError(errors.New("读取目标库失败"))
+	}); err != nil {
+		t.Fatal(err)
+	}
+	failingService := NewDatabaseSwitchService(t.TempDir())
+	failingService.backendFromProcessEnvOverride = func() bool { return false }
+	failingService.openTargetOverride = func(database.Backend) (*gorm.DB, func(), error) { return failing, func() {}, nil }
+	preflight, err = failingService.Preflight("sqlite")
+	if err != nil || preflight.ReasonCode != "check_failed" || preflight.Empty {
+		t.Fatalf("检查出错应报 check_failed: %#v err=%v", preflight, err)
+	}
+}
+
+// APP02 / I-1：只改配置（切回之前的后端）成功后与迁移并切换同一口径发布「待重启」终态，WebView 重载或
+// 设置页重新挂载时靠 SwitchStatus 补读得到；发布时已进入待重启。写配置失败时不发布完成终态。
+func TestAPP02ConfigOnlySwitchPublishesRelaunchStatusForReload(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	service := NewDatabaseSwitchService(dataDir)
+	service.backendFromProcessEnvOverride = func() bool { return false }
+	writeCompleteSQLiteTarget(t, dataDir)
+	if err := persistBackendChoice(dataDir, database.BackendPostgres, database.BackendSQLite); err != nil {
+		t.Fatal(err)
+	}
+	var statuses []DatabaseSwitchStatus
+	pendingAtPublish := []bool{}
+	service.SetProgressSink(func(status DatabaseSwitchStatus) {
+		statuses = append(statuses, status)
+		pendingAtPublish = append(pendingAtPublish, service.RelaunchPending())
+	})
+
+	persistBackendChoiceFn = func(string, database.Backend, database.Backend) error { return errors.New("disk full") }
+	t.Cleanup(func() { persistBackendChoiceFn = persistBackendChoice })
+	if _, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite", func() error { return nil }, func() {}); err == nil {
+		t.Fatal("配置写不进去时应报错")
+	}
+	if len(statuses) != 0 || service.SwitchStatus().Completed {
+		t.Fatalf("写配置失败不应发布完成终态: %#v", statuses)
+	}
+	persistBackendChoiceFn = persistBackendChoice
+
+	result, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite", func() error { return nil }, func() {})
+	if err != nil || !result.Switched {
+		t.Fatalf("切回上一个后端应成功: %#v err=%v", result, err)
+	}
+	if len(statuses) != 1 || !pendingAtPublish[0] {
+		t.Fatalf("成功后应发布一次终态，且发布时已进入待重启: %#v pending=%v", statuses, pendingAtPublish)
+	}
+	reloaded := service.SwitchStatus()
+	if !reloaded.Completed || !reloaded.RelaunchRequired || reloaded.Running || reloaded.Failed {
+		t.Fatalf("补读应得到完成且要求重启的终态: %#v", reloaded)
+	}
+	if reloaded.Target != "sqlite" || reloaded.Location != database.SQLitePath(dataDir) || reloaded.Message != result.Message {
+		t.Fatalf("终态应带目标、位置与结果说明: %#v result=%#v", reloaded, result)
+	}
+	if statuses[0] != reloaded {
+		t.Fatalf("推给前端的事件与补读的状态应一致: event=%#v status=%#v", statuses[0], reloaded)
+	}
+}
+
+// APP02 / I-2：Status 的 Backend 取自本进程启动时的环境，切换之后仍是旧后端；「待重启」提示条要说
+// 「已切换到哪个」，看的是 NextBackend——与 PendingRestart 同一判定。
+func TestAPP02StatusReportsNextBackendForPendingRestartNotice(t *testing.T) {
+	openSwitchSource(t)
+	dataDir := t.TempDir()
+	service := NewDatabaseSwitchService(dataDir)
+	service.backendFromProcessEnvOverride = func() bool { return false }
+	live := database.Backend(database.DB.Dialector.Name())
+	other := database.BackendPostgres
+	if live == database.BackendPostgres {
+		other = database.BackendSQLite
+	}
+	t.Setenv("DB_BACKEND", string(live))
+
+	status := service.Status()
+	if status.NextBackend != string(live) || status.PendingRestart {
+		t.Fatalf("没有切换时下次启动仍用当前后端: %#v", status)
+	}
+	if err := persistBackendChoice(dataDir, other, live); err != nil {
+		t.Fatal(err)
+	}
+	status = service.Status()
+	if status.Backend != string(live) {
+		t.Fatalf("前置：Backend 仍是本进程启动时的后端: %#v", status)
+	}
+	if status.NextBackend != string(other) || !status.PendingRestart {
+		t.Fatalf("切换写入配置后 NextBackend 应是切换到的后端: %#v", status)
+	}
+	// 「待重启」终态里维护围栏一直立着：Status 照样要返回（此前检测语义检索时建表被围栏拒绝，
+	// SQLite 驱动随即 panic，前端的绑定调用永远等不到返回），语义检索报暂时无法检测。
+	release := database.BeginMaintenance()
+	fenced := service.Status()
+	release()
+	if fenced.NextBackend != string(other) || !fenced.PendingRestart || fenced.SemanticAvailable || fenced.SemanticReason == "" {
+		t.Fatalf("维护围栏期间 Status 应照常报下次启动的后端: %#v", fenced)
+	}
+	// DB_BACKEND 来自进程环境时文件压不过它：下次启动仍是当前后端，不提示重启。
+	service.backendFromProcessEnvOverride = func() bool { return true }
+	status = service.Status()
+	if status.NextBackend != string(live) || status.PendingRestart {
+		t.Fatalf("环境变量锁定时下次启动仍用当前后端: %#v", status)
 	}
 }

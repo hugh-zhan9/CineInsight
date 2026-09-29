@@ -9,7 +9,7 @@ const feedback = vi.hoisted(() => ({ confirmAction: vi.fn() }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
 vi.mock('../../utils/feedback.js', () => feedback);
 
-import MobileSection, { SHORT_FEED_PIN_BANNER_KEY, shortFeedPINProblem } from './MobileSection.vue';
+import MobileSection, { SHORT_FEED_PIN_BANNER_KEY, shortFeedPINLengthProblem, shortFeedPINProblem } from './MobileSection.vue';
 
 const QR = 'data:image/png;base64,AAAA';
 const wrappers = [];
@@ -97,6 +97,43 @@ describe('访问 PIN 与登录锁定（D-PC45）', () => {
     await flushPromises();
     expect(api.SetShortFeedPIN).not.toHaveBeenCalled();
     expect(find(wrapper, 'pin-message').text()).toContain('至少 6');
+  });
+
+  it('PLAY-01 粘贴 40 个字符时提示过长而不是静默截断，保存被拦下', async () => {
+    const wrapper = await mountSection();
+    const input = find(wrapper, 'pin-input');
+    expect(input.attributes('maxlength')).toBeUndefined();
+    const pasted = 'p'.repeat(40);
+    await input.setValue(pasted);
+    // 输入框里是完整的 40 个字符，没有被截成 32 个。
+    expect(input.element.value).toBe(pasted);
+    expect(find(wrapper, 'pin-length-hint').text()).toContain('最多 32 个字符，当前 40 个');
+
+    await find(wrapper, 'pin-save').trigger('click');
+    await flushPromises();
+    expect(api.SetShortFeedPIN).not.toHaveBeenCalled();
+    expect(find(wrapper, 'pin-message').text()).toContain('最多 32 个字符');
+    // 同一句不在两处重复显示。
+    expect(exists(wrapper, 'pin-length-hint')).toBe(false);
+
+    // 删回合法长度，提示随之消失。
+    await input.setValue('p'.repeat(32));
+    expect(exists(wrapper, 'pin-length-hint')).toBe(false);
+  });
+
+  it('PLAY-01 字符数没超但超过后端 72 字节上限时同样提示过长', async () => {
+    expect(shortFeedPINLengthProblem('汉'.repeat(24))).toBe('');
+    expect(shortFeedPINProblem('汉'.repeat(24))).toBe('');
+    expect(shortFeedPINLengthProblem('汉'.repeat(25))).toContain('最多 72 字节');
+    expect(shortFeedPINProblem('汉'.repeat(25))).toContain('当前 75 字节');
+    expect(shortFeedPINProblem('abc\u0085def')).toContain('控制字符');
+
+    const wrapper = await mountSection();
+    await find(wrapper, 'pin-input').setValue('汉'.repeat(25));
+    expect(find(wrapper, 'pin-length-hint').text()).toContain('72 字节');
+    await find(wrapper, 'pin-save').trigger('click');
+    await flushPromises();
+    expect(api.SetShortFeedPIN).not.toHaveBeenCalled();
   });
 
   it('PLAY-01 设置 PIN 后清空输入并刷新状态；清除 PIN 先确认', async () => {

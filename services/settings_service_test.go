@@ -96,3 +96,43 @@ func TestUpdateSettingsTrimsOnlineMetadataSourceColumns(t *testing.T) {
 		t.Fatalf("期望存入去空白后的值，实际: %+v", saved)
 	}
 }
+
+// APP08 / m7：图片扩展名与续播口径是设置页的普通字段，此前漏在保存白名单外——前端照发，
+// 后端保留旧值，保存「成功」后重开设置页又变回去。保存后读回必须是刚存的值；续播口径存
+// 归一化后的生效值（不认识的取值按默认 resume）。
+func TestAPP08UpdateSettingsPersistsImageExtensionsAndPlaybackResumeMode(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	service := &SettingsService{}
+
+	if err := service.UpdateSettings(models.Settings{
+		ImageExtensions:    ".jpg,.png,.heic",
+		PlaybackResumeMode: PlaybackResumeModeRestartWatched,
+	}); err != nil {
+		t.Fatalf("保存设置失败: %v", err)
+	}
+	saved, err := service.GetSettings()
+	if err != nil {
+		t.Fatalf("读取设置失败: %v", err)
+	}
+	if saved.ImageExtensions != ".jpg,.png,.heic" {
+		t.Fatalf("图片扩展名未保存，实际 %q", saved.ImageExtensions)
+	}
+	if saved.PlaybackResumeMode != PlaybackResumeModeRestartWatched {
+		t.Fatalf("续播口径未保存，实际 %q", saved.PlaybackResumeMode)
+	}
+
+	// 清空图片扩展名是合法操作（使用方回退默认清单）；续播口径的非法取值存成默认。
+	if err := service.UpdateSettings(models.Settings{ImageExtensions: "", PlaybackResumeMode: "sometimes"}); err != nil {
+		t.Fatalf("再次保存设置失败: %v", err)
+	}
+	saved, err = service.GetSettings()
+	if err != nil {
+		t.Fatalf("读取设置失败: %v", err)
+	}
+	if saved.ImageExtensions != "" {
+		t.Fatalf("清空图片扩展名后应为空，实际 %q", saved.ImageExtensions)
+	}
+	if saved.PlaybackResumeMode != PlaybackResumeModeResume {
+		t.Fatalf("非法续播口径应存成默认 resume，实际 %q", saved.PlaybackResumeMode)
+	}
+}
