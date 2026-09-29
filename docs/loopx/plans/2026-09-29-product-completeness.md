@@ -821,6 +821,39 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
   - 共享追加文件在 3-way 合并时可能冲突，由主代理手工解决。
 - Resume note：尚未开始执行。基线 HEAD 为 `43efd8a`，双后端与 `npm test` 全绿（概要设计 §9）。设计文档与本计划 v1.0 已于 `5f3c9f6` 提交；本次修订随下一次提交一起进入。
 
+### 执行中追加的下游要求（来自各实施评审，执行对应切片时必须带上）
+
+- **P-014**：用 P-012/13 修复中定义的唯一旁挂字幕判定函数写入 `has_sidecar`，不要另写判定。
+- **P-020**：
+  - 在 `AddTagToVideo` / `AddTagToImage` 的事务中调用 `SupersedeCandidatesForManualTag` / `SupersedeImageCandidatesForManualTag`；
+  - `VideoService` 实现 `SetVideoWatchedFromLink`，调用时不触发观察者。
+- **P-022**：
+  - 从 Jellyfin 保存视图还原筛选条件时，同时读取 `PersonIDsJSON`，并经过 `activePersonIDs` 过滤（P-012/13 评审 I-5）；
+  - 删除遇到 `ErrTrashUnsupportedVolume` 时沿用既有的失败映射。
+- **P-025**：
+  - 代理入队（`playback_proxy_service.go`）显式排除失效视图（P-012/13 评审 Minor 3）；
+  - `playback_proxy_service.go` 里写 `is_stale` 时补上失效原因。
+- **P-027**：恢复路径改为调用 P-021 修复提供的手机端生命周期函数，并先检查 `ShouldStart()`。
+- **P-029 接线清单**（各切片交付报告中的接线项汇总于此，执行 P-029 时逐项勾掉）：
+  - `aiTaggingService.SetIdleGate(idleGate)`；
+  - 观察者双向注入：`resetMovieChartService` 重建服务后要重新注入；
+  - `SetVideoRelocatedNotifier` → `video-relocated` 事件；
+  - 启动扫描完成后 `emitLibraryScanSummary(startup)`，手动扫描用 `manual`；
+  - `MoveDirectory` 成功后执行 `reconfigureLibraryWatcher`；
+  - `startShortFeedServer` 改为走生命周期锁并检查 `ShouldStart()`；
+  - 删除 `app.go` 与 `app_settings.go` 中已成为空操作的 `SyncFeedback` 调用；
+  - `UndoTagPersonConversion` 的头像清理改在启动时注入；
+  - P-023 / P-024 / P-027 的接线项。
+- **P-033**：
+  - 删除设置页的「反馈回流」开关入口（P-021 结论：它只控制收藏与点赞的投影）；
+  - 显式载荷补上 `cleanup_*` 字段；
+  - 榜单撤销「想看」时提示「同时从想看片单移除」（P-019 的已接受语义）。
+- **P-039**：`docs/short-feed-lan.md` 中「无登录、无 PIN、无二维码」与投影机制的描述需要更新。
+- **P-040**：回收站列表方法名改回设计名（旧的 `ListTrashEntries` 删除后，把 `ListTrashEntriesPage` 改为 `ListTrashEntries`）；统一各处 `*BatchResult` 类型的命名。
+- **真机交接**：
+  - 系统废纸篓在没有「完全磁盘访问」权限时，恢复与清除能否正常执行（P-010 评审 I7）；
+  - IINA「从头播完」的缺口。
+
 ### 计划评审记录
 
 **评审一**（2026-09-29）
