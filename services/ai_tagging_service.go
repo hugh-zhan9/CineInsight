@@ -767,8 +767,15 @@ func (s *AITaggingService) resolveOfficialTagInTx(tx *gorm.DB, candidate models.
 		return 0, ErrAITagCandidateNoTag
 	}
 	var tag models.Tag
-	if err := tx.First(&tag, *candidate.MatchedTagID).Error; err != nil {
+	// Unscoped：标签被软删（删除 / 合并）时要报「标签已删除或已合并」，不能落成「候选不存在」。
+	if err := tx.Unscoped().First(&tag, *candidate.MatchedTagID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return 0, ErrAITagCandidateTagDeleted
+		}
 		return 0, err
+	}
+	if tag.DeletedAt.IsValid() {
+		return 0, ErrAITagCandidateTagDeleted
 	}
 	if !isAITagEligible(tag) {
 		return 0, ErrAITagCandidateTagUnavailable
@@ -1005,13 +1012,28 @@ var (
 	ErrAITagCandidateNotApprovable  = errors.New("candidate confidence is not approvable")
 	ErrAITagCandidateNoTag          = errors.New("candidate is not matched to the configured tag library")
 	ErrAITagCandidateTagUnavailable = errors.New("candidate tag is no longer available in the configured tag library")
+	// ErrAITagCandidateTagDeleted：候选指向的标签已被删除或合并（软删 / 行已不在）。
+	ErrAITagCandidateTagDeleted = fmt.Errorf("%w (tag deleted or merged)", ErrAITagCandidateTagUnavailable)
 )
 
-// aiTagApproveMessage 把批准失败翻成给用户看的中文。
+// 批量批准里 superseded 项的文案，按候选真正被作废的原因给（META-11）。
+const (
+	aiTagSupersededBySibling    = "同标签的其他候选已批准"
+	aiTagSupersededByManualTag  = "已手动添加该标签"
+	aiTagSupersededByReanalysis = "视频已重新分析（词表变化或手动重新分析），这条候选已失效"
+	aiTagSupersededByTagDeleted = "标签已删除或已合并"
+	aiTagSupersededOutOfLibrary = "候选标签已不在 AI 词表中"
+	aiTagSupersededUnknown      = "候选已失效"
+)
+
+// aiTagApproveMessage 把批准失败翻成给用户看的中文。superseded 的具体原因由
+// supersededCandidateReason 查库得出，这里只给兜底文案。
 func aiTagApproveMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrAITagCandidateSuperseded):
-		return "候选已被同标签的其他候选替代"
+		return aiTagSupersededUnknown
+	case errors.Is(err, ErrAITagCandidateTagDeleted):
+		return aiTagSupersededByTagDeleted + "，无法批准"
 	case errors.Is(err, ErrAITagCandidateNotPending):
 		return "候选已不在待审状态"
 	case errors.Is(err, ErrAITagCandidateNotApprovable):
@@ -1026,9 +1048,65 @@ func aiTagApproveMessage(err error) string {
 	return "批准失败：" + err.Error()
 }
 
+// supersededCandidateReason 查出一条 superseded 候选真正被作废的原因（META-11）。候选表没有
+// 原因列，按作废路径各自留下的痕迹倒推，先查痕迹最确定的：
+//  1. rejected_at 非空：只有 SupersedeCandidatesForManualTag（手动加标签）会给 superseded 写它；
+//  2. 同视频同标签有一条在本候选生成之后批准的候选：被那次批准连带作废；
+//  3. 标签已不在 / 已软删：删除或合并；标签还在但出了 AI 词表（改成人物分类等）；
+//  4. 视频上已有该标签（未留痕的旧路径手动添加）；
+//  5. 其余是重新分析（证据指纹变化、词表变化重排、手动重新分析）作废的。
+//
+// 读库失败只影响文案，给兜底的「候选已失效」，不让一次查询失败把整批结果变成错误。
+func (s *AITaggingService) supersededCandidateReason(candidateID uint) string {
+	var candidate models.AITagCandidate
+	if err := database.DB.Select("id", "video_id", "matched_tag_id", "created_at", "rejected_at").
+		First(&candidate, candidateID).Error; err != nil {
+		return aiTagSupersededUnknown
+	}
+	if candidate.RejectedAt != nil {
+		return aiTagSupersededByManualTag
+	}
+	if candidate.MatchedTagID == nil {
+		return aiTagSupersededByTagDeleted
+	}
+	tagID := *candidate.MatchedTagID
+	var approvedSiblings int64
+	if err := database.DB.Model(&models.AITagCandidate{}).
+		Where("video_id = ? AND matched_tag_id = ? AND id <> ? AND status = ? AND approved_at >= ?",
+			candidate.VideoID, tagID, candidate.ID, models.AITagCandidateStatusApproved, candidate.CreatedAt).
+		Count(&approvedSiblings).Error; err != nil {
+		return aiTagSupersededUnknown
+	}
+	if approvedSiblings > 0 {
+		return aiTagSupersededBySibling
+	}
+	var tag models.Tag
+	if err := database.DB.Unscoped().First(&tag, tagID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return aiTagSupersededByTagDeleted
+		}
+		return aiTagSupersededUnknown
+	}
+	if tag.DeletedAt.IsValid() {
+		return aiTagSupersededByTagDeleted
+	}
+	if !isAITagEligible(tag) {
+		return aiTagSupersededOutOfLibrary
+	}
+	var tagged int64
+	if err := database.DB.Table("video_tags").Where("video_id = ? AND tag_id = ?", candidate.VideoID, tagID).
+		Count(&tagged).Error; err != nil {
+		return aiTagSupersededUnknown
+	}
+	if tagged > 0 {
+		return aiTagSupersededByManualTag
+	}
+	return aiTagSupersededByReanalysis
+}
+
 // ApproveCandidates 逐项沿用单条批准的事务（D-PC29）；一条失败不影响其余。
-// 重复 id 只处理一次。同视频同标签里先批准的一条会作废其余，后面被作废的项标为
-// superseded（不算失败）。
+// 重复 id 只处理一次。已经作废（含同视频同标签里先批准的一条连带作废其余）的项标为
+// superseded（不算失败），文案按真实原因给。
 func (s *AITaggingService) ApproveCandidates(ids []uint) AITagBatchResult {
 	result := AITagBatchResult{Results: make([]AITagBatchItemResult, 0, len(ids))}
 	seen := make(map[uint]struct{}, len(ids))
@@ -1041,7 +1119,7 @@ func (s *AITaggingService) ApproveCandidates(ids []uint) AITagBatchResult {
 		item, err := s.ApproveCandidate(id)
 		if errors.Is(err, ErrAITagCandidateSuperseded) {
 			result.Superseded++
-			result.Results = append(result.Results, AITagBatchItemResult{ID: id, Superseded: true, Message: aiTagApproveMessage(err)})
+			result.Results = append(result.Results, AITagBatchItemResult{ID: id, Superseded: true, Message: s.supersededCandidateReason(id)})
 			continue
 		}
 		if err != nil {
@@ -1058,15 +1136,24 @@ func (s *AITaggingService) ApproveCandidates(ids []uint) AITagBatchResult {
 // ErrAITagFilterTagRequired：按筛选批准必须先选标签，空筛选不执行（避免一键批准全部待审）。
 var ErrAITagFilterTagRequired = errors.New("请先选择一个标签再批准筛选结果")
 
-// approvableCandidateIDsByFilter 把筛选条件解析成候选 id。口径与列表查询一致：标签
-// 精确匹配、置信度（可选）精确匹配、状态 pending；另外只含视频未删除且置信度可批准
-// （high / medium）的候选——low 永远批不了，计入预览会让「预览 N 条、批准 M 条」对不上。
-func (s *AITaggingService) approvableCandidateIDsByFilter(filter AITagCandidateFilter) ([]uint, error) {
+// approvableCandidate 是按筛选解析出的一条可批准候选。
+type approvableCandidate struct {
+	ID      uint
+	VideoID uint
+}
+
+// approvableCandidatesByFilter 把筛选条件解析成候选（按 id 升序）。口径与列表查询一致：标签
+// 精确匹配、置信度（可选）精确匹配、状态 pending；另外只含视频未删除、置信度可批准
+// （high / medium）、且标签仍在 AI 词表里（未删除、非自动、非人物分类）的候选——这些条件
+// 任何一条不满足都批不了，计入预览会让「预览 N 条、批准 M 条」对不上。
+func (s *AITaggingService) approvableCandidatesByFilter(filter AITagCandidateFilter) ([]approvableCandidate, error) {
 	if filter.TagID == 0 {
 		return nil, ErrAITagFilterTagRequired
 	}
 	query := database.DB.Model(&models.AITagCandidate{}).
 		Joins("INNER JOIN videos ON videos.id = ai_tag_candidates.video_id AND videos.deleted_at IS NULL").
+		Joins(`INNER JOIN tags ON tags.id = ai_tag_candidates.matched_tag_id AND tags.deleted_at IS NULL
+			AND COALESCE(tags.automatic_kind, '') = '' AND TRIM(COALESCE(tags.namespace, '')) <> ?`, personTagNamespace).
 		Where("ai_tag_candidates.status = ?", models.AITagCandidateStatusPending).
 		Where("ai_tag_candidates.matched_tag_id = ?", filter.TagID).
 		Where("ai_tag_candidates.confidence IN ?", []string{models.AITagConfidenceHigh, models.AITagConfidenceMedium})
@@ -1077,27 +1164,39 @@ func (s *AITaggingService) approvableCandidateIDsByFilter(filter AITagCandidateF
 		}
 		query = query.Where("ai_tag_candidates.confidence = ?", confidence)
 	}
-	var ids []uint
-	if err := query.Order("ai_tag_candidates.id").Pluck("ai_tag_candidates.id", &ids).Error; err != nil {
+	var candidates []approvableCandidate
+	if err := query.Select("ai_tag_candidates.id AS id, ai_tag_candidates.video_id AS video_id").
+		Order("ai_tag_candidates.id").Scan(&candidates).Error; err != nil {
 		return nil, err
 	}
-	return ids, nil
+	return candidates, nil
 }
 
-// CountCandidatesByFilter 给前端在批准前显示计数预览，口径与 ApproveCandidatesByFilter 相同。
+// CountCandidatesByFilter 给前端在批准前显示计数预览，口径与 ApproveCandidatesByFilter 的
+// 实际批准数相同：筛选固定了标签，同一视频的多条候选只会批准第一条（其余被它连带作废），
+// 所以按视频去重计数。
 func (s *AITaggingService) CountCandidatesByFilter(filter AITagCandidateFilter) (int, error) {
-	ids, err := s.approvableCandidateIDsByFilter(filter)
+	candidates, err := s.approvableCandidatesByFilter(filter)
 	if err != nil {
 		return 0, err
 	}
-	return len(ids), nil
+	videos := make(map[uint]struct{}, len(candidates))
+	for _, candidate := range candidates {
+		videos[candidate.VideoID] = struct{}{}
+	}
+	return len(videos), nil
 }
 
 // ApproveCandidatesByFilter 在服务端把筛选条件解析成候选 id，再交给 ApproveCandidates。
+// 同视频的后几条会以 superseded（同标签的其他候选已批准）出现在逐项结果里，前端据此局部移除。
 func (s *AITaggingService) ApproveCandidatesByFilter(filter AITagCandidateFilter) (AITagBatchResult, error) {
-	ids, err := s.approvableCandidateIDsByFilter(filter)
+	candidates, err := s.approvableCandidatesByFilter(filter)
 	if err != nil {
 		return AITagBatchResult{}, err
+	}
+	ids := make([]uint, 0, len(candidates))
+	for _, candidate := range candidates {
+		ids = append(ids, candidate.ID)
 	}
 	return s.ApproveCandidates(ids), nil
 }

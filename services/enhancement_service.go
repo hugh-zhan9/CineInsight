@@ -21,8 +21,8 @@ import (
 )
 
 // EnhancementService 是视频超分任务的唯一入口：PostgreSQL 任务表为事实源，
-// 全应用单 worker 串行执行（P-012 定稿 §4）。原视频只读；所有失败/取消
-// 路径都必须清理隐藏工作目录，不遗留输出记录。
+// 全应用单 worker 串行执行（P-012 定稿 §4）。原视频只读；失败路径清理隐藏工作目录、
+// 不遗留输出记录——空间不足与用户取消除外，它们保留检查点供重试续跑（D-PC24）。
 type EnhancementService struct {
 	capability   EnhancementRuntimeCapability
 	videoService *VideoService
@@ -316,11 +316,11 @@ func (s *EnhancementService) CancelTask(taskID uint) error {
 	case models.EnhancementStatusCancelled:
 		return nil // 取消幂等
 	case models.EnhancementStatusQueued:
-		if err := s.transitionStatus(task.ID, models.EnhancementStatusQueued, models.EnhancementStatusCancelled, "cancelled", "用户取消"); err != nil {
+		if err := s.transitionStatus(task.ID, models.EnhancementStatusQueued, models.EnhancementStatusCancelled, enhancementCodeCancelled, "用户取消"); err != nil {
 			// CAS 竞争：任务恰好已被 worker 领取，按运行中取消处理。
 			return s.cancelRunningTask(task.ID)
 		}
-		s.cleanupTaskWorkdir(task)
+		// 排队中的任务可能是「从检查点重试」排回来的：取消同样保留检查点（D-PC24）。
 		s.emitTaskByID(task.ID)
 		return nil
 	case models.EnhancementStatusRunning, models.EnhancementStatusCancelRequested:
@@ -349,7 +349,11 @@ func (s *EnhancementService) cancelRunningTask(taskID uint) error {
 	return nil
 }
 
-// RetryTask 复用同一任务记录重试失败/已取消任务：清零进度、重跑全部 preflight。
+// RetryTask 复用同一任务记录重试失败/已取消任务。
+//
+// 空间不足与用户取消保留了检查点（D-PC24）：运行时与模型版本都没变时从断点继续——保留固化
+// 的源 SHA-256 与帧数记账，worker 进 preflight 后用它校验源（变了就 source_changed 并清理），
+// 再逐段校验清单大小与哈希。其余失败码与版本已变的情况照旧清零进度、重跑全部 preflight。
 func (s *EnhancementService) RetryTask(taskID uint) (*EnhancementTaskView, error) {
 	if !s.capability.Available {
 		return nil, fmt.Errorf("%w: %s", ErrEnhancementUnavailable, s.capability.Message)
@@ -361,12 +365,16 @@ func (s *EnhancementService) RetryTask(taskID uint) (*EnhancementTaskView, error
 	if task.Status != models.EnhancementStatusFailed && task.Status != models.EnhancementStatusCancelled {
 		return nil, fmt.Errorf("只有失败或已取消的任务可以重试（当前 %s）", task.Status)
 	}
-	s.cleanupTaskWorkdir(task)
+	spec := EnhancementProfiles[task.Profile]
+	resume := enhancementCheckpointKept(task.ErrorCode) &&
+		task.RuntimeVersion == s.capability.RuntimeVersion && task.ModelVersion == spec.ModelName
+	if !resume {
+		s.cleanupTaskWorkdir(task)
+	}
 	info, err := os.Lstat(task.Video.Path)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("unsupported_input: 源文件不可读或不是常规文件")
 	}
-	spec := EnhancementProfiles[task.Profile]
 	updates := map[string]any{
 		"status": models.EnhancementStatusQueued, "phase": models.EnhancementPhasePreflight,
 		"source_size": info.Size(), "source_mod_time_ns": info.ModTime().UnixNano(), "source_sha256": "",
@@ -374,6 +382,11 @@ func (s *EnhancementService) RetryTask(taskID uint) (*EnhancementTaskView, error
 		"total_frames": 0, "committed_frames": 0,
 		"error_code": "", "error_summary": "",
 		"started_at": nil, "finished_at": nil,
+	}
+	if resume {
+		delete(updates, "source_sha256")
+		delete(updates, "total_frames")
+		delete(updates, "committed_frames")
 	}
 	if err := database.DB.Model(&models.VideoEnhancementTask{}).
 		Where("id = ? AND status IN ?", task.ID, []string{models.EnhancementStatusFailed, models.EnhancementStatusCancelled}).
@@ -552,6 +565,17 @@ func (s *EnhancementService) transitionStatus(taskID uint, from, to, errorCode, 
 	return nil
 }
 
+// 保留检查点的两个结束码（D-PC24）：空间不足与用户取消都不是任务本身有问题，重试应当接着做。
+const (
+	enhancementCodeDiskInsufficient = "disk_insufficient"
+	enhancementCodeCancelled        = "cancelled"
+)
+
+// enhancementCheckpointKept 报告这个结束码是否保留工作目录与检查点。
+func enhancementCheckpointKept(code string) bool {
+	return code == enhancementCodeDiskInsufficient || code == enhancementCodeCancelled
+}
+
 func (s *EnhancementService) failTask(taskID uint, code, summary string) {
 	now := s.now()
 	_ = database.DB.Model(&models.VideoEnhancementTask{}).
@@ -560,10 +584,13 @@ func (s *EnhancementService) failTask(taskID uint, code, summary string) {
 			"status": models.EnhancementStatusFailed, "error_code": code,
 			"error_summary": sanitizeEnhancementError(summary), "finished_at": &now,
 		}).Error
-	// 失败不得留下临时文件（D-007）：终态统一清理隐藏工作目录。
-	var task models.VideoEnhancementTask
-	if err := database.DB.First(&task, taskID).Error; err == nil {
-		s.cleanupTaskWorkdir(task)
+	// 失败不得留下临时文件（D-007）：终态清理隐藏工作目录。空间不足除外（D-PC24 收窄）：
+	// 检查点留着，腾出空间后重试从断点继续。
+	if !enhancementCheckpointKept(code) {
+		var task models.VideoEnhancementTask
+		if err := database.DB.First(&task, taskID).Error; err == nil {
+			s.cleanupTaskWorkdir(task)
+		}
 	}
 	s.emitTaskByID(taskID)
 }
@@ -623,7 +650,11 @@ func (s *EnhancementService) ensureOutputNameFree(video models.Video, basename s
 }
 
 func (s *EnhancementService) ensureDiskFloor(sourcePath string, sourceSize int64, width, height int) error {
-	required := EnhancementRequiredDiskBytes(sourceSize, width, height)
+	return s.ensureDiskFree(sourcePath, EnhancementRequiredDiskBytes(sourceSize, width, height))
+}
+
+// ensureDiskFree 检查源所在卷至少还有 required 字节可用。
+func (s *EnhancementService) ensureDiskFree(sourcePath string, required int64) error {
 	free, err := s.diskFree(filepath.Dir(sourcePath))
 	if err != nil {
 		return fmt.Errorf("disk_insufficient: 无法检查磁盘空间: %v", err)

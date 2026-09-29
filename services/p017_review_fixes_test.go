@@ -10,7 +10,8 @@ import (
 
 // 本文件验收 P-017 独立评审的修复项（META-01 / META-02 / META-14）。
 
-// META01：删除「人物」分类标签（曾关联视频）后重排：只挂该标签的视频变为无人工标签。
+// META01：删除「人物」分类标签（曾关联视频）后只做定向重排：只挂该标签的视频删完就没有
+// 人工标签，重新进入自动分析；其他视频（包括同样没有任何标签的视频）状态与指纹不变。
 func TestTagServiceMETA01DeletePersonTagWithMediaResetsAITagging(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	video := p017Video(t, "person-only.mp4")
@@ -25,8 +26,11 @@ func TestTagServiceMETA01DeletePersonTagWithMediaResetsAITagging(t *testing.T) {
 	if err := database.DB.Create(&unused).Error; err != nil {
 		t.Fatal(err)
 	}
-	// 状态行挂在另一个已有人工标签的视频上，不应被无关删除影响。
+	// 状态行挂在只有这个人物标签的视频上：删除该标签后它应被重置。
 	p017AIState(t, video.ID)
+	// 另一个本来就没有任何人工标签、已分析完的视频：全库重排会把它打回 pending，定向重排不得碰它。
+	untagged := p017Video(t, "untagged.mp4")
+	p017AIState(t, untagged.ID)
 	svc := &TagService{}
 
 	// 从未关联过媒体的人物标签：没有状态受影响，不重排。
@@ -40,7 +44,14 @@ func TestTagServiceMETA01DeletePersonTagWithMediaResetsAITagging(t *testing.T) {
 		t.Fatal(err)
 	}
 	if got := p017Fingerprint(t, video.ID); got != "" {
-		t.Fatalf("删除曾关联媒体的人物标签应重排，fingerprint=%q", got)
+		t.Fatalf("删除曾关联媒体的人物标签应重排挂过它的视频，fingerprint=%q", got)
+	}
+	var other models.AITaggingState
+	if err := database.DB.Where("video_id = ?", untagged.ID).First(&other).Error; err != nil {
+		t.Fatal(err)
+	}
+	if other.EvidenceFingerprint != "fp" || other.Status != models.AITaggingStateStatusCompleted {
+		t.Fatalf("与该标签无关的视频不得被重排: %+v", other)
 	}
 }
 
@@ -69,9 +80,9 @@ func TestTagServiceMETA01MergePersonTagsDoesNotReset(t *testing.T) {
 	}
 }
 
-// META02：改名硬删了与已转换标签同名的软删行后，撤销返回 tag_name_taken（不是 tag_gone），
-// 最近转换列表的 undoable 如实反映。
-func TestTagPersonConversionMETA02UndoAfterSoftDeletedRowHardDeletedReturnsNameTaken(t *testing.T) {
+// META02：改名硬删了与已转换标签同名的软删行后，撤销返回 conversion_not_undoable（原标签已被
+// 清理，不是「名字被占用」），记录保持 applied，最近转换列表的 undoable 如实反映。
+func TestTagPersonConversionMETA02UndoAfterSoftDeletedRowHardDeletedReturnsNotUndoable(t *testing.T) {
 	tag, _, _ := conversionFixture(t)
 	svc := &TagService{}
 	result, err := svc.ConvertTagToPerson(TagPersonConversionRequest{TagID: tag.ID, TagName: tag.Name, CreateNew: true})
@@ -90,11 +101,16 @@ func TestTagPersonConversionMETA02UndoAfterSoftDeletedRowHardDeletedReturnsNameT
 	if err := svc.UpdateTag(other.ID, tag.Name, "#123456"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.UndoTagPersonConversion(result.ConversionID); !errors.Is(err, ErrTagNameTaken) {
-		t.Fatalf("应返回 tag_name_taken: %v", err)
+	_, err = svc.UndoTagPersonConversion(result.ConversionID)
+	if !errors.Is(err, ErrConversionNotUndoable) || err.Error() != "conversion_not_undoable" {
+		t.Fatalf("应返回 conversion_not_undoable: %v", err)
 	}
-	if err := database.DB.First(&models.TagPersonConversion{}, result.ConversionID).Error; err != nil {
+	var record models.TagPersonConversion
+	if err := database.DB.First(&record, result.ConversionID).Error; err != nil {
 		t.Fatal(err)
+	}
+	if record.State != models.TagPersonConversionApplied {
+		t.Fatalf("撤销失败必须整体回滚，记录仍是 applied: %+v", record)
 	}
 	records, _ = svc.ListTagPersonConversions(10)
 	if records[0].Undoable {

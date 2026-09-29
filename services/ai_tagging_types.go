@@ -151,7 +151,7 @@ type AITagLibraryInput struct {
 type AITagBatchItemResult struct {
 	ID uint `json:"id"`
 	OK bool `json:"ok"`
-	// Superseded 表示该候选被同视频同标签的另一条批准作废，不算失败。
+	// Superseded 表示该候选已失效（同标签候选已批准、已手动添加、标签变化或重新分析等，原因见 Message），不算失败。
 	Superseded bool                 `json:"superseded,omitempty"`
 	Message    string               `json:"message,omitempty"`
 	Item       *AITaggingReviewItem `json:"item,omitempty"`
@@ -163,7 +163,7 @@ type AITagBatchResult struct {
 	Requested int `json:"requested"`
 	Succeeded int `json:"succeeded"`
 	Failed    int `json:"failed"`
-	// Superseded 是被同标签的其他候选作废的条数，与 Failed 互斥。
+	// Superseded 是已失效候选的条数（原因各异，见逐项 Message），与 Failed 互斥。
 	Superseded int                    `json:"superseded"`
 	Results    []AITagBatchItemResult `json:"results"`
 }

@@ -42,6 +42,10 @@ var (
 	ErrConversionNotFound   = errors.New("conversion_not_found")
 	ErrConversionNotApplied = errors.New("conversion_not_applied")
 	ErrTagNameTaken         = errors.New("tag_name_taken")
+	// ErrConversionNotUndoable：原标签行已被硬删（同名新建或改名会清掉软删行），没有东西可以
+	// 复原。前端文案「原标签已被清理，无法撤销这次转换」（META-02）；不复用 tag_name_taken，
+	// 那个码的处置是「先改掉占名的标签再试」，而这里再怎么改名也撤销不了。
+	ErrConversionNotUndoable = errors.New("conversion_not_undoable")
 )
 
 const conversionIDChunk = 500
@@ -157,11 +161,9 @@ func (s *TagService) ConvertTagToPerson(input TagPersonConversionRequest) (*TagP
 			return fmt.Errorf("写入转换记录失败: %w", err)
 		}
 		result.ConversionID = record.ID
-		if err := deleteTagTx(tx, &tag); err != nil {
-			return err
-		}
-		// 转换属于「转人物」：候选与待重排状态需要对账（人物分类的标签本不在词表内）。
-		return resetAITaggingAfterLibraryChange(tx)
+		// 「人物」分类的标签不在词表内：deleteTagTx 走定向对账（只重置删完就没有人工标签的
+		// 视频、只作废指向它的候选），不再额外做一次全库重排（META-01）。
+		return deleteTagTx(tx, &tag)
 	})
 	if err != nil {
 		return nil, err
@@ -272,10 +274,10 @@ func (s *TagService) UndoTagPersonConversion(conversionID uint) (*TagPersonConve
 		// ② 还原标签。标签行仍是活跃的，说明期间有人用同名重新建过（会复活同一行）。
 		var tag models.Tag
 		if err := tx.Unscoped().First(&tag, record.TagID).Error; err != nil {
-			// 标签行已不在：软删行被同名的新建或改名硬删了（updateTag 的既有行为），对撤销
-			// 来说与「名字被占用」是同一件事，用契约内的错误码。
+			// 标签行已不在：软删行被同名的新建或改名硬删了（updateTag 的既有行为）。
+			// 原标签的 ID 与关联都回不来了，报 conversion_not_undoable，事务回滚、记录仍是 applied。
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrTagNameTaken
+				return ErrConversionNotUndoable
 			}
 			return err
 		}
@@ -352,8 +354,10 @@ func (s *TagService) UndoTagPersonConversion(conversionID uint) (*TagPersonConve
 				return err
 			}
 		}
-		// ⑥ 词表对账。
-		return resetAITaggingAfterLibraryChange(tx)
+		// ⑥ 词表对账：只转换「人物」分类标签，而人物分类不在 AI 词表里（规则 6），撤销只是把它
+		// 加回来，词表内容不变；恢复关系的视频重新有了人工标签，自动路径本就会跳过它们（规则 1）。
+		// 因此不做全库重置——那会把所有无标签视频打回 pending、重抽证据（复审 B 裁决）。
+		return nil
 	})
 	if err != nil {
 		return nil, err

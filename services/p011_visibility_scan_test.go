@@ -319,11 +319,7 @@ func TestNarrowReconcileClearsOfflineRootAndRefinesMissingLIB07(t *testing.T) {
 
 // staleGuardPendingFixes 是扫描出的、不在 P-010 / P-011 可修改范围内的违规点。每一项都带说明，由后续切片修复后
 // 从这里删除；新增违规点不允许往这里加。key 是「文件:函数名」。
-var staleGuardPendingFixes = map[string]string{
-	// 播放代理生成失败时只写了 is_stale=true，没有写 stale_reason。playback_proxy_service.go 归 P-025（只改队列排位），
-	// 这一处由主代理在 P-029 整合时改成同时写 stale_reason（例如复用 markVideoStale 的带原因写法）。
-	"playback_proxy_service.go:markVideoStale": "P-029 整合时补 stale_reason（P-025 的写入范围不含此处）",
-}
+var staleGuardPendingFixes = map[string]string{}
 
 // TestStaleWritesAlwaysCarryReasonLIB10 用 AST 扫描 services 下全部非测试 .go 文件：
 // 视频表上任何把 is_stale 写成 true 的 Update / Updates / UpdateColumn(s) / 原生 SQL，必须在同一语句里写非空 stale_reason；

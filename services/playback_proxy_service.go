@@ -45,6 +45,10 @@ var ErrPlaybackProxyStopping = errors.New("播放代理任务正在停止，请�
 // playbackProxyResultLimit 是状态里保留的逐项结果条数上限。
 const playbackProxyResultLimit = 200
 
+// playbackProxyQueuePositionLimit 是状态里带出排位的排队项上限（D-PC26、PLAY-04）。每次状态
+// 变化都会整份推给前端，按筛选入队可能是几万项，全量带出等于每个事件都搬一遍整条队列。
+const playbackProxyQueuePositionLimit = 200
+
 // playbackProxyDurationTolerance 是产物时长与源时长的允许偏差（±2%，流程步骤 7）。
 const playbackProxyDurationTolerance = 0.02
 
@@ -59,10 +63,15 @@ type PlaybackProxyItemResult struct {
 
 // PlaybackProxyStatus 是代理任务总览，也是 playback-proxy-state 事件的载荷。
 type PlaybackProxyStatus struct {
-	Running          bool                      `json:"running"`
-	Cancelled        bool                      `json:"cancelled"`
-	Completed        bool                      `json:"completed"`
-	Queued           int                       `json:"queued"`
+	Running   bool `json:"running"`
+	Cancelled bool `json:"cancelled"`
+	Completed bool `json:"completed"`
+	Queued    int  `json:"queued"`
+	// QueuedVideoIDs 是还在排队（尚未轮到）的视频，按处理顺序排列：下标 i 的视频排在
+	// 「第 i+1 个」（D-PC26，抽屉显示「排队中（第 N 个）」）。正在处理的那一项是
+	// CurrentVideoID，不在这里。只带前 playbackProxyQueuePositionLimit 项；Queued 更大时，
+	// 其余排队项没有具体排位。
+	QueuedVideoIDs   []uint                    `json:"queued_video_ids"`
 	Total            int                       `json:"total"`
 	Processed        int                       `json:"processed"`
 	Succeeded        int                       `json:"succeeded"`
@@ -162,7 +171,7 @@ func (s *PlaybackProxyService) SetMediaWorkSlot(slot *MediaWorkSlot) {
 // Status 返回当前任务状态快照。
 func (s *PlaybackProxyService) Status() PlaybackProxyStatus {
 	if s == nil {
-		return PlaybackProxyStatus{Results: []PlaybackProxyItemResult{}}
+		return PlaybackProxyStatus{QueuedVideoIDs: []uint{}, Results: []PlaybackProxyItemResult{}}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -172,6 +181,11 @@ func (s *PlaybackProxyService) Status() PlaybackProxyStatus {
 func (s *PlaybackProxyService) snapshotLocked() PlaybackProxyStatus {
 	status := s.status
 	status.Queued = len(s.queue)
+	positioned := s.queue
+	if len(positioned) > playbackProxyQueuePositionLimit {
+		positioned = positioned[:playbackProxyQueuePositionLimit]
+	}
+	status.QueuedVideoIDs = append(make([]uint, 0, len(positioned)), positioned...)
 	status.Results = append([]PlaybackProxyItemResult(nil), s.status.Results...)
 	if status.Results == nil {
 		status.Results = []PlaybackProxyItemResult{}
@@ -233,6 +247,9 @@ func collectPlaybackProxyFilterIDs(filter LibraryFilter) ([]uint, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 显式排除失效记录：「路径失效」视图不裁剪扫描根（D-PC06），在那个视图里点「为当前筛选
+	// 生成代理」会把一批指不到文件的记录全塞进队列（P-012/13 评审 Minor 3）。
+	query = query.Where("videos.is_stale = ?", false)
 	var videoIDs []uint
 	if err := query.Order("videos.id ASC").Pluck("videos.id", &videoIDs).Error; err != nil {
 		return nil, fmt.Errorf("读取当前筛选结果失败: %w", err)
@@ -269,7 +286,8 @@ func filterPlaybackProxyCandidates(videoIDs []uint) ([]uint, error) {
 		return nil, nil
 	}
 	var videos []models.Video
-	if err := database.DB.Select("id", "path", "size", "duration", "width", "height").Where("id IN ?", videoIDs).Order("id ASC").Find(&videos).Error; err != nil {
+	if err := database.DB.Select("id", "path", "size", "duration", "width", "height").
+		Where("id IN ? AND is_stale = ?", videoIDs, false).Order("id ASC").Find(&videos).Error; err != nil {
 		return nil, fmt.Errorf("读取代理候选视频失败: %w", err)
 	}
 	candidates := make([]uint, 0, len(videos))
@@ -564,10 +582,8 @@ func (s *PlaybackProxyService) processOne(ctx context.Context, videoID uint) {
 
 	info, err := os.Stat(video.Path)
 	if err != nil || info.IsDir() {
-		if err != nil && os.IsNotExist(err) {
-			s.markVideoStale(videoID)
-		}
-		if err == nil && info.IsDir() {
+		// 两种情况都是 file_missing：路径上不再是一个视频文件，失效原因记 missing_file。
+		if (err != nil && os.IsNotExist(err)) || (err == nil && info.IsDir()) {
 			s.markVideoStale(videoID)
 		}
 		s.failItem(video, playbackProxyFingerprint{}, models.PlaybackProxyStrategyRemux,
@@ -721,11 +737,13 @@ func (s *PlaybackProxyService) failItem(video models.Video, source playbackProxy
 	})
 }
 
+// markVideoStale 在源文件不见了时把视频标为失效，原因 missing_file（D-PC06）。走共享的
+// markVideoStale 条件更新：已失效的行（原因可能更具体，例如离线根）不被改写。
 func (s *PlaybackProxyService) markVideoStale(videoID uint) {
 	if database.DB == nil {
 		return
 	}
-	if err := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("is_stale", true).Error; err != nil {
+	if err := markVideoStale(videoID, models.StaleReasonMissingFile).Error; err != nil {
 		log.Printf("标记视频失效失败（播放代理） video_id=%d err=%v", videoID, err)
 	}
 }

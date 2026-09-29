@@ -553,10 +553,38 @@ func TestMEDIA01ForceGenerateBranchEndToEnd(t *testing.T) {
 		t.Fatal("pending 应已登记")
 	}
 
-	// 强制生成期间字幕文件锁必须被持有：并发抢同一 .srt 的锁会被挡住，直到收尾结束。
+	// 强制生成的收尾期间字幕文件锁必须被持有：收尾中途（双语翻译前读术语表那一刻）另起
+	// 协程抢同一 .srt 的锁，必须等到收尾结束才拿得到。探针挂在 glossaryResolver 上，
+	// 它只在 finalizeSubtitleArtifact 内部、Replace 之前被调用。
+	translations := make([]string, 10)
+	for i := range translations {
+		translations[i] = "谢谢。"
+	}
+	reply, _ := json.Marshal(map[string][]string{"translations": translations})
+	server, _ := startPromptCapturingLLMServer(t, func(string) string {
+		body, _ := json.Marshal(map[string]any{"choices": []map[string]any{{"message": map[string]string{"content": string(reply)}}}})
+		return string(body)
+	})
+	probe := make(chan bool, 1) // true：收尾期间抢锁被挡住
+	probeAcquired := make(chan func(), 1)
+	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) {
+		go func() { probeAcquired <- lockSubtitleFile(srtPath) }()
+		select {
+		case release := <-probeAcquired:
+			release()
+			probe <- false
+		case <-time.After(200 * time.Millisecond):
+			probe <- true
+		}
+		return nil, nil
+	}
+	forceOptions := SubtitleGenerateOptions{
+		ForceGenerate: true, BilingualEnabled: true, BilingualLang: "zh",
+		TranslationConfig: SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"},
+	}
 	forced := make(chan error, 1)
 	go func() {
-		got, err := service.executeSubtitleTask(context.Background(), 2, req, video.Path, SubtitleGenerateOptions{ForceGenerate: true})
+		got, err := service.executeSubtitleTask(context.Background(), 2, req, video.Path, forceOptions)
 		if err == nil && got.Status != SubtitleResultStatusSuccess {
 			err = errors.New("强制生成未成功: " + string(got.Status))
 		}
@@ -570,7 +598,22 @@ func TestMEDIA01ForceGenerateBranchEndToEnd(t *testing.T) {
 	case <-time.After(10 * time.Second):
 		t.Fatal("强制生成超时")
 	}
-	unlock := lockSubtitleFile(srtPath) // 收尾结束后锁已释放，不会死锁
+	select {
+	case blocked := <-probe:
+		if !blocked {
+			t.Fatal("收尾期间另一协程拿到了同一 .srt 的锁：强制生成分支没有持锁")
+		}
+	default:
+		t.Fatal("探针没有运行：收尾没有走到双语翻译")
+	}
+	// 收尾结束后锁已释放：探针协程随即拿到锁，放掉它（包级条带锁，不能留着）。
+	select {
+	case release := <-probeAcquired:
+		release()
+	case <-time.After(5 * time.Second):
+		t.Fatal("收尾结束后锁应已释放")
+	}
+	unlock := lockSubtitleFile(srtPath)
 	unlock()
 	if !strings.Contains(string(mustReadBytes(t, srtPath)), "Thank you.") {
 		t.Fatal("强制生成后 .srt 应是转写结果")

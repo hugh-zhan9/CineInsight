@@ -477,30 +477,61 @@ func TestPreviewSessionUsesProxyWithUnchangedLocator(t *testing.T) {
 	}
 }
 
-// 白名单命中的视频（mp4）根本不查代理：既有路径逐字节不变。
-func TestPreviewSessionForWhitelistedSourceIgnoresProxy(t *testing.T) {
+// PLAY-05（D-PC26，P-025 改写原 D-004 断言）：白名单命中的 mp4 生成了代理之后，预览优先用代理，
+// 会话与字节一致；没有代理时白名单路径逐字节不变。inlinePreviewMIMEs 本身不改。
+func TestPreviewSessionPrefersProxyForWhitelistedSourcePLAY05(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, _ := newProxyTestService(t)
 	videoService := newProxyBackedVideoService(service)
 	video := createProxyTestVideo(t, "native.mp4", 10)
-	seedReadyProxy(t, service, video, 4096, time.Now())
 
+	// 没有代理：白名单照旧，下发源文件。
 	session, err := videoService.GetPreviewSession(video.ID)
 	if err != nil {
 		t.Fatalf("读取预览会话失败: %v", err)
 	}
-	if session.Mode != "inline" || session.Proxy != nil {
-		t.Fatalf("白名单命中时不该标代理: %#v", session)
-	}
-	if session.InlineSource.MIME != "video/mp4" {
-		t.Fatalf("MIME 应来自白名单: %s", session.InlineSource.MIME)
+	if session.Mode != "inline" || session.Proxy != nil || session.InlineSource.MIME != "video/mp4" {
+		t.Fatalf("无代理时白名单命中应内嵌源文件: %#v", session)
 	}
 	media, err := videoService.ResolvePreviewMedia(video.ID)
 	if err != nil {
 		t.Fatalf("解析预览字节失败: %v", err)
 	}
 	if media.Path != video.Path {
-		t.Fatalf("白名单命中时应下发源文件: %s", media.Path)
+		t.Fatalf("无代理时应下发源文件: %s", media.Path)
+	}
+
+	// 生成代理之后：会话带代理标注，字节换成代理，locator 不变。
+	proxyPath := seedReadyProxy(t, service, video, 4096, time.Now())
+	session, err = videoService.GetPreviewSession(video.ID)
+	if err != nil {
+		t.Fatalf("读取预览会话失败: %v", err)
+	}
+	if session.Mode != "inline" || session.Proxy == nil || session.Proxy.Size != 4096 {
+		t.Fatalf("有代理时白名单命中的文件也应优先用代理: %#v", session)
+	}
+	if session.InlineSource == nil || session.InlineSource.LocatorValue != previewMediaPath(video.ID) || session.InlineSource.MIME != playbackProxyMIME {
+		t.Fatalf("locator 形态不该变、MIME 为代理 MIME: %#v", session.InlineSource)
+	}
+	media, err = videoService.ResolvePreviewMedia(video.ID)
+	if err != nil {
+		t.Fatalf("解析预览字节失败: %v", err)
+	}
+	if media.Path != proxyPath || media.MIME != playbackProxyMIME || media.DisplayName != video.Name {
+		t.Fatalf("有代理时应下发代理字节: %#v", media)
+	}
+
+	// 源文件被改：代理失效，退回白名单源文件。
+	if err := os.WriteFile(video.Path, []byte("changed-source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	mustSetFileModTime(t, video.Path, time.Now().Add(2*time.Hour))
+	session, err = videoService.GetPreviewSession(video.ID)
+	if err != nil {
+		t.Fatalf("读取预览会话失败: %v", err)
+	}
+	if session.Proxy != nil || session.Mode != "inline" || session.InlineSource.MIME != "video/mp4" {
+		t.Fatalf("代理失效后应退回白名单源文件: %#v", session)
 	}
 }
 

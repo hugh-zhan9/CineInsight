@@ -995,17 +995,14 @@ func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
 		return fmt.Errorf("自动标签由应用维护，不能手动删除")
 	}
 	inVocabulary := isAITagEligible(*tag) // 删除会写 DeletedAt，必须在删除前判定。
-	// 曾关联过媒体也要对账：「人物」分类标签不在词表，但只挂它的视频删完就变成无人工
-	// 标签，应当重新进入自动分析。关联要在清除之前数。
-	var linked int64
-	if err := tx.Table("video_tags").Where("tag_id = ?", tag.ID).Count(&linked).Error; err != nil {
-		return err
+	if !inVocabulary {
+		// 词表外的标签（「人物」分类）删除不改变 AI 词表，不做全库重排（META-01）：
+		// 只有「删完就没有人工标签」的视频需要重新进入自动分析。定向对账必须在清除关联之前做，
+		// 之后就不知道哪些视频挂过它了。
+		if err := resetAITaggingForTagRemovalTx(tx, tag.ID); err != nil {
+			return err
+		}
 	}
-	var imageLinked int64
-	if err := tx.Table("image_tags").Where("tag_id = ?", tag.ID).Count(&imageLinked).Error; err != nil {
-		return err
-	}
-	hadMedia := linked+imageLinked > 0
 	if err := tx.Model(tag).Association("Videos").Clear(); err != nil {
 		return err
 	}
@@ -1015,11 +1012,46 @@ func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
 	if err := tx.Delete(tag).Error; err != nil {
 		return err
 	}
-	// 既不在词表内、也从没关联过媒体的标签删除后没有任何状态受影响。
-	if !inVocabulary && !hadMedia {
+	if !inVocabulary {
 		return nil
 	}
 	return resetAITaggingAfterLibraryChange(tx)
+}
+
+// resetAITaggingForTagRemovalTx 是删除词表外标签时的定向对账，替代全库的
+// resetAITaggingAfterLibraryChange（META-01）。调用方在同一事务里、**清除该标签的关联之前**调用：
+//   - 指向该标签的待审候选（视频、图片两侧）失效，与全量对账里「标签已删除」那一条同口径；
+//   - 挂过该标签、且除它之外再没有人工（非自动）标签的视频，AI 状态改回 pending 并清空证据指纹，
+//     让自动分析重新接手。其他视频的状态与指纹一律不动。
+//
+// 「挂过该标签的视频」用子查询在库里取，不先把 ID 读进内存再拼 IN 列表：一个人物标签可能挂着
+// 成千上万个视频，IN 列表会撞上 SQLite / PostgreSQL 的参数个数上限。
+func resetAITaggingForTagRemovalTx(tx *gorm.DB, tagID uint) error {
+	if err := tx.Model(&models.AITagCandidate{}).
+		Where("status = ? AND matched_tag_id = ?", models.AITagCandidateStatusPending, tagID).
+		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&models.ImageAITagCandidate{}).
+		Where("status = ? AND matched_tag_id = ?", models.AITagCandidateStatusPending, tagID).
+		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+		return err
+	}
+	return tx.Model(&models.AITaggingState{}).
+		Where("ai_tagging_states.video_id IN (SELECT removed.video_id FROM video_tags removed WHERE removed.tag_id = ?)", tagID).
+		Where(`NOT EXISTS (
+				SELECT 1 FROM video_tags
+				INNER JOIN tags ON tags.id = video_tags.tag_id
+				WHERE video_tags.video_id = ai_tagging_states.video_id
+					AND video_tags.tag_id <> ?
+					AND COALESCE(tags.automatic_kind, '') = ''
+			)`, tagID).
+		Updates(map[string]interface{}{
+			"status":               models.AITaggingStateStatusPending,
+			"skip_reason":          "",
+			"evidence_fingerprint": "",
+			"last_error":           "",
+		}).Error
 }
 
 // rewriteSavedViewTagIDsTx 把活跃保存视图 tag_ids_json 里的来源标签 ID 换成目标 ID 并去重

@@ -31,7 +31,7 @@ func TestApproveAITagCandidatesBatchChineseMessagesAndSupersededMETA11(t *testin
 	if !byID[first.ID].OK {
 		t.Fatalf("第一条应批准成功: %+v", byID[first.ID])
 	}
-	if got := byID[second.ID]; got.OK || !got.Superseded || got.Message != "候选已被同标签的其他候选替代" {
+	if got := byID[second.ID]; got.OK || !got.Superseded || got.Message != "同标签的其他候选已批准" {
 		t.Fatalf("被作废的项应标 superseded 且文案为中文: %+v", got)
 	}
 	if got := byID[rejected.ID]; got.OK || got.Superseded || got.Message != "候选已不在待审状态" {

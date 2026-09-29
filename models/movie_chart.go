@@ -147,17 +147,18 @@ type MovieChartMark struct {
 	Title       string `gorm:"size:200;not null;default:''" json:"title"`
 	PosterURL   string `gorm:"type:text;not null;default:''" json:"-"`
 
-	// WatchlistEntryID 非 0 表示这条想看片单记录是榜单建的，撤销标记时一并删除；
-	// 0 表示撞名复用了已有条目、或这个标记根本不是 want。
+	// WatchlistEntryID 非 0 表示这条标记认领了一条想看片单记录，认领方式见
+	// WatchlistEntryOrigin；0 表示未认领（历史撞名复用行或非 want 标记）。
 	//
 	// 有意只存一个裸 uint、不声明 belongs-to：声明了 GORM 会建外键，片单条目被用户
 	// 删掉就会连坐删掉标记。跨边界的一致性靠「先建片单、再写标记」的固定顺序兜底，
 	// 见需求设计文档 §5。
 	WatchlistEntryID uint `gorm:"not null;default:0" json:"watchlist_entry_id"`
 	// WatchlistEntryOrigin 说明 WatchlistEntryID 认领的条目是怎么来的：chart（榜单「想看」
-	// 新建）、enrichment（用户手动条目补全出豆瓣 ID 后绑定）、空串（未认领或撞名复用）。
-	// 视频看完的自动 want → watched 只删 chart 来源的条目；enrichment 是用户自己的
-	// 手动条目，只清认领、条目保留。默认值是空串，等于零值，不触犯 gorm default 禁令。
+	// 新建）、enrichment（用户手动条目补全出豆瓣 ID 后绑定）、reuse（榜单复用了用户已有的
+	// 同名条目）、空串（未认领或历史行）。用户在榜单上取消 want 会删 chart 与 enrichment
+	// 条目（R8 双向同步），reuse 条目永不删除；看完视频的自动 want → watched 只删 chart
+	// 条目。默认值是空串，等于零值，不触犯 gorm default 禁令。
 	WatchlistEntryOrigin string `gorm:"size:16;not null;default:''" json:"watchlist_entry_origin"`
 
 	MarkedAt  time.Time `gorm:"not null" json:"marked_at" ts_type:"string"`

@@ -320,7 +320,7 @@ func TestEnhancementRecoverOnStartupFailsTasksWhenRuntimeUnavailable(t *testing.
 	}
 }
 
-func TestEnhancementCancelDuringChunkReachesCancelledAndCleansWorkdir(t *testing.T) {
+func TestEnhancementCancelDuringChunkReachesCancelledAndKeepsCheckpoint(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	video := createEnhancementSourceVideo(t, "movie.mp4")
 	base := fakeEnhancementCommands(t, video.Path, 250, 24)
@@ -354,8 +354,9 @@ func TestEnhancementCancelDuringChunkReachesCancelledAndCleansWorkdir(t *testing
 	if task.ErrorCode != "cancelled" {
 		t.Fatalf("error_code=%q", task.ErrorCode)
 	}
-	if _, err := os.Stat(enhancementWorkdir(models.VideoEnhancementTask{ID: task.ID, Video: video})); !os.IsNotExist(err) {
-		t.Fatalf("取消后必须清理工作目录")
+	// D-PC24（P-025 收窄原定稿）：取消保留工作目录与检查点，重试从断点继续。
+	if _, err := os.Stat(enhancementWorkdir(models.VideoEnhancementTask{ID: task.ID, Video: video})); err != nil {
+		t.Fatalf("取消后应保留工作目录与检查点: %v", err)
 	}
 	// 取消幂等：再次取消返回 nil。
 	if err := service.CancelTask(view.ID); err != nil {

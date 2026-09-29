@@ -92,23 +92,10 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 		}, nil
 	}
 
-	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
-		return &PreviewSession{
-			VideoID:     video.ID,
-			Mode:        "inline",
-			DisplayName: video.Name,
-			InlineSource: &PreviewSourceDescriptor{
-				LocatorStrategy: "asset_route",
-				LocatorValue:    previewMediaPath(video.ID),
-				MIME:            mimeType,
-			},
-			SeekSprite: SeekSpriteIndex(video.ID, video.Duration),
-		}, nil
-	}
-
-	// 白名单不命中时再看有没有可用的播放代理（D-004）。
-	// 路由形态一个字都不改：locator 仍是 previewMediaPath(id)，
-	// 换源发生在 ResolvePreviewMedia 里，前端与统计语义都察觉不到区别。
+	// 先看有没有有效代理，有就用（D-PC26、PLAY-05）——包括白名单命中的文件：扩展名是 mp4
+	// 不代表内嵌 <video> 解得了（HEVC 无 hvc1、高码率等），用户专门生成的代理不该永远用不上。
+	// 路由形态一个字都不改：locator 仍是 previewMediaPath(id)，换源发生在 ResolvePreviewMedia 里。
+	// inlinePreviewMIMEs 本身不改（TestInlinePreviewMIMEsUnchanged）；正式播放永远打开源文件。
 	if proxy := s.playbackProxies().resolveValidProxy(video.ID, playbackProxyFingerprintOf(info), true); proxy != nil {
 		return &PreviewSession{
 			VideoID:     video.ID,
@@ -121,6 +108,20 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 			},
 			SeekSprite: SeekSpriteIndex(video.ID, video.Duration),
 			Proxy:      &PreviewProxyDescriptor{Strategy: proxy.Strategy, Size: proxy.OutputSize},
+		}, nil
+	}
+
+	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
+		return &PreviewSession{
+			VideoID:     video.ID,
+			Mode:        "inline",
+			DisplayName: video.Name,
+			InlineSource: &PreviewSourceDescriptor{
+				LocatorStrategy: "asset_route",
+				LocatorValue:    previewMediaPath(video.ID),
+				MIME:            mimeType,
+			},
+			SeekSprite: SeekSpriteIndex(video.ID, video.Duration),
 		}, nil
 	}
 
@@ -152,20 +153,21 @@ func (s *VideoService) ResolvePreviewMedia(videoID uint) (*PreviewMedia, error) 
 		return nil, fmt.Errorf("预览路径不是文件")
 	}
 
+	// 与 GetPreviewSession 同一顺序：有有效代理就下发代理字节（D-PC26），会话说走代理、
+	// 字节却是源文件的错位不会出现。
+	if proxy := s.playbackProxies().resolveValidProxy(video.ID, playbackProxyFingerprintOf(info), true); proxy != nil {
+		proxyInfo, statErr := os.Stat(proxy.Path)
+		if statErr == nil {
+			return &PreviewMedia{
+				Path:        proxy.Path,
+				DisplayName: video.Name,
+				MIME:        playbackProxyMIME,
+				ModTime:     proxyInfo.ModTime(),
+			}, nil
+		}
+	}
 	mimeType, ok := inlinePreviewMIME(video.Path)
 	if !ok {
-		// 白名单不命中时才可能有代理：有的话下发代理字节（D-004）。
-		if proxy := s.playbackProxies().resolveValidProxy(video.ID, playbackProxyFingerprintOf(info), true); proxy != nil {
-			proxyInfo, statErr := os.Stat(proxy.Path)
-			if statErr == nil {
-				return &PreviewMedia{
-					Path:        proxy.Path,
-					DisplayName: video.Name,
-					MIME:        playbackProxyMIME,
-					ModTime:     proxyInfo.ModTime(),
-				}, nil
-			}
-		}
 		mimeType = fallbackVideoMIME(video.Path)
 	}
 

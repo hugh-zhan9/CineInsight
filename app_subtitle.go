@@ -190,6 +190,13 @@ func (a *App) ConvertSubtitleToUTF8(videoID uint, fromEncoding string) (*service
 	}
 	result, err := a.subtitleWorkbench.ConvertToUTF8(*video, fromEncoding)
 	log.Printf("API ConvertSubtitleToUTF8 id=%d from=%s err=%v", videoID, fromEncoding, err)
+	// subtitle_encoding_ambiguous 带候选回给前端，让用户看预览选定编码后再转（MEDIA-02）；
+	// 其余带码失败（字幕缺失、编码无法识别）同样放进 error_code（G-3）。
+	if coded := asSubtitleCodedError(err); coded != nil {
+		return &services.SubtitleConvertResult{
+			ErrorCode: coded.Code, Message: coded.Message, DetectedEncoding: coded.DetectedEncoding, Candidates: coded.Candidates,
+		}, nil
+	}
 	return result, err
 }
 

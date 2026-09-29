@@ -86,8 +86,8 @@ func TestAPP07ChartWantReusesEnrichedManualEntry(t *testing.T) {
 	if entries[0].SourceName != "tmdb" || entries[0].SourceItemID != "438631" {
 		t.Fatalf("已有来源的条目不得被改写: %+v", entries[0])
 	}
-	if row, _ := h.markRow(entry.DoubanID); row.WatchlistEntryID != 0 {
-		t.Fatalf("复用的是用户的条目，不得记归属: %+v", row)
+	if row, _ := h.markRow(entry.DoubanID); row.WatchlistEntryID != manual.ID || row.WatchlistEntryOrigin != movieChartOriginReuse {
+		t.Fatalf("复用的是用户的条目，应以 reuse 认领（撤销时不删）: %+v", row)
 	}
 }
 

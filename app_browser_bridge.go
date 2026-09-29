@@ -8,6 +8,7 @@ import (
 	"log"
 
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"gorm.io/gorm"
 
 	"video-master/database"
 	"video-master/models"
@@ -75,16 +76,10 @@ func (a *App) SelectBrowserDownloadDirectory() (string, error) {
 	})
 }
 
-// ListBrowserDownloadTasks 返回桥接下载队列的任务快照。
+// ListBrowserDownloadTasks 是旧绑定的薄包装，等价于 ListDownloadTasks（含历史），
+// 与 browser-download-tasks 事件的载荷一致。前端改用 ListDownloadTasks 后由 P-040 删除。
 func (a *App) ListBrowserDownloadTasks() []services.BrowserDownloadTask {
-	if a.browserDownloads == nil {
-		return []services.BrowserDownloadTask{}
-	}
-	tasks := a.browserDownloads.ListTasks()
-	if tasks == nil {
-		return []services.BrowserDownloadTask{}
-	}
-	return tasks
+	return a.ListDownloadTasks()
 }
 
 // CancelBrowserDownloadTask 取消一个下载任务。
@@ -97,9 +92,95 @@ func (a *App) CancelBrowserDownloadTask(id string) error {
 	return err
 }
 
+// ListDownloadTasks 返回本次会话的下载任务与表里的历史（D-PC21）。历史任务不带请求头，
+// retryable 为 false，只能回浏览器重新推送。
+func (a *App) ListDownloadTasks() []services.BrowserDownloadTask {
+	if a.browserDownloads == nil {
+		return []services.BrowserDownloadTask{}
+	}
+	tasks := a.browserDownloads.ListDownloadTasks()
+	if tasks == nil {
+		return []services.BrowserDownloadTask{}
+	}
+	return tasks
+}
+
+// RetryDownload 在同一会话内重试失败或已取消的下载；重启后的任务返回 retry_requires_browser。
+func (a *App) RetryDownload(taskUID string) (services.BrowserDownloadActionResult, error) {
+	if a.browserDownloads == nil {
+		return browserDownloadUnavailable(), nil
+	}
+	result, err := a.browserDownloads.RetryDownload(taskUID)
+	log.Printf("API RetryDownload task=%s code=%s err=%v", taskUID, result.Code, err)
+	return result, err
+}
+
+// AddDownloadDirectoryToScan 把下载目录加入扫描目录，再对它窄对账入库（D-PC25）。
+// 加目录复用 DirectoryService.AddDirectory 并重配监听（与 App.AddDirectory 同样的两步）；
+// 窄对账交给 ReimportDownload，它走的是下载入库同一个 SyncAffectedDirectories，并能确认
+// 这一个任务的文件进没进库。不另起 App.AddDirectory 的后台恢复扫描，免得同一目录并发扫两遍。
+// 目录已在扫描范围内（相等或更深）时不重复添加，直接重新入库。
+func (a *App) AddDownloadDirectoryToScan(taskUID string) (services.BrowserDownloadActionResult, error) {
+	if a.browserDownloads == nil {
+		return browserDownloadUnavailable(), nil
+	}
+	directory, check, err := a.browserDownloads.FinishedDownloadDirectory(taskUID)
+	if err != nil || check.Code != services.BrowserDownloadCodeOK {
+		log.Printf("API AddDownloadDirectoryToScan task=%s code=%s err=%v", taskUID, check.Code, err)
+		return check, err
+	}
+	dirs, err := a.directoryService.GetAllDirectories()
+	if err != nil {
+		return services.BrowserDownloadActionResult{}, fmt.Errorf("读取扫描目录失败：%w", err)
+	}
+	if !services.BrowserDownloadDirectoryCovered(dirs, directory) {
+		if _, err := a.directoryService.AddDirectory(directory, ""); err != nil {
+			log.Printf("API AddDownloadDirectoryToScan task=%s add directory err=%v", taskUID, err)
+			return services.BrowserDownloadActionResult{}, fmt.Errorf("加入扫描目录失败：%w", err)
+		}
+		a.reconfigureLibraryWatcher()
+	}
+	result, err := a.browserDownloads.ReimportDownload(taskUID)
+	log.Printf("API AddDownloadDirectoryToScan task=%s code=%s err=%v", taskUID, result.Code, err)
+	return result, err
+}
+
+// ReimportDownload 对已完成下载的目录重跑一次入库（D-PC25）。
+func (a *App) ReimportDownload(taskUID string) (services.BrowserDownloadActionResult, error) {
+	if a.browserDownloads == nil {
+		return browserDownloadUnavailable(), nil
+	}
+	result, err := a.browserDownloads.ReimportDownload(taskUID)
+	log.Printf("API ReimportDownload task=%s code=%s err=%v", taskUID, result.Code, err)
+	return result, err
+}
+
+// RevealDownload 在系统文件管理器里定位下载的文件（D-PC25）。
+func (a *App) RevealDownload(taskUID string) (services.BrowserDownloadActionResult, error) {
+	if a.browserDownloads == nil {
+		return browserDownloadUnavailable(), nil
+	}
+	result, err := a.browserDownloads.RevealDownload(taskUID)
+	log.Printf("API RevealDownload task=%s code=%s err=%v", taskUID, result.Code, err)
+	return result, err
+}
+
+func browserDownloadUnavailable() services.BrowserDownloadActionResult {
+	return services.BrowserDownloadActionResult{Code: services.BrowserDownloadCodeServiceUnavailable, Message: "下载服务未启用"}
+}
+
 // startBrowserBridge 在应用启动时按设置决定要不要开桥接。
+//
+// 下载任务的落库也在这里接上（D-PC21）：startup 只在数据库就绪后才走到这一步，而且此刻
+// 桥接还没开始监听、不可能有新任务进来，正好先把上次遗留的非终态行置为 interrupted。
 func (a *App) startBrowserBridge(ctx context.Context) {
 	if a.browserDownloads != nil {
+		a.browserDownloads.SetStore(func() *gorm.DB { return database.DB })
+		if marked, err := a.browserDownloads.MarkInterruptedOnStartup(); err != nil {
+			log.Printf("Browser download: 标记上次中断的任务失败 err=%v", err)
+		} else if marked > 0 {
+			log.Printf("Browser download: 上次有 %d 个下载任务没跑完，已标为已中断", marked)
+		}
 		a.browserDownloads.Start(ctx)
 	}
 	if a.browserBridge == nil {

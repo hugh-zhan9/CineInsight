@@ -196,21 +196,43 @@ func TestAPP07PosterBacklogIgnoresEmptyMarkRow(t *testing.T) {
 	}
 }
 
-// Minor：补全正在运行的条目，榜单复用它时不回填豆瓣来源。
+// Minor：补全正在运行的条目，榜单复用它时不回填豆瓣来源。「运行中」与「有认领」是回填守卫里
+// 两个独立的条件，各自单独成立时都必须挡住回填；两者都不成立的对照组照常回填。
 func TestAPP07EnsureChartEntryDoesNotBackfillRunningEntry(t *testing.T) {
-	setupVideoServiceTestDB(t)
-	svc := NewWatchlistService(t.TempDir())
-	running := models.WatchlistEntry{Title: "沙丘", Kind: models.WatchlistKindMovie,
-		EnrichmentStatus: models.WatchlistEnrichmentRunning, EnrichmentClaim: "abc"}
-	if err := database.DB.Create(&running).Error; err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name     string
+		status   string
+		claim    string
+		backfill bool
+	}{
+		{name: "只有 running 状态（认领为空）", status: models.WatchlistEnrichmentRunning, claim: "", backfill: false},
+		{name: "只有认领（状态不是 running）", status: models.WatchlistEnrichmentPending, claim: "abc", backfill: false},
+		{name: "对照：既不 running 也无认领", status: models.WatchlistEnrichmentPending, claim: "", backfill: true},
 	}
-	id, created, err := svc.EnsureChartEntry("沙丘", "201")
-	if err != nil || created || id != running.ID {
-		t.Fatalf("应复用运行中的条目: id=%d created=%v err=%v", id, created, err)
-	}
-	if got := reloadWatchlistEntry(t, running.ID); got.SourceName != "" || got.SourceItemID != "" {
-		t.Fatalf("运行中的条目不得回填来源: %+v", got)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setupVideoServiceTestDB(t)
+			svc := NewWatchlistService(t.TempDir())
+			existing := models.WatchlistEntry{Title: "沙丘", Kind: models.WatchlistKindMovie,
+				EnrichmentStatus: tc.status, EnrichmentClaim: tc.claim}
+			if err := database.DB.Create(&existing).Error; err != nil {
+				t.Fatal(err)
+			}
+			id, created, err := svc.EnsureChartEntry("沙丘", "201")
+			if err != nil || created || id != existing.ID {
+				t.Fatalf("应复用已有条目: id=%d created=%v err=%v", id, created, err)
+			}
+			got := reloadWatchlistEntry(t, existing.ID)
+			if tc.backfill {
+				if got.SourceName != WatchlistMetadataSourceDouban || got.SourceItemID != "201" {
+					t.Fatalf("空闲的条目应回填豆瓣来源: %+v", got)
+				}
+				return
+			}
+			if got.SourceName != "" || got.SourceItemID != "" {
+				t.Fatalf("补全进行中的条目不得回填来源: %+v", got)
+			}
+		})
 	}
 }
 

@@ -293,9 +293,15 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 			s.finishCancelled(task)
 			return nil
 		}
-		if err := s.ensureDiskFloor(video.Path, task.SourceSize, probeInfo.Width, probeInfo.Height); err != nil {
-			s.failTask(task.ID, "disk_insufficient", err.Error())
-			s.cleanupTaskWorkdir(task)
+		// 每批复检只要求「下限 − 本任务已写出的分段」（D-PC24、MEDIA-03）：已写出的分段本来就
+		// 占着这个卷，按固定下限复检等于把自己的产物算成别人的占用，跑到后半程必然误报。
+		// 空间不足保留工作目录与检查点（failTask 按错误码决定），腾出空间后重试从断点继续。
+		required := EnhancementRequiredDiskBytes(task.SourceSize, probeInfo.Width, probeInfo.Height) - enhancementWrittenBytes(workdir, manifest)
+		if required < 0 {
+			required = 0
+		}
+		if err := s.ensureDiskFree(video.Path, required); err != nil {
+			s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
 			return nil
 		}
 		if stable, message := enhancementSourceStable(video.Path, task); !stable {
@@ -386,14 +392,28 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 	return nil
 }
 
+// finishCancelled 把用户取消落成终态。工作目录与检查点保留（D-PC24）：重试从断点继续。
 func (s *EnhancementService) finishCancelled(task models.VideoEnhancementTask) {
 	now := s.now()
 	_ = database.DB.Model(&models.VideoEnhancementTask{}).
 		Where("id = ? AND status IN ?", task.ID, enhancementActiveStatuses()).
-		Updates(map[string]any{"status": models.EnhancementStatusCancelled, "error_code": "cancelled", "finished_at": &now}).Error
-	s.cleanupTaskWorkdir(task)
+		Updates(map[string]any{"status": models.EnhancementStatusCancelled, "error_code": enhancementCodeCancelled, "finished_at": &now}).Error
 	s.emitTaskByID(task.ID)
-	logEnhancement("task=%d cancelled", task.ID)
+	logEnhancement("task=%d cancelled (checkpoint kept)", task.ID)
+}
+
+// enhancementWrittenBytes 是本任务已写出的分段字节：清单里（已通过大小与哈希校验的）分段
+// 在工作目录里的实际大小之和。正在写、还没进清单的半截分段不算——它下一轮会被覆盖重写。
+func enhancementWrittenBytes(workdir string, manifest enhancementSegmentManifest) int64 {
+	var total int64
+	for _, segment := range manifest.Segments {
+		info, err := os.Stat(filepath.Join(workdir, segment.Name))
+		if err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		total += info.Size()
+	}
+	return total
 }
 
 func enhancementSourceStable(path string, task models.VideoEnhancementTask) (bool, string) {

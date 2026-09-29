@@ -846,6 +846,8 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
   - 删除 `app.go` 与 `app_settings.go` 中已成为空操作的 `SyncFeedback` 调用；
   - `UndoTagPersonConversion` 的头像清理改在启动时注入；
   - P-023 / P-024 / P-027 的接线项。
+  - **发布前必须完成（复审 A I-4）**：`startShortFeedServer` 内部检查 `ShouldStart()`，启动、停止、恢复续跑都走 `withShortFeedLifecycle`；`GetShortFeedQRCode` 与 `GetShortFeedAccessStatus` 读服务实例时必须持锁；
+  - 应用退出时调用 `services.StopPlaybackRelocation()`。
 - **P-033**：
   - 删除设置页的「反馈回流」开关入口（P-021 结论：它只控制收藏与点赞的投影）；
   - 显式载荷补上 `cleanup_*` 字段；

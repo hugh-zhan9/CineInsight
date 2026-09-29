@@ -188,8 +188,8 @@ func (s *WatchlistService) Update(id uint, title string) error {
 	}
 	// 改名让旧来源 ID 失去依据（它对应的是旧片名）：清空来源，状态仍按 §3.1 落 manual
 	// （用户编辑即接管，转换表是合同，不改成 pending），要重新补全由用户手动重试。榜单
-	// 认领着该条目（榜单创建 / 补全绑定）时保持来源不变——那个豆瓣 ID 是标记的依据，
-	// 清掉会让标记与条目对不上。
+	// 认领着该条目（榜单创建 / 补全绑定 / 复用，按 watchlist_entry_id 判断、不分来源）时
+	// 保持来源不变——那个豆瓣 ID 是标记的依据，清掉会让标记与条目对不上。
 	renamed := title != current.Title
 	if renamed {
 		var claimed int64

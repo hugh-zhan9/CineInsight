@@ -151,14 +151,11 @@ func (s *MovieChartService) markEntry(doubanID, mark string, auto bool) (*MovieC
 	// 超长片名会变成「标记记上了、片单没建成」——MarkEntry 直接返回校验错误。
 	title := movieChartTruncateTitle(entry.Title)
 	if mark == models.MovieChartMarkWant {
-		watchlistEntryID, result.WatchlistConflict, err = s.markEntryWatchlistLink(title, doubanID)
+		watchlistEntryID, origin, result.WatchlistConflict, err = s.markEntryWatchlistLink(title, doubanID)
 		if err != nil {
 			return nil, err
 		}
-		result.WatchlistCreated = watchlistEntryID != 0
-		if watchlistEntryID != 0 {
-			origin = models.MovieChartOriginChart
-		}
+		result.WatchlistCreated = origin == models.MovieChartOriginChart
 	}
 	if err := s.upsertChartMark(entry, title, mark, watchlistEntryID, origin); err != nil {
 		return nil, err
@@ -253,7 +250,14 @@ func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
 	return existing.Mark == models.MovieChartMarkWatched, nil
 }
 
-// markEntryWatchlistLink 建「想看」对应的片单条目，返回 (片单条目 ID, 是否撞名)。
+// movieChartOriginReuse 是 models.MovieChartMark.WatchlistEntryOrigin 的第三个取值（APP-07）：
+// 榜单「想看」复用了片单里已有的条目（同豆瓣 ID 的条目，或用户手输 / TMDB 补全过的同名电影）。
+// 标记照样认领该条目（watchlist_entry_id = 条目 ID），删除条目时才能按 ID 精确撤销这个 want；
+// 但条目是用户自己的，榜单一侧的任何撤销（手动取消想看、改标记、看完视频的自动路径）都**不删**它，
+// 只清认领（TC-10、D-MC13）。
+const movieChartOriginReuse = "reuse"
+
+// markEntryWatchlistLink 建「想看」对应的片单条目，返回 (片单条目 ID, 认领来源, 是否撞名)。
 //
 // **顺序是承重的：先建片单条目，再写标记行**（需求设计文档 §5）。这两次写入不是
 // 一个原子单元——片单是另一个服务、另一张表、另一套唯一键，没法用一个事务罩住。
@@ -261,29 +265,32 @@ func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
 // 片单记录；反过来则会留下一个指向不存在片单 ID 的标记，而撤销会照着那个 ID 去删，
 // 删掉的可能是别人的行。
 //
-// 复用（片单里已有这部片：同豆瓣 ID 的条目，或用户手输 / TMDB 补全过的同名电影，
-// 见 WatchlistService.EnsureChartEntry）时**标记照记、但不记录归属**：返回的 ID 是
-// 0，撤销时就不会去动那条记录。榜单没有权限删除用户手工维护的数据（D-MC13）。
+// 三种结果：
+//   - 新建：来源 chart，撤销标记时一并删掉这条条目；
+//   - 复用（片单里已有这部片，见 WatchlistService.EnsureChartEntry）：来源 reuse，记下被复用
+//     条目的 ID 但撤销时**不删**它——榜单没有权限删除用户手工维护的数据（D-MC13）；
+//   - 撞唯一键（ErrWatchlistTitleExists，拿不到条目 ID）：标记照记、不认领（ID 0、来源空）。
+//
 // 同名但豆瓣 ID 不同的两部电影不算复用，各建各的（D-PC52）。
-func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint, bool, error) {
+func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint, string, bool, error) {
 	entryID, created, err := s.watchlist.EnsureChartEntry(title, doubanID)
 	if err != nil {
 		if errors.Is(err, ErrWatchlistTitleExists) {
-			return 0, true, nil
+			return 0, "", true, nil
 		}
-		return 0, false, fmt.Errorf("添加想看片单条目失败: %w", err)
+		return 0, "", false, fmt.Errorf("添加想看片单条目失败: %w", err)
 	}
 	if !created {
-		return 0, true, nil
+		return entryID, movieChartOriginReuse, true, nil
 	}
-	return entryID, false, nil
+	return entryID, models.MovieChartOriginChart, false, nil
 }
 
-// undoWantWatchlistEntry 跑「想看」的撤销副作用：只删**本次由榜单创建**的那条片单
-// 记录。
+// undoWantWatchlistEntry 跑「想看」的撤销副作用：只删**由榜单这一侧建立归属**的片单记录
+// （来源 chart；手动路径下还有 enrichment）。
 //
-// 三种情况都直接返回、什么都不删：没有标记、标记不是 want、watchlist_entry_id 为 0
-// （撞名复用了用户自己的条目）。最后一种正是 TC-10 要守的那条线。
+// 以下情况都直接返回、什么都不删：没有标记、标记不是 want、watchlist_entry_id 为 0
+// （撞唯一键、没有认领），来源为 reuse（复用了用户自己的条目）。后两种正是 TC-10 要守的那条线。
 //
 // 片单条目已经不在了（用户自己先删掉的）算撤销目的已达成，不报错。
 //
@@ -297,6 +304,10 @@ func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint
 // 那是用户手动加的条目，只是补全后被标记认领；调用方随后的 upsert 会清掉认领。
 func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMark, keepEnrichment bool) error {
 	if existing == nil || existing.Mark != models.MovieChartMarkWant || existing.WatchlistEntryID == 0 {
+		return nil
+	}
+	// 复用的条目在任何路径下都不删：调用方随后的 upsert / 条件删除会清掉认领。
+	if existing.WatchlistEntryOrigin == movieChartOriginReuse {
 		return nil
 	}
 	if keepEnrichment && existing.WatchlistEntryOrigin == models.MovieChartOriginEnrichment {

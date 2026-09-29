@@ -297,7 +297,8 @@ func TestMovieChartMarkWriteAndClearEachMark(t *testing.T) {
 }
 
 // TestMovieChartMarkKeepsUserTypedWatchlistEntry 是 TC-10：撞上用户手输的同名同类型
-// 条目时标记照记、不记归属，撤销与改标记都**不动**那条记录（D-MC13）。
+// 条目时标记照记、以 reuse 来源认领（APP-07：删除条目时能按 ID 撤销），撤销与改标记都
+// **不动**那条记录（D-MC13）。
 func TestMovieChartMarkKeepsUserTypedWatchlistEntry(t *testing.T) {
 	h := newMovieChartMarkHarness(t)
 	manual, err := h.watchlist.Create("沙丘", models.WatchlistKindMovie)
@@ -318,8 +319,8 @@ func TestMovieChartMarkKeepsUserTypedWatchlistEntry(t *testing.T) {
 	if !ok || row.Mark != models.MovieChartMarkWant {
 		t.Fatalf("撞名时标记照记: %+v", row)
 	}
-	if row.WatchlistEntryID != 0 {
-		t.Fatalf("撞名复用的是用户自己的条目，不得记归属: %d", row.WatchlistEntryID)
+	if row.WatchlistEntryID != manual.ID || row.WatchlistEntryOrigin != movieChartOriginReuse {
+		t.Fatalf("撞名复用应以 reuse 认领用户自己的条目: %+v", row)
 	}
 
 	// 撤销不误删。

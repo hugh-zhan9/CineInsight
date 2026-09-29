@@ -137,7 +137,7 @@ func (a *App) ApproveAITagCandidate(candidateID uint) (*services.AITaggingReview
 // ApproveAITagCandidates 批量批准（D-PC29）：逐项沿用单条批准的事务，返回逐项结果。
 func (a *App) ApproveAITagCandidates(ids []uint) services.AITagBatchResult {
 	result := a.aiTaggingService.ApproveCandidates(ids)
-	log.Printf("API ApproveAITagCandidates requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
+	log.Printf("API ApproveAITagCandidates requested=%d succeeded=%d failed=%d superseded=%d", result.Requested, result.Succeeded, result.Failed, result.Superseded)
 	return result
 }
 
@@ -151,7 +151,8 @@ func (a *App) ApproveAITagCandidatesByFilter(filter services.AITagCandidateFilte
 	return result, err
 }
 
-// CountAITagCandidatesByFilter 返回按同一筛选口径将被批准的候选数，供批准前的计数预览。
+// CountAITagCandidatesByFilter 返回按同一筛选口径将被批准的条数（同视频同标签去重后，
+// 与实际批准成功数一致），供批准前的计数预览。
 func (a *App) CountAITagCandidatesByFilter(filter services.AITagCandidateFilter) (int, error) {
 	return a.aiTaggingService.CountCandidatesByFilter(filter)
 }

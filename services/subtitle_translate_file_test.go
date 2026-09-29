@@ -579,7 +579,7 @@ func TestFinalizeSubtitleArtifactWarnsAboutUntranslatedEntries(t *testing.T) {
 	})
 	dir := t.TempDir()
 	video := mustCreateGlossaryVideo(t, filepath.Join(dir, "matrix.mp4"))
-	srtPath := filepath.Join(dir, "matrix"+subtitlePendingSuffix)
+	srtPath := subtitlePendingPath(filepath.Join(dir, "matrix.srt"))
 	if err := os.WriteFile(srtPath, []byte(subtitleWithUntranslatableLine), 0644); err != nil {
 		t.Fatalf("写入测试字幕失败: %v", err)
 	}

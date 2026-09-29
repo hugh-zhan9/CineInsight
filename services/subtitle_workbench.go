@@ -105,12 +105,21 @@ type SubtitleRetranslateResult struct {
 	Warnings []string `json:"warnings,omitempty"`
 }
 
+// SubtitleErrorEncodingAmbiguous：GB18030 与 Big5 都能干净解码、调用方又没指定编码时，
+// 转换拒绝执行并带回候选（MEDIA-02），由用户看预览选定后再转。
+const SubtitleErrorEncodingAmbiguous = "subtitle_encoding_ambiguous"
+
 // SubtitleConvertResult 是编码转换的结果。
 type SubtitleConvertResult struct {
 	Encoding    string               `json:"encoding"`
 	BackupID    string               `json:"backup_id,omitempty"`
 	Fingerprint *SubtitleFingerprint `json:"fingerprint,omitempty"`
 	Warnings    []string             `json:"warnings,omitempty"`
+	// 以下字段只由 App 层在遇到带错误码的失败时填写（G-3），此时文件未被改动；服务层返回 *SubtitleCodedError。
+	ErrorCode        string                             `json:"error_code,omitempty"`
+	Message          string                             `json:"message,omitempty"`
+	DetectedEncoding string                             `json:"detected_encoding,omitempty"`
+	Candidates       []subtitleparser.EncodingCandidate `json:"candidates,omitempty"`
 }
 
 type SubtitleWorkbenchService struct {
@@ -287,6 +296,8 @@ func (s *SubtitleWorkbenchService) SaveDocument(video models.Video, request Subt
 
 // ConvertToUTF8 把非 UTF-8 字幕转成 UTF-8 并经写入器写回（会先备份，可恢复）。
 // fromEncoding 是前端从 subtitle_encoding_not_utf8 里拿到的检测结果，非空时必须与当前一致。
+// 检测有歧义（多个候选）时 fromEncoding 必填：为空返回 subtitle_encoding_ambiguous 与候选，
+// 不按主推测静默转换——主推测错了，写回的就是一整份乱码（虽有备份，但用户未必察觉）。
 func (s *SubtitleWorkbenchService) ConvertToUTF8(video models.Video, fromEncoding string) (*SubtitleConvertResult, error) {
 	if video.ID == 0 || strings.TrimSpace(video.Path) == "" {
 		return nil, errors.New("视频信息无效")
@@ -310,9 +321,18 @@ func (s *SubtitleWorkbenchService) ConvertToUTF8(video models.Video, fromEncodin
 	if detected == subtitleparser.EncodingUTF8 {
 		return nil, errors.New("字幕已经是 UTF-8 编码，无需转换")
 	}
+	requested := strings.ToLower(strings.TrimSpace(fromEncoding))
+	if requested == "" && len(detection.Candidates) > 1 {
+		return nil, &SubtitleCodedError{
+			Code:             SubtitleErrorEncodingAmbiguous,
+			Message:          "无法确定字幕的编码，请先在候选中选择预览正确的一项再转换",
+			DetectedEncoding: detected,
+			Candidates:       detection.Candidates,
+		}
+	}
 	// 用户在歧义候选里选定的编码必须真的按它解码（I-2）：只允许选主推测或候选里的编码，
 	// 其余一律视为与打开时的检测不一致。
-	if requested := strings.ToLower(strings.TrimSpace(fromEncoding)); requested != "" && requested != detected {
+	if requested != "" && requested != detected {
 		allowed := false
 		for _, candidate := range detection.Candidates {
 			if candidate.Encoding == requested {

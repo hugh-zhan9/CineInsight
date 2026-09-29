@@ -50,6 +50,38 @@ type EnhancementRuntimeCapability struct {
 	// 而不是一句"不可用"。
 	ModelsInstallable bool   `json:"models_installable"`
 	ModelInstallDir   string `json:"-"`
+	// State 供行菜单直接判断（D-PC24、MEDIA-11）：available，或 not_ready——菜单项显示
+	// 「视频超分（未就绪）」并链到设置页 enhance 锚点。
+	State string `json:"state"`
+	// Hint 是未就绪时给用户看的一句说明与下一步，不含路径与技术细节（Message 保留给排障）。
+	Hint string `json:"hint"`
+}
+
+// 超分运行时的就绪状态（EnhancementRuntimeCapability.State）。
+const (
+	EnhancementRuntimeStateAvailable = "available"
+	EnhancementRuntimeStateNotReady  = "not_ready"
+)
+
+// withReadiness 按 Available 与 ReasonCode 填上 State 与面向用户的 Hint。
+func (c EnhancementRuntimeCapability) withReadiness() EnhancementRuntimeCapability {
+	if c.Available {
+		c.State = EnhancementRuntimeStateAvailable
+		c.Hint = ""
+		return c
+	}
+	c.State = EnhancementRuntimeStateNotReady
+	switch c.ReasonCode {
+	case "platform_unsupported":
+		c.Hint = "视频超分只支持 Apple Silicon 的 Mac，这台设备上无法使用"
+	case "models_missing":
+		c.Hint = "超分模型还没下载，可在设置页「视频超分」中下载（约 52 MB）"
+	case "models_corrupt":
+		c.Hint = "超分模型校验没通过，请在设置页「视频超分」中重新下载"
+	default:
+		c.Hint = "超分组件没有随应用安装，暂时无法使用"
+	}
+	return c
 }
 
 type enhancementManifest struct {
@@ -85,6 +117,10 @@ func EnhancementModelDirFor(dataDir string) string {
 // runtimeDir 为空时按可执行文件位置解析；installedModelDir 是按需下载的模型目录，
 // 随包自带模型时（旧布局）仍然优先用包内的那份。
 func ProbeEnhancementRuntime(runtimeDir string, installedModelDir string) EnhancementRuntimeCapability {
+	return probeEnhancementRuntime(runtimeDir, installedModelDir).withReadiness()
+}
+
+func probeEnhancementRuntime(runtimeDir string, installedModelDir string) EnhancementRuntimeCapability {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		return EnhancementRuntimeCapability{ReasonCode: "platform_unsupported", Message: "视频超分首版只支持 Apple Silicon macOS"}
 	}

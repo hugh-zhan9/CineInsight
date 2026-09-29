@@ -492,8 +492,12 @@ func TestBrowserDownloadImporterRequiresScanDirectory(t *testing.T) {
 		return []models.ScanDirectory{{Path: "/library/videos"}}, nil
 	})
 	_, err := importer("/downloads", "/downloads/a.mp4")
-	if err == nil || !strings.Contains(err.Error(), "没有入库") {
-		t.Fatalf("应当说明没有入库，实际 %v", err)
+	// MEDIA-09：原因只给一句且不带路径，「文件已保存，但没有入库」由界面前缀说出来。
+	if !errors.Is(err, ErrBrowserDownloadNotInScanRoots) {
+		t.Fatalf("应当报「下载目录不在片库扫描目录里」，实际 %v", err)
+	}
+	if strings.Contains(err.Error(), "/downloads") || strings.Contains(err.Error(), "没有入库") {
+		t.Fatalf("原因里不该带路径，也不该重复「没有入库」：%q", err.Error())
 	}
 }
 

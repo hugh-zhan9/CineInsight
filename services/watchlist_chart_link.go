@@ -2,6 +2,7 @@ package services
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -125,7 +126,8 @@ func watchlistTitleKindTaken(title, kind string, exceptID uint) (bool, error) {
 //  3. 都没有才新建，写 source_name / source_item_id，补全状态 pending。
 //
 // 同名但豆瓣 ID 不同的两部电影因此可以共存：第 2 步只看没有豆瓣来源的条目。
-// 复用（第 1、2 步）返回 created=false，榜单一侧据此不认领该条目。
+// 复用（第 1、2 步）返回 created=false，榜单一侧据此以 reuse 来源认领该条目：删除条目时
+// 能按 ID 撤销那个 want，但榜单一侧的撤销永远不删它（APP-07）。
 func (s *WatchlistService) EnsureChartEntry(title, doubanID string) (uint, bool, error) {
 	title, err := validateWatchlistText(title, true)
 	if err != nil {
@@ -208,29 +210,36 @@ func firstWatchlistEntry(query *gorm.DB, dest *models.WatchlistEntry) (bool, err
 // revokeChartWantForEntry 在删除条目的事务里撤销对应的榜单 want：mark 置空、
 // watchlist_entry_id 置 0，行保留（快照三列不动）。
 //
-// 匹配两种归属：标记认领了这条条目（watchlist_entry_id = 条目 ID，含 P-019 之前
-// 建的、没有豆瓣来源的存量条目），或条目带豆瓣 ID 且该 want 没有归属任何别的条目
-// （watchlist_entry_id = 0，撞名复用的情形）。指向别的条目的 want 不动。
+// 主判据是精确的认领关系：watchlist_entry_id = 条目 ID，覆盖榜单新建（chart）、补全绑定
+// （enrichment）与复用（reuse，APP-07）三种来源，与片名、来源 ID 此后怎么变都无关（复用后
+// 改名再删除仍能撤销）。
+//
+// 只有历史行（本批次之前复用时不记认领：watchlist_entry_id = 0 且来源为空）才退回猜测：
+// 条目带豆瓣 ID 时按 douban_id 对；条目是电影时按片名对，快照片名与条目片名两边都去掉
+// 首尾空白再比（APP-07 I-2：复用的是被 TMDB 补全过的同名条目，没有豆瓣 ID 可对）。
+// 已认领别的条目的 want 一律不动。
 //
 // 条件更新，不加锁：只碰 mark = 'want' 的行。
 func revokeChartWantForEntry(tx *gorm.DB, entry models.WatchlistEntry) error {
-	query := tx.Model(&models.MovieChartMark{}).Where("mark = ?", models.MovieChartMarkWant)
-	// 第三种归属（APP-07 I-2）：榜单 want 复用了一条已被 TMDB 补全的同名条目，标记没有
-	// 豆瓣来源可对、也没有认领（watchlist_entry_id = 0）。只按「片名快照与条目片名精确
-	// 相等（同一截断规范化）且条目是电影」认，指向别的条目的 want 不动。
-	titleMatch := ""
-	var titleArgs []any
-	if entry.Kind == models.WatchlistKindMovie && entry.Title != "" {
-		titleMatch = " OR (watchlist_entry_id = 0 AND title = ?)"
-		titleArgs = []any{movieChartTruncateTitle(entry.Title)}
-	}
+	var legacy []string
+	var legacyArgs []any
 	if entry.SourceName == WatchlistMetadataSourceDouban && entry.SourceItemID != "" {
-		args := append([]any{entry.ID, entry.SourceItemID}, titleArgs...)
-		query = query.Where("(watchlist_entry_id = ? OR (douban_id = ? AND watchlist_entry_id = 0)"+titleMatch+")", args...)
-	} else {
-		args := append([]any{entry.ID}, titleArgs...)
-		query = query.Where("(watchlist_entry_id = ?"+titleMatch+")", args...)
+		legacy = append(legacy, "douban_id = ?")
+		legacyArgs = append(legacyArgs, entry.SourceItemID)
 	}
+	if title := strings.TrimSpace(movieChartTruncateTitle(entry.Title)); entry.Kind == models.WatchlistKindMovie && title != "" {
+		legacy = append(legacy, "TRIM(title) = ?")
+		legacyArgs = append(legacyArgs, title)
+	}
+	condition := "watchlist_entry_id = ?"
+	args := []any{entry.ID}
+	if len(legacy) > 0 {
+		condition += " OR (watchlist_entry_id = 0 AND watchlist_entry_origin = '' AND (" + strings.Join(legacy, " OR ") + "))"
+		args = append(args, legacyArgs...)
+	}
+	query := tx.Model(&models.MovieChartMark{}).
+		Where("mark = ?", models.MovieChartMarkWant).
+		Where("("+condition+")", args...)
 	err := query.Updates(map[string]any{
 		"mark":                   "",
 		"watchlist_entry_id":     0,
@@ -244,6 +253,7 @@ func revokeChartWantForEntry(tx *gorm.DB, entry models.WatchlistEntry) error {
 }
 
 // watchlistOrigins 给一页条目标来源：被某个 want 标记认领的是「榜单」，其余是「手动」。
+// 复用（reuse）认领的是用户自己先建的条目，仍标「手动」。
 func watchlistOrigins(entries []models.WatchlistEntry) (map[uint]string, error) {
 	origins := make(map[uint]string, len(entries))
 	if len(entries) == 0 {
@@ -256,7 +266,7 @@ func watchlistOrigins(entries []models.WatchlistEntry) (map[uint]string, error) 
 	}
 	var owned []uint
 	err := database.DB.Model(&models.MovieChartMark{}).
-		Where("mark = ? AND watchlist_entry_id IN ?", models.MovieChartMarkWant, ids).
+		Where("mark = ? AND watchlist_entry_id IN ? AND watchlist_entry_origin <> ?", models.MovieChartMarkWant, ids, movieChartOriginReuse).
 		Pluck("watchlist_entry_id", &owned).Error
 	if err != nil {
 		return nil, fmt.Errorf("读取想看来源失败: %w", err)

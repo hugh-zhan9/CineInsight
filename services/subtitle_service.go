@@ -431,7 +431,9 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 				}
 				result, err := s.finalizeSubtitleArtifact(ctx, taskID, req, pending.SRTPath, pending.DetectedLang, options)
 				if err != nil {
-					return nil, s.retainPendingAfterReplaceFailure(err, req, videoPath, pending.SRTPath, pending.DetectedLang)
+					// 这一轮关掉了双语，finalize 自己报不出「已带译文」；必须沿用登记里的标记，
+					// 否则再失败一次就丢了它，下一次重试会把双语字幕再翻译一遍。
+					return nil, s.retainPendingAfterReplaceFailure(err, req, videoPath, pending.SRTPath, pending.DetectedLang, pending.TranslationApplied)
 				}
 				if result.Status == SubtitleResultStatusSuccess {
 					s.consumePendingSubtitle(req.VideoID)
@@ -533,24 +535,29 @@ func (s *SubtitleService) commitTranscription(ctx context.Context, taskID uint, 
 
 	result, err := s.finalizeSubtitleArtifact(ctx, taskID, req, pendingPath, detectedLang, options)
 	if err != nil {
-		return nil, s.retainPendingAfterReplaceFailure(err, req, videoPath, pendingPath, detectedLang)
+		return nil, s.retainPendingAfterReplaceFailure(err, req, videoPath, pendingPath, detectedLang, false)
 	}
 	s.consumePendingSubtitle(req.VideoID)
 	return result, nil
 }
 
-// subtitlePendingPath 由最终 .srt 路径得到生成流程使用的临时文件路径。
+// subtitlePendingPath 由最终 .srt 路径得到生成流程使用的临时文件路径：同目录的隐藏文件
+// `.<基本名>.cineinsight-pending.srt`。必须同目录（原子替换不能跨文件系统）；必须隐藏，
+// 否则 IINA 等播放器会把「<基本名>.*.srt」当成外挂字幕自动加载，用户看到的是未校验的结果。
 func subtitlePendingPath(srtPath string) string {
-	return strings.TrimSuffix(srtPath, filepath.Ext(srtPath)) + subtitlePendingSuffix
+	stem := strings.TrimSuffix(filepath.Base(srtPath), filepath.Ext(srtPath))
+	return filepath.Join(filepath.Dir(srtPath), "."+stem+subtitlePendingSuffix)
 }
 
 // subtitleFinalPathForPending 是 subtitlePendingPath 的逆运算；输入不是 pending 形态时返回错误，
 // 不再静默地把任意路径改成「xxx.srt」。
 func subtitleFinalPathForPending(pendingPath string) (string, error) {
-	if !strings.HasSuffix(pendingPath, subtitlePendingSuffix) {
+	name := filepath.Base(pendingPath)
+	stem := strings.TrimSuffix(name, subtitlePendingSuffix)
+	if stem == name || !strings.HasPrefix(stem, ".") || len(stem) == 1 {
 		return "", errors.New("不是字幕临时文件路径")
 	}
-	return strings.TrimSuffix(pendingPath, subtitlePendingSuffix) + ".srt", nil
+	return filepath.Join(filepath.Dir(pendingPath), stem[1:]+".srt"), nil
 }
 
 // DiscardPendingSubtitle 放弃校验未过的临时字幕：删除临时文件并清掉登记（D-PC13）。
@@ -687,7 +694,11 @@ func (e *subtitleReplaceFailedError) Unwrap() error { return e.err }
 
 // retainPendingAfterReplaceFailure 在收尾替换失败后重新登记保留下来的 pending 文件，
 // 让「强制生成」可以直接重试收尾，不必重跑识别。其他错误原样返回。
-func (s *SubtitleService) retainPendingAfterReplaceFailure(err error, req SubtitleGenerateRequest, videoPath, pendingPath, detectedLang string) error {
+//
+// alreadyTranslated 是调用方已知的「临时文件在这一轮之前就带着译文」：重试时双语被关掉，
+// 这一轮的 translationApplied 必然为 false，只看它会把标记丢掉。两者取或，已带译文的
+// pending 在之后任何一次重试里都不会再翻译。
+func (s *SubtitleService) retainPendingAfterReplaceFailure(err error, req SubtitleGenerateRequest, videoPath, pendingPath, detectedLang string, alreadyTranslated bool) error {
 	var replaceErr *subtitleReplaceFailedError
 	if errors.As(err, &replaceErr) {
 		s.cachePendingSubtitle(&pendingSubtitleArtifact{
@@ -697,7 +708,7 @@ func (s *SubtitleService) retainPendingAfterReplaceFailure(err error, req Subtit
 			Engine:             req.Engine,
 			SourceLang:         req.SourceLang,
 			DetectedLang:       detectedLang,
-			TranslationApplied: replaceErr.translationApplied,
+			TranslationApplied: replaceErr.translationApplied || alreadyTranslated,
 		})
 	}
 	return err

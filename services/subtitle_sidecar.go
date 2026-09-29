@@ -13,8 +13,9 @@ import (
 //   - 同目录，文件名以「视频基本名 + .」开头（大小写不敏感，与 macOS/Windows 文件系统一致）；
 //   - 扩展名为 srt / ass / ssa / vtt（大小写不敏感）；
 //   - 排除与视频同名的 .srt 本身（那是「同名字幕」，不算旁挂）；
-//   - 排除应用自己的临时文件：生成流程的 pending 文件、写入器的 .cineinsight-tmp-* 临时文件、
-//     翻译流程的 _translated_temp.srt；
+//   - 排除应用自己的临时文件：生成流程的 pending 文件（现行的隐藏名
+//     `.<基本名>.cineinsight-pending.srt` 与旧名 `<基本名>.cineinsight-pending.srt`，按后缀一并排除）、
+//     写入器的 .cineinsight-tmp-* 临时文件、翻译流程的 _translated_temp.srt；
 //   - 排除目录与非普通文件（悬空符号链接等）；指向普通文件的符号链接算数。
 var sidecarSubtitleExtensions = map[string]struct{}{".srt": {}, ".ass": {}, ".ssa": {}, ".vtt": {}}
 
