@@ -13,13 +13,15 @@
     <div class="setting-item">
       <label>点「播放」时的续播口径</label>
       <select v-model="form.playback_resume_mode" class="select-input" data-test="playback-resume-mode">
-        <option value="resume">接着上次的位置播（交给播放器决定）</option>
+        <option value="resume">接着上次的位置播</option>
         <option value="restart">总是从头播</option>
         <option value="restart_watched">已看的从头播，没看完的接着播</option>
       </select>
-      <p class="help-text">
-        断点是 IINA 自己记的，它默认会接着上次播。选「从头播」时应用会用 iina-cli 启动并显式关掉续播，
-        断点记录仍然保留（应用内的进度条不受影响）。没装 IINA 时用系统默认播放器打开，续播与否由那个播放器决定。
+      <!-- 断点互通（D-PC42 / PLAY-06）：片库里的断点来自 IINA、应用内预览和 Jellyfin，以最近一次写入为准。 -->
+      <p class="help-text" data-test="playback-resume-help">
+        片库记着每个视频的断点，来自 IINA、应用内预览和 Jellyfin 客户端，以最近一次写入为准。
+        接着播时，片库里有有效断点就用 iina-cli 从这个位置启动 IINA（已看的视频在看完之后又留下断点时也会续播）；没有断点时交给 IINA 自己决定。
+        选「从头播」时用 iina-cli 启动并显式关掉续播，断点记录仍然保留。没装 IINA 时用系统默认播放器打开，续播与否由那个播放器决定。
       </p>
     </div>
 
@@ -47,6 +49,48 @@
         <span>扫描后自动重算清理候选</span>
       </label>
       <p class="help-text">扫描改变了片库就重跑一次清理分析，打开清理审阅时直接看到最新结果。</p>
+    </div>
+    <!-- 清理中心两类候选的阈值（D-PC36 / META-10）：只影响清理分析，不影响「低清」自动标签。 -->
+    <div class="setting-item" data-test="cleanup-thresholds">
+      <label>清理中心的判定阈值</label>
+      <div class="cleanup-threshold-row">
+        <label class="cleanup-threshold-field">
+          <span>极短片段：时长少于</span>
+          <input
+            v-model.number="form.cleanup_short_seconds"
+            type="number"
+            min="1"
+            step="1"
+            class="number-input"
+            data-test="cleanup-short-seconds"
+          />
+          <span>秒</span>
+        </label>
+        <label class="cleanup-threshold-field">
+          <span>极低分辨率：低于</span>
+          <input
+            v-model.number="form.cleanup_low_width"
+            type="number"
+            min="1"
+            step="1"
+            class="number-input"
+            aria-label="极低分辨率的宽度阈值"
+            data-test="cleanup-low-width"
+          />
+          <span>×</span>
+          <input
+            v-model.number="form.cleanup_low_height"
+            type="number"
+            min="1"
+            step="1"
+            class="number-input"
+            aria-label="极低分辨率的高度阈值"
+            data-test="cleanup-low-height"
+          />
+          <span>像素</span>
+        </label>
+      </div>
+      <p class="help-text">清理审阅里「极短片段」「极低分辨率」两类按这里判定，默认 5 秒、480×320；保存后下一次清理分析生效。填 0 或留空按默认值。</p>
     </div>
     <div class="setting-item">
       <label class="switch">
@@ -86,7 +130,7 @@
         <span class="slider"></span>
         <span>自动为不能内嵌播放、或手机端直连会卡的视频生成播放代理</span>
       </label>
-      <p class="help-text">扫描后对本次新增的 mkv、avi 这类视频，以及长边超过 1920 或码率超过 8 Mbps 的视频生成一份 ≤1080p 的 mp4 代理；手机端实际播到这类视频而代理还没有时也会自动排队。源文件不会被改写或替换；被体积上限淘汰过的代理不会自动重建。上限与占用在「播放代理」分区。</p>
+      <p class="help-text">扫描后对本次新增的 mkv、avi 这类视频，以及长边超过 1920 或码率超过 8 Mbps 的视频生成一份 ≤1080p 的 mp4 代理；手机端实际播到这类视频而代理还没有时也会自动排队。源文件不会被改写或替换；被体积上限淘汰过的代理不会自动重建。上限与占用在「播放兼容缓存」分区。</p>
     </div>
     <div class="setting-item">
       <label class="switch">
@@ -192,6 +236,9 @@ export default {
 </script>
 
 <style scoped>
+.cleanup-threshold-row { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 6px; }
+.cleanup-threshold-field { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; }
+.cleanup-threshold-field .number-input { width: 84px; }
 .scan-blacklist-setting { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--border-color); }.scan-blacklist-list { display: grid; gap: 7px; margin-top: 10px; }.scan-blacklist-item { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--control-bg); }.scan-blacklist-item span { min-width: 0; flex: 1; overflow: hidden; color: var(--text-secondary); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 
 </style>

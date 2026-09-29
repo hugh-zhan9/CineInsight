@@ -4,7 +4,7 @@
         <h3>清理候选审阅</h3>
         <span class="cleanup-header__meta">
           共 {{ cleanupCandidateCount }} 项候选
-          <template v-if="cleanupReleasableText"> · 可释放约 <b>{{ cleanupReleasableText }}</b></template>
+          <template v-if="cleanupReleasableText"> · 移到废纸篓后，在访达清空废纸篓即可释放约 <b>{{ cleanupReleasableText }}</b></template>
         </span>
         <div class="cleanup-header__spacer"></div>
         <div v-if="cleanupResultStale" class="cleanup-outdated" data-test="cleanup-outdated-hint">
@@ -14,16 +14,26 @@
         <button type="button" class="cleanup-header__close" aria-label="关闭" @click="cleanupDialog.show = false">✕</button>
       </div>
 
-      <div v-if="cleanupDialog.analysis && !cleanupDialog.loading" class="cleanup-filter-bar">
+      <div v-if="!cleanupDialog.loading" class="cleanup-filter-bar">
+        <template v-if="cleanupDialog.analysis">
+          <button
+            v-for="option in cleanupCategoryOptions"
+            :key="option.key"
+            type="button"
+            :class="['cleanup-chip', { active: cleanupCategory === option.key }]"
+            :title="option.hint"
+            data-test="cleanup-category"
+            @click="selectCleanupCategory(option.key)"
+          >{{ option.label }}<span v-if="option.key !== 'all'" class="cleanup-chip__count">{{ option.count }}</span><span v-if="option.coverage" class="cleanup-chip__coverage" data-test="cleanup-coverage-chip">{{ option.coverage }}</span></button>
+        </template>
+        <!-- 「已忽略」页签（D-PC31）：不依赖本轮结果，分析被取消或失败时也能进来撤销。 -->
         <button
-          v-for="option in cleanupCategoryOptions"
-          :key="option.key"
           type="button"
-          :class="['cleanup-chip', { active: cleanupCategory === option.key }]"
-          :title="option.hint"
-          data-test="cleanup-category"
-          @click="cleanupCategory = option.key"
-        >{{ option.label }}<span v-if="option.key !== 'all'" class="cleanup-chip__count">{{ option.count }}</span></button>
+          :class="['cleanup-chip', { active: cleanupCategory === 'dismissed' }]"
+          title="「不是重复」「移出本组」「忽略」留下的记录，可以撤销"
+          data-test="cleanup-dismissed-tab"
+          @click="selectCleanupCategory('dismissed')"
+        >已忽略</button>
         <div class="cleanup-header__spacer"></div>
         <button type="button" class="btn-secondary btn-compact" :disabled="cleanupDialog.loading || cleanupDialog.processing" @click="reanalyzeCleanupCandidates">重新分析</button>
       </div>
@@ -42,8 +52,62 @@
           <div v-if="cleanupDialog.progress.message" class="cleanup-progress-hint">{{ cleanupDialog.progress.message }}</div>
           <div v-if="cleanupDialog.progress.path" class="cleanup-progress-path">当前文件：{{ cleanupDialog.progress.path }}</div>
           <div class="cleanup-progress-hint">该分析会逐个读取视频文件；外置硬盘、休眠磁盘或大库场景下耗时较长，长时间停留不代表已假死。</div>
+          <div class="cleanup-progress-actions">
+            <button
+              type="button"
+              class="btn-secondary btn-compact"
+              data-test="cleanup-cancel-analysis"
+              :disabled="cleanupDialog.cancelling"
+              @click="cancelCleanupAnalysis"
+            >{{ cleanupDialog.cancelling ? '正在取消…' : '取消分析' }}</button>
+          </div>
         </div>
+
+        <div v-else-if="cleanupCategory === 'dismissed'" class="cleanup-dismissed" data-test="cleanup-dismissed">
+          <div class="cleanup-dismissed__kinds">
+            <button
+              v-for="option in dismissalKindOptions"
+              :key="option.key"
+              type="button"
+              :class="['cleanup-chip', { active: dismissals.kind === option.key }]"
+              data-test="cleanup-dismissed-kind"
+              @click="switchDismissalKind(option.key)"
+            >{{ option.label }}</button>
+          </div>
+          <p class="cleanup-dismissed__hint">{{ dismissalHint }}</p>
+          <p v-if="dismissals.error" class="cleanup-error" data-test="cleanup-dismissed-error">{{ dismissals.error }}</p>
+          <p v-if="dismissals.loading && dismissals.items.length === 0" class="cleanup-empty">正在读取忽略记录…</p>
+          <p v-else-if="dismissals.items.length === 0 && dismissals.loaded" class="cleanup-empty" data-test="cleanup-dismissed-empty">这一类还没有忽略记录。</p>
+          <ul v-else-if="dismissals.items.length > 0" class="cleanup-dismissed__list">
+            <li v-for="item in dismissals.items" :key="item.id" class="cleanup-dismissed__item" data-test="cleanup-dismissal-item">
+              <span class="cleanup-dismissed__media">{{ describeDismissal(item) }}</span>
+              <span class="cleanup-dismissed__time">{{ formatDismissalTime(item.created_at) }}</span>
+              <button
+                type="button"
+                class="btn-secondary btn-compact"
+                data-test="cleanup-dismissal-undo"
+                :disabled="dismissals.undoing"
+                @click="undoCleanupDismissal(item)"
+              >撤销</button>
+            </li>
+          </ul>
+          <button
+            v-if="dismissals.hasMore"
+            type="button"
+            class="btn-secondary btn-compact"
+            data-test="cleanup-dismissed-more"
+            :disabled="dismissals.loading"
+            @click="loadCleanupDismissals(false)"
+          >{{ dismissals.loading ? '读取中…' : '加载更多' }}</button>
+        </div>
+
         <div v-else-if="cleanupDialog.error" class="cleanup-error">{{ cleanupDialog.error }}</div>
+
+        <div v-else-if="cleanupDialog.cancelled && !cleanupDialog.analysis" class="cleanup-empty" data-test="cleanup-cancelled">
+          <p class="cleanup-empty__title">上一轮分析已取消，没有产生结果。</p>
+          <button type="button" class="btn-secondary btn-compact" :disabled="cleanupDialog.processing" @click="reanalyzeCleanupCandidates">重新分析</button>
+        </div>
+
         <div v-else-if="cleanupDialog.analysis" class="cleanup-body">
           <div v-if="cleanupDialog.analysis.stale_hash_count" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-stale-hash-hint">
             <span>有 {{ cleanupDialog.analysis.stale_hash_count }} 个视频还没有可用的感知哈希（未回填或源文件已变更），暂未参与近似重复检测。</span>
@@ -62,6 +126,9 @@
             <button type="button" class="btn-secondary btn-compact" data-test="cleanup-start-frame-hash" :disabled="frameHashRunning" @click="$emit('start-frame-hash')">
               {{ frameHashRunning ? '补全中...' : '补全帧哈希' }}
             </button>
+          </div>
+          <div v-if="cleanupFocusNotice" class="cleanup-section cleanup-stale-hash-hint" data-test="cleanup-focus-missing">
+            <span>{{ cleanupFocusNotice }}</span>
           </div>
 
           <!-- 左侧目录承担分组，右侧只放当前目录的候选流（原型 A5）。
@@ -82,7 +149,8 @@
                 <span class="cleanup-dirs__count">{{ section.entries.length }}</span>
               </button>
               <div class="cleanup-dirs__spacer"></div>
-              <p class="cleanup-dirs__note">默认不勾选任何一项。逐条或整组勾选后统一移入回收站，回收站里可原路撤销。</p>
+              <!-- 统一勾选规则（D-PC49）：与图片清理页同一套，规则本身在 utils/cleanupSelection.js。 -->
+              <p class="cleanup-dirs__note">默认只勾选精确重复里保留项以外的副本；近似重复、同源、截取片段默认不勾选。保留项锁定，要先「设为保留」切换。勾选的视频移到废纸篓，可在回收站撤销。</p>
             </nav>
 
             <div class="cleanup-stream">
@@ -94,17 +162,16 @@
             <div class="cleanup-section__head">
               <strong :title="section.directory">{{ section.directory }}</strong>
               <span>{{ section.entries.length }} 项候选 · {{ section.videoCount }} 个视频</span>
-              <div class="cleanup-header__spacer"></div>
-              <button type="button" class="link-btn" data-test="cleanup-suggest-group" @click="selectSuggestedInSection(section)">按建议勾选本组（保留最高画质版本）</button>
             </div>
 
             <template v-if="true">
               <div
                 v-for="entry in section.entries"
                 :key="entry.key"
-                class="cleanup-card"
+                :class="['cleanup-card', { 'cleanup-card--focused': isFocusedEntry(entry) }]"
                 data-test="cleanup-group-card"
                 :data-kind="entry.kind"
+                :data-focused="isFocusedEntry(entry) ? 'true' : null"
               >
                 <div class="cleanup-card-kind">{{ cleanupKindLabel(entry.kind) }}</div>
 
@@ -116,6 +183,9 @@
                     <div class="cleanup-item-text">
                       <span class="cleanup-item-main">{{ cleanupItemSummary(entry.keeper) }}</span>
                       <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
+                      <span v-if="curationFor(entry.keeper).length" class="cleanup-curation" data-test="cleanup-curation">
+                        <span v-for="badge in curationFor(entry.keeper)" :key="badge.key" class="cleanup-curation__item" :title="badge.title">{{ badge.text }}</span>
+                      </span>
                     </div>
                     <div class="cleanup-item-actions">
                       <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.keeper)">预览保留项</button>
@@ -126,7 +196,7 @@
                     <input
                       type="checkbox"
                       :checked="isCleanupSelected(entry.group.alternative?.id)"
-                      :disabled="isCleanupTrashed(entry.group.alternative)"
+                      :disabled="isCleanupTrashed(entry.group.alternative) || isCleanupLocked(entry.group.alternative?.id)"
                       @change="toggleCleanupSelection(entry.group.alternative?.id)"
                     />
                     <CleanupThumbnail :video="entry.group.alternative" @preview="previewCleanupVideo" />
@@ -134,10 +204,14 @@
                       <span class="cleanup-item-main">可清理版本：{{ entry.group.alternative?.name }} · 预计释放 {{ formatFileSize(entry.group.estimated_savings) }}</span>
                       <span v-if="entry.group.alternative?.path" class="cleanup-item-path" :title="entry.group.alternative.path">{{ entry.group.alternative.path }}</span>
                       <span v-if="cleanupVideoDirectory(entry.group.alternative) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(entry.group.alternative) }}</span>
+                      <span v-if="curationFor(entry.group.alternative).length" class="cleanup-curation" data-test="cleanup-curation">
+                        <span v-for="badge in curationFor(entry.group.alternative)" :key="badge.key" class="cleanup-curation__item" :title="badge.title">{{ badge.text }}</span>
+                      </span>
+                      <span v-if="isCleanupLocked(entry.group.alternative?.id)" class="cleanup-item-locked" data-test="cleanup-member-locked">另一组要保留它</span>
                     </span>
                     <span class="cleanup-item-actions">
                       <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.group.alternative)">预览该版本</button>
-                      <button type="button" class="btn-secondary btn-compact" @click="rejectCleanupSameSource(entry.group)">不是同源</button>
+                      <button type="button" class="btn-secondary btn-compact" data-test="cleanup-reject-same-source" @click="rejectCleanupSameSource(entry.group)">不是同源</button>
                     </span>
                   </div>
                 </template>
@@ -153,6 +227,9 @@
                         <div class="cleanup-item-text">
                           <span class="cleanup-item-main">{{ cleanupItemSummary(entry.group.full) }}</span>
                           <span v-if="entry.group.full?.path" class="cleanup-item-path" :title="entry.group.full.path">{{ entry.group.full.path }}</span>
+                          <span v-if="curationFor(entry.group.full).length" class="cleanup-curation" data-test="cleanup-curation">
+                            <span v-for="badge in curationFor(entry.group.full)" :key="badge.key" class="cleanup-curation__item" :title="badge.title">{{ badge.text }}</span>
+                          </span>
                         </div>
                       </div>
                       <div class="cleanup-item-actions">
@@ -166,7 +243,7 @@
                           type="checkbox"
                           data-test="cleanup-clip-select"
                           :checked="isCleanupSelected(entry.group.clip?.id)"
-                          :disabled="isCleanupTrashed(entry.group.clip)"
+                          :disabled="isCleanupTrashed(entry.group.clip) || isCleanupLocked(entry.group.clip?.id)"
                           @change="toggleCleanupSelection(entry.group.clip?.id)"
                         />
                         <CleanupThumbnail :video="entry.group.clip" @preview="previewCleanupVideo" />
@@ -174,6 +251,10 @@
                           <span class="cleanup-item-main">{{ cleanupItemSummary(entry.group.clip) }}</span>
                           <span v-if="entry.group.clip?.path" class="cleanup-item-path" :title="entry.group.clip.path">{{ entry.group.clip.path }}</span>
                           <span v-if="cleanupVideoDirectory(entry.group.clip) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(entry.group.clip) }}</span>
+                          <span v-if="curationFor(entry.group.clip).length" class="cleanup-curation" data-test="cleanup-curation">
+                            <span v-for="badge in curationFor(entry.group.clip)" :key="badge.key" class="cleanup-curation__item" :title="badge.title">{{ badge.text }}</span>
+                          </span>
+                          <span v-if="isCleanupLocked(entry.group.clip?.id)" class="cleanup-item-locked" data-test="cleanup-member-locked">另一组要保留它</span>
                         </div>
                       </div>
                       <div class="cleanup-item-actions">
@@ -188,66 +269,101 @@
                   </p>
                 </template>
 
-                <!-- 精确重复 / 近似重复 -->
+                <!-- 精确重复 / 近似重复：保留项锁定（不能勾），「设为保留」换保留项；「按建议勾选本组」只作用于这一组。 -->
                 <template v-else-if="entry.kind === 'exact' || entry.kind === 'near'">
-                  <div class="cleanup-select-row cleanup-select-row--original" :class="{ 'cleanup-select-row--trashed': isCleanupTrashed(entry.keeper) }">
-                    <input
-                      type="checkbox"
-                      :checked="isCleanupSelected(entry.keeper?.id)"
-                      :disabled="isCleanupTrashed(entry.keeper)"
-                      @change="toggleCleanupSelection(entry.keeper?.id)"
-                    />
-                    <CleanupThumbnail :video="entry.keeper" @preview="previewCleanupVideo" />
-                    <strong>建议保留：</strong>
-                    <div class="cleanup-item-text">
-                      <span class="cleanup-item-main">{{ cleanupItemSummary(entry.keeper) }}</span>
-                      <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
-                    </div>
-                    <div class="cleanup-item-actions">
-                      <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.keeper)">预览</button>
-                      <button v-if="entry.kind === 'near'" type="button" class="btn-secondary btn-compact" @click="dismissNearDuplicateGroup(entry.group)">不是同片</button>
-                    </div>
+                  <div class="cleanup-card-head">
+                    <span class="cleanup-card-reason"><strong>原因：</strong>{{ entry.group.reason }}</span>
+                    <div class="cleanup-header__spacer"></div>
+                    <button
+                      type="button"
+                      class="link-btn"
+                      data-test="cleanup-suggest-group"
+                      :disabled="entrySuggestedIDs(entry).length === 0"
+                      @click="toggleEntrySuggestion(entry)"
+                    >{{ isEntryFullySuggested(entry) ? '取消本组勾选' : '按建议勾选本组' }}</button>
+                    <button
+                      v-if="entry.kind === 'near'"
+                      type="button"
+                      class="btn-secondary btn-compact"
+                      data-test="cleanup-dismiss-near-group"
+                      @click="dismissNearDuplicateGroup(entry.group)"
+                    >不是重复</button>
                   </div>
-                  <p><strong>原因：</strong>{{ entry.group.reason }}</p>
-                  <ul>
-                    <li v-for="candidate in entry.group.candidates || []" :key="`${entry.key}-${candidate.id}`">
-                      <div class="cleanup-select-row" :class="{ 'cleanup-select-row--trashed': isCleanupTrashed(candidate) }">
+                  <ul class="cleanup-member-list">
+                    <li v-for="member in entry.members" :key="`${entry.key}-${member.id}`">
+                      <div
+                        class="cleanup-select-row"
+                        :class="{ 'cleanup-select-row--keeper': isEntryKeeper(entry, member), 'cleanup-select-row--trashed': isCleanupTrashed(member) }"
+                        data-test="cleanup-member-row"
+                      >
                         <input
                           type="checkbox"
-                          :checked="isCleanupSelected(candidate.id)"
-                          :disabled="isCleanupTrashed(candidate)"
-                          @change="toggleCleanupSelection(candidate.id)"
+                          data-test="cleanup-member-select"
+                          :checked="isCleanupSelected(member.id)"
+                          :disabled="isCleanupTrashed(member) || isCleanupLocked(member.id)"
+                          :aria-label="`移到废纸篓 ${member.name || ''}`"
+                          @change="toggleCleanupSelection(member.id)"
                         />
-                        <CleanupThumbnail :video="candidate" @preview="previewCleanupVideo" />
+                        <CleanupThumbnail :video="member" @preview="previewCleanupVideo" />
+                        <strong v-if="isEntryKeeper(entry, member)" class="cleanup-keeper-label" data-test="cleanup-keeper-label">{{ member.id === entry.keeper?.id ? '建议保留：' : '保留：' }}</strong>
                         <span class="cleanup-item-text">
-                          <span class="cleanup-item-main">{{ cleanupItemSummary(candidate) }}</span>
-                          <span v-if="candidate.path" class="cleanup-item-path" :title="candidate.path">{{ candidate.path }}</span>
-                          <span v-if="cleanupVideoDirectory(candidate) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(candidate) }}</span>
+                          <span class="cleanup-item-main">{{ cleanupItemSummary(member) }}</span>
+                          <span v-if="member.path" class="cleanup-item-path" :title="member.path">{{ member.path }}</span>
+                          <span v-if="cleanupVideoDirectory(member) !== section.directory" class="cleanup-item-otherdir" data-test="cleanup-member-otherdir">位于 {{ cleanupVideoDirectory(member) }}</span>
+                          <span v-if="curationFor(member).length" class="cleanup-curation" data-test="cleanup-curation">
+                            <span v-for="badge in curationFor(member)" :key="badge.key" class="cleanup-curation__item" :title="badge.title">{{ badge.text }}</span>
+                          </span>
+                          <span v-if="isLockedByOtherGroup(entry, member)" class="cleanup-item-locked" data-test="cleanup-member-locked">另一组要保留它</span>
                         </span>
                         <span class="cleanup-item-actions">
-                          <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(candidate)">预览</button>
+                          <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(member)">预览</button>
+                          <button
+                            v-if="!isEntryKeeper(entry, member) && !isCleanupTrashed(member)"
+                            type="button"
+                            class="btn-secondary btn-compact"
+                            data-test="cleanup-set-keeper"
+                            @click="setCleanupKeeper(entry, member)"
+                          >设为保留</button>
+                          <button
+                            v-if="entry.kind === 'near' && entry.members.length > 2 && !isCleanupTrashed(member)"
+                            type="button"
+                            class="btn-secondary btn-compact"
+                            data-test="cleanup-remove-member"
+                            @click="removeNearDuplicateMember(entry.group, member)"
+                          >移出本组</button>
                         </span>
                       </div>
                     </li>
                   </ul>
                 </template>
 
-                <!-- 低清视频 / 短视频：单条候选，没有保留项。 -->
+                <!-- 极低分辨率 / 极短片段：单条候选，没有保留项；可以「忽略」（D-PC31）。 -->
                 <template v-else>
-                  <div class="cleanup-select-row">
+                  <div class="cleanup-select-row" :class="{ 'cleanup-select-row--trashed': isCleanupTrashed(entry.keeper) }">
                     <input
                       type="checkbox"
                       :checked="isCleanupSelected(entry.keeper?.id)"
-                      :disabled="isCleanupTrashed(entry.keeper)"
+                      :disabled="isCleanupTrashed(entry.keeper) || isCleanupLocked(entry.keeper?.id)"
                       @change="toggleCleanupSelection(entry.keeper?.id)"
                     />
                     <CleanupThumbnail :video="entry.keeper" @preview="previewCleanupVideo" />
                     <span class="cleanup-item-text">
                       <span class="cleanup-item-main">{{ cleanupItemSummary(entry.keeper) }}</span>
                       <span v-if="entry.keeper?.path" class="cleanup-item-path" :title="entry.keeper.path">{{ entry.keeper.path }}</span>
+                      <span v-if="curationFor(entry.keeper).length" class="cleanup-curation" data-test="cleanup-curation">
+                        <span v-for="badge in curationFor(entry.keeper)" :key="badge.key" class="cleanup-curation__item" :title="badge.title">{{ badge.text }}</span>
+                      </span>
+                      <span v-if="isCleanupLocked(entry.keeper?.id)" class="cleanup-item-locked" data-test="cleanup-member-locked">另一组要保留它</span>
                     </span>
                     <span class="cleanup-item-actions">
                       <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.keeper)">预览</button>
+                      <button
+                        v-if="!isCleanupTrashed(entry.keeper)"
+                        type="button"
+                        class="btn-secondary btn-compact"
+                        data-test="cleanup-dismiss-video"
+                        @click="dismissCleanupVideo(entry)"
+                      >忽略</button>
                     </span>
                   </div>
                 </template>
@@ -255,8 +371,26 @@
             </template>
           </div>
 
-          <div v-if="cleanupCandidateCount === 0" class="cleanup-empty">
-            当前没有命中轻量清理规则的候选项。
+          <!-- 空态要分得清「没有重复」与「还没算」（D-PC50）。 -->
+          <div v-if="cleanupEmptyState" class="cleanup-empty" data-test="cleanup-empty-state">
+            <p class="cleanup-empty__title">{{ cleanupEmptyState.title }}</p>
+            <p v-for="line in cleanupEmptyState.details" :key="line" class="cleanup-empty__detail">{{ line }}</p>
+            <button
+              v-if="cleanupEmptyState.action === 'perceptual-hash'"
+              type="button"
+              class="btn-secondary btn-compact"
+              data-test="cleanup-empty-start-perceptual-hash"
+              :disabled="perceptualHashRunning"
+              @click="$emit('start-perceptual-hash')"
+            >{{ perceptualHashRunning ? '补全中...' : '补全感知哈希' }}</button>
+            <button
+              v-if="cleanupEmptyState.action === 'frame-hash'"
+              type="button"
+              class="btn-secondary btn-compact"
+              data-test="cleanup-empty-start-frame-hash"
+              :disabled="frameHashRunning"
+              @click="$emit('start-frame-hash')"
+            >{{ frameHashRunning ? '补全中...' : '补全帧哈希' }}</button>
           </div>
             </div>
           </div>
@@ -266,33 +400,91 @@
       <!-- 底栏常显将要发生什么，以及"这一步可撤销"这件事 -->
       <div class="cleanup-modal-footer">
         <span class="cleanup-footer__summary">
-          将移入回收站 <b>{{ cleanupSelection.length }}</b> 项
-          <template v-if="cleanupSelectedSizeText"> · 释放 <b>{{ cleanupSelectedSizeText }}</b></template>
+          将移到废纸篓 <b>{{ cleanupSelection.length }}</b> 项
+          <template v-if="cleanupSelectedSizeText"> · 共 <b>{{ cleanupSelectedSizeText }}</b></template>
         </span>
-        <span class="cleanup-footer__hint">移入回收站可撤销，不会立即删除磁盘文件</span>
+        <span class="cleanup-footer__hint">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间</span>
         <div class="cleanup-header__spacer"></div>
         <button v-if="cleanupDialog.loading" @click="cleanupDialog.show = false" class="btn-secondary">后台继续分析</button>
         <button @click="cleanupDialog.show = false" class="btn-secondary">取消</button>
         <button
           @click="trashSelectedCleanupCandidates"
           class="btn-danger"
+          data-test="cleanup-trash-selected"
           :disabled="cleanupSelection.length === 0 || cleanupDialog.loading || cleanupDialog.processing"
         >
-          {{ cleanupDialog.processing ? '处理中...' : '移入回收站' }}
+          {{ cleanupDialog.processing ? '处理中...' : '移到废纸篓' }}
         </button>
       </div>
+
+      <!-- 删除前的汇总确认（D-PC49）与「把元数据合并到保留项」（D-PC48，默认勾选）。
+           合并在删除之前单独调用；合并失败就不删除。 -->
+      <BaseModal
+        v-if="deleteConfirm.show"
+        class="cleanup-delete-confirm"
+        aria-labelledby="cleanup-delete-confirm-title"
+        data-test="cleanup-delete-confirm-dialog"
+        @close="answerCleanupDelete(false)"
+      >
+        <h2 id="cleanup-delete-confirm-title">移到废纸篓</h2>
+        <p data-test="cleanup-delete-summary">
+          将把 {{ deleteConfirm.summary.count }} 个视频移到废纸篓<template v-if="deleteConfirm.summary.bytes > 0">，共 {{ formatFileSize(deleteConfirm.summary.bytes) }}</template>。
+        </p>
+        <p v-if="deleteConfirmKindsText" data-test="cleanup-delete-kinds">其中{{ deleteConfirmKindsText }}。</p>
+        <p v-if="deleteConfirmSimilarityCount > 0" class="cleanup-delete-confirm__warn" data-test="cleanup-delete-similarity">
+          其中 {{ deleteConfirmSimilarityCount }} 个是按画面相似度判断的（近似重复、同源或截取片段），删除前请确认已逐组看过。
+        </p>
+        <template v-if="deleteConfirm.mergeAvailable">
+          <label class="cleanup-delete-confirm__merge">
+            <input v-model="deleteConfirm.merge" type="checkbox" data-test="cleanup-merge-toggle" />
+            把元数据合并到保留项
+          </label>
+          <p class="cleanup-delete-confirm__help">标签、人物、收藏、点赞、评分、作品集与观看进度合并到各组保留项；保留项没有同名字幕时，移入被删项的字幕。合并失败时不会删除任何视频。</p>
+        </template>
+        <p class="cleanup-delete-confirm__help">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间。所在磁盘不支持废纸篓时，会先问你怎么处理。</p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" data-test="cleanup-delete-cancel" @click="answerCleanupDelete(false)">取消</button>
+          <button type="button" class="btn-danger" data-test="cleanup-delete-confirm" @click="answerCleanupDelete(true)">移到废纸篓</button>
+        </div>
+      </BaseModal>
   </BaseModal>
 </template>
 
 <script>
-import { GetCleanupStatus, StartCleanupAnalysis, DismissNearDuplicateGroup, DismissClipCandidate, RejectSameSourceRelation, PreviewExternally } from '../../../wailsjs/go/main/App';
+import {
+  GetCleanupStatus, StartCleanupAnalysisFromSettings, CancelCleanupAnalysis,
+  DismissNearDuplicateGroup, DismissNearDuplicateMember, DismissClipCandidate, DismissCleanupVideo, RejectSameSourceRelation,
+  ListCleanupDismissals, UndoCleanupDismissals, MergeMediaMetadata, PreviewExternally
+} from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import CleanupThumbnail from '../CleanupThumbnail.vue';
-import { confirmAction, notifyError, notifySuccess } from '../../utils/feedback.js';
+import { confirmAction, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
+import {
+  applySuggestion, cleanupGroup, clearGroupSelection, curationBadges, defaultSelection, describeSelectionKinds,
+  isGroupFullySuggested, keeperOf, lockedIDs, mergePlan, pruneSelection, selectionSummary, setKeeper,
+  similarityCount, suggestedIDs
+} from '../../utils/cleanupSelection.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import { formatElapsedDuration } from './format.js';
 
-// 清理候选审阅面板：后台分析状态、按目录分组的候选流、勾选与移入回收站。
+const DISMISSAL_PAGE_SIZE = 50;
+
+const DISMISSAL_KINDS = [
+  { key: 'near_duplicate', label: '近似重复' },
+  { key: 'clip', label: '截取片段' },
+  { key: 'short', label: '极短片段' },
+  { key: 'low', label: '极低分辨率' }
+];
+
+function emptyDismissals(kind = 'near_duplicate') {
+  return { kind, items: [], cursor: 0, hasMore: false, loading: false, loaded: false, undoing: false, error: '' };
+}
+
+function emptyDeleteConfirm() {
+  return { show: false, summary: { count: 0, bytes: 0, byKind: {} }, mergeAvailable: false, merge: true };
+}
+
+// 清理候选审阅面板：后台分析状态、按目录分组的候选流、勾选与移到废纸篓。
 // 父组件通过 ref 调用 open() / refreshStatus() / forgetTrashed()；需要动片库的那一步
 // （批量删除 + 撤销提示条 + 重载列表）经 trashVideos 函数 prop 回到父组件，
 // 这样原来的 await 顺序不用拆散。
@@ -305,6 +497,8 @@ export default {
     perceptualHashRunning: { type: Boolean, default: false },
     // 「补全帧哈希」按钮的运行态同样来自父组件的后台任务状态条。
     frameHashRunning: { type: Boolean, default: false },
+    // trashVideos(ids, { names }) → { result: { succeeded, failed, errors[{video_id, error}] }, failedIDs:Set, succeededIDs:[] }
+    // 片库页经撤销条执行删除（进度、取消、不支持废纸篓时的二选一）。names 是 { id: 文件名 }，供二选一弹窗列名字。
     trashVideos: { type: Function, required: true },
     afterTrashVideos: { type: Function, required: true }
   },
@@ -315,6 +509,10 @@ export default {
         show: false,
         loading: false,
         processing: false,
+        // cancelling：已经点了「取消分析」，等后台真正停下（期间仍显示进度）。
+        cancelling: false,
+        // cancelled：上一轮被用户取消，没有结果、也不算失败（D-PC51）。
+        cancelled: false,
         analysis: null,
         error: '',
         // stale：结果算出后视频库又变过，提示可能过期但保留结果继续审阅。
@@ -322,12 +520,22 @@ export default {
         progress: { stage: '', message: '', current: 0, total: 0, path: '' }
       },
       cleanupSelection: [],
+      // 默认勾选只在换了一批分析结果时套一次（按 started_at 区分），回读同一批结果不能把用户取消的勾重新勾上。
+      cleanupSelectionKey: null,
+      // 「设为保留」的覆盖：{ 组 key: 视频 id }。
+      cleanupKeepOverrides: {},
       cleanupStatusRequestID: 0,
       cleanupCategory: 'all',
       activeCleanupDirectory: '',
       cleanupCollapsedDirs: {},
-      // 本次审阅中已移入回收站的视频 id：结果不重跑，用来提示结果已过期。
+      // 本次审阅中已移到废纸篓的视频 id：结果不重跑，用来提示结果已过期。
       cleanupTrashedIDs: [],
+      // 从 AI 同源审阅「去清理」过来时要定位的那一对（{ relationId }）；找到之后清掉。
+      cleanupFocus: null,
+      cleanupFocusedRelationID: 0,
+      cleanupFocusNotice: '',
+      dismissals: emptyDismissals(),
+      deleteConfirm: emptyDeleteConfirm(),
       cleanupStartedAt: 0,
       cleanupNow: Date.now(),
       cleanupTimer: null,
@@ -357,6 +565,7 @@ export default {
         } catch (err) {
           console.error('读取清理分析结果失败:', err);
           this.cleanupDialog.loading = false;
+          this.cleanupDialog.cancelling = false;
           this.resetCleanupProgressTracking();
         }
       }
@@ -364,6 +573,7 @@ export default {
   },
   beforeUnmount() {
     this.resetCleanupProgressTracking();
+    if (this._resolveDeleteConfirm) this._resolveDeleteConfirm(null);
   },
   // 管理菜单的徽标与「分析中」文案仍由父组件渲染，这里把两个值镜像出去。
   watch: {
@@ -376,6 +586,25 @@ export default {
     },
     cleanupResultStale() {
       return Boolean(this.cleanupDialog.analysis && (this.cleanupDialog.stale || this.cleanupTrashedIDs.length));
+    },
+    cleanupThresholds() {
+      const thresholds = this.cleanupDialog.analysis?.thresholds || {};
+      return {
+        shortSeconds: Number(thresholds.short_seconds || 0),
+        lowWidth: Number(thresholds.low_width || 0),
+        lowHeight: Number(thresholds.low_height || 0)
+      };
+    },
+    // 各类别的前置条件覆盖率（D-PC50）。老结果没有 coverage 时为 null，界面不显示覆盖率。
+    cleanupCoverage() {
+      const coverage = this.cleanupDialog.analysis?.coverage;
+      if (!coverage) return null;
+      const count = value => ({ done: Number(value?.done || 0), total: Number(value?.total || 0) });
+      return {
+        near: count(coverage.perceptual_hash),
+        clip: count(coverage.frame_hash),
+        'same-source': { done: Number(coverage.same_source?.evaluated || 0), total: Number(coverage.same_source?.total || 0) }
+      };
     },
     // 顶层按目录分组：每条候选归到"建议保留项"所在目录（单条候选就按它自己的目录），
     // 组员仍可位于别的目录，行内会标出来。
@@ -415,6 +644,38 @@ export default {
       }
       return [...buckets.values()].sort((a, b) => a.directory.localeCompare(b.directory));
     },
+    // 勾选规则用的统一组（utils/cleanupSelection.js）。同源与截取片段的保留项固定，精确 / 近似可以换。
+    cleanupGroups() {
+      const groups = [];
+      for (const section of this.cleanupDirectorySections) {
+        for (const entry of section.entries) {
+          const single = entry.kind === 'low-resolution' || entry.kind === 'low-duration';
+          groups.push(cleanupGroup({
+            key: entry.key,
+            kind: entry.kind,
+            keeperId: single ? null : entry.keeper?.id,
+            memberIds: entry.members.map(member => member.id),
+            switchable: entry.kind === 'exact' || entry.kind === 'near'
+          }));
+        }
+      }
+      return groups;
+    },
+    cleanupGroupByKey() {
+      return new Map(this.cleanupGroups.map(group => [group.key, group]));
+    },
+    cleanupLockedIDs() {
+      return lockedIDs(this.cleanupGroups, this.cleanupKeepOverrides);
+    },
+    cleanupMemberSizes() {
+      const sizes = new Map();
+      for (const section of this.cleanupDirectorySections) {
+        for (const entry of section.entries) {
+          for (const member of entry.members) sizes.set(member.id, Number(member.size || 0));
+        }
+      }
+      return sizes;
+    },
     // 本轮被跳过的条目。外置盘没挂载时这个数会很大，而在有它之前，插着盘和
     // 不插盘跑出来的界面长得一模一样——用户只会觉得"检测不准"。
     cleanupSkippedText() {
@@ -434,19 +695,23 @@ export default {
         .reduce((total, section) => total + section.entries.filter(entry => entry.kind === key).length, 0);
       if (!analysis) return [];
       // 判定阈值挂在各自的类别上——「低清到底指多低」这个疑问就产生在这里。
+      // 两类阈值来自设置（D-PC36），标题按本轮实际使用的阈值显示。
+      const { lowWidth, lowHeight, shortSeconds } = this.cleanupThresholds;
+      const lowRule = lowWidth > 0 && lowHeight > 0 ? `分辨率低于 ${lowWidth}×${lowHeight}` : '分辨率低于设置的阈值';
+      const shortRule = shortSeconds > 0 ? `时长 < ${shortSeconds} 秒` : '时长低于设置的阈值';
       return [
-        { key: 'all', label: '全部类别', count: this.cleanupCandidateCount, hint: '选中的视频会移入回收站并从库中移除，可原路撤销' },
-        { key: 'exact', label: '精确重复', count: count('exact'), hint: '大小 + 采样哈希完全一致' },
-        { key: 'near', label: '近似重复', count: count('near'), hint: '多帧感知哈希接近' },
-        { key: 'same-source', label: '同源视频', count: count('same-source'), hint: '同一片源的不同转码或裁剪版本' },
-        { key: 'clip', label: '截取片段', count: count('clip'), hint: '完整片里截下来的一段：逐帧哈希对齐命中（不会默认选中）' },
-        { key: 'low-resolution', label: '低清', count: count('low-resolution'), hint: '低清视频：分辨率低于 480x320' },
-        { key: 'low-duration', label: '短视频', count: count('low-duration'), hint: '短视频：时长 < 5 秒' }
+        { key: 'all', label: '全部类别', count: this.cleanupCandidateCount, hint: '选中的视频会移到废纸篓并从库中移除，可在回收站撤销' },
+        { key: 'exact', label: '精确重复', count: count('exact'), hint: '大小 + 采样哈希完全一致；默认勾选保留项以外的副本' },
+        { key: 'near', label: '近似重复', count: count('near'), hint: '多帧感知哈希接近；默认不勾选', coverage: this.coverageLabel('near') },
+        { key: 'same-source', label: '同源视频', count: count('same-source'), hint: '同一片源的不同转码或裁剪版本，来自 AI 打标的「查找同源」；默认不勾选', coverage: this.coverageLabel('same-source') },
+        { key: 'clip', label: '截取片段', count: count('clip'), hint: '完整片里截下来的一段：逐帧哈希对齐命中（不会默认选中）', coverage: this.coverageLabel('clip') },
+        { key: 'low-resolution', label: this.cleanupKindLabel('low-resolution'), count: count('low-resolution'), hint: `极低分辨率：${lowRule}（阈值在设置「自动化与扫描」里修改）` },
+        { key: 'low-duration', label: this.cleanupKindLabel('low-duration'), count: count('low-duration'), hint: `极短片段：${shortRule}（阈值在设置「自动化与扫描」里修改）` }
       ];
     },
     // 类别筛选只收窄看到的候选，不改变分析结果本身。
     cleanupFilteredSections() {
-      if (this.cleanupCategory === 'all') return this.cleanupDirectorySections;
+      if (this.cleanupCategory === 'all' || this.cleanupCategory === 'dismissed') return this.cleanupDirectorySections;
       return this.cleanupDirectorySections
         .map(section => ({
           ...section,
@@ -460,17 +725,29 @@ export default {
       const active = sections.find(section => section.directory === this.activeCleanupDirectory);
       return [active || sections[0]];
     },
+    // 当前类别（或全部）为空时的空态：分清「没有」与「还没算 / 只算了一部分」（D-PC50）。
+    cleanupEmptyState() {
+      if (!this.cleanupDialog.analysis || this.cleanupFilteredSections.length > 0) return null;
+      const category = this.cleanupCategory;
+      if (category === 'all') {
+        const details = ['near', 'clip', 'same-source']
+          .map(kind => this.coverageNote(kind))
+          .filter(Boolean);
+        return { title: '当前没有命中轻量清理规则的候选项。', details, action: null };
+      }
+      const label = this.cleanupCategoryOptions.find(option => option.key === category)?.label || '这一类';
+      const coverage = this.cleanupCoverage?.[category];
+      if (coverage && coverage.total > 0 && coverage.done === 0) {
+        if (category === 'near') return { title: '尚未计算', details: ['还没有视频算过感知哈希，近似重复检测还没开始。'], action: 'perceptual-hash' };
+        if (category === 'clip') return { title: '尚未计算', details: ['还没有视频算过帧哈希，截取片段识别还没开始。'], action: 'frame-hash' };
+        return { title: '尚未计算', details: ['同源候选来自 AI 打标的「查找同源」，还没有视频做过同源判断。'], action: null };
+      }
+      const note = this.coverageNote(category);
+      return { title: `没有发现${label}候选。`, details: note ? [note] : [], action: null };
+    },
     // 底栏的"释放多少"只算真正选中的那些视频，不含建议保留项。
     cleanupSelectedSizeText() {
-      const selected = new Set(this.cleanupSelection);
-      let bytes = 0;
-      for (const section of this.cleanupDirectorySections) {
-        for (const entry of section.entries) {
-          for (const member of entry.members) {
-            if (selected.has(member.id)) bytes += Number(member.size || 0);
-          }
-        }
-      }
+      const bytes = this.selectedBytes(this.cleanupSelection);
       return bytes > 0 ? this.formatFileSize(bytes) : '';
     },
     cleanupReleasableText() {
@@ -517,9 +794,33 @@ export default {
       if (total <= 0) return null;
       return Math.min(100, Math.max(0, Math.round((current / total) * 100)));
     },
+    dismissalKindOptions() {
+      return DISMISSAL_KINDS;
+    },
+    dismissalHint() {
+      switch (this.dismissals.kind) {
+        case 'near_duplicate':
+          return '「不是重复」和「移出本组」留下的记录。撤销后这些视频在下次分析时重新参与近似重复检测；当时一并判为「不是同源」的同源关系不会恢复。';
+        case 'clip':
+          return '截取片段「忽略」留下的记录。撤销后这一对在下次分析时重新参与识别。';
+        default:
+          return '「忽略」留下的记录。撤销后这个视频在下次分析时重新参与这一类判断。';
+      }
+    },
+    deleteConfirmKindsText() {
+      return describeSelectionKinds(this.deleteConfirm.summary, '个');
+    },
+    deleteConfirmSimilarityCount() {
+      return similarityCount(this.deleteConfirm.summary);
+    }
   },
   methods: {
-    open() {
+    // focus：{ relationId }，从 AI 同源审阅「去清理」过来时定位那一对同源候选。
+    open(focus = null) {
+      const relationId = Number(focus?.relationId || 0);
+      this.cleanupFocus = relationId > 0 ? { relationId } : null;
+      this.cleanupFocusedRelationID = 0;
+      this.cleanupFocusNotice = '';
       return this.openCleanupDialog();
     },
     refreshStatus() {
@@ -564,8 +865,40 @@ export default {
       if (kind === 'exact') return '精确重复';
       if (kind === 'near') return '近似重复（不同转码，不会默认选中）';
       if (kind === 'clip') return '截取片段（不会默认选中）';
-      if (kind === 'low-resolution') return '低清视频';
-      return '短视频';
+      const { lowWidth, lowHeight, shortSeconds } = this.cleanupThresholds;
+      if (kind === 'low-resolution') return lowWidth > 0 && lowHeight > 0 ? `极低分辨率（< ${lowWidth}×${lowHeight}）` : '极低分辨率';
+      return shortSeconds > 0 ? `极短片段（< ${shortSeconds} 秒）` : '极短片段';
+    },
+    // 类别标题旁的覆盖率：还没算显示「尚未计算」，只算了一部分显示「已算 X / Y」。
+    coverageLabel(kind) {
+      const coverage = this.cleanupCoverage?.[kind];
+      if (!coverage || coverage.total <= 0) return '';
+      if (coverage.done === 0) return '尚未计算';
+      if (coverage.done < coverage.total) return `已算 ${coverage.done} / ${coverage.total}`;
+      return '';
+    },
+    coverageNote(kind) {
+      const coverage = this.cleanupCoverage?.[kind];
+      if (!coverage || coverage.total <= 0 || coverage.done >= coverage.total) return '';
+      if (kind === 'near') {
+        return coverage.done === 0
+          ? '近似重复尚未计算：还没有视频算过感知哈希。'
+          : `近似重复只覆盖了一部分：感知哈希已算 ${coverage.done} / ${coverage.total}。`;
+      }
+      if (kind === 'clip') {
+        return coverage.done === 0
+          ? '截取片段尚未计算：还没有视频算过帧哈希。'
+          : `截取片段只覆盖了一部分：帧哈希已算 ${coverage.done} / ${coverage.total}。`;
+      }
+      return coverage.done === 0
+        ? '同源视频尚未计算：同源候选来自 AI 打标的「查找同源」，还没有视频做过同源判断。'
+        : `同源视频只覆盖了一部分：AI 打标已对 ${coverage.done} / ${coverage.total} 个视频做过同源判断。`;
+    },
+    selectCleanupCategory(key) {
+      this.cleanupCategory = key;
+      if (key === 'dismissed' && !this.dismissals.loaded && !this.dismissals.loading) {
+        this.loadCleanupDismissals(true);
+      }
     },
     // 偏移可能是 0（片头截取），formatDuration 对 0 返回空串，这里单独给一个口径。
     formatClipOffset(seconds) {
@@ -578,7 +911,7 @@ export default {
       if (!Number.isFinite(value) || value <= 0) return '0%';
       return `${Math.round(value * 100)}%`;
     },
-    // 结果不重跑，已移入回收站的行留在原地但置灰禁选，避免重复删已删的项。
+    // 结果不重跑，已移到废纸篓的行留在原地但置灰禁选，避免重复删已删的项。
     isCleanupTrashed(video) {
       return this.cleanupTrashedIDs.includes(Number(video?.id));
     },
@@ -588,14 +921,79 @@ export default {
     toggleCleanupDir(directory) {
       this.cleanupCollapsedDirs = { ...this.cleanupCollapsedDirs, [directory]: !this.cleanupCollapsedDirs[directory] };
     },
+    curationFor(video) {
+      if (!video) return [];
+      return curationBadges(this.cleanupDialog.analysis?.curation?.[video.id]);
+    },
+    selectionOptions(overrides = this.cleanupKeepOverrides) {
+      return { overrides, locked: lockedIDs(this.cleanupGroups, overrides), excluded: this.cleanupTrashedIDs };
+    },
+    entryGroup(entry) {
+      return this.cleanupGroupByKey.get(entry.key) || null;
+    },
+    isEntryKeeper(entry, member) {
+      return keeperOf(this.entryGroup(entry), this.cleanupKeepOverrides) === Number(member?.id);
+    },
+    isCleanupLocked(videoID) {
+      return this.cleanupLockedIDs.has(Number(videoID));
+    },
+    // 这一行是别的组的保留项：本组也不能勾它。
+    isLockedByOtherGroup(entry, member) {
+      return this.isCleanupLocked(member?.id) && !this.isEntryKeeper(entry, member);
+    },
+    entrySuggestedIDs(entry) {
+      return suggestedIDs(this.entryGroup(entry), this.selectionOptions());
+    },
+    isEntryFullySuggested(entry) {
+      return isGroupFullySuggested(this.cleanupSelection, this.entryGroup(entry), this.selectionOptions());
+    },
+    // 「按建议勾选本组」只作用于这一组（D-PC49），再点一次取消本组勾选。
+    toggleEntrySuggestion(entry) {
+      const group = this.entryGroup(entry);
+      if (!group) return;
+      this.cleanupSelection = this.isEntryFullySuggested(entry)
+        ? clearGroupSelection(this.cleanupSelection, group)
+        : applySuggestion(this.cleanupSelection, group, this.selectionOptions());
+    },
+    setCleanupKeeper(entry, member) {
+      const group = this.entryGroup(entry);
+      if (!group || this.isCleanupTrashed(member)) return;
+      const next = setKeeper({
+        groups: this.cleanupGroups,
+        overrides: this.cleanupKeepOverrides,
+        selection: this.cleanupSelection,
+        excluded: this.cleanupTrashedIDs
+      }, group, member.id);
+      this.cleanupKeepOverrides = next.overrides;
+      this.cleanupSelection = next.selection;
+    },
+    selectedBytes(ids) {
+      const sizes = this.cleanupMemberSizes;
+      let bytes = 0;
+      for (const id of new Set(ids)) bytes += sizes.get(id) || 0;
+      return bytes;
+    },
     applyCleanupStatus(status) {
       if (!status) return;
       this.cleanupDialog.loading = !!status.running;
       this.cleanupDialog.error = status.error || '';
       this.cleanupDialog.stale = !!status.stale;
+      this.cleanupDialog.cancelled = !status.running && !!status.cancelled;
+      if (!status.running) this.cleanupDialog.cancelling = false;
       this.cleanupDialog.analysis = status.analysis || null;
-      const remainingIDs = new Set(this.getAllCleanupCandidates().map(video => video.id));
-      this.cleanupSelection = this.cleanupSelection.filter(id => remainingIDs.has(id));
+      if (this.cleanupDialog.analysis) {
+        const key = String(status.started_at || '');
+        if (key !== this.cleanupSelectionKey) {
+          // 换了一批结果：套一次默认勾选（只勾精确重复的非保留项），保留项覆盖作废。
+          this.cleanupSelectionKey = key;
+          this.cleanupKeepOverrides = {};
+          this.cleanupSelection = defaultSelection(this.cleanupGroups, this.selectionOptions({}));
+        } else {
+          this.cleanupSelection = pruneSelection(this.cleanupSelection, this.cleanupGroups, this.selectionOptions());
+        }
+      } else {
+        this.cleanupSelection = [];
+      }
       this.cleanupDialog.progress = status.progress || { stage: '', message: '', current: 0, total: 0, path: '' };
       if (status.running) {
         this.startCleanupProgressTracking(status.started_at);
@@ -603,6 +1001,31 @@ export default {
         this.resetCleanupProgressTracking();
         this.cleanupDialog.progress = status.progress || this.cleanupDialog.progress;
       }
+      this.applyCleanupFocus();
+    },
+    // 定位「去清理」带过来的同源对：切到同源类别与它所在的目录。结果里没有这一对时说明原因。
+    applyCleanupFocus() {
+      const focus = this.cleanupFocus;
+      if (!focus || !this.cleanupDialog.analysis) return;
+      this.cleanupFocus = null;
+      for (const section of this.cleanupDirectorySections) {
+        const entry = section.entries.find(item => item.kind === 'same-source' && Number(item.group?.relation_id) === focus.relationId);
+        if (!entry) continue;
+        this.cleanupCategory = 'same-source';
+        this.activeCleanupDirectory = section.directory;
+        this.cleanupFocusedRelationID = focus.relationId;
+        this.cleanupFocusNotice = '';
+        this.$nextTick(() => {
+          const node = document.querySelector('[data-test="cleanup-group-card"][data-focused="true"]');
+          if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center' });
+        });
+        return;
+      }
+      this.cleanupFocusNotice = '要处理的那一对同源视频不在当前的分析结果里（可能是分析之后才确认的）。点「重新分析」后再找。';
+    },
+    isFocusedEntry(entry) {
+      return entry.kind === 'same-source' && this.cleanupFocusedRelationID > 0
+        && Number(entry.group?.relation_id) === this.cleanupFocusedRelationID;
     },
     // 决策保存后，之前发出的回读不能把已处理的行重新盖回来。
     async readCleanupStatus() {
@@ -620,7 +1043,7 @@ export default {
       try {
         const { status, current } = await this.readCleanupStatus();
         if (!current) return;
-        if (status?.running || status?.completed) {
+        if (status?.running || status?.completed || status?.cancelled) {
           this.applyCleanupStatus(status);
         }
       } catch (err) {
@@ -632,7 +1055,8 @@ export default {
       try {
         const { status, current } = await this.readCleanupStatus();
         if (!current) return;
-        if (status?.running || status?.completed) {
+        // 上一轮被用户取消时不自动重跑：显示「已取消」，要不要重来由用户决定。
+        if (status?.running || status?.completed || status?.cancelled) {
           this.applyCleanupStatus(status);
           return;
         }
@@ -645,6 +1069,7 @@ export default {
     },
     async reanalyzeCleanupCandidates() {
       this.cleanupDialog.show = true;
+      if (this.cleanupCategory === 'dismissed') this.cleanupCategory = 'all';
       try {
         await this.startNewCleanupAnalysis();
       } catch (err) {
@@ -656,17 +1081,35 @@ export default {
     async startNewCleanupAnalysis() {
       const requestID = ++this.cleanupStatusRequestID;
       this.cleanupSelection = [];
+      this.cleanupSelectionKey = null;
+      this.cleanupKeepOverrides = {};
       this.cleanupCollapsedDirs = {};
       this.cleanupTrashedIDs = [];
+      this.cleanupFocusedRelationID = 0;
+      this.cleanupFocusNotice = '';
       this.cleanupDialog.loading = true;
       this.cleanupDialog.processing = false;
+      this.cleanupDialog.cancelling = false;
+      this.cleanupDialog.cancelled = false;
       this.cleanupDialog.analysis = null;
       this.cleanupDialog.error = '';
       this.cleanupDialog.stale = false;
       this.cleanupDialog.progress = { stage: 'load', message: '正在准备清理候选分析…', current: 0, total: 0, path: '' };
       this.startCleanupProgressTracking();
-      const started = await StartCleanupAnalysis(5, 480, 320);
+      // 「极短片段 / 极低分辨率」阈值由后端读设置（D-PC36），前端不再写死。
+      const started = await StartCleanupAnalysisFromSettings();
       if (requestID === this.cleanupStatusRequestID) this.applyCleanupStatus(started);
+    },
+    // 取消只是发出请求：后台在两项之间检查，真正停下后经 cleanup-progress 的 done 事件回到 cancelled 状态。
+    async cancelCleanupAnalysis() {
+      if (this.cleanupDialog.cancelling) return;
+      this.cleanupDialog.cancelling = true;
+      try {
+        await CancelCleanupAnalysis();
+      } catch (err) {
+        this.cleanupDialog.cancelling = false;
+        notifyError('取消清理分析失败：' + err);
+      }
     },
     getAllCleanupCandidates() {
       const analysis = this.cleanupDialog.analysis || {};
@@ -714,37 +1157,9 @@ export default {
         this.cleanupSelection = this.cleanupSelection.filter(id => id !== videoID);
         return;
       }
+      // 保留项锁定（D-PC49）：界面上勾选框已禁用，这里再兜一次，免得键盘或脚本绕过去。
+      if (this.isCleanupLocked(videoID) || this.cleanupTrashedIDs.includes(Number(videoID))) return;
       this.cleanupSelection = [...this.cleanupSelection, videoID];
-    },
-    getSelectAllCleanupCandidates() {
-      const analysis = this.cleanupDialog.analysis || {};
-      const byID = new Map();
-      for (const group of analysis.duplicate_groups || []) {
-        if (group.original?.id) {
-          byID.set(group.original.id, group.original);
-        }
-        for (const candidate of group.candidates || []) {
-          byID.set(candidate.id, candidate);
-        }
-      }
-      for (const group of analysis.same_source_groups || []) {
-        if (group.alternative?.id) {
-          byID.set(group.alternative.id, group.alternative);
-        }
-      }
-      for (const video of analysis.low_duration || []) {
-        byID.set(video.id, video);
-      }
-      for (const video of analysis.low_resolution || []) {
-        byID.set(video.id, video);
-      }
-      return Array.from(byID.values());
-    },
-    selectAllCleanupCandidates() {
-      // 已移入回收站的项行内已禁选，全选也必须跳过，否则会对着已删的视频再删一次。
-      this.cleanupSelection = this.getSelectAllCleanupCandidates()
-        .map(video => video.id)
-        .filter(id => !this.cleanupTrashedIDs.includes(Number(id)));
     },
     clearCleanupSelection() {
       this.cleanupSelection = [];
@@ -760,9 +1175,16 @@ export default {
         notifyError('用系统播放器打开失败: ' + err);
       }
     },
+    // 近似重复「不是重复」：整组两两配对记为忽略（同时否决这些对上待审的同源关系），忽略前先确认（D-PC31）。
     async dismissNearDuplicateGroup(group) {
       const ids = [group.original?.id, ...(group.candidates || []).map(video => video.id)].filter(Boolean);
       if (ids.length < 2) return;
+      const confirmed = await confirmAction({
+        title: '不是重复',
+        message: `确认这组 ${ids.length} 个视频不是重复？\n之后的分析不再把它们报为近似重复，这些配对上待审的同源关系也一并判为「不是同源」。任一文件变化后忽略自动失效，也可以在「已忽略」里撤销。`,
+        confirmText: '不是重复'
+      });
+      if (!confirmed) return;
       try {
         await DismissNearDuplicateGroup(ids);
         this.cleanupStatusRequestID++;
@@ -772,10 +1194,41 @@ export default {
             .filter(item => ![item.original?.id, ...(item.candidates || []).map(video => video.id)].every(id => ids.includes(id)));
         }
         this.cleanupSelection = this.cleanupSelection.filter(id => !ids.includes(id));
-        notifySuccess('已记录“不是同片”，这组视频之间的配对不再作为相似关系候选。');
+        notifySuccess('已记录“不是重复”，这组视频之间的配对不再作为近似重复候选。');
         await this.refreshCleanupStatus();
       } catch (err) {
         notifyError('忽略近似重复组失败: ' + err);
+      }
+    },
+    // 「移出本组」：只否决这个成员与组内其他成员的配对，其余成员之间的关系不动（D-PC31）。
+    async removeNearDuplicateMember(group, member) {
+      const ids = [group.original?.id, ...(group.candidates || []).map(video => video.id)].filter(Boolean);
+      const memberID = Number(member?.id);
+      if (ids.length < 3 || !ids.includes(memberID)) return;
+      const confirmed = await confirmAction({
+        title: '移出本组',
+        message: `把「${member.name || `视频 ${memberID}`}」移出本组？\n只记录它与组内其他 ${ids.length - 1} 个视频不是重复，其余成员之间的关系不变。可以在「已忽略」里撤销。`,
+        confirmText: '移出本组'
+      });
+      if (!confirmed) return;
+      try {
+        await DismissNearDuplicateMember(ids, memberID);
+        this.cleanupStatusRequestID++;
+        const analysis = this.cleanupDialog.analysis;
+        if (analysis) {
+          analysis.near_duplicate_groups = (analysis.near_duplicate_groups || []).flatMap(item => {
+            const members = [item.original, ...(item.candidates || [])].filter(Boolean);
+            const memberIDs = members.map(video => video.id);
+            if (memberIDs.length !== ids.length || !memberIDs.every(id => ids.includes(id))) return [item];
+            const rest = members.filter(video => video.id !== memberID);
+            return rest.length < 2 ? [] : [{ ...item, original: rest[0], candidates: rest.slice(1) }];
+          });
+        }
+        this.cleanupSelection = this.cleanupSelection.filter(id => id !== memberID);
+        notifySuccess('已移出本组，其余成员仍在这一组里。');
+        await this.refreshCleanupStatus();
+      } catch (err) {
+        notifyError('移出本组失败: ' + err);
       }
     },
     // 截取片段的"忽略"：双方文件都不变时后续分析不再报出（D-028）。
@@ -783,6 +1236,12 @@ export default {
       const fullID = group?.full?.id;
       const clipID = group?.clip?.id;
       if (!fullID || !clipID) return;
+      const confirmed = await confirmAction({
+        title: '忽略截取片段',
+        message: '忽略这对截取片段候选？\n双方文件都不变时，之后的分析不再报出这一对。可以在「已忽略」里撤销。',
+        confirmText: '忽略'
+      });
+      if (!confirmed) return;
       try {
         await DismissClipCandidate(fullID, clipID);
         this.cleanupStatusRequestID++;
@@ -798,8 +1257,43 @@ export default {
         notifyError('忽略截取片段失败: ' + err);
       }
     },
+    // 极短片段 / 极低分辨率也可以忽略（D-PC31、APP-11）：文件不变就不再报出，管理菜单的徽标随之消退。
+    async dismissCleanupVideo(entry) {
+      const video = entry?.keeper;
+      const category = entry?.kind === 'low-duration' ? 'short' : entry?.kind === 'low-resolution' ? 'low' : '';
+      if (!video?.id || !category) return;
+      const label = category === 'short' ? '极短片段' : '极低分辨率';
+      const confirmed = await confirmAction({
+        title: `忽略${label}候选`,
+        message: `忽略「${video.name || `视频 ${video.id}`}」这条${label}候选？\n文件不变时之后的分析不再报出它。可以在「已忽略」里撤销。`,
+        confirmText: '忽略'
+      });
+      if (!confirmed) return;
+      try {
+        await DismissCleanupVideo(video.id, category);
+        this.cleanupStatusRequestID++;
+        const analysis = this.cleanupDialog.analysis;
+        if (analysis) {
+          const key = category === 'short' ? 'low_duration' : 'low_resolution';
+          analysis[key] = (analysis[key] || []).filter(item => item.id !== video.id);
+        }
+        // 同一个视频可能还在别的类别里，只有它不再是任何候选时才放掉勾选。
+        const remaining = new Set(this.getAllCleanupCandidates().map(item => item.id));
+        this.cleanupSelection = this.cleanupSelection.filter(id => remaining.has(id));
+        notifySuccess(`已忽略这条${label}候选。`);
+        await this.refreshCleanupStatus();
+      } catch (err) {
+        notifyError(`忽略${label}候选失败: ` + err);
+      }
+    },
     async rejectCleanupSameSource(group) {
       if (!group?.relation_id) return;
+      const confirmed = await confirmAction({
+        title: '不是同源',
+        message: '确认这两个视频不是同源？\n双方内容未变时不再作为相似关系候选，AI 同源审阅也不再询问这一对。这个判断不会出现在「已忽略」列表里。',
+        confirmText: '不是同源'
+      });
+      if (!confirmed) return;
       try {
         await RejectSameSourceRelation(group.relation_id);
         this.cleanupStatusRequestID++;
@@ -818,20 +1312,123 @@ export default {
         notifyError('更新同源判断失败: ' + err);
       }
     },
+    // 「已忽略」页签（D-PC31）：按类别分页列出忽略记录，可以逐条撤销。
+    switchDismissalKind(kind) {
+      if (this.dismissals.kind === kind && this.dismissals.loaded) return;
+      this.dismissals = emptyDismissals(kind);
+      this.loadCleanupDismissals(true);
+    },
+    async loadCleanupDismissals(reset) {
+      const kind = this.dismissals.kind;
+      if (reset) this.dismissals = emptyDismissals(kind);
+      const cursor = reset ? 0 : this.dismissals.cursor;
+      this.dismissals.loading = true;
+      this.dismissals.error = '';
+      try {
+        const page = await ListCleanupDismissals(kind, cursor, DISMISSAL_PAGE_SIZE);
+        // 读取期间切了类别：丢掉这份结果。
+        if (this.dismissals.kind !== kind) return;
+        const known = new Set(this.dismissals.items.map(item => item.id));
+        this.dismissals.items = [...this.dismissals.items, ...(page?.items || []).filter(item => !known.has(item.id))];
+        this.dismissals.cursor = Number(page?.next_cursor || 0);
+        this.dismissals.hasMore = Boolean(page?.has_more);
+        this.dismissals.loaded = true;
+      } catch (err) {
+        if (this.dismissals.kind === kind) this.dismissals.error = '读取忽略记录失败：' + err;
+      } finally {
+        if (this.dismissals.kind === kind) this.dismissals.loading = false;
+      }
+    },
+    describeDismissal(item) {
+      const name = media => {
+        const text = String(media?.name || '').trim() || `视频 ${media?.id}`;
+        return media?.missing ? `${text}（已删除）` : text;
+      };
+      const media = item?.media || [];
+      if (item?.kind === 'clip' && media.length >= 2) return `片段「${name(media[1])}」 · 完整片「${name(media[0])}」`;
+      if (media.length >= 2) return `「${name(media[0])}」与「${name(media[1])}」`;
+      return media.length ? `「${name(media[0])}」` : `记录 ${item?.id}`;
+    },
+    formatDismissalTime(value) {
+      const time = new Date(value).getTime();
+      return Number.isFinite(time) && time > 0 ? `忽略于 ${new Date(time).toLocaleString()}` : '';
+    },
+    async undoCleanupDismissal(item) {
+      if (!item?.id || this.dismissals.undoing) return;
+      const kind = this.dismissals.kind;
+      this.dismissals.undoing = true;
+      try {
+        await UndoCleanupDismissals(kind, [item.id]);
+        if (this.dismissals.kind === kind) {
+          this.dismissals.items = this.dismissals.items.filter(row => row.id !== item.id);
+        }
+        notifySuccess('已撤销忽略。重新分析后会重新参与检测。');
+        // 撤销后后端把缓存结果标为可能过期，回读一次让「结果可能已过期」跟上。
+        await this.refreshCleanupStatus();
+      } catch (err) {
+        notifyError('撤销忽略失败：' + err);
+      } finally {
+        this.dismissals.undoing = false;
+      }
+    },
+    // 删除前的汇总确认：返回 null 表示取消，否则 { merge }。
+    askCleanupDeleteConfirm(summary, mergeAvailable) {
+      if (this._resolveDeleteConfirm) this._resolveDeleteConfirm(null);
+      this.deleteConfirm = { show: true, summary, mergeAvailable, merge: true };
+      return new Promise(resolve => {
+        this._resolveDeleteConfirm = resolve;
+      });
+    },
+    answerCleanupDelete(confirmed) {
+      const resolve = this._resolveDeleteConfirm;
+      this._resolveDeleteConfirm = null;
+      const merge = this.deleteConfirm.mergeAvailable && this.deleteConfirm.merge;
+      this.deleteConfirm = emptyDeleteConfirm();
+      if (resolve) resolve(confirmed ? { merge } : null);
+    },
+    // 删除之前把被删项的整理成果合并到各组保留项（D-PC48）。任何一组失败都不进入删除：
+    // 合并是幂等的并集，处理好之后再删一次即可。
+    async mergeCleanupMetadata(plan) {
+      const warnings = [];
+      for (const item of plan) {
+        try {
+          const result = await MergeMediaMetadata('video', item.keeperId, item.sourceIds);
+          warnings.push(...(result?.warnings || []));
+        } catch (err) {
+          notifyError(`合并元数据失败，没有删除任何视频：${err}\n合并可以重复执行，处理好之后再删除即可。`);
+          return null;
+        }
+      }
+      return warnings;
+    },
     async trashSelectedCleanupCandidates() {
+      if (this.cleanupDialog.processing || this.deleteConfirm.show) return;
       const selectedVideos = this.getAllCleanupCandidates()
         .filter(video => this.cleanupSelection.includes(video.id) && !this.isCleanupTrashed(video));
       if (selectedVideos.length === 0) {
         return;
       }
       const selectedIDs = selectedVideos.map(video => video.id);
+      const names = Object.fromEntries(selectedVideos.map(video => [video.id, video.name]));
+      const plan = mergePlan(this.cleanupGroups, selectedIDs, this.cleanupKeepOverrides);
+      const summary = selectionSummary(this.cleanupGroups, selectedIDs, id => this.cleanupMemberSizes.get(id) || 0);
+      // 先汇总确认（D-PC49）；取消时不调用任何写入。
+      const choice = await this.askCleanupDeleteConfirm(summary, plan.length > 0);
+      if (!choice) return;
 
       this.cleanupDialog.processing = true;
+      let trashAttempted = false;
       try {
+        let mergeWarnings = [];
+        if (choice.merge && plan.length > 0) {
+          mergeWarnings = await this.mergeCleanupMetadata(plan);
+          if (mergeWarnings === null) return;
+        }
+        trashAttempted = true;
         // 片库侧的动作分两步交回父组件，顺序与拆分前一致：先删除并把行摘出列表，
-        // 当场收窄勾选（失败重试时才不会对着已进回收站的视频再删一次），
+        // 当场收窄勾选（失败重试时才不会对着已进废纸篓的视频再删一次），
         // 然后才是撤销提示条与列表重载。
-        const { result, failedIDs, succeededIDs } = await this.trashVideos(selectedIDs);
+        const { result, failedIDs, succeededIDs } = await this.trashVideos(selectedIDs, { names });
         this.cleanupSelection = selectedIDs.filter(id => failedIDs.has(id));
         await this.afterTrashVideos(succeededIDs);
         // 已清理的项留在结果里，只标记结果可能过期；剩下的候选还能接着审阅。
@@ -840,10 +1437,13 @@ export default {
           const firstError = result.errors?.[0];
           notifyError(`批量清理完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
         }
+        if (mergeWarnings.length > 0) {
+          notify(`元数据已合并，但有 ${mergeWarnings.length} 条提示：${mergeWarnings.join('；')}`, { timeout: 0 });
+        }
         // 不再静默重跑：先问一句，让用户自己决定是继续审阅还是刷新候选。
         if (succeededIDs.length > 0 && await confirmAction({
           title: '重新分析清理候选',
-          message: `已把 ${succeededIDs.length} 个视频移入回收站。是否立即重新分析？\n选择"取消"可以继续审阅当前结果。`,
+          message: `已处理 ${succeededIDs.length} 个视频。是否立即重新分析？\n选择"取消"可以继续审阅当前结果。`,
           confirmText: '重新分析'
         })) {
           await this.reanalyzeCleanupCandidates();
@@ -853,20 +1453,8 @@ export default {
         notifyError('批量清理失败: ' + err);
       } finally {
         this.cleanupDialog.processing = false;
-        this.$emit('trash-settled', selectedIDs);
+        if (trashAttempted) this.$emit('trash-settled', selectedIDs);
       }
-    },
-    // 「按建议勾选本组」只勾非保留项；默认零选中这条边界不受影响，
-    // 用户必须显式点一次才会有选中项。
-    selectSuggestedInSection(section) {
-      const ids = [];
-      for (const entry of section.entries) {
-        for (const member of entry.members) {
-          if (entry.keeper && member.id === entry.keeper.id) continue;
-          ids.push(member.id);
-        }
-      }
-      this.cleanupSelection = [...new Set([...this.cleanupSelection, ...ids])];
     },
     // 恢复了具体某个视频就只放它；拿不到 id 时整体清空，宁可少标也不要长期标错。
     forgetCleanupTrashed(videoID) {
@@ -1208,4 +1796,37 @@ export default {
   padding: 0 10px;
   font-size: 12px;
 }
+/* 类别标题旁的覆盖率（D-PC50）：「尚未计算」「已算 X / Y」。 */
+.cleanup-chip__coverage { color: var(--warning-text); font-size: 11px; }
+.cleanup-progress-actions { margin-top: 12px; }
+
+.cleanup-card--focused { border-color: var(--accent-border); box-shadow: 0 0 0 2px var(--accent-soft); }
+.cleanup-card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 2px 0 4px; }
+.cleanup-card-reason { color: var(--review-text-secondary); font-size: 12.5px; }
+.cleanup-member-list { list-style: none; padding: 0; }
+.cleanup-select-row--keeper { border-top: 0; }
+.cleanup-keeper-label { flex: none; font-size: 12.5px; }
+.cleanup-item-locked { color: var(--warning-text); font-size: 11px; }
+/* 整理成果标记（D-PC48）：保留建议优先留整理成果多的那份。 */
+.cleanup-curation { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+.cleanup-curation__item { padding: 0 6px; border: 1px solid var(--accent-border); border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 10.5px; line-height: 16px; white-space: nowrap; }
+
+.cleanup-empty__title { margin: 0 0 6px; color: var(--review-text-emphasis); font-size: 13.5px; }
+.cleanup-empty__detail { margin: 0 0 6px; }
+
+/* 「已忽略」页签 */
+.cleanup-dismissed { display: grid; gap: 10px; }
+.cleanup-dismissed__kinds { display: flex; flex-wrap: wrap; gap: 8px; }
+.cleanup-dismissed__hint { margin: 0; color: var(--review-text-secondary); font-size: 12px; }
+.cleanup-dismissed__list { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.cleanup-dismissed__item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--review-border-color); border-radius: var(--radius); background: var(--review-subtle-bg); }
+.cleanup-dismissed__media { flex: 1; min-width: 0; color: var(--review-text-strong); font-size: 13px; overflow-wrap: anywhere; }
+.cleanup-dismissed__time { flex: none; color: var(--text-muted); font-size: 11px; }
+
+/* 删除前的汇总确认：压在清理弹窗上面。 */
+:deep(.cleanup-delete-confirm) { max-width: 520px; }
+.cleanup-delete-confirm__warn { color: var(--warning-text); }
+.cleanup-delete-confirm__merge { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-weight: 600; cursor: pointer; }
+.cleanup-delete-confirm__help { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; }
 </style>
+

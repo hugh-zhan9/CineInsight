@@ -123,23 +123,25 @@ assert.match(cleanupPanelSource, /class="cleanup-split"/, 'cleanup should use a 
 assert.match(cleanupPanelSource, /activeCleanupDirectory/, 'the sidebar should drive which directory the stream shows');
 assert.match(cleanupPanelSource, /data-test="cleanup-category"/, 'cleanup should offer a category filter with counts');
 // 三条安全边界不能被重排破坏。
-assert.match(cleanupPanelSource, /默认不勾选任何一项/, 'the zero-selected-by-default boundary must stay stated in the UI');
-assert.match(cleanupPanelSource, /移入回收站可撤销，不会立即删除磁盘文件/, 'the footer must keep saying the delete is undoable');
+// 2026-09-30 P-032（D-PC49 / D-PC01）：默认勾选改为「只勾精确重复的非保留项」，删除改为移到系统废纸篓。
+assert.match(cleanupPanelSource, /默认只勾选精确重复里保留项以外的副本；近似重复、同源、截取片段默认不勾选/, 'IMG-05 the default-selection boundary must stay stated in the UI');
+assert.match(cleanupPanelSource, /移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间/, 'the footer must keep saying the delete is undoable');
 assert.match(cleanupPanelSource, /:disabled="cleanupSelection\.length === 0/, 'the trash button stays disabled while nothing is selected');
 assert.match(cleanupPanelSource, /RejectSameSourceRelation/, 'same-source rejection must still be reachable');
 assert.match(cleanupPanelSource, /cleanup-card-kind/, 'cleanup cards should label their candidate category');
-assert.match(cleanupPanelSource, /toggleCleanupSelection\(entry\.keeper\?\.id\)/, 'cleanup duplicate original row should be selectable');
+assert.match(cleanupPanelSource, /:disabled="isCleanupTrashed\(member\) \|\| isCleanupLocked\(member\.id\)"/, 'IMG-05 duplicate keeper rows stay locked until the user picks another keeper');
 assert.match(cleanupPanelSource, /@click="previewCleanupVideo\(/, 'cleanup candidates should expose preview actions');
 assert.match(cleanupPanelSource, /cleanup-item-actions/, 'cleanup candidate rows should reserve an actions area');
 // 判定阈值从顶部一整段说明挪到了各个类别自己的 tooltip 上——
-// 「低清到底指多低」这个疑问产生在类别上，说明就该在那里。
-assert.match(cleanupPanelSource, /短视频：时长 < 5 秒/, 'cleanup should still explain the short-video threshold');
-assert.match(cleanupPanelSource, /低清视频：分辨率低于 480x320/, 'cleanup should still explain the low-resolution threshold');
+// 「低清到底指多低」这个疑问产生在类别上，说明就该在那里。META-10：两类改名，阈值来自设置。
+assert.match(cleanupPanelSource, /极短片段：\$\{shortRule\}/, 'META-10 cleanup should still explain the short-clip threshold');
+assert.match(cleanupPanelSource, /极低分辨率：\$\{lowRule\}/, 'META-10 cleanup should still explain the low-resolution threshold');
 assert.match(cleanupPanelSource, /:title="option\.hint"/, 'the thresholds should ride on the category chips');
-assert.match(cleanupPanelSource, /低清视频：分辨率低于 480x320/, 'cleanup dialog should explain the low-resolution threshold');
+assert.match(cleanupPanelSource, /analysis\?\.thresholds/, 'META-10 the thresholds shown come from the analysis, not hard-coded values');
+assert.doesNotMatch(cleanupPanelSource, /StartCleanupAnalysis\(5, 480, 320\)/, 'META-10 the front end no longer hard-codes 5 / 480 / 320');
 assert.match(cleanupPanelSource, /近似重复（不同转码，不会默认选中）/, 'near-duplicate groups should state that they are not selected by default');
 assert.match(cleanupPanelSource, /near_duplicate_groups/, 'cleanup dialog should render perceptual-hash near-duplicate groups');
-assert.match(cleanupPanelSource, /低清视频[\s\S]*短视频/, 'low-resolution section should appear before short-video section');
+assert.match(cleanupPanelSource, /极低分辨率[\s\S]*极短片段/, 'low-resolution section should appear before short-clip section');
 assert.match(videoListSource, /GetPreviewSession/, 'cleanup preview should validate file availability before opening');
 assert.match(cleanupPanelSource, /StartCleanupAnalysis/, 'cleanup analysis should start as a background task');
 assert.match(cleanupPanelSource, /GetCleanupStatus/, 'cleanup dialog should reopen from background status');
