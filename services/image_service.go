@@ -770,10 +770,11 @@ func (s *ImageService) RevealImage(imageID uint) error {
 	return revealPath(image.Path)
 }
 
-// ListImageTrashEntries 按最新删除优先返回可恢复条目。
+// ListImageTrashEntries 按最新删除优先返回可恢复条目。墓碑（trashStateRemoved，修复 I I-A）不列出。
 func (s *ImageService) ListImageTrashEntries() ([]models.ImageTrashEntry, error) {
 	var entries []models.ImageTrashEntry
 	if err := database.DB.
+		Where("state <> ?", trashStateRemoved).
 		Order("created_at DESC, id DESC").
 		Find(&entries).Error; err != nil {
 		return nil, fmt.Errorf("列出图片回收站条目失败: %w", err)
@@ -1165,6 +1166,10 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 	}
 	if entry.State == models.TrashStateFileGone {
 		return nil, ErrTrashFileGone
+	}
+	// 墓碑（修复 I I-A）：记录已被「移除记录」移除，不可恢复。
+	if entry.State == trashStateRemoved {
+		return nil, ErrTrashEntryNotRestorable
 	}
 	// 原路径被新的活跃记录复用时拒绝恢复（设计 4.5.4：部分唯一索引语义前置成明确报错）。
 	var occupant models.Image
@@ -1585,6 +1590,10 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 			return false, nil
 		}
 		if !strict && entryFileAtOriginal(imageEntryFacts(entry), originalInfo.Size(), originalInfo.ModTime().UnixNano(), stableFileIdentity(originalInfo)) {
+			// 记录了 file_sha256 的 legacy 行先核对内容哈希，不一致不恢复（修复 I m-b）。
+			if !legacyPutBackContentConfirmed(imageEntryFacts(entry), entry.FileSHA256, entry.OriginalPath) {
+				return false, mismatch("原路径文件与删除记录不一致: %s")
+			}
 			return false, nil
 		}
 	}

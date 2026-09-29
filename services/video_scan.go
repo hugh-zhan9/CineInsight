@@ -350,12 +350,17 @@ func (s *VideoService) SyncDirectoryWithProgress(dir string, progress func(Direc
 }
 
 func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcileOrphans bool, progress func(DirectoryScanProgress)) *ScanSyncResult {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
+	// 维护围栏生效（恢复 / 切换，含「待重启」终态）时不等路径锁，直接如实报错（修复 I m1）。
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		result.recordError("lock", "", "", err)
+		return result
+	}
+	defer unlock()
 	s.scanSyncMu.Lock()
 	defer s.scanSyncMu.Unlock()
 
-	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
 	scannedByPath := make(map[string]ScannedFile)
 	existingByPath := make(map[string]models.Video)
 	roots := make([]string, 0, len(dirs))
@@ -622,12 +627,17 @@ func (s *VideoService) markUnavailableScanRoot(root string, result *ScanSyncResu
 // It deliberately marks disappeared paths stale instead of invoking the user's
 // explicit delete workflow; a later event can restore or relocate the record.
 func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affected []string) *ScanSyncResult {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
+	// 监听触发的窄对账在「待重启」终态下同样不得挂住（修复 I m1）。
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		result.recordError("lock", "", "", err)
+		return result
+	}
+	defer unlock()
 	s.scanSyncMu.Lock()
 	defer s.scanSyncMu.Unlock()
 
-	result := &ScanSyncResult{Errors: make([]ScanSyncError, 0)}
 	roots := cleanScanRoots(dirs)
 	targets, err := normalizeAffectedScanDirectories(roots, affected)
 	if err != nil {
@@ -865,8 +875,11 @@ func (s *VideoService) reconcileOrphanedVideos(configuredRoots []string, result 
 //
 // 返回实际标记的条数。
 func (s *VideoService) MarkVideosStaleUnderRemovedRoot(removedRoot string, remainingRoots []string) (int64, error) {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	return markVideosStaleUnderRemovedRoot(removedRoot, remainingRoots)
 }
 
@@ -1321,6 +1334,8 @@ type legacyDeletedRow struct {
 func loadLegacyTrashDirs(db *gorm.DB) (*legacyTrashIndex, error) {
 	index := &legacyTrashIndex{recorded: make(map[string]struct{}), candidates: make(map[string]map[string]struct{})}
 	// mode 为空且 file_moved=true 的行是回填之前的旧版条目，同样属于旧版回收站。
+	// 刻意不按 state 过滤：「移除记录」留下的墓碑（trashStateRemoved，修复 I I-A）同样计入，那个 trash/ 目录里
+	// 可能还留着原文件或与原路径同 inode 的另一个名字，失去登记就会被扫描当成新文件收录。
 	const condition = "trash_path <> '' AND (mode = ? OR (mode = '' AND file_moved = ?))"
 	for _, model := range []interface{}{&models.VideoTrashEntry{}, &models.ImageTrashEntry{}} {
 		var paths []string
@@ -1738,8 +1753,11 @@ func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 		}
 	}
 
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return 0, err
+	}
+	defer unlock()
 	s.scanSyncMu.Lock()
 	defer s.scanSyncMu.Unlock()
 	// 等锁期间根可能已经回来了（排在前面的对账刚跑完）：锁内复查一次。

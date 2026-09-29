@@ -98,8 +98,11 @@ func (s *LocalMetadataService) ExportVideoNFO(ctx context.Context, videoID uint)
 		warnings = append(warnings, "Kodi movie NFO 仅支持一个作品集，已按片库顺序写出第一个作品集")
 	}
 
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	result, err := ExportLocalMetadataNFO(ctx, video.Path, LocalMetadataNFOExportInput{
 		DisplayTitle: video.DisplayTitle, PersonalRating: video.PersonalRating, Tags: tags,
 		People: personNames, Collection: collection,

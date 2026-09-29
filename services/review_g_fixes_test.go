@@ -242,12 +242,23 @@ func TestLIB05PutBackClaimedByActiveRecordOffersRemoveRecordOnlyI1(t *testing.T)
 	for _, tc := range []struct {
 		old, dup models.Video
 		entryID  uint
-	}{{legacy, legacyDup, legacyEntry.ID}, {trashed, trashedDup, trashEntry.ID}} {
-		if n := reviewGCountRows(t, &models.VideoTrashEntry{}, "id = ?", tc.entryID); n != 0 {
-			t.Fatalf("条目应被硬删: %d", n)
-		}
-		if n := reviewGCountRows(t, &models.Video{}, "id = ?", tc.old.ID); n != 0 {
-			t.Fatalf("重复的旧记录应被硬删: %d", n)
+		legacy   bool
+	}{{legacy, legacyDup, legacyEntry.ID, true}, {trashed, trashedDup, trashEntry.ID, false}} {
+		if tc.legacy {
+			// 修复 I I-A：legacy_trash 行不再硬删，改为墓碑（旧版 trash/ 目录继续登记），记录保持软删。
+			if n := reviewGCountRows(t, &models.VideoTrashEntry{}, "id = ? AND state = ?", tc.entryID, trashStateRemoved); n != 1 {
+				t.Fatalf("legacy 条目应成为墓碑: %d", n)
+			}
+			if got := p011ReloadVideo(t, tc.old.ID); !got.DeletedAt.IsValid() {
+				t.Fatalf("重复的 legacy 旧记录应保持软删: %#v", got)
+			}
+		} else {
+			if n := reviewGCountRows(t, &models.VideoTrashEntry{}, "id = ?", tc.entryID); n != 0 {
+				t.Fatalf("条目应被硬删: %d", n)
+			}
+			if n := reviewGCountRows(t, &models.Video{}, "id = ?", tc.old.ID); n != 0 {
+				t.Fatalf("重复的旧记录应被硬删: %d", n)
+			}
 		}
 		var dup models.Video
 		if err := database.DB.First(&dup, tc.dup.ID).Error; err != nil || dup.Path != tc.old.Path {
@@ -333,6 +344,20 @@ func TestLIB05SymlinkToLegacyTrashFileIsNotPutBackAndRestoreKeepsRealFileM1(t *t
 	}
 	if putBackAtPath(videoEntryFacts(entry), video.Path) {
 		t.Fatal("放回判定不得跟随符号链接")
+	}
+	// 修复 I m-a：恢复与清除对这种行都必然被拒绝，列表不提供它们，并标出原位置是符号链接。
+	if item := page.Items[0]; len(item.Actions) != 0 || !item.OriginalSymlink {
+		t.Fatalf("原位置是指向 trash/ 文件的符号链接时不应提供 restore / purge: %#v", item)
+	}
+	purged, err := center.PurgeTrashEntries("video", []uint{entry.ID})
+	if err != nil || purged.Items[0].Code != TrashResultPathOccupied {
+		t.Fatalf("原位置是指向 trash/ 文件的符号链接时清除应拒绝（path_occupied）: %#v err=%v", purged, err)
+	}
+	if got := reviewGFileContent(t, entry.TrashPath); got != "the-only-copy" {
+		t.Fatalf("拒绝清除时 trash/ 里的真实文件必须仍在: %q", got)
+	}
+	if got := p011ReloadVideo(t, video.ID); !got.DeletedAt.IsValid() {
+		t.Fatalf("拒绝清除时不得硬删记录: %#v", got)
 	}
 
 	restored, err := center.RestoreTrashEntries("video", []uint{entry.ID})

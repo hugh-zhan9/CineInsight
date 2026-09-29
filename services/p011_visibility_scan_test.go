@@ -1233,8 +1233,19 @@ func TestLibraryWatcherOfflineThenRecoveryEndToEndLIB07(t *testing.T) {
 
 // ---------- LIB-13 / PLAY-12：播放失败 ----------
 
+// p011StopPlaybackRelocationOnCleanup 让测试结束前确定性地等后台重定位 goroutine 退出（PLAY-12 偶发失败）：
+// 播放失败会在后台遍历扫描根、读写 database.DB（SQLite 测试库就在 t.TempDir() 里）。它若活过测试本身，
+// 就会在 TempDir 清理时往目录里写 -wal / -shm，报「directory not empty」，或读到下一个测试的库。
+// 必须在 setupVideoServiceTestDB 之后调用：t.Cleanup 后进先出，这样它在关库、删临时目录之前执行。
+// StopPlaybackRelocation 取消并等待（WaitGroup），不靠 sleep。
+func p011StopPlaybackRelocationOnCleanup(t *testing.T) {
+	t.Helper()
+	t.Cleanup(StopPlaybackRelocation)
+}
+
 func TestPlaybackMissingFileOnOfflineRootReturnsImmediatelyWithoutRelocationLIB13(t *testing.T) {
 	setupVideoServiceTestDB(t)
+	p011StopPlaybackRelocationOnCleanup(t)
 	parent := t.TempDir()
 	offlineRoot := filepath.Join(parent, "external")
 	createDirectoryRow(t, offlineRoot)
@@ -1282,6 +1293,7 @@ func TestPlaybackMissingFileOnOfflineRootReturnsImmediatelyWithoutRelocationLIB1
 
 func TestPlaybackMissingFileOnOnlineRootMarksThenRelocatesInBackgroundPLAY12(t *testing.T) {
 	setupVideoServiceTestDB(t)
+	p011StopPlaybackRelocationOnCleanup(t)
 	root := t.TempDir()
 	createDirectoryRow(t, root)
 	movedPath := filepath.Join(root, "moved", "movie.mp4")
@@ -1320,6 +1332,7 @@ func TestPlaybackMissingFileOnOnlineRootMarksThenRelocatesInBackgroundPLAY12(t *
 
 func TestPlaybackMissingFileOnOnlineRootWithoutCandidateStaysMissingPLAY12(t *testing.T) {
 	setupVideoServiceTestDB(t)
+	p011StopPlaybackRelocationOnCleanup(t)
 	root := t.TempDir()
 	createDirectoryRow(t, root)
 	video := models.Video{Name: "gone.mp4", Path: filepath.Join(root, "gone.mp4"), Directory: root, Size: 1}
@@ -1329,6 +1342,8 @@ func TestPlaybackMissingFileOnOnlineRootWithoutCandidateStaysMissingPLAY12(t *te
 	if _, err := (&VideoService{}).PlayVideo(video.ID); err != nil {
 		t.Fatal(err)
 	}
+	// 等后台重定位确定性地结束（没有候选，它什么都不改），再断言记录仍是 missing_file。
+	StopPlaybackRelocation()
 	if got := p011ReloadVideo(t, video.ID); !got.IsStale || got.StaleReason != models.StaleReasonMissingFile {
 		t.Fatalf("在线根下文件缺失应标 missing_file: %+v", got)
 	}

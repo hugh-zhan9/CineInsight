@@ -17,8 +17,11 @@ import (
 
 // RelocateVideo 更新视频路径（文件迁移场景，保留标签等元数据）
 func (s *VideoService) RelocateVideo(id uint, newPath string) error {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return s.relocateVideo(id, newPath)
 }
 
@@ -64,8 +67,11 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 
 // RenameVideo 重命名视频文件及数据库记录
 func (s *VideoService) RenameVideo(id uint, newName string) error {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	newName = strings.TrimSpace(newName)
 	if newName == "" {

@@ -91,6 +91,37 @@ func BeginLibraryMaintenance() func() {
 	return libraryPathMutationMu.Unlock
 }
 
+// libraryPathReadLockRetry 是路径读锁拿不到（写锁被占，或有写者在等）时的重试间隔（修复 I m1）。
+const libraryPathReadLockRetry = 50 * time.Millisecond
+
+// rLockLibraryPaths 是全局路径锁 libraryPathMutationMu 读锁的唯一获取入口（修复 F 复审 m1，修复 I）。返回释放函数。
+//
+// 恢复备份与切换后端时，enterDatabaseRestoreMode 先拿路径写锁（BeginLibraryMaintenance）、再立维护围栏；切换成功与
+// 「只改配置」之后进入「待重启」终态，写锁与围栏一直保持到进程退出。直接 RLock 的入口（监听触发的窄对账、Jellyfin 与
+// 手机端的删除、NFO 导出……）在那之后会永久阻塞。所以：
+//   - 维护围栏生效（database.MaintenanceActive）时立即返回 database.ErrMaintenance，不等锁；
+//   - 否则 TryRLock，拿到即返回；拿不到就隔 libraryPathReadLockRetry 再试，每次重试前复查围栏。TryRLock 与 RLock 一样
+//     让位于等待中的写者（有写者在等时读者拿不到），写者优先的语义不变；
+//   - 拿到读锁之后围栏恰好生效了，放掉读锁同样返回 ErrMaintenance：之后的数据库读写反正都会被围栏拒绝，
+//     不要先动了文件再失败。
+//
+// 围栏生效期间绝不无限等待。围栏只是判断的一刻的快照，真正的写入拒绝仍由数据库回调里的 enter 负责。
+func rLockLibraryPaths() (func(), error) {
+	for {
+		if database.MaintenanceActive() {
+			return nil, database.ErrMaintenance
+		}
+		if libraryPathMutationMu.TryRLock() {
+			if database.MaintenanceActive() {
+				libraryPathMutationMu.RUnlock()
+				return nil, database.ErrMaintenance
+			}
+			return libraryPathMutationMu.RUnlock, nil
+		}
+		time.Sleep(libraryPathReadLockRetry)
+	}
+}
+
 type BatchVideoOperationError struct {
 	VideoID uint   `json:"video_id"`
 	Error   string `json:"error"`
@@ -214,8 +245,11 @@ func (s *VideoService) getVideoMetadata(path string) (duration float64, resoluti
 
 // AddVideo 添加视频
 func (s *VideoService) AddVideo(path string) (*models.Video, error) {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	return s.addVideo(path)
 }
 
@@ -311,15 +345,19 @@ func (s *VideoService) GetVideo(id uint) (*models.Video, error) {
 
 // DeleteVideo 删除视频
 func (s *VideoService) DeleteVideo(id uint, deleteFile bool) error {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return s.deleteVideo(id, deleteFile)
 }
 
-// ListTrashEntries 按最新删除优先返回可恢复条目。
+// ListTrashEntries 按最新删除优先返回可恢复条目。墓碑（trashStateRemoved，修复 I I-A）不列出。
 func (s *VideoService) ListTrashEntries() ([]models.VideoTrashEntry, error) {
 	var entries []models.VideoTrashEntry
 	if err := database.DB.
+		Where("state <> ?", trashStateRemoved).
 		Order("created_at DESC, id DESC").
 		Find(&entries).Error; err != nil {
 		return nil, fmt.Errorf("列出回收站条目失败: %w", err)
@@ -352,6 +390,10 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 	}
 	if entry.State == models.TrashStateFileGone {
 		return nil, ErrTrashFileGone
+	}
+	// 墓碑（修复 I I-A）：记录已被「移除记录」移除，不可恢复。
+	if entry.State == trashStateRemoved {
+		return nil, ErrTrashEntryNotRestorable
 	}
 	// 原路径已被新的活跃记录占用（例如「只删记录」后同路径的新文件被收录）时拒绝恢复：
 	// 部分唯一索引会在事务里报一个看不懂的约束错误，这里前置成明确的中文错误。
@@ -806,7 +848,8 @@ func trashPathAlreadyRecorded(path string) bool {
 //     「已在原处」，不读废纸篓一侧（I-A）：读不到废纸篓（EPERM 等）不得让恢复失败；废纸篓里同 inode 的
 //     另一个名字（硬链接）也不删（M1）。
 //   - legacy_trash 旧行：原路径上的文件大小与 inode 与条目一致（与放回判定同一口径，I-1）同样直接判定
-//     「已在原处」，不读 trash/ 一侧。
+//     「已在原处」，不读 trash/ 一侧；条目记录了 file_sha256 时先核对一次内容哈希，不一致就是另一个文件
+//     （inode 被复用或放回后被改过），报「原路径文件与删除记录不一致」、不恢复（修复 I m-b）。
 //   - 原路径与废纸篓是同一个文件（硬链接）：文件本来就在原处，返回 false、不删废纸篓那个名字（M1）；
 //     legacy_trash 旧行在恢复提交之后才清理旧版 trash/ 里的残留名字（removeLegacyTrashLinkAfterRestore）。
 //   - 原路径用 Lstat 读取（m1）：是符号链接（可能正指向废纸篓里的文件）时返回 ErrTrashOriginalNotRegular，
@@ -836,6 +879,9 @@ func ensureTrashEntryFileRestored(trashService *TrashService, entry models.Video
 			return false, nil
 		}
 		if !strict && entryFileAtOriginal(videoEntryFacts(entry), originalInfo.Size(), originalInfo.ModTime().UnixNano(), stableFileIdentity(originalInfo)) {
+			if !legacyPutBackContentConfirmed(videoEntryFacts(entry), entry.FileSHA256, entry.OriginalPath) {
+				return false, mismatch("原路径文件与删除记录不一致: %s")
+			}
 			return false, nil
 		}
 	}
@@ -1287,12 +1333,20 @@ func (s *VideoService) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *Batc
 	result := newBatchVideoOperationResult(videoIDs)
 	batchID := newDeleteBatchID()
 	for _, videoID := range videoIDs {
-		libraryPathMutationMu.RLock()
-		_, err := s.deleteVideoBatchItem(videoID, deleteFile, "user", batchID)
-		libraryPathMutationMu.RUnlock()
+		_, err := s.deleteVideoBatchItemLocked(videoID, deleteFile, batchID)
 		result.record(videoID, err)
 	}
 	return result
+}
+
+// deleteVideoBatchItemLocked 在路径读锁下做一项用户删除；读锁拿不到（维护围栏生效）时返回 database.ErrMaintenance（修复 I m1）。
+func (s *VideoService) deleteVideoBatchItemLocked(videoID uint, deleteFile bool, batchID string) (string, error) {
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	return s.deleteVideoBatchItem(videoID, deleteFile, "user", batchID)
 }
 
 // DeleteVideosDetailed 是桌面端使用的批量删除：逐项返回结果码，整批共享一个 batch_id，
@@ -1307,9 +1361,7 @@ func (s *VideoService) DeleteVideosDetailed(videoIDs []uint, deleteFile bool, op
 			result.addCode(videoID, TrashResultCancelled, "")
 			continue
 		}
-		libraryPathMutationMu.RLock()
-		code, err := s.deleteVideoBatchItem(videoID, deleteFile, "user", batchID)
-		libraryPathMutationMu.RUnlock()
+		code, err := s.deleteVideoBatchItemLocked(videoID, deleteFile, batchID)
 		result.addOutcome(videoID, code, err)
 		opts.report(index+1, len(videoIDs))
 	}

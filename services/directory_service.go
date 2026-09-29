@@ -53,14 +53,16 @@ func (s *DirectoryService) GetAllDirectories() ([]models.ScanDirectory, error) {
 
 // AddDirectory 添加扫描目录
 func (s *DirectoryService) AddDirectory(path, alias string) (*models.ScanDirectory, error) {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	dir := &models.ScanDirectory{
 		Path:  path,
 		Alias: alias,
 	}
-	err := database.DB.Create(dir).Error
-	return dir, err
+	return dir, database.DB.Create(dir).Error
 }
 
 // ValidateScanDirectory 检查一个候选目录：是否存在、是否与已配置根重复、是否互相嵌套。
@@ -114,8 +116,11 @@ func (s *DirectoryService) UpdateDirectory(id uint, path, alias, mode string) (*
 	result := &DirectoryUpdateResult{Mode: mode, OldPath: oldPath, NewPath: newPath, PathChanged: newPath != oldPath}
 
 	if !result.PathChanged {
-		libraryPathMutationMu.RLock()
-		defer libraryPathMutationMu.RUnlock()
+		unlock, err := rLockLibraryPaths()
+		if err != nil {
+			return nil, err
+		}
+		defer unlock()
 		return result, database.DB.Model(&models.ScanDirectory{}).Where("id = ?", id).Update("alias", alias).Error
 	}
 	switch mode {
@@ -227,8 +232,11 @@ func countRemapPathConflicts(model interface{}, oldPath, newPath string) (int, e
 }
 
 func (s *DirectoryService) replaceDirectory(current models.ScanDirectory, newPath, alias string, result *DirectoryUpdateResult) (*DirectoryUpdateResult, error) {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	var others []models.ScanDirectory
 	if err := database.DB.Where("id <> ?", current.ID).Find(&others).Error; err != nil {
@@ -251,7 +259,10 @@ func (s *DirectoryService) replaceDirectory(current models.ScanDirectory, newPat
 
 // DeleteDirectory 删除扫描目录
 func (s *DirectoryService) DeleteDirectory(id uint) error {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
+	unlock, err := rLockLibraryPaths()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	return database.DB.Delete(&models.ScanDirectory{}, id).Error
 }

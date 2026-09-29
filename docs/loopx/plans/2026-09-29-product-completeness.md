@@ -1180,3 +1180,21 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - 需要识别 `backend_env_locked:` 前缀；
   - 两种新的 SQLite 恢复错误要给出不同文案：空间不足或复制失败属于普通失败，WAL 未写回属于致命错误；
   - 重新排队失败的行显示为 failed，并附带原因。
+**PG 全量 `7d5a4c9`**（P-022 + P-024）：8 个包全部通过（services 914 秒）。修复 I-2 的 PG 验证，并入下一个整合点的 PG 全量一起跑。
+
+**修复 I-1 整合**（2026-09-29）：修复 G 复审的 I-A、m-a~m-f，修复 F 复审的 m1，以及 PLAY12 偶发测试，全部修复。修复 I-1 自报 SQLite 全量通过，18 处变异检查都让对应测试变红，`TestPlaybackMissingFile*` 在 `-count=40 -race` 下也通过。契约变化已记入详细设计 §1.2b 的 §2.1 行。
+
+主代理裁决，交给修复 K：
+- 写锁入口在「待重启」终态下仍会永久阻塞，涉及 `RestoreTrashEntry`、`lockTrashKind`、`MoveVideo`、`PermanentlyDelete*`。改为拿写锁前先查一次围栏，围栏生效时立即返回 `ErrMaintenance`，保持写者优先。
+- legacy 行在 purge 以及 file_gone 的 `remove_record` 时同样改为墓碑，与 I-A 口径一致。
+
+接受为残留风险：
+- 读者改为轮询后，在连续写锁期间会一直等待，每次最多多等约 50ms；
+- `record_only` 的 restoring 行被占用时仍可能卡住；
+- 在会复用 inode 的卷上，列表、清除、用量仍只按「大小 + inode」判定。可能出现误认，但只会导致拒绝操作或只删记录，不会删文件。
+
+- **P-029**：重新生成绑定，新增 `TrashEntryView.original_symlink`。
+- **前端**：
+  - `original_symlink=true` 的行显示「原位置是符号链接」说明；
+  - `record_only` 不提供「仍然移除记录」；
+  - 墓碑对前端不可见。

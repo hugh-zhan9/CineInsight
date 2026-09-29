@@ -56,6 +56,10 @@ var (
 	ErrTrashRecordNotRemovable = errors.New("该条目的删除或恢复尚未完成，不能移除记录")
 	// ErrTrashForceRemoveUnconfirmed：「仍然移除记录」没有收到确认文案（m3）。整批拒绝，不处理任何条目。
 	ErrTrashForceRemoveUnconfirmed = errors.New("请输入「" + TrashForceRemoveConfirmText + "」确认")
+	// ErrTrashForceRemoveModeNotAllowed：「仍然移除记录」只对移到废纸篓（trash）、旧版回收站（legacy_trash）与
+	// 扫描发现缺失（missing）的条目开放（修复 I m-e）。「只删记录」（record_only）留下的是按文件身份的屏蔽，
+	// 移除记录会让屏蔽静默消失，要解除屏蔽应改用恢复（「允许重新收录」）。结果码为 not_purgeable。
+	ErrTrashForceRemoveModeNotAllowed = errors.New("「只删记录」留下的屏蔽不能用「仍然移除记录」移除；如需重新收录，请使用「允许重新收录」")
 	// ErrTrashLocationPermissionDenied：解析文件所在位置（符号链接、挂载点、扫描根）时遇到 EPERM / EACCES（m3）。
 	// 这不是「磁盘未连接」，结果码为 permission_denied；errors.Is(err, ErrTrashPermissionDenied) 成立，
 	// 手机端等既有调用方沿用同一映射。
@@ -64,6 +68,15 @@ var (
 
 // TrashForceRemoveConfirmText 是「仍然移除记录（不动文件）」必须原样传回的确认文案（m3）。
 const TrashForceRemoveConfirmText = "移除记录"
+
+// trashStateRemoved 是 legacy_trash 条目被「仍然移除记录」或「移除记录」（claimed_by_active）移除后的墓碑状态
+// （修复 I I-A）。旧版 trash/ 目录是本应用自己的目录：条目一旦硬删，那个目录就可能失去登记，里面残留的文件
+// （还没清掉的原文件、与原路径同 inode 的另一个名字）会被下一轮扫描当成新文件收录。墓碑保留条目（含 trash_path），
+// 让 loadLegacyTrashDirs 继续把该目录算作「已登记」；媒体记录保持软删、不可见，也不再挂任何标签。
+//
+// 墓碑不出现在任何列表、计数、用量或待处理汇总里：回收站接口一律把它当作不存在（loadTrashRow、ListTrashEntries），
+// 各统计只数 deleted / file_gone，不会数到它。它没有出口，也不可恢复。
+const trashStateRemoved = "removed"
 
 type trashLocationPermissionError struct{}
 
@@ -142,7 +155,13 @@ func originalRegularFile(path string) os.FileInfo {
 // hardLinkedRegularNames 报告 a 与 b 是否是同一个普通文件的两个名字（硬链接，m1）：两侧都用 Lstat 读取、
 // 不跟随符号链接，都必须是普通文件、inode 相同，且硬链接数 ≥ 2。只有这时删掉其中一个名字才不会丢掉文件内容；
 // 读不到、是符号链接、读不到硬链接数时一律返回 false（调用方不得删除）。
+//
+// a 与 b 清理后是同一个路径时直接返回 false（修复 I m-f）：那是同一个名字，硬链接数 ≥ 2 只说明别处还有名字，
+// 调用方删掉「其中一个」就是删掉这唯一的一个。
 func hardLinkedRegularNames(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return false
+	}
 	infoA, errA := os.Lstat(a)
 	infoB, errB := os.Lstat(b)
 	if errA != nil || errB != nil || !infoA.Mode().IsRegular() || !infoB.Mode().IsRegular() || !os.SameFile(infoA, infoB) {
@@ -150,6 +169,26 @@ func hardLinkedRegularNames(a, b string) bool {
 	}
 	links, ok := fileLinkCount(infoA)
 	return ok && links >= 2
+}
+
+// originalSymlinkToTrashFile 报告原路径 P 是不是指向废纸篓（或旧版 trash/）文件 T 的符号链接（修复 I m-a）：
+// Lstat(P) 是符号链接，且 os.Stat(P) 与 os.Stat(T) 是同一个文件。这时清除 T 就是删掉用户经 P 仍在使用的那唯一一份
+// 内容，清除必须拒绝（path_occupied）；恢复同样因原位置不是普通文件而拒绝（ErrTrashOriginalNotRegular）。
+// 任何一侧读不到时返回 false。
+func originalSymlinkToTrashFile(originalPath, trashPath string) bool {
+	if strings.TrimSpace(originalPath) == "" || strings.TrimSpace(trashPath) == "" {
+		return false
+	}
+	linkInfo, err := os.Lstat(originalPath)
+	if err != nil || linkInfo.Mode()&os.ModeSymlink == 0 {
+		return false
+	}
+	target, err := os.Stat(originalPath)
+	if err != nil {
+		return false
+	}
+	trash, err := os.Stat(trashPath)
+	return err == nil && os.SameFile(target, trash)
 }
 
 // errLegacyResidueNotHardLink：中断对账要清掉旧版 trash/ 与原路径里「同一个文件的另一个名字」，但两侧并不是
@@ -663,6 +702,7 @@ func trashResultCodeForError(err error) string {
 	case errors.Is(err, ErrTrashIdentityMismatch):
 		return TrashResultIdentityMismatch
 	case errors.Is(err, ErrTrashNotPurgeable), errors.Is(err, ErrTrashPutBack), errors.Is(err, ErrTrashRecordNotRemovable),
+		errors.Is(err, ErrTrashForceRemoveModeNotAllowed),
 		errors.Is(err, ErrPermanentDeleteNotActive), errors.Is(err, ErrPermanentDeleteHasTrashEntry):
 		return TrashResultNotPurgeable
 	case errors.Is(err, ErrTrashFileGone):
@@ -811,8 +851,12 @@ type TrashEntryView struct {
 	PutBack bool `json:"put_back"`
 	// ClaimedByActive：文件已放回原处，但原位置已由另一条活跃记录收录（旧版放回后被扫描新建、或修复 D 之前
 	// 读不到废纸篓时重复收录，I-1）。这一行只是重复的旧记录：不报 put_back，actions 只有 remove_record，
-	// 移除时只硬删这一行及其条目，不动任何文件。
-	ClaimedByActive bool     `json:"claimed_by_active"`
+	// 移除时只硬删这一行及其条目（legacy_trash 行改为墓碑，I-A），不动任何文件。恢复中断（state=restoring）、
+	// 文件已在原处而原位置已被另一条活跃记录收录的行同样报 claimed_by_active（修复 I m-c）。
+	ClaimedByActive bool `json:"claimed_by_active"`
+	// OriginalSymlink：原位置上是符号链接（修复 I m-a）。恢复不会跟随它，所以 actions 里不提供 restore；
+	// 它还正指向废纸篓里的这个文件时，清除会删掉经它仍在使用的唯一一份内容，purge 也不提供。
+	OriginalSymlink bool     `json:"original_symlink"`
 	Actions         []string `json:"actions"`
 }
 
@@ -873,14 +917,16 @@ func (r trashRow) actions() []string {
 //
 // 列表路径不拿全局路径写锁、也不执行恢复（Minor 1）：访达「放回原处」只做判定，
 // 以 put_back=true 返回，由显式的恢复动作去还原记录。原位置已由另一条活跃记录收录了这个文件时
-// 改报 claimed_by_active=true、actions=[remove_record]（I-1）。
+// 改报 claimed_by_active=true、actions=[remove_record]（I-1；恢复中断的 restoring 行同样，修复 I m-c）。
+// 原位置是符号链接时不提供必然失败的 restore，它指向废纸篓里这个文件时也不提供 purge（修复 I m-a）。
+// 墓碑（trashStateRemoved）不列出（I-A）。
 func (s *TrashService) ListTrashEntries(filter TrashFilter) (*TrashPage, error) {
 	spec, err := trashKindFor(filter.Kind)
 	if err != nil {
 		return nil, err
 	}
 	limit := normalizeEntityPageLimit(filter.Limit)
-	query := database.DB.Table(spec.table).Select(spec.selectColumns())
+	query := database.DB.Table(spec.table).Select(spec.selectColumns()).Where("state <> ?", trashStateRemoved)
 	if filter.CursorID > 0 {
 		query = query.Where("id < ?", filter.CursorID)
 	}
@@ -910,15 +956,22 @@ func (s *TrashService) ListTrashEntries(filter TrashFilter) (*TrashPage, error) 
 	}
 	for _, row := range rows {
 		putBack, claimed := false, false
-		if (row.State == trashStateDeleted || row.State == models.TrashStateFileGone) && row.holdsTrashFile() {
-			outcome, err := s.reconcileListedRow(spec, &row, occupants.otherThan(row.OriginalPath, row.EntityID))
+		occupied := occupants.otherThan(row.OriginalPath, row.EntityID)
+		switch {
+		case (row.State == trashStateDeleted || row.State == models.TrashStateFileGone) && row.holdsTrashFile():
+			outcome, err := s.reconcileListedRow(spec, &row, occupied)
 			if err != nil {
 				return nil, err
 			}
 			putBack = outcome == listedRowPutBack
 			claimed = outcome == listedRowClaimedByActive
+		case row.State == trashStateRestoring && row.holdsTrashFile():
+			// 恢复中断、文件已在原处、原位置却已被另一条活跃记录收录（修复 I m-c）：启动对账每次都会因
+			// path_occupied 失败，这一行只能移除（只删记录，不动文件）。只判定、不改状态。
+			claimed = occupied && trashRowFileAtOriginal(row)
 		}
 		actions := row.actions()
+		originalSymlink := false
 		switch {
 		case claimed:
 			// 原位置的文件已归另一条活跃记录：这一行只能移除（只删记录，不动文件）。
@@ -926,13 +979,15 @@ func (s *TrashService) ListTrashEntries(filter TrashFilter) (*TrashPage, error) 
 		case putBack:
 			// 文件已回到原处：只能恢复记录；清除会把记录删掉而文件还在原地。
 			actions = []string{TrashActionRestore}
+		case row.State == trashStateDeleted && row.FileMoved:
+			actions, originalSymlink = actionsForOriginalNotRegular(row, actions)
 		}
 		page.Items = append(page.Items, TrashEntryView{
 			ID: row.ID, Kind: spec.kind, EntityID: row.EntityID, Name: row.Name,
 			OriginalPath: row.OriginalPath, TrashPath: row.TrashPath, FileMoved: row.FileMoved,
 			FileSize: row.FileSize, State: row.State, Mode: row.Mode, DeletedBy: row.DeletedBy,
 			DeleteBatchID: row.DeleteBatchID, LastError: row.LastError, CreatedAt: row.CreatedAt,
-			PutBack: putBack, ClaimedByActive: claimed, Actions: actions,
+			PutBack: putBack, ClaimedByActive: claimed, OriginalSymlink: originalSymlink, Actions: actions,
 		})
 	}
 	// 游标取本页扫描到的最后一行（Minor 8）：即使某一行将来被过滤掉，也不会出现
@@ -1038,6 +1093,44 @@ func trashRowPutBack(row trashRow) bool {
 	return putBackAtPath(row.putBackFacts(), row.OriginalPath)
 }
 
+// trashRowFileAtOriginal 报告原路径上的普通文件（Lstat）是不是这一行当初删掉的那个文件：deleted / file_gone 用放回
+// 判定（trashRowPutBack）；恢复中断的 restoring 行（修复 I m-c）不经放回判定的状态门，直接比身份（entryFileAtOriginal，
+// 与放回判定同一口径）。其余状态一律 false。
+func trashRowFileAtOriginal(row trashRow) bool {
+	switch row.State {
+	case trashStateDeleted, models.TrashStateFileGone:
+		return trashRowPutBack(row)
+	case trashStateRestoring:
+		info := originalRegularFile(row.OriginalPath)
+		if info == nil {
+			return false
+		}
+		return entryFileAtOriginal(row.putBackFacts(), info.Size(), info.ModTime().UnixNano(), stableFileIdentity(info))
+	}
+	return false
+}
+
+// actionsForOriginalNotRegular 处理原位置上不是普通文件（通常是符号链接）的 deleted 行（修复 I m-a）：
+//   - 恢复只接受普通文件的原位置（ErrTrashOriginalNotRegular），不提供必然失败的 restore；
+//   - 符号链接正指向废纸篓里的这个文件时，清除同样拒绝（purgeOne），也不提供 purge。
+//
+// 第二个返回值报告原位置是否是符号链接（TrashEntryView.OriginalSymlink）。原位置不存在或读不到时原样返回。
+func actionsForOriginalNotRegular(row trashRow, actions []string) ([]string, bool) {
+	info, err := os.Lstat(row.OriginalPath)
+	if err != nil || info.Mode().IsRegular() {
+		return actions, false
+	}
+	blockPurge := originalSymlinkToTrashFile(row.OriginalPath, row.TrashPath)
+	kept := make([]string, 0, len(actions))
+	for _, action := range actions {
+		if action == TrashActionRestore || (blockPurge && action == TrashActionPurge) {
+			continue
+		}
+		kept = append(kept, action)
+	}
+	return kept, info.Mode()&os.ModeSymlink != 0
+}
+
 // canDetectPutBack 报告 trash 模式的条目能否用完整身份判定「访达放回原处」：记录了大小、mtime 与 inode。
 // legacy_trash 旧行没有可信的 mtime，按大小 + inode 判定，见 putBackDetected。
 func canDetectPutBack(mode string, want trashFileID) bool {
@@ -1103,16 +1196,17 @@ func activeOccupantAt(spec trashKindSpec, path string, entityID uint) (bool, err
 }
 
 // claimedByActive 报告这一行是不是「文件已放回原处、却已由原位置上另一条活跃记录收录」的重复旧记录（I-1）。
-// 先查占用，再做放回判定。
+// 先查占用，再做放回判定。恢复中断（restoring）、文件已在原处、原位置已被占用的行同样算（修复 I m-c）：
+// 启动对账对它每次都报 path_occupied，不在这里放行它就永远无法处理。
 func claimedByActive(spec trashKindSpec, row trashRow) (bool, error) {
-	if row.State != trashStateDeleted && row.State != models.TrashStateFileGone {
+	if row.State != trashStateDeleted && row.State != models.TrashStateFileGone && row.State != trashStateRestoring {
 		return false, nil
 	}
 	occupied, err := activeOccupantAt(spec, row.OriginalPath, row.EntityID)
 	if err != nil || !occupied {
 		return false, err
 	}
-	return trashRowPutBack(row), nil
+	return trashRowFileAtOriginal(row), nil
 }
 
 func (s *TrashService) markListedRowGone(spec trashKindSpec, row *trashRow, message string) (listedRowOutcome, error) {
@@ -1528,8 +1622,8 @@ func (s *TrashService) PurgeTrashEntries(kind string, ids []uint) (*BatchResult,
 }
 
 // RemoveGoneTrashEntries 是列表项 remove_record 动作的入口：移除「废纸篓文件已被清除」（file_gone）的条目，
-// 以及文件已放回原处、却已由原位置上另一条活跃记录收录的重复条目（claimed_by_active，deleted 或 file_gone，I-1）。
-// 硬删记录与条目，不动文件。
+// 以及文件已放回原处、却已由原位置上另一条活跃记录收录的重复条目（claimed_by_active，deleted、file_gone，
+// 或恢复中断的 restoring，I-1 / 修复 I m-c）。硬删记录与条目（claimed 的 legacy_trash 行改为墓碑，修复 I I-A），不动文件。
 func (s *TrashService) RemoveGoneTrashEntries(kind string, ids []uint) (*BatchResult, error) {
 	spec, err := trashKindFor(kind)
 	if err != nil {
@@ -1543,11 +1637,17 @@ func (s *TrashService) RemoveGoneTrashEntries(kind string, ids []uint) (*BatchRe
 }
 
 // ForceRemoveTrashRecords 是「仍然移除记录（不动文件）」（m3）：离线卷、读不到的位置等清除与移除记录都拒绝的
-// 条目的出口。只硬删媒体记录与条目，不做任何文件操作，也不要求卷在线；文件（若还在废纸篓或原处）原样保留，
-// 由用户自行处理。confirmText 必须原样等于 TrashForceRemoveConfirmText（「移除记录」），否则整批拒绝。
+// 条目的出口。只硬删媒体记录与条目（legacy_trash 行改为墓碑、媒体记录保持软删，修复 I I-A），不做任何文件操作，
+// 也不要求卷在线；文件（若还在废纸篓或原处）原样保留，由用户自行处理。confirmText 必须原样等于
+// TrashForceRemoveConfirmText（「移除记录」），否则整批拒绝。
+//
+// 只对 trash / legacy_trash / missing 模式开放（修复 I m-e）：record_only 的条目是「只删记录」留下的按身份屏蔽，
+// 返回 ErrTrashForceRemoveModeNotAllowed（not_purgeable，文案说明改用「允许重新收录」）。
 //
 // 只接受 deleted / file_gone 的条目：停在中断的删除或恢复里的条目（pending_move / restoring / rollback）
-// 对应的记录可能仍是活跃的，要先由恢复或启动对账处理完（结果码 not_purgeable）。
+// 对应的记录可能仍是活跃的，要先由恢复或启动对账处理完（结果码 not_purgeable）。唯一的例外是恢复中断、
+// 文件已在原处、原位置已由另一条活跃记录收录的 restoring 行（claimed_by_active，修复 I m-c）：启动对账永远
+// 处理不了它，这里按 remove_record 同样移除。
 func (s *TrashService) ForceRemoveTrashRecords(kind string, ids []uint, confirmText string) (*BatchResult, error) {
 	spec, err := trashKindFor(kind)
 	if err != nil {
@@ -1571,16 +1671,89 @@ func (s *TrashService) forceRemoveOne(spec trashKindSpec, id uint) error {
 	if err != nil {
 		return err
 	}
-	if row.State != trashStateDeleted && row.State != models.TrashStateFileGone {
+	if !forceRemovableMode(row) {
+		return ErrTrashForceRemoveModeNotAllowed
+	}
+	switch row.State {
+	case trashStateDeleted, models.TrashStateFileGone:
+	case trashStateRestoring:
+		claimed, err := claimedByActive(spec, row)
+		if err != nil {
+			return err
+		}
+		if !claimed {
+			return ErrTrashRecordNotRemovable
+		}
+		return removeClaimedDuplicate(spec, row)
+	default:
 		return ErrTrashRecordNotRemovable
 	}
 	if err := database.Transaction(func(tx *gorm.DB) error {
-		return hardDeleteEntityTx(tx, spec, row, []string{trashStateDeleted, models.TrashStateFileGone})
+		return removeTrashRecordTx(tx, spec, row)
 	}); err != nil {
 		return err
 	}
 	log.Printf("仍然移除回收站记录（不动文件） kind=%s entry=%d entity=%d mode=%s state=%s", spec.kind, row.ID, row.EntityID, row.Mode, row.State)
 	return nil
+}
+
+// forceRemovableMode 报告条目的模式是否允许「仍然移除记录」（修复 I m-e）：trash、legacy_trash（含回填之前
+// file_moved=true 的空 mode 旧行）与 missing。record_only 与回填之前的其他空 mode 行都不允许。
+func forceRemovableMode(row trashRow) bool {
+	switch row.Mode {
+	case models.TrashModeTrash, models.TrashModeLegacyTrash, models.TrashModeMissing:
+		return true
+	}
+	return row.isLegacyTrash()
+}
+
+// isLegacyTrash 报告这一行是不是旧版同目录 trash/ 的条目（isLegacyTrashFacts，与 loadLegacyTrashDirs 的登记口径一致）。
+func (r trashRow) isLegacyTrash() bool {
+	return isLegacyTrashFacts(r.putBackFacts())
+}
+
+// removeTrashRecordTx 是「移除记录」类操作（仍然移除记录、claimed_by_active 的 remove_record）对一行的数据库处理，
+// 不做任何文件操作。条件是这一行此刻仍是读出时的状态（row.State）：
+//   - legacy_trash 行改为墓碑（tombstoneLegacyTrashEntryTx，修复 I I-A）：条目保留、旧版 trash/ 目录继续登记，
+//     媒体记录保持软删；
+//   - 其余模式硬删条目与媒体记录（hardDeleteEntityTx，级联生效）。
+func removeTrashRecordTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
+	if row.isLegacyTrash() {
+		return tombstoneLegacyTrashEntryTx(tx, spec, row)
+	}
+	return hardDeleteEntityTx(tx, spec, row, []string{row.State})
+}
+
+// tombstoneLegacyTrashEntryTx 把一条 legacy_trash 条目置为墓碑（trashStateRemoved，修复 I I-A），不硬删：
+//   - 条目用条件更新（WHERE state = 读出时的状态），状态已变化则整笔回滚；
+//   - 条目引用的媒体记录此刻若是活跃的（状态不一致），整笔回滚——与硬删同一条安全线；
+//   - 媒体记录保持软删（不硬删、不可见）；它不会再被恢复，所以一并解除它的标签关联，让标签用量里的
+//     「回收站中」计数（GetTagUsageCounts 的 trashed_*）不再数到它，与硬删时的级联一致；
+//   - trash_path 保留：loadLegacyTrashDirs 靠它把旧版 trash/ 目录继续算作「已登记」，里面残留的文件（原文件、
+//     与原路径同 inode 的另一个名字）不会被扫描当成新文件收录。
+//
+// 不做任何文件操作。
+func tombstoneLegacyTrashEntryTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
+	result := tx.Table(spec.table).
+		Where("id = ? AND state = ?", row.ID, row.State).
+		Updates(map[string]interface{}{"state": trashStateRemoved, "last_error": "", "updated_at": time.Now()})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		return fmt.Errorf("回收站条目状态已变化: %d", row.ID)
+	}
+	var active int64
+	if err := tx.Table(spec.mediaTable).Where("id = ? AND deleted_at IS NULL", row.EntityID).Count(&active).Error; err != nil {
+		return err
+	}
+	if active != 0 {
+		return fmt.Errorf("回收站条目对应的记录仍在库中，未做任何改动: %d", row.ID)
+	}
+	if spec.kind == trashKindVideo {
+		return tx.Exec("DELETE FROM video_tags WHERE video_id = ?", row.EntityID).Error
+	}
+	return tx.Exec("DELETE FROM image_tags WHERE image_id = ?", row.EntityID).Error
 }
 
 func lockTrashKind(spec trashKindSpec) func() {
@@ -1598,7 +1771,8 @@ func loadTrashRow(spec trashKindSpec, id uint) (trashRow, trashFileID, string, e
 	if result.Error != nil {
 		return row, trashFileID{}, "", result.Error
 	}
-	if result.RowsAffected == 0 {
+	// 墓碑（I-A）对回收站接口一律视为不存在：它不出现在列表里，也没有任何可做的操作。
+	if result.RowsAffected == 0 || row.State == trashStateRemoved {
 		return row, trashFileID{}, "", fmt.Errorf("回收站条目不存在: %d", id)
 	}
 	var extra struct {
@@ -1713,6 +1887,11 @@ func (s *TrashService) purgeOne(spec trashKindSpec, id uint) error {
 	if trashRowPutBack(row) {
 		return ErrTrashPutBack
 	}
+	// 原位置是指向废纸篓里这个文件的符号链接（修复 I m-a）：清除就是删掉用户经原位置仍在使用的唯一一份内容，
+	// 拒绝（path_occupied）。恢复同样拒绝（原位置不是普通文件），列表对这种行两者都不提供。
+	if originalSymlinkToTrashFile(row.OriginalPath, row.TrashPath) {
+		return ErrTrashOriginalNotRegular
+	}
 	if strings.TrimSpace(row.TrashPath) == "" {
 		// trash_path 为空（崩溃恢复分支 3「文件位置未知」）：与其他清除入口一样，硬删前确认位置可用（M2）。
 		if err := trashEntryUnavailable(row.OriginalPath, ""); err != nil {
@@ -1753,15 +1932,17 @@ func (s *TrashService) purgeOne(spec trashKindSpec, id uint) error {
 	})
 }
 
-// removeClaimedDuplicate 硬删一条「文件已由原位置上另一条活跃记录收录」的重复旧记录及其条目（I-1）。
-// 只动数据库：原路径上的文件属于那条活跃记录，废纸篓一侧若还有同 inode 的名字也不碰。
+// removeClaimedDuplicate 移除一条「文件已由原位置上另一条活跃记录收录」的重复旧记录（I-1）：硬删这一行及其条目；
+// legacy_trash 行改为墓碑、媒体记录保持软删（修复 I I-A）。只动数据库：原路径上的文件属于那条活跃记录，
+// 废纸篓（或旧版 trash/）一侧若还有同 inode 的名字也不碰——旧版 trash/ 目录因墓碑继续登记，扫描不会把那个名字
+// 当成新文件收录。条件是这一行此刻仍是读出时的状态（deleted、file_gone，或恢复中断的 restoring，修复 I m-c）。
 func removeClaimedDuplicate(spec trashKindSpec, row trashRow) error {
 	if err := database.Transaction(func(tx *gorm.DB) error {
-		return hardDeleteEntityTx(tx, spec, row, []string{trashStateDeleted, models.TrashStateFileGone})
+		return removeTrashRecordTx(tx, spec, row)
 	}); err != nil {
 		return err
 	}
-	log.Printf("移除已由活跃记录收录的重复回收站条目 kind=%s entry=%d entity=%d", spec.kind, row.ID, row.EntityID)
+	log.Printf("移除已由活跃记录收录的重复回收站条目 kind=%s entry=%d entity=%d mode=%s state=%s", spec.kind, row.ID, row.EntityID, row.Mode, row.State)
 	return nil
 }
 
