@@ -148,14 +148,17 @@ func (a *App) RequeueInterruptedSubtitleJobs() (int, error) {
 		}
 		requeued++
 	}
-	a.subtitleService.DismissInterruptedSubtitleJobs()
+	// 没能入队的那几条随「忽略」改为 cancelled，留在任务中心，仍可单独重试。
+	if err := a.subtitleService.DismissInterruptedSubtitleJobs(); err != nil {
+		log.Printf("API RequeueInterruptedSubtitleJobs dismiss leftovers err=%v", err)
+	}
 	log.Printf("API RequeueInterruptedSubtitleJobs requeued=%d total=%d", requeued, len(summary.JobIDs))
 	return requeued, nil
 }
 
-// DismissInterruptedSubtitleJobs 是提示上的「忽略」：不再提示，任务留在历史里。
-func (a *App) DismissInterruptedSubtitleJobs() {
-	a.subtitleService.DismissInterruptedSubtitleJobs()
+// DismissInterruptedSubtitleJobs 是提示上的「忽略」：中断任务改为已取消，不再提示，仍留在历史里可单独重试。
+func (a *App) DismissInterruptedSubtitleJobs() error {
+	return a.subtitleService.DismissInterruptedSubtitleJobs()
 }
 
 // ===== 字幕索引同步（D-PC23） =====

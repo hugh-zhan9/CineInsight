@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -229,6 +231,8 @@ type subtitleIndexSyncRun struct {
 	db     *gorm.DB
 	cancel context.CancelFunc
 	done   chan struct{}
+	// gate 是开这一轮时的 startGate：非空时等它关闭（或本轮被取消）才开始。
+	gate <-chan struct{}
 }
 
 // subtitleIndexSyncer 持有后台同步的节流状态。状态跟着 *gorm.DB 走：换库（恢复备份、测试换夹具）
@@ -242,6 +246,10 @@ type subtitleIndexSyncer struct {
 	run      *subtitleIndexSyncRun
 	emit     func(SubtitleIndexSyncStatus)
 	now      func() time.Time
+	// startGate 仅供测试，生产中恒为 nil：非空时之后新开的一轮停在开始之前，直到它被关闭。
+	// 视图查询是「先发起后台同步、再读索引」，不拦住的话一轮很快的同步可能赶在首屏读索引之前
+	// 跑完，「首屏返回缓存」就无法确定地观察。
+	startGate chan struct{}
 }
 
 var subtitleIndexSync = &subtitleIndexSyncer{now: time.Now}
@@ -266,7 +274,7 @@ func (s *subtitleIndexSyncer) request(db *gorm.DB, force bool) (run *subtitleInd
 		return nil, false
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	run = &subtitleIndexSyncRun{db: db, cancel: cancel, done: make(chan struct{})}
+	run = &subtitleIndexSyncRun{db: db, cancel: cancel, done: make(chan struct{}), gate: s.startGate}
 	s.run = run
 	go s.execute(ctx, run)
 	return run, true
@@ -285,6 +293,12 @@ func (s *subtitleIndexSyncer) switchDBLocked(db *gorm.DB) {
 
 func (s *subtitleIndexSyncer) execute(ctx context.Context, run *subtitleIndexSyncRun) {
 	defer run.cancel()
+	if run.gate != nil {
+		select {
+		case <-run.gate:
+		case <-ctx.Done():
+		}
+	}
 	checked, err := syncSubtitleIndexesNow(ctx, run.db)
 	cancelled := ctx.Err() != nil
 
@@ -295,11 +309,14 @@ func (s *subtitleIndexSyncer) execute(ctx context.Context, run *subtitleIndexSyn
 	if current {
 		s.run = nil
 		// 被取消的一轮（换库、恢复备份前的停机）不算完成，不刷新节流时间。
+		// 失败的一轮（例如维护围栏期间第一条查询就被拒绝）也不算完成：只记下原因，
+		// 「上次同步时间」与检查条数保持上一次成功的值，下一次请求不被节流挡住（M-6）。
 		if !cancelled {
-			s.lastDone, s.checked = s.now(), checked
-			s.lastErr = ""
 			if err != nil {
 				s.lastErr = err.Error()
+			} else {
+				s.lastDone, s.checked = s.now(), checked
+				s.lastErr = ""
 			}
 			status, emit = s.statusLocked(), s.emit
 		}
@@ -342,7 +359,8 @@ func stopSubtitleIndexSyncAndWait() {
 }
 
 // syncSubtitleIndexesNow 对 db 上的全部视频逐条核对字幕索引（含旁挂字幕标记），返回检查过的条数。
-// 单条视频的失败忽略，与原来的同步口径一致；ctx 取消时在下一条之前停下。
+// 单条视频的失败忽略，与原来的同步口径一致；ctx 取消时在下一条之前停下。维护围栏的拒绝不是
+// 单条视频的问题，整轮按失败结束。
 func syncSubtitleIndexesNow(ctx context.Context, db *gorm.DB) (int, error) {
 	if db == nil {
 		return 0, errors.New("数据库未初始化")
@@ -351,26 +369,108 @@ func syncSubtitleIndexesNow(ctx context.Context, db *gorm.DB) (int, error) {
 	if err := db.WithContext(ctx).Select("id", "path").Order("id desc").Find(&videos).Error; err != nil {
 		return 0, err
 	}
+	sidecars := newSubtitleSidecarDirCache()
 	checked := 0
 	for _, video := range videos {
 		if err := ctx.Err(); err != nil {
 			return checked, err
 		}
-		_ = ensureSubtitleIndexForVideoOn(db, video, true)
+		if err := ensureSubtitleIndexForVideoOn(db, video, sidecars); errors.Is(err, database.ErrMaintenance) {
+			return checked, err
+		}
 		checked++
 	}
 	return checked, nil
 }
 
 func ensureSubtitleIndexForVideo(video models.Video) error {
-	return ensureSubtitleIndexForVideoOn(database.DB, video, false)
+	return ensureSubtitleIndexForVideoOn(database.DB, video, nil)
 }
 
-// ensureSubtitleIndexForVideoOn 让 video 的字幕索引与磁盘上的同名 .srt 一致。withSidecar 为真时
-// （只有全库同步这么做）顺带写 subtitle_index_states.has_sidecar（D-PC17）：旁挂字幕的判定只调用
-// subtitle_sidecar.go 的 HasSidecarSubtitle，这里不另写目录扫描。扫描与搜索命中的就地刷新不写它，
-// 免得每条视频都多读一次整个目录。
-func ensureSubtitleIndexForVideoOn(db *gorm.DB, video models.Video, withSidecar bool) error {
+// readSubtitleSidecarDir 是全库同步读视频目录的入口，测试用它数读目录的次数。
+var readSubtitleSidecarDir = os.ReadDir
+
+// subtitleSidecarDirCache 是一轮全库同步内按目录缓存的目录项（M-6）：同一目录下有上千个视频时，
+// 逐条调用 HasSidecarSubtitle 等于把整个目录读上千遍（视频数 × 目录项数）。
+//
+// 判定规则仍只有 subtitle_sidecar.go 那一份：文件名经 IsSidecarSubtitleName 判定，与
+// ListSidecarSubtitles 一样排除目录、只认（跟随符号链接后的）普通文件；这里只负责不重复读目录。
+type subtitleSidecarDirCache struct {
+	dirs map[string]*subtitleSidecarDirListing
+}
+
+type subtitleSidecarDirListing struct {
+	// names 与 lower 一一对应，按小写名排序，用前缀二分找到候选。
+	names []string
+	lower []string
+	err   error
+}
+
+func newSubtitleSidecarDirCache() *subtitleSidecarDirCache {
+	return &subtitleSidecarDirCache{dirs: map[string]*subtitleSidecarDirListing{}}
+}
+
+func (c *subtitleSidecarDirCache) listing(directory string) *subtitleSidecarDirListing {
+	if cached, ok := c.dirs[directory]; ok {
+		return cached
+	}
+	listing := &subtitleSidecarDirListing{}
+	entries, err := readSubtitleSidecarDir(directory)
+	switch {
+	case os.IsNotExist(err):
+		// 目录不存在按「没有」处理，与 ListSidecarSubtitles 一致。
+	case err != nil:
+		listing.err = fmt.Errorf("读取视频目录失败: %s", subtitleIOReason(err))
+	default:
+		type entryName struct{ name, lower string }
+		kept := make([]entryName, 0, len(entries))
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			kept = append(kept, entryName{name: entry.Name(), lower: strings.ToLower(entry.Name())})
+		}
+		sort.Slice(kept, func(i, j int) bool { return kept[i].lower < kept[j].lower })
+		listing.names = make([]string, len(kept))
+		listing.lower = make([]string, len(kept))
+		for index, entry := range kept {
+			listing.names[index], listing.lower[index] = entry.name, entry.lower
+		}
+	}
+	c.dirs[directory] = listing
+	return listing
+}
+
+// hasSidecar 与 HasSidecarSubtitle(videoPath) 同义，目录只在这一轮里读一次。
+func (c *subtitleSidecarDirCache) hasSidecar(videoPath string) (bool, error) {
+	directory := filepath.Dir(videoPath)
+	listing := c.listing(directory)
+	if listing.err != nil {
+		return false, listing.err
+	}
+	// 旁挂字幕的名字一定以「视频基本名 + .」开头（大小写不敏感）：只看这一段前缀的候选，
+	// 最终是否算数仍由 IsSidecarSubtitleName 判定。
+	base := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+	if base == "" {
+		return false, nil
+	}
+	prefix := strings.ToLower(base) + "."
+	for index := sort.SearchStrings(listing.lower, prefix); index < len(listing.lower) && strings.HasPrefix(listing.lower[index], prefix); index++ {
+		name := listing.names[index]
+		if !IsSidecarSubtitleName(videoPath, name) {
+			continue
+		}
+		if info, err := os.Stat(filepath.Join(directory, name)); err == nil && info.Mode().IsRegular() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// ensureSubtitleIndexForVideoOn 让 video 的字幕索引与磁盘上的同名 .srt 一致。sidecars 非空时
+// （只有全库同步这么做）顺带写 subtitle_index_states.has_sidecar（D-PC17），目录项按一轮缓存。
+// 扫描与搜索命中的就地刷新不写它，免得每条视频都多读一次整个目录。
+func ensureSubtitleIndexForVideoOn(db *gorm.DB, video models.Video, sidecars *subtitleSidecarDirCache) error {
 	srtPath := subtitleparser.SRTPathForVideo(video.Path)
 	if _, err := os.Stat(srtPath); err != nil {
 		if !os.IsNotExist(err) {
@@ -394,10 +494,10 @@ func ensureSubtitleIndexForVideoOn(db *gorm.DB, video models.Video, withSidecar 
 			}
 		}
 	}
-	if !withSidecar {
+	if sidecars == nil {
 		return nil
 	}
-	hasSidecar, err := HasSidecarSubtitle(video.Path)
+	hasSidecar, err := sidecars.hasSidecar(video.Path)
 	if err != nil {
 		// 目录读不了就不知道有没有旁挂字幕：保留原值，不把它当成「没有」。
 		return err

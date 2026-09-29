@@ -52,8 +52,6 @@ type SubtitleService struct {
 	translationCancels map[uint][]*translationCancelEntry
 	// eventSink 让测试截获本服务新增的事件（subtitle-failed 等）；为空时经 Wails runtime 发往前端。
 	eventSink func(name string, payload any)
-	// interruptedJobIDs 是本次启动时被标成 interrupted 的字幕任务（D-PC20 的「上次中断 N 个」提示）。
-	interruptedJobIDs []uint
 
 	// 引擎状态缓存（D-PC22）：每次探测都要起两个 Python 进程 import 运行时，60 秒内复用上一次的结果，
 	// 准备前后失效。engineStatusProbe / now 是测试接缝。
@@ -745,6 +743,17 @@ func (s *SubtitleService) discardRegisteredPendingSubtitle(videoID uint) error {
 	}
 	unlock := lockSubtitleFile(finalPath)
 	defer unlock()
+	// 别的视频（同目录同名、扩展名不同）还有待确认的行引用这个临时文件时不删（M-7）；
+	// 本视频自己的待确认行随后由 discardNeedsConfirmationJobs 逐条结束。
+	if db, err := subtitleJobsDB(); err == nil {
+		shared, err := subtitlePendingReferencedElsewhere(db, artifact.SRTPath, 0, videoID)
+		if err != nil {
+			return fmt.Errorf("检查临时字幕的引用失败: %w", err)
+		}
+		if shared {
+			return nil
+		}
+	}
 	if err := os.Remove(artifact.SRTPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除临时字幕失败: %s", subtitleIOReason(err))
 	}

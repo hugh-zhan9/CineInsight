@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 	"video-master/internal/appdata"
 	"video-master/models"
@@ -115,13 +116,81 @@ func openBackend(backend Backend, dataDir string) (*gorm.DB, error) {
 // 只写这一份。
 const BackendConfigFileName = ".env"
 
+// 后端配置文件里的两个键：DB_BACKEND 是下次启动要用的后端，PREVIOUS_BACKEND 是切换之前的后端。
+const (
+	BackendConfigKey         = "DB_BACKEND"
+	PreviousBackendConfigKey = "PREVIOUS_BACKEND"
+)
+
+// BackendConfigAdoptable 报告数据目录下的后端配置是不是本版本写出的格式：只有带 PREVIOUS_BACKEND 的
+// 才采用。09-01 以来的旧版本切换后端时也往这份文件里写过 DB_BACKEND，但当时这份文件从未被加载，
+// 那次切换从未生效；升级后突然采用它，用户会在什么都没做的情况下被换到另一个库。
+func BackendConfigAdoptable(values map[string]string) bool {
+	return strings.TrimSpace(values[PreviousBackendConfigKey]) != ""
+}
+
 func loadEnvConfig(dataDir string) {
+	dataDirConfig := ""
+	if dataDir != "" {
+		dataDirConfig = filepath.Clean(filepath.Join(dataDir, BackendConfigFileName))
+	}
 	for _, path := range envConfigPaths(dataDir) {
 		if _, err := os.Stat(path); err != nil {
 			continue
 		}
+		if path == dataDirConfig {
+			values, err := godotenv.Read(path)
+			if err != nil {
+				log.Printf("读取数据目录下的后端配置失败，本次不采用 err=%v", err)
+				continue
+			}
+			if !BackendConfigAdoptable(values) {
+				log.Printf("数据目录下的后端配置缺少 %s（旧版本写入、从未生效的切换），本次不采用", PreviousBackendConfigKey)
+				continue
+			}
+		}
 		_ = godotenv.Load(path)
 	}
+}
+
+// backendStartup 记下本进程启动时确定的后端，以及 DB_BACKEND 当时是否已由进程环境给出。
+var backendStartup struct {
+	mu             sync.Mutex
+	resolved       bool
+	backend        Backend
+	fromProcessEnv bool
+}
+
+// resolveStartupBackend 返回本进程使用的后端。
+//
+// 首次调用（启动）先判定 DB_BACKEND 是否来自进程环境——必须在加载任何配置文件之前判定——
+// 再加载配置文件并解析。之后的调用（PostgreSQL 恢复备份后的重连）不再读配置文件，沿用启动时
+// 的结果：本进程启动之后才写入的数据目录 .env（切换后端、切回之前的后端）只在下次启动生效，
+// 重连时读进来会让恢复流程中途改连另一个后端。
+func resolveStartupBackend(dataDir string) (Backend, error) {
+	backendStartup.mu.Lock()
+	defer backendStartup.mu.Unlock()
+	if backendStartup.resolved {
+		return backendStartup.backend, nil
+	}
+	fromProcessEnv := strings.TrimSpace(os.Getenv(BackendConfigKey)) != ""
+	loadEnvConfig(dataDir)
+	backend, err := ResolveBackend(backendEnvFromOS())
+	if err != nil {
+		return "", err
+	}
+	backendStartup.resolved = true
+	backendStartup.backend = backend
+	backendStartup.fromProcessEnv = fromProcessEnv
+	return backend, nil
+}
+
+// BackendFromProcessEnv 报告启动时 DB_BACKEND 是否已由进程环境给出。为真时数据目录下的后端配置
+// 无法生效（godotenv 不覆盖已存在的变量），「需要重启」不能按那份文件判定。
+func BackendFromProcessEnv() bool {
+	backendStartup.mu.Lock()
+	defer backendStartup.mu.Unlock()
+	return backendStartup.resolved && backendStartup.fromProcessEnv
 }
 
 // envConfigPaths 按优先级从高到低列出要加载的配置文件。godotenv 不覆盖已存在的变量，
@@ -237,7 +306,7 @@ func ActiveBackend() Backend {
 }
 
 func backendEnvFromOS() BackendEnv {
-	return BackendEnv{Backend: os.Getenv("DB_BACKEND"), PGHost: os.Getenv("PG_HOST")}
+	return BackendEnv{Backend: os.Getenv(BackendConfigKey), PGHost: os.Getenv("PG_HOST")}
 }
 
 // SQLiteDSN 在库文件路径上附加必须的连接参数。三个参数都不是可选项。
@@ -273,7 +342,8 @@ func SQLitePath(dataDir string) string {
 	return filepath.Join(dataDir, DefaultSQLiteFileName)
 }
 
-// Init 初始化数据库
+// Init 初始化数据库。启动时调用一次；PostgreSQL 恢复备份后的重连也走这里，那时沿用启动时
+// 解析出的后端，不再加载配置文件（见 resolveStartupBackend）。
 func Init() error {
 	// 数据目录由 appdata 统一解析（含旧目录一次性改名），两处必须口径一致。
 	// 先解析目录再加载配置：数据目录下的 .env 是配置来源之一。
@@ -281,14 +351,12 @@ func Init() error {
 	if err != nil {
 		return err
 	}
-	loadEnvConfig(dataDir)
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return fmt.Errorf("创建数据目录失败: %w", err)
-	}
-
-	backend, err := ResolveBackend(backendEnvFromOS())
+	backend, err := resolveStartupBackend(dataDir)
 	if err != nil {
 		return err
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		return fmt.Errorf("创建数据目录失败: %w", err)
 	}
 
 	db, err := openBackend(backend, dataDir)

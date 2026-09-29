@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -23,16 +24,28 @@ func (a *App) PreflightDatabaseSwitch(target string) (*services.DatabaseSwitchPr
 	return a.databaseSwitchService.Preflight(target)
 }
 
+// errDatabaseMaintenanceBusy：恢复备份与切换后端互斥，后到者直接拒绝、不排队（§1.2b / §11）。
+var errDatabaseMaintenanceBusy = errors.New("数据库恢复或切换正在进行，请稍后再试")
+
 // StartDatabaseSwitch 迁移数据并写入后端配置；成功后需要重启才生效（设计中的 MigrateAndSwitch）。
 // 迁移在后台跑，进度走 database-switch-state 事件，GetDatabaseSwitchStatus 兜底；
 // 成功的终态带 relaunch_required=true，前端据此提供「立即重启」（RelaunchApp）。
 //
 // 迁移全程处在与恢复备份相同的维护模式里（D-PC55 / APP-02）：后台服务停掉、写入被围栏
-// 拒绝，迁移器只经维护通道读源库，结束（无论成败）后撤围栏、恢复服务。与恢复共用
-// restoreMu，两者不会同时进维护模式；恢复已进入终态（应用即将退出）时不再允许切换。
+// 拒绝，迁移器只经维护通道读源库。失败（含被取消）时撤围栏、恢复服务；成功时围栏保持、
+// 服务不恢复，进入「待重启」终态（与恢复成功的 restoreTerminal 同等处理），之后的恢复、
+// 再次切换返回 relaunch_pending，唯一出口是「立即重启」。与恢复共用 restoreMu，两者不会
+// 同时进维护模式；恢复已进入终态（应用即将退出）时不再允许切换。
 func (a *App) StartDatabaseSwitch(target string) error {
+	if a.databaseSwitchService.RelaunchPending() {
+		return services.ErrDatabaseRelaunchPending
+	}
 	if !a.restoreMu.TryLock() {
-		return fmt.Errorf("数据库恢复或切换正在进行，请稍后再试")
+		return errDatabaseMaintenanceBusy
+	}
+	if a.databaseSwitchService.RelaunchPending() {
+		a.restoreMu.Unlock()
+		return services.ErrDatabaseRelaunchPending
 	}
 	if a.restoreTerminal {
 		a.restoreMu.Unlock()
@@ -53,15 +66,48 @@ func (a *App) StartDatabaseSwitch(target string) error {
 			func() error { return a.enterDatabaseRestoreMode(false) },
 			a.resumeAfterDatabaseRestoreFailure,
 		)
+		if err == nil {
+			// 持 restoreMu 置位（本 goroutine 一直持有它）：围栏不撤，应用停在「待重启」。
+			a.restoreTerminal = true
+		}
 		log.Printf("API StartDatabaseSwitch target=%s err=%v", target, err)
 	}()
 	return nil
 }
 
+// cancelDatabaseSwitchForShutdown 取消正在进行的迁移（M-3）。接线项：app.go 的 shutdown 必须在
+// 拿 restoreMu 之前调用它——迁移 goroutine 一直持有 restoreMu，不先取消，退出会等整个迁移跑完。
+// 取消按失败处理：撤围栏，配置不改，目标库留为半迁移，下次可清空重试。
+func (a *App) cancelDatabaseSwitchForShutdown() {
+	if a.databaseSwitchService == nil {
+		return
+	}
+	if a.databaseSwitchService.CancelRunningSwitch() {
+		log.Printf("App shutdown cancelled running database switch")
+	}
+}
+
 // SwitchBackendConfigOnly 切回上一个后端：只改配置、不迁移（D-PC55）。成功时
 // relaunch_required=true；切换之后在当前库里的改动不会带回，结果的 message 写明。
+//
+// 与迁移并切换同一口径（APP-02）：写配置前进入与恢复相同的维护模式（不关连接），成功后
+// 围栏保持、进入「待重启」终态，唯一出口是「立即重启」；与恢复、迁移共用 restoreMu。
 func (a *App) SwitchBackendConfigOnly(target string) (*services.DatabaseSwitchConfigResult, error) {
-	result, err := a.databaseSwitchService.SwitchBackendConfigOnly(target)
+	if !a.restoreMu.TryLock() {
+		return nil, errDatabaseMaintenanceBusy
+	}
+	defer a.restoreMu.Unlock()
+	if a.restoreTerminal && !a.databaseSwitchService.RelaunchPending() {
+		return nil, fmt.Errorf("数据库恢复已完成或进入不可恢复状态，请等待应用退出后重新打开")
+	}
+	result, err := a.databaseSwitchService.SwitchBackendConfigOnlyWithLifecycle(target,
+		func() error { return a.enterDatabaseRestoreMode(false) },
+		a.resumeAfterDatabaseRestoreFailure,
+	)
+	if err == nil && result != nil && result.Switched {
+		// 持 restoreMu 置位：围栏不撤，应用停在「待重启」。
+		a.restoreTerminal = true
+	}
 	if result != nil {
 		log.Printf("API SwitchBackendConfigOnly target=%s switched=%v reason=%s err=%v", target, result.Switched, result.ReasonCode, err)
 	} else {
@@ -178,13 +224,20 @@ func (a *App) CreateDatabaseBackup() (*services.BackupFile, error) {
 	return a.backupService.CreateBackup(ctx)
 }
 
+// RestoreDatabaseBackup 恢复备份。与切换后端互斥：另一方正在进行时立即拒绝，不排队等它结束；
+// 切换成功后的「待重启」终态下返回 relaunch_pending。
 func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error {
 	if err := a.beginBackupOperation(); err != nil {
 		return err
 	}
 	defer a.backupWG.Done()
-	a.restoreMu.Lock()
+	if !a.restoreMu.TryLock() {
+		return errDatabaseMaintenanceBusy
+	}
 	defer a.restoreMu.Unlock()
+	if a.databaseSwitchService != nil && a.databaseSwitchService.RelaunchPending() {
+		return services.ErrDatabaseRelaunchPending
+	}
 	if a.restoreTerminal {
 		return fmt.Errorf("数据库恢复已完成或进入不可恢复状态，请等待应用退出后重新打开")
 	}
@@ -225,8 +278,8 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 // 一律得到 ErrMaintenance，只有经 database.WithMaintenanceAccess 的恢复/迁移流程能访问。
 //
 // closeConnection：恢复要换掉库（SQLite 换文件、PG 灌回同一个库后重连），围栏后必须关闭
-// 连接；切换后端只读源库，连接保持打开供迁移器读取。离开维护模式统一走
-// resumeAfterDatabaseRestoreFailure。
+// 连接；切换后端只读源库，连接保持打开供迁移器读取。失败后离开维护模式统一走
+// resumeAfterDatabaseRestoreFailure；切换成功后不离开（「待重启」终态）。
 func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 	if a.jellyfinServer != nil {
 		a.jellyfinServer.Stop()
@@ -307,7 +360,8 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 }
 
 // resumeAfterDatabaseRestoreFailure 离开维护模式：撤围栏并把 enterDatabaseRestoreMode
-// 停掉的服务恢复起来。恢复备份失败、切换后端结束（成败都走这里）共用。
+// 停掉的服务恢复起来。恢复备份失败、切换后端失败（含被取消）共用；切换成功不走这里，
+// 围栏保持到重启。
 func (a *App) resumeAfterDatabaseRestoreFailure() {
 	a.releaseDatabaseRestoreMode()
 	if a.ctx == nil {

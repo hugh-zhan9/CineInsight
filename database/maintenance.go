@@ -28,8 +28,13 @@ type maintenanceAccessKey struct{}
 // access has been fenced. It lets that lifecycle persist its own outcome while
 // normal GORM calls continue to fail with ErrMaintenance.
 func WithMaintenanceAccess(db *gorm.DB) *gorm.DB {
-	ctx := context.WithValue(context.Background(), maintenanceAccessKey{}, true)
-	return db.WithContext(ctx)
+	return WithMaintenanceAccessContext(context.Background(), db)
+}
+
+// WithMaintenanceAccessContext 与 WithMaintenanceAccess 相同，但语句跟随 ctx 取消：
+// 切换后端的迁移器读源库时用它，取消迁移（例如退出应用）不必等一整张表读完。
+func WithMaintenanceAccessContext(ctx context.Context, db *gorm.DB) *gorm.DB {
+	return db.WithContext(context.WithValue(ctx, maintenanceAccessKey{}, true))
 }
 
 func hasMaintenanceAccess(tx *gorm.DB) bool {

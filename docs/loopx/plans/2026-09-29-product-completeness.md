@@ -1031,3 +1031,20 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 
 **PG 全量 `d4344ae`**：7 个包通过。services 包只有 `TestMEDIA14NoSubtitleViewReturnsCacheAndSyncsInBackground` 失败，原因是后台同步在首屏查询之前就跑完了，属于测试本身的时序竞态。在 PG 上单独重跑 8 次都通过，不是回归。已交给修复 F 改成确定性的测试。
 **P-020 + 修复 E 整合**：SQLite 全量通过，8 个包全部 ok。
+
+**PG 全量 `85a570d`**：8 个包全部通过，services 包 1472 秒。
+
+**修复 F 整合**（2026-09-29）：P-014 / P-027 评审中 I-1~I-3、M-1~M-8 的修复与 MEDIA14 时序测试都已合入。主代理整合时补了三处，均做过变异验证：
+- 中断任务的保护改成持久化：`interrupted` 状态本身就是「尚未处理」的标记，不参与裁剪；提示列出全部中断行；「忽略」把它们改为 `cancelled`。修复 F 原先的内存保护在连续两次重启后会失效。测试为 `TestMEDIA10ManyInterruptedJobsSurvivePruningUntilDismissed`（新增第二次启动的断言）和 `TestMEDIA04SubtitleJobHistoryKeepsLatestHundredTerminalRows`。
+- 「只改配置」成功后同样立起围栏，进入「待重启」，与 APP-02 口径一致；写配置失败时撤掉围栏。测试为 `TestAPP02ConfigOnlySwitchKeepsFenceUntilRelaunch`。
+- `DB_BACKEND` 来自进程环境时拒绝切换（`backend_env_locked`）。测试为 `TestAPP02SwitchRejectedWhenBackendComesFromProcessEnv`。
+- App 层签名变化：`DismissInterruptedSubtitleJobs()` 改为返回 `error`。
+- **P-029** 接线：`shutdown` 在 `restoreMu.Lock()` 之前调用 `cancelDatabaseSwitchForShutdown()`。
+- **前端**：
+  - 切换成功或只改配置成功后，弹出不可关闭的「立即重启」，并禁用其余数据库操作；
+  - `relaunch_pending:` 前缀或 `reason_code=relaunch_pending` 表示正在等待重启，`backend_env_locked` 要给出说明文案；
+  - 维护期间点「立即备份」会被拒绝，需给出提示。
+- **遗留**：
+  - `subtitle_search_service.go` 里的目录缓存与 `subtitle_sidecar.go` 各有一份「读目录并只认普通文件」的逻辑，收尾做架构检查时合并到 `subtitle_sidecar.go`；
+  - 进程组终止与原子替换沿用了超分和字幕两侧的现有函数，函数名不太贴切，但行为正确。
+- **中断与恢复**：P-023、修复 G、E + P-020 评审这三个子代理因会话额度用尽（HTTP 429）被中断，21:25 从各自的 transcript 原位续跑。

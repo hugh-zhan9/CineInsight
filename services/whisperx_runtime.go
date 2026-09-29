@@ -257,10 +257,36 @@ func (s *SubtitleService) ensureManagedPython(ctx context.Context) (string, erro
 const subtitlePrepareWaitDelay = 5 * time.Second
 
 // preparationCommand 生成引擎准备用的子进程（pip、venv、brew）：ctx 取消时杀掉它（D-PC22）。
+//
+// 子进程独占一个进程组，取消时杀整个组（M-5）：pip 会再拉起构建与下载子进程，只杀 pip 本身时
+// 它们成了孤儿，继续往虚拟环境里写、还占着输出管道。进程组的起止复用超分 sidecar 的那一对函数。
 func preparationCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, name, args...)
+	applyEnhancementProcessGroup(cmd)
+	cmd.Cancel = func() error {
+		killEnhancementProcessGroup(cmd)
+		return nil
+	}
 	cmd.WaitDelay = subtitlePrepareWaitDelay
 	return cmd
+}
+
+// venvUsable 报告已有的虚拟环境能否直接复用：解释器版本够，且 `python -m pip --version` 能跑。
+// 建 venv 时被取消（或被外部弄坏）会留下一个有解释器、没有 pip 的目录，只看解释器就会一直复用它，
+// 之后每次 pip install 都失败（M-5）。ctx 取消时返回 ctx 的错误，由调用方直接收手，不把
+// 一个好好的 venv 当成损坏删掉。
+func venvUsable(ctx context.Context, venvPython string, meetsMinimumVersion func(string) bool) (bool, error) {
+	if !meetsMinimumVersion(venvPython) {
+		return false, ctx.Err()
+	}
+	if err := preparationCommand(ctx, venvPython, "-m", "pip", "--version").Run(); err != nil {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return false, ctxErr
+		}
+		log.Printf("[Subtitle] existing venv has no usable pip, rebuilding err=%v", err)
+		return false, nil
+	}
+	return true, nil
 }
 
 // ensureManagedPythonRuntime 把 python-build-standalone 解到 runtimeDir/python 并返回
@@ -336,7 +362,11 @@ func (s *SubtitleService) ensureWhisperXVenv(ctx context.Context) (string, error
 	}
 
 	venvPython := s.whisperXVenvPython()
-	if s.pythonMeetsMinimumVersion(venvPython) {
+	usable, err := venvUsable(ctx, venvPython, s.pythonMeetsMinimumVersion)
+	if err != nil {
+		return "", err
+	}
+	if usable {
 		return venvPython, nil
 	}
 

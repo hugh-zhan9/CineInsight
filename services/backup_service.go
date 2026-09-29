@@ -124,7 +124,14 @@ type BackupService struct {
 	registryMu sync.Mutex
 	registry   *BackgroundTaskRegistry
 	notifier   DesktopNotifier
+	// restoreCopy 是 SQLite 恢复把快照写进临时库文件的那一步，测试用它模拟复制中途出错；
+	// 为空时用 io.Copy。
+	restoreCopy func(dst io.Writer, src io.Reader) (int64, error)
 }
+
+// ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。
+// 那时库被围栏挡着，备份状态也不能写进正在被迁移的源库。
+var ErrBackupDuringMaintenance = errors.New("数据库正在恢复或切换后端，暂时不能备份")
 
 // SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
 // 登记范围与 running 标记一致：手动备份与启动时的自动备份，不含恢复流程里的
@@ -291,6 +298,11 @@ func (s *BackupService) ListBackups() ([]BackupFile, error) {
 }
 
 func (s *BackupService) CreateBackup(ctx context.Context) (*BackupFile, error) {
+	// 判定与后续操作之间围栏仍可能生效：那时的读写会被屏障拒绝，状态也不会经维护通道
+	// 写进源库（recordAttempt 不带维护通道），这里只是给用户一句说得清的话。
+	if database.MaintenanceActive() {
+		return nil, ErrBackupDuringMaintenance
+	}
 	// 登记表的变化回调在服务锁之外跑：回调会走到空闲门与前端事件，
 	// 把它关在备份锁里等于给后来者埋一个隐形的锁序。
 	registry := s.taskRegistry()
@@ -349,7 +361,7 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 	// 先判快照与后端是否匹配：此时还没进维护模式、还没做安全备份，
 	// 拒绝的代价最小，用户拿到的也是一句说得清的话。
 	if !backupSuffixMatchesBackend(request.Name, backend) {
-		return s.recordedFailure(fmt.Errorf(
+		return s.recordedRestoreFailure(fmt.Errorf(
 			"备份文件与当前数据库后端不匹配，数据库未被修改：当前是 %s，而 %s 是另一种后端的快照",
 			backend, request.Name))
 	}
@@ -363,17 +375,17 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 	}
 	config, env, err := postgresCommandEnvironment()
 	if err != nil {
-		return s.recordedFailure(err)
+		return s.recordedRestoreFailure(err)
 	}
 	if err := s.runner.Run(ctx, "pg_restore", []string{"--list", backupPath}, env); err != nil {
-		return s.recordedFailure(fmt.Errorf("备份文件校验失败，数据库未被修改: %w", err))
+		return s.recordedRestoreFailure(fmt.Errorf("备份文件校验失败，数据库未被修改: %w", err))
 	}
 	if beforeRestore != nil {
 		if err := beforeRestore(); err != nil {
 			if DatabaseRestoreRequiresRestart(err) {
 				return err
 			}
-			return s.recordedFailure(fmt.Errorf("进入数据库维护模式失败，数据库未被修改: %w", err))
+			return s.recordedRestoreFailure(fmt.Errorf("进入数据库维护模式失败，数据库未被修改: %w", err))
 		}
 	}
 	// 写入围栏生效后才做安全备份，保证围栏前落库的写入都包含在安全备份里。
@@ -388,7 +400,7 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 				}
 			}
 		}
-		return s.recordedFailure(fmt.Errorf("恢复前安全备份失败，数据库未被修改: %w", safetyErr))
+		return s.recordedRestoreFailure(fmt.Errorf("恢复前安全备份失败，数据库未被修改: %w", safetyErr))
 	}
 	args := []string{
 		"--clean", "--if-exists", "--no-owner", "--no-privileges",
@@ -406,9 +418,9 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 		}
 	}
 	if restoreErr != nil {
-		return s.recordedFailure(fmt.Errorf("恢复失败: %w", restoreErr))
+		return s.recordedRestoreFailure(fmt.Errorf("恢复失败: %w", restoreErr))
 	}
-	if err := s.recordAttempt(true, nil); err != nil {
+	if err := s.recordRestoreAttempt(true, nil); err != nil {
 		return &DatabaseRestoreError{
 			Committed: true,
 			Fatal:     true,
@@ -438,11 +450,11 @@ func (s *BackupService) restoreSQLite(
 	beforeRestore func() error,
 ) error {
 	if err := verifySQLiteSnapshot(backupPath); err != nil {
-		return s.recordedFailure(fmt.Errorf("备份文件校验失败，数据库未被修改: %w", err))
+		return s.recordedRestoreFailure(fmt.Errorf("备份文件校验失败，数据库未被修改: %w", err))
 	}
 	// 失败即中止：此时还没进维护模式，库原样可用，按普通失败返回（App 走恢复失败续跑）。
 	if err := s.performSafetyBackup(ctx, directory, normalizedBackupRetention(settings.BackupRetentionCount), request.Name); err != nil {
-		return s.recordedFailure(fmt.Errorf("恢复前安全备份失败，数据库未被修改: %w", err))
+		return s.recordedRestoreFailure(fmt.Errorf("恢复前安全备份失败，数据库未被修改: %w", err))
 	}
 
 	livePath := database.SQLitePath(s.dataDir)
@@ -451,29 +463,21 @@ func (s *BackupService) restoreSQLite(
 			if DatabaseRestoreRequiresRestart(err) {
 				return err
 			}
-			return s.recordedFailure(fmt.Errorf("进入数据库维护模式失败，数据库未被修改: %w", err))
+			return s.recordedRestoreFailure(fmt.Errorf("进入数据库维护模式失败，数据库未被修改: %w", err))
 		}
 	}
 
-	// 关掉句柄再换文件。换的是主库文件，WAL 与 shm 边车必须一并清掉，
-	// 否则残留的 WAL 会被当成新库的一部分而让内容对不上。
+	// 关掉句柄再换文件。句柄一关，本进程就不能再用这个库，之后任何一步失败都只能要求重启；
+	// 换文件本身是原子的，失败时正式库文件原样留着，重启后仍是恢复前的库。
 	if database.DB != nil {
 		if sqlDB, err := database.DB.DB(); err == nil {
 			_ = sqlDB.Close()
 		}
 	}
-	for _, sidecar := range []string{livePath + "-wal", livePath + "-shm"} {
-		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
-			return &DatabaseRestoreError{
-				Fatal: true,
-				Err:   fmt.Errorf("清理 WAL 边车文件失败，应用必须重启: %w", err),
-			}
-		}
-	}
-	if err := copyFileContents(backupPath, livePath); err != nil {
+	if err := s.replaceSQLiteLibrary(backupPath, livePath); err != nil {
 		return &DatabaseRestoreError{
 			Fatal: true,
-			Err:   fmt.Errorf("替换数据库文件失败，应用必须重启并检查备份目录: %w", err),
+			Err:   fmt.Errorf("替换数据库文件失败，库文件未被替换，应用必须重启（恢复前的安全快照在备份目录里）: %w", err),
 		}
 	}
 	// 恢复成功就是成功：返回 nil，App 与 Postgres 成功时一样提示「恢复成功，应用将自动
@@ -501,21 +505,66 @@ func verifySQLiteSnapshot(path string) error {
 	return nil
 }
 
-func copyFileContents(source, target string) error {
-	in, err := os.Open(source)
+// replaceSQLiteLibrary 用快照原子地替换正式库文件（I-2）。调用前连接必须已经关闭。
+//
+// 顺序：在库文件同目录写临时文件并 fsync → 删 -wal / -shm 边车 → rename 覆盖正式库文件 →
+// fsync 目录。rename 之前任何一步失败，正式库文件都原样留着，临时文件被清掉；此前是就地截断
+// 再写，复制中途出错会留下一个半截的库文件。
+//
+// 边车在临时文件就绪之后、rename 之前删：连接已关闭时 SQLite 已做完 checkpoint，边车通常不存在；
+// 残留的 WAL 若留到 rename 之后，会被当成新库的一部分而让内容对不上。
+func (s *BackupService) replaceSQLiteLibrary(snapshotPath, livePath string) error {
+	directory := filepath.Dir(livePath)
+	source, err := os.Open(snapshotPath)
 	if err != nil {
-		return err
+		return fmt.Errorf("打开恢复快照失败: %w", err)
 	}
-	defer in.Close()
-	out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	defer source.Close()
+	temp, err := os.CreateTemp(directory, "."+filepath.Base(livePath)+".cineinsight-restore-*.tmp")
 	if err != nil {
-		return err
+		return fmt.Errorf("创建临时库文件失败: %w", err)
 	}
-	if _, err := io.Copy(out, in); err != nil {
-		_ = out.Close()
-		return err
+	tempPath := temp.Name()
+	replaced := false
+	defer func() {
+		if !replaced {
+			_ = temp.Close()
+			_ = os.Remove(tempPath)
+		}
+	}()
+	copyFn := s.restoreCopy
+	if copyFn == nil {
+		copyFn = io.Copy
 	}
-	return out.Close()
+	if _, err := copyFn(temp, source); err != nil {
+		return fmt.Errorf("写入临时库文件失败: %w", err)
+	}
+	if err := temp.Sync(); err != nil {
+		return fmt.Errorf("落盘临时库文件失败: %w", err)
+	}
+	// 替换后沿用原库文件的权限：rename 换的是整个目录项，临时文件的 0600 会跟着过去。
+	if info, err := os.Stat(livePath); err == nil {
+		if err := temp.Chmod(info.Mode().Perm()); err != nil {
+			return fmt.Errorf("设置临时库文件权限失败: %w", err)
+		}
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("关闭临时库文件失败: %w", err)
+	}
+	for _, sidecar := range []string{livePath + "-wal", livePath + "-shm"} {
+		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("清理 WAL 边车文件失败: %w", err)
+		}
+	}
+	if err := replaceSubtitleFileAtomically(tempPath, livePath); err != nil {
+		return fmt.Errorf("替换库文件失败: %w", err)
+	}
+	replaced = true
+	// 目录项已经换好；目录落盘失败只影响断电时的持久性（最坏回到恢复前的库），不否定这次替换。
+	if err := syncSubtitleParentDirectory(directory); err != nil {
+		log.Printf("SQLite 恢复后同步库目录失败 err=%v", err)
+	}
+	return nil
 }
 
 func (s *BackupService) createBackupLocked(ctx context.Context) (*BackupFile, error) {
@@ -816,7 +865,20 @@ func (s *BackupService) copyVerifiedBackup(directory string, request BackupResto
 	return tempPath, nil
 }
 
+// recordAttempt 记下一次备份的结果，走普通通道：维护围栏生效时（恢复备份、切换后端）被屏障拒绝。
+// 手动与自动备份只用它——切换后端期间经维护通道写状态，写进的是正在被迁移的源库，那次写入
+// 不会出现在新库里。
 func (s *BackupService) recordAttempt(success bool, operationErr error) error {
+	return s.writeAttempt(false, success, operationErr)
+}
+
+// recordRestoreAttempt 是恢复流程专用的记录：恢复自己立的围栏挡住了普通写入，经维护通道记下
+// 本次恢复的结果。恢复与切换后端互斥（App 的 restoreMu），这时的围栏只可能是恢复自己的。
+func (s *BackupService) recordRestoreAttempt(success bool, operationErr error) error {
+	return s.writeAttempt(true, success, operationErr)
+}
+
+func (s *BackupService) writeAttempt(maintenanceAccess, success bool, operationErr error) error {
 	now := s.now()
 	updates := map[string]any{"backup_last_attempt_at": &now}
 	if success {
@@ -833,11 +895,22 @@ func (s *BackupService) recordAttempt(success bool, operationErr error) error {
 	if db == nil {
 		return errors.New("数据库连接不可用")
 	}
-	return database.WithMaintenanceAccess(db).Model(&models.Settings{}).Where("id > 0").Updates(updates).Error
+	if maintenanceAccess {
+		db = database.WithMaintenanceAccess(db)
+	}
+	return db.Model(&models.Settings{}).Where("id > 0").Updates(updates).Error
 }
 
 func (s *BackupService) recordedFailure(operationErr error) error {
-	if statusErr := s.recordAttempt(false, operationErr); statusErr != nil {
+	return joinRecordError(operationErr, s.recordAttempt(false, operationErr))
+}
+
+func (s *BackupService) recordedRestoreFailure(operationErr error) error {
+	return joinRecordError(operationErr, s.recordRestoreAttempt(false, operationErr))
+}
+
+func joinRecordError(operationErr, statusErr error) error {
+	if statusErr != nil {
 		return errors.Join(operationErr, fmt.Errorf("记录备份状态失败: %w", statusErr))
 	}
 	return operationErr

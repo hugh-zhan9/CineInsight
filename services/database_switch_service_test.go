@@ -100,10 +100,11 @@ func containsName(values []string, want string) bool {
 }
 
 // APP-02：迁移在维护模式下进行——迁移期间写入被拒绝，迁移器仍能经维护通道读完源库；
-// 结束后撤围栏，成功终态带 relaunch_required，配置里记下上一个后端。
+// 成功终态带 relaunch_required，配置里记下上一个后端。成功后**不**撤围栏（I-1，见
+// TestAPP02SwitchSuccessKeepsMaintenanceFenceAndRejectsFurtherActions）。
 func TestAPP02SwitchRunsUnderMaintenanceAndRejectsWrites(t *testing.T) {
 	dataDir := useSQLiteAsSwitchTarget(t)
-	source, video := openSwitchSource(t)
+	_, video := openSwitchSource(t)
 	service := NewDatabaseSwitchService(dataDir)
 
 	var writeErrs []error
@@ -119,6 +120,11 @@ func TestAPP02SwitchRunsUnderMaintenanceAndRejectsWrites(t *testing.T) {
 		}
 	})
 	var release func()
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
 	entered, left := 0, 0
 	err := service.SwitchWithLifecycle(context.Background(), "sqlite",
 		func() error { entered++; release = database.BeginMaintenance(); return nil },
@@ -126,8 +132,9 @@ func TestAPP02SwitchRunsUnderMaintenanceAndRejectsWrites(t *testing.T) {
 	if err != nil {
 		t.Fatalf("维护模式下的迁移应成功: %v", err)
 	}
-	if entered != 1 || left != 1 {
-		t.Fatalf("进入与离开维护模式各一次: entered=%d left=%d", entered, left)
+	// I-1 之后成功不再离开维护模式（此前钉的是 entered=1 left=1）。
+	if entered != 1 || left != 0 {
+		t.Fatalf("进入维护模式一次、成功后不离开: entered=%d left=%d", entered, left)
 	}
 	if len(writeErrs) != 3 {
 		t.Fatalf("迁移过程中应尝试过写入: %v", writeErrs)
@@ -163,9 +170,121 @@ func TestAPP02SwitchRunsUnderMaintenanceAndRejectsWrites(t *testing.T) {
 	if err := target.Model(&models.Tag{}).Where("name = ?", "迁移中写入").Count(&sneaked).Error; err != nil || sneaked != 0 {
 		t.Fatalf("迁移中写入不应落进目标库: count=%d err=%v", sneaked, err)
 	}
-	// 离开维护模式后源库恢复可写。
-	if err := source.Create(&models.Tag{Name: "迁移后写入", Color: "#000000"}).Error; err != nil {
-		t.Fatalf("离开维护模式后应恢复写入: %v", err)
+}
+
+// APP02 / I-1：切换成功后维护围栏保持到重启——此后落进旧库的写入重启后就「消失」了。
+// 写入仍被拒绝；再次迁移切换、只改配置、清空目标库（那正是下次启动要用的库）一律 relaunch_pending。
+func TestAPP02SwitchSuccessKeepsMaintenanceFenceAndRejectsFurtherActions(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	source, _ := openSwitchSource(t)
+	service := NewDatabaseSwitchService(dataDir)
+	var release func()
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
+	left := 0
+	enter := func() error { release = database.BeginMaintenance(); return nil }
+	if err := service.SwitchWithLifecycle(context.Background(), "sqlite", enter, func() { left++; release() }); err != nil {
+		t.Fatalf("切换应成功: %v", err)
+	}
+	if left != 0 || !database.MaintenanceActive() || !service.RelaunchPending() {
+		t.Fatalf("成功后应保持围栏并进入待重启: left=%d fenced=%v pending=%v", left, database.MaintenanceActive(), service.RelaunchPending())
+	}
+	if err := source.Create(&models.Tag{Name: "切换后写入", Color: "#000000"}).Error; !errors.Is(err, database.ErrMaintenance) {
+		t.Fatalf("待重启期间写入必须被拒绝: %v", err)
+	}
+	if err := database.Transaction(func(tx *gorm.DB) error { return nil }); !errors.Is(err, database.ErrMaintenance) {
+		t.Fatalf("待重启期间事务必须被拒绝: %v", err)
+	}
+
+	entered := 0
+	err := service.SwitchWithLifecycle(context.Background(), "sqlite",
+		func() error { entered++; return nil }, func() { left++ })
+	if !errors.Is(err, ErrDatabaseRelaunchPending) || !strings.HasPrefix(err.Error(), DatabaseSwitchReasonRelaunchPending) {
+		t.Fatalf("待重启时再次切换应返回 relaunch_pending: %v", err)
+	}
+	if entered != 0 || left != 0 {
+		t.Fatalf("被拒绝的切换不得进出维护模式: entered=%d left=%d", entered, left)
+	}
+	configOnly, err := service.SwitchBackendConfigOnly("sqlite")
+	if err != nil || configOnly.Switched || configOnly.ReasonCode != DatabaseSwitchReasonRelaunchPending {
+		t.Fatalf("待重启时只改配置应被拒绝: %#v err=%v", configOnly, err)
+	}
+	cleared, err := service.ClearMigrationTarget("sqlite", ClearMigrationTargetConfirmText)
+	if err != nil || cleared.Cleared || cleared.ReasonCode != DatabaseSwitchReasonRelaunchPending {
+		t.Fatalf("待重启时清空目标库应被拒绝: %#v err=%v", cleared, err)
+	}
+	if _, err := os.Stat(database.SQLitePath(dataDir)); err != nil {
+		t.Fatalf("刚迁移完、重启后要用的库文件不得被删除: %v", err)
+	}
+	if config := readSwitchConfig(t, dataDir); config["DB_BACKEND"] != "sqlite" || config["PREVIOUS_BACKEND"] != "postgres" {
+		t.Fatalf("被拒绝的操作不得改动配置: %#v", config)
+	}
+	if final := service.SwitchStatus(); !final.Completed || !final.RelaunchRequired {
+		t.Fatalf("终态应仍是完成、要求重启: %#v", final)
+	}
+}
+
+// APP02 / M-3：迁移可以取消（退出应用时由 shutdown 调用）。取消按失败处理：离开维护模式、
+// 源库恢复可写、不写配置；目标库留为半迁移，清空后可以重试。
+func TestAPP02CancelRunningSwitchFailsAndLeavesMaintenance(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	source, _ := openSwitchSource(t)
+	service := NewDatabaseSwitchService(dataDir)
+	if service.CancelRunningSwitch() {
+		t.Fatal("没有进行中的迁移时不应有可取消的迁移")
+	}
+	cancelled := false
+	service.SetProgressSink(func(status DatabaseSwitchStatus) {
+		if status.Running && status.Table != "" && !cancelled {
+			cancelled = service.CancelRunningSwitch()
+		}
+	})
+	var release func()
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
+	left := 0
+	err := service.SwitchWithLifecycle(context.Background(), "sqlite",
+		func() error { release = database.BeginMaintenance(); return nil },
+		func() { left++; release() })
+	if !cancelled || !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消后迁移应以 context.Canceled 失败: cancelled=%v err=%v", cancelled, err)
+	}
+	if left != 1 || database.MaintenanceActive() || service.RelaunchPending() {
+		t.Fatalf("取消按失败处理：离开维护模式、不进入待重启: left=%d fenced=%v pending=%v", left, database.MaintenanceActive(), service.RelaunchPending())
+	}
+	if err := source.Create(&models.Tag{Name: "取消后写入", Color: "#000000"}).Error; err != nil {
+		t.Fatalf("取消后源库应恢复可写: %v", err)
+	}
+	failed := service.SwitchStatus()
+	if !failed.Failed || failed.RelaunchRequired || !strings.Contains(failed.Message, "已取消") {
+		t.Fatalf("失败状态应说明已取消: %#v", failed)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("取消的迁移不应写后端配置: %v", err)
+	}
+	if service.CancelRunningSwitch() {
+		t.Fatal("迁移结束后不应还有可取消的迁移")
+	}
+	target, closeTarget := openSQLiteFile(t, database.SQLitePath(dataDir))
+	if err := migrator.Preflight(target); !errors.Is(err, migrator.ErrTargetHalfMigrated) {
+		closeTarget()
+		t.Fatalf("取消后目标库应是半迁移状态: %v", err)
+	}
+	closeTarget()
+	if cleared, err := service.ClearMigrationTarget("sqlite", ClearMigrationTargetConfirmText); err != nil || !cleared.Cleared {
+		t.Fatalf("取消后应能清空目标库: %#v err=%v", cleared, err)
+	}
+	service.SetProgressSink(nil)
+	if err := service.SwitchWithLifecycle(context.Background(), "sqlite",
+		func() error { release = database.BeginMaintenance(); return nil },
+		func() { release() }); err != nil {
+		t.Fatalf("清空后重试应成功: %v", err)
 	}
 }
 
@@ -186,6 +305,12 @@ func TestAPP02ClearHalfMigratedSQLiteTargetThenRetrySucceeds(t *testing.T) {
 	}
 
 	var release func()
+	// 最后一次重试成功后围栏保持（I-1），测试结束时撤掉，免得挡住后面的用例。
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
 	left := 0
 	err = service.SwitchWithLifecycle(context.Background(), "sqlite",
 		func() error { release = database.BeginMaintenance(); return nil },
@@ -196,8 +321,12 @@ func TestAPP02ClearHalfMigratedSQLiteTargetThenRetrySucceeds(t *testing.T) {
 	if left != 1 {
 		t.Fatalf("迁移失败也必须离开维护模式: left=%d", left)
 	}
-	if database.MaintenanceActive() {
-		t.Fatalf("失败后维护围栏应已撤掉")
+	if database.MaintenanceActive() || service.RelaunchPending() {
+		t.Fatalf("失败后维护围栏应已撤掉、不进入待重启")
+	}
+	// APP02 / I-1：失败后源库恢复可写。
+	if err := source.Create(&models.Tag{Name: "失败后写入", Color: "#000000"}).Error; err != nil {
+		t.Fatalf("迁移失败后应恢复写入: %v", err)
 	}
 	failed := service.SwitchStatus()
 	if !failed.Failed || failed.Location != targetPath || failed.RelaunchRequired {
@@ -275,6 +404,29 @@ func TestAPP02ClearMigrationTargetRefusesActiveBackendAndOutsideDataDir(t *testi
 	result, err = service.ClearMigrationTarget("sqlite", ClearMigrationTargetConfirmText)
 	if err != nil || result.Cleared || result.ReasonCode != "outside_data_dir" {
 		t.Fatalf("数据目录外的库文件应拒绝删除: %#v err=%v", result, err)
+	}
+	if _, err := os.Stat(outside); err != nil {
+		t.Fatalf("数据目录外的文件不得被删除: %v", err)
+	}
+}
+
+// APP02 / M-8：数据目录里的子目录是指向数据目录外的符号链接时，经它指到的库文件同样不删。
+func TestAPP02ClearMigrationTargetRefusesSymlinkedSubdirectoryLeavingDataDir(t *testing.T) {
+	dataDir := t.TempDir()
+	outsideDir := t.TempDir()
+	if err := os.Symlink(outsideDir, filepath.Join(dataDir, "linked")); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+	outside := filepath.Join(outsideDir, "lib.db")
+	if err := os.WriteFile(outside, []byte("user file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DB_BACKEND", "postgres")
+	t.Setenv("SQLITE_PATH", filepath.Join(dataDir, "linked", "lib.db"))
+	service := NewDatabaseSwitchService(dataDir)
+	result, err := service.ClearMigrationTarget("sqlite", ClearMigrationTargetConfirmText)
+	if err != nil || result.Cleared || result.ReasonCode != "outside_data_dir" {
+		t.Fatalf("经符号链接绕出数据目录的库文件应拒绝删除: %#v err=%v", result, err)
 	}
 	if _, err := os.Stat(outside); err != nil {
 		t.Fatalf("数据目录外的文件不得被删除: %v", err)
@@ -411,5 +563,134 @@ func TestAPP02StatusPendingRestartFollowsPersistedBackendChoice(t *testing.T) {
 	}
 	if service.Status().PendingRestart {
 		t.Fatalf("配置与当前连接一致时不应提示重启")
+	}
+}
+
+// APP02 / M-2：DB_BACKEND 来自进程环境时，数据目录下的文件压不过它（godotenv 不覆盖已有变量），
+// 「需要重启」不能按那份文件判定。
+func TestAPP02StatusIgnoresPersistedChoiceWhenBackendComesFromProcessEnv(t *testing.T) {
+	openSwitchSource(t)
+	dataDir := t.TempDir()
+	service := NewDatabaseSwitchService(dataDir)
+	live := database.Backend(database.DB.Dialector.Name())
+	other := database.BackendPostgres
+	if live == database.BackendPostgres {
+		other = database.BackendSQLite
+	}
+	t.Setenv("DB_BACKEND", string(live))
+	if err := persistBackendChoice(dataDir, other, live); err != nil {
+		t.Fatal(err)
+	}
+	service.backendFromProcessEnvOverride = func() bool { return true }
+	if service.Status().PendingRestart {
+		t.Fatal("DB_BACKEND 来自进程环境时文件无法生效，不应提示重启")
+	}
+	service.backendFromProcessEnvOverride = func() bool { return false }
+	if !service.Status().PendingRestart {
+		t.Fatal("对照：DB_BACKEND 不来自进程环境时应按文件提示重启")
+	}
+}
+
+// APP02 / M-1：旧版本写的数据目录 .env 只有 DB_BACKEND、没有 PREVIOUS_BACKEND，启动时不采用，
+// 「需要重启」也不按它判定。
+func TestAPP02StatusIgnoresLegacyBackendConfigWithoutPreviousBackend(t *testing.T) {
+	openSwitchSource(t)
+	dataDir := t.TempDir()
+	service := NewDatabaseSwitchService(dataDir)
+	live := database.Backend(database.DB.Dialector.Name())
+	other := database.BackendPostgres
+	if live == database.BackendPostgres {
+		other = database.BackendSQLite
+	}
+	t.Setenv("DB_BACKEND", string(live))
+	service.backendFromProcessEnvOverride = func() bool { return false }
+	if err := os.WriteFile(filepath.Join(dataDir, ".env"), []byte("DB_BACKEND="+string(other)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if service.Status().PendingRestart {
+		t.Fatal("旧格式的配置启动时不采用，不应提示重启")
+	}
+}
+
+// APP-02：只改配置的切换与迁移并切换同一口径——检查通过后先立围栏再写配置，成功后围栏保持、
+// 进入「待重启」；写配置失败时撤围栏，配置与状态都不变。
+func TestAPP02ConfigOnlySwitchKeepsFenceUntilRelaunch(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	service := NewDatabaseSwitchService(dataDir)
+	service.backendFromProcessEnvOverride = func() bool { return false }
+	target, closeTarget := openSQLiteFile(t, database.SQLitePath(dataDir))
+	if err := target.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Create(&models.Video{Name: "old.mp4", Path: "/old/old.mp4", Directory: "/old"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	closeTarget()
+	if err := persistBackendChoice(dataDir, database.BackendPostgres, database.BackendSQLite); err != nil {
+		t.Fatal(err)
+	}
+
+	// 写配置失败：撤围栏，不进入待重启。
+	persistBackendChoiceFn = func(string, database.Backend, database.Backend) error { return errors.New("disk full") }
+	t.Cleanup(func() { persistBackendChoiceFn = persistBackendChoice })
+	entered, left := 0, 0
+	if _, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite", func() error { entered++; return nil }, func() { left++ }); err == nil {
+		t.Fatal("配置写不进去时应报错")
+	}
+	if entered != 1 || left != 1 || service.RelaunchPending() {
+		t.Fatalf("写配置失败应撤围栏且不进入待重启: entered=%d left=%d pending=%v", entered, left, service.RelaunchPending())
+	}
+	if readSwitchConfig(t, dataDir)["DB_BACKEND"] != "postgres" {
+		t.Fatal("写配置失败时配置不应改动")
+	}
+	persistBackendChoiceFn = persistBackendChoice
+
+	// 成功：围栏先于写配置立起，之后保持；再次操作一律 relaunch_pending。
+	entered, left = 0, 0
+	result, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite",
+		func() error {
+			entered++
+			if readSwitchConfig(t, dataDir)["DB_BACKEND"] != "postgres" {
+				t.Error("围栏应在写配置之前立起")
+			}
+			return nil
+		},
+		func() { left++ })
+	if err != nil || !result.Switched || !result.RelaunchRequired {
+		t.Fatalf("切回上一个后端应成功: %#v err=%v", result, err)
+	}
+	if entered != 1 || left != 0 || !service.RelaunchPending() {
+		t.Fatalf("成功后围栏保持并进入待重启: entered=%d left=%d pending=%v", entered, left, service.RelaunchPending())
+	}
+	if again, err := service.SwitchBackendConfigOnly("postgres"); err != nil || again.ReasonCode != DatabaseSwitchReasonRelaunchPending {
+		t.Fatalf("待重启时再次切换应被拒绝: %#v err=%v", again, err)
+	}
+}
+
+// APP-02：DB_BACKEND 来自进程环境时，数据目录下的配置压不过它，应用内切换永远不会生效——
+// 预检、迁移并切换、只改配置都直接拒绝，不进维护模式、不改配置。
+func TestAPP02SwitchRejectedWhenBackendComesFromProcessEnv(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	service := NewDatabaseSwitchService(dataDir)
+	service.backendFromProcessEnvOverride = func() bool { return true }
+
+	preflight, err := service.Preflight("sqlite")
+	if err != nil || preflight.ReasonCode != DatabaseSwitchReasonBackendEnvLocked || preflight.Empty {
+		t.Fatalf("预检应拒绝: %#v err=%v", preflight, err)
+	}
+	entered := 0
+	err = service.SwitchWithLifecycle(context.Background(), "sqlite", func() error { entered++; return nil }, func() {})
+	if err == nil || !strings.Contains(err.Error(), DatabaseSwitchReasonBackendEnvLocked) || entered != 0 {
+		t.Fatalf("迁移并切换应在进维护模式之前拒绝: err=%v entered=%d", err, entered)
+	}
+	if err := persistBackendChoice(dataDir, database.BackendPostgres, database.BackendSQLite); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite", func() error { entered++; return nil }, func() {})
+	if err != nil || result.Switched || result.ReasonCode != DatabaseSwitchReasonBackendEnvLocked || entered != 0 {
+		t.Fatalf("只改配置应拒绝: %#v err=%v entered=%d", result, err, entered)
+	}
+	if readSwitchConfig(t, dataDir)["DB_BACKEND"] != "postgres" {
+		t.Fatal("被拒绝时配置不应改动")
 	}
 }

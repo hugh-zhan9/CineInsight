@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 	"video-master/database"
@@ -122,8 +124,22 @@ func TestPLAY01ResumeAfterDatabaseMaintenanceKeepsDisabledShortFeedOff(t *testin
 	}
 }
 
-// APP-02：经 App 发起的切换在与恢复相同的维护模式下进行，但不关连接；结束后撤围栏、
-// 释放 restoreMu，成功终态要求重启。
+// waitRestoreMuReleased 等后台切换 goroutine 结束（它全程持有 restoreMu）。
+func waitRestoreMuReleased(t *testing.T, app *App) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for !app.restoreMu.TryLock() {
+		if time.Now().After(deadline) {
+			t.Fatal("切换结束后应释放 restoreMu")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	app.restoreMu.Unlock()
+}
+
+// APP-02：经 App 发起的切换在与恢复相同的维护模式下进行，但不关连接；结束后释放 restoreMu，
+// 成功终态要求重启。I-1 之后成功**不**撤围栏：进入「待重启」终态（此前这里钉的是「离开维护模式
+// 后应恢复写入」），写入被拒绝，恢复、再次切换、只改配置、清空目标库都返回 relaunch_pending。
 func TestAPP02StartDatabaseSwitchUsesRestoreMaintenanceWithoutClosingConnection(t *testing.T) {
 	dataDir := t.TempDir()
 	t.Setenv("DB_BACKEND", "postgres")
@@ -138,27 +154,91 @@ func TestAPP02StartDatabaseSwitchUsesRestoreMaintenanceWithoutClosingConnection(
 	if err := app.StartDatabaseSwitch("sqlite"); err != nil {
 		t.Fatalf("发起切换失败: %v", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for !app.restoreMu.TryLock() {
-		if time.Now().After(deadline) {
-			t.Fatal("切换结束后应释放 restoreMu")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	app.restoreMu.Unlock()
+	waitRestoreMuReleased(t, app)
 
 	status := app.GetDatabaseSwitchStatus()
 	if !status.Completed || !status.RelaunchRequired {
 		t.Fatalf("切换应成功并要求重启: %#v", status)
 	}
-	if database.MaintenanceActive() || app.restoreRelease != nil {
-		t.Fatal("切换结束后应已离开维护模式")
+	if !database.MaintenanceActive() || app.restoreRelease == nil || !app.restoreTerminal {
+		t.Fatalf("切换成功后应保持维护围栏、进入待重启终态: fenced=%v release=%v terminal=%v",
+			database.MaintenanceActive(), app.restoreRelease != nil, app.restoreTerminal)
 	}
 	var count int64
-	if err := database.DB.Model(&models.Video{}).Count(&count).Error; err != nil || count != 1 {
+	if err := database.WithMaintenanceAccess(database.DB).Model(&models.Video{}).Count(&count).Error; err != nil || count != 1 {
 		t.Fatalf("切换不应关闭当前连接: count=%d err=%v", count, err)
 	}
-	if err := database.DB.Create(&models.Tag{Name: "切换后写入", Color: "#000000"}).Error; err != nil {
-		t.Fatalf("离开维护模式后应恢复写入: %v", err)
+	if err := database.DB.Create(&models.Tag{Name: "切换后写入", Color: "#000000"}).Error; !errors.Is(err, database.ErrMaintenance) {
+		t.Fatalf("待重启期间写入必须被拒绝（否则会落进旧库、重启后消失）: %v", err)
+	}
+
+	restoreErr := app.RestoreDatabaseBackup(services.BackupRestoreRequest{Name: "cineinsight-20260929-120000.000000000.dump", Size: 1, Fingerprint: "x"})
+	if !errors.Is(restoreErr, services.ErrDatabaseRelaunchPending) {
+		t.Fatalf("待重启时恢复备份应返回 relaunch_pending: %v", restoreErr)
+	}
+	if err := app.StartDatabaseSwitch("sqlite"); !errors.Is(err, services.ErrDatabaseRelaunchPending) {
+		t.Fatalf("待重启时再次切换应返回 relaunch_pending: %v", err)
+	}
+	if result, err := app.SwitchBackendConfigOnly("sqlite"); err != nil || result.ReasonCode != services.DatabaseSwitchReasonRelaunchPending {
+		t.Fatalf("待重启时只改配置应被拒绝: %#v err=%v", result, err)
+	}
+	if result, err := app.ClearMigrationTarget("sqlite", services.ClearMigrationTargetConfirmText); err != nil || result.ReasonCode != services.DatabaseSwitchReasonRelaunchPending {
+		t.Fatalf("待重启时清空目标库应被拒绝: %#v err=%v", result, err)
+	}
+	if !database.MaintenanceActive() {
+		t.Fatal("被拒绝的操作不得撤掉维护围栏")
+	}
+}
+
+// APP02 / I-1 / M-3：切换进行中调用恢复立即被拒绝（不排队等切换结束）；退出时的取消按失败处理：
+// 撤围栏、恢复写入、不进入待重启。
+func TestAPP02RestoreDuringSwitchIsRejectedAndCancelledSwitchResumesWrites(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("DB_BACKEND", "postgres")
+	t.Setenv("SQLITE_PATH", "")
+	db := openAppLiveDatabase(t, func() *gorm.DB { return dbtest.OpenRaw(t) })
+	if err := db.Create(&models.Video{Name: "switch.mp4", Path: "/lib/switch.mp4", Directory: "/lib"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	app := newMaintenanceTestApp(dataDir)
+	t.Cleanup(app.releaseDatabaseRestoreMode)
+
+	restoreErrs := make(chan error, 1)
+	var once sync.Once
+	app.databaseSwitchService.SetProgressSink(func(status services.DatabaseSwitchStatus) {
+		if !status.Running || status.Table == "" {
+			return
+		}
+		once.Do(func() {
+			done := make(chan error, 1)
+			go func() {
+				done <- app.RestoreDatabaseBackup(services.BackupRestoreRequest{Name: "cineinsight-20260929-120000.000000000.dump", Size: 1, Fingerprint: "x"})
+			}()
+			select {
+			case err := <-done:
+				restoreErrs <- err
+			case <-time.After(2 * time.Second):
+				restoreErrs <- errors.New("恢复在排队等切换结束，而不是立即被拒绝")
+			}
+			app.cancelDatabaseSwitchForShutdown()
+		})
+	})
+
+	if err := app.StartDatabaseSwitch("sqlite"); err != nil {
+		t.Fatalf("发起切换失败: %v", err)
+	}
+	waitRestoreMuReleased(t, app)
+	if err := <-restoreErrs; !errors.Is(err, errDatabaseMaintenanceBusy) {
+		t.Fatalf("切换进行中恢复应立即被拒绝: %v", err)
+	}
+	status := app.GetDatabaseSwitchStatus()
+	if !status.Failed || status.RelaunchRequired {
+		t.Fatalf("取消的切换应以失败收尾: %#v", status)
+	}
+	if database.MaintenanceActive() || app.restoreRelease != nil || app.restoreTerminal || app.databaseSwitchService.RelaunchPending() {
+		t.Fatal("切换失败后应离开维护模式、不进入待重启")
+	}
+	if err := database.DB.Create(&models.Tag{Name: "失败后写入", Color: "#000000"}).Error; err != nil {
+		t.Fatalf("切换失败后应恢复写入: %v", err)
 	}
 }

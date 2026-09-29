@@ -603,24 +603,127 @@ func TestAPP02DataDirEnvOverridesBundledEnvOnLoad(t *testing.T) {
 		t.Fatalf("没有数据目录时仍应加载其他配置：%v", got)
 	}
 
-	// 注册还原后再清掉，让加载真正生效，测试结束时恢复原值。
-	t.Setenv("DB_BACKEND", "")
-	if err := os.Unsetenv("DB_BACKEND"); err != nil {
-		t.Fatal(err)
-	}
+	// 注册还原后再清掉，让加载真正生效，测试结束时恢复原值（M-8：PREVIOUS_BACKEND 同样会被加载进来）。
+	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND")
 	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("DB_BACKEND=sqlite\nPREVIOUS_BACKEND=postgres\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
+	// 直接走生产的加载入口：数据目录下的文件确实被加载了。
+	loadEnvConfig(dataDir)
+	if got := os.Getenv("DB_BACKEND"); got != "sqlite" || os.Getenv("PREVIOUS_BACKEND") != "postgres" {
+		t.Fatalf("loadEnvConfig 应加载数据目录下的 .env: DB_BACKEND=%q PREVIOUS_BACKEND=%q", got, os.Getenv("PREVIOUS_BACKEND"))
+	}
+	// 随应用分发的 .env 在它之后加载，压不过它。
 	bundled := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(bundled, []byte("DB_BACKEND=postgres\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{paths[0], bundled} {
-		if err := godotenv.Load(path); err != nil {
-			t.Fatal(err)
-		}
+	if err := godotenv.Load(bundled); err != nil {
+		t.Fatal(err)
 	}
 	if got := ActiveBackend(); got != BackendSQLite {
 		t.Fatalf("数据目录下的选择应生效，得到 %s", got)
+	}
+}
+
+// unsetEnvForTest 先用 t.Setenv 登记还原，再真正删掉这些变量：godotenv 只填补不存在的变量。
+func unsetEnvForTest(t *testing.T, keys ...string) {
+	t.Helper()
+	for _, key := range keys {
+		t.Setenv(key, "")
+		if err := os.Unsetenv(key); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// resetBackendStartupForTest 让 resolveStartupBackend 回到「本进程还没启动过」的状态，结束时还原。
+func resetBackendStartupForTest(t *testing.T) {
+	t.Helper()
+	backendStartup.mu.Lock()
+	saved := struct {
+		resolved       bool
+		backend        Backend
+		fromProcessEnv bool
+	}{backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv}
+	backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv = false, "", false
+	backendStartup.mu.Unlock()
+	t.Cleanup(func() {
+		backendStartup.mu.Lock()
+		backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv = saved.resolved, saved.backend, saved.fromProcessEnv
+		backendStartup.mu.Unlock()
+	})
+}
+
+// APP02 / M-1：09-01 以来旧版本写的数据目录 .env 只有 DB_BACKEND（那次切换当时从未生效），
+// 启动时不采用；带 PREVIOUS_BACKEND 的新格式才加载。
+func TestAPP02LoadEnvConfigSkipsLegacyDataDirConfigWithoutPreviousBackend(t *testing.T) {
+	dataDir := t.TempDir()
+	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND")
+	path := filepath.Join(dataDir, BackendConfigFileName)
+	if err := os.WriteFile(path, []byte("DB_BACKEND=postgres\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loadEnvConfig(dataDir)
+	if got, ok := os.LookupEnv("DB_BACKEND"); ok {
+		t.Fatalf("旧格式（缺 PREVIOUS_BACKEND）不应被采用，DB_BACKEND=%q", got)
+	}
+
+	if err := os.WriteFile(path, []byte("DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	loadEnvConfig(dataDir)
+	if got := os.Getenv("DB_BACKEND"); got != "postgres" {
+		t.Fatalf("新格式应被采用，DB_BACKEND=%q", got)
+	}
+}
+
+// APP02 / M-2：启动时在加载任何配置文件之前判定 DB_BACKEND 是否来自进程环境。
+func TestAPP02StartupRecordsWhetherBackendCameFromProcessEnv(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	resetBackendStartupForTest(t)
+	unsetEnvForTest(t, "PREVIOUS_BACKEND", "PG_HOST")
+	t.Setenv("DB_BACKEND", "sqlite")
+	backend, err := resolveStartupBackend(dataDir)
+	if err != nil || backend != BackendSQLite || !BackendFromProcessEnv() {
+		t.Fatalf("进程环境的 DB_BACKEND 优先且应被记下: backend=%s fromEnv=%v err=%v", backend, BackendFromProcessEnv(), err)
+	}
+
+	resetBackendStartupForTest(t)
+	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND", "PG_HOST")
+	backend, err = resolveStartupBackend(dataDir)
+	if err != nil || backend != BackendPostgres || BackendFromProcessEnv() {
+		t.Fatalf("DB_BACKEND 来自数据目录文件时不算进程环境: backend=%s fromEnv=%v err=%v", backend, BackendFromProcessEnv(), err)
+	}
+}
+
+// APP02 / I-1：PG 恢复备份后的重连（再次调用 Init）沿用启动时解析出的后端，不把本进程启动之后
+// 才写入的数据目录 .env（切换后端、切回之前的后端）读进来而中途改连另一个后端。
+func TestAPP02ReconnectKeepsStartupBackendIgnoringConfigWrittenAfterStartup(t *testing.T) {
+	dataDir := t.TempDir()
+	resetBackendStartupForTest(t)
+	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND")
+	t.Setenv("PG_HOST", "127.0.0.1")
+	backend, err := resolveStartupBackend(dataDir)
+	if err != nil || backend != BackendPostgres {
+		t.Fatalf("启动时应按 PG_HOST 解析为 postgres: %s err=%v", backend, err)
+	}
+	// 启动之后切换写下的配置。
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("DB_BACKEND=sqlite\nPREVIOUS_BACKEND=postgres\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	backend, err = resolveStartupBackend(dataDir)
+	if err != nil || backend != BackendPostgres {
+		t.Fatalf("重连应沿用启动时的后端: %s err=%v", backend, err)
+	}
+	if got, ok := os.LookupEnv("DB_BACKEND"); ok {
+		t.Fatalf("重连不应加载启动之后写入的配置，DB_BACKEND=%q", got)
+	}
+	if got := ActiveBackend(); got != BackendPostgres {
+		t.Fatalf("当前后端不应中途改变: %s", got)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -816,6 +817,10 @@ func TestAPP01SQLiteBackupModifyRestoreReturnsToBackupPoint(t *testing.T) {
 	if len(names) != 1 || names[0] != "before.mp4" {
 		t.Fatalf("恢复后数据应回到备份点，实际 %v", names)
 	}
+	// I-2：替换经同目录临时文件 + rename，成功后不留临时文件。
+	if leftovers, err := filepath.Glob(filepath.Join(dataDir, ".*cineinsight-restore-*")); err != nil || len(leftovers) != 0 {
+		t.Fatalf("恢复成功后不应留下临时库文件: %v err=%v", leftovers, err)
+	}
 }
 
 // APP-01：安全快照失败即中止——此时还没进维护模式，库原样可用，错误可重试而不是致命。
@@ -919,5 +924,106 @@ func TestAPP09PeriodicBackupLoopRunsOnTickerAndStopsOnCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(3 * time.Second):
 		t.Fatal("ctx 取消后定时循环应退出")
+	}
+}
+
+// APP01 / I-2：SQLite 恢复换库文件是原子的。复制中途出错时正式库文件原样可用（内容仍是恢复前、
+// 结构完好）、临时文件被清掉；旧句柄已关，所以结果是必须重启，重启后用的仍是恢复前的库。
+func TestAPP01SQLiteRestoreCopyFailureLeavesLiveLibraryIntact(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端的库文件恢复")
+	}
+	dataDir := t.TempDir()
+	db := openLiveSQLiteLibrary(t, dataDir)
+	if err := db.Create(&models.Video{Name: "before.mp4", Path: filepath.Join(dataDir, "before.mp4"), Directory: dataDir}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewBackupService(dataDir)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatalf("备份失败: %v", err)
+	}
+	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Update("name", "renamed.mp4").Error; err != nil {
+		t.Fatal(err)
+	}
+
+	copied := int64(0)
+	service.restoreCopy = func(dst io.Writer, src io.Reader) (int64, error) {
+		written, _ := io.CopyN(dst, src, 4096)
+		copied = written
+		return written, errors.New("模拟复制中途磁盘写满")
+	}
+	var release func()
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
+	err = service.RestoreBackupWithLifecycle(context.Background(),
+		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
+		func() error {
+			release = database.BeginMaintenance()
+			return database.Close()
+		}, nil)
+	if err == nil || !DatabaseRestoreRequiresRestart(err) {
+		t.Fatalf("句柄已关后的替换失败应要求重启: %v", err)
+	}
+	if copied == 0 {
+		t.Fatal("前置：替身应在写了一部分之后失败")
+	}
+
+	livePath := database.SQLitePath(dataDir)
+	if names := readVideoNamesFromFile(t, livePath); len(names) != 1 || names[0] != "renamed.mp4" {
+		t.Fatalf("复制失败时正式库文件应保持恢复前的内容: %v", names)
+	}
+	check, err := gorm.Open(sqlite.Open(database.SQLiteDSN(livePath)), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var integrity string
+	if err := check.Raw("PRAGMA integrity_check").Scan(&integrity).Error; err != nil || integrity != "ok" {
+		t.Fatalf("正式库文件应结构完好: %q err=%v", integrity, err)
+	}
+	if sqlDB, err := check.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
+	leftovers, err := filepath.Glob(filepath.Join(dataDir, ".*cineinsight-restore-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("失败后临时库文件应被清掉: %v err=%v", leftovers, err)
+	}
+}
+
+// APP02 / M-4：维护围栏生效期间（恢复、切换后端、切换后的待重启）「立即备份」直接拒绝；
+// 备份状态只经普通通道写，围栏期间写不进正在被迁移的源库。恢复流程自己的记录仍经维护通道。
+func TestAPP02ManualBackupRejectedDuringMaintenanceAndStatusNotWrittenThroughFence(t *testing.T) {
+	dataDir := t.TempDir()
+	db := openLiveSQLiteLibrary(t, dataDir)
+	service := NewBackupService(dataDir)
+	release := database.BeginMaintenance()
+	t.Cleanup(release)
+
+	if backup, err := service.CreateBackup(context.Background()); !errors.Is(err, ErrBackupDuringMaintenance) || backup != nil {
+		t.Fatalf("维护期间手动备份应直接拒绝: %#v err=%v", backup, err)
+	}
+	if err := service.recordAttempt(true, nil); !errors.Is(err, database.ErrMaintenance) {
+		t.Fatalf("备份状态的普通写入在围栏期间应被拒绝: %v", err)
+	}
+	var settings models.Settings
+	if err := database.WithMaintenanceAccess(db).First(&settings).Error; err != nil {
+		t.Fatal(err)
+	}
+	if settings.BackupLastAttemptAt != nil || settings.BackupLastSuccessAt != nil {
+		t.Fatalf("围栏期间不得写入备份状态: %+v", settings)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, "backups")); !os.IsNotExist(err) {
+		t.Fatalf("被拒绝的备份不应产生备份目录或文件: %v", err)
+	}
+	if err := service.recordRestoreAttempt(false, errors.New("恢复失败")); err != nil {
+		t.Fatalf("恢复流程在自己的围栏里仍应能记下结果: %v", err)
+	}
+
+	release()
+	if _, err := service.CreateBackup(context.Background()); err != nil {
+		t.Fatalf("围栏撤掉后备份应恢复可用: %v", err)
 	}
 }

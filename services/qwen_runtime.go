@@ -141,7 +141,11 @@ func (s *SubtitleService) ensureQwenVenv(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("Qwen 运行时需要 Python 3.10+，当前环境未找到可用 Python")
 	}
 	venvPython := s.qwenVenvPython()
-	if s.pythonMeetsMinimumVersion(venvPython) {
+	usable, err := venvUsable(ctx, venvPython, s.pythonMeetsMinimumVersion)
+	if err != nil {
+		return "", err
+	}
+	if usable {
 		return venvPython, nil
 	}
 	_ = os.RemoveAll(s.qwenVenvDir())

@@ -472,7 +472,8 @@ func (q *subtitleTaskQueue) emitSnapshot(snapshot SubtitleQueueSnapshot) {
 
 const (
 	// subtitleJobHistoryKeep 是保留的终态行数；每次写入终态后裁剪。needs_confirmation 不参与裁剪：
-	// 它引用着磁盘上的临时字幕，要等用户强制生成或放弃。
+	// 它引用着磁盘上的临时字幕，要等用户强制生成或放弃。本次启动提示里的 interrupted 行在被重新
+	// 排队或忽略之前同样不参与（见 pruneSubtitleJobs）。
 	subtitleJobHistoryKeep = 100
 	// subtitleJobMessageMaxRunes 是落库与事件里失败原因的长度上限。
 	subtitleJobMessageMaxRunes = 500
@@ -507,10 +508,12 @@ var (
 )
 
 var (
-	subtitleJobActiveStatuses   = []string{string(SubtitleQueueTaskStatusQueued), string(SubtitleQueueTaskStatusRunning)}
+	subtitleJobActiveStatuses = []string{string(SubtitleQueueTaskStatusQueued), string(SubtitleQueueTaskStatusRunning)}
+	// interrupted 不在其中：它与 needs_confirmation 一样在等用户处理（重新排队或忽略），
+	// 裁剪掉就是「静默丢失」（MEDIA-10）。忽略会把它改成 cancelled，之后才参与裁剪。
 	subtitleJobPrunableStatuses = []string{
 		string(SubtitleQueueTaskStatusSucceeded), string(SubtitleQueueTaskStatusFailed),
-		string(SubtitleQueueTaskStatusCancelled), string(SubtitleQueueTaskStatusInterrupted),
+		string(SubtitleQueueTaskStatusCancelled),
 	}
 	subtitleJobRetryableStatuses = []SubtitleQueueTaskStatus{
 		SubtitleQueueTaskStatusFailed, SubtitleQueueTaskStatusCancelled, SubtitleQueueTaskStatusInterrupted,
@@ -796,9 +799,18 @@ func (st *subtitleJobDBStore) recordRunning(task *subtitleQueueTask) (bool, erro
 	if superseded.Error != nil {
 		log.Printf("[Subtitle] supersede pending subtitle jobs video_id=%d err=%v", task.Request.VideoID, superseded.Error)
 	} else if superseded.RowsAffected > 0 {
-		pruneSubtitleJobHistory(db)
+		st.prune(db)
 	}
 	return true, nil
+}
+
+// prune 裁剪历史，保护本次启动提示里还没处理的中断任务（I-3）。
+func (st *subtitleJobDBStore) prune(db *gorm.DB) {
+	if st.service == nil {
+		pruneSubtitleJobHistory(db)
+		return
+	}
+	st.service.pruneSubtitleJobs(db)
 }
 
 func (st *subtitleJobDBStore) recordCancelled(task *subtitleQueueTask) {
@@ -819,7 +831,7 @@ func (st *subtitleJobDBStore) recordCancelled(task *subtitleQueueTask) {
 		log.Printf("[Subtitle] record cancelled subtitle job task_id=%d err=%v", task.TaskID, err)
 		return
 	}
-	pruneSubtitleJobHistory(db)
+	st.prune(db)
 }
 
 // recordFinished 写终态；失败（含写回失败）时再发 subtitle-failed。事件放在落库之后：
@@ -852,7 +864,7 @@ func (st *subtitleJobDBStore) recordFinished(task *subtitleQueueTask, result *Su
 		log.Printf("[Subtitle] record finished subtitle job task_id=%d status=%s err=%v", task.TaskID, outcome.status, updateErr)
 		return
 	}
-	pruneSubtitleJobHistory(db)
+	st.prune(db)
 }
 
 func (st *subtitleJobDBStore) markInterrupted(live []uint) ([]uint, error) {
@@ -883,8 +895,12 @@ func (st *subtitleJobDBStore) markInterrupted(live []uint) ([]uint, error) {
 		}).Error; err != nil {
 		return nil, err
 	}
-	pruneSubtitleJobHistory(db)
 	return ids, nil
+}
+
+// pruneSubtitleJobs 裁剪历史。中断任务的状态本身就不在可裁剪之列（I-3），这里无需另外保护。
+func (s *SubtitleService) pruneSubtitleJobs(db *gorm.DB) {
+	pruneSubtitleJobHistory(db)
 }
 
 // pruneSubtitleJobHistory 只保留最近 subtitleJobHistoryKeep 条终态行（按最后更新时间）。
@@ -1096,7 +1112,7 @@ func (s *SubtitleService) forceSubtitleJob(job *models.SubtitleJob, input Subtit
 		if result.RowsAffected == 0 {
 			return s.subtitleJobConflict(job.ID, SubtitleJobActionForce), nil
 		}
-		pruneSubtitleJobHistory(db)
+		s.pruneSubtitleJobs(db)
 		return &SubtitleJobResolveResult{
 			JobID: job.ID, Action: SubtitleJobActionForce, Status: SubtitleQueueTaskStatusFailed,
 			ErrorCode: SubtitleErrorPendingMissing, Message: message,
@@ -1153,6 +1169,11 @@ func (s *SubtitleService) enqueueResolvedSubtitleJob(task *subtitleQueueTask, ac
 
 // discardSubtitleJob 放弃待确认的任务：先以条件更新赢下这一行，再删临时字幕（持字幕文件锁，
 // 与强制生成的收尾互斥）。只删符合临时文件命名的路径，库里的值再奇怪也不会删到别的文件。
+//
+// 两种情况不删文件（M-7）：
+//   - 另有待确认的行引用同一个临时文件（同目录同名、扩展名不同的视频共用同名 .srt，临时文件
+//     也是同一个）：删了它，那一行的「强制生成」就无从谈起；
+//   - 删除失败：这一行按条件更新改回 needs_confirmation 并报错，不留下一个没人认领的临时文件。
 func (s *SubtitleService) discardSubtitleJob(job *models.SubtitleJob) (*SubtitleJobResolveResult, error) {
 	if SubtitleQueueTaskStatus(job.Status) != SubtitleQueueTaskStatusNeedsConfirmation {
 		return s.subtitleJobConflict(job.ID, SubtitleJobActionDiscard), nil
@@ -1171,10 +1192,11 @@ func (s *SubtitleService) discardSubtitleJob(job *models.SubtitleJob) (*Subtitle
 		}
 	}
 	now := time.Now()
+	const discardedMessage = "已放弃待确认的字幕"
 	result := db.Model(&models.SubtitleJob{}).
 		Where("id = ? AND status = ?", job.ID, string(SubtitleQueueTaskStatusNeedsConfirmation)).
 		Updates(map[string]any{
-			"status": string(SubtitleQueueTaskStatusCancelled), "message": "已放弃待确认的字幕", "pending_artifact_path": "",
+			"status": string(SubtitleQueueTaskStatusCancelled), "message": discardedMessage, "pending_artifact_path": "",
 			"finished_at": now, "updated_at": now,
 		})
 	if result.Error != nil {
@@ -1183,14 +1205,62 @@ func (s *SubtitleService) discardSubtitleJob(job *models.SubtitleJob) (*Subtitle
 	if result.RowsAffected == 0 {
 		return s.subtitleJobConflict(job.ID, SubtitleJobActionDiscard), nil
 	}
-	pruneSubtitleJobHistory(db)
 	if finalPath != "" {
-		if err := os.Remove(pendingPath); err != nil && !os.IsNotExist(err) {
-			return nil, fmt.Errorf("删除临时字幕失败: %s", subtitleIOReason(err))
+		shared, sharedErr := subtitlePendingReferencedElsewhere(db, pendingPath, job.ID, 0)
+		var removeErr error
+		switch {
+		case sharedErr != nil:
+			removeErr = sharedErr
+		case !shared:
+			if err := os.Remove(pendingPath); err != nil && !os.IsNotExist(err) {
+				removeErr = err
+			}
+		}
+		if removeErr != nil {
+			s.reopenDiscardedSubtitleJob(db, job, pendingPath, discardedMessage)
+			if sharedErr != nil {
+				return nil, fmt.Errorf("检查临时字幕的引用失败: %w", sharedErr)
+			}
+			return nil, fmt.Errorf("删除临时字幕失败: %s", subtitleIOReason(removeErr))
 		}
 		s.forgetPendingSubtitle(job.VideoID, pendingPath)
 	}
+	s.pruneSubtitleJobs(db)
 	return &SubtitleJobResolveResult{JobID: job.ID, Action: SubtitleJobActionDiscard, Status: SubtitleQueueTaskStatusCancelled}, nil
+}
+
+// reopenDiscardedSubtitleJob 把刚被放弃、临时文件却没删掉的那一行改回 needs_confirmation。
+// 条件更新只认「仍是这次放弃写下的样子」：两步之间已被重试改走的行不动。
+func (s *SubtitleService) reopenDiscardedSubtitleJob(db *gorm.DB, job *models.SubtitleJob, pendingPath, discardedMessage string) {
+	result := db.Model(&models.SubtitleJob{}).
+		Where("id = ? AND status = ? AND message = ? AND pending_artifact_path = ?",
+			job.ID, string(SubtitleQueueTaskStatusCancelled), discardedMessage, "").
+		Updates(map[string]any{
+			"status": string(SubtitleQueueTaskStatusNeedsConfirmation), "message": job.Message, "pending_artifact_path": pendingPath,
+			"finished_at": job.FinishedAt, "updated_at": time.Now(),
+		})
+	if result.Error != nil || result.RowsAffected == 0 {
+		log.Printf("[Subtitle] reopen discarded subtitle job id=%d rows=%d err=%v", job.ID, result.RowsAffected, result.Error)
+	}
+}
+
+// subtitlePendingReferencedElsewhere 报告是否还有别的待确认行引用同一个临时文件。excludeJobID 与
+// excludeVideoID 为 0 时不排除。比较不区分大小写：darwin 的文件系统不区分，Movie.mp4 与 movie.mkv
+// 的临时文件是同一个（与 lockSubtitleFile 的口径一致）；在区分大小写的文件系统上最多多留一个文件。
+func subtitlePendingReferencedElsewhere(db *gorm.DB, pendingPath string, excludeJobID, excludeVideoID uint) (bool, error) {
+	query := db.Model(&models.SubtitleJob{}).
+		Where("status = ? AND LOWER(pending_artifact_path) = LOWER(?)", string(SubtitleQueueTaskStatusNeedsConfirmation), filepath.Clean(pendingPath))
+	if excludeJobID != 0 {
+		query = query.Where("id <> ?", excludeJobID)
+	}
+	if excludeVideoID != 0 {
+		query = query.Where("video_id <> ?", excludeVideoID)
+	}
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }
 
 // subtitlePendingUsable 报告行里记的临时字幕是否就是当前视频路径对应的那个、且仍是磁盘上的普通文件。
@@ -1271,38 +1341,21 @@ func (s *SubtitleService) discardNeedsConfirmationJobs(videoID uint) error {
 // 标成 interrupted，返回条数；前端据 GetInterruptedSubtitleJobs 提示「上次中断 N 个字幕任务」。
 func (s *SubtitleService) MarkInterruptedSubtitleJobs() (int, error) {
 	ids, err := s.subtitleTaskQueue().markInterrupted()
-	if len(ids) > 0 {
-		s.mu.Lock()
-		seen := make(map[uint]struct{}, len(s.interruptedJobIDs))
-		for _, id := range s.interruptedJobIDs {
-			seen[id] = struct{}{}
-		}
-		for _, id := range ids {
-			if _, ok := seen[id]; !ok {
-				s.interruptedJobIDs = append(s.interruptedJobIDs, id)
-			}
-		}
-		s.mu.Unlock()
-	}
 	return len(ids), err
 }
 
-// GetInterruptedSubtitleJobs 返回本次启动标记的、至今仍是 interrupted 的任务（已被单独重试的不再计入）。
+// GetInterruptedSubtitleJobs 返回全部仍是 interrupted 的任务：不只本次启动标记的，上一次启动
+// 留下、用户既没重新排队也没忽略的也在内——「中断」状态本身就是「还没处理」的持久标记（I-3）。
+// 已被单独重试的行状态已变，不再计入。
 func (s *SubtitleService) GetInterruptedSubtitleJobs() (SubtitleInterruptedJobs, error) {
-	s.mu.Lock()
-	ids := append([]uint(nil), s.interruptedJobIDs...)
-	s.mu.Unlock()
 	summary := SubtitleInterruptedJobs{JobIDs: []uint{}}
-	if len(ids) == 0 {
-		return summary, nil
-	}
 	db, err := subtitleJobsDB()
 	if err != nil {
 		return summary, err
 	}
 	var still []uint
 	if err := db.Model(&models.SubtitleJob{}).
-		Where("id IN ? AND status = ?", ids, string(SubtitleQueueTaskStatusInterrupted)).
+		Where("status = ?", string(SubtitleQueueTaskStatusInterrupted)).
 		Order("id ASC").Pluck("id", &still).Error; err != nil {
 		return summary, err
 	}
@@ -1311,9 +1364,29 @@ func (s *SubtitleService) GetInterruptedSubtitleJobs() (SubtitleInterruptedJobs,
 	return summary, nil
 }
 
-// DismissInterruptedSubtitleJobs 是提示上的「忽略」：不再提示，任务留在历史里，仍可逐条重试。
-func (s *SubtitleService) DismissInterruptedSubtitleJobs() {
-	s.mu.Lock()
-	s.interruptedJobIDs = nil
-	s.mu.Unlock()
+// subtitleJobDismissedInterruptedMessage 是「忽略」后写入的说明：行改为 cancelled，留在历史里，仍可逐条重试。
+const subtitleJobDismissedInterruptedMessage = "应用退出时任务尚未完成（已忽略）"
+
+// DismissInterruptedSubtitleJobs 是提示上的「忽略」：全部 interrupted 行改为 cancelled，不再提示；
+// 任务留在历史里，仍可逐条重试，并与其他终态行一样参与历史裁剪（I-3）。
+func (s *SubtitleService) DismissInterruptedSubtitleJobs() error {
+	db, err := subtitleJobsDB()
+	if err != nil {
+		return err
+	}
+	now := time.Now()
+	result := db.Model(&models.SubtitleJob{}).
+		Where("status = ?", string(SubtitleQueueTaskStatusInterrupted)).
+		Updates(map[string]any{
+			"status":     string(SubtitleQueueTaskStatusCancelled),
+			"message":    subtitleJobDismissedInterruptedMessage,
+			"updated_at": now,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected > 0 {
+		pruneSubtitleJobHistory(db)
+	}
+	return nil
 }
