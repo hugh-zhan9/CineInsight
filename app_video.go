@@ -278,7 +278,8 @@ func (a *App) PlayRandomVideo() (*services.PlaybackAttemptResult, error) {
 	return result, err
 }
 
-// PlayRandomVideoWithFilter 在当前片库筛选范围内发起随机播放。
+// PlayRandomVideoWithFilter 在当前片库筛选范围内发起随机播放。启动成功时结果带 30 秒内有效的
+// reroll_token；统计在 30 秒后、下一次随机或应用关闭时才写入（D-PC43、D-PC44）。
 func (a *App) PlayRandomVideoWithFilter(request services.RandomPlayRequest) (*services.PlaybackAttemptResult, error) {
 	result, err := a.videoService.PlayRandomVideoWithFilter(request)
 	if result != nil {

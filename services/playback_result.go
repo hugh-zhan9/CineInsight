@@ -11,6 +11,8 @@ type PlaybackAttemptResult struct {
 	Reason          string                   `json:"reason,omitempty"`
 	SelectionReason string                   `json:"selection_reason,omitempty"`
 	ReconcileResult *PlaybackReconcileResult `json:"reconcile_result,omitempty"`
+	// RerollToken 只在筛选内随机播放启动成功时给出：30 秒内凭它「换一个」（D-PC44、R10）。
+	RerollToken string `json:"reroll_token,omitempty"`
 }
 
 type PlaybackReconcileResult struct {

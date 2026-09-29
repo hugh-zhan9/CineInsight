@@ -104,6 +104,33 @@ func (a *App) GetLibraryInsights() (*services.LibraryStats, error) {
 	return a.libraryStatsService.GetStats()
 }
 
+// RerollRandom 是随机结果条上的「换一个」：丢弃上一次随机的统计并在同一范围内抽下一条；
+// 令牌已失效时返回 reason_code=reroll_expired。
+func (a *App) RerollRandom(token string) (*services.PlaybackAttemptResult, error) {
+	result, err := a.videoService.RerollRandom(token)
+	logRandomPlaybackResult("RerollRandom", "", result, err)
+	return result, err
+}
+
+// RecordViewEvent 记录一次有效观看（source=inline_view），同一会话只记一次；返回本次是否新写入了事件。
+func (a *App) RecordViewEvent(videoID uint, source string, sessionID string) (bool, error) {
+	recorded, err := a.videoService.RecordViewEvent(videoID, source, sessionID)
+	log.Printf("API RecordViewEvent id=%d source=%s recorded=%v err=%v", videoID, source, recorded, err)
+	return recorded, err
+}
+
+func logRandomPlaybackResult(api, mode string, result *services.PlaybackAttemptResult, err error) {
+	if result == nil {
+		log.Printf("API %s mode=%s result=nil err=%v", api, mode, err)
+		return
+	}
+	videoID := uint(0)
+	if result.Video != nil {
+		videoID = result.Video.ID
+	}
+	log.Printf("API %s mode=%s id=%d dispatch=%v reason=%s err=%v", api, mode, videoID, result.DispatchSucceeded, result.ReasonCode, err)
+}
+
 // ListSavedLibraryViews 返回用户保存的片库筛选。
 func (a *App) ListSavedLibraryViews() ([]models.SavedLibraryView, error) {
 	views, err := a.videoService.ListSavedLibraryViews()

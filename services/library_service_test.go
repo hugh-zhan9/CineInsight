@@ -265,6 +265,8 @@ func TestFilteredRandomPlayHonorsViewModeStaleAndRecentExclusions(t *testing.T) 
 	oldOpen := openWithDefaultFn
 	openWithDefaultFn = func(path string, isDir bool) error { return nil }
 	defer func() { openWithDefaultFn = oldOpen }()
+	// P-023：筛选内随机改为 30 秒延迟提交，换成手动定时器，避免真定时器在后面的测试里触发。
+	useManualRandomCommitClock(t)
 	// D-PC23（MEDIA-14）：字幕筛选的前置同步改为节流 + 后台，先显式同步一轮。
 	syncSubtitleIndexForTest(t)
 

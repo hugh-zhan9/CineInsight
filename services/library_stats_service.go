@@ -9,8 +9,10 @@ import (
 )
 
 type LibraryStatsSummary struct {
-	// Viewed counts distinct non-deleted videos with playback/progress evidence or
-	// an explicit watched mark. Watched remains the completion/manual mark only.
+	// Viewed counts distinct visible videos with playback/progress evidence or an
+	// explicit watched mark. random_play_count alone is not evidence (PLAY-07): a
+	// random launch counts through its ledger event and last_played_at instead.
+	// Watched remains the completion/manual mark only.
 	ViewedCount    int64   `json:"viewed_count"`
 	ViewedPercent  float64 `json:"viewed_percent"`
 	VideoCount     int64   `json:"video_count"`
@@ -33,6 +35,9 @@ type LibraryStatsBucket struct {
 type LibraryStatsWatchDay struct {
 	Date  string `json:"date"`
 	Count int64  `json:"count"`
+	// BySource 是当天事件按来源的拆分（各项之和等于 Count），供热力图按来源分列图例与提示。
+	// desktop_play / desktop_random 是「启动播放」，inline_view 与 mobile_feed 是越过阈值的有效观看。
+	BySource map[string]int64 `json:"by_source"`
 }
 
 type LibraryStatsRatingBucket struct {
@@ -80,7 +85,7 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 		COALESCE(SUM(duration), 0) AS total_duration,
 		COALESCE(SUM(size), 0) AS total_size,
 		COALESCE(SUM(CASE WHEN is_watched THEN 1 ELSE 0 END), 0) AS watched_count,
-		COALESCE(SUM(CASE WHEN is_watched OR play_count > 0 OR random_play_count > 0
+		COALESCE(SUM(CASE WHEN is_watched OR play_count > 0
 			OR last_played_at IS NOT NULL OR watch_position_seconds > 0
 			OR EXISTS (SELECT 1 FROM play_events WHERE play_events.video_id = videos.id)
 			THEN 1 ELSE 0 END), 0) AS viewed_count
@@ -134,7 +139,7 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 	return stats, nil
 }
 
-// libraryWatchHeatmap 按播放事件统计近一年的每日播放次数。
+// libraryWatchHeatmap 按播放事件统计近一年的每日播放次数，并按来源拆分每一天。
 //
 // 读的是账本而不是 videos.last_played_at：后者每部片子只留最后一次，同一天播两部
 // 不同的片能看出来，同一部片播两次却只算一格，热力图长期低报。账本一次播放一行，
@@ -148,28 +153,36 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 // 按 time.Local 归并也让口径与前端对上：heatmapDays 本来就是按本地日期构建坐标轴的，
 // 而 Postgres 的 timestamptz 是按会话时区取值的。
 func libraryWatchHeatmap(now time.Time) ([]LibraryStatsWatchDay, error) {
-	var playedAt []time.Time
+	var events []struct {
+		PlayedAt time.Time
+		Source   string
+	}
 	if err := database.DB.Model(&models.PlayEvent{}).
+		Select("played_at, source").
 		Where("played_at >= ?", now.AddDate(-1, 0, 0)).
 		Order("played_at ASC").
-		Pluck("played_at", &playedAt).Error; err != nil {
+		Scan(&events).Error; err != nil {
 		return nil, err
 	}
 
-	counts := make(map[string]int64, len(playedAt))
-	order := make([]string, 0, len(playedAt))
-	for _, at := range playedAt {
-		day := at.In(time.Local).Format("2006-01-02")
-		if _, seen := counts[day]; !seen {
-			order = append(order, day)
+	days := make(map[string]*LibraryStatsWatchDay, len(events))
+	order := make([]string, 0, len(events))
+	for _, event := range events {
+		date := event.PlayedAt.In(time.Local).Format("2006-01-02")
+		day, seen := days[date]
+		if !seen {
+			day = &LibraryStatsWatchDay{Date: date, BySource: map[string]int64{}}
+			days[date] = day
+			order = append(order, date)
 		}
-		counts[day]++
+		day.Count++
+		day.BySource[event.Source]++
 	}
 	sort.Strings(order)
 
 	result := make([]LibraryStatsWatchDay, 0, len(order))
-	for _, day := range order {
-		result = append(result, LibraryStatsWatchDay{Date: day, Count: counts[day]})
+	for _, date := range order {
+		result = append(result, *days[date])
 	}
 	return result, nil
 }

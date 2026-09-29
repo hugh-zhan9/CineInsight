@@ -237,7 +237,8 @@ func TestLibraryStatsViewedCoverageDeduplicatesAllEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.Summary.VideoCount != 8 || stats.Summary.ViewedCount != 6 || stats.Summary.ViewedPercent != 75 {
+	// PLAY-07：只有 random_play_count、没有账本事件与其他证据的 "random" 不再算看过（原为 6 / 75%）。
+	if stats.Summary.VideoCount != 8 || stats.Summary.ViewedCount != 5 || stats.Summary.ViewedPercent != 62.5 {
 		t.Fatalf("coverage must count each active video once: %+v", stats.Summary)
 	}
 	if stats.Summary.WatchedCount != 1 || stats.Summary.WatchedPercent != 12.5 {

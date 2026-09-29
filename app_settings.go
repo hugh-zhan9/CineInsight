@@ -281,6 +281,8 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 // 连接；切换后端只读源库，连接保持打开供迁移器读取。失败后离开维护模式统一走
 // resumeAfterDatabaseRestoreFailure；切换成功后不离开（「待重启」终态）。
 func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
+	// 30 秒窗口里还没提交的那次随机播放先记账：围栏立起后提交会被拒绝，这一次的计数就丢了（D-PC43）。
+	services.FlushPendingRandomCommit()
 	if a.jellyfinServer != nil {
 		a.jellyfinServer.Stop()
 	}

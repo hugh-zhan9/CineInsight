@@ -1048,3 +1048,23 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - `subtitle_search_service.go` 里的目录缓存与 `subtitle_sidecar.go` 各有一份「读目录并只认普通文件」的逻辑，收尾做架构检查时合并到 `subtitle_sidecar.go`；
   - 进程组终止与原子替换沿用了超分和字幕两侧的现有函数，函数名不太贴切，但行为正确。
 - **中断与恢复**：P-023、修复 G、E + P-020 评审这三个子代理因会话额度用尽（HTTP 429）被中断，21:25 从各自的 transcript 原位续跑。
+
+**P-020 + 修复 E 独立评审**（2026-09-29，opus-xhigh 只读，中途因额度中断后续跑）：A、B 两部分都不通过，各 2 条 Important，无 Critical。
+- A-I-1：mpv 续播加载时可能删掉 watch_later，导致一启动就被误判为看完。已修订详细设计 §8.2 的前提，改为两道保护。
+- A-I-2：`resumableSQL` 放在 `NOT` 上下文里时，NULL 的求值与 Go 版不一致。
+- B-I-1：合并人物、NFO、标签转人物「确认已有关系」时，没有清掉人脸写入记录，之后解除关联会误删这些关系。
+- B-I-2：G-1 要求的 PG 证据。已补记，`85a570d` 的 PG 全量通过。
+- 另有 Minor 7 条，与上面几条一起交给修复 H。
+- **真机交接**（新增）：确认 mpv/IINA 续播加载 watch_later 后是否立即删除该文件。如果是，「续播后看完」的判定需要改用 §8.2 的候选方案。
+
+**P-023 交付与整合**（2026-09-29）：P-023 全部实现，SQLite 全量通过，`-race` 干净，6 项变异检查都能被测试拦下。主代理整合时改了一处：`reroll_token` 按设计原意放进 `PlaybackAttemptResult`，由 `PlayRandomVideoWithFilter` 直接返回，删掉了 P-023 另加的 `RandomPlaybackResult` 与 `PlayRandomVideoWithReroll`，避免出现两个随机入口。另外在 `enterDatabaseRestoreMode` 开头先提交未决的随机项。这一行在 App 层没有单测：夹具属于 services 包内部，flush 本身已在 services 层测过。
+- **P-029** 接线：
+  - `shutdown` 在关闭数据库之前调用 `services.FlushPendingRandomCommit()`；
+  - 重新生成绑定：新增 `RerollRandom`、`RecordViewEvent`，`PlaybackAttemptResult.reroll_token`、热力图 `by_source`。
+- **P-022**：Jellyfin 的 `jellyfin_view` 复用 `viewEvents.record(...)`，把来源白名单放宽到 `jellyfin_view`，阈值用 `viewThreshold`。
+- **前端**：
+  - 随机结果条读取 `reroll_token`，30 秒内「换一个」调用 `RerollRandom`；收到 `reroll_expired` 就改为普通的再随机一次；
+  - 返回的 `video` 此时计数还没变；
+  - 内嵌播放器每次打开生成会话标识，播放时长首次越过阈值或 `completed` 时调用 `RecordViewEvent`；JS 版阈值与 Go 版使用同一组样例；
+  - 洞察页标题改为「观看记录」，desktop 来源显示为「启动播放」，补上 `inline_view` 的标签；
+  - `VideoListPage.test.js`、`RandomPickBanner.test.js` 夹具里的旧文案「优先选择未看」要同步改掉。

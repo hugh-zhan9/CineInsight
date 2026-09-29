@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -95,26 +96,8 @@ func runRevealCommand(cmd *exec.Cmd) error {
 }
 
 func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) (*PlaybackAttemptResult, error) {
-	info, err := os.Stat(video.Path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return s.buildPlaybackFailureResult(video, "file_missing", "源文件不存在或已被移动。", true), nil
-		}
-		return s.buildPlaybackFailureResult(video, "path_unreadable", err.Error(), false), nil
-	}
-	if info.IsDir() {
-		return s.buildPlaybackFailureResult(video, "path_is_directory", "当前路径不是可播放文件。", true), nil
-	}
-
-	// 续播口径由设置决定：默认交给播放器自己（IINA 会接着上次播），
-	// 也可以要求从头播——那种情况下走 iina-cli 显式关掉续播。
-	resumeMode := PlaybackResumeModeResume
-	var settings models.Settings
-	if err := database.DB.Select("playback_resume_mode").First(&settings).Error; err == nil {
-		resumeMode = settings.PlaybackResumeMode
-	}
-	if err := launchPlayback(video, resumeMode); err != nil {
-		return s.buildPlaybackFailureResult(video, "dispatch_failed", err.Error(), false), nil
+	if failure := s.launchFormalPlayback(video); failure != nil {
+		return failure, nil
 	}
 
 	now := time.Now()
@@ -144,6 +127,33 @@ func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) 
 	}, nil
 }
 
+// launchFormalPlayback 检查文件并启动播放器，不写任何统计。成功返回 nil；失败返回带纠偏结果的
+// 失败结果。正式播放在它成功后立刻记账，筛选内随机则登记为未决提交、30 秒后才记账（D-PC43）。
+func (s *VideoService) launchFormalPlayback(video *models.Video) *PlaybackAttemptResult {
+	info, err := os.Stat(video.Path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return s.buildPlaybackFailureResult(video, "file_missing", "源文件不存在或已被移动。", true)
+		}
+		return s.buildPlaybackFailureResult(video, "path_unreadable", err.Error(), false)
+	}
+	if info.IsDir() {
+		return s.buildPlaybackFailureResult(video, "path_is_directory", "当前路径不是可播放文件。", true)
+	}
+
+	// 续播口径由设置决定：默认交给播放器自己（IINA 会接着上次播），
+	// 也可以要求从头播——那种情况下走 iina-cli 显式关掉续播。
+	resumeMode := PlaybackResumeModeResume
+	var settings models.Settings
+	if err := database.DB.Select("playback_resume_mode").First(&settings).Error; err == nil {
+		resumeMode = settings.PlaybackResumeMode
+	}
+	if err := launchPlayback(video, resumeMode); err != nil {
+		return s.buildPlaybackFailureResult(video, "dispatch_failed", err.Error(), false)
+	}
+	return nil
+}
+
 // recordFormalPlaybackStats 把计数递增与播放事件写在同一个事务里。
 //
 // 两者必须同生同死：账本要能解释计数是怎么长出来的，一边写成功一边写失败会让
@@ -155,6 +165,34 @@ func recordFormalPlaybackStats(video *models.Video, updates map[string]interface
 			return err
 		}
 		return tx.Create(&models.PlayEvent{VideoID: video.ID, PlayedAt: playedAt, Source: source}).Error
+	})
+}
+
+// errDeferredRandomVideoGone 表示未决随机提交到期时视频记录已被永久删除：没有计数可加，事件也不写。
+var errDeferredRandomVideoGone = errors.New("视频记录已不存在")
+
+// recordDeferredRandomPlaybackStats 提交一次延迟的随机播放统计（D-PC43）：random_play_count、
+// last_played_at 与 desktop_random 事件在同一个事务里，与 recordFormalPlaybackStats 同生同死。
+//
+// playedAt 是播放器启动的时刻而不是提交时刻。last_played_at 只向前推进：30 秒窗口内同一部片又被
+// 正式播放过时，不能被这次较早的随机启动拉回去。窗口内被移进回收站的视频照样计数（Unscoped），
+// 与账本「软删除时事件保留」一致；恢复后计数仍在。
+func recordDeferredRandomPlaybackStats(videoID uint, playedAt time.Time) error {
+	return database.Transaction(func(tx *gorm.DB) error {
+		counted := tx.Unscoped().Model(&models.Video{}).Where("id = ?", videoID).
+			Update("random_play_count", gorm.Expr("random_play_count + 1"))
+		if counted.Error != nil {
+			return counted.Error
+		}
+		if counted.RowsAffected == 0 {
+			return errDeferredRandomVideoGone
+		}
+		if err := tx.Unscoped().Model(&models.Video{}).
+			Where("id = ? AND (last_played_at IS NULL OR last_played_at < ?)", videoID, playedAt).
+			Update("last_played_at", playedAt).Error; err != nil {
+			return err
+		}
+		return tx.Create(&models.PlayEvent{VideoID: videoID, PlayedAt: playedAt, Source: models.PlayEventSourceDesktopRandom}).Error
 	})
 }
 

@@ -1,10 +1,14 @@
 package services
 
 import (
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"log"
 	"math"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -42,8 +46,10 @@ func (s *VideoService) getRandomPlayConfig() (float64, int, error) {
 	return playWeight, normalizeRandomHalfLifeDays(settings.RandomHalfLifeDays), nil
 }
 
-// PlayRandomVideo 智能加权随机发起播放
+// PlayRandomVideo 智能加权随机发起播放。全库随机没有「换一个」，启动成功即记账；
+// 开始前同样先提交上一条未决的筛选内随机，让它的计数进入这一轮的权重。
 func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
+	randomCommits.flush()
 	// 获取播放权重配置
 	var settings models.Settings
 	if err := database.DB.First(&settings).Error; err != nil {
@@ -127,21 +133,164 @@ func (s *VideoService) collectRandomCandidates(request RandomPlayRequest) (*rand
 	return &randomCandidatePool{mode: mode, rows: rows, playWeight: playWeight, halfLifeDays: halfLifeDays}, nil
 }
 
-// PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放。
+// PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放（D-PC43、R10）。
+//
+// 播放器启动成功后不立即写统计，而是登记为全应用唯一的未决提交：30 秒后、下一次随机播放之前或
+// 应用关闭时，才在同一个事务里写入 random_play_count、last_played_at 与 desktop_random 事件；
+// 30 秒内用返回的 reroll_token 调用 RerollRandom 则整次丢弃。启动失败不登记，统计仍只在成功后写。
 func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*PlaybackAttemptResult, error) {
+	// 用户没有「换一个」就又随机了一次，上一条就是真的播了。先提交再抽，
+	// 它的计数才会进入这一轮的权重，与启动即记账时的抽取分布一致。
+	randomCommits.flush()
 	pool, err := s.collectRandomCandidates(request)
 	if err != nil {
 		return nil, err
 	}
+	reason := randomModeReason(pool.mode)
 	if len(pool.rows) == 0 {
 		return &PlaybackAttemptResult{
 			DispatchSucceeded: false,
 			ReasonCode:        "no_filtered_videos",
 			UserMessage:       "随机播放失败：当前筛选范围没有可播放的视频。",
-			SelectionReason:   randomModeReason(pool.mode),
+			SelectionReason:   reason,
 		}, nil
 	}
-	return s.playRandomFromRows(pool.rows, pool.playWeight, pool.halfLifeDays, time.Now(), randomModeReason(pool.mode))
+	// 令牌在启动播放器之前生成：生成失败时什么都还没发生，直接报错即可。
+	token, err := newRandomRerollToken()
+	if err != nil {
+		return nil, err
+	}
+	video, err := selectWeightedRandomVideo(pool.rows, pool.playWeight, pool.halfLifeDays, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	if failure := s.launchFormalPlayback(video); failure != nil {
+		failure.SelectionReason = reason
+		return failure, nil
+	}
+	randomCommits.register(&pendingRandomCommit{token: token, videoID: video.ID, at: time.Now(), request: request})
+	// 返回的视频是库里的现值：计数与 last_played_at 要等提交后才变。
+	return &PlaybackAttemptResult{Video: video, DispatchSucceeded: true, SelectionReason: reason, RerollToken: token}, nil
+}
+
+// RerollRandom 是随机结果条上的「换一个」：令牌仍未决时丢弃那次随机的统计（计数与事件都不写），
+// 再用原来的筛选、模式与排除表（加上被换掉的这一部）抽下一条，新结果带新的令牌。
+// 令牌已提交、已被换掉或不认识时返回 reason_code=reroll_expired，不抽取、不写任何东西。
+func (s *VideoService) RerollRandom(token string) (*PlaybackAttemptResult, error) {
+	discarded, ok := randomCommits.discard(strings.TrimSpace(token))
+	if !ok {
+		return &PlaybackAttemptResult{
+			DispatchSucceeded: false,
+			ReasonCode:        "reroll_expired",
+			UserMessage:       "「换一个」已失效：上一次随机播放已计入统计，请重新随机。",
+		}, nil
+	}
+	request := discarded.request
+	request.ExcludeIDs = append(append([]uint(nil), discarded.request.ExcludeIDs...), discarded.videoID)
+	return s.PlayRandomVideoWithFilter(request)
+}
+
+// randomRerollWindow 是随机播放启动后允许「换一个」的时长，也是统计延迟提交的时长（R10）。
+const randomRerollWindow = 30 * time.Second
+
+// pendingRandomCommit 是一次已启动、尚未记账的筛选内随机播放。at 是播放器启动的时刻，
+// 提交时写进 last_played_at 与事件；request 留给「换一个」按同一范围再抽。
+type pendingRandomCommit struct {
+	token   string
+	videoID uint
+	at      time.Time
+	request RandomPlayRequest
+	timer   stoppableTimer
+}
+
+type stoppableTimer interface{ Stop() bool }
+
+// randomCommitSlot 保存全应用唯一的一条未决随机提交。
+//
+// 一把互斥锁同时覆盖「取出未决项」与「写库」：到期、换一个、新的随机、应用关闭四条路径
+// 无论怎样并发，每条未决项都恰好被提交或丢弃一次；flush 返回时也不会还有提交在写库。
+// 定时器回调只按令牌认领，已被取走的项再触发也是空操作。这把锁只在进程内，不是数据库锁。
+type randomCommitSlot struct {
+	mu        sync.Mutex
+	pending   *pendingRandomCommit
+	afterFunc func(time.Duration, func()) stoppableTimer
+	commit    func(videoID uint, playedAt time.Time) error
+}
+
+func newRandomCommitSlot() *randomCommitSlot {
+	return &randomCommitSlot{
+		afterFunc: func(d time.Duration, f func()) stoppableTimer { return time.AfterFunc(d, f) },
+		commit:    recordDeferredRandomPlaybackStats,
+	}
+}
+
+var randomCommits = newRandomCommitSlot()
+
+// FlushPendingRandomCommit 立即提交未决的随机播放统计。接线项：App.shutdown 在关闭数据库之前调用，
+// 让 30 秒窗口内退出的那一次随机照样计数。
+func FlushPendingRandomCommit() {
+	randomCommits.flush()
+}
+
+// register 登记新的未决项；已有未决项时先提交它（每个应用只有一条）。
+func (s *randomCommitSlot) register(pending *pendingRandomCommit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commitLocked()
+	token := pending.token
+	pending.timer = s.afterFunc(randomRerollWindow, func() { s.expire(token) })
+	s.pending = pending
+}
+
+// expire 是定时器回调：令牌仍是当前未决项时提交它。
+func (s *randomCommitSlot) expire(token string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.pending != nil && s.pending.token == token {
+		s.commitLocked()
+	}
+}
+
+// discard 在令牌仍未决时取走并丢弃它，返回被丢弃的项。
+func (s *randomCommitSlot) discard(token string) (*pendingRandomCommit, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	pending := s.pending
+	if pending == nil || token == "" || pending.token != token {
+		return nil, false
+	}
+	s.pending = nil
+	pending.timer.Stop()
+	return pending, true
+}
+
+func (s *randomCommitSlot) flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.commitLocked()
+}
+
+// commitLocked 取走并提交当前未决项。写失败沿用正式播放的语义：只记一行日志，
+// 计数与事件在同一事务里一起回滚，两者仍然一致。
+func (s *randomCommitSlot) commitLocked() {
+	pending := s.pending
+	if pending == nil {
+		return
+	}
+	s.pending = nil
+	pending.timer.Stop()
+	if err := s.commit(pending.videoID, pending.at); err != nil {
+		log.Printf("提交随机播放统计失败 id=%d err=%v", pending.videoID, err)
+	}
+}
+
+// newRandomRerollToken 生成 32 位十六进制的「换一个」令牌（G-1：随机标识不用 uuid）。
+func newRandomRerollToken() (string, error) {
+	var buffer [16]byte
+	if _, err := cryptorand.Read(buffer[:]); err != nil {
+		return "", fmt.Errorf("生成随机播放令牌失败: %w", err)
+	}
+	return hex.EncodeToString(buffer[:]), nil
 }
 
 // RandomPickMaxCount 限制单次随机取样的条数，避免把过大的结果集一次性加载进内存。
@@ -233,7 +382,7 @@ func weightedSampleWithoutReplacement(weights []float64, totalWeight float64, co
 func randomModeReason(mode string) string {
 	switch mode {
 	case RandomPlayModeUnwatched:
-		return "在当前筛选范围内优先选择未看视频"
+		return "在当前筛选范围内仅选择未看视频"
 	case RandomPlayModeFavorites:
 		return "在当前筛选范围内选择收藏视频"
 	default:
@@ -249,6 +398,21 @@ func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float
 			UserMessage:       "随机播放失败：当前没有可播放的视频记录。",
 		}, nil
 	}
+	selectedVideo, err := selectWeightedRandomVideo(rows, playWeight, halfLifeDays, now)
+	if err != nil {
+		return nil, err
+	}
+
+	// 使用数据库原子操作更新随机播放次数和最后播放时间
+	result, err := s.dispatchFormalPlayback(selectedVideo, true)
+	if result != nil {
+		result.SelectionReason = selectionReason
+	}
+	return result, err
+}
+
+// selectWeightedRandomVideo 按权重抽出一条候选，并只对它查询完整记录（含 Tags）。rows 不能为空。
+func selectWeightedRandomVideo(rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time) (*models.Video, error) {
 	weights, totalWeight := randomSelectionWeights(rows, playWeight, halfLifeDays, now)
 
 	// 使用加权随机选择（Go 1.20+ 全局 rand 已自动 seed，无需手动调用）
@@ -263,18 +427,11 @@ func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float
 		}
 	}
 
-	// 仅对选中的视频查询完整记录（含 Tags）
 	var selectedVideo models.Video
 	if err := database.DB.Preload("Tags").First(&selectedVideo, rows[selectedIdx].ID).Error; err != nil {
 		return nil, fmt.Errorf("查询选中视频失败: %w", err)
 	}
-
-	// 使用数据库原子操作更新随机播放次数和最后播放时间
-	result, err := s.dispatchFormalPlayback(&selectedVideo, true)
-	if result != nil {
-		result.SelectionReason = selectionReason
-	}
-	return result, err
+	return &selectedVideo, nil
 }
 
 func randomSelectionWeights(rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time) ([]float64, float64) {
