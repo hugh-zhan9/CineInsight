@@ -685,11 +685,15 @@ func TestLIB05PutBackDetectedUsesOriginalPathIdentityOnlyIA(t *testing.T) {
 	if !putBackDetectedFor(facts, info) {
 		t.Fatal("同一 inode 的两个名字应认定为放回")
 	}
-	// 废纸篓一侧读不到（EPERM）：判定不读那一侧，结论不变。
-	reviewDTrashSideStatFails(t, func(string) bool { return true }, os.ErrPermission)
+	// 废纸篓一侧读不到（真实 chmod 000，修复 G m4）：判定不读那一侧，结论不变。
+	unlock := reviewGLockDir(t, filepath.Dir(trashPath))
+	if _, err := os.Stat(trashPath); !errors.Is(err, os.ErrPermission) {
+		t.Fatalf("测试前提：废纸篓一侧应读不到: %v", err)
+	}
 	if !putBackDetectedFor(facts, info) {
 		t.Fatal("读不到废纸篓一侧不得影响放回判定")
 	}
+	unlock()
 	// 原路径身份任何一项不符都不是放回。
 	for _, broken := range []softDeletedEntryFacts{
 		{Mode: facts.Mode, State: facts.State, FileSize: facts.FileSize + 1, FileModTime: facts.FileModTime, FileIdentity: facts.FileIdentity},
@@ -701,12 +705,19 @@ func TestLIB05PutBackDetectedUsesOriginalPathIdentityOnlyIA(t *testing.T) {
 			t.Fatalf("身份或状态不符不得认定为放回: %#v", broken)
 		}
 	}
-	for _, mode := range []string{models.TrashModeLegacyTrash, models.TrashModeRecordOnly, models.TrashModeMissing} {
+	for _, mode := range []string{models.TrashModeRecordOnly, models.TrashModeMissing} {
 		other := facts
 		other.Mode = mode
 		if putBackDetectedFor(other, info) {
 			t.Fatalf("mode=%s 不做放回判定", mode)
 		}
+	}
+	// 修复 G I-1：legacy_trash 旧行同样判定放回，只比大小 + inode（旧行没有可信的 mtime）。
+	legacy := facts
+	legacy.Mode = models.TrashModeLegacyTrash
+	legacy.FileModTime = facts.FileModTime + 1
+	if !putBackDetectedFor(legacy, info) {
+		t.Fatal("legacy_trash 行大小 + inode 一致应认定为放回")
 	}
 }
 

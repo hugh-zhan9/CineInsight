@@ -89,10 +89,20 @@ func (a *App) PurgeTrashEntries(kind string, ids []uint) (*services.BatchResult,
 	return result, err
 }
 
-// RemoveGoneTrashEntries 移除「废纸篓文件已被清除」的条目。
+// RemoveGoneTrashEntries 执行列表项的 remove_record 动作：移除「废纸篓文件已被清除」的条目，以及文件已放回
+// 原处、却已由原位置上另一条活跃记录收录的重复条目（claimed_by_active，修复 G I-1）。只删记录，不动文件。
 func (a *App) RemoveGoneTrashEntries(kind string, ids []uint) (*services.BatchResult, error) {
 	result, err := a.trashCenter().RemoveGoneTrashEntries(kind, ids)
 	logTrashResult("RemoveGoneTrashEntries", kind, result, err)
+	return result, err
+}
+
+// ForceRemoveTrashRecords 是「仍然移除记录（不动文件）」（修复 G m3）：清除或移除记录因磁盘离线、没有权限等
+// 被拒绝时的出口。只硬删记录与条目，不做任何文件操作，也不要求磁盘在线。confirmText 必须原样等于
+// 「移除记录」，否则整批拒绝。
+func (a *App) ForceRemoveTrashRecords(kind string, ids []uint, confirmText string) (*services.BatchResult, error) {
+	result, err := a.trashCenter().ForceRemoveTrashRecords(kind, ids, confirmText)
+	logTrashResult("ForceRemoveTrashRecords", kind, result, err)
 	return result, err
 }
 

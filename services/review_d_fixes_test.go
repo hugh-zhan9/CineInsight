@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 	"video-master/database"
@@ -19,23 +18,6 @@ import (
 // 修复 D（第三轮回收站修复复审 + 手机端 PIN 锁定体验）的回归测试。测试名里的 LIBxx / IMGxx / PLAYxx
 // 是问题清单 ID，IA / Mn 是这一轮复审的问题编号。系统废纸篓是替身（system_trash_testhook_test.go）：
 // 同卷重命名进「原目录/.Trash」。
-
-// reviewDTrashSideStatFails 让 match 命中的「废纸篓一侧」路径 stat 返回 failure（例如 EPERM），其余照常。
-func reviewDTrashSideStatFails(t *testing.T, match func(string) bool, failure error) {
-	t.Helper()
-	fn := func(path string) (os.FileInfo, error) {
-		if match(path) {
-			return nil, &os.PathError{Op: "stat", Path: path, Err: failure}
-		}
-		return os.Stat(path)
-	}
-	previous := trashSideStatFn.Swap(&fn)
-	t.Cleanup(func() { trashSideStatFn.Store(previous) })
-}
-
-func reviewDInsideTrashDir(path string) bool {
-	return strings.Contains(filepath.ToSlash(path), "/.Trash/")
-}
 
 func reviewDSameInode(t *testing.T, a, b string) bool {
 	t.Helper()
@@ -48,11 +30,11 @@ func reviewDSameInode(t *testing.T, a, b string) bool {
 
 func TestLIB05ScanRestoresPutBackWhenTrashSideUnreadableIA(t *testing.T) {
 	svc, video, entry, tag := p010PutBackFixture(t)
-	// 废纸篓里同时还留着一个同 inode 的名字，且那一侧读不到（EPERM）。
+	// 废纸篓里同时还留着一个同 inode 的名字，且那一侧读不到：替身废纸篓目录真实 chmod 000（修复 G m4）。
 	if err := os.Link(video.Path, entry.TrashPath); err != nil {
 		t.Skip("无法创建硬链接")
 	}
-	reviewDTrashSideStatFails(t, reviewDInsideTrashDir, syscall.EPERM)
+	unlock := reviewGLockDir(t, filepath.Dir(entry.TrashPath))
 
 	page, err := NewTrashCenter(svc, nil).ListTrashEntries(TrashFilter{Kind: "video"})
 	if err != nil || len(page.Items) != 1 || !page.Items[0].PutBack || page.Items[0].State != trashStateDeleted {
@@ -70,7 +52,8 @@ func TestLIB05ScanRestoresPutBackWhenTrashSideUnreadableIA(t *testing.T) {
 	if err := database.DB.Unscoped().Model(&models.Video{}).Where("path = ?", video.Path).Count(&total).Error; err != nil || total != 1 {
 		t.Fatalf("同路径只应有原记录: %d err=%v", total, err)
 	}
-	// 系统废纸篓里的那个名字不动（M1）。
+	// 系统废纸篓里的那个名字不动（M1）。先恢复目录权限才能看见它。
+	unlock()
 	if _, err := os.Lstat(entry.TrashPath); err != nil {
 		t.Fatalf("恢复不得删除废纸篓里的名字: %v", err)
 	}
@@ -91,7 +74,8 @@ func TestIMG02ScanRestoresPutBackWhenTrashSideUnreadableIA(t *testing.T) {
 	if err := os.Rename(entry.TrashPath, path); err != nil {
 		t.Fatal(err)
 	}
-	reviewDTrashSideStatFails(t, reviewDInsideTrashDir, syscall.EPERM)
+	// 废纸篓一侧读不到：替身废纸篓目录真实 chmod 000（修复 G m4）。
+	reviewGLockDir(t, filepath.Dir(entry.TrashPath))
 
 	result, err := svc.SyncImageDirectories()
 	if err != nil || result.Restored != 1 || result.Added != 0 || len(result.Errors) != 0 {
@@ -356,7 +340,7 @@ func TestLIB05RemoveGoneOnPutBackOrOfflineEntryRefusedM2(t *testing.T) {
 	}
 }
 
-// ---------- M3：符号链接与非 /Volumes 挂载点 ----------
+// ---------- M3：符号链接指向的卷（挂载检查只覆盖 /Volumes 下的卷，见 scanRootAvailability） ----------
 
 func TestLIB07ScanRootSymlinkToUnmountedVolumeIsOfflineM3(t *testing.T) {
 	setupVideoServiceTestDB(t)

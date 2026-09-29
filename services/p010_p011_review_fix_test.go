@@ -509,7 +509,14 @@ func TestLIB04DecideSoftDeletedPathPutBackAndHistoricRowsI3(t *testing.T) {
 		{"trash 大小不同 新建", trashFacts, 5, 6, 9, "1:77", softDeletedCreateNew},
 		{"trash mtime 不同 新建", trashFacts, 5, 5, 10, "1:77", softDeletedCreateNew},
 		{"trash 读不到身份 新建", trashFacts, 5, 5, 9, "", softDeletedCreateNew},
-		{"legacy_trash 只有大小 不认放回", &softDeletedEntryFacts{Mode: models.TrashModeLegacyTrash, State: trashStateDeleted, FileSize: 5, FileModTime: 9, FileIdentity: "1:77"}, 5, 5, 9, "1:77", softDeletedCreateNew},
+		// 修复 G I-1：legacy_trash 旧行也按大小 + inode 判定放回（不比 mtime），扫描恢复原记录而不是新建。
+		{"legacy_trash 大小 + inode 一致 放回原处", &softDeletedEntryFacts{Mode: models.TrashModeLegacyTrash, State: trashStateDeleted, FileSize: 5, FileModTime: 9, FileIdentity: "1:77"}, 5, 5, 123, "2:77", softDeletedPutBack},
+		{"legacy_trash inode 不同 新建", &softDeletedEntryFacts{Mode: models.TrashModeLegacyTrash, State: trashStateDeleted, FileSize: 5, FileIdentity: "1:77"}, 5, 5, 9, "1:78", softDeletedCreateNew},
+		{"legacy_trash 大小不同 新建", &softDeletedEntryFacts{Mode: models.TrashModeLegacyTrash, State: trashStateDeleted, FileSize: 5, FileIdentity: "1:77"}, 5, 6, 9, "1:77", softDeletedCreateNew},
+		{"legacy_trash 没记录身份 新建", &softDeletedEntryFacts{Mode: models.TrashModeLegacyTrash, State: trashStateDeleted, FileSize: 5}, 5, 5, 9, "1:77", softDeletedCreateNew},
+		{"legacy_trash 原路径是符号链接（身份为空） 新建", &softDeletedEntryFacts{Mode: models.TrashModeLegacyTrash, State: trashStateDeleted, FileSize: 5, FileIdentity: "1:77"}, 5, 5, 9, "", softDeletedCreateNew},
+		{"回填前 mode 为空 file_moved 放回原处", &softDeletedEntryFacts{State: trashStateDeleted, FileMoved: true, FileSize: 5, FileIdentity: "1:77"}, 5, 5, 9, "1:77", softDeletedPutBack},
+		{"回填前 mode 为空 未移动 新建", &softDeletedEntryFacts{State: trashStateDeleted, FileSize: 5, FileIdentity: "1:77"}, 5, 5, 9, "1:77", softDeletedCreateNew},
 		{"record_only 从未移动 不认放回", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, DeleteBatchID: "b", FileSize: 5, FileModTime: 9, FileIdentity: "1:77"}, 5, 5, 9, "1:77", softDeletedBlocked},
 		// Minor 3：mtime=0 只比大小的兜底仅对新时代行生效。
 		{"record_only 新时代 mtime=0 大小相同 屏蔽", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, DeleteBatchID: "b", FileSize: 5}, 9, 5, 123, "", softDeletedBlocked},

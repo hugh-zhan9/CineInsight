@@ -38,3 +38,13 @@ func scanVolumeAvailable(path string) error {
 	}
 	return nil
 }
+
+// fileLinkCount 返回文件的硬链接数。清理旧版 trash/ 残留名字之前用它确认原路径与残留是同一个普通文件的
+// 两个名字（hardLinkedRegularNames，m1）；读不到时返回 false，调用方不删。
+func fileLinkCount(info os.FileInfo) (uint64, bool) {
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, false
+	}
+	return uint64(stat.Nlink), true
+}

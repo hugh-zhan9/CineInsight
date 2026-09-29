@@ -1334,9 +1334,11 @@ func loadLegacyTrashDirs(db *gorm.DB) (*legacyTrashIndex, error) {
 	// 启发式（C1 / I-3）：只认旧版特征——
 	//   - 目录基名恰为 trash（区分大小写，判定基于路径字符串）；
 	//   - 父目录下有在自己那张回收站条目表里没有条目的软删行，且 deleted_at 落在上面的时间段内；
+	//     扫描器造成的软删（deleted_by='scanner'，例如图片扫描发现文件缺失时的软删不建条目）不算——那是文件
+	//     自己不见了，不是旧版把它移进了 trash/（m2）；旧版删除留下的是 'user' 或历史空值；
 	//   - trash 目录里至少有一个文件名与这些软删行对得上（旧版 TrashTargetPath 的命名：<名>，
 	//     或 <主名>_<14 位时间戳>[_<序号>]<扩展名>）。
-	// 新版删除（有条目）与扫描器的软删（deleted_at 不在时间段内）都不会让用户自己的 trash/ 被跳过。
+	// 新版删除（有条目）与扫描器的软删（deleted_by='scanner'，不论时间）都不会让用户自己的 trash/ 被跳过。
 	// 最后一条（读 trash/ 目录）是惰性的，见 legacyTrashIndex.heuristicDir。
 	for _, source := range []struct {
 		table, entryTable, entryColumn string
@@ -1355,6 +1357,7 @@ func loadLegacyTrashDirs(db *gorm.DB) (*legacyTrashIndex, error) {
 			Select(source.table+".directory, "+source.table+".path, "+source.table+".name, "+source.table+".deleted_at").
 			Where(source.table+".deleted_at IS NOT NULL AND "+source.table+".deleted_at >= ? AND "+source.table+".deleted_at < ?",
 				legacyUnrecordedDeleteFrom.AddDate(0, 0, -1), until.AddDate(0, 0, 1)).
+			Where(source.table+".deleted_by <> ?", "scanner").
 			Where("NOT EXISTS (SELECT 1 FROM " + source.entryTable + " e WHERE e." + source.entryColumn + " = " + source.table + ".id)").
 			Scan(&rows).Error; err != nil {
 			return nil, err
@@ -1663,22 +1666,43 @@ func scanAddSkipReason(err error) (string, bool) {
 	return "", false
 }
 
-// scanRootOnline 判断扫描根当前是否可用：目录存在且（macOS 上）卷确实挂载。
-//
-// 先对根做 filepath.EvalSymlinks（失败按离线处理），再对解析后的真实路径做 /Volumes 挂载检查（M3）：
-// 根是指向 /Volumes/<盘> 的软链接、或挂在非 /Volumes 路径上时，只看原路径会把「盘已卸载、只剩空挂载点」
-// 误判为在线。
+// scanRootOnline 判断扫描根当前是否可用：目录存在且（macOS 上）卷确实挂载，见 scanRootAvailability。
 func scanRootOnline(root string) bool {
+	return scanRootAvailability(root) == nil
+}
+
+// scanRootAvailability 判断扫描根当前是否可用，可用返回 nil。
+//
+// 先对根做 filepath.EvalSymlinks（失败按不可用处理），再对解析后的真实路径做挂载检查（M3）：根是指向
+// /Volumes/<盘> 的软链接时，只看原路径会把「盘已卸载、只剩空挂载点」误判为在线。挂载检查只覆盖 /Volumes 下的卷
+// （scanVolumeAvailable）：挂在 /Volumes 以外路径上的盘卸载后留下的空目录，这里仍会判为可用，只能靠扫描的
+// 根身份复核（scanRemovalGuard）等其他检查兜底。
+//
+// 解析或读取时遇到 EPERM / EACCES，返回的错误满足 errors.Is(err, os.ErrPermission)：那是权限问题，
+// 调用方不得把它报成「磁盘未连接」（m3）。其余不可用返回 errScanRootUnavailable。
+func scanRootAvailability(root string) error {
 	clean := filepath.Clean(root)
+	unavailable := func(err error) error {
+		if errors.Is(err, os.ErrPermission) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", errScanRootUnavailable, err)
+	}
 	resolved, err := filepath.EvalSymlinks(clean)
 	if err != nil {
-		return false
+		return unavailable(err)
 	}
-	if volumeMountedCheck(clean, resolved) != nil {
-		return false
+	if err := volumeMountedCheck(clean, resolved); err != nil {
+		return unavailable(err)
 	}
 	info, err := os.Stat(resolved)
-	return err == nil && info.IsDir()
+	if err != nil {
+		return unavailable(err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: 扫描根路径不是目录: %s", errScanRootUnavailable, clean)
+	}
+	return nil
 }
 
 // MarkRootOffline 把已判定不可用的扫描根下的活跃视频标为 offline_root（D-PC08）。
@@ -1691,12 +1715,10 @@ func scanRootOnline(root string) bool {
 // 不会被晚到的标记覆盖。执行前后都复查根状态：执行前已在线就什么都不标；标记期间根回来了，
 // 撤销这次刚标上的 offline_root，避免留下「根在线、视频仍 offline_root」。
 //
-// 「其他根是否在线」要对每个根做 stat 与挂载检查，可能碰到卡住的卷，所以放在拿 scanSyncMu 之前（M6）：
-// 锁内只做数据库读写与这一个根的复查，不让一个慢卷把窄对账与全量扫描一起拖住。
+// 「其他根是否在线」要对每个根做 stat 与挂载检查，可能碰到卡住的卷，所以放在拿任何锁之前——既在 scanSyncMu
+// 之前（M6），也在全局路径锁 libraryPathMutationMu 的读锁之前（m6）：锁内只做数据库读写与这一个根的复查，
+// 不让一个慢卷把窄对账、全量扫描以及等写锁的删除 / 恢复一起拖住。
 func (s *VideoService) MarkRootOffline(root string) (int64, error) {
-	libraryPathMutationMu.RLock()
-	defer libraryPathMutationMu.RUnlock()
-
 	root = filepath.Clean(strings.TrimSpace(root))
 	if root == "" || root == "." {
 		return 0, fmt.Errorf("扫描目录为空")
@@ -1716,6 +1738,8 @@ func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 		}
 	}
 
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
 	s.scanSyncMu.Lock()
 	defer s.scanSyncMu.Unlock()
 	// 等锁期间根可能已经回来了（排在前面的对账刚跑完）：锁内复查一次。

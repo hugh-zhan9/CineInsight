@@ -109,6 +109,8 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 	defer imagePathMutationMu.RUnlock()
 	s.scanSyncMu.Lock()
 	defer s.scanSyncMu.Unlock()
+	// 旧版回收站目录集合每轮同步只刷新一次（m7），各根的遍历（scanImageDirectory）只读这份缓存。
+	refreshLegacyTrashDirs()
 
 	dirs, err := s.GetAllImageDirectories()
 	if err != nil {
@@ -355,8 +357,7 @@ func scanImageDirectory(dir string, extensions []string, excludedPaths []string)
 	if dir == "" || dir == "." {
 		return nil, fmt.Errorf("扫描根目录为空")
 	}
-	// 与视频扫描一样，每一轮遍历开始时刷新旧版回收站目录集合，随后 isTrashDir / isTrashPath 只读缓存。
-	refreshLegacyTrashDirs()
+	// 旧版回收站目录集合由入口（SyncImageDirectories）每轮刷新一次，这里只读缓存（m7）。
 	rootInfo, err := os.Stat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("扫描根目录不可用: %w", err)
@@ -894,8 +895,8 @@ func (s *ImageService) deleteImageBatchItem(id uint, deleteFile bool, batchID st
 	code := TrashResultOK
 	switch {
 	case sourceInfo == nil && deleteFile:
-		if mediaPathOffline(image.Path) {
-			return "", ErrTrashVolumeOffline
+		if err := mediaPathUnavailable(image.Path); err != nil {
+			return "", err
 		}
 		entry.Mode = models.TrashModeMissing
 		code = TrashResultFileMissing
@@ -964,8 +965,8 @@ func (s *ImageService) deleteImageToSystemTrash(image *models.Image, entry *mode
 		cancelPending()
 		if errors.Is(moveErr, os.ErrNotExist) {
 			// 卷此刻离线时不是「文件没了」，不降级（I6）。
-			if mediaPathOffline(image.Path) {
-				return "", ErrTrashVolumeOffline
+			if err := mediaPathUnavailable(image.Path); err != nil {
+				return "", err
 			}
 			entry.ID = 0
 			entry.CreatedAt = time.Time{}
@@ -1135,8 +1136,8 @@ func (s *ImageService) permanentlyDeleteImage(id uint) (string, error) {
 			return "", fmt.Errorf("删除文件失败: %w", err)
 		}
 	case os.IsNotExist(err):
-		if mediaPathOffline(image.Path) {
-			return "", ErrTrashVolumeOffline
+		if err := mediaPathUnavailable(image.Path); err != nil {
+			return "", err
 		}
 		code = TrashResultFileMissing
 	default:
@@ -1204,8 +1205,10 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		}
 	} else if info, err := os.Stat(entry.OriginalPath); err != nil {
 		restoreErr := fmt.Errorf("原文件不可用，无法恢复记录: %w", err)
-		if os.IsNotExist(err) && mediaPathOffline(entry.OriginalPath) {
-			restoreErr = ErrTrashVolumeOffline
+		if os.IsNotExist(err) {
+			if unavailable := mediaPathUnavailable(entry.OriginalPath); unavailable != nil {
+				restoreErr = unavailable
+			}
 		}
 		_ = markImageTrashEntryRecoverable(entry.ID, restoreErr)
 		return nil, restoreErr
@@ -1293,6 +1296,11 @@ func (s *ImageService) cancelInterruptedImageDeletion(entry *models.ImageTrashEn
 			return nil, err
 		}
 		if trashExists && os.SameFile(originalInfo, trashInfo) {
+			// 只有两侧是同一个普通文件的两个硬链接时才删 trash/ 里的残留名字（m1）。
+			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
+				_ = recordImageTrashEntryError(entry.ID, errLegacyResidueNotHardLink)
+				return nil, errLegacyResidueNotHardLink
+			}
 			if err := os.Remove(entry.TrashPath); err != nil {
 				_ = recordImageTrashEntryError(entry.ID, err)
 				return nil, err
@@ -1333,8 +1341,8 @@ func (s *ImageService) cancelInterruptedImageTrashDeletion(entry *models.ImageTr
 		return nil, err
 	}
 	if location == pendingFileUnknown {
-		if !filePathOnline(entry.OriginalPath) {
-			return nil, ErrTrashVolumeOffline
+		if err := mediaPathUnavailable(entry.OriginalPath); err != nil {
+			return nil, err
 		}
 		_ = recordImageTrashEntryError(entry.ID, ErrTrashFileGone)
 		return nil, ErrTrashFileGone
@@ -1375,6 +1383,10 @@ func (s *ImageService) reconcileImagePendingDelete(entry *models.ImageTrashEntry
 			return false, fmt.Errorf("原文件与待删除记录不一致: %s", entry.OriginalPath)
 		}
 		if trashExists && os.SameFile(originalInfo, trashInfo) {
+			// 只有两侧是同一个普通文件的两个硬链接时才删 trash/ 里的残留名字（m1）。
+			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
+				return false, errLegacyResidueNotHardLink
+			}
 			if err := os.Remove(entry.TrashPath); err != nil {
 				return false, fmt.Errorf("清理中断删除的回收站副本失败: %w", err)
 			}
@@ -1419,9 +1431,11 @@ func (s *ImageService) reconcileImagePendingTrashDelete(entry *models.ImageTrash
 	if err != nil {
 		return false, err
 	}
-	if location == pendingFileUnknown && !filePathOnline(entry.OriginalPath) {
-		// 卷离线时废纸篓里也读不到：保持 pending_move 等卷回来（I1）。
-		return false, ErrTrashVolumeOffline
+	if location == pendingFileUnknown {
+		// 卷离线（或因权限读不到）时废纸篓里也读不到：保持 pending_move 等卷回来（I1、m3）。
+		if err := mediaPathUnavailable(entry.OriginalPath); err != nil {
+			return false, err
+		}
 	}
 	if location == pendingFileAtOriginal {
 		result := database.DB.Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).Delete(&models.ImageTrashEntry{})
@@ -1471,6 +1485,10 @@ func reconcileImageTrashRollback(entry *models.ImageTrashEntry) error {
 	}
 	if originalExists && trashExists {
 		if os.SameFile(originalInfo, trashInfo) {
+			// 只有两侧是同一个普通文件的两个硬链接时才删 trash/ 里的名字（m1）。
+			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
+				return errLegacyResidueNotHardLink
+			}
 			if err := os.Remove(entry.TrashPath); err != nil {
 				return fmt.Errorf("清理回滚后的回收站副本失败: %w", err)
 			}
@@ -1540,7 +1558,8 @@ func imageTrashPathAlreadyRecorded(path string) bool {
 
 // ensureImageTrashEntryFileRestored 与 ensureTrashEntryFileRestored 同义：返回值只在这一次把文件
 // 从废纸篓移回原处时为 true；文件本来就在原路径时为 false（I-1）。trash 模式下原路径严格一致即判定
-// 「已在原处」、不读废纸篓一侧（I-A）；硬链接不删废纸篓那个名字（M1）。
+// 「已在原处」、不读废纸篓一侧（I-A）；legacy_trash 旧行按大小 + inode 同样判定（I-1）；硬链接不删废纸篓
+// 那个名字（M1）；原路径用 Lstat 读取，是符号链接时返回 ErrTrashOriginalNotRegular、什么都不动（m1）。
 func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.ImageTrashEntry) (bool, error) {
 	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
 	strict := !isLegacyTrashMode(entry.Mode)
@@ -1557,14 +1576,19 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 		return fmt.Errorf(format, entry.OriginalPath)
 	}
 
-	originalInfo, originalExists, err := regularFileState(entry.OriginalPath)
+	originalInfo, originalExists, err := originalFileState(entry.OriginalPath)
 	if err != nil {
 		return false, err
 	}
-	if strict && originalExists && want.strictMatch(originalInfo) {
-		return false, nil
+	if originalExists {
+		if strict && want.strictMatch(originalInfo) {
+			return false, nil
+		}
+		if !strict && entryFileAtOriginal(imageEntryFacts(entry), originalInfo.Size(), originalInfo.ModTime().UnixNano(), stableFileIdentity(originalInfo)) {
+			return false, nil
+		}
 	}
-	trashInfo, trashExists, err := trashSideFileState(entry.TrashPath)
+	trashInfo, trashExists, err := regularFileState(entry.TrashPath)
 	if err != nil {
 		return false, err
 	}
@@ -1586,9 +1610,9 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 		return false, nil
 	}
 	// 原路径上没有文件时先看卷在不在（Minor 3）：离线时既不能判「废纸篓里的文件已不存在」，
-	// 也不能往未挂载卷留下的空挂载点里恢复。
-	if trashEntryVolumeOffline(entry.OriginalPath, entry.TrashPath) {
-		return false, ErrTrashVolumeOffline
+	// 也不能往未挂载卷留下的空挂载点里恢复。读不到（权限）同样不动（m3）。
+	if err := trashEntryUnavailable(entry.OriginalPath, entry.TrashPath); err != nil {
+		return false, err
 	}
 	if !trashExists {
 		return false, ErrTrashFileGone

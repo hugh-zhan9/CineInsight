@@ -247,7 +247,7 @@ func (s *VideoService) addVideoOrRestorePutBack(path string) (*models.Video, boo
 		log.Printf("跳过已存在视频 path=%s", path)
 		return &existingVideo, false, ErrVideoExists
 	}
-	if restored, ok, err := s.restorePutBackVideo(path, info); err != nil {
+	if restored, ok, err := s.restorePutBackVideo(path); err != nil {
 		return nil, false, err
 	} else if ok {
 		log.Printf("文件已被放回原处，恢复原记录 video_id=%d", restored.ID)
@@ -394,8 +394,10 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		}
 	} else if info, err := os.Stat(entry.OriginalPath); err != nil {
 		restoreErr := fmt.Errorf("原文件不可用，无法恢复记录: %w", err)
-		if os.IsNotExist(err) && mediaPathOffline(entry.OriginalPath) {
-			restoreErr = ErrTrashVolumeOffline
+		if os.IsNotExist(err) {
+			if unavailable := mediaPathUnavailable(entry.OriginalPath); unavailable != nil {
+				restoreErr = unavailable
+			}
 		}
 		_ = markTrashEntryRecoverable(entry.ID, restoreErr)
 		return nil, restoreErr
@@ -571,8 +573,8 @@ func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedB
 	case sourceInfo == nil && deleteFile:
 		// 文件不在磁盘上。先确认它所在的扫描根现在可访问：卷没挂载不能被当成「文件没了」，
 		// 也不能降级成只删记录。文件确实不在时只清库记录。
-		if mediaPathOffline(video.Path) {
-			return "", ErrTrashVolumeOffline
+		if err := mediaPathUnavailable(video.Path); err != nil {
+			return "", err
 		}
 		entry.Mode = models.TrashModeMissing
 		code = TrashResultFileMissing
@@ -637,8 +639,8 @@ func (s *VideoService) deleteVideoToSystemTrash(video *models.Video, entry *mode
 		if errors.Is(moveErr, os.ErrNotExist) {
 			// 文件在检查与移动之间消失了：与「文件本来就不在」同一处理，只清库记录；
 			// 但卷此刻离线时不是「文件没了」，不降级（I6）。
-			if mediaPathOffline(video.Path) {
-				return "", ErrTrashVolumeOffline
+			if err := mediaPathUnavailable(video.Path); err != nil {
+				return "", err
 			}
 			entry.ID = 0
 			entry.CreatedAt = time.Time{}
@@ -803,8 +805,12 @@ func trashPathAlreadyRecorded(path string) bool {
 //   - trash 模式：原路径上的文件与条目严格一致（inode + 大小 + mtime）就是当初删掉的那个文件，直接判定
 //     「已在原处」，不读废纸篓一侧（I-A）：读不到废纸篓（EPERM 等）不得让恢复失败；废纸篓里同 inode 的
 //     另一个名字（硬链接）也不删（M1）。
+//   - legacy_trash 旧行：原路径上的文件大小与 inode 与条目一致（与放回判定同一口径，I-1）同样直接判定
+//     「已在原处」，不读 trash/ 一侧。
 //   - 原路径与废纸篓是同一个文件（硬链接）：文件本来就在原处，返回 false、不删废纸篓那个名字（M1）；
 //     legacy_trash 旧行在恢复提交之后才清理旧版 trash/ 里的残留名字（removeLegacyTrashLinkAfterRestore）。
+//   - 原路径用 Lstat 读取（m1）：是符号链接（可能正指向废纸篓里的文件）时返回 ErrTrashOriginalNotRegular，
+//     不跟随、不覆盖、不删任何名字。
 func ensureTrashEntryFileRestored(trashService *TrashService, entry models.VideoTrashEntry) (bool, error) {
 	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
 	strict := !isLegacyTrashMode(entry.Mode)
@@ -821,14 +827,19 @@ func ensureTrashEntryFileRestored(trashService *TrashService, entry models.Video
 		return fmt.Errorf(format, entry.OriginalPath)
 	}
 
-	originalInfo, originalExists, err := regularFileState(entry.OriginalPath)
+	originalInfo, originalExists, err := originalFileState(entry.OriginalPath)
 	if err != nil {
 		return false, err
 	}
-	if strict && originalExists && want.strictMatch(originalInfo) {
-		return false, nil
+	if originalExists {
+		if strict && want.strictMatch(originalInfo) {
+			return false, nil
+		}
+		if !strict && entryFileAtOriginal(videoEntryFacts(entry), originalInfo.Size(), originalInfo.ModTime().UnixNano(), stableFileIdentity(originalInfo)) {
+			return false, nil
+		}
 	}
-	trashInfo, trashExists, err := trashSideFileState(entry.TrashPath)
+	trashInfo, trashExists, err := regularFileState(entry.TrashPath)
 	if err != nil {
 		return false, err
 	}
@@ -850,9 +861,9 @@ func ensureTrashEntryFileRestored(trashService *TrashService, entry models.Video
 		return false, nil
 	}
 	// 原路径上没有文件时先看卷在不在（Minor 3）：离线时两边都读不到，那不是「废纸篓里的文件已不存在」；
-	// 废纸篓那一份还在时也不能往未挂载卷留下的空挂载点里恢复。
-	if trashEntryVolumeOffline(entry.OriginalPath, entry.TrashPath) {
-		return false, ErrTrashVolumeOffline
+	// 废纸篓那一份还在时也不能往未挂载卷留下的空挂载点里恢复。读不到（权限）同样不动（m3）。
+	if err := trashEntryUnavailable(entry.OriginalPath, entry.TrashPath); err != nil {
+		return false, err
 	}
 	if !trashExists {
 		return false, ErrTrashFileGone
@@ -990,6 +1001,12 @@ func (s *VideoService) cancelInterruptedDeletion(entry *models.VideoTrashEntry) 
 			return nil, err
 		}
 		if trashExists && os.SameFile(originalInfo, trashInfo) {
+			// 只有原路径与 trash/ 里是同一个普通文件的两个硬链接时才删残留名字（m1）：原路径是指向它的
+			// 符号链接时，跟随链接的 Stat 同样报「同一个文件」，删掉的就是真正的文件。
+			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
+				_ = recordTrashEntryError(entry.ID, errLegacyResidueNotHardLink)
+				return nil, errLegacyResidueNotHardLink
+			}
 			if err := os.Remove(entry.TrashPath); err != nil {
 				_ = recordTrashEntryError(entry.ID, err)
 				return nil, err
@@ -1031,8 +1048,8 @@ func (s *VideoService) cancelInterruptedTrashDeletion(entry *models.VideoTrashEn
 		return nil, err
 	}
 	if location == pendingFileUnknown {
-		if !filePathOnline(entry.OriginalPath) {
-			return nil, ErrTrashVolumeOffline
+		if err := mediaPathUnavailable(entry.OriginalPath); err != nil {
+			return nil, err
 		}
 		_ = recordTrashEntryError(entry.ID, ErrTrashFileGone)
 		return nil, ErrTrashFileGone
@@ -1102,9 +1119,11 @@ func (s *VideoService) reconcilePendingTrashDelete(entry *models.VideoTrashEntry
 	if err != nil {
 		return false, err
 	}
-	if location == pendingFileUnknown && !filePathOnline(entry.OriginalPath) {
-		// 卷离线时废纸篓里也读不到：不能当成「位置未知」落库，保持 pending_move 等卷回来（I1）。
-		return false, ErrTrashVolumeOffline
+	if location == pendingFileUnknown {
+		// 卷离线（或因权限读不到）时废纸篓里也读不到：不能当成「位置未知」落库，保持 pending_move 等卷回来（I1、m3）。
+		if err := mediaPathUnavailable(entry.OriginalPath); err != nil {
+			return false, err
+		}
 	}
 	if location == pendingFileAtOriginal {
 		result := database.DB.Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).Delete(&models.VideoTrashEntry{})
@@ -1158,6 +1177,10 @@ func (s *VideoService) reconcileLegacyPendingDelete(entry *models.VideoTrashEntr
 	fileReady := false
 	if originalExists && trashExists {
 		if os.SameFile(originalInfo, trashInfo) {
+			// 删原路径那个名字之前确认两侧是同一个普通文件的两个硬链接（m1）。
+			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
+				return errLegacyResidueNotHardLink
+			}
 			if err := os.Remove(entry.OriginalPath); err != nil {
 				return fmt.Errorf("清理已移入回收站的原路径副本失败: %w", err)
 			}
@@ -1215,6 +1238,10 @@ func reconcileTrashRollback(entry *models.VideoTrashEntry) error {
 	}
 	if originalExists && trashExists {
 		if os.SameFile(originalInfo, trashInfo) {
+			// 只有两侧是同一个普通文件的两个硬链接时才删 trash/ 里的名字（m1）。
+			if !hardLinkedRegularNames(entry.OriginalPath, entry.TrashPath) {
+				return errLegacyResidueNotHardLink
+			}
 			if err := os.Remove(entry.TrashPath); err != nil {
 				return fmt.Errorf("清理回滚后的回收站副本失败: %w", err)
 			}
@@ -1339,8 +1366,8 @@ func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {
 			return "", fmt.Errorf("删除文件失败: %w", err)
 		}
 	case os.IsNotExist(err):
-		if mediaPathOffline(video.Path) {
-			return "", ErrTrashVolumeOffline
+		if err := mediaPathUnavailable(video.Path); err != nil {
+			return "", err
 		}
 		code = TrashResultFileMissing
 	default:
