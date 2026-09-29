@@ -390,6 +390,11 @@ func pathlessError(err error) error {
 // 条目保留为墓碑、目录继续登记；再次删除或永久删除这条记录之前要先清掉它。文案不含路径。
 var errTrashRestoreResidueRemains = errors.New("上次恢复后，同目录旧版回收站文件夹（trash）里还留着这个文件的另一个名字，没能清理；请检查该文件夹的权限后重试，未做任何改动")
 
+// errTrashTombstoneResidueUnconfirmed：墓碑登记的旧版 trash/ 名字还在，但它不是记录当前文件的另一个名字（不是同一个普通
+// 文件的硬链接，修复 N m1）——可能是另一个文件、符号链接或目录。无法确认它是什么，不能替用户删，也不是权限问题。
+// 墓碑保留、删除被拒绝。文案不含路径。
+var errTrashTombstoneResidueUnconfirmed = errors.New("上次恢复后，同目录旧版回收站文件夹（trash）里还留着一个无法确认的文件（不是当前这个文件的另一个名字），为免误删未做任何改动；请在访达里检查该旧版回收站文件夹，处理掉那个文件后重试")
+
 // retireRestoredEntryAsTombstoneTx 是恢复事务里「条目从回收站拿掉」的另一种写法（修复 L m5）：旧版 trash/ 里还有要在
 // 提交之后清理的残留名字（legacyRestoreResidue）时，条目不硬删，而是用条件更新（WHERE state='restoring'）改为墓碑，
 // 保留 trash_path，让 loadLegacyTrashDirs 继续把那个目录算作「已登记」。提交之后清理成功才由
@@ -409,11 +414,33 @@ func retireRestoredEntryAsTombstoneTx(tx *gorm.DB, spec trashKindSpec, entryID u
 
 // settleRestoredTrashTombstone 收尾一条「记录已恢复（活跃）、条目是墓碑」的行（修复 L m5）：先补做残留名字的清理
 // （removeLegacyTrashLinkAfterRestore），残留名字已不在时才删掉墓碑（条件删除 WHERE state='removed'，只删条目、
-// 不动记录与文件）；删不掉（权限等）或名字还在（不再是原文件的另一个名字，不能删）时墓碑保留，返回
-// errTrashRestoreResidueRemains。恢复提交之后调用；再次删除、永久删除这条记录之前也先调用它（记录上挂着墓碑时
-// 不能再建新条目，video_id / image_id 唯一）。
-func settleRestoredTrashTombstone(spec trashKindSpec, entryID uint, mode string, fileMoved bool, originalPath, trashPath string) error {
-	if err := removeLegacyTrashLinkAfterRestore(mode, fileMoved, originalPath, trashPath); err != nil {
+// 不动记录与文件）；删不掉（权限等）时墓碑保留，返回 errTrashRestoreResidueRemains；名字还在、但不是当前文件的另一个
+// 名字（不能删）时墓碑保留，返回 errTrashTombstoneResidueUnconfirmed。恢复提交之后调用；再次删除、永久删除这条记录之前
+// 也先调用它（记录上挂着墓碑时不能再建新条目，video_id / image_id 唯一）。扫描器因文件缺失软删这条记录时不调用它
+// （修复 N I-1：照常软删，墓碑保留）。
+//
+// 修复 N：
+//   - 在任何残留判定与 Lstat 之前，先确认 trash_path、记录当前路径与条目原路径所在的卷与扫描根都可用
+//     （mediaPathUnavailable）：卷离线或因权限读不到时 Lstat 同样报「不存在」，那不是残留已清掉。不可用时返回离线 /
+//     无权限错误，墓碑保留、删除被拒绝（I-2）；
+//   - 硬链接判定用记录的**当前**路径 currentPath（video.Path / image.Path），而不是条目的原路径：MoveVideo、改名、
+//     扫描重定位之后，残留名字是当前文件的另一个名字（m1）。恢复刚提交时两者相同。
+func settleRestoredTrashTombstone(spec trashKindSpec, entryID uint, mode string, fileMoved bool, originalPath, currentPath, trashPath string) error {
+	checked := make(map[string]struct{}, 3)
+	for _, path := range []string{trashPath, currentPath, originalPath} {
+		path = strings.TrimSpace(path)
+		if path == "" {
+			continue
+		}
+		if _, done := checked[path]; done {
+			continue
+		}
+		checked[path] = struct{}{}
+		if err := mediaPathUnavailable(path); err != nil {
+			return err
+		}
+	}
+	if err := removeLegacyTrashLinkAfterRestore(mode, fileMoved, currentPath, trashPath); err != nil {
 		return fmt.Errorf("%w: %w", errTrashRestoreResidueRemains, pathlessError(err))
 	}
 	if strings.TrimSpace(trashPath) != "" {
@@ -421,7 +448,7 @@ func settleRestoredTrashTombstone(spec trashKindSpec, entryID uint, mode string,
 			if err != nil {
 				return fmt.Errorf("%w: %w", errTrashRestoreResidueRemains, pathlessError(err))
 			}
-			return errTrashRestoreResidueRemains
+			return errTrashTombstoneResidueUnconfirmed
 		}
 	}
 	if err := database.DB.Exec("DELETE FROM "+spec.table+" WHERE id = ? AND state = ?", entryID, trashStateRemoved).Error; err != nil {
@@ -436,7 +463,8 @@ func finishRestoredLegacyResidue(spec trashKindSpec, residue bool, entryID uint,
 	if !residue {
 		return
 	}
-	if err := settleRestoredTrashTombstone(spec, entryID, mode, fileMoved, originalPath, trashPath); err != nil {
+	// 恢复刚提交：文件就在原路径上，当前路径即原路径。
+	if err := settleRestoredTrashTombstone(spec, entryID, mode, fileMoved, originalPath, originalPath, trashPath); err != nil {
 		log.Printf("恢复后清理旧版回收站残留名字失败，条目保留为墓碑 kind=%s entry=%d err=%v", spec.kind, entryID, err)
 	}
 }
@@ -1886,22 +1914,34 @@ func tombstoneLegacyTrashEntryTx(tx *gorm.DB, spec trashKindSpec, row trashRow, 
 // sweepGoneTrashTombstones 清理旧版 trash/ 目录已经不存在的墓碑（修复 L m4），由启动对账（ReconcileTrashEntries /
 // ReconcileImageTrashEntries，持路径写锁）调用。墓碑唯一的用处是让 loadLegacyTrashDirs 把 filepath.Dir(trash_path)
 // 算作「已登记」的旧版回收站目录；目录已经不在，就没有什么可登记、也没有残留文件可挡，墓碑可以删：
-//   - 条目硬删；它引用的媒体记录若仍是软删（墓碑的常态），一并硬删（hardDeleteVideoTx / hardDeleteImageTx，级联生效）；
-//   - 媒体记录是活跃的（恢复成功但残留名字没清掉留下的墓碑，修复 L m5）只删条目，记录不动。
+//   - 条目硬删；它引用的媒体记录若是用户删除的软删（墓碑的常态），一并硬删（hardDeleteVideoTx / hardDeleteImageTx，
+//     级联生效）；
+//   - 媒体记录是活跃的（恢复成功但残留名字没清掉留下的墓碑，修复 L m5）只删条目，记录不动；
+//   - 媒体记录是扫描器因文件缺失软删的（deleted_by='scanner'：墓碑挂在活跃记录上时扫描器照常软删，修复 N I-1）
+//     同样只删条目：那条记录要留给文件回来时的自动恢复（原 ID、标签保留）。
 //
-// 「目录不存在」按代码现有口径判定（tombstoneTrashDirGone）：Lstat 报不存在，且那个位置所在的卷与扫描根可用
-// （mediaPathUnavailable 为 nil）——卷离线或因权限读不到时 Lstat 同样报不存在，那不是「目录没了」，墓碑保留。
-// trash_path 为空的墓碑不登记任何目录，同样清理。每个目录只检查一次。单行失败只记入返回的错误，不影响其他行。
+// 「目录不存在」按代码现有口径判定（tombstoneTrashDirGone）：Lstat 报不存在，且那个位置落在至少一个当前可用的扫描根
+// （视频或图片）里（修复 N m2），所在的卷与扫描根也可用（mediaPathUnavailable 为 nil）——卷离线或因权限读不到时 Lstat
+// 同样报不存在，那不是「目录没了」；不属于任何扫描根的位置没有可靠的在线判定（例如挂在 /Volumes 以外的盘卸载后），
+// 墓碑一律保留。trash_path 为空的墓碑不登记任何目录、不涉及任何文件，同样清理。每个目录只检查一次。单行失败只记入
+// 返回的错误，不影响其他行。
 func sweepGoneTrashTombstones(spec trashKindSpec) error {
 	var rows []trashRow
 	if err := database.DB.Table(spec.table).Select(spec.selectColumns()).
 		Where("state = ?", trashStateRemoved).Order("id ASC").Scan(&rows).Error; err != nil {
 		return fmt.Errorf("读取回收站墓碑失败: %w", err)
 	}
+	if len(rows) == 0 {
+		return nil
+	}
+	roots, err := configuredMediaRoots()
+	if err != nil {
+		return fmt.Errorf("读取扫描目录失败，墓碑保留: %w", err)
+	}
 	gone := make(map[string]bool)
 	var sweepErrors []error
 	for _, row := range rows {
-		if !tombstoneTrashDirGone(row, gone) {
+		if !tombstoneTrashDirGone(row, roots, gone) {
 			continue
 		}
 		if err := database.Transaction(func(tx *gorm.DB) error {
@@ -1915,8 +1955,9 @@ func sweepGoneTrashTombstones(spec trashKindSpec) error {
 	return errors.Join(sweepErrors...)
 }
 
-// tombstoneTrashDirGone 报告墓碑登记的旧版 trash/ 目录是否已经不存在（见 sweepGoneTrashTombstones）；cache 按目录记住结果。
-func tombstoneTrashDirGone(row trashRow, cache map[string]bool) bool {
+// tombstoneTrashDirGone 报告墓碑登记的旧版 trash/ 目录是否已经不存在（见 sweepGoneTrashTombstones）；roots 是全部视频与
+// 图片扫描根（configuredMediaRoots），cache 按目录记住结果。
+func tombstoneTrashDirGone(row trashRow, roots []string, cache map[string]bool) bool {
 	trashPath := strings.TrimSpace(row.TrashPath)
 	if trashPath == "" {
 		return true
@@ -1927,14 +1968,28 @@ func tombstoneTrashDirGone(row trashRow, cache map[string]bool) bool {
 	}
 	gone := false
 	if _, err := os.Lstat(dir); errors.Is(err, os.ErrNotExist) {
-		gone = mediaPathUnavailable(dir) == nil
+		// 包含它的可用扫描根数 > 0（修复 N m2）：pathInAnyScanRoot 要求至少有一个包含它的扫描根；mediaPathUnavailable
+		// 在包含它的扫描根都不可用时报离线（scanRootsUnavailableForPath），并检查所在的卷确实挂载。
+		gone = pathInAnyScanRoot(dir, roots) && mediaPathUnavailable(dir) == nil
 	}
 	cache[dir] = gone
 	return gone
 }
 
-// dropTrashTombstoneTx 删掉一条墓碑（条件删除 WHERE state='removed'，状态已变化则整笔回滚），媒体记录仍是软删时一并硬删；
-// 媒体记录是活跃的（修复 L m5 的墓碑）只删条目。不做任何文件操作。
+// pathInAnyScanRoot 报告 path 是否落在 roots 中至少一个扫描根里（与 scanRootsUnavailableForPath 同一个前缀口径）。
+func pathInAnyScanRoot(path string, roots []string) bool {
+	path = filepath.Clean(path)
+	for _, root := range roots {
+		if path == root || strings.HasPrefix(path, scanRootChildPrefix(root)) {
+			return true
+		}
+	}
+	return false
+}
+
+// dropTrashTombstoneTx 删掉一条墓碑（条件删除 WHERE state='removed'，状态已变化则整笔回滚），媒体记录是用户删除的软删
+// （deleted_by <> 'scanner'）时一并硬删；媒体记录是活跃的（修复 L m5 的墓碑）或是扫描器因文件缺失软删的（修复 N I-1）
+// 只删条目。不做任何文件操作。
 func dropTrashTombstoneTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
 	result := tx.Exec("DELETE FROM "+spec.table+" WHERE id = ? AND state = ?", row.ID, trashStateRemoved)
 	if result.Error != nil {
@@ -1944,7 +1999,8 @@ func dropTrashTombstoneTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
 		return fmt.Errorf("%w: %d", errTrashEntryStateChanged, row.ID)
 	}
 	var softDeleted int64
-	if err := tx.Table(spec.mediaTable).Where("id = ? AND deleted_at IS NOT NULL", row.EntityID).Count(&softDeleted).Error; err != nil {
+	if err := tx.Table(spec.mediaTable).Where("id = ? AND deleted_at IS NOT NULL AND deleted_by <> ?", row.EntityID, "scanner").
+		Count(&softDeleted).Error; err != nil {
 		return err
 	}
 	if softDeleted == 0 {

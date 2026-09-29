@@ -600,7 +600,8 @@ func (s *ImageService) addImage(path string) (*models.Image, error) {
 // a later scan when the original file is still on disk.
 func (s *ImageService) restoreStaleImage(path string, size int64) (bool, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
-	// 墓碑的软删行按已硬删处理，不挡住同路径更早的扫描器软删行（修复 L m4）。
+	// 用户删除的墓碑软删行按已硬删处理，不挡住同路径更早的扫描器软删行（修复 L m4）；扫描器软删的行即使挂着墓碑也照常
+	// 参与自动恢复（修复 N I-1）。
 	var image models.Image
 	if err := withoutTrashTombstones(database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path), imageTrashKind).
 		Order("deleted_at DESC, id DESC").First(&image).Error; err != nil {
@@ -657,7 +658,8 @@ func (s *ImageService) relocateImage(id uint, newPath string) error {
 }
 
 // deleteMissingImageRecord 失踪对账仅软删记录：不动磁盘文件，不建回收站条目。
-// is_stale 是后续自动恢复的来源标记。
+// is_stale 是后续自动恢复的来源标记。记录上挂着「恢复后残留」的墓碑时同样照常软删、不做残留收尾（修复 N I-1）：
+// 墓碑保留、继续登记旧版 trash/ 目录，文件回来时 restoreStaleImage 恢复原记录（withoutTrashTombstones 不遮挡扫描器软删的行）。
 func (s *ImageService) deleteMissingImageRecord(id uint) error {
 	// Preserve a recovery breadcrumb before soft deletion. If a removable
 	// volume disappears temporarily, the next scan can revive the same row and
@@ -878,8 +880,9 @@ func (s *ImageService) deleteImageBatchItem(id uint, deleteFile bool, batchID st
 			}
 		case trashStateRemoved:
 			// 上次恢复成功、旧版 trash/ 里的残留名字没清掉时留下的墓碑（修复 L m5）：先补做清理、删掉墓碑，再照常删除。
+			// 残留判定用记录的当前路径（修复 N m1）。
 			if err := settleRestoredTrashTombstone(imageTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
-				existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+				existingEntry.OriginalPath, image.Path, existingEntry.TrashPath); err != nil {
 				return "", err
 			}
 		default:
@@ -1140,9 +1143,9 @@ func (s *ImageService) permanentlyDeleteImage(id uint) (string, error) {
 		if existingEntry.State != trashStateRemoved {
 			return "", ErrPermanentDeleteHasTrashEntry
 		}
-		// 恢复成功后留下的墓碑（修复 L m5）：先补做残留清理、删掉墓碑；清不掉就不删文件。
+		// 恢复成功后留下的墓碑（修复 L m5）：先补做残留清理、删掉墓碑；清不掉就不删文件。残留判定用记录的当前路径（修复 N m1）。
 		if err := settleRestoredTrashTombstone(imageTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
-			existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+			existingEntry.OriginalPath, image.Path, existingEntry.TrashPath); err != nil {
 			return "", err
 		}
 	}

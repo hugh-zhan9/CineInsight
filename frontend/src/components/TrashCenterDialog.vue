@@ -249,12 +249,11 @@ const RESULT_TEXT = {
   identity_mismatch: '文件与删除时记录的不一致（可能已被替换），未做任何改动',
   not_purgeable: '该条目不能执行这个操作',
   file_gone: '废纸篓里的文件已被清除，只能移除记录',
-  not_restorable: '该条目当前不可恢复',
   error: '操作失败'
 };
 // 这几类同一个结果码背后有不同原因（放回原处、只删记录的屏蔽、原位置是符号链接……），
 // 服务端的单项文案更具体，有就用它。
-const PREFER_MESSAGE = new Set(['not_purgeable', 'path_occupied', 'not_restorable', 'error']);
+const PREFER_MESSAGE = new Set(['not_purgeable', 'path_occupied', 'error']);
 // 清除或移除记录被这些原因拒绝时，才提供「仍然移除记录（不动文件）」这个出口（修复 G m3）。
 const FORCE_TRIGGER_CODES = new Set(['volume_offline', 'permission_denied']);
 

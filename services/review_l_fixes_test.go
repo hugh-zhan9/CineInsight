@@ -745,6 +745,10 @@ func TestLIB05SweepDropsTombstonesWhoseTrashDirIsGoneFixLM4(t *testing.T) {
 	svc := &VideoService{}
 	center := NewTrashCenter(svc, nil)
 	root := t.TempDir()
+	// 墓碑清理只在包含它的扫描根在线时进行（修复 N m2）。
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatal(err)
+	}
 	tombstone := func(name string) (models.Video, models.VideoTrashEntry) {
 		video, entry := reviewIOldLegacyVideo(t, filepath.Join(root, name, "movie.mp4"), "legacy-"+name)
 		result, err := center.ForceRemoveTrashRecords("video", []uint{entry.ID}, TrashForceRemoveConfirmText)

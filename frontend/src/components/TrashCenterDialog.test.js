@@ -371,6 +371,12 @@ describe('LIB-05 结果码文案', () => {
     expect(trashResultText('error', 'database is in maintenance mode')).toBe('数据库正在维护（恢复或切换后端），暂时不能操作');
     expect(cleanTrashMessage('检查失败: stat /Volumes/盘/电影/a.mp4: no such file')).not.toContain('/Volumes');
   });
+
+  it('LIB-05 已删除的结果码 not_restorable 不再有专门文案；墓碑按「回收站条目不存在」（error + 服务端文案）显示', () => {
+    expect(trashResultText('not_restorable', '')).toBe('操作失败');
+    expect(trashResultText('not_restorable', '该条目当前不可恢复')).toBe('该条目当前不可恢复');
+    expect(trashResultText('error', '回收站条目不存在: 7')).toBe('回收站条目不存在: 7');
+  });
 });
 
 describe('IMG-09 扫描隐藏页签', () => {

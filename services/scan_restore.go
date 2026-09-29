@@ -13,14 +13,25 @@ import (
 	"gorm.io/gorm"
 )
 
-// withoutTrashTombstones 把「软删、且回收站条目是墓碑（trashStateRemoved）」的媒体行排除在按路径的查询之外（修复 L m4）：
-// 墓碑的媒体记录永不再可见、也不可恢复，按路径判断占用或挑「同路径最近的软删行」时把它当作已硬删。否则它会永久占住
-// 超分的输出路径，或把同路径更早的那条软删行（例如「只删记录」的屏蔽、扫描器的缺失软删）永远挡在后面。
-// 活跃行一律保留（恢复成功但残留名字没清掉时，墓碑引用的记录是活跃的，修复 L m5）。
-// query 的主表必须是 spec.mediaTable（videos / images）。
+// withoutTrashTombstones 把「用户删除的软删、且回收站条目是墓碑（trashStateRemoved）」的媒体行排除在按路径的查询之外
+// （修复 L m4）：这种墓碑的媒体记录永不再可见、也不可恢复，按路径判断占用或挑「同路径最近的软删行」时把它当作已硬删。
+// 否则它会永久占住超分的输出路径，或把同路径更早的那条软删行（例如「只删记录」的屏蔽、扫描器的缺失软删）永远挡在后面。
+// 以下两种行一律保留：
+//   - 活跃行（恢复成功但残留名字没清掉时，墓碑引用的记录是活跃的，修复 L m5）；
+//   - 扫描器因文件缺失软删的行（deleted_by='scanner'）：墓碑挂在活跃记录上时扫描器照常软删、墓碑保留（修复 N I-1），
+//     这条记录照常参与自动恢复（restoreStaleImage、addScannedVideo）与同路径判定，文件回来时恢复原 ID。
+//
+// query 的主表必须是 spec.mediaTable（videos / images）；列都带表名限定（PG 42702）。
 func withoutTrashTombstones(query *gorm.DB, spec trashKindSpec) *gorm.DB {
-	return query.Where("("+spec.mediaTable+".deleted_at IS NULL OR NOT EXISTS (SELECT 1 FROM "+spec.table+
-		" tomb WHERE tomb."+spec.entityCol+" = "+spec.mediaTable+".id AND tomb.state = ?))", trashStateRemoved)
+	return query.Where("("+spec.mediaTable+".deleted_at IS NULL OR "+spec.mediaTable+".deleted_by = ? OR NOT EXISTS (SELECT 1 FROM "+spec.table+
+		" tomb WHERE tomb."+spec.entityCol+" = "+spec.mediaTable+".id AND tomb.state = ?))", "scanner", trashStateRemoved)
+}
+
+// scannerRowUnderTombstone 报告同路径软删行 row（deletedBy 为它的 deleted_by）的回收站条目 entry 是否不该参与判定
+// （修复 N I-1）：扫描器因文件缺失软删的行上挂着的墓碑（或墓碑已被启动清理删掉、没有条目）只是在登记旧版 trash/ 目录，
+// 不是这次删除的条目。found 表示查到了条目。
+func scannerRowUnderTombstone(deletedBy string, found bool, entryState string) bool {
+	return deletedBy == "scanner" && (!found || entryState == trashStateRemoved)
 }
 
 // Caller holds the scan/path locks. Historical unknown and user deletions are
@@ -43,11 +54,67 @@ func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error)
 			restored, err := s.restoreTrashEntry(&entry)
 			return restored, err == nil, err
 		}
+		// 记录上挂着「恢复后残留」的墓碑（或墓碑已被启动清理删掉、没有条目，修复 N I-1）：扫描器软删时建不进 missing 条目，
+		// 同样自动恢复原记录，墓碑原样保留。
+		var current models.VideoTrashEntry
+		currentResult := database.DB.Select("id", "state").Where("video_id = ?", video.ID).Limit(1).Find(&current)
+		if currentResult.Error != nil {
+			return nil, false, currentResult.Error
+		}
+		if scannerRowUnderTombstone(video.DeletedBy, currentResult.RowsAffected == 1, current.State) {
+			restored, err := s.restoreScannerDeletedVideoWithoutEntry(video)
+			return restored, err == nil, err
+		}
 		// 没有 deleted 的 missing 条目（例如上次恢复中断、条目停在 restoring）：交给下面的同路径软删判定
 		// （softDeletedVideoPathSkip），restoring 由它跳过、交给启动对账，不报 add 错误（修复 L m2）。
 	}
 	// 访达「放回原处」由 addVideoOrRestorePutBack 统一处理（与手动添加同一条路，Minor 2）。
 	return s.addVideoOrRestorePutBack(path)
+}
+
+// errScannerRestoreFileMismatch：原路径上的文件与扫描器软删的记录对不上（大小不同），不恢复。文案不含路径（G-3）。
+var errScannerRestoreFileMismatch = errors.New("原路径上的文件与缺失前的记录不一致，未恢复")
+
+// restoreScannerDeletedVideoWithoutEntry 恢复一条扫描器因文件缺失软删、却没有 missing 条目的视频（修复 N I-1）。
+// 这种行只来自「恢复后残留」的墓碑：墓碑挂在活跃记录上时扫描器照常软删、不建 missing 条目（video_id 唯一；墓碑保留，
+// 继续登记旧版 trash/ 目录），或之后启动清理在 trash/ 目录消失后删掉了墓碑（只删条目、不硬删记录）。
+//
+// 与扫描器 missing 条目的自动恢复同一口径（restoreTrashEntry 对「扫描器删、没记身份」条目的判定）：原路径上是文件、
+// 大小与记录一致才恢复，否则返回错误（扫描计入 add 错误，不新建）。只改数据库——条件更新
+// （deleted_at IS NOT NULL AND deleted_by='scanner'），原 ID、标签、人物保留，重建字幕索引；墓碑（若有）原样保留。
+// 调用方持有路径读锁（扫描）。
+func (s *VideoService) restoreScannerDeletedVideoWithoutEntry(video models.Video) (*models.Video, error) {
+	info, err := os.Stat(video.Path)
+	if err != nil {
+		return nil, fmt.Errorf("原文件不可用，无法恢复记录: %w", pathlessError(err))
+	}
+	if info.IsDir() || info.Size() != video.Size {
+		return nil, errScannerRestoreFileMismatch
+	}
+	var restored models.Video
+	err = database.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.Video{}).Unscoped().
+			Where("id = ? AND deleted_at IS NOT NULL AND deleted_by = ?", video.ID, "scanner").
+			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": false, "stale_reason": ""})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("视频记录已不再处于可恢复状态: %d", video.ID)
+		}
+		if err := tx.Preload("Tags").First(&restored, video.ID).Error; err != nil {
+			return err
+		}
+		if err := rebuildSubtitleIndexTx(tx, restored); err != nil {
+			return fmt.Errorf("重建字幕索引失败: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	log.Printf("扫描器软删的视频文件已回到原处，恢复原记录（无 missing 条目） video_id=%d", restored.ID)
+	return &restored, nil
 }
 
 // restorePutBackVideo 判断同路径的软删视频里，是否有一条的文件被用户放回了原路径
@@ -421,7 +488,12 @@ func softDeletedVideoPathSkip(path string, info os.FileInfo) (row *models.Video,
 		return nil, nil, entryResult.Error
 	}
 	var facts *softDeletedEntryFacts
-	if entryResult.RowsAffected == 1 {
+	switch {
+	case scannerRowUnderTombstone(deleted.DeletedBy, entryResult.RowsAffected == 1, entry.State):
+		// 扫描器软删的行挂着墓碑（或墓碑已清理、没有条目，修复 N I-1）：按扫描器的缺失软删判定（自动恢复由
+		// addScannedVideo 处理），墓碑登记目录的事实不参与，也不按「没有条目的历史行」屏蔽。
+		facts = &softDeletedEntryFacts{Mode: models.TrashModeMissing, DeletedBy: "scanner", State: trashStateDeleted}
+	case entryResult.RowsAffected == 1:
 		entryFacts := videoEntryFacts(entry)
 		facts = &entryFacts
 	}

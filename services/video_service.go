@@ -648,10 +648,18 @@ func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedB
 				return "", fmt.Errorf("完成上次删除回滚失败: %w", reconcileErr)
 			}
 		case trashStateRemoved:
+			if deletedBy == "scanner" {
+				// 扫描器因文件缺失软删一条挂着「恢复后残留」墓碑的记录（修复 N I-1，主代理裁决）：不做残留收尾，照常软删
+				// （deleted_by='scanner'），墓碑保留、继续登记旧版 trash/ 目录。video_id 唯一，建不进 missing 条目；
+				// 文件回到原处时由 addScannedVideo 恢复原记录（restoreScannerDeletedVideoWithoutEntry）。
+				return TrashResultOK, database.Transaction(func(tx *gorm.DB) error {
+					return finalizeVideoDeletionTx(tx, &video, deletedBy)
+				})
+			}
 			// 上次恢复成功、旧版 trash/ 里的残留名字没清掉时留下的墓碑（修复 L m5）：先补做清理、删掉墓碑，再照常删除；
-			// 清不掉就不删（墓碑要继续登记那个目录，而 video_id 唯一，新条目建不进去）。
+			// 清不掉就不删（墓碑要继续登记那个目录，而 video_id 唯一，新条目建不进去）。残留判定用记录的当前路径（修复 N m1）。
 			if err := settleRestoredTrashTombstone(videoTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
-				existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+				existingEntry.OriginalPath, video.Path, existingEntry.TrashPath); err != nil {
 				return "", err
 			}
 		default:
@@ -1500,9 +1508,9 @@ func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {
 			return "", ErrPermanentDeleteHasTrashEntry
 		}
 		// 恢复成功后留下的墓碑（修复 L m5）：先补做残留清理、删掉墓碑；清不掉就不删文件——删掉原文件后，旧版 trash/ 里
-		// 那个名字就是这份内容仅剩的一个名字，墓碑随记录删掉后它会被扫描当成新文件收录。
+		// 那个名字就是这份内容仅剩的一个名字，墓碑随记录删掉后它会被扫描当成新文件收录。残留判定用记录的当前路径（修复 N m1）。
 		if err := settleRestoredTrashTombstone(videoTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
-			existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+			existingEntry.OriginalPath, video.Path, existingEntry.TrashPath); err != nil {
 			return "", err
 		}
 	}
