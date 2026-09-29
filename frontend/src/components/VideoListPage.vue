@@ -15,6 +15,7 @@
       :view-mode="viewMode"
       :row-density="rowDensity"
       :selected-tags="selectedTags"
+      :selected-people="selectedPeople"
       :selected-size-range="selectedSizeRange"
       :selected-res-range="selectedResRange"
       :min-rating="minRating"
@@ -35,9 +36,6 @@
       :incremental-scan="incrementalScan"
       :directories="directories"
       :settings="settings"
-      :ai-tag-summary="aiTagSummary"
-      :cleanup-badge-count="cleanupBadgeCount"
-      :cleanup-analyzing="cleanupAnalyzing"
       :technical-backfill="technicalBackfill"
       :perceptual-hash="perceptualHash"
       :local-metadata-backfill="localMetadataBackfill"
@@ -55,7 +53,7 @@
       @play-random="playRandom"
       @toggle-tag="toggleTagFilter"
       @clear-tags="clearTagFilter"
-      @delete-tag="requestDeleteTag"
+      @update:selected-people="updateSelectedPeople"
       @open-tag-manager="showTagManagerDialog = true"
       @toggle-select-all="toggleSelectAllVisible"
       @clear-selection="clearSelection"
@@ -75,10 +73,51 @@
       ref="incrementalScanBar"
       :migration-running="migrationRunning"
       :directories="directories"
-      :reload-view="reloadCurrentView"
+      :reload-view="reloadAfterScan"
       @reload-directories="$emit('reload-directories')"
       @state-change="incrementalScan = $event"
     />
+
+    <!-- 「路径失效」按原因分组（D-PC06、LIB-10）：标题与计数来自 ListStaleReasonCounts，点一组只看这一组。 -->
+    <div v-if="smartView === 'stale'" class="library-notice stale-reason-bar" role="group" aria-label="按失效原因筛选" data-test="stale-reason-bar">
+      <span class="library-notice__title">按原因</span>
+      <button
+        type="button"
+        :class="['tag-chip', { active: !staleReasonFilter }]"
+        data-test="stale-reason-all"
+        @click="setStaleReasonFilter('')"
+      >全部 {{ staleReasonTotal }}</button>
+      <button
+        v-for="group in staleReasonGroups"
+        :key="group.reason"
+        type="button"
+        :class="['tag-chip', { active: staleReasonFilter === group.reason }]"
+        :data-test="`stale-reason-${group.reason}`"
+        @click="setStaleReasonFilter(group.reason)"
+      >{{ group.label }} {{ group.count }}</button>
+      <button
+        type="button"
+        class="btn-secondary btn-compact library-notice__action"
+        :disabled="selectedVideoIds.length === 0 || recheckingStale"
+        data-test="stale-recheck-selected"
+        @click="recheckSelectedStale"
+      >{{ recheckingStale ? '正在重新检查…' : `重新检查所选（${selectedVideoIds.length}）` }}</button>
+    </div>
+
+    <!-- 播放失败（D-PC11、PLAY-12）：那一行就地标成失效，这里说明原因并给下一步，不整页重载。 -->
+    <div v-if="playFailureNotice" class="library-notice library-notice--warning" role="alert" data-test="play-failure-notice">
+      <span>{{ playFailureNotice.text }}</span>
+      <button type="button" class="btn-secondary btn-compact" :disabled="recheckingStale" data-test="play-failure-recheck" @click="recheckVideos([playFailureNotice.videoID])">重新检查</button>
+      <button type="button" class="btn-secondary btn-compact" data-test="play-failure-open-stale" @click="openStaleView(playFailureNotice.staleReason)">查看路径失效</button>
+      <button type="button" class="library-notice__close" aria-label="关闭提示" @click="playFailureNotice = null">×</button>
+    </div>
+
+    <!-- 保存视图引用的标签或人物已被删除（D-PC35、LIB-15）：照常应用其余条件，并说清少了几个。 -->
+    <div v-if="savedViewNotice" class="library-notice library-notice--warning" role="status" data-test="saved-view-notice">
+      <span>保存视图「{{ savedViewNotice.name }}」有 {{ savedViewNotice.dropped }} 个条件已失效（引用的标签或人物已删除），已忽略。</span>
+      <button type="button" class="btn-secondary btn-compact" data-test="saved-view-notice-update" @click="openSaveViewDialog('update')">用当前条件更新视图</button>
+      <button type="button" class="library-notice__close" aria-label="关闭提示" @click="savedViewNotice = null">×</button>
+    </div>
 
     <BackgroundTaskStatusBars
       ref="taskBars"
@@ -119,8 +158,23 @@
     />
 
     <div class="video-list" ref="videoList">
-      <div v-if="videos.length === 0 && !loading" class="empty-state">
-        <p>暂无视频，点击"扫描新目录"开始导入视频</p>
+      <!-- 三种空状态（D-PC58、APP-10）：没配目录、筛选没命中、目录里确实没有视频，各配一个能点的下一步。 -->
+      <div v-if="videos.length === 0 && !loading" class="empty-state" :data-test="`library-empty-${emptyStateKind}`">
+        <template v-if="emptyStateKind === 'no-directories'">
+          <p>还没有扫描目录。添加一个存放视频的文件夹，就能开始整理片库。</p>
+          <button type="button" class="btn-primary" data-test="library-empty-add-directory" @click="showScanDialog = true">添加扫描目录</button>
+        </template>
+        <template v-else-if="emptyStateKind === 'semantic-idle'">
+          <p>用一句话描述想找的画面或情节，回车开始语义搜索。</p>
+        </template>
+        <template v-else-if="emptyStateKind === 'no-match'">
+          <p>没有符合条件的视频</p>
+          <button type="button" class="btn-secondary" data-test="library-empty-clear-conditions" @click="clearAllConditions">清除条件</button>
+        </template>
+        <template v-else>
+          <p>扫描目录里还没有找到视频</p>
+          <button type="button" class="btn-secondary" :disabled="migrationRunning || incrementalScan.running" data-test="library-empty-rescan" @click="runIncrementalScan">重新扫描</button>
+        </template>
       </div>
       <VirtualVideoList
         v-else-if="videos.length > 0"
@@ -148,9 +202,11 @@
             :density="rowDensity"
             :narrow="previewOpen && viewMode === 'list'"
             :actions-suspended="selectedVideoIds.length > 0"
+            :override-kinds="overrideKindsFor(video)"
             @preview="openPreview"
             @play="playVideo"
             @toggle-favorite="toggleVideoFavorite"
+            @toggle-liked="toggleVideoLiked"
             @toggle-watched="toggleVideoWatched"
             @open-add-tag="openAddTagDialog"
             @remove-tag="removeTag"
@@ -224,6 +280,7 @@
     <RenameDialogs
       ref="renameDialogs"
       :migration-running="migrationRunning"
+      :video-extensions="settings.video_extensions || ''"
       :reload-view="reloadCurrentView"
       @update:migration-running="migrationRunning = $event"
       @video-renamed="applyVideoRename"
@@ -235,7 +292,23 @@
       ref="saveViewDialog"
       :current-library-filter="currentLibraryFilter"
       :after-saved="afterSavedLibraryView"
+      :saved-views="savedViews"
+      :active-view-id="lastAppliedSavedViewID"
     />
+
+    <!-- 迁移到扫描目录之外（D-PC10、LIB-09）：先说清迁完会从片库里消失，可顺手把目标加进扫描目录。 -->
+    <BaseModal v-if="moveTargetConfirm.show" close-on-overlay stop-modal-clicks aria-label="确认迁移目标" data-test="move-target-confirm" @close="resolveMoveTargetConfirm(false)">
+      <h2>目标不在扫描目录中</h2>
+      <p>「{{ moveTargetConfirm.targetLabel }}」不在任何扫描目录里。迁移后，{{ moveTargetConfirm.subject }}会从片库列表中消失，记录进入「路径失效 · 不在任何扫描目录」。</p>
+      <label class="checkbox-label">
+        <input v-model="moveTargetConfirm.addToRoots" type="checkbox" data-test="move-target-add-root" />
+        <span>同时把目标加入扫描目录</span>
+      </label>
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary" @click="resolveMoveTargetConfirm(false)">取消</button>
+        <button type="button" class="btn-primary" data-test="move-target-continue" @click="resolveMoveTargetConfirm(true)">继续迁移</button>
+      </div>
+    </BaseModal>
 
     <!-- 弹窗组件 -->
     <ScanDialog
@@ -252,6 +325,7 @@
       @close="showTagManagerDialog = false"
       @tags-changed="handleTagsChanged"
       @person-converted="handleTagPersonConverted"
+      @conversion-undone="handleTagConversionUndone"
       @request-delete-tag="requestDeleteTag"
     />
 
@@ -288,6 +362,7 @@
       :quality-enabled="settings.ai_quality_enabled"
       @close="closeAITagReviewDialog"
       @changed="handleAITagCandidatesChanged"
+      @open-cleanup="openCleanupFromReview"
     />
 
     <CleanupReviewPanel
@@ -296,11 +371,8 @@
       :frame-hash-running="frameHash.running"
       :trash-videos="trashCleanupVideos"
       :after-trash-videos="afterTrashCleanupVideos"
-      @badge-change="cleanupBadgeCount = $event"
-      @analyzing-change="cleanupAnalyzing = $event"
       @start-perceptual-hash="startPerceptualHashBackfill"
       @start-frame-hash="startFrameHashBackfill"
-      @same-source-rejected="refreshAITagSummary"
       @trash-settled="handleCleanupTrashSettled"
     />
 
@@ -347,10 +419,42 @@
 
 .loading-indicator p,
 .no-more-indicator p { margin: 0; }
+
+.empty-state .btn-primary,
+.empty-state .btn-secondary { margin-top: 10px; }
+
+/* 片库页的就地提示条：失效分组、播放失败、保存视图失效条件。与增量扫描状态条同一视觉。 */
+.library-notice {
+  margin: 10px 0 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.library-notice--warning {
+  border-color: var(--warning-border);
+  color: var(--warning-color);
+}
+.library-notice__title { font-weight: 600; color: var(--text-primary); }
+.library-notice__action { margin-left: auto; }
+.library-notice__close {
+  margin-left: auto;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 18px;
+}
 </style>
 
 <script>
-import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, GetAITaggingStatusSummary, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, ListContinueWatchingWithFilter, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -359,7 +463,7 @@ import TagDeleteDialog from './TagDeleteDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import SubtitleWorkbench from './SubtitleWorkbench.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
-import VideoListRow from './VideoListRow.vue';
+import VideoListRow, { STALE_REASON_LABELS } from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
 import LocalMetadataDialog from './LocalMetadataDialog.vue';
 import BackgroundTaskStatusBars from './video-list/BackgroundTaskStatusBars.vue';
@@ -370,7 +474,7 @@ import RenameDialogs from './video-list/RenameDialogs.vue';
 import SemanticNoticeBar from './video-list/SemanticNoticeBar.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { wheelForwardingMixin } from './video-list/wheelForwarding.js';
-import SaveViewDialog from './video-list/SaveViewDialog.vue';
+import SaveViewDialog, { parseSavedViewIDs } from './video-list/SaveViewDialog.vue';
 import SubtitlePreviewModal from './video-list/SubtitlePreviewModal.vue';
 import CleanupReviewPanel from './video-list/CleanupReviewPanel.vue';
 import SubtitleGenerateDialog from './video-list/SubtitleGenerateDialog.vue';
@@ -379,28 +483,38 @@ import EnhanceDialog from './video-list/EnhanceDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
 import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
 import BaseMenu from './ui/BaseMenu.vue';
+import BaseModal from './ui/BaseModal.vue';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
-import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
+import { findCommand, registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyBatchSummary } from '../utils/playbackProxy.js';
+import { resumable, resumePosition } from '../utils/watchState.js';
 
 // 「随机 N 部」一次抽取的条数。
 const RANDOM_PICK_SIZE = 10;
 // 智能视图「本地资料有更新」（后端 LibraryViewLocalMetadataUpdated）。
 const LOCAL_METADATA_UPDATED_VIEW = 'local_metadata_updated';
-// 与后端 watchedCompletionToleranceSeconds / watchedCompletionShortClipRatio 同口径：
-// 离片尾不到 1 秒就当看完了，20 秒以下的短片按时长 5% 收紧。
-const WATCHED_COMPLETION_TOLERANCE_SECONDS = 1;
-const WATCHED_COMPLETION_SHORT_CLIP_RATIO = 0.05;
-function watchedCompletionTolerance(duration) {
-  return Math.min(WATCHED_COMPLETION_TOLERANCE_SECONDS, duration * WATCHED_COMPLETION_SHORT_CLIP_RATIO);
+// UpdateVideoWatchProgress 的起播来源（D-PC42）：从断点、从片头、从字幕命中或指定时间。
+const WATCH_PROGRESS_ORIGINS = ['resume', 'start', 'jump'];
+// 自动对账会改变的行状态：这几个视图里改了这些状态就可能不再属于当前视图，要重载。
+const STATE_SENSITIVE_VIEWS = ['favorites', 'liked', 'continue_watching', 'unwatched', 'watched'];
+
+// 界面上只显示目录名，不显示绝对路径（G-3）。
+function pathBaseName(path) {
+  const parts = String(path || '').split(/[\\/]/).filter(Boolean);
+  return parts[parts.length - 1] || String(path || '');
+}
+function pathDirName(path) {
+  const text = String(path || '');
+  const index = Math.max(text.lastIndexOf('/'), text.lastIndexOf('\\'));
+  return index > 0 ? text.slice(0, index) : text;
 }
 
 export default {
   name: 'VideoListPage',
   mixins: [wheelForwardingMixin],
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, BaseMenu },
+  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, BaseMenu, BaseModal },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -420,8 +534,16 @@ export default {
       semanticSearchError: '',
       semanticStatus: null,
       smartView: '',
+      // 「路径失效」视图里按原因筛（D-PC06）：'' 为全部，unknown 为原因未记录。
+      staleReasonFilter: '',
+      staleReasonCounts: {},
+      recheckingStale: false,
       savedViews: [],
       selectedSavedViewID: 0,
+      // 最近一次应用的保存视图：条件改动后 selectedSavedViewID 会清零，「用当前条件更新」仍要知道是哪一个。
+      lastAppliedSavedViewID: 0,
+      // 应用保存视图时被剔除的条件数（D-PC35）：{ name, dropped }。
+      savedViewNotice: null,
       filteredCount: null,
       libraryTotalCount: null,
       countToken: 0,
@@ -430,6 +552,8 @@ export default {
       randomPick: { active: false, ids: [], reason: '', loading: false },
       randomPickToken: 0,
       selectedTags: [],
+      // 人物筛选（D-PC33）：[{ id, name }]，与工具栏的 selected-people 双向对应；筛选 DTO 只带 id。
+      selectedPeople: [],
       selectedSizeRange: 'all',
       selectedResRange: 'all',
       minRating: '',
@@ -457,7 +581,12 @@ export default {
       cursorID: 0,
       cursorLastPlayedAt: '',
       cursorRecentPlayedID: 0,
+      // 「继续观看」键集游标（D-PC42）：上一页最后一行的 watch_progress_updated_at 原样回传，外加 id。
+      cursorProgressUpdatedAt: '',
+      cursorContinueID: 0,
       libraryCursor: null,
+      // 行标签「手动」角标（D-PC36）：视频 ID（字符串）→ 被人工覆盖、结果为「加上」的自动标签种类。
+      automaticOverrideKinds: {},
       pageSize: 20,
       loading: false,
       hasMore: true,
@@ -479,8 +608,12 @@ export default {
       pendingCleanupDeleteOutcome: null,
       tagDeleteDialog: { show: false, tag: null },
       aiTagReviewDialog: { show: false, dirty: false },
-      aiTagSummary: { same_source_unread: 0 },
-      aiTagSummaryTimer: null,
+      // 播放失败后就地标成失效的那一行（D-PC11）：{ videoID, staleReason, text }。
+      playFailureNotice: null,
+      // 迁移目标不在扫描目录里时的确认（D-PC10）。
+      moveTargetConfirm: { show: false, targetLabel: '', subject: '', addToRoots: false },
+      // 超分运行时状态（D-PC24）：明确不可用时行菜单标「未就绪」并指向设置页。
+      enhanceCapability: null,
       // 四个后台任务的状态条已抽成 BackgroundTaskStatusBars，这里保留一份镜像给「管理」菜单文案。
       technicalBackfill: { running: false, preparing: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
       perceptualHash: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, failures: [] },
@@ -492,9 +625,6 @@ export default {
       localMetadataDialog: { show: false, videoIds: [] },
       // 切走前记下共用滚动容器的位置，切回来照原样恢复（图片页也在用同一个容器）。
       inactiveScrollTop: 0,
-      // 清理审阅面板自己持有分析结果；这两项是管理菜单徽标与文案要用的镜像。
-      cleanupBadgeCount: 0,
-      cleanupAnalyzing: false,
       subtitleWorkbench: { show: false, video: null },
       selectedPreviewVideoId: null,
       previewVideoSnapshot: null,
@@ -517,8 +647,7 @@ export default {
     this.refreshLibraryCounts();
     this.loadSemanticStatus();
     this.loadSavedLibraryViews();
-    this.refreshAITagSummary();
-    this.aiTagSummaryTimer = window.setInterval(this.refreshAITagSummary, 60000);
+    this.loadEnhancementCapability();
     this.attachWheelFallback();
 	window.addEventListener('keydown', this.handleLibraryShortcut);
 	window.addEventListener('keydown', this.handleToolbarShortcut);
@@ -593,6 +722,14 @@ export default {
         }
       });
 
+      // 启动扫描、改目录触发的扫描与别处发起的手动扫描都在这里汇报（D-PC09、LIB-08）。
+      this.registerRuntimeEvent('library-scan-summary', (event) => this.handleLibraryScanSummary(event));
+      // 播放失败后的后台重定位找到了新位置（D-PC11）：就地恢复那一行。
+      this.registerRuntimeEvent('video-relocated', (event) => this.handleVideoRelocated(event));
+      this.registerRuntimeEvent('video-enhancement-capability', (capability) => {
+        this.enhanceCapability = capability || null;
+      });
+
     }
   },
   watch: {
@@ -613,6 +750,14 @@ export default {
         el.scrollTop = target;
       });
     },
+    // 进「路径失效」视图时取一次各原因的计数；离开时放掉按原因的筛选。
+    smartView(view) {
+      if (view === 'stale') {
+        this.loadStaleReasonCounts();
+      } else {
+        this.staleReasonFilter = '';
+      }
+    },
     directories: {
       // 扫描范围变了就重载：列表只展示扫描根之内的视频，范围一变当前这页就过期了。
       // 只比路径集合——别名变化不影响范围，父组件首次赋值也不该触发一次白重载。
@@ -631,9 +776,6 @@ export default {
     this.detachWheelFallback();
     if (this.searchDebounceTimer) {
       clearTimeout(this.searchDebounceTimer);
-    }
-    if (this.aiTagSummaryTimer) {
-      clearInterval(this.aiTagSummaryTimer);
     }
     this.teardownRuntimeEvents();
   },
@@ -664,23 +806,49 @@ export default {
       // 但「进行中」只标在真正在翻译的那一行，否则每一行都像是自己在翻译。
       const translating = this.translatingSubtitleVideoId !== null;
       const translatingThisVideo = this.translatingSubtitleVideoId === video.id;
+      // 失效行的处理（D-PC06、LIB-10）：重新检查走窄对账；目录被移除或不在扫描范围的可以把目录加回来。
+      const staleItems = video.is_stale ? [
+        { id: 'recheck', label: '重新检查', disabled: this.recheckingStale },
+        ...(['removed_root', 'outside_roots'].includes(video.stale_reason) ? [{ id: 'readd-root', label: '加回目录…' }] : [])
+      ] : [];
+      // 超分运行时明确不可用时标「未就绪」，点了去设置页的超分分区看原因（D-PC24、MEDIA-11）。
+      const enhanceReady = this.enhanceCapability?.available !== false;
       return [
         { heading: '文件' },
         { id: 'directory', label: '打开目录' },
         { id: 'rename', label: '重命名' },
         { id: 'move', label: '迁移', disabled: this.migrationRunning },
         { id: 'export-nfo', label: '写出 NFO' },
+        ...staleItems,
+        { heading: '整理' },
+        { id: 'like', label: video.is_liked ? '取消点赞' : '点赞' },
+        { id: 'ai-reanalyze', label: '重新分析 AI 标签' },
         { heading: '字幕' },
         { id: 'subtitle', label: generating ? '生成字幕（进行中）' : '生成字幕', disabled: generating },
         { id: 'subtitle-translate', label: translatingThisVideo ? '翻译字幕（进行中）' : '翻译字幕…', disabled: generating || translating },
         { id: 'subtitle-edit', label: '编辑字幕' },
         { id: 'subtitle-preview', label: '预览字幕' },
         { heading: '增强' },
-        { id: 'enhance', label: '视频超分…' },
+        { id: 'enhance', label: enhanceReady ? '视频超分…' : '视频超分（未就绪）' },
         { id: 'playback-proxy', label: '生成播放代理', disabled: this.playbackProxy.running },
         { divider: true },
         { id: 'delete', label: '删除', danger: true, disabled: this.deletingIds.includes(video.id) }
       ];
+    },
+    // 空状态三分（D-PC58、APP-10）；语义模式还没输入描述时单独提示，不算「筛选没命中」。
+    emptyStateKind() {
+      if ((this.directories || []).length === 0) return 'no-directories';
+      if (this.searchMode === 'semantic' && !this.currentQueryKeyword() && !this.semanticSimilarVideoID) return 'semantic-idle';
+      if (this.hasActiveConditions()) return 'no-match';
+      return 'no-videos';
+    },
+    staleReasonGroups() {
+      return Object.keys(STALE_REASON_LABELS)
+        .map(reason => ({ reason, label: STALE_REASON_LABELS[reason], count: Number(this.staleReasonCounts?.[reason] || 0) }))
+        .filter(group => group.count > 0 || group.reason === this.staleReasonFilter);
+    },
+    staleReasonTotal() {
+      return Object.values(this.staleReasonCounts || {}).reduce((sum, count) => sum + Number(count || 0), 0);
     },
     selectedBatchVideos() {
       if (!this.addTagDialog.show || this.addTagDialog.mode !== 'batch') return [];
@@ -702,7 +870,9 @@ export default {
         keyword: this.currentQueryKeyword(),
         similarVideoID: this.semanticSimilarVideoID,
         smartView: this.smartView,
+        staleReason: this.staleReasonFilter,
         tags: [...this.selectedTags].sort((a, b) => a - b),
+        people: this.selectedPeople.map(person => Number(person.id)).sort((a, b) => a - b),
         size: this.selectedSizeRange === 'all' ? 'all' : `${this.selectedSizeRange.min}:${this.selectedSizeRange.max}`,
         res: this.selectedResRange === 'all' ? 'all' : `${this.selectedResRange.min}:${this.selectedResRange.max}`,
         rating: `${this.minRating}:${this.maxRating}:${this.sortMode}`
@@ -1004,9 +1174,11 @@ export default {
     // 清理面板勾中的候选仍由片库页删除：删除、撤销提示条与列表重载的先后顺序不变。
     // 删除经撤销条执行（进度、取消、不支持废纸篓时的二选一）；返回给面板的 result 保持
     // 面板认识的 { succeeded, failed, errors[{video_id, error}] } 形状。
-    async trashCleanupVideos(selectedIDs) {
+    // 面板传来 { names: {[videoId]: 文件名} }（P-032 约定）：候选多半不在当前已加载的列表里，
+    // 「不支持废纸篓」的二选一弹窗要靠它列出文件名；已加载的行只作补充。
+    async trashCleanupVideos(selectedIDs, { names = {} } = {}) {
       this.deletingIds = [...new Set([...this.deletingIds, ...selectedIDs])];
-      const outcome = await this.$refs.trashUndo.runDelete({ ids: selectedIDs, deleteFile: true, names: this.videoNames(selectedIDs) });
+      const outcome = await this.$refs.trashUndo.runDelete({ ids: selectedIDs, deleteFile: true, names: { ...this.videoNames(selectedIDs), ...(names || {}) } });
       const succeededIDs = outcome.removedIDs;
       const failedIDs = new Set(outcome.remainingIDs);
       this.videos = this.videos.filter(item => !succeededIDs.includes(item.id));
@@ -1083,9 +1255,12 @@ export default {
       if (!video || this.migrationRunning) return;
       const destination = await SelectMigrationDestinationDirectory();
       if (!destination) return;
+      const target = await this.confirmMoveTarget(destination, '这个视频');
+      if (!target.proceed) return;
       this.migrationRunning = true;
       try {
         const result = await MoveVideo(video.id, destination);
+        if (target.addToRoots) await this.addScanRoot(destination);
         await this.reloadCurrentView();
         if (result?.warning) notify(`视频迁移完成。\n警告：${result.warning}`);
       } catch (err) {
@@ -1100,9 +1275,12 @@ export default {
       const destination = await SelectMigrationDestinationDirectory();
       if (!destination) return;
       const ids = [...this.selectedVideoIds];
+      const target = await this.confirmMoveTarget(destination, `选中的 ${ids.length} 个视频`);
+      if (!target.proceed) return;
       this.migrationRunning = true;
       try {
         const result = await BatchMoveVideos(ids, destination);
+        if (target.addToRoots && Number(result?.succeeded || 0) > 0) await this.addScanRoot(destination);
         this.selectedVideoIds = [];
         await this.reloadCurrentView();
         const failures = (result?.errors || []).map(item => `失败 #${item.video_id}: ${item.error}`);
@@ -1123,10 +1301,15 @@ export default {
       if (!source) return;
       const destinationParent = await SelectMigrationDestinationDirectory();
       if (!destinationParent) return;
+      // 迁移的正是某个扫描目录本身时，扫描目录会跟着改写到新位置，不会从片库里消失。
+      const sourceIsRoot = (this.directories || []).some(dir => String(dir?.path || '') === String(source));
+      const target = sourceIsRoot ? { proceed: true, addToRoots: false } : await this.confirmMoveTarget(destinationParent, '这个文件夹里的视频');
+      if (!target.proceed) return;
       if (!await confirmAction({ title: '迁移文件夹', message: `将文件夹\n${source}\n迁移到\n${destinationParent}\n并同步更新库内路径，是否继续？`, confirmText: '迁移' })) return;
       this.migrationRunning = true;
       try {
         const result = await MoveDirectory(source, destinationParent);
+        if (target.addToRoots) await this.addScanRoot(destinationParent);
         this.$emit('reload-directories');
         await this.reloadCurrentView();
         const warning = result?.warning ? `\n警告：${result.warning}` : '';
@@ -1141,13 +1324,54 @@ export default {
     renameFolder() {
       return this.$refs.renameDialogs?.openRenameFolder();
     },
-    // 重命名成功后把已加载的那一行改名，避免整表重载让它跳位置。
+    // 重命名成功后把已加载的那一行改名，避免整表重载让它跳位置。只换路径的最后一段：
+    // 目录名里恰好含同一个文件名时，字符串替换会改错位置。
     applyVideoRename({ video, finalName }) {
       const idx = this.videos.findIndex(v => v.id === video.id);
       if (idx !== -1) {
+        const path = String(video.path || '');
         this.videos[idx].name = finalName;
-        this.videos[idx].path = video.path.replace(video.name, finalName);
+        this.videos[idx].path = path.endsWith(video.name) ? path.slice(0, path.length - video.name.length) + finalName : path;
       }
+    },
+    // 迁移目标不在任何扫描目录里时先确认（D-PC10、LIB-09）。返回 { proceed, addToRoots }。
+    async confirmMoveTarget(destination, subject) {
+      let check;
+      try {
+        check = await CheckMoveTarget(destination);
+      } catch (err) {
+        notifyError('检查迁移目标失败: ' + err);
+        return { proceed: false, addToRoots: false };
+      }
+      if (check?.in_scan_roots) return { proceed: true, addToRoots: false };
+      return new Promise(resolve => {
+        this._moveTargetResolve = resolve;
+        this.moveTargetConfirm = { show: true, targetLabel: pathBaseName(destination), subject, addToRoots: false };
+      });
+    },
+    resolveMoveTargetConfirm(proceed) {
+      const resolve = this._moveTargetResolve;
+      const addToRoots = !!this.moveTargetConfirm.addToRoots;
+      this._moveTargetResolve = null;
+      this.moveTargetConfirm = { show: false, targetLabel: '', subject: '', addToRoots: false };
+      resolve?.({ proceed: !!proceed, addToRoots: !!proceed && addToRoots });
+    },
+    // 把一个目录加入扫描目录：加入后后端在后台对它做一次窄对账，结果经 library-watcher-reconciled 回来。
+    async addScanRoot(path) {
+      try {
+        await AddDirectory(path, pathBaseName(path));
+        this.$emit('reload-directories');
+        notify(`已把「${pathBaseName(path)}」加入扫描目录。`);
+        return true;
+      } catch (err) {
+        notifyError('加入扫描目录失败: ' + err);
+        return false;
+      }
+    },
+    // 扫描目录在界面上用别名称呼，没有别名时用目录名，不显示绝对路径。
+    directoryLabel(path) {
+      const dir = (this.directories || []).find(item => String(item?.path || '') === String(path || ''));
+      return String(dir?.alias || '').trim() || pathBaseName(path);
     },
     calculateScore(video) {
       const weight = this.settings.play_weight || 2.0;
@@ -1182,7 +1406,9 @@ export default {
     },
     clearAllConditions() {
       this.smartView = '';
+      this.staleReasonFilter = '';
       this.selectedTags = [];
+      this.selectedPeople = [];
       this.selectedSizeRange = 'all';
       this.selectedResRange = 'all';
       this.minRating = '';
@@ -1209,6 +1435,11 @@ export default {
         min_rating: overrides.minRating === '' ? null : Number(overrides.minRating),
         max_rating: overrides.maxRating === '' ? null : Number(overrides.maxRating)
       };
+    },
+    // 片库总数只在为空时才重新取（refreshLibraryCounts）；扫描与重新检查之后置空让它重取。
+    // 随机批次里不走 refreshLibraryCounts，置空会让结果条一直没有总数，所以批次里先不动。
+    invalidateLibraryTotal() {
+      if (!this.randomPick.active) this.libraryTotalCount = null;
     },
     // 结果条的命中数：筛选变化后请求一次，翻页不再重复请求。
     async refreshLibraryCounts() {
@@ -1237,6 +1468,7 @@ export default {
         keyword: '',
         smart_view: '',
         tag_ids: [],
+        person_ids: [],
         min_size: 0,
         max_size: 0,
         min_height: 0,
@@ -1269,6 +1501,11 @@ export default {
         this.openSaveViewDialog();
         return;
       }
+      // 「用当前条件更新」「重命名」（D-PC35、LIB-15）：弹窗同一个，模式不同。
+      if (item.id === 'update-current' || item.id === 'rename-current') {
+        this.openSaveViewDialog(item.id === 'update-current' ? 'update' : 'rename');
+        return;
+      }
       if (item.id === 'delete-current') {
         this.deleteSelectedSavedView();
         return;
@@ -1295,11 +1532,18 @@ export default {
         case 'rename': this.renameVideo(video); break;
         case 'move': this.moveVideo(video); break;
         case 'export-nfo': this.exportLocalMetadataNFO(video); break;
+        case 'recheck': this.recheckVideos([video.id]); break;
+        case 'readd-root': this.readdRemovedRoot(video); break;
+        case 'like': this.toggleVideoLiked(video); break;
+        case 'ai-reanalyze': this.reanalyzeVideo(video); break;
         case 'subtitle': this.generateSubtitle(video); break;
         case 'subtitle-translate': this.openSubtitleTranslate(video); break;
         case 'subtitle-edit': this.openSubtitleWorkbench(video); break;
         case 'subtitle-preview': this.openSubtitlePreview(video); break;
-        case 'enhance': this.openEnhanceDialog(video); break;
+        case 'enhance':
+          if (this.enhanceCapability?.available === false) this.openEnhanceSettings();
+          else this.openEnhanceDialog(video);
+          break;
         case 'playback-proxy': this.createProxyForVideo(video); break;
         case 'delete': this.confirmDelete(video); break;
         default: break;
@@ -1337,7 +1581,13 @@ export default {
       return estimateVideoRowHeight(video, widthBucket, subtitleMode, density);
     },
     hasStructuredFilters() {
-      return this.selectedTags.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
+      return this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
+    },
+    // 当前有没有会让结果变少的条件：决定空列表显示「筛选没命中」还是「目录里没有视频」。
+    hasActiveConditions() {
+      return !!this.currentQueryKeyword() || !!this.smartView || !!this.semanticSimilarVideoID ||
+        this.selectedTags.length > 0 || this.selectedPeople.length > 0 ||
+        this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '';
     },
     currentLibraryFilter() {
       const { minSize, maxSize, minHeight, maxHeight } = this.currentFilterBounds();
@@ -1350,6 +1600,8 @@ export default {
         keyword: semantic ? '' : this.currentQueryKeyword(),
         smart_view: this.smartView,
         tag_ids: [...this.selectedTags],
+        person_ids: this.selectedPeople.map(person => Number(person.id)).filter(Boolean),
+        stale_reason: this.smartView === 'stale' ? this.staleReasonFilter : '',
         min_size: minSize,
         max_size: maxSize,
         min_height: minHeight,
@@ -1359,11 +1611,20 @@ export default {
         sort_mode: this.sortMode
       };
     },
+    // 与后端 applyLibraryFilter 同口径的本地判定：就地改完一行后据此决定它还在不在当前视图里。
     matchesSmartView(video) {
+      // 失效记录只属于「路径失效」视图（D-S02），其余视图一律不含。
+      if (this.smartView === 'stale') {
+        if (!video.is_stale) return false;
+        if (!this.staleReasonFilter) return true;
+        return (String(video.stale_reason || '') || 'unknown') === this.staleReasonFilter;
+      }
+      if (video.is_stale) return false;
       switch (this.smartView) {
         case 'favorites': return !!video.is_favorite;
         case 'liked': return !!video.is_liked;
-        case 'continue_watching': return !video.is_watched && Number(video.watch_position_seconds || 0) > 0;
+        // 「继续观看」= 断点可续，含重看中的已看片（D-PC42、PLAY-10）。
+        case 'continue_watching': return resumable(video);
         case 'unwatched': return !video.is_watched;
         case 'watched': return !!video.is_watched;
         case 'recently_played': return !!video.last_played_at;
@@ -1371,9 +1632,12 @@ export default {
           const createdAt = new Date(video.created_at || 0).getTime();
           return createdAt > 0 && createdAt >= Date.now() - 30 * 24 * 60 * 60 * 1000;
         }
-        case 'untagged': return !Array.isArray(video.tags) || video.tags.length === 0;
+        // 自动分类标签不算「已打标签」（D-PC33、META-10）。
+        case 'untagged': return !(video.tags || []).some(tag => !tag?.automatic_kind);
         case 'no_subtitle': return !this.isSubtitleSearchActive();
-        case 'stale': return !!video.is_stale;
+        // 「本地资料有更新」取决于 NFO 状态表，行上没有这个字段。状态只会被本地资料弹窗改掉，
+        // 那条路径自己重载列表，所以其余就地修改都不会让行离开这个视图。
+        case LOCAL_METADATA_UPDATED_VIEW: return true;
         default: return true;
       }
     },
@@ -1429,6 +1693,7 @@ export default {
           semanticHasMore = !!page?.has_more;
           newVideos = (page?.hits || []).map(hit => ({ ...hit.video, _semanticScore: hit.score }));
           this.libraryCursor = null;
+          await this.fillAutomaticOverrideKinds(newVideos);
         } else if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
           newVideos = await ListRecentlyPlayedWithFilter(
             this.currentLibraryFilter(),
@@ -1436,12 +1701,25 @@ export default {
             this.cursorRecentPlayedID,
             this.pageSize
           );
+          await this.fillAutomaticOverrideKinds(newVideos);
+        } else if (this.isContinueWatchingKeyset()) {
+          // 「继续观看」按最近的观看进度倒序（D-PC42、PLAY-09）：键集游标原样回传上一页最后一行的
+          // watch_progress_updated_at 与 id；进度时间为空的老数据排在最后，游标时间传空串。
+          const page = await ListContinueWatchingWithFilter(
+            this.currentLibraryFilter(),
+            this.cursorProgressUpdatedAt,
+            this.cursorContinueID,
+            this.pageSize
+          );
+          newVideos = page?.videos || [];
+          this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
         } else {
           const request = { filter: this.currentLibraryFilter(), limit: this.pageSize };
           if (this.libraryCursor) request.cursor = this.libraryCursor;
           const page = await SearchLibraryVideoPage(request);
           newVideos = page?.videos || [];
           this.libraryCursor = page?.next_cursor || null;
+          this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
         }
 
         newVideos = await this.attachSubtitleHits(newVideos, keyword);
@@ -1452,15 +1730,20 @@ export default {
           mode: this.smartView || keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
         });
 
-        if (this.searchMode === 'semantic' ? !semanticHasMore : (this.smartView === 'recently_played' && this.sortMode === 'balanced' ? newVideos.length < this.pageSize : !this.libraryCursor)) {
+        const recentKeyset = this.smartView === 'recently_played' && this.sortMode === 'balanced';
+        const arrayKeyset = recentKeyset || this.isContinueWatchingKeyset();
+        if (this.searchMode === 'semantic' ? !semanticHasMore : (arrayKeyset ? newVideos.length < this.pageSize : !this.libraryCursor)) {
           this.hasMore = false;
         }
         if (newVideos.length > 0) {
           this.videos.push(...newVideos);
           const last = newVideos[newVideos.length - 1];
-          if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
+          if (recentKeyset) {
             this.cursorLastPlayedAt = last.last_played_at || '';
             this.cursorRecentPlayedID = last.id;
+          } else if (this.isContinueWatchingKeyset()) {
+            this.cursorProgressUpdatedAt = last.watch_progress_updated_at || '';
+            this.cursorContinueID = last.id;
           }
         }
         this.debugLog('loadVideos applied to state', {
@@ -1506,7 +1789,10 @@ export default {
           this.cursorID = 0;
           this.cursorLastPlayedAt = '';
           this.cursorRecentPlayedID = 0;
+          this.cursorProgressUpdatedAt = '';
+          this.cursorContinueID = 0;
           this.libraryCursor = null;
+          this.automaticOverrideKinds = {};
           if (this.searchMode !== 'semantic') {
             this.semanticCoverage = null;
             this.semanticSearchError = '';
@@ -1524,6 +1810,37 @@ export default {
     },
     isSubtitleSearchActive(keyword = this.searchKeyword.trim()) {
       return this.searchMode === 'subtitle' && !!keyword;
+    },
+    // 「继续观看」只在均衡排序下走专用的键集接口；换了排序仍走共享分页（排序语义由用户选）。
+    isContinueWatchingKeyset() {
+      return this.searchMode !== 'semantic' && this.smartView === 'continue_watching' && this.sortMode === 'balanced';
+    },
+    overrideKindsFor(video) {
+      return this.automaticOverrideKinds[String(video?.id)] || [];
+    },
+    // 列表载荷（SearchLibraryVideoPage、继续观看）自带角标数据，按页合并进来。
+    mergeAutomaticOverrideKinds(kinds) {
+      if (!kinds || typeof kinds !== 'object') return;
+      const next = { ...this.automaticOverrideKinds };
+      for (const [id, value] of Object.entries(kinds)) next[String(id)] = Array.isArray(value) ? value : [];
+      this.automaticOverrideKinds = next;
+    },
+    // 返回数组的接口（最近播放、语义搜索、随机抽取、按 ID 取）没有角标数据，用 GetAutomaticOverrideKinds
+    // 批量补齐。只查带自动标签的行：没有自动标签就不会有「手动」角标。补不上只少一个角标，不影响列表。
+    async fillAutomaticOverrideKinds(videos) {
+      const ids = (videos || [])
+        .filter(video => (video?.tags || []).some(tag => tag?.automatic_kind))
+        .map(video => Number(video.id))
+        .filter(Boolean);
+      if (ids.length === 0) return;
+      try {
+        const kinds = await GetAutomaticOverrideKinds(ids) || {};
+        const filled = {};
+        for (const id of ids) filled[String(id)] = kinds[String(id)] || [];
+        this.mergeAutomaticOverrideKinds(filled);
+      } catch (err) {
+        this.debugLog('fillAutomaticOverrideKinds failed', { err: String(err) }, true);
+      }
     },
     currentFilterBounds() {
       let minSize = 0, maxSize = 0;
@@ -1558,38 +1875,81 @@ export default {
       this.selectedSavedViewID = Number(viewID);
       return this.applySelectedSavedView();
     },
-    openSaveViewDialog() {
-      this.$refs.saveViewDialog?.open();
+    // mode：create 另存为新视图；update 用当前条件覆盖；rename 只改名（D-PC35、LIB-15）。
+    openSaveViewDialog(mode = 'create') {
+      this.$refs.saveViewDialog?.open(mode);
     },
-    // 保存成功后刷新视图列表并选中新视图，这两步仍归片库页。
+    // 保存成功后刷新视图列表并选中新视图，这两步仍归片库页。更新当前条件后，条件与视图重新一致，
+    // 失效条件的提示也就不再成立。
     async afterSavedLibraryView(saved) {
       await this.loadSavedLibraryViews();
       this.selectedSavedViewID = saved.id;
+      this.lastAppliedSavedViewID = saved.id;
+      this.savedViewNotice = null;
     },
+    // 条件改动之后当前条件就不再等于那个保存视图了。
+    leaveSavedView() {
+      this.selectedSavedViewID = 0;
+      this.savedViewNotice = null;
+    },
+    // 保存视图里的标签与人物先经后端剔除已删除的 ID（与 Jellyfin 同口径），剔掉几个就提示几个。
     async applySelectedSavedView() {
       const view = this.savedViews.find(item => item.id === Number(this.selectedSavedViewID));
       if (!view) return;
       this.deactivateRandomPick();
-      let tagIDs = [];
+      const storedTagIDs = parseSavedViewIDs(view.tag_ids_json);
+      const storedPersonIDs = parseSavedViewIDs(view.person_ids_json);
+      let tagResult;
+      let personResult;
       try {
-        const parsed = JSON.parse(view.tag_ids_json || '[]');
-        const activeTagIDs = new Set((this.tags || []).map(tag => Number(tag.id)));
-        tagIDs = Array.isArray(parsed)
-          ? parsed.map(Number).filter(id => Number.isFinite(id) && activeTagIDs.has(id))
-          : [];
+        [tagResult, personResult] = await Promise.all([
+          storedTagIDs.length ? FilterActiveTagIDs(storedTagIDs) : { tag_ids: [], dropped: 0 },
+          storedPersonIDs.length ? FilterActivePersonIDs(storedPersonIDs) : { person_ids: [], dropped: 0 }
+        ]);
       } catch (err) {
-        console.error('保存视图标签条件无效:', err);
+        this.selectedSavedViewID = 0;
+        notifyError('应用保存视图失败: ' + err);
+        return;
       }
+      const tagIDs = (tagResult?.tag_ids || []).map(Number).filter(Boolean);
+      const people = await this.resolvePeople((personResult?.person_ids || []).map(Number).filter(Boolean));
+      const dropped = Number(tagResult?.dropped || 0) + Number(personResult?.dropped || 0);
       this.searchMode = view.search_mode || 'file';
       this.searchKeyword = view.keyword || '';
       this.smartView = view.smart_view || '';
       this.selectedTags = tagIDs;
+      this.selectedPeople = people;
+      this.lastAppliedSavedViewID = view.id;
+      this.savedViewNotice = dropped > 0 ? { name: view.name, dropped } : null;
       this.selectedSizeRange = this.findRangeOption(this.sizeOptions, view.min_size, view.max_size);
       this.selectedResRange = this.findRangeOption(this.resOptions, view.min_height, view.max_height);
       this.minRating = view.min_rating === null || view.min_rating === undefined ? '' : String(view.min_rating);
       this.maxRating = view.max_rating === null || view.max_rating === undefined ? '' : String(view.max_rating);
       this.sortMode = view.sort_mode || 'balanced';
       await this.reloadCurrentView();
+    },
+    // 保存视图只存人物 ID：名字先看已选过的，没有的再逐个取（一个视图里的人物通常只有几个）。
+    async resolvePeople(ids) {
+      const known = new Map(this.selectedPeople.map(person => [Number(person.id), person.name]));
+      return Promise.all(ids.map(async id => {
+        if (known.get(id)) return { id, name: known.get(id) };
+        try {
+          const detail = await GetPersonDetail(id, 0, 1);
+          return { id, name: detail?.person?.person?.display_name || '' };
+        } catch (err) {
+          this.debugLog('resolvePeople failed', { id, err: String(err) }, true);
+          return { id, name: '' };
+        }
+      }));
+    },
+    // 工具栏人物组合框的选择（D-PC33）：与点标签同一条路径——退出随机批次、离开保存视图、重载。
+    updateSelectedPeople(people) {
+      this.deactivateRandomPick();
+      this.selectedPeople = (people || [])
+        .map(person => ({ id: Number(person?.id || 0), name: String(person?.name || '') }))
+        .filter(person => person.id > 0);
+      this.leaveSavedView();
+      this.reloadCurrentView();
     },
     async deleteSelectedSavedView() {
       const view = this.savedViews.find(item => item.id === Number(this.selectedSavedViewID));
@@ -1644,13 +2004,13 @@ export default {
       } else {
         this.selectedTags = [...this.selectedTags, id];
       }
-      this.selectedSavedViewID = 0;
+      this.leaveSavedView();
       this.reloadCurrentView();
     },
     clearTagFilter() {
       this.deactivateRandomPick();
       this.selectedTags = [];
-      this.selectedSavedViewID = 0;
+      this.leaveSavedView();
       this.reloadCurrentView();
     },
     canVideoMatchCurrentView(video) {
@@ -1703,20 +2063,14 @@ export default {
       }
       this.videos.splice(index, 1, patched);
     },
+    // 起播位置与后端同一套判定（utils/watchState.js，D-PC41/42）：断点可续且没落进片尾区间才续播；
+    // 重看中的已看片也续播（PLAY-10）。
     resumePositionFor(video) {
-      if (!video || video.is_watched) return 0;
-      const position = Number(video.watch_position_seconds || 0);
-      const duration = Number(video.duration || 0);
-      if (!Number.isFinite(position) || position <= 0) return 0;
-      // 容差跟后端的「算看完」口径保持一致。早先这里是 5 秒 / 98%，会出现后端认为
-      // 还没看完、记着断点，前端却已经从头播的割裂。短片同样按比例收紧。
-      if (duration > 0 && position >= duration - watchedCompletionTolerance(duration)) return 0;
-      return position;
+      return resumePosition(video);
     },
     async applyVideoStateChange(updatedVideo) {
       if (!updatedVideo) return;
-      const stateSensitiveViews = ['favorites', 'liked', 'continue_watching', 'unwatched', 'watched'];
-      if (stateSensitiveViews.includes(this.smartView) && !this.matchesSmartView(updatedVideo)) {
+      if (STATE_SENSITIVE_VIEWS.includes(this.smartView) && !this.matchesSmartView(updatedVideo)) {
         await this.reloadCurrentView();
         return;
       }
@@ -1730,6 +2084,15 @@ export default {
         notifyError('更新收藏状态失败: ' + err);
       }
     },
+    // 点赞（D-PC40、PLAY-02）：唯一数据是 videos.is_liked，与手机端同一份。
+    async toggleVideoLiked(video) {
+      try {
+        const updated = await SetVideoLiked(video.id, !video.is_liked);
+        await this.applyVideoStateChange(updated);
+      } catch (err) {
+        notifyError('更新点赞状态失败: ' + err);
+      }
+    },
     async toggleVideoWatched(video) {
       try {
         const updated = await SetVideoWatched(video.id, !video.is_watched);
@@ -1738,25 +2101,42 @@ export default {
         notifyError('更新观看状态失败: ' + err);
       }
     },
+    // UpdateVideoWatchProgress 的 5 参契约（D-PC42）：duration 只在库内时长未知时采用，拿不到传 0；
+    // origin 优先用抽屉上报的起播来源，没带时按这次打开抽屉的方式推断——带字幕命中时间打开为 jump，
+    // 从断点续播为 resume，否则 start。嵌套条目的起播点抽屉自己定，按 resume（与 start 同样允许回写）。
     handlePreviewWatchProgress(progress) {
       const videoID = Number(progress?.videoID || this.selectedPreviewVideoId || 0);
       if (!videoID) return;
+      const origin = this.watchProgressOrigin(videoID, progress?.origin);
+      const reportedDuration = Number(progress?.durationSeconds);
+      const duration = Number.isFinite(reportedDuration) && reportedDuration > 0 ? reportedDuration : 0;
       const save = async () => {
-        const updated = await UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), !!progress?.completed);
+        const updated = await UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
         await this.applyVideoStateChange(updated);
       };
       this._watchProgressPromise = (this._watchProgressPromise || Promise.resolve())
         .then(save)
         .catch(err => console.error('保存观看进度失败:', err));
     },
+    watchProgressOrigin(videoID, reported) {
+      if (WATCH_PROGRESS_ORIGINS.includes(reported)) return reported;
+      if (Number(videoID) !== Number(this.selectedPreviewVideoId)) return 'resume';
+      if (this.previewStartTimeMs !== null && this.previewStartTimeMs !== undefined) return 'jump';
+      return this.resumePositionFor(this.selectedPreviewVideo) > 0 ? 'resume' : 'start';
+    },
     async applyPlaybackAttemptResult(result) {
       if (!result) return;
 
+      const reconcile = result.reconcile_result;
       if (!result.dispatch_succeeded) {
-        notifyError(result.user_message || '播放失败');
+        // 播放失败并已标失效（D-PC11、PLAY-12）：那一行就地改成失效态，给出原因与下一步，不整页重载。
+        if (reconcile?.did_mark_stale) {
+          this.markPlaybackFailureStale(result, reconcile);
+          return;
+        }
+        notifyError(this.playbackFailureText(result));
       }
 
-      const reconcile = result.reconcile_result;
       if (!reconcile) {
         return;
       }
@@ -1793,11 +2173,48 @@ export default {
         };
       }
     },
+    // 后端的失败文案带着文件的完整路径；界面上只说文件名（G-3）。
+    playbackFailureText(result) {
+      const video = result?.video || {};
+      const name = video.name || '视频';
+      const text = String(result?.user_message || '播放失败');
+      return video.path ? text.split(` (${video.path})`).join('').split(video.path).join(name) : text;
+    },
+    markPlaybackFailureStale(result, reconcile) {
+      const videoID = Number(reconcile.video_id || result.video?.id || 0);
+      const reason = String(reconcile.reason || result.reason || '');
+      const staleReason = reconcile.updated_video?.stale_reason || (reason === 'offline_root' ? 'offline_root' : 'missing_file');
+      const index = this.videos.findIndex(video => Number(video.id) === videoID);
+      const base = index !== -1 ? this.videos[index] : (result.video || {});
+      const updated = reconcile.updated_video || {};
+      const merged = {
+        ...base,
+        ...updated,
+        tags: Array.isArray(updated.tags) ? updated.tags : (base.tags || []),
+        is_stale: true,
+        stale_reason: staleReason
+      };
+      if (index !== -1) this.videos.splice(index, 1, merged);
+      if (Number(this.selectedPreviewVideoId) === videoID) {
+        this.previewVideoSnapshot = { ...merged, tags: [...(merged.tags || [])] };
+      }
+      const name = merged.display_title || merged.name || '这个视频';
+      let text;
+      if (reason === 'offline_root') {
+        text = `「${name}」所在的磁盘未连接，已在列表中标为失效；接上磁盘后会自动恢复。`;
+      } else if (reason === 'missing_file') {
+        text = `「${name}」的文件不在原位置，已标为失效；正在后台查找它是否被移到了别处，找到会自动恢复。`;
+      } else {
+        text = `${this.playbackFailureText(result)}\n已在列表中标为失效。`;
+      }
+      this.playFailureNotice = { videoID, staleReason, text };
+      if (this.smartView === 'stale') this.loadStaleReasonCounts();
+    },
     async handleSearch(immediate = false, clearSimilar = false) {
       // 筛选条件变了，固定的随机批次就不再成立：退出批次、作废在途的抽取，按新条件正常加载。
       if (this.randomPick.active) immediate = true;
       this.deactivateRandomPick();
-      this.selectedSavedViewID = 0;
+      this.leaveSavedView();
       if (clearSimilar) this.semanticSimilarVideoID = 0;
       if (this.searchDebounceTimer) {
         clearTimeout(this.searchDebounceTimer);
@@ -1845,6 +2262,7 @@ export default {
           notifyError(result?.user_message || '当前筛选范围没有可随机的视频。');
           return;
         }
+        await this.fillAutomaticOverrideKinds(picked);
         const videos = await this.attachSubtitleHits(picked, this.currentQueryKeyword());
         // 抽样结果要盖掉列表，先等在途的加载收尾，避免被后到的分页结果覆盖。
         if (this.reloadPromise) await this.reloadPromise;
@@ -1872,12 +2290,15 @@ export default {
       this.cursorID = 0;
       this.cursorLastPlayedAt = '';
       this.cursorRecentPlayedID = 0;
+      this.cursorProgressUpdatedAt = '';
+      this.cursorContinueID = 0;
     },
     // 随机批次是固定的一组 ID，刷新时按 ID 取最新记录，而不是重新抽一批。
     async refreshRandomPick() {
       let videos = [];
       try {
         const refreshed = await GetVideosByIDs(this.randomPick.ids) || [];
+        await this.fillAutomaticOverrideKinds(refreshed);
         videos = await this.attachSubtitleHits(refreshed, this.currentQueryKeyword());
       } catch (err) {
         // 与普通列表加载失败保持一致：报错并留住当前批次，不把列表清空。
@@ -2061,17 +2482,16 @@ export default {
       await this.reloadCurrentView();
       if (fromTrashDialog) await this.refreshCleanupStatus();
     },
-    async refreshAITagSummary() {
-      try {
-        this.aiTagSummary = await GetAITaggingStatusSummary() || { same_source_unread: 0 };
-      } catch (err) {
-        this.aiTagSummary = { ...this.aiTagSummary, same_source_unread: 0 };
-      }
-    },
     async handleAITagCandidatesChanged() {
       this.aiTagReviewDialog.dirty = true;
       this.$emit('reload-tags');
-      await this.refreshAITagSummary();
+    },
+    // 审阅里确认同源后点「去清理」（D-PC27）：关掉审阅、打开清理中心，按 relationId 定位这一对
+    // （P-032 约定：面板自己定位；这一对不在结果里时由面板说明）。
+    async openCleanupFromReview(payload) {
+      await this.closeAITagReviewDialog();
+      const relationId = Number(payload?.relationId || 0);
+      return this.$refs.cleanupPanel?.open(relationId ? { relationId } : undefined);
     },
     runIncrementalScan() {
       return this.$refs.incrementalScanBar?.runIncrementalScan();
@@ -2120,9 +2540,177 @@ export default {
       this.reloadCurrentView();
       this.$refs.previewDrawer?.loadCurrentEntry();
     },
+    // 撤销「标签转人物」（D-PC34）：标签与打标关系回来了，这次新建的人物可能已被删掉。
+    // 人物筛选里若还挂着不存在的人物会让结果恒为空，先剔掉；图片页经 person-converted 同样重载。
+    async handleTagConversionUndone(result) {
+      this.$emit('reload-tags');
+      if (result?.person_deleted && this.selectedPeople.length > 0) {
+        try {
+          const active = await FilterActivePersonIDs(this.selectedPeople.map(person => Number(person.id)));
+          const kept = new Set((active?.person_ids || []).map(Number));
+          this.selectedPeople = this.selectedPeople.filter(person => kept.has(Number(person.id)));
+        } catch (err) {
+          this.debugLog('handleTagConversionUndone filter people failed', { err: String(err) }, true);
+        }
+      }
+      this.$emit('person-converted', { ...(result || {}), tag_id: Number(result?.tag?.id || 0), undone: true });
+      await this.reloadCurrentView();
+      this.$refs.previewDrawer?.loadCurrentEntry();
+    },
     handleTagAdded() {
       this.$emit('reload-tags');
       this.reloadCurrentView();
+    },
+    // ===== 路径失效：分组、重新检查、加回目录（D-PC06、LIB-01、LIB-10）=====
+    async loadStaleReasonCounts() {
+      try {
+        this.staleReasonCounts = await ListStaleReasonCounts() || {};
+      } catch (err) {
+        this.debugLog('loadStaleReasonCounts failed', { err: String(err) }, true);
+      }
+    },
+    setStaleReasonFilter(reason) {
+      this.staleReasonFilter = reason || '';
+      this.handleSearch(true);
+    },
+    openStaleView(reason = '') {
+      this.playFailureNotice = null;
+      // 从别的视图切过来时计数由 smartView 的 watcher 去取；本来就在失效视图里就自己取一次。
+      if (this.smartView === 'stale') this.loadStaleReasonCounts();
+      this.smartView = 'stale';
+      this.staleReasonFilter = reason || '';
+      return this.handleSearch(true);
+    },
+    recheckSelectedStale() {
+      return this.recheckVideos([...this.selectedVideoIds]);
+    },
+    // 窄对账这些视频所在的目录：文件回到原处的恢复，找到新位置的改路径（RecheckVideos）。
+    async recheckVideos(ids) {
+      const unique = [...new Set((ids || []).map(Number).filter(Boolean))];
+      if (unique.length === 0 || this.recheckingStale) return;
+      this.recheckingStale = true;
+      try {
+        const summary = await RecheckVideos(unique);
+        const restored = Number(summary?.restored || 0);
+        const relocated = Number(summary?.relocated || 0);
+        if (restored + relocated > 0) {
+          const parts = [];
+          if (restored) parts.push(`恢复 ${restored} 个`);
+          if (relocated) parts.push(`找到新位置 ${relocated} 个`);
+          notify(`重新检查完成：${parts.join('，')}。`);
+        } else {
+          notify('重新检查完成：文件仍不在原处，记录保持失效。');
+        }
+        if (Number(summary?.error_count || 0) > 0) notifyError(`重新检查时有 ${summary.error_count} 个目录读取失败，请确认磁盘已连接。`);
+        if (this.playFailureNotice && unique.includes(Number(this.playFailureNotice.videoID))) this.playFailureNotice = null;
+        this.invalidateLibraryTotal();
+        await this.reloadCurrentView();
+        if (this.smartView === 'stale') await this.loadStaleReasonCounts();
+      } catch (err) {
+        notifyError('重新检查失败: ' + err);
+      } finally {
+        this.recheckingStale = false;
+      }
+    },
+    // 「加回目录」：找到这条记录原来所属、后来被删掉的扫描目录，确认后加回去；加回后后台窄对账恢复记录。
+    async readdRemovedRoot(video) {
+      let path;
+      let validation;
+      try {
+        path = await ReaddRemovedRoot(video.id);
+        validation = await ValidateScanDirectory(path);
+      } catch (err) {
+        notifyError(`无法加回目录：${err}。可以在设置页「扫描目录管理」里手动添加。`);
+        return;
+      }
+      const label = pathBaseName(path);
+      if (!validation?.exists) {
+        notifyError(`原来的目录「${label}」现在找不到（磁盘可能没有连接），接上后再试。`);
+        return;
+      }
+      if (validation.duplicate_of) {
+        notify(`「${label}」已经在扫描目录里，已对这条记录重新检查。`);
+        await this.recheckVideos([video.id]);
+        return;
+      }
+      const hints = [];
+      if (validation.nested_in) hints.push(`它位于扫描目录「${this.directoryLabel(validation.nested_in)}」之内。`);
+      if ((validation.contains || []).length) hints.push(`它包含已有的扫描目录「${validation.contains.map(item => this.directoryLabel(item)).join('」「')}」。`);
+      const confirmed = await confirmAction({
+        title: '加回扫描目录',
+        message: `把目录「${label}」加回扫描目录？加回后，这个目录下失效的记录会自动恢复，标签、评分与观看进度都还在。${hints.length ? '\n' + hints.join('\n') : ''}`,
+        confirmText: '加回'
+      });
+      if (!confirmed) return;
+      await this.addScanRoot(path);
+    },
+    // ===== 扫描摘要（D-PC09、LIB-08、LIB-14）=====
+    // 增量扫描条自己发起的那次扫描由它自己汇报；其余来源（启动、改目录、别处的手动对账）在这里交给它显示。
+    handleLibraryScanSummary(event) {
+      const result = event?.result;
+      if (!result) return;
+      const bar = this.$refs.incrementalScanBar;
+      if (event.trigger === 'manual' && (bar?.incrementalScan?.running || this.incrementalScan.running)) return;
+      bar?.showSummary?.(event);
+      const changed = ['added', 'deleted', 'restored', 'stale', 'relocated', 'metadata_refreshed']
+        .reduce((sum, key) => sum + Number(result[key] || 0), 0);
+      if (changed > 0) this.reloadAfterScan();
+    },
+    // 扫描之后列表与结果条总数一起刷新。
+    async reloadAfterScan() {
+      this.invalidateLibraryTotal();
+      await this.reloadCurrentView();
+      if (this.smartView === 'stale') await this.loadStaleReasonCounts();
+    },
+    // 后台重定位找到了新位置（D-PC11）：那一行改回正常；在「路径失效」视图里它就不属于这里了。
+    handleVideoRelocated(event) {
+      const videoID = Number(event?.video_id || 0);
+      const newPath = String(event?.new_path || '');
+      if (!videoID || !newPath) return;
+      if (Number(this.playFailureNotice?.videoID) === videoID) this.playFailureNotice = null;
+      const patch = { path: newPath, directory: pathDirName(newPath), name: pathBaseName(newPath), is_stale: false, stale_reason: '' };
+      const index = this.videos.findIndex(video => Number(video.id) === videoID);
+      const current = index !== -1 ? this.videos[index] : null;
+      if (current) {
+        if (this.smartView === 'stale') {
+          this.videos.splice(index, 1);
+          this.selectedVideoIds = this.selectedVideoIds.filter(id => Number(id) !== videoID);
+          this.loadStaleReasonCounts();
+        } else {
+          this.videos.splice(index, 1, { ...current, ...patch });
+        }
+      }
+      if (Number(this.selectedPreviewVideoId) === videoID && this.previewVideoSnapshot) {
+        this.previewVideoSnapshot = { ...this.previewVideoSnapshot, ...patch };
+      }
+      notify(`已找到「${current?.display_title || current?.name || patch.name}」的新位置，记录已恢复。`);
+    },
+    // ===== 超分未就绪、重新分析 =====
+    async loadEnhancementCapability() {
+      try {
+        this.enhanceCapability = await GetEnhancementCapability() || null;
+      } catch (err) {
+        this.enhanceCapability = null;
+        this.debugLog('loadEnhancementCapability failed', { err: String(err) }, true);
+      }
+    },
+    // 设置页的超分分区由 App 注册的全局命令打开（action:settings:enhance），那里说明未就绪的原因与下一步。
+    openEnhanceSettings() {
+      const command = findCommand('action:settings:enhance');
+      if (command) {
+        command.run();
+        return;
+      }
+      notify('请到设置页的「视频超分」分区查看超分组件的状态。');
+    },
+    // 已有人工标签的视频也能手动重新分析（D-PC28 规则 5）：旧的待审候选作废，重新排进 AI 分析。
+    async reanalyzeVideo(video) {
+      try {
+        await RetryAITagging(video.id);
+        notify(`已安排重新分析「${video.display_title || video.name}」，新的候选会出现在 AI 标签审阅里。`);
+      } catch (err) {
+        notifyError('重新分析失败: ' + err);
+      }
     }
   }
 };

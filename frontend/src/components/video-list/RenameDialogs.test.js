@@ -26,7 +26,9 @@ const api = vi.hoisted(() => new Proxy({}, {
 
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
-import RenameDialogs from './RenameDialogs.vue';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import RenameDialogs, { DEFAULT_VIDEO_EXTENSIONS, renamedVideoFileName } from './RenameDialogs.vue';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -75,6 +77,63 @@ describe('重命名弹窗', () => {
       finalName: 'new.mkv'
     });
     expect(wrapper.vm.renameDialog.show).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+// D-PC12：只有「视频扩展名」里的后缀才算扩展名，其余一律补回原扩展名；名字没变就直接关掉。
+describe('重命名视频的扩展名规则', () => {
+  it('LIB-03 预填 The.Matrix.1999.1080p 直接确认：不调后端，只关掉弹窗', async () => {
+    const wrapper = mount(RenameDialogs, { props: { reloadView: vi.fn() } });
+    await wrapper.vm.renameVideo({ id: 5, name: 'The.Matrix.1999.1080p.mkv', path: '/v/The.Matrix.1999.1080p.mkv' });
+    expect(wrapper.vm.renameDialog.newName).toBe('The.Matrix.1999.1080p');
+    expect(wrapper.get('[data-test="rename-video-preview"]').text()).toBe('文件名没有变化');
+    await wrapper.vm.executeRename();
+    expect(api.RenameVideo).not.toHaveBeenCalled();
+    expect(wrapper.emitted('video-renamed')).toBeUndefined();
+    expect(wrapper.vm.renameDialog.show).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('LIB-03 名字里带点也补回原扩展名，显示的新文件名与后端一致', async () => {
+    const wrapper = mount(RenameDialogs, { props: { reloadView: vi.fn() } });
+    await wrapper.vm.renameVideo({ id: 5, name: 'The.Matrix.1999.1080p.mkv', path: '/v/The.Matrix.1999.1080p.mkv' });
+    wrapper.vm.renameDialog.newName = 'The.Matrix.1999.2160p';
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="rename-video-preview"]').text()).toBe('将重命名为：The.Matrix.1999.2160p.mkv');
+    await wrapper.vm.executeRename();
+    await flushPromises();
+    expect(api.RenameVideo).toHaveBeenCalledWith(5, 'The.Matrix.1999.2160p');
+    expect(wrapper.emitted('video-renamed')[0][0].finalName).toBe('The.Matrix.1999.2160p.mkv');
+    wrapper.unmount();
+  });
+
+  it('LIB-03 三种情况：带点的名字、a.b.c、显式改成 .mp4', () => {
+    expect(renamedVideoFileName('The.Matrix.1999.1080p.mkv', 'The.Matrix.1999.1080p', '')).toBe('The.Matrix.1999.1080p.mkv');
+    expect(renamedVideoFileName('clip.mkv', 'a.b.c', '')).toBe('a.b.c.mkv');
+    expect(renamedVideoFileName('clip.mkv', 'clip.mp4', '')).toBe('clip.mp4');
+    // 大小写不敏感，与后端 strings.ToLower 一致；设置里的扩展名可以不带点。
+    expect(renamedVideoFileName('clip.mkv', 'clip.MP4', 'mp4, mkv')).toBe('clip.MP4');
+    // 自定义了「视频扩展名」时只认设置里的：.avi 不在里面就补回原扩展名。
+    expect(renamedVideoFileName('clip.mkv', 'clip.avi', '.mp4,.mkv')).toBe('clip.avi.mkv');
+    // 原文件没有扩展名时什么都不补。
+    expect(renamedVideoFileName('README', 'notes', '')).toBe('notes');
+  });
+
+  it('LIB-03 默认视频扩展名与后端 defaultVideoExtensions 一致', () => {
+    const goSource = readFileSync(resolve(process.cwd(), '../services/video_scan.go'), 'utf8');
+    const match = goSource.match(/const defaultVideoExtensions = "([^"]+)"/);
+    expect(match).toBeTruthy();
+    expect(DEFAULT_VIDEO_EXTENSIONS).toBe(match[1]);
+  });
+
+  it('LIB-03 片库页把设置里的视频扩展名交给弹窗', async () => {
+    const wrapper = mount(RenameDialogs, { props: { reloadView: vi.fn(), videoExtensions: '.mp4' } });
+    await wrapper.vm.renameVideo({ id: 5, name: 'clip.mkv', path: '/v/clip.mkv' });
+    wrapper.vm.renameDialog.newName = 'clip.mkv';
+    await wrapper.vm.$nextTick();
+    // .mkv 不在自定义列表里，所以当作名字的一部分，补回原扩展名。
+    expect(wrapper.vm.renameFinalName).toBe('clip.mkv.mkv');
     wrapper.unmount();
   });
 });

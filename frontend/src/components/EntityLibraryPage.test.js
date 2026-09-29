@@ -14,6 +14,9 @@ const api = vi.hoisted(() => ({
   RemovePersonImage: vi.fn(),
   DeleteImage: vi.fn(),
   DeleteVideo: vi.fn(),
+  // P-034：人物页删除媒体改走带结果码的批量删除（PersonMediaDeleteDialog + TrashUndoBanner）。
+  DeleteImagesWithResult: vi.fn(),
+  DeleteVideosWithResult: vi.fn(),
   GetAllTags: vi.fn(),
   BatchAddTagToImages: vi.fn(),
   PlayVideo: vi.fn(),
@@ -82,19 +85,22 @@ describe('EntityLibraryPage', () => {
     const person = { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 1 };
     api.ListPeople.mockResolvedValueOnce([person]);
     api.GetPersonDetail.mockResolvedValueOnce({ person, videos: [{ id: 21, name: 'clip.mp4', size: 100 }], images: [{ id: 11, name: 'a.jpg', size: 200 }] });
-    api.DeleteImage.mockResolvedValue(); api.DeleteVideo.mockResolvedValue();
+    const okResult = ids => Promise.resolve({ batch_id: 'b1', items: ids.map(id => ({ id, code: 'ok' })) });
+    api.DeleteImagesWithResult.mockImplementation(okResult); api.DeleteVideosWithResult.mockImplementation(okResult);
     const w = mount(EntityLibraryPage, { props: { entityType: 'person' }, global: { stubs: { teleport: true } } }); await flushPromises();
     await w.get('.entity-card').trigger('click'); await flushPromises();
     expect(w.get('.entity-library__toolbar').text()).toContain('视频 1 / 1 部 · 图片 1 / 1 张');
     await w.get('[data-test="person-image-delete-11"]').trigger('click');
-    expect(api.DeleteImage).not.toHaveBeenCalled();
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
-    expect(api.DeleteImage).toHaveBeenCalledWith(11, false);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], false, expect.any(String));
+    expect(api.DeleteImage).not.toHaveBeenCalled();
     expect(w.vm.entityImages).toHaveLength(0); expect(w.vm.selectedItem.active_image_count).toBe(0);
     await w.get('[data-test="person-video-delete-21"]').trigger('click');
     await w.get('[data-test="person-media-delete-file"]').setValue(true);
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
-    expect(api.DeleteVideo).toHaveBeenCalledWith(21, true);
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([21], true, expect.any(String));
+    expect(api.DeleteVideo).not.toHaveBeenCalled();
     expect(w.vm.entityVideos).toHaveLength(0); expect(w.vm.selectedItem.active_video_count).toBe(0);
     expect(w.vm.selectedEntity.id).toBe(7);
     w.vm.closeEntity(); await w.vm.$nextTick();

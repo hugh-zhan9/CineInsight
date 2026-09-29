@@ -25,7 +25,9 @@
       </div>
       <div v-if="localDirectories.length === 0" class="empty-hint">暂无扫描目录配置</div>
     </div>
-    <button @click="showAddDirectoryDialog = true" class="btn-primary settings-section-action">添加扫描目录</button>
+    <!-- 增删目录失败不再吞掉（LIB-14）：错误留在分区里，直到下一次操作。 -->
+    <p v-if="sectionError" class="directory-error" role="alert" data-test="scan-dirs-error">{{ sectionError }}</p>
+    <button @click="openAddDirectoryDialog" class="btn-primary settings-section-action" data-test="add-scan-directory">添加扫描目录</button>
   </div>
 
   <!-- 图片扫描目录管理 -->
@@ -44,6 +46,7 @@
       </div>
       <div v-if="localImageDirectories.length === 0" class="empty-hint">暂无图片扫描目录配置</div>
     </div>
+    <p v-if="imageSectionError" class="directory-error" role="alert" data-test="image-dirs-error">{{ imageSectionError }}</p>
     <button @click="showAddImageDirectoryDialog = true" class="btn-primary settings-section-action" data-test="add-image-directory">添加图片目录</button>
   </div>
 
@@ -53,16 +56,37 @@
       <div class="setting-item">
         <label>目录路径</label>
         <div class="directory-dialog-row">
-          <input type="text" v-model="directoryForm.path" placeholder="选择目录" class="text-input" readonly />
-          <button @click="selectDirectoryForConfig" class="btn-secondary">选择</button>
+          <input type="text" v-model="directoryForm.path" placeholder="选择目录" class="text-input" readonly data-test="scan-directory-path" />
+          <button @click="selectDirectoryForConfig" class="btn-secondary" data-test="select-scan-directory">选择</button>
         </div>
+        <!-- 去重与嵌套提示（D-PC09、LIB-14）：重复与不存在的挡住保存，嵌套只提示。 -->
+        <p v-for="hint in pathHints" :key="hint.text" :class="['directory-hint', { 'directory-hint--blocking': hint.blocking }]" data-test="scan-directory-hint">{{ hint.text }}</p>
       </div>
       <div class="setting-item">
         <label>目录别名</label>
-        <input type="text" v-model="directoryForm.alias" placeholder="给这个目录起个名字" class="text-input directory-alias-input" />
+        <input type="text" v-model="directoryForm.alias" placeholder="给这个目录起个名字" class="text-input directory-alias-input" data-test="scan-directory-alias" />
       </div>
+      <!-- 改了路径就要说清楚是哪种含义（D-PC07、LIB-02）：旧路径已经不在时默认按「搬到了新位置」。 -->
+      <div v-if="pathChanged" class="setting-item directory-edit-mode" role="radiogroup" aria-label="路径变化的含义" data-test="directory-edit-mode">
+        <label class="directory-edit-mode__option">
+          <input v-model="editMode" type="radio" value="remap" data-test="directory-edit-remap" />
+          <span>
+            <strong>目录搬到了新位置（保留数据）</strong>
+            <small>这个目录下的视频记录（含已删除的）、回收站条目、扫描黑名单、字幕索引，以及图片库里同一路径下的图片记录，都会改写到新位置；标签、评分、观看进度、人物与作品集全部保留。</small>
+          </span>
+        </label>
+        <label class="directory-edit-mode__option">
+          <input v-model="editMode" type="radio" value="replace" data-test="directory-edit-replace" />
+          <span>
+            <strong>换成另一个目录</strong>
+            <small>旧目录下的视频会进入「路径失效 · 目录已移除」（记录保留，把旧目录加回来即可恢复）；新目录按其中的文件重新扫描入库。</small>
+          </span>
+        </label>
+        <p v-if="oldPathMissing" class="directory-hint">原来的位置现在找不到，已默认选「搬到了新位置」。</p>
+      </div>
+      <p v-if="dialogError" class="directory-error" role="alert" data-test="scan-directory-dialog-error">{{ dialogError }}</p>
       <div class="modal-actions">
-        <button @click="saveDirectoryConfig" class="btn-primary">保存</button>
+        <button @click="saveDirectoryConfig" class="btn-primary" :disabled="directorySaving || validatingPath" data-test="save-scan-directory">{{ directorySaving ? '保存中…' : '保存' }}</button>
         <button @click="closeDirectoryDialog" class="btn-secondary">取消</button>
       </div>
   </BaseModal>
@@ -81,6 +105,7 @@
         <label>目录别名</label>
         <input type="text" v-model="imageDirectoryForm.alias" placeholder="给这个目录起个名字" class="text-input directory-alias-input" data-test="image-directory-alias" />
       </div>
+      <p v-if="imageDialogError" class="directory-error" role="alert" data-test="image-directory-dialog-error">{{ imageDialogError }}</p>
       <div class="modal-actions">
         <button @click="saveImageDirectoryConfig" class="btn-primary" data-test="save-image-directory">保存</button>
         <button @click="closeImageDirectoryDialog" class="btn-secondary">取消</button>
@@ -89,9 +114,18 @@
 </template>
 
 <script>
-import { SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectory, DeleteDirectory, RetryLibraryWatcherRoot, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../../wailsjs/go/main/App';
+import { SelectDirectory, GetAllDirectories, AddDirectory, UpdateDirectoryWithMode, ValidateScanDirectory, DeleteDirectory, RetryLibraryWatcherRoot, GetAllImageDirectories, AddImageDirectory, UpdateImageDirectory, DeleteImageDirectory } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
-import { confirmAction } from '../../utils/feedback.js';
+import { confirmAction, notify, translateBackendError } from '../../utils/feedback.js';
+
+// 界面上只显示目录名（G-3）。
+function directoryBaseName(path) {
+  return String(path || '').split(/[\\/]/).filter(Boolean).pop() || String(path || '');
+}
+
+function errorText(prefix, err) {
+  return `${prefix}：${translateBackendError(String(err?.message || err || '未知错误'))}`;
+}
 
 // 视频与图片两组扫描目录，以及它们的添加/编辑弹窗。目录变更要让整个应用刷新，
 // 所以往上发 directories-changed；实时监听状态由设置页统一拉取后传进来。
@@ -112,6 +146,16 @@ export default {
       showAddDirectoryDialog: false,
       editingDirectory: null,
       directoryForm: { path: '', alias: '' },
+      // 所选路径的预检结果（ValidateScanDirectory）与路径变化时选的含义。
+      pathValidation: null,
+      validatingPath: false,
+      editMode: '',
+      oldPathMissing: false,
+      directorySaving: false,
+      dialogError: '',
+      sectionError: '',
+      imageSectionError: '',
+      imageDialogError: '',
       localImageDirectories: [],
       showAddImageDirectoryDialog: false,
       editingImageDirectory: null,
@@ -127,10 +171,39 @@ export default {
       deep: true
     }
   },
+  computed: {
+    pathChanged() {
+      return !!this.editingDirectory && !!this.directoryForm.path && this.directoryForm.path !== this.editingDirectory.path;
+    },
+    // 预检结果换成提示：与自己（正在编辑的这一条）相同、嵌套的不算。
+    pathHints() {
+      const validation = this.pathValidation;
+      if (!validation || !this.directoryForm.path) return [];
+      if (this.editingDirectory && !this.pathChanged) return [];
+      const self = this.editingDirectory?.path || '';
+      const hints = [];
+      if (!validation.exists) hints.push({ text: '这个目录不存在或无法访问，请确认磁盘已连接。', blocking: true });
+      if (validation.duplicate_of && validation.duplicate_of !== self) {
+        hints.push({ text: `它已经在扫描目录里了（「${this.directoryLabel(validation.duplicate_of)}」）。`, blocking: true });
+      }
+      if (validation.nested_in && validation.nested_in !== self) {
+        hints.push({ text: `它位于扫描目录「${this.directoryLabel(validation.nested_in)}」之内，里面的视频本来就会被扫描。`, blocking: false });
+      }
+      const contains = (validation.contains || []).filter(path => path !== self);
+      if (contains.length) {
+        hints.push({ text: `它包含已有的扫描目录「${contains.map(path => this.directoryLabel(path)).join('」「')}」，这些目录会被重复覆盖。`, blocking: false });
+      }
+      return hints;
+    }
+  },
   mounted() {
     this.loadImageDirectories();
   },
   methods: {
+    directoryLabel(path) {
+      const dir = this.localDirectories.find(item => item.path === path);
+      return String(dir?.alias || '').trim() || directoryBaseName(path);
+    },
     directoryWatchStatus(directoryID) {
       return this.watcherStatus?.roots?.find(root => Number(root.directory_id) === Number(directoryID)) || null;
     },
@@ -146,65 +219,146 @@ export default {
       return status.message || (status.state === 'unavailable' ? '当前不可用' : '监听错误');
     },
     async retryDirectoryWatch(directoryID) {
+      this.sectionError = '';
       try {
         await RetryLibraryWatcherRoot(directoryID);
+      } catch (err) {
+        this.sectionError = errorText('重试实时同步失败', err);
       } finally {
         await this.reloadWatcherStatus();
       }
     },
     async selectDirectoryForConfig() {
+      this.dialogError = '';
       try {
         const dir = await SelectDirectory();
-        if (dir) this.directoryForm.path = dir;
-      } catch (err) {}
+        if (!dir) return;
+        this.directoryForm.path = dir;
+        await this.validateDialogPath();
+      } catch (err) {
+        this.dialogError = errorText('选择目录失败', err);
+      }
+    },
+    // 选了路径之后预检；编辑时路径变了还要看旧路径还在不在，决定「路径变化的含义」的默认选项。
+    async validateDialogPath() {
+      const path = this.directoryForm.path;
+      this.pathValidation = null;
+      if (!path) return;
+      this.validatingPath = true;
+      try {
+        this.pathValidation = await ValidateScanDirectory(path);
+        if (this.pathChanged) {
+          const previous = await ValidateScanDirectory(this.editingDirectory.path);
+          this.oldPathMissing = !previous?.exists;
+          if (!this.editMode && this.oldPathMissing) this.editMode = 'remap';
+        } else {
+          this.oldPathMissing = false;
+          this.editMode = '';
+        }
+      } catch (err) {
+        this.dialogError = errorText('检查目录失败', err);
+      } finally {
+        this.validatingPath = false;
+      }
+    },
+    openAddDirectoryDialog() {
+      this.resetDirectoryDialogState();
+      this.showAddDirectoryDialog = true;
     },
     editDirectory(dir) {
+      this.resetDirectoryDialogState();
       this.editingDirectory = dir;
       this.directoryForm = { path: dir.path, alias: dir.alias };
     },
+    resetDirectoryDialogState() {
+      this.pathValidation = null;
+      this.validatingPath = false;
+      this.editMode = '';
+      this.oldPathMissing = false;
+      this.directorySaving = false;
+      this.dialogError = '';
+    },
     async saveDirectoryConfig() {
-      if (!this.directoryForm.path) return;
+      if (!this.directoryForm.path || this.directorySaving || this.validatingPath) return;
+      if (this.pathHints.some(hint => hint.blocking)) {
+        this.dialogError = '请换一个目录再保存。';
+        return;
+      }
+      if (this.pathChanged && !this.editMode) {
+        this.dialogError = '路径改了：请先选择是「目录搬到了新位置」还是「换成另一个目录」。';
+        return;
+      }
+      this.directorySaving = true;
+      this.dialogError = '';
+      this.sectionError = '';
       try {
         if (this.editingDirectory) {
-          await UpdateDirectory(this.editingDirectory.id, this.directoryForm.path, this.directoryForm.alias);
+          const result = await UpdateDirectoryWithMode(this.editingDirectory.id, this.directoryForm.path, this.directoryForm.alias, this.pathChanged ? this.editMode : '');
+          this.notifyDirectoryUpdated(result);
         } else {
           await AddDirectory(this.directoryForm.path, this.directoryForm.alias);
         }
-        await this.refreshDirectories();
-        this.closeDirectoryDialog();
-      } catch (err) {}
+      } catch (err) {
+        this.dialogError = errorText('保存扫描目录失败', err);
+        this.directorySaving = false;
+        return;
+      }
+      this.directorySaving = false;
+      this.closeDirectoryDialog();
+      await this.refreshDirectories();
+    },
+    notifyDirectoryUpdated(result) {
+      if (!result?.path_changed) return;
+      const label = this.directoryForm.alias || directoryBaseName(result.new_path);
+      if (result.mode === 'remap') {
+        const rewritten = result.rewritten || {};
+        notify(`已把「${label}」改到新位置：改写了 ${Number(rewritten.videos || 0)} 个视频、${Number(rewritten.images || 0)} 张图片的路径，标签与观看进度都保留。`);
+      } else {
+        notify(`已换成新目录「${label}」：旧目录下 ${Number(result.marked_stale || 0)} 个视频进入「路径失效 · 目录已移除」。`);
+      }
     },
     async deleteDirectoryItem(id) {
-      if (!await confirmAction({ title: '删除扫描目录', message: '确定要删除此目录配置吗？该目录下的视频记录会保留但从片库列表隐藏（可在「路径失效」视图查看），磁盘文件不受影响。把同一路径再加回来时数据会自动恢复。', confirmText: '删除', danger: true })) return;
+      if (!await confirmAction({ title: '删除扫描目录', message: '确定要删除此目录配置吗？该目录下的视频记录会保留但从片库列表隐藏（可在「路径失效 · 目录已移除」里查看），磁盘文件不受影响。把同一路径再加回来时数据会自动恢复。', confirmText: '删除', danger: true })) return;
+      this.sectionError = '';
       try {
         await DeleteDirectory(id);
-        await this.refreshDirectories();
-      } catch (err) {}
+      } catch (err) {
+        this.sectionError = errorText('删除扫描目录失败', err);
+        return;
+      }
+      await this.refreshDirectories();
     },
     async refreshDirectories() {
       try {
         this.localDirectories = await GetAllDirectories();
         await this.reloadWatcherStatus();
         this.$emit('directories-changed', this.localDirectories);
-      } catch (err) {}
+      } catch (err) {
+        this.sectionError = errorText('刷新扫描目录失败', err);
+      }
     },
     closeDirectoryDialog() {
       this.showAddDirectoryDialog = false;
       this.editingDirectory = null;
       this.directoryForm = { path: '', alias: '' };
+      this.resetDirectoryDialogState();
     },
     async loadImageDirectories() {
       try {
         this.localImageDirectories = await GetAllImageDirectories() || [];
       } catch (err) {
         this.localImageDirectories = [];
+        this.imageSectionError = errorText('读取图片扫描目录失败', err);
       }
     },
     async selectDirectoryForImageConfig() {
+      this.imageDialogError = '';
       try {
         const dir = await SelectDirectory();
         if (dir) this.imageDirectoryForm.path = dir;
-      } catch (err) {}
+      } catch (err) {
+        this.imageDialogError = errorText('选择目录失败', err);
+      }
     },
     editImageDirectory(dir) {
       this.editingImageDirectory = dir;
@@ -212,27 +366,37 @@ export default {
     },
     async saveImageDirectoryConfig() {
       if (!this.imageDirectoryForm.path) return;
+      this.imageDialogError = '';
       try {
         if (this.editingImageDirectory) {
           await UpdateImageDirectory(this.editingImageDirectory.id, this.imageDirectoryForm.path, this.imageDirectoryForm.alias);
         } else {
           await AddImageDirectory(this.imageDirectoryForm.path, this.imageDirectoryForm.alias);
         }
-        await this.loadImageDirectories();
-        this.closeImageDirectoryDialog();
-      } catch (err) {}
+      } catch (err) {
+        this.imageDialogError = errorText('保存图片目录失败', err);
+        return;
+      }
+      this.imageSectionError = '';
+      await this.loadImageDirectories();
+      this.closeImageDirectoryDialog();
     },
     async deleteImageDirectoryItem(id) {
       if (!await confirmAction({ title: '删除图片目录', message: '确定要删除此图片目录配置吗？该目录下的图片记录会保留但从图库隐藏，磁盘文件不受影响。把同一路径再加回来时数据会自动恢复。', confirmText: '删除', danger: true })) return;
+      this.imageSectionError = '';
       try {
         await DeleteImageDirectory(id);
-        await this.loadImageDirectories();
-      } catch (err) {}
+      } catch (err) {
+        this.imageSectionError = errorText('删除图片目录失败', err);
+        return;
+      }
+      await this.loadImageDirectories();
     },
     closeImageDirectoryDialog() {
       this.showAddImageDirectoryDialog = false;
       this.editingImageDirectory = null;
       this.imageDirectoryForm = { path: '', alias: '' };
+      this.imageDialogError = '';
     },
   }
 };
@@ -324,6 +488,54 @@ export default {
 
 .directory-alias-input {
   margin-top: 8px;
+}
+
+.directory-error {
+  margin: 8px 0 0;
+  color: var(--danger-color);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.directory-hint {
+  margin: 6px 0 0;
+  color: var(--warning-color);
+  font-size: 12px;
+}
+
+.directory-hint--blocking {
+  color: var(--danger-color);
+}
+
+.directory-edit-mode {
+  display: grid;
+  gap: 8px;
+}
+
+.setting-item label.directory-edit-mode__option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0;
+  font-weight: 400;
+}
+
+.directory-edit-mode__option input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.directory-edit-mode__option strong {
+  display: block;
+  font-size: 13px;
+}
+
+.directory-edit-mode__option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 

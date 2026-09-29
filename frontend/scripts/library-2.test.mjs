@@ -16,14 +16,19 @@ assert.match(page, /PickRandomVideos\(\{[\s\S]*?filter: this\.currentLibraryFilt
 assert.match(page, /if \(this\.randomPick\.active\) return this\.refreshRandomPick\(\)/, 'reloads inside a random batch should refresh the fixed batch, not re-draw one');
 assert.match(page, /ListSavedLibraryViews/, 'saved views should be loaded from the backend');
 assert.match(saveViewDialog, /SaveLibraryView\(\{ name, \.\.\.this\.currentLibraryFilter\(\) \}\)/, 'saved views should capture the current filter');
-assert.match(page, /activeTagIDs\.has\(id\)/, 'saved views should ignore deleted tag IDs when restored');
+// P-034（D-PC35、LIB-15）：剔除已删除的标签与人物改由后端 FilterActiveTagIDs / FilterActivePersonIDs 判定，
+// 与 Jellyfin 同一口径；被剔除的数量提示为「N 个条件已失效」。
+assert.match(page, /FilterActiveTagIDs\(storedTagIDs\)/, 'saved views should ignore deleted tag IDs when restored');
+assert.match(page, /FilterActivePersonIDs\(storedPersonIDs\)/, 'saved views should ignore deleted people when restored');
+assert.match(page, /个条件已失效/, 'saved views should tell how many conditions were dropped');
 assert.match(page, /PlayRandomVideoWithFilter/, 'random play should use the current filter contract');
 assert.match(page, /exclude_ids: this\.recentRandomVideoIDs\.slice\(-12\)/, 'random play should avoid recent repeats');
 assert.match(page, /@watch-progress="handlePreviewWatchProgress"/, 'preview progress should be persisted by the page');
-assert.match(page, /position >= duration - watchedCompletionTolerance\(duration\)/, 'near-end positions should restart instead of immediately ending');
-// 这两个常量必须和后端的 watchedCompletionToleranceSeconds / watchedCompletionShortClipRatio 同值
-assert.match(page, /const WATCHED_COMPLETION_TOLERANCE_SECONDS = 1;/, 'resume tolerance must stay in step with the backend watchedCompletionToleranceSeconds');
-assert.match(page, /const WATCHED_COMPLETION_SHORT_CLIP_RATIO = 0\.05;/, 'short-clip ratio must stay in step with the backend watchedCompletionShortClipRatio');
+// P-034（D-PC41/42）：看完与续播的判定只在 utils/watchState.js 一处，样例与 Go 测试对齐（watchState.test.js）。
+assert.match(page, /from '\.\.\/utils\/watchState\.js'/, 'resume and completion checks should come from the shared watchState helper');
+assert.match(page, /return resumePosition\(video\);/, 'near-end positions should restart instead of immediately ending');
+assert.doesNotMatch(page, /WATCHED_COMPLETION_TOLERANCE_SECONDS|watchedCompletionTolerance/, 'the old 1-second tolerance copy is gone');
+assert.match(row, /resumePosition\(this\.video\)/, 'row progress should use the same resume formula as the drawer');
 assert.match(row, /toggle-favorite/, 'library rows should expose favorite state');
 assert.match(row, /toggle-watched/, 'library rows should expose watched state');
 assert.match(row, /watch_position_seconds/, 'library rows should show resume progress');

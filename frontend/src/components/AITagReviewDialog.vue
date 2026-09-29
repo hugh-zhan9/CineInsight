@@ -35,6 +35,9 @@
           <button type="button" class="btn-secondary" @click="loadCandidates" :disabled="loading">刷新</button>
         </div>
 
+        <!-- 同源「删除 A / 删除 B」走带结果码的删除（D-PC04）：删完给整批撤销条，撤销后重取两类待审。 -->
+        <TrashUndoBanner ref="sameSourceTrashUndo" kind="video" :after-restore="afterSameSourceRestore" />
+
         <!-- 批量审阅（D-PC29 / META-11）：结构化筛选叠加关键词；「批准筛选结果」只交出
              已加载且命中筛选的候选 ID；「按标签整批批准」才走服务端筛选，并先预览数量。 -->
         <div v-if="reviewSection === 'tags'" class="ai-tag-review-batch-bar" data-test="ai-review-batch-bar">
@@ -297,11 +300,12 @@
 </template>
 
 <script>
-import { ApproveAITagCandidate, ApproveAITagCandidates, ApproveAITagCandidatesByFilter, ConfirmSameSourceRelation, CountAITagCandidatesByFilter, DeleteVideo, GetAITaggingStatusSummary, ListAITagCandidatePage, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import { ApproveAITagCandidate, ApproveAITagCandidates, ApproveAITagCandidatesByFilter, ConfirmSameSourceRelation, CountAITagCandidatesByFilter, GetAITaggingStatusSummary, ListAITagCandidatePage, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import AddTagDialog from './AddTagDialog.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import BaseModal from './ui/BaseModal.vue';
+import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { appendCandidates, applyBatchApprovalResult, approvableCandidateIDs, batchApprovalSummaryText, candidateTagOptions, confidenceMeta, createRejectVideoConfirm, filterCandidatesByAttributes, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia, removeCandidatesForManualTags } from '../utils/aiTagReview.js';
 import { formatMediaMeta } from '../utils/mediaDetails.js';
 import { confirmAction } from '../utils/feedback.js';
@@ -310,7 +314,7 @@ const CONFIDENCE_LABELS = { high: '高置信', medium: '中置信' };
 
 export default {
   name: 'AITagReviewDialog',
-  components: { AddTagDialog, AIQualityPanel, BaseModal, FaceClusterReviewPanel },
+  components: { AddTagDialog, AIQualityPanel, BaseModal, FaceClusterReviewPanel, TrashUndoBanner },
   props: {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] },
@@ -678,13 +682,25 @@ export default {
     async confirmSameSourceDelete() {
       const videoId = Number(this.sameSourceDeleteConfirm.videoId || 0);
       if (!videoId) return;
+      const banner = this.$refs.sameSourceTrashUndo;
       await this.withProcessing(`same-source-delete-${videoId}`, async () => {
-        await DeleteVideo(videoId, false);
+        // 只删记录（原文件保留）：与确认框的说明一致；只删记录不会遇到「不支持废纸篓」。
+        const outcome = await banner.runDelete({ ids: [videoId], deleteFile: false, names: { [videoId]: this.sameSourceDeleteConfirm.videoName } });
+        if (!outcome.removedIDs.includes(videoId)) {
+          const failure = outcome.failures.find(item => item.id === videoId);
+          throw new Error(`删除失败：${failure?.text || '记录保持原样'}`);
+        }
         this.sameSourceRelations = this.sameSourceRelations.filter(relation => Number(relation.video_a_id) !== videoId && Number(relation.video_b_id) !== videoId);
         this.cancelSameSourceDelete();
+        banner.showDeleteNotice(outcome, { reportFailures: false });
         await this.loadCandidates({ silent: true });
         this.$emit('changed');
       });
+    },
+    // 撤销（或从回收站恢复）之后，被删的那条回到库里，同源关系与候选都要重取。
+    async afterSameSourceRestore() {
+      await this.loadCandidates({ silent: true });
+      this.$emit('changed');
     },
     openManualTagDialog(group) {
       if (!group?.videoId || group.videoDeleted) return;

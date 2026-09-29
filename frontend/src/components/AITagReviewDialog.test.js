@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'ApproveAITagCandidate', 'ApproveAITagCandidates', 'ApproveAITagCandidatesByFilter', 'CountAITagCandidatesByFilter',
-  'ConfirmSameSourceRelation', 'DeleteVideo', 'GetAITaggingStatusSummary', 'ListAITagCandidatePage', 'ListSameSourceRelations',
+  'ConfirmSameSourceRelation', 'DeleteVideo', 'DeleteVideosWithResult', 'RestoreTrashBatch', 'GetAITaggingStatusSummary', 'ListAITagCandidatePage', 'ListSameSourceRelations',
   'MarkSameSourceRelationRead', 'PreviewExternally', 'RejectAITagCandidate', 'RejectAITagCandidatesByVideo',
   'RejectSameSourceRelation', 'RenameVideo', 'RetryAITagging',
 ].map(name => [name, vi.fn()])));
@@ -123,7 +123,7 @@ describe('AITagReviewDialog same-source review', () => {
       is_unread: false,
     };
     api.ListSameSourceRelations.mockResolvedValueOnce([relation]).mockResolvedValueOnce([]);
-    api.DeleteVideo.mockResolvedValueOnce();
+    api.DeleteVideosWithResult.mockResolvedValueOnce({ batch_id: 'b1', items: [{ id: 7, code: 'ok' }] });
     const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
     await wrapper.vm.loadCandidates();
     await flushPromises();
@@ -140,9 +140,55 @@ describe('AITagReviewDialog same-source review', () => {
     await wrapper.findAll('.ai-confirm-actions button').find(button => button.text() === '确认删除记录').trigger('click');
     await flushPromises();
 
-    expect(api.DeleteVideo).toHaveBeenCalledWith(7, false);
+    // P-034：改走带结果码的删除，仍只删记录；删完给整批撤销条（D-PC04）。
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([7], false, expect.any(String));
+    expect(api.DeleteVideo).not.toHaveBeenCalled();
     expect(wrapper.vm.sameSourceDeleteConfirm.show).toBe(false);
     expect(wrapper.find('.same-source-row').exists()).toBe(false);
+    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已从片库移除 1 个视频（文件保留）');
+  });
+
+  it('LIB-12 同源删除后可以整批撤销，撤销后重取同源与候选', async () => {
+    const relation = {
+      id: 12, video_a_id: 7, video_a: { id: 7, name: 'Left.mp4', path: '/media/Left.mp4' },
+      video_b_id: 8, video_b: { id: 8, name: 'Right.mp4', path: '/media/Right.mp4' }, confidence: 'high', is_unread: false,
+    };
+    api.ListSameSourceRelations.mockResolvedValueOnce([relation]).mockResolvedValueOnce([]).mockResolvedValueOnce([relation]);
+    api.DeleteVideosWithResult.mockResolvedValueOnce({ batch_id: 'batch-9', items: [{ id: 8, code: 'ok' }] });
+    api.RestoreTrashBatch.mockResolvedValueOnce({ items: [{ id: 8, code: 'ok' }] });
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+    await wrapper.findAll('.same-source-row button').find(button => button.text() === '删除 B').trigger('click');
+    await wrapper.findAll('.ai-confirm-actions button').find(button => button.text() === '确认删除记录').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('changed')).toHaveLength(1);
+
+    await wrapper.get('[data-test="delete-undo"]').trigger('click');
+    await flushPromises();
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('video', 'batch-9');
+    expect(wrapper.emitted('changed')).toHaveLength(2);
+    expect(wrapper.find('.same-source-row').exists()).toBe(true);
+  });
+
+  it('同源删除失败时保留这一对并说明原因', async () => {
+    const relation = {
+      id: 13, video_a_id: 7, video_a: { id: 7, name: 'Left.mp4', path: '/media/Left.mp4' },
+      video_b_id: 8, video_b: { id: 8, name: 'Right.mp4', path: '/media/Right.mp4' }, confidence: 'high', is_unread: false,
+    };
+    api.ListSameSourceRelations.mockResolvedValueOnce([relation]);
+    api.DeleteVideosWithResult.mockResolvedValueOnce({ batch_id: '', items: [{ id: 7, code: 'volume_offline', message: '' }] });
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+    await wrapper.findAll('.same-source-row button').find(button => button.text() === '删除 A').trigger('click');
+    await wrapper.findAll('.ai-confirm-actions button').find(button => button.text() === '确认删除记录').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.error).toContain('删除失败');
+    expect(wrapper.vm.sameSourceRelations.map(item => item.id)).toEqual([13]);
+    expect(wrapper.emitted('changed')).toBeUndefined();
   });
 });
 

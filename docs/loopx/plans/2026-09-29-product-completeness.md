@@ -1391,3 +1391,23 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 根因：空闲门先登记等待者、再补填原因，并发读状态会看到一瞬「在等、但原因为空」。这是真实的小缺陷，任务中心也会读到。
 - 修法：主代理改为登记时就带上首次判定的原因，并补回归 `TestIdleGateWaiterAppearsWithReasonAPP03`（50 轮，已做变异验证）。
 - 修改后 SQLite 全量通过。
+
+**P-034 交付与整合**（2026-09-30）：P-034 已完成，包括：
+- `watchState.js`：与 Go 使用同一组样例；`UpdateVideoWatchProgress` 改为 5 个参数；「继续观看」使用键集分页；`matchesSmartView` 按新口径判断。
+- 「手动」角标：列表载荷自带；返回数组的接口用 `GetAutomaticOverrideKinds` 批量补齐。
+- 人物筛选与保存视图（清理失效条件，另存、更新、改名）。
+- 路径失效：按原因筛选、重新检查、加回目录。
+- 播放失败时就地标记失效；收到重定位事件后自动恢复。
+- 扫描摘要与跳过明细；扫描前确认；设置页扫描目录区分「搬到新位置」与「换成另一个目录」。
+- 迁移到扫描根之外先确认；三种空状态；重命名的扩展名规则；行菜单新增点赞、重新分析、超分未就绪提示。
+- 两处旧删除调用改走 `*WithResult` + `TrashUndoBanner`。
+- 已接上 P-032 约定的接口：`cleanupPanel.open({relationId})`、`trashVideos(ids,{names})`。
+
+合入后 `npm test` 全量通过：86 个文件、1212 条用例。
+
+- **停下的项**：行菜单的「重新定位文件…」缺少选择视频文件的绑定。主代理补 `SelectVideoFile`，前端这一项交给 P-036（`VideoListPage` 行菜单）。
+- **未做**：列表行上的「本地资料有更新」徽标。载荷里没有对应字段，而且进入该视图时每一行都属于这种情况，主代理接受不做。
+- **留给后续**：
+  - P-037：抽屉的 `watch-progress` 载荷要带 `origin` / `durationSeconds`；嵌套续播改用 `watchState.js`；`PersonMediaDeleteDialog` 的 `restored` 事件由 `PreviewDrawer` / `EntityLibraryPage` 接上。
+  - 主代理：`LibraryToolbar` 的保存视图菜单补「用当前条件更新」「重命名」两项；后端播放失败的 `user_message` 去掉完整路径（G-3）。
+  - P-040：删掉 `LibraryToolbar` 中已经不用的 `aiTagSummary`、`cleanupBadgeCount`、`cleanupAnalyzing`、`delete-tag`。

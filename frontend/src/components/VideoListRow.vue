@@ -39,7 +39,12 @@
       <div class="video-title-row">
         <h3 :title="video.display_title || video.name">{{ video.display_title || video.name }}</h3>
         <span v-if="video.is_watched" class="video-badge video-badge--accent">已看</span>
-        <span v-if="video.is_stale" class="video-badge video-badge--danger">路径失效</span>
+        <span
+          v-if="video.is_stale"
+          class="video-badge video-badge--danger"
+          :title="staleReasonHint"
+          data-test="row-stale-reason"
+        >路径失效 · {{ staleReasonText }}</span>
       </div>
 
       <p class="video-path" :title="video.path">{{ video.name }} <span class="video-path__sep">·</span> {{ getDirectoryLabel(video) }}</p>
@@ -71,6 +76,13 @@
             :style="{ backgroundColor: tagBgColor(tag.color) }"
           >
             <span class="tag-badge__name">{{ tag.name }}</span>
+            <!-- 自动标签被人工覆盖（D-PC36、META-13）：角标数据按视频批量带出，不逐行查询。 -->
+            <span
+              v-if="isManualOverride(tag)"
+              class="tag-manual-badge"
+              title="这个自动标签是你手动调整的，自动规则不再动它；可在「+ 标签」里恢复自动"
+              data-test="row-tag-manual"
+            >手动</span>
             <button v-if="!tag.automatic_kind || ['short_video', 'low_resolution'].includes(tag.automatic_kind)" @click="$emit('remove-tag', video, tag)" class="tag-remove">×</button>
           </span>
         </div>
@@ -97,6 +109,16 @@
         :aria-label="video.is_favorite ? '取消收藏' : '收藏'"
         @click="$emit('toggle-favorite', video)"
       >♥</button>
+      <!-- 点赞（D-PC40、PLAY-02）：窄行与网格卡放不下，只留在 ⋯ 菜单里。 -->
+      <button
+        v-if="!narrow && layoutMode !== 'grid'"
+        type="button"
+        :class="['row-btn', 'row-btn--icon', { active: video.is_liked }]"
+        :aria-pressed="!!video.is_liked"
+        :aria-label="video.is_liked ? '取消点赞' : '点赞'"
+        data-test="row-like"
+        @click="$emit('toggle-liked', video)"
+      >赞</button>
       <button
         v-if="!narrow"
         type="button"
@@ -116,6 +138,37 @@
 </template>
 
 <script>
+import { resumePosition } from '../utils/watchState.js';
+
+// 失效原因（videos.stale_reason，D-PC06）的中文名。片库页的「路径失效」分组复用同一份。
+// unknown 是后端 ListStaleReasonCounts 对空原因（历史失效行）的归类。
+export const STALE_REASON_LABELS = {
+  offline_root: '磁盘未连接',
+  missing_file: '文件不存在',
+  removed_root: '目录已移除',
+  outside_roots: '不在任何扫描目录',
+  play_failed: '播放失败',
+  read_error: '读取失败',
+  watcher_missing: '实时监听发现消失',
+  unknown: '原因未记录'
+};
+
+// 每种原因的下一步提示，悬停在失效徽标上可见。
+const STALE_REASON_HINTS = {
+  offline_root: '文件所在的磁盘没有连接。接上磁盘后会自动恢复。',
+  missing_file: '原位置找不到这个文件。文件回到原处后点「重新检查」即可恢复。',
+  removed_root: '它所在的扫描目录已被删除。把目录加回来，记录会自动恢复。',
+  outside_roots: '它不在任何扫描目录里。把所在目录加入扫描目录后会恢复。',
+  play_failed: '播放时没能打开这个文件。确认文件在原处后点「重新检查」。',
+  read_error: '扫描时读不了这个文件（可能是权限问题）。处理后点「重新检查」。',
+  watcher_missing: '实时监听发现文件已不在原处。文件回来后点「重新检查」即可恢复。',
+  unknown: '这条记录失效时还没有记录原因。点「重新检查」看看文件是否还在。'
+};
+
+export function staleReasonLabel(reason) {
+  return STALE_REASON_LABELS[String(reason || '') || 'unknown'] || STALE_REASON_LABELS.unknown;
+}
+
 export default {
   name: 'VideoListRow',
   props: {
@@ -129,9 +182,11 @@ export default {
     narrow: { type: Boolean, default: false },
     // 多选态下整排隐去行内动作：这时用户的目标是批量操作，
     // 行内按钮只会带来误点。
-    actionsSuspended: { type: Boolean, default: false }
+    actionsSuspended: { type: Boolean, default: false },
+    // 该视频被人工覆盖、结果为「加上」的自动标签种类（automatic_override_kinds[String(id)]）。
+    overrideKinds: { type: Array, default: () => [] }
   },
-  emits: ['preview', 'play', 'toggle-favorite', 'toggle-watched', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select', 'open-row-menu'],
+  emits: ['preview', 'play', 'toggle-favorite', 'toggle-liked', 'toggle-watched', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select', 'open-row-menu'],
   data() {
     return {
       thumbnailFailed: false
@@ -146,16 +201,23 @@ export default {
       if (rating === null || rating === undefined) return '未评分';
       return `评分 ${rating}/10`;
     },
+    // 进度条与抽屉起播共用 watchState.js 的 resumePosition（D-PC41/42）：标已看之前留下的旧断点
+    // 不显示；标已看之后又在看的（重看）照常显示进度（PLAY-10）；落进片尾区间的按看完处理。
     watchProgressPercent() {
-      // 已看的不再显示「在看」：看完会把断点清掉，手动标已看的也不该还挂着进度条。
-      if (this.video.is_watched) return 0;
       const duration = Number(this.video.duration || 0);
-      const position = Number(this.video.watch_position_seconds || 0);
+      const position = resumePosition(this.video);
       if (duration <= 0 || position <= 0) return 0;
       return Math.min(100, Math.max(0, (position / duration) * 100));
     },
     watchProgressLabel() {
-      return `看到 ${this.formatDuration(this.video.watch_position_seconds)} / ${this.formatDuration(this.video.duration)}`;
+      const verb = this.video.is_watched ? '重看到' : '看到';
+      return `${verb} ${this.formatDuration(this.video.watch_position_seconds)} / ${this.formatDuration(this.video.duration)}`;
+    },
+    staleReasonText() {
+      return staleReasonLabel(this.video.stale_reason);
+    },
+    staleReasonHint() {
+      return STALE_REASON_HINTS[String(this.video.stale_reason || '') || 'unknown'] || STALE_REASON_HINTS.unknown;
     }
   },
   watch: {
@@ -166,6 +228,10 @@ export default {
     }
   },
   methods: {
+    isManualOverride(tag) {
+      const kind = String(tag?.automatic_kind || '');
+      return !!kind && (this.overrideKinds || []).includes(kind);
+    },
     formatSemanticScore(value) {
       return `${Math.round(Math.max(-1, Math.min(1, Number(value) || 0)) * 100)}%`;
     },

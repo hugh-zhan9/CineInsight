@@ -144,7 +144,9 @@ assert.match(componentSource, /relation\.video_b\?\.path/, 'same-source review s
 assert.match(componentSource, /thumbnailURL\(relation\.video_a_id\)/, 'same-source review should show the A thumbnail');
 assert.match(componentSource, /thumbnailURL\(relation\.video_b_id\)/, 'same-source review should show the B thumbnail');
 assert.match(componentSource, /same-source-thumbnail--failed/, 'same-source thumbnails need a local failure placeholder');
-assert.match(componentSource, /DeleteVideo\(videoId, false\)/, 'same-source deletion should preserve the original file');
+// P-034：同源删除改走带结果码的删除与整批撤销条（D-PC04），仍只删记录、保留原文件。
+assert.match(componentSource, /runDelete\(\{ ids: \[videoId\], deleteFile: false/, 'same-source deletion should preserve the original file');
+assert.doesNotMatch(componentSource, /\bDeleteVideo\(/, 'same-source deletion must not call the legacy single delete binding');
 assert.match(componentSource, /删除 A/);
 assert.match(componentSource, /删除 B/);
 assert.match(componentSource, /不是同源/);

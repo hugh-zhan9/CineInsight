@@ -9,8 +9,11 @@
         placeholder="输入新文件名"
         @keyup.enter="executeRename"
         ref="renameInput"
+        data-test="rename-video-input"
       />
-      <p class="rename-hint">扩展名会自动保留（{{ renameDialog.ext }}）</p>
+      <!-- 与后端 RenameVideo 同一规则（D-PC12、LIB-03）：只有「视频扩展名」里的后缀才算扩展名，
+           其余一律补回原扩展名，所以 The.Matrix.1999.1080p 不会被当成「.1080p」文件。 -->
+      <p class="rename-hint" data-test="rename-video-preview">{{ renamePreviewText }}</p>
       <div class="modal-actions">
         <button @click="renameDialog.show = false" class="btn-secondary">取消</button>
         <button @click="executeRename" class="btn-primary">确认</button>
@@ -44,6 +47,37 @@ import { RenameVideo, RenameDirectory, SelectFolderToRename, GetSettings } from 
 import BaseModal from '../ui/BaseModal.vue';
 import { notify, notifyError } from '../../utils/feedback.js';
 
+// 「视频扩展名」设置为空时后端用的默认集合（services/video_scan.go 的 defaultVideoExtensions，
+// RenameDialogs.test.js 读 Go 源码核对两边一致）。
+export const DEFAULT_VIDEO_EXTENSIONS = '.mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt';
+
+// Go filepath.Ext：从最后一个点开始的后缀（含点），没有点时为空。
+function fileExtension(name) {
+  const index = String(name).lastIndexOf('.');
+  return index === -1 ? '' : String(name).slice(index);
+}
+
+function isConfiguredVideoExtension(ext, videoExtensions) {
+  const raw = String(videoExtensions || '').trim() ? videoExtensions : DEFAULT_VIDEO_EXTENSIONS;
+  const wanted = ext.toLowerCase();
+  return raw.split(',').some(item => {
+    let candidate = item.trim().toLowerCase();
+    if (!candidate) return false;
+    if (!candidate.startsWith('.')) candidate = '.' + candidate;
+    return candidate === wanted;
+  });
+}
+
+// 重命名后的实际文件名，与后端 RenameVideo 逐步对应：去掉首尾空白；新名字的后缀不在视频扩展名里
+// （或者根本没有后缀）就补回原扩展名。
+export function renamedVideoFileName(currentName, input, videoExtensions) {
+  const newName = String(input || '').trim();
+  if (!newName) return '';
+  const ext = fileExtension(newName);
+  if (!ext || !isConfiguredVideoExtension(ext, videoExtensions)) return newName + fileExtension(currentName);
+  return newName;
+}
+
 // 重命名视频与重命名文件夹两个弹窗。片库页通过 ref 调 openRenameVideo() / openRenameFolder()；
 // 文件夹重命名会动扫描目录与设置，所以完成后把三件事交回片库页处理。
 export default {
@@ -51,7 +85,9 @@ export default {
   components: { BaseModal },
   props: {
     migrationRunning: { type: Boolean, default: false },
-    reloadView: { type: Function, required: true }
+    reloadView: { type: Function, required: true },
+    // 设置里的「视频扩展名」（逗号分隔）；为空时按后端默认集合。
+    videoExtensions: { type: String, default: '' }
   },
   emits: ['update:migrationRunning', 'video-renamed', 'reload-directories', 'update-settings'],
   data() {
@@ -60,6 +96,18 @@ export default {
       renameDialog: { show: false, video: null, newName: '', ext: '' },
       folderRenameDialog: { show: false, source: '', currentName: '', newName: '', error: '' }
     };
+  },
+  computed: {
+    renameFinalName() {
+      const video = this.renameDialog.video;
+      if (!video) return '';
+      return renamedVideoFileName(video.name, this.renameDialog.newName, this.videoExtensions);
+    },
+    renamePreviewText() {
+      if (!this.renameFinalName) return '请输入新文件名';
+      if (this.renameFinalName === this.renameDialog.video?.name) return '文件名没有变化';
+      return `将重命名为：${this.renameFinalName}`;
+    }
   },
   methods: {
     openRenameVideo(video) {
@@ -77,11 +125,16 @@ export default {
       });
     },
     async executeRename() {
-      const { video, newName, ext } = this.renameDialog;
+      const { video, newName } = this.renameDialog;
       if (!newName.trim()) return;
+      const finalName = this.renameFinalName;
+      // 规范化后与原名相同（例如预填的名字没改就确认）：后端本来也什么都不做，直接关掉。
+      if (finalName === video.name) {
+        this.renameDialog.show = false;
+        return;
+      }
       try {
         await RenameVideo(video.id, newName.trim());
-        const finalName = newName.trim() + (ext !== '(无)' ? ext : '');
         this.$emit('video-renamed', { video, finalName });
         this.renameDialog.show = false;
       } catch (err) {

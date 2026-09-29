@@ -55,7 +55,11 @@ for (const command of ['library.openAIReview', 'library.openCleanup', 'photos.op
   assert.match(pendingHubSource, new RegExp(`command: '${command.replace('.', '\\.')}'`), `pending work hub should jump via ${command}`);
 }
 assert.match(videoListSource, /case 'trash': this\.openTrashDialog\(\)/, 'manage menu should still open the trash');
-assert.match(videoListSource, /GetAITaggingStatusSummary/, 'same-source unread badge should refresh from the backend summary');
+// P-034（APP-11、META-08）：同源未读与清理候选的计数改由顶栏待处理工作台汇总，片库页不再轮询 AI 汇总、
+// 也不再给工具栏传徽标镜像。
+assert.doesNotMatch(videoListSource, /GetAITaggingStatusSummary/, 'the library page no longer polls the AI summary for a manage-menu badge');
+assert.doesNotMatch(videoListSource, /cleanupBadgeCount|cleanupAnalyzing|aiTagSummary/, 'the dead manage-menu badge mirrors are gone');
+assert.doesNotMatch(videoListSource, /@delete-tag=/, 'the toolbar no longer offers a delete × on tag chips (META-14)');
 
 // 运行中的补全任务把进度和取消让给了常驻状态条——按钮进了菜单，
 // 进度不能跟着一起藏起来，否则关掉菜单就看不到还在跑什么。任务名取自共享标签表（APP-03）。

@@ -22,6 +22,9 @@ const api = vi.hoisted(() => ({
   DeleteCollection: vi.fn(),
   DeleteVideo: vi.fn(),
   DeleteImage: vi.fn(),
+  // P-034：抽屉里删除人物媒体改走带结果码的批量删除（PersonMediaDeleteDialog + TrashUndoBanner）。
+  DeleteVideosWithResult: vi.fn(),
+  DeleteImagesWithResult: vi.fn(),
   DeleteGlossaryEntry: vi.fn(),
   ListGlossaryEntries: vi.fn(() => Promise.resolve([])),
   UpsertGlossaryEntry: vi.fn(),
@@ -123,15 +126,18 @@ describe('PreviewDrawer', () => {
       person: { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 2 },
       videos: [{ id: 1, name: 'clip.mp4' }], images: [{ id: 11, name: 'a.jpg' }, { id: 12, name: 'b.jpg' }]
     });
-    api.DeleteVideo.mockResolvedValue(); api.DeleteImage.mockResolvedValue();
+    const okResult = ids => Promise.resolve({ batch_id: 'b1', items: ids.map(id => ({ id, code: 'ok' })) });
+    api.DeleteVideosWithResult.mockImplementation(okResult); api.DeleteImagesWithResult.mockImplementation(okResult);
     const w = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } }, global: { stubs: { teleport: true } } }); await flushPromises();
     await w.get('[data-test="drawer-person-video-delete-1"]').trigger('click');
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
-    expect(api.DeleteVideo).toHaveBeenCalledWith(1, false);
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([1], false, expect.any(String));
+    expect(api.DeleteVideo).not.toHaveBeenCalled();
     expect(w.vm.personDetail.videos).toHaveLength(0); expect(w.vm.personDetail.person.active_video_count).toBe(0);
     await w.get('[data-test="drawer-person-image-delete-11"]').trigger('click');
     await w.get('[data-test="person-media-delete-confirm"]').trigger('click'); await flushPromises();
-    expect(api.DeleteImage).toHaveBeenCalledWith(11, false);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([11], false, expect.any(String));
+    expect(api.DeleteImage).not.toHaveBeenCalled();
     expect(w.vm.personImages.map(image => image.id)).toEqual([12]); expect(w.vm.personDetail.person.active_image_count).toBe(1);
     expect(w.emitted('media-deleted')).toHaveLength(2); expect(w.emitted('person-deleted')).toBeUndefined();
     expect(api.GetPersonDetail).toHaveBeenCalledTimes(1); w.unmount();
