@@ -1307,3 +1307,15 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 接好 `WatchedMoviesPage` 的 `@navigate` / `@open-video`。
 - `notify` 在展示前把数据库层的英文哨兵错误翻成中文，覆盖 `database is in maintenance mode` 与 `sql: database is closed`，并导出 `translateBackendError`，内联错误也可以直接使用。
 - 前端全量 `npm test` 通过：81 个测试文件、980 条用例。
+
+**P-030 交付与整合**（2026-09-30）：回收站中心已完成，包含视频、图片、扫描隐藏、迁移残留四个页签，支持分页、用量显示和多选批量操作。特殊条目各有出口：`put_back`、`claimed_by_active`、`original_symlink`、`record_only`（允许重新收录）。「仍然移除记录」需要输入「移除记录」确认。删除统一走 `*WithResult`，按批次撤销；不支持废纸篓时弹出二选一（永久删除须二次确认）；批量删除可看进度、可取消；删除确认框写明后果。图片页、文案、「重新分析」入口，以及待处理工作台的命令注册也已完成。旧的 `TrashRestoreDialog` / `PhotoTrashDialog` 已删除。合入后 `npm test` 全量通过：81 个测试文件、1028 条用例。
+- 「清空回收站」没有做：设计 §2.3 只要求多选操作，属于设计范围内，主代理确认。
+- **仍调用旧删除绑定、没有「不支持废纸篓」二选一的入口**：
+  - `PhotoCleanupPage.vue`：已转交 P-032；
+  - `PersonMediaDeleteDialog.vue` 与 `AITagReviewDialog.vue:503`：前端收尾时统一改为 `*WithResult` 加 `TrashUndoBanner`。
+- **P-034**：`smartViewOptions` / `matchesSmartView` 补上 `local_metadata_updated`。
+- **P-040**：删除 `ListTrashEntries`、`RestoreTrashEntry`、`ListImageTrashEntries`、`RestoreImageTrashEntry`、`RetagImage` 这几个绑定；`ListTrashEntriesPage` 改名时，同步修改 `TrashCenterDialog.vue`。
+- **已知限制**：
+  - 在片库页的回收站里恢复图片后，图片页不会即时刷新；
+  - 图片页恢复后会重新加载整页。
+- **磁盘监测**：用户于 2026-09-30 撤销，不再监测。

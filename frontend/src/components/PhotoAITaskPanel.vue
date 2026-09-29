@@ -152,7 +152,7 @@
     <div class="setting-item image-semantic-index-controls">
       <label>图片语义索引</label>
       <p class="help-text">
-        索引文本 = 文件名 + 标签 + AI 描述，与视频语义索引共享同一个 embedding 模型与代次；同一时间只允许一个语义索引任务运行。
+        索引文本 = 文件名 + 标签（语义搜索按这两项匹配），与视频语义索引共享同一个 embedding 模型与代次；同一时间只允许一个语义索引任务运行。
       </p>
       <div class="image-task-status" :class="{ 'image-task-status--error': semanticStatus && !semanticStatus.available }" data-test="image-semantic-index-status">
         <strong>{{ semanticStatusText }}</strong>

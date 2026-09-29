@@ -37,13 +37,22 @@ vi.mock('./TagDeleteDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./PreviewDrawer.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./SubtitleWorkbench.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./LocalMetadataDialog.vue', () => ({ default: { template: '<div />' } }));
-vi.mock('./TrashRestoreDialog.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('./TrashCenterDialog.vue', async (importOriginal) => ({ ...(await importOriginal()), default: { template: '<div />' } }));
 vi.mock('./VirtualVideoList.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./VideoListRow.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./AITagReviewDialog.vue', () => ({ default: { template: '<div />' } }));
 
 import VideoListPage from './VideoListPage.vue';
 import { commandList } from '../utils/commandRegistry.js';
+
+// 撤销条 runDelete 返回的结果形状（见 video-list/TrashUndoBanner.vue emptyOutcome）。
+function deleteOutcome({ trashed = [], recordOnly = [], fileMissing = [], permanent = [], cancelled = [], kept = [], failures = [], batchIDs = ['b1'] } = {}) {
+  return {
+    kind: 'video', deleteFile: true, batchIDs, trashed, recordOnly, fileMissing, permanent, cancelled, kept, failures,
+    get removedIDs() { return [...this.trashed, ...this.recordOnly, ...this.fileMissing, ...this.permanent]; },
+    get remainingIDs() { return [...this.failures.map(item => item.id), ...this.cancelled, ...this.kept]; }
+  };
+}
 
 async function mountPage(extraProps = {}, extraOptions = {}) {
   const wrapper = shallowMount(VideoListPage, {
@@ -125,32 +134,44 @@ describe('VideoListPage media-detail integration', () => {
   // 清理面板已抽成 video-list/CleanupReviewPanel.vue，其自身用例见同目录的
   // CleanupReviewPanel.test.js；这里只钉住片库页这一侧的接线。
   it('清理面板要删的候选仍由片库页删除：移出列表、给撤销条、再重载', async () => {
-    const showDeleteUndo = vi.fn();
+    const outcome = deleteOutcome({ trashed: [2], failures: [{ id: 3, code: 'volume_offline', text: '所在磁盘未连接或不可访问，未做任何改动' }], kept: [4] });
+    const runDelete = vi.fn().mockResolvedValue(outcome);
+    const showDeleteNotice = vi.fn();
     const wrapper = await mountPage({}, {
-      global: { stubs: { TrashUndoBanner: { template: '<div />', methods: { showDeleteUndo } } } }
+      global: { stubs: { TrashUndoBanner: { template: '<div />', methods: { runDelete, showDeleteNotice } } } }
     });
-    wrapper.vm.videos = [{ id: 1, name: 'keep.mp4' }, { id: 2, name: 'copy.mp4' }];
-    api.BatchDeleteVideos.mockResolvedValue({ requested: 1, succeeded: 1, failed: 0, errors: [] });
+    wrapper.vm.videos = [{ id: 1, name: 'keep.mp4' }, { id: 2, name: 'copy.mp4' }, { id: 3, name: 'offline.mp4' }, { id: 4, name: 'smb.mp4' }];
     // 第一步只删除并把行从已加载列表里摘掉；撤销条与重载是第二步，
     // 中间留给清理面板收窄勾选。
     api.SearchLibraryVideoPage.mockClear();
 
-    const outcome = await wrapper.vm.trashCleanupVideos([2]);
+    const result = await wrapper.vm.trashCleanupVideos([2, 3, 4]);
 
-    expect(api.BatchDeleteVideos).toHaveBeenCalledWith([2], true);
-    expect(outcome.succeededIDs).toEqual([2]);
-    expect(wrapper.vm.videos.map(video => video.id)).toEqual([1]);
-    expect(showDeleteUndo).not.toHaveBeenCalled();
+    expect(runDelete).toHaveBeenCalledWith({ ids: [2, 3, 4], deleteFile: true, names: { 2: 'copy.mp4', 3: 'offline.mp4', 4: 'smb.mp4' } });
+    expect(result.succeededIDs).toEqual([2]);
+    expect([...result.failedIDs]).toEqual([3, 4]);
+    // 面板认识的结果形状：失败项带视频 ID 与中文原因。
+    expect(result.result).toEqual({
+      requested: 3,
+      succeeded: 1,
+      failed: 2,
+      errors: [
+        { video_id: 3, error: '所在磁盘未连接或不可访问，未做任何改动' },
+        { video_id: 4, error: '所在磁盘不支持废纸篓，已保留' }
+      ]
+    });
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([1, 3, 4]);
+    expect(showDeleteNotice).not.toHaveBeenCalled();
     expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
 
-    // 第二步：先撤销提示条，再重载列表。
+    // 第二步：先撤销提示条，再重载列表；失败项由清理面板自己报告。
     let reloadedBeforeUndo = false;
-    showDeleteUndo.mockImplementation(async () => {
+    showDeleteNotice.mockImplementation(() => {
       reloadedBeforeUndo = api.SearchLibraryVideoPage.mock.calls.length > 0;
     });
-    await wrapper.vm.afterTrashCleanupVideos(outcome.succeededIDs);
+    await wrapper.vm.afterTrashCleanupVideos(result.succeededIDs);
 
-    expect(showDeleteUndo).toHaveBeenCalledWith([2], null);
+    expect(showDeleteNotice).toHaveBeenCalledWith(outcome, { reportFailures: false });
     expect(reloadedBeforeUndo).toBe(false);
     expect(api.SearchLibraryVideoPage).toHaveBeenCalled();
     wrapper.unmount();
@@ -945,5 +966,107 @@ describe('VideoListPage state toggles keep row tags', () => {
     await flushPromises();
 
     expect(wrapper.vm.videos[0].tags).toEqual([]);
+  });
+});
+
+describe('P-030 删除与回收站接线', () => {
+  function bannerStub(outcome) {
+    const runDelete = vi.fn().mockResolvedValue(outcome);
+    const showDeleteNotice = vi.fn();
+    const openTrashDialog = vi.fn();
+    return {
+      runDelete, showDeleteNotice, openTrashDialog,
+      stubs: { TrashUndoBanner: { template: '<div />', methods: { runDelete, showDeleteNotice, openTrashDialog } } }
+    };
+  }
+
+  it('LIB-12 批量删除经撤销条执行，只把真正删掉的行移出列表并给整批撤销提示', async () => {
+    const banner = bannerStub(deleteOutcome({ trashed: [1, 2], cancelled: [3] }));
+    const wrapper = await mountPage({}, { global: { stubs: banner.stubs } });
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4' }, { id: 2, name: 'b.mp4' }, { id: 3, name: 'c.mp4' }];
+    wrapper.vm.selectedVideoIds = [1, 2, 3];
+
+    await wrapper.vm.deleteVideos([1, 2, 3], true);
+    await flushPromises();
+
+    expect(banner.runDelete).toHaveBeenCalledWith({ ids: [1, 2, 3], deleteFile: true, names: { 1: 'a.mp4', 2: 'b.mp4', 3: 'c.mp4' } });
+    expect(banner.showDeleteNotice).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([3]);
+    expect(wrapper.vm.selectedVideoIds).toEqual([3]);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.deletingIds).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('LIB-12 单个删除走同一条带结果码的路径', async () => {
+    const banner = bannerStub(deleteOutcome({ recordOnly: [5] }));
+    const wrapper = await mountPage({}, { global: { stubs: banner.stubs } });
+    wrapper.vm.videos = [{ id: 5, name: 'e.mp4' }];
+
+    await wrapper.vm.deleteVideo({ id: 5, name: 'e.mp4' }, false);
+
+    expect(banner.runDelete).toHaveBeenCalledWith({ ids: [5], deleteFile: false, names: { 5: 'e.mp4' } });
+    expect(api.DeleteVideo).not.toHaveBeenCalled();
+    expect(api.BatchDeleteVideos).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('确认删除时先关确认框，删除进度与「不支持废纸篓」的选择框不被它挡住', async () => {
+    let dialogOpenDuringDelete = null;
+    const banner = bannerStub(deleteOutcome({ trashed: [1, 2] }));
+    const wrapper = await mountPage({}, { global: { stubs: banner.stubs } });
+    banner.runDelete.mockImplementation(async () => {
+      dialogOpenDuringDelete = wrapper.vm.deleteDialog.show;
+      return deleteOutcome({ trashed: [1, 2] });
+    });
+    wrapper.vm.deleteDialog = { show: true, video: null, videoIds: [1, 2] };
+
+    await wrapper.vm.executeDelete({ video: null, deleteFile: true, dontAskAgain: false });
+
+    expect(dialogOpenDuringDelete).toBe(false);
+    expect(banner.runDelete).toHaveBeenCalledWith(expect.objectContaining({ ids: [1, 2], deleteFile: true }));
+    wrapper.unmount();
+  });
+
+  it('从回收站恢复后放掉清理面板的已删标记、重载列表，来自回收站对话框的再刷新清理状态', async () => {
+    const wrapper = await mountPage();
+    const forget = vi.spyOn(wrapper.vm, 'forgetCleanupTrashed').mockImplementation(() => {});
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    const refresh = vi.spyOn(wrapper.vm, 'refreshCleanupStatus').mockResolvedValue();
+
+    await wrapper.vm.afterTrashRestore([2, 3], false);
+    expect(forget.mock.calls.map(call => call[0])).toEqual([2, 3]);
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+
+    await wrapper.vm.afterTrashRestore([], true);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('管理菜单的「回收站」打开回收站中心的视频页签', async () => {
+    const banner = bannerStub(deleteOutcome());
+    const wrapper = await mountPage({}, { global: { stubs: banner.stubs } });
+    wrapper.vm.onManageSelect({ id: 'trash' });
+    expect(banner.openTrashDialog).toHaveBeenCalledWith('video');
+    wrapper.unmount();
+  });
+
+  it('注册待处理工作台要用的三条命令：清理、AI 审阅、本地资料有更新', async () => {
+    const wrapper = await mountPage();
+    const byID = id => commandList().find(item => item.id === id);
+    const openCleanup = vi.spyOn(wrapper.vm, 'openCleanupDialog').mockImplementation(() => {});
+    const applyView = vi.spyOn(wrapper.vm, 'applySmartViewCommand').mockResolvedValue();
+
+    byID('library.openCleanup').run();
+    expect(openCleanup).toHaveBeenCalledTimes(1);
+    byID('library.openAIReview').run();
+    expect(wrapper.vm.aiTagReviewDialog.show).toBe(true);
+    byID('library.openLocalMetadataUpdates').run();
+    expect(applyView).toHaveBeenCalledWith('local_metadata_updated');
+
+    wrapper.unmount();
+    expect(byID('library.openCleanup')).toBeUndefined();
   });
 });

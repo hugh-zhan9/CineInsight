@@ -23,13 +23,23 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetImageAITaggingSummary',
   'ListImageFolderGroups', 'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage',
   'BatchDeleteImagesInDirectory',
-  'ListPeople', 'AddPersonImages', 'RemovePersonImage'
+  'ListPeople', 'AddPersonImages', 'RemovePersonImage',
+  // P-030：带结果码的删除、整批撤销、永久删除、重新分析与回收站中心。
+  'DeleteImagesWithResult', 'DeleteImagesInDirectoryWithResult', 'PermanentlyDeleteImages', 'RestoreTrashBatch',
+  'CancelBatchDelete', 'RetryImageAITagging', 'ListTrashEntriesPage', 'GetTrashUsage', 'ListHiddenImages', 'RecheckImages',
+  'ListStagedSources'
 ].map(name => [name, vi.fn()])));
+
+// 带结果码的删除默认全部成功：每项 ok，同一个批次。
+function okDeleteResult(ids, batchID = 'batch-1') {
+  return { batch_id: batchID, requested: ids.length, succeeded: ids.length, failed: 0, cancelled: 0, items: ids.map(id => ({ id, code: 'ok' })) };
+}
 
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import PhotoLibraryPage from './PhotoLibraryPage.vue';
 import { photoCleanupStore, resetPhotoCleanupReview, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
+import { commandList } from '../utils/commandRegistry.js';
 
 function makeImage(id, overrides = {}) {
   return {
@@ -129,6 +139,12 @@ beforeEach(() => {
   api.ListPeople.mockResolvedValue([]);
   api.AddPersonImages.mockResolvedValue();
   api.RemovePersonImage.mockResolvedValue(false);
+  api.DeleteImagesWithResult.mockImplementation(ids => Promise.resolve(okDeleteResult(ids)));
+  api.DeleteImagesInDirectoryWithResult.mockResolvedValue(okDeleteResult([1, 2]));
+  api.RestoreTrashBatch.mockResolvedValue({ batch_id: 'batch-1', requested: 0, succeeded: 0, failed: 0, cancelled: 0, items: [] });
+  api.RetryImageAITagging.mockResolvedValue([]);
+  api.GetTrashUsage.mockResolvedValue(null);
+  api.ListTrashEntriesPage.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
   // 删除后是否重新分析改为询问用户；默认答"取消"，让结果留在原地继续审阅。
   feedback.confirmAction.mockResolvedValue(false);
   // 清理审阅状态是模块级共享 store，用例之间必须清干净。
@@ -303,14 +319,12 @@ describe('PhotoLibraryPage folder display', () => {
   it('删除文件夹把该目录的图片整体移入回收站，并让分组重新拉取', async () => {
     const wrapper = await openFolderMode();
     feedback.confirmAction.mockResolvedValue(true);
-    api.BatchDeleteImagesInDirectory.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });
     api.ListImageFolderGroups.mockResolvedValue([]);
 
     await wrapper.get('[data-test="photo-folder-delete"]').trigger('click');
     await flushPromises();
-    // eslint-disable-next-line no-console
 
-    expect(api.BatchDeleteImagesInDirectory).toHaveBeenCalledWith('/photos', false);
+    expect(api.DeleteImagesInDirectoryWithResult).toHaveBeenCalledWith('/photos', false, expect.stringMatching(/^[0-9a-f]{32}$/));
     // 删空之后不该还剩一个点进去是空的文件夹
     expect(wrapper.findAll('.photo-folder-card')).toHaveLength(0);
   });
@@ -322,7 +336,7 @@ describe('PhotoLibraryPage folder display', () => {
     await wrapper.get('[data-test="photo-folder-delete"]').trigger('click');
     await flushPromises();
 
-    expect(api.BatchDeleteImagesInDirectory).not.toHaveBeenCalled();
+    expect(api.DeleteImagesInDirectoryWithResult).not.toHaveBeenCalled();
     expect(wrapper.findAll('.photo-folder-card')).toHaveLength(1);
   });
 
@@ -331,7 +345,6 @@ describe('PhotoLibraryPage folder display', () => {
     await wrapper.get('[data-test="photo-display-stream"]').trigger('click');
     await flushPromises();
     wrapper.vm.selectedImageIDs = [1, 2];
-    api.BatchDeleteImages.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });
 
     await wrapper.vm.performBatchDelete(false);
     await flushPromises();
@@ -680,23 +693,26 @@ describe('PhotoLibraryPage AI retag and candidate review', () => {
     return wrapper;
   }
 
-  it('retags in place and shows the returned candidates', async () => {
+  // IMG-08：单图详情的「重新分析」走 RetryImageAITagging（已有手工标签的图片同样生效）。
+  it('IMG-08 重新分析在原处显示返回的候选', async () => {
     const wrapper = await openViewer();
     expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="photo-ai-retag"]').text()).toBe('重新分析');
 
     let resolveCall;
-    api.RetagImage.mockReturnValueOnce(new Promise(resolve => { resolveCall = resolve; }));
+    api.RetryImageAITagging.mockReturnValueOnce(new Promise(resolve => { resolveCall = resolve; }));
     await wrapper.get('[data-test="photo-ai-retag"]').trigger('click');
     await wrapper.vm.$nextTick();
 
     const button = wrapper.get('[data-test="photo-ai-retag"]');
     expect(button.attributes('disabled')).toBeDefined();
-    expect(button.text()).toBe('打标中...');
+    expect(button.text()).toBe('分析中...');
 
     resolveCall([{ id: 21, image_id: 3, suggested_name: '日落', confidence: 'medium' }]);
     await flushPromises();
 
-    expect(api.RetagImage).toHaveBeenCalledWith(3);
+    expect(api.RetryImageAITagging).toHaveBeenCalledWith(3);
+    expect(api.RetagImage).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="photo-ai-candidates"]').text()).toContain('日落');
     expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(false);
     expect(wrapper.get('[data-test="photo-ai-retag"]').attributes('disabled')).toBeUndefined();
@@ -704,7 +720,7 @@ describe('PhotoLibraryPage AI retag and candidate review', () => {
 
   it('keeps the placeholder and reports an unavailable AI configuration', async () => {
     const wrapper = await openViewer();
-    api.RetagImage.mockRejectedValueOnce('AI 配置不可用: BaseURL 或 Model 为空');
+    api.RetryImageAITagging.mockRejectedValueOnce('AI 配置不可用: BaseURL 或 Model 为空');
 
     await wrapper.get('[data-test="photo-ai-retag"]').trigger('click');
     await flushPromises();
@@ -728,8 +744,8 @@ describe('PhotoLibraryPage AI retag and candidate review', () => {
     expect(wrapper.find('[data-test="photo-ai-candidates-empty"]').exists()).toBe(true);
   });
 
-  // 后端在图片已有手工标签时返回 superseded 而不是报错，界面必须解释标签为什么没挂上。
-  it('explains why approving wrote nothing when the image has manual tags', async () => {
+  // 手工标签不再让候选作废（D-PC28 规则 2）：superseded 只意味着这个标签已经在图片上，界面要照实说。
+  it('IMG-08 explains a superseded approval as the tag already being on the image', async () => {
     const wrapper = await openViewer([{ id: 32, image_id: 3, suggested_name: '海边', confidence: 'high' }]);
     api.ApproveImageAITagCandidate.mockResolvedValueOnce({ id: 32, status: 'superseded' });
     api.ListImageAITagCandidates.mockResolvedValue([]);
@@ -737,7 +753,9 @@ describe('PhotoLibraryPage AI retag and candidate review', () => {
     await wrapper.get('[data-test="photo-ai-candidate-approve-32"]').trigger('click');
     await flushPromises();
 
-    expect(wrapper.get('[data-test="photo-ai-retag-error"]').text()).toContain('手工打的标签');
+    const text = wrapper.get('[data-test="photo-ai-retag-error"]').text();
+    expect(text).toContain('这个标签已经在图片上');
+    expect(text).not.toContain('整体作废');
   });
 
   it('rejects a candidate without touching the image tags', async () => {
@@ -907,7 +925,7 @@ describe('PhotoLibraryPage delete', () => {
   });
   it('keeps the current preview and shows an error when deletion fails', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
-    api.DeleteImage.mockRejectedValueOnce('busy');
+    api.DeleteImagesWithResult.mockRejectedValueOnce('busy');
     const wrapper = await mountPage(); wrapper.vm.openViewer(0); await flushPromises();
     await wrapper.get('[data-test="photo-viewer-delete"]').trigger('click'); await flushPromises();
     expect(wrapper.vm.viewerImage.id).toBe(1); expect(wrapper.vm.images).toHaveLength(2);
@@ -946,7 +964,7 @@ describe('PhotoLibraryPage delete', () => {
     await wrapper.findAll('[data-test="photo-card-delete"]')[0].trigger('click');
     await flushPromises();
 
-    expect(api.DeleteImage).toHaveBeenCalledWith(1, true);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([1], true, expect.any(String));
     expect(wrapper.findAll('.photo-card')).toHaveLength(1);
     expect(wrapper.text()).not.toContain('photo-1.jpg');
   });
@@ -956,13 +974,13 @@ describe('PhotoLibraryPage delete', () => {
     const wrapper = await mountPage({ settings: { confirm_before_delete: true, delete_original_file: false } });
 
     await wrapper.get('[data-test="photo-card-delete"]').trigger('click');
-    expect(api.DeleteImage).not.toHaveBeenCalled();
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="photo-delete-file"]').element.checked).toBe(false);
 
     await wrapper.get('[data-test="photo-delete-confirm"]').trigger('click');
     await flushPromises();
 
-    expect(api.DeleteImage).toHaveBeenCalledWith(4, false);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([4], false, expect.any(String));
     expect(wrapper.findAll('.photo-card')).toHaveLength(0);
   });
 });
@@ -1755,5 +1773,163 @@ describe('PhotoLibraryPage 工具栏收纳', () => {
     await wrapper.vm.$nextTick();
     expect(wrapper.find('.photo-selection-tools--active').exists()).toBe(true);
     wrapper.unmount();
+  });
+});
+
+// P-030：图片页的删除反馈、撤销、文案与回收站入口。
+describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
+  it('IMG-09 删除图片后给撤销条，「撤销本次删除」按批次恢复并重新加载', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    api.DeleteImagesWithResult.mockResolvedValueOnce(okDeleteResult([1], 'b-img'));
+    const wrapper = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: true } });
+
+    await wrapper.findAll('[data-test="photo-card-delete"]')[0].trigger('click');
+    await flushPromises();
+
+    const banner = wrapper.get('[data-test="delete-undo-banner"]');
+    expect(banner.text()).toContain('已移到废纸篓 1 张图片');
+    expect(banner.get('[data-test="delete-undo"]').text()).toBe('撤销本次删除（1 项）');
+
+    api.RestoreTrashBatch.mockResolvedValueOnce({ batch_id: 'b-img', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: [{ id: 91, code: 'ok' }] });
+    api.SearchImagePage.mockClear();
+    await banner.get('[data-test="delete-undo"]').trigger('click');
+    await flushPromises();
+
+    expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'b-img');
+    expect(api.SearchImagePage).toHaveBeenCalled();
+    expect(wrapper.find('[data-test="delete-undo-banner"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('IMG-02 只删记录的删除在撤销条上写明文件保留，同样可以撤销', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    const wrapper = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: false } });
+
+    await wrapper.get('[data-test="photo-card-delete"]').trigger('click');
+    await flushPromises();
+
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([1], false, expect.any(String));
+    const banner = wrapper.get('[data-test="delete-undo-banner"]');
+    expect(banner.text()).toContain('已从图片库移除 1 张图片（文件保留）');
+    expect(banner.find('[data-test="delete-undo"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('IMG-02 删除确认框按是否移到废纸篓说明后果', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(4)]));
+    const wrapper = await mountPage({ settings: { confirm_before_delete: true, delete_original_file: false } });
+
+    await wrapper.get('[data-test="photo-card-delete"]').trigger('click');
+    expect(wrapper.get('[data-test="photo-delete-consequence"]').text()).toContain('以后扫描到同一个文件不会再收录，可在回收站「允许重新收录」');
+    await wrapper.get('[data-test="photo-delete-file"]').setValue(true);
+    expect(wrapper.get('[data-test="photo-delete-consequence"]').text()).toContain('移到系统废纸篓');
+    wrapper.unmount();
+  });
+
+  it('IMG-02 删除文件夹的确认文案按「删除原文件」设置显示实际模式', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    api.ListImageFolderGroups.mockResolvedValue([{ directory: '/photos', name: 'photos', count: 2, covers: [] }]);
+    feedback.confirmAction.mockResolvedValue(false);
+
+    const recordOnly = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: false } });
+    await recordOnly.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+    await recordOnly.get('[data-test="photo-folder-delete"]').trigger('click');
+    await flushPromises();
+    const recordOnlyPrompt = feedback.confirmAction.mock.calls.at(-1)[0];
+    expect(recordOnlyPrompt.message).toContain('从图片库移除，文件保留在磁盘上');
+    expect(recordOnlyPrompt.message).toContain('允许重新收录');
+    expect(recordOnlyPrompt.confirmText).toBe('从图片库移除');
+    expect(recordOnlyPrompt.message).not.toContain('移到废纸篓');
+    recordOnly.unmount();
+
+    const trash = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: true } });
+    await trash.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+    await trash.get('[data-test="photo-folder-delete"]').trigger('click');
+    await flushPromises();
+    const trashPrompt = feedback.confirmAction.mock.calls.at(-1)[0];
+    expect(trashPrompt.message).toContain('移到废纸篓，可在回收站恢复');
+    expect(trashPrompt.confirmText).toBe('移到废纸篓');
+    // 两次都答了「取消」：一张都没删。
+    expect(api.DeleteImagesInDirectoryWithResult).not.toHaveBeenCalled();
+    trash.unmount();
+  });
+
+  it('IMG-12 批量删除带请求标识，失败的图片留在列表里并按原因报告', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    api.DeleteImagesWithResult.mockResolvedValueOnce({
+      batch_id: 'b2', requested: 2, succeeded: 1, failed: 1, cancelled: 0,
+      items: [{ id: 1, code: 'ok' }, { id: 2, code: 'volume_offline', message: '文件所在磁盘当前不可访问，未做任何改动' }]
+    });
+    const wrapper = await mountPage();
+    wrapper.vm.selectedImageIDs = [1, 2];
+
+    await wrapper.vm.performBatchDelete(true);
+    await flushPromises();
+
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([1, 2], true, expect.stringMatching(/^[0-9a-f]{32}$/));
+    expect(wrapper.vm.images.map(image => image.id)).toEqual([2]);
+    expect(wrapper.vm.selectedImageIDs).toEqual([2]);
+    expect(wrapper.vm.error).toContain('所在磁盘未连接或不可访问');
+    expect(wrapper.get('[data-test="delete-undo-banner"]').text()).toContain('已移到废纸篓 1 张图片');
+    wrapper.unmount();
+  });
+
+  it('D-PC02 所在磁盘不支持废纸篓时先问怎么处理；「暂不处理」不删任何东西', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    api.DeleteImagesWithResult.mockResolvedValueOnce({
+      batch_id: 'b3', requested: 1, succeeded: 0, failed: 1, cancelled: 0, items: [{ id: 1, code: 'trash_unsupported' }]
+    });
+    const wrapper = await mountPage({ settings: { confirm_before_delete: false, delete_original_file: true } });
+
+    await wrapper.findAll('[data-test="photo-card-delete"]')[0].trigger('click');
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="trash-unsupported-names"]').text()).toContain('photo-1.jpg');
+    await wrapper.get('[data-test="trash-unsupported-cancel"]').trigger('click');
+    await flushPromises();
+
+    expect(api.PermanentlyDeleteImages).not.toHaveBeenCalled();
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.images.map(image => image.id)).toEqual([1, 2]);
+    expect(wrapper.vm.error).toBe('');
+    wrapper.unmount();
+  });
+
+  it('IMG-06 语义搜索如实写「按文件名与标签匹配」，不再引导生成 AI 描述', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="photo-mode-semantic"]').attributes('title')).toContain('按文件名与标签匹配');
+    await wrapper.get('[data-test="photo-mode-semantic"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="photo-keyword"]').attributes('placeholder')).toContain('按文件名与标签匹配');
+    expect(wrapper.html()).not.toContain('AI 描述');
+    wrapper.unmount();
+  });
+
+  it('IMG-09 管理菜单的「回收站」打开回收站中心并停在图片页签', async () => {
+    const wrapper = await mountPage();
+    await openPhotoManageItem(wrapper, 'trash');
+    await flushPromises();
+
+    expect(api.ListTrashEntriesPage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image', cursor_id: 0 }));
+    expect(wrapper.get('[data-test="trash-tab-image"]').attributes('aria-selected')).toBe('true');
+    wrapper.unmount();
+  });
+
+  it('注册 photos.openAIReview：从清理审阅整页里也能打开图片 AI 标签审阅', async () => {
+    const wrapper = await mountPage();
+    const command = commandList().find(item => item.id === 'photos.openAIReview');
+    expect(command).toBeTruthy();
+    wrapper.vm.showCleanup = true;
+    await wrapper.vm.$nextTick();
+
+    command.run();
+    await flushPromises();
+
+    expect(wrapper.vm.showCleanup).toBe(false);
+    expect(wrapper.vm.showAITagReview).toBe(true);
+    wrapper.unmount();
+    expect(commandList().some(item => item.id === 'photos.openAIReview')).toBe(false);
   });
 });

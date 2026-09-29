@@ -23,7 +23,7 @@
             type="button"
             :class="['photo-search-mode__btn', { active: searchMode === 'semantic' }]"
             :disabled="!semanticAvailable"
-            :title="semanticAvailable ? '按 AI 描述做语义检索' : semanticNotice"
+            :title="semanticAvailable ? '语义搜索：按文件名与标签匹配' : semanticNotice"
             data-test="photo-mode-semantic"
             @click="setSearchMode('semantic')"
           >语义</button>
@@ -48,7 +48,7 @@
           v-model="filters.keyword"
           class="search-input photo-toolbar__keyword"
           type="text"
-          :placeholder="searchMode === 'semantic' ? '描述你想找的画面' : '按文件名搜索'"
+          :placeholder="searchMode === 'semantic' ? '输入想找的内容，按文件名与标签匹配' : '按文件名搜索'"
           data-test="photo-keyword"
         />
         <select
@@ -275,6 +275,12 @@
       <button type="button" class="photo-library__refresh-dismiss" aria-label="忽略此提示" data-test="photo-library-refresh-dismiss" @click="libraryChanged = false">×</button>
     </div>
 
+    <TrashUndoBanner
+      ref="trashUndo"
+      kind="image"
+      :after-restore="afterTrashRestore"
+    />
+
     <p v-if="error" class="photo-library__error" role="alert">{{ error }}</p>
     <p v-if="folderModeRoot && folderLoading" class="photo-folder-loading" role="status" data-test="photo-folder-loading">正在整理图片文件夹…</p>
 
@@ -407,15 +413,15 @@
 
     <div v-if="showEmptyState" class="photo-empty" data-test="photo-empty">
       <template v-if="searchMode === 'semantic' && !filters.keyword.trim()">
-        <h3 data-test="photo-semantic-prompt">输入描述开始语义搜索</h3>
-        <p>例如"海边日落的合影"。语义搜索只在图片库内进行，不会返回视频。</p>
+        <h3 data-test="photo-semantic-prompt">输入内容开始语义搜索</h3>
+        <p>语义搜索按图片的文件名与标签匹配，例如"海边"。只在图片库内进行，不会返回视频。</p>
       </template>
       <template v-else-if="searchMode === 'semantic'">
         <h3>没有语义命中</h3>
         <p v-if="semanticCoverage && Number(semanticCoverage.indexed) === 0" data-test="photo-semantic-no-index">
-          图片语义索引还没有建立。请先在设置页生成 AI 描述并运行"图片语义索引"任务。
+          图片语义索引还没有建立。请先在设置页运行"图片语义索引"任务。
         </p>
-        <p v-else>换个说法再试，或为更多图片生成 AI 描述后重跑图片语义索引。</p>
+        <p v-else>换个说法再试，或给更多图片打上标签后重跑图片语义索引。</p>
       </template>
       <template v-else-if="folderModeRoot && imageDirectories.length === 0">
         <h3>还没有配置图片扫描目录</h3>
@@ -641,9 +647,10 @@
               type="button"
               class="btn-secondary btn-compact"
               :disabled="retagging"
+              title="已有手工标签的图片也会重新分析"
               data-test="photo-ai-retag"
               @click="retagImage"
-            >{{ retagging ? '打标中...' : '重新打标' }}</button>
+            >{{ retagging ? '分析中...' : '重新分析' }}</button>
           </div>
           <p v-if="viewerDetailError" class="photo-viewer__muted">{{ viewerDetailError }}</p>
           <ul v-else-if="viewerCandidates.length" class="photo-viewer__candidates" data-test="photo-ai-candidates">
@@ -682,10 +689,10 @@
       <div class="photo-delete__options">
         <label>
           <input v-model="deleteFileChoice" type="checkbox" data-test="photo-delete-file" />
-          同时将原始文件移入回收站
+          同时把原文件移到废纸篓
         </label>
       </div>
-      <p class="photo-viewer__muted">不勾选时仅移除数据库记录，原文件会保留在磁盘上。</p>
+      <p class="photo-viewer__muted" data-test="photo-delete-consequence">{{ deleteFileChoice ? deleteTrashHint : deleteRecordOnlyHint }}</p>
       <div class="modal-actions">
         <button type="button" class="btn-danger" :disabled="deleting" data-test="photo-delete-confirm" @click="confirmDelete">确认删除</button>
         <button type="button" class="btn-secondary" :disabled="deleting" @click="deleteTarget = null">取消</button>
@@ -698,16 +705,15 @@
       <div class="photo-delete__options">
         <label>
           <input v-model="batchDeleteFileChoice" type="checkbox" data-test="photo-batch-delete-file" />
-          同时将原始文件移入回收站
+          同时把原文件移到废纸篓
         </label>
       </div>
+      <p class="photo-viewer__muted" data-test="photo-batch-delete-consequence">{{ batchDeleteFileChoice ? deleteTrashHint : deleteRecordOnlyHint }}</p>
       <div class="modal-actions">
         <button type="button" class="btn-danger" :disabled="batchBusy" data-test="photo-batch-delete-confirm" @click="confirmBatchDelete">确认删除</button>
         <button type="button" class="btn-secondary" :disabled="batchBusy" @click="batchDeletePending = false">取消</button>
       </div>
     </BaseModal>
-
-    <PhotoTrashDialog :visible="showTrash" @close="showTrash = false" @restored="handleRestored" />
 
     <ImageAITagReviewPanel
       :visible="showAITagReview"
@@ -719,10 +725,10 @@
 
 <script>
 import {
-  AddPersonImages, AddTagToImage, BatchAddTagToImages, BatchDeleteImages, DeleteImage, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
+  AddPersonImages, AddTagToImage, BatchAddTagToImages, GetAllImageDirectories, GetImageDetail, GetImageSemanticIndexStatus, GetImageTags,
   ListPeople, RemovePersonImage, OpenImageDirectory, RevealImage,
-  ApproveImageAITagCandidate, GetImageAITaggingSummary, ListImageAITagCandidates, RejectImageAITagCandidate, RetagImage,
-  BatchDeleteImagesInDirectory,
+  ApproveImageAITagCandidate, GetImageAITaggingSummary, ListImageAITagCandidates, RejectImageAITagCandidate, RetryImageAITagging,
+  DeleteImagesInDirectoryWithResult,
   ListImageFolderGroups, ListImageTimelineBuckets, RemoveTagFromImage, SearchImagePage,
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
@@ -730,7 +736,9 @@ import BaseModal from './ui/BaseModal.vue';
 import BaseMenu from './ui/BaseMenu.vue';
 import BasePopover from './ui/BasePopover.vue';
 import PhotoCleanupPage from './PhotoCleanupPage.vue';
-import PhotoTrashDialog from './PhotoTrashDialog.vue';
+import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
+import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialog.vue';
+import { summarizeTrashFailures } from './TrashCenterDialog.vue';
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
@@ -760,7 +768,7 @@ const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
-  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, PhotoTrashDialog, ImageAITagReviewPanel },
+  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, TrashUndoBanner, ImageAITagReviewPanel },
   props: {
     settings: { type: Object, required: true },
     tags: { type: Array, default: () => [] },
@@ -843,7 +851,8 @@ export default {
       batchDeletePending: false,
       batchDeleteFileChoice: false,
       batchBusy: false,
-      showTrash: false,
+      deleteTrashHint: DELETE_TRASH_HINT,
+      deleteRecordOnlyHint: DELETE_RECORD_ONLY_HINT,
       showAITagReview: false,
       aiTagPending: 0,
       showCleanup: false,
@@ -1081,6 +1090,13 @@ export default {
       keywords: ['scan', '扫描', '图片'],
       enabled: () => !this.scanning,
       run: () => this.scanNow()
+    }, {
+      // 待处理工作台按固定 ID 打开图片 AI 标签审阅（详细设计 §6.1）。切到图片页由调用方先做。
+      id: 'photos.openAIReview',
+      group: 'action',
+      label: '打开图片 AI 标签审阅',
+      keywords: ['ai', 'tag', 'review', '图片', '审阅'],
+      run: () => this.openAITagReviewFromCommand()
     }]);
     this.$nextTick(() => {
       this.attachResizeObserver();
@@ -1123,7 +1139,7 @@ export default {
         case 'scan': this.scanNow(); break;
         case 'cleanup': this.openCleanup(); break;
         case 'ai-tags': this.openAITagReview(); break;
-        case 'trash': this.showTrash = true; break;
+        case 'trash': this.openTrashDialog(); break;
         default: break;
       }
     },
@@ -1145,23 +1161,39 @@ export default {
       const key = this.folderCoverKey(folder, cover);
       this.failedFolderCovers = { ...this.failedFolderCovers, [key]: true };
     },
-    // 删除文件夹 = 把这个目录直属的图片整体移入回收站（可恢复），磁盘上的目录本身不动，
-    // 子目录也不受影响。删完分组自然消失，不用再回来看到一个空文件夹。
+    // 删除文件夹 = 按设置里的「删除原文件」处理这个目录直属的全部图片：移到废纸篓，或只从图片库移除
+    // （文件留在原处）。两种都进回收站、可撤销；磁盘上的目录本身不动，子目录也不受影响。
+    // 删完分组自然消失，不用再回来看到一个空文件夹。
     async deleteFolder(folder) {
       if (!folder?.directory || this.folderDeleting) return;
-      const confirmed = await confirmAction({
-        title: '删除文件夹',
-        message: `将「${folder.name}」下的 ${folder.count} 张图片移入回收站（可恢复）。\n磁盘上的文件夹本身和子文件夹里的图片都不会动。`,
-        confirmText: '移入回收站',
-        danger: true
-      });
+      const deleteFile = Boolean(this.settings?.delete_original_file);
+      const confirmed = await confirmAction(deleteFile
+        ? {
+          title: '删除文件夹',
+          message: `将「${folder.name}」下的 ${folder.count} 张图片移到废纸篓，可在回收站恢复。\n磁盘上的文件夹本身和子文件夹里的图片都不会动。`,
+          confirmText: '移到废纸篓',
+          danger: true
+        }
+        : {
+          title: '删除文件夹',
+          message: `将「${folder.name}」下的 ${folder.count} 张图片从图片库移除，文件保留在磁盘上。\n以后扫描到同一批文件不会再收录，可在回收站「允许重新收录」。子文件夹里的图片不受影响。`,
+          confirmText: '从图片库移除',
+          danger: true
+        });
       if (!confirmed) return;
       this.folderDeleting = true;
       this.error = '';
       try {
-        const result = await BatchDeleteImagesInDirectory(folder.directory, this.settings?.delete_original_file || false);
-        if (result?.failed) {
-          this.error = `「${folder.name}」有 ${result.failed} 张图片删除失败，其余已移入回收站。`;
+        const banner = this.$refs.trashUndo;
+        const outcome = await banner.runDelete({
+          deleteFile,
+          total: Number(folder.count || 0),
+          names: this.imageNames(),
+          invoke: requestID => DeleteImagesInDirectoryWithResult(folder.directory, deleteFile, requestID)
+        });
+        banner.showDeleteNotice(outcome, { reportFailures: false });
+        if (outcome.failures.length) {
+          this.error = `「${folder.name}」有 ${outcome.failures.length} 张图片未删除：${summarizeTrashFailures(outcome.failures)}`;
         }
         this.folderGroups = [];
         this.folderLoadedOnce = false;
@@ -1651,6 +1683,18 @@ export default {
     openAITagReview() {
       this.showAITagReview = true;
     },
+    // 审阅面板挂在网格那一侧：清理审阅整页接管时先退回网格再打开。
+    openAITagReviewFromCommand() {
+      if (this.showCleanup) this.closeCleanup();
+      this.openAITagReview();
+    },
+    async openTrashDialog(tab = 'image') {
+      if (this.showCleanup) {
+        this.closeCleanup();
+        await this.$nextTick();
+      }
+      this.$refs.trashUndo?.openTrashDialog(tab);
+    },
     closeAITagReview() {
       this.showAITagReview = false;
       this.refreshAITagSummary();
@@ -1863,24 +1907,27 @@ export default {
       await this.performBatchDelete(this.batchDeleteFileChoice);
     },
     async performBatchDelete(deleteFile) {
-      const ids = [...this.selectedImageIDs];
+      const ids = [...this.selectedImageIDs].map(Number);
       if (!ids.length || this.batchBusy) return;
       this.batchBusy = true;
       try {
         const before = new Map(this.images.map(image => [Number(image.id), image]));
-        const result = await BatchDeleteImages(ids, deleteFile);
-        const failed = new Set((result?.errors || []).map(item => Number(item.image_id)));
-        ids.filter(id => !failed.has(id)).forEach(id => this.adjustTimelineBucket(before.get(id), -1));
-        this.images = this.images.filter(image => !ids.includes(Number(image.id)) || failed.has(Number(image.id)));
-        this.selectedImageIDs = ids.filter(id => failed.has(id));
-        if (result?.failed) this.error = `批量删除部分失败：${result.failed} 张图片未删除。`;
+        const banner = this.$refs.trashUndo;
+        const outcome = await banner.runDelete({ ids, deleteFile, names: this.imageNames(ids) });
+        const removed = new Set(outcome.removedIDs);
+        removed.forEach(id => this.adjustTimelineBucket(before.get(id), -1));
+        this.images = this.images.filter(image => !removed.has(Number(image.id)));
+        this.selectedImageIDs = ids.filter(id => !removed.has(id));
+        banner.showDeleteNotice(outcome, { reportFailures: false });
+        if (outcome.failures.length) {
+          this.error = `批量删除部分失败：${outcome.failures.length} 张图片未删除。${summarizeTrashFailures(outcome.failures)}`;
+        }
         // 单张删除早就这么做了，批量删除漏了：不作废分组的话，图片删光了文件夹
         // 还留在列表上，点进去是空的。
         this.folderGroups = [];
         this.folderLoadedOnce = false;
         if (this.folderModeActive && this.activeFolder) {
-          const removed = ids.length - failed.size;
-          this.activeFolder = { ...this.activeFolder, count: Math.max(0, Number(this.activeFolder.count || 0) - removed) };
+          this.activeFolder = { ...this.activeFolder, count: Math.max(0, Number(this.activeFolder.count || 0) - removed.size) };
         }
         refreshPhotoCleanupStatus();
       } catch (err) {
@@ -1976,7 +2023,7 @@ export default {
       this.retagging = true;
       this.retagError = '';
       try {
-        const candidates = await RetagImage(image.id);
+        const candidates = await RetryImageAITagging(image.id);
         if (Number(this.viewerImage?.id) !== Number(image.id)) return;
         this.viewerCandidates = candidates || [];
         this.refreshAITagSummary();
@@ -1984,8 +2031,8 @@ export default {
         if (Number(this.viewerImage?.id) !== Number(image.id)) return;
         const message = String(err?.message || err);
         this.retagError = message.includes('AI 配置不可用')
-          ? `重新打标失败：${message}。请先在设置页配置 AI 接口的 BaseURL 与模型。`
-          : `重新打标失败：${message}`;
+          ? `重新分析失败：${message}。请先在设置页配置 AI 接口的 BaseURL 与模型。`
+          : `重新分析失败：${message}`;
       } finally {
         this.retagging = false;
       }
@@ -1997,9 +2044,9 @@ export default {
       this.retagError = '';
       try {
         const item = await ApproveImageAITagCandidate(candidate.id);
-        // 该图已有手工标签时后端整体作废候选而不写标签，得说清楚为什么没挂上。
+        // 手工标签不再让候选作废（D-PC28 规则 2）；只有这个标签已经在图片上时候选才会是 superseded。
         if (item && item.status === 'superseded') {
-          this.retagError = '这张图片已经有你手工打的标签，AI 候选已整体作废，没有写入标签。';
+          this.retagError = '这个标签已经在图片上（已手动添加），没有重复写入。';
         } else {
           await this.loadViewerDetail(image.id);
           await this.loadImageTags();
@@ -2267,7 +2314,19 @@ export default {
       if (this.deletingImageIDs.includes(image.id)) return false;
       this.deletingImageIDs.push(image.id);
       try {
-        await DeleteImage(image.id, deleteFile);
+        const banner = this.$refs.trashUndo;
+        const outcome = await banner.runDelete({ ids: [image.id], deleteFile, names: { [Number(image.id)]: image.name } });
+        banner.showDeleteNotice(outcome, { reportFailures: false });
+        if (!outcome.removedIDs.includes(Number(image.id))) {
+          // 没删掉：失败按原因报告（确认框留着，可以重试）；磁盘不支持废纸篓而用户选了「暂不处理」时
+          // 图片原样留着，不算错误，确认框随之关闭。
+          if (outcome.failures.length) {
+            this.error = `删除图片失败：${summarizeTrashFailures(outcome.failures)}`;
+            if (this.viewerImage?.id === image.id) this.viewerDetailError = this.error;
+            return false;
+          }
+          return true;
+        }
         // If this is the last loaded picture, fetch the next page before choosing
         // the replacement so an unloaded next picture wins over the previous one.
         if (this.viewerImage?.id === image.id && this.viewerIndex === this.images.length - 1 && this.hasMore) await this.loadMore();
@@ -2301,29 +2360,28 @@ export default {
         this.deletingImageIDs = this.deletingImageIDs.filter(id => id !== image.id);
       }
     },
-    handleRestored(image) {
-      if (!image) return;
-      if (this.folderModeRoot) {
-        this.folderGroups = [];
-        this.folderLoadedOnce = false;
-        this.reload();
-      } else if ((!this.folderModeActive || this.activeFolder?.directory === image.directory)
-        && !this.images.some(item => Number(item.id) === Number(image.id))) {
-        this.images.unshift(image);
-        this.adjustTimelineBucket(image, 1);
-        if (this.folderModeActive) {
-          this.activeFolder = { ...this.activeFolder, count: Number(this.activeFolder.count || 0) + 1 };
-          this.folderGroups = [];
-          this.folderLoadedOnce = false;
-        }
+    imageNames(ids = null) {
+      const wanted = ids ? new Set(ids.map(Number)) : null;
+      const names = {};
+      for (const image of this.images) {
+        const id = Number(image.id);
+        if (!wanted || wanted.has(id)) names[id] = image.name;
       }
-      this.loadedOnce = true;
+      return names;
+    },
+    // 回收站恢复（撤销条整批撤销、回收站对话框恢复、扫描隐藏重新检查找回）之后：
+    // 恢复的可能是一批、也可能分散在多个文件夹，直接按当前视图重新加载；分组与计数一并重拉。
+    async afterTrashRestore(imageIDs) {
+      const restored = new Set((imageIDs || []).map(Number));
       // 恢复回来的图片不该再在清理审阅里显示为"已删除"。
-      const restoredID = Number(image.id);
       const review = photoCleanupStore.review;
-      if (review.deletedIDs.includes(restoredID)) {
-        review.deletedIDs = review.deletedIDs.filter(id => id !== restoredID);
+      if (restored.size && review.deletedIDs.some(id => restored.has(Number(id)))) {
+        review.deletedIDs = review.deletedIDs.filter(id => !restored.has(Number(id)));
       }
+      // 文件夹分组与当前文件夹的计数由 reload 重拉。
+      this.folderGroups = [];
+      this.folderLoadedOnce = false;
+      await this.reload();
       refreshPhotoCleanupStatus();
     }
   }

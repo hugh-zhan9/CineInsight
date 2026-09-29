@@ -95,6 +95,7 @@
 
     <TrashUndoBanner
       ref="trashUndo"
+      kind="video"
       :after-restore="afterTrashRestore"
     />
 
@@ -349,7 +350,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, OpenDirectory, DeleteVideo, BatchDeleteVideos, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, GetAITaggingStatusSummary, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, GetAITaggingStatusSummary, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -386,6 +387,8 @@ import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyBatchSummary } from '../utils/
 
 // 「随机 N 部」一次抽取的条数。
 const RANDOM_PICK_SIZE = 10;
+// 智能视图「本地资料有更新」（后端 LibraryViewLocalMetadataUpdated）。
+const LOCAL_METADATA_UPDATED_VIEW = 'local_metadata_updated';
 // 与后端 watchedCompletionToleranceSeconds / watchedCompletionShortClipRatio 同口径：
 // 离片尾不到 1 秒就当看完了，20 秒以下的短片按时长 5% 收紧。
 const WATCHED_COMPLETION_TOLERANCE_SECONDS = 1;
@@ -472,6 +475,8 @@ export default {
 	  keyboardFocusVideoID: 0,
       deleteDialog: { show: false, video: null, videoIds: [] },
       deletingIds: [],
+      // 清理面板删除的结果：删除与撤销条分两步，中间留给面板收窄勾选。
+      pendingCleanupDeleteOutcome: null,
       tagDeleteDialog: { show: false, tag: null },
       aiTagReviewDialog: { show: false, dirty: false },
       aiTagSummary: { same_source_unread: 0 },
@@ -535,6 +540,29 @@ export default {
         keywords: ['random', '随机'],
         enabled: () => !this.randomPick.loading,
         run: () => this.playRandom()
+      },
+      // 待处理工作台按固定 ID 跳到本页的既有面板（详细设计 §6.1）。run() 只负责打开面板，
+      // 切到片库页由调用方先做（本页常挂载、以 v-show 切换）。
+      {
+        id: 'library.openCleanup',
+        group: 'action',
+        label: '打开清理审阅',
+        keywords: ['cleanup', '清理', '重复'],
+        run: () => this.openCleanupDialog()
+      },
+      {
+        id: 'library.openAIReview',
+        group: 'action',
+        label: '打开 AI 标签审阅',
+        keywords: ['ai', 'tag', 'review', '审阅', '标签'],
+        run: () => this.openAITagReviewDialog()
+      },
+      {
+        id: 'library.openLocalMetadataUpdates',
+        group: 'action',
+        label: '查看本地资料有更新的视频',
+        keywords: ['nfo', 'local metadata', '本地资料'],
+        run: () => this.applySmartViewCommand(LOCAL_METADATA_UPDATED_VIEW)
       }
     ]);
 
@@ -974,18 +1002,39 @@ export default {
       this.$refs.cleanupPanel?.forgetTrashed(videoID);
     },
     // 清理面板勾中的候选仍由片库页删除：删除、撤销提示条与列表重载的先后顺序不变。
+    // 删除经撤销条执行（进度、取消、不支持废纸篓时的二选一）；返回给面板的 result 保持
+    // 面板认识的 { succeeded, failed, errors[{video_id, error}] } 形状。
     async trashCleanupVideos(selectedIDs) {
       this.deletingIds = [...new Set([...this.deletingIds, ...selectedIDs])];
-      const result = await BatchDeleteVideos(selectedIDs, true);
-      const failedIDs = new Set((result?.errors || []).map(item => item.video_id));
-      const succeededIDs = selectedIDs.filter(id => !failedIDs.has(id));
+      const outcome = await this.$refs.trashUndo.runDelete({ ids: selectedIDs, deleteFile: true, names: this.videoNames(selectedIDs) });
+      const succeededIDs = outcome.removedIDs;
+      const failedIDs = new Set(outcome.remainingIDs);
       this.videos = this.videos.filter(item => !succeededIDs.includes(item.id));
-      return { result, failedIDs, succeededIDs };
+      this.pendingCleanupDeleteOutcome = outcome;
+      return { result: this.cleanupBatchResult(selectedIDs, outcome), failedIDs, succeededIDs };
     },
-    // 面板收窄完勾选之后才走这一步，顺序与拆分前一致。
-    async afterTrashCleanupVideos(succeededIDs) {
-      await this.showDeleteUndo(succeededIDs);
+    cleanupBatchResult(requestedIDs, outcome) {
+      const errors = [
+        ...outcome.failures.map(item => ({ video_id: item.id, error: item.text })),
+        ...outcome.kept.map(id => ({ video_id: id, error: '所在磁盘不支持废纸篓，已保留' })),
+        ...outcome.cancelled.map(id => ({ video_id: id, error: '已取消，未处理' }))
+      ];
+      return { requested: requestedIDs.length, succeeded: outcome.removedIDs.length, failed: errors.length, errors };
+    },
+    // 面板收窄完勾选之后才走这一步，顺序与拆分前一致。失败项由清理面板自己报告。
+    async afterTrashCleanupVideos() {
+      const outcome = this.pendingCleanupDeleteOutcome;
+      this.pendingCleanupDeleteOutcome = null;
+      if (outcome) this.$refs.trashUndo?.showDeleteNotice(outcome, { reportFailures: false });
       await this.reloadCurrentView();
+    },
+    videoNames(ids) {
+      const wanted = new Set(ids);
+      const names = {};
+      for (const video of this.videos) {
+        if (wanted.has(video.id)) names[video.id] = video.name;
+      }
+      return names;
     },
     // 状态条组件把四份任务状态镜像过来，「管理」菜单的进度文案与清理面板的重算按钮才有数据。
     applyBackgroundTaskState(state) {
@@ -1925,56 +1974,39 @@ export default {
           delete_original_file: deleteFile
         });
       }
-      if (this.deleteDialog.videoIds.length > 0) {
-        await this.deleteVideos(this.deleteDialog.videoIds, deleteFile);
+      // 先关确认框再删：批量删除的进度与「取消」、磁盘不支持废纸篓时的选择框都在它下面。
+      const videoIds = [...this.deleteDialog.videoIds];
+      this.deleteDialog.show = false;
+      if (videoIds.length > 0) {
+        await this.deleteVideos(videoIds, deleteFile);
       } else {
         await this.deleteVideo(video, deleteFile);
       }
-      this.deleteDialog.show = false;
     },
+    // 单个删除与批量删除走同一条路：带结果码的删除（D-PC01/02），成功项给整批撤销条。
     async deleteVideo(video, deleteFile) {
-      try {
-        if (!this.deletingIds.includes(video.id)) {
-          this.deletingIds.push(video.id);
-        }
-        await DeleteVideo(video.id, deleteFile);
-      if (this.selectedPreviewVideoId === video.id) {
-        this.closePreview();
-      }
-        this.videos = this.videos.filter(v => v.id !== video.id);
-        await this.showDeleteUndo([video.id], video.id);
-        await this.reloadCurrentView();
-      } catch (err) {
-        console.error('删除失败:', err);
-        notifyError('删除失败: ' + err);
-      } finally {
-        this.deletingIds = this.deletingIds.filter(id => id !== video.id);
-      }
+      if (!video) return;
+      return this.deleteVideos([video.id], deleteFile);
     },
     async deleteVideos(videoIds, deleteFile) {
       const ids = [...new Set(videoIds)].filter(id => !!id);
       if (ids.length === 0) return;
+      const banner = this.$refs.trashUndo;
       try {
         this.deletingIds = [...new Set([...this.deletingIds, ...ids])];
-        const result = await BatchDeleteVideos(ids, deleteFile);
-        const failedIds = new Set((result?.errors || []).map(item => item.video_id));
-        const succeededIds = ids.filter(id => !failedIds.has(id));
+        const outcome = await banner.runDelete({ ids, deleteFile, names: this.videoNames(ids) });
+        const removedIDs = outcome.removedIDs;
 
-        if (succeededIds.includes(this.selectedPreviewVideoId)) {
+        if (removedIDs.includes(this.selectedPreviewVideoId)) {
           this.closePreview();
         }
-        this.videos = this.videos.filter(video => !succeededIds.includes(video.id));
-        this.selectedVideoIds = this.selectedVideoIds.filter(id => failedIds.has(id));
-        await this.showDeleteUndo(succeededIds);
-        await this.reloadCurrentView();
-
-        if (result?.failed > 0) {
-          const firstError = result.errors?.[0];
-          notifyError(`批量删除完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
-        }
+        this.videos = this.videos.filter(video => !removedIDs.includes(video.id));
+        this.selectedVideoIds = this.selectedVideoIds.filter(id => !removedIDs.includes(id));
+        banner.showDeleteNotice(outcome);
+        if (removedIDs.length > 0) await this.reloadCurrentView();
       } catch (err) {
-        console.error('批量删除失败:', err);
-        notifyError('批量删除失败: ' + err);
+        console.error('删除失败:', err);
+        notifyError('删除失败: ' + err);
       } finally {
         this.deletingIds = this.deletingIds.filter(id => !ids.includes(id));
       }
@@ -2018,16 +2050,14 @@ export default {
       this.aiTagReviewDialog = { show: false, dirty: false };
       if (dirty) await this.reloadCurrentView();
     },
-    openTrashDialog() {
-      this.$refs.trashUndo?.openTrashDialog();
-    },
-    showDeleteUndo(videoIDs, preferredVideoID = null) {
-      return this.$refs.trashUndo?.showDeleteUndo(videoIDs, preferredVideoID);
+    // tab：video / image / hidden / staged，缺省停在视频页签。
+    openTrashDialog(tab = 'video') {
+      this.$refs.trashUndo?.openTrashDialog(tab);
     },
     // 从回收站恢复之后：清理面板的已删标记要跟着放掉，再重载列表；从回收站对话框
-    // 恢复的还要再拉一次清理分析状态。
-    async afterTrashRestore(videoID, fromTrashDialog) {
-      this.forgetCleanupTrashed(videoID);
+    // 恢复的（或整批撤销只回来一部分的）还要再拉一次清理分析状态。
+    async afterTrashRestore(videoIDs, fromTrashDialog) {
+      for (const videoID of videoIDs || []) this.forgetCleanupTrashed(videoID);
       await this.reloadCurrentView();
       if (fromTrashDialog) await this.refreshCleanupStatus();
     },

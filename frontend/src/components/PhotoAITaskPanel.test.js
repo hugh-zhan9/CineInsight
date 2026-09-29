@@ -98,3 +98,13 @@ describe('图片任务面板的空闲门提示', () => {
     wrapper.unmount();
   });
 });
+
+describe('IMG-06 图片语义索引的说明', () => {
+  it('如实写索引文本只含文件名与标签，不再提已移除的 AI 描述', async () => {
+    const wrapper = await mountPanel();
+    const help = wrapper.get('.image-semantic-index-controls .help-text').text();
+    expect(help).toContain('文件名 + 标签');
+    expect(help).not.toContain('AI 描述');
+    wrapper.unmount();
+  });
+});
