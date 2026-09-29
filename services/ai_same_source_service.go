@@ -537,6 +537,18 @@ func (s *AISameSourceService) UnreadCount() (int64, error) {
 	return count, err
 }
 
+// UnconfirmedCount 是待处理收件箱的同源计数（D-PC27，只读）：与审阅列表同口径——status=detected、
+// 尚未审阅、两端视频都未删除，但不受列表 200 条上限的截断。
+func (s *AISameSourceService) UnconfirmedCount() (int64, error) {
+	var count int64
+	err := database.DB.Model(&models.VideoSameSourceRelation{}).
+		Joins("INNER JOIN videos AS same_source_video_a ON same_source_video_a.id = video_same_source_relations.video_a_id AND same_source_video_a.deleted_at IS NULL").
+		Joins("INNER JOIN videos AS same_source_video_b ON same_source_video_b.id = video_same_source_relations.video_b_id AND same_source_video_b.deleted_at IS NULL").
+		Where("video_same_source_relations.status = ? AND video_same_source_relations.reviewed_at IS NULL", models.VideoSameSourceStatusDetected).
+		Count(&count).Error
+	return count, err
+}
+
 func sameSourceReviewItem(relation models.VideoSameSourceRelation) VideoSameSourceReviewItem {
 	item := VideoSameSourceReviewItem{
 		ID: relation.ID, VideoAID: relation.VideoAID, VideoBID: relation.VideoBID,

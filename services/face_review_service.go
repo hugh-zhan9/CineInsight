@@ -732,6 +732,32 @@ func reconcileFaceClusterPeople(ctx context.Context) error {
 		Delete(&models.FaceRelationWrite{}).Error
 }
 
+// CountPendingReview 是待处理收件箱的人脸计数（D-PC27，只读，不做对账写入）：
+//   - unnamed：未命名的簇，加上对账时会回到未命名的「named 但 person_id 为空」的簇（与 reconcileFaceClusterPeople 同口径）；
+//   - appendPending：已命名、有人物、且至少一条观测等待确认追加的簇。
+//
+// 已忽略的簇两项都不算。
+func (s *FaceReviewService) CountPendingReview(ctx context.Context) (unnamed int, appendPending int, err error) {
+	var unnamedCount int64
+	if err := database.DB.WithContext(ctx).Model(&models.FaceCluster{}).
+		Where("face_clusters.status = ? OR (face_clusters.status = ? AND face_clusters.person_id IS NULL)",
+			models.FaceClusterStatusUnnamed, models.FaceClusterStatusNamed).
+		Count(&unnamedCount).Error; err != nil {
+		return 0, 0, err
+	}
+	pending := database.DB.Model(&models.FaceObservation{}).Select("1").
+		Where("face_observations.cluster_id = face_clusters.id").
+		Where("face_observations.append_status = ?", models.FaceAppendStatusPending)
+	var appendCount int64
+	if err := database.DB.WithContext(ctx).Model(&models.FaceCluster{}).
+		Where("face_clusters.status = ? AND face_clusters.person_id IS NOT NULL", models.FaceClusterStatusNamed).
+		Where("EXISTS (?)", pending).
+		Count(&appendCount).Error; err != nil {
+		return 0, 0, err
+	}
+	return int(unnamedCount), int(appendCount), nil
+}
+
 // faceClusterCounts 是一个簇的观测与媒体计数。
 type faceClusterCounts struct {
 	Observations int

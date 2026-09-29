@@ -1139,3 +1139,23 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - 会话上限 64 跨重启保留；
   - 没有 `PlaySessionId` 时，同一设备在同一次运行中重看同一部片只记一次。
 - **独立安全评审**：待安排。范围是只存令牌哈希、过期与作废语义、诊断信息不泄露敏感内容。
+
+**P-024 交付与整合**（2026-09-29）：三项交付全部实现。P-024 自报 SQLite 全量通过、`-race` 干净，18 项变异检查都能被测试拦下。
+
+它停下的 4 个服务层只读接口，由主代理处理：
+- `SubtitleService.ActiveTranslationVideoIDs`：翻译进行中也要拦截退出；
+- `FaceReviewService.CountPendingReview`：原来待审人脸数恒为 0；
+- `AISameSourceService.UnconfirmedCount` 与 `AITaggingService.UnconfirmedSameSourceCount`：原来同源计数超过 200 会被截断；
+- 退出时字幕任务残留的 pending 文件：改动在 `subtitle_queue.go`，转交修复 I-2。
+
+以上都已接入 `app_pending.go` / `app_quit.go`，测试见 `services/p024_pending_counts_test.go`。
+
+- **P-029** 接线：
+  - `main.go` 注册 `OnBeforeClose: app.beforeClose`；
+  - 在 `backgroundTasks.SetOnChange`、`idleGate.SetEventEmitter`，以及各服务的状态回调（清单见 P-024 报告）中调用 `notifyTaskCenterChanged()`；
+  - 重新生成绑定，涉及 `GetTaskCenterSnapshot`、`GetPendingWorkSummary`、`ConfirmQuit` 以及 `main.*` 新类型。
+- **前端**：
+  - 同时监听 `subtitle-queue` 与 `cleanup-progress` 并重新拉取快照。这两个事件由服务层直接发出，只有排队变化时 App 层收不到；
+  - 处理 `quit-confirm-required`，并按 `warnings` 显示提示；
+  - `TaskRecentJob.id` 是字符串，调用接受数字参数的绑定前要先转换。
+- 与设计的偏差（主代理接受）：清理候选没有排除「分析之后才被删进回收站」的视频，重新分析后计数会恢复。

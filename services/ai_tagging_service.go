@@ -913,6 +913,15 @@ func (s *AITaggingService) ListSameSourceRelations(status string, unreadOnly boo
 	return service.ListRelations(status, unreadOnly)
 }
 
+// UnconfirmedSameSourceCount 返回待确认的同源关系总数（口径同 ListSameSourceRelations，不截断）。
+func (s *AITaggingService) UnconfirmedSameSourceCount() (int64, error) {
+	service, ok := s.sameSource.(*AISameSourceService)
+	if !ok {
+		return 0, fmt.Errorf("same-source service unavailable")
+	}
+	return service.UnconfirmedCount()
+}
+
 func (s *AITaggingService) MarkSameSourceRelationRead(relationID uint) error {
 	service, ok := s.sameSource.(*AISameSourceService)
 	if !ok {

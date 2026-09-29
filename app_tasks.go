@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"time"
+	"video-master/models"
 	"video-master/services"
 )
 
@@ -200,4 +202,547 @@ func (a *App) DiscardEnhancementProgress(taskID uint) (*services.EnhancementTask
 	view, err := a.enhancement.DiscardTaskProgress(taskID)
 	log.Printf("API DiscardEnhancementProgress task=%d err=%v", taskID, err)
 	return view, err
+}
+
+// ===== 任务中心适配表（D-PC18、APP-03）=====
+//
+// 每个后台任务 key 一个适配函数，把该服务既有的状态接口翻成任务中心的一项。表必须覆盖
+// 登记表的全部 key（TestAPP03TaskCenterAdaptersCoverEveryRegistryKey 守住：登记表增减一个
+// key 而这里没跟上，测试即失败）。
+//
+// 运行与否以登记表为准（buildTaskCenterItem 合并），适配函数报告的 running 只补登记表还没
+// 反映出来的那一瞬（服务已置位、Begin 尚未调用）。canStart / canCancel 只在对应的零参绑定
+// 确实存在时为真：需要参数的启动（超分、人脸、语义索引、播放代理）与按单个任务取消的
+// （超分、下载）不在 key 这一层给出，它们在 Recent 里逐条给。
+
+type taskCenterKeyState struct {
+	running   bool
+	progress  *TaskProgress
+	lastRun   *TaskLastRun
+	canStart  bool
+	canCancel bool
+}
+
+type taskCenterAdapter func(a *App, src *taskCenterSources) taskCenterKeyState
+
+var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
+	services.BackgroundTaskSubtitle:            (*App).taskCenterSubtitle,
+	services.BackgroundTaskEnhancement:         (*App).taskCenterEnhancement,
+	services.BackgroundTaskProxy:               (*App).taskCenterProxy,
+	services.BackgroundTaskFace:                (*App).taskCenterFace,
+	services.BackgroundTaskFrameHash:           (*App).taskCenterFrameHash,
+	services.BackgroundTaskPerceptualHash:      (*App).taskCenterPerceptualHash,
+	services.BackgroundTaskTechnical:           (*App).taskCenterTechnical,
+	services.BackgroundTaskLocalMetadata:       (*App).taskCenterLocalMetadata,
+	services.BackgroundTaskSemantic:            (*App).taskCenterSemantic,
+	services.BackgroundTaskImageSemantic:       (*App).taskCenterImageSemantic,
+	services.BackgroundTaskAITagging:           (*App).taskCenterAITagging,
+	services.BackgroundTaskImageAITagging:      (*App).taskCenterImageAITagging,
+	services.BackgroundTaskEXIF:                (*App).taskCenterEXIF,
+	services.BackgroundTaskImagePerceptualHash: (*App).taskCenterImagePerceptualHash,
+	services.BackgroundTaskCleanup:             (*App).taskCenterCleanup,
+	services.BackgroundTaskImageCleanup:        (*App).taskCenterImageCleanup,
+	services.BackgroundTaskCollectionSuggest:   (*App).taskCenterCollectionSuggest,
+	services.BackgroundTaskBackup:              (*App).taskCenterBackup,
+	services.BackgroundTaskBrowserDownload:     (*App).taskCenterBrowserDownload,
+	services.BackgroundTaskWatchlistEnrich:     (*App).taskCenterWatchlistEnrich,
+	services.BackgroundTaskMovieChart:          (*App).taskCenterMovieChart,
+}
+
+// runningProgress 给运行中的批量任务报进度；总数还不知道（准备阶段）时为 nil。
+func runningProgress(running bool, done, total int) *TaskProgress {
+	if !running || total <= 0 {
+		return nil
+	}
+	return &TaskProgress{Done: done, Total: total}
+}
+
+// finishedBatchRun 是批量任务上一轮的结果；还在跑、或从没跑过时为 nil。
+func finishedBatchRun(finished bool, at *time.Time, succeeded, failed int, failures []string) *TaskLastRun {
+	if !finished {
+		return nil
+	}
+	return &TaskLastRun{FinishedAt: at, Succeeded: succeeded, Failed: failed, Failures: boundTaskFailures(failures)}
+}
+
+// singleOutcomeRun 是「一轮就是一次分析」的任务（清理、建议作品集、备份）的上一轮结果。
+func singleOutcomeRun(at *time.Time, failure string) *TaskLastRun {
+	run := &TaskLastRun{FinishedAt: at, Failures: []string{}}
+	if failure != "" {
+		run.Failed = 1
+		run.Failures = boundTaskFailures([]string{failure})
+	} else {
+		run.Succeeded = 1
+	}
+	return run
+}
+
+// boundTaskFailures 按 LastRun 的约定截断：最多 taskCenterFailureLimit 条，每条最多
+// taskCenterFailureMaxRunes 个字符。
+func boundTaskFailures(failures []string) []string {
+	bounded := make([]string, 0, min(len(failures), taskCenterFailureLimit))
+	for _, failure := range failures {
+		if len(bounded) == taskCenterFailureLimit {
+			break
+		}
+		if runes := []rune(failure); len(runes) > taskCenterFailureMaxRunes {
+			failure = string(runes[:taskCenterFailureMaxRunes])
+		}
+		bounded = append(bounded, failure)
+	}
+	return bounded
+}
+
+// taskFailure 把一条失败写成「名称：原因」；没有名称时只留原因。
+func taskFailure(name, message string) string {
+	if name == "" {
+		return message
+	}
+	return name + "：" + message
+}
+
+func (a *App) taskCenterSubtitle(src *taskCenterSources) taskCenterKeyState {
+	// 队列里有任务（含排队中、worker 还没取走的）就算在跑；CancelSubtitle 取消的是当前这一个。
+	state := taskCenterKeyState{running: src.subtitleQueue.Total > 0, canCancel: src.subtitleQueue.ActiveTask != nil}
+	for _, job := range src.subtitleJobs {
+		switch job.Status {
+		case services.SubtitleQueueTaskStatusQueued, services.SubtitleQueueTaskStatusRunning:
+			continue
+		}
+		run := &TaskLastRun{FinishedAt: job.FinishedAt, Failures: []string{}}
+		switch job.Status {
+		case services.SubtitleQueueTaskStatusSucceeded:
+			run.Succeeded = 1
+		case services.SubtitleQueueTaskStatusFailed:
+			run.Failed = 1
+			run.Failures = boundTaskFailures([]string{taskFailure(job.VideoName, job.Message)})
+		}
+		state.lastRun = run
+		break
+	}
+	return state
+}
+
+func (a *App) taskCenterEnhancement(src *taskCenterSources) taskCenterKeyState {
+	var state taskCenterKeyState
+	for _, task := range src.enhancement {
+		switch task.Status {
+		case models.EnhancementStatusQueued, models.EnhancementStatusCancelRequested:
+			continue
+		case models.EnhancementStatusRunning:
+			if state.progress == nil && task.TotalFrames > 0 {
+				state.progress = &TaskProgress{Done: int(task.CommittedFrames), Total: int(task.TotalFrames)}
+			}
+			continue
+		}
+		if state.lastRun != nil {
+			continue
+		}
+		// ListTasks 先列进行中的，再按更新时间倒序列历史：第一条历史就是最近结束的那个。
+		run := &TaskLastRun{FinishedAt: task.FinishedAt, Failures: []string{}}
+		switch task.Status {
+		case models.EnhancementStatusCompleted:
+			run.Succeeded = 1
+		case models.EnhancementStatusFailed:
+			run.Failed = 1
+			reason := task.ErrorSummary
+			if reason == "" {
+				reason = task.ErrorCode
+			}
+			run.Failures = boundTaskFailures([]string{taskFailure(task.VideoName, reason)})
+		}
+		state.lastRun = run
+	}
+	return state
+}
+
+func (a *App) taskCenterProxy(src *taskCenterSources) taskCenterKeyState {
+	status := src.proxy
+	failures := make([]string, 0)
+	for _, result := range status.Results {
+		if playbackProxyResultFailed(result.Code) {
+			failures = append(failures, taskFailure(result.Name, result.Message))
+		}
+	}
+	return taskCenterKeyState{
+		running:   status.Running,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!status.Running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+func (a *App) taskCenterFace(src *taskCenterSources) taskCenterKeyState {
+	if a.faceAnalysis == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.faceAnalysis.Status()
+	running := status.Running || status.Preparing
+	failures := make([]string, 0, len(status.Failures)+1)
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	if status.LastError != "" {
+		failures = append(failures, status.LastError)
+	}
+	return taskCenterKeyState{
+		running:   running,
+		canCancel: running,
+		progress:  runningProgress(running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!running && (status.Completed || status.Cancelled || status.Interrupted),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+func (a *App) taskCenterFrameHash(src *taskCenterSources) taskCenterKeyState {
+	if a.frameHash == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.frameHash.Status()
+	running := status.Running || status.Preparing
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   running,
+		canStart:  true,
+		canCancel: running,
+		progress:  runningProgress(running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+func (a *App) taskCenterPerceptualHash(src *taskCenterSources) taskCenterKeyState {
+	if a.perceptualHash == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.perceptualHash.Status()
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   status.Running,
+		canStart:  true,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!status.Running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+func (a *App) taskCenterTechnical(src *taskCenterSources) taskCenterKeyState {
+	if a.technicalBackfill == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.technicalBackfill.Status()
+	running := status.Running || status.Preparing
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   running,
+		canStart:  true,
+		canCancel: running,
+		progress:  runningProgress(running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+// taskCenterLocalMetadata：补全与写出共用 local_metadata 这一个 key。启动与取消只作用于补全
+// （与命令面板同一口径，写出只从片库页发起）；上一轮取两者中较晚结束的那一个。
+func (a *App) taskCenterLocalMetadata(src *taskCenterSources) taskCenterKeyState {
+	if a.localMetadata == nil {
+		return taskCenterKeyState{}
+	}
+	backfill := a.localMetadata.BackfillStatus()
+	export := a.localMetadata.ExportStatus()
+	state := taskCenterKeyState{
+		running:   backfill.Running || export.Running,
+		canStart:  true,
+		canCancel: backfill.Running,
+	}
+	if backfill.Running {
+		state.progress = runningProgress(true, backfill.Processed, backfill.Total)
+	} else if export.Running {
+		state.progress = runningProgress(true, export.Processed, export.Total)
+	}
+	localFailures := func(failures []services.LocalMetadataFailure) []string {
+		messages := make([]string, 0, len(failures))
+		for _, failure := range failures {
+			messages = append(messages, failure.Message)
+		}
+		return messages
+	}
+	backfillRun := finishedBatchRun(!backfill.Running && (backfill.Completed || backfill.Cancelled),
+		backfill.UpdatedAt, backfill.Succeeded, backfill.Failed, localFailures(backfill.Failures))
+	exportRun := finishedBatchRun(!export.Running && (export.Completed || export.Cancelled),
+		export.UpdatedAt, export.Succeeded, export.Failed, localFailures(export.Failures))
+	state.lastRun = backfillRun
+	if exportRun != nil && (backfillRun == nil || laterTime(exportRun.FinishedAt, backfillRun.FinishedAt)) {
+		state.lastRun = exportRun
+	}
+	return state
+}
+
+func laterTime(left, right *time.Time) bool {
+	if left == nil {
+		return false
+	}
+	return right == nil || left.After(*right)
+}
+
+func (a *App) taskCenterSemantic(src *taskCenterSources) taskCenterKeyState {
+	svc := a.semanticIndexService()
+	if svc == nil {
+		return taskCenterKeyState{}
+	}
+	status := svc.Status()
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   status.Running,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!status.Running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+func (a *App) taskCenterImageSemantic(src *taskCenterSources) taskCenterKeyState {
+	svc := a.imageSemanticIndexService()
+	if svc == nil {
+		return taskCenterKeyState{}
+	}
+	status := svc.Status()
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   status.Running,
+		canStart:  status.Available,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!status.Running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+// taskCenterAITagging：视频 AI 打标没有内存里的「本轮」状态，运行与否只看登记表；上一轮给的是
+// 按状态累计的完成数与失败数（StatusSummary，与待处理汇总同一口径），数据库不可读时不给。
+func (a *App) taskCenterAITagging(src *taskCenterSources) taskCenterKeyState {
+	state := taskCenterKeyState{canStart: a.aiTaggingService != nil}
+	if a.aiTaggingService == nil || src.dbUnavailable != "" {
+		return state
+	}
+	summary, err := a.aiTaggingService.StatusSummary()
+	if err != nil {
+		log.Printf("API GetTaskCenterSnapshot ai tagging summary err=%v", err)
+		src.warn("视频 AI 打标状态读取失败")
+		return state
+	}
+	if summary.Completed+summary.Failed > 0 {
+		state.lastRun = &TaskLastRun{Succeeded: int(summary.Completed), Failed: int(summary.Failed), Failures: []string{}}
+	}
+	return state
+}
+
+func (a *App) taskCenterImageAITagging(src *taskCenterSources) taskCenterKeyState {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return taskCenterKeyState{}
+	}
+	status := svc.GetImageAITaggingStatus()
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   status.Running,
+		canStart:  true,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!status.Running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+func (a *App) taskCenterEXIF(src *taskCenterSources) taskCenterKeyState {
+	if a.imageEXIFBackfill == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.imageEXIFBackfill.GetImageEXIFBackfillStatus()
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   status.Running,
+		canStart:  true,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!status.Running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+func (a *App) taskCenterImagePerceptualHash(src *taskCenterSources) taskCenterKeyState {
+	if a.imagePHashBackfill == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.imagePHashBackfill.GetImagePerceptualHashBackfillStatus()
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   status.Running,
+		canStart:  true,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!status.Running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+// taskCenterCleanup：CleanupService.Status 回读时要按审阅决定过滤缓存结果（读库），数据库
+// 不可读时它的 Error 会是底层的英文错误，因此这时只报运行与进度、不报上一轮。
+func (a *App) taskCenterCleanup(src *taskCenterSources) taskCenterKeyState {
+	if a.cleanupService == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.cleanupService.Status()
+	state := taskCenterKeyState{
+		running:   status.Running,
+		canStart:  true,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Progress.Current, status.Progress.Total),
+	}
+	if status.Running || src.dbUnavailable != "" {
+		return state
+	}
+	switch {
+	case status.Completed:
+		state.lastRun = singleOutcomeRun(status.UpdatedAt, "")
+	case status.Cancelled:
+		state.lastRun = &TaskLastRun{FinishedAt: status.UpdatedAt, Failures: []string{}}
+	case status.Error != "":
+		state.lastRun = singleOutcomeRun(status.UpdatedAt, status.Error)
+	}
+	return state
+}
+
+func (a *App) taskCenterImageCleanup(src *taskCenterSources) taskCenterKeyState {
+	if a.imageCleanupService == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.imageCleanupService.GetImageCleanupStatus()
+	state := taskCenterKeyState{
+		running:   status.Running,
+		canStart:  true,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Progress.Current, status.Progress.Total),
+	}
+	if status.Running {
+		return state
+	}
+	switch {
+	case status.Completed:
+		state.lastRun = singleOutcomeRun(status.UpdatedAt, "")
+	case status.Cancelled:
+		state.lastRun = &TaskLastRun{FinishedAt: status.UpdatedAt, Failures: []string{}}
+	case status.Error != "":
+		state.lastRun = singleOutcomeRun(status.UpdatedAt, status.Error)
+	}
+	return state
+}
+
+func (a *App) taskCenterCollectionSuggest(src *taskCenterSources) taskCenterKeyState {
+	if a.collectionSuggestions == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.collectionSuggestions.Status()
+	state := taskCenterKeyState{
+		running:   status.Running,
+		canStart:  true,
+		canCancel: status.Running,
+		progress:  runningProgress(status.Running, status.Scanned, status.Total),
+	}
+	if status.Running {
+		return state
+	}
+	switch {
+	case status.LastError != "":
+		state.lastRun = singleOutcomeRun(status.UpdatedAt, status.LastError)
+	case status.Completed:
+		state.lastRun = singleOutcomeRun(status.UpdatedAt, "")
+	case status.Cancelled:
+		state.lastRun = &TaskLastRun{FinishedAt: status.UpdatedAt, Failures: []string{}}
+	}
+	return state
+}
+
+// taskCenterBackup：备份状态要读设置（最近一次尝试与错误都记在设置行里），数据库不可读时
+// 运行与否只看登记表，也不给「启动」——维护期间手动备份本来就会被拒绝。
+func (a *App) taskCenterBackup(src *taskCenterSources) taskCenterKeyState {
+	if a.backupService == nil || src.dbUnavailable != "" {
+		return taskCenterKeyState{}
+	}
+	status := a.backupService.GetStatus()
+	state := taskCenterKeyState{running: status.Running, canStart: !status.Running && status.BackupAvailable}
+	if status.LastAttemptAt != nil {
+		state.lastRun = singleOutcomeRun(status.LastAttemptAt, status.LastError)
+	}
+	return state
+}
+
+// taskCenterBrowserDownload：运行与否看登记表（每个在下的任务各登记一次）；取消与重试按单个
+// 任务在 Recent 里给。上一轮是最近结束（完成或失败）的那一个下载。
+func (a *App) taskCenterBrowserDownload(src *taskCenterSources) taskCenterKeyState {
+	var state taskCenterKeyState
+	var latest *services.BrowserDownloadTask
+	for index := range src.downloads {
+		task := &src.downloads[index]
+		if task.State != browserDownloadDone && task.State != browserDownloadFailed {
+			continue
+		}
+		if latest == nil || task.FinishedAt > latest.FinishedAt {
+			latest = task
+		}
+	}
+	if latest != nil {
+		failure := ""
+		if latest.State == browserDownloadFailed {
+			title := latest.Title
+			if title == "" {
+				title = latest.Filename
+			}
+			failure = taskFailure(title, latest.Error)
+		}
+		state.lastRun = singleOutcomeRun(unixMilliTime(latest.FinishedAt), failure)
+	}
+	return state
+}
+
+// taskCenterWatchlistEnrich：片单补全只有逐条目的状态（在片单页），没有本轮进度，也没有零参的
+// 启动 / 取消绑定；任务中心只报它在不在跑。
+func (a *App) taskCenterWatchlistEnrich(src *taskCenterSources) taskCenterKeyState {
+	return taskCenterKeyState{}
+}
+
+func (a *App) taskCenterMovieChart(src *taskCenterSources) taskCenterKeyState {
+	svc := a.movieChartService()
+	if svc == nil {
+		return taskCenterKeyState{}
+	}
+	_, running := svc.RefreshStatus()
+	return taskCenterKeyState{running: running, canCancel: running}
 }

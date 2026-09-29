@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"video-master/database"
 	"video-master/models"
@@ -68,6 +69,20 @@ func (s *SubtitleService) CancelSubtitleTranslation(videoID uint) {
 	for _, entry := range entries {
 		entry.cancel()
 	}
+}
+
+// ActiveTranslationVideoIDs 返回正在跑「翻译已有字幕」的视频 ID（升序，只读内存），供退出保护判定（D-PC21）。
+func (s *SubtitleService) ActiveTranslationVideoIDs() []uint {
+	s.mu.Lock()
+	ids := make([]uint, 0, len(s.translationCancels))
+	for videoID, entries := range s.translationCancels {
+		if len(entries) > 0 {
+			ids = append(ids, videoID)
+		}
+	}
+	s.mu.Unlock()
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 // registerTranslationCancel 登记一个可取消的翻译任务。登记发生在抢字幕文件锁之前，
