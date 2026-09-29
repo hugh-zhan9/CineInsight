@@ -3,8 +3,11 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
+	"sort"
 	"sync"
 	"testing"
+	"time"
 	"video-master/database"
 	"video-master/models"
 )
@@ -685,5 +688,514 @@ func TestFaceReviewWritesRelationsOnlyOnUserAction(t *testing.T) {
 	}
 	if count := countFaceRows(t, &models.FaceObservation{}, "append_status = ?", models.FaceAppendStatusPending); count != 0 {
 		t.Fatalf("确认后不该再有 pending 观测，实际 %d", count)
+	}
+}
+
+// ===== P-018 人脸可逆与分页（META-04 / META-11） =====
+
+// namedFaceClusterOn 造一个已命名簇：每件媒体一条观测，经 LinkFaceCluster 写关系并置 confirmed。
+func namedFaceClusterOn(t *testing.T, service *FaceReviewService, personID uint, videos []models.Video, hashPrefix string) models.FaceCluster {
+	t.Helper()
+	cluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(0))
+	for i, video := range videos {
+		seedFaceObservation(t, cluster.ID, models.FaceMediaKindVideo, video.ID, fmt.Sprintf("%s%02d", hashPrefix, i), models.FaceAppendStatusNone, 0.9)
+	}
+	if _, err := service.LinkFaceCluster(context.Background(), cluster.ID, personID); err != nil {
+		t.Fatalf("关联簇失败: %v", err)
+	}
+	return cluster
+}
+
+func videoRelationCount(t *testing.T, videoID, personID uint) int64 {
+	t.Helper()
+	return countFaceRows(t, &models.VideoPerson{}, "video_id = ? AND person_id = ?", videoID, personID)
+}
+
+// 恢复后回到未命名：ignored_at 清空，观测保留；重复恢复幂等；非忽略的已命名簇报 cluster_not_ignored。
+func TestMETA04RestoreIgnoredClusterReturnsToUnnamed(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	video := seedFaceTestVideo(t, "a.mp4")
+	person := seedFaceTestPerson(t, "周迅", false)
+	service := newFaceReviewTestService()
+	cluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(0))
+	seedFaceObservation(t, cluster.ID, models.FaceMediaKindVideo, video.ID, "r00000000001", models.FaceAppendStatusNone, 0.9)
+	if err := service.IgnoreFaceCluster(ctx, cluster.ID); err != nil {
+		t.Fatalf("忽略失败: %v", err)
+	}
+	if faceClusterByID(t, cluster.ID).IgnoredAt == nil {
+		t.Fatal("忽略应写 ignored_at")
+	}
+	if err := service.RestoreFaceCluster(ctx, cluster.ID); err != nil {
+		t.Fatalf("恢复失败: %v", err)
+	}
+	restored := faceClusterByID(t, cluster.ID)
+	if restored.Status != models.FaceClusterStatusUnnamed || restored.IgnoredAt != nil {
+		t.Fatalf("恢复后应为未命名且无 ignored_at: %+v", restored)
+	}
+	if count := countFaceRows(t, &models.FaceObservation{}, "cluster_id = ?", cluster.ID); count != 1 {
+		t.Fatalf("恢复不动观测: %d", count)
+	}
+	if err := service.RestoreFaceCluster(ctx, cluster.ID); err != nil {
+		t.Fatalf("重复恢复应幂等: %v", err)
+	}
+	// 恢复后可以正常命名（回到未命名的簇能过 unnamed 校验）。
+	if _, err := service.LinkFaceCluster(ctx, cluster.ID, person.ID); err != nil {
+		t.Fatalf("恢复后应能关联: %v", err)
+	}
+	if err := service.RestoreFaceCluster(ctx, cluster.ID); !errors.Is(err, ErrFaceClusterNotIgnored) {
+		t.Fatalf("已命名簇不能恢复: %v", err)
+	}
+	if err := service.RestoreFaceCluster(ctx, 9999); !errors.Is(err, ErrFaceClusterNotFound) {
+		t.Fatalf("不存在的簇: %v", err)
+	}
+}
+
+// 已忽略列表附忽略之后并入的观测数；历史行（无 ignored_at）显示 0；游标分页。
+func TestMETA04ListIgnoredClustersReportsAbsorbedSinceIgnored(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	cluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(0))
+	old := seedFaceObservation(t, cluster.ID, models.FaceMediaKindImage, 1, "i00000000001", models.FaceAppendStatusNone, 0.9)
+	if err := service.IgnoreFaceCluster(ctx, cluster.ID); err != nil {
+		t.Fatal(err)
+	}
+	ignoredAt := *faceClusterByID(t, cluster.ID).IgnoredAt
+	if err := database.DB.Model(&models.FaceObservation{}).Where("id = ?", old.ID).
+		UpdateColumn("updated_at", ignoredAt.Add(-time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		absorbed := seedFaceObservation(t, cluster.ID, models.FaceMediaKindImage, uint(10+i), fmt.Sprintf("i0000000001%d", i), models.FaceAppendStatusNone, 0.5)
+		if err := database.DB.Model(&models.FaceObservation{}).Where("id = ?", absorbed.ID).
+			UpdateColumn("updated_at", ignoredAt.Add(time.Minute)).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	historical := seedFaceCluster(t, models.FaceClusterStatusIgnored, nil, faceUnitVector(1))
+	seedFaceObservation(t, historical.ID, models.FaceMediaKindImage, 20, "i00000000020", models.FaceAppendStatusNone, 0.9)
+	seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(2))
+
+	page, err := service.ListIgnoredFaceClusters(ctx, 0, 1)
+	if err != nil {
+		t.Fatalf("列出已忽略失败: %v", err)
+	}
+	if len(page.Clusters) != 1 || page.Clusters[0].Cluster.ID != historical.ID || page.NextCursor != historical.ID {
+		t.Fatalf("第一页应是 id 较大的历史行且有下一页: %+v", page)
+	}
+	if page.Clusters[0].AbsorbedSinceIgnored != 0 || page.Clusters[0].IgnoredAt != nil {
+		t.Fatalf("历史行应显示 0: %+v", page.Clusters[0])
+	}
+	page, err = service.ListIgnoredFaceClusters(ctx, page.NextCursor, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(page.Clusters) != 1 || page.Clusters[0].Cluster.ID != cluster.ID || page.NextCursor != 0 {
+		t.Fatalf("第二页: %+v", page)
+	}
+	if got := page.Clusters[0].AbsorbedSinceIgnored; got != 2 {
+		t.Fatalf("忽略后并入 2 条，实际 %d", got)
+	}
+	if page.Clusters[0].Cluster.ObservationCount != 3 {
+		t.Fatalf("卡片观测数应现算为 3: %d", page.Clusters[0].Cluster.ObservationCount)
+	}
+}
+
+// 解除关联只删「未被该人物其他 named 簇覆盖」的关系；预览列出全部并标出被覆盖的。
+func TestMETA04UnlinkRemovesOnlyRelationsNotCoveredByOtherClusters(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1, v2, v3 := seedFaceTestVideo(t, "v1.mp4"), seedFaceTestVideo(t, "v2.mp4"), seedFaceTestVideo(t, "v3.mp4")
+	person := seedFaceTestPerson(t, "周迅", false)
+	clusterA := namedFaceClusterOn(t, service, person.ID, []models.Video{v1, v2}, "ua0000000")
+	namedFaceClusterOn(t, service, person.ID, []models.Video{v2, v3}, "ub0000000")
+
+	preview, err := service.PreviewFaceClusterUnlink(ctx, clusterA.ID)
+	if err != nil {
+		t.Fatalf("预览失败: %v", err)
+	}
+	if len(preview) != 2 || preview[0].MediaID != v1.ID || preview[0].Name != "v1.mp4" || preview[0].CoveredByOther ||
+		preview[1].MediaID != v2.ID || !preview[1].CoveredByOther {
+		t.Fatalf("预览应列出两件媒体且 v2 被其他簇覆盖: %+v", preview)
+	}
+
+	view, err := service.UnlinkFaceCluster(ctx, clusterA.ID, true)
+	if err != nil {
+		t.Fatalf("解除失败: %v", err)
+	}
+	if view.Status != models.FaceClusterStatusUnnamed || view.PersonID != 0 {
+		t.Fatalf("解除后应为未命名: %+v", view)
+	}
+	if got := faceClusterByID(t, clusterA.ID); got.PersonID != nil {
+		t.Fatalf("person_id 应置空: %+v", got)
+	}
+	if videoRelationCount(t, v1.ID, person.ID) != 0 {
+		t.Fatal("v1 只由该簇覆盖，关系应删除")
+	}
+	if videoRelationCount(t, v2.ID, person.ID) != 1 || videoRelationCount(t, v3.ID, person.ID) != 1 {
+		t.Fatal("v2 仍被其他簇覆盖、v3 不属于该簇，关系都应保留")
+	}
+	if _, err := service.UnlinkFaceCluster(ctx, clusterA.ID, true); !errors.Is(err, ErrFaceClusterNotNamed) {
+		t.Fatalf("重复解除应报 cluster_not_named: %v", err)
+	}
+	if _, err := service.PreviewFaceClusterUnlink(ctx, clusterA.ID); !errors.Is(err, ErrFaceClusterNotNamed) {
+		t.Fatalf("未命名簇不能预览: %v", err)
+	}
+}
+
+// removeRelations=false 时只解除簇，关系一行不动；追加候选回到 none。
+func TestMETA04UnlinkWithoutRemovingRelationsKeepsThem(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1, v2 := seedFaceTestVideo(t, "v1.mp4"), seedFaceTestVideo(t, "v2.mp4")
+	person := seedFaceTestPerson(t, "周迅", false)
+	cluster := namedFaceClusterOn(t, service, person.ID, []models.Video{v1}, "uk0000000")
+	pending := seedFaceObservation(t, cluster.ID, models.FaceMediaKindVideo, v2.ID, "uk0000009", models.FaceAppendStatusPending, 0.5)
+
+	if _, err := service.UnlinkFaceCluster(ctx, cluster.ID, false); err != nil {
+		t.Fatalf("解除失败: %v", err)
+	}
+	if videoRelationCount(t, v1.ID, person.ID) != 1 {
+		t.Fatal("不删关系时 v1 应保留")
+	}
+	if got := faceObservationByID(t, pending.ID).AppendStatus; got != models.FaceAppendStatusNone {
+		t.Fatalf("解除后 pending 应回到 none: %q", got)
+	}
+}
+
+// 并发下两次解除只有一次生效，另一次 cluster_not_named，关系只删一次。
+func TestMETA04ConcurrentUnlinkTakesEffectOnce(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1 := seedFaceTestVideo(t, "v1.mp4")
+	person := seedFaceTestPerson(t, "周迅", false)
+	cluster := namedFaceClusterOn(t, service, person.ID, []models.Video{v1}, "uc0000000")
+
+	results := make([]error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	for i := range results {
+		go func(index int) {
+			defer wait.Done()
+			_, results[index] = service.UnlinkFaceCluster(ctx, cluster.ID, true)
+		}(i)
+	}
+	wait.Wait()
+	succeeded, lost := 0, 0
+	for _, err := range results {
+		switch {
+		case err == nil:
+			succeeded++
+		case errors.Is(err, ErrFaceClusterNotNamed):
+			lost++
+		default:
+			t.Fatalf("并发解除只该成功或 cluster_not_named: %v", err)
+		}
+	}
+	if succeeded != 1 || lost != 1 {
+		t.Fatalf("应一次成功一次落败: 成功 %d 落败 %d", succeeded, lost)
+	}
+	if videoRelationCount(t, v1.ID, person.ID) != 0 {
+		t.Fatal("关系应已删除")
+	}
+}
+
+// 改派：关系去重迁移到目标人物；仍被原人物其他 named 簇覆盖的媒体在原人物侧保留。
+func TestMETA04ReassignMovesRelationsWithDedupe(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1, v2, v3 := seedFaceTestVideo(t, "v1.mp4"), seedFaceTestVideo(t, "v2.mp4"), seedFaceTestVideo(t, "v3.mp4")
+	source := seedFaceTestPerson(t, "周迅", false)
+	target := seedFaceTestPerson(t, "汤唯", false)
+	clusterA := namedFaceClusterOn(t, service, source.ID, []models.Video{v1, v2}, "ra0000000")
+	namedFaceClusterOn(t, service, source.ID, []models.Video{v2, v3}, "rb0000000")
+	// 目标人物已经在 v1 上有关系：迁移必须去重，不能报主键冲突。
+	if err := database.DB.Create(&models.VideoPerson{VideoID: v1.ID, PersonID: target.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	view, err := service.ReassignFaceCluster(ctx, clusterA.ID, target.ID, true)
+	if err != nil {
+		t.Fatalf("改派失败: %v", err)
+	}
+	if view.PersonID != target.ID || view.PersonName != "汤唯" || view.Status != models.FaceClusterStatusNamed {
+		t.Fatalf("簇应指向目标人物: %+v", view)
+	}
+	if videoRelationCount(t, v1.ID, target.ID) != 1 || videoRelationCount(t, v2.ID, target.ID) != 1 {
+		t.Fatal("目标人物应有 v1、v2 各一条关系")
+	}
+	if videoRelationCount(t, v3.ID, target.ID) != 0 {
+		t.Fatal("v3 不属于该簇，不能迁到目标人物")
+	}
+	if videoRelationCount(t, v1.ID, source.ID) != 0 {
+		t.Fatal("v1 只由被改派的簇覆盖，原人物侧应删除")
+	}
+	if videoRelationCount(t, v2.ID, source.ID) != 1 || videoRelationCount(t, v3.ID, source.ID) != 1 {
+		t.Fatal("v2 仍被原人物另一个簇覆盖、v3 不属于该簇，原人物侧应保留")
+	}
+}
+
+// moveRelations=false 只改簇指向；目标不存在报 person_not_found；目标就是当前人物为空操作；未命名簇报 cluster_not_named。
+func TestMETA04ReassignWithoutMovingRelationsAndGuards(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1 := seedFaceTestVideo(t, "v1.mp4")
+	source := seedFaceTestPerson(t, "周迅", false)
+	target := seedFaceTestPerson(t, "汤唯", false)
+	cluster := namedFaceClusterOn(t, service, source.ID, []models.Video{v1}, "rg0000000")
+
+	if _, err := service.ReassignFaceCluster(ctx, cluster.ID, 9999, true); !errors.Is(err, ErrFacePersonNotFound) {
+		t.Fatalf("目标不存在: %v", err)
+	}
+	if _, err := service.ReassignFaceCluster(ctx, cluster.ID, source.ID, true); err != nil {
+		t.Fatalf("目标就是当前人物应为空操作: %v", err)
+	}
+	if videoRelationCount(t, v1.ID, source.ID) != 1 {
+		t.Fatal("空操作不能动关系")
+	}
+	if _, err := service.ReassignFaceCluster(ctx, cluster.ID, target.ID, false); err != nil {
+		t.Fatalf("改派失败: %v", err)
+	}
+	if videoRelationCount(t, v1.ID, source.ID) != 1 || videoRelationCount(t, v1.ID, target.ID) != 0 {
+		t.Fatal("moveRelations=false 不能动关系")
+	}
+	unnamed := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(1))
+	if _, err := service.ReassignFaceCluster(ctx, unnamed.ID, target.ID, true); !errors.Is(err, ErrFaceClusterNotNamed) {
+		t.Fatalf("未命名簇不能改派: %v", err)
+	}
+}
+
+// 并发下同一次改派只迁移一次：关系不丢不重，簇最终指向目标。
+func TestMETA04ConcurrentReassignTakesEffectOnce(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1 := seedFaceTestVideo(t, "v1.mp4")
+	source := seedFaceTestPerson(t, "周迅", false)
+	target := seedFaceTestPerson(t, "汤唯", false)
+	cluster := namedFaceClusterOn(t, service, source.ID, []models.Video{v1}, "rc0000000")
+
+	results := make([]error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	for i := range results {
+		go func(index int) {
+			defer wait.Done()
+			_, results[index] = service.ReassignFaceCluster(ctx, cluster.ID, target.ID, true)
+		}(i)
+	}
+	wait.Wait()
+	for _, err := range results {
+		if err != nil && !errors.Is(err, ErrFaceClusterConflict) {
+			t.Fatalf("并发改派只该成功或 cluster_conflict: %v", err)
+		}
+	}
+	if got := faceClusterByID(t, cluster.ID); got.PersonID == nil || *got.PersonID != target.ID {
+		t.Fatalf("簇应指向目标: %+v", got)
+	}
+	if videoRelationCount(t, v1.ID, target.ID) != 1 || videoRelationCount(t, v1.ID, source.ID) != 0 {
+		t.Fatal("关系应恰好迁到目标一次")
+	}
+}
+
+// 并发下两次恢复只有一次生效，另一次幂等返回。
+func TestMETA04ConcurrentRestoreTakesEffectOnce(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	cluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(0))
+	seedFaceObservation(t, cluster.ID, models.FaceMediaKindImage, 1, "rs0000000001", models.FaceAppendStatusNone, 0.9)
+	if err := service.IgnoreFaceCluster(ctx, cluster.ID); err != nil {
+		t.Fatal(err)
+	}
+	results := make([]error, 2)
+	var wait sync.WaitGroup
+	wait.Add(2)
+	for i := range results {
+		go func(index int) {
+			defer wait.Done()
+			results[index] = service.RestoreFaceCluster(ctx, cluster.ID)
+		}(i)
+	}
+	wait.Wait()
+	for _, err := range results {
+		if err != nil {
+			t.Fatalf("并发恢复应都成功（一次生效、一次幂等）: %v", err)
+		}
+	}
+	if got := faceClusterByID(t, cluster.ID); got.Status != models.FaceClusterStatusUnnamed || got.IgnoredAt != nil {
+		t.Fatalf("恢复后状态: %+v", got)
+	}
+}
+
+// 逐条确认只写所选观测涉及的媒体，其余保持 pending；空数组仍是全部。
+func TestMETA04ConfirmAppendObservationsWritesOnlySelected(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1, v2, v3 := seedFaceTestVideo(t, "v1.mp4"), seedFaceTestVideo(t, "v2.mp4"), seedFaceTestVideo(t, "v3.mp4")
+	person := seedFaceTestPerson(t, "周迅", false)
+	cluster := seedFaceCluster(t, models.FaceClusterStatusNamed, &person.ID, faceUnitVector(0))
+	o1 := seedFaceObservation(t, cluster.ID, models.FaceMediaKindVideo, v1.ID, "cf0000000001", models.FaceAppendStatusPending, 0.9)
+	o2 := seedFaceObservation(t, cluster.ID, models.FaceMediaKindVideo, v2.ID, "cf0000000002", models.FaceAppendStatusPending, 0.9)
+	o3 := seedFaceObservation(t, cluster.ID, models.FaceMediaKindVideo, v3.ID, "cf0000000003", models.FaceAppendStatusPending, 0.9)
+
+	if err := service.ConfirmFaceClusterAppendObservations(ctx, cluster.ID, []uint{o1.ID, 99999}); err != nil {
+		t.Fatalf("逐条确认失败: %v", err)
+	}
+	if videoRelationCount(t, v1.ID, person.ID) != 1 || videoRelationCount(t, v2.ID, person.ID) != 0 || videoRelationCount(t, v3.ID, person.ID) != 0 {
+		t.Fatal("只该写所选观测 o1 涉及的媒体")
+	}
+	if faceObservationByID(t, o1.ID).AppendStatus != models.FaceAppendStatusConfirmed ||
+		faceObservationByID(t, o2.ID).AppendStatus != models.FaceAppendStatusPending ||
+		faceObservationByID(t, o3.ID).AppendStatus != models.FaceAppendStatusPending {
+		t.Fatal("只有 o1 转 confirmed，其余保持 pending")
+	}
+	if err := service.ConfirmFaceClusterAppendObservations(ctx, cluster.ID, []uint{o2.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if videoRelationCount(t, v2.ID, person.ID) != 1 || videoRelationCount(t, v3.ID, person.ID) != 0 {
+		t.Fatal("第二次只确认 o2")
+	}
+	// 空数组表示全部剩余 pending（兼容旧行为）。
+	if err := service.ConfirmFaceClusterAppendObservations(ctx, cluster.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if videoRelationCount(t, v3.ID, person.ID) != 1 || countFaceRows(t, &models.FaceObservation{}, "append_status = ?", models.FaceAppendStatusPending) != 0 {
+		t.Fatal("空数组应确认剩余全部")
+	}
+}
+
+// 已命名簇可以移除来源，且不动人物关系。
+func TestMETA04RemoveObservationFromNamedClusterKeepsRelations(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	v1, v2 := seedFaceTestVideo(t, "v1.mp4"), seedFaceTestVideo(t, "v2.mp4")
+	person := seedFaceTestPerson(t, "周迅", false)
+	cluster := namedFaceClusterOn(t, service, person.ID, []models.Video{v1, v2}, "rm0000000")
+	var observation models.FaceObservation
+	if err := database.DB.Where("cluster_id = ? AND media_id = ?", cluster.ID, v1.ID).First(&observation).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	removed, err := service.RemoveFaceClusterObservation(ctx, cluster.ID, observation.ID)
+	if err != nil || removed {
+		t.Fatalf("已命名簇应允许移除来源且簇非空: removed=%v err=%v", removed, err)
+	}
+	if got := faceObservationByID(t, observation.ID); got.ClusterID != nil {
+		t.Fatalf("观测应脱离簇: %+v", got)
+	}
+	if videoRelationCount(t, v1.ID, person.ID) != 1 || videoRelationCount(t, v2.ID, person.ID) != 1 {
+		t.Fatal("移除来源不该动人物关系")
+	}
+	if got := faceClusterByID(t, cluster.ID); got.Status != models.FaceClusterStatusNamed {
+		t.Fatalf("簇应保持 named: %+v", got)
+	}
+	ignored := seedFaceCluster(t, models.FaceClusterStatusIgnored, nil, faceUnitVector(1))
+	other := seedFaceObservation(t, ignored.ID, models.FaceMediaKindVideo, v1.ID, "rm0000000009", models.FaceAppendStatusNone, 0.9)
+	if _, err := service.RemoveFaceClusterObservation(ctx, ignored.ID, other.ID); !errors.Is(err, ErrFaceClusterNotUnnamed) {
+		t.Fatalf("已忽略簇仍不允许: %v", err)
+	}
+}
+
+// 键集分页：观测数相同的多个簇按 id 倒序，游标不重不漏；过滤条件生效。
+func TestMETA11FaceClusterPageCursorStableWithTiedCounts(t *testing.T) {
+	setupFaceTestDB(t)
+	ctx := context.Background()
+	service := newFaceReviewTestService()
+	// 观测数：3 个簇各 2 条、3 个簇各 1 条、1 个簇 3 条、1 个空簇（0 条）。
+	counts := []int{2, 1, 3, 2, 1, 2, 1, 0}
+	expected := make([]uint, 0, len(counts))
+	for i, count := range counts {
+		cluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(i%8))
+		for j := 0; j < count; j++ {
+			seedFaceObservation(t, cluster.ID, models.FaceMediaKindImage, uint(100*i+j+1), fmt.Sprintf("pg%04d%04d", i, j), models.FaceAppendStatusNone, 0.9)
+		}
+		expected = append(expected, cluster.ID)
+	}
+	ignored := seedFaceCluster(t, models.FaceClusterStatusIgnored, nil, faceUnitVector(1))
+	seedFaceObservation(t, ignored.ID, models.FaceMediaKindImage, 9000, "pg99990000", models.FaceAppendStatusNone, 0.9)
+
+	// 期望顺序：(观测数 DESC, id DESC)。
+	want := append([]uint(nil), expected...)
+	countByID := map[uint]int{}
+	for i, id := range expected {
+		countByID[id] = counts[i]
+	}
+	sort.Slice(want, func(i, j int) bool {
+		if countByID[want[i]] != countByID[want[j]] {
+			return countByID[want[i]] > countByID[want[j]]
+		}
+		return want[i] > want[j]
+	})
+	if len(want) != len(expected) {
+		t.Fatalf("基线簇数不符: %d", len(want))
+	}
+
+	for _, pageSize := range []int{1, 2, 3, 100} {
+		var got []uint
+		cursor := FaceClusterCursorKey{}
+		for guard := 0; guard < 20; guard++ {
+			page, err := service.ListFaceClusterPage(ctx, FaceClusterFilter{Status: models.FaceClusterStatusUnnamed}, cursor, pageSize)
+			if err != nil {
+				t.Fatalf("分页失败: %v", err)
+			}
+			for _, view := range page.Clusters {
+				got = append(got, view.ID)
+			}
+			if !page.HasMore {
+				break
+			}
+			if page.Next.ID == 0 {
+				t.Fatal("有下一页时游标不能为零值")
+			}
+			cursor = page.Next
+		}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("页大小 %d 下顺序/完整性不符\n got %v\nwant %v", pageSize, got, want)
+		}
+	}
+
+	// 翻页途中新增一个更大 id、同观测数的簇：已翻过的部分不重复，也不影响后续页。
+	first, err := service.ListFaceClusterPage(ctx, FaceClusterFilter{Status: models.FaceClusterStatusUnnamed}, FaceClusterCursorKey{}, 2)
+	if err != nil || len(first.Clusters) != 2 {
+		t.Fatalf("首页: %+v err=%v", first, err)
+	}
+	late := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(3))
+	seedFaceObservation(t, late.ID, models.FaceMediaKindImage, 8000, "pg88880000", models.FaceAppendStatusNone, 0.9)
+	seedFaceObservation(t, late.ID, models.FaceMediaKindImage, 8001, "pg88880001", models.FaceAppendStatusNone, 0.9)
+	rest, err := service.ListFaceClusterPage(ctx, FaceClusterFilter{Status: models.FaceClusterStatusUnnamed}, first.Next, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[uint]bool{first.Clusters[0].ID: true, first.Clusters[1].ID: true}
+	for _, view := range rest.Clusters {
+		if seen[view.ID] {
+			t.Fatalf("翻页途中出现重复簇 %d", view.ID)
+		}
+	}
+	for _, view := range rest.Clusters {
+		if view.ID == late.ID {
+			t.Fatal("新增簇排在游标之前，不该出现在后续页")
+		}
+	}
+	if len(rest.Clusters) != len(want)-2 {
+		t.Fatalf("后续页应恰好是原来剩余的簇: %d", len(rest.Clusters))
+	}
+
+	byStatus, err := service.ListFaceClusterPage(ctx, FaceClusterFilter{Status: models.FaceClusterStatusIgnored}, FaceClusterCursorKey{}, 10)
+	if err != nil || len(byStatus.Clusters) != 1 || byStatus.Clusters[0].ID != ignored.ID || byStatus.HasMore {
+		t.Fatalf("状态过滤: %+v err=%v", byStatus, err)
+	}
+	empty, err := service.ListFaceClusterPage(ctx, FaceClusterFilter{Status: models.FaceClusterStatusNamed}, FaceClusterCursorKey{}, 10)
+	if err != nil || len(empty.Clusters) != 0 || empty.HasMore {
+		t.Fatalf("空结果: %+v err=%v", empty, err)
 	}
 }

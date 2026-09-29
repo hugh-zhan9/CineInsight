@@ -332,7 +332,7 @@ func (s *MovieChartService) applyVideoWatched(doubanID string, videoID uint, wat
 	s.markMu.Lock()
 	defer s.markMu.Unlock()
 	if watched {
-		_, err := s.markEntry(doubanID, models.MovieChartMarkWatched)
+		_, err := s.markEntry(doubanID, models.MovieChartMarkWatched, true)
 		return err
 	}
 	existing, err := s.loadChartMark(doubanID)
@@ -411,9 +411,10 @@ func (s *MovieChartService) releaseWantMarksOfEntry(entryID uint, newDoubanID st
 	err := s.db.Model(&models.MovieChartMark{}).
 		Where("mark = ? AND watchlist_entry_id = ? AND douban_id <> ?", models.MovieChartMarkWant, entryID, newDoubanID).
 		Updates(map[string]any{
-			"mark":               "",
-			"watchlist_entry_id": 0,
-			"updated_at":         s.now(),
+			"mark":                   "",
+			"watchlist_entry_id":     0,
+			"watchlist_entry_origin": "",
+			"updated_at":             s.now(),
 		}).Error
 	if err != nil {
 		return fmt.Errorf("释放旧想看标记失败: %w", err)
@@ -433,12 +434,13 @@ func (s *MovieChartService) bindWatchlistEntry(entryID uint, doubanID, title str
 	}
 	now := s.now()
 	row := models.MovieChartMark{
-		DoubanID:         doubanID,
-		Mark:             models.MovieChartMarkWant,
-		ReleaseYear:      year,
-		Title:            movieChartTruncateTitle(title),
-		WatchlistEntryID: entryID,
-		MarkedAt:         now,
+		DoubanID:             doubanID,
+		Mark:                 models.MovieChartMarkWant,
+		ReleaseYear:          year,
+		Title:                movieChartTruncateTitle(title),
+		WatchlistEntryID:     entryID,
+		WatchlistEntryOrigin: models.MovieChartOriginEnrichment,
+		MarkedAt:             now,
 	}
 	// 快照优先取榜单缓存（上映年份与海报以缓存为准），缓存里没有就用条目自己的。
 	var cached models.MovieChartEntry
@@ -460,13 +462,14 @@ func (s *MovieChartService) bindWatchlistEntry(entryID uint, doubanID, title str
 	err = s.db.Model(&models.MovieChartMark{}).
 		Where("id = ? AND mark = ?", existing.ID, "").
 		Updates(map[string]any{
-			"mark":               row.Mark,
-			"release_year":       row.ReleaseYear,
-			"title":              row.Title,
-			"poster_url":         row.PosterURL,
-			"watchlist_entry_id": row.WatchlistEntryID,
-			"marked_at":          row.MarkedAt,
-			"updated_at":         now,
+			"mark":                   row.Mark,
+			"release_year":           row.ReleaseYear,
+			"title":                  row.Title,
+			"poster_url":             row.PosterURL,
+			"watchlist_entry_id":     row.WatchlistEntryID,
+			"watchlist_entry_origin": row.WatchlistEntryOrigin,
+			"marked_at":              row.MarkedAt,
+			"updated_at":             now,
 		}).Error
 	if err != nil {
 		return fmt.Errorf("写入想看标记失败: %w", err)

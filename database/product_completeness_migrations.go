@@ -221,3 +221,20 @@ func replaceWatchlistTitleIndexes(db *gorm.DB) error {
 		return nil
 	})
 }
+
+// migrateMovieChartMarkEntryOrigin 回填 movie_chart_marks.watchlist_entry_origin（APP-05/07）。
+//
+// 本批次之前只有榜单「想看」新建条目才会写 watchlist_entry_id，所以历史上任何
+// 认领了条目却没有来源的行都是 chart。判据看数据（认领非 0 且来源为空），重复执行不变；
+// 新写入的 enrichment / chart 行来源非空，不会被改写。
+func migrateMovieChartMarkEntryOrigin(db *gorm.DB) error {
+	if !db.Migrator().HasTable(&models.MovieChartMark{}) {
+		return nil
+	}
+	if err := db.Model(&models.MovieChartMark{}).
+		Where("watchlist_entry_id <> ? AND watchlist_entry_origin = ?", 0, "").
+		UpdateColumn("watchlist_entry_origin", models.MovieChartOriginChart).Error; err != nil {
+		return fmt.Errorf("回填 movie_chart_marks.watchlist_entry_origin 失败: %w", err)
+	}
+	return nil
+}

@@ -98,7 +98,7 @@ func TestRemoveFaceSourceLastObservationAndStaleAnalysisSnapshot(t *testing.T) {
 	}
 }
 
-func TestRemoveFaceSourceRejectsWrongClusterAndNamedCluster(t *testing.T) {
+func TestRemoveFaceSourceRejectsWrongClusterAndIgnoredCluster(t *testing.T) {
 	setupFaceTestDB(t)
 	ctx := context.Background()
 	cluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(0))
@@ -108,11 +108,11 @@ func TestRemoveFaceSourceRejectsWrongClusterAndNamedCluster(t *testing.T) {
 	if _, err := svc.RemoveFaceClusterObservation(ctx, cluster.ID, observation.ID); !errors.Is(err, ErrFaceObservationNotInCluster) {
 		t.Fatalf("wrong cluster: %v", err)
 	}
-	if err := database.DB.Model(&other).Update("status", models.FaceClusterStatusNamed).Error; err != nil {
+	if err := database.DB.Model(&other).Update("status", models.FaceClusterStatusIgnored).Error; err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.RemoveFaceClusterObservation(ctx, other.ID, observation.ID); !errors.Is(err, ErrFaceClusterNotUnnamed) {
-		t.Fatalf("named cluster: %v", err)
+		t.Fatalf("ignored cluster: %v", err)
 	}
 	if got := faceObservationByID(t, observation.ID); got.ClusterID == nil || *got.ClusterID != other.ID {
 		t.Fatal("rejected operation changed source")

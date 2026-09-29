@@ -94,14 +94,17 @@ func (s *MovieChartService) MarkEntry(doubanID, mark string) (*MovieChartMarkRes
 func (s *MovieChartService) markEntryLocked(doubanID, mark string) (*MovieChartMarkResult, error) {
 	s.markMu.Lock()
 	defer s.markMu.Unlock()
-	return s.markEntry(doubanID, mark)
+	return s.markEntry(doubanID, mark, false)
 }
 
 // markEntry 是 MarkEntry 去掉串行化之后的内核。调用方必须持有 s.markMu。
 //
 // 拆出来只为一件事：测试要模拟一个**不受这把锁约束**的写入者，从库层的角度验证
 // 撤销守卫。同一个 goroutine 再进一次 MarkEntry 会撞上不可重入的互斥量。
-func (s *MovieChartService) markEntry(doubanID, mark string) (*MovieChartMarkResult, error) {
+//
+// auto 为 true 表示由视频已看观察者触发的自动路径：want → watched 时 origin 为
+// enrichment 的片单条目（用户手动条目）保留，只清认领；手动路径语义不变（R8 双向同步）。
+func (s *MovieChartService) markEntry(doubanID, mark string, auto bool) (*MovieChartMarkResult, error) {
 	if s.watchlist == nil {
 		return nil, errors.New("想看片单服务不可用")
 	}
@@ -130,12 +133,13 @@ func (s *MovieChartService) markEntry(doubanID, mark string) (*MovieChartMarkRes
 	// 改标记时**先**跑上一个标记的撤销副作用。失败就整个动作放弃：此刻标记还是
 	// 原样、片单条目还挂在它名下，用户重试一次即可。反过来（先落新标记再删片单）
 	// 一旦删失败，那条片单记录就没有任何标记再指向它，谁也清不掉了。
-	if err := s.undoWantWatchlistEntry(existing); err != nil {
+	if err := s.undoWantWatchlistEntry(existing, auto); err != nil {
 		return nil, err
 	}
 
 	result := &MovieChartMarkResult{Mark: mark}
 	watchlistEntryID := uint(0)
+	origin := ""
 	// 片名先按 size:200 截断，片单与标记两边用同一个值：片名来自豆瓣，长度不受
 	// 任何人约束，而 watchlist_entries.title 与 movie_chart_marks.title 都是
 	// varchar(200)。Postgres 上超长直接报 22001，SQLite 不校验会默默存下——只跑
@@ -152,8 +156,11 @@ func (s *MovieChartService) markEntry(doubanID, mark string) (*MovieChartMarkRes
 			return nil, err
 		}
 		result.WatchlistCreated = watchlistEntryID != 0
+		if watchlistEntryID != 0 {
+			origin = models.MovieChartOriginChart
+		}
 	}
-	if err := s.upsertChartMark(entry, title, mark, watchlistEntryID); err != nil {
+	if err := s.upsertChartMark(entry, title, mark, watchlistEntryID, origin); err != nil {
 		return nil, err
 	}
 	switch {
@@ -213,7 +220,7 @@ func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
 	}
 	// 顺序同改标记：先删片单条目，再删标记行。删片单失败时标记原样留着，重试一次
 	// 就能接着往下走；倒过来则会留下一条再也没人认领的片单记录。
-	if err := s.undoWantWatchlistEntry(existing); err != nil {
+	if err := s.undoWantWatchlistEntry(existing, false); err != nil {
 		return false, err
 	}
 	// 删除带**条件更新守卫**：只删「我刚才读到的那个标记」。需求设计文档 §5 通篇
@@ -285,8 +292,14 @@ func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint
 // 冗余的——去掉它只会走到 Delete(0)，查不到行、被容忍，照样什么都不删（测试因此
 // 也测不出差别）。反过来说，一旦有人把这份容忍改成报错，那个 == 0 的判断立刻重新
 // 承重：撞名标记的撤销会从「什么都不做」变成「报一条查无记录的错」。
-func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMark) error {
+//
+// keepEnrichment 为 true（视频看完的自动路径）时，origin 为 enrichment 的条目也不删：
+// 那是用户手动加的条目，只是补全后被标记认领；调用方随后的 upsert 会清掉认领。
+func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMark, keepEnrichment bool) error {
 	if existing == nil || existing.Mark != models.MovieChartMarkWant || existing.WatchlistEntryID == 0 {
+		return nil
+	}
+	if keepEnrichment && existing.WatchlistEntryOrigin == models.MovieChartOriginEnrichment {
 		return nil
 	}
 	// 走 WatchlistService.DeleteForChart 而不是自己拼一条 DELETE：那条路径连带清理补全下来
@@ -307,16 +320,17 @@ func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMa
 // 快照三列在这里取值：title / release_year / poster_url 记的是**这一次标记时**
 // 缓存行的样子，让已看页在缓存被整年重建、或条目从豆瓣下架之后仍然完整可用
 // （D-MC05）。它们不是对缓存表的引用，因此后续列表刷新改了片名也不会回写这里。
-func (s *MovieChartService) upsertChartMark(entry models.MovieChartEntry, title, mark string, watchlistEntryID uint) error {
+func (s *MovieChartService) upsertChartMark(entry models.MovieChartEntry, title, mark string, watchlistEntryID uint, origin string) error {
 	now := s.now()
 	row := models.MovieChartMark{
-		DoubanID:         entry.DoubanID,
-		Mark:             mark,
-		ReleaseYear:      movieChartReleaseYear(entry.ReleaseDate),
-		Title:            title,
-		PosterURL:        entry.PosterURL,
-		WatchlistEntryID: watchlistEntryID,
-		MarkedAt:         now,
+		DoubanID:             entry.DoubanID,
+		Mark:                 mark,
+		ReleaseYear:          movieChartReleaseYear(entry.ReleaseDate),
+		Title:                title,
+		PosterURL:            entry.PosterURL,
+		WatchlistEntryID:     watchlistEntryID,
+		WatchlistEntryOrigin: origin,
+		MarkedAt:             now,
 	}
 	// updated_at 必须显式列进来：GORM 在 DoUpdates 这条路径上不维护它
 	// （services/image_ai_tagging_service.go:773 与 writeYearState 同此写法）。
@@ -324,13 +338,14 @@ func (s *MovieChartService) upsertChartMark(entry models.MovieChartEntry, title,
 	err := s.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "douban_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
-			"mark":               row.Mark,
-			"release_year":       row.ReleaseYear,
-			"title":              row.Title,
-			"poster_url":         row.PosterURL,
-			"watchlist_entry_id": row.WatchlistEntryID,
-			"marked_at":          row.MarkedAt,
-			"updated_at":         now,
+			"mark":                   row.Mark,
+			"release_year":           row.ReleaseYear,
+			"title":                  row.Title,
+			"poster_url":             row.PosterURL,
+			"watchlist_entry_id":     row.WatchlistEntryID,
+			"watchlist_entry_origin": row.WatchlistEntryOrigin,
+			"marked_at":              row.MarkedAt,
+			"updated_at":             now,
 		}),
 	}).Create(&row).Error
 	if err != nil {

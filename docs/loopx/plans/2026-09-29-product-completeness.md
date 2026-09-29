@@ -34,10 +34,10 @@ slices:
     status: pending
     depends: [P-013]
   - id: P-016
-    status: pending
+    status: in_progress
     depends: [P-010, P-013]
   - id: P-018
-    status: pending
+    status: in_progress
     depends: [P-015]
   - id: P-020
     status: pending
@@ -46,7 +46,7 @@ slices:
     status: pending
     depends: [P-011, P-012]
   - id: P-025
-    status: pending
+    status: in_progress
     depends: [P-013]
   - id: P-027
     status: pending
@@ -106,7 +106,9 @@ slices:
 不在本计划范围内：概要设计 §1.3 所列的排除项、问题清单 §7 的真机项、详细设计 §8.2 的 IINA「从头播完」缺口。受保护行为见概要设计 §5 与详细设计 §0 的 G-1 到 G-6。
 
 执行方式（用户 2026-09-29 指定并授权）：
-- 由 Sonnet 5.5 leaf 子代理实现，每个切片使用独立的 git worktree；
+- 由 leaf 子代理实现，每个切片使用独立的 git worktree。
+  - 2026-09-29 起，用户要求后续子代理一律使用 Opus 5.5、推理强度 xhigh；此前的 P-001～P-021 及其修复、P-018 用的是 Sonnet 5.5。
+  - xhigh 需要通过 `.claude/agents/opus-xhigh.md` 定义，会话重载之后才能使用。在那之前，暂时用 `general-purpose` 加 `model: opus`。
 - 主代理负责调度、按顺序整合、全量验证与评审；
 - 在本地分支 `feat/product-completeness` 上，每个整合点验证通过后提交一次；不推送，不合并到 master；
 - 同时运行的子代理不超过 4 个；PG 只开一个容器；剩余磁盘低于 5 GiB 时暂停并告知用户。

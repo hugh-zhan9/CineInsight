@@ -232,9 +232,10 @@ func revokeChartWantForEntry(tx *gorm.DB, entry models.WatchlistEntry) error {
 		query = query.Where("(watchlist_entry_id = ?"+titleMatch+")", args...)
 	}
 	err := query.Updates(map[string]any{
-		"mark":               "",
-		"watchlist_entry_id": 0,
-		"updated_at":         time.Now(),
+		"mark":                   "",
+		"watchlist_entry_id":     0,
+		"watchlist_entry_origin": "",
+		"updated_at":             time.Now(),
 	}).Error
 	if err != nil {
 		return fmt.Errorf("撤销榜单想看标记失败: %w", err)

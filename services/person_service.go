@@ -506,6 +506,8 @@ type MergePeopleResult struct {
 	MergedCount     int            `json:"merged_count"`
 	VideoLinksMoved int            `json:"video_links_moved"`
 	ImageLinksMoved int            `json:"image_links_moved"`
+	// Warnings 是合并已提交之后的非致命问题（如来源头像复制失败），不影响合并结果。
+	Warnings []string `json:"warnings"`
 }
 
 func (s *PersonService) GetPersonDeletionImpact(id uint) (*PersonDeletionImpact, error) {
@@ -639,8 +641,9 @@ func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeop
 	if targetID == 0 || len(sources) == 0 {
 		return nil, ErrInvalidMerge
 	}
-	result := &MergePeopleResult{MergedCount: len(sources)}
+	result := &MergePeopleResult{MergedCount: len(sources), Warnings: []string{}}
 	var orphanAvatars []string
+	needAvatar := false
 	err := database.Transaction(func(tx *gorm.DB) error {
 		var target models.Person
 		if err := tx.First(&target, targetID).Error; err != nil {
@@ -682,48 +685,31 @@ func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeop
 			Update("person_id", targetID).Error; err != nil {
 			return err
 		}
-		// ③ 目标没有头像时，从第一个有头像的来源复制。
-		importedAvatar := managedImageImport{}
-		if target.AvatarPath == "" {
-			for _, source := range sourcePeople {
-				if source.AvatarPath == "" {
-					continue
-				}
-				asset, err := s.images.Resolve(source.AvatarPath)
-				if err != nil {
-					if errors.Is(err, os.ErrNotExist) {
-						continue
-					}
-					return fmt.Errorf("读取来源头像失败: %w", err)
-				}
-				importedAvatar, err = s.images.Import("people", targetID, asset.Path)
-				if err != nil {
-					return fmt.Errorf("复制来源头像失败: %w", err)
-				}
-				if err := tx.Model(&models.Person{}).Where("id = ?", targetID).
-					Update("avatar_path", importedAvatar.RelativePath).Error; err != nil {
-					if importedAvatar.Created {
-						_ = s.images.Remove(importedAvatar.RelativePath)
-					}
-					return err
-				}
-				break
-			}
+		// ②b 来源人物的人脸候选并入目标：按 (cluster_id, person_id) 唯一约束去重，
+		// 冲突行让目标已有的那条留下；来源自己的候选行随后由 deletePersonTx 清掉。
+		if err := tx.Exec(`INSERT INTO face_person_candidates (cluster_id, person_id, similarity, created_at, updated_at)
+			SELECT cluster_id, ?, MAX(similarity), MIN(created_at), MAX(updated_at)
+			FROM face_person_candidates WHERE person_id IN ? GROUP BY cluster_id
+			ON CONFLICT (cluster_id, person_id) DO NOTHING`, targetID, sources).Error; err != nil {
+			return err
 		}
+		// ②c 「标签转人物」记录改指向目标，撤销转换才会作用在合并后的人物上（META-02）。
+		// person_created 同时置 false：目标人物不是那次转换建的，撤销时不能把它当成
+		// 「新建且已无关系」的人物删掉。
+		if err := tx.Model(&models.TagPersonConversion{}).Where("person_id IN ?", sources).
+			UpdateColumns(map[string]any{"person_id": targetID, "person_created": false}).Error; err != nil {
+			return err
+		}
+		// ③ 头像复制放到提交之后（文件系统写入不属于事务）；这里只记下目标是否需要头像。
+		needAvatar = target.AvatarPath == ""
 		// ③b 活跃保存视图的人物条件：来源 ID 改写为目标 ID（去重），与标签条件同语义，
 		// 合并后视图不会静默放宽（Minor 5）。
 		if err := rewriteSavedViewPersonIDsTx(tx, sources, targetID); err != nil {
-			if importedAvatar.Created {
-				_ = s.images.Remove(importedAvatar.RelativePath)
-			}
 			return err
 		}
 		// ④ 硬删来源人物（关系与簇已迁走，deletePersonTx 只会清掉残余候选）。
 		for _, source := range sourcePeople {
 			if err := deletePersonTx(tx, source.ID); err != nil {
-				if importedAvatar.Created {
-					_ = s.images.Remove(importedAvatar.RelativePath)
-				}
 				return err
 			}
 			if source.AvatarPath != "" {
@@ -737,6 +723,13 @@ func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeop
 			return nil, err
 		}
 		return nil, fmt.Errorf("merge people: %w", err)
+	}
+	// 头像复制在提交之后、来源头像文件删除之前：失败只记日志并给回执警告，合并不回滚。
+	if needAvatar {
+		if warning := s.copyMergedAvatar(targetID, orphanAvatars); warning != "" {
+			log.Printf("合并人物后复制来源头像失败: %s", warning)
+			result.Warnings = append(result.Warnings, warning)
+		}
 	}
 	for _, path := range orphanAvatars {
 		if err := s.images.Remove(path); err != nil {
@@ -753,6 +746,38 @@ func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeop
 	}
 	result.Target = item
 	return result, nil
+}
+
+// copyMergedAvatar 把第一个可读的来源头像复制给目标（目标此刻仍没有头像时才写库）。
+// 返回空串表示无事可报（复制成功、或没有可复制的来源头像）。写库失败或没抢到
+// （目标已有头像）时删除刚复制出的新文件，不留孤儿。
+func (s *PersonService) copyMergedAvatar(targetID uint, sourceAvatars []string) string {
+	for _, sourcePath := range sourceAvatars {
+		asset, err := s.images.Resolve(sourcePath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Sprintf("读取来源头像失败: %v", err)
+		}
+		imported, err := s.images.Import("people", targetID, asset.Path)
+		if err != nil {
+			return fmt.Sprintf("复制来源头像失败: %v", err)
+		}
+		update := database.DB.Model(&models.Person{}).Where("id = ? AND avatar_path = ?", targetID, "").
+			Update("avatar_path", imported.RelativePath)
+		if update.Error != nil || update.RowsAffected == 0 {
+			if imported.Created {
+				_ = s.images.Remove(imported.RelativePath)
+			}
+			if update.Error != nil {
+				return fmt.Sprintf("保存目标头像失败: %v", update.Error)
+			}
+			return ""
+		}
+		return ""
+	}
+	return ""
 }
 
 func normalizeEntityPageLimit(limit int) int {

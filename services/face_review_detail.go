@@ -27,9 +27,10 @@ type FaceClusterObservationPage struct {
 
 var ErrFaceObservationNotInCluster = errors.New("face_observation_not_in_cluster")
 
-// RemoveFaceClusterObservation excludes one mistaken source before naming.
+// RemoveFaceClusterObservation excludes one mistaken source from an unnamed or named cluster.
 // Keep the observation/fingerprint so unchanged media is not analysed again.
-// No media files, library records or person relationships are removed.
+// No media files, library records or person relationships are removed, even
+// when the cluster is named.
 // The result reports whether the now-empty cluster was removed.
 func (s *FaceReviewService) RemoveFaceClusterObservation(ctx context.Context, clusterID, observationID uint) (bool, error) {
 	faceClusterAssignmentMu.Lock()
@@ -40,7 +41,8 @@ func (s *FaceReviewService) RemoveFaceClusterObservation(ctx context.Context, cl
 		if err != nil {
 			return err
 		}
-		if cluster.Status != models.FaceClusterStatusUnnamed {
+		// 未命名与已命名簇都允许移除来源（D-PC30）；已命名簇移除来源不动人物关系。
+		if cluster.Status != models.FaceClusterStatusUnnamed && cluster.Status != models.FaceClusterStatusNamed {
 			return ErrFaceClusterNotUnnamed
 		}
 		result := tx.WithContext(ctx).Model(&models.FaceObservation{}).

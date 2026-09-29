@@ -772,7 +772,12 @@ func TestShortFeedErrorResponsesDoNotEchoInternalErrorsPLAY01(t *testing.T) {
 	// 真实链路：next 在数据库故障时不回传原文。
 	svc, handler, _ := newShortFeedAccessFixture(t)
 	_ = svc
-	if err := database.DB.Exec("DROP TABLE videos").Error; err != nil {
+	dropVideos := "DROP TABLE videos"
+	if database.DB.Dialector.Name() == "postgres" {
+		// PG 上有外键依赖 videos，普通 DROP 会报 2BP01；测试库按 schema 隔离，CASCADE 只影响本用例。
+		dropVideos += " CASCADE"
+	}
+	if err := database.DB.Exec(dropVideos).Error; err != nil {
 		t.Fatal(err)
 	}
 	rec = httptest.NewRecorder()

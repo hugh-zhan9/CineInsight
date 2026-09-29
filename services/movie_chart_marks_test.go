@@ -699,7 +699,7 @@ func TestMovieChartClearMarkKeepsNewerMark(t *testing.T) {
 		// 走未加锁的内核 markEntry：标记路径已经被 s.markMu 串行化，
 		// 进程内不会再出现这种交错，同一个 goroutine 再进一次公开入口只会自锁。
 		// 这个用例钉的是**库层守卫本身**——锁被挪走或绕开时的第二道防线。
-		if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkWant); err != nil {
+		if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkWant, false); err != nil {
 			t.Errorf("并发改标记失败: %v", err)
 		}
 	})
@@ -760,10 +760,10 @@ func TestMovieChartClearMarkGuardTermsAreIndependent(t *testing.T) {
 
 		h.hookOnceAfterMarkQuery("movie_chart_mark_test_owner", func() {
 			// 注入走未加锁的内核，理由同 TestMovieChartClearMarkKeepsNewerMark。
-			if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkSkip); err != nil {
+			if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkSkip, false); err != nil {
 				t.Errorf("注入改标记失败: %v", err)
 			}
-			if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkWant); err != nil {
+			if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkWant, false); err != nil {
 				t.Errorf("注入改回想看失败: %v", err)
 			}
 		})
@@ -807,7 +807,7 @@ func TestMovieChartClearMarkGuardTermsAreIndependent(t *testing.T) {
 		before, _ := h.markRow(entry.DoubanID)
 
 		h.hookOnceAfterMarkQuery("movie_chart_mark_test_markvalue", func() {
-			if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkWatched); err != nil {
+			if _, err := h.service.markEntry(entry.DoubanID, models.MovieChartMarkWatched, false); err != nil {
 				t.Errorf("注入改标记失败: %v", err)
 			}
 		})

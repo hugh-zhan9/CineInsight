@@ -381,6 +381,9 @@ func ApplySchema(db *gorm.DB) error {
 	if err := migrateGlossaryUniqueKey(db); err != nil {
 		return fmt.Errorf("迁移术语表唯一键失败: %w", err)
 	}
+	if err := migrateMovieChartMarkEntryOrigin(db); err != nil {
+		return fmt.Errorf("回填榜单标记片单来源失败: %w", err)
+	}
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
 	}

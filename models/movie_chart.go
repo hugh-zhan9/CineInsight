@@ -37,6 +37,12 @@ const (
 	MovieChartMarkWatched = "watched"
 )
 
+// MovieChartMark.WatchlistEntryOrigin 的取值。
+const (
+	MovieChartOriginChart      = "chart"
+	MovieChartOriginEnrichment = "enrichment"
+)
+
 // MovieChartEntry 是某一年榜单的本地缓存，一条对应豆瓣的一部电影。
 //
 // 这里的 gorm default 标签不触犯 2026-09-02 那条禁令。禁令管的是**默认 true 的布尔列
@@ -148,6 +154,11 @@ type MovieChartMark struct {
 	// 删掉就会连坐删掉标记。跨边界的一致性靠「先建片单、再写标记」的固定顺序兜底，
 	// 见需求设计文档 §5。
 	WatchlistEntryID uint `gorm:"not null;default:0" json:"watchlist_entry_id"`
+	// WatchlistEntryOrigin 说明 WatchlistEntryID 认领的条目是怎么来的：chart（榜单「想看」
+	// 新建）、enrichment（用户手动条目补全出豆瓣 ID 后绑定）、空串（未认领或撞名复用）。
+	// 视频看完的自动 want → watched 只删 chart 来源的条目；enrichment 是用户自己的
+	// 手动条目，只清认领、条目保留。默认值是空串，等于零值，不触犯 gorm default 禁令。
+	WatchlistEntryOrigin string `gorm:"size:16;not null;default:''" json:"watchlist_entry_origin"`
 
 	MarkedAt  time.Time `gorm:"not null" json:"marked_at" ts_type:"string"`
 	CreatedAt time.Time `json:"created_at" ts_type:"string"`

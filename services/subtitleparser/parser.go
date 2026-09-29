@@ -34,7 +34,9 @@ func ParseFile(path string) ([]Segment, error) {
 	// 一份怪编码的 .srt 而失败；只有工作台打开与翻译读取才坚持 subtitle_encoding_not_utf8。
 	text, _, err := DecodeSubtitleBytes(data)
 	if err != nil {
-		text = string(data)
+		// 非法字节替换成 U+FFFD：PostgreSQL 的 text 列拒绝非法 UTF-8（SQLSTATE 22021），
+		// 原样写入会让索引与回收站恢复在 PG 上失败；可读的部分照常可搜。
+		text = strings.ToValidUTF8(string(data), "\uFFFD")
 	}
 
 	return Parse(text)

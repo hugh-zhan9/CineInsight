@@ -406,6 +406,76 @@ func (a *App) ConfirmFaceClusterAppend(clusterID uint) error {
 	return err
 }
 
+// ConfirmFaceClusterAppendObservations 逐条确认追加候选（D-PC30）：observationIDs 为空表示
+// 全部（与 ConfirmFaceClusterAppend 相同），非空时只确认所列观测，其余保持 pending。
+// 旧的 ConfirmFaceClusterAppend 绑定在前端调用点改完前保留，由收尾切片删除。
+func (a *App) ConfirmFaceClusterAppendObservations(clusterID uint, observationIDs []uint) error {
+	err := a.faceReview.ConfirmFaceClusterAppendObservations(a.backgroundContext(), clusterID, observationIDs)
+	log.Printf("API ConfirmFaceClusterAppendObservations cluster_id=%d selected=%d err=%v", clusterID, len(observationIDs), err)
+	if err == nil {
+		a.emitFaceReviewChanged()
+	}
+	return err
+}
+
+// ListFaceClusterPage 键集分页列出簇卡片（D-PC29）：按 (观测数 DESC, id DESC)，
+// 游标为上一页返回的 next，零值从头开始。
+func (a *App) ListFaceClusterPage(filter services.FaceClusterFilter, cursor services.FaceClusterCursorKey, limit int) (services.FaceClusterPage, error) {
+	page, err := a.faceReview.ListFaceClusterPage(a.backgroundContext(), filter, cursor, limit)
+	if err != nil {
+		log.Printf("API ListFaceClusterPage status=%q media_kind=%q err=%v", filter.Status, filter.MediaKind, err)
+	}
+	return page, err
+}
+
+// ListIgnoredFaceClusters 列出已忽略的簇，附忽略之后并入的观测数（D-PC30）。
+func (a *App) ListIgnoredFaceClusters(cursor uint, limit int) (services.IgnoredFaceClusterPage, error) {
+	page, err := a.faceReview.ListIgnoredFaceClusters(a.backgroundContext(), cursor, limit)
+	if err != nil {
+		log.Printf("API ListIgnoredFaceClusters err=%v", err)
+	}
+	return page, err
+}
+
+// RestoreFaceCluster 把已忽略的簇恢复为未命名（D-PC30）。
+func (a *App) RestoreFaceCluster(clusterID uint) error {
+	err := a.faceReview.RestoreFaceCluster(a.backgroundContext(), clusterID)
+	log.Printf("API RestoreFaceCluster cluster_id=%d err=%v", clusterID, err)
+	if err == nil {
+		a.emitFaceReviewChanged()
+	}
+	return err
+}
+
+// PreviewFaceClusterUnlink 预览解除关联/改派牵动的媒体（只读）。
+func (a *App) PreviewFaceClusterUnlink(clusterID uint) ([]services.FaceUnlinkMediaView, error) {
+	views, err := a.faceReview.PreviewFaceClusterUnlink(a.backgroundContext(), clusterID)
+	if err != nil {
+		log.Printf("API PreviewFaceClusterUnlink cluster_id=%d err=%v", clusterID, err)
+	}
+	return views, err
+}
+
+// UnlinkFaceCluster 把已命名簇解回未命名；removeRelations 为真时同时删除只由该簇覆盖的关系。
+func (a *App) UnlinkFaceCluster(clusterID uint, removeRelations bool) (services.FaceClusterView, error) {
+	view, err := a.faceReview.UnlinkFaceCluster(a.backgroundContext(), clusterID, removeRelations)
+	log.Printf("API UnlinkFaceCluster cluster_id=%d remove_relations=%v err=%v", clusterID, removeRelations, err)
+	if err == nil {
+		a.emitFaceReviewChanged()
+	}
+	return view, err
+}
+
+// ReassignFaceCluster 把已命名簇改派给其他人物；moveRelations 为真时同时迁移关系。
+func (a *App) ReassignFaceCluster(clusterID, targetPersonID uint, moveRelations bool) (services.FaceClusterView, error) {
+	view, err := a.faceReview.ReassignFaceCluster(a.backgroundContext(), clusterID, targetPersonID, moveRelations)
+	log.Printf("API ReassignFaceCluster cluster_id=%d target_person_id=%d move_relations=%v err=%v", clusterID, targetPersonID, moveRelations, err)
+	if err == nil {
+		a.emitFaceReviewChanged()
+	}
+	return view, err
+}
+
 // DismissFaceClusterAppend 忽略追加候选：同一条观测不再提示，关系不动（D-019）。
 func (a *App) DismissFaceClusterAppend(clusterID uint) error {
 	err := a.faceReview.DismissFaceClusterAppend(a.backgroundContext(), clusterID)

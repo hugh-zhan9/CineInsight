@@ -627,6 +627,10 @@ func seedProductCompletenessRows(t *testing.T, db *gorm.DB, videoIDs []uint) {
 	}
 
 	rows := []any{
+		&models.MovieChartMark{
+			DoubanID: "9990001", Mark: models.MovieChartMarkWant, ReleaseYear: 2026, Title: "来源列夹具",
+			WatchlistEntryID: 7, WatchlistEntryOrigin: models.MovieChartOriginEnrichment, MarkedAt: stamp,
+		},
 		&models.MigrationStagedSource{
 			VideoID: &videoIDs[0], OriginalPath: "/lib/va.mp4",
 			StagedPath: "/lib/.va.mp4.cineinsight-migrating-0123456789abcdef", Size: 4096,
@@ -683,6 +687,13 @@ func TestMigrateCarriesProductCompletenessTablesAndColumns(t *testing.T) {
 	}
 
 	stamp := time.Unix(1_700_000_300, 0).UTC()
+	var chartMark models.MovieChartMark
+	if err := back.Where("douban_id = ?", "9990001").First(&chartMark).Error; err != nil {
+		t.Fatal(err)
+	}
+	if chartMark.WatchlistEntryID != 7 || chartMark.WatchlistEntryOrigin != models.MovieChartOriginEnrichment {
+		t.Fatalf("往返后榜单标记的片单来源应原样保留: %+v", chartMark)
+	}
 	var favorite models.Video
 	if err := back.First(&favorite, videoIDs[0]).Error; err != nil {
 		t.Fatal(err)
