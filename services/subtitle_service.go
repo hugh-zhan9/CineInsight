@@ -50,9 +50,26 @@ type SubtitleService struct {
 	// translationCancels 按视频登记正在跑的「翻译已有字幕」任务，让前端能中途叫停。
 	// 字幕生成走队列自带取消，这条路径不进队列，所以自己记一份。
 	translationCancels map[uint][]*translationCancelEntry
-	BaseDir            string
-	BinDir             string
-	ModelDir           string
+	// eventSink 让测试截获本服务新增的事件（subtitle-failed 等）；为空时经 Wails runtime 发往前端。
+	eventSink func(name string, payload any)
+	// interruptedJobIDs 是本次启动时被标成 interrupted 的字幕任务（D-PC20 的「上次中断 N 个」提示）。
+	interruptedJobIDs []uint
+
+	// 引擎状态缓存（D-PC22）：每次探测都要起两个 Python 进程 import 运行时，60 秒内复用上一次的结果，
+	// 准备前后失效。engineStatusProbe / now 是测试接缝。
+	engineStatusMu    sync.Mutex
+	engineStatusCache []SubtitleEngineStatus
+	engineStatusAt    time.Time
+	engineStatusProbe func() []SubtitleEngineStatus
+	now               func() time.Time
+
+	// prepareCancel 非空表示有一轮引擎准备正在进行，CancelEnginePreparation 调它杀掉 pip 等子进程。
+	prepareMu     sync.Mutex
+	prepareCancel context.CancelFunc
+
+	BaseDir  string
+	BinDir   string
+	ModelDir string
 }
 
 type subtitleLocalOnlyASRContextKey struct{}
@@ -98,12 +115,39 @@ func (s *SubtitleService) subtitleWriter() *SubtitleFileWriter {
 
 func (s *SubtitleService) SetContext(ctx context.Context) {
 	s.ctx = ctx
+	// 字幕索引的后台同步是包级的（「无字幕」视图、字幕搜索都经过它），完成事件由接了
+	// Wails 上下文的字幕服务代发（D-PC23）；不必另外接线。
+	setSubtitleIndexSyncEmitter(func(status SubtitleIndexSyncStatus) {
+		s.emitEvent(subtitleIndexSyncedEvent, status)
+	})
+}
+
+// emitEvent 发一条本服务的前端事件；测试经 eventSink 截获。
+func (s *SubtitleService) emitEvent(name string, payload any) {
+	s.mu.Lock()
+	sink := s.eventSink
+	s.mu.Unlock()
+	if sink != nil {
+		sink(name, payload)
+		return
+	}
+	if s.ctx != nil && s.ctx.Err() == nil {
+		wailsRuntime.EventsEmit(s.ctx, name, payload)
+	}
 }
 
 func (s *SubtitleService) newSubtitleTaskQueue() *subtitleTaskQueue {
-	return newSubtitleTaskQueue(s.emitSubtitleQueueSnapshot, func(ctx context.Context, task *subtitleQueueTask) (*SubtitleGenerateResult, error) {
+	return s.newPersistentSubtitleTaskQueue(func(ctx context.Context, task *subtitleQueueTask) (*SubtitleGenerateResult, error) {
 		return s.executeSubtitleTask(ctx, task.TaskID, task.Request, task.VideoPath, task.Options)
 	})
+}
+
+// newPersistentSubtitleTaskQueue 建一个把生命周期落到 subtitle_jobs 的队列（D-PC20）。
+// 测试用它换掉执行器，同时保留落库。
+func (s *SubtitleService) newPersistentSubtitleTaskQueue(executor subtitleTaskExecutor) *subtitleTaskQueue {
+	queue := newSubtitleTaskQueue(s.emitSubtitleQueueSnapshot, executor)
+	queue.jobs = &subtitleJobDBStore{service: s}
+	return queue
 }
 
 func (s *SubtitleService) subtitleTaskQueue() *subtitleTaskQueue {
@@ -170,16 +214,50 @@ func (s *SubtitleService) CancelGeneration() {
 
 // QuiesceGeneration cancels queued and active subtitle writes and waits until
 // the active task has released its database/file resources.
+// 字幕索引的后台同步同样写库，一并取消并等它退出（恢复备份会关掉旧连接）。
 func (s *SubtitleService) QuiesceGeneration() {
 	s.subtitleTaskQueue().cancelAllAndWait()
+	stopSubtitleIndexSyncAndWait()
 }
 
+// subtitleEngineStatusTTL 是引擎状态缓存的有效期（D-PC22）。
+const subtitleEngineStatusTTL = 60 * time.Second
+
+// GetEngineStatuses 返回各字幕引擎的可用性；60 秒内复用上一次探测的结果，准备前后失效。
 func (s *SubtitleService) GetEngineStatuses() ([]SubtitleEngineStatus, error) {
-	statuses := []SubtitleEngineStatus{
+	s.engineStatusMu.Lock()
+	defer s.engineStatusMu.Unlock()
+	now := s.clock()
+	if s.engineStatusCache != nil && now.Sub(s.engineStatusAt) < subtitleEngineStatusTTL {
+		return append([]SubtitleEngineStatus(nil), s.engineStatusCache...), nil
+	}
+	probe := s.engineStatusProbe
+	if probe == nil {
+		probe = s.probeEngineStatuses
+	}
+	statuses := probe()
+	s.engineStatusCache, s.engineStatusAt = append([]SubtitleEngineStatus(nil), statuses...), now
+	return statuses, nil
+}
+
+func (s *SubtitleService) probeEngineStatuses() []SubtitleEngineStatus {
+	return []SubtitleEngineStatus{
 		s.getWhisperXStatus(),
 		s.getQwenStatus(),
 	}
-	return statuses, nil
+}
+
+func (s *SubtitleService) invalidateEngineStatusCache() {
+	s.engineStatusMu.Lock()
+	s.engineStatusCache = nil
+	s.engineStatusMu.Unlock()
+}
+
+func (s *SubtitleService) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
 }
 
 func (s *SubtitleService) getWhisperXStatus() SubtitleEngineStatus {
@@ -288,33 +366,64 @@ func (s *SubtitleService) getQwenStatus() SubtitleEngineStatus {
 	return status
 }
 
+var (
+	// ErrSubtitleEnginePreparing：已有一轮引擎准备在进行（pip 装在同一个虚拟环境里，不能两路并发）。
+	ErrSubtitleEnginePreparing = errors.New("字幕引擎正在准备中，请等当前准备完成或先取消")
+	// ErrSubtitleEnginePreparationCancelled：用户取消了引擎准备（CancelEnginePreparation）。
+	ErrSubtitleEnginePreparationCancelled = errors.New("已取消字幕引擎准备")
+)
+
+// PrepareEngine 准备字幕引擎的运行时（D-PC22）：下载解释器、建虚拟环境、pip 安装全部经可取消的
+// 子进程执行，CancelEnginePreparation 会杀掉它们；准备结果经桌面通知告知（文案不含失败原因）。
 func (s *SubtitleService) PrepareEngine(engine SubtitleEngine) error {
-	statusMap := map[SubtitleEngine]SubtitleEngineStatus{}
+	ctx, finish, err := s.beginEnginePreparation()
+	if err != nil {
+		return err
+	}
+	defer finish()
+	// 准备前后都让引擎状态缓存失效：准备要按最新状态判断，准备完的结果也要立刻反映到界面。
+	s.invalidateEngineStatusCache()
+	defer s.invalidateEngineStatusCache()
+
 	statuses, err := s.GetEngineStatuses()
 	if err != nil {
 		return err
 	}
-	for _, status := range statuses {
-		statusMap[status.Engine] = status
+	var status *SubtitleEngineStatus
+	for index := range statuses {
+		if statuses[index].Engine == engine {
+			status = &statuses[index]
+			break
+		}
 	}
-	status, ok := statusMap[engine]
-	if !ok {
+	if status == nil {
 		return fmt.Errorf("不支持的字幕引擎: %s", engine)
 	}
 	if !status.Supported {
 		return fmt.Errorf("%s", status.ReasonMessage)
 	}
 	if !status.NeedsPrepare {
-		if s.ctx != nil {
-			wailsRuntime.EventsEmit(s.ctx, "subtitle-prepare-complete", map[string]interface{}{
-				"engine": string(engine),
-			})
-		}
+		s.emitPrepareComplete(engine)
 		return nil
 	}
 
+	err = s.runEnginePreparation(ctx, engine, *status)
+	if err != nil && ctx.Err() != nil {
+		log.Printf("[Subtitle] engine preparation cancelled engine=%s", engine)
+		s.emitProgress("prepare", engine, "cancelled", 0, "已取消准备")
+		return ErrSubtitleEnginePreparationCancelled
+	}
+	s.notifyEnginePreparation(status.DisplayName, err)
+	if err != nil {
+		return err
+	}
+	s.emitPrepareComplete(engine)
+	return nil
+}
+
+func (s *SubtitleService) runEnginePreparation(ctx context.Context, engine SubtitleEngine, status SubtitleEngineStatus) error {
 	if !status.Available && status.ReasonCode == SubtitleReasonMissingFFmpeg && runtime.GOOS == "darwin" {
-		if err := s.downloadFFmpeg(); err != nil {
+		if err := s.downloadFFmpeg(ctx); err != nil {
 			return err
 		}
 	}
@@ -326,23 +435,68 @@ func (s *SubtitleService) PrepareEngine(engine SubtitleEngine) error {
 		if runtime.GOOS != "darwin" && s.findBinary("ffmpeg") == "" {
 			return ErrSubtitleDependencyUnsupportedPlatform
 		}
-		if err := s.installWhisperXRuntime(); err != nil {
-			return err
-		}
+		return s.installWhisperXRuntime(ctx)
 	case SubtitleEngineQwen:
-		if err := s.installQwenRuntime(); err != nil {
-			return err
-		}
+		return s.installQwenRuntime(ctx)
 	default:
 		return fmt.Errorf("不支持的字幕引擎: %s", engine)
 	}
+}
 
+func (s *SubtitleService) emitPrepareComplete(engine SubtitleEngine) {
 	if s.ctx != nil {
 		wailsRuntime.EventsEmit(s.ctx, "subtitle-prepare-complete", map[string]interface{}{
 			"engine": string(engine),
 		})
 	}
-	return nil
+}
+
+// beginEnginePreparation 登记一轮引擎准备；同一时间只允许一轮。返回的 finish 注销登记并释放 ctx。
+func (s *SubtitleService) beginEnginePreparation() (context.Context, func(), error) {
+	s.prepareMu.Lock()
+	defer s.prepareMu.Unlock()
+	if s.prepareCancel != nil {
+		return nil, nil, ErrSubtitleEnginePreparing
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.prepareCancel = cancel
+	finish := func() {
+		s.prepareMu.Lock()
+		s.prepareCancel = nil
+		s.prepareMu.Unlock()
+		cancel()
+	}
+	return ctx, finish, nil
+}
+
+// CancelEnginePreparation 取消正在进行的字幕引擎准备（杀掉 pip 等子进程）。没有进行中的准备时返回 false。
+func (s *SubtitleService) CancelEnginePreparation() bool {
+	s.prepareMu.Lock()
+	cancel := s.prepareCancel
+	s.prepareMu.Unlock()
+	if cancel == nil {
+		return false
+	}
+	cancel()
+	return true
+}
+
+// notifyEnginePreparation 把准备结果发成系统通知（D-PC22）。失败原因不进文案：pip 与解释器的输出里
+// 常带本机路径（AI-CONTEXT 2.20），原因在设置页与弹窗里看。
+func (s *SubtitleService) notifyEnginePreparation(displayName string, err error) {
+	notifier := s.subtitleTaskQueue().desktopNotifier()
+	if notifier == nil {
+		return
+	}
+	name := strings.TrimSpace(displayName)
+	if name == "" {
+		name = "字幕引擎"
+	}
+	if err != nil {
+		notifyDesktop(notifier, "字幕引擎准备失败", fmt.Sprintf("%s 未能准备完成，可在设置页「字幕」分区重试", name))
+		return
+	}
+	notifyDesktop(notifier, "字幕引擎已就绪", fmt.Sprintf("%s 已准备完成，可以生成字幕", name))
 }
 
 func (s *SubtitleService) CheckDependencies() (map[string]bool, error) {
@@ -398,6 +552,9 @@ func (s *SubtitleService) DownloadDependencies() error {
 	return s.PrepareEngine(SubtitleEngineWhisperX)
 }
 
+// GenerateSubtitle 把一次字幕生成排进 FIFO 队列并等它结束。任务落 subtitle_jobs（D-PC20）；
+// 强制生成接上同一视频待确认的那一行。收尾写回失败不再作为错误返回，而是带
+// error_code=subtitle_replace_failed、pending_retained=true 的结果（临时文件已保留，可重试收尾）。
 func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPath string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
 	options = normalizeSubtitleGenerateOptions(options)
 	req.SourceLang = normalizeSubtitleSourceLangForASR(req.SourceLang)
@@ -407,7 +564,14 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 		VideoName: strings.TrimSpace(req.VideoName),
 		Options:   options,
 	}
-	return s.subtitleTaskQueue().submit(task)
+	if options.ForceGenerate {
+		task.claim = s.needsConfirmationClaim(req, videoPath)
+	}
+	result, err := s.subtitleTaskQueue().submit(task)
+	if mapped := subtitleReplaceFailedResult(req, videoPath, err); mapped != nil {
+		return mapped, nil
+	}
+	return result, err
 }
 
 func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, req SubtitleGenerateRequest, videoPath string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
@@ -518,14 +682,15 @@ func (s *SubtitleService) commitTranscription(ctx context.Context, taskID uint, 
 					DetectedLang: detectedLang,
 				})
 				return &SubtitleGenerateResult{
-					Status:         SubtitleResultStatusValidationFailed,
-					VideoID:        req.VideoID,
-					Path:           srtPath,
-					Message:        validationErr.Message,
-					ValidationCode: validationErr.Code,
-					ForceEligible:  validationErr.ForceEligible,
-					Engine:         req.Engine,
-					SourceLang:     req.SourceLang,
+					Status:          SubtitleResultStatusValidationFailed,
+					VideoID:         req.VideoID,
+					Path:            srtPath,
+					Message:         validationErr.Message,
+					ValidationCode:  validationErr.Code,
+					ForceEligible:   validationErr.ForceEligible,
+					Engine:          req.Engine,
+					SourceLang:      req.SourceLang,
+					PendingRetained: true,
 				}, nil
 			}
 			_ = os.Remove(pendingPath)
@@ -560,8 +725,16 @@ func subtitleFinalPathForPending(pendingPath string) (string, error) {
 	return filepath.Join(filepath.Dir(pendingPath), stem[1:]+".srt"), nil
 }
 
-// DiscardPendingSubtitle 放弃校验未过的临时字幕：删除临时文件并清掉登记（D-PC13）。
+// DiscardPendingSubtitle 放弃校验未过的临时字幕：删除临时文件并清掉登记（D-PC13）；
+// 任务中心里这个视频待确认的行一并置为 cancelled（D-PC20）。
 func (s *SubtitleService) DiscardPendingSubtitle(videoID uint) error {
+	if err := s.discardRegisteredPendingSubtitle(videoID); err != nil {
+		return err
+	}
+	return s.discardNeedsConfirmationJobs(videoID)
+}
+
+func (s *SubtitleService) discardRegisteredPendingSubtitle(videoID uint) error {
 	artifact := s.consumePendingSubtitle(videoID)
 	if artifact == nil {
 		return nil
@@ -1389,19 +1562,20 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
 var ErrSubtitleDependencyUnsupportedPlatform = errors.New("当前平台不支持自动下载字幕依赖，请手工安装 Whisper 运行时与 FFmpeg 后重试")
 
 // Download helpers
-func (s *SubtitleService) downloadFFmpeg() error {
+func (s *SubtitleService) downloadFFmpeg(ctx context.Context) error {
 	if runtime.GOOS == "darwin" {
-		return s.installBrewPackage("ffmpeg", "FFmpeg")
+		return s.installBrewPackage(ctx, "ffmpeg", "FFmpeg")
 	}
 	return ErrSubtitleDependencyUnsupportedPlatform
 }
 
 func (s *SubtitleService) installWhisperMac() error {
-	return s.installBrewPackage("whisper-cpp", "Whisper")
+	return s.installBrewPackage(context.Background(), "whisper-cpp", "Whisper")
 }
 
-// installBrewPackage installs a package via Homebrew with progress feedback
-func (s *SubtitleService) installBrewPackage(pkg, displayName string) error {
+// installBrewPackage installs a package via Homebrew with progress feedback.
+// ctx 取消（引擎准备被取消）时杀掉 brew 子进程。
+func (s *SubtitleService) installBrewPackage(ctx context.Context, pkg, displayName string) error {
 	brewPath, err := exec.LookPath("brew")
 	if err != nil {
 		// Also check common brew paths
@@ -1418,7 +1592,7 @@ func (s *SubtitleService) installBrewPackage(pkg, displayName string) error {
 
 	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 0, fmt.Sprintf("正在通过 Homebrew 安装 %s...", displayName))
 
-	cmd := exec.Command(brewPath, "install", pkg)
+	cmd := preparationCommand(ctx, brewPath, "install", pkg)
 	cmd.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
 
 	output, err := cmd.CombinedOutput()
@@ -1476,7 +1650,7 @@ func (s *SubtitleService) emitProgress(action string, engine SubtitleEngine, pha
 			"phase":       phase,
 			"percent":     pct,
 			"message":     msg,
-			"cancellable": action == "generate",
+			"cancellable": action == "generate" || action == "prepare",
 			"jobScope":    "single_active_v1",
 		})
 	}

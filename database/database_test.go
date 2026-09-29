@@ -8,6 +8,7 @@ import (
 	"time"
 	"video-master/models"
 
+	"github.com/joho/godotenv"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -73,6 +74,8 @@ func TestMaintenanceGateWaitsForTransactionsAndRejectsNewOperations(t *testing.T
 }
 
 func TestInitUsesPostgresEnv(t *testing.T) {
+	// Init 会读数据目录下的 .env；不隔离家目录就会读到真实安装的配置。
+	t.Setenv("HOME", t.TempDir())
 	t.Setenv("PG_HOST", "127.0.0.1")
 	t.Setenv("PG_PORT", "5432")
 	t.Setenv("PG_USER", "user")
@@ -585,5 +588,39 @@ func TestOpenBackendCreatesSQLiteFileAndRejectsUnknownBackend(t *testing.T) {
 
 	if _, err := openBackend(Backend("mysql"), dataDir); err == nil {
 		t.Fatalf("未知后端应报错")
+	}
+}
+
+// APP-02：应用内切换后端只写数据目录下的 .env。它必须排在其他配置文件之前，
+// 否则随应用分发的 .env 里的 DB_BACKEND 会压过用户的选择，重启后仍连回原来的库。
+func TestAPP02DataDirEnvOverridesBundledEnvOnLoad(t *testing.T) {
+	dataDir := t.TempDir()
+	paths := envConfigPaths(dataDir)
+	if len(paths) == 0 || paths[0] != filepath.Join(dataDir, BackendConfigFileName) {
+		t.Fatalf("数据目录下的 .env 应排第一：%v", paths)
+	}
+	if got := envConfigPaths(""); len(got) == 0 || got[0] != ".env" {
+		t.Fatalf("没有数据目录时仍应加载其他配置：%v", got)
+	}
+
+	// 注册还原后再清掉，让加载真正生效，测试结束时恢复原值。
+	t.Setenv("DB_BACKEND", "")
+	if err := os.Unsetenv("DB_BACKEND"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("DB_BACKEND=sqlite\nPREVIOUS_BACKEND=postgres\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	bundled := filepath.Join(t.TempDir(), ".env")
+	if err := os.WriteFile(bundled, []byte("DB_BACKEND=postgres\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{paths[0], bundled} {
+		if err := godotenv.Load(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := ActiveBackend(); got != BackendSQLite {
+		t.Fatalf("数据目录下的选择应生效，得到 %s", got)
 	}
 }

@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"video-master/services/subtitleparser"
 )
@@ -246,10 +247,20 @@ func pythonVersionInRange(path string, minMinor, maxMinor int) bool {
 	return major > 3 || (major == 3 && minor >= minMinor)
 }
 
-func (s *SubtitleService) ensureManagedPython() (string, error) {
-	// WhisperX 侧传 context.Background()：它原来就没有取消与超时，
-	// 换成带 ctx 的实现只是让人脸那一侧能取消，这里的行为一个字节都不变。
-	return ensureManagedPythonRuntime(context.Background(), s.whisperXRuntimeDir(), "WhisperX", "Python 3.10+", s.pythonMeetsMinimumVersion)
+func (s *SubtitleService) ensureManagedPython(ctx context.Context) (string, error) {
+	// ctx 是引擎准备的 ctx：CancelEnginePreparation 会中断解释器下载与解压（D-PC22）。
+	return ensureManagedPythonRuntime(ctx, s.whisperXRuntimeDir(), "WhisperX", "Python 3.10+", s.pythonMeetsMinimumVersion)
+}
+
+// subtitlePrepareWaitDelay 是引擎准备子进程被取消后，等它释放输出管道的上限。pip 会再拉起构建
+// 子进程，杀掉 pip 本身之后它们可能还占着管道；没有这个上限，取消会一直卡在读输出上。
+const subtitlePrepareWaitDelay = 5 * time.Second
+
+// preparationCommand 生成引擎准备用的子进程（pip、venv、brew）：ctx 取消时杀掉它（D-PC22）。
+func preparationCommand(ctx context.Context, name string, args ...string) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = subtitlePrepareWaitDelay
+	return cmd
 }
 
 // ensureManagedPythonRuntime 把 python-build-standalone 解到 runtimeDir/python 并返回
@@ -314,11 +325,11 @@ func ensureManagedPythonRuntime(ctx context.Context, runtimeDir, label, requirem
 	return pythonPath, nil
 }
 
-func (s *SubtitleService) ensureWhisperXVenv() (string, error) {
+func (s *SubtitleService) ensureWhisperXVenv(ctx context.Context) (string, error) {
 	basePython := s.findBasePython()
 	if basePython == "" {
 		var err error
-		basePython, err = s.ensureManagedPython()
+		basePython, err = s.ensureManagedPython(ctx)
 		if err != nil {
 			return "", err
 		}
@@ -335,7 +346,7 @@ func (s *SubtitleService) ensureWhisperXVenv() (string, error) {
 		return "", err
 	}
 
-	cmd := exec.Command(basePython, "-m", "venv", s.whisperXVenvDir())
+	cmd := preparationCommand(ctx, basePython, "-m", "venv", s.whisperXVenvDir())
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("创建 WhisperX 虚拟环境失败: %s", strings.TrimSpace(string(output)))
@@ -361,12 +372,14 @@ func (s *SubtitleService) isWhisperXInstalled() bool {
 	return strings.TrimSpace(string(output)) == whisperXVersion
 }
 
-func (s *SubtitleService) installWhisperXRuntime() error {
+// installWhisperXRuntime 建 WhisperX 私有运行时。ctx 取消（CancelEnginePreparation）时，
+// 正在跑的解释器下载、venv 创建与 pip 子进程都会被杀掉（D-PC22）。
+func (s *SubtitleService) installWhisperXRuntime(ctx context.Context) error {
 	if err := s.ensureWhisperXWorkerScript(); err != nil {
 		return err
 	}
 
-	venvPython, err := s.ensureWhisperXVenv()
+	venvPython, err := s.ensureWhisperXVenv(ctx)
 	if err != nil {
 		return err
 	}
@@ -376,22 +389,22 @@ func (s *SubtitleService) installWhisperXRuntime() error {
 		return err
 	}
 
-	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 10, "Preparing WhisperX runtime...")
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 10, "正在准备 WhisperX 运行时…")
 
-	upgradePip := exec.Command(venvPython, "-m", "pip", "install", "--upgrade", "pip")
+	upgradePip := preparationCommand(ctx, venvPython, "-m", "pip", "install", "--upgrade", "pip")
 	upgradePip.Env = env
 	if output, err := upgradePip.CombinedOutput(); err != nil {
 		return fmt.Errorf("升级 pip 失败: %s", strings.TrimSpace(string(output)))
 	}
 
-	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 45, "Installing WhisperX dependencies...")
-	install := exec.Command(venvPython, "-m", "pip", "install", fmt.Sprintf("whisperx==%s", whisperXVersion), "numpy")
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 45, "正在安装 WhisperX 依赖（可能需要几分钟）…")
+	install := preparationCommand(ctx, venvPython, "-m", "pip", "install", fmt.Sprintf("whisperx==%s", whisperXVersion), "numpy")
 	install.Env = env
 	if output, err := install.CombinedOutput(); err != nil {
 		return fmt.Errorf("安装 WhisperX 失败: %s", strings.TrimSpace(string(output)))
 	}
 
-	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 100, "WhisperX runtime ready")
+	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 100, "WhisperX 运行时已就绪")
 	return nil
 }
 

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -628,5 +629,295 @@ func TestRestoreRefusesMismatchedBackendBeforeTouchingTheDatabase(t *testing.T) 
 	// 关键：拒绝发生在进维护模式之前，数据库完全没被碰过。
 	if fenced {
 		t.Fatalf("跨后端快照不应触发维护模式围栏")
+	}
+}
+
+// ===== P-027 数据安全（D-PC54 / D-PC56）=====
+
+// openLiveSQLiteLibrary 在 dataDir 下按生产路径打开一个 SQLite 库并跑完 ApplySchema
+// （含维护屏障回调与默认设置行），挂成 database.DB。恢复会关掉并替换这个文件。
+func openLiveSQLiteLibrary(t *testing.T, dataDir string) *gorm.DB {
+	t.Helper()
+	t.Setenv("DB_BACKEND", "sqlite")
+	t.Setenv("SQLITE_PATH", "")
+	db, err := gorm.Open(sqlite.Open(database.SQLiteDSN(database.SQLitePath(dataDir))), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开 SQLite 库失败: %v", err)
+	}
+	if err := database.ApplySchema(db); err != nil {
+		t.Fatalf("ApplySchema 失败: %v", err)
+	}
+	previousDB := database.DB
+	database.DB = db
+	t.Cleanup(func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+		database.DB = previousDB
+	})
+	return db
+}
+
+func countSQLiteSnapshots(t *testing.T, directory string) int {
+	t.Helper()
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("读取备份目录失败: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if isBackupFileName(entry.Name()) && strings.HasSuffix(entry.Name(), sqliteBackupFileSuffix) {
+			count++
+		}
+	}
+	return count
+}
+
+func readVideoNamesFromFile(t *testing.T, path string) []string {
+	t.Helper()
+	db, err := gorm.Open(sqlite.Open(database.SQLiteDSN(path)), &gorm.Config{})
+	if err != nil {
+		t.Fatalf("打开库文件失败: %v", err)
+	}
+	defer func() {
+		if sqlDB, err := db.DB(); err == nil {
+			_ = sqlDB.Close()
+		}
+	}()
+	var names []string
+	if err := db.Model(&models.Video{}).Order("name").Pluck("name", &names).Error; err != nil {
+		t.Fatalf("读取视频失败: %v", err)
+	}
+	return names
+}
+
+// APP-01：默认的 SQLite 后端不需要任何 PG 工具，备份与恢复都应可用；backup_directory 是
+// 实际解析后的目录。
+func TestAPP01BackupStatusAvailableOnSQLiteWithoutPostgresTools(t *testing.T) {
+	service, runner, directory := setupBackupServiceTest(t, 7, 24)
+	t.Setenv("DB_BACKEND", "sqlite")
+	runner.missing["pg_dump"] = true
+	runner.missing["pg_restore"] = true
+
+	status := service.GetStatus()
+	if !status.Available || !status.BackupAvailable || !status.RestoreAvailable {
+		t.Fatalf("SQLite 下备份与恢复应可用（不看 pg 工具）: %#v", status)
+	}
+	if status.Reason != "" {
+		t.Fatalf("SQLite 下不应报不可用原因: %q", status.Reason)
+	}
+	if status.BackupDirectory != directory {
+		t.Fatalf("backup_directory 应为实际目录 %s，实际 %s", directory, status.BackupDirectory)
+	}
+
+	// 未配置目录时返回的是数据目录下的 backups，而不是空串。
+	if err := database.DB.Model(&models.Settings{}).Where("id > 0").Update("backup_directory", "").Error; err != nil {
+		t.Fatal(err)
+	}
+	if got := service.GetStatus().BackupDirectory; got != filepath.Join(service.dataDir, "backups") {
+		t.Fatalf("默认备份目录解析错误: %s", got)
+	}
+
+	// PG 后端仍沿用原判定：缺工具就不可用。
+	t.Setenv("DB_BACKEND", "postgres")
+	if pg := service.GetStatus(); pg.Available || pg.BackupAvailable || pg.RestoreAvailable {
+		t.Fatalf("PG 后端缺 pg 工具时应不可用: %#v", pg)
+	}
+}
+
+// APP-01：「在访达中显示」打开的就是 GetStatus 给出的那个目录，目录不存在时先建出来。
+func TestAPP01RevealBackupDirectoryOpensResolvedDirectory(t *testing.T) {
+	service, _, directory := setupBackupServiceTest(t, 7, 24)
+	opened := ""
+	oldOpen := openWithDefaultFn
+	openWithDefaultFn = func(path string, isDir bool) error {
+		if !isDir {
+			t.Fatalf("应按目录打开")
+		}
+		opened = path
+		return nil
+	}
+	defer func() { openWithDefaultFn = oldOpen }()
+
+	if err := service.RevealBackupDirectory(); err != nil {
+		t.Fatalf("RevealBackupDirectory 失败: %v", err)
+	}
+	if opened != directory || opened != service.GetStatus().BackupDirectory {
+		t.Fatalf("打开的目录 %q 与状态里的 %q 不一致", opened, directory)
+	}
+	if info, err := os.Stat(directory); err != nil || !info.IsDir() {
+		t.Fatalf("备份目录应已被创建: %v", err)
+	}
+
+	openWithDefaultFn = func(string, bool) error { return errors.New("open " + directory + ": failed") }
+	err := service.RevealBackupDirectory()
+	if err == nil || strings.Contains(err.Error(), directory) {
+		t.Fatalf("打开失败应返回不含绝对路径的错误: %v", err)
+	}
+}
+
+// APP-01：SQLite 上「备份 → 修改数据 → 恢复」后数据回到备份点；安全快照在进入维护围栏
+// 之前就已写好；恢复成功返回 nil，不进入「必须重启」的错误态。
+func TestAPP01SQLiteBackupModifyRestoreReturnsToBackupPoint(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端的库文件恢复")
+	}
+	dataDir := t.TempDir()
+	db := openLiveSQLiteLibrary(t, dataDir)
+	if err := db.Create(&models.Video{Name: "before.mp4", Path: filepath.Join(dataDir, "before.mp4"), Directory: dataDir}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewBackupService(dataDir)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatalf("备份失败: %v", err)
+	}
+	directory := filepath.Join(dataDir, "backups")
+
+	// 修改：改名并新增一条，恢复后两处都应回到备份点。
+	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Update("name", "renamed.mp4").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&models.Video{Name: "extra.mp4", Path: filepath.Join(dataDir, "extra.mp4"), Directory: dataDir}).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	snapshotsAtFence := -1
+	var release func()
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
+	// 与 App.enterDatabaseRestoreMode(true) 相同的两步：立围栏、关连接。
+	beforeRestore := func() error {
+		snapshotsAtFence = countSQLiteSnapshots(t, directory)
+		release = database.BeginMaintenance()
+		return database.Close()
+	}
+	reconnected := false
+	err = service.RestoreBackupWithLifecycle(context.Background(),
+		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
+		beforeRestore,
+		func() error { reconnected = true; return nil })
+	if err != nil {
+		t.Fatalf("SQLite 恢复应成功返回 nil，实际: %v", err)
+	}
+	if DatabaseRestoreRequiresRestart(err) {
+		t.Fatalf("恢复成功不应进入必须重启的错误态")
+	}
+	if reconnected {
+		t.Fatalf("SQLite 恢复换的是库文件，不应在旧进程里重连")
+	}
+	if snapshotsAtFence != 2 {
+		t.Fatalf("进入维护围栏时安全快照应已写好（原备份 + 安全快照 = 2），实际 %d", snapshotsAtFence)
+	}
+	names := readVideoNamesFromFile(t, database.SQLitePath(dataDir))
+	if len(names) != 1 || names[0] != "before.mp4" {
+		t.Fatalf("恢复后数据应回到备份点，实际 %v", names)
+	}
+}
+
+// APP-01：安全快照失败即中止——此时还没进维护模式，库原样可用，错误可重试而不是致命。
+func TestAPP01SQLiteRestoreSafetySnapshotFailureAbortsBeforeMaintenance(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端的库文件恢复")
+	}
+	dataDir := t.TempDir()
+	db := openLiveSQLiteLibrary(t, dataDir)
+	if err := db.Create(&models.Video{Name: "live.mp4", Path: filepath.Join(dataDir, "live.mp4"), Directory: dataDir}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewBackupService(dataDir)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatalf("备份失败: %v", err)
+	}
+	directory := filepath.Join(dataDir, "backups")
+	// 让安全快照的 VACUUM INTO 失败：在它要写的临时路径上预先放一个非空目录。
+	fixed := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { return fixed }
+	blocker := filepath.Join(directory, fmt.Sprintf(".cineinsight-backup-%d.tmp", fixed.UnixNano()))
+	if err := os.MkdirAll(filepath.Join(blocker, "occupied"), 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	fenced := false
+	err = service.RestoreBackupWithLifecycle(context.Background(),
+		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
+		func() error { fenced = true; return nil }, nil)
+	if err == nil || !strings.Contains(err.Error(), "恢复前安全备份失败") {
+		t.Fatalf("安全快照失败应中止恢复: %v", err)
+	}
+	if DatabaseRestoreRequiresRestart(err) {
+		t.Fatalf("安全快照失败发生在维护模式之前，不应要求重启: %v", err)
+	}
+	if fenced {
+		t.Fatalf("安全快照失败时不应进入维护模式")
+	}
+	var names []string
+	if err := database.DB.Model(&models.Video{}).Pluck("name", &names).Error; err != nil {
+		t.Fatalf("库应仍然可用: %v", err)
+	}
+	if len(names) != 1 || names[0] != "live.mp4" {
+		t.Fatalf("库不应被修改: %v", names)
+	}
+	settings, err := (&SettingsService{}).GetSettings()
+	if err != nil || !strings.Contains(settings.BackupLastError, "恢复前安全备份失败") {
+		t.Fatalf("失败原因应记入 backup_last_error: %q err=%v", settings.BackupLastError, err)
+	}
+}
+
+// APP-09：定时器的每一拍都调 MaybeBackup（到点才备份），维护模式期间跳过。
+func TestAPP09PeriodicBackupTickRunsDueBackupAndSkipsDuringMaintenance(t *testing.T) {
+	service, runner, directory := setupBackupServiceTest(t, 7, 24)
+
+	release := database.BeginMaintenance()
+	created, err := service.periodicTick(context.Background())
+	release()
+	if err != nil || created || len(runner.calls) != 0 {
+		t.Fatalf("维护模式期间应跳过: created=%v err=%v calls=%#v", created, err, runner.calls)
+	}
+
+	created, err = service.periodicTick(context.Background())
+	if err != nil || !created {
+		t.Fatalf("到点的定时检查应执行备份: created=%v err=%v", created, err)
+	}
+	if backups, err := service.listBackupsIn(directory); err != nil || len(backups) != 1 {
+		t.Fatalf("应有一份备份: %#v err=%v", backups, err)
+	}
+
+	created, err = service.periodicTick(context.Background())
+	if err != nil || created {
+		t.Fatalf("刚备份过，下一拍应按间隔跳过: created=%v err=%v", created, err)
+	}
+}
+
+// APP-09：常驻期间按周期触发，而不只是启动时一次；ctx 取消后退出。
+func TestAPP09PeriodicBackupLoopRunsOnTickerAndStopsOnCancel(t *testing.T) {
+	service, _, directory := setupBackupServiceTest(t, 7, 24)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		service.runPeriodic(ctx, 5*time.Millisecond)
+		close(done)
+	}()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if backups, err := service.listBackupsIn(directory); err == nil && len(backups) >= 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			<-done
+			t.Fatal("定时循环没有触发备份")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ctx 取消后定时循环应退出")
 	}
 }

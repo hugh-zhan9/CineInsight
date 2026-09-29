@@ -83,6 +83,8 @@ func TestLibraryFiltersCoverBuiltInViewsAndSubtitleKeyword(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "watched.srt"), []byte(decoySRT), 0644); err != nil {
 		t.Fatalf("创建干扰字幕夹具失败: %v", err)
 	}
+	// D-PC23（MEDIA-14）：视图前置同步改为节流 + 后台，这里先显式同步一轮再查。
+	syncSubtitleIndexForTest(t)
 	svc := &VideoService{}
 
 	favorites, err := svc.SearchLibraryVideos(LibraryFilter{SmartView: LibraryViewFavorites}, 0, 0, 0, 20)
@@ -200,30 +202,9 @@ func TestRecentlyPlayedWithFilterPaginatesAfterDatabaseFiltering(t *testing.T) {
 	}
 }
 
-func TestNoSubtitleViewSynchronizesFilesystemBeforeFirstQuery(t *testing.T) {
-	setupVideoServiceTestDB(t)
-	root := t.TempDir()
-	withSubtitle := models.Video{Name: "with-subtitle.mp4", Path: filepath.Join(root, "with-subtitle.mp4"), Directory: root}
-	withoutSubtitle := models.Video{Name: "without-subtitle.mp4", Path: filepath.Join(root, "without-subtitle.mp4"), Directory: root}
-	for _, video := range []*models.Video{&withSubtitle, &withoutSubtitle} {
-		if err := database.DB.Create(video).Error; err != nil {
-			t.Fatalf("创建无字幕视图夹具失败: %v", err)
-		}
-	}
-	for _, path := range []string{withSubtitle.Path, withoutSubtitle.Path} {
-		if err := os.WriteFile(path, []byte("video"), 0644); err != nil {
-			t.Fatalf("创建视频夹具失败: %v", err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(root, "with-subtitle.srt"), []byte("1\n00:00:01,000 --> 00:00:02,000\nindexed on first no-subtitle query\n"), 0644); err != nil {
-		t.Fatalf("创建字幕夹具失败: %v", err)
-	}
-
-	videos, err := (&VideoService{}).SearchLibraryVideos(LibraryFilter{SmartView: LibraryViewNoSubtitle}, 0, 0, 0, 20)
-	if err != nil || len(videos) != 1 || videos[0].ID != withoutSubtitle.ID {
-		t.Fatalf("无字幕视图首次查询前应同步磁盘字幕 videos=%+v err=%v", videos, err)
-	}
-}
+// 原 TestNoSubtitleViewSynchronizesFilesystemBeforeFirstQuery 钉住「首次查询前同步磁盘字幕」，
+// D-PC23 把它改成「先返回缓存、后台同步」，改写后的用例见
+// p014_subtitle_jobs_test.go 的 TestMEDIA14NoSubtitleViewReturnsCacheAndSyncsInBackground。
 
 func timePointer(value time.Time) *time.Time {
 	return &value
@@ -284,6 +265,8 @@ func TestFilteredRandomPlayHonorsViewModeStaleAndRecentExclusions(t *testing.T) 
 	oldOpen := openWithDefaultFn
 	openWithDefaultFn = func(path string, isDir bool) error { return nil }
 	defer func() { openWithDefaultFn = oldOpen }()
+	// D-PC23（MEDIA-14）：字幕筛选的前置同步改为节流 + 后台，先显式同步一轮。
+	syncSubtitleIndexForTest(t)
 
 	svc := &VideoService{}
 	result, err := svc.PlayRandomVideoWithFilter(RandomPlayRequest{Filter: LibraryFilter{

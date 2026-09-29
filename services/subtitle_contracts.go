@@ -90,6 +90,10 @@ const (
 	SubtitleValidationCodeHallucinationDetected SubtitleValidationCode = "hallucination_detected"
 )
 
+// SubtitleErrorReplaceFailed：字幕已生成并通过校验，但写回同名 .srt 失败；临时文件已保留，
+// 「强制生成」可以直接重试收尾而不重跑识别（D-PC13、D-PC20）。与工作台保存失败共用同一个码值。
+const SubtitleErrorReplaceFailed = string(SubtitleWorkbenchErrorReplaceFailed)
+
 type SubtitleGenerateResult struct {
 	Status            SubtitleGenerateResultStatus `json:"status"`
 	VideoID           uint                         `json:"video_id"`
@@ -101,6 +105,11 @@ type SubtitleGenerateResult struct {
 	SourceLang        string                       `json:"source_lang,omitempty"`
 	Warnings          []string                     `json:"warnings,omitempty"`
 	TranslationStatus string                       `json:"translation_status,omitempty"`
+	// ErrorCode 目前只有 subtitle_replace_failed：此时 Status 为 validation_failed、ForceEligible 为 true，
+	// 前端据错误码把「强制生成」说成「重试收尾」（G-3）。
+	ErrorCode string `json:"error_code,omitempty"`
+	// PendingRetained 表示待确认的临时字幕仍保留在磁盘上，任务中心可以强制生成或放弃。
+	PendingRetained bool `json:"pending_retained,omitempty"`
 }
 
 type SubtitleValidationError struct {

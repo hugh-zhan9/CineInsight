@@ -135,7 +135,7 @@ func (s *SubtitleService) qwenExecutionEnvironment() ([]string, bool, error) {
 	return env, false, nil
 }
 
-func (s *SubtitleService) ensureQwenVenv() (string, error) {
+func (s *SubtitleService) ensureQwenVenv(ctx context.Context) (string, error) {
 	basePython := s.findBasePython()
 	if basePython == "" {
 		return "", fmt.Errorf("Qwen 运行时需要 Python 3.10+，当前环境未找到可用 Python")
@@ -148,7 +148,7 @@ func (s *SubtitleService) ensureQwenVenv() (string, error) {
 	if err := os.MkdirAll(s.qwenRuntimeDir(), 0755); err != nil {
 		return "", err
 	}
-	cmd := exec.Command(basePython, "-m", "venv", s.qwenVenvDir())
+	cmd := preparationCommand(ctx, basePython, "-m", "venv", s.qwenVenvDir())
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("创建 Qwen 虚拟环境失败: %s", strings.TrimSpace(string(output)))
 	}
@@ -168,14 +168,15 @@ func (s *SubtitleService) isQwenInstalled() bool {
 	return err == nil && strings.TrimSpace(string(output)) == "ok"
 }
 
-func (s *SubtitleService) installQwenRuntime() error {
+// installQwenRuntime 建 Qwen ASR 私有运行时；ctx 取消时 venv 与 pip 子进程被杀掉（D-PC22）。
+func (s *SubtitleService) installQwenRuntime(ctx context.Context) error {
 	if runtime.GOOS != "darwin" || runtime.GOARCH != "arm64" {
 		return fmt.Errorf("Qwen v1 当前仅默认支持 macOS arm64")
 	}
 	if err := s.ensureQwenWorkerScript(); err != nil {
 		return err
 	}
-	venvPython, err := s.ensureQwenVenv()
+	venvPython, err := s.ensureQwenVenv(ctx)
 	if err != nil {
 		return err
 	}
@@ -183,19 +184,19 @@ func (s *SubtitleService) installQwenRuntime() error {
 	if err != nil {
 		return err
 	}
-	s.emitProgress("prepare", SubtitleEngineQwen, "preparing-runtime", 10, "Preparing Qwen ASR runtime...")
-	upgradePip := exec.Command(venvPython, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
+	s.emitProgress("prepare", SubtitleEngineQwen, "preparing-runtime", 10, "正在准备 Qwen ASR 运行时…")
+	upgradePip := preparationCommand(ctx, venvPython, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel")
 	upgradePip.Env = env
 	if output, err := upgradePip.CombinedOutput(); err != nil {
 		return fmt.Errorf("升级 Qwen pip 依赖失败: %s", strings.TrimSpace(string(output)))
 	}
-	s.emitProgress("prepare", SubtitleEngineQwen, "preparing-runtime", 45, "Installing Qwen ASR dependencies...")
-	install := exec.Command(venvPython, "-m", "pip", "install", "-U", qwenPackageName, "numpy", "soundfile")
+	s.emitProgress("prepare", SubtitleEngineQwen, "preparing-runtime", 45, "正在安装 Qwen ASR 依赖（可能需要几分钟）…")
+	install := preparationCommand(ctx, venvPython, "-m", "pip", "install", "-U", qwenPackageName, "numpy", "soundfile")
 	install.Env = env
 	if output, err := install.CombinedOutput(); err != nil {
 		return fmt.Errorf("安装 Qwen ASR 失败: %s", strings.TrimSpace(string(output)))
 	}
-	s.emitProgress("prepare", SubtitleEngineQwen, "preparing-runtime", 100, "Qwen ASR runtime ready")
+	s.emitProgress("prepare", SubtitleEngineQwen, "preparing-runtime", 100, "Qwen ASR 运行时已就绪")
 	return nil
 }
 

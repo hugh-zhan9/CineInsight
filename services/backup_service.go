@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -191,6 +192,15 @@ func (s *BackupService) GetStatus() BackupStatus {
 	status.LastAttemptAt = settings.BackupLastAttemptAt
 	status.LastSuccessAt = settings.BackupLastSuccessAt
 	status.LastError = settings.BackupLastError
+	// 可用性按后端判（D-PC54）：SQLite 的备份与恢复都只靠 VACUUM INTO 与文件替换，
+	// 永远可用；只有 PostgreSQL 需要 pg_dump / pg_restore 与连接配置。此前一律按 PG
+	// 判，默认的 SQLite 安装在设置页里备份、恢复两个按钮始终是灰的（APP-01）。
+	if database.ActiveBackend() == database.BackendSQLite {
+		status.BackupAvailable = true
+		status.RestoreAvailable = true
+		status.Available = true
+		return status
+	}
 	_, dumpErr := s.runner.LookPath("pg_dump")
 	_, restoreErr := s.runner.LookPath("pg_restore")
 	status.BackupAvailable = dumpErr == nil && restoreErr == nil
@@ -214,6 +224,62 @@ func (s *BackupService) GetStatus() BackupStatus {
 		status.Reason = "PostgreSQL 连接配置不完整"
 	}
 	return status
+}
+
+// RevealBackupDirectory 在访达中打开实际使用的备份目录（D-PC54），与 GetStatus 返回的
+// backup_directory 是同一个解析结果。目录还不存在时先建出来（与备份时同样的 0700），
+// 否则第一次备份之前点「在访达中显示」只会失败。错误文案不带绝对路径（G-3）。
+func (s *BackupService) RevealBackupDirectory() error {
+	settings, err := (&SettingsService{}).GetSettings()
+	if err != nil {
+		return fmt.Errorf("读取备份设置失败: %w", err)
+	}
+	directory := s.resolveDirectory(settings.BackupDirectory)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return errors.New("备份目录无法创建，请检查目录设置与权限")
+	}
+	if err := openWithDefaultFn(directory, true); err != nil {
+		return errors.New("无法在访达中打开备份目录")
+	}
+	return nil
+}
+
+// periodicBackupInterval 是定时备份的检查周期（D-PC56）。每次只是调用 MaybeBackup，
+// 真正是否备份仍由「自动备份间隔」设置决定，所以周期取一小时即可。
+const periodicBackupInterval = time.Hour
+
+// StartPeriodic 让应用常驻期间也能按间隔自动备份（D-PC56 / APP-09）：此前只在启动时
+// 检查一次，常驻数天的应用永远等不到下一次备份。
+//
+// 它**阻塞**到 ctx 取消为止，由调用方放进自己的 goroutine 并登记到 backupWG——这样退出时
+// 取消 ctx 再 Wait，就不会有一轮备份与关库赛跑。启动时那一次立即检查仍由 startup 负责，
+// 这里只管之后每小时一次。
+func (s *BackupService) StartPeriodic(ctx context.Context) {
+	s.runPeriodic(ctx, periodicBackupInterval)
+}
+
+func (s *BackupService) runPeriodic(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if _, err := s.periodicTick(ctx); err != nil && ctx.Err() == nil {
+				log.Printf("Periodic database backup failed err=%v", err)
+			}
+		}
+	}
+}
+
+// periodicTick 是定时器的一拍：维护模式（恢复备份、切换后端）期间直接跳过——那时库被
+// 围栏挡着，调用只会得到一条维护中的错误，何况恢复流程自己会做安全备份。
+func (s *BackupService) periodicTick(ctx context.Context) (bool, error) {
+	if database.MaintenanceActive() {
+		return false, nil
+	}
+	return s.MaybeBackup(ctx)
 }
 
 func (s *BackupService) ListBackups() ([]BackupFile, error) {
@@ -355,11 +421,14 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 // restoreSQLite 用快照替换当前库文件。
 //
 // 与 Postgres 那条路径的关键差别：那边是把数据灌回同一个库（连接可以保留并重连），
-// 这边是换掉库文件本身。正在使用的句柄不能安全地指向一个被换掉的文件，所以恢复
-// 成功后一律要求重启，不尝试重连。
+// 这边是换掉库文件本身。正在使用的句柄不能安全地指向一个被换掉的文件，所以这里
+// 不重连；恢复成功后由 App 走与 Postgres 成功时相同的「提示成功并退出」收尾。
 //
-// 顺序刻意与 Postgres 路径一致：先校验、再进维护模式围栏、再做安全备份、最后替换。
-// 安全备份放在围栏之后，才能保证围栏前落库的写入都被包含进去。
+// 顺序：校验 → 安全快照 → 进维护模式围栏 → 替换（D-PC54）。安全快照必须在围栏
+// **之前**：SQLite 的快照是本进程经 database.DB 执行的 VACUUM INTO，围栏生效后
+// 它会被维护屏障拒绝，何况进入维护模式时连接已被关闭——此前的顺序让 SQLite 恢复
+// 必然失败并把应用卡进「必须重启」的错误态（APP-01）。代价是快照与围栏之间落库的
+// 零星后台写入不在安全快照里；它们随后也会被恢复覆盖，安全快照要保的是「恢复前那一刻」。
 func (s *BackupService) restoreSQLite(
 	ctx context.Context,
 	directory string,
@@ -371,6 +440,10 @@ func (s *BackupService) restoreSQLite(
 	if err := verifySQLiteSnapshot(backupPath); err != nil {
 		return s.recordedFailure(fmt.Errorf("备份文件校验失败，数据库未被修改: %w", err))
 	}
+	// 失败即中止：此时还没进维护模式，库原样可用，按普通失败返回（App 走恢复失败续跑）。
+	if err := s.performSafetyBackup(ctx, directory, normalizedBackupRetention(settings.BackupRetentionCount), request.Name); err != nil {
+		return s.recordedFailure(fmt.Errorf("恢复前安全备份失败，数据库未被修改: %w", err))
+	}
 
 	livePath := database.SQLitePath(s.dataDir)
 	if beforeRestore != nil {
@@ -379,14 +452,6 @@ func (s *BackupService) restoreSQLite(
 				return err
 			}
 			return s.recordedFailure(fmt.Errorf("进入数据库维护模式失败，数据库未被修改: %w", err))
-		}
-	}
-	if err := s.performSafetyBackup(ctx, directory, normalizedBackupRetention(settings.BackupRetentionCount), request.Name); err != nil {
-		// 这里不 reconnect：SQLite 恢复本来就以重启收尾，维护模式保持到重启为止
-		// 反而是安全的——它挡住了所有写入。
-		return &DatabaseRestoreError{
-			Fatal: true,
-			Err:   fmt.Errorf("恢复前安全备份失败，数据库未被修改，应用必须重启以退出维护模式: %w", err),
 		}
 	}
 
@@ -411,12 +476,11 @@ func (s *BackupService) restoreSQLite(
 			Err:   fmt.Errorf("替换数据库文件失败，应用必须重启并检查备份目录: %w", err),
 		}
 	}
-	// 状态持久化要等重启后才有可用连接，这里不写，直接要求重启。
-	return &DatabaseRestoreError{
-		Committed: true,
-		Fatal:     true,
-		Err:       errors.New("数据库已从备份恢复，应用必须重启后生效"),
-	}
+	// 恢复成功就是成功：返回 nil，App 与 Postgres 成功时一样提示「恢复成功，应用将自动
+	// 退出」并走内部退出。此前这里返回 Committed+Fatal 的错误，前端会把一次成功的恢复
+	// 显示成「数据库恢复失败：……必须重启」。旧句柄已关，本次尝试的状态不写库——
+	// 恢复出来的库带着快照时刻的备份状态，重启后由自动备份按间隔自行续上。
+	return nil
 }
 
 // verifySQLiteSnapshot 确认快照确实是一个能打开、且含本应用表的 SQLite 库。

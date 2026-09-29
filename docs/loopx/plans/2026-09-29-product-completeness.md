@@ -881,6 +881,17 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
     - 手机端 429 返回 `reset_required` 时，提示去桌面端修改 PIN；
     - PIN 输入下限改为 6 位；
     - 手机端新增 409 `volume_offline`、`permission_denied` 两种提示。
+- **P-014 / P-027 交付后追加**（主代理整合时已修：数据目录下的 `.env` 优先加载、「需要重启」按该文件判定、PG 清空范围补上语义向量表）：
+  - **P-029** 接线：
+    - 启动时在数据库就绪之后、前端能入队之前调用 `subtitleService.MarkInterruptedSubtitleJobs()`；恢复续跑路径同样调用；
+    - startup 已有 `backupCtx` 的分支中登记 `backupWG` 并起 `backupService.StartPeriodic(backupCtx)`，启动时那次立即检查保留；
+    - `main.go` 注册 `OnBeforeClose: app.beforeClose`（任务判定由 P-024 补）；
+    - 重新生成绑定：`ListSubtitleJobs`、`ResolveSubtitleJob`、`GetInterruptedSubtitleJobs`、`RequeueInterruptedSubtitleJobs`、`DismissInterruptedSubtitleJobs`、`CancelSubtitleEnginePreparation`、`GetSubtitleIndexSyncStatus`、`SyncSubtitleIndexNow`、`RevealBackupDirectory`、`SwitchBackendConfigOnly`、`ClearMigrationTarget`、`RelaunchApp`。
+  - **P-024**：`beforeClose` 的任务判定点；退出时仍在跑的字幕任务可能留下隐藏的 pending 文件，启动标记中断时一并登记。
+  - **前端（P-033 / 任务中心）**：
+    - 恢复成功改为返回成功；「立即重启」「清空」确认输入、「切回之前的后端」「在访达中显示」；
+    - 「0 表示关闭启动时自动备份」与「改回去只要选回来」两句文案要改；
+    - `subtitle-failed` 带可选 `error_code`；引擎准备可取消（`phase=cancelled`）；写回失败按 `error_code=subtitle_replace_failed` 区分文案。
 - **P-039**：`docs/short-feed-lan.md` 中「无登录、无 PIN、无二维码」与投影机制的描述需要更新。
 - **P-040**：回收站列表方法名改回设计名（旧的 `ListTrashEntries` 删除后，把 `ListTrashEntriesPage` 改为 `ListTrashEntries`）；统一各处 `*BatchResult` 类型的命名。
 - **真机交接**：

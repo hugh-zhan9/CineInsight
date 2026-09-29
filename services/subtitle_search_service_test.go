@@ -27,6 +27,8 @@ func TestSearchSubtitleMatchesFindsVideoBySegmentText(t *testing.T) {
 		t.Fatalf("创建视频失败: %v", err)
 	}
 
+	// D-PC23（MEDIA-14）：搜索不再在调用线程里全库同步，先显式同步一轮。
+	syncSubtitleIndexForTest(t)
 	svc := &SubtitleSearchService{}
 	matches, err := svc.SearchSubtitleMatches("world", 10)
 	if err != nil {
@@ -48,7 +50,7 @@ func TestSearchSubtitleMatchesFindsVideoBySegmentText(t *testing.T) {
 		t.Fatalf("统计字幕索引失败: %v", err)
 	}
 	if indexedCount != 1 {
-		t.Fatalf("期望首次搜索后建立 1 条字幕索引，实际 %d", indexedCount)
+		t.Fatalf("期望同步后建立 1 条字幕索引，实际 %d", indexedCount)
 	}
 }
 
@@ -107,6 +109,8 @@ func TestSearchSubtitleMatchesLimitsByUniqueVideos(t *testing.T) {
 		t.Fatalf("创建视频B失败: %v", err)
 	}
 
+	// D-PC23（MEDIA-14）：搜索不再在调用线程里全库同步，先显式同步一轮。
+	syncSubtitleIndexForTest(t)
 	svc := &SubtitleSearchService{}
 	matches, err := svc.SearchSubtitleMatches("world", 2)
 	if err != nil {
@@ -157,6 +161,8 @@ func TestSearchSubtitleMatchesWithFiltersAppliesTagAndMediaBounds(t *testing.T) 
 		t.Fatalf("绑定标签失败: %v", err)
 	}
 
+	// D-PC23（MEDIA-14）：搜索不再在调用线程里全库同步，先显式同步一轮。
+	syncSubtitleIndexForTest(t)
 	matches, err := (&SubtitleSearchService{}).SearchSubtitleMatchesWithFilters("needle phrase", SubtitleSearchFilters{
 		TagIDs:    []uint{tag.ID},
 		MinSize:   100,
@@ -190,6 +196,8 @@ func TestSearchSubtitleMatchesWithFiltersIgnoresZeroTagIDs(t *testing.T) {
 		t.Fatalf("创建视频失败: %v", err)
 	}
 
+	// D-PC23（MEDIA-14）：搜索不再在调用线程里全库同步，先显式同步一轮。
+	syncSubtitleIndexForTest(t)
 	matches, err := (&SubtitleSearchService{}).SearchSubtitleMatchesWithFilters("zero tag needle", SubtitleSearchFilters{
 		TagIDs: []uint{0, 0},
 		Limit:  10,
@@ -220,6 +228,8 @@ func TestSearchSubtitleMatchesRefreshesStaleIndex(t *testing.T) {
 		t.Fatalf("创建视频失败: %v", err)
 	}
 
+	// D-PC23（MEDIA-14）：搜索不再在调用线程里全库同步，先显式同步一轮。
+	syncSubtitleIndexForTest(t)
 	svc := &SubtitleSearchService{}
 	if matches, err := svc.SearchSubtitleMatches("old", 10); err != nil || len(matches) != 1 {
 		t.Fatalf("首次搜索失败 matches=%d err=%v", len(matches), err)
@@ -229,6 +239,10 @@ func TestSearchSubtitleMatchesRefreshesStaleIndex(t *testing.T) {
 		t.Fatalf("改写字幕文件失败: %v", err)
 	}
 
+	// 10 分钟节流内不做全库同步，但命中的视频字幕改过会就地重建：旧词命中过期索引、刷新后不再命中。
+	if matches, err := svc.SearchSubtitleMatches("old", 10); err != nil || len(matches) != 0 {
+		t.Fatalf("命中过期索引应就地刷新，旧词不再命中 matches=%d err=%v", len(matches), err)
+	}
 	matches, err := svc.SearchSubtitleMatches("new", 10)
 	if err != nil {
 		t.Fatalf("刷新后搜索失败: %v", err)

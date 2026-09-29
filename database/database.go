@@ -111,8 +111,30 @@ func openBackend(backend Backend, dataDir string) (*gorm.DB, error) {
 	}
 }
 
-func loadEnvConfig() {
-	paths := []string{".env"}
+// BackendConfigFileName 是数据目录下后端配置文件的文件名。应用内切换后端（D-PC55）
+// 只写这一份。
+const BackendConfigFileName = ".env"
+
+func loadEnvConfig(dataDir string) {
+	for _, path := range envConfigPaths(dataDir) {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		_ = godotenv.Load(path)
+	}
+}
+
+// envConfigPaths 按优先级从高到低列出要加载的配置文件。godotenv 不覆盖已存在的变量，
+// 所以先加载的优先；进程环境变量始终最优先。
+//
+// 数据目录下的 .env 排第一：应用内切换后端只写这一份，它必须压过随应用分发的
+// .env，否则重启后仍连回原来的库（APP-02）。
+func envConfigPaths(dataDir string) []string {
+	paths := []string{}
+	if dataDir != "" {
+		paths = append(paths, filepath.Join(dataDir, BackendConfigFileName))
+	}
+	paths = append(paths, ".env")
 
 	if exePath, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exePath)
@@ -132,13 +154,7 @@ func loadEnvConfig() {
 		seen[clean] = struct{}{}
 		uniquePaths = append(uniquePaths, clean)
 	}
-
-	for _, path := range uniquePaths {
-		if _, err := os.Stat(path); err != nil {
-			continue
-		}
-		_ = godotenv.Load(path)
-	}
+	return uniquePaths
 }
 
 // PostgresDSNFromEnv 供切换流程在不改动当前连接的前提下打开目标库。
@@ -259,13 +275,13 @@ func SQLitePath(dataDir string) string {
 
 // Init 初始化数据库
 func Init() error {
-	loadEnvConfig()
-
 	// 数据目录由 appdata 统一解析（含旧目录一次性改名），两处必须口径一致。
+	// 先解析目录再加载配置：数据目录下的 .env 是配置来源之一。
 	dataDir, err := appdata.Resolve()
 	if err != nil {
 		return err
 	}
+	loadEnvConfig(dataDir)
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("创建数据目录失败: %w", err)
 	}

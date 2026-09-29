@@ -11,14 +11,23 @@ import (
 
 // ===== Subtitle Methods =====
 
-// GetSubtitleEngineStatuses 获取字幕引擎可用性状态
+// GetSubtitleEngineStatuses 获取字幕引擎可用性状态（60 秒缓存，准备前后失效，D-PC22）
 func (a *App) GetSubtitleEngineStatuses() ([]services.SubtitleEngineStatus, error) {
 	return a.subtitleService.GetEngineStatuses()
 }
 
-// PrepareSubtitleEngine 准备指定字幕引擎所需依赖
+// PrepareSubtitleEngine 准备指定字幕引擎所需依赖。被 CancelSubtitleEnginePreparation 取消时
+// 返回「已取消字幕引擎准备」；结果另经桌面通知告知。
 func (a *App) PrepareSubtitleEngine(engine services.SubtitleEngine) error {
-	return a.subtitleService.PrepareEngine(engine)
+	err := a.subtitleService.PrepareEngine(engine)
+	log.Printf("API PrepareSubtitleEngine engine=%s err=%v", engine, err)
+	return err
+}
+
+// CancelSubtitleEnginePreparation 取消正在进行的字幕引擎准备（杀掉 pip 等子进程，D-PC22）。
+func (a *App) CancelSubtitleEnginePreparation() {
+	cancelled := a.subtitleService.CancelEnginePreparation()
+	log.Printf("API CancelSubtitleEnginePreparation cancelled=%v", cancelled)
 }
 
 // CheckSubtitleDependencies 检查字幕生成依赖
@@ -31,7 +40,8 @@ func (a *App) DownloadSubtitleDependencies() error {
 	return a.subtitleService.DownloadDependencies()
 }
 
-// GenerateSubtitle 生成字幕
+// GenerateSubtitle 生成字幕。收尾写回失败时返回 error_code=subtitle_replace_failed、
+// pending_retained=true 的结果（映射在服务层完成），ForceGenerateSubtitle 可复用临时文件重试收尾。
 func (a *App) GenerateSubtitle(req services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) {
 	video, err := a.videoService.GetVideo(req.VideoID)
 	if err != nil {
@@ -45,7 +55,8 @@ func (a *App) GenerateSubtitle(req services.SubtitleGenerateRequest) (*services.
 	return a.subtitleService.GenerateSubtitle(req, video.Path, options)
 }
 
-// ForceGenerateSubtitle 强制生成字幕（跳过幻觉检测）
+// ForceGenerateSubtitle 强制生成字幕（跳过幻觉检测）；有待确认的临时字幕时复用它，不重跑识别。
+// 写回失败的映射与 GenerateSubtitle 相同。
 func (a *App) ForceGenerateSubtitle(req services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) {
 	video, err := a.videoService.GetVideo(req.VideoID)
 	if err != nil {
@@ -74,6 +85,91 @@ func (a *App) CancelSubtitleTask(taskID uint) error {
 // GetSubtitleQueueState 返回当前字幕任务队列。
 func (a *App) GetSubtitleQueueState() services.SubtitleQueueSnapshot {
 	return a.subtitleService.GetSubtitleQueueState()
+}
+
+// ===== 字幕任务中心（D-PC20） =====
+
+// ListSubtitleJobs 列出字幕任务（排队、运行中与最近的历史），limit ≤ 0 取默认值。
+func (a *App) ListSubtitleJobs(limit int) ([]services.SubtitleJobItem, error) {
+	return a.subtitleService.ListSubtitleJobs(limit)
+}
+
+// ResolveSubtitleJob 处理一条字幕任务：action 取 force（复用临时字幕强制生成 / 重试收尾）、
+// discard（放弃临时字幕）或 retry（重新排队）。force / retry 入队后立即返回。
+func (a *App) ResolveSubtitleJob(jobID uint, action string) (*services.SubtitleJobResolveResult, error) {
+	result, err := a.resolveSubtitleJob(jobID, services.SubtitleJobAction(action))
+	status := services.SubtitleQueueTaskStatus("")
+	if result != nil {
+		status = result.Status
+	}
+	log.Printf("API ResolveSubtitleJob job_id=%d action=%s status=%s err=%v", jobID, action, status, err)
+	return result, err
+}
+
+func (a *App) resolveSubtitleJob(jobID uint, action services.SubtitleJobAction) (*services.SubtitleJobResolveResult, error) {
+	input := services.SubtitleJobResolveInput{}
+	if action == services.SubtitleJobActionForce || action == services.SubtitleJobActionRetry {
+		job, err := a.subtitleService.GetSubtitleJob(jobID)
+		if err != nil {
+			return nil, err
+		}
+		video, err := a.videoService.GetVideo(job.VideoID)
+		if err != nil {
+			return nil, err
+		}
+		settings, _ := a.settingsService.GetSettings()
+		input = services.SubtitleJobResolveInput{
+			VideoPath: video.Path,
+			VideoName: video.Name,
+			Options:   subtitleGenerateOptionsFromSettings(settings, action == services.SubtitleJobActionForce),
+		}
+	}
+	return a.subtitleService.ResolveSubtitleJob(jobID, action, input)
+}
+
+// GetInterruptedSubtitleJobs 返回「上次中断 N 个字幕任务」提示所需的任务。
+func (a *App) GetInterruptedSubtitleJobs() (services.SubtitleInterruptedJobs, error) {
+	return a.subtitleService.GetInterruptedSubtitleJobs()
+}
+
+// RequeueInterruptedSubtitleJobs 是提示上的「全部重新排队」：逐个按当前设置重试，返回成功入队的条数。
+// 个别任务入队失败（例如视频已删除）只记日志，它仍留在任务中心，可以单独处理。
+func (a *App) RequeueInterruptedSubtitleJobs() (int, error) {
+	summary, err := a.subtitleService.GetInterruptedSubtitleJobs()
+	if err != nil {
+		return 0, err
+	}
+	requeued := 0
+	for _, jobID := range summary.JobIDs {
+		result, err := a.resolveSubtitleJob(jobID, services.SubtitleJobActionRetry)
+		if err != nil || result == nil || result.ErrorCode != "" {
+			log.Printf("API RequeueInterruptedSubtitleJobs job_id=%d result=%+v err=%v", jobID, result, err)
+			continue
+		}
+		requeued++
+	}
+	a.subtitleService.DismissInterruptedSubtitleJobs()
+	log.Printf("API RequeueInterruptedSubtitleJobs requeued=%d total=%d", requeued, len(summary.JobIDs))
+	return requeued, nil
+}
+
+// DismissInterruptedSubtitleJobs 是提示上的「忽略」：不再提示，任务留在历史里。
+func (a *App) DismissInterruptedSubtitleJobs() {
+	a.subtitleService.DismissInterruptedSubtitleJobs()
+}
+
+// ===== 字幕索引同步（D-PC23） =====
+
+// GetSubtitleIndexSyncStatus 返回全库字幕索引同步的状态（「上次同步时间」）。
+func (a *App) GetSubtitleIndexSyncStatus() services.SubtitleIndexSyncStatus {
+	return a.subtitleSearchService.GetSubtitleIndexSyncStatus()
+}
+
+// SyncSubtitleIndexNow 是「立即同步」：后台开始一轮全库同步并立即返回，完成后发 subtitle-index-synced。
+func (a *App) SyncSubtitleIndexNow() (services.SubtitleIndexSyncStatus, error) {
+	status, err := a.subtitleSearchService.SyncSubtitleIndexNow()
+	log.Printf("API SyncSubtitleIndexNow running=%v err=%v", status.Running, err)
+	return status, err
 }
 
 func subtitleGenerateOptionsFromSettings(settings *models.Settings, force bool) services.SubtitleGenerateOptions {

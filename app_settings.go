@@ -23,22 +23,63 @@ func (a *App) PreflightDatabaseSwitch(target string) (*services.DatabaseSwitchPr
 	return a.databaseSwitchService.Preflight(target)
 }
 
-// StartDatabaseSwitch 迁移数据并写入后端配置；成功后需要重启才生效。
-// 迁移在后台跑，进度走 database-switch-state 事件，GetDatabaseSwitchStatus 兜底。
+// StartDatabaseSwitch 迁移数据并写入后端配置；成功后需要重启才生效（设计中的 MigrateAndSwitch）。
+// 迁移在后台跑，进度走 database-switch-state 事件，GetDatabaseSwitchStatus 兜底；
+// 成功的终态带 relaunch_required=true，前端据此提供「立即重启」（RelaunchApp）。
+//
+// 迁移全程处在与恢复备份相同的维护模式里（D-PC55 / APP-02）：后台服务停掉、写入被围栏
+// 拒绝，迁移器只经维护通道读源库，结束（无论成败）后撤围栏、恢复服务。与恢复共用
+// restoreMu，两者不会同时进维护模式；恢复已进入终态（应用即将退出）时不再允许切换。
 func (a *App) StartDatabaseSwitch(target string) error {
+	if !a.restoreMu.TryLock() {
+		return fmt.Errorf("数据库恢复或切换正在进行，请稍后再试")
+	}
+	if a.restoreTerminal {
+		a.restoreMu.Unlock()
+		return fmt.Errorf("数据库恢复已完成或进入不可恢复状态，请等待应用退出后重新打开")
+	}
 	preflight, err := a.databaseSwitchService.Preflight(target)
 	if err != nil {
+		a.restoreMu.Unlock()
 		return err
 	}
 	if !preflight.Reachable || !preflight.Empty {
+		a.restoreMu.Unlock()
 		return fmt.Errorf("%s", preflight.Message)
 	}
 	go func() {
-		if err := a.databaseSwitchService.Switch(context.Background(), target); err != nil {
-			log.Printf("API StartDatabaseSwitch target=%s err=%v", target, err)
-		}
+		defer a.restoreMu.Unlock()
+		err := a.databaseSwitchService.SwitchWithLifecycle(context.Background(), target,
+			func() error { return a.enterDatabaseRestoreMode(false) },
+			a.resumeAfterDatabaseRestoreFailure,
+		)
+		log.Printf("API StartDatabaseSwitch target=%s err=%v", target, err)
 	}()
 	return nil
+}
+
+// SwitchBackendConfigOnly 切回上一个后端：只改配置、不迁移（D-PC55）。成功时
+// relaunch_required=true；切换之后在当前库里的改动不会带回，结果的 message 写明。
+func (a *App) SwitchBackendConfigOnly(target string) (*services.DatabaseSwitchConfigResult, error) {
+	result, err := a.databaseSwitchService.SwitchBackendConfigOnly(target)
+	if result != nil {
+		log.Printf("API SwitchBackendConfigOnly target=%s switched=%v reason=%s err=%v", target, result.Switched, result.ReasonCode, err)
+	} else {
+		log.Printf("API SwitchBackendConfigOnly target=%s err=%v", target, err)
+	}
+	return result, err
+}
+
+// ClearMigrationTarget 清空迁移失败的目标库，以便重试（D-PC55）。confirmText 必须是「清空」；
+// 当前正在使用的库永远不会被清空。
+func (a *App) ClearMigrationTarget(target, confirmText string) (*services.DatabaseTargetClearResult, error) {
+	result, err := a.databaseSwitchService.ClearMigrationTarget(target, confirmText)
+	if result != nil {
+		log.Printf("API ClearMigrationTarget target=%s cleared=%v removed=%d reason=%s err=%v", target, result.Cleared, len(result.Removed), result.ReasonCode, err)
+	} else {
+		log.Printf("API ClearMigrationTarget target=%s err=%v", target, err)
+	}
+	return result, err
 }
 
 // GetDatabaseSwitchStatus 返回迁移进度，供前端轮询兜底。
@@ -83,11 +124,6 @@ func (a *App) UpdateSettings(input models.Settings) error {
 		if watchErr := a.configureLibraryWatcher(input.LibraryWatchEnabled); watchErr != nil {
 			log.Printf("Library watcher settings apply failed err=%v", watchErr)
 		}
-		// 设置已保存；回流同步失败只记录（下次交互/启动同步自愈），
-		// 不把已成功的设置保存报成失败。
-		if _, syncErr := a.shortFeedService.SyncFeedback(); syncErr != nil {
-			log.Printf("Short-feed feedback settings apply failed err=%v", syncErr)
-		}
 		// 桥接开关或下载目录改了要立刻生效：关掉之后端口必须马上不再监听，
 		// 开启之后不该等到下次重启应用才能配对。
 		if bridgeErr != nil || bridgeBefore == nil ||
@@ -123,6 +159,13 @@ func (a *App) ListDatabaseBackups() ([]services.BackupFile, error) {
 	return a.backupService.ListBackups()
 }
 
+// RevealBackupDirectory 在访达中打开实际的备份目录（与 GetBackupStatus 的 backup_directory 一致）。
+func (a *App) RevealBackupDirectory() error {
+	err := a.backupService.RevealBackupDirectory()
+	log.Printf("API RevealBackupDirectory err=%v", err)
+	return err
+}
+
 func (a *App) CreateDatabaseBackup() (*services.BackupFile, error) {
 	if err := a.beginBackupOperation(); err != nil {
 		return nil, err
@@ -149,14 +192,18 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	err := a.backupService.RestoreBackupWithLifecycle(ctx, request, a.enterDatabaseRestoreMode, database.Init)
+	enterRestoreMode := func() error { return a.enterDatabaseRestoreMode(true) }
+	err := a.backupService.RestoreBackupWithLifecycle(ctx, request, enterRestoreMode, database.Init)
 	if err == nil || services.DatabaseRestoreRequiresRestart(err) {
 		a.restoreTerminal = true
 		_ = database.Close()
 		if a.ctx != nil {
+			// 应用内部发起的退出：数据库已关，退出确认（beforeClose）必须放行，
+			// 否则会在一个已经不能读库的窗口上弹「有任务在跑」（D-PC21 内部放行）。
+			allowInternalQuit()
 			go func(runtimeCtx context.Context) {
-				time.Sleep(150 * time.Millisecond)
-				runtime.Quit(runtimeCtx)
+				time.Sleep(internalQuitDelay)
+				quitRuntime(runtimeCtx)
 			}(a.ctx)
 		} else {
 			// 运行时上下文不可用（理论上只在启动完成前触发）：仍然退出进程，
@@ -173,7 +220,14 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 	return err
 }
 
-func (a *App) enterDatabaseRestoreMode() error {
+// enterDatabaseRestoreMode 是数据库维护模式的唯一入口，恢复备份与切换后端共用（D-PC55）：
+// 停掉会读写数据库的后台服务与对外服务，再立路径与数据库两道围栏。之后普通的 GORM 读写
+// 一律得到 ErrMaintenance，只有经 database.WithMaintenanceAccess 的恢复/迁移流程能访问。
+//
+// closeConnection：恢复要换掉库（SQLite 换文件、PG 灌回同一个库后重连），围栏后必须关闭
+// 连接；切换后端只读源库，连接保持打开供迁移器读取。离开维护模式统一走
+// resumeAfterDatabaseRestoreFailure。
+func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 	if a.jellyfinServer != nil {
 		a.jellyfinServer.Stop()
 	}
@@ -197,6 +251,10 @@ func (a *App) enterDatabaseRestoreMode() error {
 	}
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
+	}
+	// 帧哈希回填同样逐项写 video_frame_hash_sequences，此前漏在清单外（清理检测遗留 Q5）。
+	if a.frameHash != nil {
+		a.frameHash.StopAndWait()
 	}
 	if a.imageEXIFBackfill != nil {
 		a.imageEXIFBackfill.StopAndWait()
@@ -226,18 +284,18 @@ func (a *App) enterDatabaseRestoreMode() error {
 	if a.subtitleService != nil {
 		a.subtitleService.QuiesceGeneration()
 	}
-	if a.shortFeedServer != nil {
-		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := a.shortFeedServer.Stop(stopCtx); err != nil {
-			return err
-		}
+	// 手机端服务的启停一律经生命周期锁，与设置页开关互斥（P-021）。
+	if err := a.withShortFeedLifecycle(a.stopShortFeedForSetting); err != nil {
+		return err
 	}
 	pathRelease := services.BeginLibraryMaintenance()
 	databaseRelease := database.BeginMaintenance()
 	a.restoreRelease = func() {
 		databaseRelease()
 		pathRelease()
+	}
+	if !closeConnection {
+		return nil
 	}
 	if err := database.Close(); err != nil {
 		return &services.DatabaseRestoreError{
@@ -248,6 +306,8 @@ func (a *App) enterDatabaseRestoreMode() error {
 	return nil
 }
 
+// resumeAfterDatabaseRestoreFailure 离开维护模式：撤围栏并把 enterDatabaseRestoreMode
+// 停掉的服务恢复起来。恢复备份失败、切换后端结束（成败都走这里）共用。
 func (a *App) resumeAfterDatabaseRestoreFailure() {
 	a.releaseDatabaseRestoreMode()
 	if a.ctx == nil {
@@ -261,7 +321,12 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	// 握的是进入恢复模式之前那一个（已 Close）。不重建的话榜单页从此每次读都报
 	// 「sql: database is closed」，而且只在这条失败续跑的路径上出现。
 	a.resetMovieChartService()
-	a.startShortFeedServer(a.ctx)
+	// 手机端服务按开关决定是否重新监听：restartShortFeedServerLocked 先停旧实例，再看
+	// ShouldStart()。此前这里无条件 startShortFeedServer，用户关掉的手机端访问会在一次
+	// 失败的恢复之后被重新打开（PLAY-01）。
+	if err := a.withShortFeedLifecycle(func() error { return a.restartShortFeedServerLocked(a.ctx) }); err != nil {
+		log.Printf("Short feed server resume after database maintenance failed err=%v", err)
+	}
 	if a.jellyfinServer != nil {
 		a.jellyfinServer.Start()
 	}
