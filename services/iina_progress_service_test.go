@@ -124,8 +124,9 @@ func TestIINAProgressSyncMarksWatchedAtEndAndSkipsWatchedVideos(t *testing.T) {
 	dir := filepath.Join(home, iinaWatchLaterRelativeDir)
 
 	// 已看的片子还留着一份陈旧断点：位置被清零之后，「只前进不后退」挡不住它。
-	// 不知道何时标的已看（watched_at 为空）不再在「已看」这一步直接跳过（PLAY06 A-m-2），
+	// 不知道何时标的已看（watched_at 为空）但有进度时间的，不在「已看」这一步直接跳过（PLAY06 A-m-2），
 	// 由断点文件修改时间与库里进度时间的比较挡住：看完落库时写下的进度时间晚于这份陈旧文件。
+	// 两个时间都为空的已看行在「已看」这一步就跳过（A-m4，见 TestIINASyncWatchedWithoutAnyTimestampSkipsPLAY06）。
 	completedAt := time.Now()
 	videos := []models.Video{
 		{Name: "ended.mp4", Path: "/media/ended.mp4", Directory: "/media", Duration: 28},

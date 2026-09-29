@@ -1224,9 +1224,9 @@ func (s *VideoService) ListContinueWatchingWithFilter(filter LibraryFilter, curs
 //
 //   - 时区：SQLite 把时间存成带偏移的文本（驱动按值自己的时区格式化），比较按文本进行；写入路径
 //     （time.Now()、断点文件的修改时间）都是本地时区。UTC（…Z）的游标直接绑定，就是拿「+00:00」
-//     的文本去比「+08:00」的文本，整页错位。所以统一换成 time.Local。
+//     的文本去比「+08:00」的文本，整页错位。所以回传值统一换成 time.Local。
 //   - 精度：库里存到微秒（PG）或纳秒（SQLite），前端的 Date 只有毫秒。游标行（cursorID）现存的
-//     进度时间与回传值相差不到 1 毫秒时，改用库里的实际值：否则与游标行同一毫秒、排在它后面的行
+//     进度时间与回传值相差不到 1 毫秒时，改用库里的实际值（连同它存储时的偏移，A-m7）：否则与游标行同一毫秒、排在它后面的行
 //     会被 `<` 漏掉，回传值进位时游标行自己又会再出现一次。游标行已不在、或进度时间已经变了
 //     （相差 ≥1 毫秒）时照用回传值，与最近播放的游标同一语义。
 func continueWatchingCursorTime(cursor time.Time, cursorID uint) (time.Time, error) {
@@ -1239,7 +1239,10 @@ func continueWatchingCursorTime(cursor time.Time, cursorID uint) (time.Time, err
 	}
 	if err == nil && row.WatchProgressUpdatedAt != nil {
 		if diff := row.WatchProgressUpdatedAt.Sub(cursor); diff > -time.Millisecond && diff < time.Millisecond {
-			return row.WatchProgressUpdatedAt.In(time.Local), nil
+			// 原样返回库里读出的值（A-m7）：它带着写入时的偏移，绑定回去与游标行存储的文本逐字相同。
+			// 换成 time.Local 的话，偏移与当地不同的行（写入时在别的时区、夏令时切换前后）在 SQLite 的
+			// 文本比较里对不上自己，游标行会再出现一次。
+			return *row.WatchProgressUpdatedAt, nil
 		}
 	}
 	return cursor.In(time.Local), nil

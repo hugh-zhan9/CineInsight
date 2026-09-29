@@ -171,7 +171,8 @@ func mergeVideoMetadataTx(tx *gorm.DB, keeperID uint, sourceIDs []uint, result *
 		}
 	}
 
-	// ② 人物关系取并集。
+	// ② 人物关系取并集。保留项已有同一人物的关系（插入撞上唯一键）时，被合并项的关系确认了它：
+	// 释放保留项上人脸链路的写入记录，关系归用户所有（META-04 A-m3），之后解除簇关联不会删它。
 	var personIDs []uint
 	if err := tx.Model(&models.VideoPerson{}).Where("video_id IN ?", sourceIDs).Distinct().Pluck("person_id", &personIDs).Error; err != nil {
 		return plan, err
@@ -184,6 +185,10 @@ func mergeVideoMetadataTx(tx *gorm.DB, keeperID uint, sourceIDs []uint, result *
 		}
 		if inserted.RowsAffected == 1 {
 			result.PeopleAdded++
+			continue
+		}
+		if err := releaseFaceRelationWrites(tx, personID, models.FaceMediaKindVideo, []uint{keeperID}); err != nil {
+			return plan, err
 		}
 	}
 
@@ -318,6 +323,11 @@ func mergeImageMetadataTx(tx *gorm.DB, keeperID uint, sourceIDs []uint, result *
 		}
 		if inserted.RowsAffected == 1 {
 			result.PeopleAdded++
+			continue
+		}
+		// 同视频：保留项已有的关系被合并项确认，归用户所有（META-04 A-m3）。
+		if err := releaseFaceRelationWrites(tx, personID, models.FaceMediaKindImage, []uint{keeperID}); err != nil {
+			return err
 		}
 	}
 

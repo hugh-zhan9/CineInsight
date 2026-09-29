@@ -2,7 +2,6 @@ package services
 
 import (
 	"crypto/sha256"
-	"errors"
 	"golang.org/x/crypto/bcrypt"
 	"log"
 	"net/http"
@@ -120,23 +119,24 @@ func (s *JellyfinServer) login(w http.ResponseWriter, r *http.Request, config mo
 		jellyfinError(w, 401, "登录配置已变更")
 		return
 	}
-	// 会话先落库再放进内存（D-PC47）：表里只有令牌的哈希，重启后令牌仍然有效。
+	// 会话先落库再放进内存（D-PC47）：表里只有令牌的哈希，重启后令牌仍然有效。同一设备的旧会话、
+	// 超出上限的最旧会话在同一次写入里删掉（B-m1），它们的内存副本随后清掉。
 	deviceID, client := jellyfinClientInfo(r)
-	session, err := createJellyfinSession(key, deviceID, client, now)
-	if errors.Is(err, errJellyfinSessionLimit) {
-		jellyfinError(w, 429, "登录会话已达上限")
-		return
-	}
+	s.mu.Lock()
+	store := s.store
+	s.mu.Unlock()
+	session, revoked, err := store.create(key, deviceID, client, now)
 	if err != nil {
 		log.Printf("[Jellyfin] 登录会话写入失败")
 		jellyfinError(w, 500, "登录失败")
 		return
 	}
+	s.forgetSessions(revoked)
 	s.mu.Lock()
 	if generation != s.generation || !s.config.JellyfinEnabled {
 		s.mu.Unlock()
 		// 服务在登录途中被停掉或改了配置：这个令牌还没交给客户端，行也不留。
-		if err := deleteJellyfinSession(key); err != nil {
+		if err := store.remove(key); err != nil {
 			log.Printf("[Jellyfin] 未送达的登录会话清理失败")
 		}
 		jellyfinError(w, 401, "登录配置已变更")

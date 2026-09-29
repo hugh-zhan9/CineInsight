@@ -448,6 +448,58 @@ func TestContinueWatchingCursorAcceptsUTCMillisecondsPLAY09(t *testing.T) {
 	}
 }
 
+// PLAY-09（A-m7）：游标精确命中游标行时，直接用库里读出的值（连同它存储时的偏移）。这里的进度时间
+// 是在别的时区写下的（按 UTC 存，本地是东八区）：换成本地时区再绑定的话，SQLite 按文本比较对不上
+// 游标行自己，游标行会在下一页再出现一次。
+func TestContinueWatchingCursorKeepsStoredOffsetPLAY09(t *testing.T) {
+	if _, offset := time.Now().Zone(); offset == 0 {
+		original := time.Local
+		time.Local = time.FixedZone("UTC+8", 8*3600)
+		t.Cleanup(func() { time.Local = original })
+	}
+	setupVideoServiceTestDB(t)
+	base := time.Date(2026, 9, 29, 4, 0, 0, 500_000_000, time.UTC)
+	at := func(minutes int) *time.Time {
+		value := base.Add(time.Duration(minutes) * time.Minute)
+		return &value
+	}
+	a := p020Video(t, models.Video{Name: "utc-a.mp4", WatchPositionSeconds: 10, WatchProgressUpdatedAt: at(3)})
+	b := p020Video(t, models.Video{Name: "utc-b.mp4", WatchPositionSeconds: 10, WatchProgressUpdatedAt: at(2)})
+	c := p020Video(t, models.Video{Name: "utc-c.mp4", WatchPositionSeconds: 10, WatchProgressUpdatedAt: at(1)})
+	want := []uint{a.ID, b.ID, c.ID}
+
+	stored, err := continueWatchingCursorTime(*at(3), a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 与库里读出的值同一偏移（SQLite 上就是写入时的 UTC；PG 的 timestamptz 由驱动决定时区，比较与时区无关）。
+	readBack := p020Reload(t, a.ID).WatchProgressUpdatedAt
+	_, gotOffset := stored.Zone()
+	_, wantOffset := readBack.Zone()
+	if gotOffset != wantOffset || !stored.Equal(*at(3)) {
+		t.Fatalf("精确命中应返回库里的原值，实际 %v，库里 %v", stored, readBack)
+	}
+
+	svc := &VideoService{}
+	var got []uint
+	cursorAt, cursorID := "", uint(0)
+	for pageIndex := 0; pageIndex < 6; pageIndex++ {
+		page, err := svc.ListContinueWatchingWithFilter(LibraryFilter{}, cursorAt, cursorID, 1)
+		if err != nil {
+			t.Fatalf("第 %d 页失败: %v", pageIndex, err)
+		}
+		if len(page.Videos) == 0 {
+			break
+		}
+		last := page.Videos[len(page.Videos)-1]
+		got = append(got, last.ID)
+		cursorAt, cursorID = last.WatchProgressUpdatedAt.Format(time.RFC3339Nano), last.ID
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("按原偏移存储的进度时间翻页 got=%v want=%v", got, want)
+	}
+}
+
 type launcherSpy struct {
 	iinaArgs [][]string
 	opened   []string
@@ -678,6 +730,59 @@ func TestIINARemovedEntryRightAfterResumeKeepsSessionPLAY03(t *testing.T) {
 	}
 }
 
+// PLAY-03（A-m6）：第一道保护的门槛有 10 秒的绝对下限。短片、离片尾很近的续播，剩余时长的一半只有
+// 几秒，与 mpv 加载断点后立刻删文件的时间差不多：10 秒内的删除既不结算也不消耗会话，过了 10 秒照常结算。
+func TestIINARemovedEntryShortClipHasTenSecondFloorPLAY03(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	service, _ := newIINATestService(t)
+	launchedAt := time.Now().Add(-time.Hour)
+	sessionKept := func(name string) bool {
+		service.sessionMu.Lock()
+		defer service.sessionMu.Unlock()
+		_, ok := service.sessions[name]
+		return ok
+	}
+
+	// 时长 12 秒的短片从头播：min(60, 0.5 × 12) = 6 秒，下限把门槛抬到 10 秒。
+	clip := p020Video(t, models.Video{Name: "short-clip.mp4", Duration: 12})
+	clipName := iinaWatchLaterName(clip.Path)
+	service.RegisterLaunchedSession(clip.ID, clip.Path, 0, launchedAt)
+	for _, offset := range []time.Duration{2 * time.Second, 7 * time.Second, 9500 * time.Millisecond} {
+		if _, ok, err := service.settleRemovedEntry(clipName, launchedAt.Add(offset)); ok || err != nil {
+			t.Fatalf("启动后 %v 的删除不该结算 ok=%v err=%v", offset, ok, err)
+		}
+	}
+	if !sessionKept(clipName) {
+		t.Fatal("10 秒内的删除不该消耗会话")
+	}
+	// 过了 10 秒：推算位置 11 秒，达到时长的 90%，判看完。
+	change, ok, err := service.settleRemovedEntry(clipName, launchedAt.Add(11*time.Second))
+	if err != nil || !ok || !change.Watched {
+		t.Fatalf("过了下限的删除应当结算: %+v ok=%v err=%v", change, ok, err)
+	}
+
+	// 离片尾只剩 4 秒的续播：剩余一半是 2 秒。没有下限的话 3 秒时的那次删除（加载断点）就会按
+	// 7196 + 3 判成看完。
+	near := p020Video(t, models.Video{Name: "near-end.mp4", Duration: 7200, WatchPositionSeconds: 7196})
+	nearName := iinaWatchLaterName(near.Path)
+	service.RegisterLaunchedSession(near.ID, near.Path, 7196, launchedAt)
+	if _, ok, err := service.settleRemovedEntry(nearName, launchedAt.Add(3*time.Second)); ok || err != nil {
+		t.Fatalf("续播加载时的删除不该结算 ok=%v err=%v", ok, err)
+	}
+	if refreshed := p020Reload(t, near.ID); refreshed.IsWatched || refreshed.WatchPositionSeconds != 7196 {
+		t.Fatalf("续播加载时的删除不该判看完: %+v", refreshed)
+	}
+	if !sessionKept(nearName) {
+		t.Fatal("续播加载时的删除不该消耗会话")
+	}
+	if _, ok, err := service.settleRemovedEntry(nearName, launchedAt.Add(11*time.Second)); !ok || err != nil {
+		t.Fatalf("过了下限的删除应当结算 ok=%v err=%v", ok, err)
+	}
+	if got := iinaRemovedMinElapsed(7200, 0); got != iinaRemovedMinElapsedCap {
+		t.Fatalf("长片的门槛仍封顶在 60 秒: %v", got)
+	}
+}
+
 // PLAY-03（A-I-1 保护二）：应用发起的播放退出时写下断点（修改时间不早于启动），会话随同步结束；
 // 数小时后用户直接在 IINA 里打开同一文件，mpv 加载断点后删掉它——这次删除不判看完。
 func TestIINAExitWriteEndsSessionBeforeLaterRemovalPLAY03(t *testing.T) {
@@ -797,21 +902,25 @@ func TestIINASyncAdoptsRewatchAfterWatchedPLAY06(t *testing.T) {
 	}
 }
 
-// PLAY-06（A-m-2）：已看、不知道何时标的（watched_at 为空）、断点为 0 的行不在「已看」这一步一律跳过，
-// 交给断点文件修改时间与进度时间的比较：比库里新的写入采用（重看），不比库里新的照旧跳过。
+// PLAY-06（A-m-2、A-m4）：已看、不知道何时标的（watched_at 为空）、断点为 0 的行，只要有进度时间，
+// 就交给断点文件修改时间与进度时间的比较：比库里新的写入采用（重看），不比库里新的照旧跳过。
+// 已看时间与进度时间都为空的行无从比较新旧，照旧跳过，哪怕断点文件是刚写的（A-m4 主代理裁决，
+// 推翻此前接受的放宽），见 TestIINASyncWatchedWithoutAnyTimestampSkipsPLAY06。
 func TestIINASyncWatchedWithoutWatchedAtComparesModTimePLAY06(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	service, dir := newIINATestService(t)
 	progressAt := time.Now().Add(-2 * time.Hour)
 	newer := p020Video(t, models.Video{Name: "legacy-newer.mp4", Duration: 7200, IsWatched: true, WatchProgressUpdatedAt: &progressAt})
 	older := p020Video(t, models.Video{Name: "legacy-older.mp4", Duration: 7200, IsWatched: true, WatchProgressUpdatedAt: &progressAt})
+	noTimes := p020Video(t, models.Video{Name: "legacy-no-times.mp4", Duration: 7200, IsWatched: true})
 	writeIINAEntry(t, dir, newer.Path, "start=1800\n")
 	mustSetFileModTime(t, filepath.Join(dir, iinaWatchLaterName(newer.Path)), progressAt.Add(time.Hour))
 	writeIINAEntry(t, dir, older.Path, "start=900\n")
 	mustSetFileModTime(t, filepath.Join(dir, iinaWatchLaterName(older.Path)), progressAt.Add(-time.Hour))
+	writeIINAEntry(t, dir, noTimes.Path, "start=1200\n")
 
 	result, err := service.Sync()
-	if err != nil || result.Updated != 1 || result.Skipped != 1 {
+	if err != nil || result.Updated != 1 || result.Skipped != 2 {
 		t.Fatalf("同步结果不对: %+v err=%v", result, err)
 	}
 	if refreshed := p020Reload(t, newer.ID); refreshed.WatchPositionSeconds != 1800 || !refreshed.IsWatched || !resumable(&refreshed) {
@@ -819,6 +928,43 @@ func TestIINASyncWatchedWithoutWatchedAtComparesModTimePLAY06(t *testing.T) {
 	}
 	if refreshed := p020Reload(t, older.ID); refreshed.WatchPositionSeconds != 0 {
 		t.Fatalf("不比库里新的写入应当跳过: %+v", refreshed)
+	}
+	if refreshed := p020Reload(t, noTimes.ID); refreshed.WatchPositionSeconds != 0 || refreshed.WatchProgressUpdatedAt != nil {
+		t.Fatalf("两个时间都为空的已看行不采用断点: %+v", refreshed)
+	}
+}
+
+// PLAY-06（A-m4）：已看、watched_at 与 watch_progress_updated_at 都为空（升级前的历史行）——无从比较
+// 新旧，不采用 watch_later，不论断点文件多新、位置多靠前；已看状态与断点都不动。对照：同样两个时间都
+// 为空但未看的行照常采用；已看但断点可续（位置 > 0）的行不在这一步跳过（与修复 H 之前一致）。
+func TestIINASyncWatchedWithoutAnyTimestampSkipsPLAY06(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	service, dir := newIINATestService(t)
+	watched := p020Video(t, models.Video{Name: "no-times-watched.mp4", Duration: 7200, IsWatched: true})
+	unwatched := p020Video(t, models.Video{Name: "no-times-unwatched.mp4", Duration: 7200})
+	resumableWatched := p020Video(t, models.Video{Name: "no-times-resumable.mp4", Duration: 7200, IsWatched: true, WatchPositionSeconds: 300})
+	for _, video := range []models.Video{watched, unwatched, resumableWatched} {
+		writeIINAEntry(t, dir, video.Path, "start=2400\n")
+		mustSetFileModTime(t, filepath.Join(dir, iinaWatchLaterName(video.Path)), time.Now())
+	}
+
+	result, err := service.Sync()
+	if err != nil || result.Updated != 2 || result.Skipped != 1 {
+		t.Fatalf("同步结果不对: %+v err=%v", result, err)
+	}
+	if refreshed := p020Reload(t, watched.ID); !refreshed.IsWatched || refreshed.WatchPositionSeconds != 0 || refreshed.WatchProgressUpdatedAt != nil {
+		t.Fatalf("无从比较新旧的已看行应跳过: %+v", refreshed)
+	}
+	for _, change := range result.Changes {
+		if change.VideoID == watched.ID {
+			t.Fatalf("跳过的行不该回报变更: %+v", change)
+		}
+	}
+	if refreshed := p020Reload(t, unwatched.ID); refreshed.WatchPositionSeconds != 2400 {
+		t.Fatalf("未看的行照常采用: %+v", refreshed)
+	}
+	if refreshed := p020Reload(t, resumableWatched.ID); refreshed.WatchPositionSeconds != 2400 || !refreshed.IsWatched {
+		t.Fatalf("已看但断点可续的行照常采用、不改已看: %+v", refreshed)
 	}
 }
 

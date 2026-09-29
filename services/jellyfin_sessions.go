@@ -2,7 +2,6 @@ package services
 
 import (
 	"encoding/hex"
-	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -22,13 +21,41 @@ const (
 	jellyfinSessionTTL = 30 * 24 * time.Hour
 	// jellyfinSessionSeenInterval：last_seen_at（连同 expires_at）每个会话最多每 10 分钟刷新一次。
 	jellyfinSessionSeenInterval = 10 * time.Minute
-	// jellyfinSessionLimit 是未过期会话的上限；到达上限后新登录返回 429。
+	// jellyfinSessionLimit 是未过期会话的上限；到达上限后新登录淘汰 last_seen_at 最旧的会话（B-m1）。
 	jellyfinSessionLimit = 64
 	// jellyfinClientFieldMax 限制落库与诊断里客户端名、设备标识的长度。
 	jellyfinClientFieldMax = 128
+	// jellyfinUnknownTokenTTL 是未知令牌负缓存的有效期（B-m3）：同一个查不到的令牌在这段时间内
+	// 直接判无效，不再回表。
+	jellyfinUnknownTokenTTL = 30 * time.Second
+	// jellyfinUnknownTokenLimit 是负缓存的容量上限：满了先丢过期的，仍满时丢最早到期的一条。
+	jellyfinUnknownTokenLimit = 1024
 )
 
-var errJellyfinSessionLimit = errors.New("jellyfin_session_limit")
+// jellyfinAuthOutcome 是鉴权结论。stopping 与 rejected 分开（B-m4）：服务正在停（Stop 或 Configure
+// 停服）时接纳的请求回 503，客户端留着令牌稍后重试；只有令牌本身无效才回 401——客户端遇到 401
+// 会丢掉令牌、要求重新输入密码。
+type jellyfinAuthOutcome int
+
+const (
+	jellyfinAuthRejected jellyfinAuthOutcome = iota
+	jellyfinAuthAccepted
+	jellyfinAuthStopping
+)
+
+// jellyfinSessionStore 是会话表的读写口。默认实现直接读写 jellyfin_sessions；测试替换其中的函数，
+// 模拟数据库出错（B-m6）或在查表与写回之间插入注销（B-m3）。
+type jellyfinSessionStore struct {
+	// create 插入新会话，同时删掉同一设备的旧会话与超出上限的最旧会话，返回被删会话的令牌哈希。
+	create func(key [32]byte, deviceID, client string, now time.Time) (jellyfinSession, [][32]byte, error)
+	load   func(key [32]byte, now time.Time) (jellyfinSession, bool, error)
+	touch  func(key [32]byte, now time.Time) (jellyfinSession, bool, error)
+	remove func(key [32]byte) error
+}
+
+func defaultJellyfinSessionStore() jellyfinSessionStore {
+	return jellyfinSessionStore{create: createJellyfinSession, load: loadJellyfinSession, touch: touchJellyfinSession, remove: deleteJellyfinSession}
+}
 
 // jellyfinSessionDB 关掉 SQL 日志：出错时 GORM 会把参数（令牌哈希）插进日志。
 func jellyfinSessionDB() *gorm.DB {
@@ -37,26 +64,72 @@ func jellyfinSessionDB() *gorm.DB {
 
 func jellyfinTokenHash(key [32]byte) string { return hex.EncodeToString(key[:]) }
 
-// createJellyfinSession 先清掉已过期的行，再按未过期行数判上限，最后插入新会话。登录由 loginSlot
-// 串行化，计数与插入之间没有别的写入方。时间一律按 UTC 落库，两个后端的比较口径一致。
-func createJellyfinSession(key [32]byte, deviceID, client string, now time.Time) (jellyfinSession, error) {
-	db := jellyfinSessionDB()
+// jellyfinTokenKey 是 jellyfinTokenHash 的逆运算；表里的值不是 64 位十六进制时返回 false。
+func jellyfinTokenKey(hash string) ([32]byte, bool) {
+	var key [32]byte
+	raw, err := hex.DecodeString(hash)
+	if err != nil || len(raw) != len(key) {
+		return key, false
+	}
+	copy(key[:], raw)
+	return key, true
+}
+
+// createJellyfinSession 在一个事务里：清掉已过期的行；DeviceId 非空时删掉同一设备的旧会话
+// （Jellyfin 语义：同一台设备重新登录顶掉旧令牌，B-m1）；未过期行仍达到上限时按 last_seen_at
+// 从旧到新淘汰，腾出一个名额；最后插入新会话。返回被删掉的未过期会话的令牌哈希，调用方据此清掉
+// 内存副本。登录由 loginSlot 串行化，计数与插入之间没有别的登录。时间一律按 UTC 落库。
+func createJellyfinSession(key [32]byte, deviceID, client string, now time.Time) (jellyfinSession, [][32]byte, error) {
 	now = now.UTC()
-	if err := db.Where("expires_at <= ?", now).Delete(&models.JellyfinSession{}).Error; err != nil {
-		return jellyfinSession{}, err
-	}
-	var active int64
-	if err := db.Model(&models.JellyfinSession{}).Where("expires_at > ?", now).Count(&active).Error; err != nil {
-		return jellyfinSession{}, err
-	}
-	if active >= jellyfinSessionLimit {
-		return jellyfinSession{}, errJellyfinSessionLimit
-	}
 	row := models.JellyfinSession{TokenHash: jellyfinTokenHash(key), DeviceID: deviceID, Client: client, LastSeenAt: now, ExpiresAt: now.Add(jellyfinSessionTTL)}
-	if err := db.Create(&row).Error; err != nil {
-		return jellyfinSession{}, err
+	var revoked [][32]byte
+	err := jellyfinSessionDB().Transaction(func(tx *gorm.DB) error {
+		revoked = revoked[:0]
+		if err := tx.Where("expires_at <= ?", now).Delete(&models.JellyfinSession{}).Error; err != nil {
+			return err
+		}
+		drop := func(rows []models.JellyfinSession) error {
+			if len(rows) == 0 {
+				return nil
+			}
+			ids := make([]uint, 0, len(rows))
+			for _, stale := range rows {
+				ids = append(ids, stale.ID)
+				if staleKey, ok := jellyfinTokenKey(stale.TokenHash); ok {
+					revoked = append(revoked, staleKey)
+				}
+			}
+			return tx.Where("id IN ?", ids).Delete(&models.JellyfinSession{}).Error
+		}
+		if deviceID != "" {
+			var sameDevice []models.JellyfinSession
+			if err := tx.Select("id", "token_hash").Where("device_id = ?", deviceID).Find(&sameDevice).Error; err != nil {
+				return err
+			}
+			if err := drop(sameDevice); err != nil {
+				return err
+			}
+		}
+		var active int64
+		if err := tx.Model(&models.JellyfinSession{}).Where("expires_at > ?", now).Count(&active).Error; err != nil {
+			return err
+		}
+		if excess := int(active) - jellyfinSessionLimit + 1; excess > 0 {
+			var oldest []models.JellyfinSession
+			if err := tx.Select("id", "token_hash").Where("expires_at > ?", now).
+				Order("last_seen_at ASC").Order("id ASC").Limit(excess).Find(&oldest).Error; err != nil {
+				return err
+			}
+			if err := drop(oldest); err != nil {
+				return err
+			}
+		}
+		return tx.Create(&row).Error
+	})
+	if err != nil {
+		return jellyfinSession{}, nil, err
 	}
-	return jellyfinSession{expires: row.ExpiresAt, seen: row.LastSeenAt, id: hexSessionID(key)}, nil
+	return jellyfinSession{expires: row.ExpiresAt, seen: row.LastSeenAt, id: hexSessionID(key)}, revoked, nil
 }
 
 // loadJellyfinSession 按令牌哈希取未过期的会话。
@@ -95,81 +168,164 @@ func deleteAllJellyfinSessionsTx(tx *gorm.DB) error {
 
 // authenticate 是 Handler 的准入校验。内存命中且不需要刷新时不碰数据库；未命中（例如重启之后）
 // 按哈希查表并放进内存；距上次刷新满 10 分钟时顺延过期时间。数据库出错时返回 error，由调用方
-// 回 500，而不是把有效令牌当成无效（客户端遇到 401 会丢掉令牌、要求重新输入密码）。
-func (s *JellyfinServer) authenticate(identity jellyfinIdentity) (bool, error) {
+// 回 500，而不是把有效令牌当成无效（客户端遇到 401 会丢掉令牌、要求重新输入密码），内存副本不动。
+//
+// 查表与刷新不持 sessionIO（B-m3）：未命中的请求可以并行回表，不会排在别人的数据库往返后面。
+// sessionIO 只串行化「写回内存」与注销 / 淘汰：查表之前记下 revocations，写回时（持 sessionIO）
+// 发现它变了，说明查表期间有会话被作废，结论可能已经过时——在锁内重查一次再写回。所以作废之后，
+// 无论是写回还是负缓存，都不会让这个令牌重新生效。
+func (s *JellyfinServer) authenticate(identity jellyfinIdentity) (jellyfinAuthOutcome, error) {
 	now := s.now()
-	if valid, settled := s.cachedSession(identity, now); settled {
-		return valid, nil
+	outcome, settled, epoch := s.cachedSession(identity, now)
+	if settled {
+		return outcome, nil
 	}
-	// 数据库这一段串行化：注销删行与这里的「查表 → 放进内存」不会交错，已注销的令牌不会被放回内存。
+	session, found, err := s.lookupSession(identity.token, now)
+	if err != nil {
+		return jellyfinAuthRejected, err
+	}
 	s.sessionIO.Lock()
 	defer s.sessionIO.Unlock()
-	if valid, settled := s.cachedSession(identity, now); settled {
-		return valid, nil
+	s.mu.Lock()
+	raced := s.revocations != epoch
+	s.mu.Unlock()
+	if raced {
+		if session, found, err = s.lookupSession(identity.token, now); err != nil {
+			return jellyfinAuthRejected, err
+		}
 	}
 	s.mu.Lock()
-	session, cached := s.sessions[identity.token]
+	defer s.mu.Unlock()
+	if !s.config.JellyfinEnabled || identity.generation != s.generation {
+		return jellyfinAuthStopping, nil
+	}
+	if !found {
+		delete(s.sessions, identity.token)
+		s.rememberUnknownTokenLocked(identity.token, now)
+		return jellyfinAuthRejected, nil
+	}
+	s.sessions[identity.token] = session
+	return jellyfinAuthAccepted, nil
+}
+
+// lookupSession 取令牌的会话：先看内存副本，没有再查表；需要刷新时顺延。found=false 表示表里
+// 没有这个未过期的会话。不持任何锁做数据库往返。
+func (s *JellyfinServer) lookupSession(token [32]byte, now time.Time) (jellyfinSession, bool, error) {
+	s.mu.Lock()
+	session, cached := s.sessions[token]
+	store := s.store
 	s.mu.Unlock()
 	if !cached {
-		loaded, found, err := loadJellyfinSession(identity.token, now)
+		loaded, found, err := store.load(token, now)
 		if err != nil || !found {
-			return false, err
+			return jellyfinSession{}, false, err
 		}
 		session = loaded
 	}
-	if now.Sub(session.seen) >= jellyfinSessionSeenInterval {
-		touched, ok, err := touchJellyfinSession(identity.token, now)
-		if err != nil {
-			return false, err
-		}
-		if !ok {
-			// 行已不在或已过期：以表为准，内存里的副本一并作废。
-			s.mu.Lock()
-			delete(s.sessions, identity.token)
-			s.mu.Unlock()
-			return false, nil
-		}
-		session = touched
+	if now.Sub(session.seen) < jellyfinSessionSeenInterval {
+		return session, true, nil
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.config.JellyfinEnabled || identity.generation != s.generation {
-		return false, nil
+	touched, ok, err := store.touch(token, now)
+	if err != nil || !ok {
+		// 出错时 found=false 由 err 兜住（调用方回 500、内存不动）；行已不在或已过期时以表为准。
+		return jellyfinSession{}, false, err
 	}
-	s.sessions[identity.token] = session
-	return true, nil
+	return touched, true, nil
 }
 
-// cachedSession 只看内存：settled=false 表示需要查表或刷新。
-func (s *JellyfinServer) cachedSession(identity jellyfinIdentity, now time.Time) (valid bool, settled bool) {
+// cachedSession 只看内存：settled=false 表示需要查表或刷新，epoch 是此刻的 revocations。
+func (s *JellyfinServer) cachedSession(identity jellyfinIdentity, now time.Time) (outcome jellyfinAuthOutcome, settled bool, epoch uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	epoch = s.revocations
 	if !s.config.JellyfinEnabled || identity.generation != s.generation {
-		return false, true
+		return jellyfinAuthStopping, true, epoch
 	}
 	session, ok := s.sessions[identity.token]
 	if !ok {
-		return false, false
+		if s.unknownTokenLocked(identity.token, now) {
+			return jellyfinAuthRejected, true, epoch
+		}
+		return jellyfinAuthRejected, false, epoch
 	}
 	if !now.Before(session.expires) {
 		delete(s.sessions, identity.token)
-		return false, true
+		return jellyfinAuthRejected, true, epoch
 	}
 	if now.Sub(session.seen) < jellyfinSessionSeenInterval {
-		return true, true
+		return jellyfinAuthAccepted, true, epoch
 	}
-	return false, false
+	return jellyfinAuthRejected, false, epoch
 }
 
-// logout 先删表里的行，删成功才清内存：删不掉时令牌在重启后仍会生效，必须如实报错。
+// unknownTokenLocked 报告令牌是否在负缓存里且未到期；到期的顺手删掉。调用方持有 mu。
+func (s *JellyfinServer) unknownTokenLocked(token [32]byte, now time.Time) bool {
+	until, ok := s.unknownTokens[token]
+	if !ok {
+		return false
+	}
+	if now.Before(until) {
+		return true
+	}
+	delete(s.unknownTokens, token)
+	return false
+}
+
+// rememberUnknownTokenLocked 把查不到的令牌放进负缓存（有界）。调用方持有 mu。
+func (s *JellyfinServer) rememberUnknownTokenLocked(token [32]byte, now time.Time) {
+	if s.unknownTokens == nil {
+		s.unknownTokens = make(map[[32]byte]time.Time)
+	}
+	if _, exists := s.unknownTokens[token]; !exists && len(s.unknownTokens) >= jellyfinUnknownTokenLimit {
+		var oldestKey [32]byte
+		var oldest time.Time
+		found := false
+		for key, until := range s.unknownTokens {
+			if !now.Before(until) {
+				delete(s.unknownTokens, key)
+				continue
+			}
+			if !found || until.Before(oldest) {
+				oldestKey, oldest, found = key, until, true
+			}
+		}
+		if len(s.unknownTokens) >= jellyfinUnknownTokenLimit && found {
+			delete(s.unknownTokens, oldestKey)
+		}
+	}
+	s.unknownTokens[token] = now.Add(jellyfinUnknownTokenTTL)
+}
+
+// forgetSessions 在表里的行已经删掉之后（登录顶掉同设备旧会话、淘汰最旧会话）清掉它们的内存副本，
+// 并推进 revocations，让查表期间拿到旧结论的鉴权在写回前重查。
+func (s *JellyfinServer) forgetSessions(keys [][32]byte) {
+	if len(keys) == 0 {
+		return
+	}
+	s.sessionIO.Lock()
+	defer s.sessionIO.Unlock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, key := range keys {
+		delete(s.sessions, key)
+	}
+	s.revocations++
+}
+
+// logout 先删表里的行，删成功才清内存：删不掉时令牌在重启后仍会生效，必须如实报错，内存副本也
+// 留着（与表一致）。删行与清内存都在 sessionIO 里，与鉴权的写回互斥。
 func (s *JellyfinServer) logout(identity jellyfinIdentity) error {
 	s.sessionIO.Lock()
 	defer s.sessionIO.Unlock()
-	if err := deleteJellyfinSession(identity.token); err != nil {
+	s.mu.Lock()
+	store := s.store
+	s.mu.Unlock()
+	if err := store.remove(identity.token); err != nil {
 		return err
 	}
 	s.mu.Lock()
 	delete(s.sessions, identity.token)
+	s.revocations++
 	s.mu.Unlock()
 	return nil
 }

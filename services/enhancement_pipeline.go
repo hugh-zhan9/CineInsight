@@ -301,7 +301,7 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 		if required < 0 {
 			required = 0
 		}
-		if err := s.ensureDiskFree(video.Path, required); err != nil {
+		if err := s.ensureDiskFree(video.Path, required, enhancementFloorShortage); err != nil {
 			s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
 			return nil
 		}
@@ -368,7 +368,7 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 	_ = os.Remove(stagingPath)
 	// 合并前按产物预计体积复检空间（M-6）。不够就报 disk_insufficient 并保留检查点：分段全在
 	// 清单里，腾出空间后重试会直接从合并继续。错误摘要写明所需与可用的空间（B-m-4）。
-	if err := s.ensureMergeDiskFree(video.Path, enhancementMergeRequiredBytes(enhancementWrittenBytes(workdir, manifest), task.SourceSize)); err != nil {
+	if err := s.ensureDiskFree(video.Path, enhancementMergeRequiredBytes(enhancementWrittenBytes(workdir, manifest), task.SourceSize), enhancementMergeShortage); err != nil {
 		s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
 		return nil
 	}
@@ -461,23 +461,6 @@ func enhancementMergeRequiredBytes(writtenBytes, sourceSize int64) int64 {
 		return int64(^uint64(0) >> 1)
 	}
 	return required
-}
-
-// ensureMergeDiskFree 是合并前的空间复检（M-6）：判定与 ensureDiskFree 相同，空间不足时错误摘要
-// 给出所需与可用的空间（人类可读，B-m-4），用户据此知道要腾出多少。
-func (s *EnhancementService) ensureMergeDiskFree(sourcePath string, required int64) error {
-	free, err := s.diskFree(filepath.Dir(sourcePath))
-	if err != nil {
-		return fmt.Errorf("disk_insufficient: 无法检查磁盘空间: %v", err)
-	}
-	if required < 0 {
-		required = 0
-	}
-	if free < uint64(required) {
-		return fmt.Errorf("disk_insufficient: 合并前同卷可用空间不足（需要约 %s，可用 %s）",
-			formatEnhancementBytes(uint64(required)), formatEnhancementBytes(free))
-	}
-	return nil
 }
 
 // formatEnhancementBytes 把字节数写成人类可读的二进制单位（B / KiB / MiB / GiB / TiB），一位小数。
@@ -691,7 +674,11 @@ func (s *EnhancementService) publishOutput(ctx context.Context, task models.Vide
 		return fmt.Errorf("输出指纹计算失败: %v", err)
 	}
 
-	release := BeginLibraryMaintenance()
+	// 普通的路径写锁：维护围栏生效时直接返回 ErrMaintenance，不会在「待重启」终态下永久等待（修复 K）。
+	release, err := lockLibraryPaths()
+	if err != nil {
+		return err
+	}
 	released := false
 	releaseOnce := func() {
 		if !released {

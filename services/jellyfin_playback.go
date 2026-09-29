@@ -305,8 +305,7 @@ func (s *JellyfinServer) mutateUserData(w http.ResponseWriter, r *http.Request, 
 	s.writes.Lock()
 	defer s.writes.Unlock()
 	identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)
-	if !s.authorized(identity) {
-		jellyfinError(w, 401, "会话已失效")
+	if jellyfinRejectUnauthorized(w, s.authorized(identity)) {
 		return
 	}
 	if _, err := s.visibleVideo(r, id); s.libraryError(w, err) {
@@ -349,8 +348,7 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 	s.writes.Lock()
 	defer s.writes.Unlock()
 	identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)
-	if !s.authorized(identity) {
-		jellyfinError(w, 401, "会话已失效")
+	if jellyfinRejectUnauthorized(w, s.authorized(identity)) {
 		return
 	}
 	// 仍要走一遍可见性校验：看不见的视频不该被它的进度上报改状态。
@@ -360,10 +358,10 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 	}
 	// 有效观看（jellyfin_view）按播放会话去重：开始上报只立累计起点，进度与停止上报才判阈值与看完。
 	deviceID, _ := jellyfinClientInfo(r)
-	viewKey := jellyfinViewSessionKey(id, strings.TrimSpace(input.PlaySessionId), deviceID, identity.token)
+	viewKeys := s.viewSessions.keys(id, strings.TrimSpace(input.PlaySessionId), deviceID, identity.token, s.now())
 	started, stopped := len(parts) == 2, len(parts) == 3 && parts[2] == "stopped"
 	if input.PositionTicks == nil && stopped {
-		s.viewSessions.forget(viewKey)
+		s.viewSessions.forget(viewKeys.session)
 	}
 	if input.PositionTicks != nil {
 		seconds := float64(*input.PositionTicks) / 1e7
@@ -376,9 +374,9 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 			return
 		}
 		if started {
-			s.viewSessions.advance(viewKey, seconds, s.now(), false)
+			s.viewSessions.advance(viewKeys.session, seconds, s.now(), false)
 		} else {
-			s.recordJellyfinView(*video, viewKey, seconds, stopped)
+			s.recordJellyfinView(*video, viewKeys, seconds, stopped)
 		}
 	}
 	w.WriteHeader(204)

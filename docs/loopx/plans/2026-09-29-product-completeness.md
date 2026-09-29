@@ -1225,3 +1225,8 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - `App.vue` 启动扫描时调用 `SyncScanDirectories('startup')`，`IncrementalScanBar` 调用 `SyncScanDirectories('manual')`。
 - **P-040**：`SetAvatarRemoverIfUnset` 的兜底已成空操作，可以删掉。
 **PG 全量 `d91f36e`**（修复 I-1）：8 个包全部通过（services 931 秒）。**P-029 + 修复 K 整合**：SQLite 全量通过，8 个包全部 ok；`npm test` 通过，68 个测试文件共 774 条用例。
+
+**修复 J 整合**（2026-09-29）：修复 H 与 P-022 复审的 Minor 全部修复。修复 J 自报 SQLite 全量通过、`-race` 干净，29 项变异检查都能被测试拦下。契约变化已记入详细设计 §1.2b（§8.2/§8.3 行与 Jellyfin 行）。
+- 主代理整合时顺带做了一项：修复 K 留下的待办，把 `publishOutput` 改为调用 `lockLibraryPaths()`，并从守卫中删掉维护入口的放行名单。服务层现在已经没有任何地方把维护入口当普通写锁使用。
+- **取舍**：工具单独打印出来的 1–2 字符凭证会留在报错里。URL 里的 userinfo 仍按结构剥离。
+- **P-039**：更新 AI-CONTEXT §2.28 中「会话内存有界，重启 / 关闭 / 配置变更失效」的描述，改为持久化会话的语义。

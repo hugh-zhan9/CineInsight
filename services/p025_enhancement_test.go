@@ -742,3 +742,30 @@ func TestEnhancementSweepIgnoresNonCanonicalWorkdirNamesMEDIA03(t *testing.T) {
 		t.Fatalf("只有规范命名的目录计入: %+v", result)
 	}
 }
+
+// MEDIA-03（A-m10）：建任务、每批复检与合并前复检共用 ensureDiskFree，只有空间不足的说明不同；
+// 判定与合并之前两份函数一致：空间足够（含恰好相等、负数按 0）放行，查不到空间报 disk_insufficient。
+func TestEnhancementSharedDiskFreeCheckMEDIA03(t *testing.T) {
+	const gib = uint64(1) << 30
+	free, freeErr := gib, error(nil)
+	service := &EnhancementService{diskFree: func(string) (uint64, error) { return free, freeErr }}
+	source := filepath.Join(t.TempDir(), "movie.mp4")
+
+	if err := service.ensureDiskFree(source, int64(2*gib), enhancementFloorShortage); err == nil || err.Error() != "disk_insufficient: 同卷可用空间不足（需要至少 2.0 GiB）" {
+		t.Fatalf("批前复检的说明不对: %v", err)
+	}
+	if err := service.ensureDiskFree(source, int64(2*gib), enhancementMergeShortage); err == nil || err.Error() != "disk_insufficient: 合并前同卷可用空间不足（需要约 2.0 GiB，可用 1.0 GiB）" {
+		t.Fatalf("合并前复检的说明不对: %v", err)
+	}
+	for _, required := range []int64{int64(gib), 0, -5} {
+		for _, shortage := range []func(uint64, uint64) string{enhancementFloorShortage, enhancementMergeShortage} {
+			if err := service.ensureDiskFree(source, required, shortage); err != nil {
+				t.Fatalf("空间足够（required=%d）应放行: %v", required, err)
+			}
+		}
+	}
+	freeErr = errors.New("statfs failed")
+	if err := service.ensureDiskFree(source, 1, enhancementMergeShortage); err == nil || !strings.HasPrefix(err.Error(), "disk_insufficient: 无法检查磁盘空间") {
+		t.Fatalf("查不到空间应报 disk_insufficient: %v", err)
+	}
+}

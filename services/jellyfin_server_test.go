@@ -140,27 +140,38 @@ func TestJellyfinExpiredRevokedAndBoundedSessions(t *testing.T) {
 	if w := jellyfinRequest(s, "POST", "/Users/AuthenticateByName", "", `{}`); w.Code != 429 {
 		t.Fatal(w.Code)
 	}
-	// 上限按表里未过期的会话计（重启后内存为空，上限仍然成立）；已过期的行不占名额。
+	// 上限按表里未过期的会话计（重启后内存为空，上限仍然成立）。到达上限时新登录淘汰 last_seen_at
+	// 最旧的一行（B-m1），不再返回 429（原先这里断言 429）；已过期的行不占名额。
 	setupVideoServiceTestDB(t)
 	s = jellyfinTestServer(t)
 	now := time.Now().UTC()
 	for i := 0; i < 64; i++ {
 		key := [32]byte{byte(i), 1}
-		if err := database.DB.Create(&models.JellyfinSession{TokenHash: jellyfinTokenHash(key), LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}).Error; err != nil {
+		seen := now.Add(time.Duration(i-64) * time.Second)
+		if err := database.DB.Create(&models.JellyfinSession{TokenHash: jellyfinTokenHash(key), LastSeenAt: seen, ExpiresAt: now.Add(time.Hour)}).Error; err != nil {
 			t.Fatal(err)
 		}
 	}
-	if w := jellyfinRequest(s, "POST", "/Users/AuthenticateByName", "", `{"Username":"viewer","Pw":"test-password"}`); w.Code != 429 {
-		t.Fatal(w.Code)
+	hasRow := func(key [32]byte) bool {
+		var count int64
+		database.DB.Model(&models.JellyfinSession{}).Where("token_hash = ?", jellyfinTokenHash(key)).Count(&count)
+		return count == 1
 	}
-	if err := database.DB.Model(&models.JellyfinSession{}).Where("token_hash = ?", jellyfinTokenHash([32]byte{0, 1})).Update("expires_at", now.Add(-time.Minute)).Error; err != nil {
+	countRows := func() int64 {
+		var rows int64
+		database.DB.Model(&models.JellyfinSession{}).Count(&rows)
+		return rows
+	}
+	jellyfinLogin(t, s)
+	if rows := countRows(); rows != 64 || hasRow([32]byte{0, 1}) || !hasRow([32]byte{1, 1}) {
+		t.Fatalf("full table must evict only the least recently seen row: %d rows", rows)
+	}
+	if err := database.DB.Model(&models.JellyfinSession{}).Where("token_hash = ?", jellyfinTokenHash([32]byte{1, 1})).Update("expires_at", now.Add(-time.Minute)).Error; err != nil {
 		t.Fatal(err)
 	}
 	jellyfinLogin(t, s)
-	var rows int64
-	database.DB.Model(&models.JellyfinSession{}).Count(&rows)
-	if rows != 64 {
-		t.Fatalf("expired row not pruned on login: %d", rows)
+	if rows := countRows(); rows != 64 || hasRow([32]byte{1, 1}) || !hasRow([32]byte{2, 1}) {
+		t.Fatalf("expired row must be pruned and free the slot without evicting: %d rows", rows)
 	}
 }
 func TestJellyfinConfigureAndGenericSavePreserveCredentials(t *testing.T) {

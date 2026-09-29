@@ -241,7 +241,11 @@ func (s *JellyfinServer) serveLibrary(w http.ResponseWriter, r *http.Request) {
 			if s.libraryError(w, err) {
 				return
 			}
-			item, err := s.videoDTO(r, *video)
+			indexedSubtitles, err := jellyfinIndexedSubtitles(r, []uint{video.ID})
+			if s.libraryError(w, err) {
+				return
+			}
+			item, err := s.videoDTO(r, *video, indexedSubtitles)
 			if s.libraryError(w, err) {
 				return
 			}
@@ -352,8 +356,7 @@ func (s *JellyfinServer) deleteItem(w http.ResponseWriter, r *http.Request, raw 
 	// itself (libraryPathMutationMu), so holding s.writes here would only stall other clients'
 	// progress reports. The session is re-checked so a revoked token cannot delete.
 	identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)
-	if !s.authorized(identity) {
-		jellyfinError(w, 401, "会话已失效")
+	if jellyfinRejectUnauthorized(w, s.authorized(identity)) {
 		return
 	}
 	if _, err := s.visibleVideo(r, id); s.libraryError(w, err) {
@@ -678,8 +681,16 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 	if err := query.Preload("Tags").Offset(start).Limit(limit).Find(&videos).Error; err != nil {
 		return nil, 0, start, err
 	}
+	pageIDs := make([]uint, 0, len(videos))
 	for _, video := range videos {
-		dto, err := s.videoDTO(r, video)
+		pageIDs = append(pageIDs, video.ID)
+	}
+	indexedSubtitles, err := jellyfinIndexedSubtitles(r, pageIDs)
+	if err != nil {
+		return nil, 0, start, err
+	}
+	for _, video := range videos {
+		dto, err := s.videoDTO(r, video, indexedSubtitles)
 		if err != nil {
 			return nil, 0, start, err
 		}
@@ -928,7 +939,9 @@ func (s *JellyfinServer) listFolders(r *http.Request, q url.Values, group uint, 
 	return items[start:end], int64(total), start, nil
 }
 
-func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[string]interface{}, error) {
+// videoDTO projects one video. indexedSubtitles comes from jellyfinIndexedSubtitles for the page (or
+// the single item) being answered.
+func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video, indexedSubtitles map[uint]bool) (map[string]interface{}, error) {
 	s.mu.Lock()
 	serverID := s.config.JellyfinServerID
 	s.mu.Unlock()
@@ -962,11 +975,7 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[stri
 	item["MediaSources"] = sources
 	item["MediaStreams"] = summary.streams
 	item["Container"] = sources[0]["Container"]
-	hasSubtitles, err := jellyfinHasSubtitles(r, video.ID, summary.hasSubtitles)
-	if err != nil {
-		return nil, err
-	}
-	item["HasSubtitles"] = hasSubtitles
+	item["HasSubtitles"] = summary.hasSubtitles || indexedSubtitles[video.ID]
 	if summary.width > 0 && summary.height > 0 {
 		item["Width"], item["Height"] = summary.width, summary.height
 		item["AspectRatio"] = jellyfinAspectRatio(summary.width, summary.height)
@@ -980,20 +989,29 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[stri
 	return item, nil
 }
 
-// jellyfinHasSubtitles uses the library's definition (D-PC17, MEDIA-08): hasAnySubtitleSQL covers
-// an indexed same-name .srt, side-car subtitles (has_sidecar) and embedded subtitle streams, the
-// same predicate as the 无字幕 view. The same-name .srt found on disk right now (listed as the
-// external stream) or an embedded stream in the snapshot already answers yes without a query.
-// has_sidecar is written by the desktop's full subtitle index sync; HTTP reads do not index.
-func jellyfinHasSubtitles(r *http.Request, videoID uint, streamsSayYes bool) (bool, error) {
-	if streamsSayYes {
-		return true, nil
+// jellyfinIndexedSubtitles returns which of these videos have subtitles by the library's definition
+// (D-PC17, MEDIA-08), in one query for the whole page (B-m5): hasAnySubtitleSQL covers an indexed
+// same-name .srt, side-car subtitles (has_sidecar) and embedded subtitle streams, the same predicate
+// as the 无字幕 view. videoDTO ORs it with what mediaSources saw: a same-name .srt on disk right now
+// (listed as the external stream) or an embedded stream in the snapshot counts immediately.
+//
+// 磁盘同名 .srt 直接判有；其余以索引为准，外部新放入的旁挂字幕（名称.zh.ass 一类）要等下一轮
+// 同步：has_sidecar 只由桌面端的全库字幕索引同步写入，HTTP 读取不做索引。
+func jellyfinIndexedSubtitles(r *http.Request, videoIDs []uint) (map[uint]bool, error) {
+	indexed := make(map[uint]bool, len(videoIDs))
+	if len(videoIDs) == 0 {
+		return indexed, nil
 	}
-	var count int64
-	if err := database.DB.WithContext(r.Context()).Model(&models.Video{}).Where("videos.id = ?", videoID).Where(hasAnySubtitleSQL).Count(&count).Error; err != nil {
-		return false, err
+	var ids []uint
+	if err := database.DB.WithContext(r.Context()).Model(&models.Video{}).
+		Where("videos.id IN ?", videoIDs).Where(hasAnySubtitleSQL).
+		Pluck("videos.id", &ids).Error; err != nil {
+		return nil, err
 	}
-	return count > 0, nil
+	for _, id := range ids {
+		indexed[id] = true
+	}
+	return indexed, nil
 }
 
 func jellyfinUserData(video models.Video) map[string]interface{} {

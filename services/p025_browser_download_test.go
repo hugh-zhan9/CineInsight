@@ -630,19 +630,105 @@ exit 1
 	if !strings.Contains(row.Error, "401") || !strings.Contains(row.Error, "retry=true") {
 		t.Fatalf("短的非凭证字样照旧保留，原因仍可读：%q", row.Error)
 	}
-	secrets := browserDownloadSecrets(&browserDownloadNormalized{URL: "https://a:b@host/x?k=v", Headers: []string{"Cookie: c=d"}})
-	for _, want := range []string{"a", "b"} {
+	// A-m1 之后：3 个字符起的用户名与密码全文擦除；1–2 个字符的只在 userinfo 位置按结构剥离，
+	// 不进待擦除表（原先这里断言单字符的 a、b 也要擦，那会把整条报错擦成乱码）。
+	secrets := browserDownloadSecrets(&browserDownloadNormalized{URL: "https://abc:xyz@host/x?k=v", Headers: []string{"Cookie: c=d"}})
+	for _, want := range []string{"abc", "xyz"} {
 		found := false
 		for _, secret := range secrets {
 			found = found || secret == want
 		}
 		if !found {
-			t.Fatalf("单字符的用户名与密码也要擦: %v", secrets)
+			t.Fatalf("3 个字符的用户名与密码也要擦: %v", secrets)
 		}
 	}
 	for _, secret := range secrets {
 		if secret == "v" || secret == "d" || secret == "k=v" {
 			t.Fatalf("query 与 Cookie 的短值不该进待擦除表: %v", secrets)
+		}
+	}
+	if short := browserDownloadSecrets(&browserDownloadNormalized{URL: "https://u:pw@host/x"}); len(short) != 0 {
+		t.Fatalf("1–2 个字符的凭证不做全文擦除: %v", short)
+	}
+}
+
+// MEDIA-10（A-m1）：用户名是密码的前缀（admin / admin2024!），工具把密码单独打印出来时，表里与界面都
+// 查不到密码的任何一截；待擦除值由清洗函数自己按长度降序、一遍扫完，与调用方给的顺序无关，
+// 也不会把前一个值写下的 <redacted> 再擦一遍。
+func TestBrowserDownloadCredentialPrefixIsFullyRedactedMEDIA10(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dir := t.TempDir()
+	binary, _ := writeFakeFFmpeg(t, `echo "[https @ 0x1] HTTP error 401 Unauthorized" 1>&2
+echo "https://admin:admin2024!@host.example.com/hls/seg-001.ts: Server returned 401 Unauthorized" 1>&2
+echo "auth rejected for admin (password admin2024!)" 1>&2
+exit 1
+`)
+	service := withBrowserDownloadStore(newTestDownloadService(t, dir, binary, nil))
+	task, err := service.Enqueue(BrowserDownloadRequest{
+		URL:   "https://admin:admin2024!@host.example.com/hls/index.m3u8",
+		Kind:  "hls",
+		Title: "前缀凭证",
+	})
+	if err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	failed := waitForState(t, service, task.ID, browserDownloadStateFailed)
+	service.Wait()
+	row := mustLoadBrowserDownloadRow(t, task.ID)
+	listed := ""
+	for _, item := range service.ListDownloadTasks() {
+		if item.ID == task.ID {
+			listed = item.Error
+		}
+	}
+	for _, text := range []string{failed.Error, listed, row.Error, row.DisplayURL} {
+		for _, secret := range []string{"2024!", "2024", "admin"} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("清洗结果不应含 %q：%q", secret, text)
+			}
+		}
+	}
+	if !strings.Contains(row.Error, "401") || !strings.Contains(row.Error, "https://host.example.com/hls/seg-001.ts") {
+		t.Fatalf("清洗后仍应保留可读的原因与去掉 userinfo 的地址：%q", row.Error)
+	}
+
+	// 调用方给的顺序不作数：短值排在前面也先擦长值。
+	if got := sanitizeBrowserDownloadError("password admin2024! rejected", []string{"admin", "admin2024!"}); got != "password <redacted> rejected" {
+		t.Fatalf("长值应整段擦掉：%q", got)
+	}
+	// 一遍扫完：后面的值不会擦进前面写下的 <redacted>。
+	if got := sanitizeBrowserDownloadError("token xyzact and act", []string{"xyzact", "act"}); got != "token <redacted> and <redacted>" {
+		t.Fatalf("<redacted> 不该被再次替换：%q", got)
+	}
+}
+
+// MEDIA-10（A-m1）：用户名只有一个字符（u）时不做全文擦除，报错仍然可读；userinfo 仍按结构剥掉。
+func TestBrowserDownloadSingleCharUsernameKeepsErrorReadableMEDIA10(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dir := t.TempDir()
+	binary, _ := writeFakeFFmpeg(t, `echo "https://u:pw@cdn.example.com/hls/seg-001.ts: Server returned 401 Unauthorized (authentication failure)" 1>&2
+exit 1
+`)
+	service := withBrowserDownloadStore(newTestDownloadService(t, dir, binary, nil))
+	task, err := service.Enqueue(BrowserDownloadRequest{
+		URL:   "https://u:pw@cdn.example.com/hls/index.m3u8",
+		Kind:  "hls",
+		Title: "单字符用户名",
+	})
+	if err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	failed := waitForState(t, service, task.ID, browserDownloadStateFailed)
+	service.Wait()
+	row := mustLoadBrowserDownloadRow(t, task.ID)
+	for _, text := range []string{failed.Error, row.Error} {
+		for _, want := range []string{"Server returned 401 Unauthorized (authentication failure)", "https://cdn.example.com/hls/seg-001.ts"} {
+			if !strings.Contains(text, want) {
+				t.Fatalf("报错应保持可读，缺 %q：%q", want, text)
+			}
+		}
+		if strings.Contains(text, "u:pw@") || strings.Contains(text, "<redacted>") {
+			t.Fatalf("userinfo 应按结构剥掉、不做全文擦除：%q", text)
 		}
 	}
 }

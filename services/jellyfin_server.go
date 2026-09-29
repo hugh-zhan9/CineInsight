@@ -62,7 +62,8 @@ type JellyfinServer struct {
 	lifecycle sync.Mutex
 	mu        sync.Mutex
 	writes    sync.Mutex
-	// sessionIO serializes the database side of session lookups, refreshes and logouts.
+	// sessionIO serializes writing lookup results back into sessions with logouts and evictions;
+	// the lookups themselves run outside it (B-m3).
 	sessionIO     sync.Mutex
 	requests      sync.WaitGroup
 	server        *http.Server
@@ -73,11 +74,22 @@ type JellyfinServer struct {
 	loginWindow   time.Time
 	loginAttempts int
 	loginSlot     chan struct{}
-	video         *VideoService
-	thumbnail     *ThumbnailService
-	probe         *MediaProbeService
-	people        *PersonService
-	collections   *CollectionService
+	// revocations counts logouts and evictions (guarded by mu, bumped while holding sessionIO); a
+	// lookup that saw a different value re-checks before writing back.
+	revocations uint64
+	// unknownTokens is the bounded negative cache of tokens the table did not have (guarded by mu),
+	// cleared whenever the server stops (Stop, Configure).
+	unknownTokens map[[32]byte]time.Time
+	// store is the jellyfin_sessions access; tests replace its functions.
+	store jellyfinSessionStore
+	// configureTxHook runs inside Configure's transaction after the settings write and the session
+	// deletion; a test returns an error from it to force the rollback on either backend (B-m7).
+	configureTxHook func(tx *gorm.DB) error
+	video           *VideoService
+	thumbnail       *ThumbnailService
+	probe           *MediaProbeService
+	people          *PersonService
+	collections     *CollectionService
 	// diagnostics is guarded by mu; viewSessions has its own lock.
 	diagnostics  jellyfinDiagnosticsState
 	viewSessions jellyfinViewTracker
@@ -89,7 +101,7 @@ type JellyfinServer struct {
 
 // NewJellyfinServer creates a disabled server without opening a port.
 func NewJellyfinServer(video *VideoService, thumbnail *ThumbnailService, probe *MediaProbeService, people *PersonService, collections *CollectionService) *JellyfinServer {
-	s := &JellyfinServer{video: video, thumbnail: thumbnail, probe: probe, people: people, collections: collections, sessions: make(map[[32]byte]jellyfinSession), loginSlot: make(chan struct{}, 1), now: time.Now}
+	s := &JellyfinServer{video: video, thumbnail: thumbnail, probe: probe, people: people, collections: collections, sessions: make(map[[32]byte]jellyfinSession), unknownTokens: make(map[[32]byte]time.Time), store: defaultJellyfinSessionStore(), loginSlot: make(chan struct{}, 1), now: time.Now}
 	s.api = http.HandlerFunc(s.serveLibrary)
 	return s
 }
@@ -149,7 +161,13 @@ func (s *JellyfinServer) Configure(input JellyfinConfigInput) (JellyfinStatus, e
 		if result.RowsAffected != 1 {
 			return gorm.ErrRecordNotFound
 		}
-		return deleteAllJellyfinSessionsTx(tx)
+		if err := deleteAllJellyfinSessionsTx(tx); err != nil {
+			return err
+		}
+		if s.configureTxHook != nil {
+			return s.configureTxHook(tx)
+		}
+		return nil
 	})
 	if err != nil {
 		// Nothing was written: the old settings and their sessions stay valid, as before the call.
@@ -218,7 +236,8 @@ func (s *JellyfinServer) startLocked(config models.Settings) {
 
 // Stop closes the listener and active streams before returning. It is used on app exit and for
 // maintenance (restore, backend switch), so it only drops the in-memory session cache: persisted
-// sessions stay valid after a restart (D-PC47). Revocation is Configure's job.
+// sessions stay valid after a restart (D-PC47). Revocation is Configure's job. Requests admitted
+// before the stop that are still authenticating get 503, not 401, so clients keep their tokens (B-m4).
 func (s *JellyfinServer) Stop() {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
@@ -232,6 +251,9 @@ func (s *JellyfinServer) stopLocked() {
 	s.status.Running = false
 	s.generation++
 	s.sessions = make(map[[32]byte]jellyfinSession)
+	// The table can change while stopped (restore brings back older rows, Configure deletes all),
+	// so neither cache survives a stop.
+	s.unknownTokens = make(map[[32]byte]time.Time)
 	s.mu.Unlock()
 	if server != nil {
 		_ = server.Close()
@@ -305,13 +327,17 @@ func (s *JellyfinServer) Handler() http.Handler {
 			return
 		}
 		identity := jellyfinIdentity{generation: generation, token: sha256.Sum256([]byte(token))}
-		valid, err := s.authenticate(identity)
+		outcome, err := s.authenticate(identity)
 		if err != nil {
 			log.Printf("[Jellyfin] 登录会话校验失败")
 			jellyfinError(w, 500, "登录会话校验失败，请稍后重试")
 			return
 		}
-		if !valid {
+		switch outcome {
+		case jellyfinAuthStopping:
+			jellyfinError(w, 503, "Jellyfin 服务正在停止或重启，请稍后重试")
+			return
+		case jellyfinAuthRejected:
 			jellyfinError(w, 401, "需要有效的登录令牌")
 			return
 		}
@@ -345,13 +371,32 @@ func (s *JellyfinServer) Handler() http.Handler {
 }
 
 // authorized re-checks an admitted request before a write: authenticate already put the session
-// in memory, so a missing entry or a changed generation means it was revoked meanwhile (logout,
-// Configure, Stop). It never goes to the database.
-func (s *JellyfinServer) authorized(identity jellyfinIdentity) bool {
+// in memory, so a missing or expired entry means it was revoked meanwhile (logout, eviction). A
+// changed generation means the server is stopping (Stop, or Configure before it revokes): that is
+// 503, not a revocation (B-m4). It never goes to the database.
+func (s *JellyfinServer) authorized(identity jellyfinIdentity) jellyfinAuthOutcome {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	session, ok := s.sessions[identity.token]
-	return ok && s.config.JellyfinEnabled && identity.generation == s.generation && s.now().Before(session.expires)
+	if !s.config.JellyfinEnabled || identity.generation != s.generation {
+		return jellyfinAuthStopping
+	}
+	if session, ok := s.sessions[identity.token]; ok && s.now().Before(session.expires) {
+		return jellyfinAuthAccepted
+	}
+	return jellyfinAuthRejected
+}
+
+// jellyfinRejectUnauthorized answers a write whose session re-check failed; it returns true when it did.
+func jellyfinRejectUnauthorized(w http.ResponseWriter, outcome jellyfinAuthOutcome) bool {
+	switch outcome {
+	case jellyfinAuthAccepted:
+		return false
+	case jellyfinAuthStopping:
+		jellyfinError(w, 503, "Jellyfin 服务正在停止或重启，请稍后重试")
+	default:
+		jellyfinError(w, 401, "会话已失效")
+	}
+	return true
 }
 
 func (s *JellyfinServer) systemInfo(config models.Settings, host string) map[string]interface{} {

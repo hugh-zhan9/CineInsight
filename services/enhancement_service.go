@@ -722,19 +722,34 @@ func (s *EnhancementService) ensureOutputNameFree(video models.Video, basename s
 }
 
 func (s *EnhancementService) ensureDiskFloor(sourcePath string, sourceSize int64, width, height int) error {
-	return s.ensureDiskFree(sourcePath, EnhancementRequiredDiskBytes(sourceSize, width, height))
+	return s.ensureDiskFree(sourcePath, EnhancementRequiredDiskBytes(sourceSize, width, height), enhancementFloorShortage)
 }
 
-// ensureDiskFree 检查源所在卷至少还有 required 字节可用。
-func (s *EnhancementService) ensureDiskFree(sourcePath string, required int64) error {
+// ensureDiskFree 检查源所在卷至少还有 required 字节可用（负数按 0 算）。建任务、每批复检与合并前复检
+// 共用这一个判定，只有空间不足时的说明不同：shortage 按所需与可用的字节数写出 disk_insufficient 之后的文案。
+func (s *EnhancementService) ensureDiskFree(sourcePath string, required int64, shortage func(required, free uint64) string) error {
 	free, err := s.diskFree(filepath.Dir(sourcePath))
 	if err != nil {
 		return fmt.Errorf("disk_insufficient: 无法检查磁盘空间: %v", err)
 	}
+	if required < 0 {
+		required = 0
+	}
 	if free < uint64(required) {
-		return fmt.Errorf("disk_insufficient: 同卷可用空间不足（需要至少 %.1f GiB）", float64(required)/(1<<30))
+		return errors.New("disk_insufficient: " + shortage(uint64(required), free))
 	}
 	return nil
+}
+
+// enhancementFloorShortage 是建任务与每批复检的空间不足说明：只给下限。
+func enhancementFloorShortage(required, _ uint64) string {
+	return fmt.Sprintf("同卷可用空间不足（需要至少 %.1f GiB）", float64(required)/(1<<30))
+}
+
+// enhancementMergeShortage 是合并前复检的空间不足说明（M-6）：给出所需与可用的空间（人类可读，B-m-4），
+// 用户据此知道要腾出多少。
+func enhancementMergeShortage(required, free uint64) string {
+	return fmt.Sprintf("合并前同卷可用空间不足（需要约 %s，可用 %s）", formatEnhancementBytes(required), formatEnhancementBytes(free))
 }
 
 func (s *EnhancementService) cleanupTaskWorkdir(task models.VideoEnhancementTask) {

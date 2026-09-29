@@ -1895,3 +1895,222 @@ func TestMETA04DeletePersonRelationsSkipsRelationRecreatedAfterPlan(t *testing.T
 		t.Fatal("本簇写入且作数的关系应删除")
 	}
 }
+
+// ===== 修复 J：修复 H 复审的 A-m3 / A-m8 / A-m9 =====
+
+func imageRelationCount(t *testing.T, imageID, personID uint) int64 {
+	t.Helper()
+	return countFaceRows(t, &models.ImagePerson{}, "image_id = ? AND person_id = ?", imageID, personID)
+}
+
+// namedImageFaceClusterOn 与 namedFaceClusterOn 同构，观测挂在图片上。
+func namedImageFaceClusterOn(t *testing.T, service *FaceReviewService, personID uint, images []models.Image, hashPrefix string) models.FaceCluster {
+	t.Helper()
+	cluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(1))
+	for i, image := range images {
+		seedFaceObservation(t, cluster.ID, models.FaceMediaKindImage, image.ID, fmt.Sprintf("%s%02d", hashPrefix, i), models.FaceAppendStatusNone, 0.9)
+	}
+	if _, err := service.LinkFaceCluster(context.Background(), cluster.ID, personID); err != nil {
+		t.Fatalf("关联图片簇失败: %v", err)
+	}
+	return cluster
+}
+
+// A-m3：清理中心合并元数据。保留项上人脸链路写的 (K, P) + 被合并项 NFO 写的 (S, P)：合并时插入撞上
+// 唯一键，被合并项确认了保留项的这条关系，写入记录释放、归用户所有；之后解除簇并勾选删除关系，
+// (K, P) 保留，只有人脸链路写过的关系被删。图片合并同一规则。
+func TestMETA04MetadataMergeReleasesKeeperRelationConfirmedBySource(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	keeper := seedFaceTestVideo(t, "merge-keeper.mp4")
+	source := seedFaceTestVideo(t, "merge-source.mp4")
+	faceOnly := seedFaceTestVideo(t, "merge-face-only.mp4")
+	person := seedFaceTestPerson(t, "钱八", false)
+	cluster := namedFaceClusterOn(t, faces, person.ID, []models.Video{keeper, faceOnly}, "jm0000000")
+	applyNFOPeopleForTest(t, source.ID, person.ID)
+	if v := unlinkPreviewOf(t, faces, cluster.ID)[keeper.ID]; v.Source != FaceRelationSourceFace {
+		t.Fatalf("夹具：保留项的关系由人脸链路写入: %+v", v)
+	}
+
+	result, err := MergeMediaMetadata(MediaMergeKindVideo, keeper.ID, []uint{source.ID}, MediaMetadataMergeDeps{Watched: &VideoService{}})
+	if err != nil {
+		t.Fatalf("合并元数据失败: %v", err)
+	}
+	if result.PeopleAdded != 0 {
+		t.Fatalf("保留项已有同一人物的关系，不算新增: %+v", result)
+	}
+	byID := unlinkPreviewOf(t, faces, cluster.ID)
+	if v := byID[keeper.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+		t.Fatalf("被合并项确认过的关系应来源不明: %+v", v)
+	}
+	if v := byID[faceOnly.ID]; v.Source != FaceRelationSourceFace {
+		t.Fatalf("合并没碰过的关系仍标 face: %+v", v)
+	}
+	if _, err := faces.UnlinkFaceCluster(ctx, cluster.ID, true); err != nil {
+		t.Fatalf("解除失败: %v", err)
+	}
+	if videoRelationCount(t, keeper.ID, person.ID) != 1 {
+		t.Fatal("被合并项确认过的 (K, P) 在解除关联并删除关系后必须保留")
+	}
+	if videoRelationCount(t, faceOnly.ID, person.ID) != 0 {
+		t.Fatal("只有人脸链路写过的关系应随解除删除")
+	}
+
+	// 图片：保留项上人脸写的关系 + 被合并项手动加的同一人物。
+	people := NewPersonService(t.TempDir())
+	keeperImage := seedFaceTestImage(t, "merge-keeper.jpg")
+	sourceImage := seedFaceTestImage(t, "merge-source.jpg")
+	faceOnlyImage := seedFaceTestImage(t, "merge-face-only.jpg")
+	imageCluster := namedImageFaceClusterOn(t, faces, person.ID, []models.Image{keeperImage, faceOnlyImage}, "jn0000000")
+	if err := people.AddPersonImages(person.ID, []uint{sourceImage.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MergeMediaMetadata(MediaMergeKindImage, keeperImage.ID, []uint{sourceImage.ID}, MediaMetadataMergeDeps{}); err != nil {
+		t.Fatalf("合并图片元数据失败: %v", err)
+	}
+	if v := unlinkPreviewOf(t, faces, imageCluster.ID)[keeperImage.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+		t.Fatalf("被合并图片确认过的关系应来源不明: %+v", v)
+	}
+	if _, err := faces.UnlinkFaceCluster(ctx, imageCluster.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if imageRelationCount(t, keeperImage.ID, person.ID) != 1 || imageRelationCount(t, faceOnlyImage.ID, person.ID) != 0 {
+		t.Fatal("被合并图片确认过的关系保留，只有人脸链路写过的删除")
+	}
+}
+
+// A-m8：人物页批量添加图片（AddPersonImages）碰到人脸链路已写的关系，同样释放写入记录、归用户所有。
+func TestMETA04AddPersonImagesMakesFaceRelationUserOwned(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	people := NewPersonService(t.TempDir())
+	added := seedFaceTestImage(t, "page-added.jpg")
+	faceOnly := seedFaceTestImage(t, "page-face-only.jpg")
+	person := seedFaceTestPerson(t, "孙九", false)
+	cluster := namedImageFaceClusterOn(t, faces, person.ID, []models.Image{added, faceOnly}, "ja0000000")
+	if got := countFaceRows(t, &models.FaceRelationWrite{}, "person_id = ? AND media_kind = ?", person.ID, models.FaceMediaKindImage); got != 2 {
+		t.Fatalf("夹具：两条图片关系都由人脸链路写入: %d", got)
+	}
+	if err := people.AddPersonImages(person.ID, []uint{added.ID}); err != nil {
+		t.Fatal(err)
+	}
+	byID := unlinkPreviewOf(t, faces, cluster.ID)
+	if v := byID[added.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+		t.Fatalf("人物页确认过的图片关系应来源不明: %+v", v)
+	}
+	if v := byID[faceOnly.ID]; v.Source != FaceRelationSourceFace {
+		t.Fatalf("没被人物页确认的关系仍标 face: %+v", v)
+	}
+	if _, err := faces.UnlinkFaceCluster(ctx, cluster.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if imageRelationCount(t, added.ID, person.ID) != 1 {
+		t.Fatal("人物页确认过的图片关系必须保留")
+	}
+	if imageRelationCount(t, faceOnly.ID, person.ID) != 0 {
+		t.Fatal("只有人脸链路写过的图片关系应随解除删除")
+	}
+}
+
+// A-m8：deletePersonRelations 的图片分支同样把判定并进删除语句——规划之后图片关系被删掉又由别的来源
+// 重建（更晚的 created_at），不会被删到。
+func TestMETA04DeletePersonRelationsImageBranchSkipsRecreatedRelation(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	recreated := seedFaceTestImage(t, "recreated.jpg")
+	untouched := seedFaceTestImage(t, "untouched.jpg")
+	person := seedFaceTestPerson(t, "周十", false)
+	cluster := namedImageFaceClusterOn(t, faces, person.ID, []models.Image{recreated, untouched}, "jr0000000")
+
+	err := database.Transaction(func(tx *gorm.DB) error {
+		items, err := planFaceClusterUnlink(ctx, tx, cluster.ID, person.ID)
+		if err != nil {
+			return err
+		}
+		if got := len(removableFaceMedia(items)); got != 2 {
+			return fmt.Errorf("夹具：规划时两条图片关系都可删，实际 %d", got)
+		}
+		if err := tx.Where("image_id = ? AND person_id = ?", recreated.ID, person.ID).Delete(&models.ImagePerson{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.ImagePerson{ImageID: recreated.ID, PersonID: person.ID, CreatedAt: time.Now().Add(time.Minute)}).Error; err != nil {
+			return err
+		}
+		removed, err := deletePersonRelations(ctx, tx, person.ID, cluster.ID, removableFaceMedia(items))
+		if err != nil {
+			return err
+		}
+		if removed != 1 {
+			return fmt.Errorf("只应删掉仍由本簇记录作数的那一条图片关系，实际 %d", removed)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imageRelationCount(t, recreated.ID, person.ID) != 1 {
+		t.Fatal("规划之后重建的图片关系不能被删")
+	}
+	if imageRelationCount(t, untouched.ID, person.ID) != 0 {
+		t.Fatal("本簇写入且作数的图片关系应删除")
+	}
+}
+
+// A-m9：记录在规划之后被释放——抽屉保存（演员表里仍有这个人）发生在解除关联的规划与删除之间，
+// 释放了其中两件媒体的写入记录：删除语句的 EXISTS 条件找不到记录，这两条关系不删；另一条照删。
+// SQLite 的写事务一开始就持写锁（_txlock=immediate），抽屉保存那一步在同一事务里调用它实际执行的
+// releaseFaceRelationWrites 来模拟。
+func TestMETA04DeletePersonRelationsSkipsWritesReleasedAfterPlan(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	video := seedFaceTestVideo(t, "released-video.mp4")
+	removedVideo := seedFaceTestVideo(t, "removed-video.mp4")
+	image := seedFaceTestImage(t, "released-image.jpg")
+	person := seedFaceTestPerson(t, "吴十一", false)
+	cluster := namedFaceClusterOn(t, faces, person.ID, []models.Video{video, removedVideo}, "jw0000000")
+	seedFaceObservation(t, cluster.ID, models.FaceMediaKindImage, image.ID, "jw0000009", models.FaceAppendStatusPending, 0.9)
+	if err := faces.ConfirmFaceClusterAppendObservations(ctx, cluster.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if imageRelationCount(t, image.ID, person.ID) != 1 {
+		t.Fatal("夹具：确认追加应写出图片关系")
+	}
+
+	err := database.Transaction(func(tx *gorm.DB) error {
+		items, err := planFaceClusterUnlink(ctx, tx, cluster.ID, person.ID)
+		if err != nil {
+			return err
+		}
+		if got := len(removableFaceMedia(items)); got != 3 {
+			return fmt.Errorf("夹具：规划时三条关系都可删，实际 %d", got)
+		}
+		// 规划之后：抽屉保存确认了 video 与 image 上的这个人。
+		if err := releaseFaceRelationWrites(tx, person.ID, models.FaceMediaKindVideo, []uint{video.ID}); err != nil {
+			return err
+		}
+		if err := releaseFaceRelationWrites(tx, person.ID, models.FaceMediaKindImage, []uint{image.ID}); err != nil {
+			return err
+		}
+		removed, err := deletePersonRelations(ctx, tx, person.ID, cluster.ID, removableFaceMedia(items))
+		if err != nil {
+			return err
+		}
+		if removed != 1 {
+			return fmt.Errorf("记录已被释放的关系不删，只删剩下那一条，实际 %d", removed)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if videoRelationCount(t, video.ID, person.ID) != 1 || imageRelationCount(t, image.ID, person.ID) != 1 {
+		t.Fatal("规划之后被释放记录的关系必须保留")
+	}
+	if videoRelationCount(t, removedVideo.ID, person.ID) != 0 {
+		t.Fatal("记录仍然作数的关系应删除")
+	}
+}

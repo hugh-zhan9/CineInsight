@@ -41,11 +41,16 @@ const iinaRemovedWatchedRatio = 0.9
 // iinaRemovedMinElapsedCap 是删除事件「距启动太近」的墙钟上限（秒），见 iinaRemovedMinElapsed。
 const iinaRemovedMinElapsedCap = 60.0
 
+// iinaRemovedMinElapsedFloor 是这道门槛的绝对下限（秒，A-m6）：短片或离片尾很近的续播，剩余时长的
+// 一半可能只有一两秒，与 mpv 加载断点后立刻删文件的时间差不多，挡不住加载时的那次删除。
+const iinaRemovedMinElapsedFloor = 10.0
+
 // iinaRemovedMinElapsed 是删除事件距应用发起播放至少要过去的墙钟秒数：
-// min(60 秒, 0.5 ×（时长 − 起播位置）)。不到这个时长的删除多半是 mpv 续播时加载完断点就删掉了
-// 文件，与看没看完无关：既不结算，也不消耗会话，之后真正播完的那次删除还要靠它。
+// max(10 秒, min(60 秒, 0.5 ×（时长 − 起播位置）))。不到这个时长的删除多半是 mpv 续播时加载完断点
+// 就删掉了文件，与看没看完无关：既不结算，也不消耗会话，之后真正播完的那次删除还要靠它。
+// 代价是不到 10 秒就播完的片段收不到看完结算（与「从头播完」同属已知缺口，设计 §8.2）。
 func iinaRemovedMinElapsed(duration, startPosition float64) float64 {
-	return math.Min(iinaRemovedMinElapsedCap, 0.5*(duration-startPosition))
+	return math.Max(iinaRemovedMinElapsedFloor, math.Min(iinaRemovedMinElapsedCap, 0.5*(duration-startPosition)))
 }
 
 // IINAProgressUpdate 是一条被同步的进度。界面拿它就地更新对应的行，
@@ -508,8 +513,8 @@ func (s *IINAProgressService) settleRemovedEntryLocked(name string, eventTime ti
 //   - 断点文件的修改时间晚于库里的 watch_progress_updated_at 才采用，否则忽略：用户可能在
 //     应用内或 Jellyfin 里看得更新，那份记录优先；采用时把进度更新时间写成文件的修改时间。
 //   - 已看视频的断点不可续（resumable 为 false），且断点文件不晚于已看时间：那是陈旧记录，
-//     跳过，不能把已看的片子拉回"在看"。不知道何时标的已看（watched_at 为空）不在这一步跳过，
-//     交给下一条的修改时间比较。
+//     跳过，不能把已看的片子拉回"在看"。已看时间与进度时间都为空时无从比较新旧，同样跳过；
+//     只缺已看时间（watched_at 为空、进度时间非空）的交给下一条的修改时间比较（见 iinaSkipStaleWatchedEntry）。
 //   - 断点停在片尾区间内与应用内播放同一口径判为看完（2026-09-13 裁决）。完成判定前面不再有
 //     按位置幅度的守卫，历史遗留行（位置顶到片尾、未标已看）重播后照样自愈。
 //
@@ -560,7 +565,7 @@ func (s *IINAProgressService) syncLocked() (IINAProgressSyncResult, []uint, erro
 		// 同一个文件每次同步都会被当成"更新的写入"。
 		modTime = modTime.Truncate(time.Microsecond)
 		s.endSessionOnExitWrite(name, video.ID, modTime)
-		if video.IsWatched && !resumable(&video) && video.WatchedAt != nil && !modTime.After(*video.WatchedAt) {
+		if iinaSkipStaleWatchedEntry(&video, modTime) {
 			result.Skipped++
 			continue
 		}
@@ -604,4 +609,19 @@ func (s *IINAProgressService) syncLocked() (IINAProgressSyncResult, []uint, erro
 		log.Printf("[IINA] 同步播放进度 scanned=%d updated=%d skipped=%d", result.Scanned, result.Updated, result.Skipped)
 	}
 	return result, flipped, nil
+}
+
+// iinaSkipStaleWatchedEntry 判定已看、断点不可续的视频要不要跳过这份断点文件（D-PC42、A-m4）：
+//   - 有已看时间：文件不晚于它就是标已看之前的陈旧记录，跳过；晚于它是重看，交给后面的比较；
+//   - 已看时间与进度时间都为空（升级前的历史行）：无从比较新旧，跳过，不采用 watch_later——
+//     否则任何一份残留的断点文件都会把已看的片子拉回「在看」；
+//   - 只缺已看时间、进度时间非空：交给后面「文件修改时间晚于进度时间才采用」的比较。
+func iinaSkipStaleWatchedEntry(video *models.Video, modTime time.Time) bool {
+	if !video.IsWatched || resumable(video) {
+		return false
+	}
+	if video.WatchedAt != nil {
+		return !modTime.After(*video.WatchedAt)
+	}
+	return video.WatchProgressUpdatedAt == nil
 }

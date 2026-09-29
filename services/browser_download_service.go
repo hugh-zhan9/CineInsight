@@ -1239,20 +1239,20 @@ func browserDownloadStripURL(raw string) string {
 //  1. 删除包含 Cookie: / Set-Cookie: / Authorization: / X-…: 这类请求头样式的行；
 //  2. 形如 URL 的片段去掉 query、fragment 与 userinfo，先换成占位符，免得 //host/path 被下一步
 //     当成路径擦掉；
-//  3. 请求里已知的敏感值（Cookie 与其各段取值、地址的 query / fragment 与各参数值）逐字擦掉——
-//     放在 URL 之后：先擦的话 <redacted> 会把 URL 截成两半，query 的后半截就漏在外面了；
+//  3. 请求里已知的敏感值（Cookie 与其各段取值、地址的 query / fragment 与各参数值、userinfo 的
+//     用户名与密码）逐字擦掉——放在 URL 之后：先擦的话 <redacted> 会把 URL 截成两半，query 的后半截
+//     就漏在外面了；
 //  4. 其余绝对路径擦成 <path>；
 //  5. 最多保留 500 个字符。
+//
+// 第 3 步按长度降序、一遍扫完（A-m1）：短值恰好是长值的一段（用户名 admin、密码 admin2024!）时，
+// 先擦短的会让长值剩下半截（<redacted>2024!）露在外面；逐个 ReplaceAll 还会让后面的短值擦进前面
+// 刚写下的 <redacted> 里。调用方给的顺序不作数，这里自己排。
 //
 // PG 的 text 存不下 NUL 与非法 UTF-8，这两样一并去掉。
 func sanitizeBrowserDownloadError(message string, secrets []string) string {
 	text := strings.ReplaceAll(strings.ToValidUTF8(message, ""), "\x00", "")
-	redact := func(value string) string {
-		for _, secret := range secrets {
-			value = strings.ReplaceAll(value, secret, "<redacted>")
-		}
-		return value
-	}
+	redact := browserDownloadRedactor(secrets)
 
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	kept := lines[:0]
@@ -1287,10 +1287,36 @@ func sanitizeBrowserDownloadError(message string, secrets []string) string {
 	return text
 }
 
+// browserDownloadRedactor 把待擦除值按长度降序排好，返回一遍扫完的替换函数：同一位置上最长的值先
+// 命中，替换写下的 <redacted> 不会再被别的值匹配。
+func browserDownloadRedactor(secrets []string) func(string) string {
+	ordered := make([]string, 0, len(secrets))
+	for _, secret := range secrets {
+		if secret != "" {
+			ordered = append(ordered, secret)
+		}
+	}
+	if len(ordered) == 0 {
+		return func(value string) string { return value }
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return len(ordered[i]) > len(ordered[j]) })
+	pairs := make([]string, 0, 2*len(ordered))
+	for _, secret := range ordered {
+		pairs = append(pairs, secret, "<redacted>")
+	}
+	return strings.NewReplacer(pairs...).Replace
+}
+
+// browserDownloadCredentialMinLength 是 userinfo 凭证做全文擦除的最短长度（A-m1）。1–2 个字符的
+// 用户名或密码全文擦除会把整条报错擦成乱码（用户名 u 会抠掉每一个字母 u），这类值只在 URL 的
+// userinfo 位置按结构剥离（browserDownloadStripURL）：工具把它单独打印出来时会留在报错里，
+// 1–2 个字符的凭证本来也谈不上机密。
+const browserDownloadCredentialMinLength = 3
+
 // browserDownloadSecrets 列出这次请求里已知的敏感值，供清洗时逐字擦除。Cookie 与 query 里太短的值
 // （<6）不擦：那种长度谈不上机密，擦了反而会把 "true"、"1" 之类的正常字样从报错里抠掉。
-// userinfo 的用户名与密码例外（B-m-3）：它们就是凭证，`admin:admin@host` 这种短凭证同样要擦，
-// 代价是报错里恰好相同的字样也一并被抠掉。
+// userinfo 的用户名与密码门槛放低到 3（B-m-3、A-m1）：它们就是凭证，`admin:admin@host` 这种短凭证
+// 同样要擦，代价是报错里恰好相同的字样也一并被抠掉。
 func browserDownloadSecrets(request *browserDownloadNormalized) []string {
 	if request == nil {
 		return nil
@@ -1309,7 +1335,7 @@ func browserDownloadSecrets(request *browserDownloadNormalized) []string {
 		secrets = append(secrets, value)
 	}
 	add := func(value string) { addValue(value, 6) }
-	addCredential := func(value string) { addValue(value, 1) }
+	addCredential := func(value string) { addValue(value, browserDownloadCredentialMinLength) }
 	for _, header := range request.Headers {
 		name, value, ok := strings.Cut(header, ":")
 		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Cookie") {
@@ -1339,8 +1365,6 @@ func browserDownloadSecrets(request *browserDownloadNormalized) []string {
 			}
 		}
 	}
-	// 长的先擦：短值恰好是长值的一段时，先擦短的会让长值只剩半截露在外面。
-	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
 	return secrets
 }
 

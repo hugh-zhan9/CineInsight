@@ -333,9 +333,8 @@ func TestAPP02MaintenanceEntryStillAcquiresPathWriteLockFixK(t *testing.T) {
 // 维护入口在服务层只允许下面列出的调用点（其余一律改用 lockLibraryPaths）。
 func TestAPP02NoDirectPathWriteLockOutsideHelperFixK(t *testing.T) {
 	writeLockOwners := map[string]bool{"lockLibraryPaths": true, "BeginLibraryMaintenance": true}
-	// 已知待改的调用点：超分发布用维护入口当普通写锁（修复 J 的文件范围，整合时改用 lockLibraryPaths 并删掉这一项）。
-	// 超分服务在进入维护模式时已被 StopAndWait，终态下到不了这里。
-	maintenanceCallers := map[string]bool{"enhancement_pipeline.go:publishOutput": true}
+	// 服务层没有任何调用点可以把维护入口当普通写锁用（超分发布已改用 lockLibraryPaths）。
+	maintenanceCallers := map[string]bool{}
 
 	matches, err := filepath.Glob("*.go")
 	if err != nil {

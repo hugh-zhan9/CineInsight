@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http/httptest"
@@ -16,8 +17,9 @@ import (
 	"testing"
 	"time"
 	"video-master/database"
-	"video-master/internal/dbtest"
 	"video-master/models"
+
+	"gorm.io/gorm"
 )
 
 // ===== P-022 夹具 =====
@@ -185,19 +187,45 @@ func TestJellyfinPLAY14ConfigureRevokesAllPersistedSessions(t *testing.T) {
 		t.Fatalf("token survived account change: %d", w.Code)
 	}
 
-	// 设置写回失败：整个事务回滚，会话保留（与改动前一致）。
-	if dbtest.IsPostgres() {
-		return
-	}
+	// 设置写回失败：整个事务回滚，会话保留（与改动前一致）。失败由事务末尾的钩子注入（B-m7）：
+	// 此时设置已改写、会话已删除，回滚要把两者一并撤回；两个后端都能跑（原先用 SQLite 触发器，PG 上跳过）。
 	fourth := p022Login(t, again, "Fileball", "a")
-	if err := database.DB.Exec(`CREATE TRIGGER p022_reject_settings BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT, 'denied'); END;`).Error; err != nil {
+	var before models.Settings
+	if err := database.DB.First(&before).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := again.Configure(JellyfinConfigInput{Enabled: false, Username: "viewer"}); err == nil {
+	hookRan := false
+	again.configureTxHook = func(tx *gorm.DB) error {
+		hookRan = true
+		var inside int64
+		if err := tx.Model(&models.JellyfinSession{}).Count(&inside).Error; err != nil {
+			return err
+		}
+		var settings models.Settings
+		if err := tx.First(&settings).Error; err != nil {
+			return err
+		}
+		if inside != 0 || settings.JellyfinUsername != "renamed-viewer" {
+			t.Errorf("hook must run after the settings write and the session deletion: sessions=%d username=%q", inside, settings.JellyfinUsername)
+		}
+		return errors.New("injected failure")
+	}
+	if _, err := again.Configure(JellyfinConfigInput{Enabled: false, Username: "renamed-viewer"}); err == nil {
 		t.Fatal("expected rejected save")
+	}
+	again.configureTxHook = nil
+	if !hookRan {
+		t.Fatal("failure hook did not run")
 	}
 	if got := len(p022SessionRows(t)); got != 1 {
 		t.Fatalf("failed save must not delete sessions: %d rows", got)
+	}
+	var after models.Settings
+	if err := database.DB.First(&after).Error; err != nil {
+		t.Fatal(err)
+	}
+	if after.JellyfinUsername != before.JellyfinUsername || after.JellyfinEnabled != before.JellyfinEnabled {
+		t.Fatalf("failed save must roll back the settings: before %q/%v after %q/%v", before.JellyfinUsername, before.JellyfinEnabled, after.JellyfinUsername, after.JellyfinEnabled)
 	}
 	if w := jellyfinRequest(p022Server(t, clock), "GET", "/Users/Me", fourth, ""); w.Code != 200 {
 		t.Fatalf("session lost on failed save: %d", w.Code)
@@ -484,7 +512,10 @@ func TestJellyfinPLAY07ViewEventOncePerPlaySessionAfterThresholdOrCompletion(t *
 		t.Fatalf("same session recorded twice: %d", got)
 	}
 
-	// 会话 ps-2：从 90 开始、1 秒后停在 99（片尾区间）→ 看完即记。
+	// 会话 ps-2：从 90 开始、1 秒后停在 99（片尾区间）→ 看完即记。只因看完成立的记录在同一
+	// 「条目 + 设备」记过之后 10 分钟内不重复记（B-m2，见 TestJellyfinPLAY07PlaySessionAliasAndCompletionWindow），
+	// 所以先走出 ps-1 那条记录的窗口（原先这里紧接着 ps-1 就断言记第二条）。
+	step(11 * time.Minute)
 	p022Progress(t, s, token, "Playing", first.ID, 90, "ps-2", "dev-a")
 	step(time.Second)
 	p022Progress(t, s, token, "Playing/Stopped", first.ID, 99, "ps-2", "dev-a")
@@ -830,5 +861,574 @@ func TestJellyfinLIB05TrashUnsupportedKeepsExistingDeleteFailureMapping(t *testi
 	}
 	if !strings.Contains(logs.String(), fmt.Sprintf("[Jellyfin] 删除视频 %d 失败", first.ID)) {
 		t.Fatalf("failure log should name only the video ID:\n%s", logs.String())
+	}
+}
+
+// ===== 修复 J：P-022 复审 B-m1 ~ B-m7 =====
+
+// p022SeedSession 直接往表里放一个已知令牌的会话（模拟之前登录过的客户端）。
+func p022SeedSession(t *testing.T, token, device string, seen, expires time.Time) {
+	t.Helper()
+	key := sha256.Sum256([]byte(token))
+	if err := database.DB.Create(&models.JellyfinSession{TokenHash: jellyfinTokenHash(key), DeviceID: device, LastSeenAt: seen.UTC(), ExpiresAt: expires.UTC()}).Error; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func p022Cached(s *JellyfinServer, token string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.sessions[sha256.Sum256([]byte(token))]
+	return ok
+}
+
+func p022Enable(s *JellyfinServer) {
+	s.mu.Lock()
+	s.config.JellyfinEnabled = true
+	s.mu.Unlock()
+}
+
+func p022Await(t *testing.T, ch <-chan struct{}, what string) {
+	t.Helper()
+	select {
+	case <-ch:
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out waiting for %s", what)
+	}
+}
+
+// B-m1：同一设备重新登录顶掉旧会话（Jellyfin 语义）——表里不累积，旧令牌在本进程内立即失效（内存副本
+// 一并清掉），重启后也无效；别的设备、没带 DeviceId 的会话不受影响。
+func TestJellyfinPLAY14SameDeviceLoginReplacesOldSession(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	clock := newP022Clock(time.Now().UTC().Truncate(time.Second))
+	s := p022Server(t, clock)
+	old := p022Login(t, s, "Fileball", "iphone")
+	other := p022Login(t, s, "Infuse", "ipad")
+	anonymousA := p022Login(t, s, "", "")
+	anonymousB := p022Login(t, s, "", "")
+	if w := jellyfinRequest(s, "GET", "/Users/Me", old, ""); w.Code != 200 || !p022Cached(s, old) {
+		t.Fatalf("old token before re-login: %d", w.Code)
+	}
+	fresh := p022Login(t, s, "Fileball", "iphone")
+	rows := p022SessionRows(t)
+	if len(rows) != 4 {
+		t.Fatalf("same-device login must not accumulate rows: %d", len(rows))
+	}
+	for _, row := range rows {
+		if row.DeviceID == "iphone" && row.TokenHash != p022TokenHash(fresh) {
+			t.Fatalf("the old iphone session survived: %+v", row)
+		}
+	}
+	if w := jellyfinRequest(s, "GET", "/Users/Me", old, ""); w.Code != 401 || p022Cached(s, old) {
+		t.Fatalf("replaced token still valid in this process: %d", w.Code)
+	}
+	for _, token := range []string{fresh, other, anonymousA, anonymousB} {
+		if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 200 {
+			t.Fatalf("unrelated session lost: %d", w.Code)
+		}
+	}
+	restarted := p022Server(t, clock)
+	if w := jellyfinRequest(restarted, "GET", "/Users/Me", old, ""); w.Code != 401 {
+		t.Fatalf("replaced token after restart: %d", w.Code)
+	}
+	if w := jellyfinRequest(restarted, "GET", "/Users/Me", fresh, ""); w.Code != 200 {
+		t.Fatalf("fresh token after restart: %d", w.Code)
+	}
+}
+
+// B-m1：未过期会话到达上限（64）时，新登录淘汰 last_seen_at 最旧的一行，不再返回 429；被淘汰的令牌在
+// 本进程内立即失效（内存副本清掉），其余会话照常可用。淘汰看最近使用时间，不看建立顺序。
+func TestJellyfinPLAY14SessionLimitEvictsLeastRecentlySeen(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	base := time.Now().UTC().Truncate(time.Second)
+	clock := newP022Clock(base)
+	s := p022Server(t, clock)
+	tokens := make([]string, jellyfinSessionLimit-1)
+	for i := range tokens {
+		tokens[i] = fmt.Sprintf("seed-token-%02d", i)
+		seen := base.Add(-9*time.Minute + time.Duration(i)*time.Second)
+		switch i {
+		case 0:
+			seen = base.Add(-time.Second) // 最早建立，但最近用过
+		case 7:
+			seen = base.Add(-9*time.Minute - 30*time.Second) // 最久没用
+		}
+		p022SeedSession(t, tokens[i], fmt.Sprintf("device-%02d", i), seen, base.Add(24*time.Hour))
+	}
+	// 要被淘汰的那个先进内存：淘汰要连内存副本一起清掉。
+	if w := jellyfinRequest(s, "GET", "/Users/Me", tokens[7], ""); w.Code != 200 || !p022Cached(s, tokens[7]) {
+		t.Fatalf("seeded token: %d", w.Code)
+	}
+	first := p022Login(t, s, "Fileball", "device-new-1")
+	if got := len(p022SessionRows(t)); got != jellyfinSessionLimit {
+		t.Fatalf("below the limit nothing is evicted: %d rows", got)
+	}
+	second := p022Login(t, s, "Fileball", "device-new-2")
+	rows := p022SessionRows(t)
+	if len(rows) != jellyfinSessionLimit {
+		t.Fatalf("a full table stays at the limit: %d rows", len(rows))
+	}
+	for _, row := range rows {
+		if row.TokenHash == p022TokenHash(tokens[7]) {
+			t.Fatal("least recently seen session was not evicted")
+		}
+	}
+	if w := jellyfinRequest(s, "GET", "/Users/Me", tokens[7], ""); w.Code != 401 || p022Cached(s, tokens[7]) {
+		t.Fatalf("evicted token still valid in this process: %d", w.Code)
+	}
+	for _, token := range []string{tokens[0], tokens[1], first, second} {
+		if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 200 {
+			t.Fatalf("session that was not least recently seen lost: %d", w.Code)
+		}
+	}
+}
+
+// B-m2：Progress 带 PlaySessionId、Stopped 不带——同一「条目 + 设备」见过 PlaySessionId 之后沿用它作为
+// 去重键，停止上报接着同一个会话累计、去重，只记一条。换 PlaySessionId 再报片尾位置（看完捷径）：
+// 同一「条目 + 设备」10 分钟窗口内不重复记；窗口内累计越过阈值的新会话、别的设备照记，走出窗口后照记。
+func TestJellyfinPLAY07PlaySessionAliasAndCompletionWindow(t *testing.T) {
+	useFreshViewEventDedup(t, viewEventDedupCapacity)
+	s, token, first, second := jellyfinLibraryFixture(t)
+	clock := newP022Clock(time.Now().UTC().Truncate(time.Second))
+	s.now = clock.now
+	step := clock.advance
+
+	// first（时长 100，阈值 50）：ps-a 累计 30 秒；不带 PlaySessionId 的停止上报又走了 25 秒 → 55，记一条。
+	p022Progress(t, s, token, "Playing", first.ID, 0, "ps-a", "dev-a")
+	step(30 * time.Second)
+	p022Progress(t, s, token, "Playing/Progress", first.ID, 30, "ps-a", "dev-a")
+	step(25 * time.Second)
+	p022Progress(t, s, token, "Playing/Stopped", first.ID, 55, "", "dev-a")
+	if got := p022ViewEvents(t, first.ID); got != 1 {
+		t.Fatalf("stopped without PlaySessionId must continue ps-a: %d events", got)
+	}
+	p022Progress(t, s, token, "Playing/Stopped", first.ID, 99, "", "dev-a")
+	if got := p022ViewEvents(t, first.ID); got != 1 {
+		t.Fatalf("a repeated stop is still ps-a: %d events", got)
+	}
+
+	// second：ps-b 越过阈值记一条；不带 PlaySessionId 的停止上报停在片尾，不另记。
+	p022Progress(t, s, token, "Playing", second.ID, 0, "ps-b", "dev-a")
+	step(60 * time.Second)
+	p022Progress(t, s, token, "Playing/Progress", second.ID, 60, "ps-b", "dev-a")
+	p022Progress(t, s, token, "Playing/Stopped", second.ID, 99, "", "dev-a")
+	if got := p022ViewEvents(t, second.ID); got != 1 {
+		t.Fatalf("progress with / stop without PlaySessionId: %d events", got)
+	}
+	// 换 PlaySessionId 报片尾：窗口内不重复记。
+	p022Progress(t, s, token, "Playing", second.ID, 90, "ps-c", "dev-a")
+	step(time.Second)
+	p022Progress(t, s, token, "Playing/Stopped", second.ID, 99, "ps-c", "dev-a")
+	if got := p022ViewEvents(t, second.ID); got != 1 {
+		t.Fatalf("completion under a new PlaySessionId inside the window: %d events", got)
+	}
+	// 窗口内真的又看了一遍（累计越过阈值）照记。
+	p022Progress(t, s, token, "Playing", second.ID, 0, "ps-d", "dev-a")
+	step(60 * time.Second)
+	p022Progress(t, s, token, "Playing/Progress", second.ID, 60, "ps-d", "dev-a")
+	if got := p022ViewEvents(t, second.ID); got != 2 {
+		t.Fatalf("a real rewatch inside the window: %d events", got)
+	}
+	// 别的设备不受这个窗口影响。
+	p022Progress(t, s, token, "Playing", second.ID, 90, "ps-e", "dev-b")
+	step(time.Second)
+	p022Progress(t, s, token, "Playing/Stopped", second.ID, 99, "ps-e", "dev-b")
+	if got := p022ViewEvents(t, second.ID); got != 3 {
+		t.Fatalf("another device's completion: %d events", got)
+	}
+	// 走出窗口之后，换 PlaySessionId 报片尾照记。
+	step(11 * time.Minute)
+	p022Progress(t, s, token, "Playing", second.ID, 90, "ps-f", "dev-a")
+	step(time.Second)
+	p022Progress(t, s, token, "Playing/Stopped", second.ID, 99, "ps-f", "dev-a")
+	if got := p022ViewEvents(t, second.ID); got != 4 {
+		t.Fatalf("completion after the window: %d events", got)
+	}
+}
+
+// B-m3：未命中内存的鉴权回表不持 sessionIO——一个请求卡在查表里，另一个令牌的回表照常完成。
+func TestJellyfinPLAY14LookupRunsOutsideSessionIO(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	clock := newP022Clock(time.Now().UTC().Truncate(time.Second))
+	blocked := p022Login(t, p022Server(t, clock), "", "")
+	free := p022Login(t, p022Server(t, clock), "", "")
+	s := p022Server(t, clock) // 新进程：内存为空，两个令牌都要回表
+	blockedKey := sha256.Sum256([]byte(blocked))
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	realLoad := s.store.load
+	s.store.load = func(key [32]byte, now time.Time) (jellyfinSession, bool, error) {
+		if key == blockedKey {
+			once.Do(func() { close(entered) })
+			<-release
+		}
+		return realLoad(key, now)
+	}
+	blockedDone := make(chan int, 1)
+	go func() { blockedDone <- jellyfinRequest(s, "GET", "/Users/Me", blocked, "").Code }()
+	p022Await(t, entered, "the blocked lookup")
+	freeDone := make(chan int, 1)
+	go func() { freeDone <- jellyfinRequest(s, "GET", "/Users/Me", free, "").Code }()
+	select {
+	case code := <-freeDone:
+		if code != 200 {
+			close(release)
+			t.Fatalf("other token: %d", code)
+		}
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("another token's lookup waited behind the blocked one")
+	}
+	close(release)
+	if code := <-blockedDone; code != 200 {
+		t.Fatalf("blocked token after release: %d", code)
+	}
+}
+
+// B-m3：查表读到有效会话之后、写回内存之前令牌被注销——写回前发现期间有作废，锁内重查：注销完成后
+// 这个令牌不会被写回内存，也不再被接受。负缓存只会拒绝、不会让它复活，30 秒内不回表；Stop / Configure
+// 时清空（停服期间表可能变了，例如从备份恢复把行带回来）。
+func TestJellyfinPLAY14RevokedDuringLookupIsNotWrittenBack(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	clock := newP022Clock(time.Now().UTC().Truncate(time.Second))
+	token := p022Login(t, p022Server(t, clock), "", "")
+	s := p022Server(t, clock)
+	var loads atomic.Int32
+	loaded, release := make(chan struct{}), make(chan struct{})
+	realLoad := s.store.load
+	s.store.load = func(key [32]byte, now time.Time) (jellyfinSession, bool, error) {
+		n := loads.Add(1)
+		session, found, err := realLoad(key, now)
+		if n == 1 {
+			close(loaded)
+			<-release
+		}
+		return session, found, err
+	}
+	firstDone := make(chan int, 1)
+	go func() { firstDone <- jellyfinRequest(s, "GET", "/Users/Me", token, "").Code }()
+	p022Await(t, loaded, "the first lookup")
+	if w := jellyfinRequest(s, "POST", "/Sessions/Logout", token, ""); w.Code != 204 {
+		close(release)
+		t.Fatalf("logout: %d", w.Code)
+	}
+	close(release)
+	if code := <-firstDone; code != 401 {
+		t.Fatalf("a lookup that raced the logout must re-check: %d", code)
+	}
+	if p022Cached(s, token) {
+		t.Fatal("logged-out token was written back into memory")
+	}
+	if rows := p022SessionRows(t); len(rows) != 0 {
+		t.Fatalf("logout left rows: %d", len(rows))
+	}
+
+	// 负缓存：30 秒内直接拒绝、不回表；过期后回表，仍是 401。
+	before := loads.Load()
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 || loads.Load() != before {
+		t.Fatalf("negative cache: %d, lookups %d → %d", w.Code, before, loads.Load())
+	}
+	clock.advance(jellyfinUnknownTokenTTL + time.Second)
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 || loads.Load() != before+1 {
+		t.Fatalf("after the negative TTL: %d, lookups %d → %d", w.Code, before, loads.Load())
+	}
+
+	// 停服期间行回来了（备份恢复）：Stop 清空负缓存，重新开服后令牌照常有效。
+	p022SeedSession(t, token, "", clock.now(), clock.now().Add(time.Hour))
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 {
+		t.Fatalf("still negatively cached before the stop: %d", w.Code)
+	}
+	s.Stop()
+	p022Enable(s)
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 200 {
+		t.Fatalf("Stop must clear the negative cache: %d", w.Code)
+	}
+	// Configure 同样清空（它先停服）。
+	if w := jellyfinRequest(s, "GET", "/Users/Me", "never-issued-token", ""); w.Code != 401 {
+		t.Fatalf("unknown token: %d", w.Code)
+	}
+	s.mu.Lock()
+	cachedUnknown := len(s.unknownTokens)
+	s.mu.Unlock()
+	if cachedUnknown == 0 {
+		t.Fatal("fixture: the unknown token should be negatively cached")
+	}
+	if _, err := s.Configure(JellyfinConfigInput{Enabled: false, Username: "viewer"}); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	cachedUnknown = len(s.unknownTokens)
+	s.mu.Unlock()
+	if cachedUnknown != 0 {
+		t.Fatalf("Configure must clear the negative cache: %d", cachedUnknown)
+	}
+}
+
+// B-m3（-race）：同一令牌大量并发回表、跨刷新边界，同时注销；负缓存有界。
+func TestJellyfinPLAY14ConcurrentLookupsNegativeCacheIsBounded(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	base := time.Now().UTC().Truncate(time.Second)
+	clock := newP022Clock(base)
+	token := p022Login(t, p022Server(t, clock), "", "")
+	clock.set(base.Add(11 * time.Minute))
+	s := p022Server(t, clock)
+	var wg sync.WaitGroup
+	start := make(chan struct{})
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			for j := 0; j < 10; j++ {
+				jellyfinRequest(s, "GET", "/Users/Me", token, "")
+				jellyfinRequest(s, "GET", "/Users/Me", fmt.Sprintf("unknown-%d-%d", i, j), "")
+			}
+		}(i)
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		<-start
+		if w := jellyfinRequest(s, "POST", "/Sessions/Logout", token, ""); w.Code != 204 && w.Code != 401 {
+			t.Errorf("logout: %d", w.Code)
+		}
+	}()
+	close(start)
+	wg.Wait()
+	if p022Cached(s, token) {
+		t.Fatal("logged-out session resurrected in memory")
+	}
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 {
+		t.Fatalf("token after logout: %d", w.Code)
+	}
+	s.mu.Lock()
+	for i := 0; i < 2*jellyfinUnknownTokenLimit; i++ {
+		s.rememberUnknownTokenLocked(sha256.Sum256([]byte(fmt.Sprintf("spray-%d", i))), clock.now())
+	}
+	size := len(s.unknownTokens)
+	s.mu.Unlock()
+	if size > jellyfinUnknownTokenLimit {
+		t.Fatalf("negative cache exceeds its bound: %d", size)
+	}
+}
+
+// B-m4：Stop()（退出、维护模式）期间仍在鉴权的在途请求回 503，客户端不丢令牌，之后令牌照常有效；
+// Configure 停服期间的在途请求同样回 503，Configure 作废会话之后的请求回 401。写请求的复检同一口径。
+func TestJellyfinPLAY14StoppingRequestsGet503NotUnauthorized(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	clock := newP022Clock(time.Now().UTC().Truncate(time.Second))
+	token := p022Login(t, p022Server(t, clock), "", "")
+	s := p022Server(t, clock)
+	key := sha256.Sum256([]byte(token))
+
+	// 写请求的复检（authorized）：同代且会话在内存里放行；换代（停服中）回 503；会话不在回 401。
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 200 {
+		t.Fatalf("fixture: %d", w.Code)
+	}
+	s.mu.Lock()
+	generation := s.generation
+	s.mu.Unlock()
+	for _, c := range []struct {
+		identity jellyfinIdentity
+		want     int
+	}{
+		{jellyfinIdentity{generation: generation, token: key}, 0},
+		{jellyfinIdentity{generation: generation - 1, token: key}, 503},
+		{jellyfinIdentity{generation: generation, token: sha256.Sum256([]byte("revoked"))}, 401},
+	} {
+		w := httptest.NewRecorder()
+		rejected := jellyfinRejectUnauthorized(w, s.authorized(c.identity))
+		if (c.want == 0 && rejected) || (c.want != 0 && (!rejected || w.Code != c.want)) {
+			t.Fatalf("authorized(%+v): rejected=%v code=%d want %d", c.identity.generation, rejected, w.Code, c.want)
+		}
+	}
+
+	var block atomic.Bool
+	entered := make(chan struct{}, 1)
+	var release chan struct{}
+	realLoad := s.store.load
+	s.store.load = func(k [32]byte, now time.Time) (jellyfinSession, bool, error) {
+		session, found, err := realLoad(k, now)
+		if block.Load() {
+			entered <- struct{}{}
+			<-release
+		}
+		return session, found, err
+	}
+	// stopDuring 让一个请求卡在查表之后，调用 stop；等 stop 换代（它随后等在途请求结束）再放行。
+	stopDuring := func(stop func()) int {
+		t.Helper()
+		release = make(chan struct{})
+		block.Store(true)
+		code := make(chan int, 1)
+		go func() { code <- jellyfinRequest(s, "GET", "/Users/Me", token, "").Code }()
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("request did not reach the lookup")
+		}
+		block.Store(false)
+		s.mu.Lock()
+		before := s.generation
+		s.mu.Unlock()
+		stopped := make(chan struct{})
+		go func() { stop(); close(stopped) }()
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+			s.mu.Lock()
+			changed := s.generation != before
+			s.mu.Unlock()
+			if changed {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("stop did not change the generation")
+			}
+		}
+		close(release)
+		result := <-code
+		p022Await(t, stopped, "stop")
+		return result
+	}
+
+	s.Stop() // 清空内存，让下一个请求回表
+	p022Enable(s)
+	if code := stopDuring(s.Stop); code != 503 {
+		t.Fatalf("in-flight request during Stop: %d, want 503", code)
+	}
+	if got := len(p022SessionRows(t)); got != 1 {
+		t.Fatalf("Stop must not revoke: %d rows", got)
+	}
+	p022Enable(s)
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 200 {
+		t.Fatalf("token after Stop: %d", w.Code)
+	}
+
+	s.Stop()
+	p022Enable(s)
+	code := stopDuring(func() {
+		if _, err := s.Configure(JellyfinConfigInput{Enabled: false, Username: "viewer"}); err != nil {
+			t.Error(err)
+		}
+	})
+	if code != 503 {
+		t.Fatalf("in-flight request during Configure's stop: %d, want 503", code)
+	}
+	if got := len(p022SessionRows(t)); got != 0 {
+		t.Fatalf("Configure must revoke: %d rows", got)
+	}
+	p022Enable(s)
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 {
+		t.Fatalf("revoked token after Configure: %d, want 401", w.Code)
+	}
+}
+
+// B-m6：鉴权回表出错回 500（不回 401），内存副本不动、也不进负缓存；注销删行失败回 500，内存与表都不动，
+// 令牌照常可用。
+func TestJellyfinPLAY14DatabaseErrorsReturn500AndKeepMemory(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	base := time.Now().UTC().Truncate(time.Second)
+	clock := newP022Clock(base)
+	s := p022Server(t, clock)
+	token := p022Login(t, s, "", "")
+	failure := errors.New("database unavailable")
+	realTouch, realLoad, realRemove := s.store.touch, s.store.load, s.store.remove
+
+	// 满 10 分钟需要顺延时，顺延失败。
+	clock.set(base.Add(11 * time.Minute))
+	s.store.touch = func([32]byte, time.Time) (jellyfinSession, bool, error) { return jellyfinSession{}, false, failure }
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 500 {
+		t.Fatalf("refresh failure: %d, want 500", w.Code)
+	}
+	if !p022Cached(s, token) {
+		t.Fatal("a database error must not drop the cached session")
+	}
+	s.store.touch = realTouch
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 200 {
+		t.Fatalf("after the database recovers: %d", w.Code)
+	}
+
+	// 内存未命中时查表失败。
+	restarted := p022Server(t, clock)
+	restarted.store.load = func([32]byte, time.Time) (jellyfinSession, bool, error) { return jellyfinSession{}, false, failure }
+	if w := jellyfinRequest(restarted, "GET", "/Users/Me", token, ""); w.Code != 500 {
+		t.Fatalf("lookup failure: %d, want 500", w.Code)
+	}
+	restarted.mu.Lock()
+	negatives, cached := len(restarted.unknownTokens), len(restarted.sessions)
+	restarted.mu.Unlock()
+	if negatives != 0 || cached != 0 {
+		t.Fatalf("a failed lookup must leave both caches alone: negative %d cached %d", negatives, cached)
+	}
+	restarted.store.load = realLoad
+	if w := jellyfinRequest(restarted, "GET", "/Users/Me", token, ""); w.Code != 200 {
+		t.Fatalf("after the database recovers: %d", w.Code)
+	}
+
+	// 注销删行失败。
+	s.store.remove = func([32]byte) error { return failure }
+	if w := jellyfinRequest(s, "POST", "/Sessions/Logout", token, ""); w.Code != 500 {
+		t.Fatalf("logout failure: %d, want 500", w.Code)
+	}
+	if !p022Cached(s, token) || len(p022SessionRows(t)) != 1 {
+		t.Fatal("a failed logout must keep the memory copy and the row")
+	}
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 200 {
+		t.Fatalf("token after a failed logout: %d", w.Code)
+	}
+	s.store.remove = realRemove
+	if w := jellyfinRequest(s, "POST", "/Sessions/Logout", token, ""); w.Code != 204 {
+		t.Fatalf("logout: %d", w.Code)
+	}
+	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 {
+		t.Fatalf("token after logout: %d", w.Code)
+	}
+}
+
+// B-m5：列表的 HasSubtitles 一页只查一次字幕索引（不再逐项 COUNT）；结论与片库「无字幕」同口径
+// （逐项口径见 TestJellyfinMEDIA08HasSubtitlesMatchesLibraryNoSubtitleView）。
+func TestJellyfinMEDIA08HasSubtitlesListIsOneBatchQuery(t *testing.T) {
+	s, token, first, second := jellyfinLibraryFixture(t)
+	root := first.Directory
+	extra := make([]models.Video, 4)
+	for i := range extra {
+		extra[i] = models.Video{Name: fmt.Sprintf("extra-%d.mp4", i), Path: filepath.Join(root, fmt.Sprintf("extra-%d.mp4", i)), Directory: root, Duration: 100, Size: 10}
+		if err := database.DB.Create(&extra[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, row := range []interface{}{
+		&models.SubtitleIndexState{VideoID: extra[0].ID, HasSidecar: true},
+		&models.SubtitleIndexState{VideoID: extra[1].ID, SegmentCount: 2},
+		&models.MediaStream{VideoID: second.ID, StreamIndex: 0, StreamType: "subtitle", CodecName: "subrip"},
+	} {
+		if err := database.DB.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var statements atomic.Int32
+	const callback = "test:fix-j-subtitle-index-queries"
+	if err := database.DB.Callback().Query().After("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if strings.Contains(tx.Statement.SQL.String(), "subtitle_index_states") {
+			statements.Add(1)
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.DB.Callback().Query().Remove(callback) })
+
+	items, _ := jellyfinItems(t, jellyfinRequest(s, "GET", "/Items", token, ""))
+	if len(items) != 6 {
+		t.Fatalf("items %d", len(items))
+	}
+	if got := statements.Load(); got != 1 {
+		t.Fatalf("a page of %d items must query the subtitle index once, got %d", len(items), got)
+	}
+	want := map[uint]bool{first.ID: false, second.ID: true, extra[0].ID: true, extra[1].ID: true, extra[2].ID: false, extra[3].ID: false}
+	for _, item := range items {
+		_, id, _ := jellyfinParseID(item["Id"].(string))
+		if item["HasSubtitles"] != want[id] {
+			t.Errorf("video %d HasSubtitles=%v want %v", id, item["HasSubtitles"], want[id])
+		}
 	}
 }
