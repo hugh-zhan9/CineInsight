@@ -246,12 +246,6 @@ func (s *DatabaseSwitchService) Preflight(target string) (*DatabaseSwitchPreflig
 	return result, nil
 }
 
-// Switch 迁移数据并把后端写进配置。成功后必须重启才会生效。
-// 不带维护模式，只供没有 App 的场景使用；应用内的切换走 SwitchWithLifecycle。
-func (s *DatabaseSwitchService) Switch(ctx context.Context, target string) error {
-	return s.SwitchWithLifecycle(ctx, target, nil, nil)
-}
-
 // SwitchWithLifecycle 在维护模式下迁移并写配置（D-PC55 / APP-02）。
 //
 // enterMaintenance 由 App 注入（与恢复备份同一个 enterDatabaseRestoreMode：停后台服务、

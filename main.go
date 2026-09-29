@@ -23,6 +23,8 @@ func main() {
 		app.setStartupError(err)
 	} else {
 		defer database.Close()
+		// 在 wails.Run 之前：darwin 上 OnStartup 与页面加载并发，前端一加载就会查询中断的字幕任务。
+		app.markInterruptedSubtitleJobs()
 	}
 
 	// 默认禁用日志，设置页开启后再写入
@@ -42,7 +44,9 @@ func main() {
 		},
 		BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0}, // 设为透明
 		OnStartup:        app.startup,
-		OnShutdown:       app.shutdown,
+		// 有字幕、超分、代理或下载任务在跑时先请前端确认再退出（D-PC21）；内部发起的退出直接放行。
+		OnBeforeClose: app.beforeClose,
+		OnShutdown:    app.shutdown,
 		Bind: []interface{}{
 			app,
 		},

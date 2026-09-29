@@ -286,3 +286,21 @@ func TestLibraryStatsReportsPlayEventTotalsBySource(t *testing.T) {
 		t.Fatalf("空账本应给出 0 与空 map: total=%d bySource=%#v", empty.TotalPlayEvents, empty.PlaysBySource)
 	}
 }
+
+// LIB-10：播放成功把失效标记一并清掉时，返回给前端的记录也不能带着旧的失效原因。
+func TestPlayVideoSuccessClearsReturnedStaleReasonLIB10(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := createPlayEventFixtureVideo(t, t.TempDir(), "was-offline.mp4")
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).
+		Updates(map[string]interface{}{"is_stale": true, "stale_reason": models.StaleReasonOfflineRoot}).Error; err != nil {
+		t.Fatal(err)
+	}
+	stubSuccessfulPlaybackLaunch(t)
+	result, err := (&VideoService{}).PlayVideo(video.ID)
+	if err != nil || result == nil || !result.DispatchSucceeded || result.Video == nil {
+		t.Fatalf("文件在时播放应成功: result=%+v err=%v", result, err)
+	}
+	if result.Video.IsStale || result.Video.StaleReason != "" {
+		t.Fatalf("返回的记录应同时清掉失效标记与原因: stale=%v reason=%q", result.Video.IsStale, result.Video.StaleReason)
+	}
+}

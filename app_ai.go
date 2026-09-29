@@ -270,6 +270,7 @@ func (a *App) resetSemanticIndexService() {
 	service.SetEventEmitter(func(status services.SemanticIndexStatus) {
 		if a.ctx != nil && a.ctx.Err() == nil {
 			runtime.EventsEmit(a.ctx, "semantic-index-state", status)
+			a.notifyTaskCenterChanged()
 		}
 	})
 	a.semanticMu.Lock()

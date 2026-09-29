@@ -1083,3 +1083,32 @@ func TestVideoAndChartWatchedSyncWithoutLoopAPP05(t *testing.T) {
 		t.Fatalf("观影记录撤销应回写关联视频: %+v", refreshed)
 	}
 }
+
+// META-13：返回视频数组的页面（最近播放、语义搜索）用 GetAutomaticOverrideKinds 补「手动」角标，
+// 口径与分页结果一致：只含 present=true、一次查询、超过上限直接报错。
+func TestGetAutomaticOverrideKindsBatchesPresentOverridesMETA13(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	a := p020Video(t, models.Video{Name: "a.mp4"})
+	b := p020Video(t, models.Video{Name: "b.mp4"})
+	overrides := []models.VideoAutomaticTagOverride{
+		{VideoID: a.ID, AutomaticKind: shortVideoAutomaticTagKind, Present: true},
+		{VideoID: b.ID, AutomaticKind: lowResolutionAutomaticTagKind, Present: false},
+	}
+	if err := database.DB.Create(&overrides).Error; err != nil {
+		t.Fatal(err)
+	}
+	kinds, err := (&VideoService{}).GetAutomaticOverrideKinds([]uint{a.ID, b.ID, a.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(kinds) != 1 || len(kinds[a.ID]) != 1 || kinds[a.ID][0] != shortVideoAutomaticTagKind {
+		t.Fatalf("只应带出 present=true 的覆盖: %+v", kinds)
+	}
+	tooMany := make([]uint, automaticOverrideKindsBatchLimit+1)
+	for index := range tooMany {
+		tooMany[index] = uint(index + 1)
+	}
+	if _, err := (&VideoService{}).GetAutomaticOverrideKinds(tooMany); err == nil {
+		t.Fatal("超过一次查询上限应报错")
+	}
+}

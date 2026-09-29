@@ -130,7 +130,11 @@ func (a *App) GetShortFeedAccessStatus() (services.ShortFeedAccessStatus, error)
 	if err != nil {
 		return services.ShortFeedAccessStatus{}, err
 	}
-	if a.shortFeedServer != nil {
+	// 读服务实例要持生命周期锁：启停会替换 a.shortFeedServer（复审 A I-4）。
+	_ = a.withShortFeedLifecycle(func() error {
+		if a.shortFeedServer == nil {
+			return nil
+		}
 		server := a.shortFeedServer.Status()
 		status.Listening = server.Running
 		if server.Running {
@@ -139,7 +143,8 @@ func (a *App) GetShortFeedAccessStatus() (services.ShortFeedAccessStatus, error)
 				status.URL = server.LANURLs[0]
 			}
 		}
-	}
+		return nil
+	})
 	return status, nil
 }
 
@@ -147,10 +152,14 @@ func (a *App) GetShortFeedAccessStatus() (services.ShortFeedAccessStatus, error)
 // 地址由服务端决定、不接受前端传入：二维码内容不可能被换成别的地址。没有可用局域网地址
 // 或平台不支持二维码时返回空串。
 func (a *App) GetShortFeedQRCode() (string, error) {
-	if a.shortFeedServer == nil {
-		return "", nil
-	}
-	target := a.shortFeedServer.PreferredLANURL()
+	target := ""
+	// 读服务实例要持生命周期锁：启停会替换 a.shortFeedServer（复审 A I-4）。
+	_ = a.withShortFeedLifecycle(func() error {
+		if a.shortFeedServer != nil {
+			target = a.shortFeedServer.PreferredLANURL()
+		}
+		return nil
+	})
 	if target == "" {
 		return "", nil
 	}

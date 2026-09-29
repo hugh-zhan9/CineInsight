@@ -120,6 +120,7 @@ func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) 
 	}
 	video.LastPlayedAt = &now
 	video.IsStale = false
+	video.StaleReason = ""
 
 	return &PlaybackAttemptResult{
 		Video:             video,

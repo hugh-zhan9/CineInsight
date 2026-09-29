@@ -136,7 +136,11 @@ func (s *DirectoryService) UpdateDirectory(id uint, path, alias, mode string) (*
 func (s *DirectoryService) remapDirectory(current models.ScanDirectory, newPath, alias string, result *DirectoryUpdateResult) (*DirectoryUpdateResult, error) {
 	// 重映射也会改写图片侧的路径（rewriteLibraryPathPrefixTx 覆盖 images / image_directories），
 	// 与 MoveDirectory / RenameDirectory 同样按「视频锁在前、图片锁在后」的固定顺序持锁。
-	defer lockLibraryPathRewrite()()
+	unlock, err := lockLibraryPathRewrite()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	oldPath := result.OldPath
 	if info, err := os.Stat(newPath); err != nil {
@@ -163,7 +167,7 @@ func (s *DirectoryService) remapDirectory(current models.ScanDirectory, newPath,
 		return nil, err
 	}
 
-	err := database.Transaction(func(tx *gorm.DB) error {
+	err = database.Transaction(func(tx *gorm.DB) error {
 		counts, err := rewriteLibraryPathPrefixTx(tx, oldPath, newPath)
 		if err != nil {
 			return err

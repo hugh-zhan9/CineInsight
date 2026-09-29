@@ -1198,3 +1198,30 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - `original_symlink=true` 的行显示「原位置是符号链接」说明；
   - `record_only` 不提供「仍然移除记录」；
   - 墓碑对前端不可见。
+**PG 全量 `9fa32de`**（修复 I-2）：8 个包全部通过（services 812 秒）。
+
+**P-029 与修复 K 整合**（2026-09-29）：
+- **P-029**：接线清单共 22 处，都有测试和变异验证；`stale_reason` 全局守卫覆盖 246 个文件、11 处视频写入，均合规；绑定用 `GOTOOLCHAIN=go1.24.9 wails generate module` 生成。
+- **P-029 停下的项，由主代理补齐**：
+  - 恢复失败后续跑时，改调 `rebuildMovieChartService()`，并补上 `markInterruptedSubtitleJobs()`；
+  - 扫描后的自动清理分析改为 `StartAnalysisFromSettings()`；
+  - `GetShortFeedQRCode` 与 `GetShortFeedAccessStatus` 读服务实例时持生命周期锁（复审 A I-4，发布前必须完成）；
+  - 新增 `GetAutomaticOverrideKinds(videoIDs)`（服务层加 App 层，一次最多 1000 个）；
+  - `semantic-index-state`、`image-ai-tagging-progress`、`image-semantic-index-state` 三个事件触发任务中心刷新，并有源码契约测试；
+  - 播放成功时，返回的记录一并清空 `StaleReason`。成功路径上 GORM 已经回写过，这一行是在统计写入失败时兜底，测试只钉住返回行为，不防变异；
+  - 扫描摘要：设计与代码冲突（后端分不清启动扫描和手动扫描），主代理裁决给 `SyncScanDirectories` 加 `trigger` 参数，不另开平行绑定，旧调用点不传时按 manual 处理；`emitLibraryScanSummary` 改走可测的 `emitRuntimeEvent`；
+  - 修正 P-029 的 `TestWireStartupHooksEmitsRelocationAndTaskCenterChangesPLAY12APP03`：假的空闲探测要在一切可能触发真实探测的操作之前装上，否则一次在途的真实探测会把机器真实的空闲时长写进缓存，机器闲置超过 5 分钟时断言失败。这是环境相关的测试缺陷，不是代码回归；
+  - 合入后重新生成绑定。
+- **修复 K**：
+  - 写锁入口走 `lockLibraryPaths()`，涉及 14 个入口，另有守卫测试；
+  - legacy 行在清除以及 file_gone 的移除记录时改为墓碑；
+  - 删掉死导出 `Switch`；
+  - 10 处变异检查，全部被测试拦下。
+- **待办**：
+  - 修复 J 合入后，把 `enhancement_pipeline.go` 里 `publishOutput` 调用的 `BeginLibraryMaintenance()` 改成 `lockLibraryPaths()`，并删掉守卫里对它的放行；
+  - 维护终态下，路径锁入口的报错仍是英文的 `database is in maintenance mode`，前端要翻译。
+- **前端（P-034 等）**：
+  - `VideoListPage.vue`、`EntityLibraryPage.vue` 调用 `UpdateVideoWatchProgress` 要改成 5 个参数，否则运行时保存进度会失败，而且 `npm test` 查不出来；
+  - `App.vue` 启动扫描时调用 `SyncScanDirectories('startup')`，`IncrementalScanBar` 调用 `SyncScanDirectories('manual')`。
+- **P-040**：`SetAvatarRemoverIfUnset` 的兜底已成空操作，可以删掉。
+**PG 全量 `d91f36e`**（修复 I-1）：8 个包全部通过（services 931 秒）。**P-029 + 修复 K 整合**：SQLite 全量通过，8 个包全部 ok；`npm test` 通过，68 个测试文件共 774 条用例。

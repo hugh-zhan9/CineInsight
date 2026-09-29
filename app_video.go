@@ -122,6 +122,10 @@ func (a *App) BatchMoveVideos(videoIDs []uint, destinationDirectory string) *ser
 
 func (a *App) MoveDirectory(sourceDirectory, destinationParent string) (*services.FolderMigrationResult, error) {
 	result, err := a.videoService.MoveDirectory(sourceDirectory, destinationParent)
+	if err == nil {
+		// 迁移会连带改写扫描目录与排除规则（rewriteLibraryPathPrefixTx），监听要按新路径重配（D-PC10）。
+		a.reconfigureLibraryWatcher()
+	}
 	log.Printf("API MoveDirectory source=%s destinationParent=%s result=%+v err=%v", sourceDirectory, destinationParent, result, err)
 	return result, err
 }

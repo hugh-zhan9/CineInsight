@@ -384,7 +384,9 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	// 恢复失败续跑：database.Init 已经把 database.DB 换成了新的连接，而榜单服务
 	// 握的是进入恢复模式之前那一个（已 Close）。不重建的话榜单页从此每次读都报
 	// 「sql: database is closed」，而且只在这条失败续跑的路径上出现。
-	a.resetMovieChartService()
+	a.rebuildMovieChartService()
+	// 换了数据库句柄：上一次进程或这次恢复前留下的排队/运行中字幕任务同样标成中断（D-PC20）。
+	a.markInterruptedSubtitleJobs()
 	// 手机端服务按开关决定是否重新监听：restartShortFeedServerLocked 先停旧实例，再看
 	// ShouldStart()。此前这里无条件 startShortFeedServer，用户关掉的手机端访问会在一次
 	// 失败的恢复之后被重新打开（PLAY-01）。

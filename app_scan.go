@@ -4,8 +4,6 @@ import (
 	"log"
 	"video-master/models"
 	"video-master/services"
-
-	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // ===== 扫描、可见性与迁移残留（产品完善度 P-011） =====
@@ -17,7 +15,7 @@ func (a *App) emitLibraryScanSummary(trigger string, result *services.ScanSyncRe
 	if result == nil || a.ctx == nil {
 		return
 	}
-	runtime.EventsEmit(a.ctx, "library-scan-summary", services.LibraryScanSummaryEvent{Trigger: trigger, Result: result})
+	emitRuntimeEvent(a.ctx, "library-scan-summary", services.LibraryScanSummaryEvent{Trigger: trigger, Result: result})
 }
 
 // ValidateScanDirectory 在把目录加入扫描根之前预检：是否存在、是否重复、是否与已有根嵌套。

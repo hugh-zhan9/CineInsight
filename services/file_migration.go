@@ -34,10 +34,13 @@ type FileMigrationResult struct {
 // MoveVideo moves a managed video and its sibling SRT into an existing directory.
 // The filesystem move is rolled back when the database path update fails.
 func (s *VideoService) MoveVideo(id uint, destinationDirectory string) (*FileMigrationResult, error) {
-	libraryPathMutationMu.Lock()
-	defer libraryPathMutationMu.Unlock()
+	unlock, err := lockLibraryPaths()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
-	destinationDirectory, err := existingDirectory(destinationDirectory)
+	destinationDirectory, err = existingDirectory(destinationDirectory)
 	if err != nil {
 		return nil, err
 	}
@@ -169,9 +172,13 @@ func (s *VideoService) BatchMoveVideos(videoIDs []uint, destinationDirectory str
 // managed video and configured scan-directory path contained by the source.
 func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) (*FolderMigrationResult, error) {
 	// 路径前缀改写同时改图片表，所以视频与图片两把路径写锁都要持有（Minor 4）。
-	defer lockLibraryPathRewrite()()
+	unlock, err := lockLibraryPathRewrite()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
-	sourceDirectory, err := existingSourceDirectory(sourceDirectory)
+	sourceDirectory, err = existingSourceDirectory(sourceDirectory)
 	if err != nil {
 		return nil, fmt.Errorf("源文件夹无效: %w", err)
 	}
@@ -309,9 +316,13 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 // RenameDirectory renames a managed directory in place and rewrites every
 // persisted path that points at the directory or one of its descendants.
 func (s *VideoService) RenameDirectory(sourceDirectory, newName string) (*FolderMigrationResult, error) {
-	defer lockLibraryPathRewrite()()
+	unlock, err := lockLibraryPathRewrite()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
-	sourceDirectory, err := existingSourceDirectory(sourceDirectory)
+	sourceDirectory, err = existingSourceDirectory(sourceDirectory)
 	if err != nil {
 		return nil, fmt.Errorf("源文件夹无效: %w", err)
 	}
@@ -532,13 +543,17 @@ type PathRewriteCounts struct {
 
 // lockLibraryPathRewrite 为路径前缀改写拿两把路径写锁，顺序固定：视频锁在前、图片锁在后
 // （任何同时需要两把锁的地方都按这个顺序，避免死锁）。返回按相反顺序释放的函数。
-func lockLibraryPathRewrite() func() {
-	libraryPathMutationMu.Lock()
+// 视频锁经 lockLibraryPaths：维护围栏生效时返回 database.ErrMaintenance，两把锁都不持有（修复 K）。
+func lockLibraryPathRewrite() (func(), error) {
+	unlockVideos, err := lockLibraryPaths()
+	if err != nil {
+		return nil, err
+	}
 	imagePathMutationMu.Lock()
 	return func() {
 		imagePathMutationMu.Unlock()
-		libraryPathMutationMu.Unlock()
-	}
+		unlockVideos()
+	}, nil
 }
 
 // rewriteLibraryPathPrefixTx 是「路径前缀改写」的唯一实现（D-PC07）：文件夹改名、

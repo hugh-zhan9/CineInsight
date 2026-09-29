@@ -116,6 +116,19 @@ func loadAutomaticOverrideKinds(videoIDs []uint) (map[uint][]string, error) {
 	return kinds, nil
 }
 
+// automaticOverrideKindsBatchLimit 限制一次查询的视频数：调用方是按页展示的列表，远用不到这么多。
+const automaticOverrideKindsBatchLimit = 1000
+
+// GetAutomaticOverrideKinds 批量返回这些视频的「手动」角标数据（D-PC36），口径与
+// LibraryVideoPage.automatic_override_kinds 相同；供最近播放、语义搜索等返回 []models.Video 的页面补齐。
+func (s *VideoService) GetAutomaticOverrideKinds(videoIDs []uint) (map[uint][]string, error) {
+	ids := uniqueUintIDs(videoIDs)
+	if len(ids) > automaticOverrideKindsBatchLimit {
+		return nil, fmt.Errorf("一次最多查询 %d 个视频的标签覆盖", automaticOverrideKindsBatchLimit)
+	}
+	return loadAutomaticOverrideKinds(ids)
+}
+
 // newLibraryVideoPage 组装一页结果并批量带出自动标签覆盖。
 func newLibraryVideoPage(videos []models.Video, next *LibraryVideoCursor) (*LibraryVideoPage, error) {
 	ids := make([]uint, 0, len(videos))

@@ -90,6 +90,12 @@ func (a *App) SearchLibraryVideoPage(request services.LibraryVideoPageRequest) (
 	return a.videoService.SearchLibraryVideoPage(request.Filter, request.Cursor, request.Limit)
 }
 
+// GetAutomaticOverrideKinds 批量返回视频的「手动」角标数据（D-PC36），键为视频 ID。
+// 片库分页结果已自带这份数据；最近播放、语义搜索等返回视频数组的页面用它补齐。
+func (a *App) GetAutomaticOverrideKinds(videoIDs []uint) (map[uint][]string, error) {
+	return a.videoService.GetAutomaticOverrideKinds(videoIDs)
+}
+
 // CountLibraryVideos 返回当前筛选命中的视频条数，供片库结果条回显。
 func (a *App) CountLibraryVideos(filter services.LibraryFilter) (int64, error) {
 	return a.videoService.CountLibraryVideos(filter)
@@ -176,7 +182,13 @@ func (a *App) DeleteSavedLibraryView(viewID uint) error {
 	return err
 }
 
-func (a *App) SyncScanDirectories() (*services.ScanSyncResult, error) {
+// SyncScanDirectories 全量扫描所有扫描根。trigger 由前端给出：启动时的那次传 "startup"，
+// 扫描条上的手动扫描传 "manual"；为空或不认识时按 "manual" 处理。完成后按 trigger 发
+// library-scan-summary（D-PC09）。
+func (a *App) SyncScanDirectories(trigger string) (*services.ScanSyncResult, error) {
+	if trigger != services.ScanTriggerStartup {
+		trigger = services.ScanTriggerManual
+	}
 	dirs, err := a.directoryService.GetAllDirectories()
 	if err != nil {
 		log.Printf("API SyncScanDirectories load dirs err=%v", err)
@@ -194,8 +206,9 @@ func (a *App) SyncScanDirectories() (*services.ScanSyncResult, error) {
 		go a.triggerAITaggingAuto("scan")
 		aiWakeQueued = true
 	}
-	log.Printf("API SyncScanDirectories dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d ai_wake_queued=%v",
-		result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors), aiWakeQueued)
+	log.Printf("API SyncScanDirectories trigger=%s dirs=%d scanned=%d added=%d relocated=%d deleted=%d refreshed=%d skipped=%d errors=%d ai_wake_queued=%v",
+		trigger, result.Directories, result.Scanned, result.Added, result.Relocated, result.Deleted, result.MetadataRefreshed, result.Skipped, len(result.Errors), aiWakeQueued)
+	a.emitLibraryScanSummary(trigger, result)
 	a.runPostScanAutomation(result)
 	return result, nil
 }
@@ -251,7 +264,7 @@ func (a *App) runPostScanAutomation(result *services.ScanSyncResult) {
 			if err := a.runGatedAutoTask(
 				string(services.BackgroundTaskCleanup),
 				func(context.Context, services.TaskPauseHook) error {
-					_, err := a.cleanupService.StartAnalysis(services.CleanupCriteria{})
+					_, err := a.cleanupService.StartAnalysisFromSettings()
 					return err
 				},
 			); err != nil {

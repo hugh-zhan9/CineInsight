@@ -69,10 +69,12 @@ var (
 // TrashForceRemoveConfirmText 是「仍然移除记录（不动文件）」必须原样传回的确认文案（m3）。
 const TrashForceRemoveConfirmText = "移除记录"
 
-// trashStateRemoved 是 legacy_trash 条目被「仍然移除记录」或「移除记录」（claimed_by_active）移除后的墓碑状态
-// （修复 I I-A）。旧版 trash/ 目录是本应用自己的目录：条目一旦硬删，那个目录就可能失去登记，里面残留的文件
-// （还没清掉的原文件、与原路径同 inode 的另一个名字）会被下一轮扫描当成新文件收录。墓碑保留条目（含 trash_path），
-// 让 loadLegacyTrashDirs 继续把该目录算作「已登记」；媒体记录保持软删、不可见，也不再挂任何标签。
+// trashStateRemoved 是 legacy 条目（legacy_trash，或回填之前 file_moved=true 的空 mode 旧行）被「仍然移除记录」、
+// 「移除记录」（claimed_by_active 或 file_gone）或「清除」（文件删掉之后）移除后的墓碑状态（修复 I I-A；清除与
+// file_gone 的移除记录见修复 K）。旧版 trash/ 目录是本应用自己的目录：条目一旦硬删，那个目录就可能失去登记，里面残留的
+// 文件（还没清掉的原文件、与原路径同 inode 的另一个名字、同目录里其他旧版删除留下的文件）会被下一轮扫描当成新文件收录。
+// 墓碑保留条目（含 trash_path），让 loadLegacyTrashDirs 继续把该目录算作「已登记」；媒体记录保持软删、不可见，
+// 也不再挂任何标签。
 //
 // 墓碑不出现在任何列表、计数、用量或待处理汇总里：回收站接口一律把它当作不存在（loadTrashRow、ListTrashEntries），
 // 各统计只数 deleted / file_gone，不会数到它。它没有出口，也不可恢复。
@@ -1607,8 +1609,8 @@ func (s *TrashService) RestoreTrashBatch(kind, batchID string) (*BatchResult, er
 	return result, err
 }
 
-// PurgeTrashEntries 清除废纸篓里的文件并硬删媒体记录。仅对 mode 为 trash / legacy_trash 且
-// state 为 deleted / file_gone 的条目生效；文件存在时先核对身份再删除。
+// PurgeTrashEntries 清除废纸篓里的文件并硬删媒体记录（legacy_trash 行改为墓碑、媒体记录保持软删，修复 K）。
+// 仅对 mode 为 trash / legacy_trash 且 state 为 deleted / file_gone 的条目生效；文件存在时先核对身份再删除。
 func (s *TrashService) PurgeTrashEntries(kind string, ids []uint) (*BatchResult, error) {
 	spec, err := trashKindFor(kind)
 	if err != nil {
@@ -1623,7 +1625,8 @@ func (s *TrashService) PurgeTrashEntries(kind string, ids []uint) (*BatchResult,
 
 // RemoveGoneTrashEntries 是列表项 remove_record 动作的入口：移除「废纸篓文件已被清除」（file_gone）的条目，
 // 以及文件已放回原处、却已由原位置上另一条活跃记录收录的重复条目（claimed_by_active，deleted、file_gone，
-// 或恢复中断的 restoring，I-1 / 修复 I m-c）。硬删记录与条目（claimed 的 legacy_trash 行改为墓碑，修复 I I-A），不动文件。
+// 或恢复中断的 restoring，I-1 / 修复 I m-c）。硬删记录与条目（legacy 行改为墓碑：claimed 见修复 I I-A，file_gone 见修复 K），
+// 不动文件。
 func (s *TrashService) RemoveGoneTrashEntries(kind string, ids []uint) (*BatchResult, error) {
 	spec, err := trashKindFor(kind)
 	if err != nil {
@@ -1664,7 +1667,10 @@ func (s *TrashService) ForceRemoveTrashRecords(kind string, ids []uint, confirmT
 }
 
 func (s *TrashService) forceRemoveOne(spec trashKindSpec, id uint) error {
-	unlock := lockTrashKind(spec)
+	unlock, err := lockTrashKind(spec)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	row, _, _, err := loadTrashRow(spec, id)
@@ -1712,20 +1718,28 @@ func (r trashRow) isLegacyTrash() bool {
 	return isLegacyTrashFacts(r.putBackFacts())
 }
 
-// removeTrashRecordTx 是「移除记录」类操作（仍然移除记录、claimed_by_active 的 remove_record）对一行的数据库处理，
-// 不做任何文件操作。条件是这一行此刻仍是读出时的状态（row.State）：
-//   - legacy_trash 行改为墓碑（tombstoneLegacyTrashEntryTx，修复 I I-A）：条目保留、旧版 trash/ 目录继续登记，
+// removeTrashRecordTx 是「移除记录」类操作（仍然移除记录、claimed_by_active 的 remove_record、file_gone 的
+// remove_record）对一行的数据库处理，不做任何文件操作。条件是这一行此刻仍是读出时的状态（row.State），
+// 处理方式见 retireTrashEntryTx。
+func removeTrashRecordTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
+	return retireTrashEntryTx(tx, spec, row, []string{row.State})
+}
+
+// retireTrashEntryTx 是回收站条目「从回收站里拿掉」的唯一数据库实现（移除记录各入口与清除共用），条件是条目此刻的
+// 状态仍在 states 之中：
+//   - legacy 行（legacy_trash，或回填之前 file_moved=true 的空 mode 旧行）改为墓碑（tombstoneLegacyTrashEntryTx，
+//     修复 I I-A；清除与 file_gone 的移除记录同样如此，修复 K）：条目与 trash_path 保留、旧版 trash/ 目录继续登记，
 //     媒体记录保持软删；
 //   - 其余模式硬删条目与媒体记录（hardDeleteEntityTx，级联生效）。
-func removeTrashRecordTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
+func retireTrashEntryTx(tx *gorm.DB, spec trashKindSpec, row trashRow, states []string) error {
 	if row.isLegacyTrash() {
-		return tombstoneLegacyTrashEntryTx(tx, spec, row)
+		return tombstoneLegacyTrashEntryTx(tx, spec, row, states)
 	}
-	return hardDeleteEntityTx(tx, spec, row, []string{row.State})
+	return hardDeleteEntityTx(tx, spec, row, states)
 }
 
 // tombstoneLegacyTrashEntryTx 把一条 legacy_trash 条目置为墓碑（trashStateRemoved，修复 I I-A），不硬删：
-//   - 条目用条件更新（WHERE state = 读出时的状态），状态已变化则整笔回滚；
+//   - 条目用条件更新（WHERE state IN states），状态已变化则整笔回滚；
 //   - 条目引用的媒体记录此刻若是活跃的（状态不一致），整笔回滚——与硬删同一条安全线；
 //   - 媒体记录保持软删（不硬删、不可见）；它不会再被恢复，所以一并解除它的标签关联，让标签用量里的
 //     「回收站中」计数（GetTagUsageCounts 的 trashed_*）不再数到它，与硬删时的级联一致；
@@ -1733,9 +1747,9 @@ func removeTrashRecordTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
 //     与原路径同 inode 的另一个名字）不会被扫描当成新文件收录。
 //
 // 不做任何文件操作。
-func tombstoneLegacyTrashEntryTx(tx *gorm.DB, spec trashKindSpec, row trashRow) error {
+func tombstoneLegacyTrashEntryTx(tx *gorm.DB, spec trashKindSpec, row trashRow, states []string) error {
 	result := tx.Table(spec.table).
-		Where("id = ? AND state = ?", row.ID, row.State).
+		Where("id = ? AND state IN ?", row.ID, states).
 		Updates(map[string]interface{}{"state": trashStateRemoved, "last_error": "", "updated_at": time.Now()})
 	if result.Error != nil {
 		return result.Error
@@ -1756,13 +1770,14 @@ func tombstoneLegacyTrashEntryTx(tx *gorm.DB, spec trashKindSpec, row trashRow) 
 	return tx.Exec("DELETE FROM image_tags WHERE image_id = ?", row.EntityID).Error
 }
 
-func lockTrashKind(spec trashKindSpec) func() {
+// lockTrashKind 为一项回收站写操作拿对应媒体的路径写锁。视频锁经 lockLibraryPaths：维护围栏生效时立即返回
+// database.ErrMaintenance，不在「待重启」终态下永久等锁（修复 K）。图片锁不被维护入口持有，照常等待。
+func lockTrashKind(spec trashKindSpec) (func(), error) {
 	if spec.kind == trashKindVideo {
-		libraryPathMutationMu.Lock()
-		return libraryPathMutationMu.Unlock
+		return lockLibraryPaths()
 	}
 	imagePathMutationMu.Lock()
-	return imagePathMutationMu.Unlock
+	return imagePathMutationMu.Unlock, nil
 }
 
 func loadTrashRow(spec trashKindSpec, id uint) (trashRow, trashFileID, string, error) {
@@ -1857,7 +1872,10 @@ func hardDeleteImageTx(tx *gorm.DB, id uint) error {
 }
 
 func (s *TrashService) purgeOne(spec trashKindSpec, id uint) error {
-	unlock := lockTrashKind(spec)
+	unlock, err := lockTrashKind(spec)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	row, want, sha, err := loadTrashRow(spec, id)
@@ -1927,8 +1945,10 @@ func (s *TrashService) purgeOne(spec trashKindSpec, id uint) error {
 			return fmt.Errorf("检查回收站文件失败: %w", statErr)
 		}
 	}
+	// 文件已删掉（或确实已不在）之后：非 legacy 行硬删条目与媒体记录；legacy 行改为墓碑、媒体记录保持软删，
+	// 让旧版 trash/ 目录继续登记，里面残留的其他文件不会被下一轮扫描当成新文件收录（修复 K，与 I-A 同一口径）。
 	return database.Transaction(func(tx *gorm.DB) error {
-		return hardDeleteEntityTx(tx, spec, row, []string{trashStateDeleted, models.TrashStateFileGone})
+		return retireTrashEntryTx(tx, spec, row, []string{trashStateDeleted, models.TrashStateFileGone})
 	})
 }
 
@@ -1947,7 +1967,10 @@ func removeClaimedDuplicate(spec trashKindSpec, row trashRow) error {
 }
 
 func (s *TrashService) removeGoneOne(spec trashKindSpec, id uint) error {
-	unlock := lockTrashKind(spec)
+	unlock, err := lockTrashKind(spec)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 
 	row, _, _, err := loadTrashRow(spec, id)
@@ -1974,8 +1997,9 @@ func (s *TrashService) removeGoneOne(spec trashKindSpec, id uint) error {
 	if trashRowPutBack(row) {
 		return ErrTrashPutBack
 	}
+	// 非 legacy 行硬删；legacy 行改为墓碑，旧版 trash/ 目录继续登记（修复 K，与 I-A 同一口径）。
 	return database.Transaction(func(tx *gorm.DB) error {
-		return hardDeleteEntityTx(tx, spec, row, []string{models.TrashStateFileGone})
+		return removeTrashRecordTx(tx, spec, row)
 	})
 }
 

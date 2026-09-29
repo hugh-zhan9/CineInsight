@@ -86,9 +86,36 @@ var libraryPathMutationMu sync.RWMutex
 
 // BeginLibraryMaintenance waits for active path readers/writers and blocks new
 // media-path mutations until the returned release function is called.
+//
+// 这是恢复备份 / 切换后端进入维护模式（App 的 enterDatabaseRestoreMode）拿路径写锁的入口：它在立维护围栏**之前**
+// 调用，所以不查围栏、照常等锁。其他取路径写锁的地方一律经 lockLibraryPaths（修复 K）。
 func BeginLibraryMaintenance() func() {
 	libraryPathMutationMu.Lock()
 	return libraryPathMutationMu.Unlock
+}
+
+// lockLibraryPaths 是全局路径锁 libraryPathMutationMu 写锁的获取入口（维护入口 BeginLibraryMaintenance 除外，修复 K）。
+// 返回释放函数。
+//
+// 「待重启」终态下 enterDatabaseRestoreMode 拿的写锁与维护围栏一直保持到进程退出，直接 Lock() 的入口（回收站恢复、
+// 清除与移除记录、永久删除、移动文件、文件夹改名 / 迁移 / 重映射……）会永久阻塞。所以：
+//   - 拿锁**之前**查一次维护围栏，生效就立即返回 database.ErrMaintenance，不等锁；
+//   - 否则直接 Lock()：写者之间的排队与「写者优先于新读者」的语义不变，不轮询；
+//   - 拿到写锁之后围栏已经生效（等锁期间围栏被立起，而立围栏的一方没有经路径写锁），放锁并同样返回 ErrMaintenance：
+//     之后的数据库读写反正都会被围栏拒绝，不要先动了文件再失败。
+//
+// 已知边界：查完围栏、还没排上锁的那一刻，维护入口恰好拿到了写锁并进入终态，这个写者会一直等下去（主代理接受，
+// 与「不轮询、保持写者优先」二选一）。围栏只是判断那一刻的快照，真正的写入拒绝仍由数据库回调里的 enter 负责。
+func lockLibraryPaths() (func(), error) {
+	if database.MaintenanceActive() {
+		return nil, database.ErrMaintenance
+	}
+	libraryPathMutationMu.Lock()
+	if database.MaintenanceActive() {
+		libraryPathMutationMu.Unlock()
+		return nil, database.ErrMaintenance
+	}
+	return libraryPathMutationMu.Unlock, nil
 }
 
 // libraryPathReadLockRetry 是路径读锁拿不到（写锁被占，或有写者在等）时的重试间隔（修复 I m1）。
@@ -367,8 +394,11 @@ func (s *VideoService) ListTrashEntries() ([]models.VideoTrashEntry, error) {
 
 // RestoreTrashEntry 将一个软删除视频恢复到原路径。
 func (s *VideoService) RestoreTrashEntry(entryID uint) (*models.Video, error) {
-	libraryPathMutationMu.Lock()
-	defer libraryPathMutationMu.Unlock()
+	unlock, err := lockLibraryPaths()
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 
 	var entry models.VideoTrashEntry
 	if err := database.DB.First(&entry, entryID).Error; err != nil {
@@ -1114,8 +1144,11 @@ func (s *VideoService) cancelInterruptedTrashDeletion(entry *models.VideoTrashEn
 
 // ReconcileTrashEntries 恢复上次进程中断时尚未完成的文件与数据库操作。
 func (s *VideoService) ReconcileTrashEntries() error {
-	libraryPathMutationMu.Lock()
-	defer libraryPathMutationMu.Unlock()
+	unlock, err := lockLibraryPaths()
+	if err != nil {
+		return err
+	}
+	defer unlock()
 
 	var entries []models.VideoTrashEntry
 	if err := database.DB.Where("state IN ?", []string{trashStatePendingMove, trashStateRestoring, trashStateRollback}).Find(&entries).Error; err != nil {
@@ -1373,12 +1406,20 @@ func (s *VideoService) DeleteVideosDetailed(videoIDs []uint, deleteFile bool, op
 func (s *VideoService) PermanentlyDeleteVideos(videoIDs []uint) *BatchResult {
 	result := newBatchResult(len(videoIDs), "")
 	for _, videoID := range videoIDs {
-		libraryPathMutationMu.Lock()
-		code, err := s.permanentlyDeleteVideo(videoID)
-		libraryPathMutationMu.Unlock()
+		code, err := s.permanentlyDeleteVideoLocked(videoID)
 		result.addOutcome(videoID, code, err)
 	}
 	return result
+}
+
+// permanentlyDeleteVideoLocked 在路径写锁下永久删除一项；写锁拿不到（维护围栏生效）时返回 database.ErrMaintenance（修复 K）。
+func (s *VideoService) permanentlyDeleteVideoLocked(id uint) (string, error) {
+	unlock, err := lockLibraryPaths()
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	return s.permanentlyDeleteVideo(id)
 }
 
 func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {

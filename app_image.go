@@ -33,6 +33,7 @@ func (a *App) resetImageAITaggingService() {
 	svc.SetEventEmitter(func(status services.ImageAITaggingStatus) {
 		if a.ctx != nil && a.ctx.Err() == nil {
 			runtime.EventsEmit(a.ctx, "image-ai-tagging-progress", status)
+			a.notifyTaskCenterChanged()
 		}
 	})
 	a.imageAITagMu.Lock()
@@ -122,6 +123,7 @@ func (a *App) resetImageSemanticIndexService() {
 	service.SetEventEmitter(func(status services.ImageSemanticIndexStatus) {
 		if a.ctx != nil && a.ctx.Err() == nil {
 			runtime.EventsEmit(a.ctx, "image-semantic-index-state", status)
+			a.notifyTaskCenterChanged()
 		}
 	})
 	a.imageSemanticMu.Lock()
