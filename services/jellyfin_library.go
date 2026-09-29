@@ -361,6 +361,8 @@ func (s *JellyfinServer) deleteItem(w http.ResponseWriter, r *http.Request, raw 
 	}
 	if err := s.video.DeleteVideo(id, true); err != nil {
 		// The error text can carry the media path; the desktop trash view shows the recorded reason.
+		// ErrTrashUnsupportedVolume (the volume has no system trash) takes this same mapping: remote
+		// clients never get a permanent delete, the desktop offers that choice (详细设计 §2.1).
 		log.Printf("[Jellyfin] 删除视频 %d 失败，详情见桌面回收站", id)
 		jellyfinError(w, 500, "删除失败，请在桌面端查看回收站状态")
 		return
@@ -516,6 +518,17 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 		if err := json.Unmarshal([]byte(view.TagIDsJSON), &filter.TagIDs); err != nil {
 			return nil, 0, start, err
 		}
+		if err := json.Unmarshal([]byte(view.PersonIDsJSON), &filter.PersonIDs); err != nil {
+			return nil, 0, start, err
+		}
+		// 视图保留已删除标签与人物的原 ID（D-PC35）：与桌面一致，失效条件直接忽略，
+		// 而不是按 AND 语义把整个视图查空（META-07）。
+		if filter.TagIDs, _, err = activeTagIDs(filter.TagIDs); err != nil {
+			return nil, 0, start, err
+		}
+		if filter.PersonIDs, _, err = activePersonIDs(filter.PersonIDs); err != nil {
+			return nil, 0, start, err
+		}
 	case jellyCollection, jellyGroup, jellyPerson:
 	default:
 		return nil, 0, start, errJellyfinQuery
@@ -562,15 +575,16 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 			query = query.Where(entry.column+" = ?", b)
 		}
 	}
+	// 「可续播」与片库的「继续观看」同一口径（D-PC42）：resumableSQL，重看中的已看片也算。
 	if value := jellyfinParam(q, "IsResumable"); value != "" {
 		b, err := strconv.ParseBool(value)
 		if err != nil {
 			return nil, 0, start, errJellyfinQuery
 		}
 		if b {
-			query = query.Where("videos.is_watched = ? AND videos.watch_position_seconds > 0", false)
+			query = query.Where(resumableSQL)
 		} else {
-			query = query.Where("videos.is_watched = ? OR videos.watch_position_seconds <= 0", true)
+			query = query.Where(jellyfinNotResumableSQL)
 		}
 	}
 	for _, f := range strings.Split(strings.ToLower(jellyfinParam(q, "Filters")), ",") {
@@ -583,7 +597,7 @@ func (s *JellyfinServer) queryItems(r *http.Request, q url.Values, relatedTo uin
 		case "isunplayed":
 			query = query.Where("videos.is_watched = ?", false)
 		case "isresumable":
-			query = query.Where("videos.is_watched = ? AND videos.watch_position_seconds > 0", false)
+			query = query.Where(resumableSQL)
 		case "isnotfolder":
 		case "isfolder":
 			query = query.Where("1 = 0")
@@ -708,7 +722,7 @@ func (s *JellyfinServer) orderVideos(query *gorm.DB, q url.Values, filter Librar
 	if sortBy := jellyfinParam(q, "SortBy"); sortBy != "" {
 		// Keys with no counterpart in this model (ProductionYear, IsFolder, …) are ignored per D-02;
 		// every accepted key maps through this table, so client text never reaches the SQL.
-		columns := map[string]string{"sortname": jellyfinSortNameExpr, "name": "LOWER(videos.name)", "datecreated": "videos.created_at", "datelastcontentadded": "videos.created_at", "dateplayed": "videos.last_played_at", "playcount": "videos.play_count", "runtime": "videos.duration", "communityrating": "videos.personal_rating", "random": "RANDOM()"}
+		columns := map[string]string{"sortname": jellyfinSortNameExpr, "name": "LOWER(videos.name)", "datecreated": "videos.created_at", "datelastcontentadded": "videos.created_at", "dateplayed": jellyfinDatePlayedExpr, "playcount": "videos.play_count", "runtime": "videos.duration", "communityrating": "videos.personal_rating", "random": "RANDOM()"}
 		ordered := false
 		for i, sortKey := range strings.Split(strings.ToLower(sortBy), ",") {
 			column, ok := columns[strings.TrimSpace(sortKey)]
@@ -719,6 +733,11 @@ func (s *JellyfinServer) orderVideos(query *gorm.DB, q url.Values, filter Librar
 			if column == "RANDOM()" {
 				query = query.Order(column)
 				continue
+			}
+			if column == jellyfinDatePlayedExpr {
+				// Never-played rows sort as the smallest value on both backends (PG's default puts
+				// NULL first under DESC), so "recently played" lists end with them.
+				query = query.Order("CASE WHEN " + column + " IS NULL THEN 0 ELSE 1 END" + jellyfinSortDirection(orders, i))
 			}
 			query = query.Order(column + jellyfinSortDirection(orders, i))
 		}
@@ -735,6 +754,11 @@ func (s *JellyfinServer) orderVideos(query *gorm.DB, q url.Values, filter Librar
 			direction = " DESC"
 		}
 		return query.Order("CASE WHEN videos.personal_rating IS NULL THEN 1 ELSE 0 END ASC").Order("videos.personal_rating" + direction).Order("videos.id DESC"), nil
+	}
+	if filter.SmartView == LibraryViewContinueWatching || jellyfinResumeRequested(q) {
+		// Same order as the library's 继续观看 (PLAY-09, ListContinueWatchingWithFilter): latest
+		// progress first; legacy rows without a progress time last on both backends.
+		return query.Order("CASE WHEN videos.watch_progress_updated_at IS NULL THEN 1 ELSE 0 END ASC").Order("videos.watch_progress_updated_at DESC").Order("videos.id DESC"), nil
 	}
 	if filter.SmartView == LibraryViewRecentlyAdded {
 		return query.Order("videos.created_at DESC").Order("videos.id DESC"), nil
@@ -938,7 +962,11 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[stri
 	item["MediaSources"] = sources
 	item["MediaStreams"] = summary.streams
 	item["Container"] = sources[0]["Container"]
-	item["HasSubtitles"] = summary.hasSubtitles
+	hasSubtitles, err := jellyfinHasSubtitles(r, video.ID, summary.hasSubtitles)
+	if err != nil {
+		return nil, err
+	}
+	item["HasSubtitles"] = hasSubtitles
 	if summary.width > 0 && summary.height > 0 {
 		item["Width"], item["Height"] = summary.width, summary.height
 		item["AspectRatio"] = jellyfinAspectRatio(summary.width, summary.height)
@@ -951,17 +979,34 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video) (map[stri
 	}
 	return item, nil
 }
+
+// jellyfinHasSubtitles uses the library's definition (D-PC17, MEDIA-08): hasAnySubtitleSQL covers
+// an indexed same-name .srt, side-car subtitles (has_sidecar) and embedded subtitle streams, the
+// same predicate as the 无字幕 view. The same-name .srt found on disk right now (listed as the
+// external stream) or an embedded stream in the snapshot already answers yes without a query.
+// has_sidecar is written by the desktop's full subtitle index sync; HTTP reads do not index.
+func jellyfinHasSubtitles(r *http.Request, videoID uint, streamsSayYes bool) (bool, error) {
+	if streamsSayYes {
+		return true, nil
+	}
+	var count int64
+	if err := database.DB.WithContext(r.Context()).Model(&models.Video{}).Where("videos.id = ?", videoID).Where(hasAnySubtitleSQL).Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func jellyfinUserData(video models.Video) map[string]interface{} {
-	// 已看就不报续播位置：手动标已看不动断点（误点可撤销），自动判完成才清零，
-	// 两种情况下客户端都不该给一个「已播完」的条目挂续播条并从中途接着播。
-	// 这也和 IsResumable 的筛选口径（is_watched=false AND position>0）对得上。
-	positionTicks := int64(video.WatchPositionSeconds * 1e7)
-	if video.IsWatched {
-		positionTicks = 0
+	// 续播位置只在断点有效（resumable，D-PC42）时如实报告：已看之后又播到中途（重看）照常续播；
+	// 标已看之前留下的旧断点不报，客户端不会给「已播完」的条目从中途接着播。
+	// 与 IsResumable 的筛选口径（resumableSQL）一致。
+	positionTicks := int64(0)
+	if resumable(&video) {
+		positionTicks = int64(video.WatchPositionSeconds * 1e7)
 	}
 	data := map[string]interface{}{"Key": jellyfinID(jellyVideo, video.ID), "ItemId": jellyfinID(jellyVideo, video.ID), "IsFavorite": video.IsFavorite, "Played": video.IsWatched, "PlaybackPositionTicks": positionTicks, "PlayCount": video.PlayCount}
-	if video.LastPlayedAt != nil {
-		data["LastPlayedDate"] = video.LastPlayedAt.UTC().Format(time.RFC3339)
+	if played := jellyfinDatePlayed(video); played != nil {
+		data["LastPlayedDate"] = played.UTC().Format(time.RFC3339)
 	}
 	return data
 }
@@ -991,6 +1036,25 @@ var jellyfinKindFlags = []struct {
 
 // jellyfinSortNameExpr is the SQL for Jellyfin's SortName: the user title when set, else the file name.
 const jellyfinSortNameExpr = "LOWER(CASE WHEN videos.display_title <> '' THEN videos.display_title ELSE videos.name END)"
+
+// jellyfinNotResumableSQL is IsResumable=false: every row for which resumableSQL is not true.
+// IS NOT TRUE also takes the rows where resumableSQL evaluates to NULL (a watched row with a
+// breakpoint but no progress time), which Go's resumable reports as not resumable.
+const jellyfinNotResumableSQL = "(" + resumableSQL + ") IS NOT TRUE"
+
+// jellyfinDatePlayedExpr is DatePlayed = max(last_played_at, watch_progress_updated_at) (D-PC42):
+// Jellyfin and in-app progress only move watch_progress_updated_at, desktop launches only
+// last_played_at. NULL when neither is set.
+const jellyfinDatePlayedExpr = "(CASE WHEN videos.watch_progress_updated_at IS NULL THEN videos.last_played_at WHEN videos.last_played_at IS NULL OR videos.watch_progress_updated_at > videos.last_played_at THEN videos.watch_progress_updated_at ELSE videos.last_played_at END)"
+
+// jellyfinDatePlayed is the Go side of jellyfinDatePlayedExpr, for UserData.LastPlayedDate.
+func jellyfinDatePlayed(video models.Video) *time.Time {
+	played := video.LastPlayedAt
+	if progress := video.WatchProgressUpdatedAt; progress != nil && (played == nil || progress.After(*played)) {
+		played = progress
+	}
+	return played
+}
 
 // List parameters may arrive as one delimited value or as repeated keys, like Jellyfin's
 // CommaDelimitedCollectionModelBinder accepts; the separator matches how each one is parsed.
@@ -1068,6 +1132,15 @@ func jellyfinScopeEmpty(q url.Values, folders bool) bool {
 		return true
 	}
 	return false
+}
+
+// jellyfinResumeRequested reports a request narrowed to resumable items (Items/Resume sets
+// IsResumable=true); its values were validated by queryItems before ordering.
+func jellyfinResumeRequested(q url.Values) bool {
+	if resumable, _ := strconv.ParseBool(jellyfinParam(q, "IsResumable")); resumable {
+		return true
+	}
+	return jellyfinCSVContains(jellyfinParam(q, "Filters"), "IsResumable")
 }
 
 // jellyfinSortOrders validates SortOrder; entries pair with SortBy keys by position.

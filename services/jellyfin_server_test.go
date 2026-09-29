@@ -54,6 +54,8 @@ func jellyfinLogin(t *testing.T, s *JellyfinServer) string {
 	return body.AccessToken
 }
 func TestJellyfinAuthenticationBoundary(t *testing.T) {
+	// 登录会话落库（D-PC47），鉴权测试也要有库。
+	setupVideoServiceTestDB(t)
 	s := jellyfinTestServer(t)
 	if w := jellyfinRequest(s, "POST", "/Users/AuthenticateByName", "", `{"Username":"viewer","Pw":"wrong"}`); w.Code != 401 {
 		t.Fatal(w.Code)
@@ -111,14 +113,21 @@ func TestJellyfinAuthenticationBoundary(t *testing.T) {
 	}
 }
 func TestJellyfinExpiredRevokedAndBoundedSessions(t *testing.T) {
+	setupVideoServiceTestDB(t)
 	s := jellyfinTestServer(t)
 	token := jellyfinLogin(t, s)
 	key := sha256.Sum256([]byte(token))
 	session := s.sessions[key]
 	session.expires = time.Now().Add(-time.Second)
 	s.sessions[key] = session
-	if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 {
-		t.Fatal(w.Code)
+	// 内存只是 jellyfin_sessions 的缓存：过期要表里也过期，否则下一次未命中会从表里取回来。
+	if err := database.DB.Model(&models.JellyfinSession{}).Where("token_hash = ?", jellyfinTokenHash(key)).Update("expires_at", time.Now().UTC().Add(-time.Second)).Error; err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if w := jellyfinRequest(s, "GET", "/Users/Me", token, ""); w.Code != 401 {
+			t.Fatal(i, w.Code)
+		}
 	}
 	token = jellyfinLogin(t, s)
 	s.Stop()
@@ -131,13 +140,27 @@ func TestJellyfinExpiredRevokedAndBoundedSessions(t *testing.T) {
 	if w := jellyfinRequest(s, "POST", "/Users/AuthenticateByName", "", `{}`); w.Code != 429 {
 		t.Fatal(w.Code)
 	}
+	// 上限按表里未过期的会话计（重启后内存为空，上限仍然成立）；已过期的行不占名额。
+	setupVideoServiceTestDB(t)
 	s = jellyfinTestServer(t)
+	now := time.Now().UTC()
 	for i := 0; i < 64; i++ {
-		key := [32]byte{byte(i)}
-		s.sessions[key] = jellyfinSession{expires: time.Now().Add(time.Hour)}
+		key := [32]byte{byte(i), 1}
+		if err := database.DB.Create(&models.JellyfinSession{TokenHash: jellyfinTokenHash(key), LastSeenAt: now, ExpiresAt: now.Add(time.Hour)}).Error; err != nil {
+			t.Fatal(err)
+		}
 	}
 	if w := jellyfinRequest(s, "POST", "/Users/AuthenticateByName", "", `{"Username":"viewer","Pw":"test-password"}`); w.Code != 429 {
 		t.Fatal(w.Code)
+	}
+	if err := database.DB.Model(&models.JellyfinSession{}).Where("token_hash = ?", jellyfinTokenHash([32]byte{0, 1})).Update("expires_at", now.Add(-time.Minute)).Error; err != nil {
+		t.Fatal(err)
+	}
+	jellyfinLogin(t, s)
+	var rows int64
+	database.DB.Model(&models.JellyfinSession{}).Count(&rows)
+	if rows != 64 {
+		t.Fatalf("expired row not pruned on login: %d", rows)
 	}
 }
 func TestJellyfinConfigureAndGenericSavePreserveCredentials(t *testing.T) {
@@ -236,6 +259,7 @@ func TestJellyfinPortConflictIsVisibleAndNeverFallsBack(t *testing.T) {
 }
 
 func TestJellyfinStopCancelsAndDrainsReadHandlers(t *testing.T) {
+	setupVideoServiceTestDB(t)
 	s := jellyfinTestServer(t)
 	token := jellyfinLogin(t, s)
 	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})

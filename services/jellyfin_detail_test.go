@@ -358,8 +358,11 @@ func TestJellyfinDeleteMovesVideoToTrash(t *testing.T) {
 	if total != 1 || len(items) != 1 || items[0]["Id"] != jellyfinID(jellyVideo, first.ID) {
 		t.Errorf("remaining %v", items)
 	}
-	// Revoked sessions cannot delete even inside the same process lifetime.
-	s.Stop()
+	// Revoked sessions cannot delete even inside the same process lifetime. Stop() alone no longer
+	// revokes (sessions persist, D-PC47); the user turning the server off in settings does.
+	if _, err := s.Configure(JellyfinConfigInput{Enabled: false, Username: "viewer"}); err != nil {
+		t.Fatal(err)
+	}
 	s.mu.Lock()
 	s.config.JellyfinEnabled = true
 	s.mu.Unlock()

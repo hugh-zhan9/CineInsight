@@ -2,7 +2,9 @@ package services
 
 import (
 	"crypto/sha256"
+	"errors"
 	"golang.org/x/crypto/bcrypt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -18,14 +20,8 @@ func jellyfinToken(r *http.Request) string {
 		if strings.HasPrefix(strings.ToLower(header), "bearer ") {
 			return strings.TrimSpace(header[7:])
 		}
-		if at := strings.IndexByte(header, ' '); at >= 0 {
-			header = header[at+1:]
-		}
-		for _, field := range strings.Split(header, ",") {
-			key, value, ok := strings.Cut(strings.TrimSpace(field), "=")
-			if ok && strings.EqualFold(key, "Token") {
-				return strings.Trim(value, "\"")
-			}
+		if value, ok := jellyfinHeaderField(header, "Token"); ok {
+			return value
 		}
 	}
 	token := ""
@@ -42,6 +38,35 @@ func jellyfinToken(r *http.Request) string {
 		}
 	}
 	return token
+}
+
+// jellyfinHeaderField reads one field of a MediaBrowser authorization header value
+// (`MediaBrowser Client="…", DeviceId="…", Token="…"`).
+func jellyfinHeaderField(header, name string) (string, bool) {
+	if at := strings.IndexByte(header, ' '); at >= 0 {
+		header = header[at+1:]
+	}
+	for _, field := range strings.Split(header, ",") {
+		key, value, ok := strings.Cut(strings.TrimSpace(field), "=")
+		if ok && strings.EqualFold(key, name) {
+			return strings.Trim(value, "\""), true
+		}
+	}
+	return "", false
+}
+
+// jellyfinAuthField returns the first non-empty field of that name in either authorization header.
+func jellyfinAuthField(r *http.Request, name string) string {
+	for _, header := range []string{"Authorization", "X-Emby-Authorization"} {
+		value := r.Header.Get(header)
+		if strings.HasPrefix(strings.ToLower(value), "bearer ") {
+			continue
+		}
+		if field, ok := jellyfinHeaderField(value, name); ok && strings.TrimSpace(field) != "" {
+			return strings.TrimSpace(field)
+		}
+	}
+	return ""
 }
 
 func (s *JellyfinServer) login(w http.ResponseWriter, r *http.Request, config models.Settings, generation uint64) {
@@ -82,21 +107,39 @@ func (s *JellyfinServer) login(w http.ResponseWriter, r *http.Request, config mo
 		return
 	}
 	key := sha256.Sum256([]byte(token))
-	session := jellyfinSession{expires: time.Now().Add(30 * 24 * time.Hour), id: hexSessionID(key)}
+	now := s.now()
 	s.mu.Lock()
 	for key, session := range s.sessions {
-		if !time.Now().Before(session.expires) {
+		if !now.Before(session.expires) {
 			delete(s.sessions, key)
 		}
 	}
-	if generation != s.generation || !s.config.JellyfinEnabled {
-		s.mu.Unlock()
+	current := generation == s.generation && s.config.JellyfinEnabled
+	s.mu.Unlock()
+	if !current {
 		jellyfinError(w, 401, "登录配置已变更")
 		return
 	}
-	if len(s.sessions) >= 64 {
-		s.mu.Unlock()
+	// 会话先落库再放进内存（D-PC47）：表里只有令牌的哈希，重启后令牌仍然有效。
+	deviceID, client := jellyfinClientInfo(r)
+	session, err := createJellyfinSession(key, deviceID, client, now)
+	if errors.Is(err, errJellyfinSessionLimit) {
 		jellyfinError(w, 429, "登录会话已达上限")
+		return
+	}
+	if err != nil {
+		log.Printf("[Jellyfin] 登录会话写入失败")
+		jellyfinError(w, 500, "登录失败")
+		return
+	}
+	s.mu.Lock()
+	if generation != s.generation || !s.config.JellyfinEnabled {
+		s.mu.Unlock()
+		// 服务在登录途中被停掉或改了配置：这个令牌还没交给客户端，行也不留。
+		if err := deleteJellyfinSession(key); err != nil {
+			log.Printf("[Jellyfin] 未送达的登录会话清理失败")
+		}
+		jellyfinError(w, 401, "登录配置已变更")
 		return
 	}
 	s.sessions[key] = session

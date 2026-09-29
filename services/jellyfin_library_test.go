@@ -153,6 +153,7 @@ func TestJellyfinTagsCollectionsAndSavedViewIntersection(t *testing.T) {
 	}
 }
 func TestJellyfinOriginalRangeSubtitleAndWatchState(t *testing.T) {
+	useFreshViewEventDedup(t, viewEventDedupCapacity)
 	s, token, first, _ := jellyfinLibraryFixture(t)
 	id := jellyfinID(jellyVideo, first.ID)
 	r := httptest.NewRequest("GET", "/Videos/"+id+"/stream?Static=true&api_key="+token, nil)
@@ -211,10 +212,14 @@ func TestJellyfinOriginalRangeSubtitleAndWatchState(t *testing.T) {
 	if !video.IsWatched || video.IsFavorite || video.WatchPositionSeconds != 0 {
 		t.Fatalf("completed %+v", video)
 	}
-	var events int64
-	database.DB.Model(&models.PlayEvent{}).Count(&events)
-	if events != 0 {
-		t.Fatal("progress changed play ledger")
+	// 进度上报不产生「启动播放」事件，也不动计数列；看完那次只追加一条有效观看 jellyfin_view（D-PC43）。
+	var ledger []models.PlayEvent
+	database.DB.Find(&ledger)
+	if len(ledger) != 1 || ledger[0].Source != PlayEventSourceJellyfinView || ledger[0].VideoID != first.ID {
+		t.Fatalf("progress changed play ledger: %+v", ledger)
+	}
+	if database.DB.First(&video, first.ID); video.PlayCount != 0 || video.RandomPlayCount != 0 {
+		t.Fatalf("progress changed play counters: %+v", video)
 	}
 	if err := os.Remove(first.Path); err != nil {
 		t.Fatal(err)

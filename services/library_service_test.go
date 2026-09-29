@@ -969,9 +969,9 @@ func TestSetVideoWatchedKeepsResumePoint(t *testing.T) {
 	}
 }
 
-// 已看的视频上报中途位置：位置照记（手动标已看可能只是误点，断点要留着），
-// 但 Jellyfin 那边不能同时报 Played=true 和非零续播位置。
-func TestJellyfinUserDataHidesResumePointForWatchedVideo(t *testing.T) {
+// 已看的视频上报中途位置：位置照记（重看），Jellyfin 与片库同一口径（resumable，D-PC42 / P-022）
+// 如实报告这个续播位置；标已看之前留下的旧断点仍报 0（该断言见 TestJellyfinPLAY09UserDataFollowsResumable）。
+func TestJellyfinUserDataReportsRewatchResumePoint(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
 	video := models.Video{Name: "rewatch.mp4", Path: filepath.Join(t.TempDir(), "rewatch.mp4"), Directory: "/tmp", Duration: 7200}
@@ -992,7 +992,7 @@ func TestJellyfinUserDataHidesResumePointForWatchedVideo(t *testing.T) {
 	if data["Played"] != true {
 		t.Fatalf("已看应当报 Played=true: %+v", data)
 	}
-	if ticks, _ := data["PlaybackPositionTicks"].(int64); ticks != 0 {
-		t.Fatalf("已看不该再报续播位置，否则客户端会从中途接着播: %v", ticks)
+	if ticks, _ := data["PlaybackPositionTicks"].(int64); ticks != int64(1800*1e7) {
+		t.Fatalf("重看写下的断点可续播，应当如实报告: %v", ticks)
 	}
 }

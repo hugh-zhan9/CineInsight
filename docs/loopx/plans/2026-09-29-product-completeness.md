@@ -1110,3 +1110,32 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - **真机交接**（新增）：IINA 启动时是否会写 watch_later。如果会，第二道保护会让会话过早结束。
 - 独立复审：修复 H 涉及人物关系删除，属于破坏性改动，需要复审。
 修复 H 整合验证：SQLite 全量中 services 包有 1 条偶发失败，`TestPlaybackMissingFileOnOnlineRootWithoutCandidateStaysMissingPLAY12` 报 TempDir 清理时「directory not empty」，原因是后台 goroutine 在测试结束后仍在写临时目录。单独跑 5 次、services 包整包重跑都通过，其余 7 个包全绿。这条测试留待改成确定性写法。
+
+**修复 G 复审**（2026-09-29，opus-xhigh 只读，登录中断后续跑）：**不通过**。0 个 Critical，1 个 Important，6 个 Minor，全部交给修复 I-1 处理。
+- **I-A（Important）**：「仍然移除记录」或 claimed 的「移除记录」硬删了 legacy 条目后，旧版 `trash/` 目录不再被登记，下一轮扫描会把里面的文件重新收录（C1 同类问题）。
+  - 主代理裁决：legacy 行改为墓碑状态，不出现在任何列表和计数中，媒体记录保持软删，仍然不动任何文件；墓碑条目计入「已登记目录」。
+- **Minor**：
+  - m-a：原路径是指向回收站文件的符号链接时，「清除」会删掉真实文件。改为拒绝，返回 `path_occupied`。
+  - m-b：条目记有哈希时，恢复前先做哈希核对；在会复用 inode 的卷上存在误判边界，写进注释。
+  - m-c：扫描时跳过 restoring 行；ForceRemove 与 claimed 覆盖 restoring 行被占用的情形。
+  - m-d：守卫位点的测试缺口。
+  - m-e：ForceRemove 不对 record_only 开放。
+  - m-f：路径相等时直接拒绝；`fileLinkCount` 改用 `//go:build unix`。
+- **同时交给修复 I-1**：修复 F 复审的 m1（维护终态下取路径读锁永久阻塞，改为围栏生效即立即返回 `ErrMaintenance`），以及修复 H 整合时发现的偶发测试。
+- **修复 I-2**：修复 F 复审的 m2–m12。
+
+**PG 全量 `a6f492f`**：进行中。
+
+**P-022 交付与整合**（2026-09-29）：六项全部实现。P-022 自报 SQLite 全量通过、`-race` 干净，17 项变异检查都能被测试拦下。契约变化已写入详细设计 §1.2b。
+- **P-029**：
+  - 重新生成绑定：新增 `GetJellyfinDiagnostics`；
+  - 启动完成后安排一轮无字幕索引同步，写入 `has_sidecar`。`HasSubtitles` 与「无字幕」视图都依赖这一步，合并后也作为 P-014 下游要求的落点。
+- **前端（P-033）**：
+  - 设置页展示诊断信息，`last_failure` 可能为 null；
+  - 保存 Jellyfin 配置前提示「所有已登录的客户端需要重新登录」。
+- **收尾架构检查**：Jellyfin 可续播列表的排序子句与 `ListContinueWatchingWithFilter` 重复了三行，需要合并成共享函数。
+- **残留风险**：
+  - 从备份恢复时会话表一同回滚，备份之后作废的令牌会重新生效；
+  - 会话上限 64 跨重启保留；
+  - 没有 `PlaySessionId` 时，同一设备在同一次运行中重看同一部片只记一次。
+- **独立安全评审**：待安排。范围是只存令牌哈希、过期与作废语义、诊断信息不泄露敏感内容。

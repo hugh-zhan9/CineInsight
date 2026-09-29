@@ -332,6 +332,7 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 	var input struct {
 		ItemId        string
 		PositionTicks *int64
+		PlaySessionId string
 	}
 	if !jellyfinDecode(w, r, &input) {
 		return
@@ -353,8 +354,16 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 		return
 	}
 	// 仍要走一遍可见性校验：看不见的视频不该被它的进度上报改状态。
-	if _, err := s.visibleVideo(r, id); s.libraryError(w, err) {
+	video, err := s.visibleVideo(r, id)
+	if s.libraryError(w, err) {
 		return
+	}
+	// 有效观看（jellyfin_view）按播放会话去重：开始上报只立累计起点，进度与停止上报才判阈值与看完。
+	deviceID, _ := jellyfinClientInfo(r)
+	viewKey := jellyfinViewSessionKey(id, strings.TrimSpace(input.PlaySessionId), deviceID, identity.token)
+	started, stopped := len(parts) == 2, len(parts) == 3 && parts[2] == "stopped"
+	if input.PositionTicks == nil && stopped {
+		s.viewSessions.forget(viewKey)
 	}
 	if input.PositionTicks != nil {
 		seconds := float64(*input.PositionTicks) / 1e7
@@ -365,6 +374,11 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 		// 时长由服务层取库里的值。
 		if _, err = s.video.UpdateVideoWatchProgress(id, seconds, 0, false, WatchProgressOriginResume); s.libraryError(w, err) {
 			return
+		}
+		if started {
+			s.viewSessions.advance(viewKey, seconds, s.now(), false)
+		} else {
+			s.recordJellyfinView(*video, viewKey, seconds, stopped)
 		}
 	}
 	w.WriteHeader(204)

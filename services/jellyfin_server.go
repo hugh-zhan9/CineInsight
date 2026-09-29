@@ -49,16 +49,21 @@ type JellyfinStatus struct {
 	StartupError string   `json:"startup_error"`
 }
 
+// jellyfinSession is the in-memory copy of one jellyfin_sessions row; expires and seen mirror
+// expires_at and last_seen_at as last written.
 type jellyfinSession struct {
 	expires time.Time
+	seen    time.Time
 	id      string
 }
 
 // JellyfinServer owns only protocol authentication and the HTTP listener.
 type JellyfinServer struct {
-	lifecycle     sync.Mutex
-	mu            sync.Mutex
-	writes        sync.Mutex
+	lifecycle sync.Mutex
+	mu        sync.Mutex
+	writes    sync.Mutex
+	// sessionIO serializes the database side of session lookups, refreshes and logouts.
+	sessionIO     sync.Mutex
 	requests      sync.WaitGroup
 	server        *http.Server
 	config        models.Settings
@@ -73,18 +78,26 @@ type JellyfinServer struct {
 	probe         *MediaProbeService
 	people        *PersonService
 	collections   *CollectionService
+	// diagnostics is guarded by mu; viewSessions has its own lock.
+	diagnostics  jellyfinDiagnosticsState
+	viewSessions jellyfinViewTracker
+	// now is the clock for session expiry and view accumulation; tests replace it.
+	now func() time.Time
 	// Set by the library adapter; authentication always runs before dispatch.
 	api http.Handler
 }
 
 // NewJellyfinServer creates a disabled server without opening a port.
 func NewJellyfinServer(video *VideoService, thumbnail *ThumbnailService, probe *MediaProbeService, people *PersonService, collections *CollectionService) *JellyfinServer {
-	s := &JellyfinServer{video: video, thumbnail: thumbnail, probe: probe, people: people, collections: collections, sessions: make(map[[32]byte]jellyfinSession), loginSlot: make(chan struct{}, 1)}
+	s := &JellyfinServer{video: video, thumbnail: thumbnail, probe: probe, people: people, collections: collections, sessions: make(map[[32]byte]jellyfinSession), loginSlot: make(chan struct{}, 1), now: time.Now}
 	s.api = http.HandlerFunc(s.serveLibrary)
 	return s
 }
 
-// Configure serializes persistence, revocation and listener replacement.
+// Configure serializes persistence, revocation and listener replacement. Every saved change
+// (disabling, account or password, port) deletes all persisted sessions in the same transaction
+// as the settings write (D-PC47). The listener is stopped first so no in-flight login can insert
+// a session after the deletion; a failed save restarts the previously persisted configuration.
 func (s *JellyfinServer) Configure(input JellyfinConfigInput) (JellyfinStatus, error) {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
@@ -92,6 +105,7 @@ func (s *JellyfinServer) Configure(input JellyfinConfigInput) (JellyfinStatus, e
 	if err := database.DB.First(&config).Error; err != nil {
 		return s.Status(), fmt.Errorf("读取 Jellyfin 设置失败")
 	}
+	previous := config
 	if input.Port == 0 {
 		input.Port = 8096
 	}
@@ -123,14 +137,25 @@ func (s *JellyfinServer) Configure(input JellyfinConfigInput) (JellyfinStatus, e
 		config.JellyfinServerID = id
 	}
 	config.JellyfinEnabled, config.JellyfinPort, config.JellyfinUsername = input.Enabled, input.Port, input.Username
-	// GORM's error logger interpolates SQL parameters, including password hashes.
-	result := database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Model(&models.Settings{}).Where("id = ?", config.ID).Updates(map[string]interface{}{
-		"jellyfin_enabled": config.JellyfinEnabled, "jellyfin_port": config.JellyfinPort, "jellyfin_username": config.JellyfinUsername, "jellyfin_password_hash": config.JellyfinPasswordHash, "jellyfin_server_id": config.JellyfinServerID,
+	s.stopLocked()
+	// GORM's error logger interpolates SQL parameters, including password and token hashes.
+	err := database.DB.Session(&gorm.Session{Logger: logger.Default.LogMode(logger.Silent)}).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&models.Settings{}).Where("id = ?", config.ID).Updates(map[string]interface{}{
+			"jellyfin_enabled": config.JellyfinEnabled, "jellyfin_port": config.JellyfinPort, "jellyfin_username": config.JellyfinUsername, "jellyfin_password_hash": config.JellyfinPasswordHash, "jellyfin_server_id": config.JellyfinServerID,
+		})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return gorm.ErrRecordNotFound
+		}
+		return deleteAllJellyfinSessionsTx(tx)
 	})
-	if result.Error != nil || result.RowsAffected != 1 {
+	if err != nil {
+		// Nothing was written: the old settings and their sessions stay valid, as before the call.
+		s.startLocked(previous)
 		return s.Status(), fmt.Errorf("保存 Jellyfin 设置失败")
 	}
-	s.stopLocked()
 	s.startLocked(config)
 	return s.Status(), nil
 }
@@ -191,7 +216,9 @@ func (s *JellyfinServer) startLocked(config models.Settings) {
 	}()
 }
 
-// Stop revokes credentials and closes active streams before returning.
+// Stop closes the listener and active streams before returning. It is used on app exit and for
+// maintenance (restore, backend switch), so it only drops the in-memory session cache: persisted
+// sessions stay valid after a restart (D-PC47). Revocation is Configure's job.
 func (s *JellyfinServer) Stop() {
 	s.lifecycle.Lock()
 	defer s.lifecycle.Unlock()
@@ -246,8 +273,13 @@ func (s *JellyfinServer) Handler() http.Handler {
 			jellyfinError(w, 403, "访问来源不允许")
 			return
 		}
-		// Logging starts inside the LAN boundary so outside hosts cannot fill app.log.
-		defer jellyfinLogRequest(r.Method, path, r.URL.Query(), recorder)
+		// Logging starts inside the LAN boundary so outside hosts cannot fill app.log. The
+		// diagnostics keep an in-memory copy of the last failure line (same masking as the log).
+		_, client := jellyfinClientInfo(r)
+		defer func() {
+			status, shape := jellyfinLogRequest(r.Method, path, r.URL.Query(), recorder)
+			s.noteRequest(s.now(), client, r.Method, shape, status)
+		}()
 		s.mu.Lock()
 		config, generation := s.config, s.generation
 		if config.JellyfinEnabled {
@@ -268,8 +300,18 @@ func (s *JellyfinServer) Handler() http.Handler {
 			return
 		}
 		token := jellyfinToken(r)
+		if token == "" {
+			jellyfinError(w, 401, "需要有效的登录令牌")
+			return
+		}
 		identity := jellyfinIdentity{generation: generation, token: sha256.Sum256([]byte(token))}
-		if token == "" || !s.authorized(identity) {
+		valid, err := s.authenticate(identity)
+		if err != nil {
+			log.Printf("[Jellyfin] 登录会话校验失败")
+			jellyfinError(w, 500, "登录会话校验失败，请稍后重试")
+			return
+		}
+		if !valid {
 			jellyfinError(w, 401, "需要有效的登录令牌")
 			return
 		}
@@ -278,9 +320,11 @@ func (s *JellyfinServer) Handler() http.Handler {
 		urlCopy.Path = path
 		r.URL = &urlCopy
 		if path == "/sessions/logout" && r.Method == "POST" {
-			s.mu.Lock()
-			delete(s.sessions, identity.token)
-			s.mu.Unlock()
+			if err := s.logout(identity); err != nil {
+				log.Printf("[Jellyfin] 注销会话失败")
+				jellyfinError(w, 500, "注销失败，请稍后重试")
+				return
+			}
 			w.WriteHeader(204)
 			return
 		}
@@ -300,11 +344,14 @@ func (s *JellyfinServer) Handler() http.Handler {
 	})
 }
 
+// authorized re-checks an admitted request before a write: authenticate already put the session
+// in memory, so a missing entry or a changed generation means it was revoked meanwhile (logout,
+// Configure, Stop). It never goes to the database.
 func (s *JellyfinServer) authorized(identity jellyfinIdentity) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	session, ok := s.sessions[identity.token]
-	return ok && s.config.JellyfinEnabled && identity.generation == s.generation && time.Now().Before(session.expires)
+	return ok && s.config.JellyfinEnabled && identity.generation == s.generation && s.now().Before(session.expires)
 }
 
 func (s *JellyfinServer) systemInfo(config models.Settings, host string) map[string]interface{} {
@@ -404,21 +451,17 @@ var jellyfinLoggedValues = map[string]bool{"sortby": true, "sortorder": true, "i
 
 // jellyfinLogRequest writes the route shape, status and parameter names (§九): IDs are masked,
 // and tokens, search terms and media paths never appear. Successful media transfers and
-// progress reports are too frequent to log; every rejected request is logged.
-func jellyfinLogRequest(method, path string, query url.Values, recorder *jellyfinStatusWriter) {
+// progress reports are too frequent to log; every rejected request is logged. It returns the
+// response status and, when a line was written, the masked route shape it printed.
+func jellyfinLogRequest(method, path string, query url.Values, recorder *jellyfinStatusWriter) (int, string) {
 	status := recorder.status
 	if status == 0 {
 		status = http.StatusOK
 	}
 	if status < 400 && (strings.HasPrefix(path, "/videos/") || strings.Contains(path, "/images/") || strings.HasSuffix(path, "/download") || strings.HasPrefix(path, "/sessions/playing")) {
-		return
+		return status, ""
 	}
-	segments := strings.Split(path, "/")
-	for i, segment := range segments {
-		if compact := strings.ReplaceAll(segment, "-", ""); len(compact) == 32 && strings.Trim(compact, "0123456789abcdef") == "" {
-			segments[i] = "{id}"
-		}
-	}
+	shape := jellyfinRouteShape(path)
 	params := make([]string, 0, len(query))
 	for key, values := range query {
 		if jellyfinLoggedValues[strings.ToLower(key)] {
@@ -432,5 +475,17 @@ func jellyfinLogRequest(method, path string, query url.Values, recorder *jellyfi
 	if summary == "" {
 		summary = "-"
 	}
-	log.Printf("[Jellyfin] %s %s %d 参数=%s", jellyfinLogSafe(method, 16), jellyfinLogSafe(strings.Join(segments, "/"), 120), status, summary)
+	log.Printf("[Jellyfin] %s %s %d 参数=%s", jellyfinLogSafe(method, 16), shape, status, summary)
+	return status, shape
+}
+
+// jellyfinRouteShape masks 32-hex path segments as {id} and makes the result one safe log token.
+func jellyfinRouteShape(path string) string {
+	segments := strings.Split(path, "/")
+	for i, segment := range segments {
+		if compact := strings.ReplaceAll(segment, "-", ""); len(compact) == 32 && strings.Trim(compact, "0123456789abcdef") == "" {
+			segments[i] = "{id}"
+		}
+	}
+	return jellyfinLogSafe(strings.Join(segments, "/"), 120)
 }
