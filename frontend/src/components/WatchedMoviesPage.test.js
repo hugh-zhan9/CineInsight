@@ -7,9 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // api 里额外放了一个 ListMovieChart：本页**不该**碰榜单缓存，它在这里的唯一作用是
 // 「一旦被调用就炸」——已看页在缓存清空后仍要完整可用（D-MC05 快照列存在的理由）。
 const api = vi.hoisted(() => Object.fromEntries([
-  'ListWatchedMovies', 'ListMovieChart'
+  'ListWatchedMovies', 'ListMovieChart',
+  'ClearMovieChartMark', 'GetVideosByIDs', 'LinkMovieToVideo', 'SuggestLibraryMatchesBatch'
 ].map(name => [name, vi.fn()])));
+const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(), notifySuccess: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
+vi.mock('../utils/feedback.js', () => feedback);
 
 import WatchedMoviesPage from './WatchedMoviesPage.vue';
 
@@ -36,6 +39,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   api.ListWatchedMovies.mockResolvedValue([]);
   api.ListMovieChart.mockRejectedValue(new Error('已看页不该读榜单缓存'));
+  api.SuggestLibraryMatchesBatch.mockResolvedValue({});
+  feedback.confirmAction.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -67,11 +72,16 @@ describe('只显示榜单标记，不掺主片库的已看', () => {
     expect(find(wrapper, 'summary').text()).toBe('共 3 部');
   });
 
-  it('只从绑定层导入 ListWatchedMovies，且不接受任何 props', () => {
+  // D-PC52（用户 R8 裁决）推翻了 D-MC11 的「两边互不影响」：观影记录可以关联片库视频并双向同步已看，
+  // 所以本页多了撤销、关联、建议与按 ID 取视频四个绑定。仍然不许碰榜单缓存（D-MC05）。
+  it('APP-05 绑定只有观影记录、撤销、关联与建议、取视频这几个，不读榜单缓存，且不接受任何 props', () => {
     const imported = [...SOURCE.matchAll(/import\s*\{([^}]*)\}\s*from\s*'[^']*wailsjs\/go\/main\/App'/g)]
       .flatMap(match => match[1].split(',').map(name => name.trim()).filter(Boolean));
 
-    expect(imported).toEqual(['ListWatchedMovies']);
+    expect([...imported].sort()).toEqual([
+      'ClearMovieChartMark', 'GetVideosByIDs', 'LinkMovieToVideo', 'ListWatchedMovies', 'SuggestLibraryMatchesBatch'
+    ]);
+    expect(imported).not.toContain('ListMovieChart');
     // 没有 props ⇒ 父组件也喂不进来片库侧的数据，两条路径一起堵上。
     expect(WatchedMoviesPage.props).toBeUndefined();
   });
@@ -266,5 +276,82 @@ describe('重新读取', () => {
     await flushPromises();
 
     expect(wrapper.vm.groups).toEqual([]);
+  });
+});
+
+describe('观影记录与片库的闭环（D-PC52）', () => {
+  it('APP-05 标题改为「观影记录」，说明关联后已看双向同步', async () => {
+    const wrapper = await page();
+    expect(wrapper.get('h2').text()).toBe('观影记录');
+    expect(find(wrapper, 'scope-note').text()).toContain('互相同步');
+  });
+
+  it('APP-05 取消已看先确认，关联了视频时说明视频也会改回未看，成功后重读', async () => {
+    api.ListWatchedMovies.mockResolvedValue([group(2026, [movie('11', { linked_video_ids: [5] }), movie('22')])]);
+    const wrapper = await page();
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await find(wrapper, 'unwatch-11').trigger('click');
+    await flushPromises();
+    expect(api.ClearMovieChartMark).not.toHaveBeenCalled();
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('关联的片库视频也会改回未看');
+
+    api.ClearMovieChartMark.mockResolvedValue(undefined);
+    api.ListWatchedMovies.mockResolvedValue([group(2026, [movie('22')])]);
+    await find(wrapper, 'unwatch-11').trigger('click');
+    await flushPromises();
+    expect(api.ClearMovieChartMark).toHaveBeenCalledWith('11');
+    expect(texts(wrapper, 'title')).toEqual(['片名 22']);
+
+    await find(wrapper, 'unwatch-22').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls.at(-1)[0].message).not.toContain('关联的片库视频');
+  });
+
+  it('APP-05 已关联的条目可以在片库打开，去榜单发出导航意图', async () => {
+    api.ListWatchedMovies.mockResolvedValue([group(2026, [movie('11', { linked_video_ids: [5] })])]);
+    api.GetVideosByIDs.mockResolvedValue([{ id: 5, name: 'dune.mkv' }]);
+    const wrapper = await page();
+
+    await find(wrapper, 'open-11').trigger('click');
+    await flushPromises();
+    expect(api.GetVideosByIDs).toHaveBeenCalledWith([5]);
+    expect(wrapper.emitted('open-video')[0][0]).toEqual({ id: 5, name: 'dune.mkv' });
+
+    await find(wrapper, 'chart-11').trigger('click');
+    expect(wrapper.emitted('navigate')[0]).toEqual(['movie-chart']);
+    // 已关联就不再给「片库中可能已有」的建议。
+    expect(api.SuggestLibraryMatchesBatch).not.toHaveBeenCalled();
+  });
+
+  it('APP-06 没关联的条目按「片名|年份」批量要建议，一键关联后改为可在片库打开', async () => {
+    api.ListWatchedMovies.mockResolvedValue([group(2021, [movie('11', { title: '沙丘' })]), group(0, [movie('22', { title: '无年份' })])]);
+    api.SuggestLibraryMatchesBatch.mockResolvedValue({
+      '沙丘|2021': [{ video_id: 5, name: 'Dune.2021.mkv', display_title: '沙丘', score: 110 }],
+      '无年份|0': []
+    });
+    const wrapper = await page();
+    expect(api.SuggestLibraryMatchesBatch).toHaveBeenCalledTimes(1);
+    expect(api.SuggestLibraryMatchesBatch).toHaveBeenCalledWith([{ title: '沙丘', year: 2021 }, { title: '无年份', year: 0 }]);
+    expect(find(wrapper, 'suggestions-11').text()).toContain('片库中可能已有');
+    expect(findAll(wrapper, 'suggestions-22')).toHaveLength(0);
+    expect(findAll(wrapper, 'open-11')).toHaveLength(0);
+
+    api.LinkMovieToVideo.mockResolvedValue(undefined);
+    await find(wrapper, 'link-11-5').trigger('click');
+    await flushPromises();
+    expect(api.LinkMovieToVideo).toHaveBeenCalledWith('11', 5);
+    expect(findAll(wrapper, 'suggestions-11')).toHaveLength(0);
+    expect(findAll(wrapper, 'open-11')).toHaveLength(1);
+  });
+
+  it('APP-05 关联的视频已不在片库时如实说明，不发导航', async () => {
+    api.ListWatchedMovies.mockResolvedValue([group(2026, [movie('11', { linked_video_ids: [5] })])]);
+    api.GetVideosByIDs.mockResolvedValue([]);
+    const wrapper = await page();
+    await find(wrapper, 'open-11').trigger('click');
+    await flushPromises();
+    expect(find(wrapper, 'action-error').text()).toContain('已不在片库');
+    expect(wrapper.emitted('open-video')).toBeUndefined();
   });
 });

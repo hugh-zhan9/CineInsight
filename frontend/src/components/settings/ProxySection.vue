@@ -1,10 +1,12 @@
 <template>
   <div id="settings-playback-proxy" class="settings-section">
-    <h3>播放代理</h3>
-    <p class="help-text">
-      mkv、avi 这类容器在应用内和手机端都播不了。生成一份 mp4 播放代理之后，预览与手机端会自动改用它，
-      源文件一个字节都不会动，正式播放仍然打开源文件。代理放在 <code>~/.CineInsight/proxies/</code>，
-      删掉随时可以重新生成。
+    <!-- 原名「播放代理」（D-PC59）：和「在线资料源」里的「资料源出网代理」同名会被当成一回事，
+         这里说的是本地转出来的兼容副本，所以叫「播放兼容缓存」。 -->
+    <h3>播放兼容缓存</h3>
+    <p class="help-text" data-test="proxy-intro">
+      mkv、avi 这类容器在应用内和手机端都播不了。为它生成一份 mp4 兼容副本（也叫播放代理）之后，
+      预览与手机端会自动改用它，源文件一个字节都不会动，正式播放仍然打开源文件。副本放在应用数据目录下的
+      proxies 文件夹里，删掉随时可以重新生成。这里与「在线资料源」的出网代理无关。
     </p>
     <p class="help-text">重编码用的是 VideoToolbox，仅 macOS 可用；其他平台只有 remux（换容器）这一条路走得通。</p>
 
@@ -32,7 +34,7 @@
     </div>
 
     <div class="setting-item">
-      <label>代理目录体积上限（GiB）</label>
+      <label>兼容缓存体积上限（GiB）</label>
       <input
         data-test="proxy-cache-limit"
         type="number"
@@ -42,8 +44,9 @@
         :value="limitGiB"
         @input="onLimitInput"
       />
-      <p class="help-text">
-        超过上限时按「最久没用过」淘汰，刚用过 60 秒内的那份不动。填 0 表示不限。
+      <!-- 保护窗口与 services/playback_proxy_store.go 的 playbackProxyEvictionGrace 一致：120 秒（PLAY-15）。 -->
+      <p class="help-text" data-test="proxy-limit-help">
+        超过上限时按「最久没用过」淘汰，刚用过 120 秒内的那份不动。填 0 表示不限。
         调小上限不会立刻清理，下一次生成代理时生效——想马上生效就点下面的「立即整理」。
       </p>
     </div>

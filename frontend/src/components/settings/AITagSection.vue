@@ -116,13 +116,18 @@ import { GetSemanticIndexStatus, StartSemanticIndex, CancelSemanticIndex, TestAI
 import PhotoAITaskPanel from '../PhotoAITaskPanel.vue';
 import { confirmAction, notifyError } from '../../utils/feedback.js';
 
+// 语义索引任务从库里读 AI 接口与 embedding 模型，这几项改了没保存就启动会用旧配置。
+const SEMANTIC_INDEX_FIELDS = ['ai_tagging_base_url', 'ai_tagging_api_key', 'ai_tagging_model', 'semantic_embedding_model'];
+
 // AI 标签分区：接口配置、抽帧与字幕预算，以及视频语义索引的启动/取消。
 // 图片侧的三个任务面板由 PhotoAITaskPanel 自己管。
 export default {
   name: 'AITagSection',
   components: { PhotoAITaskPanel },
   props: {
-    form: { type: Object, required: true }
+    form: { type: Object, required: true },
+    // (fields, actionLabel) => Promise<boolean>：语义索引用的是已保存的接口与模型配置（D-PC57）。
+    ensureSaved: { type: Function, default: null }
   },
   data() {
     return {
@@ -181,6 +186,8 @@ export default {
       }
     },
     async startSemanticIndex(rebuild) {
+      if (typeof this.ensureSaved === 'function' &&
+        !await this.ensureSaved(SEMANTIC_INDEX_FIELDS, rebuild ? '重建语义索引' : '构建语义索引')) return;
       if (rebuild && !await confirmAction({ title: '重建语义索引', message: '重建会为当前模型重新请求全部视频的 embedding。继续吗？', confirmText: '重建' })) return;
       try {
         this.semanticIndexStatus = { ...(this.semanticIndexStatus || {}), ...(await StartSemanticIndex({ rebuild })) };

@@ -6,7 +6,7 @@
     <div class="short-feed-status">
       <div class="short-feed-status-main">
         <strong>{{ enhanceStatusText }}</strong>
-        <span>{{ enhanceStatusDetail }}</span>
+        <span data-test="enhance-status-detail">{{ enhanceStatusDetail }}</span>
       </div>
       <div class="short-feed-actions">
         <button
@@ -81,7 +81,8 @@ export default {
       if (this.enhanceCapability.available) {
         return `运行时 ${this.enhanceCapability.runtime_version}，模型已就绪，可在视频的 ⋯ 菜单里发起超分。`;
       }
-      return this.enhanceCapability.message || '超分不可用';
+      // hint 是面向用户的原因与下一步（MEDIA-11）；message 偏排障，只在没有 hint 时兜底。
+      return this.enhanceCapability.hint || this.enhanceCapability.message || '超分不可用';
     },
     enhanceDownloadPercent() {
       const total = Number(this.enhanceModelStatus?.total_bytes || 0);

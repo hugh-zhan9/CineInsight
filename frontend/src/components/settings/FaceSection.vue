@@ -176,7 +176,9 @@ export default {
   name: 'FaceSection',
   components: { TaskFailureList },
   props: {
-    form: { type: Object, required: true }
+    form: { type: Object, required: true },
+    // (fields, actionLabel) => Promise<boolean>：相关字段有未保存修改时提示先保存（D-PC57）。
+    ensureSaved: { type: Function, default: null }
   },
   data() {
     return {
@@ -294,6 +296,8 @@ export default {
       }
     },
     async prepareRuntime() {
+      // 准备运行时按已保存的镜像前缀下载模型（D-PC57）：改了没保存就先提示保存。
+      if (typeof this.ensureSaved === 'function' && !await this.ensureSaved(['face_model_mirror_url'], '准备运行时')) return;
       try {
         this.runtimeStatus = await PrepareFaceRuntime();
       } catch (err) {

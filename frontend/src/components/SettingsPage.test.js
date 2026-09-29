@@ -26,7 +26,13 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetImageEXIFBackfillStatus', 'StartImageEXIFBackfill', 'CancelImageEXIFBackfill',
   'ListGlossaryEntries', 'UpsertGlossaryEntry', 'DeleteGlossaryEntry',
   'GetBrowserBridgeStatus', 'RegenerateBrowserBridgeToken', 'SelectBrowserDownloadDirectory',
-  'ListBrowserDownloadTasks', 'CancelBrowserDownloadTask'
+  'ListBrowserDownloadTasks', 'CancelBrowserDownloadTask',
+  // P-033 新接入的绑定：分区挂载时会调，缺了会在 mock 上抛「没有这个导出」。
+  'GetDatabaseSwitchStatus', 'SwitchBackendConfigOnly', 'ClearMigrationTarget', 'RelaunchApp', 'RevealBackupDirectory',
+  'GetShortFeedAccessStatus', 'GetShortFeedQRCode', 'SetShortFeedEnabled', 'SetShortFeedPIN', 'ClearShortFeedPIN',
+  'UnlockShortFeedLogin', 'GetJellyfinStatus', 'GetJellyfinDiagnostics', 'ConfigureJellyfin', 'GetIINASyncStatus',
+  'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine', 'CancelSubtitleEnginePreparation', 'ValidateScanDirectory',
+  'GetIdleSchedulerStatus', 'RunGatedTaskNow', 'GetPlaybackProxyUsage', 'GetPlaybackProxyStatus'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -82,6 +88,13 @@ async function mountPage(status = {
     interval_hours: 24
   });
   api.ListDatabaseBackups.mockResolvedValue([]);
+  api.GetDatabaseSwitchStatus.mockResolvedValue({ running: false, completed: false, failed: false });
+  api.GetShortFeedAccessStatus.mockResolvedValue({ enabled: true, pin_set: true, listening: false, url: '', login_locked: false });
+  api.GetShortFeedQRCode.mockResolvedValue('');
+  api.GetJellyfinStatus.mockResolvedValue({ enabled: false, running: false, port: 8096, username: '', password_set: false, lan_urls: [] });
+  api.GetJellyfinDiagnostics.mockResolvedValue({ enabled: false, listening: false, last_client: '', last_failure: null });
+  api.GetIINASyncStatus.mockResolvedValue({ enabled: false, watching_dir: '', last_error: '' });
+  api.GetSubtitleEngineStatuses.mockResolvedValue([]);
   api.CreateDatabaseBackup.mockResolvedValue({ name: 'cineinsight-now.dump', size: 100, created_at: '2026-08-04T12:00:00Z' });
   api.RestoreDatabaseBackup.mockResolvedValue();
   api.GetSemanticIndexStatus.mockResolvedValue({ available: true, running: false, completed: false, processed: 0, total: 0 });
@@ -199,13 +212,16 @@ describe('SettingsPage library watcher', () => {
     expect(wrapper.text()).toContain('实时同步已关闭');
   });
 
-	it('persists the short-feed feedback switch', async () => {
+	// P-021 结论：「反馈回流」只控制已删掉的收藏 / 点赞投影，开关入口随之删除（P-033）。
+	// 通用保存仍无条件写这一列，所以保存时原值照样带回，不借保存把它改掉。
+	it('PLAY-01 设置页不再有反馈回流开关，保存时原值照样带回', async () => {
 	  const wrapper = await mountPage();
-	  await wrapper.find('[data-test="short-feed-feedback-sync-toggle"]').setValue(false);
+	  expect(wrapper.find('[data-test="short-feed-feedback-sync-toggle"]').exists()).toBe(false);
+	  expect(wrapper.text()).not.toContain('短视频喜欢');
 	  await wrapper.find('.settings-save-button').trigger('click');
 	  await flushPromises();
 
-	  expect(api.UpdateSettings).toHaveBeenCalledWith(expect.objectContaining({ short_feed_feedback_sync_enabled: false }));
+	  expect(api.UpdateSettings).toHaveBeenCalledWith(expect.objectContaining({ short_feed_feedback_sync_enabled: true }));
 	});
 
   it('persists independent local workflow switches', async () => {
@@ -707,6 +723,19 @@ describe('视频超分：模型按需下载', () => {
     expect(wrapper.get('[data-test="enhance-model-download"]').text()).toContain('重新下载');
   });
 
+  it('MEDIA-11 未就绪时显示面向用户的原因与下一步（hint），而不是排障用的 message', async () => {
+    const wrapper = await mountWithEnhance({
+      available: false,
+      reason_code: 'runtime_unavailable',
+      models_installable: false,
+      message: '超分运行时未随应用打包（缺少 enhance-runtime 清单）',
+      hint: '超分组件没有随应用安装，暂时无法使用'
+    });
+    const detail = wrapper.get('[data-test="enhance-status-detail"]').text();
+    expect(detail).toBe('超分组件没有随应用安装，暂时无法使用');
+    expect(detail).not.toContain('enhance-runtime');
+  });
+
   it('平台不支持这类原因不给下载入口', async () => {
     const wrapper = await mountWithEnhance({
       available: false,
@@ -984,4 +1013,157 @@ describe('浏览器插件桥接', () => {
 
 
 
+});
+
+describe('设置页的保存口径（D-PC57 / D-PC58 / D-PC59）', () => {
+  it('APP-10 扫描目录排在第 2 位，模板里分区的先后与 SETTINGS_SECTIONS 完全一致', async () => {
+    const wrapper = await mountPage();
+    expect(SETTINGS_SECTIONS[1].key).toBe('scan-dirs');
+    const domOrder = [...wrapper.element.querySelectorAll('.settings-grid-shell [id^="settings-"]')]
+      .map(element => element.id.replace('settings-', ''));
+    expect(domOrder).toEqual(SETTINGS_SECTIONS.map(section => section.key));
+    wrapper.unmount();
+  });
+
+  it('APP-14 Jellyfin 是独立分区（不再藏在手机端里），播放代理改名「播放兼容缓存」', async () => {
+    const wrapper = await mountPage();
+    expect(SETTINGS_SECTIONS.find(section => section.key === 'jellyfin')?.label).toBe('Jellyfin 客户端连接');
+    expect(wrapper.findComponent({ name: 'MobileSection' }).find('#settings-jellyfin').exists()).toBe(false);
+    expect(wrapper.get('#settings-jellyfin h3').text()).toBe('Jellyfin 客户端连接');
+    expect(wrapper.get('#settings-playback-proxy h3').text()).toBe('播放兼容缓存');
+    wrapper.unmount();
+  });
+
+  it('APP-08 每个分区按 SETTINGS_SECTIONS 的 saveMode 标出「即时生效 / 需保存」', async () => {
+    const wrapper = await mountPage();
+    for (const section of SETTINGS_SECTIONS) {
+      const element = wrapper.get(`#settings-${section.key}`).element;
+      expect(['save', 'instant', 'mixed'], section.key).toContain(section.saveMode);
+      expect(element.dataset.saveMode, section.key).toBe(section.saveMode);
+    }
+    expect(wrapper.get('#settings-database').element.dataset.saveModeLabel).toBe('即时生效');
+    expect(wrapper.get('#settings-backup').element.dataset.saveModeLabel).toBe('需保存');
+    wrapper.unmount();
+  });
+
+  it('APP-08 改了表单就发 update:dirty=true 并提示未保存，保存成功后回到 false', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.emitted('update:dirty').at(-1)).toEqual([false]);
+    expect(wrapper.find('[data-test="settings-dirty-hint"]').exists()).toBe(false);
+
+    wrapper.vm.settingsForm.theme = 'dark';
+    await flushPromises();
+    expect(wrapper.emitted('update:dirty').at(-1)).toEqual([true]);
+    expect(wrapper.get('[data-test="settings-dirty-hint"]').text()).toBe('有未保存的修改');
+
+    wrapper.vm.settingsForm.theme = 'system';
+    await flushPromises();
+    expect(wrapper.emitted('update:dirty').at(-1)).toEqual([false]);
+
+    wrapper.vm.settingsForm.theme = 'dark';
+    await flushPromises();
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    expect(wrapper.emitted('update:dirty').at(-1)).toEqual([false]);
+    wrapper.unmount();
+  });
+
+  it('APP-08 父组件换了一份设置时，用户正在改的字段不被整份盖掉', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.settingsForm.backup_directory = '/Volumes/备份盘';
+    await flushPromises();
+    await wrapper.setProps({ settings: { ...baseSettings(), theme: 'dark', play_weight: 3 } });
+    await flushPromises();
+    expect(wrapper.vm.settingsForm.backup_directory).toBe('/Volumes/备份盘');
+    expect(wrapper.vm.settingsForm.theme).toBe('dark');
+    expect(wrapper.vm.dirtyFields).toEqual(['backup_directory']);
+    wrapper.unmount();
+  });
+
+  it('APP-08 依赖未保存字段的即时动作先提示保存：取消就不动，确认则先保存再执行', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.settingsForm.backup_directory = '/Volumes/备份盘';
+    await flushPromises();
+    const backupNow = () => wrapper.get('[data-test="backup-now"]');
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await backupNow().trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls.at(-1)[0].message).toContain('立即备份');
+    expect(api.UpdateSettings).not.toHaveBeenCalled();
+    expect(api.CreateDatabaseBackup).not.toHaveBeenCalled();
+
+    await backupNow().trigger('click');
+    await flushPromises();
+    expect(api.UpdateSettings).toHaveBeenCalledWith(expect.objectContaining({ backup_directory: '/Volumes/备份盘' }));
+    expect(api.CreateDatabaseBackup).toHaveBeenCalledTimes(1);
+    expect(api.UpdateSettings.mock.invocationCallOrder[0]).toBeLessThan(api.CreateDatabaseBackup.mock.invocationCallOrder[0]);
+
+    // 已经保存过、没有相关改动时直接执行，不再打扰。
+    const confirms = feedback.confirmAction.mock.calls.length;
+    await backupNow().trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls.length).toBe(confirms);
+    expect(api.CreateDatabaseBackup).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it('APP-04 只有 AI 打标字段变了才触发打标并提示「已触发 AI 自动打标」', async () => {
+    const wrapper = await mountPage();
+    api.TriggerAITagging.mockResolvedValue(true);
+
+    wrapper.vm.settingsForm.theme = 'dark';
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    expect(api.TriggerAITagging).not.toHaveBeenCalled();
+    expect(wrapper.get('.settings-save-status').text()).toBe('设置保存成功。');
+
+    wrapper.vm.settingsForm.ai_tagging_base_url = 'http://127.0.0.1:1234/v1';
+    wrapper.vm.settingsForm.ai_tagging_model = 'qwen-vl';
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    expect(api.TriggerAITagging).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('.settings-save-status').text()).toBe('设置保存成功，已触发 AI 自动打标。');
+
+    // 再保存一次、AI 字段没变：不再触发。
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    expect(api.TriggerAITagging).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('显式载荷带上三个清理阈值（P-001 评审 Minor 7），读不出时按默认值 5 / 480 / 320', async () => {
+    const wrapper = await mountPage();
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    expect(api.UpdateSettings.mock.calls.at(-1)[0]).toEqual(expect.objectContaining({
+      cleanup_short_seconds: 5, cleanup_low_width: 480, cleanup_low_height: 320
+    }));
+
+    await wrapper.setProps({ settings: { ...baseSettings(), cleanup_short_seconds: 12, cleanup_low_width: 640, cleanup_low_height: 360 } });
+    await flushPromises();
+    await wrapper.vm.saveSettings();
+    await flushPromises();
+    expect(api.UpdateSettings.mock.calls.at(-1)[0]).toEqual(expect.objectContaining({
+      cleanup_short_seconds: 12, cleanup_low_width: 640, cleanup_low_height: 360
+    }));
+    // 专用接口写的列不进通用保存：手机端开关、Jellyfin、桥接令牌。
+    const payload = api.UpdateSettings.mock.calls.at(-1)[0];
+    for (const key of ['short_feed_enabled', 'jellyfin_enabled', 'browser_bridge_token']) {
+      expect(payload, key).not.toHaveProperty(key);
+    }
+    wrapper.unmount();
+  });
+
+  it('APP-02 数据库进入「待重启」时向上 emit relaunch-required，交给 App 挂全局遮罩', async () => {
+    const wrapper = await mountPage();
+    api.PreflightDatabaseSwitch.mockResolvedValue({ target: 'sqlite', reachable: true, empty: false, reason_code: 'not_empty', message: '目标库不是空的' });
+    await sectionVm(wrapper, 'DatabaseSection').preflightDatabaseSwitch();
+    await flushPromises();
+    api.SwitchBackendConfigOnly.mockResolvedValue({ target: 'sqlite', switched: true, relaunch_required: true, message: '已改为使用 sqlite，重启应用后生效。' });
+    await wrapper.get('[data-test="db-switch-config-only"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('relaunch-required')[0][0]).toEqual({ message: '已改为使用 sqlite，重启应用后生效。' });
+    wrapper.unmount();
+  });
 });

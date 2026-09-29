@@ -1257,3 +1257,16 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - P-033：`SettingsPage` 发 `update:dirty`；`IdleSchedulingSection` 改用 `backgroundTaskLabel`；`utils/enhancement.js` 合入后，任务中心的超分状态文案改为引用它。
   - P-034：`VideoListPage` 接入 `:selected-people`，推出 `person_ids`，清除条件和保存视图时一并处理；`matchesSmartView` 加入 `local_metadata_updated`；`IncrementalScanBar` 调用 `SyncScanDirectories('manual')`；清理不再使用的 `@delete-tag`、`aiTagSummary`、`cleanupBadgeCount`、`cleanupAnalyzing`。
   - P-039：改写 AI-CONTEXT §2.21「⌘K 归片库页」一句，以及 §2.19 里的 key 数量。
+
+**P-033 交付与整合**（2026-09-30）：设置页（脏状态、保存方式标注、分区顺序、IINA 分区、清理阈值载荷）、数据库与备份（恢复、切换、切回、清空、立即重启，以及 `relaunch_pending` / `backend_env_locked` 两种前缀）、手机端（开关、PIN、锁定与解除、二维码）、Jellyfin / IINA 诊断、字幕引擎准备、空闲调度、下载、超分、片单 / 榜单 / 观影记录已全部完成。合入后 `npm test` 全量通过：79 个测试文件、928 条用例。
+- 按主代理裁决，没有自建全局遮罩；`SettingsPage` 会发出 `relaunch-required` 与 `update:dirty`。
+- **主代理待办（App.vue）**：
+  - 挂载全局「待重启」遮罩；
+  - 观影记录页的 `@navigate` / `@open-video`；
+  - 启动错误页按后端显示提示（D-PC58）；
+  - 共享的错误翻译（`database is in maintenance mode` 等）。
+- **P-032**：`AutomationSection.vue` 里「播放代理」分区改称「播放兼容缓存」。
+- **已知**：
+  - 复用条目的「撤销想看」提示仍写着「会从片单移除」，实际不会移除，属于偏安全方向；
+  - 下载目录校验不看黑名单，下载页用 `directory_excluded` 兜底。
+- **独立评审**：清空目标库、切回之前的后端、立即重启三个流程，待安排。

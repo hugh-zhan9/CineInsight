@@ -5,7 +5,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'ListMovieChart', 'ListMovieChartYears', 'OpenMovieChartYear', 'RefreshMovieChart',
   'CancelMovieChartRefresh', 'MarkMovieChartEntry', 'ClearMovieChartMark'
 ].map(name => [name, vi.fn()])));
-const feedback = vi.hoisted(() => ({ notifySuccess: vi.fn() }));
+const feedback = vi.hoisted(() => ({ notifySuccess: vi.fn(), confirmAction: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('../utils/feedback.js', () => feedback);
 
@@ -60,6 +60,7 @@ beforeEach(() => {
   api.ListMovieChartYears.mockResolvedValue([CURRENT_YEAR, CURRENT_YEAR - 1]);
   api.OpenMovieChartYear.mockResolvedValue(false);
   api.ListMovieChart.mockResolvedValue(chartPage());
+  feedback.confirmAction.mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -414,6 +415,45 @@ describe('三种标记', () => {
 
     expect(api.ListMovieChart).toHaveBeenLastCalledWith(CURRENT_YEAR, 'release', 1, false);
     expect(findAll(wrapper, 'item')).toHaveLength(1);
+  });
+});
+
+describe('撤销「想看」同步想看片单（P-019 / D-PC52）', () => {
+  it('APP-07 撤销想看前提示会同时从想看片单移除，取消则什么都不做', async () => {
+    api.ListMovieChart.mockResolvedValue(chartPage({ total: 1, items: [item('1', { mark: 'want' })] }));
+    const wrapper = await page();
+    const want = () => findAll(wrapper, 'item')[0].get('[data-test="movie-chart-mark-want"]');
+    expect(want().attributes('title')).toContain('同时从想看片单移除');
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await want().trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('同时从想看片单移除');
+    expect(api.ClearMovieChartMark).not.toHaveBeenCalled();
+
+    api.ClearMovieChartMark.mockResolvedValue(undefined);
+    await want().trigger('click');
+    await flushPromises();
+    expect(api.ClearMovieChartMark).toHaveBeenCalledWith('1');
+    expect(feedback.notifySuccess).toHaveBeenCalledWith('已撤销想看');
+  });
+
+  it('APP-07 从想看改成已看同样先提示；其他标记之间切换不打扰', async () => {
+    api.ListMovieChart.mockResolvedValue(chartPage({ total: 2, items: [item('1', { mark: 'want' }), item('2', { mark: 'skip' })] }));
+    const wrapper = await page();
+    api.MarkMovieChartEntry.mockResolvedValue({ mark: 'watched', watchlist_created: false, watchlist_conflict: false });
+
+    await findAll(wrapper, 'item')[0].get('[data-test="movie-chart-mark-watched"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('改为「已看」');
+    expect(api.MarkMovieChartEntry).toHaveBeenLastCalledWith('1', 'watched');
+
+    await findAll(wrapper, 'item')[1].get('[data-test="movie-chart-mark-watched"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
+    expect(api.MarkMovieChartEntry).toHaveBeenLastCalledWith('2', 'watched');
   });
 });
 

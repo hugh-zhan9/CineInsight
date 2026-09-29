@@ -93,7 +93,7 @@
           <button v-for="option in markOptions" :key="option.value" type="button"
             :class="['btn-secondary', 'btn-compact', { 'movie-chart-mark--on': item.mark === option.value }]"
             :aria-pressed="item.mark === option.value ? 'true' : 'false'"
-            :title="item.mark === option.value ? '再次点击撤销' : ''"
+            :title="markButtonTitle(item, option.value)"
             :disabled="busy || loading" :data-test="`movie-chart-mark-${option.value}`"
             @click="toggleMark(item, option.value)">{{ option.label }}</button>
         </div>
@@ -117,7 +117,7 @@ import {
   CancelMovieChartRefresh, ClearMovieChartMark, ListMovieChart, ListMovieChartYears,
   MarkMovieChartEntry, OpenMovieChartYear, RefreshMovieChart
 } from '../../wailsjs/go/main/App';
-import { notifySuccess } from '../utils/feedback.js';
+import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
 // 六类失败分类码各有各的一句话，**不合并**（D-MC07）。把代理连不上和「豆瓣没收录」
 // 写成同一句，用户会照着换年份的方向排查，而真正要做的是去设置页改代理地址。
@@ -375,6 +375,9 @@ export default {
     async toggleMark(item, mark) {
       if (this.busy || this.loading) return;
       const undo = item.mark === mark;
+      // 撤销「想看」（或把它改成别的标记）会同时从想看片单移除这部片（P-019 的双向同步，
+      // APP-07）。这一步动的是另一页的数据，先说出来再做。
+      if (item.mark === 'want' && !await this.confirmLeaveWant(mark, undo)) return;
       this.busy = true;
       this.actionError = '';
       this.notice = '';
@@ -398,7 +401,9 @@ export default {
         this.page = Math.min(this.page - 1, this.totalPages);
         await this.load();
       }
-      if (undo) {
+      if (undo && mark === 'want') {
+        notifySuccess('已撤销想看');
+      } else if (undo) {
         notifySuccess('已撤销标记');
       } else if (conflict) {
         // 撞名不是失败：标记照样记下了，只是没有新建片单条目，撤销时也不会去动
@@ -407,6 +412,14 @@ export default {
       } else {
         notifySuccess(`已标记${MARK_LABELS[mark] || mark}`);
       }
+    },
+    confirmLeaveWant(mark, undo) {
+      const action = undo ? '撤销「想看」' : `改为「${MARK_LABELS[mark] || mark}」`;
+      return confirmAction({
+        title: undo ? '撤销想看' : '更改标记',
+        message: `${action}后，这部片会同时从想看片单移除。继续吗？`,
+        confirmText: undo ? '撤销想看' : '确认更改'
+      });
     },
     failureTextOf(code) {
       if (!code) return '';
@@ -430,6 +443,10 @@ export default {
     },
     markLabel(mark) {
       return MARK_LABELS[mark] || mark;
+    },
+    markButtonTitle(item, mark) {
+      if (item.mark !== mark) return '';
+      return mark === 'want' ? '再次点击撤销，同时从想看片单移除' : '再次点击撤销';
     },
     originalTitleOf(item) {
       const original = (item.original_title || '').trim();

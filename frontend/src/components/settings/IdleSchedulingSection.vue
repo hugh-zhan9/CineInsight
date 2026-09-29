@@ -7,8 +7,8 @@
         <span class="slider"></span>
         <span>空闲时才跑自动后台任务</span>
       </label>
-      <p class="help-text">
-        只影响自动触发的任务（扫描后的技术信息、近重复指纹、清理分析，以及图片 EXIF 与 AI 打标）。
+      <p class="help-text" data-test="idle-gated-tasks">
+        只影响自动触发的任务：{{ gatedTaskText }}。
         你自己点的「开始」按钮任何时候都立刻执行，不受这里影响。
       </p>
       <p class="help-text">空闲判定依赖 macOS 的 ioreg 与 pmset；其他平台一律视为空闲，等同于关掉这个开关。</p>
@@ -102,7 +102,16 @@
 <script>
 import { GetIdleSchedulerStatus, RunGatedTaskNow } from '../../../wailsjs/go/main/App';
 import { notifyError } from '../../utils/feedback.js';
-import { BACKGROUND_TASK_LABELS, idleWaitReasonLabel, isIdleGateNotWaitingError } from '../../utils/idleScheduling.js';
+import { backgroundTaskLabel, idleWaitReasonLabel, isIdleGateNotWaitingError } from '../../utils/idleScheduling.js';
+
+// 实际经空闲门的自动任务（APP-04 / D-PC19）。清单照 app_library.go 的扫描后自动化
+// （技术信息、近重复指纹、清理分析、建议作品集、帧哈希、人脸、播放代理）、app_image.go 的
+// 图片自动化（EXIF、图片指纹、图片 AI 打标）与 AI 打标 worker 的启动批次和定时轮次抄下来；
+// 后端改了受控范围，这里要跟着改——说明文字由它生成，不再手写一句。
+export const IDLE_GATED_TASK_KEYS = [
+  'technical', 'phash', 'cleanup', 'collection_suggest', 'frame_hash', 'face', 'proxy',
+  'ai_tagging', 'exif', 'image_phash', 'image_ai_tagging'
+];
 
 // 后台任务调度分区：开关、阈值、电源与时间窗，外加一块当前空闲状态与等待清单。
 // 等待清单里的每一项都能直接「忽略空闲立即运行」——设置页是用户找得到的地方，
@@ -135,6 +144,9 @@ export default {
     this.idleStateOff?.();
   },
   computed: {
+    gatedTaskText() {
+      return IDLE_GATED_TASK_KEYS.map(key => this.taskLabel(key)).join('、');
+    },
     stateText() {
       const status = this.status;
       if (!status) return '';
@@ -174,7 +186,8 @@ export default {
       this.form.idle_window_end = '';
     },
     taskLabel(taskKey) {
-      return BACKGROUND_TASK_LABELS[taskKey] || taskKey;
+      // 认不出的 key 也只显示中文兜底，不把原始 key 露给用户（D-PC18，P-031 的共用口径）。
+      return backgroundTaskLabel(taskKey);
     },
     reasonLabel(reason) {
       return idleWaitReasonLabel(reason);

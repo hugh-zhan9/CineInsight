@@ -187,3 +187,20 @@ describe('后台任务调度设置分区', () => {
     expect(wrapper.get('[data-test="idle-waiting-list"]').text()).toContain('不在允许的时间段内');
   });
 });
+
+describe('受空闲门控制的任务清单（D-PC19）', () => {
+  it('APP-04 说明按实际受控清单生成：含 AI 打标、人脸、帧哈希、代理、建议作品集', async () => {
+    const wrapper = await mountSection();
+    const text = wrapper.get('[data-test="idle-gated-tasks"]').text();
+    for (const label of ['技术信息', '近重复指纹', '清理分析', 'AI 打标', '人脸分析', '帧哈希', '播放代理', '建议作品集', '图片 EXIF', '图片指纹', '图片 AI 打标']) {
+      expect(text, label).toContain(label);
+    }
+    // 用户自己点的任务不受空闲门影响，这句要一直在。
+    expect(text).toContain('立刻执行');
+  });
+
+  it('APP-04 认不出的任务 key 也只显示中文兜底，不露原始 key', async () => {
+    const wrapper = await mountSection();
+    expect(wrapper.vm.taskLabel('some_new_key')).not.toContain('some_new_key');
+  });
+});

@@ -46,6 +46,8 @@
               :data-test="`watchlist-source-title-${entry.id}`">{{ sourceTitleOf(entry) }}</span>
             <div class="watchlist-entry-meta">
               <span class="watchlist-kind-tag" :data-test="`watchlist-kind-${entry.id}`">{{ kindLabel(entry.kind) }}</span>
+              <!-- 条目来源（D-PC52）：榜单「想看」建立或认领的是「榜单」，其余是「手动」。 -->
+              <span class="watchlist-origin-tag" :data-test="`watchlist-origin-${entry.id}`">{{ originLabel(entry) }}</span>
               <span class="watchlist-status" :data-test="`watchlist-status-${entry.id}`">{{ statusLabel(entry.enrichment_status) }}</span>
               <span v-if="entry.year">{{ entry.year }}</span>
               <span v-if="entry.rating">{{ Number(entry.rating).toFixed(1) }} 分</span>
@@ -57,6 +59,24 @@
             <p v-if="genresOf(entry).length" class="watchlist-detail-line">{{ genresOf(entry).join(' · ') }}</p>
             <p v-if="creditsText(entry)" class="watchlist-detail-line">{{ creditsText(entry) }}</p>
             <p v-if="entry.overview" class="watchlist-overview">{{ entry.overview }}</p>
+            <!-- 片库关联提示（APP-06）：只读建议，不自动删条目；用户一键关联或从片单移除。 -->
+            <div v-if="linkedText(entry)" class="watchlist-library" :data-test="`watchlist-linked-${entry.id}`">
+              <span>{{ linkedText(entry) }}</span>
+              <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy || loading"
+                :data-test="`watchlist-remove-after-link-${entry.id}`" @click="remove(entry)">移除（片单）</button>
+            </div>
+            <div v-else-if="suggestionsOf(entry).length" class="watchlist-library" :data-test="`watchlist-suggestions-${entry.id}`">
+              <span class="watchlist-library__label">片库中可能已有：</span>
+              <span v-for="suggestion in suggestionsOf(entry)" :key="suggestion.video_id" class="watchlist-library__match"
+                :data-test="`watchlist-suggestion-${entry.id}-${suggestion.video_id}`">
+                {{ suggestion.display_title || suggestion.name }}
+                <button v-if="doubanIDOf(entry)" class="btn-secondary btn-compact" type="button" :disabled="busy || loading"
+                  :data-test="`watchlist-link-${entry.id}-${suggestion.video_id}`" @click="linkSuggestion(entry, suggestion)">关联</button>
+              </span>
+              <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy || loading"
+                :data-test="`watchlist-remove-suggested-${entry.id}`" @click="remove(entry)">移除（片单）</button>
+              <span v-if="!doubanIDOf(entry)" class="watchlist-library__hint">补全到豆瓣条目后才能关联片库视频。</span>
+            </div>
           </div>
         </div>
         <div class="watchlist-actions">
@@ -108,8 +128,8 @@
 
 <script>
 import {
-  ApplyWatchlistCandidate, CreateWatchlistEntry, DeleteWatchlistEntry, ListWatchlist,
-  ListWatchlistCandidates, RetryWatchlistEnrichment, UpdateWatchlistEntry
+  ApplyWatchlistCandidate, CreateWatchlistEntry, DeleteWatchlistEntry, LinkMovieToVideo, ListWatchlist,
+  ListWatchlistCandidates, RetryWatchlistEnrichment, SuggestLibraryMatchesBatch, UpdateWatchlistEntry
 } from '../../wailsjs/go/main/App';
 import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
@@ -164,6 +184,14 @@ const FAILURE_TEXTS = {
   source_error: source => `${source} 返回异常`
 };
 
+// WatchlistPage.origins 的取值（services.WatchlistOrigin*）。
+const ORIGIN_LABELS = { chart: '来自榜单', manual: '手动添加' };
+
+// 与后端 services.LibraryMatchKey 一致：「片名|年份」，年份未知为 0。
+function libraryMatchKey(title, year) {
+  return `${title}|${Number(year) || 0}`;
+}
+
 export default {
   name: 'WatchlistPage',
   data() {
@@ -171,7 +199,8 @@ export default {
       entries: [], nextID: 0, keyword: '', title: '', kind: DEFAULT_KIND, kindTouched: false,
       editID: 0, error: '', loading: false, loaded: false, busy: false, requestID: 0,
       candidateEntryID: 0, candidates: [], candidateLoading: false, candidateError: '', candidateRequestID: 0,
-      brokenPosters: [], kindOptions: KIND_OPTIONS
+      brokenPosters: [], kindOptions: KIND_OPTIONS,
+      origins: {}, suggestions: {}, suggestionRequestID: 0, linked: {}
     };
   },
   computed: {
@@ -210,8 +239,10 @@ export default {
         const page = await ListWatchlist(this.keyword.trim(), more ? this.nextID : 0, 50);
         if (requestID !== this.requestID) return;
         this.entries = more ? [...this.entries, ...page.entries] : page.entries;
+        this.origins = more ? { ...this.origins, ...(page.origins || {}) } : { ...(page.origins || {}) };
         this.nextID = page.next_id;
         this.loaded = true;
+        this.loadSuggestions(page.entries || [], more);
       } catch (err) {
         if (requestID === this.requestID) this.error = `读取想看片单失败：${err}`;
       } finally {
@@ -268,7 +299,12 @@ export default {
       if (this.busy || this.loading) return;
       this.busy = true;
       try {
-        if (!await confirmAction({ title: '移除想看记录', message: `从想看片单移除「${entry.title}」？`, confirmText: '移除', danger: true })) return;
+        // 删除片单条目会同步撤销榜单上的「想看」（D-PC52 双向同步），关联到豆瓣条目的要先说清楚。
+        const chartLinked = this.origins[entry.id] === 'chart' || Boolean(this.doubanIDOf(entry));
+        const message = chartLinked
+          ? `从想看片单移除「${entry.title}」？年度榜单上这部片的「想看」标记也会一并撤销。`
+          : `从想看片单移除「${entry.title}」？`;
+        if (!await confirmAction({ title: '移除想看记录', message, confirmText: '移除', danger: true })) return;
         await DeleteWatchlistEntry(entry.id);
         this.entries = this.entries.filter(item => item.id !== entry.id);
         if (this.editID === entry.id) this.resetDraft();
@@ -365,10 +401,63 @@ export default {
         const index = this.entries.findIndex(item => item.id === id);
         if (index < 0) return;
         this.brokenPosters = this.brokenPosters.filter(item => item !== id);
+        if (page.origins && page.origins[id]) this.origins = { ...this.origins, [id]: page.origins[id] };
         this.entries.splice(index, 1, fresh);
       } catch (err) {
         this.error = `刷新想看条目失败：${err}`;
       }
+    },
+    // 「片库中可能已有」（D-PC52）：一页条目一次批量查询，不逐条调单条接口。
+    // 建议只读、不出网；查不到或查询失败都只是不显示，不影响片单本身。
+    async loadSuggestions(entries, append) {
+      const requestID = ++this.suggestionRequestID;
+      const queries = entries.map(entry => ({ title: entry.title, year: Number(entry.year) || 0 }));
+      if (!queries.length) {
+        if (!append) this.suggestions = {};
+        return;
+      }
+      try {
+        const result = (await SuggestLibraryMatchesBatch(queries)) || {};
+        if (requestID !== this.suggestionRequestID) return;
+        const next = append ? { ...this.suggestions } : {};
+        for (const entry of entries) {
+          const list = result[libraryMatchKey(entry.title, entry.year)];
+          next[entry.id] = Array.isArray(list) ? list.slice(0, 3) : [];
+        }
+        this.suggestions = next;
+      } catch {
+        if (requestID === this.suggestionRequestID && !append) this.suggestions = {};
+      }
+    },
+    suggestionsOf(entry) {
+      return this.suggestions[entry.id] || [];
+    },
+    // 关联靠豆瓣 ID（movie_video_links 的键）：只有补全到豆瓣条目的片单项才能关联。
+    doubanIDOf(entry) {
+      return entry.source_name === 'douban' && entry.source_item_id ? String(entry.source_item_id) : '';
+    },
+    async linkSuggestion(entry, suggestion) {
+      const doubanID = this.doubanIDOf(entry);
+      if (!doubanID || this.busy) return;
+      this.busy = true;
+      try {
+        await LinkMovieToVideo(doubanID, suggestion.video_id);
+        this.linked = { ...this.linked, [entry.id]: suggestion };
+        notifySuccess('已关联片库视频');
+        this.error = '';
+      } catch (err) {
+        this.error = `关联片库视频失败：${err}`;
+      } finally {
+        this.busy = false;
+      }
+    },
+    linkedText(entry) {
+      const suggestion = this.linked[entry.id];
+      if (!suggestion) return '';
+      return `已关联片库视频：${suggestion.display_title || suggestion.name}。片库里已经有了，可以从片单移除。`;
+    },
+    originLabel(entry) {
+      return ORIGIN_LABELS[this.origins[entry.id]] || ORIGIN_LABELS.manual;
     },
     kindLabel(kind) {
       return KIND_LABELS[kind] || KIND_LABELS[DEFAULT_KIND];
@@ -488,7 +577,11 @@ export default {
 .watchlist-source-title { color: var(--text-secondary); font-size: 13px; line-height: 1.4; word-break: break-word; }
 
 .watchlist-entry-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
-.watchlist-kind-tag, .watchlist-status { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; }
+.watchlist-kind-tag, .watchlist-status, .watchlist-origin-tag { padding: 1px 8px; border: 1px solid var(--border-color); border-radius: 999px; }
+.watchlist-library { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 10px; border: 1px dashed var(--border-color); border-radius: var(--radius-sm); font-size: 12.5px; color: var(--text-secondary); }
+.watchlist-library__label { color: var(--text-primary); font-weight: 600; }
+.watchlist-library__match { display: inline-flex; align-items: center; gap: 6px; overflow-wrap: anywhere; }
+.watchlist-library__hint { flex-basis: 100%; font-size: 12px; }
 .watchlist-failure { margin: 0; color: var(--danger-color); font-size: 12px; overflow-wrap: anywhere; }
 .watchlist-detail-line { margin: 0; color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; }
 .watchlist-overview { margin: 0; font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }

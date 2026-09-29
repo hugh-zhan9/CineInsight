@@ -3,7 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'CreateWatchlistEntry', 'UpdateWatchlistEntry', 'DeleteWatchlistEntry', 'ListWatchlist',
-  'RetryWatchlistEnrichment', 'ListWatchlistCandidates', 'ApplyWatchlistCandidate'
+  'RetryWatchlistEnrichment', 'ListWatchlistCandidates', 'ApplyWatchlistCandidate',
+  'SuggestLibraryMatchesBatch', 'LinkMovieToVideo'
 ].map(name => [name, vi.fn()])));
 const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(), notifySuccess: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -54,6 +55,7 @@ beforeEach(() => {
   api.ListWatchlist.mockResolvedValue({ entries: [], next_id: 0 });
   api.CreateWatchlistEntry.mockResolvedValue(entry(1, '沙丘'));
   api.ListWatchlistCandidates.mockResolvedValue([]);
+  api.SuggestLibraryMatchesBatch.mockResolvedValue({});
   feedback.confirmAction.mockResolvedValue(true);
 });
 afterEach(() => {
@@ -560,5 +562,64 @@ describe('想看片单的 FC2 番号识别', () => {
     wrappers.push(wrapper);
     await flushPromises();
     expect(wrapper.text()).toContain('FC2');
+  });
+});
+
+describe('想看片单与片库、榜单的闭环（D-PC52）', () => {
+  const douban = (id, title, extra = {}) => entry(id, title, {
+    enrichment_status: 'succeeded', source_name: 'douban', source_item_id: `3${id}`, year: 2021, ...extra
+  });
+
+  it('APP-07 显示条目来源：榜单建立或认领的标「来自榜单」，其余标「手动添加」', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [douban(1, '沙丘'), entry(2, '手输片名')], next_id: 0, origins: { 1: 'chart', 2: 'manual' } });
+    const wrapper = await page();
+    expect(find(wrapper, 'origin-1').text()).toBe('来自榜单');
+    expect(find(wrapper, 'origin-2').text()).toBe('手动添加');
+  });
+
+  it('APP-07 移除关联到豆瓣条目的片单项时说明会同时撤销榜单上的「想看」', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [douban(1, '沙丘'), entry(2, '手输片名')], next_id: 0, origins: { 1: 'chart' } });
+    const wrapper = await page();
+    await find(wrapper, 'remove-1').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls.at(-1)[0].message).toContain('「想看」标记也会一并撤销');
+    await find(wrapper, 'remove-2').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls.at(-1)[0].message).not.toContain('榜单');
+  });
+
+  it('APP-06 一页条目批量要「片库中可能已有」，有豆瓣 ID 的可以一键关联，之后提示从片单移除', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [douban(1, '沙丘'), entry(2, '手输片名')], next_id: 0, origins: {} });
+    api.SuggestLibraryMatchesBatch.mockResolvedValue({
+      '沙丘|2021': [{ video_id: 9, name: 'Dune.2021.mkv', display_title: '沙丘', score: 110 }],
+      '手输片名|0': [{ video_id: 8, name: '手输片名.mp4', display_title: '', score: 100 }]
+    });
+    const wrapper = await page();
+    expect(api.SuggestLibraryMatchesBatch).toHaveBeenCalledTimes(1);
+    expect(api.SuggestLibraryMatchesBatch).toHaveBeenCalledWith([{ title: '沙丘', year: 2021 }, { title: '手输片名', year: 0 }]);
+    expect(find(wrapper, 'suggestions-1').text()).toContain('片库中可能已有');
+    // 没有豆瓣 ID 的手动条目没法关联（关联表按豆瓣 ID 建），只给移除与说明。
+    expect(wrapper.find('[data-test="watchlist-link-2-8"]').exists()).toBe(false);
+    expect(find(wrapper, 'suggestions-2').text()).toContain('补全到豆瓣条目后才能关联');
+
+    api.LinkMovieToVideo.mockResolvedValue(undefined);
+    await find(wrapper, 'link-1-9').trigger('click');
+    await flushPromises();
+    expect(api.LinkMovieToVideo).toHaveBeenCalledWith('31', 9);
+    expect(find(wrapper, 'linked-1').text()).toContain('已关联片库视频：沙丘');
+
+    // 片单不会因入库自动删条目，只提示并提供一键移除。
+    await find(wrapper, 'remove-after-link-1').trigger('click');
+    await flushPromises();
+    expect(api.DeleteWatchlistEntry).toHaveBeenCalledWith(1);
+  });
+
+  it('APP-06 建议查询失败不影响片单本身', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [douban(1, '沙丘')], next_id: 0 });
+    api.SuggestLibraryMatchesBatch.mockRejectedValue(new Error('年度榜单服务不可用'));
+    const wrapper = await page();
+    expect(wrapper.findAll('[data-test="watchlist-entry"]')).toHaveLength(1);
+    expect(wrapper.find('[data-test="watchlist-suggestions-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="watchlist-error"]').exists()).toBe(false);
   });
 });

@@ -40,8 +40,12 @@ const baseline = readFileSync(baselinePath, 'utf8')
 assert.ok(baseline.length > 0, 'data-test baseline should not be empty');
 
 // 2026-09-23 用户批准统一标签库，独立 AI 库编辑器及其重载入口已整体退役。
-// 只豁免这个已删除的功能，其余基线钩子仍必须存在。
-const retired = new Set(['data-test="reload-ai-tag-library"']);
+// 2026-09-29 P-033：设置页「反馈回流」开关删除（P-021 结论：它只控制已删掉的收藏 / 点赞投影）。
+// 只豁免这些已删除的功能，其余基线钩子仍必须存在。
+const retired = new Set([
+  'data-test="reload-ai-tag-library"',
+  'data-test="short-feed-feedback-sync-toggle"'
+]);
 for (const hook of retired) {
   assert.ok(baseline.includes(hook), `退役钩子必须来自基线: ${hook}`);
   assert.ok(!present.has(hook), `已退役的入口不应继续出现: ${hook}`);

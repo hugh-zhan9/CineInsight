@@ -618,6 +618,24 @@ input:checked + .slider::before {
   padding-bottom: 10px;
 }
 
+/* 分区标题旁的「即时生效 / 需保存」标记（D-PC57）。data-save-mode 由 SettingsPage 按
+   SETTINGS_SECTIONS 打在分区根节点上；标题由各分区组件渲染，所以规则必须是全局的。 */
+.settings-section[data-save-mode] > h3::after {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+  vertical-align: 2px;
+}
+
+.settings-section[data-save-mode="save"] > h3::after { content: '需保存'; }
+.settings-section[data-save-mode="instant"] > h3::after { content: '即时生效'; color: var(--accent-color); border-color: var(--accent-border); }
+.settings-section[data-save-mode="mixed"] > h3::after { content: '部分需保存'; }
+
 .settings-section-heading {
   display: flex;
   align-items: center;

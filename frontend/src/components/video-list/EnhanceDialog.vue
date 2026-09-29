@@ -4,7 +4,8 @@
     <!-- 能力不可用 / 没带上视频这两条死胡同分支里原本没有任何按钮，
          这个弹窗又不响应点遮罩，用户会被困在里面出不来。 -->
     <template v-if="!enhanceCapability?.available">
-      <p class="help-text">超分能力不可用：{{ enhanceCapability?.message || '运行时未打包' }}</p>
+      <!-- 未就绪要说清楚原因和下一步（MEDIA-11）：hint 是给用户看的一句话，message 留给排障。 -->
+      <p class="help-text" data-test="enhance-unavailable">超分暂时不可用：{{ enhanceUnavailableText }}</p>
     </template>
     <template v-else-if="enhanceDialog.video">
       <p class="enhance-source-name" :title="enhanceDialog.video.path">{{ enhanceDialog.video.name }}</p>
@@ -18,7 +19,17 @@
         </div>
       </div>
       <p class="help-text">输出：<code>{{ enhanceOutputPreview }}</code>（与源同目录）</p>
-      <p class="help-text">固定 2× 放大；原文件不会被修改；任务可随时取消。运行需要同卷至少约 {{ enhanceDiskFloorText }} 可用空间。</p>
+      <p class="help-text">固定 2× 放大；原文件不会被修改；任务可随时取消，取消或空间不足时进度会保留，重试从断点接着做。运行需要同卷至少约 {{ enhanceDiskFloorText }} 可用空间。</p>
+      <div class="setting-item enhance-copy-metadata">
+        <label class="checkbox-label">
+          <input v-model="enhanceDialog.copyMetadata" type="checkbox" data-test="enhance-copy-metadata" />
+          <span>把原片的标签、人物、作品集与外挂字幕复制到产物</span>
+        </label>
+        <p class="help-text">只复制你自己整理的信息（自动标签不复制）；产物加入原片所在的作品集，排在末尾。</p>
+      </div>
+      <p v-if="retainedTaskForVideo" class="help-text enhance-retained-hint" data-test="enhance-retained-hint">
+        这个视频有一个保留了进度的任务。新建任务会清掉那份进度；想接着做，请在下方任务列表里点它的「重试」。
+      </p>
       <p v-if="enhanceDialog.error" class="cleanup-error">{{ enhanceDialog.error }}</p>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" @click="enhanceDialog.show = false">取消</button>
@@ -34,14 +45,28 @@
     <template v-if="enhanceTasks.length">
       <div class="divider"></div>
       <h3 class="enhance-task-heading">任务</h3>
-      <div v-for="task in enhanceTasks" :key="task.id" class="enhance-task-row">
+      <div v-for="task in enhanceTasks" :key="task.id" class="enhance-task-row" :data-test="`enhance-task-${task.id}`">
         <span class="enhance-task-main">
-          {{ task.video_name }} · {{ enhanceStatusLabel(task) }}
-          <template v-if="task.status === 'running' && task.total_frames">（{{ task.committed_frames }}/{{ task.total_frames }} 帧）</template>
+          <span class="enhance-task-title">{{ task.video_name }} · <span data-test="enhance-task-status">{{ enhanceStatusLabel(task) }}</span></span>
+          <small v-if="enhanceDetailText(task)" class="enhance-task-detail" data-test="enhance-task-detail">{{ enhanceDetailText(task) }}</small>
         </span>
         <span class="enhance-task-actions">
-          <button v-if="['queued','running'].includes(task.status)" type="button" class="btn-secondary btn-compact" @click="cancelEnhancementTask(task)">取消</button>
-          <button v-if="['failed','cancelled'].includes(task.status)" type="button" class="btn-secondary btn-compact" @click="retryEnhancementTask(task)">重试</button>
+          <button v-if="enhancementCancellable(task)" type="button" class="btn-secondary btn-compact" @click="cancelEnhancementTask(task)">取消</button>
+          <button v-if="enhancementRetryable(task)" type="button" class="btn-secondary btn-compact" :data-test="`enhance-retry-${task.id}`" @click="retryEnhancementTask(task)">重试</button>
+          <button
+            v-if="enhancementRetainsProgress(task)"
+            type="button"
+            class="btn-secondary btn-compact btn-danger-outline"
+            :data-test="`enhance-discard-${task.id}`"
+            @click="discardEnhancementProgress(task)"
+          >放弃保留的进度</button>
+          <button
+            v-if="task.status === 'completed' && task.output_video_id"
+            type="button"
+            class="btn-secondary btn-compact"
+            :data-test="`enhance-reveal-${task.id}`"
+            @click="revealEnhancementOutput(task)"
+          >查看产物</button>
         </span>
       </div>
     </template>
@@ -49,10 +74,13 @@
 </template>
 
 <script>
-import { GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask } from '../../../wailsjs/go/main/App';
+import { GetEnhancementCapability, GetEnhancementVideoPreflight, CreateEnhancementTask, ListEnhancementTasks, CancelEnhancementTask, RetryEnhancementTask, DiscardEnhancementProgress, OpenDirectory } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
-import { notifyError } from '../../utils/feedback.js';
+import { confirmAction, notifyError, notifySuccess } from '../../utils/feedback.js';
 import { formatMediaMeta } from '../../utils/mediaDetails.js';
+import {
+  enhancementCancellable, enhancementDetailText, enhancementRetainsProgress, enhancementRetryable, enhancementStatusText
+} from '../../utils/enhancement.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 
 // 视频超分弹窗：能力探测、单个任务创建与最近任务列表。由父组件通过 ref 调用 open()
@@ -64,7 +92,7 @@ export default {
   data() {
     return {
       enhanceCapability: null,
-      enhanceDialog: { show: false, video: null, profile: 'general', creating: false, error: '', preflight: null },
+      enhanceDialog: { show: false, video: null, profile: 'general', copyMetadata: true, creating: false, error: '', preflight: null },
       enhanceTasks: []
     };
   },
@@ -72,6 +100,17 @@ export default {
     this.registerRuntimeEvent('video-enhancement-state', view => this.applyEnhancementState(view));
   },
   computed: {
+    enhanceUnavailableText() {
+      const capability = this.enhanceCapability;
+      return capability?.hint || capability?.message || '超分组件没有随应用安装';
+    },
+    // 同一视频新建任务时后端会先清掉旧任务保留的检查点（主代理裁决 2026-09-29），
+    // 所以在创建前把这件事说出来，想续跑的人去点那条任务的「重试」。
+    retainedTaskForVideo() {
+      const videoID = this.enhanceDialog.video?.id;
+      if (!videoID) return null;
+      return this.enhanceTasks.find(task => task.video_id === videoID && enhancementRetainsProgress(task)) || null;
+    },
     enhanceOutputPreview() {
       const preflight = this.enhanceDialog.preflight;
       if (preflight) {
@@ -88,11 +127,15 @@ export default {
   },
   methods: {
     formatMediaMeta,
+    enhancementCancellable,
+    enhancementRetryable,
+    enhancementRetainsProgress,
+    enhanceDetailText: enhancementDetailText,
     open(video) {
       return this.openEnhanceDialog(video);
     },
     async openEnhanceDialog(video) {
-      this.enhanceDialog = { show: true, video, profile: 'general', creating: false, error: '' };
+      this.enhanceDialog = { show: true, video, profile: 'general', copyMetadata: true, creating: false, error: '' };
       try {
         this.enhanceCapability = await GetEnhancementCapability();
       } catch (err) {
@@ -119,15 +162,18 @@ export default {
       else this.enhanceTasks.unshift(view);
     },
     enhanceStatusLabel(task) {
-      const labels = { queued: '排队中', running: `处理中（${task.phase}）`, cancel_requested: '取消中', cancelled: '已取消', completed: '已完成', failed: `失败（${task.error_code}）` };
-      return labels[task.status] || task.status;
+      return enhancementStatusText(task);
     },
     async createEnhancementTask() {
       if (!this.enhanceDialog.video) return;
       this.enhanceDialog.creating = true;
       this.enhanceDialog.error = '';
       try {
-        await CreateEnhancementTask({ video_id: this.enhanceDialog.video.id, profile: this.enhanceDialog.profile });
+        await CreateEnhancementTask({
+          video_id: this.enhanceDialog.video.id,
+          profile: this.enhanceDialog.profile,
+          copy_metadata: this.enhanceDialog.copyMetadata !== false
+        });
         await this.refreshEnhancementTasks();
       } catch (err) {
         this.enhanceDialog.error = String(err);
@@ -151,6 +197,31 @@ export default {
       }
       await this.refreshEnhancementTasks();
     },
+    // 放弃之后工作目录会被删掉、重试从头开始（MEDIA-03），这一步不可撤销，先确认。
+    async discardEnhancementProgress(task) {
+      const confirmed = await confirmAction({
+        title: '放弃保留的进度',
+        message: `「${task.video_name}」已处理的部分会被删除，腾出磁盘空间；之后重试将从头开始。确认放弃吗？`,
+        confirmText: '放弃进度',
+        danger: true
+      });
+      if (!confirmed) return;
+      try {
+        const view = await DiscardEnhancementProgress(task.id);
+        if (view?.id) this.applyEnhancementState(view);
+        notifySuccess('已放弃保留的进度');
+      } catch (err) {
+        notifyError('放弃保留的进度失败: ' + err);
+      }
+      await this.refreshEnhancementTasks();
+    },
+    async revealEnhancementOutput(task) {
+      try {
+        await OpenDirectory(task.output_video_id);
+      } catch (err) {
+        notifyError('打开产物所在位置失败: ' + err);
+      }
+    },
   }
 };
 </script>
@@ -160,8 +231,12 @@ export default {
 .enhance-source-meta { margin-bottom: 10px; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .enhance-task-heading { font-size: 14px; margin-bottom: 8px; }
 .enhance-task-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--border-color); font-size: 12px; }
-.enhance-task-main { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.enhance-task-actions { flex: 0 0 auto; display: flex; gap: 6px; }
+.enhance-task-main { min-width: 0; display: grid; gap: 2px; }
+.enhance-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.enhance-task-detail { color: var(--text-secondary); font-size: 11.5px; overflow-wrap: anywhere; }
+.enhance-task-actions { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+.enhance-copy-metadata { margin-bottom: 12px; }
+.enhance-retained-hint { color: var(--warning-text); }
 .cleanup-error {
   color: var(--review-text-muted);
   font-size: 13px;

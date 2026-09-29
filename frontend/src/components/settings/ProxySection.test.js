@@ -196,3 +196,20 @@ describe('ProxySection', () => {
     expect(wrapper.get('[data-test="proxy-usage"]').text()).toContain('读取代理占用失败');
   });
 });
+
+describe('播放兼容缓存的名称与文案（D-PC59 / D-PC61）', () => {
+  it('PLAY-15 淘汰保护窗口写 120 秒，与后端 playbackProxyEvictionGrace 一致', async () => {
+    const wrapper = await mountSection();
+    const help = wrapper.get('[data-test="proxy-limit-help"]').text();
+    expect(help).toContain('120 秒');
+    expect(help).not.toContain('60 秒');
+  });
+
+  it('APP-14 分区改名「播放兼容缓存」，并点明与资料源出网代理无关，不再写绝对路径', async () => {
+    const wrapper = await mountSection();
+    expect(wrapper.get('h3').text()).toBe('播放兼容缓存');
+    const intro = wrapper.get('[data-test="proxy-intro"]').text();
+    expect(intro).toContain('出网代理无关');
+    expect(intro).not.toContain('~/.CineInsight');
+  });
+});

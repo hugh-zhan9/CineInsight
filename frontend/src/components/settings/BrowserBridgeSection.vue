@@ -58,13 +58,27 @@
     <div class="setting-item">
       <label>下载目录</label>
       <div class="bridge-token-row">
-        <input class="bridge-token" type="text" v-model="form.browser_download_directory" placeholder="尚未选择" />
+        <input
+          class="bridge-token"
+          type="text"
+          v-model="form.browser_download_directory"
+          placeholder="尚未选择"
+          data-test="bridge-download-directory"
+          @change="validateDownloadDirectory"
+        />
         <button type="button" class="btn-secondary" @click="chooseDirectory">选择目录</button>
       </div>
+      <!-- 选完目录就告诉用户它在不在扫描范围里（D-PC25）：不在的话下载照常，但不会自动进片库。 -->
+      <p
+        v-if="directoryCheck"
+        :class="['bridge-directory-check', `bridge-directory-check--${directoryCheck.level}`]"
+        data-test="bridge-directory-check"
+        role="status"
+      >{{ directoryCheck.text }}</p>
       <p class="help-text">
         插件推过来的视频落到这里。没有设置时桥接会拒绝建任务而不是替你挑一个目录。
         这个目录不会自动加进扫描目录——想让下载的视频进片库，请在「扫描目录管理」里
-        把它（或它的上级目录）加进去。
+        把它（或它的上级目录）加进去，或者在「下载」页对已完成的任务点「把下载目录加入扫描目录」。
       </p>
     </div>
 
@@ -91,8 +105,24 @@
 import {
   GetBrowserBridgeStatus,
   RegenerateBrowserBridgeToken,
-  SelectBrowserDownloadDirectory
+  SelectBrowserDownloadDirectory,
+  ValidateScanDirectory
 } from '../../../wailsjs/go/main/App';
+
+// ValidateScanDirectory 的结果 → 一句提示。与已配置的根相同或在其内＝在扫描范围里。
+export function downloadDirectoryCheckText(validation) {
+  if (!validation) return null;
+  if (!validation.exists) {
+    return { level: 'warn', text: '这个目录目前不存在，桥接建任务时会失败；请重新选择一个已有的目录。' };
+  }
+  if (validation.duplicate_of || validation.nested_in) {
+    return { level: 'ok', text: '这个目录在片库扫描范围内，下载完成后会自动入库。' };
+  }
+  return {
+    level: 'warn',
+    text: '这个目录不在片库扫描范围内：视频会下载下来，但不会自动进片库。可以在「扫描目录管理」里把它加进去。'
+  };
+}
 
 // 浏览器插件分区：桥接状态、配对令牌、下载目录与任务列表。
 export default {
@@ -104,11 +134,14 @@ export default {
     return {
       status: null,
       tokenVisible: false,
-      tokenMessage: ''
+      tokenMessage: '',
+      directoryCheck: null,
+      directoryCheckSeq: 0
     };
   },
   mounted() {
     this.loadStatus();
+    if (String(this.form.browser_download_directory || '').trim()) this.validateDownloadDirectory();
   },
   computed: {
     statusText() {
@@ -150,9 +183,29 @@ export default {
       try {
         const directory = await SelectBrowserDownloadDirectory();
         // 用户取消选择时返回空串，此时保持原值而不是清空。
-        if (directory) this.form.browser_download_directory = directory;
+        if (directory) {
+          this.form.browser_download_directory = directory;
+          await this.validateDownloadDirectory();
+        }
       } catch (err) {
         this.$emit('error', `选择目录失败：${err}`);
+      }
+    },
+    // 只读检查，不改任何状态；连点两次时只认最后一次的结果。
+    async validateDownloadDirectory() {
+      const directory = String(this.form.browser_download_directory || '').trim();
+      const seq = ++this.directoryCheckSeq;
+      if (!directory) {
+        this.directoryCheck = null;
+        return;
+      }
+      try {
+        const validation = await ValidateScanDirectory(directory);
+        if (seq !== this.directoryCheckSeq) return;
+        this.directoryCheck = downloadDirectoryCheckText(validation);
+      } catch (err) {
+        if (seq !== this.directoryCheckSeq) return;
+        this.directoryCheck = { level: 'warn', text: `检查下载目录是否在扫描范围内失败：${err}` };
       }
     },
   }
@@ -194,5 +247,9 @@ export default {
 }
 
 .bridge-token { flex: 1; min-width: 0; }
+
+.bridge-directory-check { margin: 8px 0 0; font-size: 12.5px; overflow-wrap: anywhere; }
+.bridge-directory-check--ok { color: var(--success-color); }
+.bridge-directory-check--warn { color: var(--warning-text); }
 
 </style>

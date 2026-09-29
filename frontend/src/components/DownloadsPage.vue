@@ -42,7 +42,8 @@
 
     <div v-if="tasks.length === 0" class="downloads-empty" data-test="downloads-empty">
       <h3>还没有下载任务</h3>
-      <p>在浏览器插件里抓到视频后点「发送到 CineInsight」，任务会出现在这里，下完自动进片库。</p>
+      <!-- 下载目录不会自动加进扫描目录（D-B05），「下完自动进片库」只在目录已在扫描范围内时成立。 -->
+      <p>在浏览器插件里抓到视频后点「发送到 CineInsight」，任务会出现在这里；下载目录在扫描范围内时，下完会自动入库。</p>
     </div>
 
     <template v-else>
@@ -53,7 +54,10 @@
             v-for="task in [...activeTasks, ...queuedTasks]"
             :key="task.id"
             :task="task"
+            :notice="notices[task.id] || null"
+            :busy="busyIds.includes(task.id)"
             @cancel="cancelTask"
+            @action="runAction"
           />
         </div>
       </div>
@@ -61,7 +65,15 @@
       <div v-if="finishedTasks.length" class="downloads-group">
         <h3 class="downloads-group__title">已结束</h3>
         <div class="downloads-list">
-          <DownloadRow v-for="task in finishedTasks" :key="task.id" :task="task" @cancel="cancelTask" />
+          <DownloadRow
+            v-for="task in finishedTasks"
+            :key="task.id"
+            :task="task"
+            :notice="notices[task.id] || null"
+            :busy="busyIds.includes(task.id)"
+            @cancel="cancelTask"
+            @action="runAction"
+          />
         </div>
       </div>
     </template>
@@ -69,11 +81,40 @@
 </template>
 
 <script>
-import { ListBrowserDownloadTasks, CancelBrowserDownloadTask } from '../../wailsjs/go/main/App';
+import {
+  AddDownloadDirectoryToScan, CancelBrowserDownloadTask, ListDownloadTasks, ReimportDownload, RetryDownload, RevealDownload
+} from '../../wailsjs/go/main/App';
 import DownloadRow from './downloads/DownloadRow.vue';
 
-const ACTIVE_STATES = ['running', 'remuxing', 'importing'];
-const TERMINAL_STATES = ['done', 'failed', 'canceled'];
+// 后端从不发出 remuxing（MEDIA-15），状态集合以 browser_download_service.go 为准。
+const ACTIVE_STATES = ['running', 'importing'];
+const TERMINAL_STATES = ['done', 'failed', 'canceled', 'interrupted'];
+
+// 动作结果码（后端 BrowserDownloadCode*）的中文兜底：后端通常带 message，没带时用这里的说法。
+// directory_* 三个是「加入扫描目录」的预检结果：加进去也不会入库，所以不当失败处理，
+// 而是说清楚要去设置页做什么。
+const ACTION_CODE_TEXTS = {
+  directory_excluded: { level: 'warn', text: '下载目录在扫描黑名单里，加入扫描目录也不会入库，请先在设置页把它移出黑名单。' },
+  directory_nested: { level: 'warn', text: '下载目录包含已有的扫描目录，直接加入会让扫描目录互相嵌套，请在设置页调整扫描目录。' },
+  directory_missing: { level: 'error', text: '下载目录已不存在。' },
+  not_in_scan_roots: { level: 'warn', text: '下载目录还不在片库扫描目录里。' },
+  import_failed: { level: 'error', text: '入库没有成功。' },
+  retry_requires_browser: { level: 'warn', text: '应用重启后下载请求已失效，请回浏览器重新推送。' },
+  not_retryable: { level: 'warn', text: '只有失败或已取消的任务可以重试。' },
+  queue_full: { level: 'warn', text: '下载队列已满，等前面的任务跑完再试。' },
+  not_finished: { level: 'warn', text: '任务还没有下载完成。' },
+  file_missing: { level: 'error', text: '下载的文件已经不在了。' },
+  reveal_failed: { level: 'error', text: '无法打开所在目录。' },
+  service_unavailable: { level: 'error', text: '下载服务未启用。' },
+  task_not_found: { level: 'error', text: '没有这个下载任务。' }
+};
+
+const ACTION_SUCCESS_TEXTS = {
+  retry: '已重新排队下载',
+  'add-directory': '已把下载目录加入扫描目录并入库',
+  reimport: '已重新入库',
+  reveal: ''
+};
 
 // 插件推过来的下载任务的独立页面。
 //
@@ -83,7 +124,7 @@ export default {
   name: 'DownloadsPage',
   components: { DownloadRow },
   data() {
-    return { tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [] };
+    return { tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [], notices: {}, busyIds: [] };
   },
   computed: {
     visibleTasks() {
@@ -112,7 +153,7 @@ export default {
     },
     activeHintText() {
       if (this.activeTasks.length === 0) return '当前没有任务在跑';
-      return this.activeTasks.some((task) => task.state === 'remuxing') ? '含转封装' : '正在下载';
+      return this.activeTasks.some((task) => task.state === 'importing') ? '含入库中' : '正在下载';
     }
   },
   mounted() {
@@ -130,7 +171,8 @@ export default {
   methods: {
     async loadTasks() {
       try {
-        this.tasks = (await ListBrowserDownloadTasks()) || [];
+        // 本次会话的任务 + 表里的历史（D-PC21），与 browser-download-tasks 事件同一份载荷。
+        this.tasks = (await ListDownloadTasks()) || [];
         this.errorMessage = '';
       } catch (err) {
         this.tasks = [];
@@ -144,6 +186,56 @@ export default {
       } catch (err) {
         this.errorMessage = `取消任务失败：${err}`;
       }
+    },
+    // 重试 / 加入扫描目录 / 重新入库 / 打开所在目录（D-PC25）。结果按行显示，
+    // 不用一条全页报错盖住其他任务。
+    async runAction({ action, task }) {
+      const call = {
+        retry: RetryDownload,
+        'add-directory': AddDownloadDirectoryToScan,
+        reimport: ReimportDownload,
+        reveal: RevealDownload
+      }[action];
+      if (!call || !task?.id || this.busyIds.includes(task.id)) return;
+      this.busyIds = [...this.busyIds, task.id];
+      this.setNotice(task.id, null);
+      try {
+        const result = await call(task.id);
+        this.applyActionResult(action, task, result);
+      } catch (err) {
+        this.setNotice(task.id, { level: 'error', text: `操作失败：${err}` });
+      } finally {
+        this.busyIds = this.busyIds.filter(id => id !== task.id);
+      }
+    },
+    applyActionResult(action, task, result) {
+      const code = result?.code || 'ok';
+      if (result?.task?.id) this.mergeTask(result.task);
+      if (code === 'ok') {
+        const text = ACTION_SUCCESS_TEXTS[action];
+        this.setNotice(task.id, text ? { level: 'success', text } : null);
+        return;
+      }
+      const known = ACTION_CODE_TEXTS[code];
+      if (code === 'not_in_scan_roots' || code === 'import_failed') {
+        // 原因句已经在「文件已保存，但没有入库：…」那一行里了，这里不再重复一遍（MEDIA-15）。
+        this.setNotice(task.id, { level: 'warn', text: '这次入库仍没有成功，原因见上方说明。' });
+        return;
+      }
+      const text = String(result?.message || '').trim() || known?.text || `操作没有完成（${code}）`;
+      this.setNotice(task.id, { level: known?.level || 'error', text });
+    },
+    // 动作结果里带回的任务快照先就地换上；随后的推送仍是唯一的整体刷新来源。
+    mergeTask(fresh) {
+      const index = this.tasks.findIndex(item => item.id === fresh.id);
+      if (index < 0) return;
+      this.tasks.splice(index, 1, { ...this.tasks[index], ...fresh });
+    },
+    setNotice(id, notice) {
+      const next = { ...this.notices };
+      if (notice) next[id] = notice;
+      else delete next[id];
+      this.notices = next;
     },
     // 只从这一次的界面里收起来。后端仍然留着最近的记录，重开页面还看得到——
     // 不假装这是"删除"。
