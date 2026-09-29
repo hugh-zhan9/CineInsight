@@ -122,6 +122,9 @@ type DatabaseSwitchService struct {
 	// cancelMigration 非空表示有一次迁移正在进行，CancelRunningSwitch 调它取消。
 	cancelMu        sync.Mutex
 	cancelMigration context.CancelFunc
+	// shuttingDown 由 CancelRunningSwitch 置位、本进程内不再复位：应用正在退出。取消落在迁移
+	// 登记取消函数之前（App 还在预检、后台 goroutine 还没起来）时，靠它让之后的迁移不再开始（m2）。
+	shuttingDown atomic.Bool
 
 	statusMu sync.RWMutex
 	status   DatabaseSwitchStatus
@@ -181,6 +184,30 @@ func (s *DatabaseSwitchService) Status() DatabaseBackendStatus {
 const DatabaseSwitchReasonBackendEnvLocked = "backend_env_locked"
 
 const databaseSwitchBackendEnvLockedMessage = "当前后端由环境变量 DB_BACKEND 指定，应用内切换在重启后不会生效；请修改该环境变量后重启应用"
+
+// ErrDatabaseBackendEnvLocked 是迁移并切换因 backend_env_locked 被拒绝时的错误。与 relaunch_pending
+// 一样，这个入口只返回 error，前端据消息开头的原因码识别。
+var ErrDatabaseBackendEnvLocked = errors.New(DatabaseSwitchReasonBackendEnvLocked + ": " + databaseSwitchBackendEnvLockedMessage)
+
+// ErrDatabaseSwitchCancelledForShutdown：应用正在退出（CancelRunningSwitch 已调用），迁移不再开始。
+// 按取消处理：什么都没碰，配置不改。
+var ErrDatabaseSwitchCancelledForShutdown = fmt.Errorf("应用正在退出，迁移已取消（尚未开始），当前库未受影响: %w", context.Canceled)
+
+// errDatabaseSwitchBusy：另一次切换或清空目标库正持有切换锁。
+var errDatabaseSwitchBusy = errors.New("已有一次切换或清空目标库正在进行，请稍后再试")
+
+// Err 把预检结果换成「能不能开始迁移」：可用（能连上且为空）时返回 nil，否则返回说明原因的错误。
+// backend_env_locked 与 relaunch_pending 一样带原因码前缀（ErrDatabaseBackendEnvLocked），其余原因
+// 只带说明文字。
+func (p *DatabaseSwitchPreflight) Err() error {
+	if p.ReasonCode == DatabaseSwitchReasonBackendEnvLocked {
+		return ErrDatabaseBackendEnvLocked
+	}
+	if p.Reachable && p.Empty {
+		return nil
+	}
+	return errors.New(p.Message)
+}
 
 // Preflight 检查目标后端能不能连、是不是空的。不写任何数据。
 func (s *DatabaseSwitchService) Preflight(target string) (*DatabaseSwitchPreflight, error) {
@@ -252,14 +279,16 @@ func (s *DatabaseSwitchService) SwitchWithLifecycle(
 		return ErrDatabaseRelaunchPending
 	}
 	if s.backendFromProcessEnv() {
-		return fmt.Errorf("%s: %s", DatabaseSwitchReasonBackendEnvLocked, databaseSwitchBackendEnvLockedMessage)
+		return ErrDatabaseBackendEnvLocked
 	}
 	source := database.ActiveBackend()
 	if backend == source {
 		return fmt.Errorf("目标与当前后端相同，无需切换")
 	}
 	if !s.mu.TryLock() {
-		return fmt.Errorf("已有一次切换正在进行")
+		// App 在后台 goroutine 里调这里，发起时已返回成功：不发布终态，前端就一直等不到结果（m12）。
+		// 经 App 时 restoreMu 已排除另一次迁移，持锁的只会是清空目标库，覆盖状态不会盖掉进行中的迁移。
+		return s.fail(backend, errDatabaseSwitchBusy)
 	}
 	defer s.mu.Unlock()
 	if s.relaunchPending.Load() {
@@ -271,6 +300,11 @@ func (s *DatabaseSwitchService) SwitchWithLifecycle(
 		s.setMigrationCancel(nil)
 		cancel()
 	}()
+	// 退出时的取消若落在登记取消函数之前，CancelRunningSwitch 找不到可取消的迁移；它先置位
+	// shuttingDown 再读取消函数，这里先登记再读 shuttingDown，两边总有一边看得见对方（m2）。
+	if s.shuttingDown.Load() {
+		return s.fail(backend, ErrDatabaseSwitchCancelledForShutdown)
+	}
 	s.running.Store(true)
 	defer s.running.Store(false)
 
@@ -327,7 +361,11 @@ func (s *DatabaseSwitchService) RelaunchPending() bool {
 
 // CancelRunningSwitch 取消正在进行的迁移（退出应用时由 shutdown 在拿 restoreMu 之前调用）。
 // 取消按失败处理：离开维护模式，配置不改，目标库可能留为半迁移。没有进行中的迁移时返回 false。
+//
+// 取消带状态（m2）：先置位 shuttingDown，之后才开始的迁移（App 预检之后、SwitchWithLifecycle
+// 登记取消函数之后都会复查）按取消处理、不开始。
 func (s *DatabaseSwitchService) CancelRunningSwitch() bool {
+	s.shuttingDown.Store(true)
 	s.cancelMu.Lock()
 	cancel := s.cancelMigration
 	s.cancelMu.Unlock()
@@ -336,6 +374,12 @@ func (s *DatabaseSwitchService) CancelRunningSwitch() bool {
 	}
 	cancel()
 	return true
+}
+
+// ShuttingDown 报告 CancelRunningSwitch 是否已被调用（应用正在退出）。App 在预检之后复查它，
+// 为真时不再发起迁移。
+func (s *DatabaseSwitchService) ShuttingDown() bool {
+	return s.shuttingDown.Load()
 }
 
 func (s *DatabaseSwitchService) setMigrationCancel(cancel context.CancelFunc) {
@@ -378,13 +422,10 @@ func (s *DatabaseSwitchService) migrateAndPersist(ctx context.Context, target *g
 	return result, nil
 }
 
-// SwitchBackendConfigOnly 切回上一个后端：只改配置、不迁移数据（D-PC55「切回之前的后端」）。
-// 不带维护模式，只供没有 App 的场景与测试使用；应用内走 SwitchBackendConfigOnlyWithLifecycle。
-func (s *DatabaseSwitchService) SwitchBackendConfigOnly(target string) (*DatabaseSwitchConfigResult, error) {
-	return s.SwitchBackendConfigOnlyWithLifecycle(target, nil, nil)
-}
-
-// SwitchBackendConfigOnlyWithLifecycle 只在目标就是配置里记下的「上一个后端」、且目标库非空时允许——
+// SwitchBackendConfigOnlyWithLifecycle 切回上一个后端：只改配置、不迁移数据（D-PC55「切回之前的后端」）。
+// 这是唯一的入口：不立围栏的版本已删掉（m10），免得今后被调用而不立围栏。
+//
+// 只在目标就是配置里记下的「上一个后端」、且目标库非空时允许——
 // 空库或半迁移的库切过去等于换成一个空片库。切换之后在当前库里产生的改动不会带回目标库，Message 里写明。
 //
 // 与迁移并切换同一口径（APP-02）：检查全部通过后先 enterMaintenance 立写入围栏，再写配置；写配置失败

@@ -1284,6 +1284,282 @@ func TestMEDIA04DiscardKeepsTempFileSharedByAnotherPendingJob(t *testing.T) {
 	}
 }
 
+// createPendingSubtitleJob 直接写一条待确认行（不跑识别）。
+func createPendingSubtitleJob(t *testing.T, video models.Video, pendingPath string) models.SubtitleJob {
+	t.Helper()
+	job := models.SubtitleJob{
+		VideoID: video.ID, Engine: "whisperx", SourceLang: "en",
+		Status: string(SubtitleQueueTaskStatusNeedsConfirmation), Message: "待确认", PendingArtifactPath: pendingPath,
+	}
+	if err := database.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
+// MEDIA04 / m6：「另有待确认行共用同一临时文件」按 subtitleFileLockKey（Clean → NFC → 小写）在 Go 里比较：
+// NFC 与 NFD 写法的「Café」、大小写不同的非 ASCII 名字（ÉTÉ / été）在 darwin 上是同一个文件。SQL 的 LOWER
+// 两者都认不出来（SQLite 只转 ASCII，也没有哪个后端做规范化）。
+func TestMEDIA04PendingSharedCheckFoldsUnicodeNormalizationAndCase(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	nfc := "Café"
+	nfd := "Café"
+	videoNFC := models.Video{Name: nfc + ".mp4", Path: filepath.Join(root, nfc+".mp4"), Directory: root}
+	videoNFD := models.Video{Name: nfd + ".mkv", Path: filepath.Join(root, nfd+".mkv"), Directory: root}
+	for _, video := range []*models.Video{&videoNFC, &videoNFD} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	pendingNFC := subtitlePendingPath(subtitleparser.SRTPathForVideo(videoNFC.Path))
+	pendingNFD := subtitlePendingPath(subtitleparser.SRTPathForVideo(videoNFD.Path))
+	if pendingNFC == pendingNFD {
+		t.Fatal("前置：两种写法的字节应不同")
+	}
+	if err := os.WriteFile(pendingNFC, []byte("pending"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	jobNFC := createPendingSubtitleJob(t, videoNFC, pendingNFC)
+	createPendingSubtitleJob(t, videoNFD, pendingNFD)
+	h := newP014Harness(t, t.TempDir())
+
+	if resolved, err := h.service.ResolveSubtitleJob(jobNFC.ID, SubtitleJobActionDiscard, SubtitleJobResolveInput{}); err != nil || resolved.Status != SubtitleQueueTaskStatusCancelled {
+		t.Fatalf("放弃 NFC 那一行应成功: %+v err=%v", resolved, err)
+	}
+	if _, err := os.Stat(pendingNFC); err != nil {
+		t.Fatalf("NFD 写法的待确认行还引用着同一个临时文件，不得删除: %v", err)
+	}
+
+	// 非 ASCII 的大小写：库里记的是 été，问的是 ÉTÉ。
+	upper := filepath.Join(root, ".ÉTÉ.cineinsight-pending.srt")
+	lower := filepath.Join(root, ".été.cineinsight-pending.srt")
+	createPendingSubtitleJob(t, videoNFC, lower)
+	if shared, err := subtitlePendingReferencedElsewhere(database.DB, upper, 0, 0); err != nil || !shared {
+		t.Fatalf("大小写不同的非 ASCII 名字应视为同一个临时文件: shared=%v err=%v", shared, err)
+	}
+	other := filepath.Join(root, ".other.cineinsight-pending.srt")
+	if shared, err := subtitlePendingReferencedElsewhere(database.DB, other, 0, 0); err != nil || shared {
+		t.Fatalf("对照：别的临时文件不算共用: shared=%v err=%v", shared, err)
+	}
+}
+
+// MEDIA04 / m6：对话框里的旧放弃入口查不了库时报错、不删临时文件——不知道有没有别的待确认行在用它。
+func TestMEDIA04LegacyDiscardFailsWithoutDeletingWhenJobsDBUnavailable(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", nil)
+	pendingPath := subtitlePendingPath(srtPath)
+	if err := os.WriteFile(pendingPath, []byte("pending"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	service := NewSubtitleService(t.TempDir())
+	service.cachePendingSubtitle(&pendingSubtitleArtifact{VideoID: video.ID, VideoPath: video.Path, SRTPath: pendingPath, Engine: SubtitleEngineWhisperX, SourceLang: "en"})
+
+	previous := database.DB
+	database.DB = nil
+	err := service.DiscardPendingSubtitle(video.ID)
+	database.DB = previous
+	if err == nil {
+		t.Fatal("查不了库时放弃应报错")
+	}
+	if _, statErr := os.Stat(pendingPath); statErr != nil {
+		t.Fatalf("查不了库时不得删除临时文件: %v", statErr)
+	}
+}
+
+// MEDIA04 / m11：放弃时临时文件删不掉、要把行改回待确认，条件只认「仍是这次放弃写下的样子」——
+// 两步之间被重试又被取消（同样是 cancelled、pending 为空，但说明不同）的行不动。
+func TestMEDIA04ReopenDiscardedJobRequiresDiscardMessage(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", nil)
+	pendingPath := subtitlePendingPath(srtPath)
+	const discardedMessage = "已放弃待确认的字幕"
+	original := models.SubtitleJob{
+		VideoID: video.ID, Engine: "whisperx", SourceLang: "en",
+		Status: string(SubtitleQueueTaskStatusCancelled), Message: "字幕任务已取消",
+	}
+	if err := database.DB.Create(&original).Error; err != nil {
+		t.Fatal(err)
+	}
+	before := original
+	before.Status = string(SubtitleQueueTaskStatusNeedsConfirmation)
+	before.Message = "检测到疑似模型幻觉"
+	service := NewSubtitleService(t.TempDir())
+
+	service.reopenDiscardedSubtitleJob(database.DB, &before, pendingPath, discardedMessage)
+	if row := mustLoadSubtitleJob(t, original.ID); SubtitleQueueTaskStatus(row.Status) != SubtitleQueueTaskStatusCancelled || row.Message != "字幕任务已取消" || row.PendingArtifactPath != "" {
+		t.Fatalf("说明不是这次放弃写下的，不应改回待确认: %+v", row)
+	}
+
+	if err := database.DB.Model(&models.SubtitleJob{}).Where("id = ?", original.ID).Update("message", discardedMessage).Error; err != nil {
+		t.Fatal(err)
+	}
+	service.reopenDiscardedSubtitleJob(database.DB, &before, pendingPath, discardedMessage)
+	if row := mustLoadSubtitleJob(t, original.ID); SubtitleQueueTaskStatus(row.Status) != SubtitleQueueTaskStatusNeedsConfirmation || row.Message != before.Message || row.PendingArtifactPath != pendingPath {
+		t.Fatalf("对照：仍是放弃写下的样子时应改回待确认: %+v", row)
+	}
+}
+
+// markLeftoverSubtitleJobs 造上一次进程退出时还在跑的行，返回按视频顺序的行。
+func markLeftoverSubtitleJobs(t *testing.T, videos ...models.Video) []models.SubtitleJob {
+	t.Helper()
+	jobs := make([]models.SubtitleJob, 0, len(videos))
+	for _, video := range videos {
+		job := models.SubtitleJob{VideoID: video.ID, Engine: "whisperx", SourceLang: "en", Status: string(SubtitleQueueTaskStatusRunning)}
+		if err := database.DB.Create(&job).Error; err != nil {
+			t.Fatal(err)
+		}
+		jobs = append(jobs, job)
+	}
+	return jobs
+}
+
+// MEDIA10（P-024 下游）：退出时正在跑的任务留下隐藏的临时字幕。标记中断时，临时文件位置上是普通文件
+// 才记进 pending_artifact_path（没有残留、符号链接都不记）；「忽略」时没有别的行引用就删掉它，同名
+// .srt 一个字节都不动。
+func TestMEDIA10InterruptedJobRecordsLeftoverPendingAndDismissRemovesIt(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	original := []byte("1\n00:00:00,000 --> 00:00:01,000\nhand-made\n")
+	withLeftover, srtWith := mustCreateSubtitleVideo(t, "left.mp4", original)
+	withoutLeftover, _ := mustCreateSubtitleVideo(t, "clean.mp4", nil)
+	linked, srtLinked := mustCreateSubtitleVideo(t, "linked.mp4", nil)
+	pendingWith := subtitlePendingPath(srtWith)
+	if err := os.WriteFile(pendingWith, []byte("half written"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	linkTarget := filepath.Join(t.TempDir(), "elsewhere.srt")
+	if err := os.WriteFile(linkTarget, []byte("user file"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(linkTarget, subtitlePendingPath(srtLinked)); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+	jobs := markLeftoverSubtitleJobs(t, withLeftover, withoutLeftover, linked)
+	h := newP014Harness(t, t.TempDir())
+
+	if count, err := h.service.MarkInterruptedSubtitleJobs(); err != nil || count != 3 {
+		t.Fatalf("应标记 3 条: count=%d err=%v", count, err)
+	}
+	if row := mustLoadSubtitleJob(t, jobs[0].ID); SubtitleQueueTaskStatus(row.Status) != SubtitleQueueTaskStatusInterrupted || row.PendingArtifactPath != pendingWith {
+		t.Fatalf("有残留临时字幕的中断行应记下它: %+v", row)
+	}
+	for _, job := range jobs[1:] {
+		if row := mustLoadSubtitleJob(t, job.ID); row.PendingArtifactPath != "" {
+			t.Fatalf("没有残留（或位置上是符号链接）时不应记: %+v", row)
+		}
+	}
+	if items, err := h.service.ListSubtitleJobs(0); err != nil {
+		t.Fatal(err)
+	} else {
+		for _, item := range items {
+			assertNoPath(t, "任务列表", item.Message, pendingWith)
+		}
+	}
+
+	if err := h.service.DismissInterruptedSubtitleJobs(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(pendingWith); !os.IsNotExist(err) {
+		t.Fatalf("忽略后没有别的行引用的残留临时字幕应删除: %v", err)
+	}
+	if got, err := os.ReadFile(srtWith); err != nil || !bytes.Equal(got, original) {
+		t.Fatalf("同名 .srt 不得改动: %q err=%v", got, err)
+	}
+	if _, err := os.Lstat(subtitlePendingPath(srtLinked)); err != nil {
+		t.Fatalf("没记下的符号链接不得删除: %v", err)
+	}
+	if _, err := os.Stat(linkTarget); err != nil {
+		t.Fatalf("符号链接指向的文件不得删除: %v", err)
+	}
+	for _, job := range jobs {
+		row := mustLoadSubtitleJob(t, job.ID)
+		if SubtitleQueueTaskStatus(row.Status) != SubtitleQueueTaskStatusCancelled || row.Message != subtitleJobDismissedInterruptedMessage || row.PendingArtifactPath != "" {
+			t.Fatalf("忽略后行改为已取消、不再指向临时文件: %+v", row)
+		}
+	}
+}
+
+// MEDIA10（P-024 下游）：中断行记下的临时字幕另有待确认行引用（movie.mp4 与 movie.mkv 共用同名 .srt，
+// 临时文件也是同一个）时，「忽略」不删；那一行自己放弃之后才删。
+func TestMEDIA10DismissKeepsLeftoverPendingSharedByNeedsConfirmationJob(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	interruptedVideo := models.Video{Name: "movie.mp4", Path: filepath.Join(root, "movie.mp4"), Directory: root}
+	pendingVideo := models.Video{Name: "movie.mkv", Path: filepath.Join(root, "movie.mkv"), Directory: root}
+	for _, video := range []*models.Video{&interruptedVideo, &pendingVideo} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatal(err)
+		}
+		mustCreateFile(t, video.Path)
+	}
+	pendingPath := subtitlePendingPath(subtitleparser.SRTPathForVideo(interruptedVideo.Path))
+	if err := os.WriteFile(pendingPath, []byte("pending"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	needsConfirmation := createPendingSubtitleJob(t, pendingVideo, pendingPath)
+	jobs := markLeftoverSubtitleJobs(t, interruptedVideo)
+	h := newP014Harness(t, t.TempDir())
+	if count, err := h.service.MarkInterruptedSubtitleJobs(); err != nil || count != 1 {
+		t.Fatalf("应标记 1 条: count=%d err=%v", count, err)
+	}
+	if row := mustLoadSubtitleJob(t, jobs[0].ID); row.PendingArtifactPath != pendingPath {
+		t.Fatalf("中断行应记下临时字幕: %+v", row)
+	}
+
+	if err := h.service.DismissInterruptedSubtitleJobs(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(pendingPath); err != nil {
+		t.Fatalf("另有待确认行引用时忽略不得删除临时字幕: %v", err)
+	}
+	if resolved, err := h.service.ResolveSubtitleJob(needsConfirmation.ID, SubtitleJobActionDiscard, SubtitleJobResolveInput{}); err != nil || resolved.Status != SubtitleQueueTaskStatusCancelled {
+		t.Fatalf("放弃待确认行应成功: %+v err=%v", resolved, err)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("没有行再引用时临时字幕应删除: %v", err)
+	}
+}
+
+// MEDIA10 / m7：「全部重新排队」没能入队的中断行改为 failed、写真实原因，不标「已忽略」；残留的临时
+// 字幕与忽略时同样清掉。条件更新只认仍是 interrupted 的行，已处理过的行返回 false、不动。
+func TestMEDIA10FailInterruptedJobWritesReasonInsteadOfDismissed(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", nil)
+	pendingPath := subtitlePendingPath(srtPath)
+	if err := os.WriteFile(pendingPath, []byte("half written"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	jobs := markLeftoverSubtitleJobs(t, video)
+	h := newP014Harness(t, t.TempDir())
+	if _, err := h.service.MarkInterruptedSubtitleJobs(); err != nil {
+		t.Fatal(err)
+	}
+
+	changed, err := h.service.FailInterruptedSubtitleJob(jobs[0].ID, "视频已删除，无法重新排队")
+	if err != nil || !changed {
+		t.Fatalf("应改为失败: changed=%v err=%v", changed, err)
+	}
+	row := mustLoadSubtitleJob(t, jobs[0].ID)
+	if SubtitleQueueTaskStatus(row.Status) != SubtitleQueueTaskStatusFailed || row.Message != "视频已删除，无法重新排队" || row.PendingArtifactPath != "" {
+		t.Fatalf("行应为 failed 并写明原因: %+v", row)
+	}
+	if strings.Contains(row.Message, "已忽略") {
+		t.Fatalf("没点忽略的行不得写「已忽略」: %q", row.Message)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("没有别的行引用的残留临时字幕应删除: %v", err)
+	}
+	if summary, err := h.service.GetInterruptedSubtitleJobs(); err != nil || summary.Count != 0 {
+		t.Fatalf("改为失败后不再计入中断提示: %+v err=%v", summary, err)
+	}
+	if again, err := h.service.FailInterruptedSubtitleJob(jobs[0].ID, "别的原因"); err != nil || again {
+		t.Fatalf("已不是中断状态的行不应再改: changed=%v err=%v", again, err)
+	}
+	if row := mustLoadSubtitleJob(t, jobs[0].ID); row.Message != "视频已删除，无法重新排队" {
+		t.Fatalf("第二次调用不得覆盖原因: %+v", row)
+	}
+}
+
 // processAlive 报告 pid 对应的进程是否还活着（僵尸等待回收时也算活着，调用方轮询）。
 func processAlive(pid int) bool {
 	process, err := os.FindProcess(pid)

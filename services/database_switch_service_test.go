@@ -208,7 +208,7 @@ func TestAPP02SwitchSuccessKeepsMaintenanceFenceAndRejectsFurtherActions(t *test
 	if entered != 0 || left != 0 {
 		t.Fatalf("被拒绝的切换不得进出维护模式: entered=%d left=%d", entered, left)
 	}
-	configOnly, err := service.SwitchBackendConfigOnly("sqlite")
+	configOnly, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite", nil, nil)
 	if err != nil || configOnly.Switched || configOnly.ReasonCode != DatabaseSwitchReasonRelaunchPending {
 		t.Fatalf("待重启时只改配置应被拒绝: %#v err=%v", configOnly, err)
 	}
@@ -233,9 +233,8 @@ func TestAPP02CancelRunningSwitchFailsAndLeavesMaintenance(t *testing.T) {
 	dataDir := useSQLiteAsSwitchTarget(t)
 	source, _ := openSwitchSource(t)
 	service := NewDatabaseSwitchService(dataDir)
-	if service.CancelRunningSwitch() {
-		t.Fatal("没有进行中的迁移时不应有可取消的迁移")
-	}
+	// m2 之后取消带状态（置位「正在关闭」后不再复位），这里不再先空调一次 CancelRunningSwitch；
+	// 「没有进行中的迁移时返回 false」由 TestAPP02CancelBeforeMigrationRegistersKeepsSwitchFromStarting 覆盖。
 	cancelled := false
 	service.SetProgressSink(func(status DatabaseSwitchStatus) {
 		if status.Running && status.Table != "" && !cancelled {
@@ -280,8 +279,12 @@ func TestAPP02CancelRunningSwitchFailsAndLeavesMaintenance(t *testing.T) {
 	if cleared, err := service.ClearMigrationTarget("sqlite", ClearMigrationTargetConfirmText); err != nil || !cleared.Cleared {
 		t.Fatalf("取消后应能清空目标库: %#v err=%v", cleared, err)
 	}
-	service.SetProgressSink(nil)
-	if err := service.SwitchWithLifecycle(context.Background(), "sqlite",
+	// 取消只在退出时调用、带状态（m2）：本进程之后不再开始迁移，重试发生在下次启动——新的服务实例。
+	if err := service.SwitchWithLifecycle(context.Background(), "sqlite", nil, nil); !errors.Is(err, ErrDatabaseSwitchCancelledForShutdown) {
+		t.Fatalf("取消之后同一进程不应再开始迁移: %v", err)
+	}
+	relaunched := NewDatabaseSwitchService(dataDir)
+	if err := relaunched.SwitchWithLifecycle(context.Background(), "sqlite",
 		func() error { release = database.BeginMaintenance(); return nil },
 		func() { release() }); err != nil {
 		t.Fatalf("清空后重试应成功: %v", err)
@@ -484,7 +487,7 @@ func TestAPP02SwitchBackendConfigOnlyRequiresNonEmptyPreviousBackend(t *testing.
 	dataDir := useSQLiteAsSwitchTarget(t)
 	service := NewDatabaseSwitchService(dataDir)
 
-	result, err := service.SwitchBackendConfigOnly("sqlite")
+	result, err := service.SwitchBackendConfigOnlyWithLifecycle("sqlite", nil, nil)
 	if err != nil || result.Switched || result.ReasonCode != "previous_unknown" {
 		t.Fatalf("没有切换记录时应拒绝: %#v err=%v", result, err)
 	}
@@ -492,7 +495,7 @@ func TestAPP02SwitchBackendConfigOnlyRequiresNonEmptyPreviousBackend(t *testing.
 	if err := persistBackendChoice(dataDir, database.BackendPostgres, database.BackendPostgres); err != nil {
 		t.Fatal(err)
 	}
-	result, err = service.SwitchBackendConfigOnly("sqlite")
+	result, err = service.SwitchBackendConfigOnlyWithLifecycle("sqlite", nil, nil)
 	if err != nil || result.Switched || result.ReasonCode != "not_previous" {
 		t.Fatalf("目标不是上一个后端时应拒绝: %#v err=%v", result, err)
 	}
@@ -500,7 +503,7 @@ func TestAPP02SwitchBackendConfigOnlyRequiresNonEmptyPreviousBackend(t *testing.
 	if err := persistBackendChoice(dataDir, database.BackendPostgres, database.BackendSQLite); err != nil {
 		t.Fatal(err)
 	}
-	result, err = service.SwitchBackendConfigOnly("sqlite")
+	result, err = service.SwitchBackendConfigOnlyWithLifecycle("sqlite", nil, nil)
 	if err != nil || result.Switched || result.ReasonCode != "target_empty" {
 		t.Fatalf("目标库为空时应拒绝: %#v err=%v", result, err)
 	}
@@ -514,7 +517,7 @@ func TestAPP02SwitchBackendConfigOnlyRequiresNonEmptyPreviousBackend(t *testing.
 	}
 	closeTarget()
 
-	result, err = service.SwitchBackendConfigOnly("sqlite")
+	result, err = service.SwitchBackendConfigOnlyWithLifecycle("sqlite", nil, nil)
 	if err != nil || !result.Switched || !result.RelaunchRequired {
 		t.Fatalf("切回非空的上一个后端应成功并要求重启: %#v err=%v", result, err)
 	}
@@ -662,7 +665,7 @@ func TestAPP02ConfigOnlySwitchKeepsFenceUntilRelaunch(t *testing.T) {
 	if entered != 1 || left != 0 || !service.RelaunchPending() {
 		t.Fatalf("成功后围栏保持并进入待重启: entered=%d left=%d pending=%v", entered, left, service.RelaunchPending())
 	}
-	if again, err := service.SwitchBackendConfigOnly("postgres"); err != nil || again.ReasonCode != DatabaseSwitchReasonRelaunchPending {
+	if again, err := service.SwitchBackendConfigOnlyWithLifecycle("postgres", nil, nil); err != nil || again.ReasonCode != DatabaseSwitchReasonRelaunchPending {
 		t.Fatalf("待重启时再次切换应被拒绝: %#v err=%v", again, err)
 	}
 }
@@ -692,5 +695,101 @@ func TestAPP02SwitchRejectedWhenBackendComesFromProcessEnv(t *testing.T) {
 	}
 	if readSwitchConfig(t, dataDir)["DB_BACKEND"] != "postgres" {
 		t.Fatal("被拒绝时配置不应改动")
+	}
+}
+
+// APP02 / m2：取消带状态。退出时的取消落在迁移登记取消函数之前（App 还在预检、后台 goroutine
+// 还没起来）时，CancelRunningSwitch 找不到可取消的迁移；之后才开始的迁移按取消处理、不开始——
+// 不打开目标库、不进维护模式、不写配置，终态是失败并说明已取消。
+func TestAPP02CancelBeforeMigrationRegistersKeepsSwitchFromStarting(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	openSwitchSource(t)
+	service := NewDatabaseSwitchService(dataDir)
+	service.backendFromProcessEnvOverride = func() bool { return false }
+	if service.CancelRunningSwitch() {
+		t.Fatal("没有进行中的迁移时不应有可取消的迁移")
+	}
+	if !service.ShuttingDown() {
+		t.Fatal("取消之后应记下「正在关闭」")
+	}
+	opened := 0
+	service.openTargetOverride = func(database.Backend) (*gorm.DB, func(), error) {
+		opened++
+		return nil, nil, errors.New("正在关闭时不应打开目标库")
+	}
+	var statuses []DatabaseSwitchStatus
+	service.SetProgressSink(func(status DatabaseSwitchStatus) { statuses = append(statuses, status) })
+	entered, left := 0, 0
+	err := service.SwitchWithLifecycle(context.Background(), "sqlite",
+		func() error { entered++; return nil }, func() { left++ })
+	if !errors.Is(err, ErrDatabaseSwitchCancelledForShutdown) || !errors.Is(err, context.Canceled) {
+		t.Fatalf("正在关闭时迁移应按取消处理: %v", err)
+	}
+	if opened != 0 || entered != 0 || left != 0 || service.RelaunchPending() {
+		t.Fatalf("迁移不应开始: opened=%d entered=%d left=%d pending=%v", opened, entered, left, service.RelaunchPending())
+	}
+	final := service.SwitchStatus()
+	if !final.Failed || final.Running || !strings.Contains(final.Message, "已取消") {
+		t.Fatalf("终态应是失败并说明已取消: %#v", final)
+	}
+	if len(statuses) != 1 || !statuses[0].Failed {
+		t.Fatalf("推给前端的只有这一条失败终态: %#v", statuses)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("取消的迁移不应写后端配置: %v", err)
+	}
+	if service.CancelRunningSwitch() {
+		t.Fatal("被拒绝的迁移不应留下可取消的登记")
+	}
+}
+
+// APP02 / m12：切换锁被占用（经 App 时只可能是清空目标库）时，迁移也发布失败终态——App 在后台
+// goroutine 里调它、发起时已返回成功，不发布的话前端一直等不到结果。
+func TestAPP02SwitchWhileLockHeldPublishesFailedStatus(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	openSwitchSource(t)
+	service := NewDatabaseSwitchService(dataDir)
+	service.backendFromProcessEnvOverride = func() bool { return false }
+	var statuses []DatabaseSwitchStatus
+	service.SetProgressSink(func(status DatabaseSwitchStatus) { statuses = append(statuses, status) })
+
+	service.mu.Lock()
+	entered := 0
+	err := service.SwitchWithLifecycle(context.Background(), "sqlite", func() error { entered++; return nil }, func() {})
+	service.mu.Unlock()
+	if !errors.Is(err, errDatabaseSwitchBusy) || entered != 0 {
+		t.Fatalf("锁被占用时应直接拒绝、不进维护模式: err=%v entered=%d", err, entered)
+	}
+	if len(statuses) != 1 || !statuses[0].Failed || statuses[0].Running || statuses[0].Message != errDatabaseSwitchBusy.Error() {
+		t.Fatalf("应发布一条失败终态: %#v", statuses)
+	}
+	if final := service.SwitchStatus(); !final.Failed || final.Target != "sqlite" || final.Location != database.SQLitePath(dataDir) {
+		t.Fatalf("轮询兜底同样看到失败终态: %#v", final)
+	}
+}
+
+// APP02 / m12：DB_BACKEND 来自进程环境时，预检结果换成的错误与 relaunch_pending 一样带原因码前缀，
+// App 的 StartDatabaseSwitch 直接返回它；迁移并切换同样返回这个错误。其他原因只带说明文字。
+func TestAPP02PreflightErrCarriesBackendEnvLockedPrefix(t *testing.T) {
+	dataDir := useSQLiteAsSwitchTarget(t)
+	service := NewDatabaseSwitchService(dataDir)
+	service.backendFromProcessEnvOverride = func() bool { return true }
+	preflight, err := service.Preflight("sqlite")
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked := preflight.Err()
+	if !errors.Is(locked, ErrDatabaseBackendEnvLocked) || !strings.HasPrefix(locked.Error(), DatabaseSwitchReasonBackendEnvLocked+":") {
+		t.Fatalf("backend_env_locked 应带原因码前缀: %v", locked)
+	}
+	if err := service.SwitchWithLifecycle(context.Background(), "sqlite", nil, nil); !errors.Is(err, ErrDatabaseBackendEnvLocked) {
+		t.Fatalf("迁移并切换应返回同一个错误: %v", err)
+	}
+	if err := (&DatabaseSwitchPreflight{Reachable: true, Empty: true}).Err(); err != nil {
+		t.Fatalf("目标可用时不应报错: %v", err)
+	}
+	notEmpty := (&DatabaseSwitchPreflight{Reachable: true, ReasonCode: "not_empty", Message: "目标库非空"}).Err()
+	if notEmpty == nil || notEmpty.Error() != "目标库非空" {
+		t.Fatalf("其他原因只带说明文字: %v", notEmpty)
 	}
 }

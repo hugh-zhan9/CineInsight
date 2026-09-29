@@ -127,6 +127,9 @@ type BackupService struct {
 	// restoreCopy 是 SQLite 恢复把快照写进临时库文件的那一步，测试用它模拟复制中途出错；
 	// 为空时用 io.Copy。
 	restoreCopy func(dst io.Writer, src io.Reader) (int64, error)
+	// diskFree 返回目录所在卷对非特权用户可用的字节数，SQLite 恢复复制临时库之前用它检查空间；
+	// 测试用它模拟空间不足。为空时用 enhancementDiskFree（同一个 statfs 实现）。
+	diskFree func(path string) (uint64, error)
 }
 
 // ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。
@@ -436,11 +439,15 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 // 这边是换掉库文件本身。正在使用的句柄不能安全地指向一个被换掉的文件，所以这里
 // 不重连；恢复成功后由 App 走与 Postgres 成功时相同的「提示成功并退出」收尾。
 //
-// 顺序：校验 → 安全快照 → 进维护模式围栏 → 替换（D-PC54）。安全快照必须在围栏
-// **之前**：SQLite 的快照是本进程经 database.DB 执行的 VACUUM INTO，围栏生效后
-// 它会被维护屏障拒绝，何况进入维护模式时连接已被关闭——此前的顺序让 SQLite 恢复
-// 必然失败并把应用卡进「必须重启」的错误态（APP-01）。代价是快照与围栏之间落库的
+// 顺序：清扫遗留临时库 → 校验 → 安全快照 → 查空间并备好临时库 → 进维护模式围栏、关句柄 →
+// 换文件（D-PC54）。安全快照必须在围栏**之前**：SQLite 的快照是本进程经 database.DB 执行的
+// VACUUM INTO，围栏生效后它会被维护屏障拒绝，何况进入维护模式时连接已被关闭——此前的顺序让
+// SQLite 恢复必然失败并把应用卡进「必须重启」的错误态（APP-01）。代价是快照与围栏之间落库的
 // 零星后台写入不在安全快照里；它们随后也会被恢复覆盖，安全快照要保的是「恢复前那一刻」。
+//
+// 临时库同样在关句柄**之前**备好（m3）：复制、fsync、改权限、关闭都可能失败（最常见的是磁盘写满），
+// 那时库还开着、也没进维护模式，失败只是一次普通的恢复失败；句柄关掉之后只剩删边车、rename、
+// 目录 fsync 这几步，失败才需要重启。
 func (s *BackupService) restoreSQLite(
 	ctx context.Context,
 	directory string,
@@ -449,6 +456,10 @@ func (s *BackupService) restoreSQLite(
 	settings *models.Settings,
 	beforeRestore func() error,
 ) error {
+	livePath := database.SQLitePath(s.dataDir)
+	// 上一次恢复中途崩溃留下的临时库有一整个库文件那么大，先清掉再算空间（m4）。
+	// 恢复持 s.mu 串行，此刻没有别的恢复在写临时库。
+	database.SweepSQLiteRestoreTemps(livePath)
 	if err := verifySQLiteSnapshot(backupPath); err != nil {
 		return s.recordedRestoreFailure(fmt.Errorf("备份文件校验失败，数据库未被修改: %w", err))
 	}
@@ -456,8 +467,17 @@ func (s *BackupService) restoreSQLite(
 	if err := s.performSafetyBackup(ctx, directory, normalizedBackupRetention(settings.BackupRetentionCount), request.Name); err != nil {
 		return s.recordedRestoreFailure(fmt.Errorf("恢复前安全备份失败，数据库未被修改: %w", err))
 	}
+	tempPath, err := s.prepareSQLiteRestoreLibrary(backupPath, livePath)
+	if err != nil {
+		return s.recordedRestoreFailure(fmt.Errorf("准备恢复用的库文件失败，数据库未被修改: %w", err))
+	}
+	swapped := false
+	defer func() {
+		if !swapped {
+			_ = os.Remove(tempPath)
+		}
+	}()
 
-	livePath := database.SQLitePath(s.dataDir)
 	if beforeRestore != nil {
 		if err := beforeRestore(); err != nil {
 			if DatabaseRestoreRequiresRestart(err) {
@@ -474,12 +494,19 @@ func (s *BackupService) restoreSQLite(
 			_ = sqlDB.Close()
 		}
 	}
-	if err := s.replaceSQLiteLibrary(backupPath, livePath); err != nil {
+	if err := swapSQLiteLibrary(tempPath, livePath); err != nil {
+		if errors.Is(err, errSQLiteUncheckpointedWAL) {
+			return &DatabaseRestoreError{
+				Fatal: true,
+				Err:   fmt.Errorf("库文件旁还有尚未写回主库的 WAL 日志（可能有未落盘的提交），为免丢数据已中止恢复，库文件未被替换；请重启应用后再恢复: %w", err),
+			}
+		}
 		return &DatabaseRestoreError{
 			Fatal: true,
 			Err:   fmt.Errorf("替换数据库文件失败，库文件未被替换，应用必须重启（恢复前的安全快照在备份目录里）: %w", err),
 		}
 	}
+	swapped = true
 	// 恢复成功就是成功：返回 nil，App 与 Postgres 成功时一样提示「恢复成功，应用将自动
 	// 退出」并走内部退出。此前这里返回 Committed+Fatal 的错误，前端会把一次成功的恢复
 	// 显示成「数据库恢复失败：……必须重启」。旧句柄已关，本次尝试的状态不写库——
@@ -505,29 +532,42 @@ func verifySQLiteSnapshot(path string) error {
 	return nil
 }
 
-// replaceSQLiteLibrary 用快照原子地替换正式库文件（I-2）。调用前连接必须已经关闭。
+// prepareSQLiteRestoreLibrary 在库文件同目录备好替换用的临时库（I-2、m3），返回它的路径。
+// 调用时连接还开着、也没进维护模式：这里的任何失败都只是普通的恢复失败，临时文件已清掉。
 //
-// 顺序：在库文件同目录写临时文件并 fsync → 删 -wal / -shm 边车 → rename 覆盖正式库文件 →
-// fsync 目录。rename 之前任何一步失败，正式库文件都原样留着，临时文件被清掉；此前是就地截断
-// 再写，复制中途出错会留下一个半截的库文件。
-//
-// 边车在临时文件就绪之后、rename 之前删：连接已关闭时 SQLite 已做完 checkpoint，边车通常不存在；
-// 残留的 WAL 若留到 rename 之后，会被当成新库的一部分而让内容对不上。
-func (s *BackupService) replaceSQLiteLibrary(snapshotPath, livePath string) error {
+// 先查库目录所在卷的剩余空间，至少要放得下一份快照；不够就直接失败，不去写一个注定写不完的文件。
+// 之后复制 → fsync → 沿用原库文件的权限（rename 换的是整个目录项，临时文件的 0600 会跟着过去）→ 关闭。
+func (s *BackupService) prepareSQLiteRestoreLibrary(snapshotPath, livePath string) (string, error) {
 	directory := filepath.Dir(livePath)
 	source, err := os.Open(snapshotPath)
 	if err != nil {
-		return fmt.Errorf("打开恢复快照失败: %w", err)
+		return "", fmt.Errorf("打开恢复快照失败: %w", err)
 	}
 	defer source.Close()
-	temp, err := os.CreateTemp(directory, "."+filepath.Base(livePath)+".cineinsight-restore-*.tmp")
+	info, err := source.Stat()
 	if err != nil {
-		return fmt.Errorf("创建临时库文件失败: %w", err)
+		return "", fmt.Errorf("读取恢复快照失败: %w", err)
+	}
+	diskFree := s.diskFree
+	if diskFree == nil {
+		diskFree = enhancementDiskFree
+	}
+	free, err := diskFree(directory)
+	if err != nil {
+		return "", fmt.Errorf("无法检查库文件所在磁盘的剩余空间: %w", err)
+	}
+	if need := uint64(max(info.Size(), 0)); free < need {
+		return "", fmt.Errorf("库文件所在磁盘剩余空间不足（需要约 %s，可用 %s）",
+			formatEnhancementBytes(need), formatEnhancementBytes(free))
+	}
+	temp, err := os.CreateTemp(directory, database.SQLiteRestoreTempPattern(livePath))
+	if err != nil {
+		return "", fmt.Errorf("创建临时库文件失败: %w", err)
 	}
 	tempPath := temp.Name()
-	replaced := false
+	ready := false
 	defer func() {
-		if !replaced {
+		if !ready {
 			_ = temp.Close()
 			_ = os.Remove(tempPath)
 		}
@@ -537,21 +577,42 @@ func (s *BackupService) replaceSQLiteLibrary(snapshotPath, livePath string) erro
 		copyFn = io.Copy
 	}
 	if _, err := copyFn(temp, source); err != nil {
-		return fmt.Errorf("写入临时库文件失败: %w", err)
+		return "", fmt.Errorf("写入临时库文件失败: %w", err)
 	}
 	if err := temp.Sync(); err != nil {
-		return fmt.Errorf("落盘临时库文件失败: %w", err)
+		return "", fmt.Errorf("落盘临时库文件失败: %w", err)
 	}
-	// 替换后沿用原库文件的权限：rename 换的是整个目录项，临时文件的 0600 会跟着过去。
-	if info, err := os.Stat(livePath); err == nil {
-		if err := temp.Chmod(info.Mode().Perm()); err != nil {
-			return fmt.Errorf("设置临时库文件权限失败: %w", err)
+	if liveInfo, err := os.Stat(livePath); err == nil {
+		if err := temp.Chmod(liveInfo.Mode().Perm()); err != nil {
+			return "", fmt.Errorf("设置临时库文件权限失败: %w", err)
 		}
 	}
 	if err := temp.Close(); err != nil {
-		return fmt.Errorf("关闭临时库文件失败: %w", err)
+		return "", fmt.Errorf("关闭临时库文件失败: %w", err)
 	}
-	for _, sidecar := range []string{livePath + "-wal", livePath + "-shm"} {
+	ready = true
+	return tempPath, nil
+}
+
+// errSQLiteUncheckpointedWAL：关掉连接之后库文件旁的 -wal 仍然非空。
+var errSQLiteUncheckpointedWAL = errors.New("WAL 日志非空")
+
+// swapSQLiteLibrary 用备好的临时库原子地替换正式库文件。调用前连接必须已经关闭；这里只做
+// 删边车 → rename 覆盖正式库文件 → fsync 目录。rename 之前任何一步失败，正式库文件都原样留着。
+//
+// 连接关闭时 SQLite 会做完 checkpoint 并删掉边车，所以边车通常不存在；残留的边车若留到 rename
+// 之后，会被当成新库的一部分而让内容对不上，所以在 rename 之前删。但 -wal 非空说明还有提交没写回
+// 主库（例如还有别的连接开着这个库）：删掉它就是丢数据，此时中止、不动正式库（m4）。
+func swapSQLiteLibrary(tempPath, livePath string) error {
+	walPath := livePath + "-wal"
+	if info, err := os.Lstat(walPath); err == nil {
+		if info.Size() > 0 {
+			return errSQLiteUncheckpointedWAL
+		}
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("检查 WAL 边车文件失败: %w", err)
+	}
+	for _, sidecar := range []string{walPath, livePath + "-shm"} {
 		if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("清理 WAL 边车文件失败: %w", err)
 		}
@@ -559,9 +620,8 @@ func (s *BackupService) replaceSQLiteLibrary(snapshotPath, livePath string) erro
 	if err := replaceSubtitleFileAtomically(tempPath, livePath); err != nil {
 		return fmt.Errorf("替换库文件失败: %w", err)
 	}
-	replaced = true
 	// 目录项已经换好；目录落盘失败只影响断电时的持久性（最坏回到恢复前的库），不否定这次替换。
-	if err := syncSubtitleParentDirectory(directory); err != nil {
+	if err := syncSubtitleParentDirectory(filepath.Dir(livePath)); err != nil {
 		log.Printf("SQLite 恢复后同步库目录失败 err=%v", err)
 	}
 	return nil

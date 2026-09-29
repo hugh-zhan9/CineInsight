@@ -927,8 +927,9 @@ func TestAPP09PeriodicBackupLoopRunsOnTickerAndStopsOnCancel(t *testing.T) {
 	}
 }
 
-// APP01 / I-2：SQLite 恢复换库文件是原子的。复制中途出错时正式库文件原样可用（内容仍是恢复前、
-// 结构完好）、临时文件被清掉；旧句柄已关，所以结果是必须重启，重启后用的仍是恢复前的库。
+// APP01 / I-2 / m3：SQLite 恢复换库文件是原子的。复制中途出错时正式库文件原样可用（内容仍是恢复前、
+// 结构完好）、临时文件被清掉。m3 之后临时库在关句柄**之前**备好：复制失败时还没进维护模式、句柄
+// 还开着，结果是一次普通的恢复失败而不是「必须重启」（此前这里钉的是 DatabaseRestoreRequiresRestart）。
 func TestAPP01SQLiteRestoreCopyFailureLeavesLiveLibraryIntact(t *testing.T) {
 	if dbtest.IsPostgres() {
 		t.Skip("本用例针对 SQLite 后端的库文件恢复")
@@ -959,17 +960,30 @@ func TestAPP01SQLiteRestoreCopyFailureLeavesLiveLibraryIntact(t *testing.T) {
 			release()
 		}
 	})
+	fenced := false
 	err = service.RestoreBackupWithLifecycle(context.Background(),
 		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
 		func() error {
+			fenced = true
 			release = database.BeginMaintenance()
 			return database.Close()
 		}, nil)
-	if err == nil || !DatabaseRestoreRequiresRestart(err) {
-		t.Fatalf("句柄已关后的替换失败应要求重启: %v", err)
+	if err == nil || DatabaseRestoreRequiresRestart(err) || !strings.Contains(err.Error(), "数据库未被修改") {
+		t.Fatalf("关句柄之前的复制失败应是普通失败、不要求重启: %v", err)
 	}
 	if copied == 0 {
 		t.Fatal("前置：替身应在写了一部分之后失败")
+	}
+	if fenced {
+		t.Fatal("复制失败发生在进维护模式之前，不应进入维护模式")
+	}
+	// 句柄没关：库仍然可用，失败原因记进备份状态。
+	var liveNames []string
+	if err := database.DB.Model(&models.Video{}).Pluck("name", &liveNames).Error; err != nil || len(liveNames) != 1 || liveNames[0] != "renamed.mp4" {
+		t.Fatalf("复制失败后库应仍可用且未被修改: %v err=%v", liveNames, err)
+	}
+	if settings, err := (&SettingsService{}).GetSettings(); err != nil || !strings.Contains(settings.BackupLastError, "写入临时库文件失败") {
+		t.Fatalf("失败原因应记入 backup_last_error: %+v err=%v", settings, err)
 	}
 
 	livePath := database.SQLitePath(dataDir)
@@ -990,6 +1004,191 @@ func TestAPP01SQLiteRestoreCopyFailureLeavesLiveLibraryIntact(t *testing.T) {
 	leftovers, err := filepath.Glob(filepath.Join(dataDir, ".*cineinsight-restore-*"))
 	if err != nil || len(leftovers) != 0 {
 		t.Fatalf("失败后临时库文件应被清掉: %v err=%v", leftovers, err)
+	}
+}
+
+// sqliteRestoreTempsIn 列出库目录里的恢复临时库文件（`.<库文件名>.cineinsight-restore-*.tmp`）。
+func sqliteRestoreTempsIn(t *testing.T, livePath string) []string {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(filepath.Dir(livePath), "."+filepath.Base(livePath)+".cineinsight-restore-*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return matches
+}
+
+// APP01 / m3：临时库在关句柄之前就已复制、落盘、关闭——进维护模式（beforeRestore）的那一刻，库目录里
+// 已经有一份与快照等大的临时库；关句柄之后只剩删边车、rename、目录 fsync。
+func TestAPP01SQLiteRestorePreparesTempLibraryBeforeClosingHandle(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端的库文件恢复")
+	}
+	dataDir := t.TempDir()
+	db := openLiveSQLiteLibrary(t, dataDir)
+	if err := db.Create(&models.Video{Name: "before.mp4", Path: filepath.Join(dataDir, "before.mp4"), Directory: dataDir}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewBackupService(dataDir)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatalf("备份失败: %v", err)
+	}
+	if err := db.Model(&models.Video{}).Where("name = ?", "before.mp4").Update("name", "renamed.mp4").Error; err != nil {
+		t.Fatal(err)
+	}
+	livePath := database.SQLitePath(dataDir)
+	var atFence []string
+	var tempSize int64 = -1
+	var release func()
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
+	err = service.RestoreBackupWithLifecycle(context.Background(),
+		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
+		func() error {
+			atFence = sqliteRestoreTempsIn(t, livePath)
+			if len(atFence) == 1 {
+				if info, err := os.Stat(atFence[0]); err == nil {
+					tempSize = info.Size()
+				}
+			}
+			release = database.BeginMaintenance()
+			return database.Close()
+		}, nil)
+	if err != nil {
+		t.Fatalf("恢复应成功: %v", err)
+	}
+	if len(atFence) != 1 || tempSize != backup.Size {
+		t.Fatalf("进维护模式时临时库应已备好（与快照等大 %d）: temps=%v size=%d", backup.Size, atFence, tempSize)
+	}
+	if names := readVideoNamesFromFile(t, livePath); len(names) != 1 || names[0] != "before.mp4" {
+		t.Fatalf("恢复后数据应回到备份点: %v", names)
+	}
+	if leftovers := sqliteRestoreTempsIn(t, livePath); len(leftovers) != 0 {
+		t.Fatalf("成功后不应留下临时库: %v", leftovers)
+	}
+}
+
+// APP01 / m3 / m4：库目录所在卷放不下一份快照时直接失败、不进维护模式、库照常可用；恢复开始时先清掉
+// 上次崩溃留下的临时库（只删匹配命名的普通文件），再去算空间。
+func TestAPP01SQLiteRestoreInsufficientSpaceFailsBeforeMaintenanceAndSweepsLeftovers(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端的库文件恢复")
+	}
+	dataDir := t.TempDir()
+	db := openLiveSQLiteLibrary(t, dataDir)
+	if err := db.Create(&models.Video{Name: "live.mp4", Path: filepath.Join(dataDir, "live.mp4"), Directory: dataDir}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewBackupService(dataDir)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatalf("备份失败: %v", err)
+	}
+	livePath := database.SQLitePath(dataDir)
+	leftover := filepath.Join(dataDir, "."+filepath.Base(livePath)+".cineinsight-restore-1234.tmp")
+	unrelated := filepath.Join(dataDir, "."+filepath.Base(livePath)+".cineinsight-restore-keep.txt")
+	for _, path := range []string{leftover, unrelated} {
+		if err := os.WriteFile(path, []byte("left over"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// 名字匹配但不是普通文件：不碰。
+	namedDir := filepath.Join(dataDir, "."+filepath.Base(livePath)+".cineinsight-restore-dir.tmp")
+	if err := os.MkdirAll(namedDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+
+	var checkedDir string
+	service.diskFree = func(path string) (uint64, error) {
+		checkedDir = path
+		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+			t.Error("算空间之前应已清掉遗留的临时库")
+		}
+		return uint64(backup.Size - 1), nil
+	}
+	fenced := false
+	err = service.RestoreBackupWithLifecycle(context.Background(),
+		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
+		func() error { fenced = true; return nil }, nil)
+	if err == nil || !strings.Contains(err.Error(), "剩余空间不足") || DatabaseRestoreRequiresRestart(err) {
+		t.Fatalf("空间不足应直接失败、不要求重启: %v", err)
+	}
+	if fenced {
+		t.Fatal("空间不足时不应进入维护模式")
+	}
+	if checkedDir != filepath.Dir(livePath) {
+		t.Fatalf("应检查库文件所在目录的卷: %q", checkedDir)
+	}
+	if temps := sqliteRestoreTempsIn(t, livePath); len(temps) != 1 || temps[0] != namedDir {
+		t.Fatalf("只应留下名字匹配的目录，不应新建临时库: %v", temps)
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("不匹配命名的文件不得删除: %v", err)
+	}
+	var names []string
+	if err := database.DB.Model(&models.Video{}).Pluck("name", &names).Error; err != nil || len(names) != 1 || names[0] != "live.mp4" {
+		t.Fatalf("库应仍可用且未被修改: %v err=%v", names, err)
+	}
+	if settings, err := (&SettingsService{}).GetSettings(); err != nil || !strings.Contains(settings.BackupLastError, "剩余空间不足") {
+		t.Fatalf("失败原因应记入 backup_last_error: %+v err=%v", settings, err)
+	}
+}
+
+// APP01 / m4：关掉句柄之后库文件旁的 -wal 仍然非空，说明还有提交没写回主库：中止恢复、不删边车、
+// 不动正式库，要求重启（重启后 SQLite 会先把 WAL 写回）；临时库被清掉。
+func TestAPP01SQLiteRestoreAbortsWhenWALStillHoldsCommits(t *testing.T) {
+	if dbtest.IsPostgres() {
+		t.Skip("本用例针对 SQLite 后端的库文件恢复")
+	}
+	dataDir := t.TempDir()
+	db := openLiveSQLiteLibrary(t, dataDir)
+	if err := db.Create(&models.Video{Name: "before.mp4", Path: filepath.Join(dataDir, "before.mp4"), Directory: dataDir}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := NewBackupService(dataDir)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatalf("备份失败: %v", err)
+	}
+	livePath := database.SQLitePath(dataDir)
+	walPath := livePath + "-wal"
+	walContent := []byte("uncheckpointed frames")
+	liveHash := ""
+	var release func()
+	t.Cleanup(func() {
+		if release != nil {
+			release()
+		}
+	})
+	err = service.RestoreBackupWithLifecycle(context.Background(),
+		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
+		func() error {
+			release = database.BeginMaintenance()
+			if err := database.Close(); err != nil {
+				return err
+			}
+			hash, err := hashFile(livePath)
+			if err != nil {
+				return err
+			}
+			liveHash = hash
+			// 模拟关闭之后仍有未 checkpoint 的提交（例如还有别的连接开着这个库）。
+			return os.WriteFile(walPath, walContent, 0600)
+		}, nil)
+	if err == nil || !DatabaseRestoreRequiresRestart(err) || !strings.Contains(err.Error(), "WAL") {
+		t.Fatalf("-wal 非空时应中止恢复并要求重启: %v", err)
+	}
+	if got, err := hashFile(livePath); err != nil || got != liveHash {
+		t.Fatalf("正式库文件不得被替换: hash=%s want=%s err=%v", got, liveHash, err)
+	}
+	if got, err := os.ReadFile(walPath); err != nil || string(got) != string(walContent) {
+		t.Fatalf("非空的 -wal 不得被删除: %q err=%v", got, err)
+	}
+	if leftovers := sqliteRestoreTempsIn(t, livePath); len(leftovers) != 0 {
+		t.Fatalf("中止后临时库应被清掉: %v", leftovers)
 	}
 }
 

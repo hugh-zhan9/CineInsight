@@ -3,10 +3,8 @@ package services
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -385,86 +383,6 @@ func syncSubtitleIndexesNow(ctx context.Context, db *gorm.DB) (int, error) {
 
 func ensureSubtitleIndexForVideo(video models.Video) error {
 	return ensureSubtitleIndexForVideoOn(database.DB, video, nil)
-}
-
-// readSubtitleSidecarDir 是全库同步读视频目录的入口，测试用它数读目录的次数。
-var readSubtitleSidecarDir = os.ReadDir
-
-// subtitleSidecarDirCache 是一轮全库同步内按目录缓存的目录项（M-6）：同一目录下有上千个视频时，
-// 逐条调用 HasSidecarSubtitle 等于把整个目录读上千遍（视频数 × 目录项数）。
-//
-// 判定规则仍只有 subtitle_sidecar.go 那一份：文件名经 IsSidecarSubtitleName 判定，与
-// ListSidecarSubtitles 一样排除目录、只认（跟随符号链接后的）普通文件；这里只负责不重复读目录。
-type subtitleSidecarDirCache struct {
-	dirs map[string]*subtitleSidecarDirListing
-}
-
-type subtitleSidecarDirListing struct {
-	// names 与 lower 一一对应，按小写名排序，用前缀二分找到候选。
-	names []string
-	lower []string
-	err   error
-}
-
-func newSubtitleSidecarDirCache() *subtitleSidecarDirCache {
-	return &subtitleSidecarDirCache{dirs: map[string]*subtitleSidecarDirListing{}}
-}
-
-func (c *subtitleSidecarDirCache) listing(directory string) *subtitleSidecarDirListing {
-	if cached, ok := c.dirs[directory]; ok {
-		return cached
-	}
-	listing := &subtitleSidecarDirListing{}
-	entries, err := readSubtitleSidecarDir(directory)
-	switch {
-	case os.IsNotExist(err):
-		// 目录不存在按「没有」处理，与 ListSidecarSubtitles 一致。
-	case err != nil:
-		listing.err = fmt.Errorf("读取视频目录失败: %s", subtitleIOReason(err))
-	default:
-		type entryName struct{ name, lower string }
-		kept := make([]entryName, 0, len(entries))
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			kept = append(kept, entryName{name: entry.Name(), lower: strings.ToLower(entry.Name())})
-		}
-		sort.Slice(kept, func(i, j int) bool { return kept[i].lower < kept[j].lower })
-		listing.names = make([]string, len(kept))
-		listing.lower = make([]string, len(kept))
-		for index, entry := range kept {
-			listing.names[index], listing.lower[index] = entry.name, entry.lower
-		}
-	}
-	c.dirs[directory] = listing
-	return listing
-}
-
-// hasSidecar 与 HasSidecarSubtitle(videoPath) 同义，目录只在这一轮里读一次。
-func (c *subtitleSidecarDirCache) hasSidecar(videoPath string) (bool, error) {
-	directory := filepath.Dir(videoPath)
-	listing := c.listing(directory)
-	if listing.err != nil {
-		return false, listing.err
-	}
-	// 旁挂字幕的名字一定以「视频基本名 + .」开头（大小写不敏感）：只看这一段前缀的候选，
-	// 最终是否算数仍由 IsSidecarSubtitleName 判定。
-	base := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
-	if base == "" {
-		return false, nil
-	}
-	prefix := strings.ToLower(base) + "."
-	for index := sort.SearchStrings(listing.lower, prefix); index < len(listing.lower) && strings.HasPrefix(listing.lower[index], prefix); index++ {
-		name := listing.names[index]
-		if !IsSidecarSubtitleName(videoPath, name) {
-			continue
-		}
-		if info, err := os.Stat(filepath.Join(directory, name)); err == nil && info.Mode().IsRegular() {
-			return true, nil
-		}
-	}
-	return false, nil
 }
 
 // ensureSubtitleIndexForVideoOn 让 video 的字幕索引与磁盘上的同名 .srt 一致。sidecars 非空时

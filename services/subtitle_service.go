@@ -744,15 +744,18 @@ func (s *SubtitleService) discardRegisteredPendingSubtitle(videoID uint) error {
 	unlock := lockSubtitleFile(finalPath)
 	defer unlock()
 	// 别的视频（同目录同名、扩展名不同）还有待确认的行引用这个临时文件时不删（M-7）；
-	// 本视频自己的待确认行随后由 discardNeedsConfirmationJobs 逐条结束。
-	if db, err := subtitleJobsDB(); err == nil {
-		shared, err := subtitlePendingReferencedElsewhere(db, artifact.SRTPath, 0, videoID)
-		if err != nil {
-			return fmt.Errorf("检查临时字幕的引用失败: %w", err)
-		}
-		if shared {
-			return nil
-		}
+	// 本视频自己的待确认行随后由 discardNeedsConfirmationJobs 逐条结束。查不了库就不知道有没有
+	// 别人在用：报错、不删（m6），与查询本身出错同样处理。
+	db, err := subtitleJobsDB()
+	if err != nil {
+		return fmt.Errorf("检查临时字幕的引用失败: %w", err)
+	}
+	shared, err := subtitlePendingReferencedElsewhere(db, artifact.SRTPath, 0, videoID)
+	if err != nil {
+		return fmt.Errorf("检查临时字幕的引用失败: %w", err)
+	}
+	if shared {
+		return nil
 	}
 	if err := os.Remove(artifact.SRTPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除临时字幕失败: %s", subtitleIOReason(err))

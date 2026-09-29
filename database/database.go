@@ -167,13 +167,16 @@ var backendStartup struct {
 // 再加载配置文件并解析。之后的调用（PostgreSQL 恢复备份后的重连）不再读配置文件，沿用启动时
 // 的结果：本进程启动之后才写入的数据目录 .env（切换后端、切回之前的后端）只在下次启动生效，
 // 重连时读进来会让恢复流程中途改连另一个后端。
+//
+// 「来自进程环境」按变量是否存在判定，空值也算（m5）：godotenv 同样是「存在即不覆盖」，进程环境里
+// 有一个 DB_BACKEND= 空值时，数据目录下的配置同样写不进来，应用内切换同样不会生效。
 func resolveStartupBackend(dataDir string) (Backend, error) {
 	backendStartup.mu.Lock()
 	defer backendStartup.mu.Unlock()
 	if backendStartup.resolved {
 		return backendStartup.backend, nil
 	}
-	fromProcessEnv := strings.TrimSpace(os.Getenv(BackendConfigKey)) != ""
+	_, fromProcessEnv := os.LookupEnv(BackendConfigKey)
 	loadEnvConfig(dataDir)
 	backend, err := ResolveBackend(backendEnvFromOS())
 	if err != nil {
@@ -342,6 +345,53 @@ func SQLitePath(dataDir string) string {
 	return filepath.Join(dataDir, DefaultSQLiteFileName)
 }
 
+// SQLite 恢复备份时，快照先复制成库文件同目录的隐藏临时文件 `.<库文件名>.cineinsight-restore-<随机>.tmp`，
+// 再 rename 覆盖正式库文件（services.BackupService）。命名只在这里定义一次，清扫与创建共用。
+const (
+	sqliteRestoreTempInfix  = ".cineinsight-restore-"
+	sqliteRestoreTempSuffix = ".tmp"
+)
+
+// SQLiteRestoreTempPattern 是给 os.CreateTemp 用的临时库文件名模式（`*` 由随机串替换）。
+func SQLiteRestoreTempPattern(livePath string) string {
+	return "." + filepath.Base(livePath) + sqliteRestoreTempInfix + "*" + sqliteRestoreTempSuffix
+}
+
+// isSQLiteRestoreTempName 判断 name 是否是 livePath 的恢复临时库文件名。按前后缀比较而不用 glob：
+// 自定义的库文件名里可能有 [ 之类的通配符字符。
+func isSQLiteRestoreTempName(livePath, name string) bool {
+	prefix := "." + filepath.Base(livePath) + sqliteRestoreTempInfix
+	return len(name) > len(prefix)+len(sqliteRestoreTempSuffix) &&
+		strings.HasPrefix(name, prefix) && strings.HasSuffix(name, sqliteRestoreTempSuffix)
+}
+
+// SweepSQLiteRestoreTemps 删掉库文件目录下崩溃遗留的恢复临时库文件（m4），返回删掉的个数。
+// 只删名字符合 SQLiteRestoreTempPattern、且本身是普通文件（不跟随符号链接）的目录项，其他一概不碰；
+// 启动时（打开库之前）与每次恢复开始时调用，那时没有恢复在写临时文件。读目录或删除失败只记日志：
+// 清扫是回收空间，不应挡住启动或恢复。
+func SweepSQLiteRestoreTemps(livePath string) int {
+	directory := filepath.Dir(livePath)
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("清扫 SQLite 恢复临时文件时读取库目录失败 err=%v", err)
+		}
+		return 0
+	}
+	removed := 0
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !isSQLiteRestoreTempName(livePath, entry.Name()) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(directory, entry.Name())); err != nil && !os.IsNotExist(err) {
+			log.Printf("清扫 SQLite 恢复临时文件失败 name=%s err=%v", entry.Name(), err)
+			continue
+		}
+		removed++
+	}
+	return removed
+}
+
 // Init 初始化数据库。启动时调用一次；PostgreSQL 恢复备份后的重连也走这里，那时沿用启动时
 // 解析出的后端，不再加载配置文件（见 resolveStartupBackend）。
 func Init() error {
@@ -357,6 +407,12 @@ func Init() error {
 	}
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		return fmt.Errorf("创建数据目录失败: %w", err)
+	}
+	if backend == BackendSQLite {
+		// 上次恢复备份中途崩溃会在库目录留下一份库文件大小的隐藏临时文件（m4）。
+		if removed := SweepSQLiteRestoreTemps(SQLitePath(dataDir)); removed > 0 {
+			log.Printf("启动时清掉 %d 个 SQLite 恢复遗留的临时库文件", removed)
+		}
 	}
 
 	db, err := openBackend(backend, dataDir)

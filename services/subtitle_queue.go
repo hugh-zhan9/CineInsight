@@ -472,8 +472,8 @@ func (q *subtitleTaskQueue) emitSnapshot(snapshot SubtitleQueueSnapshot) {
 
 const (
 	// subtitleJobHistoryKeep 是保留的终态行数；每次写入终态后裁剪。needs_confirmation 不参与裁剪：
-	// 它引用着磁盘上的临时字幕，要等用户强制生成或放弃。本次启动提示里的 interrupted 行在被重新
-	// 排队或忽略之前同样不参与（见 pruneSubtitleJobs）。
+	// 它引用着磁盘上的临时字幕，要等用户强制生成或放弃。interrupted 行在被重新排队或忽略之前
+	// 同样不参与（见 subtitleJobPrunableStatuses）。
 	subtitleJobHistoryKeep = 100
 	// subtitleJobMessageMaxRunes 是落库与事件里失败原因的长度上限。
 	subtitleJobMessageMaxRunes = 500
@@ -799,18 +799,9 @@ func (st *subtitleJobDBStore) recordRunning(task *subtitleQueueTask) (bool, erro
 	if superseded.Error != nil {
 		log.Printf("[Subtitle] supersede pending subtitle jobs video_id=%d err=%v", task.Request.VideoID, superseded.Error)
 	} else if superseded.RowsAffected > 0 {
-		st.prune(db)
+		pruneSubtitleJobHistory(db)
 	}
 	return true, nil
-}
-
-// prune 裁剪历史，保护本次启动提示里还没处理的中断任务（I-3）。
-func (st *subtitleJobDBStore) prune(db *gorm.DB) {
-	if st.service == nil {
-		pruneSubtitleJobHistory(db)
-		return
-	}
-	st.service.pruneSubtitleJobs(db)
 }
 
 func (st *subtitleJobDBStore) recordCancelled(task *subtitleQueueTask) {
@@ -831,7 +822,7 @@ func (st *subtitleJobDBStore) recordCancelled(task *subtitleQueueTask) {
 		log.Printf("[Subtitle] record cancelled subtitle job task_id=%d err=%v", task.TaskID, err)
 		return
 	}
-	st.prune(db)
+	pruneSubtitleJobHistory(db)
 }
 
 // recordFinished 写终态；失败（含写回失败）时再发 subtitle-failed。事件放在落库之后：
@@ -864,7 +855,7 @@ func (st *subtitleJobDBStore) recordFinished(task *subtitleQueueTask, result *Su
 		log.Printf("[Subtitle] record finished subtitle job task_id=%d status=%s err=%v", task.TaskID, outcome.status, updateErr)
 		return
 	}
-	st.prune(db)
+	pruneSubtitleJobHistory(db)
 }
 
 func (st *subtitleJobDBStore) markInterrupted(live []uint) ([]uint, error) {
@@ -895,16 +886,59 @@ func (st *subtitleJobDBStore) markInterrupted(live []uint) ([]uint, error) {
 		}).Error; err != nil {
 		return nil, err
 	}
+	recordInterruptedPendingArtifacts(db, ids)
 	return ids, nil
 }
 
-// pruneSubtitleJobs 裁剪历史。中断任务的状态本身就不在可裁剪之列（I-3），这里无需另外保护。
-func (s *SubtitleService) pruneSubtitleJobs(db *gorm.DB) {
-	pruneSubtitleJobHistory(db)
+// recordInterruptedPendingArtifacts 把中断任务留在磁盘上的隐藏临时字幕记进行里（MEDIA-10）：应用退出时
+// 正在跑的任务可能已经写出了 `.<基本名>.cineinsight-pending.srt`，重启后没有任何记录指向它。按视频路径
+// 算出临时文件的位置，只有那里是普通文件（不跟随符号链接）才写进 pending_artifact_path；「忽略」时据此
+// 清掉（见 DismissInterruptedSubtitleJobs），重新排队会覆盖同一个文件。记录失败只记日志，不影响标记本身。
+func recordInterruptedPendingArtifacts(db *gorm.DB, ids []uint) {
+	var jobs []models.SubtitleJob
+	if err := db.Select("id", "video_id").
+		Where("id IN ? AND status = ? AND pending_artifact_path = ?", ids, string(SubtitleQueueTaskStatusInterrupted), "").
+		Find(&jobs).Error; err != nil {
+		log.Printf("[Subtitle] list interrupted subtitle jobs for pending artifacts err=%v", err)
+		return
+	}
+	videoIDs := make([]uint, 0, len(jobs))
+	for _, job := range jobs {
+		videoIDs = append(videoIDs, job.VideoID)
+	}
+	if len(videoIDs) == 0 {
+		return
+	}
+	// 进了回收站的视频也照样认：路径还在记录里，临时文件留在原目录。
+	var videos []models.Video
+	if err := db.Unscoped().Model(&models.Video{}).Select("id", "path").Where("id IN ?", videoIDs).Find(&videos).Error; err != nil {
+		log.Printf("[Subtitle] load video paths for interrupted subtitle jobs err=%v", err)
+		return
+	}
+	paths := make(map[uint]string, len(videos))
+	for _, video := range videos {
+		paths[video.ID] = video.Path
+	}
+	for _, job := range jobs {
+		videoPath := strings.TrimSpace(paths[job.VideoID])
+		if videoPath == "" {
+			continue
+		}
+		pendingPath := subtitlePendingPath(subtitleparser.SRTPathForVideo(videoPath))
+		if info, err := os.Lstat(pendingPath); err != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		if err := db.Model(&models.SubtitleJob{}).
+			Where("id = ? AND status = ? AND pending_artifact_path = ?", job.ID, string(SubtitleQueueTaskStatusInterrupted), "").
+			Update("pending_artifact_path", pendingPath).Error; err != nil {
+			log.Printf("[Subtitle] record pending artifact of interrupted subtitle job id=%d err=%v", job.ID, err)
+		}
+	}
 }
 
 // pruneSubtitleJobHistory 只保留最近 subtitleJobHistoryKeep 条终态行（按最后更新时间）。
-// 删除带上终态条件：两步之间被重试改回 queued 的行不会被误删。
+// 删除带上终态条件：两步之间被重试改回 queued 的行不会被误删。中断与待确认的行不在可裁剪之列
+// （subtitleJobPrunableStatuses，I-3），这里无需另外保护。
 func pruneSubtitleJobHistory(db *gorm.DB) {
 	var ids []uint
 	if err := db.Model(&models.SubtitleJob{}).
@@ -1112,7 +1146,7 @@ func (s *SubtitleService) forceSubtitleJob(job *models.SubtitleJob, input Subtit
 		if result.RowsAffected == 0 {
 			return s.subtitleJobConflict(job.ID, SubtitleJobActionForce), nil
 		}
-		s.pruneSubtitleJobs(db)
+		pruneSubtitleJobHistory(db)
 		return &SubtitleJobResolveResult{
 			JobID: job.ID, Action: SubtitleJobActionForce, Status: SubtitleQueueTaskStatusFailed,
 			ErrorCode: SubtitleErrorPendingMissing, Message: message,
@@ -1225,7 +1259,7 @@ func (s *SubtitleService) discardSubtitleJob(job *models.SubtitleJob) (*Subtitle
 		}
 		s.forgetPendingSubtitle(job.VideoID, pendingPath)
 	}
-	s.pruneSubtitleJobs(db)
+	pruneSubtitleJobHistory(db)
 	return &SubtitleJobResolveResult{JobID: job.ID, Action: SubtitleJobActionDiscard, Status: SubtitleQueueTaskStatusCancelled}, nil
 }
 
@@ -1245,22 +1279,32 @@ func (s *SubtitleService) reopenDiscardedSubtitleJob(db *gorm.DB, job *models.Su
 }
 
 // subtitlePendingReferencedElsewhere 报告是否还有别的待确认行引用同一个临时文件。excludeJobID 与
-// excludeVideoID 为 0 时不排除。比较不区分大小写：darwin 的文件系统不区分，Movie.mp4 与 movie.mkv
-// 的临时文件是同一个（与 lockSubtitleFile 的口径一致）；在区分大小写的文件系统上最多多留一个文件。
+// excludeVideoID 为 0 时不排除。
+//
+// 「同一个」按 subtitleFileLockKey（Clean → NFC → 小写）在 Go 里比较，与 lockSubtitleFile 同一口径（m6）：
+// darwin 的文件系统不区分大小写、也不区分 Unicode 规范化形式，Movie.mp4 与 movie.mkv、NFC 与 NFD
+// 写法的「Café」落到的是同一个临时文件。SQL 的 LOWER 做不到这一点（SQLite 只转 ASCII，两个后端都
+// 不做规范化）。在区分大小写的文件系统上最多多留一个文件。
 func subtitlePendingReferencedElsewhere(db *gorm.DB, pendingPath string, excludeJobID, excludeVideoID uint) (bool, error) {
 	query := db.Model(&models.SubtitleJob{}).
-		Where("status = ? AND LOWER(pending_artifact_path) = LOWER(?)", string(SubtitleQueueTaskStatusNeedsConfirmation), filepath.Clean(pendingPath))
+		Where("status = ? AND pending_artifact_path <> ?", string(SubtitleQueueTaskStatusNeedsConfirmation), "")
 	if excludeJobID != 0 {
 		query = query.Where("id <> ?", excludeJobID)
 	}
 	if excludeVideoID != 0 {
 		query = query.Where("video_id <> ?", excludeVideoID)
 	}
-	var count int64
-	if err := query.Count(&count).Error; err != nil {
+	var candidates []string
+	if err := query.Pluck("pending_artifact_path", &candidates).Error; err != nil {
 		return false, err
 	}
-	return count > 0, nil
+	key := subtitleFileLockKey(pendingPath)
+	for _, candidate := range candidates {
+		if subtitleFileLockKey(candidate) == key {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // subtitlePendingUsable 报告行里记的临时字幕是否就是当前视频路径对应的那个、且仍是磁盘上的普通文件。
@@ -1322,7 +1366,7 @@ func (s *SubtitleService) needsConfirmationClaim(req SubtitleGenerateRequest, vi
 func (s *SubtitleService) discardNeedsConfirmationJobs(videoID uint) error {
 	db, err := subtitleJobsDB()
 	if err != nil {
-		return nil
+		return err
 	}
 	var jobs []models.SubtitleJob
 	if err := db.Where("video_id = ? AND status = ?", videoID, string(SubtitleQueueTaskStatusNeedsConfirmation)).
@@ -1368,25 +1412,143 @@ func (s *SubtitleService) GetInterruptedSubtitleJobs() (SubtitleInterruptedJobs,
 const subtitleJobDismissedInterruptedMessage = "应用退出时任务尚未完成（已忽略）"
 
 // DismissInterruptedSubtitleJobs 是提示上的「忽略」：全部 interrupted 行改为 cancelled，不再提示；
-// 任务留在历史里，仍可逐条重试，并与其他终态行一样参与历史裁剪（I-3）。
+// 任务留在历史里，仍可逐条重试，并与其他终态行一样参与历史裁剪（I-3）。「已忽略」的文案只写在
+// 这里——用户真的点了「忽略」的行；「全部重新排队」没能入队的行走 FailInterruptedSubtitleJob（m7）。
+//
+// 中断时留下的临时字幕（markInterrupted 记在 pending_artifact_path）在没有别的行引用时删掉（MEDIA-10）。
 func (s *SubtitleService) DismissInterruptedSubtitleJobs() error {
 	db, err := subtitleJobsDB()
 	if err != nil {
+		return err
+	}
+	var leftovers []string
+	if err := db.Model(&models.SubtitleJob{}).
+		Where("status = ? AND pending_artifact_path <> ?", string(SubtitleQueueTaskStatusInterrupted), "").
+		Pluck("pending_artifact_path", &leftovers).Error; err != nil {
 		return err
 	}
 	now := time.Now()
 	result := db.Model(&models.SubtitleJob{}).
 		Where("status = ?", string(SubtitleQueueTaskStatusInterrupted)).
 		Updates(map[string]any{
-			"status":     string(SubtitleQueueTaskStatusCancelled),
-			"message":    subtitleJobDismissedInterruptedMessage,
-			"updated_at": now,
+			"status":                string(SubtitleQueueTaskStatusCancelled),
+			"message":               subtitleJobDismissedInterruptedMessage,
+			"pending_artifact_path": "",
+			"updated_at":            now,
 		})
 	if result.Error != nil {
 		return result.Error
 	}
+	s.removeUnreferencedPendingArtifacts(db, leftovers)
 	if result.RowsAffected > 0 {
 		pruneSubtitleJobHistory(db)
 	}
 	return nil
+}
+
+// FailInterruptedSubtitleJob 把「全部重新排队」时没能入队的一条中断任务改为 failed，message 写真实原因
+// （例如「视频已删除，无法重新排队」），不再随后续的「忽略」被标成「已忽略」（m7）。failed 与其他
+// 「这一步没能做成、原因见说明」的行同一语义，任务中心照常给出「重试」。
+//
+// 条件更新只认仍是 interrupted 的行：两步之间已被单独处理的行不动，返回 false。中断时留下的临时字幕
+// 与「忽略」同样处理：没有别的行引用时删掉。
+func (s *SubtitleService) FailInterruptedSubtitleJob(jobID uint, reason string) (bool, error) {
+	db, err := subtitleJobsDB()
+	if err != nil {
+		return false, err
+	}
+	var job models.SubtitleJob
+	if err := db.Select("id", "pending_artifact_path").Where("id = ? AND status = ?", jobID, string(SubtitleQueueTaskStatusInterrupted)).
+		Limit(1).Find(&job).Error; err != nil {
+		return false, err
+	}
+	if job.ID == 0 {
+		return false, nil
+	}
+	message := scrubSubtitleJobMessage(reason, "")
+	if message == "" {
+		message = "重新排队失败"
+	}
+	result := db.Model(&models.SubtitleJob{}).
+		Where("id = ? AND status = ?", jobID, string(SubtitleQueueTaskStatusInterrupted)).
+		Updates(map[string]any{
+			"status":                string(SubtitleQueueTaskStatusFailed),
+			"message":               message,
+			"pending_artifact_path": "",
+			"updated_at":            time.Now(),
+		})
+	if result.Error != nil {
+		return false, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return false, nil
+	}
+	if strings.TrimSpace(job.PendingArtifactPath) != "" {
+		s.removeUnreferencedPendingArtifacts(db, []string{job.PendingArtifactPath})
+	}
+	pruneSubtitleJobHistory(db)
+	return true, nil
+}
+
+// removeUnreferencedPendingArtifacts 删掉不再有人认领的临时字幕（中断任务被忽略或重新排队失败之后）。
+// 同一个文件（按 subtitleFileLockKey）只处理一次；单个文件删不掉只记日志——行已经结束，临时文件
+// 留下也不会被误用。
+func (s *SubtitleService) removeUnreferencedPendingArtifacts(db *gorm.DB, pendingPaths []string) {
+	seen := make(map[string]struct{}, len(pendingPaths))
+	for _, pendingPath := range pendingPaths {
+		key := subtitleFileLockKey(pendingPath)
+		if _, done := seen[key]; done {
+			continue
+		}
+		seen[key] = struct{}{}
+		if err := s.removeUnreferencedPendingArtifact(db, pendingPath); err != nil {
+			log.Printf("[Subtitle] remove leftover pending subtitle err=%s", scrubSubtitleJobMessage(err.Error(), ""))
+		}
+	}
+}
+
+// removeUnreferencedPendingArtifact 只删符合临时文件命名、且是普通文件的路径——库里记的值再奇怪也不会
+// 删到同名 .srt 或别的文件。持字幕文件锁（与生成、强制生成、放弃互斥），在锁内确认：没有待确认行
+// 引用它（m6 同一口径），本进程也没有登记它（刚跑完、结果还没落库的任务）。
+func (s *SubtitleService) removeUnreferencedPendingArtifact(db *gorm.DB, pendingPath string) error {
+	finalPath, err := subtitleFinalPathForPending(pendingPath)
+	if err != nil {
+		return nil
+	}
+	unlock := lockSubtitleFile(finalPath)
+	defer unlock()
+	shared, err := subtitlePendingReferencedElsewhere(db, pendingPath, 0, 0)
+	if err != nil {
+		return fmt.Errorf("检查临时字幕的引用失败: %w", err)
+	}
+	if shared || s.pendingSubtitleRegistered(pendingPath) {
+		return nil
+	}
+	info, err := os.Lstat(pendingPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("读取临时字幕失败: %s", subtitleIOReason(err))
+	}
+	if !info.Mode().IsRegular() {
+		return nil
+	}
+	if err := os.Remove(pendingPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("删除临时字幕失败: %s", subtitleIOReason(err))
+	}
+	return nil
+}
+
+// pendingSubtitleRegistered 报告本进程的内存登记里是否有指向同一个临时文件的待确认产物。
+func (s *SubtitleService) pendingSubtitleRegistered(pendingPath string) bool {
+	key := subtitleFileLockKey(pendingPath)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, artifact := range s.pending {
+		if artifact != nil && subtitleFileLockKey(artifact.SRTPath) == key {
+			return true
+		}
+	}
+	return false
 }

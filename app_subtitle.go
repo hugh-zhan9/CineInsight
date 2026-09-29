@@ -7,6 +7,8 @@ import (
 	"video-master/models"
 	"video-master/services"
 	"video-master/services/subtitleparser"
+
+	"gorm.io/gorm"
 )
 
 // ===== Subtitle Methods =====
@@ -133,7 +135,9 @@ func (a *App) GetInterruptedSubtitleJobs() (services.SubtitleInterruptedJobs, er
 }
 
 // RequeueInterruptedSubtitleJobs 是提示上的「全部重新排队」：逐个按当前设置重试，返回成功入队的条数。
-// 个别任务入队失败（例如视频已删除）只记日志，它仍留在任务中心，可以单独处理。
+// 没能入队的任务改为 failed、写明真实原因（例如「视频已删除，无法重新排队」），留在任务中心可以单独
+// 处理；不再随「忽略」标成「已忽略」——用户并没有点忽略（m7）。已被别的操作处理的行（重复点击、另一个
+// 窗口已重试）状态以那边为准，不动。
 func (a *App) RequeueInterruptedSubtitleJobs() (int, error) {
 	summary, err := a.subtitleService.GetInterruptedSubtitleJobs()
 	if err != nil {
@@ -142,18 +146,36 @@ func (a *App) RequeueInterruptedSubtitleJobs() (int, error) {
 	requeued := 0
 	for _, jobID := range summary.JobIDs {
 		result, err := a.resolveSubtitleJob(jobID, services.SubtitleJobActionRetry)
-		if err != nil || result == nil || result.ErrorCode != "" {
-			log.Printf("API RequeueInterruptedSubtitleJobs job_id=%d result=%+v err=%v", jobID, result, err)
+		if err == nil && result != nil && result.ErrorCode == "" {
+			requeued++
 			continue
 		}
-		requeued++
-	}
-	// 没能入队的那几条随「忽略」改为 cancelled，留在任务中心，仍可单独重试。
-	if err := a.subtitleService.DismissInterruptedSubtitleJobs(); err != nil {
-		log.Printf("API RequeueInterruptedSubtitleJobs dismiss leftovers err=%v", err)
+		log.Printf("API RequeueInterruptedSubtitleJobs job_id=%d result=%+v err=%v", jobID, result, err)
+		if errors.Is(err, services.ErrSubtitleJobNotFound) || (result != nil && result.ErrorCode == services.SubtitleErrorJobConflict) {
+			continue
+		}
+		if _, markErr := a.subtitleService.FailInterruptedSubtitleJob(jobID, interruptedRequeueFailureReason(result, err)); markErr != nil {
+			// 这一行仍是 interrupted：下次提示里还在，不会被静默丢掉。
+			log.Printf("API RequeueInterruptedSubtitleJobs mark failed job_id=%d err=%v", jobID, markErr)
+		}
 	}
 	log.Printf("API RequeueInterruptedSubtitleJobs requeued=%d total=%d", requeued, len(summary.JobIDs))
 	return requeued, nil
+}
+
+// interruptedRequeueFailureReason 是「全部重新排队」没能入队时写进任务的原因。视频已删除（进了回收站）
+// 是最常见的一种，单独给一句说得清的话；其余沿用重试返回的说明（服务层落库前擦掉路径）。
+func interruptedRequeueFailureReason(result *services.SubtitleJobResolveResult, err error) string {
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return "视频已删除，无法重新排队"
+	case err != nil:
+		return "重新排队失败：" + err.Error()
+	case result != nil && result.Message != "":
+		return "重新排队失败：" + result.Message
+	default:
+		return "重新排队失败"
+	}
 }
 
 // DismissInterruptedSubtitleJobs 是提示上的「忽略」：中断任务改为已取消，不再提示，仍留在历史里可单独重试。

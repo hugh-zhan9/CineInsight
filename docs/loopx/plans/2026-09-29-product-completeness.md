@@ -40,10 +40,10 @@ slices:
     status: in_progress
     depends: [P-015]
   - id: P-020
-    status: pending
+    status: in_progress
     depends: [P-010, P-012, P-015]
   - id: P-023
-    status: pending
+    status: in_progress
     depends: [P-011, P-012]
   - id: P-025
     status: in_progress
@@ -52,13 +52,13 @@ slices:
     status: in_progress
     depends: [P-011]
   - id: P-022
-    status: pending
+    status: in_progress
     depends: [P-012, P-020, P-023]
   - id: P-024
-    status: pending
+    status: in_progress
     depends: [P-013, P-014, P-015, P-016, P-017, P-018, P-025, P-027]
   - id: P-029
-    status: pending
+    status: in_progress
     depends: [P-010, P-011, P-012, P-013, P-014, P-015, P-016, P-017, P-018, P-019, P-020, P-021, P-022, P-023, P-024, P-025, P-027]
   - id: P-030
     status: pending
@@ -1159,3 +1159,24 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - 处理 `quit-confirm-required`，并按 `warnings` 显示提示；
   - `TaskRecentJob.id` 是字符串，调用接受数字参数的绑定前要先转换。
 - 与设计的偏差（主代理接受）：清理候选没有排除「分析之后才被删进回收站」的视频，重新分析后计数会恢复。
+**PG 全量 `a6f492f`**（修复 H）：8 个包全部通过（services 874 秒）。
+
+**修复 H + P-022 独立复审**（2026-09-29，opus-xhigh 只读，登录中断后续跑）：A（修复 H）与 B（P-022）都**通过**，没有 Critical 和 Important；Minor 分别 10 条和 7 条，已交给修复 J。
+
+主代理裁决：
+- 推翻此前对 A-m-2 的放宽。已看、且 `watched_at` 与 `watch_progress_updated_at` 都为空的行，无法判断断点新旧，照旧跳过，不采用 watch_later。
+- A-m2（抽屉保存总带完整人物列表，导致释放范围偏宽）与 A-m5（PG 下 MergePeople 与 Unlink 并发时可能出现 40P01 死锁）只记录为已知，不改。
+
+复审确认的安全结论（P-022）：
+- 表里只存令牌哈希；
+- `Configure` 作废会话是原子的，`Stop()` 不作废；
+- 诊断只统计通过来源校验的请求，并做了脱敏；
+- 累计播放时长以服务端墙钟为上限。
+
+**修复 I-2 整合**（2026-09-29）：修复 F 复审中 m2–m12 的问题，以及 P-024 转来的中断任务残留临时文件，都已修完。修复 I-2 自报 SQLite 全量通过，17 项变异检查都被测试拦下。契约变化已记入详细设计 §1.2b 的 §5.3 与 §11 行。App 签名没有变化。
+- 主代理接受一处范围扩大：「重新排队失败 → failed」时也清理残留的临时文件。
+- **收尾**：服务层还导出了无生命周期的 `Switch(ctx, target)`，没有任何调用点，改为不导出。
+- **前端**：
+  - 需要识别 `backend_env_locked:` 前缀；
+  - 两种新的 SQLite 恢复错误要给出不同文案：空间不足或复制失败属于普通失败，WAL 未写回属于致命错误；
+  - 重新排队失败的行显示为 failed，并附带原因。

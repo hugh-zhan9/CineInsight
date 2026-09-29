@@ -76,6 +76,10 @@ func TestMaintenanceGateWaitsForTransactionsAndRejectsNewOperations(t *testing.T
 func TestInitUsesPostgresEnv(t *testing.T) {
 	// Init 会读数据目录下的 .env；不隔离家目录就会读到真实安装的配置。
 	t.Setenv("HOME", t.TempDir())
+	// APP02 / m11：Init 经 resolveStartupBackend 解析后端并写下启动缓存；测试结束时还原，
+	// 否则本进程之后的用例都会沿用这里解析出的 postgres。
+	resetBackendStartupForTest(t)
+	unsetEnvForTest(t, "DB_BACKEND", "PREVIOUS_BACKEND")
 	t.Setenv("PG_HOST", "127.0.0.1")
 	t.Setenv("PG_PORT", "5432")
 	t.Setenv("PG_USER", "user")
@@ -87,6 +91,101 @@ func TestInitUsesPostgresEnv(t *testing.T) {
 	if err == nil {
 		_ = Close()
 		t.Fatalf("expected error when postgres is unreachable")
+	}
+	// 接入点：后端由启动缓存解析（PG_HOST → postgres），DB_BACKEND 不来自进程环境。
+	backendStartup.mu.Lock()
+	resolved, backend, fromEnv := backendStartup.resolved, backendStartup.backend, backendStartup.fromProcessEnv
+	backendStartup.mu.Unlock()
+	if !resolved || backend != BackendPostgres || fromEnv {
+		t.Fatalf("Init 应经 resolveStartupBackend 记下启动时的后端: resolved=%v backend=%s fromEnv=%v", resolved, backend, fromEnv)
+	}
+}
+
+// APP02 / m4：SQLite 启动时（打开库之前）清掉上次恢复崩溃留下的临时库文件；Init 同样经启动缓存解析后端。
+func TestAPP02InitSweepsSQLiteRestoreLeftoversBeforeOpening(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	resetBackendStartupForTest(t)
+	unsetEnvForTest(t, "PREVIOUS_BACKEND", "PG_HOST")
+	t.Setenv("DB_BACKEND", "sqlite")
+	libraryDir := t.TempDir()
+	livePath := filepath.Join(libraryDir, "library.db")
+	t.Setenv("SQLITE_PATH", livePath)
+	leftover := filepath.Join(libraryDir, ".library.db.cineinsight-restore-98765.tmp")
+	if err := os.WriteFile(leftover, []byte("half restored"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	previous := DB
+	t.Cleanup(func() {
+		_ = Close()
+		DB = previous
+	})
+	if err := Init(); err != nil {
+		t.Fatalf("SQLite 启动失败: %v", err)
+	}
+	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
+		t.Fatalf("启动时应清掉遗留的恢复临时库: %v", err)
+	}
+	if !BackendFromProcessEnv() || ActiveBackend() != BackendSQLite {
+		t.Fatalf("Init 应经启动缓存记下进程环境给出的 sqlite: fromEnv=%v backend=%s", BackendFromProcessEnv(), ActiveBackend())
+	}
+}
+
+// APP02 / m4：清扫只删库目录里名字符合 `.<库文件名>.cineinsight-restore-*.tmp` 的普通文件；
+// 其他库的临时文件、名字不全的、目录、符号链接（连同它指向的文件）一概不动。
+func TestAPP02SweepSQLiteRestoreTempsOnlyRemovesMatchingRegularFiles(t *testing.T) {
+	dir := t.TempDir()
+	livePath := filepath.Join(dir, "library.db")
+	outside := filepath.Join(t.TempDir(), "target.tmp")
+	if err := os.WriteFile(outside, []byte("user file"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	matching := []string{".library.db.cineinsight-restore-1.tmp", ".library.db.cineinsight-restore-abc123.tmp"}
+	kept := []string{
+		".library.db.cineinsight-restore-.tmp",      // 没有随机串
+		".library.db.cineinsight-restore-1.tmp.bak", // 后缀不对
+		".other.db.cineinsight-restore-1.tmp",       // 别的库
+		"library.db.cineinsight-restore-1.tmp",      // 不是隐藏名
+		".cineinsight-restore-1.tmp",                // 备份流程的临时文件
+		"library.db",
+	}
+	for _, name := range append(append([]string{}, matching...), kept...) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	namedDir := filepath.Join(dir, ".library.db.cineinsight-restore-dir.tmp")
+	if err := os.MkdirAll(namedDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, ".library.db.cineinsight-restore-link.tmp")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("无法创建符号链接: %v", err)
+	}
+
+	if removed := SweepSQLiteRestoreTemps(livePath); removed != len(matching) {
+		t.Fatalf("应只删 %d 个匹配的普通文件，实际 %d", len(matching), removed)
+	}
+	for _, name := range matching {
+		if _, err := os.Lstat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s 应被删除: %v", name, err)
+		}
+	}
+	for _, path := range append([]string{namedDir, link, outside}, func() []string {
+		paths := make([]string, 0, len(kept))
+		for _, name := range kept {
+			paths = append(paths, filepath.Join(dir, name))
+		}
+		return paths
+	}()...) {
+		if _, err := os.Lstat(path); err != nil {
+			t.Fatalf("%s 不应被删除: %v", path, err)
+		}
+	}
+	if pattern := SQLiteRestoreTempPattern(livePath); pattern != ".library.db.cineinsight-restore-*.tmp" {
+		t.Fatalf("临时库命名模式不对: %s", pattern)
+	}
+	if removed := SweepSQLiteRestoreTemps(filepath.Join(t.TempDir(), "gone", "library.db")); removed != 0 {
+		t.Fatalf("库目录不存在时什么都不删: %d", removed)
 	}
 }
 
@@ -698,6 +797,25 @@ func TestAPP02StartupRecordsWhetherBackendCameFromProcessEnv(t *testing.T) {
 	backend, err = resolveStartupBackend(dataDir)
 	if err != nil || backend != BackendPostgres || BackendFromProcessEnv() {
 		t.Fatalf("DB_BACKEND 来自数据目录文件时不算进程环境: backend=%s fromEnv=%v err=%v", backend, BackendFromProcessEnv(), err)
+	}
+}
+
+// APP02 / m5：DB_BACKEND 在进程环境里存在即算来自进程环境，空值也算——godotenv 同样「存在即不覆盖」，
+// 数据目录下的配置写不进来，应用内切换在重启后同样不会生效。
+func TestAPP02StartupTreatsEmptyProcessBackendAsProcessEnv(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dataDir, BackendConfigFileName), []byte("DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	resetBackendStartupForTest(t)
+	unsetEnvForTest(t, "PREVIOUS_BACKEND", "PG_HOST")
+	t.Setenv("DB_BACKEND", "")
+	backend, err := resolveStartupBackend(dataDir)
+	if err != nil || backend != BackendSQLite || !BackendFromProcessEnv() {
+		t.Fatalf("空值的 DB_BACKEND 也算来自进程环境: backend=%s fromEnv=%v err=%v", backend, BackendFromProcessEnv(), err)
+	}
+	if got, ok := os.LookupEnv("DB_BACKEND"); !ok || got != "" {
+		t.Fatalf("数据目录下的配置不应覆盖进程环境里的空值: %q ok=%v", got, ok)
 	}
 }
 

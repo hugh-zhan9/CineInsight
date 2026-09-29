@@ -56,9 +56,16 @@ func (a *App) StartDatabaseSwitch(target string) error {
 		a.restoreMu.Unlock()
 		return err
 	}
-	if !preflight.Reachable || !preflight.Empty {
+	// backend_env_locked 与 relaunch_pending 一样带原因码前缀（m12），前端据此给出说明。
+	if err := preflight.Err(); err != nil {
 		a.restoreMu.Unlock()
-		return fmt.Errorf("%s", preflight.Message)
+		return err
+	}
+	// 预检可能要等目标库连接超时：这期间应用开始退出（shutdown 已调 cancelDatabaseSwitchForShutdown、
+	// 正等 restoreMu）时不再发起迁移，立即放锁（m2）。
+	if a.databaseSwitchService.ShuttingDown() {
+		a.restoreMu.Unlock()
+		return services.ErrDatabaseSwitchCancelledForShutdown
 	}
 	go func() {
 		defer a.restoreMu.Unlock()
@@ -77,7 +84,8 @@ func (a *App) StartDatabaseSwitch(target string) error {
 
 // cancelDatabaseSwitchForShutdown 取消正在进行的迁移（M-3）。接线项：app.go 的 shutdown 必须在
 // 拿 restoreMu 之前调用它——迁移 goroutine 一直持有 restoreMu，不先取消，退出会等整个迁移跑完。
-// 取消按失败处理：撤围栏，配置不改，目标库留为半迁移，下次可清空重试。
+// 取消按失败处理：撤围栏，配置不改，目标库留为半迁移，下次可清空重试。取消带状态（m2）：此刻还在
+// 预检、迁移尚未开始时，预检之后不再发起迁移。
 func (a *App) cancelDatabaseSwitchForShutdown() {
 	if a.databaseSwitchService == nil {
 		return

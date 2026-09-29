@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"video-master/models"
 	"video-master/services"
 
+	"github.com/joho/godotenv"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
@@ -187,6 +189,117 @@ func TestAPP02StartDatabaseSwitchUsesRestoreMaintenanceWithoutClosingConnection(
 	}
 	if !database.MaintenanceActive() {
 		t.Fatal("被拒绝的操作不得撤掉维护围栏")
+	}
+}
+
+// APP02 / m2：退出在预检进行中到来（shutdown 先调 cancelDatabaseSwitchForShutdown，再等 restoreMu）。
+// 取消带状态：预检之后复查到「正在关闭」就不再发起迁移、立即放锁，shutdown 不用等一整次迁移。
+// 预检期间的取消与预检之前的取消对这次复查是同一回事（标志置位后不复位），这里在发起前调用。
+func TestAPP02StartDatabaseSwitchCancelledDuringPreflightDoesNotStartAndReleasesLock(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("DB_BACKEND", "postgres")
+	t.Setenv("SQLITE_PATH", "")
+	openAppLiveDatabase(t, func() *gorm.DB { return dbtest.OpenRaw(t) })
+	app := newMaintenanceTestApp(dataDir)
+	t.Cleanup(app.releaseDatabaseRestoreMode)
+	var statusMu sync.Mutex
+	var statuses []services.DatabaseSwitchStatus
+	app.databaseSwitchService.SetProgressSink(func(status services.DatabaseSwitchStatus) {
+		statusMu.Lock()
+		statuses = append(statuses, status)
+		statusMu.Unlock()
+	})
+
+	app.cancelDatabaseSwitchForShutdown()
+	err := app.StartDatabaseSwitch("sqlite")
+	if !errors.Is(err, services.ErrDatabaseSwitchCancelledForShutdown) {
+		t.Fatalf("正在关闭时发起切换应按取消处理: %v", err)
+	}
+	if !app.restoreMu.TryLock() {
+		t.Fatal("预检之后应立即释放 restoreMu，不能让 shutdown 等迁移")
+	}
+	app.restoreMu.Unlock()
+	statusMu.Lock()
+	published := len(statuses)
+	statusMu.Unlock()
+	if published != 0 {
+		t.Fatalf("迁移不应开始（后台 goroutine 不应起来）: %#v", statuses)
+	}
+	if database.MaintenanceActive() || app.restoreRelease != nil || app.restoreTerminal || app.databaseSwitchService.RelaunchPending() {
+		t.Fatal("迁移没开始，不应进维护模式或待重启")
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, ".env")); !os.IsNotExist(err) {
+		t.Fatalf("不应写后端配置: %v", err)
+	}
+}
+
+// APP02 / m11：App 层「切回之前的后端」的接线——与恢复、迁移共用 restoreMu 且用 TryLock（被占用时立即
+// 拒绝、不排队）；成功时经 enterDatabaseRestoreMode 立起维护围栏并停在「待重启」终态。改成传 nil 生命周期
+// 或改用 Lock 都会让这条用例变红。
+func TestAPP02SwitchBackendConfigOnlyWiresMaintenanceAndRejectsWhileBusy(t *testing.T) {
+	dataDir := t.TempDir()
+	t.Setenv("DB_BACKEND", "postgres")
+	t.Setenv("SQLITE_PATH", "")
+	openAppLiveDatabase(t, func() *gorm.DB { return dbtest.OpenRaw(t) })
+	// 上一个后端（SQLite）的库非空，配置里记着它。
+	target, err := gorm.Open(sqlite.Open(database.SQLiteDSN(database.SQLitePath(dataDir))), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := target.AutoMigrate(models.AllModels()...); err != nil {
+		t.Fatal(err)
+	}
+	if err := target.Create(&models.Video{Name: "old.mp4", Path: "/old/old.mp4", Directory: "/old"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if sqlDB, err := target.DB(); err == nil {
+		_ = sqlDB.Close()
+	}
+	configPath := filepath.Join(dataDir, ".env")
+	if err := os.WriteFile(configPath, []byte("DB_BACKEND=postgres\nPREVIOUS_BACKEND=sqlite\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app := newMaintenanceTestApp(dataDir)
+	t.Cleanup(app.releaseDatabaseRestoreMode)
+
+	// 恢复或迁移正持有 restoreMu：立即拒绝。
+	app.restoreMu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		_, err := app.SwitchBackendConfigOnly("sqlite")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		app.restoreMu.Unlock()
+		if !errors.Is(err, errDatabaseMaintenanceBusy) {
+			t.Fatalf("restoreMu 被占用时应立即拒绝: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		app.restoreMu.Unlock()
+		<-done
+		t.Fatal("restoreMu 被占用时应立即拒绝，而不是排队等锁")
+	}
+	if values, err := godotenv.Read(configPath); err != nil || values["DB_BACKEND"] != "postgres" {
+		t.Fatalf("被拒绝时配置不应改动: %#v err=%v", values, err)
+	}
+	if database.MaintenanceActive() {
+		t.Fatal("被拒绝时不应进维护模式")
+	}
+
+	result, err := app.SwitchBackendConfigOnly("sqlite")
+	if err != nil || result == nil || !result.Switched || !result.RelaunchRequired {
+		t.Fatalf("切回上一个后端应成功: %#v err=%v", result, err)
+	}
+	if !database.MaintenanceActive() || app.restoreRelease == nil || !app.restoreTerminal || !app.databaseSwitchService.RelaunchPending() {
+		t.Fatalf("成功后应经维护模式入口立起围栏并停在待重启: fenced=%v release=%v terminal=%v",
+			database.MaintenanceActive(), app.restoreRelease != nil, app.restoreTerminal)
+	}
+	if err := database.DB.Create(&models.Tag{Name: "切回后写入", Color: "#000000"}).Error; !errors.Is(err, database.ErrMaintenance) {
+		t.Fatalf("待重启期间写入必须被拒绝: %v", err)
+	}
+	if values, err := godotenv.Read(configPath); err != nil || values["DB_BACKEND"] != "sqlite" || values["PREVIOUS_BACKEND"] != "postgres" {
+		t.Fatalf("配置应改为切回的后端: %#v err=%v", values, err)
 	}
 }
 
