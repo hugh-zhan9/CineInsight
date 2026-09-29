@@ -101,14 +101,15 @@ func (a *App) stopShortFeedForSetting() error {
 	return nil
 }
 
-// SetShortFeedPIN 设置手机端访问 PIN（4–32 个字符，不含控制字符）。设置后所有已登录的手机会话失效。
+// SetShortFeedPIN 设置手机端访问 PIN（6–32 个字符，不含控制字符）。设置后所有已登录的手机会话失效，
+// 失败计数、全局冷却与每日失败上限一并重置。
 func (a *App) SetShortFeedPIN(pin string) error {
 	err := a.shortFeedService.SetShortFeedPIN(pin)
 	log.Printf("API SetShortFeedPIN err=%v", err)
 	return err
 }
 
-// ClearShortFeedPIN 清除 PIN，同时使全部会话失效。
+// ClearShortFeedPIN 清除 PIN，同时使全部会话失效，并重置失败计数、全局冷却与每日失败上限。
 func (a *App) ClearShortFeedPIN() error {
 	err := a.shortFeedService.ClearShortFeedPIN()
 	log.Printf("API ClearShortFeedPIN err=%v", err)

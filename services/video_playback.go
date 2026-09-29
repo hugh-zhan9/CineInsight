@@ -191,33 +191,46 @@ type VideoRelocatedEvent struct {
 
 var (
 	// playbackRelocateSem 让后台重定位全局串行；playbackRelocateWG 让测试与关闭流程能等它们结束。
-	playbackRelocateSem    = make(chan struct{}, 1)
-	playbackRelocateWG     sync.WaitGroup
-	playbackRelocateMu     sync.Mutex
-	playbackRelocateCtx    context.Context
-	playbackRelocateCancel context.CancelFunc
+	playbackRelocateSem = make(chan struct{}, 1)
+	playbackRelocateWG  sync.WaitGroup
+	// playbackRelocateMu 保护下面三项，并让 WaitGroup 的 Add 与 StopPlaybackRelocation 的 Wait 不并发：
+	// stopping 期间不再登记新的重定位（Minor 5）。
+	playbackRelocateMu       sync.Mutex
+	playbackRelocateCtx      context.Context
+	playbackRelocateCancel   context.CancelFunc
+	playbackRelocateStopping bool
 )
 
-// playbackRelocateContext 返回当前批次的取消上下文；StopPlaybackRelocation 之后下一次调用会新建。
-func playbackRelocateContext() context.Context {
+// beginPlaybackRelocation 登记一次后台重定位：返回它要用的取消上下文。StopPlaybackRelocation 正在
+// 等待时返回 false，调用方不启动 goroutine（Add 与 Wait 在同一把锁下互斥）。
+func beginPlaybackRelocation() (context.Context, bool) {
 	playbackRelocateMu.Lock()
 	defer playbackRelocateMu.Unlock()
+	if playbackRelocateStopping {
+		return nil, false
+	}
 	if playbackRelocateCtx == nil {
 		playbackRelocateCtx, playbackRelocateCancel = context.WithCancel(context.Background())
 	}
-	return playbackRelocateCtx
+	playbackRelocateWG.Add(1)
+	return playbackRelocateCtx, true
 }
 
-// StopPlaybackRelocation 取消排队与进行中的后台重定位（应用退出时调用；接线项：App 关闭流程）。
-// 取消后再次发生的播放失败仍会启动新的重定位。
+// StopPlaybackRelocation 取消排队与进行中的后台重定位并等它们退出（应用退出时调用；接线项：
+// App.shutdown）。先在锁内置「停止中」并取消上下文，之后不再有新的 Add，再 Wait；Wait 返回后
+// 清除标志，此后再次发生的播放失败仍会启动新的重定位。
 func StopPlaybackRelocation() {
 	playbackRelocateMu.Lock()
+	playbackRelocateStopping = true
 	if playbackRelocateCancel != nil {
 		playbackRelocateCancel()
 	}
 	playbackRelocateCtx, playbackRelocateCancel = nil, nil
 	playbackRelocateMu.Unlock()
 	playbackRelocateWG.Wait()
+	playbackRelocateMu.Lock()
+	playbackRelocateStopping = false
+	playbackRelocateMu.Unlock()
 }
 
 var (
@@ -247,7 +260,7 @@ func notifyVideoRelocated(event VideoRelocatedEvent) {
 // playbackVideoRootOffline 判断视频所在的扫描根现在是否离线：卷未挂载，或包含该路径的
 // 扫描根都无法 Stat。找不到归属的根时按在线处理——那是「文件缺失」而不是「盘没插」。
 func playbackVideoRootOffline(path string) bool {
-	if scanVolumeAvailable(path) != nil {
+	if mediaVolumeAvailable(path) != nil {
 		return true
 	}
 	var dirs []models.ScanDirectory
@@ -312,8 +325,12 @@ func (s *VideoService) reconcileAfterPlaybackFailure(video *models.Video, reason
 		if _, running := playbackRelocating.LoadOrStore(video.ID, struct{}{}); !running {
 			// 上下文在派生 goroutine 之前取：StopPlaybackRelocation 取消的就是这一个，
 			// 避免排队的 goroutine 启动得太晚、拿到取消之后新建的上下文而永远等不到信号量。
-			playbackRelocateWG.Add(1)
-			go s.relocateInBackground(playbackRelocateContext(), snapshot)
+			if ctx, ok := beginPlaybackRelocation(); ok {
+				go s.relocateInBackground(ctx, snapshot)
+			} else {
+				// 正在停止（应用退出）：不再启动新的遍历，记录保持失效。
+				playbackRelocating.Delete(video.ID)
+			}
 		}
 	}
 	return result
@@ -384,7 +401,8 @@ func (s *VideoService) findRelocatedVideoCandidate(ctx context.Context, video *m
 		if err := ctx.Err(); err != nil {
 			return "", false, err
 		}
-		scannedFiles, err := s.ScanDirectoryWithInfo(root)
+		// 遍历中途每个目录项都检查取消（Minor 5）：大盘全根遍历可能很久，退出时不能等它走完。
+		scannedFiles, err := s.scanDirectoryCollectContext(ctx, root, true, nil, nil)
 		if err != nil {
 			return "", false, err
 		}

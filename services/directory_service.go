@@ -129,8 +129,9 @@ func (s *DirectoryService) UpdateDirectory(id uint, path, alias, mode string) (*
 }
 
 func (s *DirectoryService) remapDirectory(current models.ScanDirectory, newPath, alias string, result *DirectoryUpdateResult) (*DirectoryUpdateResult, error) {
-	libraryPathMutationMu.Lock()
-	defer libraryPathMutationMu.Unlock()
+	// 重映射也会改写图片侧的路径（rewriteLibraryPathPrefixTx 覆盖 images / image_directories），
+	// 与 MoveDirectory / RenameDirectory 同样按「视频锁在前、图片锁在后」的固定顺序持锁。
+	defer lockLibraryPathRewrite()()
 
 	oldPath := result.OldPath
 	if info, err := os.Stat(newPath); err != nil {

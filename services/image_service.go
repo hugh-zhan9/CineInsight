@@ -893,7 +893,8 @@ func (s *ImageService) deleteImageBatchItem(id uint, deleteFile bool, batchID st
 		}
 		entry.Mode = models.TrashModeMissing
 		code = TrashResultFileMissing
-	case sourceInfo == nil, !deleteFile, isTrashPath(image.Path):
+	case sourceInfo == nil, !deleteFile, isRecordedTrashPath(image.Path):
+		// 只有确实登记过的回收站位置才降级为只删记录；启发式旧版 trash/ 目录不算（I-3）。
 		entry.Mode = models.TrashModeRecordOnly
 	default:
 		entry.Mode = models.TrashModeTrash
@@ -989,7 +990,8 @@ func (s *ImageService) deleteImageToSystemTrash(image *models.Image, entry *mode
 				if current.State == trashStateDeleted {
 					return TrashResultOK, nil
 				}
-				return "", fmt.Errorf("待删除条目已被其他操作处理，未移动文件: %w", err)
+				// 文件已进废纸篓，条目状态被并发操作改变：如实说明，不回滚文件（Minor 12）。
+				return "", fmt.Errorf("文件已移入废纸篓，但删除记录的状态已被其他操作改变，数据库状态待对账: %w", err)
 			}
 			// 条目已不存在（他方取消了删除）：文件却在废纸篓里，落到下面的回滚逻辑把它放回原处。
 		}
@@ -1182,19 +1184,23 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		return nil, fmt.Errorf("回收站条目当前不可恢复: %s", entry.State)
 	}
 
-	fileAtOriginal := false
+	// movedFromTrash 只在这一次把文件从废纸篓移回原处时为 true；事务失败时只有这种情形才补偿（I-1）。
+	movedFromTrash := false
 	trashService := NewTrashService()
 	if entry.Mode == models.TrashModeRecordOnly {
 		// 只删记录：文件一直在原地没动过，恢复只还原数据库，不碰文件。
 	} else if entry.FileMoved {
 		var err error
-		fileAtOriginal, err = ensureImageTrashEntryFileRestored(trashService, *entry)
+		movedFromTrash, err = ensureImageTrashEntryFileRestored(trashService, *entry)
 		if err != nil {
 			_ = markImageTrashEntryRecoverable(entry.ID, err)
 			return nil, err
 		}
 	} else if info, err := os.Stat(entry.OriginalPath); err != nil {
 		restoreErr := fmt.Errorf("原文件不可用，无法恢复记录: %w", err)
+		if os.IsNotExist(err) && mediaPathOffline(entry.OriginalPath) {
+			restoreErr = ErrTrashVolumeOffline
+		}
 		_ = markImageTrashEntryRecoverable(entry.ID, restoreErr)
 		return nil, restoreErr
 	} else if info.IsDir() {
@@ -1240,7 +1246,7 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 			_ = recordImageTrashEntryError(entry.ID, fmt.Errorf("恢复状态不一致: %w", err))
 			return nil, fmt.Errorf("恢复状态不一致，未执行文件补偿: %w", err)
 		}
-		if fileAtOriginal {
+		if movedFromTrash {
 			if rollbackErr := trashService.RestoreFromTrash(entry.OriginalPath, entry.TrashPath); rollbackErr != nil {
 				_ = recordImageTrashEntryError(entry.ID, rollbackErr)
 				return nil, fmt.Errorf("恢复数据库记录失败: %w；文件回滚失败: %v", err, rollbackErr)
@@ -1524,6 +1530,8 @@ func imageTrashPathAlreadyRecorded(path string) bool {
 	return database.DB.Model(&models.ImageTrashEntry{}).Where("trash_path = ?", path).Count(&count).Error == nil && count > 0
 }
 
+// ensureImageTrashEntryFileRestored 与 ensureTrashEntryFileRestored 同义：返回值只在这一次把文件
+// 从废纸篓移回原处时为 true；文件本来就在原路径时为 false（I-1）。
 func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.ImageTrashEntry) (bool, error) {
 	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
 	strict := !isLegacyTrashMode(entry.Mode)
@@ -1561,7 +1569,13 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 		if !matches(entry.OriginalPath, originalInfo) {
 			return false, mismatch("原路径文件与删除记录不一致: %s")
 		}
-		return true, nil
+		// 文件本来就在原路径：这次没有动它。
+		return false, nil
+	}
+	// 原路径上没有文件时先看卷在不在（Minor 3）：离线时既不能判「废纸篓里的文件已不存在」，
+	// 也不能往未挂载卷留下的空挂载点里恢复。
+	if trashEntryVolumeOffline(entry.OriginalPath, entry.TrashPath) {
+		return false, ErrTrashVolumeOffline
 	}
 	if !trashExists {
 		return false, ErrTrashFileGone

@@ -155,14 +155,22 @@ func (s *ShortFeedHTTPServer) Status() ShortFeedServerStatus {
 const (
 	shortFeedAccessNoPIN   = "loopback/private-lan/link-local only; no PIN set, anyone on the LAN can open it"
 	shortFeedAccessWithPIN = "loopback/private-lan/link-local only; PIN login required"
+	// 读不出 PIN 状态时鉴权一律 503、不放行（authorize）；文案与之一致，不能说成「没设 PIN」。
+	shortFeedAccessUnavailable = "loopback/private-lan/link-local only; PIN status unavailable, data requests are refused"
 )
 
-// allowedAccessText 如实描述当前的访问控制：设了 PIN 才是「需要登录」。
+// allowedAccessText 如实描述当前的访问控制：设了 PIN 才是「需要登录」；读库失败时是「状态不可用」
+// （复审 Minor 12）。
 func (s *ShortFeedHTTPServer) allowedAccessText() string {
-	if s.feed != nil {
-		if hash, err := s.feed.pinHash(); err == nil && hash != "" {
-			return shortFeedAccessWithPIN
-		}
+	if s.feed == nil {
+		return shortFeedAccessNoPIN
+	}
+	hash, err := s.feed.pinHash()
+	switch {
+	case err != nil:
+		return shortFeedAccessUnavailable
+	case hash != "":
+		return shortFeedAccessWithPIN
 	}
 	return shortFeedAccessNoPIN
 }
@@ -502,9 +510,17 @@ func (s *ShortFeedHTTPServer) handleItemMutation(w http.ResponseWriter, r *http.
 		}
 		err := s.feed.DeleteItem(ref)
 		if err != nil {
-			if errors.Is(err, ErrTrashUnsupportedVolume) {
+			switch {
+			case errors.Is(err, ErrTrashUnsupportedVolume):
 				// 手机端不提供永久删除：这块盘进不了废纸篓，就让用户回桌面端处理。
 				writeShortFeedError(w, http.StatusConflict, "trash_unsupported", "该磁盘不支持废纸篓，请在桌面端处理")
+				return
+			case errors.Is(err, ErrTrashVolumeOffline):
+				// 盘没插：什么都没动，接上磁盘后再删（复审 Minor 11）。
+				writeShortFeedError(w, http.StatusConflict, "volume_offline", "文件所在磁盘当前未连接，未做任何改动")
+				return
+			case errors.Is(err, ErrTrashPermissionDenied):
+				writeShortFeedError(w, http.StatusConflict, "permission_denied", "没有权限把文件移到废纸篓，请在桌面端处理")
 				return
 			}
 			writeShortFeedMutationResult(w, nil, err)

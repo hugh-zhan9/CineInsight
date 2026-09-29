@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"video-master/database"
 	"video-master/models"
 
@@ -28,95 +29,146 @@ func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error)
 		restored, err := s.restoreTrashEntry(&entry)
 		return restored, err == nil, err
 	}
-	if err == nil && video.DeletedAt.IsValid() {
-		// 访达「放回原处」：原路径上的文件与回收站条目身份一致，就地恢复原记录（I3）。
-		if restored, ok, putBackErr := s.restoreVideoIfPutBack(&video, path); putBackErr != nil {
-			return nil, false, putBackErr
-		} else if ok {
-			return restored, true, nil
-		}
-	}
-	added, err := s.addVideo(path)
-	return added, false, err
+	// 访达「放回原处」由 addVideoOrRestorePutBack 统一处理（与手动添加同一条路，Minor 2）。
+	return s.addVideoOrRestorePutBack(path)
 }
 
-// restoreVideoIfPutBack 判断软删视频的文件是否被用户在访达里放回了原路径（inode + 大小 + mtime 一致，
-// 设备号不参与），是则只在数据库里恢复原记录（原 ID、标签、人物），条目按既有恢复成功语义移除。
+// restorePutBackVideo 判断同路径的软删视频里，是否有一条的文件被用户在访达里放回了原路径
+// （putBackDetected），有则只在数据库里恢复那一条原记录（原 ID、标签、人物），条目按既有恢复成功
+// 语义移除。遍历同路径的全部软删行、取身份一致的那条，而不是只看最新一条（Minor 2）。
 // 条目此前若因废纸篓里找不到文件被标成 file_gone，先条件更新回 deleted 再走既有恢复。
-func (s *VideoService) restoreVideoIfPutBack(deleted *models.Video, path string) (*models.Video, bool, error) {
-	info, statErr := os.Stat(path)
-	if statErr != nil || info.IsDir() {
-		return nil, false, nil
-	}
-	var entry models.VideoTrashEntry
-	result := database.DB.Where("video_id = ?", deleted.ID).Limit(1).Find(&entry)
-	if result.Error != nil {
-		return nil, false, result.Error
-	}
-	if result.RowsAffected == 0 || !isPutBack(entry.Mode, entry.State, entry.FileSize, entry.FileModTime, entry.FileIdentity, info) {
-		return nil, false, nil
-	}
-	if entry.State == models.TrashStateFileGone {
-		revive := database.DB.Model(&models.VideoTrashEntry{}).
-			Where("id = ? AND state = ?", entry.ID, models.TrashStateFileGone).
-			Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": ""})
-		if revive.Error != nil {
-			return nil, false, revive.Error
-		}
-		entry.State = trashStateDeleted
-	}
-	restored, err := s.restoreTrashEntry(&entry)
-	if err != nil {
+// 调用方持有路径读锁（扫描或 AddVideo）。
+func (s *VideoService) restorePutBackVideo(path string, info os.FileInfo) (*models.Video, bool, error) {
+	var deleted []models.Video
+	if err := database.DB.Unscoped().Select("id").Where("path = ? AND deleted_at IS NOT NULL", path).
+		Order("id DESC").Find(&deleted).Error; err != nil {
 		return nil, false, err
 	}
-	return restored, true, nil
+	for _, row := range deleted {
+		var entry models.VideoTrashEntry
+		result := database.DB.Where("video_id = ?", row.ID).Limit(1).Find(&entry)
+		if result.Error != nil {
+			return nil, false, result.Error
+		}
+		if result.RowsAffected == 0 || !putBackDetectedFor(videoEntryFacts(entry), info) {
+			continue
+		}
+		if entry.State == models.TrashStateFileGone {
+			revive := database.DB.Model(&models.VideoTrashEntry{}).
+				Where("id = ? AND state = ?", entry.ID, models.TrashStateFileGone).
+				Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": ""})
+			if revive.Error != nil {
+				return nil, false, revive.Error
+			}
+			entry.State = trashStateDeleted
+		}
+		restored, err := s.restoreTrashEntry(&entry)
+		if err != nil {
+			return nil, false, err
+		}
+		return restored, true, nil
+	}
+	return nil, false, nil
 }
 
-// restoreImageIfPutBack 是 restoreVideoIfPutBack 的图片版本（I3）。
+// restoreImageIfPutBack 是 restorePutBackVideo 的图片版本（I3、Minor 2）。
 func (s *ImageService) restoreImageIfPutBack(path string) (bool, error) {
 	info, statErr := os.Stat(path)
 	if statErr != nil || info.IsDir() {
 		return false, nil
 	}
-	var deleted models.Image
-	found := database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path).Order("id DESC").Limit(1).Find(&deleted)
-	if found.Error != nil {
-		return false, found.Error
-	}
-	if found.RowsAffected == 0 {
-		return false, nil
-	}
-	var entry models.ImageTrashEntry
-	result := database.DB.Where("image_id = ?", deleted.ID).Limit(1).Find(&entry)
-	if result.Error != nil {
-		return false, result.Error
-	}
-	if result.RowsAffected == 0 || !isPutBack(entry.Mode, entry.State, entry.FileSize, entry.FileModTime, entry.FileIdentity, info) {
-		return false, nil
-	}
-	if entry.State == models.TrashStateFileGone {
-		revive := database.DB.Model(&models.ImageTrashEntry{}).
-			Where("id = ? AND state = ?", entry.ID, models.TrashStateFileGone).
-			Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": ""})
-		if revive.Error != nil {
-			return false, revive.Error
-		}
-		entry.State = trashStateDeleted
-	}
-	if _, err := s.restoreImageTrashEntry(&entry); err != nil {
+	var deleted []models.Image
+	if err := database.DB.Unscoped().Select("id").Where("path = ? AND deleted_at IS NOT NULL", path).
+		Order("id DESC").Find(&deleted).Error; err != nil {
 		return false, err
 	}
-	return true, nil
+	for _, row := range deleted {
+		var entry models.ImageTrashEntry
+		result := database.DB.Where("image_id = ?", row.ID).Limit(1).Find(&entry)
+		if result.Error != nil {
+			return false, result.Error
+		}
+		if result.RowsAffected == 0 || !putBackDetectedFor(imageEntryFacts(entry), info) {
+			continue
+		}
+		if entry.State == models.TrashStateFileGone {
+			revive := database.DB.Model(&models.ImageTrashEntry{}).
+				Where("id = ? AND state = ?", entry.ID, models.TrashStateFileGone).
+				Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": ""})
+			if revive.Error != nil {
+				return false, revive.Error
+			}
+			entry.State = trashStateDeleted
+		}
+		if _, err := s.restoreImageTrashEntry(&entry); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
-// isPutBack 是「访达放回原处」的判定：只有 trash 模式、状态为 deleted / file_gone、记录了 inode 与 mtime
-// 的条目才有足够身份；当前文件的大小、mtime、inode 必须全部一致。
-func isPutBack(mode, state string, size, mtimeNS int64, identity string, info os.FileInfo) bool {
-	if state != trashStateDeleted && state != models.TrashStateFileGone {
+// putBackDetected 是「访达放回原处」的唯一判定（扫描、手动添加、回收站列表与清除共用，Minor 2）：
+//
+//   - 条目是 trash 模式、状态为 deleted / file_gone，且记录了大小、mtime、inode（canDetectPutBack）；
+//   - 原路径上文件的大小、mtime、inode（不含设备号）与条目全部一致；
+//   - 废纸篓里的那一份已经不在，或与原路径上的是同一个文件（同一 inode 的两个名字）。
+//
+// 只有大小 + mtime 一致而 inode 不同，是另一个文件，不得认定为放回。
+func putBackDetected(facts softDeletedEntryFacts, size, mtimeNS int64, identity string) bool {
+	if facts.State != trashStateDeleted && facts.State != models.TrashStateFileGone {
 		return false
 	}
-	want := trashFileID{Size: size, ModTimeNS: mtimeNS, Identity: identity}
-	return canDetectPutBack(mode, want) && want.strictMatch(info)
+	want := trashFileID{Size: facts.FileSize, ModTimeNS: facts.FileModTime, Identity: facts.FileIdentity}
+	if !canDetectPutBack(facts.Mode, want) {
+		return false
+	}
+	if want.Size != size || want.ModTimeNS != mtimeNS || identity == "" || identityInode(want.Identity) != identityInode(identity) {
+		return false
+	}
+	trashPath := strings.TrimSpace(facts.TrashPath)
+	if trashPath == "" {
+		return true
+	}
+	trashInfo, err := os.Stat(trashPath)
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return true
+	case err != nil:
+		// 读不到废纸篓那一侧（权限等）：证据不足，不认定。
+		return false
+	}
+	return !trashInfo.IsDir() && stableFileIdentity(trashInfo) == identity
+}
+
+// putBackDetectedFor 用原路径上文件的 FileInfo 做放回判定。
+func putBackDetectedFor(facts softDeletedEntryFacts, info os.FileInfo) bool {
+	if info == nil || info.IsDir() {
+		return false
+	}
+	return putBackDetected(facts, info.Size(), info.ModTime().UnixNano(), stableFileIdentity(info))
+}
+
+// putBackAtPath 读取 path 上的文件并做放回判定；文件不在或读不到时返回 false。
+func putBackAtPath(facts softDeletedEntryFacts, path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, exists, err := regularFileState(path)
+	if err != nil || !exists {
+		return false
+	}
+	return putBackDetectedFor(facts, info)
+}
+
+func videoEntryFacts(entry models.VideoTrashEntry) softDeletedEntryFacts {
+	return softDeletedEntryFacts{Mode: entry.Mode, DeletedBy: entry.DeletedBy, FileSize: entry.FileSize, FileModTime: entry.FileModTime,
+		FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State, TrashPath: entry.TrashPath}
+}
+
+func imageEntryFacts(entry models.ImageTrashEntry) softDeletedEntryFacts {
+	return softDeletedEntryFacts{Mode: entry.Mode, DeletedBy: entry.DeletedBy, FileSize: entry.FileSize, FileModTime: entry.FileModTime,
+		FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State, TrashPath: entry.TrashPath}
 }
 
 // 同路径软删行的判定结果（详细设计 §2.2）。
@@ -143,13 +195,15 @@ type softDeletedEntryFacts struct {
 	FileIdentity  string
 	DeleteBatchID string
 	State         string
+	// TrashPath 只用于放回判定的「废纸篓那一份已不在」一项。
+	TrashPath string
 }
 
 // decideSoftDeletedPath 按 §2.2 的表依次判定：
 //
 //  1. mode=missing 且 deleted_by=scanner → 自动恢复；
 //  2. mode=record_only（新时代行，delete_batch_id 非空），且大小与 mtime 都没变 → 屏蔽；
-//  3. mode=trash 且原路径上的文件与条目身份（inode + 大小 + mtime）一致 → 访达放回，就地恢复；
+//  3. mode=trash 且满足放回判定（putBackDetected，与列表、手动添加同一个条件）→ 访达放回，就地恢复；
 //     mode 为 trash / legacy_trash 的其余情形 → 新建（原文件在废纸篓，这是新文件）；
 //  4. 没有条目、或历史回填行（delete_batch_id 为空的 record_only），且记录大小等于文件大小 → 屏蔽；
 //  5. 其他 → 新建。
@@ -173,9 +227,7 @@ func decideSoftDeletedPath(entry *softDeletedEntryFacts, rowSize, size, mtimeNS 
 			}
 			return softDeletedCreateNew
 		case models.TrashModeTrash:
-			want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
-			if (entry.State == trashStateDeleted || entry.State == models.TrashStateFileGone) && canDetectPutBack(entry.Mode, want) &&
-				want.Size == size && want.ModTimeNS == mtimeNS && identity != "" && identityInode(want.Identity) == identityInode(identity) {
+			if putBackDetected(*entry, size, mtimeNS, identity) {
 				return softDeletedPutBack
 			}
 		}
@@ -209,14 +261,15 @@ func softDeletedVideoPathSkip(path string, info os.FileInfo) (row *models.Video,
 	}
 	var facts *softDeletedEntryFacts
 	if entryResult.RowsAffected == 1 {
-		facts = &softDeletedEntryFacts{Mode: entry.Mode, DeletedBy: entry.DeletedBy, FileSize: entry.FileSize, FileModTime: entry.FileModTime,
-			FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State}
+		entryFacts := videoEntryFacts(entry)
+		facts = &entryFacts
 	}
 	switch decideSoftDeletedPath(facts, deleted.Size, info.Size(), info.ModTime().UnixNano(), stableFileIdentity(info)) {
 	case softDeletedBlocked:
 		return &deleted, fmt.Errorf("%w: %w", ErrVideoBlockedByUserDelete, ErrVideoExists), nil
 	case softDeletedAutoRestore, softDeletedPutBack:
-		// 自动恢复与访达放回都由扫描流程在 addVideo 之前处理；直接 AddVideo 时不新建重复记录。
+		// 自动恢复由 addScannedVideo、访达放回由 addVideoOrRestorePutBack 在建记录之前处理；
+		// 走到这里说明那一步没有恢复（或并发改变了状态），不新建重复记录。
 		return &deleted, ErrVideoExists, nil
 	}
 	return nil, nil, nil
@@ -246,8 +299,8 @@ func softDeletedImagePathSkip(path string, info os.FileInfo) (row *models.Image,
 	}
 	var facts *softDeletedEntryFacts
 	if entryResult.RowsAffected == 1 {
-		facts = &softDeletedEntryFacts{Mode: entry.Mode, DeletedBy: entry.DeletedBy, FileSize: entry.FileSize, FileModTime: entry.FileModTime,
-			FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State}
+		entryFacts := imageEntryFacts(entry)
+		facts = &entryFacts
 	}
 	switch decideSoftDeletedPath(facts, deleted.Size, info.Size(), info.ModTime().UnixNano(), stableFileIdentity(info)) {
 	case softDeletedBlocked:

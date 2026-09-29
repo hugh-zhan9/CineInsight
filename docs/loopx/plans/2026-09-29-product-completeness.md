@@ -49,7 +49,7 @@ slices:
     status: in_progress
     depends: [P-013]
   - id: P-027
-    status: pending
+    status: in_progress
     depends: [P-011]
   - id: P-022
     status: pending
@@ -870,6 +870,17 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
   - **小修（下一个跟进子代理）**：
     - `clip_verify.go` 的画面复核改为使用分析传入的 ctx，取消时能立即中断；
     - `ai_same_source_service.go` 的查找同源改用带指纹核对的近似重复忽略加载函数。
+- **复审 A 第三轮修复后追加**：
+  - **P-029** 接线：
+    - `shutdown` 时调用 `services.StopPlaybackRelocation()`；
+    - 启动与恢复续跑都走 `withShortFeedLifecycle(restartShortFeedServerLocked)`；
+    - `GetShortFeedServerStatus` 在服务为 nil 时，`AllowedAccess` 文案与 `allowedAccessText` 保持同一口径。
+  - **小修（下一个跟进子代理，主代理裁决）**：图片扫描改为按路径判定 trash 目录，与视频侧的 `isTrashPath` / 旧版启发式一致，修复 IMG-13（并入 LIB-14），并同步更新 `TestImageSyncSkipsTrashAndHiddenPaths`。
+  - **前端**：
+    - 回收站中处于 `put_back` 状态的行，提示「已放回原处」，只提供恢复操作；
+    - 手机端 429 返回 `reset_required` 时，提示去桌面端修改 PIN；
+    - PIN 输入下限改为 6 位；
+    - 手机端新增 409 `volume_offline`、`permission_denied` 两种提示。
 - **P-039**：`docs/short-feed-lan.md` 中「无登录、无 PIN、无二维码」与投影机制的描述需要更新。
 - **P-040**：回收站列表方法名改回设计名（旧的 `ListTrashEntries` 删除后，把 `ListTrashEntriesPage` 改为 `ListTrashEntries`）；统一各处 `*BatchResult` 类型的命名。
 - **真机交接**：

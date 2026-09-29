@@ -18,14 +18,20 @@ import (
 // P-010 / P-011 独立评审问题（C1、I1~I6、Minor）的回归测试。测试名里的 LIBxx / IMGxx 是问题清单 ID。
 // 测试进程里的系统废纸篓是替身（system_trash_testhook_test.go）：同卷重命名进「原目录/.Trash」。
 
-// 一个视频已被软删（模拟旧版应用删除后的库状态），返回它所在目录。
-func p010SoftDeletedVideoIn(t *testing.T, dir string) models.Video {
+// p010LegacyEraDeletedAt 落在旧版应用「移进 trash/ 却不建条目」的时间段（2026-04-16 至 2026-07-30）内。
+var p010LegacyEraDeletedAt = time.Date(2026, 5, 20, 10, 30, 0, 0, time.Local)
+
+// 一个视频已被旧版应用软删（没有回收站条目、deleted_at 在旧版时间段内），模拟旧版删除后的库状态。
+func p010SoftDeletedVideoIn(t *testing.T, dir, name string) models.Video {
 	t.Helper()
-	video := models.Video{Name: "gone.mp4", Path: filepath.Join(dir, "gone.mp4"), Directory: dir, Size: 7}
+	video := models.Video{Name: name, Path: filepath.Join(dir, name), Directory: dir, Size: 7}
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := database.DB.Delete(&video).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Unscoped().Model(&models.Video{}).Where("id = ?", video.ID).Update("deleted_at", p010LegacyEraDeletedAt).Error; err != nil {
 		t.Fatal(err)
 	}
 	return video
@@ -43,8 +49,8 @@ func TestLIB05LegacyTrashDirWithoutEntriesIsNotReimportedC1(t *testing.T) {
 	for _, path := range []string{legacyFile, nested, keep} {
 		createOldVideoFile(t, path)
 	}
-	// 旧版应用删除过一个视频：库里只剩软删行，没有回收站条目，文件在 <目录>/trash/ 里。
-	p010SoftDeletedVideoIn(t, mediaDir)
+	// 旧版应用删除过一个视频：库里只剩软删行（旧版时间段内），没有回收站条目，文件在 <目录>/trash/ 里。
+	p010SoftDeletedVideoIn(t, mediaDir, "old-deleted.mp4")
 	// 父目录从无删除记录的 trash、以及用户自己的 Trash（大写）照常扫描。
 	plainTrash := filepath.Join(root, "other", "trash", "plain.mp4")
 	userTrash := filepath.Join(root, "third", "Trash", "user.mp4")
@@ -80,6 +86,16 @@ func TestIMG02LegacyTrashDirUnderSoftDeletedImageDirectoryIsSkippedC1(t *testing
 	if err := database.DB.Delete(image).Error; err != nil {
 		t.Fatal(err)
 	}
+	if err := database.DB.Unscoped().Model(&models.Image{}).Where("id = ?", image.ID).Update("deleted_at", p010LegacyEraDeletedAt).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 旧版应用把 a.jpg 移进了 pics/trash/，同名冲突时带时间戳：a_20260520103000.jpg。
+	if err := os.MkdirAll(filepath.Join(root, "pics", "trash"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(image.Path, filepath.Join(root, "pics", "trash", "a_20260520103000.jpg")); err != nil {
+		t.Fatal(err)
+	}
 	refreshLegacyTrashDirs()
 	if !isTrashDir(filepath.Join(root, "pics", "trash")) || !isTrashPath(filepath.Join(root, "pics", "trash", "b.jpg")) {
 		t.Fatal("图片所在目录下、名为 trash 的目录应按旧版回收站处理")
@@ -110,6 +126,8 @@ func TestScanSkipBreakdownPerCategoryLIB14(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustSetFileModTime(t, source, time.Now().Add(-time.Hour))
+	// 旧版应用删除过 legacy.mp4（软删、无条目、旧版时间段内），文件在 trash/ 里。
+	p010SoftDeletedVideoIn(t, mediaDir, "legacy.mp4")
 	// 用户只删了记录、文件仍在原处（大小与 mtime 都没变）。
 	blocked := p010Video(t, filepath.Join(mediaDir, "blocked.mp4"), "blocked-content")
 	mustSetFileModTime(t, blocked.Path, time.Now().Add(-time.Hour))
@@ -138,8 +156,9 @@ func TestLIB05ListKeepsStateWhenVolumeOfflineI1(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry := p010VideoEntry(t, video.ID)
-	// 卷被拔掉：整个挂载点连同废纸篓目录都读不到。
-	if err := os.RemoveAll(mount); err != nil {
+	// 卷被拔掉：卷挂载检查报告未挂载（替身，I-2），卷上的文件读不到（删掉废纸篓里那份来模拟）。
+	remount := reviewAUnmountVolume(t, mount)
+	if err := os.Remove(entry.TrashPath); err != nil {
 		t.Fatal(err)
 	}
 	center := NewTrashCenter(svc, nil)
@@ -151,9 +170,7 @@ func TestLIB05ListKeepsStateWhenVolumeOfflineI1(t *testing.T) {
 		t.Fatalf("状态不应被改写: %#v", got)
 	}
 	// 卷回来了但文件确实不在：这才是 file_gone。
-	if err := os.MkdirAll(filepath.Dir(entry.TrashPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
+	remount()
 	if page, err = center.ListTrashEntries(TrashFilter{Kind: "video"}); err != nil || page.Items[0].State != models.TrashStateFileGone {
 		t.Fatalf("卷在线且文件不在应对账为 file_gone: %#v err=%v", page, err)
 	}
@@ -187,7 +204,9 @@ func TestLIB05CrashRecoveryKeepsPendingWhenVolumeOfflineI1(t *testing.T) {
 	if err := database.DB.Create(&entry).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(mount); err != nil {
+	// 卷被拔掉：挂载检查报告未挂载（替身，I-2），原路径上的文件读不到。
+	remount := reviewAUnmountVolume(t, mount)
+	if err := os.Remove(video.Path); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.ReconcileTrashEntries(); err == nil {
@@ -200,9 +219,7 @@ func TestLIB05CrashRecoveryKeepsPendingWhenVolumeOfflineI1(t *testing.T) {
 		t.Fatalf("记录必须仍然活跃: %v", err)
 	}
 	// 卷回来了：文件确实找不到，落到分支 3。
-	if err := os.MkdirAll(mount, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	remount()
 	if err := svc.ReconcileTrashEntries(); err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +245,9 @@ func TestIMG02CrashRecoveryKeepsPendingWhenVolumeOfflineI1(t *testing.T) {
 	if err := database.DB.Create(&entry).Error; err != nil {
 		t.Fatal(err)
 	}
-	if err := os.RemoveAll(mount); err != nil {
+	// 卷被拔掉：挂载检查报告未挂载（替身，I-2），原路径上的文件读不到。
+	reviewAUnmountVolume(t, mount)
+	if err := os.Remove(image.Path); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.ReconcileImageTrashEntries(); err == nil {
@@ -245,6 +264,8 @@ func TestIMG02CrashRecoveryKeepsPendingWhenVolumeOfflineI1(t *testing.T) {
 func TestLIB11StagedListingKeepsPendingWhenVolumeOfflineI1(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	mount := filepath.Join(t.TempDir(), "mnt")
+	// 卷未挂载（替身，I-2）：只凭「目录不存在」不再算离线。
+	reviewAUnmountVolume(t, mount)
 	onlineRoot := t.TempDir()
 	offlineStaged := filepath.Join(mount, ".a.mp4.cineinsight-migrating-aaa")
 	goneStaged := filepath.Join(onlineRoot, ".b.mp4.cineinsight-migrating-bbb")
@@ -363,9 +384,22 @@ func p010PutBackFixture(t *testing.T) (*VideoService, models.Video, models.Video
 func TestLIB05FinderPutBackRestoresOriginalRecordOnListI3(t *testing.T) {
 	svc, video, entry, tag := p010PutBackFixture(t)
 	center := NewTrashCenter(svc, nil)
+	// 复审 Minor 1：列表只判定「可恢复」，不在列表路径上恢复（不拿全局路径写锁）。
 	page, err := center.ListTrashEntries(TrashFilter{Kind: "video"})
-	if err != nil || len(page.Items) != 0 {
-		t.Fatalf("放回原处后条目应被移除，不出现在列表里: %#v err=%v", page, err)
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("放回原处的条目应仍在列表里并标为可恢复: %#v err=%v", page, err)
+	}
+	item := page.Items[0]
+	if !item.PutBack || item.State != trashStateDeleted || len(item.Actions) != 1 || item.Actions[0] != TrashActionRestore {
+		t.Fatalf("应报告 put_back 且只提供恢复: %#v", item)
+	}
+	if err := database.DB.First(&models.Video{}, video.ID).Error; err == nil {
+		t.Fatal("列表不应自行恢复记录")
+	}
+	// 显式恢复：只还原数据库，文件不动。
+	result, err := center.RestoreTrashEntries("video", []uint{entry.ID})
+	if err != nil || result.Succeeded != 1 {
+		t.Fatalf("显式恢复应成功: %#v err=%v", result, err)
 	}
 	var restored models.Video
 	if err := database.DB.Preload("Tags").First(&restored, video.ID).Error; err != nil {

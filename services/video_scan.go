@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -180,6 +181,12 @@ func (s *VideoService) scanDirectoryWithProgress(dir string, skipRecentlyActive 
 // scanDirectoryCollect 是遍历的唯一实现。filtered 非空时，被过滤规则挡掉的视频类文件
 // （临时后缀、5 分钟内修改、非视频源码）按原因累加进去，供扫描回报使用（D-PC09、LIB-14）。
 func (s *VideoService) scanDirectoryCollect(dir string, skipRecentlyActive bool, progress func(DirectoryScanProgress), filtered *SkipBreakdown) ([]ScannedFile, error) {
+	return s.scanDirectoryCollectContext(context.Background(), dir, skipRecentlyActive, progress, filtered)
+}
+
+// scanDirectoryCollectContext 与 scanDirectoryCollect 相同，但每个目录项之前检查 ctx：
+// 播放失败后的后台重定位要能在遍历中途被取消（Minor 5），取消时返回 ctx.Err()。
+func (s *VideoService) scanDirectoryCollectContext(ctx context.Context, dir string, skipRecentlyActive bool, progress func(DirectoryScanProgress), filtered *SkipBreakdown) ([]ScannedFile, error) {
 	// 每一轮遍历开始时刷新旧版回收站目录集合，随后 isTrashPath 只读缓存。
 	refreshLegacyTrashDirs()
 	var videoFiles []ScannedFile
@@ -229,6 +236,9 @@ func (s *VideoService) scanDirectoryCollect(dir string, skipRecentlyActive bool,
 		walk = walkDirectoryInBatches
 	}
 	err = walk(dir, func(path string, info os.FileInfo, err error) error {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
+		}
 		if isScanPathExcluded(path, excludedPaths) {
 			if info != nil && info.IsDir() {
 				return filepath.SkipDir
@@ -246,7 +256,7 @@ func (s *VideoService) scanDirectoryCollect(dir string, skipRecentlyActive bool,
 
 		if info != nil && info.IsDir() && isTrashDir(path) {
 			if filtered != nil && isUnrecordedLegacyTrashDir(path) {
-				filtered.LegacyTrash += countLegacyTrashVideos(path, videoExts)
+				filtered.LegacyTrash += countLegacyTrashVideos(path, videoExts, excludedPaths)
 			}
 			return filepath.SkipDir
 		}
@@ -1185,40 +1195,116 @@ func isSystemTrashSegment(name string) bool {
 	return strings.EqualFold(name, ".Trash") || strings.EqualFold(name, ".Trashes")
 }
 
-// legacyTrashDirs 缓存旧版回收站目录集合：mode='legacy_trash' 的回收站条目里
-// filepath.Dir(trash_path) 去重。绑定到 database.DB 实例，换库时自动失效；
+// legacyTrashDirs 缓存旧版回收站目录索引，绑定到 database.DB 实例，换库时自动失效；
 // 每轮扫描开始时 refreshLegacyTrashDirs 重新读取。
 //
-// 集合里有两类目录：有 legacy_trash 条目的目录（值为 false），以及旧版应用（2026-04-16 到
-// 2026-07-30）删除时移进去、却没建回收站条目的 <目录>/trash/（值为 true，见 loadLegacyTrashDirs）。
+// 索引里有两类目录：有 legacy_trash 条目的目录（「已登记」），以及按旧版特征认出的、没建回收站
+// 条目的 <目录>/trash/（「启发式」，见 loadLegacyTrashDirs）。两类都让扫描与监听跳过；只有已登记的
+// 一类影响删除（isRecordedTrashPath，I-3）。
 var legacyTrashDirs struct {
-	mu   sync.RWMutex
-	db   *gorm.DB
-	dirs map[string]bool
+	mu    sync.RWMutex
+	db    *gorm.DB
+	index *legacyTrashIndex
 }
 
-// refreshLegacyTrashDirs 从两张回收站表重建集合。读取失败时保留旧缓存（换库除外），
+// legacyTrashIndex 是一次刷新得到的旧版回收站目录索引。
+//
+// 启发式目录的「trash/ 里有没有对得上的文件名」要读目录，这一步是惰性的：只在扫描、监听或计数
+// 真的问到这个目录时才读一次并记住结果。刷新时不读——候选目录可能在别的（离线或卡住的网络）卷上，
+// 不能让每一轮扫描开始时都去碰它们。
+type legacyTrashIndex struct {
+	// recorded：有 legacy_trash 条目的目录（filepath.Dir(trash_path) 去重）。
+	recorded map[string]struct{}
+	// candidates：<父目录>/trash → 父目录下旧版时间段内、没有条目的软删行的文件名。
+	candidates map[string]map[string]struct{}
+
+	mu       sync.Mutex
+	resolved map[string]bool
+}
+
+func (ix *legacyTrashIndex) empty() bool {
+	return ix == nil || (len(ix.recorded) == 0 && len(ix.candidates) == 0)
+}
+
+func (ix *legacyTrashIndex) recordedDir(dir string) bool {
+	if ix == nil {
+		return false
+	}
+	_, ok := ix.recorded[dir]
+	return ok
+}
+
+// heuristicDir 报告 dir 是否是按旧版特征认出的 trash/ 目录（已登记的目录不算）。
+// 目录只读一次；读目录时不持锁，免得一个卡住的卷拖住别的查询。
+func (ix *legacyTrashIndex) heuristicDir(dir string) bool {
+	if ix == nil {
+		return false
+	}
+	names, candidate := ix.candidates[dir]
+	if !candidate || ix.recordedDir(dir) {
+		return false
+	}
+	ix.mu.Lock()
+	result, known := ix.resolved[dir]
+	ix.mu.Unlock()
+	if known {
+		return result
+	}
+	result = false
+	if entries, err := os.ReadDir(dir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() && legacyTrashNameMatchesAny(entry.Name(), names) {
+				result = true
+				break
+			}
+		}
+	}
+	ix.mu.Lock()
+	if ix.resolved == nil {
+		ix.resolved = make(map[string]bool)
+	}
+	ix.resolved[dir] = result
+	ix.mu.Unlock()
+	return result
+}
+
+// refreshLegacyTrashDirs 从两张回收站表与软删行重建索引。读取失败时保留旧缓存（换库除外），
 // 因为「多跳过一个目录」比「把回收站里的文件当新视频收录」安全得多。
 func refreshLegacyTrashDirs() {
 	db := database.DB
 	if db == nil {
 		return
 	}
-	dirs, err := loadLegacyTrashDirs(db)
+	index, err := loadLegacyTrashDirs(db)
 	legacyTrashDirs.mu.Lock()
 	defer legacyTrashDirs.mu.Unlock()
 	if err != nil {
 		log.Printf("读取旧版回收站目录失败 err=%v", err)
 		if legacyTrashDirs.db != db {
-			legacyTrashDirs.db, legacyTrashDirs.dirs = db, nil
+			legacyTrashDirs.db, legacyTrashDirs.index = db, nil
 		}
 		return
 	}
-	legacyTrashDirs.db, legacyTrashDirs.dirs = db, dirs
+	legacyTrashDirs.db, legacyTrashDirs.index = db, index
 }
 
-func loadLegacyTrashDirs(db *gorm.DB) (map[string]bool, error) {
-	dirs := make(map[string]bool)
+// 旧版应用（fd06f54 起，到 81fa75d 之后的版本为止）删除时把文件移进 <媒体目录>/trash/ 却不建回收站
+// 条目的时间段：2026-04-16 至 2026-07-30（含），按本地日历日计。
+var (
+	legacyUnrecordedDeleteFrom  = time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local)
+	legacyUnrecordedDeleteUntil = time.Date(2026, 7, 31, 0, 0, 0, 0, time.Local) // 不含
+)
+
+// legacyDeletedRow 是一条没有回收站条目的软删行（视频或图片）。
+type legacyDeletedRow struct {
+	Directory string
+	Path      string
+	Name      string
+	DeletedAt *time.Time
+}
+
+func loadLegacyTrashDirs(db *gorm.DB) (*legacyTrashIndex, error) {
+	index := &legacyTrashIndex{recorded: make(map[string]struct{}), candidates: make(map[string]map[string]struct{})}
 	// mode 为空且 file_moved=true 的行是回填之前的旧版条目，同样属于旧版回收站。
 	const condition = "trash_path <> '' AND (mode = ? OR (mode = '' AND file_moved = ?))"
 	for _, model := range []interface{}{&models.VideoTrashEntry{}, &models.ImageTrashEntry{}} {
@@ -1227,82 +1313,201 @@ func loadLegacyTrashDirs(db *gorm.DB) (map[string]bool, error) {
 			return nil, err
 		}
 		for _, trashPath := range paths {
-			dirs[filepath.Dir(filepath.Clean(trashPath))] = false
+			index.recorded[filepath.Dir(filepath.Clean(trashPath))] = struct{}{}
 		}
 	}
-	// 旧版应用在这段时间里删除会把文件移进 <媒体目录>/trash/ 却不建条目（fd06f54、81fa75d）。
-	// 目录基名恰为 trash（区分大小写），且其父目录是至少一条已软删视频或图片的所在目录，就认作旧版
-	// 回收站目录；用户自己的 Trash（大写）或父目录从无删除记录的 trash 仍正常扫描（C1）。
-	for _, source := range []struct {
-		model  interface{}
-		column string
-	}{{&models.Video{}, "directory"}, {&models.Image{}, "directory"}} {
-		var parents []string
-		if err := db.Unscoped().Model(source.model).Where("deleted_at IS NOT NULL AND "+source.column+" <> ''").
-			Distinct().Pluck(source.column, &parents).Error; err != nil {
+	// 启发式（C1 / I-3）：只认旧版特征——
+	//   - 目录基名恰为 trash（区分大小写，判定基于路径字符串）；
+	//   - 父目录下有在自己那张回收站条目表里没有条目的软删行，且 deleted_at 落在上面的时间段内；
+	//   - trash 目录里至少有一个文件名与这些软删行对得上（旧版 TrashTargetPath 的命名：<名>，
+	//     或 <主名>_<14 位时间戳>[_<序号>]<扩展名>）。
+	// 新版删除（有条目）与扫描器的软删（deleted_at 不在时间段内）都不会让用户自己的 trash/ 被跳过。
+	// 最后一条（读 trash/ 目录）是惰性的，见 legacyTrashIndex.heuristicDir。
+	for _, source := range []struct{ table, entryTable, entryColumn string }{
+		{"videos", "video_trash_entries", "video_id"},
+		{"images", "image_trash_entries", "image_id"},
+	} {
+		var rows []legacyDeletedRow
+		// SQL 里按时间段各放宽一天粗筛（SQLite 的时间是文本，带时区偏移时比较不精确），下面在 Go 里精确判定。
+		if err := db.Table(source.table).
+			Select(source.table+".directory, "+source.table+".path, "+source.table+".name, "+source.table+".deleted_at").
+			Where(source.table+".deleted_at IS NOT NULL AND "+source.table+".deleted_at >= ? AND "+source.table+".deleted_at < ?",
+				legacyUnrecordedDeleteFrom.AddDate(0, 0, -1), legacyUnrecordedDeleteUntil.AddDate(0, 0, 1)).
+			Where("NOT EXISTS (SELECT 1 FROM " + source.entryTable + " e WHERE e." + source.entryColumn + " = " + source.table + ".id)").
+			Scan(&rows).Error; err != nil {
 			return nil, err
 		}
-		for _, parent := range parents {
-			trashDir := filepath.Join(filepath.Clean(parent), DefaultTrashDirName)
-			if _, known := dirs[trashDir]; !known {
-				dirs[trashDir] = true
+		for _, row := range rows {
+			if row.DeletedAt == nil {
+				continue
+			}
+			at := row.DeletedAt.In(time.Local)
+			if at.Before(legacyUnrecordedDeleteFrom) || !at.Before(legacyUnrecordedDeleteUntil) {
+				continue
+			}
+			parent := filepath.Clean(strings.TrimSpace(row.Directory))
+			if parent == "" || parent == "." {
+				parent = filepath.Dir(filepath.Clean(row.Path))
+			}
+			trashDir := filepath.Join(parent, DefaultTrashDirName)
+			names := index.candidates[trashDir]
+			if names == nil {
+				names = make(map[string]struct{})
+				index.candidates[trashDir] = names
+			}
+			for _, name := range []string{filepath.Base(filepath.Clean(row.Path)), strings.TrimSpace(row.Name)} {
+				if name != "" && name != "." && name != string(os.PathSeparator) {
+					names[name] = struct{}{}
+				}
 			}
 		}
 	}
-	return dirs, nil
+	return index, nil
 }
 
-func snapshotLegacyTrashDirs() map[string]bool {
+// legacyTrashNameMatchesAny 报告 fileName 是否是旧版 TrashTargetPath 为 names 中某个文件生成的名字。
+func legacyTrashNameMatchesAny(fileName string, names map[string]struct{}) bool {
+	if _, exact := names[fileName]; exact {
+		return true
+	}
+	for base := range names {
+		if legacyTrashNameMatches(fileName, base) {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyTrashNameMatches 按旧版 TrashTargetPath 的命名规则匹配：<base>，或
+// <主名>_<YYYYMMDDHHMMSS><扩展名>，或 <主名>_<YYYYMMDDHHMMSS>_<序号><扩展名>。
+func legacyTrashNameMatches(fileName, base string) bool {
+	if fileName == base {
+		return true
+	}
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	prefix := stem + "_"
+	if len(fileName) < len(prefix)+len(ext) || !strings.HasPrefix(fileName, prefix) || !strings.HasSuffix(fileName, ext) {
+		return false
+	}
+	middle := fileName[len(prefix) : len(fileName)-len(ext)]
+	timestamp, attempt, hasAttempt := strings.Cut(middle, "_")
+	if len(timestamp) != 14 || !isASCIINumber(timestamp) {
+		return false
+	}
+	return !hasAttempt || isASCIINumber(attempt)
+}
+
+// isASCIINumber 报告 value 非空且只由 0-9 组成。
+func isASCIINumber(value string) bool {
+	if value == "" {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '0' || value[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func snapshotLegacyTrashDirs() *legacyTrashIndex {
 	legacyTrashDirs.mu.RLock()
 	current := legacyTrashDirs.db == database.DB
-	dirs := legacyTrashDirs.dirs
+	index := legacyTrashDirs.index
 	legacyTrashDirs.mu.RUnlock()
 	if current {
-		return dirs
+		return index
 	}
 	refreshLegacyTrashDirs()
 	legacyTrashDirs.mu.RLock()
 	defer legacyTrashDirs.mu.RUnlock()
-	return legacyTrashDirs.dirs
+	return legacyTrashDirs.index
 }
 
-// isUnrecordedLegacyTrashDir 报告 path 是否是没有条目的旧版 trash/ 目录（C1）。
+// isUnrecordedLegacyTrashDir 报告 path 是否是没有条目、按旧版特征认出的 trash/ 目录（C1）。
 func isUnrecordedLegacyTrashDir(path string) bool {
-	return snapshotLegacyTrashDirs()[filepath.Clean(path)]
+	return snapshotLegacyTrashDirs().heuristicDir(filepath.Clean(path))
 }
 
 // countLegacyTrashVideos 统计旧版 trash/ 目录里的视频类文件（扩展名命中），供扫描回报的 legacy_trash 分项。
-func countLegacyTrashVideos(dir string, videoExts []string) int {
+// 与遍历同一套规则（Minor 7）：隐藏目录/文件与黑名单路径不计；仍有活跃记录的文件由对账按 existing
+// 计数，这里不重复计（除非遍历规则本来就会挡掉它，那样对账也不会计它）。
+func countLegacyTrashVideos(dir string, videoExts, excludedPaths []string) int {
+	dir = filepath.Clean(dir)
+	active := make(map[string]struct{})
+	var activePaths []string
+	if err := database.DB.Model(&models.Video{}).
+		Where(`path LIKE ? ESCAPE '\'`, escapeSQLLikePrefix(scanRootChildPrefix(dir))+"%").
+		Pluck("path", &activePaths).Error; err != nil {
+		log.Printf("读取旧版回收站目录内的在库记录失败 err=%v", err)
+	}
+	for _, path := range activePaths {
+		active[filepath.Clean(path)] = struct{}{}
+	}
 	count := 0
 	_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
+		if err != nil || entry == nil {
+			if entry != nil && entry.IsDir() && path != dir {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if isScanPathExcluded(path, excludedPaths) || (path != dir && strings.HasPrefix(entry.Name(), ".")) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
+		matched := false
 		for _, videoExt := range videoExts {
 			if videoExt != "" && ext == strings.ToLower(videoExt) {
-				count++
+				matched = true
 				break
 			}
 		}
+		if !matched {
+			return nil
+		}
+		if _, recorded := active[filepath.Clean(path)]; recorded {
+			if info, infoErr := entry.Info(); infoErr == nil && !skippedDuringWalk(path, info) {
+				return nil
+			}
+		}
+		count++
 		return nil
 	})
 	return count
 }
 
-// isTrashDir 判断目录本身是不是回收站：旧版回收站目录，或系统废纸篓目录名。
+// isTrashDir 判断目录本身是不是回收站：旧版回收站目录（已登记或启发式），或系统废纸篓目录名。
+// 只用于扫描与监听跳过。
 func isTrashDir(path string) bool {
 	clean := filepath.Clean(path)
 	if isSystemTrashSegment(filepath.Base(clean)) {
 		return true
 	}
-	_, legacy := snapshotLegacyTrashDirs()[clean]
-	return legacy
+	index := snapshotLegacyTrashDirs()
+	return index.recordedDir(clean) || index.heuristicDir(clean)
 }
 
-// isTrashPath 判断路径是否位于回收站内。只认旧版回收站目录集合与路径中的
-// .Trash / .Trashes 段，不再按任意层级名为 trash 的目录判断。
+// isTrashPath 判断路径是否位于回收站内（扫描与监听跳过用）。只认旧版回收站目录集合（含启发式）
+// 与路径中的 .Trash / .Trashes 段，不再按任意层级名为 trash 的目录判断。
 func isTrashPath(path string) bool {
+	return trashPathMatches(path, true)
+}
+
+// isRecordedTrashPath 是删除路径用的判定：只认 .Trash / .Trashes 段与有 legacy_trash 条目的旧版目录。
+// 启发式认出的旧版 trash/ 目录不在其中，那里的文件照常移入废纸篓，不降级为只删记录（I-3）。
+func isRecordedTrashPath(path string) bool {
+	return trashPathMatches(path, false)
+}
+
+func trashPathMatches(path string, includeHeuristic bool) bool {
 	cleanPath := filepath.Clean(path)
 	volume := filepath.VolumeName(cleanPath)
 	trimmed := strings.TrimPrefix(cleanPath, volume)
@@ -1311,12 +1516,12 @@ func isTrashPath(path string) bool {
 			return true
 		}
 	}
-	dirs := snapshotLegacyTrashDirs()
-	if len(dirs) == 0 {
+	index := snapshotLegacyTrashDirs()
+	if index.empty() {
 		return false
 	}
 	for current := cleanPath; ; {
-		if _, legacy := dirs[current]; legacy {
+		if index.recordedDir(current) || (includeHeuristic && index.heuristicDir(current)) {
 			return true
 		}
 		parent := filepath.Dir(current)
@@ -1438,7 +1643,7 @@ func scanAddSkipReason(err error) (string, bool) {
 
 // scanRootOnline 判断扫描根当前是否可用：目录存在且（macOS 上）卷确实挂载。
 func scanRootOnline(root string) bool {
-	if scanVolumeAvailable(root) != nil {
+	if mediaVolumeAvailable(root) != nil {
 		return false
 	}
 	info, err := os.Stat(root)
@@ -1446,10 +1651,14 @@ func scanRootOnline(root string) bool {
 }
 
 // MarkRootOffline 把已判定不可用的扫描根下的活跃视频标为 offline_root（D-PC08）。
-// 仍属于其他可用根的视频（嵌套根）保持原样。返回实际标记的条数。
+// 仍属于其他可用根的视频（嵌套根）保持原样。返回实际标记（且未撤销）的条数。
 //
-// 由监听在根变为 unavailable 时调用；启动与全量扫描的离线判定走 markUnavailableScanRoot，
+// 由监听在根变为 unavailable 时异步调用；启动与全量扫描的离线判定走 markUnavailableScanRoot，
 // 写同一个原因。根恢复后由窄对账清除（文件存在即恢复）。
+//
+// 与窄对账、全量扫描串行（持 scanSyncMu，Minor 6）：根回来后排队的对账一定在这次标记之后执行，
+// 不会被晚到的标记覆盖。执行前后都复查根状态：执行前已在线就什么都不标；标记期间根回来了，
+// 撤销这次刚标上的 offline_root，避免留下「根在线、视频仍 offline_root」。
 func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 	libraryPathMutationMu.RLock()
 	defer libraryPathMutationMu.RUnlock()
@@ -1458,7 +1667,9 @@ func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 	if root == "" || root == "." {
 		return 0, fmt.Errorf("扫描目录为空")
 	}
-	// 监听的判定与这里之间隔着队列与写锁，根可能已经回来了：执行前再确认一次，在线就什么都不标（Minor 12）。
+	s.scanSyncMu.Lock()
+	defer s.scanSyncMu.Unlock()
+	// 监听的判定与这里之间隔着队列与锁，根可能已经回来了：执行前再确认一次，在线就什么都不标（Minor 12）。
 	if scanRootOnline(root) {
 		return 0, nil
 	}
@@ -1491,6 +1702,19 @@ func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 			return marked, fmt.Errorf("标记离线失败: %w", update.Error)
 		}
 		marked += update.RowsAffected
+	}
+	if marked > 0 && scanRootOnline(root) {
+		// 标记期间根回来了：撤销这次的标记。这些行标记前都是 is_stale=false，撤销即恢复原状。
+		for start := 0; start < len(ids); start += 500 {
+			end := min(start+500, len(ids))
+			if err := database.DB.Model(&models.Video{}).
+				Where("id IN ? AND is_stale = ? AND stale_reason = ?", ids[start:end], true, models.StaleReasonOfflineRoot).
+				Updates(map[string]interface{}{"is_stale": false, "stale_reason": ""}).Error; err != nil {
+				return marked, fmt.Errorf("撤销离线标记失败: %w", err)
+			}
+		}
+		log.Printf("扫描根在标记期间恢复在线，已撤销 offline_root root=%s count=%d", root, marked)
+		return 0, nil
 	}
 	if marked > 0 {
 		log.Printf("扫描根离线，标记 offline_root root=%s marked=%d", root, marked)

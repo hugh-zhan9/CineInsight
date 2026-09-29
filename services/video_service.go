@@ -218,30 +218,44 @@ func (s *VideoService) AddVideo(path string) (*models.Video, error) {
 }
 
 func (s *VideoService) addVideo(path string) (*models.Video, error) {
+	video, _, err := s.addVideoOrRestorePutBack(path)
+	return video, err
+}
+
+// addVideoOrRestorePutBack 是新增视频的唯一实现。restored=true 表示同路径的文件是被用户在访达里
+// 放回原处的那个已删除视频，这次恢复了原记录而没有新建（Minor 2：手动 AddVideo 与扫描同一判定）。
+// 调用方持有路径读锁。
+func (s *VideoService) addVideoOrRestorePutBack(path string) (*models.Video, bool, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
 
 	// 检查文件是否存在
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, fmt.Errorf("文件不存在: %w", err)
+		return nil, false, fmt.Errorf("文件不存在: %w", err)
 	}
 	if isKnownNonVideoSourcePath(path) {
-		return nil, fmt.Errorf("不是视频文件: %s", path)
+		return nil, false, fmt.Errorf("不是视频文件: %s", path)
 	}
 
 	// 检查是否已存在：活跃记录一律算已存在；同路径只剩软删行时按身份判定（D-PC03）。
 	var existingVideo models.Video
 	if result := database.DB.Where("path = ?", path).Limit(1).Find(&existingVideo); result.Error != nil {
-		return nil, result.Error
+		return nil, false, result.Error
 	} else if result.RowsAffected == 1 {
 		log.Printf("跳过已存在视频 path=%s", path)
-		return &existingVideo, ErrVideoExists
+		return &existingVideo, false, ErrVideoExists
+	}
+	if restored, ok, err := s.restorePutBackVideo(path, info); err != nil {
+		return nil, false, err
+	} else if ok {
+		log.Printf("文件已被放回原处，恢复原记录 video_id=%d", restored.ID)
+		return restored, true, nil
 	}
 	if row, skipErr, err := softDeletedVideoPathSkip(path, info); err != nil {
-		return nil, err
+		return nil, false, err
 	} else if skipErr != nil {
 		log.Printf("跳过同路径的已删除视频 path=%s", path)
-		return row, skipErr
+		return row, false, skipErr
 	}
 
 	video := &models.Video{
@@ -261,10 +275,10 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 		errMsg := strings.ToLower(err.Error())
 		if strings.Contains(errMsg, "unique") || strings.Contains(errMsg, "constraint") {
 			if findErr := database.DB.Where("path = ?", path).First(&existingVideo).Error; findErr == nil {
-				return &existingVideo, ErrVideoExists
+				return &existingVideo, false, ErrVideoExists
 			}
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if probeErr := s.technicalProbe().Refresh(context.Background(), video.ID); probeErr != nil {
 		log.Printf("新增视频技术信息读取失败 id=%d err=%v", video.ID, probeErr)
@@ -281,7 +295,7 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 		video = refreshed
 	}
 	log.Printf("新增视频 path=%s", path)
-	return video, nil
+	return video, false, nil
 }
 
 // GetVideo 获取单个视频详情
@@ -363,19 +377,24 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		return nil, fmt.Errorf("回收站条目当前不可恢复: %s", entry.State)
 	}
 
-	fileAtOriginal := false
+	// movedFromTrash：这一次恢复把文件从废纸篓移回了原处。只有这种情形在恢复事务失败时才把文件
+	// 移回废纸篓作补偿；文件本来就在原路径（访达放回、上次中断已移回）时一律不动文件（I-1）。
+	movedFromTrash := false
 	trashService := NewTrashService()
 	if entry.Mode == models.TrashModeRecordOnly {
 		// 只删记录：文件一直在原地没动过，恢复只还原数据库（原 ID、标签、人物），不碰文件。
 	} else if entry.FileMoved {
 		var err error
-		fileAtOriginal, err = ensureTrashEntryFileRestored(trashService, *entry)
+		movedFromTrash, err = ensureTrashEntryFileRestored(trashService, *entry)
 		if err != nil {
 			_ = markTrashEntryRecoverable(entry.ID, err)
 			return nil, err
 		}
 	} else if info, err := os.Stat(entry.OriginalPath); err != nil {
 		restoreErr := fmt.Errorf("原文件不可用，无法恢复记录: %w", err)
+		if os.IsNotExist(err) && mediaPathOffline(entry.OriginalPath) {
+			restoreErr = ErrTrashVolumeOffline
+		}
 		_ = markTrashEntryRecoverable(entry.ID, restoreErr)
 		return nil, restoreErr
 	} else if info.IsDir() {
@@ -425,7 +444,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 			_ = recordTrashEntryError(entry.ID, fmt.Errorf("恢复状态不一致: %w", err))
 			return nil, fmt.Errorf("恢复状态不一致，未执行文件补偿: %w", err)
 		}
-		if fileAtOriginal {
+		if movedFromTrash {
 			if rollbackErr := trashService.RestoreFromTrash(entry.OriginalPath, entry.TrashPath); rollbackErr != nil {
 				_ = recordTrashEntryError(entry.ID, rollbackErr)
 				return nil, fmt.Errorf("恢复数据库记录失败: %w；文件回滚失败: %v", err, rollbackErr)
@@ -553,7 +572,8 @@ func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedB
 		}
 		entry.Mode = models.TrashModeMissing
 		code = TrashResultFileMissing
-	case sourceInfo == nil, !deleteFile, isTrashPath(video.Path):
+	case sourceInfo == nil, !deleteFile, isRecordedTrashPath(video.Path):
+		// 只有确实登记过的回收站位置才降级为只删记录；启发式旧版 trash/ 目录不算（I-3）。
 		entry.Mode = models.TrashModeRecordOnly
 	default:
 		entry.Mode = models.TrashModeTrash
@@ -648,7 +668,9 @@ func (s *VideoService) deleteVideoToSystemTrash(video *models.Video, entry *mode
 				if current.State == trashStateDeleted {
 					return TrashResultOK, nil
 				}
-				return "", fmt.Errorf("待删除条目已被其他操作处理，未移动文件: %w", err)
+				// 文件确实已经在废纸篓里，只是条目被并发操作改成了别的状态：如实说明，不回滚文件，
+				// 由启动对账（或下一次删除/恢复）按文件身份收尾（Minor 12）。
+				return "", fmt.Errorf("文件已移入废纸篓，但删除记录的状态已被其他操作改变，数据库状态待对账: %w", err)
 			}
 			// 条目已不存在（他方取消了删除）：文件却在废纸篓里，落到下面的回滚逻辑把它放回原处。
 		}
@@ -770,6 +792,9 @@ func trashPathAlreadyRecorded(path string) bool {
 	return database.DB.Model(&models.VideoTrashEntry{}).Where("trash_path = ?", path).Count(&count).Error == nil && count > 0
 }
 
+// ensureTrashEntryFileRestored 确保条目的文件回到原路径。返回的 movedFromTrash 只在「这一次把文件
+// 从废纸篓移回了原处」时为 true（包括清掉原路径与废纸篓之间的硬链接副本）；文件本来就在原路径
+// （访达放回、上次恢复中断前已移回）时为 false，调用方据此决定事务失败后要不要补偿（I-1）。
 func ensureTrashEntryFileRestored(trashService *TrashService, entry models.VideoTrashEntry) (bool, error) {
 	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
 	strict := !isLegacyTrashMode(entry.Mode)
@@ -807,7 +832,13 @@ func ensureTrashEntryFileRestored(trashService *TrashService, entry models.Video
 		if !matches(entry.OriginalPath, originalInfo) {
 			return false, mismatch("原路径文件与删除记录不一致: %s")
 		}
-		return true, nil
+		// 文件本来就在原路径：这次没有动它。
+		return false, nil
+	}
+	// 原路径上没有文件时先看卷在不在（Minor 3）：离线时两边都读不到，那不是「废纸篓里的文件已不存在」；
+	// 废纸篓那一份还在时也不能往未挂载卷留下的空挂载点里恢复。
+	if trashEntryVolumeOffline(entry.OriginalPath, entry.TrashPath) {
+		return false, ErrTrashVolumeOffline
 	}
 	if !trashExists {
 		return false, ErrTrashFileGone

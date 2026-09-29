@@ -84,7 +84,7 @@ func TestShortFeedRouteGuardCoversEveryRoutePLAY01(t *testing.T) {
 	svc, handler, server := newShortFeedAccessFixture(t)
 	root := t.TempDir()
 	video := createShortFeedVideo(t, root, "guard.mp4", 30, false)
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatalf("设置 PIN 失败: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestShortFeedRouteGuardCoversEveryRoutePLAY01(t *testing.T) {
 	}
 
 	// 登录后所有数据路由放行。
-	cookie := loginShortFeed(t, handler, "2468", "127.0.0.1:5000")
+	cookie := loginShortFeed(t, handler, "246800", "127.0.0.1:5000")
 	for _, target := range []string{"/short-api/status", "/short-api/feed/scopes", "/short-api/tags", "/short-api/favorites", "/short-media/video/" + strconvUint(video.ID)} {
 		req := shortFeedRequest(http.MethodGet, target, "", "127.0.0.1:5000")
 		req.AddCookie(cookie)
@@ -191,12 +191,12 @@ func TestShortFeedPINLoginLockoutAndCookiePLAY01(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
 	clock := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return clock }
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatalf("设置 PIN 失败: %v", err)
 	}
 	// PIN 用 bcrypt 存，库里没有明文。
 	hash, _ := svc.pinHash()
-	if hash == "" || strings.Contains(hash, "2468") || bcrypt.CompareHashAndPassword([]byte(hash), []byte("2468")) != nil {
+	if hash == "" || strings.Contains(hash, "246800") || bcrypt.CompareHashAndPassword([]byte(hash), []byte("246800")) != nil {
 		t.Fatalf("库里应存 bcrypt 哈希而不是明文: %q", hash)
 	}
 
@@ -220,18 +220,18 @@ func TestShortFeedPINLoginLockoutAndCookiePLAY01(t *testing.T) {
 
 	// 锁定期间连正确 PIN 也不放行。
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, shortFeedRequest(http.MethodPost, "/short-api/auth", `{"pin":"2468"}`, attacker))
+	handler.ServeHTTP(rec, shortFeedRequest(http.MethodPost, "/short-api/auth", `{"pin":"246800"}`, attacker))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("锁定期间正确 PIN 也应 429，实际 %d", rec.Code)
 	}
 	// 另一个 IP 不受影响：限次按客户端 IP 计。
-	other := loginShortFeed(t, handler, "2468", "192.168.1.60:4000")
+	other := loginShortFeed(t, handler, "246800", "192.168.1.60:4000")
 	if other.Value == "" {
 		t.Fatalf("其他 IP 应能正常登录")
 	}
 
 	clock = clock.Add(61 * time.Second)
-	cookie := loginShortFeed(t, handler, "2468", attacker)
+	cookie := loginShortFeed(t, handler, "246800", attacker)
 
 	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode || cookie.Path != "/" {
 		t.Fatalf("Cookie 属性不符: %+v", cookie)
@@ -243,10 +243,10 @@ func TestShortFeedPINLoginLockoutAndCookiePLAY01(t *testing.T) {
 
 func TestShortFeedPINChangeRevokesSessionsPLAY01(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
-	cookie := loginShortFeed(t, handler, "2468", "127.0.0.1:5000")
+	cookie := loginShortFeed(t, handler, "246800", "127.0.0.1:5000")
 	get := func(c *http.Cookie) int {
 		req := shortFeedRequest(http.MethodGet, "/short-api/status", "", "127.0.0.1:5000")
 		if c != nil {
@@ -259,13 +259,13 @@ func TestShortFeedPINChangeRevokesSessionsPLAY01(t *testing.T) {
 	if get(cookie) != http.StatusOK {
 		t.Fatal("登录后应放行")
 	}
-	if err := svc.SetShortFeedPIN("1357"); err != nil {
+	if err := svc.SetShortFeedPIN("135700"); err != nil {
 		t.Fatal(err)
 	}
 	if get(cookie) != http.StatusUnauthorized {
 		t.Fatal("PIN 变更后旧会话必须失效")
 	}
-	fresh := loginShortFeed(t, handler, "1357", "127.0.0.1:5000")
+	fresh := loginShortFeed(t, handler, "135700", "127.0.0.1:5000")
 	if get(fresh) != http.StatusOK {
 		t.Fatal("新 PIN 登录应放行")
 	}
@@ -276,7 +276,7 @@ func TestShortFeedPINChangeRevokesSessionsPLAY01(t *testing.T) {
 		t.Fatal("清除 PIN 后无需会话")
 	}
 	// 重新设 PIN 时，此前签发过的会话不会「复活」。
-	if err := svc.SetShortFeedPIN("1357"); err != nil {
+	if err := svc.SetShortFeedPIN("135700"); err != nil {
 		t.Fatal(err)
 	}
 	if get(fresh) != http.StatusUnauthorized {
@@ -286,7 +286,7 @@ func TestShortFeedPINChangeRevokesSessionsPLAY01(t *testing.T) {
 
 func TestShortFeedAuthRequestDisciplinePLAY01(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
 	post := func(mutate func(*http.Request), body string) *httptest.ResponseRecorder {
@@ -298,20 +298,20 @@ func TestShortFeedAuthRequestDisciplinePLAY01(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 		return rec
 	}
-	if rec := post(func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") }, `{"pin":"2468"}`); rec.Code != http.StatusUnsupportedMediaType {
+	if rec := post(func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") }, `{"pin":"246800"}`); rec.Code != http.StatusUnsupportedMediaType {
 		t.Fatalf("非 JSON 应 415，实际 %d", rec.Code)
 	}
-	if rec := post(nil, `{"pin":"2468","extra":1}`); rec.Code != http.StatusBadRequest {
+	if rec := post(nil, `{"pin":"246800","extra":1}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("未知字段应 400，实际 %d", rec.Code)
 	}
-	if rec := post(nil, `{"pin":"2468"}{"pin":"2468"}`); rec.Code != http.StatusBadRequest {
+	if rec := post(nil, `{"pin":"246800"}{"pin":"246800"}`); rec.Code != http.StatusBadRequest {
 		t.Fatalf("多个 JSON 值应 400，实际 %d", rec.Code)
 	}
 	huge := `{"pin":"` + strings.Repeat("9", 2048) + `"}`
 	if rec := post(nil, huge); rec.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("超过 1 KiB 应 413，实际 %d", rec.Code)
 	}
-	if rec := post(func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }, `{"pin":"2468"}`); rec.Code != http.StatusForbidden {
+	if rec := post(func(r *http.Request) { r.Header.Set("Origin", "http://evil.example") }, `{"pin":"246800"}`); rec.Code != http.StatusForbidden {
 		t.Fatalf("跨源登录应 403，实际 %d", rec.Code)
 	}
 	getRec := httptest.NewRecorder()
@@ -324,7 +324,8 @@ func TestShortFeedAuthRequestDisciplinePLAY01(t *testing.T) {
 func TestShortFeedPINValidationAndStatusPLAY01(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := NewShortFeedService(&VideoService{})
-	for _, bad := range []string{"", "123", strings.Repeat("a", 33), "12\x0034", "ab\ncd", "tab\there", strings.Repeat("字", 25)} {
+	// 复审 Minor 10：最短 6 位，4、5 位一律拒绝。
+	for _, bad := range []string{"", "123", "1234", "12345", strings.Repeat("a", 33), "1234\x0056", "abc\ndef", "tab\there", strings.Repeat("字", 25)} {
 		if err := svc.SetShortFeedPIN(bad); err == nil {
 			t.Fatalf("非法 PIN %q 应被拒绝", bad)
 		}
@@ -332,8 +333,8 @@ func TestShortFeedPINValidationAndStatusPLAY01(t *testing.T) {
 	if hash, _ := svc.pinHash(); hash != "" {
 		t.Fatalf("被拒绝的 PIN 不应落库")
 	}
-	if err := svc.SetShortFeedPIN("1234"); err != nil {
-		t.Fatalf("4 个字符应合法: %v", err)
+	if err := svc.SetShortFeedPIN("123456"); err != nil {
+		t.Fatalf("6 个字符应合法: %v", err)
 	}
 	if err := svc.SetShortFeedPIN(strings.Repeat("a", 32)); err != nil {
 		t.Fatalf("32 个字符应合法: %v", err)

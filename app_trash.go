@@ -47,6 +47,8 @@ func (a *App) CancelBatchDelete(requestID string) bool {
 }
 
 // ListTrashEntriesPage 分页列出回收站条目（游标分页，当页对账 file_gone）。
+// 用户在访达里「放回原处」的条目以 put_back=true、actions=[restore] 返回，列表本身不恢复；
+// 需要调用 RestoreTrashEntries 才会还原记录（复审 Minor 1）。
 func (a *App) ListTrashEntriesPage(filter services.TrashFilter) (*services.TrashPage, error) {
 	page, err := a.trashCenter().ListTrashEntries(filter)
 	if err != nil {

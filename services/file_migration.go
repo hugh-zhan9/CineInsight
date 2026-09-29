@@ -168,8 +168,8 @@ func (s *VideoService) BatchMoveVideos(videoIDs []uint, destinationDirectory str
 // MoveDirectory moves a directory below destinationParent and rewrites every
 // managed video and configured scan-directory path contained by the source.
 func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) (*FolderMigrationResult, error) {
-	libraryPathMutationMu.Lock()
-	defer libraryPathMutationMu.Unlock()
+	// 路径前缀改写同时改图片表，所以视频与图片两把路径写锁都要持有（Minor 4）。
+	defer lockLibraryPathRewrite()()
 
 	sourceDirectory, err := existingSourceDirectory(sourceDirectory)
 	if err != nil {
@@ -309,8 +309,7 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 // RenameDirectory renames a managed directory in place and rewrites every
 // persisted path that points at the directory or one of its descendants.
 func (s *VideoService) RenameDirectory(sourceDirectory, newName string) (*FolderMigrationResult, error) {
-	libraryPathMutationMu.Lock()
-	defer libraryPathMutationMu.Unlock()
+	defer lockLibraryPathRewrite()()
 
 	sourceDirectory, err := existingSourceDirectory(sourceDirectory)
 	if err != nil {
@@ -526,12 +525,27 @@ type PathRewriteCounts struct {
 	StagedSources     int `json:"staged_sources"`
 	Images            int `json:"images"`
 	ImageTrashEntries int `json:"image_trash_entries"`
+	// 以下两项是复审 Minor 4 补上的图片侧配置：图片扫描目录（含软删）与图片扫描黑名单。
+	ImageDirectories    int `json:"image_directories"`
+	ImageScanExclusions int `json:"image_scan_exclusions"`
+}
+
+// lockLibraryPathRewrite 为路径前缀改写拿两把路径写锁，顺序固定：视频锁在前、图片锁在后
+// （任何同时需要两把锁的地方都按这个顺序，避免死锁）。返回按相反顺序释放的函数。
+func lockLibraryPathRewrite() func() {
+	libraryPathMutationMu.Lock()
+	imagePathMutationMu.Lock()
+	return func() {
+		imagePathMutationMu.Unlock()
+		libraryPathMutationMu.Unlock()
+	}
 }
 
 // rewriteLibraryPathPrefixTx 是「路径前缀改写」的唯一实现（D-PC07）：文件夹改名、
 // 文件夹迁移、编辑扫描目录（重映射）三处共用。覆盖视频（含软删，并清除失效标记与原因）、
-// 回收站条目的 original_path / trash_path、扫描黑名单、字幕索引路径与扫描目录。
-// 只改数据库，不碰磁盘；调用方负责事务、锁与文件系统侧的回滚。
+// 回收站条目的 original_path / trash_path、扫描黑名单、字幕索引路径与扫描目录，以及图片侧的
+// 图片（含软删）、图片回收站条目、图片扫描目录与图片扫描黑名单。
+// 只改数据库，不碰磁盘；调用方负责事务与文件系统侧的回滚，并须持有 lockLibraryPathRewrite 的两把锁。
 func rewriteLibraryPathPrefixTx(tx *gorm.DB, oldPrefix, newPrefix string) (PathRewriteCounts, error) {
 	var counts PathRewriteCounts
 	oldPrefix = filepath.Clean(strings.TrimSpace(oldPrefix))
@@ -585,6 +599,24 @@ func rewriteLibraryPathPrefixTx(tx *gorm.DB, oldPrefix, newPrefix string) (PathR
 			return counts, err
 		}
 		counts.Directories++
+	}
+
+	var imageDirectories []models.ImageDirectory
+	if err := tx.Unscoped().Find(&imageDirectories).Error; err != nil {
+		return counts, fmt.Errorf("读取图片扫描目录失败: %w", err)
+	}
+	for _, directory := range imageDirectories {
+		newPath, ok, err := rewrite(directory.Path)
+		if err != nil {
+			return counts, err
+		}
+		if !ok {
+			continue
+		}
+		if err := tx.Unscoped().Model(&models.ImageDirectory{}).Where("id = ?", directory.ID).Update("path", newPath).Error; err != nil {
+			return counts, err
+		}
+		counts.ImageDirectories++
 	}
 
 	var trashEntries []models.VideoTrashEntry
@@ -695,24 +727,35 @@ func rewriteLibraryPathPrefixTx(tx *gorm.DB, oldPrefix, newPrefix string) (PathR
 			return counts, fmt.Errorf("读取扫描设置失败: %w", err)
 		}
 	} else {
-		excluded := parseScanExcludePaths(settings.ScanExcludePaths)
-		changed := 0
-		for i := range excluded {
-			newPath, ok, err := rewrite(excluded[i])
-			if err != nil {
-				return counts, err
+		// 视频黑名单与图片黑名单是同一种格式（换行分隔的路径），各自改写各自的列。
+		rewriteExclusions := func(raw, column string) (int, error) {
+			excluded := parseScanExcludePaths(raw)
+			changed := 0
+			for i := range excluded {
+				newPath, ok, err := rewrite(excluded[i])
+				if err != nil {
+					return 0, err
+				}
+				if ok {
+					excluded[i] = newPath
+					changed++
+				}
 			}
-			if ok {
-				excluded[i] = newPath
-				changed++
+			if changed == 0 {
+				return 0, nil
 			}
-		}
-		if changed > 0 {
 			normalized := normalizeScanExcludePaths(strings.Join(excluded, "\n"))
-			if err := tx.Model(&models.Settings{}).Where("id = ?", settings.ID).Update("scan_exclude_paths", normalized).Error; err != nil {
-				return counts, err
+			if err := tx.Model(&models.Settings{}).Where("id = ?", settings.ID).Update(column, normalized).Error; err != nil {
+				return 0, err
 			}
-			counts.ScanExclusions = changed
+			return changed, nil
+		}
+		var err error
+		if counts.ScanExclusions, err = rewriteExclusions(settings.ScanExcludePaths, "scan_exclude_paths"); err != nil {
+			return counts, err
+		}
+		if counts.ImageScanExclusions, err = rewriteExclusions(settings.ImageScanExcludePaths, "image_scan_exclude_paths"); err != nil {
+			return counts, err
 		}
 	}
 

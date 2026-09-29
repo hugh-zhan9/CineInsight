@@ -64,7 +64,7 @@ func TestShortFeedLockoutSharedAcrossPortsAndIgnoresForwardedForPLAY01(t *testin
 	svc, handler, _ := newShortFeedAccessFixture(t)
 	clock := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return clock }
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
 	// 同一 IP、每次换端口、每次伪造不同的 X-Forwarded-For：额度仍然共享。
@@ -84,7 +84,7 @@ func TestShortFeedLockoutSharedAcrossPortsAndIgnoresForwardedForPLAY01(t *testin
 		t.Fatalf("同 IP 不同端口共 5 次失败应锁定，实际 %d", fifth.Code)
 	}
 	// 正确 PIN 换个端口、换个 X-Forwarded-For 也不放行。
-	rec := shortFeedLoginStatus(handler, "2468", shortFeedRemoteWithPort("192.168.1.50", 5555), func(r *http.Request) {
+	rec := shortFeedLoginStatus(handler, "246800", shortFeedRemoteWithPort("192.168.1.50", 5555), func(r *http.Request) {
 		r.Header.Set("X-Forwarded-For", "203.0.113.9")
 	})
 	if rec.Code != http.StatusTooManyRequests {
@@ -94,7 +94,7 @@ func TestShortFeedLockoutSharedAcrossPortsAndIgnoresForwardedForPLAY01(t *testin
 
 func TestShortFeedLockoutSharedWithinIPv6PrefixPLAY01(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
 	// 同一 /64 内轮换地址（隐私地址）共享额度。
@@ -107,7 +107,7 @@ func TestShortFeedLockoutSharedWithinIPv6PrefixPLAY01(t *testing.T) {
 	if rec := shortFeedLoginStatus(handler, "0000", "[fd00:1:2:3:aaaa::1]:4000", nil); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("同 /64 第 5 次失败应锁定，实际 %d", rec.Code)
 	}
-	if rec := shortFeedLoginStatus(handler, "2468", "[fd00:1:2:3:bbbb::9]:4000", nil); rec.Code != http.StatusTooManyRequests {
+	if rec := shortFeedLoginStatus(handler, "246800", "[fd00:1:2:3:bbbb::9]:4000", nil); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("同 /64 的另一个地址正确 PIN 也应 429，实际 %d", rec.Code)
 	}
 	// IPv4-mapped 与 IPv4 是同一来源。
@@ -118,14 +118,14 @@ func TestShortFeedLockoutSharedWithinIPv6PrefixPLAY01(t *testing.T) {
 		}
 		shortFeedLoginStatus(handler, "0000", remote, nil)
 	}
-	if rec := shortFeedLoginStatus(handler, "2468", "192.168.7.7:9", nil); rec.Code != http.StatusTooManyRequests {
+	if rec := shortFeedLoginStatus(handler, "246800", "192.168.7.7:9", nil); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("IPv4 与其 mapped 形式应共享额度，实际 %d", rec.Code)
 	}
 }
 
 func TestShortFeedConcurrentWrongPINsAtMostFiveCompareAgainstPLAY01(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
@@ -168,10 +168,10 @@ func TestShortFeedGlobalFailureBudgetCoolsAllSourcesButKeepsSessionsPLAY01(t *te
 	svc, handler, _ := newShortFeedAccessFixture(t)
 	clock := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return clock }
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
-	session := loginShortFeed(t, handler, "2468", "192.168.1.9:1")
+	session := loginShortFeed(t, handler, "246800", "192.168.1.9:1")
 
 	// 20 次失败分散在 5 个不同来源（每个来源只用 4 次，谁也没触发单源锁定）。
 	for source := 1; source <= 5; source++ {
@@ -192,7 +192,7 @@ func TestShortFeedGlobalFailureBudgetCoolsAllSourcesButKeepsSessionsPLAY01(t *te
 		t.Fatalf("全局冷却应为 pin_locked + retry_after=60: %v", payload)
 	}
 	// 另一个从未失败过的 IP，连正确 PIN 也被冷却。
-	other := shortFeedLoginStatus(handler, "2468", "192.168.4.4:4000", nil)
+	other := shortFeedLoginStatus(handler, "246800", "192.168.4.4:4000", nil)
 	if other.Code != http.StatusTooManyRequests {
 		t.Fatalf("全局冷却期间其他 IP 也应 429，实际 %d", other.Code)
 	}
@@ -206,7 +206,7 @@ func TestShortFeedGlobalFailureBudgetCoolsAllSourcesButKeepsSessionsPLAY01(t *te
 	}
 	// 冷却过后可以再登录，且成功登录重置冷却档位。
 	clock = clock.Add(61 * time.Second)
-	if cookie := loginShortFeed(t, handler, "2468", "192.168.4.4:4000"); cookie.Value == "" {
+	if cookie := loginShortFeed(t, handler, "246800", "192.168.4.4:4000"); cookie.Value == "" {
 		t.Fatal("冷却结束后应能登录")
 	}
 	auth := svc.authState()
@@ -298,11 +298,11 @@ func TestShortFeedSessionTokensDifferAndExpireAfter30DaysPLAY01(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
 	clock := time.Date(2026, 9, 29, 12, 0, 0, 0, time.UTC)
 	svc.now = func() time.Time { return clock }
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
-	first := loginShortFeed(t, handler, "2468", "192.168.1.1:1")
-	second := loginShortFeed(t, handler, "2468", "192.168.1.1:2")
+	first := loginShortFeed(t, handler, "246800", "192.168.1.1:1")
+	second := loginShortFeed(t, handler, "246800", "192.168.1.1:2")
 	if first.Value == second.Value {
 		t.Fatal("两次登录的令牌必须不同")
 	}
@@ -357,7 +357,7 @@ func TestShortFeedPublicPathIsConservativePLAY01(t *testing.T) {
 
 func TestShortFeedEncodedPathsRequireSessionPLAY01(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
 	for _, target := range []string{
@@ -702,7 +702,7 @@ func TestShortFeedAllowedAccessTextReflectsPINPLAY14(t *testing.T) {
 	if strings.Contains(before, "no login") || !strings.Contains(before, "no PIN") {
 		t.Fatalf("未设 PIN 时应如实说明没有 PIN: %q", before)
 	}
-	if err := svc.SetShortFeedPIN("2468"); err != nil {
+	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
 	}
 	after := server.Status().AllowedAccess
