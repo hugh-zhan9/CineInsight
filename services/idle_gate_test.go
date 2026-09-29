@@ -739,3 +739,37 @@ func TestIdleGatePauseHookReleaseRacesWithWait(t *testing.T) {
 		t.Fatal("摘钩子与等待竞争时 worker 被挂住了")
 	}
 }
+
+// APP-03：等待者一出现在状态里就带着原因。任务中心读到「在等」时必须同时能说明为什么在等，
+// 不能有一瞬原因为空（先登记、后补原因会被并发读到）。
+func TestIdleGateWaiterAppearsWithReasonAPP03(t *testing.T) {
+	for round := 0; round < 50; round++ {
+		gate := busyGate()
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_ = gate.Run(ctx, string(BackgroundTaskTechnical), func(context.Context) error { return nil })
+		}()
+		deadline := time.Now().Add(3 * time.Second)
+		found := false
+		for !found && time.Now().Before(deadline) {
+			for _, waiting := range gate.GetIdleSchedulerStatus().Waiting {
+				if waiting.TaskKey != string(BackgroundTaskTechnical) {
+					continue
+				}
+				found = true
+				if waiting.Reason != IdleWaitReasonUserActive {
+					cancel()
+					<-done
+					t.Fatalf("第 %d 轮：等待者出现时原因应为 user_active，实际 %q", round, waiting.Reason)
+				}
+			}
+		}
+		cancel()
+		<-done
+		if !found {
+			t.Fatalf("第 %d 轮：等待者没有出现", round)
+		}
+	}
+}

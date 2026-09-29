@@ -409,10 +409,12 @@ func (g *IdleGate) wait(ctx context.Context, taskKey string, notify func(TaskGat
 		return nil
 	}
 	// 先判一次：能直接放行就不登记等待者，免得界面上闪一下"等待空闲"。
-	if allowed, _ := g.evaluate(taskKey); allowed {
+	allowed, reason := g.evaluate(taskKey)
+	if allowed {
 		return nil
 	}
-	waiter, err := g.registerWaiter(taskKey, isRun)
+	// 登记时就带上这次判定的原因：状态里不会出现「在等、但原因为空」的一瞬（任务中心据此显示等待原因）。
+	waiter, err := g.registerWaiter(taskKey, isRun, reason)
 	if err != nil {
 		return err
 	}
@@ -464,7 +466,7 @@ func (g *IdleGate) wait(ctx context.Context, taskKey string, notify func(TaskGat
 	}
 }
 
-func (g *IdleGate) registerWaiter(taskKey string, isRun bool) (*idleWaiter, error) {
+func (g *IdleGate) registerWaiter(taskKey string, isRun bool, reason string) (*idleWaiter, error) {
 	g.mu.Lock()
 	if isRun {
 		if existing := g.runWaiter[taskKey]; existing != nil {
@@ -475,7 +477,7 @@ func (g *IdleGate) registerWaiter(taskKey string, isRun bool) (*idleWaiter, erro
 			return nil, ErrIdleGateTaskAlreadyWaiting
 		}
 	}
-	waiter := &idleWaiter{taskKey: taskKey, isRun: isRun, since: g.now(), release: make(chan struct{})}
+	waiter := &idleWaiter{taskKey: taskKey, isRun: isRun, since: g.now(), release: make(chan struct{}), reason: reason}
 	if g.waiters[taskKey] == nil {
 		g.waiters[taskKey] = make(map[*idleWaiter]struct{})
 	}
