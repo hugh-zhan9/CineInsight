@@ -365,6 +365,19 @@ describe('工具栏三层重排', () => {
     wrapper.unmount();
   });
 
+  it('LIB-15 视图菜单提供「用当前条件更新」「重命名」，没有选中视图时禁用', async () => {
+    const wrapper = mountToolbar();
+    let items = wrapper.vm.viewMenuItems;
+    expect(items.find(item => item.id === 'update-current').disabled).toBe(true);
+    expect(items.find(item => item.id === 'rename-current').disabled).toBe(true);
+
+    await wrapper.setProps({ savedViews: [{ id: 5, name: '未看 4K' }], selectedSavedViewID: 5 });
+    items = wrapper.vm.viewMenuItems;
+    expect(items.find(item => item.id === 'update-current')).toEqual(expect.objectContaining({ label: '用当前条件更新该视图', disabled: false }));
+    expect(items.find(item => item.id === 'rename-current')).toEqual(expect.objectContaining({ label: '重命名该视图', disabled: false }));
+    wrapper.unmount();
+  });
+
   it('语义模式下不用结构化计数冒充命中数', async () => {
     const wrapper = mountToolbar({ searchMode: 'semantic', videos: [{ id: 1 }, { id: 2 }], hasMore: false, filteredCount: null });
     await wrapper.vm.$nextTick();

@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"video-master/database"
@@ -302,5 +303,17 @@ func TestPlayVideoSuccessClearsReturnedStaleReasonLIB10(t *testing.T) {
 	}
 	if result.Video.IsStale || result.Video.StaleReason != "" {
 		t.Fatalf("返回的记录应同时清掉失效标记与原因: stale=%v reason=%q", result.Video.IsStale, result.Video.StaleReason)
+	}
+}
+
+// PLAY-12 / G-3：播放失败的提示只写文件名，系统错误里的绝对路径擦掉。
+func TestPlaybackFailureMessageOmitsAbsolutePathsPLAY12(t *testing.T) {
+	video := &models.Video{Name: "movie.mp4", Path: "/Volumes/Media/secret/movie.mp4"}
+	result := (&VideoService{}).buildPlaybackFailureResult(video, "path_unreadable", "open /Volumes/Media/secret/movie.mp4: permission denied", false)
+	if strings.Contains(result.UserMessage, "/Volumes/Media") {
+		t.Fatalf("提示里不应出现绝对路径: %q", result.UserMessage)
+	}
+	if !strings.Contains(result.UserMessage, "movie.mp4") || !strings.Contains(result.UserMessage, "permission denied") {
+		t.Fatalf("提示应保留文件名与原因: %q", result.UserMessage)
 	}
 }

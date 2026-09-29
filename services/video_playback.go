@@ -202,7 +202,8 @@ func (s *VideoService) buildPlaybackFailureResult(video *models.Video, reasonCod
 		Video:             video,
 		DispatchSucceeded: false,
 		ReasonCode:        reasonCode,
-		UserMessage:       fmt.Sprintf("播放失败: %s (%s)\n原因: %s", video.Name, video.Path, detail),
+		// 面向用户的文案不带绝对路径（G-3）：只写文件名，系统错误里的路径擦成 <path>。
+		UserMessage: fmt.Sprintf("播放失败: %s\n原因: %s", video.Name, scrubPlaybackProxyPaths(detail)),
 	}
 	result.Reason = playbackFailureReason(reasonCode, false)
 	if shouldReconcile {

@@ -1226,8 +1226,9 @@ func TestPlayRandomVideoErrorContainsVideoInfo(t *testing.T) {
 		t.Fatalf("期望 dispatch 失败结果")
 	}
 	msg := result.UserMessage
-	if !strings.Contains(msg, "broken.mp4") || !strings.Contains(msg, videoPath) {
-		t.Fatalf("错误信息未包含视频信息: %s", msg)
+	// 只写文件名，不带绝对路径（G-3、PLAY-12）。
+	if !strings.Contains(msg, "broken.mp4") || strings.Contains(msg, videoPath) {
+		t.Fatalf("错误信息应只含文件名、不含绝对路径: %s", msg)
 	}
 	if result.ReconcileResult != nil {
 		t.Fatalf("dispatch_failed 不应返回 reconcile result")
@@ -1445,8 +1446,9 @@ func TestPlayVideoMissingFileReturnsReconcileResultAndMarksStale(t *testing.T) {
 	if !result.ReconcileResult.DidMarkStale {
 		t.Fatalf("期望标记 stale")
 	}
-	if !strings.Contains(result.UserMessage, "missing.mp4") || !strings.Contains(result.UserMessage, videoPath) {
-		t.Fatalf("错误信息未包含文件级上下文: %s", result.UserMessage)
+	// 文件级上下文只给文件名，不带绝对路径（G-3）。
+	if !strings.Contains(result.UserMessage, "missing.mp4") || strings.Contains(result.UserMessage, videoPath) {
+		t.Fatalf("错误信息应包含文件名、不含绝对路径: %s", result.UserMessage)
 	}
 
 	after := previewStatsSnapshot(t, video.ID)
@@ -1657,5 +1659,34 @@ func TestDeleteVideoKeepsRecordWhenScanRootUnreachable(t *testing.T) {
 	var kept models.Video
 	if err := database.DB.Unscoped().First(&kept, video.ID).Error; err != nil || kept.DeletedAt.IsValid() {
 		t.Fatalf("库记录必须保持原样: %#v err=%v", kept, err)
+	}
+}
+
+// LIB-10：「重新定位文件…」的文件选择框按「视频扩展名」设置过滤：小写、带点、去重，设置为空时用默认集合。
+func TestConfiguredVideoExtensionsFollowsSettingsLIB10(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	setExtensions := func(value string) {
+		t.Helper()
+		if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("video_extensions", value).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	setExtensions("")
+	if got := ConfiguredVideoExtensions(); len(got) != len(strings.Split(defaultVideoExtensions, ",")) {
+		t.Fatalf("设置为空时应使用默认集合: %v", got)
+	}
+	setExtensions("MKV, .mp4,mkv, ,.MOV")
+	got := ConfiguredVideoExtensions()
+	want := []string{".mkv", ".mp4", ".mov"}
+	if len(got) != len(want) {
+		t.Fatalf("扩展名应规范化并去重: got=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("扩展名应规范化并去重: got=%v want=%v", got, want)
+		}
+	}
+	if !isConfiguredVideoExtension(".MOV") || isConfiguredVideoExtension(".avi") {
+		t.Fatal("重命名的扩展名判定应与同一份集合一致")
 	}
 }

@@ -1358,6 +1358,10 @@ export function SelectPersonAvatar() {
   return window['go']['main']['App']['SelectPersonAvatar']();
 }
 
+export function SelectVideoFile() {
+  return window['go']['main']['App']['SelectVideoFile']();
+}
+
 export function SetCollectionCover(arg1, arg2) {
   return window['go']['main']['App']['SetCollectionCover'](arg1, arg2);
 }

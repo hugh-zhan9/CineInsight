@@ -1411,3 +1411,10 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - P-037：抽屉的 `watch-progress` 载荷要带 `origin` / `durationSeconds`；嵌套续播改用 `watchState.js`；`PersonMediaDeleteDialog` 的 `restored` 事件由 `PreviewDrawer` / `EntityLibraryPage` 接上。
   - 主代理：`LibraryToolbar` 的保存视图菜单补「用当前条件更新」「重命名」两项；后端播放失败的 `user_message` 去掉完整路径（G-3）。
   - P-040：删掉 `LibraryToolbar` 中已经不用的 `aiTagSummary`、`cleanupBadgeCount`、`cleanupAnalyzing`、`delete-tag`。
+
+**主代理补齐 P-034 留下的三项**（2026-09-30）：
+- 新增 `services.ConfiguredVideoExtensions()`（重命名规则与文件选择共用）和 `App.SelectVideoFile()`（只列「视频扩展名」里的格式）。测试 `TestConfiguredVideoExtensionsFollowsSettingsLIB10`；绑定已重新生成。
+- 播放失败的 `user_message` 只写文件名，系统错误里的路径擦掉（G-3）。测试 `TestPlaybackFailureMessageOmitsAbsolutePathsPLAY12`；两条原来钉住完整路径的旧断言改为「不得含路径」。
+- `LibraryToolbar` 视图菜单补「用当前条件更新该视图」「重命名该视图」，未选中视图时禁用。测试「LIB-15 视图菜单提供…」。
+
+验证：Go 全量（SQLite）通过；`npm test` 86 个文件、1213 条用例全部通过。

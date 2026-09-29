@@ -169,14 +169,17 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 	return nil
 }
 
-// isConfiguredVideoExtension 判断后缀（带点）是否在「视频扩展名」设置里；设置为空时用默认集合。
-func isConfiguredVideoExtension(ext string) bool {
+// ConfiguredVideoExtensions 返回「视频扩展名」设置里的后缀（小写、带点、去重）；设置为空或读不到时用默认集合。
+func ConfiguredVideoExtensions() []string {
 	raw := defaultVideoExtensions
 	var settings models.Settings
-	if err := database.DB.Select("video_extensions").First(&settings).Error; err == nil && strings.TrimSpace(settings.VideoExtensions) != "" {
-		raw = settings.VideoExtensions
+	if database.DB != nil {
+		if err := database.DB.Select("video_extensions").First(&settings).Error; err == nil && strings.TrimSpace(settings.VideoExtensions) != "" {
+			raw = settings.VideoExtensions
+		}
 	}
-	ext = strings.ToLower(ext)
+	seen := map[string]bool{}
+	exts := []string{}
 	for _, candidate := range strings.Split(raw, ",") {
 		candidate = strings.ToLower(strings.TrimSpace(candidate))
 		if candidate == "" {
@@ -185,6 +188,18 @@ func isConfiguredVideoExtension(ext string) bool {
 		if !strings.HasPrefix(candidate, ".") {
 			candidate = "." + candidate
 		}
+		if !seen[candidate] {
+			seen[candidate] = true
+			exts = append(exts, candidate)
+		}
+	}
+	return exts
+}
+
+// isConfiguredVideoExtension 判断后缀（带点）是否在「视频扩展名」设置里；设置为空时用默认集合。
+func isConfiguredVideoExtension(ext string) bool {
+	ext = strings.ToLower(ext)
+	for _, candidate := range ConfiguredVideoExtensions() {
 		if candidate == ext {
 			return true
 		}

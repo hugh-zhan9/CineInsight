@@ -3,6 +3,7 @@ package main
 import (
 	"log"
 	"os"
+	"strings"
 	"video-master/models"
 	"video-master/services"
 
@@ -102,6 +103,22 @@ func (a *App) ScanDirectoryWithInfo(dir string) ([]services.ScannedFile, error) 
 }
 
 // RelocateVideo 更新视频路径（文件迁移，保留标签等元数据）
+// SelectVideoFile 打开系统文件选择框，只列出「视频扩展名」设置里的格式；返回所选路径，取消时为空串。
+// 供失效行的「重新定位文件…」使用，选中后再调 RelocateVideo。
+func (a *App) SelectVideoFile() (string, error) {
+	patterns := make([]string, 0)
+	for _, ext := range services.ConfiguredVideoExtensions() {
+		patterns = append(patterns, "*"+ext)
+	}
+	pattern := strings.Join(patterns, ";")
+	return runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{
+		Title: "选择视频文件的新位置",
+		Filters: []runtime.FileFilter{
+			{DisplayName: "视频文件", Pattern: pattern},
+		},
+	})
+}
+
 func (a *App) RelocateVideo(id uint, newPath string) error {
 	err := a.videoService.RelocateVideo(id, newPath)
 	log.Printf("API RelocateVideo id=%d newPath=%s err=%v", id, newPath, err)

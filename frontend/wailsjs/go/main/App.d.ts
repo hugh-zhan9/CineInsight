@@ -683,6 +683,8 @@ export function SelectMigrationSourceDirectory():Promise<string>;
 
 export function SelectPersonAvatar():Promise<string>;
 
+export function SelectVideoFile():Promise<string>;
+
 export function SetCollectionCover(arg1:number,arg2:string):Promise<models.MediaCollection>;
 
 export function SetImageFavorite(arg1:number,arg2:boolean):Promise<models.Image>;

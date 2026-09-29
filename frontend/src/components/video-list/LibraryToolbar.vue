@@ -630,6 +630,9 @@ export default {
       if (items.length === 0) items.push({ id: 'none', label: '还没有保存的视图', disabled: true });
       items.push({ divider: true });
       items.push({ id: 'save-current', label: '保存当前视图' });
+      // 选中了某个视图时才能「用当前条件更新」或「重命名」（D-PC35、LIB-15），由片库页打开同一个弹窗的不同模式。
+      items.push({ id: 'update-current', label: '用当前条件更新该视图', disabled: !this.selectedSavedViewID });
+      items.push({ id: 'rename-current', label: '重命名该视图', disabled: !this.selectedSavedViewID });
       items.push({ id: 'delete-current', label: '删除该视图', danger: true, disabled: !this.selectedSavedViewID });
       return items;
     },
