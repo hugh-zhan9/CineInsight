@@ -141,12 +141,19 @@ func (a *App) ApproveAITagCandidates(ids []uint) services.AITagBatchResult {
 	return result
 }
 
-// ApproveAITagCandidatesByFilter 按筛选条件批准：服务端解析出候选 id 后逐项批准。
+// ApproveAITagCandidatesByFilter 按筛选条件批准：只支持 tag_id（必填）与可选的 confidence
+// 精确匹配，与列表查询一致。前端的「批准筛选结果」应改为把已加载且已过滤的 ID 交给
+// ApproveAITagCandidates；本接口留给「按标签整批批准」，批准前用 CountAITagCandidatesByFilter 预览。
 func (a *App) ApproveAITagCandidatesByFilter(filter services.AITagCandidateFilter) (services.AITagBatchResult, error) {
 	result, err := a.aiTaggingService.ApproveCandidatesByFilter(filter)
-	log.Printf("API ApproveAITagCandidatesByFilter tag=%d min_confidence=%q query=%v requested=%d succeeded=%d failed=%d err=%v",
-		filter.TagID, filter.MinConfidence, strings.TrimSpace(filter.Query) != "", result.Requested, result.Succeeded, result.Failed, err)
+	log.Printf("API ApproveAITagCandidatesByFilter tag=%d confidence=%q requested=%d succeeded=%d failed=%d superseded=%d err=%v",
+		filter.TagID, filter.Confidence, result.Requested, result.Succeeded, result.Failed, result.Superseded, err)
 	return result, err
+}
+
+// CountAITagCandidatesByFilter 返回按同一筛选口径将被批准的候选数，供批准前的计数预览。
+func (a *App) CountAITagCandidatesByFilter(filter services.AITagCandidateFilter) (int, error) {
+	return a.aiTaggingService.CountCandidatesByFilter(filter)
 }
 
 // RetryImageAITagging 显式重新分析单张图片：绕过证据指纹，对已有手工标签的图片同样生效（规则 5）。

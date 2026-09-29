@@ -119,7 +119,7 @@ func (s *TranslationGlossaryService) Upsert(entry models.TranslationGlossaryEntr
 		}
 		var conflict models.TranslationGlossaryEntry
 		err := database.DB.
-			Where("scope_key = ? AND source_term_lower = ? AND id <> ?", normalized.ScopeKey, normalized.SourceTermLower, normalized.ID).
+			Where("scope_key = ? AND target_language = ? AND source_term_lower = ? AND id <> ?", normalized.ScopeKey, normalized.TargetLanguage, normalized.SourceTermLower, normalized.ID).
 			First(&conflict).Error
 		if err == nil {
 			return nil, ErrGlossaryTermConflict

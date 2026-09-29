@@ -194,7 +194,8 @@ func (s *AITaggingService) runWorkerOnceGated(ctx context.Context) {
 			s.runWorkerOnce(ctx)
 			return nil
 		})
-		if err != nil && ctx.Err() == nil && waitCtx.Err() == nil {
+		// 已有自动唤醒在排队是预期的合并，不是中断，不记日志。
+		if err != nil && !errors.Is(err, ErrIdleGateTaskAlreadyWaiting) && ctx.Err() == nil && waitCtx.Err() == nil {
 			log.Printf("[AITagging] gated round aborted err=%v", err)
 		}
 	}()
@@ -274,11 +275,13 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		config.ImagesPerRequest,
 		config.SubtitleCharLimit,
 	)
+	// 显式重试标记在 setProcessing 之后就没了，所以入口处读一次：既用于放行人工标签检查，
+	// 也用于词表变化自动重排时把用户的显式请求带下去。
+	explicit, err := s.isExplicitRetry(video.ID)
+	if err != nil {
+		return err
+	}
 	if hasNonAutomaticTags(video.Tags) {
-		explicit, err := s.isExplicitRetry(video.ID)
-		if err != nil {
-			return err
-		}
 		if !explicit {
 			log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
 			return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
@@ -350,8 +353,13 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		runStatus = models.AITaggingStateStatusSkipped
 		failureCode = "tag_library_changed"
 		log.Printf("[AITagging] tag library changed during analysis; retry scheduled video_id=%d", video.ID)
-		// 自动重排：不带显式重试标记，人工标签检查照旧。
-		return s.requeueVideo(video.ID, "")
+		// 自动重排：本轮是用户显式重试时保留 manual_retry，不抹掉用户的请求；否则不带
+		// 标记，人工标签检查照旧。
+		requeueReason := ""
+		if explicit {
+			requeueReason = aiTaggingSkipReasonManualRetry
+		}
+		return s.requeueVideo(video.ID, requeueReason)
 	}
 	log.Printf("[AITagging] analyze succeeded video_id=%d suggestions=%d", video.ID, len(suggestions))
 	runID := run.ID
@@ -697,11 +705,14 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 		if err := activeVideoExistsInTx(tx, candidate.VideoID); err != nil {
 			return err
 		}
+		if candidate.Status == models.AITagCandidateStatusSuperseded {
+			return ErrAITagCandidateSuperseded
+		}
 		if candidate.Status != models.AITagCandidateStatusPending {
-			return fmt.Errorf("candidate is not pending")
+			return ErrAITagCandidateNotPending
 		}
 		if candidate.Confidence != models.AITagConfidenceHigh && candidate.Confidence != models.AITagConfidenceMedium {
-			return fmt.Errorf("candidate confidence is not approvable")
+			return ErrAITagCandidateNotApprovable
 		}
 		tagID, err := s.resolveOfficialTagInTx(tx, candidate)
 		if err != nil {
@@ -721,7 +732,7 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 			return result.Error
 		}
 		if result.RowsAffected != 1 {
-			return fmt.Errorf("candidate is no longer pending")
+			return ErrAITagCandidateNotPending
 		}
 		approvalRecord := models.AITagApprovalRecord{
 			VideoID:     candidate.VideoID,
@@ -753,14 +764,14 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 
 func (s *AITaggingService) resolveOfficialTagInTx(tx *gorm.DB, candidate models.AITagCandidate) (uint, error) {
 	if candidate.MatchedTagID == nil {
-		return 0, fmt.Errorf("candidate is not matched to the configured tag library")
+		return 0, ErrAITagCandidateNoTag
 	}
 	var tag models.Tag
 	if err := tx.First(&tag, *candidate.MatchedTagID).Error; err != nil {
 		return 0, err
 	}
 	if !isAITagEligible(tag) {
-		return 0, fmt.Errorf("candidate tag is no longer available in the configured tag library")
+		return 0, ErrAITagCandidateTagUnavailable
 	}
 	return tag.ID, nil
 }
@@ -986,8 +997,38 @@ func SupersedeCandidatesForManualTag(tx *gorm.DB, videoID, tagID uint) ([]uint, 
 	return ids, nil
 }
 
+// 批准候选的可识别失败。英文文案保持不变（单条批准的前端按子串判断「已不在待审」），
+// 批量结果里由 aiTagApproveMessage 翻成中文。
+var (
+	ErrAITagCandidateNotPending     = errors.New("candidate is not pending")
+	ErrAITagCandidateSuperseded     = fmt.Errorf("%w (superseded by another candidate of the same tag)", ErrAITagCandidateNotPending)
+	ErrAITagCandidateNotApprovable  = errors.New("candidate confidence is not approvable")
+	ErrAITagCandidateNoTag          = errors.New("candidate is not matched to the configured tag library")
+	ErrAITagCandidateTagUnavailable = errors.New("candidate tag is no longer available in the configured tag library")
+)
+
+// aiTagApproveMessage 把批准失败翻成给用户看的中文。
+func aiTagApproveMessage(err error) string {
+	switch {
+	case errors.Is(err, ErrAITagCandidateSuperseded):
+		return "候选已被同标签的其他候选替代"
+	case errors.Is(err, ErrAITagCandidateNotPending):
+		return "候选已不在待审状态"
+	case errors.Is(err, ErrAITagCandidateNotApprovable):
+		return "候选置信度过低，不可批准"
+	case errors.Is(err, ErrAITagCandidateNoTag):
+		return "候选未匹配到词表中的标签"
+	case errors.Is(err, ErrAITagCandidateTagUnavailable):
+		return "候选标签已不在 AI 词表中"
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return "候选不存在，或所属视频已被删除"
+	}
+	return "批准失败：" + err.Error()
+}
+
 // ApproveCandidates 逐项沿用单条批准的事务（D-PC29）；一条失败不影响其余。
-// 重复 id 只处理一次。
+// 重复 id 只处理一次。同视频同标签里先批准的一条会作废其余，后面被作废的项标为
+// superseded（不算失败）。
 func (s *AITaggingService) ApproveCandidates(ids []uint) AITagBatchResult {
 	result := AITagBatchResult{Results: make([]AITagBatchItemResult, 0, len(ids))}
 	seen := make(map[uint]struct{}, len(ids))
@@ -998,9 +1039,14 @@ func (s *AITaggingService) ApproveCandidates(ids []uint) AITagBatchResult {
 		seen[id] = struct{}{}
 		result.Requested++
 		item, err := s.ApproveCandidate(id)
+		if errors.Is(err, ErrAITagCandidateSuperseded) {
+			result.Superseded++
+			result.Results = append(result.Results, AITagBatchItemResult{ID: id, Superseded: true, Message: aiTagApproveMessage(err)})
+			continue
+		}
 		if err != nil {
 			result.Failed++
-			result.Results = append(result.Results, AITagBatchItemResult{ID: id, Message: err.Error()})
+			result.Results = append(result.Results, AITagBatchItemResult{ID: id, Message: aiTagApproveMessage(err)})
 			continue
 		}
 		result.Succeeded++
@@ -1009,26 +1055,48 @@ func (s *AITaggingService) ApproveCandidates(ids []uint) AITagBatchResult {
 	return result
 }
 
-// ApproveCandidatesByFilter 在服务端把筛选条件解析成候选 id，再交给 ApproveCandidates。
-// 只解析仍为 pending、置信度可批准、且视频未删除的候选；筛选为空即全部待审。
-func (s *AITaggingService) ApproveCandidatesByFilter(filter AITagCandidateFilter) (AITagBatchResult, error) {
+// ErrAITagFilterTagRequired：按筛选批准必须先选标签，空筛选不执行（避免一键批准全部待审）。
+var ErrAITagFilterTagRequired = errors.New("请先选择一个标签再批准筛选结果")
+
+// approvableCandidateIDsByFilter 把筛选条件解析成候选 id。口径与列表查询一致：标签
+// 精确匹配、置信度（可选）精确匹配、状态 pending；另外只含视频未删除且置信度可批准
+// （high / medium）的候选——low 永远批不了，计入预览会让「预览 N 条、批准 M 条」对不上。
+func (s *AITaggingService) approvableCandidateIDsByFilter(filter AITagCandidateFilter) ([]uint, error) {
+	if filter.TagID == 0 {
+		return nil, ErrAITagFilterTagRequired
+	}
 	query := database.DB.Model(&models.AITagCandidate{}).
 		Joins("INNER JOIN videos ON videos.id = ai_tag_candidates.video_id AND videos.deleted_at IS NULL").
-		Where("ai_tag_candidates.status = ?", models.AITagCandidateStatusPending)
-	if normalizeAIConfidence(filter.MinConfidence) == models.AITagConfidenceHigh {
-		query = query.Where("ai_tag_candidates.confidence = ?", models.AITagConfidenceHigh)
-	} else {
-		query = query.Where("ai_tag_candidates.confidence IN ?", []string{models.AITagConfidenceHigh, models.AITagConfidenceMedium})
-	}
-	if filter.TagID > 0 {
-		query = query.Where("ai_tag_candidates.matched_tag_id = ?", filter.TagID)
-	}
-	if text := strings.ToLower(strings.TrimSpace(filter.Query)); text != "" {
-		like := "%" + escapeSQLLike(text) + "%"
-		query = query.Where(`(LOWER(ai_tag_candidates.suggested_name) LIKE ? ESCAPE '\' OR LOWER(videos.name) LIKE ? ESCAPE '\')`, like, like)
+		Where("ai_tag_candidates.status = ?", models.AITagCandidateStatusPending).
+		Where("ai_tag_candidates.matched_tag_id = ?", filter.TagID).
+		Where("ai_tag_candidates.confidence IN ?", []string{models.AITagConfidenceHigh, models.AITagConfidenceMedium})
+	if strings.TrimSpace(filter.Confidence) != "" {
+		confidence := normalizeAIConfidence(filter.Confidence)
+		if confidence == "" {
+			return nil, fmt.Errorf("无效的置信度：%q", filter.Confidence)
+		}
+		query = query.Where("ai_tag_candidates.confidence = ?", confidence)
 	}
 	var ids []uint
 	if err := query.Order("ai_tag_candidates.id").Pluck("ai_tag_candidates.id", &ids).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// CountCandidatesByFilter 给前端在批准前显示计数预览，口径与 ApproveCandidatesByFilter 相同。
+func (s *AITaggingService) CountCandidatesByFilter(filter AITagCandidateFilter) (int, error) {
+	ids, err := s.approvableCandidateIDsByFilter(filter)
+	if err != nil {
+		return 0, err
+	}
+	return len(ids), nil
+}
+
+// ApproveCandidatesByFilter 在服务端把筛选条件解析成候选 id，再交给 ApproveCandidates。
+func (s *AITaggingService) ApproveCandidatesByFilter(filter AITagCandidateFilter) (AITagBatchResult, error) {
+	ids, err := s.approvableCandidateIDsByFilter(filter)
+	if err != nil {
 		return AITagBatchResult{}, err
 	}
 	return s.ApproveCandidates(ids), nil

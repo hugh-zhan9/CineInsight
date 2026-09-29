@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -583,6 +584,46 @@ func (s *PersonService) DeletePerson(id uint) error {
 	return nil
 }
 
+// rewriteSavedViewPersonIDsTx 把活跃保存视图 person_ids_json 里的来源人物 ID 改写为目标 ID 并去重（升序）。
+// 只改包含来源 ID 的视图；JSON 解析不了的行保持原样（不因一行脏数据阻断合并）。
+func rewriteSavedViewPersonIDsTx(tx *gorm.DB, sources []uint, targetID uint) error {
+	sourceSet := make(map[uint]struct{}, len(sources))
+	for _, id := range sources {
+		sourceSet[id] = struct{}{}
+	}
+	var views []models.SavedLibraryView
+	if err := tx.Where("person_ids_json <> ?", "[]").Find(&views).Error; err != nil {
+		return err
+	}
+	for _, view := range views {
+		var ids []uint
+		if err := json.Unmarshal([]byte(view.PersonIDsJSON), &ids); err != nil {
+			continue
+		}
+		touched := false
+		for index, id := range ids {
+			if _, isSource := sourceSet[id]; isSource {
+				ids[index] = targetID
+				touched = true
+			}
+		}
+		if !touched {
+			continue
+		}
+		ids = uniqueUintIDs(ids)
+		sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+		encoded, err := json.Marshal(ids)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.SavedLibraryView{}).Where("id = ?", view.ID).
+			Update("person_ids_json", string(encoded)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // MergePeople 把 sourceIDs 并入 targetID（D-PC32）：单一事务改写关系并去重、簇改指向目标、
 // 目标无头像时复制来源头像，最后硬删来源人物；来源头像文件在提交之后才删。
 func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeopleResult, error) {
@@ -668,6 +709,14 @@ func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeop
 				}
 				break
 			}
+		}
+		// ③b 活跃保存视图的人物条件：来源 ID 改写为目标 ID（去重），与标签条件同语义，
+		// 合并后视图不会静默放宽（Minor 5）。
+		if err := rewriteSavedViewPersonIDsTx(tx, sources, targetID); err != nil {
+			if importedAvatar.Created {
+				_ = s.images.Remove(importedAvatar.RelativePath)
+			}
+			return err
 		}
 		// ④ 硬删来源人物（关系与簇已迁走，deletePersonTx 只会清掉残余候选）。
 		for _, source := range sourcePeople {

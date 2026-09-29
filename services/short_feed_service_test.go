@@ -183,6 +183,7 @@ func TestShortFeedImageEligibilityAndMediaRange(t *testing.T) {
 	handler := server.Handler()
 
 	rangeReq := httptest.NewRequest(http.MethodGet, "/short-media/image/"+strconvUint(ok.ID), nil)
+	rangeReq.Host = "127.0.0.1"
 	rangeReq.RemoteAddr = "127.0.0.1:5321"
 	rangeReq.Header.Set("Range", "bytes=0-3")
 	rangeRec := httptest.NewRecorder()
@@ -199,6 +200,7 @@ func TestShortFeedImageEligibilityAndMediaRange(t *testing.T) {
 
 	// 不可解码的图片不给下发，且不泄露内部原因。
 	badReq := httptest.NewRequest(http.MethodGet, "/short-media/image/"+strconvUint(unsupported.ID), nil)
+	badReq.Host = "127.0.0.1"
 	badReq.RemoteAddr = "127.0.0.1:5321"
 	badRec := httptest.NewRecorder()
 	handler.ServeHTTP(badRec, badReq)
@@ -211,6 +213,7 @@ func TestShortFeedImageEligibilityAndMediaRange(t *testing.T) {
 		t.Fatalf("删除图片文件失败: %v", err)
 	}
 	missingReq := httptest.NewRequest(http.MethodGet, "/short-media/image/"+strconvUint(ok.ID), nil)
+	missingReq.Host = "127.0.0.1"
 	missingReq.RemoteAddr = "127.0.0.1:5321"
 	missingRec := httptest.NewRecorder()
 	handler.ServeHTTP(missingRec, missingReq)
@@ -886,6 +889,7 @@ func TestShortFeedHTTPGuardsAndRange(t *testing.T) {
 
 	rangeResp := httptest.NewRecorder()
 	rangeReq := httptest.NewRequest(http.MethodGet, "/short-media/video/"+strconvUint(video.ID), nil)
+	rangeReq.Host = "127.0.0.1"
 	rangeReq.RemoteAddr = "127.0.0.1:1234"
 	rangeReq.Header.Set("Range", "bytes=0-3")
 	handler.ServeHTTP(rangeResp, rangeReq)

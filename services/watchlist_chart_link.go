@@ -30,6 +30,10 @@ const (
 // ApplyCandidate 两条路径）。回调发生在写库成功之后、且不持有片单一侧的任何锁。
 type watchlistDoubanBindObserver interface {
 	OnWatchlistDoubanBound(entryID uint, doubanID, title string, year int)
+	// OnWatchlistSourceChanged 在条目的来源 ID 发生任何变化（含改选到非豆瓣来源，此时
+	// newDoubanID 为空）之后、OnWatchlistDoubanBound 之前回调：榜单一侧据此释放仍认领着
+	// 该条目、但豆瓣 ID 与新来源不一致的 want 标记（APP-07 I-1）。
+	OnWatchlistSourceChanged(entryID uint, newDoubanID string)
 }
 
 // watchlistDoubanBind 是观察者槽位，零值可用。
@@ -56,6 +60,32 @@ func (s *WatchlistService) SetDoubanBindObserver(observer watchlistDoubanBindObs
 		return
 	}
 	s.bind.set(observer)
+}
+
+// watchlistDoubanIDOf 取来源里的豆瓣 ID；来源不是豆瓣时为空。
+func watchlistDoubanIDOf(sourceName, sourceItemID string) string {
+	if sourceName != WatchlistMetadataSourceDouban {
+		return ""
+	}
+	return sourceItemID
+}
+
+// notifySourceChanged 在写回让条目的来源 ID 变化后通知观察者。previous 是写回**前**的
+// 条目。豆瓣 ID 前后一致（含都不是豆瓣）时不通知：没有标记会因此失去依据。
+func (s *WatchlistService) notifySourceChanged(previous models.WatchlistEntry, detail *WatchlistMetadataDetail) {
+	if detail == nil {
+		return
+	}
+	observer := s.bind.get()
+	if observer == nil {
+		return
+	}
+	oldID := watchlistDoubanIDOf(previous.SourceName, previous.SourceItemID)
+	newID := watchlistDoubanIDOf(detail.SourceName, detail.SourceItemID)
+	if oldID == newID {
+		return
+	}
+	observer.OnWatchlistSourceChanged(previous.ID, newID)
 }
 
 // notifyDoubanBound 在补全把条目写成 douban 来源之后通知观察者。只有电影会带豆瓣来源。
@@ -126,9 +156,11 @@ func (s *WatchlistService) EnsureChartEntry(title, doubanID string) (uint, bool,
 	}
 	if found {
 		if byTitle.SourceItemID == "" {
-			// 条件更新：读到之后被别人补全过就不覆盖，仍然复用这一条。
+			// 条件更新：读到之后被别人补全过就不覆盖，仍然复用这一条。补全正在跑
+			// （claim 非空 / running）的条目同样只复用、不回填：回填会与那一轮写回竞争来源列。
 			err := db.Model(&models.WatchlistEntry{}).
-				Where("id = ? AND source_item_id = ?", byTitle.ID, "").
+				Where("id = ? AND source_item_id = ? AND enrichment_claim = ? AND enrichment_status <> ?",
+					byTitle.ID, "", "", models.WatchlistEnrichmentRunning).
 				Updates(map[string]any{
 					"source_name":    WatchlistMetadataSourceDouban,
 					"source_item_id": doubanID,
@@ -183,11 +215,21 @@ func firstWatchlistEntry(query *gorm.DB, dest *models.WatchlistEntry) (bool, err
 // 条件更新，不加锁：只碰 mark = 'want' 的行。
 func revokeChartWantForEntry(tx *gorm.DB, entry models.WatchlistEntry) error {
 	query := tx.Model(&models.MovieChartMark{}).Where("mark = ?", models.MovieChartMarkWant)
+	// 第三种归属（APP-07 I-2）：榜单 want 复用了一条已被 TMDB 补全的同名条目，标记没有
+	// 豆瓣来源可对、也没有认领（watchlist_entry_id = 0）。只按「片名快照与条目片名精确
+	// 相等（同一截断规范化）且条目是电影」认，指向别的条目的 want 不动。
+	titleMatch := ""
+	var titleArgs []any
+	if entry.Kind == models.WatchlistKindMovie && entry.Title != "" {
+		titleMatch = " OR (watchlist_entry_id = 0 AND title = ?)"
+		titleArgs = []any{movieChartTruncateTitle(entry.Title)}
+	}
 	if entry.SourceName == WatchlistMetadataSourceDouban && entry.SourceItemID != "" {
-		query = query.Where("watchlist_entry_id = ? OR (douban_id = ? AND watchlist_entry_id = 0)",
-			entry.ID, entry.SourceItemID)
+		args := append([]any{entry.ID, entry.SourceItemID}, titleArgs...)
+		query = query.Where("(watchlist_entry_id = ? OR (douban_id = ? AND watchlist_entry_id = 0)"+titleMatch+")", args...)
 	} else {
-		query = query.Where("watchlist_entry_id = ?", entry.ID)
+		args := append([]any{entry.ID}, titleArgs...)
+		query = query.Where("(watchlist_entry_id = ?"+titleMatch+")", args...)
 	}
 	err := query.Updates(map[string]any{
 		"mark":               "",

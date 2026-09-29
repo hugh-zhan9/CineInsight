@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
@@ -189,6 +190,37 @@ type VideoRelocatedEvent struct {
 }
 
 var (
+	// playbackRelocateSem 让后台重定位全局串行；playbackRelocateWG 让测试与关闭流程能等它们结束。
+	playbackRelocateSem    = make(chan struct{}, 1)
+	playbackRelocateWG     sync.WaitGroup
+	playbackRelocateMu     sync.Mutex
+	playbackRelocateCtx    context.Context
+	playbackRelocateCancel context.CancelFunc
+)
+
+// playbackRelocateContext 返回当前批次的取消上下文；StopPlaybackRelocation 之后下一次调用会新建。
+func playbackRelocateContext() context.Context {
+	playbackRelocateMu.Lock()
+	defer playbackRelocateMu.Unlock()
+	if playbackRelocateCtx == nil {
+		playbackRelocateCtx, playbackRelocateCancel = context.WithCancel(context.Background())
+	}
+	return playbackRelocateCtx
+}
+
+// StopPlaybackRelocation 取消排队与进行中的后台重定位（应用退出时调用；接线项：App 关闭流程）。
+// 取消后再次发生的播放失败仍会启动新的重定位。
+func StopPlaybackRelocation() {
+	playbackRelocateMu.Lock()
+	if playbackRelocateCancel != nil {
+		playbackRelocateCancel()
+	}
+	playbackRelocateCtx, playbackRelocateCancel = nil, nil
+	playbackRelocateMu.Unlock()
+	playbackRelocateWG.Wait()
+}
+
+var (
 	videoRelocatedNotifierMu sync.RWMutex
 	videoRelocatedNotifier   func(VideoRelocatedEvent)
 	// playbackRelocating 记录正在后台重定位的视频，同一条不并发起多个遍历。
@@ -278,7 +310,10 @@ func (s *VideoService) reconcileAfterPlaybackFailure(video *models.Video, reason
 	if !offline {
 		snapshot := *video
 		if _, running := playbackRelocating.LoadOrStore(video.ID, struct{}{}); !running {
-			go s.relocateInBackground(snapshot)
+			// 上下文在派生 goroutine 之前取：StopPlaybackRelocation 取消的就是这一个，
+			// 避免排队的 goroutine 启动得太晚、拿到取消之后新建的上下文而永远等不到信号量。
+			playbackRelocateWG.Add(1)
+			go s.relocateInBackground(playbackRelocateContext(), snapshot)
 		}
 	}
 	return result
@@ -286,9 +321,20 @@ func (s *VideoService) reconcileAfterPlaybackFailure(video *models.Video, reason
 
 // relocateInBackground 在所有在线扫描根里找同名同大小的唯一候选；找到就 RelocateVideo
 // （同时清失效）并通知前端。任何一步失败或结果不唯一都只记日志，记录保持失效。
-func (s *VideoService) relocateInBackground(video models.Video) {
+func (s *VideoService) relocateInBackground(ctx context.Context, video models.Video) {
+	defer playbackRelocateWG.Done()
 	defer playbackRelocating.Delete(video.ID)
-	matchedPath, ambiguous, err := s.findRelocatedVideoCandidate(&video)
+	// 全局串行：多个视频同时播放失败时，全根遍历一次只跑一个，其余排队（Minor 8）。
+	select {
+	case playbackRelocateSem <- struct{}{}:
+		defer func() { <-playbackRelocateSem }()
+	case <-ctx.Done():
+		return
+	}
+	if ctx.Err() != nil {
+		return
+	}
+	matchedPath, ambiguous, err := s.findRelocatedVideoCandidate(ctx, &video)
 	if err != nil {
 		log.Printf("自动纠偏扫描失败 id=%d err=%v", video.ID, err)
 		return
@@ -303,7 +349,7 @@ func (s *VideoService) relocateInBackground(video models.Video) {
 	notifyVideoRelocated(VideoRelocatedEvent{VideoID: video.ID, NewPath: matchedPath})
 }
 
-func (s *VideoService) findRelocatedVideoCandidate(video *models.Video) (string, bool, error) {
+func (s *VideoService) findRelocatedVideoCandidate(ctx context.Context, video *models.Video) (string, bool, error) {
 	var directories []models.ScanDirectory
 	if err := database.DB.Order("path asc").Find(&directories).Error; err != nil {
 		return "", false, err
@@ -334,6 +380,9 @@ func (s *VideoService) findRelocatedVideoCandidate(video *models.Video) (string,
 		// 离线的根遍历只会失败并拖慢整个搜索；文件不可能在一个不在线的根里被找到。
 		if !scanRootOnline(root) {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return "", false, err
 		}
 		scannedFiles, err := s.ScanDirectoryWithInfo(root)
 		if err != nil {

@@ -848,6 +848,12 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
   - 删除设置页的「反馈回流」开关入口（P-021 结论：它只控制收藏与点赞的投影）；
   - 显式载荷补上 `cleanup_*` 字段；
   - 榜单撤销「想看」时提示「同时从想看片单移除」（P-019 的已接受语义）。
+- **P-020**（追加）：视频列表的载荷批量带出 `automatic_override_kinds`，用于行标签上的「手动」角标（D-PC36；P-017 改成按单个视频查询，行上逐条查询开销太大）。
+- **主代理整合**（在 P-012/13 修复合入之后处理，涉及 `person_service.go`）：
+  - `MergePeople` 的头像复制放到事务提交之后；
+  - 来源人物的人脸候选迁移到目标人物，不直接删除；
+  - 撤销转换时，如果人物已被合并，改用合并目标来删除关系。
+- **P-035**：「批准筛选结果」把已加载且已过滤的 ID 交给 `ApproveAITagCandidates(ids)`；`ByFilter` 只用于按标签批量批准，先调用 `CountCandidatesByFilter` 预览数量。
 - **P-039**：`docs/short-feed-lan.md` 中「无登录、无 PIN、无二维码」与投影机制的描述需要更新。
 - **P-040**：回收站列表方法名改回设计名（旧的 `ListTrashEntries` 删除后，把 `ListTrashEntriesPage` 改为 `ListTrashEntries`）；统一各处 `*BatchResult` 类型的命名。
 - **真机交接**：

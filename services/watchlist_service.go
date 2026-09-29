@@ -169,7 +169,7 @@ func (s *WatchlistService) Update(id uint, title string) error {
 		return err
 	}
 	var current models.WatchlistEntry
-	if err := database.DB.Select("id", "kind").First(&current, id).Error; err != nil {
+	if err := database.DB.Select("id", "kind", "title").First(&current, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrWatchlistEntryNotFound
 		}
@@ -182,10 +182,31 @@ func (s *WatchlistService) Update(id uint, title string) error {
 	if taken {
 		return ErrWatchlistTitleExists
 	}
-	result := database.DB.Model(&models.WatchlistEntry{}).Where("id = ?", id).Updates(map[string]any{
+	fields := map[string]any{
 		"title":             title,
 		"enrichment_status": models.WatchlistEnrichmentManual,
-	})
+	}
+	// 改名让旧来源 ID 失去依据（它对应的是旧片名）：清空来源，状态仍按 §3.1 落 manual
+	// （用户编辑即接管，转换表是合同，不改成 pending），要重新补全由用户手动重试。榜单
+	// 认领着该条目（榜单创建 / 补全绑定）时保持来源不变——那个豆瓣 ID 是标记的依据，
+	// 清掉会让标记与条目对不上。
+	renamed := title != current.Title
+	if renamed {
+		var claimed int64
+		err := database.DB.Model(&models.MovieChartMark{}).
+			Where("mark = ? AND watchlist_entry_id = ?", models.MovieChartMarkWant, id).
+			Limit(1).Count(&claimed).Error
+		if err != nil {
+			return fmt.Errorf("修改想看记录失败: %w", err)
+		}
+		if claimed == 0 {
+			fields["source_name"] = ""
+			fields["source_item_id"] = ""
+			fields["source_title"] = ""
+			fields["source_fields"] = ""
+		}
+	}
+	result := database.DB.Model(&models.WatchlistEntry{}).Where("id = ?", id).Updates(fields)
 	if result.Error != nil {
 		if watchlistTitleConflict(result.Error) {
 			return ErrWatchlistTitleExists
@@ -222,7 +243,7 @@ func (s *WatchlistService) DeleteForChart(id uint) error {
 
 func (s *WatchlistService) deleteEntry(id uint, revokeChartWant bool) error {
 	var entry models.WatchlistEntry
-	if err := database.DB.Select("id", "poster_path", "source_name", "source_item_id").First(&entry, id).Error; err != nil {
+	if err := database.DB.Select("id", "title", "kind", "poster_path", "source_name", "source_item_id").First(&entry, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrWatchlistEntryNotFound
 		}
@@ -230,7 +251,7 @@ func (s *WatchlistService) deleteEntry(id uint, revokeChartWant bool) error {
 	}
 	// 删条目与撤销榜单 want 在同一事务里（D-PC52）：只删条目会留下一个指向不存在
 	// 条目的 want 标记，榜单上仍显示「想看」而片单里没有。
-	err := database.DB.Transaction(func(tx *gorm.DB) error {
+	err := database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Where("id = ?", id).Delete(&models.WatchlistEntry{})
 		if result.Error != nil {
 			return fmt.Errorf("移除想看记录失败: %w", result.Error)
@@ -457,6 +478,8 @@ func (s *WatchlistService) ApplyCandidate(id uint, sourceItemID string) error {
 			log.Printf("[WatchlistEnrich] apply candidate stale poster cleanup failed id=%d err=%v", id, err)
 		}
 	}
+	// 先按写回前的来源通知「来源变了」，再改 entry：观察者要拿旧、新两个豆瓣 ID 比。
+	s.notifySourceChanged(entry, detail)
 	entry.EnrichmentStatus = models.WatchlistEnrichmentManual
 	entry.EnrichmentError = ""
 	entry.SourceName = detail.SourceName

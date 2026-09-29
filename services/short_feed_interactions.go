@@ -10,6 +10,8 @@ import (
 	"unicode/utf8"
 	"video-master/database"
 	"video-master/models"
+
+	"gorm.io/gorm"
 )
 
 // 手机端「播放范围」的五个可选值。范围只收窄候选池，不改变加权抽取本身。
@@ -232,8 +234,12 @@ func (s *ShortFeedService) ScopeCountsFiltered(mediaFilter string) ([]ShortFeedS
 
 // SetRating 设置个人评分（0–10 半分制，nil 表示清空），视频与图片共用同一套校验。
 func (s *ShortFeedService) SetRating(ref ShortFeedMediaRef, rating *float64) (*ShortFeedItemDTO, error) {
-	if err := validateRatingValue(rating); err != nil {
+	// 先过可见边界：不可见（黑名单、扫描根之外、失效）一律按不存在处理，什么都不写。
+	if err := s.ensureItemVisible(ref); err != nil {
 		return nil, err
+	}
+	if err := validateRatingValue(rating); err != nil {
+		return nil, fmt.Errorf("%w: %v", errShortFeedInvalidRating, err)
 	}
 	switch ref.Kind {
 	case ShortFeedMediaVideo:
@@ -255,6 +261,9 @@ func (s *ShortFeedService) SetWatched(ref ShortFeedMediaRef, watched bool) (*Sho
 	if ref.Kind != ShortFeedMediaVideo {
 		return nil, ErrShortFeedUnsupportedMedia
 	}
+	if err := s.ensureItemVisible(ref); err != nil {
+		return nil, err
+	}
 	if _, err := s.videoService.SetVideoWatched(ref.ID, watched); err != nil {
 		return nil, err
 	}
@@ -263,8 +272,11 @@ func (s *ShortFeedService) SetWatched(ref ShortFeedMediaRef, watched bool) (*Sho
 
 // SetItemTag 挂上或摘掉一个标签。自动标签由应用维护，底层服务会拒绝。
 func (s *ShortFeedService) SetItemTag(ref ShortFeedMediaRef, tagID uint, attached bool) (*ShortFeedItemDTO, error) {
+	if err := s.ensureItemVisible(ref); err != nil {
+		return nil, err
+	}
 	if tagID == 0 {
-		return nil, fmt.Errorf("标签 ID 不能为空")
+		return nil, errShortFeedInvalidTag
 	}
 	var err error
 	switch ref.Kind {
@@ -285,6 +297,13 @@ func (s *ShortFeedService) SetItemTag(ref ShortFeedMediaRef, tagID uint, attache
 		return nil, ErrShortFeedUnsupportedMedia
 	}
 	if err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			// 自动标签由应用维护，底层用不带类型的错误拒绝；这里把「拒绝」和「数据库故障」分开。
+			var tag models.Tag
+			if lookupErr := database.DB.First(&tag, tagID).Error; lookupErr == nil && tag.AutomaticKind != "" {
+				return nil, fmt.Errorf("%w: %v", errShortFeedInvalidTag, err)
+			}
+		}
 		return nil, err
 	}
 	return s.reloadItem(ref)
@@ -344,22 +363,49 @@ func (s *ShortFeedService) CreateFeedTag(name string) (ShortFeedTagDTO, error) {
 	return ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color}, nil
 }
 
-// RestoreDeleted 撤销刚才那一次删除。回收站里每个媒体最多一条记录（video_id /
-// image_id 都是唯一索引），所以按 ref 找就是刚删掉的那一条。
+// RestoreDeleted 撤销手机端刚才的删除。
+//
+// 回收站条目按 id 一一对应，但手机端不是回收站的管理入口：只能撤销**本服务通过手机端
+// 删除的**条目，而且原条目此刻仍在可见边界内（扫描根之内、不在黑名单）。其余一律按
+// 不存在处理，不能借「撤销」去恢复桌面端或扫描器放进回收站的东西。
 func (s *ShortFeedService) RestoreDeleted(ref ShortFeedMediaRef) error {
+	entryID, ok := s.mobileDeletedEntry(ref)
+	if !ok {
+		return gorm.ErrRecordNotFound
+	}
 	switch ref.Kind {
 	case ShortFeedMediaVideo:
 		var entry models.VideoTrashEntry
-		if err := database.DB.Where("video_id = ?", ref.ID).First(&entry).Error; err != nil {
+		if err := database.DB.Where("id = ? AND video_id = ?", entryID, ref.ID).First(&entry).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				s.forgetMobileDeleted(ref)
+			}
 			return err
+		}
+		scope, err := loadCleanupPathScope()
+		if err != nil {
+			return err
+		}
+		if !scope.contains(entry.OriginalPath) {
+			return gorm.ErrRecordNotFound
 		}
 		if _, err := s.videoService.RestoreTrashEntry(entry.ID); err != nil {
 			return err
 		}
 	case ShortFeedMediaImage:
 		var entry models.ImageTrashEntry
-		if err := database.DB.Where("image_id = ?", ref.ID).First(&entry).Error; err != nil {
+		if err := database.DB.Where("id = ? AND image_id = ?", entryID, ref.ID).First(&entry).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				s.forgetMobileDeleted(ref)
+			}
 			return err
+		}
+		excluded, err := imageScanExcludedPaths(database.DB)
+		if err != nil {
+			return err
+		}
+		if isScanPathExcluded(entry.OriginalPath, excluded) {
+			return gorm.ErrRecordNotFound
 		}
 		if _, err := NewImageService().RestoreImageTrashEntry(entry.ID); err != nil {
 			return err
@@ -367,12 +413,96 @@ func (s *ShortFeedService) RestoreDeleted(ref ShortFeedMediaRef) error {
 	default:
 		return ErrShortFeedUnsupportedMedia
 	}
+	s.forgetMobileDeleted(ref)
 	s.invalidateCandidates()
 	return nil
 }
 
+// shortFeedMobileDeletedCap 是「本服务通过手机端删除」记录的容量：只为撤销服务，
+// 超出后丢最旧的（更旧的删除只能回桌面端的回收站处理）。
+const shortFeedMobileDeletedCap = 256
+
+// rememberMobileDeleted 在手机端删除成功后记下对应的回收站条目。
+func (s *ShortFeedService) rememberMobileDeleted(ref ShortFeedMediaRef) {
+	var entryID uint
+	switch ref.Kind {
+	case ShortFeedMediaVideo:
+		var entry models.VideoTrashEntry
+		if err := database.DB.Select("id").Where("video_id = ?", ref.ID).First(&entry).Error; err != nil {
+			return
+		}
+		entryID = entry.ID
+	case ShortFeedMediaImage:
+		var entry models.ImageTrashEntry
+		if err := database.DB.Select("id").Where("image_id = ?", ref.ID).First(&entry).Error; err != nil {
+			return
+		}
+		entryID = entry.ID
+	default:
+		return
+	}
+	s.mobileDeletedMu.Lock()
+	defer s.mobileDeletedMu.Unlock()
+	if s.mobileDeleted == nil {
+		s.mobileDeleted = map[ShortFeedMediaRef]uint{}
+	}
+	if _, exists := s.mobileDeleted[ref]; !exists {
+		s.mobileDeletedOrder = append(s.mobileDeletedOrder, ref)
+	}
+	s.mobileDeleted[ref] = entryID
+	for len(s.mobileDeletedOrder) > shortFeedMobileDeletedCap {
+		delete(s.mobileDeleted, s.mobileDeletedOrder[0])
+		s.mobileDeletedOrder = s.mobileDeletedOrder[1:]
+	}
+}
+
+func (s *ShortFeedService) mobileDeletedEntry(ref ShortFeedMediaRef) (uint, bool) {
+	s.mobileDeletedMu.Lock()
+	defer s.mobileDeletedMu.Unlock()
+	id, ok := s.mobileDeleted[ref]
+	return id, ok
+}
+
+func (s *ShortFeedService) forgetMobileDeleted(ref ShortFeedMediaRef) {
+	s.mobileDeletedMu.Lock()
+	defer s.mobileDeletedMu.Unlock()
+	if _, ok := s.mobileDeleted[ref]; !ok {
+		return
+	}
+	delete(s.mobileDeleted, ref)
+	for i, queued := range s.mobileDeletedOrder {
+		if queued == ref {
+			s.mobileDeletedOrder = append(s.mobileDeletedOrder[:i:i], s.mobileDeletedOrder[i+1:]...)
+			break
+		}
+	}
+}
+
+// ensureItemVisible 是所有「按 ID 写」入口的公共门：条目必须在手机端可见边界内
+// （视频：扫描根 + 黑名单 + 未失效 + 时长门槛；图片：未失效 + 黑名单 + 有解码器）。
+// 不可见与不存在同样返回 gorm.ErrRecordNotFound，响应因此不会带出隐藏条目的任何字段。
+func (s *ShortFeedService) ensureItemVisible(ref ShortFeedMediaRef) error {
+	var err error
+	switch ref.Kind {
+	case ShortFeedMediaVideo:
+		_, err = s.loadEligibleVideo(ref.ID)
+	case ShortFeedMediaImage:
+		_, err = s.loadEligibleImage(database.DB, ref.ID)
+	default:
+		return ErrShortFeedUnsupportedMedia
+	}
+	if errors.Is(err, ErrShortFeedNoEligibleVideos) {
+		return gorm.ErrRecordNotFound
+	}
+	return err
+}
+
 // reloadItem 把改动后的这一条重新组装成手机端的 DTO，让前端不必猜写入结果。
+// 组装前同样过可见边界：写入之后条目被隐藏的话，返回的是 404 而不是它的字段。
 func (s *ShortFeedService) reloadItem(ref ShortFeedMediaRef) (*ShortFeedItemDTO, error) {
+	if err := s.ensureItemVisible(ref); err != nil {
+		return nil, err
+	}
 	switch ref.Kind {
 	case ShortFeedMediaVideo:
 		var video models.Video
@@ -392,3 +522,10 @@ func (s *ShortFeedService) reloadItem(ref ShortFeedMediaRef) (*ShortFeedItemDTO,
 		return nil, ErrShortFeedUnsupportedMedia
 	}
 }
+
+var (
+	// errShortFeedInvalidRating / errShortFeedInvalidTag 让 HTTP 层给出固定文案的 400，
+	// 而不是回传底层错误原文。
+	errShortFeedInvalidRating = errors.New("invalid rating")
+	errShortFeedInvalidTag    = errors.New("invalid tag")
+)

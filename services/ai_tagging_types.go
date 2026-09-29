@@ -149,25 +149,28 @@ type AITagLibraryInput struct {
 
 // AITagBatchItemResult 是批量批准中一条候选的结果。
 type AITagBatchItemResult struct {
-	ID      uint                 `json:"id"`
-	OK      bool                 `json:"ok"`
-	Message string               `json:"message,omitempty"`
-	Item    *AITaggingReviewItem `json:"item,omitempty"`
+	ID uint `json:"id"`
+	OK bool `json:"ok"`
+	// Superseded 表示该候选被同视频同标签的另一条批准作废，不算失败。
+	Superseded bool                 `json:"superseded,omitempty"`
+	Message    string               `json:"message,omitempty"`
+	Item       *AITaggingReviewItem `json:"item,omitempty"`
 }
 
 // AITagBatchResult 是 ApproveAITagCandidates* 的逐项结果（D-PC29）。
 // 与批准单条的事务语义一致：某一条失败不影响其余，前端据 Results 局部更新。
 type AITagBatchResult struct {
-	Requested int                    `json:"requested"`
-	Succeeded int                    `json:"succeeded"`
-	Failed    int                    `json:"failed"`
-	Results   []AITagBatchItemResult `json:"results"`
+	Requested int `json:"requested"`
+	Succeeded int `json:"succeeded"`
+	Failed    int `json:"failed"`
+	// Superseded 是被同标签的其他候选作废的条数，与 Failed 互斥。
+	Superseded int                    `json:"superseded"`
+	Results    []AITagBatchItemResult `json:"results"`
 }
 
-// AITagCandidateFilter 是「批准筛选结果」的服务端筛选条件，三项均可省略。
-// MinConfidence 取 high 只含 high，其余取值含 high 与 medium。
+// AITagCandidateFilter 是「批准筛选结果」的服务端筛选条件：TagID 必填，Confidence
+// 可省略，两项都是与列表查询一致的精确匹配。
 type AITagCandidateFilter struct {
-	TagID         uint   `json:"tag_id,omitempty"`
-	MinConfidence string `json:"min_confidence,omitempty"`
-	Query         string `json:"query,omitempty"`
+	TagID      uint   `json:"tag_id"`
+	Confidence string `json:"confidence,omitempty"`
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -77,11 +78,13 @@ type SkipBreakdown struct {
 	NotVideo int `json:"not_video"`
 	// ReadError：读取失败，已同时写入 Errors。
 	ReadError int `json:"read_error"`
+	// LegacyTrash：旧版应用留在 <媒体目录>/trash/ 里的、没有回收站条目的文件，扫描跳过不收录。
+	LegacyTrash int `json:"legacy_trash"`
 }
 
 // Total 返回各项之和。
 func (b SkipBreakdown) Total() int {
-	return b.Existing + b.BlockedUserDelete + b.RecentlyModified + b.TempFile + b.NotVideo + b.ReadError
+	return b.Existing + b.BlockedUserDelete + b.RecentlyModified + b.TempFile + b.NotVideo + b.ReadError + b.LegacyTrash
 }
 
 func (b *SkipBreakdown) merge(other SkipBreakdown) {
@@ -91,6 +94,7 @@ func (b *SkipBreakdown) merge(other SkipBreakdown) {
 	b.TempFile += other.TempFile
 	b.NotVideo += other.NotVideo
 	b.ReadError += other.ReadError
+	b.LegacyTrash += other.LegacyTrash
 }
 
 // 跳过原因，与 SkipBreakdown 的字段一一对应。
@@ -101,6 +105,7 @@ const (
 	skipReasonTempFile          = "temp_file"
 	skipReasonNotVideo          = "not_video"
 	skipReasonReadError         = "read_error"
+	skipReasonLegacyTrash       = "legacy_trash"
 )
 
 // recordSkip 同时累加分项与总数，保证 Skipped == SkipBreakdown.Total()。
@@ -117,6 +122,8 @@ func (r *ScanSyncResult) recordSkip(reason string) {
 		r.SkipBreakdown.TempFile++
 	case skipReasonNotVideo:
 		r.SkipBreakdown.NotVideo++
+	case skipReasonLegacyTrash:
+		r.SkipBreakdown.LegacyTrash++
 	default:
 		r.SkipBreakdown.ReadError++
 	}
@@ -238,6 +245,9 @@ func (s *VideoService) scanDirectoryCollect(dir string, skipRecentlyActive bool,
 		}
 
 		if info != nil && info.IsDir() && isTrashDir(path) {
+			if filtered != nil && isUnrecordedLegacyTrashDir(path) {
+				filtered.LegacyTrash += countLegacyTrashVideos(path, videoExts)
+			}
 			return filepath.SkipDir
 		}
 		if err != nil {
@@ -1125,11 +1135,8 @@ func scanRootReachableForPath(path string) (bool, string, error) {
 		if path != root && !strings.HasPrefix(path, scanRootChildPrefix(root)) {
 			continue
 		}
-		info, statErr := os.Stat(root)
-		if statErr != nil {
-			return false, root, nil
-		}
-		return info.IsDir(), root, nil
+		// 带挂载点检查：macOS 上弹出磁盘后 /Volumes 下会留下空目录，只 Stat 根会误判在线。
+		return scanRootOnline(root), root, nil
 	}
 	return false, "", fmt.Errorf("视频 %q 不在任何已配置的扫描目录下，无法确认其所在位置是否可访问", path)
 }
@@ -1181,10 +1188,13 @@ func isSystemTrashSegment(name string) bool {
 // legacyTrashDirs 缓存旧版回收站目录集合：mode='legacy_trash' 的回收站条目里
 // filepath.Dir(trash_path) 去重。绑定到 database.DB 实例，换库时自动失效；
 // 每轮扫描开始时 refreshLegacyTrashDirs 重新读取。
+//
+// 集合里有两类目录：有 legacy_trash 条目的目录（值为 false），以及旧版应用（2026-04-16 到
+// 2026-07-30）删除时移进去、却没建回收站条目的 <目录>/trash/（值为 true，见 loadLegacyTrashDirs）。
 var legacyTrashDirs struct {
 	mu   sync.RWMutex
 	db   *gorm.DB
-	dirs map[string]struct{}
+	dirs map[string]bool
 }
 
 // refreshLegacyTrashDirs 从两张回收站表重建集合。读取失败时保留旧缓存（换库除外），
@@ -1207,8 +1217,8 @@ func refreshLegacyTrashDirs() {
 	legacyTrashDirs.db, legacyTrashDirs.dirs = db, dirs
 }
 
-func loadLegacyTrashDirs(db *gorm.DB) (map[string]struct{}, error) {
-	dirs := make(map[string]struct{})
+func loadLegacyTrashDirs(db *gorm.DB) (map[string]bool, error) {
+	dirs := make(map[string]bool)
 	// mode 为空且 file_moved=true 的行是回填之前的旧版条目，同样属于旧版回收站。
 	const condition = "trash_path <> '' AND (mode = ? OR (mode = '' AND file_moved = ?))"
 	for _, model := range []interface{}{&models.VideoTrashEntry{}, &models.ImageTrashEntry{}} {
@@ -1217,13 +1227,32 @@ func loadLegacyTrashDirs(db *gorm.DB) (map[string]struct{}, error) {
 			return nil, err
 		}
 		for _, trashPath := range paths {
-			dirs[filepath.Dir(filepath.Clean(trashPath))] = struct{}{}
+			dirs[filepath.Dir(filepath.Clean(trashPath))] = false
+		}
+	}
+	// 旧版应用在这段时间里删除会把文件移进 <媒体目录>/trash/ 却不建条目（fd06f54、81fa75d）。
+	// 目录基名恰为 trash（区分大小写），且其父目录是至少一条已软删视频或图片的所在目录，就认作旧版
+	// 回收站目录；用户自己的 Trash（大写）或父目录从无删除记录的 trash 仍正常扫描（C1）。
+	for _, source := range []struct {
+		model  interface{}
+		column string
+	}{{&models.Video{}, "directory"}, {&models.Image{}, "directory"}} {
+		var parents []string
+		if err := db.Unscoped().Model(source.model).Where("deleted_at IS NOT NULL AND "+source.column+" <> ''").
+			Distinct().Pluck(source.column, &parents).Error; err != nil {
+			return nil, err
+		}
+		for _, parent := range parents {
+			trashDir := filepath.Join(filepath.Clean(parent), DefaultTrashDirName)
+			if _, known := dirs[trashDir]; !known {
+				dirs[trashDir] = true
+			}
 		}
 	}
 	return dirs, nil
 }
 
-func snapshotLegacyTrashDirs() map[string]struct{} {
+func snapshotLegacyTrashDirs() map[string]bool {
 	legacyTrashDirs.mu.RLock()
 	current := legacyTrashDirs.db == database.DB
 	dirs := legacyTrashDirs.dirs
@@ -1235,6 +1264,30 @@ func snapshotLegacyTrashDirs() map[string]struct{} {
 	legacyTrashDirs.mu.RLock()
 	defer legacyTrashDirs.mu.RUnlock()
 	return legacyTrashDirs.dirs
+}
+
+// isUnrecordedLegacyTrashDir 报告 path 是否是没有条目的旧版 trash/ 目录（C1）。
+func isUnrecordedLegacyTrashDir(path string) bool {
+	return snapshotLegacyTrashDirs()[filepath.Clean(path)]
+}
+
+// countLegacyTrashVideos 统计旧版 trash/ 目录里的视频类文件（扩展名命中），供扫描回报的 legacy_trash 分项。
+func countLegacyTrashVideos(dir string, videoExts []string) int {
+	count := 0
+	_ = filepath.WalkDir(dir, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return nil
+		}
+		ext := strings.ToLower(filepath.Ext(path))
+		for _, videoExt := range videoExts {
+			if videoExt != "" && ext == strings.ToLower(videoExt) {
+				count++
+				break
+			}
+		}
+		return nil
+	})
+	return count
 }
 
 // isTrashDir 判断目录本身是不是回收站：旧版回收站目录，或系统废纸篓目录名。
@@ -1404,6 +1457,10 @@ func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 	root = filepath.Clean(strings.TrimSpace(root))
 	if root == "" || root == "." {
 		return 0, fmt.Errorf("扫描目录为空")
+	}
+	// 监听的判定与这里之间隔着队列与写锁，根可能已经回来了：执行前再确认一次，在线就什么都不标（Minor 12）。
+	if scanRootOnline(root) {
+		return 0, nil
 	}
 	var dirs []models.ScanDirectory
 	if err := database.DB.Find(&dirs).Error; err != nil {

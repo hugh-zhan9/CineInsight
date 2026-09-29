@@ -273,6 +273,14 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 			result.Restored++
 			continue
 		}
+		// 访达「放回原处」：原路径上的文件与回收站条目身份一致，就地恢复原记录（I3）。
+		if restored, putBackErr := s.restoreImageIfPutBack(file.Path); putBackErr != nil {
+			result.recordError("restore", filepath.Dir(file.Path), file.Path, putBackErr)
+			continue
+		} else if restored {
+			result.Restored++
+			continue
+		}
 		if _, err := s.addImage(file.Path); err != nil {
 			if errors.Is(err, ErrImageExists) {
 				result.Skipped++
@@ -880,7 +888,7 @@ func (s *ImageService) deleteImageBatchItem(id uint, deleteFile bool, batchID st
 	code := TrashResultOK
 	switch {
 	case sourceInfo == nil && deleteFile:
-		if reachable, _, reachErr := scanRootReachableForImagePath(image.Path); reachErr == nil && !reachable {
+		if mediaPathOffline(image.Path) {
 			return "", ErrTrashVolumeOffline
 		}
 		entry.Mode = models.TrashModeMissing
@@ -934,9 +942,24 @@ func (s *ImageService) deleteImageToSystemTrash(image *models.Image, entry *mode
 	}
 
 	trashedPath, moveErr := trashService.MoveToTrash(image.Path)
+	if errors.Is(moveErr, errTrashLocationUnknown) {
+		// 文件已进废纸篓但系统没回报位置：保留条目，走崩溃恢复的按身份查找（Minor 1）。
+		completed, recErr := s.reconcileImagePendingTrashDelete(entry)
+		if recErr != nil {
+			return "", fmt.Errorf("文件已移入废纸篓，但无法确认位置: %w", recErr)
+		}
+		if !completed {
+			return "", fmt.Errorf("移动文件到回收站失败: %w", moveErr)
+		}
+		return TrashResultOK, nil
+	}
 	if moveErr != nil {
 		cancelPending()
 		if errors.Is(moveErr, os.ErrNotExist) {
+			// 卷此刻离线时不是「文件没了」，不降级（I6）。
+			if mediaPathOffline(image.Path) {
+				return "", ErrTrashVolumeOffline
+			}
 			entry.ID = 0
 			entry.CreatedAt = time.Time{}
 			entry.UpdatedAt = time.Time{}
@@ -958,6 +981,18 @@ func (s *ImageService) deleteImageToSystemTrash(image *models.Image, entry *mode
 
 	entry.TrashPath = trashedPath
 	if err := recordTrashedPath("image_trash_entries", entry.ID, trashedPath); err != nil {
+		if errors.Is(err, errTrashEntryStateChanged) {
+			// 条目状态已被他方改变：先重读，他方已终结就不回滚文件（Minor 2）。
+			var current models.ImageTrashEntry
+			reread := database.DB.Where("id = ?", entry.ID).Limit(1).Find(&current)
+			if reread.Error == nil && reread.RowsAffected == 1 {
+				if current.State == trashStateDeleted {
+					return TrashResultOK, nil
+				}
+				return "", fmt.Errorf("待删除条目已被其他操作处理，未移动文件: %w", err)
+			}
+			// 条目已不存在（他方取消了删除）：文件却在废纸篓里，落到下面的回滚逻辑把它放回原处。
+		}
 		if rollbackErr := trashService.RestoreFromTrashVerified(trashedPath, image.Path, want); rollbackErr != nil {
 			return "", fmt.Errorf("记录废纸篓位置失败: %w；文件回滚失败，将在下次启动时按文件身份对账: %v", err, rollbackErr)
 		}
@@ -1017,29 +1052,6 @@ func (s *ImageService) deleteImageToSystemTrash(image *models.Image, entry *mode
 	return "", fmt.Errorf("删除数据库记录失败: %w", err)
 }
 
-// scanRootReachableForImagePath 判断图片所属的图片扫描根现在是否可访问；找不到归属的根时报错，不猜。
-func scanRootReachableForImagePath(path string) (bool, string, error) {
-	var dirs []models.ImageDirectory
-	if err := database.DB.Find(&dirs).Error; err != nil {
-		return false, "", fmt.Errorf("加载图片扫描目录失败: %w", err)
-	}
-	for _, dir := range dirs {
-		root := filepath.Clean(strings.TrimSpace(dir.Path))
-		if root == "" || root == "." {
-			continue
-		}
-		if path != root && !strings.HasPrefix(path, scanRootChildPrefix(root)) {
-			continue
-		}
-		info, statErr := os.Stat(root)
-		if statErr != nil {
-			return false, root, nil
-		}
-		return info.IsDir(), root, nil
-	}
-	return false, "", fmt.Errorf("图片不在任何已配置的图片目录下，无法确认其所在位置是否可访问")
-}
-
 // DeleteImagesDetailed 是桌面端使用的批量删除：逐项结果码、整批一个 batch_id，可上报进度与取消。
 func (s *ImageService) DeleteImagesDetailed(imageIDs []uint, deleteFile bool, opts BatchDeleteOptions) *BatchResult {
 	batchID := newDeleteBatchID()
@@ -1083,9 +1095,20 @@ func (s *ImageService) PermanentlyDeleteImages(imageIDs []uint) *BatchResult {
 }
 
 func (s *ImageService) permanentlyDeleteImage(id uint) (string, error) {
+	// 只接受活跃记录（默认 scope），并拒绝已有回收站条目的图片（I5）。
 	var image models.Image
-	if err := database.DB.Unscoped().First(&image, id).Error; err != nil {
+	if err := database.DB.First(&image, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", ErrPermanentDeleteNotActive
+		}
 		return "", err
+	}
+	var entryCount int64
+	if err := database.DB.Model(&models.ImageTrashEntry{}).Where("image_id = ?", image.ID).Count(&entryCount).Error; err != nil {
+		return "", fmt.Errorf("检查回收站条目失败: %w", err)
+	}
+	if entryCount > 0 {
+		return "", ErrPermanentDeleteHasTrashEntry
 	}
 	code := TrashResultOK
 	info, err := os.Stat(image.Path)
@@ -1104,7 +1127,7 @@ func (s *ImageService) permanentlyDeleteImage(id uint) (string, error) {
 			return "", fmt.Errorf("删除文件失败: %w", err)
 		}
 	case os.IsNotExist(err):
-		if reachable, _, reachErr := scanRootReachableForImagePath(image.Path); reachErr == nil && !reachable {
+		if mediaPathOffline(image.Path) {
 			return "", ErrTrashVolumeOffline
 		}
 		code = TrashResultFileMissing
@@ -1296,6 +1319,9 @@ func (s *ImageService) cancelInterruptedImageTrashDeletion(entry *models.ImageTr
 		return nil, err
 	}
 	if location == pendingFileUnknown {
+		if !filePathOnline(entry.OriginalPath) {
+			return nil, ErrTrashVolumeOffline
+		}
 		_ = recordImageTrashEntryError(entry.ID, ErrTrashFileGone)
 		return nil, ErrTrashFileGone
 	}
@@ -1378,6 +1404,10 @@ func (s *ImageService) reconcileImagePendingTrashDelete(entry *models.ImageTrash
 	location, foundPath, err := resolvePendingTrashMove(entry.OriginalPath, entry.TrashPath, want)
 	if err != nil {
 		return false, err
+	}
+	if location == pendingFileUnknown && !filePathOnline(entry.OriginalPath) {
+		// 卷离线时废纸篓里也读不到：保持 pending_move 等卷回来（I1）。
+		return false, ErrTrashVolumeOffline
 	}
 	if location == pendingFileAtOriginal {
 		result := database.DB.Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).Delete(&models.ImageTrashEntry{})
@@ -1546,7 +1576,7 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 }
 
 // imageTrashEntryFileMatches 按删除时记录的指纹核对文件：大小必须一致；
-// 强身份（dev:inode）命中即通过，否则回退 SHA-256 全量比对。
+// 强身份（inode，不含设备号）命中即通过，否则回退 SHA-256 全量比对。
 func imageTrashEntryFileMatches(path string, info os.FileInfo, entry models.ImageTrashEntry) bool {
 	if info == nil {
 		return false
@@ -1554,7 +1584,7 @@ func imageTrashEntryFileMatches(path string, info os.FileInfo, entry models.Imag
 	if entry.FileSize != 0 && info.Size() != entry.FileSize {
 		return false
 	}
-	if entry.FileIdentity != "" && stableFileIdentity(info) == entry.FileIdentity {
+	if entry.FileIdentity != "" && sameFileInode(entry.FileIdentity, info) {
 		return true
 	}
 	if entry.FileSHA256 == "" {

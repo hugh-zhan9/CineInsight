@@ -522,6 +522,10 @@ type PathRewriteCounts struct {
 	TrashEntries    int `json:"trash_entries"`
 	ScanExclusions  int `json:"scan_exclusions"`
 	SubtitleIndexes int `json:"subtitle_indexes"`
+	// 以下三项是 Minor 6 补上的持久化路径：迁移残留登记、图片（含软删）、图片回收站条目。
+	StagedSources     int `json:"staged_sources"`
+	Images            int `json:"images"`
+	ImageTrashEntries int `json:"image_trash_entries"`
 }
 
 // rewriteLibraryPathPrefixTx 是「路径前缀改写」的唯一实现（D-PC07）：文件夹改名、
@@ -609,6 +613,80 @@ func rewriteLibraryPathPrefixTx(tx *gorm.DB, oldPrefix, newPrefix string) (PathR
 			return counts, err
 		}
 		counts.TrashEntries++
+	}
+
+	var images []models.Image
+	if err := tx.Unscoped().Select("id", "path").
+		Where(`path = ? OR path LIKE ? ESCAPE '\'`, oldPrefix, like).Find(&images).Error; err != nil {
+		return counts, fmt.Errorf("读取图片记录失败: %w", err)
+	}
+	for _, image := range images {
+		newPath, ok, err := rewrite(image.Path)
+		if err != nil {
+			return counts, err
+		}
+		if !ok {
+			continue
+		}
+		if err := tx.Unscoped().Model(&models.Image{}).Where("id = ?", image.ID).
+			Updates(map[string]interface{}{"path": newPath, "directory": filepath.Dir(newPath)}).Error; err != nil {
+			return counts, err
+		}
+		counts.Images++
+	}
+
+	var imageTrashEntries []models.ImageTrashEntry
+	if err := tx.Where(`original_path = ? OR original_path LIKE ? ESCAPE '\' OR trash_path = ? OR trash_path LIKE ? ESCAPE '\'`,
+		oldPrefix, like, oldPrefix, like).Find(&imageTrashEntries).Error; err != nil {
+		return counts, fmt.Errorf("读取图片回收站记录失败: %w", err)
+	}
+	for _, entry := range imageTrashEntries {
+		updates := make(map[string]interface{})
+		if newPath, ok, err := rewrite(entry.OriginalPath); err != nil {
+			return counts, err
+		} else if ok {
+			updates["original_path"] = newPath
+		}
+		if entry.TrashPath != "" {
+			if newPath, ok, err := rewrite(entry.TrashPath); err != nil {
+				return counts, err
+			} else if ok {
+				updates["trash_path"] = newPath
+			}
+		}
+		if len(updates) == 0 {
+			continue
+		}
+		if err := tx.Model(&models.ImageTrashEntry{}).Where("id = ?", entry.ID).Updates(updates).Error; err != nil {
+			return counts, err
+		}
+		counts.ImageTrashEntries++
+	}
+
+	var stagedSources []models.MigrationStagedSource
+	if err := tx.Where(`original_path = ? OR original_path LIKE ? ESCAPE '\' OR staged_path = ? OR staged_path LIKE ? ESCAPE '\'`,
+		oldPrefix, like, oldPrefix, like).Find(&stagedSources).Error; err != nil {
+		return counts, fmt.Errorf("读取迁移残留登记失败: %w", err)
+	}
+	for _, source := range stagedSources {
+		updates := make(map[string]interface{})
+		if newPath, ok, err := rewrite(source.OriginalPath); err != nil {
+			return counts, err
+		} else if ok {
+			updates["original_path"] = newPath
+		}
+		if newPath, ok, err := rewrite(source.StagedPath); err != nil {
+			return counts, err
+		} else if ok {
+			updates["staged_path"] = newPath
+		}
+		if len(updates) == 0 {
+			continue
+		}
+		if err := tx.Model(&models.MigrationStagedSource{}).Where("id = ?", source.ID).Updates(updates).Error; err != nil {
+			return counts, err
+		}
+		counts.StagedSources++
 	}
 
 	var settings models.Settings

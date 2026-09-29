@@ -130,6 +130,11 @@ func (a *App) FilterActiveTagIDs(tagIDs []uint) (*services.ActiveTagIDsResult, e
 	return a.videoService.FilterActiveTagIDs(tagIDs)
 }
 
+// FilterActivePersonIDs 剔除已不存在的人物 ID，返回保留的 ID 与被剔除的数量（与 FilterActiveTagIDs 同语义）。
+func (a *App) FilterActivePersonIDs(personIDs []uint) (*services.ActivePersonIDsResult, error) {
+	return a.videoService.FilterActivePersonIDs(personIDs)
+}
+
 // ListStaleReasonCounts 返回路径失效记录按原因的计数，空原因归入 unknown。
 func (a *App) ListStaleReasonCounts() (map[string]int, error) {
 	counts, err := a.videoService.ListStaleReasonCounts()

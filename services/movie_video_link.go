@@ -57,6 +57,12 @@ const (
 	libraryScoreYear  = 10
 )
 
+// 编译期断言：榜单服务同时是视频已看观察者与片单来源观察者，接口改名会在这里报错。
+var (
+	_ WatchStateObserver          = (*MovieChartService)(nil)
+	_ watchlistDoubanBindObserver = (*MovieChartService)(nil)
+)
+
 // SetLinkedVideoWatchSetter 注入「榜单侧改已看之后回写关联视频」的实现（接线项）。
 // 传 nil 表示不回写。
 func (s *MovieChartService) SetLinkedVideoWatchSetter(setter LinkedVideoWatchSetter) {
@@ -166,23 +172,63 @@ func normalizeLibraryTitle(text string) string {
 	return builder.String()
 }
 
+// LibraryMatchQuery 是批量建议里的一个查询。
+type LibraryMatchQuery struct {
+	Title string `json:"title"`
+	Year  int    `json:"year"`
+}
+
+// LibraryMatchKey 是批量结果的键：原样的片名加年份，前端用同样的拼法取回自己的那一份。
+func LibraryMatchKey(title string, year int) string {
+	return title + "|" + strconv.Itoa(year)
+}
+
 // SuggestLibraryMatches 给出片库里可能就是这部片的视频，最多 5 条，只读。
+// 是批量接口的单条特例，规则见 SuggestLibraryMatchesBatch。
+func (s *MovieChartService) SuggestLibraryMatches(title string, year int) ([]LibraryMatchSuggestion, error) {
+	result, err := s.SuggestLibraryMatchesBatch([]LibraryMatchQuery{{Title: title, Year: year}})
+	if err != nil {
+		return nil, err
+	}
+	return result[LibraryMatchKey(title, year)], nil
+}
+
+// SuggestLibraryMatchesBatch 一次扫描片库匹配多个查询（榜单一页几十部片，逐条扫会
+// 把片库扫几十遍），返回 LibraryMatchKey(title, year) → 建议列表；每个查询都有键，
+// 没有命中或片名规范化后为空时是空列表。只读、只看活跃且未失效的视频。
 //
 // 匹配 display_title / original_title / 去扩展名的 name 三个字段，规范化之后**完全
-// 相等或以查询词为前缀**才算命中；同一视频取三个字段里最高的分。年份已知（> 0）且
-// 文件名含该年份时加分。只看活跃且未失效的视频：软删的、路径失效的都不该被建议。
-func (s *MovieChartService) SuggestLibraryMatches(title string, year int) ([]LibraryMatchSuggestion, error) {
+// 相等或以查询词为前缀**才算命中；同一视频取三个字段里最高的分，最多 5 条。年份已知
+// （> 0）且文件名含该年份时加分。
+func (s *MovieChartService) SuggestLibraryMatchesBatch(queries []LibraryMatchQuery) (map[string][]LibraryMatchSuggestion, error) {
 	if s == nil {
 		return nil, errors.New("年度榜单服务不可用")
 	}
-	query := normalizeLibraryTitle(title)
-	suggestions := make([]LibraryMatchSuggestion, 0, librarySuggestLimit)
-	if query == "" {
-		return suggestions, nil
+	type compiled struct {
+		key      string
+		query    string
+		yearText string
 	}
-	yearText := ""
-	if year > 0 {
-		yearText = strconv.Itoa(year)
+	result := make(map[string][]LibraryMatchSuggestion, len(queries))
+	active := make([]compiled, 0, len(queries))
+	for _, q := range queries {
+		key := LibraryMatchKey(q.Title, q.Year)
+		if _, seen := result[key]; seen {
+			continue
+		}
+		result[key] = make([]LibraryMatchSuggestion, 0, librarySuggestLimit)
+		normalized := normalizeLibraryTitle(q.Title)
+		if normalized == "" {
+			continue
+		}
+		c := compiled{key: key, query: normalized}
+		if q.Year > 0 {
+			c.yearText = strconv.Itoa(q.Year)
+		}
+		active = append(active, c)
+	}
+	if len(active) == 0 {
+		return result, nil
 	}
 
 	var batch []models.Video
@@ -191,48 +237,63 @@ func (s *MovieChartService) SuggestLibraryMatches(title string, year int) ([]Lib
 		Where("is_stale = ?", false).
 		FindInBatches(&batch, 1000, func(_ *gorm.DB, _ int) error {
 			for _, video := range batch {
-				score := libraryMatchScore(query, video)
-				if score == 0 {
-					continue
+				fields := libraryMatchFields(video)
+				for _, c := range active {
+					score := libraryMatchScoreFields(c.query, fields)
+					if score == 0 {
+						continue
+					}
+					if c.yearText != "" && strings.Contains(video.Name, c.yearText) {
+						score += libraryScoreYear
+					}
+					result[c.key] = append(result[c.key], LibraryMatchSuggestion{
+						VideoID:      video.ID,
+						Name:         video.Name,
+						DisplayTitle: video.DisplayTitle,
+						Score:        score,
+					})
 				}
-				if yearText != "" && strings.Contains(video.Name, yearText) {
-					score += libraryScoreYear
-				}
-				suggestions = append(suggestions, LibraryMatchSuggestion{
-					VideoID:      video.ID,
-					Name:         video.Name,
-					DisplayTitle: video.DisplayTitle,
-					Score:        score,
-				})
 			}
 			return nil
 		}).Error
 	if err != nil {
 		return nil, fmt.Errorf("匹配片库失败: %w", err)
 	}
-	sort.SliceStable(suggestions, func(i, j int) bool {
-		if suggestions[i].Score != suggestions[j].Score {
-			return suggestions[i].Score > suggestions[j].Score
+	for key, suggestions := range result {
+		sort.SliceStable(suggestions, func(i, j int) bool {
+			if suggestions[i].Score != suggestions[j].Score {
+				return suggestions[i].Score > suggestions[j].Score
+			}
+			return suggestions[i].VideoID < suggestions[j].VideoID
+		})
+		if len(suggestions) > librarySuggestLimit {
+			suggestions = suggestions[:librarySuggestLimit]
 		}
-		return suggestions[i].VideoID < suggestions[j].VideoID
-	})
-	if len(suggestions) > librarySuggestLimit {
-		suggestions = suggestions[:librarySuggestLimit]
+		result[key] = suggestions
 	}
-	return suggestions, nil
+	return result, nil
 }
 
-// libraryMatchScore 返回视频三个可比字段里的最高匹配分，没有命中返回 0。
-func libraryMatchScore(query string, video models.Video) int {
-	best := 0
+// libraryMatchFields 返回视频三个可比字段的规范化形式（空的已剔除）。
+func libraryMatchFields(video models.Video) []string {
+	fields := make([]string, 0, 3)
 	for _, candidate := range []string{
 		video.DisplayTitle,
 		video.OriginalTitle,
 		strings.TrimSuffix(video.Name, filepath.Ext(video.Name)),
 	} {
-		normalized := normalizeLibraryTitle(candidate)
+		if normalized := normalizeLibraryTitle(candidate); normalized != "" {
+			fields = append(fields, normalized)
+		}
+	}
+	return fields
+}
+
+// libraryMatchScoreFields 返回规范化字段里的最高匹配分，没有命中返回 0。
+func libraryMatchScoreFields(query string, fields []string) int {
+	best := 0
+	for _, normalized := range fields {
 		switch {
-		case normalized == "":
 		case normalized == query:
 			best = max(best, libraryScoreExact)
 		case strings.HasPrefix(normalized, query):
@@ -329,6 +390,35 @@ func (s *MovieChartService) OnWatchlistDoubanBound(entryID uint, doubanID, title
 	if err := s.bindWatchlistEntry(entryID, doubanID, title, year); err != nil {
 		log.Printf("[MovieChart] watchlist bound douban=%s entry=%d err=%v", doubanID, entryID, err)
 	}
+}
+
+// OnWatchlistSourceChanged 实现 watchlistDoubanBindObserver：条目的来源 ID 变了，仍认领着
+// 该条目、但豆瓣 ID 与新来源不一致的 want 标记必须释放（mark 清空、认领归零），否则旧
+// 标记（如误匹配的 1984 版）之后被取消想看时会把这条已改选成 2021 版的条目删掉。
+// newDoubanID 为空表示改选到了非豆瓣来源，此时该条目名下所有 want 都释放。
+func (s *MovieChartService) OnWatchlistSourceChanged(entryID uint, newDoubanID string) {
+	if s == nil {
+		return
+	}
+	if err := s.releaseWantMarksOfEntry(entryID, newDoubanID); err != nil {
+		log.Printf("[MovieChart] watchlist source changed entry=%d err=%v", entryID, err)
+	}
+}
+
+func (s *MovieChartService) releaseWantMarksOfEntry(entryID uint, newDoubanID string) error {
+	s.markMu.Lock()
+	defer s.markMu.Unlock()
+	err := s.db.Model(&models.MovieChartMark{}).
+		Where("mark = ? AND watchlist_entry_id = ? AND douban_id <> ?", models.MovieChartMarkWant, entryID, newDoubanID).
+		Updates(map[string]any{
+			"mark":               "",
+			"watchlist_entry_id": 0,
+			"updated_at":         s.now(),
+		}).Error
+	if err != nil {
+		return fmt.Errorf("释放旧想看标记失败: %w", err)
+	}
+	return nil
 }
 
 func (s *MovieChartService) bindWatchlistEntry(entryID uint, doubanID, title string, year int) error {

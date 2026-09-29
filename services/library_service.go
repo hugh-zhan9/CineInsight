@@ -42,12 +42,16 @@ const (
 	StaleReasonUnknown = "unknown"
 )
 
+// hasEmbeddedSubtitleSQL 是「探测到内嵌字幕流」的唯一判定式；内嵌字幕流的类型字面值全仓只在此出现。
+// 注意：设计文档写的是 media_streams.codec_type，实际列是 stream_type。
+const hasEmbeddedSubtitleSQL = `EXISTS (SELECT 1 FROM media_streams ms WHERE ms.video_id = videos.id AND ms.stream_type = 'subtitle')`
+
 // hasAnySubtitleSQL 是「有字幕」的唯一判定式（D-PC17）：字幕索引有片段、同目录有旁挂字幕，
 // 或探测到内嵌字幕流。「无字幕」视图取它的反面，Jellyfin 的 HasSubtitles 也应复用它，
 // 不得各自再写一份。列名全部限定，可以直接嵌进任何以 videos 为外层的查询（PG 的 42702）。
-// 注意：设计文档写的是 media_streams.codec_type，实际列是 stream_type。
+// 旁挂字幕的文件系统判定见 subtitle_sidecar.go，has_sidecar 列由它写入。
 const hasAnySubtitleSQL = `(EXISTS (SELECT 1 FROM subtitle_index_states sis WHERE sis.video_id = videos.id AND (sis.segment_count > 0 OR sis.has_sidecar))
-	OR EXISTS (SELECT 1 FROM media_streams ms WHERE ms.video_id = videos.id AND ms.stream_type = 'subtitle'))`
+	OR ` + hasEmbeddedSubtitleSQL + `)`
 
 const recentlyAddedWindow = 30 * 24 * time.Hour
 
@@ -342,7 +346,8 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	case LibraryViewRecentlyPlayed:
 		query = query.Where("videos.last_played_at IS NOT NULL")
 	case LibraryViewUntagged:
-		// 自动标签（人物/自动分类等）不算「已打标签」（D-PC33）。
+		// 带 automatic_kind 的自动分类标签不算「已打标签」（D-PC33）；人物已是独立实体（people 表），
+		// 本来就不在 video_tags 里，与这条判定无关。
 		query = query.Where("NOT EXISTS (SELECT 1 FROM video_tags vt JOIN tags t ON t.id = vt.tag_id WHERE vt.video_id = videos.id AND COALESCE(t.automatic_kind, '') = '')")
 	case LibraryViewNoSubtitle:
 		query = query.Where("NOT " + hasAnySubtitleSQL)
@@ -528,6 +533,21 @@ func (s *VideoService) ListSavedLibraryViews() ([]models.SavedLibraryView, error
 // ErrSavedViewNameTaken 是保存视图重名时的错误，文案即错误码 saved_view_name_taken，前端按它映射提示。
 var ErrSavedViewNameTaken = errors.New("saved_view_name_taken")
 
+// savedViewNameConflict 识别保存视图名称的唯一键冲突。两个后端报错形状不同：Postgres 带索引名
+// idx_saved_library_views_name_active，SQLite 给出列 "saved_library_views.name"；
+// 若有人全局打开 gorm TranslateError，则统一成 gorm.ErrDuplicatedKey。
+func savedViewNameConflict(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	message := err.Error()
+	return strings.Contains(message, "idx_saved_library_views_name_active") ||
+		strings.Contains(message, "UNIQUE constraint failed: saved_library_views.name")
+}
+
 // buildSavedLibraryView 校验名称并把筛选条件规范化成保存视图行（新建与更新共用）。
 func buildSavedLibraryView(name string, input LibraryFilter) (models.SavedLibraryView, error) {
 	name = strings.TrimSpace(name)
@@ -564,6 +584,9 @@ func (s *VideoService) SaveLibraryView(input SavedLibraryViewInput) (*models.Sav
 		return nil, err
 	}
 	if err := database.DB.Create(&view).Error; err != nil {
+		if savedViewNameConflict(err) {
+			return nil, ErrSavedViewNameTaken
+		}
 		return nil, fmt.Errorf("保存视图失败: %w", err)
 	}
 	return &view, nil
@@ -598,6 +621,10 @@ func (s *VideoService) UpdateSavedLibraryView(id uint, name string, filter Libra
 	}
 	result := database.DB.Model(&models.SavedLibraryView{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {
+		// 上面的重名预检与更新之间有竞态：并发改名撞上唯一键时同样映射成 saved_view_name_taken。
+		if savedViewNameConflict(result.Error) {
+			return nil, ErrSavedViewNameTaken
+		}
 		return nil, fmt.Errorf("更新视图失败: %w", result.Error)
 	}
 	if result.RowsAffected != 1 {
@@ -617,7 +644,8 @@ type ActiveTagIDsResult struct {
 }
 
 // activeTagIDs 过滤掉不存在或已软删的标签 ID（D-PC35），返回保留的 ID（去重、升序）与被剔除的数量。
-// 保存视图、应用保存视图、Jellyfin 标签组查询都用它，不各自再写一份。
+// 目前唯一的调用方是桌面入口 FilterActiveTagIDs：前端保存或应用视图前经它剔除失效标签；
+// 服务端的保存/应用路径本身不调用它（视图 JSON 保留原 ID，是否忽略由前端据返回值决定）。
 func activeTagIDs(ids []uint) ([]uint, int, error) {
 	wanted := uniqueUintIDs(ids)
 	sort.Slice(wanted, func(i, j int) bool { return wanted[i] < wanted[j] })
@@ -639,6 +667,37 @@ func (s *VideoService) FilterActiveTagIDs(ids []uint) (*ActiveTagIDsResult, erro
 		return nil, err
 	}
 	return &ActiveTagIDsResult{TagIDs: active, Dropped: dropped}, nil
+}
+
+// ActivePersonIDsResult 是 FilterActivePersonIDs 的返回：保留下来的人物 ID 与被剔除的数量。
+type ActivePersonIDsResult struct {
+	PersonIDs []uint `json:"person_ids"`
+	Dropped   int    `json:"dropped"`
+}
+
+// activePersonIDs 与 activeTagIDs 同构：过滤掉已不存在的人物 ID，返回保留的 ID（去重、升序）与被剔除的数量。
+// 删除人物后保存视图仍保留原 ID，应用视图前用它把失效条件忽略掉并提示数量。
+func activePersonIDs(ids []uint) ([]uint, int, error) {
+	wanted := uniqueUintIDs(ids)
+	sort.Slice(wanted, func(i, j int) bool { return wanted[i] < wanted[j] })
+	if len(wanted) == 0 {
+		return []uint{}, 0, nil
+	}
+	active := make([]uint, 0, len(wanted))
+	if err := database.DB.Model(&models.Person{}).Where("id IN ?", wanted).Order("id ASC").Pluck("id", &active).Error; err != nil {
+		return nil, 0, fmt.Errorf("加载人物失败: %w", err)
+	}
+	return active, len(wanted) - len(active), nil
+}
+
+// FilterActivePersonIDs 是 activePersonIDs 的桌面入口：前端应用保存视图前调用，
+// 用返回的 Dropped 提示「N 个条件已失效」。
+func (s *VideoService) FilterActivePersonIDs(ids []uint) (*ActivePersonIDsResult, error) {
+	active, dropped, err := activePersonIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	return &ActivePersonIDsResult{PersonIDs: active, Dropped: dropped}, nil
 }
 
 // ListStaleReasonCounts 返回失效记录按原因的计数（D-PC06），空原因归入 StaleReasonUnknown。
@@ -669,12 +728,9 @@ func (s *VideoService) ListStaleReasonCounts() (map[string]int, error) {
 
 // visibleVideoQuery 是「默认视图」的可见口径：扫描根之内、不在黑名单、非失效（D-PC06）。
 // 头部总数与洞察页总数共用它，保证与片库列表结果条对得上。
+// 直接复用 applyLibraryFilter 的默认视图条件（空筛选），不再单独维护一份规则。
 func visibleVideoQuery(query *gorm.DB) (*gorm.DB, error) {
-	query, err := applyScanRootScope(query)
-	if err != nil {
-		return nil, err
-	}
-	return query.Where("videos.is_stale = ?", false), nil
+	return applyLibraryFilter(query, LibraryFilter{}, time.Now())
 }
 
 // SearchLibraryVideoPage provides stable pagination for balanced and nullable rating sorts.

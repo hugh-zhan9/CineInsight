@@ -42,7 +42,6 @@ var (
 	ErrConversionNotFound   = errors.New("conversion_not_found")
 	ErrConversionNotApplied = errors.New("conversion_not_applied")
 	ErrTagNameTaken         = errors.New("tag_name_taken")
-	ErrTagGone              = errors.New("tag_gone")
 )
 
 const conversionIDChunk = 500
@@ -196,33 +195,21 @@ func tagPersonMediaIDs(tx *gorm.DB, relTable, mediaColumn, mediaTable string, ta
 	return ids, err
 }
 
-// insertNewPersonRelations 只插入人物尚未拥有的关系，并返回真正新插入的媒体 ID。
+// insertNewPersonRelations 插入人物的关系并返回**本次真正新增**的媒体 ID：以 INSERT 的
+// RowsAffected 为准（ON CONFLICT DO NOTHING 命中已有行时为 0），不先查再插——先查后插在
+// 并发下会把别人刚加的关系记成本次新增，撤销时误删。
 func insertNewPersonRelations(tx *gorm.DB, table, mediaColumn string, personID uint, mediaIDs []uint) ([]uint, error) {
-	existing := make(map[uint]struct{})
-	for _, chunk := range chunkUintIDs(mediaIDs, conversionIDChunk) {
-		if len(chunk) == 0 {
-			continue
-		}
-		var found []uint
-		if err := tx.Table(table).Where("person_id = ? AND "+mediaColumn+" IN ?", personID, chunk).
-			Pluck(mediaColumn, &found).Error; err != nil {
-			return nil, err
-		}
-		for _, id := range found {
-			existing[id] = struct{}{}
-		}
-	}
 	added := make([]uint, 0, len(mediaIDs))
 	now := time.Now()
 	for _, id := range mediaIDs {
-		if _, ok := existing[id]; ok {
-			continue
+		result := tx.Exec("INSERT INTO "+table+" ("+mediaColumn+", person_id, created_at) VALUES (?, ?, ?) ON CONFLICT ("+mediaColumn+", person_id) DO NOTHING",
+			id, personID, now)
+		if result.Error != nil {
+			return nil, result.Error
 		}
-		if err := tx.Exec("INSERT INTO "+table+" ("+mediaColumn+", person_id, created_at) VALUES (?, ?, ?) ON CONFLICT ("+mediaColumn+", person_id) DO NOTHING",
-			id, personID, now).Error; err != nil {
-			return nil, err
+		if result.RowsAffected == 1 {
+			added = append(added, id)
 		}
-		added = append(added, id)
 	}
 	return added, nil
 }
@@ -230,7 +217,25 @@ func insertNewPersonRelations(tx *gorm.DB, table, mediaColumn string, personID u
 // SetAvatarRemover 注入删除托管头像文件的能力：撤销转换可能删掉新建的人物及其头像，
 // 而 TagService 自己不持有托管图片目录。未注入时不动文件（只留下一张孤立头像）。
 func (s *TagService) SetAvatarRemover(remove func(relativePath string) error) {
+	s.avatarMu.Lock()
+	defer s.avatarMu.Unlock()
 	s.removeAvatar = remove
+}
+
+// SetAvatarRemoverIfUnset 只在尚未注入时注入。正式做法是构造/启动时注入一次（P-029 接线项）；
+// 在那之前 App 的撤销入口用它兜底，既不改写已注入的实现，也不与撤销并发写同一个字段。
+func (s *TagService) SetAvatarRemoverIfUnset(remove func(relativePath string) error) {
+	s.avatarMu.Lock()
+	defer s.avatarMu.Unlock()
+	if s.removeAvatar == nil {
+		s.removeAvatar = remove
+	}
+}
+
+func (s *TagService) avatarRemover() func(relativePath string) error {
+	s.avatarMu.RLock()
+	defer s.avatarMu.RUnlock()
+	return s.removeAvatar
 }
 
 // TagPersonConversionUndoResult 是撤销后的回执，供前端刷新标签与人物列表。
@@ -267,8 +272,10 @@ func (s *TagService) UndoTagPersonConversion(conversionID uint) (*TagPersonConve
 		// ② 还原标签。标签行仍是活跃的，说明期间有人用同名重新建过（会复活同一行）。
 		var tag models.Tag
 		if err := tx.Unscoped().First(&tag, record.TagID).Error; err != nil {
+			// 标签行已不在：软删行被同名的新建或改名硬删了（updateTag 的既有行为），对撤销
+			// 来说与「名字被占用」是同一件事，用契约内的错误码。
 			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrTagGone
+				return ErrTagNameTaken
 			}
 			return err
 		}
@@ -351,8 +358,8 @@ func (s *TagService) UndoTagPersonConversion(conversionID uint) (*TagPersonConve
 	if err != nil {
 		return nil, err
 	}
-	if orphanAvatar != "" && s.removeAvatar != nil {
-		if err := s.removeAvatar(orphanAvatar); err != nil {
+	if remove := s.avatarRemover(); orphanAvatar != "" && remove != nil {
+		if err := remove(orphanAvatar); err != nil {
 			log.Printf("撤销标签转人物后清理头像失败: %v", err)
 		}
 	}
@@ -361,17 +368,19 @@ func (s *TagService) UndoTagPersonConversion(conversionID uint) (*TagPersonConve
 
 // TagPersonConversionRecord 是「最近转换」列表的一行。
 type TagPersonConversionRecord struct {
-	ID            uint       `json:"id"`
-	TagID         uint       `json:"tag_id"`
-	TagName       string     `json:"tag_name"`
-	PersonID      uint       `json:"person_id"`
-	PersonName    string     `json:"person_name"`
-	PersonCreated bool       `json:"person_created"`
-	VideoCount    int        `json:"video_count"`
-	ImageCount    int        `json:"image_count"`
-	State         string     `json:"state"`
-	CreatedAt     time.Time  `json:"created_at" ts_type:"string"`
-	UndoneAt      *time.Time `json:"undone_at" ts_type:"string"`
+	ID            uint   `json:"id"`
+	TagID         uint   `json:"tag_id"`
+	TagName       string `json:"tag_name"`
+	PersonID      uint   `json:"person_id"`
+	PersonName    string `json:"person_name"`
+	PersonCreated bool   `json:"person_created"`
+	VideoCount    int    `json:"video_count"`
+	ImageCount    int    `json:"image_count"`
+	State         string `json:"state"`
+	// Undoable 为 true 表示现在撤销能成功：记录仍是 applied，标签行还在回收态、且没有同名活跃标签。
+	Undoable  bool       `json:"undoable"`
+	CreatedAt time.Time  `json:"created_at" ts_type:"string"`
+	UndoneAt  *time.Time `json:"undone_at" ts_type:"string"`
 }
 
 // ListTagPersonConversions 按时间倒序返回最近的转换记录（默认 20，上限 100）。
@@ -394,8 +403,14 @@ func (s *TagService) ListTagPersonConversions(limit int) ([]TagPersonConversionR
 			State: row.State, CreatedAt: row.CreatedAt, UndoneAt: row.UndoneAt,
 		}
 		var tag models.Tag
-		if err := database.DB.Unscoped().Select("id", "name").First(&tag, row.TagID).Error; err == nil {
+		if err := database.DB.Unscoped().Select("id", "name", "deleted_at").First(&tag, row.TagID).Error; err == nil {
 			record.TagName = tag.Name
+			if row.State == models.TagPersonConversionApplied && tag.DeletedAt.IsValid() {
+				var taken int64
+				if err := database.DB.Model(&models.Tag{}).Where("name = ? AND id <> ?", tag.Name, tag.ID).Count(&taken).Error; err == nil {
+					record.Undoable = taken == 0
+				}
+			}
 		}
 		var person models.Person
 		if err := database.DB.Select("id", "display_name").First(&person, row.PersonID).Error; err == nil {

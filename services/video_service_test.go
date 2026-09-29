@@ -1422,6 +1422,9 @@ func TestPlayVideoMissingFileReturnsReconcileResultAndMarksStale(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
 	root := t.TempDir()
+	// 播放失败会启动后台重定位 goroutine，它还在读库时临时目录已被清理会偶发失败（基线里出现过一次）：
+	// 后注册的 Cleanup 先执行，等它结束。
+	t.Cleanup(playbackRelocateWG.Wait)
 	videoPath := filepath.Join(root, "missing.mp4")
 
 	video := models.Video{Name: "missing.mp4", Path: videoPath, Directory: root, Size: 1}

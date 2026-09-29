@@ -184,6 +184,7 @@ func TestPlaybackProxyRealShortFeedRouteServesProxyBytes(t *testing.T) {
 	// 发过去（#7）。发过去只会得到一个放不出来的黑框，还白占流量。
 	before := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, target, nil)
+	request.Host = "127.0.0.1"
 	request.RemoteAddr = "127.0.0.1:12345"
 	handler.ServeHTTP(before, request)
 	if before.Code != http.StatusNotFound {
@@ -202,6 +203,7 @@ func TestPlaybackProxyRealShortFeedRouteServesProxyBytes(t *testing.T) {
 	feed.invalidateCandidates()
 	after := httptest.NewRecorder()
 	request = httptest.NewRequest(http.MethodGet, target, nil)
+	request.Host = "127.0.0.1"
 	request.RemoteAddr = "127.0.0.1:12345"
 	handler.ServeHTTP(after, request)
 	if after.Code != http.StatusOK {
@@ -344,6 +346,7 @@ func TestPlaybackProxyRealShortFeedRouteSupportsRange(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/short-media/video/%d", video.ID), nil)
+	request.Host = "127.0.0.1"
 	request.RemoteAddr = "127.0.0.1:12345"
 	request.Header.Set("Range", "bytes=100-199")
 	server.Handler().ServeHTTP(recorder, request)

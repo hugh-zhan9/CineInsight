@@ -461,6 +461,11 @@ func (s *VideoService) ListStagedSources() ([]models.MigrationStagedSource, erro
 	pending := make([]models.MigrationStagedSource, 0, len(rows))
 	for _, row := range rows {
 		if _, err := os.Lstat(row.StagedPath); errors.Is(err, os.ErrNotExist) {
+			if !filePathOnline(row.StagedPath) {
+				// 卷离线（或所在目录读不到）不是「文件没了」：保持 pending，等卷回来再对账（I1）。
+				pending = append(pending, row)
+				continue
+			}
 			if markErr := markStagedSourceCleaned(row.ID); markErr != nil {
 				return nil, markErr
 			}
@@ -511,6 +516,21 @@ func (s *VideoService) DeleteStagedSources(ids []uint) (*StagedSourceDeleteResul
 			continue
 		}
 		info, err := os.Lstat(row.StagedPath)
+		if err == nil {
+			// 删除前复核体积与登记时一致：不一致说明这个路径上的内容已被换过，不能删（Minor 9）。
+			actual := info.Size()
+			if info.IsDir() {
+				actual = directoryFileBytes(row.StagedPath)
+			}
+			if actual != row.Size {
+				result.Failed = append(result.Failed, StagedSourceFailure{ID: row.ID, Error: "暂存文件的大小与登记时不一致，已拒绝删除"})
+				continue
+			}
+		} else if errors.Is(err, os.ErrNotExist) && !filePathOnline(row.StagedPath) {
+			// 卷离线不是「文件没了」：不置 cleaned（I1）。
+			result.Failed = append(result.Failed, StagedSourceFailure{ID: row.ID, Error: "文件所在磁盘当前不可访问，未做任何改动"})
+			continue
+		}
 		if err == nil {
 			if info.IsDir() {
 				err = os.RemoveAll(row.StagedPath)

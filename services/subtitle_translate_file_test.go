@@ -446,7 +446,7 @@ func TestTranslateSubtitleFileCancelWhileWaitingForSubtitleLock(t *testing.T) {
 
 	// 占住这个视频的字幕文件锁（现实里是同一视频的字幕生成正在跑），让翻译卡在等锁。
 	// 这是包级条带锁，中途 t.Fatal 会把它永久锁死，所以释放走一个幂等的闭包。
-	unlock := lockSubtitleFile(videoID)
+	unlock := lockSubtitleFile(srtPath)
 	released := false
 	releaseLock := func() {
 		if !released {

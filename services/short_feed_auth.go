@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"path"
 	"strings"
 	"sync"
@@ -19,7 +21,6 @@ import (
 	"video-master/models"
 
 	"golang.org/x/crypto/bcrypt"
-	"gorm.io/gorm"
 )
 
 // 手机端访问控制（D-PC45，详细设计 §8.6）。
@@ -46,6 +47,17 @@ const (
 	shortFeedAuthFailureWindow = 10 * time.Minute
 	// 登录请求体上限：一个 PIN 最多几十字节。
 	shortFeedAuthBodyLimit int64 = 1 << 10
+
+	// 全局失败预算：所有来源合计，滚动 1 分钟内最多 20 次进入比对。换源地址（多网卡、
+	// IPv6 隐私地址轮换、多台设备）也绕不过这一条。超出后全局冷却 60 秒起逐次翻倍、
+	// 上限 15 分钟，一次成功登录后重置。已登录会话不受影响。
+	shortFeedGlobalFailureBudget = 20
+	shortFeedGlobalWindow        = time.Minute
+	shortFeedGlobalCooldownBase  = 60 * time.Second
+	shortFeedGlobalCooldownMax   = 15 * time.Minute
+
+	// 失败计数表容量上限：超出时淘汰最旧的条目，表不会被伪造来源撑爆。
+	shortFeedFailureTableCap = 1024
 )
 
 var (
@@ -76,10 +88,19 @@ type shortFeedFailure struct {
 	lockedUntil time.Time
 }
 
+// shortFeedAuth 的两把锁互不嵌套：mu 只保护会话表，failMu 只保护失败计数与全局预算。
+// 会话校验（每个数据请求都走）因此不会被失败表上的登录请求拖慢。
 type shortFeedAuth struct {
 	mu       sync.Mutex
 	sessions map[string]shortFeedSession
+
+	failMu   sync.Mutex
 	failures map[string]*shortFeedFailure
+	// globalAttempts 是滚动窗口内进入比对的时刻；globalLockedUntil 是全局冷却截止；
+	// globalLevel 是已经触发过几次冷却（决定下一次冷却时长）。
+	globalAttempts    []time.Time
+	globalLockedUntil time.Time
+	globalLevel       int
 }
 
 func newShortFeedAuth() *shortFeedAuth {
@@ -144,16 +165,28 @@ func (a *shortFeedAuth) revokeAll() {
 	a.mu.Unlock()
 }
 
+// globalCooldownLocked 返回全局冷却的剩余秒数；不在冷却中返回 0。调用方持有 failMu。
+func (a *shortFeedAuth) globalCooldownLocked(now time.Time) int {
+	if a.globalLockedUntil.After(now) {
+		return shortFeedRetryAfter(a.globalLockedUntil, now)
+	}
+	return 0
+}
+
 // beginAttempt 在比较 PIN 之前先「预扣」一次机会：并发的猜测请求不能借着「结果还没回来、
-// 失败还没记账」绕过 5 次上限。成功登录会清空这个 IP 的计数。
-func (a *shortFeedAuth) beginAttempt(ip string, now time.Time) (retryAfter int, allowed bool) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	entry := a.failures[ip]
+// 失败还没记账」绕过上限。key 是归一后的来源键（见 shortFeedClientKey）。
+// 依次检查：全局冷却 → 该来源的锁定与次数 → 全局预算。成功登录会清空该来源的计数与全局状态。
+func (a *shortFeedAuth) beginAttempt(key string, now time.Time) (retryAfter int, allowed bool) {
+	a.failMu.Lock()
+	defer a.failMu.Unlock()
+	if remaining := a.globalCooldownLocked(now); remaining > 0 {
+		return remaining, false
+	}
+	entry := a.failures[key]
 	if entry == nil {
+		a.evictFailuresLocked(now)
 		entry = &shortFeedFailure{}
-		a.failures[ip] = entry
-		a.pruneFailuresLocked(now)
+		a.failures[key] = entry
 	}
 	if entry.lockedUntil.After(now) {
 		return shortFeedRetryAfter(entry.lockedUntil, now), false
@@ -166,16 +199,40 @@ func (a *shortFeedAuth) beginAttempt(ip string, now time.Time) (retryAfter int, 
 		entry.lockedUntil = now.Add(shortFeedAuthLockout)
 		return shortFeedRetryAfter(entry.lockedUntil, now), false
 	}
+
+	// 全局预算：窗口外的旧记录先丢掉。
+	kept := a.globalAttempts[:0]
+	for _, at := range a.globalAttempts {
+		if now.Sub(at) < shortFeedGlobalWindow {
+			kept = append(kept, at)
+		}
+	}
+	a.globalAttempts = kept
+	if len(a.globalAttempts) >= shortFeedGlobalFailureBudget {
+		cooldown := shortFeedGlobalCooldownBase
+		for i := 0; i < a.globalLevel && cooldown < shortFeedGlobalCooldownMax; i++ {
+			cooldown *= 2
+		}
+		if cooldown > shortFeedGlobalCooldownMax {
+			cooldown = shortFeedGlobalCooldownMax
+		}
+		a.globalLevel++
+		a.globalLockedUntil = now.Add(cooldown)
+		a.globalAttempts = nil
+		return shortFeedRetryAfter(a.globalLockedUntil, now), false
+	}
+	a.globalAttempts = append(a.globalAttempts, now)
+
 	entry.attempts++
 	entry.lastAttempt = now
 	return 0, true
 }
 
-// failedAttempt 记录一次失败结果；返回这次失败是否已经触发锁定。
-func (a *shortFeedAuth) failedAttempt(ip string, now time.Time) (locked bool, retryAfter int) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	entry := a.failures[ip]
+// failedAttempt 记录一次失败结果；返回这次失败是否已经触发该来源的锁定。
+func (a *shortFeedAuth) failedAttempt(key string, now time.Time) (locked bool, retryAfter int) {
+	a.failMu.Lock()
+	defer a.failMu.Unlock()
+	entry := a.failures[key]
 	if entry == nil {
 		return false, 0
 	}
@@ -188,24 +245,44 @@ func (a *shortFeedAuth) failedAttempt(ip string, now time.Time) (locked bool, re
 	return false, 0
 }
 
-func (a *shortFeedAuth) succeeded(ip string) {
-	a.mu.Lock()
-	delete(a.failures, ip)
-	a.mu.Unlock()
+// succeeded 一次成功登录：清掉该来源的计数，并重置全局预算与冷却档位。
+func (a *shortFeedAuth) succeeded(key string) {
+	a.failMu.Lock()
+	delete(a.failures, key)
+	a.globalAttempts = nil
+	a.globalLockedUntil = time.Time{}
+	a.globalLevel = 0
+	a.failMu.Unlock()
 }
 
-// pruneFailuresLocked 只在新增条目时顺手清一遍过期项，避免表无界增长。
-func (a *shortFeedAuth) pruneFailuresLocked(now time.Time) {
-	if len(a.failures) < 256 {
+// evictFailuresLocked 在新增条目前保证表未满：先清过期项，仍满则淘汰最旧的（优先淘汰
+// 未在锁定中的）。表大小恒不超过 shortFeedFailureTableCap。
+func (a *shortFeedAuth) evictFailuresLocked(now time.Time) {
+	if len(a.failures) < shortFeedFailureTableCap {
 		return
 	}
-	for ip, entry := range a.failures {
+	for key, entry := range a.failures {
 		if entry.lockedUntil.After(now) {
 			continue
 		}
 		if now.Sub(entry.lastAttempt) > shortFeedAuthFailureWindow {
-			delete(a.failures, ip)
+			delete(a.failures, key)
 		}
+	}
+	for len(a.failures) >= shortFeedFailureTableCap {
+		oldestKey := ""
+		var oldest *shortFeedFailure
+		oldestLocked := true
+		for key, entry := range a.failures {
+			locked := entry.lockedUntil.After(now)
+			switch {
+			case oldest == nil,
+				oldestLocked && !locked,
+				locked == oldestLocked && entry.lastAttempt.Before(oldest.lastAttempt):
+				oldestKey, oldest, oldestLocked = key, entry, locked
+			}
+		}
+		delete(a.failures, oldestKey)
 	}
 }
 
@@ -218,14 +295,27 @@ func shortFeedRetryAfter(until time.Time, now time.Time) int {
 	return seconds
 }
 
-// shortFeedClientIP 只信任 TCP 对端地址：服务前面没有反向代理，
-// X-Forwarded-For 之类的头是客户端自己写的，拿来当限次键等于没有限次。
-func shortFeedClientIP(remoteAddr string) string {
+// shortFeedClientKey 把 TCP 对端地址归一成限次键。只信任 TCP 对端：服务前面没有反向代理，
+// X-Forwarded-For 之类的头是客户端自己写的。端口不参与（同 IP 不同端口共享额度）；
+// IPv4-mapped IPv6 还原成 IPv4；其余 IPv6 按 /64 前缀归并（一台主机能轮换整段 /64）。
+func shortFeedClientKey(remoteAddr string) string {
 	host := remoteAddr
 	if h, _, err := net.SplitHostPort(remoteAddr); err == nil {
 		host = h
 	}
-	return host
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return host
+	}
+	addr = addr.WithZone("").Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, err := addr.Prefix(64)
+	if err != nil {
+		return addr.String()
+	}
+	return prefix.String()
 }
 
 func validateShortFeedPIN(pin string) error {
@@ -325,10 +415,8 @@ func (s *ShortFeedService) pinHash() (string, error) {
 		return "", errors.New("数据库未初始化")
 	}
 	var settings models.Settings
+	// 读不到设置行（含行不存在）一律报错：鉴权路径据此返回 503，不放行。
 	if err := database.DB.Select("short_feed_pin_hash").First(&settings).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", nil
-		}
 		return "", err
 	}
 	return settings.ShortFeedPINHash, nil
@@ -349,18 +437,33 @@ func (s *ShortFeedService) AccessStatus() (ShortFeedAccessStatus, error) {
 // shortFeedPublicPath 是不需要会话的路径全集：页面壳与静态资源（不含数据），
 // 以及登录两个入口。**默认拒绝**：不在这张表里的路径，包括今后新增的任何路由，
 // 在设了 PIN 之后一律要会话。
-func shortFeedPublicPath(rawPath string) bool {
-	p := path.Clean("/" + rawPath)
-	switch p {
+//
+// 保守判定：只有原始路径没有任何编码（RawPath 为空、解码后不含 % 与反斜杠）且已经是规范形态（不含 ..、//、.）
+// 时才可能公开；仅允许多一个结尾的 "/"。否则鉴权看到的路径与 mux 最终分派的路径可能
+// 不是同一个（%2F、%2e%2e、%252F），一律要求会话。
+func shortFeedPublicPath(u *url.URL) bool {
+	if u == nil || u.RawPath != "" {
+		return false
+	}
+	p := u.Path
+	// 解码后仍残留 % 或反斜杠说明请求里有二次编码（%252F）之类的花样；合法的页面与资源名没有这些。
+	if strings.ContainsAny(p, "%\\") {
+		return false
+	}
+	cleaned := path.Clean("/" + p)
+	if p != cleaned && p != cleaned+"/" {
+		return false
+	}
+	switch cleaned {
 	case "/short", "/short-api/auth", "/short-api/auth/status", "/assets":
 		return true
 	}
-	return strings.HasPrefix(p, "/assets/")
+	return strings.HasPrefix(cleaned, "/assets/")
 }
 
 // authorize 校验一个请求；返回 false 时已经写好响应。
 func (s *ShortFeedHTTPServer) authorize(w http.ResponseWriter, r *http.Request) bool {
-	if shortFeedPublicPath(r.URL.Path) {
+	if shortFeedPublicPath(r.URL) {
 		return true
 	}
 	hash, err := s.feed.pinHash()
@@ -436,7 +539,7 @@ func (s *ShortFeedHTTPServer) handleAuth(w http.ResponseWriter, r *http.Request)
 	}
 
 	auth := s.feed.authState()
-	ip := shortFeedClientIP(r.RemoteAddr)
+	ip := shortFeedClientKey(r.RemoteAddr)
 	now := s.feed.now()
 	if retryAfter, allowed := auth.beginAttempt(ip, now); !allowed {
 		writeShortFeedPINLocked(w, retryAfter)

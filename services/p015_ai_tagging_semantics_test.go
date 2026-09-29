@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -228,7 +229,8 @@ func TestApproveAITagCandidatesBatchPerItemResultMETA11(t *testing.T) {
 	}
 }
 
-// META-11：按筛选批准 —— 标签、最低置信度、关键字三项都在服务端解析，已删除视频不参与。
+// META-11：按筛选批准 —— 只支持 tag_id + 可选 confidence 精确匹配，已删除视频不参与，
+// 计数预览与实际批准数一致，空筛选拒绝执行。
 func TestApproveAITagCandidatesByFilterMETA11(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	tagA := p015Tag(t, "动作", "custom")
@@ -245,28 +247,41 @@ func TestApproveAITagCandidatesByFilterMETA11(t *testing.T) {
 	}
 
 	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
-	// 只要 high + 标签 A：只有 c1（c2 是 medium，c4 视频已删除）。
-	result, err := svc.ApproveCandidatesByFilter(AITagCandidateFilter{TagID: tagA.ID, MinConfidence: models.AITagConfidenceHigh})
+	// 空筛选拒绝：不能一键批准全部待审。
+	if _, err := svc.ApproveCandidatesByFilter(AITagCandidateFilter{}); !errors.Is(err, ErrAITagFilterTagRequired) {
+		t.Fatalf("空筛选应被拒绝: %v", err)
+	}
+	if _, err := svc.CountCandidatesByFilter(AITagCandidateFilter{}); !errors.Is(err, ErrAITagFilterTagRequired) {
+		t.Fatalf("空筛选计数也应被拒绝: %v", err)
+	}
+	// 计数预览：标签 A 下 c1(high) + c2(medium)，c4 视频已删除。
+	count, err := svc.CountCandidatesByFilter(AITagCandidateFilter{TagID: tagA.ID})
+	if err != nil || count != 2 {
+		t.Fatalf("预览应为 2: %d %v", count, err)
+	}
+	// 只要 high + 标签 A：只有 c1，预览与批准数一致。
+	filter := AITagCandidateFilter{TagID: tagA.ID, Confidence: models.AITagConfidenceHigh}
+	if count, err := svc.CountCandidatesByFilter(filter); err != nil || count != 1 {
+		t.Fatalf("high 预览应为 1: %d %v", count, err)
+	}
+	result, err := svc.ApproveCandidatesByFilter(filter)
 	if err != nil {
 		t.Fatalf("按筛选批准失败: %v", err)
 	}
 	if result.Requested != 1 || result.Succeeded != 1 || result.Results[0].ID != c1.ID {
 		t.Fatalf("筛选结果不符: %+v", result)
 	}
-	// 关键字命中视频名（下划线按字面量匹配，不是通配符）：alpha_ 只命中 alpha_one，而它已批准。
-	result, err = svc.ApproveCandidatesByFilter(AITagCandidateFilter{Query: "alpha_"})
-	if err != nil || result.Requested != 0 {
-		t.Fatalf("关键字筛选不应命中已处理或已删除的候选: %+v err=%v", result, err)
+	// 剩余：标签 A 的 medium。
+	count, _ = svc.CountCandidatesByFilter(AITagCandidateFilter{TagID: tagA.ID})
+	result, err = svc.ApproveCandidatesByFilter(AITagCandidateFilter{TagID: tagA.ID})
+	if err != nil || result.Succeeded != int(count) || count != 1 {
+		t.Fatalf("预览与批准数应一致: count=%d %+v err=%v", count, result, err)
 	}
-	// 空筛选 = 全部剩余可批准候选。
-	result, err = svc.ApproveCandidatesByFilter(AITagCandidateFilter{})
-	if err != nil || result.Requested != 2 || result.Succeeded != 2 {
-		t.Fatalf("空筛选应批准剩余待审: %+v err=%v", result, err)
+	if got := p015CandidateStatus(t, c2.ID); got != models.AITagCandidateStatusApproved {
+		t.Fatalf("c2 应 approved，实际 %s", got)
 	}
-	for _, id := range []uint{c2.ID, c3.ID} {
-		if got := p015CandidateStatus(t, id); got != models.AITagCandidateStatusApproved {
-			t.Fatalf("候选 %d 应 approved，实际 %s", id, got)
-		}
+	if got := p015CandidateStatus(t, c3.ID); got != models.AITagCandidateStatusPending {
+		t.Fatalf("其他标签的候选不应被批准，实际 %s", got)
 	}
 	if got := p015CandidateStatus(t, c4.ID); got != models.AITagCandidateStatusPending {
 		t.Fatalf("已删除视频的候选不应被批准，实际 %s", got)

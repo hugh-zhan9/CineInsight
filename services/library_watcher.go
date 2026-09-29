@@ -345,13 +345,26 @@ func (s *LibraryWatcherService) takeOfflineRootsLocked() []string {
 	return roots
 }
 
+// notifyOfflineRoots 在工作 goroutine 里标记离线根：标记要拿库的写锁，不能卡住监听事件循环（Minor 12）。
+// goroutine 计入 workerWG，Close 会等它结束；服务已停止时不再标记。
 func (s *LibraryWatcherService) notifyOfflineRoots(roots []string) {
-	if s.markRootOffline == nil {
+	if s.markRootOffline == nil || len(roots) == 0 {
 		return
 	}
-	for _, root := range roots {
-		s.markRootOffline(root)
+	s.mu.Lock()
+	if !s.running {
+		s.mu.Unlock()
+		return
 	}
+	s.workerWG.Add(1)
+	mark := s.markRootOffline
+	s.mu.Unlock()
+	go func() {
+		defer s.workerWG.Done()
+		for _, root := range roots {
+			mark(root)
+		}
+	}()
 }
 
 // patrolUnavailableRoots 巡检不可用的根：目录存在且卷已挂载就 RetryRoot（D-PC08）。

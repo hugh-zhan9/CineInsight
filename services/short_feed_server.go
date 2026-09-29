@@ -57,8 +57,7 @@ func NewShortFeedHTTPServer(feed *ShortFeedService, assets fs.FS, config ShortFe
 		assets: assets,
 		config: config,
 		status: ShortFeedServerStatus{
-			BindAddress:   config.BindAddress,
-			AllowedAccess: "loopback/private-lan/link-local only, no login",
+			BindAddress: config.BindAddress,
 		},
 	}
 }
@@ -78,7 +77,8 @@ func (s *ShortFeedHTTPServer) Start(ctx context.Context) {
 	selectedPort := 0
 	for port := s.config.PortStart; port <= s.config.PortEnd; port++ {
 		addr := net.JoinHostPort(s.config.BindAddress, strconv.Itoa(port))
-		listener, listenErr = net.Listen("tcp", addr)
+		// 只监听 IPv4：与只公布 IPv4 地址一致，也让限次键不会被 IPv6 地址轮换绕开。
+		listener, listenErr = net.Listen("tcp4", addr)
 		if listenErr == nil {
 			selectedPort = port
 			break
@@ -86,10 +86,9 @@ func (s *ShortFeedHTTPServer) Start(ctx context.Context) {
 	}
 	if listener == nil {
 		s.status = ShortFeedServerStatus{
-			Running:       false,
-			BindAddress:   s.config.BindAddress,
-			StartupError:  fmt.Sprintf("端口 %d 到 %d 都被占用或无法监听，请关闭占用这些端口的程序后重试（%v）", s.config.PortStart, s.config.PortEnd, listenErr),
-			AllowedAccess: "loopback/private-lan/link-local only, no login",
+			Running:      false,
+			BindAddress:  s.config.BindAddress,
+			StartupError: fmt.Sprintf("端口 %d 到 %d 都被占用或无法监听，请关闭占用这些端口的程序后重试（%v）", s.config.PortStart, s.config.PortEnd, listenErr),
 		}
 		s.mu.Unlock()
 		return
@@ -98,13 +97,12 @@ func (s *ShortFeedHTTPServer) Start(ctx context.Context) {
 	s.listener = listener
 	s.server = &http.Server{Handler: s.Handler()}
 	s.status = ShortFeedServerStatus{
-		Running:       true,
-		BindAddress:   s.config.BindAddress,
-		Port:          selectedPort,
-		URL:           fmt.Sprintf("http://127.0.0.1:%d/short/", selectedPort),
-		LANURLs:       shortFeedLANURLs(selectedPort),
-		FallbackUsed:  selectedPort != s.config.PortStart,
-		AllowedAccess: "loopback/private-lan/link-local only, no login",
+		Running:      true,
+		BindAddress:  s.config.BindAddress,
+		Port:         selectedPort,
+		URL:          fmt.Sprintf("http://127.0.0.1:%d/short/", selectedPort),
+		LANURLs:      shortFeedLANURLs(selectedPort),
+		FallbackUsed: selectedPort != s.config.PortStart,
 	}
 	server := s.server
 	s.mu.Unlock()
@@ -143,13 +141,104 @@ func (s *ShortFeedHTTPServer) Stop(ctx context.Context) error {
 
 func (s *ShortFeedHTTPServer) Status() ShortFeedServerStatus {
 	if s == nil {
-		return ShortFeedServerStatus{AllowedAccess: "loopback/private-lan/link-local only, no login"}
+		return ShortFeedServerStatus{AllowedAccess: shortFeedAccessNoPIN}
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	status := s.status
+	s.mu.RUnlock()
 	status.LANURLs = append([]string(nil), status.LANURLs...)
+	// 读库放在锁外：访问范围文案随 PIN 是否已设变化。
+	status.AllowedAccess = s.allowedAccessText()
 	return status
+}
+
+const (
+	shortFeedAccessNoPIN   = "loopback/private-lan/link-local only; no PIN set, anyone on the LAN can open it"
+	shortFeedAccessWithPIN = "loopback/private-lan/link-local only; PIN login required"
+)
+
+// allowedAccessText 如实描述当前的访问控制：设了 PIN 才是「需要登录」。
+func (s *ShortFeedHTTPServer) allowedAccessText() string {
+	if s.feed != nil {
+		if hash, err := s.feed.pinHash(); err == nil && hash != "" {
+			return shortFeedAccessWithPIN
+		}
+	}
+	return shortFeedAccessNoPIN
+}
+
+// PreferredLANURL 是当前首选的局域网访问地址（默认路由所在网卡排第一）；没有则返回空串。
+func (s *ShortFeedHTTPServer) PreferredLANURL() string {
+	status := s.Status()
+	if !status.Running || len(status.LANURLs) == 0 {
+		return ""
+	}
+	return status.LANURLs[0]
+}
+
+// listenPorts 是 Host 头允许携带的端口：已经在监听时只认实际端口，
+// 还没监听（Handler 被直接使用）时认配置的端口区间。
+func (s *ShortFeedHTTPServer) hostPortAllowed(port int) bool {
+	s.mu.RLock()
+	actual := s.status.Port
+	s.mu.RUnlock()
+	if actual > 0 {
+		return port == actual
+	}
+	return port >= s.config.PortStart && port <= s.config.PortEnd
+}
+
+// shortFeedHostAllowed 校验 Host 头（DNS 重绑定防线）：只接受 IP 字面量（环回、私网、
+// 链路本地）或 localhost，端口必须是监听端口；缺省端口按监听端口处理。
+func (s *ShortFeedHTTPServer) shortFeedHostAllowed(host string) bool {
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return false
+	}
+	name := host
+	port := 0
+	hasPort := false
+	parsePort := func(text string) bool {
+		n, err := strconv.Atoi(text)
+		if err != nil || n <= 0 || n > 65535 {
+			return false
+		}
+		port, hasPort = n, true
+		return true
+	}
+	switch {
+	case strings.HasPrefix(host, "["):
+		end := strings.Index(host, "]")
+		if end < 0 {
+			return false
+		}
+		name = host[1:end]
+		if rest := host[end+1:]; rest != "" {
+			if rest[0] != ':' || !parsePort(rest[1:]) {
+				return false
+			}
+		}
+	case strings.Count(host, ":") == 1:
+		idx := strings.Index(host, ":")
+		name = host[:idx]
+		if !parsePort(host[idx+1:]) {
+			return false
+		}
+	case strings.Contains(host, ":"):
+		// 未加方括号的 IPv6 不是合法的 Host 头。
+		return false
+	}
+	if hasPort && !s.hostPortAllowed(port) {
+		return false
+	}
+	if strings.EqualFold(name, "localhost") {
+		return true
+	}
+	addr, err := netip.ParseAddr(name)
+	if err != nil || addr.Zone() != "" {
+		return false
+	}
+	return addr.IsLoopback() || addr.IsPrivate() || addr.IsLinkLocalUnicast()
 }
 
 func (s *ShortFeedHTTPServer) Handler() http.Handler {
@@ -161,6 +250,11 @@ func (s *ShortFeedHTTPServer) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !shortFeedRemoteAllowed(r.RemoteAddr) {
 			writeShortFeedError(w, http.StatusForbidden, "forbidden_source", "short feed only accepts loopback or private LAN requests")
+			return
+		}
+		// Host 校验先于一切（含公开页面）：域名 Host 说明请求是经 DNS 重绑定进来的。
+		if !s.shortFeedHostAllowed(r.Host) {
+			writeShortFeedError(w, http.StatusMisdirectedRequest, "invalid_host", "不支持的访问地址")
 			return
 		}
 		// 鉴权在 mux 之外、按路径默认拒绝：今后新增的任何路由不必记得单独挂中间件，
@@ -256,19 +350,18 @@ func (s *ShortFeedHTTPServer) handleNext(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		status := http.StatusInternalServerError
 		code := "next_failed"
-		if errors.Is(err, ErrShortFeedNoEligibleVideos) {
-			status = http.StatusNotFound
-			code = "no_eligible_videos"
+		message := "获取内容失败"
+		switch {
+		case errors.Is(err, ErrShortFeedNoEligibleVideos):
+			status, code, message = http.StatusNotFound, "no_eligible_videos", "没有可播放的内容"
+		case strings.HasPrefix(err.Error(), "不支持的播放范围"):
+			status, code, message = http.StatusBadRequest, "invalid_scope", "不支持的播放范围"
+		case errors.Is(err, ErrShortFeedInvalidMediaFilter):
+			status, code, message = http.StatusBadRequest, "invalid_media", "不支持的资源类型"
+		default:
+			logShortFeedError("next", err)
 		}
-		if strings.HasPrefix(err.Error(), "不支持的播放范围") {
-			status = http.StatusBadRequest
-			code = "invalid_scope"
-		}
-		if errors.Is(err, ErrShortFeedInvalidMediaFilter) {
-			status = http.StatusBadRequest
-			code = "invalid_media"
-		}
-		writeShortFeedError(w, status, code, err.Error())
+		writeShortFeedError(w, status, code, message)
 		return
 	}
 	writeShortFeedJSON(w, http.StatusOK, dto)
@@ -282,10 +375,11 @@ func (s *ShortFeedHTTPServer) handleScopes(w http.ResponseWriter, r *http.Reques
 	scopes, err := s.feed.ScopeCountsFiltered(r.URL.Query().Get("media"))
 	if err != nil {
 		if errors.Is(err, ErrShortFeedInvalidMediaFilter) {
-			writeShortFeedError(w, http.StatusBadRequest, "invalid_media", err.Error())
+			writeShortFeedError(w, http.StatusBadRequest, "invalid_media", "不支持的资源类型")
 			return
 		}
-		writeShortFeedError(w, http.StatusInternalServerError, "scopes_failed", err.Error())
+		logShortFeedError("scopes", err)
+		writeShortFeedError(w, http.StatusInternalServerError, "scopes_failed", "获取播放范围失败")
 		return
 	}
 	writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"scopes": scopes})
@@ -302,7 +396,8 @@ func (s *ShortFeedHTTPServer) handleTags(w http.ResponseWriter, r *http.Request)
 		}
 		tags, err := s.feed.ListFeedTags(keyword)
 		if err != nil {
-			writeShortFeedError(w, http.StatusInternalServerError, "tags_failed", err.Error())
+			logShortFeedError("tags", err)
+			writeShortFeedError(w, http.StatusInternalServerError, "tags_failed", "获取标签失败")
 			return
 		}
 		writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"tags": tags})
@@ -330,7 +425,7 @@ func (s *ShortFeedHTTPServer) handleTags(w http.ResponseWriter, r *http.Request)
 			writeShortFeedError(w, http.StatusBadRequest, "automatic_tag", "该名称是系统自动标签，不能手动使用")
 		case err != nil:
 			// 数据库错误原文不回给局域网客户端。
-			log.Printf("[ShortFeed] create tag failed: %v", err)
+			logShortFeedError("create tag", err)
 			writeShortFeedError(w, http.StatusInternalServerError, "tag_create_failed", "创建标签失败")
 		default:
 			writeShortFeedJSON(w, http.StatusOK, tag)
@@ -347,7 +442,8 @@ func (s *ShortFeedHTTPServer) handleFavorites(w http.ResponseWriter, r *http.Req
 	}
 	dtos, err := s.feed.FavoriteItems()
 	if err != nil {
-		writeShortFeedError(w, http.StatusInternalServerError, "favorites_failed", err.Error())
+		logShortFeedError("favorites", err)
+		writeShortFeedError(w, http.StatusInternalServerError, "favorites_failed", "获取收藏失败")
 		return
 	}
 	writeShortFeedJSON(w, http.StatusOK, map[string]interface{}{"items": dtos})
@@ -418,7 +514,13 @@ func (s *ShortFeedHTTPServer) handleItemMutation(w http.ResponseWriter, r *http.
 	case "restore":
 		// 撤销刚才那次删除。回收站里每个媒体最多一条记录，按 ref 找就是它。
 		if err := s.feed.RestoreDeleted(ref); err != nil {
-			writeShortFeedError(w, http.StatusBadRequest, "restore_failed", err.Error())
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				// 不是本服务通过手机端删除的、或原条目已不在可见范围：按不存在处理。
+				writeShortFeedError(w, http.StatusNotFound, "restore_not_found", "没有可撤销的删除")
+				return
+			}
+			logShortFeedError("restore", err)
+			writeShortFeedError(w, http.StatusBadRequest, "restore_failed", "撤销删除失败")
 			return
 		}
 		writeShortFeedJSON(w, http.StatusOK, map[string]bool{"restored": true})
@@ -477,7 +579,8 @@ func (s *ShortFeedHTTPServer) writeMediaError(w http.ResponseWriter, err error) 
 		writeShortFeedError(w, http.StatusNotFound, "media_not_found", "short feed media not found")
 		return
 	}
-	writeShortFeedError(w, http.StatusInternalServerError, "media_unavailable", err.Error())
+	logShortFeedError("media", err)
+	writeShortFeedError(w, http.StatusInternalServerError, "media_unavailable", "媒体暂时无法读取")
 }
 
 // serveMediaFile 统一用 ServeContent 下发，Range/If-Range/Last-Modified 免费获得。
@@ -488,7 +591,8 @@ func (s *ShortFeedHTTPServer) serveMediaFile(w http.ResponseWriter, r *http.Requ
 			writeShortFeedError(w, http.StatusNotFound, "media_not_found", "short feed media not found")
 			return
 		}
-		writeShortFeedError(w, http.StatusInternalServerError, "media_open_failed", err.Error())
+		logShortFeedError("media open", err)
+		writeShortFeedError(w, http.StatusInternalServerError, "media_open_failed", "媒体暂时无法读取")
 		return
 	}
 	defer file.Close()
@@ -597,7 +701,7 @@ func decodeShortFeedMutationLimit(w http.ResponseWriter, r *http.Request, target
 			writeShortFeedError(w, http.StatusRequestEntityTooLarge, "body_too_large", "请求体过大")
 			return false
 		}
-		writeShortFeedError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		writeShortFeedError(w, http.StatusBadRequest, "invalid_json", "请求格式无效")
 		return false
 	}
 	if decoder.Decode(&struct{}{}) != io.EOF {
@@ -613,14 +717,15 @@ func writeShortFeedMutationResult(w http.ResponseWriter, result *ShortFeedIntera
 		return
 	}
 	if errors.Is(err, ErrShortFeedNoEligibleVideos) {
-		writeShortFeedError(w, http.StatusBadRequest, "not_eligible", err.Error())
+		writeShortFeedError(w, http.StatusBadRequest, "not_eligible", "该内容当前不可操作")
 		return
 	}
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		writeShortFeedError(w, http.StatusNotFound, "video_not_found", "short feed video not found")
 		return
 	}
-	writeShortFeedError(w, http.StatusInternalServerError, "mutation_failed", err.Error())
+	logShortFeedError("mutation", err)
+	writeShortFeedError(w, http.StatusInternalServerError, "mutation_failed", "操作失败")
 }
 
 // writeShortFeedItemResult 把改动后的整条 DTO 回给前端，
@@ -629,11 +734,21 @@ func writeShortFeedItemResult(w http.ResponseWriter, dto *ShortFeedItemDTO, err 
 	if err != nil {
 		status := http.StatusInternalServerError
 		code := "mutation_failed"
-		if errors.Is(err, ErrShortFeedUnsupportedMedia) {
-			status = http.StatusBadRequest
-			code = "unsupported_media"
+		message := "操作失败"
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			// 不可见（黑名单、扫描根之外、失效）与不存在同一个答案，响应不带任何条目字段。
+			status, code, message = http.StatusNotFound, "item_not_found", "内容不存在"
+		case errors.Is(err, ErrShortFeedUnsupportedMedia):
+			status, code, message = http.StatusBadRequest, "unsupported_media", "该类型不支持此操作"
+		case errors.Is(err, errShortFeedInvalidRating):
+			status, code, message = http.StatusBadRequest, "invalid_rating", "评分需在 0 到 10 之间，步长 0.5"
+		case errors.Is(err, errShortFeedInvalidTag):
+			status, code, message = http.StatusBadRequest, "invalid_tag", "标签不可用"
+		default:
+			logShortFeedError("item mutation", err)
 		}
-		writeShortFeedError(w, status, code, err.Error())
+		writeShortFeedError(w, status, code, message)
 		return
 	}
 	writeShortFeedJSON(w, http.StatusOK, dto)
@@ -811,4 +926,13 @@ func ShortFeedQRCodeDataURL(target string) (string, error) {
 		return "", nil
 	}
 	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), nil
+}
+
+// logShortFeedError 记录手机端请求的内部错误。原始错误只进日志，而且先擦掉绝对路径
+// （G-3）：日志文件同样会被用户贴出去。
+func logShortFeedError(op string, err error) {
+	if err == nil {
+		return
+	}
+	log.Printf("[ShortFeed] %s failed: %s", op, scrubPlaybackProxyPaths(err.Error()))
 }

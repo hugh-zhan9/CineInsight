@@ -111,6 +111,10 @@ const (
 	WatchlistMetadataFailureNotFound WatchlistMetadataFailure = "not_found"
 	// WatchlistMetadataFailureSourceError 其他非 2xx、响应无法解析。
 	WatchlistMetadataFailureSourceError WatchlistMetadataFailure = "source_error"
+	// WatchlistMetadataFailureTitleConflict 不是源的失败：补全写回时 (片名, 类型, 源 ID)
+	// 撞上片单里的另一条记录（APP-07）。只由写回路径落库，适配器不产生它，也不参与聚合
+	// 的失败排序；前端文案另行映射。
+	WatchlistMetadataFailureTitleConflict WatchlistMetadataFailure = "title_conflict"
 )
 
 // WatchlistMetadataSourceError 是适配器对外的唯一失败形态：带分类码，可被上层

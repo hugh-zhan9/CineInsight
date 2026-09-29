@@ -54,9 +54,10 @@ type SubtitleTranslateResult struct {
 	// BackupID 是被覆盖前的旧字幕备份，可经 RestoreSubtitleBackup 恢复（D-PC13、MEDIA-05）。
 	BackupID string `json:"backup_id,omitempty"`
 	// ErrorCode 等三个字段只由 App 层在遇到带错误码的失败时填写（G-3），服务层返回 *SubtitleCodedError。
-	ErrorCode        string `json:"error_code,omitempty"`
-	Message          string `json:"message,omitempty"`
-	DetectedEncoding string `json:"detected_encoding,omitempty"`
+	ErrorCode        string                             `json:"error_code,omitempty"`
+	Message          string                             `json:"message,omitempty"`
+	DetectedEncoding string                             `json:"detected_encoding,omitempty"`
+	Candidates       []subtitleparser.EncodingCandidate `json:"candidates,omitempty"`
 }
 
 // CancelSubtitleTranslation 叫停某个视频正在跑的字幕翻译；没有在跑就什么都不做。
@@ -130,17 +131,20 @@ func (s *SubtitleService) TranslateSubtitleFile(ctx context.Context, videoPath s
 	// 等锁可能要等上几分钟（同余视频的字幕生成也持这把锁），先说一声，
 	// 否则用户对着一个毫无解释的 0% 进度条。
 	s.emitTranslateProgress(request.VideoID, 0, "排队等待该视频的字幕任务...")
-	unlock := lockSubtitleFile(request.VideoID)
+	unlock := lockSubtitleFile(srtPath)
 	defer unlock()
 	if ctx.Err() != nil {
 		return nil, errSubtitleTranslationCancelled
 	}
 
-	if _, err := os.Stat(srtPath); err != nil {
+	// Lstat：符号链接/目录之类的非普通文件在跑翻译之前就拒绝，不要翻完才在写入器里失败。
+	if info, err := os.Lstat(srtPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil, missingSidecarError(request.VideoID, videoPath)
 		}
 		return nil, fmt.Errorf("读取字幕文件失败: %s", subtitleIOReason(err))
+	} else if !info.Mode().IsRegular() {
+		return nil, errors.New("字幕文件不是普通文件，已拒绝覆盖")
 	}
 	if err := checkSubtitleFileUTF8(srtPath); err != nil {
 		return nil, err
@@ -246,7 +250,8 @@ func checkSubtitleFileUTF8(path string) error {
 }
 
 func ensureUTF8SubtitleContent(content []byte) error {
-	_, encoding, err := subtitleparser.DecodeSubtitleBytes(content)
+	detection, err := subtitleparser.DetectSubtitleEncoding(content)
+	encoding := detection.Encoding
 	if err != nil {
 		encoding = "unknown"
 	} else if encoding == subtitleparser.EncodingUTF8 {
@@ -255,50 +260,48 @@ func ensureUTF8SubtitleContent(content []byte) error {
 	message := "字幕文件的编码无法识别，请先转换为 UTF-8 后再操作"
 	if encoding != "unknown" {
 		message = fmt.Sprintf("字幕文件不是 UTF-8 编码（检测为 %s），请先转换为 UTF-8 后再操作", strings.ToUpper(encoding))
+		if len(detection.Candidates) > 1 {
+			message = fmt.Sprintf("字幕文件不是 UTF-8 编码，且无法确定是简体还是繁体编码（首选 %s），请对照预览选择正确的编码后再转换", strings.ToUpper(encoding))
+		}
 	}
-	return &SubtitleCodedError{Code: SubtitleErrorEncodingNotUTF8, Message: message, DetectedEncoding: encoding}
+	return &SubtitleCodedError{Code: SubtitleErrorEncodingNotUTF8, Message: message, DetectedEncoding: encoding, Candidates: detection.Candidates}
 }
 
 // missingSidecarError 区分「什么字幕都没有」与「没有同名 .srt 但有别的字幕」（D-PC17）。
-// 后者不能编辑也不能翻译，提示「请先生成字幕」只会误导用户。
+// 后者不能编辑也不能翻译，提示「请先生成字幕」只会误导用户。探测失败（读目录、读库）时返回该错误本身，
+// 不悄悄当作 subtitle_missing。
 func missingSidecarError(videoID uint, videoPath string) error {
-	if hasNonSidecarSRTSubtitle(videoID, videoPath) {
+	other, err := hasNonSidecarSRTSubtitle(videoID, videoPath)
+	if err != nil {
+		return err
+	}
+	if other {
 		return &SubtitleCodedError{Code: SubtitleErrorNotSidecarSRT, Message: "该视频只有内嵌/其他格式字幕，暂不支持编辑或翻译"}
 	}
 	return &SubtitleCodedError{Code: SubtitleErrorMissing, Message: "该视频还没有外挂字幕，请先生成字幕"}
 }
 
-// hasNonSidecarSRTSubtitle 判断同名 .srt 缺失时是否还有其他字幕：同目录「基本名 + .」前缀且扩展名为
-// srt/ass/ssa/vtt 的文件，或探测记录里的内嵌字幕流。探测任何一步失败都按「没有」处理，
-// 由 subtitle_missing 兜住，不因为一次读库失败而多出一条失败路径。
-func hasNonSidecarSRTSubtitle(videoID uint, videoPath string) bool {
-	directory := filepath.Dir(videoPath)
-	base := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
-	if entries, err := os.ReadDir(directory); err == nil {
-		prefix := strings.ToLower(base) + "."
-		for _, entry := range entries {
-			if entry.IsDir() {
-				continue
-			}
-			name := strings.ToLower(entry.Name())
-			if !strings.HasPrefix(name, prefix) {
-				continue
-			}
-			switch filepath.Ext(name) {
-			case ".srt", ".ass", ".ssa", ".vtt":
-				return true
-			}
-		}
+// hasNonSidecarSRTSubtitle 判断同名 .srt 缺失时是否还有其他字幕：共用的旁挂字幕判定
+// （HasSidecarSubtitle）或探测记录里的内嵌字幕流（hasEmbeddedSubtitleSQL）。
+func hasNonSidecarSRTSubtitle(videoID uint, videoPath string) (bool, error) {
+	found, err := HasSidecarSubtitle(videoPath)
+	if err != nil {
+		return false, err
+	}
+	if found {
+		return true, nil
 	}
 	if videoID != 0 && database.DB != nil {
 		var count int64
-		if err := database.DB.Model(&models.MediaStream{}).
-			Where("video_id = ? AND stream_type = ?", videoID, "subtitle").
-			Count(&count).Error; err == nil && count > 0 {
-			return true
+		if err := database.DB.Model(&models.Video{}).
+			Where("videos.id = ?", videoID).
+			Where(hasEmbeddedSubtitleSQL).
+			Count(&count).Error; err != nil {
+			return false, fmt.Errorf("读取内嵌字幕信息失败: %w", err)
 		}
+		return count > 0, nil
 	}
-	return false
+	return false, nil
 }
 
 func normalizeSubtitleTranslateMode(mode SubtitleTranslateMode) (SubtitleTranslateMode, error) {

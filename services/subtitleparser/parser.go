@@ -30,9 +30,11 @@ func ParseFile(path string) ([]Segment, error) {
 	}
 
 	// 经编码识别再解析：GBK/Big5/UTF-16 字幕不再被当成乱码索引（D-PC14）。
+	// 识别不了编码时保持旧的宽松行为（按原字节解析，绝不报错）：检索/索引路径不能因为
+	// 一份怪编码的 .srt 而失败；只有工作台打开与翻译读取才坚持 subtitle_encoding_not_utf8。
 	text, _, err := DecodeSubtitleBytes(data)
 	if err != nil {
-		return nil, err
+		text = string(data)
 	}
 
 	return Parse(text)

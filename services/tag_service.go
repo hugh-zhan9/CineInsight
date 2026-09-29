@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"sync"
 	"video-master/database"
 	"video-master/models"
 
@@ -15,6 +16,8 @@ import (
 
 type TagService struct {
 	// removeAvatar 由 App 接线时经 SetAvatarRemover 注入，撤销转换删除新建人物时清理头像文件。
+	// avatarMu 保护它：注入与撤销可能在不同 goroutine 里。
+	avatarMu     sync.RWMutex
 	removeAvatar func(relativePath string) error
 }
 
@@ -992,6 +995,17 @@ func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
 		return fmt.Errorf("自动标签由应用维护，不能手动删除")
 	}
 	inVocabulary := isAITagEligible(*tag) // 删除会写 DeletedAt，必须在删除前判定。
+	// 曾关联过媒体也要对账：「人物」分类标签不在词表，但只挂它的视频删完就变成无人工
+	// 标签，应当重新进入自动分析。关联要在清除之前数。
+	var linked int64
+	if err := tx.Table("video_tags").Where("tag_id = ?", tag.ID).Count(&linked).Error; err != nil {
+		return err
+	}
+	var imageLinked int64
+	if err := tx.Table("image_tags").Where("tag_id = ?", tag.ID).Count(&imageLinked).Error; err != nil {
+		return err
+	}
+	hadMedia := linked+imageLinked > 0
 	if err := tx.Model(tag).Association("Videos").Clear(); err != nil {
 		return err
 	}
@@ -1001,8 +1015,8 @@ func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
 	if err := tx.Delete(tag).Error; err != nil {
 		return err
 	}
-	// 人物分类的标签不在词表内；转人物走这里时由调用方显式重置。
-	if !inVocabulary {
+	// 既不在词表内、也从没关联过媒体的标签删除后没有任何状态受影响。
+	if !inVocabulary && !hadMedia {
 		return nil
 	}
 	return resetAITaggingAfterLibraryChange(tx)
@@ -1058,6 +1072,10 @@ func rewriteSavedViewTagIDsTx(tx *gorm.DB, sourceIDs []uint, targetID uint) erro
 type TagUsageCount struct {
 	Videos int64 `json:"videos"`
 	Images int64 `json:"images"`
+	// TrashedVideos / TrashedImages 是仍挂着该标签、但已在回收站里的媒体数。删除或合并
+	// 标签会一并清掉这些关联，确认框据此如实显示范围（恢复后它们也不再带这个标签）。
+	TrashedVideos int64 `json:"trashed_videos"`
+	TrashedImages int64 `json:"trashed_images"`
 }
 
 // GetTagUsageCounts 返回每个标签仍可见的视频与图片数；未使用的标签也带 0 值。
@@ -1086,6 +1104,19 @@ func (s *TagService) GetTagUsageCounts(ids []uint) (map[uint]TagUsageCount, erro
 		Where("image_tags.tag_id IN ?", ids).Group("image_tags.tag_id").Scan(&imageRows).Error; err != nil {
 		return nil, err
 	}
+	var trashedVideoRows, trashedImageRows []row
+	if err := database.DB.Table("video_tags").
+		Select("video_tags.tag_id AS tag_id, COUNT(*) AS total").
+		Joins("JOIN videos ON videos.id = video_tags.video_id AND videos.deleted_at IS NOT NULL").
+		Where("video_tags.tag_id IN ?", ids).Group("video_tags.tag_id").Scan(&trashedVideoRows).Error; err != nil {
+		return nil, err
+	}
+	if err := database.DB.Table("image_tags").
+		Select("image_tags.tag_id AS tag_id, COUNT(*) AS total").
+		Joins("JOIN images ON images.id = image_tags.image_id AND images.deleted_at IS NOT NULL").
+		Where("image_tags.tag_id IN ?", ids).Group("image_tags.tag_id").Scan(&trashedImageRows).Error; err != nil {
+		return nil, err
+	}
 	for _, r := range videoRows {
 		c := result[r.TagID]
 		c.Videos = r.Total
@@ -1094,6 +1125,16 @@ func (s *TagService) GetTagUsageCounts(ids []uint) (map[uint]TagUsageCount, erro
 	for _, r := range imageRows {
 		c := result[r.TagID]
 		c.Images = r.Total
+		result[r.TagID] = c
+	}
+	for _, r := range trashedVideoRows {
+		c := result[r.TagID]
+		c.TrashedVideos = r.Total
+		result[r.TagID] = c
+	}
+	for _, r := range trashedImageRows {
+		c := result[r.TagID]
+		c.TrashedImages = r.Total
 		result[r.TagID] = c
 	}
 	return result, nil

@@ -24,7 +24,7 @@ import (
 //
 // 流程：同目录临时文件 → fsync → 目标存在则备份到
 // <dataDir>/subtitle-backups/<videoID>/<unixNano>.srt（每个视频只留最新 5 份）→ 原子替换。
-// 调用方在外层持有 lockSubtitleFile(videoID)，写入器自己不加锁。
+// 调用方在外层持有 lockSubtitleFile(目标 .srt 路径)，写入器自己不加锁。
 
 const (
 	subtitleBackupDirName = "subtitle-backups"
@@ -45,6 +45,8 @@ type SubtitleCodedError struct {
 	Code             string
 	Message          string
 	DetectedEncoding string
+	// Candidates 只在编码歧义（GB18030 与 Big5 都能干净解码）时非空，带各自的前 3 条字幕预览。
+	Candidates []subtitleparser.EncodingCandidate
 }
 
 func (e *SubtitleCodedError) Error() string { return e.Message }
@@ -81,6 +83,27 @@ func (w *SubtitleFileWriter) backupDir(videoID uint) (string, error) {
 
 // Replace 用 content 原子地替换 target。目标已存在时先备份；任何一步失败，目标保持原样。
 func (w *SubtitleFileWriter) Replace(ctx context.Context, videoID uint, target string, content []byte) (SubtitleWriteResult, error) {
+	return w.replaceWithMode(ctx, videoID, target, content, 0644)
+}
+
+// ensureSubtitleTargetReplaceable 在生成/翻译开始前确认目标 .srt（若存在）是普通文件，
+// 否则尽早报错，免得跑完识别/翻译才在写入器里失败。
+func ensureSubtitleTargetReplaceable(target string) error {
+	info, err := os.Lstat(target)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("读取字幕文件状态失败: %s", subtitleIOReason(err))
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("字幕文件不是普通文件，已拒绝覆盖")
+	}
+	return nil
+}
+
+// replaceWithMode 是 Replace 的实现；defaultMode 只在目标不存在时使用（恢复备份时取备份记录的权限）。
+func (w *SubtitleFileWriter) replaceWithMode(ctx context.Context, videoID uint, target string, content []byte, defaultMode os.FileMode) (SubtitleWriteResult, error) {
 	if videoID == 0 {
 		return SubtitleWriteResult{}, errors.New("字幕写入缺少视频 ID")
 	}
@@ -91,7 +114,7 @@ func (w *SubtitleFileWriter) Replace(ctx context.Context, videoID uint, target s
 		return SubtitleWriteResult{}, err
 	}
 
-	mode := os.FileMode(0644)
+	mode := defaultMode
 	exists := false
 	// Lstat 而不是 Stat：原子替换会把符号链接本身换掉，真正的字幕文件反而留着旧内容。
 	if info, err := os.Lstat(target); err == nil {
@@ -112,7 +135,7 @@ func (w *SubtitleFileWriter) Replace(ctx context.Context, videoID uint, target s
 
 	result := SubtitleWriteResult{Replaced: exists}
 	if exists {
-		backupID, err := w.backupCurrent(videoID, target)
+		backupID, err := w.backupCurrent(videoID, target, mode)
 		if err != nil {
 			return SubtitleWriteResult{}, err
 		}
@@ -176,7 +199,8 @@ func writeSubtitleTemporary(target string, content []byte, mode os.FileMode) (st
 }
 
 // backupCurrent 把 target 当前内容复制成一份新备份，返回备份 ID（unixNano 字符串）。
-func (w *SubtitleFileWriter) backupCurrent(videoID uint, target string) (string, error) {
+// 备份文件继承原文件的权限（mode），恢复到已被删除的目标时就用它作为原权限。
+func (w *SubtitleFileWriter) backupCurrent(videoID uint, target string, mode os.FileMode) (string, error) {
 	directory, err := w.backupDir(videoID)
 	if err != nil {
 		return "", err
@@ -195,14 +219,18 @@ func (w *SubtitleFileWriter) backupCurrent(videoID uint, target string) (string,
 	for attempt := 0; attempt < 1000; attempt, stamp = attempt+1, stamp+1 {
 		id := strconv.FormatInt(stamp, 10)
 		backupPath := filepath.Join(directory, id+".srt")
-		out, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+		out, err := os.OpenFile(backupPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if err != nil {
 			if os.IsExist(err) {
 				continue
 			}
 			return "", fmt.Errorf("创建字幕备份失败: %s", subtitleIOReason(err))
 		}
-		_, copyErr := io.Copy(out, source)
+		// 先按 0600 创建再 Chmod：不受 umask 影响，备份权限与原文件严格一致。
+		copyErr := out.Chmod(mode)
+		if copyErr == nil {
+			_, copyErr = io.Copy(out, source)
+		}
 		if copyErr == nil {
 			copyErr = out.Sync()
 		}
@@ -292,14 +320,20 @@ func (w *SubtitleFileWriter) RestoreBackup(ctx context.Context, videoID uint, ta
 	if err != nil {
 		return SubtitleWriteResult{}, err
 	}
-	content, err := os.ReadFile(filepath.Join(directory, backupID+".srt"))
+	backupPath := filepath.Join(directory, backupID+".srt")
+	content, err := os.ReadFile(backupPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return SubtitleWriteResult{}, errors.New("这份字幕备份已不存在")
 		}
 		return SubtitleWriteResult{}, fmt.Errorf("读取字幕备份失败: %s", subtitleIOReason(err))
 	}
-	return w.Replace(ctx, videoID, target, content)
+	// 备份文件的权限就是备份时原文件的权限：目标还在时沿用目标权限，已被删除时用它。
+	mode := os.FileMode(0644)
+	if info, statErr := os.Stat(backupPath); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	return w.replaceWithMode(ctx, videoID, target, content, mode)
 }
 
 // SubtitleOverwriteInfo 是「生成字幕前告知会覆盖什么」所需的信息（D-PC13）。
@@ -362,10 +396,10 @@ func (s *SubtitleService) ListSubtitleBackups(video models.Video) ([]SubtitleBac
 
 // RestoreSubtitleBackup 把某份备份写回同名 .srt，并刷新字幕索引。恢复前先备份当前文件。
 func (s *SubtitleService) RestoreSubtitleBackup(video models.Video, backupID string) (*SubtitleRestoreResult, error) {
-	unlock := lockSubtitleFile(video.ID)
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	unlock := lockSubtitleFile(srtPath)
 	defer unlock()
 
-	srtPath := subtitleparser.SRTPathForVideo(video.Path)
 	writeResult, err := s.subtitleWriter().RestoreBackup(context.Background(), video.ID, srtPath, backupID)
 	if err != nil {
 		return nil, err

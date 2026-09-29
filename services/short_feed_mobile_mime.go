@@ -18,10 +18,13 @@ import (
 const shortFeedMobileMIMEVerdictTTL = 10 * time.Minute
 
 type shortFeedMobileMIMEVerdict struct {
-	size int64
-	mime string
-	ok   bool
-	at   time.Time
+	// size 与 modTimeNS 是判定时源文件的指纹（stat 得到，不信库里的旧值）：
+	// 文件原地替换、哪怕大小碰巧相同，也不沿用旧结论。
+	size      int64
+	modTimeNS int64
+	mime      string
+	ok        bool
+	at        time.Time
 }
 
 // mobileInlineMIME 判定一条视频能否直接发给手机播放，返回下发用的 MIME。
@@ -57,7 +60,7 @@ func mobileInlineMIME(video models.Video, snapshot *playbackProxySnapshot) (stri
 }
 
 // mobileMIMEForVideo 是 mobileInlineMIME 的服务层入口：只对需要快照的扩展名才去读快照，
-// 结果按（视频 ID + 文件大小）缓存一段时间。
+// 结果按（视频 ID + 源文件大小 + 修改时间）缓存一段时间。
 func (s *ShortFeedService) mobileMIMEForVideo(video models.Video) (string, bool) {
 	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
 		return mimeType, true
@@ -68,9 +71,14 @@ func (s *ShortFeedService) mobileMIMEForVideo(video models.Video) (string, bool)
 		return "", false
 	}
 
+	fingerprint, err := mediaProbeStat(video.Path)
+	if err != nil {
+		// 源文件读不到：没有证据，不承诺「能播」，也不缓存这个结论。
+		return "", false
+	}
 	now := s.now()
 	s.mobileMIMEMu.Lock()
-	if verdict, ok := s.mobileMIMECache[video.ID]; ok && verdict.size == video.Size && now.Sub(verdict.at) < shortFeedMobileMIMEVerdictTTL {
+	if verdict, ok := s.mobileMIMECache[video.ID]; ok && verdict.size == fingerprint.size && verdict.modTimeNS == fingerprint.modTimeNS && now.Sub(verdict.at) < shortFeedMobileMIMEVerdictTTL {
 		s.mobileMIMEMu.Unlock()
 		return verdict.mime, verdict.ok
 	}
@@ -92,7 +100,7 @@ func (s *ShortFeedService) mobileMIMEForVideo(video models.Video) (string, bool)
 	if s.mobileMIMECache == nil {
 		s.mobileMIMECache = make(map[uint]shortFeedMobileMIMEVerdict)
 	}
-	s.mobileMIMECache[video.ID] = shortFeedMobileMIMEVerdict{size: video.Size, mime: mimeType, ok: ok, at: cachedAt}
+	s.mobileMIMECache[video.ID] = shortFeedMobileMIMEVerdict{size: fingerprint.size, modTimeNS: fingerprint.modTimeNS, mime: mimeType, ok: ok, at: cachedAt}
 	s.mobileMIMEMu.Unlock()
 	return mimeType, ok
 }

@@ -122,7 +122,7 @@ func (a *App) TranslateSubtitle(req services.SubtitleTranslateRequest) (*service
 	if coded := asSubtitleCodedError(err); coded != nil {
 		return &services.SubtitleTranslateResult{
 			VideoID: req.VideoID, Mode: req.Mode, TargetLang: req.TargetLang,
-			ErrorCode: coded.Code, Message: coded.Message, DetectedEncoding: coded.DetectedEncoding,
+			ErrorCode: coded.Code, Message: coded.Message, DetectedEncoding: coded.DetectedEncoding, Candidates: coded.Candidates,
 		}, nil
 	}
 	return result, err
@@ -165,7 +165,7 @@ func (a *App) GetSubtitleEditDocument(videoID uint) (*services.SubtitleEditDocum
 	if coded := asSubtitleCodedError(err); coded != nil {
 		return &services.SubtitleEditDocument{
 			VideoID: videoID, Entries: []subtitleparser.EditorSegment{}, Issues: []subtitleparser.DocumentIssue{},
-			ErrorCode: coded.Code, Message: coded.Message, DetectedEncoding: coded.DetectedEncoding,
+			ErrorCode: coded.Code, Message: coded.Message, DetectedEncoding: coded.DetectedEncoding, Candidates: coded.Candidates,
 		}, nil
 	}
 	return document, err

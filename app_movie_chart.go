@@ -159,6 +159,17 @@ func (a *App) SuggestLibraryMatches(title string, year int) ([]services.LibraryM
 	return service.SuggestLibraryMatches(title, year)
 }
 
+// SuggestLibraryMatchesBatch 一次扫描匹配多个查询，返回 "片名|年份" → 建议列表
+// （键与 services.LibraryMatchKey 一致，每个查询都有键）。榜单一页几十张卡片用它，
+// 不要逐条调单条接口。
+func (a *App) SuggestLibraryMatchesBatch(queries []services.LibraryMatchQuery) (map[string][]services.LibraryMatchSuggestion, error) {
+	service := a.movieChartService()
+	if service == nil {
+		return nil, errors.New("年度榜单服务不可用")
+	}
+	return service.SuggestLibraryMatchesBatch(queries)
+}
+
 // ListMovieChartYears 返回年份下拉的选项：本地有缓存的年份 ∪ {当前年}，倒序。
 func (a *App) ListMovieChartYears() ([]int, error) {
 	return a.movieChartService().ListYears()

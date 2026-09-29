@@ -286,8 +286,9 @@ func (a *App) DeletePerson(personID uint) error {
 // ===== 标签转人物撤销、用量、自动标签覆盖（P-017，D-PC34/36/37） =====
 
 func (a *App) UndoTagPersonConversion(conversionID uint) (*services.TagPersonConversionUndoResult, error) {
-	// 撤销可能删掉新建人物及其头像文件；TagService 不持有托管图片目录，这里注入清理函数。
-	a.tagService.SetAvatarRemover(a.personService.RemoveManagedAvatar)
+	// 撤销可能删掉新建人物及其头像文件；TagService 不持有托管图片目录。正式注入在
+	// 构造/启动时做一次（P-029 接线项）；此前用「未注入才注入」兜底，避免每次调用都写字段。
+	a.tagService.SetAvatarRemoverIfUnset(a.personService.RemoveManagedAvatar)
 	result, err := a.tagService.UndoTagPersonConversion(conversionID)
 	if err == nil && a.cleanupService != nil {
 		a.cleanupService.InvalidateAnalysis()

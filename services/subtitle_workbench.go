@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"errors"
@@ -56,6 +57,8 @@ type SubtitleEditDocument struct {
 	ErrorCode        string `json:"error_code,omitempty"`
 	Message          string `json:"message,omitempty"`
 	DetectedEncoding string `json:"detected_encoding,omitempty"`
+	// Candidates 是编码歧义时的候选（含各自前 3 条字幕预览），用户选定后把编码传给 ConvertSubtitleToUTF8。
+	Candidates []subtitleparser.EncodingCandidate `json:"candidates,omitempty"`
 }
 
 type SubtitleValidationResult struct {
@@ -163,6 +166,13 @@ func (s *SubtitleWorkbenchService) GetDocument(video models.Video) (*SubtitleEdi
 		}
 		return nil, err
 	}
+	// 0 字节或只有空白（含 BOM）的旧 .srt 当作空白文档打开：指纹取现有文件，保存时正常备份后替换。
+	if len(bytes.TrimSpace(bytes.TrimPrefix(content, []byte{0xEF, 0xBB, 0xBF}))) == 0 {
+		return &SubtitleEditDocument{
+			VideoID: video.ID, Fingerprint: fingerprint, Entries: []subtitleparser.EditorSegment{},
+			Issues: []subtitleparser.DocumentIssue{},
+		}, nil
+	}
 	if err := ensureUTF8SubtitleContent(content); err != nil {
 		return nil, err
 	}
@@ -225,10 +235,10 @@ func (s *SubtitleWorkbenchService) SaveDocument(video models.Video, request Subt
 		return result, nil
 	}
 
-	unlock := lockSubtitleFile(video.ID)
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	unlock := lockSubtitleFile(srtPath)
 	defer unlock()
 
-	srtPath := subtitleparser.SRTPathForVideo(video.Path)
 	_, currentFingerprint, _, err := readSubtitleForEditing(srtPath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
@@ -281,10 +291,10 @@ func (s *SubtitleWorkbenchService) ConvertToUTF8(video models.Video, fromEncodin
 	if video.ID == 0 || strings.TrimSpace(video.Path) == "" {
 		return nil, errors.New("视频信息无效")
 	}
-	unlock := lockSubtitleFile(video.ID)
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	unlock := lockSubtitleFile(srtPath)
 	defer unlock()
 
-	srtPath := subtitleparser.SRTPathForVideo(video.Path)
 	content, _, _, err := readSubtitleForEditing(srtPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -292,15 +302,32 @@ func (s *SubtitleWorkbenchService) ConvertToUTF8(video models.Video, fromEncodin
 		}
 		return nil, err
 	}
-	text, detected, err := subtitleparser.DecodeSubtitleBytes(content)
+	detection, err := subtitleparser.DetectSubtitleEncoding(content)
 	if err != nil {
 		return nil, &SubtitleCodedError{Code: SubtitleErrorEncodingNotUTF8, Message: "字幕文件的编码无法识别，无法自动转换", DetectedEncoding: "unknown"}
 	}
+	text, detected := detection.Text, detection.Encoding
 	if detected == subtitleparser.EncodingUTF8 {
 		return nil, errors.New("字幕已经是 UTF-8 编码，无需转换")
 	}
+	// 用户在歧义候选里选定的编码必须真的按它解码（I-2）：只允许选主推测或候选里的编码，
+	// 其余一律视为与打开时的检测不一致。
 	if requested := strings.ToLower(strings.TrimSpace(fromEncoding)); requested != "" && requested != detected {
-		return nil, errors.New("字幕编码与之前检测的结果不一致，请重新打开字幕")
+		allowed := false
+		for _, candidate := range detection.Candidates {
+			if candidate.Encoding == requested {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return nil, errors.New("字幕编码与之前检测的结果不一致，请重新打开字幕")
+		}
+		decoded, decodeErr := subtitleparser.DecodeSubtitleBytesAs(content, requested)
+		if decodeErr != nil {
+			return nil, errors.New("字幕无法按所选编码解码，请重新选择")
+		}
+		text, detected = decoded, requested
 	}
 
 	writeResult, err := s.writer().Replace(context.Background(), video.ID, srtPath, []byte(text))

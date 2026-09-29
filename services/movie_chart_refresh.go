@@ -411,7 +411,7 @@ func (s *MovieChartService) runPosterPhase(ctx context.Context, year int, pacer 
 func movieChartPosterBacklog(db *gorm.DB, year int) *gorm.DB {
 	// 子查询与 chartQuery 里那条隐藏标记的 NOT IN 同形：两处都不用 join，
 	// join 会让 douban_id 在别处变成有歧义的列名，两个后端的报错形态还不一样。
-	marked := db.Model(&models.MovieChartMark{}).Select("douban_id")
+	marked := db.Model(&models.MovieChartMark{}).Select("douban_id").Where("mark <> ?", "")
 	return db.Model(&models.MovieChartEntry{}).
 		Where("year = ? AND poster_path = ? AND poster_url <> ?", year, "", "").
 		// 括号自己写死：GORM 会给含 OR 的裸表达式补括号，但这一条的正确性太贵，

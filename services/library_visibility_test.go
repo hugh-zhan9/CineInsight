@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -156,9 +157,16 @@ func TestLIB08HeaderAndInsightTotalsUseDefaultViewVisibility(t *testing.T) {
 
 func TestPLAY07InsightTagAndRatingBucketsUseVisibleScope(t *testing.T) {
 	setupVideoServiceTestDB(t)
+	// 配置扫描根：根之外的非失效视频同样不可见，统计必须按扫描根裁剪。
+	if err := database.DB.Create(&models.ScanDirectory{Path: "/lib/a"}).Error; err != nil {
+		t.Fatal(err)
+	}
 	visible := libVisVideo(t, "/lib/a/x.mp4", func(v *models.Video) { v.Size = 10; v.PersonalRating = float64Pointer(7) })
 	hidden := libVisVideo(t, "/lib/b/x.mp4", func(v *models.Video) {
 		v.Size, v.IsStale, v.PersonalRating = 20, true, float64Pointer(7)
+	})
+	outsideRoots := libVisVideo(t, "/lib/z/x.mp4", func(v *models.Video) {
+		v.Size, v.PersonalRating = 30, float64Pointer(7)
 	})
 	tag := models.Tag{Name: "口径", IsActive: true}
 	if err := database.DB.Create(&tag).Error; err != nil {
@@ -166,6 +174,7 @@ func TestPLAY07InsightTagAndRatingBucketsUseVisibleScope(t *testing.T) {
 	}
 	libVisTag(t, visible.ID, tag.ID)
 	libVisTag(t, hidden.ID, tag.ID)
+	libVisTag(t, outsideRoots.ID, tag.ID)
 	stats, err := NewLibraryStatsService().GetStats()
 	if err != nil {
 		t.Fatal(err)
@@ -231,6 +240,14 @@ func TestMETA02PersonFilterUsesAndSemanticsAndSavedViewRoundTrips(t *testing.T) 
 	}
 	if !found {
 		t.Fatalf("往返不一致: %+v", views)
+	}
+	// 往返的后半程：把保存的 JSON 解析回筛选条件再应用，命中与直接筛选一致。
+	var restored []uint
+	if err := json.Unmarshal([]byte(view.PersonIDsJSON), &restored); err != nil {
+		t.Fatalf("person_ids_json 应可解析: %v", err)
+	}
+	if got := libVisIDs(t, LibraryFilter{PersonIDs: restored, SearchMode: view.SearchMode, SortMode: view.SortMode}); !reflect.DeepEqual(got, []uint{both.ID}) {
+		t.Fatalf("解析回筛选再应用应命中同样的视频: %v", got)
 	}
 }
 

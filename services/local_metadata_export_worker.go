@@ -208,6 +208,8 @@ func (s *LocalMetadataService) collectExportVideoIDs(ctx context.Context, filter
 	if err != nil {
 		return nil, err
 	}
+	// NFO 只写给当前指得到文件的视频：即便调用方传入「路径失效」视图，失效记录也不处理（结果为空）。
+	query = query.Where("videos.is_stale = ?", false)
 	var videoIDs []uint
 	if err := query.Order("videos.id ASC").Pluck("videos.id", &videoIDs).Error; err != nil {
 		return nil, fmt.Errorf("读取当前筛选结果失败: %w", err)

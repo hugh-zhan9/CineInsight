@@ -504,7 +504,7 @@ func (s *WatchlistService) settleEnrichmentSuccess(entry models.WatchlistEntry, 
 		// 写回的 (title, kind, 源 ID) 撞上了另一条记录：这是明确的唯一约束失败（整条
 		// UPDATE 没有生效），按失败落地并丢弃刚落盘的图，而不是停在 running 等重启恢复。
 		s.discardEnrichmentResult(entry, poster, "写回时片名与源 ID 撞上片单里的另一条记录")
-		s.settleEnrichmentFailure(entry, WatchlistMetadataFailureSourceError, ErrWatchlistTitleExists)
+		s.settleEnrichmentFailure(entry, WatchlistMetadataFailureTitleConflict, ErrWatchlistTitleExists)
 		return
 	}
 	if err != nil {
@@ -525,6 +525,7 @@ func (s *WatchlistService) settleEnrichmentSuccess(entry models.WatchlistEntry, 
 			log.Printf("[WatchlistEnrich] stale poster cleanup failed id=%d err=%v", entry.ID, err)
 		}
 	}
+	s.notifySourceChanged(entry, detail)
 	entry.EnrichmentStatus = models.WatchlistEnrichmentSucceeded
 	entry.EnrichmentError = ""
 	entry.SourceName = detail.SourceName

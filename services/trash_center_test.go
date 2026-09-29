@@ -164,17 +164,17 @@ func TestLIB04DecideSoftDeletedPathTable(t *testing.T) {
 	}{
 		{"missing+scanner 自动恢复", &softDeletedEntryFacts{Mode: models.TrashModeMissing, DeletedBy: "scanner"}, 5, 5, 9, softDeletedAutoRestore},
 		{"missing+user 新建", &softDeletedEntryFacts{Mode: models.TrashModeMissing, DeletedBy: "user"}, 5, 5, 9, softDeletedCreateNew},
-		{"record_only 身份未变 屏蔽", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5, FileModTime: 9}, 5, 5, 9, softDeletedBlocked},
-		{"record_only mtime 变了 新建", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5, FileModTime: 9}, 5, 5, 10, softDeletedCreateNew},
-		{"record_only 大小变了 新建", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5, FileModTime: 9}, 5, 6, 9, softDeletedCreateNew},
-		{"record_only 无 mtime 只比大小", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5}, 5, 5, 9, softDeletedBlocked},
+		{"record_only 身份未变 屏蔽", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5, FileModTime: 9, DeleteBatchID: "b"}, 5, 5, 9, softDeletedBlocked},
+		{"record_only mtime 变了 新建", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5, FileModTime: 9, DeleteBatchID: "b"}, 5, 5, 10, softDeletedCreateNew},
+		{"record_only 大小变了 新建", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5, FileModTime: 9, DeleteBatchID: "b"}, 5, 6, 9, softDeletedCreateNew},
+		{"record_only 新时代行无 mtime 只比大小", &softDeletedEntryFacts{Mode: models.TrashModeRecordOnly, FileSize: 5, DeleteBatchID: "b"}, 5, 5, 9, softDeletedBlocked},
 		{"trash 新建", &softDeletedEntryFacts{Mode: models.TrashModeTrash, FileSize: 5, FileModTime: 9}, 5, 5, 9, softDeletedCreateNew},
 		{"legacy_trash 新建", &softDeletedEntryFacts{Mode: models.TrashModeLegacyTrash}, 5, 5, 9, softDeletedCreateNew},
 		{"无条目 大小相同 屏蔽", nil, 5, 5, 9, softDeletedBlocked},
 		{"无条目 大小不同 新建", nil, 5, 6, 9, softDeletedCreateNew},
 	}
 	for _, tc := range cases {
-		if got := decideSoftDeletedPath(tc.entry, tc.row, tc.size, tc.mtime); got != tc.want {
+		if got := decideSoftDeletedPath(tc.entry, tc.row, tc.size, tc.mtime, ""); got != tc.want {
 			t.Errorf("%s: got %d want %d", tc.name, got, tc.want)
 		}
 	}

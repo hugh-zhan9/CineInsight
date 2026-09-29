@@ -85,6 +85,11 @@ type ShortFeedService struct {
 	authOnce sync.Once
 	auth     *shortFeedAuth
 
+	// 手机端删除记录（short_feed_interactions.go）：只有本服务通过手机端删掉的条目才能被「撤销」。
+	mobileDeletedMu    sync.Mutex
+	mobileDeleted      map[ShortFeedMediaRef]uint
+	mobileDeletedOrder []ShortFeedMediaRef
+
 	// mobileInlineMIME 的判定缓存（short_feed_mobile_mime.go）。
 	mobileMIMEMu    sync.Mutex
 	mobileMIMECache map[uint]shortFeedMobileMIMEVerdict
@@ -855,6 +860,10 @@ func (s *ShortFeedService) SyncFeedback() (ShortFeedFeedbackSyncResult, error) {
 }
 
 func (s *ShortFeedService) DeleteItem(ref ShortFeedMediaRef) error {
+	// 删除会动磁盘文件：不可见的条目（黑名单、扫描根之外、失效）一律按不存在处理，什么都不动。
+	if err := s.ensureItemVisible(ref); err != nil {
+		return err
+	}
 	switch ref.Kind {
 	case ShortFeedMediaVideo:
 		deleteVideo := s.videoService.DeleteVideo
@@ -863,12 +872,14 @@ func (s *ShortFeedService) DeleteItem(ref ShortFeedMediaRef) error {
 		}
 		err := deleteVideo(ref.ID, true)
 		if err == nil {
+			s.rememberMobileDeleted(ref)
 			s.invalidateCandidates()
 		}
 		return err
 	case ShortFeedMediaImage:
 		err := NewImageService().DeleteImage(ref.ID, true)
 		if err == nil {
+			s.rememberMobileDeleted(ref)
 			s.invalidateCandidates()
 		}
 		return err
@@ -882,11 +893,13 @@ func (s *ShortFeedService) DeleteItem(ref ShortFeedMediaRef) error {
 func (s *ShortFeedService) recordImageView(ref ShortFeedMediaRef) (*ShortFeedInteractionDTO, error) {
 	now := s.now()
 	var state shortFeedInteractionState
+	var viewed *models.Image
 	err := database.Transaction(func(tx *gorm.DB) error {
 		img, err := s.loadEligibleImage(tx, ref.ID)
 		if err != nil {
 			return err
 		}
+		viewed = img
 		if err := tx.Model(&models.Image{}).Where("id = ?", img.ID).Update("is_stale", false).Error; err != nil {
 			return err
 		}
@@ -899,7 +912,13 @@ func (s *ShortFeedService) recordImageView(ref ShortFeedMediaRef) (*ShortFeedInt
 	if err != nil {
 		return nil, err
 	}
-	return stateInteractionDTO(ref, state), nil
+	// liked/favorited 取自 images 行（唯一数据），互动表只提供浏览次数。
+	dto := stateInteractionDTO(ref, state)
+	dto.Liked = viewed.IsLiked
+	dto.Favorited = viewed.IsFavorite
+	dto.LikedAt = nil
+	dto.FavoritedAt = viewed.FavoritedAt
+	return dto, nil
 }
 
 func (s *ShortFeedService) setImageLiked(ref ShortFeedMediaRef, liked bool) (*ShortFeedInteractionDTO, error) {

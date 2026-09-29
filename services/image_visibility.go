@@ -78,12 +78,13 @@ type HiddenImagePage struct {
 	HasMore    bool          `json:"has_more"`
 }
 
-// ListHiddenImages 按 id 倒序分页列出被扫描器隐藏的图片：deleted_by='scanner'，或带 is_stale
-// 恢复标记的软删图片。用户主动删除的图片（deleted_by='user'）不在这里，它们在回收站。
+// ListHiddenImages 按 id 倒序分页列出被扫描隐藏的图片：被扫描器软删的（deleted_by='scanner'），
+// 带 is_stale 恢复标记的软删图片，以及仍然活跃但 is_stale 的图片（它们已从图库视图里消失，Minor 11）。
+// 用户主动删除的图片（deleted_by='user'）不在这里，它们在回收站。
 func (s *ImageService) ListHiddenImages(cursor uint, limit int) (*HiddenImagePage, error) {
 	limit = normalizeEntityPageLimit(limit)
 	query := database.DB.Unscoped().Model(&models.Image{}).
-		Where("deleted_at IS NOT NULL AND (deleted_by = ? OR is_stale = ?)", "scanner", true)
+		Where("(deleted_at IS NOT NULL AND deleted_by = ?) OR is_stale = ?", "scanner", true)
 	if cursor > 0 {
 		query = query.Where("id < ?", cursor)
 	}

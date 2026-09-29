@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -314,31 +317,230 @@ func TestNarrowReconcileClearsOfflineRootAndRefinesMissingLIB07(t *testing.T) {
 	}
 }
 
+// staleGuardPendingFixes 是扫描出的、不在 P-010 / P-011 可修改范围内的违规点。每一项都带说明，由后续切片修复后
+// 从这里删除；新增违规点不允许往这里加。key 是「文件:函数名」。
+var staleGuardPendingFixes = map[string]string{
+	// 播放代理生成失败时只写了 is_stale=true，没有写 stale_reason。playback_proxy_service.go 归 P-025（只改队列排位），
+	// 这一处由主代理在 P-029 整合时改成同时写 stale_reason（例如复用 markVideoStale 的带原因写法）。
+	"playback_proxy_service.go:markVideoStale": "P-029 整合时补 stale_reason（P-025 的写入范围不含此处）",
+}
+
+// TestStaleWritesAlwaysCarryReasonLIB10 用 AST 扫描 services 下全部非测试 .go 文件：
+// 视频表上任何把 is_stale 写成 true 的 Update / Updates / UpdateColumn(s) / 原生 SQL，必须在同一语句里写非空 stale_reason；
+// 写成 false 时必须同时把 stale_reason 清空。images 表没有 stale_reason 列，不受此约束。
 func TestStaleWritesAlwaysCarryReasonLIB10(t *testing.T) {
-	files := []string{
-		"video_scan.go", "library_watcher.go", "file_migration.go", "file_migration_io.go",
-		"directory_service.go", "video_playback.go", "video_rename_move.go", "scan_removal_guard.go",
-		"directory_scan_progress.go",
+	files, err := filepath.Glob("*.go")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("扫描 services 源文件失败: %v", err)
 	}
-	singleColumn := regexp.MustCompile(`Update\("is_stale"`)
-	mapWrite := regexp.MustCompile(`"is_stale":\s*(true|false)`)
+	updateNames := map[string]bool{"Update": true, "Updates": true, "UpdateColumn": true, "UpdateColumns": true}
+	rawNames := map[string]bool{"Exec": true, "Raw": true}
+	stringOf := func(expr ast.Expr) (string, bool) {
+		lit, ok := expr.(*ast.BasicLit)
+		if !ok || lit.Kind != token.STRING {
+			return "", false
+		}
+		value, err := strconv.Unquote(lit.Value)
+		return value, err == nil
+	}
+	isEmptyString := func(expr ast.Expr) bool {
+		value, ok := stringOf(expr)
+		return ok && value == ""
+	}
+	isModelsImage := func(node ast.Node) bool {
+		selector, ok := node.(*ast.SelectorExpr)
+		if !ok {
+			return false
+		}
+		pkg, ok := selector.X.(*ast.Ident)
+		return ok && pkg.Name == "models" && selector.Sel.Name == "Image"
+	}
+	// imageVariables 找出函数里类型是 models.Image（含指针、切片）的形参与局部变量名。
+	imageVariables := func(fn *ast.FuncDecl) map[string]bool {
+		names := make(map[string]bool)
+		typeIsImage := func(expr ast.Expr) bool {
+			found := false
+			ast.Inspect(expr, func(node ast.Node) bool {
+				if isModelsImage(node) {
+					found = true
+				}
+				return !found
+			})
+			return found
+		}
+		if fn.Type.Params != nil {
+			for _, field := range fn.Type.Params.List {
+				if typeIsImage(field.Type) {
+					for _, ident := range field.Names {
+						names[ident.Name] = true
+					}
+				}
+			}
+		}
+		ast.Inspect(fn, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.ValueSpec:
+				if typed.Type != nil && typeIsImage(typed.Type) {
+					for _, ident := range typed.Names {
+						names[ident.Name] = true
+					}
+				}
+			case *ast.AssignStmt:
+				for index, rhs := range typed.Rhs {
+					if index < len(typed.Lhs) && typeIsImage(rhs) {
+						if ident, ok := typed.Lhs[index].(*ast.Ident); ok {
+							names[ident.Name] = true
+						}
+					}
+				}
+			}
+			return true
+		})
+		return names
+	}
+	// receiverMentionsImages 沿调用链找 models.Image、Table("images") 或图片类型的变量。
+	receiverMentionsImages := func(expr ast.Expr, imageVars map[string]bool) bool {
+		mentions := false
+		ast.Inspect(expr, func(node ast.Node) bool {
+			switch typed := node.(type) {
+			case *ast.SelectorExpr:
+				if isModelsImage(typed) {
+					mentions = true
+				}
+			case *ast.Ident:
+				if imageVars[typed.Name] {
+					mentions = true
+				}
+			case *ast.BasicLit:
+				if value, ok := stringOf(typed); ok && value == "images" {
+					mentions = true
+				}
+			}
+			return !mentions
+		})
+		return mentions
+	}
+
+	violations := make(map[string]string)
 	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		fset := token.NewFileSet()
+		parsed, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("解析 %s 失败: %v", name, err)
+		}
 		raw, err := os.ReadFile(name)
 		if err != nil {
-			t.Fatalf("读取 %s 失败: %v", name, err)
-		}
-		if singleColumn.Match(raw) {
-			t.Errorf("%s 用单列 Update 写了 is_stale，必须同时写 stale_reason", name)
+			t.Fatal(err)
 		}
 		lines := strings.Split(string(raw), "\n")
-		for index, line := range lines {
-			if !mapWrite.MatchString(line) {
+		nearbyReason := func(line int) bool {
+			for i := max(0, line-7); i < min(len(lines), line+6); i++ {
+				if strings.Contains(lines[i], `"stale_reason"`) {
+					return true
+				}
+			}
+			return false
+		}
+		for _, decl := range parsed.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
 				continue
 			}
-			window := strings.Join(lines[max(0, index-3):min(len(lines), index+4)], "\n")
-			if !strings.Contains(window, `"stale_reason"`) {
-				t.Errorf("%s:%d 写 is_stale 时没有同时写 stale_reason", name, index+1)
-			}
+			imageVars := imageVariables(fn)
+			ast.Inspect(fn, func(node ast.Node) bool {
+				call, ok := node.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				selector, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				key := name + ":" + fn.Name.Name
+				position := fset.Position(call.Pos())
+				report := func(message string) {
+					violations[key] = message + "（" + name + ":" + strconv.Itoa(position.Line) + "）"
+				}
+				if rawNames[selector.Sel.Name] {
+					for _, arg := range call.Args {
+						sql, ok := stringOf(arg)
+						if !ok {
+							continue
+						}
+						lower := strings.ToLower(sql)
+						if strings.Contains(lower, "is_stale") && strings.Contains(lower, "update") && strings.Contains(lower, " set ") &&
+							!strings.Contains(lower, "images") && !strings.Contains(lower, "stale_reason") {
+							report("原生 SQL 写了 is_stale 却没有写 stale_reason")
+						}
+					}
+					return true
+				}
+				if !updateNames[selector.Sel.Name] || receiverMentionsImages(selector.X, imageVars) {
+					return true
+				}
+				for index, arg := range call.Args {
+					if column, ok := stringOf(arg); ok && column == "is_stale" && index == 0 {
+						// 单列写法：值在下一个参数，原因没法在同一语句里写，只能靠紧邻的另一条带原因的更新。
+						if !nearbyReason(position.Line) {
+							report("单列 Update(\"is_stale\", …) 没有紧邻的 stale_reason 写入")
+						}
+						continue
+					}
+					literal, ok := arg.(*ast.CompositeLit)
+					if !ok {
+						continue
+					}
+					var staleValue, reasonValue ast.Expr
+					hasStale, hasReason := false, false
+					for _, element := range literal.Elts {
+						pair, ok := element.(*ast.KeyValueExpr)
+						if !ok {
+							continue
+						}
+						fieldName := ""
+						if text, ok := stringOf(pair.Key); ok {
+							fieldName = text
+						} else if ident, ok := pair.Key.(*ast.Ident); ok {
+							fieldName = ident.Name
+						}
+						switch fieldName {
+						case "is_stale", "IsStale":
+							hasStale, staleValue = true, pair.Value
+						case "stale_reason", "StaleReason":
+							hasReason, reasonValue = true, pair.Value
+						}
+					}
+					if !hasStale {
+						continue
+					}
+					if !hasReason {
+						report("写 is_stale 的同一语句里没有 stale_reason")
+						continue
+					}
+					if ident, ok := staleValue.(*ast.Ident); ok && ident.Name == "true" && isEmptyString(reasonValue) {
+						report("is_stale=true 时 stale_reason 不能是空串")
+					}
+					if ident, ok := staleValue.(*ast.Ident); ok && ident.Name == "false" && !isEmptyString(reasonValue) {
+						report("is_stale=false 时必须把 stale_reason 清空")
+					}
+				}
+				return true
+			})
+		}
+	}
+	for key, message := range violations {
+		if _, pending := staleGuardPendingFixes[key]; pending {
+			continue
+		}
+		t.Errorf("%s: %s", key, message)
+	}
+	// 待修白名单里的项被修好后必须从白名单删除，避免它变成永久豁免。
+	for key := range staleGuardPendingFixes {
+		if _, still := violations[key]; !still {
+			t.Errorf("待修白名单项 %s 已不再违规，请从 staleGuardPendingFixes 删除", key)
 		}
 	}
 }
@@ -1004,8 +1206,17 @@ func TestLibraryWatcherOfflineThenRecoveryEndToEndLIB07(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	if got := p011ReloadVideo(t, video.ID); !got.IsStale || got.StaleReason != models.StaleReasonOfflineRoot {
-		t.Fatalf("运行中根不可用应标 offline_root（与启动一致）: %+v", got)
+	// 离线标记在工作 goroutine 里执行（Minor 12），不在监听事件循环里同步拿写锁：轮询等它落库。
+	markDeadline := time.Now().Add(3 * time.Second)
+	for {
+		got := p011ReloadVideo(t, video.ID)
+		if got.IsStale && got.StaleReason == models.StaleReasonOfflineRoot {
+			break
+		}
+		if time.Now().After(markDeadline) {
+			t.Fatalf("运行中根不可用应标 offline_root（与启动一致）: %+v", got)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	// 盘重新插上：文件回来，巡检重连并对账，失效原因与标记一起清除。

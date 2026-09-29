@@ -689,7 +689,7 @@ func TestTagServiceMETA14UsageCounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if counts[used.ID] != (TagUsageCount{Videos: 1, Images: 2}) || counts[unused.ID] != (TagUsageCount{}) {
+	if counts[used.ID] != (TagUsageCount{Videos: 1, Images: 2, TrashedVideos: 1}) || counts[unused.ID] != (TagUsageCount{}) {
 		t.Fatalf("计数不符: %+v", counts)
 	}
 	if _, present := counts[unused.ID]; !present {

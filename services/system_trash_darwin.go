@@ -61,7 +61,6 @@ static int cineinsightTrashItem(const char *path, char **resulting, int *isCocoa
 import "C"
 
 import (
-	"errors"
 	"unsafe"
 )
 
@@ -88,9 +87,9 @@ func moveToSystemTrash(path string) (string, error) {
 	}()
 	if status == 0 {
 		if resulting == nil {
-			// 系统没有回报实际路径：文件确实进了废纸篓，但后面恢复需要这个路径。宁可当作失败，
-			// 让调用方走崩溃恢复分支按身份去找，也不能编一个路径。
-			return "", errors.New("移到废纸篓失败: 系统没有返回废纸篓中的位置")
+			// 系统没有回报实际路径：文件确实进了废纸篓，但后面恢复需要这个路径。不能编一个路径，
+			// 也不能当作「没移动」：返回哨兵错误，调用方保留 pending 条目并按身份去废纸篓里找。
+			return "", errTrashLocationUnknown
 		}
 		return C.GoString(resulting), nil
 	}

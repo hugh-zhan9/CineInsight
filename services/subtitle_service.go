@@ -73,6 +73,9 @@ type pendingSubtitleArtifact struct {
 	Engine       SubtitleEngine
 	SourceLang   string
 	DetectedLang string
+	// TranslationApplied 表示双语译文已经合并进临时文件（收尾时替换失败留下的现场），
+	// 强制重试时不得再翻译一次。
+	TranslationApplied bool
 }
 
 func NewSubtitleService(baseDir string) *SubtitleService {
@@ -409,18 +412,26 @@ func (s *SubtitleService) GenerateSubtitle(req SubtitleGenerateRequest, videoPat
 
 func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, req SubtitleGenerateRequest, videoPath string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
 	s.emitGenerateProgress(taskID, req, "checking", 0, "初始化任务...")
+	// 目标 .srt 若存在必须是普通文件：尽早报错，不要跑完识别才在写入器里失败。
+	if err := ensureSubtitleTargetReplaceable(subtitleparser.SRTPathForVideo(videoPath)); err != nil {
+		return nil, err
+	}
 	if options.ForceGenerate {
 		if pending := s.peekPendingSubtitle(req.VideoID); pending != nil &&
 			pending.VideoPath == videoPath &&
 			pending.Engine == req.Engine &&
 			(pending.SourceLang == "" || pending.SourceLang == req.SourceLang) {
 			if _, err := os.Stat(pending.SRTPath); err == nil {
-				unlockSubtitle := lockSubtitleFile(req.VideoID)
+				unlockSubtitle := lockSubtitleFile(subtitleparser.SRTPathForVideo(videoPath))
 				defer unlockSubtitle()
 				s.emitGenerateProgress(taskID, req, "finalizing", 35, "使用上次校验结果强制生成...")
+				if pending.TranslationApplied {
+					// 上次已把译文合并进临时文件（只是替换失败），重试不能再翻译一遍。
+					options.BilingualEnabled = false
+				}
 				result, err := s.finalizeSubtitleArtifact(ctx, taskID, req, pending.SRTPath, pending.DetectedLang, options)
 				if err != nil {
-					return nil, err
+					return nil, s.retainPendingAfterReplaceFailure(err, req, videoPath, pending.SRTPath, pending.DetectedLang)
 				}
 				if result.Status == SubtitleResultStatusSuccess {
 					s.consumePendingSubtitle(req.VideoID)
@@ -472,7 +483,7 @@ func (s *SubtitleService) commitTranscription(ctx context.Context, taskID uint, 
 	s.emitGenerateProgress(taskID, req, "normalizing", 35, "整理转写结果...")
 	srtPath := subtitleparser.SRTPathForVideo(videoPath)
 	pendingPath := subtitlePendingPath(srtPath)
-	unlockSubtitle := lockSubtitleFile(req.VideoID)
+	unlockSubtitle := lockSubtitleFile(srtPath)
 	defer unlockSubtitle()
 
 	if plainTranscriptText(segments, 0) == "" {
@@ -522,7 +533,7 @@ func (s *SubtitleService) commitTranscription(ctx context.Context, taskID uint, 
 
 	result, err := s.finalizeSubtitleArtifact(ctx, taskID, req, pendingPath, detectedLang, options)
 	if err != nil {
-		return nil, err
+		return nil, s.retainPendingAfterReplaceFailure(err, req, videoPath, pendingPath, detectedLang)
 	}
 	s.consumePendingSubtitle(req.VideoID)
 	return result, nil
@@ -533,9 +544,13 @@ func subtitlePendingPath(srtPath string) string {
 	return strings.TrimSuffix(srtPath, filepath.Ext(srtPath)) + subtitlePendingSuffix
 }
 
-// subtitleFinalPathForPending 是 subtitlePendingPath 的逆运算。
-func subtitleFinalPathForPending(pendingPath string) string {
-	return strings.TrimSuffix(pendingPath, subtitlePendingSuffix) + ".srt"
+// subtitleFinalPathForPending 是 subtitlePendingPath 的逆运算；输入不是 pending 形态时返回错误，
+// 不再静默地把任意路径改成「xxx.srt」。
+func subtitleFinalPathForPending(pendingPath string) (string, error) {
+	if !strings.HasSuffix(pendingPath, subtitlePendingSuffix) {
+		return "", errors.New("不是字幕临时文件路径")
+	}
+	return strings.TrimSuffix(pendingPath, subtitlePendingSuffix) + ".srt", nil
 }
 
 // DiscardPendingSubtitle 放弃校验未过的临时字幕：删除临时文件并清掉登记（D-PC13）。
@@ -544,10 +559,11 @@ func (s *SubtitleService) DiscardPendingSubtitle(videoID uint) error {
 	if artifact == nil {
 		return nil
 	}
-	if !strings.HasSuffix(artifact.SRTPath, subtitlePendingSuffix) {
+	finalPath, err := subtitleFinalPathForPending(artifact.SRTPath)
+	if err != nil {
 		return nil
 	}
-	unlock := lockSubtitleFile(videoID)
+	unlock := lockSubtitleFile(finalPath)
 	defer unlock()
 	if err := os.Remove(artifact.SRTPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("删除临时字幕失败: %s", subtitleIOReason(err))
@@ -660,17 +676,48 @@ func plainTranscriptText(segments []subtitleparser.Segment, charLimit int) strin
 	return truncateRunes(builder.String(), charLimit)
 }
 
+// subtitleReplaceFailedError 表示收尾时原子替换失败：临时文件已按设计保留，等待强制重试。
+type subtitleReplaceFailedError struct {
+	err                error
+	translationApplied bool
+}
+
+func (e *subtitleReplaceFailedError) Error() string { return e.err.Error() }
+func (e *subtitleReplaceFailedError) Unwrap() error { return e.err }
+
+// retainPendingAfterReplaceFailure 在收尾替换失败后重新登记保留下来的 pending 文件，
+// 让「强制生成」可以直接重试收尾，不必重跑识别。其他错误原样返回。
+func (s *SubtitleService) retainPendingAfterReplaceFailure(err error, req SubtitleGenerateRequest, videoPath, pendingPath, detectedLang string) error {
+	var replaceErr *subtitleReplaceFailedError
+	if errors.As(err, &replaceErr) {
+		s.cachePendingSubtitle(&pendingSubtitleArtifact{
+			VideoID:            req.VideoID,
+			VideoPath:          videoPath,
+			SRTPath:            pendingPath,
+			Engine:             req.Engine,
+			SourceLang:         req.SourceLang,
+			DetectedLang:       detectedLang,
+			TranslationApplied: replaceErr.translationApplied,
+		})
+	}
+	return err
+}
+
 // finalizeSubtitleArtifact 收尾一份已写好的 pending 字幕：可选的双语翻译在临时文件上完成，
 // 最后经写入器 Replace 到同名 .srt 并删除临时文件（D-PC13）。调用方持有 lockSubtitleFile。
 // pendingPath 必须是 subtitlePendingPath 形态；任何非成功出口都会删掉临时文件。
 func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID uint, req SubtitleGenerateRequest, pendingPath string, detectedLang string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
 	warnings := []string{}
 	translationStatus := ""
-	srtPath := subtitleFinalPathForPending(pendingPath)
+	srtPath, err := subtitleFinalPathForPending(pendingPath)
+	if err != nil {
+		return nil, err
+	}
 	outputPrefix := strings.TrimSuffix(srtPath, filepath.Ext(srtPath))
-	committed := false
+	// keepPending 为真时（替换失败）保留临时文件与登记，允许强制重试而不必重跑识别。
+	committed, keepPending := false, false
 	defer func() {
-		if !committed {
+		if !committed && !keepPending {
 			_ = os.Remove(pendingPath)
 		}
 	}()
@@ -758,7 +805,12 @@ done:
 			s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
 			return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
 		}
-		return nil, fmt.Errorf("写入字幕失败: %w", err)
+		// 替换失败不是内容问题：保留临时文件并重新登记，用户可以「强制生成」重试收尾。
+		// 登记由持有视频路径的调用方完成（retainPendingAfterReplaceFailure）。
+		keepPending = true
+		return nil, &subtitleReplaceFailedError{
+			err: fmt.Errorf("写入字幕失败: %w", err), translationApplied: translationStatus == "translated",
+		}
 	}
 	if writeResult.BackupID != "" {
 		log.Printf("[Subtitle] replaced existing subtitle video_id=%d backup_id=%s", req.VideoID, writeResult.BackupID)
