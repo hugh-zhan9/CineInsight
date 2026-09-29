@@ -108,12 +108,13 @@ func (s *ImageService) restoreImageIfPutBack(path string) (bool, error) {
 	return false, nil
 }
 
-// putBackDetected 是「访达放回原处」的唯一判定（扫描、手动添加、回收站列表与清除共用，Minor 2）：
+// putBackDetected 是「访达放回原处」的唯一判定（扫描、手动添加、回收站列表、清除与用量共用，Minor 2）：
 //
 //   - 条目是 trash 模式、状态为 deleted / file_gone，且记录了大小、mtime、inode（canDetectPutBack）；
-//   - 原路径上文件的大小、mtime、inode（不含设备号）与条目全部一致；
-//   - 废纸篓里的那一份已经不在，或与原路径上的是同一个文件（同一 inode 的两个名字）。
+//   - 原路径上文件的大小、mtime、inode（不含设备号）与条目全部一致。
 //
+// 只凭原路径上的文件身份判定，不读废纸篓一侧（I-A）：同一 inode 就是当初删掉的那个文件，废纸篓里
+// 同时还有一个名字（硬链接）也是同一个文件；读不到废纸篓（EPERM 等）不能反过来让扫描把它当新文件收录。
 // 只有大小 + mtime 一致而 inode 不同，是另一个文件，不得认定为放回。
 func putBackDetected(facts softDeletedEntryFacts, size, mtimeNS int64, identity string) bool {
 	if facts.State != trashStateDeleted && facts.State != models.TrashStateFileGone {
@@ -123,22 +124,7 @@ func putBackDetected(facts softDeletedEntryFacts, size, mtimeNS int64, identity 
 	if !canDetectPutBack(facts.Mode, want) {
 		return false
 	}
-	if want.Size != size || want.ModTimeNS != mtimeNS || identity == "" || identityInode(want.Identity) != identityInode(identity) {
-		return false
-	}
-	trashPath := strings.TrimSpace(facts.TrashPath)
-	if trashPath == "" {
-		return true
-	}
-	trashInfo, err := os.Stat(trashPath)
-	switch {
-	case errors.Is(err, os.ErrNotExist):
-		return true
-	case err != nil:
-		// 读不到废纸篓那一侧（权限等）：证据不足，不认定。
-		return false
-	}
-	return !trashInfo.IsDir() && stableFileIdentity(trashInfo) == identity
+	return want.Size == size && want.ModTimeNS == mtimeNS && identity != "" && identityInode(want.Identity) == identityInode(identity)
 }
 
 // putBackDetectedFor 用原路径上文件的 FileInfo 做放回判定。
@@ -161,14 +147,28 @@ func putBackAtPath(facts softDeletedEntryFacts, path string) bool {
 	return putBackDetectedFor(facts, info)
 }
 
+// legacyPutBackAtPath 是 legacy_trash 旧行（及回填前 file_moved=true 的旧行）的轻量放回判定（M9）：
+// 原路径上文件的大小与 inode（不含设备号）都与条目一致。旧行没有可信的 mtime，只比这两项；
+// 没记录大小或身份的旧行无从判定。只看原路径，不读废纸篓一侧。
+func legacyPutBackAtPath(fileSize int64, fileIdentity, path string) bool {
+	if fileSize == 0 || fileIdentity == "" || strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, exists, err := regularFileState(path)
+	if err != nil || !exists {
+		return false
+	}
+	return info.Size() == fileSize && sameFileInode(fileIdentity, info)
+}
+
 func videoEntryFacts(entry models.VideoTrashEntry) softDeletedEntryFacts {
 	return softDeletedEntryFacts{Mode: entry.Mode, DeletedBy: entry.DeletedBy, FileSize: entry.FileSize, FileModTime: entry.FileModTime,
-		FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State, TrashPath: entry.TrashPath}
+		FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State}
 }
 
 func imageEntryFacts(entry models.ImageTrashEntry) softDeletedEntryFacts {
 	return softDeletedEntryFacts{Mode: entry.Mode, DeletedBy: entry.DeletedBy, FileSize: entry.FileSize, FileModTime: entry.FileModTime,
-		FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State, TrashPath: entry.TrashPath}
+		FileIdentity: entry.FileIdentity, DeleteBatchID: entry.DeleteBatchID, State: entry.State}
 }
 
 // 同路径软删行的判定结果（详细设计 §2.2）。
@@ -195,8 +195,6 @@ type softDeletedEntryFacts struct {
 	FileIdentity  string
 	DeleteBatchID string
 	State         string
-	// TrashPath 只用于放回判定的「废纸篓那一份已不在」一项。
-	TrashPath string
 }
 
 // decideSoftDeletedPath 按 §2.2 的表依次判定：

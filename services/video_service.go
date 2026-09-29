@@ -435,6 +435,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 			return nil, fmt.Errorf("恢复提交结果无法确认，已保留当前文件和恢复日志供启动对账: %w", err)
 		}
 		if committed {
+			removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 			if loadErr := database.DB.Preload("Tags").First(&restored, video.ID).Error; loadErr != nil {
 				return nil, fmt.Errorf("恢复已提交，但读取结果失败: %w", loadErr)
 			}
@@ -453,6 +454,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		_ = database.DB.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": err.Error()}).Error
 		return nil, fmt.Errorf("恢复数据库记录失败: %w", err)
 	}
+	removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 	log.Printf("视频恢复 video_id=%d original_deleted_by=%s", restored.ID, entry.DeletedBy)
 	return &restored, nil
 }
@@ -793,8 +795,14 @@ func trashPathAlreadyRecorded(path string) bool {
 }
 
 // ensureTrashEntryFileRestored 确保条目的文件回到原路径。返回的 movedFromTrash 只在「这一次把文件
-// 从废纸篓移回了原处」时为 true（包括清掉原路径与废纸篓之间的硬链接副本）；文件本来就在原路径
-// （访达放回、上次恢复中断前已移回）时为 false，调用方据此决定事务失败后要不要补偿（I-1）。
+// 从废纸篓移回了原处」时为 true；文件本来就在原路径（访达放回、硬链接、上次恢复中断前已移回）时为
+// false，调用方据此决定事务失败后要不要补偿（I-1）。
+//
+//   - trash 模式：原路径上的文件与条目严格一致（inode + 大小 + mtime）就是当初删掉的那个文件，直接判定
+//     「已在原处」，不读废纸篓一侧（I-A）：读不到废纸篓（EPERM 等）不得让恢复失败；废纸篓里同 inode 的
+//     另一个名字（硬链接）也不删（M1）。
+//   - 原路径与废纸篓是同一个文件（硬链接）：文件本来就在原处，返回 false、不删废纸篓那个名字（M1）；
+//     legacy_trash 旧行在恢复提交之后才清理旧版 trash/ 里的残留名字（removeLegacyTrashLinkAfterRestore）。
 func ensureTrashEntryFileRestored(trashService *TrashService, entry models.VideoTrashEntry) (bool, error) {
 	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
 	strict := !isLegacyTrashMode(entry.Mode)
@@ -815,18 +823,22 @@ func ensureTrashEntryFileRestored(trashService *TrashService, entry models.Video
 	if err != nil {
 		return false, err
 	}
-	trashInfo, trashExists, err := regularFileState(entry.TrashPath)
+	if strict && originalExists && want.strictMatch(originalInfo) {
+		return false, nil
+	}
+	trashInfo, trashExists, err := trashSideFileState(entry.TrashPath)
 	if err != nil {
 		return false, err
 	}
 	if originalExists && trashExists {
-		if os.SameFile(originalInfo, trashInfo) {
-			if err := os.Remove(entry.TrashPath); err != nil {
-				return false, fmt.Errorf("清理已恢复的回收站副本失败: %w", err)
-			}
-			return true, nil
+		if !os.SameFile(originalInfo, trashInfo) {
+			return false, ErrTrashPathOccupied
 		}
-		return false, ErrTrashPathOccupied
+		// 硬链接：原路径上本来就有这个文件。trash 模式走到这里说明它与条目不符（严格一致已在上面返回）。
+		if strict {
+			return false, ErrTrashIdentityMismatch
+		}
+		return false, nil
 	}
 	if originalExists {
 		if !matches(entry.OriginalPath, originalInfo) {

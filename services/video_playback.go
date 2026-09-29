@@ -194,19 +194,21 @@ var (
 	playbackRelocateSem = make(chan struct{}, 1)
 	playbackRelocateWG  sync.WaitGroup
 	// playbackRelocateMu 保护下面三项，并让 WaitGroup 的 Add 与 StopPlaybackRelocation 的 Wait 不并发：
-	// stopping 期间不再登记新的重定位（Minor 5）。
-	playbackRelocateMu       sync.Mutex
-	playbackRelocateCtx      context.Context
-	playbackRelocateCancel   context.CancelFunc
-	playbackRelocateStopping bool
+	// 有停止者在等待期间不再登记新的重定位（Minor 5）。
+	playbackRelocateMu     sync.Mutex
+	playbackRelocateCtx    context.Context
+	playbackRelocateCancel context.CancelFunc
+	// playbackRelocateStoppers 是正在执行（或等待）StopPlaybackRelocation 的调用者个数。用计数而不是布尔：
+	// 两个 Stop 并发时，先返回的那个不能把「停止中」清掉，否则新的 Add 会与另一个仍在 Wait 的 Stop 并发（M8）。
+	playbackRelocateStoppers int
 )
 
-// beginPlaybackRelocation 登记一次后台重定位：返回它要用的取消上下文。StopPlaybackRelocation 正在
-// 等待时返回 false，调用方不启动 goroutine（Add 与 Wait 在同一把锁下互斥）。
+// beginPlaybackRelocation 登记一次后台重定位：返回它要用的取消上下文。有 StopPlaybackRelocation 正在
+// 执行时返回 false，调用方不启动 goroutine（Add 只在没有任何 Wait 进行中时发生，与 Wait 在同一把锁下互斥）。
 func beginPlaybackRelocation() (context.Context, bool) {
 	playbackRelocateMu.Lock()
 	defer playbackRelocateMu.Unlock()
-	if playbackRelocateStopping {
+	if playbackRelocateStoppers > 0 {
 		return nil, false
 	}
 	if playbackRelocateCtx == nil {
@@ -217,11 +219,11 @@ func beginPlaybackRelocation() (context.Context, bool) {
 }
 
 // StopPlaybackRelocation 取消排队与进行中的后台重定位并等它们退出（应用退出时调用；接线项：
-// App.shutdown）。先在锁内置「停止中」并取消上下文，之后不再有新的 Add，再 Wait；Wait 返回后
-// 清除标志，此后再次发生的播放失败仍会启动新的重定位。
+// App.shutdown）。可安全重入与并发调用：先在锁内登记为停止者并取消上下文，之后不再有新的 Add，再 Wait；
+// 最后一个停止者返回时才重新允许登记，此后再次发生的播放失败仍会启动新的重定位。
 func StopPlaybackRelocation() {
 	playbackRelocateMu.Lock()
-	playbackRelocateStopping = true
+	playbackRelocateStoppers++
 	if playbackRelocateCancel != nil {
 		playbackRelocateCancel()
 	}
@@ -229,7 +231,7 @@ func StopPlaybackRelocation() {
 	playbackRelocateMu.Unlock()
 	playbackRelocateWG.Wait()
 	playbackRelocateMu.Lock()
-	playbackRelocateStopping = false
+	playbackRelocateStoppers--
 	playbackRelocateMu.Unlock()
 }
 

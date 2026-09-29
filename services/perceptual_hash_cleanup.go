@@ -198,21 +198,6 @@ func perceptualHashRowComplete(row models.VideoPerceptualHash) bool {
 	return row.HashEarly != "" && row.HashMiddle != "" && row.HashLate != ""
 }
 
-// loadNearDuplicateDismissals 返回用户已忽略的近似重复视频对（不看指纹）。
-// AI 查找同源（ai_same_source_service.go）用它跳过判过"不是同片"的对；清理分析改用
-// loadActiveNearDuplicateDismissals，文件变了的忽略不再算数。
-func loadNearDuplicateDismissals() (map[[2]uint]struct{}, error) {
-	var dismissals []models.NearDuplicateDismissal
-	if err := database.DB.Find(&dismissals).Error; err != nil {
-		return nil, err
-	}
-	pairs := make(map[[2]uint]struct{}, len(dismissals))
-	for _, dismissal := range dismissals {
-		pairs[cleanupVideoPairKey(dismissal.VideoLowID, dismissal.VideoHighID)] = struct{}{}
-	}
-	return pairs, nil
-}
-
 // loadActiveNearDuplicateDismissals 只返回仍然有效的近似重复忽略（D-PC31）：两侧记录的指纹
 // 为空（历史行）或与 current 一致才算数；current 里没有的视频（本轮读不到）无从核对，照旧算数。
 func loadActiveNearDuplicateDismissals(current map[uint]string) (map[[2]uint]struct{}, error) {

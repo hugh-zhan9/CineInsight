@@ -167,7 +167,7 @@ func TestVerifyClipPairSamplingAndFailures(t *testing.T) {
 				}
 				return clipTestRGB(120, 80, 40), nil
 			}}
-			got, err := svc.verifyClipPair(full, clip, CleanupClipGroup{OffsetSeconds: 20})
+			got, err := svc.verifyClipPair(context.Background(), full, clip, CleanupClipGroup{OffsetSeconds: 20})
 			if err != nil || got != test.want || calls != 10 {
 				t.Fatalf("got %v err=%v calls=%d", got, err, calls)
 			}
@@ -177,7 +177,7 @@ func TestVerifyClipPairSamplingAndFailures(t *testing.T) {
 		svc := &CleanupService{clipFrame: func(context.Context, string, float64) ([]byte, error) {
 			return nil, errors.New("decoder error with /private/media/path")
 		}}
-		ok, err := svc.verifyClipPair(full, clip, CleanupClipGroup{OffsetSeconds: 20})
+		ok, err := svc.verifyClipPair(context.Background(), full, clip, CleanupClipGroup{OffsetSeconds: 20})
 		if ok || err == nil || strings.Contains(err.Error(), "/private/media") {
 			t.Fatalf("read error must remain sanitized: %v %v", ok, err)
 		}
@@ -185,12 +185,28 @@ func TestVerifyClipPairSamplingAndFailures(t *testing.T) {
 	t.Run("cancelled", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		svc := &CleanupService{ctx: ctx, clipFrame: func(ctx context.Context, _ string, _ float64) ([]byte, error) {
+		svc := &CleanupService{clipFrame: func(ctx context.Context, _ string, _ float64) ([]byte, error) {
 			return nil, ctx.Err()
 		}}
-		ok, err := svc.verifyClipPair(full, clip, CleanupClipGroup{OffsetSeconds: 20})
+		ok, err := svc.verifyClipPair(ctx, full, clip, CleanupClipGroup{OffsetSeconds: 20})
 		if ok || !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled: %v %v", ok, err)
+		}
+	})
+	// IMG-12：用户取消本轮分析时，复核用的是分析的 ctx 而不是服务的 ctx，
+	// 正在进行的抽帧随之中断，不再读完剩下的采样点。
+	t.Run("IMG12 analysis cancel interrupts verification while service ctx is live", func(t *testing.T) {
+		analysis, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		calls := 0
+		svc := &CleanupService{ctx: context.Background(), clipFrame: func(ctx context.Context, _ string, _ float64) ([]byte, error) {
+			calls++
+			cancel()
+			return nil, ctx.Err()
+		}}
+		ok, err := svc.verifyClipPair(analysis, full, clip, CleanupClipGroup{OffsetSeconds: 20})
+		if ok || !errors.Is(err, context.Canceled) || calls != 1 {
+			t.Fatalf("analysis cancel should stop verification: ok=%v err=%v calls=%d", ok, err, calls)
 		}
 	})
 	t.Run("source changed during verification", func(t *testing.T) {
@@ -201,7 +217,7 @@ func TestVerifyClipPairSamplingAndFailures(t *testing.T) {
 			}
 			return clipTestRGB(120, 80, 40), nil
 		}
-		if ok, err := svc.verifyClipPair(full, clip, CleanupClipGroup{OffsetSeconds: 20}); err == nil || ok {
+		if ok, err := svc.verifyClipPair(context.Background(), full, clip, CleanupClipGroup{OffsetSeconds: 20}); err == nil || ok {
 			t.Fatalf("changed source: %v %v", ok, err)
 		}
 	})

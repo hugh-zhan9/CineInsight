@@ -867,18 +867,20 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
 - **P-016 交付后追加**：
   - **P-029** 接线：`imageCleanupService.SetBackgroundTaskRegistry(backgroundTasks)`；`app_library.go` 中扫描后的自动清理分析改为 `StartAnalysisFromSettings()`，以使用设置中的阈值（主代理裁决，与 D-PC36 一致）。
   - **P-020**：`SetVideoWatched` 在已看状态翻转时通知 `WatchStateObserver`，合并元数据后的已看同步依赖这一点。
-  - **小修（下一个跟进子代理）**：
-    - `clip_verify.go` 的画面复核改为使用分析传入的 ctx，取消时能立即中断；
-    - `ai_same_source_service.go` 的查找同源改用带指纹核对的近似重复忽略加载函数。
+  - **小修（已由主代理完成，2026-09-29）**：
+    - `clip_verify.go` 的画面复核改为使用分析传入的 ctx，取消时能立即中断（`TestVerifyClipPairSamplingAndFailures/IMG12…`）；
+    - `ai_same_source_service.go` 的查找同源改用带指纹核对的近似重复忽略加载函数，删除不看指纹的旧加载函数（`TestAISameSourceIMG07DismissalFollowsFileFingerprint`）。
 - **复审 A 第三轮修复后追加**：
   - **P-029** 接线：
     - `shutdown` 时调用 `services.StopPlaybackRelocation()`；
     - 启动与恢复续跑都走 `withShortFeedLifecycle(restartShortFeedServerLocked)`；
     - `GetShortFeedServerStatus` 在服务为 nil 时，`AllowedAccess` 文案与 `allowedAccessText` 保持同一口径。
-  - **小修（下一个跟进子代理，主代理裁决）**：图片扫描改为按路径判定 trash 目录，与视频侧的 `isTrashPath` / 旧版启发式一致，修复 IMG-13（并入 LIB-14），并同步更新 `TestImageSyncSkipsTrashAndHiddenPaths`。
+  - **小修（已并入修复 D，主代理裁决）**：图片扫描改为按路径判定 trash 目录，与视频侧的 `isTrashPath` / 旧版启发式一致，修复 IMG-13（并入 LIB-14），并同步更新 `TestImageSyncSkipsTrashAndHiddenPaths`。
   - **前端**：
     - 回收站中处于 `put_back` 状态的行，提示「已放回原处」，只提供恢复操作；
-    - 手机端 429 返回 `reset_required` 时，提示去桌面端修改 PIN；
+    - 手机端 429 返回 `daily_locked` 时，提示「请在电脑上解除锁定，或 24 小时后再试」（修复 D 之后不再有 `reset_required`）；
+    - 设置页 `MobileSection` 显示锁定状态（`login_locked` / `locked_until`），提供「解除锁定」（`UnlockShortFeedLogin`）；
+    - 回收站：清除与「移除已清除记录」遇到已放回条目返回 `not_purgeable`，移除记录可能返回 `volume_offline`；legacy 行也可能 `put_back=true`；
     - PIN 输入下限改为 6 位；
     - 手机端新增 409 `volume_offline`、`permission_denied` 两种提示。
 - **P-014 / P-027 交付后追加**（主代理整合时已修：数据目录下的 `.env` 优先加载、「需要重启」按该文件判定、PG 清空范围补上语义向量表）：
@@ -952,3 +954,33 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
 P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/` 目录会被重新收录）、7 个 Important、13 个 Minor，交给评审修复子代理处理。P-010/P-011 在修复完成之前保持 in_progress。P-012/13、P-015/17/19、P-021 的评审仍在进行。
 
 修订后没有重新做全量评审：计划评审规则只要求复核修改过的部分。P-001、P-010 的迁移与删除语义会在实施后另做独立代码评审。
+
+**P-014 / P-027 整合与评审**（2026-09-29）：两片于 `422d077` 合入，双后端全量通过（PG：`-p 1`，services 922 秒，含只在 PG 上跑的删表回滚用例）。整合时主代理修了三处：
+- 数据目录下的 `.env` 优先加载，否则切换后端重启后不生效；
+- 「需要重启」改为按该文件判定；
+- PG 清空目标库的范围补上语义向量表。
+
+独立只读评审（opus-xhigh）：0 个 Critical，3 个 Important，8 个 Minor，全部交给修复 F。
+- I-1：切换成功后撤了维护围栏，重启前的写入会落进旧库。这与 APP-02「迁移后到重启前的写入丢失」冲突。主代理裁决为：成功后保持围栏，进入「待重启」终态，已修订详细设计 §11 与 §1.2b。
+- I-2：SQLite 恢复替换文件不是原子的。
+- I-3：重启标记中断时，超过 100 条的中断任务会被裁剪掉。
+- Minor：
+  - 旧格式的数据目录 `.env`；
+  - 进程环境覆盖时「需要重启」一直亮着；
+  - 迁移期间退出会卡住；
+  - 维护期间备份仍会写入；
+  - 取消引擎准备会留下坏掉的 venv；
+  - 同步性能，以及失败后仍刷新完成时间；
+  - 放弃待确认字幕时产生孤儿文件、误删共用的临时文件；
+  - 三处测试缺口。
+
+评审认为 P-014 扩大的节流范围与 `has_sidecar` 的写入时机都符合 §1.2b 的口径，不构成违背。P-014、P-027 在修复 F 合入并复审之前保持 in_progress。
+- **转入下游**：P-022 的 Jellyfin `HasSubtitles` 如果要用 `has_sidecar`，必须保证它已经算过：P-029 在启动完成后安排一轮无字幕索引同步，或者 P-022 改用实时判定。
+
+**修复 D 整合**（2026-09-29）：第三轮回收站修复的复审发现（I-A、M1–M11）与 IMG-13 已全部合入。
+- 主代理整合时补了一处：`scan_removal_guard.go` 的删除保护改走先解析符号链接的挂载检查，对应测试 `TestLIB07RemovalGuardResolvesSymlinkedRootToUnmountedVolume`，已做变异验证。这个缺口是修复 D 报告的，但该文件不在它的写入范围内。
+- M4 公式按字面实现：条目表里如果有 2026-04-16 之前的条目，上界会回落到 07-30，效果与改动前相同。本机最早的条目是 2026-09-01，不受影响。
+- 残留风险：
+  - M9 只做了列表这一侧。扫描遇到放回原处的 legacy 文件时，可能新建一条记录；之后在回收站点恢复会得到 `path_occupied`。这种情况只在手工把旧版 `trash/` 里的文件挪回原处时出现。
+  - 重映射确认框里的「图片路径同样改写」只能在执行后报数，要事先报需要另加预览接口，本批不做。
+- P-029 接线：重新生成绑定时加入 `UnlockShortFeedLogin`。

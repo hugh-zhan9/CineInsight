@@ -22,8 +22,12 @@ type clipFrameReader func(context.Context, string, float64) ([]byte, error)
 
 // verifyClipPair 用画面结构与空间位置复核哈希候选。只读源文件，既不调用 AI，
 // 也不保存抽帧。读取失败必须报错，不能把未经复核的配对当作候选。
-func (s *CleanupService) verifyClipPair(full, clip clipSequence, candidate CleanupClipGroup) (bool, error) {
-	parent := s.ctx
+//
+// parent 是本轮分析的 ctx：用户取消分析时，正在进行的抽帧必须随之中断（IMG-12）。
+func (s *CleanupService) verifyClipPair(parent context.Context, full, clip clipSequence, candidate CleanupClipGroup) (bool, error) {
+	if parent == nil {
+		parent = s.ctx
+	}
 	if parent == nil {
 		parent = context.Background()
 	}

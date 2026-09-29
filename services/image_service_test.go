@@ -386,23 +386,39 @@ func TestImageSyncRespectsScanExcludePaths(t *testing.T) {
 	}
 }
 
+// IMG-13（并入 LIB-14）之后，图片扫描与视频扫描同一套按路径的回收站判定：旧版 trash/（父目录下有
+// 旧版时间段内无条目的软删图片、文件名对得上）与隐藏路径照常跳过；用户自己叫 Trash 的目录照常收录。
+// 原断言「trash/ 与 Trash/ 一律按目录名跳过」随之修正。
 func TestImageSyncSkipsTrashAndHiddenPaths(t *testing.T) {
 	setupImageServiceTestDB(t)
 	svc := NewImageService()
 	root := t.TempDir()
 	mustCreateFile(t, filepath.Join(root, "visible.jpg"))
 	mustCreateFile(t, filepath.Join(root, "trash", "deleted.jpg"))
-	mustCreateFile(t, filepath.Join(root, "Trash", "deleted2.jpg"))
+	mustCreateFile(t, filepath.Join(root, "albums", "Trash", "deleted2.jpg"))
 	mustCreateFile(t, filepath.Join(root, ".cache", "hidden-dir.jpg"))
 	mustCreateFile(t, filepath.Join(root, ".hidden.jpg"))
+	mustCreateFile(t, filepath.Join(root, ".Trash", "system.jpg"))
+	// 旧版应用删除 deleted.jpg 时把它移进了 root/trash/，库里只剩旧版时间段内、没有条目的软删行。
+	legacy := models.Image{Name: "deleted.jpg", Path: filepath.Join(root, "deleted.jpg"), Directory: root, Size: 1}
+	if err := database.DB.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Delete(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Unscoped().Model(&models.Image{}).Where("id = ?", legacy.ID).Update("deleted_at", p010LegacyEraDeletedAt).Error; err != nil {
+		t.Fatal(err)
+	}
 	imageTestMustAddDirectory(t, svc, root)
 
 	result := imageTestMustSync(t, svc)
-	if result.Added != 1 {
-		t.Fatalf("trash/隐藏路径应被过滤: %+v", result)
+	if result.Added != 2 {
+		t.Fatalf("旧版 trash/ 与隐藏路径应被过滤、用户的 Trash 目录照常收录: %+v", result)
 	}
 	var images []models.Image
-	if err := database.DB.Find(&images).Error; err != nil || len(images) != 1 || images[0].Name != "visible.jpg" {
+	if err := database.DB.Order("name").Find(&images).Error; err != nil || len(images) != 2 ||
+		images[0].Name != "deleted2.jpg" || images[1].Name != "visible.jpg" {
 		t.Fatalf("入库结果不符: images=%+v err=%v", images, err)
 	}
 }

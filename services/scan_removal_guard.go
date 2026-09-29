@@ -14,10 +14,13 @@ var errScanRootUnavailable = errors.New("扫描根不可用")
 // A missing file is deletable only while the same successfully scanned root is
 // still available. In particular, an ejected volume must not look like an empty
 // directory. Keep the snapshot from before traversal through final deletion.
+//
+// 挂载检查走 mediaVolumeAvailable（先解析符号链接）：扫描根是指向 /Volumes 下某块盘的软链接时，
+// 要检查的是链接那头的盘，否则盘被拔出后留下的空挂载点会让整根的视频被当成「扫描删除」（LIB-07）。
 type scanRemovalGuard map[string]os.FileInfo
 
 func (g scanRemovalGuard) capture(root string) error {
-	if err := scanVolumeAvailable(root); err != nil {
+	if err := mediaVolumeAvailable(root); err != nil {
 		return err
 	}
 	info, err := os.Stat(root)
@@ -32,7 +35,7 @@ func (g scanRemovalGuard) capture(root string) error {
 }
 
 func (g scanRemovalGuard) verify(root string) error {
-	if err := scanVolumeAvailable(root); err != nil {
+	if err := mediaVolumeAvailable(root); err != nil {
 		return err
 	}
 	after, err := os.Stat(root)
@@ -50,7 +53,7 @@ func (g scanRemovalGuard) missing(path string, excluded []string) (bool, error) 
 	if isScanPathExcluded(path, excluded) {
 		return false, nil
 	}
-	if err := scanVolumeAvailable(path); err != nil {
+	if err := mediaVolumeAvailable(path); err != nil {
 		return false, fmt.Errorf("%w: %w", errScanRootUnavailable, err)
 	}
 	available := false

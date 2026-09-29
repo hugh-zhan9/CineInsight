@@ -1184,12 +1184,6 @@ func shouldSkipHiddenPath(info os.FileInfo) bool {
 	return info.Name() != "." && strings.HasPrefix(info.Name(), ".")
 }
 
-// isTrashDirName 只按名字判断，保留给还没改成按路径判断的图片扫描；
-// 视频扫描与监听一律用 isTrashDir / isTrashPath（LIB-14：用户自己名为 Trash 的目录要能被扫描）。
-func isTrashDirName(name string) bool {
-	return strings.EqualFold(strings.TrimSpace(name), DefaultTrashDirName)
-}
-
 // 系统废纸篓目录名（macOS 卷上的 .Trash / .Trashes）。
 func isSystemTrashSegment(name string) bool {
 	return strings.EqualFold(name, ".Trash") || strings.EqualFold(name, ".Trashes")
@@ -1289,11 +1283,32 @@ func refreshLegacyTrashDirs() {
 }
 
 // 旧版应用（fd06f54 起，到 81fa75d 之后的版本为止）删除时把文件移进 <媒体目录>/trash/ 却不建回收站
-// 条目的时间段：2026-04-16 至 2026-07-30（含），按本地日历日计。
+// 条目的时间段：自 2026-04-16 起（含），按本地日历日计。
+//
+// 上界由数据推出（M4）：取 2026-07-30 与该媒体回收站条目表里最早一条 created_at 的日期两者较晚的那一天（含）。
+// 用户可能很晚才升级到会建条目的版本，这之前的「无条目软删」仍是旧版删除；表为空时用 2026-07-30。
 var (
-	legacyUnrecordedDeleteFrom  = time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local)
-	legacyUnrecordedDeleteUntil = time.Date(2026, 7, 31, 0, 0, 0, 0, time.Local) // 不含
+	legacyUnrecordedDeleteFrom    = time.Date(2026, 4, 16, 0, 0, 0, 0, time.Local)
+	legacyUnrecordedDeleteLastDay = time.Date(2026, 7, 30, 0, 0, 0, 0, time.Local)
 )
+
+// legacyUnrecordedDeleteUntil 返回某一张回收站条目表对应的时间段上界（不含）：
+// max(2026-07-30, 最早条目的本地日期) 的次日零点。
+func legacyUnrecordedDeleteUntil(db *gorm.DB, entryModel interface{}) (time.Time, error) {
+	lastDay := legacyUnrecordedDeleteLastDay
+	var earliest []time.Time
+	if err := db.Model(entryModel).Where("created_at IS NOT NULL").Order("created_at ASC").Limit(1).Pluck("created_at", &earliest).Error; err != nil {
+		return time.Time{}, err
+	}
+	if len(earliest) == 1 && !earliest[0].IsZero() {
+		at := earliest[0].In(time.Local)
+		day := time.Date(at.Year(), at.Month(), at.Day(), 0, 0, 0, 0, time.Local)
+		if day.After(lastDay) {
+			lastDay = day
+		}
+	}
+	return lastDay.AddDate(0, 0, 1), nil
+}
 
 // legacyDeletedRow 是一条没有回收站条目的软删行（视频或图片）。
 type legacyDeletedRow struct {
@@ -1323,16 +1338,23 @@ func loadLegacyTrashDirs(db *gorm.DB) (*legacyTrashIndex, error) {
 	//     或 <主名>_<14 位时间戳>[_<序号>]<扩展名>）。
 	// 新版删除（有条目）与扫描器的软删（deleted_at 不在时间段内）都不会让用户自己的 trash/ 被跳过。
 	// 最后一条（读 trash/ 目录）是惰性的，见 legacyTrashIndex.heuristicDir。
-	for _, source := range []struct{ table, entryTable, entryColumn string }{
-		{"videos", "video_trash_entries", "video_id"},
-		{"images", "image_trash_entries", "image_id"},
+	for _, source := range []struct {
+		table, entryTable, entryColumn string
+		entryModel                     interface{}
+	}{
+		{"videos", "video_trash_entries", "video_id", &models.VideoTrashEntry{}},
+		{"images", "image_trash_entries", "image_id", &models.ImageTrashEntry{}},
 	} {
+		until, err := legacyUnrecordedDeleteUntil(db, source.entryModel)
+		if err != nil {
+			return nil, err
+		}
 		var rows []legacyDeletedRow
 		// SQL 里按时间段各放宽一天粗筛（SQLite 的时间是文本，带时区偏移时比较不精确），下面在 Go 里精确判定。
 		if err := db.Table(source.table).
 			Select(source.table+".directory, "+source.table+".path, "+source.table+".name, "+source.table+".deleted_at").
 			Where(source.table+".deleted_at IS NOT NULL AND "+source.table+".deleted_at >= ? AND "+source.table+".deleted_at < ?",
-				legacyUnrecordedDeleteFrom.AddDate(0, 0, -1), legacyUnrecordedDeleteUntil.AddDate(0, 0, 1)).
+				legacyUnrecordedDeleteFrom.AddDate(0, 0, -1), until.AddDate(0, 0, 1)).
 			Where("NOT EXISTS (SELECT 1 FROM " + source.entryTable + " e WHERE e." + source.entryColumn + " = " + source.table + ".id)").
 			Scan(&rows).Error; err != nil {
 			return nil, err
@@ -1342,7 +1364,7 @@ func loadLegacyTrashDirs(db *gorm.DB) (*legacyTrashIndex, error) {
 				continue
 			}
 			at := row.DeletedAt.In(time.Local)
-			if at.Before(legacyUnrecordedDeleteFrom) || !at.Before(legacyUnrecordedDeleteUntil) {
+			if at.Before(legacyUnrecordedDeleteFrom) || !at.Before(until) {
 				continue
 			}
 			parent := filepath.Clean(strings.TrimSpace(row.Directory))
@@ -1642,11 +1664,20 @@ func scanAddSkipReason(err error) (string, bool) {
 }
 
 // scanRootOnline 判断扫描根当前是否可用：目录存在且（macOS 上）卷确实挂载。
+//
+// 先对根做 filepath.EvalSymlinks（失败按离线处理），再对解析后的真实路径做 /Volumes 挂载检查（M3）：
+// 根是指向 /Volumes/<盘> 的软链接、或挂在非 /Volumes 路径上时，只看原路径会把「盘已卸载、只剩空挂载点」
+// 误判为在线。
 func scanRootOnline(root string) bool {
-	if mediaVolumeAvailable(root) != nil {
+	clean := filepath.Clean(root)
+	resolved, err := filepath.EvalSymlinks(clean)
+	if err != nil {
 		return false
 	}
-	info, err := os.Stat(root)
+	if volumeMountedCheck(clean, resolved) != nil {
+		return false
+	}
+	info, err := os.Stat(resolved)
 	return err == nil && info.IsDir()
 }
 
@@ -1659,6 +1690,9 @@ func scanRootOnline(root string) bool {
 // 与窄对账、全量扫描串行（持 scanSyncMu，Minor 6）：根回来后排队的对账一定在这次标记之后执行，
 // 不会被晚到的标记覆盖。执行前后都复查根状态：执行前已在线就什么都不标；标记期间根回来了，
 // 撤销这次刚标上的 offline_root，避免留下「根在线、视频仍 offline_root」。
+//
+// 「其他根是否在线」要对每个根做 stat 与挂载检查，可能碰到卡住的卷，所以放在拿 scanSyncMu 之前（M6）：
+// 锁内只做数据库读写与这一个根的复查，不让一个慢卷把窄对账与全量扫描一起拖住。
 func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 	libraryPathMutationMu.RLock()
 	defer libraryPathMutationMu.RUnlock()
@@ -1667,9 +1701,7 @@ func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 	if root == "" || root == "." {
 		return 0, fmt.Errorf("扫描目录为空")
 	}
-	s.scanSyncMu.Lock()
-	defer s.scanSyncMu.Unlock()
-	// 监听的判定与这里之间隔着队列与锁，根可能已经回来了：执行前再确认一次，在线就什么都不标（Minor 12）。
+	// 监听的判定与这里之间隔着队列，根可能已经回来了：先确认一次，在线就什么都不标（Minor 12）。
 	if scanRootOnline(root) {
 		return 0, nil
 	}
@@ -1682,6 +1714,13 @@ func (s *VideoService) MarkRootOffline(root string) (int64, error) {
 		if other != root && scanRootOnline(other) {
 			others = append(others, other)
 		}
+	}
+
+	s.scanSyncMu.Lock()
+	defer s.scanSyncMu.Unlock()
+	// 等锁期间根可能已经回来了（排在前面的对账刚跑完）：锁内复查一次。
+	if scanRootOnline(root) {
+		return 0, nil
 	}
 	candidates, err := activeVideosUnderRoots([]string{root})
 	if err != nil {

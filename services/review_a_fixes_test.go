@@ -192,16 +192,28 @@ func TestLIB05CrashRecoveryParentDirRemovedFallsToBranchThreeI2(t *testing.T) {
 	base := t.TempDir()
 	onlineDir := filepath.Join(base, "online", "movies")
 	offlineMount := filepath.Join(base, "external")
+	// 修复 D 的 M11：三个位置都配成扫描根，覆盖「扫描根离线」分支（scanRootsOfflineForPath），
+	// 而不只是卷挂载检查。
+	detachedRoot := filepath.Join(base, "detached")
+	createDirectoryRow(t, filepath.Join(base, "online"))
+	createDirectoryRow(t, offlineMount)
+	createDirectoryRow(t, detachedRoot)
 	online := p010Video(t, filepath.Join(onlineDir, "a.mp4"), "content-a")
 	offline := p010Video(t, filepath.Join(offlineMount, "b.mp4"), "content-b")
+	detached := p010Video(t, filepath.Join(detachedRoot, "c.mp4"), "content-c")
 	reviewAPendingTrashEntry(t, online)
 	reviewAPendingTrashEntry(t, offline)
-	// 卷在线，只是父目录被删掉了：文件确实不在。另一块盘则是真的未挂载。
+	reviewAPendingTrashEntry(t, detached)
+	// 卷在线、扫描根在线，只是父目录被删掉了：文件确实不在。另一块盘则是真的未挂载。
 	if err := os.RemoveAll(onlineDir); err != nil {
 		t.Fatal(err)
 	}
 	reviewAUnmountVolume(t, offlineMount)
 	if err := os.Remove(offline.Path); err != nil {
+		t.Fatal(err)
+	}
+	// 第三个扫描根整个不见了（卷检查通过，但扫描根 stat 失败）：按扫描根离线处理。
+	if err := os.RemoveAll(detachedRoot); err != nil {
 		t.Fatal(err)
 	}
 	if err := svc.ReconcileTrashEntries(); err == nil {
@@ -210,11 +222,13 @@ func TestLIB05CrashRecoveryParentDirRemovedFallsToBranchThreeI2(t *testing.T) {
 	if got := p010VideoEntry(t, online.ID); got.State != trashStateDeleted || got.LastError != trashUnknownLocationMessage {
 		t.Fatalf("卷在线、父目录被删应落入分支 3: %#v", got)
 	}
-	if got := p010VideoEntry(t, offline.ID); got.State != trashStatePendingMove {
-		t.Fatalf("卷离线时 pending_move 必须保持原状: %#v", got)
-	}
-	if err := database.DB.First(&models.Video{}, offline.ID).Error; err != nil {
-		t.Fatalf("离线卷上的记录应仍然活跃: %v", err)
+	for _, video := range []models.Video{offline, detached} {
+		if got := p010VideoEntry(t, video.ID); got.State != trashStatePendingMove {
+			t.Fatalf("卷离线或扫描根离线时 pending_move 必须保持原状: %#v", got)
+		}
+		if err := database.DB.First(&models.Video{}, video.ID).Error; err != nil {
+			t.Fatalf("离线位置上的记录应仍然活跃: %v", err)
+		}
 	}
 }
 
@@ -632,7 +646,9 @@ func TestLIB05PutBackPicksIdentityMatchingRowAmongSeveralMinor2(t *testing.T) {
 	}
 }
 
-func TestLIB05PutBackDetectedRequiresTrashCopyGoneOrSameFileMinor2(t *testing.T) {
+// 复审 I-A：放回判定只凭原路径上的文件身份（inode + 大小 + mtime），不再要求「废纸篓那一份已不在」。
+// 替换了 TestLIB05PutBackDetectedRequiresTrashCopyGoneOrSameFileMinor2（旧条件依赖能读到废纸篓一侧）。
+func TestLIB05PutBackDetectedUsesOriginalPathIdentityOnlyIA(t *testing.T) {
 	dir := t.TempDir()
 	original := filepath.Join(dir, "a.mp4")
 	if err := os.WriteFile(original, []byte("content"), 0o644); err != nil {
@@ -644,29 +660,46 @@ func TestLIB05PutBackDetectedRequiresTrashCopyGoneOrSameFileMinor2(t *testing.T)
 		t.Skip("当前平台没有稳定文件身份")
 	}
 	facts := softDeletedEntryFacts{Mode: models.TrashModeTrash, State: trashStateDeleted, FileSize: info.Size(),
-		FileModTime: info.ModTime().UnixNano(), FileIdentity: identity, TrashPath: filepath.Join(dir, ".Trash", "a.mp4")}
+		FileModTime: info.ModTime().UnixNano(), FileIdentity: identity}
+	trashPath := filepath.Join(dir, ".Trash", "a.mp4")
 	if !putBackDetectedFor(facts, info) {
 		t.Fatal("废纸篓那一份已不在：应认定为放回")
 	}
-	// 废纸篓路径上是另一个文件（不同 inode）：不认定。
-	if err := os.MkdirAll(filepath.Dir(facts.TrashPath), 0o755); err != nil {
+	// 废纸篓路径上是另一个文件（不同 inode）：原路径上就是记录的那个 inode，仍认定为放回。
+	if err := os.MkdirAll(filepath.Dir(trashPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(facts.TrashPath, []byte("content"), 0o644); err != nil {
+	if err := os.WriteFile(trashPath, []byte("content"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if putBackDetectedFor(facts, info) {
-		t.Fatal("废纸篓里还有另一个文件时不得认定为放回")
+	if !putBackDetectedFor(facts, info) {
+		t.Fatal("废纸篓里另有一个文件不影响：原路径身份一致就是放回")
 	}
 	// 废纸篓路径与原路径是同一个文件（硬链接）：认定。
-	if err := os.Remove(facts.TrashPath); err != nil {
+	if err := os.Remove(trashPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Link(original, facts.TrashPath); err != nil {
+	if err := os.Link(original, trashPath); err != nil {
 		t.Skip("无法创建硬链接")
 	}
 	if !putBackDetectedFor(facts, info) {
 		t.Fatal("同一 inode 的两个名字应认定为放回")
+	}
+	// 废纸篓一侧读不到（EPERM）：判定不读那一侧，结论不变。
+	reviewDTrashSideStatFails(t, func(string) bool { return true }, os.ErrPermission)
+	if !putBackDetectedFor(facts, info) {
+		t.Fatal("读不到废纸篓一侧不得影响放回判定")
+	}
+	// 原路径身份任何一项不符都不是放回。
+	for _, broken := range []softDeletedEntryFacts{
+		{Mode: facts.Mode, State: facts.State, FileSize: facts.FileSize + 1, FileModTime: facts.FileModTime, FileIdentity: facts.FileIdentity},
+		{Mode: facts.Mode, State: facts.State, FileSize: facts.FileSize, FileModTime: facts.FileModTime + 1, FileIdentity: facts.FileIdentity},
+		{Mode: facts.Mode, State: facts.State, FileSize: facts.FileSize, FileModTime: facts.FileModTime, FileIdentity: "1:1"},
+		{Mode: facts.Mode, State: trashStateRestoring, FileSize: facts.FileSize, FileModTime: facts.FileModTime, FileIdentity: facts.FileIdentity},
+	} {
+		if putBackDetectedFor(broken, info) {
+			t.Fatalf("身份或状态不符不得认定为放回: %#v", broken)
+		}
 	}
 	for _, mode := range []string{models.TrashModeLegacyTrash, models.TrashModeRecordOnly, models.TrashModeMissing} {
 		other := facts
@@ -1029,7 +1062,9 @@ func TestShortFeedPINMinimumSixCharactersPLAY01Minor10(t *testing.T) {
 	}
 }
 
-func TestShortFeedDailyFailureCapLocksNewLoginsUntilPINResetPLAY01Minor10(t *testing.T) {
+// 修复 D 的 M5 之后，每日锁在最后一次失败后 24 小时自动解除（见 review_d_fixes_test.go）；
+// 这里仍验证 24 小时之内一律 429、已登录会话不受影响、改 PIN / 清 PIN 立即重置。
+func TestShortFeedDailyFailureCapLocksNewLoginsUntilResetOrExpiryPLAY01Minor10(t *testing.T) {
 	svc, handler, _ := newShortFeedAccessFixture(t)
 	if err := svc.SetShortFeedPIN("246800"); err != nil {
 		t.Fatal(err)
@@ -1055,7 +1090,7 @@ func TestShortFeedDailyFailureCapLocksNewLoginsUntilPINResetPLAY01Minor10(t *tes
 	if locked, retry := auth.failedAttempt("10.9.9.9", last); !locked || retry != shortFeedDailyLockedRetry {
 		t.Fatalf("超过 200 次失败应触发每日上限: locked=%v retry=%d", locked, retry)
 	}
-	// 之后的新登录一律 429（即使过了几个小时、换了来源、PIN 正确）。
+	// 24 小时之内的新登录一律 429（即使过了几个小时、换了来源、PIN 正确）。
 	if retry, ok := auth.beginAttempt("10.8.8.8", last.Add(3*time.Hour)); ok || retry != shortFeedDailyLockedRetry {
 		t.Fatalf("每日上限锁定后应拒绝新登录: retry=%d ok=%v", retry, ok)
 	}
@@ -1064,8 +1099,8 @@ func TestShortFeedDailyFailureCapLocksNewLoginsUntilPINResetPLAY01Minor10(t *tes
 		t.Fatalf("每日上限锁定后登录应 429，实际 %d", rec.Code)
 	}
 	payload := decodeShortFeedBody(t, rec)
-	if payload["code"] != "pin_locked" || payload["reset_required"] != true {
-		t.Fatalf("429 应带 pin_locked 与 reset_required: %v", payload)
+	if payload["code"] != "pin_locked" || payload["daily_locked"] != true {
+		t.Fatalf("429 应带 pin_locked 与 daily_locked: %v", payload)
 	}
 	// 已登录会话不受影响。
 	dataReq := shortFeedRequest(http.MethodGet, "/short-api/status", "", "192.168.1.9:1")

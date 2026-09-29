@@ -116,8 +116,15 @@ func (a *App) ClearShortFeedPIN() error {
 	return err
 }
 
-// GetShortFeedAccessStatus 返回开关、是否已设 PIN、是否在监听与首选访问地址。
-// PIN 哈希不在其中：前端只靠 pin_set 决定是否显示「建议设置 PIN」。
+// UnlockShortFeedLogin 解除手机端登录锁定（PIN 错误次数过多触发的每日上限与全局冷却）：只重置失败计数，
+// 已登录的手机会话继续有效，PIN 不变。
+func (a *App) UnlockShortFeedLogin() {
+	a.shortFeedService.UnlockShortFeedLogin()
+	log.Printf("API UnlockShortFeedLogin")
+}
+
+// GetShortFeedAccessStatus 返回开关、是否已设 PIN、是否在监听与首选访问地址，以及登录锁定状态
+// （login_locked / locked_until）。PIN 哈希不在其中：前端只靠 pin_set 决定是否显示「建议设置 PIN」。
 func (a *App) GetShortFeedAccessStatus() (services.ShortFeedAccessStatus, error) {
 	status, err := a.shortFeedService.AccessStatus()
 	if err != nil {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -44,6 +45,9 @@ var (
 	ErrPermanentDeleteHasTrashEntry = errors.New("该记录已有回收站条目，请在回收站中清除")
 	// ErrTrashEntryNotRestorable：条目当前状态不允许恢复。
 	ErrTrashEntryNotRestorable = errors.New("该条目当前不可恢复")
+	// ErrTrashPutBack：文件已被放回原处（原路径上的文件身份与条目一致）。清除或移除记录只会删掉记录而
+	// 文件还在原地，应改用恢复（M2）。结果码为 not_purgeable。
+	ErrTrashPutBack = errors.New("文件已被放回原处，请改用恢复")
 )
 
 // errTrashLocationUnknown：系统废纸篓报告移动成功，但没有返回文件在废纸篓里的位置。
@@ -81,6 +85,33 @@ var systemTrashMove = moveToSystemTrash
 // trashLookupDirs 返回某个原路径对应的「用户废纸篓顶层目录」候选，崩溃恢复按文件身份在这些
 // 目录里找。单测替换成临时目录。
 var trashLookupDirs = defaultTrashLookupDirs
+
+// trashSideStatFn 是读取「废纸篓一侧」文件状态的替身入口，只在单测里设置（模拟 EPERM 等读不到
+// 废纸篓的情形）；为 nil 时用 os.Stat。用原子指针是因为测试之间残留的后台 goroutine 可能并发读它。
+var trashSideStatFn atomic.Pointer[func(string) (os.FileInfo, error)]
+
+// statTrashSide 读取废纸篓一侧路径的状态（恢复、列表对账、清除共用）。
+func statTrashSide(path string) (os.FileInfo, error) {
+	if fn := trashSideStatFn.Load(); fn != nil {
+		return (*fn)(path)
+	}
+	return os.Stat(path)
+}
+
+// trashSideFileState 与 regularFileState 同义，但经 statTrashSide 读取。
+func trashSideFileState(path string) (os.FileInfo, bool, error) {
+	info, err := statTrashSide(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if info.IsDir() {
+		return nil, false, fmt.Errorf("路径不是文件: %s", path)
+	}
+	return info, true, nil
+}
 
 type TrashService struct {
 	TrashDirName string
@@ -220,6 +251,27 @@ func legacyTrashFileMatches(path string, info os.FileInfo, id trashFileID, sha s
 // isLegacyTrashMode 报告条目是否走旧版语义：mode 为 legacy_trash，或迁移回填之前的空 mode。
 func isLegacyTrashMode(mode string) bool {
 	return mode == "" || mode == "legacy_trash"
+}
+
+// removeLegacyTrashLinkAfterRestore 在恢复事务提交之后，清掉旧版 trash/ 里与原路径同一个文件的残留名字
+// （旧版恢复在 link 之后、remove 之前中断留下的硬链接）。只对 legacy_trash 旧行做：那是本应用自己的 trash/
+// 目录，条目删除后残留名字会被扫描当成新文件收录；系统废纸篓里的名字一律不动（M1）。
+// 在提交之后做，恢复失败时两个名字都保持原样。清理失败只记日志：恢复已经完成。
+func removeLegacyTrashLinkAfterRestore(mode string, fileMoved bool, originalPath, trashPath string) {
+	if !isLegacyTrashMode(mode) || !fileMoved || strings.TrimSpace(trashPath) == "" {
+		return
+	}
+	originalInfo, err := os.Stat(originalPath)
+	if err != nil {
+		return
+	}
+	trashInfo, err := os.Stat(trashPath)
+	if err != nil || !os.SameFile(originalInfo, trashInfo) {
+		return
+	}
+	if err := os.Remove(trashPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("恢复后清理旧版回收站残留名字失败 err=%v", err)
+	}
 }
 
 // RestoreFromTrashVerified 在恢复前核对废纸篓文件的身份，不符返回 ErrTrashIdentityMismatch。
@@ -569,7 +621,8 @@ func trashResultCodeForError(err error) string {
 		return TrashResultPathOccupied
 	case errors.Is(err, ErrTrashIdentityMismatch):
 		return TrashResultIdentityMismatch
-	case errors.Is(err, ErrTrashNotPurgeable), errors.Is(err, ErrPermanentDeleteNotActive), errors.Is(err, ErrPermanentDeleteHasTrashEntry):
+	case errors.Is(err, ErrTrashNotPurgeable), errors.Is(err, ErrTrashPutBack),
+		errors.Is(err, ErrPermanentDeleteNotActive), errors.Is(err, ErrPermanentDeleteHasTrashEntry):
 		return TrashResultNotPurgeable
 	case errors.Is(err, ErrTrashFileGone):
 		return TrashResultFileGone
@@ -841,11 +894,11 @@ const (
 
 // reconcileListedRow 对列表当页里「应有文件」的行做对账（详细设计 §2.1）：
 //
-//   - 废纸篓里的文件还在且身份一致 → 不动；
+//   - 原路径上的文件满足放回判定（trashRowPutBack，只看原路径的文件身份，I-A / M9）→ 报告可恢复，
+//     不改状态、不恢复（Minor 1）；废纸篓那一侧此时读不读得到都不影响结论；
+//   - 废纸篓里的文件还在且身份一致 → 不动；读不到（权限等）→ 不动；
 //   - 文件还在但身份不符（被别的同名文件占了）→ file_gone + 「废纸篓中的文件已被替换」；
-//   - 文件不在：先确认所在卷在线（卷离线不是「文件没了」，保持原状，I1）；
-//     原路径上的文件满足放回判定（putBackDetected）→ 报告可恢复，不改状态、不恢复（Minor 1）；
-//     否则 file_gone。
+//   - 文件不在：先确认所在卷在线（卷离线不是「文件没了」，保持原状，I1），否则 file_gone。
 //
 // 状态转换全部是条件更新（WHERE state='deleted'）。
 func (s *TrashService) reconcileListedRow(spec trashKindSpec, row *trashRow) (listedRowOutcome, error) {
@@ -853,8 +906,11 @@ func (s *TrashService) reconcileListedRow(spec trashKindSpec, row *trashRow) (li
 	if row.State == models.TrashStateFileGone {
 		return s.reviveGoneRow(spec, row, want)
 	}
+	if trashRowPutBack(*row) {
+		return listedRowPutBack, nil
+	}
 	if strings.TrimSpace(row.TrashPath) != "" {
-		info, statErr := os.Stat(row.TrashPath)
+		info, statErr := statTrashSide(row.TrashPath)
 		switch {
 		case statErr == nil:
 			if info.IsDir() || !trashRowFileMatches(*row, want, info) {
@@ -869,14 +925,11 @@ func (s *TrashService) reconcileListedRow(spec trashKindSpec, row *trashRow) (li
 	if !trashRowVolumeOnline(*row) {
 		return listedRowUnchanged, nil
 	}
-	if putBackAtPath(row.putBackFacts(), row.OriginalPath) {
-		return listedRowPutBack, nil
-	}
 	return s.markListedRowGone(spec, row, "")
 }
 
 // reviveGoneRow 处理已标成 file_gone 的行：文件重新出现（身份一致）时改回 deleted——
-// 要么废纸篓路径上又有了它（例如卷重新挂载），要么被放回了原处（此时报告可恢复，由显式恢复还原记录）。
+// 要么被放回了原处（此时报告可恢复，由显式恢复还原记录），要么废纸篓路径上又有了它（例如卷重新挂载）。
 func (s *TrashService) reviveGoneRow(spec trashKindSpec, row *trashRow, want trashFileID) (listedRowOutcome, error) {
 	revive := func(outcome listedRowOutcome) (listedRowOutcome, error) {
 		result := database.DB.Table(spec.table).
@@ -893,13 +946,13 @@ func (s *TrashService) reviveGoneRow(spec trashKindSpec, row *trashRow, want tra
 		// 条目状态已被他方改变：按原样返回，不报告可恢复。
 		return listedRowUnchanged, nil
 	}
+	if trashRowPutBack(*row) {
+		return revive(listedRowPutBack)
+	}
 	if strings.TrimSpace(row.TrashPath) != "" {
-		if info, err := os.Stat(row.TrashPath); err == nil && !info.IsDir() && trashRowFileMatches(*row, want, info) && !want.empty() {
+		if info, err := statTrashSide(row.TrashPath); err == nil && !info.IsDir() && trashRowFileMatches(*row, want, info) && !want.empty() {
 			return revive(listedRowMarked)
 		}
-	}
-	if putBackAtPath(row.putBackFacts(), row.OriginalPath) {
-		return revive(listedRowPutBack)
 	}
 	return listedRowUnchanged, nil
 }
@@ -907,11 +960,31 @@ func (s *TrashService) reviveGoneRow(spec trashKindSpec, row *trashRow, want tra
 // putBackFacts 把列表行转成放回判定所需的条目事实。
 func (r trashRow) putBackFacts() softDeletedEntryFacts {
 	return softDeletedEntryFacts{Mode: r.Mode, DeletedBy: r.DeletedBy, FileSize: r.FileSize, FileModTime: r.FileModTime,
-		FileIdentity: r.FileIdentity, DeleteBatchID: r.DeleteBatchID, State: r.State, TrashPath: r.TrashPath}
+		FileIdentity: r.FileIdentity, DeleteBatchID: r.DeleteBatchID, State: r.State}
 }
 
-// canDetectPutBack 报告能否用身份判定「访达放回原处」：只有 trash 模式（record_only 的文件从未移动过）且记录了 inode 与 mtime
-// 的条目才有足够的身份；legacy_trash 与历史行只有大小，不足以认定原路径上的文件就是它。
+// trashRowPutBack 是列表、清除、移除记录与用量共用的放回判定，只看原路径上的文件身份（I-A）：
+//
+//   - trash 模式：putBackDetected（inode + 大小 + mtime 与条目全部一致）；
+//   - legacy_trash（及回填前 file_moved=true 的旧行）：轻量判定，大小 + inode 一致（M9）。
+//
+// 只有 deleted / file_gone 的行才谈得上放回；record_only / missing 的文件从未进过废纸篓。
+func trashRowPutBack(row trashRow) bool {
+	if row.State != trashStateDeleted && row.State != models.TrashStateFileGone {
+		return false
+	}
+	switch {
+	case row.Mode == models.TrashModeTrash:
+		return putBackAtPath(row.putBackFacts(), row.OriginalPath)
+	case isLegacyTrashMode(row.Mode) && row.holdsTrashFile():
+		return legacyPutBackAtPath(row.FileSize, row.FileIdentity, row.OriginalPath)
+	}
+	return false
+}
+
+// canDetectPutBack 报告能否用完整身份判定「访达放回原处」：只有 trash 模式（record_only 的文件从未移动过）且记录了 inode 与 mtime
+// 的条目才有足够的身份。legacy_trash 旧行没有可信的 mtime，列表与清除另用 legacyPutBackAtPath 做轻量判定（M9）；
+// 扫描与手动添加不对旧行做放回判定。
 func canDetectPutBack(mode string, want trashFileID) bool {
 	return mode == models.TrashModeTrash && want.Identity != "" && want.ModTimeNS != 0 && want.Size != 0
 }
@@ -950,12 +1023,71 @@ func trashRowFileMatches(row trashRow, want trashFileID, info os.FileInfo) bool 
 // 使用真实的 scanVolumeAvailable。用原子指针是因为后台 goroutine（播放重定位、监听巡检）会并发读它。
 var mediaVolumeAvailableFn atomic.Pointer[func(string) error]
 
-// mediaVolumeAvailable 是「/Volumes 下的卷确实挂载」检查（非 macOS 恒为可用）。
+// mediaVolumeAvailable 是「/Volumes 下的卷确实挂载」检查（非 macOS 恒为可用）。判定前先解析符号链接
+// （M3）：路径（或它的某一级父目录）是指向 /Volumes 下某块盘的软链接时，要检查的是链接指向的那块盘。
+// 路径本身可以不存在（文件已不在），此时解析最近的存在的父目录再拼上其余部分；解析失败（包括途中
+// 遇到悬空的软链接）按离线处理——宁可不改写状态，也不把「链接那头的盘没插」当成「文件没了」。
 func mediaVolumeAvailable(path string) error {
-	if fn := mediaVolumeAvailableFn.Load(); fn != nil {
-		return (*fn)(path)
+	clean := filepath.Clean(path)
+	resolved, err := resolveMediaPathSymlinks(clean)
+	if err != nil {
+		return fmt.Errorf("无法确认所在磁盘已连接: %w", err)
 	}
-	return scanVolumeAvailable(path)
+	return volumeMountedCheck(clean, resolved)
+}
+
+// volumeMountedCheck 对原路径与解析后的路径都做 /Volumes 挂载检查（单测替身或真实的 scanVolumeAvailable），
+// 任一报告未挂载即未挂载。原路径那一次对真实实现是多余的（解析后的路径已经覆盖），保留它是为了让按原路径
+// 前缀注入的替身照常生效。
+func volumeMountedCheck(raw, resolved string) error {
+	check := scanVolumeAvailable
+	if fn := mediaVolumeAvailableFn.Load(); fn != nil {
+		check = *fn
+	}
+	if err := check(raw); err != nil {
+		return err
+	}
+	if resolved != raw {
+		return check(resolved)
+	}
+	return nil
+}
+
+// resolveMediaPathSymlinks 解析 path 的符号链接。path 不存在时解析最近的存在的父目录，再拼上其余部分；
+// 途中某一级「自身存在（Lstat 成功）却解析不了」说明它是悬空的软链接，返回错误。
+func resolveMediaPathSymlinks(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	rest := make([]string, 0, 4)
+	current := path
+	for {
+		if _, lstatErr := os.Lstat(current); lstatErr == nil {
+			return "", fmt.Errorf("符号链接指向的位置不存在: %w", os.ErrNotExist)
+		} else if !errors.Is(lstatErr, os.ErrNotExist) {
+			return "", lstatErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", err
+		}
+		rest = append(rest, filepath.Base(current))
+		current = parent
+		parentResolved, parentErr := filepath.EvalSymlinks(current)
+		if parentErr == nil {
+			for i := len(rest) - 1; i >= 0; i-- {
+				parentResolved = filepath.Join(parentResolved, rest[i])
+			}
+			return parentResolved, nil
+		}
+		if !errors.Is(parentErr, os.ErrNotExist) {
+			return "", parentErr
+		}
+	}
 }
 
 // scanRootsOfflineForPath 报告 path 是否属于至少一个视频或图片扫描根，且这些根都不在线。
@@ -1023,7 +1155,8 @@ func trashRowVolumeOnline(row trashRow) bool {
 }
 
 // TrashKindUsage 是某一类媒体的回收站用量。BytesInTrash 只计 state=deleted 且文件真的在
-// 废纸篓（trash / legacy_trash）里的条目。
+// 废纸篓（trash / legacy_trash）里的条目：文件已被放回原处（与列表的 put_back 同一判定）的行不计，
+// 清空废纸篓并不会释放它们的空间（M10）。LegacyBytes 是其中 legacy_trash 的部分，同样不计已放回的行。
 type TrashKindUsage struct {
 	Count        int64 `json:"count"`
 	BytesInTrash int64 `json:"bytes_in_trash"`
@@ -1055,19 +1188,37 @@ func trashKindUsage(spec trashKindSpec) (TrashKindUsage, error) {
 	if err := scan(&usage.Count, "COUNT(*)", db().Where("state IN ?", []string{trashStateDeleted, models.TrashStateFileGone})); err != nil {
 		return usage, err
 	}
-	if err := scan(&usage.BytesInTrash, "CAST(COALESCE(SUM(file_size), 0) AS BIGINT)", db().Where("state = ? AND mode IN ?", trashStateDeleted, modes)); err != nil {
-		return usage, err
-	}
 	if err := scan(&usage.GoneCount, "COUNT(*)", db().Where("state = ?", models.TrashStateFileGone)); err != nil {
 		return usage, err
 	}
 	if err := scan(&usage.LegacyCount, "COUNT(*)", db().Where("state = ? AND mode = ?", trashStateDeleted, models.TrashModeLegacyTrash)); err != nil {
 		return usage, err
 	}
-	if err := scan(&usage.LegacyBytes, "CAST(COALESCE(SUM(file_size), 0) AS BIGINT)", db().Where("state = ? AND mode = ?", trashStateDeleted, models.TrashModeLegacyTrash)); err != nil {
-		return usage, err
+	// 字节数要逐行排除已放回原处的条目：放回与否取决于磁盘上的文件身份，库里没有这一列，
+	// 所以按 id 分批读出候选行、在 Go 里判定（每行一次原路径 stat）。
+	const batchSize = 500
+	var afterID uint
+	for {
+		var rows []trashRow
+		if err := db().Select(spec.selectColumns()).
+			Where("state = ? AND mode IN ? AND id > ?", trashStateDeleted, modes, afterID).
+			Order("id ASC").Limit(batchSize).Scan(&rows).Error; err != nil {
+			return usage, err
+		}
+		for _, row := range rows {
+			if trashRowPutBack(row) {
+				continue
+			}
+			usage.BytesInTrash += row.FileSize
+			if row.Mode == models.TrashModeLegacyTrash {
+				usage.LegacyBytes += row.FileSize
+			}
+		}
+		if len(rows) < batchSize {
+			return usage, nil
+		}
+		afterID = rows[len(rows)-1].ID
 	}
-	return usage, nil
 }
 
 // GetTrashUsage 返回回收站用量：视频、图片、迁移残留。
@@ -1279,8 +1430,18 @@ func (s *TrashService) purgeOne(spec trashKindSpec, id uint) error {
 			return err
 		}
 	}
-	if strings.TrimSpace(row.TrashPath) != "" {
-		info, statErr := os.Stat(row.TrashPath)
+	// 文件被放回了原处（只看原路径上的文件身份，I-A）：清除只会删掉记录而文件还在原地，应改用恢复。
+	// 废纸篓里同时还有一个同 inode 的名字（硬链接）时同样拒绝，不能删掉那个名字后再硬删记录。
+	if trashRowPutBack(row) {
+		return ErrTrashPutBack
+	}
+	if strings.TrimSpace(row.TrashPath) == "" {
+		// trash_path 为空（崩溃恢复分支 3「文件位置未知」）：与其他清除入口一样，硬删前确认位置在线（M2）。
+		if trashEntryVolumeOffline(row.OriginalPath, "") {
+			return ErrTrashVolumeOffline
+		}
+	} else {
+		info, statErr := statTrashSide(row.TrashPath)
 		switch {
 		case statErr == nil:
 			if info.IsDir() {
@@ -1304,11 +1465,7 @@ func (s *TrashService) purgeOne(spec trashKindSpec, id uint) error {
 			if trashEntryVolumeOffline(row.OriginalPath, row.TrashPath) {
 				return ErrTrashVolumeOffline
 			}
-			// 文件被放回了原处：清除只会删掉记录而文件还在原地，应改用恢复。
-			if putBackAtPath(row.putBackFacts(), row.OriginalPath) {
-				return ErrTrashNotPurgeable
-			}
-			// 文件确实已经不在：只清记录。
+			// 文件确实已经不在（放回原处已在上面排除）：只清记录。
 		default:
 			return fmt.Errorf("检查回收站文件失败: %w", statErr)
 		}
@@ -1328,6 +1485,14 @@ func (s *TrashService) removeGoneOne(spec trashKindSpec, id uint) error {
 	}
 	if row.State != models.TrashStateFileGone {
 		return ErrTrashNotPurgeable
+	}
+	// 与清除共用硬删前的检查（M2）：位置离线时 file_gone 的依据不可靠，不硬删；文件被放回了原处时
+	// 硬删会让原地的文件失去记录，应改用恢复。
+	if trashEntryVolumeOffline(row.OriginalPath, row.TrashPath) {
+		return ErrTrashVolumeOffline
+	}
+	if trashRowPutBack(row) {
+		return ErrTrashPutBack
 	}
 	return database.Transaction(func(tx *gorm.DB) error {
 		return hardDeleteEntityTx(tx, spec, row, []string{models.TrashStateFileGone})

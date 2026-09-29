@@ -89,7 +89,7 @@ func TestFrameHashRealFFmpegClipFixture(t *testing.T) {
 		if !ok {
 			t.Fatal("真实片段未通过哈希筛选")
 		}
-		verified, err := (&CleanupService{}).verifyClipPair(fullSequence, clipSequence, candidate)
+		verified, err := (&CleanupService{}).verifyClipPair(context.Background(), fullSequence, clipSequence, candidate)
 		if err != nil || !verified {
 			t.Fatalf("真实片段复核失败: verified=%v err=%v", verified, err)
 		}

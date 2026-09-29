@@ -60,11 +60,13 @@ const (
 	// 失败计数表容量上限：超出时淘汰最旧的条目，表不会被伪造来源撑爆。
 	shortFeedFailureTableCap = 1024
 
-	// 每日失败上限（复审 Minor 10）：滚动 24 小时内所有来源合计失败超过 200 次后，新的登录一律 429，
-	// 直到桌面端修改或清除 PIN（SetShortFeedPIN / ClearShortFeedPIN 会重置）。已登录会话不受影响。
-	// 成功登录不重置这项计数：否则猜测者只要等主人登录一次就能再拿到一整份额度。
+	// 每日失败上限（复审 Minor 10）：滚动 24 小时内所有来源合计失败超过 200 次后，新的登录一律 429。
+	// 锁在最后一次失败之后 24 小时自动解除（M5）：锁定期间的请求不进入比对、不算失败，所以猜测者每
+	// 24 小时最多拿到约 200 次比对；主人也可以在桌面端解除（UnlockShortFeedLogin），或修改 / 清除 PIN。
+	// 已登录会话不受影响。成功登录不重置这项计数：否则猜测者只要等主人登录一次就能再拿到一整份额度。
 	shortFeedDailyFailureLimit  = 200
 	shortFeedDailyFailureWindow = 24 * time.Hour
+	shortFeedDailyLockDuration  = 24 * time.Hour
 )
 
 var (
@@ -75,11 +77,16 @@ var (
 
 // ShortFeedAccessStatus 是设置页读取的手机端访问状态。PIN 哈希永远不下发，
 // 前端只靠 pin_set 决定是否显示「建议设置 PIN」。
+//
+// LoginLocked 表示手机端的新登录此刻一律被拒（每日失败上限，或全局冷却）；LockedUntil 是预计自动解除的
+// 时刻（未锁定时为 null）。设置页据此显示「解除锁定」（UnlockShortFeedLogin）。已登录的会话不受锁影响。
 type ShortFeedAccessStatus struct {
-	Enabled   bool   `json:"enabled"`
-	PINSet    bool   `json:"pin_set"`
-	Listening bool   `json:"listening"`
-	URL       string `json:"url"`
+	Enabled     bool       `json:"enabled"`
+	PINSet      bool       `json:"pin_set"`
+	Listening   bool       `json:"listening"`
+	URL         string     `json:"url"`
+	LoginLocked bool       `json:"login_locked"`
+	LockedUntil *time.Time `json:"locked_until" ts_type:"string"`
 }
 
 type shortFeedSession struct {
@@ -108,10 +115,10 @@ type shortFeedAuth struct {
 	globalAttempts    []time.Time
 	globalLockedUntil time.Time
 	globalLevel       int
-	// dailyFailures 是滚动 24 小时内的失败时刻；dailyLocked 表示已超过每日上限，
-	// 只有 resetFailures（改 PIN / 清 PIN）能解除。
-	dailyFailures []time.Time
-	dailyLocked   bool
+	// dailyFailures 是滚动 24 小时内的失败时刻；dailyLockedUntil 非零且晚于当前时刻表示已超过每日上限，
+	// 它等于最后一次失败之后 24 小时。resetFailures（解除锁定 / 改 PIN / 清 PIN）立即解除。
+	dailyFailures    []time.Time
+	dailyLockedUntil time.Time
 }
 
 func newShortFeedAuth() *shortFeedAuth {
@@ -185,17 +192,18 @@ func (a *shortFeedAuth) globalCooldownLocked(now time.Time) int {
 }
 
 // shortFeedDailyLockedRetry 是 beginAttempt / failedAttempt 报告「已超过每日失败上限」时的 retryAfter
-// 哨兵值：没有可等待的时长，调用方据此返回「请在桌面端修改或清除 PIN」而不是倒计时。
+// 哨兵值：调用方据此返回「请在桌面端解除锁定，或 24 小时后再试」，剩余时长另由 dailyLockedUntilAt 给出。
 const shortFeedDailyLockedRetry = -1
 
 // beginAttempt 在比较 PIN 之前先「预扣」一次机会：并发的猜测请求不能借着「结果还没回来、
 // 失败还没记账」绕过上限。key 是归一后的来源键（见 shortFeedClientKey）。
 // 依次检查：每日上限 → 全局冷却 → 该来源的锁定与次数 → 全局预算。成功登录会清空该来源的计数与
-// 全局冷却，但不清每日计数。已超过每日上限时返回 (shortFeedDailyLockedRetry, false)。
+// 全局冷却，但不清每日计数。每日上限锁定中返回 (shortFeedDailyLockedRetry, false)；被拒的请求不进入
+// 比对、不算失败，不会顺延锁定（M5）。
 func (a *shortFeedAuth) beginAttempt(key string, now time.Time) (retryAfter int, allowed bool) {
 	a.failMu.Lock()
 	defer a.failMu.Unlock()
-	if a.dailyLocked {
+	if a.dailyLockedUntil.After(now) {
 		return shortFeedDailyLockedRetry, false
 	}
 	if remaining := a.globalCooldownLocked(now); remaining > 0 {
@@ -248,8 +256,8 @@ func (a *shortFeedAuth) beginAttempt(key string, now time.Time) (retryAfter int,
 }
 
 // failedAttempt 记录一次失败结果；返回这次失败是否已经触发该来源的锁定。
-// 每一次失败都计入每日计数；超过每日上限即进入需要桌面端重置的锁定（retryAfter 为
-// shortFeedDailyLockedRetry）。
+// 每一次失败都计入每日计数；超过每日上限即进入每日锁定（retryAfter 为 shortFeedDailyLockedRetry），
+// 最后一次失败之后 24 小时自动解除。
 func (a *shortFeedAuth) failedAttempt(key string, now time.Time) (locked bool, retryAfter int) {
 	a.failMu.Lock()
 	defer a.failMu.Unlock()
@@ -269,9 +277,15 @@ func (a *shortFeedAuth) failedAttempt(key string, now time.Time) (locked bool, r
 	return false, 0
 }
 
-// recordDailyFailureLocked 记一次失败并丢掉 24 小时之前的记录；返回是否已超过每日上限。
+// recordDailyFailureLocked 记一次失败并丢掉 24 小时之前的记录；返回是否处于每日锁定。
+// 超过上限时锁到这次失败之后 24 小时，并清空计数（解除后重新计满 200 次才会再锁）。锁定期间仍有
+// 在锁定之前就已进入比对的请求失败时，锁顺延到这次失败之后 24 小时（「最后一次失败后 24 小时」）。
 // 调用方持有 failMu。
 func (a *shortFeedAuth) recordDailyFailureLocked(now time.Time) bool {
+	if a.dailyLockedUntil.After(now) {
+		a.dailyLockedUntil = now.Add(shortFeedDailyLockDuration)
+		return true
+	}
 	kept := a.dailyFailures[:0]
 	for _, at := range a.dailyFailures {
 		if now.Sub(at) < shortFeedDailyFailureWindow {
@@ -280,10 +294,36 @@ func (a *shortFeedAuth) recordDailyFailureLocked(now time.Time) bool {
 	}
 	a.dailyFailures = append(kept, now)
 	if len(a.dailyFailures) > shortFeedDailyFailureLimit {
-		a.dailyLocked = true
+		a.dailyLockedUntil = now.Add(shortFeedDailyLockDuration)
 		a.dailyFailures = nil
+		return true
 	}
-	return a.dailyLocked
+	return false
+}
+
+// dailyLockedUntilAt 返回每日锁定的解除时刻；未锁定（或已自动解除）时返回零值。
+func (a *shortFeedAuth) dailyLockedUntilAt(now time.Time) time.Time {
+	a.failMu.Lock()
+	defer a.failMu.Unlock()
+	if a.dailyLockedUntil.After(now) {
+		return a.dailyLockedUntil
+	}
+	return time.Time{}
+}
+
+// loginLockStatus 报告新登录此刻是否一律被拒（每日锁定或全局冷却），以及较晚的那个解除时刻。
+// 单个来源的锁定只影响那个来源，不算在内。
+func (a *shortFeedAuth) loginLockStatus(now time.Time) (bool, time.Time) {
+	a.failMu.Lock()
+	defer a.failMu.Unlock()
+	var until time.Time
+	if a.dailyLockedUntil.After(now) {
+		until = a.dailyLockedUntil
+	}
+	if a.globalLockedUntil.After(now) && a.globalLockedUntil.After(until) {
+		until = a.globalLockedUntil
+	}
+	return !until.IsZero(), until
 }
 
 // succeeded 一次成功登录：清掉该来源的计数，并重置全局预算与冷却档位（每日计数保留）。
@@ -296,8 +336,8 @@ func (a *shortFeedAuth) succeeded(key string) {
 	a.failMu.Unlock()
 }
 
-// resetFailures 清空失败表、全局预算与冷却、每日计数与每日锁定：桌面端修改或清除 PIN 之后，
-// 旧 PIN 上累计的猜测次数不再有意义（复审 Minor 10）。
+// resetFailures 清空失败表、全局预算与冷却、每日计数与每日锁定：桌面端解除锁定、修改或清除 PIN 时调用
+// （复审 Minor 10、M5）。只动失败计数，不碰会话表。
 func (a *shortFeedAuth) resetFailures() {
 	a.failMu.Lock()
 	a.failures = map[string]*shortFeedFailure{}
@@ -305,7 +345,7 @@ func (a *shortFeedAuth) resetFailures() {
 	a.globalLockedUntil = time.Time{}
 	a.globalLevel = 0
 	a.dailyFailures = nil
-	a.dailyLocked = false
+	a.dailyLockedUntil = time.Time{}
 	a.failMu.Unlock()
 }
 
@@ -467,6 +507,20 @@ func (s *ShortFeedService) ClearShortFeedPIN() error {
 	return nil
 }
 
+// UnlockShortFeedLogin 解除手机端登录锁定（M5）：只重置失败计数、全局冷却与每日锁定，
+// 不撤销已登录的会话，也不修改 PIN。
+func (s *ShortFeedService) UnlockShortFeedLogin() {
+	s.authState().resetFailures()
+}
+
+// clock 返回服务的当前时间（测试可替换 now）。
+func (s *ShortFeedService) clock() time.Time {
+	if s.now != nil {
+		return s.now()
+	}
+	return time.Now()
+}
+
 func (s *ShortFeedService) pinHash() (string, error) {
 	if database.DB == nil {
 		return "", errors.New("数据库未初始化")
@@ -479,7 +533,7 @@ func (s *ShortFeedService) pinHash() (string, error) {
 	return settings.ShortFeedPINHash, nil
 }
 
-// AccessStatus 返回开关与 PIN 是否已设。listening 与 url 取决于 HTTP 服务，由 App 层补齐。
+// AccessStatus 返回开关、PIN 是否已设与登录锁定状态。listening 与 url 取决于 HTTP 服务，由 App 层补齐。
 func (s *ShortFeedService) AccessStatus() (ShortFeedAccessStatus, error) {
 	if database.DB == nil {
 		return ShortFeedAccessStatus{}, errors.New("数据库未初始化")
@@ -488,7 +542,12 @@ func (s *ShortFeedService) AccessStatus() (ShortFeedAccessStatus, error) {
 	if err := database.DB.Select("short_feed_enabled", "short_feed_pin_hash").First(&settings).Error; err != nil {
 		return ShortFeedAccessStatus{}, err
 	}
-	return ShortFeedAccessStatus{Enabled: settings.ShortFeedEnabled, PINSet: settings.ShortFeedPINHash != ""}, nil
+	status := ShortFeedAccessStatus{Enabled: settings.ShortFeedEnabled, PINSet: settings.ShortFeedPINHash != ""}
+	if locked, until := s.authState().loginLockStatus(s.clock()); locked {
+		status.LoginLocked = true
+		status.LockedUntil = &until
+	}
+	return status, nil
 }
 
 // shortFeedPublicPath 是不需要会话的路径全集：页面壳与静态资源（不含数据），
@@ -599,12 +658,13 @@ func (s *ShortFeedHTTPServer) handleAuth(w http.ResponseWriter, r *http.Request)
 	ip := shortFeedClientKey(r.RemoteAddr)
 	now := s.feed.now()
 	if retryAfter, allowed := auth.beginAttempt(ip, now); !allowed {
-		writeShortFeedPINLocked(w, retryAfter)
+		writeShortFeedPINLocked(w, retryAfter, auth, now)
 		return
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(body.PIN)) != nil {
-		if locked, retryAfter := auth.failedAttempt(ip, s.feed.now()); locked {
-			writeShortFeedPINLocked(w, retryAfter)
+		failedAt := s.feed.now()
+		if locked, retryAfter := auth.failedAttempt(ip, failedAt); locked {
+			writeShortFeedPINLocked(w, retryAfter, auth, failedAt)
 			return
 		}
 		writeShortFeedError(w, http.StatusUnauthorized, "pin_invalid", "PIN 不正确")
@@ -628,16 +688,23 @@ func (s *ShortFeedHTTPServer) handleAuth(w http.ResponseWriter, r *http.Request)
 	writeShortFeedJSON(w, http.StatusOK, map[string]bool{"authenticated": true})
 }
 
-func writeShortFeedPINLocked(w http.ResponseWriter, retryAfter int) {
+func writeShortFeedPINLocked(w http.ResponseWriter, retryAfter int, auth *shortFeedAuth, now time.Time) {
 	if retryAfter == shortFeedDailyLockedRetry {
-		// 每日上限：没有可等待的时长，只能在桌面端修改或清除 PIN。code 仍是 pin_locked（前端按锁定处理），
-		// reset_required 告诉页面不要显示倒计时。
-		writeShortFeedJSON(w, http.StatusTooManyRequests, map[string]interface{}{
-			"error":          "pin_locked",
-			"code":           "pin_locked",
-			"message":        "PIN 错误次数过多，手机端登录已暂停，请在电脑上修改或清除 PIN 后再试",
-			"reset_required": true,
-		})
+		// 每日上限（M5）：最后一次失败之后 24 小时自动解除，也可以在桌面端解除。code 仍是 pin_locked（前端按
+		// 锁定处理）；daily_locked 告诉页面这是长时间锁定，应提示「在电脑上解除」而不是短倒计时。
+		payload := map[string]interface{}{
+			"error":        "pin_locked",
+			"code":         "pin_locked",
+			"message":      "PIN 错误次数过多，手机端登录已暂停：请在电脑上解除锁定，或 24 小时后再试",
+			"daily_locked": true,
+		}
+		if until := auth.dailyLockedUntilAt(now); !until.IsZero() {
+			seconds := shortFeedRetryAfter(until, now)
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", seconds))
+			payload["retry_after"] = seconds
+			payload["locked_until"] = until.UTC().Format(time.RFC3339)
+		}
+		writeShortFeedJSON(w, http.StatusTooManyRequests, payload)
 		return
 	}
 	w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))

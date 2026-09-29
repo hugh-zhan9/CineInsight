@@ -1243,3 +1243,38 @@ func TestCleanupMETA10ThresholdsComeFromSettings(t *testing.T) {
 		t.Fatalf("≤0 应取默认值: %+v err=%v", criteria, err)
 	}
 }
+
+// IMG-07：AI 查找同源与清理分析同一口径——近似重复忽略在任一侧文件变了之后不再算数，
+// 读不到的文件无从核对时照旧算数。
+func TestAISameSourceIMG07DismissalFollowsFileFingerprint(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	a := p016Video(t, root, "a.mp4", "same-source-a", 1920, 1080)
+	b := p016Video(t, root, "b.mp4", "same-source-b-x", 1920, 1080)
+	if err := DismissNearDuplicateGroup([]uint{a.ID, b.ID}); err != nil {
+		t.Fatal(err)
+	}
+	pair := cleanupVideoPairKey(a.ID, b.ID)
+	loaded := func() bool {
+		t.Helper()
+		pairs, err := loadActiveNearDuplicateDismissals(currentSameSourceFingerprints(a, []models.Video{b}))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, ok := pairs[pair]
+		return ok
+	}
+	if !loaded() {
+		t.Fatal("文件未变时忽略应生效")
+	}
+	mustWriteSizedFile(t, b.Path, []byte("same-source-b-re-encoded"))
+	if loaded() {
+		t.Fatal("一侧文件变了忽略应失效，不能再跳过这一对")
+	}
+	if err := os.Remove(b.Path); err != nil {
+		t.Fatal(err)
+	}
+	if !loaded() {
+		t.Fatal("读不到的文件无从核对，忽略应照旧生效")
+	}
+}

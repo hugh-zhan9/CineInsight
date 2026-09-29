@@ -163,7 +163,7 @@ func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map
 			}
 			existing, exists := best[sequences[clip].video.ID]
 			if !exists || candidate.MatchRate > existing.MatchRate {
-				verified, err := s.verifyClipPair(sequences[full], sequences[clip], candidate)
+				verified, err := s.verifyClipPair(ctx, sequences[full], sequences[clip], candidate)
 				if err != nil {
 					// 配对自己的期限/读盘失败不终止整轮；应用关闭仍要及时退出。
 					if ctx.Err() != nil {

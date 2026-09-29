@@ -345,12 +345,18 @@ func (s *ImageService) SyncImageDirectories() (*ImageScanResult, error) {
 }
 
 // scanImageDirectory 按扩展名遍历单个图片目录。过滤链（设计 4.1.2）：
-// ScanExcludePaths → 隐藏路径 → trash 目录名 SkipDir → isTrashPath。
+// ScanExcludePaths → 隐藏路径 → 回收站目录 SkipDir → isTrashPath。
+//
+// 回收站目录与视频扫描同一套按路径的判定（IMG-13，并入 LIB-14）：isTrashDir / isTrashPath 只认
+// 有 legacy_trash 条目的目录、按旧版特征认出的 trash/（基名恰为 trash、父目录下有旧版时间段内无条目的
+// 软删媒体且文件名对得上）与 .Trash / .Trashes；用户自己恰好叫 trash / Trash 的目录照常收录。
 func scanImageDirectory(dir string, extensions []string, excludedPaths []string) ([]ScannedFile, error) {
 	dir = filepath.Clean(strings.TrimSpace(dir))
 	if dir == "" || dir == "." {
 		return nil, fmt.Errorf("扫描根目录为空")
 	}
+	// 与视频扫描一样，每一轮遍历开始时刷新旧版回收站目录集合，随后 isTrashDir / isTrashPath 只读缓存。
+	refreshLegacyTrashDirs()
 	rootInfo, err := os.Stat(dir)
 	if err != nil {
 		return nil, fmt.Errorf("扫描根目录不可用: %w", err)
@@ -365,7 +371,7 @@ func scanImageDirectory(dir string, extensions []string, excludedPaths []string)
 	}
 
 	err = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if isScanPathExcluded(path, excludedPaths) || (info != nil && (shouldSkipHiddenPath(info) || (info.IsDir() && isTrashDirName(info.Name())))) {
+		if isScanPathExcluded(path, excludedPaths) || (info != nil && (shouldSkipHiddenPath(info) || (info.IsDir() && isTrashDir(path)))) {
 			if info != nil && info.IsDir() {
 				return filepath.SkipDir
 			}
@@ -1237,6 +1243,7 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 			return nil, fmt.Errorf("恢复提交结果无法确认，已保留当前文件和恢复日志供启动对账: %w", err)
 		}
 		if committed {
+			removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 			if loadErr := database.DB.Preload("Tags").First(&restored, image.ID).Error; loadErr != nil {
 				return nil, fmt.Errorf("恢复已提交，但读取结果失败: %w", loadErr)
 			}
@@ -1255,6 +1262,7 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		_ = database.DB.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": err.Error()}).Error
 		return nil, fmt.Errorf("恢复数据库记录失败: %w", err)
 	}
+	removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 	return &restored, nil
 }
 
@@ -1531,7 +1539,8 @@ func imageTrashPathAlreadyRecorded(path string) bool {
 }
 
 // ensureImageTrashEntryFileRestored 与 ensureTrashEntryFileRestored 同义：返回值只在这一次把文件
-// 从废纸篓移回原处时为 true；文件本来就在原路径时为 false（I-1）。
+// 从废纸篓移回原处时为 true；文件本来就在原路径时为 false（I-1）。trash 模式下原路径严格一致即判定
+// 「已在原处」、不读废纸篓一侧（I-A）；硬链接不删废纸篓那个名字（M1）。
 func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.ImageTrashEntry) (bool, error) {
 	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
 	strict := !isLegacyTrashMode(entry.Mode)
@@ -1552,18 +1561,22 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 	if err != nil {
 		return false, err
 	}
-	trashInfo, trashExists, err := regularFileState(entry.TrashPath)
+	if strict && originalExists && want.strictMatch(originalInfo) {
+		return false, nil
+	}
+	trashInfo, trashExists, err := trashSideFileState(entry.TrashPath)
 	if err != nil {
 		return false, err
 	}
 	if originalExists && trashExists {
-		if os.SameFile(originalInfo, trashInfo) {
-			if err := os.Remove(entry.TrashPath); err != nil {
-				return false, fmt.Errorf("清理已恢复的回收站副本失败: %w", err)
-			}
-			return true, nil
+		if !os.SameFile(originalInfo, trashInfo) {
+			return false, ErrTrashPathOccupied
 		}
-		return false, ErrTrashPathOccupied
+		// 硬链接：原路径上本来就有这个文件。trash 模式走到这里说明它与条目不符（严格一致已在上面返回）。
+		if strict {
+			return false, ErrTrashIdentityMismatch
+		}
+		return false, nil
 	}
 	if originalExists {
 		if !matches(entry.OriginalPath, originalInfo) {

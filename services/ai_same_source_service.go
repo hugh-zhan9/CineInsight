@@ -74,8 +74,9 @@ func (s *AISameSourceService) FindSameSource(ctx context.Context, video models.V
 		return AISameSourceEvidence{}, &AITaggingFatalError{Err: err}
 	}
 	// 用户在清理面板对一对视频点过"不是同片"，就不再拿这一对去问 AI：省一次请求，
-	// 也免得判过的对以"疑似同源"的身份再回到待审里。
-	dismissedPairs, err := loadNearDuplicateDismissals()
+	// 也免得判过的对以"疑似同源"的身份再回到待审里。与清理分析同一口径（D-PC31）：
+	// 任一侧文件变了，这条忽略就不再算数；本轮读不到的文件无从核对，照旧算数。
+	dismissedPairs, err := loadActiveNearDuplicateDismissals(currentSameSourceFingerprints(video, candidates))
 	if err != nil {
 		return AISameSourceEvidence{}, &AITaggingFatalError{Err: err}
 	}
@@ -155,6 +156,17 @@ func (s *AISameSourceService) FindSameSource(ctx context.Context, video models.V
 	}
 	result.Summary = fmt.Sprintf("发现 %d 个高置信同源视频：%s。已有标签只能作为证据，不能直接复制或写入正式标签。", len(result.Relations), strings.Join(evidenceDescriptions, "、"))
 	return result, nil
+}
+
+// currentSameSourceFingerprints 读参考视频与候选此刻的 size:mtimeNS，供核对近似重复忽略是否失效。
+func currentSameSourceFingerprints(video models.Video, candidates []models.Video) map[uint]string {
+	current := make(map[uint]string, len(candidates)+1)
+	for _, item := range append([]models.Video{video}, candidates...) {
+		if fingerprint, err := statCleanupFileFingerprint(item.Path); err == nil {
+			current[item.ID] = fingerprint
+		}
+	}
+	return current
 }
 
 func (s *AISameSourceService) loadDurationCandidates(video models.Video) ([]models.Video, error) {

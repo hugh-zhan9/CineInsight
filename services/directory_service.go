@@ -172,21 +172,45 @@ func (s *DirectoryService) remapDirectory(current models.ScanDirectory, newPath,
 	return result, nil
 }
 
-// checkRemapConflicts 在改写之前找出「改写后会与新路径下已有的活跃记录撞路径」的视频，
-// 给出可读的错误，而不是让唯一索引在事务中途失败。
+// checkRemapConflicts 在改写之前找出「改写后会与新路径下已有的活跃记录撞路径」的视频与图片，
+// 给出可读的错误，而不是让唯一索引在事务中途失败。重映射同样改写图片路径（rewriteLibraryPathPrefixTx），
+// 所以图片的路径唯一索引（idx_images_path_active）也要预检（M7）。
 func checkRemapConflicts(oldPath, newPath string) error {
-	existing, err := activeVideosUnderRoots([]string{oldPath})
+	videoConflicts, err := countRemapPathConflicts(&models.Video{}, oldPath, newPath)
 	if err != nil {
-		return fmt.Errorf("读取视频记录失败: %w", err)
+		return fmt.Errorf("检查新路径下的已有视频记录失败: %w", err)
 	}
-	projected := make([]string, 0, len(existing))
-	for _, video := range existing {
-		if !pathIsEqualOrInside(video.Path, oldPath) {
+	if videoConflicts > 0 {
+		return fmt.Errorf("新路径下已有 %d 条视频记录与原记录路径重复，请先处理这些记录", videoConflicts)
+	}
+	imageConflicts, err := countRemapPathConflicts(&models.Image{}, oldPath, newPath)
+	if err != nil {
+		return fmt.Errorf("检查新路径下的已有图片记录失败: %w", err)
+	}
+	if imageConflicts > 0 {
+		return fmt.Errorf("新路径下已有 %d 张图片记录与原记录路径重复，请先处理这些图片", imageConflicts)
+	}
+	return nil
+}
+
+// countRemapPathConflicts 统计 model（视频或图片；默认作用域只含活跃行）里位于 oldPath 之下的活跃行
+// 改写到 newPath 之后，有多少条的新路径已被活跃行占用。路径唯一索引只覆盖 deleted_at IS NULL 的行，
+// 软删行改写后不会撞索引，不参与预检。
+func countRemapPathConflicts(model interface{}, oldPath, newPath string) (int, error) {
+	like := escapeSQLLikePrefix(scanRootChildPrefix(oldPath)) + "%"
+	var paths []string
+	if err := database.DB.Model(model).Where(`path = ? OR path LIKE ? ESCAPE '\'`, oldPath, like).Pluck("path", &paths).Error; err != nil {
+		return 0, err
+	}
+	projected := make([]string, 0, len(paths))
+	for _, path := range paths {
+		// LIKE 对含通配符的路径可能过匹配，这里以路径包含关系为准。
+		if !pathIsEqualOrInside(path, oldPath) {
 			continue
 		}
-		rewritten, err := replacePathPrefix(video.Path, oldPath, newPath)
+		rewritten, err := replacePathPrefix(path, oldPath, newPath)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		projected = append(projected, rewritten)
 	}
@@ -194,15 +218,12 @@ func checkRemapConflicts(oldPath, newPath string) error {
 	for start := 0; start < len(projected); start += 500 {
 		end := min(start+500, len(projected))
 		var count int64
-		if err := database.DB.Model(&models.Video{}).Where("path IN ?", projected[start:end]).Count(&count).Error; err != nil {
-			return fmt.Errorf("检查新路径下的已有记录失败: %w", err)
+		if err := database.DB.Model(model).Where("path IN ?", projected[start:end]).Count(&count).Error; err != nil {
+			return 0, err
 		}
 		conflicts += int(count)
 	}
-	if conflicts > 0 {
-		return fmt.Errorf("新路径下已有 %d 条视频记录与原记录路径重复，请先处理这些记录", conflicts)
-	}
-	return nil
+	return conflicts, nil
 }
 
 func (s *DirectoryService) replaceDirectory(current models.ScanDirectory, newPath, alias string, result *DirectoryUpdateResult) (*DirectoryUpdateResult, error) {
