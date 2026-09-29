@@ -858,6 +858,18 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
   - 来源人物的人脸候选迁移到目标人物，不直接删除；
   - 撤销转换时，如果人物已被合并，改用合并目标来删除关系。
 - **P-035**：「批准筛选结果」把已加载且已过滤的 ID 交给 `ApproveAITagCandidates(ids)`；`ByFilter` 只用于按标签批量批准，先调用 `CountCandidatesByFilter` 预览数量。
+- **P-014**（追加）：给 `SubtitleGenerateResult` 增加 `ErrorCode` 和 `PendingRetained`；在 `app_subtitle.go` 中把 `subtitleReplaceFailedError` 映射为 `subtitle_replace_failed`（复审 B 修复时停在这一步：`subtitle_contracts.go` 不在该轮的写入范围内）。
+- **主代理整合裁决**（2026-09-29）：
+  - 超分的 `copy_metadata` 落库为新列，历史任务值为 false；
+  - 同一视频新建超分任务时，先清理之前保留的检查点；
+  - 撤销「标签转人物」不再做全库 AI 重置；
+  - 既有代码里的两处 `clause.Locking`（`ApproveCandidate`、`ConvertTagToPerson`）早于本批次，本批次不修改，只登记为遗留。
+- **P-016 交付后追加**：
+  - **P-029** 接线：`imageCleanupService.SetBackgroundTaskRegistry(backgroundTasks)`；`app_library.go` 中扫描后的自动清理分析改为 `StartAnalysisFromSettings()`，以使用设置中的阈值（主代理裁决，与 D-PC36 一致）。
+  - **P-020**：`SetVideoWatched` 在已看状态翻转时通知 `WatchStateObserver`，合并元数据后的已看同步依赖这一点。
+  - **小修（下一个跟进子代理）**：
+    - `clip_verify.go` 的画面复核改为使用分析传入的 ctx，取消时能立即中断；
+    - `ai_same_source_service.go` 的查找同源改用带指纹核对的近似重复忽略加载函数。
 - **P-039**：`docs/short-feed-lan.md` 中「无登录、无 PIN、无二维码」与投影机制的描述需要更新。
 - **P-040**：回收站列表方法名改回设计名（旧的 `ListTrashEntries` 删除后，把 `ListTrashEntriesPage` 改为 `ListTrashEntries`）；统一各处 `*BatchResult` 类型的命名。
 - **真机交接**：

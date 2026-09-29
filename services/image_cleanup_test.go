@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -651,7 +652,7 @@ func TestImageCleanupCandidateCapStopsScanningLaterBands(t *testing.T) {
 	states = append(states, near, victim)
 
 	svc := NewImageCleanupService()
-	groups, stale := svc.buildNearDuplicateGroups(states, nil)
+	groups, stale := svc.buildNearDuplicateGroups(context.Background(), states, nil)
 	if stale != 0 {
 		t.Fatalf("全部条目都有可用指纹，stale 应为 0，实际 %d", stale)
 	}
@@ -663,7 +664,7 @@ func TestImageCleanupCandidateCapStopsScanningLaterBands(t *testing.T) {
 
 	// 对照组：把占名额的 filler 去掉，同一对必须能成组——证明上面漏掉那一对确实是
 	// 上限造成的，而不是哈希或阈值构造错了。
-	controlGroups, _ := svc.buildNearDuplicateGroups([]imageCleanupFileState{near, victim}, nil)
+	controlGroups, _ := svc.buildNearDuplicateGroups(context.Background(), []imageCleanupFileState{near, victim}, nil)
 	if len(controlGroups) != 1 || len(imageCleanupGroupIDs(controlGroups[0])) != 2 {
 		t.Fatalf("对照组应当成一对（距离 7，在阈值 %d 内），实际 %+v", imageCleanupHammingThreshold, controlGroups)
 	}

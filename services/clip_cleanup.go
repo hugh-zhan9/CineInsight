@@ -47,9 +47,10 @@ type clipSequence struct {
 //
 // excluded 里是已经被别的类别认领的视频对（精确重复）与用户忽略过的对，
 // 它们不再作为截取候选出现。
-func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, int, error) {
+//
+// ctx 是这一轮分析的上下文：用户取消（D-PC51）或应用退出时在逐对比较之间停下。
+func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, int, error) {
 	startedAt := time.Now()
-	ctx := s.ctx
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -86,7 +87,7 @@ func (s *CleanupService) loadCleanupClipGroups(excluded map[[2]uint]struct{}, pr
 		// 与回填的新鲜判定同一套口径（frameHashSequenceMatchesFile）：带 last_error、
 		// 没有帧、或采样间隔不是当前值的行都不参与匹配，等回填重算。间隔不同的两条
 		// 序列无法逐帧对齐，留着它只会让"待补全"与"能匹配"两个口径互相打架。
-		if row.LastError != "" || row.FrameCount <= 0 || row.IntervalMS != clipFrameIntervalMS {
+		if !frameHashRowCurrent(row) {
 			continue
 		}
 		info, statErr := os.Stat(row.Video.Path)
@@ -235,6 +236,12 @@ func clipDismissalStillApplies(dismissed map[[2]uint]models.ClipDismissal, full,
 	}
 	return record.FullSourceSize == full.sourceSize && record.FullSourceModTimeNS == full.sourceMod &&
 		record.ClipSourceSize == clip.sourceSize && record.ClipSourceModTimeNS == clip.sourceMod
+}
+
+// frameHashRowCurrent 是"这一行序列按当前口径可用"的行内判据（不含与磁盘文件的比对）：
+// 没有 last_error、有帧、采样间隔等于当前常量。截取匹配与覆盖率（D-PC50）共用。
+func frameHashRowCurrent(row models.VideoFrameHashSequence) bool {
+	return row.LastError == "" && row.FrameCount > 0 && row.IntervalMS == clipFrameIntervalMS
 }
 
 // countVideosWithoutUsableFrameHash 统计本轮范围内、文件确实读得到、却还没有可用

@@ -584,12 +584,12 @@ func TestCleanupClipVerificationParentCancellationStopsAnalysis(t *testing.T) {
 		cancel()
 		return nil, ctx.Err()
 	}}
-	groups, _, _, err := svc.loadCleanupClipGroups(nil, nil)
+	groups, _, _, err := svc.loadCleanupClipGroups(ctx, nil, nil)
 	if !errors.Is(err, context.Canceled) || groups != nil || reads != 1 {
 		t.Fatalf("父上下文取消必须终止: groups=%+v reads=%d err=%v", groups, reads, err)
 	}
 	// 已取消时也不能继续逐对比较/抽帧。
-	_, _, _, err = svc.loadCleanupClipGroups(nil, nil)
+	_, _, _, err = svc.loadCleanupClipGroups(ctx, nil, nil)
 	if !errors.Is(err, context.Canceled) || reads != 1 {
 		t.Fatalf("取消后仍读取: reads=%d err=%v", reads, err)
 	}

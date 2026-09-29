@@ -31,16 +31,34 @@ func (a *App) GetCleanupCandidates(minDurationSeconds int, minWidth int, minHeig
 	return analysis, nil
 }
 
+// StartCleanupAnalysis 是旧绑定的薄包装（P-040 统一删除）：阈值改由设置提供（D-PC36），
+// 传入的三个参数不再生效，转调 StartCleanupAnalysisFromSettings。
 func (a *App) StartCleanupAnalysis(minDurationSeconds int, minWidth int, minHeight int) (*services.CleanupStatus, error) {
-	criteria := services.CleanupCriteria{
-		MinDuration: time.Duration(minDurationSeconds) * time.Second,
-		MinWidth:    minWidth,
-		MinHeight:   minHeight,
-	}
-	status, err := a.cleanupService.StartAnalysis(criteria)
-	log.Printf("API StartCleanupAnalysis duration=%d width=%d height=%d running=%v completed=%v err=%v",
-		minDurationSeconds, minWidth, minHeight, status != nil && status.Running, status != nil && status.Completed, err)
+	log.Printf("API StartCleanupAnalysis (legacy) ignored duration=%d width=%d height=%d", minDurationSeconds, minWidth, minHeight)
+	return a.StartCleanupAnalysisFromSettings()
+}
+
+// StartCleanupAnalysisFromSettings 启动视频清理分析，「极短片段 / 极低分辨率」阈值读设置
+// cleanup_short_seconds / cleanup_low_width / cleanup_low_height（≤0 用默认 5 / 480 / 320）。
+func (a *App) StartCleanupAnalysisFromSettings() (*services.CleanupStatus, error) {
+	status, err := a.cleanupService.StartAnalysisFromSettings()
+	log.Printf("API StartCleanupAnalysisFromSettings running=%v completed=%v err=%v",
+		status != nil && status.Running, status != nil && status.Completed, err)
 	return status, err
+}
+
+// CancelCleanupAnalysis 取消进行中的视频清理分析（D-PC51）。没有在跑时返回错误。
+func (a *App) CancelCleanupAnalysis() error {
+	err := a.cleanupService.CancelAnalysis()
+	log.Printf("API CancelCleanupAnalysis err=%v", err)
+	return err
+}
+
+// CancelImageCleanupAnalysis 取消进行中的图片清理分析（D-PC51）。没有在跑时返回错误。
+func (a *App) CancelImageCleanupAnalysis() error {
+	err := a.imageCleanupService.CancelImageCleanupAnalysis()
+	log.Printf("API CancelImageCleanupAnalysis err=%v", err)
+	return err
 }
 
 func (a *App) GetCleanupStatus() *services.CleanupStatus {
@@ -55,6 +73,86 @@ func (a *App) DismissNearDuplicateGroup(videoIDs []uint) error {
 	err := services.DismissNearDuplicateGroup(videoIDs)
 	log.Printf("API DismissNearDuplicateGroup videos=%d err=%v", len(videoIDs), err)
 	return err
+}
+
+// DismissNearDuplicateMember 把一个视频移出近似重复组（只否决它与组内其他成员的配对，D-PC31）。
+func (a *App) DismissNearDuplicateMember(groupVideoIDs []uint, memberID uint) error {
+	err := services.DismissNearDuplicateMember(groupVideoIDs, memberID)
+	log.Printf("API DismissNearDuplicateMember videos=%d member=%d err=%v", len(groupVideoIDs), memberID, err)
+	return err
+}
+
+// DismissImageNearDuplicateMember 把一张图片移出近似重复组（D-PC31）。
+func (a *App) DismissImageNearDuplicateMember(groupImageIDs []uint, memberID uint) error {
+	err := services.DismissImageNearDuplicateMember(groupImageIDs, memberID)
+	log.Printf("API DismissImageNearDuplicateMember images=%d member=%d err=%v", len(groupImageIDs), memberID, err)
+	if err == nil && a.imageCleanupService != nil {
+		a.imageCleanupService.InvalidateAnalysis()
+	}
+	return err
+}
+
+// DismissCleanupVideo 忽略一个「极短片段」（category=short）或「极低分辨率」（category=low）候选（D-PC31）。
+func (a *App) DismissCleanupVideo(videoID uint, category string) error {
+	err := services.DismissCleanupVideo(videoID, category)
+	log.Printf("API DismissCleanupVideo video=%d category=%s err=%v", videoID, category, err)
+	return err
+}
+
+// ListCleanupDismissals 分页列出某一类忽略记录（「已忽略」页签）。kind：near_duplicate / clip /
+// short / low / image_near_duplicate；cursor 为上一页的 next_cursor（首页传 0）。
+func (a *App) ListCleanupDismissals(kind string, cursor uint, limit int) (*services.CleanupDismissalPage, error) {
+	page, err := services.ListCleanupDismissals(kind, cursor, limit)
+	if err != nil {
+		log.Printf("API ListCleanupDismissals kind=%s err=%v", kind, err)
+		return nil, err
+	}
+	log.Printf("API ListCleanupDismissals kind=%s result=%d hasMore=%v", kind, len(page.Items), page.HasMore)
+	return page, nil
+}
+
+// UndoCleanupDismissals 撤销某一类里的若干条忽略记录；已缓存的分析结果随之标为可能过期。
+func (a *App) UndoCleanupDismissals(kind string, ids []uint) (*services.CleanupDismissalUndoResult, error) {
+	result, err := services.UndoCleanupDismissals(kind, ids)
+	log.Printf("API UndoCleanupDismissals kind=%s ids=%d err=%v", kind, len(ids), err)
+	if err != nil {
+		return nil, err
+	}
+	if result.Removed > 0 {
+		a.invalidateCleanupAnalysisFor(kind == services.CleanupDismissalKindImageNearDuplicate)
+	}
+	return result, nil
+}
+
+// MergeMediaMetadata 把被合并项的整理成果合并到保留项（D-PC48）。kind：video / image。
+// 清理中心在删除确认后、调用删除之前单独调用；返回错误时不要进入删除。
+func (a *App) MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint) (*services.MediaMetadataMergeResult, error) {
+	deps := services.MediaMetadataMergeDeps{Watched: a.videoService}
+	if a.subtitleService != nil {
+		deps.Subtitles = services.NewSubtitleFileWriter(a.subtitleService.BaseDir)
+	}
+	result, err := services.MergeMediaMetadata(kind, keeperID, sourceIDs, deps)
+	if err != nil {
+		log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d err=%v", kind, keeperID, len(sourceIDs), err)
+		return nil, err
+	}
+	log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d tags=%d people=%d collections=%d watched=%v subtitle=%v warnings=%d",
+		kind, keeperID, len(sourceIDs), result.TagsAdded, result.PeopleAdded, result.CollectionsAdded, result.WatchedChanged, result.SubtitleMoved, len(result.Warnings))
+	// 整理项变了，缓存结果里的保留建议与整理图标可能过期。
+	a.invalidateCleanupAnalysisFor(kind == services.MediaMergeKindImage)
+	return result, nil
+}
+
+func (a *App) invalidateCleanupAnalysisFor(image bool) {
+	if image {
+		if a.imageCleanupService != nil {
+			a.imageCleanupService.InvalidateAnalysis()
+		}
+		return
+	}
+	if a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
 }
 
 // ===== 帧哈希序列与截取片段识别（D-026、D-028）=====

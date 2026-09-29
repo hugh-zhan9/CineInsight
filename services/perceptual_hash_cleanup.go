@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"math"
 	"os"
@@ -20,9 +21,10 @@ const (
 
 // presentVideoIDs 是调用方本轮已确认在扫描范围内、文件也读得到的视频集合。
 // 它只用来数出"连感知哈希行都没有"的视频——那部分早先完全不进任何计数。
-func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupDuplicateGroup, map[[2]uint]struct{}, int64, error) {
+// ctx 被取消时在下一行 / 下一个比较之前停下。
+func loadCleanupNearDuplicateGroups(ctx context.Context, excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupDuplicateGroup, map[[2]uint]struct{}, int64, error) {
 	var rows []models.VideoPerceptualHash
-	if err := database.DB.Preload("Video.Tags").Order("video_id ASC").Find(&rows).Error; err != nil {
+	if err := database.DB.WithContext(ctx).Preload("Video.Tags").Order("video_id ASC").Find(&rows).Error; err != nil {
 		return nil, nil, 0, err
 	}
 	scope, err := loadCleanupPathScope()
@@ -33,6 +35,9 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}, presentVideoI
 	hashedVideoIDs := make(map[uint]struct{}, len(rows))
 	valid := rows[:0]
 	for _, row := range rows {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, 0, err
+		}
 		if !scope.contains(row.Video.Path) {
 			continue
 		}
@@ -42,7 +47,7 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}, presentVideoI
 			// 文件读不到是另一回事，由 SkippedUnavailable 负责报，不算指纹问题。
 			continue
 		}
-		if row.HashEarly == "" || row.HashMiddle == "" || row.HashLate == "" {
+		if !perceptualHashRowComplete(row) {
 			staleCount++
 			continue
 		}
@@ -69,6 +74,9 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}, presentVideoI
 	adjacency := make(map[int]map[int]struct{})
 	matchedPairs := make(map[[2]uint]struct{})
 	for index, row := range valid {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, 0, err
+		}
 		candidates := make(map[int]struct{})
 		for _, key := range perceptualBandKeys(row) {
 			if len(candidates) < perceptualHashMaxCandidates {
@@ -174,7 +182,8 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}, presentVideoI
 				covered[pair] = struct{}{}
 			}
 		}
-		sort.Slice(videos, func(i, j int) bool { return isPreferredCleanupVideo(videos[i], videos[j]) })
+		// 整理分在全部类别成组后由 rankCleanupCandidates 统一补上并重排。
+		sort.Slice(videos, func(i, j int) bool { return isPreferredCleanupVideo(videos[i], videos[j], nil) })
 		groups = append(groups, CleanupDuplicateGroup{
 			Original: videos[0], Candidates: append([]models.Video(nil), videos[1:]...),
 			Reason: "三帧感知哈希接近，可能是同片不同转码（不会默认选中）",
@@ -184,7 +193,14 @@ func loadCleanupNearDuplicateGroups(excluded map[[2]uint]struct{}, presentVideoI
 	return groups, matchedPairs, staleCount, nil
 }
 
-// loadNearDuplicateDismissals 返回用户已忽略的近似重复视频对。
+// perceptualHashRowComplete 报告三帧哈希是否都已算出（回填失败的行三项为空）。
+func perceptualHashRowComplete(row models.VideoPerceptualHash) bool {
+	return row.HashEarly != "" && row.HashMiddle != "" && row.HashLate != ""
+}
+
+// loadNearDuplicateDismissals 返回用户已忽略的近似重复视频对（不看指纹）。
+// AI 查找同源（ai_same_source_service.go）用它跳过判过"不是同片"的对；清理分析改用
+// loadActiveNearDuplicateDismissals，文件变了的忽略不再算数。
 func loadNearDuplicateDismissals() (map[[2]uint]struct{}, error) {
 	var dismissals []models.NearDuplicateDismissal
 	if err := database.DB.Find(&dismissals).Error; err != nil {
@@ -197,33 +213,118 @@ func loadNearDuplicateDismissals() (map[[2]uint]struct{}, error) {
 	return pairs, nil
 }
 
+// loadActiveNearDuplicateDismissals 只返回仍然有效的近似重复忽略（D-PC31）：两侧记录的指纹
+// 为空（历史行）或与 current 一致才算数；current 里没有的视频（本轮读不到）无从核对，照旧算数。
+func loadActiveNearDuplicateDismissals(current map[uint]string) (map[[2]uint]struct{}, error) {
+	var dismissals []models.NearDuplicateDismissal
+	if err := database.DB.Find(&dismissals).Error; err != nil {
+		return nil, err
+	}
+	pairs := make(map[[2]uint]struct{}, len(dismissals))
+	for _, dismissal := range dismissals {
+		if !cleanupDismissalSideApplies(dismissal.FingerprintA, current, dismissal.VideoLowID) ||
+			!cleanupDismissalSideApplies(dismissal.FingerprintB, current, dismissal.VideoHighID) {
+			continue
+		}
+		pairs[cleanupVideoPairKey(dismissal.VideoLowID, dismissal.VideoHighID)] = struct{}{}
+	}
+	return pairs, nil
+}
+
 // DismissNearDuplicateGroup 把一组视频的全部两两配对持久化为忽略，后续
-// 清理分析不再把它们报为近似重复。
+// 清理分析不再把它们报为近似重复。每条忽略记下双方此刻的 size:mtimeNS，
+// 任一侧文件变了这条忽略随之失效（D-PC31）。
 func DismissNearDuplicateGroup(videoIDs []uint) error {
-	if len(videoIDs) < 2 {
+	ids := uniqueUintIDs(videoIDs)
+	if len(ids) < 2 {
 		return fmt.Errorf("忽略近似重复组至少需要两个视频")
 	}
-	dismissals := make([]models.NearDuplicateDismissal, 0, len(videoIDs)*(len(videoIDs)-1)/2)
-	for i := 0; i < len(videoIDs); i++ {
-		for j := i + 1; j < len(videoIDs); j++ {
-			pair := cleanupVideoPairKey(videoIDs[i], videoIDs[j])
-			dismissals = append(dismissals, models.NearDuplicateDismissal{VideoLowID: pair[0], VideoHighID: pair[1]})
+	pairs := make([][2]uint, 0, len(ids)*(len(ids)-1)/2)
+	for i := 0; i < len(ids); i++ {
+		for j := i + 1; j < len(ids); j++ {
+			pairs = append(pairs, cleanupVideoPairKey(ids[i], ids[j]))
 		}
+	}
+	return dismissNearDuplicatePairs(ids, pairs)
+}
+
+// DismissNearDuplicateMember 把一个成员移出近似重复组（D-PC31）：只否决它与组内其他成员的配对，
+// 其余成员之间的关系不动，下次分析仍可成组。
+func DismissNearDuplicateMember(groupVideoIDs []uint, memberID uint) error {
+	ids := uniqueUintIDs(groupVideoIDs)
+	if memberID == 0 || !containsUintID(ids, memberID) {
+		return fmt.Errorf("要移出的视频不在这一组里")
+	}
+	pairs := make([][2]uint, 0, len(ids)-1)
+	for _, other := range ids {
+		if other != memberID {
+			pairs = append(pairs, cleanupVideoPairKey(memberID, other))
+		}
+	}
+	if len(pairs) == 0 {
+		return fmt.Errorf("移出成员时组内至少还要有另一个视频")
+	}
+	return dismissNearDuplicatePairs(ids, pairs)
+}
+
+// dismissNearDuplicatePairs 写入（或刷新指纹）一批近似重复忽略，并否决这些对上待审的同源关系。
+func dismissNearDuplicatePairs(videoIDs []uint, pairs [][2]uint) error {
+	fingerprints, err := loadVideoFileFingerprints(videoIDs)
+	if err != nil {
+		return err
+	}
+	dismissals := make([]models.NearDuplicateDismissal, 0, len(pairs))
+	for _, pair := range pairs {
+		dismissals = append(dismissals, models.NearDuplicateDismissal{
+			VideoLowID: pair[0], VideoHighID: pair[1],
+			FingerprintA: fingerprints[pair[0]], FingerprintB: fingerprints[pair[1]],
+		})
 	}
 	// "不是同片"也是对同源判断的否决：这些对上还在待审的同源关系一并判掉，
 	// 否则 AI 标签管理里的"视频同源待审"会继续拿同一对来问。两步同一事务：
 	// 只写了忽略表而没判关系，清理面板与同源待审就会各说各话。
-	pairs := make([][2]uint, 0, len(dismissals))
-	for _, dismissal := range dismissals {
-		pairs = append(pairs, [2]uint{dismissal.VideoLowID, dismissal.VideoHighID})
-	}
 	now := time.Now()
 	return database.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&dismissals).Error; err != nil {
+		// 同一对重复忽略要刷新指纹：上一条可能记的是重编码之前的那两个文件。
+		// pairs 由调用方从去重后的 ID 生成，批内没有重复键（PG 21000）。
+		if err := tx.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "video_low_id"}, {Name: "video_high_id"}},
+			DoUpdates: clause.AssignmentColumns([]string{"fingerprint_a", "fingerprint_b"}),
+		}).Create(&dismissals).Error; err != nil {
 			return err
 		}
 		return rejectDetectedSameSourceRelationsForPairsTx(tx, pairs, now)
 	})
+}
+
+// loadVideoFileFingerprints 读出每个活跃视频此刻的 size:mtimeNS。视频不存在或文件读不到时报错：
+// 空指纹表示"永不失效"，只留给历史行，新写入的忽略必须带上真实指纹。
+func loadVideoFileFingerprints(videoIDs []uint) (map[uint]string, error) {
+	var videos []models.Video
+	if err := database.DB.Select("id", "path").Where("id IN ?", videoIDs).Find(&videos).Error; err != nil {
+		return nil, err
+	}
+	if len(videos) != len(videoIDs) {
+		return nil, fmt.Errorf("部分视频不存在或已删除，无法记录忽略")
+	}
+	fingerprints := make(map[uint]string, len(videos))
+	for _, video := range videos {
+		fingerprint, err := statCleanupFileFingerprint(video.Path)
+		if err != nil {
+			return nil, fmt.Errorf("视频 %d 的文件当前无法访问，无法记录忽略", video.ID)
+		}
+		fingerprints[video.ID] = fingerprint
+	}
+	return fingerprints, nil
+}
+
+func containsUintID(ids []uint, target uint) bool {
+	for _, id := range ids {
+		if id == target {
+			return true
+		}
+	}
+	return false
 }
 
 func perceptualBandKeys(row models.VideoPerceptualHash) []string {
