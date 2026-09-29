@@ -70,4 +70,16 @@ describe('标签转为人物', () => {
     expect(wrapper.get('.btn-primary').element.disabled).toBe(false);
     wrapper.unmount();
   });
+
+  // META-02（D-PC34）：转换前写明后果——顶部筛选改用人物、AI 词表不再包含它，以及去哪里撤销。
+  it('META-02 explains the consequences and where to undo before converting', async () => {
+    const wrapper = mount(TagPersonConversionPanel, { props: { tagId: 4 } });
+    await flushPromises();
+    const text = wrapper.get('[data-test="tag-person-conversion-consequences"]').text();
+    expect(text).toContain('标签筛选里不再有「张三」');
+    expect(text).toContain('人物筛选');
+    expect(text).toContain('AI 打标的词表不再包含这个标签');
+    expect(text).toContain('「最近转换」里撤销');
+    wrapper.unmount();
+  });
 });

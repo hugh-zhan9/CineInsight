@@ -2,11 +2,15 @@ import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'ApproveAITagCandidate', 'ConfirmSameSourceRelation', 'DeleteVideo', 'GetAITaggingStatusSummary', 'ListAITagCandidatePage', 'ListSameSourceRelations',
+  'ApproveAITagCandidate', 'ApproveAITagCandidates', 'ApproveAITagCandidatesByFilter', 'CountAITagCandidatesByFilter',
+  'ConfirmSameSourceRelation', 'DeleteVideo', 'GetAITaggingStatusSummary', 'ListAITagCandidatePage', 'ListSameSourceRelations',
   'MarkSameSourceRelationRead', 'PreviewExternally', 'RejectAITagCandidate', 'RejectAITagCandidatesByVideo',
   'RejectSameSourceRelation', 'RenameVideo', 'RetryAITagging',
 ].map(name => [name, vi.fn()])));
 vi.mock('../../wailsjs/go/main/App', () => api);
+// 批量批准走应用内确认框：默认答「确定」，需要「取消」的用例单独设置。
+const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(() => Promise.resolve(true)) }));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
 vi.mock('./AddTagDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./AIQualityPanel.vue', () => ({ default: { template: '<div data-test="quality-panel">quality panel</div>' } }));
 vi.mock('./FaceClusterReviewPanel.vue', () => ({ default: { template: '<div data-test="face-panel-stub">face panel</div>' } }));
@@ -32,6 +36,7 @@ beforeEach(() => {
   api.GetAITaggingStatusSummary.mockResolvedValue({ config_available: true });
   api.ListAITagCandidatePage.mockResolvedValue(candidatePage([]));
   api.ListSameSourceRelations.mockResolvedValue([]);
+  feedback.confirmAction.mockResolvedValue(true);
 });
 
 // 2026-09-01 起两个顶层页签合并成主从布局：待审在左，质量评估作为右侧常驻
@@ -58,7 +63,8 @@ describe('AITagReviewDialog quality entry', () => {
 });
 
 describe('AITagReviewDialog same-source review', () => {
-  it('offers an explicit confirm action and removes the handled relation locally', async () => {
+  // META-08（D-PC27）：确认同源后卡片不再消失，而是换成「已确认同源 · 去清理」。
+  it('META-08 confirms a relation, keeps the card and offers going to cleanup', async () => {
     api.ListSameSourceRelations.mockResolvedValueOnce([{
       id: 9,
       video_a_id: 1,
@@ -97,7 +103,13 @@ describe('AITagReviewDialog same-source review', () => {
     await flushPromises();
 
     expect(api.ConfirmSameSourceRelation).toHaveBeenCalledWith(9);
-    expect(wrapper.find('.same-source-row').exists()).toBe(false);
+    expect(wrapper.find('.same-source-row').exists()).toBe(true);
+    expect(wrapper.find('[data-test="same-source-confirmed-9"]').text()).toBe('已确认同源');
+    expect(wrapper.findAll('.same-source-row button').some(button => button.text() === '确认同源')).toBe(false);
+    // 确认过的不再算待审。
+    expect(wrapper.get('[data-test="same-source-review-tab"]').text()).toContain('0');
+    await wrapper.get('[data-test="same-source-go-cleanup-9"]').trigger('click');
+    expect(wrapper.emitted('open-cleanup')).toEqual([[{ relationId: 9, videoIds: [1, 2] }]]);
   });
 
   it('deletes either same-source video record while keeping the original file', async () => {
@@ -383,5 +395,174 @@ describe('AITagReviewDialog layout and media meta', () => {
     expect(metas).toHaveLength(2);
     expect(metas[0].text()).toBe('4.0 GB · 01:00');
     expect(metas[1].text()).toBe('700.0 MB · 01:00');
+  });
+});
+
+// META-08（D-PC27）：打开弹窗不再把同源全部标已读，切到同源页签才算看过。
+describe('AITagReviewDialog META-08 同源已读时机与待审总数', () => {
+  const unreadRelation = {
+    id: 21, video_a_id: 1, video_b_id: 2,
+    video_a: { id: 1, name: 'A.mp4', path: '/a/A.mp4' }, video_b: { id: 2, name: 'B.mp4', path: '/b/B.mp4' },
+    confidence: 'high', is_unread: true,
+  };
+
+  it('META-08 marks same-source relations read only after switching to that tab', async () => {
+    api.ListSameSourceRelations.mockResolvedValue([unreadRelation]);
+    api.MarkSameSourceRelationRead.mockResolvedValue();
+    const wrapper = mount(AITagReviewDialog, { props: { visible: false } });
+    await wrapper.setProps({ visible: true });
+    await flushPromises();
+    expect(api.MarkSameSourceRelationRead).not.toHaveBeenCalled();
+    expect(wrapper.emitted('changed')).toBeUndefined();
+
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+    await flushPromises();
+    expect(api.MarkSameSourceRelationRead).toHaveBeenCalledWith(21);
+    expect(wrapper.vm.sameSourceRelations[0].is_unread).toBe(false);
+    expect(wrapper.emitted('changed')).toHaveLength(1);
+
+    // 已读过的不会在下一次切换时重复标记。
+    await wrapper.get('[data-test="ai-candidate-review-tab"]').trigger('click');
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+    await flushPromises();
+    expect(api.MarkSameSourceRelationRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('META-08 shows the backend pending total instead of the loaded page size', async () => {
+    api.GetAITaggingStatusSummary.mockResolvedValue({ config_available: true, pending: 137 });
+    api.ListAITagCandidatePage.mockResolvedValue(candidatePage([tagCandidate({ id: 9 })], 9));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    expect(wrapper.get('[data-test="ai-candidate-review-tab"]').text()).toContain('137');
+    expect(wrapper.get('[data-test="ai-review-counts"]').text()).toContain('AI 标签待审 137 条（已加载 1 条）');
+  });
+});
+
+// META-11（D-PC29）：组头「批准本组全部」、筛选栏「批准筛选结果（N）」与按标签整批批准。
+describe('AITagReviewDialog META-11 批量批准', () => {
+  const pool = () => [
+    tagCandidate({ id: 5, video_id: 10, matched_tag_id: 20, matched_tag: { id: 20, name: '动作' }, confidence: 'high' }),
+    tagCandidate({ id: 4, video_id: 10, matched_tag_id: 21, matched_tag: { id: 21, name: '夜景' }, suggested_name: '夜景', confidence: 'medium' }),
+    tagCandidate({ id: 3, video_id: 10, matched_tag_id: 22, matched_tag: { id: 22, name: '室内' }, suggested_name: '室内', confidence: 'low' }),
+    tagCandidate({ id: 2, video_id: 11, video: { id: 11, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, matched_tag_id: 20, matched_tag: { id: 20, name: '动作' }, confidence: 'high' }),
+  ];
+
+  async function mountWithPool() {
+    api.ListAITagCandidatePage.mockResolvedValue(candidatePage(pool()));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('META-11 approves the approvable candidates of one group after confirmation', async () => {
+    api.ApproveAITagCandidates.mockResolvedValue({
+      requested: 2, succeeded: 2, failed: 0, superseded: 0,
+      results: [{ id: 5, ok: true, item: { id: 5, video_id: 10, matched_tag_id: 20 } }, { id: 4, ok: true, item: { id: 4, video_id: 10, matched_tag_id: 21 } }],
+    });
+    const wrapper = await mountWithPool();
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="ai-approve-group-10"]').trigger('click');
+    await flushPromises();
+    expect(api.ApproveAITagCandidates).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-test="ai-approve-group-10"]').trigger('click');
+    await flushPromises();
+    // 低置信的那条批不了，不交出去。
+    expect(api.ApproveAITagCandidates).toHaveBeenCalledWith([5, 4]);
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([3, 2]);
+    expect(wrapper.get('[data-test="ai-review-notice"]').text()).toContain('成功 2 条');
+    expect(wrapper.emitted('changed')).toHaveLength(1);
+  });
+
+  it('META-11 approves only the loaded and filtered IDs, and needs a filter first', async () => {
+    api.ApproveAITagCandidates.mockResolvedValue({
+      requested: 2, succeeded: 1, failed: 0, superseded: 1,
+      results: [
+        { id: 5, ok: true, item: { id: 5, video_id: 10, matched_tag_id: 20 } },
+        { id: 2, superseded: true, message: '已手动添加该标签' },
+      ],
+    });
+    const wrapper = await mountWithPool();
+    const button = wrapper.get('[data-test="ai-approve-filtered"]');
+    expect(button.attributes('disabled')).toBeDefined();
+    expect(button.text()).toContain('（0）');
+
+    await wrapper.get('[data-test="ai-review-filter-tag"]').setValue('20');
+    expect(wrapper.get('[data-test="ai-approve-filtered"]').text()).toContain('（2）');
+    await wrapper.get('[data-test="ai-approve-filtered"]').trigger('click');
+    await flushPromises();
+
+    expect(api.ApproveAITagCandidates).toHaveBeenCalledWith([5, 2]);
+    expect(api.ApproveAITagCandidatesByFilter).not.toHaveBeenCalled();
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([4, 3]);
+    // superseded 不是失败，原因要写出来。
+    const notice = wrapper.get('[data-test="ai-review-notice"]').text();
+    expect(notice).toContain('1 条已失效（已手动添加该标签 1 条）');
+    expect(notice).not.toContain('失败');
+  });
+
+  it('META-11 previews the count before approving everything under a tag', async () => {
+    api.CountAITagCandidatesByFilter.mockResolvedValue(7);
+    api.ApproveAITagCandidatesByFilter.mockResolvedValue({
+      requested: 7, succeeded: 7, failed: 0, superseded: 0,
+      results: [{ id: 5, ok: true, item: { id: 5, video_id: 10, matched_tag_id: 20 } }],
+    });
+    const wrapper = await mountWithPool();
+    expect(wrapper.get('[data-test="ai-approve-by-tag"]').attributes('disabled')).toBeDefined();
+
+    await wrapper.get('[data-test="ai-review-filter-tag"]').setValue('20');
+    await wrapper.get('[data-test="ai-review-filter-confidence"]').setValue('high');
+    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click');
+    await flushPromises();
+
+    expect(api.CountAITagCandidatesByFilter).toHaveBeenCalledWith({ tag_id: 20, confidence: 'high' });
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('为 7 个视频批准') }));
+    expect(api.ApproveAITagCandidatesByFilter).toHaveBeenCalledWith({ tag_id: 20, confidence: 'high' });
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).not.toContain(5);
+  });
+
+  it('META-11 does not approve by tag when the preview finds nothing or is cancelled', async () => {
+    const wrapper = await mountWithPool();
+    await wrapper.get('[data-test="ai-review-filter-tag"]').setValue('21');
+
+    api.CountAITagCandidatesByFilter.mockResolvedValueOnce(0);
+    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="ai-review-notice"]').text()).toContain('没有可批准');
+
+    api.CountAITagCandidatesByFilter.mockResolvedValueOnce(3);
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click');
+    await flushPromises();
+    expect(api.ApproveAITagCandidatesByFilter).not.toHaveBeenCalled();
+  });
+});
+
+// META-06：手动加标签后按 (video_id, tag_id) 局部移除候选，同视频其他标签的候选保留。
+describe('AITagReviewDialog META-06 手动加标签', () => {
+  it('META-06 removes only the same-tag candidates of that video without reloading', async () => {
+    api.ListAITagCandidatePage.mockResolvedValue(candidatePage([
+      tagCandidate({ id: 5, video_id: 10, matched_tag_id: 20 }),
+      tagCandidate({ id: 4, video_id: 10, matched_tag_id: 21, suggested_name: '夜景' }),
+      tagCandidate({ id: 3, video_id: 11, video: { id: 11, name: 'b.mp4', path: '/b.mp4', tags: [] }, matched_tag_id: 20 }),
+    ]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    await wrapper.vm.loadCandidates();
+    await flushPromises();
+    const loads = api.ListAITagCandidatePage.mock.calls.length;
+
+    wrapper.vm.openManualTagDialog(wrapper.vm.groups[0]);
+    await wrapper.vm.handleManualTagAdded({ videoIds: [10], tagIds: [20], tags: [{ id: 20, name: '动作', color: '#ff0000' }] });
+    await flushPromises();
+
+    expect(api.ListAITagCandidatePage).toHaveBeenCalledTimes(loads);
+    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([4, 3]);
+    expect(wrapper.vm.groups[0].videoTags.map(tag => tag.name)).toEqual(['动作']);
+    expect(wrapper.get('[data-test="ai-review-notice"]').text()).toContain('其他候选保留');
+    expect(wrapper.emitted('changed')).toHaveLength(1);
   });
 });

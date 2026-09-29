@@ -39,7 +39,7 @@
         <p>还没有可确认的剧集候选。</p>
         <p class="help-text">
           候选按文件名认剧集：「S01E02」、「第 3 集」、「EP04」、「[05]」、「片名 - 06」这几种写法各算一种。
-          同一扫描根下同名系列凑够两集才成一组，已经在作品集里的视频不会再被提。
+          同一扫描根下同名系列凑够两集才成一组，已经在作品集里的视频不会再被提；已建作品集的系列出现新集时，会提示追加到那个作品集。
         </p>
       </div>
       <template v-else>
@@ -52,26 +52,37 @@
             data-test="collection-suggestion-item"
             @click="activeID = suggestion.id"
           >
-            <span class="suggestion-list__name">{{ suggestion.series_name }}</span>
-            <span class="suggestion-list__meta">{{ suggestion.member_count }} 集 · {{ suggestion.scan_root }}</span>
+            <span class="suggestion-list__name">{{ suggestion.series_name }}<span v-if="isAppend(suggestion)" class="suggestion-list__badge" :data-test="`collection-suggestion-append-badge-${suggestion.id}`">追加</span></span>
+            <span class="suggestion-list__meta">{{ isAppend(suggestion) ? `新增 ${suggestion.member_count} 集 → 「${suggestion.target_collection_name}」` : `${suggestion.member_count} 集` }} · {{ suggestion.scan_root }}</span>
           </button>
         </nav>
 
         <div v-if="activeSuggestion" class="suggestion-detail">
-          <label class="suggestion-name">
-            <span>作品集名称</span>
-            <input
-              v-model="activeDraft.name"
-              type="text"
-              maxlength="200"
-              class="text-input"
-              data-test="collection-suggestion-name"
-              placeholder="作品集名称"
-            />
-          </label>
-          <p class="help-text">
-            已有同名作品集时会加入那一个，不会新建。确认只写作品集关系，视频标题与文件名不会改动。
-          </p>
+          <!-- D-PC38：已确认作品集的系列又出现新集，候选是「追加到现有作品集」，不再新建（META-15）。 -->
+          <template v-if="isAppend(activeSuggestion)">
+            <p class="suggestion-append-target" data-test="collection-suggestion-append-target">
+              追加到现有作品集「{{ activeSuggestion.target_collection_name || `作品集 #${activeSuggestion.target_collection_id}` }}」
+            </p>
+            <p class="help-text">
+              这些是该系列新出现、还不在任何作品集里的集，确认后按集号插入到合适的位置。视频标题与文件名不会改动。
+            </p>
+          </template>
+          <template v-else>
+            <label class="suggestion-name">
+              <span>作品集名称</span>
+              <input
+                v-model="activeDraft.name"
+                type="text"
+                maxlength="200"
+                class="text-input"
+                data-test="collection-suggestion-name"
+                placeholder="作品集名称"
+              />
+            </label>
+            <p class="help-text">
+              已有同名作品集时会加入那一个，不会新建。确认只写作品集关系，视频标题与文件名不会改动。
+            </p>
+          </template>
 
           <div class="suggestion-members">
             <div
@@ -116,9 +127,9 @@
         type="button"
         class="btn-primary"
         data-test="collection-suggestion-confirm"
-        :disabled="processing || keptVideoIDs.length < 2 || !activeDraft.name.trim()"
+        :disabled="!canConfirm"
         @click="confirm"
-      >确认建作品集</button>
+      >{{ isAppend(activeSuggestion) ? '追加到作品集' : '确认建作品集' }}</button>
     </div>
   </BaseModal>
 </template>
@@ -171,6 +182,12 @@ export default {
       return this.activeSuggestion.members
         .map(member => member.video_id)
         .filter(videoID => !excluded.includes(videoID));
+    },
+    // 新建至少两集且要有名称；追加到既有作品集一集就够，名称沿用目标作品集（后端同一口径）。
+    canConfirm() {
+      if (this.processing || !this.activeSuggestion) return false;
+      if (this.isAppend(this.activeSuggestion)) return this.keptVideoIDs.length >= 1;
+      return this.keptVideoIDs.length >= 2 && Boolean(this.activeDraft.name.trim());
     }
   },
   async mounted() {
@@ -184,6 +201,10 @@ export default {
   },
   methods: {
     formatBytes,
+    // kind=append 等价于 target_collection_id 非空（详细设计 §1.2a）。
+    isAppend(suggestion) {
+      return suggestion?.kind === 'append' || Boolean(suggestion?.target_collection_id);
+    },
     applyStatus(data) {
       this.status = {
         running: Boolean(data?.running),
@@ -259,28 +280,30 @@ export default {
     },
     async confirm() {
       const suggestion = this.activeSuggestion;
-      if (!suggestion) return;
-      const name = this.activeDraft.name.trim();
+      if (!suggestion || !this.canConfirm) return;
+      const append = this.isAppend(suggestion);
+      const name = append ? (suggestion.target_collection_name || '') : this.activeDraft.name.trim();
       const videoIDs = this.keptVideoIDs;
-      if (videoIDs.length < 2 || !name) return;
       this.processing = true;
       try {
         const detail = await ConfirmCollectionSuggestion(suggestion.id, name, videoIDs);
-        notifySuccess(`已把 ${videoIDs.length} 集写入作品集「${name}」`);
+        notifySuccess(append ? `已把 ${videoIDs.length} 集追加到作品集「${name}」` : `已把 ${videoIDs.length} 集写入作品集「${name}」`);
         this.$emit('confirmed', detail);
         this.dropSuggestion(suggestion.id);
       } catch (err) {
-        notifyError('确认作品集失败：' + err);
+        const raw = String(err?.message || err || '');
+        notifyError(raw.includes('target_collection_gone') ? '目标作品集已被删除，请重新分析剧集。' : '确认作品集失败：' + raw);
       } finally {
         this.processing = false;
       }
     },
+    // D-PC38：忽略按（扫描根，规范化系列名）记忆，之后这个系列新增集数也不会再提醒。
     async dismiss() {
       const suggestion = this.activeSuggestion;
       if (!suggestion) return;
       const confirmed = await confirmAction({
         title: '忽略这一组',
-        message: `「${suggestion.series_name}」的 ${suggestion.members.length} 集不再作为建议出现。成员有增减时会重新提醒。`,
+        message: `「${suggestion.series_name}」不再作为建议出现：同一扫描目录下的这个系列之后新增集数也不会再提醒。`,
         confirmText: '忽略'
       });
       if (!confirmed) return;
@@ -370,6 +393,8 @@ export default {
 }
 .suggestion-list__item.active { border-color: var(--accent-border); background: var(--accent-soft); }
 .suggestion-list__name { color: var(--text-primary); font-size: 13px; }
+.suggestion-list__badge { margin-left: 6px; padding: 0 6px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 11px; }
+.suggestion-append-target { margin: 0 0 6px; color: var(--text-primary); font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 .suggestion-list__meta { overflow: hidden; color: var(--text-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 
 .suggestion-detail { min-width: 0; flex: 1; overflow-y: auto; padding: 14px 18px; }

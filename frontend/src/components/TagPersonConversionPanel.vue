@@ -5,6 +5,13 @@
     <template v-else-if="preview">
       <p>将姓名标签「{{ preview.tag_name }}」转为人物，关联 {{ preview.video_count }} 部视频、{{ preview.image_count }} 张图片。</p>
       <p class="help-text">成功后删除原标签及其打标关系，改用人物关联。包含回收站中保留的媒体关系；原视频、图片文件不变。</p>
+      <!-- D-PC34：转换前写明后果（META-02），并告诉用户哪里能撤销。 -->
+      <ul class="tag-person-conversion__consequences" data-test="tag-person-conversion-consequences">
+        <li>片库顶部的标签筛选里不再有「{{ preview.tag_name }}」，按这个人筛选请改用人物筛选。</li>
+        <li>AI 打标的词表不再包含这个标签。</li>
+        <li>保存视图里用到这个标签的条件会失效，并提示「条件已失效」。</li>
+        <li>转换后可以在标签管理的「最近转换」里撤销，恢复原标签与打标关系。</li>
+      </ul>
       <fieldset class="tag-person-conversion__choices" :disabled="saving">
         <legend>{{ preview.people.length ? '发现同名人物，请选择' : '目标人物' }}</legend>
         <label v-for="person in preview.people" :key="person.id">
@@ -81,4 +88,5 @@ export default {
 .tag-person-conversion__choices label { display: flex; align-items: baseline; gap: 8px; overflow-wrap: anywhere; }
 .tag-person-conversion__choices small { color: var(--text-muted); }
 .tag-person-conversion__error { color: var(--danger-color); }
+.tag-person-conversion__consequences { display: grid; gap: 4px; margin: 0; padding-left: 20px; color: var(--text-secondary); font-size: 13px; line-height: 1.5; }
 </style>

@@ -6,7 +6,7 @@
         <button type="button" class="btn-secondary btn-compact" @click="$emit('close')">关闭</button>
       </div>
       <p>查看这张脸出现的原图或视频，确认身份后再命名。视频会跳到人脸出现的位置。</p>
-      <p v-if="cluster.status === 'unnamed'">识别有误的来源可逐条移除，原图片和视频会保留。</p>
+      <p v-if="canRemoveSources">识别有误的来源可逐条移除，原图片和视频会保留<template v-if="cluster.status === 'named'">；已经建立的人物关系不受影响，需要时在「解除关联」里处理</template>。</p>
       <p v-if="error" role="alert">{{ error }}</p>
       <p v-if="removeError" role="alert">{{ removeError }}</p>
       <div class="face-source-dialog__list">
@@ -19,7 +19,7 @@
             <p class="face-source-dialog__path">{{ source.path }}</p>
             <span v-if="source.unavailable">{{ source.unavailable }}</span>
             <button v-else type="button" class="btn-secondary btn-compact" :data-test="`face-source-open-${source.observation_id}`" @click="openSource(source)">{{ source.media_kind === 'video' ? '查看视频片段' : '查看原图' }}</button>
-            <button v-if="cluster.status === 'unnamed'" type="button" class="btn-secondary btn-compact face-source-dialog__remove" :disabled="loading || removingID !== null" :data-test="`face-source-remove-${source.observation_id}`" @click="removeSource(source)">{{ removingID === source.observation_id ? '移除中…' : '移除' }}</button>
+            <button v-if="canRemoveSources" type="button" class="btn-secondary btn-compact face-source-dialog__remove" :disabled="loading || removingID !== null" :data-test="`face-source-remove-${source.observation_id}`" @click="removeSource(source)">{{ removingID === source.observation_id ? '移除中…' : '移除' }}</button>
           </div>
         </article>
         <p v-if="!loading && !sources.length && !error">暂无可查看的图片或视频来源。</p>
@@ -45,10 +45,23 @@ import ImageSourceDialog from './ImageSourceDialog.vue';
 import { GetFaceClusterObservations, RemoveFaceClusterObservation, PreviewExternally } from '../../wailsjs/go/main/App';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { feedbackState, resolveConfirm } from '../utils/feedback.js';
+// 移除来源的错误码（META-04）：已忽略的簇不能移除来源，要先恢复；来源已不在簇里说明别处刚处理过。
+const REMOVE_ERROR_TEXT = {
+  cluster_ignored: '这一簇已被忽略，请先在「已忽略」中恢复后再移除来源。',
+  face_observation_not_in_cluster: '这条来源已经不在这一簇里了，请关闭后刷新列表。',
+  cluster_not_found: '这一簇已经不在了，请关闭后刷新列表。'
+};
+function removeErrorText(err) {
+  const raw = String(err?.message || err || '');
+  const code = Object.keys(REMOVE_ERROR_TEXT).find(item => raw.includes(item));
+  return code ? REMOVE_ERROR_TEXT[code] : `移除来源失败：${raw}`;
+}
 export default {
   name: 'FaceClusterDetailDialog', components: { BaseModal, PreviewDrawer, ImageSourceDialog },
   props: { cluster: { type: Object, required: true } }, emits: ['close', 'name', 'link', 'removed'],
   data: () => ({ sources: [], nextID: 0, loading: false, error: '', removeError: '', removingID: null, videoError: '', cropFailed: {}, videoSource: null, imageSource: null }),
+  // D-PC30：未命名与已命名簇都能逐条移除来源（已命名簇移除不动人物关系）；已忽略的要先恢复。
+  computed: { canRemoveSources() { return this.cluster.status === 'unnamed' || this.cluster.status === 'named'; } },
   watch: { 'cluster.id': { immediate: true, handler() { this.reset(); } } },
   mounted() { window.addEventListener('keydown', this.escape, true); },
   beforeUnmount() { this._request = null; this._sourceSession = null; window.removeEventListener('keydown', this.escape, true); },
@@ -67,7 +80,7 @@ export default {
       finally { if (this._request === request) this.loading = false; }
     },
     async removeSource(source) {
-      if (this.loading || this.removingID !== null || this.cluster.status !== 'unnamed') return;
+      if (this.loading || this.removingID !== null || !this.canRemoveSources) return;
       const session = this._sourceSession;
       this.removingID = source.observation_id; this.removeError = '';
       try {
@@ -78,7 +91,7 @@ export default {
         if (clusterRemoved) { this.$emit('close'); return; }
         this.removingID = null;
         if (!this.sources.length && this.nextID) await this.loadMore();
-      } catch (err) { if (this._sourceSession === session) this.removeError = `移除来源失败：${err}`; }
+      } catch (err) { if (this._sourceSession === session) this.removeError = removeErrorText(err); }
       finally { if (this._sourceSession === session) this.removingID = null; }
     },
     openSource(source) {

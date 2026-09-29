@@ -205,3 +205,53 @@ describe('建议作品集面板', () => {
     expect(members[0].text()).toContain('700.0 MB');
   });
 });
+
+// META-15（D-PC38）：已建作品集的系列出现新集时给「追加」候选；忽略按系列记忆，新增集数不再提醒。
+describe('建议作品集 META-15 追加候选', () => {
+  const appendSuggestion = (overrides = {}) => suggestion({
+    id: 9, kind: 'append', target_collection_id: 3, target_collection_name: 'Show 全集',
+    member_count: 1, members: [member(14, 4)], ...overrides,
+  });
+
+  it('META-15 shows an append candidate and appends even a single new episode', async () => {
+    api.ListCollectionSuggestions.mockResolvedValue([appendSuggestion()]);
+    const wrapper = await mountPanel();
+    expect(wrapper.find('[data-test="collection-suggestion-append-badge-9"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="collection-suggestion-item"]').text()).toContain('新增 1 集 → 「Show 全集」');
+    expect(wrapper.get('[data-test="collection-suggestion-append-target"]').text()).toContain('追加到现有作品集「Show 全集」');
+    // 追加不改名：没有名称输入框。
+    expect(wrapper.find('[data-test="collection-suggestion-name"]').exists()).toBe(false);
+    const confirm = wrapper.get('[data-test="collection-suggestion-confirm"]');
+    expect(confirm.text()).toBe('追加到作品集');
+    expect(confirm.attributes('disabled')).toBeUndefined();
+
+    await confirm.trigger('click');
+    await flushPromises();
+    expect(api.ConfirmCollectionSuggestion).toHaveBeenCalledWith(9, 'Show 全集', [14]);
+    expect(feedback.notifySuccess).toHaveBeenCalledWith('已把 1 集追加到作品集「Show 全集」');
+    expect(wrapper.findAll('[data-test="collection-suggestion-item"]').length).toBe(0);
+  });
+
+  it('META-15 cannot append when every new episode was removed, and explains a deleted target', async () => {
+    api.ListCollectionSuggestions.mockResolvedValue([appendSuggestion()]);
+    api.ConfirmCollectionSuggestion.mockRejectedValue(new Error('target_collection_gone'));
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="collection-suggestion-remove-member"]').trigger('click');
+    expect(wrapper.get('[data-test="collection-suggestion-confirm"]').attributes('disabled')).toBeDefined();
+    await wrapper.get('[data-test="collection-suggestion-remove-member"]').trigger('click');
+
+    await wrapper.get('[data-test="collection-suggestion-confirm"]').trigger('click');
+    await flushPromises();
+    expect(feedback.notifyError).toHaveBeenCalledWith('目标作品集已被删除，请重新分析剧集。');
+    expect(wrapper.findAll('[data-test="collection-suggestion-item"]').length).toBe(1);
+  });
+
+  it('META-15 dismissing says new episodes of the series will not come back', async () => {
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="collection-suggestion-dismiss"]').trigger('click');
+    await flushPromises();
+    const message = feedback.confirmAction.mock.calls[0][0].message;
+    expect(message).toContain('新增集数也不会再提醒');
+    expect(message).not.toContain('成员有增减时会重新提醒');
+  });
+});

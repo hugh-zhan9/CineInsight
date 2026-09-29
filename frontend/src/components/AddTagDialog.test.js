@@ -3,14 +3,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   CreateTag: vi.fn(), AddTagToVideo: vi.fn(),
-  BatchAddTagToVideos: vi.fn(), BatchRemoveTagFromVideos: vi.fn()
+  BatchAddTagToVideos: vi.fn(), BatchRemoveTagFromVideos: vi.fn(),
+  GetVideoAutomaticTagOverrides: vi.fn(), ClearVideoAutomaticTagOverride: vi.fn()
 }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 import AddTagDialog from './AddTagDialog.vue';
 
 const tags = [{ id: 1, name: '旅行' }, { id: 2, name: '动作' }];
 let wrapper;
-beforeEach(() => vi.resetAllMocks());
+beforeEach(() => {
+  vi.resetAllMocks();
+  api.GetVideoAutomaticTagOverrides.mockResolvedValue([]);
+});
 afterEach(() => { wrapper?.unmount(); vi.restoreAllMocks(); });
 
 function open(mode = 'single') {
@@ -81,5 +85,64 @@ describe('添加标签输入', () => {
     await wrapper.get('.modal-actions .btn-primary').trigger('click');
     await flushPromises();
     expect(api.AddTagToVideo).toHaveBeenCalledWith(10, 4);
+  });
+});
+
+// META-13（D-PC36）：自动标签被手动覆盖时在添加标签弹窗里亮出「手动」角标，并能「恢复自动」。
+describe('META-13 自动标签的手动覆盖', () => {
+  const autoTags = [
+    { id: 3, name: '短视频', automatic_kind: 'short_video' },
+    { id: 4, name: '低清', automatic_kind: 'low_resolution' }
+  ];
+
+  it('META-13 shows manual overrides with a badge and restores automatic tagging', async () => {
+    api.GetVideoAutomaticTagOverrides.mockResolvedValue([
+      { video_id: 10, automatic_kind: 'short_video', present: true },
+      { video_id: 10, automatic_kind: 'low_resolution', present: false }
+    ]);
+    api.ClearVideoAutomaticTagOverride.mockResolvedValue();
+    wrapper = mount(AddTagDialog, { props: { visible: true, tags: autoTags, video: { id: 10, tags: [autoTags[0]] } } });
+    await flushPromises();
+
+    expect(api.GetVideoAutomaticTagOverrides).toHaveBeenCalledWith(10);
+    const shortRow = wrapper.get('[data-test="automatic-override-short_video"]');
+    expect(shortRow.text()).toContain('短视频');
+    expect(shortRow.find('.tag-manual-badge').text()).toBe('手动');
+    expect(shortRow.text()).toContain('已手动加上');
+    expect(wrapper.get('[data-test="automatic-override-low_resolution"]').text()).toContain('已手动去掉');
+
+    await wrapper.get('[data-test="automatic-override-restore-short_video"]').trigger('click');
+    await flushPromises();
+    expect(api.ClearVideoAutomaticTagOverride).toHaveBeenCalledWith(10, 'short_video');
+    expect(wrapper.find('[data-test="automatic-override-short_video"]').exists()).toBe(false);
+    expect(wrapper.emitted('tag-added')).toEqual([[{ videoIds: [10], tagIds: [], tags: [], restoredKind: 'short_video' }]]);
+  });
+
+  it('META-13 keeps the override when restoring fails and hides the section in batch mode', async () => {
+    api.GetVideoAutomaticTagOverrides.mockResolvedValue([{ video_id: 10, automatic_kind: 'low_resolution', present: true }]);
+    api.ClearVideoAutomaticTagOverride.mockRejectedValue(new Error('数据库繁忙'));
+    wrapper = mount(AddTagDialog, { props: { visible: true, tags: autoTags, video: { id: 10, tags: [] } } });
+    await flushPromises();
+    await wrapper.get('[data-test="automatic-override-restore-low_resolution"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="automatic-override-low_resolution"]').exists()).toBe(true);
+    expect(wrapper.get('.automatic-override-error').text()).toContain('恢复自动失败');
+    expect(wrapper.emitted('tag-added')).toBeUndefined();
+    wrapper.unmount();
+
+    api.GetVideoAutomaticTagOverrides.mockClear();
+    wrapper = mount(AddTagDialog, { props: { visible: true, tags: autoTags, mode: 'batch', videoIds: [10, 11] } });
+    await flushPromises();
+    expect(api.GetVideoAutomaticTagOverrides).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="automatic-override-section"]').exists()).toBe(false);
+  });
+
+  // META-06：宿主据载荷按 (video_id, tag_id) 局部移除待审候选。
+  it('META-06 reports the video and tag ids that were added', async () => {
+    open();
+    await wrapper.findAll('.clickable-tag-item')[1].trigger('click');
+    await wrapper.get('.modal-actions .btn-primary').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('tag-added')[0][0]).toEqual({ videoIds: [10], tagIds: [2], tags: [{ id: 2, name: '动作' }] });
   });
 });

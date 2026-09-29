@@ -24,6 +24,31 @@
         <p class="help-text">输入名称可实时过滤已有标签，若不存在则创建新标签并加入本次选择。</p>
       </div>
 
+      <!-- D-PC36：自动标签（短视频 / 低清）被手动加上或去掉之后，自动规则不再改动它。
+           这里把这种覆盖亮出来，并给出「恢复自动」让它重新跟随规则（META-13）。 -->
+      <div v-if="!isBatchMode && (automaticOverrides.length || overrideError)" class="setting-item automatic-override-section" data-test="automatic-override-section">
+        <label>自动标签的手动调整</label>
+        <p class="help-text">这些自动标签被你手动改过，自动规则不再动它们。「恢复自动」后按这个视频的时长与分辨率重新判断。</p>
+        <div
+          v-for="override in automaticOverrides"
+          :key="override.automatic_kind"
+          class="automatic-override-row"
+          :data-test="`automatic-override-${override.automatic_kind}`"
+        >
+          <span class="tag-name">{{ automaticKindLabel(override.automatic_kind) }}</span>
+          <span class="tag-manual-badge" title="这个自动标签是你手动调整的">手动</span>
+          <span class="automatic-override-state">{{ override.present ? '已手动加上' : '已手动去掉' }}</span>
+          <button
+            type="button"
+            class="btn-secondary btn-compact"
+            :disabled="restoringKinds.includes(override.automatic_kind)"
+            :data-test="`automatic-override-restore-${override.automatic_kind}`"
+            @click="restoreAutomatic(override)"
+          >{{ restoringKinds.includes(override.automatic_kind) ? '恢复中…' : '恢复自动' }}</button>
+        </div>
+        <p v-if="overrideError" class="help-text automatic-override-error" role="alert">{{ overrideError }}</p>
+      </div>
+
       <template v-if="isBatchMode">
         <div class="divider"></div>
 
@@ -96,10 +121,13 @@
 </template>
 
 <script>
-import { CreateTag, AddTagToVideo, BatchAddTagToVideos, BatchRemoveTagFromVideos } from '../../wailsjs/go/main/App';
+import { CreateTag, AddTagToVideo, BatchAddTagToVideos, BatchRemoveTagFromVideos, ClearVideoAutomaticTagOverride, GetVideoAutomaticTagOverrides } from '../../wailsjs/go/main/App';
 import { selectedTagsFromIds, toggleSelectedTagId, uniqueTagsById } from '../utils/addTagSelection.js';
 import BaseModal from './ui/BaseModal.vue';
 import { confirmAction, notifyError } from '../utils/feedback.js';
+
+// 可被手动覆盖的两种自动标签（后端 ClearVideoAutomaticTagOverride 只接受这两种）。
+const AUTOMATIC_KIND_LABELS = { short_video: '短视频', low_resolution: '低清' };
 
 export default {
   name: 'AddTagDialog',
@@ -112,6 +140,8 @@ export default {
     selectedVideos: { type: Array, default: () => [] },
     mode: { type: String, default: 'single' }
   },
+  // tag-added 从 P-035 起带载荷 { videoIds, tagIds, tags, restoredKind? }：宿主据此按
+  // (video_id, tag_id) 局部移除待审候选；只关心「标签变了」的宿主照旧忽略参数。
   emits: ['close', 'tag-added'],
   data() {
     return {
@@ -119,7 +149,10 @@ export default {
       selectedTagIds: [],
       createdTags: [],
       processingTagIds: [],
-      applying: false
+      applying: false,
+      automaticOverrides: [],
+      overrideError: '',
+      restoringKinds: []
     };
   },
   computed: {
@@ -178,10 +211,52 @@ export default {
         this.createdTags = [];
         this.processingTagIds = [];
         this.applying = false;
+        this.loadAutomaticOverrides();
       }
     }
   },
+  mounted() {
+    if (this.visible) this.loadAutomaticOverrides();
+  },
   methods: {
+    automaticKindLabel(kind) {
+      const tag = this.tags.find(item => item?.automatic_kind === kind);
+      return tag?.name || AUTOMATIC_KIND_LABELS[kind] || kind;
+    },
+    // 覆盖行只对单个视频有意义；批量模式不显示。请求按视频 ID 作废：弹窗换了视频时
+    // 迟到的旧结果不能落到新视频上。
+    async loadAutomaticOverrides() {
+      this.automaticOverrides = [];
+      this.overrideError = '';
+      this.restoringKinds = [];
+      const videoID = Number(this.video?.id || 0);
+      if (this.isBatchMode || !videoID) return;
+      const token = Symbol('automatic-overrides');
+      this._overrideToken = token;
+      try {
+        const overrides = await GetVideoAutomaticTagOverrides(videoID);
+        if (this._overrideToken !== token) return;
+        this.automaticOverrides = (overrides || []).filter(item => AUTOMATIC_KIND_LABELS[item?.automatic_kind]);
+      } catch (err) {
+        if (this._overrideToken === token) this.overrideError = `读取自动标签的手动调整失败：${err}`;
+      }
+    },
+    async restoreAutomatic(override) {
+      const videoID = Number(this.video?.id || 0);
+      const kind = override?.automatic_kind;
+      if (!videoID || !kind || this.restoringKinds.includes(kind)) return;
+      this.restoringKinds = [...this.restoringKinds, kind];
+      this.overrideError = '';
+      try {
+        await ClearVideoAutomaticTagOverride(videoID, kind);
+        this.automaticOverrides = this.automaticOverrides.filter(item => item.automatic_kind !== kind);
+        this.$emit('tag-added', { videoIds: [videoID], tagIds: [], tags: [], restoredKind: kind });
+      } catch (err) {
+        this.overrideError = `恢复自动失败：${err}`;
+      } finally {
+        this.restoringKinds = this.restoringKinds.filter(item => item !== kind);
+      }
+    },
     isDuplicateError(err) {
       const raw = err && (err.message || err.error || err.toString ? err.toString() : err);
       const msg = String(raw || '').toLowerCase();
@@ -225,11 +300,14 @@ export default {
     async applySelectedTags() {
       if (this.selectedTagIds.length === 0 || this.applying) return;
       this.applying = true;
+      const tagIds = [...this.selectedTagIds];
+      const tags = selectedTagsFromIds(this.allTags, tagIds);
+      const videoIds = this.isBatchMode ? [...this.videoIds] : [Number(this.video?.id || 0)].filter(Boolean);
       try {
-        for (const tagID of this.selectedTagIds) {
+        for (const tagID of tagIds) {
           await this.addTag(tagID);
         }
-        this.$emit('tag-added');
+        this.$emit('tag-added', { videoIds, tagIds, tags });
         this.$emit('close');
       } catch (err) {
         console.error('添加标签失败:', err);
@@ -252,7 +330,7 @@ export default {
       this.processingTagIds = [...this.processingTagIds, tag.id];
       try {
         const result = await BatchRemoveTagFromVideos(this.videoIds, tag.id);
-        this.$emit('tag-added');
+        this.$emit('tag-added', { videoIds: [...this.videoIds], tagIds: [], tags: [], removedTagId: Number(tag.id) });
         if (result?.failed > 0) {
           const firstError = result.errors?.[0];
           notifyError(`批量移除完成：成功 ${result.succeeded} 个，失败 ${result.failed} 个。${firstError ? `\n首个失败：视频 ${firstError.video_id}，${firstError.error}` : ''}`);
@@ -303,6 +381,26 @@ export default {
 .btn-small {
   padding: 5px 9px;
   font-size: 12px;
+}
+
+.automatic-override-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  margin-bottom: 6px;
+  background: var(--panel-solid-bg);
+}
+
+.automatic-override-state {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.automatic-override-error {
+  color: var(--danger-color);
 }
 
 .tag-selector-container {

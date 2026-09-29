@@ -100,6 +100,7 @@
           <div style="display: flex; gap: 6px;">
             <span v-if="tag.automatic_kind" class="system-tag-note">自动标签</span>
             <template v-else>
+              <span v-if="isDirtyTag(tag)" class="tag-dirty-note" :data-test="`tag-dirty-${tag.id}`">未保存</span>
               <button @click="saveTag(tag)" class="btn-secondary">保存</button>
               <button v-if="canConvertToPerson(tag)" type="button" class="btn-secondary" @click="openPersonConversion(tag)">转为人物</button>
               <button @click.stop="$emit('request-delete-tag', tag)" class="btn-secondary" style="color: var(--danger-color); border-color: var(--danger-color);">删除</button>
@@ -121,6 +122,32 @@
         <p v-if="!categorySuggestions.length" class="help-text">暂无分类。</p>
       </div>
 
+      <div class="divider"></div>
+      <!-- D-PC34：最近的标签转人物记录，可撤销（META-02）。撤销恢复原标签与打标关系，
+           移除这次新增的人物关系；本次新建且已无其他关系的人物一并删除。 -->
+      <div class="tag-manager-panel tag-conversion-history" data-test="tag-conversion-history">
+        <h3>最近转换</h3>
+        <p v-if="conversionsError" class="merge-error" role="alert">{{ conversionsError }}</p>
+        <p v-if="conversionsLoading && !conversions.length" class="help-text">正在读取转换记录…</p>
+        <p v-else-if="!conversions.length && !conversionsError" class="help-text">还没有把标签转为人物的记录。</p>
+        <div v-for="record in conversions" :key="record.id" class="conversion-row" :data-test="`tag-conversion-${record.id}`">
+          <span class="conversion-row__main">
+            <strong>「{{ record.tag_name }}」→ 人物「{{ record.person_name || `人物 #${record.person_id}` }}」</strong>
+            <small>{{ record.video_count }} 部视频、{{ record.image_count }} 张图片 · {{ formatConversionTime(record.created_at) }}<template v-if="record.person_created"> · 转换时新建了人物</template></small>
+          </span>
+          <span v-if="record.state === 'undone'" class="system-tag-note">已撤销</span>
+          <button
+            v-else-if="record.undoable"
+            type="button"
+            class="btn-secondary btn-compact"
+            :disabled="undoingConversionID !== 0"
+            :data-test="`tag-conversion-undo-${record.id}`"
+            @click="undoConversion(record)"
+          >{{ undoingConversionID === record.id ? '撤销中…' : '撤销' }}</button>
+          <span v-else class="system-tag-note" title="原标签已被清理，无法恢复">不可撤销</span>
+        </div>
+      </div>
+
       <div class="modal-actions">
         <button @click="handleClose" class="btn-secondary">完成</button>
       </div>
@@ -129,10 +156,31 @@
 </template>
 
 <script>
-import { CreateTagWithCategory, MergeTags, UpdateTagWithCategory, TriggerAITagging, CreateTagCategory, RenameTagCategory, DeleteTagCategory } from '../../wailsjs/go/main/App';
+import { CreateTagWithCategory, MergeTags, UpdateTagWithCategory, TriggerAITagging, CreateTagCategory, RenameTagCategory, DeleteTagCategory, GetTagUsageCounts, ListTagPersonConversions, UndoTagPersonConversion } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import TagPersonConversionPanel from './TagPersonConversionPanel.vue';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
+
+// 撤销标签转人物的错误码（D-PC34）。
+const UNDO_ERROR_TEXT = {
+  conversion_not_applied: '这次转换已经撤销过了，记录已刷新。',
+  conversion_not_undoable: '原标签已被清理，无法撤销这次转换。',
+  tag_name_taken: '已经有同名的标签，无法恢复原标签。请先改名或合并那个标签，再撤销这次转换。'
+};
+const RECENT_CONVERSION_LIMIT = 10;
+
+// 合并确认框里的影响范围（META-14）：来源标签上的视频与图片（回收站里的另列）。
+function usageSummary(counts, ids) {
+  const total = { videos: 0, images: 0, trashedVideos: 0, trashedImages: 0 };
+  for (const id of ids) {
+    const usage = counts?.[id] || counts?.[String(id)] || {};
+    total.videos += Number(usage.videos || 0);
+    total.images += Number(usage.images || 0);
+    total.trashedVideos += Number(usage.trashed_videos || 0);
+    total.trashedImages += Number(usage.trashed_images || 0);
+  }
+  return total;
+}
 
 export default {
   name: 'TagManagerDialog',
@@ -141,7 +189,8 @@ export default {
     visible: { type: Boolean, default: false },
     tags: { type: Array, default: () => [] }
   },
-  emits: ['close', 'tags-changed', 'request-delete-tag', 'person-converted'],
+  // conversion-undone（P-035 新增）：撤销标签转人物成功，载荷为后端 TagPersonConversionUndoResult。
+  emits: ['close', 'tags-changed', 'request-delete-tag', 'person-converted', 'conversion-undone'],
   data() {
     return {
       conversionTagID: 0,
@@ -163,7 +212,11 @@ export default {
       mergeSourceIds: [],
       mergeKeyword: '',
       mergeLoading: false,
-      mergeError: ''
+      mergeError: '',
+      conversions: [],
+      conversionsLoading: false,
+      conversionsError: '',
+      undoingConversionID: 0
     };
   },
   computed: {
@@ -200,6 +253,10 @@ export default {
     },
     canMerge() {
       return this.mergeTargetId > 0 && this.mergeSourceIds.length > 0;
+    },
+    // D-PC37：改了但还没点「保存」的行（名称、颜色、分类任一与已保存值不同）。
+    dirtyTagIDs() {
+      return this.localTags.filter(tag => this.isDirtyTag(tag)).map(tag => Number(tag.id));
     }
   },
   watch: {
@@ -235,14 +292,76 @@ export default {
         this.categoryError = '';
         this.localTags = this.tags.map(t => ({ ...t }));
         this.categoryTags = this.tags.map(t => ({ ...t }));
+        this.loadConversions();
       }
     }
+  },
+  mounted() {
+    if (this.visible) this.loadConversions();
   },
   methods: {
     async handleClose() {
       if (this.conversionBusy) return;
       if (this.conversionTagID) { this.conversionTagID = 0; return; }
+      const dirty = this.dirtyTagIDs.length;
+      if (dirty && !await confirmAction({ title: '放弃未保存的修改', message: `放弃 ${dirty} 项未保存修改？这些标签会保持上次保存时的名称、颜色和分类。`, confirmText: '放弃修改', danger: true })) return;
       this.$emit('close');
+    },
+    isDirtyTag(tag) {
+      if (!tag || tag.automatic_kind) return false;
+      const saved = this.tags.find(item => Number(item.id) === Number(tag.id));
+      if (!saved) return false;
+      return String(saved.name || '') !== String(tag.name || '')
+        || String(saved.color || '') !== String(tag.color || '')
+        || String(saved.namespace || '') !== String(tag.namespace || '');
+    },
+    async loadConversions() {
+      const token = Symbol('tag-conversions');
+      this._conversionsToken = token;
+      this.conversionsLoading = true;
+      this.conversionsError = '';
+      try {
+        const records = await ListTagPersonConversions(RECENT_CONVERSION_LIMIT);
+        if (this._conversionsToken !== token) return;
+        this.conversions = Array.isArray(records) ? records : [];
+      } catch (err) {
+        if (this._conversionsToken === token) this.conversionsError = '读取转换记录失败：' + err;
+      } finally {
+        if (this._conversionsToken === token) this.conversionsLoading = false;
+      }
+    },
+    formatConversionTime(value) {
+      const date = value ? new Date(value) : null;
+      return date && Number.isFinite(date.getTime()) ? date.toLocaleString() : '时间未知';
+    },
+    async undoConversion(record) {
+      if (!record?.undoable || this.undoingConversionID) return;
+      const personPart = record.person_created ? '；这次新建的人物如果已经没有其他关系，也会一并删除' : '';
+      const confirmed = await confirmAction({
+        title: '撤销标签转人物',
+        message: `撤销后恢复标签「${record.tag_name}」及其 ${record.video_count} 部视频、${record.image_count} 张图片的打标关系，并移除这次新增的人物关系${personPart}。`,
+        confirmText: '撤销转换',
+        danger: true
+      });
+      if (!confirmed) return;
+      this.undoingConversionID = Number(record.id);
+      this.conversionsError = '';
+      try {
+        const result = await UndoTagPersonConversion(Number(record.id));
+        this.conversions = this.conversions.map(item => (Number(item.id) === Number(record.id) ? { ...item, state: 'undone', undoable: false } : item));
+        const deletedPart = result?.person_deleted ? '，这次新建的人物已删除' : '';
+        notify(`已撤销：恢复标签「${result?.tag?.name || record.tag_name}」，${Number(result?.video_count || 0)} 部视频、${Number(result?.image_count || 0)} 张图片${deletedPart}。`);
+        this.$emit('tags-changed');
+        this.$emit('conversion-undone', result);
+      } catch (err) {
+        const raw = String(err?.message || err || '');
+        const code = Object.keys(UNDO_ERROR_TEXT).find(item => raw.includes(item));
+        // 记录已经变了（别处撤销过、原标签被清理）就先重读，再把原因写上——重读会清空旧提示。
+        if (code === 'conversion_not_applied' || code === 'conversion_not_undoable') await this.loadConversions();
+        this.conversionsError = code ? UNDO_ERROR_TEXT[code] : `撤销失败：${raw}`;
+      } finally {
+        this.undoingConversionID = 0;
+      }
     },
     canConvertToPerson(tag) {
       return !tag.automatic_kind && String(tag.namespace || '').trim() === '人物';
@@ -265,9 +384,10 @@ export default {
       this.mergeSourceIds = this.mergeSourceIds.filter(id => Number(id) !== Number(result.tag_id));
       this.newCategoryTagIDs = this.newCategoryTagIDs.filter(id => Number(id) !== Number(result.tag_id));
       if (Number(this.mergeTargetId) === Number(result.tag_id)) this.mergeTargetId = 0;
-      notify(`已转为人物「${result.person.display_name}」，关联 ${result.video_count} 部视频、${result.image_count} 张图片，原标签已删除。`);
+      notify(`已转为人物「${result.person.display_name}」，关联 ${result.video_count} 部视频、${result.image_count} 张图片，原标签已删除。可在「最近转换」里撤销。`);
       this.$emit('tags-changed');
       this.$emit('person-converted', result);
+      this.loadConversions();
     },
     categoryCount(name) {
       return this.categoryTags.filter(tag => String(tag.namespace || '').trim() === name).length;
@@ -406,7 +526,17 @@ export default {
         .filter(tag => sourceIds.includes(Number(tag.id)))
         .map(tag => `「${tag.name}」`)
         .join('、');
-      if (!target || !await confirmAction({ title: '合并标签', message: `确定将 ${sourceNames} 合并到「${target.name}」吗？源标签会被删除，此操作不能自动撤销。`, confirmText: '合并', danger: true })) return;
+      if (!target) return;
+      // META-14：确认框里说清受影响的视频与图片数；统计失败只在文案里说明，不挡合并本身。
+      let impact = '';
+      try {
+        const usage = usageSummary(await GetTagUsageCounts(sourceIds), sourceIds);
+        const trashed = usage.trashedVideos || usage.trashedImages ? `（回收站中另有 ${usage.trashedVideos} 部视频、${usage.trashedImages} 张图片）` : '';
+        impact = `${usage.videos} 部视频、${usage.images} 张图片${trashed}上的这些标签会改为「${target.name}」。`;
+      } catch (err) {
+        impact = `（受影响的媒体数统计失败：${err}）`;
+      }
+      if (!await confirmAction({ title: '合并标签', message: `确定将 ${sourceNames} 合并到「${target.name}」吗？${impact}源标签会被删除，此操作不能自动撤销。`, confirmText: '合并', danger: true })) return;
       this.mergeLoading = true;
       this.mergeError = '';
       try {
@@ -467,4 +597,10 @@ export default {
 .color-picker::-webkit-color-swatch-wrapper { padding: 0; }
 .color-picker::-webkit-color-swatch { border: 1px solid var(--border-color); border-radius: 4px; }
 .system-tag-note { align-self: center; color: var(--text-secondary); font-size: 12px; white-space: nowrap; }
+.tag-dirty-note { align-self: center; color: var(--warning-text); font-size: 12px; white-space: nowrap; }
+.tag-conversion-history { min-height: 0; }
+.conversion-row { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--border-color); }
+.conversion-row__main { display: grid; flex: 1; gap: 3px; min-width: 0; }
+.conversion-row__main strong { overflow-wrap: anywhere; font-size: 13px; }
+.conversion-row__main small { color: var(--text-secondary); font-size: 12px; }
 </style>

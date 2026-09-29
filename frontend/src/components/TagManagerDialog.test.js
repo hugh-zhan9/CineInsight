@@ -25,7 +25,10 @@ const api = vi.hoisted(() => ({
   RenameTagCategory: vi.fn(),
   DeleteTagCategory: vi.fn(),
   PreviewTagPersonConversion: vi.fn(),
-  ConvertTagToPerson: vi.fn()
+  ConvertTagToPerson: vi.fn(),
+  GetTagUsageCounts: vi.fn(),
+  ListTagPersonConversions: vi.fn(),
+  UndoTagPersonConversion: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -50,6 +53,8 @@ beforeEach(() => {
   api.PreviewTagPersonConversion.mockResolvedValue({ tag_id: 1, tag_name: '旅行', video_count: 2, image_count: 1, people: [] });
   api.ConvertTagToPerson.mockResolvedValue({ person: { id: 7, display_name: '旅行' }, video_count: 2, image_count: 1 });
   feedback.confirmAction.mockResolvedValue(true);
+  api.GetTagUsageCounts.mockResolvedValue({});
+  api.ListTagPersonConversions.mockResolvedValue([]);
 });
 
 describe('标签转为人物入口', () => {
@@ -129,6 +134,7 @@ describe('TagManagerDialog merge picker', () => {
     expect(wrapper.text()).toContain('已选 1 个');
 
     await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await flushPromises();
 
     expect(feedback.confirmAction).toHaveBeenCalledOnce();
     expect(api.MergeTags).toHaveBeenCalledWith([2], 1);
@@ -152,6 +158,7 @@ describe('TagManagerDialog merge picker', () => {
 
     await wrapper.get('.merge-source-option input[type="checkbox"]').setValue(true);
     await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await flushPromises();
 
     expect(api.MergeTags).toHaveBeenCalledWith([1], 3);
   });
@@ -164,6 +171,7 @@ describe('TagManagerDialog merge picker', () => {
     expect(wrapper.findAll('.merge-source-option').map(option => option.text())).toEqual(['动作', '激烈动作']);
     await wrapper.findAll('.merge-source-option input[type="checkbox"]')[0].setValue(true);
     await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await flushPromises();
 
     expect(api.MergeTags).toHaveBeenCalledWith([3], 1);
   });
@@ -344,5 +352,107 @@ describe('unified tag management', () => {
     const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
     await wrapper.findAll('.tag-edit-row')[2].findAll('button').find(button => button.text() === '删除').trigger('click');
     expect(wrapper.emitted('request-delete-tag')[0][0].id).toBe(3);
+  });
+});
+
+// META-14（D-PC37）：标签管理有未保存的行时关闭要确认；合并确认框显示受影响的媒体数。
+describe('TagManagerDialog META-14 防误删与未保存修改', () => {
+  it('META-14 asks before discarding unsaved rows and keeps the dialog when declined', async () => {
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    // 没有改动时直接关闭，不打扰。
+    await wrapper.findAll('.modal-actions .btn-secondary').at(-1).trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+
+    await wrapper.findAll('.tag-edit-row')[0].get('input[type="text"]').setValue('旅行改名');
+    await wrapper.findAll('.tag-edit-row')[1].get('.tag-category-edit').setValue('');
+    await wrapper.findAll('.tag-edit-row')[2].get('input[type="text"]').setValue('动作片');
+    expect(wrapper.find('[data-test="tag-dirty-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="tag-dirty-3"]').exists()).toBe(true);
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.findAll('.modal-actions .btn-secondary').at(-1).trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('放弃 2 项未保存修改？') }));
+    expect(wrapper.emitted('close')).toHaveLength(1);
+
+    await wrapper.findAll('.modal-actions .btn-secondary').at(-1).trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('close')).toHaveLength(2);
+  });
+
+  it('META-14 shows the affected video and image counts before merging', async () => {
+    api.GetTagUsageCounts.mockResolvedValue({ 2: { videos: 12, images: 3, trashed_videos: 1, trashed_images: 0 } });
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await wrapper.get('.merge-target-select').setValue('1');
+    await wrapper.get('[aria-label="筛选待合并标签"]').setValue('旅游');
+    await wrapper.get('.merge-source-option input[type="checkbox"]').setValue(true);
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('.merge-actions .btn-primary').trigger('click');
+    await flushPromises();
+    expect(api.GetTagUsageCounts).toHaveBeenCalledWith([2]);
+    const message = feedback.confirmAction.mock.calls[0][0].message;
+    expect(message).toContain('12 部视频、3 张图片（回收站中另有 1 部视频、0 张图片）');
+    expect(api.MergeTags).not.toHaveBeenCalled();
+  });
+});
+
+// META-02（D-PC34）：标签管理列出最近的标签转人物，可撤销。
+describe('TagManagerDialog META-02 最近转换与撤销', () => {
+  const record = (overrides = {}) => ({
+    id: 4, tag_id: 1, tag_name: '张三', person_id: 9, person_name: '张三', person_created: true,
+    video_count: 3, image_count: 2, state: 'applied', undoable: true, created_at: '2026-09-29T10:00:00Z', ...overrides,
+  });
+
+  it('META-02 lists recent conversions and undoes one after confirmation', async () => {
+    api.ListTagPersonConversions.mockResolvedValue([record(), record({ id: 3, tag_name: '李四', undoable: false }), record({ id: 2, state: 'undone', undoable: false })]);
+    api.UndoTagPersonConversion.mockResolvedValue({ conversion_id: 4, tag: { id: 1, name: '张三' }, video_count: 3, image_count: 2, person_deleted: true });
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+
+    expect(api.ListTagPersonConversions).toHaveBeenCalledWith(10);
+    expect(wrapper.get('[data-test="tag-conversion-4"]').text()).toContain('「张三」→ 人物「张三」');
+    expect(wrapper.get('[data-test="tag-conversion-3"]').text()).toContain('不可撤销');
+    expect(wrapper.get('[data-test="tag-conversion-2"]').text()).toContain('已撤销');
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="tag-conversion-undo-4"]').trigger('click');
+    await flushPromises();
+    expect(api.UndoTagPersonConversion).not.toHaveBeenCalled();
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('这次新建的人物如果已经没有其他关系，也会一并删除');
+
+    await wrapper.get('[data-test="tag-conversion-undo-4"]').trigger('click');
+    await flushPromises();
+    expect(api.UndoTagPersonConversion).toHaveBeenCalledWith(4);
+    expect(wrapper.get('[data-test="tag-conversion-4"]').text()).toContain('已撤销');
+    expect(feedback.notify).toHaveBeenCalledWith(expect.stringContaining('新建的人物已删除'));
+    expect(wrapper.emitted('tags-changed')).toHaveLength(1);
+    expect(wrapper.emitted('conversion-undone')[0][0]).toMatchObject({ conversion_id: 4 });
+  });
+
+  it('META-02 explains tag_name_taken and keeps the record undoable', async () => {
+    api.ListTagPersonConversions.mockResolvedValue([record()]);
+    api.UndoTagPersonConversion.mockRejectedValue(new Error('tag_name_taken'));
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+    await wrapper.get('[data-test="tag-conversion-undo-4"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.tag-conversion-history').text()).toContain('已经有同名的标签');
+    expect(wrapper.find('[data-test="tag-conversion-undo-4"]').exists()).toBe(true);
+    expect(wrapper.emitted('tags-changed')).toBeUndefined();
+  });
+
+  it('META-02 refreshes the list when the conversion was already undone elsewhere', async () => {
+    api.ListTagPersonConversions.mockResolvedValueOnce([record()]).mockResolvedValueOnce([record({ state: 'undone', undoable: false })]);
+    api.UndoTagPersonConversion.mockRejectedValue('conversion_not_applied');
+    const wrapper = mount(TagManagerDialog, { props: { visible: true, tags } });
+    await flushPromises();
+    await wrapper.get('[data-test="tag-conversion-undo-4"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('.tag-conversion-history').text()).toContain('已经撤销过了');
+    expect(api.ListTagPersonConversions).toHaveBeenCalledTimes(2);
+    expect(wrapper.get('[data-test="tag-conversion-4"]').text()).toContain('已撤销');
   });
 });

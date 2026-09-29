@@ -172,8 +172,8 @@ export default {
       loadingMore: false,
       busy: false,
       error: '',
-      // notice 与 error 分开：接受候选被整体作废是"说明为什么没挂上标签"，不是调用失败，
-      // 而且 load() 会清空 error，混用会让这条说明在紧随其后的刷新里被冲掉。
+      // notice 与 error 分开：它是操作结果的说明，不是调用失败；而且 load() 会清空 error，
+      // 混用会让这条说明在紧随其后的刷新里被冲掉。
       notice: '',
       // 缩略图失败在一次打开内是黏的：文件真的没了的时候，每次审批后的重新加载
       // 都去重试等于白发请求。重新打开面板时清空，给临时失败一次重试机会。
@@ -288,13 +288,9 @@ export default {
       this.notice = '';
       try {
         const item = await ApproveImageAITagCandidate(candidate.id);
-        // 该图已有手工标签时后端不写入标签，而是把待审候选整体作废。
-        // 这不是错误，但用户点的是"接受"，得让他知道为什么标签没出现。
-        if (item && item.status === 'superseded') {
-          this.notice = '这张图片已经有你手工打的标签，AI 候选已整体作废，没有写入标签。';
-        }
-        // 后端同时作废同图同名候选（手工标签冲突时整图作废）：按同一规则局部移除，
-        // 不整表重拉——分页之后重拉会把已加载的页丢掉，还会把用户拉回列表顶部。
+        // 后端同时作废同图同标签的其他候选：按同一规则局部移除，不整表重拉——分页之后
+        // 重拉会把已加载的页丢掉，还会把用户拉回列表顶部。D-PC28 规则 2 之后图片上已有
+        // 手工标签不再让整图候选作废，这张图其他标签的候选照常留在列表里（META-06）。
         this.candidates = removeCandidatesAfterApproval(this.candidates, candidate, item, 'image_id');
         this.$emit('changed');
         await this.fillEmptyPage();
@@ -325,8 +321,12 @@ export default {
       this.error = '';
       this.notice = '';
       try {
-        await RejectImageAITagCandidatesByImage(group.imageID);
+        const rejected = await RejectImageAITagCandidatesByImage(group.imageID);
+        const loaded = group.items.length;
         this.candidates = removeCandidatesByMedia(this.candidates, 'image_id', group.imageID);
+        // 「全部拒绝」按图片拒绝全部待审候选，包括当前置信度筛选之外、尚未加载的：
+        // 条数不一样时说清楚，免得用户以为只拒了眼前这几条。
+        if (Number(rejected) > loaded) this.notice = `已拒绝「${group.name}」的全部 ${Number(rejected)} 条待审候选（含当前筛选之外的）。`;
         await this.fillEmptyPage();
       } catch (err) {
         this.error = `批量拒绝失败: ${err}`;

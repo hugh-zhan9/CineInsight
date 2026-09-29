@@ -107,19 +107,125 @@ export function removeCandidatesByMedia(candidates, mediaField, mediaId) {
   return (Array.isArray(candidates) ? candidates : []).filter(candidate => Number(candidate?.[mediaField]) !== id);
 }
 
-// 接受一条候选后后端还会动别的行：同媒体同标签的其他待审候选置 superseded；
-// 该媒体已有手工标签时（返回 status=superseded）整媒体的待审候选一并作废。
+// 接受一条候选后后端还会动别的行：同媒体同标签的其他待审候选置 superseded。
 // 前端按同一条规则局部移除，而不是整表重拉——分页之后重拉会把已加载的页全丢掉。
-export function removeCandidatesAfterApproval(candidates, candidate, approvedItem, mediaField) {
+// D-PC28 规则 2 之后，媒体上已有手工标签不再让整媒体的候选作废（META-06），
+// 这里也不再有「整媒体移除」的分支：同媒体其他标签的候选一律留在列表里。
+// approvedItem 保留在签名里只为调用方不变，结果不再依赖它的 status。
+export function removeCandidatesAfterApproval(candidates, candidate, approvedItem, mediaField = 'video_id') {
   const list = Array.isArray(candidates) ? candidates : [];
   const mediaId = Number(candidate?.[mediaField]);
-  if (String(approvedItem?.status || '') === 'superseded') {
-    return removeCandidatesByMedia(list, mediaField, mediaId);
-  }
   const approvedKey = candidateTagKey(candidate);
   return list.filter(item => {
     if (Number(item?.id) === Number(candidate?.id)) return false;
     if (Number(item?.[mediaField]) !== mediaId) return true;
     return approvedKey === null || candidateTagKey(item) !== approvedKey;
   });
+}
+
+// 手动给视频加标签之后，后端把同视频、matched_tag_id 等于该标签的待审候选置 superseded
+// （原因「已手动添加」，D-PC28 规则 2）。AddTagToVideo 不回传被作废的 ID，前端按
+// (video_id, tag_id) 同一口径局部移除；同视频其他标签的候选保留。
+export function removeCandidatesForManualTags(candidates, videoId, tagIds) {
+  const id = Number(videoId);
+  const tags = new Set((Array.isArray(tagIds) ? tagIds : []).map(Number).filter(Boolean));
+  const list = Array.isArray(candidates) ? candidates : [];
+  if (!id || tags.size === 0) return list;
+  return list.filter(candidate => Number(candidate?.video_id) !== id || !tags.has(candidateTagKey(candidate)));
+}
+
+// 只有高、中置信且视频未删除的候选能被批准（后端 ApproveCandidate 的同一口径），
+// 批量批准只把这些 ID 交出去，避免一批结果里塞满必然失败的项。
+export function isApprovableCandidate(candidate) {
+  const confidence = String(candidate?.confidence || '').toLowerCase();
+  return !candidate?.video_deleted && (confidence === 'high' || confidence === 'medium');
+}
+
+export function approvableCandidateIDs(candidates) {
+  return (Array.isArray(candidates) ? candidates : [])
+    .filter(isApprovableCandidate)
+    .map(candidate => Number(candidate.id))
+    .filter(Boolean);
+}
+
+// 审阅列表的结构化筛选：置信度精确匹配、候选标签按 matched_tag_id 精确匹配。
+// 关键词检索另走 filterCandidatesForReview，两者叠加就是「当前筛选结果」。
+export function filterCandidatesByAttributes(candidates, { confidence = '', tagId = 0 } = {}) {
+  const wantedConfidence = String(confidence || '').toLowerCase();
+  const wantedTag = Number(tagId) || 0;
+  return (Array.isArray(candidates) ? candidates : []).filter(candidate => {
+    if (wantedConfidence && String(candidate?.confidence || '').toLowerCase() !== wantedConfidence) return false;
+    if (wantedTag && candidateTagKey(candidate) !== wantedTag) return false;
+    return true;
+  });
+}
+
+// 已加载候选里出现过的标签（按名称排序），供筛选栏的标签下拉使用。
+export function candidateTagOptions(candidates) {
+  const byID = new Map();
+  for (const candidate of Array.isArray(candidates) ? candidates : []) {
+    const id = candidateTagKey(candidate);
+    if (!id || byID.has(id)) continue;
+    byID.set(id, { id, name: candidate?.matched_tag?.name || candidate?.suggested_name || `标签 #${id}` });
+  }
+  return [...byID.values()].sort((a, b) => String(a.name).localeCompare(String(b.name), 'zh-Hans-CN'));
+}
+
+function tallyMessages(items, fallback) {
+  const counts = new Map();
+  for (const item of items) {
+    const message = String(item?.message || '').trim() || fallback;
+    counts.set(message, (counts.get(message) || 0) + 1);
+  }
+  return [...counts.entries()].map(([message, count]) => ({ message, count }));
+}
+
+// 批量批准（META-11）的结果落到已加载列表上：成功项按单条批准的同一规则局部移除
+// （连同同视频同标签的其余候选）；superseded 项已不在待审，直接移除；真正失败的项留着，
+// 让用户看得见、能单独重试。返回新列表与按原因归并的摘要。
+export function applyBatchApprovalResult(candidates, result) {
+  let list = Array.isArray(candidates) ? candidates : [];
+  const items = Array.isArray(result?.results) ? result.results : [];
+  const byID = new Map(list.map(candidate => [Number(candidate?.id), candidate]));
+  const superseded = [];
+  const failed = [];
+  for (const item of items) {
+    const id = Number(item?.id);
+    if (item?.ok) {
+      const approved = byID.get(id) || item.item || { id };
+      list = removeCandidatesAfterApproval(list, approved, item.item, 'video_id');
+    } else if (item?.superseded) {
+      superseded.push(item);
+      list = removeCandidateById(list, id);
+    } else {
+      failed.push(item);
+    }
+  }
+  return {
+    candidates: list,
+    summary: {
+      requested: Number(result?.requested ?? items.length) || 0,
+      succeeded: Number(result?.succeeded ?? items.filter(item => item?.ok).length) || 0,
+      superseded: Number(result?.superseded ?? superseded.length) || 0,
+      failed: Number(result?.failed ?? failed.length) || 0,
+      supersededReasons: tallyMessages(superseded, '候选已失效'),
+      failureReasons: tallyMessages(failed, '批准失败')
+    }
+  };
+}
+
+// 批量结果的一句话说明。superseded 不是失败：同标签的另一条已批准、已手动添加等，
+// 原因按后端逐项文案归并后列出来（META-11），否则用户分不清「没批上」和「不用批」。
+export function batchApprovalSummaryText(summary) {
+  if (!summary) return '';
+  const parts = [`批量批准完成：成功 ${summary.succeeded} 条`];
+  if (summary.superseded) {
+    const reasons = (summary.supersededReasons || []).map(reason => `${reason.message} ${reason.count} 条`).join('；');
+    parts.push(`${summary.superseded} 条已失效（${reasons}）`);
+  }
+  if (summary.failed) {
+    const reasons = (summary.failureReasons || []).map(reason => `${reason.message} ${reason.count} 条`).join('；');
+    parts.push(`${summary.failed} 条失败（${reasons}）`);
+  }
+  return `${parts.join('，')}。`;
 }

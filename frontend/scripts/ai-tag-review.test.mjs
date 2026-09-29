@@ -2,13 +2,19 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import {
   appendCandidates,
+  applyBatchApprovalResult,
+  approvableCandidateIDs,
+  batchApprovalSummaryText,
+  candidateTagOptions,
   confidenceMeta,
   createRejectVideoConfirm,
+  filterCandidatesByAttributes,
   filterCandidatesForReview,
   groupCandidatesByVideo,
   removeCandidateById,
   removeCandidatesAfterApproval,
-  removeCandidatesByMedia
+  removeCandidatesByMedia,
+  removeCandidatesForManualTags
 } from '../src/utils/aiTagReview.js';
 
 assert.equal(confidenceMeta('high').label, '高置信');
@@ -93,12 +99,13 @@ assert.deepEqual(
   [3, 4],
   'approving should drop the approved row and its same-media same-name siblings only'
 );
-// 该媒体已有手工标签时后端整媒体作废，前端也必须整媒体移除。
+// META-06：D-PC28 规则 2 之后手工标签不再让整媒体的候选作废，前端也不能整媒体移除——
+// 同媒体其他标签的候选必须留在列表里（此前这里断言的是相反的旧行为）。
 assert.deepEqual(
   removeCandidatesAfterApproval(approvalPool, approvalPool[0], { status: 'superseded' }, 'image_id')
     .map(candidate => candidate.id),
-  [4],
-  'a superseded approval voids every pending candidate of that media'
+  [3, 4],
+  'META-06 approval never voids the other-tag candidates of the same media'
 );
 // 同一标签 ID 的候选一起移除，与后端 SQL 一致。
 assert.deepEqual(
@@ -176,3 +183,47 @@ const caseDistinct = [
   { id: 102, video_id: 5, matched_tag_id: 31, normalized_name: 'action' },
 ];
 assert.deepEqual(removeCandidatesAfterApproval(caseDistinct, caseDistinct[0], {status:'approved'}, 'video_id').map(c=>c.id), [102]);
+
+// META-06：手动加标签后按 (video_id, tag_id) 局部移除，同视频其他标签、别的视频同标签都保留。
+const manualPool = [
+  { id: 1, video_id: 5, matched_tag_id: 20 },
+  { id: 2, video_id: 5, matched_tag_id: 21 },
+  { id: 3, video_id: 6, matched_tag_id: 20 },
+  { id: 4, video_id: 5, matched_tag_id: 20 },
+];
+assert.deepEqual(removeCandidatesForManualTags(manualPool, 5, [20]).map(c => c.id), [2, 3], 'META-06 manual tag removes only (video, tag) matches');
+assert.deepEqual(removeCandidatesForManualTags(manualPool, 5, []).map(c => c.id), [1, 2, 3, 4], 'META-06 no tag ids means no removal');
+assert.deepEqual(removeCandidatesForManualTags(manualPool, 0, [20]).map(c => c.id), [1, 2, 3, 4]);
+
+// META-11：批量批准只交出可批准的 ID；结果按逐项局部移除，superseded 带原因归并。
+const batchPool = [
+  { id: 1, video_id: 5, matched_tag_id: 20, confidence: 'high' },
+  { id: 2, video_id: 5, matched_tag_id: 20, confidence: 'medium' },
+  { id: 3, video_id: 5, matched_tag_id: 21, confidence: 'low' },
+  { id: 4, video_id: 6, matched_tag_id: 20, confidence: 'high', video_deleted: true },
+  { id: 5, video_id: 7, matched_tag_id: 22, confidence: 'high', matched_tag: { id: 22, name: '舞蹈' } },
+];
+assert.deepEqual(approvableCandidateIDs(batchPool), [1, 2, 5], 'META-11 low confidence and deleted videos are never submitted');
+assert.deepEqual(filterCandidatesByAttributes(batchPool, { confidence: 'high' }).map(c => c.id), [1, 4, 5]);
+assert.deepEqual(filterCandidatesByAttributes(batchPool, { tagId: 20 }).map(c => c.id), [1, 2, 4]);
+assert.deepEqual(filterCandidatesByAttributes(batchPool, { confidence: 'high', tagId: 20 }).map(c => c.id), [1, 4]);
+assert.deepEqual(candidateTagOptions([{ matched_tag_id: 22, matched_tag: { name: '舞蹈' } }, { matched_tag_id: 20, suggested_name: '动作' }, { matched_tag_id: 22 }]).map(t => t.id), [20, 22]);
+
+const applied = applyBatchApprovalResult(batchPool, {
+  requested: 3, succeeded: 1, superseded: 1, failed: 1,
+  results: [
+    { id: 1, ok: true, item: { id: 1, video_id: 5, matched_tag_id: 20 } },
+    { id: 2, superseded: true, message: '同标签的其他候选已批准' },
+    { id: 5, message: '候选标签已不在 AI 词表中' },
+  ],
+});
+assert.deepEqual(applied.candidates.map(c => c.id), [3, 4, 5], 'META-11 ok and superseded rows leave the list, failures stay for retry');
+assert.deepEqual(applied.summary.supersededReasons, [{ message: '同标签的其他候选已批准', count: 1 }]);
+const summaryText = batchApprovalSummaryText(applied.summary);
+assert.match(summaryText, /成功 1 条/);
+assert.match(summaryText, /1 条已失效（同标签的其他候选已批准 1 条）/, 'META-11 superseded reasons are spelled out');
+assert.match(summaryText, /1 条失败（候选标签已不在 AI 词表中 1 条）/);
+// 结果里有未加载的 ID（按标签整批批准时常见）也不影响已加载列表。
+assert.deepEqual(applyBatchApprovalResult(batchPool, { results: [{ id: 99, ok: true, item: { id: 99, video_id: 7, matched_tag_id: 22 } }] }).candidates.map(c => c.id), [1, 2, 3, 4]);
+
+console.log('ai-tag-review batch helpers passed');

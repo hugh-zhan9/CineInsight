@@ -2,13 +2,13 @@
   <aside class="preview-drawer" role="dialog" aria-label="媒体详情抽屉">
     <div class="preview-drawer__header glass-drawer-header">
       <div class="preview-drawer__heading">
-        <button v-if="canGoBack" type="button" class="btn-secondary btn-compact" @click="goBack">返回</button>
+        <button v-if="canGoBack" type="button" class="btn-secondary btn-compact" @click="requestGoBack">返回</button>
         <div>
           <p class="preview-drawer__eyebrow">{{ entryLabel }}</p>
           <h3>{{ entryTitle }}</h3>
         </div>
       </div>
-      <button type="button" class="preview-drawer__close btn-secondary btn-compact" @click="$emit('close')">关闭</button>
+      <button type="button" class="preview-drawer__close btn-secondary btn-compact" data-test="preview-drawer-close" @click="requestClose">关闭</button>
     </div>
 
     <div class="preview-drawer__body">
@@ -79,14 +79,16 @@
           <label class="detail-field">简介<textarea v-model="draft.description" maxlength="65536" rows="5"></textarea></label>
           <label class="detail-field">个人评分
             <span class="detail-rating-input">
-              <input v-model.trim="draft.personalRating" type="text" inputmode="decimal" maxlength="4" placeholder="未评分" aria-label="个人评分，0 到 10，支持 0.5 分" />
+              <input v-model.trim="draft.personalRating" type="text" inputmode="decimal" maxlength="4" placeholder="未评分" aria-label="个人评分，0 到 10，支持 0.5 分" data-test="detail-rating-input" :disabled="ratingSaving" @change="saveRatingNow" />
               <span aria-hidden="true">/ 10</span>
             </span>
-            <small>输入 0–10，支持半分；留空表示未评分</small>
+            <!-- D-PC47：评分改完即保存（UpdateVideoRating），不必等「保存作品信息」。 -->
+            <small>输入 0–10，支持半分；留空表示未评分。改完即保存</small>
+            <small v-if="ratingError" class="detail-error-text" role="alert" data-test="detail-rating-error">{{ ratingError }}</small>
           </label>
           <p class="detail-secondary">原文件：{{ details.video.name }}</p>
           <div class="detail-inline-actions">
-            <button type="button" class="btn-primary" :disabled="saving" @click="saveVideoDetails">{{ saving ? '保存中...' : '保存作品信息' }}</button>
+            <button type="button" class="btn-primary" data-test="drawer-save-details" :disabled="saving" @click="saveVideoDetails">{{ saving ? '保存中...' : '保存作品信息' }}</button>
             <button type="button" class="btn-secondary" @click="$emit('open-local-metadata', details.video)">导入本地资料</button>
 			<button type="button" class="btn-secondary" @click="$emit('export-local-metadata', details.video)">写出 NFO</button>
 			<button type="button" class="btn-secondary" @click="$emit('enhance', details.video)">视频超分</button>
@@ -95,13 +97,20 @@
         </section>
 
         <section class="detail-section">
-          <div class="detail-section__heading"><h4>演员</h4><span>{{ draft.personIDs.length }} 人</span></div>
+          <!-- 与标签分类「人物」、人物页同一个叫法（META-02）。 -->
+          <div class="detail-section__heading"><h4>人物</h4><span>{{ draft.personIDs.length + pendingPeople.length }} 人</span></div>
           <div class="entity-chip-list">
             <button v-for="item in selectedPeople" :key="item.person.id" type="button" class="entity-chip" @click="openPerson(item.person.id)">
               <img v-if="item.avatar_url" :src="item.avatar_url" alt="" />
               <span>{{ item.person.display_name }}</span>
-              <span class="entity-chip__remove" title="移除" @click.stop="togglePerson(item.person.id, false)">×</span>
+              <span class="entity-chip__remove" title="移除" :data-test="`drawer-person-remove-${item.person.id}`" @click.stop="removePerson(item)">×</span>
             </button>
+            <!-- 「新建并加入」只在本地暂存（D-PC32 / META-05），点「保存作品信息」时才新建人物并关联。 -->
+            <span v-for="pending in pendingPeople" :key="pending.key" class="entity-chip entity-chip--pending" :data-test="`drawer-pending-person-${pending.key}`">
+              <span>{{ pending.displayName }}</span>
+              <small>保存后新建</small>
+              <button type="button" class="entity-chip__remove" title="移除" @click="removePendingPerson(pending.key)">×</button>
+            </span>
           </div>
           <div class="detail-inline-form">
             <input v-model="personKeyword" placeholder="搜索人物姓名" @input="searchPeople" />
@@ -120,7 +129,8 @@
             <div class="detail-create-box__fields">
               <input v-model="newPerson.displayName" placeholder="显示姓名" maxlength="200" />
               <input v-model="newPerson.originalName" placeholder="原始姓名（可空）" maxlength="200" />
-              <button type="button" class="btn-secondary" :disabled="creatingPerson" @click="createAndSelectPerson">{{ creatingPerson ? '创建中...' : '新建并加入' }}</button>
+              <button type="button" class="btn-secondary" data-test="drawer-person-stage" :disabled="creatingPerson || !newPerson.displayName.trim()" @click="createAndSelectPerson">新建并加入</button>
+              <small class="detail-create-box__hint">点「保存作品信息」时才会真正新建并关联；不保存就不会留下空人物。</small>
             </div>
           </details>
         </section>
@@ -378,7 +388,7 @@ import {
   AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
   GetPersonImages, RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonImage, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
   SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails,
-  CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy
+  UpdateVideoRating, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy
 } from '../../wailsjs/go/main/App';
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
 import GlossaryEditor from './GlossaryEditor.vue';
@@ -390,6 +400,12 @@ import RelatedVideoItem from './RelatedVideoItem.vue';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 import { confirmAction } from '../utils/feedback.js';
 import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyStrategyLabel } from '../utils/playbackProxy.js';
+
+const sameIDSet = (a, b) => {
+  const left = [...new Set((a || []).map(Number))].sort((x, y) => x - y);
+  const right = [...new Set((b || []).map(Number))].sort((x, y) => x - y);
+  return left.length === right.length && left.every((value, index) => value === right[index]);
+};
 
 export default {
   name: 'PreviewDrawer',
@@ -411,6 +427,8 @@ export default {
       loading: false, error: '', saving: false, refreshingTechnical: false,
       details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', personalRating: '', personIDs: [], collectionIDs: [] },
       personKeyword: '', personCandidates: [], creatingPerson: false, collectionKeyword: '', collectionCandidates: [], collectionCursorName: '', collectionCursorID: 0, collectionHasMore: false, collectionSearching: false, newPerson: { displayName: '', originalName: '' },
+      // 「新建并加入」暂存的人物（D-PC32）：保存作品信息时才 CreatePerson 并关联；换条目、不保存就丢弃。
+      pendingPeople: [], ratingSaving: false, ratingError: '',
       personDetail: null, personEdit: { displayName: '', originalName: '' },
       // 图片区块与视频区块各自分页、不混排（D-021）：首页来自 GetPersonDetail，
       // 后续页走 GetPersonImages。
@@ -460,6 +478,19 @@ export default {
     selectedPeople() {
       const byID = new Map([...(this.details?.people || []), ...this.personCandidates].map(item => [Number(item?.person?.id), item]));
       return this.draft.personIDs.map(id => byID.get(Number(id))).filter(Boolean);
+    },
+    // 视频条目上有没有还没保存的修改：作品信息、人物、作品集，以及暂存待新建的人物。
+    hasUnsavedVideoDraft() {
+      if (this.currentEntry?.type !== 'video' || !this.details) return false;
+      if (this.pendingPeople.length) return true;
+      const saved = createVideoDetailsDraft(this.details);
+      const draft = this.draft;
+      return saved.displayTitle !== draft.displayTitle
+        || saved.originalTitle !== draft.originalTitle
+        || saved.description !== draft.description
+        || String(saved.personalRating) !== String(draft.personalRating ?? '')
+        || !sameIDSet(saved.personIDs, draft.personIDs)
+        || !sameIDSet(saved.collectionIDs, draft.collectionIDs);
     },
     relatedVideoIDs() {
       if (this.currentEntry?.type === 'person') return (this.personDetail?.videos || []).map(video => Number(video.id));
@@ -571,6 +602,7 @@ export default {
     },
     async loadCurrentEntry() {
       this.imagePreview = null; this.selectedPersonImageIDs = []; this.avatarPickerOpen = false; this.avatarError = '';
+      this.pendingPeople = []; this.ratingError = ''; this.ratingSaving = false;
       if (!this.currentEntry) return;
       const entry = { ...this.currentEntry };
       const requestToken = Symbol('detail-entry');
@@ -620,7 +652,17 @@ export default {
       }
       return detail;
     },
-    async navigate(entry) { this.resetRelatedVideoEditor(); this.navigator.push(entry); this.currentEntry = this.navigator.current(); this.canGoBack = this.navigator.canGoBack(); await this.loadCurrentEntry(); },
+    // 离开有未保存修改的视频条目前确认（D-PC32）：关闭抽屉、返回、跳到人物或作品集都会丢掉草稿。
+    async confirmDiscardVideoDraft() {
+      if (!this.hasUnsavedVideoDraft) return true;
+      return confirmAction({ title: '放弃未保存的修改', message: '作品信息、人物或作品集还有未保存的修改，离开后会丢失。确定放弃吗？', confirmText: '放弃修改', danger: true });
+    },
+    async requestClose() { if (await this.confirmDiscardVideoDraft()) this.$emit('close'); },
+    async requestGoBack() { if (await this.confirmDiscardVideoDraft()) await this.goBack(); },
+    async navigate(entry) {
+      if (!await this.confirmDiscardVideoDraft()) return;
+      this.resetRelatedVideoEditor(); this.navigator.push(entry); this.currentEntry = this.navigator.current(); this.canGoBack = this.navigator.canGoBack(); await this.loadCurrentEntry();
+    },
     async goBack() { this.resetRelatedVideoEditor(); this.currentEntry = this.navigator.back(); this.canGoBack = this.navigator.canGoBack(); await this.loadCurrentEntry(); },
     openPerson(id) { return this.navigate({ type: 'person', id }); },
     openCollection(id) { return this.navigate({ type: 'collection', id }); },
@@ -629,14 +671,21 @@ export default {
       return this._entryLoadToken === entryToken && this.currentEntry?.type === 'video' && Number(this.currentEntry.id) === Number(videoID);
     },
     async saveVideoDetails() {
+      // 暂存的人物正在新建：再点一次保存不能再建一遍。
+      if (this.creatingPerson) return;
       this.saving = true; this.error = '';
       const videoID = this.details.video.id; const entryToken = this._entryLoadToken; const operationToken = Symbol('video-save');
       this._videoSaveToken = operationToken;
+      // 草稿在任何 await 之前取快照：新建人物期间用户可能已经切到别的条目。
+      const draft = { ...this.draft, personIDs: [...this.draft.personIDs], collectionIDs: [...this.draft.collectionIDs] };
+      const pending = [...this.pendingPeople];
       try {
+        const personalRating = validateRatingDraft(draft.personalRating);
+        const createdIDs = await this.createPendingPeople(pending, videoID, entryToken);
         const updatedDetails = await UpdateVideoDetails({
-          video_id: videoID, display_title: this.draft.displayTitle, original_title: this.draft.originalTitle,
-          description: this.draft.description,
-          personal_rating: validateRatingDraft(this.draft.personalRating), person_ids: [...this.draft.personIDs], collection_ids: [...this.draft.collectionIDs]
+          video_id: videoID, display_title: draft.displayTitle, original_title: draft.originalTitle,
+          description: draft.description,
+          personal_rating: personalRating, person_ids: [...new Set([...draft.personIDs, ...createdIDs])], collection_ids: draft.collectionIDs
         });
         this.$emit('details-updated', updatedDetails);
         if (this.isCurrentVideoRequest(videoID, entryToken)) {
@@ -653,6 +702,22 @@ export default {
       } catch (err) { if (this._personSearchToken === requestToken) this.error = String(err); }
     },
     togglePerson(id, force) { this.draft.personIDs = toggleEntityID(this.draft.personIDs, id, force); },
+    // 移除已保存的人物关系前，若它是该人物最后一个活跃媒体，复用「最后一条关系」确认（D-PC32 / META-05）：
+    // 保存时后端会顺手删掉已无任何关系的人物。本次才搜出来、还没保存过的人物移除不需要确认。
+    async removePerson(item) {
+      const id = Number(item?.person?.id);
+      if (!id) return;
+      const saved = (this.details?.people || []).find(person => Number(person?.person?.id) === id);
+      const activeRelations = Number(saved?.active_video_count || 0) + Number(saved?.active_image_count || 0);
+      if (saved && activeRelations <= 1 && !await confirmAction({
+        title: '移除人物',
+        message: `这是「${item.person.display_name || `人物 #${id}`}」最后一个活跃关联媒体。若没有软删除媒体保留的关系，保存后人物也会被删除，确定移除吗？`,
+        confirmText: '移除',
+        danger: true
+      })) return;
+      this.togglePerson(id, false);
+    },
+    removePendingPerson(key) { this.pendingPeople = this.pendingPeople.filter(item => item.key !== key); },
     toggleCollection(id, force) { this.draft.collectionIDs = toggleEntityID(this.draft.collectionIDs, id, force); },
     resetRelatedVideoEditor() {
       this._relatedVideoSearchToken = Symbol('related-video-search');
@@ -829,22 +894,58 @@ export default {
       } catch (err) { if (this._collectionSearchToken === requestToken) this.error = String(err); }
       finally { if (this._collectionSearchToken === requestToken) this.collectionSearching = false; }
     },
-    async createAndSelectPerson() {
-      if (this.creatingPerson) return;
+    // 「新建并加入」（D-PC32）：只在本地暂存姓名，保存作品信息时才调用 CreatePerson。
+    // 以前点一下就写库，不保存直接关抽屉会留下一个没有任何关系、又删不掉的人物（META-05）。
+    createAndSelectPerson() {
+      const displayName = this.newPerson.displayName.trim();
+      if (!displayName || this.currentEntry?.type !== 'video') return;
+      this._pendingPersonSeq = (this._pendingPersonSeq || 0) + 1;
+      this.pendingPeople = [...this.pendingPeople, { key: this._pendingPersonSeq, displayName, originalName: this.newPerson.originalName.trim() }];
+      this.newPerson = { displayName: '', originalName: '' };
+    },
+    // 保存时逐个新建暂存的人物。建好一个就把它转成正式候选并选中：后面的步骤失败时，重试不会再建一遍。
+    async createPendingPeople(pending, videoID, entryToken) {
+      if (!pending.length) return [];
       this.creatingPerson = true;
-      const videoID = this.currentEntry?.type === 'video' ? Number(this.currentEntry.id) : 0;
-      const entryToken = this._entryLoadToken; const operationToken = Symbol('person-create');
-      this._personCreateToken = operationToken;
+      const ids = [];
       try {
-        const person = await CreatePerson(this.newPerson.displayName, this.newPerson.originalName);
-        if (this._personCreateToken !== operationToken || !this.isCurrentVideoRequest(videoID, entryToken)) return;
-        const item = { person, avatar_url: '', active_video_count: 0 };
-        this.personCandidates = [item, ...this.personCandidates]; this.togglePerson(person.id, true);
-        this.newPerson = { displayName: '', originalName: '' };
-      } catch (err) {
-        if (this._personCreateToken === operationToken && this.isCurrentVideoRequest(videoID, entryToken)) this.error = String(err);
+        for (const item of pending) {
+          const person = await CreatePerson(item.displayName, item.originalName);
+          ids.push(Number(person.id));
+          if (this.isCurrentVideoRequest(videoID, entryToken)) {
+            this.pendingPeople = this.pendingPeople.filter(entry => entry.key !== item.key);
+            this.personCandidates = [{ person, avatar_url: '', active_video_count: 0, active_image_count: 0 }, ...this.personCandidates];
+            this.togglePerson(person.id, true);
+          }
+        }
+        return ids;
+      } finally {
+        this.creatingPerson = false;
       }
-      finally { if (this._personCreateToken === operationToken) this.creatingPerson = false; }
+    },
+    // 评分即时保存（D-PC47）：输入框失焦或回车即调 UpdateVideoRating，不经「保存作品信息」。
+    async saveRatingNow() {
+      if (this.currentEntry?.type !== 'video' || !this.details?.video) return;
+      const videoID = Number(this.details.video.id); const entryToken = this._entryLoadToken;
+      let rating;
+      try { rating = validateRatingDraft(this.draft.personalRating); }
+      catch (err) { this.ratingError = err?.message || String(err); return; }
+      this.ratingError = '';
+      const current = this.details.video.personal_rating ?? null;
+      if (rating === current) return;
+      this.ratingSaving = true;
+      try {
+        const updated = await UpdateVideoRating(videoID, rating);
+        if (!this.isCurrentVideoRequest(videoID, entryToken)) return;
+        const value = updated?.personal_rating ?? null;
+        this.details = { ...this.details, video: { ...this.details.video, personal_rating: value } };
+        this.draft.personalRating = value === null ? '' : String(value);
+        this.$emit('details-updated', this.details);
+      } catch (err) {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.ratingError = `保存评分失败：${err}`;
+      } finally {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.ratingSaving = false;
+      }
     },
     async refreshTechnical() {
       this.refreshingTechnical = true; this.technicalError = '';
@@ -1059,6 +1160,7 @@ export default {
 .detail-field { display: grid; gap: 6px; font-size: 12px; color: var(--text-secondary); }.detail-field input,.detail-field select,.detail-field textarea,.detail-inline-form input,.detail-create-box input { width: 100%; border: 1px solid var(--border-color); border-radius: 8px; padding: 9px 10px; background: var(--control-bg); color: var(--text-primary); }
 .detail-rating-input { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 9px; }.detail-rating-input > span { color: var(--text-muted); font-size: 13px; }.detail-field small { color: var(--text-muted); font-size: 11px; font-weight: 400; }
 .detail-secondary,.detail-empty { font-size: 12px; color: var(--text-muted); word-break: break-all; }.detail-error,.detail-error-text { color: var(--danger-color); }.detail-error { padding: 18px; border: 1px solid var(--danger-color); border-radius: 12px; }
+.entity-chip--pending { border-style: dashed; }.entity-chip--pending small { color: var(--text-muted); font-size: 11px; }.entity-chip--pending .entity-chip__remove { border: 0; padding: 0; background: transparent; cursor: pointer; }.detail-create-box__hint { color: var(--text-muted); font-size: 11px; }
 .entity-chip-list { display: flex; flex-wrap: wrap; gap: 8px; }.entity-chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border-color); border-radius: 999px; padding: 4px 9px 4px 5px; background: var(--control-hover-bg); color: var(--text-primary); }.entity-chip img { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; }.entity-chip__remove { color: var(--danger-color); font-size: 16px; }
 .detail-inline-form,.detail-action-row { display: flex; gap: 8px; flex-wrap: wrap; }.detail-inline-form input { flex: 1; }.candidate-list { display: grid; gap: 6px; }.candidate-list button { display: flex; justify-content: space-between; gap: 10px; text-align: left; border: 1px solid var(--border-color); border-radius: 9px; padding: 9px 10px; color: var(--text-primary); background: transparent; }.candidate-list small { color: var(--text-muted); }.detail-create-box { display: grid; gap: 8px; }.detail-create-box summary { cursor: pointer; color: var(--accent-color); }.detail-create-box__fields { display: grid; gap: 8px; justify-items: start; }.detail-create-box__fields input { width: 100%; }
 .related-video-editor { display: grid; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--border-color); }.related-video-results,.related-video-list { display: grid; gap: 8px; }

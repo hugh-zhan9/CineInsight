@@ -303,6 +303,20 @@
   color: var(--text-primary);
 }
 
+/* D-PC36：自动标签被人工覆盖时的「手动」角标。添加标签弹窗与列表行标签共用。 */
+.tag-manual-badge {
+  flex: none;
+  padding: 0 5px;
+  border: 1px solid var(--warning-border);
+  border-radius: 5px;
+  background: var(--warning-soft);
+  color: var(--warning-text);
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .tag-remove,
 .tag-chip-delete {
   background: transparent;

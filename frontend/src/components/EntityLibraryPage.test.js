@@ -18,10 +18,21 @@ const api = vi.hoisted(() => ({
   BatchAddTagToImages: vi.fn(),
   PlayVideo: vi.fn(),
   PreviewExternally: vi.fn(),
-  UpdateVideoWatchProgress: vi.fn()
+  UpdateVideoWatchProgress: vi.fn(),
+  MergePeople: vi.fn(),
+  DeletePerson: vi.fn(),
+  GetPersonDeletionImpact: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
+// 合并、删除人物走应用内确认框：默认答「确定」，需要「取消」的用例单独设置。
+const feedback = vi.hoisted(() => ({
+  confirmAction: vi.fn(() => Promise.resolve(true)),
+  notify: vi.fn(),
+  notifyError: vi.fn(),
+  notifySuccess: vi.fn()
+}));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
 vi.mock('./FaceClusterReviewPanel.vue', () => ({
   default: {
     name: 'FaceClusterReviewPanel',
@@ -57,6 +68,7 @@ beforeEach(() => {
     videos: []
   });
   api.PlayVideo.mockResolvedValue({ dispatch_succeeded: true });
+  feedback.confirmAction.mockResolvedValue(true);
 });
 
 describe('EntityLibraryPage', () => {
@@ -315,5 +327,149 @@ describe('EntityLibraryPage 待命名人脸分区', () => {
     wrapper.findComponent({ name: 'FaceClusterReviewPanel' }).vm.$emit('changed');
     await flushPromises();
     expect(api.ListPeople).toHaveBeenCalledTimes(2);
+  });
+
+  // META-11：未命名按页加载，还有下一页时摘要写成「N+」。
+  it('META-11 marks the unnamed count as partial when more pages exist', async () => {
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    wrapper.findComponent({ name: 'FaceClusterReviewPanel' }).vm.$emit('loaded', { unnamed: 20, appendPending: 0, unnamedHasMore: true });
+    await flushPromises();
+    expect(wrapper.get('[data-test="people-face-review-summary"]').text()).toContain('20+ 组未命名');
+  });
+
+  // META-08（D-PC27）：人物页注册 people.openFaceReview，待处理工作台据此跳过来并展开分区。
+  it('META-08 registers people.openFaceReview which returns to the list and expands the section', async () => {
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person', focusEntity: { id: 7, name: 'Actor Seven' } } });
+    await flushPromises();
+    const command = commandList().find(item => item.id === 'people.openFaceReview');
+    expect(command).toBeTruthy();
+    expect(wrapper.vm.selectedEntity).toEqual({ type: 'person', id: 7 });
+    wrapper.vm.faceReviewCollapsed = true;
+
+    command.run();
+    await flushPromises();
+    expect(wrapper.vm.selectedEntity).toBe(null);
+    expect(wrapper.vm.faceReviewCollapsed).toBe(false);
+    expect(wrapper.find('[data-test="people-face-review"]').exists()).toBe(true);
+    // 展开算用户的选择：之后面板回报「没有待处理」也不再自动收起。
+    wrapper.findComponent({ name: 'FaceClusterReviewPanel' }).vm.$emit('loaded', { unnamed: 0, appendPending: 0 });
+    await flushPromises();
+    expect(wrapper.vm.faceReviewCollapsed).toBe(false);
+
+    wrapper.unmount();
+    expect(commandList().map(item => item.id)).not.toContain('people.openFaceReview');
+  });
+
+  it('META-08 collections page does not register the face review command', async () => {
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'collection' } });
+    await flushPromises();
+    expect(commandList().map(item => item.id)).not.toContain('people.openFaceReview');
+    wrapper.unmount();
+  });
+});
+
+// META-03 / META-05（D-PC32）：人物页提供合并与显式删除，都要先确认。
+describe('EntityLibraryPage 人物合并与删除', () => {
+  const person = (id, name, videos = 1, images = 0) => ({ person: { id, display_name: name, original_name: '' }, avatar_url: '', active_video_count: videos, active_image_count: images, cursor_name: name });
+
+  async function openPerson() {
+    api.ListPeople.mockResolvedValueOnce([person(7, '张三', 2, 1), person(8, '张三', 1), person(9, '李四', 0)]);
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    await wrapper.get('.entity-card').trigger('click');
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('META-03 merges selected people into the current person after confirmation', async () => {
+    const wrapper = await openPerson();
+    api.ListPeople.mockResolvedValueOnce([person(7, '张三', 2, 1), person(8, '张三', 1)]);
+    await wrapper.get('[data-test="person-merge-open"]').trigger('click');
+    await flushPromises();
+    // 不能把自己列为来源。
+    expect(wrapper.find('[data-test="person-merge-option-7"]').exists()).toBe(false);
+    await wrapper.get('[data-test="person-merge-option-8"] input').setValue(true);
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="person-merge-submit"]').trigger('click');
+    await flushPromises();
+    expect(api.MergePeople).not.toHaveBeenCalled();
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('「张三」 合并到「Actor Seven」');
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('此操作不能撤销');
+
+    api.MergePeople.mockResolvedValueOnce({ target: person(7, '张三', 3, 1), merged_count: 1, video_links_moved: 1, image_links_moved: 0, warnings: ['头像复制失败'] });
+    await wrapper.get('[data-test="person-merge-submit"]').trigger('click');
+    await flushPromises();
+    expect(api.MergePeople).toHaveBeenCalledWith(7, [8]);
+    expect(feedback.notifySuccess).toHaveBeenCalledWith(expect.stringContaining('已把 1 个人物合并到'));
+    expect(feedback.notify).toHaveBeenCalledWith(expect.stringContaining('头像复制失败'));
+    expect(wrapper.find('[data-test="person-merge-panel"]').exists()).toBe(false);
+    expect(wrapper.vm.items.map(item => item.person.id)).toEqual([7, 9]);
+    // 合并后重读目标人物的详情，关系与计数以后端为准。
+    expect(api.GetPersonDetail).toHaveBeenLastCalledWith(7, 0, 30);
+  });
+
+  it('META-03 explains invalid_merge and keeps the panel open', async () => {
+    const wrapper = await openPerson();
+    api.ListPeople.mockResolvedValueOnce([person(8, '张三', 1)]);
+    await wrapper.get('[data-test="person-merge-open"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="person-merge-option-8"] input').setValue(true);
+    api.MergePeople.mockRejectedValueOnce(new Error('invalid_merge'));
+    await wrapper.get('[data-test="person-merge-submit"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="person-merge-panel"]').text()).toContain('不能把人物合并到它自己');
+  });
+
+  it('META-05 deletes a person after showing the relation counts', async () => {
+    const wrapper = await openPerson();
+    api.GetPersonDeletionImpact.mockResolvedValue({ video_count: 2, image_count: 1, face_cluster_count: 3 });
+    api.DeletePerson.mockResolvedValue();
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="person-delete"]').trigger('click');
+    await flushPromises();
+    expect(api.GetPersonDeletionImpact).toHaveBeenCalledWith(7);
+    const message = feedback.confirmAction.mock.calls[0][0].message;
+    expect(message).toContain('2 部视频、1 张图片');
+    expect(message).toContain('3 组人脸回到待命名');
+    expect(message).toContain('文件和片库记录都会保留');
+    expect(api.DeletePerson).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-test="person-delete"]').trigger('click');
+    await flushPromises();
+    expect(api.DeletePerson).toHaveBeenCalledWith(7);
+    expect(wrapper.vm.selectedEntity).toBe(null);
+    expect(feedback.notifySuccess).toHaveBeenCalledWith(expect.stringContaining('已删除人物'));
+  });
+
+  it('META-05 does not delete when the impact cannot be read', async () => {
+    const wrapper = await openPerson();
+    api.GetPersonDeletionImpact.mockRejectedValueOnce(new Error('person_not_found'));
+    await wrapper.get('[data-test="person-delete"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.DeletePerson).not.toHaveBeenCalled();
+    expect(wrapper.get('.entity-library__error').text()).toContain('有人物已经不存在了');
+  });
+});
+
+// D-PC42：人物页保存观看进度改为 5 参调用（origin 取 resume/start/jump，时长未知传 0）。
+describe('EntityLibraryPage 观看进度 origin', () => {
+  it('passes duration and origin from the drawer, defaulting to resume with unknown duration', async () => {
+    api.UpdateVideoWatchProgress.mockResolvedValue({ id: 3 });
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+
+    wrapper.vm.handleWatchProgress({ videoID: 3, positionSeconds: 42, completed: false });
+    wrapper.vm.handleWatchProgress({ videoID: 3, positionSeconds: 50, completed: true, origin: 'jump', durationSeconds: 120 });
+    wrapper.vm.handleWatchProgress({ videoID: 3, positionSeconds: 1, completed: false, origin: 'bogus', durationSeconds: Number.NaN });
+    await flushPromises();
+    expect(api.UpdateVideoWatchProgress.mock.calls).toEqual([
+      [3, 42, 0, false, 'resume'],
+      [3, 50, 120, true, 'jump'],
+      [3, 1, 0, false, 'resume'],
+    ]);
   });
 });

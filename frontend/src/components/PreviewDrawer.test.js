@@ -50,6 +50,7 @@ const api = vi.hoisted(() => ({
   UpdateCollection: vi.fn(),
   UpdatePerson: vi.fn(),
   UpdateVideoDetails: vi.fn(),
+  UpdateVideoRating: vi.fn(),
   CreatePlaybackProxy: vi.fn(),
   DeletePlaybackProxy: vi.fn(),
   GetPlaybackProxy: vi.fn()
@@ -108,6 +109,7 @@ async function mountDrawer(details = videoDetails(1)) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  feedback.confirmAction.mockResolvedValue(true);
   api.GetAllDirectories.mockResolvedValue([]);
   api.SelectDirectory.mockResolvedValue('');
   api.GetPlaybackProxy.mockResolvedValue(null);
@@ -243,7 +245,11 @@ describe('PreviewDrawer', () => {
     expect(wrapper.find('.detail-rating-input select').exists()).toBe(false);
     const updated = videoDetails(1, { video: { id: 1, personal_rating: 0 } });
     api.UpdateVideoDetails.mockResolvedValueOnce(updated);
+    // D-PC47 之后评分改完即保存：0 分同样立即写入，之后的「保存作品信息」也带着 0。
+    api.UpdateVideoRating.mockResolvedValueOnce({ id: 1, personal_rating: 0 });
     await ratingInput.setValue('0');
+    await flushPromises();
+    expect(api.UpdateVideoRating).toHaveBeenCalledWith(1, 0);
 
     await wrapper.vm.saveVideoDetails();
 
@@ -465,37 +471,139 @@ describe('PreviewDrawer', () => {
     expect(wrapper.vm.personCandidates.map(item => item.person.display_name)).toEqual(['New result']);
   });
 
-  it('does not attach a person created for a video after navigating away', async () => {
+  // META-05（D-PC32）：「新建并加入」只暂存，离开这个视频（确认放弃）就丢掉，绝不留下空人物。
+  // 此前这里断言的是点一下就 CreatePerson 的旧行为。
+  it('META-05 drops a staged person when navigating away without creating it', async () => {
     const wrapper = await mountDrawer();
-    const pendingCreate = deferred();
-    api.CreatePerson.mockReturnValueOnce(pendingCreate.promise);
     wrapper.vm.newPerson = { displayName: 'Actor A', originalName: '' };
+    wrapper.vm.createAndSelectPerson();
+    expect(api.CreatePerson).not.toHaveBeenCalled();
+    expect(wrapper.vm.pendingPeople.map(item => item.displayName)).toEqual(['Actor A']);
 
-    const createPromise = wrapper.vm.createAndSelectPerson();
     await wrapper.vm.openVideo(2);
-    pendingCreate.resolve({ id: 9, display_name: 'Actor A', original_name: '' });
-    await createPromise;
-
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ title: '放弃未保存的修改' }));
     expect(wrapper.vm.currentEntry).toEqual({ type: 'video', id: 2 });
-    expect(wrapper.vm.draft.personIDs).toEqual([]);
-    expect(wrapper.vm.personCandidates).toEqual([]);
+    expect(wrapper.vm.pendingPeople).toEqual([]);
+    expect(api.CreatePerson).not.toHaveBeenCalled();
   });
 
-  it('prevents duplicate person creation while the first request is pending', async () => {
+  it('META-05 creates staged people only once on save and associates them', async () => {
     const wrapper = await mountDrawer();
     const pendingCreate = deferred();
     api.CreatePerson.mockReturnValueOnce(pendingCreate.promise);
+    api.UpdateVideoDetails.mockResolvedValueOnce(videoDetails(1, { people: [{ person: { id: 10, display_name: 'Only Once' }, active_video_count: 1, active_image_count: 0 }] }));
     wrapper.vm.newPerson = { displayName: 'Only Once', originalName: '' };
+    wrapper.vm.createAndSelectPerson();
+    await flushPromises();
+    expect(wrapper.find('[data-test="drawer-pending-person-1"]').text()).toContain('保存后新建');
 
-    const firstCreate = wrapper.vm.createAndSelectPerson();
-    const secondCreate = wrapper.vm.createAndSelectPerson();
-
+    const firstSave = wrapper.vm.saveVideoDetails();
+    const secondSave = wrapper.vm.saveVideoDetails();
     expect(wrapper.vm.creatingPerson).toBe(true);
     expect(api.CreatePerson).toHaveBeenCalledOnce();
+    expect(api.CreatePerson).toHaveBeenCalledWith('Only Once', '');
     pendingCreate.resolve({ id: 10, display_name: 'Only Once', original_name: '' });
-    await Promise.all([firstCreate, secondCreate]);
+    await Promise.all([firstSave, secondSave]);
+    await flushPromises();
+
+    expect(api.UpdateVideoDetails).toHaveBeenCalledOnce();
+    expect(api.UpdateVideoDetails).toHaveBeenCalledWith(expect.objectContaining({ video_id: 1, person_ids: [10] }));
     expect(wrapper.vm.creatingPerson).toBe(false);
+    expect(wrapper.vm.pendingPeople).toEqual([]);
     expect(wrapper.vm.draft.personIDs).toEqual([10]);
+  });
+
+  it('META-05 keeps already-created people when a later step fails, so a retry does not duplicate them', async () => {
+    const wrapper = await mountDrawer();
+    api.CreatePerson.mockResolvedValueOnce({ id: 11, display_name: 'A' }).mockRejectedValueOnce(new Error('person_name_invalid'));
+    wrapper.vm.newPerson = { displayName: 'A', originalName: '' };
+    wrapper.vm.createAndSelectPerson();
+    wrapper.vm.newPerson = { displayName: 'B', originalName: '' };
+    wrapper.vm.createAndSelectPerson();
+
+    await wrapper.vm.saveVideoDetails();
+    await flushPromises();
+    expect(api.UpdateVideoDetails).not.toHaveBeenCalled();
+    expect(wrapper.vm.draft.personIDs).toEqual([11]);
+    expect(wrapper.vm.pendingPeople.map(item => item.displayName)).toEqual(['B']);
+  });
+
+  it('META-05 asks before closing with unsaved changes and closes directly when clean', async () => {
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-drawer-close"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(wrapper.emitted('close')).toHaveLength(1);
+
+    wrapper.vm.draft.displayTitle = '改过的标题';
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="preview-drawer-close"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted('close')).toHaveLength(1);
+
+    await wrapper.get('[data-test="preview-drawer-close"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('close')).toHaveLength(2);
+  });
+
+  it('META-05 confirms before removing the last relation of a person from the video', async () => {
+    const details = videoDetails(1, { people: [
+      { person: { id: 5, display_name: '只此一部' }, active_video_count: 1, active_image_count: 0 },
+      { person: { id: 6, display_name: '还有别的' }, active_video_count: 3, active_image_count: 1 },
+    ] });
+    const wrapper = await mountDrawer(details);
+
+    await wrapper.get('[data-test="drawer-person-remove-6"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(wrapper.vm.draft.personIDs).toEqual([5]);
+
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="drawer-person-remove-5"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('最后一个活跃关联媒体');
+    expect(wrapper.vm.draft.personIDs).toEqual([5]);
+
+    await wrapper.get('[data-test="drawer-person-remove-5"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.draft.personIDs).toEqual([]);
+  });
+
+  // D-PC47：评分改完即保存，不经「保存作品信息」。
+  it('saves the rating immediately through UpdateVideoRating and reports invalid values', async () => {
+    const wrapper = await mountDrawer();
+    api.UpdateVideoRating.mockResolvedValueOnce({ id: 1, personal_rating: 7.5 });
+    const input = wrapper.get('[data-test="detail-rating-input"]');
+    await input.setValue('7.5');
+    await input.trigger('change');
+    await flushPromises();
+    expect(api.UpdateVideoRating).toHaveBeenCalledWith(1, 7.5);
+    expect(api.UpdateVideoDetails).not.toHaveBeenCalled();
+    expect(wrapper.vm.details.video.personal_rating).toBe(7.5);
+    expect(wrapper.emitted('details-updated').at(-1)[0].video.personal_rating).toBe(7.5);
+    // 保存过的评分不算未保存的修改。
+    expect(wrapper.vm.hasUnsavedVideoDraft).toBe(false);
+
+    await input.setValue('7.3');
+    await input.trigger('change');
+    await flushPromises();
+    expect(api.UpdateVideoRating).toHaveBeenCalledTimes(1);
+    expect(wrapper.get('[data-test="detail-rating-error"]').text()).toContain('0.5 倍数');
+
+    api.UpdateVideoRating.mockResolvedValueOnce({ id: 1, personal_rating: null });
+    await input.setValue('');
+    await input.trigger('change');
+    await flushPromises();
+    expect(api.UpdateVideoRating).toHaveBeenLastCalledWith(1, null);
+    expect(wrapper.vm.details.video.personal_rating).toBe(null);
+  });
+
+  it('shows the people section with the same name as the tag category', async () => {
+    const wrapper = await mountDrawer();
+    expect(wrapper.findAll('.detail-section__heading h4').map(heading => heading.text())).toContain('人物');
+    expect(wrapper.findAll('.detail-section__heading h4').map(heading => heading.text())).not.toContain('演员');
   });
 
   it('keeps the last successful technical snapshot visible when refresh fails', async () => {

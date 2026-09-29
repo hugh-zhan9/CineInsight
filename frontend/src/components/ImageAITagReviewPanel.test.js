@@ -70,22 +70,34 @@ describe('ImageAITagReviewPanel', () => {
     expect(api.ListImageAITagCandidatePage).toHaveBeenCalledTimes(1);
   });
 
-  // 后端在图片已有手工标签时返回 superseded 而不是报错。用户点的是"接受"，
-  // 界面必须解释标签为什么没挂上，否则看起来就是点了没反应。
-  it('explains why nothing was tagged when the image already has manual tags', async () => {
-    api.ListImageAITagCandidatePage.mockResolvedValue(page([candidate()]));
-    api.ApproveImageAITagCandidate.mockResolvedValue({ id: 1, status: 'superseded' });
+  // META-06：D-PC28 规则 2 之后接受候选不再让整图候选作废（此前这里断言的是「手工标签导致整图作废」
+  // 的旧提示）。接受只移除同图同标签的候选，这张图其他标签的候选留在列表里。
+  it('META-06 keeps the other-tag candidates of the image after approving one', async () => {
+    api.ListImageAITagCandidatePage.mockResolvedValue(page([
+      candidate({ id: 1, matched_tag_id: 7 }),
+      candidate({ id: 2, matched_tag_id: 7, suggested_name: '海岸' }),
+      candidate({ id: 3, matched_tag_id: 8, suggested_name: '日落' }),
+    ]));
+    api.ApproveImageAITagCandidate.mockResolvedValue({ id: 1, status: 'approved' });
     const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } });
     await flushPromises();
 
     await wrapper.find('[data-test="image-ai-tag-approve-1"]').trigger('click');
     await flushPromises();
 
-    const notice = wrapper.find('[data-test="image-ai-tag-review-notice"]');
-    expect(notice.exists()).toBe(true);
-    expect(notice.text()).toContain('手工打的标签');
-    // 是说明不是报错：不能占用 error 位，否则会被紧随其后的刷新清掉。
+    expect(wrapper.vm.candidates.map(item => item.id)).toEqual([3]);
+    expect(wrapper.find('[data-test="image-ai-tag-review-notice"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="image-ai-tag-review-error"]').exists()).toBe(false);
+  });
+
+  it('explains that reject-all also covered candidates outside the loaded filter', async () => {
+    api.ListImageAITagCandidatePage.mockResolvedValue(page([candidate()]));
+    api.RejectImageAITagCandidatesByImage.mockResolvedValue(4);
+    const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } });
+    await flushPromises();
+    await wrapper.find('[data-test="image-ai-tag-reject-all-10"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="image-ai-tag-review-notice"]').text()).toContain('全部 4 条');
   });
 
   it('rejects a single candidate and the whole image', async () => {

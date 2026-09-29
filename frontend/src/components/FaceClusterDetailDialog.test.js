@@ -41,15 +41,31 @@ describe('FaceClusterDetailDialog', () => {
   await w.getComponent({ name: 'BaseModal' }).get('[data-test="face-source-remove-2"]').trigger('click'); await flushPromises();
   expect(w.emitted('close')).toHaveLength(1); w.unmount();
  });
- it('does not apply a late removal to a different cluster or offer removal for named clusters', async () => {
+ // META-04：已忽略的簇不提供移除来源（要先恢复）；已命名簇见下一条用例。
+ it('META-04 does not apply a late removal to a different cluster or offer removal for ignored clusters', async () => {
   api.GetFaceClusterObservations.mockResolvedValue({ observations: [source(1)] });
   let finish; api.RemoveFaceClusterObservation.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
   const w = mount(FaceClusterDetailDialog, { props: { cluster }, attachTo: document.body }); await flushPromises();
   await w.getComponent({ name: 'BaseModal' }).get('[data-test="face-source-remove-1"]').trigger('click');
-  await w.setProps({ cluster: { id: 2, status: 'named' } }); await flushPromises();
+  await w.setProps({ cluster: { id: 2, status: 'ignored' } }); await flushPromises();
   finish(true); await flushPromises();
   expect(w.vm.sources).toHaveLength(1); expect(w.emitted('close')).toBeUndefined();
   expect(w.getComponent({ name: 'BaseModal' }).find('[data-test="face-source-remove-1"]').exists()).toBe(false); w.unmount();
+ });
+ // META-04（D-PC30）：已命名簇同样可以逐条移除来源，且说明人物关系不受影响；已忽略簇的报错给出去处。
+ it('META-04 lets named clusters remove sources and explains cluster_ignored', async () => {
+  api.GetFaceClusterObservations.mockResolvedValue({ observations: [source(1), source(2)] });
+  api.RemoveFaceClusterObservation.mockResolvedValueOnce(false).mockRejectedValueOnce(new Error('cluster_ignored'));
+  const w = mount(FaceClusterDetailDialog, { props: { cluster: { id: 3, status: 'named', person_name: '周迅' } }, attachTo: document.body }); await flushPromises();
+  const modal = w.getComponent({ name: 'BaseModal' });
+  expect(modal.text()).toContain('已经建立的人物关系不受影响');
+  await modal.get('[data-test="face-source-remove-1"]').trigger('click'); await flushPromises();
+  expect(api.RemoveFaceClusterObservation).toHaveBeenCalledWith(3, 1);
+  expect(w.vm.sources.map(item => item.observation_id)).toEqual([2]);
+  expect(w.emitted('removed')).toHaveLength(1);
+  await modal.get('[data-test="face-source-remove-2"]').trigger('click'); await flushPromises();
+  expect(modal.text()).toContain('请先在「已忽略」中恢复');
+  expect(w.vm.sources.map(item => item.observation_id)).toEqual([2]); w.unmount();
  });
  it('paginates sources and opens the original image or video at frame zero', async () => {
   api.GetFaceClusterObservations.mockResolvedValueOnce({ observations: [source(1)], next_id: 1 }).mockResolvedValueOnce({ observations: [source(2, 'video')], next_id: 0 });

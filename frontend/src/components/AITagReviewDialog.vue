@@ -3,9 +3,9 @@
       <div class="ai-tag-review-header">
         <div>
           <h3>AI 标签管理</h3>
-          <!-- 分页之后 candidates 是"已加载的"，不是总数：还有下一页时必须说清楚，
-               否则这个数字看起来就是全部待审。 -->
-          <p class="help-text">AI 标签待审 {{ candidates.length }} 条<span v-if="candidateCursor">（已加载，还有更多）</span>，视频同源待审 {{ sameSourceRelations.length }} 条<span v-if="reviewSection === 'tags' && reviewSearch.trim()">，当前显示 {{ filteredCandidates.length }} 条标签</span>。</p>
+          <!-- 分页之后 candidates 是"已加载的"，不是总数：总数取后端汇总（META-08），
+               还有下一页时再单独说已加载了多少。 -->
+          <p class="help-text" data-test="ai-review-counts">AI 标签待审 {{ pendingCandidateTotal }} 条<span v-if="candidateCursor">（已加载 {{ candidates.length }} 条）</span>，视频同源待审 {{ pendingSameSourceCount }} 条<span v-if="reviewSection === 'tags' && hasActiveFilter">，当前筛选 {{ filteredCandidates.length }} 条标签</span>。</p>
           <p v-if="summary && !summary.config_available" class="ai-tag-warning">AI 配置不可用，后台分析已暂停。</p>
         </div>
         <button type="button" class="btn-secondary" @click="$emit('close')">关闭</button>
@@ -16,8 +16,8 @@
       <div :class="['ai-review-split', { 'ai-review-split--with-quality': qualityEnabled }]">
         <div class="ai-review-main">
         <nav class="ai-review-type-tabs" aria-label="待审工作台类型">
-          <button type="button" :class="{ active: reviewSection === 'tags' }" data-test="ai-candidate-review-tab" @click="reviewSection = 'tags'">AI 标签待审 <span>{{ candidates.length }}{{ candidateCursor ? '+' : '' }}</span></button>
-          <button type="button" :class="{ active: reviewSection === 'same-source' }" data-test="same-source-review-tab" @click="reviewSection = 'same-source'">视频同源待审 <span>{{ sameSourceRelations.length }}</span></button>
+          <button type="button" :class="{ active: reviewSection === 'tags' }" data-test="ai-candidate-review-tab" @click="reviewSection = 'tags'">AI 标签待审 <span>{{ pendingCandidateTotal }}</span></button>
+          <button type="button" :class="{ active: reviewSection === 'same-source' }" data-test="same-source-review-tab" @click="reviewSection = 'same-source'">视频同源待审 <span>{{ pendingSameSourceCount }}</span></button>
           <button type="button" :class="{ active: reviewSection === 'face' }" data-test="face-cluster-review-tab" @click="reviewSection = 'face'">人物候选</button>
         </nav>
 
@@ -31,9 +31,42 @@
             class="search-input ai-tag-review-search"
             placeholder="搜索视频、路径、候选标签"
           />
-          <p v-else class="same-source-help">同源判断只提供证据；确认或删除后会退出当前待审列表。</p>
+          <p v-else class="same-source-help">同源判断只提供证据；确认后可「去清理」决定删哪一个，删除后会退出当前待审列表。</p>
           <button type="button" class="btn-secondary" @click="loadCandidates" :disabled="loading">刷新</button>
         </div>
+
+        <!-- 批量审阅（D-PC29 / META-11）：结构化筛选叠加关键词；「批准筛选结果」只交出
+             已加载且命中筛选的候选 ID；「按标签整批批准」才走服务端筛选，并先预览数量。 -->
+        <div v-if="reviewSection === 'tags'" class="ai-tag-review-batch-bar" data-test="ai-review-batch-bar">
+          <select v-model="filterConfidence" class="select-input ai-tag-review-filter" aria-label="按置信度筛选" data-test="ai-review-filter-confidence">
+            <option value="">全部置信度</option>
+            <option value="high">仅高置信</option>
+            <option value="medium">仅中置信</option>
+          </select>
+          <select v-model.number="filterTagID" class="select-input ai-tag-review-filter" aria-label="按候选标签筛选" data-test="ai-review-filter-tag">
+            <option :value="0">全部候选标签</option>
+            <option v-for="option in tagOptions" :key="option.id" :value="option.id">{{ option.name }}</option>
+          </select>
+          <button
+            type="button"
+            class="btn-primary btn-compact"
+            data-test="ai-approve-filtered"
+            :disabled="!hasActiveFilter || !filteredApprovableIDs.length || processingIds.includes('batch-filtered')"
+            :title="hasActiveFilter ? '批准当前筛选出的已加载候选' : '先设置筛选条件'"
+            @click="approveFilteredResults"
+          >批准筛选结果（{{ filteredApprovableIDs.length }}）</button>
+          <button
+            type="button"
+            class="btn-secondary btn-compact"
+            data-test="ai-approve-by-tag"
+            :disabled="!filterTagID || processingIds.includes('batch-tag')"
+            title="按所选标签批准全部待审候选，包括尚未加载的"
+            @click="approveByTag"
+          >按标签整批批准…</button>
+          <span class="help-text ai-tag-review-batch-hint">手动添加标签只会让同一标签的候选退出待审，不会作废这个视频的其他候选。</span>
+        </div>
+
+        <p v-if="notice && reviewSection !== 'face'" class="ai-tag-review-notice" role="status" data-test="ai-review-notice">{{ notice }}</p>
 
         <div class="ai-review-workbench-content" data-test="ai-review-scroll-area">
           <!-- 人物候选面板自己管加载与报错，不受 AI 标签候选那一次请求的成败影响。 -->
@@ -86,8 +119,16 @@
                   <button type="button" class="btn-secondary btn-compact" title="同时打开两个视频" @click="previewSameSource(relation)" :disabled="processingIds.includes(`same-source-preview-${relation.id}`)">预览</button>
                   <button type="button" class="btn-danger btn-compact" @click="openSameSourceDelete(relation, 'a')" :disabled="processingIds.includes(`same-source-delete-${relation.video_a_id}`)">删除 A</button>
                   <button type="button" class="btn-danger btn-compact" @click="openSameSourceDelete(relation, 'b')" :disabled="processingIds.includes(`same-source-delete-${relation.video_b_id}`)">删除 B</button>
-                  <button type="button" class="btn-primary btn-compact" @click="confirmSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">确认同源</button>
-                  <button type="button" class="btn-secondary btn-compact" @click="rejectSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">不是同源</button>
+                  <!-- D-PC27：确认同源之后卡片留下，给出「去清理」——清理中心会把这一对标为
+                       「已确认同源」，用户只需决定删哪一个。 -->
+                  <template v-if="relation.confirmed">
+                    <span class="same-source-confirmed-badge" :data-test="`same-source-confirmed-${relation.id}`">已确认同源</span>
+                    <button type="button" class="btn-primary btn-compact" :data-test="`same-source-go-cleanup-${relation.id}`" @click="goToCleanup(relation)">去清理</button>
+                  </template>
+                  <template v-else>
+                    <button type="button" class="btn-primary btn-compact" @click="confirmSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">确认同源</button>
+                    <button type="button" class="btn-secondary btn-compact" @click="rejectSameSource(relation)" :disabled="processingIds.includes(`same-source-${relation.id}`)">不是同源</button>
+                  </template>
                 </div>
               </div>
             </section>
@@ -95,7 +136,7 @@
           </template>
           <template v-else>
             <!-- 还有下一页时不能说"暂无"：那只是当页被处理空了。 -->
-            <div v-if="groups.length === 0 && !candidateCursor" class="ai-tag-review-empty">{{ reviewSearch.trim() ? '没有匹配的待审 AI 标签' : '暂无待审 AI 标签' }}</div>
+            <div v-if="groups.length === 0 && !candidateCursor" class="ai-tag-review-empty">{{ hasActiveFilter ? '没有匹配的待审 AI 标签' : '暂无待审 AI 标签' }}</div>
             <div v-if="groups.length" class="ai-tag-review-list">
               <section v-for="group in groups" :key="group.videoId" class="ai-video-group">
                 <div class="ai-video-title">
@@ -125,6 +166,13 @@
                   </div>
                 </div>
                 <div class="ai-video-actions">
+                  <button
+                    type="button"
+                    class="btn-primary btn-compact"
+                    :data-test="`ai-approve-group-${group.videoId}`"
+                    :disabled="group.videoDeleted || !approvableCandidateIDs(group.candidates).length || processingIds.includes(`batch-group-${group.videoId}`)"
+                    @click="approveGroup(group)"
+                  >批准本组全部</button>
                   <button type="button" class="btn-secondary btn-compact" @click="previewVideo(group.videoId)" :disabled="group.videoDeleted || processingIds.includes(`preview-${group.videoId}`)">预览视频</button>
                   <button type="button" class="btn-secondary btn-compact" @click="openRenameDialog(group)" :disabled="group.videoDeleted || processingIds.includes(`rename-${group.videoId}`)">重命名</button>
                   <button type="button" class="btn-secondary btn-compact" @click="openManualTagDialog(group)" :disabled="group.videoDeleted">手动添加标签</button>
@@ -249,13 +297,16 @@
 </template>
 
 <script>
-import { ApproveAITagCandidate, ConfirmSameSourceRelation, DeleteVideo, GetAITaggingStatusSummary, ListAITagCandidatePage, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
+import { ApproveAITagCandidate, ApproveAITagCandidates, ApproveAITagCandidatesByFilter, ConfirmSameSourceRelation, CountAITagCandidatesByFilter, DeleteVideo, GetAITaggingStatusSummary, ListAITagCandidatePage, ListSameSourceRelations, MarkSameSourceRelationRead, PreviewExternally, RejectAITagCandidate, RejectAITagCandidatesByVideo, RejectSameSourceRelation, RenameVideo, RetryAITagging } from '../../wailsjs/go/main/App';
 import AddTagDialog from './AddTagDialog.vue';
 import AIQualityPanel from './AIQualityPanel.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import BaseModal from './ui/BaseModal.vue';
-import { appendCandidates, confidenceMeta, createRejectVideoConfirm, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia } from '../utils/aiTagReview.js';
+import { appendCandidates, applyBatchApprovalResult, approvableCandidateIDs, batchApprovalSummaryText, candidateTagOptions, confidenceMeta, createRejectVideoConfirm, filterCandidatesByAttributes, filterCandidatesForReview, groupCandidatesByVideo, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia, removeCandidatesForManualTags } from '../utils/aiTagReview.js';
 import { formatMediaMeta } from '../utils/mediaDetails.js';
+import { confirmAction } from '../utils/feedback.js';
+
+const CONFIDENCE_LABELS = { high: '高置信', medium: '中置信' };
 
 export default {
   name: 'AITagReviewDialog',
@@ -265,10 +316,17 @@ export default {
     tags: { type: Array, default: () => [] },
     qualityEnabled: { type: Boolean, default: true },
   },
-  emits: ['close', 'changed'],
+  // open-cleanup（P-035 新增）：确认同源后点「去清理」，载荷 { relationId, videoIds: [a, b] }；
+  // 宿主页负责关掉本弹窗、打开清理中心并定位这一对。
+  emits: ['close', 'changed', 'open-cleanup'],
   data() {
     return {
       candidates: [],
+      // 结构化筛选（D-PC29）：与关键词叠加，「批准筛选结果」按叠加后的已加载候选批准。
+      filterConfidence: '',
+      filterTagID: 0,
+      // 批量批准结果、手动加标签之后的说明。与 error 分开：error 会把整个列表换成报错。
+      notice: '',
       // 候选按 id 游标分页：candidateCursor 非 0 表示后端还有下一页。
       candidateCursor: 0,
       loadingMore: false,
@@ -293,10 +351,30 @@ export default {
   },
   computed: {
     filteredCandidates() {
-      return filterCandidatesForReview(this.candidates, this.reviewSearch);
+      const structured = filterCandidatesByAttributes(this.candidates, { confidence: this.filterConfidence, tagId: this.filterTagID });
+      return filterCandidatesForReview(structured, this.reviewSearch);
     },
     groups() {
       return groupCandidatesByVideo(this.filteredCandidates);
+    },
+    hasActiveFilter() {
+      return Boolean(String(this.reviewSearch || '').trim() || this.filterConfidence || this.filterTagID);
+    },
+    // 「批准筛选结果」只在有筛选条件时可用：没有筛选等于一键批准全部已加载，那不是筛选。
+    filteredApprovableIDs() {
+      return this.hasActiveFilter ? approvableCandidateIDs(this.filteredCandidates) : [];
+    },
+    tagOptions() {
+      return candidateTagOptions(this.candidates);
+    },
+    // 待审总数取后端汇总（META-08）；汇总还没回来时退回已加载条数。
+    pendingCandidateTotal() {
+      if (typeof this.summary?.pending === 'number') return this.summary.pending;
+      return `${this.candidates.length}${this.candidateCursor ? '+' : ''}`;
+    },
+    // 确认过的同源留在列表里等「去清理」，但已经不算待审了。
+    pendingSameSourceCount() {
+      return this.sameSourceRelations.filter(relation => !relation.confirmed).length;
     },
   },
   watch: {
@@ -304,12 +382,19 @@ export default {
     reviewSearch(value) {
       if (String(value || '').trim()) this.loadAllCandidatesForSearch();
     },
+    // 同源「已读」的时机（D-PC27）：用户真的切到同源页签才算看过，打开弹窗不算。
+    reviewSection(value) {
+      if (value === 'same-source') this.markSameSourceRead();
+    },
     visible(value) {
       if (value) {
         // 弹窗是常驻挂载的：不在每次打开时清掉，缩略图一次失败就会占位到重启应用。
         this.thumbnailFailures = {};
         this.reviewSection = 'tags';
         this.reviewSearch = '';
+        this.filterConfidence = '';
+        this.filterTagID = 0;
+        this.notice = '';
         this.loadCandidates();
       }
     },
@@ -317,6 +402,7 @@ export default {
   methods: {
     confidenceMeta,
     formatMediaMeta,
+    approvableCandidateIDs,
     thumbnailURL(videoId) {
       return `/preview/thumbnail/${videoId}`;
     },
@@ -344,18 +430,36 @@ export default {
         this.candidates = Array.isArray(candidatePage?.items) ? candidatePage.items : [];
         this.candidateCursor = Number(candidatePage?.next_id || 0);
         this.sameSourceRelations = Array.isArray(relations) ? relations : [];
-        const unread = this.sameSourceRelations.filter(relation => relation.is_unread);
-        if (unread.length) {
-          await Promise.all(unread.map(relation => MarkSameSourceRelationRead(relation.id)));
-          this.sameSourceRelations = this.sameSourceRelations.map(relation => ({ ...relation, is_unread: false }));
-          if (this.summary) this.summary.same_source_unread = 0;
-          this.$emit('changed');
-        }
+        // 已经停在同源页签上（刷新、删除后重取）时，新列表也算看过了。
+        if (this.reviewSection === 'same-source') await this.markSameSourceRead();
       } catch (err) {
         if (token !== this.candidateLoadToken) return;
         this.error = '加载 AI 标签候选失败: ' + err;
       } finally {
         if (!silent) this.loading = false;
+      }
+    },
+    // D-PC27：同源「全部标已读」只在用户切到同源页签时做；打开弹窗、停在标签页签都不算。
+    async markSameSourceRead() {
+      const unread = this.sameSourceRelations.filter(relation => relation.is_unread);
+      if (!unread.length) return;
+      try {
+        await Promise.all(unread.map(relation => MarkSameSourceRelationRead(relation.id)));
+        const readIDs = new Set(unread.map(relation => Number(relation.id)));
+        this.sameSourceRelations = this.sameSourceRelations.map(relation => (readIDs.has(Number(relation.id)) ? { ...relation, is_unread: false } : relation));
+        if (this.summary) this.summary.same_source_unread = 0;
+        this.$emit('changed');
+      } catch (err) {
+        this.error = '标记同源已读失败: ' + err;
+      }
+    },
+    // 局部移除之后刷新汇总里的待审总数；读不到就保留上一次的数字（它只是个计数）。
+    async refreshSummary() {
+      try {
+        const summary = await GetAITaggingStatusSummary();
+        if (summary) this.summary = summary;
+      } catch (err) {
+        console.warn('刷新 AI 标签汇总失败:', err);
       }
     },
     // 取下一页并追加。返回 true 表示这次真的取到了数据，供搜索时的连续翻页判断收敛。
@@ -406,10 +510,11 @@ export default {
     async approve(candidate) {
       await this.withProcessing(candidate.id, async () => {
         const item = await ApproveAITagCandidate(candidate.id);
-        // 后端同时作废同视频同名候选，手工标签冲突时整视频作废：按同一规则局部移除，
-        // 不再整表重拉（重拉会把已翻出来的页丢掉）。
+        // 后端同时作废同视频同标签的其他候选：按同一规则局部移除，不再整表重拉
+        // （重拉会把已翻出来的页丢掉）。同视频其他标签的候选保留（META-06）。
         this.candidates = removeCandidatesAfterApproval(this.candidates, candidate, item, 'video_id');
         this.$emit('changed');
+        this.refreshSummary();
         await this.fillEmptyCandidatePage();
       });
     },
@@ -417,8 +522,72 @@ export default {
       await this.withProcessing(candidate.id, async () => {
         await RejectAITagCandidate(candidate.id);
         this.candidates = removeCandidateById(this.candidates, candidate.id);
+        this.refreshSummary();
         await this.fillEmptyCandidatePage();
       });
+    },
+    // 批量批准的共同收尾（META-11）：逐项结果落到已加载列表上，摘要说清成功、已失效与失败。
+    async runBatchApproval(key, request) {
+      await this.withProcessing(key, async () => {
+        const result = await request();
+        const { candidates, summary } = applyBatchApprovalResult(this.candidates, result);
+        this.candidates = candidates;
+        this.notice = batchApprovalSummaryText(summary);
+        if (summary.succeeded || summary.superseded) this.$emit('changed');
+        this.refreshSummary();
+        await this.fillEmptyCandidatePage();
+      });
+    },
+    async approveGroup(group) {
+      const ids = approvableCandidateIDs(group?.candidates);
+      if (!ids.length) return;
+      const confirmed = await confirmAction({
+        title: '批准本组全部',
+        message: `批准「${group.videoName}」已加载的 ${ids.length} 条候选？同一标签的重复候选只会批准一条，其余自动退出待审。`,
+        confirmText: '全部批准'
+      });
+      if (!confirmed) return;
+      await this.runBatchApproval(`batch-group-${group.videoId}`, () => ApproveAITagCandidates(ids));
+    },
+    // 「批准筛选结果」：把已加载且命中当前筛选的候选 ID 交给 ApproveAITagCandidates。
+    // 不走 ByFilter——关键词检索的口径在前端，服务端复现不了（详细设计 §1.2b §6.3）。
+    async approveFilteredResults() {
+      const ids = [...this.filteredApprovableIDs];
+      if (!ids.length) return;
+      const confirmed = await confirmAction({
+        title: '批准筛选结果',
+        message: `批准当前筛选出的 ${ids.length} 条候选？只包含已经加载出来的候选；同一视频同一标签只批准一条，其余自动退出待审。`,
+        confirmText: '批准'
+      });
+      if (!confirmed) return;
+      await this.runBatchApproval('batch-filtered', () => ApproveAITagCandidates(ids));
+    },
+    // 按标签整批批准（含尚未加载的候选）：服务端按 {tag_id, confidence} 解析，批准前先用
+    // CountAITagCandidatesByFilter 按同一口径预览会动到多少个视频。
+    async approveByTag() {
+      const tagID = Number(this.filterTagID) || 0;
+      if (!tagID) return;
+      const filter = this.filterConfidence ? { tag_id: tagID, confidence: this.filterConfidence } : { tag_id: tagID };
+      const tagName = this.tagOptions.find(option => option.id === tagID)?.name || `标签 #${tagID}`;
+      const scope = this.filterConfidence ? `${CONFIDENCE_LABELS[this.filterConfidence] || this.filterConfidence}的` : '';
+      let count = 0;
+      try {
+        count = Number(await CountAITagCandidatesByFilter(filter)) || 0;
+      } catch (err) {
+        this.error = '统计可批准的候选失败: ' + err;
+        return;
+      }
+      if (!count) {
+        this.notice = `「${tagName}」没有可批准的${scope}待审候选（只统计高、中置信且视频未删除的）。`;
+        return;
+      }
+      const confirmed = await confirmAction({
+        title: '按标签整批批准',
+        message: `为 ${count} 个视频批准${scope}「${tagName}」标签候选？包括尚未加载的候选，批准后标签会直接加到这些视频上。`,
+        confirmText: `批准 ${count} 个视频`
+      });
+      if (!confirmed) return;
+      await this.runBatchApproval('batch-tag', () => ApproveAITagCandidatesByFilter(filter));
     },
     async rejectSameSource(relation) {
       await this.withProcessing(`same-source-${relation.id}`, async () => {
@@ -430,8 +599,16 @@ export default {
     async confirmSameSource(relation) {
       await this.withProcessing(`same-source-${relation.id}`, async () => {
         await ConfirmSameSourceRelation(relation.id);
-        this.sameSourceRelations = this.sameSourceRelations.filter(item => Number(item.id) !== Number(relation.id));
+        // 卡片留下并换成「已确认同源 · 去清理」：确认本身不删任何东西，下一步是决定删哪个。
+        this.sameSourceRelations = this.sameSourceRelations.map(item => (Number(item.id) === Number(relation.id) ? { ...item, confirmed: true, is_unread: false } : item));
         this.$emit('changed');
+      });
+    },
+    goToCleanup(relation) {
+      if (!relation?.id) return;
+      this.$emit('open-cleanup', {
+        relationId: Number(relation.id),
+        videoIds: [Number(relation.video_a_id), Number(relation.video_b_id)]
       });
     },
     async rejectVideoGroup(group) {
@@ -452,6 +629,7 @@ export default {
         this.candidates = this.candidates.filter(candidate => !rejectedIds.has(Number(candidate.id)));
         this.cancelRejectVideoGroup();
         this.$emit('changed');
+        this.refreshSummary();
         await this.fillEmptyCandidatePage();
       });
     },
@@ -461,6 +639,7 @@ export default {
         // RetryVideo 把这个视频的待审候选全部置 superseded，局部移除就够，
         // 不必回到第一页；新一轮候选要等后台分析跑完才出现。
         this.candidates = removeCandidatesByMedia(this.candidates, 'video_id', videoId);
+        this.refreshSummary();
         await this.fillEmptyCandidatePage();
       });
     },
@@ -523,8 +702,29 @@ export default {
     closeManualTagDialog() {
       this.manualTagDialog = { show: false, video: null };
     },
-    async handleManualTagAdded() {
-      await this.loadCandidates({ silent: true });
+    // 手动加标签之后（META-06）：后端把同视频、同标签的待审候选置 superseded（原因「已手动
+    // 添加」），这里按 (video_id, tag_id) 同一口径局部移除，并把新标签补到这个视频的「已有标签」上。
+    // 同视频其他标签的候选保留，不再回到第一页重拉。
+    async handleManualTagAdded(payload = {}) {
+      const videoId = Number(payload?.videoIds?.[0] || this.manualTagDialog.video?.id || 0);
+      const tagIds = (Array.isArray(payload?.tagIds) ? payload.tagIds : []).map(Number).filter(Boolean);
+      if (videoId && tagIds.length) {
+        const before = this.candidates.length;
+        this.candidates = removeCandidatesForManualTags(this.candidates, videoId, tagIds);
+        const removed = before - this.candidates.length;
+        const added = Array.isArray(payload?.tags) ? payload.tags : [];
+        this.candidates = this.candidates.map(candidate => {
+          if (Number(candidate.video_id) !== videoId) return candidate;
+          const existing = Array.isArray(candidate.video?.tags) ? candidate.video.tags : [];
+          const known = new Set(existing.map(tag => Number(tag?.id)));
+          return { ...candidate, video: { ...(candidate.video || {}), tags: [...existing, ...added.filter(tag => !known.has(Number(tag?.id)))] } };
+        });
+        this.notice = removed
+          ? `已手动添加标签；同一标签的 ${removed} 条候选已退出待审，这个视频的其他候选保留。`
+          : '已手动添加标签；这个视频的其他候选保留，可以继续审阅。';
+        this.refreshSummary();
+        await this.fillEmptyCandidatePage();
+      }
       this.$emit('changed');
     },
     tagBgColor(hex) {
@@ -594,6 +794,7 @@ export default {
       if (this.processingIds.includes(id)) return;
       this.processingIds = [...this.processingIds, id];
       this.error = '';
+      this.notice = '';
       try {
         await action();
       } catch (err) {
@@ -699,6 +900,47 @@ export default {
   margin: 0;
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.ai-tag-review-batch-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 0 0 10px;
+  min-width: 0;
+}
+
+.ai-tag-review-filter {
+  flex: 0 1 160px;
+  min-width: 120px;
+}
+
+.ai-tag-review-batch-hint {
+  flex: 1 1 100%;
+  margin: 0;
+}
+
+.ai-tag-review-notice {
+  margin: 0 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--accent-border);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--text-primary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.same-source-confirmed-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .ai-review-split {

@@ -12,6 +12,11 @@
       </div>
       <div v-if="selectedEntity" class="entity-library__search">
         <button type="button" class="btn-primary" @click="drawerEntity = { ...selectedEntity }">编辑与批量关联</button>
+        <!-- D-PC32：人物合并与显式删除（META-03 / META-05）。 -->
+        <template v-if="isPeople">
+          <button type="button" class="btn-secondary" data-test="person-merge-open" :disabled="personActionBusy" @click="openMergeForm">合并其他人物</button>
+          <button type="button" class="btn-danger" data-test="person-delete" :disabled="personActionBusy" @click="requestDeletePerson">删除人物</button>
+        </template>
       </div>
       <div v-else class="entity-library__search">
         <input v-model="keyword" :placeholder="isPeople ? '搜索显示或原始姓名' : '搜索名称或简介'" @keyup.enter="reload" />
@@ -26,6 +31,28 @@
     </section>
 
     <p v-if="error" class="entity-library__error" role="alert">{{ error }}</p>
+
+    <!-- 合并人物：当前人物是保留目标，勾选要并入的同一个人（例如 NFO 导入重复建出来的同名人物）。 -->
+    <section v-if="isPeople && selectedEntity && mergeForm.open" class="entity-person-merge glass-surface" data-test="person-merge-panel">
+      <p>把其他人物合并到「{{ selectedEntityName }}」：它们的视频、图片关系并入「{{ selectedEntityName }}」（重复的自动去掉），人脸组改指向「{{ selectedEntityName }}」，被并入的人物随后删除。</p>
+      <div class="entity-library__search">
+        <input v-model="mergeForm.keyword" placeholder="搜索要并入的人物" data-test="person-merge-search" @keyup.enter="searchMergeCandidates" />
+        <button type="button" class="btn-secondary" :disabled="mergeForm.searching" @click="searchMergeCandidates">搜索</button>
+      </div>
+      <div class="entity-person-merge__options">
+        <label v-for="item in mergeCandidates" :key="entityID(item)" class="entity-person-merge__option" :data-test="`person-merge-option-${entityID(item)}`">
+          <input type="checkbox" :checked="mergeForm.selectedIDs.includes(entityID(item))" @change="toggleMergeSource(item, $event.target.checked)" />
+          <span>{{ entityName(item) }}</span>
+          <small>{{ entitySecondary(item) }} · {{ item.active_video_count || 0 }} 部视频 · {{ item.active_image_count || 0 }} 张图片 · #{{ entityID(item) }}</small>
+        </label>
+        <p v-if="!mergeForm.searching && !mergeCandidates.length" class="entity-person-merge__empty">没有可并入的人物，换个关键词试试。</p>
+      </div>
+      <p v-if="mergeForm.error" class="entity-library__error" role="alert">{{ mergeForm.error }}</p>
+      <div class="entity-person-merge__actions">
+        <button type="button" class="btn-secondary" :disabled="personActionBusy" @click="closeMergeForm">取消</button>
+        <button type="button" class="btn-danger" data-test="person-merge-submit" :disabled="personActionBusy || !mergeForm.selectedIDs.length" @click="submitMerge">合并（{{ mergeForm.selectedIDs.length }}）</button>
+      </div>
+    </section>
 
     <!-- 人脸分析认出来但还没命名的面孔就在这里等着：命名或关联之后它们才成为下面列表里的人物。
          面板与 AI 标签管理里的「人物候选」是同一个组件、同一批簇。 -->
@@ -136,17 +163,31 @@
 
 <script>
 import {
-  CreateCollection, CreatePerson, GetCollectionDetail, GetPersonDetail, GetPersonImages, ListCollections, ListPeople, OpenDirectory, PlayVideo,
-  PreviewExternally, UpdateVideoWatchProgress, RevealImage, RemovePersonImage
+  CreateCollection, CreatePerson, DeletePerson, GetCollectionDetail, GetPersonDeletionImpact, GetPersonDetail, GetPersonImages, ListCollections, ListPeople,
+  MergePeople, OpenDirectory, PlayVideo, PreviewExternally, UpdateVideoWatchProgress, RevealImage, RemovePersonImage
 } from '../../wailsjs/go/main/App';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
-import { confirmAction } from '../utils/feedback.js';
+import { confirmAction, notify, notifySuccess } from '../utils/feedback.js';
 import { formatBytes, formatDuration } from '../utils/mediaDetails.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
+
+// UpdateVideoWatchProgress 的起播来源（D-PC42）。
+const WATCH_PROGRESS_ORIGINS = ['resume', 'start', 'jump'];
+// 人物合并 / 删除的错误码（D-PC32）。
+const PERSON_ERROR_TEXT = {
+  invalid_merge: '不能把人物合并到它自己。',
+  person_not_found: '有人物已经不存在了，列表已刷新。'
+};
+function personErrorText(err, fallback) {
+  const raw = String(err?.message || err || '');
+  const code = Object.keys(PERSON_ERROR_TEXT).find(item => raw.includes(item));
+  return { code, text: code ? PERSON_ERROR_TEXT[code] : `${fallback}：${raw}` };
+}
+const emptyMergeForm = () => ({ open: false, keyword: '', results: [], selectedIDs: [], searching: false, error: '' });
 
 export default {
   name: 'EntityLibraryPage',
@@ -167,7 +208,8 @@ export default {
       personMediaDeleteTarget: null,
       // 待命名人脸分区：面板自己拉数据，这里只记摘要与收起状态。没有待处理项时默认收起，
       // 用户手动点过展开/收起之后就不再替他做主。
-      faceReviewCounts: null, faceReviewCollapsed: false, faceReviewToggled: false
+      faceReviewCounts: null, faceReviewCollapsed: false, faceReviewToggled: false,
+      mergeForm: emptyMergeForm(), personActionBusy: false
     };
   },
   computed: {
@@ -179,10 +221,15 @@ export default {
       const counts = this.faceReviewCounts;
       if (!counts) return '正在读取人脸候选…';
       const parts = [];
-      if (counts.unnamed) parts.push(`${counts.unnamed} 组未命名`);
+      // 未命名按页加载（D-PC29）：还有下一页时写成「N+」，不假装这就是全部。
+      if (counts.unnamed) parts.push(`${counts.unnamed}${counts.unnamedHasMore ? '+' : ''} 组未命名`);
       if (counts.appendPending) parts.push(`${counts.appendPending} 组待确认追加`);
       if (!parts.length) return '暂无待处理的人脸候选。人脸分析在设置页启动，认出的面孔会出现在这里。';
       return `${parts.join(' · ')}；命名或关联后会成为下面列表里的人物。`;
+    },
+    mergeCandidates() {
+      const selfID = Number(this.selectedEntity?.id || 0);
+      return this.mergeForm.results.filter(item => this.entityID(item) && this.entityID(item) !== selfID);
     }
   },
   watch: {
@@ -194,14 +241,25 @@ export default {
     this.reload();
     this.applyFocusEntity(this.focusEntity);
     // 命令面板的本页动作（D-029）。两种实体各挂一个 scope：两个页面不会同时挂载。
-    registerCommands(this.isPeople ? 'entity-person' : 'entity-collection', [{
+    const commands = [{
       id: this.isPeople ? 'action:person-reload' : 'action:collection-reload',
       group: 'action',
       label: this.isPeople ? '刷新人物列表' : '刷新作品集列表',
       keywords: ['reload', '刷新'],
       enabled: () => !this.loading,
       run: () => this.reload()
-    }]);
+    }];
+    // people.openFaceReview 是待处理工作台跳转用的固定命令 ID（详细设计 §6.1 / D-PC27）。
+    if (this.isPeople) {
+      commands.push({
+        id: 'people.openFaceReview',
+        group: 'action',
+        label: '处理待命名人脸',
+        keywords: ['face', '人脸', '人物候选', '待处理'],
+        run: () => this.openFaceReview()
+      });
+    }
+    registerCommands(this.isPeople ? 'entity-person' : 'entity-collection', commands);
   },
   beforeUnmount() {
     unregisterCommands(this.isPeople ? 'entity-person' : 'entity-collection');
@@ -265,7 +323,7 @@ export default {
     formatBytes,
     formatDuration,
     onFaceReviewLoaded(counts) {
-      this.faceReviewCounts = { unnamed: Number(counts?.unnamed || 0), appendPending: Number(counts?.appendPending || 0) };
+      this.faceReviewCounts = { unnamed: Number(counts?.unnamed || 0), appendPending: Number(counts?.appendPending || 0), unnamedHasMore: Boolean(counts?.unnamedHasMore) };
       if (!this.faceReviewToggled) {
         this.faceReviewCollapsed = this.faceReviewCounts.unnamed + this.faceReviewCounts.appendPending === 0;
       }
@@ -273,6 +331,121 @@ export default {
     toggleFaceReview() {
       this.faceReviewToggled = true;
       this.faceReviewCollapsed = !this.faceReviewCollapsed;
+    },
+    // 从待处理工作台跳过来：回到人物列表、展开「待命名人脸」并滚到它。展开算用户的选择，之后不再自动收起。
+    openFaceReview() {
+      if (!this.isPeople) return;
+      if (this.selectedEntity) this.closeEntity();
+      this.faceReviewToggled = true;
+      this.faceReviewCollapsed = false;
+      this.$nextTick(() => this.$el?.querySelector?.('[data-test="people-face-review"]')?.scrollIntoView?.({ block: 'start' }));
+    },
+    openMergeForm() {
+      this.mergeForm = { ...emptyMergeForm(), open: true };
+      this.searchMergeCandidates();
+    },
+    closeMergeForm() {
+      this.mergeForm = emptyMergeForm();
+    },
+    async searchMergeCandidates() {
+      const token = Symbol('person-merge-search');
+      this._mergeSearchToken = token;
+      this.mergeForm.searching = true;
+      this.mergeForm.error = '';
+      try {
+        const results = await ListPeople(this.mergeForm.keyword.trim(), '', 0, 50);
+        if (this._mergeSearchToken !== token) return;
+        this.mergeForm.results = results || [];
+      } catch (err) {
+        if (this._mergeSearchToken === token) this.mergeForm.error = `搜索人物失败：${err}`;
+      } finally {
+        if (this._mergeSearchToken === token) this.mergeForm.searching = false;
+      }
+    },
+    toggleMergeSource(item, selected) {
+      const id = this.entityID(item);
+      const others = this.mergeForm.selectedIDs.filter(value => value !== id);
+      this.mergeForm.selectedIDs = selected ? [...others, id] : others;
+      // 选中的人物可能被下一次搜索换掉：把名字留一份，确认框和结果提示要用。
+      this._mergeNames = { ...(this._mergeNames || {}), [id]: this.entityName(item) || `人物 #${id}` };
+    },
+    async submitMerge() {
+      const targetID = Number(this.selectedEntity?.id || 0);
+      const sourceIDs = [...this.mergeForm.selectedIDs];
+      if (!this.isPeople || !targetID || !sourceIDs.length || this.personActionBusy) return;
+      const targetName = this.selectedEntityName;
+      const names = sourceIDs.map(id => `「${this._mergeNames?.[id] || `人物 #${id}`}」`).join('、');
+      const confirmed = await confirmAction({
+        title: '合并人物',
+        message: `将 ${names} 合并到「${targetName}」？它们的视频、图片关系会并入「${targetName}」（重复的自动去掉），人脸组改指向「${targetName}」，${names} 随后删除。此操作不能撤销。`,
+        confirmText: '合并',
+        danger: true
+      });
+      if (!confirmed) return;
+      this.personActionBusy = true;
+      this.mergeForm.error = '';
+      try {
+        const result = await MergePeople(targetID, sourceIDs);
+        const removed = new Set(sourceIDs);
+        this.items = this.items.filter(item => !removed.has(this.entityID(item)));
+        if (result?.target && Number(this.selectedEntity?.id) === targetID) {
+          this.selectedItem = result.target;
+          this.patchSelectedItem();
+        }
+        notifySuccess(`已把 ${Number(result?.merged_count || sourceIDs.length)} 个人物合并到「${targetName}」：迁移 ${Number(result?.video_links_moved || 0)} 条视频关系、${Number(result?.image_links_moved || 0)} 条图片关系。`);
+        // 头像复制在事务之后做，失败只进 warnings（详细设计 §1.2b）：合并本身已经成功。
+        if (result?.warnings?.length) notify(`合并已完成，另有提示：${result.warnings.join('；')}`);
+        this.closeMergeForm();
+        if (Number(this.selectedEntity?.id) === targetID) {
+          await this.loadEntityVideos(true);
+          if (this.drawerEntity?.type === 'person' && Number(this.drawerEntity.id) === targetID) {
+            this.drawerEntity = null; await this.$nextTick();
+            if (Number(this.selectedEntity?.id) === targetID) this.drawerEntity = { type: 'person', id: targetID };
+          }
+        }
+      } catch (err) {
+        const { code, text } = personErrorText(err, '合并人物失败');
+        // 重搜会清空提示，先重搜再写原因。
+        if (code === 'person_not_found') await this.searchMergeCandidates();
+        this.mergeForm.error = text;
+      } finally {
+        this.personActionBusy = false;
+      }
+    },
+    // 显式删除人物（META-05）：先读影响范围写进确认框；零关系的人物也能在这里删掉。
+    async requestDeletePerson() {
+      const personID = Number(this.selectedEntity?.id || 0);
+      if (!this.isPeople || !personID || this.personActionBusy) return;
+      const name = this.selectedEntityName;
+      this.personActionBusy = true;
+      this.error = '';
+      try {
+        let impact;
+        try {
+          impact = await GetPersonDeletionImpact(personID);
+        } catch (err) {
+          this.error = personErrorText(err, '读取删除影响失败').text;
+          return;
+        }
+        const faces = Number(impact?.face_cluster_count || 0);
+        const confirmed = await confirmAction({
+          title: '删除人物',
+          message: `删除「${name}」？将解除它与 ${Number(impact?.video_count || 0)} 部视频、${Number(impact?.image_count || 0)} 张图片的关系${faces ? `，${faces} 组人脸回到待命名` : ''}；视频、图片文件和片库记录都会保留。此操作不能撤销。`,
+          confirmText: '删除人物',
+          danger: true
+        });
+        if (!confirmed) return;
+        await DeletePerson(personID);
+        notifySuccess(`已删除人物「${name}」。`);
+        this.closeEntity();
+        await this.reload();
+      } catch (err) {
+        const { code, text } = personErrorText(err, '删除人物失败');
+        if (code === 'person_not_found') { this.closeEntity(); await this.reload(); }
+        this.error = text;
+      } finally {
+        this.personActionBusy = false;
+      }
     },
     setupInfiniteLoading() {
       if (typeof IntersectionObserver === 'undefined') return;
@@ -438,9 +611,15 @@ export default {
       try { await PreviewExternally(video.id); }
       catch (err) { this.error = `外部预览失败：${err}`; }
     },
+    // UpdateVideoWatchProgress 的 5 参契约（D-PC42）：duration 只在库内时长未知时采用，拿不到就传 0；
+    // origin 优先用抽屉上报的起播来源。本页的抽屉从不带字幕命中或指定时间打开，会话只会从断点或
+    // 片头开始——这两种在后端同样允许回写更早的位置（只有 jump 限制只前进），所以缺省按 resume。
     handleWatchProgress(progress) {
       const videoID = Number(progress?.videoID || 0); if (!videoID) return;
-      const save = () => UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), !!progress?.completed);
+      const origin = WATCH_PROGRESS_ORIGINS.includes(progress?.origin) ? progress.origin : 'resume';
+      const reportedDuration = Number(progress?.durationSeconds);
+      const duration = Number.isFinite(reportedDuration) && reportedDuration > 0 ? reportedDuration : 0;
+      const save = () => UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
       this._watchProgressPromise = (this._watchProgressPromise || Promise.resolve()).then(save).catch(err => { this.error = `保存观看进度失败：${err}`; });
     },
     async handleCollectionDeleted() { this.closeEntity(); await this.reload(); },
@@ -483,6 +662,15 @@ export default {
 .entity-image-card figcaption { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
 .entity-image-card__size { color: var(--text-muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 .entity-library__more { align-self: center; }.entity-library__sentinel { height: 1px; }.entity-library__error { color: var(--danger-color); }
+.entity-person-merge { display: grid; gap: 10px; padding: 12px 14px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.entity-person-merge > p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.entity-person-merge__options { display: grid; gap: 4px; max-height: 240px; overflow-y: auto; }
+.entity-person-merge__option { display: grid; grid-template-columns: auto minmax(0, max-content) minmax(0, 1fr); align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; cursor: pointer; font-size: 13px; }
+.entity-person-merge__option:hover { background: var(--control-hover-bg); }
+.entity-person-merge__option input { min-width: 0; width: auto; padding: 0; }
+.entity-person-merge__option small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
+.entity-person-merge__empty { margin: 0; color: var(--text-muted); font-size: 12px; }
+.entity-person-merge__actions { display: flex; justify-content: flex-end; gap: 8px; }
 @media (max-width: 1100px) { .entity-library--with-drawer { padding-right: 18px; } }
 @media (max-width: 900px) {.entity-library__toolbar,.entity-library__create { align-items: stretch; flex-direction: column; }.entity-library__title { align-items: flex-start; }.entity-library__search { display: flex; }.entity-video-grid { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); } }
 </style>
