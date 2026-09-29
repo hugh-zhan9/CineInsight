@@ -125,19 +125,22 @@ func (a *App) UndoCleanupDismissals(kind string, ids []uint) (*services.CleanupD
 }
 
 // MergeMediaMetadata 把被合并项的整理成果合并到保留项（D-PC48）。kind：video / image。
-// 清理中心在删除确认后、调用删除之前单独调用；返回错误时不要进入删除。
-func (a *App) MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint) (*services.MediaMetadataMergeResult, error) {
-	deps := services.MediaMetadataMergeDeps{Watched: a.videoService}
+// 清理中心在删除确认后、调用删除之前按组单独调用；返回错误时不要进入删除。
+// options：截取片段组传 skip_playback_state / skip_subtitle 都为 true，其余类别都为 false（§9.1）。
+func (a *App) MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, options services.MediaMetadataMergeOptions) (*services.MediaMetadataMergeResult, error) {
+	deps := services.MediaMetadataMergeDeps{Watched: a.videoService, Options: options}
 	if a.subtitleService != nil {
 		deps.Subtitles = services.NewSubtitleFileWriter(a.subtitleService.BaseDir)
 	}
 	result, err := services.MergeMediaMetadata(kind, keeperID, sourceIDs, deps)
 	if err != nil {
-		log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d err=%v", kind, keeperID, len(sourceIDs), err)
+		log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d skip_playback_state=%v skip_subtitle=%v err=%v",
+			kind, keeperID, len(sourceIDs), options.SkipPlaybackState, options.SkipSubtitle, err)
 		return nil, err
 	}
-	log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d tags=%d people=%d collections=%d watched=%v subtitle=%v warnings=%d",
-		kind, keeperID, len(sourceIDs), result.TagsAdded, result.PeopleAdded, result.CollectionsAdded, result.WatchedChanged, result.SubtitleMoved, len(result.Warnings))
+	log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d skip_playback_state=%v skip_subtitle=%v tags=%d people=%d collections=%d watched=%v subtitle=%v warnings=%d",
+		kind, keeperID, len(sourceIDs), options.SkipPlaybackState, options.SkipSubtitle,
+		result.TagsAdded, result.PeopleAdded, result.CollectionsAdded, result.WatchedChanged, result.SubtitleMoved, len(result.Warnings))
 	// 整理项变了，缓存结果里的保留建议与整理图标可能过期。
 	a.invalidateCleanupAnalysisFor(kind == services.MediaMergeKindImage)
 	return result, nil

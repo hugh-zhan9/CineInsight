@@ -133,7 +133,7 @@ assert.match(cleanupPanelSource, /移到废纸篓后可在回收站撤销；在�
 assert.match(cleanupPanelSource, /:disabled="cleanupSelection\.length === 0/, 'the trash button stays disabled while nothing is selected');
 assert.match(cleanupPanelSource, /RejectSameSourceRelation/, 'same-source rejection must still be reachable');
 assert.match(cleanupPanelSource, /cleanup-card-kind/, 'cleanup cards should label their candidate category');
-assert.match(cleanupPanelSource, /:disabled="isCleanupTrashed\(member\) \|\| isCleanupLocked\(member\.id\)"/, 'IMG-05 duplicate keeper rows stay locked until the user picks another keeper');
+assert.match(cleanupPanelSource, /:disabled="cleanupDialog\.processing \|\| isCleanupTrashed\(member\) \|\| isCleanupLocked\(member\.id\)"/, 'IMG-05 duplicate keeper rows stay locked until the user picks another keeper');
 assert.match(cleanupPanelSource, /@click="previewCleanupVideo\(/, 'cleanup candidates should expose preview actions');
 assert.match(cleanupPanelSource, /cleanup-item-actions/, 'cleanup candidate rows should reserve an actions area');
 // 判定阈值从顶部一整段说明挪到了各个类别自己的 tooltip 上——

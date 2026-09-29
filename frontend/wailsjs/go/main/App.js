@@ -962,8 +962,8 @@ export function MarkSameSourceRelationRead(arg1) {
   return window['go']['main']['App']['MarkSameSourceRelationRead'](arg1);
 }
 
-export function MergeMediaMetadata(arg1, arg2, arg3) {
-  return window['go']['main']['App']['MergeMediaMetadata'](arg1, arg2, arg3);
+export function MergeMediaMetadata(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['MergeMediaMetadata'](arg1, arg2, arg3, arg4);
 }
 
 export function MergePeople(arg1, arg2) {

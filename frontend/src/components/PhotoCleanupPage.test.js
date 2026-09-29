@@ -58,6 +58,9 @@ function statusWith(analysis, extra = {}) {
 
 const analysisStatus = () => statusWith({ near_duplicate_groups: [nearGroup()] });
 
+// MergeMediaMetadata 的第 4 个参数（§9.1）：图片只有精确 / 近似两类，两项都不跳过（后端对图片也忽略它们）。
+const FULL_MERGE = { skip_playback_state: false, skip_subtitle: false };
+
 function okResult(ids, batchID = 'batch-1') {
   return { batch_id: batchID, requested: ids.length, succeeded: ids.length, failed: 0, cancelled: 0, items: ids.map(id => ({ id, code: 'ok' })) };
 }
@@ -128,7 +131,8 @@ describe('图片清理审阅', () => {
     wrapper.unmount();
   });
 
-  it('IMG-05 改了保留项之后，按建议全勾过的组跟着换成新的其余项', async () => {
+  // §9.2 主代理裁决（P-032 评审 Minor 2）：原保留项只解除锁定，不自动勾上。
+  it('D-PC49 改了保留项之后，原保留项可勾但不自动勾上', async () => {
     const wrapper = mount(PhotoCleanupPage);
     await flushPromises();
 
@@ -138,7 +142,11 @@ describe('图片清理审阅', () => {
     wrapper.vm.setKeep(entry, entry.members[1]);
     await flushPromises();
 
-    expect(wrapper.vm.selection).toEqual([1]);
+    expect(wrapper.vm.selection).toEqual([]);
+    const toggles = wrapper.findAll('[data-test="cleanup-candidate-toggle"]');
+    expect(toggles[0].element.disabled).toBe(false);
+    expect(toggles[0].element.checked).toBe(false);
+    expect(toggles[1].element.disabled).toBe(true);
     wrapper.unmount();
   });
 
@@ -222,7 +230,7 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
     await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
     await flushPromises();
 
-    expect(calls[0]).toEqual(['merge', 'image', 11, [12]]);
+    expect(calls[0]).toEqual(['merge', 'image', 11, [12], FULL_MERGE]);
     expect(calls[1].slice(0, 3)).toEqual(['delete', [12], true]);
     expect(calls[1][3]).toMatch(/^[0-9a-f]{32}$/);
     expect(api.BatchDeleteImages).not.toHaveBeenCalled();
@@ -245,6 +253,49 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
     expect(api.BatchDeleteImages).not.toHaveBeenCalled();
     expect(wrapper.get('[data-test="cleanup-error"]').text()).toContain('合并元数据失败，没有删除任何图片');
     expect(wrapper.vm.selection).toEqual([12]);
+    expect(wrapper.vm.processing).toBe(false);
+    wrapper.unmount();
+  });
+
+  // P-032 评审 I-1：删除前按锁定规则裁剪勾选。去掉这一步时合并计划会拒绝生成，删除不会发生。
+  it('IMG-03 保留项被强行放进勾选时不会送进删除：先裁剪，再合并与删除其余项', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
+    photoCleanupStore.review.selection = [11, 12];
+    await clickDelete(wrapper);
+
+    const dialog = wrapper.get('[data-test="cleanup-delete-confirm-dialog"]');
+    expect(dialog.get('[data-test="cleanup-delete-summary"]').text()).toContain('将把 1 张图片移到废纸篓');
+    // 合并说明（P-032 评审 Minor 3）：只合并手动标签、撤销删除不撤回合并。
+    expect(dialog.get('[data-test="cleanup-merge-note"]').text()).toContain('标签只合并手动标签');
+    expect(dialog.get('[data-test="cleanup-merge-note"]').text()).toContain('撤销删除不会撤回合并');
+    await dialog.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+
+    expect(api.MergeMediaMetadata).toHaveBeenCalledWith('image', 11, [12], FULL_MERGE);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledTimes(1);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([12], true, expect.any(String));
+    wrapper.unmount();
+  });
+
+  // P-032 评审 Minor 4：按组逐个合并，第二组失败时前一组已经合并（不回滚），一张都不删。
+  it('IMG-03 多组合并中途失败：说明前面几组已合并，没有删除任何图片', async () => {
+    api.MergeMediaMetadata
+      .mockResolvedValueOnce({ warnings: [] })
+      .mockRejectedValueOnce(new Error('数据库繁忙'));
+    const second = { original: makeMember(21, 'keep-2.jpg'), candidates: [makeMember(22, 'copy-2.jpg')], reason: '一致' };
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup(), second] }));
+    expect(wrapper.vm.selection).toEqual([12, 22]);
+    await clickDelete(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['image', 11, [12], FULL_MERGE], ['image', 21, [22], FULL_MERGE]]);
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+    const error = wrapper.get('[data-test="cleanup-error"]').text();
+    expect(error).toContain('没有删除任何图片');
+    expect(error).toContain('共 2 组，前 1 组已经合并到各自的保留项');
+    expect(wrapper.vm.selection).toEqual([12, 22]);
     expect(wrapper.vm.processing).toBe(false);
     wrapper.unmount();
   });
@@ -314,6 +365,107 @@ describe('删除前汇总确认、合并元数据与废纸篓（D-PC48 / D-PC49 
     expect(api.RestoreTrashBatch).toHaveBeenCalledWith('image', 'batch-1');
     expect(wrapper.vm.deletedIDs).toEqual([]);
     expect(wrapper.emitted('deleted')).toHaveLength(2);
+    wrapper.unmount();
+  });
+});
+
+describe('D-PC49 锁定与删除进行中（P-032 评审 I-1、Minor 5 / 7 / 8）', () => {
+  // A（精确，保留 1）与 B（近似，保留 3）都含图 2；B 另有图 4。
+  const overlapping = () => statusWith({
+    duplicate_groups: [{ original: makeMember(1, 'a.jpg'), candidates: [makeMember(2, 'b.jpg')], reason: '一致' }],
+    near_duplicate_groups: [{ original: makeMember(3, 'c.jpg'), candidates: [makeMember(2, 'b.jpg'), makeMember(4, 'd.jpg')], reason: '接近' }]
+  });
+  const card = (wrapper, kind) => wrapper.findAll('[data-test="cleanup-group-card"]').find(node => node.attributes('data-kind') === kind);
+  const toggleOf = (node, name) => node.findAll('[data-test="cleanup-candidate-toggle"]').find(item => item.attributes('aria-label') === `删除 ${name}`);
+
+  it('D-PC49「本组不删」的成员在别的组里也锁定，合并计划也不合并到被跳过的组', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    const wrapper = await mountWith(overlapping());
+    expect(wrapper.vm.selection).toEqual([2]);
+
+    await card(wrapper, 'exact').get('[data-test="cleanup-skip-group"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.selection).toEqual([]);
+    const nearCard = card(wrapper, 'near');
+    expect(toggleOf(nearCard, 'b.jpg').element.disabled).toBe(true);
+    expect(nearCard.get('[data-test="cleanup-member-locked"]').text()).toBe('（另一组设了「本组不删」）');
+    wrapper.vm.toggleSelection(2);
+    expect(wrapper.vm.selection).toEqual([]);
+
+    // 强行放进勾选也会在删除前被裁掉；被跳过的组不进合并计划。
+    photoCleanupStore.review.selection = [2, 4];
+    await clickDelete(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['image', 3, [4], FULL_MERGE]]);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([4], true, expect.any(String));
+    wrapper.unmount();
+  });
+
+  it('D-PC49 删除进行中禁用勾选、「保留这份」「本组不删」「移出本组」「不是重复」与返回，结束后恢复', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    let finishDelete;
+    api.DeleteImagesWithResult.mockImplementation(ids => new Promise(resolve => { finishDelete = () => resolve(okResult(ids)); }));
+    const wrapper = await mountWith(overlapping());
+    await clickDelete(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([2], true, expect.any(String));
+    expect(wrapper.vm.processing).toBe(true);
+
+    const controls = () => wrapper.findAll([
+      '[data-test="cleanup-candidate-toggle"]', '[data-test="cleanup-keep-toggle"]', '[data-test="cleanup-skip-group"]',
+      '[data-test="cleanup-suggest-group"]', '[data-test="cleanup-remove-member"]', '[data-test="cleanup-dismiss-group"]',
+      '[data-test="cleanup-samedir-switch"] input', '[data-test="cleanup-back"]'
+    ].join(', '));
+    expect(controls().length).toBeGreaterThanOrEqual(14);
+    expect(controls().every(node => node.element.disabled)).toBe(true);
+
+    // 界面之外直接调用也不生效。
+    const nearEntry = wrapper.vm.entries.find(entry => entry.kind === 'near');
+    wrapper.vm.setKeep(nearEntry, nearEntry.members[2]);
+    wrapper.vm.toggleSelection(4);
+    wrapper.vm.toggleSkipGroup(nearEntry);
+    await wrapper.vm.removeMember(nearEntry, nearEntry.members[2]);
+    expect(wrapper.vm.keepOverrides).toEqual({});
+    expect(wrapper.vm.selection).toEqual([2]);
+    expect(wrapper.vm.skippedGroups).toEqual({});
+    expect(api.DismissImageNearDuplicateMember).not.toHaveBeenCalled();
+
+    finishDelete();
+    await flushPromises();
+    expect(wrapper.vm.processing).toBe(false);
+    expect(wrapper.get('[data-test="cleanup-back"]').element.disabled).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('D-PC49「已忽略」下不能移到废纸篓', async () => {
+    api.ListCleanupDismissals.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()] }));
+    expect(wrapper.vm.selection).toEqual([12]);
+    await wrapper.get('[data-test="cleanup-dismissed-toggle"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="cleanup-delete-selected"]').element.disabled).toBe(true);
+    await wrapper.vm.deleteSelected();
+    await flushPromises();
+    expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(false);
+    expect(api.DeleteImagesWithResult).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('IMG-05「移出本组」移走推荐保留项时，接替的保留项移出勾选', async () => {
+    const wrapper = await mountWith(statusWith({ near_duplicate_groups: [{
+      original: makeMember(1, 'a.jpg'), candidates: [makeMember(2, 'b.jpg'), makeMember(3, 'c.jpg')], reason: '接近'
+    }] }));
+    wrapper.vm.toggleSelection(2);
+    wrapper.vm.toggleSelection(3);
+    expect(wrapper.vm.selection).toEqual([2, 3]);
+    const entry = wrapper.vm.entries[0];
+    await wrapper.vm.removeMember(entry, entry.members[0]);
+    await flushPromises();
+    expect(api.DismissImageNearDuplicateMember).toHaveBeenCalledWith([1, 2, 3], 1);
+    expect(wrapper.vm.keepFor(wrapper.vm.entries[0])).toBe(2);
+    expect(wrapper.vm.selection).toEqual([3]);
     wrapper.unmount();
   });
 });

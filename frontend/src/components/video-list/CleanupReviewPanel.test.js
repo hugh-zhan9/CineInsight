@@ -31,15 +31,20 @@ import CleanupReviewPanel from './CleanupReviewPanel.vue';
 import { feedbackState, resetFeedback } from '../../utils/feedback.js';
 
 // 面板本身不动片库：批量删除、撤销条与列表重载都由片库页经 trashVideos 执行。
-// 这里用与 VideoListPage.trashCleanupVideos 同样的调用替身。
+// 替身按 VideoListPage.trashCleanupVideos 的契约：trashVideos(ids, { names }) →
+// { result: { requested, succeeded, failed, errors }, failedIDs: Set, succeededIDs: [] }，默认全部成功。
+// 断言直接看 trashVideos 收到了什么（P-032 评审 Minor 9：不再经旧的 BatchDeleteVideos）。
 function makeTrashVideos() {
-  return vi.fn(async (ids) => {
-    const result = await api.BatchDeleteVideos(ids, true);
-    const failedIDs = new Set((result?.errors || []).map(item => item.video_id));
-    const succeededIDs = ids.filter(id => !failedIDs.has(id));
-    return { result, failedIDs, succeededIDs };
-  });
+  return vi.fn(async (ids) => ({
+    result: { requested: ids.length, succeeded: ids.length, failed: 0, errors: [] },
+    failedIDs: new Set(),
+    succeededIDs: [...ids]
+  }));
 }
+
+// MergeMediaMetadata 的第 4 个参数（§9.1）：截取片段组两项都跳过，其余类别都不跳过。
+const FULL_MERGE = { skip_playback_state: false, skip_subtitle: false };
+const CLIP_MERGE = { skip_playback_state: true, skip_subtitle: true };
 
 function mountPanel(options = {}) {
   const { deep = false, ...rest } = options;
@@ -106,7 +111,7 @@ describe('清理候选审阅', () => {
     await wrapper.vm.open();
     expect(wrapper.vm.cleanupDialog.analysis[key]).toEqual([]);
     expect(wrapper.vm.cleanupSelection).toEqual([]);
-    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
+    expect(api.StartCleanupAnalysisFromSettings).not.toHaveBeenCalled();
     wrapper.unmount();
   });
 
@@ -201,7 +206,7 @@ describe('清理候选选择与分组', () => {
     await wrapper.vm.open();
     await flushPromises();
 
-    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
+    expect(api.StartCleanupAnalysisFromSettings).not.toHaveBeenCalled();
     expect(wrapper.vm.cleanupDialog.loading).toBe(false);
     expect(wrapper.vm.cleanupDialog.analysis).toBeTruthy();
     expect(wrapper.vm.cleanupResultStale).toBe(true);
@@ -226,10 +231,10 @@ describe('清理候选选择与分组', () => {
     api.GetCleanupStatus.mockResolvedValue({
       running: false, completed: true, error: '', stale: false, progress: { stage: 'done' }, analysis
     });
-    api.BatchDeleteVideos.mockResolvedValue({ requested: 1, succeeded: 1, failed: 0, errors: [] });
     feedback.confirmAction.mockResolvedValue(false);
 
     const wrapper = mountPanel();
+    const trashVideos = wrapper.props('trashVideos');
     await flushPromises();
     await wrapper.vm.open();
     await flushPromises();
@@ -245,16 +250,15 @@ describe('清理候选选择与分组', () => {
     const pending = wrapper.vm.trashSelectedCleanupCandidates();
     await flushPromises();
     // 删除前先有汇总确认（D-PC49），确认之后才开始写。
-    expect(api.BatchDeleteVideos).not.toHaveBeenCalled();
+    expect(trashVideos).not.toHaveBeenCalled();
     wrapper.vm.answerCleanupDelete(true);
     await pending;
     await flushPromises();
 
-    expect(api.BatchDeleteVideos).toHaveBeenCalledWith([2], true);
+    expect(trashVideos).toHaveBeenCalledWith([2], { names: { 2: 'copy.mp4' } });
     expect(selectionWhenAfterTrashRan).toEqual([]);
     // 答"取消"：不重跑，结果留在原地继续审阅，只标记为已过期。
     expect(feedback.confirmAction).toHaveBeenCalledTimes(1);
-    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
     expect(api.StartCleanupAnalysisFromSettings).not.toHaveBeenCalled();
     expect(wrapper.vm.cleanupDialog.analysis).toBeTruthy();
     expect(wrapper.vm.cleanupResultStale).toBe(true);
@@ -483,7 +487,6 @@ describe('截取片段类别', () => {
 
   it('勾选片段后走既有的回收站路径，不会另开一条删除口子', async () => {
     const wrapper = await openClipReview();
-    api.BatchDeleteVideos.mockResolvedValue({ requested: 1, succeeded: 1, failed: 0, errors: [] });
     feedback.confirmAction.mockResolvedValue(false);
 
     await wrapper.get('[data-test="cleanup-clip-select"]').setValue(true);
@@ -493,7 +496,7 @@ describe('截取片段类别', () => {
     await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
     await flushPromises();
 
-    expect(api.BatchDeleteVideos).toHaveBeenCalledWith([12], true);
+    expect(wrapper.props('trashVideos')).toHaveBeenCalledWith([12], { names: { 12: 'excerpt.mp4' } });
     wrapper.unmount();
   });
 
@@ -654,7 +657,7 @@ describe('IMG-03 保留建议与合并元数据', () => {
     await dialog.get('[data-test="cleanup-delete-confirm"]').trigger('click');
     await flushPromises();
 
-    expect(calls).toEqual([['merge', 'video', 1, [2]], ['trash', [2]]]);
+    expect(calls).toEqual([['merge', 'video', 1, [2], FULL_MERGE], ['trash', [2]]]);
     // 不支持废纸篓时的二选一弹窗要列文件名：面板把名字一并交给片库页。
     expect(trashVideos).toHaveBeenCalledWith([2], { names: { 2: 'v2.mp4' } });
     wrapper.unmount();
@@ -670,11 +673,93 @@ describe('IMG-03 保留建议与合并元数据', () => {
 
     expect(api.MergeMediaMetadata).toHaveBeenCalledTimes(1);
     expect(trashVideos).not.toHaveBeenCalled();
-    expect(api.BatchDeleteVideos).not.toHaveBeenCalled();
-    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
     expect(feedback.notifyError.mock.calls.map(call => String(call[0])).join('\n')).toContain('合并元数据失败，没有删除任何视频');
     expect(wrapper.vm.cleanupSelection).toEqual([2]);
     expect(wrapper.vm.cleanupDialog.processing).toBe(false);
+    wrapper.unmount();
+  });
+
+  // P-032 评审 Minor 4：按组逐个合并，第二组失败时前一组已经合并（不回滚），一个都不删。
+  it('IMG-03 多组合并中途失败：说明前面几组已合并，没有删除任何视频', async () => {
+    api.MergeMediaMetadata
+      .mockResolvedValueOnce({ warnings: [] })
+      .mockRejectedValueOnce(new Error('数据库繁忙'));
+    const { wrapper, trashVideos } = await openWith(baseAnalysis({
+      duplicate_groups: [
+        { original: video(1), candidates: [video(2)], reason: '一致' },
+        { original: video(3), candidates: [video(4)], reason: '一致' }
+      ]
+    }));
+    expect(wrapper.vm.cleanupSelection).toEqual([2, 4]);
+
+    await clickTrash(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['video', 1, [2], FULL_MERGE], ['video', 3, [4], FULL_MERGE]]);
+    expect(trashVideos).not.toHaveBeenCalled();
+    const message = feedback.notifyError.mock.calls.map(call => String(call[0])).join('\n');
+    expect(message).toContain('没有删除任何视频');
+    expect(message).toContain('共 2 组，前 1 组已经合并到各自的保留项');
+    expect(wrapper.vm.cleanupSelection).toEqual([2, 4]);
+    expect(wrapper.vm.cleanupDialog.processing).toBe(false);
+    wrapper.unmount();
+  });
+
+  // P-032 评审 I-1：锁定的 ID 即使出现在勾选里（界面之外改的、或结果换过），删除前也按锁定规则裁掉。
+  it('IMG-03 保留项被强行放进勾选时不会送进删除：先裁剪，再合并与删除其余项', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    api.MergeMediaMetadata.mockResolvedValue({ warnings: [] });
+    const { wrapper, trashVideos } = await openWith(exactAnalysis());
+    wrapper.vm.cleanupSelection = [1, 2];
+
+    await clickTrash(wrapper);
+    expect(wrapper.get('[data-test="cleanup-delete-summary"]').text()).toContain('将把 1 个视频移到废纸篓');
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+
+    expect(api.MergeMediaMetadata).toHaveBeenCalledWith('video', 1, [2], FULL_MERGE);
+    expect(trashVideos).toHaveBeenCalledTimes(1);
+    expect(trashVideos).toHaveBeenCalledWith([2], { names: { 2: 'v2.mp4' } });
+    wrapper.unmount();
+  });
+
+  // §9.1 主代理裁决（P-032 评审 I-2）：截取片段组不合并观看状态与字幕；同一保留项的两组按组分别调用。
+  it('D-PC48 截取片段组只合并标签、人物、作品集、收藏 / 点赞 / 评分，与同一保留项的精确重复组分开调用', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    api.MergeMediaMetadata.mockResolvedValue({ warnings: [] });
+    const { wrapper, trashVideos } = await openWith(baseAnalysis({
+      duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }],
+      clip_groups: [{ full: video(1), clip: video(3), offset_seconds: 30, match_rate: 0.95, estimated_savings: 300 }]
+    }));
+    wrapper.vm.toggleCleanupSelection(3);
+    expect(wrapper.vm.cleanupSelection).toEqual([2, 3]);
+
+    await clickTrash(wrapper);
+    const dialog = wrapper.get('[data-test="cleanup-delete-confirm-dialog"]');
+    expect(dialog.get('[data-test="cleanup-merge-scope-full"]').text()).toContain('观看状态（已看、断点）');
+    expect(dialog.get('[data-test="cleanup-merge-scope-full"]').text()).toContain('复制一份给保留项');
+    expect(dialog.get('[data-test="cleanup-merge-scope-clip"]').text()).toBe('截取片段组只合并标签、人物、作品集、收藏 / 点赞 / 评分，不合并观看状态和字幕。');
+    const note = dialog.get('[data-test="cleanup-merge-note"]').text();
+    expect(note).toContain('标签只合并手动标签');
+    expect(note).toContain('撤销删除不会撤回合并');
+    await dialog.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['video', 1, [2], FULL_MERGE], ['video', 1, [3], CLIP_MERGE]]);
+    expect(trashVideos).toHaveBeenCalledWith([2, 3], { names: { 2: 'v2.mp4', 3: 'v3.mp4' } });
+    wrapper.unmount();
+  });
+
+  it('D-PC48 只删截取片段时，确认框只说截取片段组的合并范围', async () => {
+    const { wrapper } = await openWith(baseAnalysis({
+      clip_groups: [{ full: video(1), clip: video(3), offset_seconds: 30, match_rate: 0.95, estimated_savings: 300 }]
+    }));
+    wrapper.vm.toggleCleanupSelection(3);
+    await clickTrash(wrapper);
+    expect(wrapper.find('[data-test="cleanup-merge-scope-full"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="cleanup-merge-scope-clip"]').exists()).toBe(true);
+    await wrapper.get('[data-test="cleanup-delete-cancel"]').trigger('click');
     wrapper.unmount();
   });
 
@@ -711,8 +796,6 @@ describe('IMG-03 保留建议与合并元数据', () => {
     expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(false);
     expect(api.MergeMediaMetadata).not.toHaveBeenCalled();
     expect(trashVideos).not.toHaveBeenCalled();
-    expect(api.BatchDeleteVideos).not.toHaveBeenCalled();
-    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
     expect(wrapper.emitted('trash-settled')).toBeUndefined();
     wrapper.unmount();
   });
@@ -746,7 +829,8 @@ describe('IMG-03 保留建议与合并元数据', () => {
 });
 
 describe('IMG-05 统一的勾选与锁定规则', () => {
-  it('IMG-05 保留项的勾选框禁用；「设为保留」换保留项后原保留项可勾，全勾过的组按新保留项重新全勾', async () => {
+  // §9.2 主代理裁决（P-032 评审 Minor 2）：原保留项往往整理成果最多，换保留项后只解除锁定，不自动勾上。
+  it('D-PC49 保留项的勾选框禁用；「设为保留」换保留项后原保留项可勾但不自动勾上，其余成员按新保留项重算', async () => {
     const { wrapper } = await openWith(baseAnalysis({
       duplicate_groups: [{ original: video(1), candidates: [video(2), video(3)], reason: '一致' }]
     }));
@@ -757,10 +841,113 @@ describe('IMG-05 统一的勾选与锁定规则', () => {
 
     await wrapper.findAll('[data-test="cleanup-member-row"]')[1].get('[data-test="cleanup-set-keeper"]').trigger('click');
     await flushPromises();
-    expect([...wrapper.vm.cleanupSelection].sort()).toEqual([1, 3]);
+    expect(wrapper.vm.cleanupSelection).toEqual([3]);
     expect(checkbox(0).disabled).toBe(false);
+    expect(checkbox(0).checked).toBe(false);
     expect(checkbox(1).disabled).toBe(true);
     expect(wrapper.findAll('[data-test="cleanup-member-row"]')[1].get('[data-test="cleanup-keeper-label"]').text()).toBe('保留：');
+    wrapper.unmount();
+  });
+
+  // P-032 评审 I-1：删除进行中换保留项、改勾选、移出本组或忽略，都可能让正在删的那一份变成「要保留的」。
+  it('D-PC49 删除进行中禁用勾选、「设为保留」「移出本组」和各类忽略，结束后恢复', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    api.MergeMediaMetadata.mockResolvedValue({ warnings: [] });
+    let finishTrash;
+    const trashVideos = vi.fn(ids => new Promise(resolve => {
+      finishTrash = () => resolve({ result: { requested: ids.length, succeeded: ids.length, failed: 0, errors: [] }, failedIDs: new Set(), succeededIDs: [...ids] });
+    }));
+    const { wrapper } = await openWith(baseAnalysis({
+      near_duplicate_groups: [{ original: video(1), candidates: [video(2), video(3)], reason: '接近' }],
+      same_source_groups: [{ relation_id: 9, preferred: video(4), alternative: video(5), reason: 'AI 判断同源', estimated_savings: 500 }],
+      clip_groups: [{ full: video(6), clip: video(7), offset_seconds: 0, match_rate: 0.9, estimated_savings: 700 }],
+      low_duration: [video(8)]
+    }), { props: { trashVideos } });
+    wrapper.vm.toggleCleanupSelection(2);
+    await clickTrash(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+    expect(trashVideos).toHaveBeenCalledWith([2], expect.anything());
+    expect(wrapper.vm.cleanupDialog.processing).toBe(true);
+
+    const controls = () => wrapper.findAll([
+      'input[type="checkbox"]:not([data-test="cleanup-merge-toggle"])',
+      '[data-test="cleanup-set-keeper"]', '[data-test="cleanup-remove-member"]', '[data-test="cleanup-suggest-group"]',
+      '[data-test="cleanup-dismiss-near-group"]', '[data-test="cleanup-reject-same-source"]',
+      '[data-test="cleanup-dismiss-clip"]', '[data-test="cleanup-dismiss-video"]'
+    ].join(', '));
+    expect(controls().length).toBeGreaterThanOrEqual(12);
+    expect(controls().every(node => node.element.disabled)).toBe(true);
+
+    // 界面之外直接调用也不生效。
+    const entry = wrapper.vm.cleanupDirectorySections[0].entries.find(item => item.kind === 'near');
+    wrapper.vm.setCleanupKeeper(entry, entry.members[1]);
+    wrapper.vm.toggleCleanupSelection(3);
+    await wrapper.vm.removeNearDuplicateMember(entry.group, entry.members[2]);
+    await wrapper.vm.dismissNearDuplicateGroup(entry.group);
+    expect(wrapper.vm.cleanupKeepOverrides).toEqual({});
+    expect(wrapper.vm.cleanupSelection).toEqual([2]);
+    expect(api.DismissNearDuplicateMember).not.toHaveBeenCalled();
+    expect(api.DismissNearDuplicateGroup).not.toHaveBeenCalled();
+
+    finishTrash();
+    await flushPromises();
+    expect(wrapper.vm.cleanupDialog.processing).toBe(false);
+    expect(wrapper.findAll('[data-test="cleanup-set-keeper"]').some(node => !node.element.disabled)).toBe(true);
+    wrapper.unmount();
+  });
+
+  // P-032 评审 I-1：移出的是原保留项时，本地接替的保留项（rest[0]）不能还勾着。
+  it('IMG-05「移出本组」移走原保留项时，接替的保留项移出勾选', async () => {
+    const { wrapper } = await openWith(baseAnalysis({
+      near_duplicate_groups: [{ original: video(1), candidates: [video(2), video(3)], reason: '接近' }]
+    }));
+    wrapper.vm.toggleCleanupSelection(2);
+    wrapper.vm.toggleCleanupSelection(3);
+    expect(wrapper.vm.cleanupSelection).toEqual([2, 3]);
+    // 回读拿不到新结果，只看本地的处理。
+    api.GetCleanupStatus.mockResolvedValue({ running: false, completed: false });
+
+    const entry = wrapper.vm.cleanupDirectorySections[0].entries[0];
+    await wrapper.vm.removeNearDuplicateMember(entry.group, entry.members[0]);
+    await flushPromises();
+
+    expect(api.DismissNearDuplicateMember).toHaveBeenCalledWith([1, 2, 3], 1);
+    expect(wrapper.vm.isCleanupLocked(2)).toBe(true);
+    expect(wrapper.vm.cleanupSelection).toEqual([3]);
+    wrapper.unmount();
+  });
+
+  it('D-PC49「已忽略」页签下不能移到废纸篓', async () => {
+    const { wrapper, trashVideos } = await openWith(baseAnalysis({
+      duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }]
+    }));
+    api.ListCleanupDismissals.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
+    expect(wrapper.vm.cleanupSelection).toEqual([2]);
+    await wrapper.get('[data-test="cleanup-dismissed-tab"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="cleanup-trash-selected"]').element.disabled).toBe(true);
+    await wrapper.vm.trashSelectedCleanupCandidates();
+    await flushPromises();
+    expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(false);
+    expect(trashVideos).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('D-PC49 目录栏标出每个目录已勾选的数量', async () => {
+    const { wrapper } = await openWith(baseAnalysis({
+      duplicate_groups: [
+        { original: video(1), candidates: [video(2)], reason: '一致' },
+        { original: video(3, { directory: '/lib/b' }), candidates: [video(4, { directory: '/lib/b' }), video(5, { directory: '/lib/b' })], reason: '一致' }
+      ]
+    }));
+    const badges = () => wrapper.findAll('[data-test="cleanup-dir-section"]')
+      .map(node => node.find('[data-test="cleanup-dir-selected"]'))
+      .map(node => (node.exists() ? node.text() : ''));
+    expect(badges()).toEqual(['已勾 1', '已勾 2']);
+    wrapper.vm.toggleCleanupSelection(2);
+    await flushPromises();
+    expect(badges()).toEqual(['', '已勾 2']);
     wrapper.unmount();
   });
 
@@ -995,7 +1182,7 @@ describe('META-10 类别改名并标出设置里的阈值', () => {
     const { wrapper } = await openWith(baseAnalysis());
     await wrapper.vm.reanalyzeCleanupCandidates();
     expect(api.StartCleanupAnalysisFromSettings).toHaveBeenCalledTimes(1);
-    expect(api.StartCleanupAnalysis).not.toHaveBeenCalled();
+    expect(api.StartCleanupAnalysisFromSettings).toHaveBeenCalledWith();
     wrapper.unmount();
   });
 });

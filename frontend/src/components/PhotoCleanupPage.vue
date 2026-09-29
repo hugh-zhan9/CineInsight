@@ -1,7 +1,15 @@
 <template>
   <section class="cleanup-page" data-test="photo-cleanup-page">
     <header class="cleanup-page__bar glass-surface">
-      <button type="button" class="btn-secondary" data-test="cleanup-back" @click="$emit('close')">← 返回图片库</button>
+      <!-- 删除进行中不能离开（P-032 评审 Minor 5）：撤销条与「不支持废纸篓」二选一都挂在本页上。 -->
+      <button
+        type="button"
+        class="btn-secondary"
+        data-test="cleanup-back"
+        :disabled="processing"
+        :title="processing ? '正在移到废纸篓，完成后再返回' : ''"
+        @click="$emit('close')"
+      >← 返回图片库</button>
       <div class="cleanup-page__title">
         <h2>清理审阅</h2>
         <!-- 勾选规则与视频清理面板同一套（D-PC49，utils/cleanupSelection.js）。 -->
@@ -29,7 +37,7 @@
       <button
         type="button"
         class="btn-danger"
-        :disabled="selection.length === 0 || running || processing"
+        :disabled="selection.length === 0 || running || processing || showDismissed"
         data-test="cleanup-delete-selected"
         @click="deleteSelected"
       >{{ processing ? '处理中…' : `移到废纸篓 (${selection.length})` }}</button>
@@ -112,7 +120,7 @@
           {{ allCollapsed ? '全部展开' : '全部折叠' }}
         </button>
         <label class="cleanup-page__switch" data-test="cleanup-samedir-switch">
-          <input type="checkbox" :checked="sameDirOnly" @change="toggleSameDirOnly" />
+          <input type="checkbox" :checked="sameDirOnly" :disabled="processing" @change="toggleSameDirOnly" />
           只勾选与保留项同目录的副本
         </label>
         <span class="cleanup-page__hint">跨目录的副本可能是你的备份；不想让整个目录参与审阅，把它加进图片扫描黑名单。</span>
@@ -186,7 +194,7 @@
               <button
                 type="button"
                 class="btn-secondary btn-compact"
-                :disabled="isSkipped(entry) || (!isGroupFullySuggested(entry) && suggestedIDsFor(entry).length === 0)"
+                :disabled="processing || isSkipped(entry) || (!isGroupFullySuggested(entry) && suggestedIDsFor(entry).length === 0)"
                 data-test="cleanup-suggest-group"
                 @click="toggleGroupSuggestion(entry)"
               >{{ isGroupFullySuggested(entry) ? '取消本组勾选' : '按建议勾选（保留推荐项）' }}</button>
@@ -194,6 +202,7 @@
                 type="button"
                 class="btn-secondary btn-compact"
                 :class="{ 'cleanup-group__skip--active': isSkipped(entry) }"
+                :disabled="processing"
                 data-test="cleanup-skip-group"
                 @click="toggleSkipGroup(entry)"
               >{{ isSkipped(entry) ? '已跳过（点我恢复）' : '本组不删' }}</button>
@@ -201,7 +210,7 @@
                 v-if="entry.kind === 'near'"
                 type="button"
                 class="btn-secondary btn-compact"
-                :disabled="dismissing"
+                :disabled="dismissing || processing"
                 data-test="cleanup-dismiss-group"
                 @click="dismissGroup(entry)"
               >不是重复</button>
@@ -236,7 +245,7 @@
                       type="radio"
                       :name="`keep-${entry.key}`"
                       :checked="isKept(entry, member)"
-                      :disabled="isDeleted(member)"
+                      :disabled="processing || isDeleted(member)"
                       :aria-label="`保留 ${member.name}`"
                       data-test="cleanup-keep-toggle"
                       @change="setKeep(entry, member)"
@@ -247,13 +256,13 @@
                     <input
                       type="checkbox"
                       :checked="selection.includes(Number(member.id))"
-                      :disabled="isKept(entry, member) || isSkipped(entry) || isDeleted(member) || isProtected(entry, member)"
+                      :disabled="processing || isKept(entry, member) || isSkipped(entry) || isDeleted(member) || isProtected(entry, member)"
                       :aria-label="`删除 ${member.name}`"
                       data-test="cleanup-candidate-toggle"
                       @change="toggleSelection(member.id)"
                     />
                     删除
-                    <span v-if="isProtected(entry, member)" class="cleanup-member__locked" data-test="cleanup-member-locked">（另一组要保留它）</span>
+                    <span v-if="isProtected(entry, member)" class="cleanup-member__locked" data-test="cleanup-member-locked">（{{ lockReason(entry, member) }}）</span>
                   </label>
                 </div>
 
@@ -314,7 +323,7 @@
                     v-if="entry.kind === 'near' && entry.members.length > 2 && !isDeleted(member)"
                     type="button"
                     class="btn-secondary btn-compact"
-                    :disabled="dismissing"
+                    :disabled="dismissing || processing"
                     data-test="cleanup-remove-member"
                     @click="removeMember(entry, member)"
                   >移出本组</button>
@@ -363,7 +372,8 @@
           <input v-model="deleteConfirm.merge" type="checkbox" data-test="cleanup-merge-toggle" />
           把元数据合并到保留项
         </label>
-        <p class="cleanup-delete-confirm__help">标签、人物、收藏、点赞与评分合并到各组保留的那张。合并失败时不会删除任何图片。</p>
+        <p class="cleanup-delete-confirm__help" data-test="cleanup-merge-scope">标签、人物、收藏、点赞与评分合并到各组保留的那张。</p>
+        <p class="cleanup-delete-confirm__help" data-test="cleanup-merge-note">标签只合并手动标签（自动标签不合并）。撤销删除不会撤回合并。合并失败时不会删除任何图片。</p>
       </template>
       <p class="cleanup-delete-confirm__help">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间。所在磁盘不支持废纸篓时，会先问你怎么处理。</p>
       <div class="modal-actions">
@@ -401,8 +411,9 @@ import {
 } from '../utils/photoCleanupStore.js';
 import { confirmAction } from '../utils/feedback.js';
 import {
-  applySuggestion, cleanupGroup, clearGroupSelection, defaultSelection, describeSelectionKinds, isGroupFullySuggested,
-  keeperOf, lockedIDs, mergePlan, pruneSelection, selectionSummary, setKeeper, similarityCount, suggestedIDs
+  applySuggestion, cleanupGroup, clearGroupSelection, defaultSelection, describeMergeFailure, describeSelectionKinds,
+  isGroupFullySuggested, keeperOf, lockedIDs, mergePlan, pruneSelection, selectionSummary, setKeeper, similarityCount,
+  suggestedIDs
 } from '../utils/cleanupSelection.js';
 
 const STAGE_LABELS = {
@@ -424,7 +435,7 @@ function emptyDismissals() {
 }
 
 function emptyDeleteConfirm() {
-  return { show: false, summary: { count: 0, bytes: 0, byKind: {} }, mergeAvailable: false, merge: true };
+  return { show: false, summary: { count: 0, bytes: 0, byKind: {}, similar: 0 }, mergeAvailable: false, merge: true };
 }
 
 export default {
@@ -535,10 +546,22 @@ export default {
         .sort((a, b) => a.directory.localeCompare(b.directory));
     },
     hasGroups() { return this.entries.length > 0; },
+    // 「本组不删」的组 key。
+    skippedKeys() {
+      return Object.keys(this.skippedGroups).filter(key => this.skippedGroups[key]);
+    },
     // 同一张图可能既是某组的候选、又是另一组的保留项（精确对只在彼此之间排除）。
-    // 任何一组的保留项都不允许被删，否则会出现"这一组勾了删、那一组显示保留"的自相矛盾。
+    // 任何一组的保留项都不允许被删，否则会出现"这一组勾了删、那一组显示保留"的自相矛盾；
+    // 「本组不删」的组同理，它的成员在别的组里也不能勾（P-032 评审 Minor 7）。
     protectedIDs() {
+      return lockedIDs(this.cleanupGroups, this.keepOverrides, this.skippedKeys);
+    },
+    keeperIDs() {
       return lockedIDs(this.cleanupGroups, this.keepOverrides);
+    },
+    skippedMemberIDs() {
+      const skipped = new Set(this.skippedKeys);
+      return new Set(this.cleanupGroups.filter(group => skipped.has(group.key)).flatMap(group => group.memberIds));
     },
     allCollapsed() {
       return this.directorySections.length > 0
@@ -714,11 +737,12 @@ export default {
     isDeleted(image) {
       return this.deletedIDs.includes(Number(image?.id));
     },
-    // 勾选规则的参数：跨组锁定、已删除的排除、「本组不删」与「只勾同目录」由 filter 表达。
+    // 勾选规则的参数：跨组锁定（保留项与「本组不删」的成员）、已删除的排除、「只勾同目录」由 filter 表达。
     selectionOptions(overrides = this.keepOverrides) {
       return {
         overrides,
-        locked: lockedIDs(this.cleanupGroups, overrides),
+        skipped: this.skippedKeys,
+        locked: lockedIDs(this.cleanupGroups, overrides, this.skippedKeys),
         excluded: this.deletedIDs,
         filter: this.suggestionAllows
       };
@@ -736,10 +760,16 @@ export default {
     groupOf(entry) {
       return this.groupByKey.get(entry.key) || null;
     },
-    // 这张图是别的组的保留项：本组不能勾它删。
-    isProtected(entry, image) {
+    // 这张图被别的组锁定：是别的组的保留项，或者在一个「本组不删」的组里。本组也不能勾它删。
+    lockReason(entry, image) {
       const id = Number(image?.id);
-      return this.protectedIDs.has(id) && this.keepFor(entry) !== id;
+      if (this.keepFor(entry) === id) return '';
+      if (this.keeperIDs.has(id)) return '另一组要保留它';
+      if (!this.isSkipped(entry) && this.skippedMemberIDs.has(id)) return '另一组设了「本组不删」';
+      return '';
+    },
+    isProtected(entry, image) {
+      return Boolean(this.lockReason(entry, image));
     },
     // 本组是否已经是"保留推荐项、其余全勾"的状态。
     isGroupFullySuggested(entry) {
@@ -751,7 +781,7 @@ export default {
     // 「按建议勾选」只作用于这一组（D-PC49），再点一次取消本组勾选。
     toggleGroupSuggestion(entry) {
       const group = this.groupOf(entry);
-      if (!group) return;
+      if (!group || this.processing) return;
       this.review.selection = this.isGroupFullySuggested(entry)
         ? clearGroupSelection(this.selection, group)
         : applySuggestion(this.selection, group, this.selectionOptions());
@@ -769,16 +799,18 @@ export default {
     isKept(entry, image) {
       return Number(image?.id) === this.keepFor(entry);
     },
-    // 换保留项：新保留项移出勾选，原保留项解除锁定；本组原先是「按建议全勾」时按新保留项重新全勾。
+    // 换保留项：新保留项移出勾选，原保留项解除锁定但不自动勾上（§9.2 裁决）；本组原先是「按建议全勾」时
+    // 按新保留项重算其余成员。删除进行中不能换（P-032 评审 I-1）。
     setKeep(entry, image) {
       const group = this.groupOf(entry);
-      if (!group) return;
+      if (!group || this.processing) return;
       const next = setKeeper({
         groups: this.cleanupGroups,
         overrides: this.keepOverrides,
         selection: this.selection,
         excluded: this.deletedIDs,
-        filter: this.suggestionAllows
+        filter: this.suggestionAllows,
+        skipped: this.skippedKeys
       }, group, image?.id);
       this.review.keepOverrides = next.overrides;
       this.review.selection = next.selection;
@@ -788,7 +820,7 @@ export default {
     },
     toggleSkipGroup(entry) {
       const group = this.groupOf(entry);
-      if (!group) return;
+      if (!group || this.processing) return;
       if (this.isSkipped(entry)) {
         this.review.skippedGroups = { ...this.skippedGroups, [entry.key]: false };
         // 恢复本组：按默认规则重算（精确重复重新勾副本，近似重复仍然不勾）。
@@ -801,6 +833,7 @@ export default {
       }
     },
     toggleSameDirOnly() {
+      if (this.processing) return;
       this.review.sameDirOnly = !this.sameDirOnly;
       // 切换的是默认规则，直接按新规则重算勾选（手动微调会被覆盖，这是明示行为）。
       this.applyAutoSelection();
@@ -897,6 +930,7 @@ export default {
     },
     toggleSelection(imageID) {
       const id = Number(imageID);
+      if (this.processing) return;
       if (this.selection.includes(id)) {
         this.review.selection = this.selection.filter(item => item !== id);
         return;
@@ -932,10 +966,17 @@ export default {
       if (resolve) resolve(confirmed ? { merge } : null);
     },
     async deleteSelected() {
-      if (this.selection.length === 0 || this.processing || this.running || this.deleteConfirm.show) return;
+      if (this.selection.length === 0 || this.processing || this.running || this.deleteConfirm.show || this.showDismissed) return;
+      // 删除前按锁定规则裁剪勾选：保留项、「本组不删」的成员、已删除、不再出现在结果里的都不送进删除。
       const requested = pruneSelection(this.selection, this.cleanupGroups, this.selectionOptions());
       if (requested.length === 0) return;
-      const plan = mergePlan(this.cleanupGroups, requested, this.keepOverrides);
+      let plan;
+      try {
+        plan = mergePlan(this.cleanupGroups, requested, this.selectionOptions());
+      } catch (err) {
+        this.localError = err?.message || String(err);
+        return;
+      }
       const summary = selectionSummary(this.cleanupGroups, requested, id => this.memberBytesByID.get(id) || 0);
       // 先汇总确认（D-PC49）；取消时不调用任何写入。
       const choice = await this.askDeleteConfirm(summary, plan.length > 0);
@@ -946,13 +987,13 @@ export default {
       let outcome = null;
       let failureNotice = '';
       try {
-        // 删除之前把被删项的整理成果合并到各组保留项（D-PC48），任何一组失败都不进入删除。
+        // 删除之前按组把被删项的整理成果合并到各组保留项（D-PC48），任何一组失败都不进入删除。
         if (choice.merge) {
-          for (const item of plan) {
+          for (const [index, item] of plan.entries()) {
             try {
-              await MergeMediaMetadata('image', item.keeperId, item.sourceIds);
+              await MergeMediaMetadata('image', item.keeperId, item.sourceIds, item.options);
             } catch (err) {
-              this.localError = `合并元数据失败，没有删除任何图片：${err}。合并可以重复执行，处理好之后再删除即可。`;
+              this.localError = describeMergeFailure(err, index, plan.length, '图片');
               return;
             }
           }
@@ -960,9 +1001,10 @@ export default {
         const banner = this.$refs.trashUndo;
         outcome = await banner.runDelete({ ids: requested, deleteFile: true, names: this.memberNames(requested) });
         const removed = new Set(outcome.removedIDs.map(Number));
-        // 已删除的行留在结果里置灰，剩下的组可以接着审阅；没删掉的（失败、取消、磁盘不支持时选了暂不处理）仍然勾着。
+        // 已删除的行留在结果里置灰，剩下的组可以接着审阅；没删掉的（失败、取消、磁盘不支持时选了暂不处理）
+        // 仍然勾着，按当前的组再裁一次。
         this.review.deletedIDs = [...new Set([...this.deletedIDs, ...removed])];
-        this.review.selection = requested.filter(id => !removed.has(id));
+        this.review.selection = pruneSelection(requested.filter(id => !removed.has(id)), this.cleanupGroups, this.selectionOptions());
         banner.showDeleteNotice(outcome, { reportFailures: false });
         if (outcome.failures.length) {
           failureNotice = `有 ${outcome.failures.length} 张图片删除失败：${summarizeTrashFailures(outcome.failures)}`;
@@ -996,7 +1038,7 @@ export default {
       await refreshPhotoCleanupStatus();
     },
     async dismissGroup(entry) {
-      if (this.dismissing) return;
+      if (this.dismissing || this.processing) return;
       const ids = entry.members.map(member => Number(member.id));
       const confirmed = await confirmAction({
         title: '不是重复',
@@ -1021,7 +1063,7 @@ export default {
     },
     // 「移出本组」（D-PC31）：只否决这张图与组内其他成员的配对，其余成员之间的关系不动。
     async removeMember(entry, member) {
-      if (this.dismissing) return;
+      if (this.dismissing || this.processing) return;
       const ids = entry.members.map(item => Number(item.id));
       const memberID = Number(member?.id);
       if (ids.length < 3 || !ids.includes(memberID)) return;
@@ -1037,7 +1079,8 @@ export default {
         await DismissImageNearDuplicateMember(ids, memberID);
         const removed = [...new Set([...(this.removedMembers[entry.key] || []), memberID])];
         this.review.removedMembers = { ...this.removedMembers, [entry.key]: removed };
-        this.review.selection = this.selection.filter(id => id !== memberID);
+        // 移出的是推荐保留项时由剩下排第一的接替：按新的组重新裁剪，接替者不能还勾着。
+        this.review.selection = pruneSelection(this.selection.filter(id => id !== memberID), this.cleanupGroups, this.selectionOptions());
         this.dismissals.loaded = false;
       } catch (err) {
         this.localError = `移出本组失败：${err}`;

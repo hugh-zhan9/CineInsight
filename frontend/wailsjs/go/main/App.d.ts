@@ -485,7 +485,7 @@ export function MarkMovieChartEntry(arg1:string,arg2:string):Promise<services.Mo
 
 export function MarkSameSourceRelationRead(arg1:number):Promise<void>;
 
-export function MergeMediaMetadata(arg1:string,arg2:number,arg3:Array<number>):Promise<services.MediaMetadataMergeResult>;
+export function MergeMediaMetadata(arg1:string,arg2:number,arg3:Array<number>,arg4:services.MediaMetadataMergeOptions):Promise<services.MediaMetadataMergeResult>;
 
 export function MergePeople(arg1:number,arg2:Array<number>):Promise<services.MergePeopleResult>;
 

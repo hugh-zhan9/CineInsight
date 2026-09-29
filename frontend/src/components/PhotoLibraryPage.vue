@@ -1,6 +1,7 @@
 <template>
   <PhotoCleanupPage
     v-if="showCleanup"
+    ref="cleanupPage"
     @close="closeCleanup"
     @deleted="handleCleanupDeleted"
   />
@@ -743,7 +744,7 @@ import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
-import { confirmAction } from '../utils/feedback.js';
+import { confirmAction, notify } from '../utils/feedback.js';
 import {
   PHOTO_GROUP_MONTH, PHOTO_GROUP_NONE, PHOTO_ROW_HEADER,
   buildPhotoLayout, calculatePhotoAnchorScrollTop, calculatePhotoWindow,
@@ -1685,12 +1686,12 @@ export default {
     },
     // 审阅面板挂在网格那一侧：清理审阅整页接管时先退回网格再打开。
     openAITagReviewFromCommand() {
-      if (this.showCleanup) this.closeCleanup();
+      if (this.showCleanup && !this.closeCleanup()) return;
       this.openAITagReview();
     },
     async openTrashDialog(tab = 'image') {
       if (this.showCleanup) {
-        this.closeCleanup();
+        if (!this.closeCleanup()) return;
         await this.$nextTick();
       }
       this.$refs.trashUndo?.openTrashDialog(tab);
@@ -1710,7 +1711,13 @@ export default {
       this.inactiveScrollTop = this.scrollOwnerEl?.scrollTop || 0;
       this.showCleanup = true;
     },
+    // 清理页删除进行中不能卸载它（P-032 评审 Minor 5）：撤销条与「不支持废纸篓」二选一都挂在那一页上。
+    // 返回 false 表示这次没有离开，调用方不要接着切走。
     closeCleanup() {
+      if (this.$refs.cleanupPage?.processing) {
+        notify('正在把图片移到废纸篓，完成后再离开清理审阅。');
+        return false;
+      }
       this.showCleanup = false;
       this.$nextTick(() => {
         // 换根之后要重新盯新的 $el，再恢复位置。
@@ -1718,6 +1725,7 @@ export default {
         this.restoreScrollPosition();
         this.checkLibraryFreshness();
       });
+      return true;
     },
     async handleCleanupDeleted() {
       await this.reload();

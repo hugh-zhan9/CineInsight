@@ -6046,6 +6046,20 @@ export namespace services {
 	
 	
 	
+	export class MediaMetadataMergeOptions {
+	    skip_playback_state: boolean;
+	    skip_subtitle: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MediaMetadataMergeOptions(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.skip_playback_state = source["skip_playback_state"];
+	        this.skip_subtitle = source["skip_subtitle"];
+	    }
+	}
 	export class MediaMetadataMergeResult {
 	    kind: string;
 	    keeper_id: number;

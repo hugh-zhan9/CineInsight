@@ -27,12 +27,24 @@ type MediaMergeWatchedSetter interface {
 	SetVideoWatched(videoID uint, watched bool) (*models.Video, error)
 }
 
-// MediaMetadataMergeDeps 是合并在数据库事务之外要用到的能力，由 App 层注入。
+// MediaMetadataMergeOptions 是一次合并的范围（P-032 评审 I-2，§9.1 主代理裁决）。零值表示全部合并。
+// 截取片段只是完整片的一小段，它的已看、断点和字幕时间轴都不适用于完整片，清理中心对截取片段组
+// 两项都传 true。图片没有观看状态和字幕，忽略这两项。
+type MediaMetadataMergeOptions struct {
+	// SkipPlaybackState 跳过已看取或与断点取最大（因此不会经已看 setter 触发 D-PC52 的同步）。
+	SkipPlaybackState bool `json:"skip_playback_state"`
+	// SkipSubtitle 跳过把来源的同名 .srt 复制成保留项的同名 .srt。
+	SkipSubtitle bool `json:"skip_subtitle"`
+}
+
+// MediaMetadataMergeDeps 是合并在数据库事务之外要用到的能力（由 App 层注入），以及本次的合并范围。
 type MediaMetadataMergeDeps struct {
 	// Watched 用于提交后翻转 keeper 的已看状态；视频合并必填。
 	Watched MediaMergeWatchedSetter
 	// Subtitles 用于把来源的同名 .srt 写成 keeper 的同名 .srt（D-PC13 写入器）；为 nil 时字幕迁移记警告。
 	Subtitles *SubtitleFileWriter
+	// Options 是合并范围，零值为全部合并。
+	Options MediaMetadataMergeOptions
 }
 
 // MediaMetadataMergeResult 是一次合并的结果。Warnings 是不影响数据库合并的问题（字幕迁移失败等），
@@ -58,12 +70,13 @@ type MediaMetadataMergeResult struct {
 //   - 非自动标签取并集，人物关系取并集；
 //   - 收藏 / 点赞取或，favorited_at 取最早（收藏为真时一定带时间，规则同 favoriteColumns）；
 //   - 评分取最大（NULL 视为最小）；
-//   - 视频：keeper 加入来源所在的每个作品集，位置放在来源的位置；keeper 未看时断点取最大。
+//   - 视频：keeper 加入来源所在的每个作品集，位置放在来源的位置；keeper 未看时断点取最大
+//     （deps.Options.SkipPlaybackState 时已看与断点都不动）。
 //
 // 事务提交之后：keeper 的已看由 false 变 true 时经 deps.Watched 翻转（观察者照常收到通知），
 // 失败返回错误（数据库合并已提交且可重复执行，调用方不要进入删除）；keeper 没有同名 .srt
-// 而来源有时，经 deps.Subtitles 写成 keeper 的同名 .srt 并刷新索引，失败只记警告
-// （字幕仍在来源旁，随来源进入废纸篓，可恢复）。
+// 而来源有时，经 deps.Subtitles 复制成 keeper 的同名 .srt 并刷新索引（deps.Options.SkipSubtitle
+// 时不复制），失败只记警告（来源的字幕留在原处）。
 func MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, deps MediaMetadataMergeDeps) (*MediaMetadataMergeResult, error) {
 	if kind != MediaMergeKindVideo && kind != MediaMergeKindImage {
 		return nil, fmt.Errorf("未知的媒体类别：%s", kind)
@@ -94,7 +107,7 @@ func MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, deps Media
 	var plan videoMergeFollowUp
 	if err := database.Transaction(func(tx *gorm.DB) error {
 		var err error
-		plan, err = mergeVideoMetadataTx(tx, keeperID, sources, result)
+		plan, err = mergeVideoMetadataTx(tx, keeperID, sources, deps.Options, result)
 		return err
 	}); err != nil {
 		return nil, err
@@ -105,7 +118,9 @@ func MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, deps Media
 		}
 		result.WatchedChanged = true
 	}
-	moveMergedSubtitle(plan.keeper, plan.sources, deps.Subtitles, result)
+	if !deps.Options.SkipSubtitle {
+		moveMergedSubtitle(plan.keeper, plan.sources, deps.Subtitles, result)
+	}
 	return result, nil
 }
 
@@ -143,7 +158,7 @@ func loadMergeVideos(tx *gorm.DB, keeperID uint, sourceIDs []uint) (models.Video
 	return keeper, ordered, nil
 }
 
-func mergeVideoMetadataTx(tx *gorm.DB, keeperID uint, sourceIDs []uint, result *MediaMetadataMergeResult) (videoMergeFollowUp, error) {
+func mergeVideoMetadataTx(tx *gorm.DB, keeperID uint, sourceIDs []uint, options MediaMetadataMergeOptions, result *MediaMetadataMergeResult) (videoMergeFollowUp, error) {
 	keeper, sources, err := loadMergeVideos(tx, keeperID, sourceIDs)
 	if err != nil {
 		return videoMergeFollowUp{}, err
@@ -252,6 +267,10 @@ func mergeVideoMetadataTx(tx *gorm.DB, keeperID uint, sourceIDs []uint, result *
 	}
 
 	// ⑤ 观看：keeper 已看时断点不动；未看时断点取最大（按 keeper 的时长截断）。
+	// 截取片段组（SkipPlaybackState）的已看与断点不适用于完整片，整步跳过。
+	if options.SkipPlaybackState {
+		return plan, nil
+	}
 	if !keeper.IsWatched && bestProgress != nil {
 		position := bestProgress.WatchPositionSeconds
 		if keeper.Duration > 0 && position > keeper.Duration {

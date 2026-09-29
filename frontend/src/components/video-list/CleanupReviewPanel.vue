@@ -146,6 +146,12 @@
                 @click="activeCleanupDirectory = section.directory"
               >
                 <span class="cleanup-dirs__path">{{ section.directory }}</span>
+                <span
+                  v-if="cleanupSelectedCountByDirectory.get(section.directory)"
+                  class="cleanup-dirs__selected"
+                  data-test="cleanup-dir-selected"
+                  :title="`这个目录的候选里已勾选 ${cleanupSelectedCountByDirectory.get(section.directory)} 个`"
+                >已勾 {{ cleanupSelectedCountByDirectory.get(section.directory) }}</span>
                 <span class="cleanup-dirs__count">{{ section.entries.length }}</span>
               </button>
               <div class="cleanup-dirs__spacer"></div>
@@ -196,7 +202,7 @@
                     <input
                       type="checkbox"
                       :checked="isCleanupSelected(entry.group.alternative?.id)"
-                      :disabled="isCleanupTrashed(entry.group.alternative) || isCleanupLocked(entry.group.alternative?.id)"
+                      :disabled="cleanupDialog.processing || isCleanupTrashed(entry.group.alternative) || isCleanupLocked(entry.group.alternative?.id)"
                       @change="toggleCleanupSelection(entry.group.alternative?.id)"
                     />
                     <CleanupThumbnail :video="entry.group.alternative" @preview="previewCleanupVideo" />
@@ -211,7 +217,7 @@
                     </span>
                     <span class="cleanup-item-actions">
                       <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.group.alternative)">预览该版本</button>
-                      <button type="button" class="btn-secondary btn-compact" data-test="cleanup-reject-same-source" @click="rejectCleanupSameSource(entry.group)">不是同源</button>
+                      <button type="button" class="btn-secondary btn-compact" data-test="cleanup-reject-same-source" :disabled="cleanupDialog.processing" @click="rejectCleanupSameSource(entry.group)">不是同源</button>
                     </span>
                   </div>
                 </template>
@@ -243,7 +249,7 @@
                           type="checkbox"
                           data-test="cleanup-clip-select"
                           :checked="isCleanupSelected(entry.group.clip?.id)"
-                          :disabled="isCleanupTrashed(entry.group.clip) || isCleanupLocked(entry.group.clip?.id)"
+                          :disabled="cleanupDialog.processing || isCleanupTrashed(entry.group.clip) || isCleanupLocked(entry.group.clip?.id)"
                           @change="toggleCleanupSelection(entry.group.clip?.id)"
                         />
                         <CleanupThumbnail :video="entry.group.clip" @preview="previewCleanupVideo" />
@@ -259,7 +265,7 @@
                       </div>
                       <div class="cleanup-item-actions">
                         <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.group.clip)">预览片段</button>
-                        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-dismiss-clip" @click="dismissClipCandidate(entry.group)">忽略</button>
+                        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-dismiss-clip" :disabled="cleanupDialog.processing" @click="dismissClipCandidate(entry.group)">忽略</button>
                       </div>
                     </div>
                   </div>
@@ -278,7 +284,7 @@
                       type="button"
                       class="link-btn"
                       data-test="cleanup-suggest-group"
-                      :disabled="entrySuggestedIDs(entry).length === 0"
+                      :disabled="cleanupDialog.processing || entrySuggestedIDs(entry).length === 0"
                       @click="toggleEntrySuggestion(entry)"
                     >{{ isEntryFullySuggested(entry) ? '取消本组勾选' : '按建议勾选本组' }}</button>
                     <button
@@ -286,6 +292,7 @@
                       type="button"
                       class="btn-secondary btn-compact"
                       data-test="cleanup-dismiss-near-group"
+                      :disabled="cleanupDialog.processing"
                       @click="dismissNearDuplicateGroup(entry.group)"
                     >不是重复</button>
                   </div>
@@ -300,7 +307,7 @@
                           type="checkbox"
                           data-test="cleanup-member-select"
                           :checked="isCleanupSelected(member.id)"
-                          :disabled="isCleanupTrashed(member) || isCleanupLocked(member.id)"
+                          :disabled="cleanupDialog.processing || isCleanupTrashed(member) || isCleanupLocked(member.id)"
                           :aria-label="`移到废纸篓 ${member.name || ''}`"
                           @change="toggleCleanupSelection(member.id)"
                         />
@@ -322,6 +329,7 @@
                             type="button"
                             class="btn-secondary btn-compact"
                             data-test="cleanup-set-keeper"
+                            :disabled="cleanupDialog.processing"
                             @click="setCleanupKeeper(entry, member)"
                           >设为保留</button>
                           <button
@@ -329,6 +337,7 @@
                             type="button"
                             class="btn-secondary btn-compact"
                             data-test="cleanup-remove-member"
+                            :disabled="cleanupDialog.processing"
                             @click="removeNearDuplicateMember(entry.group, member)"
                           >移出本组</button>
                         </span>
@@ -343,7 +352,7 @@
                     <input
                       type="checkbox"
                       :checked="isCleanupSelected(entry.keeper?.id)"
-                      :disabled="isCleanupTrashed(entry.keeper) || isCleanupLocked(entry.keeper?.id)"
+                      :disabled="cleanupDialog.processing || isCleanupTrashed(entry.keeper) || isCleanupLocked(entry.keeper?.id)"
                       @change="toggleCleanupSelection(entry.keeper?.id)"
                     />
                     <CleanupThumbnail :video="entry.keeper" @preview="previewCleanupVideo" />
@@ -362,6 +371,7 @@
                         type="button"
                         class="btn-secondary btn-compact"
                         data-test="cleanup-dismiss-video"
+                        :disabled="cleanupDialog.processing"
                         @click="dismissCleanupVideo(entry)"
                       >忽略</button>
                     </span>
@@ -411,7 +421,7 @@
           @click="trashSelectedCleanupCandidates"
           class="btn-danger"
           data-test="cleanup-trash-selected"
-          :disabled="cleanupSelection.length === 0 || cleanupDialog.loading || cleanupDialog.processing"
+          :disabled="cleanupSelection.length === 0 || cleanupDialog.loading || cleanupDialog.processing || cleanupCategory === 'dismissed'"
         >
           {{ cleanupDialog.processing ? '处理中...' : '移到废纸篓' }}
         </button>
@@ -439,7 +449,14 @@
             <input v-model="deleteConfirm.merge" type="checkbox" data-test="cleanup-merge-toggle" />
             把元数据合并到保留项
           </label>
-          <p class="cleanup-delete-confirm__help">标签、人物、收藏、点赞、评分、作品集与观看进度合并到各组保留项；保留项没有同名字幕时，移入被删项的字幕。合并失败时不会删除任何视频。</p>
+          <!-- 合并范围按类别说明（§9.1）：截取片段组不合并观看状态与字幕。 -->
+          <p v-if="deleteConfirm.mergeScope.full" class="cleanup-delete-confirm__help" data-test="cleanup-merge-scope-full">
+            标签、人物、作品集、收藏 / 点赞 / 评分与观看状态（已看、断点）合并到各组保留项；保留项没有同名字幕时，把被删项的字幕复制一份给保留项。
+          </p>
+          <p v-if="deleteConfirm.mergeScope.clip" class="cleanup-delete-confirm__help" data-test="cleanup-merge-scope-clip">
+            截取片段组只合并标签、人物、作品集、收藏 / 点赞 / 评分，不合并观看状态和字幕。
+          </p>
+          <p class="cleanup-delete-confirm__help" data-test="cleanup-merge-note">标签只合并手动标签（自动标签不合并）。撤销删除不会撤回合并。合并失败时不会删除任何视频。</p>
         </template>
         <p class="cleanup-delete-confirm__help">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间。所在磁盘不支持废纸篓时，会先问你怎么处理。</p>
         <div class="modal-actions">
@@ -460,9 +477,9 @@ import BaseModal from '../ui/BaseModal.vue';
 import CleanupThumbnail from '../CleanupThumbnail.vue';
 import { confirmAction, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
 import {
-  applySuggestion, cleanupGroup, clearGroupSelection, curationBadges, defaultSelection, describeSelectionKinds,
-  isGroupFullySuggested, keeperOf, lockedIDs, mergePlan, pruneSelection, selectionSummary, setKeeper,
-  similarityCount, suggestedIDs
+  applySuggestion, cleanupGroup, clearGroupSelection, curationBadges, defaultSelection, describeMergeFailure,
+  describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, mergePlan, pruneSelection, selectionSummary,
+  setKeeper, similarityCount, suggestedIDs
 } from '../../utils/cleanupSelection.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import { formatElapsedDuration } from './format.js';
@@ -481,7 +498,7 @@ function emptyDismissals(kind = 'near_duplicate') {
 }
 
 function emptyDeleteConfirm() {
-  return { show: false, summary: { count: 0, bytes: 0, byKind: {} }, mergeAvailable: false, merge: true };
+  return { show: false, summary: { count: 0, bytes: 0, byKind: {}, similar: 0 }, mergeAvailable: false, mergeScope: { full: false, clip: false }, merge: true };
 }
 
 // 清理候选审阅面板：后台分析状态、按目录分组的候选流、勾选与移到废纸篓。
@@ -719,6 +736,21 @@ export default {
         }))
         .filter(section => section.entries.length > 0);
     },
+    // 目录栏上每个目录已勾选几个（P-032 评审 Minor 8）：只看当前看得到的候选，同一视频在一个目录里只算一次。
+    cleanupSelectedCountByDirectory() {
+      const selected = new Set(this.cleanupSelection);
+      const counts = new Map();
+      for (const section of this.cleanupFilteredSections) {
+        const ids = new Set();
+        for (const entry of section.entries) {
+          for (const member of entry.members) {
+            if (selected.has(member.id)) ids.add(member.id);
+          }
+        }
+        counts.set(section.directory, ids.size);
+      }
+      return counts;
+    },
     activeCleanupSections() {
       const sections = this.cleanupFilteredSections;
       if (sections.length === 0) return [];
@@ -950,14 +982,16 @@ export default {
     // 「按建议勾选本组」只作用于这一组（D-PC49），再点一次取消本组勾选。
     toggleEntrySuggestion(entry) {
       const group = this.entryGroup(entry);
-      if (!group) return;
+      if (!group || this.cleanupDialog.processing) return;
       this.cleanupSelection = this.isEntryFullySuggested(entry)
         ? clearGroupSelection(this.cleanupSelection, group)
         : applySuggestion(this.cleanupSelection, group, this.selectionOptions());
     },
+    // 删除进行中不能换保留项（P-032 评审 I-1）：合并计划已按原保留项算好，这时换过去的新保留项
+    // 可能正在被删。勾选、移出本组与各类忽略同理，按钮都禁用，这里再兜一次。
     setCleanupKeeper(entry, member) {
       const group = this.entryGroup(entry);
-      if (!group || this.isCleanupTrashed(member)) return;
+      if (!group || this.cleanupDialog.processing || this.isCleanupTrashed(member)) return;
       const next = setKeeper({
         groups: this.cleanupGroups,
         overrides: this.cleanupKeepOverrides,
@@ -1152,7 +1186,7 @@ export default {
       return this.cleanupSelection.includes(videoID);
     },
     toggleCleanupSelection(videoID) {
-      if (!videoID) return;
+      if (!videoID || this.cleanupDialog.processing) return;
       if (this.isCleanupSelected(videoID)) {
         this.cleanupSelection = this.cleanupSelection.filter(id => id !== videoID);
         return;
@@ -1178,7 +1212,7 @@ export default {
     // 近似重复「不是重复」：整组两两配对记为忽略（同时否决这些对上待审的同源关系），忽略前先确认（D-PC31）。
     async dismissNearDuplicateGroup(group) {
       const ids = [group.original?.id, ...(group.candidates || []).map(video => video.id)].filter(Boolean);
-      if (ids.length < 2) return;
+      if (ids.length < 2 || this.cleanupDialog.processing) return;
       const confirmed = await confirmAction({
         title: '不是重复',
         message: `确认这组 ${ids.length} 个视频不是重复？\n之后的分析不再把它们报为近似重复，这些配对上待审的同源关系也一并判为「不是同源」。任一文件变化后忽略自动失效，也可以在「已忽略」里撤销。`,
@@ -1204,7 +1238,7 @@ export default {
     async removeNearDuplicateMember(group, member) {
       const ids = [group.original?.id, ...(group.candidates || []).map(video => video.id)].filter(Boolean);
       const memberID = Number(member?.id);
-      if (ids.length < 3 || !ids.includes(memberID)) return;
+      if (ids.length < 3 || !ids.includes(memberID) || this.cleanupDialog.processing) return;
       const confirmed = await confirmAction({
         title: '移出本组',
         message: `把「${member.name || `视频 ${memberID}`}」移出本组？\n只记录它与组内其他 ${ids.length - 1} 个视频不是重复，其余成员之间的关系不变。可以在「已忽略」里撤销。`,
@@ -1224,7 +1258,8 @@ export default {
             return rest.length < 2 ? [] : [{ ...item, original: rest[0], candidates: rest.slice(1) }];
           });
         }
-        this.cleanupSelection = this.cleanupSelection.filter(id => id !== memberID);
+        // 移出的是原保留项时 rest[0] 升为保留项：按新的组重新裁剪，把它移出勾选（P-032 评审 I-1）。
+        this.cleanupSelection = pruneSelection(this.cleanupSelection.filter(id => id !== memberID), this.cleanupGroups, this.selectionOptions());
         notifySuccess('已移出本组，其余成员仍在这一组里。');
         await this.refreshCleanupStatus();
       } catch (err) {
@@ -1235,7 +1270,7 @@ export default {
     async dismissClipCandidate(group) {
       const fullID = group?.full?.id;
       const clipID = group?.clip?.id;
-      if (!fullID || !clipID) return;
+      if (!fullID || !clipID || this.cleanupDialog.processing) return;
       const confirmed = await confirmAction({
         title: '忽略截取片段',
         message: '忽略这对截取片段候选？\n双方文件都不变时，之后的分析不再报出这一对。可以在「已忽略」里撤销。',
@@ -1261,7 +1296,7 @@ export default {
     async dismissCleanupVideo(entry) {
       const video = entry?.keeper;
       const category = entry?.kind === 'low-duration' ? 'short' : entry?.kind === 'low-resolution' ? 'low' : '';
-      if (!video?.id || !category) return;
+      if (!video?.id || !category || this.cleanupDialog.processing) return;
       const label = category === 'short' ? '极短片段' : '极低分辨率';
       const confirmed = await confirmAction({
         title: `忽略${label}候选`,
@@ -1287,7 +1322,7 @@ export default {
       }
     },
     async rejectCleanupSameSource(group) {
-      if (!group?.relation_id) return;
+      if (!group?.relation_id || this.cleanupDialog.processing) return;
       const confirmed = await confirmAction({
         title: '不是同源',
         message: '确认这两个视频不是同源？\n双方内容未变时不再作为相似关系候选，AI 同源审阅也不再询问这一对。这个判断不会出现在「已忽略」列表里。',
@@ -1371,10 +1406,16 @@ export default {
         this.dismissals.undoing = false;
       }
     },
-    // 删除前的汇总确认：返回 null 表示取消，否则 { merge }。
-    askCleanupDeleteConfirm(summary, mergeAvailable) {
+    // 删除前的汇总确认：返回 null 表示取消，否则 { merge }。plan 是合并计划，决定合并范围怎么说明。
+    askCleanupDeleteConfirm(summary, plan) {
       if (this._resolveDeleteConfirm) this._resolveDeleteConfirm(null);
-      this.deleteConfirm = { show: true, summary, mergeAvailable, merge: true };
+      this.deleteConfirm = {
+        show: true,
+        summary,
+        mergeAvailable: plan.length > 0,
+        mergeScope: { full: plan.some(item => item.kind !== 'clip'), clip: plan.some(item => item.kind === 'clip') },
+        merge: true
+      };
       return new Promise(resolve => {
         this._resolveDeleteConfirm = resolve;
       });
@@ -1386,34 +1427,43 @@ export default {
       this.deleteConfirm = emptyDeleteConfirm();
       if (resolve) resolve(confirmed ? { merge } : null);
     },
-    // 删除之前把被删项的整理成果合并到各组保留项（D-PC48）。任何一组失败都不进入删除：
-    // 合并是幂等的并集，处理好之后再删一次即可。
+    // 删除之前按组把被删项的整理成果合并到各组保留项（D-PC48），截取片段组不合并观看状态与字幕（§9.1）。
+    // 任何一组失败都不进入删除：合并是幂等的并集，处理好之后再删一次即可。
     async mergeCleanupMetadata(plan) {
       const warnings = [];
-      for (const item of plan) {
+      for (const [index, item] of plan.entries()) {
         try {
-          const result = await MergeMediaMetadata('video', item.keeperId, item.sourceIds);
+          const result = await MergeMediaMetadata('video', item.keeperId, item.sourceIds, item.options);
           warnings.push(...(result?.warnings || []));
         } catch (err) {
-          notifyError(`合并元数据失败，没有删除任何视频：${err}\n合并可以重复执行，处理好之后再删除即可。`);
+          notifyError(describeMergeFailure(err, index, plan.length, '视频'));
           return null;
         }
       }
       return warnings;
     },
     async trashSelectedCleanupCandidates() {
-      if (this.cleanupDialog.processing || this.deleteConfirm.show) return;
-      const selectedVideos = this.getAllCleanupCandidates()
-        .filter(video => this.cleanupSelection.includes(video.id) && !this.isCleanupTrashed(video));
-      if (selectedVideos.length === 0) {
+      if (this.cleanupDialog.processing || this.deleteConfirm.show || this.cleanupCategory === 'dismissed') return;
+      // 删除前按锁定规则裁剪勾选（与图片清理页同一做法，P-032 评审 I-1）：保留项、已移到废纸篓、
+      // 不再出现在结果里的都不送进删除。
+      const selectedIDs = pruneSelection(this.cleanupSelection, this.cleanupGroups, this.selectionOptions());
+      if (selectedIDs.length === 0) {
         return;
       }
-      const selectedIDs = selectedVideos.map(video => video.id);
-      const names = Object.fromEntries(selectedVideos.map(video => [video.id, video.name]));
-      const plan = mergePlan(this.cleanupGroups, selectedIDs, this.cleanupKeepOverrides);
+      const wanted = new Set(selectedIDs);
+      const names = Object.fromEntries(this.getAllCleanupCandidates()
+        .filter(video => wanted.has(video.id))
+        .map(video => [video.id, video.name]));
+      let plan;
+      try {
+        plan = mergePlan(this.cleanupGroups, selectedIDs, this.selectionOptions());
+      } catch (err) {
+        notifyError(err?.message || String(err));
+        return;
+      }
       const summary = selectionSummary(this.cleanupGroups, selectedIDs, id => this.cleanupMemberSizes.get(id) || 0);
       // 先汇总确认（D-PC49）；取消时不调用任何写入。
-      const choice = await this.askCleanupDeleteConfirm(summary, plan.length > 0);
+      const choice = await this.askCleanupDeleteConfirm(summary, plan);
       if (!choice) return;
 
       this.cleanupDialog.processing = true;
@@ -1429,7 +1479,8 @@ export default {
         // 当场收窄勾选（失败重试时才不会对着已进废纸篓的视频再删一次），
         // 然后才是撤销提示条与列表重载。
         const { result, failedIDs, succeededIDs } = await this.trashVideos(selectedIDs, { names });
-        this.cleanupSelection = selectedIDs.filter(id => failedIDs.has(id));
+        // 勾选改成失败项时按当前的组再裁一次：删除期间结果可能被回读替换过。
+        this.cleanupSelection = pruneSelection(selectedIDs.filter(id => failedIDs.has(id)), this.cleanupGroups, this.selectionOptions());
         await this.afterTrashVideos(succeededIDs);
         // 已清理的项留在结果里，只标记结果可能过期；剩下的候选还能接着审阅。
         this.cleanupTrashedIDs = [...new Set([...this.cleanupTrashedIDs, ...succeededIDs])];
@@ -1557,6 +1608,7 @@ export default {
 .cleanup-dirs__item.active { background: var(--accent-soft); color: var(--accent-text); font-weight: 650; }
 .cleanup-dirs__path { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cleanup-dirs__count { flex: none; font-family: var(--font-mono); }
+.cleanup-dirs__selected { flex: none; padding: 0 6px; border: 1px solid var(--accent-color); border-radius: 999px; color: var(--accent-text); font-size: 11px; white-space: nowrap; }
 .cleanup-dirs__spacer { flex: 1; min-height: 10px; }
 .cleanup-dirs__note { padding: 10px; border-top: 1px solid var(--hairline-soft); color: var(--text-muted); font-size: 11.5px; line-height: 1.6; }
 
