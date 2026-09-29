@@ -49,8 +49,11 @@
         <p class="startup-error-hint">
           这通常只是当前没有连上数据库，已有数据不会因此被删除。
         </p>
-        <p class="startup-error-hint">
-          如果你是双击启动应用，请优先检查 macOS 是否已允许“析微影策”访问本地网络，并确认 Postgres 地址和端口可达。
+        <p v-if="startupBackend === 'sqlite'" class="startup-error-hint" data-test="startup-error-sqlite-hint">
+          当前使用本机 SQLite 数据库：请检查数据目录所在的磁盘是否已连接、是否有剩余空间和写入权限；库文件损坏时，可以用备份目录里的备份替换后重新打开应用。
+        </p>
+        <p v-else class="startup-error-hint" data-test="startup-error-postgres-hint">
+          当前使用 Postgres 数据库：如果你是双击启动应用，请优先检查 macOS 是否已允许“析微影策”访问本地网络，并确认 Postgres 地址和端口可达。
         </p>
       </div>
     </div>
@@ -75,7 +78,7 @@
            不在这个页面时不该有那个副作用，所以用 v-if 而不是 v-show。 -->
       <MovieChartPage v-if="currentPage === 'movie-chart'" />
       <!-- 已看页只读一次本地标记表，进页面才挂载就够了；切回来重新读，不用自己做失效。 -->
-      <WatchedMoviesPage v-if="currentPage === 'watched-movies'" />
+      <WatchedMoviesPage v-if="currentPage === 'watched-movies'" @navigate="navigateTo" @open-video="openVideoFromCommand" />
 
       <SettingsPage
         ref="settingsPage"
@@ -85,6 +88,7 @@
         @settings-saved="handleSettingsUpdate"
         @directories-changed="handleDirectoriesChanged"
         @update:dirty="settingsDirty = Boolean($event)"
+        @relaunch-required="showRelaunchRequired($event && $event.message)"
       />
 
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" />
@@ -129,13 +133,26 @@
     />
     <QuitConfirmDialog />
 
+    <!-- 「待重启」终态（D-PC55 / APP-02）：切换后端或切回之前的后端成功后，维护围栏一直保持到重启，
+         任何数据库读写都会被拒绝。这层遮罩不可关闭，唯一出口是「立即重启」。 -->
+    <div v-if="relaunchRequired" class="relaunch-overlay" role="alertdialog" aria-modal="true" data-test="relaunch-overlay">
+      <div class="relaunch-card">
+        <h2>需要重启应用</h2>
+        <p class="relaunch-text">{{ relaunchMessage || '数据库后端已切换，重启应用后生效；在此之前数据库保持只读。' }}</p>
+        <p v-if="relaunchError" class="relaunch-error" data-test="relaunch-error">{{ relaunchError }}</p>
+        <button type="button" class="btn btn-primary" :disabled="relaunching" data-test="relaunch-now" @click="relaunchNow">
+          {{ relaunching ? '正在重启…' : '立即重启' }}
+        </button>
+      </div>
+    </div>
+
     <!-- 全局提示宿主：webview 的 alert/confirm 是哑的，所有错误提示和危险操作确认都走这里 -->
     <AppFeedback />
   </div>
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs, GetDatabaseBackendStatus, RelaunchApp } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
@@ -176,6 +193,13 @@ export default {
       tags: [],
       directories: [],
       startupError: '',
+      // 启动错误页按当前后端给提示（D-PC58）：sqlite / postgres，读不到时为空串（按 Postgres 口径提示）。
+      startupBackend: '',
+      // 「待重启」遮罩（D-PC55）。
+      relaunchRequired: false,
+      relaunchMessage: '',
+      relaunching: false,
+      relaunchError: '',
       systemTheme: 'light',
       libraryCounts: null,
       // 已上报给后端的前后台标记；null = 还没报过。相同值不重复上报。
@@ -207,6 +231,13 @@ export default {
     this.attachForegroundReporting();
     this.startupError = await GetStartupError();
     if (this.startupError) {
+      // 后端状态只读配置、不需要数据库连接，连不上库时也能拿到。
+      try {
+        const status = await GetDatabaseBackendStatus();
+        this.startupBackend = String(status?.backend || '');
+      } catch {
+        this.startupBackend = '';
+      }
       this.applyTheme();
       return;
     }
@@ -218,6 +249,12 @@ export default {
     // 扫描完成事件（D-PC09）：库里真的多了、少了或恢复了视频时，顶栏的库规模计数跟着刷新。
     // 列表本身的刷新归片库页。
     this.registerRuntimeEvent('library-scan-summary', event => this.handleLibraryScanSummary(event));
+    // 迁移并切换在后台完成：用户可能已经离开设置页，遮罩由这里统一弹出（D-PC55）。
+    this.registerRuntimeEvent('database-switch-state', status => {
+      if (status?.completed && status?.relaunch_required) {
+        this.showRelaunchRequired(status.message);
+      }
+    });
     
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     this.systemTheme = mediaQuery.matches ? 'dark' : 'light';
@@ -268,6 +305,26 @@ export default {
     }
   },
   methods: {
+    // 「待重启」终态只进不出：之后再收到事件或 emit 也只更新说明文字。
+    showRelaunchRequired(message) {
+      this.relaunchRequired = true;
+      if (message) this.relaunchMessage = String(message);
+    },
+    async relaunchNow() {
+      if (this.relaunching) return;
+      this.relaunching = true;
+      this.relaunchError = '';
+      try {
+        const result = await RelaunchApp();
+        if (!result?.relaunched) {
+          this.relaunchError = result?.message || '无法自动重启，请手动退出并重新打开应用。';
+          this.relaunching = false;
+        }
+      } catch (error) {
+        this.relaunchError = String(error?.message || error || '') || '无法自动重启，请手动退出并重新打开应用。';
+        this.relaunching = false;
+      }
+    },
     // 所有切页都走这里（顶栏、命令面板、待处理工作台、图片页的「去设置」）。设置页有未保存修改时
     // 先确认「放弃未保存的设置修改？」（D-PC57、APP-08）：SettingsPage 是 v-if，切走即销毁表单。
     // 能直接切时同步返回 true；要确认时返回 Promise，用户选继续编辑则 resolve 为 false。
@@ -554,6 +611,40 @@ export default {
 .header-tools + .header-counts { margin-left: 0; }
 
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
+.relaunch-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.45);
+}
+.relaunch-card {
+  max-width: 480px;
+  width: 100%;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 24px 28px;
+}
+.relaunch-card h2 {
+  font-size: 18px;
+  margin-bottom: 10px;
+  color: var(--text-primary);
+}
+.relaunch-text {
+  font-size: 14px;
+  line-height: 1.7;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+}
+.relaunch-error {
+  font-size: 13px;
+  color: var(--danger-color);
+  margin-bottom: 12px;
+}
 .startup-error-view {
   flex: 1;
   display: flex;

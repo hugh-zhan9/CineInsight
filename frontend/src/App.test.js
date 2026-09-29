@@ -5,7 +5,8 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetSettings', 'GetAllTags', 'GetAllDirectories', 'GetStartupError',
   'SyncScanDirectories', 'SyncImageDirectories', 'GetLibraryCounts', 'LogFrontend',
   'SetWindowForeground', 'GetVideosByIDs',
-  'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListSavedLibraryViews', 'ListCollections', 'ListPeople'
+  'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListSavedLibraryViews', 'ListCollections', 'ListPeople',
+  'GetDatabaseBackendStatus', 'RelaunchApp'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../wailsjs/go/main/App', () => api);
@@ -562,5 +563,67 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(wrapper.findComponent({ name: 'QuitConfirmDialog' }).exists()).toBe(true);
     expect(wrapper.find('[data-test="open-task-center"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="open-pending-work"]').exists()).toBe(false);
+  });
+});
+
+describe('「待重启」遮罩与启动错误页', () => {
+  let handlers;
+
+  beforeEach(() => {
+    handlers = {};
+    window.runtime = { EventsOn: (event, handler) => { handlers[event] = handler; return () => { delete handlers[event]; }; } };
+  });
+
+  afterEach(() => {
+    delete window.runtime;
+  });
+
+  it('APP-02 后台迁移完成且需要重启时，不在设置页也弹出不可关闭的「立即重启」遮罩', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.find('[data-test="relaunch-overlay"]').exists()).toBe(false);
+
+    handlers['database-switch-state']({ completed: false, relaunch_required: false, running: true });
+    await flushPromises();
+    expect(wrapper.find('[data-test="relaunch-overlay"]').exists()).toBe(false);
+
+    handlers['database-switch-state']({ completed: true, relaunch_required: true, message: '迁移完成，请立即重启应用' });
+    await flushPromises();
+    const overlay = wrapper.get('[data-test="relaunch-overlay"]');
+    expect(overlay.text()).toContain('迁移完成，请立即重启应用');
+    // 只有一个出口：没有关闭或取消按钮。
+    expect(overlay.findAll('button').map(button => button.text())).toEqual(['立即重启']);
+
+    api.RelaunchApp.mockResolvedValue({ relaunched: true, message: '' });
+    await wrapper.get('[data-test="relaunch-now"]').trigger('click');
+    await flushPromises();
+    expect(api.RelaunchApp).toHaveBeenCalledTimes(1);
+  });
+
+  it('APP-02 设置页上报 relaunch-required 同样弹出遮罩；自动重启失败时说明原因且按钮可再次点击', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'settings' });
+    wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('relaunch-required', { message: '已切回之前的后端，重启后生效' });
+    await flushPromises();
+    expect(wrapper.get('[data-test="relaunch-overlay"]').text()).toContain('已切回之前的后端，重启后生效');
+
+    api.RelaunchApp.mockResolvedValue({ relaunched: false, message: '当前不是以应用包运行，请手动重新打开应用' });
+    await wrapper.get('[data-test="relaunch-now"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="relaunch-error"]').text()).toContain('请手动重新打开应用');
+    expect(wrapper.get('[data-test="relaunch-now"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('APP-10 启动错误页按当前后端给出 SQLite 或 Postgres 的排查提示', async () => {
+    api.GetStartupError.mockResolvedValue('打开数据库失败');
+    api.GetDatabaseBackendStatus.mockResolvedValue({ backend: 'sqlite' });
+    let wrapper = await mountApp();
+    expect(wrapper.find('[data-test="startup-error-sqlite-hint"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="startup-error-postgres-hint"]').exists()).toBe(false);
+    wrapper.unmount();
+
+    api.GetDatabaseBackendStatus.mockResolvedValue({ backend: 'postgres' });
+    wrapper = await mountApp();
+    expect(wrapper.find('[data-test="startup-error-postgres-hint"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="startup-error-sqlite-hint"]').exists()).toBe(false);
   });
 });

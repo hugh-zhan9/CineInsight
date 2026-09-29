@@ -12,9 +12,23 @@ const AUTO_DISMISS_MS = 4500;
 let nextToastID = 1;
 let pendingConfirmResolve = null;
 
+// 后端少数错误没有中文文案（来自数据库层的哨兵错误），在展示前统一换成中文（G-3）。
+const BACKEND_ERROR_TRANSLATIONS = [
+  ['database is in maintenance mode', '数据库正在恢复备份或切换后端，暂时无法操作；如已提示需要重启，请重启应用'],
+  ['sql: database is closed', '数据库连接已关闭，请重启应用'],
+];
+
+export function translateBackendError(message) {
+  let text = String(message ?? '');
+  for (const [source, target] of BACKEND_ERROR_TRANSLATIONS) {
+    text = text.split(source).join(target);
+  }
+  return text;
+}
+
 // 错误不自动消失：用户可能正盯着别处，错过了就等于没提示。
 export function notify(message, { level = 'info', timeout = level === 'error' ? 0 : AUTO_DISMISS_MS } = {}) {
-  const text = String(message ?? '').trim();
+  const text = translateBackendError(message).trim();
   if (!text) return null;
   const id = nextToastID++;
   feedbackState.toasts.push({ id, level, message: text });

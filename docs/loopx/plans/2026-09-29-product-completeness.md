@@ -1300,3 +1300,10 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 **P-040**：
 - 前端已不再调用 `ListFaceClusters`；
 - `models.ts` 里缺 `services.TagUsageCount` 类型，重新生成绑定时核对。
+
+**主代理 App.vue 收尾**（2026-09-30）：
+- 全局「待重启」遮罩（D-PC55 / APP-02）不可关闭，只有「立即重启」一个出口。它监听 `database-switch-state`（completed && relaunch_required）与 `SettingsPage` 的 `relaunch-required`，`RelaunchApp` 失败时显示原因，按钮可再次点击。
+- 启动错误页按 `GetDatabaseBackendStatus` 返回的后端分别给出 SQLite / Postgres 的排查提示（D-PC58 / APP-10）。
+- 接好 `WatchedMoviesPage` 的 `@navigate` / `@open-video`。
+- `notify` 在展示前把数据库层的英文哨兵错误翻成中文，覆盖 `database is in maintenance mode` 与 `sql: database is closed`，并导出 `translateBackendError`，内联错误也可以直接使用。
+- 前端全量 `npm test` 通过：81 个测试文件、980 条用例。
