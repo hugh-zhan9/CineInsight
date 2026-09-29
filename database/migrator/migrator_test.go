@@ -654,6 +654,13 @@ func seedProductCompletenessRows(t *testing.T, db *gorm.DB, videoIDs []uint) {
 			Directory: "/dl", Status: "succeeded", FinishedAt: &stamp,
 		},
 		&models.CleanupVideoDismissal{VideoID: videoIDs[0], Category: models.CleanupDismissalCategoryShort, Fingerprint: "100:1700000000123000000"},
+		// 超分任务的 copy_metadata（MEDIA-11）：true 必须原样往返。
+		&models.VideoEnhancementTask{
+			VideoID: videoIDs[0], Profile: models.EnhancementProfileGeneral, Scale: 2, CopyMetadata: true,
+			Status: models.EnhancementStatusCancelled, Phase: models.EnhancementPhaseEnhance,
+			SourceSize: 4096, SourceModTimeNS: 1_700_000_000_789_000_000,
+			OutputBasename: "va.enhanced-general-2x.mkv", ErrorCode: "cancelled",
+		},
 	}
 	for _, row := range rows {
 		if err := db.Create(row).Error; err != nil {
@@ -728,5 +735,12 @@ func TestMigrateCarriesProductCompletenessTablesAndColumns(t *testing.T) {
 	}
 	if settings.FavoritesUnifiedAt == nil || !settings.FavoritesUnifiedAt.Equal(stamp) {
 		t.Fatalf("favorites_unified_at 应原样保留: %+v", settings.FavoritesUnifiedAt)
+	}
+	var enhancement models.VideoEnhancementTask
+	if err := back.Where("output_basename = ?", "va.enhanced-general-2x.mkv").First(&enhancement).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !enhancement.CopyMetadata || enhancement.VideoID != videoIDs[0] || enhancement.ErrorCode != "cancelled" {
+		t.Fatalf("往返后超分任务的 copy_metadata 应原样保留为 true（MEDIA11）: %+v", enhancement)
 	}
 }

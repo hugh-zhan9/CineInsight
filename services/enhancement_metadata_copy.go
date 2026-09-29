@@ -17,8 +17,8 @@ import (
 // 超分产物继承原片信息（D-PC24「把原片的标签、人物、作品集与外挂字幕复制到产物」）。
 //
 // 这两个函数只负责「怎么复制」。「这一次要不要复制」来自 CreateEnhancementTask 的
-// copy_metadata 入参，而任务可能跨重启才发布，这个开关存在哪里设计没有给出——
-// 见 P-025 交付报告的停下项，接线等主代理裁决后在 publishOutput 的事务里调用。
+// copy_metadata 入参，落在 video_enhancement_tasks.copy_metadata（任务可能跨重启才发布，
+// 重试沿用）。publishOutput 在发布事务里调用前者，事务提交、路径锁释放之后调用后者。
 
 // copyEnhancementSourceMetadataTx 在产物入库的同一事务里，把原片的非自动标签、人物、作品集
 // 成员关系复制给产物。自动标签（automatic_kind 非空）由产物自己的规则重新判定，不复制；

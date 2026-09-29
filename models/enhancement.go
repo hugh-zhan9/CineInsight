@@ -33,6 +33,10 @@ type VideoEnhancementTask struct {
 
 	Profile string `gorm:"size:16;not null" json:"profile"`
 	Scale   int    `gorm:"not null;default:2" json:"scale"`
+	// CopyMetadata：发布时把原片的非自动标签、人物、作品集与外挂字幕复制给产物（D-PC24）。
+	// 由创建请求显式传入，重试沿用；历史任务创建时没有这个选项，升级后为 false。
+	// false 是零值，所以这一列可以带 gorm default（G-1）。
+	CopyMetadata bool `gorm:"not null;default:false" json:"copy_metadata"`
 
 	Status string `gorm:"size:24;not null;index" json:"status"`
 	Phase  string `gorm:"size:16;not null;default:'preflight'" json:"phase"`

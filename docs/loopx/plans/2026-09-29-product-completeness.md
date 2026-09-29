@@ -31,7 +31,7 @@ slices:
     status: in_progress
     depends: [P-001]
   - id: P-014
-    status: pending
+    status: in_progress
     depends: [P-013]
   - id: P-016
     status: in_progress

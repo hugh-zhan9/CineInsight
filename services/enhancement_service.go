@@ -30,6 +30,8 @@ type EnhancementService struct {
 	sameSource   *AISameSourceService
 	// 模型按需下载后的安装目录；重新探测能力时要带上它。
 	modelInstallDir string
+	// 应用数据目录：复制外挂字幕时字幕写入器在这里放备份（D-PC13）。
+	dataDir string
 
 	// 测试接缝：外部命令、磁盘空间、ffmpeg/ffprobe 定位、时间源。
 	runCommand       enhancementCommandRunner
@@ -115,9 +117,12 @@ type EnhancementTaskView struct {
 }
 
 // EnhancementCreateRequest 创建一个超分任务。
+// CopyMetadata 为 true 时，产物发布时继承原片的非自动标签、人物、作品集与外挂字幕（D-PC24）；
+// 请求里不带这个字段即为 false。
 type EnhancementCreateRequest struct {
-	VideoID uint   `json:"video_id"`
-	Profile string `json:"profile"`
+	VideoID      uint   `json:"video_id"`
+	Profile      string `json:"profile"`
+	CopyMetadata bool   `json:"copy_metadata"`
 }
 
 // ErrEnhancementPublishInProgress 表示任务已进入原子发布，不能取消。
@@ -127,6 +132,7 @@ var ErrEnhancementPublishInProgress = errors.New("publish_in_progress")
 func NewEnhancementService(videoService *VideoService, probe *MediaProbeService, sameSource *AISameSourceService, dataDir string) *EnhancementService {
 	return &EnhancementService{
 		modelInstallDir:  EnhancementModelDirFor(dataDir),
+		dataDir:          dataDir,
 		capability:       ProbeEnhancementRuntime("", EnhancementModelDirFor(dataDir)),
 		videoService:     videoService,
 		probe:            probe,
@@ -207,6 +213,11 @@ func (s *EnhancementService) CreateTask(ctx context.Context, request Enhancement
 	if err := s.ensureOutputNameFree(video, outputBasename); err != nil {
 		return nil, err
 	}
+	// 新建任务取代这个视频此前保留着检查点的任务（MEDIA-03）：放在磁盘下限检查之前，
+	// 旧检查点占着的空间才算得进这次的可用空间。
+	if err := s.discardRetainedCheckpoints(video); err != nil {
+		return nil, err
+	}
 	if err := s.ensureDiskFloor(video.Path, info.Size(), probeInfo.Width, probeInfo.Height); err != nil {
 		return nil, err
 	}
@@ -215,6 +226,7 @@ func (s *EnhancementService) CreateTask(ctx context.Context, request Enhancement
 		VideoID:         video.ID,
 		Profile:         spec.Profile,
 		Scale:           spec.Scale,
+		CopyMetadata:    request.CopyMetadata,
 		Status:          models.EnhancementStatusQueued,
 		Phase:           models.EnhancementPhasePreflight,
 		SourceSize:      info.Size(),
@@ -388,10 +400,17 @@ func (s *EnhancementService) RetryTask(taskID uint) (*EnhancementTaskView, error
 		delete(updates, "total_frames")
 		delete(updates, "committed_frames")
 	}
-	if err := database.DB.Model(&models.VideoEnhancementTask{}).
-		Where("id = ? AND status IN ?", task.ID, []string{models.EnhancementStatusFailed, models.EnhancementStatusCancelled}).
-		Updates(updates).Error; err != nil {
-		return nil, err
+	// 条件带上读到的结束码（G-2）：新建同视频任务可能刚把这条的检查点清掉并改了结束码
+	// （discardRetainedCheckpoints），这时不能再按「从检查点续跑」排回队列。
+	// copy_metadata 不在 updates 里：重试沿用创建时的选择。
+	result := database.DB.Model(&models.VideoEnhancementTask{}).
+		Where("id = ? AND status = ? AND error_code = ?", task.ID, task.Status, task.ErrorCode).
+		Updates(updates)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return nil, errors.New("任务状态已变化，请刷新后再重试")
 	}
 	s.emitTaskByID(task.ID)
 	s.ensureWorker()
@@ -571,9 +590,62 @@ const (
 	enhancementCodeCancelled        = "cancelled"
 )
 
+// enhancementCodeCheckpointDiscarded 表示保留的检查点已被新建的同视频任务清理（MEDIA-03）。
+// 任务状态不变（仍是 failed / cancelled），只是结束码不再属于「保留检查点」，重试从头开始。
+const enhancementCodeCheckpointDiscarded = "checkpoint_discarded"
+
 // enhancementCheckpointKept 报告这个结束码是否保留工作目录与检查点。
 func enhancementCheckpointKept(code string) bool {
 	return code == enhancementCodeDiskInsufficient || code == enhancementCodeCancelled
+}
+
+// discardRetainedCheckpoints 在为 video 新建任务之前，清理它此前保留着检查点的任务
+// （cancelled / disk_insufficient，与 RetryTask 判断能否续跑的口径一致）：先用条件更新把
+// 结束码改成 checkpoint_discarded，更新成功的那一条再删工作目录；条件更新落空说明任务
+// 恰好被重试排回了队列，它的检查点不能动。
+//
+// 该视频已有活跃任务时什么都不做：这次创建会幂等地返回那个任务，并没有新建。
+func (s *EnhancementService) discardRetainedCheckpoints(video models.Video) error {
+	var active int64
+	if err := database.DB.Model(&models.VideoEnhancementTask{}).
+		Where("video_id = ? AND status IN ?", video.ID, enhancementActiveStatuses()).
+		Count(&active).Error; err != nil {
+		return err
+	}
+	if active > 0 {
+		return nil
+	}
+	var retained []models.VideoEnhancementTask
+	if err := database.DB.
+		Where("video_id = ? AND status IN ? AND error_code IN ?", video.ID,
+			[]string{models.EnhancementStatusFailed, models.EnhancementStatusCancelled},
+			[]string{enhancementCodeDiskInsufficient, enhancementCodeCancelled}).
+		Order("id ASC").Find(&retained).Error; err != nil {
+		return err
+	}
+	for _, task := range retained {
+		reason := "已取消"
+		if task.ErrorCode == enhancementCodeDiskInsufficient {
+			reason = "空间不足"
+		}
+		result := database.DB.Model(&models.VideoEnhancementTask{}).
+			Where("id = ? AND status = ? AND error_code = ?", task.ID, task.Status, task.ErrorCode).
+			Updates(map[string]any{
+				"error_code":    enhancementCodeCheckpointDiscarded,
+				"error_summary": reason + "；保留的进度已在新建同一视频的超分任务时清理，重试将从头开始",
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			continue
+		}
+		task.Video = video
+		s.cleanupTaskWorkdir(task)
+		logEnhancement("task=%d checkpoint discarded by a new task for video=%d", task.ID, video.ID)
+		s.emitTaskByID(task.ID)
+	}
+	return nil
 }
 
 func (s *EnhancementService) failTask(taskID uint, code, summary string) {

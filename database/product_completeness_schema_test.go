@@ -78,6 +78,7 @@ func TestProductCompletenessSchemaCreatesNewTablesAndColumns(t *testing.T) {
 		{&models.CollectionSuggestion{}, "dismiss_key"}, {&models.CollectionSuggestion{}, "target_collection_id"},
 		{&models.SubtitleIndexState{}, "has_sidecar"},
 		{&models.FaceCluster{}, "ignored_at"}, {&models.SavedLibraryView{}, "person_ids_json"},
+		{&models.VideoEnhancementTask{}, "copy_metadata"},
 	} {
 		if !migrator.HasColumn(check.model, check.column) {
 			t.Fatalf("缺少列 %T.%s", check.model, check.column)
@@ -750,6 +751,65 @@ func TestGlossaryUniqueKeyFreshDatabase(t *testing.T) {
 		t.Fatal("新库不该有旧的术语唯一索引")
 	}
 	assertIndexColumnOrder(t, db, "idx_translation_glossary_entries_scope_lang_term", "scope_key", "target_language", "source_term_lower")
+}
+
+// ---------------------------------------------------------------- 超分 copy_metadata
+
+// MEDIA-11：老库升级补上 video_enhancement_tasks.copy_metadata，历史任务为 false（它们创建时
+// 没有这个选项）；新行不写这一列同样是 false，显式 true 存得下、重复 ApplySchema 不被改写。
+func TestEnhancementCopyMetadataColumnDefaultsFalseForOldTasksMEDIA11(t *testing.T) {
+	db := dbtest.OpenRaw(t)
+	if err := database.ApplySchema(db); err != nil {
+		t.Fatal(err)
+	}
+	video := models.Video{Name: "v.mp4", Path: "/lib/v.mp4", Directory: "/lib"}
+	if err := db.Create(&video).Error; err != nil {
+		t.Fatal(err)
+	}
+	newTask := func(status string) models.VideoEnhancementTask {
+		return models.VideoEnhancementTask{
+			VideoID: video.ID, Profile: "general", Scale: 2, Status: status, Phase: "preflight",
+			OutputBasename: "v.enhanced-general-2x.mkv",
+		}
+	}
+	historical := newTask("completed")
+	if err := db.Create(&historical).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 退回老库形状：这一列还不存在。
+	if err := db.Migrator().DropColumn(&models.VideoEnhancementTask{}, "copy_metadata"); err != nil {
+		t.Fatalf("模拟老库删除列失败(%s): %v", dbtest.Backend(), err)
+	}
+	recycleConnections(t, db)
+	applySchemaTwice(t, db)
+
+	var upgraded models.VideoEnhancementTask
+	if err := db.First(&upgraded, historical.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if upgraded.CopyMetadata {
+		t.Fatalf("历史任务升级后 copy_metadata 应为 false(%s)", dbtest.Backend())
+	}
+
+	omitted := newTask("failed")
+	if err := db.Omit("copy_metadata").Create(&omitted).Error; err != nil {
+		t.Fatal(err)
+	}
+	explicit := newTask("cancelled")
+	explicit.CopyMetadata = true
+	if err := db.Create(&explicit).Error; err != nil {
+		t.Fatal(err)
+	}
+	applySchemaTwice(t, db)
+	for id, want := range map[uint]bool{historical.ID: false, omitted.ID: false, explicit.ID: true} {
+		var reloaded models.VideoEnhancementTask
+		if err := db.First(&reloaded, id).Error; err != nil {
+			t.Fatal(err)
+		}
+		if reloaded.CopyMetadata != want {
+			t.Fatalf("任务 %d 的 copy_metadata 应为 %v(%s)", id, want, dbtest.Backend())
+		}
+	}
 }
 
 // ---------------------------------------------------------------- 整体幂等

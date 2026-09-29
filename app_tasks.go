@@ -170,7 +170,7 @@ func (a *App) CreateEnhancementTask(request services.EnhancementCreateRequest) (
 		ctx = context.Background()
 	}
 	view, err := a.enhancement.CreateTask(ctx, request)
-	log.Printf("API CreateEnhancementTask video=%d profile=%s err=%v", request.VideoID, request.Profile, err)
+	log.Printf("API CreateEnhancementTask video=%d profile=%s copy_metadata=%v err=%v", request.VideoID, request.Profile, request.CopyMetadata, err)
 	return view, err
 }
 

@@ -583,7 +583,8 @@ func (s *EnhancementService) countVideoPackets(ctx context.Context, path string)
 }
 
 // publishOutput 在窄临界区内原子发布：再查冲突 → rename → 单事务建
-// videos 记录、自动标签、已确认同源关系并完成任务。事务失败回滚文件。
+// videos 记录、自动标签、（copy_metadata 时）原片的标签/人物/作品集、已确认同源关系并完成任务。
+// 事务失败回滚文件。外挂字幕在事务提交、路径锁释放之后复制，失败只给任务留一句警告。
 func (s *EnhancementService) publishOutput(ctx context.Context, task models.VideoEnhancementTask, source models.Video, stagingPath string) error {
 	targetPath := filepath.Join(filepath.Dir(source.Path), task.OutputBasename)
 
@@ -597,7 +598,14 @@ func (s *EnhancementService) publishOutput(ctx context.Context, task models.Vide
 	}
 
 	release := BeginLibraryMaintenance()
-	defer release()
+	released := false
+	releaseOnce := func() {
+		if !released {
+			released = true
+			release()
+		}
+	}
+	defer releaseOnce()
 
 	if _, err := os.Lstat(targetPath); err == nil {
 		return fmt.Errorf("output_conflict: 输出路径在发布时已被占用")
@@ -633,6 +641,12 @@ func (s *EnhancementService) publishOutput(ctx context.Context, task models.Vide
 		}
 		if err := syncShortVideoTagForVideo(tx, output.ID); err != nil {
 			return err
+		}
+		// D-PC24：与产物入库同一事务，复制失败整个发布回滚（MEDIA-11）。
+		if task.CopyMetadata {
+			if err := copyEnhancementSourceMetadataTx(tx, source.ID, output.ID); err != nil {
+				return err
+			}
 		}
 		pairA, pairB, err := normalizedVideoPair(source.ID, output.ID)
 		if err != nil {
@@ -694,6 +708,18 @@ func (s *EnhancementService) publishOutput(ctx context.Context, task models.Vide
 		if err := database.DB.First(&outputVideo, output.ID).Error; err == nil {
 			if _, _, err := s.sameSource.ensureFingerprint(context.Background(), outputVideo, false); err != nil {
 				logEnhancement("task=%d output=%d fingerprint deferred: %v", task.ID, output.ID, sanitizeEnhancementError(err.Error()))
+			}
+		}
+	}
+	if task.CopyMetadata {
+		// 外挂字幕经字幕写入器复制（D-PC13）：它要拿字幕锁，所以先放掉路径锁，不在锁里嵌锁。
+		// 产物已经入库，复制失败只把一句不含路径的警告留在已完成任务的 error_summary 上。
+		releaseOnce()
+		if warning := copyEnhancementSidecarSubtitle(context.Background(), NewSubtitleFileWriter(s.dataDir), source, output); warning != "" {
+			if err := database.DB.Model(&models.VideoEnhancementTask{}).
+				Where("id = ? AND status = ?", task.ID, models.EnhancementStatusCompleted).
+				Update("error_summary", warning).Error; err != nil {
+				logEnhancement("task=%d subtitle copy warning not recorded: %v", task.ID, sanitizeEnhancementError(err.Error()))
 			}
 		}
 	}
