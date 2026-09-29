@@ -6,29 +6,45 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync/atomic"
 	"video-master/database"
 	"video-master/models"
 
 	"gorm.io/gorm"
 )
 
+// withoutTrashTombstones 把「软删、且回收站条目是墓碑（trashStateRemoved）」的媒体行排除在按路径的查询之外（修复 L m4）：
+// 墓碑的媒体记录永不再可见、也不可恢复，按路径判断占用或挑「同路径最近的软删行」时把它当作已硬删。否则它会永久占住
+// 超分的输出路径，或把同路径更早的那条软删行（例如「只删记录」的屏蔽、扫描器的缺失软删）永远挡在后面。
+// 活跃行一律保留（恢复成功但残留名字没清掉时，墓碑引用的记录是活跃的，修复 L m5）。
+// query 的主表必须是 spec.mediaTable（videos / images）。
+func withoutTrashTombstones(query *gorm.DB, spec trashKindSpec) *gorm.DB {
+	return query.Where("("+spec.mediaTable+".deleted_at IS NULL OR NOT EXISTS (SELECT 1 FROM "+spec.table+
+		" tomb WHERE tomb."+spec.entityCol+" = "+spec.mediaTable+".id AND tomb.state = ?))", trashStateRemoved)
+}
+
 // Caller holds the scan/path locks. Historical unknown and user deletions are
 // intentionally left alone: file presence does not establish deletion intent.
 func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error) {
 	var video models.Video
-	err := database.DB.Unscoped().Where("path = ?", path).
+	err := withoutTrashTombstones(database.DB.Unscoped().Where("path = ?", path), videoTrashKind).
 		Order("deleted_at IS NULL DESC, id DESC").First(&video).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, false, err
 	}
 	if err == nil && video.DeletedAt.IsValid() && video.DeletedBy == "scanner" {
 		var entry models.VideoTrashEntry
-		if err := database.DB.Where("video_id = ? AND deleted_by = ? AND file_moved = ? AND state = ? AND mode IN ?",
-			video.ID, "scanner", false, trashStateDeleted, []string{models.TrashModeMissing, ""}).First(&entry).Error; err != nil {
-			return nil, false, err
+		result := database.DB.Where("video_id = ? AND deleted_by = ? AND file_moved = ? AND state = ? AND mode IN ?",
+			video.ID, "scanner", false, trashStateDeleted, []string{models.TrashModeMissing, ""}).Limit(1).Find(&entry)
+		if result.Error != nil {
+			return nil, false, result.Error
 		}
-		restored, err := s.restoreTrashEntry(&entry)
-		return restored, err == nil, err
+		if result.RowsAffected == 1 {
+			restored, err := s.restoreTrashEntry(&entry)
+			return restored, err == nil, err
+		}
+		// 没有 deleted 的 missing 条目（例如上次恢复中断、条目停在 restoring）：交给下面的同路径软删判定
+		// （softDeletedVideoPathSkip），restoring 由它跳过、交给启动对账，不报 add 错误（修复 L m2）。
 	}
 	// 访达「放回原处」由 addVideoOrRestorePutBack 统一处理（与手动添加同一条路，Minor 2）。
 	return s.addVideoOrRestorePutBack(path)
@@ -40,7 +56,8 @@ func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error)
 // 遍历同路径的全部软删行、取身份一致的那条，而不是只看最新一条（Minor 2）。
 // 条目此前若因废纸篓里找不到文件被标成 file_gone，先条件更新回 deleted 再走既有恢复。
 // 原路径用 Lstat 读取：是符号链接时一律不认定放回（m1）。legacy_trash 行按大小 + inode 认定放回后，条目记录了
-// file_sha256 的再核对一次内容哈希，不一致不认定（legacyPutBackContentConfirmed，修复 I m-b）。
+// file_sha256 的再核对一次内容哈希，不一致不认定（checkLegacyPutBackContent，修复 I m-b）；读不出哈希（EIO / EACCES 等）
+// 是「无法判定」（修复 L m1）：没有别的行能认定放回时返回那个读取错误，调用方既不恢复也不新建（扫描计入读取错误）。
 // 调用方持有路径读锁（扫描或 AddVideo）。
 func (s *VideoService) restorePutBackVideo(path string) (*models.Video, bool, error) {
 	info := originalRegularFile(path)
@@ -52,14 +69,20 @@ func (s *VideoService) restorePutBackVideo(path string) (*models.Video, bool, er
 		Order("id DESC").Find(&deleted).Error; err != nil {
 		return nil, false, err
 	}
+	var undetermined error
 	for _, row := range deleted {
 		var entry models.VideoTrashEntry
 		result := database.DB.Where("video_id = ?", row.ID).Limit(1).Find(&entry)
 		if result.Error != nil {
 			return nil, false, result.Error
 		}
-		if result.RowsAffected == 0 || !putBackDetectedFor(videoEntryFacts(entry), info) ||
-			!legacyPutBackContentConfirmed(videoEntryFacts(entry), entry.FileSHA256, path) {
+		if result.RowsAffected == 0 || !putBackDetectedFor(videoEntryFacts(entry), info) {
+			continue
+		}
+		if content, contentErr := checkLegacyPutBackContent(videoEntryFacts(entry), entry.FileSHA256, path); content != legacyContentConfirmed {
+			if content == legacyContentUndetermined && undetermined == nil {
+				undetermined = contentErr
+			}
 			continue
 		}
 		if entry.State == models.TrashStateFileGone {
@@ -77,10 +100,13 @@ func (s *VideoService) restorePutBackVideo(path string) (*models.Video, bool, er
 		}
 		return restored, true, nil
 	}
+	if undetermined != nil {
+		return nil, false, undetermined
+	}
 	return nil, false, nil
 }
 
-// restoreImageIfPutBack 是 restorePutBackVideo 的图片版本（I3、Minor 2、I-1、m1）。
+// restoreImageIfPutBack 是 restorePutBackVideo 的图片版本（I3、Minor 2、I-1、m1；内容哈希读不出时同样返回读取错误，修复 L m1）。
 func (s *ImageService) restoreImageIfPutBack(path string) (bool, error) {
 	info := originalRegularFile(path)
 	if info == nil {
@@ -91,14 +117,20 @@ func (s *ImageService) restoreImageIfPutBack(path string) (bool, error) {
 		Order("id DESC").Find(&deleted).Error; err != nil {
 		return false, err
 	}
+	var undetermined error
 	for _, row := range deleted {
 		var entry models.ImageTrashEntry
 		result := database.DB.Where("image_id = ?", row.ID).Limit(1).Find(&entry)
 		if result.Error != nil {
 			return false, result.Error
 		}
-		if result.RowsAffected == 0 || !putBackDetectedFor(imageEntryFacts(entry), info) ||
-			!legacyPutBackContentConfirmed(imageEntryFacts(entry), entry.FileSHA256, path) {
+		if result.RowsAffected == 0 || !putBackDetectedFor(imageEntryFacts(entry), info) {
+			continue
+		}
+		if content, contentErr := checkLegacyPutBackContent(imageEntryFacts(entry), entry.FileSHA256, path); content != legacyContentConfirmed {
+			if content == legacyContentUndetermined && undetermined == nil {
+				undetermined = contentErr
+			}
 			continue
 		}
 		if entry.State == models.TrashStateFileGone {
@@ -114,6 +146,9 @@ func (s *ImageService) restoreImageIfPutBack(path string) (bool, error) {
 			return false, err
 		}
 		return true, nil
+	}
+	if undetermined != nil {
+		return false, undetermined
 	}
 	return false, nil
 }
@@ -151,7 +186,7 @@ func entryFileAtOriginal(facts softDeletedEntryFacts, size, mtimeNS int64, ident
 		return want.Size == size && want.ModTimeNS == mtimeNS && identityInode(want.Identity) == identityInode(identity)
 	case isLegacyTrashFacts(facts):
 		// 已知边界：FAT / exFAT / SMB 等卷上的 inode 号不稳定、可能被复用（文件删掉后同一个号码分给新文件），
-		// 大小恰好也相同时这里会把另一个文件误认成放回的原文件。恢复原记录之前由 legacyPutBackContentConfirmed
+		// 大小恰好也相同时这里会把另一个文件误认成放回的原文件。恢复原记录之前由 checkLegacyPutBackContent
 		// 再核对一次内容哈希（条目记录了 file_sha256 时，修复 I m-b）；没有记录哈希的旧行仍只能按大小 + inode 判定。
 		return facts.FileSize != 0 && facts.FileIdentity != "" && facts.FileSize == size &&
 			identityInode(facts.FileIdentity) == identityInode(identity)
@@ -164,18 +199,54 @@ func isLegacyTrashFacts(facts softDeletedEntryFacts) bool {
 	return facts.Mode == models.TrashModeLegacyTrash || (facts.Mode == "" && facts.FileMoved)
 }
 
-// legacyPutBackContentConfirmed 是 legacy_trash 行「按大小 + inode 认定放回」之后、恢复原记录之前的内容核对
-// （修复 I m-b）：条目记录了 file_sha256（旧版删除时算过整文件哈希）时，对原路径上的文件重算一次，不一致（或读不了）
-// 就不认定放回——那是 inode 被复用的另一个文件，或放回之后被改过的文件。没有记录哈希的条目、非 legacy 条目一律返回
-// true（保持现状；trash 模式的放回判定另有 mtime，不需要哈希）。
-//
-// 只在「要恢复原记录」的路径上调用（扫描与手动添加的放回恢复、显式恢复），列表、清除、用量的放回判定不做整文件哈希。
-func legacyPutBackContentConfirmed(facts softDeletedEntryFacts, sha, path string) bool {
-	if !isLegacyTrashFacts(facts) || strings.TrimSpace(sha) == "" {
-		return true
+// legacyPutBackContent 是 legacy_trash 行放回内容核对的三态结果（修复 L m1）。
+type legacyPutBackContent int
+
+const (
+	// legacyContentConfirmed：内容哈希一致，或无需核对（没有记录哈希、不是 legacy 条目）。
+	legacyContentConfirmed legacyPutBackContent = iota
+	// legacyContentMismatch：哈希不一致——inode 被复用的另一个文件，或放回之后被改过的文件：按新文件处理（修复 I m-b）。
+	legacyContentMismatch
+	// legacyContentUndetermined：读不出哈希（EIO / EACCES 等），无法判定是不是原文件：扫描既不恢复也不新建，显式恢复拒绝。
+	legacyContentUndetermined
+)
+
+// errLegacyPutBackUnreadable：legacy 放回的内容核对读不出原位置上的文件（修复 L m1）。文案不含路径；包装底层的
+// 系统错误，EACCES / EPERM 时 errors.Is(err, os.ErrPermission) 成立（回收站结果码 permission_denied）。
+var errLegacyPutBackUnreadable = errors.New("无法读取原位置上的文件核对内容，未做任何改动")
+
+// legacyPutBackDigestFn 是 legacy 放回内容核对读哈希的替身入口，只在单测里设置（模拟 EIO / EACCES，修复 L m1）；
+// 为 nil 时用 fileSHA256Hex。用原子指针是因为扫描与监听的后台 goroutine 会并发读它。
+var legacyPutBackDigestFn atomic.Pointer[func(string) (string, error)]
+
+func legacyPutBackDigest(path string) (string, error) {
+	if fn := legacyPutBackDigestFn.Load(); fn != nil {
+		return (*fn)(path)
 	}
-	digest, err := fileSHA256Hex(path)
-	return err == nil && digest == sha
+	return fileSHA256Hex(path)
+}
+
+// checkLegacyPutBackContent 是 legacy_trash 行「按大小 + inode 认定放回」之后、恢复原记录之前的内容核对
+// （修复 I m-b，修复 L m1 改为三态）：条目记录了 file_sha256（旧版删除时算过整文件哈希）时，对原路径上的文件重算一次：
+//   - 一致 → legacyContentConfirmed；
+//   - 不一致 → legacyContentMismatch（不认定放回，按新文件处理）；
+//   - 读不出哈希 → legacyContentUndetermined，并返回 errLegacyPutBackUnreadable 包装的读取错误。
+//
+// 没有记录哈希的条目、非 legacy 条目一律 legacyContentConfirmed（保持现状；trash 模式的放回判定另有 mtime，不需要哈希）。
+// 只在「要恢复原记录」或「要据此决定是否新建」的路径上调用（扫描与手动添加、显式恢复），列表、清除、用量的放回判定
+// 不做整文件哈希。
+func checkLegacyPutBackContent(facts softDeletedEntryFacts, sha, path string) (legacyPutBackContent, error) {
+	if !isLegacyTrashFacts(facts) || strings.TrimSpace(sha) == "" {
+		return legacyContentConfirmed, nil
+	}
+	digest, err := legacyPutBackDigest(path)
+	if err != nil {
+		return legacyContentUndetermined, fmt.Errorf("%w: %w", errLegacyPutBackUnreadable, pathlessError(err))
+	}
+	if digest != sha {
+		return legacyContentMismatch, nil
+	}
+	return legacyContentConfirmed, nil
 }
 
 // putBackDetectedFor 用原路径上文件的 FileInfo 做放回判定。info 必须来自 Lstat：符号链接、目录一律不认定（m1）。
@@ -204,16 +275,21 @@ func originalPathIdentity(path string) string {
 
 // putBackIdentity 返回同路径软删行判定（decideSoftDeletedPath）用的原路径身份：原路径上普通文件（Lstat）的稳定身份，
 // 是符号链接或读不到时为空（m1）。legacy_trash 行按大小 + inode 会认定放回、但内容哈希与条目记录的 file_sha256 不一致时
-// 同样返回空（修复 I m-b）：不认定放回，按新文件处理，而不是既不恢复也不收录。
-func putBackIdentity(facts *softDeletedEntryFacts, sha, path string, info os.FileInfo) string {
-	identity := originalPathIdentity(path)
-	if facts == nil || identity == "" || info == nil {
-		return identity
+// 同样返回空（修复 I m-b）：不认定放回，按新文件处理，而不是既不恢复也不收录。哈希读不出（修复 L m1）时返回
+// 非 nil 的 undetermined：无法判定是不是原文件，调用方跳过、不新建。
+func putBackIdentity(facts *softDeletedEntryFacts, sha, path string, info os.FileInfo) (identity string, undetermined error) {
+	identity = originalPathIdentity(path)
+	if facts == nil || identity == "" || info == nil ||
+		!putBackDetected(*facts, info.Size(), info.ModTime().UnixNano(), identity) {
+		return identity, nil
 	}
-	if putBackDetected(*facts, info.Size(), info.ModTime().UnixNano(), identity) && !legacyPutBackContentConfirmed(*facts, sha, path) {
-		return ""
+	switch content, err := checkLegacyPutBackContent(*facts, sha, path); content {
+	case legacyContentMismatch:
+		return "", nil
+	case legacyContentUndetermined:
+		return "", err
 	}
-	return identity
+	return identity, nil
 }
 
 // restoringTrashEntityAt 查原路径 path 上有没有恢复中断（state=restoring）的条目，有则返回它引用的媒体 ID（修复 I m-c）。
@@ -329,8 +405,9 @@ func softDeletedVideoPathSkip(path string, info os.FileInfo) (row *models.Video,
 		log.Printf("原路径上有恢复中断的回收站条目，交给启动对账，不新建记录 video_id=%d", restoring)
 		return &deleted, ErrVideoExists, nil
 	}
+	// 墓碑的软删行按已硬删处理，不挡住更早的软删行（修复 L m4）。
 	var deleted models.Video
-	result := database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path).
+	result := withoutTrashTombstones(database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path), videoTrashKind).
 		Order("id DESC").Limit(1).Find(&deleted)
 	if result.Error != nil {
 		return nil, nil, result.Error
@@ -349,7 +426,13 @@ func softDeletedVideoPathSkip(path string, info os.FileInfo) (row *models.Video,
 		facts = &entryFacts
 	}
 	// 放回判定的身份取自原路径上的普通文件（Lstat）：原路径是符号链接时不认定放回（m1）。
-	switch decideSoftDeletedPath(facts, deleted.Size, info.Size(), info.ModTime().UnixNano(), putBackIdentity(facts, entry.FileSHA256, path, info)) {
+	identity, undetermined := putBackIdentity(facts, entry.FileSHA256, path, info)
+	if undetermined != nil {
+		// legacy 放回的内容哈希读不出（修复 L m1）：无法判定是不是原文件，不新建。
+		log.Printf("同路径已删除视频的放回内容无法核对，跳过 video_id=%d err=%v", deleted.ID, undetermined)
+		return &deleted, fmt.Errorf("%w: %w", ErrVideoExists, undetermined), nil
+	}
+	switch decideSoftDeletedPath(facts, deleted.Size, info.Size(), info.ModTime().UnixNano(), identity) {
 	case softDeletedBlocked:
 		return &deleted, fmt.Errorf("%w: %w", ErrVideoBlockedByUserDelete, ErrVideoExists), nil
 	case softDeletedAutoRestore, softDeletedPutBack:
@@ -380,8 +463,9 @@ func softDeletedImagePathSkip(path string, info os.FileInfo) (row *models.Image,
 		log.Printf("原路径上有恢复中断的图片回收站条目，交给启动对账，不新建记录 image_id=%d", restoring)
 		return &deleted, ErrImageExists, nil
 	}
+	// 墓碑的软删行按已硬删处理，不挡住更早的软删行（修复 L m4）。
 	var deleted models.Image
-	result := database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path).
+	result := withoutTrashTombstones(database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path), imageTrashKind).
 		Order("id DESC").Limit(1).Find(&deleted)
 	if result.Error != nil {
 		return nil, nil, result.Error
@@ -400,7 +484,13 @@ func softDeletedImagePathSkip(path string, info os.FileInfo) (row *models.Image,
 		facts = &entryFacts
 	}
 	// 放回判定的身份取自原路径上的普通文件（Lstat）：原路径是符号链接时不认定放回（m1）。
-	switch decideSoftDeletedPath(facts, deleted.Size, info.Size(), info.ModTime().UnixNano(), putBackIdentity(facts, entry.FileSHA256, path, info)) {
+	identity, undetermined := putBackIdentity(facts, entry.FileSHA256, path, info)
+	if undetermined != nil {
+		// legacy 放回的内容哈希读不出（修复 L m1）：无法判定是不是原文件，不新建。
+		log.Printf("同路径已删除图片的放回内容无法核对，跳过 image_id=%d err=%v", deleted.ID, undetermined)
+		return &deleted, fmt.Errorf("%w: %w", ErrImageExists, undetermined), nil
+	}
+	switch decideSoftDeletedPath(facts, deleted.Size, info.Size(), info.ModTime().UnixNano(), identity) {
 	case softDeletedBlocked:
 		return &deleted, fmt.Errorf("%w: %w", ErrImageBlockedByUserDelete, ErrImageExists), nil
 	case softDeletedAutoRestore, softDeletedPutBack:

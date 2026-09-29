@@ -600,8 +600,9 @@ func (s *ImageService) addImage(path string) (*models.Image, error) {
 // a later scan when the original file is still on disk.
 func (s *ImageService) restoreStaleImage(path string, size int64) (bool, error) {
 	path = filepath.Clean(strings.TrimSpace(path))
+	// 墓碑的软删行按已硬删处理，不挡住同路径更早的扫描器软删行（修复 L m4）。
 	var image models.Image
-	if err := database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path).
+	if err := withoutTrashTombstones(database.DB.Unscoped().Where("path = ? AND deleted_at IS NOT NULL", path), imageTrashKind).
 		Order("deleted_at DESC, id DESC").First(&image).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return false, nil
@@ -789,7 +790,14 @@ func (s *ImageService) RestoreImageTrashEntry(entryID uint) (*models.Image, erro
 
 	var entry models.ImageTrashEntry
 	if err := database.DB.First(&entry, entryID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errTrashEntryNotFound(entryID)
+		}
 		return nil, fmt.Errorf("读取图片回收站条目失败: %w", err)
+	}
+	// 墓碑与不存在的条目同一个错误（修复 L m6）。
+	if entry.State == trashStateRemoved {
+		return nil, errTrashEntryNotFound(entry.ID)
 	}
 	if entry.State == trashStatePendingMove || entry.State == trashStateRollback {
 		return s.cancelInterruptedImageDeletion(&entry)
@@ -823,6 +831,10 @@ func (s *ImageService) ReconcileImageTrashEntries() error {
 			_ = recordImageTrashEntryError(entry.ID, err)
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("图片回收站条目 %d 对账失败: %w", entry.ID, err))
 		}
+	}
+	// 旧版 trash/ 目录已不存在的墓碑不再需要登记，清理掉（修复 L m4）。
+	if err := sweepGoneTrashTombstones(imageTrashKind); err != nil {
+		reconcileErrors = append(reconcileErrors, err)
 	}
 	return errors.Join(reconcileErrors...)
 }
@@ -863,6 +875,12 @@ func (s *ImageService) deleteImageBatchItem(id uint, deleteFile bool, batchID st
 			if reconcileErr := reconcileImageTrashRollback(&existingEntry); reconcileErr != nil {
 				_ = recordImageTrashEntryError(existingEntry.ID, reconcileErr)
 				return "", fmt.Errorf("完成上次删除回滚失败: %w", reconcileErr)
+			}
+		case trashStateRemoved:
+			// 上次恢复成功、旧版 trash/ 里的残留名字没清掉时留下的墓碑（修复 L m5）：先补做清理、删掉墓碑，再照常删除。
+			if err := settleRestoredTrashTombstone(imageTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
+				existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+				return "", err
 			}
 		default:
 			return "", fmt.Errorf("图片已有回收站条目，不能重复删除: %d", existingEntry.ID)
@@ -1113,12 +1131,20 @@ func (s *ImageService) permanentlyDeleteImage(id uint) (string, error) {
 		}
 		return "", err
 	}
-	var entryCount int64
-	if err := database.DB.Model(&models.ImageTrashEntry{}).Where("image_id = ?", image.ID).Count(&entryCount).Error; err != nil {
-		return "", fmt.Errorf("检查回收站条目失败: %w", err)
+	var existingEntry models.ImageTrashEntry
+	existingResult := database.DB.Where("image_id = ?", image.ID).Limit(1).Find(&existingEntry)
+	if existingResult.Error != nil {
+		return "", fmt.Errorf("检查回收站条目失败: %w", existingResult.Error)
 	}
-	if entryCount > 0 {
-		return "", ErrPermanentDeleteHasTrashEntry
+	if existingResult.RowsAffected == 1 {
+		if existingEntry.State != trashStateRemoved {
+			return "", ErrPermanentDeleteHasTrashEntry
+		}
+		// 恢复成功后留下的墓碑（修复 L m5）：先补做残留清理、删掉墓碑；清不掉就不删文件。
+		if err := settleRestoredTrashTombstone(imageTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
+			existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+			return "", err
+		}
 	}
 	code := TrashResultOK
 	info, err := os.Stat(image.Path)
@@ -1167,9 +1193,9 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 	if entry.State == models.TrashStateFileGone {
 		return nil, ErrTrashFileGone
 	}
-	// 墓碑（修复 I I-A）：记录已被「移除记录」移除，不可恢复。
+	// 墓碑（修复 I I-A）：记录已被「移除记录」移除，对回收站接口一律按不存在处理（修复 L m6）。
 	if entry.State == trashStateRemoved {
-		return nil, ErrTrashEntryNotRestorable
+		return nil, errTrashEntryNotFound(entry.ID)
 	}
 	// 原路径被新的活跃记录复用时拒绝恢复（设计 4.5.4：部分唯一索引语义前置成明确报错）。
 	var occupant models.Image
@@ -1178,6 +1204,12 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		return nil, fmt.Errorf("检查原路径活跃记录失败: %w", occupantResult.Error)
 	}
 	if occupantResult.RowsAffected == 1 {
+		// 恢复中断的行：文件不在原处就退回 deleted，不让它卡在 restoring（修复 L m2）。
+		if entry.State == trashStateRestoring {
+			if err := releaseOccupiedRestoringEntry(imageTrashKind, entry.ID, imageEntryFacts(*entry), entry.OriginalPath); err != nil {
+				return nil, err
+			}
+		}
 		return nil, ErrTrashPathOccupied
 	}
 
@@ -1227,6 +1259,8 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		return nil, restoreErr
 	}
 
+	// 旧版 trash/ 里还留着同一个文件的另一个名字时，事务里条目改为墓碑，提交之后清理成功才删掉（修复 L m5）。
+	residue := legacyRestoreResidue(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 	var restored models.Image
 	err := database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Image{}).
@@ -1242,6 +1276,9 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		if err := tx.Preload("Tags").First(&restored, image.ID).Error; err != nil {
 			return err
 		}
+		if residue {
+			return retireRestoredEntryAsTombstoneTx(tx, imageTrashKind, entry.ID)
+		}
 		return tx.Delete(entry).Error
 	})
 	if err != nil {
@@ -1251,7 +1288,7 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 			return nil, fmt.Errorf("恢复提交结果无法确认，已保留当前文件和恢复日志供启动对账: %w", err)
 		}
 		if committed {
-			removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+			finishRestoredLegacyResidue(imageTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 			if loadErr := database.DB.Preload("Tags").First(&restored, image.ID).Error; loadErr != nil {
 				return nil, fmt.Errorf("恢复已提交，但读取结果失败: %w", loadErr)
 			}
@@ -1270,7 +1307,7 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		_ = database.DB.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": err.Error()}).Error
 		return nil, fmt.Errorf("恢复数据库记录失败: %w", err)
 	}
-	removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+	finishRestoredLegacyResidue(imageTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 	return &restored, nil
 }
 
@@ -1591,8 +1628,12 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 		}
 		if !strict && entryFileAtOriginal(imageEntryFacts(entry), originalInfo.Size(), originalInfo.ModTime().UnixNano(), stableFileIdentity(originalInfo)) {
 			// 记录了 file_sha256 的 legacy 行先核对内容哈希，不一致不恢复（修复 I m-b）。
-			if !legacyPutBackContentConfirmed(imageEntryFacts(entry), entry.FileSHA256, entry.OriginalPath) {
+			switch content, contentErr := checkLegacyPutBackContent(imageEntryFacts(entry), entry.FileSHA256, entry.OriginalPath); content {
+			case legacyContentMismatch:
 				return false, mismatch("原路径文件与删除记录不一致: %s")
+			case legacyContentUndetermined:
+				// 读不出哈希、无法判定（修复 L m1）：显式恢复同样拒绝，什么都不动。
+				return false, contentErr
 			}
 			return false, nil
 		}
@@ -1690,6 +1731,10 @@ func confirmImageRestoreTransactionOutcome(imageID uint, entryID uint) (bool, bo
 	}
 	if err != nil {
 		return false, false, err
+	}
+	// 恢复事务在有旧版残留名字时把条目改为墓碑而不是删掉（修复 L m5）：记录已活跃、条目是墓碑同样是已提交。
+	if !image.DeletedAt.IsValid() && entry.State == trashStateRemoved {
+		return true, false, nil
 	}
 	if image.DeletedAt.IsValid() && entry.State == trashStateRestoring {
 		return false, true, nil

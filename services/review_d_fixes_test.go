@@ -208,7 +208,8 @@ func TestLIB05LegacyHardLinkRestoreKeepsOriginalAndCleansResidueAfterCommitM1(t 
 		t.Fatal(err)
 	}
 	center := NewTrashCenter(svc, nil)
-	disable := reviewAFailDeletesOn(t, "video_trash_entries")
+	// 修复 L m5：有残留名字时恢复事务把条目改为墓碑（UPDATE）而不是删掉，注入点改为事务的第一步（还原视频记录）。
+	disable := reviewLFailUpdatesOn(t, "videos")
 	result, err := center.RestoreTrashEntries("video", []uint{entry.ID})
 	if err != nil || result.Failed != 1 {
 		t.Fatalf("注入失败后恢复应报失败: %#v err=%v", result, err)

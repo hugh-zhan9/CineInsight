@@ -1243,6 +1243,23 @@ func p011StopPlaybackRelocationOnCleanup(t *testing.T) {
 	t.Cleanup(StopPlaybackRelocation)
 }
 
+// p011WaitPlaybackRelocation 在断言之前等后台重定位真正跑完（修复 L m7）：等 WaitGroup、不取消。先 Stop 再断言的话，
+// 排队中的重定位会被取消、根本没跑，「没有候选、记录保持失效」的断言就什么也没验证。清理时仍由
+// p011StopPlaybackRelocationOnCleanup 执行 Stop。限时内没跑完判失败（清理时的 Stop 会取消并等它退出）。
+func p011WaitPlaybackRelocation(t *testing.T) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() {
+		playbackRelocateWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("后台重定位没有在限时内跑完")
+	}
+}
+
 func TestPlaybackMissingFileOnOfflineRootReturnsImmediatelyWithoutRelocationLIB13(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	p011StopPlaybackRelocationOnCleanup(t)
@@ -1325,6 +1342,7 @@ func TestPlaybackMissingFileOnOnlineRootMarksThenRelocatesInBackgroundPLAY12(t *
 	case <-time.After(3 * time.Second):
 		t.Fatal("后台重定位成功后应发 video-relocated 事件")
 	}
+	p011WaitPlaybackRelocation(t)
 	if got := p011ReloadVideo(t, video.ID); got.Path != movedPath || got.IsStale || got.StaleReason != "" {
 		t.Fatalf("重定位后应改路径并清失效原因: %+v", got)
 	}
@@ -1342,8 +1360,8 @@ func TestPlaybackMissingFileOnOnlineRootWithoutCandidateStaysMissingPLAY12(t *te
 	if _, err := (&VideoService{}).PlayVideo(video.ID); err != nil {
 		t.Fatal(err)
 	}
-	// 等后台重定位确定性地结束（没有候选，它什么都不改），再断言记录仍是 missing_file。
-	StopPlaybackRelocation()
+	// 等后台重定位真正跑完（等 WaitGroup，不取消：没有候选，它遍历完什么都不改），再断言记录仍是 missing_file。
+	p011WaitPlaybackRelocation(t)
 	if got := p011ReloadVideo(t, video.ID); !got.IsStale || got.StaleReason != models.StaleReasonMissingFile {
 		t.Fatalf("在线根下文件缺失应标 missing_file: %+v", got)
 	}

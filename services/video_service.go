@@ -14,6 +14,7 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -95,58 +96,77 @@ func BeginLibraryMaintenance() func() {
 }
 
 // lockLibraryPaths 是全局路径锁 libraryPathMutationMu 写锁的获取入口（维护入口 BeginLibraryMaintenance 除外，修复 K）。
-// 返回释放函数。
+// 返回释放函数。获取方式见 acquireLibraryPath（修复 L m3）：围栏生效时立即返回 database.ErrMaintenance；
+// 否则阻塞等写锁，等待期间维护开始也返回 ErrMaintenance；拿到写锁后复查围栏。
 //
-// 「待重启」终态下 enterDatabaseRestoreMode 拿的写锁与维护围栏一直保持到进程退出，直接 Lock() 的入口（回收站恢复、
-// 清除与移除记录、永久删除、移动文件、文件夹改名 / 迁移 / 重映射……）会永久阻塞。所以：
-//   - 拿锁**之前**查一次维护围栏，生效就立即返回 database.ErrMaintenance，不等锁；
-//   - 否则直接 Lock()：写者之间的排队与「写者优先于新读者」的语义不变，不轮询；
-//   - 拿到写锁之后围栏已经生效（等锁期间围栏被立起，而立围栏的一方没有经路径写锁），放锁并同样返回 ErrMaintenance：
-//     之后的数据库读写反正都会被围栏拒绝，不要先动了文件再失败。
-//
-// 已知边界：查完围栏、还没排上锁的那一刻，维护入口恰好拿到了写锁并进入终态，这个写者会一直等下去（主代理接受，
-// 与「不轮询、保持写者优先」二选一）。围栏只是判断那一刻的快照，真正的写入拒绝仍由数据库回调里的 enter 负责。
+// 「待重启」终态下 enterDatabaseRestoreMode 拿的写锁与维护围栏一直保持到进程退出，这里保证回收站恢复、清除与移除记录、
+// 永久删除、移动文件、文件夹改名 / 迁移 / 重映射……这些写锁入口都不会永久阻塞，写者之间的排队与「写者优先于新读者」不变。
 func lockLibraryPaths() (func(), error) {
-	if database.MaintenanceActive() {
-		return nil, database.ErrMaintenance
-	}
-	libraryPathMutationMu.Lock()
-	if database.MaintenanceActive() {
-		libraryPathMutationMu.Unlock()
-		return nil, database.ErrMaintenance
-	}
-	return libraryPathMutationMu.Unlock, nil
+	return acquireLibraryPath(libraryPathMutationMu.TryLock, libraryPathMutationMu.Lock, libraryPathMutationMu.Unlock)
 }
 
-// libraryPathReadLockRetry 是路径读锁拿不到（写锁被占，或有写者在等）时的重试间隔（修复 I m1）。
-const libraryPathReadLockRetry = 50 * time.Millisecond
-
-// rLockLibraryPaths 是全局路径锁 libraryPathMutationMu 读锁的唯一获取入口（修复 F 复审 m1，修复 I）。返回释放函数。
+// rLockLibraryPaths 是全局路径锁 libraryPathMutationMu 读锁的唯一获取入口（修复 F 复审 m1，修复 I，修复 L m3）。返回释放函数。
 //
 // 恢复备份与切换后端时，enterDatabaseRestoreMode 先拿路径写锁（BeginLibraryMaintenance）、再立维护围栏；切换成功与
-// 「只改配置」之后进入「待重启」终态，写锁与围栏一直保持到进程退出。直接 RLock 的入口（监听触发的窄对账、Jellyfin 与
-// 手机端的删除、NFO 导出……）在那之后会永久阻塞。所以：
-//   - 维护围栏生效（database.MaintenanceActive）时立即返回 database.ErrMaintenance，不等锁；
-//   - 否则 TryRLock，拿到即返回；拿不到就隔 libraryPathReadLockRetry 再试，每次重试前复查围栏。TryRLock 与 RLock 一样
-//     让位于等待中的写者（有写者在等时读者拿不到），写者优先的语义不变；
-//   - 拿到读锁之后围栏恰好生效了，放掉读锁同样返回 ErrMaintenance：之后的数据库读写反正都会被围栏拒绝，
-//     不要先动了文件再失败。
+// 「只改配置」之后进入「待重启」终态，写锁与围栏一直保持到进程退出。监听触发的窄对账、Jellyfin 与手机端的删除、
+// NFO 导出……这些读锁入口经 acquireLibraryPath 获取，不会在那之后永久阻塞。
 //
-// 围栏生效期间绝不无限等待。围栏只是判断的一刻的快照，真正的写入拒绝仍由数据库回调里的 enter 负责。
+// 读锁用阻塞的 RLock 等（不轮询）：写者放锁时，排着的读者先于下一个写者拿到锁，批量写者逐项取写锁期间读者不会被饿死；
+// 有写者在等时新读者照常让位（写者优先）。
 func rLockLibraryPaths() (func(), error) {
-	for {
-		if database.MaintenanceActive() {
+	return acquireLibraryPath(libraryPathMutationMu.TryRLock, libraryPathMutationMu.RLock, libraryPathMutationMu.RUnlock)
+}
+
+// libraryMaintenanceStartedFn 是「维护开始」通知的替身入口，只在单测里设置（让通知不到达，以便钉住拿锁之后的围栏复查）；
+// 为 nil 时用 database.MaintenanceStarted。用原子指针是因为后台 goroutine（播放重定位等）会并发读它。
+var libraryMaintenanceStartedFn atomic.Pointer[func() <-chan struct{}]
+
+func libraryMaintenanceStarted() <-chan struct{} {
+	if fn := libraryMaintenanceStartedFn.Load(); fn != nil {
+		return (*fn)()
+	}
+	return database.MaintenanceStarted()
+}
+
+// acquireLibraryPath 是路径锁（读或写）的获取实现（修复 L m3，主代理裁决：不轮询）：
+//   - 维护围栏生效（database.MaintenanceActive）时立即返回 database.ErrMaintenance，不等锁；
+//   - 否则先 tryLock，拿不到就在辅助 goroutine 里阻塞 lock()，调用方同时等「拿到锁」与「维护开始」
+//     （database.MaintenanceStarted）两者之一。维护先到则返回 ErrMaintenance；那个辅助 goroutine 之后一旦拿到锁
+//     立即释放（不持有、不泄漏锁）。阻塞的 lock() 保留读写锁本身的语义：写者之间排队、有写者在等时新读者让位、
+//     写者放锁时排着的读者先于下一个写者；
+//   - 拿到锁之后复查一次围栏：生效就放锁并返回 ErrMaintenance。之后的数据库读写反正都会被围栏拒绝，不要先动了文件再失败。
+//
+// 围栏生效期间绝不无限等待。围栏只是判断那一刻的快照，真正的写入拒绝仍由数据库回调里的 enter 负责。
+// 恢复 / 切换在立围栏之前先拿路径写锁（BeginLibraryMaintenance），所以等在它后面的读者与写者都会收到这次通知。
+func acquireLibraryPath(tryLock func() bool, lock, unlock func()) (func(), error) {
+	if database.MaintenanceActive() {
+		return nil, database.ErrMaintenance
+	}
+	// 在检查围栏之后取通知：两者之间维护开始了，取到的就是已关闭的通道。
+	started := libraryMaintenanceStarted()
+	if !tryLock() {
+		acquired := make(chan struct{})
+		abandoned := make(chan struct{})
+		go func() {
+			lock()
+			select {
+			case acquired <- struct{}{}:
+			case <-abandoned:
+				unlock()
+			}
+		}()
+		select {
+		case <-acquired:
+		case <-started:
+			close(abandoned)
 			return nil, database.ErrMaintenance
 		}
-		if libraryPathMutationMu.TryRLock() {
-			if database.MaintenanceActive() {
-				libraryPathMutationMu.RUnlock()
-				return nil, database.ErrMaintenance
-			}
-			return libraryPathMutationMu.RUnlock, nil
-		}
-		time.Sleep(libraryPathReadLockRetry)
 	}
+	if database.MaintenanceActive() {
+		unlock()
+		return nil, database.ErrMaintenance
+	}
+	return unlock, nil
 }
 
 type BatchVideoOperationError struct {
@@ -402,7 +422,14 @@ func (s *VideoService) RestoreTrashEntry(entryID uint) (*models.Video, error) {
 
 	var entry models.VideoTrashEntry
 	if err := database.DB.First(&entry, entryID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errTrashEntryNotFound(entryID)
+		}
 		return nil, fmt.Errorf("读取回收站条目失败: %w", err)
+	}
+	// 墓碑与不存在的条目同一个错误（修复 L m6）。
+	if entry.State == trashStateRemoved {
+		return nil, errTrashEntryNotFound(entry.ID)
 	}
 	if entry.State == trashStatePendingMove || entry.State == trashStateRollback {
 		return s.cancelInterruptedDeletion(&entry)
@@ -421,9 +448,9 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 	if entry.State == models.TrashStateFileGone {
 		return nil, ErrTrashFileGone
 	}
-	// 墓碑（修复 I I-A）：记录已被「移除记录」移除，不可恢复。
+	// 墓碑（修复 I I-A）：记录已被「移除记录」移除，对回收站接口一律按不存在处理（修复 L m6）。
 	if entry.State == trashStateRemoved {
-		return nil, ErrTrashEntryNotRestorable
+		return nil, errTrashEntryNotFound(entry.ID)
 	}
 	// 原路径已被新的活跃记录占用（例如「只删记录」后同路径的新文件被收录）时拒绝恢复：
 	// 部分唯一索引会在事务里报一个看不懂的约束错误，这里前置成明确的中文错误。
@@ -433,6 +460,12 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		return nil, fmt.Errorf("检查原路径活跃记录失败: %w", occupantResult.Error)
 	}
 	if occupantResult.RowsAffected == 1 {
+		// 恢复中断的行：文件不在原处就退回 deleted，不让它卡在 restoring（修复 L m2）。
+		if entry.State == trashStateRestoring {
+			if err := releaseOccupiedRestoringEntry(videoTrashKind, entry.ID, videoEntryFacts(*entry), entry.OriginalPath); err != nil {
+				return nil, err
+			}
+		}
 		return nil, ErrTrashPathOccupied
 	}
 
@@ -484,6 +517,9 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		return nil, restoreErr
 	}
 
+	// 旧版 trash/ 里还留着与原路径同一个文件的另一个名字时，事务里条目改为墓碑而不是硬删，提交之后清理成功才删掉墓碑
+	// （修复 L m5）：清理失败（或进程在两者之间退出）时目录继续登记，残留名字不会被扫描当成新文件收录。
+	residue := legacyRestoreResidue(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 	var restored models.Video
 	err := database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).
@@ -502,6 +538,9 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		if err := rebuildSubtitleIndexTx(tx, restored); err != nil {
 			return fmt.Errorf("重建字幕索引失败: %w", err)
 		}
+		if residue {
+			return retireRestoredEntryAsTombstoneTx(tx, videoTrashKind, entry.ID)
+		}
 		return tx.Delete(entry).Error
 	})
 	if err != nil {
@@ -511,7 +550,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 			return nil, fmt.Errorf("恢复提交结果无法确认，已保留当前文件和恢复日志供启动对账: %w", err)
 		}
 		if committed {
-			removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+			finishRestoredLegacyResidue(videoTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 			if loadErr := database.DB.Preload("Tags").First(&restored, video.ID).Error; loadErr != nil {
 				return nil, fmt.Errorf("恢复已提交，但读取结果失败: %w", loadErr)
 			}
@@ -530,7 +569,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		_ = database.DB.Model(entry).Updates(map[string]interface{}{"state": trashStateDeleted, "last_error": err.Error()}).Error
 		return nil, fmt.Errorf("恢复数据库记录失败: %w", err)
 	}
-	removeLegacyTrashLinkAfterRestore(entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
+	finishRestoredLegacyResidue(videoTrashKind, residue, entry.ID, entry.Mode, entry.FileMoved, entry.OriginalPath, entry.TrashPath)
 	log.Printf("视频恢复 video_id=%d original_deleted_by=%s", restored.ID, entry.DeletedBy)
 	return &restored, nil
 }
@@ -607,6 +646,13 @@ func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedB
 			if reconcileErr := reconcileTrashRollback(&existingEntry); reconcileErr != nil {
 				_ = recordTrashEntryError(existingEntry.ID, reconcileErr)
 				return "", fmt.Errorf("完成上次删除回滚失败: %w", reconcileErr)
+			}
+		case trashStateRemoved:
+			// 上次恢复成功、旧版 trash/ 里的残留名字没清掉时留下的墓碑（修复 L m5）：先补做清理、删掉墓碑，再照常删除；
+			// 清不掉就不删（墓碑要继续登记那个目录，而 video_id 唯一，新条目建不进去）。
+			if err := settleRestoredTrashTombstone(videoTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
+				existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+				return "", err
 			}
 		default:
 			return "", fmt.Errorf("视频已有回收站条目，不能重复删除: %d", existingEntry.ID)
@@ -881,7 +927,8 @@ func trashPathAlreadyRecorded(path string) bool {
 //     「已在原处」，不读 trash/ 一侧；条目记录了 file_sha256 时先核对一次内容哈希，不一致就是另一个文件
 //     （inode 被复用或放回后被改过），报「原路径文件与删除记录不一致」、不恢复（修复 I m-b）。
 //   - 原路径与废纸篓是同一个文件（硬链接）：文件本来就在原处，返回 false、不删废纸篓那个名字（M1）；
-//     legacy_trash 旧行在恢复提交之后才清理旧版 trash/ 里的残留名字（removeLegacyTrashLinkAfterRestore）。
+//     legacy_trash 旧行在恢复提交之后才清理旧版 trash/ 里的残留名字（removeLegacyTrashLinkAfterRestore；清理失败时条目
+//     保留为墓碑，修复 L m5）。
 //   - 原路径用 Lstat 读取（m1）：是符号链接（可能正指向废纸篓里的文件）时返回 ErrTrashOriginalNotRegular，
 //     不跟随、不覆盖、不删任何名字。
 func ensureTrashEntryFileRestored(trashService *TrashService, entry models.VideoTrashEntry) (bool, error) {
@@ -909,8 +956,12 @@ func ensureTrashEntryFileRestored(trashService *TrashService, entry models.Video
 			return false, nil
 		}
 		if !strict && entryFileAtOriginal(videoEntryFacts(entry), originalInfo.Size(), originalInfo.ModTime().UnixNano(), stableFileIdentity(originalInfo)) {
-			if !legacyPutBackContentConfirmed(videoEntryFacts(entry), entry.FileSHA256, entry.OriginalPath) {
+			switch content, contentErr := checkLegacyPutBackContent(videoEntryFacts(entry), entry.FileSHA256, entry.OriginalPath); content {
+			case legacyContentMismatch:
 				return false, mismatch("原路径文件与删除记录不一致: %s")
+			case legacyContentUndetermined:
+				// 读不出哈希、无法判定（修复 L m1）：显式恢复同样拒绝，什么都不动。
+				return false, contentErr
 			}
 			return false, nil
 		}
@@ -1028,6 +1079,10 @@ func confirmRestoreTransactionOutcome(videoID uint, entryID uint) (bool, bool, e
 	}
 	if err != nil {
 		return false, false, err
+	}
+	// 恢复事务在有旧版残留名字时把条目改为墓碑而不是删掉（修复 L m5）：记录已活跃、条目是墓碑同样是已提交。
+	if !video.DeletedAt.IsValid() && entry.State == trashStateRemoved {
+		return true, false, nil
 	}
 	if video.DeletedAt.IsValid() && entry.State == trashStateRestoring {
 		return false, true, nil
@@ -1170,6 +1225,10 @@ func (s *VideoService) ReconcileTrashEntries() error {
 			_ = recordTrashEntryError(entry.ID, err)
 			reconcileErrors = append(reconcileErrors, fmt.Errorf("回收站条目 %d 对账失败: %w", entry.ID, err))
 		}
+	}
+	// 旧版 trash/ 目录已不存在的墓碑不再需要登记，清理掉（修复 L m4）。
+	if err := sweepGoneTrashTombstones(videoTrashKind); err != nil {
+		reconcileErrors = append(reconcileErrors, err)
 	}
 	return errors.Join(reconcileErrors...)
 }
@@ -1431,12 +1490,21 @@ func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {
 		}
 		return "", err
 	}
-	var entryCount int64
-	if err := database.DB.Model(&models.VideoTrashEntry{}).Where("video_id = ?", video.ID).Count(&entryCount).Error; err != nil {
-		return "", fmt.Errorf("检查回收站条目失败: %w", err)
+	var existingEntry models.VideoTrashEntry
+	existingResult := database.DB.Where("video_id = ?", video.ID).Limit(1).Find(&existingEntry)
+	if existingResult.Error != nil {
+		return "", fmt.Errorf("检查回收站条目失败: %w", existingResult.Error)
 	}
-	if entryCount > 0 {
-		return "", ErrPermanentDeleteHasTrashEntry
+	if existingResult.RowsAffected == 1 {
+		if existingEntry.State != trashStateRemoved {
+			return "", ErrPermanentDeleteHasTrashEntry
+		}
+		// 恢复成功后留下的墓碑（修复 L m5）：先补做残留清理、删掉墓碑；清不掉就不删文件——删掉原文件后，旧版 trash/ 里
+		// 那个名字就是这份内容仅剩的一个名字，墓碑随记录删掉后它会被扫描当成新文件收录。
+		if err := settleRestoredTrashTombstone(videoTrashKind, existingEntry.ID, existingEntry.Mode, existingEntry.FileMoved,
+			existingEntry.OriginalPath, existingEntry.TrashPath); err != nil {
+			return "", err
+		}
 	}
 	if err := ensureNoActiveEnhancement(database.DB, video.ID); err != nil {
 		return "", err

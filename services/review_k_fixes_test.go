@@ -155,7 +155,9 @@ func TestAPP02PathWriteLockEntriesReturnMaintenanceWhenFencedFixK(t *testing.T) 
 	}
 }
 
-// 拿到写锁之后复查围栏：等锁期间围栏被立起（立围栏的一方没有经路径写锁）时放锁并返回 ErrMaintenance。
+// 等锁期间围栏被立起（立围栏的一方没有经路径写锁）时返回 ErrMaintenance，而且不持有写锁。
+// 修复 L m3 之后，等待中的写者由「维护开始」通知唤醒、立即返回；放弃的那次获取随后拿到写锁会立即释放（辅助 goroutine），
+// 所以这里改为等写锁在合理时间内变为空闲。「拿到锁之后复查围栏」由 TestAPP02PathLockRechecksFenceAfterAcquireFixLM3 钉住。
 func TestAPP02PathWriteLockRechecksFenceAfterAcquireFixK(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	libraryPathMutationMu.RLock()
@@ -190,10 +192,7 @@ func TestAPP02PathWriteLockRechecksFenceAfterAcquireFixK(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("等锁的写者没有返回")
 	}
-	if !libraryPathMutationMu.TryLock() {
-		t.Fatal("复查围栏失败后必须放掉写锁")
-	}
-	libraryPathMutationMu.Unlock()
+	reviewLWaitPathLockFree(t, "被放弃的写锁获取必须在拿到锁后立即释放")
 	release()
 	release = nil
 }
@@ -363,9 +362,13 @@ func TestAPP02NoDirectPathWriteLockOutsideHelperFixK(t *testing.T) {
 					if !maintenanceCallers[name+":"+fn.Name.Name] {
 						t.Errorf("%s:%s 调用了维护入口 BeginLibraryMaintenance，普通写锁应改用 lockLibraryPaths（维护终态会永久阻塞）", name, fn.Name.Name)
 					}
-					return true
 				}
-				selector, ok := call.Fun.(*ast.SelectorExpr)
+				return true
+			})
+			// 修复 L m3：写锁经 acquireLibraryPath 以方法值（libraryPathMutationMu.Lock，不是调用）传入，
+			// 所以查所有选择子表达式，调用与方法值都算获取。
+			ast.Inspect(fn.Body, func(node ast.Node) bool {
+				selector, ok := node.(*ast.SelectorExpr)
 				if !ok {
 					return true
 				}
@@ -376,7 +379,7 @@ func TestAPP02NoDirectPathWriteLockOutsideHelperFixK(t *testing.T) {
 				switch selector.Sel.Name {
 				case "Lock", "TryLock":
 					if !writeLockOwners[fn.Name.Name] {
-						t.Errorf("%s:%s 直接获取 libraryPathMutationMu 写锁，应改用 lockLibraryPaths（维护终态会永久阻塞）", name, fn.Name.Name)
+						t.Errorf("%s:%s 直接获取 libraryPathMutationMu 写锁（%s），应改用 lockLibraryPaths（维护终态会永久阻塞）", name, fn.Name.Name, selector.Sel.Name)
 					}
 				}
 				return true

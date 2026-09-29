@@ -691,8 +691,9 @@ func (s *EnhancementService) publishOutput(ctx context.Context, task models.Vide
 	if _, err := os.Lstat(targetPath); err == nil {
 		return fmt.Errorf("output_conflict: 输出路径在发布时已被占用")
 	}
+	// 墓碑的软删记录按已硬删处理，不占用输出路径（修复 L m4，与 ensureOutputNameFree 同一口径）。
 	var occupied models.Video
-	if err := database.DB.Unscoped().Where("path = ?", targetPath).First(&occupied).Error; err == nil {
+	if err := withoutTrashTombstones(database.DB.Unscoped().Where("path = ?", targetPath), videoTrashKind).First(&occupied).Error; err == nil {
 		return fmt.Errorf("output_conflict: 输出路径已被片库记录占用")
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err

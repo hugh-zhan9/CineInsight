@@ -183,8 +183,9 @@ func TestLIB05TombstoneHiddenFromListUsageAndTagCountsFixIIA(t *testing.T) {
 			t.Fatalf("%s 对墓碑应失败: %#v err=%v", name, result, err)
 		}
 	}
-	if _, err := svc.RestoreTrashEntry(entry.ID); !errors.Is(err, ErrTrashEntryNotRestorable) {
-		t.Fatalf("旧版恢复接口对墓碑应返回不可恢复: %v", err)
+	// 修复 L m6：恢复与其他操作同一个「回收站条目不存在」（原先是「该条目当前不可恢复」）。
+	if _, err := svc.RestoreTrashEntry(entry.ID); !errors.Is(err, ErrTrashEntryNotFound) {
+		t.Fatalf("旧版恢复接口对墓碑应返回回收站条目不存在: %v", err)
 	}
 	if got := p011ReloadVideo(t, video.ID); !got.DeletedAt.IsValid() {
 		t.Fatalf("记录应保持软删: %#v", got)
@@ -1086,7 +1087,7 @@ func TestAPP02PathReadLockRechecksFenceWhileWaitingFixIM1(t *testing.T) {
 		t.Fatalf("写锁被持有、围栏未生效时读者应等待: %v", err)
 	case <-time.After(200 * time.Millisecond):
 	}
-	// 围栏随后生效：等待中的读者必须在下一次重试时发现并返回，而不是一直等写锁。
+	// 围栏随后生效：等待中的读者必须由「维护开始」通知唤醒并返回（修复 L m3，原先是下一次轮询时发现），而不是一直等写锁。
 	release = database.BeginMaintenance()
 	select {
 	case err := <-done:
@@ -1178,12 +1179,10 @@ func TestAPP02NoDirectPathReadLockOutsideHelperFixIM1(t *testing.T) {
 			if !ok || fn.Body == nil {
 				continue
 			}
+			// 修复 L m3：读锁经 acquireLibraryPath 以方法值（libraryPathMutationMu.RLock，不是调用）传入，
+			// 所以查所有选择子表达式，调用与方法值都算获取：只有 rLockLibraryPaths 可以引用 RLock / TryRLock。
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
-				call, ok := node.(*ast.CallExpr)
-				if !ok {
-					return true
-				}
-				selector, ok := call.Fun.(*ast.SelectorExpr)
+				selector, ok := node.(*ast.SelectorExpr)
 				if !ok {
 					return true
 				}
@@ -1192,11 +1191,10 @@ func TestAPP02NoDirectPathReadLockOutsideHelperFixIM1(t *testing.T) {
 					return true
 				}
 				switch selector.Sel.Name {
-				case "RLock":
-					t.Errorf("%s:%s 直接调用 libraryPathMutationMu.RLock，应改用 rLockLibraryPaths（维护终态会永久阻塞）", name, fn.Name.Name)
-				case "TryRLock":
+				case "RLock", "TryRLock":
 					if fn.Name.Name != "rLockLibraryPaths" {
-						t.Errorf("%s:%s 在 rLockLibraryPaths 之外获取路径读锁", name, fn.Name.Name)
+						t.Errorf("%s:%s 在 rLockLibraryPaths 之外获取路径读锁（libraryPathMutationMu.%s），应改用 rLockLibraryPaths（维护终态会永久阻塞）",
+							name, fn.Name.Name, selector.Sel.Name)
 					}
 				}
 				return true

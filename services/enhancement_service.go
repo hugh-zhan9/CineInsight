@@ -712,8 +712,9 @@ func (s *EnhancementService) ensureOutputNameFree(video models.Video, basename s
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("output_conflict: 无法检查输出路径: %v", err)
 	}
+	// 墓碑（旧版回收站条目被移除后留下的）的软删记录按已硬删处理，不占用输出路径（修复 L m4）。
 	var existing models.Video
-	if err := database.DB.Unscoped().Where("path = ?", target).First(&existing).Error; err == nil {
+	if err := withoutTrashTombstones(database.DB.Unscoped().Where("path = ?", target), videoTrashKind).First(&existing).Error; err == nil {
 		return fmt.Errorf("output_conflict: 输出路径已被片库记录占用（含回收站）")
 	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
 		return err

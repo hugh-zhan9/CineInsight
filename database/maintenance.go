@@ -18,6 +18,9 @@ type databaseOperationGate struct {
 	cond     *sync.Cond
 	active   bool
 	inFlight int
+	// started 与 active 同步：维护开始（active 由 false 变 true）时关闭，撤掉维护时换成新的未关闭通道。
+	// MaintenanceStarted 返回它，等锁的一方据此得知「等待期间维护开始了」。
+	started chan struct{}
 }
 
 var operationGate = newDatabaseOperationGate()
@@ -42,7 +45,7 @@ func hasMaintenanceAccess(tx *gorm.DB) bool {
 }
 
 func newDatabaseOperationGate() *databaseOperationGate {
-	gate := &databaseOperationGate{}
+	gate := &databaseOperationGate{started: make(chan struct{})}
 	gate.cond = sync.NewCond(&gate.mu)
 	return gate
 }
@@ -68,6 +71,9 @@ func (gate *databaseOperationGate) leave() {
 
 func (gate *databaseOperationGate) beginMaintenance() func() {
 	gate.mu.Lock()
+	if !gate.active {
+		close(gate.started)
+	}
 	gate.active = true
 	for gate.inFlight > 0 {
 		gate.cond.Wait()
@@ -78,6 +84,9 @@ func (gate *databaseOperationGate) beginMaintenance() func() {
 	return func() {
 		once.Do(func() {
 			gate.mu.Lock()
+			if gate.active {
+				gate.started = make(chan struct{})
+			}
 			gate.active = false
 			gate.cond.Broadcast()
 			gate.mu.Unlock()
@@ -89,6 +98,12 @@ func (gate *databaseOperationGate) isActive() bool {
 	gate.mu.Lock()
 	defer gate.mu.Unlock()
 	return gate.active
+}
+
+func (gate *databaseOperationGate) maintenanceStarted() <-chan struct{} {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	return gate.started
 }
 
 // BeginMaintenance rejects new database operations and waits for operations
@@ -103,6 +118,16 @@ func BeginMaintenance() func() {
 // 判断与写入之间围栏随时可能生效，真正的拒绝由回调里的 enter 负责。
 func MaintenanceActive() bool {
 	return operationGate.isActive()
+}
+
+// MaintenanceStarted 返回一个在维护围栏生效时关闭的通道（修复 L m3）：围栏此刻已生效则返回已关闭的通道；
+// 否则返回的通道在下一次 BeginMaintenance 立起围栏时关闭（与 MaintenanceActive 变为 true 同一时刻）。
+// 维护撤掉之后，之前取到的通道保持关闭，新的调用拿到新的通道。
+//
+// 只用来让长时间等待的一方（服务层的路径锁）在等待期间得知维护开始、及时放弃；不改变围栏本身的语义，
+// 真正的拒绝仍由回调里的 enter 负责。
+func MaintenanceStarted() <-chan struct{} {
+	return operationGate.maintenanceStarted()
 }
 
 // migrationMarkerTable 是 database/migrator 在目标库里写的迁移标记表

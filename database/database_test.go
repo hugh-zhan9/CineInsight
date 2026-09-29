@@ -845,3 +845,63 @@ func TestAPP02ReconnectKeepsStartupBackendIgnoringConfigWrittenAfterStartup(t *t
 		t.Fatalf("当前后端不应中途改变: %s", got)
 	}
 }
+
+// 修复 L m3（APP-02）：MaintenanceStarted 返回的通道与围栏同步——围栏未生效时不关闭，BeginMaintenance 立起围栏的
+// 同一刻关闭；围栏已生效时取到的是已关闭的通道；撤掉之后旧通道保持关闭，新取到的是未关闭的新通道。
+// 用独立的 gate，不碰全局围栏；等在途操作的语义不变（inFlight 未清零时 begin 照常等待，通知先于等待完成发出）。
+func TestMaintenanceStartedChannelFollowsFenceAPP02FixLM3(t *testing.T) {
+	gate := newDatabaseOperationGate()
+	isClosed := func(ch <-chan struct{}) bool {
+		select {
+		case <-ch:
+			return true
+		default:
+			return false
+		}
+	}
+	before := gate.maintenanceStarted()
+	if isClosed(before) {
+		t.Fatal("围栏未生效时通知不得关闭")
+	}
+	if err := gate.enter(); err != nil {
+		t.Fatal(err)
+	}
+	acquired := make(chan func(), 1)
+	go func() { acquired <- gate.beginMaintenance() }()
+	select {
+	case <-before:
+	case <-time.After(time.Second):
+		t.Fatal("立起围栏时应立即关闭通知（不等在途操作结束）")
+	}
+	select {
+	case release := <-acquired:
+		release()
+		t.Fatal("在途操作未结束时维护仍须等待")
+	case <-time.After(20 * time.Millisecond):
+	}
+	if err := gate.enter(); !errors.Is(err, ErrMaintenance) {
+		t.Fatalf("围栏生效后新操作应被拒绝: %v", err)
+	}
+	if during := gate.maintenanceStarted(); !isClosed(during) {
+		t.Fatal("围栏已生效时取到的通知应已关闭")
+	}
+	gate.leave()
+	release := <-acquired
+	release()
+	release() // 重复释放是空操作，不得再换出新通道
+	if !isClosed(before) {
+		t.Fatal("撤掉围栏后旧通知保持关闭")
+	}
+	after := gate.maintenanceStarted()
+	if isClosed(after) {
+		t.Fatal("撤掉围栏后应换成未关闭的新通知")
+	}
+	if again := gate.maintenanceStarted(); again != after {
+		t.Fatal("两次维护之间取到的应是同一个通知")
+	}
+	second := gate.beginMaintenance()
+	if !isClosed(after) {
+		t.Fatal("下一次立起围栏时新通知同样关闭")
+	}
+	second()
+}
