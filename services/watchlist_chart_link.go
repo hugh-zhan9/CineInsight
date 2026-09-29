@@ -252,6 +252,24 @@ func revokeChartWantForEntry(tx *gorm.DB, entry models.WatchlistEntry) error {
 	return nil
 }
 
+// releaseReuseChartWantsForEntry 释放以 reuse 认领该条目的 want 标记（APP-07 M-2）：认领归零、
+// 来源改为 unclaimed，mark 保留 want——那是用户在榜单上的明确表态，片单一侧的编辑不替他撤销。
+// 条件更新，不加锁：只碰 mark = 'want' 且确实以 reuse 认领着这一条的行。
+func releaseReuseChartWantsForEntry(tx *gorm.DB, entryID uint) error {
+	err := tx.Model(&models.MovieChartMark{}).
+		Where("mark = ? AND watchlist_entry_id = ? AND watchlist_entry_origin = ?",
+			models.MovieChartMarkWant, entryID, movieChartOriginReuse).
+		Updates(map[string]any{
+			"watchlist_entry_id":     0,
+			"watchlist_entry_origin": movieChartOriginUnclaimed,
+			"updated_at":             time.Now(),
+		}).Error
+	if err != nil {
+		return fmt.Errorf("释放榜单想看的复用认领失败: %w", err)
+	}
+	return nil
+}
+
 // watchlistOrigins 给一页条目标来源：被某个 want 标记认领的是「榜单」，其余是「手动」。
 // 复用（reuse）认领的是用户自己先建的条目，仍标「手动」。
 func watchlistOrigins(entries []models.WatchlistEntry) (map[uint]string, error) {

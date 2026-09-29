@@ -6,7 +6,9 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync"
 
 	"video-master/models"
 )
@@ -40,6 +42,30 @@ var (
 	}
 )
 
+// onPlaybackLaunched 是「正式播放已成功启动」的包级钩子（D-PC41）：launchPlayback 成功后调用，
+// startPosition 是本次起播位置（续播为库内断点，从头播为 0）。由 App 接线设置为
+// IINAProgressService.OnPlaybackLaunched，用于登记 IINA 会话；nil 表示不登记。
+var (
+	playbackLaunchedMu sync.RWMutex
+	onPlaybackLaunched func(videoID uint, path string, startPosition float64)
+)
+
+// SetPlaybackLaunchedHook 设置 onPlaybackLaunched（接线项）。传 nil 取消。
+func SetPlaybackLaunchedHook(hook func(videoID uint, path string, startPosition float64)) {
+	playbackLaunchedMu.Lock()
+	onPlaybackLaunched = hook
+	playbackLaunchedMu.Unlock()
+}
+
+func notifyPlaybackLaunched(videoID uint, path string, startPosition float64) {
+	playbackLaunchedMu.RLock()
+	hook := onPlaybackLaunched
+	playbackLaunchedMu.RUnlock()
+	if hook != nil {
+		hook(videoID, path, startPosition)
+	}
+}
+
 // normalizePlaybackResumeMode 把空值和不认识的取值都归到默认口径。
 func normalizePlaybackResumeMode(mode string) string {
 	switch strings.TrimSpace(mode) {
@@ -64,21 +90,46 @@ func shouldRestartPlayback(mode string, video *models.Video) bool {
 	}
 }
 
-// launchPlayback 打开视频。需要从头播时走 iina-cli 并显式关掉续播——
-// 这样不用去删 IINA 的断点文件，进度记录能保住。IINA 不在时退回系统默认方式：
-// 别的播放器本来也不会自动续播。
+// mpvStartArg 把库内断点格式化成 iina-cli 的起播参数（保留 1 位小数）。
+func mpvStartArg(position float64) string {
+	return "--mpv-start=" + strconv.FormatFloat(position, 'f', 1, 64)
+}
+
+// launchPlayback 打开视频。
+//   - 从头播：走 iina-cli 显式关掉续播——这样不用去删 IINA 的断点文件，进度记录能保住；
+//   - 续播且库内断点有效（resumable）：走 iina-cli 带上断点（D-PC42），片库里的断点可能来自
+//     内嵌预览或 Jellyfin，IINA 自己并不知道；
+//   - 其余情况，以及 IINA 不在时，退回系统默认方式：别的播放器本来也不会自动续播。
+//
+// 成功启动后调用 onPlaybackLaunched 登记本次会话。
 func launchPlayback(video *models.Video, mode string) error {
 	if video == nil || strings.TrimSpace(video.Path) == "" {
 		return fmt.Errorf("视频路径为空")
 	}
-	if !shouldRestartPlayback(mode, video) {
-		return openWithDefaultFn(video.Path, false)
+	startPosition := 0.0
+	var err error
+	switch {
+	case shouldRestartPlayback(mode, video):
+		if binary, ok := iinaCLILookup(); ok {
+			err = runIINACommand(binary, "--mpv-resume-playback=no", video.Path)
+		} else {
+			err = openWithDefaultFn(video.Path, false)
+		}
+	case resumable(video):
+		startPosition = video.WatchPositionSeconds
+		if binary, ok := iinaCLILookup(); ok {
+			err = runIINACommand(binary, mpvStartArg(startPosition), video.Path)
+		} else {
+			err = openWithDefaultFn(video.Path, false)
+		}
+	default:
+		err = openWithDefaultFn(video.Path, false)
 	}
-	binary, ok := iinaCLILookup()
-	if !ok {
-		return openWithDefaultFn(video.Path, false)
+	if err != nil {
+		return err
 	}
-	return runIINACommand(binary, "--mpv-resume-playback=no", video.Path)
+	notifyPlaybackLaunched(video.ID, video.Path, startPosition)
+	return nil
 }
 
 // LaunchStreamInIINA 把一条流交给本机的 IINA 播放。

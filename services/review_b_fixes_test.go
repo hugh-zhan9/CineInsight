@@ -495,8 +495,10 @@ func TestAPP07ReuseClaimIsExactAndChartUndoNeverDeletesUserEntry(t *testing.T) {
 	}
 }
 
-// 复用后改名：认领包含 reuse，来源不清；再删除条目仍按 ID 撤销那个 want。
-func TestAPP07DeleteReusedEntryAfterRenameStillRevokesWant(t *testing.T) {
+// 复用后改名（复审 B M-2，替换原「改名不清来源、删除仍撤销」的口径）：被 reuse 认领的是用户自己的
+// 条目，改名等于说它记的不是榜单上那部片——清空来源、释放认领；want 标记保留、改为未认领
+// （unclaimed），之后删除这条条目不再撤销它。
+func TestAPP07RenameReusedEntryClearsSourceAndReleasesClaim(t *testing.T) {
 	h := newMovieChartMarkHarness(t)
 	manual := mustCreateEnrichedEntry(t, "沙丘", "tmdb", "438631")
 	h.seedEntry("201", "沙丘", "2021-10-22")
@@ -506,15 +508,38 @@ func TestAPP07DeleteReusedEntryAfterRenameStillRevokesWant(t *testing.T) {
 	if err := h.watchlist.Update(manual.ID, "沙丘：第一部"); err != nil {
 		t.Fatal(err)
 	}
-	if got := reloadWatchlistEntry(t, manual.ID); got.SourceName != "tmdb" || got.SourceItemID != "438631" {
-		t.Fatalf("被复用认领的条目改名不得清来源: %+v", got)
+	if got := reloadWatchlistEntry(t, manual.ID); got.SourceName != "" || got.SourceItemID != "" {
+		t.Fatalf("被复用认领的条目改名应清空来源: %+v", got)
+	}
+	row, _ := h.markRow("201")
+	if row.Mark != models.MovieChartMarkWant || row.WatchlistEntryID != 0 || row.WatchlistEntryOrigin != movieChartOriginUnclaimed {
+		t.Fatalf("改名应释放复用认领、want 保留为未认领: %+v", row)
 	}
 	if err := h.watchlist.Delete(manual.ID); err != nil {
 		t.Fatal(err)
 	}
-	row, _ := h.markRow("201")
-	if row.Mark != "" || row.WatchlistEntryID != 0 || row.WatchlistEntryOrigin != "" {
-		t.Fatalf("改名后删除复用条目仍应撤销 want: %+v", row)
+	if row, _ := h.markRow("201"); row.Mark != models.MovieChartMarkWant {
+		t.Fatalf("释放认领后删除条目不该撤销榜单上的 want: %+v", row)
+	}
+}
+
+// 榜单新建的条目（chart 认领）改名：来源不变、认领不变（那个豆瓣 ID 是标记的依据）。
+func TestAPP07RenameChartOwnedEntryKeepsSourceAndClaim(t *testing.T) {
+	h := newMovieChartMarkHarness(t)
+	h.seedEntry("201", "沙丘", "2021-10-22")
+	result, err := h.service.MarkEntry("201", models.MovieChartMarkWant)
+	if err != nil || !result.WatchlistCreated {
+		t.Fatalf("应新建片单条目: %+v err=%v", result, err)
+	}
+	owned, _ := h.markRow("201")
+	if err := h.watchlist.Update(owned.WatchlistEntryID, "沙丘（2021）"); err != nil {
+		t.Fatal(err)
+	}
+	if got := reloadWatchlistEntry(t, owned.WatchlistEntryID); got.SourceName != WatchlistMetadataSourceDouban || got.SourceItemID != "201" {
+		t.Fatalf("榜单认领的条目改名不得清来源: %+v", got)
+	}
+	if row, _ := h.markRow("201"); row.WatchlistEntryID != owned.WatchlistEntryID || row.WatchlistEntryOrigin != models.MovieChartOriginChart {
+		t.Fatalf("榜单认领不变: %+v", row)
 	}
 }
 
@@ -563,8 +588,9 @@ func TestAPP07SameTitleThreeFilmsAndReselectBoundaries(t *testing.T) {
 	if err := h.watchlist.ApplyCandidate(manual.ID, "2021"); err != nil {
 		t.Fatal(err)
 	}
-	if row, _ := h.markRow("1984"); row.Mark != "" || row.WatchlistEntryID != 0 || row.WatchlistEntryOrigin != "" {
-		t.Fatalf("改选后 1984 的复用认领应释放: %+v", row)
+	// 复审 B M-2：对 reuse 标记只释放认领，mark='want' 保留为未认领（用户在榜单上的明确表态）。
+	if row, _ := h.markRow("1984"); row.Mark != models.MovieChartMarkWant || row.WatchlistEntryID != 0 || row.WatchlistEntryOrigin != movieChartOriginUnclaimed {
+		t.Fatalf("改选后 1984 的复用认领应释放、want 保留: %+v", row)
 	}
 	if err := h.service.ClearMark("1984"); err != nil {
 		t.Fatal(err)
@@ -619,5 +645,114 @@ func TestAPP07LegacyUnclaimedWantStillRevokedByTrimmedTitle(t *testing.T) {
 	}
 	if row, _ := h.markRow("203"); row.Mark != models.MovieChartMarkWant || row.WatchlistEntryID != other.ID {
 		t.Fatalf("认领着别的条目的 want 不得撤销: %+v", row)
+	}
+}
+
+// 复审 B M-3：新产生的未认领 want（撞唯一键拿不到条目 ID）写 origin=unclaimed；删除同名条目时的
+// 片名兜底只命中历史行（origin 为空，见 TestAPP07LegacyUnclaimedWantStillRevokedByTrimmedTitle），
+// 不会把这个从没认领过任何条目的 want 撤掉。
+func TestAPP07NewUnclaimedWantIsNotRevokedByTitleFallback(t *testing.T) {
+	h := newMovieChartMarkHarness(t)
+	blank, err := h.watchlist.Create("沙丘", models.WatchlistKindMovie)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 另一条同名条目的来源 ID 恰好也是 201（别家源）：给 blank 回填豆瓣来源会撞
+	// (title, kind, source_item_id)，EnsureChartEntry 报 ErrWatchlistTitleExists。
+	mustCreateEnrichedEntry(t, "沙丘", "tmdb", "201")
+	h.seedEntry("201", "沙丘", "2021-10-22")
+	result, err := h.service.MarkEntry("201", models.MovieChartMarkWant)
+	if err != nil || !result.WatchlistConflict || result.WatchlistCreated {
+		t.Fatalf("应走撞名分支: %+v err=%v", result, err)
+	}
+	row, _ := h.markRow("201")
+	if row.Mark != models.MovieChartMarkWant || row.WatchlistEntryID != 0 || row.WatchlistEntryOrigin != movieChartOriginUnclaimed {
+		t.Fatalf("撞名时 want 照记、不认领、来源 unclaimed: %+v", row)
+	}
+	if err := h.watchlist.Delete(blank.ID); err != nil {
+		t.Fatal(err)
+	}
+	if row, _ := h.markRow("201"); row.Mark != models.MovieChartMarkWant {
+		t.Fatalf("删除同名条目不该按片名撤销新的未认领 want: %+v", row)
+	}
+}
+
+// 复审 B M-4：早先因重新分析作废的候选，之后同标签另一条才被批准——作废原因仍是「重新分析」，
+// 不是「同标签的其他候选已批准」，也不因那次批准把标签挂上了视频而说成「已手动添加」。
+// 判据是候选自己的作废时间（updated_at）与同标签候选的 approved_at。
+func TestApproveAITagCandidatesMETA11EarlierReanalysisIsNotReportedAsSiblingApproval(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
+	tag := p015Tag(t, "动作", "类型")
+	video := p015Video(t, "retry-then-approve.mp4")
+	early := p015Candidate(t, video.ID, tag, models.AITagConfidenceHigh, models.AITagCandidateStatusPending)
+	if err := svc.RetryVideo(video.ID); err != nil {
+		t.Fatal(err)
+	}
+	if status := p015CandidateStatus(t, early.ID); status != models.AITagCandidateStatusSuperseded {
+		t.Fatalf("重新分析应作废早先的候选: %s", status)
+	}
+	// 作废时间与之后的批准时间拉开，免得落在同一时钟刻度上。
+	time.Sleep(5 * time.Millisecond)
+	later := p015Candidate(t, video.ID, tag, models.AITagConfidenceHigh, models.AITagCandidateStatusPending)
+	if _, err := svc.ApproveCandidate(later.ID); err != nil {
+		t.Fatalf("批准后来的候选失败: %v", err)
+	}
+
+	result := svc.ApproveCandidates([]uint{early.ID})
+	if len(result.Results) != 1 {
+		t.Fatalf("结果条数: %+v", result)
+	}
+	if got := result.Results[0]; got.OK || !got.Superseded || got.Message != aiTagSupersededByReanalysis {
+		t.Fatalf("早先因重新分析作废的候选应报「重新分析」，实际 %+v", got)
+	}
+
+	// 对照：同一次批准连带作废的候选仍报「同标签的其他候选已批准」。
+	other := p015Video(t, "sibling.mp4")
+	first := p015Candidate(t, other.ID, tag, models.AITagConfidenceHigh, models.AITagCandidateStatusPending)
+	second := p015Candidate(t, other.ID, tag, models.AITagConfidenceMedium, models.AITagCandidateStatusPending)
+	pair := svc.ApproveCandidates([]uint{first.ID, second.ID})
+	if len(pair.Results) != 2 || !pair.Results[0].OK || pair.Results[1].Message != aiTagSupersededBySibling {
+		t.Fatalf("连带作废应报同标签已批准: %+v", pair)
+	}
+}
+
+// 复审 B M-5：同一个文件名的 NFC（é 一个码位）与 NFD（e + 组合重音，访达 / HFS+ 返回的写法）在
+// APFS 上是同一个文件，锁的键先做 NFC 规整再转小写，两种写法拿到同一把锁。
+func TestMEDIA05SubtitleLockKeyNormalizesUnicode(t *testing.T) {
+	nfc := "/Media/Café/Amélie.srt"
+	nfd := "/Media/Café/./AMélie.SRT"
+	if nfc == nfd || []byte(nfc)[len("/Media/Caf")] == []byte(nfd)[len("/Media/Caf")] {
+		t.Fatal("夹具的两种写法字节必须不同")
+	}
+	if got, want := subtitleFileLockKey(nfd), subtitleFileLockKey(nfc); got != want {
+		t.Fatalf("NFC 与 NFD 写法应得到同一个键: %q vs %q", got, want)
+	}
+	if subtitleFileLockKey(nfc) != "/media/café/amélie.srt" {
+		t.Fatalf("键应为 NFC + 小写: %q", subtitleFileLockKey(nfc))
+	}
+
+	unlock := lockSubtitleFile(nfc)
+	released := false
+	defer func() {
+		if !released {
+			unlock()
+		}
+	}()
+	acquired := make(chan func(), 1)
+	go func() { acquired <- lockSubtitleFile(nfd) }()
+	select {
+	case release := <-acquired:
+		release()
+		t.Fatal("NFC 与 NFD 写法的同一 .srt 必须互斥")
+	case <-time.After(150 * time.Millisecond):
+	}
+	released = true
+	unlock()
+	select {
+	case release := <-acquired:
+		release()
+	case <-time.After(5 * time.Second):
+		t.Fatal("释放后应能拿到锁")
 	}
 }

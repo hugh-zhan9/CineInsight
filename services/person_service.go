@@ -531,7 +531,7 @@ func (s *PersonService) GetPersonDeletionImpact(id uint) (*PersonDeletionImpact,
 	return impact, nil
 }
 
-// deletePersonTx 硬删人物：两张关系表的行、人脸候选与命名簇的指向一并清理，簇回到未命名
+// deletePersonTx 硬删人物：两张关系表的行、人脸候选、人脸链路写入记录与命名簇的指向一并清理，簇回到未命名
 // （与 reconcileFaceClusterPeople 同口径，但在同一事务里做，不依赖外键 SET NULL 与后续对账）。
 func deletePersonTx(tx *gorm.DB, personID uint) error {
 	if err := tx.Where("person_id = ?", personID).Delete(&models.VideoPerson{}).Error; err != nil {
@@ -541,6 +541,11 @@ func deletePersonTx(tx *gorm.DB, personID uint) error {
 		return err
 	}
 	if err := tx.Where("person_id = ?", personID).Delete(&models.FacePersonCandidate{}).Error; err != nil {
+		return err
+	}
+	// 人脸链路的写入记录随人物一起删：它们只对这个人物的关系有意义，留着会在簇 ID
+	// 被复用时（SQLite 删掉最大行后会复用 ID）被误认成新簇的写入（META-04）。
+	if err := tx.Where("person_id = ?", personID).Delete(&models.FaceRelationWrite{}).Error; err != nil {
 		return err
 	}
 	if err := tx.Model(&models.FaceCluster{}).

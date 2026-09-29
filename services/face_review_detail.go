@@ -42,7 +42,12 @@ func (s *FaceReviewService) RemoveFaceClusterObservation(ctx context.Context, cl
 			return err
 		}
 		// 未命名与已命名簇都允许移除来源（D-PC30）；已命名簇移除来源不动人物关系。
-		if cluster.Status != models.FaceClusterStatusUnnamed && cluster.Status != models.FaceClusterStatusNamed {
+		// 已忽略的簇报 cluster_ignored（M-8）：要先在「已忽略」里恢复，而不是「这一簇已被命名」。
+		switch cluster.Status {
+		case models.FaceClusterStatusUnnamed, models.FaceClusterStatusNamed:
+		case models.FaceClusterStatusIgnored:
+			return ErrFaceClusterIgnored
+		default:
 			return ErrFaceClusterNotUnnamed
 		}
 		result := tx.WithContext(ctx).Model(&models.FaceObservation{}).

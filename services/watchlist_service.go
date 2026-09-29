@@ -188,13 +188,18 @@ func (s *WatchlistService) Update(id uint, title string) error {
 	}
 	// 改名让旧来源 ID 失去依据（它对应的是旧片名）：清空来源，状态仍按 §3.1 落 manual
 	// （用户编辑即接管，转换表是合同，不改成 pending），要重新补全由用户手动重试。榜单
-	// 认领着该条目（榜单创建 / 补全绑定 / 复用，按 watchlist_entry_id 判断、不分来源）时
-	// 保持来源不变——那个豆瓣 ID 是标记的依据，清掉会让标记与条目对不上。
+	// 以 chart / enrichment 认领着该条目时保持来源不变——那个豆瓣 ID 是标记的依据，清掉会让
+	// 标记与条目对不上。
+	//
+	// 以 reuse 认领的是用户自己先建的条目（APP-07 M-2）：用户改名等于说「这条记的不是榜单上那部
+	// 片」，于是照未认领的条目清空来源，并释放 reuse 认领——want 标记保留（那是用户在榜单上的表态），
+	// 改为未认领（watchlist_entry_origin = unclaimed），之后删除这条条目不再撤销它。
 	renamed := title != current.Title
+	releaseReuse := false
 	if renamed {
 		var claimed int64
 		err := database.DB.Model(&models.MovieChartMark{}).
-			Where("mark = ? AND watchlist_entry_id = ?", models.MovieChartMarkWant, id).
+			Where("mark = ? AND watchlist_entry_id = ? AND watchlist_entry_origin <> ?", models.MovieChartMarkWant, id, movieChartOriginReuse).
 			Limit(1).Count(&claimed).Error
 		if err != nil {
 			return fmt.Errorf("修改想看记录失败: %w", err)
@@ -204,14 +209,22 @@ func (s *WatchlistService) Update(id uint, title string) error {
 			fields["source_item_id"] = ""
 			fields["source_title"] = ""
 			fields["source_fields"] = ""
+			releaseReuse = true
 		}
 	}
-	result := database.DB.Model(&models.WatchlistEntry{}).Where("id = ?", id).Updates(fields)
-	if result.Error != nil {
-		if watchlistTitleConflict(result.Error) {
+	var result *gorm.DB
+	err = database.Transaction(func(tx *gorm.DB) error {
+		result = tx.Model(&models.WatchlistEntry{}).Where("id = ?", id).Updates(fields)
+		if result.Error != nil || result.RowsAffected == 0 || !releaseReuse {
+			return result.Error
+		}
+		return releaseReuseChartWantsForEntry(tx, id)
+	})
+	if err != nil {
+		if watchlistTitleConflict(err) {
 			return ErrWatchlistTitleExists
 		}
-		return fmt.Errorf("修改想看记录失败: %w", result.Error)
+		return fmt.Errorf("修改想看记录失败: %w", err)
 	}
 	if result.RowsAffected == 0 {
 		return ErrWatchlistEntryNotFound

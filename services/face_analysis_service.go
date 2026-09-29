@@ -1284,6 +1284,11 @@ func recomputeFaceClustersTx(ctx context.Context, tx *gorm.DB, clusterIDs []uint
 				Delete(&models.FacePersonCandidate{}).Error; err != nil {
 				return nil, err
 			}
+			// 与 ClearFaceData 同理：空簇被删时连同它的写入记录一起删，避免 ID 复用后的误认。
+			if err := tx.WithContext(ctx).Where("cluster_id = ?", clusterID).
+				Delete(&models.FaceRelationWrite{}).Error; err != nil {
+				return nil, err
+			}
 			if err := tx.WithContext(ctx).Delete(&models.FaceCluster{}, clusterID).Error; err != nil {
 				return nil, err
 			}
@@ -1346,6 +1351,11 @@ func (s *FaceAnalysisService) ClearFaceData() (FaceDataUsage, error) {
 	}
 	err := database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Where("1 = 1").Delete(&models.FacePersonCandidate{}).Error; err != nil {
+			return err
+		}
+		// 簇都没了，写入记录也就失去归属。已写入的人物关系保留、归用户所有；记录不删的话，
+		// 重新分析后复用了同一 ID 的新簇会把它们当成自己写的，解除关联时误删（META-04）。
+		if err := tx.Where("1 = 1").Delete(&models.FaceRelationWrite{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("1 = 1").Delete(&models.FaceCluster{}).Error; err != nil {

@@ -64,6 +64,9 @@ func AllModels() []interface{} {
 		&FaceCluster{},
 		&FaceObservation{},
 		&FacePersonCandidate{},
+		// 人脸链路写入记录（META-04）：没有外键（多态媒体引用，人物删除由审阅对账清理），
+		// 排在哪里都满足拓扑序，放在人脸表旁边便于查找。
+		&FaceRelationWrite{},
 		// 年度电影榜单的三张表放在末尾：它们之间与对既有表都没有外键
 		// （标记表按豆瓣 ID 字符串逻辑关联条目缓存表，理由见 models/movie_chart.go），
 		// 因此不引入新的拓扑序约束，追加在哪里都行，追加在末尾最省事。

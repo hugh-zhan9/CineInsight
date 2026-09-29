@@ -361,7 +361,9 @@ func (s *JellyfinServer) playbackProgress(w http.ResponseWriter, r *http.Request
 		// 「算不算看完」统一由服务层按同一个容差判，这里只负责把位置报上去：
 		// 早先这里自己要求 seconds >= duration，比内嵌播放器那条路严，同一部片
 		// 在两个客户端上会得出不同的已看结论。
-		if _, err = s.video.UpdateVideoWatchProgress(id, seconds, false); s.libraryError(w, err) {
+		// Jellyfin 客户端上报的就是它当前的播放位置，按最近一次写入为准（允许往回写）；
+		// 时长由服务层取库里的值。
+		if _, err = s.video.UpdateVideoWatchProgress(id, seconds, 0, false, WatchProgressOriginResume); s.libraryError(w, err) {
 			return
 		}
 	}

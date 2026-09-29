@@ -588,12 +588,12 @@ func TestMigrateRoundTripPreservesBinaryColumns(t *testing.T) {
 	}
 }
 
-// productCompletenessTables 是 2026-09-29 批次新增的七张表。
+// productCompletenessTables 是 2026-09-29 批次新增的表（七张 + 人脸写入记录 face_relation_writes）。
 func productCompletenessTables() []any {
 	return []any{
 		&models.MigrationStagedSource{}, &models.SubtitleJob{}, &models.TagPersonConversion{},
 		&models.MovieVideoLink{}, &models.JellyfinSession{}, &models.BrowserDownloadTask{},
-		&models.CleanupVideoDismissal{},
+		&models.CleanupVideoDismissal{}, &models.FaceRelationWrite{},
 	}
 }
 
@@ -654,6 +654,8 @@ func seedProductCompletenessRows(t *testing.T, db *gorm.DB, videoIDs []uint) {
 			Directory: "/dl", Status: "succeeded", FinishedAt: &stamp,
 		},
 		&models.CleanupVideoDismissal{VideoID: videoIDs[0], Category: models.CleanupDismissalCategoryShort, Fingerprint: "100:1700000000123000000"},
+		// 人脸链路写入记录（META-04）：没有外键，多态媒体引用；media_kind 是 varchar(8)。
+		&models.FaceRelationWrite{PersonID: 1, MediaKind: models.FaceMediaKindVideo, MediaID: videoIDs[0], ClusterID: 1, CreatedAt: stamp},
 		// 超分任务的 copy_metadata（MEDIA-11）：true 必须原样往返。
 		&models.VideoEnhancementTask{
 			VideoID: videoIDs[0], Profile: models.EnhancementProfileGeneral, Scale: 2, CopyMetadata: true,
@@ -742,5 +744,12 @@ func TestMigrateCarriesProductCompletenessTablesAndColumns(t *testing.T) {
 	}
 	if !enhancement.CopyMetadata || enhancement.VideoID != videoIDs[0] || enhancement.ErrorCode != "cancelled" {
 		t.Fatalf("往返后超分任务的 copy_metadata 应原样保留为 true（MEDIA11）: %+v", enhancement)
+	}
+	var write models.FaceRelationWrite
+	if err := back.Where("media_kind = ? AND media_id = ?", models.FaceMediaKindVideo, videoIDs[0]).First(&write).Error; err != nil {
+		t.Fatalf("往返后读不到人脸写入记录（META04）: %v", err)
+	}
+	if write.PersonID != 1 || write.ClusterID != 1 || !write.CreatedAt.Equal(stamp) {
+		t.Fatalf("人脸写入记录往返后应原样保留（META04）: %+v", write)
 	}
 }

@@ -289,7 +289,7 @@ func TestReviewJellyfinCapabilities(t *testing.T) {
 }
 func TestReviewJellyfinFilterContract(t *testing.T) {
 	s, token, v, _ := jellyfinLibraryFixture(t)
-	if _, err := s.video.UpdateVideoWatchProgress(v.ID, 25, false); err != nil {
+	if _, err := s.video.UpdateVideoWatchProgress(v.ID, 25, 0, false, WatchProgressOriginResume); err != nil {
 		t.Fatal(err)
 	}
 	for _, query := range []string{"ExcludeItemIds=" + jellyfinID(jellyVideo, v.ID), "IsResumable=false"} {
@@ -378,7 +378,7 @@ func TestJellyfinProgressNearEndMarksWatched(t *testing.T) {
 	if err := database.DB.Create(&second).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.video.UpdateVideoWatchProgress(second.ID, 50, false); err != nil {
+	if _, err := s.video.UpdateVideoWatchProgress(second.ID, 50, 0, false, WatchProgressOriginResume); err != nil {
 		t.Fatalf("记录断点失败: %v", err)
 	}
 	database.DB.First(&second, second.ID)

@@ -116,10 +116,16 @@ func (a *App) RetryDownload(taskUID string) (services.BrowserDownloadActionResul
 }
 
 // AddDownloadDirectoryToScan 把下载目录加入扫描目录，再对它窄对账入库（D-PC25）。
-// 加目录复用 DirectoryService.AddDirectory 并重配监听（与 App.AddDirectory 同样的两步）；
-// 窄对账交给 ReimportDownload，它走的是下载入库同一个 SyncAffectedDirectories，并能确认
-// 这一个任务的文件进没进库。不另起 App.AddDirectory 的后台恢复扫描，免得同一目录并发扫两遍。
-// 目录已在扫描范围内（相等或更深）时不重复添加，直接重新入库。
+//
+// 先预检（M-5）：ValidateScanDirectory 判重复 / 嵌套 / 存在，再对照扫描黑名单；黑名单、包含已有
+// 扫描根、目录不在时返回可读的结果码（BrowserDownloadScanDirectoryCheck），不加目录。目录已在
+// 扫描范围内（与某个根相同或在其内）时不重复添加，直接重新入库。
+//
+// 真正加了目录时，与 App.AddDirectory 走同样的三步：DirectoryService.AddDirectory、重配监听、
+// rescanAddedDirectory（窄对账并发 library-watcher-reconciled / library-scan-summary 事件，片库页据此
+// 刷新）。这里同步调用 rescanAddedDirectory 而不是像 App.AddDirectory 那样另起 goroutine：随后的
+// ReimportDownload 还要对同一目录跑一次入库并确认这一个任务的文件进没进库，两次扫描串行，
+// 不会并发扫同一目录。
 func (a *App) AddDownloadDirectoryToScan(taskUID string) (services.BrowserDownloadActionResult, error) {
 	if a.browserDownloads == nil {
 		return browserDownloadUnavailable(), nil
@@ -129,16 +135,30 @@ func (a *App) AddDownloadDirectoryToScan(taskUID string) (services.BrowserDownlo
 		log.Printf("API AddDownloadDirectoryToScan task=%s code=%s err=%v", taskUID, check.Code, err)
 		return check, err
 	}
-	dirs, err := a.directoryService.GetAllDirectories()
+	validation, err := a.directoryService.ValidateScanDirectory(directory)
 	if err != nil {
-		return services.BrowserDownloadActionResult{}, fmt.Errorf("读取扫描目录失败：%w", err)
+		return services.BrowserDownloadActionResult{}, fmt.Errorf("检查扫描目录失败：%w", err)
 	}
-	if !services.BrowserDownloadDirectoryCovered(dirs, directory) {
-		if _, err := a.directoryService.AddDirectory(directory, ""); err != nil {
+	settings, err := a.settingsService.GetSettings()
+	if err != nil {
+		return services.BrowserDownloadActionResult{}, fmt.Errorf("读取设置失败：%w", err)
+	}
+	covered, precheck := services.BrowserDownloadScanDirectoryCheck(validation,
+		services.BrowserDownloadDirectoryExcluded(settings.ScanExcludePaths, directory))
+	if precheck.Code != services.BrowserDownloadCodeOK {
+		log.Printf("API AddDownloadDirectoryToScan task=%s code=%s", taskUID, precheck.Code)
+		return precheck, nil
+	}
+	if !covered {
+		added, err := a.directoryService.AddDirectory(directory, "")
+		if err != nil {
 			log.Printf("API AddDownloadDirectoryToScan task=%s add directory err=%v", taskUID, err)
 			return services.BrowserDownloadActionResult{}, fmt.Errorf("加入扫描目录失败：%w", err)
 		}
 		a.reconfigureLibraryWatcher()
+		if added != nil {
+			a.rescanAddedDirectory(*added)
+		}
 	}
 	result, err := a.browserDownloads.ReimportDownload(taskUID)
 	log.Printf("API AddDownloadDirectoryToScan task=%s code=%s err=%v", taskUID, result.Code, err)

@@ -656,7 +656,16 @@ func (s *ImageLibraryService) AddTagToImage(imageID uint, tagID uint) error {
 		return fmt.Errorf("自动标签由应用维护，不能手动添加")
 	}
 
-	return database.DB.Model(&image).Association("Tags").Append(&tag)
+	// 与视频侧同构（D-PC28 规则 2）：同图 pending 且匹配该标签的 AI 候选在同一事务里作废。
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&image).Association("Tags").Append(&tag); err != nil {
+			return err
+		}
+		if _, err := SupersedeImageCandidatesForManualTag(tx, imageID, tagID); err != nil {
+			return fmt.Errorf("作废对应的 AI 候选失败: %w", err)
+		}
+		return nil
+	})
 }
 
 // RemoveTagFromImage 移除图片的标签。

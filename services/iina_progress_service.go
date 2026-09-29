@@ -3,8 +3,10 @@ package services
 import (
 	"crypto/md5"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"gorm.io/gorm"
 
 	"video-master/database"
 	"video-master/models"
@@ -25,6 +28,13 @@ import (
 // 系统播放器一路只记了播放次数，不记进度，"继续观看"视图和行上的进度条
 // 对外部播放形同虚设。这里把 IINA 的断点读回来补上这一环。
 const iinaWatchLaterRelativeDir = "Library/Application Support/com.colliderli.iina/watch_later"
+
+// iinaSessionTTL 是应用发起的 IINA 会话的登记有效期（D-PC41）。超过这个时间的删除事件
+// 不再据墙钟推算——那多半已经不是这一次播放了。
+const iinaSessionTTL = 12 * time.Hour
+
+// iinaRemovedWatchedRatio：删除事件时，最后已知位置达到时长的这个比例也判为看完（D-PC41）。
+const iinaRemovedWatchedRatio = 0.9
 
 // IINAProgressUpdate 是一条被同步的进度。界面拿它就地更新对应的行，
 // 不必整表重载——重载会按当前排序重新打分，刚看完的视频会跳到别的位置，
@@ -45,17 +55,52 @@ type IINAProgressSyncResult struct {
 	Changes []IINAProgressUpdate `json:"changes"`
 }
 
+// IINASyncStatus 是设置页展示的 IINA 同步状态（D-PC47）。
+type IINASyncStatus struct {
+	// Enabled 表示正在监听断点目录。
+	Enabled bool `json:"enabled"`
+	// WatchingDir 是正在监听的目录；没有在监听时为空。
+	WatchingDir string `json:"watching_dir"`
+	// LastSyncAt 是最近一次成功同步（含删除事件的看完判定）的时间，从未成功过为 nil。
+	LastSyncAt *time.Time `json:"last_sync_at" ts_type:"string"`
+	// LastError 是最近一次失败的原因（已去掉绝对路径）；之后成功同步一次就清空。
+	LastError string `json:"last_error"`
+}
+
+// iinaLaunchedSession 是一次由应用发起的播放（D-PC41）。只在内存里，重启即丢。
+type iinaLaunchedSession struct {
+	videoID       uint
+	path          string
+	startPosition float64
+	launchedAt    time.Time
+	// lastParsed 是本次会话期间（文件 mtime 不早于启动时间）最后一次读到的断点位置。
+	lastParsed   float64
+	lastParsedAt time.Time
+}
+
 // IINAProgressService 把 IINA 的播放断点同步进片库。
 type IINAProgressService struct {
 	mu            sync.Mutex
 	watchLaterDir string
-	// 测试接缝
-	readEntry func(path string) (string, error)
+	// 测试接缝：读取断点文件内容与修改时间。
+	readEntry func(path string) (string, time.Time, error)
 
 	watchMu   sync.Mutex
 	watcher   *fsnotify.Watcher
 	onSynced  func(IINAProgressSyncResult)
 	watchStop chan struct{}
+
+	// notifyWatched 是已看翻转的转发口（接线为 VideoService.NotifyWatchStateChanged）。
+	notifyMu      sync.RWMutex
+	notifyWatched func(videoID uint, watched bool)
+
+	// sessions 按 watch_later 文件名（路径 MD5）索引应用发起的播放会话。锁序：mu → sessionMu。
+	sessionMu sync.Mutex
+	sessions  map[string]*iinaLaunchedSession
+
+	statusMu   sync.Mutex
+	lastSyncAt *time.Time
+	lastError  string
 }
 
 func NewIINAProgressService(homeDir string) *IINAProgressService {
@@ -65,10 +110,15 @@ func NewIINAProgressService(homeDir string) *IINAProgressService {
 	}
 	return &IINAProgressService{
 		watchLaterDir: dir,
-		readEntry: func(path string) (string, error) {
+		readEntry: func(path string) (string, time.Time, error) {
+			info, err := os.Stat(path)
+			if err != nil {
+				return "", time.Time{}, err
+			}
 			data, err := os.ReadFile(path)
-			return string(data), err
+			return string(data), info.ModTime(), err
 		},
+		sessions: map[string]*iinaLaunchedSession{},
 	}
 }
 
@@ -116,9 +166,134 @@ func (s *IINAProgressService) SetOnSynced(hook func(IINAProgressSyncResult)) {
 	s.watchMu.Unlock()
 }
 
+// SetWatchedNotifier 注入已看翻转的转发口（接线项：VideoService.NotifyWatchStateChanged）。
+// IINA 同步直接写库，观察者由 VideoService 统一持有，这里只负责转发。
+func (s *IINAProgressService) SetWatchedNotifier(notify func(videoID uint, watched bool)) {
+	s.notifyMu.Lock()
+	s.notifyWatched = notify
+	s.notifyMu.Unlock()
+}
+
+func (s *IINAProgressService) notifyWatchedFlips(videoIDs []uint) {
+	if len(videoIDs) == 0 {
+		return
+	}
+	s.notifyMu.RLock()
+	notify := s.notifyWatched
+	s.notifyMu.RUnlock()
+	if notify == nil {
+		return
+	}
+	for _, videoID := range videoIDs {
+		notify(videoID, true)
+	}
+}
+
+// RegisterLaunchedSession 登记一次由应用发起的播放（D-PC41）。startPosition 是本次起播位置：
+// 续播为库内断点，从头播为 0。只存内存，iinaSessionTTL 后过期；同一文件再次登记会覆盖。
+func (s *IINAProgressService) RegisterLaunchedSession(videoID uint, path string, startPosition float64, launchedAt time.Time) {
+	if s == nil || videoID == 0 || strings.TrimSpace(path) == "" {
+		return
+	}
+	if startPosition < 0 || math.IsNaN(startPosition) || math.IsInf(startPosition, 0) {
+		startPosition = 0
+	}
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	s.pruneSessionsLocked(launchedAt)
+	s.sessions[iinaWatchLaterName(path)] = &iinaLaunchedSession{
+		videoID: videoID, path: path, startPosition: startPosition, launchedAt: launchedAt,
+	}
+}
+
+// OnPlaybackLaunched 以当前时间登记会话，签名与 playback_launcher.go 的 onPlaybackLaunched 一致，
+// 接线时直接 SetPlaybackLaunchedHook(iinaProgress.OnPlaybackLaunched)。
+func (s *IINAProgressService) OnPlaybackLaunched(videoID uint, path string, startPosition float64) {
+	s.RegisterLaunchedSession(videoID, path, startPosition, time.Now())
+}
+
+func (s *IINAProgressService) pruneSessionsLocked(now time.Time) {
+	for name, session := range s.sessions {
+		if now.Sub(session.launchedAt) > iinaSessionTTL {
+			delete(s.sessions, name)
+		}
+	}
+}
+
+// noteSessionPosition 记下会话期间读到的断点位置：文件修改时间早于启动时间的是上一次播放留下的，
+// 不算这次的进度。
+func (s *IINAProgressService) noteSessionPosition(name string, videoID uint, seconds float64, modTime time.Time) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	session, ok := s.sessions[name]
+	if !ok || session.videoID != videoID || modTime.Before(session.launchedAt) || modTime.Before(session.lastParsedAt) {
+		return
+	}
+	session.lastParsed = seconds
+	session.lastParsedAt = modTime
+}
+
+// takeSession 取出并移除一个未过期的会话；一次删除事件只结算一次。
+func (s *IINAProgressService) takeSession(name string, now time.Time) (iinaLaunchedSession, bool) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	session, ok := s.sessions[name]
+	if !ok {
+		return iinaLaunchedSession{}, false
+	}
+	delete(s.sessions, name)
+	if now.Sub(session.launchedAt) > iinaSessionTTL {
+		return iinaLaunchedSession{}, false
+	}
+	return *session, true
+}
+
+// Status 返回设置页展示的同步状态（D-PC47）。
+func (s *IINAProgressService) Status() IINASyncStatus {
+	status := IINASyncStatus{}
+	s.watchMu.Lock()
+	if s.watcher != nil {
+		status.Enabled = true
+		status.WatchingDir = s.watchLaterDir
+	}
+	s.watchMu.Unlock()
+	s.statusMu.Lock()
+	if s.lastSyncAt != nil {
+		at := *s.lastSyncAt
+		status.LastSyncAt = &at
+	}
+	status.LastError = s.lastError
+	s.statusMu.Unlock()
+	return status
+}
+
+func (s *IINAProgressService) recordSyncSuccess(at time.Time) {
+	s.statusMu.Lock()
+	s.lastSyncAt = &at
+	s.lastError = ""
+	s.statusMu.Unlock()
+}
+
+func (s *IINAProgressService) recordSyncError(err error) {
+	if err == nil {
+		return
+	}
+	s.statusMu.Lock()
+	s.lastError = scrubPlaybackProxyPaths(err.Error())
+	s.statusMu.Unlock()
+}
+
 // StartWatching 监听 IINA 的断点目录。IINA 在退出播放时才写这个文件，
 // 所以事件一到就意味着"刚看完一段"，这时候同步最及时——不必等下次启动应用。
 func (s *IINAProgressService) StartWatching() error {
+	if err := s.startWatching(); err != nil {
+		s.recordSyncError(err)
+		return err
+	}
+	return nil
+}
+
+func (s *IINAProgressService) startWatching() error {
 	if !s.Available() {
 		return fmt.Errorf("没有找到 IINA 的播放断点目录")
 	}
@@ -157,8 +332,18 @@ func (s *IINAProgressService) StopWatching() {
 	}
 }
 
+func (s *IINAProgressService) emitSynced(result IINAProgressSyncResult) {
+	s.watchMu.Lock()
+	hook := s.onSynced
+	s.watchMu.Unlock()
+	if hook != nil {
+		hook(result)
+	}
+}
+
 // watchLoop 把一串写事件合并成一次同步：IINA 退出时会连着写文件，
-// 每个事件都跑一遍全库扫描没有意义。
+// 每个事件都跑一遍全库扫描没有意义。删除 / 改名事件逐个立即结算：它只在播到结尾时发生，
+// 只对本次会话登记过的视频生效（D-PC41）。
 func (s *IINAProgressService) watchLoop(watcher *fsnotify.Watcher, stop chan struct{}) {
 	const debounce = 400 * time.Millisecond
 	var timer *time.Timer
@@ -174,7 +359,9 @@ func (s *IINAProgressService) watchLoop(watcher *fsnotify.Watcher, stop chan str
 			if !ok {
 				return
 			}
-			// 只关心写入和创建；删除意味着看完了，但我们不据此改"已看"，忽略即可。
+			if event.Op&(fsnotify.Remove|fsnotify.Rename) != 0 {
+				s.handleRemovedEvent(filepath.Base(event.Name), time.Now())
+			}
 			if event.Op&(fsnotify.Write|fsnotify.Create) == 0 {
 				continue
 			}
@@ -187,6 +374,7 @@ func (s *IINAProgressService) watchLoop(watcher *fsnotify.Watcher, stop chan str
 			if !ok {
 				return
 			}
+			s.recordSyncError(fmt.Errorf("监听断点目录出错: %w", err))
 			log.Printf("[IINA] 监听断点目录出错 err=%v", err)
 		case <-timerC:
 			timerC = nil
@@ -198,44 +386,126 @@ func (s *IINAProgressService) watchLoop(watcher *fsnotify.Watcher, stop chan str
 			if result.Updated == 0 {
 				continue
 			}
-			s.watchMu.Lock()
-			hook := s.onSynced
-			s.watchMu.Unlock()
-			if hook != nil {
-				hook(result)
-			}
+			s.emitSynced(result)
 		}
 	}
 }
 
-// Sync 遍历库内视频，把 IINA 记下的断点补进 watch_position_seconds。
-// 只往前推进进度，不回退：用户可能在应用内看得更远，那份记录更新。
+func (s *IINAProgressService) handleRemovedEvent(name string, eventTime time.Time) {
+	change, ok, err := s.settleRemovedEntry(name, eventTime)
+	if err != nil {
+		s.recordSyncError(err)
+		log.Printf("[IINA] 结算删除事件失败 err=%v", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	s.emitSynced(IINAProgressSyncResult{Updated: 1, Changes: []IINAProgressUpdate{change}})
+}
+
+// settleRemovedEntry 结算一次 watch_later 删除 / 改名（D-PC41）。
 //
-// 断点文件"消失"仍然不据此判已看（可能是用户自己清了 IINA 的记录）；但断点位置
-// 停在片尾是明确信号，与应用内播放同一口径判为看完（2026-09-13 裁决）。桌面「播放」
-// 按钮走的就是 IINA，这条路不判的话，用户看到的还是「看到 00:28 / 00:28」却没标已看。
-// 已经标记已看的视频直接跳过：看完了就没有断点可续，一份陈旧的 watch_later 记录
-// 不该再把它拉回"在看"。
+// 只对本次会话登记过的视频生效；未登记的删除照旧忽略（多半是用户自己清了 IINA 的记录）。
+// 最后已知位置取库内断点、会话期间最后读到的断点、按墙钟推算的位置三者的最大值——
+// 暂停只会让墙钟推算偏大，而删除事件只在播到结尾时发生。满足看完判定或达到时长 90% 时
+// 标已看、清零断点，返回给界面的变更 Watched=true。文件其实还在（被重写）时不算删除。
+func (s *IINAProgressService) settleRemovedEntry(name string, eventTime time.Time) (IINAProgressUpdate, bool, error) {
+	s.mu.Lock()
+	change, flipped, ok, err := s.settleRemovedEntryLocked(name, eventTime)
+	s.mu.Unlock()
+	if err != nil || !ok {
+		return IINAProgressUpdate{}, false, err
+	}
+	s.recordSyncSuccess(time.Now())
+	if flipped {
+		s.notifyWatchedFlips([]uint{change.VideoID})
+	}
+	return change, true, nil
+}
+
+func (s *IINAProgressService) settleRemovedEntryLocked(name string, eventTime time.Time) (IINAProgressUpdate, bool, bool, error) {
+	if s.watchLaterDir != "" {
+		if _, err := os.Stat(filepath.Join(s.watchLaterDir, name)); err == nil {
+			return IINAProgressUpdate{}, false, false, nil
+		}
+	}
+	session, ok := s.takeSession(name, eventTime)
+	if !ok {
+		return IINAProgressUpdate{}, false, false, nil
+	}
+	var video models.Video
+	err := database.DB.Select("id", "duration", "watch_position_seconds", "is_watched").First(&video, session.videoID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return IINAProgressUpdate{}, false, false, nil
+	}
+	if err != nil {
+		return IINAProgressUpdate{}, false, false, err
+	}
+	if video.Duration <= 0 {
+		return IINAProgressUpdate{}, false, false, nil
+	}
+	elapsed := eventTime.Sub(session.launchedAt).Seconds()
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	lastKnown := max(video.WatchPositionSeconds, session.lastParsed, session.startPosition+elapsed)
+	if !isWatchCompleted(lastKnown, video.Duration) && lastKnown < iinaRemovedWatchedRatio*video.Duration {
+		return IINAProgressUpdate{}, false, false, nil
+	}
+	if video.IsWatched && video.WatchPositionSeconds == 0 {
+		return IINAProgressUpdate{}, false, false, nil
+	}
+	flipped, applied, err := markWatchedFromCompletion(database.DB, video.ID,
+		map[string]interface{}{"watch_progress_updated_at": eventTime}, time.Now())
+	if err != nil || !applied {
+		return IINAProgressUpdate{}, false, false, err
+	}
+	log.Printf("[IINA] 播到结尾判为看完 video_id=%d last_known=%.1f duration=%.1f", video.ID, lastKnown, video.Duration)
+	return IINAProgressUpdate{VideoID: video.ID, WatchPositionSeconds: 0, Watched: true}, flipped, true, nil
+}
+
+// Sync 遍历库内视频，把 IINA 记下的断点补进 watch_position_seconds（D-PC42：以最近一次写入为准）。
+//
+//   - 断点文件的修改时间晚于库里的 watch_progress_updated_at 才采用，否则忽略：用户可能在
+//     应用内或 Jellyfin 里看得更新，那份记录优先；采用时把进度更新时间写成文件的修改时间。
+//   - 已看视频的断点不可续（resumable 为 false），且断点文件不晚于已看时间：那是陈旧记录，
+//     跳过，不能把已看的片子拉回"在看"。
+//   - 断点停在片尾区间内与应用内播放同一口径判为看完（2026-09-13 裁决）。完成判定前面不再有
+//     按位置幅度的守卫，历史遗留行（位置顶到片尾、未标已看）重播后照样自愈。
+//
+// 断点文件"消失"由监听里的删除事件结算，只对本次会话登记过的视频生效（见 settleRemovedEntry）。
 func (s *IINAProgressService) Sync() (IINAProgressSyncResult, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	result, flipped, err := s.syncLocked()
+	s.mu.Unlock()
+	if err != nil {
+		s.recordSyncError(err)
+		return result, err
+	}
+	s.recordSyncSuccess(time.Now())
+	s.notifyWatchedFlips(flipped)
+	return result, nil
+}
 
+func (s *IINAProgressService) syncLocked() (IINAProgressSyncResult, []uint, error) {
 	result := IINAProgressSyncResult{Changes: make([]IINAProgressUpdate, 0)}
 	if !s.Available() {
-		return result, fmt.Errorf("没有找到 IINA 的播放断点目录")
+		return result, nil, fmt.Errorf("没有找到 IINA 的播放断点目录")
 	}
 
 	var videos []models.Video
-	if err := database.DB.Select("id, path, duration, watch_position_seconds, is_watched").Find(&videos).Error; err != nil {
-		return result, err
+	if err := database.DB.Select("id, path, duration, watch_position_seconds, is_watched, watched_at, watch_progress_updated_at").Find(&videos).Error; err != nil {
+		return result, nil, err
 	}
+	var flipped []uint
 	for _, video := range videos {
 		if strings.TrimSpace(video.Path) == "" {
 			continue
 		}
 		result.Scanned++
-		entryPath := filepath.Join(s.watchLaterDir, iinaWatchLaterName(video.Path))
-		content, err := s.readEntry(entryPath)
+		name := iinaWatchLaterName(video.Path)
+		content, modTime, err := s.readEntry(filepath.Join(s.watchLaterDir, name))
 		if err != nil {
 			continue // 没有断点：没看过，或者已经看完被 mpv 删掉了
 		}
@@ -246,39 +516,52 @@ func (s *IINAProgressService) Sync() (IINAProgressSyncResult, error) {
 		if video.Duration > 0 && seconds > video.Duration {
 			seconds = video.Duration
 		}
-		// 看完的不再回写：位置被清成 0 之后，"只前进不后退"这条防线就挡不住
-		// 陈旧断点了，会把已看的片子重新变成"看到一半"。
-		if video.IsWatched {
+		// PG 的时间戳只到微秒：不截断的话，写回去的修改时间读出来总比文件早一点，
+		// 同一个文件每次同步都会被当成"更新的写入"。
+		modTime = modTime.Truncate(time.Microsecond)
+		s.noteSessionPosition(name, video.ID, seconds, modTime)
+		if video.IsWatched && !resumable(&video) && (video.WatchedAt == nil || !modTime.After(*video.WatchedAt)) {
 			result.Skipped++
 			continue
 		}
-		// 完成判定必须排在前向守卫之前。两者幅度同为 1 秒，放在后面会有一段死区：
-		// 库里存着 26.6 的 28 秒片子，用户续播到 27.3 退出，27.3 <= 26.6+1 先被跳过，
-		// 判定根本跑不到。历史遗留行（位置已顶到片尾、is_watched 仍为 false）更是
-		// 恒满足 seconds <= position+1，放在后面就永远不会自愈——而「不回填」这条
-		// 裁决正是建立在"再播一次自然就好"上的。
-		completed := isWatchedCompletionPosition(video.Duration, seconds)
-		// 只前进不后退，且忽略毫秒级抖动
-		if !completed && seconds <= video.WatchPositionSeconds+1 {
+		if video.WatchProgressUpdatedAt != nil && !modTime.After(*video.WatchProgressUpdatedAt) {
 			result.Skipped++
 			continue
 		}
-		updates := map[string]interface{}{"watch_position_seconds": seconds}
-		recorded := seconds
-		if completed {
-			applyWatchedCompletionUpdates(updates, &video, time.Now())
-			recorded = 0
+		// 条件更新：读库之后若有更新的写入（内嵌预览、Jellyfin），这次就让给它。
+		newerOnly := func(db *gorm.DB) *gorm.DB {
+			return db.Where("(videos.watch_progress_updated_at IS NULL OR videos.watch_progress_updated_at < ?)", modTime)
 		}
-		if err := database.DB.Model(&models.Video{}).
-			Where("id = ?", video.ID).
-			Updates(updates).Error; err != nil {
-			return result, err
+		change := IINAProgressUpdate{VideoID: video.ID, WatchPositionSeconds: seconds}
+		applied := false
+		if isWatchCompleted(seconds, video.Duration) {
+			var wasFlipped bool
+			wasFlipped, applied, err = markWatchedFromCompletion(database.DB, video.ID,
+				map[string]interface{}{"watch_progress_updated_at": modTime}, time.Now(), newerOnly)
+			if err != nil {
+				return result, flipped, err
+			}
+			if wasFlipped {
+				flipped = append(flipped, video.ID)
+			}
+			change.WatchPositionSeconds, change.Watched = 0, true
+		} else {
+			update := database.DB.Model(&models.Video{}).Scopes(newerOnly).Where("videos.id = ?", video.ID).
+				Updates(map[string]interface{}{"watch_position_seconds": seconds, "watch_progress_updated_at": modTime})
+			if update.Error != nil {
+				return result, flipped, update.Error
+			}
+			applied = update.RowsAffected == 1
+		}
+		if !applied {
+			result.Skipped++
+			continue
 		}
 		result.Updated++
-		result.Changes = append(result.Changes, IINAProgressUpdate{VideoID: video.ID, WatchPositionSeconds: recorded, Watched: completed})
+		result.Changes = append(result.Changes, change)
 	}
 	if result.Updated > 0 {
 		log.Printf("[IINA] 同步播放进度 scanned=%d updated=%d skipped=%d", result.Scanned, result.Updated, result.Skipped)
 	}
-	return result, nil
+	return result, flipped, nil
 }

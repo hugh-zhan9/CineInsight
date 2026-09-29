@@ -113,10 +113,10 @@ func TestInlinePreviewCompletionWritesNoPlayEvent(t *testing.T) {
 	}
 
 	svc := &VideoService{}
-	if _, err := svc.UpdateVideoWatchProgress(video.ID, 60, false); err != nil {
+	if _, err := svc.UpdateVideoWatchProgress(video.ID, 60, 0, false, WatchProgressOriginResume); err != nil {
 		t.Fatalf("更新观看进度失败: %v", err)
 	}
-	if _, err := svc.UpdateVideoWatchProgress(video.ID, 120, true); err != nil {
+	if _, err := svc.UpdateVideoWatchProgress(video.ID, 120, 0, true, WatchProgressOriginResume); err != nil {
 		t.Fatalf("标记看完失败: %v", err)
 	}
 

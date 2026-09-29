@@ -62,6 +62,10 @@ const (
 	browserDownloadErrorMaxRunes = 500
 	// browserDownloadHistoryLimit 是 ListDownloadTasks 从表里带出的历史条数上限。
 	browserDownloadHistoryLimit = 200
+	// browserDownloadPersistedTerminalLimit 是 browser_download_tasks 里保留的终态行数上限（M-8）：
+	// 每次写入终态之后按 created_at 倒序裁掉更早的，表不会随使用无限长。
+	browserDownloadPersistedTerminalLimit = 500
+	browserDownloadTrimBatch              = 500
 )
 
 // 入库状态（BrowserDownloadTask.ImportStatus，D-PC25）。空串表示还没到入库这一步或没有入库服务。
@@ -83,6 +87,11 @@ const (
 	BrowserDownloadCodeFileMissing          = "file_missing"
 	BrowserDownloadCodeRevealFailed         = "reveal_failed"
 	BrowserDownloadCodeServiceUnavailable   = "service_unavailable"
+	// 「加入扫描目录」前的预检（M-5）：目录在扫描黑名单里（加进去也扫不到）、目录包含已有的
+	// 扫描目录（加进去会互相嵌套）、目录已不存在。
+	BrowserDownloadCodeDirectoryExcluded = "directory_excluded"
+	BrowserDownloadCodeDirectoryNested   = "directory_nested"
+	BrowserDownloadCodeDirectoryMissing  = "directory_missing"
 )
 
 // BrowserDownloadTask 是对外（桥接与设置页）暴露的任务快照。
@@ -179,6 +188,16 @@ type BrowserDownloadService struct {
 	// 锁序固定为 persistMu → mu。
 	store     func() *gorm.DB
 	persistMu sync.Mutex
+
+	// history 是表里历史任务的快照（已现算入库状态），推送事件直接用它（M-2）：进度事件
+	// 逐行触发，若每次都在 emitMu 下查库、逐个 os.Stat 产物，一个慢盘就能把所有下载的进度
+	// 推送一起卡住。快照只在任务落到终态、显式列举（ListDownloadTasks）与入库动作之后刷新；
+	// historyMu 只护这份快照本身，historyRefreshMu 串行化刷新（查库与 Stat 都在它下面、不在
+	// emitMu 与 mu 下）。
+	historyMu        sync.Mutex
+	history          []BrowserDownloadTask
+	historyLoaded    bool
+	historyRefreshMu sync.Mutex
 }
 
 // SetEventEmitter 注入任务变化的推送口。进度是逐行解析出来的，变化非常频繁，
@@ -198,6 +217,16 @@ func (s *BrowserDownloadService) notify(force bool) {
 		return
 	}
 	s.emitMu.Lock()
+	hasEmitter := s.emit != nil
+	s.emitMu.Unlock()
+	if !hasEmitter {
+		return
+	}
+	// 还没有历史快照（第一次推送早于任何一次列举）就先在锁外读一次：emitMu 下只拼内存快照。
+	if !s.historyReady() {
+		s.refreshHistory()
+	}
+	s.emitMu.Lock()
 	defer s.emitMu.Unlock()
 	if s.emit == nil {
 		return
@@ -207,9 +236,9 @@ func (s *BrowserDownloadService) notify(force bool) {
 		return
 	}
 	s.lastEmit = now
-	// 推送与 ListDownloadTasks 同一份（含表里的历史）：下载页拿事件整体替换列表，
-	// 只推内存任务的话，重启前的历史会在第一次事件后消失。
-	s.emit(s.ListDownloadTasks())
+	// 推送与 ListDownloadTasks 同口径（含表里的历史）：下载页拿事件整体替换列表，
+	// 只推内存任务的话，重启前的历史会在第一次事件后消失。历史取快照，不查库不 Stat（M-2）。
+	s.emit(mergeBrowserDownloadTasks(s.ListTasks(), s.cachedHistory()))
 }
 
 func NewBrowserDownloadService(deps BrowserDownloadDeps) *BrowserDownloadService {
@@ -238,6 +267,10 @@ func (s *BrowserDownloadService) SetStore(db func() *gorm.DB) {
 	s.mu.Lock()
 	s.store = db
 	s.mu.Unlock()
+	// 换了库，旧的历史快照不再作数，下一次推送或列举时重读。
+	s.historyMu.Lock()
+	s.history, s.historyLoaded = nil, false
+	s.historyMu.Unlock()
 }
 
 func (s *BrowserDownloadService) db() *gorm.DB {
@@ -380,6 +413,7 @@ func (s *BrowserDownloadService) CancelTask(id string) error {
 	}
 	if queued {
 		s.persist(id)
+		s.refreshHistory()
 	}
 	s.notify(true)
 	return nil
@@ -620,6 +654,12 @@ func (s *BrowserDownloadService) update(id string, mutate func(task *BrowserDown
 	if stateChanged {
 		setBrowserDownloadStateLocked(&entry.task, entry.task.State, now)
 	}
+	if entry.task.State == browserDownloadStateDone {
+		// 完成的任务不再需要请求规格（M-4）：它带着 Referer / Cookie，而完成的任务不能重试，
+		// 留在内存里只是让 Cookie 多活一会儿。失败与取消的保留，同一会话内还要靠它重试。
+		entry.request = nil
+	}
+	reachedTerminal := stateChanged && browserDownloadTerminal(entry.task.State)
 	// 只有落库列变了才写表：进度是逐行解析的，每一行都写一次表毫无意义。
 	persistNeeded := stateChanged ||
 		entry.task.Filename != before.Filename ||
@@ -629,6 +669,10 @@ func (s *BrowserDownloadService) update(id string, mutate func(task *BrowserDown
 
 	if persistNeeded {
 		s.persist(id)
+	}
+	if reachedTerminal {
+		// 终态会让历史变化（新行落定、M-8 的裁剪），在推送之前、锁外刷新快照。
+		s.refreshHistory()
 	}
 	// 回调在锁外投递：它会回到 Wails 的事件层，不该被下载队列的锁牵着走。
 	s.notify(stateChanged)
@@ -718,6 +762,38 @@ func (s *BrowserDownloadService) persist(id string) {
 	}).Create(&row).Error
 	if err != nil {
 		log.Printf("browser download: 写入任务记录失败 task=%s err=%v", id, err)
+		return
+	}
+	if browserDownloadTerminal(task.State) {
+		if err := trimBrowserDownloadRows(db); err != nil {
+			log.Printf("browser download: 裁剪历史任务记录失败 err=%v", err)
+		}
+	}
+}
+
+// trimBrowserDownloadRows 只保留最近 browserDownloadPersistedTerminalLimit 条终态行（M-8），
+// 按 created_at 倒序（与 ListDownloadTasks 带出历史的顺序一致）裁掉更早的。非终态行不裁：
+// 它们要么是本次会话在跑的任务，要么等启动时被标成 interrupted。
+func trimBrowserDownloadRows(db *gorm.DB) error {
+	terminal := []string{browserDownloadStateDone, browserDownloadStateFailed, browserDownloadStateCancel, browserDownloadStateInterrupted}
+	for {
+		var ids []uint
+		if err := db.Model(&models.BrowserDownloadTask{}).
+			Where("status IN ?", terminal).
+			Order("created_at DESC, id DESC").
+			Offset(browserDownloadPersistedTerminalLimit).Limit(browserDownloadTrimBatch).
+			Pluck("id", &ids).Error; err != nil {
+			return err
+		}
+		if len(ids) == 0 {
+			return nil
+		}
+		if err := db.Where("id IN ?", ids).Delete(&models.BrowserDownloadTask{}).Error; err != nil {
+			return err
+		}
+		if len(ids) < browserDownloadTrimBatch {
+			return nil
+		}
 	}
 }
 
@@ -768,40 +844,85 @@ func (s *BrowserDownloadService) MarkInterruptedOnStartup() (int64, error) {
 		"finished_at": now,
 		"updated_at":  now,
 	})
+	if result.Error == nil && result.RowsAffected > 0 {
+		s.refreshHistory()
+	}
 	return result.RowsAffected, result.Error
 }
 
 // ListDownloadTasks 合并内存任务与表里的历史（D-PC21）。同一个 task_uid 以内存为准：
 // 只有内存里的任务还握着请求规格，能重试。
+//
+// 这是历史快照的显式刷新点（M-2）：界面打开下载页、手动刷新时走这里，入库状态按当下
+// 片库与扫描目录现算；事件推送复用这份快照。
 func (s *BrowserDownloadService) ListDownloadTasks() []BrowserDownloadTask {
 	if s == nil {
 		return nil
 	}
-	tasks := s.ListTasks()
-	db := s.db()
-	if db == nil {
-		return tasks
+	s.refreshHistory()
+	return mergeBrowserDownloadTasks(s.ListTasks(), s.cachedHistory())
+}
+
+// mergeBrowserDownloadTasks 把表里的历史并到内存任务后面，同一个 task_uid 以内存为准，
+// 按创建时间倒序。
+func mergeBrowserDownloadTasks(live, history []BrowserDownloadTask) []BrowserDownloadTask {
+	tasks := make([]BrowserDownloadTask, 0, len(live)+len(history))
+	tasks = append(tasks, live...)
+	seen := make(map[string]struct{}, len(live))
+	for _, task := range live {
+		seen[task.ID] = struct{}{}
 	}
-	var rows []models.BrowserDownloadTask
-	if err := db.Order("created_at DESC, id DESC").Limit(browserDownloadHistoryLimit).Find(&rows).Error; err != nil {
-		log.Printf("browser download: 读取历史任务失败 err=%v", err)
-		return tasks
-	}
-	live := make(map[string]struct{}, len(tasks))
-	for _, task := range tasks {
-		live[task.ID] = struct{}{}
-	}
-	history := make([]BrowserDownloadTask, 0, len(rows))
-	for _, row := range rows {
-		if _, ok := live[row.TaskUID]; ok {
+	for _, task := range history {
+		if _, ok := seen[task.ID]; ok {
 			continue
 		}
-		history = append(history, browserDownloadTaskOfRow(row))
+		tasks = append(tasks, task)
 	}
-	annotateBrowserDownloadHistoryImport(db, history)
-	tasks = append(tasks, history...)
 	sort.SliceStable(tasks, func(i, j int) bool { return tasks[i].CreatedAt > tasks[j].CreatedAt })
 	return tasks
+}
+
+// historyReady 报告历史快照是否已经读过（读过但为空也算）。
+func (s *BrowserDownloadService) historyReady() bool {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	return s.historyLoaded
+}
+
+// cachedHistory 返回历史快照的副本；没有读过时为空。
+func (s *BrowserDownloadService) cachedHistory() []BrowserDownloadTask {
+	s.historyMu.Lock()
+	defer s.historyMu.Unlock()
+	return append([]BrowserDownloadTask(nil), s.history...)
+}
+
+// refreshHistory 重读表里的历史并现算入库状态（查库与 os.Stat 都在这里）。不持有 mu、emitMu
+// 或 persistMu；读失败时保留旧快照并记日志。刷新之间用 historyRefreshMu 串行，后一次刷新
+// 读到的一定不比前一次旧。
+func (s *BrowserDownloadService) refreshHistory() {
+	if s == nil {
+		return
+	}
+	s.historyRefreshMu.Lock()
+	defer s.historyRefreshMu.Unlock()
+	var history []BrowserDownloadTask
+	if db := s.db(); db != nil {
+		var rows []models.BrowserDownloadTask
+		if err := db.Order("created_at DESC, id DESC").Limit(browserDownloadHistoryLimit).Find(&rows).Error; err != nil {
+			log.Printf("browser download: 读取历史任务失败 err=%v", err)
+			return
+		}
+		history = make([]BrowserDownloadTask, 0, len(rows))
+		for _, row := range rows {
+			history = append(history, browserDownloadTaskOfRow(row))
+		}
+		// 内存里也有的那几行会在合并时被内存版本替换；这里照样现算，免得它们之后被裁出内存
+		// （trimLocked）时，推送里的历史版本缺了入库状态。
+		annotateBrowserDownloadHistoryImport(db, history)
+	}
+	s.historyMu.Lock()
+	s.history, s.historyLoaded = history, true
+	s.historyMu.Unlock()
 }
 
 func browserDownloadTaskOfRow(row models.BrowserDownloadTask) BrowserDownloadTask {
@@ -959,6 +1080,9 @@ func (s *BrowserDownloadService) ReimportDownload(taskUID string) (BrowserDownlo
 	}
 	videoID, importErr := s.deps.ImportDirectory(cleanBrowserDownloadDirectory(task.Directory), task.OutputPath)
 	status, message := browserDownloadImportOutcome(videoID, importErr)
+	// 历史任务的入库状态是按片库与扫描目录现算的：这次入库（以及可能刚加进来的扫描目录）会改变
+	// 同一目录下其他历史任务的状态，先刷新快照，之后的推送才带得上。
+	s.refreshHistory()
 	if inMemory {
 		s.update(taskUID, func(current *BrowserDownloadTask) {
 			current.VideoID = videoID
@@ -1010,6 +1134,13 @@ func (s *BrowserDownloadService) RetryDownload(taskUID string) (BrowserDownloadA
 	}
 	s.mu.Lock()
 	entry, ok := s.entries[taskUID]
+	// 先判状态再判请求规格：完成的任务已经丢掉了请求规格（M-4），它该报「不可重试」，
+	// 而不是「请回浏览器重新推送」。
+	if ok && entry.task.State != browserDownloadStateFailed && entry.task.State != browserDownloadStateCancel {
+		task := entry.task
+		s.mu.Unlock()
+		return BrowserDownloadActionResult{Code: BrowserDownloadCodeNotRetryable, Message: "只有失败或已取消的任务可以重试", Task: &task}, nil
+	}
 	if !ok || entry.request == nil {
 		s.mu.Unlock()
 		return BrowserDownloadActionResult{Code: BrowserDownloadCodeRetryRequiresBrowser, Message: "应用重启后请求信息已不在，请回浏览器重新推送"}, nil
@@ -1056,7 +1187,11 @@ func cleanBrowserDownloadDirectory(directory string) string {
 // ---- 错误与地址清洗（详细设计 §5.4、计划评审 I7）----
 
 // browserDownloadURLPattern 匹配文本里形如 URL 的片段（scheme://…，到空白或引号为止）。
-var browserDownloadURLPattern = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.\-]*://[^\s'"<>]+`)
+//
+// 开头不加 \b（M-1）：\b 要求 scheme 前是非单词字符，`_https://…?sig=` 这种前面紧贴下划线或
+// 字母数字的片段整个匹配不上，签名就原样留在文本里。去掉之后最坏是把前缀字母并进 scheme
+// （xhttps://…），照样会被剥掉 query 与 userinfo。
+var browserDownloadURLPattern = regexp.MustCompile(`(?i)[a-z][a-z0-9+.\-]*://[^\s'"<>]+`)
 
 // browserDownloadSensitiveHeaderLine 匹配请求头样式的敏感行：Cookie、Set-Cookie、Authorization、
 // Proxy-Authorization，以及 X- 开头的自定义头（签名、令牌常放在这里）。
@@ -1071,21 +1206,28 @@ func browserDownloadDisplayURL(raw string) string {
 
 // browserDownloadStripURL 去掉 query、fragment、路径参数（;jsessionid=…）与 userinfo。
 // 手写而不走 url.Parse：解析失败的片段同样要剥干净，不能原样落库。
+//
+// 顺序是承重的（I-1）：先在 scheme:// 之后按第一个 / ? # 切出 authority，按**最后一个** @
+// 去掉 userinfo，再在 path 上截断 ? # ;。反过来先截 ; 的话，`https://u:p;w@host/x` 会被截成
+// `https://u:p`——用户名与半截密码被当成主机名原样留下。
 func browserDownloadStripURL(raw string) string {
-	if index := strings.IndexAny(raw, "?#;"); index >= 0 {
-		raw = raw[:index]
-	}
 	schemeEnd := strings.Index(raw, "://")
 	if schemeEnd < 0 {
+		if index := strings.IndexAny(raw, "?#;"); index >= 0 {
+			raw = raw[:index]
+		}
 		return raw
 	}
 	rest := raw[schemeEnd+3:]
 	authority, path := rest, ""
-	if slash := strings.IndexByte(rest, '/'); slash >= 0 {
-		authority, path = rest[:slash], rest[slash:]
+	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
+		authority, path = rest[:end], rest[end:]
 	}
 	if at := strings.LastIndexByte(authority, '@'); at >= 0 {
 		authority = authority[at+1:]
+	}
+	if index := strings.IndexAny(path, "?#;"); index >= 0 {
+		path = path[:index]
 	}
 	return raw[:schemeEnd+3] + authority + path
 }
@@ -1174,6 +1316,14 @@ func browserDownloadSecrets(request *browserDownloadNormalized) []string {
 		}
 	}
 	if parsed, err := url.Parse(request.URL); err == nil {
+		// userinfo 里的用户名与密码（I-1）：URL 形态的片段会被 browserDownloadStripURL 剥掉，
+		// 这里再按值擦一遍，防它们以别的形态（ffmpeg 把凭证单独打印出来）出现在报错里。
+		if parsed.User != nil {
+			add(parsed.User.Username())
+			if password, ok := parsed.User.Password(); ok {
+				add(password)
+			}
+		}
 		add(parsed.RawQuery)
 		add(parsed.Fragment)
 		for _, values := range parsed.Query() {
@@ -1591,6 +1741,38 @@ func BrowserDownloadImporterFromScan(videos *VideoService, directories func() ([
 		}
 		return 0, errBrowserDownloadNotInLibrary
 	}
+}
+
+// BrowserDownloadScanDirectoryCheck 把「把下载目录加入扫描目录」之前的预检归成一个动作结果（M-5）。
+// validation 来自 DirectoryService.ValidateScanDirectory，excluded 表示目录落在扫描黑名单里
+// （BrowserDownloadDirectoryExcluded）。
+//
+//   - 黑名单优先：目录在黑名单里时，不论加不加扫描目录都扫不到它，报 directory_excluded；
+//   - 已在扫描范围内（与某个根相同，或在某个根之内）：covered=true、结果 ok，不必再加，直接重新入库；
+//   - 目录包含已有的扫描根：加进去会互相嵌套，报 directory_nested，让用户去设置页自己决定；
+//   - 目录已不存在：报 directory_missing。
+//
+// 文案不带路径（G-3）。
+func BrowserDownloadScanDirectoryCheck(validation *ScanDirectoryValidation, excluded bool) (bool, BrowserDownloadActionResult) {
+	switch {
+	case excluded:
+		return false, BrowserDownloadActionResult{Code: BrowserDownloadCodeDirectoryExcluded, Message: "下载目录在扫描黑名单里，加入扫描目录也不会入库，请先在设置页把它移出黑名单"}
+	case validation == nil:
+		return false, BrowserDownloadActionResult{Code: BrowserDownloadCodeDirectoryMissing, Message: "下载目录不可用"}
+	case validation.DuplicateOf != "" || validation.NestedIn != "":
+		return true, BrowserDownloadActionResult{Code: BrowserDownloadCodeOK}
+	case len(validation.Contains) > 0:
+		return false, BrowserDownloadActionResult{Code: BrowserDownloadCodeDirectoryNested, Message: "下载目录包含已有的扫描目录，直接加入会让扫描目录互相嵌套，请在设置页调整扫描目录"}
+	case !validation.Exists:
+		return false, BrowserDownloadActionResult{Code: BrowserDownloadCodeDirectoryMissing, Message: "下载目录已不存在"}
+	}
+	return false, BrowserDownloadActionResult{Code: BrowserDownloadCodeOK}
+}
+
+// BrowserDownloadDirectoryExcluded 报告下载目录是否落在扫描黑名单（Settings.ScanExcludePaths，
+// 换行分隔）里：与扫描同一个判定（isScanPathExcluded）。
+func BrowserDownloadDirectoryExcluded(scanExcludePaths, directory string) bool {
+	return isScanPathExcluded(filepath.Clean(directory), parseScanExcludePaths(scanExcludePaths))
 }
 
 // BrowserDownloadDirectoryCovered 报告下载目录是否落在某个扫描目录之内（含相等）。

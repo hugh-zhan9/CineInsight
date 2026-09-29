@@ -48,14 +48,17 @@ func TestParseIINAStartSeconds(t *testing.T) {
 	}
 }
 
-func TestIINAProgressSyncWritesPositionsForwardOnly(t *testing.T) {
+// D-PC42（PLAY-06）：IINA 同步以最近一次写入为准，取代「只前进」——断点文件比库里的
+// 进度更新时间旧才忽略。
+func TestIINAProgressSyncAdoptsOnlyNewerWritesPLAY06(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	home := t.TempDir()
 	dir := filepath.Join(home, iinaWatchLaterRelativeDir)
 
+	inAppWrite := time.Now()
 	videos := []models.Video{
 		{Name: "fresh.mp4", Path: "/media/fresh.mp4", Directory: "/media", Duration: 3600},
-		{Name: "ahead.mp4", Path: "/media/ahead.mp4", Directory: "/media", Duration: 3600, WatchPositionSeconds: 1200},
+		{Name: "ahead.mp4", Path: "/media/ahead.mp4", Directory: "/media", Duration: 3600, WatchPositionSeconds: 1200, WatchProgressUpdatedAt: &inAppWrite},
 		{Name: "untouched.mp4", Path: "/media/untouched.mp4", Directory: "/media", Duration: 3600},
 		{Name: "overrun.mp4", Path: "/media/overrun.mp4", Directory: "/media", Duration: 100},
 	}
@@ -63,8 +66,9 @@ func TestIINAProgressSyncWritesPositionsForwardOnly(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeIINAEntry(t, dir, "/media/fresh.mp4", "start=615.5\nvolume=100.0\n")
-	// 应用内已经看到 1200 秒，IINA 里只到 300：不该把进度往回拽
+	// 应用内一小时前之后才看到 1200 秒；IINA 的 300 是更早写的：不该把进度往回拽
 	writeIINAEntry(t, dir, "/media/ahead.mp4", "start=300.0\n")
+	mustSetFileModTime(t, filepath.Join(dir, iinaWatchLaterName("/media/ahead.mp4")), inAppWrite.Add(-time.Hour))
 	// 没有 start 的条目直接跳过
 	writeIINAEntry(t, dir, "/media/untouched.mp4", "# redirect entry\n")
 	// 超过时长的断点要夹到时长
@@ -87,7 +91,15 @@ func TestIINAProgressSyncWritesPositionsForwardOnly(t *testing.T) {
 		t.Fatalf("新进度没写进去: %v", refreshed[0].WatchPositionSeconds)
 	}
 	if refreshed[1].WatchPositionSeconds != 1200 {
-		t.Fatalf("进度被往回拽了: %v", refreshed[1].WatchPositionSeconds)
+		t.Fatalf("比库里旧的断点不该覆盖进度: %v", refreshed[1].WatchPositionSeconds)
+	}
+	// 采用时把进度更新时间写成断点文件的修改时间：再同步一次同一份文件不会被当成新写入。
+	if refreshed[0].WatchProgressUpdatedAt == nil {
+		t.Fatalf("采用 IINA 断点时应写进度更新时间: %+v", refreshed[0])
+	}
+	again, err := service.Sync()
+	if err != nil || again.Updated != 0 {
+		t.Fatalf("同一份断点文件再同步不该再更新: %+v err=%v", again, err)
 	}
 	if refreshed[2].WatchPositionSeconds != 0 {
 		t.Fatalf("没有 start 的条目不该改动: %v", refreshed[2].WatchPositionSeconds)
@@ -231,14 +243,15 @@ func TestIINAProgressSyncCompletionBeatsForwardOnlyGuard(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, iinaWatchLaterRelativeDir)
 
+	inAppWrite := time.Now()
 	videos := []models.Video{
 		// 历史遗留行：位置已顶到片尾，但没标已看。seconds 被夹到 28，
 		// 恒满足 28 <= 28+1，判定排在守卫之后就永远跳过。
 		{Name: "legacy.mp4", Path: "/media/legacy.mp4", Directory: "/media", Duration: 28, WatchPositionSeconds: 28},
 		// 死区：库里存 26.6，这次到 27.3，27.3 <= 27.6 会被守卫吞掉。
 		{Name: "deadzone.mp4", Path: "/media/deadzone.mp4", Directory: "/media", Duration: 28, WatchPositionSeconds: 26.6},
-		// 正常的往回拽仍要被守卫挡住。
-		{Name: "backwards.mp4", Path: "/media/backwards.mp4", Directory: "/media", Duration: 3600, WatchPositionSeconds: 1200},
+		// 比库里旧的断点仍要被挡住（D-PC42 以最近写入为准）。
+		{Name: "backwards.mp4", Path: "/media/backwards.mp4", Directory: "/media", Duration: 3600, WatchPositionSeconds: 1200, WatchProgressUpdatedAt: &inAppWrite},
 	}
 	if err := database.DB.Create(&videos).Error; err != nil {
 		t.Fatal(err)
@@ -246,6 +259,7 @@ func TestIINAProgressSyncCompletionBeatsForwardOnlyGuard(t *testing.T) {
 	writeIINAEntry(t, dir, "/media/legacy.mp4", "start=27.9\n")
 	writeIINAEntry(t, dir, "/media/deadzone.mp4", "start=27.3\n")
 	writeIINAEntry(t, dir, "/media/backwards.mp4", "start=300.0\n")
+	mustSetFileModTime(t, filepath.Join(dir, iinaWatchLaterName("/media/backwards.mp4")), inAppWrite.Add(-time.Hour))
 
 	if _, err := NewIINAProgressService(home).Sync(); err != nil {
 		t.Fatalf("同步失败: %v", err)
@@ -261,6 +275,6 @@ func TestIINAProgressSyncCompletionBeatsForwardOnlyGuard(t *testing.T) {
 		t.Fatalf("死区内的完成不该被抗抖动守卫吞掉: %+v", refreshed[1])
 	}
 	if refreshed[2].IsWatched || refreshed[2].WatchPositionSeconds != 1200 {
-		t.Fatalf("往回拽的断点仍要被挡住: %+v", refreshed[2])
+		t.Fatalf("比库里旧的断点仍要被挡住: %+v", refreshed[2])
 	}
 }

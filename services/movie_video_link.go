@@ -393,9 +393,13 @@ func (s *MovieChartService) OnWatchlistDoubanBound(entryID uint, doubanID, title
 }
 
 // OnWatchlistSourceChanged 实现 watchlistDoubanBindObserver：条目的来源 ID 变了，仍认领着
-// 该条目、但豆瓣 ID 与新来源不一致的 want 标记必须释放（mark 清空、认领归零），否则旧
-// 标记（如误匹配的 1984 版）之后被取消想看时会把这条已改选成 2021 版的条目删掉。
-// newDoubanID 为空表示改选到了非豆瓣来源，此时该条目名下所有 want 都释放。
+// 该条目、但豆瓣 ID 与新来源不一致的 want 标记必须释放，否则旧标记（如误匹配的 1984 版）之后
+// 被取消想看时会把这条已改选成 2021 版的条目删掉。newDoubanID 为空表示改选到了非豆瓣来源，
+// 此时该条目名下所有 want 都释放。
+//
+// 释放分两种（APP-07 M-2）：以 reuse 认领的是用户在榜单上点的「想看」复用了他自己的条目——
+// 只释放认领（认领归零、来源 unclaimed），mark 保留 want，用户在榜单上的明确表态不被片单一侧
+// 的改选清掉；chart / enrichment 认领的 want 是随这条条目的豆瓣 ID 而来的，照旧 mark 清空。
 func (s *MovieChartService) OnWatchlistSourceChanged(entryID uint, newDoubanID string) {
 	if s == nil {
 		return
@@ -408,18 +412,31 @@ func (s *MovieChartService) OnWatchlistSourceChanged(entryID uint, newDoubanID s
 func (s *MovieChartService) releaseWantMarksOfEntry(entryID uint, newDoubanID string) error {
 	s.markMu.Lock()
 	defer s.markMu.Unlock()
-	err := s.db.Model(&models.MovieChartMark{}).
-		Where("mark = ? AND watchlist_entry_id = ? AND douban_id <> ?", models.MovieChartMarkWant, entryID, newDoubanID).
-		Updates(map[string]any{
-			"mark":                   "",
-			"watchlist_entry_id":     0,
-			"watchlist_entry_origin": "",
-			"updated_at":             s.now(),
-		}).Error
-	if err != nil {
-		return fmt.Errorf("释放旧想看标记失败: %w", err)
-	}
-	return nil
+	now := s.now()
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&models.MovieChartMark{}).
+			Where("mark = ? AND watchlist_entry_id = ? AND douban_id <> ? AND watchlist_entry_origin = ?",
+				models.MovieChartMarkWant, entryID, newDoubanID, movieChartOriginReuse).
+			Updates(map[string]any{
+				"watchlist_entry_id":     0,
+				"watchlist_entry_origin": movieChartOriginUnclaimed,
+				"updated_at":             now,
+			}).Error; err != nil {
+			return fmt.Errorf("释放旧想看标记失败: %w", err)
+		}
+		if err := tx.Model(&models.MovieChartMark{}).
+			Where("mark = ? AND watchlist_entry_id = ? AND douban_id <> ? AND watchlist_entry_origin <> ?",
+				models.MovieChartMarkWant, entryID, newDoubanID, movieChartOriginReuse).
+			Updates(map[string]any{
+				"mark":                   "",
+				"watchlist_entry_id":     0,
+				"watchlist_entry_origin": "",
+				"updated_at":             now,
+			}).Error; err != nil {
+			return fmt.Errorf("释放旧想看标记失败: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *MovieChartService) bindWatchlistEntry(entryID uint, doubanID, title string, year int) error {

@@ -34,12 +34,12 @@ func TestLibraryStateUpdatesAreAdditiveAndIdempotent(t *testing.T) {
 	if len(updated.Tags) != 1 || updated.Tags[0].ID != tag.ID {
 		t.Fatalf("状态切换的返回值必须带标签，实际 %+v", updated.Tags)
 	}
-	updated, err = svc.UpdateVideoWatchProgress(video.ID, 40, false)
+	updated, err = svc.UpdateVideoWatchProgress(video.ID, 40, 0, false, WatchProgressOriginResume)
 	if err != nil || updated.WatchPositionSeconds != 40 || updated.IsWatched {
 		t.Fatalf("看到中途不应自动已看 video=%+v err=%v", updated, err)
 	}
 	// 2026-09-13 裁决：位置夹紧到片尾就是看完了，不再要求前端非得给 completed。
-	updated, err = svc.UpdateVideoWatchProgress(video.ID, 125, false)
+	updated, err = svc.UpdateVideoWatchProgress(video.ID, 125, 0, false, WatchProgressOriginResume)
 	if err != nil || !updated.IsWatched || updated.WatchedAt == nil || updated.WatchPositionSeconds != 0 {
 		t.Fatalf("进度夹紧到片尾应标记已看并清掉断点 video=%+v err=%v", updated, err)
 	}
@@ -47,11 +47,11 @@ func TestLibraryStateUpdatesAreAdditiveAndIdempotent(t *testing.T) {
 	if err != nil || updated.IsWatched || updated.WatchedAt != nil {
 		t.Fatalf("标记未看应清掉已看状态 video=%+v err=%v", updated, err)
 	}
-	updated, err = svc.UpdateVideoWatchProgress(video.ID, 99, true)
+	updated, err = svc.UpdateVideoWatchProgress(video.ID, 99, 0, true, WatchProgressOriginResume)
 	if err != nil || !updated.IsWatched || updated.WatchedAt == nil || updated.WatchPositionSeconds != 0 {
 		t.Fatalf("完成播放应标记已看并清掉断点 video=%+v err=%v", updated, err)
 	}
-	if _, err := svc.UpdateVideoWatchProgress(video.ID, math.NaN(), false); err == nil {
+	if _, err := svc.UpdateVideoWatchProgress(video.ID, math.NaN(), 0, false, WatchProgressOriginResume); err == nil {
 		t.Fatalf("NaN 进度应被拒绝")
 	}
 }
@@ -782,8 +782,9 @@ func TestLibraryCountsMatchScopedListing(t *testing.T) {
 	}
 }
 
-// 2026-09-13 裁决：「看到 00:28 / 00:28 不就是已播完吗」。判定要严格（容差 1 秒），
-// 判定成立就清掉断点，这样下次播放从头开始，列表也不再当它还在看。
+// 2026-09-13 裁决：「看到 00:28 / 00:28 不就是已播完吗」。判定成立就清掉断点，这样下次播放
+// 从头开始，列表也不再当它还在看。片尾区间按 D-PC41 改为 min(时长 × 5%, 180 秒)（PLAY-11）：
+// 1 秒容差让跳过片尾字幕的片子永远挂在「继续观看」。
 func TestUpdateVideoWatchProgressTreatsNearEndAsWatched(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
@@ -796,10 +797,12 @@ func TestUpdateVideoWatchProgressTreatsNearEndAsWatched(t *testing.T) {
 	}{
 		{"停在片尾", 28, 28, true},
 		{"差半秒", 28, 27.5, true},
-		{"差满一秒", 28, 27, true},
-		{"差一秒多一点", 28, 26.9, false},
+		{"片尾区间内（5% = 1.4 秒）", 28, 26.6, true},
+		{"刚出片尾区间", 28, 26.5, false},
 		{"刚过一半", 28, 15, false},
-		{"长片差两秒", 7200, 7198, false},
+		{"长片跳过片尾字幕 PLAY-11", 7200, 7050, true},
+		{"长片片尾区间封顶 180 秒", 7200, 7020, true},
+		{"长片差 181 秒", 7200, 7019, false},
 		{"长片停在片尾", 7200, 7200, true},
 	}
 	for _, testCase := range cases {
@@ -813,7 +816,7 @@ func TestUpdateVideoWatchProgressTreatsNearEndAsWatched(t *testing.T) {
 			if err := database.DB.Create(&video).Error; err != nil {
 				t.Fatalf("创建视频失败: %v", err)
 			}
-			updated, err := svc.UpdateVideoWatchProgress(video.ID, testCase.position, false)
+			updated, err := svc.UpdateVideoWatchProgress(video.ID, testCase.position, 0, false, WatchProgressOriginResume)
 			if err != nil {
 				t.Fatalf("更新观看进度失败: %v", err)
 			}
@@ -838,7 +841,7 @@ func TestUpdateVideoWatchProgressWithoutDurationNeverAutoWatches(t *testing.T) {
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
-	updated, err := (&VideoService{}).UpdateVideoWatchProgress(video.ID, 9999, false)
+	updated, err := (&VideoService{}).UpdateVideoWatchProgress(video.ID, 9999, 0, false, WatchProgressOriginResume)
 	if err != nil {
 		t.Fatalf("更新观看进度失败: %v", err)
 	}
@@ -847,7 +850,8 @@ func TestUpdateVideoWatchProgressWithoutDurationNeverAutoWatches(t *testing.T) {
 	}
 }
 
-// 亚秒片段上固定 1 秒容差会退化成「一打开就算看完」：位置 0 也满足 position >= duration-1。
+// 亚秒片段上固定容差会退化成「一打开就算看完」：位置 0 也满足 position >= duration-1。
+// 片尾区间按时长 5% 计，短片同样严格。
 func TestUpdateVideoWatchProgressDoesNotAutoWatchVeryShortClips(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := &VideoService{}
@@ -866,7 +870,8 @@ func TestUpdateVideoWatchProgressDoesNotAutoWatchVeryShortClips(t *testing.T) {
 		{"三秒片刚开始", 3, 0.2, false},
 		{"三秒片过大半不算看完", 3, 2.6, false},
 		{"三秒片到片尾", 3, 2.9, true},
-		{"二十秒片是比例与绝对值的交接点", 20, 19.1, true},
+		{"二十秒片的片尾区间是 1 秒", 20, 19.1, true},
+		{"二十秒片差 1 秒多不算看完", 20, 18.9, false},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -874,7 +879,7 @@ func TestUpdateVideoWatchProgressDoesNotAutoWatchVeryShortClips(t *testing.T) {
 			if err := database.DB.Create(&video).Error; err != nil {
 				t.Fatalf("创建视频失败: %v", err)
 			}
-			updated, err := svc.UpdateVideoWatchProgress(video.ID, testCase.position, false)
+			updated, err := svc.UpdateVideoWatchProgress(video.ID, testCase.position, 0, false, WatchProgressOriginResume)
 			if err != nil {
 				t.Fatalf("更新观看进度失败: %v", err)
 			}
@@ -894,7 +899,7 @@ func TestUpdateVideoWatchProgressHonoursExplicitCompletedFarFromEnd(t *testing.T
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
-	updated, err := (&VideoService{}).UpdateVideoWatchProgress(video.ID, 120, true)
+	updated, err := (&VideoService{}).UpdateVideoWatchProgress(video.ID, 120, 0, true, WatchProgressOriginResume)
 	if err != nil {
 		t.Fatalf("更新观看进度失败: %v", err)
 	}
@@ -911,13 +916,13 @@ func TestUpdateVideoWatchProgressKeepsFirstWatchedAt(t *testing.T) {
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
-	first, err := svc.UpdateVideoWatchProgress(video.ID, 100, false)
+	first, err := svc.UpdateVideoWatchProgress(video.ID, 100, 0, false, WatchProgressOriginResume)
 	if err != nil || first.WatchedAt == nil {
 		t.Fatalf("首次看完失败: %+v err=%v", first, err)
 	}
 	firstWatchedAt := *first.WatchedAt
 	time.Sleep(5 * time.Millisecond)
-	again, err := svc.UpdateVideoWatchProgress(video.ID, 100, false)
+	again, err := svc.UpdateVideoWatchProgress(video.ID, 100, 0, false, WatchProgressOriginResume)
 	if err != nil {
 		t.Fatalf("再次上报失败: %v", err)
 	}
@@ -935,7 +940,7 @@ func TestSetVideoWatchedKeepsResumePoint(t *testing.T) {
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
-	if _, err := svc.UpdateVideoWatchProgress(video.ID, 40, false); err != nil {
+	if _, err := svc.UpdateVideoWatchProgress(video.ID, 40, 0, false, WatchProgressOriginResume); err != nil {
 		t.Fatalf("记录断点失败: %v", err)
 	}
 	watched, err := svc.SetVideoWatched(video.ID, true)
@@ -953,7 +958,7 @@ func TestSetVideoWatchedKeepsResumePoint(t *testing.T) {
 	if err := database.DB.Create(&other).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
 	}
-	if _, err := svc.UpdateVideoWatchProgress(other.ID, 40, false); err != nil {
+	if _, err := svc.UpdateVideoWatchProgress(other.ID, 40, 0, false, WatchProgressOriginResume); err != nil {
 		t.Fatalf("记录断点失败: %v", err)
 	}
 	unwatched, err := svc.SetVideoWatched(other.ID, false)
@@ -974,7 +979,7 @@ func TestJellyfinUserDataHidesResumePointForWatchedVideo(t *testing.T) {
 	if _, err := svc.SetVideoWatched(video.ID, true); err != nil {
 		t.Fatalf("标已看失败: %v", err)
 	}
-	updated, err := svc.UpdateVideoWatchProgress(video.ID, 1800, false)
+	updated, err := svc.UpdateVideoWatchProgress(video.ID, 1800, 0, false, WatchProgressOriginResume)
 	if err != nil {
 		t.Fatalf("更新观看进度失败: %v", err)
 	}

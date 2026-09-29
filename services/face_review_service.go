@@ -40,7 +40,32 @@ var (
 	ErrFaceClusterConflict = errors.New("cluster_conflict")
 	// ErrFaceClusterNotIgnored 是恢复的前置：只有被忽略的簇才能恢复。
 	ErrFaceClusterNotIgnored = errors.New("cluster_not_ignored")
+	// ErrFaceClusterIgnored 是对已忽略簇做只对未命名 / 已命名簇有意义的动作（移除来源）：
+	// 与 cluster_not_unnamed 分开，界面据此提示「先在『已忽略』里恢复」（META-04 M-8）。
+	ErrFaceClusterIgnored = errors.New("cluster_ignored")
 )
+
+// FaceUnlinkMediaView.Source 的取值（META-04）：关系是不是这一簇经人脸链路写出的。
+const (
+	// FaceRelationSourceFace：这一簇写过这条关系（face_relation_writes 里有仍然作数的记录），
+	// 解除关联 / 改派时可以删除或迁走（仍被该人物其他已命名簇持有或覆盖的除外）。
+	FaceRelationSourceFace = "face"
+	// FaceRelationSourceUnknown：没有这一簇的写入记录——NFO 导入、手动添加、标签转人物，
+	// 或升级前的历史关系，也包括关系已不存在的媒体。一律保留。
+	FaceRelationSourceUnknown = "unknown"
+)
+
+// withFaceClusterAssignment 在 faceClusterAssignmentMu 下执行 fn：命名、关联、解除、改派、
+// 恢复、移除来源与分析侧的聚类彼此串行（META-04 M-1），用 defer 保证 fn 内 panic 也会放锁。
+func withFaceClusterAssignment(fn func() error) error {
+	faceClusterAssignmentMu.Lock()
+	defer faceClusterAssignmentMu.Unlock()
+	return fn()
+}
+
+// faceClusterAfterSnapshotHook 是测试接缝：解除关联 / 改派在读完簇快照之后、条件更新之前调用它，
+// 测试据此模拟另一个写入者恰好在这段窗口里改写了簇（META-04 M-2）。生产代码里恒为 nil。
+var faceClusterAfterSnapshotHook func(tx *gorm.DB, clusterID uint)
 
 // FaceClusterFilter 是审阅面板的查询条件（7.2 `ListFaceClusters(filter)`）。
 // 两个字段都留空就是不筛。
@@ -212,33 +237,36 @@ func (s *FaceReviewService) NameFaceCluster(ctx context.Context, clusterID uint,
 	var personID uint
 	var imported managedImageImport
 	var written int64
-	err = database.Transaction(func(tx *gorm.DB) error {
-		cluster, err := lockFaceCluster(ctx, tx, clusterID)
-		if err != nil {
-			return err
-		}
-		if cluster.Status != models.FaceClusterStatusUnnamed {
-			return ErrFaceClusterNotUnnamed
-		}
-		person := models.Person{DisplayName: displayName, OriginalName: originalName}
-		if err := tx.WithContext(ctx).Create(&person).Error; err != nil {
-			return err
-		}
-		personID = person.ID
-		imported, err = s.importClusterAvatar(tx.WithContext(ctx), cluster, person.ID)
-		if err != nil {
-			return err
-		}
-		if imported.RelativePath != "" {
-			if err := tx.Model(&person).Update("avatar_path", imported.RelativePath).Error; err != nil {
+	// 与解除关联 / 改派串行（M-1）：否则一次命名可能夹在别人的「读快照 → 条件更新」之间。
+	err = withFaceClusterAssignment(func() error {
+		return database.Transaction(func(tx *gorm.DB) error {
+			cluster, err := lockFaceCluster(ctx, tx, clusterID)
+			if err != nil {
 				return err
 			}
-		}
-		written, err = writeFaceClusterRelations(ctx, tx, cluster.ID, person.ID, false, nil)
-		if err != nil {
-			return err
-		}
-		return claimFaceCluster(ctx, tx, cluster.ID, person.ID)
+			if cluster.Status != models.FaceClusterStatusUnnamed {
+				return ErrFaceClusterNotUnnamed
+			}
+			person := models.Person{DisplayName: displayName, OriginalName: originalName}
+			if err := tx.WithContext(ctx).Create(&person).Error; err != nil {
+				return err
+			}
+			personID = person.ID
+			imported, err = s.importClusterAvatar(tx.WithContext(ctx), cluster, person.ID)
+			if err != nil {
+				return err
+			}
+			if imported.RelativePath != "" {
+				if err := tx.Model(&person).Update("avatar_path", imported.RelativePath).Error; err != nil {
+					return err
+				}
+			}
+			written, err = writeFaceClusterRelations(ctx, tx, cluster.ID, person.ID, false, nil)
+			if err != nil {
+				return err
+			}
+			return claimFaceCluster(ctx, tx, cluster.ID, person.ID)
+		})
 	})
 	if err != nil {
 		s.cleanupUnreferencedAvatar(imported)
@@ -255,27 +283,29 @@ func (s *FaceReviewService) LinkFaceCluster(ctx context.Context, clusterID, pers
 		return FaceClusterView{}, fmt.Errorf("reconcile face clusters: %w", err)
 	}
 	var written int64
-	err := database.Transaction(func(tx *gorm.DB) error {
-		cluster, err := lockFaceCluster(ctx, tx, clusterID)
-		if err != nil {
-			return err
-		}
-		if cluster.Status != models.FaceClusterStatusUnnamed {
-			return ErrFaceClusterNotUnnamed
-		}
-		var person models.Person
-		if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
-			First(&person, personID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrFacePersonNotFound
+	err := withFaceClusterAssignment(func() error {
+		return database.Transaction(func(tx *gorm.DB) error {
+			cluster, err := lockFaceCluster(ctx, tx, clusterID)
+			if err != nil {
+				return err
 			}
-			return err
-		}
-		written, err = writeFaceClusterRelations(ctx, tx, cluster.ID, person.ID, false, nil)
-		if err != nil {
-			return err
-		}
-		return claimFaceCluster(ctx, tx, cluster.ID, person.ID)
+			if cluster.Status != models.FaceClusterStatusUnnamed {
+				return ErrFaceClusterNotUnnamed
+			}
+			var person models.Person
+			if err := tx.WithContext(ctx).Clauses(clause.Locking{Strength: "UPDATE"}).
+				First(&person, personID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return ErrFacePersonNotFound
+				}
+				return err
+			}
+			written, err = writeFaceClusterRelations(ctx, tx, cluster.ID, person.ID, false, nil)
+			if err != nil {
+				return err
+			}
+			return claimFaceCluster(ctx, tx, cluster.ID, person.ID)
+		})
 	})
 	if err != nil {
 		return FaceClusterView{}, err
@@ -417,6 +447,9 @@ func lockFaceCluster(ctx context.Context, tx *gorm.DB, clusterID uint) (models.F
 // claimFaceCluster 把簇翻成 named：状态条件写在 WHERE 里，行锁之外再兜一层，
 // 影响行数为 0 就说明别人已经命名过了。同一事务里清掉候选、把观测标为已确认
 // （首次命名等于确认了簇内全部观测）。
+//
+// 用户忽略过的追加（dismissed）不在「全部」之内（META-04 M-3）：簇解除关联后再命名 / 关联，
+// 那些观测是用户明确否掉过的，保持 dismissed，也不写关系（见 writeFaceClusterRelations）。
 func claimFaceCluster(ctx context.Context, tx *gorm.DB, clusterID, personID uint) error {
 	result := tx.WithContext(ctx).Model(&models.FaceCluster{}).
 		Where("id = ? AND status = ?", clusterID, models.FaceClusterStatusUnnamed).
@@ -435,7 +468,8 @@ func claimFaceCluster(ctx context.Context, tx *gorm.DB, clusterID, personID uint
 		return err
 	}
 	return tx.WithContext(ctx).Model(&models.FaceObservation{}).
-		Where("cluster_id = ? AND append_status <> ?", clusterID, models.FaceAppendStatusConfirmed).
+		Where("cluster_id = ? AND append_status NOT IN ?", clusterID,
+			[]string{models.FaceAppendStatusConfirmed, models.FaceAppendStatusDismissed}).
 		Update("append_status", models.FaceAppendStatusConfirmed).Error
 }
 
@@ -449,9 +483,9 @@ type faceMediaRef struct {
 // 的地方（连同下面的解除/改派），只由用户动作在事务内调用。
 //
 // pendingOnly 为真时只看 append_status = pending 的观测（确认追加），observationIDs
-// 非空时进一步限定为所列观测；为假时看簇内全部观测（首次命名或关联）。按
-// (media_kind, media_id) 去重，已存在的关系靠 ON CONFLICT DO NOTHING 跳过，
-// 因此重复确认不会报错也不会重复写。
+// 非空时进一步限定为所列观测；为假时看簇内全部观测（首次命名或关联），但用户忽略过的
+// 追加（dismissed）除外（M-3）。按 (media_kind, media_id) 去重，已存在的关系靠
+// ON CONFLICT DO NOTHING 跳过，因此重复确认不会报错也不会重复写。
 func writeFaceClusterRelations(ctx context.Context, tx *gorm.DB, clusterID, personID uint, pendingOnly bool, observationIDs []uint) (int64, error) {
 	query := tx.WithContext(ctx).Model(&models.FaceObservation{}).
 		Distinct("media_kind", "media_id").
@@ -462,58 +496,184 @@ func writeFaceClusterRelations(ctx context.Context, tx *gorm.DB, clusterID, pers
 		if len(observationIDs) > 0 {
 			query = query.Where("id IN ?", observationIDs)
 		}
+	} else {
+		query = query.Where("append_status <> ?", models.FaceAppendStatusDismissed)
 	}
 	var refs []faceMediaRef
 	if err := query.Scan(&refs).Error; err != nil {
 		return 0, err
 	}
-	return writePersonRelations(ctx, tx, personID, refs)
+	return writeFaceRelations(ctx, tx, clusterID, personID, refs)
 }
 
-// writePersonRelations 给人物补上这批媒体的关系（幂等）。
-func writePersonRelations(ctx context.Context, tx *gorm.DB, personID uint, refs []faceMediaRef) (int64, error) {
+// writeFaceRelations 给人物补上这批媒体的关系（幂等），并为人脸链路真正写出的关系记账
+// （face_relation_writes，META-04 I-1）：
+//   - 这一次 INSERT … ON CONFLICT DO NOTHING 真的插进去了（RowsAffected = 1）：记 (人物, 媒体, 本簇)；
+//   - 关系已经存在，而且它本身就是人脸链路写的（有仍然作数的写入记录）：本簇也记一行，
+//     共同持有——之后任何一个簇离开该人物，只要还有别的簇持有，关系就留着；
+//   - 关系已经存在、来源不是人脸链路（NFO、手动、标签转人物、升级前的历史关系）：不记，
+//     解除关联 / 改派时一律保留。
+//
+// 逐行插入才拿得到每一行的 RowsAffected。关系行与记录行的 created_at 取同一个时间，
+// 见 faceRelationWriteValid。
+func writeFaceRelations(ctx context.Context, tx *gorm.DB, clusterID, personID uint, refs []faceMediaRef) (int64, error) {
 	videoIDs, imageIDs := splitFaceMediaRefs(refs)
-
+	now := time.Now()
 	var written int64
+	records := make([]models.FaceRelationWrite, 0, len(refs))
+	existed := make([]faceMediaRef, 0)
+	record := func(kind string, mediaID uint) {
+		records = append(records, models.FaceRelationWrite{
+			PersonID: personID, MediaKind: kind, MediaID: mediaID, ClusterID: clusterID, CreatedAt: now,
+		})
+	}
+
 	if len(videoIDs) > 0 {
 		// Unscoped：软删除的视频行还在库里，关系也应当建起来（人物清理判定本就把
 		// 软删除媒体的关系算作有效关系）；只有已经永久删除的媒体要跳过，否则外键报错。
-		var existing []uint
+		var present []uint
 		if err := tx.WithContext(ctx).Unscoped().Model(&models.Video{}).
-			Where("id IN ?", videoIDs).Pluck("id", &existing).Error; err != nil {
+			Where("id IN ?", videoIDs).Pluck("id", &present).Error; err != nil {
 			return written, err
 		}
-		if len(existing) > 0 {
-			relations := make([]models.VideoPerson, 0, len(existing))
-			for _, videoID := range existing {
-				relations = append(relations, models.VideoPerson{VideoID: videoID, PersonID: personID})
-			}
-			result := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&relations)
+		for _, videoID := range present {
+			result := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).
+				Create(&models.VideoPerson{VideoID: videoID, PersonID: personID, CreatedAt: now})
 			if result.Error != nil {
 				return written, result.Error
 			}
-			written += result.RowsAffected
+			if result.RowsAffected == 1 {
+				written++
+				record(models.FaceMediaKindVideo, videoID)
+			} else {
+				existed = append(existed, faceMediaRef{MediaKind: models.FaceMediaKindVideo, MediaID: videoID})
+			}
 		}
 	}
 	if len(imageIDs) > 0 {
-		var existing []uint
+		var present []uint
 		if err := tx.WithContext(ctx).Unscoped().Model(&models.Image{}).
-			Where("id IN ?", imageIDs).Pluck("id", &existing).Error; err != nil {
+			Where("id IN ?", imageIDs).Pluck("id", &present).Error; err != nil {
 			return written, err
 		}
-		if len(existing) > 0 {
-			relations := make([]models.ImagePerson, 0, len(existing))
-			for _, imageID := range existing {
-				relations = append(relations, models.ImagePerson{ImageID: imageID, PersonID: personID})
-			}
-			result := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).Create(&relations)
+		for _, imageID := range present {
+			result := tx.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).
+				Create(&models.ImagePerson{ImageID: imageID, PersonID: personID, CreatedAt: now})
 			if result.Error != nil {
 				return written, result.Error
 			}
-			written += result.RowsAffected
+			if result.RowsAffected == 1 {
+				written++
+				record(models.FaceMediaKindImage, imageID)
+			} else {
+				existed = append(existed, faceMediaRef{MediaKind: models.FaceMediaKindImage, MediaID: imageID})
+			}
 		}
 	}
-	return written, nil
+
+	if len(existed) > 0 {
+		relationTimes, err := loadFaceRelationTimes(ctx, tx, personID, existed)
+		if err != nil {
+			return written, err
+		}
+		writes, err := loadFaceRelationWrites(ctx, tx, personID, existed)
+		if err != nil {
+			return written, err
+		}
+		shared := make(map[faceMediaRef]bool, len(existed))
+		for _, write := range writes {
+			ref := faceMediaRef{MediaKind: write.MediaKind, MediaID: write.MediaID}
+			if faceRelationWriteValid(write, relationTimes) {
+				shared[ref] = true
+			}
+		}
+		for _, ref := range existed {
+			if shared[ref] {
+				record(ref.MediaKind, ref.MediaID)
+			}
+		}
+	}
+	if len(records) == 0 {
+		return written, nil
+	}
+	// 同一 (人物, 媒体, 簇) 再写一次（关系被删后本簇又确认了一遍）时刷新 created_at，
+	// 让记录重新与新的关系行对上。refs 已按媒体去重，一批里不会有重复键（PG 21000）；
+	// SET 右侧是 excluded 列，不引用目标表（PG 42702）。
+	return written, tx.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "person_id"}, {Name: "media_kind"}, {Name: "media_id"}, {Name: "cluster_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"created_at"}),
+	}).CreateInBatches(&records, faceRelationChunk).Error
+}
+
+// faceRelationWriteValid 报告一条写入记录是否仍然作数：对应的关系还在，且关系行不晚于记录。
+// 关系被别的路径删掉、又由 NFO / 手动等来源重建时，新关系的 created_at 晚于旧记录，
+// 旧记录于是失效——那条新关系不是人脸链路写的，解除时不能删。
+func faceRelationWriteValid(write models.FaceRelationWrite, relationTimes map[faceMediaRef]time.Time) bool {
+	createdAt, ok := relationTimes[faceMediaRef{MediaKind: write.MediaKind, MediaID: write.MediaID}]
+	return ok && !createdAt.After(write.CreatedAt)
+}
+
+// loadFaceRelationTimes 取人物与这批媒体现有关系行的 created_at（没有关系的媒体不在结果里）。
+func loadFaceRelationTimes(ctx context.Context, tx *gorm.DB, personID uint, refs []faceMediaRef) (map[faceMediaRef]time.Time, error) {
+	videoIDs, imageIDs := splitFaceMediaRefs(refs)
+	times := make(map[faceMediaRef]time.Time, len(refs))
+	type relationRow struct {
+		MediaID   uint      `gorm:"column:media_id"`
+		CreatedAt time.Time `gorm:"column:created_at"`
+	}
+	load := func(model interface{}, column, kind string, ids []uint) error {
+		for start := 0; start < len(ids); start += faceRelationChunk {
+			end := min(start+faceRelationChunk, len(ids))
+			var rows []relationRow
+			if err := tx.WithContext(ctx).Model(model).
+				Select(column+" AS media_id, created_at").
+				Where("person_id = ? AND "+column+" IN ?", personID, ids[start:end]).
+				Scan(&rows).Error; err != nil {
+				return err
+			}
+			for _, row := range rows {
+				times[faceMediaRef{MediaKind: kind, MediaID: row.MediaID}] = row.CreatedAt
+			}
+		}
+		return nil
+	}
+	if err := load(&models.VideoPerson{}, "video_id", models.FaceMediaKindVideo, videoIDs); err != nil {
+		return nil, err
+	}
+	if err := load(&models.ImagePerson{}, "image_id", models.FaceMediaKindImage, imageIDs); err != nil {
+		return nil, err
+	}
+	return times, nil
+}
+
+// loadFaceRelationWrites 取人物在这批媒体上的全部写入记录（任意簇）。
+func loadFaceRelationWrites(ctx context.Context, tx *gorm.DB, personID uint, refs []faceMediaRef) ([]models.FaceRelationWrite, error) {
+	videoIDs, imageIDs := splitFaceMediaRefs(refs)
+	var writes []models.FaceRelationWrite
+	for _, group := range []struct {
+		kind string
+		ids  []uint
+	}{{models.FaceMediaKindVideo, videoIDs}, {models.FaceMediaKindImage, imageIDs}} {
+		for start := 0; start < len(group.ids); start += faceRelationChunk {
+			end := min(start+faceRelationChunk, len(group.ids))
+			var rows []models.FaceRelationWrite
+			if err := tx.WithContext(ctx).
+				Where("person_id = ? AND media_kind = ? AND media_id IN ?", personID, group.kind, group.ids[start:end]).
+				Find(&rows).Error; err != nil {
+				return nil, err
+			}
+			writes = append(writes, rows...)
+		}
+	}
+	return writes, nil
+}
+
+// deleteFaceClusterWrites 删掉簇在某人物名下的全部写入记录：簇离开该人物（解除关联、改派）之后，
+// 这些记录不再能由它行使。removeRelations / moveRelations 为假时关系是用户选择留下的，
+// 记录一并删掉等于把它们交还给用户——之后任何人脸动作都不会再删它们。
+func deleteFaceClusterWrites(ctx context.Context, tx *gorm.DB, personID, clusterID uint) error {
+	return tx.WithContext(ctx).Where("person_id = ? AND cluster_id = ?", personID, clusterID).
+		Delete(&models.FaceRelationWrite{}).Error
 }
 
 func splitFaceMediaRefs(refs []faceMediaRef) (videoIDs, imageIDs []uint) {
@@ -531,10 +691,28 @@ func splitFaceMediaRefs(refs []faceMediaRef) (videoIDs, imageIDs []uint) {
 // reconcileFaceClusterPeople 把人物已被删除的簇拉回未命名（4.4.4）。
 // 外键 SET NULL 只能置空 person_id，改不了 status；不修的话这些簇既不会在面板上
 // 重新出现，也过不了「必须是未命名」这道校验，等于永久卡死。
+//
+// 同一处清掉已删除人物的写入记录（face_relation_writes 不挂外键，人物删除时不会级联）。
+// 人物 ID 自增不复用，残留行本身不会被误用；这里清掉是为了不让表无限长。先读再删：
+// 绝大多数时候没有可删的行，只读一次就够，免得每次列举都去抢写锁。
 func reconcileFaceClusterPeople(ctx context.Context) error {
-	return database.DB.WithContext(ctx).Model(&models.FaceCluster{}).
+	if err := database.DB.WithContext(ctx).Model(&models.FaceCluster{}).
 		Where("status = ? AND person_id IS NULL", models.FaceClusterStatusNamed).
-		Update("status", models.FaceClusterStatusUnnamed).Error
+		Update("status", models.FaceClusterStatusUnnamed).Error; err != nil {
+		return err
+	}
+	orphans := database.DB.WithContext(ctx).Model(&models.FaceRelationWrite{}).
+		Where("person_id NOT IN (?)", database.DB.Model(&models.Person{}).Select("id"))
+	var stale []uint
+	if err := orphans.Limit(1).Pluck("id", &stale).Error; err != nil {
+		return err
+	}
+	if len(stale) == 0 {
+		return nil
+	}
+	return database.DB.WithContext(ctx).
+		Where("person_id NOT IN (?)", database.DB.Model(&models.Person{}).Select("id")).
+		Delete(&models.FaceRelationWrite{}).Error
 }
 
 // faceClusterCounts 是一个簇的观测与媒体计数。
@@ -782,11 +960,12 @@ type FaceClusterPage struct {
 	HasMore  bool                 `json:"has_more"`
 }
 
-// faceClusterObservationCountSQL 是按观测行现算的观测数，与 loadFaceClusterCounts 同口径。
-const faceClusterObservationCountSQL = "(SELECT COUNT(*) FROM face_observations WHERE face_observations.cluster_id = face_clusters.id)"
-
 // ListFaceClusterPage 按 (观测数 DESC, id DESC) 键集分页。排序键里带 id，
 // 多个簇观测数相同时游标也是稳定的；页大小复用 normalizeEntityPageLimit。
+//
+// 排序读维护列 face_clusters.observation_count（META-11 M-4），走 idx_face_clusters_count_id，
+// 不再每页对每个簇现算一次 COUNT(*)。卡片上显示的观测数仍按观测行现算（buildFaceClusterViews），
+// 游标用的是排序键本身（列值），翻页语义与之前一致。
 func (s *FaceReviewService) ListFaceClusterPage(ctx context.Context, filter FaceClusterFilter, cursor FaceClusterCursorKey, limit int) (FaceClusterPage, error) {
 	if err := reconcileFaceClusterPeople(ctx); err != nil {
 		return FaceClusterPage{}, fmt.Errorf("reconcile face clusters: %w", err)
@@ -794,16 +973,16 @@ func (s *FaceReviewService) ListFaceClusterPage(ctx context.Context, filter Face
 	limit = normalizeEntityPageLimit(limit)
 
 	query := applyFaceClusterFilter(database.DB.WithContext(ctx).Model(&models.FaceCluster{}).
-		Select("face_clusters.id AS id, "+faceClusterObservationCountSQL+" AS observation_count"), filter)
+		Select("face_clusters.id AS id, face_clusters.observation_count AS observation_count"), filter)
 	if cursor.ID != 0 {
-		query = query.Where(faceClusterObservationCountSQL+" < ? OR ("+faceClusterObservationCountSQL+" = ? AND face_clusters.id < ?)",
+		query = query.Where("(face_clusters.observation_count < ? OR (face_clusters.observation_count = ? AND face_clusters.id < ?))",
 			cursor.Count, cursor.Count, cursor.ID)
 	}
 	var keys []struct {
 		ID               uint `gorm:"column:id"`
 		ObservationCount int  `gorm:"column:observation_count"`
 	}
-	if err := query.Order("observation_count DESC, face_clusters.id DESC").Limit(limit + 1).Scan(&keys).Error; err != nil {
+	if err := query.Order("face_clusters.observation_count DESC, face_clusters.id DESC").Limit(limit + 1).Scan(&keys).Error; err != nil {
 		return FaceClusterPage{}, fmt.Errorf("list face cluster page: %w", err)
 	}
 	page := FaceClusterPage{Clusters: []FaceClusterView{}}
@@ -935,12 +1114,22 @@ func (s *FaceReviewService) RestoreFaceCluster(ctx context.Context, clusterID ui
 	return nil
 }
 
-// FaceUnlinkMediaView 是解除关联预览里的一件媒体。CoveredByOther 为真表示该人物
-// 的其他 named 簇仍然覆盖它，解除时关系会保留。
+// FaceUnlinkMediaView 是解除关联预览里的一件媒体。
+//
+//   - HasRelation：原人物与这件媒体现在有没有关系行；
+//   - Source：face 表示这条关系是这一簇经人脸链路写的（有仍然作数的写入记录），unknown 表示
+//     来源不明（NFO、手动、标签转人物或升级前的历史关系），unknown 的关系解除时一律保留；
+//   - CoveredByOther：该人物的其他 named 簇仍然覆盖它（已确认观测，或那个簇也持有这条关系），
+//     解除时关系会保留。
+//
+// 解除关联（removeRelations）/ 改派（moveRelations）真正删除的，恰好是
+// HasRelation && Source == face && !CoveredByOther 的那些（META-04 I-1、M-7）。
 type FaceUnlinkMediaView struct {
 	MediaKind      string `json:"media_kind"`
 	MediaID        uint   `json:"media_id"`
 	Name           string `json:"name"`
+	HasRelation    bool   `json:"has_relation"`
+	Source         string `json:"source"`
 	CoveredByOther bool   `json:"covered_by_other"`
 }
 
@@ -960,6 +1149,23 @@ func namedFaceClusterSnapshot(ctx context.Context, tx *gorm.DB, clusterID uint) 
 	return cluster, nil
 }
 
+// faceClusterUpdateLost 在解除关联 / 改派的条件更新落空时重读簇，给出输的一方该报的错
+// （M-2）：簇已不在 → cluster_not_found；已不是 named（或人物刚被删、person_id 已置空）→
+// cluster_not_named；仍是 named、只是换了人物 → cluster_conflict（别人在读快照之后改派过它）。
+func faceClusterUpdateLost(ctx context.Context, tx *gorm.DB, clusterID uint) error {
+	var current models.FaceCluster
+	if err := tx.WithContext(ctx).Select("id", "status", "person_id").First(&current, clusterID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrFaceClusterNotFound
+		}
+		return err
+	}
+	if current.Status != models.FaceClusterStatusNamed || current.PersonID == nil {
+		return ErrFaceClusterNotNamed
+	}
+	return ErrFaceClusterConflict
+}
+
 // loadFaceClusterConfirmedMedia 是该簇已确认观测涉及的媒体（关系就是这些观测写出去的）。
 func loadFaceClusterConfirmedMedia(ctx context.Context, tx *gorm.DB, clusterID uint) ([]faceMediaRef, error) {
 	var refs []faceMediaRef
@@ -972,40 +1178,141 @@ func loadFaceClusterConfirmedMedia(ctx context.Context, tx *gorm.DB, clusterID u
 	return refs, err
 }
 
-// loadMediaCoveredByOtherClusters 返回被同一人物其他 named 簇（已确认观测）覆盖的媒体。
-func loadMediaCoveredByOtherClusters(ctx context.Context, tx *gorm.DB, clusterID, personID uint) (map[faceMediaRef]bool, error) {
-	others := tx.WithContext(ctx).Model(&models.FaceCluster{}).Select("id").
-		Where("status = ? AND person_id = ? AND id <> ?", models.FaceClusterStatusNamed, personID, clusterID)
-	var refs []faceMediaRef
-	err := tx.WithContext(ctx).Model(&models.FaceObservation{}).
-		Distinct("media_kind", "media_id").
-		Where("cluster_id IN (?) AND append_status = ?", others, models.FaceAppendStatusConfirmed).
-		Where("media_kind IN ?", []string{models.FaceMediaKindVideo, models.FaceMediaKindImage}).
-		Scan(&refs).Error
-	if err != nil {
+// loadOtherNamedFaceClusters 是同一人物名下、除本簇以外的 named 簇。
+func loadOtherNamedFaceClusters(ctx context.Context, tx *gorm.DB, clusterID, personID uint) (map[uint]bool, error) {
+	var ids []uint
+	if err := tx.WithContext(ctx).Model(&models.FaceCluster{}).
+		Where("status = ? AND person_id = ? AND id <> ?", models.FaceClusterStatusNamed, personID, clusterID).
+		Pluck("id", &ids).Error; err != nil {
 		return nil, err
 	}
-	covered := make(map[faceMediaRef]bool, len(refs))
-	for _, ref := range refs {
-		covered[ref] = true
+	others := make(map[uint]bool, len(ids))
+	for _, id := range ids {
+		others[id] = true
+	}
+	return others, nil
+}
+
+// loadMediaCoveredByOtherClusters 返回被这些簇（已确认观测）覆盖的媒体。
+func loadMediaCoveredByOtherClusters(ctx context.Context, tx *gorm.DB, others map[uint]bool) (map[faceMediaRef]bool, error) {
+	covered := map[faceMediaRef]bool{}
+	if len(others) == 0 {
+		return covered, nil
+	}
+	ids := make([]uint, 0, len(others))
+	for id := range others {
+		ids = append(ids, id)
+	}
+	for start := 0; start < len(ids); start += faceRelationChunk {
+		end := min(start+faceRelationChunk, len(ids))
+		var refs []faceMediaRef
+		if err := tx.WithContext(ctx).Model(&models.FaceObservation{}).
+			Distinct("media_kind", "media_id").
+			Where("cluster_id IN ? AND append_status = ?", ids[start:end], models.FaceAppendStatusConfirmed).
+			Where("media_kind IN ?", []string{models.FaceMediaKindVideo, models.FaceMediaKindImage}).
+			Scan(&refs).Error; err != nil {
+			return nil, err
+		}
+		for _, ref := range refs {
+			covered[ref] = true
+		}
 	}
 	return covered, nil
 }
 
+// faceUnlinkItem 是簇离开人物时对一件媒体的判定，预览与执行共用（M-7：预览说会删的，
+// 就是执行时删的那些）。
+type faceUnlinkItem struct {
+	ref            faceMediaRef
+	hasRelation    bool
+	fromFace       bool
+	coveredByOther bool
+}
+
+// removable 报告簇离开人物时这条关系该不该删：关系还在、是本簇写的、且没有别的 named 簇
+// 覆盖或持有。来源不明的关系（没有本簇的写入记录）一律保留。
+func (item faceUnlinkItem) removable() bool {
+	return item.hasRelation && item.fromFace && !item.coveredByOther
+}
+
+// planFaceClusterUnlink 对簇的已确认媒体逐件判定（见 faceUnlinkItem）。
+//
+// 覆盖取两条口径的并集：其他 named 簇的已确认观测里有这件媒体，或其他 named 簇也持有这条
+// 关系的写入记录。宁可多留：留下的关系用户随时能手动删，删错的关系没有人知道该补回来。
+func planFaceClusterUnlink(ctx context.Context, tx *gorm.DB, clusterID, personID uint) ([]faceUnlinkItem, error) {
+	refs, err := loadFaceClusterConfirmedMedia(ctx, tx, clusterID)
+	if err != nil {
+		return nil, err
+	}
+	if len(refs) == 0 {
+		return []faceUnlinkItem{}, nil
+	}
+	others, err := loadOtherNamedFaceClusters(ctx, tx, clusterID, personID)
+	if err != nil {
+		return nil, err
+	}
+	covered, err := loadMediaCoveredByOtherClusters(ctx, tx, others)
+	if err != nil {
+		return nil, err
+	}
+	relationTimes, err := loadFaceRelationTimes(ctx, tx, personID, refs)
+	if err != nil {
+		return nil, err
+	}
+	writes, err := loadFaceRelationWrites(ctx, tx, personID, refs)
+	if err != nil {
+		return nil, err
+	}
+	own := make(map[faceMediaRef]bool, len(writes))
+	for _, write := range writes {
+		if !faceRelationWriteValid(write, relationTimes) {
+			continue
+		}
+		ref := faceMediaRef{MediaKind: write.MediaKind, MediaID: write.MediaID}
+		switch {
+		case write.ClusterID == clusterID:
+			own[ref] = true
+		case others[write.ClusterID]:
+			covered[ref] = true
+		}
+	}
+	items := make([]faceUnlinkItem, 0, len(refs))
+	for _, ref := range refs {
+		_, hasRelation := relationTimes[ref]
+		items = append(items, faceUnlinkItem{
+			ref:            ref,
+			hasRelation:    hasRelation,
+			fromFace:       own[ref],
+			coveredByOther: covered[ref],
+		})
+	}
+	return items, nil
+}
+
+func removableFaceMedia(items []faceUnlinkItem) []faceMediaRef {
+	refs := make([]faceMediaRef, 0, len(items))
+	for _, item := range items {
+		if item.removable() {
+			refs = append(refs, item.ref)
+		}
+	}
+	return refs
+}
+
 // PreviewFaceClusterUnlink 列出解除/改派会牵动的媒体：该簇确认观测涉及的 (kind, id, name)，
-// 并标出仍被同一人物其他 named 簇覆盖的那些。只读。
+// 每项标出关系在不在、是不是本簇写的、是否仍被同一人物其他 named 簇覆盖（M-7）。只读。
 func (s *FaceReviewService) PreviewFaceClusterUnlink(ctx context.Context, clusterID uint) ([]FaceUnlinkMediaView, error) {
 	cluster, err := namedFaceClusterSnapshot(ctx, database.DB, clusterID)
 	if err != nil {
 		return nil, err
 	}
-	refs, err := loadFaceClusterConfirmedMedia(ctx, database.DB, clusterID)
+	items, err := planFaceClusterUnlink(ctx, database.DB, clusterID, *cluster.PersonID)
 	if err != nil {
 		return nil, fmt.Errorf("load face cluster media: %w", err)
 	}
-	covered, err := loadMediaCoveredByOtherClusters(ctx, database.DB, clusterID, *cluster.PersonID)
-	if err != nil {
-		return nil, fmt.Errorf("load covered media: %w", err)
+	refs := make([]faceMediaRef, 0, len(items))
+	for _, item := range items {
+		refs = append(refs, item.ref)
 	}
 	videoIDs, imageIDs := splitFaceMediaRefs(refs)
 	videoNames, err := loadMediaNames(ctx, &models.Video{}, videoIDs)
@@ -1016,17 +1323,23 @@ func (s *FaceReviewService) PreviewFaceClusterUnlink(ctx context.Context, cluste
 	if err != nil {
 		return nil, err
 	}
-	views := make([]FaceUnlinkMediaView, 0, len(refs))
-	for _, ref := range refs {
-		name := videoNames[ref.MediaID]
-		if ref.MediaKind == models.FaceMediaKindImage {
-			name = imageNames[ref.MediaID]
+	views := make([]FaceUnlinkMediaView, 0, len(items))
+	for _, item := range items {
+		name := videoNames[item.ref.MediaID]
+		if item.ref.MediaKind == models.FaceMediaKindImage {
+			name = imageNames[item.ref.MediaID]
+		}
+		source := FaceRelationSourceUnknown
+		if item.fromFace {
+			source = FaceRelationSourceFace
 		}
 		views = append(views, FaceUnlinkMediaView{
-			MediaKind:      ref.MediaKind,
-			MediaID:        ref.MediaID,
+			MediaKind:      item.ref.MediaKind,
+			MediaID:        item.ref.MediaID,
 			Name:           name,
-			CoveredByOther: covered[ref],
+			HasRelation:    item.hasRelation,
+			Source:         source,
+			CoveredByOther: item.coveredByOther,
 		})
 	}
 	return views, nil
@@ -1059,59 +1372,51 @@ func deletePersonRelations(ctx context.Context, tx *gorm.DB, personID uint, refs
 	return removed, nil
 }
 
-func uncoveredFaceMedia(refs []faceMediaRef, covered map[faceMediaRef]bool) []faceMediaRef {
-	kept := make([]faceMediaRef, 0, len(refs))
-	for _, ref := range refs {
-		if !covered[ref] {
-			kept = append(kept, ref)
-		}
-	}
-	return kept
-}
-
-// UnlinkFaceCluster 把已命名簇解回未命名（person_id 置空）。removeRelations 为真时，
-// 同一事务里删除预览列出的媒体与原人物的关系，但仍被该人物其他 named 簇覆盖的保留。
-// 簇的追加候选（pending）随之回到 none。并发下输的一方报 cluster_not_named。
+// UnlinkFaceCluster 把已命名簇解回未命名（person_id 置空）。removeRelations 为真时，同一事务里
+// 只删除「本簇写过、且没被该人物其他 named 簇覆盖或持有」的关系；来源不明的关系（NFO、手动、
+// 标签转人物、升级前的历史关系）一律保留（META-04 I-1）。无论删不删，本簇在原人物名下的写入
+// 记录都随之删除。簇的追加候选（pending）回到 none，用户忽略过的（dismissed）保持不变。
+// 并发下输的一方：簇已不是 named 报 cluster_not_named，仍是 named 但被改派过报 cluster_conflict。
 func (s *FaceReviewService) UnlinkFaceCluster(ctx context.Context, clusterID uint, removeRelations bool) (FaceClusterView, error) {
-	faceClusterAssignmentMu.Lock()
-	defer faceClusterAssignmentMu.Unlock()
 	var removed int64
-	err := database.Transaction(func(tx *gorm.DB) error {
-		cluster, err := namedFaceClusterSnapshot(ctx, tx, clusterID)
-		if err != nil {
-			return err
-		}
-		personID := *cluster.PersonID
-		result := tx.WithContext(ctx).Model(&models.FaceCluster{}).
-			Where("id = ? AND status = ? AND person_id = ?", clusterID, models.FaceClusterStatusNamed, personID).
-			Updates(map[string]interface{}{
-				"status":    models.FaceClusterStatusUnnamed,
-				"person_id": nil,
-			})
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return ErrFaceClusterNotNamed
-		}
-		if err := tx.WithContext(ctx).Model(&models.FaceObservation{}).
-			Where("cluster_id = ? AND append_status = ?", clusterID, models.FaceAppendStatusPending).
-			Update("append_status", models.FaceAppendStatusNone).Error; err != nil {
-			return err
-		}
-		if !removeRelations {
-			return nil
-		}
-		refs, err := loadFaceClusterConfirmedMedia(ctx, tx, clusterID)
-		if err != nil {
-			return err
-		}
-		covered, err := loadMediaCoveredByOtherClusters(ctx, tx, clusterID, personID)
-		if err != nil {
-			return err
-		}
-		removed, err = deletePersonRelations(ctx, tx, personID, uncoveredFaceMedia(refs, covered))
-		return err
+	err := withFaceClusterAssignment(func() error {
+		return database.Transaction(func(tx *gorm.DB) error {
+			cluster, err := namedFaceClusterSnapshot(ctx, tx, clusterID)
+			if err != nil {
+				return err
+			}
+			personID := *cluster.PersonID
+			if hook := faceClusterAfterSnapshotHook; hook != nil {
+				hook(tx, clusterID)
+			}
+			result := tx.WithContext(ctx).Model(&models.FaceCluster{}).
+				Where("id = ? AND status = ? AND person_id = ?", clusterID, models.FaceClusterStatusNamed, personID).
+				Updates(map[string]interface{}{
+					"status":    models.FaceClusterStatusUnnamed,
+					"person_id": nil,
+				})
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return faceClusterUpdateLost(ctx, tx, clusterID)
+			}
+			if err := tx.WithContext(ctx).Model(&models.FaceObservation{}).
+				Where("cluster_id = ? AND append_status = ?", clusterID, models.FaceAppendStatusPending).
+				Update("append_status", models.FaceAppendStatusNone).Error; err != nil {
+				return err
+			}
+			if removeRelations {
+				items, err := planFaceClusterUnlink(ctx, tx, clusterID, personID)
+				if err != nil {
+					return err
+				}
+				if removed, err = deletePersonRelations(ctx, tx, personID, removableFaceMedia(items)); err != nil {
+					return err
+				}
+			}
+			return deleteFaceClusterWrites(ctx, tx, personID, clusterID)
+		})
 	})
 	if err != nil {
 		return FaceClusterView{}, err
@@ -1120,65 +1425,60 @@ func (s *FaceReviewService) UnlinkFaceCluster(ctx context.Context, clusterID uin
 	return s.clusterView(ctx, clusterID)
 }
 
-// ReassignFaceCluster 把已命名簇改指向另一个人物。moveRelations 为真时，同一事务里
-// 给目标人物补上簇确认观测涉及的媒体（去重），并从原人物删除这些关系，但仍被原人物
-// 其他 named 簇覆盖的媒体在原人物侧保留。目标就是当前人物时是幂等空操作。
+// ReassignFaceCluster 把已命名簇改指向另一个人物。moveRelations 为真时，同一事务里给目标人物
+// 补上簇确认观测涉及的媒体（去重，按人脸链路记账），并从原人物只删除「本簇写过、且没被原人物
+// 其他 named 簇覆盖或持有」的关系；来源不明的关系在原人物侧保留（META-04 I-1）。本簇在原人物
+// 名下的写入记录随之删除。目标就是当前人物时是幂等空操作。
 // 并发下簇被别人改派过报 cluster_conflict，簇已不是 named 报 cluster_not_named。
 func (s *FaceReviewService) ReassignFaceCluster(ctx context.Context, clusterID, targetPersonID uint, moveRelations bool) (FaceClusterView, error) {
-	faceClusterAssignmentMu.Lock()
-	defer faceClusterAssignmentMu.Unlock()
 	var moved, removed int64
-	err := database.Transaction(func(tx *gorm.DB) error {
-		cluster, err := namedFaceClusterSnapshot(ctx, tx, clusterID)
-		if err != nil {
-			return err
-		}
-		sourcePersonID := *cluster.PersonID
-		var target models.Person
-		if err := tx.WithContext(ctx).Select("id").First(&target, targetPersonID).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrFacePersonNotFound
+	err := withFaceClusterAssignment(func() error {
+		return database.Transaction(func(tx *gorm.DB) error {
+			cluster, err := namedFaceClusterSnapshot(ctx, tx, clusterID)
+			if err != nil {
+				return err
 			}
-			return err
-		}
-		if sourcePersonID == targetPersonID {
-			return nil
-		}
-		result := tx.WithContext(ctx).Model(&models.FaceCluster{}).
-			Where("id = ? AND status = ? AND person_id = ?", clusterID, models.FaceClusterStatusNamed, sourcePersonID).
-			Update("person_id", targetPersonID)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			var current models.FaceCluster
-			if err := tx.WithContext(ctx).Select("id", "status").First(&current, clusterID).Error; err != nil {
+			sourcePersonID := *cluster.PersonID
+			var target models.Person
+			if err := tx.WithContext(ctx).Select("id").First(&target, targetPersonID).Error; err != nil {
 				if errors.Is(err, gorm.ErrRecordNotFound) {
-					return ErrFaceClusterNotFound
+					return ErrFacePersonNotFound
 				}
 				return err
 			}
-			if current.Status != models.FaceClusterStatusNamed {
-				return ErrFaceClusterNotNamed
+			if sourcePersonID == targetPersonID {
+				return nil
 			}
-			return ErrFaceClusterConflict
-		}
-		if !moveRelations {
-			return nil
-		}
-		refs, err := loadFaceClusterConfirmedMedia(ctx, tx, clusterID)
-		if err != nil {
-			return err
-		}
-		covered, err := loadMediaCoveredByOtherClusters(ctx, tx, clusterID, sourcePersonID)
-		if err != nil {
-			return err
-		}
-		if moved, err = writePersonRelations(ctx, tx, targetPersonID, refs); err != nil {
-			return err
-		}
-		removed, err = deletePersonRelations(ctx, tx, sourcePersonID, uncoveredFaceMedia(refs, covered))
-		return err
+			if hook := faceClusterAfterSnapshotHook; hook != nil {
+				hook(tx, clusterID)
+			}
+			result := tx.WithContext(ctx).Model(&models.FaceCluster{}).
+				Where("id = ? AND status = ? AND person_id = ?", clusterID, models.FaceClusterStatusNamed, sourcePersonID).
+				Update("person_id", targetPersonID)
+			if result.Error != nil {
+				return result.Error
+			}
+			if result.RowsAffected == 0 {
+				return faceClusterUpdateLost(ctx, tx, clusterID)
+			}
+			if moveRelations {
+				items, err := planFaceClusterUnlink(ctx, tx, clusterID, sourcePersonID)
+				if err != nil {
+					return err
+				}
+				refs := make([]faceMediaRef, 0, len(items))
+				for _, item := range items {
+					refs = append(refs, item.ref)
+				}
+				if moved, err = writeFaceRelations(ctx, tx, clusterID, targetPersonID, refs); err != nil {
+					return err
+				}
+				if removed, err = deletePersonRelations(ctx, tx, sourcePersonID, removableFaceMedia(items)); err != nil {
+					return err
+				}
+			}
+			return deleteFaceClusterWrites(ctx, tx, sourcePersonID, clusterID)
+		})
 	})
 	if err != nil {
 		return FaceClusterView{}, err

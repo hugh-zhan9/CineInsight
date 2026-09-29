@@ -812,6 +812,61 @@ func TestEnhancementCopyMetadataColumnDefaultsFalseForOldTasksMEDIA11(t *testing
 	}
 }
 
+// ---------------------------------------------------------------- 人脸写入记录与簇分页索引
+
+// META-04 / META-11：新库与老库升级都建出 face_relation_writes（唯一键生效、没有外键）与
+// face_clusters 的 (observation_count, id) 索引；两者都由 AutoMigrate 按模型标签创建。
+func TestFaceRelationWritesTableAndClusterCountIndexMETA04(t *testing.T) {
+	db := dbtest.OpenRaw(t)
+	applySchemaTwice(t, db)
+	migrator := db.Migrator()
+	checks := []struct {
+		model interface{}
+		index string
+	}{
+		{&models.FaceRelationWrite{}, "idx_face_relation_writes_identity"},
+		{&models.FaceRelationWrite{}, "idx_face_relation_writes_cluster"},
+		{&models.FaceCluster{}, "idx_face_clusters_count_id"},
+	}
+	for _, check := range checks {
+		if !migrator.HasIndex(check.model, check.index) {
+			t.Fatalf("新库缺少索引 %s(%s)", check.index, dbtest.Backend())
+		}
+	}
+
+	// 没有外键：人物、簇、媒体都可以是不存在的 ID（多态引用，人物删除由审阅对账清理）。
+	write := models.FaceRelationWrite{PersonID: 987, MediaKind: models.FaceMediaKindImage, MediaID: 654, ClusterID: 321, CreatedAt: time.Now()}
+	if err := db.Create(&write).Error; err != nil {
+		t.Fatalf("写入记录不该有外键(%s): %v", dbtest.Backend(), err)
+	}
+	duplicate := write
+	duplicate.ID = 0
+	if err := db.Create(&duplicate).Error; err == nil {
+		t.Fatal("(person_id, media_kind, media_id, cluster_id) 应唯一")
+	}
+	otherCluster := write
+	otherCluster.ID = 0
+	otherCluster.ClusterID = 322
+	if err := db.Create(&otherCluster).Error; err != nil {
+		t.Fatalf("同一关系可由多个簇共同持有: %v", err)
+	}
+
+	// 老库升级：表与索引都还没有。
+	if err := migrator.DropTable(&models.FaceRelationWrite{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := migrator.DropIndex(&models.FaceCluster{}, "idx_face_clusters_count_id"); err != nil {
+		t.Fatal(err)
+	}
+	recycleConnections(t, db)
+	applySchemaTwice(t, db)
+	for _, check := range checks {
+		if !db.Migrator().HasIndex(check.model, check.index) {
+			t.Fatalf("老库升级后缺少索引 %s(%s)", check.index, dbtest.Backend())
+		}
+	}
+}
+
 // ---------------------------------------------------------------- 整体幂等
 
 func TestApplySchemaIsIdempotentForProductCompletenessSettings(t *testing.T) {

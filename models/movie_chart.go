@@ -156,7 +156,8 @@ type MovieChartMark struct {
 	WatchlistEntryID uint `gorm:"not null;default:0" json:"watchlist_entry_id"`
 	// WatchlistEntryOrigin 说明 WatchlistEntryID 认领的条目是怎么来的：chart（榜单「想看」
 	// 新建）、enrichment（用户手动条目补全出豆瓣 ID 后绑定）、reuse（榜单复用了用户已有的
-	// 同名条目）、空串（未认领或历史行）。用户在榜单上取消 want 会删 chart 与 enrichment
+	// 同名条目）、unclaimed（新写的 want 标记没有认领任何条目，片名兜底撤销不碰它）、
+	// 空串（历史行，片名兜底撤销只命中这一类）。用户在榜单上取消 want 会删 chart 与 enrichment
 	// 条目（R8 双向同步），reuse 条目永不删除；看完视频的自动 want → watched 只删 chart
 	// 条目。默认值是空串，等于零值，不触犯 gorm default 禁令。
 	WatchlistEntryOrigin string `gorm:"size:16;not null;default:''" json:"watchlist_entry_origin"`

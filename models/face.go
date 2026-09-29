@@ -80,15 +80,19 @@ type FaceObservation struct {
 // 增量聚类只和它比对；representative_observation_id 指向质量最高的那条观测，
 // 界面用它的裁剪图当簇头像。
 type FaceCluster struct {
-	ID     uint   `gorm:"primarykey" json:"id"`
+	// id 同时是 idx_face_clusters_count_id 的第二列：审阅面板按 (observation_count DESC, id DESC)
+	// 键集分页（META-11），两列都在索引里才能倒序扫索引、不必每页现算观测数再排序。
+	ID     uint   `gorm:"primarykey;index:idx_face_clusters_count_id,priority:2" json:"id"`
 	Status string `gorm:"size:16;not null;default:'unnamed';index:idx_face_clusters_status" json:"status"`
 	// PersonID 在人物被删除时置空（外键 SET NULL），簇于是回到未命名重新出现在
 	// 审阅面板里（4.4.4）。
-	PersonID                    *uint   `gorm:"index:idx_face_clusters_person" json:"person_id"`
-	Person                      *Person `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
-	Centroid                    []byte  `json:"-"`
-	ObservationCount            int     `gorm:"not null;default:0" json:"observation_count"`
-	RepresentativeObservationID *uint   `json:"representative_observation_id"`
+	PersonID *uint   `gorm:"index:idx_face_clusters_person" json:"person_id"`
+	Person   *Person `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
+	Centroid []byte  `json:"-"`
+	// ObservationCount 由聚类（建簇 1、归入 +1）与 recomputeFaceClustersTx（删观测、移除来源后
+	// 按实际观测行重算）维护；分页排序读它（META-11）。
+	ObservationCount            int   `gorm:"not null;default:0;index:idx_face_clusters_count_id,priority:1" json:"observation_count"`
+	RepresentativeObservationID *uint `json:"representative_observation_id"`
 	// IgnoredAt 是簇被忽略的时间（D-PC30），历史行为空；「已忽略」列表据此统计忽略之后并入的观测数。
 	IgnoredAt *time.Time `json:"ignored_at" ts_type:"string"`
 	CreatedAt time.Time  `json:"created_at" ts_type:"string"`

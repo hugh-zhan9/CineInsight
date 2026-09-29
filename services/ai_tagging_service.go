@@ -742,9 +742,15 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&approvalRecord).Error; err != nil {
 			return err
 		}
+		// 连带作废的 updated_at 显式写成这次批准的 approved_at：supersededCandidateReason 靠
+		// 「同标签候选的批准时间不晚于本候选的作废时间」认出这种作废（META-11 M-4），两者
+		// 必须是同一个时间，不能一个取注入的时钟、一个取 GORM 的自动时间。
 		if err := tx.Model(&models.AITagCandidate{}).
 			Where("video_id = ? AND matched_tag_id = ? AND id <> ? AND status = ?", candidate.VideoID, candidate.MatchedTagID, candidate.ID, models.AITagCandidateStatusPending).
-			Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
+			Updates(map[string]interface{}{
+				"status":     models.AITagCandidateStatusSuperseded,
+				"updated_at": now,
+			}).Error; err != nil {
 			return err
 		}
 		approved = candidate
@@ -1051,15 +1057,19 @@ func aiTagApproveMessage(err error) string {
 // supersededCandidateReason 查出一条 superseded 候选真正被作废的原因（META-11）。候选表没有
 // 原因列，按作废路径各自留下的痕迹倒推，先查痕迹最确定的：
 //  1. rejected_at 非空：只有 SupersedeCandidatesForManualTag（手动加标签）会给 superseded 写它；
-//  2. 同视频同标签有一条在本候选生成之后批准的候选：被那次批准连带作废；
+//  2. 同视频同标签有一条候选的批准时间落在 [本候选生成, 本候选作废] 之间：被那次批准连带作废。
+//     作废时间就是本候选的 updated_at（连带作废与批准同一事务、同一个时间，见 ApproveCandidate）。
+//     只看「生成之后批准」不够（M-4）：早先因重新分析作废的候选，之后同标签另一条被批准，
+//     批准时间晚于它的作废时间——那不是它作废的原因；
 //  3. 标签已不在 / 已软删：删除或合并；标签还在但出了 AI 词表（改成人物分类等）；
 //  4. 视频上已有该标签（未留痕的旧路径手动添加）；
 //  5. 其余是重新分析（证据指纹变化、词表变化重排、手动重新分析）作废的。
 //
 // 读库失败只影响文案，给兜底的「候选已失效」，不让一次查询失败把整批结果变成错误。
+// 时间比较放在 Go 里做：SQLite 把时间存成文本，按字符串比较在小数位数不同时会排错。
 func (s *AITaggingService) supersededCandidateReason(candidateID uint) string {
 	var candidate models.AITagCandidate
-	if err := database.DB.Select("id", "video_id", "matched_tag_id", "created_at", "rejected_at").
+	if err := database.DB.Select("id", "video_id", "matched_tag_id", "created_at", "updated_at", "rejected_at").
 		First(&candidate, candidateID).Error; err != nil {
 		return aiTagSupersededUnknown
 	}
@@ -1070,15 +1080,25 @@ func (s *AITaggingService) supersededCandidateReason(candidateID uint) string {
 		return aiTagSupersededByTagDeleted
 	}
 	tagID := *candidate.MatchedTagID
-	var approvedSiblings int64
-	if err := database.DB.Model(&models.AITagCandidate{}).
-		Where("video_id = ? AND matched_tag_id = ? AND id <> ? AND status = ? AND approved_at >= ?",
-			candidate.VideoID, tagID, candidate.ID, models.AITagCandidateStatusApproved, candidate.CreatedAt).
-		Count(&approvedSiblings).Error; err != nil {
+	var siblings []models.AITagCandidate
+	if err := database.DB.Select("id", "approved_at").
+		Where("video_id = ? AND matched_tag_id = ? AND id <> ? AND status = ? AND approved_at IS NOT NULL",
+			candidate.VideoID, tagID, candidate.ID, models.AITagCandidateStatusApproved).
+		Find(&siblings).Error; err != nil {
 		return aiTagSupersededUnknown
 	}
-	if approvedSiblings > 0 {
-		return aiTagSupersededBySibling
+	// laterApproval：本候选作废之后，同标签另一条才被批准。那次批准会把标签挂到视频上，下面
+	// 「视频上已有该标签 → 手动添加」的推断因此不成立——标签是后来批准的，不是本候选作废的原因。
+	laterApproval := false
+	for _, sibling := range siblings {
+		approvedAt := *sibling.ApprovedAt
+		if approvedAt.Before(candidate.CreatedAt) {
+			continue
+		}
+		if !approvedAt.After(candidate.UpdatedAt) {
+			return aiTagSupersededBySibling
+		}
+		laterApproval = true
 	}
 	var tag models.Tag
 	if err := database.DB.Unscoped().First(&tag, tagID).Error; err != nil {
@@ -1092,6 +1112,9 @@ func (s *AITaggingService) supersededCandidateReason(candidateID uint) string {
 	}
 	if !isAITagEligible(tag) {
 		return aiTagSupersededOutOfLibrary
+	}
+	if laterApproval {
+		return aiTagSupersededByReanalysis
 	}
 	var tagged int64
 	if err := database.DB.Table("video_tags").Where("video_id = ? AND tag_id = ?", candidate.VideoID, tagID).

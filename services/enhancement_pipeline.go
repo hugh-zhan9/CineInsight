@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"video-master/database"
 	"video-master/models"
@@ -323,6 +324,12 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 				s.finishCancelled(task)
 				return nil
 			}
+			// 批内写满了卷（批前复检之后别的程序占了空间）：同样是空间不足，保留已提交的检查点
+			// （M-6）。没进清单的半截分段下一轮会被覆盖重写，不计入已写字节。
+			if enhancementNoSpace(err) {
+				s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
+				return nil
+			}
 			s.failTask(task.ID, enhancementErrorCode(err, "inference_failed"), err.Error())
 			s.cleanupTaskWorkdir(task)
 			return nil
@@ -339,6 +346,11 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 			Size: segmentInfo.Size(), SHA256: segmentDigest,
 		})
 		if err := saveEnhancementManifest(workdir, manifest); err != nil {
+			// 清单是先写临时文件再改名：写满卷时旧清单原样在盘上，检查点仍然一致（M-6）。
+			if enhancementNoSpace(err) {
+				s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
+				return nil
+			}
 			s.failTask(task.ID, "publish_failed", err.Error())
 			s.cleanupTaskWorkdir(task)
 			return nil
@@ -352,9 +364,23 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 	// —— 合并 + 校验 + 原子发布 ——
 	s.updatePhase(task.ID, models.EnhancementPhaseEncode)
 	stagingPath := filepath.Join(workdir, "final.cispart")
+	// 上一次中断留下的半截合并产物先删掉：它占着空间，而这一次合并会整个重写它。
+	_ = os.Remove(stagingPath)
+	// 合并前按产物预计体积复检空间（M-6）。不够就报 disk_insufficient 并保留检查点：分段全在
+	// 清单里，腾出空间后重试会直接从合并继续。
+	if err := s.ensureDiskFree(video.Path, enhancementMergeRequiredBytes(enhancementWrittenBytes(workdir, manifest), task.SourceSize)); err != nil {
+		s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
+		return nil
+	}
 	if err := s.concatSegments(ctx, ffmpeg, video.Path, workdir, manifest, stagingPath, probeInfo); err != nil {
 		if ctx.Err() != nil {
 			return s.interruptionResult(ctx, task)
+		}
+		// 合并途中写满了卷：删掉半截产物腾出空间，保留分段与清单（M-6）。
+		if enhancementNoSpace(err) {
+			_ = os.Remove(stagingPath)
+			s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
+			return nil
 		}
 		s.failTask(task.ID, "encode_failed", err.Error())
 		return nil
@@ -414,6 +440,37 @@ func enhancementWrittenBytes(workdir string, manifest enhancementSegmentManifest
 		total += info.Size()
 	}
 	return total
+}
+
+// enhancementMergeRequiredBytes 是合并产物的预计体积（M-6）：视频流就是已写出的分段
+// （-c:v copy 原样拼接），音轨、字幕从源里原样复制，体积不超过源文件本身。按上限估，
+// 宁可提前报空间不足、保留检查点，也不让合并写到一半才撞满卷。
+func enhancementMergeRequiredBytes(writtenBytes, sourceSize int64) int64 {
+	if writtenBytes < 0 {
+		writtenBytes = 0
+	}
+	if sourceSize < 0 {
+		sourceSize = 0
+	}
+	required := writtenBytes + sourceSize
+	if required < 0 {
+		return int64(^uint64(0) >> 1)
+	}
+	return required
+}
+
+// enhancementNoSpace 报告一次失败是不是卷写满了（ENOSPC）：Go 侧写文件的错误可以直接判，
+// ffmpeg / sidecar 子进程的失败只能看它 stderr 尾部里的系统报错文案（已拼进错误消息）。
+func enhancementNoSpace(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, syscall.ENOSPC) {
+		return true
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "no space left on device") ||
+		strings.Contains(message, "not enough space on the disk")
 }
 
 func enhancementSourceStable(path string, task models.VideoEnhancementTask) (bool, string) {

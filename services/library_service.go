@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -89,6 +91,42 @@ type LibraryVideoCursor struct {
 type LibraryVideoPage struct {
 	Videos     []models.Video      `json:"videos"`
 	NextCursor *LibraryVideoCursor `json:"next_cursor,omitempty"`
+	// AutomaticOverrideKinds：本页视频中被人工「加上」的自动标签 kind（D-PC36 行标签上的
+	// 「手动」角标），按视频 ID 索引，只含有覆盖的视频。整页一次批量查询，不逐行查。
+	AutomaticOverrideKinds map[uint][]string `json:"automatic_override_kinds"`
+}
+
+// loadAutomaticOverrideKinds 一次查出这些视频上 present=true 的自动标签覆盖（D-PC36），
+// 按视频 ID 分组、kind 升序。present=false（手动去掉）的覆盖没有标签可挂角标，不返回。
+func loadAutomaticOverrideKinds(videoIDs []uint) (map[uint][]string, error) {
+	kinds := map[uint][]string{}
+	ids := uniqueUintIDs(videoIDs)
+	if len(ids) == 0 {
+		return kinds, nil
+	}
+	var rows []models.VideoAutomaticTagOverride
+	if err := database.DB.Select("video_id", "automatic_kind").
+		Where("video_id IN ? AND present = ?", ids, true).
+		Order("video_id ASC, automatic_kind ASC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("加载自动标签覆盖失败: %w", err)
+	}
+	for _, row := range rows {
+		kinds[row.VideoID] = append(kinds[row.VideoID], row.AutomaticKind)
+	}
+	return kinds, nil
+}
+
+// newLibraryVideoPage 组装一页结果并批量带出自动标签覆盖。
+func newLibraryVideoPage(videos []models.Video, next *LibraryVideoCursor) (*LibraryVideoPage, error) {
+	ids := make([]uint, 0, len(videos))
+	for _, video := range videos {
+		ids = append(ids, video.ID)
+	}
+	kinds, err := loadAutomaticOverrideKinds(ids)
+	if err != nil {
+		return nil, err
+	}
+	return &LibraryVideoPage{Videos: videos, NextCursor: next, AutomaticOverrideKinds: kinds}, nil
 }
 
 // LibraryVideoPageRequest keeps the optional cursor inside a generated DTO so
@@ -336,7 +374,8 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	case LibraryViewLiked:
 		query = query.Where("videos.is_liked = ?", true)
 	case LibraryViewContinueWatching:
-		query = query.Where("videos.is_watched = ? AND videos.watch_position_seconds > 0", false)
+		// 「继续观看」= 断点可续（D-PC42）：包括重看中的已看片；已看后留下的旧断点不算。
+		query = query.Where(resumableSQL)
 	case LibraryViewUnwatched:
 		query = query.Where("videos.is_watched = ?", false)
 	case LibraryViewWatched:
@@ -427,98 +466,244 @@ func (s *VideoService) getVideoWithTags(videoID uint) (*models.Video, error) {
 	return &video, nil
 }
 
-// SetVideoWatched 更新主片库已看状态。
-func (s *VideoService) SetVideoWatched(videoID uint, watched bool) (*models.Video, error) {
+// watchStateNotifier 保存已看状态观察者（D-PC52）。观察者由 App 在启动与重建榜单服务后注入，
+// 读写都可能与请求并发，所以单独加锁。
+type watchStateNotifier struct {
+	mu       sync.RWMutex
+	observer WatchStateObserver
+}
+
+// SetWatchStateObserver 注入已看状态观察者（接线项）；传 nil 表示不通知。
+func (s *VideoService) SetWatchStateObserver(observer WatchStateObserver) {
+	s.watchState.mu.Lock()
+	s.watchState.observer = observer
+	s.watchState.mu.Unlock()
+}
+
+// NotifyWatchStateChanged 在 is_watched 实际翻转、写入已提交之后通知观察者。
+// VideoService 自己的翻转路径都经过它；IINA 断点同步这类直接写库的服务也经它转发，
+// 保证观察者只有 VideoService 这一个持有者。观察者的失败只记日志，不影响调用方：
+// 已看状态已经落库，关联记录没跟上是次要问题。
+func (s *VideoService) NotifyWatchStateChanged(videoID uint, watched bool) {
+	if s == nil || videoID == 0 {
+		return
+	}
+	s.watchState.mu.RLock()
+	observer := s.watchState.observer
+	s.watchState.mu.RUnlock()
+	if observer == nil {
+		return
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			log.Printf("已看状态观察者失败 video_id=%d watched=%v err=%v", videoID, watched, recovered)
+		}
+	}()
+	observer.OnVideoWatchedChanged(videoID, watched)
+}
+
+// 编译期断言：VideoService 是榜单一侧回写关联视频的入口（D-PC52）。
+var _ LinkedVideoWatchSetter = (*VideoService)(nil)
+
+// setVideoWatchedState 把 is_watched 写成目标值，返回是否真的翻转了。
+//
+// 翻转用条件更新（WHERE is_watched = 旧值）判定，并发下只有一方拿到 flipped=true，
+// 观察者因此只会被通知一次。rewriteSame=true 时，已处于目标状态也照样重写一遍
+// （SetVideoWatched 的既有语义：显式标已看会刷新 watched_at）；false 时视为幂等的空操作。
+func setVideoWatchedState(videoID uint, watched bool, rewriteSame bool) (bool, error) {
 	if videoID == 0 {
-		return nil, fmt.Errorf("视频 ID 不能为空")
+		return false, fmt.Errorf("视频 ID 不能为空")
 	}
 	updates := map[string]interface{}{"is_watched": watched}
 	if watched {
 		now := time.Now()
 		updates["watched_at"] = &now
 		// 有意不动 watch_position_seconds：手动标已看可能只是误点，销毁断点撤不回来
-		// （看到 40 分钟的两小时电影点一下就没了）。「已看就从头播」由前端的
-		// resumePositionFor 保证，对外自洽由 jellyfinUserData 在 Played 时报 0 保证。
+		// （看到 40 分钟的两小时电影点一下就没了）。「已看就从头播」由 resumable 保证：
+		// 断点早于这次的 watched_at，就不再算可续播。
 	} else {
 		updates["watched_at"] = nil
 	}
-	result := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Updates(updates)
+	result := database.DB.Model(&models.Video{}).Where("id = ? AND is_watched = ?", videoID, !watched).Updates(updates)
 	if result.Error != nil {
-		return nil, result.Error
+		return false, result.Error
+	}
+	if result.RowsAffected == 1 {
+		return true, nil
+	}
+	if !rewriteSame {
+		var count int64
+		if err := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Count(&count).Error; err != nil {
+			return false, err
+		}
+		if count != 1 {
+			return false, gorm.ErrRecordNotFound
+		}
+		return false, nil
+	}
+	result = database.DB.Model(&models.Video{}).Where("id = ?", videoID).Updates(updates)
+	if result.Error != nil {
+		return false, result.Error
 	}
 	if result.RowsAffected != 1 {
-		return nil, gorm.ErrRecordNotFound
+		return false, gorm.ErrRecordNotFound
+	}
+	return false, nil
+}
+
+// SetVideoWatched 更新主片库已看状态。已看状态实际翻转时，写入之后通知 WatchStateObserver。
+func (s *VideoService) SetVideoWatched(videoID uint, watched bool) (*models.Video, error) {
+	flipped, err := setVideoWatchedState(videoID, watched, true)
+	if err != nil {
+		return nil, err
+	}
+	if flipped {
+		s.NotifyWatchStateChanged(videoID, watched)
 	}
 	return s.getVideoWithTags(videoID)
 }
 
-// UpdateVideoWatchProgress 保存内嵌播放器观看位置。
-// watchedCompletionToleranceSeconds 是「算看完」的容差：位置离片尾不到这么多秒就
-// 视为播完。用户裁决要严格，所以只给 1 秒，而不是常见的百分比阈值。
-const watchedCompletionToleranceSeconds = 1.0
+// SetVideoWatchedFromLink 实现 LinkedVideoWatchSetter：榜单一侧改了已看之后回写关联视频。
+// 按合同**不**通知观察者，否则会回到榜单再写一遍；已处于目标状态时是幂等的空操作。
+func (s *VideoService) SetVideoWatchedFromLink(videoID uint, watched bool) error {
+	_, err := setVideoWatchedState(videoID, watched, false)
+	return err
+}
 
-// watchedCompletionShortClipRatio 是短片上的容差比例：时长 × 5% 小于 1 秒时用它。
-// 20 秒以下的片子按比例算，保证「严格」这条裁决在短内容上同样成立。
-const watchedCompletionShortClipRatio = 0.05
+// watchCompletionTail 是片尾区间（D-PC41）：时长的 5%，最多 180 秒。
+func watchCompletionTail(duration float64) float64 { return math.Min(duration*0.05, 180) }
 
-// isWatchedCompletionPosition 判断这个位置算不算把片子看完了。短片上容差按时长
-// 比例收紧：固定 1 秒用在 0.8 秒的片段上会让位置 0 也算看完，而取一半又等于
-// 「看过一半就算看完」——比用户明确否决掉的 95% 阈值还松。位置必须真的往前走过。
-func isWatchedCompletionPosition(duration, position float64) bool {
-	if duration <= 0 || position <= 0 {
+// isWatchCompleted 是「算看完」的唯一判定（D-PC41）：内嵌播放器、Jellyfin、IINA 三条上报路径
+// 都只调用它。位置必须真的往前走过，时长未知时一律不算看完。前端 utils/watchState.js 用同一组样例对齐。
+func isWatchCompleted(position, duration float64) bool {
+	return duration > 0 && position > 0 && position >= duration-watchCompletionTail(duration)
+}
+
+// resumable 是「断点有效、可以续播」的唯一判定（D-PC42）：有断点，且没看完，或者这次断点是
+// 在最近一次标已看之后写的（重看）。resumableSQL 是它的 SQL 版本，两者必须同步修改。
+func resumable(v *models.Video) bool {
+	if v == nil || v.WatchPositionSeconds <= 0 {
 		return false
 	}
-	tolerance := watchedCompletionToleranceSeconds
-	if scaled := duration * watchedCompletionShortClipRatio; scaled < tolerance {
-		tolerance = scaled
+	if !v.IsWatched || v.WatchedAt == nil {
+		return true
 	}
-	return position >= duration-tolerance
+	return v.WatchProgressUpdatedAt != nil && v.WatchProgressUpdatedAt.After(*v.WatchedAt)
 }
 
-// applyWatchedCompletionUpdates 把「判为看完」要写的那组字段填进 updates。
-// 内嵌播放器 / Jellyfin 走的 UpdateVideoWatchProgress 与 IINA 断点同步共用它，
-// 免得两处各自漂移。
-func applyWatchedCompletionUpdates(updates map[string]interface{}, video *models.Video, now time.Time) {
-	updates["is_watched"] = true
-	// 只记第一次看完的时间：把一部早就看完的片子再拖到片尾，不该改写它。
-	if !video.IsWatched || video.WatchedAt == nil {
-		updates["watched_at"] = &now
+// resumableSQL 是 resumable 的 SQL 版本，列名全部限定（PG 的 42702），可以嵌进任何以 videos
+// 为外层的查询。watch_progress_updated_at 为 NULL 时比较结果为 NULL，与 Go 版的 nil 同为 false。
+const resumableSQL = `(videos.watch_position_seconds > 0 AND (NOT videos.is_watched OR videos.watched_at IS NULL OR videos.watch_progress_updated_at > videos.watched_at))`
+
+// 内嵌播放器上报进度时的起播来源（D-PC42）。
+const (
+	// WatchProgressOriginResume：从库内断点起播。
+	WatchProgressOriginResume = "resume"
+	// WatchProgressOriginStart：从片头起播。
+	WatchProgressOriginStart = "start"
+	// WatchProgressOriginJump：从字幕命中或手动指定的时间起播，这类会话只允许把断点往前推。
+	WatchProgressOriginJump = "jump"
+)
+
+// markWatchedFromCompletion 把一次「判为看完」落库：标已看、断点清零（2026-09-13 语义）；
+// watched_at 只记第一次看完的时间。extra 里是调用方要一起写的列（进度更新时间）。
+// scopes 是附加条件（IINA 同步用它挡住比库里更旧的断点文件）。
+//
+// 返回 flipped（is_watched 由 false 变为 true，调用方据此通知观察者）与 applied（是否有行被写）。
+func markWatchedFromCompletion(db *gorm.DB, videoID uint, extra map[string]interface{}, now time.Time, scopes ...func(*gorm.DB) *gorm.DB) (flipped bool, applied bool, err error) {
+	build := func(watchedAt interface{}) map[string]interface{} {
+		updates := map[string]interface{}{
+			"is_watched":             true,
+			"watch_position_seconds": float64(0),
+			"watched_at":             watchedAt,
+		}
+		for key, value := range extra {
+			updates[key] = value
+		}
+		return updates
 	}
-	// 看完就把断点清掉：留着它下次播放会从片尾接着播，列表里也会一直挂着
-	// 「看到 X / Y」当成还在看。
-	updates["watch_position_seconds"] = float64(0)
+	result := db.Model(&models.Video{}).Scopes(scopes...).
+		Where("videos.id = ? AND videos.is_watched = ?", videoID, false).Updates(build(&now))
+	if result.Error != nil {
+		return false, false, result.Error
+	}
+	if result.RowsAffected == 1 {
+		return true, true, nil
+	}
+	// 已经是已看：重看又播到片尾，照样清断点，但不改写第一次看完的时间。
+	result = db.Model(&models.Video{}).Scopes(scopes...).
+		Where("videos.id = ?", videoID).Updates(build(gorm.Expr("COALESCE(watched_at, ?)", now)))
+	if result.Error != nil {
+		return false, false, result.Error
+	}
+	return false, result.RowsAffected == 1, nil
 }
 
-func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds float64, completed bool) (*models.Video, error) {
+// UpdateVideoWatchProgress 保存内嵌播放器 / Jellyfin 上报的观看位置（D-PC41、D-PC42）。
+//
+// durationSeconds 是播放器报的时长，只在库里的时长未知（≤0）时用于夹紧与看完判定；0 表示不知道。
+// origin 取 WatchProgressOrigin*：jump 会话只允许把断点往前推，位置小于库里的有效断点就不写；
+// 看完判定成立时照常写（看完与断点方向无关）。
+func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds float64, durationSeconds float64, completed bool, origin string) (*models.Video, error) {
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
 	}
 	if math.IsNaN(positionSeconds) || math.IsInf(positionSeconds, 0) || positionSeconds < 0 {
 		return nil, fmt.Errorf("观看位置无效")
 	}
+	if math.IsNaN(durationSeconds) || math.IsInf(durationSeconds, 0) || durationSeconds < 0 {
+		return nil, fmt.Errorf("播放时长无效")
+	}
+	origin = strings.TrimSpace(origin)
+	if origin != WatchProgressOriginResume && origin != WatchProgressOriginStart && origin != WatchProgressOriginJump {
+		return nil, fmt.Errorf("不支持的起播来源: %s", origin)
+	}
 	var video models.Video
 	if err := database.DB.First(&video, videoID).Error; err != nil {
 		return nil, err
 	}
-	if video.Duration > 0 && positionSeconds > video.Duration {
-		positionSeconds = video.Duration
+	duration := video.Duration
+	if duration <= 0 {
+		duration = durationSeconds
 	}
-	// 调用方给的 completed 只覆盖一部分情况（内嵌播放器的 ended、Jellyfin 的停止
-	// 上报），而暂停在片尾、拖到末尾、直接关掉抽屉同样是看完了。容差取得很紧，
-	// 避免把"还差一点"算成看完。
-	if !completed && isWatchedCompletionPosition(video.Duration, positionSeconds) {
+	if duration > 0 && positionSeconds > duration {
+		positionSeconds = duration
+	}
+	// 调用方给的 completed 只覆盖一部分情况（内嵌播放器的 ended），而暂停在片尾、
+	// 跳过片尾字幕后关掉抽屉、Jellyfin 的停止上报同样是看完了。
+	if !completed && isWatchCompleted(positionSeconds, duration) {
 		completed = true
 	}
 	now := time.Now()
-	updates := map[string]interface{}{
+	if completed {
+		flipped, applied, err := markWatchedFromCompletion(database.DB, videoID, map[string]interface{}{"watch_progress_updated_at": &now}, now)
+		if err != nil {
+			return nil, err
+		}
+		if !applied {
+			return nil, gorm.ErrRecordNotFound
+		}
+		if flipped {
+			s.NotifyWatchStateChanged(videoID, true)
+		}
+		return s.getVideoWithTags(videoID)
+	}
+	query := database.DB.Model(&models.Video{}).Where("videos.id = ?", videoID)
+	if origin == WatchProgressOriginJump {
+		// 只和有效断点比：已看之前留下的旧断点（resumable 为 false）不算「已存位置」，
+		// 否则重看时从字幕命中起播的进度永远写不进去。条件更新而不是先读后写，
+		// 并发的两次上报里更靠后的位置不会被更早的覆盖。
+		query = query.Where("(NOT "+resumableSQL+" OR videos.watch_position_seconds <= ?)", positionSeconds)
+	}
+	result := query.Updates(map[string]interface{}{
 		"watch_position_seconds":    positionSeconds,
 		"watch_progress_updated_at": &now,
+	})
+	if result.Error != nil {
+		return nil, result.Error
 	}
-	if completed {
-		applyWatchedCompletionUpdates(updates, &video, now)
-	}
-	if err := database.DB.Model(&video).Updates(updates).Error; err != nil {
-		return nil, err
+	if result.RowsAffected != 1 && origin != WatchProgressOriginJump {
+		return nil, gorm.ErrRecordNotFound
 	}
 	return s.getVideoWithTags(videoID)
 }
@@ -787,22 +972,22 @@ func (s *VideoService) SearchLibraryVideoPage(filter LibraryFilter, cursor *Libr
 		if err != nil {
 			return nil, err
 		}
-		page := &LibraryVideoPage{Videos: videos}
+		var next *LibraryVideoCursor
 		if len(videos) > limit {
-			page.Videos = videos[:limit]
-			last := page.Videos[len(page.Videos)-1]
+			videos = videos[:limit]
+			last := videos[len(videos)-1]
 			playWeight, err := s.getPlayWeight()
 			if err != nil {
 				return nil, err
 			}
-			page.NextCursor = &LibraryVideoCursor{
+			next = &LibraryVideoCursor{
 				SortMode: LibrarySortBalanced,
 				Score:    float64(last.PlayCount)*playWeight + float64(last.RandomPlayCount),
 				Size:     last.Size,
 				ID:       last.ID,
 			}
 		}
-		return page, nil
+		return newLibraryVideoPage(videos, next)
 	}
 
 	query := database.DB.Model(&models.Video{}).Preload("Tags")
@@ -829,17 +1014,17 @@ func (s *VideoService) SearchLibraryVideoPage(filter LibraryFilter, cursor *Libr
 	if err := query.Limit(limit + 1).Find(&videos).Error; err != nil {
 		return nil, err
 	}
-	page := &LibraryVideoPage{Videos: videos}
+	var next *LibraryVideoCursor
 	if len(videos) > limit {
-		page.Videos = videos[:limit]
-		last := page.Videos[len(page.Videos)-1]
-		page.NextCursor = &LibraryVideoCursor{SortMode: normalized.SortMode, RatingIsNull: last.PersonalRating == nil, ID: last.ID}
+		videos = videos[:limit]
+		last := videos[len(videos)-1]
+		next = &LibraryVideoCursor{SortMode: normalized.SortMode, RatingIsNull: last.PersonalRating == nil, ID: last.ID}
 		if last.PersonalRating != nil {
 			rating := *last.PersonalRating
-			page.NextCursor.Rating = &rating
+			next.Rating = &rating
 		}
 	}
-	return page, nil
+	return newLibraryVideoPage(videos, next)
 }
 
 func validateLibraryVideoCursor(sortMode string, cursor *LibraryVideoCursor) error {
@@ -943,6 +1128,55 @@ func (s *VideoService) ListRecentlyPlayedWithFilter(filter LibraryFilter, cursor
 	var videos []models.Video
 	err = query.Order("videos.last_played_at DESC, videos.id DESC").Limit(limit).Find(&videos).Error
 	return videos, err
+}
+
+// ListContinueWatchingWithFilter 是「继续观看」视图的默认排序（D-PC42、PLAY-09）：条件为
+// resumableSQL，按 (watch_progress_updated_at DESC, id DESC) 键集分页，沿用最近播放的游标模式——
+// 调用方把上一页最后一行的 watch_progress_updated_at（RFC3339Nano）与 id 传回来。
+//
+// 老数据里有断点却没有进度更新时间的行（旧版 IINA 同步只写位置），排在所有有时间的行之后、
+// 按 id 倒序；游标落在这一段时 cursorProgressUpdatedAt 传空串、cursorID 非零。
+// 两个后端对 NULL 的默认排序相反，这里用 CASE 显式统一。
+func (s *VideoService) ListContinueWatchingWithFilter(filter LibraryFilter, cursorProgressUpdatedAt string, cursorID uint, limit int) (*LibraryVideoPage, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 20
+	}
+	cursorProgressUpdatedAt = strings.TrimSpace(cursorProgressUpdatedAt)
+	if cursorProgressUpdatedAt != "" && cursorID == 0 {
+		return nil, fmt.Errorf("继续观看游标不完整")
+	}
+	var cursorTime time.Time
+	if cursorProgressUpdatedAt != "" {
+		var err error
+		cursorTime, err = time.Parse(time.RFC3339Nano, cursorProgressUpdatedAt)
+		if err != nil {
+			return nil, fmt.Errorf("继续观看时间游标无效: %w", err)
+		}
+	}
+	filter.SmartView = LibraryViewContinueWatching
+	if cursorID == 0 && libraryFilterNeedsSubtitleSync(filter) {
+		if err := syncSubtitleIndexesFromFilesystem(); err != nil {
+			return nil, err
+		}
+	}
+	query, err := applyLibraryFilter(database.DB.Model(&models.Video{}).Preload("Tags"), filter, time.Now())
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case cursorProgressUpdatedAt != "":
+		query = query.Where("(videos.watch_progress_updated_at < ? OR (videos.watch_progress_updated_at = ? AND videos.id < ?) OR videos.watch_progress_updated_at IS NULL)", cursorTime, cursorTime, cursorID)
+	case cursorID != 0:
+		query = query.Where("videos.watch_progress_updated_at IS NULL AND videos.id < ?", cursorID)
+	}
+	var videos []models.Video
+	err = query.Order("CASE WHEN videos.watch_progress_updated_at IS NULL THEN 1 ELSE 0 END ASC").
+		Order("videos.watch_progress_updated_at DESC").Order("videos.id DESC").
+		Limit(limit).Find(&videos).Error
+	if err != nil {
+		return nil, err
+	}
+	return newLibraryVideoPage(videos, nil)
 }
 
 // GetLibrarySubtitleHits 返回指定当前页视频的首个字幕命中，不改变页面排序。

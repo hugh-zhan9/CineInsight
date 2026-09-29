@@ -984,3 +984,50 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - M9 只做了列表这一侧。扫描遇到放回原处的 legacy 文件时，可能新建一条记录；之后在回收站点恢复会得到 `path_occupied`。这种情况只在手工把旧版 `trash/` 里的文件挪回原处时出现。
   - 重映射确认框里的「图片路径同样改写」只能在执行后报数，要事先报需要另加预览接口，本批不做。
 - P-029 接线：重新生成绑定时加入 `UnlockShortFeedLogin`。
+
+**P-020 交付**（2026-09-29）：基于 `422d077` 完成，SQLite 全量通过，六项变异检查都会让对应测试变红。自行决定的几处已由主代理接受，记入详细设计 §1.2b 的 §8.2 / §8.3 行。
+- **P-029** 接线：
+  - `services.SetPlaybackLaunchedHook(iinaProgress.OnPlaybackLaunched)`；
+  - `iinaProgress.SetWatchedNotifier(videoService.NotifyWatchStateChanged)`；
+  - `videoService.SetWatchStateObserver(movieChartService)`，`resetMovieChartService` 重建服务后重新注入；
+  - `movieChartService.SetLinkedVideoWatchSetter(videoService)`；
+  - 重新生成绑定：`UpdateVideoWatchProgress` 改为 5 个参数，新增 `SetVideoLiked`、`GetIINASyncStatus`、`ListContinueWatchingWithFilter`；
+  - 补一个批量查询 `GetAutomaticOverrideKinds(videoIDs)` 的 App 方法，复用 `loadAutomaticOverrideKinds`，供最近播放、语义搜索、`GetVideosByIDs` 这几处返回 `[]models.Video` 的页面补「手动」角标。
+- **前端（P-034）**：
+  - `VideoListPage.vue`、`EntityLibraryPage.vue` 改为 5 参调用：`origin` 取 `resume` / `start` / `jump`，时长未知传 0；
+  - `utils/watchState.js` 与 Go 测试使用同一组样例；
+  - 「继续观看」在均衡排序下改用新方法；`matchesSmartView` 改为按 `resumable` 判断；
+  - 手动加标签后，按 `(video_id, tag_id)` 在本地移除对应候选。
+- **残留风险（真机）**：
+  - 应用发起播放后 12 小时内，用户若自己清空 IINA 播放记录，按墙钟推算可能误判为已看；
+  - `--mpv-start` 与 IINA 自带的 watch_later 哪个优先还不确定，不生效时考虑加 `--mpv-resume-playback=no`；
+  - 升级后第一次 IINA 同步，会给有断点文件、但进度时间为空的行补写一次进度时间。
+
+**修复 E 交付**（2026-09-29）：P-018、P-025、复审 B 的评审发现全部实现，SQLite 全量通过，契约变更记入详细设计 §1.2b。
+- 主代理整合时补了三处（修复 E 的写入范围够不到）：删除人物、清除人脸数据、删除空簇时，在同一事务里删掉 `face_relation_writes` 的记录；补了 `models/movie_chart.go` 中 origin 取值的注释。对应测试 `TestMETA04PersonDeleteAndClearFaceDataDropFaceRelationWrites`，已做变异验证。
+- `MergePeople` 不迁移写入记录：合并后，来源人物由人脸链路写入的关系按「来源不明」处理并保留（偏保守，主代理接受）。
+- **P-029** 接线：
+  - 在 `RecoverOnStartup` 之后，于同一个后台 goroutine 中调用 `enhancement.SweepOrphanWorkdirs(ctx)`；
+  - 重新生成绑定：新增 `DiscardEnhancementProgress`，`FaceUnlinkMediaView` 新增 `has_relation` 与 `source` 两个字段。
+- **前端**：
+  - `FaceClusterReviewPanel` 补上 `cluster_ignored` 与 `cluster_conflict` 的文案；解除关联与改派的预览要显示来源（来源不明的关系会保留）；
+  - `DownloadRow` 处理三个新结果码；
+  - 超分面板给 cancelled 与 disk_insufficient 的任务加「放弃保留的进度」。
+- **P-039**：更新 AI-CONTEXT §2.26、§2.29。
+- 独立评审：修复 E 涉及安全清洗与破坏性删除，需要复审，与 P-020 的评审一起安排。
+
+**修复 D 复审**（2026-09-29，独立只读）：0 个 Critical，1 个 Important，8 个 Minor。上一轮的发现中，M9 部分修复，其余全部已修。以下由修复 G 处理，主代理已裁决：
+- I-1：放回原处的 legacy 条目，如果原路径上已有活跃记录，会卡在回收站里无法处理。修法分两头：
+  - 源头：扫描时 legacy 行也按「大小 + inode」判定放回，并恢复原记录；
+  - 兜底：原路径上已有活跃记录时，不再报 `put_back`，改为提供「移除记录」，只删除这一行和它的条目，不动文件。
+- m1：原路径如果是软链接，不算放回；删除旧版 `trash/` 里的名字之前，要求原路径是普通文件，并且硬链接数 ≥ 2。
+- m2：旧版启发式要排除扫描器造成的软删。
+- m3：离线条目新增「仍然移除记录（不动文件）」，需要显式确认。这是闭环补充，主代理裁决，记入设计。另外，EPERM 不再报成 `volume_offline`，改报 `permission_denied`。
+- m4：用真实的 `chmod 000` 测 EPERM。
+- m5：统计用量时，每个卷只检查一次；离线卷上的行不 stat。
+- m6：判定其他根是否在线的检查，移到拿读锁之前。
+- m7：旧版回收站目录集合每轮扫描只刷新一次。
+- m8：更正注释。
+
+**PG 全量 `d4344ae`**：7 个包通过。services 包只有 `TestMEDIA14NoSubtitleViewReturnsCacheAndSyncsInBackground` 失败，原因是后台同步在首屏查询之前就跑完了，属于测试本身的时序竞态。在 PG 上单独重跑 8 次都通过，不是回归。已交给修复 F 改成确定性的测试。
+**P-020 + 修复 E 整合**：SQLite 全量通过，8 个包全部 ok。

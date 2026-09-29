@@ -30,6 +30,12 @@ func (a *App) GetIINAProgressAvailable() bool {
 	return a.iinaProgress.Available()
 }
 
+// GetIINASyncStatus 返回设置页展示的 IINA 同步状态：是否在监听、监听的目录、
+// 最近一次成功同步的时间与最近的失败原因（D-PC47）。
+func (a *App) GetIINASyncStatus() services.IINASyncStatus {
+	return a.iinaProgress.Status()
+}
+
 func (a *App) SelectMigrationSourceDirectory() (string, error) {
 	return runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
 		Title: "选择要迁移的文件夹",
@@ -326,6 +332,13 @@ func (a *App) SetVideoFavorite(videoID uint, favorite bool) (*models.Video, erro
 	return video, err
 }
 
+// SetVideoLiked 更新点赞状态（D-PC40），返回带标签的完整行，与 SetVideoFavorite 同构。
+func (a *App) SetVideoLiked(videoID uint, liked bool) (*models.Video, error) {
+	video, err := a.videoService.SetVideoLiked(videoID, liked)
+	log.Printf("API SetVideoLiked video_id=%d liked=%v err=%v", videoID, liked, err)
+	return video, err
+}
+
 // SetVideoWatched 更新主片库已看状态。
 func (a *App) SetVideoWatched(videoID uint, watched bool) (*models.Video, error) {
 	video, err := a.videoService.SetVideoWatched(videoID, watched)
@@ -333,11 +346,24 @@ func (a *App) SetVideoWatched(videoID uint, watched bool) (*models.Video, error)
 	return video, err
 }
 
-// UpdateVideoWatchProgress 保存内嵌播放器观看位置。
-func (a *App) UpdateVideoWatchProgress(videoID uint, positionSeconds float64, completed bool) (*models.Video, error) {
-	video, err := a.videoService.UpdateVideoWatchProgress(videoID, positionSeconds, completed)
-	log.Printf("API UpdateVideoWatchProgress video_id=%d completed=%v err=%v", videoID, completed, err)
+// UpdateVideoWatchProgress 保存内嵌播放器观看位置。durationSeconds 是播放器报的时长（未知传 0），
+// origin 是起播来源：resume（从断点）/ start（从片头）/ jump（字幕命中或手动指定时间，只允许前进）。
+func (a *App) UpdateVideoWatchProgress(videoID uint, positionSeconds float64, durationSeconds float64, completed bool, origin string) (*models.Video, error) {
+	video, err := a.videoService.UpdateVideoWatchProgress(videoID, positionSeconds, durationSeconds, completed, origin)
+	log.Printf("API UpdateVideoWatchProgress video_id=%d completed=%v origin=%s err=%v", videoID, completed, origin, err)
 	return video, err
+}
+
+// ListContinueWatchingWithFilter 是「继续观看」视图的默认排序：按进度更新时间倒序的键集分页。
+// 游标取上一页最后一行的 watch_progress_updated_at（为空时传空串）与 id，首页都传零值。
+func (a *App) ListContinueWatchingWithFilter(filter services.LibraryFilter, cursorProgressUpdatedAt string, cursorID uint, limit int) (*services.LibraryVideoPage, error) {
+	page, err := a.videoService.ListContinueWatchingWithFilter(filter, cursorProgressUpdatedAt, cursorID, limit)
+	count := 0
+	if page != nil {
+		count = len(page.Videos)
+	}
+	log.Printf("API ListContinueWatchingWithFilter cursorProgressUpdatedAt=%q cursorID=%d count=%d err=%v", cursorProgressUpdatedAt, cursorID, count, err)
+	return page, err
 }
 
 func (a *App) BatchRemoveTagFromVideos(videoIDs []uint, tagID uint) *services.BatchVideoOperationResult {

@@ -31,6 +31,8 @@ type VideoService struct {
 	// 可为 nil：没接代理服务时一切退回本批之前的行为。
 	playbackProxyMu sync.RWMutex
 	playbackProxy   *PlaybackProxyService
+	// watchState 保存已看状态观察者（D-PC52），见 library_service.go 的 SetWatchStateObserver。
+	watchState watchStateNotifier
 }
 
 func NewVideoService(mediaProbe *MediaProbeService) *VideoService {
@@ -1396,7 +1398,21 @@ func (s *VideoService) AddTagToVideo(videoID uint, tagID uint) error {
 		return setManualAutomaticVideoTag(videoID, tag, true)
 	}
 
-	return database.DB.Model(&video).Association("Tags").Append(&tag)
+	// 手动加上的标签若正是某条待审 AI 候选匹配的标签，候选在同一事务里作废为 superseded
+	// （D-PC28 规则 2，META-06）；其他候选不受影响。前端按 (video_id, tag_id) 局部移除。
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&video).Association("Tags").Append(&tag); err != nil {
+			return err
+		}
+		superseded, err := SupersedeCandidatesForManualTag(tx, videoID, tagID)
+		if err != nil {
+			return fmt.Errorf("作废对应的 AI 候选失败: %w", err)
+		}
+		if len(superseded) > 0 {
+			log.Printf("手动加标签作废 AI 候选 video_id=%d tag_id=%d candidates=%d", videoID, tagID, len(superseded))
+		}
+		return nil
+	})
 }
 
 // RemoveTagFromVideo 移除视频的标签

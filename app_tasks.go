@@ -193,3 +193,11 @@ func (a *App) RetryEnhancementTask(taskID uint) (*services.EnhancementTaskView, 
 	log.Printf("API RetryEnhancementTask task=%d err=%v", taskID, err)
 	return view, err
 }
+
+// DiscardEnhancementProgress 放弃一个超分任务保留的进度（空间不足 / 取消时留下的检查点，I-3）：
+// 删掉工作目录，结束码改为 checkpoint_discarded，之后重试从头开始。
+func (a *App) DiscardEnhancementProgress(taskID uint) (*services.EnhancementTaskView, error) {
+	view, err := a.enhancement.DiscardTaskProgress(taskID)
+	log.Printf("API DiscardEnhancementProgress task=%d err=%v", taskID, err)
+	return view, err
+}

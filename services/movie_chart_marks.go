@@ -257,6 +257,12 @@ func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
 // 只清认领（TC-10、D-MC13）。
 const movieChartOriginReuse = "reuse"
 
+// movieChartOriginUnclaimed 是第四个取值（APP-07 M-3）：want 标记**没有**认领任何片单条目
+// （watchlist_entry_id = 0），而且这是本批次之后新产生的——撞唯一键没拿到条目 ID，或 reuse 认领
+// 因条目改名、改选来源被释放。与空串（本批次之前的历史行）分开：删除片单条目时，只有历史行才退回
+// 按片名 / 豆瓣 ID 兜底撤销（revokeChartWantForEntry），新的未认领标记不会被一条同名条目误撤。
+const movieChartOriginUnclaimed = "unclaimed"
+
 // markEntryWatchlistLink 建「想看」对应的片单条目，返回 (片单条目 ID, 认领来源, 是否撞名)。
 //
 // **顺序是承重的：先建片单条目，再写标记行**（需求设计文档 §5）。这两次写入不是
@@ -269,14 +275,14 @@ const movieChartOriginReuse = "reuse"
 //   - 新建：来源 chart，撤销标记时一并删掉这条条目；
 //   - 复用（片单里已有这部片，见 WatchlistService.EnsureChartEntry）：来源 reuse，记下被复用
 //     条目的 ID 但撤销时**不删**它——榜单没有权限删除用户手工维护的数据（D-MC13）；
-//   - 撞唯一键（ErrWatchlistTitleExists，拿不到条目 ID）：标记照记、不认领（ID 0、来源空）。
+//   - 撞唯一键（ErrWatchlistTitleExists，拿不到条目 ID）：标记照记、不认领（ID 0、来源 unclaimed，M-3）。
 //
 // 同名但豆瓣 ID 不同的两部电影不算复用，各建各的（D-PC52）。
 func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint, string, bool, error) {
 	entryID, created, err := s.watchlist.EnsureChartEntry(title, doubanID)
 	if err != nil {
 		if errors.Is(err, ErrWatchlistTitleExists) {
-			return 0, "", true, nil
+			return 0, movieChartOriginUnclaimed, true, nil
 		}
 		return 0, "", false, fmt.Errorf("添加想看片单条目失败: %w", err)
 	}

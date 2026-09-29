@@ -111,7 +111,8 @@ func TestRemoveFaceSourceRejectsWrongClusterAndIgnoredCluster(t *testing.T) {
 	if err := database.DB.Model(&other).Update("status", models.FaceClusterStatusIgnored).Error; err != nil {
 		t.Fatal(err)
 	}
-	if _, err := svc.RemoveFaceClusterObservation(ctx, other.ID, observation.ID); !errors.Is(err, ErrFaceClusterNotUnnamed) {
+	// META-04 M-8：已忽略簇报 cluster_ignored，不再借用 cluster_not_unnamed。
+	if _, err := svc.RemoveFaceClusterObservation(ctx, other.ID, observation.ID); !errors.Is(err, ErrFaceClusterIgnored) {
 		t.Fatalf("ignored cluster: %v", err)
 	}
 	if got := faceObservationByID(t, observation.ID); got.ClusterID == nil || *got.ClusterID != other.ID {

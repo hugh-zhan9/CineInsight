@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -387,5 +388,278 @@ func TestEnhancementCopiesSidecarSubtitleToOutputMEDIA11(t *testing.T) {
 	warning := copyEnhancementSidecarSubtitle(context.Background(), writer, blockedSource, blockedOutput)
 	if warning == "" || strings.Contains(warning, root) {
 		t.Fatalf("写入失败应只给一句不含路径的警告: %q", warning)
+	}
+}
+
+// ===== P-025 复审：合并前复检、ENOSPC、续跑源变化、放弃进度、孤儿工作目录 =====
+
+func enhancementSegmentCountUnder(dir string) int {
+	matches, _ := filepath.Glob(filepath.Join(dir, ".cineinsight-enhance-*", "seg-*.cispart"))
+	return len(matches)
+}
+
+// M-6：分段全部写完、合并前按产物预计体积（已写分段 + 源文件）复检；不够报 disk_insufficient 并
+// 保留检查点，腾出空间后重试直接从合并继续、不重跑任何一批。
+func TestEnhancementMergeChecksDiskAndKeepsCheckpointMEDIA03(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := createEnhancementSourceVideo(t, "movie.mp4")
+	var sidecarCalls atomic.Int32
+	service := newEnhancementTestService(t, countingSidecar(fakeEnhancementCommands(t, video.Path, 250, 24), &sidecarCalls))
+	var starveMerge atomic.Bool
+	starveMerge.Store(true)
+	service.diskFree = func(path string) (uint64, error) {
+		if starveMerge.Load() && enhancementSegmentCountUnder(path) >= 3 {
+			return 1, nil
+		}
+		return 1 << 62, nil
+	}
+	view, err := service.CreateTask(context.Background(), EnhancementCreateRequest{VideoID: video.ID, Profile: "general"})
+	if err != nil {
+		t.Fatalf("创建任务失败: %v", err)
+	}
+	failed := waitEnhancementTask(t, view.ID, models.EnhancementStatusFailed)
+	service.StopAndWait()
+	if failed.ErrorCode != enhancementCodeDiskInsufficient || failed.CommittedFrames != 250 {
+		t.Fatalf("合并前空间不足应报 disk_insufficient 且三批都已提交: %+v", failed)
+	}
+	workdir := enhancementWorkdir(models.VideoEnhancementTask{ID: failed.ID, Video: video})
+	for _, name := range []string{"segments.json", "seg-00000.cispart", "seg-00001.cispart", "seg-00002.cispart"} {
+		if _, err := os.Stat(filepath.Join(workdir, name)); err != nil {
+			t.Fatalf("合并前空间不足应保留检查点 %s: %v", name, err)
+		}
+	}
+
+	starveMerge.Store(false)
+	if _, err := service.RetryTask(failed.ID); err != nil {
+		t.Fatalf("重试失败: %v", err)
+	}
+	done := waitEnhancementTask(t, failed.ID, models.EnhancementStatusCompleted)
+	service.StopAndWait()
+	if done.OutputVideoID == nil {
+		t.Fatalf("续跑应完成发布: %+v", done)
+	}
+	if got := sidecarCalls.Load(); got != 3 {
+		t.Fatalf("从合并续跑不该重跑任何一批: sidecar 调用 %d 次", got)
+	}
+}
+
+// M-6：合并途中写满卷（ENOSPC）映射为 disk_insufficient：删掉半截合并产物，保留分段与清单。
+func TestEnhancementMergeNoSpaceMapsToDiskInsufficientMEDIA03(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := createEnhancementSourceVideo(t, "movie.mp4")
+	base := fakeEnhancementCommands(t, video.Path, 250, 24)
+	var failConcat atomic.Bool
+	failConcat.Store(true)
+	runner := func(ctx context.Context, name string, args []string) (string, error) {
+		if failConcat.Load() && strings.Contains(strings.Join(args, " "), "-f concat") {
+			_ = os.WriteFile(args[len(args)-1], []byte("half-written"), 0o644)
+			return "av_interleaved_write_frame(): No space left on device", errors.New("exit status 1")
+		}
+		return base(ctx, name, args)
+	}
+	service := newEnhancementTestService(t, runner)
+	view, err := service.CreateTask(context.Background(), EnhancementCreateRequest{VideoID: video.ID, Profile: "general"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitEnhancementTask(t, view.ID, models.EnhancementStatusFailed)
+	service.StopAndWait()
+	if failed.ErrorCode != enhancementCodeDiskInsufficient {
+		t.Fatalf("ENOSPC 应映射为 disk_insufficient: %+v", failed)
+	}
+	workdir := enhancementWorkdir(models.VideoEnhancementTask{ID: failed.ID, Video: video})
+	if _, err := os.Stat(filepath.Join(workdir, "final.cispart")); !os.IsNotExist(err) {
+		t.Fatalf("半截合并产物应删掉以腾出空间: %v", err)
+	}
+	if enhancementSegmentCountUnder(filepath.Dir(video.Path)) != 3 {
+		t.Fatal("分段应保留")
+	}
+	failConcat.Store(false)
+	if _, err := service.RetryTask(failed.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitEnhancementTask(t, failed.ID, models.EnhancementStatusCompleted)
+	service.StopAndWait()
+}
+
+// M-7：保留检查点后源文件内容被改了（大小不变）：续跑在 preflight 比对固化的 SHA-256，报 source_changed
+// 并丢弃检查点，不拿旧分段去拼新内容。
+func TestEnhancementResumeWithChangedSourceDiscardsCheckpointMEDIA03(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := createEnhancementSourceVideo(t, "movie.mp4")
+	var sidecarCalls atomic.Int32
+	service := newEnhancementTestService(t, countingSidecar(fakeEnhancementCommands(t, video.Path, 250, 24), &sidecarCalls))
+	var starve atomic.Bool
+	starve.Store(true)
+	service.diskFree = func(path string) (uint64, error) {
+		if starve.Load() && enhancementSegmentsExist(path) {
+			return 0, nil
+		}
+		return 1 << 62, nil
+	}
+	view, err := service.CreateTask(context.Background(), EnhancementCreateRequest{VideoID: video.ID, Profile: "general"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitEnhancementTask(t, view.ID, models.EnhancementStatusFailed)
+	service.StopAndWait()
+	if failed.ErrorCode != enhancementCodeDiskInsufficient || failed.SourceSHA256 == "" {
+		t.Fatalf("应先留下检查点并固化源哈希: %+v", failed)
+	}
+	workdir := enhancementWorkdir(models.VideoEnhancementTask{ID: failed.ID, Video: video})
+
+	// 同样长度、不同内容：大小不变，只有哈希能发现。
+	if err := os.WriteFile(video.Path, []byte("SOURCE-VIDEO-CONTENT"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	starve.Store(false)
+	if _, err := service.RetryTask(failed.ID); err != nil {
+		t.Fatalf("重试失败: %v", err)
+	}
+	changed := waitEnhancementTask(t, failed.ID, models.EnhancementStatusFailed)
+	service.StopAndWait()
+	if changed.ErrorCode != "source_changed" {
+		t.Fatalf("源内容变了应报 source_changed: %+v", changed)
+	}
+	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
+		t.Fatalf("源变了应丢弃检查点: %v", err)
+	}
+	if got := sidecarCalls.Load(); got != 1 {
+		t.Fatalf("源变了不该再跑任何一批: sidecar 调用 %d 次", got)
+	}
+}
+
+// I-3：放弃保留的进度——删工作目录、结束码改为 checkpoint_discarded，重复放弃幂等；
+// 之后重试从头开始。没有保留进度的任务报 ErrEnhancementNoRetainedProgress。
+func TestEnhancementDiscardTaskProgressMEDIA03(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	video := createEnhancementSourceVideo(t, "movie.mp4")
+	service := newEnhancementTestService(t, fakeEnhancementCommands(t, video.Path, 250, 24))
+	service.stopping = true // 不起 worker：只看状态与目录
+	task := seedRetainedEnhancementTask(t, video, models.EnhancementStatusCancelled, enhancementCodeCancelled)
+	workdir := enhancementWorkdir(models.VideoEnhancementTask{ID: task.ID, Video: video})
+
+	view, err := service.DiscardTaskProgress(task.ID)
+	if err != nil || view == nil || view.ErrorCode != enhancementCodeCheckpointDiscarded {
+		t.Fatalf("放弃进度应成功: %+v err=%v", view, err)
+	}
+	if _, err := os.Stat(workdir); !os.IsNotExist(err) {
+		t.Fatalf("放弃进度应删掉工作目录: %v", err)
+	}
+	reloaded := reloadEnhancementTask(t, task.ID)
+	if reloaded.Status != models.EnhancementStatusCancelled || reloaded.ErrorCode != enhancementCodeCheckpointDiscarded || reloaded.ErrorSummary == "" {
+		t.Fatalf("状态不变、结束码改为 checkpoint_discarded: %+v", reloaded)
+	}
+	if again, err := service.DiscardTaskProgress(task.ID); err != nil || again.ErrorCode != enhancementCodeCheckpointDiscarded {
+		t.Fatalf("重复放弃应幂等: %+v err=%v", again, err)
+	}
+	if _, err := service.RetryTask(task.ID); err != nil {
+		t.Fatal(err)
+	}
+	if retried := reloadEnhancementTask(t, task.ID); retried.CommittedFrames != 0 || retried.SourceSHA256 != "" {
+		t.Fatalf("放弃进度后重试应从头开始: %+v", retried)
+	}
+
+	other := createEnhancementSourceVideo(t, "other.mp4")
+	notRetained := seedRetainedEnhancementTask(t, other, models.EnhancementStatusFailed, "verify_failed")
+	if _, err := service.DiscardTaskProgress(notRetained.ID); !errors.Is(err, ErrEnhancementNoRetainedProgress) {
+		t.Fatalf("没有保留进度的任务应报 ErrEnhancementNoRetainedProgress: %v", err)
+	}
+}
+
+// I-3：启动清扫走遍扫描根，只留下「仍在排队 / 运行」与「保留检查点且在任务当前位置」的工作目录；
+// 任务行不存在、已完成、其他结束码、已放弃、视频换了目录的一律删除。不是本应用命名的同前缀目录
+// 与扫描根之外的目录不碰。
+func TestEnhancementSweepOrphanWorkdirsMEDIA03(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := newEnhancementTestService(t, fakeEnhancementCommands(t, "", 250, 24))
+	newVideo := func(rel string) models.Video {
+		t.Helper()
+		path := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("source-video-content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		video := models.Video{Name: filepath.Base(path), Path: path, Directory: filepath.Dir(path), Size: 20}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatal(err)
+		}
+		return video
+	}
+	workdirOf := func(task models.VideoEnhancementTask, video models.Video) string {
+		return enhancementWorkdir(models.VideoEnhancementTask{ID: task.ID, Video: video})
+	}
+	kept := map[string]string{}
+	removed := map[string]string{}
+
+	diskFull := newVideo("a/disk.mp4")
+	kept["disk_insufficient"] = workdirOf(seedRetainedEnhancementTask(t, diskFull, models.EnhancementStatusFailed, enhancementCodeDiskInsufficient), diskFull)
+	cancelled := newVideo("a/deep/er/cancel.mp4")
+	kept["cancelled"] = workdirOf(seedRetainedEnhancementTask(t, cancelled, models.EnhancementStatusCancelled, enhancementCodeCancelled), cancelled)
+	running := newVideo("b/running.mp4")
+	kept["running"] = workdirOf(seedRetainedEnhancementTask(t, running, models.EnhancementStatusRunning, ""), running)
+	verify := newVideo("b/verify.mp4")
+	removed["verify_failed"] = workdirOf(seedRetainedEnhancementTask(t, verify, models.EnhancementStatusFailed, "verify_failed"), verify)
+	completed := newVideo("c/done.mp4")
+	removed["completed"] = workdirOf(seedRetainedEnhancementTask(t, completed, models.EnhancementStatusCompleted, ""), completed)
+	discarded := newVideo("c/discarded.mp4")
+	removed["checkpoint_discarded"] = workdirOf(seedRetainedEnhancementTask(t, discarded, models.EnhancementStatusCancelled, enhancementCodeCheckpointDiscarded), discarded)
+
+	// 视频换了目录：检查点留在旧位置，续跑只会去新位置找，旧目录是孤儿。
+	moved := newVideo("new/moved.mp4")
+	movedTask := seedRetainedEnhancementTask(t, moved, models.EnhancementStatusFailed, enhancementCodeDiskInsufficient)
+	stale := filepath.Join(root, "old", filepath.Base(workdirOf(movedTask, moved)))
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(workdirOf(movedTask, moved), stale); err != nil {
+		t.Fatal(err)
+	}
+	removed["moved"] = stale
+
+	// 任务行已不存在。
+	orphan := filepath.Join(root, "d", enhancementWorkdirPrefix+"999999")
+	if err := os.MkdirAll(orphan, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removed["no_task"] = orphan
+
+	// 不是本应用命名的同前缀目录、扫描根之外的孤儿：都不碰。
+	foreign := filepath.Join(root, "d", enhancementWorkdirPrefix+"notanid")
+	outside := filepath.Join(t.TempDir(), enhancementWorkdirPrefix+"888888")
+	for _, dir := range []string{foreign, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	kept["foreign"] = foreign
+	kept["outside"] = outside
+
+	result, err := service.SweepOrphanWorkdirs(context.Background())
+	if err != nil {
+		t.Fatalf("清扫失败: %v", err)
+	}
+	for name, dir := range kept {
+		if _, err := os.Stat(dir); err != nil {
+			t.Fatalf("%s 的工作目录应保留: %v", name, err)
+		}
+	}
+	for name, dir := range removed {
+		if _, err := os.Stat(dir); !os.IsNotExist(err) {
+			t.Fatalf("%s 的工作目录应删除: %v", name, err)
+		}
+	}
+	if result.Found != 8 || result.Removed != 5 || result.Kept != 3 || result.Errors != 0 {
+		t.Fatalf("计数不对: %+v", result)
+	}
+	// 重复清扫无事可做。
+	if again, err := service.SweepOrphanWorkdirs(context.Background()); err != nil || again.Removed != 0 || again.Kept != 3 {
+		t.Fatalf("重复清扫: %+v err=%v", again, err)
 	}
 }

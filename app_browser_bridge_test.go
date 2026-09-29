@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,7 +43,8 @@ func TestAddDownloadDirectoryToScanImportsDownloadMEDIA09(t *testing.T) {
 		ImportDirectory: services.BrowserDownloadImporterFromScan(&services.VideoService{}, directories.GetAllDirectories),
 	})
 	downloads.SetStore(func() *gorm.DB { return database.DB })
-	app := &App{directoryService: directories, settingsService: &services.SettingsService{}, browserDownloads: downloads}
+	// videoService：真正加了目录时会像 App.AddDirectory 一样跑 rescanAddedDirectory（M-5）。
+	app := &App{directoryService: directories, settingsService: &services.SettingsService{}, browserDownloads: downloads, videoService: &services.VideoService{}}
 
 	if listed := app.ListDownloadTasks(); len(listed) != 1 || listed[0].ImportStatus != services.BrowserDownloadImportNotInScanRoots {
 		t.Fatalf("历史任务应当现算出 not_in_scan_roots: %+v", listed)
@@ -76,5 +78,79 @@ func TestAddDownloadDirectoryToScanImportsDownloadMEDIA09(t *testing.T) {
 	// 重启后的任务不能重试：请求头不在内存里。
 	if retry, err := app.RetryDownload(row.TaskUID); err != nil || retry.Code != services.BrowserDownloadCodeRetryRequiresBrowser {
 		t.Fatalf("历史任务重试应返回 retry_requires_browser: %+v err=%v", retry, err)
+	}
+}
+
+// seedFinishedDownloadRow 在 downloadDir 下放一个已下载的文件，并写一条重启后的历史任务行。
+func seedFinishedDownloadRow(t *testing.T, downloadDir, uid string) models.BrowserDownloadTask {
+	t.Helper()
+	if err := os.MkdirAll(downloadDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(downloadDir, uid+".mp4"), []byte("fake-media"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	row := models.BrowserDownloadTask{
+		TaskUID: uid, DisplayURL: "https://cdn/a.m3u8", FileName: uid + ".mp4",
+		Directory: downloadDir, Status: "done", FinishedAt: &now, CreatedAt: now, UpdatedAt: now,
+	}
+	if err := database.DB.Create(&row).Error; err != nil {
+		t.Fatalf("写入历史任务失败: %v", err)
+	}
+	return row
+}
+
+// MEDIA-09（M-5）：加入扫描目录之前先预检。下载目录在扫描黑名单里 → directory_excluded；
+// 下载目录包含已有的扫描根 → directory_nested。两种情况都不加目录、不入库，文案不带路径。
+func TestAddDownloadDirectoryToScanPrechecksMEDIA09(t *testing.T) {
+	setupAppTestDB(t)
+	root := t.TempDir()
+	excludedDir := filepath.Join(root, "excluded", "downloads")
+	parentDir := filepath.Join(root, "parent")
+	childRoot := filepath.Join(parentDir, "library")
+	if err := os.MkdirAll(childRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Create(&models.Settings{
+		VideoExtensions: ".mp4", PlayWeight: 2.0, ScanExcludePaths: filepath.Join(root, "excluded"),
+	}).Error; err != nil {
+		t.Fatalf("初始化设置失败: %v", err)
+	}
+	excludedRow := seedFinishedDownloadRow(t, excludedDir, "bd-excluded")
+	nestedRow := seedFinishedDownloadRow(t, parentDir, "bd-nested")
+
+	directories := &services.DirectoryService{}
+	if _, err := directories.AddDirectory(childRoot, ""); err != nil {
+		t.Fatal(err)
+	}
+	downloads := services.NewBrowserDownloadService(services.BrowserDownloadDeps{
+		ImportDirectory: services.BrowserDownloadImporterFromScan(&services.VideoService{}, directories.GetAllDirectories),
+	})
+	downloads.SetStore(func() *gorm.DB { return database.DB })
+	app := &App{directoryService: directories, settingsService: &services.SettingsService{}, browserDownloads: downloads, videoService: &services.VideoService{}}
+
+	for _, tc := range []struct {
+		uid  string
+		code string
+	}{
+		{excludedRow.TaskUID, services.BrowserDownloadCodeDirectoryExcluded},
+		{nestedRow.TaskUID, services.BrowserDownloadCodeDirectoryNested},
+	} {
+		result, err := app.AddDownloadDirectoryToScan(tc.uid)
+		if err != nil || result.Code != tc.code || result.Message == "" {
+			t.Fatalf("%s 应报 %s: %+v err=%v", tc.uid, tc.code, result, err)
+		}
+		if strings.Contains(result.Message, root) {
+			t.Fatalf("结果文案不该带路径: %q", result.Message)
+		}
+	}
+	dirs, err := directories.GetAllDirectories()
+	if err != nil || len(dirs) != 1 || dirs[0].Path != childRoot {
+		t.Fatalf("预检不过时不该添加扫描目录: %+v err=%v", dirs, err)
+	}
+	var imported int64
+	if err := database.DB.Model(&models.Video{}).Count(&imported).Error; err != nil || imported != 0 {
+		t.Fatalf("预检不过时不该入库: %d err=%v", imported, err)
 	}
 }
