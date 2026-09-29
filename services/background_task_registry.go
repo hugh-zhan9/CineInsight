@@ -24,8 +24,11 @@ const (
 	BackgroundTaskEXIF                BackgroundTaskKey = "exif"
 	BackgroundTaskImagePerceptualHash BackgroundTaskKey = "image_phash"
 	BackgroundTaskCleanup             BackgroundTaskKey = "cleanup"
-	BackgroundTaskCollectionSuggest   BackgroundTaskKey = "collection_suggest"
-	BackgroundTaskBackup              BackgroundTaskKey = "backup"
+	// BackgroundTaskImageCleanup 是图片清理分析（D-PC18）。排在 cleanup 之后，
+	// 与视频侧清理分析并列出现在任务中心。
+	BackgroundTaskImageCleanup      BackgroundTaskKey = "image_cleanup"
+	BackgroundTaskCollectionSuggest BackgroundTaskKey = "collection_suggest"
+	BackgroundTaskBackup            BackgroundTaskKey = "backup"
 	// BackgroundTaskBrowserDownload 是浏览器插件桥接推过来的下载任务（D-B04）。
 	// 它不进空闲门——那道门只挡自动触发的任务，而这些是用户在浏览器里点出来的。
 	BackgroundTaskBrowserDownload BackgroundTaskKey = "browser_download"
@@ -55,6 +58,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskEXIF,
 	BackgroundTaskImagePerceptualHash,
 	BackgroundTaskCleanup,
+	BackgroundTaskImageCleanup,
 	BackgroundTaskCollectionSuggest,
 	BackgroundTaskBackup,
 	BackgroundTaskBrowserDownload,

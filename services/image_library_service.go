@@ -585,12 +585,27 @@ func imagePeopleListItems(imageID uint) ([]PersonListItem, error) {
 	return items, nil
 }
 
-// SetImageFavorite 更新照片收藏状态。
+// SetImageLiked 更新照片点赞状态（D-PC40），与 SetImageFavorite 同构。
+func (s *ImageLibraryService) SetImageLiked(imageID uint, liked bool) (*models.Image, error) {
+	if imageID == 0 {
+		return nil, fmt.Errorf("图片 ID 不能为空")
+	}
+	result := database.DB.Model(&models.Image{}).Where("id = ?", imageID).Update("is_liked", liked)
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return s.getImageWithTags(imageID)
+}
+
+// SetImageFavorite 更新照片收藏状态，并维护 favorited_at（规则同 favoriteColumns）。
 func (s *ImageLibraryService) SetImageFavorite(imageID uint, favorite bool) (*models.Image, error) {
 	if imageID == 0 {
 		return nil, fmt.Errorf("图片 ID 不能为空")
 	}
-	result := database.DB.Model(&models.Image{}).Where("id = ?", imageID).Update("is_favorite", favorite)
+	result := database.DB.Model(&models.Image{}).Where("id = ?", imageID).Updates(favoriteColumns(favorite, time.Now()))
 	if result.Error != nil {
 		return nil, result.Error
 	}

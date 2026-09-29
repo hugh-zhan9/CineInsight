@@ -25,8 +25,11 @@ func assertWatchlistSchemaUpgraded(t *testing.T, db *gorm.DB) {
 			t.Fatalf("升级后缺少列 %s", column)
 		}
 	}
-	if !migrator.HasIndex(&models.WatchlistEntry{}, "idx_watchlist_title_kind") {
-		t.Fatal("升级后缺少 idx_watchlist_title_kind")
+	if !migrator.HasIndex(&models.WatchlistEntry{}, "idx_watchlist_title_kind_source") {
+		t.Fatal("升级后缺少 idx_watchlist_title_kind_source")
+	}
+	if migrator.HasIndex(&models.WatchlistEntry{}, "idx_watchlist_title_kind") {
+		t.Fatal("(title, kind) 的旧唯一索引应已删除，否则同名同类型不同来源的条目无法共存")
 	}
 	if !migrator.HasIndex(&models.WatchlistEntry{}, "idx_watchlist_enrichment") {
 		t.Fatal("升级后缺少 idx_watchlist_enrichment")
@@ -34,15 +37,16 @@ func assertWatchlistSchemaUpgraded(t *testing.T, db *gorm.DB) {
 	if migrator.HasIndex(&models.WatchlistEntry{}, "idx_watchlist_title") {
 		t.Fatal("旧的单列唯一索引应已删除，否则同名不同类型无法共存")
 	}
-	assertIndexColumnOrder(t, db, "idx_watchlist_title_kind", "title", "kind")
+	assertIndexColumnOrder(t, db, "idx_watchlist_title_kind_source", "title", "kind", "source_item_id")
 	assertIndexColumnOrder(t, db, "idx_watchlist_enrichment", "enrichment_status", "id")
 }
 
 // assertIndexColumnOrder 钉住索引的列顺序。
 //
-// idx_watchlist_title_kind 必须是 (title, kind)：services.watchlistTitleConflict 在
-// SQLite 上认的是报错里的列清单 "watchlist_entries.title, watchlist_entries.kind"，
-// 调成 (kind, title) 判据立刻失配，撞名会静默退化成一条通用数据库错误。
+// idx_watchlist_title_kind_source 必须是 (title, kind, source_item_id)：
+// services.watchlistTitleConflict 在 SQLite 上认的是报错里列清单的前缀
+// "watchlist_entries.title, watchlist_entries.kind"，在 Postgres 上认的是索引名里的
+// idx_watchlist_title_kind 前缀；调成 (kind, title, ...) 判据立刻失配，撞名会静默退化成一条通用数据库错误。
 // idx_watchlist_enrichment 必须是 (enrichment_status, id)：后台 worker 按状态过滤、
 // 按 id 升序认领，列反过来这条访问路径就用不上索引了。
 func assertIndexColumnOrder(t *testing.T, db *gorm.DB, index string, want ...string) {
@@ -145,7 +149,7 @@ func TestWatchlistUpgradeOnCompositeUniqueLibraryIsNoop(t *testing.T) {
 // 而不是"没有某个索引"。守卫若只看索引，这里会按 title 单键硬删掉同名不同类型的行。
 func TestWatchlistUpgradeWithKindColumnButNoIndexes(t *testing.T) {
 	db := dbtest.Open(t)
-	for _, index := range []string{"idx_watchlist_title_kind", "idx_watchlist_enrichment"} {
+	for _, index := range []string{"idx_watchlist_title_kind_source", "idx_watchlist_enrichment"} {
 		if err := db.Migrator().DropIndex(&models.WatchlistEntry{}, index); err != nil {
 			t.Fatalf("删 %s 失败: %v", index, err)
 		}

@@ -34,7 +34,8 @@ func dedupeWatchlistTitlesBeforeSchema(db *gorm.DB) error {
 	// 留着是刻意的：这条路走下去是不可逆的硬删除，多一次 HasIndex 换一层
 	// 兜底（比如某个后端上 HasColumn 判走了眼）划算。
 	if db.Migrator().HasColumn(&models.WatchlistEntry{}, "kind") ||
-		db.Migrator().HasIndex(&models.WatchlistEntry{}, "idx_watchlist_title_kind") {
+		db.Migrator().HasIndex(&models.WatchlistEntry{}, watchlistTitleKindLegacyIndex) ||
+		db.Migrator().HasIndex(&models.WatchlistEntry{}, watchlistTitleKindSourceIndex) {
 		return nil
 	}
 	// 早先的版本已经按 title 去过重，不必再来一遍。

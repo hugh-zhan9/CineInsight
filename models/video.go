@@ -23,11 +23,13 @@ type Video struct {
 	Width                  int            `json:"width"`                                                                   // 宽度
 	Height                 int            `json:"height"`                                                                  // 高度
 	IsStale                bool           `gorm:"default:false" json:"is_stale"`                                           // 当前路径是否失效/待纠偏
+	StaleReason            string         `gorm:"size:24;not null;default:''" json:"stale_reason"`                         // 失效原因（StaleReason* 常量）；is_stale=false 时必须为空，历史失效行为空
 	PlayCount              int            `gorm:"default:0" json:"play_count"`                                             // 播放次数
 	RandomPlayCount        int            `gorm:"default:0" json:"random_play_count"`                                      // 随机播放次数
 	LastPlayedAt           *time.Time     `json:"last_played_at" ts_type:"string"`                                         // 最后播放时间
 	IsFavorite             bool           `gorm:"not null;default:false" json:"is_favorite"`                               // 主片库收藏状态
-	IsLiked                bool           `gorm:"not null;default:false;index" json:"is_liked"`                            // 手机端点赞状态的投影；与 is_favorite 同构
+	FavoritedAt            *time.Time     `json:"favorited_at" ts_type:"string"`                                           // 置 is_favorite=true 时写当前时间，置 false 时清空
+	IsLiked                bool           `gorm:"not null;default:false;index" json:"is_liked"`                            // 点赞状态（升级后与 is_favorite 同为唯一数据源）
 	IsWatched              bool           `gorm:"not null;default:false" json:"is_watched"`                                // 是否已看
 	WatchPositionSeconds   float64        `gorm:"not null;default:0" json:"watch_position_seconds"`                        // 内嵌播放器观看位置（秒）
 	WatchProgressUpdatedAt *time.Time     `json:"watch_progress_updated_at" ts_type:"string"`                              // 最近一次观看进度更新时间
@@ -38,23 +40,54 @@ type Video struct {
 	DeletedAt              SoftDeleteTime `gorm:"index" json:"-"`
 }
 
+// 视频失效原因（videos.stale_reason，D-PC06）。is_stale=true 时写入其一，
+// is_stale=false 时必须为空；历史失效行为空，界面显示「原因未记录」。
+const (
+	StaleReasonOfflineRoot    = "offline_root"
+	StaleReasonMissingFile    = "missing_file"
+	StaleReasonRemovedRoot    = "removed_root"
+	StaleReasonOutsideRoots   = "outside_roots"
+	StaleReasonPlayFailed     = "play_failed"
+	StaleReasonReadError      = "read_error"
+	StaleReasonWatcherMissing = "watcher_missing"
+)
+
+// 回收站条目模式（video_trash_entries.mode / image_trash_entries.mode，D-PC01/03）。
+const (
+	// TrashModeTrash：文件已移入系统废纸篓，trash_path 是系统返回的实际路径。
+	TrashModeTrash = "trash"
+	// TrashModeLegacyTrash：旧版同目录 trash/ 目录里的文件（file_moved=true 的历史行）。
+	TrashModeLegacyTrash = "legacy_trash"
+	// TrashModeRecordOnly：只删记录、文件原地保留，按文件身份屏蔽重新收录。
+	TrashModeRecordOnly = "record_only"
+	// TrashModeMissing：扫描发现文件已不在而软删的记录（deleted_by=scanner）。
+	TrashModeMissing = "missing"
+)
+
+// TrashStateFileGone 是回收站条目新增的状态：废纸篓里的文件已被外部清除（D-PC01）。
+const TrashStateFileGone = "file_gone"
+
 // VideoTrashEntry 记录恢复软删除视频所需的信息。
 type VideoTrashEntry struct {
-	DeletedBy    string    `gorm:"not null;default:''" json:"deleted_by"` // user / scanner；空值为历史未知
-	ID           uint      `gorm:"primarykey" json:"id"`
-	VideoID      uint      `gorm:"uniqueIndex;not null" json:"video_id"`
-	VideoName    string    `gorm:"not null" json:"video_name"`
-	OriginalPath string    `gorm:"not null" json:"original_path"`
-	TrashPath    string    `gorm:"uniqueIndex:idx_video_trash_entries_trash_path,where:trash_path <> ''" json:"trash_path"`
-	FileMoved    bool      `gorm:"not null;default:false" json:"file_moved"`
-	FileSize     int64     `gorm:"not null;default:0" json:"file_size"`
-	FileModTime  int64     `gorm:"not null;default:0" json:"file_mod_time"`
-	FileIdentity string    `json:"-"`
-	FileSHA256   string    `json:"-"`
-	State        string    `gorm:"not null;default:deleted;index" json:"state"`
-	LastError    string    `json:"last_error"`
-	CreatedAt    time.Time `gorm:"index" json:"created_at" ts_type:"string"`
-	UpdatedAt    time.Time `json:"updated_at" ts_type:"string"`
+	DeletedBy    string `gorm:"not null;default:''" json:"deleted_by"` // user / scanner；空值为历史未知
+	ID           uint   `gorm:"primarykey" json:"id"`
+	VideoID      uint   `gorm:"uniqueIndex;not null" json:"video_id"`
+	VideoName    string `gorm:"not null" json:"video_name"`
+	OriginalPath string `gorm:"not null" json:"original_path"`
+	TrashPath    string `gorm:"uniqueIndex:idx_video_trash_entries_trash_path,where:trash_path <> ''" json:"trash_path"`
+	FileMoved    bool   `gorm:"not null;default:false" json:"file_moved"`
+	FileSize     int64  `gorm:"not null;default:0" json:"file_size"`
+	FileModTime  int64  `gorm:"not null;default:0" json:"file_mod_time"`
+	FileIdentity string `json:"-"`
+	FileSHA256   string `json:"-"`
+	State        string `gorm:"not null;default:deleted;index" json:"state"`
+	// Mode 取值见 TrashMode*；空串只出现在迁移回填之前。回填只看 file_moved 与 deleted_by。
+	Mode string `gorm:"size:16;not null;default:''" json:"mode"`
+	// DeleteBatchID 让同一次删除操作的条目共享一个标识（32 位十六进制）；历史行为空。
+	DeleteBatchID string    `gorm:"size:32;not null;default:'';index" json:"delete_batch_id"`
+	LastError     string    `json:"last_error"`
+	CreatedAt     time.Time `gorm:"index" json:"created_at" ts_type:"string"`
+	UpdatedAt     time.Time `json:"updated_at" ts_type:"string"`
 }
 
 // SubtitleSegment stores searchable SRT segments for fast subtitle lookup.
@@ -74,16 +107,18 @@ type SubtitleSegment struct {
 
 // SubtitleIndexState tracks whether a video's SRT file has been indexed.
 type SubtitleIndexState struct {
-	ID              uint      `gorm:"primarykey" json:"id"`
-	VideoID         uint      `gorm:"uniqueIndex" json:"video_id"`
-	Video           Video     `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
-	SubtitlePath    string    `json:"subtitle_path"`
-	SubtitleModTime int64     `gorm:"index" json:"subtitle_mod_time"`
-	SubtitleSize    int64     `json:"subtitle_size"`
-	SegmentCount    int       `json:"segment_count"`
-	LastCheckedAt   time.Time `json:"last_checked_at" ts_type:"string"`
-	CreatedAt       time.Time `json:"created_at" ts_type:"string"`
-	UpdatedAt       time.Time `json:"updated_at" ts_type:"string"`
+	ID              uint   `gorm:"primarykey" json:"id"`
+	VideoID         uint   `gorm:"uniqueIndex" json:"video_id"`
+	Video           Video  `gorm:"constraint:OnDelete:CASCADE;" json:"-"`
+	SubtitlePath    string `json:"subtitle_path"`
+	SubtitleModTime int64  `gorm:"index" json:"subtitle_mod_time"`
+	SubtitleSize    int64  `json:"subtitle_size"`
+	SegmentCount    int    `json:"segment_count"`
+	// HasSidecar：同目录存在 名称.*.{srt,ass,ssa,vtt}（不含同名 .srt 本身）。
+	HasSidecar    bool      `gorm:"not null;default:false" json:"has_sidecar"`
+	LastCheckedAt time.Time `json:"last_checked_at" ts_type:"string"`
+	CreatedAt     time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt     time.Time `json:"updated_at" ts_type:"string"`
 }
 
 // Tag 标签模型
@@ -243,6 +278,30 @@ type Settings struct {
 	TMDBAPIKey         string `gorm:"type:text;not null;default:''" json:"tmdb_api_key"`
 	BangumiAccessToken string `gorm:"type:text;not null;default:''" json:"bangumi_access_token"`
 
+	// 手机端访问控制（D-PC45）。
+	//
+	// ShortFeedEnabled 是默认值随「新库/老库」而不同的布尔列（新库 false、老库升级 true），
+	// **不带 gorm default 标签**：带上之后 GORM 的 Create 会把 false 当未设置，双向迁移器
+	// 会把用户关掉的开关翻回去。新库由 ApplySchema 显式写 false，老库由
+	// database.migrateShortFeedEnabledSetting 在「列刚被加入」时写 true。
+	//
+	// ShortFeedPINHash 是 bcrypt 哈希，为空表示未设 PIN，不进 JSON。
+	// 这两列以及 FavoritesUnifiedAt 都有各自的专用写入路径，通用设置保存
+	// （SettingsService.UpdateSettings）必须 Omit 它们，否则旧快照会回写。
+	ShortFeedEnabled bool   `json:"short_feed_enabled"`
+	ShortFeedPINHash string `gorm:"size:100;not null;default:''" json:"-"`
+
+	// 清理中心两类阈值（D-PC36）：极短片段秒数、极低分辨率的宽与高。默认 5 / 480 / 320，
+	// 值 <= 0 视为默认。默认值非零，因此**不带 gorm default 标签**（同 ProxyCacheLimitBytes），
+	// 由新库 ApplySchema 显式行与 migrateCleanupThresholdSettings 写入。
+	CleanupShortSeconds int `json:"cleanup_short_seconds"`
+	CleanupLowWidth     int `json:"cleanup_low_width"`
+	CleanupLowHeight    int `json:"cleanup_low_height"`
+
+	// FavoritesUnifiedAt 是收藏与点赞并集迁移的「只执行一次」标记（D-PC40）：
+	// NULL 表示尚未合并。不进 JSON。
+	FavoritesUnifiedAt *time.Time `json:"-"`
+
 	UpdatedAt time.Time `json:"updated_at" ts_type:"string"`
 }
 
@@ -258,20 +317,22 @@ type ScanDirectory struct {
 
 // SavedLibraryView 保存用户命名的片库筛选条件。
 type SavedLibraryView struct {
-	ID         uint           `gorm:"primarykey" json:"id"`
-	Name       string         `gorm:"not null;uniqueIndex:idx_saved_library_views_name_active,where:deleted_at IS NULL" json:"name"`
-	SearchMode string         `gorm:"not null;default:'file'" json:"search_mode"`
-	Keyword    string         `json:"keyword"`
-	SmartView  string         `gorm:"index" json:"smart_view"`
-	TagIDsJSON string         `gorm:"type:text;not null;default:'[]'" json:"tag_ids_json"`
-	MinSize    int64          `json:"min_size"`
-	MaxSize    int64          `json:"max_size"`
-	MinHeight  int            `json:"min_height"`
-	MaxHeight  int            `json:"max_height"`
-	MinRating  *float64       `gorm:"type:numeric(3,1)" json:"min_rating"`
-	MaxRating  *float64       `gorm:"type:numeric(3,1)" json:"max_rating"`
-	SortMode   string         `gorm:"not null;default:'balanced'" json:"sort_mode"`
-	CreatedAt  time.Time      `json:"created_at" ts_type:"string"`
-	UpdatedAt  time.Time      `json:"updated_at" ts_type:"string"`
-	DeletedAt  SoftDeleteTime `gorm:"index" json:"-"`
+	ID         uint   `gorm:"primarykey" json:"id"`
+	Name       string `gorm:"not null;uniqueIndex:idx_saved_library_views_name_active,where:deleted_at IS NULL" json:"name"`
+	SearchMode string `gorm:"not null;default:'file'" json:"search_mode"`
+	Keyword    string `json:"keyword"`
+	SmartView  string `gorm:"index" json:"smart_view"`
+	TagIDsJSON string `gorm:"type:text;not null;default:'[]'" json:"tag_ids_json"`
+	// PersonIDsJSON 是保存视图里的人物筛选（D-PC33），JSON 数组，空为 []。
+	PersonIDsJSON string         `gorm:"type:text;not null;default:'[]'" json:"person_ids_json"`
+	MinSize       int64          `json:"min_size"`
+	MaxSize       int64          `json:"max_size"`
+	MinHeight     int            `json:"min_height"`
+	MaxHeight     int            `json:"max_height"`
+	MinRating     *float64       `gorm:"type:numeric(3,1)" json:"min_rating"`
+	MaxRating     *float64       `gorm:"type:numeric(3,1)" json:"max_rating"`
+	SortMode      string         `gorm:"not null;default:'balanced'" json:"sort_mode"`
+	CreatedAt     time.Time      `json:"created_at" ts_type:"string"`
+	UpdatedAt     time.Time      `json:"updated_at" ts_type:"string"`
+	DeletedAt     SoftDeleteTime `gorm:"index" json:"-"`
 }

@@ -315,12 +315,41 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	return query, nil
 }
 
-// SetVideoFavorite 更新主片库收藏状态。
+// favoriteColumns 是收藏切换要写的列（D-PC40）：置 true 时写 favorited_at，置 false 时清空。
+// 置 true 用 COALESCE 保留已有时间，这样对已收藏的项重复置 true（双击、重复回流）不会
+// 把它顶到「最近收藏」最前面；取消再收藏才会重新计时。
+func favoriteColumns(favorite bool, now time.Time) map[string]interface{} {
+	if favorite {
+		return map[string]interface{}{
+			"is_favorite":  true,
+			"favorited_at": gorm.Expr("COALESCE(favorited_at, ?)", now),
+		}
+	}
+	return map[string]interface{}{"is_favorite": false, "favorited_at": nil}
+}
+
+// SetVideoFavorite 更新主片库收藏状态，并维护 favorited_at。
 func (s *VideoService) SetVideoFavorite(videoID uint, favorite bool) (*models.Video, error) {
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
 	}
-	result := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("is_favorite", favorite)
+	result := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Updates(favoriteColumns(favorite, time.Now()))
+	if result.Error != nil {
+		return nil, result.Error
+	}
+	if result.RowsAffected != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	return s.getVideoWithTags(videoID)
+}
+
+// SetVideoLiked 更新点赞状态（D-PC40）。与 SetVideoFavorite 同构：点赞的唯一数据是
+// videos.is_liked，桌面与手机端都直接读写它；返回带标签的完整行，前端整行覆盖列表项。
+func (s *VideoService) SetVideoLiked(videoID uint, liked bool) (*models.Video, error) {
+	if videoID == 0 {
+		return nil, fmt.Errorf("视频 ID 不能为空")
+	}
+	result := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("is_liked", liked)
 	if result.Error != nil {
 		return nil, result.Error
 	}

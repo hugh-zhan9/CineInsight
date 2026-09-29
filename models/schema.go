@@ -70,5 +70,15 @@ func AllModels() []interface{} {
 		&MovieChartEntry{},
 		&MovieChartMark{},
 		&MovieChartYearState{},
+		// 产品完善度批次（2026-09-29）的七张新表，追加在末尾。其中 subtitle_jobs、
+		// movie_video_links、cleanup_video_dismissals 有外键指向 videos，videos 是清单第一项，
+		// 所以排在哪里都满足拓扑序；其余四张不建外键（见各模型注释）。
+		&MigrationStagedSource{},
+		&SubtitleJob{},
+		&TagPersonConversion{},
+		&MovieVideoLink{},
+		&JellyfinSession{},
+		&BrowserDownloadTask{},
+		&CleanupVideoDismissal{},
 	}
 }

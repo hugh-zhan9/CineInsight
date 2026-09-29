@@ -4,7 +4,7 @@ source: docs/loopx/design/2026-09-29-product-completeness/需求设计文档.md
 status: ready
 slices:
   - id: P-001
-    status: pending
+    status: done
     depends: []
   - id: P-010
     status: pending
@@ -134,6 +134,7 @@ flowchart LR
 
 ### 执行约定（每个子代理的提示词都要包含）
 
+- **对齐基线**：Agent 工具创建 worktree 时以 master（`43efd8a`）为基线，而不是功能分支（P-001 执行时实测确认）。所以子代理开工前的第一步是 `git merge --ff-only feat/product-completeness`，完成后核对 `git log -1` 与主代理给出的基线提交一致，不一致就停下来回报。
 - **准备 worktree 环境**：worktree 里缺少被 gitignore 的内容，开始前从主工作区补齐：
   - 复制 `frontend/dist/`（`assets.go` 的 `go:embed` 需要）；
   - 复制 `.loopx/workspace/2026-09-02-capability-batch/baseline/`（`subtitle_translation_test.go` 与 `data-test-set.test.mjs` 会读取）；
@@ -847,5 +848,21 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
 | I13 崩溃恢复与点赞合并 | 详细设计 §2.1、§2.2 补充 |
 | I14 破坏性前端没有评审 | P-030、P-032、P-033、P-035、P-018 补上 review 行 |
 | Minor | 符号名以代码为准（详细设计 Planning Handoff）；规则 6 在 P-015 / P-017 间分工；文案项重新分配；`main_bindings.go` 归 P-029；`SyncFeedback` 那一处归 P-027；`MergeMediaMetadata` 的已看状态经过观察者 |
+
+**P-001 实施评审**（2026-09-29，独立只读子代理）：0 个 Critical，3 个 Important，9 个 Minor。
+
+- 主代理已修复：
+  - I1：旧版中断状态（pending_move / rollback 且有 trash_path）回填为 legacy_trash；
+  - I3：jellyfin_sessions 的 device_id / client 改为 text；
+  - Minor 1：数据判据迁移移到全部「列刚建出来」迁移之后；
+  - PG 测试夹具的连接回收。
+- 转入下游切片的要求：
+  - I2 → P-019：已补全条目仍须报撞名，覆盖三条路径的回归测试；
+  - Minor 3 → P-021：接线前删除投影与双向对账，加「桌面点赞经同步后保留」的回归测试；
+  - Minor 4 → P-016：直接写 `is_favorite` 必须经过 setter；
+  - Minor 5 → P-010：守卫——每条建条目的路径都写入非空 mode；
+  - Minor 7 → P-033：显式载荷补上 cleanup_*；
+  - Minor 8：已写入详细设计 §8.6。
+- 验证：双后端 `go test ./...` 全绿。
 
 修订后没有重新做全量评审：计划评审规则只要求复核修改过的部分。P-001、P-010 的迁移与删除语义会在实施后另做独立代码评审。

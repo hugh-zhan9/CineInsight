@@ -61,6 +61,7 @@ func seedSource(t *testing.T, db *gorm.DB) (videoIDs []uint, tagID uint) {
 	}
 
 	seedBlobHeavyRows(t, db, videoIDs)
+	seedProductCompletenessRows(t, db, videoIDs)
 	// 手写夹具覆盖不到的表由反射补一行：往返比对是逐表比行数，空表永远 0 == 0，
 	// 一张表整张被漏掉也照样"通过"（N-1 就是这样藏住的）。
 	seedEveryTable(t, db)
@@ -584,5 +585,137 @@ func TestMigrateRoundTripPreservesBinaryColumns(t *testing.T) {
 	}
 	if candidate.Similarity != 0.6125 {
 		t.Fatalf("相似度往返后不一致: %+v", candidate)
+	}
+}
+
+// productCompletenessTables 是 2026-09-29 批次新增的七张表。
+func productCompletenessTables() []any {
+	return []any{
+		&models.MigrationStagedSource{}, &models.SubtitleJob{}, &models.TagPersonConversion{},
+		&models.MovieVideoLink{}, &models.JellyfinSession{}, &models.BrowserDownloadTask{},
+		&models.CleanupVideoDismissal{},
+	}
+}
+
+// seedProductCompletenessRows 给产品完善度批次的七张新表各造一行贴近真实的数据，并给既有
+// 表的新列写上非零值。seedEveryTable 只会填最小合法行（字符串一律 "x"），既盖不住 64 位哈希、
+// 32 位十六进制标识这类 Postgres 才校验的长度，也验不了新列在往返后原样保留，所以这里显式造。
+func seedProductCompletenessRows(t *testing.T, db *gorm.DB, videoIDs []uint) {
+	t.Helper()
+	stamp := time.Unix(1_700_000_300, 0).UTC()
+	batch := "0123456789abcdef0123456789abcdef"
+
+	// 既有表的新列。
+	if err := db.Model(&models.Video{}).Where("id = ?", videoIDs[0]).
+		Updates(map[string]interface{}{"is_favorite": true, "favorited_at": stamp}).Error; err != nil {
+		t.Fatalf("写视频收藏时间失败: %v", err)
+	}
+	if err := db.Model(&models.Video{}).Where("id = ?", videoIDs[1]).
+		Updates(map[string]interface{}{"is_stale": true, "stale_reason": models.StaleReasonOfflineRoot}).Error; err != nil {
+		t.Fatalf("写视频失效原因失败: %v", err)
+	}
+	if err := db.Model(&models.VideoTrashEntry{}).Where("video_id = ?", videoIDs[2]).
+		Updates(map[string]interface{}{"mode": models.TrashModeRecordOnly, "delete_batch_id": batch}).Error; err != nil {
+		t.Fatalf("写回收站模式失败: %v", err)
+	}
+	if err := db.Model(&models.Settings{}).Where("1 = 1").Updates(map[string]interface{}{
+		"short_feed_enabled": false, "short_feed_pin_hash": "$2a$10$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ01234",
+		"cleanup_short_seconds": 7, "cleanup_low_width": 500, "cleanup_low_height": 300,
+		"favorites_unified_at": stamp,
+	}).Error; err != nil {
+		t.Fatalf("写设置新列失败: %v", err)
+	}
+
+	rows := []any{
+		&models.MigrationStagedSource{
+			VideoID: &videoIDs[0], OriginalPath: "/lib/va.mp4",
+			StagedPath: "/lib/.va.mp4.cineinsight-migrating-0123456789abcdef", Size: 4096,
+			State: models.MigrationStagedStatePending,
+		},
+		&models.SubtitleJob{
+			VideoID: videoIDs[0], Engine: "whisperx", SourceLang: "ja", OptionsJSON: `{"model":"medium"}`,
+			Status: "succeeded", Message: "完成", PendingArtifactPath: "", StartedAt: &stamp, FinishedAt: &stamp,
+		},
+		&models.TagPersonConversion{
+			TagID: 1, PersonID: 1, PersonCreated: true, VideoIDsJSON: "[1,2]", ImageIDsJSON: "[3]",
+			AddedVideoPersonIDsJSON: "[1]", AddedImagePersonIDsJSON: "[]", State: models.TagPersonConversionApplied,
+		},
+		&models.MovieVideoLink{DoubanID: "1292052", VideoID: videoIDs[0]},
+		&models.JellyfinSession{
+			TokenHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+			DeviceID:  "device-1", Client: "Fileball", LastSeenAt: stamp, ExpiresAt: stamp.Add(24 * time.Hour),
+		},
+		&models.BrowserDownloadTask{
+			TaskUID: batch, DisplayURL: "https://example.com/a/b.mp4", FileName: "b.mp4",
+			Directory: "/dl", Status: "succeeded", FinishedAt: &stamp,
+		},
+		&models.CleanupVideoDismissal{VideoID: videoIDs[0], Category: models.CleanupDismissalCategoryShort, Fingerprint: "100:1700000000123000000"},
+	}
+	for _, row := range rows {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatalf("建产品完善度夹具 %T 失败: %v", row, err)
+		}
+	}
+}
+
+// 产品完善度批次：七张新表与既有表的新列都要随迁移原样搬过去，往返一遍也不丢。
+func TestMigrateCarriesProductCompletenessTablesAndColumns(t *testing.T) {
+	source := dbtest.Open(t)
+	middle := dbtest.Open(t)
+	back := dbtest.Open(t)
+	videoIDs, _ := seedSource(t, source)
+	for _, model := range productCompletenessTables() {
+		if countUnscoped(t, source, model) == 0 {
+			t.Fatalf("夹具里新表 %T 必须至少有一行", model)
+		}
+	}
+	for _, step := range []struct{ from, to *gorm.DB }{{source, middle}, {middle, back}} {
+		if _, err := Migrate(context.Background(), Options{
+			Source: step.from, Target: step.to, TargetBackend: backendOfTest(),
+		}); err != nil {
+			t.Fatalf("迁移失败: %v", err)
+		}
+	}
+	for _, model := range productCompletenessTables() {
+		if want, got := countUnscoped(t, source, model), countUnscoped(t, back, model); want != got {
+			t.Fatalf("往返后新表 %T 行数不一致: source=%d back=%d", model, want, got)
+		}
+	}
+
+	stamp := time.Unix(1_700_000_300, 0).UTC()
+	var favorite models.Video
+	if err := back.First(&favorite, videoIDs[0]).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !favorite.IsFavorite || favorite.FavoritedAt == nil || !favorite.FavoritedAt.Equal(stamp) {
+		t.Fatalf("往返后 favorited_at 应原样保留: %+v", favorite)
+	}
+	var stale models.Video
+	if err := back.First(&stale, videoIDs[1]).Error; err != nil {
+		t.Fatal(err)
+	}
+	if !stale.IsStale || stale.StaleReason != models.StaleReasonOfflineRoot {
+		t.Fatalf("往返后 stale_reason 应原样保留: %+v", stale)
+	}
+	var entry models.VideoTrashEntry
+	if err := back.Where("video_id = ?", videoIDs[2]).First(&entry).Error; err != nil {
+		t.Fatal(err)
+	}
+	if entry.Mode != models.TrashModeRecordOnly || entry.DeleteBatchID != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("往返后回收站 mode / delete_batch_id 应原样保留: %+v", entry)
+	}
+	var settings models.Settings
+	if err := back.First(&settings).Error; err != nil {
+		t.Fatal(err)
+	}
+	// 关掉的开关不能被复制翻回 true；PIN 哈希、阈值与合并标记原样保留。
+	if settings.ShortFeedEnabled {
+		t.Fatal("关掉的 short_feed_enabled 不该在往返后翻成 true")
+	}
+	if settings.ShortFeedPINHash == "" || settings.CleanupShortSeconds != 7 || settings.CleanupLowWidth != 500 || settings.CleanupLowHeight != 300 {
+		t.Fatalf("往返后设置新列应原样保留: %+v", settings)
+	}
+	if settings.FavoritesUnifiedAt == nil || !settings.FavoritesUnifiedAt.Equal(stamp) {
+		t.Fatalf("favorites_unified_at 应原样保留: %+v", settings.FavoritesUnifiedAt)
 	}
 }

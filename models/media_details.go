@@ -109,10 +109,13 @@ type VideoPerceptualHash struct {
 // NearDuplicateDismissal 持久化用户对"近似重复"误报的忽略：被忽略的视频对
 // 不再进入后续清理分析的近似重复候选。低 ID 存 VideoLowID，高 ID 存 VideoHighID。
 type NearDuplicateDismissal struct {
-	ID          uint      `gorm:"primarykey" json:"id"`
-	VideoLowID  uint      `gorm:"not null;uniqueIndex:idx_near_dup_dismissal_pair" json:"video_low_id"`
-	VideoHighID uint      `gorm:"not null;uniqueIndex:idx_near_dup_dismissal_pair" json:"video_high_id"`
-	CreatedAt   time.Time `json:"created_at" ts_type:"string"`
+	ID          uint `gorm:"primarykey" json:"id"`
+	VideoLowID  uint `gorm:"not null;uniqueIndex:idx_near_dup_dismissal_pair" json:"video_low_id"`
+	VideoHighID uint `gorm:"not null;uniqueIndex:idx_near_dup_dismissal_pair" json:"video_high_id"`
+	// FingerprintA / FingerprintB 记录忽略时双方的 size:mtimeNS；空（历史行）表示永不失效（D-PC31）。
+	FingerprintA string    `gorm:"size:64;not null;default:''" json:"fingerprint_a"`
+	FingerprintB string    `gorm:"size:64;not null;default:''" json:"fingerprint_b"`
+	CreatedAt    time.Time `json:"created_at" ts_type:"string"`
 }
 
 // MediaStream stores one supported ffprobe stream from the last successful snapshot.
@@ -154,16 +157,22 @@ type MediaStream struct {
 // Postgres spell differently. SourceTermLower is written lowercased for the same
 // reason: the unique key must not depend on a dialect's lower() in an index.
 type TranslationGlossaryEntry struct {
-	ID              uint             `gorm:"primarykey" json:"id"`
-	CollectionID    *uint            `gorm:"index:idx_translation_glossary_entries_collection" json:"collection_id"`
-	Collection      *MediaCollection `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
-	ScopeKey        int64            `gorm:"not null;default:0;uniqueIndex:idx_translation_glossary_entries_scope_term,priority:1" json:"scope_key"`
-	SourceTerm      string           `gorm:"size:200;not null" json:"source_term"`
-	SourceTermLower string           `gorm:"size:200;not null;uniqueIndex:idx_translation_glossary_entries_scope_term,priority:2" json:"source_term_lower"`
-	TargetTerm      string           `gorm:"size:200;not null" json:"target_term"`
-	Note            string           `gorm:"type:text;not null;default:''" json:"note"`
-	CreatedAt       time.Time        `json:"created_at" ts_type:"string"`
-	UpdatedAt       time.Time        `json:"updated_at" ts_type:"string"`
+	ID           uint             `gorm:"primarykey" json:"id"`
+	CollectionID *uint            `gorm:"index:idx_translation_glossary_entries_collection" json:"collection_id"`
+	Collection   *MediaCollection `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
+	ScopeKey     int64            `gorm:"not null;default:0;uniqueIndex:idx_translation_glossary_entries_scope_lang_term,priority:1" json:"scope_key"`
+	// TargetLanguage 为空表示对所有目标语言生效（D-PC16）。唯一键因此是
+	// (scope_key, target_language, source_term_lower)。它换了索引名而不是原地改列：
+	// AutoMigrate 见到同名索引就跳过，改不动老库里的旧定义；新名字让新索引由
+	// AutoMigrate 建出，旧的 idx_translation_glossary_entries_scope_term 由
+	// database.migrateGlossaryUniqueKey 显式删掉。
+	TargetLanguage  string    `gorm:"size:16;not null;default:'';uniqueIndex:idx_translation_glossary_entries_scope_lang_term,priority:2" json:"target_language"`
+	SourceTerm      string    `gorm:"size:200;not null" json:"source_term"`
+	SourceTermLower string    `gorm:"size:200;not null;uniqueIndex:idx_translation_glossary_entries_scope_lang_term,priority:3" json:"source_term_lower"`
+	TargetTerm      string    `gorm:"size:200;not null" json:"target_term"`
+	Note            string    `gorm:"type:text;not null;default:''" json:"note"`
+	CreatedAt       time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt       time.Time `json:"updated_at" ts_type:"string"`
 }
 
 // 建议作品集的候选状态（D-024）。
@@ -183,13 +192,20 @@ const (
 type CollectionSuggestion struct {
 	ID uint `gorm:"primarykey" json:"id"`
 	// ScanRoot 是成员所属的扫描根。跨扫描根不合并（D-023），所以它是分组键的一半。
-	ScanRoot         string    `gorm:"type:text;not null;default:''" json:"scan_root"`
-	SeriesName       string    `gorm:"size:200;not null" json:"series_name"`
-	NormalizedSeries string    `gorm:"size:200;not null" json:"normalized_series"`
-	Status           string    `gorm:"size:16;not null;index:idx_collection_suggestions_status" json:"status"`
-	Fingerprint      string    `gorm:"size:64;not null;uniqueIndex:idx_collection_suggestions_fingerprint" json:"fingerprint"`
-	CreatedAt        time.Time `json:"created_at" ts_type:"string"`
-	UpdatedAt        time.Time `json:"updated_at" ts_type:"string"`
+	ScanRoot         string `gorm:"type:text;not null;default:''" json:"scan_root"`
+	SeriesName       string `gorm:"size:200;not null" json:"series_name"`
+	NormalizedSeries string `gorm:"size:200;not null" json:"normalized_series"`
+	Status           string `gorm:"size:16;not null;index:idx_collection_suggestions_status" json:"status"`
+	Fingerprint      string `gorm:"size:64;not null;uniqueIndex:idx_collection_suggestions_fingerprint" json:"fingerprint"`
+	// DismissKey = hex(sha256(scanRoot + "\n" + normalizedSeries))，忽略时写入，Analyze 据此
+	// 跳过已忽略的分组（D-PC38）。用 varchar(64) 而不是 char(64)：哈希恰好 64 个十六进制字符，
+	// 同样避免 22001；而 Postgres 的 char(n) 会把默认空串补成 64 个空格，下游写 != "" 会误判。
+	DismissKey string `gorm:"size:64;not null;default:'';index:idx_collection_suggestions_dismiss_key" json:"dismiss_key"`
+	// TargetCollectionID 只在追加候选（kind=append）上有值：新成员要并入的既有作品集（D-PC38）。
+	// 不建外键：作品集是软删除的，候选下次分析会重算。
+	TargetCollectionID *uint     `json:"target_collection_id"`
+	CreatedAt          time.Time `json:"created_at" ts_type:"string"`
+	UpdatedAt          time.Time `json:"updated_at" ts_type:"string"`
 }
 
 // CollectionSuggestionMember 是候选里的一个视频（D-024）。

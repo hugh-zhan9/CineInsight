@@ -84,13 +84,15 @@ type FaceCluster struct {
 	Status string `gorm:"size:16;not null;default:'unnamed';index:idx_face_clusters_status" json:"status"`
 	// PersonID 在人物被删除时置空（外键 SET NULL），簇于是回到未命名重新出现在
 	// 审阅面板里（4.4.4）。
-	PersonID                    *uint     `gorm:"index:idx_face_clusters_person" json:"person_id"`
-	Person                      *Person   `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
-	Centroid                    []byte    `json:"-"`
-	ObservationCount            int       `gorm:"not null;default:0" json:"observation_count"`
-	RepresentativeObservationID *uint     `json:"representative_observation_id"`
-	CreatedAt                   time.Time `json:"created_at" ts_type:"string"`
-	UpdatedAt                   time.Time `json:"updated_at" ts_type:"string"`
+	PersonID                    *uint   `gorm:"index:idx_face_clusters_person" json:"person_id"`
+	Person                      *Person `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
+	Centroid                    []byte  `json:"-"`
+	ObservationCount            int     `gorm:"not null;default:0" json:"observation_count"`
+	RepresentativeObservationID *uint   `json:"representative_observation_id"`
+	// IgnoredAt 是簇被忽略的时间（D-PC30），历史行为空；「已忽略」列表据此统计忽略之后并入的观测数。
+	IgnoredAt *time.Time `json:"ignored_at" ts_type:"string"`
+	CreatedAt time.Time  `json:"created_at" ts_type:"string"`
+	UpdatedAt time.Time  `json:"updated_at" ts_type:"string"`
 }
 
 // FacePersonCandidate 是"这个簇可能是这个人"的建议（D-017）。

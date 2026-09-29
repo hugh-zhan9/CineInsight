@@ -87,6 +87,10 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		// 人脸识别（D-016、D-022）：镜像前缀存进去的就是生效值（去空白），
 		// 自动开关即时生效——扫描后自动化每次读一次这一列。
 		settings.AutoFaceAnalysis = input.AutoFaceAnalysis
+		// 清理中心阈值（D-PC36）：<=0 视为默认，存进去的就是生效值。
+		settings.CleanupShortSeconds = positiveOrDefault(input.CleanupShortSeconds, database.DefaultCleanupShortSeconds)
+		settings.CleanupLowWidth = positiveOrDefault(input.CleanupLowWidth, database.DefaultCleanupLowWidth)
+		settings.CleanupLowHeight = positiveOrDefault(input.CleanupLowHeight, database.DefaultCleanupLowHeight)
 		settings.FaceModelMirrorURL = strings.TrimSpace(input.FaceModelMirrorURL)
 		// 帧哈希序列（D-026）：自动开关即时生效，扫描后自动化每次读一次这一列。
 		settings.AutoFrameHashSequence = input.AutoFrameHashSequence
@@ -109,7 +113,13 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.BangumiAccessToken = strings.TrimSpace(input.BangumiAccessToken)
 
 		// 独立配置可能在读取 settings 后更新，禁止旧快照覆盖其所属字段。
-		if err := tx.Omit("JellyfinEnabled", "JellyfinPort", "JellyfinUsername", "JellyfinPasswordHash", "JellyfinServerID").Save(&settings).Error; err != nil {
+		//
+		// 手机端开关与 PIN 哈希（D-PC45）、收藏并集迁移标记（D-PC40）同理：它们各有专用写入
+		// 路径（SetShortFeedEnabled / SetShortFeedPIN / migrateUnifyFavorites），整行 Save 若带上
+		// 读取时的旧快照，就会把这些路径刚写下的值回滚——尤其是 PIN 哈希，被回滚等于悄悄撤销了
+		// 用户刚设的访问控制。
+		if err := tx.Omit("JellyfinEnabled", "JellyfinPort", "JellyfinUsername", "JellyfinPasswordHash", "JellyfinServerID",
+			"ShortFeedEnabled", "ShortFeedPINHash", "FavoritesUnifiedAt").Save(&settings).Error; err != nil {
 			return err
 		}
 		return syncShortVideoTags(tx)

@@ -25,10 +25,12 @@ const (
 
 // WatchlistEntry 是手工维护的想看片名，不依赖本地媒体文件。
 //
-// 唯一键是 (title, kind) 而不是 title：同名不同类型（例如剧版与影版）是两条
-// 独立的记录。索引名与列顺序都是承重的——services.watchlistTitleConflict 靠
-// 报错里出现的索引名/列清单把撞名翻译成「该片名已在想看片单中」，改名或调列序
-// 会让撞名静默退化成一条通用数据库错误。
+// 唯一键是 (title, kind, source_item_id)（D-PC52）而不是 title：同名不同类型
+// （例如剧版与影版）、同名同类型但来自榜单不同条目的，都是独立的记录。手动条目的
+// source_item_id 恒为空串，因此手动条目之间仍按 (title, kind) 撞名。索引名与列顺序
+// 都是承重的——services.watchlistTitleConflict 靠报错里出现的索引名（必须以
+// idx_watchlist_title 开头）/列清单前缀把撞名翻译成「该片名已在想看片单中」，
+// 改名或调列序会让撞名静默退化成一条通用数据库错误。
 //
 // 这里的 gorm default 标签不触犯 2026-09-02 那条禁令。禁令管的是**默认 true 的
 // 布尔列与默认非零的数值列**：GORM 会把零值字段当未设置并替换成标签默认值，
@@ -39,8 +41,8 @@ const (
 // TestWatchlistDefaultsApplyOnInsert。
 type WatchlistEntry struct {
 	ID    uint   `gorm:"primarykey;index:idx_watchlist_enrichment,priority:2" json:"id"`
-	Title string `gorm:"size:200;not null;uniqueIndex:idx_watchlist_title_kind,priority:1" json:"title"`
-	Kind  string `gorm:"size:16;not null;default:'movie';uniqueIndex:idx_watchlist_title_kind,priority:2" json:"kind"`
+	Title string `gorm:"size:200;not null;uniqueIndex:idx_watchlist_title_kind_source,priority:1" json:"title"`
+	Kind  string `gorm:"size:16;not null;default:'movie';uniqueIndex:idx_watchlist_title_kind_source,priority:2" json:"kind"`
 
 	// 补全状态族。idx_watchlist_enrichment(enrichment_status, id) 是后台 worker
 	// 取待办的访问路径，按 id 升序让认领顺序确定。
@@ -55,7 +57,7 @@ type WatchlistEntry struct {
 	EnrichmentStatus string `gorm:"size:16;not null;default:'pending';index:idx_watchlist_enrichment,priority:1" json:"enrichment_status"`
 	EnrichmentError  string `gorm:"size:32;not null;default:''" json:"enrichment_error"`
 	SourceName       string `gorm:"size:16;not null;default:''" json:"source_name"`
-	SourceItemID     string `gorm:"size:64;not null;default:''" json:"source_item_id"`
+	SourceItemID     string `gorm:"size:64;not null;default:'';uniqueIndex:idx_watchlist_title_kind_source,priority:3" json:"source_item_id"`
 
 	// SourceTitle 是源站给的片名，**只读补充**，不覆盖用户手输的 Title。
 	//

@@ -312,9 +312,8 @@ func ApplySchema(db *gorm.DB) error {
 	}
 	// 如果表存在，先清理重复数据，避免 AutoMigrate 创建唯一索引失败
 	if db.Migrator().HasTable(&models.Video{}) {
-		if err := cleanupReimportedSoftDeletedVideos(db); err != nil {
-			return fmt.Errorf("清理软删除重导入视频失败: %w", err)
-		}
+		// cleanupReimportedSoftDeletedVideos 已退役（LIB-04，D-PC03）：它把与软删行同路径的
+		// 活跃视频在每次启动时直接软删，与「身份不同则新建记录」正面冲突。
 		if err := cleanupDuplicateVideos(db); err != nil {
 			return fmt.Errorf("清理重复视频失败: %w", err)
 		}
@@ -327,6 +326,7 @@ func ApplySchema(db *gorm.DB) error {
 	idleSchedulingColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "idle_scheduling_enabled")
 	desktopNotificationsColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "desktop_notifications_enabled")
 	proxyCacheLimitColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "proxy_cache_limit_bytes")
+	shortFeedEnabledColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "short_feed_enabled")
 	// 这一列是"图片 dHash 换算法"那一版才加的，因此"它在 AutoMigrate 之前还不存在"
 	// 正好等价于"这个库第一次跑到新版本"，可以拿来当清空旧指纹的一次性判据。
 	imagePerceptualHashColumnExisted := settingsTableExisted && db.Migrator().HasColumn(&models.Settings{}, "auto_image_perceptual_hash")
@@ -346,7 +346,12 @@ func ApplySchema(db *gorm.DB) error {
 	if err := resetImagePerceptualHashesForAlgorithmChange(db, settingsTableExisted, imagePerceptualHashColumnExisted); err != nil {
 		return fmt.Errorf("清空旧版图片指纹失败: %w", err)
 	}
-	// 紧跟 AutoMigrate：它依赖刚建出的 kind 列与 idx_watchlist_title_kind。
+	// 同一套「列刚建出来」判据（D-PC45），同样紧贴 AutoMigrate：老库升级后手机端保持开启，
+	// 判据一旦被消费掉就再也补不回来。它自带 NULL 自愈，所以排在图片指纹重置之后也不会丢。
+	if err := migrateShortFeedEnabledSetting(db, settingsTableExisted, shortFeedEnabledColumnExisted); err != nil {
+		return fmt.Errorf("迁移手机端开关失败: %w", err)
+	}
+	// 紧跟 AutoMigrate：它依赖刚建出的 kind 列与 idx_watchlist_title_kind_source。
 	if err := migrateWatchlistKind(db, !watchlistEnrichmentColumnExisted); err != nil {
 		return fmt.Errorf("迁移想看片单类型失败: %w", err)
 	}
@@ -364,6 +369,17 @@ func ApplySchema(db *gorm.DB) error {
 	}
 	if err := migrateProxyCacheLimitSetting(db, settingsTableExisted, proxyCacheLimitColumnExisted); err != nil {
 		return fmt.Errorf("迁移播放代理上限设置失败: %w", err)
+	}
+	// 以下三个迁移排在全部「列刚建出来」迁移之后（P-001 评审 Minor 1）：它们的判据都看数据本身（mode = ''、值 <= 0 / NULL、唯一索引是否在位），
+	// 不依赖 AutoMigrate 之前的观测，可以重复执行。
+	if err := migrateTrashEntryMode(db); err != nil {
+		return fmt.Errorf("回填回收站模式失败: %w", err)
+	}
+	if err := migrateCleanupThresholdSettings(db); err != nil {
+		return fmt.Errorf("迁移清理阈值失败: %w", err)
+	}
+	if err := migrateGlossaryUniqueKey(db); err != nil {
+		return fmt.Errorf("迁移术语表唯一键失败: %w", err)
 	}
 	if err := ensureVideoPathUniqueIndex(db); err != nil {
 		return fmt.Errorf("创建视频路径唯一索引失败: %w", err)
@@ -399,6 +415,7 @@ func ApplySchema(db *gorm.DB) error {
 	var settings models.Settings
 	if err := db.First(&settings).Error; err == gorm.ErrRecordNotFound {
 		// 默认支持的视频格式
+		favoritesUnifiedAt := time.Now()
 		defaultExts := ".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
 		settings = models.Settings{
 			ConfirmBeforeDelete:          true,
@@ -429,12 +446,24 @@ func ApplySchema(db *gorm.DB) error {
 			DesktopNotificationsEnabled:  true,
 			ProxyCacheLimitBytes:         DefaultProxyCacheLimitBytes,
 			BrowserDownloadConcurrency:   DefaultBrowserDownloadConcurrency,
+			// 默认非零 / 默认随新旧库而异的列不带 gorm default，新库在这里显式写值。
+			ShortFeedEnabled:    false,
+			CleanupShortSeconds: DefaultCleanupShortSeconds,
+			CleanupLowWidth:     DefaultCleanupLowWidth,
+			CleanupLowHeight:    DefaultCleanupLowHeight,
+			// 新库没有需要合并的旧互动数据，直接盖章，免得之后误跑一次合并。
+			FavoritesUnifiedAt: &favoritesUnifiedAt,
 		}
 		if err := db.Create(&settings).Error; err != nil {
 			return fmt.Errorf("初始化默认设置失败: %w", err)
 		}
 	} else if err != nil {
 		return fmt.Errorf("读取默认设置失败: %w", err)
+	}
+	// 收藏与点赞并集迁移（D-PC40）：靠 favorites_unified_at 只执行一次，放在默认设置行
+	// 就位之后，这样 settings 为空表的新库也是「已盖章」。
+	if err := migrateUnifyFavorites(db); err != nil {
+		return fmt.Errorf("合并收藏与点赞失败: %w", err)
 	}
 	if err := registerMaintenanceCallbacks(db); err != nil {
 		return fmt.Errorf("注册数据库维护屏障失败: %w", err)
@@ -583,40 +612,6 @@ func cleanupDuplicateVideos(db *gorm.DB) error {
 		}
 	}
 
-	return nil
-}
-
-func cleanupReimportedSoftDeletedVideos(db *gorm.DB) error {
-	type reimportedPath struct {
-		Path string
-	}
-
-	var paths []reimportedPath
-	if err := db.Raw(`
-		SELECT active.path
-		FROM videos active
-		WHERE active.deleted_at IS NULL AND active.path <> ''
-		  AND EXISTS (
-			SELECT 1
-			FROM videos deleted
-			WHERE deleted.path = active.path
-			  AND deleted.deleted_at IS NOT NULL
-		  )
-		GROUP BY active.path
-	`).Scan(&paths).Error; err != nil {
-		return err
-	}
-
-	for _, item := range paths {
-		if err := db.Exec(`
-			UPDATE videos
-			SET deleted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-			WHERE path = ? AND deleted_at IS NULL
-		`, item.Path).Error; err != nil {
-			return err
-		}
-		log.Printf("清理软删除后重导入的视频 path=%s", item.Path)
-	}
 	return nil
 }
 

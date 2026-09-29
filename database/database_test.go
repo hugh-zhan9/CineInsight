@@ -204,7 +204,11 @@ func TestMediaDetailSchemaRejectsInvalidPersonalRating(t *testing.T) {
 	}
 }
 
-func TestCleanupReimportedSoftDeletedVideosRemovesActiveDuplicatePath(t *testing.T) {
+// LIB04：cleanupReimportedSoftDeletedVideos 已退役。它曾在每次启动时把「与某条软删行同
+// 路径」的活跃视频直接软删，与「身份不同则新建记录」正面冲突——新收录的文件会在下次
+// 启动时被静默删除。这条用例断言相反的行为：同路径的活跃行经过 ApplySchema 之后仍然活跃，
+// 反复启动也一样；软删行原样保留。
+func TestCleanupReimportedSoftDeletedVideosRetiredLIB04KeepsActiveDuplicatePath(t *testing.T) {
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "cleanup.db")), &gorm.Config{})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
@@ -229,20 +233,31 @@ func TestCleanupReimportedSoftDeletedVideosRemovesActiveDuplicatePath(t *testing
 		t.Fatalf("create normal fixture: %v", err)
 	}
 
-	if err := cleanupReimportedSoftDeletedVideos(db); err != nil {
-		t.Fatalf("cleanup reimported videos: %v", err)
-	}
-
-	var activeCount int64
-	if err := db.Model(&models.Video{}).Where("path = ?", "/tmp/deleted.mp4").Count(&activeCount).Error; err != nil {
-		t.Fatalf("count active reimport: %v", err)
-	}
-	if activeCount != 0 {
-		t.Fatalf("expected reimported active row to be soft-deleted, got %d", activeCount)
-	}
-
-	if err := db.First(&activeNormal, activeNormal.ID).Error; err != nil {
-		t.Fatalf("normal active row should remain visible: %v", err)
+	for round := 1; round <= 2; round++ {
+		if err := ApplySchema(db); err != nil {
+			t.Fatalf("第 %d 次 ApplySchema 失败: %v", round, err)
+		}
+		var activeCount int64
+		if err := db.Model(&models.Video{}).Where("path = ?", "/tmp/deleted.mp4").Count(&activeCount).Error; err != nil {
+			t.Fatalf("count active reimport: %v", err)
+		}
+		if activeCount != 1 {
+			t.Fatalf("第 %d 次 ApplySchema 后同路径活跃行应仍然活跃，实际活跃行数 %d", round, activeCount)
+		}
+		var reloaded models.Video
+		if err := db.First(&reloaded, activeReimport.ID).Error; err != nil {
+			t.Fatalf("第 %d 次 ApplySchema 后重导入的活跃行应仍可见: %v", round, err)
+		}
+		if err := db.First(&activeNormal, activeNormal.ID).Error; err != nil {
+			t.Fatalf("normal active row should remain visible: %v", err)
+		}
+		var softDeleted int64
+		if err := db.Unscoped().Model(&models.Video{}).Where("id = ? AND deleted_at IS NOT NULL", deleted.ID).Count(&softDeleted).Error; err != nil {
+			t.Fatalf("count soft deleted: %v", err)
+		}
+		if softDeleted != 1 {
+			t.Fatalf("软删行应原样保留，实际 %d", softDeleted)
+		}
 	}
 }
 

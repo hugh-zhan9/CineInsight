@@ -1,7 +1,6 @@
 package database
 
 import (
-	"errors"
 	"fmt"
 	"video-master/models"
 
@@ -49,7 +48,7 @@ func migrateWatchlistKind(db *gorm.DB, enrichmentColumnJustAdded bool) error {
 	if err := db.Model(&models.WatchlistEntry{}).
 		Where("kind IS NULL OR kind = ?", "").
 		UpdateColumn("kind", models.WatchlistKindMovie).Error; err != nil {
-		// 唯一可能的失败是撞上 idx_watchlist_title_kind：库里同时有同名的 kind=''
+		// 唯一可能的失败是撞上唯一索引（旧的 idx_watchlist_title_kind 或新的 idx_watchlist_title_kind_source）：库里同时有同名的 kind=''
 		// 与 kind='movie' 两行。该保留哪一条只有人能决定，这里不猜，只把错误说到
 		// 用户能照着修的程度。
 		return fmt.Errorf("补齐想看条目类型失败（库里可能有同名且 kind 为空的手工数据，需要人工确认保留哪一条）: %w", err)
@@ -67,16 +66,9 @@ func migrateWatchlistKind(db *gorm.DB, enrichmentColumnJustAdded bool) error {
 		UpdateColumn("enrichment_status", models.WatchlistEnrichmentManual).Error; err != nil {
 		return err
 	}
-	// ② 复合唯一索引由 AutoMigrate 依标签创建，这里只断言它在位。没有它就不能安全地
-	//    删掉旧的单列唯一索引——那会让片单短暂失去任何撞名保护。
-	if !db.Migrator().HasIndex(&models.WatchlistEntry{}, "idx_watchlist_title_kind") {
-		return errors.New("AutoMigrate 未建立 idx_watchlist_title_kind，不能删除旧的单列唯一索引")
-	}
-	// ③ 旧的单列唯一索引让同名不同类型无法共存，确认新索引就位后删掉。
-	if db.Migrator().HasIndex(&models.WatchlistEntry{}, "idx_watchlist_title") {
-		if err := db.Migrator().DropIndex(&models.WatchlistEntry{}, "idx_watchlist_title"); err != nil {
-			return err
-		}
-	}
-	return nil
+	// ② 复合唯一索引由 AutoMigrate 依标签创建（D-PC52 之后是 (title, kind, source_item_id)），
+	//    这里只断言它在位。没有它就不能安全地删掉旧索引——那会让片单短暂失去任何撞名保护。
+	// ③ 两代旧唯一索引（单列 idx_watchlist_title、(title, kind) 的 idx_watchlist_title_kind）
+	//    确认新索引就位后在同一个事务里删掉，见 replaceWatchlistTitleIndexes。
+	return replaceWatchlistTitleIndexes(db)
 }
