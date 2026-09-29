@@ -125,13 +125,25 @@ func TestCollectionSuggestionExcludesVideosAlreadyInCollection(t *testing.T) {
 		t.Fatalf("已入集视频不该成为成员: got=%v", got)
 	}
 
-	// 只剩一个没入集的视频时整组消失。
+	// 只剩一个没入集的视频、而同系列其余成员已在作品集里：变成单集追加候选（D-PC38，META15），
+	// 不再是「成员不足 2 整组消失」。
 	if err := collections.AddCollectionVideo(existing.ID, second.ID); err != nil {
 		t.Fatalf("加入作品集失败: %v", err)
 	}
 	views = analyzeSuggestionsOnce(t, svc)
+	if len(views) != 1 || views[0].Kind != "append" || views[0].TargetCollectionID == nil || *views[0].TargetCollectionID != existing.ID {
+		t.Fatalf("单集应生成追加候选: %#v", views)
+	}
+	if got := suggestionMemberIDs(views[0]); len(got) != 1 || got[0] != third.ID {
+		t.Fatalf("追加候选只含未入集成员: %v", got)
+	}
+	// 全部入集后没有候选。
+	if err := collections.AddCollectionVideo(existing.ID, third.ID); err != nil {
+		t.Fatalf("加入作品集失败: %v", err)
+	}
+	views = analyzeSuggestionsOnce(t, svc)
 	if len(views) != 0 {
-		t.Fatalf("成员不足 2 应当没有候选: %#v", views)
+		t.Fatalf("全部入集应当没有候选: %#v", views)
 	}
 }
 
@@ -203,7 +215,7 @@ func TestCollectionSuggestionTreatsDashVersionSuffixAsSameEpisode(t *testing.T) 
 }
 
 // 忽略按 fingerprint 记忆：成员不变不再出现，成员集合一变就是新候选（D-025）。
-func TestCollectionSuggestionDismissIsRememberedUntilMembersChange(t *testing.T) {
+func TestCollectionSuggestionMETA15DismissIsRememberedPerSeries(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := createSuggestionScanRoot(t, t.TempDir())
 	createSuggestionVideo(t, root, "Show.S01E01.mkv")
@@ -235,16 +247,96 @@ func TestCollectionSuggestionDismissIsRememberedUntilMembersChange(t *testing.T)
 		t.Fatalf("忽略不应删除成员: count=%d", memberCount)
 	}
 
+	// META15：忽略按系列记忆（dismiss_key），新增一集后不再出现。
+	var dismissed models.CollectionSuggestion
+	if err := database.DB.First(&dismissed, dismissedID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if dismissed.DismissKey != suggestionDismissKey(dismissed.ScanRoot, dismissed.NormalizedSeries) || len(dismissed.DismissKey) != 64 {
+		t.Fatalf("忽略应写入 dismiss_key: %q", dismissed.DismissKey)
+	}
 	createSuggestionVideo(t, root, "Show.S01E03.mkv")
 	views = analyzeSuggestionsOnce(t, svc)
-	if len(views) != 1 {
-		t.Fatalf("成员集合变化后应重新出现: %#v", views)
+	if len(views) != 0 {
+		t.Fatalf("META15 被忽略的系列新增一集后不应再出现: %#v", views)
 	}
-	if views[0].ID == dismissedID {
-		t.Fatalf("新成员集合必须是新候选: id=%d", views[0].ID)
+}
+
+// 旧记录没有 dismiss_key：旧的按指纹记忆仍然生效，成员集合变化后重新出现（D-025 的旧行为）。
+func TestCollectionSuggestionMETA15LegacyDismissKeepsFingerprintMemory(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := createSuggestionScanRoot(t, t.TempDir())
+	first := createSuggestionVideo(t, root, "Show.S01E01.mkv")
+	second := createSuggestionVideo(t, root, "Show.S01E02.mkv")
+	members := []models.CollectionSuggestionMember{{VideoID: first.ID}, {VideoID: second.ID}}
+	legacy := models.CollectionSuggestion{
+		ScanRoot: root, SeriesName: "Show", NormalizedSeries: "show",
+		Status: models.CollectionSuggestionStatusDismissed, Fingerprint: suggestionFingerprint(members),
 	}
-	if len(views[0].Members) != 3 {
-		t.Fatalf("新候选应有 3 个成员: %#v", views[0].Members)
+	if err := database.DB.Create(&legacy).Error; err != nil {
+		t.Fatal(err)
+	}
+	svc := newSuggestionService(t)
+	if views := analyzeSuggestionsOnce(t, svc); len(views) != 0 {
+		t.Fatalf("旧指纹记忆应仍然生效: %#v", views)
+	}
+	createSuggestionVideo(t, root, "Show.S01E03.mkv")
+	views := analyzeSuggestionsOnce(t, svc)
+	if len(views) != 1 || len(views[0].Members) != 3 || views[0].ID == legacy.ID {
+		t.Fatalf("旧记录成员集合变化后应作为新候选出现: %#v", views)
+	}
+}
+
+// META15：已确认的系列新增一集，生成 append 候选；确认后按集号插入既有作品集，且视频不被改名。
+func TestCollectionSuggestionMETA15AppendCandidateForConfirmedSeries(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	root := createSuggestionScanRoot(t, t.TempDir())
+	ep1 := createSuggestionVideo(t, root, "Show.S01E01.mkv")
+	ep2 := createSuggestionVideo(t, root, "Show.S01E02.mkv")
+	ep4 := createSuggestionVideo(t, root, "Show.S01E04.mkv")
+
+	svc := newSuggestionService(t)
+	views := analyzeSuggestionsOnce(t, svc)
+	if len(views) != 1 || views[0].Kind != "new" || views[0].TargetCollectionID != nil {
+		t.Fatalf("首轮应是新建候选: %#v", views)
+	}
+	detail, err := svc.Confirm(views[0].ID, "Show", nil)
+	if err != nil {
+		t.Fatalf("确认失败: %v", err)
+	}
+	// 新增第 3 集：同系列已有成员在作品集里，产生追加候选（单集也生成）。
+	ep3 := createSuggestionVideo(t, root, "Show.S01E03.mkv")
+	views = analyzeSuggestionsOnce(t, svc)
+	if len(views) != 1 || views[0].Kind != "append" || views[0].TargetCollectionID == nil ||
+		*views[0].TargetCollectionID != detail.Collection.Collection.ID || views[0].TargetCollectionName != "Show" {
+		t.Fatalf("应生成追加候选: %#v", views)
+	}
+	if got := suggestionMemberIDs(views[0]); len(got) != 1 || got[0] != ep3.ID {
+		t.Fatalf("追加候选只含新成员: %v", got)
+	}
+	detail, err = svc.Confirm(views[0].ID, "ignored-name", nil)
+	if err != nil {
+		t.Fatalf("确认追加失败: %v", err)
+	}
+	var order []uint
+	for _, item := range detail.Videos {
+		order = append(order, item.Video.ID)
+	}
+	want := []uint{ep1.ID, ep2.ID, ep3.ID, ep4.ID}
+	if len(order) != len(want) {
+		t.Fatalf("作品集成员数不符: %v", order)
+	}
+	for index := range want {
+		if order[index] != want[index] {
+			t.Fatalf("应按集号插入: got=%v want=%v", order, want)
+		}
+	}
+	var reloaded models.Video
+	if err := database.DB.First(&reloaded, ep3.ID).Error; err != nil || reloaded.Name != "Show.S01E03.mkv" {
+		t.Fatalf("确认追加不得改视频名: %+v err=%v", reloaded, err)
+	}
+	if again := analyzeSuggestionsOnce(t, svc); len(again) != 0 {
+		t.Fatalf("追加确认后不应再有候选: %#v", again)
 	}
 }
 

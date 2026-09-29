@@ -102,6 +102,10 @@ func TestRenameVideoChangingOnlyExtensionKeepsSiblingSubtitle(t *testing.T) {
 	if err := os.WriteFile(srtPath, []byte("1\n00:00:01,000 --> 00:00:03,000\nextension rename\n\n"), 0644); err != nil {
 		t.Fatalf("写入字幕文件失败: %v", err)
 	}
+	// LIB03：只有「视频扩展名」设置里列出的后缀才算扩展名，.mkv 要先在设置里启用。
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("video_extensions", ".mp4,.mkv").Error; err != nil {
+		t.Fatalf("更新扩展名设置失败: %v", err)
+	}
 	video := models.Video{Name: "movie.mp4", Path: oldVideoPath, Directory: root, Size: 10}
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatalf("创建视频失败: %v", err)
@@ -166,6 +170,8 @@ func TestScanDirectorySkipsTrashTempSuffixAndRecentlyActiveFiles(t *testing.T) {
 	mustSetFileModTime(t, stableVideo, oldTime)
 	mustSetFileModTime(t, trashVideo, oldTime)
 	mustSetFileModTime(t, tempSuffixVideo, oldTime)
+	// LIB14：只有旧版回收站目录（legacy_trash 条目所在目录）才被跳过，名字叫 trash 不够。
+	registerLegacyTrashEntry(t, filepath.Join(root, "orig.mp4"), trashVideo)
 
 	files, err := svc.ScanDirectory(root)
 	if err != nil {
@@ -367,7 +373,8 @@ func TestDeleteVideoMovesFileToTrashWhenDeleteFileEnabled(t *testing.T) {
 		t.Fatalf("期望原文件已移走, err=%v", err)
 	}
 
-	trashPath := filepath.Join(filepath.Dir(videoPath), DefaultTrashDirName, filepath.Base(videoPath))
+	// 测试进程里的系统废纸篓是替身：同卷重命名进「原目录/.Trash」。
+	trashPath := filepath.Join(filepath.Dir(videoPath), ".Trash", filepath.Base(videoPath))
 	if _, err := os.Stat(trashPath); err != nil {
 		t.Fatalf("期望文件已移动到回收站: %v", err)
 	}
@@ -603,41 +610,35 @@ func TestDeleteVideoRestoresFileWhenTrashEntryCannotBeRecorded(t *testing.T) {
 	}
 }
 
-func TestMoveToTrashNeverOverwritesCollidingCandidates(t *testing.T) {
+// MoveToTrash 只走系统废纸篓（这里是替身）；系统返回的路径原样交给调用方，已有同名文件不被覆盖。
+func TestMoveToTrashNeverOverwritesExistingTrashFiles(t *testing.T) {
 	root := t.TempDir()
 	sourcePath := filepath.Join(root, "movie.mp4")
 	mustCreateFile(t, sourcePath)
-	trashDir := filepath.Join(root, DefaultTrashDirName)
+	trashDir := filepath.Join(root, ".Trash")
 	if err := os.MkdirAll(trashDir, 0755); err != nil {
 		t.Fatalf("创建回收站目录失败: %v", err)
 	}
-	fixedNow := time.Date(2026, 7, 30, 12, 34, 56, 0, time.Local)
 	baseCollision := filepath.Join(trashDir, "movie.mp4")
-	timestampCollision := filepath.Join(trashDir, "movie_20260730123456.mp4")
 	if err := os.WriteFile(baseCollision, []byte("keep-base"), 0644); err != nil {
 		t.Fatalf("创建基础碰撞文件失败: %v", err)
 	}
-	if err := os.WriteFile(timestampCollision, []byte("keep-timestamp"), 0644); err != nil {
-		t.Fatalf("创建时间戳碰撞文件失败: %v", err)
-	}
 
-	trashService := NewTrashService()
-	trashService.now = func() time.Time { return fixedNow }
-	targetPath, err := trashService.MoveToTrash(sourcePath)
+	targetPath, err := NewTrashService().MoveToTrash(sourcePath)
 	if err != nil {
 		t.Fatalf("移动碰撞文件失败: %v", err)
 	}
-	if targetPath != filepath.Join(trashDir, "movie_20260730123456_2.mp4") {
-		t.Fatalf("应跳过所有已占用候选: %s", targetPath)
+	if targetPath == baseCollision {
+		t.Fatalf("不应复用已占用的路径: %s", targetPath)
 	}
-	for path, want := range map[string]string{
-		baseCollision:      "keep-base",
-		timestampCollision: "keep-timestamp",
-	} {
-		content, readErr := os.ReadFile(path)
-		if readErr != nil || string(content) != want {
-			t.Fatalf("碰撞文件不应被覆盖 path=%s content=%q err=%v", path, content, readErr)
-		}
+	if _, err := os.Stat(targetPath); err != nil {
+		t.Fatalf("文件应在返回的路径上: %v", err)
+	}
+	if _, err := os.Stat(sourcePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("原文件应已移走: %v", err)
+	}
+	if content, readErr := os.ReadFile(baseCollision); readErr != nil || string(content) != "keep-base" {
+		t.Fatalf("碰撞文件不应被覆盖 content=%q err=%v", content, readErr)
 	}
 }
 

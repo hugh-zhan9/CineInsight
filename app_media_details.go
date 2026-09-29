@@ -265,6 +265,58 @@ func (a *App) ConvertTagToPerson(input services.TagPersonConversionRequest) (*se
 	return result, err
 }
 
+// ===== 人物管理（P-017，D-PC32） =====
+
+func (a *App) MergePeople(targetID uint, sourceIDs []uint) (*services.MergePeopleResult, error) {
+	result, err := a.personService.MergePeople(targetID, sourceIDs)
+	log.Printf("API MergePeople target=%d sources=%v err=%v", targetID, sourceIDs, err)
+	return result, err
+}
+
+func (a *App) GetPersonDeletionImpact(personID uint) (*services.PersonDeletionImpact, error) {
+	return a.personService.GetPersonDeletionImpact(personID)
+}
+
+func (a *App) DeletePerson(personID uint) error {
+	err := a.personService.DeletePerson(personID)
+	log.Printf("API DeletePerson id=%d err=%v", personID, err)
+	return err
+}
+
+// ===== 标签转人物撤销、用量、自动标签覆盖（P-017，D-PC34/36/37） =====
+
+func (a *App) UndoTagPersonConversion(conversionID uint) (*services.TagPersonConversionUndoResult, error) {
+	// 撤销可能删掉新建人物及其头像文件；TagService 不持有托管图片目录，这里注入清理函数。
+	a.tagService.SetAvatarRemover(a.personService.RemoveManagedAvatar)
+	result, err := a.tagService.UndoTagPersonConversion(conversionID)
+	if err == nil && a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	log.Printf("API UndoTagPersonConversion id=%d err=%v", conversionID, err)
+	return result, err
+}
+
+func (a *App) ListTagPersonConversions(limit int) ([]services.TagPersonConversionRecord, error) {
+	return a.tagService.ListTagPersonConversions(limit)
+}
+
+func (a *App) GetTagUsageCounts(ids []uint) (map[uint]services.TagUsageCount, error) {
+	return a.tagService.GetTagUsageCounts(ids)
+}
+
+func (a *App) GetVideoAutomaticTagOverrides(videoID uint) ([]models.VideoAutomaticTagOverride, error) {
+	return a.tagService.GetVideoAutomaticTagOverrides(videoID)
+}
+
+func (a *App) ClearVideoAutomaticTagOverride(videoID uint, kind string) error {
+	return a.tagService.ClearVideoAutomaticTagOverride(videoID, kind)
+}
+
+// UpdateVideoRating 是抽屉动作条星级评分的即时保存；rating 为 null 表示清空（D-PC47）。
+func (a *App) UpdateVideoRating(videoID uint, rating *float64) (*models.Video, error) {
+	return a.videoDetailService.UpdateVideoRating(videoID, rating)
+}
+
 // ===== 建议作品集（P-007，D-023..D-025）=====
 
 // StartCollectionSuggestionAnalysis 是用户显式发起的剧集分析，不经空闲门（D-030）。

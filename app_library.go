@@ -118,6 +118,25 @@ func (a *App) SaveLibraryView(input services.SavedLibraryViewInput) (*models.Sav
 	return view, err
 }
 
+// UpdateSavedLibraryView 用新名称与筛选条件覆盖已有视图；重名返回 saved_view_name_taken。
+func (a *App) UpdateSavedLibraryView(viewID uint, name string, filter services.LibraryFilter) (*models.SavedLibraryView, error) {
+	view, err := a.videoService.UpdateSavedLibraryView(viewID, name, filter)
+	log.Printf("API UpdateSavedLibraryView id=%d name=%q err=%v", viewID, name, err)
+	return view, err
+}
+
+// FilterActiveTagIDs 剔除不存在或已删除的标签 ID，返回保留的 ID 与被剔除的数量。
+func (a *App) FilterActiveTagIDs(tagIDs []uint) (*services.ActiveTagIDsResult, error) {
+	return a.videoService.FilterActiveTagIDs(tagIDs)
+}
+
+// ListStaleReasonCounts 返回路径失效记录按原因的计数，空原因归入 unknown。
+func (a *App) ListStaleReasonCounts() (map[string]int, error) {
+	counts, err := a.videoService.ListStaleReasonCounts()
+	log.Printf("API ListStaleReasonCounts reasons=%d err=%v", len(counts), err)
+	return counts, err
+}
+
 // DeleteSavedLibraryView 删除用户保存的片库筛选。
 func (a *App) DeleteSavedLibraryView(viewID uint) error {
 	err := a.videoService.DeleteSavedLibraryView(viewID)

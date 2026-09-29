@@ -45,9 +45,6 @@ func TestParseStrictRejectsEntriesThatCouldNeverBeSavedBack(t *testing.T) {
 			"1", "00:00:01,000 --> 00:00:02,000", "",
 			"2", "00:00:03,000 --> 00:00:04,000", "present",
 		}, "\n"),
-		"zero duration": strings.Join([]string{
-			"1", "00:00:05,000 --> 00:00:05,000", "instant",
-		}, "\n"),
 		"oversized text": strings.Join([]string{
 			"1", "00:00:01,000 --> 00:00:02,000", strings.Repeat("x", MaxEditorSegmentBytes+1),
 		}, "\n"),
@@ -58,6 +55,42 @@ func TestParseStrictRejectsEntriesThatCouldNeverBeSavedBack(t *testing.T) {
 				t.Fatal("opening a document that can never be saved must fail")
 			}
 		})
+	}
+}
+
+// MEDIA-06：零时长与结束早于开始的条目可以打开，问题以 issue 形式报告而不是拒绝加载。
+func TestParseStrictOpensZeroDurationAndReversedEntriesAsIssuesMEDIA06(t *testing.T) {
+	content := strings.Join([]string{
+		"1", "00:00:05,000 --> 00:00:05,000", "instant",
+		"",
+		"2", "00:00:09,000 --> 00:00:08,000", "reversed",
+		"",
+		"3", "00:00:07,900 --> 00:00:10,000", "overlaps reversed end",
+	}, "\n")
+
+	segments, err := ParseStrict([]byte(content))
+	if err != nil {
+		t.Fatalf("零时长/倒置条目应当能打开: %v", err)
+	}
+	if len(segments) != 3 {
+		t.Fatalf("segments = %#v", segments)
+	}
+	issues := DetectDocumentIssues(segments)
+	want := []DocumentIssue{
+		{Index: 1, Kind: DocumentIssueZeroDuration},
+		{Index: 2, Kind: DocumentIssueEndBeforeStart},
+		{Index: 3, Kind: DocumentIssueOverlap},
+	}
+	if len(issues) != len(want) {
+		t.Fatalf("issues = %#v, want %#v", issues, want)
+	}
+	for i := range want {
+		if issues[i] != want[i] {
+			t.Fatalf("issues[%d] = %#v, want %#v", i, issues[i], want[i])
+		}
+	}
+	if !hasEditorIssueCode(ValidateEditorSegments(segments), EditorIssueInvalidRange) {
+		t.Fatal("保存前校验必须仍然拒绝 end<=start")
 	}
 }
 

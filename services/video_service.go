@@ -229,11 +229,19 @@ func (s *VideoService) addVideo(path string) (*models.Video, error) {
 		return nil, fmt.Errorf("不是视频文件: %s", path)
 	}
 
-	// 检查是否已存在
+	// 检查是否已存在：活跃记录一律算已存在；同路径只剩软删行时按身份判定（D-PC03）。
 	var existingVideo models.Video
-	if err := database.DB.Unscoped().Where("path = ?", path).First(&existingVideo).Error; err == nil {
+	if result := database.DB.Where("path = ?", path).Limit(1).Find(&existingVideo); result.Error != nil {
+		return nil, result.Error
+	} else if result.RowsAffected == 1 {
 		log.Printf("跳过已存在视频 path=%s", path)
 		return &existingVideo, ErrVideoExists
+	}
+	if row, skipErr, err := softDeletedVideoPathSkip(path, info); err != nil {
+		return nil, err
+	} else if skipErr != nil {
+		log.Printf("跳过同路径的已删除视频 path=%s", path)
+		return row, skipErr
 	}
 
 	video := &models.Video{
@@ -326,6 +334,19 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 	if !video.DeletedAt.IsValid() {
 		return nil, fmt.Errorf("视频记录当前不是已删除状态: %d", video.ID)
 	}
+	if entry.State == models.TrashStateFileGone {
+		return nil, ErrTrashFileGone
+	}
+	// 原路径已被新的活跃记录占用（例如「只删记录」后同路径的新文件被收录）时拒绝恢复：
+	// 部分唯一索引会在事务里报一个看不懂的约束错误，这里前置成明确的中文错误。
+	var occupant models.Video
+	occupantResult := database.DB.Where("path = ? AND id <> ?", entry.OriginalPath, video.ID).Limit(1).Find(&occupant)
+	if occupantResult.Error != nil {
+		return nil, fmt.Errorf("检查原路径活跃记录失败: %w", occupantResult.Error)
+	}
+	if occupantResult.RowsAffected == 1 {
+		return nil, ErrTrashPathOccupied
+	}
 
 	if entry.State == trashStateDeleted {
 		result := database.DB.Model(entry).
@@ -344,7 +365,9 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 
 	fileAtOriginal := false
 	trashService := NewTrashService()
-	if entry.FileMoved {
+	if entry.Mode == models.TrashModeRecordOnly {
+		// 只删记录：文件一直在原地没动过，恢复只还原数据库（原 ID、标签、人物），不碰文件。
+	} else if entry.FileMoved {
 		var err error
 		fileAtOriginal, err = ensureTrashEntryFileRestored(trashService, *entry)
 		if err != nil {
@@ -371,7 +394,7 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 		result := tx.Model(&models.Video{}).
 			Unscoped().
 			Where("id = ? AND deleted_at IS NOT NULL", video.ID).
-			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": false})
+			Updates(map[string]interface{}{"deleted_at": nil, "is_stale": false, "stale_reason": ""})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -418,19 +441,27 @@ func (s *VideoService) restoreTrashEntry(entry *models.VideoTrashEntry) (*models
 // deleteVideo 删一条视频记录，成功后连带删掉它的播放代理（D-002）。
 //
 // 级联放在这一层而不是 DeleteVideo：扫描对账里消失的文件也走 deleteVideo，
-// 那些视频的代理同样该跟着走。软删除与永久删除在这里是同一条路——回收站里的
+// 那些视频的代理同样该跟着走——软删除与永久删除在这里是同一条路，回收站里的
 // 视频不需要代理，恢复之后要用再重新触发一次。
 func (s *VideoService) deleteVideo(id uint, deleteFile bool) error {
 	return s.deleteVideoBy(id, deleteFile, "user")
 }
 
 func (s *VideoService) deleteVideoBy(id uint, deleteFile bool, deletedBy string) error {
-	if err := s.deleteVideoRecordBy(id, deleteFile, deletedBy); err != nil {
-		return err
+	_, err := s.deleteVideoBatchItem(id, deleteFile, deletedBy, newDeleteBatchID())
+	return err
+}
+
+// deleteVideoBatchItem 是带批次标识与结果码的单项删除。返回的 code 只在 err==nil 时有意义
+// （ok 或 file_missing），失败时的结果码由 trashResultCodeForError 从 err 推出。
+func (s *VideoService) deleteVideoBatchItem(id uint, deleteFile bool, deletedBy, batchID string) (string, error) {
+	code, err := s.deleteVideoRecordBatch(id, deleteFile, deletedBy, batchID)
+	if err != nil {
+		return "", err
 	}
 	s.playbackProxies().DeleteForVideo(id)
-	log.Printf("视频软删除 video_id=%d deleted_by=%s delete_file=%t", id, deletedBy, deleteFile)
-	return nil
+	log.Printf("视频软删除 video_id=%d deleted_by=%s delete_file=%t code=%s", id, deletedBy, deleteFile, code)
+	return code, nil
 }
 
 func (s *VideoService) deleteVideoRecord(id uint, deleteFile bool) error {
@@ -438,96 +469,182 @@ func (s *VideoService) deleteVideoRecord(id uint, deleteFile bool) error {
 }
 
 func (s *VideoService) deleteVideoRecordBy(id uint, deleteFile bool, deletedBy string) error {
+	_, err := s.deleteVideoRecordBatch(id, deleteFile, deletedBy, newDeleteBatchID())
+	return err
+}
+
+// deleteVideoRecordBatch 删除一条视频记录并建回收站条目（详细设计 §2.1 结果契约）。
+//
+// 建条目的每条路径都写非空 mode 与 delete_batch_id：
+//   - deleteFile=true 且文件在：mode=trash，走 pending_move → 系统废纸篓 → 事务软删；
+//   - deleteFile=false，或文件在但位于旧版回收站目录：mode=record_only，记录身份；
+//   - 扫描器删除、或用户删除时文件已不在：mode=missing。
+//
+// 不支持废纸篓、没权限、卷离线时记录与条目都保持原状（pending 条目被撤销），不降级。
+func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedBy, batchID string) (string, error) {
+	if batchID == "" {
+		batchID = newDeleteBatchID()
+	}
 	var video models.Video
 	if err := database.DB.First(&video, id).Error; err != nil {
-		return err
+		return "", err
 	}
 	var existingEntry models.VideoTrashEntry
 	existingResult := database.DB.Where("video_id = ?", video.ID).Limit(1).Find(&existingEntry)
 	if existingResult.Error != nil {
-		return fmt.Errorf("检查既有回收站条目失败: %w", existingResult.Error)
+		return "", fmt.Errorf("检查既有回收站条目失败: %w", existingResult.Error)
 	}
 	if existingResult.RowsAffected == 1 {
 		switch existingEntry.State {
 		case trashStatePendingMove:
-			if reconcileErr := s.reconcilePendingDelete(&existingEntry); reconcileErr != nil {
+			completed, reconcileErr := s.reconcilePendingDelete(&existingEntry)
+			if reconcileErr != nil {
 				_ = recordTrashEntryError(existingEntry.ID, reconcileErr)
-				return fmt.Errorf("继续上次删除失败: %w", reconcileErr)
+				return "", fmt.Errorf("继续上次删除失败: %w", reconcileErr)
 			}
-			return nil
+			if completed {
+				return TrashResultOK, nil
+			}
+			// 上次的删除没有移动过文件，已被取消；按本次请求重新删除。
 		case trashStateRollback:
 			if reconcileErr := reconcileTrashRollback(&existingEntry); reconcileErr != nil {
 				_ = recordTrashEntryError(existingEntry.ID, reconcileErr)
-				return fmt.Errorf("完成上次删除回滚失败: %w", reconcileErr)
+				return "", fmt.Errorf("完成上次删除回滚失败: %w", reconcileErr)
 			}
 		default:
-			return fmt.Errorf("视频已有回收站条目，不能重复删除: %d", existingEntry.ID)
+			return "", fmt.Errorf("视频已有回收站条目，不能重复删除: %d", existingEntry.ID)
 		}
 	}
 
 	entry := models.VideoTrashEntry{
-		DeletedBy:    deletedBy,
-		FileSize:     video.Size,
-		VideoID:      video.ID,
-		VideoName:    video.Name,
-		OriginalPath: video.Path,
-		State:        trashStateDeleted,
+		DeletedBy:     deletedBy,
+		FileSize:      video.Size,
+		VideoID:       video.ID,
+		VideoName:     video.Name,
+		OriginalPath:  video.Path,
+		State:         trashStateDeleted,
+		DeleteBatchID: batchID,
 	}
-	var sourceInfo os.FileInfo
-	var err error
-	sourceInfo, err = os.Stat(video.Path)
+	sourceInfo, err := os.Stat(video.Path)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("检查待删除文件失败: %w", err)
+		return "", fmt.Errorf("检查待删除文件失败: %w", err)
 	}
 	if err == nil {
 		if sourceInfo.IsDir() {
-			return fmt.Errorf("视频路径不是文件: %s", video.Path)
+			return "", fmt.Errorf("视频路径不是文件: %s", video.Path)
 		}
+		// trash / record_only 只记录身份（大小、mtime、dev:inode），不读文件内容做 SHA-256。
 		entry.FileSize = sourceInfo.Size()
 		entry.FileModTime = sourceInfo.ModTime().UnixNano()
 		entry.FileIdentity = stableFileIdentity(sourceInfo)
-		entry.FileSHA256, err = fileSHA256Hex(video.Path)
-		if err != nil {
-			return fmt.Errorf("计算待删除文件摘要失败: %w", err)
-		}
+	} else {
+		sourceInfo = nil
 	}
 
-	shouldMoveFile := deleteFile && sourceInfo != nil && !isTrashPath(video.Path)
-	if !shouldMoveFile {
-		return database.Transaction(func(tx *gorm.DB) error {
+	code := TrashResultOK
+	switch {
+	case deletedBy == "scanner":
+		entry.Mode = models.TrashModeMissing
+	case sourceInfo == nil && deleteFile:
+		// 文件不在磁盘上。先确认它所在的扫描根现在可访问：卷没挂载不能被当成「文件没了」，
+		// 也不能降级成只删记录。文件确实不在时只清库记录。
+		if reachable, _, reachErr := scanRootReachableForPath(video.Path); reachErr == nil && !reachable {
+			return "", ErrTrashVolumeOffline
+		}
+		entry.Mode = models.TrashModeMissing
+		code = TrashResultFileMissing
+	case sourceInfo == nil, !deleteFile, isTrashPath(video.Path):
+		entry.Mode = models.TrashModeRecordOnly
+	default:
+		entry.Mode = models.TrashModeTrash
+	}
+
+	if entry.Mode != models.TrashModeTrash {
+		err := database.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&entry).Error; err != nil {
 				return err
 			}
 			return finalizeVideoDeletionTx(tx, &video, entry.DeletedBy)
 		})
+		return code, err
 	}
+	return s.deleteVideoToSystemTrash(&video, &entry)
+}
 
+// deleteVideoToSystemTrash 是 mode=trash 的删除：pending_move 条目 → 移入系统废纸篓 →
+// 记下实际路径 → 事务里置 deleted 并软删记录。
+func (s *VideoService) deleteVideoToSystemTrash(video *models.Video, entry *models.VideoTrashEntry) (string, error) {
 	trashService := NewTrashService()
 	entry.State = trashStatePendingMove
-	if err := createPendingTrashEntry(&entry, trashService); err != nil {
-		return fmt.Errorf("记录待删除文件失败: %w", err)
+	entry.TrashPath = ""
+	if err := database.DB.Create(entry).Error; err != nil {
+		return "", fmt.Errorf("记录待删除文件失败: %w", err)
 	}
-	if err := movePendingTrashEntryFile(&entry, trashService); err != nil {
-		_ = recordTrashEntryError(entry.ID, err)
-		return fmt.Errorf("移动文件到回收站失败: %w", err)
+	cancelPending := func() {
+		_ = database.DB.Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).Delete(&models.VideoTrashEntry{}).Error
 	}
-	trashInfo, err := os.Stat(entry.TrashPath)
+
+	info, statErr := os.Stat(video.Path)
+	if statErr != nil {
+		cancelPending()
+		return "", fmt.Errorf("检查待删除文件失败: %w", statErr)
+	}
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	if !want.strictMatch(info) {
+		cancelPending()
+		return "", fmt.Errorf("文件在删除过程中发生了变化，已取消删除")
+	}
+
+	trashedPath, moveErr := trashService.MoveToTrash(video.Path)
+	if moveErr != nil {
+		cancelPending()
+		if errors.Is(moveErr, os.ErrNotExist) {
+			// 文件在检查与移动之间消失了：与「文件本来就不在」同一处理，只清库记录。
+			entry.ID = 0
+			entry.CreatedAt = time.Time{}
+			entry.UpdatedAt = time.Time{}
+			entry.State = trashStateDeleted
+			entry.Mode = models.TrashModeMissing
+			err := database.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Create(entry).Error; err != nil {
+					return err
+				}
+				return finalizeVideoDeletionTx(tx, video, entry.DeletedBy)
+			})
+			return TrashResultFileMissing, err
+		}
+		if errors.Is(moveErr, ErrTrashUnsupportedVolume) || errors.Is(moveErr, ErrTrashPermissionDenied) {
+			return "", moveErr
+		}
+		return "", fmt.Errorf("移动文件到回收站失败: %w", moveErr)
+	}
+
+	// 文件已在系统废纸篓里。先把实际路径写回条目：这一步之前进程退出，条目会停在 pending_move
+	// 且 trash_path 为空，启动对账按文件身份去废纸篓里找（详细设计 §2.1 崩溃恢复）。
+	entry.TrashPath = trashedPath
+	if err := recordTrashedPath("video_trash_entries", entry.ID, trashedPath); err != nil {
+		if rollbackErr := trashService.RestoreFromTrashVerified(trashedPath, video.Path, want); rollbackErr != nil {
+			return "", fmt.Errorf("记录废纸篓位置失败: %w；文件回滚失败，将在下次启动时按文件身份对账: %v", err, rollbackErr)
+		}
+		cancelPending()
+		return "", fmt.Errorf("记录废纸篓位置失败，已撤销删除: %w", err)
+	}
+	trashInfo, err := os.Stat(trashedPath)
 	if err != nil {
-		return fmt.Errorf("读取回收站文件信息失败: %w", err)
+		return "", fmt.Errorf("读取回收站文件信息失败: %w", err)
 	}
-	if !trashEntryFileMatches(entry.TrashPath, trashInfo, entry) {
-		return fmt.Errorf("回收站文件与删除前内容不一致: %s", entry.TrashPath)
+	if !want.strictMatch(trashInfo) {
+		return "", ErrTrashIdentityMismatch
 	}
-	log.Printf("视频已移入回收站 src=%s dst=%s", video.Path, entry.TrashPath)
+	log.Printf("视频已移入系统废纸篓 video_id=%d", video.ID)
 
 	err = database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.VideoTrashEntry{}).
 			Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).
 			Updates(map[string]interface{}{
-				"state":       trashStateDeleted,
-				"file_moved":  true,
-				"file_sha256": entry.FileSHA256,
-				"last_error":  "",
+				"state":      trashStateDeleted,
+				"file_moved": true,
+				"last_error": "",
 			})
 		if result.Error != nil {
 			return result.Error
@@ -535,34 +652,34 @@ func (s *VideoService) deleteVideoRecordBy(id uint, deleteFile bool, deletedBy s
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("待删除条目状态已变化: %d", entry.ID)
 		}
-		return finalizeVideoDeletionTx(tx, &video, entry.DeletedBy)
+		return finalizeVideoDeletionTx(tx, video, entry.DeletedBy)
 	})
 	if err == nil {
-		return nil
+		return TrashResultOK, nil
 	}
 	committed, rolledBack, confirmErr := confirmDeleteTransactionOutcome(video.ID, entry.ID)
 	if confirmErr != nil {
 		_ = recordTrashEntryError(entry.ID, fmt.Errorf("删除提交结果无法确认: %w", err))
-		return fmt.Errorf("删除提交结果无法确认，文件和操作日志已保留供启动对账: %w", err)
+		return "", fmt.Errorf("删除提交结果无法确认，文件和操作日志已保留供启动对账: %w", err)
 	}
 	if committed {
-		return nil
+		return TrashResultOK, nil
 	}
 	if !rolledBack {
 		_ = recordTrashEntryError(entry.ID, fmt.Errorf("删除状态不一致: %w", err))
-		return fmt.Errorf("删除状态不一致，未执行文件补偿: %w", err)
+		return "", fmt.Errorf("删除状态不一致，未执行文件补偿: %w", err)
 	}
 
-	_ = database.DB.Model(&entry).Update("state", trashStateRollback).Error
-	if rollbackErr := trashService.RestoreFromTrash(entry.TrashPath, video.Path); rollbackErr != nil {
+	_ = database.DB.Model(entry).Where("state = ?", trashStatePendingMove).Update("state", trashStateRollback).Error
+	if rollbackErr := trashService.RestoreFromTrashVerified(entry.TrashPath, video.Path, want); rollbackErr != nil {
 		_ = recordTrashEntryError(entry.ID, rollbackErr)
-		return fmt.Errorf("删除数据库记录失败: %w；文件回滚失败: %v", err, rollbackErr)
+		return "", fmt.Errorf("删除数据库记录失败: %w；文件回滚失败: %v", err, rollbackErr)
 	}
-	if cleanupErr := database.DB.Delete(&entry).Error; cleanupErr != nil {
+	if cleanupErr := database.DB.Delete(entry).Error; cleanupErr != nil {
 		_ = recordTrashEntryError(entry.ID, cleanupErr)
-		return fmt.Errorf("删除数据库记录失败: %w；清理待删除条目失败: %v", err, cleanupErr)
+		return "", fmt.Errorf("删除数据库记录失败: %w；清理待删除条目失败: %v", err, cleanupErr)
 	}
-	return fmt.Errorf("删除数据库记录失败: %w", err)
+	return "", fmt.Errorf("删除数据库记录失败: %w", err)
 }
 
 func finalizeVideoDeletionTx(tx *gorm.DB, video *models.Video, deletedBy string) error {
@@ -576,21 +693,6 @@ func finalizeVideoDeletionTx(tx *gorm.DB, video *models.Video, deletedBy string)
 		return err
 	}
 	return tx.Delete(video).Error
-}
-
-func createPendingTrashEntry(entry *models.VideoTrashEntry, trashService *TrashService) error {
-	for attempt := 0; attempt < 10000; attempt++ {
-		entry.TrashPath = trashService.TrashTargetPath(entry.OriginalPath, attempt)
-		if err := database.DB.Create(entry).Error; err == nil {
-			return nil
-		} else if !trashPathAlreadyRecorded(entry.TrashPath) {
-			return err
-		}
-		entry.ID = 0
-		entry.CreatedAt = time.Time{}
-		entry.UpdatedAt = time.Time{}
-	}
-	return fmt.Errorf("无法记录唯一回收站路径: %s", entry.OriginalPath)
 }
 
 func movePendingTrashEntryFile(entry *models.VideoTrashEntry, trashService *TrashService) error {
@@ -640,6 +742,21 @@ func trashPathAlreadyRecorded(path string) bool {
 }
 
 func ensureTrashEntryFileRestored(trashService *TrashService, entry models.VideoTrashEntry) (bool, error) {
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	strict := !isLegacyTrashMode(entry.Mode)
+	matches := func(path string, info os.FileInfo) bool {
+		if strict {
+			return want.strictMatch(info)
+		}
+		return trashEntryFileMatches(path, info, entry)
+	}
+	mismatch := func(format string) error {
+		if strict {
+			return ErrTrashIdentityMismatch
+		}
+		return fmt.Errorf(format, entry.OriginalPath)
+	}
+
 	originalInfo, originalExists, err := regularFileState(entry.OriginalPath)
 	if err != nil {
 		return false, err
@@ -655,19 +772,19 @@ func ensureTrashEntryFileRestored(trashService *TrashService, entry models.Video
 			}
 			return true, nil
 		}
-		return false, fmt.Errorf("原路径已被占用，拒绝覆盖: %s", entry.OriginalPath)
+		return false, ErrTrashPathOccupied
 	}
 	if originalExists {
-		if !trashEntryFileMatches(entry.OriginalPath, originalInfo, entry) {
-			return false, fmt.Errorf("原路径文件与删除记录不一致: %s", entry.OriginalPath)
+		if !matches(entry.OriginalPath, originalInfo) {
+			return false, mismatch("原路径文件与删除记录不一致: %s")
 		}
 		return true, nil
 	}
 	if !trashExists {
-		return false, fmt.Errorf("回收站文件不存在: %s", entry.TrashPath)
+		return false, ErrTrashFileGone
 	}
-	if !trashEntryFileMatches(entry.TrashPath, trashInfo, entry) {
-		return false, fmt.Errorf("回收站文件与删除记录不一致: %s", entry.TrashPath)
+	if !matches(entry.TrashPath, trashInfo) {
+		return false, mismatch("回收站文件与删除记录不一致: %s")
 	}
 	if err := trashService.RestoreFromTrash(entry.TrashPath, entry.OriginalPath); err != nil {
 		return false, err
@@ -775,6 +892,9 @@ func markTrashEntryRecoverable(entryID uint, cause error) error {
 }
 
 func (s *VideoService) cancelInterruptedDeletion(entry *models.VideoTrashEntry) (*models.Video, error) {
+	if !isLegacyTrashMode(entry.Mode) && entry.State == trashStatePendingMove {
+		return s.cancelInterruptedTrashDeletion(entry)
+	}
 	var video models.Video
 	if err := database.DB.Preload("Tags").First(&video, entry.VideoID).Error; err != nil {
 		return nil, fmt.Errorf("读取活动视频失败: %w", err)
@@ -823,6 +943,35 @@ func (s *VideoService) cancelInterruptedDeletion(entry *models.VideoTrashEntry) 
 	return &video, nil
 }
 
+// cancelInterruptedTrashDeletion 撤销一次 mode=trash 中断在 pending_move 的删除：文件没动就直接删条目，
+// 已进废纸篓（trash_path 已记录或按身份找到）就核对身份后移回原路径；位置未知则拒绝。
+func (s *VideoService) cancelInterruptedTrashDeletion(entry *models.VideoTrashEntry) (*models.Video, error) {
+	var video models.Video
+	if err := database.DB.Preload("Tags").First(&video, entry.VideoID).Error; err != nil {
+		return nil, fmt.Errorf("读取活动视频失败: %w", err)
+	}
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	location, foundPath, err := resolvePendingTrashMove(entry.OriginalPath, entry.TrashPath, want)
+	if err != nil {
+		_ = recordTrashEntryError(entry.ID, err)
+		return nil, err
+	}
+	if location == pendingFileUnknown {
+		_ = recordTrashEntryError(entry.ID, ErrTrashFileGone)
+		return nil, ErrTrashFileGone
+	}
+	if location == pendingFileInTrash {
+		if err := NewTrashService().RestoreFromTrashVerified(foundPath, entry.OriginalPath, want); err != nil {
+			_ = recordTrashEntryError(entry.ID, err)
+			return nil, err
+		}
+	}
+	if err := database.DB.Delete(entry).Error; err != nil {
+		return nil, fmt.Errorf("清理中断删除日志失败: %w", err)
+	}
+	return &video, nil
+}
+
 // ReconcileTrashEntries 恢复上次进程中断时尚未完成的文件与数据库操作。
 func (s *VideoService) ReconcileTrashEntries() error {
 	libraryPathMutationMu.Lock()
@@ -838,7 +987,7 @@ func (s *VideoService) ReconcileTrashEntries() error {
 		var err error
 		switch entry.State {
 		case trashStatePendingMove:
-			err = s.reconcilePendingDelete(entry)
+			_, err = s.reconcilePendingDelete(entry)
 		case trashStateRestoring:
 			_, err = s.restoreTrashEntry(entry)
 		case trashStateRollback:
@@ -852,7 +1001,67 @@ func (s *VideoService) ReconcileTrashEntries() error {
 	return errors.Join(reconcileErrors...)
 }
 
-func (s *VideoService) reconcilePendingDelete(entry *models.VideoTrashEntry) error {
+// reconcilePendingDelete 对账一条 pending_move 条目。completed=true 表示删除已补提交（记录已软删）；
+// false 表示这次删除没有移动过文件，已被取消，视频记录保持活跃。
+func (s *VideoService) reconcilePendingDelete(entry *models.VideoTrashEntry) (bool, error) {
+	if !isLegacyTrashMode(entry.Mode) {
+		return s.reconcilePendingTrashDelete(entry)
+	}
+	err := s.reconcileLegacyPendingDelete(entry)
+	return err == nil, err
+}
+
+// reconcilePendingTrashDelete 处理 mode=trash 的 pending_move（详细设计 §2.1 崩溃恢复三分支）：
+//  1. 原路径文件仍在且身份一致 → 取消，回滚为活跃记录；
+//  2. 原路径已不在，在废纸篓里按身份找到 → 补写 trash_path，置 deleted；
+//  3. 都找不到 → 置 deleted 并写「文件位置未知」，回收站里只提供「移除记录」。
+func (s *VideoService) reconcilePendingTrashDelete(entry *models.VideoTrashEntry) (bool, error) {
+	var video models.Video
+	if err := database.DB.Unscoped().First(&video, entry.VideoID).Error; err != nil {
+		return false, err
+	}
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	location, foundPath, err := resolvePendingTrashMove(entry.OriginalPath, entry.TrashPath, want)
+	if err != nil {
+		return false, err
+	}
+	if location == pendingFileAtOriginal {
+		result := database.DB.Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).Delete(&models.VideoTrashEntry{})
+		if result.Error != nil {
+			return false, fmt.Errorf("取消中断删除失败: %w", result.Error)
+		}
+		log.Printf("视频删除中断且文件未移动，已取消 video_id=%d", entry.VideoID)
+		return false, nil
+	}
+	updates := map[string]interface{}{"state": trashStateDeleted, "file_moved": true, "last_error": ""}
+	if location == pendingFileUnknown {
+		updates = map[string]interface{}{"state": trashStateDeleted, "file_moved": false, "trash_path": "", "last_error": trashUnknownLocationMessage}
+	}
+	err = database.Transaction(func(tx *gorm.DB) error {
+		if location == pendingFileInTrash && foundPath != entry.TrashPath {
+			if err := claimTrashPathTx(tx, "video_trash_entries", entry.ID, foundPath); err != nil {
+				return err
+			}
+			updates["trash_path"] = foundPath
+		}
+		result := tx.Model(&models.VideoTrashEntry{}).
+			Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("待删除条目状态已变化: %d", entry.ID)
+		}
+		return finalizeVideoDeletionTx(tx, &video, entry.DeletedBy)
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *VideoService) reconcileLegacyPendingDelete(entry *models.VideoTrashEntry) error {
 	var video models.Video
 	if err := database.DB.Unscoped().First(&video, entry.VideoID).Error; err != nil {
 		return err
@@ -968,10 +1177,94 @@ func (r *BatchVideoOperationResult) record(videoID uint, err error) {
 
 func (s *VideoService) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *BatchVideoOperationResult {
 	result := newBatchVideoOperationResult(videoIDs)
+	batchID := newDeleteBatchID()
 	for _, videoID := range videoIDs {
-		result.record(videoID, s.DeleteVideo(videoID, deleteFile))
+		libraryPathMutationMu.RLock()
+		_, err := s.deleteVideoBatchItem(videoID, deleteFile, "user", batchID)
+		libraryPathMutationMu.RUnlock()
+		result.record(videoID, err)
 	}
 	return result
+}
+
+// DeleteVideosDetailed 是桌面端使用的批量删除：逐项返回结果码，整批共享一个 batch_id，
+// 可带 requestID 上报进度并在两项之间被 CancelBatchDelete 取消（D-PC51）。
+func (s *VideoService) DeleteVideosDetailed(videoIDs []uint, deleteFile bool, opts BatchDeleteOptions) *BatchResult {
+	batchID := newDeleteBatchID()
+	result := newBatchResult(len(videoIDs), batchID)
+	cancelled, finish := opts.begin()
+	defer finish()
+	for index, videoID := range videoIDs {
+		if cancelled() {
+			result.addCode(videoID, TrashResultCancelled, "")
+			continue
+		}
+		libraryPathMutationMu.RLock()
+		code, err := s.deleteVideoBatchItem(videoID, deleteFile, "user", batchID)
+		libraryPathMutationMu.RUnlock()
+		result.addOutcome(videoID, code, err)
+		opts.report(index+1, len(videoIDs))
+	}
+	return result
+}
+
+// PermanentlyDeleteVideos 永久删除视频文件与记录，只用于 trash_unsupported 之后用户明确选择
+// 「永久删除」（二次确认在前端）。流程：身份核对 → 删文件 → 硬删记录（级联）。
+func (s *VideoService) PermanentlyDeleteVideos(videoIDs []uint) *BatchResult {
+	result := newBatchResult(len(videoIDs), "")
+	for _, videoID := range videoIDs {
+		libraryPathMutationMu.Lock()
+		code, err := s.permanentlyDeleteVideo(videoID)
+		libraryPathMutationMu.Unlock()
+		result.addOutcome(videoID, code, err)
+	}
+	return result
+}
+
+func (s *VideoService) permanentlyDeleteVideo(id uint) (string, error) {
+	var video models.Video
+	if err := database.DB.Unscoped().First(&video, id).Error; err != nil {
+		return "", err
+	}
+	if err := ensureNoActiveEnhancement(database.DB, video.ID); err != nil {
+		return "", err
+	}
+	code := TrashResultOK
+	info, err := os.Stat(video.Path)
+	switch {
+	case err == nil:
+		if info.IsDir() {
+			return "", fmt.Errorf("视频路径不是文件")
+		}
+		// 没有删除时记录的条目可核对（不支持废纸篓时删除已被撤销），只能核对入库时的大小。
+		if video.Size != 0 && info.Size() != video.Size {
+			return "", ErrTrashIdentityMismatch
+		}
+		if err := os.Remove(video.Path); err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				return "", ErrTrashPermissionDenied
+			}
+			return "", fmt.Errorf("删除文件失败: %w", err)
+		}
+	case os.IsNotExist(err):
+		if reachable, _, reachErr := scanRootReachableForPath(video.Path); reachErr == nil && !reachable {
+			return "", ErrTrashVolumeOffline
+		}
+		code = TrashResultFileMissing
+	default:
+		return "", fmt.Errorf("检查待删除文件失败: %w", err)
+	}
+	if err := database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("video_id = ?", video.ID).Delete(&models.VideoTrashEntry{}).Error; err != nil {
+			return err
+		}
+		return hardDeleteVideoTx(tx, video.ID)
+	}); err != nil {
+		return "", fmt.Errorf("删除数据库记录失败: %w", err)
+	}
+	s.playbackProxies().DeleteForVideo(video.ID)
+	log.Printf("视频永久删除 video_id=%d code=%s", video.ID, code)
+	return code, nil
 }
 
 func (s *VideoService) BatchAddTagToVideos(videoIDs []uint, tagID uint) *BatchVideoOperationResult {

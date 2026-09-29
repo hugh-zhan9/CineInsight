@@ -3,6 +3,7 @@ package services
 import (
 	"fmt"
 	"strings"
+	"time"
 	"video-master/database"
 	"video-master/models"
 
@@ -184,26 +185,6 @@ func (s *ImageAITaggingService) ApproveImageAITagCandidate(candidateID uint) (*I
 		if candidate.Confidence != models.AITagConfidenceHigh && candidate.Confidence != models.AITagConfidenceMedium {
 			return fmt.Errorf("候选置信度不可接受")
 		}
-		hasManualTags, err := s.hasManualOfficialImageTagsInTx(tx, candidate.ImageID)
-		if err != nil {
-			return err
-		}
-		if hasManualTags {
-			// 用户已经自己给这张图打过标签：人的判断优先，AI 候选整体作废而不是叠加。
-			now := s.now()
-			if err := tx.Model(&models.ImageAITagCandidate{}).
-				Where("image_id = ? AND status = ?", candidate.ImageID, models.AITagCandidateStatusPending).
-				Updates(map[string]interface{}{
-					"status":      models.AITagCandidateStatusSuperseded,
-					"rejected_at": &now,
-				}).Error; err != nil {
-				return err
-			}
-			approved = candidate
-			approved.Status = models.AITagCandidateStatusSuperseded
-			approved.RejectedAt = &now
-			return nil
-		}
 		tagID, err := s.resolveOfficialImageTagInTx(tx, candidate)
 		if err != nil {
 			return err
@@ -279,9 +260,8 @@ func (s *ImageAITaggingService) RejectPendingImageAITagCandidatesByImage(imageID
 	now := s.now()
 	var rejected int64
 	err := database.Transaction(func(tx *gorm.DB) error {
-		if err := activeImageExistsInTx(tx, imageID); err != nil {
-			return err
-		}
+		// IMG-14：这里不校验图片是否活跃。已删除图片的候选仍要能整体拒绝，
+		// 否则它们会永远挂在待审列表里。批准路径的活跃校验保持不变。
 		result := tx.Model(&models.ImageAITagCandidate{}).
 			Where("image_id = ? AND status = ?", imageID, models.AITagCandidateStatusPending).
 			Updates(map[string]interface{}{
@@ -313,15 +293,42 @@ func (s *ImageAITaggingService) GetImageAITaggingSummary() (*ImageAITaggingSumma
 	if _, _, err := s.prepareClient(); err == nil {
 		summary.ConfigAvailable = true
 	}
-	if err := s.db.Model(&models.ImageAITagCandidate{}).
-		Where("status = ?", models.AITagCandidateStatusPending).
-		Count(&summary.Pending).Error; err != nil {
+	// IMG-14：待审计数只算活跃图片，已删除图片的候选不进计数。
+	pending := func() *gorm.DB {
+		return s.db.Model(&models.ImageAITagCandidate{}).
+			Joins("INNER JOIN images ON images.id = image_ai_tag_candidates.image_id AND images.deleted_at IS NULL").
+			Where("image_ai_tag_candidates.status = ?", models.AITagCandidateStatusPending)
+	}
+	if err := pending().Count(&summary.Pending).Error; err != nil {
 		return nil, err
 	}
-	if err := s.db.Model(&models.ImageAITagCandidate{}).
-		Where("status = ?", models.AITagCandidateStatusPending).
-		Distinct("image_id").Count(&summary.PendingImages).Error; err != nil {
+	if err := pending().Distinct("image_ai_tag_candidates.image_id").Count(&summary.PendingImages).Error; err != nil {
 		return nil, err
 	}
 	return summary, nil
+}
+
+// SupersedeImageCandidatesForManualTag 在用户手动给图片加标签时，把同图 pending 且
+// matched_tag_id 等于该标签的候选条件更新为 superseded（规则 2）。
+// 由 AddTagToImage 在同一事务内调用（P-020 接入）；返回被作废的候选 id，供前端局部移除。
+func SupersedeImageCandidatesForManualTag(tx *gorm.DB, imageID, tagID uint) ([]uint, error) {
+	var ids []uint
+	if err := tx.Model(&models.ImageAITagCandidate{}).
+		Where("image_id = ? AND matched_tag_id = ? AND status = ?", imageID, tagID, models.AITagCandidateStatusPending).
+		Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	now := time.Now()
+	if err := tx.Model(&models.ImageAITagCandidate{}).
+		Where("id IN ? AND status = ?", ids, models.AITagCandidateStatusPending).
+		Updates(map[string]interface{}{
+			"status":      models.AITagCandidateStatusSuperseded,
+			"rejected_at": &now,
+		}).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
 }

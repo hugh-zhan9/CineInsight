@@ -343,27 +343,35 @@ func (a *App) rescanAddedDirectory(added models.ScanDirectory) {
 	runtime.EventsEmit(a.ctx, "library-watcher-reconciled", services.LibraryReconcileEvent{
 		DirectoryID: added.ID,
 		Affected:    1,
-		Result: &services.LibraryReconcileSummary{
-			Scanned:           result.Scanned,
-			Added:             result.Added,
-			Relocated:         result.Relocated,
-			Stale:             result.Stale,
-			Restored:          result.Restored,
-			MetadataRefreshed: result.MetadataRefreshed,
-			Skipped:           result.Skipped,
-			ErrorCount:        len(result.Errors),
-		},
+		Result:      services.SummarizeScanResult(result),
 		CompletedAt: time.Now(),
 	})
+	a.emitLibraryScanSummary(services.ScanTriggerDirectoryChange, result)
 }
 
-// UpdateDirectory 更新目录
+// UpdateDirectory 更新目录。旧绑定的薄包装：路径变化按「替换为新目录」处理。
+// 前端全部改用 UpdateDirectoryWithMode 之后由收尾切片删除。
 func (a *App) UpdateDirectory(id uint, path, alias string) error {
-	err := a.directoryService.UpdateDirectory(id, path, alias)
-	if err == nil {
-		a.reconfigureLibraryWatcher()
-	}
+	_, err := a.UpdateDirectoryWithMode(id, path, alias, services.DirectoryUpdateModeReplace)
 	return err
+}
+
+// UpdateDirectoryWithMode 更新扫描目录的路径与别名（D-PC07）。
+// mode=remap：目录只是换了位置，保留记录 ID、标签与进度，路径整体改写到新目录；
+// mode=replace：用新目录替换旧目录，旧目录下的记录标为 removed_root。路径没变时 mode 被忽略。
+//
+// 成功且路径变化后重配监听，并在后台对新路径做一次窄对账——remap 后确认新位置的文件都在，
+// replace 后把之前标失效、现在又扫得到的记录接回来。
+func (a *App) UpdateDirectoryWithMode(id uint, path, alias, mode string) (*services.DirectoryUpdateResult, error) {
+	result, err := a.directoryService.UpdateDirectory(id, path, alias, mode)
+	if err != nil {
+		return nil, err
+	}
+	if result.PathChanged {
+		a.reconfigureLibraryWatcher()
+		go a.rescanAddedDirectory(models.ScanDirectory{ID: id, Path: result.NewPath})
+	}
+	return result, nil
 }
 
 // DeleteDirectory 删除扫描目录。

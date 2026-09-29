@@ -31,6 +31,8 @@ func TestScanDirectoryProgressBeforeCompletionAndSameFiltering(t *testing.T) {
 		mustSetFileModTime(t, path, time.Now().Add(-time.Hour))
 	}
 	mustCreateFile(t, filepath.Join(root, "recent.mp4"))
+	// LIB14：trash/ 只有登记为旧版回收站目录才被跳过。
+	registerLegacyTrashEntry(t, filepath.Join(root, "no.mp4"), filepath.Join(root, "trash", "no.mp4"))
 	if err := os.Symlink(root, filepath.Join(root, "loop")); err != nil {
 		t.Fatal(err)
 	}

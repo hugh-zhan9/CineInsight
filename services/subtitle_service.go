@@ -46,7 +46,7 @@ type SubtitleService struct {
 	taskQueue         *subtitleTaskQueue
 	// glossaryResolver 解析视频的术语生效集（D-033）。可替换是为了让翻译流程的
 	// 测试不必先造出作品集与库表。
-	glossaryResolver func(videoID uint) ([]GlossaryTerm, error)
+	glossaryResolver func(videoID uint, targetLanguage string) ([]GlossaryTerm, error)
 	// translationCancels 按视频登记正在跑的「翻译已有字幕」任务，让前端能中途叫停。
 	// 字幕生成走队列自带取消，这条路径不进队列，所以自己记一份。
 	translationCancels map[uint][]*translationCancelEntry
@@ -85,6 +85,12 @@ func NewSubtitleService(baseDir string) *SubtitleService {
 	}
 	service.taskQueue = service.newSubtitleTaskQueue()
 	return service
+}
+
+// subtitleWriter 返回以应用数据目录为根的字幕写入器。写入器无状态，每次现取，
+// BaseDir 为空（数据目录没解析出来）时，覆盖已有字幕会报错而不是写相对路径。
+func (s *SubtitleService) subtitleWriter() *SubtitleFileWriter {
+	return NewSubtitleFileWriter(s.BaseDir)
 }
 
 func (s *SubtitleService) SetContext(ctx context.Context) {
@@ -448,7 +454,6 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 	// Extract audio and transcribe with the shared local-ASR execution slot.
 	s.emitGenerateProgress(taskID, req, "extracting-audio", 10, "提取音频...")
 	s.emitGenerateProgress(taskID, req, "transcribing", 20, fmt.Sprintf("使用 %s 转写音频...", engineStatus.DisplayName))
-	outputPrefix := strings.TrimSuffix(videoPath, filepath.Ext(videoPath))
 	detectedLang, segments, err := s.transcribeVideoLocally(ctx, videoPath, req.Engine, req.SourceLang, options.RecognitionConfig)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -458,24 +463,43 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 		return nil, err
 	}
 
+	return s.commitTranscription(ctx, taskID, req, videoPath, detectedLang, segments, options)
+}
+
+// commitTranscription 把转写结果落成字幕（D-PC13）：先写到 pending 临时文件，校验通过才
+// Replace 到 .srt。幻觉、空结果、取消三条路径下，原 .srt 一个字节都不动。
+func (s *SubtitleService) commitTranscription(ctx context.Context, taskID uint, req SubtitleGenerateRequest, videoPath string, detectedLang string, segments []subtitleparser.Segment, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
 	s.emitGenerateProgress(taskID, req, "normalizing", 35, "整理转写结果...")
-	srtPath := outputPrefix + ".srt"
+	srtPath := subtitleparser.SRTPathForVideo(videoPath)
+	pendingPath := subtitlePendingPath(srtPath)
 	unlockSubtitle := lockSubtitleFile(req.VideoID)
 	defer unlockSubtitle()
-	if err := writeSRT(srtPath, segments); err != nil {
-		return nil, fmt.Errorf("写入字幕失败: %w", err)
+
+	if plainTranscriptText(segments, 0) == "" {
+		_ = os.Remove(pendingPath)
+		return nil, errors.New("语音识别未产生有效字幕，视频可能没有清晰的语音内容")
+	}
+	if ctx.Err() != nil {
+		_ = os.Remove(pendingPath)
+		s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
+		return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
+	}
+	if err := writeSRT(pendingPath, segments); err != nil {
+		_ = os.Remove(pendingPath)
+		return nil, fmt.Errorf("写入字幕失败: %s", subtitleIOReason(err))
 	}
 
 	// 后处理：检测幻觉输出（forceGenerate 时跳过）
 	if !options.ForceGenerate {
 		s.emitGenerateProgress(taskID, req, "validating", 50, "校验字幕输出...")
-		if err := s.validateSRT(srtPath); err != nil {
+		if err := s.validateSRT(pendingPath); err != nil {
 			var validationErr *SubtitleValidationError
 			if ok := errors.As(err, &validationErr); ok {
+				// 校验未过：临时文件留给「强制生成」，原字幕不动。
 				s.cachePendingSubtitle(&pendingSubtitleArtifact{
 					VideoID:      req.VideoID,
 					VideoPath:    videoPath,
-					SRTPath:      srtPath,
+					SRTPath:      pendingPath,
 					Engine:       req.Engine,
 					SourceLang:   req.SourceLang,
 					DetectedLang: detectedLang,
@@ -491,16 +515,44 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 					SourceLang:     req.SourceLang,
 				}, nil
 			}
+			_ = os.Remove(pendingPath)
 			return nil, err
 		}
 	}
 
-	result, err := s.finalizeSubtitleArtifact(ctx, taskID, req, srtPath, detectedLang, options)
+	result, err := s.finalizeSubtitleArtifact(ctx, taskID, req, pendingPath, detectedLang, options)
 	if err != nil {
 		return nil, err
 	}
 	s.consumePendingSubtitle(req.VideoID)
 	return result, nil
+}
+
+// subtitlePendingPath 由最终 .srt 路径得到生成流程使用的临时文件路径。
+func subtitlePendingPath(srtPath string) string {
+	return strings.TrimSuffix(srtPath, filepath.Ext(srtPath)) + subtitlePendingSuffix
+}
+
+// subtitleFinalPathForPending 是 subtitlePendingPath 的逆运算。
+func subtitleFinalPathForPending(pendingPath string) string {
+	return strings.TrimSuffix(pendingPath, subtitlePendingSuffix) + ".srt"
+}
+
+// DiscardPendingSubtitle 放弃校验未过的临时字幕：删除临时文件并清掉登记（D-PC13）。
+func (s *SubtitleService) DiscardPendingSubtitle(videoID uint) error {
+	artifact := s.consumePendingSubtitle(videoID)
+	if artifact == nil {
+		return nil
+	}
+	if !strings.HasSuffix(artifact.SRTPath, subtitlePendingSuffix) {
+		return nil
+	}
+	unlock := lockSubtitleFile(videoID)
+	defer unlock()
+	if err := os.Remove(artifact.SRTPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("删除临时字幕失败: %s", subtitleIOReason(err))
+	}
+	return nil
 }
 
 // GenerateTemporaryTranscript performs local ASR without writing an SRT or sending raw audio externally.
@@ -608,10 +660,20 @@ func plainTranscriptText(segments []subtitleparser.Segment, charLimit int) strin
 	return truncateRunes(builder.String(), charLimit)
 }
 
-func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID uint, req SubtitleGenerateRequest, srtPath string, detectedLang string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
+// finalizeSubtitleArtifact 收尾一份已写好的 pending 字幕：可选的双语翻译在临时文件上完成，
+// 最后经写入器 Replace 到同名 .srt 并删除临时文件（D-PC13）。调用方持有 lockSubtitleFile。
+// pendingPath 必须是 subtitlePendingPath 形态；任何非成功出口都会删掉临时文件。
+func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID uint, req SubtitleGenerateRequest, pendingPath string, detectedLang string, options SubtitleGenerateOptions) (*SubtitleGenerateResult, error) {
 	warnings := []string{}
 	translationStatus := ""
+	srtPath := subtitleFinalPathForPending(pendingPath)
 	outputPrefix := strings.TrimSuffix(srtPath, filepath.Ext(srtPath))
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(pendingPath)
+		}
+	}()
 
 	if options.BilingualEnabled && strings.TrimSpace(options.BilingualLang) != "" {
 		targetLang := normalizeSubtitleLanguageCode(options.BilingualLang)
@@ -632,12 +694,12 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 				log.Printf("[Subtitle] translation config unavailable provider=%s err=%v, keeping original SRT", provider, err)
 				goto done
 			}
-			// 术语生效集按视频所属作品集解析一次，整轮翻译共用（D-033）。
+			// 术语生效集按视频所属作品集与目标语言解析一次，整轮翻译共用（D-033、D-PC16）。
 			// 只有能吃下术语表的翻译器才去查：DeepL 用不上，也就不该因为一次库读失败
 			// 而多出一条它原本没有的失败路径（D-034）。
 			var glossary []GlossaryTerm
 			if _, injectable := translator.(ContextualTranslator); injectable {
-				resolved, resolveErr := s.glossaryResolver(req.VideoID)
+				resolved, resolveErr := s.glossaryResolver(req.VideoID, targetLang)
 				if resolveErr != nil {
 					translationStatus = "failed"
 					warnings = append(warnings, fmt.Sprintf("双语翻译失败，已保留原文字幕：读取术语表失败：%v", resolveErr))
@@ -655,7 +717,7 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 			if sourceLang == "auto" || sourceLang == "unknown" {
 				sourceLang = ""
 			}
-			fallbackCount, translateErr := s.translateSRTWithProgress(ctx, srtPath, translatedSrtPath, sourceLang, targetLang, translator, glossary, nil)
+			fallbackCount, translateErr := s.translateSRTWithProgress(ctx, pendingPath, translatedSrtPath, sourceLang, targetLang, translator, glossary, nil)
 			if translateErr != nil {
 				if ctx.Err() != nil {
 					s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
@@ -667,7 +729,7 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 				goto done
 			}
 			s.emitGenerateProgress(taskID, req, "merging", 85, "合并双语字幕...")
-			if err := s.mergeBilingualSRT(srtPath, translatedSrtPath, srtPath); err != nil {
+			if err := s.mergeBilingualSRT(pendingPath, translatedSrtPath, pendingPath); err != nil {
 				translationStatus = "failed"
 				warnings = append(warnings, fmt.Sprintf("双语字幕合并失败，已保留原文字幕：%v", err))
 				log.Printf("[Subtitle] merge failed: %v", err)
@@ -682,6 +744,28 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 	}
 
 done:
+	if ctx.Err() != nil {
+		s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
+		return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
+	}
+	content, err := os.ReadFile(pendingPath)
+	if err != nil {
+		return nil, fmt.Errorf("读取待写入字幕失败: %s", subtitleIOReason(err))
+	}
+	writeResult, err := s.subtitleWriter().Replace(ctx, req.VideoID, srtPath, content)
+	if err != nil {
+		if ctx.Err() != nil {
+			s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
+			return &SubtitleGenerateResult{Status: SubtitleResultStatusCancelled, VideoID: req.VideoID, Message: "字幕生成已取消"}, nil
+		}
+		return nil, fmt.Errorf("写入字幕失败: %w", err)
+	}
+	if writeResult.BackupID != "" {
+		log.Printf("[Subtitle] replaced existing subtitle video_id=%d backup_id=%s", req.VideoID, writeResult.BackupID)
+	}
+	_ = os.Remove(pendingPath)
+	committed = true
+
 	if err := indexSubtitleFileForVideoID(req.VideoID, srtPath); err != nil {
 		log.Printf("[Subtitle] index subtitle failed videoID=%d path=%s err=%v", req.VideoID, srtPath, err)
 		warnings = append(warnings, fmt.Sprintf("字幕索引更新失败：%v", err))
@@ -697,6 +781,7 @@ done:
 			"path":               srtPath,
 			"warnings":           warnings,
 			"translation_status": translationStatus,
+			"backup_id":          writeResult.BackupID,
 		})
 	}
 	return &SubtitleGenerateResult{
@@ -936,9 +1021,14 @@ func parseSRTEntries(srtPath string) ([]SRTEntry, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 经编码识别再切块：BOM 不再污染第一条的序号，非 UTF-8 也不会被当成乱码解析（D-PC14）。
+	text, _, err := subtitleparser.DecodeSubtitleBytes(data)
+	if err != nil {
+		return nil, err
+	}
 
 	var entries []SRTEntry
-	blocks := srtBlockSplitter.Split(strings.TrimSpace(string(data)), -1)
+	blocks := srtBlockSplitter.Split(strings.TrimSpace(text), -1)
 
 	for _, block := range blocks {
 		lines := strings.Split(strings.TrimSpace(block), "\n")
@@ -1083,18 +1173,10 @@ func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPat
 			return fallbackCount, fmt.Errorf("字幕翻译返回 %d 条，期望 %d 条", len(translated), len(batch))
 		}
 
-		// 空译文写出去就是一个只有序号和时间轴的块，parseSRTEntries 与编辑器解析器
-		// 都会把它整条丢掉：仅译文模式下这条字幕被永久删除，双语合并则因为两边条数
-		// 对不上而让其后所有译文错位。保留原文既保住了条目，也保住了对齐。回退必须
-		// 赶在喂给上文窗口之前，否则「原文 → 空」会作为示范样本进入下一批的提示词。
-		for j := range translated {
-			text := strings.TrimSpace(translated[j])
-			if text == "" {
-				text = batch[j].Text
-				fallbackCount++
-			}
-			translated[j] = text
-		}
+		// 空译文回退必须赶在喂给上文窗口之前，否则「原文 → 空」会作为示范样本进入下一批的提示词。
+		var batchFallbacks int
+		translated, batchFallbacks = applyTranslationFallback(texts, translated)
+		fallbackCount += batchFallbacks
 
 		preceding = trailingContextPairs(texts, translated, subtitleTranslationContextWindow)
 		if onBatch != nil {
@@ -1121,6 +1203,26 @@ func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPat
 	return fallbackCount, os.WriteFile(outputPath, []byte(buf.String()), 0644)
 }
 
+// applyTranslationFallback 是空译文回退的唯一实现（D-PC16），字幕生成的自动双语、
+// 已有字幕的文件翻译、工作台选区重译三处共用。
+//
+// 空译文写出去就是一个只有序号和时间轴的块，parseSRTEntries 与编辑器解析器都会把它整条
+// 丢掉：仅译文模式下这条字幕被永久删除，双语合并则因为两边条数对不上而让其后所有译文错位。
+// 保留原文既保住了条目，也保住了对齐。sources 与 translated 等长；返回回退后的新切片与回退条数。
+func applyTranslationFallback(sources, translated []string) ([]string, int) {
+	result := make([]string, len(translated))
+	fallbackCount := 0
+	for index, translation := range translated {
+		text := strings.TrimSpace(translation)
+		if text == "" && index < len(sources) {
+			text = sources[index]
+			fallbackCount++
+		}
+		result[index] = text
+	}
+	return result, fallbackCount
+}
+
 // subtitleFallbackWarning 是「译文为空、已保留原文」的统一措辞：手动翻译与生成流程
 // 的自动双语走同一套回退，就不该有两种口径。
 func subtitleFallbackWarning(count int) string {
@@ -1129,13 +1231,23 @@ func subtitleFallbackWarning(count int) string {
 
 // mergeBilingualSRT 合并两个 SRT 文件为双语 SRT（每条字幕上行原文、下行翻译）
 func (s *SubtitleService) mergeBilingualSRT(originalPath, translatedPath, outputPath string) error {
+	merged, err := s.buildBilingualSRT(originalPath, translatedPath)
+	if err != nil {
+		return err
+	}
+	return writeFileAtomically(outputPath, merged, 0644)
+}
+
+// buildBilingualSRT 生成双语 SRT 的内容而不落盘，让调用方决定怎么写（生成流程写临时文件，
+// 文件翻译经写入器 Replace）。
+func (s *SubtitleService) buildBilingualSRT(originalPath, translatedPath string) ([]byte, error) {
 	origEntries, err := parseSRTEntries(originalPath)
 	if err != nil {
-		return fmt.Errorf("读取原文字幕失败: %v", err)
+		return nil, fmt.Errorf("读取原文字幕失败: %v", err)
 	}
 	transEntries, err := parseSRTEntries(translatedPath)
 	if err != nil {
-		return fmt.Errorf("读取翻译字幕失败: %v", err)
+		return nil, fmt.Errorf("读取翻译字幕失败: %v", err)
 	}
 
 	var buf strings.Builder
@@ -1176,7 +1288,7 @@ func (s *SubtitleService) mergeBilingualSRT(originalPath, translatedPath, output
 	}
 
 	log.Printf("[Subtitle] mergeBilingualSRT: merged %d entries", maxLen)
-	return writeFileAtomically(outputPath, []byte(buf.String()), 0644)
+	return []byte(buf.String()), nil
 }
 
 func writeFileAtomically(path string, data []byte, mode os.FileMode) error {

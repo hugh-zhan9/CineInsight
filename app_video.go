@@ -187,6 +187,29 @@ func (a *App) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *services.Batc
 	return result
 }
 
+// DeleteVideosWithResult 是带单项结果码与 batch_id 的批量删除（详细设计 §2.1）。requestID 可选：
+// 非空时逐项发 batch-delete-progress 事件，并可被 CancelBatchDelete 取消。
+// 结果码：ok / trash_unsupported / file_missing / permission_denied / volume_offline / error / cancelled。
+func (a *App) DeleteVideosWithResult(videoIDs []uint, deleteFile bool, requestID string) *services.BatchResult {
+	result := a.videoService.DeleteVideosDetailed(videoIDs, deleteFile, a.batchDeleteOptions(requestID))
+	if result.Succeeded > 0 {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	log.Printf("API DeleteVideosWithResult requested=%d succeeded=%d failed=%d cancelled=%d deleteFile=%v", result.Requested, result.Succeeded, result.Failed, result.Cancelled, deleteFile)
+	return result
+}
+
+// PermanentlyDeleteVideos 永久删除视频文件与记录，只用于 trash_unsupported 之后用户明确选择
+// 「永久删除」（二次确认由前端完成）。
+func (a *App) PermanentlyDeleteVideos(videoIDs []uint) *services.BatchResult {
+	result := a.videoService.PermanentlyDeleteVideos(videoIDs)
+	if result.Succeeded > 0 {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	log.Printf("API PermanentlyDeleteVideos requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
+	return result
+}
+
 // ListTrashEntries 返回当前可恢复的视频删除记录。
 func (a *App) ListTrashEntries() ([]models.VideoTrashEntry, error) {
 	entries, err := a.videoService.ListTrashEntries()

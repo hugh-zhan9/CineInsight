@@ -570,6 +570,8 @@ func newTestLibraryWatcher(backend *fakeLibraryWatchBackend, reconcile func([]mo
 	service := NewLibraryWatcherService(&VideoService{})
 	service.backendFactory = func() (libraryWatchBackend, error) { return backend, nil }
 	service.reconcile = reconcile
+	// 这些用例不带数据库；离线标记另有专门用例（LIB07）。
+	service.markRootOffline = func(string) {}
 	service.coalesceWindow = 15 * time.Millisecond
 	service.stabilityInterval = 10 * time.Millisecond
 	service.stabilityTimeout = 300 * time.Millisecond

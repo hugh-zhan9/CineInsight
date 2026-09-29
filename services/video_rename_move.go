@@ -39,10 +39,12 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 
 	if err := database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
-			"path":      newPath,
-			"directory": filepath.Dir(newPath),
-			"name":      filepath.Base(newPath),
-			"size":      info.Size(),
+			"path":         newPath,
+			"directory":    filepath.Dir(newPath),
+			"name":         filepath.Base(newPath),
+			"size":         info.Size(),
+			"is_stale":     false,
+			"stale_reason": "",
 		})
 		if result.Error != nil {
 			return result.Error
@@ -79,10 +81,14 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 		return fmt.Errorf("视频不存在: %w", err)
 	}
 
-	// 保留原始扩展名（如果新名称没带扩展名）
+	// 只有「视频扩展名」设置里列出的后缀才算扩展名；The.Matrix.1999.1080p 里的 .1080p
+	// 不是，要补回原扩展名（LIB-03）。
 	oldExt := filepath.Ext(video.Name)
-	if filepath.Ext(newName) == "" {
+	if ext := filepath.Ext(newName); ext == "" || !isConfiguredVideoExtension(ext) {
 		newName = newName + oldExt
+	}
+	if newName == video.Name {
+		return nil
 	}
 
 	oldPath := video.Path
@@ -155,4 +161,27 @@ func (s *VideoService) RenameVideo(id uint, newName string) error {
 
 	log.Printf("视频重命名 id=%d oldName=%s newName=%s", id, video.Name, newName)
 	return nil
+}
+
+// isConfiguredVideoExtension 判断后缀（带点）是否在「视频扩展名」设置里；设置为空时用默认集合。
+func isConfiguredVideoExtension(ext string) bool {
+	raw := defaultVideoExtensions
+	var settings models.Settings
+	if err := database.DB.Select("video_extensions").First(&settings).Error; err == nil && strings.TrimSpace(settings.VideoExtensions) != "" {
+		raw = settings.VideoExtensions
+	}
+	ext = strings.ToLower(ext)
+	for _, candidate := range strings.Split(raw, ",") {
+		candidate = strings.ToLower(strings.TrimSpace(candidate))
+		if candidate == "" {
+			continue
+		}
+		if !strings.HasPrefix(candidate, ".") {
+			candidate = "." + candidate
+		}
+		if candidate == ext {
+			return true
+		}
+	}
+	return false
 }

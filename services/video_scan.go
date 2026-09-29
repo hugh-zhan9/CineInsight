@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -24,6 +25,9 @@ const (
 	trashStateRestoring       = "restoring"
 	trashStateRollback        = "rollback"
 )
+
+// defaultVideoExtensions 是「视频扩展名」设置为空时使用的默认集合。
+const defaultVideoExtensions = ".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt"
 
 var tempVideoStemSuffixes = []string{
 	".temp", "_temp", "-temp",
@@ -46,18 +50,86 @@ type ScanSyncResult struct {
 	// Restored 是这一轮把 is_stale 清掉的条数（文件重新出现）。删掉扫描目录后
 	// 记录会被标失效，把同一路径加回来时就靠这个计数让界面知道"数据回来了"，
 	// 否则一轮只做恢复的扫描在计数上全是 0，前端不会刷新列表。
-	Restored          int             `json:"restored"`
-	Relocated         int             `json:"relocated"`
-	MetadataRefreshed int             `json:"metadata_refreshed"`
-	Skipped           int             `json:"skipped"`
-	Errors            []ScanSyncError `json:"errors"`
+	Restored          int `json:"restored"`
+	Relocated         int `json:"relocated"`
+	MetadataRefreshed int `json:"metadata_refreshed"`
+	// Skipped 是 SkipBreakdown 各项之和，保留给只认总数的旧调用方。
+	Skipped int `json:"skipped"`
+	// SkipBreakdown 把「跳过」拆成用户能据此行动的原因（D-PC09）。
+	SkipBreakdown SkipBreakdown   `json:"skip_breakdown"`
+	Errors        []ScanSyncError `json:"errors"`
 	// AddedVideoIDs 是本次新增的视频 ID。扫描后自动化要按"本次新增"下手
 	// （D-006 的代理候选就只取这一批），光有计数说不出是哪几条。
 	AddedVideoIDs []uint `json:"added_video_ids"`
 }
 
-func (r *ScanSyncResult) recordError(operation, directory, path string, err error) {
+// SkipBreakdown 是扫描跳过原因的分项计数（D-PC09）。JSON 键固定，前端按键取值。
+type SkipBreakdown struct {
+	// Existing：记录已存在（含扫得到但不属于本轮候选的在库文件）。
+	Existing int `json:"existing"`
+	// BlockedUserDelete：用户只删过记录、文件身份未变，扫描不重新收录。
+	BlockedUserDelete int `json:"blocked_user_delete"`
+	// RecentlyModified：5 分钟内修改过，可能仍在写入。
+	RecentlyModified int `json:"recently_modified"`
+	// TempFile：文件名带 -temp / -tmp 等临时后缀。
+	TempFile int `json:"temp_file"`
+	// NotVideo：扩展名与视频相同但内容是源码等非视频文件。
+	NotVideo int `json:"not_video"`
+	// ReadError：读取失败，已同时写入 Errors。
+	ReadError int `json:"read_error"`
+}
+
+// Total 返回各项之和。
+func (b SkipBreakdown) Total() int {
+	return b.Existing + b.BlockedUserDelete + b.RecentlyModified + b.TempFile + b.NotVideo + b.ReadError
+}
+
+func (b *SkipBreakdown) merge(other SkipBreakdown) {
+	b.Existing += other.Existing
+	b.BlockedUserDelete += other.BlockedUserDelete
+	b.RecentlyModified += other.RecentlyModified
+	b.TempFile += other.TempFile
+	b.NotVideo += other.NotVideo
+	b.ReadError += other.ReadError
+}
+
+// 跳过原因，与 SkipBreakdown 的字段一一对应。
+const (
+	skipReasonExisting          = "existing"
+	skipReasonBlockedUserDelete = "blocked_user_delete"
+	skipReasonRecentlyModified  = "recently_modified"
+	skipReasonTempFile          = "temp_file"
+	skipReasonNotVideo          = "not_video"
+	skipReasonReadError         = "read_error"
+)
+
+// recordSkip 同时累加分项与总数，保证 Skipped == SkipBreakdown.Total()。
+func (r *ScanSyncResult) recordSkip(reason string) {
 	r.Skipped++
+	switch reason {
+	case skipReasonExisting:
+		r.SkipBreakdown.Existing++
+	case skipReasonBlockedUserDelete:
+		r.SkipBreakdown.BlockedUserDelete++
+	case skipReasonRecentlyModified:
+		r.SkipBreakdown.RecentlyModified++
+	case skipReasonTempFile:
+		r.SkipBreakdown.TempFile++
+	case skipReasonNotVideo:
+		r.SkipBreakdown.NotVideo++
+	default:
+		r.SkipBreakdown.ReadError++
+	}
+}
+
+// addSkipBreakdown 并入遍历阶段收集的过滤计数。
+func (r *ScanSyncResult) addSkipBreakdown(filtered SkipBreakdown) {
+	r.SkipBreakdown.merge(filtered)
+	r.Skipped += filtered.Total()
+}
+
+func (r *ScanSyncResult) recordError(operation, directory, path string, err error) {
+	r.recordSkip(skipReasonReadError)
 	r.Errors = append(r.Errors, ScanSyncError{
 		Operation: operation,
 		Directory: directory,
@@ -95,6 +167,14 @@ func (s *VideoService) scanDirectoryWithInfo(dir string, skipRecentlyActive bool
 }
 
 func (s *VideoService) scanDirectoryWithProgress(dir string, skipRecentlyActive bool, progress func(DirectoryScanProgress)) ([]ScannedFile, error) {
+	return s.scanDirectoryCollect(dir, skipRecentlyActive, progress, nil)
+}
+
+// scanDirectoryCollect 是遍历的唯一实现。filtered 非空时，被过滤规则挡掉的视频类文件
+// （临时后缀、5 分钟内修改、非视频源码）按原因累加进去，供扫描回报使用（D-PC09、LIB-14）。
+func (s *VideoService) scanDirectoryCollect(dir string, skipRecentlyActive bool, progress func(DirectoryScanProgress), filtered *SkipBreakdown) ([]ScannedFile, error) {
+	// 每一轮遍历开始时刷新旧版回收站目录集合，随后 isTrashPath 只读缓存。
+	refreshLegacyTrashDirs()
 	var videoFiles []ScannedFile
 	reporter := directoryScanReporter{callback: progress}
 	dir = filepath.Clean(strings.TrimSpace(dir))
@@ -125,7 +205,7 @@ func (s *VideoService) scanDirectoryWithProgress(dir string, skipRecentlyActive 
 	// 解析视频格式
 	videoExts := strings.Split(settings.VideoExtensions, ",")
 	if len(videoExts) == 1 && strings.TrimSpace(videoExts[0]) == "" {
-		videoExts = strings.Split(".mp4,.avi,.mkv,.mov,.wmv,.flv,.webm,.m4v,.ts,.3gp,.mpg,.mpeg,.rm,.rmvb,.vob,.divx,.f4v,.asf,.qt", ",")
+		videoExts = strings.Split(defaultVideoExtensions, ",")
 	}
 	for i := range videoExts {
 		videoExts[i] = strings.TrimSpace(videoExts[i])
@@ -157,7 +237,7 @@ func (s *VideoService) scanDirectoryWithProgress(dir string, skipRecentlyActive 
 			return nil
 		}
 
-		if info != nil && info.IsDir() && isTrashDirName(info.Name()) {
+		if info != nil && info.IsDir() && isTrashDir(path) {
 			return filepath.SkipDir
 		}
 		if err != nil {
@@ -171,20 +251,43 @@ func (s *VideoService) scanDirectoryWithProgress(dir string, skipRecentlyActive 
 		reporter.state.Visited++
 		defer func() { reporter.update("reading", reporter.state.CurrentPath, false) }()
 
-		if isTrashPath(path) || hasTempVideoSuffix(path) || (skipRecentlyActive && isRecentlyActiveFile(info)) || isKnownNonVideoSourcePath(path) {
+		if isTrashPath(path) {
 			return nil
 		}
-
 		ext := strings.ToLower(filepath.Ext(path))
+		matched := false
 		for _, videoExt := range videoExts {
 			if ext == strings.ToLower(videoExt) {
-				videoFiles = append(videoFiles, ScannedFile{Path: path, Size: info.Size()})
-				reporter.state.Found = len(videoFiles)
-				if len(videoFiles) == 1 {
-					reporter.update("reading", reporter.state.CurrentPath, true)
-				}
+				matched = true
 				break
 			}
+		}
+		if !matched {
+			return nil
+		}
+		// 只有扩展名是视频的文件才谈得上「被跳过」；其他文件与扫描无关，不计数。
+		if hasTempVideoSuffix(path) {
+			if filtered != nil {
+				filtered.TempFile++
+			}
+			return nil
+		}
+		if skipRecentlyActive && isRecentlyActiveFile(info) {
+			if filtered != nil {
+				filtered.RecentlyModified++
+			}
+			return nil
+		}
+		if isKnownNonVideoSourcePath(path) {
+			if filtered != nil {
+				filtered.NotVideo++
+			}
+			return nil
+		}
+		videoFiles = append(videoFiles, ScannedFile{Path: path, Size: info.Size()})
+		reporter.state.Found = len(videoFiles)
+		if len(videoFiles) == 1 {
+			reporter.update("reading", reporter.state.CurrentPath, true)
 		}
 
 		return nil
@@ -195,11 +298,11 @@ func (s *VideoService) scanDirectoryWithProgress(dir string, skipRecentlyActive 
 	return videoFiles, err
 }
 
-func (s *VideoService) scanDirectoryForReconciliation(dir string) ([]ScannedFile, error) {
+func (s *VideoService) scanDirectoryForReconciliation(dir string, filtered *SkipBreakdown) ([]ScannedFile, error) {
 	if s != nil && s.scanDirectoryWithOptions != nil {
 		return s.scanDirectoryWithOptions(dir, false)
 	}
-	return s.scanDirectoryWithInfo(dir, false)
+	return s.scanDirectoryCollect(dir, false, nil, filtered)
 }
 
 type scanFileFingerprint struct {
@@ -271,7 +374,8 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 			}
 			continue
 		}
-		scannedFiles, err := s.scanDirectoryWithProgress(root, true, progress)
+		var filtered SkipBreakdown
+		scannedFiles, err := s.scanDirectoryCollect(root, true, progress, &filtered)
 		if err != nil {
 			result.recordError("scan", root, "", err)
 			delete(removalGuard, root)
@@ -283,6 +387,7 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 			continue
 		}
 		roots = append(roots, root)
+		result.addSkipBreakdown(filtered)
 		result.Scanned += len(scannedFiles)
 		for _, file := range scannedFiles {
 			scannedByPath[file.Path] = file
@@ -320,7 +425,7 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 			if scanCandidateIsMissing(video, result) {
 				if missing, err := removalGuard.missing(video.Path, excludedPaths); err != nil {
 					result.recordError("check_missing_root", video.Directory, video.Path, err)
-					update := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true)
+					update := markVideoStale(video.ID, staleReasonForGuardError(err))
 					if update.Error != nil {
 						result.recordError("mark_stale", video.Directory, video.Path, update.Error)
 					} else {
@@ -333,7 +438,7 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 			continue
 		}
 		if video.IsStale {
-			if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_stale", false).Error; err != nil {
+			if err := clearVideoStale(video.ID); err != nil {
 				result.recordError("clear_stale", video.Directory, video.Path, err)
 			} else {
 				video.IsStale = false
@@ -407,8 +512,8 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 		}
 		added, restored, err := s.addScannedVideo(file.Path)
 		if err != nil {
-			if errors.Is(err, ErrVideoExists) {
-				result.Skipped++
+			if reason, skipped := scanAddSkipReason(err); skipped {
+				result.recordSkip(reason)
 				continue
 			}
 			result.recordError("add", filepath.Dir(file.Path), file.Path, err)
@@ -439,7 +544,7 @@ func (s *VideoService) syncScanDirectories(dirs []models.ScanDirectory, reconcil
 		missing, guardErr := removalGuard.missing(video.Path, excludedPaths)
 		if guardErr != nil {
 			result.recordError("check_delete", video.Directory, video.Path, guardErr)
-			if update := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true); update.Error != nil {
+			if update := markVideoStale(video.ID, staleReasonForGuardError(guardErr)); update.Error != nil {
 				result.recordError("mark_stale", video.Directory, video.Path, update.Error)
 			} else {
 				result.Stale += int(update.RowsAffected)
@@ -484,7 +589,7 @@ func (s *VideoService) markUnavailableScanRoot(root string, result *ScanSyncResu
 		return
 	}
 	for _, video := range videos {
-		update := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true)
+		update := markVideoStale(video.ID, models.StaleReasonOfflineRoot)
 		if update.Error != nil {
 			result.recordError("mark_stale", root, video.Path, update.Error)
 		} else {
@@ -514,12 +619,14 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 	scannedByPath := make(map[string]ScannedFile)
 	successfulTargets := make([]string, 0, len(targets))
 	for _, target := range targets {
-		files, scanErr := s.scanDirectoryForReconciliation(target)
+		var filtered SkipBreakdown
+		files, scanErr := s.scanDirectoryForReconciliation(target, &filtered)
 		if scanErr != nil {
 			result.recordError("scan_affected", target, "", scanErr)
 			continue
 		}
 		successfulTargets = append(successfulTargets, target)
+		result.addSkipBreakdown(filtered)
 		result.Scanned += len(files)
 		for _, file := range files {
 			file.Path = filepath.Clean(file.Path)
@@ -557,7 +664,7 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 			continue
 		}
 		if video.IsStale {
-			if err := database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_stale", false).Error; err != nil {
+			if err := clearVideoStale(video.ID); err != nil {
 				result.recordError("clear_stale", video.Directory, video.Path, err)
 			} else {
 				video.IsStale = false
@@ -609,8 +716,8 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		}
 		video, restored, addErr := s.addScannedVideo(file.Path)
 		if addErr != nil {
-			if errors.Is(addErr, ErrVideoExists) {
-				result.Skipped++
+			if reason, skipped := scanAddSkipReason(addErr); skipped {
+				result.recordSkip(reason)
 				continue
 			}
 			result.recordError("add", filepath.Dir(file.Path), file.Path, addErr)
@@ -633,10 +740,20 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 		if _, relocated := relocatedIDs[video.ID]; relocated {
 			continue
 		}
-		if _, affectedMissing := missingIDs[video.ID]; !affectedMissing || video.IsStale {
+		if _, affectedMissing := missingIDs[video.ID]; !affectedMissing {
 			continue
 		}
-		if err := database.DB.Model(&models.Video{}).Where("id = ? AND is_stale = ?", video.ID, false).Update("is_stale", true).Error; err != nil {
+		if video.IsStale {
+			// 根曾离线、如今回来了：在窄对账成功覆盖的子树里文件仍然不存在，
+			// 失效原因就从「磁盘离线」改成「文件缺失」，否则重连后永远显示离线。
+			if video.StaleReason == models.StaleReasonOfflineRoot && pathBelongsToAny(filepath.Clean(video.Path), successfulTargets) {
+				if err := refineOfflineStaleToMissing(video.ID); err != nil {
+					result.recordError("mark_stale", video.Directory, video.Path, err)
+				}
+			}
+			continue
+		}
+		if err := markVideoStale(video.ID, models.StaleReasonMissingFile).Error; err != nil {
 			result.recordError("mark_stale", video.Directory, video.Path, err)
 			continue
 		}
@@ -651,16 +768,23 @@ func (s *VideoService) SyncAffectedDirectories(dirs []models.ScanDirectory, affe
 // scanCandidateIsMissing 区分磁盘丢失和扫描过滤；活跃窗口、黑名单等只限制扫描收录。
 // 只有明确不存在的文件才能进入迁移、删除或标失效路径，权限/IO 失败保留原记录并报错。
 func scanCandidateIsMissing(video models.Video, result *ScanSyncResult) bool {
-	_, err := os.Stat(video.Path)
+	info, err := os.Stat(video.Path)
 	if errors.Is(err, os.ErrNotExist) {
 		return true
 	}
 	if err != nil {
 		result.recordError("check_missing", video.Directory, video.Path, err)
-	} else {
-		result.Skipped++
+	} else if !skippedDuringWalk(video.Path, info) {
+		// 遍历阶段已经按原因计过数的（临时后缀、刚修改、非视频源码）不再重复计；
+		// 其余是在库、文件也在、但不属于本轮遍历结果的记录。
+		result.recordSkip(skipReasonExisting)
 	}
 	return false
+}
+
+// skippedDuringWalk 判断文件是否会被遍历阶段的过滤规则挡掉（这些规则在遍历时已计数）。
+func skippedDuringWalk(path string, info os.FileInfo) bool {
+	return hasTempVideoSuffix(path) || isRecentlyActiveFile(info) || isKnownNonVideoSourcePath(path)
 }
 
 // reconcileOrphanedVideos 处理"不属于任何已配置扫描目录"的记录。
@@ -698,9 +822,7 @@ func (s *VideoService) reconcileOrphanedVideos(configuredRoots []string, result 
 		if end > len(orphanIDs) {
 			end = len(orphanIDs)
 		}
-		update := database.DB.Model(&models.Video{}).
-			Where("id IN ? AND is_stale = ?", orphanIDs[start:end], false).
-			Update("is_stale", true)
+		update := markVideosStale(orphanIDs[start:end], models.StaleReasonOutsideRoots)
 		if update.Error != nil {
 			result.recordError("orphan_stale", "", "", update.Error)
 			return
@@ -725,7 +847,11 @@ func (s *VideoService) reconcileOrphanedVideos(configuredRoots []string, result 
 func (s *VideoService) MarkVideosStaleUnderRemovedRoot(removedRoot string, remainingRoots []string) (int64, error) {
 	libraryPathMutationMu.RLock()
 	defer libraryPathMutationMu.RUnlock()
+	return markVideosStaleUnderRemovedRoot(removedRoot, remainingRoots)
+}
 
+// markVideosStaleUnderRemovedRoot 是不加锁的实现，调用方负责持有 libraryPathMutationMu。
+func markVideosStaleUnderRemovedRoot(removedRoot string, remainingRoots []string) (int64, error) {
 	root := filepath.Clean(strings.TrimSpace(removedRoot))
 	if root == "" || root == "." {
 		return 0, fmt.Errorf("扫描目录为空")
@@ -739,7 +865,7 @@ func (s *VideoService) MarkVideosStaleUnderRemovedRoot(removedRoot string, remai
 		remaining = append(remaining, cleaned)
 	}
 
-	candidates, err := s.getActiveVideosUnderRoots([]string{root})
+	candidates, err := activeVideosUnderRoots([]string{root})
 	if err != nil {
 		return 0, fmt.Errorf("读取该目录下的视频失败: %w", err)
 	}
@@ -767,9 +893,7 @@ func (s *VideoService) MarkVideosStaleUnderRemovedRoot(removedRoot string, remai
 		if end > len(ids) {
 			end = len(ids)
 		}
-		result := database.DB.Model(&models.Video{}).
-			Where("id IN ? AND is_stale = ?", ids[start:end], false).
-			Update("is_stale", true)
+		result := markVideosStale(ids[start:end], models.StaleReasonRemovedRoot)
 		if result.Error != nil {
 			return marked, fmt.Errorf("标记失效失败: %w", result.Error)
 		}
@@ -949,6 +1073,11 @@ func (s *VideoService) needsTechnicalRefreshDuringScan(video models.Video, scann
 }
 
 func (s *VideoService) getActiveVideosUnderRoots(roots []string) ([]models.Video, error) {
+	return activeVideosUnderRoots(roots)
+}
+
+// activeVideosUnderRoots 不依赖服务实例，供只持有数据库的调用方（目录更新、路径改写）使用。
+func activeVideosUnderRoots(roots []string) ([]models.Video, error) {
 	if len(roots) == 0 {
 		return []models.Video{}, nil
 	}
@@ -1038,20 +1167,111 @@ func shouldSkipHiddenPath(info os.FileInfo) bool {
 	return info.Name() != "." && strings.HasPrefix(info.Name(), ".")
 }
 
+// isTrashDirName 只按名字判断，保留给还没改成按路径判断的图片扫描；
+// 视频扫描与监听一律用 isTrashDir / isTrashPath（LIB-14：用户自己名为 Trash 的目录要能被扫描）。
 func isTrashDirName(name string) bool {
 	return strings.EqualFold(strings.TrimSpace(name), DefaultTrashDirName)
 }
 
+// 系统废纸篓目录名（macOS 卷上的 .Trash / .Trashes）。
+func isSystemTrashSegment(name string) bool {
+	return strings.EqualFold(name, ".Trash") || strings.EqualFold(name, ".Trashes")
+}
+
+// legacyTrashDirs 缓存旧版回收站目录集合：mode='legacy_trash' 的回收站条目里
+// filepath.Dir(trash_path) 去重。绑定到 database.DB 实例，换库时自动失效；
+// 每轮扫描开始时 refreshLegacyTrashDirs 重新读取。
+var legacyTrashDirs struct {
+	mu   sync.RWMutex
+	db   *gorm.DB
+	dirs map[string]struct{}
+}
+
+// refreshLegacyTrashDirs 从两张回收站表重建集合。读取失败时保留旧缓存（换库除外），
+// 因为「多跳过一个目录」比「把回收站里的文件当新视频收录」安全得多。
+func refreshLegacyTrashDirs() {
+	db := database.DB
+	if db == nil {
+		return
+	}
+	dirs, err := loadLegacyTrashDirs(db)
+	legacyTrashDirs.mu.Lock()
+	defer legacyTrashDirs.mu.Unlock()
+	if err != nil {
+		log.Printf("读取旧版回收站目录失败 err=%v", err)
+		if legacyTrashDirs.db != db {
+			legacyTrashDirs.db, legacyTrashDirs.dirs = db, nil
+		}
+		return
+	}
+	legacyTrashDirs.db, legacyTrashDirs.dirs = db, dirs
+}
+
+func loadLegacyTrashDirs(db *gorm.DB) (map[string]struct{}, error) {
+	dirs := make(map[string]struct{})
+	// mode 为空且 file_moved=true 的行是回填之前的旧版条目，同样属于旧版回收站。
+	const condition = "trash_path <> '' AND (mode = ? OR (mode = '' AND file_moved = ?))"
+	for _, model := range []interface{}{&models.VideoTrashEntry{}, &models.ImageTrashEntry{}} {
+		var paths []string
+		if err := db.Model(model).Where(condition, models.TrashModeLegacyTrash, true).Distinct().Pluck("trash_path", &paths).Error; err != nil {
+			return nil, err
+		}
+		for _, trashPath := range paths {
+			dirs[filepath.Dir(filepath.Clean(trashPath))] = struct{}{}
+		}
+	}
+	return dirs, nil
+}
+
+func snapshotLegacyTrashDirs() map[string]struct{} {
+	legacyTrashDirs.mu.RLock()
+	current := legacyTrashDirs.db == database.DB
+	dirs := legacyTrashDirs.dirs
+	legacyTrashDirs.mu.RUnlock()
+	if current {
+		return dirs
+	}
+	refreshLegacyTrashDirs()
+	legacyTrashDirs.mu.RLock()
+	defer legacyTrashDirs.mu.RUnlock()
+	return legacyTrashDirs.dirs
+}
+
+// isTrashDir 判断目录本身是不是回收站：旧版回收站目录，或系统废纸篓目录名。
+func isTrashDir(path string) bool {
+	clean := filepath.Clean(path)
+	if isSystemTrashSegment(filepath.Base(clean)) {
+		return true
+	}
+	_, legacy := snapshotLegacyTrashDirs()[clean]
+	return legacy
+}
+
+// isTrashPath 判断路径是否位于回收站内。只认旧版回收站目录集合与路径中的
+// .Trash / .Trashes 段，不再按任意层级名为 trash 的目录判断。
 func isTrashPath(path string) bool {
 	cleanPath := filepath.Clean(path)
 	volume := filepath.VolumeName(cleanPath)
 	trimmed := strings.TrimPrefix(cleanPath, volume)
 	for _, part := range strings.Split(trimmed, string(os.PathSeparator)) {
-		if isTrashDirName(part) {
+		if isSystemTrashSegment(part) {
 			return true
 		}
 	}
-	return false
+	dirs := snapshotLegacyTrashDirs()
+	if len(dirs) == 0 {
+		return false
+	}
+	for current := cleanPath; ; {
+		if _, legacy := dirs[current]; legacy {
+			return true
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
 }
 
 func hasTempVideoSuffix(path string) bool {
@@ -1114,4 +1334,196 @@ func isTypeScriptSource(reader io.Reader) bool {
 
 func isRecentlyActiveFile(info os.FileInfo) bool {
 	return time.Since(info.ModTime()) < recentActiveFileThreshold
+}
+
+// markVideoStale 把一条活跃视频标为失效并写入原因。条件更新：已失效的行不受影响，
+// RowsAffected 只统计这次新标的。所有写 is_stale=true 的地方都走这里或 markVideosStale。
+func markVideoStale(id uint, reason string) *gorm.DB {
+	return database.DB.Model(&models.Video{}).
+		Where("id = ? AND is_stale = ?", id, false).
+		Updates(map[string]interface{}{"is_stale": true, "stale_reason": reason})
+}
+
+func markVideosStale(ids []uint, reason string) *gorm.DB {
+	return database.DB.Model(&models.Video{}).
+		Where("id IN ? AND is_stale = ?", ids, false).
+		Updates(map[string]interface{}{"is_stale": true, "stale_reason": reason})
+}
+
+// clearVideoStale 清除失效标记，同时清空原因（is_stale=false 时原因必须为空）。
+func clearVideoStale(id uint) error {
+	return database.DB.Model(&models.Video{}).Where("id = ?", id).
+		Updates(map[string]interface{}{"is_stale": false, "stale_reason": ""}).Error
+}
+
+// refineOfflineStaleToMissing 把「磁盘离线」的失效改成「文件缺失」；条件更新，不动其他原因。
+func refineOfflineStaleToMissing(id uint) error {
+	return database.DB.Model(&models.Video{}).
+		Where("id = ? AND is_stale = ? AND stale_reason = ?", id, true, models.StaleReasonOfflineRoot).
+		Update("stale_reason", models.StaleReasonMissingFile).Error
+}
+
+// staleReasonForGuardError 区分「根不可用」与「读取失败」：removalGuard 报告的根离线、
+// 卷未挂载、根身份变化都带 errScanRootUnavailable，其余（例如权限）是读取失败。
+func staleReasonForGuardError(err error) string {
+	if errors.Is(err, errScanRootUnavailable) {
+		return models.StaleReasonOfflineRoot
+	}
+	return models.StaleReasonReadError
+}
+
+// scanAddSkipReason 把 addScannedVideo 的「不算失败」结果映射成跳过原因。
+func scanAddSkipReason(err error) (string, bool) {
+	switch {
+	case errors.Is(err, ErrVideoBlockedByUserDelete):
+		return skipReasonBlockedUserDelete, true
+	case errors.Is(err, ErrVideoExists):
+		return skipReasonExisting, true
+	}
+	return "", false
+}
+
+// scanRootOnline 判断扫描根当前是否可用：目录存在且（macOS 上）卷确实挂载。
+func scanRootOnline(root string) bool {
+	if scanVolumeAvailable(root) != nil {
+		return false
+	}
+	info, err := os.Stat(root)
+	return err == nil && info.IsDir()
+}
+
+// MarkRootOffline 把已判定不可用的扫描根下的活跃视频标为 offline_root（D-PC08）。
+// 仍属于其他可用根的视频（嵌套根）保持原样。返回实际标记的条数。
+//
+// 由监听在根变为 unavailable 时调用；启动与全量扫描的离线判定走 markUnavailableScanRoot，
+// 写同一个原因。根恢复后由窄对账清除（文件存在即恢复）。
+func (s *VideoService) MarkRootOffline(root string) (int64, error) {
+	libraryPathMutationMu.RLock()
+	defer libraryPathMutationMu.RUnlock()
+
+	root = filepath.Clean(strings.TrimSpace(root))
+	if root == "" || root == "." {
+		return 0, fmt.Errorf("扫描目录为空")
+	}
+	var dirs []models.ScanDirectory
+	if err := database.DB.Find(&dirs).Error; err != nil {
+		return 0, fmt.Errorf("读取扫描目录失败: %w", err)
+	}
+	others := make([]string, 0, len(dirs))
+	for _, other := range cleanScanRoots(dirs) {
+		if other != root && scanRootOnline(other) {
+			others = append(others, other)
+		}
+	}
+	candidates, err := activeVideosUnderRoots([]string{root})
+	if err != nil {
+		return 0, fmt.Errorf("读取该目录下的视频失败: %w", err)
+	}
+	ids := make([]uint, 0, len(candidates))
+	for _, video := range candidates {
+		if video.IsStale || (len(others) > 0 && videoBelongsToRoots(video, others)) {
+			continue
+		}
+		ids = append(ids, video.ID)
+	}
+	var marked int64
+	for start := 0; start < len(ids); start += 500 {
+		end := min(start+500, len(ids))
+		update := markVideosStale(ids[start:end], models.StaleReasonOfflineRoot)
+		if update.Error != nil {
+			return marked, fmt.Errorf("标记离线失败: %w", update.Error)
+		}
+		marked += update.RowsAffected
+	}
+	if marked > 0 {
+		log.Printf("扫描根离线，标记 offline_root root=%s marked=%d", root, marked)
+	}
+	return marked, nil
+}
+
+// RecheckVideos 对指定视频所在目录做一次窄对账（D-PC06）：目录去重后交给
+// SyncAffectedDirectories，文件回来的清失效，仍不存在的按失效原因更新。
+// 所在目录已不存在时向上取最近的仍存在的目录，且必须落在某个扫描根之内；
+// 不在任何扫描根下的视频（outside_roots）无法窄对账，会被忽略。
+func (s *VideoService) RecheckVideos(ids []uint) (LibraryReconcileSummary, error) {
+	if len(ids) == 0 {
+		return LibraryReconcileSummary{}, nil
+	}
+	var dirs []models.ScanDirectory
+	if err := database.DB.Find(&dirs).Error; err != nil {
+		return LibraryReconcileSummary{}, fmt.Errorf("读取扫描目录失败: %w", err)
+	}
+	roots := cleanScanRoots(dirs)
+	var videos []models.Video
+	if err := database.DB.Select("id", "directory", "path").Where("id IN ?", ids).Find(&videos).Error; err != nil {
+		return LibraryReconcileSummary{}, fmt.Errorf("读取视频失败: %w", err)
+	}
+	unique := make(map[string]struct{})
+	for _, video := range videos {
+		target := filepath.Clean(video.Directory)
+		if !pathBelongsToAny(target, roots) {
+			continue
+		}
+		for {
+			if _, err := os.Stat(target); err == nil || !pathBelongsToAny(filepath.Dir(target), roots) {
+				break
+			}
+			target = filepath.Dir(target)
+		}
+		unique[target] = struct{}{}
+	}
+	if len(unique) == 0 {
+		return LibraryReconcileSummary{}, nil
+	}
+	affected := make([]string, 0, len(unique))
+	for target := range unique {
+		affected = append(affected, target)
+	}
+	sort.Strings(affected)
+	summary := summarizeLibraryReconciliation(s.SyncAffectedDirectories(dirs, affected))
+	if summary == nil {
+		return LibraryReconcileSummary{}, nil
+	}
+	return *summary, nil
+}
+
+// ReaddRemovedRoot 返回视频原来所属、后来被移除的扫描根，供前端预填「添加扫描目录」。
+// 扫描目录是软删的，据此找回包含该视频路径的、最长的那个已移除根；找不到就报错，
+// 不去猜一个目录。
+func (s *VideoService) ReaddRemovedRoot(videoID uint) (string, error) {
+	var video models.Video
+	if err := database.DB.Select("id", "path").First(&video, videoID).Error; err != nil {
+		return "", fmt.Errorf("视频不存在: %w", err)
+	}
+	var removed []models.ScanDirectory
+	if err := database.DB.Unscoped().Where("deleted_at IS NOT NULL").Find(&removed).Error; err != nil {
+		return "", fmt.Errorf("读取已移除的扫描目录失败: %w", err)
+	}
+	best := ""
+	for _, dir := range removed {
+		root := filepath.Clean(strings.TrimSpace(dir.Path))
+		if root == "" || root == "." || !pathBelongsToAny(video.Path, []string{root}) {
+			continue
+		}
+		if len(root) > len(best) {
+			best = root
+		}
+	}
+	if best == "" {
+		return "", fmt.Errorf("找不到该视频原来的扫描目录")
+	}
+	return best, nil
+}
+
+// 扫描完成事件（D-PC09）。事件由 App 层沿用 runtime.EventsEmit 发出，载荷在这里定义。
+const (
+	ScanTriggerStartup         = "startup"
+	ScanTriggerDirectoryChange = "directory_change"
+	ScanTriggerManual          = "manual"
+)
+
+// LibraryScanSummaryEvent 是 library-scan-summary 事件的载荷。
+type LibraryScanSummaryEvent struct {
+	Trigger string          `json:"trigger"`
+	Result  *ScanSyncResult `json:"result"`
 }

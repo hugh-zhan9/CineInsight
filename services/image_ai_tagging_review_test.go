@@ -82,9 +82,9 @@ func TestImageAITagApproveWritesOfficialTag(t *testing.T) {
 	}
 }
 
-// TestImageAITagApproveSupersedesWhenManuallyTagged 钉住"人的判断优先"：
-// 已有手工标签时接受候选不写入标签，而是把该图待审候选整体作废。
-func TestImageAITagApproveSupersedesWhenManuallyTagged(t *testing.T) {
+// TestImageAITagApproveStillApprovesWhenManuallyTaggedIMG08 钉住 D-PC28 规则 2：
+// 已有手工标签不再让接受候选变成整图作废，候选照常写入标签，其余待审候选保持待审。
+func TestImageAITagApproveStillApprovesWhenManuallyTaggedIMG08(t *testing.T) {
 	svc := newImageAITaggingReviewTestService(t)
 	library := imageAITaggingTestLibrary(t, "海边", "日落")
 	img := imageAITaggingTestImage(t, "heic")
@@ -102,13 +102,13 @@ func TestImageAITagApproveSupersedesWhenManuallyTagged(t *testing.T) {
 
 	item, err := svc.ApproveImageAITagCandidate(first.ID)
 	if err != nil {
-		t.Fatalf("接受应成功返回 superseded: %v", err)
+		t.Fatalf("已有手工标签时接受应成功: %v", err)
 	}
-	if item.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("应置为 superseded: %+v", item)
+	if item.Status != models.AITagCandidateStatusApproved {
+		t.Fatalf("应置为 approved: %+v", item)
 	}
-	if imageHasTag(t, img.ID, library[0].ID) {
-		t.Fatal("已手工打标时不应写入 AI 标签")
+	if !imageHasTag(t, img.ID, library[0].ID) {
+		t.Fatal("已手工打标时接受候选仍应写入 AI 标签")
 	}
 	var pending int64
 	if err := database.DB.Model(&models.ImageAITagCandidate{}).
@@ -116,8 +116,8 @@ func TestImageAITagApproveSupersedesWhenManuallyTagged(t *testing.T) {
 		Count(&pending).Error; err != nil {
 		t.Fatalf("统计待审候选失败: %v", err)
 	}
-	if pending != 0 {
-		t.Fatalf("该图待审候选应被整体作废，剩余 %d", pending)
+	if pending != 1 {
+		t.Fatalf("其余待审候选应保持待审，实际 %d", pending)
 	}
 }
 

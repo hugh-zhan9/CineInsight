@@ -146,3 +146,28 @@ type AITagLibraryInput struct {
 	ReviewRequired bool   `json:"review_required"`
 	IsActive       bool   `json:"is_active"`
 }
+
+// AITagBatchItemResult 是批量批准中一条候选的结果。
+type AITagBatchItemResult struct {
+	ID      uint                 `json:"id"`
+	OK      bool                 `json:"ok"`
+	Message string               `json:"message,omitempty"`
+	Item    *AITaggingReviewItem `json:"item,omitempty"`
+}
+
+// AITagBatchResult 是 ApproveAITagCandidates* 的逐项结果（D-PC29）。
+// 与批准单条的事务语义一致：某一条失败不影响其余，前端据 Results 局部更新。
+type AITagBatchResult struct {
+	Requested int                    `json:"requested"`
+	Succeeded int                    `json:"succeeded"`
+	Failed    int                    `json:"failed"`
+	Results   []AITagBatchItemResult `json:"results"`
+}
+
+// AITagCandidateFilter 是「批准筛选结果」的服务端筛选条件，三项均可省略。
+// MinConfidence 取 high 只含 high，其余取值含 high 与 medium。
+type AITagCandidateFilter struct {
+	TagID         uint   `json:"tag_id,omitempty"`
+	MinConfidence string `json:"min_confidence,omitempty"`
+	Query         string `json:"query,omitempty"`
+}

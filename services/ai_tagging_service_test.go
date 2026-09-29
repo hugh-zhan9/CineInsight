@@ -41,9 +41,6 @@ func TestAutomaticTagsDoNotMakeVideoIneligibleForAITagging(t *testing.T) {
 	if hasNonAutomaticTags(videos[0].Tags) {
 		t.Fatalf("自动标签不应被识别为人工/正式标签: %+v", videos[0].Tags)
 	}
-	if manual, err := svc.hasManualOfficialTagsInTx(database.DB, video.ID); err != nil || manual {
-		t.Fatalf("自动标签不应使候选审批冲突: manual=%v err=%v", manual, err)
-	}
 }
 
 type fakeAITaggingConfigProvider struct {
@@ -788,7 +785,8 @@ func TestAITaggingStatusSummaryExcludesSoftDeletedVideos(t *testing.T) {
 	}
 }
 
-func TestApproveAITagCandidateSupersedesWhenVideoWasManuallyTagged(t *testing.T) {
+// META-06：已有人工标签时批准照常生效，不再整视频作废（D-PC28 规则 2）。
+func TestApproveAITagCandidateStillApprovesWhenVideoWasManuallyTaggedMETA06(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	existingTag := models.Tag{Name: "动作", Color: "#fff"}
 	newTag := models.Tag{Name: "悬疑", Color: "#000"}
@@ -819,20 +817,21 @@ func TestApproveAITagCandidateSupersedesWhenVideoWasManuallyTagged(t *testing.T)
 	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
 	item, err := svc.ApproveCandidate(candidate.ID)
 	if err != nil {
-		t.Fatalf("已有人工标签时应过期候选而非失败: %v", err)
+		t.Fatalf("已有人工标签时批准应成功: %v", err)
 	}
-	if item.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("候选应标记为 superseded，实际 %s", item.Status)
+	if item.Status != models.AITagCandidateStatusApproved {
+		t.Fatalf("候选应为 approved，实际 %s", item.Status)
 	}
-	if got := countRows(t, "video_tags"); got != 1 {
-		t.Fatalf("已有人工标签时不应新增正式关联，实际 %d", got)
+	if got := countRows(t, "video_tags"); got != 2 {
+		t.Fatalf("批准应新增正式关联，实际 %d", got)
 	}
-	if got := countRows(t, "ai_tag_approval_records"); got != 0 {
-		t.Fatalf("已有人工标签时不应记录 AI 来源，实际 %d", got)
+	if got := countRows(t, "ai_tag_approval_records"); got != 1 {
+		t.Fatalf("应记录 AI 来源，实际 %d", got)
 	}
 }
 
-func TestApproveAITagCandidateSupersedesAfterManualTagAddedFollowingAIApproval(t *testing.T) {
+// META-06：AI 批准后又手动加标签，再批准第二个候选仍然生效。
+func TestApproveAITagCandidateApprovesAfterManualTagAddedFollowingAIApprovalMETA06(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	firstTag := configuredAITag("动作", "#fff")
 	secondTag := configuredAITag("悬疑", "#000")
@@ -877,16 +876,16 @@ func TestApproveAITagCandidateSupersedesAfterManualTagAddedFollowingAIApproval(t
 	}
 	item, err := svc.ApproveCandidate(secondCandidate.ID)
 	if err != nil {
-		t.Fatalf("人工补标签后审批旧候选应过期而非失败: %v", err)
+		t.Fatalf("人工补标签后批准第二个候选应成功: %v", err)
 	}
-	if item.Status != models.AITagCandidateStatusSuperseded {
-		t.Fatalf("第二个候选应标记为 superseded，实际 %s", item.Status)
+	if item.Status != models.AITagCandidateStatusApproved {
+		t.Fatalf("第二个候选应为 approved，实际 %s", item.Status)
 	}
-	if got := countRows(t, "video_tags"); got != 2 {
-		t.Fatalf("人工补标签后不应新增第二个 AI 关联，实际 %d", got)
+	if got := countRows(t, "video_tags"); got != 3 {
+		t.Fatalf("应有两个 AI 关联加一个人工关联，实际 %d", got)
 	}
-	if got := countRows(t, "ai_tag_approval_records"); got != 1 {
-		t.Fatalf("只应保留首个 AI 来源记录，实际 %d", got)
+	if got := countRows(t, "ai_tag_approval_records"); got != 2 {
+		t.Fatalf("应有两条 AI 来源记录，实际 %d", got)
 	}
 }
 
@@ -905,7 +904,8 @@ func TestAITaggingFingerprintChangeAllowsSameLabelReanalysis(t *testing.T) {
 	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {
 		t.Fatalf("首次处理失败: %v", err)
 	}
-	if err := database.DB.Model(&tag).Update("color", "#000").Error; err != nil {
+	// 词表指纹不含颜色/更新时间（META-01），改分类才会改变指纹并触发重分析。
+	if err := database.DB.Model(&tag).Update("namespace", "story").Error; err != nil {
 		t.Fatalf("更新标签失败: %v", err)
 	}
 	if err := svc.ProcessVideo(context.Background(), video.ID); err != nil {

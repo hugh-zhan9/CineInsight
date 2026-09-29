@@ -15,7 +15,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 	"video-master/models"
 	"video-master/services/subtitleparser"
 )
@@ -334,12 +333,15 @@ func buildEvidenceFingerprint(video models.Video, tags []models.Tag, evidence AI
 	return hex.EncodeToString(sum[:])
 }
 
+// tagLibraryHash 是词表指纹：按 id 排序的 (id, name, trimmed namespace) 序列哈希（D-PC28）。
+// 刻意不含 UpdatedAt / 颜色：只改颜色不该让整库视频重新送去 AI 分析。
 func tagLibraryHash(tags []models.Tag) string {
-	items := make([]string, 0, len(tags))
-	for _, tag := range tags {
-		items = append(items, fmt.Sprintf("%d:%s:%s", tag.ID, tag.Name, tag.UpdatedAt.UTC().Format(time.RFC3339Nano)))
+	sorted := append([]models.Tag(nil), tags...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].ID < sorted[j].ID })
+	items := make([]string, 0, len(sorted))
+	for _, tag := range sorted {
+		items = append(items, fmt.Sprintf("%d:%s:%s", tag.ID, tag.Name, strings.TrimSpace(tag.Namespace)))
 	}
-	sort.Strings(items)
 	sum := sha256.Sum256([]byte(strings.Join(items, "\n")))
 	return hex.EncodeToString(sum[:])
 }

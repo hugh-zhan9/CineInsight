@@ -57,6 +57,11 @@ type LocalMetadataRelationDiff struct {
 	ChangeType        string                         `json:"change_type"`
 	DefaultSelected   bool                           `json:"default_selected"`
 	RequiresOverwrite bool                           `json:"requires_overwrite"`
+	// Added / Removed / Kept 是按名字列出的差异（D-PC39）：来源里新增、来源里没有的现有项、
+	// 两边都有的项。来源为空时不比较，三者都是空数组。
+	Added   []string `json:"added"`
+	Removed []string `json:"removed"`
+	Kept    []string `json:"kept"`
 }
 
 type LocalMetadataArtworkDiff struct {
@@ -69,7 +74,10 @@ type LocalMetadataArtworkDiff struct {
 }
 
 type LocalMetadataDiff struct {
-	VideoID        uint                      `json:"video_id"`
+	VideoID uint `json:"video_id"`
+	// VideoName 与 VideoPath 让批量导入界面能认出「这是哪个视频」（D-PC39）。
+	VideoName      string                    `json:"video_name"`
+	VideoPath      string                    `json:"video_path"`
 	ManifestSHA256 string                    `json:"manifest_sha256"`
 	CurrentSHA256  string                    `json:"current_sha256"`
 	Status         string                    `json:"status"`
@@ -148,7 +156,7 @@ func (s *LocalMetadataService) GetDiff(videoID uint) (*LocalMetadataDiff, error)
 		if err := s.recordObservation(videoID, "", LocalMetadataStateMissing, "", ""); err != nil {
 			return nil, err
 		}
-		return &LocalMetadataDiff{VideoID: videoID, Status: LocalMetadataStateMissing, Warnings: sources.warnings}, nil
+		return &LocalMetadataDiff{VideoID: videoID, VideoName: video.Name, VideoPath: video.Path, Status: LocalMetadataStateMissing, Warnings: sources.warnings}, nil
 	}
 	manifest, err := localMetadataManifest(sources.manifest)
 	if err != nil {
@@ -266,7 +274,7 @@ func (s *LocalMetadataService) buildDiff(video models.Video, source LocalMetadat
 		return nil, err
 	}
 	return &LocalMetadataDiff{
-		VideoID: video.ID, ManifestSHA256: manifest, CurrentSHA256: localMetadataCurrentFingerprint(video, people, collections), Status: status,
+		VideoID: video.ID, VideoName: video.Name, VideoPath: video.Path, ManifestSHA256: manifest, CurrentSHA256: localMetadataCurrentFingerprint(video, people, collections), Status: status,
 		Title:         scalarLocalMetadataDiff("title", video.DisplayTitle, source.Title),
 		OriginalTitle: scalarLocalMetadataDiff("original_title", video.OriginalTitle, source.OriginalTitle),
 		Description:   scalarLocalMetadataDiff("description", video.Description, source.Description),
@@ -316,9 +324,28 @@ func scalarLocalMetadataDiff(field, current, source string) LocalMetadataScalarD
 }
 
 func relationLocalMetadataDiff(field string, current []LocalMetadataEntity, source []LocalMetadataEntityCandidate) LocalMetadataRelationDiff {
-	diff := LocalMetadataRelationDiff{Field: field, Current: current, Source: source, ChangeType: "none"}
+	diff := LocalMetadataRelationDiff{Field: field, Current: current, Source: source, ChangeType: "none",
+		Added: []string{}, Removed: []string{}, Kept: []string{}}
 	if len(source) == 0 {
 		return diff
+	}
+	currentSet := make(map[string]struct{}, len(current))
+	for _, entity := range current {
+		currentSet[entity.NormalizedName] = struct{}{}
+	}
+	sourceSet := make(map[string]struct{}, len(source))
+	for _, candidate := range source {
+		sourceSet[candidate.NormalizedName] = struct{}{}
+		if _, ok := currentSet[candidate.NormalizedName]; ok {
+			diff.Kept = append(diff.Kept, candidate.SourceName)
+		} else {
+			diff.Added = append(diff.Added, candidate.SourceName)
+		}
+	}
+	for _, entity := range current {
+		if _, ok := sourceSet[entity.NormalizedName]; !ok {
+			diff.Removed = append(diff.Removed, entity.Name)
+		}
 	}
 	currentNames := make([]string, 0, len(current))
 	for _, entity := range current {

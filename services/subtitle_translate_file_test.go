@@ -184,7 +184,7 @@ func TestTranslateSubtitleFileSkipsGlossaryLookupForDeepL(t *testing.T) {
 
 	service := NewSubtitleService(t.TempDir())
 	resolved := 0
-	service.glossaryResolver = func(uint) ([]GlossaryTerm, error) {
+	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) {
 		resolved++
 		return nil, nil
 	}
@@ -579,7 +579,7 @@ func TestFinalizeSubtitleArtifactWarnsAboutUntranslatedEntries(t *testing.T) {
 	})
 	dir := t.TempDir()
 	video := mustCreateGlossaryVideo(t, filepath.Join(dir, "matrix.mp4"))
-	srtPath := filepath.Join(dir, "matrix.srt")
+	srtPath := filepath.Join(dir, "matrix"+subtitlePendingSuffix)
 	if err := os.WriteFile(srtPath, []byte(subtitleWithUntranslatableLine), 0644); err != nil {
 		t.Fatalf("写入测试字幕失败: %v", err)
 	}

@@ -6,9 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
+	"log"
 	"os"
-	"path/filepath"
 	"strings"
 	"video-master/models"
 	"video-master/services/subtitleparser"
@@ -30,6 +29,16 @@ const (
 	SubtitleSaveStatusRejected     SubtitleSaveStatus = "rejected"
 )
 
+// SubtitleRetranslateMode 是工作台重译的作用范围（D-PC16）。
+type SubtitleRetranslateMode string
+
+const (
+	// SubtitleRetranslateModeWholeEntry 把整条文本送去翻译并整条替换（默认，兼容旧请求）。
+	SubtitleRetranslateModeWholeEntry SubtitleRetranslateMode = "whole_entry"
+	// SubtitleRetranslateModeTranslationLine 只把第一行（原文）送去翻译，只替换第二行（译文）。
+	SubtitleRetranslateModeTranslationLine SubtitleRetranslateMode = "translation_line"
+)
+
 type SubtitleFingerprint struct {
 	Size      int64  `json:"size"`
 	ModTimeNS int64  `json:"mod_time_ns"`
@@ -40,6 +49,13 @@ type SubtitleEditDocument struct {
 	VideoID     uint                           `json:"video_id"`
 	Fingerprint SubtitleFingerprint            `json:"fingerprint"`
 	Entries     []subtitleparser.EditorSegment `json:"entries"`
+	// Issues 是打开时发现的格式问题（零时长、结束早于开始、重叠）。它们不阻止打开，
+	// 但会阻止保存，由工作台的「下一个问题」与「一键修复」处理（D-PC15）。
+	Issues []subtitleparser.DocumentIssue `json:"issues"`
+	// 以下三个字段只由 App 层在遇到带错误码的失败时填写（G-3）；服务层返回 *SubtitleCodedError。
+	ErrorCode        string `json:"error_code,omitempty"`
+	Message          string `json:"message,omitempty"`
+	DetectedEncoding string `json:"detected_encoding,omitempty"`
 }
 
 type SubtitleValidationResult struct {
@@ -57,8 +73,14 @@ type SubtitleSaveResult struct {
 	Status      SubtitleSaveStatus                     `json:"status"`
 	Fingerprint *SubtitleFingerprint                   `json:"fingerprint,omitempty"`
 	Issues      []subtitleparser.EditorValidationIssue `json:"issues,omitempty"`
-	ErrorCode   SubtitleWorkbenchErrorCode             `json:"error_code,omitempty"`
-	Message     string                                 `json:"message,omitempty"`
+	// FirstIssueEntryIndex / FirstIssueClientID 指向第一个问题所在的条目（从 1 起），
+	// 让前端直接跳过去；校验被拒绝时才有值（D-PC15）。
+	FirstIssueEntryIndex int                        `json:"first_issue_entry_index,omitempty"`
+	FirstIssueClientID   string                     `json:"first_issue_client_id,omitempty"`
+	ErrorCode            SubtitleWorkbenchErrorCode `json:"error_code,omitempty"`
+	Message              string                     `json:"message,omitempty"`
+	// BackupID 是被覆盖前的旧字幕备份；新建文件时为空（D-PC13）。
+	BackupID string `json:"backup_id,omitempty"`
 }
 
 type SubtitleRetranslateEntry struct {
@@ -70,18 +92,32 @@ type SubtitleRetranslateRequest struct {
 	VideoID    uint                       `json:"video_id"`
 	SourceLang string                     `json:"source_lang"`
 	TargetLang string                     `json:"target_lang"`
+	Mode       SubtitleRetranslateMode    `json:"mode"`
 	Entries    []SubtitleRetranslateEntry `json:"entries"`
 }
 
 type SubtitleRetranslateResult struct {
 	Entries []SubtitleRetranslateEntry `json:"entries"`
+	// Warnings 带空译文回退的告知（沿用 subtitleFallbackWarning 的口径）。
+	Warnings []string `json:"warnings,omitempty"`
+}
+
+// SubtitleConvertResult 是编码转换的结果。
+type SubtitleConvertResult struct {
+	Encoding    string               `json:"encoding"`
+	BackupID    string               `json:"backup_id,omitempty"`
+	Fingerprint *SubtitleFingerprint `json:"fingerprint,omitempty"`
+	Warnings    []string             `json:"warnings,omitempty"`
 }
 
 type SubtitleWorkbenchService struct {
 	subtitleService   *SubtitleService
 	replaceFile       func(string, string) error
 	translatorFactory func(SubtitleTranslationConfig) (SubtitleTranslator, error)
-	glossaryResolver  func(videoID uint) ([]GlossaryTerm, error)
+	glossaryResolver  func(videoID uint, targetLanguage string) ([]GlossaryTerm, error)
+	// dataDir 是没有 subtitleService 时写入器使用的应用数据目录（备份根）；
+	// 有 subtitleService 时以它的 BaseDir 为准。
+	dataDir string
 }
 
 func NewSubtitleWorkbenchService(subtitleService *SubtitleService) *SubtitleWorkbenchService {
@@ -92,7 +128,7 @@ func NewSubtitleWorkbenchService(subtitleService *SubtitleService) *SubtitleWork
 	}
 	service.translatorFactory = func(config SubtitleTranslationConfig) (SubtitleTranslator, error) {
 		if service.subtitleService == nil {
-			return nil, fmt.Errorf("subtitle service unavailable")
+			return nil, fmt.Errorf("字幕服务不可用")
 		}
 		provider := normalizeSubtitleTranslationProvider(config.Provider)
 		return service.subtitleService.subtitleTranslator(provider, config)
@@ -100,20 +136,62 @@ func NewSubtitleWorkbenchService(subtitleService *SubtitleService) *SubtitleWork
 	return service
 }
 
+func (s *SubtitleWorkbenchService) writer() *SubtitleFileWriter {
+	dataDir := s.dataDir
+	if s.subtitleService != nil {
+		dataDir = s.subtitleService.BaseDir
+	}
+	writer := NewSubtitleFileWriter(dataDir)
+	if s.replaceFile != nil {
+		writer.replaceFile = s.replaceFile
+	}
+	return writer
+}
+
+// GetDocument 打开视频的同名 .srt。失败时返回带错误码的 *SubtitleCodedError：
+// subtitle_missing（没有字幕，可用 NewBlankDocument 以空文档打开）、
+// subtitle_not_sidecar_srt、subtitle_encoding_not_utf8。
 func (s *SubtitleWorkbenchService) GetDocument(video models.Video) (*SubtitleEditDocument, error) {
 	if video.ID == 0 || strings.TrimSpace(video.Path) == "" {
-		return nil, fmt.Errorf("video is invalid")
+		return nil, errors.New("视频信息无效")
 	}
 	srtPath := subtitleparser.SRTPathForVideo(video.Path)
 	content, fingerprint, _, err := readSubtitleForEditing(srtPath)
 	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, missingSidecarError(video.ID, video.Path)
+		}
+		return nil, err
+	}
+	if err := ensureUTF8SubtitleContent(content); err != nil {
 		return nil, err
 	}
 	entries, err := subtitleparser.ParseStrict(content)
 	if err != nil {
 		return nil, err
 	}
-	return &SubtitleEditDocument{VideoID: video.ID, Fingerprint: fingerprint, Entries: entries}, nil
+	return &SubtitleEditDocument{
+		VideoID: video.ID, Fingerprint: fingerprint, Entries: entries,
+		Issues: subtitleparser.DetectDocumentIssues(entries),
+	}, nil
+}
+
+// NewBlankDocument 以空文档打开还没有字幕的视频；保存时经写入器创建文件（D-PC15）。
+// 空文档的指纹是零值：保存时文件必须仍然不存在，否则按外部改动处理。
+func (s *SubtitleWorkbenchService) NewBlankDocument(video models.Video) (*SubtitleEditDocument, error) {
+	if video.ID == 0 || strings.TrimSpace(video.Path) == "" {
+		return nil, errors.New("视频信息无效")
+	}
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	if _, err := os.Lstat(srtPath); err == nil {
+		return nil, errors.New("同名字幕已经存在，请重新打开字幕")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("读取字幕文件状态失败: %s", subtitleIOReason(err))
+	}
+	return &SubtitleEditDocument{
+		VideoID: video.ID, Entries: []subtitleparser.EditorSegment{},
+		Issues: []subtitleparser.DocumentIssue{},
+	}, nil
 }
 
 func (s *SubtitleWorkbenchService) Validate(entries []subtitleparser.EditorSegment) SubtitleValidationResult {
@@ -129,72 +207,52 @@ func (s *SubtitleWorkbenchService) Validate(entries []subtitleparser.EditorSegme
 
 func (s *SubtitleWorkbenchService) SaveDocument(video models.Video, request SubtitleSaveRequest) (*SubtitleSaveResult, error) {
 	if request.VideoID == 0 || request.VideoID != video.ID {
-		return nil, fmt.Errorf("subtitle save video ID does not match")
+		return nil, errors.New("保存请求的视频与当前视频不一致")
 	}
 	serialized, issues := subtitleparser.SerializeEditorSegments(request.Entries)
 	if len(issues) != 0 {
-		return &SubtitleSaveResult{
+		result := &SubtitleSaveResult{
 			Status: SubtitleSaveStatusRejected, ErrorCode: SubtitleWorkbenchErrorValidation,
-			Message: "subtitle validation failed", Issues: issues,
-		}, nil
+			Message: "字幕校验未通过，请先修正标出的问题", Issues: issues,
+		}
+		for _, issue := range issues {
+			if issue.EntryIndex > 0 {
+				result.FirstIssueEntryIndex = issue.EntryIndex
+				result.FirstIssueClientID = issue.ClientID
+				break
+			}
+		}
+		return result, nil
 	}
 
 	unlock := lockSubtitleFile(video.ID)
 	defer unlock()
 
 	srtPath := subtitleparser.SRTPathForVideo(video.Path)
-	_, currentFingerprint, sourceMode, err := readSubtitleForEditing(srtPath)
+	_, currentFingerprint, _, err := readSubtitleForEditing(srtPath)
 	if err != nil {
-		return nil, err
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		// 文件不存在：只有以空文档打开（零指纹）时才允许创建。
+		currentFingerprint = SubtitleFingerprint{}
 	}
 	if currentFingerprint != request.Fingerprint {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorConflict, "subtitle changed outside the editor; reload before saving"), nil
+		return rejectedSubtitleSave(SubtitleWorkbenchErrorConflict, "字幕在编辑器之外被修改，请重新加载后再保存"), nil
 	}
 
-	temporary, err := os.CreateTemp(filepath.Dir(srtPath), "."+filepath.Base(srtPath)+".tmp-*")
+	writeResult, err := s.writer().Replace(context.Background(), video.ID, srtPath, serialized)
 	if err != nil {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, fmt.Sprintf("create subtitle temporary file: %s", subtitleIOReason(err))), nil
-	}
-	temporaryPath := temporary.Name()
-	removeTemporary := true
-	defer func() {
-		_ = temporary.Close()
-		if removeTemporary {
-			_ = os.Remove(temporaryPath)
-		}
-	}()
-	if err := temporary.Chmod(sourceMode.Perm()); err != nil {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, fmt.Sprintf("set subtitle permissions: %s", subtitleIOReason(err))), nil
-	}
-	if _, err := temporary.Write(serialized); err != nil {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, fmt.Sprintf("write subtitle temporary file: %s", subtitleIOReason(err))), nil
-	}
-	if err := temporary.Sync(); err != nil {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, fmt.Sprintf("sync subtitle temporary file: %s", subtitleIOReason(err))), nil
-	}
-	if err := temporary.Close(); err != nil {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, fmt.Sprintf("close subtitle temporary file: %s", subtitleIOReason(err))), nil
+		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, err.Error()), nil
 	}
 
-	_, finalFingerprint, _, err := readSubtitleForEditing(srtPath)
-	if err != nil {
-		return nil, err
-	}
-	if finalFingerprint != request.Fingerprint {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorConflict, "subtitle changed outside the editor; reload before saving"), nil
-	}
-	if err := s.replaceFile(temporaryPath, srtPath); err != nil {
-		return rejectedSubtitleSave(SubtitleWorkbenchErrorReplaceFailed, fmt.Sprintf("replace subtitle file: %s", subtitleIOReason(err))), nil
-	}
-	removeTemporary = false
-	_ = syncSubtitleParentDirectory(filepath.Dir(srtPath))
-
-	// The file is already replaced; never report this as "not modified".
+	// 文件已经换好，此后无论如何都不能报告「未保存」。
 	_, savedFingerprint, _, err := readSubtitleForEditing(srtPath)
 	if err != nil {
 		return &SubtitleSaveResult{
-			Status:  SubtitleSaveStatusIndexPending,
-			Message: "subtitle saved but could not be re-read; index refresh is pending",
+			Status:   SubtitleSaveStatusIndexPending,
+			Message:  "字幕已保存，但无法重新读取，索引稍后刷新",
+			BackupID: writeResult.BackupID,
 		}, nil
 	}
 	segments := make([]subtitleparser.Segment, 0, len(request.Entries))
@@ -208,41 +266,117 @@ func (s *SubtitleWorkbenchService) SaveDocument(video models.Video, request Subt
 		})
 	}
 	if err := replaceSubtitleIndex(video, srtPath, segments); err != nil {
+		log.Printf("[Subtitle] workbench index refresh failed video_id=%d err=%v", video.ID, err)
 		return &SubtitleSaveResult{
 			Status: SubtitleSaveStatusIndexPending, Fingerprint: &savedFingerprint,
-			Message: fmt.Sprintf("subtitle saved but index refresh failed: %v", err),
+			Message: "字幕已保存，但搜索索引刷新失败", BackupID: writeResult.BackupID,
 		}, nil
 	}
-	return &SubtitleSaveResult{Status: SubtitleSaveStatusSaved, Fingerprint: &savedFingerprint}, nil
+	return &SubtitleSaveResult{Status: SubtitleSaveStatusSaved, Fingerprint: &savedFingerprint, BackupID: writeResult.BackupID}, nil
+}
+
+// ConvertToUTF8 把非 UTF-8 字幕转成 UTF-8 并经写入器写回（会先备份，可恢复）。
+// fromEncoding 是前端从 subtitle_encoding_not_utf8 里拿到的检测结果，非空时必须与当前一致。
+func (s *SubtitleWorkbenchService) ConvertToUTF8(video models.Video, fromEncoding string) (*SubtitleConvertResult, error) {
+	if video.ID == 0 || strings.TrimSpace(video.Path) == "" {
+		return nil, errors.New("视频信息无效")
+	}
+	unlock := lockSubtitleFile(video.ID)
+	defer unlock()
+
+	srtPath := subtitleparser.SRTPathForVideo(video.Path)
+	content, _, _, err := readSubtitleForEditing(srtPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, missingSidecarError(video.ID, video.Path)
+		}
+		return nil, err
+	}
+	text, detected, err := subtitleparser.DecodeSubtitleBytes(content)
+	if err != nil {
+		return nil, &SubtitleCodedError{Code: SubtitleErrorEncodingNotUTF8, Message: "字幕文件的编码无法识别，无法自动转换", DetectedEncoding: "unknown"}
+	}
+	if detected == subtitleparser.EncodingUTF8 {
+		return nil, errors.New("字幕已经是 UTF-8 编码，无需转换")
+	}
+	if requested := strings.ToLower(strings.TrimSpace(fromEncoding)); requested != "" && requested != detected {
+		return nil, errors.New("字幕编码与之前检测的结果不一致，请重新打开字幕")
+	}
+
+	writeResult, err := s.writer().Replace(context.Background(), video.ID, srtPath, []byte(text))
+	if err != nil {
+		return nil, err
+	}
+	result := &SubtitleConvertResult{Encoding: detected, BackupID: writeResult.BackupID}
+	if _, fingerprint, _, readErr := readSubtitleForEditing(srtPath); readErr == nil {
+		result.Fingerprint = &fingerprint
+	}
+	if err := indexSubtitleFileForVideoID(video.ID, srtPath); err != nil {
+		log.Printf("[Subtitle] index converted subtitle failed video_id=%d err=%v", video.ID, err)
+		result.Warnings = append(result.Warnings, "字幕已转换，但搜索索引刷新失败")
+	}
+	return result, nil
+}
+
+func normalizeSubtitleRetranslateMode(mode SubtitleRetranslateMode) (SubtitleRetranslateMode, error) {
+	switch SubtitleRetranslateMode(strings.TrimSpace(string(mode))) {
+	case "", SubtitleRetranslateModeWholeEntry:
+		return SubtitleRetranslateModeWholeEntry, nil
+	case SubtitleRetranslateModeTranslationLine:
+		return SubtitleRetranslateModeTranslationLine, nil
+	default:
+		return "", fmt.Errorf("不支持的重译范围: %q", string(mode))
+	}
+}
+
+// translationLineSource 取一条字幕的第一行（原文）。
+func translationLineSource(text string) string {
+	normalized := strings.Trim(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), "\n")
+	return strings.TrimSpace(strings.SplitN(normalized, "\n", 2)[0])
+}
+
+// replaceTranslationLine 只替换第二行；单行条目把译文补成第二行，第三行及以后原样保留。
+func replaceTranslationLine(text, translation string) string {
+	normalized := strings.Trim(strings.ReplaceAll(strings.ReplaceAll(text, "\r\n", "\n"), "\r", "\n"), "\n")
+	lines := strings.Split(normalized, "\n")
+	if len(lines) < 2 {
+		return lines[0] + "\n" + translation
+	}
+	lines[1] = translation
+	return strings.Join(lines, "\n")
 }
 
 func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request SubtitleRetranslateRequest, config SubtitleTranslationConfig) (*SubtitleRetranslateResult, error) {
 	if len(request.Entries) == 0 {
-		return nil, fmt.Errorf("subtitle translation selection is empty")
+		return nil, errors.New("请先选择要重译的字幕")
 	}
 	if strings.TrimSpace(request.TargetLang) == "" {
-		return nil, fmt.Errorf("subtitle translation target language is required")
+		return nil, errors.New("请选择重译的目标语言")
+	}
+	mode, err := normalizeSubtitleRetranslateMode(request.Mode)
+	if err != nil {
+		return nil, err
 	}
 	seen := make(map[string]struct{}, len(request.Entries))
 	totalTextBytes := 0
 	if len(request.Entries) > subtitleparser.MaxEditorSegments {
-		return nil, fmt.Errorf("subtitle translation selection exceeds %d entries", subtitleparser.MaxEditorSegments)
+		return nil, fmt.Errorf("重译选区不能超过 %d 条", subtitleparser.MaxEditorSegments)
 	}
 	for _, entry := range request.Entries {
 		id := strings.TrimSpace(entry.ClientID)
 		if id == "" {
-			return nil, fmt.Errorf("subtitle translation entry client ID is required")
+			return nil, errors.New("重译条目缺少标识")
 		}
 		if _, exists := seen[id]; exists {
-			return nil, fmt.Errorf("subtitle translation entry client ID %q is duplicated", id)
+			return nil, fmt.Errorf("重译条目标识 %q 重复", id)
 		}
 		seen[id] = struct{}{}
 		if strings.TrimSpace(entry.Text) == "" {
-			return nil, fmt.Errorf("subtitle translation entry %q is empty", id)
+			return nil, fmt.Errorf("重译条目 %q 的文本为空", id)
 		}
 		totalTextBytes += len([]byte(entry.Text))
 		if totalTextBytes > subtitleparser.MaxEditorFileBytes {
-			return nil, fmt.Errorf("subtitle translation selection exceeds %d bytes", subtitleparser.MaxEditorFileBytes)
+			return nil, fmt.Errorf("重译选区的文本超过 %d 字节", subtitleparser.MaxEditorFileBytes)
 		}
 	}
 	translator, err := s.translatorFactory(config)
@@ -250,20 +384,31 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 		return nil, err
 	}
 	if translator == nil {
-		return nil, fmt.Errorf("subtitle translator unavailable")
+		return nil, errors.New("字幕翻译器不可用")
 	}
-	// 术语生效集按视频解析一次，整次选区重译共用（D-033）。只有能吃下术语表的翻译器
-	// 才去查：DeepL 用不上，也就不该因为一次库读失败而多出一条失败路径（D-034）。
+	// 术语生效集按视频与目标语言解析一次，整次选区重译共用（D-033、D-PC16）。只有能吃下术语表的
+	// 翻译器才去查：DeepL 用不上，也就不该因为一次库读失败而多出一条失败路径（D-034）。
 	contextual, injectable := translator.(ContextualTranslator)
 	var glossary []GlossaryTerm
 	if injectable {
-		resolved, err := s.glossaryResolver(request.VideoID)
+		resolved, err := s.glossaryResolver(request.VideoID, normalizeSubtitleLanguageCode(request.TargetLang))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("读取术语表失败: %w", err)
 		}
 		glossary = resolved
 	}
+
+	sources := make([]string, len(request.Entries))
+	for index, entry := range request.Entries {
+		if mode == SubtitleRetranslateModeTranslationLine {
+			sources[index] = translationLineSource(entry.Text)
+		} else {
+			sources[index] = entry.Text
+		}
+	}
+
 	translatedEntries := make([]SubtitleRetranslateEntry, 0, len(request.Entries))
+	fallbackCount := 0
 	// 滑动窗口：上一批尾部若干条 (原文, 译文) 作为只读上文，首批为空（D-035）。
 	var preceding []ContextPair
 	const batchSize = 50
@@ -272,10 +417,7 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 		if end > len(request.Entries) {
 			end = len(request.Entries)
 		}
-		texts := make([]string, end-start)
-		for index := start; index < end; index++ {
-			texts[index-start] = request.Entries[index].Text
-		}
+		texts := sources[start:end]
 		translations, err := translateSubtitleBatch(ctx, translator, contextual, TranslationRequest{
 			Texts:            texts,
 			SourceLang:       request.SourceLang,
@@ -287,55 +429,69 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 			return nil, err
 		}
 		if len(translations) != len(texts) {
-			return nil, fmt.Errorf("subtitle translation returned %d entries for %d inputs", len(translations), len(texts))
+			return nil, fmt.Errorf("字幕翻译返回 %d 条，期望 %d 条", len(translations), len(texts))
 		}
-		preceding = trailingContextPairs(texts, translations, subtitleTranslationContextWindow)
-		for index, translation := range translations {
-			translatedEntries = append(translatedEntries, SubtitleRetranslateEntry{
-				ClientID: request.Entries[start+index].ClientID,
-				Text:     translation,
-			})
+		// 空译文回退（与生成、文件翻译共用），且必须先于上文窗口，免得「原文 → 空」进入下一批提示词。
+		fallbackTexts, batchFallbacks := applyTranslationFallback(texts, translations)
+		fallbackCount += batchFallbacks
+		preceding = trailingContextPairs(texts, fallbackTexts, subtitleTranslationContextWindow)
+		for index := range translations {
+			entry := request.Entries[start+index]
+			text := fallbackTexts[index]
+			if mode == SubtitleRetranslateModeTranslationLine {
+				if strings.TrimSpace(translations[index]) == "" {
+					// 没有译文：条目保持原样，不把原文当译文叠成两遍。
+					text = entry.Text
+				} else {
+					text = replaceTranslationLine(entry.Text, text)
+				}
+			}
+			translatedEntries = append(translatedEntries, SubtitleRetranslateEntry{ClientID: entry.ClientID, Text: text})
 		}
 	}
-	return &SubtitleRetranslateResult{Entries: translatedEntries}, nil
+	result := &SubtitleRetranslateResult{Entries: translatedEntries}
+	if fallbackCount > 0 {
+		result.Warnings = append(result.Warnings, subtitleFallbackWarning(fallbackCount))
+	}
+	return result, nil
 }
 
 func readSubtitleForEditing(path string) ([]byte, SubtitleFingerprint, os.FileMode, error) {
 	// Lstat, not Stat: an atomic replace would destroy a symlink and write the edit
 	// to the wrong location, leaving the real subtitle file behind with stale content.
 	if linkInfo, err := os.Lstat(path); err != nil {
-		return nil, SubtitleFingerprint{}, 0, err
+		return nil, SubtitleFingerprint{}, 0, wrapSubtitleReadError(err)
 	} else if !linkInfo.Mode().IsRegular() {
-		return nil, SubtitleFingerprint{}, 0, fmt.Errorf("subtitle source is not a regular file")
+		return nil, SubtitleFingerprint{}, 0, errors.New("字幕文件不是普通文件（可能是符号链接），已拒绝编辑")
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, SubtitleFingerprint{}, 0, err
+		return nil, SubtitleFingerprint{}, 0, wrapSubtitleReadError(err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return nil, SubtitleFingerprint{}, 0, err
+		return nil, SubtitleFingerprint{}, 0, wrapSubtitleReadError(err)
 	}
 	if !info.Mode().IsRegular() {
-		return nil, SubtitleFingerprint{}, 0, fmt.Errorf("subtitle source is not a regular file")
+		return nil, SubtitleFingerprint{}, 0, errors.New("字幕文件不是普通文件，已拒绝编辑")
 	}
 	if info.Size() > subtitleparser.MaxEditorFileBytes {
-		return nil, SubtitleFingerprint{}, 0, fmt.Errorf("subtitle exceeds %d byte editor limit", subtitleparser.MaxEditorFileBytes)
+		return nil, SubtitleFingerprint{}, 0, fmt.Errorf("字幕文件超过编辑器 %d 字节的上限", subtitleparser.MaxEditorFileBytes)
 	}
 	content, err := io.ReadAll(io.LimitReader(file, subtitleparser.MaxEditorFileBytes+1))
 	if err != nil {
-		return nil, SubtitleFingerprint{}, 0, err
+		return nil, SubtitleFingerprint{}, 0, wrapSubtitleReadError(err)
 	}
 	if len(content) > subtitleparser.MaxEditorFileBytes {
-		return nil, SubtitleFingerprint{}, 0, fmt.Errorf("subtitle exceeds %d byte editor limit", subtitleparser.MaxEditorFileBytes)
+		return nil, SubtitleFingerprint{}, 0, fmt.Errorf("字幕文件超过编辑器 %d 字节的上限", subtitleparser.MaxEditorFileBytes)
 	}
 	finalInfo, err := file.Stat()
 	if err != nil {
-		return nil, SubtitleFingerprint{}, 0, err
+		return nil, SubtitleFingerprint{}, 0, wrapSubtitleReadError(err)
 	}
 	if finalInfo.Size() != info.Size() || finalInfo.ModTime() != info.ModTime() {
-		return nil, SubtitleFingerprint{}, 0, fmt.Errorf("subtitle changed while it was being read")
+		return nil, SubtitleFingerprint{}, 0, errors.New("读取字幕时文件发生了变化，请重试")
 	}
 	digest := sha256.Sum256(content)
 	return content, SubtitleFingerprint{
@@ -343,23 +499,20 @@ func readSubtitleForEditing(path string) ([]byte, SubtitleFingerprint, os.FileMo
 	}, info.Mode(), nil
 }
 
-func rejectedSubtitleSave(code SubtitleWorkbenchErrorCode, message string) *SubtitleSaveResult {
-	return &SubtitleSaveResult{Status: SubtitleSaveStatusRejected, ErrorCode: code, Message: message}
+// subtitleReadError 是不含路径的中文读取错误，Unwrap 保留原因，
+// 调用方用 errors.Is(err, os.ErrNotExist) 分流「文件不存在」。
+type subtitleReadError struct {
+	message string
+	cause   error
 }
 
-// subtitleIOReason strips the local path out of filesystem errors so save failures can be
-// reported to the WebView and the log without disclosing where the media library lives.
-func subtitleIOReason(err error) string {
-	if err == nil {
-		return ""
-	}
-	var pathErr *fs.PathError
-	if errors.As(err, &pathErr) {
-		return fmt.Sprintf("%s: %v", pathErr.Op, pathErr.Err)
-	}
-	var linkErr *os.LinkError
-	if errors.As(err, &linkErr) {
-		return fmt.Sprintf("%s: %v", linkErr.Op, linkErr.Err)
-	}
-	return err.Error()
+func (e *subtitleReadError) Error() string { return e.message }
+func (e *subtitleReadError) Unwrap() error { return e.cause }
+
+func wrapSubtitleReadError(err error) error {
+	return &subtitleReadError{message: "读取字幕文件失败: " + subtitleIOReason(err), cause: err}
+}
+
+func rejectedSubtitleSave(code SubtitleWorkbenchErrorCode, message string) *SubtitleSaveResult {
+	return &SubtitleSaveResult{Status: SubtitleSaveStatusRejected, ErrorCode: code, Message: message}
 }

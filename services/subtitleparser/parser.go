@@ -29,7 +29,13 @@ func ParseFile(path string) ([]Segment, error) {
 		return nil, err
 	}
 
-	return Parse(string(data))
+	// 经编码识别再解析：GBK/Big5/UTF-16 字幕不再被当成乱码索引（D-PC14）。
+	text, _, err := DecodeSubtitleBytes(data)
+	if err != nil {
+		return nil, err
+	}
+
+	return Parse(text)
 }
 
 func SRTPathForVideo(videoPath string) string {

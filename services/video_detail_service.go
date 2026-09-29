@@ -275,6 +275,29 @@ func (s *VideoDetailService) UpdateVideoDetails(input VideoDetailsUpdate) (*Vide
 	return s.GetVideoDetails(input.VideoID)
 }
 
+// UpdateVideoRating 是抽屉动作条星级评分的轻量即时保存（D-PC47）：只改 personal_rating，
+// 不经「保存作品信息」，不触碰人物与作品集。rating 为 nil 表示清空。返回带标签的视频。
+func (s *VideoDetailService) UpdateVideoRating(videoID uint, rating *float64) (*models.Video, error) {
+	if videoID == 0 {
+		return nil, errors.New("video ID is required")
+	}
+	if err := validateRatingValue(rating); err != nil {
+		return nil, err
+	}
+	result := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("personal_rating", rating)
+	if result.Error != nil {
+		return nil, fmt.Errorf("update video rating: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var video models.Video
+	if err := database.DB.Preload("Tags").First(&video, videoID).Error; err != nil {
+		return nil, err
+	}
+	return &video, nil
+}
+
 func validateDetailTargets(tx *gorm.DB, personIDs, collectionIDs []uint) error {
 	if len(personIDs) > 0 {
 		var people []models.Person

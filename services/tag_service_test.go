@@ -270,9 +270,9 @@ func TestAutomaticVideoTagsRespectManualOverridesAndLowResolutionBoundary(t *tes
 	tagService := &TagService{}
 	videoService := &VideoService{}
 	videos := []models.Video{
-		{Name: "both.mp4", Path: "/tmp/auto-both.mp4", Duration: 30, Height: 1079},
-		{Name: "boundary.mp4", Path: "/tmp/auto-boundary.mp4", Duration: 600, Height: 1080},
-		{Name: "unknown.mp4", Path: "/tmp/auto-unknown.mp4", Duration: 600, Height: 0},
+		{Name: "both.mp4", Path: "/tmp/auto-both.mp4", Duration: 30, Width: 1920 - 1, Height: 1079},
+		{Name: "boundary.mp4", Path: "/tmp/auto-boundary.mp4", Duration: 600, Width: 1920, Height: 1080},
+		{Name: "unknown.mp4", Path: "/tmp/auto-unknown.mp4", Duration: 600, Width: 0, Height: 0},
 	}
 	if err := database.DB.Create(&videos).Error; err != nil {
 		t.Fatal(err)

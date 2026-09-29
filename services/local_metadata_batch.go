@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 	"video-master/database"
@@ -23,14 +24,30 @@ type LocalMetadataFailure struct {
 	Message   string `json:"message"`
 }
 
+// LocalMetadataBatchPersonDecision 是同一批次内一个规范化来源名的唯一一次决策（D-PC32）：
+// 前端每个来源名只展示一次选择，结果以 BatchResolutions 回传。
+type LocalMetadataBatchPersonDecision struct {
+	SourceName      string                `json:"source_name"`
+	NormalizedName  string                `json:"normalized_name"`
+	Matches         []LocalMetadataEntity `json:"matches"`
+	DefaultMode     string                `json:"default_mode"`
+	DefaultEntityID uint                  `json:"default_entity_id"`
+	VideoIDs        []uint                `json:"video_ids"`
+}
+
 type LocalMetadataBatchPreview struct {
 	Requested int                    `json:"requested"`
 	Diffs     []LocalMetadataDiff    `json:"diffs"`
 	Failures  []LocalMetadataFailure `json:"failures"`
+	// PeopleDecisions 把各视频里同名的来源人物合并成一条决策，按规范化名字排序。
+	PeopleDecisions []LocalMetadataBatchPersonDecision `json:"people_decisions"`
 }
 
 type LocalMetadataBatchApplyRequest struct {
 	Requests []LocalMetadataApplyRequest `json:"requests"`
+	// BatchResolutions 以规范化来源名为键，对每个视频的人物字段生效；某个请求自己带了同名
+	// resolution 时以请求自己的为准。create_new 在批次内首次应用时创建人物，之后复用同一 ID。
+	BatchResolutions map[string]LocalMetadataResolution `json:"batch_resolutions"`
 }
 
 type LocalMetadataBatchResult struct {
@@ -86,7 +103,9 @@ func (s *LocalMetadataService) PreviewBatch(videoIDs []uint) LocalMetadataBatchP
 		}}}
 	}
 	videoIDs = uniqueSortedIDs(videoIDs)
-	preview := LocalMetadataBatchPreview{Requested: len(videoIDs), Diffs: make([]LocalMetadataDiff, 0, len(videoIDs)), Failures: []LocalMetadataFailure{}}
+	preview := LocalMetadataBatchPreview{Requested: len(videoIDs), Diffs: make([]LocalMetadataDiff, 0, len(videoIDs)),
+		Failures: []LocalMetadataFailure{}, PeopleDecisions: []LocalMetadataBatchPersonDecision{}}
+	decisions := make(map[string]*LocalMetadataBatchPersonDecision)
 	for _, videoID := range videoIDs {
 		diff, err := s.GetDiff(videoID)
 		if err != nil {
@@ -94,6 +113,25 @@ func (s *LocalMetadataService) PreviewBatch(videoIDs []uint) LocalMetadataBatchP
 			continue
 		}
 		preview.Diffs = append(preview.Diffs, *diff)
+		for _, candidate := range diff.People.Source {
+			decision, exists := decisions[candidate.NormalizedName]
+			if !exists {
+				decision = &LocalMetadataBatchPersonDecision{
+					SourceName: candidate.SourceName, NormalizedName: candidate.NormalizedName, Matches: candidate.Matches,
+					DefaultMode: candidate.DefaultMode, DefaultEntityID: candidate.DefaultEntityID, VideoIDs: []uint{},
+				}
+				decisions[candidate.NormalizedName] = decision
+			}
+			decision.VideoIDs = append(decision.VideoIDs, videoID)
+		}
+	}
+	names := make([]string, 0, len(decisions))
+	for name := range decisions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		preview.PeopleDecisions = append(preview.PeopleDecisions, *decisions[name])
 	}
 	return preview
 }
@@ -106,7 +144,18 @@ func (s *LocalMetadataService) ApplyBatch(request LocalMetadataBatchApplyRequest
 		return result
 	}
 	seen := make(map[uint]struct{}, len(request.Requests))
+	batch := &localMetadataBatchContext{createdPeople: make(map[string]uint)}
+	batchResolutions := make(map[string]LocalMetadataResolution, len(request.BatchResolutions))
+	for name, resolution := range request.BatchResolutions {
+		normalized := normalizeLocalMetadataName(name)
+		if normalized == "" {
+			continue
+		}
+		resolution.NormalizedName = normalized
+		batchResolutions[normalized] = resolution
+	}
 	for _, item := range request.Requests {
+		item.PeopleResolutions = mergeBatchPeopleResolutions(item.PeopleResolutions, batchResolutions)
 		if item.VideoID == 0 {
 			result.Failed++
 			result.Failures = append(result.Failures, LocalMetadataFailure{ErrorCode: "invalid_request", Message: "视频 ID 不能为空"})
@@ -118,7 +167,7 @@ func (s *LocalMetadataService) ApplyBatch(request LocalMetadataBatchApplyRequest
 			continue
 		}
 		seen[item.VideoID] = struct{}{}
-		applied, err := s.Apply(item)
+		applied, err := s.apply(item, batch)
 		if err != nil {
 			result.Failed++
 			result.Failures = append(result.Failures, localMetadataFailure(item.VideoID, err))
@@ -128,6 +177,30 @@ func (s *LocalMetadataService) ApplyBatch(request LocalMetadataBatchApplyRequest
 		result.Results = append(result.Results, *applied)
 	}
 	return result
+}
+
+// mergeBatchPeopleResolutions 把批次级决策补进单个请求：请求自己已有的同名 resolution 优先。
+// indexLocalMetadataResolutions 拒绝重复名字，所以这里按规范化名字去重后再补。
+func mergeBatchPeopleResolutions(own []LocalMetadataResolution, batch map[string]LocalMetadataResolution) []LocalMetadataResolution {
+	if len(batch) == 0 {
+		return own
+	}
+	merged := append([]LocalMetadataResolution(nil), own...)
+	present := make(map[string]struct{}, len(own))
+	for _, resolution := range own {
+		present[normalizeLocalMetadataName(resolution.NormalizedName)] = struct{}{}
+	}
+	names := make([]string, 0, len(batch))
+	for name := range batch {
+		if _, exists := present[name]; !exists {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		merged = append(merged, batch[name])
+	}
+	return merged
 }
 
 func localMetadataFailure(videoID uint, err error) LocalMetadataFailure {

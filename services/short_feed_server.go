@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -87,7 +88,7 @@ func (s *ShortFeedHTTPServer) Start(ctx context.Context) {
 		s.status = ShortFeedServerStatus{
 			Running:       false,
 			BindAddress:   s.config.BindAddress,
-			StartupError:  fmt.Sprintf("short feed server failed to listen on ports %d..%d: %v", s.config.PortStart, s.config.PortEnd, listenErr),
+			StartupError:  fmt.Sprintf("端口 %d 到 %d 都被占用或无法监听，请关闭占用这些端口的程序后重试（%v）", s.config.PortStart, s.config.PortEnd, listenErr),
 			AllowedAccess: "loopback/private-lan/link-local only, no login",
 		}
 		s.mu.Unlock()
@@ -153,25 +154,46 @@ func (s *ShortFeedHTTPServer) Status() ShortFeedServerStatus {
 
 func (s *ShortFeedHTTPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/short", s.handleShortRedirect)
-	mux.HandleFunc("/short/", s.handleShortApp)
-	mux.Handle("/assets/", http.FileServer(http.FS(s.assets)))
-	mux.HandleFunc("/short-api/status", s.handleStatus)
-	mux.HandleFunc("/short-api/feed/next", s.handleNext)
-	mux.HandleFunc("/short-api/feed/scopes", s.handleScopes)
-	mux.HandleFunc("/short-api/tags", s.handleTags)
-	mux.HandleFunc("/short-api/favorites", s.handleFavorites)
-	mux.HandleFunc("/short-api/items/", s.handleItemMutation)
-	mux.HandleFunc("/short-media/", s.handleMedia)
-	mux.HandleFunc("/short-thumb/", s.handleThumbnail)
+	for _, route := range s.routes() {
+		mux.Handle(route.pattern, route.handler)
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !shortFeedRemoteAllowed(r.RemoteAddr) {
 			writeShortFeedError(w, http.StatusForbidden, "forbidden_source", "short feed only accepts loopback or private LAN requests")
 			return
 		}
+		// 鉴权在 mux 之外、按路径默认拒绝：今后新增的任何路由不必记得单独挂中间件，
+		// 只有 shortFeedPublicPath 里列出的页面壳与登录入口才免会话。
+		if !s.authorize(w, r) {
+			return
+		}
 		mux.ServeHTTP(w, r)
 	})
+}
+
+type shortFeedRoute struct {
+	pattern string
+	handler http.Handler
+}
+
+// routes 是服务注册的全部路由，Handler 与「路由全集守卫」测试共用这一张表。
+func (s *ShortFeedHTTPServer) routes() []shortFeedRoute {
+	return []shortFeedRoute{
+		{"/short", http.HandlerFunc(s.handleShortRedirect)},
+		{"/short/", http.HandlerFunc(s.handleShortApp)},
+		{"/assets/", http.FileServer(http.FS(s.assets))},
+		{"/short-api/auth", http.HandlerFunc(s.handleAuth)},
+		{"/short-api/auth/status", http.HandlerFunc(s.handleAuthStatus)},
+		{"/short-api/status", http.HandlerFunc(s.handleStatus)},
+		{"/short-api/feed/next", http.HandlerFunc(s.handleNext)},
+		{"/short-api/feed/scopes", http.HandlerFunc(s.handleScopes)},
+		{"/short-api/tags", http.HandlerFunc(s.handleTags)},
+		{"/short-api/favorites", http.HandlerFunc(s.handleFavorites)},
+		{"/short-api/items/", http.HandlerFunc(s.handleItemMutation)},
+		{"/short-media/", http.HandlerFunc(s.handleMedia)},
+		{"/short-thumb/", http.HandlerFunc(s.handleThumbnail)},
+	}
 }
 
 func (s *ShortFeedHTTPServer) recordStartupError(err error) {
@@ -384,6 +406,11 @@ func (s *ShortFeedHTTPServer) handleItemMutation(w http.ResponseWriter, r *http.
 		}
 		err := s.feed.DeleteItem(ref)
 		if err != nil {
+			if errors.Is(err, ErrTrashUnsupportedVolume) {
+				// 手机端不提供永久删除：这块盘进不了废纸篓，就让用户回桌面端处理。
+				writeShortFeedError(w, http.StatusConflict, "trash_unsupported", "该磁盘不支持废纸篓，请在桌面端处理")
+				return
+			}
 			writeShortFeedMutationResult(w, nil, err)
 			return
 		}
@@ -548,6 +575,11 @@ func parseShortFeedExcludeRefs(value string) []ShortFeedMediaRef {
 }
 
 func decodeShortFeedMutation(w http.ResponseWriter, r *http.Request, target interface{}) bool {
+	return decodeShortFeedMutationLimit(w, r, target, 1<<20)
+}
+
+// decodeShortFeedMutationLimit 是严格 JSON 体读取：类型、单个对象、未知字段与体积上限。
+func decodeShortFeedMutationLimit(w http.ResponseWriter, r *http.Request, target interface{}, limit int64) bool {
 	contentType := strings.ToLower(strings.TrimSpace(strings.Split(r.Header.Get("Content-Type"), ";")[0]))
 	if contentType != "application/json" {
 		writeShortFeedError(w, http.StatusUnsupportedMediaType, "json_required", "mutation requires application/json")
@@ -557,9 +589,14 @@ func decodeShortFeedMutation(w http.ResponseWriter, r *http.Request, target inte
 		writeShortFeedError(w, http.StatusBadRequest, "json_body_required", "mutation requires a JSON object body")
 		return false
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, limit))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(target); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeShortFeedError(w, http.StatusRequestEntityTooLarge, "body_too_large", "请求体过大")
+			return false
+		}
 		writeShortFeedError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return false
 	}
@@ -609,8 +646,10 @@ func writeShortFeedJSON(w http.ResponseWriter, status int, payload interface{}) 
 }
 
 func writeShortFeedError(w http.ResponseWriter, status int, code string, message string) {
+	// error 是既有字段，code 是 §8.6/§8.4 约定的机器可读码；两者同值，旧前端读 error、新前端读 code。
 	writeShortFeedJSON(w, status, map[string]string{
 		"error":   code,
+		"code":    code,
 		"message": message,
 	})
 }
@@ -748,4 +787,28 @@ func buildShortFeedLANURLs(interfaces []lanInterface, primary netip.Addr, port i
 
 func shortFeedLANURLs(port int) []string {
 	return buildShortFeedLANURLs(collectLANInterfaces(), primaryOutboundIPv4(), port)
+}
+
+// shortFeedQRCodeMaxLen 二维码内容上限：访问地址最多几十个字符。
+const shortFeedQRCodeMaxLen = 512
+
+// ShortFeedQRCodeDataURL 把手机端访问地址渲染成二维码，返回 data URL。
+// 不支持二维码的平台（非 macOS 或无 cgo 构建）返回空串，前端据此不显示。
+func ShortFeedQRCodeDataURL(target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" || len(target) > shortFeedQRCodeMaxLen {
+		return "", errors.New("二维码地址无效")
+	}
+	parsed, err := url.Parse(target)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return "", errors.New("二维码地址无效")
+	}
+	png, err := generateQRCodePNG(target)
+	if err != nil {
+		return "", err
+	}
+	if len(png) == 0 {
+		return "", nil
+	}
+	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png), nil
 }

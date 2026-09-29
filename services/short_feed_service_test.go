@@ -245,7 +245,7 @@ func TestShortFeedImageInteractionsProjectIntoImageLibrary(t *testing.T) {
 		t.Fatalf("图片重复喜欢失败: %v", err)
 	}
 	if !imageIsLiked(t, img.ID) {
-		t.Fatalf("喜欢应投影为 images.is_liked = true")
+		t.Fatalf("喜欢应直接写入 images.is_liked = true")
 	}
 
 	if _, err := svc.SetFavorited(ref, true); err != nil {
@@ -256,7 +256,7 @@ func TestShortFeedImageInteractionsProjectIntoImageLibrary(t *testing.T) {
 		t.Fatalf("读取图片失败: %v", err)
 	}
 	if !reloaded.IsFavorite {
-		t.Fatal("手机端收藏应回写图片库的 is_favorite")
+		t.Fatal("手机端收藏应直接写入图片库的 is_favorite")
 	}
 
 	// 用户在桌面端手动取消收藏后，再次同步不得把它改回去。
@@ -320,8 +320,9 @@ func TestShortFeedImageInteractionsProjectIntoImageLibrary(t *testing.T) {
 	}
 }
 
-// 投影总开关关闭时既不新增也不清理既有投影，图片侧与视频侧一致。
-func TestShortFeedImageSyncDisabledLeavesProjectionAlone(t *testing.T) {
+// D-PC40 之后「反馈回流」开关不再控制任何行为：图片点赞直接读写 images.is_liked，
+// 开关关着也一样生效（此前关着开关时取消点赞不会清理列）。
+func TestShortFeedImageLikeIgnoresFeedbackSyncSwitchPLAY02(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()
 	svc := NewShortFeedService(&VideoService{})
@@ -333,17 +334,17 @@ func TestShortFeedImageSyncDisabledLeavesProjectionAlone(t *testing.T) {
 		t.Fatalf("图片喜欢失败: %v", err)
 	}
 	if !imageIsLiked(t, img.ID) {
-		t.Fatalf("投影应存在：is_liked 应为 true")
+		t.Fatalf("is_liked 应为 true")
 	}
 
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("short_feed_feedback_sync_enabled", false).Error; err != nil {
-		t.Fatalf("关闭投影开关失败: %v", err)
+		t.Fatalf("关闭回流开关失败: %v", err)
 	}
 	if _, err := svc.SetLiked(ref, false); err != nil {
 		t.Fatalf("取消图片喜欢失败: %v", err)
 	}
-	if !imageIsLiked(t, img.ID) {
-		t.Fatalf("关闭开关后不应清理既有投影")
+	if imageIsLiked(t, img.ID) {
+		t.Fatalf("回流开关不再控制点赞：取消后 is_liked 应为 false")
 	}
 }
 
@@ -730,11 +731,11 @@ func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 		t.Fatalf("喜欢不应新增标签关联，got=%d want=%d", got, beforeVideoTags)
 	}
 	if !videoIsLiked(t, video.ID) {
-		t.Fatalf("喜欢应投影为 videos.is_liked = true")
+		t.Fatalf("喜欢应直接写入 videos.is_liked = true")
 	}
 	var reloaded models.Video
 	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
-		t.Fatalf("手机收藏应同步到主片库: favorite=%v err=%v", reloaded.IsFavorite, err)
+		t.Fatalf("手机收藏应直接写入主片库: favorite=%v err=%v", reloaded.IsFavorite, err)
 	}
 	var preference models.ShortFeedTagPreference
 	if err := database.DB.Where("tag_id = ?", tag.ID).First(&preference).Error; err != nil {
@@ -771,43 +772,34 @@ func TestShortFeedFeedbackSyncIsIdempotent(t *testing.T) {
 		t.Fatalf("手机取消收藏失败: %v", err)
 	}
 	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || reloaded.IsFavorite {
-		t.Fatalf("手机取消收藏不应改变主库状态: favorite=%v err=%v", reloaded.IsFavorite, err)
+		t.Fatalf("手机取消收藏后主库同为取消: favorite=%v err=%v", reloaded.IsFavorite, err)
 	}
 	if _, err := svc.SetFavorited(videoRef(video.ID), true); err != nil {
 		t.Fatalf("手机重新收藏失败: %v", err)
 	}
 	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
-		t.Fatalf("手机端新的收藏动作应重新投影到主库: favorite=%v err=%v", reloaded.IsFavorite, err)
+		t.Fatalf("手机端重新收藏应直接写入主库: favorite=%v err=%v", reloaded.IsFavorite, err)
 	}
 }
 
-func TestShortFeedFeedbackSyncDisabledDoesNotRemoveExistingProjection(t *testing.T) {
+// 同上：开关关着，手机端的收藏与取消收藏也直接落到 videos.is_favorite。
+func TestShortFeedVideoFavoriteIgnoresFeedbackSyncSwitchPLAY02(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	root := t.TempDir()
 	video := createShortFeedVideo(t, root, "disabled.mp4", 80, false)
 	svc := NewShortFeedService(&VideoService{})
-	if _, err := svc.SetLiked(videoRef(video.ID), true); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := svc.SetFavorited(videoRef(video.ID), true); err != nil {
 		t.Fatal(err)
 	}
-	beforeVideoTags := countShortFeedRows(t, "video_tags")
 	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("short_feed_feedback_sync_enabled", false).Error; err != nil {
-		t.Fatal(err)
-	}
-	if _, err := svc.SetLiked(videoRef(video.ID), false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.SetFavorited(videoRef(video.ID), false); err != nil {
 		t.Fatal(err)
 	}
-	if got := countShortFeedRows(t, "video_tags"); got != beforeVideoTags {
-		t.Fatalf("关闭同步不得删除既有标签关联，got=%d want=%d", got, beforeVideoTags)
-	}
 	var reloaded models.Video
-	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || !reloaded.IsFavorite {
-		t.Fatalf("关闭同步不得清除既有主片库收藏: favorite=%v err=%v", reloaded.IsFavorite, err)
+	if err := database.DB.First(&reloaded, video.ID).Error; err != nil || reloaded.IsFavorite || reloaded.FavoritedAt != nil {
+		t.Fatalf("回流开关不再控制收藏：取消后应清空: favorite=%v at=%v err=%v", reloaded.IsFavorite, reloaded.FavoritedAt, err)
 	}
 }
 
@@ -831,7 +823,7 @@ func TestShortFeedPlaybackAndDeleteUseExistingSemantics(t *testing.T) {
 	if err := svc.DeleteItem(videoRef(video.ID)); err != nil {
 		t.Fatalf("删除视频失败: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(root, DefaultTrashDirName, "play.mp4")); err != nil {
+	if _, err := os.Stat(filepath.Join(root, ".Trash", "play.mp4")); err != nil {
 		t.Fatalf("文件应移动到 trash: %v", err)
 	}
 	var deleted models.Video

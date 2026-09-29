@@ -27,6 +27,9 @@ type WatchlistService struct {
 	// 零值可用：没接登记表、没接事件口、没启动 worker 的服务（单测夹具、
 	// 只做增删改查的路径）照常工作。
 	enrich watchlistEnrichment
+	// bind 是「条目被补全写回豆瓣 ID」的观察者槽位（D-PC52），由榜单服务在构造时
+	// 挂上。零值可用；片单一侧只认接口，不 import 榜单服务的具体类型。
+	bind watchlistDoubanBind
 }
 
 // NewWatchlistService 照 NewPersonService / NewCollectionService 的形态构造：
@@ -39,6 +42,9 @@ func NewWatchlistService(dataDir string) *WatchlistService {
 type WatchlistPage struct {
 	Entries []models.WatchlistEntry `json:"entries"`
 	NextID  uint                    `json:"next_id"`
+	// Origins 给本页每条记录标出来源：WatchlistOriginManual / WatchlistOriginChart
+	// （D-PC52 界面「片单页显示条目来源」）。键是条目 ID，本页的每一条都有值。
+	Origins map[uint]string `json:"origins"`
 }
 
 var ErrWatchlistTitleExists = errors.New("该片名已在想看片单中")
@@ -102,6 +108,11 @@ func (s *WatchlistService) List(keyword string, cursorID uint, limit int) (*Watc
 		page.Entries = page.Entries[:limit]
 		page.NextID = page.Entries[limit-1].ID
 	}
+	origins, err := watchlistOrigins(page.Entries)
+	if err != nil {
+		return nil, err
+	}
+	page.Origins = origins
 	return page, nil
 }
 
@@ -118,6 +129,15 @@ func (s *WatchlistService) Create(title, kind string) (*models.WatchlistEntry, e
 	kind, err = normalizeWatchlistKind(kind)
 	if err != nil {
 		return nil, err
+	}
+	// 撞名要在**所有**条目里查（D-PC52）：唯一索引带了 source_item_id，已补全的条目
+	// 不再被数据库挡住手动同名，只剩服务层这一道。索引只兜并发下的完全重复。
+	taken, err := watchlistTitleKindTaken(title, kind, 0)
+	if err != nil {
+		return nil, err
+	}
+	if taken {
+		return nil, ErrWatchlistTitleExists
 	}
 	// 补全状态一律从 pending 起步——凭证是否配置由后台 worker 判定，不在创建时短路。
 	entry := &models.WatchlistEntry{
@@ -148,6 +168,20 @@ func (s *WatchlistService) Update(id uint, title string) error {
 	if err != nil {
 		return err
 	}
+	var current models.WatchlistEntry
+	if err := database.DB.Select("id", "kind").First(&current, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return ErrWatchlistEntryNotFound
+		}
+		return fmt.Errorf("修改想看记录失败: %w", err)
+	}
+	taken, err := watchlistTitleKindTaken(title, current.Kind, id)
+	if err != nil {
+		return err
+	}
+	if taken {
+		return ErrWatchlistTitleExists
+	}
 	result := database.DB.Model(&models.WatchlistEntry{}).Where("id = ?", id).Updates(map[string]any{
 		"title":             title,
 		"enrichment_status": models.WatchlistEnrichmentManual,
@@ -176,19 +210,41 @@ func (s *WatchlistService) Update(id uint, title string) error {
 // 指向不存在文件的记录，正是 §3.2 回滚边界要避免的那种状态。删图失败时行已经没了，
 // 只能把「条目已删除但图片没清掉」如实报出来，照 PersonService 的既有做法。
 func (s *WatchlistService) Delete(id uint) error {
+	return s.deleteEntry(id, true)
+}
+
+// DeleteForChart 是榜单一侧撤销 want 时删除自己建的条目：与 Delete 相同，只是不在
+// 事务里去撤销榜单标记——调用方（MovieChartService）紧接着自己改写或删除那一行标记，
+// 让 Delete 先把它清成空会使调用方的条件删除守卫失配。
+func (s *WatchlistService) DeleteForChart(id uint) error {
+	return s.deleteEntry(id, false)
+}
+
+func (s *WatchlistService) deleteEntry(id uint, revokeChartWant bool) error {
 	var entry models.WatchlistEntry
-	if err := database.DB.Select("id", "poster_path").First(&entry, id).Error; err != nil {
+	if err := database.DB.Select("id", "poster_path", "source_name", "source_item_id").First(&entry, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrWatchlistEntryNotFound
 		}
 		return fmt.Errorf("移除想看记录失败: %w", err)
 	}
-	result := database.DB.Where("id = ?", id).Delete(&models.WatchlistEntry{})
-	if result.Error != nil {
-		return fmt.Errorf("移除想看记录失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return ErrWatchlistEntryNotFound
+	// 删条目与撤销榜单 want 在同一事务里（D-PC52）：只删条目会留下一个指向不存在
+	// 条目的 want 标记，榜单上仍显示「想看」而片单里没有。
+	err := database.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Where("id = ?", id).Delete(&models.WatchlistEntry{})
+		if result.Error != nil {
+			return fmt.Errorf("移除想看记录失败: %w", result.Error)
+		}
+		if result.RowsAffected == 0 {
+			return ErrWatchlistEntryNotFound
+		}
+		if !revokeChartWant {
+			return nil
+		}
+		return revokeChartWantForEntry(tx, entry)
+	})
+	if err != nil {
+		return err
 	}
 	if entry.PosterPath == "" {
 		return nil
@@ -370,6 +426,17 @@ func (s *WatchlistService) ApplyCandidate(id uint, sourceItemID string) error {
 		"poster_path":       posterPath,
 	})
 	if result.Error != nil {
+		if watchlistTitleConflict(result.Error) {
+			// 写回的 (title, kind, 源 ID) 撞上片单里的另一条记录（典型：同名的两部榜单
+			// 条目，用户把其中一条选成了另一部的豆瓣条目）。给出可读的撞名文案，而不是
+			// 笼统的「应用候选失败」；刚落盘的新图没人引用，清掉。
+			if poster.Created && poster.RelativePath != "" {
+				if err := s.RemovePoster(poster.RelativePath); err != nil {
+					log.Printf("[WatchlistEnrich] apply candidate poster cleanup failed id=%d path=%s err=%v", id, poster.RelativePath, err)
+				}
+			}
+			return fmt.Errorf("%w（片单里已有同名且来源相同的记录，无法应用该候选）", ErrWatchlistTitleExists)
+		}
 		return fmt.Errorf("应用候选失败: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
@@ -394,6 +461,7 @@ func (s *WatchlistService) ApplyCandidate(id uint, sourceItemID string) error {
 	entry.EnrichmentError = ""
 	entry.SourceName = detail.SourceName
 	s.emitEnrichProgress(entry)
+	s.notifyDoubanBound(entry, detail)
 	log.Printf("[WatchlistEnrich] applied candidate id=%d source=%s item=%s", entry.ID, detail.SourceName, detail.SourceItemID)
 	return nil
 }

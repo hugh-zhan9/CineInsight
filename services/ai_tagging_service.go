@@ -17,6 +17,12 @@ import (
 
 const aiTaggingWorkerInterval = 5 * time.Minute
 
+// aiTaggingSkipReasonManualRetry 落在 pending 状态行的 skip_reason 上，表示这是用户显式
+// 要求的重新分析（D-PC28 规则 5）：worker 对它跳过「已有人工标签」检查。
+// 状态行本来就有 skip_reason 列，借它持久化这个意图，不必加列，重启后也不丢。
+// setProcessing 会把 skip_reason 清空，所以一次显式重试只生效一轮。
+const aiTaggingSkipReasonManualRetry = "manual_retry"
+
 type AITaggingService struct {
 	configProvider AITaggingConfigProvider
 	clientFactory  func(AITaggingConfig) AITaggingAIClient
@@ -29,6 +35,22 @@ type AITaggingService struct {
 	workerCancel   context.CancelFunc
 	workerWake     chan struct{}
 	registry       *BackgroundTaskRegistry
+	idleGate       *IdleGate
+	// gatedMu 保护 gatedActive / gatedCancel：worker 循环里"过门等待中的自动轮次"。
+	gatedMu     sync.Mutex
+	gatedActive bool
+	gatedCancel context.CancelFunc
+}
+
+// SetIdleGate 接入空闲门（D-PC19）：worker 的启动批次与定时轮次经 IdleGate.Run，
+// 显式唤醒通道仍然直通。传 nil 等价于不过门。App 启动时调用属于 P-029 接线项。
+func (s *AITaggingService) SetIdleGate(gate *IdleGate) {
+	if s == nil {
+		return
+	}
+	s.workerMu.Lock()
+	s.idleGate = gate
+	s.workerMu.Unlock()
 }
 
 // SetBackgroundTaskRegistry 接入后台任务登记表（D-014）。
@@ -118,7 +140,7 @@ func (s *AITaggingService) Trigger() bool {
 }
 
 func (s *AITaggingService) workerLoop(ctx context.Context, wake <-chan struct{}) {
-	s.runWorkerOnce(ctx)
+	s.runWorkerOnceGated(ctx)
 	ticker := time.NewTicker(aiTaggingWorkerInterval)
 	defer ticker.Stop()
 	for {
@@ -126,10 +148,65 @@ func (s *AITaggingService) workerLoop(ctx context.Context, wake <-chan struct{})
 		case <-ctx.Done():
 			return
 		case <-wake:
+			// 显式唤醒直通：先摘掉还在门口排队的自动轮次，再直接执行。
+			s.cancelGatedWait()
 			s.runWorkerOnce(ctx)
 		case <-ticker.C:
-			s.runWorkerOnce(ctx)
+			s.runWorkerOnceGated(ctx)
 		}
+	}
+}
+
+// runWorkerOnceGated 是自动轮次（启动批次与定时轮次）的入口。
+//
+// 没接空闲门时同步直通。接了门时把"过门等待"放到独立 goroutine：门口的等待可能持续
+// 数小时，若卡在 workerLoop 里，显式唤醒通道就没人消费了。空闲调度关闭时
+// IdleGate.Run 立刻放行，行为与直通一致。同一时刻最多一个等待中的自动轮次，
+// 后到的合并进去（与 IdleGate 对同一 taskKey 的合并语义一致）。
+func (s *AITaggingService) runWorkerOnceGated(ctx context.Context) {
+	s.workerMu.Lock()
+	gate := s.idleGate
+	s.workerMu.Unlock()
+	if gate == nil {
+		s.runWorkerOnce(ctx)
+		return
+	}
+	s.gatedMu.Lock()
+	if s.gatedActive {
+		s.gatedMu.Unlock()
+		return
+	}
+	waitCtx, cancel := context.WithCancel(ctx)
+	s.gatedActive = true
+	s.gatedCancel = cancel
+	s.gatedMu.Unlock()
+	go func() {
+		defer func() {
+			cancel()
+			s.gatedMu.Lock()
+			s.gatedActive = false
+			s.gatedCancel = nil
+			s.gatedMu.Unlock()
+		}()
+		// waitCtx 只管"等门"；放行后的执行用 worker 自己的 ctx，
+		// 显式唤醒取消等待时不会误伤已经放行、正在处理的一轮。
+		err := gate.Run(waitCtx, string(BackgroundTaskAITagging), func(context.Context) error {
+			s.runWorkerOnce(ctx)
+			return nil
+		})
+		if err != nil && ctx.Err() == nil && waitCtx.Err() == nil {
+			log.Printf("[AITagging] gated round aborted err=%v", err)
+		}
+	}()
+}
+
+// cancelGatedWait 摘掉门口排队的自动轮次。只取消"等待"，已放行执行中的一轮不受影响。
+func (s *AITaggingService) cancelGatedWait() {
+	s.gatedMu.Lock()
+	cancel := s.gatedCancel
+	s.gatedMu.Unlock()
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -198,8 +275,14 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		config.SubtitleCharLimit,
 	)
 	if hasNonAutomaticTags(video.Tags) {
-		log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
-		return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
+		explicit, err := s.isExplicitRetry(video.ID)
+		if err != nil {
+			return err
+		}
+		if !explicit {
+			log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
+			return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
+		}
 	}
 	existingTags, err := s.loadActiveTags()
 	if err != nil {
@@ -267,7 +350,8 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 		runStatus = models.AITaggingStateStatusSkipped
 		failureCode = "tag_library_changed"
 		log.Printf("[AITagging] tag library changed during analysis; retry scheduled video_id=%d", video.ID)
-		return s.RetryVideo(video.ID)
+		// 自动重排：不带显式重试标记，人工标签检查照旧。
+		return s.requeueVideo(video.ID, "")
 	}
 	log.Printf("[AITagging] analyze succeeded video_id=%d suggestions=%d", video.ID, len(suggestions))
 	runID := run.ID
@@ -289,6 +373,17 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	return s.markState(video.ID, models.AITaggingStateStatusCompleted, "", fingerprint, "")
 }
 
+// isExplicitRetry 判断这个视频当前是否处于用户显式要求的重新分析中。
+func (s *AITaggingService) isExplicitRetry(videoID uint) (bool, error) {
+	var count int64
+	if err := database.DB.Model(&models.AITaggingState{}).
+		Where("video_id = ? AND status = ? AND skip_reason = ?", videoID, models.AITaggingStateStatusPending, aiTaggingSkipReasonManualRetry).
+		Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func hasNonAutomaticTags(tags []models.Tag) bool {
 	for _, tag := range tags {
 		if tag.AutomaticKind == "" {
@@ -303,12 +398,18 @@ func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error)
 	err := database.DB.Model(&models.Video{}).
 		Preload("Tags").
 		Where("is_stale = ?", false).
-		Where(`NOT EXISTS (
+		// 规则 1：自动路径只打没有人工标签的视频；显式重新分析（规则 5）的视频例外。
+		Where(`(NOT EXISTS (
 			SELECT 1 FROM video_tags
 			INNER JOIN tags ON tags.id = video_tags.tag_id
 			WHERE video_tags.video_id = videos.id
 				AND COALESCE(tags.automatic_kind, '') = ''
-		)`).
+		) OR EXISTS (
+			SELECT 1 FROM ai_tagging_states
+			WHERE ai_tagging_states.video_id = videos.id
+				AND ai_tagging_states.status = ?
+				AND ai_tagging_states.skip_reason = ?
+		))`, models.AITaggingStateStatusPending, aiTaggingSkipReasonManualRetry).
 		Where("NOT EXISTS (SELECT 1 FROM ai_tag_candidates WHERE ai_tag_candidates.video_id = videos.id AND ai_tag_candidates.status = ?)", models.AITagCandidateStatusPending).
 		Where(`NOT EXISTS (
 			SELECT 1 FROM ai_tagging_states
@@ -329,6 +430,8 @@ func (s *AITaggingService) loadActiveTags() ([]models.Tag, error) {
 	var tags []models.Tag
 	if err := database.DB.
 		Where("COALESCE(automatic_kind, '') = ''").
+		// 规则 6：「人物」分类的人名不进词表，避免把人名交给视觉模型。
+		Where("TRIM(COALESCE(namespace, '')) <> ?", personTagNamespace).
 		Order("namespace asc, sort_order asc, id asc").
 		Find(&tags).Error; err != nil {
 		return nil, err
@@ -430,6 +533,11 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 		runID = runIDs[0]
 	}
 	matcher := newAITagMatcher(tags)
+	// 规则 3：用户拒绝过的 (视频, 标签) 不再生成候选，拒绝跟着标签 id 走，改名后依然有效。
+	rejected, err := s.rejectedCandidateTagIDs(video.ID)
+	if err != nil {
+		return 0, err
+	}
 	created := 0
 	for _, suggestion := range suggestions {
 		confidence := normalizeAIConfidence(suggestion.Confidence)
@@ -451,6 +559,9 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 		// AI suggestions must always match the unified, non-automatic tag library.
 		if matchedTagID == nil {
 			log.Printf("[AITagging] drop out-of-library suggestion video_id=%d", video.ID)
+			continue
+		}
+		if _, denied := rejected[*matchedTagID]; denied {
 			continue
 		}
 		reasoning := strings.TrimSpace(suggestion.Reasoning)
@@ -493,6 +604,21 @@ func (s *AITaggingService) persistSuggestions(video models.Video, tags []models.
 		}
 	}
 	return created, nil
+}
+
+// rejectedCandidateTagIDs 返回该视频已被拒绝的候选所对应的标签 id 集合。
+func (s *AITaggingService) rejectedCandidateTagIDs(videoID uint) (map[uint]struct{}, error) {
+	var ids []uint
+	if err := database.DB.Model(&models.AITagCandidate{}).
+		Where("video_id = ? AND status = ? AND matched_tag_id IS NOT NULL", videoID, models.AITagCandidateStatusRejected).
+		Distinct().Pluck("matched_tag_id", &ids).Error; err != nil {
+		return nil, err
+	}
+	denied := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		denied[id] = struct{}{}
+	}
+	return denied, nil
 }
 
 // aiTagCandidateQuery 是全量列表与游标翻页共用的查询：预载、筛选与排序只有一份。
@@ -577,25 +703,6 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 		if candidate.Confidence != models.AITagConfidenceHigh && candidate.Confidence != models.AITagConfidenceMedium {
 			return fmt.Errorf("candidate confidence is not approvable")
 		}
-		hasManualTags, err := s.hasManualOfficialTagsInTx(tx, candidate.VideoID)
-		if err != nil {
-			return err
-		}
-		if hasManualTags {
-			now := s.now()
-			if err := tx.Model(&models.AITagCandidate{}).
-				Where("video_id = ? AND status = ?", candidate.VideoID, models.AITagCandidateStatusPending).
-				Updates(map[string]interface{}{
-					"status":      models.AITagCandidateStatusSuperseded,
-					"rejected_at": &now,
-				}).Error; err != nil {
-				return err
-			}
-			approved = candidate
-			approved.Status = models.AITagCandidateStatusSuperseded
-			approved.RejectedAt = &now
-			return nil
-		}
 		tagID, err := s.resolveOfficialTagInTx(tx, candidate)
 		if err != nil {
 			return err
@@ -642,27 +749,6 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 	}
 	item := aiTagCandidateReviewItem(approved)
 	return &item, nil
-}
-
-func (s *AITaggingService) hasManualOfficialTagsInTx(tx *gorm.DB, videoID uint) (bool, error) {
-	var officialCount int64
-	if err := tx.Table("video_tags AS vt").
-		Joins("INNER JOIN tags ON tags.id = vt.tag_id").
-		Where("vt.video_id = ? AND COALESCE(tags.automatic_kind, '') = ''", videoID).
-		Count(&officialCount).Error; err != nil {
-		return false, err
-	}
-	if officialCount == 0 {
-		return false, nil
-	}
-	var aiApprovedCount int64
-	if err := tx.Table("video_tags AS vt").
-		Joins("INNER JOIN ai_tag_approval_records AS ar ON ar.video_id = vt.video_id AND ar.tag_id = vt.tag_id").
-		Where("vt.video_id = ?", videoID).
-		Count(&aiApprovedCount).Error; err != nil {
-		return false, err
-	}
-	return officialCount > aiApprovedCount, nil
 }
 
 func (s *AITaggingService) resolveOfficialTagInTx(tx *gorm.DB, candidate models.AITagCandidate) (uint, error) {
@@ -721,7 +807,14 @@ func (s *AITaggingService) RejectPendingCandidatesByVideo(videoID uint) (int64, 
 	return rejected, nil
 }
 
+// RetryVideo 是用户显式的「重新分析」：对已有人工标签的视频同样生效（规则 5），
+// 通过 pending 状态行上的 manual_retry 标记让 worker 跳过人工标签检查。
 func (s *AITaggingService) RetryVideo(videoID uint) error {
+	return s.requeueVideo(videoID, aiTaggingSkipReasonManualRetry)
+}
+
+// requeueVideo 作废待审候选并把状态置回 pending。skipReason 为空是自动重排。
+func (s *AITaggingService) requeueVideo(videoID uint, skipReason string) error {
 	return database.Transaction(func(tx *gorm.DB) error {
 		if err := activeVideoExistsInTx(tx, videoID); err != nil {
 			return err
@@ -734,7 +827,7 @@ func (s *AITaggingService) RetryVideo(videoID uint) error {
 		var state models.AITaggingState
 		err := tx.Where("video_id = ?", videoID).First(&state).Error
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			state = models.AITaggingState{VideoID: videoID, Status: models.AITaggingStateStatusPending}
+			state = models.AITaggingState{VideoID: videoID, Status: models.AITaggingStateStatusPending, SkipReason: skipReason}
 			return tx.Create(&state).Error
 		}
 		if err != nil {
@@ -742,7 +835,7 @@ func (s *AITaggingService) RetryVideo(videoID uint) error {
 		}
 		return tx.Model(&state).Updates(map[string]interface{}{
 			"status":               models.AITaggingStateStatusPending,
-			"skip_reason":          "",
+			"skip_reason":          skipReason,
 			"evidence_fingerprint": "",
 			"last_error":           "",
 		}).Error
@@ -866,4 +959,77 @@ func aiTagCandidateReviewItem(candidate models.AITagCandidate) AITaggingReviewIt
 		CreatedAt:      candidate.CreatedAt.Format(time.RFC3339),
 		UpdatedAt:      candidate.UpdatedAt.Format(time.RFC3339),
 	}
+}
+
+// SupersedeCandidatesForManualTag 在用户手动给视频加标签时，把同视频 pending 且
+// matched_tag_id 等于该标签的候选条件更新为 superseded（规则 2）。
+// 由 AddTagToVideo 在同一事务内调用（P-020 接入）；返回被作废的候选 id，供前端局部移除。
+func SupersedeCandidatesForManualTag(tx *gorm.DB, videoID, tagID uint) ([]uint, error) {
+	var ids []uint
+	if err := tx.Model(&models.AITagCandidate{}).
+		Where("video_id = ? AND matched_tag_id = ? AND status = ?", videoID, tagID, models.AITagCandidateStatusPending).
+		Pluck("id", &ids).Error; err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	now := time.Now()
+	if err := tx.Model(&models.AITagCandidate{}).
+		Where("id IN ? AND status = ?", ids, models.AITagCandidateStatusPending).
+		Updates(map[string]interface{}{
+			"status":      models.AITagCandidateStatusSuperseded,
+			"rejected_at": &now,
+		}).Error; err != nil {
+		return nil, err
+	}
+	return ids, nil
+}
+
+// ApproveCandidates 逐项沿用单条批准的事务（D-PC29）；一条失败不影响其余。
+// 重复 id 只处理一次。
+func (s *AITaggingService) ApproveCandidates(ids []uint) AITagBatchResult {
+	result := AITagBatchResult{Results: make([]AITagBatchItemResult, 0, len(ids))}
+	seen := make(map[uint]struct{}, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		result.Requested++
+		item, err := s.ApproveCandidate(id)
+		if err != nil {
+			result.Failed++
+			result.Results = append(result.Results, AITagBatchItemResult{ID: id, Message: err.Error()})
+			continue
+		}
+		result.Succeeded++
+		result.Results = append(result.Results, AITagBatchItemResult{ID: id, OK: true, Item: item})
+	}
+	return result
+}
+
+// ApproveCandidatesByFilter 在服务端把筛选条件解析成候选 id，再交给 ApproveCandidates。
+// 只解析仍为 pending、置信度可批准、且视频未删除的候选；筛选为空即全部待审。
+func (s *AITaggingService) ApproveCandidatesByFilter(filter AITagCandidateFilter) (AITagBatchResult, error) {
+	query := database.DB.Model(&models.AITagCandidate{}).
+		Joins("INNER JOIN videos ON videos.id = ai_tag_candidates.video_id AND videos.deleted_at IS NULL").
+		Where("ai_tag_candidates.status = ?", models.AITagCandidateStatusPending)
+	if normalizeAIConfidence(filter.MinConfidence) == models.AITagConfidenceHigh {
+		query = query.Where("ai_tag_candidates.confidence = ?", models.AITagConfidenceHigh)
+	} else {
+		query = query.Where("ai_tag_candidates.confidence IN ?", []string{models.AITagConfidenceHigh, models.AITagConfidenceMedium})
+	}
+	if filter.TagID > 0 {
+		query = query.Where("ai_tag_candidates.matched_tag_id = ?", filter.TagID)
+	}
+	if text := strings.ToLower(strings.TrimSpace(filter.Query)); text != "" {
+		like := "%" + escapeSQLLike(text) + "%"
+		query = query.Where(`(LOWER(ai_tag_candidates.suggested_name) LIKE ? ESCAPE '\' OR LOWER(videos.name) LIKE ? ESCAPE '\')`, like, like)
+	}
+	var ids []uint
+	if err := query.Order("ai_tag_candidates.id").Pluck("ai_tag_candidates.id", &ids).Error; err != nil {
+		return AITagBatchResult{}, err
+	}
+	return s.ApproveCandidates(ids), nil
 }

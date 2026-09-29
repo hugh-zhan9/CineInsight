@@ -121,8 +121,14 @@ func TestLocalMetadataDiffMapsEntitiesWithoutNetworkOrPathLeakage(t *testing.T) 
 	if err != nil {
 		t.Fatalf("marshal diff: %v", err)
 	}
-	if strings.Contains(string(payload), root) || strings.Contains(string(payload), "example.invalid") {
-		t.Fatalf("diff leaked a source path or ignored URL: %s", payload)
+	// META09：diff 带视频名与视频路径（用户自己的库路径），但不得泄露来源文件（NFO、封面）的路径或被忽略的 URL。
+	if diff.VideoName != "movie.mp4" || diff.VideoPath != videoPath {
+		t.Fatalf("META09 diff 应带视频名与路径: name=%q path=%q", diff.VideoName, diff.VideoPath)
+	}
+	for _, leaked := range []string{filepath.Join(root, "movie.nfo"), filepath.Join(root, "poster.jpg"), "example.invalid"} {
+		if strings.Contains(string(payload), leaked) {
+			t.Fatalf("diff leaked a source path or ignored URL %q: %s", leaked, payload)
+		}
 	}
 	var state models.VideoLocalMetadataState
 	if err := database.DB.First(&state, "video_id = ?", video.ID).Error; err != nil {

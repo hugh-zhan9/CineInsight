@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"video-master/database"
+	"video-master/models"
 	"video-master/services/subtitleparser"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
@@ -49,6 +51,12 @@ type SubtitleTranslateResult struct {
 	TargetLang string                `json:"target_lang"`
 	Entries    int                   `json:"entries"`
 	Warnings   []string              `json:"warnings,omitempty"`
+	// BackupID 是被覆盖前的旧字幕备份，可经 RestoreSubtitleBackup 恢复（D-PC13、MEDIA-05）。
+	BackupID string `json:"backup_id,omitempty"`
+	// ErrorCode 等三个字段只由 App 层在遇到带错误码的失败时填写（G-3），服务层返回 *SubtitleCodedError。
+	ErrorCode        string `json:"error_code,omitempty"`
+	Message          string `json:"message,omitempty"`
+	DetectedEncoding string `json:"detected_encoding,omitempty"`
 }
 
 // CancelSubtitleTranslation 叫停某个视频正在跑的字幕翻译；没有在跑就什么都不做。
@@ -128,16 +136,18 @@ func (s *SubtitleService) TranslateSubtitleFile(ctx context.Context, videoPath s
 		return nil, errSubtitleTranslationCancelled
 	}
 
-	info, err := os.Stat(srtPath)
-	if err != nil {
+	if _, err := os.Stat(srtPath); err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("该视频还没有外挂字幕，请先生成字幕")
+			return nil, missingSidecarError(request.VideoID, videoPath)
 		}
-		return nil, fmt.Errorf("读取字幕文件失败: %w", err)
+		return nil, fmt.Errorf("读取字幕文件失败: %s", subtitleIOReason(err))
+	}
+	if err := checkSubtitleFileUTF8(srtPath); err != nil {
+		return nil, err
 	}
 	entries, err := parseSRTEntries(srtPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取字幕文件失败: %w", err)
+		return nil, fmt.Errorf("读取字幕文件失败: %s", subtitleIOReason(err))
 	}
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("字幕文件为空，无法翻译")
@@ -151,7 +161,7 @@ func (s *SubtitleService) TranslateSubtitleFile(ctx context.Context, videoPath s
 	// 术语表只对吃得下它的翻译器解析，DeepL 用不上就不该多出一条读库失败路径（D-034）。
 	var glossary []GlossaryTerm
 	if _, injectable := translator.(ContextualTranslator); injectable {
-		resolved, resolveErr := s.glossaryResolver(request.VideoID)
+		resolved, resolveErr := s.glossaryResolver(request.VideoID, targetLang)
 		if resolveErr != nil {
 			return nil, fmt.Errorf("读取术语表失败: %w", resolveErr)
 		}
@@ -181,31 +191,34 @@ func (s *SubtitleService) TranslateSubtitleFile(ctx context.Context, videoPath s
 		return nil, fmt.Errorf("字幕翻译失败，已保留原字幕: %w", err)
 	}
 
+	s.emitTranslateProgress(request.VideoID, 92, "写回字幕文件...")
+	var replacement []byte
+	if mode == SubtitleTranslateModeBilingual {
+		merged, mergeErr := s.buildBilingualSRT(srtPath, translatedPath)
+		if mergeErr != nil {
+			return nil, fmt.Errorf("双语字幕合并失败，已保留原字幕: %w", mergeErr)
+		}
+		replacement = merged
+	} else {
+		translated, readErr := os.ReadFile(translatedPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("读取译文字幕失败，已保留原字幕: %s", subtitleIOReason(readErr))
+		}
+		replacement = translated
+	}
+	// 经写入器覆盖：先备份旧字幕再原子替换，沿用原文件权限，翻译后可恢复上一版（D-PC13）。
+	writeResult, err := s.subtitleWriter().Replace(ctx, request.VideoID, srtPath, replacement)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, errSubtitleTranslationCancelled
+		}
+		return nil, fmt.Errorf("写入字幕失败，已保留原字幕: %w", err)
+	}
+
 	warnings := []string{}
 	if fallbackCount > 0 {
 		warnings = append(warnings, subtitleFallbackWarning(fallbackCount))
 	}
-
-	s.emitTranslateProgress(request.VideoID, 92, "写回字幕文件...")
-	if mode == SubtitleTranslateModeBilingual {
-		if err := s.mergeBilingualSRT(srtPath, translatedPath, srtPath); err != nil {
-			return nil, fmt.Errorf("双语字幕合并失败，已保留原字幕: %w", err)
-		}
-		// mergeBilingualSRT 是给「新生成的字幕」写的，权限固定 0644；这条路径改的
-		// 是用户已有的文件，不该顺手放宽它的权限。
-		if err := os.Chmod(srtPath, info.Mode().Perm()); err != nil {
-			log.Printf("[Subtitle] restore subtitle permission failed path=%s err=%v", srtPath, err)
-		}
-	} else {
-		translated, readErr := os.ReadFile(translatedPath)
-		if readErr != nil {
-			return nil, fmt.Errorf("读取译文字幕失败，已保留原字幕: %w", readErr)
-		}
-		if err := writeFileAtomically(srtPath, translated, info.Mode().Perm()); err != nil {
-			return nil, fmt.Errorf("写入译文字幕失败，已保留原字幕: %w", err)
-		}
-	}
-
 	if err := indexSubtitleFileForVideoID(request.VideoID, srtPath); err != nil {
 		log.Printf("[Subtitle] index translated subtitle failed video_id=%d path=%s err=%v", request.VideoID, srtPath, err)
 		warnings = append(warnings, fmt.Sprintf("字幕索引更新失败：%v", err))
@@ -219,7 +232,73 @@ func (s *SubtitleService) TranslateSubtitleFile(ctx context.Context, videoPath s
 		TargetLang: targetLang,
 		Entries:    len(entries),
 		Warnings:   warnings,
+		BackupID:   writeResult.BackupID,
 	}, nil
+}
+
+// checkSubtitleFileUTF8 读取字幕并确认是 UTF-8；否则返回 subtitle_encoding_not_utf8，不解析也不写入（D-PC14）。
+func checkSubtitleFileUTF8(path string) error {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("读取字幕文件失败: %s", subtitleIOReason(err))
+	}
+	return ensureUTF8SubtitleContent(content)
+}
+
+func ensureUTF8SubtitleContent(content []byte) error {
+	_, encoding, err := subtitleparser.DecodeSubtitleBytes(content)
+	if err != nil {
+		encoding = "unknown"
+	} else if encoding == subtitleparser.EncodingUTF8 {
+		return nil
+	}
+	message := "字幕文件的编码无法识别，请先转换为 UTF-8 后再操作"
+	if encoding != "unknown" {
+		message = fmt.Sprintf("字幕文件不是 UTF-8 编码（检测为 %s），请先转换为 UTF-8 后再操作", strings.ToUpper(encoding))
+	}
+	return &SubtitleCodedError{Code: SubtitleErrorEncodingNotUTF8, Message: message, DetectedEncoding: encoding}
+}
+
+// missingSidecarError 区分「什么字幕都没有」与「没有同名 .srt 但有别的字幕」（D-PC17）。
+// 后者不能编辑也不能翻译，提示「请先生成字幕」只会误导用户。
+func missingSidecarError(videoID uint, videoPath string) error {
+	if hasNonSidecarSRTSubtitle(videoID, videoPath) {
+		return &SubtitleCodedError{Code: SubtitleErrorNotSidecarSRT, Message: "该视频只有内嵌/其他格式字幕，暂不支持编辑或翻译"}
+	}
+	return &SubtitleCodedError{Code: SubtitleErrorMissing, Message: "该视频还没有外挂字幕，请先生成字幕"}
+}
+
+// hasNonSidecarSRTSubtitle 判断同名 .srt 缺失时是否还有其他字幕：同目录「基本名 + .」前缀且扩展名为
+// srt/ass/ssa/vtt 的文件，或探测记录里的内嵌字幕流。探测任何一步失败都按「没有」处理，
+// 由 subtitle_missing 兜住，不因为一次读库失败而多出一条失败路径。
+func hasNonSidecarSRTSubtitle(videoID uint, videoPath string) bool {
+	directory := filepath.Dir(videoPath)
+	base := strings.TrimSuffix(filepath.Base(videoPath), filepath.Ext(videoPath))
+	if entries, err := os.ReadDir(directory); err == nil {
+		prefix := strings.ToLower(base) + "."
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			name := strings.ToLower(entry.Name())
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			switch filepath.Ext(name) {
+			case ".srt", ".ass", ".ssa", ".vtt":
+				return true
+			}
+		}
+	}
+	if videoID != 0 && database.DB != nil {
+		var count int64
+		if err := database.DB.Model(&models.MediaStream{}).
+			Where("video_id = ? AND stream_type = ?", videoID, "subtitle").
+			Count(&count).Error; err == nil && count > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeSubtitleTranslateMode(mode SubtitleTranslateMode) (SubtitleTranslateMode, error) {

@@ -213,7 +213,7 @@ func TestResolveForVideoPrefersCollectionScopeOverGlobal(t *testing.T) {
 	mustUpsertGlossaryEntry(t, models.TranslationGlossaryEntry{SourceTerm: "Trinity", TargetTerm: "崔妮蒂"})
 	mustUpsertGlossaryEntry(t, models.TranslationGlossaryEntry{CollectionID: collectionScope(collection.ID), SourceTerm: "neo", TargetTerm: "作品集尼奥"})
 
-	terms, err := NewTranslationGlossaryService().ResolveForVideo(video.ID)
+	terms, err := NewTranslationGlossaryService().ResolveForVideo(video.ID, "")
 	if err != nil {
 		t.Fatalf("解析术语生效集失败: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestResolveForVideoTakesNewestEntryWhenCollectionsConflict(t *testing.T) {
 	mustSetGlossaryUpdatedAt(t, olderEntry.ID, base)
 	mustSetGlossaryUpdatedAt(t, newerEntry.ID, base.Add(time.Hour))
 
-	terms, err := NewTranslationGlossaryService().ResolveForVideo(video.ID)
+	terms, err := NewTranslationGlossaryService().ResolveForVideo(video.ID, "")
 	if err != nil {
 		t.Fatalf("解析术语生效集失败: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestResolveForVideoTakesNewestEntryWhenCollectionsConflict(t *testing.T) {
 
 	// 反向：让旧作品集的条目变成最新，结论必须跟着翻转。
 	mustSetGlossaryUpdatedAt(t, olderEntry.ID, base.Add(2*time.Hour))
-	terms, err = NewTranslationGlossaryService().ResolveForVideo(video.ID)
+	terms, err = NewTranslationGlossaryService().ResolveForVideo(video.ID, "")
 	if err != nil {
 		t.Fatalf("解析术语生效集失败: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestResolveForVideoIgnoresDeletedCollectionsAndReturnsGlobalOnly(t *testing
 		t.Fatalf("软删除作品集失败: %v", err)
 	}
 
-	terms, err := NewTranslationGlossaryService().ResolveForVideo(video.ID)
+	terms, err := NewTranslationGlossaryService().ResolveForVideo(video.ID, "")
 	if err != nil {
 		t.Fatalf("解析术语生效集失败: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestResolveForVideoIgnoresDeletedCollectionsAndReturnsGlobalOnly(t *testing
 	}
 
 	lonely := mustCreateGlossaryVideo(t, "/library/other.mp4")
-	terms, err = NewTranslationGlossaryService().ResolveForVideo(lonely.ID)
+	terms, err = NewTranslationGlossaryService().ResolveForVideo(lonely.ID, "")
 	if err != nil {
 		t.Fatalf("解析术语生效集失败: %v", err)
 	}

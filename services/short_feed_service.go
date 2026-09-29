@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/rand"
 	"os"
+	"sort"
 	"sync"
 	"time"
 	"video-master/database"
@@ -72,7 +73,21 @@ type ShortFeedService struct {
 	candidateMu   sync.Mutex
 	candidates    []shortFeedCandidate
 	candidateHint *models.Video
-	candidatesAt  time.Time
+	// candidateUnplayable 是被格式门排除的视频（既不能内嵌、手机端白名单不命中、也没有代理），
+	// 只用来给 /feed/scopes 报 unplayable_count。
+	candidateUnplayable []shortFeedCandidate
+	candidatesAt        time.Time
+
+	// deleteVideoFn 可注入，测试用它模拟「该磁盘不支持废纸篓」等删除结果；为 nil 时走 VideoService.DeleteVideo。
+	deleteVideoFn func(id uint, deleteFile bool) error
+
+	// 手机端访问控制（short_feed_auth.go）：PIN 会话与失败计数。
+	authOnce sync.Once
+	auth     *shortFeedAuth
+
+	// mobileInlineMIME 的判定缓存（short_feed_mobile_mime.go）。
+	mobileMIMEMu    sync.Mutex
+	mobileMIMECache map[uint]shortFeedMobileMIMEVerdict
 }
 
 type ShortFeedFeedbackSyncResult struct {
@@ -105,6 +120,7 @@ func (s *ShortFeedService) invalidateCandidates() {
 	s.candidateMu.Lock()
 	s.candidates = nil
 	s.candidateHint = nil
+	s.candidateUnplayable = nil
 	s.candidatesAt = time.Time{}
 	s.candidateMu.Unlock()
 }
@@ -157,7 +173,8 @@ func (s *ShortFeedService) resolveImageMedia(imageID uint, view bool) (*ShortFee
 		return nil, ErrShortFeedUnsupportedMedia
 	}
 	var img models.Image
-	if err := database.DB.First(&img, imageID).Error; err != nil {
+	if err := applyImageVisibility(database.DB.Model(&models.Image{}), database.DB).
+		Where("images.id = ?", imageID).First(&img).Error; err != nil {
 		return nil, err
 	}
 	if !s.shortFeedImageEligible(img) {
@@ -190,6 +207,7 @@ func (s *ShortFeedService) resolveImageMedia(imageID uint, view bool) (*ShortFee
 	}, nil
 }
 
+// markImageStale：images 表没有 stale_reason 列（原因只记在视频侧，D-PC06）。
 func (s *ShortFeedService) markImageStale(imageID uint) {
 	_ = database.DB.Model(&models.Image{}).Where("id = ?", imageID).Update("is_stale", true).Error
 }
@@ -307,22 +325,39 @@ func filterCandidatesByMedia(candidates []shortFeedCandidate, mediaFilter string
 }
 
 func (s *ShortFeedService) cachedCandidates() ([]shortFeedCandidate, *models.Video, error) {
-	s.candidateMu.Lock()
-	if s.candidates != nil && s.now().Sub(s.candidatesAt) < shortFeedCandidateTTL {
-		items, hint := s.candidates, s.candidateHint
-		s.candidateMu.Unlock()
-		return items, hint, nil
-	}
-	s.candidateMu.Unlock()
-
-	items, hint, err := s.collectCandidates()
+	snapshot, err := s.cachedSnapshot()
 	if err != nil {
 		return nil, nil, err
 	}
+	return snapshot.candidates, snapshot.hint, nil
+}
+
+// shortFeedSnapshot 是一次候选收集的完整结果。
+type shortFeedSnapshot struct {
+	candidates []shortFeedCandidate
+	// hint 是"存在但不可播放"的视频样本，候选为空时用来给出可解释的原因。
+	hint *models.Video
+	// unplayable 是被格式门排除的全部视频，供 unplayable_count 按范围统计。
+	unplayable []shortFeedCandidate
+}
+
+func (s *ShortFeedService) cachedSnapshot() (shortFeedSnapshot, error) {
 	s.candidateMu.Lock()
-	s.candidates, s.candidateHint, s.candidatesAt = items, hint, s.now()
+	if s.candidates != nil && s.now().Sub(s.candidatesAt) < shortFeedCandidateTTL {
+		snapshot := shortFeedSnapshot{candidates: s.candidates, hint: s.candidateHint, unplayable: s.candidateUnplayable}
+		s.candidateMu.Unlock()
+		return snapshot, nil
+	}
 	s.candidateMu.Unlock()
-	return items, hint, nil
+
+	snapshot, err := s.collectSnapshot()
+	if err != nil {
+		return shortFeedSnapshot{}, err
+	}
+	s.candidateMu.Lock()
+	s.candidates, s.candidateHint, s.candidateUnplayable, s.candidatesAt = snapshot.candidates, snapshot.hint, snapshot.unplayable, s.now()
+	s.candidateMu.Unlock()
+	return snapshot, nil
 }
 
 // candidateFileExists 只检查这一条；缺失的顺手标记 stale，下次重建快照时自然排除。
@@ -339,7 +374,7 @@ func (s *ShortFeedService) candidateFileExists(candidate shortFeedCandidate) boo
 	info, err := s.stat(path)
 	if err != nil || info.IsDir() {
 		if candidate.video != nil {
-			s.markStale(candidate.ref.ID)
+			s.markStale(candidate.ref.ID, shortFeedStaleReason(err))
 		} else {
 			s.markImageStale(candidate.ref.ID)
 		}
@@ -350,7 +385,7 @@ func (s *ShortFeedService) candidateFileExists(candidate shortFeedCandidate) boo
 	// 这条视频本来就不该入选，放过去手机端只会拿到一段播不了的源字节。
 	// resolveVideoProxy 顺手把失效的文件与表行清掉，重建快照时它自然消失。
 	if candidate.video != nil {
-		if _, inline := inlinePreviewMIME(candidate.video.Path); !inline {
+		if _, inline := s.mobileMIMEForVideo(*candidate.video); !inline {
 			if s.resolveVideoProxy(*candidate.video, false) == nil {
 				return false
 			}
@@ -430,32 +465,46 @@ func (s *ShortFeedService) loadTagBoosts() (shortFeedTagBoosts, error) {
 }
 
 func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Video, error) {
-	boosts, err := s.loadTagBoosts()
+	snapshot, err := s.collectSnapshot()
 	if err != nil {
 		return nil, nil, err
+	}
+	return snapshot.candidates, snapshot.hint, nil
+}
+
+func (s *ShortFeedService) collectSnapshot() (shortFeedSnapshot, error) {
+	boosts, err := s.loadTagBoosts()
+	if err != nil {
+		return shortFeedSnapshot{}, err
 	}
 	// 这里不做文件存在性检查：抽中之后只 stat 那一条即可。
 	existingVideos, err := s.loadEligibleVideos(nil)
 	if err != nil {
-		return nil, nil, err
+		return shortFeedSnapshot{}, err
 	}
 
 	// 有有效代理的视频也入选（D-004）：内嵌白名单不命中但代理已经生成好了，
 	// 手机端拿到的是代理字节。
 	proxied, err := loadProxiedVideoIDs()
 	if err != nil {
-		return nil, nil, err
+		return shortFeedSnapshot{}, err
 	}
 
 	candidates := make([]shortFeedCandidate, 0, len(existingVideos))
 	var unsupportedVideo *models.Video
+	var unplayable []shortFeedCandidate
 	for i := range existingVideos {
 		video := existingVideos[i]
-		if _, ok := inlinePreviewMIME(video.Path); !ok {
+		// 手机端白名单（§8.7）在内嵌白名单之上多认 h264/hevc + aac 的 .mov。
+		if _, ok := s.mobileMIMEForVideo(video); !ok {
 			if _, hasProxy := proxied[video.ID]; !hasProxy {
 				if unsupportedVideo == nil {
 					unsupportedVideo = &existingVideos[i]
 				}
+				unplayable = append(unplayable, shortFeedCandidate{
+					ref:   ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID},
+					video: &existingVideos[i],
+				})
 				continue
 			}
 		}
@@ -468,7 +517,7 @@ func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Vi
 
 	images, err := s.loadEligibleImages(nil)
 	if err != nil {
-		return nil, nil, err
+		return shortFeedSnapshot{}, err
 	}
 	for i := range images {
 		candidates = append(candidates, shortFeedCandidate{
@@ -477,7 +526,7 @@ func (s *ShortFeedService) collectCandidates() ([]shortFeedCandidate, *models.Vi
 			image: &images[i],
 		})
 	}
-	return candidates, unsupportedVideo, nil
+	return shortFeedSnapshot{candidates: candidates, hint: unsupportedVideo, unplayable: unplayable}, nil
 }
 
 func (s *ShortFeedService) imageFileExists(img models.Image) bool {
@@ -544,42 +593,53 @@ func (s *ShortFeedService) weightedSelectIndex(candidates []shortFeedCandidate) 
 	return len(candidates) - 1
 }
 
-// FavoriteItems 收藏页：两种媒体合并，各自按最近收藏时间倒序后再按时间归并。
+// shortFeedFavoriteOrder 收藏页的排序：favorited_at 倒序、NULL 最后、id 倒序。
+// NULLS LAST 两个后端写法不同，用 CASE 表达式统一（历史收藏并集迁移前的行可能没有时间）。
+func shortFeedFavoriteOrder(query *gorm.DB, table string) *gorm.DB {
+	return query.
+		Order("CASE WHEN " + table + ".favorited_at IS NULL THEN 1 ELSE 0 END").
+		Order(table + ".favorited_at DESC").
+		Order(table + ".id DESC")
+}
+
+// FavoriteItems 收藏页：收藏的唯一数据是 videos/images.is_favorite（D-PC40），与桌面端同源；
+// 视频与图片合并后按 favorited_at 倒序（NULL 最后），同时刻按 id 倒序。
 func (s *ShortFeedService) FavoriteItems() ([]ShortFeedItemDTO, error) {
+	type favoriteEntry struct {
+		at  *time.Time
+		id  uint
+		dto ShortFeedItemDTO
+	}
+	var entries []favoriteEntry
+
 	var videos []models.Video
 	maxDurationSeconds := s.maxDurationSeconds()
-	err := database.DB.Model(&models.Video{}).
-		Preload("Tags").
-		Joins("JOIN short_feed_interactions ON short_feed_interactions.video_id = videos.id").
-		Where("short_feed_interactions.favorited = ?", true).
-		Where("videos.is_stale = ?", false).
-		Where("videos.duration > ? AND videos.duration < ?", 0, maxDurationSeconds).
-		Order("short_feed_interactions.updated_at DESC").
-		Find(&videos).Error
+	// 与 feed 同一可见边界：扫描根 + 黑名单 + 未失效（PLAY-01）。
+	videoQuery, err := applyScanRootScope(database.DB.Model(&models.Video{}).Preload("Tags"))
 	if err != nil {
 		return nil, err
 	}
-
-	result := make([]ShortFeedItemDTO, 0, len(videos))
-	existing := s.filterExistingVideos(videos)
-	for i := range existing {
-		dto, err := s.videoDTO(&existing[i], "", "")
+	videoQuery = videoQuery.
+		Where("videos.is_favorite = ?", true).
+		Where("videos.is_stale = ?", false).
+		Where("videos.duration > ? AND videos.duration < ?", 0, maxDurationSeconds)
+	if err := shortFeedFavoriteOrder(videoQuery, "videos").Find(&videos).Error; err != nil {
+		return nil, err
+	}
+	for _, video := range s.filterExistingVideos(videos) {
+		video := video
+		dto, err := s.videoDTO(&video, "", "")
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, *dto)
+		entries = append(entries, favoriteEntry{at: video.FavoritedAt, id: video.ID, dto: *dto})
 	}
 
 	if s.imageThumbnail != nil {
 		var images []models.Image
-		err = database.DB.Model(&models.Image{}).
-			Preload("Tags").
-			Joins("JOIN short_feed_image_interactions ON short_feed_image_interactions.image_id = images.id").
-			Where("short_feed_image_interactions.favorited = ?", true).
-			Where("images.is_stale = ?", false).
-			Order("short_feed_image_interactions.updated_at DESC").
-			Find(&images).Error
-		if err != nil {
+		imageQuery := applyImageVisibility(database.DB.Model(&models.Image{}).Preload("Tags"), database.DB).
+			Where("images.is_favorite = ?", true)
+		if err := shortFeedFavoriteOrder(imageQuery, "images").Find(&images).Error; err != nil {
 			return nil, err
 		}
 		for i := range images {
@@ -590,10 +650,51 @@ func (s *ShortFeedService) FavoriteItems() ([]ShortFeedItemDTO, error) {
 			if err != nil {
 				return nil, err
 			}
-			result = append(result, *dto)
+			entries = append(entries, favoriteEntry{at: images[i].FavoritedAt, id: images[i].ID, dto: *dto})
 		}
 	}
+
+	sort.SliceStable(entries, func(i, j int) bool {
+		a, b := entries[i], entries[j]
+		switch {
+		case a.at != nil && b.at == nil:
+			return true
+		case a.at == nil && b.at != nil:
+			return false
+		case a.at != nil && b.at != nil && !a.at.Equal(*b.at):
+			return a.at.After(*b.at)
+		}
+		return a.id > b.id
+	})
+	result := make([]ShortFeedItemDTO, 0, len(entries))
+	for _, entry := range entries {
+		result = append(result, entry.dto)
+	}
 	return result, nil
+}
+
+// loadVisibleVideo 读取一条对手机端可见的视频：扫描根 + 黑名单之内（applyScanRootScope）。
+// 不可见与不存在同样返回 gorm.ErrRecordNotFound，调用方一律映射成 404。
+func (s *ShortFeedService) loadVisibleVideo(videoID uint) (models.Video, error) {
+	var video models.Video
+	query, err := applyScanRootScope(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return video, err
+	}
+	err = query.Where("videos.id = ?", videoID).First(&video).Error
+	return video, err
+}
+
+// loadEligibleVideo 在可见的基础上再套 feed 的入选条件（未失效、时长在范围内）。
+func (s *ShortFeedService) loadEligibleVideo(videoID uint) (models.Video, error) {
+	video, err := s.loadVisibleVideo(videoID)
+	if err != nil {
+		return video, err
+	}
+	if !shortFeedEligible(video, s.maxDurationSeconds()) {
+		return video, ErrShortFeedNoEligibleVideos
+	}
+	return video, nil
 }
 
 // RecordPlayback 记录一次播放/浏览。
@@ -607,6 +708,10 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 	videoID := ref.ID
 	now := s.now()
 	maxDurationSeconds := s.maxDurationSeconds()
+	// 可见性检查放在事务外：它要读扫描目录与黑名单，不该占着事务连接去查别的表。
+	if _, err := s.loadVisibleVideo(videoID); err != nil {
+		return nil, err
+	}
 	var interaction models.ShortFeedInteraction
 	err := database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
@@ -620,6 +725,7 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 			"random_play_count": gorm.Expr("random_play_count + 1"),
 			"last_played_at":    now,
 			"is_stale":          false,
+			"stale_reason":      "",
 		}).Error; err != nil {
 			return err
 		}
@@ -641,9 +747,12 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 	if err != nil {
 		return nil, err
 	}
-	return interactionDTO(&interaction), nil
+	return s.videoInteractionDTO(&interaction, nil), nil
 }
 
+// SetLiked 手机端点赞。点赞的唯一数据是 videos/images.is_liked（D-PC40）：直接走桌面同一个
+// setter，不再有互动表投影，也就没有「同步一下把桌面点赞清掉」的路径。
+// 互动表只继续记 view_count / last_viewed_at。
 func (s *ShortFeedService) SetLiked(ref ShortFeedMediaRef, liked bool) (*ShortFeedInteractionDTO, error) {
 	if ref.Kind == ShortFeedMediaImage {
 		return s.setImageLiked(ref, liked)
@@ -651,51 +760,21 @@ func (s *ShortFeedService) SetLiked(ref ShortFeedMediaRef, liked bool) (*ShortFe
 	if ref.Kind != ShortFeedMediaVideo {
 		return nil, ErrShortFeedUnsupportedMedia
 	}
-	videoID := ref.ID
-	now := s.now()
-	maxDurationSeconds := s.maxDurationSeconds()
-	var interaction models.ShortFeedInteraction
-	wasLiked := false
-	err := database.Transaction(func(tx *gorm.DB) error {
-		var video models.Video
-		if err := tx.Preload("Tags").First(&video, videoID).Error; err != nil {
-			return err
-		}
-		if !shortFeedEligible(video, maxDurationSeconds) {
-			return ErrShortFeedNoEligibleVideos
-		}
-
-		if err := upsertShortFeedInteraction(tx, videoID, func(row *models.ShortFeedInteraction) {
-			wasLiked = row.Liked
-			row.Liked = liked
-			if liked {
-				row.LikedAt = &now
-			} else {
-				row.LikedAt = nil
-			}
-			interaction = *row
-		}); err != nil {
-			return err
-		}
-
-		if liked && !wasLiked {
-			for _, tag := range video.Tags {
-				if err := incrementShortFeedTagPreference(tx, tag.ID, ShortFeedPreferenceStep); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
+	before, err := s.loadEligibleVideo(ref.ID)
 	if err != nil {
 		return nil, err
 	}
-	// 交互已提交；投影同步失败只记录日志，不把已成功的操作报成失败。
-	// 投影会在下次交互、设置保存或启动同步时自愈。
-	if _, err := s.SyncFeedback(); err != nil {
-		log.Printf("short-feed: 同步喜欢状态到主片库失败（将于下次同步自愈）: %v", err)
+	updated, err := s.videoService.SetVideoLiked(ref.ID, liked)
+	if err != nil {
+		return nil, err
 	}
-	return interactionDTO(&interaction), nil
+	if liked && !before.IsLiked {
+		if err := s.bumpTagPreferences(updated.Tags); err != nil {
+			// 点赞已提交；推荐偏好只是弱加权，失败只记录，不把已成功的操作报成失败。
+			log.Printf("short-feed: 记录标签偏好失败 video_id=%d: %v", ref.ID, err)
+		}
+	}
+	return s.videoInteractionDTO(nil, updated), nil
 }
 
 func (s *ShortFeedService) SetFavorited(ref ShortFeedMediaRef, favorited bool) (*ShortFeedInteractionDTO, error) {
@@ -705,160 +784,84 @@ func (s *ShortFeedService) SetFavorited(ref ShortFeedMediaRef, favorited bool) (
 	if ref.Kind != ShortFeedMediaVideo {
 		return nil, ErrShortFeedUnsupportedMedia
 	}
-	videoID := ref.ID
-	now := s.now()
-	maxDurationSeconds := s.maxDurationSeconds()
-	var interaction models.ShortFeedInteraction
-	err := database.Transaction(func(tx *gorm.DB) error {
-		var video models.Video
-		if err := tx.First(&video, videoID).Error; err != nil {
-			return err
-		}
-		if !shortFeedEligible(video, maxDurationSeconds) {
-			return ErrShortFeedNoEligibleVideos
-		}
-		return upsertShortFeedInteraction(tx, videoID, func(row *models.ShortFeedInteraction) {
-			if row.Favorited != favorited {
-				row.FavoriteSyncedToLibrary = false
-			}
-			row.Favorited = favorited
-			if favorited {
-				row.FavoritedAt = &now
-			} else {
-				row.FavoritedAt = nil
-			}
-			interaction = *row
-		})
-	})
+	if _, err := s.loadEligibleVideo(ref.ID); err != nil {
+		return nil, err
+	}
+	updated, err := s.videoService.SetVideoFavorite(ref.ID, favorited)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.SyncFeedback(); err != nil {
-		log.Printf("short-feed: 同步收藏状态到主片库失败（将于下次同步自愈）: %v", err)
-	}
-	return interactionDTO(&interaction), nil
+	return s.videoInteractionDTO(nil, updated), nil
 }
 
-// SyncFeedback projects phone-feed state into the main library. The liked tag
-// is fully owned by this projection and is reconciled both ways. Favorites
-// project exactly once per phone-side favorite action (tracked by
-// favorite_synced_to_library): a feed un-favorite never erases a favorite set
-// manually in the main library, and a manual un-favorite in the main library
-// is never overwritten by a later sync of the same phone-side action.
-func (s *ShortFeedService) SyncFeedback() (ShortFeedFeedbackSyncResult, error) {
-	result := ShortFeedFeedbackSyncResult{}
-	if database.DB == nil {
-		return result, errors.New("database is not initialized")
+// bumpTagPreferences 对一批标签各加一步偏好。
+func (s *ShortFeedService) bumpTagPreferences(tags []models.Tag) error {
+	if len(tags) == 0 {
+		return nil
 	}
-	var settings models.Settings
-	if err := database.DB.Select("short_feed_feedback_sync_enabled").First(&settings).Error; err != nil {
-		return result, err
-	}
-	result.Enabled = settings.ShortFeedFeedbackSyncEnabled
-	if !result.Enabled {
-		return result, nil
-	}
-
-	err := database.Transaction(func(tx *gorm.DB) error {
-		// 点赞投影到 videos.is_liked 列，与收藏同构。
-		//
-		// 早先这里落到一个 automatic_kind=short_feed_liked 的自动标签上，因为
-		// videos 表当时没有对应的列。代价是：应用启动就无条件往用户的标签列表里
-		// 塞一个标签（哪怕一次喜欢都没点过），而那个标签除了被创建和改名之外
-		// 没有任何代码读它——对 Feed 的推荐加权也毫无贡献（加权加的是视频自己的
-		// 内容标签）。2026-09-01 用户裁决改为真实列。
-		liked := tx.Model(&models.Video{}).
-			Where("is_liked = ?", false).
-			Where("id IN (?)", tx.Model(&models.ShortFeedInteraction{}).Select("video_id").
-				Where("liked = ?", true)).
-			Update("is_liked", true)
-		if liked.Error != nil {
-			return liked.Error
+	return database.Transaction(func(tx *gorm.DB) error {
+		for _, tag := range tags {
+			if err := incrementShortFeedTagPreference(tx, tag.ID, ShortFeedPreferenceStep); err != nil {
+				return err
+			}
 		}
-		result.LikesAdded = liked.RowsAffected
-
-		// 双向对账：手机端取消喜欢后，列上的投影也要撤掉。
-		// 收藏是"每次手机端操作只投影一次"（怕覆盖主片库里的手工取消），
-		// 点赞不同——它完全由这个投影拥有，所以两个方向都跟着走。
-		unliked := tx.Model(&models.Video{}).
-			Where("is_liked = ?", true).
-			Where("id NOT IN (?)", tx.Model(&models.ShortFeedInteraction{}).Select("video_id").
-				Where("liked = ?", true)).
-			Update("is_liked", false)
-		if unliked.Error != nil {
-			return unliked.Error
-		}
-		result.LikesRemoved = unliked.RowsAffected
-
-		favorited := tx.Model(&models.Video{}).
-			Where("is_favorite = ?", false).
-			Where("id IN (?)", tx.Model(&models.ShortFeedInteraction{}).Select("video_id").
-				Where("favorited = ? AND favorite_synced_to_library = ?", true, false)).
-			Update("is_favorite", true)
-		if favorited.Error != nil {
-			return favorited.Error
-		}
-		result.FavoritesAdded = favorited.RowsAffected
-
-		// 只把"视频当前已是收藏"的行标记为已同步：并发提交的新收藏若落在
-		// 投影 UPDATE 之后，不会被误标，下次同步仍会投影。
-		marked := tx.Model(&models.ShortFeedInteraction{}).
-			Where("favorited = ? AND favorite_synced_to_library = ?", true, false).
-			Where("video_id IN (?)", tx.Model(&models.Video{}).Select("id").Where("is_favorite = ?", true)).
-			Update("favorite_synced_to_library", true)
-		if marked.Error != nil {
-			return marked.Error
-		}
-
-		return syncShortFeedImageFeedback(tx, &result)
+		return nil
 	})
-	return result, err
 }
 
-// syncShortFeedImageFeedback 是图片侧的等价投影，与视频侧逐条对齐：
-// 点赞完全由投影拥有（双向对账），收藏每次手机端动作只投影一次。
-func syncShortFeedImageFeedback(tx *gorm.DB, result *ShortFeedFeedbackSyncResult) error {
-	liked := tx.Model(&models.Image{}).
-		Where("is_liked = ?", false).
-		Where("id IN (?)", tx.Model(&models.ShortFeedImageInteraction{}).Select("image_id").
-			Where("liked = ?", true)).
-		Update("is_liked", true)
-	if liked.Error != nil {
-		return liked.Error
+// videoInteractionDTO 组装视频互动结果：liked/favorited/favorited_at 取自 videos 行（唯一数据），
+// 浏览次数取自互动表。传 interaction 时（RecordPlayback）直接用它，否则现读；video 为 nil 时
+// 按 interaction 里的 video_id 去读行。
+func (s *ShortFeedService) videoInteractionDTO(interaction *models.ShortFeedInteraction, video *models.Video) *ShortFeedInteractionDTO {
+	var row models.ShortFeedInteraction
+	switch {
+	case interaction != nil:
+		row = *interaction
+	case video != nil:
+		if loaded, err := interactionForVideo(video.ID); err == nil {
+			row = loaded
+		} else {
+			row = models.ShortFeedInteraction{VideoID: video.ID}
+		}
 	}
-	result.ImageLikesAdded = liked.RowsAffected
-
-	unliked := tx.Model(&models.Image{}).
-		Where("is_liked = ?", true).
-		Where("id NOT IN (?)", tx.Model(&models.ShortFeedImageInteraction{}).Select("image_id").
-			Where("liked = ?", true)).
-		Update("is_liked", false)
-	if unliked.Error != nil {
-		return unliked.Error
+	if video == nil {
+		var loaded models.Video
+		if err := database.DB.First(&loaded, row.VideoID).Error; err == nil {
+			video = &loaded
+		}
 	}
-	result.ImageLikesRemoved = unliked.RowsAffected
-
-	favorited := tx.Model(&models.Image{}).
-		Where("is_favorite = ?", false).
-		Where("id IN (?)", tx.Model(&models.ShortFeedImageInteraction{}).Select("image_id").
-			Where("favorited = ? AND favorite_synced_to_library = ?", true, false)).
-		Update("is_favorite", true)
-	if favorited.Error != nil {
-		return favorited.Error
+	dto := interactionDTO(&row)
+	dto.LikedAt = nil
+	dto.FavoritedAt = nil
+	dto.Liked = false
+	dto.Favorited = false
+	if video != nil {
+		dto.Liked = video.IsLiked
+		dto.Favorited = video.IsFavorite
+		dto.FavoritedAt = video.FavoritedAt
 	}
-	result.ImageFavoritesAdded = favorited.RowsAffected
+	return dto
+}
 
-	marked := tx.Model(&models.ShortFeedImageInteraction{}).
-		Where("favorited = ? AND favorite_synced_to_library = ?", true, false).
-		Where("image_id IN (?)", tx.Model(&models.Image{}).Select("id").Where("is_favorite = ?", true)).
-		Update("favorite_synced_to_library", true)
-	return marked.Error
+// SyncFeedback 保留为空操作。
+//
+// 以前它把手机端互动表投影进主片库，并对 is_liked 双向对账：那会让桌面端点赞在下一次
+// 同步时被清掉（手机端从没点过赞）。D-PC40 之后收藏与点赞只有 videos/images 一份数据，
+// 「反馈回流」开关（short_feed_feedback_sync_enabled）除了这两项投影之外不控制任何行为，
+// 也就没有东西可同步。保留方法与返回结构只为让 App 层现有调用点继续编译，
+// 调用点与设置页入口由接线切片（P-029 / P-033）删除，列保留不删。
+func (s *ShortFeedService) SyncFeedback() (ShortFeedFeedbackSyncResult, error) {
+	return ShortFeedFeedbackSyncResult{}, nil
 }
 
 func (s *ShortFeedService) DeleteItem(ref ShortFeedMediaRef) error {
 	switch ref.Kind {
 	case ShortFeedMediaVideo:
-		err := s.videoService.DeleteVideo(ref.ID, true)
+		deleteVideo := s.videoService.DeleteVideo
+		if s.deleteVideoFn != nil {
+			deleteVideo = s.deleteVideoFn
+		}
+		err := deleteVideo(ref.ID, true)
 		if err == nil {
 			s.invalidateCandidates()
 		}
@@ -900,79 +903,54 @@ func (s *ShortFeedService) recordImageView(ref ShortFeedMediaRef) (*ShortFeedInt
 }
 
 func (s *ShortFeedService) setImageLiked(ref ShortFeedMediaRef, liked bool) (*ShortFeedInteractionDTO, error) {
-	now := s.now()
-	var state shortFeedInteractionState
-	err := database.Transaction(func(tx *gorm.DB) error {
-		img, err := s.loadEligibleImage(tx, ref.ID)
-		if err != nil {
-			return err
-		}
-		wasLiked := false
-		state, err = upsertShortFeedInteractionFor(tx, ref, func(row *shortFeedInteractionState) {
-			wasLiked = row.Liked
-			row.Liked = liked
-			if liked {
-				row.LikedAt = &now
-			} else {
-				row.LikedAt = nil
-			}
-		})
-		if err != nil {
-			return err
-		}
-		// 标签偏好表是图片与视频共用的，因为 tags 表本身就共用。
-		if liked && !wasLiked {
-			for _, tag := range img.Tags {
-				if err := incrementShortFeedTagPreference(tx, tag.ID, ShortFeedPreferenceStep); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
-	})
+	before, err := s.loadEligibleImage(database.DB, ref.ID)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.SyncFeedback(); err != nil {
-		log.Printf("short-feed: 同步图片喜欢状态到图片库失败（将于下次同步自愈）: %v", err)
+	updated, err := NewImageLibraryService().SetImageLiked(ref.ID, liked)
+	if err != nil {
+		return nil, err
 	}
-	return stateInteractionDTO(ref, state), nil
+	if liked && !before.IsLiked {
+		// 标签偏好表是图片与视频共用的，因为 tags 表本身就共用。
+		if err := s.bumpTagPreferences(updated.Tags); err != nil {
+			log.Printf("short-feed: 记录标签偏好失败 image_id=%d: %v", ref.ID, err)
+		}
+	}
+	return s.imageInteractionDTO(ref, updated), nil
 }
 
 func (s *ShortFeedService) setImageFavorited(ref ShortFeedMediaRef, favorited bool) (*ShortFeedInteractionDTO, error) {
-	now := s.now()
-	var state shortFeedInteractionState
-	err := database.Transaction(func(tx *gorm.DB) error {
-		if _, err := s.loadEligibleImage(tx, ref.ID); err != nil {
-			return err
-		}
-		var err error
-		state, err = upsertShortFeedInteractionFor(tx, ref, func(row *shortFeedInteractionState) {
-			if row.Favorited != favorited {
-				row.FavoriteSyncedToLibrary = false
-			}
-			row.Favorited = favorited
-			if favorited {
-				row.FavoritedAt = &now
-			} else {
-				row.FavoritedAt = nil
-			}
-		})
-		return err
-	})
+	if _, err := s.loadEligibleImage(database.DB, ref.ID); err != nil {
+		return nil, err
+	}
+	updated, err := NewImageLibraryService().SetImageFavorite(ref.ID, favorited)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.SyncFeedback(); err != nil {
-		log.Printf("short-feed: 同步图片收藏状态到图片库失败（将于下次同步自愈）: %v", err)
+	return s.imageInteractionDTO(ref, updated), nil
+}
+
+// imageInteractionDTO 与视频侧对称：liked/favorited 取自 images 行，浏览次数取自互动表。
+func (s *ShortFeedService) imageInteractionDTO(ref ShortFeedMediaRef, img *models.Image) *ShortFeedInteractionDTO {
+	state, err := loadShortFeedInteraction(ref)
+	if err != nil {
+		state = shortFeedInteractionState{}
 	}
-	return stateInteractionDTO(ref, state), nil
+	dto := stateInteractionDTO(ref, state)
+	dto.Liked = img.IsLiked
+	dto.Favorited = img.IsFavorite
+	dto.LikedAt = nil
+	dto.FavoritedAt = img.FavoritedAt
+	return dto
 }
 
 // loadEligibleImage 读取并校验图片资格，交互类方法统一走它，避免各处重复判据。
 func (s *ShortFeedService) loadEligibleImage(tx *gorm.DB, imageID uint) (*models.Image, error) {
 	var img models.Image
-	if err := tx.Preload("Tags").First(&img, imageID).Error; err != nil {
+	// 与 feed 同一图片可见边界（未失效 + 黑名单）：不可见的图片同样按不存在处理。
+	query := applyImageVisibility(tx.Model(&models.Image{}), tx)
+	if err := query.Preload("Tags").Where("images.id = ?", imageID).First(&img).Error; err != nil {
 		return nil, err
 	}
 	if !s.shortFeedImageEligible(img) {
@@ -989,26 +967,23 @@ func (s *ShortFeedService) ResolveMedia(ref ShortFeedMediaRef) (*ShortFeedMedia,
 	if ref.Kind != ShortFeedMediaVideo {
 		return nil, ErrShortFeedUnsupportedMedia
 	}
-	videoID := ref.ID
-	var video models.Video
-	if err := database.DB.First(&video, videoID).Error; err != nil {
+	// 先套可见边界（扫描根 + 黑名单）：黑名单目录里的视频按不存在处理，映射成 404。
+	video, err := s.loadEligibleVideo(ref.ID)
+	if err != nil {
 		return nil, err
-	}
-	if !shortFeedEligible(video, s.maxDurationSeconds()) {
-		return nil, ErrShortFeedNoEligibleVideos
 	}
 	info, err := os.Stat(video.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.markStale(video.ID)
+			s.markStale(video.ID, models.StaleReasonMissingFile)
 		}
 		return nil, err
 	}
 	if info.IsDir() {
-		s.markStale(video.ID)
+		s.markStale(video.ID, models.StaleReasonReadError)
 		return nil, fmt.Errorf("short-feed media path is directory")
 	}
-	mimeType, ok := inlinePreviewMIME(video.Path)
+	mimeType, ok := s.mobileMIMEForVideo(video)
 	if !ok {
 		// 白名单不命中时才可能有代理：命中就下发代理字节（D-004）。
 		// 路径形态不变，手机端仍然只知道 /short-media/video/{id} 这一个地址。
@@ -1062,12 +1037,18 @@ func (s *ShortFeedService) loadEligibleVideos(excludeIDs []uint) ([]models.Video
 	var videos []models.Video
 	maxDurationSeconds := s.maxDurationSeconds()
 	// 同上：抽签阶段不预载标签。
-	query := database.DB.Model(&models.Video{}).
-		Where("is_stale = ?", false).
-		Where("duration > ? AND duration < ?", 0, maxDurationSeconds).
-		Order("id ASC")
+	// 可见性与桌面默认视图同一口径（PLAY-01）：扫描根 + 黑名单 + 未失效。规则只在
+	// applyScanRootScope 里有一份，这里不复制。
+	query, err := applyScanRootScope(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return nil, err
+	}
+	query = query.
+		Where("videos.is_stale = ?", false).
+		Where("videos.duration > ? AND videos.duration < ?", 0, maxDurationSeconds).
+		Order("videos.id ASC")
 	if len(excludeIDs) > 0 {
-		query = query.Where("id NOT IN ?", excludeIDs)
+		query = query.Where("videos.id NOT IN ?", excludeIDs)
 	}
 	if err := query.Find(&videos).Error; err != nil {
 		return nil, err
@@ -1089,19 +1070,30 @@ func (s *ShortFeedService) videoFileExists(video models.Video) bool {
 	info, err := os.Stat(video.Path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			s.markStale(video.ID)
+			s.markStale(video.ID, models.StaleReasonMissingFile)
 		}
 		return false
 	}
 	if info.IsDir() {
-		s.markStale(video.ID)
+		s.markStale(video.ID, models.StaleReasonReadError)
 		return false
 	}
 	return true
 }
 
-func (s *ShortFeedService) markStale(videoID uint) {
-	_ = database.DB.Model(&models.Video{}).Where("id = ?", videoID).Update("is_stale", true).Error
+// markStale 把视频标成失效，**必须同时写原因**（详细设计 §3.1）：is_stale 与 stale_reason 成对出现。
+func (s *ShortFeedService) markStale(videoID uint, reason string) {
+	_ = database.DB.Model(&models.Video{}).Where("id = ?", videoID).
+		Updates(map[string]interface{}{"is_stale": true, "stale_reason": reason}).Error
+}
+
+// shortFeedStaleReason 把文件检查错误翻成失效原因：文件确实不在是 missing_file，
+// 其余（权限、I/O、路径变成目录）是 read_error。
+func shortFeedStaleReason(err error) string {
+	if err != nil && os.IsNotExist(err) {
+		return models.StaleReasonMissingFile
+	}
+	return models.StaleReasonReadError
 }
 
 func (s *ShortFeedService) tagPreferenceMap() (map[uint]float64, error) {
@@ -1183,13 +1175,9 @@ func shortFeedTagWeight(tags []models.Tag, prefs map[uint]float64) float64 {
 }
 
 func (s *ShortFeedService) videoDTO(video *models.Video, reasonCode string, reasonMessage string) (*ShortFeedItemDTO, error) {
-	interaction, err := interactionForVideo(video.ID)
-	if err != nil {
-		return nil, err
-	}
 	mediaURL := ""
 	mediaMIME := ""
-	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
+	if mimeType, ok := s.mobileMIMEForVideo(*video); ok {
 		mediaURL = shortFeedMediaURL(ShortFeedMediaRef{Kind: ShortFeedMediaVideo, ID: video.ID})
 		mediaMIME = mimeType
 	} else if proxy := s.resolveVideoProxy(*video, false); proxy != nil {
@@ -1215,8 +1203,8 @@ func (s *ShortFeedService) videoDTO(video *models.Video, reasonCode string, reas
 		Tags:           tags,
 		MediaURL:       mediaURL,
 		MediaMIME:      mediaMIME,
-		Liked:          interaction.Liked,
-		Favorited:      interaction.Favorited,
+		Liked:          video.IsLiked,
+		Favorited:      video.IsFavorite,
 		PersonalRating: video.PersonalRating,
 		Watched:        video.IsWatched,
 		ReasonCode:     reasonCode,
@@ -1227,10 +1215,6 @@ func (s *ShortFeedService) videoDTO(video *models.Video, reasonCode string, reas
 // imageDTO 图片条目。没有时长与进度条；图说用的是已接受的标签，Tags 在这里已经预载好。
 func (s *ShortFeedService) imageDTO(img *models.Image) (*ShortFeedItemDTO, error) {
 	ref := ShortFeedMediaRef{Kind: ShortFeedMediaImage, ID: img.ID}
-	state, err := loadShortFeedInteraction(ref)
-	if err != nil {
-		return nil, err
-	}
 	tags := make([]ShortFeedTagDTO, 0, len(img.Tags))
 	for _, tag := range img.Tags {
 		tags = append(tags, ShortFeedTagDTO{ID: tag.ID, Name: tag.Name, Color: tag.Color})
@@ -1244,8 +1228,8 @@ func (s *ShortFeedService) imageDTO(img *models.Image) (*ShortFeedItemDTO, error
 		Tags:      tags,
 		MediaURL:  shortFeedMediaURL(ref),
 		MediaMIME: "image/jpeg",
-		Liked:     state.Liked,
-		Favorited: state.Favorited,
+		Liked:     img.IsLiked,
+		Favorited: img.IsFavorite,
 		// 图片没有观看状态，Watched 保持 false。
 		PersonalRating: img.PersonalRating,
 	}, nil

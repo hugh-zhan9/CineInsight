@@ -3,6 +3,7 @@ package services
 import (
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"sort"
 	"strings"
@@ -485,6 +486,226 @@ func personHasRemainingRelations(tx *gorm.DB, personID uint) (bool, error) {
 	return imageRelations != 0, nil
 }
 
+// 人物管理的哨兵错误；消息即错误码，前端按码分支。
+var (
+	ErrPersonNotFound = errors.New("person_not_found")
+	ErrInvalidMerge   = errors.New("invalid_merge")
+)
+
+// PersonDeletionImpact 是删除人物前要给用户看的影响范围，按关系行统计（含软删除媒体）。
+type PersonDeletionImpact struct {
+	VideoCount       int64 `json:"video_count"`
+	ImageCount       int64 `json:"image_count"`
+	FaceClusterCount int64 `json:"face_cluster_count"`
+}
+
+// MergePeopleResult 是合并回执。
+type MergePeopleResult struct {
+	Target          PersonListItem `json:"target"`
+	MergedCount     int            `json:"merged_count"`
+	VideoLinksMoved int            `json:"video_links_moved"`
+	ImageLinksMoved int            `json:"image_links_moved"`
+}
+
+func (s *PersonService) GetPersonDeletionImpact(id uint) (*PersonDeletionImpact, error) {
+	var person models.Person
+	if err := database.DB.Select("id").First(&person, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrPersonNotFound
+		}
+		return nil, err
+	}
+	impact := &PersonDeletionImpact{}
+	if err := database.DB.Model(&models.VideoPerson{}).Where("person_id = ?", id).Count(&impact.VideoCount).Error; err != nil {
+		return nil, err
+	}
+	if err := database.DB.Model(&models.ImagePerson{}).Where("person_id = ?", id).Count(&impact.ImageCount).Error; err != nil {
+		return nil, err
+	}
+	if err := database.DB.Model(&models.FaceCluster{}).Where("person_id = ?", id).Count(&impact.FaceClusterCount).Error; err != nil {
+		return nil, err
+	}
+	return impact, nil
+}
+
+// deletePersonTx 硬删人物：两张关系表的行、人脸候选与命名簇的指向一并清理，簇回到未命名
+// （与 reconcileFaceClusterPeople 同口径，但在同一事务里做，不依赖外键 SET NULL 与后续对账）。
+func deletePersonTx(tx *gorm.DB, personID uint) error {
+	if err := tx.Where("person_id = ?", personID).Delete(&models.VideoPerson{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("person_id = ?", personID).Delete(&models.ImagePerson{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Where("person_id = ?", personID).Delete(&models.FacePersonCandidate{}).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&models.FaceCluster{}).
+		Where("person_id = ? AND status = ?", personID, models.FaceClusterStatusNamed).
+		Updates(map[string]any{"person_id": nil, "status": models.FaceClusterStatusUnnamed}).Error; err != nil {
+		return err
+	}
+	if err := tx.Model(&models.FaceCluster{}).Where("person_id = ?", personID).
+		Update("person_id", nil).Error; err != nil {
+		return err
+	}
+	return tx.Delete(&models.Person{}, personID).Error
+}
+
+// DeletePerson 删除人物及其全部关系与头像（D-PC32）；头像文件在事务提交之后才删。
+func (s *PersonService) DeletePerson(id uint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	avatarPath := ""
+	err := database.Transaction(func(tx *gorm.DB) error {
+		var person models.Person
+		if err := tx.First(&person, id).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrPersonNotFound
+			}
+			return err
+		}
+		avatarPath = person.AvatarPath
+		return deletePersonTx(tx, id)
+	})
+	if err != nil {
+		if errors.Is(err, ErrPersonNotFound) {
+			return err
+		}
+		return fmt.Errorf("delete person: %w", err)
+	}
+	if avatarPath != "" {
+		if err := s.images.Remove(avatarPath); err != nil {
+			return fmt.Errorf("person deleted but avatar cleanup failed: %w", err)
+		}
+	}
+	return nil
+}
+
+// MergePeople 把 sourceIDs 并入 targetID（D-PC32）：单一事务改写关系并去重、簇改指向目标、
+// 目标无头像时复制来源头像，最后硬删来源人物；来源头像文件在提交之后才删。
+func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeopleResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sources := uniqueSortedIDs(sourceIDs)
+	for _, id := range sourceIDs {
+		if id == targetID {
+			return nil, ErrInvalidMerge
+		}
+	}
+	if targetID == 0 || len(sources) == 0 {
+		return nil, ErrInvalidMerge
+	}
+	result := &MergePeopleResult{MergedCount: len(sources)}
+	var orphanAvatars []string
+	err := database.Transaction(func(tx *gorm.DB) error {
+		var target models.Person
+		if err := tx.First(&target, targetID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return ErrPersonNotFound
+			}
+			return err
+		}
+		var sourcePeople []models.Person
+		if err := tx.Where("id IN ?", sources).Order("id").Find(&sourcePeople).Error; err != nil {
+			return err
+		}
+		if len(sourcePeople) != len(sources) {
+			return ErrPersonNotFound
+		}
+		// ① 关系改写为目标并去重，再删来源残行。
+		videoInsert := tx.Exec(`INSERT INTO video_people (video_id, person_id, created_at)
+			SELECT video_id, ?, MIN(created_at) FROM video_people WHERE person_id IN ? GROUP BY video_id
+			ON CONFLICT (video_id, person_id) DO NOTHING`, targetID, sources)
+		if videoInsert.Error != nil {
+			return videoInsert.Error
+		}
+		result.VideoLinksMoved = int(videoInsert.RowsAffected)
+		imageInsert := tx.Exec(`INSERT INTO image_people (image_id, person_id, created_at)
+			SELECT image_id, ?, MIN(created_at) FROM image_people WHERE person_id IN ? GROUP BY image_id
+			ON CONFLICT (image_id, person_id) DO NOTHING`, targetID, sources)
+		if imageInsert.Error != nil {
+			return imageInsert.Error
+		}
+		result.ImageLinksMoved = int(imageInsert.RowsAffected)
+		if err := tx.Where("person_id IN ?", sources).Delete(&models.VideoPerson{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("person_id IN ?", sources).Delete(&models.ImagePerson{}).Error; err != nil {
+			return err
+		}
+		// ② 命名簇改指向目标。
+		if err := tx.Model(&models.FaceCluster{}).Where("person_id IN ?", sources).
+			Update("person_id", targetID).Error; err != nil {
+			return err
+		}
+		// ③ 目标没有头像时，从第一个有头像的来源复制。
+		importedAvatar := managedImageImport{}
+		if target.AvatarPath == "" {
+			for _, source := range sourcePeople {
+				if source.AvatarPath == "" {
+					continue
+				}
+				asset, err := s.images.Resolve(source.AvatarPath)
+				if err != nil {
+					if errors.Is(err, os.ErrNotExist) {
+						continue
+					}
+					return fmt.Errorf("读取来源头像失败: %w", err)
+				}
+				importedAvatar, err = s.images.Import("people", targetID, asset.Path)
+				if err != nil {
+					return fmt.Errorf("复制来源头像失败: %w", err)
+				}
+				if err := tx.Model(&models.Person{}).Where("id = ?", targetID).
+					Update("avatar_path", importedAvatar.RelativePath).Error; err != nil {
+					if importedAvatar.Created {
+						_ = s.images.Remove(importedAvatar.RelativePath)
+					}
+					return err
+				}
+				break
+			}
+		}
+		// ④ 硬删来源人物（关系与簇已迁走，deletePersonTx 只会清掉残余候选）。
+		for _, source := range sourcePeople {
+			if err := deletePersonTx(tx, source.ID); err != nil {
+				if importedAvatar.Created {
+					_ = s.images.Remove(importedAvatar.RelativePath)
+				}
+				return err
+			}
+			if source.AvatarPath != "" {
+				orphanAvatars = append(orphanAvatars, source.AvatarPath)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, ErrPersonNotFound) || errors.Is(err, ErrInvalidMerge) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("merge people: %w", err)
+	}
+	for _, path := range orphanAvatars {
+		if err := s.images.Remove(path); err != nil {
+			log.Printf("合并人物后清理来源头像失败: %v", err)
+		}
+	}
+	var target models.Person
+	if err := database.DB.First(&target, targetID).Error; err != nil {
+		return nil, err
+	}
+	item, err := s.personListItem(target)
+	if err != nil {
+		return nil, err
+	}
+	result.Target = item
+	return result, nil
+}
+
 func normalizeEntityPageLimit(limit int) int {
 	if limit <= 0 {
 		return defaultEntityPageLimit
@@ -752,6 +973,11 @@ func (s *PersonService) RemovePersonAvatar(personID uint) error {
 		return fmt.Errorf("person avatar cleared but image cleanup failed: %w", err)
 	}
 	return nil
+}
+
+// RemoveManagedAvatar 删除一个托管头像文件；供撤销标签转人物删掉新建人物时清理头像用。
+func (s *PersonService) RemoveManagedAvatar(relativePath string) error {
+	return s.images.Remove(relativePath)
 }
 
 func (s *PersonService) ResolvePersonAvatar(personID uint) (ManagedImageAsset, error) {

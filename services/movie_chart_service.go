@@ -126,6 +126,10 @@ type MovieChartService struct {
 	// P-004 把它写成包级变量，只是因为字段得声明在本文件而那个切片不该改这里；
 	// 应用只构造一个 MovieChartService，两种写法语义等价，P-005 原样搬成了字段。
 	markMu sync.Mutex
+
+	// linkedWatch 是榜单侧改已看后回写关联视频的实现（P-020 的 VideoService），由 App
+	// 注入，见 SetLinkedVideoWatchSetter。受 mu 保护；nil 表示不回写。
+	linkedWatch LinkedVideoWatchSetter
 }
 
 const (
@@ -164,6 +168,10 @@ func NewMovieChartService(db *gorm.DB, watchlist *WatchlistService) *MovieChartS
 	}
 	if watchlist != nil {
 		service.images = watchlist.images
+		// 片单补全写回豆瓣 ID 时通知本服务补 want 标记（D-PC52）。片单一侧只认接口，
+		// 依赖方向仍是榜单 → 片单；同一个片单服务被再次构造的榜单服务接管时，
+		// 观察者随之换成最新的那个。
+		watchlist.SetDoubanBindObserver(service)
 	}
 	return service
 }

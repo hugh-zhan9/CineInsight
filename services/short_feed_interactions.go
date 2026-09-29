@@ -29,6 +29,8 @@ type ShortFeedScopeCount struct {
 	Scope string `json:"scope"`
 	Name  string `json:"name"`
 	Count int    `json:"count"`
+	// UnplayableCount 是该范围里被格式门排除的视频数（手机播不了、也没有代理），面板据此提示。
+	UnplayableCount int `json:"unplayable_count"`
 }
 
 var shortFeedScopeNames = map[string]string{
@@ -96,19 +98,19 @@ func (s *ShortFeedService) loadShortFeedScopeFacts(needFavorites, needTags bool)
 		taggedImages:    map[uint]bool{},
 	}
 	if needFavorites {
-		// 手机端的收藏状态以互动表为准：它才是 Feed 自己的收藏，主片库那份是
-		// 投影过去的结果。视频与图片各有一张并行表。
+		// 收藏的唯一数据是 videos/images.is_favorite（D-PC40），与桌面端同源；
+		// 互动表里的 favorited 列不再读写。
 		var videoIDs []uint
-		if err := database.DB.Model(&models.ShortFeedInteraction{}).
-			Where("favorited = ?", true).Pluck("video_id", &videoIDs).Error; err != nil {
+		if err := database.DB.Model(&models.Video{}).
+			Where("is_favorite = ?", true).Pluck("id", &videoIDs).Error; err != nil {
 			return nil, err
 		}
 		for _, id := range videoIDs {
 			facts.favoritedVideos[id] = true
 		}
 		var imageIDs []uint
-		if err := database.DB.Model(&models.ShortFeedImageInteraction{}).
-			Where("favorited = ?", true).Pluck("image_id", &imageIDs).Error; err != nil {
+		if err := database.DB.Model(&models.Image{}).
+			Where("is_favorite = ?", true).Pluck("id", &imageIDs).Error; err != nil {
 			return nil, err
 		}
 		for _, id := range imageIDs {
@@ -195,11 +197,15 @@ func (s *ShortFeedService) ScopeCountsFiltered(mediaFilter string) ([]ShortFeedS
 	if err != nil {
 		return nil, err
 	}
-	all, _, err := s.cachedCandidates()
+	snapshot, err := s.cachedSnapshot()
 	if err != nil {
 		return nil, err
 	}
-	all = filterCandidatesByMedia(all, normalizedMedia)
+	all := filterCandidatesByMedia(snapshot.candidates, normalizedMedia)
+	unplayable := snapshot.unplayable
+	if normalizedMedia == ShortFeedMediaFilterImage {
+		unplayable = nil
+	}
 	facts, err := s.loadShortFeedScopeFacts(true, true)
 	if err != nil {
 		return nil, err
@@ -213,7 +219,13 @@ func (s *ShortFeedService) ScopeCountsFiltered(mediaFilter string) ([]ShortFeedS
 				count++
 			}
 		}
-		counts = append(counts, ShortFeedScopeCount{Scope: scope, Name: shortFeedScopeNames[scope], Count: count})
+		unplayableCount := 0
+		for _, candidate := range unplayable {
+			if scope == ShortFeedScopeAll || facts.matches(scope, candidate, now) {
+				unplayableCount++
+			}
+		}
+		counts = append(counts, ShortFeedScopeCount{Scope: scope, Name: shortFeedScopeNames[scope], Count: count, UnplayableCount: unplayableCount})
 	}
 	return counts, nil
 }

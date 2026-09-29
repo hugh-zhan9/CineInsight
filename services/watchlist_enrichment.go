@@ -419,7 +419,7 @@ func (s *WatchlistService) writeBackEnrichment(id uint, claim string, fields map
 
 // enrichClaimedEntry 处理一条已经认领到的条目：问源、下海报、写回。
 func (s *WatchlistService) enrichClaimedEntry(ctx context.Context, entry models.WatchlistEntry, sources watchlistEnrichmentSources) {
-	detail, fieldSources, err := lookupWatchlistDetail(ctx, sources.registry, WatchlistMetadataKind(entry.Kind), entry.Title)
+	detail, fieldSources, err := s.lookupEntryDetail(ctx, sources.registry, entry)
 	if err != nil {
 		s.settleEnrichmentFailure(entry, watchlistEnrichmentFailureFor(err), err)
 		return
@@ -445,6 +445,30 @@ func (s *WatchlistService) enrichClaimedEntry(ctx context.Context, entry models.
 		}
 	}
 	s.settleEnrichmentSuccess(entry, detail, fieldSources, poster)
+}
+
+// lookupEntryDetail 取一条待补全条目的详情。
+//
+// 来源已经是豆瓣且带 ID 的电影（榜单建的，或补全过的）直接按 ID 取详情，不再按片名
+// 搜索取第一个候选（D-PC52）：按片名搜会把「同名不同年」的另一部片写到这条上，还把
+// 榜单已经知道的确切 ID 丢掉。其余情形沿用按类型走链 / 聚合。
+func (s *WatchlistService) lookupEntryDetail(ctx context.Context, registry *WatchlistMetadataRegistry, entry models.WatchlistEntry) (*WatchlistMetadataDetail, map[string]string, error) {
+	kind := WatchlistMetadataKind(entry.Kind)
+	if kind == WatchlistMetadataKindMovie && entry.SourceName == WatchlistMetadataSourceDouban && entry.SourceItemID != "" {
+		chain, err := registry.Chain(kind)
+		if err != nil {
+			return nil, nil, err
+		}
+		detail, err := selectedWatchlistMetadataDetail(ctx, chain, kind, WatchlistMetadataSourceDouban+":"+entry.SourceItemID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if detail == nil {
+			return nil, nil, newWatchlistMetadataSourceError(WatchlistMetadataSourceDouban, WatchlistMetadataFailureSourceError, 0, "详情为空", nil)
+		}
+		return detail, nil, nil
+	}
+	return lookupWatchlistDetail(ctx, registry, kind, entry.Title)
 }
 
 // watchlistSourceItemIDLimit 是 SourceItemID 列的 size:64。
@@ -476,6 +500,13 @@ func (s *WatchlistService) settleEnrichmentSuccess(entry models.WatchlistEntry, 
 		"rating":            detail.Rating,
 		"poster_path":       posterPath,
 	})
+	if err != nil && watchlistTitleConflict(err) {
+		// 写回的 (title, kind, 源 ID) 撞上了另一条记录：这是明确的唯一约束失败（整条
+		// UPDATE 没有生效），按失败落地并丢弃刚落盘的图，而不是停在 running 等重启恢复。
+		s.discardEnrichmentResult(entry, poster, "写回时片名与源 ID 撞上片单里的另一条记录")
+		s.settleEnrichmentFailure(entry, WatchlistMetadataFailureSourceError, ErrWatchlistTitleExists)
+		return
+	}
 	if err != nil {
 		// UPDATE 本身报错，写没写进去无从判断。刚落盘的图**不删**：万一那一行其实
 		// 更新成功了，删掉就留下一条指向不存在文件的记录——多一个孤儿文件远比
@@ -498,6 +529,7 @@ func (s *WatchlistService) settleEnrichmentSuccess(entry models.WatchlistEntry, 
 	entry.EnrichmentError = ""
 	entry.SourceName = detail.SourceName
 	s.emitEnrichProgress(entry)
+	s.notifyDoubanBound(entry, detail)
 	log.Printf("[WatchlistEnrich] settled id=%d status=succeeded source=%s item=%s poster=%t",
 		entry.ID, detail.SourceName, detail.SourceItemID, posterPath != "")
 }

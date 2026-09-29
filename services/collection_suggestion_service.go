@@ -35,6 +35,13 @@ var (
 	ErrCollectionSuggestionMemberMismatch = errors.New("member_mismatch")
 	// ErrCollectionSuggestionNameInvalid 对应 collection_name_invalid。
 	ErrCollectionSuggestionNameInvalid = errors.New("collection_name_invalid")
+	// ErrCollectionSuggestionTargetGone：追加候选的目标作品集已不存在。
+	ErrCollectionSuggestionTargetGone = errors.New("target_collection_gone")
+)
+
+const (
+	suggestionKindNew    = "new"
+	suggestionKindAppend = "append"
 )
 
 // collectionSuggestionPageSize 是分析时取视频的分页大小。
@@ -74,13 +81,18 @@ type CollectionSuggestionMemberView struct {
 
 // CollectionSuggestionView 是一条待审阅候选。
 type CollectionSuggestionView struct {
-	ID          uint                             `json:"id"`
-	ScanRoot    string                           `json:"scan_root"`
-	SeriesName  string                           `json:"series_name"`
-	Status      string                           `json:"status"`
-	MemberCount int                              `json:"member_count"`
-	Members     []CollectionSuggestionMemberView `json:"members"`
-	CreatedAt   time.Time                        `json:"created_at" ts_type:"string"`
+	ID         uint   `json:"id"`
+	ScanRoot   string `json:"scan_root"`
+	SeriesName string `json:"series_name"`
+	Status     string `json:"status"`
+	// Kind 是 new（新建作品集）或 append（追加到既有作品集）。库里没有 kind 列，
+	// append 等价于 target_collection_id 非空（详细设计 §1.2a）。
+	Kind                 string                           `json:"kind"`
+	TargetCollectionID   *uint                            `json:"target_collection_id"`
+	TargetCollectionName string                           `json:"target_collection_name"`
+	MemberCount          int                              `json:"member_count"`
+	Members              []CollectionSuggestionMemberView `json:"members"`
+	CreatedAt            time.Time                        `json:"created_at" ts_type:"string"`
 }
 
 // CollectionSuggestionService 分析剧集候选并把确认动作转成作品集写入。
@@ -226,6 +238,8 @@ type suggestionCandidate struct {
 	normalizedSeries string
 	fingerprint      string
 	members          []models.CollectionSuggestionMember
+	// targetCollectionID 非空表示追加候选（kind=append）：members 只含尚未入集的新成员。
+	targetCollectionID *uint
 }
 
 // analyzeOnce 跑完一轮分析：解析 → 分组 → 排除 → 与记忆比对 → upsert pending。
@@ -290,19 +304,36 @@ func (s *CollectionSuggestionService) analyzeOnce(ctx context.Context) error {
 		return nil
 	}
 
-	collected, err := videoIDsInAnyCollection(ctx)
+	collected, err := videoCollectionIndex(ctx)
+	if err != nil {
+		return err
+	}
+	dismissedKeys, err := dismissedSuggestionKeys(ctx)
 	if err != nil {
 		return err
 	}
 	candidates := make([]*suggestionCandidate, 0, len(groups))
 	for _, group := range groups {
-		group.members = dropCollectedMembers(group.members, collected)
-		if len(group.members) < 2 {
+		// 系列被忽略过：不再提，无论之后新增了几集（D-PC38）。旧的指纹记忆在 persistCandidates 里照旧生效。
+		if _, dismissed := dismissedKeys[suggestionDismissKey(group.scanRoot, group.normalizedSeries)]; dismissed {
+			continue
+		}
+		var targetCollectionID *uint
+		group.members, targetCollectionID = splitSuggestionMembers(group.members, collected)
+		if targetCollectionID == nil && len(group.members) < 2 {
+			continue
+		}
+		if targetCollectionID != nil && len(group.members) < 1 {
 			continue
 		}
 		sortSuggestionMembers(group.members)
 		assignSuggestionPositions(group.members)
-		group.fingerprint = suggestionFingerprint(group.members)
+		group.targetCollectionID = targetCollectionID
+		if targetCollectionID != nil {
+			group.fingerprint = suggestionAppendFingerprint(group.members, *targetCollectionID)
+		} else {
+			group.fingerprint = suggestionFingerprint(group.members)
+		}
 		candidates = append(candidates, group)
 	}
 	// 写入顺序稳定：同一库跑两遍产生的 ID 顺序一致，测试与界面都不会漂。
@@ -383,6 +414,8 @@ func (s *CollectionSuggestionService) persistCandidates(ctx context.Context, can
 				NormalizedSeries: candidate.normalizedSeries,
 				Status:           models.CollectionSuggestionStatusPending,
 				Fingerprint:      candidate.fingerprint,
+				// 追加候选记下目标作品集；新候选为 nil。
+				TargetCollectionID: candidate.targetCollectionID,
 			}
 			if err := tx.Create(&suggestion).Error; err != nil {
 				return fmt.Errorf("写入剧集候选: %w", err)
@@ -420,18 +453,35 @@ func (s *CollectionSuggestionService) List() ([]CollectionSuggestionView, error)
 		if err != nil {
 			return nil, err
 		}
-		if len(members) < 2 {
-			continue
-		}
-		views = append(views, CollectionSuggestionView{
+		view := CollectionSuggestionView{
 			ID:          suggestion.ID,
 			ScanRoot:    suggestion.ScanRoot,
 			SeriesName:  suggestion.SeriesName,
 			Status:      suggestion.Status,
+			Kind:        suggestionKindNew,
 			MemberCount: len(members),
 			Members:     members,
 			CreatedAt:   suggestion.CreatedAt,
-		})
+		}
+		if suggestion.TargetCollectionID != nil {
+			// 追加候选：单集也值得提；目标作品集已被删除的，等下一轮分析重算。
+			var target models.MediaCollection
+			if err := database.DB.Select("id", "name").First(&target, *suggestion.TargetCollectionID).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					continue
+				}
+				return nil, fmt.Errorf("读取追加目标作品集: %w", err)
+			}
+			if len(members) < 1 {
+				continue
+			}
+			view.Kind = suggestionKindAppend
+			view.TargetCollectionID = suggestion.TargetCollectionID
+			view.TargetCollectionName = target.Name
+		} else if len(members) < 2 {
+			continue
+		}
+		views = append(views, view)
 	}
 	return views, nil
 }
@@ -454,7 +504,10 @@ func (s *CollectionSuggestionService) Confirm(suggestionID uint, name string, or
 	if err != nil {
 		return nil, err
 	}
-	ordered, err := validateSuggestionSelection(members, orderedVideoIDs)
+	if suggestion.TargetCollectionID != nil {
+		return s.confirmAppend(suggestion, members, orderedVideoIDs)
+	}
+	ordered, err := validateSuggestionSelection(members, orderedVideoIDs, 2)
 	if err != nil {
 		return nil, err
 	}
@@ -476,11 +529,127 @@ func (s *CollectionSuggestionService) Confirm(suggestionID uint, name string, or
 	if err := s.reorderConfirmedCollection(collectionID, ordered); err != nil {
 		return nil, err
 	}
-	if err := database.DB.Model(&models.CollectionSuggestion{}).Where("id = ?", suggestion.ID).
-		Update("status", models.CollectionSuggestionStatusConfirmed).Error; err != nil {
+	if err := s.markSuggestion(suggestion.ID, models.CollectionSuggestionStatusConfirmed, ""); err != nil {
 		return nil, fmt.Errorf("标记剧集候选已确认: %w", err)
 	}
 	return s.collections.GetCollectionDetail(collectionID)
+}
+
+// markSuggestion 用条件更新把 pending 候选翻成终态；已被别处翻过则视为不再待处理。
+func (s *CollectionSuggestionService) markSuggestion(id uint, status, dismissKey string) error {
+	updates := map[string]any{"status": status}
+	if dismissKey != "" {
+		updates["dismiss_key"] = dismissKey
+	}
+	result := database.DB.Model(&models.CollectionSuggestion{}).
+		Where("id = ? AND status = ?", id, models.CollectionSuggestionStatusPending).Updates(updates)
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrCollectionSuggestionNotPending
+	}
+	return nil
+}
+
+// confirmAppend 确认追加候选（D-PC38）：把新成员并入既有作品集，再按集号插入到合适位置。
+// 与新建确认一样保持「每步原子 + 整体可重入」：AddCollectionVideos 跳过已在集里的成员，
+// 重排只依赖当前顺序，任何一步失败后重试结果与一次成功等价。
+func (s *CollectionSuggestionService) confirmAppend(suggestion models.CollectionSuggestion, members []models.CollectionSuggestionMember, orderedVideoIDs []uint) (*CollectionDetail, error) {
+	ordered, err := validateSuggestionSelection(members, orderedVideoIDs, 1)
+	if err != nil {
+		return nil, err
+	}
+	targetID := *suggestion.TargetCollectionID
+	if err := database.DB.Select("id").First(&models.MediaCollection{}, targetID).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrCollectionSuggestionTargetGone
+		}
+		return nil, err
+	}
+	if err := s.collections.AddCollectionVideos(targetID, ordered); err != nil {
+		return nil, err
+	}
+	if err := s.reorderAppendedCollection(targetID, members, ordered); err != nil {
+		return nil, err
+	}
+	if err := s.markSuggestion(suggestion.ID, models.CollectionSuggestionStatusConfirmed, ""); err != nil {
+		return nil, fmt.Errorf("标记剧集候选已确认: %w", err)
+	}
+	return s.collections.GetCollectionDetail(targetID)
+}
+
+// reorderAppendedCollection 把新成员按 (季, 集) 插入作品集：放在第一个「同一系列且集号更大」的既有成员之前，
+// 找不到就放到末尾。无法解析集号的既有成员保持原位。
+func (s *CollectionSuggestionService) reorderAppendedCollection(collectionID uint, members []models.CollectionSuggestionMember, appended []uint) error {
+	detail, err := s.collections.GetCollectionDetail(collectionID)
+	if err != nil {
+		return err
+	}
+	appendedSet := idSet(appended)
+	type episodeKey struct {
+		ok              bool
+		season, episode int
+	}
+	memberKey := make(map[uint]episodeKey, len(members))
+	for _, member := range members {
+		memberKey[member.VideoID] = episodeKey{ok: true, season: intValueOrZero(member.Season), episode: intValueOrZero(member.Episode)}
+	}
+	series := ""
+	existing := make([]uint, 0, len(detail.Videos))
+	existingKey := make(map[uint]episodeKey, len(detail.Videos))
+	for _, item := range detail.Videos {
+		if _, isNew := appendedSet[item.Video.ID]; isNew {
+			continue
+		}
+		existing = append(existing, item.Video.ID)
+		parsed := ParseEpisodeFromFileName(fileNameStem(item.Video.Name))
+		if parsed.OK {
+			if series == "" {
+				series = parsed.NormalizedSeries
+			}
+			if parsed.NormalizedSeries == series {
+				existingKey[item.Video.ID] = episodeKey{ok: true, season: intValueOrZero(parsed.Season), episode: intValueOrZero(parsed.Episode)}
+			}
+		}
+	}
+	desired := existing
+	for _, videoID := range appendedInEpisodeOrder(members, appended) {
+		key := memberKey[videoID]
+		insertAt := len(desired)
+		for index, existingID := range desired {
+			other, hasKey := existingKey[existingID]
+			if !hasKey && memberKey[existingID].ok {
+				other, hasKey = memberKey[existingID], true // 本轮已插入的新成员参与比较。
+			}
+			if hasKey && (other.season > key.season || (other.season == key.season && other.episode > key.episode)) {
+				insertAt = index
+				break
+			}
+		}
+		desired = append(desired[:insertAt], append([]uint{videoID}, desired[insertAt:]...)...)
+	}
+	if len(desired) != len(detail.Videos) {
+		return ErrCollectionSuggestionMemberMismatch
+	}
+	return s.collections.ReorderCollectionVideos(collectionID, desired)
+}
+
+// appendedInEpisodeOrder 按候选成员的 (季, 集, 视频ID) 顺序返回本次追加的视频。
+func appendedInEpisodeOrder(members []models.CollectionSuggestionMember, appended []uint) []uint {
+	selected := idSet(appended)
+	sorted := make([]models.CollectionSuggestionMember, 0, len(appended))
+	for _, member := range members {
+		if _, ok := selected[member.VideoID]; ok {
+			sorted = append(sorted, member)
+		}
+	}
+	sortSuggestionMembers(sorted)
+	ids := make([]uint, 0, len(sorted))
+	for _, member := range sorted {
+		ids = append(ids, member.VideoID)
+	}
+	return ids
 }
 
 // resolveConfirmTargetCollection 同名活跃作品集存在就用它，否则新建。
@@ -531,11 +700,16 @@ func (s *CollectionSuggestionService) reorderConfirmedCollection(collectionID ui
 func (s *CollectionSuggestionService) Dismiss(suggestionID uint) error {
 	s.confirmMu.Lock()
 	defer s.confirmMu.Unlock()
-	if _, _, err := s.loadPendingSuggestion(suggestionID); err != nil {
+	suggestion, _, err := s.loadPendingSuggestion(suggestionID)
+	if err != nil {
 		return err
 	}
-	if err := database.DB.Model(&models.CollectionSuggestion{}).Where("id = ?", suggestionID).
-		Update("status", models.CollectionSuggestionStatusDismissed).Error; err != nil {
+	// 同时写下按系列的忽略键，之后同一系列新增集数也不再提（D-PC38）。
+	if err := s.markSuggestion(suggestionID, models.CollectionSuggestionStatusDismissed,
+		suggestionDismissKey(suggestion.ScanRoot, suggestion.NormalizedSeries)); err != nil {
+		if errors.Is(err, ErrCollectionSuggestionNotPending) {
+			return err
+		}
 		return fmt.Errorf("忽略剧集候选: %w", err)
 	}
 	return nil
@@ -559,7 +733,7 @@ func (s *CollectionSuggestionService) loadPendingSuggestion(suggestionID uint) (
 
 // validateSuggestionSelection 校验 orderedVideoIDs ⊆ 成员，并保留调用方顺序。
 // 传空视为"全选"，顺序取成员的集号顺序。
-func validateSuggestionSelection(members []models.CollectionSuggestionMember, orderedVideoIDs []uint) ([]uint, error) {
+func validateSuggestionSelection(members []models.CollectionSuggestionMember, orderedVideoIDs []uint, minMembers int) ([]uint, error) {
 	memberSet := make(map[uint]struct{}, len(members))
 	for _, member := range members {
 		memberSet[member.VideoID] = struct{}{}
@@ -569,7 +743,7 @@ func validateSuggestionSelection(members []models.CollectionSuggestionMember, or
 		for _, member := range members {
 			ordered = append(ordered, member.VideoID)
 		}
-		if len(ordered) < 2 {
+		if len(ordered) < minMembers {
 			return nil, ErrCollectionSuggestionMemberMismatch
 		}
 		return ordered, nil
@@ -586,7 +760,7 @@ func validateSuggestionSelection(members []models.CollectionSuggestionMember, or
 		seen[videoID] = struct{}{}
 		ordered = append(ordered, videoID)
 	}
-	if len(ordered) < 2 {
+	if len(ordered) < minMembers {
 		return nil, ErrCollectionSuggestionMemberMismatch
 	}
 	return ordered, nil
@@ -689,26 +863,76 @@ func fileNameStem(name string) string {
 	return strings.TrimSuffix(name, filepath.Ext(name))
 }
 
-// videoIDsInAnyCollection 返回已经在任何作品集里的视频（D-025）。
+// videoCollectionIndex 返回「视频 → 所属活跃作品集」（D-025）。一个视频在多个作品集里时取 ID 最小的。
 // 作品集软删除时它的关系行已经被删掉，所以这里不用再筛作品集状态。
-func videoIDsInAnyCollection(ctx context.Context) (map[uint]struct{}, error) {
-	var videoIDs []uint
+func videoCollectionIndex(ctx context.Context) (map[uint]uint, error) {
+	var relations []struct {
+		VideoID      uint
+		CollectionID uint
+	}
 	if err := database.DB.WithContext(ctx).Model(&models.CollectionVideo{}).
-		Distinct().Pluck("video_id", &videoIDs).Error; err != nil {
+		Select("video_id, MIN(collection_id) AS collection_id").
+		Group("video_id").Scan(&relations).Error; err != nil {
 		return nil, fmt.Errorf("读取作品集成员: %w", err)
 	}
-	return idSet(videoIDs), nil
+	index := make(map[uint]uint, len(relations))
+	for _, relation := range relations {
+		index[relation.VideoID] = relation.CollectionID
+	}
+	return index, nil
 }
 
-func dropCollectedMembers(members []models.CollectionSuggestionMember, collected map[uint]struct{}) []models.CollectionSuggestionMember {
-	kept := make([]models.CollectionSuggestionMember, 0, len(members))
+// splitSuggestionMembers 把系列分组里已入集的成员剔除，返回尚未入集的成员。
+// 已有成员属于某个作品集时（成员最多的那个，并列取 ID 小的）返回它作为追加目标（D-PC38）；
+// 没有成员入集时目标为 nil，按新建候选处理。
+func splitSuggestionMembers(members []models.CollectionSuggestionMember, collected map[uint]uint) ([]models.CollectionSuggestionMember, *uint) {
+	fresh := make([]models.CollectionSuggestionMember, 0, len(members))
+	perCollection := make(map[uint]int)
 	for _, member := range members {
-		if _, inCollection := collected[member.VideoID]; inCollection {
+		if collectionID, inCollection := collected[member.VideoID]; inCollection {
+			perCollection[collectionID]++
 			continue
 		}
-		kept = append(kept, member)
+		fresh = append(fresh, member)
 	}
-	return kept
+	var target uint
+	for collectionID, count := range perCollection {
+		if target == 0 || count > perCollection[target] || (count == perCollection[target] && collectionID < target) {
+			target = collectionID
+		}
+	}
+	if target == 0 {
+		return fresh, nil
+	}
+	return fresh, &target
+}
+
+// suggestionDismissKey 是忽略记忆键：hex(sha256(scanRoot + "\n" + normalizedSeries))。
+// 不用 NUL 分隔，因为 PG 的文本类型存不下 NUL；定长 64 位十六进制也避免 22001。
+func suggestionDismissKey(scanRoot, normalizedSeries string) string {
+	sum := sha256.Sum256([]byte(scanRoot + "\n" + normalizedSeries))
+	return hex.EncodeToString(sum[:])
+}
+
+// dismissedSuggestionKeys 读出所有已忽略候选写下的 dismiss_key；旧记录该列为空，不在其中。
+func dismissedSuggestionKeys(ctx context.Context) (map[string]struct{}, error) {
+	var keys []string
+	if err := database.DB.WithContext(ctx).Model(&models.CollectionSuggestion{}).
+		Where("status = ? AND dismiss_key <> ?", models.CollectionSuggestionStatusDismissed, "").
+		Distinct().Pluck("dismiss_key", &keys).Error; err != nil {
+		return nil, fmt.Errorf("读取已忽略的剧集系列: %w", err)
+	}
+	set := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		set[key] = struct{}{}
+	}
+	return set, nil
+}
+
+// suggestionAppendFingerprint 是追加候选的指纹：把目标作品集混进去，避免与同一批成员的新建候选撞唯一键。
+func suggestionAppendFingerprint(members []models.CollectionSuggestionMember, targetCollectionID uint) string {
+	sum := sha256.Sum256([]byte("append:" + strconv.FormatUint(uint64(targetCollectionID), 10) + ":" + suggestionFingerprint(members)))
+	return hex.EncodeToString(sum[:])
 }
 
 // sortSuggestionMembers 按 (season, episode, video_id) 排序。没有季信息的按第 0 季

@@ -341,7 +341,7 @@ func TestJellyfinDeleteMovesVideoToTrash(t *testing.T) {
 	if _, err := os.Stat(second.Path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("original should be gone: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(second.Path), DefaultTrashDirName, filepath.Base(second.Path))); err != nil {
+	if _, err := os.Stat(filepath.Join(filepath.Dir(second.Path), ".Trash", filepath.Base(second.Path))); err != nil {
 		t.Errorf("file should sit in the trash folder: %v", err)
 	}
 	var entries int64

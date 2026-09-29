@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 )
 
+// errScanRootUnavailable 标记「根离线、卷未挂载或根身份变化」这一类失败，
+// 与权限等读取失败区分开（决定失效原因是 offline_root 还是 read_error）。
+var errScanRootUnavailable = errors.New("扫描根不可用")
+
 // A missing file is deletable only while the same successfully scanned root is
 // still available. In particular, an ejected volume must not look like an empty
 // directory. Keep the snapshot from before traversal through final deletion.
@@ -47,7 +51,7 @@ func (g scanRemovalGuard) missing(path string, excluded []string) (bool, error) 
 		return false, nil
 	}
 	if err := scanVolumeAvailable(path); err != nil {
-		return false, err
+		return false, fmt.Errorf("%w: %w", errScanRootUnavailable, err)
 	}
 	available := false
 	for root := range g {
@@ -60,7 +64,7 @@ func (g scanRemovalGuard) missing(path string, excluded []string) (bool, error) 
 		}
 	}
 	if !available {
-		return false, fmt.Errorf("扫描根已离线或发生变化，保留记录: %s", path)
+		return false, fmt.Errorf("%w: 扫描根已离线或发生变化，保留记录: %s", errScanRootUnavailable, path)
 	}
 	_, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {

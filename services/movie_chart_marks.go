@@ -37,6 +37,10 @@ type MovieChartMarkResult struct {
 	Mark              string `json:"mark"`
 	WatchlistCreated  bool   `json:"watchlist_created"`
 	WatchlistConflict bool   `json:"watchlist_conflict"`
+
+	// watchedChange 记录这次动作让「已看」状态怎么变：1 = 刚变成已看，-1 = 刚离开
+	// 已看，0 = 没变。只给 MarkEntry 决定要不要回写关联视频用，不出现在绑定里。
+	watchedChange int
 }
 
 // ErrMovieChartEntryNotFound 表示要标记的豆瓣 ID 不在本地榜单缓存里。
@@ -75,6 +79,19 @@ func (s *MovieChartService) MarkEntry(doubanID, mark string) (*MovieChartMarkRes
 	if s == nil {
 		return nil, errors.New("年度榜单服务不可用")
 	}
+	result, err := s.markEntryLocked(doubanID, mark)
+	if err != nil {
+		return nil, err
+	}
+	// 回写放在释放 markMu **之后**：回写方若把状态再通知回来（观察者路径会取 markMu），
+	// 在锁内调用就是自锁。回写对象是关联视频，方法本身不触发观察者（D-PC52）。
+	if result.watchedChange != 0 {
+		s.syncLinkedVideosWatched(doubanID, result.watchedChange > 0)
+	}
+	return result, nil
+}
+
+func (s *MovieChartService) markEntryLocked(doubanID, mark string) (*MovieChartMarkResult, error) {
 	s.markMu.Lock()
 	defer s.markMu.Unlock()
 	return s.markEntry(doubanID, mark)
@@ -108,6 +125,7 @@ func (s *MovieChartService) markEntry(doubanID, mark string) (*MovieChartMarkRes
 		}
 		return &MovieChartMarkResult{Mark: mark}, nil
 	}
+	wasWatched := existing != nil && existing.Mark == models.MovieChartMarkWatched
 
 	// 改标记时**先**跑上一个标记的撤销副作用。失败就整个动作放弃：此刻标记还是
 	// 原样、片单条目还挂在它名下，用户重试一次即可。反过来（先落新标记再删片单）
@@ -129,7 +147,7 @@ func (s *MovieChartService) markEntry(doubanID, mark string) (*MovieChartMarkRes
 	// 超长片名会变成「标记记上了、片单没建成」——MarkEntry 直接返回校验错误。
 	title := movieChartTruncateTitle(entry.Title)
 	if mark == models.MovieChartMarkWant {
-		watchlistEntryID, result.WatchlistConflict, err = s.markEntryWatchlistLink(title)
+		watchlistEntryID, result.WatchlistConflict, err = s.markEntryWatchlistLink(title, doubanID)
 		if err != nil {
 			return nil, err
 		}
@@ -137,6 +155,12 @@ func (s *MovieChartService) markEntry(doubanID, mark string) (*MovieChartMarkRes
 	}
 	if err := s.upsertChartMark(entry, title, mark, watchlistEntryID); err != nil {
 		return nil, err
+	}
+	switch {
+	case mark == models.MovieChartMarkWatched && !wasWatched:
+		result.watchedChange = 1
+	case mark != models.MovieChartMarkWatched && wasWatched:
+		result.watchedChange = -1
 	}
 	return result, nil
 }
@@ -151,28 +175,46 @@ func (s *MovieChartService) ClearMark(doubanID string) error {
 	if s == nil {
 		return errors.New("年度榜单服务不可用")
 	}
+	wasWatched, err := s.clearMarkLocked(doubanID)
+	if err != nil {
+		return err
+	}
+	if wasWatched {
+		s.syncLinkedVideosWatched(doubanID, false)
+	}
+	return nil
+}
+
+func (s *MovieChartService) clearMarkLocked(doubanID string) (bool, error) {
 	s.markMu.Lock()
 	defer s.markMu.Unlock()
-	return s.clearMark(doubanID)
+	return s.clearMarkWasWatched(doubanID)
 }
 
 // clearMark 是 ClearMark 去掉串行化之后的内核。调用方必须持有 s.markMu，
 // 拆分的理由同 markEntry。
 func (s *MovieChartService) clearMark(doubanID string) error {
+	_, err := s.clearMarkWasWatched(doubanID)
+	return err
+}
+
+// clearMarkWasWatched 是 clearMark 的内核，另返回被撤销的标记是否是「已看」，
+// 供 ClearMark 决定要不要回写关联视频。调用方必须持有 s.markMu。
+func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
 	if s.watchlist == nil {
-		return errors.New("想看片单服务不可用")
+		return false, errors.New("想看片单服务不可用")
 	}
 	existing, err := s.loadChartMark(doubanID)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if existing == nil {
-		return nil
+		return false, nil
 	}
 	// 顺序同改标记：先删片单条目，再删标记行。删片单失败时标记原样留着，重试一次
 	// 就能接着往下走；倒过来则会留下一条再也没人认领的片单记录。
 	if err := s.undoWantWatchlistEntry(existing); err != nil {
-		return err
+		return false, err
 	}
 	// 删除带**条件更新守卫**：只删「我刚才读到的那个标记」。需求设计文档 §5 通篇
 	// 用条件更新而不是锁，这一句是同一个模式用在最后一处写入上。
@@ -193,14 +235,15 @@ func (s *MovieChartService) clearMark(doubanID string) error {
 		existing.ID, existing.Mark, existing.WatchlistEntryID).
 		Delete(&models.MovieChartMark{})
 	if result.Error != nil {
-		return fmt.Errorf("撤销 %s 的标记失败: %w", doubanID, result.Error)
+		return false, fmt.Errorf("撤销 %s 的标记失败: %w", doubanID, result.Error)
 	}
 	if result.RowsAffected == 0 {
 		// 影响 0 行＝读到之后有人改过它。丢弃并记日志、**不报错**，与详情写回撞上
 		// 认领守卫时的处置一致（movie_chart_refresh.go 的 writeBackDetail）。
 		log.Printf("[MovieChart] discard clear mark douban=%s reason=撤销守卫不成立（标记已被改写）", doubanID)
+		return false, nil
 	}
-	return nil
+	return existing.Mark == models.MovieChartMarkWatched, nil
 }
 
 // markEntryWatchlistLink 建「想看」对应的片单条目，返回 (片单条目 ID, 是否撞名)。
@@ -211,18 +254,22 @@ func (s *MovieChartService) clearMark(doubanID string) error {
 // 片单记录；反过来则会留下一个指向不存在片单 ID 的标记，而撤销会照着那个 ID 去删，
 // 删掉的可能是别人的行。
 //
-// 撞名（用户自己早先手输过同名同类型的条目）时**标记照记、但不记录归属**：返回
-// 的 ID 是 0，撤销时就不会去动那条记录。榜单没有权限删除用户手工维护的数据
-// （D-MC13）。
-func (s *MovieChartService) markEntryWatchlistLink(title string) (uint, bool, error) {
-	created, err := s.watchlist.Create(title, models.WatchlistKindMovie)
+// 复用（片单里已有这部片：同豆瓣 ID 的条目，或用户手输 / TMDB 补全过的同名电影，
+// 见 WatchlistService.EnsureChartEntry）时**标记照记、但不记录归属**：返回的 ID 是
+// 0，撤销时就不会去动那条记录。榜单没有权限删除用户手工维护的数据（D-MC13）。
+// 同名但豆瓣 ID 不同的两部电影不算复用，各建各的（D-PC52）。
+func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint, bool, error) {
+	entryID, created, err := s.watchlist.EnsureChartEntry(title, doubanID)
 	if err != nil {
 		if errors.Is(err, ErrWatchlistTitleExists) {
 			return 0, true, nil
 		}
 		return 0, false, fmt.Errorf("添加想看片单条目失败: %w", err)
 	}
-	return created.ID, false, nil
+	if !created {
+		return 0, true, nil
+	}
+	return entryID, false, nil
 }
 
 // undoWantWatchlistEntry 跑「想看」的撤销副作用：只删**本次由榜单创建**的那条片单
@@ -242,9 +289,9 @@ func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMa
 	if existing == nil || existing.Mark != models.MovieChartMarkWant || existing.WatchlistEntryID == 0 {
 		return nil
 	}
-	// 走 WatchlistService.Delete 而不是自己拼一条 DELETE：那条路径连带清理补全下来
-	// 的海报，绕过它会在 media-details/watchlist/<id>/ 下留孤儿文件。
-	if err := s.watchlist.Delete(existing.WatchlistEntryID); err != nil {
+	// 走 WatchlistService.DeleteForChart 而不是自己拼一条 DELETE：那条路径连带清理补全下来
+	// 的海报（与 Delete 的区别只是不去撤销标记：标记由本服务自己改写或删除），绕过它会在 media-details/watchlist/<id>/ 下留孤儿文件。
+	if err := s.watchlist.DeleteForChart(existing.WatchlistEntryID); err != nil {
 		if errors.Is(err, ErrWatchlistEntryNotFound) {
 			log.Printf("[MovieChart] undo want douban=%s watchlist_entry=%d 已不存在，按撤销成功处理",
 				existing.DoubanID, existing.WatchlistEntryID)

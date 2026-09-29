@@ -134,6 +134,32 @@ func (a *App) ApproveAITagCandidate(candidateID uint) (*services.AITaggingReview
 	return item, err
 }
 
+// ApproveAITagCandidates 批量批准（D-PC29）：逐项沿用单条批准的事务，返回逐项结果。
+func (a *App) ApproveAITagCandidates(ids []uint) services.AITagBatchResult {
+	result := a.aiTaggingService.ApproveCandidates(ids)
+	log.Printf("API ApproveAITagCandidates requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
+	return result
+}
+
+// ApproveAITagCandidatesByFilter 按筛选条件批准：服务端解析出候选 id 后逐项批准。
+func (a *App) ApproveAITagCandidatesByFilter(filter services.AITagCandidateFilter) (services.AITagBatchResult, error) {
+	result, err := a.aiTaggingService.ApproveCandidatesByFilter(filter)
+	log.Printf("API ApproveAITagCandidatesByFilter tag=%d min_confidence=%q query=%v requested=%d succeeded=%d failed=%d err=%v",
+		filter.TagID, filter.MinConfidence, strings.TrimSpace(filter.Query) != "", result.Requested, result.Succeeded, result.Failed, err)
+	return result, err
+}
+
+// RetryImageAITagging 显式重新分析单张图片：绕过证据指纹，对已有手工标签的图片同样生效（规则 5）。
+func (a *App) RetryImageAITagging(imageID uint) ([]models.ImageAITagCandidate, error) {
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return nil, fmt.Errorf("数据库未初始化")
+	}
+	candidates, err := svc.RetryImageAITagging(imageID)
+	log.Printf("API RetryImageAITagging image=%d err=%v", imageID, err)
+	return candidates, err
+}
+
 func (a *App) RejectAITagCandidate(candidateID uint) error {
 	err := a.aiTaggingService.RejectCandidate(candidateID)
 	log.Printf("API RejectAITagCandidate candidateID=%d err=%v", candidateID, err)

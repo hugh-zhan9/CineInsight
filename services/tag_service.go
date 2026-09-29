@@ -1,6 +1,7 @@
 package services
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -12,11 +13,27 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-type TagService struct{}
+type TagService struct {
+	// removeAvatar 由 App 接线时经 SetAvatarRemover 注入，撤销转换删除新建人物时清理头像文件。
+	removeAvatar func(relativePath string) error
+}
 
 // isAITagEligible deliberately ignores the legacy type and activation fields.
+// 「人物」分类的标签是人名，不进入 AI 词表（D-PC28 规则 6）。
 func isAITagEligible(tag models.Tag) bool {
-	return tag.AutomaticKind == "" && !tag.DeletedAt.IsValid()
+	return tag.AutomaticKind == "" && !tag.DeletedAt.IsValid() &&
+		strings.TrimSpace(tag.Namespace) != personTagNamespace
+}
+
+// aiVocabularyChanged 判断一次标签编辑是否改变了 AI 可用词表的内容（D-PC28 规则 4）：
+// 标签进出词表，或在词表内改了名字或分类。只改颜色不算。
+func aiVocabularyChanged(before, after models.Tag) bool {
+	eligibleBefore, eligibleAfter := isAITagEligible(before), isAITagEligible(after)
+	if !eligibleBefore && !eligibleAfter {
+		return false
+	}
+	return eligibleBefore != eligibleAfter || before.Name != after.Name ||
+		strings.TrimSpace(before.Namespace) != strings.TrimSpace(after.Namespace)
 }
 
 // aiTagMatcher preserves exact names when legacy labels normalize to the same word.
@@ -261,7 +278,8 @@ func resetAITaggingAfterLibraryChange(tx *gorm.DB) error {
 				WHERE tags.id = ai_tag_candidates.matched_tag_id
 					AND tags.deleted_at IS NULL
 					AND COALESCE(tags.automatic_kind, '') = ''
-			)`).
+					AND TRIM(COALESCE(tags.namespace, '')) <> ?
+			)`, personTagNamespace).
 		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 		return err
 	}
@@ -273,7 +291,8 @@ func resetAITaggingAfterLibraryChange(tx *gorm.DB) error {
 				WHERE tags.id = image_ai_tag_candidates.matched_tag_id
 					AND tags.deleted_at IS NULL
 					AND COALESCE(tags.automatic_kind, '') = ''
-			)`).
+					AND TRIM(COALESCE(tags.namespace, '')) <> ?
+			)`, personTagNamespace).
 		Update("status", models.AITagCandidateStatusSuperseded).Error; err != nil {
 		return err
 	}
@@ -324,13 +343,20 @@ func (s *TagService) CreateTagCategory(name string, tagIDs []uint) error {
 		if len(tags) != len(ids) {
 			return fmt.Errorf("标签不存在")
 		}
+		vocabularyChanged := false
 		for _, tag := range tags {
 			if tag.AutomaticKind != "" {
 				return fmt.Errorf("自动标签不能加入分类")
 			}
+			after := tag
+			after.Namespace = name
+			vocabularyChanged = vocabularyChanged || aiVocabularyChanged(tag, after)
 		}
 		if err := tx.Model(&models.Tag{}).Where("id IN ?", tagIDs).Update("namespace", name).Error; err != nil {
 			return err
+		}
+		if !vocabularyChanged {
+			return nil
 		}
 		return resetAITaggingAfterLibraryChange(tx)
 	})
@@ -375,11 +401,18 @@ func (s *TagService) changeTagCategory(oldName, newName string, deleting bool) e
 			}
 		}
 		ids := make([]uint, 0, len(tags))
+		vocabularyChanged := false
 		for _, tag := range tags {
 			ids = append(ids, tag.ID)
+			after := tag
+			after.Namespace = newName
+			vocabularyChanged = vocabularyChanged || aiVocabularyChanged(tag, after)
 		}
 		if err := tx.Model(&models.Tag{}).Where("id IN ?", ids).Update("namespace", newName).Error; err != nil {
 			return err
+		}
+		if !vocabularyChanged {
+			return nil
 		}
 		return resetAITaggingAfterLibraryChange(tx)
 	})
@@ -544,8 +577,18 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 		if err := tx.Where("tag_id IN ?", uniqueSources).Delete(&models.ShortFeedTagPreference{}).Error; err != nil {
 			return err
 		}
+		if err := rewriteSavedViewTagIDsTx(tx, uniqueSources, targetTagID); err != nil {
+			return err
+		}
 		if err := tx.Where("id IN ?", uniqueSources).Delete(&models.Tag{}).Error; err != nil {
 			return err
+		}
+		vocabularyChanged := isAITagEligible(target)
+		for _, source := range sources {
+			vocabularyChanged = vocabularyChanged || isAITagEligible(source)
+		}
+		if !vocabularyChanged {
+			return nil
 		}
 		return resetAITaggingAfterLibraryChange(tx)
 	})
@@ -588,8 +631,19 @@ func syncShortVideoTagsWithResult(tx *gorm.DB, result *ShortVideoTagSyncResult) 
 	if err != nil {
 		return err
 	}
-	_, _, err = syncAutomaticTagBulk(tx, lowTag, "v.is_stale = ? AND v.height > ? AND v.height < ?", false, 0, 1080)
+	_, _, err = syncAutomaticTagBulk(tx, lowTag, lowResolutionEligibility, false, 0, 0, 1920, 1920, 1080, 1080)
 	return err
+}
+
+// lowResolutionEligibility 与 isLowResolutionVideo 同义（D-PC36）：
+// w>0 && h>0 && max(w,h)<1920 && min(w,h)<1080，宽银幕 1080p（1920×800）不算低清。
+const lowResolutionEligibility = "v.is_stale = ? AND v.width > ? AND v.height > ? AND v.width < ? AND v.height < ? AND (v.width < ? OR v.height < ?)"
+
+func isLowResolutionVideo(width, height int) bool {
+	if width <= 0 || height <= 0 {
+		return false
+	}
+	return max(width, height) < 1920 && min(width, height) < 1080
 }
 
 // Sync one rule without changing rows for which the user recorded a decision.
@@ -639,7 +693,7 @@ func syncShortVideoTagForVideo(tx *gorm.DB, videoID uint) error {
 	if err := syncAutomaticTagForVideo(tx, &video, shortTag, !video.IsStale && video.Duration > 0 && video.Duration < maxDurationSeconds); err != nil {
 		return err
 	}
-	return syncAutomaticTagForVideo(tx, &video, lowTag, !video.IsStale && video.Height > 0 && video.Height < 1080)
+	return syncAutomaticTagForVideo(tx, &video, lowTag, !video.IsStale && isLowResolutionVideo(video.Width, video.Height))
 }
 
 func syncAutomaticTagForVideo(tx *gorm.DB, video *models.Video, tag *models.Tag, eligible bool) error {
@@ -798,6 +852,9 @@ func (s *TagService) createTag(name, color string, category *string) (*models.Ta
 		if err != nil {
 			return err
 		}
+		if !isAITagEligible(*tag) {
+			return nil
+		}
 		return resetAITaggingAfterLibraryChange(tx)
 	})
 	return tag, err
@@ -905,6 +962,14 @@ func (s *TagService) updateTag(id uint, name, color string, category *string) er
 				return err
 			}
 		}
+		after := current
+		after.Name = name
+		if category != nil {
+			after.Namespace = *category
+		}
+		if !aiVocabularyChanged(current, after) {
+			return nil
+		}
 		return resetAITaggingAfterLibraryChange(tx)
 	})
 }
@@ -926,6 +991,7 @@ func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
 	if tag.AutomaticKind != "" {
 		return fmt.Errorf("自动标签由应用维护，不能手动删除")
 	}
+	inVocabulary := isAITagEligible(*tag) // 删除会写 DeletedAt，必须在删除前判定。
 	if err := tx.Model(tag).Association("Videos").Clear(); err != nil {
 		return err
 	}
@@ -935,5 +1001,125 @@ func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
 	if err := tx.Delete(tag).Error; err != nil {
 		return err
 	}
+	// 人物分类的标签不在词表内；转人物走这里时由调用方显式重置。
+	if !inVocabulary {
+		return nil
+	}
 	return resetAITaggingAfterLibraryChange(tx)
+}
+
+// rewriteSavedViewTagIDsTx 把活跃保存视图 tag_ids_json 里的来源标签 ID 换成目标 ID 并去重
+// （D-PC35）。合并标签时与关系改写同一事务，保证桌面与 Jellyfin 的视图不会静默放宽或变空。
+func rewriteSavedViewTagIDsTx(tx *gorm.DB, sourceIDs []uint, targetID uint) error {
+	sources := make(map[uint]struct{}, len(sourceIDs))
+	for _, id := range sourceIDs {
+		sources[id] = struct{}{}
+	}
+	var views []models.SavedLibraryView
+	if err := tx.Where("tag_ids_json <> ?", "[]").Find(&views).Error; err != nil {
+		return err
+	}
+	for _, view := range views {
+		var ids []uint
+		if err := json.Unmarshal([]byte(view.TagIDsJSON), &ids); err != nil {
+			continue // 历史脏数据不由合并操作修复。
+		}
+		rewritten := make([]uint, 0, len(ids))
+		seen := make(map[uint]struct{}, len(ids))
+		changed := false
+		for _, id := range ids {
+			if _, isSource := sources[id]; isSource {
+				id = targetID
+				changed = true
+			}
+			if _, dup := seen[id]; dup {
+				changed = true
+				continue
+			}
+			seen[id] = struct{}{}
+			rewritten = append(rewritten, id)
+		}
+		if !changed {
+			continue
+		}
+		payload, err := json.Marshal(rewritten)
+		if err != nil {
+			return err
+		}
+		if err := tx.Model(&models.SavedLibraryView{}).Where("id = ?", view.ID).
+			Update("tag_ids_json", string(payload)).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// TagUsageCount 是删除与合并确认框要显示的影响范围（D-PC37）。
+type TagUsageCount struct {
+	Videos int64 `json:"videos"`
+	Images int64 `json:"images"`
+}
+
+// GetTagUsageCounts 返回每个标签仍可见的视频与图片数；未使用的标签也带 0 值。
+func (s *TagService) GetTagUsageCounts(ids []uint) (map[uint]TagUsageCount, error) {
+	result := make(map[uint]TagUsageCount, len(ids))
+	if len(ids) == 0 {
+		return result, nil
+	}
+	for _, id := range ids {
+		result[id] = TagUsageCount{}
+	}
+	type row struct {
+		TagID uint
+		Total int64
+	}
+	var videoRows, imageRows []row
+	if err := database.DB.Table("video_tags").
+		Select("video_tags.tag_id AS tag_id, COUNT(*) AS total").
+		Joins("JOIN videos ON videos.id = video_tags.video_id AND videos.deleted_at IS NULL").
+		Where("video_tags.tag_id IN ?", ids).Group("video_tags.tag_id").Scan(&videoRows).Error; err != nil {
+		return nil, err
+	}
+	if err := database.DB.Table("image_tags").
+		Select("image_tags.tag_id AS tag_id, COUNT(*) AS total").
+		Joins("JOIN images ON images.id = image_tags.image_id AND images.deleted_at IS NULL").
+		Where("image_tags.tag_id IN ?", ids).Group("image_tags.tag_id").Scan(&imageRows).Error; err != nil {
+		return nil, err
+	}
+	for _, r := range videoRows {
+		c := result[r.TagID]
+		c.Videos = r.Total
+		result[r.TagID] = c
+	}
+	for _, r := range imageRows {
+		c := result[r.TagID]
+		c.Images = r.Total
+		result[r.TagID] = c
+	}
+	return result, nil
+}
+
+// GetVideoAutomaticTagOverrides 列出该视频上所有人工覆盖（D-PC36）：present=true 是手动加上，
+// false 是手动去掉。前端据此显示「手动」角标与「恢复自动」入口。
+func (s *TagService) GetVideoAutomaticTagOverrides(videoID uint) ([]models.VideoAutomaticTagOverride, error) {
+	overrides := []models.VideoAutomaticTagOverride{}
+	err := database.DB.Where("video_id = ?", videoID).Order("automatic_kind").Find(&overrides).Error
+	return overrides, err
+}
+
+// ClearVideoAutomaticTagOverride 删除覆盖行并立即对该视频自动对账，让它重新跟随自动规则。
+func (s *TagService) ClearVideoAutomaticTagOverride(videoID uint, kind string) error {
+	if kind != shortVideoAutomaticTagKind && kind != lowResolutionAutomaticTagKind {
+		return fmt.Errorf("该自动标签不能恢复")
+	}
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.First(&models.Video{}, videoID).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("video_id = ? AND automatic_kind = ?", videoID, kind).
+			Delete(&models.VideoAutomaticTagOverride{}).Error; err != nil {
+			return err
+		}
+		return syncShortVideoTagForVideo(tx, videoID)
+	})
 }

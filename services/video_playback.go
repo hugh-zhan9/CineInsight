@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -119,6 +120,7 @@ func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) 
 	updates := map[string]interface{}{
 		"last_played_at": now,
 		"is_stale":       false,
+		"stale_reason":   "",
 	}
 	source := models.PlayEventSourceDesktopPlay
 	if random {
@@ -162,61 +164,143 @@ func (s *VideoService) buildPlaybackFailureResult(video *models.Video, reasonCod
 		ReasonCode:        reasonCode,
 		UserMessage:       fmt.Sprintf("播放失败: %s (%s)\n原因: %s", video.Name, video.Path, detail),
 	}
+	result.Reason = playbackFailureReason(reasonCode, false)
 	if shouldReconcile {
 		result.ReconcileResult = s.reconcileAfterPlaybackFailure(video, reasonCode)
+		result.Reason = result.ReconcileResult.Reason
+		if result.Reason == playbackReasonOfflineRoot {
+			result.UserMessage = fmt.Sprintf("播放失败: %s\n原因: 所在磁盘未连接，请连接后重试。", video.Name)
+		}
 	}
 	return result
 }
 
+// 播放失败原因（PlaybackAttemptResult.reason 的取值，D-PC11）。
+const (
+	playbackReasonOfflineRoot = "offline_root"
+	playbackReasonMissingFile = "missing_file"
+	playbackReasonError       = "error"
+)
+
+// VideoRelocatedEvent 是后台重定位成功后发出的 video-relocated 事件载荷（D-PC11）。
+type VideoRelocatedEvent struct {
+	VideoID uint   `json:"video_id"`
+	NewPath string `json:"new_path"`
+}
+
+var (
+	videoRelocatedNotifierMu sync.RWMutex
+	videoRelocatedNotifier   func(VideoRelocatedEvent)
+	// playbackRelocating 记录正在后台重定位的视频，同一条不并发起多个遍历。
+	playbackRelocating sync.Map
+)
+
+// SetVideoRelocatedNotifier 注入 video-relocated 事件的发送方。App 启动时设置为对
+// runtime.EventsEmit 的调用；未设置时后台重定位照常完成，只是不发事件。
+func SetVideoRelocatedNotifier(notifier func(VideoRelocatedEvent)) {
+	videoRelocatedNotifierMu.Lock()
+	videoRelocatedNotifier = notifier
+	videoRelocatedNotifierMu.Unlock()
+}
+
+func notifyVideoRelocated(event VideoRelocatedEvent) {
+	videoRelocatedNotifierMu.RLock()
+	notifier := videoRelocatedNotifier
+	videoRelocatedNotifierMu.RUnlock()
+	if notifier != nil {
+		notifier(event)
+	}
+}
+
+// playbackVideoRootOffline 判断视频所在的扫描根现在是否离线：卷未挂载，或包含该路径的
+// 扫描根都无法 Stat。找不到归属的根时按在线处理——那是「文件缺失」而不是「盘没插」。
+func playbackVideoRootOffline(path string) bool {
+	if scanVolumeAvailable(path) != nil {
+		return true
+	}
+	var dirs []models.ScanDirectory
+	if err := database.DB.Find(&dirs).Error; err != nil {
+		return false
+	}
+	containing := 0
+	for _, root := range cleanScanRoots(dirs) {
+		if !pathBelongsToAny(path, []string{root}) {
+			continue
+		}
+		containing++
+		if scanRootOnline(root) {
+			return false
+		}
+	}
+	return containing > 0
+}
+
+// playbackFailureReason 把失败归入 offline_root / missing_file / error。
+func playbackFailureReason(reasonCode string, offline bool) string {
+	switch {
+	case offline:
+		return playbackReasonOfflineRoot
+	case reasonCode == "file_missing" || reasonCode == "path_is_directory":
+		return playbackReasonMissingFile
+	default:
+		return playbackReasonError
+	}
+}
+
+// reconcileAfterPlaybackFailure 立即返回（LIB-13、PLAY-12）：先标记失效并写原因，
+// 磁盘离线时到此为止且不做重定位；根在线时把「是否被移动到别处」的遍历放到后台，
+// 找到后由 relocateInBackground 改路径并发 video-relocated 事件。
 func (s *VideoService) reconcileAfterPlaybackFailure(video *models.Video, reasonCode string) *PlaybackReconcileResult {
 	result := &PlaybackReconcileResult{
 		VideoID:    video.ID,
 		ReasonCode: reasonCode,
 	}
-
-	if err := database.DB.Model(video).Update("is_stale", true).Error; err == nil {
+	offline := playbackVideoRootOffline(video.Path)
+	reason := playbackFailureReason(reasonCode, offline)
+	result.Reason = reason
+	staleReason := models.StaleReasonMissingFile
+	if offline {
+		staleReason = models.StaleReasonOfflineRoot
+	}
+	if err := markVideoStale(video.ID, staleReason).Error; err == nil {
 		video.IsStale = true
+		video.StaleReason = staleReason
 		result.DidMarkStale = true
+	} else {
+		log.Printf("播放失败标记失效失败 id=%d err=%v", video.ID, err)
 	}
-
-	matchedPath, ambiguous, err := s.findRelocatedVideoCandidate(video)
-	if err != nil {
-		log.Printf("自动纠偏扫描失败 id=%d err=%v", video.ID, err)
-		result.NeedsReload = true
-		if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
-			updatedVideo.IsStale = true
-			result.UpdatedVideo = updatedVideo
-		}
-		return result
-	}
-
-	if ambiguous {
-		result.NeedsReload = true
-		if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
-			result.UpdatedVideo = updatedVideo
-		}
-		return result
-	}
-
-	if matchedPath != "" && matchedPath != video.Path {
-		if err := s.RelocateVideo(video.ID, matchedPath); err == nil {
-			_ = database.DB.Model(&models.Video{}).Where("id = ?", video.ID).Update("is_stale", false).Error
-			if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
-				updatedVideo.IsStale = false
-				result.DidRelocate = true
-				result.UpdatedVideo = updatedVideo
-				return result
-			}
-		}
-		result.NeedsReload = true
-		return result
-	}
-
-	result.NeedsReload = true
 	if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
 		result.UpdatedVideo = updatedVideo
+	} else {
+		result.NeedsReload = true
+	}
+	log.Printf("播放失败 id=%d code=%s reason=%s", video.ID, reasonCode, reason)
+	if !offline {
+		snapshot := *video
+		if _, running := playbackRelocating.LoadOrStore(video.ID, struct{}{}); !running {
+			go s.relocateInBackground(snapshot)
+		}
 	}
 	return result
+}
+
+// relocateInBackground 在所有在线扫描根里找同名同大小的唯一候选；找到就 RelocateVideo
+// （同时清失效）并通知前端。任何一步失败或结果不唯一都只记日志，记录保持失效。
+func (s *VideoService) relocateInBackground(video models.Video) {
+	defer playbackRelocating.Delete(video.ID)
+	matchedPath, ambiguous, err := s.findRelocatedVideoCandidate(&video)
+	if err != nil {
+		log.Printf("自动纠偏扫描失败 id=%d err=%v", video.ID, err)
+		return
+	}
+	if ambiguous || matchedPath == "" || matchedPath == video.Path {
+		return
+	}
+	if err := s.RelocateVideo(video.ID, matchedPath); err != nil {
+		log.Printf("自动纠偏失败 id=%d err=%v", video.ID, err)
+		return
+	}
+	notifyVideoRelocated(VideoRelocatedEvent{VideoID: video.ID, NewPath: matchedPath})
 }
 
 func (s *VideoService) findRelocatedVideoCandidate(video *models.Video) (string, bool, error) {
@@ -247,6 +331,10 @@ func (s *VideoService) findRelocatedVideoCandidate(video *models.Video) (string,
 	roots := append(primary, secondary...)
 	seenCandidates := map[string]struct{}{}
 	for _, root := range roots {
+		// 离线的根遍历只会失败并拖慢整个搜索；文件不可能在一个不在线的根里被找到。
+		if !scanRootOnline(root) {
+			continue
+		}
 		scannedFiles, err := s.ScanDirectoryWithInfo(root)
 		if err != nil {
 			return "", false, err

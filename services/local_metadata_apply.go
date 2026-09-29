@@ -50,7 +50,18 @@ type VideoArtworkData struct {
 	DataURL string `json:"data_url"`
 }
 
+// localMetadataBatchContext 是一次批量应用共享的状态（D-PC32）：同一批次里同一规范化来源名
+// 的 create_new 只创建一次人物，之后的视频复用同一 ID。只在事务提交后才登记新建的人物，
+// 回滚的视频不会把不存在的 ID 留给后面的视频。
+type localMetadataBatchContext struct {
+	createdPeople map[string]uint
+}
+
 func (s *LocalMetadataService) Apply(request LocalMetadataApplyRequest) (*LocalMetadataApplyResult, error) {
+	return s.apply(request, nil)
+}
+
+func (s *LocalMetadataService) apply(request LocalMetadataApplyRequest, batch *localMetadataBatchContext) (*LocalMetadataApplyResult, error) {
 	if request.VideoID == 0 || strings.TrimSpace(request.ManifestSHA256) == "" || strings.TrimSpace(request.CurrentSHA256) == "" {
 		return nil, errors.New("video, manifest and current fingerprints are required")
 	}
@@ -133,7 +144,9 @@ func (s *LocalMetadataService) Apply(request LocalMetadataApplyRequest) (*LocalM
 	}
 	appliedFields := make([]string, 0, len(selected))
 	oldArtwork := make([]string, 0, 2)
+	newlyCreatedPeople := make(map[string]uint)
 	err = database.Transaction(func(tx *gorm.DB) error {
+		clear(newlyCreatedPeople)
 		video, currentPeople, currentCollections, loadErr := loadLockedLocalMetadataCurrent(tx, request.VideoID)
 		if loadErr != nil {
 			return loadErr
@@ -174,7 +187,7 @@ func (s *LocalMetadataService) Apply(request LocalMetadataApplyRequest) (*LocalM
 			}
 		}
 		if _, ok := selected["people"]; ok {
-			ids, resolveErr := resolveLocalMetadataPeople(tx, diff.People.Source, peopleResolutions)
+			ids, resolveErr := resolveLocalMetadataPeople(tx, diff.People.Source, peopleResolutions, batch, newlyCreatedPeople)
 			if resolveErr != nil {
 				return resolveErr
 			}
@@ -195,21 +208,19 @@ func (s *LocalMetadataService) Apply(request LocalMetadataApplyRequest) (*LocalM
 			}
 			appliedFields = append(appliedFields, "collection")
 		}
-		now := time.Now()
-		return tx.Clauses(clause.OnConflict{
-			Columns: []clause.Column{{Name: "video_id"}},
-			DoUpdates: clause.Assignments(map[string]any{
-				"observed_manifest_sha256": request.ManifestSHA256, "applied_manifest_sha256": request.ManifestSHA256,
-				"status": LocalMetadataStateCurrent, "last_error_code": "", "last_error": "", "last_checked_at": now, "applied_at": now,
-			}),
-		}).Create(&models.VideoLocalMetadataState{
-			VideoID: request.VideoID, ObservedManifestSHA256: request.ManifestSHA256, AppliedManifestSHA256: request.ManifestSHA256,
-			Status: LocalMetadataStateCurrent, LastCheckedAt: now, AppliedAt: &now,
-		}).Error
+		return recordAppliedLocalMetadataManifest(tx, request.VideoID, request.ManifestSHA256, "")
 	})
 	if err != nil {
 		cleanupImports()
 		return nil, err
+	}
+	if batch != nil {
+		if batch.createdPeople == nil {
+			batch.createdPeople = make(map[string]uint)
+		}
+		for name, id := range newlyCreatedPeople {
+			batch.createdPeople[name] = id
+		}
 	}
 	for _, path := range oldArtwork {
 		s.removeUnreferencedVideoArtwork(path)
@@ -432,7 +443,41 @@ func loadLockedLocalMetadataCurrent(tx *gorm.DB, videoID uint) (models.Video, []
 	return video, currentPeople, currentCollections, nil
 }
 
-func resolveLocalMetadataPeople(tx *gorm.DB, candidates []LocalMetadataEntityCandidate, resolutions map[string]LocalMetadataResolution) ([]uint, error) {
+// recordAppliedLocalMetadataManifest 把 manifest 记为已应用并置状态为 current。Apply 与「NFO 写出后
+// 同步」共用这一处写入；sourceStat 非空时一并更新，让下次扫描的 size/mtime 快速判定命中。
+func recordAppliedLocalMetadataManifest(db *gorm.DB, videoID uint, manifest, sourceStat string) error {
+	now := time.Now()
+	assignments := map[string]any{
+		"observed_manifest_sha256": manifest, "applied_manifest_sha256": manifest,
+		"status": LocalMetadataStateCurrent, "last_error_code": "", "last_error": "", "last_checked_at": now, "applied_at": now,
+	}
+	if sourceStat != "" {
+		assignments["observed_source_stat"] = sourceStat
+	}
+	return db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "video_id"}},
+		DoUpdates: clause.Assignments(assignments),
+	}).Create(&models.VideoLocalMetadataState{
+		VideoID: videoID, ObservedManifestSHA256: manifest, ObservedSourceStat: sourceStat, AppliedManifestSHA256: manifest,
+		Status: LocalMetadataStateCurrent, LastCheckedAt: now, AppliedAt: &now,
+	}).Error
+}
+
+// syncLocalMetadataStateAfterExport 在 NFO 写出成功后重新读取磁盘上的来源，把当前 manifest 记为
+// 已应用，避免下次扫描把应用自己刚写出的 NFO 判成「本地资料有更新」（D-PC39）。
+func (s *LocalMetadataService) syncLocalMetadataStateAfterExport(videoID uint, videoPath string) error {
+	sources, err := discoverLocalMetadataSources(videoPath)
+	if err != nil || len(sources.manifest) == 0 {
+		return err
+	}
+	manifest, err := localMetadataManifest(sources.manifest)
+	if err != nil {
+		return err
+	}
+	return recordAppliedLocalMetadataManifest(database.DB, videoID, manifest, localMetadataSourceStat(sources.manifest))
+}
+
+func resolveLocalMetadataPeople(tx *gorm.DB, candidates []LocalMetadataEntityCandidate, resolutions map[string]LocalMetadataResolution, batch *localMetadataBatchContext, created map[string]uint) ([]uint, error) {
 	ids := make([]uint, 0, len(candidates))
 	for _, candidate := range candidates {
 		resolution, exists := resolutions[candidate.NormalizedName]
@@ -450,10 +495,26 @@ func resolveLocalMetadataPeople(tx *gorm.DB, candidates []LocalMetadataEntityCan
 			}
 			ids = append(ids, person.ID)
 		case "create_new":
+			// 同一批次同一规范化名字只创建一次：先复用批次内已创建（且仍存在）的人物，
+			// 本次调用里较早创建的同名人物同理。
+			if reusedID, ok := created[candidate.NormalizedName]; ok {
+				ids = append(ids, reusedID)
+				continue
+			}
+			if batch != nil {
+				if batchID, ok := batch.createdPeople[candidate.NormalizedName]; ok {
+					var existing models.Person
+					if tx.First(&existing, batchID).Error == nil {
+						ids = append(ids, existing.ID)
+						continue
+					}
+				}
+			}
 			person := models.Person{DisplayName: candidate.SourceName}
 			if err := tx.Create(&person).Error; err != nil {
 				return nil, err
 			}
+			created[candidate.NormalizedName] = person.ID
 			ids = append(ids, person.ID)
 		default:
 			return nil, fmt.Errorf("unsupported person resolution mode %q", resolution.Mode)

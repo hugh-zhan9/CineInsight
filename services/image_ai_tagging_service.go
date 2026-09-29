@@ -272,6 +272,12 @@ func (s *ImageAITaggingService) StopAndWait() {
 // 同一张图不允许并发重跑两次，批量走到正在重跑的图会跳过。
 // 重跑绕过证据指纹判定——用户显式要求重来，就该真的重来。
 func (s *ImageAITaggingService) RetagImage(imageID uint) ([]models.ImageAITagCandidate, error) {
+	return s.RetryImageAITagging(imageID)
+}
+
+// RetryImageAITagging 是用户显式的「重新分析」（D-PC28 规则 5）：绕过证据指纹，
+// 也跳过「已有人工标签」检查——人工标签只挡自动路径（规则 1），不挡用户主动要求。
+func (s *ImageAITaggingService) RetryImageAITagging(imageID uint) ([]models.ImageAITagCandidate, error) {
 	config, client, err := s.prepareClient()
 	if err != nil {
 		return nil, err
@@ -451,16 +457,20 @@ func (s *ImageAITaggingService) run(ctx context.Context, config AITaggingConfig,
 // imageAITaggingCodeSkipped 表示按 skip_reason 跳过，其余为已落库的 error_code。
 // force 为真时绕过证据指纹判定（单张重跑）。
 func (s *ImageAITaggingService) executeOne(ctx context.Context, config AITaggingConfig, client ImageTaggingClient, img models.Image, force bool) (string, int, error) {
-	// 已有手工标签的图片不打标：这类候选在审阅时本来就会被整体置 superseded，
-	// 发出去只是白花一次 AI 调用。
+	// 自动路径（force=false）不给已有手工标签的图片打标（规则 1）；显式重新分析
+	// （force=true，规则 5）跳过这项检查。
 	//
 	// 判定必须减去审批记录，不能像视频侧那样只看 hasNonAutomaticTags：AI 标签库里的标签
 	// AutomaticKind 全是空串，用户接受过一个候选之后这张图就会被误判成"手工打标"，
 	// 从此永久跳过——那正好废掉了「标签库变了就重新评估」这条改进。
-	manual, err := s.hasManualOfficialImageTags(ctx, img.ID)
-	if err != nil {
-		s.markTaggingFailed(img.ID, imageAITaggingErrorPersistFailed, err)
-		return imageAITaggingErrorPersistFailed, 0, err
+	manual := false
+	if !force {
+		var err error
+		manual, err = s.hasManualOfficialImageTags(ctx, img.ID)
+		if err != nil {
+			s.markTaggingFailed(img.ID, imageAITaggingErrorPersistFailed, err)
+			return imageAITaggingErrorPersistFailed, 0, err
+		}
 	}
 	if manual {
 		if err := s.markState(ctx, img.ID, models.AITaggingStateStatusSkipped, imageAITaggingSkipAlreadyTagged, "", ""); err != nil {
@@ -566,6 +576,8 @@ func (s *ImageAITaggingService) loadActiveLibraryTags(ctx context.Context) ([]mo
 	var tags []models.Tag
 	if err := s.db.WithContext(ctx).
 		Where("COALESCE(automatic_kind, '') = ''").
+		// 规则 6：「人物」分类的人名不进词表。
+		Where("TRIM(COALESCE(namespace, '')) <> ?", personTagNamespace).
 		Order("namespace asc, sort_order asc, id asc").
 		Find(&tags).Error; err != nil {
 		return nil, err

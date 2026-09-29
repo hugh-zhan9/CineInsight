@@ -8,12 +8,24 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+	"video-master/database"
+	"video-master/models"
+
+	"gorm.io/gorm"
 )
+
+// migrationStagingMarker 是暂存源文件名里固定的标记：.<名>.cineinsight-migrating-<hex>。
+// 清理入口据此拒绝删除不像暂存文件的路径。
+const migrationStagingMarker = ".cineinsight-migrating-"
+
+// linkFile 是迁移时切换文件用的硬链接；测试替换它来模拟跨文件系统（链接失败、回退到复制）。
+var linkFile = os.Link
 
 // moveFileNoReplace returns a non-empty retainedSource when a cross-filesystem
 // copy was required. The caller must keep it until it can safely surface or
@@ -47,7 +59,7 @@ func moveFileNoReplace(source, destination string) (retainedSource string, retur
 	}
 
 	if sourceInfo.Mode().IsRegular() {
-		if err := os.Link(staging, destination); err == nil {
+		if err := linkFile(staging, destination); err == nil {
 			if err := os.Remove(staging); err != nil {
 				cleanupErr := os.Remove(destination)
 				if cleanupErr != nil {
@@ -77,7 +89,7 @@ func migrationStagingPath(source string) (string, error) {
 		}
 		candidate := filepath.Join(
 			filepath.Dir(source),
-			fmt.Sprintf(".%s.cineinsight-migrating-%s", filepath.Base(source), hex.EncodeToString(randomBytes)),
+			fmt.Sprintf(".%s%s%s", filepath.Base(source), migrationStagingMarker, hex.EncodeToString(randomBytes)),
 		)
 		if exists, err := pathExists(candidate); err != nil {
 			return "", err
@@ -234,7 +246,7 @@ func copyDirectoryNoReplace(source, destination string) (returnErr error) {
 		if !entry.Type().IsRegular() {
 			return fmt.Errorf("不支持迁移特殊文件: %s", path)
 		}
-		if err := os.Link(path, target); err == nil {
+		if err := linkFile(path, target); err == nil {
 			return nil
 		} else if exists, checkErr := pathExists(target); checkErr != nil {
 			return checkErr
@@ -388,4 +400,133 @@ func directoryEntries(root string) (map[string]copiedEntry, error) {
 		return nil
 	})
 	return entries, err
+}
+
+// stagedSourceInput 是待登记的一个暂存源。Staged 为空表示这次没有产生暂存（同盘硬链接切换）。
+type stagedSourceInput struct {
+	Original string
+	Staged   string
+	Size     int64
+}
+
+// registerStagedSources 在调用方的事务里登记跨盘迁移留下的暂存源（D-PC05、LIB-11）。
+// 与路径切换同一事务：登记与数据库切换要么一起成功，要么一起回滚。
+func registerStagedSources(tx *gorm.DB, videoID *uint, inputs []stagedSourceInput) error {
+	for _, input := range inputs {
+		if input.Staged == "" {
+			continue
+		}
+		size := input.Size
+		if size == 0 {
+			if info, err := os.Lstat(input.Staged); err == nil && info.Mode().IsRegular() {
+				size = info.Size()
+			}
+		}
+		row := models.MigrationStagedSource{
+			VideoID:      videoID,
+			OriginalPath: input.Original,
+			StagedPath:   input.Staged,
+			Size:         size,
+			State:        models.MigrationStagedStatePending,
+		}
+		if err := tx.Create(&row).Error; err != nil {
+			return fmt.Errorf("登记迁移残留失败: %w", err)
+		}
+	}
+	return nil
+}
+
+// directoryFileBytes 累加目录下普通文件的字节数，用于登记暂存文件夹的占用；读不到的按 0 计。
+func directoryFileBytes(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !entry.Type().IsRegular() {
+			return nil
+		}
+		if info, infoErr := entry.Info(); infoErr == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// ListStagedSources 列出仍待处理的迁移残留，并逐行对账：文件已经不存在的行置为 cleaned
+// 且不再返回。状态转换用条件更新，并发时后到的一方是空操作。
+func (s *VideoService) ListStagedSources() ([]models.MigrationStagedSource, error) {
+	var rows []models.MigrationStagedSource
+	if err := database.DB.Where("state = ?", models.MigrationStagedStatePending).Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("读取迁移残留失败: %w", err)
+	}
+	pending := make([]models.MigrationStagedSource, 0, len(rows))
+	for _, row := range rows {
+		if _, err := os.Lstat(row.StagedPath); errors.Is(err, os.ErrNotExist) {
+			if markErr := markStagedSourceCleaned(row.ID); markErr != nil {
+				return nil, markErr
+			}
+			continue
+		}
+		pending = append(pending, row)
+	}
+	return pending, nil
+}
+
+func markStagedSourceCleaned(id uint) error {
+	now := time.Now()
+	if err := database.DB.Model(&models.MigrationStagedSource{}).
+		Where("id = ? AND state = ?", id, models.MigrationStagedStatePending).
+		Updates(map[string]interface{}{"state": models.MigrationStagedStateCleaned, "cleaned_at": &now}).Error; err != nil {
+		return fmt.Errorf("更新迁移残留状态失败: %w", err)
+	}
+	return nil
+}
+
+// StagedSourceFailure 是某条迁移残留清理失败的原因（中文，不含路径）。
+type StagedSourceFailure struct {
+	ID    uint   `json:"id"`
+	Error string `json:"error"`
+}
+
+// StagedSourceDeleteResult 汇总一次 DeleteStagedSources。
+type StagedSourceDeleteResult struct {
+	Cleaned int                   `json:"cleaned"`
+	Failed  []StagedSourceFailure `json:"failed"`
+}
+
+// DeleteStagedSources 永久删除指定的迁移残留：os.Remove（暂存文件夹用 RemoveAll）成功后置 cleaned。
+// 文件已经不存在按已清理处理。不是 pending 的 ID 与不存在的 ID 被忽略。
+// 名字不带暂存标记的路径一律拒绝——表里的路径来自数据库，删除前必须确认它确实是暂存文件。
+func (s *VideoService) DeleteStagedSources(ids []uint) (*StagedSourceDeleteResult, error) {
+	result := &StagedSourceDeleteResult{Failed: make([]StagedSourceFailure, 0)}
+	if len(ids) == 0 {
+		return result, nil
+	}
+	var rows []models.MigrationStagedSource
+	if err := database.DB.Where("id IN ? AND state = ?", ids, models.MigrationStagedStatePending).Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("读取迁移残留失败: %w", err)
+	}
+	for _, row := range rows {
+		if !strings.Contains(filepath.Base(row.StagedPath), migrationStagingMarker) {
+			result.Failed = append(result.Failed, StagedSourceFailure{ID: row.ID, Error: "记录的路径不是迁移暂存文件，已拒绝删除"})
+			continue
+		}
+		info, err := os.Lstat(row.StagedPath)
+		if err == nil {
+			if info.IsDir() {
+				err = os.RemoveAll(row.StagedPath)
+			} else {
+				err = os.Remove(row.StagedPath)
+			}
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			result.Failed = append(result.Failed, StagedSourceFailure{ID: row.ID, Error: "删除失败，请检查文件权限或是否被占用"})
+			log.Printf("删除迁移残留失败 id=%d err=%v", row.ID, err)
+			continue
+		}
+		if err := markStagedSourceCleaned(row.ID); err != nil {
+			return result, err
+		}
+		result.Cleaned++
+	}
+	return result, nil
 }

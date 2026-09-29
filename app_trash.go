@@ -1,0 +1,123 @@
+package main
+
+import (
+	"log"
+	"strings"
+	"video-master/services"
+
+	"github.com/wailsapp/wails/v2/pkg/runtime"
+)
+
+// 回收站中心的 App 层入口（P-010，详细设计 §2.1 / §2.4 / §9.4）。
+//
+// 旧的 ListTrashEntries / RestoreTrashEntry / ListImageTrashEntries / RestoreImageTrashEntry 仍保留
+// （前端调用点全部改完之前，见 Planning Handoff），由 P-040 统一删除；这里的方法是新的统一接口，
+// 视频与图片共用，用 kind（video / image）区分。
+
+// trashCenter 每次调用现建：TrashService 除批量取消登记（包级）外没有状态。
+func (a *App) trashCenter() *services.TrashService {
+	return services.NewTrashCenter(a.videoService, a.imageService)
+}
+
+// batchDeleteOptions 组装批量删除的可选参数。requestID 非空时每处理一项发一次
+// batch-delete-progress {request_id, done, total}，并可被 CancelBatchDelete 取消。
+func (a *App) batchDeleteOptions(requestID string) services.BatchDeleteOptions {
+	requestID = strings.TrimSpace(requestID)
+	options := services.BatchDeleteOptions{RequestID: requestID}
+	if requestID != "" {
+		options.Progress = func(done, total int) {
+			if a.ctx == nil {
+				return
+			}
+			runtime.EventsEmit(a.ctx, "batch-delete-progress", struct {
+				RequestID string `json:"request_id"`
+				Done      int    `json:"done"`
+				Total     int    `json:"total"`
+			}{requestID, done, total})
+		}
+	}
+	return options
+}
+
+// CancelBatchDelete 取消进行中的批量删除：在两项之间生效，已完成的项保留，未处理的项计为 cancelled。
+func (a *App) CancelBatchDelete(requestID string) bool {
+	cancelled := services.CancelBatchDelete(requestID)
+	log.Printf("API CancelBatchDelete requestID=%s found=%v", requestID, cancelled)
+	return cancelled
+}
+
+// ListTrashEntriesPage 分页列出回收站条目（游标分页，当页对账 file_gone）。
+func (a *App) ListTrashEntriesPage(filter services.TrashFilter) (*services.TrashPage, error) {
+	page, err := a.trashCenter().ListTrashEntries(filter)
+	if err != nil {
+		log.Printf("API ListTrashEntriesPage kind=%s err=%v", filter.Kind, err)
+		return nil, err
+	}
+	log.Printf("API ListTrashEntriesPage kind=%s result=%d hasMore=%v", filter.Kind, len(page.Items), page.HasMore)
+	return page, nil
+}
+
+// GetTrashUsage 返回回收站用量（视频、图片、迁移残留）。
+func (a *App) GetTrashUsage() (*services.TrashUsage, error) {
+	usage, err := a.trashCenter().GetTrashUsage()
+	log.Printf("API GetTrashUsage err=%v", err)
+	return usage, err
+}
+
+// RestoreTrashEntries 按条目 ID 逐项恢复。
+func (a *App) RestoreTrashEntries(kind string, ids []uint) (*services.BatchResult, error) {
+	result, err := a.trashCenter().RestoreTrashEntries(kind, ids)
+	a.afterTrashChange(kind, result)
+	logTrashResult("RestoreTrashEntries", kind, result, err)
+	return result, err
+}
+
+// RestoreTrashBatch 恢复同一次删除操作留下的全部条目（撤销本次删除）。
+func (a *App) RestoreTrashBatch(kind, batchID string) (*services.BatchResult, error) {
+	result, err := a.trashCenter().RestoreTrashBatch(kind, batchID)
+	a.afterTrashChange(kind, result)
+	logTrashResult("RestoreTrashBatch", kind, result, err)
+	return result, err
+}
+
+// PurgeTrashEntries 清除废纸篓里的文件并硬删记录。
+func (a *App) PurgeTrashEntries(kind string, ids []uint) (*services.BatchResult, error) {
+	result, err := a.trashCenter().PurgeTrashEntries(kind, ids)
+	logTrashResult("PurgeTrashEntries", kind, result, err)
+	return result, err
+}
+
+// RemoveGoneTrashEntries 移除「废纸篓文件已被清除」的条目。
+func (a *App) RemoveGoneTrashEntries(kind string, ids []uint) (*services.BatchResult, error) {
+	result, err := a.trashCenter().RemoveGoneTrashEntries(kind, ids)
+	logTrashResult("RemoveGoneTrashEntries", kind, result, err)
+	return result, err
+}
+
+// TrashStagedSources 把迁移残留的暂存源文件移入系统废纸篓。
+func (a *App) TrashStagedSources(ids []uint) *services.BatchResult {
+	result := a.trashCenter().TrashStagedSources(ids)
+	log.Printf("API TrashStagedSources requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
+	return result
+}
+
+// afterTrashChange 恢复成功后让清理分析结果失效（与旧的单项恢复方法一致）。
+func (a *App) afterTrashChange(kind string, result *services.BatchResult) {
+	if result == nil || result.Succeeded == 0 {
+		return
+	}
+	if kind == "video" && a.cleanupService != nil {
+		a.cleanupService.InvalidateAnalysis()
+	}
+	if kind == "image" && a.imageCleanupService != nil {
+		a.imageCleanupService.InvalidateAnalysis()
+	}
+}
+
+func logTrashResult(method, kind string, result *services.BatchResult, err error) {
+	if result == nil {
+		log.Printf("API %s kind=%s err=%v", method, kind, err)
+		return
+	}
+	log.Printf("API %s kind=%s requested=%d succeeded=%d failed=%d err=%v", method, kind, result.Requested, result.Succeeded, result.Failed, err)
+}

@@ -3,16 +3,19 @@ package services
 import "video-master/models"
 
 type PlaybackAttemptResult struct {
-	Video             *models.Video            `json:"video,omitempty"`
-	DispatchSucceeded bool                     `json:"dispatch_succeeded"`
-	UserMessage       string                   `json:"user_message,omitempty"`
-	ReasonCode        string                   `json:"reason_code,omitempty"`
-	SelectionReason   string                   `json:"selection_reason,omitempty"`
-	ReconcileResult   *PlaybackReconcileResult `json:"reconcile_result,omitempty"`
+	Video             *models.Video `json:"video,omitempty"`
+	DispatchSucceeded bool          `json:"dispatch_succeeded"`
+	UserMessage       string        `json:"user_message,omitempty"`
+	ReasonCode        string        `json:"reason_code,omitempty"`
+	// Reason 是失败原因的分类：offline_root / missing_file / error（D-PC11）。
+	Reason          string                   `json:"reason,omitempty"`
+	SelectionReason string                   `json:"selection_reason,omitempty"`
+	ReconcileResult *PlaybackReconcileResult `json:"reconcile_result,omitempty"`
 }
 
 type PlaybackReconcileResult struct {
 	VideoID            uint          `json:"video_id"`
+	Reason             string        `json:"reason,omitempty"`
 	DidMarkStale       bool          `json:"did_mark_stale"`
 	DidRelocate        bool          `json:"did_relocate"`
 	DidRefreshMetadata bool          `json:"did_refresh_metadata"`

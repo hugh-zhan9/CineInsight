@@ -122,6 +122,43 @@ func (a *App) ListWatchedMovies() ([]services.WatchedMovieYearGroup, error) {
 	return a.movieChartService().ListWatched()
 }
 
+// LinkMovieToVideo 把榜单条目（豆瓣 ID）关联到一个片库视频（D-PC52）。重复关联幂等。
+func (a *App) LinkMovieToVideo(doubanID string, videoID uint) error {
+	service := a.movieChartService()
+	if service == nil {
+		return errors.New("年度榜单服务不可用")
+	}
+	return service.LinkMovieToVideo(doubanID, videoID)
+}
+
+// UnlinkMovieVideo 解除关联，没有这条关联时幂等返回 nil。
+func (a *App) UnlinkMovieVideo(doubanID string, videoID uint) error {
+	service := a.movieChartService()
+	if service == nil {
+		return errors.New("年度榜单服务不可用")
+	}
+	return service.UnlinkMovieVideo(doubanID, videoID)
+}
+
+// ListMovieVideoLinks 返回某个豆瓣 ID 已关联的片库视频，「在片库打开」用。
+func (a *App) ListMovieVideoLinks(doubanID string) ([]services.LinkedVideoView, error) {
+	service := a.movieChartService()
+	if service == nil {
+		return nil, errors.New("年度榜单服务不可用")
+	}
+	return service.ListMovieVideoLinks(doubanID)
+}
+
+// SuggestLibraryMatches 给出「片库中可能已有」的建议（最多 5 条，只读、不出网）。
+// year 为 0 表示年份未知。片单条目与观影记录卡片共用这一个入口。
+func (a *App) SuggestLibraryMatches(title string, year int) ([]services.LibraryMatchSuggestion, error) {
+	service := a.movieChartService()
+	if service == nil {
+		return nil, errors.New("年度榜单服务不可用")
+	}
+	return service.SuggestLibraryMatches(title, year)
+}
+
 // ListMovieChartYears 返回年份下拉的选项：本地有缓存的年份 ∪ {当前年}，倒序。
 func (a *App) ListMovieChartYears() ([]int, error) {
 	return a.movieChartService().ListYears()

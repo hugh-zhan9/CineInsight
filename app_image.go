@@ -369,6 +369,67 @@ func (a *App) BatchDeleteImagesInDirectory(directory string, deleteFile bool) (*
 	return result, nil
 }
 
+// DeleteImagesWithResult 是带单项结果码与 batch_id 的批量删除。requestID 可选：非空时逐项发
+// batch-delete-progress 事件，并可被 CancelBatchDelete 取消。deleteFile=false 只删记录并建 record_only 条目。
+func (a *App) DeleteImagesWithResult(imageIDs []uint, deleteFile bool, requestID string) *services.BatchResult {
+	result := a.imageService.DeleteImagesDetailed(imageIDs, deleteFile, a.batchDeleteOptions(requestID))
+	log.Printf("API DeleteImagesWithResult requested=%d succeeded=%d failed=%d cancelled=%d deleteFile=%v", result.Requested, result.Succeeded, result.Failed, result.Cancelled, deleteFile)
+	if result.Succeeded > 0 && a.imageCleanupService != nil {
+		a.imageCleanupService.InvalidateAnalysis()
+	}
+	return result
+}
+
+// DeleteImagesInDirectoryWithResult 删除某个文件夹直属的全部图片，返回单项结果码与 batch_id。
+func (a *App) DeleteImagesInDirectoryWithResult(directory string, deleteFile bool, requestID string) (*services.BatchResult, error) {
+	result, err := a.imageService.DeleteImagesInDirectoryDetailed(directory, deleteFile, a.batchDeleteOptions(requestID))
+	if err != nil {
+		log.Printf("API DeleteImagesInDirectoryWithResult directory=%s err=%v", directory, err)
+		return nil, err
+	}
+	log.Printf("API DeleteImagesInDirectoryWithResult directory=%s requested=%d succeeded=%d failed=%d cancelled=%d deleteFile=%v",
+		directory, result.Requested, result.Succeeded, result.Failed, result.Cancelled, deleteFile)
+	if result.Succeeded > 0 && a.imageCleanupService != nil {
+		a.imageCleanupService.InvalidateAnalysis()
+	}
+	return result, nil
+}
+
+// PermanentlyDeleteImages 永久删除图片文件与记录，只用于 trash_unsupported 之后用户明确选择「永久删除」。
+func (a *App) PermanentlyDeleteImages(imageIDs []uint) *services.BatchResult {
+	result := a.imageService.PermanentlyDeleteImages(imageIDs)
+	log.Printf("API PermanentlyDeleteImages requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
+	if result.Succeeded > 0 && a.imageCleanupService != nil {
+		a.imageCleanupService.InvalidateAnalysis()
+	}
+	return result
+}
+
+// ListHiddenImages 分页列出被扫描器隐藏的图片，附原因（offline_root / missing_file / removed_root）。
+func (a *App) ListHiddenImages(cursor uint, limit int) (*services.HiddenImagePage, error) {
+	page, err := a.imageService.ListHiddenImages(cursor, limit)
+	if err != nil {
+		log.Printf("API ListHiddenImages cursor=%d err=%v", cursor, err)
+		return nil, err
+	}
+	log.Printf("API ListHiddenImages cursor=%d result=%d hasMore=%v", cursor, len(page.Items), page.HasMore)
+	return page, nil
+}
+
+// RecheckImages 重新检查被隐藏的图片（图片侧没有窄扫描，等价于一次全量图片目录对账）。
+func (a *App) RecheckImages(imageIDs []uint) (*services.ImageScanResult, error) {
+	result, err := a.imageService.RecheckImages(imageIDs)
+	if err != nil {
+		log.Printf("API RecheckImages requested=%d err=%v", len(imageIDs), err)
+		return nil, err
+	}
+	log.Printf("API RecheckImages requested=%d added=%d restored=%d removed=%d errors=%d", len(imageIDs), result.Added, result.Restored, result.Removed, len(result.Errors))
+	if a.imageCleanupService != nil {
+		a.imageCleanupService.InvalidateAnalysis()
+	}
+	return result, nil
+}
+
 // OpenImageDirectory 在系统文件管理器中打开图片目录。
 func (a *App) OpenImageDirectory(directory string) error {
 	err := a.imageService.OpenImageDirectory(directory)

@@ -540,10 +540,19 @@ func (s *ImageService) addImage(path string) (*models.Image, error) {
 		return nil, fmt.Errorf("文件不存在: %w", err)
 	}
 
+	// 活跃记录一律算已存在；同路径只剩软删行时按身份判定（D-PC03，与视频侧同一张表）。
 	var existingImage models.Image
-	if err := database.DB.Unscoped().Where("path = ?", path).First(&existingImage).Error; err == nil {
+	if result := database.DB.Where("path = ?", path).Limit(1).Find(&existingImage); result.Error != nil {
+		return nil, result.Error
+	} else if result.RowsAffected == 1 {
 		log.Printf("跳过已存在图片 path=%s", path)
 		return &existingImage, ErrImageExists
+	}
+	if row, skipErr, err := softDeletedImagePathSkip(path, info); err != nil {
+		return nil, err
+	} else if skipErr != nil {
+		log.Printf("跳过同路径的已删除图片 path=%s", path)
+		return row, skipErr
 	}
 
 	image := &models.Image{
@@ -658,29 +667,12 @@ func (s *ImageService) markMissingImageStale(id uint) error {
 	return database.DB.Model(&models.Image{}).Where("id = ?", id).Update("is_stale", true).Error
 }
 
-// deleteImageRecord is an intentional user deletion. It explicitly clears the
-// scanner recovery marker so a later scan cannot undo that choice.
-func (s *ImageService) deleteImageRecord(id uint) error {
-	return database.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Model(&models.Image{}).Where("id = ?", id).Updates(map[string]interface{}{"is_stale": false, "deleted_by": "user"}).Error; err != nil {
-			return err
-		}
-		result := tx.Delete(&models.Image{}, id)
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return fmt.Errorf("图片记录不存在或已删除: %d", id)
-		}
-		return nil
-	})
-}
-
 // ===== 回收站（镜像视频侧四态状态机 pending_move/deleted/restoring/rollback，设计 4.5 / D-008） =====
 
-// DeleteImage 删除图片。deleteFile=false 仅软删记录（不建回收站条目、不动文件）；
-// deleteFile=true 走完整状态机：pending_move 条目 → 移文件入回收站 → 指纹校验 →
-// 事务内 CAS 置 deleted + 软删图片记录。
+// DeleteImage 删除图片。deleteFile=false 软删记录并建 record_only 条目（文件不动、记录身份，
+// 之后同一文件不会被扫描重新收录，可在回收站「允许重新收录」）；deleteFile=true 走完整状态机：
+// pending_move 条目 → 移入系统废纸篓 → 身份校验 → 事务内 CAS 置 deleted + 软删图片记录。
+// 所在磁盘不支持废纸篓时返回 ErrTrashUnsupportedVolume，记录与条目保持原状。
 func (s *ImageService) DeleteImage(id uint, deleteFile bool) error {
 	imagePathMutationMu.RLock()
 	defer imagePathMutationMu.RUnlock()
@@ -690,8 +682,12 @@ func (s *ImageService) DeleteImage(id uint, deleteFile bool) error {
 // BatchDeleteImages 逐张删除并按项记录失败原因，无顶层 error。
 func (s *ImageService) BatchDeleteImages(imageIDs []uint, deleteFile bool) *BatchImageOperationResult {
 	result := newBatchImageOperationResult(imageIDs)
+	batchID := newDeleteBatchID()
 	for _, imageID := range imageIDs {
-		result.record(imageID, s.DeleteImage(imageID, deleteFile))
+		imagePathMutationMu.RLock()
+		_, err := s.deleteImageBatchItem(imageID, deleteFile, batchID)
+		imagePathMutationMu.RUnlock()
+		result.record(imageID, err)
 	}
 	return result
 }
@@ -700,6 +696,15 @@ func (s *ImageService) BatchDeleteImages(imageIDs []uint, deleteFile bool) *Batc
 // 直属的图片，不递归子目录——文件夹视图本来就是按直属目录分组的，递归会删掉用户
 // 在界面上根本没看到的东西。磁盘上的目录本身不动。
 func (s *ImageService) BatchDeleteImagesInDirectory(directory string, deleteFile bool) (*BatchImageOperationResult, error) {
+	ids, err := s.imageIDsInDirectory(directory)
+	if err != nil {
+		return nil, err
+	}
+	return s.BatchDeleteImages(ids, deleteFile), nil
+}
+
+// imageIDsInDirectory 返回目录直属的活跃图片 ID；目录为空或没有图片时报错。
+func (s *ImageService) imageIDsInDirectory(directory string) ([]uint, error) {
 	cleaned := strings.TrimSpace(directory)
 	if cleaned == "" {
 		return nil, fmt.Errorf("目录为空")
@@ -714,7 +719,7 @@ func (s *ImageService) BatchDeleteImagesInDirectory(directory string, deleteFile
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("目录里没有可删除的图片：%s", cleaned)
 	}
-	return s.BatchDeleteImages(ids, deleteFile), nil
+	return ids, nil
 }
 
 // OpenImageDirectory 打开图片目录。只接受库里确实存在图片的目录，
@@ -807,14 +812,25 @@ func (s *ImageService) ReconcileImageTrashEntries() error {
 }
 
 func (s *ImageService) deleteImage(id uint, deleteFile bool) error {
+	_, err := s.deleteImageBatchItem(id, deleteFile, newDeleteBatchID())
+	return err
+}
+
+// deleteImageBatchItem 是带批次标识与结果码的单项删除，语义与 deleteVideoRecordBatch 一致：
+// deleteFile=false 建 record_only 条目（记录身份，不再是「不建条目」）；deleteFile=true 且文件在
+// 走系统废纸篓；文件不在则 mode=missing。建条目的每条路径都写非空 mode 与 delete_batch_id。
+func (s *ImageService) deleteImageBatchItem(id uint, deleteFile bool, batchID string) (string, error) {
+	if batchID == "" {
+		batchID = newDeleteBatchID()
+	}
 	var image models.Image
 	if err := database.DB.First(&image, id).Error; err != nil {
-		return err
+		return "", err
 	}
 	var existingEntry models.ImageTrashEntry
 	existingResult := database.DB.Where("image_id = ?", image.ID).Limit(1).Find(&existingEntry)
 	if existingResult.Error != nil {
-		return fmt.Errorf("检查既有回收站条目失败: %w", existingResult.Error)
+		return "", fmt.Errorf("检查既有回收站条目失败: %w", existingResult.Error)
 	}
 	if existingResult.RowsAffected == 1 {
 		switch existingEntry.State {
@@ -822,89 +838,148 @@ func (s *ImageService) deleteImage(id uint, deleteFile bool) error {
 			completed, reconcileErr := s.reconcileImagePendingDelete(&existingEntry)
 			if reconcileErr != nil {
 				_ = recordImageTrashEntryError(existingEntry.ID, reconcileErr)
-				return fmt.Errorf("处理上次中断删除失败: %w", reconcileErr)
+				return "", fmt.Errorf("处理上次中断删除失败: %w", reconcileErr)
 			}
 			if completed {
-				return nil
+				return TrashResultOK, nil
 			}
 		case trashStateRollback:
 			if reconcileErr := reconcileImageTrashRollback(&existingEntry); reconcileErr != nil {
 				_ = recordImageTrashEntryError(existingEntry.ID, reconcileErr)
-				return fmt.Errorf("完成上次删除回滚失败: %w", reconcileErr)
+				return "", fmt.Errorf("完成上次删除回滚失败: %w", reconcileErr)
 			}
 		default:
-			return fmt.Errorf("图片已有回收站条目，不能重复删除: %d", existingEntry.ID)
+			return "", fmt.Errorf("图片已有回收站条目，不能重复删除: %d", existingEntry.ID)
 		}
 	}
 
-	if !deleteFile {
-		return s.deleteImageRecord(image.ID)
-	}
-
 	entry := models.ImageTrashEntry{
-		DeletedBy:    "user",
-		ImageID:      image.ID,
-		ImageName:    image.Name,
-		OriginalPath: image.Path,
-		State:        trashStateDeleted,
+		DeletedBy:     "user",
+		FileSize:      image.Size,
+		ImageID:       image.ID,
+		ImageName:     image.Name,
+		OriginalPath:  image.Path,
+		State:         trashStateDeleted,
+		DeleteBatchID: batchID,
 	}
 	sourceInfo, err := os.Stat(image.Path)
 	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("检查待删除文件失败: %w", err)
+		return "", fmt.Errorf("检查待删除文件失败: %w", err)
 	}
 	if err == nil {
 		if sourceInfo.IsDir() {
-			return fmt.Errorf("图片路径不是文件: %s", image.Path)
+			return "", fmt.Errorf("图片路径不是文件: %s", image.Path)
 		}
 		entry.FileSize = sourceInfo.Size()
 		entry.FileModTime = sourceInfo.ModTime().UnixNano()
 		entry.FileIdentity = stableFileIdentity(sourceInfo)
-		entry.FileSHA256, err = fileSHA256Hex(image.Path)
-		if err != nil {
-			return fmt.Errorf("计算待删除文件摘要失败: %w", err)
-		}
+	} else {
+		sourceInfo = nil
 	}
 
-	// 源文件本就不存在（或已在回收站内）时不移动文件，仅落条目并软删记录（镜像视频侧）。
-	shouldMoveFile := sourceInfo != nil && !isTrashPath(image.Path)
-	if !shouldMoveFile {
-		return database.Transaction(func(tx *gorm.DB) error {
+	code := TrashResultOK
+	switch {
+	case sourceInfo == nil && deleteFile:
+		if reachable, _, reachErr := scanRootReachableForImagePath(image.Path); reachErr == nil && !reachable {
+			return "", ErrTrashVolumeOffline
+		}
+		entry.Mode = models.TrashModeMissing
+		code = TrashResultFileMissing
+	case sourceInfo == nil, !deleteFile, isTrashPath(image.Path):
+		entry.Mode = models.TrashModeRecordOnly
+	default:
+		entry.Mode = models.TrashModeTrash
+	}
+
+	if entry.Mode != models.TrashModeTrash {
+		return code, database.Transaction(func(tx *gorm.DB) error {
 			if err := tx.Create(&entry).Error; err != nil {
 				return err
 			}
-			if err := tx.Model(&image).Update("deleted_by", entry.DeletedBy).Error; err != nil {
-				return err
-			}
-			return tx.Delete(&image).Error
+			return softDeleteImageByUserTx(tx, &image)
 		})
 	}
+	return s.deleteImageToSystemTrash(&image, &entry)
+}
 
+// softDeleteImageByUserTx 软删图片并把 deleted_by 记为 user、清掉扫描器的恢复标记，
+// 让之后的扫描不会撤销这次有意的删除。
+func softDeleteImageByUserTx(tx *gorm.DB, image *models.Image) error {
+	if err := tx.Model(image).Updates(map[string]interface{}{"deleted_by": "user", "is_stale": false}).Error; err != nil {
+		return err
+	}
+	return tx.Delete(image).Error
+}
+
+func (s *ImageService) deleteImageToSystemTrash(image *models.Image, entry *models.ImageTrashEntry) (string, error) {
 	trashService := NewTrashService()
 	entry.State = trashStatePendingMove
-	if err := createPendingImageTrashEntry(&entry, trashService); err != nil {
-		return fmt.Errorf("记录待删除文件失败: %w", err)
+	entry.TrashPath = ""
+	if err := database.DB.Create(entry).Error; err != nil {
+		return "", fmt.Errorf("记录待删除文件失败: %w", err)
 	}
-	if err := movePendingImageTrashEntryFile(&entry, trashService); err != nil {
-		_ = recordImageTrashEntryError(entry.ID, err)
-		return fmt.Errorf("移动文件到回收站失败: %w", err)
+	cancelPending := func() {
+		_ = database.DB.Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).Delete(&models.ImageTrashEntry{}).Error
 	}
-	trashInfo, err := os.Stat(entry.TrashPath)
+
+	info, statErr := os.Stat(image.Path)
+	if statErr != nil {
+		cancelPending()
+		return "", fmt.Errorf("检查待删除文件失败: %w", statErr)
+	}
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	if !want.strictMatch(info) {
+		cancelPending()
+		return "", fmt.Errorf("文件在删除过程中发生了变化，已取消删除")
+	}
+
+	trashedPath, moveErr := trashService.MoveToTrash(image.Path)
+	if moveErr != nil {
+		cancelPending()
+		if errors.Is(moveErr, os.ErrNotExist) {
+			entry.ID = 0
+			entry.CreatedAt = time.Time{}
+			entry.UpdatedAt = time.Time{}
+			entry.State = trashStateDeleted
+			entry.Mode = models.TrashModeMissing
+			err := database.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Create(entry).Error; err != nil {
+					return err
+				}
+				return softDeleteImageByUserTx(tx, image)
+			})
+			return TrashResultFileMissing, err
+		}
+		if errors.Is(moveErr, ErrTrashUnsupportedVolume) || errors.Is(moveErr, ErrTrashPermissionDenied) {
+			return "", moveErr
+		}
+		return "", fmt.Errorf("移动文件到回收站失败: %w", moveErr)
+	}
+
+	entry.TrashPath = trashedPath
+	if err := recordTrashedPath("image_trash_entries", entry.ID, trashedPath); err != nil {
+		if rollbackErr := trashService.RestoreFromTrashVerified(trashedPath, image.Path, want); rollbackErr != nil {
+			return "", fmt.Errorf("记录废纸篓位置失败: %w；文件回滚失败，将在下次启动时按文件身份对账: %v", err, rollbackErr)
+		}
+		cancelPending()
+		return "", fmt.Errorf("记录废纸篓位置失败，已撤销删除: %w", err)
+	}
+	trashInfo, err := os.Stat(trashedPath)
 	if err != nil {
-		return fmt.Errorf("读取回收站文件信息失败: %w", err)
+		return "", fmt.Errorf("读取回收站文件信息失败: %w", err)
 	}
-	if !imageTrashEntryFileMatches(entry.TrashPath, trashInfo, entry) {
-		return fmt.Errorf("回收站文件与删除前内容不一致: %s", entry.TrashPath)
+	if !want.strictMatch(trashInfo) {
+		return "", ErrTrashIdentityMismatch
 	}
-	log.Printf("图片已移入回收站 src=%s dst=%s", image.Path, entry.TrashPath)
+	log.Printf("图片已移入系统废纸篓 image_id=%d", image.ID)
 
 	err = database.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.ImageTrashEntry{}).
 			Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).
 			Updates(map[string]interface{}{
-				"state":       trashStateDeleted,
-				"file_moved":  true,
-				"file_sha256": entry.FileSHA256,
-				"last_error":  "",
+				"state":      trashStateDeleted,
+				"file_moved": true,
+				"last_error": "",
 			})
 		if result.Error != nil {
 			return result.Error
@@ -912,37 +987,140 @@ func (s *ImageService) deleteImage(id uint, deleteFile bool) error {
 		if result.RowsAffected != 1 {
 			return fmt.Errorf("待删除条目状态已变化: %d", entry.ID)
 		}
-		if err := tx.Model(&image).Update("deleted_by", entry.DeletedBy).Error; err != nil {
-			return err
-		}
-		return tx.Delete(&image).Error
+		return softDeleteImageByUserTx(tx, image)
 	})
 	if err == nil {
-		return nil
+		return TrashResultOK, nil
 	}
 	committed, rolledBack, confirmErr := confirmImageDeleteTransactionOutcome(image.ID, entry.ID)
 	if confirmErr != nil {
 		_ = recordImageTrashEntryError(entry.ID, fmt.Errorf("删除提交结果无法确认: %w", err))
-		return fmt.Errorf("删除提交结果无法确认，文件和操作日志已保留供启动对账: %w", err)
+		return "", fmt.Errorf("删除提交结果无法确认，文件和操作日志已保留供启动对账: %w", err)
 	}
 	if committed {
-		return nil
+		return TrashResultOK, nil
 	}
 	if !rolledBack {
 		_ = recordImageTrashEntryError(entry.ID, fmt.Errorf("删除状态不一致: %w", err))
-		return fmt.Errorf("删除状态不一致，未执行文件补偿: %w", err)
+		return "", fmt.Errorf("删除状态不一致，未执行文件补偿: %w", err)
 	}
 
-	_ = database.DB.Model(&entry).Update("state", trashStateRollback).Error
-	if rollbackErr := trashService.RestoreFromTrash(entry.TrashPath, image.Path); rollbackErr != nil {
+	_ = database.DB.Model(entry).Where("state = ?", trashStatePendingMove).Update("state", trashStateRollback).Error
+	if rollbackErr := trashService.RestoreFromTrashVerified(entry.TrashPath, image.Path, want); rollbackErr != nil {
 		_ = recordImageTrashEntryError(entry.ID, rollbackErr)
-		return fmt.Errorf("删除数据库记录失败: %w；文件回滚失败: %v", err, rollbackErr)
+		return "", fmt.Errorf("删除数据库记录失败: %w；文件回滚失败: %v", err, rollbackErr)
 	}
-	if cleanupErr := database.DB.Delete(&entry).Error; cleanupErr != nil {
+	if cleanupErr := database.DB.Delete(entry).Error; cleanupErr != nil {
 		_ = recordImageTrashEntryError(entry.ID, cleanupErr)
-		return fmt.Errorf("删除数据库记录失败: %w；清理待删除条目失败: %v", err, cleanupErr)
+		return "", fmt.Errorf("删除数据库记录失败: %w；清理待删除条目失败: %v", err, cleanupErr)
 	}
-	return fmt.Errorf("删除数据库记录失败: %w", err)
+	return "", fmt.Errorf("删除数据库记录失败: %w", err)
+}
+
+// scanRootReachableForImagePath 判断图片所属的图片扫描根现在是否可访问；找不到归属的根时报错，不猜。
+func scanRootReachableForImagePath(path string) (bool, string, error) {
+	var dirs []models.ImageDirectory
+	if err := database.DB.Find(&dirs).Error; err != nil {
+		return false, "", fmt.Errorf("加载图片扫描目录失败: %w", err)
+	}
+	for _, dir := range dirs {
+		root := filepath.Clean(strings.TrimSpace(dir.Path))
+		if root == "" || root == "." {
+			continue
+		}
+		if path != root && !strings.HasPrefix(path, scanRootChildPrefix(root)) {
+			continue
+		}
+		info, statErr := os.Stat(root)
+		if statErr != nil {
+			return false, root, nil
+		}
+		return info.IsDir(), root, nil
+	}
+	return false, "", fmt.Errorf("图片不在任何已配置的图片目录下，无法确认其所在位置是否可访问")
+}
+
+// DeleteImagesDetailed 是桌面端使用的批量删除：逐项结果码、整批一个 batch_id，可上报进度与取消。
+func (s *ImageService) DeleteImagesDetailed(imageIDs []uint, deleteFile bool, opts BatchDeleteOptions) *BatchResult {
+	batchID := newDeleteBatchID()
+	result := newBatchResult(len(imageIDs), batchID)
+	cancelled, finish := opts.begin()
+	defer finish()
+	for index, imageID := range imageIDs {
+		if cancelled() {
+			result.addCode(imageID, TrashResultCancelled, "")
+			continue
+		}
+		imagePathMutationMu.RLock()
+		code, err := s.deleteImageBatchItem(imageID, deleteFile, batchID)
+		imagePathMutationMu.RUnlock()
+		result.addOutcome(imageID, code, err)
+		opts.report(index+1, len(imageIDs))
+	}
+	return result
+}
+
+// DeleteImagesInDirectoryDetailed 与 BatchDeleteImagesInDirectory 选取同一批图片（目录直属、不递归）。
+func (s *ImageService) DeleteImagesInDirectoryDetailed(directory string, deleteFile bool, opts BatchDeleteOptions) (*BatchResult, error) {
+	ids, err := s.imageIDsInDirectory(directory)
+	if err != nil {
+		return nil, err
+	}
+	return s.DeleteImagesDetailed(ids, deleteFile, opts), nil
+}
+
+// PermanentlyDeleteImages 永久删除图片文件与记录，只用于 trash_unsupported 之后用户明确选择
+// 「永久删除」。流程：身份核对 → 删文件 → 硬删记录（级联）。
+func (s *ImageService) PermanentlyDeleteImages(imageIDs []uint) *BatchResult {
+	result := newBatchResult(len(imageIDs), "")
+	for _, imageID := range imageIDs {
+		imagePathMutationMu.Lock()
+		code, err := s.permanentlyDeleteImage(imageID)
+		imagePathMutationMu.Unlock()
+		result.addOutcome(imageID, code, err)
+	}
+	return result
+}
+
+func (s *ImageService) permanentlyDeleteImage(id uint) (string, error) {
+	var image models.Image
+	if err := database.DB.Unscoped().First(&image, id).Error; err != nil {
+		return "", err
+	}
+	code := TrashResultOK
+	info, err := os.Stat(image.Path)
+	switch {
+	case err == nil:
+		if info.IsDir() {
+			return "", fmt.Errorf("图片路径不是文件")
+		}
+		if image.Size != 0 && info.Size() != image.Size {
+			return "", ErrTrashIdentityMismatch
+		}
+		if err := os.Remove(image.Path); err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				return "", ErrTrashPermissionDenied
+			}
+			return "", fmt.Errorf("删除文件失败: %w", err)
+		}
+	case os.IsNotExist(err):
+		if reachable, _, reachErr := scanRootReachableForImagePath(image.Path); reachErr == nil && !reachable {
+			return "", ErrTrashVolumeOffline
+		}
+		code = TrashResultFileMissing
+	default:
+		return "", fmt.Errorf("检查待删除文件失败: %w", err)
+	}
+	if err := database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("image_id = ?", image.ID).Delete(&models.ImageTrashEntry{}).Error; err != nil {
+			return err
+		}
+		return hardDeleteImageTx(tx, image.ID)
+	}); err != nil {
+		return "", fmt.Errorf("删除数据库记录失败: %w", err)
+	}
+	log.Printf("图片永久删除 image_id=%d code=%s", image.ID, code)
+	return code, nil
 }
 
 func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*models.Image, error) {
@@ -953,6 +1131,9 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 	if !image.DeletedAt.IsValid() {
 		return nil, fmt.Errorf("图片记录当前不是已删除状态: %d", image.ID)
 	}
+	if entry.State == models.TrashStateFileGone {
+		return nil, ErrTrashFileGone
+	}
 	// 原路径被新的活跃记录复用时拒绝恢复（设计 4.5.4：部分唯一索引语义前置成明确报错）。
 	var occupant models.Image
 	occupantResult := database.DB.Where("path = ? AND id != ?", entry.OriginalPath, entry.ImageID).Limit(1).Find(&occupant)
@@ -960,7 +1141,7 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 		return nil, fmt.Errorf("检查原路径活跃记录失败: %w", occupantResult.Error)
 	}
 	if occupantResult.RowsAffected == 1 {
-		return nil, fmt.Errorf("原路径已被其他活跃图片记录占用，拒绝恢复: %s", entry.OriginalPath)
+		return nil, ErrTrashPathOccupied
 	}
 
 	if entry.State == trashStateDeleted {
@@ -980,7 +1161,9 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 
 	fileAtOriginal := false
 	trashService := NewTrashService()
-	if entry.FileMoved {
+	if entry.Mode == models.TrashModeRecordOnly {
+		// 只删记录：文件一直在原地没动过，恢复只还原数据库，不碰文件。
+	} else if entry.FileMoved {
 		var err error
 		fileAtOriginal, err = ensureImageTrashEntryFileRestored(trashService, *entry)
 		if err != nil {
@@ -1049,6 +1232,9 @@ func (s *ImageService) restoreImageTrashEntry(entry *models.ImageTrashEntry) (*m
 // cancelInterruptedImageDeletion 取消一次在 pending_move/rollback 中断的删除：
 // 文件回到原路径、条目物理删除、图片记录保持活跃。
 func (s *ImageService) cancelInterruptedImageDeletion(entry *models.ImageTrashEntry) (*models.Image, error) {
+	if !isLegacyTrashMode(entry.Mode) && entry.State == trashStatePendingMove {
+		return s.cancelInterruptedImageTrashDeletion(entry)
+	}
 	var image models.Image
 	if err := database.DB.Preload("Tags").First(&image, entry.ImageID).Error; err != nil {
 		return nil, fmt.Errorf("读取活动图片失败: %w", err)
@@ -1097,10 +1283,41 @@ func (s *ImageService) cancelInterruptedImageDeletion(entry *models.ImageTrashEn
 	return &image, nil
 }
 
+// cancelInterruptedImageTrashDeletion 撤销一次 mode=trash 中断在 pending_move 的删除，语义同视频侧。
+func (s *ImageService) cancelInterruptedImageTrashDeletion(entry *models.ImageTrashEntry) (*models.Image, error) {
+	var image models.Image
+	if err := database.DB.Preload("Tags").First(&image, entry.ImageID).Error; err != nil {
+		return nil, fmt.Errorf("读取活动图片失败: %w", err)
+	}
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	location, foundPath, err := resolvePendingTrashMove(entry.OriginalPath, entry.TrashPath, want)
+	if err != nil {
+		_ = recordImageTrashEntryError(entry.ID, err)
+		return nil, err
+	}
+	if location == pendingFileUnknown {
+		_ = recordImageTrashEntryError(entry.ID, ErrTrashFileGone)
+		return nil, ErrTrashFileGone
+	}
+	if location == pendingFileInTrash {
+		if err := NewTrashService().RestoreFromTrashVerified(foundPath, entry.OriginalPath, want); err != nil {
+			_ = recordImageTrashEntryError(entry.ID, err)
+			return nil, err
+		}
+	}
+	if err := database.DB.Delete(entry).Error; err != nil {
+		return nil, fmt.Errorf("清理中断删除日志失败: %w", err)
+	}
+	return &image, nil
+}
+
 // reconcileImagePendingDelete 对账 pending_move 条目：文件未移动则取消本次删除
 // （删除条目，图片记录保持活跃，completed=false）；文件已移入回收站则补提交事务
 // （置 deleted + 软删图片，completed=true）。
 func (s *ImageService) reconcileImagePendingDelete(entry *models.ImageTrashEntry) (bool, error) {
+	if !isLegacyTrashMode(entry.Mode) {
+		return s.reconcileImagePendingTrashDelete(entry)
+	}
 	var image models.Image
 	if err := database.DB.Unscoped().First(&image, entry.ImageID).Error; err != nil {
 		return false, err
@@ -1149,6 +1366,55 @@ func (s *ImageService) reconcileImagePendingDelete(entry *models.ImageTrashEntry
 	return true, nil
 }
 
+// reconcileImagePendingTrashDelete 是 mode=trash 的 pending_move 崩溃恢复三分支，语义同视频侧
+// reconcilePendingTrashDelete：文件没动 → 取消；已进废纸篓（按记录的路径或身份找到）→ 补提交；
+// 位置未知 → 置 deleted 并写「文件位置未知」。
+func (s *ImageService) reconcileImagePendingTrashDelete(entry *models.ImageTrashEntry) (bool, error) {
+	var image models.Image
+	if err := database.DB.Unscoped().First(&image, entry.ImageID).Error; err != nil {
+		return false, err
+	}
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	location, foundPath, err := resolvePendingTrashMove(entry.OriginalPath, entry.TrashPath, want)
+	if err != nil {
+		return false, err
+	}
+	if location == pendingFileAtOriginal {
+		result := database.DB.Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).Delete(&models.ImageTrashEntry{})
+		if result.Error != nil {
+			return false, fmt.Errorf("取消中断删除失败: %w", result.Error)
+		}
+		log.Printf("图片删除中断且文件未移动，已取消 image_id=%d", entry.ImageID)
+		return false, nil
+	}
+	updates := map[string]interface{}{"state": trashStateDeleted, "file_moved": true, "last_error": ""}
+	if location == pendingFileUnknown {
+		updates = map[string]interface{}{"state": trashStateDeleted, "file_moved": false, "trash_path": "", "last_error": trashUnknownLocationMessage}
+	}
+	err = database.Transaction(func(tx *gorm.DB) error {
+		if location == pendingFileInTrash && foundPath != entry.TrashPath {
+			if err := claimTrashPathTx(tx, "image_trash_entries", entry.ID, foundPath); err != nil {
+				return err
+			}
+			updates["trash_path"] = foundPath
+		}
+		result := tx.Model(&models.ImageTrashEntry{}).
+			Where("id = ? AND state = ?", entry.ID, trashStatePendingMove).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected != 1 {
+			return fmt.Errorf("待删除条目状态已变化: %d", entry.ID)
+		}
+		return softDeleteImageByUserTx(tx, &image)
+	})
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func reconcileImageTrashRollback(entry *models.ImageTrashEntry) error {
 	trashService := NewTrashService()
 	originalInfo, originalExists, err := regularFileState(entry.OriginalPath)
@@ -1180,21 +1446,6 @@ func reconcileImageTrashRollback(entry *models.ImageTrashEntry) error {
 		return fmt.Errorf("回滚后的原文件与删除记录不一致")
 	}
 	return database.DB.Delete(entry).Error
-}
-
-func createPendingImageTrashEntry(entry *models.ImageTrashEntry, trashService *TrashService) error {
-	for attempt := 0; attempt < 10000; attempt++ {
-		entry.TrashPath = trashService.TrashTargetPath(entry.OriginalPath, attempt)
-		if err := database.DB.Create(entry).Error; err == nil {
-			return nil
-		} else if !imageTrashPathAlreadyRecorded(entry.TrashPath) {
-			return err
-		}
-		entry.ID = 0
-		entry.CreatedAt = time.Time{}
-		entry.UpdatedAt = time.Time{}
-	}
-	return fmt.Errorf("无法记录唯一回收站路径: %s", entry.OriginalPath)
 }
 
 func movePendingImageTrashEntryFile(entry *models.ImageTrashEntry, trashService *TrashService) error {
@@ -1244,6 +1495,21 @@ func imageTrashPathAlreadyRecorded(path string) bool {
 }
 
 func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.ImageTrashEntry) (bool, error) {
+	want := trashFileID{Size: entry.FileSize, ModTimeNS: entry.FileModTime, Identity: entry.FileIdentity}
+	strict := !isLegacyTrashMode(entry.Mode)
+	matches := func(path string, info os.FileInfo) bool {
+		if strict {
+			return want.strictMatch(info)
+		}
+		return imageTrashEntryFileMatches(path, info, entry)
+	}
+	mismatch := func(format string) error {
+		if strict {
+			return ErrTrashIdentityMismatch
+		}
+		return fmt.Errorf(format, entry.OriginalPath)
+	}
+
 	originalInfo, originalExists, err := regularFileState(entry.OriginalPath)
 	if err != nil {
 		return false, err
@@ -1259,19 +1525,19 @@ func ensureImageTrashEntryFileRestored(trashService *TrashService, entry models.
 			}
 			return true, nil
 		}
-		return false, fmt.Errorf("原路径已被占用，拒绝覆盖: %s", entry.OriginalPath)
+		return false, ErrTrashPathOccupied
 	}
 	if originalExists {
-		if !imageTrashEntryFileMatches(entry.OriginalPath, originalInfo, entry) {
-			return false, fmt.Errorf("原路径文件与删除记录不一致: %s", entry.OriginalPath)
+		if !matches(entry.OriginalPath, originalInfo) {
+			return false, mismatch("原路径文件与删除记录不一致: %s")
 		}
 		return true, nil
 	}
 	if !trashExists {
-		return false, fmt.Errorf("回收站文件不存在: %s", entry.TrashPath)
+		return false, ErrTrashFileGone
 	}
-	if !imageTrashEntryFileMatches(entry.TrashPath, trashInfo, entry) {
-		return false, fmt.Errorf("回收站文件与删除记录不一致: %s", entry.TrashPath)
+	if !matches(entry.TrashPath, trashInfo) {
+		return false, mismatch("回收站文件与删除记录不一致: %s")
 	}
 	if err := trashService.RestoreFromTrash(entry.TrashPath, entry.OriginalPath); err != nil {
 		return false, err

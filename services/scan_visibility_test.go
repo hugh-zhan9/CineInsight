@@ -177,6 +177,10 @@ func TestScanSkipsUnreadableExcludedAndHiddenDirectories(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if name == DefaultTrashDirName {
+				// LIB14：只有旧版回收站目录才按名跳过，这里登记为 legacy_trash 目录。
+				registerLegacyTrashEntry(t, filepath.Join(root, "orig.mp4"), filepath.Join(folder, "orig.mp4"))
+			}
 			if err := os.Chmod(folder, 0000); err != nil {
 				t.Fatal(err)
 			}

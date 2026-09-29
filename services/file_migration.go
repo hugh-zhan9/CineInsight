@@ -101,10 +101,17 @@ func (s *VideoService) MoveVideo(id uint, destinationDirectory string) (*FileMig
 
 	updateErr := database.Transaction(func(tx *gorm.DB) error {
 		if err := tx.Model(&video).Updates(map[string]interface{}{
-			"path":      newPath,
-			"directory": destinationDirectory,
-			"is_stale":  false,
+			"path":         newPath,
+			"directory":    destinationDirectory,
+			"is_stale":     false,
+			"stale_reason": "",
 		}).Error; err != nil {
+			return err
+		}
+		if err := registerStagedSources(tx, &video.ID, []stagedSourceInput{
+			{Original: oldPath, Staged: videoRetainedSource},
+			{Original: oldSubtitlePath, Staged: subtitleRetainedSource},
+		}); err != nil {
 			return err
 		}
 		return syncShortVideoTagForVideo(tx, video.ID)
@@ -197,10 +204,6 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 	if err := database.DB.Unscoped().Find(&videos).Error; err != nil {
 		return nil, fmt.Errorf("读取视频记录失败: %w", err)
 	}
-	var directories []models.ScanDirectory
-	if err := database.DB.Unscoped().Find(&directories).Error; err != nil {
-		return nil, fmt.Errorf("读取扫描目录失败: %w", err)
-	}
 	occupiedPaths := make(map[string]uint)
 	for i := range videos {
 		if videos[i].DeletedAt.IsValid() || pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
@@ -265,38 +268,24 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 	}
 
 	result := &FolderMigrationResult{Source: sourceDirectory, Destination: destinationDirectory}
+	stagedSize := int64(0)
+	if independentCopy {
+		stagedSize = directoryFileBytes(stagingDirectory)
+	}
 	updateErr := database.Transaction(func(tx *gorm.DB) error {
-		for i := range videos {
-			if !pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
-				continue
-			}
-			newPath, err := replacePathPrefix(videos[i].Path, sourceDirectory, destinationDirectory)
-			if err != nil {
-				return err
-			}
-			if err := tx.Unscoped().Model(&models.Video{}).Where("id = ?", videos[i].ID).Updates(map[string]interface{}{
-				"path":      newPath,
-				"directory": filepath.Dir(newPath),
-				"is_stale":  false,
-			}).Error; err != nil {
-				return err
-			}
-			videos[i].Path = newPath
-			videos[i].Directory = filepath.Dir(newPath)
-			result.VideosUpdated++
+		counts, err := rewriteLibraryPathPrefixTx(tx, sourceDirectory, destinationDirectory)
+		if err != nil {
+			return err
 		}
-		for i := range directories {
-			if !pathIsEqualOrInside(directories[i].Path, sourceDirectory) {
-				continue
-			}
-			newPath, err := replacePathPrefix(directories[i].Path, sourceDirectory, destinationDirectory)
-			if err != nil {
+		result.VideosUpdated = counts.Videos
+		result.DirectoriesUpdated = counts.Directories
+		result.TrashEntriesUpdated = counts.TrashEntries
+		result.ScanExclusionsUpdated = counts.ScanExclusions
+		if independentCopy {
+			// 跨盘时源文件夹被保留为暂存路径，与数据库切换同一事务登记，之后才有入口管理它。
+			if err := registerStagedSources(tx, nil, []stagedSourceInput{{Original: sourceDirectory, Staged: stagingDirectory, Size: stagedSize}}); err != nil {
 				return err
 			}
-			if err := tx.Unscoped().Model(&models.ScanDirectory{}).Where("id = ?", directories[i].ID).Update("path", newPath).Error; err != nil {
-				return err
-			}
-			result.DirectoriesUpdated++
 		}
 		return syncShortVideoTags(tx)
 	})
@@ -313,28 +302,7 @@ func (s *VideoService) MoveDirectory(sourceDirectory, destinationParent string) 
 		log.Printf("文件夹迁移清理源目录失败 staging=%s destination=%s err=%v", stagingDirectory, destinationDirectory, err)
 	}
 
-	for i := range videos {
-		if !pathIsEqualOrInside(videos[i].Path, destinationDirectory) || videos[i].DeletedAt.IsValid() {
-			continue
-		}
-		srtPath := subtitleparser.SRTPathForVideo(videos[i].Path)
-		exists, checkErr := pathExists(srtPath)
-		if checkErr == nil && exists {
-			if indexErr := indexSubtitleFileForVideoID(videos[i].ID, srtPath); indexErr != nil {
-				log.Printf("文件夹迁移后刷新字幕索引失败 id=%d path=%s err=%v", videos[i].ID, srtPath, indexErr)
-				if deleteErr := deleteSubtitleIndex(videos[i].ID); deleteErr != nil {
-					log.Printf("文件夹迁移后清理失效字幕索引失败 id=%d err=%v", videos[i].ID, deleteErr)
-				}
-			}
-		} else {
-			if checkErr != nil {
-				log.Printf("文件夹迁移后检查字幕失败 id=%d path=%s err=%v", videos[i].ID, srtPath, checkErr)
-			}
-			if deleteErr := deleteSubtitleIndex(videos[i].ID); deleteErr != nil {
-				log.Printf("文件夹迁移后清理无效字幕索引失败 id=%d err=%v", videos[i].ID, deleteErr)
-			}
-		}
-	}
+	reindexSubtitlesUnderDirectory(destinationDirectory, "文件夹迁移后")
 	return result, nil
 }
 
@@ -382,16 +350,6 @@ func (s *VideoService) RenameDirectory(sourceDirectory, newName string) (*Folder
 	if err := database.DB.Unscoped().Find(&directories).Error; err != nil {
 		return nil, fmt.Errorf("读取扫描目录失败: %w", err)
 	}
-	var trashEntries []models.VideoTrashEntry
-	if err := database.DB.Find(&trashEntries).Error; err != nil {
-		return nil, fmt.Errorf("读取回收站记录失败: %w", err)
-	}
-	var settings models.Settings
-	settingsErr := database.DB.First(&settings).Error
-	if settingsErr != nil && !errors.Is(settingsErr, gorm.ErrRecordNotFound) {
-		return nil, fmt.Errorf("读取扫描设置失败: %w", settingsErr)
-	}
-
 	affected := false
 	occupiedPaths := make(map[string]uint)
 	for i := range videos {
@@ -442,107 +400,21 @@ func (s *VideoService) RenameDirectory(sourceDirectory, newName string) (*Folder
 	}
 
 	updateErr := database.Transaction(func(tx *gorm.DB) error {
-		for i := range videos {
-			if !pathIsEqualOrInside(videos[i].Path, sourceDirectory) {
-				continue
-			}
-			newPath, replaceErr := replacePathPrefix(videos[i].Path, sourceDirectory, destinationDirectory)
-			if replaceErr != nil {
-				return replaceErr
-			}
-			if err := tx.Unscoped().Model(&models.Video{}).Where("id = ?", videos[i].ID).Updates(map[string]interface{}{
-				"path": newPath, "directory": filepath.Dir(newPath), "is_stale": false,
-			}).Error; err != nil {
-				return err
-			}
-			videos[i].Path = newPath
-			videos[i].Directory = filepath.Dir(newPath)
-			result.VideosUpdated++
+		counts, err := rewriteLibraryPathPrefixTx(tx, sourceDirectory, destinationDirectory)
+		if err != nil {
+			return err
 		}
-		for i := range directories {
-			if !pathIsEqualOrInside(directories[i].Path, sourceDirectory) {
-				continue
-			}
-			newPath, replaceErr := replacePathPrefix(directories[i].Path, sourceDirectory, destinationDirectory)
-			if replaceErr != nil {
-				return replaceErr
-			}
-			if err := tx.Unscoped().Model(&models.ScanDirectory{}).Where("id = ?", directories[i].ID).Update("path", newPath).Error; err != nil {
-				return err
-			}
-			result.DirectoriesUpdated++
-		}
-		for i := range trashEntries {
-			updates := make(map[string]interface{})
-			if pathIsEqualOrInside(trashEntries[i].OriginalPath, sourceDirectory) {
-				newPath, replaceErr := replacePathPrefix(trashEntries[i].OriginalPath, sourceDirectory, destinationDirectory)
-				if replaceErr != nil {
-					return replaceErr
-				}
-				updates["original_path"] = newPath
-			}
-			if trashEntries[i].TrashPath != "" && pathIsEqualOrInside(trashEntries[i].TrashPath, sourceDirectory) {
-				newPath, replaceErr := replacePathPrefix(trashEntries[i].TrashPath, sourceDirectory, destinationDirectory)
-				if replaceErr != nil {
-					return replaceErr
-				}
-				updates["trash_path"] = newPath
-			}
-			if len(updates) > 0 {
-				if err := tx.Model(&models.VideoTrashEntry{}).Where("id = ?", trashEntries[i].ID).Updates(updates).Error; err != nil {
-					return err
-				}
-				result.TrashEntriesUpdated++
-			}
-		}
-		if settings.ID != 0 {
-			excludedPaths := parseScanExcludePaths(settings.ScanExcludePaths)
-			for i := range excludedPaths {
-				if !pathIsEqualOrInside(excludedPaths[i], sourceDirectory) {
-					continue
-				}
-				newPath, replaceErr := replacePathPrefix(excludedPaths[i], sourceDirectory, destinationDirectory)
-				if replaceErr != nil {
-					return replaceErr
-				}
-				excludedPaths[i] = newPath
-				result.ScanExclusionsUpdated++
-			}
-			if result.ScanExclusionsUpdated > 0 {
-				normalized := normalizeScanExcludePaths(strings.Join(excludedPaths, "\n"))
-				if err := tx.Model(&models.Settings{}).Where("id = ?", settings.ID).Update("scan_exclude_paths", normalized).Error; err != nil {
-					return err
-				}
-			}
-		}
+		result.VideosUpdated = counts.Videos
+		result.DirectoriesUpdated = counts.Directories
+		result.TrashEntriesUpdated = counts.TrashEntries
+		result.ScanExclusionsUpdated = counts.ScanExclusions
 		return syncShortVideoTags(tx)
 	})
 	if updateErr != nil {
 		return nil, rollbackFilesystem(fmt.Errorf("更新重命名路径失败: %w", updateErr))
 	}
 
-	for i := range videos {
-		if videos[i].DeletedAt.IsValid() || !pathIsEqualOrInside(videos[i].Path, destinationDirectory) {
-			continue
-		}
-		srtPath := subtitleparser.SRTPathForVideo(videos[i].Path)
-		exists, checkErr := pathExists(srtPath)
-		if checkErr == nil && exists {
-			if indexErr := indexSubtitleFileForVideoID(videos[i].ID, srtPath); indexErr != nil {
-				log.Printf("文件夹重命名后刷新字幕索引失败 id=%d path=%s err=%v", videos[i].ID, srtPath, indexErr)
-				if deleteErr := deleteSubtitleIndex(videos[i].ID); deleteErr != nil {
-					log.Printf("文件夹重命名后清理失效字幕索引失败 id=%d err=%v", videos[i].ID, deleteErr)
-				}
-			}
-		} else {
-			if checkErr != nil {
-				log.Printf("文件夹重命名后检查字幕失败 id=%d path=%s err=%v", videos[i].ID, srtPath, checkErr)
-			}
-			if deleteErr := deleteSubtitleIndex(videos[i].ID); deleteErr != nil {
-				log.Printf("文件夹重命名后清理无效字幕索引失败 id=%d err=%v", videos[i].ID, deleteErr)
-			}
-		}
-	}
+	reindexSubtitlesUnderDirectory(destinationDirectory, "文件夹重命名后")
 	return result, nil
 }
 
@@ -641,4 +513,220 @@ func replacePathPrefix(path, oldPrefix, newPrefix string) (string, error) {
 		return filepath.Clean(newPrefix), nil
 	}
 	return filepath.Join(newPrefix, rel), nil
+}
+
+// PathRewriteCounts 是一次前缀改写各类持久化路径的更新条数。
+type PathRewriteCounts struct {
+	Videos          int `json:"videos"`
+	Directories     int `json:"directories"`
+	TrashEntries    int `json:"trash_entries"`
+	ScanExclusions  int `json:"scan_exclusions"`
+	SubtitleIndexes int `json:"subtitle_indexes"`
+}
+
+// rewriteLibraryPathPrefixTx 是「路径前缀改写」的唯一实现（D-PC07）：文件夹改名、
+// 文件夹迁移、编辑扫描目录（重映射）三处共用。覆盖视频（含软删，并清除失效标记与原因）、
+// 回收站条目的 original_path / trash_path、扫描黑名单、字幕索引路径与扫描目录。
+// 只改数据库，不碰磁盘；调用方负责事务、锁与文件系统侧的回滚。
+func rewriteLibraryPathPrefixTx(tx *gorm.DB, oldPrefix, newPrefix string) (PathRewriteCounts, error) {
+	var counts PathRewriteCounts
+	oldPrefix = filepath.Clean(strings.TrimSpace(oldPrefix))
+	newPrefix = filepath.Clean(strings.TrimSpace(newPrefix))
+	if oldPrefix == "" || oldPrefix == "." || newPrefix == "" || newPrefix == "." {
+		return counts, fmt.Errorf("路径前缀为空")
+	}
+	like := escapeSQLLikePrefix(scanRootChildPrefix(oldPrefix)) + "%"
+	rewrite := func(path string) (string, bool, error) {
+		if !pathIsEqualOrInside(path, oldPrefix) {
+			return "", false, nil
+		}
+		rewritten, err := replacePathPrefix(path, oldPrefix, newPrefix)
+		return rewritten, err == nil, err
+	}
+
+	var videos []models.Video
+	if err := tx.Unscoped().Select("id", "path").
+		Where(`path = ? OR path LIKE ? ESCAPE '\'`, oldPrefix, like).Find(&videos).Error; err != nil {
+		return counts, fmt.Errorf("读取视频记录失败: %w", err)
+	}
+	for _, video := range videos {
+		newPath, ok, err := rewrite(video.Path)
+		if err != nil {
+			return counts, err
+		}
+		if !ok {
+			continue
+		}
+		if err := tx.Unscoped().Model(&models.Video{}).Where("id = ?", video.ID).Updates(map[string]interface{}{
+			"path": newPath, "directory": filepath.Dir(newPath), "is_stale": false, "stale_reason": "",
+		}).Error; err != nil {
+			return counts, err
+		}
+		counts.Videos++
+	}
+
+	var directories []models.ScanDirectory
+	if err := tx.Unscoped().Find(&directories).Error; err != nil {
+		return counts, fmt.Errorf("读取扫描目录失败: %w", err)
+	}
+	for _, directory := range directories {
+		newPath, ok, err := rewrite(directory.Path)
+		if err != nil {
+			return counts, err
+		}
+		if !ok {
+			continue
+		}
+		if err := tx.Unscoped().Model(&models.ScanDirectory{}).Where("id = ?", directory.ID).Update("path", newPath).Error; err != nil {
+			return counts, err
+		}
+		counts.Directories++
+	}
+
+	var trashEntries []models.VideoTrashEntry
+	if err := tx.Where(`original_path = ? OR original_path LIKE ? ESCAPE '\' OR trash_path = ? OR trash_path LIKE ? ESCAPE '\'`,
+		oldPrefix, like, oldPrefix, like).Find(&trashEntries).Error; err != nil {
+		return counts, fmt.Errorf("读取回收站记录失败: %w", err)
+	}
+	for _, entry := range trashEntries {
+		updates := make(map[string]interface{})
+		if newPath, ok, err := rewrite(entry.OriginalPath); err != nil {
+			return counts, err
+		} else if ok {
+			updates["original_path"] = newPath
+		}
+		if entry.TrashPath != "" {
+			if newPath, ok, err := rewrite(entry.TrashPath); err != nil {
+				return counts, err
+			} else if ok {
+				updates["trash_path"] = newPath
+			}
+		}
+		if len(updates) == 0 {
+			continue
+		}
+		if err := tx.Model(&models.VideoTrashEntry{}).Where("id = ?", entry.ID).Updates(updates).Error; err != nil {
+			return counts, err
+		}
+		counts.TrashEntries++
+	}
+
+	var settings models.Settings
+	if err := tx.First(&settings).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return counts, fmt.Errorf("读取扫描设置失败: %w", err)
+		}
+	} else {
+		excluded := parseScanExcludePaths(settings.ScanExcludePaths)
+		changed := 0
+		for i := range excluded {
+			newPath, ok, err := rewrite(excluded[i])
+			if err != nil {
+				return counts, err
+			}
+			if ok {
+				excluded[i] = newPath
+				changed++
+			}
+		}
+		if changed > 0 {
+			normalized := normalizeScanExcludePaths(strings.Join(excluded, "\n"))
+			if err := tx.Model(&models.Settings{}).Where("id = ?", settings.ID).Update("scan_exclude_paths", normalized).Error; err != nil {
+				return counts, err
+			}
+			counts.ScanExclusions = changed
+		}
+	}
+
+	var indexes []models.SubtitleIndexState
+	if err := tx.Select("id", "subtitle_path").
+		Where(`subtitle_path = ? OR subtitle_path LIKE ? ESCAPE '\'`, oldPrefix, like).Find(&indexes).Error; err != nil {
+		return counts, fmt.Errorf("读取字幕索引失败: %w", err)
+	}
+	for _, index := range indexes {
+		newPath, ok, err := rewrite(index.SubtitlePath)
+		if err != nil {
+			return counts, err
+		}
+		if !ok {
+			continue
+		}
+		if err := tx.Model(&models.SubtitleIndexState{}).Where("id = ?", index.ID).Update("subtitle_path", newPath).Error; err != nil {
+			return counts, err
+		}
+		counts.SubtitleIndexes++
+	}
+	return counts, nil
+}
+
+// reindexSubtitlesUnderDirectory 在路径改写提交后按磁盘现状重建目录下活跃视频的字幕索引。
+// 失败只记日志：索引可以随时由扫描重建，不该让已经完成的迁移报错。
+func reindexSubtitlesUnderDirectory(directory, action string) {
+	videos, err := activeVideosUnderRoots([]string{directory})
+	if err != nil {
+		log.Printf("%s读取视频失败 dir=%s err=%v", action, directory, err)
+		return
+	}
+	for _, video := range videos {
+		if !pathIsEqualOrInside(video.Path, directory) {
+			continue
+		}
+		srtPath := subtitleparser.SRTPathForVideo(video.Path)
+		exists, checkErr := pathExists(srtPath)
+		if checkErr == nil && exists {
+			if indexErr := indexSubtitleFileForVideoID(video.ID, srtPath); indexErr != nil {
+				log.Printf("%s刷新字幕索引失败 id=%d path=%s err=%v", action, video.ID, srtPath, indexErr)
+				if deleteErr := deleteSubtitleIndex(video.ID); deleteErr != nil {
+					log.Printf("%s清理失效字幕索引失败 id=%d err=%v", action, video.ID, deleteErr)
+				}
+			}
+			continue
+		}
+		if checkErr != nil {
+			log.Printf("%s检查字幕失败 id=%d path=%s err=%v", action, video.ID, srtPath, checkErr)
+		}
+		if deleteErr := deleteSubtitleIndex(video.ID); deleteErr != nil {
+			log.Printf("%s清理无效字幕索引失败 id=%d err=%v", action, video.ID, deleteErr)
+		}
+	}
+}
+
+// MoveTargetCheck 是迁移目标的预检结果（LIB-09）。
+type MoveTargetCheck struct {
+	// InScanRoots：目标目录位于某个扫描目录之内（或就是扫描目录）。
+	// 不在时，迁移后的视频会在下次全量扫描时变成孤儿而失效。
+	InScanRoots bool `json:"in_scan_roots"`
+}
+
+// CheckMoveTarget 判断迁移目标是否落在扫描根之内。目标目录不要求存在；
+// 同时按原路径与解析符号链接后的路径比较，避免 /var 与 /private/var 之类的别名误报。
+func (s *VideoService) CheckMoveTarget(targetDir string) (*MoveTargetCheck, error) {
+	target := filepath.Clean(strings.TrimSpace(targetDir))
+	if target == "" || target == "." {
+		return nil, fmt.Errorf("目标文件夹不能为空")
+	}
+	absolute, err := filepath.Abs(target)
+	if err != nil {
+		return nil, fmt.Errorf("解析目标文件夹失败: %w", err)
+	}
+	candidates := []string{absolute}
+	if resolved, resolveErr := filepath.EvalSymlinks(absolute); resolveErr == nil && resolved != absolute {
+		candidates = append(candidates, resolved)
+	}
+	var dirs []models.ScanDirectory
+	if err := database.DB.Find(&dirs).Error; err != nil {
+		return nil, fmt.Errorf("读取扫描目录失败: %w", err)
+	}
+	for _, root := range cleanScanRoots(dirs) {
+		roots := []string{root}
+		if resolved, resolveErr := filepath.EvalSymlinks(root); resolveErr == nil && resolved != root {
+			roots = append(roots, resolved)
+		}
+		for _, candidate := range candidates {
+			if pathBelongsToAny(candidate, roots) {
+				return &MoveTargetCheck{InScanRoots: true}, nil
+			}
+		}
+	}
+	return &MoveTargetCheck{}, nil
 }

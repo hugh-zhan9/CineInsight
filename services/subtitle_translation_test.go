@@ -593,7 +593,7 @@ func TestFinalizeSubtitleArtifactResolvesGlossaryForVideo(t *testing.T) {
 	mustUpsertGlossaryEntry(t, models.TranslationGlossaryEntry{CollectionID: collectionScope(collection.ID), SourceTerm: "Neo", TargetTerm: "作品集尼奥"})
 
 	service := NewSubtitleService(t.TempDir())
-	srtPath := filepath.Join(t.TempDir(), "matrix.srt")
+	srtPath := filepath.Join(t.TempDir(), "matrix"+subtitlePendingSuffix)
 	if err := os.WriteFile(srtPath, []byte("1\n00:00:00,000 --> 00:00:01,000\nNEO arrives\n\n"), 0644); err != nil {
 		t.Fatalf("写入测试字幕失败: %v", err)
 	}
@@ -638,11 +638,11 @@ func TestFinalizeSubtitleArtifactSkipsGlossaryForDeepL(t *testing.T) {
 
 	service := NewSubtitleService(t.TempDir())
 	resolved := 0
-	service.glossaryResolver = func(uint) ([]GlossaryTerm, error) {
+	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) {
 		resolved++
 		return nil, nil
 	}
-	srtPath := filepath.Join(t.TempDir(), "matrix.srt")
+	srtPath := filepath.Join(t.TempDir(), "matrix"+subtitlePendingSuffix)
 	if err := os.WriteFile(srtPath, []byte("1\n00:00:00,000 --> 00:00:01,000\nNEO arrives\n\n"), 0644); err != nil {
 		t.Fatalf("写入测试字幕失败: %v", err)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"slices"
@@ -48,7 +49,9 @@ type LibraryReconcileSummary struct {
 	Restored          int `json:"restored"`
 	MetadataRefreshed int `json:"metadata_refreshed"`
 	Skipped           int `json:"skipped"`
-	ErrorCount        int `json:"error_count"`
+	// SkipBreakdown 是 Skipped 的分项，Skipped 等于各项之和（D-PC09）。
+	SkipBreakdown SkipBreakdown `json:"skip_breakdown"`
+	ErrorCount    int           `json:"error_count"`
 }
 
 type LibraryReconcileEvent struct {
@@ -96,6 +99,11 @@ type LibraryWatcherService struct {
 	backendFactory      func() (libraryWatchBackend, error)
 	rootSupport         func(string) (bool, string, error)
 	reconcile           func([]models.ScanDirectory, []string) *ScanSyncResult
+	markRootOffline     func(root string)
+	offlineNotify       []string
+	patrolInterval      time.Duration
+	lastPatrol          time.Time
+	patrolRunning       bool
 	emitStatus          func(LibraryWatcherStatus)
 	emitReconcile       func(LibraryReconcileEvent)
 	roots               map[uint]*libraryWatchRoot
@@ -123,6 +131,7 @@ func NewLibraryWatcherService(videoService *VideoService) *LibraryWatcherService
 		stabilityInterval: time.Second,
 		stabilityTimeout:  30 * time.Second,
 		tickInterval:      100 * time.Millisecond,
+		patrolInterval:    time.Minute,
 	}
 	service.backendFactory = newLibraryWatchBackend
 	service.rootSupport = classifyLibraryWatchRoot
@@ -131,6 +140,14 @@ func NewLibraryWatcherService(videoService *VideoService) *LibraryWatcherService
 			return &ScanSyncResult{Errors: []ScanSyncError{{Operation: "watch_reconcile", Error: "video service unavailable"}}}
 		}
 		return service.videoService.SyncAffectedDirectories(dirs, affected)
+	}
+	service.markRootOffline = func(root string) {
+		if service.videoService == nil {
+			return
+		}
+		if _, err := service.videoService.MarkRootOffline(root); err != nil {
+			log.Printf("标记离线扫描根失败 root=%s err=%v", root, err)
+		}
 	}
 	return service
 }
@@ -261,10 +278,12 @@ func (s *LibraryWatcherService) Reconfigure(dirs []models.ScanDirectory, exclude
 		_ = s.registerRootLocked(candidate)
 	}
 	snapshot, emitter := s.statusEmitLocked()
+	offline := s.takeOfflineRootsLocked()
 	s.mu.Unlock()
 	if emitter != nil {
 		emitter(snapshot)
 	}
+	s.notifyOfflineRoots(offline)
 	return nil
 }
 
@@ -279,6 +298,7 @@ func (s *LibraryWatcherService) RetryRoot(directoryID uint) (LibraryWatchRootSta
 	root.pending = make(map[string]struct{})
 	root.due = time.Time{}
 	root.processing = false
+	wasUnavailable := root.status.State == LibraryWatchStateUnavailable
 	target := root.directory
 	if root.pendingDirectory != nil {
 		target = *root.pendingDirectory
@@ -293,6 +313,11 @@ func (s *LibraryWatcherService) RetryRoot(directoryID uint) (LibraryWatchRootSta
 	}
 	err := s.registerRootLocked(candidate)
 	if err == nil {
+		if wasUnavailable {
+			// 根从不可用回到可用：排队一次窄对账，清掉这段时间写下的 offline_root（D-PC08）。
+			candidate.pending[filepath.Clean(candidate.directory.Path)] = struct{}{}
+			candidate.due = time.Now()
+		}
 		s.roots[directoryID] = candidate
 		s.removeRootWatchesLocked(root)
 	} else if root.pendingDirectory != nil {
@@ -303,11 +328,87 @@ func (s *LibraryWatcherService) RetryRoot(directoryID uint) (LibraryWatchRootSta
 	}
 	status := s.roots[directoryID].status
 	snapshot, emitter := s.statusEmitLocked()
+	offline := s.takeOfflineRootsLocked()
 	s.mu.Unlock()
 	if emitter != nil {
 		emitter(snapshot)
 	}
+	s.notifyOfflineRoots(offline)
 	return status, err
+}
+
+// takeOfflineRootsLocked 取走待通知的离线根；调用方在释放 s.mu 之后交给 notifyOfflineRoots，
+// 因为标记要写数据库，不能在持锁时做。
+func (s *LibraryWatcherService) takeOfflineRootsLocked() []string {
+	roots := s.offlineNotify
+	s.offlineNotify = nil
+	return roots
+}
+
+func (s *LibraryWatcherService) notifyOfflineRoots(roots []string) {
+	if s.markRootOffline == nil {
+		return
+	}
+	for _, root := range roots {
+		s.markRootOffline(root)
+	}
+}
+
+// patrolUnavailableRoots 巡检不可用的根：目录存在且卷已挂载就 RetryRoot（D-PC08）。
+// 只处理 root_unavailable；不支持的文件系统等原因重试也没用。now 距上次巡检不足
+// patrolInterval 时直接返回；传零值表示强制巡检并同步执行（测试用）。
+func (s *LibraryWatcherService) patrolUnavailableRoots(now time.Time) {
+	s.mu.Lock()
+	if !now.IsZero() && s.lastPatrol.IsZero() {
+		// 第一次心跳只记起点：刚启动时不可用的根已经由启动流程处理过，一个巡检周期之后再查。
+		s.lastPatrol = now
+		s.mu.Unlock()
+		return
+	}
+	if !s.running || s.patrolRunning || (!now.IsZero() && now.Sub(s.lastPatrol) < s.patrolInterval) {
+		s.mu.Unlock()
+		return
+	}
+	if !now.IsZero() {
+		s.lastPatrol = now
+	}
+	type candidate struct {
+		id   uint
+		path string
+	}
+	candidates := make([]candidate, 0)
+	for id, root := range s.roots {
+		if root.status.State == LibraryWatchStateUnavailable && root.status.ReasonCode == "root_unavailable" {
+			candidates = append(candidates, candidate{id: id, path: root.directory.Path})
+		}
+	}
+	if len(candidates) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	s.patrolRunning = true
+	s.workerWG.Add(1)
+	s.mu.Unlock()
+
+	run := func() {
+		defer s.workerWG.Done()
+		defer func() {
+			s.mu.Lock()
+			s.patrolRunning = false
+			s.mu.Unlock()
+		}()
+		for _, item := range candidates {
+			// Stat 卸载的网络盘可能卡住，所以正常巡检在独立 goroutine 里做。
+			if scanRootOnline(filepath.Clean(item.path)) {
+				_, _ = s.RetryRoot(item.id)
+			}
+		}
+	}
+	if now.IsZero() {
+		run()
+		return
+	}
+	go run()
 }
 
 func (s *LibraryWatcherService) Snapshot() LibraryWatcherStatus {
@@ -421,7 +522,7 @@ func (s *LibraryWatcherService) registerRootLocked(root *libraryWatchRoot) error
 			if !entry.IsDir() {
 				return nil
 			}
-			if current != path && (strings.HasPrefix(entry.Name(), ".") || isTrashDirName(entry.Name())) {
+			if current != path && (strings.HasPrefix(entry.Name(), ".") || isTrashDir(current)) {
 				return filepath.SkipDir
 			}
 			current = filepath.Clean(current)
@@ -471,7 +572,7 @@ func (s *LibraryWatcherService) registerCreatedSubtreeLocked(root *libraryWatchR
 		if !entry.IsDir() {
 			return nil
 		}
-		if current != path && (strings.HasPrefix(entry.Name(), ".") || isTrashDirName(entry.Name())) {
+		if current != path && (strings.HasPrefix(entry.Name(), ".") || isTrashDir(current)) {
 			return filepath.SkipDir
 		}
 		current = filepath.Clean(current)
@@ -546,6 +647,7 @@ func (s *LibraryWatcherService) eventLoop(ctx context.Context, backend libraryWa
 			s.handleBackendError(err)
 		case now := <-ticker.C:
 			s.dispatchDueBatches(now)
+			s.patrolUnavailableRoots(now)
 		}
 	}
 }
@@ -608,10 +710,12 @@ func (s *LibraryWatcherService) handleEvent(event fsnotify.Event) {
 		root.due = now.Add(s.coalesceWindow)
 	}
 	snapshot, emitter := s.statusEmitLocked()
+	offline := s.takeOfflineRootsLocked()
 	s.mu.Unlock()
 	if emitter != nil {
 		emitter(snapshot)
 	}
+	s.notifyOfflineRoots(offline)
 }
 
 func (s *LibraryWatcherService) handleBackendError(err error) {
@@ -648,8 +752,10 @@ func libraryWatchHiddenDescendant(path, root string) bool {
 	if err != nil || rel == "." {
 		return false
 	}
+	current := filepath.Clean(root)
 	for _, part := range strings.Split(rel, string(filepath.Separator)) {
-		if strings.HasPrefix(part, ".") || isTrashDirName(part) {
+		current = filepath.Join(current, part)
+		if strings.HasPrefix(part, ".") || isTrashDir(current) {
 			return true
 		}
 	}
@@ -762,6 +868,11 @@ func (s *LibraryWatcherService) batchIsCurrent(rootID uint, generation uint64) b
 	return s.running && root != nil && root.processing && root.generation == generation
 }
 
+// SummarizeScanResult 把扫描结果压成事件载荷用的摘要（含 skip_breakdown）。
+func SummarizeScanResult(result *ScanSyncResult) *LibraryReconcileSummary {
+	return summarizeLibraryReconciliation(result)
+}
+
 func summarizeLibraryReconciliation(result *ScanSyncResult) *LibraryReconcileSummary {
 	if result == nil {
 		return nil
@@ -774,6 +885,7 @@ func summarizeLibraryReconciliation(result *ScanSyncResult) *LibraryReconcileSum
 		Restored:          result.Restored,
 		MetadataRefreshed: result.MetadataRefreshed,
 		Skipped:           result.Skipped,
+		SkipBreakdown:     result.SkipBreakdown,
 		ErrorCount:        len(result.Errors),
 	}
 }
@@ -799,6 +911,9 @@ func (s *LibraryWatcherService) setRootErrorLocked(root *libraryWatchRoot, code,
 }
 
 func (s *LibraryWatcherService) setRootUnavailableLocked(root *libraryWatchRoot, code, message string) {
+	if code == "root_unavailable" {
+		s.offlineNotify = append(s.offlineNotify, filepath.Clean(root.directory.Path))
+	}
 	root.status = LibraryWatchRootStatus{
 		DirectoryID: root.directory.ID,
 		State:       LibraryWatchStateUnavailable,
@@ -909,7 +1024,7 @@ func snapshotWatchDirectories(directories []string, excluded ...string) (map[str
 				return nil
 			}
 			if entry.IsDir() {
-				if path != directory && (strings.HasPrefix(entry.Name(), ".") || isTrashDirName(entry.Name())) {
+				if path != directory && (strings.HasPrefix(entry.Name(), ".") || isTrashDir(path)) {
 					return filepath.SkipDir
 				}
 				return nil

@@ -7,28 +7,28 @@ slices:
     status: done
     depends: []
   - id: P-010
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-011
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-012
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-013
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-015
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-017
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-019
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-021
-    status: pending
+    status: in_progress
     depends: [P-001]
   - id: P-014
     status: pending
@@ -864,5 +864,14 @@ cgo 调用在单元测试中通过函数变量注入替身；另写一条只在 
   - Minor 7 → P-033：显式载荷补上 cleanup_*；
   - Minor 8：已写入详细设计 §8.6。
 - 验证：双后端 `go test ./...` 全绿。
+
+**后端一波整合**（2026-09-29）：P-010、P-011、P-012、P-013、P-015、P-017、P-019、P-021 已全部合入。整合时主代理补了几处：
+- P-011 停下的 `PlaybackAttemptResult.reason` 字段；
+- 超分任务的 RESTRICT 外键：有进行中的任务时拒绝清除，已结束的任务随记录一并删除，附回归用例；
+- 更正 P-012 测试名里的问题 ID。
+
+验证：P-021 合入前双后端 `go test ./...` 全绿；P-021 合入后 SQLite 全绿。
+
+P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/` 目录会被重新收录）、7 个 Important、13 个 Minor，交给评审修复子代理处理。P-010/P-011 在修复完成之前保持 in_progress。P-012/13、P-015/17/19、P-021 的评审仍在进行。
 
 修订后没有重新做全量评审：计划评审规则只要求复核修改过的部分。P-001、P-010 的迁移与删除语义会在实施后另做独立代码评审。

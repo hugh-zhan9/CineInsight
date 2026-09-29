@@ -35,24 +35,41 @@ const (
 	LibraryViewUntagged         = "untagged"
 	LibraryViewNoSubtitle       = "no_subtitle"
 	LibraryViewStale            = "stale"
+	// LibraryViewLocalMetadataUpdated：本地 NFO/元数据有更新待应用（D-PC39）。
+	LibraryViewLocalMetadataUpdated = "local_metadata_updated"
+
+	// StaleReasonUnknown 是 stale_reason 筛选里「原因未记录」（空原因）的取值（D-PC06）。
+	StaleReasonUnknown = "unknown"
 )
+
+// hasAnySubtitleSQL 是「有字幕」的唯一判定式（D-PC17）：字幕索引有片段、同目录有旁挂字幕，
+// 或探测到内嵌字幕流。「无字幕」视图取它的反面，Jellyfin 的 HasSubtitles 也应复用它，
+// 不得各自再写一份。列名全部限定，可以直接嵌进任何以 videos 为外层的查询（PG 的 42702）。
+// 注意：设计文档写的是 media_streams.codec_type，实际列是 stream_type。
+const hasAnySubtitleSQL = `(EXISTS (SELECT 1 FROM subtitle_index_states sis WHERE sis.video_id = videos.id AND (sis.segment_count > 0 OR sis.has_sidecar))
+	OR EXISTS (SELECT 1 FROM media_streams ms WHERE ms.video_id = videos.id AND ms.stream_type = 'subtitle'))`
 
 const recentlyAddedWindow = 30 * 24 * time.Hour
 
 // LibraryFilter 描述主片库和随机播放共享的筛选边界。
 type LibraryFilter struct {
-	SearchMode string   `json:"search_mode"`
-	Keyword    string   `json:"keyword"`
-	PathPrefix string   `json:"path_prefix"`
-	SmartView  string   `json:"smart_view"`
-	TagIDs     []uint   `json:"tag_ids"`
-	MinSize    int64    `json:"min_size"`
-	MaxSize    int64    `json:"max_size"`
-	MinHeight  int      `json:"min_height"`
-	MaxHeight  int      `json:"max_height"`
-	MinRating  *float64 `json:"min_rating"`
-	MaxRating  *float64 `json:"max_rating"`
-	SortMode   string   `json:"sort_mode"`
+	SearchMode string `json:"search_mode"`
+	Keyword    string `json:"keyword"`
+	PathPrefix string `json:"path_prefix"`
+	SmartView  string `json:"smart_view"`
+	TagIDs     []uint `json:"tag_ids"`
+	// PersonIDs 是人物筛选（D-PC33）：AND 语义，空表示不筛。
+	PersonIDs []uint `json:"person_ids"`
+	// StaleReason 只在「路径失效」视图里生效，精确匹配 models.StaleReason*；
+	// StaleReasonUnknown 表示空原因（历史失效行）。
+	StaleReason string   `json:"stale_reason"`
+	MinSize     int64    `json:"min_size"`
+	MaxSize     int64    `json:"max_size"`
+	MinHeight   int      `json:"min_height"`
+	MaxHeight   int      `json:"max_height"`
+	MinRating   *float64 `json:"min_rating"`
+	MaxRating   *float64 `json:"max_rating"`
+	SortMode    string   `json:"sort_mode"`
 }
 
 // LibraryVideoCursor is an opaque stable cursor for SearchLibraryVideoPage.
@@ -94,7 +111,13 @@ var validLibraryViews = map[string]struct{}{
 	LibraryViewAll: {}, LibraryViewFavorites: {}, LibraryViewLiked: {}, LibraryViewContinueWatching: {},
 	LibraryViewUnwatched: {}, LibraryViewWatched: {}, LibraryViewRecentlyAdded: {},
 	LibraryViewRecentlyPlayed: {}, LibraryViewUntagged: {}, LibraryViewNoSubtitle: {},
-	LibraryViewStale: {},
+	LibraryViewStale: {}, LibraryViewLocalMetadataUpdated: {},
+}
+
+var validStaleReasons = map[string]struct{}{
+	StaleReasonUnknown: {}, models.StaleReasonOfflineRoot: {}, models.StaleReasonMissingFile: {},
+	models.StaleReasonRemovedRoot: {}, models.StaleReasonOutsideRoots: {}, models.StaleReasonPlayFailed: {},
+	models.StaleReasonReadError: {}, models.StaleReasonWatcherMissing: {},
 }
 
 func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
@@ -116,6 +139,16 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 	}
 	filter.TagIDs = uniqueUintIDs(filter.TagIDs)
 	sort.Slice(filter.TagIDs, func(i, j int) bool { return filter.TagIDs[i] < filter.TagIDs[j] })
+	filter.PersonIDs = uniqueUintIDs(filter.PersonIDs)
+	sort.Slice(filter.PersonIDs, func(i, j int) bool { return filter.PersonIDs[i] < filter.PersonIDs[j] })
+	filter.StaleReason = strings.TrimSpace(filter.StaleReason)
+	if filter.SmartView != LibraryViewStale {
+		filter.StaleReason = ""
+	} else if filter.StaleReason != "" {
+		if _, ok := validStaleReasons[filter.StaleReason]; !ok {
+			return LibraryFilter{}, fmt.Errorf("不支持的失效原因: %s", filter.StaleReason)
+		}
+	}
 	if filter.MinSize < 0 || filter.MaxSize < 0 || filter.MinHeight < 0 || filter.MaxHeight < 0 {
 		return LibraryFilter{}, fmt.Errorf("筛选范围不能为负数")
 	}
@@ -201,6 +234,12 @@ func (scope cleanupPathScope) contains(path string) bool {
 }
 
 func applyScanRootScope(query *gorm.DB) (*gorm.DB, error) {
+	return applyScanScope(query, true)
+}
+
+// applyScanScope 是 applyScanRootScope 的实现。includeRoots=false 时只保留黑名单排除、
+// 跳过扫描根裁剪：「路径失效」视图要显示根被移除后落到范围外的记录（D-PC06）。
+func applyScanScope(query *gorm.DB, includeRoots bool) (*gorm.DB, error) {
 	scope, err := loadCleanupPathScope()
 	if err != nil {
 		return nil, err
@@ -209,7 +248,7 @@ func applyScanRootScope(query *gorm.DB) (*gorm.DB, error) {
 		query = query.Where(`NOT (videos.path = ? OR videos.path LIKE ? ESCAPE '\')`, excluded, escapeSQLLikePrefix(scanRootChildPrefix(excluded))+"%")
 	}
 	roots := scope.roots
-	if len(roots) == 0 {
+	if len(roots) == 0 || !includeRoots {
 		return query, nil
 	}
 	conditions := database.DB.Session(&gorm.Session{NewDB: true})
@@ -235,7 +274,8 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	}
 	filter = normalized
 
-	query, err = applyScanRootScope(query)
+	// 失效视图跳过根裁剪（黑名单仍排除）：根被移除后落到范围外的记录正是要在这里找回。
+	query, err = applyScanScope(query, filter.SmartView != LibraryViewStale)
 	if err != nil {
 		return nil, err
 	}
@@ -282,6 +322,9 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 			Having("COUNT(DISTINCT tag_id) = ?", len(filter.TagIDs))
 		query = query.Where("videos.id IN (?)", subquery)
 	}
+	for _, personID := range filter.PersonIDs {
+		query = query.Where("EXISTS (SELECT 1 FROM video_people vp WHERE vp.video_id = videos.id AND vp.person_id = ?)", personID)
+	}
 
 	switch filter.SmartView {
 	case LibraryViewFavorites:
@@ -299,11 +342,21 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	case LibraryViewRecentlyPlayed:
 		query = query.Where("videos.last_played_at IS NOT NULL")
 	case LibraryViewUntagged:
-		query = query.Where("NOT EXISTS (SELECT 1 FROM video_tags WHERE video_tags.video_id = videos.id)")
+		// 自动标签（人物/自动分类等）不算「已打标签」（D-PC33）。
+		query = query.Where("NOT EXISTS (SELECT 1 FROM video_tags vt JOIN tags t ON t.id = vt.tag_id WHERE vt.video_id = videos.id AND COALESCE(t.automatic_kind, '') = '')")
 	case LibraryViewNoSubtitle:
-		query = query.Where("NOT EXISTS (SELECT 1 FROM subtitle_index_states WHERE subtitle_index_states.video_id = videos.id AND subtitle_index_states.segment_count > 0)")
+		query = query.Where("NOT " + hasAnySubtitleSQL)
+	case LibraryViewLocalMetadataUpdated:
+		query = query.Where("EXISTS (SELECT 1 FROM video_local_metadata_states lms WHERE lms.video_id = videos.id AND lms.status = ?)", LocalMetadataStateUpdateAvailable)
 	case LibraryViewStale:
 		query = query.Where("videos.is_stale = ?", true)
+		switch filter.StaleReason {
+		case "":
+		case StaleReasonUnknown:
+			query = query.Where("COALESCE(videos.stale_reason, '') = ''")
+		default:
+			query = query.Where("videos.stale_reason = ?", filter.StaleReason)
+		}
 	}
 
 	// 失效记录只在「路径失效」视图里露面（D-S02）。它们当前指不到文件：留在默认
@@ -472,33 +525,156 @@ func (s *VideoService) ListSavedLibraryViews() ([]models.SavedLibraryView, error
 	return views, err
 }
 
-// SaveLibraryView 创建命名保存视图。
-func (s *VideoService) SaveLibraryView(input SavedLibraryViewInput) (*models.SavedLibraryView, error) {
-	name := strings.TrimSpace(input.Name)
+// ErrSavedViewNameTaken 是保存视图重名时的错误，文案即错误码 saved_view_name_taken，前端按它映射提示。
+var ErrSavedViewNameTaken = errors.New("saved_view_name_taken")
+
+// buildSavedLibraryView 校验名称并把筛选条件规范化成保存视图行（新建与更新共用）。
+func buildSavedLibraryView(name string, input LibraryFilter) (models.SavedLibraryView, error) {
+	name = strings.TrimSpace(name)
 	if name == "" {
-		return nil, fmt.Errorf("视图名称不能为空")
+		return models.SavedLibraryView{}, fmt.Errorf("视图名称不能为空")
 	}
 	if len([]rune(name)) > 80 {
-		return nil, fmt.Errorf("视图名称不能超过 80 个字符")
+		return models.SavedLibraryView{}, fmt.Errorf("视图名称不能超过 80 个字符")
 	}
-	filter, err := normalizeLibraryFilter(input.LibraryFilter)
+	filter, err := normalizeLibraryFilter(input)
 	if err != nil {
-		return nil, err
+		return models.SavedLibraryView{}, err
 	}
 	tagJSON, err := json.Marshal(filter.TagIDs)
 	if err != nil {
-		return nil, fmt.Errorf("编码标签筛选失败: %w", err)
+		return models.SavedLibraryView{}, fmt.Errorf("编码标签筛选失败: %w", err)
 	}
-	view := models.SavedLibraryView{
+	personJSON, err := json.Marshal(filter.PersonIDs)
+	if err != nil {
+		return models.SavedLibraryView{}, fmt.Errorf("编码人物筛选失败: %w", err)
+	}
+	return models.SavedLibraryView{
 		Name: name, SearchMode: filter.SearchMode, Keyword: filter.Keyword, SmartView: filter.SmartView,
-		TagIDsJSON: string(tagJSON), MinSize: filter.MinSize, MaxSize: filter.MaxSize,
+		TagIDsJSON: string(tagJSON), PersonIDsJSON: string(personJSON), MinSize: filter.MinSize, MaxSize: filter.MaxSize,
 		MinHeight: filter.MinHeight, MaxHeight: filter.MaxHeight,
 		MinRating: filter.MinRating, MaxRating: filter.MaxRating, SortMode: filter.SortMode,
+	}, nil
+}
+
+// SaveLibraryView 创建命名保存视图。
+func (s *VideoService) SaveLibraryView(input SavedLibraryViewInput) (*models.SavedLibraryView, error) {
+	view, err := buildSavedLibraryView(input.Name, input.LibraryFilter)
+	if err != nil {
+		return nil, err
 	}
 	if err := database.DB.Create(&view).Error; err != nil {
 		return nil, fmt.Errorf("保存视图失败: %w", err)
 	}
 	return &view, nil
+}
+
+// UpdateSavedLibraryView 用新的名称与筛选条件覆盖已有视图（D-PC35「用当前条件更新」「重命名」）。
+// 名称与另一个活跃视图重名时返回 ErrSavedViewNameTaken；视图不存在返回 gorm.ErrRecordNotFound。
+func (s *VideoService) UpdateSavedLibraryView(id uint, name string, filter LibraryFilter) (*models.SavedLibraryView, error) {
+	if id == 0 {
+		return nil, fmt.Errorf("视图 ID 不能为空")
+	}
+	next, err := buildSavedLibraryView(name, filter)
+	if err != nil {
+		return nil, err
+	}
+	var current models.SavedLibraryView
+	if err := database.DB.First(&current, id).Error; err != nil {
+		return nil, err
+	}
+	var taken int64
+	if err := database.DB.Model(&models.SavedLibraryView{}).Where("name = ? AND id <> ?", next.Name, id).Count(&taken).Error; err != nil {
+		return nil, err
+	}
+	if taken > 0 {
+		return nil, ErrSavedViewNameTaken
+	}
+	updates := map[string]interface{}{
+		"name": next.Name, "search_mode": next.SearchMode, "keyword": next.Keyword, "smart_view": next.SmartView,
+		"tag_ids_json": next.TagIDsJSON, "person_ids_json": next.PersonIDsJSON,
+		"min_size": next.MinSize, "max_size": next.MaxSize, "min_height": next.MinHeight, "max_height": next.MaxHeight,
+		"min_rating": next.MinRating, "max_rating": next.MaxRating, "sort_mode": next.SortMode,
+	}
+	result := database.DB.Model(&models.SavedLibraryView{}).Where("id = ?", id).Updates(updates)
+	if result.Error != nil {
+		return nil, fmt.Errorf("更新视图失败: %w", result.Error)
+	}
+	if result.RowsAffected != 1 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	var updated models.SavedLibraryView
+	if err := database.DB.First(&updated, id).Error; err != nil {
+		return nil, err
+	}
+	return &updated, nil
+}
+
+// ActiveTagIDsResult 是 FilterActiveTagIDs 的返回：保留下来的标签 ID 与被剔除的数量。
+type ActiveTagIDsResult struct {
+	TagIDs  []uint `json:"tag_ids"`
+	Dropped int    `json:"dropped"`
+}
+
+// activeTagIDs 过滤掉不存在或已软删的标签 ID（D-PC35），返回保留的 ID（去重、升序）与被剔除的数量。
+// 保存视图、应用保存视图、Jellyfin 标签组查询都用它，不各自再写一份。
+func activeTagIDs(ids []uint) ([]uint, int, error) {
+	wanted := uniqueUintIDs(ids)
+	sort.Slice(wanted, func(i, j int) bool { return wanted[i] < wanted[j] })
+	if len(wanted) == 0 {
+		return []uint{}, 0, nil
+	}
+	active := make([]uint, 0, len(wanted))
+	if err := database.DB.Model(&models.Tag{}).Where("id IN ?", wanted).Order("id ASC").Pluck("id", &active).Error; err != nil {
+		return nil, 0, fmt.Errorf("加载标签失败: %w", err)
+	}
+	return active, len(wanted) - len(active), nil
+}
+
+// FilterActiveTagIDs 是 activeTagIDs 的桌面入口：前端保存或应用视图前调用，
+// 用返回的 Dropped 提示「N 个条件已失效」。
+func (s *VideoService) FilterActiveTagIDs(ids []uint) (*ActiveTagIDsResult, error) {
+	active, dropped, err := activeTagIDs(ids)
+	if err != nil {
+		return nil, err
+	}
+	return &ActiveTagIDsResult{TagIDs: active, Dropped: dropped}, nil
+}
+
+// ListStaleReasonCounts 返回失效记录按原因的计数（D-PC06），空原因归入 StaleReasonUnknown。
+// 口径与「路径失效」视图一致：不做根裁剪，黑名单仍排除。
+func (s *VideoService) ListStaleReasonCounts() (map[string]int, error) {
+	query, err := applyScanScope(database.DB.Model(&models.Video{}).Where("videos.is_stale = ?", true), false)
+	if err != nil {
+		return nil, err
+	}
+	var rows []struct {
+		Reason string
+		Count  int
+	}
+	if err := query.Select("COALESCE(videos.stale_reason, '') AS reason, COUNT(*) AS count").
+		Group("COALESCE(videos.stale_reason, '')").Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int, len(rows))
+	for _, row := range rows {
+		reason := row.Reason
+		if reason == "" {
+			reason = StaleReasonUnknown
+		}
+		counts[reason] += row.Count
+	}
+	return counts, nil
+}
+
+// visibleVideoQuery 是「默认视图」的可见口径：扫描根之内、不在黑名单、非失效（D-PC06）。
+// 头部总数与洞察页总数共用它，保证与片库列表结果条对得上。
+func visibleVideoQuery(query *gorm.DB) (*gorm.DB, error) {
+	query, err := applyScanRootScope(query)
+	if err != nil {
+		return nil, err
+	}
+	return query.Where("videos.is_stale = ?", false), nil
 }
 
 // SearchLibraryVideoPage provides stable pagination for balanced and nullable rating sorts.
@@ -817,7 +993,7 @@ func (s *VideoService) GetLibraryCounts() (*LibraryCounts, error) {
 	counts := &LibraryCounts{}
 	// 顶栏这个数必须和片库列表用同一套扫描根裁剪，否则"库 N 视频"会比列表结果条多出
 	// 一批范围外的旧记录，两个数字并排显示却对不上。
-	videoQuery, err := applyScanRootScope(database.DB.Model(&models.Video{}))
+	videoQuery, err := visibleVideoQuery(database.DB.Model(&models.Video{}))
 	if err != nil {
 		return nil, err
 	}

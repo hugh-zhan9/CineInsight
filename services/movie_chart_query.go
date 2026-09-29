@@ -158,6 +158,8 @@ type WatchedMovieView struct {
 	Title     string    `json:"title"`
 	HasPoster bool      `json:"has_poster"`
 	MarkedAt  time.Time `json:"marked_at" ts_type:"string"`
+	// LinkedVideoIDs 是已关联的活跃片库视频 ID（D-PC52），非空时界面提供「在片库打开」。
+	LinkedVideoIDs []uint `json:"linked_video_ids"`
 }
 
 // ValidateChartYear 校验年份入参，供绑定层在转发前调用。
@@ -435,13 +437,18 @@ func (s *MovieChartService) ListWatched() ([]WatchedMovieYearGroup, error) {
 	if err != nil {
 		return nil, err
 	}
+	links, err := s.linkedVideoIDsByDouban()
+	if err != nil {
+		return nil, err
+	}
 	groups := make([]WatchedMovieYearGroup, 0)
 	for _, row := range rows {
 		view := WatchedMovieView{
-			DoubanID:  row.DoubanID,
-			Title:     row.Title,
-			HasPoster: posters[row.DoubanID],
-			MarkedAt:  row.MarkedAt,
+			DoubanID:       row.DoubanID,
+			Title:          row.Title,
+			HasPoster:      posters[row.DoubanID],
+			MarkedAt:       row.MarkedAt,
+			LinkedVideoIDs: append([]uint{}, links[row.DoubanID]...),
 		}
 		// 行已经按年份倒序排好，所以只要和上一组比一次年份就够，不用先建 map 再排序。
 		if len(groups) > 0 && groups[len(groups)-1].Year == row.ReleaseYear {

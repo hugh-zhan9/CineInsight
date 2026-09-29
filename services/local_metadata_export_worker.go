@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sort"
 	"sync"
 	"time"
@@ -105,6 +106,12 @@ func (s *LocalMetadataService) ExportVideoNFO(ctx context.Context, videoID uint)
 	})
 	if result != nil {
 		result.Warnings = warnings
+	}
+	if err == nil && result != nil {
+		// 写出成功后把磁盘上的当前 manifest 记为已应用，避免下次扫描把刚写出的 NFO 判成「有更新」。
+		if syncErr := s.syncLocalMetadataStateAfterExport(video.ID, video.Path); syncErr != nil {
+			log.Printf("NFO 写出后同步本地资料状态失败: video=%d err=%v", video.ID, syncErr)
+		}
 	}
 	return result, err
 }

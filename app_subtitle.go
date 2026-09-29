@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"video-master/models"
 	"video-master/services"
@@ -117,6 +118,13 @@ func (a *App) TranslateSubtitle(req services.SubtitleTranslateRequest) (*service
 	config := subtitleGenerateOptionsFromSettings(settings, false).TranslationConfig
 	result, err := a.subtitleService.TranslateSubtitleFile(a.backgroundContext(), video.Path, req, config)
 	log.Printf("API TranslateSubtitle id=%d target=%s mode=%s provider=%s err=%v", req.VideoID, req.TargetLang, req.Mode, config.Provider, err)
+	// 带错误码的失败（字幕缺失、非 UTF-8、非同名 .srt）放进返回结构的 error_code，让前端分流（G-3）。
+	if coded := asSubtitleCodedError(err); coded != nil {
+		return &services.SubtitleTranslateResult{
+			VideoID: req.VideoID, Mode: req.Mode, TargetLang: req.TargetLang,
+			ErrorCode: coded.Code, Message: coded.Message, DetectedEncoding: coded.DetectedEncoding,
+		}, nil
+	}
 	return result, err
 }
 
@@ -152,7 +160,81 @@ func (a *App) GetSubtitleEditDocument(videoID uint) (*services.SubtitleEditDocum
 	}
 	document, err := a.subtitleWorkbench.GetDocument(*video)
 	log.Printf("API GetSubtitleEditDocument id=%d entries=%d err=%v", videoID, subtitleEditEntryCount(document), err)
+	// subtitle_missing / subtitle_not_sidecar_srt / subtitle_encoding_not_utf8 以 error_code 返回，
+	// 前端据此显示「新建空白字幕」或「转换为 UTF-8」（D-PC14、D-PC15、D-PC17）。
+	if coded := asSubtitleCodedError(err); coded != nil {
+		return &services.SubtitleEditDocument{
+			VideoID: videoID, Entries: []subtitleparser.EditorSegment{}, Issues: []subtitleparser.DocumentIssue{},
+			ErrorCode: coded.Code, Message: coded.Message, DetectedEncoding: coded.DetectedEncoding,
+		}, nil
+	}
 	return document, err
+}
+
+// CreateBlankSubtitleDocument 以空文档打开还没有字幕的视频，保存时才创建 .srt（D-PC15）。
+func (a *App) CreateBlankSubtitleDocument(videoID uint) (*services.SubtitleEditDocument, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+	document, err := a.subtitleWorkbench.NewBlankDocument(*video)
+	log.Printf("API CreateBlankSubtitleDocument id=%d err=%v", videoID, err)
+	return document, err
+}
+
+// ConvertSubtitleToUTF8 把 GBK/Big5/UTF-16 字幕转成 UTF-8，写回前先备份（D-PC14）。
+func (a *App) ConvertSubtitleToUTF8(videoID uint, fromEncoding string) (*services.SubtitleConvertResult, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := a.subtitleWorkbench.ConvertToUTF8(*video, fromEncoding)
+	log.Printf("API ConvertSubtitleToUTF8 id=%d from=%s err=%v", videoID, fromEncoding, err)
+	return result, err
+}
+
+// GetSubtitleOverwriteInfo 报告生成字幕是否会覆盖现有 .srt，以及哪些视频共用它（D-PC13）。
+func (a *App) GetSubtitleOverwriteInfo(videoID uint) (*services.SubtitleOverwriteInfo, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+	return a.subtitleService.GetSubtitleOverwriteInfo(*video)
+}
+
+// ListSubtitleBackups 列出视频的字幕备份（最新 5 份）。
+func (a *App) ListSubtitleBackups(videoID uint) ([]services.SubtitleBackup, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+	return a.subtitleService.ListSubtitleBackups(*video)
+}
+
+// RestoreSubtitleBackup 恢复某份字幕备份；恢复前会先备份当前字幕。
+func (a *App) RestoreSubtitleBackup(videoID uint, backupID string) (*services.SubtitleRestoreResult, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := a.subtitleService.RestoreSubtitleBackup(*video, backupID)
+	log.Printf("API RestoreSubtitleBackup id=%d backup=%s err=%v", videoID, backupID, err)
+	return result, err
+}
+
+// DiscardPendingSubtitle 放弃校验未通过的临时字幕（用户选择不「强制生成」时调用）。
+func (a *App) DiscardPendingSubtitle(videoID uint) error {
+	err := a.subtitleService.DiscardPendingSubtitle(videoID)
+	log.Printf("API DiscardPendingSubtitle id=%d err=%v", videoID, err)
+	return err
+}
+
+func asSubtitleCodedError(err error) *services.SubtitleCodedError {
+	var coded *services.SubtitleCodedError
+	if errors.As(err, &coded) {
+		return coded
+	}
+	return nil
 }
 
 func subtitleEditEntryCount(document *services.SubtitleEditDocument) int {

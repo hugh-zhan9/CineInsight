@@ -53,7 +53,8 @@ func TestImageTrashDeleteMovesFileAndCreatesEntry(t *testing.T) {
 	if _, err := os.Stat(imagePath); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("期望原文件已移走, err=%v", err)
 	}
-	trashPath := filepath.Join(root, DefaultTrashDirName, "photo.jpg")
+	// 测试进程里的系统废纸篓是替身（system_trash_testhook_test.go）：同卷重命名进「原目录/.Trash」。
+	trashPath := filepath.Join(root, ".Trash", "photo.jpg")
 	if _, err := os.Stat(trashPath); err != nil {
 		t.Fatalf("期望文件已移动到回收站: %v", err)
 	}
@@ -77,8 +78,12 @@ func TestImageTrashDeleteMovesFileAndCreatesEntry(t *testing.T) {
 	if entry.State != trashStateDeleted || !entry.FileMoved {
 		t.Fatalf("条目应处于 deleted 且标记文件已移动: %#v", entry)
 	}
-	if entry.FileSize != int64(len("image-bytes")) || entry.FileModTime == 0 || entry.FileSHA256 == "" {
-		t.Fatalf("条目指纹缺失: %#v", entry)
+	// trash 模式只记录身份（大小、mtime、dev:inode），不再整文件 SHA-256（D-PC01）。
+	if entry.FileSize != int64(len("image-bytes")) || entry.FileModTime == 0 || entry.FileSHA256 != "" {
+		t.Fatalf("条目指纹不符: %#v", entry)
+	}
+	if entry.Mode != models.TrashModeTrash || len(entry.DeleteBatchID) != 32 {
+		t.Fatalf("条目应为 trash 模式并带批次标识: %#v", entry)
 	}
 }
 
@@ -220,8 +225,8 @@ func TestImageTrashRejectsDuplicateDelete(t *testing.T) {
 	}
 }
 
-// TC-5 场景：deleteFile=false 仅软删记录——零条目、零文件移动。
-func TestImageTrashDeleteRecordOnlyCreatesNoEntryAndKeepsFile(t *testing.T) {
+// TC-5 场景：deleteFile=false 仅软删记录——建 record_only 条目（IMG-02），零文件移动。
+func TestImageTrashDeleteRecordOnlyCreatesRecordOnlyEntryAndKeepsFile(t *testing.T) {
 	setupImageServiceTestDB(t)
 	svc := NewImageService()
 	root := t.TempDir()
@@ -242,8 +247,10 @@ func TestImageTrashDeleteRecordOnlyCreatesNoEntryAndKeepsFile(t *testing.T) {
 	if err := database.DB.Unscoped().First(&deleted, image.ID).Error; err != nil || !deleted.DeletedAt.IsValid() {
 		t.Fatalf("记录应被软删除: %#v err=%v", deleted, err)
 	}
-	if entries := imageTrashTestEntries(t, svc); len(entries) != 0 {
-		t.Fatalf("仅删除记录不应创建回收站条目: %#v", entries)
+	entries := imageTrashTestEntries(t, svc)
+	if len(entries) != 1 || entries[0].Mode != models.TrashModeRecordOnly || entries[0].FileMoved || entries[0].TrashPath != "" ||
+		entries[0].FileSize != int64(len("keep-me")) || entries[0].FileModTime == 0 || entries[0].DeleteBatchID == "" {
+		t.Fatalf("仅删除记录应建带身份的 record_only 条目: %#v", entries)
 	}
 }
 

@@ -70,7 +70,12 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 	}
 	now := s.now()
 	stats := &LibraryStats{GeneratedAt: now}
-	if err := database.DB.Model(&models.Video{}).Select(`
+	// 洞察页的总数与头部、片库默认视图同一口径：扫描根 + 黑名单 + 非失效（D-PC06、PLAY-07）。
+	summaryQuery, err := visibleVideoQuery(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return nil, err
+	}
+	if err := summaryQuery.Select(`
 		COUNT(*) AS video_count,
 		COALESCE(SUM(duration), 0) AS total_duration,
 		COALESCE(SUM(size), 0) AS total_size,
@@ -86,13 +91,16 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 		stats.Summary.WatchedPercent = float64(stats.Summary.WatchedCount) * 100 / float64(stats.Summary.VideoCount)
 		stats.Summary.ViewedPercent = float64(stats.Summary.ViewedCount) * 100 / float64(stats.Summary.VideoCount)
 	}
-	if err := database.DB.Model(&models.Video{}).
-		Where("created_at >= ?", now.AddDate(0, 0, -30)).
+	recentQuery, err := visibleVideoQuery(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return nil, err
+	}
+	if err := recentQuery.
+		Where("videos.created_at >= ?", now.AddDate(0, 0, -30)).
 		Count(&stats.Summary.RecentAddedCount).Error; err != nil {
 		return nil, err
 	}
 
-	var err error
 	if stats.StorageByDirectory, err = libraryStorageByDirectory(); err != nil {
 		return nil, err
 	}
@@ -113,7 +121,11 @@ func (s *LibraryStatsService) GetStats() (*LibraryStats, error) {
 	if stats.TotalPlayEvents, stats.PlaysBySource, err = libraryPlayEventTotals(); err != nil {
 		return nil, err
 	}
-	if err := database.DB.Model(&models.Video{}).
+	ratingQuery, err := visibleVideoQuery(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return nil, err
+	}
+	if err := ratingQuery.
 		Select("personal_rating AS rating, COUNT(*) AS count").
 		Where("personal_rating IS NOT NULL").Group("personal_rating").Order("personal_rating ASC").
 		Scan(&stats.RatingDistribution).Error; err != nil {
@@ -187,7 +199,11 @@ func libraryPlayEventTotals() (int64, map[string]int64, error) {
 
 func libraryStorageByDirectory() ([]LibraryStatsBucket, error) {
 	var buckets []LibraryStatsBucket
-	err := database.DB.Model(&models.Video{}).
+	query, err := visibleVideoQuery(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return nil, err
+	}
+	err = query.
 		Select("directory AS label, COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes").
 		Group("directory").Order("bytes DESC, label ASC").Limit(50).Scan(&buckets).Error
 	return buckets, err
@@ -200,6 +216,10 @@ func libraryStorageByTag(byCount bool) ([]LibraryStatsBucket, error) {
 		Joins("JOIN video_tags ON video_tags.tag_id = tags.id").
 		Joins("JOIN videos ON videos.id = video_tags.video_id AND videos.deleted_at IS NULL").
 		Where("tags.deleted_at IS NULL")
+	query, err := visibleVideoQuery(query)
+	if err != nil {
+		return nil, err
+	}
 	// 标签榜按出现次数排序；存储面板展示的是字节，排序与
 	// 展示口径一致，避免 top-N 截断漏掉占用最大的标签。
 	order := "bytes DESC, tags.name ASC"
@@ -209,7 +229,7 @@ func libraryStorageByTag(byCount bool) ([]LibraryStatsBucket, error) {
 	} else {
 		query = query.Limit(50)
 	}
-	err := query.Group("tags.id, tags.name").Order(order).Scan(&buckets).Error
+	err = query.Group("tags.id, tags.name").Order(order).Scan(&buckets).Error
 	return buckets, err
 }
 
@@ -219,7 +239,11 @@ func libraryStorageByResolution() ([]LibraryStatsBucket, error) {
 		Count  int64
 		Bytes  int64
 	}
-	if err := database.DB.Model(&models.Video{}).
+	query, err := visibleVideoQuery(database.DB.Model(&models.Video{}))
+	if err != nil {
+		return nil, err
+	}
+	if err := query.
 		Select("height, COUNT(*) AS count, COALESCE(SUM(size), 0) AS bytes").
 		Group("height").Scan(&rows).Error; err != nil {
 		return nil, err

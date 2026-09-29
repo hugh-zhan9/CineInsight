@@ -14,6 +14,14 @@ import (
 	"video-master/services/subtitleparser"
 )
 
+// newTestSubtitleWorkbench 造一个不带 SubtitleService 的工作台，并给写入器一个临时数据目录做备份根。
+func newTestSubtitleWorkbench(t *testing.T) *SubtitleWorkbenchService {
+	t.Helper()
+	service := NewSubtitleWorkbenchService(nil)
+	service.dataDir = t.TempDir()
+	return service
+}
+
 type subtitleWorkbenchTranslatorFunc func(context.Context, []string, string, string) ([]string, error)
 
 func (f subtitleWorkbenchTranslatorFunc) Translate(ctx context.Context, texts []string, sourceLang, targetLang string) ([]string, error) {
@@ -23,7 +31,7 @@ func (f subtitleWorkbenchTranslatorFunc) Translate(ctx context.Context, texts []
 func TestSubtitleWorkbenchSaveReplacesSRTAndRefreshesIndexWithoutBackup(t *testing.T) {
 	setupSubtitleSearchTestDB(t)
 	video, srtPath := createSubtitleWorkbenchFixture(t)
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 
 	document, err := service.GetDocument(*video)
 	if err != nil {
@@ -64,7 +72,7 @@ func TestSubtitleWorkbenchSaveReplacesSRTAndRefreshesIndexWithoutBackup(t *testi
 func TestSubtitleWorkbenchSaveRejectsExternalChange(t *testing.T) {
 	setupSubtitleSearchTestDB(t)
 	video, srtPath := createSubtitleWorkbenchFixture(t)
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 	document, err := service.GetDocument(*video)
 	if err != nil {
 		t.Fatalf("get document: %v", err)
@@ -105,7 +113,7 @@ func TestSubtitleWorkbenchSaveRejectsExternalChange(t *testing.T) {
 func TestSubtitleWorkbenchReportsSavedWhenIndexRefreshFails(t *testing.T) {
 	setupSubtitleSearchTestDB(t)
 	video, srtPath := createSubtitleWorkbenchFixture(t)
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 	document, err := service.GetDocument(*video)
 	if err != nil {
 		t.Fatalf("get document: %v", err)
@@ -140,7 +148,7 @@ func TestSubtitleWorkbenchReportsSavedWhenIndexRefreshFails(t *testing.T) {
 func TestSubtitleWorkbenchReplaceFailureLeavesOriginalUntouched(t *testing.T) {
 	setupSubtitleSearchTestDB(t)
 	video, srtPath := createSubtitleWorkbenchFixture(t)
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 	service.replaceFile = func(_, _ string) error { return errors.New("replace failed") }
 	document, err := service.GetDocument(*video)
 	if err != nil {
@@ -163,14 +171,14 @@ func TestSubtitleWorkbenchReplaceFailureLeavesOriginalUntouched(t *testing.T) {
 	if !strings.Contains(string(content), "original") || strings.Contains(string(content), "editor") {
 		t.Fatalf("original changed after replace failure: %q", string(content))
 	}
-	artifacts, _ := filepath.Glob(filepath.Join(filepath.Dir(srtPath), ".movie.srt.tmp-*"))
+	artifacts, _ := filepath.Glob(filepath.Join(filepath.Dir(srtPath), ".movie.srt.cineinsight-tmp-*"))
 	if len(artifacts) != 0 {
 		t.Fatalf("temporary files leaked: %#v", artifacts)
 	}
 }
 
 func TestSubtitleWorkbenchRetranslateIsAllOrNothing(t *testing.T) {
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 	service.translatorFactory = func(SubtitleTranslationConfig) (SubtitleTranslator, error) {
 		return subtitleWorkbenchTranslatorFunc(func(_ context.Context, texts []string, _, _ string) ([]string, error) {
 			return []string{"only one"}, nil
@@ -206,7 +214,7 @@ func TestSubtitleWorkbenchRefusesSymlinkedSubtitle(t *testing.T) {
 		t.Fatalf("symlink SRT: %v", err)
 	}
 
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 	if _, err := service.GetDocument(*video); err == nil {
 		t.Fatal("editing a symlinked subtitle must be refused")
 	}
@@ -255,12 +263,12 @@ func createSubtitleWorkbenchFixture(t *testing.T) (*models.Video, string) {
 
 // P-010：选区重译与字幕生成走同一套术语表 + 滑动窗口（D-033、D-035）。
 func TestSubtitleWorkbenchRetranslateInjectsGlossaryAndSlidesContextWindow(t *testing.T) {
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 	translator := &recordingContextualTranslator{reply: echoTranslationReply("译:")}
 	service.translatorFactory = func(SubtitleTranslationConfig) (SubtitleTranslator, error) { return translator, nil }
 	glossary := []GlossaryTerm{{SourceTerm: "Neo", TargetTerm: "尼奥"}}
 	resolvedFor := []uint{}
-	service.glossaryResolver = func(videoID uint) ([]GlossaryTerm, error) {
+	service.glossaryResolver = func(videoID uint, _ string) ([]GlossaryTerm, error) {
 		resolvedFor = append(resolvedFor, videoID)
 		return glossary, nil
 	}
@@ -294,14 +302,14 @@ func TestSubtitleWorkbenchRetranslateInjectsGlossaryAndSlidesContextWindow(t *te
 }
 
 func TestSubtitleWorkbenchRetranslateFailsWhenGlossaryCannotBeResolved(t *testing.T) {
-	service := NewSubtitleWorkbenchService(nil)
+	service := newTestSubtitleWorkbench(t)
 	service.translatorFactory = func(SubtitleTranslationConfig) (SubtitleTranslator, error) {
 		return &recordingContextualTranslator{reply: func(TranslationRequest) ([]string, error) {
 			t.Fatal("术语表解析失败时不应发出翻译请求")
 			return nil, nil
 		}}, nil
 	}
-	service.glossaryResolver = func(uint) ([]GlossaryTerm, error) { return nil, errors.New("glossary unavailable") }
+	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) { return nil, errors.New("glossary unavailable") }
 
 	_, err := service.Retranslate(context.Background(), SubtitleRetranslateRequest{
 		VideoID: 1, TargetLang: "zh", Entries: []SubtitleRetranslateEntry{{ClientID: "a", Text: "one"}},
