@@ -320,3 +320,22 @@ describe('后台任务状态条', () => {
     wrapper.unmount();
   });
 });
+
+describe('状态条任务名统一（APP-03）', () => {
+  it('APP-03 状态条的任务名取自共享标签表，与任务中心、命令面板同一说法', async () => {
+    const { BACKGROUND_TASK_LABELS } = await import('../../utils/idleScheduling.js');
+    const wrapper = await mountBars();
+    wrapper.vm.technicalBackfill = { ...wrapper.vm.technicalBackfill, running: true, total: 3, processed: 1 };
+    wrapper.vm.frameHash = { ...wrapper.vm.frameHash, running: true, total: 7, processed: 2 };
+    wrapper.vm.localMetadataBackfill = { ...wrapper.vm.localMetadataBackfill, running: true, total: 5, processed: 4 };
+    wrapper.vm.perceptualHash = { ...wrapper.vm.perceptualHash, running: true, total: 9, processed: 3 };
+    await wrapper.vm.$nextTick();
+
+    const text = wrapper.text();
+    expect(text).toContain(`${BACKGROUND_TASK_LABELS.technical} 1/3`);
+    expect(text).toContain(`${BACKGROUND_TASK_LABELS.frame_hash} 2/7`);
+    expect(text).toContain(`${BACKGROUND_TASK_LABELS.local_metadata} 4/5`);
+    expect(text).toContain(`${BACKGROUND_TASK_LABELS.phash}补全：已检查 3/9`);
+    wrapper.unmount();
+  });
+});

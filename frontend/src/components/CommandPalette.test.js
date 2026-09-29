@@ -16,6 +16,7 @@ vi.mock('../../wailsjs/go/main/App', () => api);
 import CommandPalette from './CommandPalette.vue';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { buildTaskCommands } from '../utils/taskCommands.js';
+import { feedbackState, resetFeedback } from '../utils/feedback.js';
 
 const scopesUsed = new Set();
 
@@ -147,6 +148,63 @@ describe('命令面板渲染与执行', () => {
     await flushPromises();
 
     expect(wrapper.emitted('close')).toHaveLength(1);
+  });
+});
+
+describe('执行反馈（APP-12）', () => {
+  function toastMessages() {
+    return feedbackState.toasts.map(toast => ({ level: toast.level, message: toast.message }));
+  }
+
+  beforeEach(() => resetFeedback());
+
+  it('APP-12 执行成功统一提示「已执行：<label>」', async () => {
+    register('page', [{ id: 'action:backup', group: 'action', label: '立即备份数据库', keywords: [], run: vi.fn(() => Promise.resolve({})) }]);
+    const wrapper = mountPalette();
+
+    await wrapper.get('[data-test="command-palette-input"]').trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+
+    expect(toastMessages()).toEqual([{ level: 'success', message: '已执行：立即备份数据库' }]);
+  });
+
+  it('APP-12 run() 返回 false（用户中途放弃）时不提示已执行', async () => {
+    register('page', [{ id: 'nav:page:videos', group: 'navigate', label: '打开视频', keywords: [], run: vi.fn(() => Promise.resolve(false)) }]);
+    const wrapper = mountPalette();
+
+    await wrapper.get('[data-test="command-palette-input"]').trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+
+    expect(toastMessages()).toEqual([]);
+  });
+
+  it('APP-12 执行失败仍报错，不报已执行', async () => {
+    register('page', [{ id: 'action:boom', group: 'action', label: '会失败的动作', keywords: [], run: vi.fn(() => Promise.reject(new Error('后端不可用'))) }]);
+    const wrapper = mountPalette();
+
+    await wrapper.get('[data-test="command-palette-input"]').trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+
+    expect(toastMessages()).toEqual([{ level: 'error', message: '执行「会失败的动作」失败：Error: 后端不可用' }]);
+  });
+
+  it('APP-11 beforeRun 先做准备（App 用它切到宿主页），返回 false 就不执行', async () => {
+    const run = vi.fn();
+    register('page', [{ id: 'library.openAIReview', group: 'action', label: 'AI 标签审阅', keywords: [], run }]);
+    const beforeRun = vi.fn(() => Promise.resolve(false));
+    const wrapper = mount(CommandPalette, { props: { open: true, openVideo: vi.fn(), beforeRun } });
+
+    await wrapper.get('[data-test="command-palette-input"]').trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(beforeRun).toHaveBeenCalledWith(expect.objectContaining({ id: 'library.openAIReview' }));
+    expect(run).not.toHaveBeenCalled();
+
+    beforeRun.mockResolvedValue(true);
+    await wrapper.setProps({ open: false });
+    await wrapper.setProps({ open: true });
+    await wrapper.get('[data-test="command-palette-input"]').trigger('keydown', { key: 'Enter' });
+    await flushPromises();
+    expect(run).toHaveBeenCalledTimes(1);
   });
 });
 

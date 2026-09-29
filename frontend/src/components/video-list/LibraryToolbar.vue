@@ -55,8 +55,16 @@
           <option value="rating_asc">评分从低到高</option>
         </select>
 
+        <!-- 主键带上当前随机模式（PLAY-08）；语义模式下随机会忽略搜索词、从全库抽，所以禁用并说明原因。 -->
         <div class="split-btn">
-          <button type="button" class="split-btn__main" @click="$emit('play-random')">按当前条件随机</button>
+          <button
+            type="button"
+            class="split-btn__main"
+            data-test="random-play-main"
+            :disabled="randomDisabled"
+            :title="randomDisabled ? randomDisabledReason : null"
+            @click="$emit('play-random')"
+          >按当前条件随机 · {{ randomModeLabel }}</button>
           <span class="split-btn__divider" aria-hidden="true"></span>
           <button
             ref="randomTrigger"
@@ -86,7 +94,6 @@
           @click="toggleToolbarMenu('manage', 'manageTrigger')"
         >
           管理
-          <span v-if="manageAttentionCount > 0" class="toolbar-btn__badge">{{ manageAttentionCount }}</span>
           <span class="toolbar-btn__caret">▾</span>
         </button>
       </div>
@@ -111,6 +118,60 @@
               >{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
             </div>
           </div>
+          <!-- 人物筛选（D-PC33、META-02）：多选取交集，选中项与标签一样点一下取消；筛选条件归片库页持有，
+               这里只把选中的人物 emit 出去。 -->
+          <div class="person-filter-row" role="group" aria-label="人物筛选" data-test="person-filter">
+            <div class="person-filter-label">
+              <span class="person-filter-label__name">人物</span>
+              <span v-if="selectedPeople.length" class="person-filter-label__count">已选 {{ selectedPeople.length }}</span>
+            </div>
+            <div class="tags-wrap">
+              <button
+                v-for="person in selectedPeople"
+                :key="person.id"
+                type="button"
+                class="tag-chip tag-chip-wrap active"
+                :aria-label="`取消人物筛选 ${personName(person)}`"
+                :data-test="`person-filter-chip-${person.id}`"
+                @click="removePersonFilter(person.id)"
+              >
+                <span class="tag-chip-name">{{ personName(person) }}</span>
+                <span class="tag-chip-check">✓</span>
+              </button>
+              <div class="person-filter-combobox">
+                <input
+                  v-model="personKeyword"
+                  type="search"
+                  class="search-input person-filter-input"
+                  placeholder="搜索人物，回车添加"
+                  role="combobox"
+                  autocomplete="off"
+                  aria-label="搜索人物"
+                  aria-controls="library-person-filter-options"
+                  :aria-expanded="personMenuOpen"
+                  data-test="person-filter-search"
+                  @focus="openPersonMenu"
+                  @input="onPersonInput"
+                  @keydown="onPersonKeydown"
+                  @blur="closePersonMenu"
+                />
+                <div v-if="personMenuOpen" id="library-person-filter-options" class="person-filter-options" role="listbox" data-test="person-filter-options">
+                  <button
+                    v-for="(item, index) in personOptions"
+                    :key="item.person.id"
+                    type="button"
+                    role="option"
+                    :aria-selected="index === personActiveIndex"
+                    :class="['person-filter-option', { active: index === personActiveIndex }]"
+                    :data-test="`person-filter-option-${item.person.id}`"
+                    @mouseenter="personActiveIndex = index"
+                    @mousedown.prevent="addPersonFilter(item)"
+                  >{{ item.person.display_name }}</button>
+                  <span v-if="personOptions.length === 0" class="person-filter-options__empty">{{ personSearchError || '没有匹配的人物' }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
           <div v-for="group in tagGroups" :key="group.key" class="tag-category-row" role="group" :aria-label="group.label">
             <div class="tag-category-label">
               <span class="tag-category-label__name">{{ group.label }}</span>
@@ -127,7 +188,6 @@
               >
                 <span class="tag-chip-name">{{ tag.name }}</span>
                 <span v-if="isTagSelected(tag.id)" class="tag-chip-check">✓</span>
-                <button v-if="!tag.automatic_kind" type="button" class="tag-chip-delete" @click.stop="$emit('delete-tag', tag)">×</button>
               </div>
             </div>
           </div>
@@ -253,7 +313,7 @@
 </template>
 
 <script>
-import { CountLibraryVideos } from '../../../wailsjs/go/main/App';
+import { CountLibraryVideos, ListPeople } from '../../../wailsjs/go/main/App';
 import BaseMenu from '../ui/BaseMenu.vue';
 import BasePopover from '../ui/BasePopover.vue';
 import BatchActionBar from './BatchActionBar.vue';
@@ -261,6 +321,13 @@ import CollectionSuggestionPanel from '../CollectionSuggestionPanel.vue';
 import { GetCollectionSuggestionStatus } from '../../../wailsjs/go/main/App';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import { logFrontend } from '../../utils/frontendLog.js';
+import { registerCommands, unregisterCommands } from '../../utils/commandRegistry.js';
+
+// 随机模式在按钮与菜单上的说法（D-PC44：「优先未看」实为只抽未看，改叫「仅未看」）。
+const RANDOM_MODE_LABELS = { balanced: '均衡', unwatched: '仅未看', favorites: '仅收藏' };
+
+// 人物组合框一次最多列出的候选数。
+const PERSON_OPTION_LIMIT = 20;
 
 // 吸顶的片库工具栏：三层控件、标签行、结果条与批量操作栏，外加筛选浮层与三个下拉菜单。
 // 查询条件本身仍归 VideoListPage 持有，这里只负责呈现与把动作发回去；
@@ -280,6 +347,8 @@ export default {
     viewMode: { type: String, default: 'list' },
     rowDensity: { type: String, default: 'compact' },
     selectedTags: { type: Array, default: () => [] },
+    // 人物筛选的选中项 [{ id, name }]（D-PC33）。真值在片库页，这里只显示并 emit update:selectedPeople。
+    selectedPeople: { type: Array, default: () => [] },
     selectedSizeRange: { type: [String, Object], default: 'all' },
     selectedResRange: { type: [String, Object], default: 'all' },
     minRating: { type: String, default: '' },
@@ -300,7 +369,9 @@ export default {
     incrementalScan: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
-    aiTagSummary: { type: Object, required: true },
+    // 下面三项原先用于「管理」菜单的徽标与清理项；待处理数量与清理入口已并入顶栏的待处理工作台
+    // （D-PC27、D-PC59），工具栏不再渲染它们。片库页仍在传，prop 暂留，由片库页的切片一并清理。
+    aiTagSummary: { type: Object, default: () => ({}) },
     cleanupBadgeCount: { type: Number, default: 0 },
     cleanupAnalyzing: { type: Boolean, default: false },
     technicalBackfill: { type: Object, required: true },
@@ -315,6 +386,7 @@ export default {
   },
   emits: [
     'update:searchKeyword', 'update:smartView', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
+    'update:selectedPeople',
     'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'delete-tag', 'open-tag-manager',
     'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
     'manage-select', 'view-select', 'random-select',
@@ -338,6 +410,7 @@ export default {
         { label: '最近添加', value: 'recently_added' },
         { label: '未打标签', value: 'untagged' },
         { label: '无字幕', value: 'no_subtitle' },
+        { label: '本地资料有更新', value: 'local_metadata_updated' },
         { label: '路径失效', value: 'stale' }
       ],
       toolbarMenu: null,
@@ -346,7 +419,12 @@ export default {
       filterPreviewCount: null,
       filterPreviewTimer: null,
       collectionSuggestionOpen: false,
-      collectionSuggestionAnalyzing: false
+      collectionSuggestionAnalyzing: false,
+      personKeyword: '',
+      personCandidates: [],
+      personMenuOpen: false,
+      personActiveIndex: 0,
+      personSearchError: ''
     };
   },
   mounted() {
@@ -356,6 +434,38 @@ export default {
     this.registerRuntimeEvent('collection-suggestion-state', (data) => {
       this.collectionSuggestionAnalyzing = Boolean(data?.running);
     });
+    // 待处理工作台与 App 全局命令的跳转目标（详细设计 §6.1 的固定命令 ID）。工具栏常挂载在片库页里，
+    // 这几个面板与弹窗也都从这里打开；hidden：面板里另有 App 注册的同名全局命令，这里只作跳转目标。
+    registerCommands('library-toolbar', [
+      {
+        id: 'library.openCollectionSuggestions',
+        group: 'action',
+        label: '打开建议作品集',
+        keywords: ['collection', '建议作品集'],
+        hidden: true,
+        run: () => { this.collectionSuggestionOpen = true; }
+      },
+      {
+        id: 'library.openTrash',
+        group: 'action',
+        label: '打开回收站',
+        keywords: ['trash', '回收站'],
+        hidden: true,
+        run: () => { this.$emit('manage-select', { id: 'trash' }); }
+      },
+      {
+        id: 'library.openTagManager',
+        group: 'action',
+        label: '打开标签管理',
+        keywords: ['tag', '标签管理'],
+        hidden: true,
+        run: () => { this.$emit('open-tag-manager'); }
+      }
+    ]);
+  },
+  beforeUnmount() {
+    unregisterCommands('library-toolbar');
+    clearTimeout(this._personSearchTimer);
   },
   computed: {
 	tagGroups() {
@@ -417,6 +527,9 @@ export default {
           .filter(Boolean);
         if (names.length > 0) labels.push(`标签 ${names.join('、')}`);
       }
+      if (this.selectedPeople.length > 0) {
+        labels.push(`人物 ${this.selectedPeople.map(person => this.personName(person)).join('、')}`);
+      }
       // 按 min/max 取值比对，不比对象引用：保存视图恢复出来的区间是新对象。
       const rangeLabel = (options, range) => options.find(
         item => item.value.min === range.min && item.value.max === range.max
@@ -454,14 +567,9 @@ export default {
     filterPreviewText() {
       return this.filterPreviewCount === null ? '' : `（${this.formatCount(this.filterPreviewCount)}）`;
     },
-    manageAttentionCount() {
-      return (this.aiTagSummary.same_source_unread || 0) + (this.cleanupBadgeCount || 0);
-    },
+    // 「管理」菜单（D-PC59）：「AI 标签管理」「清理审阅」与菜单徽标已并入顶栏的待处理工作台
+    // （⌘K 打开清理中心），这里只留扫描、整理、补全与标签管理等库维护动作（APP-11）。
     manageMenuItems() {
-      const unread = this.aiTagSummary.same_source_unread || 0;
-      const cleanup = this.cleanupAnalyzing
-        ? '清理候选（分析中）'
-        : (this.cleanupBadgeCount ? `清理候选（待审阅 ${this.cleanupBadgeCount} 项）` : '清理候选');
       const items = [
         { heading: '扫描' },
         { id: 'scan-new', label: '扫描新目录', shortcut: '⇧⌘N', disabled: this.migrationRunning },
@@ -507,9 +615,7 @@ export default {
       }
       items.push(
         { heading: '维护' },
-        { id: 'ai-tags', label: unread ? `AI 标签管理（${unread} 未读）` : 'AI 标签管理', shortcut: '⌘T' },
         { id: 'tag-manager', label: '标签管理' },
-        { id: 'cleanup', label: cleanup, shortcut: '⌘K' },
         { id: 'collection-suggestions', label: this.collectionSuggestionAnalyzing ? '建议作品集（分析中）' : '建议作品集' },
         { id: 'trash', label: '回收站' }
       );
@@ -529,12 +635,25 @@ export default {
     },
     randomMenuItems() {
       return [
-        { id: 'mode:balanced', label: '均衡随机', checked: this.randomMode === 'balanced' },
-        { id: 'mode:unwatched', label: '随机未看', checked: this.randomMode === 'unwatched' },
-        { id: 'mode:favorites', label: '随机收藏', checked: this.randomMode === 'favorites' },
+        { id: 'mode:balanced', label: RANDOM_MODE_LABELS.balanced, checked: this.randomMode === 'balanced' },
+        { id: 'mode:unwatched', label: RANDOM_MODE_LABELS.unwatched, checked: this.randomMode === 'unwatched' },
+        { id: 'mode:favorites', label: RANDOM_MODE_LABELS.favorites, checked: this.randomMode === 'favorites' },
         { divider: true },
-        { id: 'pick-ten', label: `随机 ${this.randomPickSize} 部`, disabled: this.randomPickLoading }
+        { id: 'pick-ten', label: `随机 ${this.randomPickSize} 部`, disabled: this.randomPickLoading || this.randomDisabled }
       ];
+    },
+    randomModeLabel() {
+      return RANDOM_MODE_LABELS[this.randomMode] || RANDOM_MODE_LABELS.balanced;
+    },
+    randomDisabled() {
+      return this.searchMode === 'semantic';
+    },
+    randomDisabledReason() {
+      return '语义搜索模式下无法按当前条件随机（随机会忽略搜索词、从全库抽取），请切回文件或字幕搜索';
+    },
+    personOptions() {
+      const selected = new Set(this.selectedPeople.map(person => Number(person.id)));
+      return this.personCandidates.filter(item => item?.person?.id && !selected.has(Number(item.person.id)));
     },
     allVisibleSelected() {
       const ids = this.videos.map(video => video.id);
@@ -546,13 +665,76 @@ export default {
 	  const selected = new Set(this.selectedTags.map(Number));
 	  return group.tags.filter(tag => selected.has(Number(tag.id))).length;
 	},
-    // 管理菜单里只有「建议作品集」由工具栏自己处理，其余照旧交回片库页。
-    onManageSelect(id) {
+    // 管理菜单里只有「建议作品集」由工具栏自己处理，其余照旧交回片库页（原样转发菜单项）。
+    // BaseMenu 发的是菜单项对象，旧用例传的是 id 字符串，两种都认。
+    onManageSelect(item) {
+      const id = typeof item === 'string' ? item : item?.id;
       if (id === 'collection-suggestions') {
         this.collectionSuggestionOpen = true;
         return;
       }
-      this.$emit('manage-select', id);
+      this.$emit('manage-select', item);
+    },
+    personName(person) {
+      return String(person?.name || '').trim() || '已选人物';
+    },
+    addPersonFilter(item) {
+      const id = Number(item?.person?.id || 0);
+      if (!id || this.selectedPeople.some(person => Number(person.id) === id)) return;
+      this.$emit('update:selectedPeople', [...this.selectedPeople, { id, name: item.person.display_name || '' }]);
+      this.personKeyword = '';
+      this.personMenuOpen = false;
+      this.personActiveIndex = 0;
+    },
+    removePersonFilter(id) {
+      this.$emit('update:selectedPeople', this.selectedPeople.filter(person => Number(person.id) !== Number(id)));
+    },
+    openPersonMenu() {
+      this.personMenuOpen = true;
+      this.personActiveIndex = 0;
+      this.searchPeople();
+    },
+    closePersonMenu() {
+      this.personMenuOpen = false;
+    },
+    onPersonInput() {
+      this.personMenuOpen = true;
+      this.personActiveIndex = 0;
+      clearTimeout(this._personSearchTimer);
+      this._personSearchTimer = setTimeout(() => this.searchPeople(), 200);
+    },
+    onPersonKeydown(event) {
+      const options = this.personOptions;
+      if (event.key === 'ArrowDown' && options.length) {
+        event.preventDefault();
+        this.personMenuOpen = true;
+        this.personActiveIndex = (this.personActiveIndex + 1) % options.length;
+      } else if (event.key === 'ArrowUp' && options.length) {
+        event.preventDefault();
+        this.personMenuOpen = true;
+        this.personActiveIndex = (this.personActiveIndex - 1 + options.length) % options.length;
+      } else if (event.key === 'Enter') {
+        event.preventDefault();
+        const option = options[this.personActiveIndex] || options[0];
+        if (option) this.addPersonFilter(option);
+      } else if (event.key === 'Escape') {
+        this.personMenuOpen = false;
+      }
+    },
+    async searchPeople() {
+      const token = Symbol('library-person-filter');
+      this._personSearchToken = token;
+      try {
+        const results = await ListPeople(this.personKeyword.trim(), '', 0, PERSON_OPTION_LIMIT);
+        if (this._personSearchToken !== token) return;
+        this.personCandidates = Array.isArray(results) ? results : [];
+        this.personSearchError = '';
+      } catch (err) {
+        if (this._personSearchToken !== token) return;
+        this.personCandidates = [];
+        this.personSearchError = '人物搜索失败，请稍后再试';
+        this.debugLog('searchPeople failed', { err: String(err) }, true);
+      }
     },
     collectionSuggestionConfirmed() {
       // 新建的作品集不在片库列表里，不用重载列表；候选少了一组由面板自己收。
@@ -710,6 +892,57 @@ export default {
   border-top: 1px solid var(--hairline-faint);
 }
 .tag-category-row > .tags-wrap { flex: 1; align-content: flex-start; }
+.person-filter-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 6px;
+  border-top: 1px solid var(--hairline-faint);
+}
+.person-filter-row > .tags-wrap { flex: 1; align-content: flex-start; }
+/* 与分类标签列同宽同字号；类名单独起，免得与标签分类行的计数、名称混在一起。 */
+.person-filter-label {
+  display: flex;
+  flex: 0 0 104px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 4px 0;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.person-filter-label__name { font-weight: 600; }
+.person-filter-label__count { color: var(--text-muted); font-size: 11px; }
+.person-filter-combobox { position: relative; width: 200px; }
+.person-filter-input { height: 26px; font-size: 12px; }
+.person-filter-options {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  box-shadow: var(--shadow-modal);
+}
+.person-filter-option {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-primary);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.person-filter-option.active { background: var(--accent-soft); color: var(--accent-text); }
+.person-filter-options__empty { display: block; padding: 8px; color: var(--text-muted); font-size: 12px; }
 .tag-category-label {
   display: flex;
   flex: 0 0 104px;
@@ -832,8 +1065,9 @@ export default {
 
 .split-btn__main { padding: 0 12px; }
 .split-btn__caret { padding: 0 9px; color: var(--text-muted); }
-.split-btn__main:hover,
+.split-btn__main:hover:not(:disabled),
 .split-btn__caret:hover { background: var(--control-hover-bg); }
+.split-btn__main:disabled { color: var(--text-muted); cursor: not-allowed; }
 .split-btn__divider { width: 1px; background: var(--hairline); }
 
 /* 结果条与批量栏占同一个位置、同一个高度，互斥出现（批量栏的那一份在 BatchActionBar 里） */

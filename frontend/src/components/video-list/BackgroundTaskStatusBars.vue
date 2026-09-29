@@ -1,11 +1,11 @@
 <template>
   <div v-if="technicalBackfill.running || technicalBackfill.completed || technicalBackfill.cancelled || technicalBackfill.failed || technicalWaitingText" :class="['scan-sync-status', barStateClass(technicalBackfill)]" :role="technicalBackfill.failed ? 'alert' : 'status'">
-    <span v-if="!technicalBackfill.running && !technicalBackfill.completed && !technicalBackfill.cancelled && !technicalBackfill.failed">技术信息</span>
+    <span v-if="!technicalBackfill.running && !technicalBackfill.completed && !technicalBackfill.cancelled && !technicalBackfill.failed">{{ labels.technical }}</span>
     <span v-else-if="technicalBackfill.preparing">正在统计待补全视频...</span>
-    <span v-else-if="technicalBackfill.completed && technicalBackfill.total === 0 && !technicalBackfill.failed">技术信息无需补全（已是最新状态）。</span>
-    <span v-else-if="technicalBackfill.running">技术信息 {{ technicalBackfill.processed }}/{{ technicalBackfill.total }}</span>
+    <span v-else-if="technicalBackfill.completed && technicalBackfill.total === 0 && !technicalBackfill.failed">{{ labels.technical }}无需补全（已是最新状态）。</span>
+    <span v-else-if="technicalBackfill.running">{{ labels.technical }} {{ technicalBackfill.processed }}/{{ technicalBackfill.total }}</span>
     <span v-else>
-      技术信息：成功 {{ technicalBackfill.succeeded }}，跳过 {{ technicalBackfill.skipped }}，失败 {{ technicalBackfill.failed }}
+      {{ labels.technical }}：成功 {{ technicalBackfill.succeeded }}，跳过 {{ technicalBackfill.skipped }}，失败 {{ technicalBackfill.failed }}
       <span v-if="technicalBackfill.cancelled">（已取消）</span>
       <span v-else-if="technicalBackfill.completed">（已完成）</span>
     </span>
@@ -22,10 +22,10 @@
   </div>
 
   <div v-if="perceptualHash.running || perceptualHash.completed || perceptualHashWaitingText" :class="['scan-sync-status', barStateClass(perceptualHash)]" :role="perceptualHash.failed ? 'alert' : 'status'">
-    <span v-if="perceptualHash.running">近重复指纹补全：已检查 {{ perceptualHash.processed }}/{{ perceptualHash.total }} 部；</span>
-    <span v-else-if="!perceptualHash.completed">近重复指纹补全</span>
+    <span v-if="perceptualHash.running">{{ labels.phash }}补全：已检查 {{ perceptualHash.processed }}/{{ perceptualHash.total }} 部；</span>
+    <span v-else-if="!perceptualHash.completed">{{ labels.phash }}补全</span>
     <span v-if="perceptualHash.running || perceptualHash.completed">
-      <template v-if="!perceptualHash.running">近重复指纹补全：</template>
+      <template v-if="!perceptualHash.running">{{ labels.phash }}补全：</template>
       本轮新生成 {{ perceptualHash.succeeded }} 部，已有指纹复用 {{ perceptualHash.reused }} 部，处理失败 {{ perceptualHash.failed }} 部
       <template v-if="perceptualHash.out_of_scope">，已移出处理范围 {{ perceptualHash.out_of_scope }} 部</template>
       <span v-if="perceptualHash.cancelled">（已取消）</span><span v-else-if="perceptualHash.completed">{{ perceptualHash.failed ? '（本轮结束，有失败项）' : '（已完成）' }}</span>
@@ -45,12 +45,12 @@
   </div>
 
   <div v-if="frameHash.running || frameHash.completed || frameHash.cancelled || frameHash.failed || frameHashWaitingText" :class="['scan-sync-status', barStateClass(frameHash)]" :role="frameHash.failed ? 'alert' : 'status'">
-    <span v-if="!frameHash.running && !frameHash.completed && !frameHash.cancelled && !frameHash.failed">帧哈希</span>
+    <span v-if="!frameHash.running && !frameHash.completed && !frameHash.cancelled && !frameHash.failed">{{ labels.frame_hash }}</span>
     <span v-else-if="frameHash.preparing">正在统计待补全帧哈希的视频...</span>
-    <span v-else-if="frameHash.completed && frameHash.total === 0 && !frameHash.failed">帧哈希无需补全（已是最新状态）。</span>
-    <span v-else-if="frameHash.running">帧哈希 {{ frameHash.processed }}/{{ frameHash.total }}</span>
+    <span v-else-if="frameHash.completed && frameHash.total === 0 && !frameHash.failed">{{ labels.frame_hash }}无需补全（已是最新状态）。</span>
+    <span v-else-if="frameHash.running">{{ labels.frame_hash }} {{ frameHash.processed }}/{{ frameHash.total }}</span>
     <span v-else>
-      帧哈希：成功 {{ frameHash.succeeded }}，跳过 {{ frameHash.skipped }}，失败 {{ frameHash.failed }}
+      {{ labels.frame_hash }}：成功 {{ frameHash.succeeded }}，跳过 {{ frameHash.skipped }}，失败 {{ frameHash.failed }}
       <span v-if="frameHash.cancelled">（已取消）</span><span v-else-if="frameHash.completed">（已完成）</span>
     </span>
     <span v-if="frameHashWaitingText" class="status-waiting-idle" data-test="frame-hash-waiting-idle">{{ frameHashWaitingText }}</span>
@@ -66,9 +66,9 @@
   </div>
 
   <div v-if="localMetadataBackfill.running || localMetadataBackfill.completed" :class="['scan-sync-status', barStateClass(localMetadataBackfill)]" :role="localMetadataBackfill.failed ? 'alert' : 'status'">
-    <span v-if="localMetadataBackfill.running">本地资料 {{ localMetadataBackfill.processed }}/{{ localMetadataBackfill.total }}</span>
+    <span v-if="localMetadataBackfill.running">{{ labels.local_metadata }} {{ localMetadataBackfill.processed }}/{{ localMetadataBackfill.total }}</span>
     <span v-else>
-      本地资料：成功 {{ localMetadataBackfill.succeeded }}，跳过 {{ localMetadataBackfill.skipped }}，失败 {{ localMetadataBackfill.failed }}
+      {{ labels.local_metadata }}：成功 {{ localMetadataBackfill.succeeded }}，跳过 {{ localMetadataBackfill.skipped }}，失败 {{ localMetadataBackfill.failed }}
       <span v-if="localMetadataBackfill.cancelled">（已取消）</span><span v-else-if="localMetadataBackfill.completed">（已完成）</span>
     </span>
     <button v-if="localMetadataBackfill.running" type="button" class="btn-secondary btn-compact status-cancel" @click="cancelLocalMetadataBackfill">取消</button>
@@ -87,11 +87,13 @@
 import { StartTechnicalBackfill, GetTechnicalBackfillStatus, CancelTechnicalBackfill, StartPerceptualHashBackfill, GetPerceptualHashBackfillStatus, CancelPerceptualHashBackfill, StartFrameHashBackfill, GetFrameHashBackfillStatus, CancelFrameHashBackfill, StartLocalMetadataBackfill, GetLocalMetadataBackfillStatus, CancelLocalMetadataBackfill, ExportLocalMetadataNFO, StartLocalMetadataExport, GetLocalMetadataExportStatus, CancelLocalMetadataExport, RunGatedTaskNow, GetIdleSchedulerStatus } from '../../../wailsjs/go/main/App';
 import { confirmAction, notify, notifyError } from '../../utils/feedback.js';
 import { logFrontend } from '../../utils/frontendLog.js';
-import { idleGateWaitingText, isIdleGateNotWaitingError } from '../../utils/idleScheduling.js';
+import { BACKGROUND_TASK_LABELS, idleGateWaitingText, isIdleGateNotWaitingError } from '../../utils/idleScheduling.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import TaskFailureList from './TaskFailureList.vue';
 
 // 五条常驻的后台任务状态条：技术信息、近重复指纹、帧哈希、本地资料补全、NFO 写出。
+// 任务名与任务中心、命令面板同一份（utils/idleScheduling.js 的 BACKGROUND_TASK_LABELS，D-PC18）。
+// 全部后台任务的状态、上一轮结果与动作在顶栏的任务中心里；这里只保留片库页最常看的这几条。
 // 启动入口留在「管理」菜单、行菜单与清理面板里，片库页通过 ref 调进来；
 // 五份状态再镜像回去，菜单项的进度文案与清理面板的两个补全按钮才有数据可读。
 export default {
@@ -148,6 +150,9 @@ export default {
     taskState: { handler(state) { this.$emit('state-change', state); }, deep: true, immediate: true }
   },
   computed: {
+    labels() {
+      return BACKGROUND_TASK_LABELS;
+    },
     // 自动触发的那一轮被空闲门挡住时，状态条上直接说明原因并给一条出路。
     // 用户自己点的那一轮不会有 gate.waiting_idle，这两个元素也就不会出现。
     technicalWaitingText() {

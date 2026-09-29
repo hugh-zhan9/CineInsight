@@ -1,22 +1,29 @@
-// 命令面板任务组的命令构造（D-029 任务组）。状态只有两个来源：登记表快照
-// （GetBackgroundTasks / 事件 background-tasks，运行中的任务 key）与空闲门总览
-// （GetIdleSchedulerStatus / 事件 idle-scheduler-state，等待空闲的任务清单）。
+// 命令面板任务组的命令构造（D-029 任务组），以及任务中心（D-PC18）按 key 执行动作时用的绑定表。
+// 状态只有两个来源：登记表快照（GetBackgroundTasks / 事件 background-tasks，运行中的任务 key）与
+// 空闲门总览（GetIdleSchedulerStatus / 事件 idle-scheduler-state，等待空闲的任务清单）。
 //
 // 放在这里而不是面板里：面板只渲染注册表，任务与绑定的对应关系是业务知识。
 
 import {
-  CancelFaceAnalysis, CancelImageAITagging, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
-  CancelImageSemanticIndex, CancelLocalMetadataBackfill,
+  CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelFaceAnalysis, CancelImageAITagging,
+  CancelImageCleanupAnalysis, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
+  CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelMovieChartRefresh,
   CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
-  CreateDatabaseBackup, RunGatedTaskNow, StartImageAITagging, StartImageEXIFBackfill,
+  CreateDatabaseBackup, RunGatedTaskNow, StartCleanupAnalysisFromSettings, StartCollectionSuggestionAnalysis,
+  StartImageAITagging, StartImageCleanupAnalysis, StartImageEXIFBackfill,
   StartImagePerceptualHashBackfill, StartImageSemanticIndex,
   StartFrameHashBackfill, StartLocalMetadataBackfill, StartPerceptualHashBackfill, StartTechnicalBackfill, TriggerAITagging
 } from '../../wailsjs/go/main/App';
-import { BACKGROUND_TASK_LABELS, idleWaitReasonLabel, isIdleGateNotWaitingError } from './idleScheduling.js';
+import { backgroundTaskLabel, BACKGROUND_TASK_LABELS, idleWaitReasonLabel, isIdleGateNotWaitingError } from './idleScheduling.js';
 
 // 各任务的显式启动 / 取消绑定。只收零参绑定：超分要选文件与倍率、字幕要选视频、
-// 语义索引要选构建范围、清理分析要选阈值，命令面板不替用户编造这些参数，
+// 语义索引要选构建范围，命令面板与任务中心不替用户编造这些参数，
 // 这类任务因此只在运行中或等待空闲时出现在任务组里。
+//
+// 与后端任务中心适配表（app_tasks.go 的 canStart / canCancel）逐项对齐：后端只在对应的零参
+// 绑定确实存在时才给出 start / cancel，这里必须有同一个绑定，taskCommands.test.js 读后端源码守住。
+// 清理分析的零参启动用「按设置里的阈值」那个绑定（StartCleanupAnalysisFromSettings），
+// 与扫描后自动分析同一口径（D-PC36）。
 //
 // local_metadata 一个 key 对应补全与写出两条 worker（后端按计数登记）。这里的
 // 启动与取消都只作用于「补全」，写出仍只从片库页的管理菜单发起。
@@ -41,12 +48,12 @@ const TASK_BINDINGS = {
   image_ai_tagging: { start: () => StartImageAITagging(), cancel: () => CancelImageAITagging() },
   exif: { start: () => StartImageEXIFBackfill(), cancel: () => CancelImageEXIFBackfill() },
   image_phash: { start: () => StartImagePerceptualHashBackfill(), cancel: () => CancelImagePerceptualHashBackfill() },
-  backup: { start: () => CreateDatabaseBackup() }
+  cleanup: { start: () => StartCleanupAnalysisFromSettings(), cancel: () => CancelCleanupAnalysis() },
+  image_cleanup: { start: () => StartImageCleanupAnalysis(), cancel: () => CancelImageCleanupAnalysis() },
+  collection_suggest: { start: () => StartCollectionSuggestionAnalysis(), cancel: () => CancelCollectionSuggestionAnalysis() },
+  backup: { start: () => CreateDatabaseBackup() },
+  movie_chart: { cancel: () => CancelMovieChartRefresh() }
 };
-
-function taskLabel(taskKey) {
-  return BACKGROUND_TASK_LABELS[taskKey] || taskKey;
-}
 
 // 「立即运行」恰好落在任务刚被放行之后会收到 idle_gate_task_not_waiting，
 // 那不是失败，只是没什么可放行的了（与设置页、图片任务面板同口径）。
@@ -56,6 +63,20 @@ async function runGatedTaskNow(taskKey) {
   } catch (err) {
     if (!isIdleGateNotWaitingError(err)) throw err;
   }
+}
+
+// taskActionRunner 返回任务中心一项动作（start / cancel / run_now）的执行函数；
+// 没有对应绑定时返回 null，调用方据此不渲染按钮。
+export function taskActionRunner(taskKey, action) {
+  const key = String(taskKey || '');
+  if (action === 'run_now') return () => runGatedTaskNow(key);
+  const binding = TASK_BINDINGS[key]?.[action];
+  return typeof binding === 'function' ? binding : null;
+}
+
+// 只读的绑定清单，供守卫测试比对后端适配表：{ key: ['start', 'cancel'] }。
+export function taskBindingActions() {
+  return Object.fromEntries(Object.entries(TASK_BINDINGS).map(([key, bindings]) => [key, Object.keys(bindings)]));
 }
 
 // running：登记表里正在跑的 task key 数组。waiting：空闲门 status.waiting 数组。
@@ -77,13 +98,13 @@ export function buildTaskCommands({ running = [], waiting = [], onSettled = null
     if (runningKeys.has(key) || waitingReasons.has(key) || TASK_BINDINGS[key]?.start) keys.push(key);
   }
   // 运行中与等待空闲的任务可能不在标签表里（后端加了新 key 而前端还没同步文案），
-  // 它们仍要出现在面板里，只是显示成裸 key。
+  // 它们仍要出现在面板里，名字用中文兜底说法（不显示原始 key，D-PC18）。
   for (const key of [...runningKeys, ...waitingReasons.keys()]) {
     if (!keys.includes(key)) keys.push(key);
   }
 
   return keys.map(key => {
-    const name = taskLabel(key);
+    const name = backgroundTaskLabel(key);
     const bindings = TASK_BINDINGS[key] || {};
     const keywords = [key, '任务', 'task'];
 

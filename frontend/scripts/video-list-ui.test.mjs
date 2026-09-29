@@ -33,29 +33,33 @@ assert.match(toolbarSource, /class="split-btn"/, 'random play should be one spli
 assert.match(toolbarSource, /toggleToolbarMenu\('filter', 'filterTrigger'\)/, 'range conditions should collapse into a filter popover');
 assert.match(toolbarSource, /toggleToolbarMenu\('manage', 'manageTrigger'\)/, 'library maintenance should collapse into a manage menu');
 
-// 管理菜单的四个分组和 12 个动作一个都不能丢。
+// 管理菜单的四个分组和其余库维护动作一个都不能丢。
 for (const heading of ['扫描', '整理', '补全', '维护']) {
   assert.match(toolbarSource, new RegExp(`heading: '${heading}'`), `manage menu should keep the ${heading} group`);
 }
 for (const id of [
   'scan-new', 'scan-incremental', 'move-folder', 'rename-folder', 'export-nfo',
   'backfill-technical', 'backfill-phash', 'backfill-local-metadata',
-  'ai-tags', 'tag-manager', 'cleanup', 'trash'
+  'tag-manager', 'trash'
 ]) {
   assert.match(toolbarSource, new RegExp(`id: '${id}'`), `manage menu should keep the ${id} action`);
 }
-assert.match(videoListSource, /case 'ai-tags': this\.openAITagReviewDialog\(\)/, 'manage menu should still open AI tag review');
-assert.match(videoListSource, /case 'cleanup': this\.openCleanupDialog\(\)/, 'manage menu should still open cleanup review');
+// 2026-09-29 产品完善度批次（D-PC59、APP-11、META-08）：「AI 标签管理」「清理审阅」与「管理」按钮上的
+// 合并徽标并入顶栏的待处理工作台（⌘K 打开清理中心），菜单里不再出现；入口改由工作台按固定命令 ID 跳转。
+for (const id of ['ai-tags', 'cleanup']) {
+  assert.doesNotMatch(toolbarSource, new RegExp(`id: '${id}'`), `manage menu should no longer carry the ${id} entry (APP-11)`);
+}
+assert.doesNotMatch(toolbarSource, /manageAttentionCount/, 'the manage button badge moved to the header pending-work badge (META-08)');
+const pendingHubSource = readFileSync(new URL('../src/components/PendingWorkHub.vue', import.meta.url), 'utf8');
+for (const command of ['library.openAIReview', 'library.openCleanup', 'photos.openAIReview', 'people.openFaceReview', 'library.openCollectionSuggestions', 'library.openLocalMetadataUpdates']) {
+  assert.match(pendingHubSource, new RegExp(`command: '${command.replace('.', '\\.')}'`), `pending work hub should jump via ${command}`);
+}
 assert.match(videoListSource, /case 'trash': this\.openTrashDialog\(\)/, 'manage menu should still open the trash');
-assert.match(toolbarSource, /aiTagSummary\.same_source_unread/, 'AI tag management should expose unread same-source relations');
 assert.match(videoListSource, /GetAITaggingStatusSummary/, 'same-source unread badge should refresh from the backend summary');
-// 徽标从按钮搬到了「管理」按钮上，但仍要能一眼看到有待办。
-assert.match(toolbarSource, /manageAttentionCount\(\)/, 'the manage button should carry a combined attention badge');
-assert.match(toolbarSource, /待审阅 \$\{this\.cleanupBadgeCount\} 项/, 'a completed background analysis should still surface its count');
 
 // 运行中的补全任务把进度和取消让给了常驻状态条——按钮进了菜单，
-// 进度不能跟着一起藏起来，否则关掉菜单就看不到还在跑什么。
-assert.match(taskBarsSource, /技术信息 \{\{ technicalBackfill\.processed \}\}\/\{\{ technicalBackfill\.total \}\}/, 'running backfill progress should stay visible in the status banner');
+// 进度不能跟着一起藏起来，否则关掉菜单就看不到还在跑什么。任务名取自共享标签表（APP-03）。
+assert.match(taskBarsSource, /\{\{ labels\.technical \}\} \{\{ technicalBackfill\.processed \}\}\/\{\{ technicalBackfill\.total \}\}/, 'running backfill progress should stay visible in the status banner');
 assert.match(taskBarsSource, /@click="cancelTechnicalBackfill"/, 'the status banner should carry the cancel action');
 assert.match(taskBarsSource, /@click="cancelPerceptualHashBackfill"/, 'the status banner should carry the phash cancel action');
 assert.match(taskBarsSource, /@click="cancelLocalMetadataExport"/, 'the status banner should carry the NFO export cancel action');

@@ -54,7 +54,7 @@
 import { SearchLibraryVideoPage } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import { COMMAND_GROUPS, filterCommands, isCommandEnabled } from '../utils/commandRegistry.js';
-import { notifyError } from '../utils/feedback.js';
+import { notifyError, notifySuccess } from '../utils/feedback.js';
 
 // 视频组一次最多 8 条（D-029）：面板是"快速跳过去"，不是第二个片库列表。
 const VIDEO_RESULT_LIMIT = 8;
@@ -70,6 +70,9 @@ export default {
     open: { type: Boolean, default: false },
     // 打开视频详情抽屉：走片库页既有的 openPreview，面板不新建打开路径。
     openVideo: { type: Function, required: true },
+    // 执行前的准备（可选）：App 用它把宿主页的固定命令先切到宿主页再执行（详细设计 §6.1）。
+    // 返回（或 resolve 为）false 表示放弃执行。面板自己不认识任何页面。
+    beforeRun: { type: Function, default: null },
     // 视频搜索防抖毫秒数；测试里设 0 直接同步走。
     searchDebounceMs: { type: Number, default: 180 }
   },
@@ -177,16 +180,19 @@ export default {
       this.activeIndex = entries[0].index;
     },
     // 先关面板再执行：run() 往往切页或开抽屉，面板留在最上层会挡住结果。
-    execute(entry) {
+    // 成功统一提示「已执行：<label>」（D-PC60、APP-12）；run() 返回 false 表示用户中途放弃
+    // （例如离开设置页时选了继续编辑），不算执行，也不提示。
+    async execute(entry) {
       if (!entry || !entry.enabled) return;
+      const command = entry.command;
       this.$emit('close');
       try {
-        const result = entry.command.run();
-        if (result && typeof result.catch === 'function') {
-          result.catch(err => notifyError(`执行「${entry.command.label}」失败：${err}`));
-        }
+        if (this.beforeRun && await this.beforeRun(command) === false) return;
+        const result = await command.run();
+        if (result === false) return;
+        notifySuccess(`已执行：${command.label}`);
       } catch (err) {
-        notifyError(`执行「${entry.command.label}」失败：${err}`);
+        notifyError(`执行「${command.label}」失败：${err}`);
       }
     },
     scheduleVideoSearch() {

@@ -14,6 +14,7 @@ const api = vi.hoisted(() => new Proxy({}, {
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import LibraryToolbar from './LibraryToolbar.vue';
+import { commandList, findCommand } from '../../utils/commandRegistry.js';
 
 const SIZE_OPTIONS = [
   { label: '2G-4G', value: { min: 2 * 1024 ** 3, max: 4 * 1024 ** 3 } }
@@ -139,7 +140,8 @@ describe('工具栏三层重排', () => {
     wrapper.unmount();
   });
 
-  it('普通分类的大量标签不隐藏，删除只发删除事件，自动分类不展示', async () => {
+  // META-14：筛选标签上的 × 实为全局删除，误触就删掉一个标签；删除只留在标签管理里。
+  it('META-14 普通分类的大量标签不隐藏，标签上不再有删除 ×，点一下只切换筛选，自动分类不展示', async () => {
     const tags = Array.from({ length: 80 }, (_, index) => ({ id: index + 1, name: `标签 ${index + 1}`, namespace: '题材' }));
     const automaticTag = { id: 81, name: '短视频', namespace: '自动', automatic_kind: 'short_video' };
     const wrapper = mountToolbar({ tags: [...tags, automaticTag] });
@@ -148,10 +150,11 @@ describe('工具栏三层重排', () => {
     const chips = wrapper.findAll('.tag-chip-wrap');
     const automaticChip = chips.find(chip => chip.get('.tag-chip-name').text() === '短视频');
     expect(automaticChip).toBeUndefined();
+    expect(wrapper.find('.tag-chip-delete').exists()).toBe(false);
     const manualChip = chips.find(chip => chip.get('.tag-chip-name').text() === '标签 1');
-    await manualChip.get('.tag-chip-delete').trigger('click');
-    expect(wrapper.emitted('delete-tag')[0]).toEqual([tags[0]]);
-    expect(wrapper.emitted('toggle-tag')).toBeUndefined();
+    await manualChip.trigger('click');
+    expect(wrapper.emitted('toggle-tag')[0]).toEqual([1]);
+    expect(wrapper.emitted('delete-tag')).toBeUndefined();
     wrapper.unmount();
   });
 
@@ -231,16 +234,22 @@ describe('工具栏三层重排', () => {
     wrapper.unmount();
   });
 
-  it('管理菜单保留全部维护动作并按四组分开（P-007 追加建议作品集、P-006 追加当前筛选生成代理）', async () => {
-    const wrapper = mountToolbar({ settings: { local_metadata_enabled: true } });
+  // APP-11 / D-PC59：「AI 标签管理」「清理审阅」并入顶栏的待处理工作台（⌘K 打开清理中心），
+  // 菜单只留库维护动作，徽标也一起移走（META-08：待处理数量改看顶栏角标）。
+  it('APP-11 管理菜单去掉 AI 标签管理与清理审阅，保留其余维护动作并按四组分开，按钮不再带徽标', async () => {
+    const wrapper = mount(LibraryToolbar, {
+      props: baseProps({ settings: { local_metadata_enabled: true }, aiTagSummary: { same_source_unread: 4 }, cleanupBadgeCount: 7 })
+    });
     const items = wrapper.vm.manageMenuItems;
     expect(items.filter(item => item.heading).map(item => item.heading)).toEqual(['扫描', '整理', '补全', '维护']);
     expect(items.filter(item => item.id).map(item => item.id)).toEqual([
       'scan-new', 'scan-incremental',
       'move-folder', 'rename-folder', 'export-nfo',
       'backfill-technical', 'backfill-phash', 'backfill-playback-proxy', 'backfill-local-metadata',
-      'ai-tags', 'tag-manager', 'cleanup', 'collection-suggestions', 'trash'
+      'tag-manager', 'collection-suggestions', 'trash'
     ]);
+    const manage = wrapper.findAll('button').find(button => button.text().startsWith('管理'));
+    expect(manage.find('.toolbar-btn__badge').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -271,7 +280,7 @@ describe('工具栏三层重排', () => {
     wrapper.unmount();
   });
 
-  it('建议作品集入口与清理审阅同级，面板由工具栏自己持有', async () => {
+  it('建议作品集入口与其他维护动作同级，面板由工具栏自己持有', async () => {
     api.GetCollectionSuggestionStatus.mockResolvedValue({ running: false });
     const wrapper = mountToolbar();
     await flushPromises();
@@ -303,9 +312,44 @@ describe('工具栏三层重排', () => {
     expect(wrapper.vm.randomMenuItems[0].checked).toBe(true);
     expect(wrapper.vm.randomMenuItems.find(item => item.id === 'pick-ten').label).toBe('随机 10 部');
 
-    const main = wrapper.findAll('button').find(button => button.text() === '按当前条件随机');
+    const main = wrapper.get('[data-test="random-play-main"]');
+    expect(main.text()).toBe('按当前条件随机 · 均衡');
     await main.trigger('click');
     expect(wrapper.emitted('play-random')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 随机按钮显示当前模式，「优先未看」改叫「仅未看」', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ randomMode: 'unwatched' }) });
+    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('按当前条件随机 · 仅未看');
+    expect(wrapper.vm.randomMenuItems.filter(item => item.id?.startsWith('mode:')).map(item => item.label))
+      .toEqual(['均衡', '仅未看', '仅收藏']);
+    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'mode:unwatched').checked).toBe(true);
+
+    await wrapper.setProps({ randomMode: 'favorites' });
+    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('按当前条件随机 · 仅收藏');
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 语义搜索模式下禁用随机并说明原因（语义模式会忽略搜索词、抽全库）', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ searchMode: 'semantic' }) });
+    const main = wrapper.get('[data-test="random-play-main"]');
+    expect(main.attributes('disabled')).toBeDefined();
+    expect(main.attributes('title')).toContain('语义搜索模式下无法按当前条件随机');
+    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'pick-ten').disabled).toBe(true);
+
+    await main.trigger('click');
+    expect(wrapper.emitted('play-random')).toBeUndefined();
+
+    await wrapper.setProps({ searchMode: 'file' });
+    expect(wrapper.get('[data-test="random-play-main"]').attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+
+  it('META-09 智能视图里有「本地资料有更新」', () => {
+    const wrapper = mountToolbar({ smartView: 'local_metadata_updated' });
+    expect(wrapper.vm.smartViewOptions).toContainEqual({ label: '本地资料有更新', value: 'local_metadata_updated' });
+    expect(wrapper.vm.activeConditionLabels).toContain('本地资料有更新');
     wrapper.unmount();
   });
 
@@ -346,6 +390,93 @@ describe('语义入口置灰', () => {
     const wrapper = mount(LibraryToolbar, { props: baseProps() });
     await wrapper.vm.$nextTick();
     expect(wrapper.find('[data-test="search-mode-semantic"]').attributes('disabled')).toBeUndefined();
+    wrapper.unmount();
+  });
+});
+
+describe('人物筛选组合框（META-02）', () => {
+  const people = [
+    { person: { id: 7, display_name: '张三' } },
+    { person: { id: 8, display_name: '李四' } }
+  ];
+
+  it('META-02 聚焦即按关键字搜人物，选中后 emit 新的人物列表并清空输入', async () => {
+    api.ListPeople.mockResolvedValue(people);
+    const wrapper = mount(LibraryToolbar, { props: baseProps() });
+
+    await wrapper.get('[data-test="person-filter-search"]').trigger('focus');
+    await flushPromises();
+    expect(api.ListPeople).toHaveBeenCalledWith('', '', 0, 20);
+    expect(wrapper.findAll('[data-test^="person-filter-option-"]').map(option => option.text())).toEqual(['张三', '李四']);
+
+    await wrapper.get('[data-test="person-filter-option-8"]').trigger('mousedown');
+    expect(wrapper.emitted('update:selectedPeople')[0]).toEqual([[{ id: 8, name: '李四' }]]);
+    expect(wrapper.vm.personKeyword).toBe('');
+    wrapper.unmount();
+  });
+
+  it('META-02 已选人物以选中态显示、写进条件回显，点一下取消；候选里不再重复出现', async () => {
+    api.ListPeople.mockResolvedValue(people);
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ selectedPeople: [{ id: 7, name: '张三' }] }) });
+
+    expect(wrapper.get('[data-test="person-filter-chip-7"]').text()).toContain('张三');
+    expect(wrapper.vm.activeConditionLabels).toContain('人物 张三');
+
+    await wrapper.get('[data-test="person-filter-search"]').trigger('focus');
+    await flushPromises();
+    expect(wrapper.findAll('[data-test^="person-filter-option-"]').map(option => option.text())).toEqual(['李四']);
+
+    await wrapper.get('[data-test="person-filter-chip-7"]').trigger('click');
+    expect(wrapper.emitted('update:selectedPeople')[0]).toEqual([[]]);
+    wrapper.unmount();
+  });
+
+  it('META-02 键盘上下选、回车添加；人物搜索失败给中文提示', async () => {
+    api.ListPeople.mockResolvedValue(people);
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ selectedPeople: [{ id: 1, name: '王五' }] }) });
+    const input = wrapper.get('[data-test="person-filter-search"]');
+
+    await input.trigger('focus');
+    await flushPromises();
+    await input.trigger('keydown', { key: 'ArrowDown' });
+    await input.trigger('keydown', { key: 'Enter' });
+    expect(wrapper.emitted('update:selectedPeople')[0]).toEqual([[{ id: 1, name: '王五' }, { id: 8, name: '李四' }]]);
+
+    api.ListPeople.mockRejectedValue(new Error('db down'));
+    await input.trigger('focus');
+    await flushPromises();
+    expect(wrapper.get('[data-test="person-filter-options"]').text()).toContain('人物搜索失败');
+    wrapper.unmount();
+  });
+});
+
+describe('待处理工作台的跳转目标（APP-11）', () => {
+  it('APP-11 工具栏注册 library.openCollectionSuggestions 等固定命令，只作跳转目标、不在面板里重复出现', async () => {
+    const wrapper = mountToolbar();
+
+    expect(commandList().map(command => command.id)).not.toContain('library.openCollectionSuggestions');
+    findCommand('library.openCollectionSuggestions').run();
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.collectionSuggestionOpen).toBe(true);
+
+    findCommand('library.openTrash').run();
+    expect(wrapper.emitted('manage-select')[0]).toEqual([{ id: 'trash' }]);
+    findCommand('library.openTagManager').run();
+    expect(wrapper.emitted('open-tag-manager')).toHaveLength(1);
+
+    wrapper.unmount();
+    expect(findCommand('library.openCollectionSuggestions')).toBeNull();
+  });
+
+  it('管理菜单发来的是菜单项对象时，「建议作品集」同样由工具栏自己打开', async () => {
+    const wrapper = mountToolbar();
+    wrapper.vm.onManageSelect({ id: 'collection-suggestions', label: '建议作品集' });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.vm.collectionSuggestionOpen).toBe(true);
+    expect(wrapper.emitted('manage-select')).toBeUndefined();
+
+    wrapper.vm.onManageSelect({ id: 'trash', label: '回收站' });
+    expect(wrapper.emitted('manage-select')[0]).toEqual([{ id: 'trash', label: '回收站' }]);
     wrapper.unmount();
   });
 });

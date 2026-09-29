@@ -6,8 +6,11 @@
 //   group    'navigate' | 'action' | 'task' | 'video'
 //   label    面板里显示的文字，也是过滤的第一权重来源
 //   keywords 额外的匹配词（拼音缩写、英文别名等），只参与过滤、不显示
-//   run()    执行；面板先关闭再调用它
+//   run()    执行；面板先关闭再调用它。返回（或 resolve 为）false 表示用户中途放弃，面板不报「已执行」
 //   enabled() 可选，返回 false 时灰显不可执行
+//   hidden   可选，true 表示只作跳转目标：面板不列出，但 findCommand(id) 找得到。
+//            各宿主页为待处理工作台注册的固定命令 ID（如 library.openCollectionSuggestions，详细设计 §6.1）
+//            用它，免得与 App 注册的同名全局命令在面板里重复出现。
 
 import { shallowRef } from 'vue';
 
@@ -47,6 +50,9 @@ function validateCommand(command, scopeKey) {
   if (command.enabled !== undefined && typeof command.enabled !== 'function') {
     throw new TypeError(`命令面板注册项 ${command.id} 的 enabled 必须是函数`);
   }
+  if (command.hidden !== undefined && typeof command.hidden !== 'boolean') {
+    throw new TypeError(`命令面板注册项 ${command.id} 的 hidden 必须是布尔值`);
+  }
   return command;
 }
 
@@ -63,9 +69,8 @@ export function unregisterCommands(scopeKey) {
   if (scopes.delete(String(scopeKey ?? ''))) version.value += 1;
 }
 
-// commandList 按「分组固定顺序 → scope 注册顺序 → scope 内声明顺序」拉平，
-// 与面板的渲染顺序一致，方向键的上下移动才和眼睛看到的一致。
-export function commandList() {
+// 全部命令（含 hidden）按「分组固定顺序 → scope 注册顺序 → scope 内声明顺序」拉平，同 id 只留先注册的。
+function allCommands() {
   void version.value;
   const entries = [...scopes.values()].sort((a, b) => a.order - b.order);
   const seen = new Set();
@@ -80,6 +85,20 @@ export function commandList() {
     }
   }
   return result;
+}
+
+// commandList 是面板里列出的命令，顺序与面板的渲染顺序一致，方向键的上下移动才和眼睛看到的一致。
+// hidden 的跳转目标不在其中。
+export function commandList() {
+  return allCommands().filter(command => !command.hidden);
+}
+
+// findCommand 按 id 找一条命令（含 hidden 的跳转目标）；同 id 取的是面板会显示的那一条（先注册者）。
+// 待处理工作台与 App 的全局命令按固定命令 ID 跳到宿主页时用它（详细设计 §6.1）。
+export function findCommand(id) {
+  const key = String(id ?? '');
+  if (!key) return null;
+  return allCommands().find(command => command.id === key) || null;
 }
 
 // 权重：label 前缀 > label 包含 > keywords 包含；同权重按 commandList 的顺序稳定排列。

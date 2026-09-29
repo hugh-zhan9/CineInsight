@@ -1,7 +1,8 @@
 // 空闲调度（D-030..D-032）的展示口径：任务名与等待原因的中文说法只此一处，
-// 设置页分区与片库页状态条共用，免得两处各写一套、说法对不上。
+// 设置页分区、片库页状态条、命令面板任务组与任务中心共用，免得各写一套、说法对不上。
 
-// 与后端 services.BackgroundTaskKeys() 的固定集合一一对应。
+// 与后端 services.BackgroundTaskKeys() 的固定集合一一对应，顺序也相同（即任务中心的面板顺序）。
+// idleScheduling.test.js 直接读后端登记表的源码比对：后端增减一个 key 而这里没跟上，测试即失败（APP-03）。
 export const BACKGROUND_TASK_LABELS = {
   subtitle: '字幕生成',
   enhancement: '视频超分',
@@ -18,10 +19,21 @@ export const BACKGROUND_TASK_LABELS = {
   exif: '图片 EXIF',
   image_phash: '图片指纹',
   cleanup: '清理分析',
+  image_cleanup: '图片清理分析',
   collection_suggest: '建议作品集',
   backup: '数据库备份',
-  browser_download: '插件下载'
+  browser_download: '插件下载',
+  watchlist_enrich: '片单补全',
+  movie_chart: '榜单抓取'
 };
+
+// 后端新加了 key 而前端还没同步文案时的兜底说法。守卫测试保证正常情况下用不到它；
+// 真用到时也只显示中文，不把原始 key 露给用户（D-PC18）。
+const UNKNOWN_TASK_LABEL = '其他后台任务';
+
+export function backgroundTaskLabel(taskKey) {
+  return BACKGROUND_TASK_LABELS[taskKey] || UNKNOWN_TASK_LABEL;
+}
 
 const IDLE_WAIT_REASON_LABELS = {
   user_active: '你正在用电脑',

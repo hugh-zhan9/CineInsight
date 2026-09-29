@@ -4,42 +4,39 @@
       <div class="header-left">
         <h1>析微影策</h1>
       </div>
-      <div class="header-nav">
-        <button 
-          @click="currentPage = 'videos'" 
-          :class="['nav-btn', { active: currentPage === 'videos' }]"
-        >
-          视频
-        </button>
-        <button @click="currentPage = 'people'" :class="['nav-btn', { active: currentPage === 'people' }]">
-          人物
-        </button>
-        <button @click="currentPage = 'collections'" :class="['nav-btn', { active: currentPage === 'collections' }]">
-          作品集
-        </button>
-        <button @click="currentPage = 'watchlist'" :class="['nav-btn', { active: currentPage === 'watchlist' }]" data-test="nav-watchlist">
-          想看
-        </button>
-        <button @click="currentPage = 'movie-chart'" :class="['nav-btn', { active: currentPage === 'movie-chart' }]" data-test="nav-movie-chart">
-          榜单
-        </button>
-        <button @click="currentPage = 'watched-movies'" :class="['nav-btn', { active: currentPage === 'watched-movies' }]" data-test="nav-watched-movies">
-          已看
-        </button>
-		<button @click="currentPage = 'insights'" :class="['nav-btn', { active: currentPage === 'insights' }]">
-		  洞察
-		</button>
-		<button @click="currentPage = 'photos'" :class="['nav-btn', { active: currentPage === 'photos' }]">
-		  图片
-		</button>
-		<button @click="currentPage = 'downloads'" :class="['nav-btn', { active: currentPage === 'downloads' }]">
-		  下载
-		</button>
-        <button 
-          @click="currentPage = 'settings'" 
+      <!-- 顶栏按三组渲染（D-PC59）：片库、片单、工具，组间分隔；「下载」只在开启浏览器插件桥接时出现。
+           页面清单与命令面板的导航组同一份（utils/appCommands.js 的 APP_NAV_GROUPS）。 -->
+      <nav class="header-nav" aria-label="页面导航">
+        <template v-for="(group, index) in visibleNavGroups" :key="group.key">
+          <span v-if="index > 0" class="header-nav__divider" aria-hidden="true"></span>
+          <div class="header-nav__group" role="group" :aria-label="group.label" :data-test="`nav-group-${group.key}`">
+            <button
+              v-for="page in group.pages"
+              :key="page.key"
+              type="button"
+              :class="['nav-btn', { active: currentPage === page.key }]"
+              :data-test="`nav-${page.key}`"
+              @click="navigateTo(page.key)"
+            >{{ page.label }}</button>
+          </div>
+        </template>
+        <span class="header-nav__divider" aria-hidden="true"></span>
+        <button
+          type="button"
           :class="['nav-btn', { active: currentPage === 'settings' }]"
-        >
-          设置
+          data-test="nav-settings"
+          @click="navigateTo('settings')"
+        >设置</button>
+      </nav>
+      <div v-if="!startupError" class="header-tools">
+        <button type="button" class="header-tool-btn" data-test="open-pending-work" @click="openPendingWork">
+          待处理
+          <span v-if="pendingWorkTotal > 0" class="header-badge" data-test="pending-work-badge">{{ badgeText(pendingWorkTotal) }}</span>
+        </button>
+        <button type="button" class="header-tool-btn" data-test="open-task-center" @click="openTaskCenter">
+          任务
+          <span v-if="taskCenterBadge.running > 0" class="header-badge" data-test="task-center-badge">{{ badgeText(taskCenterBadge.running) }}</span>
+          <span v-if="taskCenterBadge.failed" class="header-dot" role="img" aria-label="有任务上一轮失败" data-test="task-center-failed-dot"></span>
         </button>
       </div>
       <div v-if="libraryCountsText" class="header-counts">{{ libraryCountsText }}</div>
@@ -87,6 +84,7 @@
         :directories="directories"
         @settings-saved="handleSettingsUpdate"
         @directories-changed="handleDirectoriesChanged"
+        @update:dirty="settingsDirty = Boolean($event)"
       />
 
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" />
@@ -100,7 +98,7 @@
 	    :page-active="currentPage === 'photos'"
 	    :settings="settings"
 	    :tags="tags"
-	    @open-settings="currentPage = 'settings'"
+	    @open-settings="navigateTo('settings')"
 	  />
     </div>
 
@@ -109,8 +107,27 @@
       v-if="!startupError"
       :open="commandPaletteOpen"
       :open-video="openVideoFromCommand"
+      :before-run="prepareCommandRun"
       @close="closeCommandPalette"
     />
+
+    <!-- 任务中心与待处理工作台常挂载（关着也在），顶栏角标才能跟着事件与定时刷新走。 -->
+    <TaskCenterDrawer
+      v-if="!startupError"
+      :open="taskCenterOpen"
+      @close="taskCenterOpen = false"
+      @badge-change="taskCenterBadge = $event"
+      @open-video="openVideoByID"
+    />
+    <PendingWorkHub
+      v-if="!startupError"
+      :open="pendingWorkOpen"
+      @close="pendingWorkOpen = false"
+      @badge-change="pendingWorkTotal = $event"
+      @run-command="runPendingCommand"
+      @open-task-center="openTaskCenter"
+    />
+    <QuitConfirmDialog />
 
     <!-- 全局提示宿主：webview 的 alert/confirm 是哑的，所有错误提示和危险操作确认都走这里 -->
     <AppFeedback />
@@ -118,7 +135,7 @@
 </template>
 
 <script>
-import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground } from '../wailsjs/go/main/App';
+import { GetSettings, GetAllTags, GetAllDirectories, GetStartupError, SyncScanDirectories, SyncImageDirectories, GetLibraryCounts, SetWindowForeground, GetVideosByIDs } from '../wailsjs/go/main/App';
 import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
@@ -130,8 +147,13 @@ import MovieChartPage from './components/MovieChartPage.vue';
 import WatchedMoviesPage from './components/WatchedMoviesPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
+import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
+import PendingWorkHub from './components/PendingWorkHub.vue';
+import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
+import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
-import { appCommandsMixin } from './utils/appCommands.js';
+import { confirmAction, notifyError } from './utils/feedback.js';
+import { APP_NAV_GROUPS, appCommandsMixin, isNavPageVisible } from './utils/appCommands.js';
 
 // 扫描根的身份只由路径集合决定：别名、时间戳变了不影响"扫描范围"。
 function scanRootKey(dirs) {
@@ -141,8 +163,11 @@ function scanRootKey(dirs) {
 export default {
   name: 'App',
   // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
-  mixins: [appCommandsMixin],
-  components: { VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage, MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette },
+  mixins: [appCommandsMixin, runtimeEventsMixin],
+  components: {
+    VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
+    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog
+  },
   data() {
     return {
       currentPage: 'videos',
@@ -156,6 +181,13 @@ export default {
       // 已上报给后端的前后台标记；null = 还没报过。相同值不重复上报。
       windowForeground: null,
       foregroundListeners: null,
+      // 设置页有未保存修改（SettingsPage 的 update:dirty，D-PC57）：切走前要先确认。
+      settingsDirty: false,
+      taskCenterOpen: false,
+      pendingWorkOpen: false,
+      // 两个顶栏角标的数据由常挂载的抽屉与工作台报上来。
+      taskCenterBadge: { running: 0, failed: false },
+      pendingWorkTotal: 0,
       settings: {
         confirm_before_delete: true,
         delete_original_file: false,
@@ -183,6 +215,9 @@ export default {
     await this.loadDirectories();
     this.loadTags();
     this.loadLibraryCounts();
+    // 扫描完成事件（D-PC09）：库里真的多了、少了或恢复了视频时，顶栏的库规模计数跟着刷新。
+    // 列表本身的刷新归片库页。
+    this.registerRuntimeEvent('library-scan-summary', event => this.handleLibraryScanSummary(event));
     
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     this.systemTheme = mediaQuery.matches ? 'dark' : 'light';
@@ -194,7 +229,7 @@ export default {
 
     if (this.settings.auto_scan_on_startup) {
       if (this.directories.length > 0) {
-        this.incrementalScanAll();
+        this.incrementalScanAll('startup');
       }
       this.incrementalScanImageDirectories();
     }
@@ -206,6 +241,10 @@ export default {
     'settings.theme'() {
       this.applyTheme();
     },
+    // 「下载」页只在开启浏览器插件桥接时出现在顶栏与命令面板（D-PC59）。
+    'settings.browser_bridge_enabled'() {
+      this.registerAppCommands();
+    },
     currentPage: {
       immediate: true,
       handler(page) {
@@ -214,6 +253,11 @@ export default {
     }
   },
   computed: {
+    visibleNavGroups() {
+      return APP_NAV_GROUPS
+        .map(group => ({ ...group, pages: group.pages.filter(page => isNavPageVisible(page, this.settings)) }))
+        .filter(group => group.pages.length > 0);
+    },
     // 计数任一失败就整段不显示，不给占位数字——头部的数字是用来一眼确认库规模的，
     // 显示一个假的比不显示更糟。
     libraryCountsText() {
@@ -224,6 +268,64 @@ export default {
     }
   },
   methods: {
+    // 所有切页都走这里（顶栏、命令面板、待处理工作台、图片页的「去设置」）。设置页有未保存修改时
+    // 先确认「放弃未保存的设置修改？」（D-PC57、APP-08）：SettingsPage 是 v-if，切走即销毁表单。
+    // 能直接切时同步返回 true；要确认时返回 Promise，用户选继续编辑则 resolve 为 false。
+    navigateTo(page) {
+      if (!page || page === this.currentPage) return true;
+      if (this.currentPage === 'settings' && this.settingsDirty) {
+        return confirmAction({
+          title: '离开设置页',
+          message: '放弃未保存的设置修改？',
+          confirmText: '放弃修改',
+          cancelText: '继续编辑',
+          danger: true
+        }).then(ok => {
+          if (!ok) return false;
+          this.settingsDirty = false;
+          this.currentPage = page;
+          return true;
+        });
+      }
+      this.currentPage = page;
+      return true;
+    },
+    openTaskCenter() {
+      this.pendingWorkOpen = false;
+      this.taskCenterOpen = true;
+    },
+    openPendingWork() {
+      this.taskCenterOpen = false;
+      this.pendingWorkOpen = true;
+    },
+    // 工作台的「处理」：按固定命令 ID 跳到宿主页并打开既有面板（详细设计 §6.1）。
+    runPendingCommand(commandID, label) {
+      return Promise.resolve(this.runHostCommand(commandID, label))
+        .catch(err => notifyError(`打开「${label || '待处理事项'}」失败：${err}`));
+    },
+    // 任务中心里超分产物的「在片库中打开」：按 ID 取回视频再走片库页既有的详情入口。
+    async openVideoByID(videoID) {
+      try {
+        const [video] = await GetVideosByIDs([Number(videoID)]) || [];
+        if (!video) {
+          notifyError('产物视频不在片库中，可能不在扫描目录内或已被删除。');
+          return;
+        }
+        await this.openVideoFromCommand(video);
+      } catch (err) {
+        notifyError(`打开视频失败：${err}`);
+      }
+    },
+    badgeText(count) {
+      const value = Number(count || 0);
+      return value > 99 ? '99+' : String(value);
+    },
+    handleLibraryScanSummary(event) {
+      const result = event?.result;
+      if (!result) return;
+      const changed = Number(result.added || 0) + Number(result.deleted || 0) + Number(result.restored || 0) + Number(result.stale || 0);
+      if (changed > 0) this.loadLibraryCounts();
+    },
     handleTagPersonConverted(result) {
       this.$refs.photoLibrary?.handleTagPersonConverted(result);
     },
@@ -319,11 +421,13 @@ export default {
       this.directories = newDirectories;
       // 扫描根真的变了才对账：新根下的文件立刻入库，范围外的旧记录靠查询侧的
       // 扫描根裁剪自动从列表里消失。只改别名不该触发一次全盘扫描。
-      if (rootsChanged && this.directories.length > 0) this.incrementalScanAll();
+      if (rootsChanged && this.directories.length > 0) this.incrementalScanAll('manual');
     },
-    async incrementalScanAll() {
+    // trigger：启动时那次传 startup，其余（改了扫描根之后的对账）传 manual（§1.2b，后端据此发
+    // library-scan-summary）。
+    async incrementalScanAll(trigger = 'manual') {
       try {
-        const result = await SyncScanDirectories();
+        const result = await SyncScanDirectories(trigger);
         this.debugLog('incrementalScanAll resolved', result);
         if ((result?.added || 0) > 0 || (result?.deleted || 0) > 0 || (result?.relocated || 0) > 0 || (result?.metadata_refreshed || 0) > 0) {
           await this.loadDirectories();
@@ -373,7 +477,7 @@ export default {
 
 .nav-btn {
   height: 32px;
-  padding: 0 14px;
+  padding: 0 12px;
   background: transparent;
   border: none;
   border-radius: var(--radius);
@@ -386,6 +490,59 @@ export default {
 .nav-btn.active { color: var(--accent-on); background: var(--accent-color); font-weight: 600; }
 .nav-btn:hover:not(.active) { color: var(--text-primary); background: var(--panel-muted-bg); }
 
+/* 顶栏三组（D-PC59）：组内按钮紧挨，组间一条竖向发丝线。 */
+.header-nav__group { display: flex; gap: 2px; align-items: center; }
+.header-nav__divider {
+  width: 1px;
+  height: 18px;
+  margin: 0 8px;
+  background: var(--hairline);
+}
+
+/* 右侧常驻入口：待处理、任务中心。角标 = 数量，红点 = 有任务上一轮失败（D-PC18、D-PC27）。 */
+.header-tools {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  --wails-draggable: none;
+}
+.header-tool-btn {
+  position: relative;
+  height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.header-tool-btn:hover { color: var(--text-primary); background: var(--control-hover-bg); }
+.header-badge {
+  min-width: 18px;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--accent-color);
+  color: var(--accent-on);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+.header-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--danger-color);
+}
+
 .header-counts {
   margin-left: auto;
   color: var(--text-muted);
@@ -394,6 +551,7 @@ export default {
   white-space: nowrap;
   --wails-draggable: none;
 }
+.header-tools + .header-counts { margin-left: 0; }
 
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .startup-error-view {

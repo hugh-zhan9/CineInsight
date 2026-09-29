@@ -61,19 +61,19 @@ slices:
     status: in_progress
     depends: [P-010, P-011, P-012, P-013, P-014, P-015, P-016, P-017, P-018, P-019, P-020, P-021, P-022, P-023, P-024, P-025, P-027]
   - id: P-030
-    status: pending
+    status: in_progress
     depends: [P-029]
   - id: P-031
-    status: pending
+    status: in_progress
     depends: [P-029]
   - id: P-032
     status: pending
     depends: [P-029]
   - id: P-033
-    status: pending
+    status: in_progress
     depends: [P-029]
   - id: P-035
-    status: pending
+    status: in_progress
     depends: [P-029]
   - id: P-034
     status: pending
@@ -1230,3 +1230,30 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 主代理整合时顺带做了一项：修复 K 留下的待办，把 `publishOutput` 改为调用 `lockLibraryPaths()`，并从守卫中删掉维护入口的放行名单。服务层现在已经没有任何地方把维护入口当普通写锁使用。
 - **取舍**：工具单独打印出来的 1–2 字符凭证会留在报错里。URL 里的 userinfo 仍按结构剥离。
 - **P-039**：更新 AI-CONTEXT §2.28 中「会话内存有界，重启 / 关闭 / 配置变更失效」的描述，改为持久化会话的语义。
+
+**前端第一波启动**（2026-09-29）：P-031、P-033、P-035 基于 `f1b67ca` 开跑，同时开始修复 I-1 + 修复 K 的回收站数据安全复审。P-030 等复审结论出来再开，避免回收站契约再变；P-032 排在下一批。PG 全量 `f1b67ca` 在后台运行，这是后端的最终状态。
+
+**修复 I-1 + 修复 K 复审**（2026-09-29，opus-xhigh 只读）：**通过**，0 个 Critical，0 个 Important，7 条 Minor。复审确认墓碑在所有读取路径上都被正确排除，或被正确计入「已登记目录」，`publishOutput` 已改用 `lockLibraryPaths()`。
+
+以下几项交给修复 L 收尾（P-030 已先开，这几项都不改变前端可见的契约）：
+- m1：legacy 行的哈希读不出来时，按「无法判定」处理：扫描既不恢复也不新建；
+- m2：restoring 行被占用、而文件不在原处时，退回 deleted；missing 模式的 restoring 行，扫描时跳过；
+- m3：路径锁不再每 50ms 轮询，改为在辅助 goroutine 里阻塞等锁，并同时监听维护通知。这样既保留读写穿插与写者优先，也避免批量写锁期间读者被饿死数小时；
+- m4：判断路径占用和 `softDeleted*PathSkip` 时，墓碑对应的行按已硬删处理；trash/ 目录不存在时清理对应墓碑；
+- m5：恢复成功后，如果残留的硬链接没删掉，改为留墓碑，不做硬删；
+- m6：对墓碑的操作统一返回「回收站条目不存在」，并补上断言；
+- m7：PLAY12 测试先等重定位真正跑完再断言；补读锁拿到后复查围栏的测试。
+**PG 全量 `f1b67ca`**（后端最终状态，含 P-029、修复 J、修复 K）：8 个包全部通过（services 838 秒）。后端所有切片与各轮修复均已完成双后端验证。
+**中断与恢复（三）**：P-030、P-031、P-033、P-035 因会话额度用尽（HTTP 429）同时中断，额度恢复后（2026-09-30 02:22）从各自的 transcript 原位续跑。
+
+**P-031 交付与整合**（2026-09-30）：任务中心、待处理工作台、退出确认、顶栏三组、命令面板与片库工具栏已完成。合入后 `npm test` 全量通过：73 个测试文件、854 条用例。
+- 主代理裁决：
+  - 「待重启」的不可关闭遮罩只做一处，放在 App 层 `App.vue`，监听 `database-switch-state` 与 `SettingsPage` 的 `relaunch-required` emit。已通知 P-033 不再自建遮罩，改为向上 emit。
+  - 启动错误页按后端显示 SQLite 或 PG 文案（D-PC58），直接用现有的 `GetDatabaseBackendStatus`，不新增后端接口。以上两项都在 P-033 合入后由主代理在 `App.vue` 补。
+  - ⌘K 直接执行 `library.openCleanup`：工作台最终没有页签，接受这个理解。
+- **交给后续切片的约定**：
+  - P-030：在 `VideoListPage` 注册 `library.openCleanup`、`library.openAIReview`、`library.openLocalMetadataUpdates`，在 `PhotoLibraryPage` 注册 `photos.openAIReview`，均在 `mounted` 中同步注册并设为 `hidden: true`。
+  - P-035：在 `EntityLibraryPage` 注册 `people.openFaceReview`。
+  - P-033：`SettingsPage` 发 `update:dirty`；`IdleSchedulingSection` 改用 `backgroundTaskLabel`；`utils/enhancement.js` 合入后，任务中心的超分状态文案改为引用它。
+  - P-034：`VideoListPage` 接入 `:selected-people`，推出 `person_ids`，清除条件和保存视图时一并处理；`matchesSmartView` 加入 `local_metadata_updated`；`IncrementalScanBar` 调用 `SyncScanDirectories('manual')`；清理不再使用的 `@delete-tag`、`aiTagSummary`、`cleanupBadgeCount`、`cleanupAnalyzing`。
+  - P-039：改写 AI-CONTEXT §2.21「⌘K 归片库页」一句，以及 §2.19 里的 key 数量。

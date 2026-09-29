@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  COMMAND_GROUPS, commandList, filterCommands, isCommandEnabled, registerCommands, unregisterCommands
+  COMMAND_GROUPS, commandList, filterCommands, findCommand, isCommandEnabled, registerCommands, unregisterCommands
 } from './commandRegistry.js';
 
 // 注册表是模块级单例：每条用例自己清干净，免得互相看见对方的命令。
@@ -105,5 +105,32 @@ describe('isCommandEnabled', () => {
     expect(isCommandEnabled(command('a'))).toBe(true);
     expect(isCommandEnabled(command('b', { enabled: () => false }))).toBe(false);
     expect(isCommandEnabled(command('c', { enabled: () => true }))).toBe(true);
+  });
+});
+
+describe('跳转目标（hidden）与按 ID 查找（APP-11）', () => {
+  it('APP-11 hidden 的命令不在面板列表与过滤结果里，但 findCommand 能按 ID 找到', () => {
+    const run = vi.fn();
+    register('host-page', [
+      command('library.openCleanup', { hidden: true, label: '清理中心', run }),
+      command('visible:one', { label: '清理别的' })
+    ]);
+
+    expect(commandList().map(item => item.id)).toEqual(['visible:one']);
+    expect(filterCommands('清理').map(item => item.id)).toEqual(['visible:one']);
+    expect(findCommand('library.openCleanup').run).toBe(run);
+    expect(findCommand('visible:one').label).toBe('清理别的');
+    expect(findCommand('missing')).toBeNull();
+    expect(findCommand('')).toBeNull();
+  });
+
+  it('同 id 时 findCommand 取先注册的那一条，与面板显示一致', () => {
+    register('page-a', [command('dup', { label: '先来的' })]);
+    register('page-b', [command('dup', { label: '后来的' })]);
+    expect(findCommand('dup').label).toBe('先来的');
+  });
+
+  it('hidden 不是布尔值直接抛错', () => {
+    expect(() => register('bad', [command('bad:one', { hidden: 'yes' })])).toThrow(/hidden/);
   });
 });

@@ -4,13 +4,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => Object.fromEntries([
   'GetSettings', 'GetAllTags', 'GetAllDirectories', 'GetStartupError',
   'SyncScanDirectories', 'SyncImageDirectories', 'GetLibraryCounts', 'LogFrontend',
-  'SetWindowForeground',
+  'SetWindowForeground', 'GetVideosByIDs',
   'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListSavedLibraryViews', 'ListCollections', 'ListPeople'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../wailsjs/go/main/App', () => api);
 
 import App from './App.vue';
+import { registerCommands, unregisterCommands } from './utils/commandRegistry.js';
+import { feedbackState, resetFeedback, resolveConfirm } from './utils/feedback.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -31,6 +33,7 @@ beforeEach(() => {
   api.ListPeople.mockResolvedValue([]);
   // jsdom 的 hasFocus 行为随实现变动，前后台用例自己钉住它。
   document.hasFocus = vi.fn(() => true);
+  resetFeedback();
 });
 
 // 用例结束后必须卸载：App 在 window / document 上挂了前后台监听，
@@ -110,6 +113,8 @@ describe('扫描目录配置变更', () => {
     await flushPromises();
 
     expect(api.SyncScanDirectories).toHaveBeenCalledTimes(1);
+    // 改了扫描根之后的对账按手动扫描上报（§1.2b：前端只传 startup / manual）。
+    expect(api.SyncScanDirectories).toHaveBeenCalledWith('manual');
     expect(wrapper.vm.directories).toHaveLength(1);
   });
 
@@ -261,14 +266,38 @@ describe('命令面板快捷键', () => {
     expect(wrapper.vm.commandPaletteOpen).toBe(true);
   });
 
-  it('⌘K 不是命令面板的快捷键：它仍归片库页的清理审阅', async () => {
+  // D-PC59：「管理」菜单去掉清理审阅后，⌘K 改为走待处理工作台的清理入口（library.openCleanup），
+  // 任何页面都能按；它仍然不是命令面板的快捷键。
+  it('APP-11 ⌘K 在其他页面先切回片库页，再执行 library.openCleanup', async () => {
     const wrapper = await mountApp();
+    const run = vi.fn();
+    registerCommands('test-cleanup-host', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
+    await wrapper.setData({ currentPage: 'insights' });
 
     const event = pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
     await flushPromises();
 
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(run).toHaveBeenCalledTimes(1);
     expect(wrapper.vm.commandPaletteOpen).toBe(false);
-    expect(event.defaultPrevented).toBe(false);
+    unregisterCommands('test-cleanup-host');
+  });
+
+  it('APP-11 ⌘K 已被片库页先接手（preventDefault）时让位，不重复打开', async () => {
+    const wrapper = await mountApp();
+    const run = vi.fn();
+    registerCommands('test-cleanup-host', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
+    const claim = event => event.preventDefault();
+    window.addEventListener('keydown', claim, true);
+
+    pressKey(window, { key: 'k', code: 'KeyK', metaKey: true });
+    await flushPromises();
+
+    window.removeEventListener('keydown', claim, true);
+    unregisterCommands('test-cleanup-host');
+    expect(run).not.toHaveBeenCalled();
+    expect(wrapper.vm.currentPage).toBe('videos');
   });
 
   it('面板关闭时不拦截 J / K / 空格等既有审阅快捷键', async () => {
@@ -314,5 +343,224 @@ describe('命令面板快捷键', () => {
     await flushPromises();
 
     expect(wrapper.vm.commandPaletteOpen).toBe(false);
+  });
+});
+
+describe('顶栏信息架构（APP-14）', () => {
+  function groupLabels(wrapper) {
+    return wrapper.findAll('[data-test^="nav-group-"]').map(group => ({
+      key: group.attributes('data-test').replace('nav-group-', ''),
+      label: group.attributes('aria-label'),
+      pages: group.findAll('.nav-btn').map(button => button.text())
+    }));
+  }
+
+  it('APP-14 顶栏按片库、片单、工具三组渲染，组间有分隔，「已看」改名「观影记录」', async () => {
+    const wrapper = await mountApp();
+
+    expect(groupLabels(wrapper)).toEqual([
+      { key: 'library', label: '片库', pages: ['视频', '人物', '作品集', '图片'] },
+      { key: 'lists', label: '片单', pages: ['想看', '榜单', '观影记录'] },
+      { key: 'tools', label: '工具', pages: ['洞察'] }
+    ]);
+    expect(wrapper.findAll('.header-nav__divider')).toHaveLength(3);
+    expect(wrapper.get('[data-test="nav-settings"]').text()).toBe('设置');
+    expect(wrapper.get('.header-nav').text()).not.toContain('已看');
+  });
+
+  it('APP-14 「下载」只在开启浏览器插件桥接时出现，关掉后随即隐藏', async () => {
+    api.GetSettings.mockResolvedValue({ auto_scan_on_startup: false, theme: 'system', browser_bridge_enabled: true });
+    const wrapper = await mountApp();
+
+    expect(wrapper.find('[data-test="nav-downloads"]').exists()).toBe(true);
+    await wrapper.get('[data-test="nav-downloads"]').trigger('click');
+    expect(wrapper.vm.currentPage).toBe('downloads');
+
+    wrapper.vm.handleSettingsUpdate({ browser_bridge_enabled: false });
+    await flushPromises();
+    expect(wrapper.find('[data-test="nav-downloads"]').exists()).toBe(false);
+  });
+});
+
+describe('设置页离开确认（APP-08）', () => {
+  async function onDirtySettings() {
+    const wrapper = await mountApp();
+    await wrapper.get('[data-test="nav-settings"]').trigger('click');
+    wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', true);
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('APP-08 有未保存修改时切页先确认，选「继续编辑」留在设置页', async () => {
+    const wrapper = await onDirtySettings();
+
+    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    expect(feedbackState.confirm?.message).toBe('放弃未保存的设置修改？');
+    resolveConfirm(false);
+    await flushPromises();
+
+    expect(wrapper.vm.currentPage).toBe('settings');
+    expect(wrapper.findComponent({ name: 'SettingsPage' }).exists()).toBe(true);
+  });
+
+  it('APP-08 选「放弃修改」后切走，脏标记随之清掉', async () => {
+    const wrapper = await onDirtySettings();
+
+    await wrapper.get('[data-test="nav-photos"]').trigger('click');
+    resolveConfirm(true);
+    await flushPromises();
+
+    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(wrapper.vm.settingsDirty).toBe(false);
+  });
+
+  it('APP-08 命令面板里的导航同样经过确认', async () => {
+    const wrapper = await onDirtySettings();
+
+    const pending = wrapper.vm.openVideoFromCommand({ id: 1 });
+    expect(feedbackState.confirm).not.toBeNull();
+    resolveConfirm(false);
+    expect(await pending).toBe(false);
+    expect(wrapper.vm.currentPage).toBe('settings');
+  });
+
+  it('APP-08 没有未保存修改时直接切页，不弹确认', async () => {
+    const wrapper = await mountApp();
+    await wrapper.get('[data-test="nav-settings"]').trigger('click');
+    wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', false);
+
+    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    expect(feedbackState.confirm).toBeNull();
+    expect(wrapper.vm.currentPage).toBe('videos');
+  });
+});
+
+describe('启动扫描与扫描摘要', () => {
+  let handlers;
+
+  beforeEach(() => {
+    handlers = {};
+    window.runtime = { EventsOn: (event, handler) => { handlers[event] = handler; return () => { delete handlers[event]; }; } };
+  });
+
+  afterEach(() => {
+    delete window.runtime;
+  });
+
+  it('LIB-08 启动时的全量扫描带 startup 触发来源', async () => {
+    api.GetSettings.mockResolvedValue({ auto_scan_on_startup: true, theme: 'system' });
+    api.GetAllDirectories.mockResolvedValue([{ id: 1, path: '/Volumes/media', alias: '' }]);
+    await mountApp();
+
+    expect(api.SyncScanDirectories).toHaveBeenCalledTimes(1);
+    expect(api.SyncScanDirectories).toHaveBeenCalledWith('startup');
+  });
+
+  it('LIB-08 library-scan-summary 报告库里有增减或恢复时刷新顶栏计数，没有变化不刷', async () => {
+    await mountApp();
+    expect(api.GetLibraryCounts).toHaveBeenCalledTimes(1);
+
+    handlers['library-scan-summary']({ trigger: 'startup', result: { added: 0, deleted: 0, restored: 0, stale: 0 } });
+    await flushPromises();
+    expect(api.GetLibraryCounts).toHaveBeenCalledTimes(1);
+
+    handlers['library-scan-summary']({ trigger: 'manual', result: { added: 2, deleted: 0, restored: 0, stale: 0 } });
+    await flushPromises();
+    expect(api.GetLibraryCounts).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => {
+  it('APP-03 顶栏「任务」打开任务中心抽屉，角标显示运行中数量，有失败时标红点', async () => {
+    const wrapper = await mountApp();
+    const drawer = wrapper.findComponent({ name: 'TaskCenterDrawer' });
+    expect(drawer.props('open')).toBe(false);
+    expect(wrapper.find('[data-test="task-center-badge"]').exists()).toBe(false);
+
+    drawer.vm.$emit('badge-change', { running: 3, failed: true });
+    await flushPromises();
+    expect(wrapper.get('[data-test="task-center-badge"]').text()).toBe('3');
+    expect(wrapper.find('[data-test="task-center-failed-dot"]').exists()).toBe(true);
+
+    await wrapper.get('[data-test="open-task-center"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(true);
+    wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('close');
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(false);
+  });
+
+  it('META-08 顶栏「待处理」角标来自工作台的总数，超过 99 显示 99+', async () => {
+    const wrapper = await mountApp();
+    const hub = wrapper.findComponent({ name: 'PendingWorkHub' });
+
+    hub.vm.$emit('badge-change', 5);
+    await flushPromises();
+    expect(wrapper.get('[data-test="pending-work-badge"]').text()).toBe('5');
+
+    hub.vm.$emit('badge-change', 120);
+    await flushPromises();
+    expect(wrapper.get('[data-test="pending-work-badge"]').text()).toBe('99+');
+
+    hub.vm.$emit('badge-change', 0);
+    await flushPromises();
+    expect(wrapper.find('[data-test="pending-work-badge"]').exists()).toBe(false);
+
+    await wrapper.get('[data-test="open-pending-work"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(true);
+  });
+
+  it('APP-11 工作台「处理」先切到宿主页（人物页按需挂载），再按固定命令 ID 执行', async () => {
+    const wrapper = await mountApp();
+    const run = vi.fn();
+    registerCommands('test-face-host', [{ id: 'people.openFaceReview', group: 'action', label: '人脸审阅', hidden: true, run }]);
+
+    wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'people.openFaceReview', '人脸待命名');
+    await flushPromises();
+
+    expect(wrapper.vm.currentPage).toBe('people');
+    expect(run).toHaveBeenCalledTimes(1);
+    unregisterCommands('test-face-host');
+  });
+
+  it('APP-11 宿主页没有注册该命令时给出中文提示，不静默失败', async () => {
+    const wrapper = await mountApp();
+
+    wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'photos.openAIReview', '图片 AI 标签待审阅');
+    await flushPromises();
+
+    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('「图片 AI 标签待审阅」暂时打不开');
+  });
+
+  it('APP-03 任务中心里超分产物「在片库中打开」按 ID 取回视频后打开详情', async () => {
+    const wrapper = await mountApp();
+    const open = vi.fn();
+    wrapper.vm.openVideoFromCommand = open;
+    api.GetVideosByIDs.mockResolvedValue([{ id: 42, name: 'out.mp4' }]);
+
+    wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-video', 42);
+    await flushPromises();
+
+    expect(api.GetVideosByIDs).toHaveBeenCalledWith([42]);
+    expect(open).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }));
+  });
+
+  it('APP-03 产物视频不在片库中时说明原因', async () => {
+    const wrapper = await mountApp();
+    api.GetVideosByIDs.mockResolvedValue([]);
+
+    wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-video', 42);
+    await flushPromises();
+
+    expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('产物视频不在片库中');
+  });
+
+  it('MEDIA-10 退出确认对话框常挂载；数据库连不上时顶栏不显示任务与待处理入口', async () => {
+    api.GetStartupError.mockResolvedValue('数据库连接失败');
+    const wrapper = await mountApp();
+
+    expect(wrapper.findComponent({ name: 'QuitConfirmDialog' }).exists()).toBe(true);
+    expect(wrapper.find('[data-test="open-task-center"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="open-pending-work"]').exists()).toBe(false);
   });
 });
