@@ -422,7 +422,16 @@ func TestEnhancementMergeChecksDiskAndKeepsCheckpointMEDIA03(t *testing.T) {
 	if failed.ErrorCode != enhancementCodeDiskInsufficient || failed.CommittedFrames != 250 {
 		t.Fatalf("合并前空间不足应报 disk_insufficient 且三批都已提交: %+v", failed)
 	}
+	// B-m-4：摘要写明所需与可用的空间（人类可读）。
 	workdir := enhancementWorkdir(models.VideoEnhancementTask{ID: failed.ID, Video: video})
+	manifest, err := loadEnhancementManifest(workdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRequired := formatEnhancementBytes(uint64(enhancementMergeRequiredBytes(enhancementWrittenBytes(workdir, manifest), video.Size)))
+	if !strings.Contains(failed.ErrorSummary, "需要约 "+wantRequired) || !strings.Contains(failed.ErrorSummary, "可用 1 B") {
+		t.Fatalf("合并前空间不足的摘要应给出所需（%s）与可用空间: %q", wantRequired, failed.ErrorSummary)
+	}
 	for _, name := range []string{"segments.json", "seg-00000.cispart", "seg-00001.cispart", "seg-00002.cispart"} {
 		if _, err := os.Stat(filepath.Join(workdir, name)); err != nil {
 			t.Fatalf("合并前空间不足应保留检查点 %s: %v", name, err)
@@ -661,5 +670,75 @@ func TestEnhancementSweepOrphanWorkdirsMEDIA03(t *testing.T) {
 	// 重复清扫无事可做。
 	if again, err := service.SweepOrphanWorkdirs(context.Background()); err != nil || again.Removed != 0 || again.Kept != 3 {
 		t.Fatalf("重复清扫: %+v err=%v", again, err)
+	}
+}
+
+// MEDIA-03（B-m-4）：合并前空间不足的摘要用人类可读的二进制单位。
+func TestFormatEnhancementBytesMEDIA03(t *testing.T) {
+	for size, want := range map[uint64]string{
+		0:                  "0 B",
+		1:                  "1 B",
+		1023:               "1023 B",
+		1024:               "1.0 KiB",
+		1536:               "1.5 KiB",
+		5 << 20:            "5.0 MiB",
+		12*(1<<30) + 1<<29: "12.5 GiB",
+		3 << 40:            "3.0 TiB",
+		^uint64(0):         "16.0 EiB",
+	} {
+		if got := formatEnhancementBytes(size); got != want {
+			t.Fatalf("formatEnhancementBytes(%d) = %q，应为 %q", size, got, want)
+		}
+	}
+}
+
+// MEDIA-03（B-m-2）：目录名后缀必须是规范十进制 id 才算任务工作目录。带前导零、符号、0 的同前缀目录
+// 不是本应用建的：不计入、不删除——否则 .cineinsight-enhance-0999999 会被当成任务 999999 的孤儿删掉。
+func TestEnhancementSweepIgnoresNonCanonicalWorkdirNamesMEDIA03(t *testing.T) {
+	for name, want := range map[string]uint{
+		enhancementWorkdirPrefix + "7":                    7,
+		enhancementWorkdirPrefix + "1234567":              1234567,
+		enhancementWorkdirPrefix + "007":                  0,
+		enhancementWorkdirPrefix + "0":                    0,
+		enhancementWorkdirPrefix + "00":                   0,
+		enhancementWorkdirPrefix + "+5":                   0,
+		enhancementWorkdirPrefix + "-5":                   0,
+		enhancementWorkdirPrefix + "5 ":                   0,
+		enhancementWorkdirPrefix + "":                     0,
+		enhancementWorkdirPrefix + "1e3":                  0,
+		".other-prefix-7":                                 0,
+		enhancementWorkdirPrefix + "99999999999999999999": 0,
+	} {
+		got, ok := enhancementWorkdirTaskID(name)
+		if ok != (want != 0) || got != want {
+			t.Fatalf("enhancementWorkdirTaskID(%q) = (%d, %v)，应为 %d", name, got, ok, want)
+		}
+	}
+
+	setupVideoServiceTestDB(t)
+	root := t.TempDir()
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatal(err)
+	}
+	service := newEnhancementTestService(t, fakeEnhancementCommands(t, "", 250, 24))
+	leadingZero := filepath.Join(root, "x", enhancementWorkdirPrefix+"0999999")
+	orphan := filepath.Join(root, "x", enhancementWorkdirPrefix+"999999")
+	for _, dir := range []string{leadingZero, orphan} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result, err := service.SweepOrphanWorkdirs(context.Background())
+	if err != nil {
+		t.Fatalf("清扫失败: %v", err)
+	}
+	if _, err := os.Stat(leadingZero); err != nil {
+		t.Fatalf("带前导零的同前缀目录不是本应用建的，不该删: %v", err)
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatalf("规范命名、任务行不存在的孤儿应当删除: %v", err)
+	}
+	if result.Found != 1 || result.Removed != 1 || result.Kept != 0 {
+		t.Fatalf("只有规范命名的目录计入: %+v", result)
 	}
 }

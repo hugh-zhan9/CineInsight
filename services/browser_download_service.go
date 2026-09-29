@@ -658,6 +658,9 @@ func (s *BrowserDownloadService) update(id string, mutate func(task *BrowserDown
 		// 完成的任务不再需要请求规格（M-4）：它带着 Referer / Cookie，而完成的任务不能重试，
 		// 留在内存里只是让 Cookie 多活一会儿。失败与取消的保留，同一会话内还要靠它重试。
 		entry.request = nil
+		// 地址同理（B-m-3）：换成与表里 display_url 相同的显示用地址，ListTasks 与推送事件
+		// 不再带出签名 query 与 userinfo。
+		entry.task.URL = browserDownloadDisplayURL(entry.task.URL)
 	}
 	reachedTerminal := stateChanged && browserDownloadTerminal(entry.task.State)
 	// 只有落库列变了才写表：进度是逐行解析的，每一行都写一次表毫无意义。
@@ -1284,17 +1287,19 @@ func sanitizeBrowserDownloadError(message string, secrets []string) string {
 	return text
 }
 
-// browserDownloadSecrets 列出这次请求里已知的敏感值，供清洗时逐字擦除。太短的值（<6）不擦：
-// 那种长度谈不上机密，擦了反而会把 "true"、"1" 之类的正常字样从报错里抠掉。
+// browserDownloadSecrets 列出这次请求里已知的敏感值，供清洗时逐字擦除。Cookie 与 query 里太短的值
+// （<6）不擦：那种长度谈不上机密，擦了反而会把 "true"、"1" 之类的正常字样从报错里抠掉。
+// userinfo 的用户名与密码例外（B-m-3）：它们就是凭证，`admin:admin@host` 这种短凭证同样要擦，
+// 代价是报错里恰好相同的字样也一并被抠掉。
 func browserDownloadSecrets(request *browserDownloadNormalized) []string {
 	if request == nil {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	secrets := make([]string, 0)
-	add := func(value string) {
+	addValue := func(value string, minLength int) {
 		value = strings.TrimSpace(value)
-		if len(value) < 6 {
+		if value == "" || len(value) < minLength {
 			return
 		}
 		if _, ok := seen[value]; ok {
@@ -1303,6 +1308,8 @@ func browserDownloadSecrets(request *browserDownloadNormalized) []string {
 		seen[value] = struct{}{}
 		secrets = append(secrets, value)
 	}
+	add := func(value string) { addValue(value, 6) }
+	addCredential := func(value string) { addValue(value, 1) }
 	for _, header := range request.Headers {
 		name, value, ok := strings.Cut(header, ":")
 		if !ok || !strings.EqualFold(strings.TrimSpace(name), "Cookie") {
@@ -1319,9 +1326,9 @@ func browserDownloadSecrets(request *browserDownloadNormalized) []string {
 		// userinfo 里的用户名与密码（I-1）：URL 形态的片段会被 browserDownloadStripURL 剥掉，
 		// 这里再按值擦一遍，防它们以别的形态（ffmpeg 把凭证单独打印出来）出现在报错里。
 		if parsed.User != nil {
-			add(parsed.User.Username())
+			addCredential(parsed.User.Username())
 			if password, ok := parsed.User.Password(); ok {
-				add(password)
+				addCredential(password)
 			}
 		}
 		add(parsed.RawQuery)

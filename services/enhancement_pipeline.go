@@ -367,8 +367,8 @@ func (s *EnhancementService) processTask(ctx context.Context, task models.VideoE
 	// 上一次中断留下的半截合并产物先删掉：它占着空间，而这一次合并会整个重写它。
 	_ = os.Remove(stagingPath)
 	// 合并前按产物预计体积复检空间（M-6）。不够就报 disk_insufficient 并保留检查点：分段全在
-	// 清单里，腾出空间后重试会直接从合并继续。
-	if err := s.ensureDiskFree(video.Path, enhancementMergeRequiredBytes(enhancementWrittenBytes(workdir, manifest), task.SourceSize)); err != nil {
+	// 清单里，腾出空间后重试会直接从合并继续。错误摘要写明所需与可用的空间（B-m-4）。
+	if err := s.ensureMergeDiskFree(video.Path, enhancementMergeRequiredBytes(enhancementWrittenBytes(workdir, manifest), task.SourceSize)); err != nil {
 		s.failTask(task.ID, enhancementCodeDiskInsufficient, err.Error())
 		return nil
 	}
@@ -445,6 +445,10 @@ func enhancementWrittenBytes(workdir string, manifest enhancementSegmentManifest
 // enhancementMergeRequiredBytes 是合并产物的预计体积（M-6）：视频流就是已写出的分段
 // （-c:v copy 原样拼接），音轨、字幕从源里原样复制，体积不超过源文件本身。按上限估，
 // 宁可提前报空间不足、保留检查点，也不让合并写到一半才撞满卷。
+//
+// 更紧的「已写分段 + 源里非视频流」需要逐流字节数：已有的 ffprobe 输出（-show_streams）里没有
+// 可靠的逐流体积（bit_rate 常缺失，mkv 的 NUMBER_OF_BYTES 标签也不是每个文件都有），不重新探测
+// 就拿不到，所以保持按整个源文件估（B-m-4）。
 func enhancementMergeRequiredBytes(writtenBytes, sourceSize int64) int64 {
 	if writtenBytes < 0 {
 		writtenBytes = 0
@@ -457,6 +461,39 @@ func enhancementMergeRequiredBytes(writtenBytes, sourceSize int64) int64 {
 		return int64(^uint64(0) >> 1)
 	}
 	return required
+}
+
+// ensureMergeDiskFree 是合并前的空间复检（M-6）：判定与 ensureDiskFree 相同，空间不足时错误摘要
+// 给出所需与可用的空间（人类可读，B-m-4），用户据此知道要腾出多少。
+func (s *EnhancementService) ensureMergeDiskFree(sourcePath string, required int64) error {
+	free, err := s.diskFree(filepath.Dir(sourcePath))
+	if err != nil {
+		return fmt.Errorf("disk_insufficient: 无法检查磁盘空间: %v", err)
+	}
+	if required < 0 {
+		required = 0
+	}
+	if free < uint64(required) {
+		return fmt.Errorf("disk_insufficient: 合并前同卷可用空间不足（需要约 %s，可用 %s）",
+			formatEnhancementBytes(uint64(required)), formatEnhancementBytes(free))
+	}
+	return nil
+}
+
+// formatEnhancementBytes 把字节数写成人类可读的二进制单位（B / KiB / MiB / GiB / TiB），一位小数。
+func formatEnhancementBytes(size uint64) string {
+	const unit = 1024
+	if size < unit {
+		return fmt.Sprintf("%d B", size)
+	}
+	value := float64(size)
+	suffixes := []string{"KiB", "MiB", "GiB", "TiB", "PiB", "EiB"}
+	index := -1
+	for value >= unit && index < len(suffixes)-1 {
+		value /= unit
+		index++
+	}
+	return fmt.Sprintf("%.1f %s", value, suffixes[index])
 }
 
 // enhancementNoSpace 报告一次失败是不是卷写满了（ENOSPC）：Go 侧写文件的错误可以直接判，

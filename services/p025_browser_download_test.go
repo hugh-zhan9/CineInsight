@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -594,6 +595,110 @@ func TestBrowserDownloadDoneDropsRequestSpecMEDIA10(t *testing.T) {
 	}
 	if result, err := service.RetryDownload(task.ID); err != nil || result.Code != BrowserDownloadCodeNotRetryable {
 		t.Fatalf("完成的任务重试应报 not_retryable: %+v err=%v", result, err)
+	}
+}
+
+// MEDIA-10（B-m-3）：userinfo 里的短凭证（admin:admin）不受「<6 不擦」门槛限制，报错里单独打印出来的
+// 用户名与密码同样擦掉；Cookie / query 的短值照旧不擦。
+func TestBrowserDownloadShortUserinfoCredentialsAreRedactedMEDIA10(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dir := t.TempDir()
+	binary, _ := writeFakeFFmpeg(t, `echo "[https @ 0x1] HTTP error 401 Unauthorized" 1>&2
+echo "login admin rejected (password admin), retry=true" 1>&2
+exit 1
+`)
+	service := withBrowserDownloadStore(newTestDownloadService(t, dir, binary, nil))
+	task, err := service.Enqueue(BrowserDownloadRequest{
+		URL:    "https://admin:admin@host.example.com/hls/index.m3u8?sig=SIGNATURE9911&v=true",
+		Kind:   "hls",
+		Title:  "短凭证",
+		Cookie: "theme=dark",
+	})
+	if err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	failed := waitForState(t, service, task.ID, browserDownloadStateFailed)
+	service.Wait()
+	row := mustLoadBrowserDownloadRow(t, task.ID)
+	for _, text := range []string{failed.Error, row.Error, row.DisplayURL} {
+		for _, secret := range []string{"admin", "SIGNATURE9911"} {
+			if strings.Contains(text, secret) {
+				t.Fatalf("清洗结果不应含 %q：%q", secret, text)
+			}
+		}
+	}
+	if !strings.Contains(row.Error, "401") || !strings.Contains(row.Error, "retry=true") {
+		t.Fatalf("短的非凭证字样照旧保留，原因仍可读：%q", row.Error)
+	}
+	secrets := browserDownloadSecrets(&browserDownloadNormalized{URL: "https://a:b@host/x?k=v", Headers: []string{"Cookie: c=d"}})
+	for _, want := range []string{"a", "b"} {
+		found := false
+		for _, secret := range secrets {
+			found = found || secret == want
+		}
+		if !found {
+			t.Fatalf("单字符的用户名与密码也要擦: %v", secrets)
+		}
+	}
+	for _, secret := range secrets {
+		if secret == "v" || secret == "d" || secret == "k=v" {
+			t.Fatalf("query 与 Cookie 的短值不该进待擦除表: %v", secrets)
+		}
+	}
+}
+
+// MEDIA-10（B-m-3）：任务完成后内存里的地址换成显示用地址——ListTasks、推送事件与合并列表都不再带出
+// 签名 query 与 userinfo，与表里的 display_url 一致。
+func TestBrowserDownloadDoneTaskListsDisplayURLOnlyMEDIA10(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	dir := t.TempDir()
+	binary, _ := writeFakeFFmpeg(t, fakeFFmpegSuccess)
+	service := withBrowserDownloadStore(newTestDownloadService(t, dir, binary, nil))
+	var emittedMu sync.Mutex
+	var lastEmitted []BrowserDownloadTask
+	service.SetEventEmitter(func(tasks []BrowserDownloadTask) {
+		emittedMu.Lock()
+		lastEmitted = tasks
+		emittedMu.Unlock()
+	})
+	const display = "https://cdn.example.com/hls/index.m3u8"
+	task, err := service.Enqueue(BrowserDownloadRequest{
+		URL:   "https://admin:admin@cdn.example.com/hls/index.m3u8?sig=SIGNATURE4242#frag",
+		Kind:  "hls",
+		Title: "完成后的地址",
+	})
+	if err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	done := waitForState(t, service, task.ID, browserDownloadStateDone)
+	service.Wait()
+	check := func(source string, tasks []BrowserDownloadTask) {
+		t.Helper()
+		found := false
+		for _, item := range tasks {
+			if item.ID != task.ID {
+				continue
+			}
+			found = true
+			if item.URL != display {
+				t.Fatalf("%s 里的地址应为显示用地址 %q，实际 %q", source, display, item.URL)
+			}
+		}
+		if !found {
+			t.Fatalf("%s 里没有这个任务", source)
+		}
+	}
+	if done.URL != display {
+		t.Fatalf("完成时的快照地址应为显示用地址: %q", done.URL)
+	}
+	check("ListTasks", service.ListTasks())
+	check("ListDownloadTasks", service.ListDownloadTasks())
+	emittedMu.Lock()
+	emitted := lastEmitted
+	emittedMu.Unlock()
+	check("推送事件", emitted)
+	if row := mustLoadBrowserDownloadRow(t, task.ID); row.DisplayURL != display {
+		t.Fatalf("表里的 display_url 不对: %q", row.DisplayURL)
 	}
 }
 

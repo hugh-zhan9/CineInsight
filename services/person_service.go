@@ -321,7 +321,12 @@ func (s *PersonService) AddPersonVideos(personID uint, videoIDs []uint) error {
 		for _, videoID := range videoIDs {
 			relations = append(relations, models.VideoPerson{VideoID: videoID, PersonID: personID})
 		}
-		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&relations).Error
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&relations).Error; err != nil {
+			return err
+		}
+		// 用户在人物页确认了这些关系：已有关系上人脸链路的写入记录删掉，归用户所有（META-04 B-I-1）。
+		// 新插入的关系本来就没有作数的记录，一并删掉无影响。
+		return releaseFaceRelationWrites(tx, personID, models.FaceMediaKindVideo, videoIDs)
 	})
 	if err != nil {
 		return fmt.Errorf("add person videos: %w", err)
@@ -406,7 +411,11 @@ func (s *PersonService) AddPersonImages(personID uint, imageIDs []uint) error {
 		for _, imageID := range imageIDs {
 			relations = append(relations, models.ImagePerson{ImageID: imageID, PersonID: personID})
 		}
-		return tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&relations).Error
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&relations).Error; err != nil {
+			return err
+		}
+		// 同 AddPersonVideos：用户确认过的关系归用户所有（META-04 B-I-1）。
+		return releaseFaceRelationWrites(tx, personID, models.FaceMediaKindImage, imageIDs)
 	})
 	if err != nil {
 		return fmt.Errorf("add person images: %w", err)
@@ -664,6 +673,19 @@ func (s *PersonService) MergePeople(targetID uint, sourceIDs []uint) (*MergePeop
 		if len(sourcePeople) != len(sources) {
 			return ErrPersonNotFound
 		}
+		// ⓪ 来源人物在某件媒体上有关系，就是另一个来源（NFO、手动、标签转人物……）确认了目标在这件
+		// 媒体上的关系（META-04 B-I-1）：目标在这些媒体上的人脸链路写入记录全部删掉，关系从此来源不明、
+		// 归用户所有，之后解除 / 改派目标的簇都不会删它。必须在删来源关系之前做，子查询要读它们。
+		// 来源自己的写入记录随 deletePersonTx 删掉，迁到目标上的关系同样来源不明。
+		if err := tx.Where("face_relation_writes.person_id = ?", targetID).
+			Where(`((face_relation_writes.media_kind = ? AND face_relation_writes.media_id IN
+					(SELECT video_people.video_id FROM video_people WHERE video_people.person_id IN ?))
+				OR (face_relation_writes.media_kind = ? AND face_relation_writes.media_id IN
+					(SELECT image_people.image_id FROM image_people WHERE image_people.person_id IN ?)))`,
+				models.FaceMediaKindVideo, sources, models.FaceMediaKindImage, sources).
+			Delete(&models.FaceRelationWrite{}).Error; err != nil {
+			return err
+		}
 		// ① 关系改写为目标并去重，再删来源残行。
 		videoInsert := tx.Exec(`INSERT INTO video_people (video_id, person_id, created_at)
 			SELECT video_id, ?, MIN(created_at) FROM video_people WHERE person_id IN ? GROUP BY video_id
@@ -845,6 +867,10 @@ func (s *PersonService) SetVideoPeople(videoID uint, personIDs []uint) error {
 		}
 		for _, personID := range desired {
 			if _, exists := oldSet[personID]; exists {
+				// 已有关系又出现在这次保存的列表里：归用户所有（META-04 B-I-1）。
+				if err := releaseFaceRelationWrites(tx, personID, models.FaceMediaKindVideo, []uint{videoID}); err != nil {
+					return err
+				}
 				continue
 			}
 			relation := models.VideoPerson{VideoID: videoID, PersonID: personID}
@@ -939,6 +965,10 @@ func (s *PersonService) SetImagePeople(imageID uint, personIDs []uint) error {
 		}
 		for _, personID := range desired {
 			if _, exists := oldSet[personID]; exists {
+				// 图片抽屉保存：已有关系又出现在这次保存的列表里，归用户所有（META-04 B-I-1）。
+				if err := releaseFaceRelationWrites(tx, personID, models.FaceMediaKindImage, []uint{imageID}); err != nil {
+					return err
+				}
 				continue
 			}
 			relation := models.ImagePerson{ImageID: imageID, PersonID: personID}

@@ -592,8 +592,11 @@ func resumable(v *models.Video) bool {
 }
 
 // resumableSQL 是 resumable 的 SQL 版本，列名全部限定（PG 的 42702），可以嵌进任何以 videos
-// 为外层的查询。watch_progress_updated_at 为 NULL 时比较结果为 NULL，与 Go 版的 nil 同为 false。
-const resumableSQL = `(videos.watch_position_seconds > 0 AND (NOT videos.is_watched OR videos.watched_at IS NULL OR videos.watch_progress_updated_at > videos.watched_at))`
+// 为外层的查询。它在任何上下文里都是二值结果（含 NOT (…)）：watch_position_seconds 与 is_watched
+// 都是 NOT NULL 列，最后一项先判 watch_progress_updated_at IS NOT NULL 再比较——否则那一项在
+// 「已看、watched_at 非空、进度时间为空」的行上是 NULL，整个式子跟着变成 NULL，
+// NOT resumableSQL 也是 NULL，被当成 false 的一方就会漏掉这类行（PLAY-10）。
+const resumableSQL = `(videos.watch_position_seconds > 0 AND (NOT videos.is_watched OR videos.watched_at IS NULL OR (videos.watch_progress_updated_at IS NOT NULL AND videos.watch_progress_updated_at > videos.watched_at)))`
 
 // 内嵌播放器上报进度时的起播来源（D-PC42）。
 const (
@@ -609,7 +612,10 @@ const (
 // watched_at 只记第一次看完的时间。extra 里是调用方要一起写的列（进度更新时间）。
 // scopes 是附加条件（IINA 同步用它挡住比库里更旧的断点文件）。
 //
-// 返回 flipped（is_watched 由 false 变为 true，调用方据此通知观察者）与 applied（是否有行被写）。
+// 返回 flipped（本次写入把 is_watched 由 false 变为 true，调用方据此通知观察者）与 applied
+// （库里满足 scopes 的这一行现在处于「已看、断点为 0」：本次写入的结果，或两次条件更新之间
+// 别的写入者先一步做成的结果）。两者都按实际写入 / 实际状态报告，不会出现把 false 改成 true
+// 却报告 flipped=false 的情况。
 func markWatchedFromCompletion(db *gorm.DB, videoID uint, extra map[string]interface{}, now time.Time, scopes ...func(*gorm.DB) *gorm.DB) (flipped bool, applied bool, err error) {
 	build := func(watchedAt interface{}) map[string]interface{} {
 		updates := map[string]interface{}{
@@ -630,13 +636,31 @@ func markWatchedFromCompletion(db *gorm.DB, videoID uint, extra map[string]inter
 	if result.RowsAffected == 1 {
 		return true, true, nil
 	}
-	// 已经是已看：重看又播到片尾，照样清断点，但不改写第一次看完的时间。
+	// 已经是已看：重看又播到片尾，照样清断点，但不改写第一次看完的时间。条件里带上
+	// is_watched = true：两次更新之间有人把它改回了未看的话，这里不能顺手把它改成已看——
+	// 那是一次 false → true 的翻转，却只能报告 flipped=false，观察者就收不到通知。
 	result = db.Model(&models.Video{}).Scopes(scopes...).
-		Where("videos.id = ?", videoID).Updates(build(gorm.Expr("COALESCE(watched_at, ?)", now)))
+		Where("videos.id = ? AND videos.is_watched = ?", videoID, true).
+		Updates(build(gorm.Expr("COALESCE(watched_at, ?)", now)))
 	if result.Error != nil {
 		return false, false, result.Error
 	}
-	return false, result.RowsAffected == 1, nil
+	if result.RowsAffected == 1 {
+		return false, true, nil
+	}
+	// 两次条件更新都落空：行已不在、被 scopes 挡住，或两次更新之间被改回了未看。重读一次，
+	// 按库里的实际状态报告，不在这里再翻转。
+	var current models.Video
+	err = db.Model(&models.Video{}).Scopes(scopes...).
+		Select("videos.id", "videos.is_watched", "videos.watch_position_seconds").
+		Where("videos.id = ?", videoID).Take(&current).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return false, current.IsWatched && current.WatchPositionSeconds == 0, nil
 }
 
 // UpdateVideoWatchProgress 保存内嵌播放器 / Jellyfin 上报的观看位置（D-PC41、D-PC42）。
@@ -681,7 +705,8 @@ func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds fl
 			return nil, err
 		}
 		if !applied {
-			return nil, gorm.ErrRecordNotFound
+			// 行已不在（getVideoWithTags 报未找到），或并发的「取消已看」先落了库：按实际状态返回。
+			return s.getVideoWithTags(videoID)
 		}
 		if flipped {
 			s.NotifyWatchStateChanged(videoID, true)
@@ -1132,7 +1157,8 @@ func (s *VideoService) ListRecentlyPlayedWithFilter(filter LibraryFilter, cursor
 
 // ListContinueWatchingWithFilter 是「继续观看」视图的默认排序（D-PC42、PLAY-09）：条件为
 // resumableSQL，按 (watch_progress_updated_at DESC, id DESC) 键集分页，沿用最近播放的游标模式——
-// 调用方把上一页最后一行的 watch_progress_updated_at（RFC3339Nano）与 id 传回来。
+// 调用方把上一页最后一行的 watch_progress_updated_at（RFC3339 / RFC3339Nano，任意时区）与 id 传回来。
+// 原样回传后端给的字符串最稳；换成 UTC（…Z）或截到毫秒也不漏行、不重复，见 continueWatchingCursorTime。
 //
 // 老数据里有断点却没有进度更新时间的行（旧版 IINA 同步只写位置），排在所有有时间的行之后、
 // 按 id 倒序；游标落在这一段时 cursorProgressUpdatedAt 传空串、cursorID 非零。
@@ -1147,10 +1173,12 @@ func (s *VideoService) ListContinueWatchingWithFilter(filter LibraryFilter, curs
 	}
 	var cursorTime time.Time
 	if cursorProgressUpdatedAt != "" {
-		var err error
-		cursorTime, err = time.Parse(time.RFC3339Nano, cursorProgressUpdatedAt)
+		parsed, err := time.Parse(time.RFC3339Nano, cursorProgressUpdatedAt)
 		if err != nil {
 			return nil, fmt.Errorf("继续观看时间游标无效: %w", err)
+		}
+		if cursorTime, err = continueWatchingCursorTime(parsed, cursorID); err != nil {
+			return nil, err
 		}
 	}
 	filter.SmartView = LibraryViewContinueWatching
@@ -1177,6 +1205,31 @@ func (s *VideoService) ListContinueWatchingWithFilter(filter LibraryFilter, curs
 		return nil, err
 	}
 	return newLibraryVideoPage(videos, nil)
+}
+
+// continueWatchingCursorTime 把回传的进度时间游标换成与存储同一时区、同一精度的值再参与比较（A-m-3）。
+//
+//   - 时区：SQLite 把时间存成带偏移的文本（驱动按值自己的时区格式化），比较按文本进行；写入路径
+//     （time.Now()、断点文件的修改时间）都是本地时区。UTC（…Z）的游标直接绑定，就是拿「+00:00」
+//     的文本去比「+08:00」的文本，整页错位。所以统一换成 time.Local。
+//   - 精度：库里存到微秒（PG）或纳秒（SQLite），前端的 Date 只有毫秒。游标行（cursorID）现存的
+//     进度时间与回传值相差不到 1 毫秒时，改用库里的实际值：否则与游标行同一毫秒、排在它后面的行
+//     会被 `<` 漏掉，回传值进位时游标行自己又会再出现一次。游标行已不在、或进度时间已经变了
+//     （相差 ≥1 毫秒）时照用回传值，与最近播放的游标同一语义。
+func continueWatchingCursorTime(cursor time.Time, cursorID uint) (time.Time, error) {
+	var row models.Video
+	err := database.DB.Unscoped().Model(&models.Video{}).
+		Select("videos.id", "videos.watch_progress_updated_at").
+		Where("videos.id = ?", cursorID).Take(&row).Error
+	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+		return time.Time{}, fmt.Errorf("读取继续观看游标失败: %w", err)
+	}
+	if err == nil && row.WatchProgressUpdatedAt != nil {
+		if diff := row.WatchProgressUpdatedAt.Sub(cursor); diff > -time.Millisecond && diff < time.Millisecond {
+			return row.WatchProgressUpdatedAt.In(time.Local), nil
+		}
+	}
+	return cursor.In(time.Local), nil
 }
 
 // GetLibrarySubtitleHits 返回指定当前页视频的首个字幕命中，不改变页面排序。

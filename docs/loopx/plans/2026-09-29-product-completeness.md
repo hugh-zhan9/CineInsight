@@ -1078,3 +1078,35 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - `permission_denied` 与「原位置是符号链接」两种情况的文案。
 - 独立复审：待安排（数据安全）。
 **PG 全量 `e40b34d`**：8 个包全部通过（services 805 秒）。**修复 G 整合**：SQLite 全量通过（8 个包全部 ok）。
+
+**修复 F 复审**（2026-09-29，opus-xhigh 只读）：**通过**。0 个 Critical，0 个 Important，12 条 Minor。
+
+排入收尾修复（修复 I）的 Minor：
+- m1：「待重启」终态下，获取路径锁的入口会被永久阻塞。在 App 层先检查 `restoreTerminal`，是终态就立即拒绝。
+- m2：取消需要带状态。Preflight 进行期间用户退出，取消落空。
+- m3：复制临时库挪到关闭句柄之前做，并事先检查剩余空间。
+- m4：`-wal` 非空时中止恢复；清扫崩溃后留下的恢复临时文件。
+- m5：进程环境判定改用 `os.LookupEnv`。
+- m6：判断共享临时文件时，在 Go 里用 `subtitleFileLockKey` 比较，不再依赖 SQL 的 `LOWER`。另外 `subtitleJobsDB` 出错时应报错，而不是照删。
+- m7：「全部重新排队」没能入队的行，要写入真实的失败原因，不能标成「已忽略」。
+- m8：`subtitle_search_service.go` 的目录缓存并回 `subtitle_sidecar.go`（计划已登记为遗留）。
+- m9：删掉只做转调的 prune 间接层。
+- m10：无生命周期版本的 `SwitchBackendConfigOnly` 改为不导出。
+- m11：补测试缺口：App 层只改配置的接线与 TryLock、`Init` 调用 `resolveStartupBackend`、`message = ?` 条件、启动缓存的还原。
+- m12：`s.mu` 被占用时也要发布失败终态；`backend_env_locked` 在 App 层补上前缀。
+
+- **P-024**（已转达）：在「待重启」或恢复终态下，`beforeClose` 直接放行退出。
+- **前端**：终态弹窗必须挡住所有操作。
+- **设计取舍**：终态期间被拒绝的 IINA「看完」删除事件不会补回，这是「拒绝写入旧库」的代价，主代理接受。
+**PG 全量 `d95821b`**（修复 G）：8 个包全部通过（services 983 秒）。
+**中断与恢复（二）**：修复 H、P-022、P-024、修复 G 复审因登录失效（HTTP 403）同时中断，用户重新登录后从各自的 transcript 原位续跑。
+
+**修复 H 整合**（2026-09-29）：P-020 与修复 E 评审提出的问题全部修复，修复 H 自报 SQLite 全量通过，变异检查覆盖了各处关键修复。主代理接受的取舍如下：
+- A-m-2：已看但 `watched_at` 为空的历史行，之后会采纳新写入的 watch_later 位置。本机数据中 5 条已看记录都有 `watched_at`，不受影响。
+- B-I-1：额外覆盖人物页添加、图片抽屉、`SetVideoPeople` 四个入口。这几处都是「用户确认已有关系」，改动只会让关系更不容易被删。
+- 撤销标签转人物时，不恢复已释放的写入记录。
+- 合并前的空间估算仍用保守上限，但摘要里会给出需要和可用的字节数。
+- 契约变更已记入详细设计 §1.2b 与 §8.2。
+- **真机交接**（新增）：IINA 启动时是否会写 watch_later。如果会，第二道保护会让会话过早结束。
+- 独立复审：修复 H 涉及人物关系删除，属于破坏性改动，需要复审。
+修复 H 整合验证：SQLite 全量中 services 包有 1 条偶发失败，`TestPlaybackMissingFileOnOnlineRootWithoutCandidateStaysMissingPLAY12` 报 TempDir 清理时「directory not empty」，原因是后台 goroutine 在测试结束后仍在写临时目录。单独跑 5 次、services 包整包重跑都通过，其余 7 个包全绿。这条测试留待改成确定性写法。

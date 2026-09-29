@@ -363,6 +363,11 @@ func replaceVideoPeopleRelations(tx *gorm.DB, videoID uint, desired []uint, prun
 	}
 	for _, personID := range desired {
 		if _, exists := oldSet[personID]; exists {
+			// 关系已存在、又出现在这次的断言列表里（NFO 应用或抽屉保存）：别的来源确认了它，人脸链路的
+			// 写入记录全部删掉，关系归用户所有，之后解除 / 改派人脸簇都不会删它（META-04 B-I-1）。
+			if err := releaseFaceRelationWrites(tx, personID, models.FaceMediaKindVideo, []uint{videoID}); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&models.VideoPerson{VideoID: videoID, PersonID: personID}).Error; err != nil {

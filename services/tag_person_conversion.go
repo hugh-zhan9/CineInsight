@@ -151,6 +151,14 @@ func (s *TagService) ConvertTagToPerson(input TagPersonConversionRequest) (*TagP
 		if err != nil {
 			return fmt.Errorf("关联图片失败: %w", err)
 		}
+		// 转换前就存在的关系被这个标签再确认了一次：人脸链路的写入记录删掉，关系归用户所有
+		// （META-04 B-I-1）。撤销转换不删这些关系，也不恢复记录——它们本来就不是这次转换加的。
+		if err := releaseFaceRelationWrites(tx, result.Person.ID, models.FaceMediaKindVideo, subtractUintIDs(videoIDs, addedVideoIDs)); err != nil {
+			return err
+		}
+		if err := releaseFaceRelationWrites(tx, result.Person.ID, models.FaceMediaKindImage, subtractUintIDs(imageIDs, addedImageIDs)); err != nil {
+			return err
+		}
 		record := models.TagPersonConversion{
 			TagID: tag.ID, PersonID: result.Person.ID, PersonCreated: input.CreateNew,
 			VideoIDsJSON: marshalIDList(videoIDs), ImageIDsJSON: marshalIDList(imageIDs),
@@ -169,6 +177,18 @@ func (s *TagService) ConvertTagToPerson(input TagPersonConversionRequest) (*TagP
 		return nil, err
 	}
 	return result, nil
+}
+
+// subtractUintIDs 返回 ids 中不在 removed 里的元素，保持原顺序。
+func subtractUintIDs(ids, removed []uint) []uint {
+	drop := idSet(removed)
+	kept := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if _, skip := drop[id]; !skip {
+			kept = append(kept, id)
+		}
+	}
+	return kept
 }
 
 func marshalIDList(ids []uint) string {

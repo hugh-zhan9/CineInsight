@@ -123,18 +123,22 @@ func TestIINAProgressSyncMarksWatchedAtEndAndSkipsWatchedVideos(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, iinaWatchLaterRelativeDir)
 
+	// 已看的片子还留着一份陈旧断点：位置被清零之后，「只前进不后退」挡不住它。
+	// 不知道何时标的已看（watched_at 为空）不再在「已看」这一步直接跳过（PLAY06 A-m-2），
+	// 由断点文件修改时间与库里进度时间的比较挡住：看完落库时写下的进度时间晚于这份陈旧文件。
+	completedAt := time.Now()
 	videos := []models.Video{
 		{Name: "ended.mp4", Path: "/media/ended.mp4", Directory: "/media", Duration: 28},
 		{Name: "midway.mp4", Path: "/media/midway.mp4", Directory: "/media", Duration: 28},
-		{Name: "already.mp4", Path: "/media/already.mp4", Directory: "/media", Duration: 28, IsWatched: true},
+		{Name: "already.mp4", Path: "/media/already.mp4", Directory: "/media", Duration: 28, IsWatched: true, WatchProgressUpdatedAt: &completedAt},
 	}
 	if err := database.DB.Create(&videos).Error; err != nil {
 		t.Fatal(err)
 	}
 	writeIINAEntry(t, dir, "/media/ended.mp4", "start=27.6\n")
 	writeIINAEntry(t, dir, "/media/midway.mp4", "start=14.0\n")
-	// 已看的片子还留着一份陈旧断点：位置被清零之后，「只前进不后退」挡不住它。
 	writeIINAEntry(t, dir, "/media/already.mp4", "start=14.0\n")
+	mustSetFileModTime(t, filepath.Join(dir, iinaWatchLaterName("/media/already.mp4")), completedAt.Add(-time.Hour))
 
 	result, err := NewIINAProgressService(home).Sync()
 	if err != nil {

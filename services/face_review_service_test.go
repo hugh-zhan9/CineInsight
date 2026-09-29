@@ -1633,3 +1633,265 @@ func TestMETA04PersonDeleteAndClearFaceDataDropFaceRelationWrites(t *testing.T) 
 		t.Fatalf("清除人脸数据不动人物关系: %d", got)
 	}
 }
+
+// ===== 修复 H：其他来源确认已有关系时归用户所有（META-04 B-I-1）、删除语句自带判定（B-m-1） =====
+
+// applyNFOPeopleForTest 走 NFO 应用改写演员表的同一个函数（local_metadata_apply 的 people 字段）。
+func applyNFOPeopleForTest(t *testing.T, videoID uint, personIDs ...uint) {
+	t.Helper()
+	if err := database.Transaction(func(tx *gorm.DB) error {
+		return replaceVideoPeopleKeepingEntities(tx, videoID, personIDs)
+	}); err != nil {
+		t.Fatalf("应用 NFO 演员表失败: %v", err)
+	}
+}
+
+func unlinkPreviewOf(t *testing.T, service *FaceReviewService, clusterID uint) map[uint]FaceUnlinkMediaView {
+	t.Helper()
+	preview, err := service.PreviewFaceClusterUnlink(context.Background(), clusterID)
+	if err != nil {
+		t.Fatalf("预览失败: %v", err)
+	}
+	return previewByMedia(preview)
+}
+
+// 人脸链路建出 T 的关系 → NFO 导入同一演员 S → 合并 S 进 T → 解除 T 的簇并勾选删除关系：
+// S 带来的那条关系保留，预览显示 unknown；只有人脸链路写过、没有别的来源的关系被删。
+//
+// 两种先后都跑。按字面顺序（先人脸后 NFO）时，NFO 应用会把演员表整个换成 [S]、先删掉 (T, V)，
+// 合并后重建的关系晚于旧记录，本来就不作数；真正会误删的是 S 的关系早于人脸写入（先 NFO 后人脸）：
+// 合并时 (V, T) 已存在、ON CONFLICT 保留了人脸写的那一行，记录仍然作数。
+func TestMETA04MergeKeepsNFOConfirmedRelationUserOwned(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	people := NewPersonService(t.TempDir())
+	for index, order := range []string{"face_then_nfo", "nfo_then_face"} {
+		t.Run(order, func(t *testing.T) {
+			video := seedFaceTestVideo(t, order+".mp4")
+			faceOnly := seedFaceTestVideo(t, order+"-face-only.mp4")
+			target := seedFaceTestPerson(t, "张三", false)
+			source := seedFaceTestPerson(t, "张三", false)
+			prefix := fmt.Sprintf("hm%d00000", index)
+			var cluster models.FaceCluster
+			if order == "face_then_nfo" {
+				cluster = namedFaceClusterOn(t, faces, target.ID, []models.Video{video, faceOnly}, prefix)
+				applyNFOPeopleForTest(t, video.ID, source.ID)
+			} else {
+				applyNFOPeopleForTest(t, video.ID, source.ID)
+				time.Sleep(2 * time.Millisecond)
+				cluster = namedFaceClusterOn(t, faces, target.ID, []models.Video{video, faceOnly}, prefix)
+			}
+			if _, err := people.MergePeople(target.ID, []uint{source.ID}); err != nil {
+				t.Fatalf("合并失败: %v", err)
+			}
+			byID := unlinkPreviewOf(t, faces, cluster.ID)
+			if v := byID[video.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+				t.Fatalf("NFO 确认过的关系合并后应来源不明: %+v", v)
+			}
+			if v := byID[faceOnly.ID]; !v.HasRelation || v.Source != FaceRelationSourceFace {
+				t.Fatalf("只有人脸链路写过的关系仍标 face: %+v", v)
+			}
+			if _, err := faces.UnlinkFaceCluster(ctx, cluster.ID, true); err != nil {
+				t.Fatalf("解除失败: %v", err)
+			}
+			if videoRelationCount(t, video.ID, target.ID) != 1 {
+				t.Fatal("NFO 确认过的关系在解除关联并删除关系后必须保留")
+			}
+			if videoRelationCount(t, faceOnly.ID, target.ID) != 0 {
+				t.Fatal("只有人脸链路写过的关系应随解除删除")
+			}
+		})
+	}
+}
+
+// 人脸关系在抽屉里被删掉之后，合并一个在同一部视频上有（更早）关系的同名人物：迁过来的关系沿用来源
+// 关系的时间，早于旧的写入记录，旧记录因而重新「作数」。合并时释放记录，关系归用户所有。
+func TestMETA04MergeAfterDrawerRemovedFaceRelationKeepsRelation(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	people := NewPersonService(t.TempDir())
+	details := NewVideoDetailService(people, NewCollectionService(t.TempDir()))
+	video := seedFaceTestVideo(t, "drawer.mp4")
+	faceOnly := seedFaceTestVideo(t, "drawer-face-only.mp4")
+	source := seedFaceTestPerson(t, "李四", false)
+	if err := people.AddPersonVideos(source.ID, []uint{video.ID}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	target := seedFaceTestPerson(t, "李四", false)
+	cluster := namedFaceClusterOn(t, faces, target.ID, []models.Video{video, faceOnly}, "hd0000000")
+	// 抽屉里把 T 从这部视频上删掉（T 在另一部视频上还有关系，不会被当成孤立人物清理）。
+	if _, err := details.UpdateVideoDetails(VideoDetailsUpdate{VideoID: video.ID, PersonIDs: []uint{source.ID}}); err != nil {
+		t.Fatalf("抽屉保存失败: %v", err)
+	}
+	if videoRelationCount(t, video.ID, target.ID) != 0 {
+		t.Fatal("夹具：抽屉应已删掉 T 的关系")
+	}
+	if _, err := people.MergePeople(target.ID, []uint{source.ID}); err != nil {
+		t.Fatalf("合并失败: %v", err)
+	}
+	if v := unlinkPreviewOf(t, faces, cluster.ID)[video.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+		t.Fatalf("合并带来的关系应来源不明: %+v", v)
+	}
+	if _, err := faces.UnlinkFaceCluster(ctx, cluster.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if videoRelationCount(t, video.ID, target.ID) != 1 {
+		t.Fatal("合并带来的关系不能被人脸链路删掉")
+	}
+	if videoRelationCount(t, faceOnly.ID, target.ID) != 0 {
+		t.Fatal("只有人脸链路写过的关系应随解除删除")
+	}
+}
+
+// 对已有人脸关系的视频再应用一次 NFO（演员表里就有这个人）：NFO 确认了这条关系，归用户所有。
+// 抽屉保存同一份演员表同理；人物页添加、图片抽屉保存也按同一规则释放记录。
+func TestMETA04ReapplyingNFOOnFaceRelationMakesItUserOwned(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	people := NewPersonService(t.TempDir())
+	details := NewVideoDetailService(people, NewCollectionService(t.TempDir()))
+	nfoVideo := seedFaceTestVideo(t, "nfo-again.mp4")
+	drawerVideo := seedFaceTestVideo(t, "drawer-again.mp4")
+	pageVideo := seedFaceTestVideo(t, "page-again.mp4")
+	faceOnly := seedFaceTestVideo(t, "face-only.mp4")
+	person := seedFaceTestPerson(t, "王五", false)
+	cluster := namedFaceClusterOn(t, faces, person.ID, []models.Video{nfoVideo, drawerVideo, pageVideo, faceOnly}, "hn0000000")
+	for _, video := range []models.Video{nfoVideo, drawerVideo, pageVideo, faceOnly} {
+		if v := unlinkPreviewOf(t, faces, cluster.ID)[video.ID]; v.Source != FaceRelationSourceFace {
+			t.Fatalf("夹具：人脸链路写的关系应标 face: %+v", v)
+		}
+	}
+
+	applyNFOPeopleForTest(t, nfoVideo.ID, person.ID)
+	if _, err := details.UpdateVideoDetails(VideoDetailsUpdate{VideoID: drawerVideo.ID, PersonIDs: []uint{person.ID}}); err != nil {
+		t.Fatalf("抽屉保存失败: %v", err)
+	}
+	if err := people.AddPersonVideos(person.ID, []uint{pageVideo.ID}); err != nil {
+		t.Fatal(err)
+	}
+	byID := unlinkPreviewOf(t, faces, cluster.ID)
+	for _, video := range []models.Video{nfoVideo, drawerVideo, pageVideo} {
+		if v := byID[video.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+			t.Fatalf("%s：别的来源确认过的关系应来源不明: %+v", video.Name, v)
+		}
+	}
+	if v := byID[faceOnly.ID]; v.Source != FaceRelationSourceFace {
+		t.Fatalf("没被别的来源确认的关系仍标 face: %+v", v)
+	}
+	if _, err := faces.UnlinkFaceCluster(ctx, cluster.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	for _, video := range []models.Video{nfoVideo, drawerVideo, pageVideo} {
+		if videoRelationCount(t, video.ID, person.ID) != 1 {
+			t.Fatalf("%s：别的来源确认过的关系必须保留", video.Name)
+		}
+	}
+	if videoRelationCount(t, faceOnly.ID, person.ID) != 0 {
+		t.Fatal("只有人脸链路写过的关系应随解除删除")
+	}
+
+	// 图片抽屉保存：同一规则。
+	image := seedFaceTestImage(t, "again.jpg")
+	imageCluster := seedFaceCluster(t, models.FaceClusterStatusUnnamed, nil, faceUnitVector(1))
+	seedFaceObservation(t, imageCluster.ID, models.FaceMediaKindImage, image.ID, "hi0000000001", models.FaceAppendStatusNone, 0.9)
+	if _, err := faces.LinkFaceCluster(ctx, imageCluster.ID, person.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := people.SetImagePeople(image.ID, []uint{person.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if v := unlinkPreviewOf(t, faces, imageCluster.ID)[image.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+		t.Fatalf("图片抽屉确认过的关系应来源不明: %+v", v)
+	}
+}
+
+// 标签转人物转给一个已有人脸关系的人物：标签确认了这条已有关系，归用户所有；撤销转换不删它。
+func TestMETA04TagConversionOntoFaceRelationMakesItUserOwned(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	video := seedFaceTestVideo(t, "tagged.mp4")
+	faceOnly := seedFaceTestVideo(t, "tag-face-only.mp4")
+	person := seedFaceTestPerson(t, "赵六", false)
+	cluster := namedFaceClusterOn(t, faces, person.ID, []models.Video{video, faceOnly}, "ht0000000")
+	tag := models.Tag{Name: "赵六", Namespace: personTagNamespace}
+	if err := database.DB.Create(&tag).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Exec("INSERT INTO video_tags(video_id, tag_id) VALUES (?, ?)", video.ID, tag.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	result, err := (&TagService{}).ConvertTagToPerson(TagPersonConversionRequest{TagID: tag.ID, TagName: tag.Name, TargetPersonID: person.ID})
+	if err != nil {
+		t.Fatalf("标签转人物失败: %v", err)
+	}
+	byID := unlinkPreviewOf(t, faces, cluster.ID)
+	if v := byID[video.ID]; !v.HasRelation || v.Source != FaceRelationSourceUnknown {
+		t.Fatalf("标签确认过的关系应来源不明: %+v", v)
+	}
+	if v := byID[faceOnly.ID]; v.Source != FaceRelationSourceFace {
+		t.Fatalf("标签没碰过的关系仍标 face: %+v", v)
+	}
+	if _, err := (&TagService{}).UndoTagPersonConversion(result.ConversionID); err != nil {
+		t.Fatalf("撤销失败: %v", err)
+	}
+	if videoRelationCount(t, video.ID, person.ID) != 1 {
+		t.Fatal("撤销转换不删转换前就有的关系")
+	}
+	if _, err := faces.UnlinkFaceCluster(ctx, cluster.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if videoRelationCount(t, video.ID, person.ID) != 1 || videoRelationCount(t, faceOnly.ID, person.ID) != 0 {
+		t.Fatal("标签确认过的关系保留，只有人脸链路写过的删除")
+	}
+}
+
+// B-m-1：判定并进删除语句。规划（planFaceClusterUnlink）读完之后、删除之前，关系被删掉又由别的来源
+// 重建（更晚的 created_at）：DELETE 的条件与 faceRelationWriteValid 同口径，不会删到新关系。
+func TestMETA04DeletePersonRelationsSkipsRelationRecreatedAfterPlan(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	ctx := context.Background()
+	faces := newFaceReviewTestService()
+	recreated := seedFaceTestVideo(t, "recreated.mp4")
+	untouched := seedFaceTestVideo(t, "untouched.mp4")
+	person := seedFaceTestPerson(t, "孙七", false)
+	cluster := namedFaceClusterOn(t, faces, person.ID, []models.Video{recreated, untouched}, "hr0000000")
+
+	err := database.Transaction(func(tx *gorm.DB) error {
+		items, err := planFaceClusterUnlink(ctx, tx, cluster.ID, person.ID)
+		if err != nil {
+			return err
+		}
+		if got := len(removableFaceMedia(items)); got != 2 {
+			return fmt.Errorf("夹具：规划时两条都可删，实际 %d", got)
+		}
+		// 规划之后：关系被删掉，又由别的来源重建。
+		if err := tx.Where("video_id = ? AND person_id = ?", recreated.ID, person.ID).Delete(&models.VideoPerson{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Create(&models.VideoPerson{VideoID: recreated.ID, PersonID: person.ID, CreatedAt: time.Now().Add(time.Minute)}).Error; err != nil {
+			return err
+		}
+		removed, err := deletePersonRelations(ctx, tx, person.ID, cluster.ID, removableFaceMedia(items))
+		if err != nil {
+			return err
+		}
+		if removed != 1 {
+			return fmt.Errorf("只应删掉仍由本簇记录作数的那一条，实际 %d", removed)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if videoRelationCount(t, recreated.ID, person.ID) != 1 {
+		t.Fatal("规划之后重建的关系不能被删")
+	}
+	if videoRelationCount(t, untouched.ID, person.ID) != 0 {
+		t.Fatal("本簇写入且作数的关系应删除")
+	}
+}

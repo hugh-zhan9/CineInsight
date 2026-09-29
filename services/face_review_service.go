@@ -676,6 +676,23 @@ func deleteFaceClusterWrites(ctx context.Context, tx *gorm.DB, personID, cluster
 		Delete(&models.FaceRelationWrite{}).Error
 }
 
+// releaseFaceRelationWrites 删掉人物在这批媒体上的全部写入记录（任意簇），关系从此来源不明、
+// 归用户所有（META-04 B-I-1）。人脸链路之外的来源——NFO 应用、抽屉保存人物、标签转人物、合并
+// 人物——确认了一条已经存在的关系时调用：那条关系不再只是人脸链路的产物，之后解除关联 / 改派
+// 都不能再删它。只删记录，不动关系本身。
+func releaseFaceRelationWrites(tx *gorm.DB, personID uint, mediaKind string, mediaIDs []uint) error {
+	for _, chunk := range chunkUintIDs(mediaIDs, faceRelationChunk) {
+		if len(chunk) == 0 {
+			continue
+		}
+		if err := tx.Where("person_id = ? AND media_kind = ? AND media_id IN ?", personID, mediaKind, chunk).
+			Delete(&models.FaceRelationWrite{}).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func splitFaceMediaRefs(refs []faceMediaRef) (videoIDs, imageIDs []uint) {
 	for _, ref := range refs {
 		switch ref.MediaKind {
@@ -1347,13 +1364,22 @@ func (s *FaceReviewService) PreviewFaceClusterUnlink(ctx context.Context, cluste
 
 const faceRelationChunk = 500
 
-// deletePersonRelations 删除人物与这批媒体的关系行。
-func deletePersonRelations(ctx context.Context, tx *gorm.DB, personID uint, refs []faceMediaRef) (int64, error) {
+// deletePersonRelations 删除人物与这批媒体中「仍由本簇写入记录作数」的关系行（B-m-1）。
+//
+// 判定并进删除语句本身：DELETE 只命中本簇在该 (人物, 媒体) 上有写入记录、且关系行的 created_at
+// 不晚于记录的行——与 faceRelationWriteValid 同一口径。planFaceClusterUnlink 读完之后、这里删除
+// 之前，关系若被别的路径删掉又由别的来源重建，新关系晚于旧记录，这条语句就不会删到它；记录若在
+// 这期间被释放（releaseFaceRelationWrites），也同样不删。子查询里的列全部限定（PG 的 42702）。
+func deletePersonRelations(ctx context.Context, tx *gorm.DB, personID, clusterID uint, refs []faceMediaRef) (int64, error) {
 	videoIDs, imageIDs := splitFaceMediaRefs(refs)
 	var removed int64
 	for start := 0; start < len(videoIDs); start += faceRelationChunk {
 		end := min(start+faceRelationChunk, len(videoIDs))
-		result := tx.WithContext(ctx).Where("person_id = ? AND video_id IN ?", personID, videoIDs[start:end]).
+		result := tx.WithContext(ctx).
+			Where("video_people.person_id = ? AND video_people.video_id IN ?", personID, videoIDs[start:end]).
+			Where(`EXISTS (SELECT 1 FROM face_relation_writes w WHERE w.person_id = video_people.person_id
+				AND w.media_kind = ? AND w.media_id = video_people.video_id AND w.cluster_id = ?
+				AND video_people.created_at <= w.created_at)`, models.FaceMediaKindVideo, clusterID).
 			Delete(&models.VideoPerson{})
 		if result.Error != nil {
 			return removed, result.Error
@@ -1362,7 +1388,11 @@ func deletePersonRelations(ctx context.Context, tx *gorm.DB, personID uint, refs
 	}
 	for start := 0; start < len(imageIDs); start += faceRelationChunk {
 		end := min(start+faceRelationChunk, len(imageIDs))
-		result := tx.WithContext(ctx).Where("person_id = ? AND image_id IN ?", personID, imageIDs[start:end]).
+		result := tx.WithContext(ctx).
+			Where("image_people.person_id = ? AND image_people.image_id IN ?", personID, imageIDs[start:end]).
+			Where(`EXISTS (SELECT 1 FROM face_relation_writes w WHERE w.person_id = image_people.person_id
+				AND w.media_kind = ? AND w.media_id = image_people.image_id AND w.cluster_id = ?
+				AND image_people.created_at <= w.created_at)`, models.FaceMediaKindImage, clusterID).
 			Delete(&models.ImagePerson{})
 		if result.Error != nil {
 			return removed, result.Error
@@ -1411,7 +1441,7 @@ func (s *FaceReviewService) UnlinkFaceCluster(ctx context.Context, clusterID uin
 				if err != nil {
 					return err
 				}
-				if removed, err = deletePersonRelations(ctx, tx, personID, removableFaceMedia(items)); err != nil {
+				if removed, err = deletePersonRelations(ctx, tx, personID, clusterID, removableFaceMedia(items)); err != nil {
 					return err
 				}
 			}
@@ -1473,7 +1503,7 @@ func (s *FaceReviewService) ReassignFaceCluster(ctx context.Context, clusterID, 
 				if moved, err = writeFaceRelations(ctx, tx, clusterID, targetPersonID, refs); err != nil {
 					return err
 				}
-				if removed, err = deletePersonRelations(ctx, tx, sourcePersonID, removableFaceMedia(items)); err != nil {
+				if removed, err = deletePersonRelations(ctx, tx, sourcePersonID, clusterID, removableFaceMedia(items)); err != nil {
 					return err
 				}
 			}

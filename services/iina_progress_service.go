@@ -23,7 +23,9 @@ import (
 
 // IINA（以及底层的 mpv）在退出播放时把断点写进 watch_later 目录：文件名是
 // 播放路径原文的 MD5（大写十六进制），内容是 mpv 的 conf 片段，其中 start=<秒>
-// 就是看到哪儿了。播放到结尾时这个文件会被删掉。
+// 就是看到哪儿了。这个文件被删除不只发生在播到结尾：mpv 续播时加载完断点很可能
+// 立刻把它删掉（需真机确认），用户也可能自己清掉记录，所以删除事件本身不说明看完了
+// （见 settleRemovedEntry 的两道保护）。
 //
 // 系统播放器一路只记了播放次数，不记进度，"继续观看"视图和行上的进度条
 // 对外部播放形同虚设。这里把 IINA 的断点读回来补上这一环。
@@ -35,6 +37,16 @@ const iinaSessionTTL = 12 * time.Hour
 
 // iinaRemovedWatchedRatio：删除事件时，最后已知位置达到时长的这个比例也判为看完（D-PC41）。
 const iinaRemovedWatchedRatio = 0.9
+
+// iinaRemovedMinElapsedCap 是删除事件「距启动太近」的墙钟上限（秒），见 iinaRemovedMinElapsed。
+const iinaRemovedMinElapsedCap = 60.0
+
+// iinaRemovedMinElapsed 是删除事件距应用发起播放至少要过去的墙钟秒数：
+// min(60 秒, 0.5 ×（时长 − 起播位置）)。不到这个时长的删除多半是 mpv 续播时加载完断点就删掉了
+// 文件，与看没看完无关：既不结算，也不消耗会话，之后真正播完的那次删除还要靠它。
+func iinaRemovedMinElapsed(duration, startPosition float64) float64 {
+	return math.Min(iinaRemovedMinElapsedCap, 0.5*(duration-startPosition))
+}
 
 // IINAProgressUpdate 是一条被同步的进度。界面拿它就地更新对应的行，
 // 不必整表重载——重载会按当前排序重新打分，刚看完的视频会跳到别的位置，
@@ -68,14 +80,14 @@ type IINASyncStatus struct {
 }
 
 // iinaLaunchedSession 是一次由应用发起的播放（D-PC41）。只在内存里，重启即丢。
+//
+// 会话在三种情况下结束：删除事件结算（或判定没看完）时消耗掉；同步读到这次播放退出时写下的
+// 断点（文件 mtime 不早于 launchedAt，见 endSessionOnExitWrite）；iinaSessionTTL 过期。
 type iinaLaunchedSession struct {
 	videoID       uint
 	path          string
 	startPosition float64
 	launchedAt    time.Time
-	// lastParsed 是本次会话期间（文件 mtime 不早于启动时间）最后一次读到的断点位置。
-	lastParsed   float64
-	lastParsedAt time.Time
 }
 
 // IINAProgressService 把 IINA 的播放断点同步进片库。
@@ -220,32 +232,45 @@ func (s *IINAProgressService) pruneSessionsLocked(now time.Time) {
 	}
 }
 
-// noteSessionPosition 记下会话期间读到的断点位置：文件修改时间早于启动时间的是上一次播放留下的，
-// 不算这次的进度。
-func (s *IINAProgressService) noteSessionPosition(name string, videoID uint, seconds float64, modTime time.Time) {
+// endSessionOnExitWrite 在同步读到该视频的断点文件、且文件修改时间不早于会话启动时间时结束会话
+// （A-I-1）：这说明应用发起的这次播放已经退出并写下了位置——它的进度由同步按常规口径采用，
+// 之后再发生的删除（例如数小时后用户直接在 IINA 里打开同一文件、mpv 加载断点后删掉它）
+// 不属于这次播放，按未登记处理，不再拿墙钟去推算位置。修改时间早于启动时间的是上一次播放留下的，
+// 会话照旧保留。
+func (s *IINAProgressService) endSessionOnExitWrite(name string, videoID uint, modTime time.Time) {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
 	session, ok := s.sessions[name]
-	if !ok || session.videoID != videoID || modTime.Before(session.launchedAt) || modTime.Before(session.lastParsedAt) {
+	if !ok || session.videoID != videoID || modTime.Before(session.launchedAt) {
 		return
 	}
-	session.lastParsed = seconds
-	session.lastParsedAt = modTime
+	delete(s.sessions, name)
 }
 
-// takeSession 取出并移除一个未过期的会话；一次删除事件只结算一次。
-func (s *IINAProgressService) takeSession(name string, now time.Time) (iinaLaunchedSession, bool) {
+// peekSession 取一个未过期会话的副本，不移除；过期的顺手删掉。
+func (s *IINAProgressService) peekSession(name string, now time.Time) (iinaLaunchedSession, bool) {
 	s.sessionMu.Lock()
 	defer s.sessionMu.Unlock()
 	session, ok := s.sessions[name]
 	if !ok {
 		return iinaLaunchedSession{}, false
 	}
-	delete(s.sessions, name)
 	if now.Sub(session.launchedAt) > iinaSessionTTL {
+		delete(s.sessions, name)
 		return iinaLaunchedSession{}, false
 	}
 	return *session, true
+}
+
+// consumeSession 移除 peekSession 取到的那个会话；一次删除事件只结算一次。期间同一文件被重新
+// 登记（新的一次播放）时不动新会话。
+func (s *IINAProgressService) consumeSession(name string, taken iinaLaunchedSession) {
+	s.sessionMu.Lock()
+	defer s.sessionMu.Unlock()
+	session, ok := s.sessions[name]
+	if ok && session.videoID == taken.videoID && session.launchedAt.Equal(taken.launchedAt) {
+		delete(s.sessions, name)
+	}
 }
 
 // Status 返回设置页展示的同步状态（D-PC47）。
@@ -342,8 +367,8 @@ func (s *IINAProgressService) emitSynced(result IINAProgressSyncResult) {
 }
 
 // watchLoop 把一串写事件合并成一次同步：IINA 退出时会连着写文件，
-// 每个事件都跑一遍全库扫描没有意义。删除 / 改名事件逐个立即结算：它只在播到结尾时发生，
-// 只对本次会话登记过的视频生效（D-PC41）。
+// 每个事件都跑一遍全库扫描没有意义。删除 / 改名事件逐个立即结算，只对本次会话登记过的视频
+// 生效（D-PC41）；删除不一定意味着播到了结尾，结算前的保护见 settleRemovedEntry。
 func (s *IINAProgressService) watchLoop(watcher *fsnotify.Watcher, stop chan struct{}) {
 	const debounce = 400 * time.Millisecond
 	var timer *time.Timer
@@ -406,10 +431,16 @@ func (s *IINAProgressService) handleRemovedEvent(name string, eventTime time.Tim
 
 // settleRemovedEntry 结算一次 watch_later 删除 / 改名（D-PC41）。
 //
-// 只对本次会话登记过的视频生效；未登记的删除照旧忽略（多半是用户自己清了 IINA 的记录）。
-// 最后已知位置取库内断点、会话期间最后读到的断点、按墙钟推算的位置三者的最大值——
-// 暂停只会让墙钟推算偏大，而删除事件只在播到结尾时发生。满足看完判定或达到时长 90% 时
-// 标已看、清零断点，返回给界面的变更 Watched=true。文件其实还在（被重写）时不算删除。
+// 只对本次会话登记过、仍在进行的播放生效；未登记的删除照旧忽略（多半是用户自己清了 IINA 的记录，
+// 或者是应用发起的那次播放退出之后，用户直接在 IINA 里打开同一文件——见 endSessionOnExitWrite）。
+//
+// 删除并不只在播到结尾时发生：mpv 续播时加载完断点很可能马上删掉文件。墙钟推算的位置在那一刻
+// 就是「起播位置 + 一两秒」，库内断点又常常已在 90% 以后，直接结算会把刚开始续播的片子判成看完。
+// 所以距启动不到 iinaRemovedMinElapsed 的删除既不结算也不消耗会话，留给之后真正播完的那次删除。
+//
+// 过了这道门：最后已知位置取库内断点与按墙钟推算的位置（起播位置 + 经过时间）两者的最大值——
+// 暂停只会让墙钟推算偏大。满足看完判定或达到时长 90% 时标已看、清零断点，返回给界面的变更
+// Watched=true。文件其实还在（被重写）时不算删除。
 func (s *IINAProgressService) settleRemovedEntry(name string, eventTime time.Time) (IINAProgressUpdate, bool, error) {
 	s.mu.Lock()
 	change, flipped, ok, err := s.settleRemovedEntryLocked(name, eventTime)
@@ -430,26 +461,33 @@ func (s *IINAProgressService) settleRemovedEntryLocked(name string, eventTime ti
 			return IINAProgressUpdate{}, false, false, nil
 		}
 	}
-	session, ok := s.takeSession(name, eventTime)
+	session, ok := s.peekSession(name, eventTime)
 	if !ok {
 		return IINAProgressUpdate{}, false, false, nil
 	}
 	var video models.Video
 	err := database.DB.Select("id", "duration", "watch_position_seconds", "is_watched").First(&video, session.videoID).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
+		s.consumeSession(name, session)
 		return IINAProgressUpdate{}, false, false, nil
 	}
 	if err != nil {
 		return IINAProgressUpdate{}, false, false, err
 	}
 	if video.Duration <= 0 {
+		s.consumeSession(name, session)
 		return IINAProgressUpdate{}, false, false, nil
 	}
 	elapsed := eventTime.Sub(session.launchedAt).Seconds()
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	lastKnown := max(video.WatchPositionSeconds, session.lastParsed, session.startPosition+elapsed)
+	if elapsed < iinaRemovedMinElapsed(video.Duration, session.startPosition) {
+		// 续播加载断点时的那次删除：会话留着，不结算。
+		return IINAProgressUpdate{}, false, false, nil
+	}
+	s.consumeSession(name, session)
+	lastKnown := max(video.WatchPositionSeconds, session.startPosition+elapsed)
 	if !isWatchCompleted(lastKnown, video.Duration) && lastKnown < iinaRemovedWatchedRatio*video.Duration {
 		return IINAProgressUpdate{}, false, false, nil
 	}
@@ -470,11 +508,13 @@ func (s *IINAProgressService) settleRemovedEntryLocked(name string, eventTime ti
 //   - 断点文件的修改时间晚于库里的 watch_progress_updated_at 才采用，否则忽略：用户可能在
 //     应用内或 Jellyfin 里看得更新，那份记录优先；采用时把进度更新时间写成文件的修改时间。
 //   - 已看视频的断点不可续（resumable 为 false），且断点文件不晚于已看时间：那是陈旧记录，
-//     跳过，不能把已看的片子拉回"在看"。
+//     跳过，不能把已看的片子拉回"在看"。不知道何时标的已看（watched_at 为空）不在这一步跳过，
+//     交给下一条的修改时间比较。
 //   - 断点停在片尾区间内与应用内播放同一口径判为看完（2026-09-13 裁决）。完成判定前面不再有
 //     按位置幅度的守卫，历史遗留行（位置顶到片尾、未标已看）重播后照样自愈。
 //
-// 断点文件"消失"由监听里的删除事件结算，只对本次会话登记过的视频生效（见 settleRemovedEntry）。
+// 读到应用发起的播放退出时写下的断点（修改时间不早于启动时间）会结束那次会话（endSessionOnExitWrite）。
+// 断点文件"消失"由监听里的删除事件结算，只对仍在进行的会话生效（见 settleRemovedEntry）。
 func (s *IINAProgressService) Sync() (IINAProgressSyncResult, error) {
 	s.mu.Lock()
 	result, flipped, err := s.syncLocked()
@@ -519,8 +559,8 @@ func (s *IINAProgressService) syncLocked() (IINAProgressSyncResult, []uint, erro
 		// PG 的时间戳只到微秒：不截断的话，写回去的修改时间读出来总比文件早一点，
 		// 同一个文件每次同步都会被当成"更新的写入"。
 		modTime = modTime.Truncate(time.Microsecond)
-		s.noteSessionPosition(name, video.ID, seconds, modTime)
-		if video.IsWatched && !resumable(&video) && (video.WatchedAt == nil || !modTime.After(*video.WatchedAt)) {
+		s.endSessionOnExitWrite(name, video.ID, modTime)
+		if video.IsWatched && !resumable(&video) && video.WatchedAt != nil && !modTime.After(*video.WatchedAt) {
 			result.Skipped++
 			continue
 		}

@@ -95,7 +95,8 @@ type EnhancementWorkdirSweepResult struct {
 // checkpoint_discarded）收尾、视频已换目录。读库失败或位置判断不了时留下——宁可多留一个目录，
 // 也不在拿不准时删掉用户花了几个小时算出来的进度。
 //
-// 名字不是「前缀 + 十进制 id」的同前缀目录不是本应用建的，不碰、也不往里走。
+// 名字不是「前缀 + 规范十进制 id」（见 enhancementWorkdirTaskID，带前导零的也不算）的同前缀目录
+// 不是本应用建的，不碰、也不往里走。
 // 读不了的目录跳过（计入 Errors），离线的扫描根直接跳过。
 func (s *EnhancementService) SweepOrphanWorkdirs(ctx context.Context) (EnhancementWorkdirSweepResult, error) {
 	result := EnhancementWorkdirSweepResult{}
@@ -120,12 +121,12 @@ func (s *EnhancementService) SweepOrphanWorkdirs(ctx context.Context) (Enhanceme
 			if !entry.IsDir() || !strings.HasPrefix(entry.Name(), enhancementWorkdirPrefix) {
 				return nil
 			}
-			id, parseErr := strconv.ParseUint(strings.TrimPrefix(entry.Name(), enhancementWorkdirPrefix), 10, 64)
-			if parseErr != nil || id == 0 {
+			id, ok := enhancementWorkdirTaskID(entry.Name())
+			if !ok {
 				return fs.SkipDir
 			}
 			result.Found++
-			if s.enhancementWorkdirWanted(uint(id), path) {
+			if s.enhancementWorkdirWanted(id, path) {
 				result.Kept++
 				return fs.SkipDir
 			}
@@ -147,6 +148,21 @@ func (s *EnhancementService) SweepOrphanWorkdirs(ctx context.Context) (Enhanceme
 	}
 	logEnhancement("orphan workdir sweep found=%d removed=%d kept=%d errors=%d", result.Found, result.Removed, result.Kept, result.Errors)
 	return result, nil
+}
+
+// enhancementWorkdirTaskID 从目录名解析任务 id：只有「前缀 + 规范十进制 id」才是本应用建的工作目录
+// （B-m-2）。后缀必须与 strconv.FormatUint(id, 10) 完全一致——前导零（-007）、符号、0 都不算，
+// 否则 .cineinsight-enhance-007 这种别人的目录会被当成任务 7 的孤儿删掉。
+func enhancementWorkdirTaskID(name string) (uint, bool) {
+	suffix, found := strings.CutPrefix(name, enhancementWorkdirPrefix)
+	if !found {
+		return 0, false
+	}
+	id, err := strconv.ParseUint(suffix, 10, 64)
+	if err != nil || id == 0 || strconv.FormatUint(id, 10) != suffix || uint64(uint(id)) != id {
+		return 0, false
+	}
+	return uint(id), true
 }
 
 // enhancementWorkdirWanted 判断在 path 找到的任务 taskID 的工作目录还要不要（见 SweepOrphanWorkdirs）。
