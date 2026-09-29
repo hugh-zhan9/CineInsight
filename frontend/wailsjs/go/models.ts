@@ -2044,6 +2044,7 @@ export namespace services {
 	    confidence: string;
 	    reason: string;
 	    estimated_savings: number;
+	    confirmed: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new CleanupSameSourceGroup(source);
@@ -2057,6 +2058,7 @@ export namespace services {
 	        this.confidence = source["confidence"];
 	        this.reason = source["reason"];
 	        this.estimated_savings = source["estimated_savings"];
+	        this.confirmed = source["confirmed"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

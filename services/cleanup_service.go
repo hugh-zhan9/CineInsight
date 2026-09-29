@@ -42,6 +42,8 @@ type CleanupSameSourceGroup struct {
 	Confidence       string       `json:"confidence"`
 	Reason           string       `json:"reason"`
 	EstimatedSavings int64        `json:"estimated_savings"`
+	// Confirmed 表示用户已在 AI 审阅里确认这一对同源（reviewed_at 非空），清理中心据此标出「已确认同源」。
+	Confirmed bool `json:"confirmed"`
 }
 
 type CleanupAnalysis struct {
@@ -713,6 +715,7 @@ func loadCleanupSameSourceGroups(ctx context.Context, excludedPairs map[[2]uint]
 		groups = append(groups, CleanupSameSourceGroup{
 			RelationID: relation.ID, Preferred: preferred, Alternative: alternative,
 			Confidence: relation.Confidence, Reason: reason, EstimatedSavings: alternative.Size,
+			Confirmed: relation.ReviewedAt != nil,
 		})
 	}
 	return groups, nil

@@ -706,3 +706,47 @@ func TestCleanupDoneMessageOmitsZeroSkipCounts(t *testing.T) {
 		})
 	}
 }
+
+// META-08：用户在 AI 审阅里确认同源之后，清理中心的同源组带 confirmed，界面据此标出「已确认同源」。
+func TestCleanupSameSourceGroupCarriesConfirmedMETA08(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	makeVideo := func(name, content string) models.Video {
+		t.Helper()
+		path := filepath.Join(root, name)
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		video := models.Video{Name: name, Path: path, Directory: root, Size: int64(len(content))}
+		if err := database.DB.Create(&video).Error; err != nil {
+			t.Fatal(err)
+		}
+		return video
+	}
+	if err := database.DB.Create(&models.ScanDirectory{Path: root}).Error; err != nil {
+		t.Fatal(err)
+	}
+	a := makeVideo("confirm-a.mp4", "aaaa")
+	b := makeVideo("confirm-b.mp4", "bbbbbb")
+	relation := models.VideoSameSourceRelation{VideoAID: a.ID, VideoBID: b.ID, Status: models.VideoSameSourceStatusDetected, Confidence: "high", DetectionVersion: "test"}
+	if err := database.DB.Create(&relation).Error; err != nil {
+		t.Fatal(err)
+	}
+	analyze := func() CleanupSameSourceGroup {
+		t.Helper()
+		result, err := (&CleanupService{}).AnalyzeCleanupCandidates(CleanupCriteria{})
+		if err != nil || len(result.SameSourceGroups) != 1 {
+			t.Fatalf("应有一组同源候选: %+v err=%v", result, err)
+		}
+		return result.SameSourceGroups[0]
+	}
+	if analyze().Confirmed {
+		t.Fatal("未确认的同源关系不应标为已确认")
+	}
+	if err := NewAISameSourceService(nil).ConfirmRelation(relation.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !analyze().Confirmed {
+		t.Fatal("确认之后同源组应带 confirmed")
+	}
+}

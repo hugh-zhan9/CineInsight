@@ -1054,6 +1054,20 @@ describe('「去清理」定位同源对与 D-PC01 文案', () => {
     wrapper.unmount();
   });
 
+  it('META-08 已在 AI 审阅里确认的同源组标出「已确认同源」，未确认的不标', async () => {
+    const analysis = sameSourceAnalysis();
+    analysis.same_source_groups.push({ relation_id: 43, preferred: video(7, { directory: '/lib/z' }), alternative: video(8, { directory: '/lib/z' }), reason: 'AI 判断同源', estimated_savings: 100, confirmed: true });
+    api.GetCleanupStatus.mockResolvedValue({ completed: true, started_at: 'run-g', analysis });
+    const wrapper = mountPanel({ deep: true, attachTo: document.body });
+    await flushPromises();
+    await wrapper.vm.open({ relationId: 43 });
+    await flushPromises();
+    const badges = wrapper.findAll('[data-test="cleanup-same-source-confirmed"]');
+    expect(badges).toHaveLength(1);
+    expect(badges[0].text()).toBe('已确认同源');
+    wrapper.unmount();
+  });
+
   it('APP-11 要定位的那一对不在当前结果里时给出说明，不静默', async () => {
     api.GetCleanupStatus.mockResolvedValue({ completed: true, started_at: 'run-f', analysis: sameSourceAnalysis() });
     const wrapper = mountPanel({ deep: true, attachTo: document.body });

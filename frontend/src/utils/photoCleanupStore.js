@@ -15,6 +15,8 @@ function emptyReview(key = '') {
     selection: [],
     deletedIDs: [],
     dismissedKeys: [],
+    // 近似重复组里被「移出本组」的成员（组键 → 视频/图片 ID 列表），随每轮分析重置（D-PC31）。
+    removedMembers: {},
     // sameDirOnly 是勾选策略偏好，不随每轮分析重置，由调用方跨批次带过来。
     sameDirOnly: false
   };

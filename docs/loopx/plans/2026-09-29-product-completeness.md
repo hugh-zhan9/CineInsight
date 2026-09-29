@@ -1371,3 +1371,11 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - **store 字段**：`photoCleanupStore.review.removedMembers` 需要补进 `emptyReview()`，由主代理补。
 - **P-040**：前端已不再调用 `StartCleanupAnalysis(5,480,320)` 和 `BatchDeleteImages`。
 - **独立评审**：「删除前先合并、合并失败就不删」与「默认不勾近似重复」两处，待安排。
+
+**P-032 停下项由主代理补齐**（2026-09-30）：
+- `CleanupSameSourceGroup.confirmed` 取 `reviewed_at` 是否非空，对应测试 `TestCleanupSameSourceGroupCarriesConfirmedMETA08`；
+- 清理中心同源卡片显示「已确认同源」，对应测试「META-08 已在 AI 审阅里确认的同源组标出…」；
+- `photoCleanupStore.emptyReview()` 补上 `removedMembers`；
+- 已重新生成绑定。
+
+合入后 Go 全量通过，`npm test` 83 个文件、1117 条用例全部通过。

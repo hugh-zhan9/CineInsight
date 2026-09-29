@@ -191,7 +191,7 @@
                       <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(entry.keeper)">预览保留项</button>
                     </div>
                   </div>
-                  <p><strong>判断：</strong>{{ entry.group.reason }}<span v-if="entry.group.confidence"> · 置信度 {{ entry.group.confidence }}</span></p>
+                  <p><strong>判断：</strong>{{ entry.group.reason }}<span v-if="entry.group.confidence"> · 置信度 {{ entry.group.confidence }}</span><span v-if="entry.group.confirmed" class="cleanup-confirmed-badge" data-test="cleanup-same-source-confirmed">已确认同源</span></p>
                   <div class="cleanup-select-row">
                     <input
                       type="checkbox"
@@ -1828,5 +1828,15 @@ export default {
 .cleanup-delete-confirm__warn { color: var(--warning-text); }
 .cleanup-delete-confirm__merge { display: flex; align-items: center; gap: 8px; margin-top: 12px; font-weight: 600; cursor: pointer; }
 .cleanup-delete-confirm__help { margin: 6px 0 0; color: var(--text-muted); font-size: 12px; }
+.cleanup-confirmed-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--success-color, var(--accent-color));
+  border: 1px solid currentColor;
+}
 </style>
 
