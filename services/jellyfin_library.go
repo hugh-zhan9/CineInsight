@@ -339,9 +339,9 @@ func (s *JellyfinServer) searchHints(w http.ResponseWriter, r *http.Request) {
 	jellyfinJSON(w, map[string]interface{}{"SearchHints": hints, "TotalRecordCount": total})
 }
 
-// deleteItem implements DELETE Items/{id} for videos (V1.0.3): the file moves to the library's
-// trash folder through the same VideoService path the desktop and phone feed use, so it stays
-// recoverable from the desktop trash view. Folders, views and tags cannot be deleted here.
+// deleteItem implements DELETE Items/{id} for videos (V1.0.3): the file moves to the macOS Trash
+// through the same VideoService path the desktop and phone feed use (D-PC01), so it stays
+// recoverable from the desktop trash center. Folders, views and tags cannot be deleted here.
 func (s *JellyfinServer) deleteItem(w http.ResponseWriter, r *http.Request, raw string) {
 	kind, id, err := jellyfinParseID(raw)
 	if s.libraryError(w, err) {
@@ -351,8 +351,8 @@ func (s *JellyfinServer) deleteItem(w http.ResponseWriter, r *http.Request, raw 
 		jellyfinError(w, 403, "只能删除视频，视图、标签与作品集不可删除")
 		return
 	}
-	// Not under s.writes: that lock keeps progress/favorite writes in arrival order, and moving a
-	// multi-GB file to the trash hashes the whole file first. VideoService serializes deletions
+	// Not under s.writes: that lock keeps progress/favorite writes in arrival order, and a deletion
+	// can block on disk I/O and the library path locks. VideoService serializes deletions
 	// itself (libraryPathMutationMu), so holding s.writes here would only stall other clients'
 	// progress reports. The session is re-checked so a revoked token cannot delete.
 	identity, _ := r.Context().Value(jellyfinIdentityKey{}).(jellyfinIdentity)

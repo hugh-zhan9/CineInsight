@@ -158,6 +158,7 @@ function stateLabel(state) {
   switch (state) {
     case TASK_STATE.QUEUED: return '排队中';
     case TASK_STATE.RUNNING: return '下载中';
+    case TASK_STATE.REMUXING: return '转为 MP4 中';
     case 'writing': return '保存中';
     case TASK_STATE.PAUSED: return '已暂停';
     case TASK_STATE.DONE: return '已完成';

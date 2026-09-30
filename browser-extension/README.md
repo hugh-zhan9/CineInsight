@@ -46,7 +46,7 @@ HLS 条目一律交付 `.mp4`。fMP4 分片拼起来本来就是 mp4；MPEG-TS �
 2. 全部下完后单独一趟转封装：用 [mux.js](https://github.com/videojs/mux.js)（Apache-2.0，固化在
    `vendor/mux-mp4.min.js`，许可证见 `vendor/mux.js-LICENSE`）把 TS 无损转成 mp4，不重新编码。
    按 188 字节（TS 包长）的整数倍分块流式读写，不把整份文件读进内存。这一步任务状态是
-   `remuxing`（下载管理页目前原样显示这个状态名）。
+   `remuxing`，下载管理页显示为「转为 MP4 中」。
 
 转封装一个字节都没产出时明确报错，不交一个空文件。遇到这种流：
 
