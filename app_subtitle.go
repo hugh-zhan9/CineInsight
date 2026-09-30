@@ -32,16 +32,6 @@ func (a *App) CancelSubtitleEnginePreparation() {
 	log.Printf("API CancelSubtitleEnginePreparation cancelled=%v", cancelled)
 }
 
-// CheckSubtitleDependencies 检查字幕生成依赖
-func (a *App) CheckSubtitleDependencies() (map[string]bool, error) {
-	return a.subtitleService.CheckDependencies()
-}
-
-// DownloadSubtitleDependencies 下载字幕生成依赖
-func (a *App) DownloadSubtitleDependencies() error {
-	return a.subtitleService.DownloadDependencies()
-}
-
 // GenerateSubtitle 生成字幕。收尾写回失败时返回 error_code=subtitle_replace_failed、
 // pending_retained=true 的结果（映射在服务层完成），ForceGenerateSubtitle 可复用临时文件重试收尾。
 func (a *App) GenerateSubtitle(req services.SubtitleGenerateRequest) (*services.SubtitleGenerateResult, error) {
@@ -90,11 +80,6 @@ func (a *App) GetSubtitleQueueState() services.SubtitleQueueSnapshot {
 }
 
 // ===== 字幕任务中心（D-PC20） =====
-
-// ListSubtitleJobs 列出字幕任务（排队、运行中与最近的历史），limit ≤ 0 取默认值。
-func (a *App) ListSubtitleJobs(limit int) ([]services.SubtitleJobItem, error) {
-	return a.subtitleService.ListSubtitleJobs(limit)
-}
 
 // ResolveSubtitleJob 处理一条字幕任务：action 取 force（复用临时字幕强制生成 / 重试收尾）、
 // discard（放弃临时字幕）或 retry（重新排队）。force / retry 入队后立即返回。
@@ -370,11 +355,6 @@ func subtitleEditEntryCount(document *services.SubtitleEditDocument) int {
 		return 0
 	}
 	return len(document.Entries)
-}
-
-// ValidateSubtitleEditDocument validates an in-memory edit without touching the source SRT.
-func (a *App) ValidateSubtitleEditDocument(request services.SubtitleSaveRequest) services.SubtitleValidationResult {
-	return a.subtitleWorkbench.Validate(request.Entries)
 }
 
 // RetranslateSubtitleEntries translates a selection without persisting it.

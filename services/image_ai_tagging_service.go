@@ -267,16 +267,10 @@ func (s *ImageAITaggingService) StopAndWait() {
 	s.mu.Unlock()
 }
 
-// RetagImage 同步单张重跑。可以与后台批量任务并发：用户点了这一张就应该立刻拿到结果，
-// 而不是等一个可能要跑几小时的批量任务结束。冲突只用行级认领来防：
-// 同一张图不允许并发重跑两次，批量走到正在重跑的图会跳过。
-// 重跑绕过证据指纹判定——用户显式要求重来，就该真的重来。
-func (s *ImageAITaggingService) RetagImage(imageID uint) ([]models.ImageAITagCandidate, error) {
-	return s.RetryImageAITagging(imageID)
-}
-
 // RetryImageAITagging 是用户显式的「重新分析」（D-PC28 规则 5）：绕过证据指纹，
 // 也跳过「已有人工标签」检查——人工标签只挡自动路径（规则 1），不挡用户主动要求。
+// 同步单张重跑，可以与后台批量任务并发：冲突只用行级认领来防，同一张图不允许并发重跑两次，
+// 批量走到正在重跑的图会跳过。
 func (s *ImageAITaggingService) RetryImageAITagging(imageID uint) ([]models.ImageAITagCandidate, error) {
 	config, client, err := s.prepareClient()
 	if err != nil {

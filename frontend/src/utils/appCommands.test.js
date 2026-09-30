@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => Object.fromEntries([
   'CreateDatabaseBackup', 'GetBackgroundTasks', 'GetIdleSchedulerStatus', 'ListCollections', 'ListPeople',
   'ListSavedLibraryViews', 'LogFrontend',
-  'UpdateSettings', 'GetAITagLibrary', 'SaveAITagLibrary', 'ClearAITagLibrary', 'TriggerAITagging',
+  'UpdateSettings', 'TriggerAITagging',
   'GetLibraryWatcherStatus',
   'StartFrameHashBackfill', 'CancelFrameHashBackfill', 'SyncImageDirectories'
 ].map(name => [name, vi.fn()])));

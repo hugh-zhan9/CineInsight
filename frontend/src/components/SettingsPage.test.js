@@ -15,7 +15,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'GetDatabaseBackendStatus', 'PreflightDatabaseSwitch', 'StartDatabaseSwitch',
-  'UpdateSettings', 'SelectDirectory', 'GetAllDirectories', 'AddDirectory', 'UpdateDirectory', 'DeleteDirectory',
+  'UpdateSettings', 'SelectDirectory', 'GetAllDirectories', 'AddDirectory', 'DeleteDirectory',
   // P-034：扫描目录分区改用 UpdateDirectoryWithMode（重映射 / 替换二选一）。
   'UpdateDirectoryWithMode',
   'GetShortFeedServerStatus', 'GetAITagLibrary', 'SaveAITagLibrary', 'ClearAITagLibrary', 'TriggerAITagging',
@@ -28,7 +28,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetImageEXIFBackfillStatus', 'StartImageEXIFBackfill', 'CancelImageEXIFBackfill',
   'ListGlossaryEntries', 'UpsertGlossaryEntry', 'DeleteGlossaryEntry',
   'GetBrowserBridgeStatus', 'RegenerateBrowserBridgeToken', 'SelectBrowserDownloadDirectory',
-  'ListBrowserDownloadTasks', 'CancelBrowserDownloadTask',
+  'CancelBrowserDownloadTask',
   // P-033 新接入的绑定：分区挂载时会调，缺了会在 mock 上抛「没有这个导出」。
   'GetDatabaseSwitchStatus', 'SwitchBackendConfigOnly', 'ClearMigrationTarget', 'RelaunchApp', 'RevealBackupDirectory',
   'GetShortFeedAccessStatus', 'GetShortFeedQRCode', 'SetShortFeedEnabled', 'SetShortFeedPIN', 'ClearShortFeedPIN',
@@ -940,7 +940,6 @@ describe('命令面板接线', () => {
 describe('浏览器插件桥接', () => {
   async function mountWithBridge({ status, tasks = [] } = {}) {
     api.GetBrowserBridgeStatus.mockResolvedValue(status || { running: false, enabled: false });
-    api.ListBrowserDownloadTasks.mockResolvedValue(tasks);
     const wrapper = await mountPage();
     await flushPromises();
     return wrapper;

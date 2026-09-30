@@ -28,6 +28,8 @@ assert.match(subtitleSettingsSource, /subtitle_whisperx_model/);
 assert.match(subtitleSettingsSource, /subtitle_whisperx_batch_size/);
 assert.match(bindingsSource, /export function GetSubtitleQueueState/);
 assert.match(bindingsSource, /export function CancelSubtitleTask/);
-assert.match(bindingsSource, /export function SearchSubtitleMatchesWithFilters/);
+// 旧的字幕搜索入口 SearchSubtitleMatchesWithFilters 已无前端调用，P-040 删除；片库页的字幕命中走 GetLibrarySubtitleHits。
+assert.doesNotMatch(bindingsSource, /export function SearchSubtitleMatchesWithFilters/);
+assert.match(bindingsSource, /export function GetLibrarySubtitleHits/);
 
 console.log('subtitle-workflow tests passed');

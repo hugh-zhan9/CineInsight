@@ -90,31 +90,7 @@ func (a *App) TestAITaggingConnection(input services.AITaggingConnectionTestInpu
 	return result
 }
 
-func (a *App) GetAITagLibrary() ([]models.Tag, error) {
-	tags, err := a.tagService.GetAITagLibrary()
-	log.Printf("API GetAITagLibrary result=%d err=%v", len(tags), err)
-	return tags, err
-}
-
-func (a *App) SaveAITagLibrary(inputs []services.AITagLibraryInput) ([]models.Tag, error) {
-	tags, err := a.tagService.SaveAITagLibrary(inputs)
-	log.Printf("API SaveAITagLibrary requested=%d result=%d err=%v", len(inputs), len(tags), err)
-	return tags, err
-}
-
-func (a *App) ClearAITagLibrary() ([]models.Tag, error) {
-	tags, err := a.tagService.ClearAITagLibrary()
-	log.Printf("API ClearAITagLibrary result=%d err=%v", len(tags), err)
-	return tags, err
-}
-
 // ===== AI Tagging Methods =====
-
-func (a *App) ListAITagCandidates(videoID uint, confidence string, status string) ([]services.AITaggingReviewItem, error) {
-	items, err := a.aiTaggingService.ListCandidates(videoID, confidence, status)
-	log.Printf("API ListAITagCandidates videoID=%d confidence=%s status=%s result=%d err=%v", videoID, confidence, status, len(items), err)
-	return items, err
-}
 
 // ListAITagCandidatePage 是审阅工作台的取数入口：候选没有上限，一次全量下发
 // 在大库上既压 IPC 又要前端渲染上千行。cursorID 为 0 取第一页，limit<=0 用服务端默认。
@@ -344,15 +320,6 @@ func (a *App) GetFaceDataUsage() (services.FaceDataUsage, error) {
 // 这六个绑定是人脸链路上唯一会让 video_people / image_people 变化的入口，而且每一个
 // 都对应用户在面板上的一次点击。审阅动作改完之后发 face-review-changed，面板据此
 // 局部刷新，不必整页重载。
-
-// ListFaceClusters 返回审阅面板要的簇视图（7.2）。
-func (a *App) ListFaceClusters(filter services.FaceClusterFilter) ([]services.FaceClusterView, error) {
-	views, err := a.faceReview.ListFaceClusters(a.backgroundContext(), filter)
-	if err != nil {
-		log.Printf("API ListFaceClusters status=%q media_kind=%q err=%v", filter.Status, filter.MediaKind, err)
-	}
-	return views, err
-}
 
 // GetFaceClusterObservations returns source media for an on-demand review page.
 func (a *App) GetFaceClusterObservations(clusterID, cursorID uint, limit int) (*services.FaceClusterObservationPage, error) {

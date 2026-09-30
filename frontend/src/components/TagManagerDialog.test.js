@@ -18,8 +18,6 @@ const api = vi.hoisted(() => ({
   MergeTags: vi.fn(),
   UpdateTagWithCategory: vi.fn(),
   GetAITagLibrary: vi.fn(),
-  SaveAITagLibrary: vi.fn(),
-  ClearAITagLibrary: vi.fn(),
   TriggerAITagging: vi.fn(),
   CreateTagCategory: vi.fn(),
   RenameTagCategory: vi.fn(),
@@ -47,8 +45,6 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.MergeTags.mockResolvedValue({ target_tag_id: 1, merged_tag_count: 1 });
   api.GetAITagLibrary.mockResolvedValue([]);
-  api.SaveAITagLibrary.mockResolvedValue([]);
-  api.ClearAITagLibrary.mockResolvedValue([]);
   api.TriggerAITagging.mockResolvedValue(false);
   api.PreviewTagPersonConversion.mockResolvedValue({ tag_id: 1, tag_name: '旅行', video_count: 2, image_count: 1, people: [] });
   api.ConvertTagToPerson.mockResolvedValue({ person: { id: 7, display_name: '旅行' }, video_count: 2, image_count: 1 });

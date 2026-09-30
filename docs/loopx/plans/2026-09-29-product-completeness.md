@@ -1490,3 +1490,21 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 片单页：加载后对本页带豆瓣 ID 的条目调用 `ListMovieVideoLinks`，认出已有的关联；新增「取消关联」，解除全部关联视频后回到建议。
 - 取消关联只断开已看同步，两边已有的已看标记不变。
 - 测试「APP-06 已关联的条目可以取消关联…」「APP-06 刷新后认得出已有的关联…」，两处变异都已验证。`UnlinkMovieVideo`、`ListMovieVideoLinks` 因此都有了前端调用方，P-040 守卫的白名单可以去掉。
+
+**P-040 交付与整合**（2026-09-30）：子代理中途两次因流式连接超时中断，续跑后完成。
+- 删掉 48 个前端与 Go 生产代码都不再调用的 App 绑定。
+- 服务层只删纯转调的薄包装：`VideoService.SearchVideos` / `SearchVideosByTags` / `BatchRefreshVideoMetadata`、`AITaggingService.ListCandidates`、`ImageAITaggingService.RetagImage`、`TagService.SetAvatarRemoverIfUnset`。它们的测试改为直接调用底层函数。
+- `ListTrashEntriesPage` 改名为 `ListTrashEntries`。
+- 删掉 `LibraryToolbar` 中已不用的三个 prop 和 `delete-tag` 事件。
+- 新增守卫 `frontend/scripts/bindings-usage.test.mjs`，已挂进 `npm test`：前端导入的名字都要存在，`App.d.ts` 里每个导出都要有前端调用方。
+- 主代理整合时：
+  - 裁决删除 `SearchSubtitleMatchesWithFilters`（片库字幕命中走 `GetLibrarySubtitleHits`），同步改了 `subtitle-workflow.test.mjs`；
+  - 「取消关联」已接入，守卫的白名单和待裁决表都清空；
+  - 重新生成绑定，导出从 402 个变为 353 个，全部有前端调用方；
+  - `package.json.md5` 按新增的脚本更新。
+- 保留、未删：服务层里生产代码已不调用、但被测试大量使用或自带实现的函数（清单见 P-040 报告）。`*BatchResult` 命名统一没做：没有定下统一方案，而且要改约 25 个文件，收益低，主代理接受。
+- `models.ts` 缺 `services.TagUsageCount`、`LibraryMatchSuggestion`、`SubtitleEngine`：Wails v2 不给只出现在 map 值里的结构体和具名字符串生成类型。前端是纯 JS，不受影响，主代理接受。
+- 验证：
+  - Go 全量（SQLite）通过；`npm test` 94 个文件、1393 条用例通过，守卫输出 `353 exports, 353 used`。
+  - 主工作区 `GOTOOLCHAIN=go1.24.9 wails build` 两次都成功（`build/bin/析微影策.app`）。二进制里能找到废纸篓（`trashItemAtURL:resultingItemURL:error:`）与二维码（`CIQRCodeGenerator`）的 cgo 符号。
+  - 附注：Wails 2.11 每次构建都会执行一遍「Installing frontend dependencies」，`package-lock.json` 没变。

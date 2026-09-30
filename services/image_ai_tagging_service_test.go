@@ -403,7 +403,7 @@ func TestImageAITaggingRejectsWhenConfigUnavailable(t *testing.T) {
 		if _, err := svc.StartImageAITagging(context.Background()); !errors.Is(err, ErrImageAITaggingConfigUnavailable) {
 			t.Fatalf("%s 应返回配置不可用，实际 %v", name, err)
 		}
-		if _, err := svc.RetagImage(1); !errors.Is(err, ErrImageAITaggingConfigUnavailable) {
+		if _, err := svc.RetryImageAITagging(1); !errors.Is(err, ErrImageAITaggingConfigUnavailable) {
 			t.Fatalf("%s 单张重跑应返回配置不可用，实际 %v", name, err)
 		}
 	}
@@ -432,7 +432,7 @@ func TestImageAITaggingSendsOnlyStrippedThumbnailAndPrompt(t *testing.T) {
 	imageAITaggingTestLibrary(t, "海边")
 	img := imageAITaggingTestImage(t, "heic")
 
-	if _, err := svc.RetagImage(img.ID); err != nil {
+	if _, err := svc.RetryImageAITagging(img.ID); err != nil {
 		t.Fatalf("单张打标失败: %v", err)
 	}
 
@@ -546,7 +546,7 @@ func TestImageAITaggingRefusesToSendWhenStripFails(t *testing.T) {
 	imageAITaggingTestLibrary(t, "海边")
 	img := imageAITaggingTestImage(t, "heic")
 
-	if _, err := svc.RetagImage(img.ID); err == nil {
+	if _, err := svc.RetryImageAITagging(img.ID); err == nil {
 		t.Fatal("剥除失败时应报错")
 	}
 	if called {
@@ -574,7 +574,7 @@ func TestImageAITaggingRetagBypassesFingerprint(t *testing.T) {
 	}
 	waitImageAITagging(t, svc)
 
-	candidates, err := svc.RetagImage(img.ID)
+	candidates, err := svc.RetryImageAITagging(img.ID)
 	if err != nil {
 		t.Fatalf("重跑失败: %v", err)
 	}

@@ -14,7 +14,7 @@ vi.mock('../utils/feedback.js', async (importOriginal) => ({
 }));
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'ListTrashEntriesPage', 'GetTrashUsage', 'RestoreTrashEntries', 'PurgeTrashEntries', 'RemoveGoneTrashEntries',
+  'ListTrashEntries', 'GetTrashUsage', 'RestoreTrashEntries', 'PurgeTrashEntries', 'RemoveGoneTrashEntries',
   'ForceRemoveTrashRecords', 'ListHiddenImages', 'RecheckImages', 'ListStagedSources', 'TrashStagedSources', 'DeleteStagedSources'
 ].map(name => [name, vi.fn()])));
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -68,17 +68,17 @@ beforeEach(() => {
     image: { count: 2, bytes_in_trash: 0, gone_count: 0, legacy_count: 0, legacy_bytes: 0 },
     staged: { count: 1, bytes: 4096 }
   });
-  api.ListTrashEntriesPage.mockResolvedValue(page([]));
+  api.ListTrashEntries.mockResolvedValue(page([]));
   api.ListHiddenImages.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
   api.ListStagedSources.mockResolvedValue([]);
 });
 
 describe('LIB-05 回收站中心：列表、分页与用量', () => {
   it('打开即按页签分页读取，并显示废纸篓占用与「在访达中清空才会释放空间」', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(9), entry(8)], { hasMore: true, nextCursor: 8 }));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(9), entry(8)], { hasMore: true, nextCursor: 8 }));
     const wrapper = await mountDialog();
 
-    expect(api.ListTrashEntriesPage).toHaveBeenCalledWith({ kind: 'video', mode: '', deleted_by: '', query: '', cursor_id: 0, limit: 50 });
+    expect(api.ListTrashEntries).toHaveBeenCalledWith({ kind: 'video', mode: '', deleted_by: '', query: '', cursor_id: 0, limit: 50 });
     expect(wrapper.text()).toContain('在访达中清空废纸篓才会释放空间');
     const usage = wrapper.get('[data-test="trash-usage"]').text();
     expect(usage).toContain('废纸篓中占用 2.0 GB');
@@ -87,10 +87,10 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
     expect(wrapper.get('[data-test="trash-tab-video"]').text()).toBe('视频（3）');
     expect(wrapper.get('[data-test="trash-tab-staged"]').text()).toBe('迁移残留（1）');
 
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(7)]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(7)]));
     await wrapper.get('[data-test="trash-load-more"]').trigger('click');
     await flushPromises();
-    expect(api.ListTrashEntriesPage).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'video', cursor_id: 8 }));
+    expect(api.ListTrashEntries).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'video', cursor_id: 8 }));
     expect(wrapper.findAll('.trash-center-entry')).toHaveLength(3);
     expect(wrapper.find('[data-test="trash-load-more"]').exists()).toBe(false);
     wrapper.unmount();
@@ -100,22 +100,22 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
     const wrapper = await mountDialog();
     await wrapper.get('[data-test="trash-filter-mode"]').setValue('record_only');
     await flushPromises();
-    expect(api.ListTrashEntriesPage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'record_only', cursor_id: 0 }));
+    expect(api.ListTrashEntries).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'record_only', cursor_id: 0 }));
 
     await wrapper.get('[data-test="trash-filter-deleted-by"]').setValue('scanner');
     await flushPromises();
-    expect(api.ListTrashEntriesPage).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'record_only', deleted_by: 'scanner' }));
+    expect(api.ListTrashEntries).toHaveBeenLastCalledWith(expect.objectContaining({ mode: 'record_only', deleted_by: 'scanner' }));
 
     await wrapper.get('[data-test="trash-search"]').setValue('  假期 ');
     await wrapper.get('[data-test="trash-search"]').trigger('keydown', { key: 'Enter' });
     await flushPromises();
-    expect(api.ListTrashEntriesPage).toHaveBeenLastCalledWith(expect.objectContaining({ query: '假期', cursor_id: 0 }));
+    expect(api.ListTrashEntries).toHaveBeenLastCalledWith(expect.objectContaining({ query: '假期', cursor_id: 0 }));
     expect(wrapper.text()).toContain('没有符合条件的条目');
     wrapper.unmount();
   });
 
   it('条目显示文件大小与删除人，0 字节的旧记录不显示大小', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([
+    api.ListTrashEntries.mockResolvedValueOnce(page([
       entry(1, { deleted_by: 'scanner', mode: 'missing', file_moved: false, file_size: 1.5 * 1024 * 1024 * 1024, actions: ['restore'] }),
       entry(2, { deleted_by: '', file_size: 0 })
     ]));
@@ -129,11 +129,11 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
   });
 
   it('IMG-02 图片页签与视频对称：同一套接口，kind=image', async () => {
-    api.ListTrashEntriesPage.mockResolvedValue(page([entry(5, { kind: 'image', name: 'a.jpg', mode: 'record_only', file_moved: false, actions: ['restore'] })]));
+    api.ListTrashEntries.mockResolvedValue(page([entry(5, { kind: 'image', name: 'a.jpg', mode: 'record_only', file_moved: false, actions: ['restore'] })]));
     api.RestoreTrashEntries.mockResolvedValueOnce(batch([{ id: 5, code: 'ok' }]));
     const wrapper = await mountDialog({ initialTab: 'image' });
 
-    expect(api.ListTrashEntriesPage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' }));
+    expect(api.ListTrashEntries).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image' }));
     // 只删记录的条目：恢复就是「允许重新收录」。
     const restore = wrapper.get('[data-test="trash-entry-restore"]');
     expect(restore.text()).toBe('允许重新收录');
@@ -149,7 +149,7 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
 
 describe('LIB-12 多选与批量操作', () => {
   it('「恢复所选」一次恢复所选条目，只把成功的移出列表并报告失败原因', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(1), entry(2), entry(3, { state: 'file_gone', actions: ['remove_record'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(1), entry(2), entry(3, { state: 'file_gone', actions: ['remove_record'] })]));
     api.RestoreTrashEntries.mockResolvedValueOnce(batch([
       { id: 1, code: 'ok' },
       { id: 2, code: 'path_occupied', message: '原位置已收录了新文件' }
@@ -171,7 +171,7 @@ describe('LIB-12 多选与批量操作', () => {
   });
 
   it('LIB-05 永久删除所选要二次确认；取消时不调用 PurgeTrashEntries', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(1), entry(2, { mode: 'record_only', file_moved: false, actions: ['restore'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(1), entry(2, { mode: 'record_only', file_moved: false, actions: ['restore'] })]));
     const wrapper = await mountDialog();
     await wrapper.get('[data-test="trash-select-all"]').setValue(true);
     expect(wrapper.get('[data-test="trash-bulk-purge"]').text()).toBe('永久删除所选（1）');
@@ -192,7 +192,7 @@ describe('LIB-12 多选与批量操作', () => {
   });
 
   it('LIB-05 单条永久删除同样先确认；取消不调用', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(4)]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(4)]));
     const wrapper = await mountDialog();
     feedback.confirmAction.mockResolvedValueOnce(false);
     await wrapper.get('[data-test="trash-entry-purge"]').trigger('click');
@@ -202,7 +202,7 @@ describe('LIB-12 多选与批量操作', () => {
   });
 
   it('移除已清除记录要确认；取消时不调用 RemoveGoneTrashEntries', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(3, { state: 'file_gone', actions: ['remove_record'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(3, { state: 'file_gone', actions: ['remove_record'] })]));
     const wrapper = await mountDialog();
     expect(wrapper.text()).toContain('文件已从废纸篓清除');
 
@@ -222,7 +222,7 @@ describe('LIB-12 多选与批量操作', () => {
 
 describe('LIB-05 特殊条目的出口与说明', () => {
   it('put_back 的行提示「已放回原处」，只提供恢复', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(1, { put_back: true, actions: ['restore'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(1, { put_back: true, actions: ['restore'] })]));
     const wrapper = await mountDialog();
     const row = wrapper.get('[data-test="trash-entry-1"]');
     expect(row.text()).toContain('已放回原处');
@@ -234,7 +234,7 @@ describe('LIB-05 特殊条目的出口与说明', () => {
 
   it('put_back 的行清除时若返回 not_purgeable，照实显示「请改用恢复」且不给「仍然移除记录」', async () => {
     // 列表判定之后文件才被放回：清除按钮还在，后端拒绝。
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(1, { mode: 'legacy_trash' })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(1, { mode: 'legacy_trash' })]));
     api.PurgeTrashEntries.mockResolvedValueOnce(batch([{ id: 1, code: 'not_purgeable', message: '文件已被放回原处，请改用恢复' }]));
     const wrapper = await mountDialog();
     await wrapper.get('[data-test="trash-entry-purge"]').trigger('click');
@@ -245,7 +245,7 @@ describe('LIB-05 特殊条目的出口与说明', () => {
   });
 
   it('claimed_by_active 的行只提供「移除记录」并说明不动文件', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(2, { claimed_by_active: true, actions: ['remove_record'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(2, { claimed_by_active: true, actions: ['remove_record'] })]));
     const wrapper = await mountDialog();
     const row = wrapper.get('[data-test="trash-entry-2"]');
     expect(row.text()).toContain('原位置已由片库中的另一条记录收录，只能移除这条旧记录（不动文件）');
@@ -254,7 +254,7 @@ describe('LIB-05 特殊条目的出口与说明', () => {
   });
 
   it('original_symlink=true 的行说明原位置是符号链接，不提供恢复', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([
+    api.ListTrashEntries.mockResolvedValueOnce(page([
       entry(3, { original_symlink: true, actions: [] }),
       entry(4, { original_symlink: true, actions: ['purge'] })
     ]));
@@ -271,7 +271,7 @@ describe('LIB-05 特殊条目的出口与说明', () => {
   });
 
   it('pending_move 等中断状态提供「恢复原状态」并显示上次失败原因', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(5, { state: 'pending_move', last_error: '文件位置未知', actions: ['restore'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(5, { state: 'pending_move', last_error: '文件位置未知', actions: ['restore'] })]));
     const wrapper = await mountDialog();
     const row = wrapper.get('[data-test="trash-entry-5"]');
     expect(row.text()).toContain('删除曾中断，可恢复原状态');
@@ -283,7 +283,7 @@ describe('LIB-05 特殊条目的出口与说明', () => {
 
 describe('LIB-05 仍然移除记录（不动文件）', () => {
   async function offlineRow(overrides = {}) {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(6, overrides)]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(6, overrides)]));
     api.PurgeTrashEntries.mockResolvedValueOnce(batch([{ id: 6, code: 'volume_offline', message: '文件所在磁盘当前不可访问，未做任何改动' }]));
     const wrapper = await mountDialog();
     expect(wrapper.find('[data-test="trash-entry-force"]').exists()).toBe(false);
@@ -335,7 +335,7 @@ describe('LIB-05 仍然移除记录（不动文件）', () => {
   });
 
   it('record_only 的条目恢复失败也不提供「仍然移除记录」', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(7, { mode: 'record_only', file_moved: false, actions: ['restore'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(7, { mode: 'record_only', file_moved: false, actions: ['restore'] })]));
     api.RestoreTrashEntries.mockResolvedValueOnce(batch([{ id: 7, code: 'volume_offline' }]));
     const wrapper = await mountDialog();
     await wrapper.get('[data-test="trash-entry-restore"]').trigger('click');
@@ -346,7 +346,7 @@ describe('LIB-05 仍然移除记录（不动文件）', () => {
   });
 
   it('扫描时已消失的条目恢复失败后提供出口，否则它永远卡在回收站里', async () => {
-    api.ListTrashEntriesPage.mockResolvedValueOnce(page([entry(8, { mode: 'missing', file_moved: false, deleted_by: 'scanner', actions: ['restore'] })]));
+    api.ListTrashEntries.mockResolvedValueOnce(page([entry(8, { mode: 'missing', file_moved: false, deleted_by: 'scanner', actions: ['restore'] })]));
     api.RestoreTrashEntries.mockResolvedValueOnce(batch([{ id: 8, code: 'error', message: '原文件不可用，无法恢复记录' }]));
     const wrapper = await mountDialog();
     await wrapper.get('[data-test="trash-entry-restore"]').trigger('click');
@@ -457,7 +457,7 @@ describe('LIB-11 迁移残留页签', () => {
 describe('LIB-05 关闭与过期响应', () => {
   it('关闭后仍在路上的列表响应被丢弃', async () => {
     let resolveList;
-    api.ListTrashEntriesPage.mockReturnValueOnce(new Promise(resolve => { resolveList = resolve; }));
+    api.ListTrashEntries.mockReturnValueOnce(new Promise(resolve => { resolveList = resolve; }));
     const wrapper = await mountDialog();
     await wrapper.setProps({ visible: false });
     resolveList(page([entry(1)]));

@@ -244,16 +244,6 @@ func (s *TagService) SetAvatarRemover(remove func(relativePath string) error) {
 	s.removeAvatar = remove
 }
 
-// SetAvatarRemoverIfUnset 只在尚未注入时注入。正式做法是构造/启动时注入一次（P-029 接线项）；
-// 在那之前 App 的撤销入口用它兜底，既不改写已注入的实现，也不与撤销并发写同一个字段。
-func (s *TagService) SetAvatarRemoverIfUnset(remove func(relativePath string) error) {
-	s.avatarMu.Lock()
-	defer s.avatarMu.Unlock()
-	if s.removeAvatar == nil {
-		s.removeAvatar = remove
-	}
-}
-
 func (s *TagService) avatarRemover() func(relativePath string) error {
 	s.avatarMu.RLock()
 	defer s.avatarMu.RUnlock()

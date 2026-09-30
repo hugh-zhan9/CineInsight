@@ -76,12 +76,6 @@ func (a *App) SelectBrowserDownloadDirectory() (string, error) {
 	})
 }
 
-// ListBrowserDownloadTasks 是旧绑定的薄包装，等价于 ListDownloadTasks（含历史），
-// 与 browser-download-tasks 事件的载荷一致。前端改用 ListDownloadTasks 后由 P-040 删除。
-func (a *App) ListBrowserDownloadTasks() []services.BrowserDownloadTask {
-	return a.ListDownloadTasks()
-}
-
 // CancelBrowserDownloadTask 取消一个下载任务。
 func (a *App) CancelBrowserDownloadTask(id string) error {
 	if a.browserDownloads == nil {

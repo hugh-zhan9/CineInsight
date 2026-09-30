@@ -9,69 +9,6 @@ import (
 
 // ===== Library Methods =====
 
-// GetAllVideos 获取所有视频（保持兼容，实际使用分页）
-func (a *App) GetAllVideos() ([]models.Video, error) {
-	return a.videoService.GetAllVideos()
-}
-
-// GetVideosPaginated 分页获取视频
-func (a *App) GetVideosPaginated(cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	videos, err := a.videoService.GetVideosPaginated(cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API GetVideosPaginated cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
-	return videos, err
-}
-
-// SearchVideos 搜索视频（支持分页）
-func (a *App) SearchVideos(keyword string, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	videos, err := a.videoService.SearchVideos(keyword, cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API SearchVideos keyword=%q cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", keyword, cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
-	return videos, err
-}
-
-// SearchSubtitleMatches 按字幕内容搜索视频片段
-func (a *App) SearchSubtitleMatches(keyword string, limit int) ([]services.SubtitleSearchMatch, error) {
-	matches, err := a.subtitleSearchService.SearchSubtitleMatches(keyword, limit)
-	log.Printf("API SearchSubtitleMatches keyword=%q limit=%d result=%d err=%v", keyword, limit, len(matches), err)
-	return matches, err
-}
-
-// SearchSubtitleMatchesWithFilters 按字幕内容及视频属性搜索视频片段。
-func (a *App) SearchSubtitleMatchesWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight, limit int) ([]services.SubtitleSearchMatch, error) {
-	matches, err := a.subtitleSearchService.SearchSubtitleMatchesWithFilters(keyword, services.SubtitleSearchFilters{
-		TagIDs: tagIDs, MinSize: minSize, MaxSize: maxSize, MinHeight: minHeight, MaxHeight: maxHeight, Limit: limit,
-	})
-	log.Printf("API SearchSubtitleMatchesWithFilters keyword=%q tags=%v size=[%d,%d] height=[%d,%d] limit=%d result=%d err=%v", keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, limit, len(matches), err)
-	return matches, err
-}
-
-// SearchVideosByTags 按标签搜索视频（多选 AND，支持分页）
-func (a *App) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	videos, err := a.videoService.SearchVideosByTags(tagIDs, cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API SearchVideosByTags tags=%v cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v", tagIDs, cursorScore, cursorSize, cursorID, limit, len(videos), err)
-	return videos, err
-}
-
-// SearchVideosWithFilters 组合搜索视频（名称 + 标签 + 体积 + 分辨率，支持分页）
-func (a *App) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	videos, err := a.videoService.SearchVideosWithFilters(keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API SearchVideosWithFilters keyword=%q tags=%v size=[%d,%d] height=[%d,%d] cursorScore=%.4f cursorSize=%d cursorID=%d limit=%d result=%d err=%v sample=%s", keyword, tagIDs, minSize, maxSize, minHeight, maxHeight, cursorScore, cursorSize, cursorID, limit, len(videos), err, summarizeVideos(videos, 3))
-	return videos, err
-}
-
-// SearchLibraryVideos 使用主片库智能视图与筛选条件查询视频。
-func (a *App) SearchLibraryVideos(filter services.LibraryFilter, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	videos, err := a.videoService.SearchLibraryVideos(filter, cursorScore, cursorSize, cursorID, limit)
-	log.Printf("API SearchLibraryVideos view=%s mode=%s count=%d err=%v", filter.SmartView, filter.SearchMode, len(videos), err)
-	return videos, err
-}
-
-// ListRecentlyPlayed 返回最近正式播放的视频。
-func (a *App) ListRecentlyPlayed(limit int) ([]models.Video, error) {
-	videos, err := a.videoService.ListRecentlyPlayed(limit)
-	log.Printf("API ListRecentlyPlayed count=%d err=%v", len(videos), err)
-	return videos, err
-}
-
 // ListRecentlyPlayedWithFilter 按当前片库条件稳定分页返回最近播放视频。
 func (a *App) ListRecentlyPlayedWithFilter(filter services.LibraryFilter, cursorLastPlayedAt string, cursorID uint, limit int) ([]models.Video, error) {
 	videos, err := a.videoService.ListRecentlyPlayedWithFilter(filter, cursorLastPlayedAt, cursorID, limit)

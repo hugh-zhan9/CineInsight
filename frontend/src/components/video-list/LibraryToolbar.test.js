@@ -33,7 +33,6 @@ function baseProps(extra = {}) {
     incrementalScan: { running: false, state: 'idle', message: '' },
     directories: [],
     settings: {},
-    aiTagSummary: { same_source_unread: 0 },
     technicalBackfill: { running: false },
     perceptualHash: { running: false },
     localMetadataBackfill: { running: false },
@@ -240,7 +239,7 @@ describe('工具栏三层重排', () => {
   // 菜单只留库维护动作，徽标也一起移走（META-08：待处理数量改看顶栏角标）。
   it('APP-11 管理菜单去掉 AI 标签管理与清理审阅，保留其余维护动作并按四组分开，按钮不再带徽标', async () => {
     const wrapper = mount(LibraryToolbar, {
-      props: baseProps({ settings: { local_metadata_enabled: true }, aiTagSummary: { same_source_unread: 4 }, cleanupBadgeCount: 7 })
+      props: baseProps({ settings: { local_metadata_enabled: true } })
     });
     const items = wrapper.vm.manageMenuItems;
     expect(items.filter(item => item.heading).map(item => item.heading)).toEqual(['扫描', '整理', '补全', '维护']);

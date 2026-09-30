@@ -480,13 +480,6 @@ func (a *App) rescanAddedDirectory(added models.ScanDirectory) {
 	a.emitLibraryScanSummary(services.ScanTriggerDirectoryChange, result)
 }
 
-// UpdateDirectory 更新目录。旧绑定的薄包装：路径变化按「替换为新目录」处理。
-// 前端全部改用 UpdateDirectoryWithMode 之后由收尾切片删除。
-func (a *App) UpdateDirectory(id uint, path, alias string) error {
-	_, err := a.UpdateDirectoryWithMode(id, path, alias, services.DirectoryUpdateModeReplace)
-	return err
-}
-
 // UpdateDirectoryWithMode 更新扫描目录的路径与别名（D-PC07）。
 // mode=remap：目录只是换了位置，保留记录 ID、标签与进度，路径整体改写到新目录；
 // mode=replace：用新目录替换旧目录，旧目录下的记录标为 removed_root。路径没变时 mode 被忽略。

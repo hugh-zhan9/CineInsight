@@ -370,11 +370,6 @@ export default {
     incrementalScan: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
-    // 下面三项原先用于「管理」菜单的徽标与清理项；待处理数量与清理入口已并入顶栏的待处理工作台
-    // （D-PC27、D-PC59），工具栏不再渲染它们。片库页仍在传，prop 暂留，由片库页的切片一并清理。
-    aiTagSummary: { type: Object, default: () => ({}) },
-    cleanupBadgeCount: { type: Number, default: 0 },
-    cleanupAnalyzing: { type: Boolean, default: false },
     technicalBackfill: { type: Object, required: true },
     perceptualHash: { type: Object, required: true },
     localMetadataBackfill: { type: Object, required: true },
@@ -388,7 +383,7 @@ export default {
   emits: [
     'update:searchKeyword', 'update:smartView', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
-    'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'delete-tag', 'open-tag-manager',
+    'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'open-tag-manager',
     'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
     'manage-select', 'view-select', 'random-select',
     'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete'

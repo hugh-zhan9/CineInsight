@@ -659,14 +659,6 @@ func aiTagCandidateReviewItems(candidates []models.AITagCandidate) []AITaggingRe
 	return items
 }
 
-func (s *AITaggingService) ListCandidates(videoID uint, confidence string, status string) ([]AITaggingReviewItem, error) {
-	var candidates []models.AITagCandidate
-	if err := aiTagCandidateQuery(videoID, confidence, status).Find(&candidates).Error; err != nil {
-		return nil, err
-	}
-	return aiTagCandidateReviewItems(candidates), nil
-}
-
 // ListCandidatePage 按候选 id 游标取一页。待审候选没有上限，全量下发在大库上
 // 既压 IPC 又要前端一次渲染上千行；审阅工作台改走这条。cursorID 为 0 表示第一页。
 func (s *AITaggingService) ListCandidatePage(videoID uint, confidence string, status string, cursorID uint, limit int) (*AITagCandidatePage, error) {

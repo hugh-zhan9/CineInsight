@@ -18,19 +18,6 @@ func homeDirForIINA() string {
 	return home
 }
 
-// SyncIINAProgress 把 IINA 的播放断点同步进片库。外部播放器只记得播放次数，
-// 进度这一环靠它补上。
-func (a *App) SyncIINAProgress() (services.IINAProgressSyncResult, error) {
-	result, err := a.iinaProgress.Sync()
-	log.Printf("API SyncIINAProgress scanned=%d updated=%d err=%v", result.Scanned, result.Updated, err)
-	return result, err
-}
-
-// GetIINAProgressAvailable 表示这台机器上有没有 IINA 的断点记录可读。
-func (a *App) GetIINAProgressAvailable() bool {
-	return a.iinaProgress.Available()
-}
-
 // GetIINASyncStatus 返回设置页展示的 IINA 同步状态：是否在监听、监听的目录、
 // 最近一次成功同步的时间与最近的失败原因（D-PC47）。
 func (a *App) GetIINASyncStatus() services.IINASyncStatus {
@@ -55,27 +42,6 @@ func (a *App) SelectFolderToRename() (string, error) {
 	})
 }
 
-// ScanDirectory 扫描目录
-func (a *App) ScanDirectory(dir string) ([]string, error) {
-	files, err := a.videoService.ScanDirectory(dir)
-	log.Printf("API ScanDirectory dir=%s result=%d err=%v", dir, len(files), err)
-	return files, err
-}
-
-// ScanDirectoryWithProgress scopes events to this invocation, so late events
-// or other scans cannot overwrite the dialog's current discovery state.
-func (a *App) ScanDirectoryWithProgress(dir, requestID string) ([]string, error) {
-	log.Printf("API ScanDirectoryWithProgress begin dir=%s", dir)
-	files, err := a.videoService.ScanDirectoryWithProgress(dir, func(progress services.DirectoryScanProgress) {
-		runtime.EventsEmit(a.ctx, "directory-scan-progress", struct {
-			services.DirectoryScanProgress
-			RequestID string `json:"request_id"`
-		}{progress, requestID})
-	})
-	log.Printf("API ScanDirectoryWithProgress end dir=%s result=%d err=%v", dir, len(files), err)
-	return files, err
-}
-
 // SyncDirectoryWithProgress runs manual discovery and reconciliation in the backend.
 func (a *App) SyncDirectoryWithProgress(dir, requestID string) *services.ScanSyncResult {
 	result := a.videoService.SyncDirectoryWithProgress(dir, func(progress services.DirectoryScanProgress) {
@@ -93,13 +59,6 @@ func (a *App) SyncDirectoryWithProgress(dir, requestID string) *services.ScanSyn
 	}
 	a.runPostScanAutomation(result)
 	return result
-}
-
-// ScanDirectoryWithInfo 扫描目录（附带文件大小，用于迁移检测）
-func (a *App) ScanDirectoryWithInfo(dir string) ([]services.ScannedFile, error) {
-	files, err := a.videoService.ScanDirectoryWithInfo(dir)
-	log.Printf("API ScanDirectoryWithInfo dir=%s result=%d err=%v", dir, len(files), err)
-	return files, err
 }
 
 // RelocateVideo 更新视频路径（文件迁移，保留标签等元数据）
@@ -156,62 +115,11 @@ func (a *App) RenameDirectory(sourceDirectory, newName string) (*services.Folder
 	return result, err
 }
 
-// RefreshVideoMetadata 刷新并补全视频元数据 (时长/分辨率)
-func (a *App) RefreshVideoMetadata(id uint) error {
-	return a.videoService.RefreshVideoMetadata(id)
-}
-
-func (a *App) BatchRefreshVideoMetadata(videoIDs []uint) *services.BatchVideoOperationResult {
-	result := a.videoService.BatchRefreshVideoMetadata(videoIDs)
-	log.Printf("API BatchRefreshVideoMetadata requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
-	return result
-}
-
 // RenameVideo 重命名视频文件及数据库记录
 func (a *App) RenameVideo(id uint, newName string) error {
 	err := a.videoService.RenameVideo(id, newName)
 	log.Printf("API RenameVideo id=%d newName=%s err=%v", id, newName, err)
 	return err
-}
-
-// AddVideo 添加视频
-func (a *App) AddVideo(path string) (*models.Video, error) {
-	video, err := a.videoService.AddVideo(path)
-	if err == nil && video != nil && a.cleanupService != nil {
-		a.cleanupService.InvalidateAnalysis()
-	}
-	if video != nil {
-		log.Printf("API AddVideo path=%s id=%d err=%v", path, video.ID, err)
-	} else {
-		log.Printf("API AddVideo path=%s id=0 err=%v", path, err)
-	}
-	return video, err
-}
-
-// GetVideosByDirectory 按目录获取视频记录
-func (a *App) GetVideosByDirectory(dir string) ([]models.Video, error) {
-	videos, err := a.videoService.GetVideosByDirectory(dir)
-	log.Printf("API GetVideosByDirectory dir=%s result=%d err=%v sample=%s", dir, len(videos), err, summarizeVideos(videos, 3))
-	return videos, err
-}
-
-// DeleteVideo 删除视频
-func (a *App) DeleteVideo(id uint, deleteFile bool) error {
-	err := a.videoService.DeleteVideo(id, deleteFile)
-	if err == nil {
-		a.cleanupService.InvalidateAnalysis()
-	}
-	log.Printf("API DeleteVideo id=%d deleteFile=%v err=%v", id, deleteFile, err)
-	return err
-}
-
-func (a *App) BatchDeleteVideos(videoIDs []uint, deleteFile bool) *services.BatchVideoOperationResult {
-	result := a.videoService.BatchDeleteVideos(videoIDs, deleteFile)
-	if result.Succeeded > 0 {
-		a.cleanupService.InvalidateAnalysis()
-	}
-	log.Printf("API BatchDeleteVideos requested=%d succeeded=%d failed=%d deleteFile=%v", result.Requested, result.Succeeded, result.Failed, deleteFile)
-	return result
 }
 
 // DeleteVideosWithResult 是带单项结果码与 batch_id 的批量删除（详细设计 §2.1）。requestID 可选：
@@ -235,23 +143,6 @@ func (a *App) PermanentlyDeleteVideos(videoIDs []uint) *services.BatchResult {
 	}
 	log.Printf("API PermanentlyDeleteVideos requested=%d succeeded=%d failed=%d", result.Requested, result.Succeeded, result.Failed)
 	return result
-}
-
-// ListTrashEntries 返回当前可恢复的视频删除记录。
-func (a *App) ListTrashEntries() ([]models.VideoTrashEntry, error) {
-	entries, err := a.videoService.ListTrashEntries()
-	log.Printf("API ListTrashEntries result=%d err=%v", len(entries), err)
-	return entries, err
-}
-
-// RestoreTrashEntry 将一个视频恢复到删除前的路径。
-func (a *App) RestoreTrashEntry(entryID uint) (*models.Video, error) {
-	video, err := a.videoService.RestoreTrashEntry(entryID)
-	if err == nil {
-		a.cleanupService.InvalidateAnalysis()
-	}
-	log.Printf("API RestoreTrashEntry entryID=%d err=%v", entryID, err)
-	return video, err
 }
 
 // OpenDirectory 打开文件所在目录
@@ -284,17 +175,6 @@ func (a *App) PlayVideo(videoID uint) (*services.PlaybackAttemptResult, error) {
 		log.Printf("API PlayVideo id=%d dispatch=%v reason=%s err=%v", videoID, result.DispatchSucceeded, result.ReasonCode, err)
 	} else {
 		log.Printf("API PlayVideo id=%d dispatch=false reason=<nil> err=%v", videoID, err)
-	}
-	return result, err
-}
-
-// PlayRandomVideo 随机发起正式播放
-func (a *App) PlayRandomVideo() (*services.PlaybackAttemptResult, error) {
-	result, err := a.videoService.PlayRandomVideo()
-	if result != nil && result.Video != nil {
-		log.Printf("API PlayRandomVideo id=%d dispatch=%v reason=%s err=%v", result.Video.ID, result.DispatchSucceeded, result.ReasonCode, err)
-	} else {
-		log.Printf("API PlayRandomVideo id=0 dispatch=false err=%v", err)
 	}
 	return result, err
 }

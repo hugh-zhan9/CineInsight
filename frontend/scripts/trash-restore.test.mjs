@@ -27,9 +27,10 @@ assert.match(trashDialogSource, /token !== state\.token \|\| !this\.visible/, 's
 assert.match(trashDialogSource, /entry\.last_error/, 'interrupted operations should expose their latest diagnostic');
 assert.match(trashDialogSource, /pending_move/, 'interrupted deletes should offer an in-app recovery action');
 
-// 旧的「只列全部 / 单条恢复」绑定由 P-040 删除：前端不能再调用它们。
+// 旧的「只列全部 / 单条恢复」绑定已由 P-040 删除，分页列表随后改回设计名 ListTrashEntries(filter)。
+assert.match(trashDialogSource, /ListTrashEntries\(\{/, 'the trash center should list entries through the paged ListTrashEntries(filter)');
 for (const [name, source] of [['VideoListPage', videoListSource], ['PhotoLibraryPage', photoLibrarySource], ['TrashCenterDialog', trashDialogSource], ['TrashUndoBanner', trashUndoSource]]) {
-  assert.doesNotMatch(source, /\b(ListTrashEntries|RestoreTrashEntry|ListImageTrashEntries|RestoreImageTrashEntry)\b(?!Page|s\b)/, `${name} must not call the legacy trash bindings`);
+  assert.doesNotMatch(source, /\b(ListTrashEntriesPage|RestoreTrashEntry|ListImageTrashEntries|RestoreImageTrashEntry)\b/, `${name} must not call the legacy trash bindings`);
   assert.doesNotMatch(source, /\bBatchDelete(Videos|Images|ImagesInDirectory)\(/, `${name} must use the result-coded delete bindings`);
 }
 

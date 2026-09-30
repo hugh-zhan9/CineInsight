@@ -3,40 +3,8 @@ package main
 import (
 	"context"
 	"log"
-	"time"
 	"video-master/services"
 )
-
-// GetCleanupCandidates 获取清理候选（轻量规则）
-func (a *App) GetCleanupCandidates(minDurationSeconds int, minWidth int, minHeight int) (*services.CleanupAnalysis, error) {
-	criteria := services.CleanupCriteria{
-		MinDuration: time.Duration(minDurationSeconds) * time.Second,
-		MinWidth:    minWidth,
-		MinHeight:   minHeight,
-	}
-	startedAt := time.Now()
-	log.Printf("API GetCleanupCandidates begin duration=%d width=%d height=%d", minDurationSeconds, minWidth, minHeight)
-	analysis, err := a.cleanupService.AnalyzeCleanupCandidates(criteria)
-	if err != nil {
-		log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d elapsed=%s err=%v",
-			minDurationSeconds, minWidth, minHeight, time.Since(startedAt).Round(time.Millisecond), err)
-		return nil, err
-	}
-
-	log.Printf("API GetCleanupCandidates duration=%d width=%d height=%d elapsed=%s duplicate_groups=%d low_duration=%d low_resolution=%d",
-		minDurationSeconds, minWidth, minHeight,
-		time.Since(startedAt).Round(time.Millisecond),
-		len(analysis.DuplicateGroups), len(analysis.LowDuration), len(analysis.LowResolution),
-	)
-	return analysis, nil
-}
-
-// StartCleanupAnalysis 是旧绑定的薄包装（P-040 统一删除）：阈值改由设置提供（D-PC36），
-// 传入的三个参数不再生效，转调 StartCleanupAnalysisFromSettings。
-func (a *App) StartCleanupAnalysis(minDurationSeconds int, minWidth int, minHeight int) (*services.CleanupStatus, error) {
-	log.Printf("API StartCleanupAnalysis (legacy) ignored duration=%d width=%d height=%d", minDurationSeconds, minWidth, minHeight)
-	return a.StartCleanupAnalysisFromSettings()
-}
 
 // StartCleanupAnalysisFromSettings 启动视频清理分析，「极短片段 / 极低分辨率」阈值读设置
 // cleanup_short_seconds / cleanup_low_width / cleanup_low_height（≤0 用默认 5 / 480 / 320）。

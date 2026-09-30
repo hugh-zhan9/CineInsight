@@ -10,9 +10,7 @@ import (
 
 // 回收站中心的 App 层入口（P-010，详细设计 §2.1 / §2.4 / §9.4）。
 //
-// 旧的 ListTrashEntries / RestoreTrashEntry / ListImageTrashEntries / RestoreImageTrashEntry 仍保留
-// （前端调用点全部改完之前，见 Planning Handoff），由 P-040 统一删除；这里的方法是新的统一接口，
-// 视频与图片共用，用 kind（video / image）区分。
+// 视频与图片共用一套统一接口，用 kind（video / image）区分。旧的单列表 / 单条恢复绑定已由 P-040 删除。
 
 // trashCenter 每次调用现建：TrashService 除批量取消登记（包级）外没有状态。
 func (a *App) trashCenter() *services.TrashService {
@@ -46,16 +44,16 @@ func (a *App) CancelBatchDelete(requestID string) bool {
 	return cancelled
 }
 
-// ListTrashEntriesPage 分页列出回收站条目（游标分页，当页对账 file_gone）。
+// ListTrashEntries 分页列出回收站条目（游标分页，当页对账 file_gone）。
 // 用户在访达里「放回原处」的条目以 put_back=true、actions=[restore] 返回，列表本身不恢复；
 // 需要调用 RestoreTrashEntries 才会还原记录（复审 Minor 1）。
-func (a *App) ListTrashEntriesPage(filter services.TrashFilter) (*services.TrashPage, error) {
+func (a *App) ListTrashEntries(filter services.TrashFilter) (*services.TrashPage, error) {
 	page, err := a.trashCenter().ListTrashEntries(filter)
 	if err != nil {
-		log.Printf("API ListTrashEntriesPage kind=%s err=%v", filter.Kind, err)
+		log.Printf("API ListTrashEntries kind=%s err=%v", filter.Kind, err)
 		return nil, err
 	}
-	log.Printf("API ListTrashEntriesPage kind=%s result=%d hasMore=%v", filter.Kind, len(page.Items), page.HasMore)
+	log.Printf("API ListTrashEntries kind=%s result=%d hasMore=%v", filter.Kind, len(page.Items), page.HasMore)
 	return page, nil
 }
 

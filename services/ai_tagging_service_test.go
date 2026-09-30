@@ -723,10 +723,11 @@ func TestListAITagCandidatesIncludesSoftDeletedVideoMetadata(t *testing.T) {
 	}
 
 	svc := newTestAITaggingService(&fakeAITaggingClient{}, nil)
-	items, err := svc.ListCandidates(0, "", models.AITagCandidateStatusPending)
+	page, err := svc.ListCandidatePage(0, "", models.AITagCandidateStatusPending, 0, 0)
 	if err != nil {
 		t.Fatalf("读取候选失败: %v", err)
 	}
+	items := page.Items
 	if len(items) != 2 {
 		t.Fatalf("审阅列表应保留有效和已删除视频候选，实际 %d: %+v", len(items), items)
 	}

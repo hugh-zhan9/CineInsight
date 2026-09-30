@@ -17,10 +17,10 @@ const api = vi.hoisted(() => Object.fromEntries([
   'SearchLibraryVideoPage', 'SearchSemanticVideos', 'FindSimilarVideos', 'ListRecentlyPlayedWithFilter', 'GetLibrarySubtitleHits', 'PlayVideo', 'PlayRandomVideoWithFilter', 'PickRandomVideos', 'GetVideosByIDs', 'CountLibraryVideos', 'GetSemanticIndexStatus',
   'SetVideoFavorite', 'SetVideoWatched', 'UpdateVideoWatchProgress', 'ListSavedLibraryViews', 'SaveLibraryView',
   'DeleteSavedLibraryView', 'RejectSameSourceRelation', 'OpenDirectory', 'DeleteVideo', 'BatchDeleteVideos', 'ListTrashEntries',
-  'RestoreTrashEntry', 'RemoveTagFromVideo', 'UpdateSettings', 'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine',
+  'RemoveTagFromVideo', 'UpdateSettings', 'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine',
   'GenerateSubtitle', 'ForceGenerateSubtitle', 'RenameVideo', 'RenameDirectory', 'MoveVideo', 'BatchMoveVideos', 'MoveDirectory',
   'SelectFolderToRename', 'SelectMigrationSourceDirectory', 'SelectMigrationDestinationDirectory', 'CancelSubtitle', 'CancelSubtitleTask',
-  'GetSubtitleQueueState', 'GetCleanupStatus', 'GetAITaggingStatusSummary', 'StartCleanupAnalysis', 'GetSubtitleSegments',
+  'GetSubtitleQueueState', 'GetCleanupStatus', 'GetAITaggingStatusSummary', 'GetSubtitleSegments',
   'GetPreviewSession', 'PreviewExternally', 'SyncScanDirectories', 'StartTechnicalBackfill', 'GetTechnicalBackfillStatus',
   'CancelTechnicalBackfill', 'StartLocalMetadataBackfill', 'GetLocalMetadataBackfillStatus', 'CancelLocalMetadataBackfill',
   'StartPerceptualHashBackfill', 'GetPerceptualHashBackfillStatus', 'CancelPerceptualHashBackfill',
@@ -195,9 +195,13 @@ describe('VideoListPage media-detail integration', () => {
   it('APP-11 不再给工具栏传徽标与分析中镜像，也不再轮询 AI 汇总；标签上的删除入口已拆掉', async () => {
     const wrapper = await mountPage();
     const toolbar = wrapper.findComponent({ name: 'LibraryToolbar' });
-    expect(toolbar.props('cleanupBadgeCount')).toBe(0);
-    expect(toolbar.props('cleanupAnalyzing')).toBe(false);
-    expect(toolbar.props('aiTagSummary')).toEqual({});
+    // P-040 已把这三个 prop 从工具栏删掉：既不再声明，页面也不再以任何写法传入。
+    const attrs = Object.keys(toolbar.vm.$attrs);
+    for (const [camel, kebab] of [['cleanupBadgeCount', 'cleanup-badge-count'], ['cleanupAnalyzing', 'cleanup-analyzing'], ['aiTagSummary', 'ai-tag-summary']]) {
+      expect(Object.keys(toolbar.props())).not.toContain(camel);
+      expect(attrs).not.toContain(camel);
+      expect(attrs).not.toContain(kebab);
+    }
     expect(api.GetAITaggingStatusSummary).not.toHaveBeenCalled();
     expect(toolbar.vm.$attrs.onDeleteTag).toBeUndefined();
     const panel = wrapper.findComponent({ name: 'CleanupReviewPanel' });

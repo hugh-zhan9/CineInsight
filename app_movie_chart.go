@@ -149,16 +149,6 @@ func (a *App) ListMovieVideoLinks(doubanID string) ([]services.LinkedVideoView, 
 	return service.ListMovieVideoLinks(doubanID)
 }
 
-// SuggestLibraryMatches 给出「片库中可能已有」的建议（最多 5 条，只读、不出网）。
-// year 为 0 表示年份未知。片单条目与观影记录卡片共用这一个入口。
-func (a *App) SuggestLibraryMatches(title string, year int) ([]services.LibraryMatchSuggestion, error) {
-	service := a.movieChartService()
-	if service == nil {
-		return nil, errors.New("年度榜单服务不可用")
-	}
-	return service.SuggestLibraryMatches(title, year)
-}
-
 // SuggestLibraryMatchesBatch 一次扫描匹配多个查询，返回 "片名|年份" → 建议列表
 // （键与 services.LibraryMatchKey 一致，每个查询都有键）。榜单一页几十张卡片用它，
 // 不要逐条调单条接口。

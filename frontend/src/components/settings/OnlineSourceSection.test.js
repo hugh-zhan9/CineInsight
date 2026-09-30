@@ -178,9 +178,6 @@ describe('设置页保存载荷带上在线资料源五项', () => {
   });
 
   async function mountSettingsPage(settings = baseSettings()) {
-    api.GetAITagLibrary.mockResolvedValue([]);
-    api.SaveAITagLibrary.mockResolvedValue([]);
-    api.ClearAITagLibrary.mockResolvedValue([]);
     api.UpdateSettings.mockResolvedValue();
     api.TriggerAITagging.mockResolvedValue(false);
     api.GetLibraryWatcherStatus.mockResolvedValue({ running: false, roots: [] });

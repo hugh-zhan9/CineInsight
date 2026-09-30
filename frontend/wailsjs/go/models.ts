@@ -375,46 +375,6 @@ export namespace models {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
-	export class ImageTrashEntry {
-	    deleted_by: string;
-	    id: number;
-	    image_id: number;
-	    image_name: string;
-	    original_path: string;
-	    trash_path: string;
-	    file_moved: boolean;
-	    file_size: number;
-	    file_mod_time: number;
-	    state: string;
-	    mode: string;
-	    delete_batch_id: string;
-	    last_error: string;
-	    created_at: string;
-	    updated_at: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new ImageTrashEntry(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.deleted_by = source["deleted_by"];
-	        this.id = source["id"];
-	        this.image_id = source["image_id"];
-	        this.image_name = source["image_name"];
-	        this.original_path = source["original_path"];
-	        this.trash_path = source["trash_path"];
-	        this.file_moved = source["file_moved"];
-	        this.file_size = source["file_size"];
-	        this.file_mod_time = source["file_mod_time"];
-	        this.state = source["state"];
-	        this.mode = source["mode"];
-	        this.delete_batch_id = source["delete_batch_id"];
-	        this.last_error = source["last_error"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	    }
-	}
 	export class MediaCollection {
 	    id: number;
 	    name: string;
@@ -938,46 +898,6 @@ export namespace models {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
-	export class VideoTrashEntry {
-	    deleted_by: string;
-	    id: number;
-	    video_id: number;
-	    video_name: string;
-	    original_path: string;
-	    trash_path: string;
-	    file_moved: boolean;
-	    file_size: number;
-	    file_mod_time: number;
-	    state: string;
-	    mode: string;
-	    delete_batch_id: string;
-	    last_error: string;
-	    created_at: string;
-	    updated_at: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new VideoTrashEntry(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.deleted_by = source["deleted_by"];
-	        this.id = source["id"];
-	        this.video_id = source["video_id"];
-	        this.video_name = source["video_name"];
-	        this.original_path = source["original_path"];
-	        this.trash_path = source["trash_path"];
-	        this.file_moved = source["file_moved"];
-	        this.file_size = source["file_size"];
-	        this.file_mod_time = source["file_mod_time"];
-	        this.state = source["state"];
-	        this.mode = source["mode"];
-	        this.delete_batch_id = source["delete_batch_id"];
-	        this.last_error = source["last_error"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	    }
-	}
 	export class WatchlistEntry {
 	    id: number;
 	    title: string;
@@ -1420,28 +1340,6 @@ export namespace services {
 		    }
 		    return a;
 		}
-	}
-	export class AITagLibraryInput {
-	    id: number;
-	    namespace: string;
-	    name: string;
-	    color: string;
-	    review_required: boolean;
-	    is_active: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new AITagLibraryInput(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.namespace = source["namespace"];
-	        this.name = source["name"];
-	        this.color = source["color"];
-	        this.review_required = source["review_required"];
-	        this.is_active = source["is_active"];
-	    }
 	}
 	export class AITaggingConnectionTestInput {
 	    base_url: string;
@@ -3450,59 +3348,6 @@ export namespace services {
 		    return a;
 		}
 	}
-	export class IINAProgressUpdate {
-	    video_id: number;
-	    watch_position_seconds: number;
-	    watched: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new IINAProgressUpdate(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.video_id = source["video_id"];
-	        this.watch_position_seconds = source["watch_position_seconds"];
-	        this.watched = source["watched"];
-	    }
-	}
-	export class IINAProgressSyncResult {
-	    scanned: number;
-	    updated: number;
-	    skipped: number;
-	    changes: IINAProgressUpdate[];
-	
-	    static createFrom(source: any = {}) {
-	        return new IINAProgressSyncResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.scanned = source["scanned"];
-	        this.updated = source["updated"];
-	        this.skipped = source["skipped"];
-	        this.changes = this.convertValues(source["changes"], IINAProgressUpdate);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	
 	export class IINASyncStatus {
 	    enabled: boolean;
 	    watching_dir: string;
@@ -5041,24 +4886,6 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.title = source["title"];
 	        this.year = source["year"];
-	    }
-	}
-	export class LibraryMatchSuggestion {
-	    video_id: number;
-	    name: string;
-	    display_title: string;
-	    score: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new LibraryMatchSuggestion(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.video_id = source["video_id"];
-	        this.name = source["name"];
-	        this.display_title = source["display_title"];
-	        this.score = source["score"];
 	    }
 	}
 	export class SkipBreakdown {
@@ -6992,20 +6819,6 @@ export namespace services {
 		    return a;
 		}
 	}
-	export class ScannedFile {
-	    path: string;
-	    size: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new ScannedFile(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.path = source["path"];
-	        this.size = source["size"];
-	    }
-	}
 	
 	export class SemanticIndexBuildRequest {
 	    rebuild: boolean;
@@ -7584,44 +7397,6 @@ export namespace services {
 	        this.job_ids = source["job_ids"];
 	    }
 	}
-	export class SubtitleJobItem {
-	    id: number;
-	    video_id: number;
-	    video_name: string;
-	    engine: string;
-	    source_lang: string;
-	    status: string;
-	    message: string;
-	    error_code?: string;
-	    pending_retained: boolean;
-	    force_generate: boolean;
-	    created_at: string;
-	    started_at?: string;
-	    finished_at?: string;
-	    actions: string[];
-	
-	    static createFrom(source: any = {}) {
-	        return new SubtitleJobItem(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.video_id = source["video_id"];
-	        this.video_name = source["video_name"];
-	        this.engine = source["engine"];
-	        this.source_lang = source["source_lang"];
-	        this.status = source["status"];
-	        this.message = source["message"];
-	        this.error_code = source["error_code"];
-	        this.pending_retained = source["pending_retained"];
-	        this.force_generate = source["force_generate"];
-	        this.created_at = source["created_at"];
-	        this.started_at = source["started_at"];
-	        this.finished_at = source["finished_at"];
-	        this.actions = source["actions"];
-	    }
-	}
 	export class SubtitleJobResolveResult {
 	    job_id: number;
 	    action: string;
@@ -7934,38 +7709,6 @@ export namespace services {
 		    return a;
 		}
 	}
-	export class SubtitleSearchMatch {
-	    video: models.Video;
-	    segment: subtitleparser.Segment;
-	
-	    static createFrom(source: any = {}) {
-	        return new SubtitleSearchMatch(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.video = this.convertValues(source["video"], models.Video);
-	        this.segment = this.convertValues(source["segment"], subtitleparser.Segment);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
 	export class SubtitleTranslateRequest {
 	    video_id: number;
 	    source_lang: string;
@@ -8014,38 +7757,6 @@ export namespace services {
 	        this.message = source["message"];
 	        this.detected_encoding = source["detected_encoding"];
 	        this.candidates = this.convertValues(source["candidates"], subtitleparser.EncodingCandidate);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class SubtitleValidationResult {
-	    valid: boolean;
-	    issues: subtitleparser.EditorValidationIssue[];
-	
-	    static createFrom(source: any = {}) {
-	        return new SubtitleValidationResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.valid = source["valid"];
-	        this.issues = this.convertValues(source["issues"], subtitleparser.EditorValidationIssue);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -8490,24 +8201,6 @@ export namespace services {
 		    }
 		    return a;
 		}
-	}
-	export class VideoArtworkData {
-	    video_id: number;
-	    kind: string;
-	    mime: string;
-	    data_url: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new VideoArtworkData(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.video_id = source["video_id"];
-	        this.kind = source["kind"];
-	        this.mime = source["mime"];
-	        this.data_url = source["data_url"];
-	    }
 	}
 	export class VideoArtworkStatus {
 	    has_poster: boolean;

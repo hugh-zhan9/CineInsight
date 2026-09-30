@@ -338,12 +338,12 @@ func TestAITaggingReviewAPIsApproveCandidate(t *testing.T) {
 	}
 
 	app := NewApp()
-	candidates, err := app.ListAITagCandidates(0, "", "pending")
+	page, err := app.ListAITagCandidatePage(0, "", "pending", 0, 0)
 	if err != nil {
 		t.Fatalf("列出候选失败: %v", err)
 	}
-	if len(candidates) != 1 || candidates[0].ID != candidate.ID {
-		t.Fatalf("候选列表错误: %#v", candidates)
+	if len(page.Items) != 1 || page.Items[0].ID != candidate.ID {
+		t.Fatalf("候选列表错误: %#v", page.Items)
 	}
 	if _, err := app.ApproveAITagCandidate(candidate.ID); err != nil {
 		t.Fatalf("审批候选失败: %v", err)
@@ -720,24 +720,18 @@ func TestSubtitleAPIContractsCompile(t *testing.T) {
 func TestBatchVideoAPIContractsCompile(t *testing.T) {
 	app := NewApp()
 
-	var batchDelete func([]uint, bool) *services.BatchVideoOperationResult = app.BatchDeleteVideos
-	_ = batchDelete
-
 	var batchAddTag func([]uint, uint) *services.BatchVideoOperationResult = app.BatchAddTagToVideos
 	_ = batchAddTag
 
 	var batchRemoveTag func([]uint, uint) *services.BatchVideoOperationResult = app.BatchRemoveTagFromVideos
 	_ = batchRemoveTag
-
-	var batchRefreshMetadata func([]uint) *services.BatchVideoOperationResult = app.BatchRefreshVideoMetadata
-	_ = batchRefreshMetadata
 }
 
 func TestTrashRestoreAPIContracts(t *testing.T) {
 	app := NewApp()
 	type trashRestoreAPI interface {
-		ListTrashEntries() ([]models.VideoTrashEntry, error)
-		RestoreTrashEntry(uint) (*models.Video, error)
+		ListTrashEntries(services.TrashFilter) (*services.TrashPage, error)
+		RestoreTrashEntries(string, []uint) (*services.BatchResult, error)
 	}
 	if _, ok := any(app).(trashRestoreAPI); !ok {
 		t.Fatalf("App 应暴露回收站列表与恢复 API")

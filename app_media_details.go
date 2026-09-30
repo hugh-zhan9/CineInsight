@@ -24,18 +24,6 @@ func (a *App) RefreshVideoTechnicalMetadata(videoID uint) (*services.VideoDetail
 	return a.videoDetailService.GetVideoDetails(videoID)
 }
 
-func (a *App) GetLocalMetadataDiff(videoID uint) (*services.LocalMetadataDiff, error) {
-	return a.localMetadata.GetDiff(videoID)
-}
-
-func (a *App) ApplyLocalMetadata(request services.LocalMetadataApplyRequest) (*services.LocalMetadataApplyResult, error) {
-	result, err := a.localMetadata.Apply(request)
-	if err == nil && a.cleanupService != nil {
-		a.cleanupService.InvalidateAnalysis()
-	}
-	return result, err
-}
-
 func (a *App) PreviewLocalMetadataBatch(videoIDs []uint) services.LocalMetadataBatchPreview {
 	return a.localMetadata.PreviewBatch(videoIDs)
 }
@@ -54,10 +42,6 @@ func (a *App) ExportLocalMetadataNFO(videoID uint) (*services.LocalMetadataNFOEx
 		ctx = context.Background()
 	}
 	return a.localMetadata.ExportVideoNFO(ctx, videoID)
-}
-
-func (a *App) ResolveVideoArtwork(videoID uint, kind string) (*services.VideoArtworkData, error) {
-	return a.localMetadata.ResolveVideoArtwork(videoID, kind)
 }
 
 // ListPeople returns stable local person candidates and their active video and image counts.
@@ -102,10 +86,6 @@ func (a *App) AddPersonImages(personID uint, imageIDs []uint) error {
 // 图片的最后一条关系，人物已被连带清理。
 func (a *App) RemovePersonImage(personID, imageID uint) (bool, error) {
 	return a.personService.RemovePersonImage(personID, imageID)
-}
-
-func (a *App) SetImagePeople(imageID uint, personIDs []uint) error {
-	return a.personService.SetImagePeople(imageID, personIDs)
 }
 
 func (a *App) SelectPersonAvatar() (string, error) {
@@ -215,13 +195,6 @@ func (a *App) CreateTagWithCategory(name, color, category string) (*models.Tag, 
 	return tag, err
 }
 
-// UpdateTag 更新标签
-func (a *App) UpdateTag(id uint, name, color string) error {
-	err := a.tagService.UpdateTag(id, name, color)
-	log.Printf("API UpdateTag id=%d name=%s color=%s err=%v", id, name, color, err)
-	return err
-}
-
 func (a *App) UpdateTagWithCategory(id uint, name, color, category string) error {
 	err := a.tagService.UpdateTagWithCategory(id, name, color, category)
 	log.Printf("API UpdateTagWithCategory id=%d name=%s category=%s err=%v", id, name, category, err)
@@ -286,9 +259,7 @@ func (a *App) DeletePerson(personID uint) error {
 // ===== 标签转人物撤销、用量、自动标签覆盖（P-017，D-PC34/36/37） =====
 
 func (a *App) UndoTagPersonConversion(conversionID uint) (*services.TagPersonConversionUndoResult, error) {
-	// 撤销可能删掉新建人物及其头像文件；TagService 不持有托管图片目录。正式注入在
-	// 构造/启动时做一次（P-029 接线项）；此前用「未注入才注入」兜底，避免每次调用都写字段。
-	a.tagService.SetAvatarRemoverIfUnset(a.personService.RemoveManagedAvatar)
+	// 撤销可能删掉新建人物及其头像文件；删头像的能力由 wireServiceHooks 在构造时注入。
 	result, err := a.tagService.UndoTagPersonConversion(conversionID)
 	if err == nil && a.cleanupService != nil {
 		a.cleanupService.InvalidateAnalysis()

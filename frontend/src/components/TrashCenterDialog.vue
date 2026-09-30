@@ -225,7 +225,7 @@
 
 <script>
 import {
-  DeleteStagedSources, ForceRemoveTrashRecords, GetTrashUsage, ListHiddenImages, ListStagedSources, ListTrashEntriesPage,
+  DeleteStagedSources, ForceRemoveTrashRecords, GetTrashUsage, ListHiddenImages, ListStagedSources, ListTrashEntries,
   PurgeTrashEntries, RecheckImages, RemoveGoneTrashEntries, RestoreTrashEntries, TrashStagedSources
 } from '../../wailsjs/go/main/App';
 import { formatBytes } from '../utils/mediaDetails.js';
@@ -476,7 +476,7 @@ export default {
       state.error = '';
       const filter = this.filters[kind];
       try {
-        const page = await ListTrashEntriesPage({
+        const page = await ListTrashEntries({
           kind,
           mode: filter.mode,
           deleted_by: filter.deletedBy,

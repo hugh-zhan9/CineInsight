@@ -97,16 +97,6 @@ func (s *VideoService) GetVideosPaginated(cursorScore float64, cursorSize int64,
 	return videos, err
 }
 
-// SearchVideos 搜索视频（按名称）- 支持分页（按概率优先排序）
-func (s *VideoService) SearchVideos(keyword string, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	return s.SearchVideosWithFilters(keyword, nil, 0, 0, 0, 0, cursorScore, cursorSize, cursorID, limit)
-}
-
-// SearchVideosByTags 按标签搜索（多选 AND）- 支持分页（按概率优先排序）
-func (s *VideoService) SearchVideosByTags(tagIDs []uint, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
-	return s.SearchVideosWithFilters("", tagIDs, 0, 0, 0, 0, cursorScore, cursorSize, cursorID, limit)
-}
-
 // SearchVideosWithFilters 组合搜索（关键词 + 标签 + 体积 + 分辨率 AND）- 支持分页（按概率优先排序）
 func (s *VideoService) SearchVideosWithFilters(keyword string, tagIDs []uint, minSize, maxSize int64, minHeight, maxHeight int, cursorScore float64, cursorSize int64, cursorID uint, limit int) ([]models.Video, error) {
 	var videos []models.Video

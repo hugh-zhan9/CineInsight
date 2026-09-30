@@ -1591,14 +1591,6 @@ func (s *VideoService) BatchRemoveTagFromVideos(videoIDs []uint, tagID uint) *Ba
 	return result
 }
 
-func (s *VideoService) BatchRefreshVideoMetadata(videoIDs []uint) *BatchVideoOperationResult {
-	result := newBatchVideoOperationResult(videoIDs)
-	for _, videoID := range videoIDs {
-		result.record(videoID, s.RefreshVideoMetadata(videoID))
-	}
-	return result
-}
-
 // AddTagToVideo 为视频添加标签
 func (s *VideoService) AddTagToVideo(videoID uint, tagID uint) error {
 	var video models.Video

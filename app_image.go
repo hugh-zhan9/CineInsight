@@ -327,49 +327,7 @@ func (a *App) BatchAddTagToImages(imageIDs []uint, tagID uint) *services.BatchIm
 	return result
 }
 
-// BatchRemoveTagFromImages 批量移除图片标签
-func (a *App) BatchRemoveTagFromImages(imageIDs []uint, tagID uint) *services.BatchImageOperationResult {
-	result := a.imageLibraryService.BatchRemoveTagFromImages(imageIDs, tagID)
-	log.Printf("API BatchRemoveTagFromImages requested=%d succeeded=%d failed=%d tagID=%d", result.Requested, result.Succeeded, result.Failed, tagID)
-	return result
-}
-
 // ===== Image Trash Methods =====
-
-// DeleteImage 删除图片（deleteFile=false 仅软删记录，不建回收站条目）。
-func (a *App) DeleteImage(id uint, deleteFile bool) error {
-	err := a.imageService.DeleteImage(id, deleteFile)
-	log.Printf("API DeleteImage id=%d deleteFile=%v err=%v", id, deleteFile, err)
-	if err == nil && a.imageCleanupService != nil {
-		a.imageCleanupService.InvalidateAnalysis()
-	}
-	return err
-}
-
-// BatchDeleteImages 批量删除图片
-func (a *App) BatchDeleteImages(imageIDs []uint, deleteFile bool) *services.BatchImageOperationResult {
-	result := a.imageService.BatchDeleteImages(imageIDs, deleteFile)
-	log.Printf("API BatchDeleteImages requested=%d succeeded=%d failed=%d deleteFile=%v", result.Requested, result.Succeeded, result.Failed, deleteFile)
-	if result.Succeeded > 0 && a.imageCleanupService != nil {
-		a.imageCleanupService.InvalidateAnalysis()
-	}
-	return result
-}
-
-// BatchDeleteImagesInDirectory 删除某个文件夹下的全部图片（移入回收站，可恢复）。
-func (a *App) BatchDeleteImagesInDirectory(directory string, deleteFile bool) (*services.BatchImageOperationResult, error) {
-	result, err := a.imageService.BatchDeleteImagesInDirectory(directory, deleteFile)
-	if err != nil {
-		log.Printf("API BatchDeleteImagesInDirectory directory=%s err=%v", directory, err)
-		return nil, err
-	}
-	log.Printf("API BatchDeleteImagesInDirectory directory=%s requested=%d succeeded=%d failed=%d deleteFile=%v",
-		directory, result.Requested, result.Succeeded, result.Failed, deleteFile)
-	if result.Succeeded > 0 && a.imageCleanupService != nil {
-		a.imageCleanupService.InvalidateAnalysis()
-	}
-	return result, nil
-}
 
 // DeleteImagesWithResult 是带单项结果码与 batch_id 的批量删除。requestID 可选：非空时逐项发
 // batch-delete-progress 事件，并可被 CancelBatchDelete 取消。deleteFile=false 只删记录并建 record_only 条目。
@@ -444,23 +402,6 @@ func (a *App) RevealImage(imageID uint) error {
 	err := a.imageService.RevealImage(imageID)
 	log.Printf("API RevealImage image_id=%d err=%v", imageID, err)
 	return err
-}
-
-// ListImageTrashEntries 返回当前可恢复的图片删除记录。
-func (a *App) ListImageTrashEntries() ([]models.ImageTrashEntry, error) {
-	entries, err := a.imageService.ListImageTrashEntries()
-	log.Printf("API ListImageTrashEntries result=%d err=%v", len(entries), err)
-	return entries, err
-}
-
-// RestoreImageTrashEntry 将一张图片恢复到删除前的路径。
-func (a *App) RestoreImageTrashEntry(entryID uint) (*models.Image, error) {
-	image, err := a.imageService.RestoreImageTrashEntry(entryID)
-	log.Printf("API RestoreImageTrashEntry entryID=%d err=%v", entryID, err)
-	if err == nil && image != nil && a.imageCleanupService != nil {
-		a.imageCleanupService.InvalidateAnalysis()
-	}
-	return image, err
 }
 
 // ===== Image Semantic Methods =====
@@ -642,17 +583,6 @@ func (a *App) GetImageAITaggingSummary() (*services.ImageAITaggingSummary, error
 		return nil, fmt.Errorf("数据库未初始化")
 	}
 	return svc.GetImageAITaggingSummary()
-}
-
-// RetagImage 对单张图片同步重跑 AI 打标，返回该图当前的待审候选
-func (a *App) RetagImage(imageID uint) ([]models.ImageAITagCandidate, error) {
-	svc := a.imageAITaggingService()
-	if svc == nil {
-		return nil, fmt.Errorf("数据库未初始化")
-	}
-	candidates, err := svc.RetagImage(imageID)
-	log.Printf("API RetagImage image=%d err=%v", imageID, err)
-	return candidates, err
 }
 
 // ===== Image EXIF Backfill Methods =====

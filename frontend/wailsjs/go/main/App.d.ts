@@ -25,10 +25,6 @@ export function AddTagToImage(arg1:number,arg2:number):Promise<void>;
 
 export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
-export function AddVideo(arg1:string):Promise<models.Video>;
-
-export function ApplyLocalMetadata(arg1:services.LocalMetadataApplyRequest):Promise<services.LocalMetadataApplyResult>;
-
 export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyRequest):Promise<services.LocalMetadataBatchResult>;
 
 export function ApplyWatchlistCandidate(arg1:number,arg2:string):Promise<void>;
@@ -49,17 +45,7 @@ export function BatchCreatePlaybackProxies(arg1:Array<number>):Promise<services.
 
 export function BatchCreatePlaybackProxiesForFilter(arg1:services.LibraryFilter):Promise<services.PlaybackProxyStatus>;
 
-export function BatchDeleteImages(arg1:Array<number>,arg2:boolean):Promise<services.BatchImageOperationResult>;
-
-export function BatchDeleteImagesInDirectory(arg1:string,arg2:boolean):Promise<services.BatchImageOperationResult>;
-
-export function BatchDeleteVideos(arg1:Array<number>,arg2:boolean):Promise<services.BatchVideoOperationResult>;
-
 export function BatchMoveVideos(arg1:Array<number>,arg2:string):Promise<services.BatchVideoOperationResult>;
-
-export function BatchRefreshVideoMetadata(arg1:Array<number>):Promise<services.BatchVideoOperationResult>;
-
-export function BatchRemoveTagFromImages(arg1:Array<number>,arg2:number):Promise<services.BatchImageOperationResult>;
 
 export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
 
@@ -114,10 +100,6 @@ export function CancelSubtitleTranslation(arg1:number):Promise<void>;
 export function CancelTechnicalBackfill():Promise<void>;
 
 export function CheckMoveTarget(arg1:string):Promise<services.MoveTargetCheck>;
-
-export function CheckSubtitleDependencies():Promise<Record<string, boolean>>;
-
-export function ClearAITagLibrary():Promise<Array<models.Tag>>;
 
 export function ClearFaceData():Promise<services.FaceDataUsage>;
 
@@ -177,8 +159,6 @@ export function DeleteDirectory(arg1:number):Promise<void>;
 
 export function DeleteGlossaryEntry(arg1:number):Promise<void>;
 
-export function DeleteImage(arg1:number,arg2:boolean):Promise<void>;
-
 export function DeleteImageDirectory(arg1:number):Promise<void>;
 
 export function DeleteImagesInDirectoryWithResult(arg1:string,arg2:boolean,arg3:string):Promise<services.BatchResult>;
@@ -196,8 +176,6 @@ export function DeleteStagedSources(arg1:Array<number>):Promise<services.StagedS
 export function DeleteTag(arg1:number):Promise<void>;
 
 export function DeleteTagCategory(arg1:string):Promise<void>;
-
-export function DeleteVideo(arg1:number,arg2:boolean):Promise<void>;
 
 export function DeleteVideosWithResult(arg1:Array<number>,arg2:boolean,arg3:string):Promise<services.BatchResult>;
 
@@ -225,8 +203,6 @@ export function DismissNearDuplicateGroup(arg1:Array<number>):Promise<void>;
 
 export function DismissNearDuplicateMember(arg1:Array<number>,arg2:number):Promise<void>;
 
-export function DownloadSubtitleDependencies():Promise<void>;
-
 export function EnforcePlaybackProxyLimit():Promise<services.PlaybackProxyUsage>;
 
 export function ExportLocalMetadataNFO(arg1:number):Promise<services.LocalMetadataNFOExportResult>;
@@ -245,8 +221,6 @@ export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<
 
 export function GetAIQualityReport(arg1:services.AIQualityFilter):Promise<services.AIQualityReport>;
 
-export function GetAITagLibrary():Promise<Array<models.Tag>>;
-
 export function GetAITaggingStatusSummary():Promise<services.AITaggingStatusSummary>;
 
 export function GetAllDirectories():Promise<Array<models.ScanDirectory>>;
@@ -255,8 +229,6 @@ export function GetAllImageDirectories():Promise<Array<models.ImageDirectory>>;
 
 export function GetAllTags():Promise<Array<models.Tag>>;
 
-export function GetAllVideos():Promise<Array<models.Video>>;
-
 export function GetAutomaticOverrideKinds(arg1:Array<number>):Promise<Record<number, Array<string>>>;
 
 export function GetBackgroundTasks():Promise<Array<string>>;
@@ -264,8 +236,6 @@ export function GetBackgroundTasks():Promise<Array<string>>;
 export function GetBackupStatus():Promise<services.BackupStatus>;
 
 export function GetBrowserBridgeStatus():Promise<services.BrowserBridgeStatus>;
-
-export function GetCleanupCandidates(arg1:number,arg2:number,arg3:number):Promise<services.CleanupAnalysis>;
 
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
@@ -292,8 +262,6 @@ export function GetFaceDataUsage():Promise<services.FaceDataUsage>;
 export function GetFaceRuntimeStatus():Promise<services.FaceRuntimeStatus>;
 
 export function GetFrameHashBackfillStatus():Promise<services.FrameHashStatus>;
-
-export function GetIINAProgressAvailable():Promise<boolean>;
 
 export function GetIINASyncStatus():Promise<services.IINASyncStatus>;
 
@@ -332,8 +300,6 @@ export function GetLibrarySubtitleHits(arg1:string,arg2:Array<number>):Promise<A
 export function GetLibraryWatcherStatus():Promise<services.LibraryWatcherStatus>;
 
 export function GetLocalMetadataBackfillStatus():Promise<services.LocalMetadataBackfillStatus>;
-
-export function GetLocalMetadataDiff(arg1:number):Promise<services.LocalMetadataDiff>;
 
 export function GetLocalMetadataExportStatus():Promise<services.LocalMetadataExportStatus>;
 
@@ -391,11 +357,7 @@ export function GetVideoAutomaticTagOverrides(arg1:number):Promise<Array<models.
 
 export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
 
-export function GetVideosByDirectory(arg1:string):Promise<Array<models.Video>>;
-
 export function GetVideosByIDs(arg1:Array<number>):Promise<Array<models.Video>>;
-
-export function GetVideosPaginated(arg1:number,arg2:number,arg3:number,arg4:number):Promise<Array<models.Video>>;
 
 export function IgnoreFaceCluster(arg1:number):Promise<void>;
 
@@ -404,10 +366,6 @@ export function LinkFaceCluster(arg1:number,arg2:number):Promise<services.FaceCl
 export function LinkMovieToVideo(arg1:string,arg2:number):Promise<void>;
 
 export function ListAITagCandidatePage(arg1:number,arg2:string,arg3:string,arg4:number,arg5:number):Promise<services.AITagCandidatePage>;
-
-export function ListAITagCandidates(arg1:number,arg2:string,arg3:string):Promise<Array<services.AITaggingReviewItem>>;
-
-export function ListBrowserDownloadTasks():Promise<Array<services.BrowserDownloadTask>>;
 
 export function ListCleanupDismissals(arg1:string,arg2:number,arg3:number):Promise<services.CleanupDismissalPage>;
 
@@ -425,8 +383,6 @@ export function ListEnhancementTasks(arg1:number):Promise<Array<services.Enhance
 
 export function ListFaceClusterPage(arg1:services.FaceClusterFilter,arg2:services.FaceClusterCursorKey,arg3:number):Promise<services.FaceClusterPage>;
 
-export function ListFaceClusters(arg1:services.FaceClusterFilter):Promise<Array<services.FaceClusterView>>;
-
 export function ListGlossaryEntries(arg1:number):Promise<Array<models.TranslationGlossaryEntry>>;
 
 export function ListHiddenImages(arg1:number,arg2:number):Promise<services.HiddenImagePage>;
@@ -441,8 +397,6 @@ export function ListImageFolderGroups(arg1:services.ImageFilter):Promise<Array<s
 
 export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
 
-export function ListImageTrashEntries():Promise<Array<models.ImageTrashEntry>>;
-
 export function ListMovieChart(arg1:number,arg2:string,arg3:number,arg4:boolean):Promise<services.MovieChartPage>;
 
 export function ListMovieChartYears():Promise<Array<number>>;
@@ -450,8 +404,6 @@ export function ListMovieChartYears():Promise<Array<number>>;
 export function ListMovieVideoLinks(arg1:string):Promise<Array<services.LinkedVideoView>>;
 
 export function ListPeople(arg1:string,arg2:string,arg3:number,arg4:number):Promise<Array<services.PersonListItem>>;
-
-export function ListRecentlyPlayed(arg1:number):Promise<Array<models.Video>>;
 
 export function ListRecentlyPlayedWithFilter(arg1:services.LibraryFilter,arg2:string,arg3:number,arg4:number):Promise<Array<models.Video>>;
 
@@ -465,13 +417,9 @@ export function ListStaleReasonCounts():Promise<Record<string, number>>;
 
 export function ListSubtitleBackups(arg1:number):Promise<Array<services.SubtitleBackup>>;
 
-export function ListSubtitleJobs(arg1:number):Promise<Array<services.SubtitleJobItem>>;
-
 export function ListTagPersonConversions(arg1:number):Promise<Array<services.TagPersonConversionRecord>>;
 
-export function ListTrashEntries():Promise<Array<models.VideoTrashEntry>>;
-
-export function ListTrashEntriesPage(arg1:services.TrashFilter):Promise<services.TrashPage>;
+export function ListTrashEntries(arg1:services.TrashFilter):Promise<services.TrashPage>;
 
 export function ListWatchedMovies():Promise<Array<services.WatchedMovieYearGroup>>;
 
@@ -509,8 +457,6 @@ export function PermanentlyDeleteVideos(arg1:Array<number>):Promise<services.Bat
 
 export function PickRandomVideos(arg1:services.RandomPlayRequest,arg2:number):Promise<services.RandomPickResult>;
 
-export function PlayRandomVideo():Promise<services.PlaybackAttemptResult>;
-
 export function PlayRandomVideoWithFilter(arg1:services.RandomPlayRequest):Promise<services.PlaybackAttemptResult>;
 
 export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
@@ -542,8 +488,6 @@ export function RecheckVideos(arg1:Array<number>):Promise<services.LibraryReconc
 export function RecordViewEvent(arg1:number,arg2:string,arg3:string):Promise<boolean>;
 
 export function RefreshMovieChart(arg1:number):Promise<void>;
-
-export function RefreshVideoMetadata(arg1:number):Promise<void>;
 
 export function RefreshVideoTechnicalMetadata(arg1:number):Promise<services.VideoDetails>;
 
@@ -597,23 +541,15 @@ export function RerollRandom(arg1:string):Promise<services.PlaybackAttemptResult
 
 export function ResolveSubtitleJob(arg1:number,arg2:string):Promise<services.SubtitleJobResolveResult>;
 
-export function ResolveVideoArtwork(arg1:number,arg2:string):Promise<services.VideoArtworkData>;
-
 export function RestoreDatabaseBackup(arg1:services.BackupRestoreRequest):Promise<void>;
 
 export function RestoreFaceCluster(arg1:number):Promise<void>;
-
-export function RestoreImageTrashEntry(arg1:number):Promise<models.Image>;
 
 export function RestoreSubtitleBackup(arg1:number,arg2:string):Promise<services.SubtitleRestoreResult>;
 
 export function RestoreTrashBatch(arg1:string,arg2:string):Promise<services.BatchResult>;
 
 export function RestoreTrashEntries(arg1:string,arg2:Array<number>):Promise<services.BatchResult>;
-
-export function RestoreTrashEntry(arg1:number):Promise<models.Video>;
-
-export function RetagImage(arg1:number):Promise<Array<models.ImageAITagCandidate>>;
 
 export function RetranslateSubtitleEntries(arg1:services.SubtitleRetranslateRequest):Promise<services.SubtitleRetranslateResult>;
 
@@ -637,17 +573,9 @@ export function RevealImage(arg1:number):Promise<void>;
 
 export function RunGatedTaskNow(arg1:string):Promise<void>;
 
-export function SaveAITagLibrary(arg1:Array<services.AITagLibraryInput>):Promise<Array<models.Tag>>;
-
 export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<models.SavedLibraryView>;
 
 export function SaveSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleSaveResult>;
-
-export function ScanDirectory(arg1:string):Promise<Array<string>>;
-
-export function ScanDirectoryWithInfo(arg1:string):Promise<Array<services.ScannedFile>>;
-
-export function ScanDirectoryWithProgress(arg1:string,arg2:string):Promise<Array<string>>;
 
 export function SearchImagePage(arg1:services.ImagePageRequest):Promise<services.ImagePage>;
 
@@ -655,19 +583,7 @@ export function SearchImagesSemantic(arg1:services.ImageSemanticSearchRequest):P
 
 export function SearchLibraryVideoPage(arg1:services.LibraryVideoPageRequest):Promise<services.LibraryVideoPage>;
 
-export function SearchLibraryVideos(arg1:services.LibraryFilter,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
-
 export function SearchSemanticVideos(arg1:services.SemanticSearchRequest):Promise<services.SemanticSearchPage>;
-
-export function SearchSubtitleMatches(arg1:string,arg2:number):Promise<Array<services.SubtitleSearchMatch>>;
-
-export function SearchSubtitleMatchesWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number):Promise<Array<services.SubtitleSearchMatch>>;
-
-export function SearchVideos(arg1:string,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
-
-export function SearchVideosByTags(arg1:Array<number>,arg2:number,arg3:number,arg4:number,arg5:number):Promise<Array<models.Video>>;
-
-export function SearchVideosWithFilters(arg1:string,arg2:Array<number>,arg3:number,arg4:number,arg5:number,arg6:number,arg7:number,arg8:number,arg9:number,arg10:number):Promise<Array<models.Video>>;
 
 export function SelectBrowserDownloadDirectory():Promise<string>;
 
@@ -689,8 +605,6 @@ export function SetCollectionCover(arg1:number,arg2:string):Promise<models.Media
 
 export function SetImageFavorite(arg1:number,arg2:boolean):Promise<models.Image>;
 
-export function SetImagePeople(arg1:number,arg2:Array<number>):Promise<void>;
-
 export function SetImageRating(arg1:number,arg2:any):Promise<models.Image>;
 
 export function SetPersonAvatar(arg1:number,arg2:string):Promise<models.Person>;
@@ -706,8 +620,6 @@ export function SetVideoLiked(arg1:number,arg2:boolean):Promise<models.Video>;
 export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
 
 export function SetWindowForeground(arg1:boolean):Promise<void>;
-
-export function StartCleanupAnalysis(arg1:number,arg2:number,arg3:number):Promise<services.CleanupStatus>;
 
 export function StartCleanupAnalysisFromSettings():Promise<services.CleanupStatus>;
 
@@ -741,15 +653,11 @@ export function StartSemanticIndex(arg1:services.SemanticIndexBuildRequest):Prom
 
 export function StartTechnicalBackfill():Promise<services.TechnicalBackfillStatus>;
 
-export function SuggestLibraryMatches(arg1:string,arg2:number):Promise<Array<services.LibraryMatchSuggestion>>;
-
 export function SuggestLibraryMatchesBatch(arg1:Array<services.LibraryMatchQuery>):Promise<Record<string, Array<services.LibraryMatchSuggestion>>>;
 
 export function SwitchBackendConfigOnly(arg1:string):Promise<services.DatabaseSwitchConfigResult>;
 
 export function SyncDirectoryWithProgress(arg1:string,arg2:string):Promise<services.ScanSyncResult>;
-
-export function SyncIINAProgress():Promise<services.IINAProgressSyncResult>;
 
 export function SyncImageDirectories():Promise<services.ImageScanResult>;
 
@@ -779,8 +687,6 @@ export function UnlockShortFeedLogin():Promise<void>;
 
 export function UpdateCollection(arg1:number,arg2:string,arg3:string):Promise<models.MediaCollection>;
 
-export function UpdateDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
-
 export function UpdateDirectoryWithMode(arg1:number,arg2:string,arg3:string,arg4:string):Promise<services.DirectoryUpdateResult>;
 
 export function UpdateImageDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
@@ -790,8 +696,6 @@ export function UpdatePerson(arg1:number,arg2:string,arg3:string):Promise<models
 export function UpdateSavedLibraryView(arg1:number,arg2:string,arg3:services.LibraryFilter):Promise<models.SavedLibraryView>;
 
 export function UpdateSettings(arg1:models.Settings):Promise<void>;
-
-export function UpdateTag(arg1:number,arg2:string,arg3:string):Promise<void>;
 
 export function UpdateTagWithCategory(arg1:number,arg2:string,arg3:string,arg4:string):Promise<void>;
 
@@ -806,5 +710,3 @@ export function UpdateWatchlistEntry(arg1:number,arg2:string):Promise<void>;
 export function UpsertGlossaryEntry(arg1:models.TranslationGlossaryEntry):Promise<models.TranslationGlossaryEntry>;
 
 export function ValidateScanDirectory(arg1:string):Promise<services.ScanDirectoryValidation>;
-
-export function ValidateSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleValidationResult>;

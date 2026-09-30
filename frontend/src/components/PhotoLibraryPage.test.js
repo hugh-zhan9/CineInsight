@@ -16,17 +16,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => Object.fromEntries([
   'SearchImagePage', 'GetImageDetail', 'SetImageFavorite', 'SetImageRating',
   'AddTagToImage', 'BatchAddTagToImages', 'RemoveTagFromImage', 'GetAllImageDirectories', 'SyncImageDirectories',
-  'DeleteImage', 'ListImageTrashEntries', 'RestoreImageTrashEntry',
   'StartImageCleanupAnalysis', 'GetImageCleanupStatus', 'DismissImageNearDuplicateGroup', 'BatchDeleteImages',
   'GetImageSemanticIndexStatus', 'SearchImagesSemantic',
   'RetagImage', 'ListImageAITagCandidates', 'ApproveImageAITagCandidate', 'RejectImageAITagCandidate',
   'GetImageAITaggingSummary',
   'ListImageFolderGroups', 'ListImageTimelineBuckets', 'GetImageTags', 'OpenImageDirectory', 'RevealImage',
-  'BatchDeleteImagesInDirectory',
   'ListPeople', 'AddPersonImages', 'RemovePersonImage',
   // P-030：带结果码的删除、整批撤销、永久删除、重新分析与回收站中心。
   'DeleteImagesWithResult', 'DeleteImagesInDirectoryWithResult', 'PermanentlyDeleteImages', 'RestoreTrashBatch',
-  'CancelBatchDelete', 'RetryImageAITagging', 'ListTrashEntriesPage', 'GetTrashUsage', 'ListHiddenImages', 'RecheckImages',
+  'CancelBatchDelete', 'RetryImageAITagging', 'ListTrashEntries', 'GetTrashUsage', 'ListHiddenImages', 'RecheckImages',
   'ListStagedSources',
   // P-032：清理审阅的合并元数据、取消分析、移出本组与「已忽略」。
   'MergeMediaMetadata', 'CancelImageCleanupAnalysis', 'DismissImageNearDuplicateMember', 'ListCleanupDismissals', 'UndoCleanupDismissals'
@@ -120,8 +118,6 @@ beforeEach(() => {
   api.GetImageDetail.mockImplementation(id => Promise.resolve({ image: makeImage(Number(id)) }));
   api.SetImageFavorite.mockImplementation((id, favorite) => Promise.resolve({ id, is_favorite: favorite }));
   api.SetImageRating.mockImplementation((id, rating) => Promise.resolve({ id, personal_rating: rating }));
-  api.DeleteImage.mockResolvedValue();
-  api.ListImageTrashEntries.mockResolvedValue([]);
   api.GetImageCleanupStatus.mockResolvedValue(idleCleanupStatus());
   api.StartImageCleanupAnalysis.mockResolvedValue(idleCleanupStatus());
   api.DismissImageNearDuplicateGroup.mockResolvedValue();
@@ -146,7 +142,7 @@ beforeEach(() => {
   api.RestoreTrashBatch.mockResolvedValue({ batch_id: 'batch-1', requested: 0, succeeded: 0, failed: 0, cancelled: 0, items: [] });
   api.RetryImageAITagging.mockResolvedValue([]);
   api.GetTrashUsage.mockResolvedValue(null);
-  api.ListTrashEntriesPage.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
+  api.ListTrashEntries.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
   api.MergeMediaMetadata.mockResolvedValue({ kind: 'image', warnings: [] });
   api.ListCleanupDismissals.mockResolvedValue({ items: [], next_cursor: 0, has_more: false });
   // 删除后是否重新分析改为询问用户；默认答"取消"，让结果留在原地继续审阅。
@@ -1991,7 +1987,7 @@ describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
     await openPhotoManageItem(wrapper, 'trash');
     await flushPromises();
 
-    expect(api.ListTrashEntriesPage).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image', cursor_id: 0 }));
+    expect(api.ListTrashEntries).toHaveBeenCalledWith(expect.objectContaining({ kind: 'image', cursor_id: 0 }));
     expect(wrapper.get('[data-test="trash-tab-image"]').attributes('aria-selected')).toBe('true');
     wrapper.unmount();
   });
