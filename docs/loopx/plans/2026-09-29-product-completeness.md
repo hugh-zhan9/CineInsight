@@ -1508,3 +1508,17 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - Go 全量（SQLite）通过；`npm test` 94 个文件、1393 条用例通过，守卫输出 `353 exports, 353 used`。
   - 主工作区 `GOTOOLCHAIN=go1.24.9 wails build` 两次都成功（`build/bin/析微影策.app`）。二进制里能找到废纸篓（`trashItemAtURL:resultingItemURL:error:`）与二维码（`CIQRCodeGenerator`）的 cgo 符号。
   - 附注：Wails 2.11 每次构建都会执行一遍「Installing frontend dependencies」，`package-lock.json` 没变。
+
+**P-039 交付与整合**（2026-09-30）：文档校正完成，只改文档，共 10 个文件。子代理中途两次因流式连接超时中断，续跑后完成。
+- AI-CONTEXT §1、§3、2.x 按本批语义改写，被推翻的旧裁决注明日期；README / GUIDE：默认 SQLite、备份与恢复、应用名「析微影策」；ALGORITHM 按代码更正加权随机的概率与候选数。
+- `browser-extension/README.md`、`docs/browser-extension.md`：TS 流在浏览器内用 mux.js 转成 mp4。
+- `docs/short-feed-lan.md`：PIN 与会话、有效观看计数、失败与重试、删除进废纸篓。
+- 超分设计文首新增「实现后修订」。
+- 问题清单 88 条、概要设计 61 个决定都写回了实现状态：问题 78 条已实现、10 条部分实现（余项只能真机确认）；决定有 7 项部分实现。
+- 按代码更正了 7 处文档与代码的冲突（见 P-039 报告）。
+- 验证：旧说法 grep 只剩两处带标注的历史引用；链接检查 0 个失效。
+- 主代理整合时补的：
+  - 问题清单 / 概要设计里「P-040 尚未执行」改为已完成；
+  - AI-CONTEXT 新增绑定守卫的约定，人脸簇列表注明 App 层已改走 `ListFaceClusterPage`；
+  - 按 P-039 的建议更正详细设计 5 处：状态行、§1.2b 回收站列表方法名、IINA 事件名、手机端每日锁定的解除方式、`ApproveAITagCandidatesByFilter` 签名，并在 §12 补上两份文档。
+- 代码侧遗留，记入交接：浏览器扩展下载页的 `stateLabel` 缺 `remuxing` 的中文；`services/jellyfin_library.go` 中 `deleteItem` 的注释已过时。
