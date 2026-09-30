@@ -1,7 +1,7 @@
 ---
 schema: loopx-plan/v1
 source: docs/loopx/design/2026-09-29-product-completeness/需求设计文档.md
-status: in_progress
+status: done
 slices:
   - id: P-001
     status: done
@@ -1547,3 +1547,33 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 要移出的那一份必须在库。其他成员按 `Unscoped` 读取：在库成员的文件读不到仍报错；已软删成员对原 path 取 size:mtimeNS，读不到记空指纹（这一侧永不失效）；记录已硬删的 ID 跳过。
 - 整组忽略只写至少一侧在库的配对。全员不在库，或者跳过之后没有可写的配对时，报中文错误。
 - 子代理共做 7 组变异检查，都让对应测试变红。合入后 Go 全量（SQLite）通过；`npm test` 94 个文件、1403 条用例通过。
+
+**最终验证**（2026-09-30，`3fc4ded`，机器空闲时执行）：
+- SQLite：`go test -count=1 ./...`，8 个包全部 ok。
+- PostgreSQL：`CINEINSIGHT_TEST_PG_DSN=… go test -count=1 -p 1 ./...`，8 个包全部 ok（services 881s）。
+- 前端：`npm test` 94 个文件、1403 条用例，脚本测试全部通过，绑定守卫为 `353 exports, 353 used`。
+- 浏览器扩展：`npm test` 96 条通过。
+- 出包：`GOTOOLCHAIN=go1.24.9 wails build` 成功，产物为 `build/bin/析微影策.app`，含废纸篓与二维码的 cgo 符号。
+- 问题覆盖：88 个 ID 都被测试引用；架构唯一性核对通过；没有新增数据库锁。
+
+## 交接（需要真机，单元测试不能替代）
+- 系统废纸篓：
+  - 本地 APFS、外置 exFAT、SMB 上的删除、恢复与清除；
+  - 没有「完全磁盘访问」权限时的表现；
+  - 外置盘拔出时各流程保持原状态。
+- IINA：
+  - 从头播到结尾不会产生 watch_later 事件，所以不判看完（已知缺口，详细设计 §8.2）；
+  - 续播后 IINA 是否立即删除 watch_later 文件。
+- 手机端：PIN 登录、每日锁定与桌面解除、二维码扫码。
+- `wails build` 的签名与首次启动。
+- 切到图片页之外时，「不支持废纸篓」的二选一不可见（P-030 就有的行为），真机确认是否需要改成全局弹窗。
+- AGENTS.md 里原有的三项 TODO 不变：超分运行时打包、M4 样片验收、洞察页 EXPLAIN 证据。
+
+## 已接受的遗留（主代理裁决，均已记录在上文）
+- 挂墓碑、被扫描器软删的视频没有回收站出口，扫描报错会提示把文件改名后重新扫描（修复 N 复审 m-1）。
+- `deleteMissingImageRecord` 与用户删除并发时，记录可能先被扫描器标记、再自动恢复。这是本批之前就有的问题。
+- 列表行上没有「翻译中 x%」徽标。
+- 清理弹窗盖住撤销条。
+- `*BatchResult` 类型命名没有统一。
+- `models.ts` 缺三个只出现在 map 值里的类型。
+- 近似重复忽略里，软删成员一侧用空指纹，这一侧永不失效。
