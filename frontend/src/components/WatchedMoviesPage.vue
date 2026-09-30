@@ -59,6 +59,9 @@
           <div class="watched-movies-actions">
             <button v-if="linkedIDs(movie).length" class="btn-secondary btn-compact" type="button" :disabled="busy"
               :data-test="`watched-movies-open-${movie.douban_id}`" @click="openInLibrary(movie)">在片库打开</button>
+            <!-- 关联错了要能撤回（D-PC52）：只断开同步，两边已有的已看标记都不动。 -->
+            <button v-if="linkedIDs(movie).length" class="btn-secondary btn-compact" type="button" :disabled="busy"
+              :data-test="`watched-movies-unlink-${movie.douban_id}`" @click="unlink(movie)">取消关联</button>
             <button class="btn-secondary btn-compact" type="button" :disabled="busy"
               :data-test="`watched-movies-chart-${movie.douban_id}`" @click="$emit('navigate', 'movie-chart')">去榜单</button>
             <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy"
@@ -71,10 +74,10 @@
 </template>
 
 <script>
-// 本页的绑定只有这几个：读观影记录、撤销标记、关联与建议、按 ID 取视频（在片库打开）。
+// 本页的绑定只有这几个：读观影记录、撤销标记、关联 / 取消关联与建议、按 ID 取视频（在片库打开）。
 // **不读榜单缓存**（ListMovieChart 等）：观影记录在缓存清空后仍要完整可用（D-MC05 快照列存在的全部理由）。
 import {
-  ClearMovieChartMark, GetVideosByIDs, LinkMovieToVideo, ListWatchedMovies, SuggestLibraryMatchesBatch
+  ClearMovieChartMark, GetVideosByIDs, LinkMovieToVideo, ListWatchedMovies, SuggestLibraryMatchesBatch, UnlinkMovieVideo
 } from '../../wailsjs/go/main/App';
 import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
@@ -181,6 +184,24 @@ export default {
       } finally {
         this.busy = false;
       }
+    },
+    // 取消关联：逐个解除这部片关联的视频，之后两边的已看不再同步；解除后重新给出「片库中可能已有」的建议。
+    async unlink(movie) {
+      const ids = this.linkedIDs(movie);
+      if (!ids.length || this.busy) return;
+      this.busy = true;
+      this.actionError = '';
+      try {
+        for (const id of ids) await UnlinkMovieVideo(movie.douban_id, id);
+        this.linkedOverrides = { ...this.linkedOverrides, [movie.douban_id]: [] };
+        notifySuccess('已取消关联，之后两边的已看状态不再同步；已有的已看标记不变');
+      } catch (err) {
+        this.actionError = `取消关联失败：${err}`;
+        return;
+      } finally {
+        this.busy = false;
+      }
+      await this.loadSuggestions(this.groups);
     },
     async openInLibrary(movie) {
       const ids = this.linkedIDs(movie);

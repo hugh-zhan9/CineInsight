@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => Object.fromEntries([
   'CreateWatchlistEntry', 'UpdateWatchlistEntry', 'DeleteWatchlistEntry', 'ListWatchlist',
   'RetryWatchlistEnrichment', 'ListWatchlistCandidates', 'ApplyWatchlistCandidate',
-  'SuggestLibraryMatchesBatch', 'LinkMovieToVideo'
+  'SuggestLibraryMatchesBatch', 'LinkMovieToVideo', 'ListMovieVideoLinks', 'UnlinkMovieVideo'
 ].map(name => [name, vi.fn()])));
 const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(), notifySuccess: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -56,6 +56,7 @@ beforeEach(() => {
   api.CreateWatchlistEntry.mockResolvedValue(entry(1, '沙丘'));
   api.ListWatchlistCandidates.mockResolvedValue([]);
   api.SuggestLibraryMatchesBatch.mockResolvedValue({});
+  api.ListMovieVideoLinks.mockResolvedValue([]);
   feedback.confirmAction.mockResolvedValue(true);
 });
 afterEach(() => {
@@ -612,6 +613,37 @@ describe('想看片单与片库、榜单的闭环（D-PC52）', () => {
     await find(wrapper, 'remove-after-link-1').trigger('click');
     await flushPromises();
     expect(api.DeleteWatchlistEntry).toHaveBeenCalledWith(1);
+  });
+
+  it('APP-06 刷新后认得出已有的关联；取消关联解除全部视频，回到建议', async () => {
+    api.ListWatchlist.mockResolvedValue({ entries: [douban(1, '沙丘'), entry(2, '手输片名')], next_id: 0, origins: {} });
+    api.SuggestLibraryMatchesBatch.mockResolvedValue({
+      '沙丘|2021': [{ video_id: 9, name: 'Dune.2021.mkv', display_title: '沙丘', score: 110 }]
+    });
+    api.ListMovieVideoLinks.mockResolvedValue([
+      { video_id: 9, name: 'Dune.2021.mkv', display_title: '沙丘', is_watched: false },
+      { video_id: 10, name: 'Dune.2021.4K.mkv', display_title: '', is_watched: false }
+    ]);
+    const wrapper = await page();
+    // 只查带豆瓣 ID 的条目。
+    expect(api.ListMovieVideoLinks).toHaveBeenCalledTimes(1);
+    expect(api.ListMovieVideoLinks).toHaveBeenCalledWith('31');
+    expect(find(wrapper, 'linked-1').text()).toContain('已关联片库视频：沙丘');
+    expect(wrapper.find('[data-test="watchlist-suggestions-1"]').exists()).toBe(false);
+
+    api.UnlinkMovieVideo.mockRejectedValueOnce('数据库忙');
+    await find(wrapper, 'unlink-1').trigger('click');
+    await flushPromises();
+    expect(find(wrapper, 'error').text()).toContain('取消关联失败');
+    expect(find(wrapper, 'linked-1').exists()).toBe(true);
+
+    api.UnlinkMovieVideo.mockResolvedValue(undefined);
+    await find(wrapper, 'unlink-1').trigger('click');
+    await flushPromises();
+    expect(api.UnlinkMovieVideo).toHaveBeenCalledWith('31', 9);
+    expect(api.UnlinkMovieVideo).toHaveBeenCalledWith('31', 10);
+    expect(wrapper.find('[data-test="watchlist-linked-1"]').exists()).toBe(false);
+    expect(find(wrapper, 'suggestions-1').text()).toContain('片库中可能已有');
   });
 
   it('APP-06 建议查询失败不影响片单本身', async () => {

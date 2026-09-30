@@ -62,6 +62,9 @@
             <!-- 片库关联提示（APP-06）：只读建议，不自动删条目；用户一键关联或从片单移除。 -->
             <div v-if="linkedText(entry)" class="watchlist-library" :data-test="`watchlist-linked-${entry.id}`">
               <span>{{ linkedText(entry) }}</span>
+              <!-- 关联错了要能撤回（D-PC52）：只断开已看同步，不动片单条目与视频本身。 -->
+              <button class="btn-secondary btn-compact" type="button" :disabled="busy || loading"
+                :data-test="`watchlist-unlink-${entry.id}`" @click="unlink(entry)">取消关联</button>
               <button class="btn-secondary btn-danger-outline btn-compact" type="button" :disabled="busy || loading"
                 :data-test="`watchlist-remove-after-link-${entry.id}`" @click="remove(entry)">移除（片单）</button>
             </div>
@@ -128,8 +131,8 @@
 
 <script>
 import {
-  ApplyWatchlistCandidate, CreateWatchlistEntry, DeleteWatchlistEntry, LinkMovieToVideo, ListWatchlist,
-  ListWatchlistCandidates, RetryWatchlistEnrichment, SuggestLibraryMatchesBatch, UpdateWatchlistEntry
+  ApplyWatchlistCandidate, CreateWatchlistEntry, DeleteWatchlistEntry, LinkMovieToVideo, ListMovieVideoLinks, ListWatchlist,
+  ListWatchlistCandidates, RetryWatchlistEnrichment, SuggestLibraryMatchesBatch, UnlinkMovieVideo, UpdateWatchlistEntry
 } from '../../wailsjs/go/main/App';
 import { confirmAction, notifySuccess } from '../utils/feedback.js';
 
@@ -428,6 +431,26 @@ export default {
       } catch {
         if (requestID === this.suggestionRequestID && !append) this.suggestions = {};
       }
+      await this.loadExistingLinks(entries, append, requestID);
+    },
+    // 已有的关联存在后端（movie_video_links），刷新页面后也要认得出来，否则已关联的条目又显示成「可能已有 · 关联」。
+    // 只查本页带豆瓣 ID 的条目；查询失败只是不显示关联，不影响片单本身。
+    async loadExistingLinks(entries, append, requestID) {
+      const targets = entries.filter(entry => this.doubanIDOf(entry));
+      const results = await Promise.all(targets.map(async entry => {
+        try {
+          return { entry, links: (await ListMovieVideoLinks(this.doubanIDOf(entry))) || [] };
+        } catch {
+          return { entry, links: [] };
+        }
+      }));
+      if (requestID !== this.suggestionRequestID) return;
+      const next = append ? { ...this.linked } : {};
+      for (const { entry, links } of results) {
+        if (links.length) next[entry.id] = { ...links[0], video_ids: links.map(link => link.video_id) };
+        else delete next[entry.id];
+      }
+      this.linked = next;
     },
     suggestionsOf(entry) {
       return this.suggestions[entry.id] || [];
@@ -442,11 +465,30 @@ export default {
       this.busy = true;
       try {
         await LinkMovieToVideo(doubanID, suggestion.video_id);
-        this.linked = { ...this.linked, [entry.id]: suggestion };
+        this.linked = { ...this.linked, [entry.id]: { ...suggestion, video_ids: [suggestion.video_id] } };
         notifySuccess('已关联片库视频');
         this.error = '';
       } catch (err) {
         this.error = `关联片库视频失败：${err}`;
+      } finally {
+        this.busy = false;
+      }
+    },
+    // 取消关联：解除这个豆瓣条目关联的全部视频，之后回到「片库中可能已有」的建议。
+    async unlink(entry) {
+      const doubanID = this.doubanIDOf(entry);
+      const linked = this.linked[entry.id];
+      if (!doubanID || !linked || this.busy) return;
+      this.busy = true;
+      try {
+        for (const videoID of linked.video_ids || [linked.video_id]) await UnlinkMovieVideo(doubanID, videoID);
+        const next = { ...this.linked };
+        delete next[entry.id];
+        this.linked = next;
+        notifySuccess('已取消关联，之后两边的已看状态不再同步');
+        this.error = '';
+      } catch (err) {
+        this.error = `取消关联失败：${err}`;
       } finally {
         this.busy = false;
       }

@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // 「一旦被调用就炸」——已看页在缓存清空后仍要完整可用（D-MC05 快照列存在的理由）。
 const api = vi.hoisted(() => Object.fromEntries([
   'ListWatchedMovies', 'ListMovieChart',
-  'ClearMovieChartMark', 'GetVideosByIDs', 'LinkMovieToVideo', 'SuggestLibraryMatchesBatch'
+  'ClearMovieChartMark', 'GetVideosByIDs', 'LinkMovieToVideo', 'SuggestLibraryMatchesBatch', 'UnlinkMovieVideo'
 ].map(name => [name, vi.fn()])));
 const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(), notifySuccess: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -79,7 +79,7 @@ describe('只显示榜单标记，不掺主片库的已看', () => {
       .flatMap(match => match[1].split(',').map(name => name.trim()).filter(Boolean));
 
     expect([...imported].sort()).toEqual([
-      'ClearMovieChartMark', 'GetVideosByIDs', 'LinkMovieToVideo', 'ListWatchedMovies', 'SuggestLibraryMatchesBatch'
+      'ClearMovieChartMark', 'GetVideosByIDs', 'LinkMovieToVideo', 'ListWatchedMovies', 'SuggestLibraryMatchesBatch', 'UnlinkMovieVideo'
     ]);
     expect(imported).not.toContain('ListMovieChart');
     // 没有 props ⇒ 父组件也喂不进来片库侧的数据，两条路径一起堵上。
@@ -306,6 +306,30 @@ describe('观影记录与片库的闭环（D-PC52）', () => {
     await find(wrapper, 'unwatch-22').trigger('click');
     await flushPromises();
     expect(feedback.confirmAction.mock.calls.at(-1)[0].message).not.toContain('关联的片库视频');
+  });
+
+  it('APP-06 已关联的条目可以取消关联：逐个解除，之后重新给出建议，失败时就地报错', async () => {
+    api.ListWatchedMovies.mockResolvedValue([group(2021, [movie('11', { title: '沙丘', linked_video_ids: [5, 6] })])]);
+    api.SuggestLibraryMatchesBatch.mockResolvedValue({ '沙丘|2021': [{ video_id: 5, name: 'Dune.2021.mkv', display_title: '沙丘' }] });
+    const wrapper = await page();
+    expect(api.SuggestLibraryMatchesBatch).not.toHaveBeenCalled();
+
+    api.UnlinkMovieVideo.mockRejectedValueOnce('数据库忙');
+    await find(wrapper, 'unlink-11').trigger('click');
+    await flushPromises();
+    expect(find(wrapper, 'action-error').text()).toContain('取消关联失败');
+    expect(findAll(wrapper, 'open-11')).toHaveLength(1);
+
+    api.UnlinkMovieVideo.mockResolvedValue(undefined);
+    await find(wrapper, 'unlink-11').trigger('click');
+    await flushPromises();
+    expect(api.UnlinkMovieVideo).toHaveBeenCalledWith('11', 5);
+    expect(api.UnlinkMovieVideo).toHaveBeenCalledWith('11', 6);
+    expect(feedback.notifySuccess).toHaveBeenCalledWith(expect.stringContaining('不再同步'));
+    expect(findAll(wrapper, 'open-11')).toHaveLength(0);
+    expect(findAll(wrapper, 'unlink-11')).toHaveLength(0);
+    expect(api.SuggestLibraryMatchesBatch).toHaveBeenCalledWith([{ title: '沙丘', year: 2021 }]);
+    expect(find(wrapper, 'suggestions-11').text()).toContain('片库中可能已有');
   });
 
   it('APP-05 已关联的条目可以在片库打开，去榜单发出导航意图', async () => {
