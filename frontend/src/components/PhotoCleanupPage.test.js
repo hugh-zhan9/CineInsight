@@ -664,7 +664,7 @@ describe('D-PC01 文案', () => {
 
 // ===== P-032 复审（修复 Q）：确认框打开期间与改分组请求进行中（I-1）、合并失败提示（m3） =====
 describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审 I-1）', () => {
-  const CHANGED = '确认期间勾选或保留项有变化，请重新确认';
+  const CHANGED = '确认期间清理结果、勾选或保留项有变化，请重新确认';
   // A（精确，保留 1）与 B（近似，保留 3）都含图 2；B 另有图 4。
   const overlapping = () => statusWith({
     duplicate_groups: [{ original: makeMember(1, 'a.jpg'), candidates: [makeMember(2, 'b.jpg')], reason: '一致' }],
@@ -844,6 +844,98 @@ describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审
     expect(error).toContain('合并元数据失败，没有删除任何图片：数据库繁忙。');
     expect(error).toContain('共 2 组，前 1 组已经合并到各自的保留项');
     expect(error).toContain('已合并的组另有 1 条提示：整理图标刷新失败');
+    wrapper.unmount();
+  });
+
+  // P-032 复审（修复 R）Minor：「不是重复」与「移出本组」同构，确认返回后再查一次锁。
+  it('D-PC49 等「不是重复」确认的时候打开了删除确认框：之后再确认也不发请求', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()], near_duplicate_groups: [threeWayNear()] }));
+    let answerDismiss;
+    feedback.confirmAction.mockImplementationOnce(() => new Promise(resolve => { answerDismiss = resolve; }));
+    const nearEntry = wrapper.vm.entries.find(entry => entry.kind === 'near');
+    const pending = wrapper.vm.dismissGroup(nearEntry);
+    await clickDelete(wrapper);
+    expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(true);
+
+    answerDismiss(true);
+    await pending;
+    await flushPromises();
+    expect(api.DismissImageNearDuplicateGroup).not.toHaveBeenCalled();
+    expect(wrapper.vm.dismissing).toBe(false);
+    expect(wrapper.vm.review.dismissedKeys || []).toEqual([]);
+    await wrapper.get('[data-test="cleanup-delete-cancel"]').trigger('click');
+    wrapper.unmount();
+  });
+});
+
+// ===== P-032 复审（修复 R）：「移出本组」后接替的保留项不能是已经删掉的那一张（I-a） =====
+describe('D-PC49「移出本组」后的接替保留项（P-032 复审 I-a）', () => {
+  const nearOf = wrapper => wrapper.vm.entries.find(entry => entry.kind === 'near');
+
+  // 勾上这几张、删掉；删除后的「重新分析」由调用方的 confirmAction 替身选取消，结果留着继续审阅。
+  async function deleteSelection(wrapper, ids) {
+    photoCleanupStore.review.selection = ids;
+    await clickDelete(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+  }
+
+  it('IMG-05 近似组 {1,2,3,4} 先删 2 再移出 1：接替者是 3 而不是 2，合并调用的保留项是 3', async () => {
+    feedback.confirmAction.mockResolvedValue(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const wrapper = await mountWith(statusWith({ near_duplicate_groups: [{
+      original: makeMember(1, 'a.jpg'), candidates: [makeMember(2, 'b.jpg'), makeMember(3, 'c.jpg'), makeMember(4, 'd.jpg')], reason: '接近'
+    }] }));
+    await deleteSelection(wrapper, [2]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['image', 1, [2], FULL_MERGE]]);
+    expect(wrapper.vm.deletedIDs).toEqual([2]);
+
+    await wrapper.vm.removeMember(nearOf(wrapper), nearOf(wrapper).members[0]);
+    await flushPromises();
+    expect(api.DismissImageNearDuplicateMember).toHaveBeenCalledWith([1, 2, 3, 4], 1);
+    const entry = nearOf(wrapper);
+    expect(entry.members.map(member => member.id)).toEqual([2, 3, 4]);
+    expect(wrapper.vm.keepFor(entry)).toBe(3);
+    expect(wrapper.vm.protectedIDs.has(3)).toBe(true);
+    expect(wrapper.vm.protectedIDs.has(2)).toBe(false);
+    expect(wrapper.find('[data-test="cleanup-group-exhausted"]').exists()).toBe(false);
+
+    api.MergeMediaMetadata.mockClear();
+    api.DeleteImagesWithResult.mockClear();
+    await deleteSelection(wrapper, [4]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['image', 3, [4], FULL_MERGE]]);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([4], true, expect.any(String));
+    wrapper.unmount();
+  });
+
+  it('IMG-05 移出后本组剩下的都已删：组上说明原因，成员不可勾，不进入合并与删除', async () => {
+    feedback.confirmAction.mockResolvedValue(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const wrapper = await mountWith(statusWith({
+      duplicate_groups: [exactGroup()],
+      near_duplicate_groups: [{ original: makeMember(1, 'a.jpg'), candidates: [makeMember(2, 'b.jpg'), makeMember(3, 'c.jpg')], reason: '接近' }]
+    }));
+    await deleteSelection(wrapper, [2, 3]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['image', 1, [2, 3], FULL_MERGE]]);
+
+    await wrapper.vm.removeMember(nearOf(wrapper), nearOf(wrapper).members[0]);
+    await flushPromises();
+    const entry = nearOf(wrapper);
+    expect(entry.members.map(member => member.id)).toEqual([2, 3]);
+    expect(wrapper.vm.isExhausted(entry)).toBe(true);
+    expect(wrapper.vm.keepFor(entry)).toBeNull();
+    const card = wrapper.findAll('[data-test="cleanup-group-card"]').find(node => node.attributes('data-kind') === 'near');
+    expect(card.get('[data-test="cleanup-group-exhausted"]').text()).toContain('本组剩下的都已移到废纸篓');
+    expect(card.get('[data-test="cleanup-group-outcome"]').text()).toBe('本组不参与删除');
+    expect(card.findAll('[data-test="cleanup-candidate-toggle"]').every(node => node.element.disabled)).toBe(true);
+    expect(card.findAll('.cleanup-member--keep')).toHaveLength(0);
+    expect(card.find('[data-test="cleanup-member-locked"]').exists()).toBe(false);
+    expect(wrapper.vm.protectedIDs.has(2) && wrapper.vm.protectedIDs.has(3)).toBe(true);
+
+    // 强行把这组成员放回勾选：删除前被裁掉，只删别的组，合并也只按别的组。
+    api.MergeMediaMetadata.mockClear();
+    api.DeleteImagesWithResult.mockClear();
+    await deleteSelection(wrapper, [2, 3, 12]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['image', 11, [12], FULL_MERGE]]);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([12], true, expect.any(String));
     wrapper.unmount();
   });
 });

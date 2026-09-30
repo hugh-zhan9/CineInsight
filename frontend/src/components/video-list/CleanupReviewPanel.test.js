@@ -1278,7 +1278,7 @@ describe('「去清理」定位同源对与 D-PC01 文案', () => {
 // ===== P-032 复审（修复 Q）：确认框打开期间与改分组请求进行中（I-1）、移出本组的保留项覆盖（m1）、
 // 删除后裁剪与合并失败提示（m2 / m3） =====
 describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审 I-1）', () => {
-  const CHANGED = '确认期间勾选或保留项有变化，请重新确认';
+  const CHANGED = '确认期间清理结果、勾选或保留项有变化，请重新确认';
   const errorText = () => feedback.notifyError.mock.calls.map(call => String(call[0])).join('\n');
   const nearEntryOf = wrapper => wrapper.vm.cleanupDirectorySections
     .flatMap(section => section.entries).find(entry => entry.kind === 'near');
@@ -1502,7 +1502,7 @@ describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审
   });
 
   // P-032 复审 m3：第二组合并已提交、同步已看失败；第一组的字幕提示也要给出。
-  it('IMG-03 第二组合并已提交但同步已看失败：说明第 2 组已合并、第 1 组的提示也列出，一个都不删', async () => {
+  it('IMG-03 第二组合并已提交但同步已看失败：用保留项文件名说明那一组已合并、字幕未复制，第 1 组的提示也列出，一个都不删', async () => {
     api.MergeMediaMetadata
       .mockResolvedValueOnce({ warnings: ['字幕迁移失败：目标文件已存在（字幕仍在被合并项旁边）'] })
       .mockRejectedValueOnce('merge_committed: 合并已看状态失败：数据库繁忙');
@@ -1519,13 +1519,195 @@ describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审
     expect(api.MergeMediaMetadata).toHaveBeenCalledTimes(2);
     expect(trashVideos).not.toHaveBeenCalled();
     const message = errorText();
-    expect(message).toContain('第 2 组的整理成果已合并到保留项，但同步已看状态失败（合并已看状态失败：数据库繁忙）');
+    expect(message).toContain('保留「v3.mp4」的那一组的整理成果已合并到保留项，但同步已看状态失败（合并已看状态失败：数据库繁忙），字幕未复制');
+    expect(message).not.toContain('第 2 组');
+    expect(message).not.toContain('/lib/a');
     expect(message).toContain('没有删除任何视频');
     expect(message).toContain('共 2 组，前 1 组已经合并到各自的保留项');
     expect(message).toContain('已合并的组另有 1 条提示：字幕迁移失败：目标文件已存在');
     expect(message).not.toContain('merge_committed');
     expect(wrapper.vm.cleanupSelection).toEqual([2, 4]);
     expect(wrapper.vm.cleanupDialog.processing).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+// ===== P-032 复审（修复 R）：「移出本组」后接替的保留项不能是已经移到废纸篓的那一份（I-a） =====
+describe('D-PC49「移出本组」后的接替保留项（P-032 复审 I-a）', () => {
+  const nearEntryOf = wrapper => wrapper.vm.cleanupDirectorySections
+    .flatMap(section => section.entries).find(entry => entry.kind === 'near');
+
+  // 勾上这几个、删掉；删除后的「重新分析」由调用方的 confirmAction 替身选取消，结果留着继续审阅。
+  async function trashSelection(wrapper, ids) {
+    wrapper.vm.cleanupSelection = ids;
+    await clickTrash(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+  }
+
+  it('IMG-05 近似组 {1,2,3,4} 先删 2 再移出 1：接替者是 3 而不是 2，合并调用的保留项是 3', async () => {
+    api.MergeMediaMetadata.mockResolvedValue({ warnings: [] });
+    feedback.confirmAction.mockResolvedValue(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const { wrapper, trashVideos } = await openWith(baseAnalysis({
+      near_duplicate_groups: [{ original: video(1), candidates: [video(2), video(3), video(4)], reason: '接近' }]
+    }));
+    await trashSelection(wrapper, [2]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['video', 1, [2], FULL_MERGE]]);
+    expect(wrapper.vm.cleanupTrashedIDs).toEqual([2]);
+
+    // 回读拿到的是后端拆组后的结果：原片（组 key）按推荐顺序是 2，与本地更新一致；保留项由前端接替。
+    api.GetCleanupStatus.mockResolvedValue({ running: false, completed: true, started_at: 'run-a', analysis: baseAnalysis({
+      near_duplicate_groups: [{ original: video(2), candidates: [video(3), video(4)], reason: '接近' }]
+    }) });
+    await wrapper.vm.removeNearDuplicateMember(nearEntryOf(wrapper).group, { id: 1, name: 'v1.mp4' });
+    await flushPromises();
+    expect(api.DismissNearDuplicateMember).toHaveBeenCalledWith([1, 2, 3, 4], 1);
+    const entry = nearEntryOf(wrapper);
+    expect(entry.key).toBe('near-2');
+    expect(wrapper.vm.isEntryKeeper(entry, { id: 3 })).toBe(true);
+    expect(wrapper.vm.isEntryKeeper(entry, { id: 2 })).toBe(false);
+    expect(wrapper.vm.isCleanupLocked(3)).toBe(true);
+    expect(wrapper.find('[data-test="cleanup-group-exhausted"]').exists()).toBe(false);
+    const labels = wrapper.findAll('[data-test="cleanup-keeper-label"]');
+    expect(labels.map(node => node.text())).toEqual(['建议保留：']);
+    expect(labels[0].element.closest('[data-test="cleanup-member-row"]').textContent).toContain('v3.mp4');
+
+    api.MergeMediaMetadata.mockClear();
+    trashVideos.mockClear();
+    await trashSelection(wrapper, [4]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['video', 3, [4], FULL_MERGE]]);
+    expect(trashVideos).toHaveBeenCalledWith([4], expect.anything());
+    wrapper.unmount();
+  });
+
+  it('IMG-05 用户设的保留项被移出、原片已删：接替者是仍在库的第一个成员', async () => {
+    api.MergeMediaMetadata.mockResolvedValue({ warnings: [] });
+    feedback.confirmAction.mockResolvedValue(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const { wrapper } = await openWith(baseAnalysis({
+      near_duplicate_groups: [{ original: video(1), candidates: [video(2), video(3), video(4)], reason: '接近' }]
+    }));
+    api.GetCleanupStatus.mockResolvedValue({ running: false, completed: false });
+    wrapper.vm.setCleanupKeeper(nearEntryOf(wrapper), { id: 3 });
+    await trashSelection(wrapper, [1]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['video', 3, [1], FULL_MERGE]]);
+
+    await wrapper.vm.removeNearDuplicateMember(nearEntryOf(wrapper).group, { id: 3, name: 'v3.mp4' });
+    await flushPromises();
+    const entry = nearEntryOf(wrapper);
+    expect(entry.key).toBe('near-1');
+    expect(wrapper.vm.cleanupKeepOverrides).toEqual({});
+    expect(wrapper.vm.isEntryKeeper(entry, { id: 2 })).toBe(true);
+    expect(wrapper.vm.isEntryKeeper(entry, { id: 1 })).toBe(false);
+    expect(wrapper.vm.isCleanupLocked(2)).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('IMG-05 移出后本组剩下的都已移到废纸篓：组上说明原因，成员不可勾，不进入合并与删除', async () => {
+    api.MergeMediaMetadata.mockResolvedValue({ warnings: [] });
+    feedback.confirmAction.mockResolvedValue(false).mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const exactGroup = { original: video(10), candidates: [video(11)], reason: '一致' };
+    const { wrapper, trashVideos } = await openWith(baseAnalysis({
+      duplicate_groups: [exactGroup],
+      near_duplicate_groups: [{ original: video(1), candidates: [video(2), video(3)], reason: '接近' }]
+    }));
+    await trashSelection(wrapper, [2, 3]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['video', 1, [2, 3], FULL_MERGE]]);
+
+    api.GetCleanupStatus.mockResolvedValue({ running: false, completed: true, started_at: 'run-a', analysis: baseAnalysis({
+      duplicate_groups: [exactGroup],
+      near_duplicate_groups: [{ original: video(2), candidates: [video(3)], reason: '接近' }]
+    }) });
+    await wrapper.vm.removeNearDuplicateMember(nearEntryOf(wrapper).group, { id: 1, name: 'v1.mp4' });
+    await flushPromises();
+    const entry = nearEntryOf(wrapper);
+    expect(entry.members.map(member => member.id)).toEqual([2, 3]);
+    expect(wrapper.vm.isEntryExhausted(entry)).toBe(true);
+    const card = wrapper.findAll('[data-test="cleanup-group-card"]').find(node => node.find('[data-test="cleanup-group-exhausted"]').exists());
+    expect(card.get('[data-test="cleanup-group-exhausted"]').text()).toContain('本组剩下的都已移到废纸篓');
+    expect(card.findAll('[data-test="cleanup-member-select"]').every(node => node.element.disabled)).toBe(true);
+    expect(card.get('[data-test="cleanup-suggest-group"]').element.disabled).toBe(true);
+    expect(card.find('[data-test="cleanup-keeper-label"]').exists()).toBe(false);
+    expect(card.find('[data-test="cleanup-member-locked"]').exists()).toBe(false);
+    expect(wrapper.vm.isCleanupLocked(2) && wrapper.vm.isCleanupLocked(3)).toBe(true);
+
+    // 强行把这组成员放回勾选：删除前被裁掉，只删别的组，合并也只按别的组。
+    api.MergeMediaMetadata.mockClear();
+    trashVideos.mockClear();
+    await trashSelection(wrapper, [2, 3, 11]);
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([['video', 10, [11], FULL_MERGE]]);
+    expect(trashVideos).toHaveBeenCalledWith([11], expect.anything());
+    wrapper.unmount();
+  });
+});
+
+// ===== P-032 复审（修复 R）Minor：确认框打开或删除进行中不能关掉外层面板 =====
+describe('D-PC49 删除流程中的面板关闭保护（P-032 复审 Minor）', () => {
+  const LOCKED = '正在移到废纸篓，完成后再关闭';
+  const pressEscape = async () => {
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    await flushPromises();
+  };
+  const lockNotices = () => feedback.notify.mock.calls.filter(call => String(call[0]).includes(LOCKED));
+
+  it('D-PC49 确认框打开或删除进行中：✕ 与「取消」禁用，关闭方法与 Esc 被拦下并提示；结束后恢复', async () => {
+    feedback.confirmAction.mockResolvedValue(false);
+    const { wrapper } = await openWith(baseAnalysis({
+      duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }]
+    }));
+    const close = () => wrapper.get('[data-test="cleanup-close"]');
+    const cancel = () => wrapper.get('[data-test="cleanup-cancel"]');
+    expect(close().element.disabled).toBe(false);
+
+    // 确认框打开：按钮禁用；直接调用关闭方法被拦下并提示。
+    await clickTrash(wrapper);
+    expect(close().element.disabled).toBe(true);
+    expect(cancel().element.disabled).toBe(true);
+    expect(close().attributes('title')).toBe(LOCKED);
+    expect(wrapper.vm.closeCleanupDialog()).toBe(false);
+    expect(wrapper.vm.cleanupDialog.show).toBe(true);
+    expect(lockNotices()).toHaveLength(1);
+
+    // Esc 只取消确认框，面板留着，也不再提示。
+    feedback.notify.mockClear();
+    await pressEscape();
+    expect(wrapper.find('[data-test="cleanup-delete-confirm-dialog"]').exists()).toBe(false);
+    expect(wrapper.vm.cleanupDialog.show).toBe(true);
+    expect(wrapper.vm.cleanupDialog.processing).toBe(false);
+    expect(lockNotices()).toHaveLength(0);
+
+    // 删除进行中（合并还没返回）：Esc 被拦下并提示，按钮禁用。
+    let finishMerge;
+    api.MergeMediaMetadata.mockImplementationOnce(() => new Promise(resolve => { finishMerge = resolve; }));
+    await clickTrash(wrapper);
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.cleanupDialog.processing).toBe(true);
+    await pressEscape();
+    expect(wrapper.vm.cleanupDialog.show).toBe(true);
+    expect(lockNotices()).toHaveLength(1);
+    expect(close().element.disabled).toBe(true);
+    expect(cancel().element.disabled).toBe(true);
+
+    finishMerge({ warnings: [] });
+    await flushPromises();
+    expect(wrapper.vm.cleanupDialog.processing).toBe(false);
+    expect(close().element.disabled).toBe(false);
+    await close().trigger('click');
+    expect(wrapper.vm.cleanupDialog.show).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('D-PC49 没有删除流程时 Esc 关闭面板；应用确认框开着时 Esc 只关确认框', async () => {
+    const { wrapper } = await openWith(baseAnalysis({
+      duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }]
+    }));
+    feedbackState.confirm = { title: '移出本组' };
+    await pressEscape();
+    expect(wrapper.vm.cleanupDialog.show).toBe(true);
+    feedbackState.confirm = null;
+    await pressEscape();
+    expect(wrapper.vm.cleanupDialog.show).toBe(false);
+    expect(lockNotices()).toHaveLength(0);
     wrapper.unmount();
   });
 });

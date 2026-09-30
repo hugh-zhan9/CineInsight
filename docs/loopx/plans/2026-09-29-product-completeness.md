@@ -1529,3 +1529,16 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 「继续观看」的排序原先在片库与 Jellyfin `Items/Resume` 各写一遍，抽成共用的 `orderContinueWatching`。
 - 数据库恢复的报错原先把系统错误和 `pg_restore` 的输出原样交给界面，可能带绝对路径。新增 `services.WithoutAbsolutePaths`，只擦文案、错误链不变；`RestoreDatabaseBackup` 返回前统一经过它。它用自己的严格规则，不误擦「恢复 / 切换」「SQLite/PG」里的斜杠。测试 `TestWithoutAbsolutePathsKeepsErrorChainAPP01`。
 - 扩展下载页补上 `remuxing` 的中文「转为 MP4 中」；更正 Jellyfin `deleteItem` 过时的注释。
+
+**修复 Q 复审**（2026-09-30，opus-xhigh 只读，基于 `cec3458`）：**通过**。修复 O 复审的 I-1、m1–m3 都已解决，没有引入 Critical / Important。评审另外发现 1 条早就存在的 Important（I-a），以及 5 条 Minor，都交修复 R。
+
+**修复 R 整合**（2026-09-30）：
+- I-a（「移出本组」后接替的保留项可能已在废纸篓）：新增 `availableKeeper`，接替者取第一个仍在库的成员；成员都已删的组标为 `exhausted`，全部锁定、不参与合并与删除，并在组上说明原因。后端拆组没有改，仍按原片 ID 定组 key，这样回读后 key 与接替者一致；子代理说明了为什么只改前端，主代理接受。
+- Minor 1–5：
+  - 图片页 `dismissGroup` 确认后复查的测试；
+  - `merge_committed:` 的文案补上「字幕未复制」，App 层在这类错误下也把缓存标为过期；
+  - 合并失败提示用保留项的文件名指明是哪一组；
+  - 视频面板在确认或删除进行中不能关闭，Esc 被拦下，不在删除流程里时按 Esc 关闭面板；
+  - 中止提示改为新文案。
+- 子代理做了 12 处变异检查，都让对应测试变红。合入后 Go 全量（SQLite）通过；`npm test` 94 个文件、1403 条用例通过。
+- 子代理发现的新缺陷：近似组里有已移到废纸篓的成员时，后端 `DismissNearDuplicateMember` / `DismissImageNearDuplicateMember` 拒绝整组，报「部分视频（图片）不存在或已删除」，所以「先删一份、再移出别的成员」走不通。主代理裁决：后端接受已软删的组成员，但被移出的那一份必须仍在库；忽略记录照常写，软删成员按现有规则记录指纹。→ 修复 S。

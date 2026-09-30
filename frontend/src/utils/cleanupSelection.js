@@ -48,15 +48,30 @@ function uniqueIDs(values) {
   return ids;
 }
 
-export function cleanupGroup({ key, kind, keeperId = null, memberIds = [], switchable = false }) {
+// 接替的保留项（P-032 复审 I-a）：preferred 还在库就用它，否则按成员顺序取第一个仍在库的；
+// unavailable 是已经移到废纸篓的 ID。成员都不在库时返回 null。
+export function availableKeeper(memberIds, preferred = null, unavailable = []) {
   const members = uniqueIDs(memberIds);
-  const keeper = toID(keeperId);
+  const gone = new Set(uniqueIDs(unavailable));
+  const wanted = toID(preferred);
+  if (wanted !== null && members.includes(wanted) && !gone.has(wanted)) return wanted;
+  return members.find(id => !gone.has(id)) ?? null;
+}
+
+// unavailable：已经移到废纸篓的 ID。建议保留项已不在库时由 availableKeeper 选接替者；
+// 本该有保留项、成员却都不在库时 exhausted 为真：这一组没有保留项，成员全部锁定，不参与合并与删除。
+export function cleanupGroup({ key, kind, keeperId = null, memberIds = [], switchable = false, unavailable = [] }) {
+  const members = uniqueIDs(memberIds);
+  const wanted = toID(keeperId);
+  const suggested = wanted !== null && members.includes(wanted) ? wanted : null;
+  const keeper = suggested === null ? null : availableKeeper(members, suggested, unavailable);
   return {
     key: String(key),
     kind,
-    keeperId: keeper !== null && members.includes(keeper) ? keeper : null,
+    keeperId: keeper,
     memberIds: members,
-    switchable: Boolean(switchable)
+    switchable: Boolean(switchable),
+    exhausted: suggested !== null && keeper === null
   };
 }
 
@@ -72,14 +87,14 @@ function keySet(keys) {
   return new Set([...(keys || [])].map(String));
 }
 
-// 锁定的 ID：每组的当前保留项，加上「本组不删」各组的全部成员。
+// 锁定的 ID：每组的当前保留项，加上「本组不删」各组与没有在库保留项（exhausted）各组的全部成员。
 export function lockedIDs(groups, overrides = {}, skipped = []) {
   const skippedKeys = keySet(skipped);
   const locked = new Set();
   for (const group of groups || []) {
     const keeper = keeperOf(group, overrides);
     if (keeper !== null) locked.add(keeper);
-    if (skippedKeys.has(group.key)) group.memberIds.forEach(id => locked.add(id));
+    if (skippedKeys.has(group.key) || group.exhausted) group.memberIds.forEach(id => locked.add(id));
   }
   return locked;
 }
@@ -193,7 +208,8 @@ export function mergeOptionsFor(kind) {
 
 // 删除前的合并计划（D-PC48）：每个有保留项的组里被勾选的成员合并到该组当前保留项，按组逐条调用；
 // 同一个保留项出现在几组里也按组分开（截取片段组的范围与其他组不同，不能混在一次调用里）。
-// 极短、极低这类没有保留项的候选与「本组不删」的组不参与。options 同其他函数：{ overrides, skipped, locked }。
+// 极短、极低这类没有保留项的候选、「本组不删」的组与成员都已移到废纸篓（exhausted）的组不参与。
+// options 同其他函数：{ overrides, skipped, locked }。
 // 勾选里有锁定项时抛 LockedSelectionError，不静默跳过（P-032 评审 I-1）。
 export function mergePlan(groups, selection, options = {}) {
   const { overrides, skipped, locked } = normalizedOptions(groups, options);
@@ -204,7 +220,7 @@ export function mergePlan(groups, selection, options = {}) {
   const skippedKeys = keySet(skipped);
   const plan = [];
   for (const group of groups || []) {
-    if (skippedKeys.has(group.key)) continue;
+    if (skippedKeys.has(group.key) || group.exhausted) continue;
     const keeper = keeperOf(group, overrides);
     if (keeper === null) continue;
     const sourceIds = group.memberIds.filter(id => id !== keeper && selected.has(id));
@@ -247,7 +263,7 @@ export function deletionPlanUnchanged(confirmed, groups, selection, options = {}
   }
 }
 
-export const SELECTION_CHANGED_MESSAGE = '确认期间勾选或保留项有变化，请重新确认。这次没有合并，也没有删除任何项。';
+export const SELECTION_CHANGED_MESSAGE = '确认期间清理结果、勾选或保留项有变化，请重新确认。这次没有合并，也没有删除任何项。';
 
 // 后端在数据库合并已提交、补已看状态失败时给错误加的前缀（与 services.MediaMergeCommittedErrorPrefix 一致）。
 export const MERGE_COMMITTED_PREFIX = 'merge_committed:';
@@ -259,16 +275,25 @@ function errorText(error) {
   return String(error ?? '');
 }
 
+// 只取文件名：提示里不出现目录（名字里带了路径也只留最后一段）。
+function baseName(value) {
+  const text = String(value ?? '').trim();
+  return text.split(/[\\/]/).filter(Boolean).pop() || '';
+}
+
 // 按组合并中途失败时的提示（P-032 评审 Minor 4）：merged 是失败之前已经完整合并的组数。
 // warnings 是这几组返回的提示（例如字幕复制失败），一并列出，不丢。
-// 错误带 merge_committed: 前缀时，第 merged+1 组的数据库合并已经提交，只是同步已看状态失败（P-032 复审 m3）。
-export function describeMergeFailure(error, merged, total, noun, warnings = []) {
+// 错误带 merge_committed: 前缀时，失败那一组的数据库合并已经提交，只是同步已看状态失败，字幕也没有复制
+// （P-032 复审 m3）；keeperName 是那一组保留项的文件名，提示用它指明是哪一组。
+export function describeMergeFailure(error, merged, total, noun, warnings = [], keeperName = '') {
   const raw = errorText(error).trim();
   const committed = raw.startsWith(MERGE_COMMITTED_PREFIX);
   const reason = committed ? raw.slice(MERGE_COMMITTED_PREFIX.length).trim() : raw;
   const parts = [];
   if (committed) {
-    parts.push(`第 ${merged + 1} 组的整理成果已合并到保留项，但同步已看状态失败（${reason}），没有删除任何${noun}。`);
+    const name = baseName(keeperName);
+    const group = name ? `保留「${name}」的那一组` : `第 ${merged + 1} 组`;
+    parts.push(`${group}的整理成果已合并到保留项，但同步已看状态失败（${reason}），字幕未复制，没有删除任何${noun}。`);
   } else {
     parts.push(`合并元数据失败，没有删除任何${noun}：${reason}。`);
   }

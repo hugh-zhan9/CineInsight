@@ -218,6 +218,8 @@
               >不是重复</button>
             </div>
 
+            <p v-if="isExhausted(entry)" class="cleanup-group__exhausted" data-test="cleanup-group-exhausted">本组剩下的都已移到废纸篓，没有可保留的一张，这一组不参与合并和删除。</p>
+
             <div class="cleanup-group__members">
               <div
                 v-for="member in entry.members"
@@ -502,7 +504,8 @@ export default {
           .filter(member => !removed.has(Number(member.id)));
         if (members.length < 2) return [];
         const directories = new Set(members.map(member => this.directoryOf(member)));
-        // 推荐保留项被移出本组时，由剩下成员里排第一的接替（后端按整理成果、画质排序）。
+        // 推荐保留项被移出本组时，由剩下成员里排第一的接替（后端按整理成果、画质排序）；
+        // 已经移到废纸篓的跳过，由 cleanupGroups 按 deletedIDs 选（P-032 复审 I-a）。
         const suggestedKeeperID = members.some(member => Number(member.id) === Number(group.original?.id))
           ? Number(group.original.id)
           : Number(members[0].id);
@@ -521,14 +524,16 @@ export default {
         ...flatten(this.analysis.near_duplicate_groups, 'near')
       ];
     },
-    // 勾选规则用的统一组（utils/cleanupSelection.js）。
+    // 勾选规则用的统一组（utils/cleanupSelection.js）。建议保留项已删除时接替者取第一个仍在库的成员；
+    // 一个在库的都没有时这一组不参与合并与删除（P-032 复审 I-a）。
     cleanupGroups() {
       return this.entries.map(entry => cleanupGroup({
         key: entry.key,
         kind: entry.kind,
         keeperId: entry.suggestedKeeperID,
         memberIds: entry.members.map(member => member.id),
-        switchable: true
+        switchable: true,
+        unavailable: this.deletedIDs
       }));
     },
     groupByKey() {
@@ -770,7 +775,8 @@ export default {
     // 这张图被别的组锁定：是别的组的保留项，或者在一个「本组不删」的组里。本组也不能勾它删。
     lockReason(entry, image) {
       const id = Number(image?.id);
-      if (this.keepFor(entry) === id) return '';
+      // 已删除的行只标「已删除」（本组剩下的都已删时它们也锁定，但不是因为别的组）。
+      if (this.isDeleted(image) || this.keepFor(entry) === id) return '';
       if (this.keeperIDs.has(id)) return '另一组要保留它';
       if (!this.isSkipped(entry) && this.skippedMemberIDs.has(id)) return '另一组设了「本组不删」';
       return '';
@@ -795,13 +801,21 @@ export default {
     },
     groupOutcomeLabel(entry) {
       if (this.isSkipped(entry)) return '本组不删';
+      if (this.isExhausted(entry)) return '本组不参与删除';
       const marked = entry.members.filter(member => this.selection.includes(Number(member.id))).length;
       return marked === 0 ? '本组暂不删除任何图片' : `本组将删除 ${marked} 张`;
     },
     keepFor(entry) {
-      const keeper = keeperOf(this.groupOf(entry), this.keepOverrides);
+      const group = this.groupOf(entry);
+      // 本组剩下的都已删：没有保留项，成员全部锁定（不会因此变成全部可删）。
+      if (group?.exhausted) return null;
+      const keeper = keeperOf(group, this.keepOverrides);
       // 组总有保留项；拿不到时退回组内第一个成员，避免 NaN 让整组失去保留项、全部可删。
       return keeper ?? Number(entry.members[0]?.id);
+    },
+    // 本组剩下的都已移到废纸篓，没有可接替的保留项（P-032 复审 I-a）。
+    isExhausted(entry) {
+      return Boolean(this.groupOf(entry)?.exhausted);
     },
     isKept(entry, image) {
       return Number(image?.id) === this.keepFor(entry);
@@ -1017,7 +1031,9 @@ export default {
               const result = await MergeMediaMetadata('image', item.keeperId, item.sourceIds, item.options);
               warnings.push(...(result?.warnings || []));
             } catch (err) {
-              this.localError = describeMergeFailure(err, index, plan.length, '图片', warnings);
+              // 失败的那一组用保留项的文件名指明。
+              const keeperName = this.memberNames([item.keeperId])[item.keeperId] || `图片 ${item.keeperId}`;
+              this.localError = describeMergeFailure(err, index, plan.length, '图片', warnings, keeperName);
               return;
             }
           }
@@ -1210,6 +1226,7 @@ export default {
 .cleanup-group__warn { padding: 2px 8px; border: 1px solid var(--danger-color); border-radius: 999px; color: var(--danger-color); font-size: 11px; }
 .cleanup-group__outcome { padding: 2px 8px; border: 1px dashed var(--hairline); border-radius: 999px; color: var(--text-secondary); font-size: 11px; white-space: nowrap; }
 .cleanup-group__skip--active { border-color: var(--accent-color); color: var(--accent-color); }
+.cleanup-group__exhausted { margin: 0; color: var(--danger-color); font-size: 12px; }
 
 .cleanup-group__members { display: flex; flex-wrap: wrap; gap: 12px; }
 .cleanup-member { display: flex; flex-direction: column; gap: 8px; width: 260px; padding: 10px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--panel-bg); }

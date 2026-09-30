@@ -1,5 +1,6 @@
 <template>
-  <BaseModal v-if="cleanupDialog.show" class="cleanup-modal">
+  <!-- 确认框打开或删除进行中不能关闭（与图片清理页的离开保护同一口径）：✕、「取消」禁用，Esc 与关闭方法拦截。 -->
+  <BaseModal v-if="cleanupDialog.show" class="cleanup-modal" @close="handleCleanupEscape">
       <div class="cleanup-modal-header">
         <h3>清理候选审阅</h3>
         <span class="cleanup-header__meta">
@@ -11,7 +12,7 @@
           <span>视频库在本次分析之后变过，结果可能已过期</span>
           <button type="button" class="btn-secondary btn-compact" :disabled="cleanupDialog.loading || cleanupDialog.processing" @click="reanalyzeCleanupCandidates">重新分析</button>
         </div>
-        <button type="button" class="cleanup-header__close" aria-label="关闭" @click="cleanupDialog.show = false">✕</button>
+        <button type="button" class="cleanup-header__close" aria-label="关闭" data-test="cleanup-close" :disabled="cleanupCloseLocked" :title="cleanupCloseLocked ? CLOSE_LOCKED_MESSAGE : ''" @click="closeCleanupDialog">✕</button>
       </div>
 
       <div v-if="!cleanupDialog.loading" class="cleanup-filter-bar">
@@ -296,6 +297,7 @@
                       @click="dismissNearDuplicateGroup(entry.group)"
                     >不是重复</button>
                   </div>
+                  <p v-if="isEntryExhausted(entry)" class="cleanup-card-exhausted" data-test="cleanup-group-exhausted">本组剩下的都已移到废纸篓，没有可保留的一份，这一组不参与合并和删除。</p>
                   <ul class="cleanup-member-list">
                     <li v-for="member in entry.members" :key="`${entry.key}-${member.id}`">
                       <div
@@ -312,7 +314,7 @@
                           @change="toggleCleanupSelection(member.id)"
                         />
                         <CleanupThumbnail :video="member" @preview="previewCleanupVideo" />
-                        <strong v-if="isEntryKeeper(entry, member)" class="cleanup-keeper-label" data-test="cleanup-keeper-label">{{ member.id === entry.keeper?.id ? '建议保留：' : '保留：' }}</strong>
+                        <strong v-if="isEntryKeeper(entry, member)" class="cleanup-keeper-label" data-test="cleanup-keeper-label">{{ member.id === entryGroup(entry)?.keeperId ? '建议保留：' : '保留：' }}</strong>
                         <span class="cleanup-item-text">
                           <span class="cleanup-item-main">{{ cleanupItemSummary(member) }}</span>
                           <span v-if="member.path" class="cleanup-item-path" :title="member.path">{{ member.path }}</span>
@@ -415,8 +417,8 @@
         </span>
         <span class="cleanup-footer__hint">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间</span>
         <div class="cleanup-header__spacer"></div>
-        <button v-if="cleanupDialog.loading" @click="cleanupDialog.show = false" class="btn-secondary">后台继续分析</button>
-        <button @click="cleanupDialog.show = false" class="btn-secondary">取消</button>
+        <button v-if="cleanupDialog.loading" @click="closeCleanupDialog" class="btn-secondary">后台继续分析</button>
+        <button class="btn-secondary" data-test="cleanup-cancel" :disabled="cleanupCloseLocked" :title="cleanupCloseLocked ? CLOSE_LOCKED_MESSAGE : ''" @click="closeCleanupDialog">取消</button>
         <!-- 改分组的请求（移出本组、各类忽略）还没返回时不能删除（P-032 复审 I-1）。
              确认框打开期间 processing 已经为真（删除流程从确认开始），按钮文字仍写「移到废纸篓」。 -->
         <button
@@ -478,7 +480,7 @@ import {
 } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import CleanupThumbnail from '../CleanupThumbnail.vue';
-import { confirmAction, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
+import { confirmAction, feedbackState, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
 import {
   applySuggestion, cleanupGroup, clearGroupSelection, curationBadges, defaultSelection, deletionPlan, deletionPlanUnchanged,
   describeMergeFailure, describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, pruneSelection,
@@ -499,6 +501,9 @@ const DISMISSAL_KINDS = [
 function emptyDismissals(kind = 'near_duplicate') {
   return { kind, items: [], cursor: 0, hasMore: false, loading: false, loaded: false, undoing: false, error: '' };
 }
+
+// 确认框打开或删除进行中时关闭面板的提示：撤销条与「不支持废纸篓」二选一都要等这一轮结束。
+const CLOSE_LOCKED_MESSAGE = '正在移到废纸篓，完成后再关闭';
 
 function emptyDeleteConfirm() {
   return { show: false, summary: { count: 0, bytes: 0, byKind: {}, similar: 0 }, mergeAvailable: false, mergeScope: { full: false, clip: false }, merge: true };
@@ -525,6 +530,7 @@ export default {
   emits: ['badge-change', 'analyzing-change', 'start-perceptual-hash', 'start-frame-hash', 'same-source-rejected', 'trash-settled'],
   data() {
     return {
+      CLOSE_LOCKED_MESSAGE,
       cleanupDialog: {
         show: false,
         loading: false,
@@ -609,6 +615,10 @@ export default {
     cleanupResultStale() {
       return Boolean(this.cleanupDialog.analysis && (this.cleanupDialog.stale || this.cleanupTrashedIDs.length));
     },
+    // 删除流程从确认框打开起算（processing 在那时已经置上），到合并与删除全部结束为止。
+    cleanupCloseLocked() {
+      return this.cleanupDialog.processing || this.deleteConfirm.show;
+    },
     cleanupThresholds() {
       const thresholds = this.cleanupDialog.analysis?.thresholds || {};
       return {
@@ -667,6 +677,8 @@ export default {
       return [...buckets.values()].sort((a, b) => a.directory.localeCompare(b.directory));
     },
     // 勾选规则用的统一组（utils/cleanupSelection.js）。同源与截取片段的保留项固定，精确 / 近似可以换。
+    // 建议保留项已经移到废纸篓时（例如「移出本组」让它升了上来），接替者从仍在库的成员里选；
+    // 一个在库的都没有时这一组不参与合并与删除（P-032 复审 I-a）。
     cleanupGroups() {
       const groups = [];
       for (const section of this.cleanupDirectorySections) {
@@ -677,7 +689,8 @@ export default {
             kind: entry.kind,
             keeperId: single ? null : entry.keeper?.id,
             memberIds: entry.members.map(member => member.id),
-            switchable: entry.kind === 'exact' || entry.kind === 'near'
+            switchable: entry.kind === 'exact' || entry.kind === 'near',
+            unavailable: this.cleanupTrashedIDs
           }));
         }
       }
@@ -974,9 +987,13 @@ export default {
     isCleanupLocked(videoID) {
       return this.cleanupLockedIDs.has(Number(videoID));
     },
-    // 这一行是别的组的保留项：本组也不能勾它。
+    // 这一行是别的组的保留项：本组也不能勾它。已移到废纸篓的行不再这样标（本组剩下的都已删时它们也锁定）。
     isLockedByOtherGroup(entry, member) {
-      return this.isCleanupLocked(member?.id) && !this.isEntryKeeper(entry, member);
+      return this.isCleanupLocked(member?.id) && !this.isEntryKeeper(entry, member) && !this.isCleanupTrashed(member);
+    },
+    // 本组剩下的都已移到废纸篓，没有可接替的保留项（P-032 复审 I-a）。
+    isEntryExhausted(entry) {
+      return Boolean(this.entryGroup(entry)?.exhausted);
     },
     entrySuggestedIDs(entry) {
       return suggestedIDs(this.entryGroup(entry), this.selectionOptions());
@@ -1204,6 +1221,21 @@ export default {
       if (this.cleanupDialog.processing) return;
       this.cleanupSelection = [];
     },
+    // 关闭面板（✕、「取消」「后台继续分析」、Esc）：确认框打开或删除进行中拦下并说明。
+    closeCleanupDialog() {
+      if (this.cleanupCloseLocked) {
+        notify(`${CLOSE_LOCKED_MESSAGE}。`);
+        return false;
+      }
+      this.cleanupDialog.show = false;
+      return true;
+    },
+    // 外层弹窗的 Esc：删除确认框或应用确认框开着时 Esc 只关掉确认框（它们自己处理），
+    // 这里不关面板、也不提示（与回收站同一做法）。
+    handleCleanupEscape() {
+      if (this.deleteConfirm.show || feedbackState.confirm) return;
+      this.closeCleanupDialog();
+    },
     // 改分组的请求（移出本组、不是重复、各类忽略、不是同源）统一走这里（P-032 复审 I-1）：
     // 等用户确认的这段时间里可能已经开始删除流程，确认之后再查一次；请求进行中计数，删除入口据此拦截。
     async runCleanupGroupRequest(confirmOptions, request) {
@@ -1276,6 +1308,8 @@ export default {
               if (memberIDs.length !== ids.length || !memberIDs.every(id => ids.includes(id))) return [item];
               const rest = members.filter(video => video.id !== memberID);
               if (rest.length < 2) return [];
+              // 原片（组 key）按推荐顺序取 rest[0]，与后端拆组一致，回读后 key 不变；它已移到废纸篓时，
+              // 保留项由 cleanupGroups 从仍在库的成员里接替（P-032 复审 I-a）。
               newKey = `near-${rest[0].id}`;
               return [{ ...item, original: rest[0], candidates: rest.slice(1) }];
             });
@@ -1471,8 +1505,9 @@ export default {
           const result = await MergeMediaMetadata('video', item.keeperId, item.sourceIds, item.options);
           warnings.push(...(result?.warnings || []));
         } catch (err) {
-          // 前面几组已经合并，它们的提示（例如字幕复制失败）随失败提示一起给出。
-          notifyError(describeMergeFailure(err, index, plan.length, '视频', warnings));
+          // 前面几组已经合并，它们的提示（例如字幕复制失败）随失败提示一起给出；失败的那一组用保留项的文件名指明。
+          const keeper = this.getAllCleanupCandidates().find(video => video.id === item.keeperId);
+          notifyError(describeMergeFailure(err, index, plan.length, '视频', warnings, keeper?.name || `视频 ${item.keeperId}`));
           return null;
         }
       }
@@ -1904,6 +1939,7 @@ export default {
 .cleanup-select-row--keeper { border-top: 0; }
 .cleanup-keeper-label { flex: none; font-size: 12.5px; }
 .cleanup-item-locked { color: var(--warning-text); font-size: 11px; }
+.cleanup-card-exhausted { margin: 0 0 4px; color: var(--warning-text); font-size: 12px; }
 /* 整理成果标记（D-PC48）：保留建议优先留整理成果多的那份。 */
 .cleanup-curation { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
 .cleanup-curation__item { padding: 0 6px; border: 1px solid var(--accent-border); border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 10.5px; line-height: 16px; white-space: nowrap; }

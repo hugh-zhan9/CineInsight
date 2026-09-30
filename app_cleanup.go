@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 	"video-master/services"
 )
 
@@ -104,6 +105,10 @@ func (a *App) MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, o
 	if err != nil {
 		log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d skip_playback_state=%v skip_subtitle=%v err=%v",
 			kind, keeperID, len(sourceIDs), options.SkipPlaybackState, options.SkipSubtitle, err)
+		// 数据库合并已经提交、只是之后补已看失败（P-032 复审 m3）：整理项已经变了，缓存同样标为可能过期。
+		if strings.HasPrefix(err.Error(), services.MediaMergeCommittedErrorPrefix) {
+			a.invalidateCleanupAnalysisFor(kind == services.MediaMergeKindImage)
+		}
 		return nil, err
 	}
 	log.Printf("API MergeMediaMetadata kind=%s keeper=%d sources=%d skip_playback_state=%v skip_subtitle=%v tags=%d people=%d collections=%d watched=%v subtitle=%v warnings=%d",

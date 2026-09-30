@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applySuggestion, cleanupGroup, curationBadges, defaultSelection, deletionPlan, deletionPlanUnchanged, describeMergeFailure,
+  applySuggestion, availableKeeper, cleanupGroup, curationBadges, defaultSelection, deletionPlan, deletionPlanUnchanged, describeMergeFailure,
   describeSelectionKinds, isGroupFullySuggested, isLocked, keeperOf, LockedSelectionError, lockedIDs, MERGE_COMMITTED_PREFIX,
-  mergeOptionsFor, mergePlan, pruneSelection, sameDeletionPlan, selectionSummary, setKeeper, similarityCount, suggestedIDs,
+  mergeOptionsFor, mergePlan, pruneSelection, sameDeletionPlan, SELECTION_CHANGED_MESSAGE, selectionSummary, setKeeper,
+  similarityCount, suggestedIDs,
   toggleSuggestion
 } from './cleanupSelection.js';
 
@@ -133,6 +134,39 @@ describe('utils/cleanupSelection（D-PC49 统一勾选规则）', () => {
     ]);
   });
 
+  // P-032 复审 I-a：建议保留项已经移到废纸篓时，接替者从仍在库的成员里选；一个在库的都没有时整组锁定、不进合并。
+  it('D-PC49 保留项已移到废纸篓时接替者取第一个仍在库的成员；都不在库时整组不参与合并与删除', () => {
+    expect(availableKeeper([2, 3, 4], 2, [2])).toBe(3);
+    expect(availableKeeper([2, 3, 4], 3, [2])).toBe(3);
+    expect(availableKeeper([2, 3, 4], null, [])).toBe(2);
+    expect(availableKeeper([2, 3], 2, [2, 3])).toBeNull();
+
+    const promoted = cleanupGroup({ key: 'near-2', kind: 'near', keeperId: 2, memberIds: [2, 3, 4], switchable: true, unavailable: [2] });
+    expect(promoted.keeperId).toBe(3);
+    expect(promoted.exhausted).toBe(false);
+    expect([...lockedIDs([promoted])]).toEqual([3]);
+    expect(mergePlan([promoted], [4])).toEqual([{ key: 'near-2', kind: 'near', keeperId: 3, sourceIds: [4], options: FULL_MERGE }]);
+
+    const exhausted = cleanupGroup({ key: 'near-2', kind: 'near', keeperId: 2, memberIds: [2, 3], switchable: true, unavailable: [2, 3] });
+    expect(exhausted.keeperId).toBeNull();
+    expect(exhausted.exhausted).toBe(true);
+    const other = cleanupGroup({ key: 'exact-7', kind: 'exact', keeperId: 7, memberIds: [7, 8], switchable: true });
+    const all = [exhausted, other];
+    expect([...lockedIDs(all)].sort()).toEqual([2, 3, 7]);
+    expect(suggestedIDs(exhausted, { locked: lockedIDs(all) })).toEqual([]);
+    // 即使没传「已删除」也不会送进删除：成员都锁定，裁剪时去掉；合并计划跳过这一组。
+    expect(pruneSelection([2, 3, 8], all)).toEqual([8]);
+    expect(deletionPlan(all, [2, 3, 8])).toEqual({ ids: [8], plan: [{ key: 'exact-7', kind: 'exact', keeperId: 7, sourceIds: [8], options: FULL_MERGE }] });
+    expect(() => mergePlan([exhausted], [3])).toThrow(LockedSelectionError);
+    expect(mergePlan([exhausted], [])).toEqual([]);
+    // 极短、极低这类本来就没有保留项的候选不算 exhausted。
+    expect(cleanupGroup({ key: 'dur-11', kind: 'low-duration', memberIds: [11], unavailable: [11] }).exhausted).toBe(false);
+  });
+
+  it('D-PC49 确认期间有变化的提示点明清理结果、勾选或保留项', () => {
+    expect(SELECTION_CHANGED_MESSAGE).toBe('确认期间清理结果、勾选或保留项有变化，请重新确认。这次没有合并，也没有删除任何项。');
+  });
+
   it('IMG-03 多组合并中途失败的提示说明前面几组已合并、没有删除任何媒体', () => {
     expect(describeMergeFailure('数据库繁忙', 0, 1, '视频')).toBe('合并元数据失败，没有删除任何视频：数据库繁忙。合并可以重复执行，处理好之后再删除即可。');
     const partial = describeMergeFailure('数据库繁忙', 2, 3, '图片');
@@ -141,15 +175,21 @@ describe('utils/cleanupSelection（D-PC49 统一勾选规则）', () => {
   });
 
   // P-032 复审 m3：数据库合并已提交、同步已看失败时后端带 merge_committed: 前缀；前面几组的提示不丢。
-  it('IMG-03 合并已提交但同步已看失败：说明第 k 组已合并、前几组也已合并、没有删除任何媒体', () => {
-    const only = describeMergeFailure(`${MERGE_COMMITTED_PREFIX} 合并已看状态失败：数据库繁忙`, 0, 1, '视频');
-    expect(only).toBe('第 1 组的整理成果已合并到保留项，但同步已看状态失败（合并已看状态失败：数据库繁忙），没有删除任何视频。合并可以重复执行，处理好之后再删除即可。');
+  // P-032 复审 Minor：失败的那一组用保留项的文件名指明（不含目录），并说明字幕未复制。
+  it('IMG-03 合并已提交但同步已看失败：用保留项文件名指明那一组、说明字幕未复制、前几组也已合并、没有删除任何媒体', () => {
+    const only = describeMergeFailure(`${MERGE_COMMITTED_PREFIX} 合并已看状态失败：数据库繁忙`, 0, 1, '视频', [], '/lib/a/电影.mkv');
+    expect(only).toBe('保留「电影.mkv」的那一组的整理成果已合并到保留项，但同步已看状态失败（合并已看状态失败：数据库繁忙），字幕未复制，没有删除任何视频。合并可以重复执行，处理好之后再删除即可。');
     expect(only).not.toContain(MERGE_COMMITTED_PREFIX);
     expect(only).not.toContain('合并元数据失败');
+    expect(only).not.toContain('/lib/a');
+    expect(only).not.toContain('第 1 组');
+    // Windows 风格的分隔符同样只留文件名。
+    expect(describeMergeFailure(`${MERGE_COMMITTED_PREFIX} x`, 0, 1, '视频', [], 'D:\\影片\\b.mp4')).toContain('保留「b.mp4」的那一组');
 
     // Wails 给字符串；Error 对象（测试替身）同样识别，而且不带「Error:」。
-    const later = describeMergeFailure(new Error('merge_committed: 合并已看状态失败：setter down'), 2, 3, '视频', ['字幕迁移失败：目标文件已存在']);
-    expect(later).toContain('第 3 组的整理成果已合并到保留项，但同步已看状态失败');
+    const later = describeMergeFailure(new Error('merge_committed: 合并已看状态失败：setter down'), 2, 3, '视频', ['字幕迁移失败：目标文件已存在'], 'c.mp4');
+    expect(later).toContain('保留「c.mp4」的那一组的整理成果已合并到保留项，但同步已看状态失败');
+    expect(later).toContain('字幕未复制');
     expect(later).toContain('没有删除任何视频');
     expect(later).toContain('共 3 组，前 2 组已经合并到各自的保留项');
     expect(later).toContain('已合并的组另有 1 条提示：字幕迁移失败：目标文件已存在');
