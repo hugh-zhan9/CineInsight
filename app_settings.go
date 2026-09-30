@@ -275,10 +275,11 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 				os.Exit(0)
 			}()
 		}
-		return err
+		// 交给界面的文案不带绝对路径（G-3）；错误链不变，前缀 restore_committed / restore_fatal 照旧。
+		return services.WithoutAbsolutePaths(err)
 	}
 	a.resumeAfterDatabaseRestoreFailure()
-	return err
+	return services.WithoutAbsolutePaths(err)
 }
 
 // enterDatabaseRestoreMode 是数据库维护模式的唯一入口，恢复备份与切换后端共用（D-PC55）：

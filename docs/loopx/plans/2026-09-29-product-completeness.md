@@ -1522,3 +1522,10 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
   - AI-CONTEXT 新增绑定守卫的约定，人脸簇列表注明 App 层已改走 `ListFaceClusterPage`；
   - 按 P-039 的建议更正详细设计 5 处：状态行、§1.2b 回收站列表方法名、IINA 事件名、手机端每日锁定的解除方式、`ApproveAITagCandidatesByFilter` 签名，并在 §12 补上两份文档。
 - 代码侧遗留，记入交接：浏览器扩展下载页的 `stateLabel` 缺 `remuxing` 的中文；`services/jellyfin_library.go` 中 `deleteItem` 的注释已过时。
+
+**收尾核对**（2026-09-30，主代理）：
+- 问题覆盖（§V.2）：88 个 ID 都至少被一条测试引用（Go 用去连字符形式，前端和扩展用原形式）。
+- 架构唯一性：`SubtitleFileWriter`、`rewriteLibraryPathPrefixTx`、`hasAnySubtitleSQL`、`activeTagIDs`、Go 的 `isWatchCompleted` / `resumable` 各只有一份，JS 各一份（`watchState.js`）。`clause.Locking` 与基线 `43efd8a` 都是 31 处，没有新增数据库锁，`face_review_service.go` 里那一处只是换了位置。
+- 「继续观看」的排序原先在片库与 Jellyfin `Items/Resume` 各写一遍，抽成共用的 `orderContinueWatching`。
+- 数据库恢复的报错原先把系统错误和 `pg_restore` 的输出原样交给界面，可能带绝对路径。新增 `services.WithoutAbsolutePaths`，只擦文案、错误链不变；`RestoreDatabaseBackup` 返回前统一经过它。它用自己的严格规则，不误擦「恢复 / 切换」「SQLite/PG」里的斜杠。测试 `TestWithoutAbsolutePathsKeepsErrorChainAPP01`。
+- 扩展下载页补上 `remuxing` 的中文「转为 MP4 中」；更正 Jellyfin `deleteItem` 过时的注释。

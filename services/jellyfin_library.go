@@ -767,9 +767,8 @@ func (s *JellyfinServer) orderVideos(query *gorm.DB, q url.Values, filter Librar
 		return query.Order("CASE WHEN videos.personal_rating IS NULL THEN 1 ELSE 0 END ASC").Order("videos.personal_rating" + direction).Order("videos.id DESC"), nil
 	}
 	if filter.SmartView == LibraryViewContinueWatching || jellyfinResumeRequested(q) {
-		// Same order as the library's 继续观看 (PLAY-09, ListContinueWatchingWithFilter): latest
-		// progress first; legacy rows without a progress time last on both backends.
-		return query.Order("CASE WHEN videos.watch_progress_updated_at IS NULL THEN 1 ELSE 0 END ASC").Order("videos.watch_progress_updated_at DESC").Order("videos.id DESC"), nil
+		// Same order as the library's 继续观看 (PLAY-09): one shared helper, see orderContinueWatching.
+		return orderContinueWatching(query), nil
 	}
 	if filter.SmartView == LibraryViewRecentlyAdded {
 		return query.Order("videos.created_at DESC").Order("videos.id DESC"), nil

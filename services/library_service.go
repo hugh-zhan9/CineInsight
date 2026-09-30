@@ -1168,6 +1168,13 @@ func (s *VideoService) ListRecentlyPlayedWithFilter(filter LibraryFilter, cursor
 	return videos, err
 }
 
+// orderContinueWatching 是「继续观看」的唯一排序口径（D-PC42、PLAY-09），片库与 Jellyfin 的 Items/Resume 共用：
+// 最近更新进度的在前；没有进度时间的历史行排最后（两种后端一致），同时间按 id 倒序。
+func orderContinueWatching(query *gorm.DB) *gorm.DB {
+	return query.Order("CASE WHEN videos.watch_progress_updated_at IS NULL THEN 1 ELSE 0 END ASC").
+		Order("videos.watch_progress_updated_at DESC").Order("videos.id DESC")
+}
+
 // ListContinueWatchingWithFilter 是「继续观看」视图的默认排序（D-PC42、PLAY-09）：条件为
 // resumableSQL，按 (watch_progress_updated_at DESC, id DESC) 键集分页，沿用最近播放的游标模式——
 // 调用方把上一页最后一行的 watch_progress_updated_at（RFC3339 / RFC3339Nano，任意时区）与 id 传回来。
@@ -1211,9 +1218,7 @@ func (s *VideoService) ListContinueWatchingWithFilter(filter LibraryFilter, curs
 		query = query.Where("videos.watch_progress_updated_at IS NULL AND videos.id < ?", cursorID)
 	}
 	var videos []models.Video
-	err = query.Order("CASE WHEN videos.watch_progress_updated_at IS NULL THEN 1 ELSE 0 END ASC").
-		Order("videos.watch_progress_updated_at DESC").Order("videos.id DESC").
-		Limit(limit).Find(&videos).Error
+	err = orderContinueWatching(query).Limit(limit).Find(&videos).Error
 	if err != nil {
 		return nil, err
 	}
