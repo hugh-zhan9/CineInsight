@@ -86,7 +86,9 @@ describe('多选批量栏', () => {
     await byText('导入本地资料').trigger('click');
     await byText('批量删除').trigger('click');
     await byText('清除选择').trigger('click');
-    for (const name of ['batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-delete', 'clear-selection']) {
+    // MEDIA-14：批量生成字幕由批量栏发出，工具栏原样转发给片库页。
+    await byText('批量生成字幕').trigger('click');
+    for (const name of ['batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-delete', 'clear-selection', 'batch-subtitle']) {
       expect(wrapper.emitted(name)).toHaveLength(1);
     }
     wrapper.unmount();

@@ -144,7 +144,7 @@
     </button>
 
     <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="unlinkingImageIDs.includes(imagePreview.id)" :action-error="entityImagesError" @close="imagePreview = null" @unlink="unlinkPersonImage" @delete="requestPersonMediaDelete('image', $event)" />
-    <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" />
+    <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" @restored="handlePersonMediaRestored" />
 
     <PreviewDrawer
       v-if="drawerEntity"
@@ -157,6 +157,7 @@
       @person-deleted="handlePersonDeleted"
       @relations-updated="handleRelationsUpdated"
       @media-deleted="handlePersonMediaDeleted($event, true)"
+      @media-restored="handlePersonMediaRestored($event, true)"
     />
   </main>
 </template>
@@ -291,6 +292,15 @@ export default {
       if (!fromDrawer) this.$refs.personDrawer?.handlePersonMediaDeleted?.(target, false);
       if (target.kind === 'image' && !this.entityImages.length && this.entityImageCursor) this.loadMoreEntityImages();
       if (target.kind === 'video' && !this.entityVideos.length && this.entityVideosHasMore) this.loadEntityVideos(false);
+    },
+    // 删除被撤销或从回收站恢复（PersonMediaDeleteDialog 的 restored，来自本页或抽屉）：恢复的媒体回到人物名下，
+    // 重读当前人物的视频首页、图片首页与计数；本页发起的恢复顺带让停在人物详情的抽屉也重读。
+    async handlePersonMediaRestored(payload, fromDrawer = false) {
+      if (!fromDrawer) this.$refs.personDrawer?.handlePersonMediaRestored?.(payload, false);
+      if (!this.isPeople || !this.selectedEntity) return;
+      this._entityVideosToken = Symbol('media-restored'); this.entityVideosLoading = false;
+      this._entityImagesToken = null; this.entityImagesLoading = false;
+      await this.loadEntityVideos(true);
     },
     async revealPersonImage(image) {
       try { await RevealImage(Number(image.id)); }

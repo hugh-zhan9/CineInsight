@@ -39,18 +39,31 @@
       </div>
 
       <div class="insights-grid">
-        <article class="insights-panel insights-panel--wide">
+        <!-- 观看记录（D-PC43、PLAY-07）：热力图按来源分列。桌面两种来源在应用启动外部播放器时即记，
+             标为「启动播放」；内嵌、手机与 Jellyfin 是累计播放越过阈值才记的有效观看。 -->
+        <article class="insights-panel insights-panel--wide" data-test="insights-watch-records">
           <div class="insights-panel__heading">
-            <h3>近一年观看热力</h3>
-            <span>共 {{ formatNumber(heatmapTotal) }} 次播放 · 最长连续 {{ longestWatchStreak }} 天</span>
+            <h3>观看记录</h3>
+            <span data-test="insights-heatmap-total">近一年{{ heatmapSourceLabel }} {{ formatNumber(heatmapTotal) }} 条 · 最长连续 {{ longestWatchStreak }} 天</span>
             <div class="heatmap-legend" aria-hidden="true">
               少<i class="heat-0"></i><i class="heat-1"></i><i class="heat-2"></i><i class="heat-3"></i><i class="heat-4"></i>多
             </div>
           </div>
+          <div class="heatmap-sources" role="group" aria-label="按来源查看" data-test="insights-heatmap-sources">
+            <button
+              v-for="option in heatmapSourceOptions"
+              :key="option.source"
+              type="button"
+              :class="['heatmap-source', { active: option.source === activeHeatmapSource }]"
+              :aria-pressed="option.source === activeHeatmapSource"
+              :data-test="`insights-heatmap-source-${option.source}`"
+              @click="heatmapSource = option.source"
+            >{{ option.label }}<small>{{ formatNumber(option.count) }}</small></button>
+          </div>
           <p data-test="insights-play-events">{{ playEventsSummaryText }}</p>
-          <p class="insights-play-events-note">累计事件包含重复播放及已删除影片；历史事件每部仅补记一次。热力图仅展示近一年。</p>
-          <div class="watch-heatmap" aria-label="近一年观看热力图">
-            <span v-for="day in heatmapDays" :key="day.date" :class="`heat-${day.level}`" :title="`${day.date} · ${day.count} 次播放`"></span>
+          <p class="insights-play-events-note" data-test="insights-watch-records-note">口径：「启动播放」在应用启动外部播放器时即记一次，不代表看了多久；内嵌观看、手机观看与 Jellyfin 观看在同一次播放累计超过 60 秒（短片取时长的一半）或看完时记一次。累计事件包含重复播放及已删除影片；历史事件每部仅补记一次。热力图仅展示近一年。</p>
+          <div class="watch-heatmap" aria-label="近一年观看记录热力图">
+            <span v-for="day in heatmapDays" :key="day.date" :class="`heat-${day.level}`" :title="day.title"></span>
           </div>
         </article>
 
@@ -106,6 +119,28 @@ import { GetImageInsights, GetLibraryInsights } from '../../wailsjs/go/main/App'
 import BucketChart from './insights/BucketChart.vue';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
+// 播放账本各来源的叫法（D-PC43）。桌面两种来源在启动外部播放器时即记，叫「启动播放」；
+// inline_view / mobile_feed / jellyfin_view 是累计播放越过阈值（或看完）才记的有效观看。
+// 顺序即图例与摘要的顺序；后端将来加了新来源，按原样排在后面。
+const PLAY_SOURCE_LABELS = {
+  desktop_play: '启动播放',
+  desktop_random: '随机启动播放',
+  inline_view: '内嵌观看',
+  mobile_feed: '手机观看',
+  jellyfin_view: 'Jellyfin 观看',
+  legacy: '历史补记'
+};
+
+function orderedSources(counts) {
+  const known = Object.keys(PLAY_SOURCE_LABELS).filter(source => Number(counts[source] || 0) > 0);
+  const extra = Object.keys(counts).filter(source => !(source in PLAY_SOURCE_LABELS) && Number(counts[source] || 0) > 0).sort();
+  return [...known, ...extra];
+}
+
+function playSourceLabel(source) {
+  return PLAY_SOURCE_LABELS[source] || source;
+}
+
 export default {
   name: 'InsightsPage',
   components: { BucketChart },
@@ -113,7 +148,7 @@ export default {
     // 卷可用性由扫描目录与监听状态推出，不再单开一条后端统计。
     directories: { type: Array, default: () => [] }
   },
-  data() { return { loading: false, error: '', stats: null, imageLoading: false, imageError: '', imageStats: null }; },
+  data() { return { loading: false, error: '', stats: null, imageLoading: false, imageError: '', imageStats: null, heatmapSource: 'all' }; },
   computed: {
     averageDurationText() {
       const count = Number(this.stats?.summary?.video_count || 0);
@@ -136,22 +171,41 @@ export default {
       const broken = [...roots.values()].filter(Boolean).length;
       return broken > 0 ? `${roots.size} 个卷 · ${broken} 个当前不可用` : `${roots.size} 个卷`;
     },
+    // 近一年各来源的条数（每天的 by_source 相加），供「按来源分列」的切换与计数。
+    heatmapSourceTotals() {
+      const totals = {};
+      for (const day of this.stats?.watch_heatmap || []) {
+        for (const [source, count] of Object.entries(day?.by_source || {})) {
+          totals[source] = (totals[source] || 0) + Number(count || 0);
+        }
+      }
+      return totals;
+    },
+    heatmapSourceOptions() {
+      const totals = this.heatmapSourceTotals;
+      const all = (this.stats?.watch_heatmap || []).reduce((total, day) => total + Number(day.count || 0), 0);
+      return [
+        { source: 'all', label: '全部', count: all },
+        ...orderedSources(totals).map(source => ({ source, label: playSourceLabel(source), count: totals[source] }))
+      ];
+    },
+    // 选中的来源刷新后不在了（比如一年窗口滑过），回到「全部」。
+    activeHeatmapSource() {
+      return this.heatmapSourceOptions.some(option => option.source === this.heatmapSource) ? this.heatmapSource : 'all';
+    },
+    heatmapSourceLabel() {
+      return this.activeHeatmapSource === 'all' ? '' : playSourceLabel(this.activeHeatmapSource);
+    },
     heatmapTotal() {
-      return (this.stats?.watch_heatmap || []).reduce((total, day) => total + Number(day.count || 0), 0);
+      return this.heatmapDays.reduce((total, day) => total + day.count, 0);
     },
     // 播放事件账本的两项：全库流水总数与按来源的拆分。总数不限一年窗口，
     // 与只看近一年的热力图刻意是两个数。
     playEventsSummaryText() {
       const total = Number(this.stats?.total_play_events || 0);
       const bySource = this.stats?.plays_by_source || {};
-      const labels = { desktop_play: '桌面', desktop_random: '随机', mobile_feed: '手机', legacy: '历史' };
-      const ordered = Object.keys(labels).filter(source => Number(bySource[source] || 0) > 0);
-      // 后端将来加了新来源也要能显示出来，不认识的键按原样排在后面。
-      const extra = Object.keys(bySource)
-        .filter(source => !(source in labels) && Number(bySource[source] || 0) > 0)
-        .sort();
-      const parts = [...ordered, ...extra]
-        .map(source => `${labels[source] || source} ${this.formatNumber(bySource[source])}`);
+      const parts = orderedSources(bySource)
+        .map(source => `${playSourceLabel(source)} ${this.formatNumber(bySource[source])}`);
       const head = `播放事件 ${this.formatNumber(total)}`;
       return parts.length > 0 ? `${head} · ${parts.join(' · ')}` : head;
     },
@@ -188,7 +242,19 @@ export default {
       return null;
     },
     heatmapDays() {
-      const counts = new Map((this.stats?.watch_heatmap || []).map(day => [String(day.date).slice(0, 10), Number(day.count || 0)]));
+      const selected = this.activeHeatmapSource;
+      const byDate = new Map((this.stats?.watch_heatmap || []).map(day => [String(day.date).slice(0, 10), day]));
+      const dayCount = (day) => {
+        if (!day) return 0;
+        return selected === 'all' ? Number(day.count || 0) : Number(day.by_source?.[selected] || 0);
+      };
+      // 悬停提示总带当天的来源拆分，选中某一来源时也看得到别的来源。
+      const dayTitle = (date, day) => {
+        const total = Number(day?.count || 0);
+        const bySource = day?.by_source || {};
+        const parts = orderedSources(bySource).map(source => `${playSourceLabel(source)} ${bySource[source]}`);
+        return parts.length > 0 ? `${date} · 共 ${total} 条（${parts.join(' · ')}）` : `${date} · ${total} 条`;
+      };
       // 后端读 play_events 后在 Go 侧按 time.Local 归并成 YYYY-MM-DD；
       // 坐标轴同样用本地日期构建，避免 UTC 轴导致的错位一天。
       const localDate = (value) => {
@@ -203,8 +269,9 @@ export default {
       const result = [];
       for (let index = 0; index < 365; index += 1) {
         const date = localDate(cursor);
-        const count = counts.get(date) || 0;
-        result.push({ date, count, level: count === 0 ? 0 : Math.min(4, Math.ceil(Math.log2(count + 1))) });
+        const day = byDate.get(date);
+        const count = dayCount(day);
+        result.push({ date, count, level: count === 0 ? 0 : Math.min(4, Math.ceil(Math.log2(count + 1))), title: dayTitle(date, day) });
         cursor.setDate(cursor.getDate() + 1);
       }
       return result;
@@ -282,6 +349,11 @@ export default {
 .insights-progress { height: 5px; margin-top: 3px; border-radius: 3px; background: var(--neutral-softer); }
 .insights-progress i { display: block; height: 100%; border-radius: inherit; background: var(--accent-color); }
 .heatmap-legend { display: flex; align-items: center; gap: 5px; margin-left: auto; color: var(--text-muted); font-size: 11px; }
+.heatmap-sources { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.heatmap-source { display: inline-flex; align-items: baseline; gap: 6px; height: var(--h-compact); padding: 0 10px; border: 1px solid var(--border-color); border-radius: 999px; background: var(--control-bg); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.heatmap-source small { color: var(--text-muted); font-family: var(--font-mono); font-size: 11px; }
+.heatmap-source:hover { border-color: var(--border-strong); background: var(--control-hover-bg); }
+.heatmap-source.active { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .heatmap-legend i { width: 10px; height: 10px; border-radius: 2px; }
 .insights-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .insights-panel--wide { grid-column: 1 / -1; }

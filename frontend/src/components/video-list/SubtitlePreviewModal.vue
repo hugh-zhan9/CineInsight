@@ -1,10 +1,10 @@
 <template>
-  <BaseModal v-if="subtitlePreview.show" class="subtitle-preview-modal">
+  <BaseModal v-if="subtitlePreview.show" class="subtitle-preview-modal" @close="subtitlePreview.show = false">
       <h3>字幕预览</h3>
       <p class="cleanup-intro" v-if="subtitlePreview.video">{{ subtitlePreview.video.name }}</p>
 
       <div v-if="subtitlePreview.loading" class="cleanup-loading">正在读取字幕片段...</div>
-      <div v-else-if="subtitlePreview.error" class="cleanup-error">{{ subtitlePreview.error }}</div>
+      <div v-else-if="subtitlePreview.error" class="cleanup-error" data-test="subtitle-preview-error">{{ subtitlePreview.error }}</div>
       <div v-else-if="subtitlePreview.segments.length" class="subtitle-preview-list">
         <div
           v-for="segment in subtitlePreview.segments"
@@ -29,6 +29,9 @@
 <script>
 import { GetSubtitleSegments } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
+import { subtitleExceptionText } from '../../utils/subtitleTools.js';
+
+const MISSING_SIDECAR_TEXT = '这个视频没有同名 .srt 字幕。内嵌字幕或其他格式（.ass、.vtt 等）的字幕暂不支持在这里预览、编辑或翻译。';
 
 // 字幕预览弹窗（行菜单的「预览字幕」）。命中高亮跟着片库页当前的搜索词与搜索模式走，
 // 所以这两项作为 prop 传进来。
@@ -55,7 +58,11 @@ export default {
         this.subtitlePreview.segments = segments || [];
       } catch (err) {
         console.error('读取字幕片段失败:', err);
-        this.subtitlePreview.error = '读取字幕片段失败: ' + err;
+        // 没有同名 .srt 是最常见的原因：说清预览只认同名 .srt（D-PC17），不把系统错误与路径原样抛给用户（G-3）。
+        const raw = String(err?.message || err || '');
+        this.subtitlePreview.error = /no such file or directory/i.test(raw)
+          ? MISSING_SIDECAR_TEXT
+          : `读取字幕片段失败：${subtitleExceptionText(err)}`;
       } finally {
         this.subtitlePreview.loading = false;
       }

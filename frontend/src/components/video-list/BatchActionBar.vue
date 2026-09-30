@@ -8,6 +8,8 @@
       <button @click="$emit('batch-move')" class="btn-secondary btn-compact" :disabled="migrationRunning">批量迁移</button>
       <button type="button" class="btn-secondary btn-compact" @click="$emit('batch-local-metadata')">导入本地资料</button>
       <button type="button" class="btn-secondary btn-compact" data-test="batch-playback-proxy" @click="$emit('batch-playback-proxy')">为选中生成代理</button>
+      <!-- 批量生成字幕（D-PC23、MEDIA-14）：逐个排进字幕队列，确认与汇总由片库页的字幕弹窗负责。 -->
+      <button type="button" class="btn-secondary btn-compact" data-test="batch-subtitle" @click="$emit('batch-subtitle')">批量生成字幕</button>
       <button @click="$emit('batch-delete')" class="btn-danger btn-compact">批量删除</button>
       <div class="selection-toolbar__spacer"></div>
       <button type="button" class="link-btn" @click="$emit('toggle-select-all')">{{ allVisibleSelected ? '取消全选' : '选择本页' }}</button>
@@ -25,7 +27,7 @@ export default {
     migrationRunning: { type: Boolean, default: false },
     allVisibleSelected: { type: Boolean, default: false }
   },
-  emits: ['batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-delete', 'toggle-select-all', 'clear-selection']
+  emits: ['batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete', 'toggle-select-all', 'clear-selection']
 };
 </script>
 

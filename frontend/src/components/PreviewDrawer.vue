@@ -19,9 +19,29 @@
       </div>
 
       <template v-else-if="currentEntry?.type === 'video' && details">
+        <!-- 动作条（D-PC47、PLAY-14）：播放、收藏、点赞、已看与星级评分都在抽屉顶部，不必只靠快捷键。
+             评分点一下即保存（UpdateVideoRating），不经「保存作品信息」。 -->
+        <section v-if="actionVideo" class="detail-section drawer-action-bar" data-test="drawer-action-bar" aria-label="常用操作">
+          <div class="drawer-action-bar__buttons">
+            <button type="button" class="row-btn row-btn--primary" data-test="drawer-action-play" :disabled="actionBusy === 'play'" @click="playFromDrawer">{{ actionBusy === 'play' ? '启动中...' : '播放' }}</button>
+            <button type="button" :class="['row-btn', { 'row-btn--fav': actionVideo.is_favorite }]" :aria-pressed="!!actionVideo.is_favorite" data-test="drawer-action-favorite" :disabled="!!actionBusy" @click="toggleVideoState('favorite')">收藏</button>
+            <button type="button" :class="['row-btn', { active: actionVideo.is_liked }]" :aria-pressed="!!actionVideo.is_liked" data-test="drawer-action-like" :disabled="!!actionBusy" @click="toggleVideoState('liked')">点赞</button>
+            <button type="button" :class="['row-btn', { active: actionVideo.is_watched }]" :aria-pressed="!!actionVideo.is_watched" data-test="drawer-action-watched" :disabled="!!actionBusy" @click="toggleVideoState('watched')">已看</button>
+          </div>
+          <div class="drawer-stars" role="group" aria-label="个人评分，0 到 10，支持 0.5 分" data-test="drawer-stars">
+            <span v-for="star in 10" :key="star" :class="['drawer-star', `drawer-star--${starFill(star)}`]">
+              <button type="button" class="drawer-star__half drawer-star__half--left" :aria-label="`评 ${star - 0.5} 分`" :aria-pressed="ratingValue === star - 0.5" :data-test="`drawer-star-${star - 0.5}`" :disabled="ratingSaving" @click="rateFromStars(star - 0.5)"></button>
+              <button type="button" class="drawer-star__half drawer-star__half--right" :aria-label="`评 ${star} 分`" :aria-pressed="ratingValue === star" :data-test="`drawer-star-${star}`" :disabled="ratingSaving" @click="rateFromStars(star)"></button>
+            </span>
+            <span class="drawer-stars__value" data-test="drawer-stars-value">{{ ratingValue === null ? '未评分' : `${ratingValue.toFixed(1)} / 10` }}</span>
+            <button v-if="ratingValue !== null" type="button" class="btn-secondary btn-compact" data-test="drawer-stars-clear" :disabled="ratingSaving" @click="rateFromStars(null)">清除</button>
+          </div>
+          <p v-if="actionError" class="detail-error-text" role="alert" data-test="drawer-action-error">{{ actionError }}</p>
+        </section>
+
         <section class="detail-section detail-section--player">
           <div v-if="!currentSession" class="preview-drawer__placeholder">正在准备预览...</div>
-          <template v-else-if="currentSession.mode === 'inline' && currentSession.inline_source">
+          <template v-else-if="currentSession.mode === 'inline' && currentSession.inline_source && !inlinePlaybackFailed">
             <div class="preview-drawer__player-shell">
               <video
                 ref="videoElement"
@@ -31,12 +51,14 @@
                 preload="metadata"
                 :muted="true"
                 @loadedmetadata="handleLoadedMetadata"
-                @play="hasPlaybackStarted = true"
+                @play="handlePlay"
                 @timeupdate="handleTimeUpdate"
-                @pause="emitWatchProgress(true, false)"
+                @seeking="handleSeeking"
+                @pause="handlePause"
                 @ended="emitWatchProgress(true, true)"
+                @error="handleVideoError"
               >
-                <source :src="currentSession.inline_source.locator_value" :type="currentSession.inline_source.mime" />
+                <source :src="currentSession.inline_source.locator_value" :type="currentSession.inline_source.mime" @error="handleSourceError" />
               </video>
               <div
                 v-if="activeSeekSprite"
@@ -63,10 +85,21 @@
               </div>
             </div>
           </template>
+          <!-- 内嵌播放器报错（D-PC26、PLAY-05）：解码失败不再是一块黑屏，给出系统播放器与播放代理两条路。
+               已经在经代理播放时再生成一份也没用，只留系统播放器。 -->
+          <div v-else-if="currentSession.mode === 'inline' && inlinePlaybackFailed" class="preview-drawer__placeholder" role="alert" data-test="preview-inline-error">
+            <p>无法内嵌播放此文件</p>
+            <div class="detail-action-row">
+              <button type="button" class="btn-primary" data-test="preview-inline-error-external" @click="$emit('preview-externally', details.video)">用系统播放器预览</button>
+              <button v-if="!playingThroughProxy" type="button" class="btn-secondary" data-test="preview-inline-error-proxy" :disabled="proxyBusy || proxyPending" @click="createPlaybackProxy">{{ proxyCreateLabel }}</button>
+            </div>
+            <p v-if="proxyProgressText" class="preview-drawer__proxy-progress" data-test="preview-inline-error-progress">{{ proxyProgressText }}</p>
+          </div>
           <template v-else-if="currentSession.mode === 'external-preview' && currentSession.external_action">
             <div class="preview-drawer__placeholder">
               <p>{{ currentSession.reason_message }}</p>
               <button type="button" class="btn-primary" @click="$emit('preview-externally', details.video)">{{ currentSession.external_action.button_label }}</button>
+              <p v-if="proxyProgressText" class="preview-drawer__proxy-progress" data-test="preview-player-proxy-progress">{{ proxyProgressText }}</p>
             </div>
           </template>
           <div v-else class="preview-drawer__placeholder">{{ currentSession.reason_message || '当前视频暂不支持预览。' }}</div>
@@ -158,24 +191,26 @@
           <p v-if="technicalError || details.technical_metadata?.last_error" class="detail-error-text">最近错误：{{ technicalError || details.technical_metadata.last_error }}</p>
 
           <!-- 播放代理（D-004、D-006）：mkv/avi 这类容器在应用内播不了，
-               生成一份 mp4 代理之后预览与手机端自动改用它，源文件不动。 -->
+               生成一份 mp4 代理之后预览与手机端自动改用它，源文件不动。
+               排队与进度来自 playback-proxy-state（D-PC26）：这一项完成后自动重取预览会话、切到内嵌播放。 -->
           <div class="proxy-block" data-test="preview-proxy-block">
             <p class="proxy-block__status" data-test="preview-proxy-status">{{ proxyStatusText }}</p>
+            <p v-if="proxyNotice" class="proxy-block__status" data-test="preview-proxy-notice">{{ proxyNotice }}</p>
             <p v-if="proxyError" class="detail-error-text" data-test="preview-proxy-error">{{ proxyError }}</p>
             <div class="detail-action-row">
               <button
                 type="button"
                 class="btn-secondary btn-compact"
                 data-test="preview-proxy-create"
-                :disabled="proxyBusy"
+                :disabled="proxyBusy || proxyPending"
                 @click="createPlaybackProxy"
-              >{{ proxyBusy ? '生成中...' : '生成播放代理' }}</button>
+              >{{ proxyCreateLabel }}</button>
               <button
                 v-if="playbackProxy"
                 type="button"
                 class="btn-secondary btn-compact btn-danger-outline"
                 data-test="preview-proxy-delete"
-                :disabled="proxyBusy"
+                :disabled="proxyBusy || proxyPending"
                 @click="deletePlaybackProxy"
               >删除此代理</button>
             </div>
@@ -379,7 +414,7 @@
     </div>
     <ImageLibraryPicker v-if="avatarPickerOpen" :busy="avatarSaving" :action-error="avatarError" @close="avatarPickerOpen = false" @select="setAvatarFromImage" />
     <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="isPersonImageUpdating(imagePreview.id)" :action-error="personImageError" @close="imagePreview = null" @unlink="removePersonImageRelation" @delete="requestPersonMediaDelete('image', $event)" />
-    <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" />
+    <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" @restored="handlePersonMediaRestored" />
   </aside>
 </template>
 
@@ -388,9 +423,12 @@ import {
   AddCollectionVideo, AddCollectionVideos, AddPersonVideo, AddPersonVideos, CreatePerson, DeleteCollection, GetAllDirectories, GetCollectionDetail, GetPersonDetail, GetPreviewSession, GetVideoDetails, ListCollections, ListPeople,
   GetPersonImages, RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonImage, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
   SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails,
-  UpdateVideoRating, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy
+  UpdateVideoRating, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus,
+  PlayVideo, SetVideoFavorite, SetVideoLiked, SetVideoWatched, RecordViewEvent
 } from '../../wailsjs/go/main/App';
-import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
+import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackOrigin, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
+import { isWatchCompleted, resumePosition } from '../utils/watchState.js';
+import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../utils/viewThreshold.js';
 import GlossaryEditor from './GlossaryEditor.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import ImageLibraryPicker from './ImageLibraryPicker.vue';
@@ -399,7 +437,14 @@ import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 import { confirmAction } from '../utils/feedback.js';
-import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyStrategyLabel } from '../utils/playbackProxy.js';
+import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyItemState, playbackProxyItemStateText, playbackProxyStrategyLabel } from '../utils/playbackProxy.js';
+
+// 动作条的三个状态开关：字段名、绑定与失败时的说法。
+const VIDEO_STATE_TOGGLES = {
+  favorite: { field: 'is_favorite', call: (id, value) => SetVideoFavorite(id, value), failure: '更新收藏状态失败' },
+  liked: { field: 'is_liked', call: (id, value) => SetVideoLiked(id, value), failure: '更新点赞状态失败' },
+  watched: { field: 'is_watched', call: (id, value) => SetVideoWatched(id, value), failure: '更新观看状态失败' }
+};
 
 const sameIDSet = (a, b) => {
   const left = [...new Set((a || []).map(Number))].sort((x, y) => x - y);
@@ -418,7 +463,10 @@ export default {
     resumePositionSeconds: { type: Number, default: 0 },
     pageActive: { type: Boolean, default: true }
   },
-  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale'],
+  // watch-progress 载荷：{ videoID, positionSeconds, completed, origin: resume|start|jump, durationSeconds（未知为 0）}（D-PC42）。
+  // media-restored：人物媒体删除后被撤销或从回收站恢复，载荷 { kind, ids }，宿主据此重读列表。
+  // playback-attempted：动作条「播放」的 PlaybackAttemptResult，宿主可按自己的列表口径处理失效与重定位。
+  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'media-restored', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale', 'playback-attempted'],
   data() {
     return {
       selectedPersonImageIDs: [], imagePreview: null, avatarPickerOpen: false, avatarSaving: false, avatarError: '',
@@ -437,7 +485,12 @@ export default {
       relatedVideoKeyword: '', relatedVideoDirectory: '', relatedVideoDirectories: [], relatedVideoCandidates: [], relatedVideoSelection: [], relatedVideoCursor: null, relatedVideoHasMore: false, relatedVideoSearching: false, relatedVideoSearchPerformed: false, relatedVideoUpdatingIDs: [], relatedVideoError: '',
       appliedSeekKey: '', lastProgressEmittedAt: 0, resettingVideo: false, hasPlaybackStarted: false,
       seekPreview: null, seekSpriteUnavailable: false, seekSpriteRetryCount: 0, seekSpriteRetryTimer: null,
-      playbackProxy: null, proxyBusy: false, proxyError: ''
+      playbackProxy: null, proxyBusy: false, proxyError: '', proxyNotice: '',
+      // 正在等的那一项代理（D-PC26）：{ videoID, state }，state 为 playbackProxyItemState 的结果，
+      // 入队请求还没返回时 phase 为 submitting。只有它完成时才自动切换，旧结果不会触发。
+      proxyTracking: null,
+      inlinePlaybackFailed: false,
+      actionBusy: '', actionError: ''
     };
   },
   computed: {
@@ -515,7 +568,40 @@ export default {
     playingThroughProxy() {
       return Boolean(this.currentSession?.proxy);
     },
+    // 动作条读的状态：根条目以宿主传入的行为准（快捷键在宿主那边改了收藏 / 已看，这里要跟着变），
+    // 嵌套条目只有抽屉自己读到的详情。
+    actionVideo() {
+      const base = this.currentEntry?.type === 'video' ? this.details?.video : null;
+      if (!base) return null;
+      const live = Number(this.video?.id) === Number(base.id) ? this.video : null;
+      if (!live) return base;
+      return {
+        ...base,
+        is_favorite: live.is_favorite ?? base.is_favorite,
+        is_liked: live.is_liked ?? base.is_liked,
+        is_watched: live.is_watched ?? base.is_watched
+      };
+    },
+    ratingValue() {
+      const rating = this.details?.video?.personal_rating;
+      if (rating === null || rating === undefined || rating === '') return null;
+      const value = Number(rating);
+      return Number.isFinite(value) ? value : null;
+    },
+    proxyPending() {
+      return !!this.proxyTracking && this.currentEntry?.type === 'video' && this.proxyTracking.videoID === Number(this.currentEntry.id);
+    },
+    // 「排队中（第 N 个）」「生成中」（D-PC26、PLAY-04）。入队请求还没回来时说「正在加入队列」。
+    proxyProgressText() {
+      if (!this.proxyPending) return '';
+      return playbackProxyItemStateText(this.proxyTracking.state) || '正在加入队列';
+    },
+    proxyCreateLabel() {
+      if (this.proxyPending) return this.proxyTracking.state?.phase === 'queued' ? '排队中...' : '生成中...';
+      return this.proxyBusy ? '处理中...' : '生成播放代理';
+    },
     proxyStatusText() {
+      if (this.proxyPending) return `${this.proxyProgressText}。完成后会自动切到内嵌播放。`;
       if (this.playingThroughProxy) {
         const proxy = this.currentSession.proxy;
         return `当前正经播放代理播放（${playbackProxyStrategyLabel(proxy.strategy)}，${this.formatBytes(proxy.size)}）。`;
@@ -537,13 +623,30 @@ export default {
         if (oldSession) { this.emitWatchProgress(true, false, oldSession?.video_id); this.resetVideoElement(); }
         this.appliedSeekKey = '';
         this.seekPreview = null; this.seekSpriteUnavailable = false; this.clearSeekSpriteRetry();
+        // 换了会话就是换了一次播放：报错状态清掉，重新开一个观看会话（D-PC43）。
+        this.inlinePlaybackFailed = false;
+        this.startViewSession(newSession);
         this.$nextTick(() => this.configureVideoElement());
       }
     },
-    startTimeMs() { this.appliedSeekKey = ''; this.$nextTick(() => this.configureVideoElement()); }
+    startTimeMs(value) {
+      // 抽屉开着时又从字幕命中跳了一次：这一次播放从此按 jump 上报，只允许往前写断点（D-PC42）。
+      if (value !== null && value !== undefined && this._viewSession) this._viewSession.origin = 'jump';
+      this.appliedSeekKey = ''; this.$nextTick(() => this.configureVideoElement());
+    }
   },
-  mounted() { this.loadRelatedVideoDirectories(); this.resetRootEntry(); window.addEventListener('keydown', this.handleReviewShortcut); },
-  beforeUnmount() { window.removeEventListener('keydown', this.handleReviewShortcut); this.clearSeekSpriteRetry(); this.emitWatchProgress(true, false); this.resetVideoElement(); },
+  mounted() {
+    this.loadRelatedVideoDirectories(); this.resetRootEntry(); window.addEventListener('keydown', this.handleReviewShortcut);
+    // 代理队列的排位与完成（D-PC26）：本项完成后自动重取预览会话。
+    if (window.runtime?.EventsOn) {
+      const off = window.runtime.EventsOn('playback-proxy-state', status => this.applyProxyStatus(status, { fromEvent: true }));
+      if (typeof off === 'function') this._proxyStateOff = off;
+    }
+  },
+  beforeUnmount() {
+    window.removeEventListener('keydown', this.handleReviewShortcut); this.clearSeekSpriteRetry(); this.emitWatchProgress(true, false); this.resetVideoElement();
+    this._proxyStateOff?.(); this._proxyStateOff = null;
+  },
   methods: {
     requestPersonMediaDelete(kind, media) {
       if (this.currentEntry?.type !== 'person') return;
@@ -569,6 +672,12 @@ export default {
         if (target.kind === 'image' && !this.personImages.length && this.personImageCursor) this.loadMorePersonImages();
       }
       if (notify) this.$emit('media-deleted', target);
+    },
+    // 删除被撤销、或从撤销条打开的回收站里恢复了（PersonMediaDeleteDialog 的 restored）：恢复的媒体回到人物名下，
+    // 当前停在人物详情就整页重读（视频、图片与计数一起），并告诉宿主刷新它自己的列表。
+    async handlePersonMediaRestored(payload, notify = true) {
+      if (notify) this.$emit('media-restored', { kind: payload?.kind || '', ids: [...(payload?.ids || [])] });
+      if (this.currentEntry?.type === 'person') await this.loadCurrentEntry();
     },
 	handleReviewShortcut(event) {
 	  if (!this.pageActive) return;
@@ -619,8 +728,10 @@ export default {
           this.details = details;
           this.technicalError = '';
           this.nestedSession = nestedSession;
-          this.playbackProxy = null; this.proxyError = ''; this.proxyBusy = false;
+          this.playbackProxy = null; this.proxyError = ''; this.proxyNotice = ''; this.proxyBusy = false; this.proxyTracking = null;
+          this.actionBusy = ''; this.actionError = '';
           this.loadPlaybackProxy(Number(entry.id), requestToken);
+          this.loadProxyQueueState(Number(entry.id), requestToken);
           this.draft = createVideoDetailsDraft(details);
           this._personSearchToken = Symbol('person-search'); this.personCandidates = [...(details.people || [])];
           this.collectionKeyword = ''; this._collectionSearchToken = Symbol('collection-search'); this.collectionSearching = false;
@@ -947,6 +1058,59 @@ export default {
         if (this.isCurrentVideoRequest(videoID, entryToken)) this.ratingSaving = false;
       }
     },
+    // ===== 动作条（D-PC47、PLAY-14）=====
+    starFill(star) {
+      const value = this.ratingValue;
+      if (value === null) return 'empty';
+      if (value >= star) return 'full';
+      return value >= star - 0.5 ? 'half' : 'empty';
+    },
+    // 星级点一下即保存：与评分输入框同一条路（saveRatingNow → UpdateVideoRating），null 表示清除。
+    rateFromStars(value) {
+      if (this.ratingSaving) return;
+      this.draft.personalRating = value === null ? '' : String(value);
+      return this.saveRatingNow();
+    },
+    // 收藏 / 点赞 / 已看：直接调对应绑定，拿回的整条视频写回详情，并按「作品信息已更新」通知宿主刷新那一行。
+    async toggleVideoState(kind) {
+      const toggle = VIDEO_STATE_TOGGLES[kind];
+      const current = this.actionVideo;
+      if (!toggle || !current || this.actionBusy) return;
+      const videoID = Number(current.id); const entryToken = this._entryLoadToken;
+      this.actionBusy = kind; this.actionError = '';
+      try {
+        const updated = await toggle.call(videoID, !current[toggle.field]);
+        if (!this.isCurrentVideoRequest(videoID, entryToken)) return;
+        // 状态接口没带 tags 时沿用已有的标签，别用 null 盖掉。
+        const video = { ...this.details.video, ...(updated || { [toggle.field]: !current[toggle.field] }) };
+        if (!Array.isArray(updated?.tags)) video.tags = this.details.video.tags;
+        this.details = { ...this.details, video };
+        this.$emit('details-updated', this.details);
+      } catch (err) {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.actionError = `${toggle.failure}：${err}`;
+      } finally {
+        if (this.actionBusy === kind) this.actionBusy = '';
+      }
+    },
+    // 播放走正式播放（PlayVideo），永远打开源文件。失败原因就地显示（后端文案不含路径），
+    // 整个结果交给宿主，由它按自己的列表口径处理失效与重定位。
+    async playFromDrawer() {
+      const current = this.actionVideo;
+      if (!current || this.actionBusy) return;
+      const videoID = Number(current.id); const entryToken = this._entryLoadToken;
+      this.actionBusy = 'play'; this.actionError = '';
+      try {
+        const result = await PlayVideo(videoID);
+        this.$emit('playback-attempted', result);
+        if (result && result.dispatch_succeeded === false && this.isCurrentVideoRequest(videoID, entryToken)) {
+          this.actionError = result.user_message || '播放失败';
+        }
+      } catch (err) {
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.actionError = `播放失败：${err}`;
+      } finally {
+        if (this.actionBusy === 'play') this.actionBusy = '';
+      }
+    },
     async refreshTechnical() {
       this.refreshingTechnical = true; this.technicalError = '';
       const videoID = this.details.video.id; const entryToken = this._entryLoadToken; const operationToken = Symbol('technical-refresh');
@@ -966,9 +1130,10 @@ export default {
       }
       finally { if (this._technicalRefreshToken === operationToken) this.refreshingTechnical = false; }
     },
-    // ===== 播放代理（D-004、D-006）=====
-    // 生成是后台单 worker 任务，这里等它跑完这一项再回读元数据：
-    // 用户点完按钮总要看到结果，抽屉里没有别的地方能显示进度。
+    // ===== 播放代理（D-004、D-006、D-PC26）=====
+    // 生成是后台单 worker 的 FIFO 队列：CreatePlaybackProxy 只负责入队，立即返回，不等这一项跑完。
+    // 排位与完成靠 playback-proxy-state 事件：本项在队列里显示「排队中（第 N 个）」、处理中显示「生成中」，
+    // 本项有了结果再回读代理元数据；结果为可用时重取预览会话，自动切到内嵌播放。
     async loadPlaybackProxy(videoID, entryToken) {
       try {
         const proxy = await GetPlaybackProxy(videoID);
@@ -977,23 +1142,65 @@ export default {
         if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyError = `读取播放代理状态失败：${err}`;
       }
     },
-    async createPlaybackProxy() {
-      if (this.proxyBusy || this.currentEntry?.type !== 'video') return;
-      const videoID = Number(this.currentEntry.id); const entryToken = this._entryLoadToken;
-      this.proxyBusy = true; this.proxyError = '';
+    // 打开条目时这一项可能已经被别处（行菜单、批量、自动）排进队列：读一次当前快照补上排位，
+    // 之后跟着事件走。只认排队与处理中，已有的旧结果不触发切换。
+    async loadProxyQueueState(videoID, entryToken) {
       try {
-        const status = await CreatePlaybackProxy(videoID);
-        const item = (status?.results || []).find(result => Number(result.video_id) === videoID);
-        if (item && item.code !== 'created' && item.code !== 'already_exists' && this.isCurrentVideoRequest(videoID, entryToken)) {
-          this.proxyError = `生成播放代理失败：${PLAYBACK_PROXY_CODE_LABELS[item.code] || item.code}`;
-        }
+        const status = await GetPlaybackProxyStatus();
+        if (this.isCurrentVideoRequest(videoID, entryToken)) this.applyProxyStatus(status, { fromEvent: true });
+      } catch (err) {
+        // 队列快照只用来显示排位，读不到时等下一次事件即可，不打扰用户。
+      }
+    },
+    async createPlaybackProxy() {
+      if (this.proxyBusy || this.proxyPending || this.currentEntry?.type !== 'video') return;
+      const videoID = Number(this.currentEntry.id); const entryToken = this._entryLoadToken;
+      this.proxyBusy = true; this.proxyError = ''; this.proxyNotice = '';
+      this.proxyTracking = { videoID, state: { phase: 'submitting' } };
+      let status = null;
+      let enqueued = false;
+      try {
+        status = await CreatePlaybackProxy(videoID);
+        enqueued = true;
       } catch (err) {
         if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyError = `生成播放代理失败：${err}`;
+        if (this.proxyTracking?.videoID === videoID) this.proxyTracking = null;
       } finally {
         if (this.isCurrentVideoRequest(videoID, entryToken)) this.proxyBusy = false;
-        await this.loadPlaybackProxy(videoID, entryToken);
-        await this.reloadPreviewSessionForProxy(videoID, entryToken);
       }
+      // 入队的回执本身就是一份快照：已经在排队就接着等，已经有结果（或快照里没有这一项）就当场收尾。
+      if (enqueued && this.isCurrentVideoRequest(videoID, entryToken)) this.applyProxyStatus(status || { running: false }, { fromEvent: false });
+    },
+    // 按一份代理状态快照推进当前视频的那一项（D-PC26、PLAY-04）。排队与处理中只更新显示；
+    // 只有正在等的那一项（proxyTracking）有了结果、或整轮结束时，才收尾一次。
+    // 入队请求还没返回时，事件里的空白或旧结果都不算数（那一刻队列里还没有这一项）。
+    applyProxyStatus(status, { fromEvent = true } = {}) {
+      if (!status || this.currentEntry?.type !== 'video') return;
+      const videoID = Number(this.currentEntry.id);
+      const tracking = this.proxyTracking?.videoID === videoID ? this.proxyTracking : null;
+      const state = playbackProxyItemState(status, videoID, { tracked: !!tracking });
+      if (state.phase === 'queued' || state.phase === 'processing') {
+        this.proxyTracking = { videoID, state };
+        return;
+      }
+      if (!tracking) return;
+      if (fromEvent && tracking.state?.phase === 'submitting') return;
+      if (fromEvent && state.phase === 'idle' && status.running) return;
+      this.proxyTracking = null;
+      this.finishProxyTask(videoID, this._entryLoadToken, state);
+    },
+    async finishProxyTask(videoID, entryToken, state) {
+      const outcome = state.phase === 'done' ? state.outcome : '';
+      if (outcome === 'failed') {
+        this.proxyError = `生成播放代理失败：${PLAYBACK_PROXY_CODE_LABELS[state.result.code] || state.result.code}`;
+      } else if (outcome === 'cancelled') {
+        this.proxyNotice = '播放代理任务已取消。';
+      }
+      await this.loadPlaybackProxy(videoID, entryToken);
+      if (!this.isCurrentVideoRequest(videoID, entryToken)) return;
+      // 结果里有这一项就以结果为准；整轮结束却没有这一项的结果（结果条数有上限），以回读的代理状态为准。
+      const ready = outcome ? outcome === 'ready' : this.playbackProxy?.status === 'ready';
+      if (ready) await this.reloadPreviewSessionForProxy(videoID, entryToken);
     },
     async deletePlaybackProxy() {
       if (this.proxyBusy || this.currentEntry?.type !== 'video') return;
@@ -1094,23 +1301,96 @@ export default {
       this.seekSpriteRetryCount = 0;
     },
     configureVideoElement() { const video = this.$refs.videoElement; if (!video) return; video.defaultMuted = true; video.muted = true; this.applyStartTime(video); },
-    applyStartTime(video) {
-      const startTimeMs = detailPlaybackStartMs({
+    // 起播参数：根条目用宿主算好的续播位置；嵌套条目用同一套续播判定（utils/watchState.js，PLAY-10）——
+    // 已看片只有「标已看之后又看过」的断点才续播，落进片尾区间的断点从头播。
+    playbackStartOptions() {
+      return {
         entryID: this.currentEntry?.id,
         rootVideoID: this.video?.id,
         explicitStartTimeMs: this.startTimeMs,
         rootResumePositionSeconds: this.resumePositionSeconds,
-        nestedResumePositionSeconds: this.details?.video?.watch_position_seconds
-      });
+        nestedResumePositionSeconds: resumePosition(this.details?.video)
+      };
+    },
+    applyStartTime(video) {
+      const startTimeMs = detailPlaybackStartMs(this.playbackStartOptions());
       if (video.readyState < 1 || startTimeMs === 0) return;
       let seekSeconds = startTimeMs / 1000; if (Number.isFinite(video.duration) && video.duration > 0) seekSeconds = Math.min(seekSeconds, Math.max(video.duration - 0.001, 0));
       const seekKey = `${this.currentSession?.video_id || ''}:${seekSeconds}`; if (seekKey === this.appliedSeekKey) return; video.currentTime = seekSeconds; this.appliedSeekKey = seekKey;
     },
-    handleTimeUpdate() { this.emitWatchProgress(false, false); },
+    // ===== 观看会话（D-PC43、PLAY-07）=====
+    // 每次打开内嵌播放器是一个会话：会话标识每次新生成，累计播放首次越过 viewThreshold、或判定看完时
+    // 调一次 RecordViewEvent(inline_view)。起播来源（D-PC42）在第一次开始播放时定下，整场播放不变。
+    startViewSession(session) {
+      const inline = session?.mode === 'inline' && session?.inline_source;
+      const videoID = Number(session?.video_id || (this.currentEntry?.type === 'video' ? this.currentEntry.id : 0) || 0);
+      this._viewSession = inline && videoID
+        ? { id: newViewSessionID(), videoID, origin: '', accumulator: createPlaybackAccumulator(), recorded: false }
+        : null;
+    },
+    playerDurationSeconds(video = this.$refs.videoElement) {
+      const duration = Number(video?.duration);
+      return Number.isFinite(duration) && duration > 0 ? duration : 0;
+    },
+    handlePlay() {
+      this.hasPlaybackStarted = true;
+      const session = this._viewSession;
+      if (!session) return;
+      if (!session.origin) session.origin = detailPlaybackOrigin(this.playbackStartOptions());
+      session.accumulator.breakSegment();
+    },
+    // 暂停与拖动都断开当前一段累计：之后的一大步不能被墙钟放行成「播放」。
+    handlePause() {
+      this._viewSession?.accumulator.breakSegment();
+      this.emitWatchProgress(true, false);
+    },
+    handleSeeking() { this._viewSession?.accumulator.breakSegment(); },
+    handleTimeUpdate() {
+      const video = this.$refs.videoElement;
+      if (video && !video.paused && !video.seeking) this._viewSession?.accumulator.sample(video.currentTime, Date.now(), video.playbackRate);
+      this.maybeRecordView(false);
+      this.emitWatchProgress(false, false);
+    },
+    maybeRecordView(completedHint) {
+      const session = this._viewSession;
+      if (!session || session.recorded || (!this.hasPlaybackStarted && !completedHint)) return;
+      const video = this.$refs.videoElement;
+      const detailsDuration = Number(this.details?.video?.id) === session.videoID ? Number(this.details.video.duration) : 0;
+      const duration = this.playerDurationSeconds(video) || (detailsDuration > 0 ? detailsDuration : 0);
+      const completed = !!completedHint || isWatchCompleted(Number(video?.currentTime || 0), duration);
+      if (!completed && session.accumulator.seconds < viewThreshold(duration)) return;
+      session.recorded = true;
+      // 只写一次；失败不重试，后端也不会把失败的这次记进去重表。
+      Promise.resolve()
+        .then(() => RecordViewEvent(session.videoID, 'inline_view', session.id))
+        .catch(err => console.error('记录有效观看失败:', err));
+    },
     emitWatchProgress(force, completed, videoID = null) {
-      if (this.resettingVideo || (!this.hasPlaybackStarted && !completed)) return; const video = this.$refs.videoElement; const positionSeconds = Number(video?.currentTime || 0);
+      if (this.resettingVideo) return;
+      this.maybeRecordView(completed);
+      if (!this.hasPlaybackStarted && !completed) return; const video = this.$refs.videoElement; const positionSeconds = Number(video?.currentTime || 0);
       if (!Number.isFinite(positionSeconds) || positionSeconds <= 0) return; const now = Date.now(); if (!force && now - this.lastProgressEmittedAt < 10000) return;
-      this.lastProgressEmittedAt = now; this.$emit('watch-progress', { videoID: Number(videoID || this.currentSession?.video_id || this.currentEntry?.id || this.video?.id || 0), positionSeconds, completed: !!completed });
+      this.lastProgressEmittedAt = now;
+      // 起播来源（D-PC42）：从断点 resume、从片头 start、从字幕命中或指定时间 jump；时长未知传 0，
+      // 后端只在库内时长未知时采用它。
+      const origin = this._viewSession?.origin || detailPlaybackOrigin(this.playbackStartOptions());
+      this.$emit('watch-progress', {
+        videoID: Number(videoID || this._viewSession?.videoID || this.currentSession?.video_id || this.currentEntry?.id || this.video?.id || 0),
+        positionSeconds,
+        completed: !!completed,
+        origin,
+        durationSeconds: this.playerDurationSeconds(video)
+      });
+    },
+    // 内嵌播放器报错（PLAY-05）：<video> 自己的 error 带 MediaError（解码失败、源不支持）；
+    // <source> 的 error 只在它还带着地址时才算数——换会话时清掉地址再 load() 也会触发一次。
+    handleVideoError(event) {
+      if (this.resettingVideo || !event?.target?.error) return;
+      this.inlinePlaybackFailed = true;
+    },
+    handleSourceError(event) {
+      if (this.resettingVideo || !event?.target?.getAttribute?.('src')) return;
+      this.inlinePlaybackFailed = true;
     },
     resetVideoElement() {
       const video = this.$refs.videoElement; if (!video) return; this.resettingVideo = true;
@@ -1174,6 +1454,22 @@ export default {
 .selection-row { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; }.selection-row button { background: transparent; border: 0; color: var(--text-primary); text-align: left; cursor: pointer; }.selection-row small { color: var(--text-muted); }
 .technical-grid { display: grid; grid-template-columns: 90px 1fr; gap: 6px 10px; margin: 0; font-size: 12px; }.technical-grid dt { color: var(--text-muted); }.technical-grid dd { margin: 0; word-break: break-word; }.technical-status { margin: 0; font-size: 12px; }.technical-status--current { color: var(--success-color); }.technical-status--stale,.technical-status--error { color: var(--warning-strong); }
 .proxy-block { display: grid; gap: 6px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }.proxy-block__status { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.preview-drawer__proxy-progress { margin: 0; color: var(--text-secondary); font-size: 12px; }
+/* 动作条：按钮沿用行上的 row-btn（收藏 / 已看的按下态与列表一致），星级每颗分左右两半，各是一个按钮。 */
+.drawer-action-bar { gap: 10px; }
+.drawer-action-bar__buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.drawer-stars { display: flex; flex-wrap: wrap; align-items: center; gap: 2px; }
+.drawer-star { position: relative; display: inline-block; width: 20px; height: 20px; flex: none; }
+.drawer-star::before,.drawer-star::after { content: '★'; position: absolute; inset: 0; font-size: 18px; line-height: 20px; text-align: left; pointer-events: none; }
+.drawer-star::before { color: var(--border-strong); }
+.drawer-star::after { width: 0; overflow: hidden; color: var(--accent-color); }
+.drawer-star--half::after { width: 50%; }
+.drawer-star--full::after { width: 100%; }
+.drawer-star__half { position: absolute; top: 0; bottom: 0; width: 50%; z-index: 1; border: 0; padding: 0; background: transparent; cursor: pointer; }
+.drawer-star__half--left { left: 0; }.drawer-star__half--right { right: 0; }
+.drawer-star__half:disabled { cursor: progress; }
+.drawer-star__half:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 1px; border-radius: 3px; }
+.drawer-stars__value { margin: 0 6px 0 8px; color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
 .stream-card { display: grid; gap: 4px; padding: 10px; border-radius: 9px; background: var(--control-hover-bg); font-size: 12px; }.stream-card span { color: var(--text-secondary); word-break: break-word; }
 .entity-identity > img,.entity-avatar-placeholder { width: 96px; height: 96px; object-fit: cover; border-radius: 14px; }.entity-avatar-placeholder { display: grid; place-items: center; background: var(--control-hover-bg); color: var(--text-muted); }
 @media (max-width: 900px) { .preview-drawer { width: 100vw; right: 0; bottom: 0; top: 70px; min-width: 0; border-radius: 18px 18px 0 0; } }

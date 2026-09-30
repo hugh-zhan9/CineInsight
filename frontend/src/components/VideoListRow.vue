@@ -119,11 +119,12 @@
         data-test="row-like"
         @click="$emit('toggle-liked', video)"
       >赞</button>
+      <!-- 「已看」在抽屉打开时的窄行里同样保留（D-PC47、PLAY-14）：边预览边标记是最常见的用法。 -->
       <button
-        v-if="!narrow"
         type="button"
         :class="['row-btn', { active: video.is_watched }]"
         :aria-pressed="!!video.is_watched"
+        data-test="row-watched"
         @click="$emit('toggle-watched', video)"
       >已看</button>
       <button

@@ -511,6 +511,57 @@ button {
 .feed-toast__text { flex: 1; }
 .feed-toast__undo { border: 0; background: transparent; color: #5fd0c2; font-size: 13px; font-weight: 600; }
 
+/* 取下一条失败：浏览历史保留，顶部下方一条常驻提示配「重试」（D-PC46）。放在顶栏下面，
+   不与底部的撤销提示、进度条抢位置。 */
+.feed-retry {
+  position: absolute;
+  top: max(64px, calc(env(safe-area-inset-top) + 50px));
+  left: 16px;
+  right: 16px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid #5a3b2b;
+  border-radius: 12px;
+  background: rgba(38, 24, 18, 0.94);
+  color: #f3e4dc;
+  font-size: 13px;
+}
+.feed-retry__text { flex: 1; }
+.feed-retry__btn {
+  height: 32px;
+  padding: 0 14px;
+  border: 1px solid #23a99b;
+  border-radius: 8px;
+  background: #23a99b;
+  color: #04211e;
+  font-size: 13px;
+  font-weight: 600;
+}
+.feed-retry__btn:disabled { opacity: 0.6; }
+
+/* 访问 PIN 页（D-PC45）：整屏，输入框要能选中、能聚焦，所以恢复文字选择。 */
+.pin-gate {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: max(24px, env(safe-area-inset-top)) 20px max(24px, env(safe-area-inset-bottom));
+  background: #0c0c0d;
+  -webkit-user-select: text;
+  user-select: text;
+}
+.pin-gate__card { width: min(360px, 100%); display: grid; gap: 12px; }
+.pin-gate__card h1 { margin: 0; font-size: 20px; }
+.pin-gate__hint { margin: 0; color: #8fa0a5; font-size: 13px; line-height: 1.5; }
+.pin-gate__error { margin: 0; color: #f59e8b; font-size: 13px; line-height: 1.5; }
+.pin-gate__submit { flex: none; width: 100%; }
+.pin-gate__submit:disabled { opacity: 0.6; }
+
+.scope-option__hint { margin: -4px 4px 2px; color: #d9b36a; font-size: 12px; line-height: 1.5; }
+
 .top-bar.visible,
 .action-rail.visible {
   opacity: 1;
@@ -636,6 +687,21 @@ button {
   gap: 1px;
   padding-bottom: env(safe-area-inset-bottom);
 }
+
+.favorites-empty { margin: 0; padding: 48px 24px; color: rgba(255, 255, 255, 0.62); text-align: center; font-size: 14px; }
+.favorites-error {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 12px 14px;
+  padding: 10px 14px;
+  border: 1px solid #5a3b2b;
+  border-radius: 12px;
+  background: rgba(38, 24, 18, 0.94);
+  color: #f3e4dc;
+  font-size: 13px;
+}
+.favorites-error span { flex: 1; }
 
 .favorite-item {
   display: grid;

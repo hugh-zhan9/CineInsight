@@ -479,3 +479,44 @@ describe('EntityLibraryPage 观看进度 origin', () => {
     ]);
   });
 });
+
+// P-037：PersonMediaDeleteDialog 的 restored（撤销删除或从回收站恢复）由本页与抽屉接上。
+describe('EntityLibraryPage 撤销删除后的刷新', () => {
+  async function openPerson() {
+    const person = { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 1 };
+    api.ListPeople.mockResolvedValueOnce([person]);
+    api.GetPersonDetail.mockResolvedValueOnce({ person, videos: [{ id: 21, name: 'clip.mp4', size: 100 }], images: [{ id: 11, name: 'a.jpg', size: 200 }] });
+    const w = mount(EntityLibraryPage, { props: { entityType: 'person' }, global: { stubs: { teleport: true } } });
+    await flushPromises();
+    await w.get('.entity-card').trigger('click');
+    await flushPromises();
+    return { w, person };
+  }
+
+  it('LIB-12 本页删除后撤销：重读当前人物的视频、图片与计数，并让停在人物详情的抽屉也重读', async () => {
+    const { w, person } = await openPerson();
+    const drawerReload = vi.fn();
+    w.vm.$refs.personDrawer.handlePersonMediaRestored = drawerReload;
+    w.vm.personMediaDeleteTarget = { kind: 'image', media: { id: 11, name: 'a.jpg', size: 200 }, personID: 7 };
+    await flushPromises();
+    const restoredPerson = { ...person, active_image_count: 1 };
+    api.GetPersonDetail.mockResolvedValueOnce({ person: restoredPerson, videos: [{ id: 21, name: 'clip.mp4', size: 100 }], images: [{ id: 11, name: 'a.jpg', size: 200 }] });
+    const calls = api.GetPersonDetail.mock.calls.length;
+    w.findComponent({ name: 'PersonMediaDeleteDialog' }).vm.$emit('restored', { kind: 'image', ids: [11] });
+    await flushPromises();
+    expect(api.GetPersonDetail.mock.calls.length).toBe(calls + 1);
+    expect(api.GetPersonDetail).toHaveBeenLastCalledWith(7, 0, 30);
+    expect(w.vm.entityImages.map(image => image.id)).toEqual([11]);
+    expect(drawerReload).toHaveBeenCalledWith({ kind: 'image', ids: [11] }, false);
+    w.unmount();
+  });
+
+  it('LIB-12 抽屉里的删除被撤销（media-restored）：本页重读当前人物', async () => {
+    const { w } = await openPerson();
+    const calls = api.GetPersonDetail.mock.calls.length;
+    w.findComponent({ name: 'PreviewDrawer' }).vm.$emit('media-restored', { kind: 'video', ids: [21] });
+    await flushPromises();
+    expect(api.GetPersonDetail.mock.calls.length).toBe(calls + 1);
+    w.unmount();
+  });
+});

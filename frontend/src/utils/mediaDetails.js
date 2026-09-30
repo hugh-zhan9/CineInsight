@@ -163,6 +163,19 @@ export function detailPlaybackStartMs({ entryID, rootVideoID, explicitStartTimeM
   return Number.isFinite(resumeSeconds) && resumeSeconds > 0 ? resumeSeconds * 1000 : 0;
 }
 
+// 起播来源（D-PC42，UpdateVideoWatchProgress 的 origin）：与 detailPlaybackStartMs 同一套判断。
+// 根条目带了指定时间（字幕命中、人脸出现时刻等）是 jump，只允许往前写断点；
+// 否则从断点起播是 resume、从片头起播是 start，这两种允许回写更早的位置。嵌套条目没有指定时间。
+export function detailPlaybackOrigin(options) {
+  const { entryID, rootVideoID, explicitStartTimeMs } = options || {};
+  const isRootVideo = Number(entryID) > 0 && Number(entryID) === Number(rootVideoID);
+  const explicit = Number(explicitStartTimeMs);
+  if (isRootVideo && explicitStartTimeMs !== null && explicitStartTimeMs !== undefined && Number.isFinite(explicit) && explicit >= 0) {
+    return 'jump';
+  }
+  return detailPlaybackStartMs(options || {}) > 0 ? 'resume' : 'start';
+}
+
 function uniqueIDs(ids) {
   return [...new Set((ids || []).map(Number).filter(id => Number.isInteger(id) && id > 0))];
 }

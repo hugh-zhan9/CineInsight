@@ -8,6 +8,8 @@
           <span class="glossary-arrow">→</span>
           <strong>{{ entry.target_term }}</strong>
         </div>
+        <!-- 目标语言（D-PC16、MEDIA-07）：空表示所有语言，只在翻译成该语言时注入。 -->
+        <span class="glossary-language" :data-test="`glossary-language-${entry.id}`">{{ languageLabel(entry.target_language) }}</span>
         <span v-if="entry.note" class="glossary-note">{{ entry.note }}</span>
         <div class="glossary-actions">
           <button type="button" class="btn-secondary btn-compact" :data-test="`glossary-edit-${entry.id}`" @click="startEdit(entry)">编辑</button>
@@ -34,6 +36,14 @@
         data-test="glossary-target-input"
         v-model.trim="draft.target_term"
       />
+      <select
+        class="text-input glossary-language-select"
+        aria-label="目标语言"
+        data-test="glossary-language-select"
+        v-model="draft.target_language"
+      >
+        <option v-for="option in languageOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+      </select>
       <input
         type="text"
         class="text-input"
@@ -49,6 +59,7 @@
         <button v-if="draft.id" type="button" class="btn-secondary btn-compact" data-test="glossary-cancel" @click="resetDraft">取消</button>
       </div>
     </div>
+    <p class="help-text glossary-language-hint">目标语言选「所有语言」时，翻译成任何语言都生效；指定语言后只在翻译成该语言时使用。</p>
     <p v-if="error" class="glossary-error" data-test="glossary-error">{{ error }}</p>
   </div>
 </template>
@@ -57,7 +68,22 @@
 import { DeleteGlossaryEntry, ListGlossaryEntries, UpsertGlossaryEntry } from '../../wailsjs/go/main/App';
 import { confirmAction } from '../utils/feedback.js';
 
-const emptyDraft = () => ({ id: 0, source_term: '', target_term: '', note: '' });
+const emptyDraft = () => ({ id: 0, target_language: '', source_term: '', target_term: '', note: '' });
+
+// 目标语言的可选项，代码与字幕翻译的目标语言一致；空 = 所有语言。
+export const GLOSSARY_LANGUAGE_OPTIONS = [
+  { value: '', label: '所有语言' },
+  { value: 'zh', label: '中文' },
+  { value: 'en', label: '英语' },
+  { value: 'ja', label: '日语' },
+  { value: 'ko', label: '韩语' },
+  { value: 'fr', label: '法语' },
+  { value: 'de', label: '德语' },
+  { value: 'es', label: '西班牙语' },
+  { value: 'pt', label: '葡萄牙语' },
+  { value: 'ru', label: '俄语' },
+  { value: 'it', label: '意大利语' }
+];
 
 // 字幕翻译术语表编辑器（D-033）。同一个组件服务两个作用域：collectionId 为 0 时维护
 // 全局表，非 0 时维护该作品集的表；作用域的覆盖规则在服务端解析，这里不参与。
@@ -68,7 +94,7 @@ export default {
     hint: { type: String, default: '' }
   },
   data() {
-    return { entries: [], draft: emptyDraft(), error: '' };
+    return { entries: [], draft: emptyDraft(), error: '', languageOptions: GLOSSARY_LANGUAGE_OPTIONS };
   },
   computed: {
     canSave() {
@@ -85,6 +111,10 @@ export default {
     this.load();
   },
   methods: {
+    languageLabel(code) {
+      const value = String(code || '').trim().toLowerCase();
+      return GLOSSARY_LANGUAGE_OPTIONS.find(option => option.value === value)?.label || value.toUpperCase();
+    },
     async load() {
       try {
         this.entries = await ListGlossaryEntries(Number(this.collectionId) || 0) || [];
@@ -100,6 +130,7 @@ export default {
     startEdit(entry) {
       this.draft = {
         id: Number(entry.id),
+        target_language: String(entry.target_language || '').trim().toLowerCase(),
         source_term: entry.source_term || '',
         target_term: entry.target_term || '',
         note: entry.note || ''
@@ -112,6 +143,7 @@ export default {
         await UpsertGlossaryEntry({
           id: this.draft.id || 0,
           collection_id: collectionID || null,
+          target_language: this.draft.target_language || '',
           source_term: this.draft.source_term,
           target_term: this.draft.target_term,
           note: this.draft.note
@@ -192,6 +224,23 @@ export default {
 
 .glossary-arrow {
   color: var(--text-secondary);
+}
+
+.glossary-language {
+  flex: none;
+  padding: 1px 8px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.glossary-form .glossary-language-select {
+  flex: 0 1 120px;
+}
+
+.glossary-language-hint {
+  margin: 0;
 }
 
 .glossary-note {

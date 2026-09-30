@@ -10,7 +10,10 @@
     @keydown="onKeydown"
     @contextmenu.prevent
   >
-    <section v-if="view === 'feed'" class="feed-stage">
+    <!-- 服务端设了 PIN 而没有会话：任何数据请求都回 401 pin_required，先登录（D-PC45）。 -->
+    <PinGate v-if="authRequired" @authenticated="onAuthenticated" />
+
+    <section v-else-if="view === 'feed'" class="feed-stage">
       <FeedStage
         ref="stage"
         :item="currentVideo"
@@ -28,7 +31,6 @@
         @time-update="onTimeUpdate"
         @play="onVideoPlay"
         @pause="onVideoPause"
-        @playing="onVideoPlaying"
         @media-error="onMediaError"
         @stage-tap="handleStageTap"
         @zoom-reset="resetPhotoZoom"
@@ -71,11 +73,18 @@
         @seek-cancel="cancelSeeking"
         @seek-key="seekByKeyboard"
       />
+      <!-- 取下一条失败（D-PC46、PLAY-13）：浏览历史原样保留，停在当前条目，给一个重试。 -->
+      <div v-if="loadError" class="feed-retry" role="alert" data-test="short-feed-retry-bar">
+        <span class="feed-retry__text">{{ loadError }}</span>
+        <button type="button" class="feed-retry__btn" data-test="short-feed-retry" :disabled="loading" @click="retryLoad">重试</button>
+      </div>
     </section>
 
     <FavoritesView
       v-else
       :items="favorites"
+      :loading="favoritesLoading"
+      :error="favoritesError"
       @close="view = 'feed'"
       @refresh="loadFavorites"
       @select="selectFavorite"
@@ -149,24 +158,27 @@
           @click="applyMediaKind(option.kind)"
         >{{ option.name }}</button>
       </div>
-      <button
-        v-for="option in scopes"
-        :key="option.scope"
-        type="button"
-        class="scope-option"
-        :class="{ active: option.scope === scope }"
-        @click="applyScope(option.scope)"
-      >
-        {{ option.name }}<span class="scope-option__count">{{ option.count }}</span>
-      </button>
+      <template v-for="option in scopes" :key="option.scope">
+        <button
+          type="button"
+          class="scope-option"
+          :class="{ active: option.scope === scope }"
+          @click="applyScope(option.scope)"
+        >
+          {{ option.name }}<span class="scope-option__count">{{ option.count }}</span>
+        </button>
+        <!-- 被格式门排除的视频不再无声消失（D-PC46、PLAY-13）：说清有几条、怎么让它能播。 -->
+        <p v-if="unplayableHintText(option.unplayable_count)" class="scope-option__hint" :data-test="`short-feed-unplayable-${option.scope}`">{{ unplayableHintText(option.unplayable_count) }}</p>
+      </template>
+      <p v-if="scopesError" class="sheet__empty" role="alert" data-test="short-feed-scopes-error">{{ scopesError }}</p>
     </FeedSheet>
 
     <DeleteDialog
       v-if="deleteDialogOpen"
       :title="isImageItem ? '删除图片' : '删除视频'"
       :message="isImageItem
-        ? '图片会移入回收站，可在桌面端恢复，并从图片库与手机 Feed 中移除。'
-        : '文件会移入 trash 文件夹，并从普通列表和短视频 Feed 中移除。'"
+        ? '图片会移到废纸篓，可在电脑端回收站恢复，并从图片库与手机 Feed 中移除。'
+        : '视频会移到废纸篓，可在电脑端回收站恢复，并从片库与手机 Feed 中移除。'"
       @cancel="deleteDialogOpen = false"
       @confirm="confirmDelete"
     />
@@ -179,7 +191,9 @@
 </template>
 
 <script>
-import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, restoreItem, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
+import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, restoreItem, setAuthRequiredHandler, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
+import { feedErrorText, unplayableHintText } from './errors.js';
+import { createPlaybackAccumulator, viewThreshold } from '../utils/viewThreshold.js';
 
 // 资源类型筛选与播放范围正交，记在本机：手机上选过"仅图片"，下次打开还是。
 const MEDIA_KIND_STORAGE_KEY = 'short-feed-media-kind';
@@ -213,6 +227,7 @@ import FavoritesView from './components/FavoritesView.vue';
 import DeleteDialog from './components/DeleteDialog.vue';
 import FeedSheet from './components/FeedSheet.vue';
 import FeedDots from './components/FeedDots.vue';
+import PinGate from './components/PinGate.vue';
 
 const swipeTracker = createSwipeTracker();
 const wakeLock = createWakeLock();
@@ -223,7 +238,7 @@ const FEED_HISTORY_LIMIT = 40;
 
 export default {
   name: 'ShortFeedApp',
-  components: { FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, DeleteDialog, FeedSheet, FeedDots },
+  components: { FeedStage, FeedTopBar, FeedMeta, FeedActionRail, FeedProgress, FavoritesView, DeleteDialog, FeedSheet, FeedDots, PinGate },
   watch: {
     // 标签搜索实时查服务端：每次输入变化都重新拉一次（100ms 内的连续按键合并成一次）。
     tagKeyword(value) {
@@ -260,8 +275,16 @@ export default {
       prefetching: false,
       recentKeys: [],
       favorites: [],
+      favoritesLoading: false,
+      // 收藏页加载失败的说明（D-PC46）：不再显示成「暂无收藏」。
+      favoritesError: '',
+      scopesError: '',
       view: 'feed',
       loading: false,
+      // 取下一条失败的说明（网络异常等），配「重试」；为空表示没有待重试的失败。
+      loadError: '',
+      // 服务端要求 PIN（401 pin_required）时显示 PIN 页。
+      authRequired: false,
       statusText: '加载中',
       muted: true,
       playbackRate: 1,
@@ -341,6 +364,7 @@ export default {
     }
   },
   beforeUnmount() {
+    setAuthRequiredHandler(null);
     this.clearControlsHideTimer();
     this.clearLongPressTimer();
     this.releaseWakeLock();
@@ -350,6 +374,8 @@ export default {
     clearTimeout(this.tagSearchTimer);
   },
   async mounted() {
+    // 任何一次请求回 401 pin_required 都切到 PIN 页；登录后回到原来的位置接着看。
+    setAuthRequiredHandler(() => { this.authRequired = true; });
     document.addEventListener('visibilitychange', this.handleVisibilityChange);
     this.fullscreenSupported = !!(document.fullscreenEnabled || document.webkitFullscreenEnabled);
     document.addEventListener('fullscreenchange', this.syncFullscreen);
@@ -359,8 +385,9 @@ export default {
     this.$el.focus();
   },
   methods: {
+    unplayableHintText,
     async nextVideo(direction = 1) {
-      if (this.loading || direction === 0 || this.sheet) return;
+      if (this.loading || direction === 0 || this.sheet || this.authRequired) return;
       // 往回划走历史，不重新抽签：抽签回来的是另一条，那不叫"上一条"。
       if (direction < 0) {
         if (this.index > 0) {
@@ -374,18 +401,46 @@ export default {
         this.activateCurrent();
         return;
       }
+      await this.loadNextItem();
+    },
+    // 取一条新的接到历史末尾并切过去。失败时原地不动：浏览历史与当前条目都保留。
+    async loadNextItem() {
+      if (this.loading || this.authRequired) return;
       this.loading = true;
-      this.statusText = '加载中';
+      this.loadError = '';
+      if (this.items.length === 0) this.statusText = '加载中';
       try {
         const video = this.takePrefetchedVideo() || await getNextItem(this.recentKeys.slice(-12), this.scope, this.mediaKind);
         this.appendItem(video);
       } catch (err) {
-        this.items = [];
-        this.index = -1;
-        this.statusText = String(err.message || err);
+        // PIN 页接管，不在底下再叠一条失败提示。
+        if (this.authRequired) return;
+        // 失败不清空浏览历史（D-PC46、PLAY-13）：停在当前条目，往回划照样能看，另给一条「网络异常 · 重试」。
+        const message = feedErrorText(err);
+        this.loadError = message;
+        if (this.items.length === 0) this.statusText = message;
       } finally {
         this.loading = false;
       }
+    },
+    // 「重试」总是去取新的一条：用户中途往回划过，也不必先划回末尾。
+    retryLoad() {
+      return this.loadNextItem();
+    },
+    // 登录成功：回到原来的位置；还没有任何条目就重新取一条。收藏页开着就重读收藏。
+    async onAuthenticated() {
+      this.authRequired = false;
+      this.loadError = '';
+      if (this.view === 'favorites') {
+        await this.loadFavorites();
+        return;
+      }
+      if (this.items.length === 0) {
+        await this.nextVideo();
+        return;
+      }
+      await this.$nextTick();
+      this.activateCurrent();
     },
     appendItem(video) {
       // 历史有上限，否则一路划下去会把整库都留在内存里。
@@ -397,7 +452,9 @@ export default {
       const video = this.currentVideo;
       if (!video) return;
       this.statusText = unsupportedStatusText(video);
+      // 每次划到一条都是一次新的观看：累计播放从零算起，越过阈值才记（D-PC43）。
       this.recordedVideoID = null;
+      this._viewAccumulator = createPlaybackAccumulator();
       this.isPlaying = false;
       this.videoCurrentTime = 0;
       this.videoDuration = 0;
@@ -510,6 +567,7 @@ export default {
     },
     onVideoPause() {
       this.isPlaying = false;
+      this._viewAccumulator?.breakSegment();
       this.showControls();
       this.clearControlsHideTimer();
       this.releaseWakeLock();
@@ -597,25 +655,36 @@ export default {
       this.currentVideo.favorited = true;
       this.showControls();
       this.clearControlsHideTimer();
+      const item = this.currentVideo;
       try {
         if (!wasLiked) {
-          await setLiked(this.currentVideo, true);
+          await setLiked(item, true);
         }
         if (!wasFavorited) {
-          await setFavorited(this.currentVideo, true);
+          await setFavorited(item, true);
         }
         if (this.isPlaying) {
           this.scheduleControlsHide();
         }
       } catch (err) {
-        this.currentVideo.liked = wasLiked;
-        this.currentVideo.favorited = wasFavorited;
+        // 失败回滚并说一声（D-PC46），不再静默恢复原状。
+        item.liked = wasLiked;
+        item.favorited = wasFavorited;
+        this.flashToast(`点赞收藏失败：${feedErrorText(err)}`);
       } finally {
         this.longPressActionInFlight = false;
       }
     },
-    onVideoPlaying() {
-      this.recordCurrentItemView();
+    // 手机端的有效观看（D-PC43、PLAY-07）：不再在 playing 那一刻就记，改为这一条累计播放越过
+    // viewThreshold（min(60 秒, 时长一半)）才上报一次，后端来源仍是 mobile_feed。拖动、循环回片头不算播放。
+    trackViewProgress() {
+      const player = this.player();
+      const item = this.currentVideo;
+      if (!player || !item || this.isImageItem || player.paused || this.seeking) return;
+      const accumulator = this._viewAccumulator || (this._viewAccumulator = createPlaybackAccumulator());
+      const seconds = accumulator.sample(player.currentTime, Date.now(), player.playbackRate);
+      const duration = Number.isFinite(player.duration) && player.duration > 0 ? player.duration : Number(item.duration);
+      if (seconds >= viewThreshold(duration)) this.recordCurrentItemView();
     },
     async recordCurrentItemView() {
       const key = itemKey(this.currentVideo);
@@ -673,6 +742,8 @@ export default {
         return;
       }
       this.statusText = '当前视频无法在浏览器中播放';
+      // 仍然自动跳到下一条，但提示留在下一条上，不再一闪而过（PLAY-13）。
+      this.flashToast(`「${this.currentVideo.name || '这条视频'}」无法在浏览器中播放，已跳过`);
       setTimeout(() => this.nextVideo(), 350);
     },
     syncVideoTime() {
@@ -684,6 +755,7 @@ export default {
     onTimeUpdate() {
       if (this.seeking) return;
       this.syncVideoTime();
+      this.trackViewProgress();
     },
     startSeeking(event) {
       if (!this.videoDuration) return;
@@ -717,6 +789,7 @@ export default {
       }
       const player = this.player();
       if (player && this.videoDuration) {
+        this._viewAccumulator?.breakSegment();
         player.currentTime = (this.scrubValue / 1000) * this.videoDuration;
       }
       this.seeking = false;
@@ -749,6 +822,8 @@ export default {
     commitSeek(seconds) {
       const player = this.player();
       if (!player || !this.videoDuration) return;
+      // 拖动与键盘定位不算播放：断开当前一段累计。
+      this._viewAccumulator?.breakSegment();
       player.currentTime = seconds;
       this.videoCurrentTime = seconds;
       this.scrubValue = Math.round((seconds / this.videoDuration) * 1000);
@@ -773,24 +848,29 @@ export default {
         this.controlsHideTimer = null;
       }
     },
+    // 点赞、收藏先改界面再写库；失败回滚到原状态并提示（D-PC46、PLAY-13），不再静默。
     async toggleLike() {
-      if (!this.currentVideo) return;
-      const liked = !this.currentVideo.liked;
-      this.currentVideo.liked = liked;
+      const item = this.currentVideo;
+      if (!item) return;
+      const liked = !item.liked;
+      item.liked = liked;
       try {
-        await setLiked(this.currentVideo, liked);
+        await setLiked(item, liked);
       } catch (err) {
-        this.currentVideo.liked = !liked;
+        item.liked = !liked;
+        this.flashToast(`${liked ? '点赞' : '取消点赞'}失败：${feedErrorText(err)}`);
       }
     },
     async toggleFavorite() {
-      if (!this.currentVideo) return;
-      const favorited = !this.currentVideo.favorited;
-      this.currentVideo.favorited = favorited;
+      const item = this.currentVideo;
+      if (!item) return;
+      const favorited = !item.favorited;
+      item.favorited = favorited;
       try {
-        await setFavorited(this.currentVideo, favorited);
+        await setFavorited(item, favorited);
       } catch (err) {
-        this.currentVideo.favorited = !favorited;
+        item.favorited = !favorited;
+        this.flashToast(`${favorited ? '收藏' : '取消收藏'}失败：${feedErrorText(err)}`);
       }
     },
     async confirmDelete() {
@@ -805,14 +885,16 @@ export default {
         this.items = this.items.filter((item, position) => position !== this.index);
         this.index = Math.min(this.index, this.items.length - 1);
         this.pendingUndo = deleted;
-        this.flashToast(`已移入回收站 · ${deleted.name}`, true);
+        this.flashToast(`已移到废纸篓 · ${deleted.name}`, true);
         if (this.index < 0 || this.items.length === 0) {
           await this.nextVideo();
         } else {
           this.activateCurrent();
         }
       } catch (err) {
-        this.statusText = String(err.message || err);
+        // 409 volume_offline / permission_denied / trash_unsupported：什么都没动，说清原因（D-PC01、PLAY-13）。
+        // 之前写进 statusText，而它只在条目放不了时才显示，可播放的条目上删除失败完全没有反馈。
+        this.flashToast(`删除失败：${feedErrorText(err)}`);
       }
     },
     async undoDelete() {
@@ -824,7 +906,7 @@ export default {
         await restoreItem(target);
         this.flashToast(`已恢复 · ${target.name}`);
       } catch (err) {
-        this.flashToast(`恢复失败：${String(err.message || err)}`);
+        this.flashToast(`恢复失败：${feedErrorText(err)}`);
       }
     },
     openRatingSheet() {
@@ -877,11 +959,13 @@ export default {
       }
     },
     async loadScopes() {
+      this.scopesError = '';
       try {
         const payload = await getScopes(this.mediaKind);
         this.scopes = payload?.scopes || [];
       } catch (err) {
         this.scopes = [];
+        this.scopesError = `播放范围加载失败：${feedErrorText(err)}`;
       }
     },
     async applyScope(scope) {
@@ -943,12 +1027,18 @@ export default {
       this.view = 'favorites';
       await this.loadFavorites();
     },
+    // 收藏页加载失败显示错误态与重试（D-PC46、PLAY-13）：之前清空列表，看起来像「暂无收藏」。
+    // 已经显示的收藏不清掉，重试成功再换。
     async loadFavorites() {
+      this.favoritesLoading = true;
+      this.favoritesError = '';
       try {
         const payload = await getFavorites();
         this.favorites = payload?.items || [];
       } catch (err) {
-        this.favorites = [];
+        this.favoritesError = `收藏加载失败：${feedErrorText(err)}`;
+      } finally {
+        this.favoritesLoading = false;
       }
     },
     selectFavorite(video) {
@@ -1005,12 +1095,14 @@ export default {
       if (target?.closest?.('.tag-row')) return true;
       // 底部面板整层（含遮罩、输入框）都不归舞台管：舞台一 preventDefault，
       // 点遮罩关闭的合成 click 与输入框聚焦就都没了。
-      return !!target?.closest?.('button, input, textarea, select, [role="slider"], .progress-dock, .modal-backdrop, .favorites-view, .sheet-layer');
+      return !!target?.closest?.('button, input, textarea, select, [role="slider"], .progress-dock, .modal-backdrop, .favorites-view, .pin-gate, .feed-retry, .sheet-layer');
     },
     onWheel(event) {
       this.nextVideo(wheelDirection(event.deltaY, Date.now(), this.wheelState));
     },
     onKeydown(event) {
+      // PIN 页与输入框里的空格、方向键属于输入，不是翻页。
+      if (this.authRequired || event.target?.closest?.('input, textarea, select')) return;
       const direction = keyboardDirection(event.key);
       if (direction !== 0) {
         event.preventDefault();

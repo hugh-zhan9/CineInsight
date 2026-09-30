@@ -18,9 +18,10 @@ const mountLive = (props = {}) => mount(PersonMediaDeleteDialog, { props: { targ
 const body = () => new DOMWrapper(document.body);
 beforeEach(() => vi.resetAllMocks());
 describe('PersonMediaDeleteDialog', () => {
-  it('cancels without calling a deletion API', async () => {
+  it('cancels without calling a deletion API; G-3 确认框只写文件名，不带绝对路径', async () => {
     const w = create();
-    expect(w.text()).toContain('/photos/photo.jpg');
+    expect(w.text()).toContain('photo.jpg');
+    expect(w.text()).not.toContain('/photos/photo.jpg');
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' })); await flushPromises();
     expect(w.emitted('close')).toHaveLength(1);
     expect(api.DeleteImagesWithResult).not.toHaveBeenCalled(); expect(api.DeleteVideosWithResult).not.toHaveBeenCalled(); w.unmount();

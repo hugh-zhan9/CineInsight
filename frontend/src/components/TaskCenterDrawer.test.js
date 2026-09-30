@@ -290,6 +290,18 @@ describe('最近任务四类（APP-03）', () => {
     expect(messages).toContain('已提交入库');
   });
 
+  it('MEDIA-04 字幕写回失败的任务，「强制生成」显示为「重试写回」', async () => {
+    api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({ recent: [
+      ...recent,
+      { kind: 'subtitle', id: '14', video_id: 7, title: '雨夜.mp4', status: 'needs_confirmation', error_code: 'subtitle_replace_failed', message: '写回失败', actions: ['force', 'discard'] }
+    ] }));
+    const wrapper = mountDrawer();
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="task-recent-action-subtitle-14-force"]').text()).toBe('重试写回');
+    expect(wrapper.get('[data-test="task-recent-action-subtitle-13-force"]').text()).toBe('强制生成');
+  });
+
   it('APP-03 播放代理失败项可重新生成', async () => {
     const wrapper = await mountWithRecent();
 

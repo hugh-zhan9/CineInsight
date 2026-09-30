@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import {
   createDetailNavigator,
   createVideoDetailsDraft,
+  detailPlaybackOrigin,
   detailPlaybackStartMs,
   formatFrameRate,
   formatMediaMeta,
@@ -66,6 +67,15 @@ assert.deepEqual(patched.tags, [{ id: 1 }], 'narrow detail patch preserves loade
 assert.equal(detailPlaybackStartMs({ entryID: 7, rootVideoID: 7, explicitStartTimeMs: 4200, rootResumePositionSeconds: 30, nestedResumePositionSeconds: 90 }), 4200);
 assert.equal(detailPlaybackStartMs({ entryID: 8, rootVideoID: 7, explicitStartTimeMs: 4200, rootResumePositionSeconds: 30, nestedResumePositionSeconds: 90 }), 90000);
 assert.equal(detailPlaybackStartMs({ entryID: 8, rootVideoID: 0, explicitStartTimeMs: null, rootResumePositionSeconds: 0, nestedResumePositionSeconds: 12.5 }), 12500);
+
+// PLAY-10 起播来源（D-PC42）：根条目带指定时间为 jump（含 0 秒，如人脸出现在片头）；否则有断点为 resume、从头为 start。
+assert.equal(detailPlaybackOrigin({ entryID: 7, rootVideoID: 7, explicitStartTimeMs: 4200, rootResumePositionSeconds: 30 }), 'jump', 'PLAY-10 subtitle hit start is a jump');
+assert.equal(detailPlaybackOrigin({ entryID: 7, rootVideoID: 7, explicitStartTimeMs: 0, rootResumePositionSeconds: 30 }), 'jump', 'PLAY-10 an explicit zero start is still a jump');
+assert.equal(detailPlaybackOrigin({ entryID: 7, rootVideoID: 7, explicitStartTimeMs: null, rootResumePositionSeconds: 30 }), 'resume', 'PLAY-10 root resume');
+assert.equal(detailPlaybackOrigin({ entryID: 7, rootVideoID: 7, explicitStartTimeMs: null, rootResumePositionSeconds: 0 }), 'start', 'PLAY-10 root from the beginning');
+assert.equal(detailPlaybackOrigin({ entryID: 8, rootVideoID: 7, explicitStartTimeMs: 4200, nestedResumePositionSeconds: 90 }), 'resume', 'PLAY-10 nested entries ignore the root start time');
+assert.equal(detailPlaybackOrigin({ entryID: 8, rootVideoID: 7, explicitStartTimeMs: 4200, nestedResumePositionSeconds: 0 }), 'start', 'PLAY-10 nested entry without resume starts over');
+assert.equal(detailPlaybackOrigin(undefined), 'start');
 
 // 媒体元信息行：缺哪项省哪项，不用"未知"占位；0 字节等同缺失。
 assert.deepEqual(formatMediaMeta({ size: 1.5 * 1024 * 1024 * 1024, duration: 3723, width: 1920, height: 1080 }), ['1.5 GB', '01:02:03', '1920×1080']);

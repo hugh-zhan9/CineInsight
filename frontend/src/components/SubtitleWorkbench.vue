@@ -16,9 +16,38 @@
       </header>
 
       <div v-if="loading" class="subtitle-workbench__state">正在读取外置 SRT...</div>
-      <div v-else-if="loadError" class="subtitle-workbench__state subtitle-workbench__state--error" role="alert">
+      <!-- 还没有字幕（D-PC15、MEDIA-06）：不是死胡同，可以新建空白字幕，保存时才创建文件。 -->
+      <div v-else-if="loadErrorCode === 'subtitle_missing'" class="subtitle-workbench__state" data-test="workbench-missing">
         <p>{{ loadError }}</p>
-        <button type="button" class="btn-primary" @click="loadWorkbench">重试</button>
+        <p class="subtitle-workbench__state-hint">可以新建一份空白字幕手动编写，保存时才会创建同名 .srt 文件。</p>
+        <button type="button" class="btn-primary" :disabled="creatingBlank" data-test="workbench-create-blank" @click="createBlankDocument">
+          {{ creatingBlank ? '正在新建…' : '新建空白字幕' }}
+        </button>
+      </div>
+      <!-- 非 UTF-8（D-PC14、MEDIA-02）：不直接编辑，先一键转换（会先备份）；编码有歧义时按预览选。 -->
+      <div v-else-if="loadErrorCode === 'subtitle_encoding_not_utf8'" class="subtitle-workbench__state" data-test="workbench-encoding">
+        <p>{{ loadError }}</p>
+        <div v-if="encoding.candidates.length > 1" class="subtitle-workbench__encoding-options">
+          <label v-for="candidate in encoding.candidates" :key="candidate.encoding" class="subtitle-workbench__encoding-option">
+            <input v-model="encoding.selected" type="radio" :value="candidate.encoding" :data-test="`workbench-encoding-${candidate.encoding}`" />
+            <span>
+              <strong>{{ encodingLabel(candidate.encoding) }}</strong>
+              <em>{{ candidate.preview }}</em>
+            </span>
+          </label>
+        </div>
+        <p v-if="encoding.error" class="subtitle-workbench__state--error" role="alert">{{ encoding.error }}</p>
+        <button
+          type="button"
+          class="btn-primary"
+          :disabled="encoding.converting || encoding.unknown"
+          data-test="workbench-convert-utf8"
+          @click="convertToUTF8"
+        >{{ encoding.converting ? '正在转换…' : '转换为 UTF-8（会先备份）' }}</button>
+      </div>
+      <div v-else-if="loadError" class="subtitle-workbench__state subtitle-workbench__state--error" role="alert" data-test="workbench-load-error">
+        <p>{{ loadError }}</p>
+        <button v-if="loadErrorCode !== 'subtitle_not_sidecar_srt'" type="button" class="btn-primary" @click="loadWorkbench">重试</button>
       </div>
 
       <template v-else>
@@ -88,9 +117,28 @@
                   <option v-for="language in languageOptions" :key="`target-${language.value}`" :value="language.value">{{ language.label }}</option>
                 </select>
               </div>
+              <!-- 两种重译范围（D-PC16、MEDIA-07）：选区多数是双语两行时默认只替换译文行，不破坏原文。 -->
+              <div class="subtitle-workbench__mode-row" role="radiogroup" aria-label="重译范围">
+                <label><input v-model="retranslateModeModel" type="radio" value="translation_line" data-test="retranslate-mode-translation_line" /> 只替换译文行</label>
+                <label><input v-model="retranslateModeModel" type="radio" value="whole_entry" data-test="retranslate-mode-whole_entry" /> 整条替换</label>
+              </div>
               <button type="button" class="btn-secondary" :disabled="translating || selectedIDs.length === 0" @click="retranslateSelection">
                 {{ translating ? '翻译中...' : `翻译选中 ${selectedIDs.length} 条` }}
               </button>
+            </section>
+
+            <!-- 历史版本（D-PC13、MEDIA-05）：每次覆盖前自动备份，保留最近 5 份。 -->
+            <section class="subtitle-workbench__tool-section" data-test="workbench-backups">
+              <h3>历史版本</h3>
+              <p v-if="!backups.length" class="subtitle-workbench__hint">还没有备份。生成、翻译或保存覆盖字幕时，会自动备份最近 5 份。</p>
+              <template v-else>
+                <select v-model="selectedBackupID" aria-label="选择要恢复的版本" data-test="workbench-backup-select">
+                  <option v-for="backup in backups" :key="backup.id" :value="backup.id">{{ backupLabel(backup) }}</option>
+                </select>
+                <button type="button" class="btn-secondary" :disabled="restoringBackup || !selectedBackupID" data-test="workbench-restore-backup" @click="restoreSelectedBackup">
+                  {{ restoringBackup ? '正在恢复…' : '恢复所选版本' }}
+                </button>
+              </template>
             </section>
           </aside>
 
@@ -100,6 +148,12 @@
                 <button data-test="undo" type="button" class="btn-secondary" :disabled="history.length === 0" @click="undo">撤销</button>
                 <button data-test="redo" type="button" class="btn-secondary" :disabled="future.length === 0" @click="redo">重做</button>
                 <button type="button" class="btn-secondary" @click="toggleAllSelection">{{ allSelected ? '取消全选' : '全选' }}</button>
+              </div>
+              <!-- 问题导航与一键修复（D-PC15、MEDIA-06）：零时长、重叠在加载时是「待修问题」，不是打不开。 -->
+              <div v-if="issueEntryIndexes.length" class="subtitle-workbench__issue-actions" data-test="workbench-issues">
+                <span class="subtitle-workbench__issue-count">{{ issueEntryIndexes.length }} 条有问题</span>
+                <button type="button" class="btn-secondary" data-test="workbench-next-issue" @click="goToNextIssue">下一个问题</button>
+                <button type="button" class="btn-secondary" :disabled="timingIssueCount === 0" data-test="workbench-fix-timing" @click="fixTimingIssues">一键修复时间</button>
               </div>
               <span>共 {{ entries.length }} 条 · 已选 {{ selectedIDs.length }} 条</span>
             </div>
@@ -169,8 +223,11 @@
           <div class="subtitle-workbench__messages">
             <p v-if="operationError" class="subtitle-workbench__message subtitle-workbench__message--error" role="alert">{{ operationError }}</p>
             <p v-else-if="operationMessage" class="subtitle-workbench__message" role="status">{{ operationMessage }}</p>
+            <p v-else-if="entries.length === 0" class="subtitle-workbench__message" data-test="workbench-empty-hint">
+              字幕还没有内容，点「插入」添加第一条。
+            </p>
             <p v-else-if="validationIssues.length" class="subtitle-workbench__message subtitle-workbench__message--error">
-              当前有 {{ validationIssues.length }} 个校验问题，修正后才能保存。
+              当前有 {{ validationIssues.length }} 个校验问题，修正后才能保存；可用「下一个问题」逐条查看。
             </p>
             <p v-else class="subtitle-workbench__message">序号会在保存时自动重排。快捷键：⌘/Ctrl+S 保存，⌘/Ctrl+Z 撤销。</p>
           </div>
@@ -191,13 +248,31 @@
 
 <script>
 import {
+  ConvertSubtitleToUTF8,
+  CreateBlankSubtitleDocument,
   GetPreviewSession,
   GetSubtitleEditDocument,
+  ListSubtitleBackups,
   PreviewExternally,
+  RestoreSubtitleBackup,
   RetranslateSubtitleEntries,
   SaveSubtitleEditDocument
 } from '../../wailsjs/go/main/App';
 import { confirmAction } from '../utils/feedback.js';
+import { formatBytes } from '../utils/mediaDetails.js';
+import {
+  defaultRetranslateMode, fixSubtitleTimingIssues, formatLocalTime, subtitleEncodingLabel, subtitleEncodingPrompt,
+  subtitleErrorText, subtitleExceptionText
+} from '../utils/subtitleTools.js';
+
+// 加载失败里需要单独给出口的错误码（D-PC14、D-PC15、D-PC17）。
+const DOCUMENT_ERROR_CODES = ['subtitle_missing', 'subtitle_not_sidecar_srt', 'subtitle_encoding_not_utf8'];
+// 一键修复只管时间问题；负时间、空文本等要人来改。
+const TIMING_ISSUE_CODES = ['invalid_time_range', 'overlap'];
+
+function emptyEncoding() {
+  return { detected: '', candidates: [], selected: '', converting: false, error: '', unknown: false };
+}
 
 const ENTRY_ROW_HEIGHT = 210;
 const HISTORY_LIMIT = 100;
@@ -224,6 +299,14 @@ export default {
     return {
       loading: true,
       loadError: '',
+      loadErrorCode: '',
+      creatingBlank: false,
+      encoding: emptyEncoding(),
+      backups: [],
+      selectedBackupID: '',
+      restoringBackup: false,
+      // 用户手动选的重译范围；空表示按选区自动判断（D-PC16）。选区一变就回到自动。
+      retranslateModeOverride: '',
       documentFingerprint: null,
       entries: [],
       baselineSignature: '',
@@ -345,6 +428,25 @@ export default {
     },
     issueIDs() {
       return new Set(this.validationIssues.map(issue => issue.client_id).filter(Boolean));
+    },
+    issueEntryIndexes() {
+      const ids = this.issueIDs;
+      return this.entries.map((entry, index) => (ids.has(entry.client_id) ? index : -1)).filter(index => index >= 0);
+    },
+    timingIssueCount() {
+      return this.validationIssues.filter(issue => TIMING_ISSUE_CODES.includes(issue.code)).length;
+    },
+    defaultRetranslateMode() {
+      const selected = new Set(this.selectedIDs);
+      return defaultRetranslateMode(this.entries.filter(entry => selected.has(entry.client_id)));
+    },
+    retranslateModeModel: {
+      get() {
+        return this.retranslateModeOverride || this.defaultRetranslateMode;
+      },
+      set(mode) {
+        this.retranslateModeOverride = mode;
+      }
     }
   },
   watch: {
@@ -352,6 +454,9 @@ export default {
       if (!this.followPlayback || next < 0 || next === this.lastFollowedIndex) return;
       this.lastFollowedIndex = next;
       this.scrollEntryIntoView(next);
+    },
+    selectedIDs() {
+      this.retranslateModeOverride = '';
     }
   },
   mounted() {
@@ -367,6 +472,8 @@ export default {
     async loadWorkbench() {
       this.loading = true;
       this.loadError = '';
+      this.loadErrorCode = '';
+      this.encoding = emptyEncoding();
       this.operationError = '';
       this.operationMessage = '';
       this.previewLoading = true;
@@ -374,25 +481,158 @@ export default {
       const previewPromise = GetPreviewSession(this.video.id);
       try {
         const document = await documentPromise;
-        this.documentFingerprint = { ...document.fingerprint };
-        this.entries = cloneEntries(document.entries);
-        this.baselineSignature = entriesSignature(this.entries);
-        this.history = [];
-        this.future = [];
-        this.selectedIDs = [];
+        if (document?.error_code) {
+          this.applyDocumentError(document);
+        } else {
+          this.applyDocument(document);
+          const issueCount = Array.isArray(document?.issues) ? document.issues.length : 0;
+          if (issueCount > 0) {
+            this.operationMessage = `打开时发现 ${issueCount} 处时间问题（零时长或与上一条重叠），可用「一键修复时间」处理，修好后才能保存。`;
+          }
+        }
       } catch (error) {
-        this.loadError = `无法打开字幕工作台：${String(error)}`;
+        this.loadError = `无法打开字幕工作台：${subtitleExceptionText(error)}`;
       } finally {
         this.loading = false;
       }
+      this.loadBackups();
       try {
         this.previewSession = await previewPromise;
       } catch (error) {
-        this.previewError = String(error);
+        this.previewError = subtitleExceptionText(error);
       } finally {
         this.previewLoading = false;
       }
       this.$nextTick(this.measureViewport);
+    },
+    applyDocument(document) {
+      this.documentFingerprint = { ...(document?.fingerprint || {}) };
+      this.entries = cloneEntries(document?.entries);
+      this.baselineSignature = entriesSignature(this.entries);
+      this.history = [];
+      this.future = [];
+      this.selectedIDs = [];
+    },
+    applyDocumentError(document) {
+      const code = DOCUMENT_ERROR_CODES.includes(document.error_code) ? document.error_code : '';
+      this.loadErrorCode = code || document.error_code;
+      if (code === 'subtitle_encoding_not_utf8') {
+        const detected = String(document.detected_encoding || '').toLowerCase();
+        const candidates = Array.isArray(document.candidates) ? document.candidates.filter(item => item?.encoding) : [];
+        this.encoding = {
+          ...emptyEncoding(),
+          detected,
+          candidates,
+          selected: detected || candidates[0]?.encoding || '',
+          unknown: !detected || detected === 'unknown'
+        };
+        this.loadError = candidates.length > 1
+          ? `${subtitleErrorText('subtitle_encoding_ambiguous', '')}转换时会先备份原文件。`
+          : subtitleEncodingPrompt(detected);
+        return;
+      }
+      this.loadError = subtitleErrorText(document.error_code, document.message);
+    },
+    encodingLabel(encoding) {
+      return subtitleEncodingLabel(encoding);
+    },
+    async createBlankDocument() {
+      if (this.creatingBlank) return;
+      this.creatingBlank = true;
+      try {
+        const document = await CreateBlankSubtitleDocument(this.video.id);
+        this.applyDocument(document);
+        this.loadError = '';
+        this.loadErrorCode = '';
+        this.operationMessage = '已新建空白字幕，点「插入」添加第一条；保存时才会创建同名 .srt 文件。';
+        this.$nextTick(this.measureViewport);
+      } catch (error) {
+        this.loadError = `新建空白字幕失败：${subtitleExceptionText(error)}`;
+        this.loadErrorCode = '';
+      } finally {
+        this.creatingBlank = false;
+      }
+    },
+    async convertToUTF8() {
+      if (this.encoding.converting || this.encoding.unknown) return;
+      const chosen = this.encoding.candidates.length > 1 ? this.encoding.selected : this.encoding.detected;
+      this.encoding = { ...this.encoding, converting: true, error: '' };
+      try {
+        const result = await ConvertSubtitleToUTF8(this.video.id, chosen || '');
+        if (result?.error_code === 'subtitle_encoding_ambiguous') {
+          this.applyDocumentError({ ...result, error_code: 'subtitle_encoding_not_utf8' });
+          return;
+        }
+        if (result?.error_code) {
+          this.encoding = { ...this.encoding, converting: false, error: subtitleErrorText(result.error_code, result.message) };
+          return;
+        }
+        await this.loadWorkbench();
+        const warnings = Array.isArray(result?.warnings) && result.warnings.length ? ` ${result.warnings.join('；')}` : '';
+        if (!this.loadError) this.operationMessage = `已转换为 UTF-8（原文件已备份，可在「历史版本」恢复）。${warnings}`;
+      } catch (error) {
+        this.encoding = { ...this.encoding, converting: false, error: `转换失败：${subtitleExceptionText(error)}` };
+      }
+    },
+    async loadBackups() {
+      try {
+        const backups = await ListSubtitleBackups(this.video.id);
+        this.backups = Array.isArray(backups) ? backups : [];
+      } catch (_error) {
+        this.backups = [];
+      }
+      if (!this.backups.some(backup => backup.id === this.selectedBackupID)) {
+        this.selectedBackupID = this.backups[0]?.id || '';
+      }
+    },
+    backupLabel(backup) {
+      return `${formatLocalTime(backup.created_at)} · ${formatBytes(backup.size)}`;
+    },
+    async restoreSelectedBackup() {
+      const backup = this.backups.find(item => item.id === this.selectedBackupID);
+      if (!backup || this.restoringBackup) return;
+      const lead = this.isDirty ? '当前还有未保存的修改，恢复后会丢弃。' : '';
+      const confirmed = await confirmAction({
+        title: '恢复字幕版本',
+        message: `${lead}把字幕恢复到 ${formatLocalTime(backup.created_at)} 的版本？当前的字幕文件会先备份，之后仍可再恢复回来。`,
+        confirmText: '恢复',
+        danger: this.isDirty
+      });
+      if (!confirmed) return;
+      this.restoringBackup = true;
+      try {
+        const result = await RestoreSubtitleBackup(this.video.id, backup.id);
+        await this.loadWorkbench();
+        const warnings = Array.isArray(result?.warnings) && result.warnings.length ? ` ${result.warnings.join('；')}` : '';
+        if (!this.loadError) this.operationMessage = `已恢复到 ${formatLocalTime(backup.created_at)} 的版本（恢复前的字幕已备份）。${warnings}`;
+        this.$emit('saved', { video_id: this.video.id, status: 'restored' });
+      } catch (error) {
+        this.operationError = `恢复失败：${subtitleExceptionText(error)}`;
+      } finally {
+        this.restoringBackup = false;
+      }
+    },
+    focusEntry(index) {
+      const entry = this.entries[index];
+      if (!entry) return;
+      this.selectedIDs = [entry.client_id];
+      this.$nextTick(() => this.scrollEntryIntoView(index));
+    },
+    goToNextIssue() {
+      const indexes = this.issueEntryIndexes;
+      if (!indexes.length) return;
+      const current = this.selectionIndexes.length ? this.selectionIndexes[this.selectionIndexes.length - 1] : -1;
+      const next = indexes.find(index => index > current);
+      this.focusEntry(next === undefined ? indexes[0] : next);
+    },
+    fixTimingIssues() {
+      const { entries, fixed } = fixSubtitleTimingIssues(this.entries);
+      if (!fixed) {
+        this.operationMessage = '没有能自动修复的时间问题，请逐条调整。';
+        return;
+      }
+      this.mutate(() => { this.entries = entries; });
+      this.operationMessage = `已修复 ${fixed} 处时间问题，保存前仍可撤销。`;
     },
     async reloadDocument() {
       if (this.isDirty && !await confirmAction({ title: '重新加载字幕', message: '重新加载会丢弃当前未保存修改，确定继续？', confirmText: '丢弃并重载', danger: true })) return;
@@ -443,7 +683,7 @@ export default {
       try {
         await PreviewExternally(this.video.id);
       } catch (error) {
-        this.operationError = `无法打开系统播放器：${String(error)}`;
+        this.operationError = `无法打开系统播放器：${subtitleExceptionText(error)}`;
       }
     },
     measureViewport() {
@@ -598,6 +838,7 @@ export default {
       if (this.translating || this.selectedIDs.length === 0) return;
       const selected = new Set(this.selectedIDs);
       const sourceEntries = this.entries.filter(entry => selected.has(entry.client_id));
+      const mode = this.retranslateModeModel;
       this.translating = true;
       this.operationError = '';
       try {
@@ -605,6 +846,7 @@ export default {
           video_id: this.video.id,
           source_lang: this.sourceLang,
           target_lang: this.targetLang,
+          mode,
           entries: sourceEntries.map(entry => ({ client_id: entry.client_id, text: entry.text }))
         });
         const translated = Array.isArray(result?.entries) ? result.entries : [];
@@ -616,9 +858,11 @@ export default {
             if (byID.has(entry.client_id)) entry.text = byID.get(entry.client_id);
           });
         });
-        this.operationMessage = `已翻译 ${translated.length} 条，保存前仍可撤销。`;
+        const scope = mode === 'translation_line' ? '（只替换了译文行）' : '';
+        const warnings = Array.isArray(result?.warnings) && result.warnings.length ? ` ${result.warnings.join('；')}` : '';
+        this.operationMessage = `已翻译 ${translated.length} 条${scope}，保存前仍可撤销。${warnings}`;
       } catch (error) {
-        this.operationError = `重新翻译失败：${String(error)}`;
+        this.operationError = `重新翻译失败：${subtitleExceptionText(error)}`;
       } finally {
         this.translating = false;
       }
@@ -636,17 +880,28 @@ export default {
         });
         if (result?.status !== 'saved' && result?.status !== 'saved_index_pending') {
           const issueMessage = Array.isArray(result?.issues) && result.issues.length ? result.issues[0].message : '';
-          this.operationError = issueMessage || result?.message || '字幕保存被拒绝';
+          // 校验被拒时直接跳到第一个问题（D-PC15）。
+          const firstIndex = this.entries.findIndex(entry => entry.client_id === result?.first_issue_client_id);
+          if (firstIndex >= 0) this.focusEntry(firstIndex);
+          else if (Number(result?.first_issue_entry_index) > 0) this.focusEntry(Number(result.first_issue_entry_index) - 1);
+          const position = Number(result?.first_issue_entry_index) > 0 ? `第 ${result.first_issue_entry_index} 条：` : '';
+          this.operationError = issueMessage
+            ? `${position}${issueMessage}`
+            : subtitleErrorText(result?.error_code, result?.message || '字幕保存被拒绝');
           return;
         }
-        this.documentFingerprint = { ...result.fingerprint };
+        if (result.fingerprint) this.documentFingerprint = { ...result.fingerprint };
         this.baselineSignature = entriesSignature(this.entries);
         this.history = [];
         this.future = [];
-        this.operationMessage = result.status === 'saved_index_pending' ? (result.message || '字幕已保存，索引将在稍后重建。') : '字幕已保存。';
+        const backup = result.backup_id ? '原字幕已备份，可在「历史版本」恢复。' : '';
+        this.operationMessage = result.status === 'saved_index_pending'
+          ? `${result.message || '字幕已保存，索引将在稍后重建。'}${backup}`
+          : `字幕已保存。${backup}`;
+        this.loadBackups();
         this.$emit('saved', { video_id: this.video.id, status: result.status });
       } catch (error) {
-        this.operationError = `保存字幕失败：${String(error)}`;
+        this.operationError = `保存字幕失败：${subtitleExceptionText(error)}`;
       } finally {
         this.saving = false;
       }
@@ -780,6 +1035,59 @@ export default {
 .subtitle-workbench__message--error,
 .subtitle-workbench__entry-errors {
   color: var(--danger-color);
+}
+
+.subtitle-workbench__state-hint,
+.subtitle-workbench__hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.subtitle-workbench__encoding-options {
+  display: grid;
+  gap: 8px;
+  max-width: 520px;
+  margin: 12px auto;
+  text-align: left;
+}
+
+.subtitle-workbench__encoding-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.subtitle-workbench__encoding-option span {
+  display: grid;
+  gap: 2px;
+}
+
+.subtitle-workbench__encoding-option em {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+  white-space: pre-line;
+}
+
+.subtitle-workbench__mode-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.subtitle-workbench__issue-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.subtitle-workbench__issue-count {
+  color: var(--danger-color);
+  font-weight: 600;
 }
 
 .subtitle-workbench__playback-status {

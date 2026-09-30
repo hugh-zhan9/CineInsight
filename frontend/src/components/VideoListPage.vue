@@ -67,6 +67,7 @@
       @batch-move="moveSelectedVideos"
       @batch-local-metadata="openLocalMetadataDialog(selectedVideoIds)"
       @batch-playback-proxy="createProxiesForSelected"
+      @batch-subtitle="generateSubtitlesForSelected"
       @batch-delete="confirmBatchDelete"
     />
     <IncrementalScanBar
@@ -102,6 +103,18 @@
         data-test="stale-recheck-selected"
         @click="recheckSelectedStale"
       >{{ recheckingStale ? '正在重新检查…' : `重新检查所选（${selectedVideoIds.length}）` }}</button>
+    </div>
+
+    <!-- 「无字幕」视图与字幕搜索先用缓存的索引（D-PC23、MEDIA-14）：说清上次同步时间，给「立即同步」。 -->
+    <div v-if="subtitleIndexNoticeVisible" class="library-notice" role="status" data-test="subtitle-index-sync-bar">
+      <span data-test="subtitle-index-sync-text">{{ subtitleIndexSyncText }}</span>
+      <button
+        type="button"
+        class="btn-secondary btn-compact library-notice__action"
+        :disabled="subtitleIndexSyncBusy"
+        data-test="subtitle-index-sync-now"
+        @click="syncSubtitleIndexNow"
+      >{{ subtitleIndexSyncBusy ? '同步中…' : '立即同步' }}</button>
     </div>
 
     <!-- 播放失败（D-PC11、PLAY-12）：那一行就地标成失效，这里说明原因并给下一步，不整页重载。 -->
@@ -146,15 +159,19 @@
     <SubtitleTranslateDialog
       ref="subtitleTranslate"
       @translated="handleSubtitleTranslated"
-      @translating-change="translatingSubtitleVideoId = $event"
+      @translating-change="handleTranslatingChange"
+      @translate-progress="translatingSubtitlePercent = Number($event?.percent || 0)"
     />
 
     <RandomPickBanner
       :random-pick="randomPick"
       :random-pick-size="randomPickSize"
       :video-count="videos.length"
+      :random-play="randomPlayBanner"
       @reshuffle="reshuffleRandomPick"
       @exit="exitRandomPick"
+      @reroll="rerollRandomPlay"
+      @dismiss-play="dismissRandomPlay"
     />
 
     <div class="video-list" ref="videoList">
@@ -239,6 +256,8 @@
       @watch-progress="handlePreviewWatchProgress"
       @details-updated="handleVideoDetailsUpdated"
       @media-deleted="handlePersonMediaDeleted"
+      @media-restored="handlePersonMediaRestored"
+      @playback-attempted="applyPlaybackAttemptResult"
       @open-local-metadata="openLocalMetadataDialog([$event.id])"
 	  @export-local-metadata="exportLocalMetadataNFO"
 	  @enhance="openEnhanceDialog"
@@ -454,7 +473,7 @@
 </style>
 
 <script>
-import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, ListContinueWatchingWithFilter, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, PickRandomVideos, GetVideosByIDs, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
+import { SearchLibraryVideoPage, CountLibraryVideos, GetSemanticIndexStatus, SearchSemanticVideos, FindSimilarVideos, ListRecentlyPlayedWithFilter, ListContinueWatchingWithFilter, GetAutomaticOverrideKinds, GetLibrarySubtitleHits, PlayVideo, PlayRandomVideoWithFilter, RerollRandom, PickRandomVideos, GetVideosByIDs, SelectVideoFile, RelocateVideo, ListSubtitleBackups, RestoreSubtitleBackup, GetSubtitleIndexSyncStatus, SyncSubtitleIndexNow, SetVideoFavorite, SetVideoLiked, SetVideoWatched, UpdateVideoWatchProgress, ListSavedLibraryViews, DeleteSavedLibraryView, FilterActiveTagIDs, FilterActivePersonIDs, GetPersonDetail, OpenDirectory, RemoveTagFromVideo, UpdateSettings, MoveVideo, BatchMoveVideos, MoveDirectory, CheckMoveTarget, SelectMigrationSourceDirectory, SelectMigrationDestinationDirectory, ListStaleReasonCounts, RecheckVideos, ReaddRemovedRoot, ValidateScanDirectory, AddDirectory, RetryAITagging, GetEnhancementCapability, GetPreviewSession, PreviewExternally, CreatePlaybackProxy, BatchCreatePlaybackProxies, BatchCreatePlaybackProxiesForFilter } from '../../wailsjs/go/main/App';
 import ScanDialog from './ScanDialog.vue';
 import TagManagerDialog from './TagManagerDialog.vue';
 import AddTagDialog from './AddTagDialog.vue';
@@ -490,6 +509,9 @@ import { findCommand, registerCommands, unregisterCommands } from '../utils/comm
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyBatchSummary } from '../utils/playbackProxy.js';
 import { resumable, resumePosition } from '../utils/watchState.js';
+import { scrubAbsolutePaths } from '../utils/pathText.js';
+import { formatLocalTime, subtitleExceptionText } from '../utils/subtitleTools.js';
+import { loadRandomMode, loadRecentRandomIDs, normalizeRecentRandomIDs, RANDOM_REROLL_WINDOW_MS, rerollWindowOpen, saveRandomMode, saveRecentRandomIDs } from '../utils/randomPlayback.js';
 
 // 「随机 N 部」一次抽取的条数。
 const RANDOM_PICK_SIZE = 10;
@@ -509,6 +531,14 @@ function pathDirName(path) {
   const text = String(path || '');
   const index = Math.max(text.lastIndexOf('/'), text.lastIndexOf('\\'));
   return index > 0 ? text.slice(0, index) : text;
+}
+
+// RelocateVideo 的两种常见失败带着完整路径（G-3）：换成不含路径的中文说法；其余擦掉路径后原样给出。
+function relocateErrorText(err) {
+  const raw = String(err?.message || err || '');
+  if (raw.startsWith('目标文件不存在')) return '重新定位失败：所选文件不存在或无法读取。';
+  if (raw.startsWith('目标路径已被其他记录占用')) return '重新定位失败：所选文件已被片库中的另一条记录收录。';
+  return '重新定位失败：' + scrubAbsolutePaths(raw);
 }
 
 export default {
@@ -547,9 +577,12 @@ export default {
       filteredCount: null,
       libraryTotalCount: null,
       countToken: 0,
-      randomMode: 'balanced',
-      recentRandomVideoIDs: [],
+      // 随机模式与「最近 12 次」排除表存在本机（D-PC44），重启后仍然生效。
+      randomMode: loadRandomMode(),
+      recentRandomVideoIDs: loadRecentRandomIDs(),
       randomPick: { active: false, ids: [], reason: '', loading: false },
+      // 最近一次随机播放（D-PC43、D-PC44）：token 是 30 秒内「换一个」用的令牌，startedAt 为本机时刻。
+      randomPlay: { active: false, video: null, reason: '', token: '', startedAt: 0, rerollable: false, loading: false },
       randomPickToken: 0,
       selectedTags: [],
       // 人物筛选（D-PC33）：[{ id, name }]，与工具栏的 selected-people 双向对应；筛选 DTO 只带 id。
@@ -635,8 +668,12 @@ export default {
       homeListVirtualizationEnabled: true,
       // 行菜单要知道哪些视频正在生成字幕；值由字幕任务组件镜像过来。
       generatingSubtitleIds: [],
-      // 翻译弹窗是单例，正在翻译哪个视频由它镜像过来，供行菜单禁用入口。
+      // 翻译弹窗是单例，正在翻译哪个视频由它镜像过来，供行菜单禁用入口；进度也镜像过来标在菜单上（MEDIA-12）。
       translatingSubtitleVideoId: null,
+      translatingSubtitlePercent: 0,
+      // 字幕索引同步状态（D-PC23）：「无字幕」视图与字幕搜索上显示「上次同步时间 · 立即同步」。
+      subtitleIndexSync: null,
+      subtitleIndexSyncRequesting: false,
       runtimeOffHandlers: [],
       searchDebounceTimer: null,
     };
@@ -667,7 +704,8 @@ export default {
         group: 'action',
         label: '随机播放',
         keywords: ['random', '随机'],
-        enabled: () => !this.randomPick.loading,
+        // 语义模式下随机会忽略搜索词、从全库抽取（PLAY-08），与工具栏按钮同样禁用。
+        enabled: () => !this.randomPick.loading && this.searchMode !== 'semantic',
         run: () => this.playRandom()
       },
       // 待处理工作台按固定 ID 跳到本页的既有面板（详细设计 §6.1）。run() 只负责打开面板，
@@ -724,6 +762,8 @@ export default {
 
       // 启动扫描、改目录触发的扫描与别处发起的手动扫描都在这里汇报（D-PC09、LIB-08）。
       this.registerRuntimeEvent('library-scan-summary', (event) => this.handleLibraryScanSummary(event));
+      // 后台字幕索引同步完成（D-PC23）：更新「上次同步时间」，正停在依赖索引的视图上就刷新一次。
+      this.registerRuntimeEvent('subtitle-index-synced', (status) => this.handleSubtitleIndexSynced(status));
       // 播放失败后的后台重定位找到了新位置（D-PC11）：就地恢复那一行。
       this.registerRuntimeEvent('video-relocated', (event) => this.handleVideoRelocated(event));
       this.registerRuntimeEvent('video-enhancement-capability', (capability) => {
@@ -750,6 +790,15 @@ export default {
         el.scrollTop = target;
       });
     },
+    randomMode(mode) {
+      saveRandomMode(mode);
+    },
+    subtitleIndexNoticeVisible: {
+      immediate: true,
+      handler(visible) {
+        if (visible) this.loadSubtitleIndexSyncStatus();
+      }
+    },
     // 进「路径失效」视图时取一次各原因的计数；离开时放掉按原因的筛选。
     smartView(view) {
       if (view === 'stale') {
@@ -770,6 +819,7 @@ export default {
     }
   },
   beforeUnmount() {
+    clearTimeout(this._randomRerollTimer);
     unregisterCommands('video-list');
 	window.removeEventListener('keydown', this.handleLibraryShortcut);
 	window.removeEventListener('keydown', this.handleToolbarShortcut);
@@ -782,6 +832,33 @@ export default {
   computed: {
     randomPickSize() {
       return RANDOM_PICK_SIZE;
+    },
+    subtitleIndexNoticeVisible() {
+      return this.smartView === 'no_subtitle' || this.isSubtitleSearchActive();
+    },
+    subtitleIndexSyncBusy() {
+      return this.subtitleIndexSyncRequesting || !!this.subtitleIndexSync?.running;
+    },
+    subtitleIndexSyncText() {
+      const status = this.subtitleIndexSync;
+      if (status?.running) return '正在后台同步字幕索引，完成后列表会自动刷新。';
+      const parts = [];
+      parts.push(status?.last_synced_at
+        ? `字幕索引上次同步：${formatLocalTime(status.last_synced_at)}（每 10 分钟最多自动同步一次）。`
+        : '字幕索引本次启动后还没有同步过，列表先按现有索引显示。');
+      if (status?.error) parts.push(`上次同步失败：${scrubAbsolutePaths(status.error)}`);
+      return parts.join(' ');
+    },
+    randomPlayBanner() {
+      const play = this.randomPlay;
+      if (!play.active || !play.video) return null;
+      return {
+        active: true,
+        videoName: play.video.display_title || play.video.name || `视频 #${play.video.id}`,
+        reason: play.reason,
+        rerollable: play.rerollable,
+        loading: play.loading
+      };
     },
     // 能力不可用时把「语义」入口置灰并说明原因，而不是让用户搜完看到一个空结果——
     // 空结果会被读成"库里没有匹配内容"，而不是"这个能力现在用不了"。
@@ -809,6 +886,8 @@ export default {
       // 失效行的处理（D-PC06、LIB-10）：重新检查走窄对账；目录被移除或不在扫描范围的可以把目录加回来。
       const staleItems = video.is_stale ? [
         { id: 'recheck', label: '重新检查', disabled: this.recheckingStale },
+        // 文件被挪到别处、自动查找没找到时，手动指给它（LIB-10）。
+        { id: 'relocate', label: '重新定位文件…' },
         ...(['removed_root', 'outside_roots'].includes(video.stale_reason) ? [{ id: 'readd-root', label: '加回目录…' }] : [])
       ] : [];
       // 超分运行时明确不可用时标「未就绪」，点了去设置页的超分分区看原因（D-PC24、MEDIA-11）。
@@ -825,9 +904,11 @@ export default {
         { id: 'ai-reanalyze', label: '重新分析 AI 标签' },
         { heading: '字幕' },
         { id: 'subtitle', label: generating ? '生成字幕（进行中）' : '生成字幕', disabled: generating },
-        { id: 'subtitle-translate', label: translatingThisVideo ? '翻译字幕（进行中）' : '翻译字幕…', disabled: generating || translating },
+        { id: 'subtitle-translate', label: translatingThisVideo ? `翻译字幕（进行中 ${this.translatingSubtitlePercent}%）` : '翻译字幕…', disabled: generating || translating },
         { id: 'subtitle-edit', label: '编辑字幕' },
         { id: 'subtitle-preview', label: '预览字幕' },
+        // 生成、翻译、工作台保存覆盖字幕前都会备份（D-PC13、MEDIA-05）；这里恢复最近一份，更早的在工作台「历史版本」里。
+        { id: 'subtitle-restore', label: '恢复上一版字幕…', disabled: generating || translatingThisVideo },
         { heading: '增强' },
         { id: 'enhance', label: enhanceReady ? '视频超分…' : '视频超分（未就绪）' },
         { id: 'playback-proxy', label: '生成播放代理', disabled: this.playbackProxy.running },
@@ -1248,6 +1329,75 @@ export default {
     generateSubtitle(video) {
       return this.$refs.subtitleTasks?.generate(video);
     },
+    // 批量生成字幕（D-PC23、MEDIA-14）：只有已加载的选中行才有名字；没加载到的按 ID 补上，名字由队列回报。
+    generateSubtitlesForSelected() {
+      const byID = new Map(this.videos.map(video => [Number(video.id), video]));
+      const videos = [...new Set(this.selectedVideoIds.map(Number))]
+        .filter(Boolean)
+        .map(id => byID.get(id) || { id, name: `视频 #${id}` });
+      return this.$refs.subtitleTasks?.generateBatch(videos);
+    },
+    handleTranslatingChange(videoID) {
+      this.translatingSubtitleVideoId = videoID;
+      this.translatingSubtitlePercent = 0;
+    },
+    // 行菜单「恢复上一版字幕」（D-PC13、MEDIA-05）：恢复最近一份备份；恢复前当前字幕也会被备份，所以可以再换回来。
+    async restoreLatestSubtitleBackup(video) {
+      if (!video?.id) return;
+      let backups;
+      try {
+        backups = await ListSubtitleBackups(video.id) || [];
+      } catch (err) {
+        notifyError('读取字幕备份失败：' + subtitleExceptionText(err));
+        return;
+      }
+      const latest = backups[0];
+      if (!latest) {
+        notify('这个视频还没有字幕备份。生成、翻译或在工作台保存覆盖字幕时，会自动备份最近 5 份。');
+        return;
+      }
+      const name = video.display_title || video.name;
+      const more = backups.length > 1 ? `\n共有 ${backups.length} 份备份，更早的版本可在「编辑字幕」的「历史版本」里恢复。` : '';
+      const confirmed = await confirmAction({
+        title: '恢复上一版字幕',
+        message: `把「${name}」的字幕恢复到 ${formatLocalTime(latest.created_at)} 的版本？当前的字幕会先备份，之后仍可再换回来。${more}`,
+        confirmText: '恢复'
+      });
+      if (!confirmed) return;
+      try {
+        const result = await RestoreSubtitleBackup(video.id, latest.id);
+        const warnings = Array.isArray(result?.warnings) && result.warnings.length ? `\n${result.warnings.join('\n')}` : '';
+        notify(`已把「${name}」的字幕恢复到 ${formatLocalTime(latest.created_at)} 的版本。${warnings}`);
+        await this.reloadCurrentView();
+      } catch (err) {
+        notifyError('恢复字幕失败：' + subtitleExceptionText(err));
+      }
+    },
+    // ===== 字幕索引同步（D-PC23、MEDIA-14）=====
+    async loadSubtitleIndexSyncStatus() {
+      try {
+        const status = await GetSubtitleIndexSyncStatus();
+        if (status) this.subtitleIndexSync = status;
+      } catch (err) {
+        this.debugLog('loadSubtitleIndexSyncStatus failed', { err: String(err) }, true);
+      }
+    },
+    async syncSubtitleIndexNow() {
+      if (this.subtitleIndexSyncBusy) return;
+      this.subtitleIndexSyncRequesting = true;
+      try {
+        const status = await SyncSubtitleIndexNow();
+        if (status) this.subtitleIndexSync = status;
+      } catch (err) {
+        notifyError('同步字幕索引失败：' + subtitleExceptionText(err));
+      } finally {
+        this.subtitleIndexSyncRequesting = false;
+      }
+    },
+    async handleSubtitleIndexSynced(status) {
+      if (status) this.subtitleIndexSync = { ...status, running: false };
+      if (this.subtitleIndexNoticeVisible) await this.reloadCurrentView();
+    },
     renameVideo(video) {
       return this.$refs.renameDialogs?.openRenameVideo(video);
     },
@@ -1534,12 +1684,14 @@ export default {
         case 'export-nfo': this.exportLocalMetadataNFO(video); break;
         case 'recheck': this.recheckVideos([video.id]); break;
         case 'readd-root': this.readdRemovedRoot(video); break;
+        case 'relocate': this.relocateVideoFile(video); break;
         case 'like': this.toggleVideoLiked(video); break;
         case 'ai-reanalyze': this.reanalyzeVideo(video); break;
         case 'subtitle': this.generateSubtitle(video); break;
         case 'subtitle-translate': this.openSubtitleTranslate(video); break;
         case 'subtitle-edit': this.openSubtitleWorkbench(video); break;
         case 'subtitle-preview': this.openSubtitlePreview(video); break;
+        case 'subtitle-restore': this.restoreLatestSubtitleBackup(video); break;
         case 'enhance':
           if (this.enhanceCapability?.available === false) this.openEnhanceSettings();
           else this.openEnhanceDialog(video);
@@ -2049,6 +2201,11 @@ export default {
       if (Number(this.selectedPreviewVideoId) === id) this.closePreview();
       await this.reloadCurrentView();
     },
+    // 抽屉里人物详情删掉的媒体被撤销恢复（LIB-12）：恢复的记录要回到列表，按当前条件重载一次。
+    async handlePersonMediaRestored() {
+      this.invalidateLibraryTotal();
+      await this.reloadCurrentView();
+    },
     async handleVideoDetailsUpdated(details) {
       const updatedVideoID = Number(details?.video?.id || 0);
       if (this.selectedPreviewVideoId === updatedVideoID) {
@@ -2327,23 +2484,93 @@ export default {
       await this.resetAndLoadVideos();
     },
     async playRandom() {
+      // 语义模式下随机会忽略搜索词、从全库抽取（PLAY-08）：入口已禁用，这里再挡一次快捷键与命令面板。
+      if (this.searchMode === 'semantic') {
+        notify('语义搜索结果不支持随机，请切回文件或字幕搜索。');
+        return;
+      }
+      if (this.randomPlay.loading) return;
+      this.randomPlay = { ...this.randomPlay, loading: true };
       try {
         const result = await PlayRandomVideoWithFilter({
           filter: this.currentLibraryFilter(),
           mode: this.randomMode,
           exclude_ids: this.recentRandomVideoIDs.slice(-12)
         });
-        if (result.dispatch_succeeded && result.video) {
-          this.recentRandomVideoIDs = [...this.recentRandomVideoIDs, result.video.id].slice(-24);
-          await this.applyPlaybackAttemptResult(result);
-          notify(`正在随机播放: ${result.video.name}\n${result.selection_reason || '按当前筛选条件选择'}`);
-          return;
-        }
-        await this.applyPlaybackAttemptResult(result);
+        await this.handleRandomPlayResult(result);
       } catch (err) {
         console.error('随机播放失败:', err);
         notifyError('随机播放失败: ' + err);
+      } finally {
+        this.randomPlay = { ...this.randomPlay, loading: false };
       }
+    },
+    // 结果条上的「换一个」（D-PC44）：30 秒窗口内用令牌换，这次随机不计数、不记账；
+    // 窗口已过、没有令牌，或后端答 reroll_expired（已提交）时，改为普通的再随机一次。
+    async rerollRandomPlay() {
+      const current = this.randomPlay;
+      if (current.loading) return;
+      if (!current.token || !rerollWindowOpen(current.startedAt)) {
+        await this.playRandom();
+        return;
+      }
+      this.randomPlay = { ...current, loading: true };
+      let expired = false;
+      try {
+        const result = await RerollRandom(current.token);
+        if (result?.reason_code === 'reroll_expired') {
+          expired = true;
+        } else {
+          await this.handleRandomPlayResult(result);
+        }
+      } catch (err) {
+        console.error('换一个失败:', err);
+        notifyError('换一个失败: ' + err);
+      } finally {
+        this.randomPlay = { ...this.randomPlay, loading: false };
+      }
+      if (expired) {
+        this.randomPlay = { ...this.randomPlay, token: '', rerollable: false };
+        await this.playRandom();
+      }
+    },
+    async handleRandomPlayResult(result) {
+      if (result?.dispatch_succeeded && result.video) {
+        this.rememberRandomVideo(result.video.id);
+        this.showRandomPlayResult(result);
+        // 返回的 video 是库里的现值：计数与 last_played_at 要等 30 秒后提交才变，这里不自行加一。
+        await this.applyPlaybackAttemptResult(result);
+        return;
+      }
+      // 没抽到或没播起来：结果条上那一部已经不是「正在随机播放」的了。
+      this.dismissRandomPlay();
+      await this.applyPlaybackAttemptResult(result);
+    },
+    showRandomPlayResult(result) {
+      clearTimeout(this._randomRerollTimer);
+      const token = String(result.reroll_token || '');
+      this.randomPlay = {
+        active: true,
+        video: result.video,
+        reason: result.selection_reason || '按当前筛选条件选择',
+        token,
+        startedAt: Date.now(),
+        rerollable: Boolean(token),
+        loading: this.randomPlay.loading
+      };
+      if (!token) return;
+      // 窗口到点就把结果条改成「已计入」；令牌本身由后端判定，这里只管说法。
+      this._randomRerollTimer = setTimeout(() => {
+        if (this.randomPlay.token === token) this.randomPlay = { ...this.randomPlay, rerollable: false };
+      }, RANDOM_REROLL_WINDOW_MS);
+    },
+    dismissRandomPlay() {
+      clearTimeout(this._randomRerollTimer);
+      this.randomPlay = { active: false, video: null, reason: '', token: '', startedAt: 0, rerollable: false, loading: this.randomPlay.loading };
+    },
+    rememberRandomVideo(videoID) {
+      this.recentRandomVideoIDs = normalizeRecentRandomIDs([...this.recentRandomVideoIDs, videoID]);
+      saveRecentRandomIDs(this.recentRandomVideoIDs);
     },
     async playVideo(id) {
       try {
@@ -2661,6 +2888,53 @@ export default {
       this.invalidateLibraryTotal();
       await this.reloadCurrentView();
       if (this.smartView === 'stale') await this.loadStaleReasonCounts();
+    },
+    // 「重新定位文件…」（LIB-10）：选一个视频文件作为这条记录的新位置，标签、评分与观看记录都保留。
+    async relocateVideoFile(video) {
+      if (!video?.id) return;
+      let path;
+      try {
+        path = await SelectVideoFile();
+      } catch (err) {
+        notifyError('打开文件选择框失败：' + subtitleExceptionText(err));
+        return;
+      }
+      if (!path) return;
+      try {
+        await RelocateVideo(video.id, path);
+      } catch (err) {
+        notifyError(relocateErrorText(err));
+        return;
+      }
+      let refreshed = null;
+      try {
+        const rows = await GetVideosByIDs([video.id]) || [];
+        await this.fillAutomaticOverrideKinds(rows);
+        refreshed = rows[0] || null;
+      } catch (err) {
+        this.debugLog('relocate refresh failed', { err: String(err) }, true);
+      }
+      this.applyRelocatedRow(video.id, refreshed || { path, directory: pathDirName(path), name: pathBaseName(path) });
+      notify(`已重新定位「${video.display_title || video.name}」，记录已恢复。`);
+    },
+    // 重新定位后的就地更新：失效视图里这一行不再属于这里，其余视图原位换成新记录。
+    applyRelocatedRow(videoID, fields) {
+      const id = Number(videoID);
+      const patch = { ...fields, is_stale: false, stale_reason: '' };
+      if (Number(this.playFailureNotice?.videoID) === id) this.playFailureNotice = null;
+      const index = this.videos.findIndex(video => Number(video.id) === id);
+      if (index !== -1) {
+        if (this.smartView === 'stale') {
+          this.videos.splice(index, 1);
+          this.selectedVideoIds = this.selectedVideoIds.filter(selected => Number(selected) !== id);
+          this.loadStaleReasonCounts();
+        } else {
+          this.videos.splice(index, 1, { ...this.videos[index], ...patch });
+        }
+      }
+      if (Number(this.selectedPreviewVideoId) === id && this.previewVideoSnapshot) {
+        this.previewVideoSnapshot = { ...this.previewVideoSnapshot, ...patch };
+      }
     },
     // 后台重定位找到了新位置（D-PC11）：那一行改回正常；在「路径失效」视图里它就不属于这里了。
     handleVideoRelocated(event) {

@@ -225,6 +225,7 @@
       @batch-move="$emit('batch-move')"
       @batch-local-metadata="$emit('batch-local-metadata')"
       @batch-playback-proxy="$emit('batch-playback-proxy')"
+      @batch-subtitle="$emit('batch-subtitle')"
       @batch-delete="$emit('batch-delete')"
       @toggle-select-all="$emit('toggle-select-all')"
       @clear-selection="$emit('clear-selection')"
@@ -390,7 +391,7 @@ export default {
     'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'delete-tag', 'open-tag-manager',
     'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
     'manage-select', 'view-select', 'random-select',
-    'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-delete'
+    'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete'
   ],
   data() {
     return {

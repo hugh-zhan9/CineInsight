@@ -1,16 +1,44 @@
+// 请求失败统一抛 FeedRequestError：页面按 code 与 status 区分提示（PIN、锁定、磁盘离线、网络异常），
+// 不再只拿一句 message。network 为 true 表示请求根本没到服务端或响应没读完。
+export class FeedRequestError extends Error {
+  constructor(message, { status = 0, code = '', payload = null, network = false } = {}) {
+    super(message);
+    this.name = 'FeedRequestError';
+    this.status = status;
+    this.code = code;
+    this.payload = payload;
+    this.network = network;
+  }
+}
+
+// 服务端设了 PIN 而当前没有会话时，所有数据接口都回 401 pin_required（D-PC45）。
+// 页面登记一个回调，任何一次请求撞上它就切到 PIN 页，不必每个调用点各判一遍。
+let authRequiredHandler = null;
+export function setAuthRequiredHandler(handler) {
+  authRequiredHandler = typeof handler === 'function' ? handler : null;
+}
+
 async function requestJSON(path, options = {}) {
-  const response = await fetch(path, {
-    credentials: 'same-origin',
-    ...options
-  });
+  let response;
   let payload = null;
-  const contentType = response.headers.get('content-type') || '';
-  if (contentType.includes('application/json')) {
-    payload = await response.json();
+  try {
+    response = await fetch(path, {
+      credentials: 'same-origin',
+      ...options
+    });
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      payload = await response.json();
+    }
+  } catch (_err) {
+    throw new FeedRequestError('网络异常', { network: true });
   }
   if (!response.ok) {
+    const code = payload?.code || payload?.error || '';
     const message = payload?.message || payload?.error || response.statusText;
-    throw new Error(message);
+    const error = new FeedRequestError(message, { status: response.status, code, payload });
+    if (response.status === 401 && code === 'pin_required') authRequiredHandler?.(error);
+    throw error;
   }
   return payload;
 }
@@ -91,4 +119,9 @@ export function setItemTag(item, tagID, attached) {
 
 export function restoreItem(item) {
   return postJSON(itemPath(item, 'restore'), {});
+}
+
+// 用 PIN 换会话 Cookie（D-PC45）：成功后服务端 Set-Cookie，之后的数据请求与 <video>/<img> 同源自动带上。
+export function authenticate(pin) {
+  return postJSON('/short-api/auth', { pin });
 }

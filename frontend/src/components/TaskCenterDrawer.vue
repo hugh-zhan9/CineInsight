@@ -326,7 +326,11 @@ export default {
       return RECENT_STATUS_LABELS[job.kind]?.[job.status] || '状态未知';
     },
     recentActions(job) {
-      const labels = RECENT_ACTION_LABELS[job.kind] || {};
+      let labels = RECENT_ACTION_LABELS[job.kind] || {};
+      // 字幕已生成、只是写回文件失败（MEDIA-04）：「强制生成」实际是再写一次，按用户看到的意思叫「重试写回」。
+      if (job.kind === 'subtitle' && job.error_code === 'subtitle_replace_failed') {
+        labels = { ...labels, force: '重试写回' };
+      }
       return asArray(job.actions)
         .filter(action => labels[action])
         .map(action => ({ action, label: labels[action] }));

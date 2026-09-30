@@ -4,7 +4,6 @@
       <BaseModal v-if="stage === 'confirm'" aria-label="确认删除媒体" data-test="person-media-delete-dialog" @close="close">
         <h3>删除{{ kindLabel }}</h3>
         <p>{{ target.media.name }} · {{ formatBytes(target.media.size) }}</p>
-        <p class="person-media-delete-path">{{ target.media.path }}</p>
         <p>删除后，该{{ kindLabel }}会从片库及所有人物的活跃作品中移除。</p>
         <label class="person-media-delete-option"><input v-model="deleteFile" type="checkbox" :disabled="busy" data-test="person-media-delete-file" />同时把原文件移到废纸篓</label>
         <!-- 两种后果与片库删除确认框同一口径（D-PC01/03）。 -->
@@ -97,7 +96,6 @@ export default {
   max-width: 640px; margin: 0 auto;
   background: var(--panel-bg); box-shadow: var(--shadow-modal);
 }
-.person-media-delete-path { overflow-wrap: anywhere; color: var(--text-muted); }
 .person-media-delete-option { display: flex; align-items: center; gap: 8px; }
 .person-media-delete-option input { width: auto; margin: 0; }
 </style>

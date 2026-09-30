@@ -11,7 +11,7 @@ vi.mock('../utils/feedback.js', async (importOriginal) => ({
   ...(await importOriginal()),
   ...feedback
 }));
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({
   AddCollectionVideo: vi.fn(),
@@ -56,7 +56,14 @@ const api = vi.hoisted(() => ({
   UpdateVideoRating: vi.fn(),
   CreatePlaybackProxy: vi.fn(),
   DeletePlaybackProxy: vi.fn(),
-  GetPlaybackProxy: vi.fn()
+  GetPlaybackProxy: vi.fn(),
+  // P-037：代理排位快照、动作条与有效观看。
+  GetPlaybackProxyStatus: vi.fn(),
+  PlayVideo: vi.fn(),
+  SetVideoFavorite: vi.fn(),
+  SetVideoLiked: vi.fn(),
+  SetVideoWatched: vi.fn(),
+  RecordViewEvent: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -118,6 +125,8 @@ beforeEach(() => {
   api.GetPlaybackProxy.mockResolvedValue(null);
   api.CreatePlaybackProxy.mockResolvedValue({ results: [{ video_id: 1, code: 'created', strategy: 'remux' }] });
   api.DeletePlaybackProxy.mockResolvedValue(null);
+  api.GetPlaybackProxyStatus.mockResolvedValue({ running: false, queued: 0, queued_video_ids: [], current_video_id: 0, results: [] });
+  api.RecordViewEvent.mockResolvedValue(true);
 });
 
 describe('PreviewDrawer', () => {
@@ -799,6 +808,459 @@ describe('PreviewDrawer 作品集术语表（P-010）', () => {
     expect(api.DeletePlaybackProxy).toHaveBeenCalledWith(1);
     expect(wrapper.vm.playbackProxy).toBeNull();
     expect(wrapper.emitted('preview-session-stale')?.[0]).toEqual([1]);
+  });
+});
+
+// ===== P-037：抽屉动作条、代理排位与自动切换、内嵌报错、观看会话 =====
+
+// 捕获抽屉订阅的 playback-proxy-state 回调，模拟后端推送。
+function installRuntime() {
+  const handlers = {};
+  window.runtime = { EventsOn: vi.fn((name, fn) => { handlers[name] = fn; return () => { delete handlers[name]; }; }) };
+  return handlers;
+}
+
+const inlineSession = (id, extra = {}) => ({ video_id: id, mode: 'inline', inline_source: { locator_value: `/preview/video/${id}`, mime: 'video/mp4' }, ...extra });
+
+async function mountInline(props = {}, details = videoDetails(1)) {
+  api.GetVideoDetails.mockImplementation(id => Promise.resolve(id === details.video.id ? details : videoDetails(id)));
+  api.ListCollections.mockResolvedValue([]);
+  const wrapper = mount(PreviewDrawer, { props: { video: details.video, session: inlineSession(details.video.id), ...props } });
+  await flushPromises();
+  return wrapper;
+}
+
+// jsdom 的 <video> 不会真的播放：把播放器状态接到一个可改的对象上。
+function fakePlayer(element, { duration = Number.NaN } = {}) {
+  const state = { currentTime: 0, duration, paused: true, seeking: false, playbackRate: 1, readyState: 4 };
+  for (const key of Object.keys(state)) {
+    Object.defineProperty(element, key, { configurable: true, get: () => state[key], set: value => { state[key] = value; } });
+  }
+  return state;
+}
+
+// 以 250ms 一次的 timeupdate 往前播 seconds 秒。clock 是 Date.now 的假时钟。
+async function playThrough(video, player, clock, seconds, from = player.currentTime) {
+  const steps = Math.round(seconds / 0.25);
+  for (let step = 1; step <= steps; step += 1) {
+    player.currentTime = from + step * 0.25;
+    clock.now += 250;
+    await video.trigger('timeupdate');
+  }
+}
+
+afterEach(() => {
+  delete window.runtime;
+  vi.restoreAllMocks();
+});
+
+describe('P-037 抽屉代理排位、进度与自动切换（D-PC26）', () => {
+  it('PLAY-04 入队后显示「排队中（第 N 个）」与「生成中」，本项完成后回读代理并请求刷新根条目的预览会话', async () => {
+    const handlers = installRuntime();
+    api.CreatePlaybackProxy.mockResolvedValueOnce({ running: true, queued: 2, queued_video_ids: [9, 1], current_video_id: 5, results: [] });
+    api.GetPlaybackProxy
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({ video_id: 1, strategy: 'remux', status: 'ready', output_size: 1024, last_error: '' });
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('排队中（第 2 个）');
+    expect(wrapper.get('[data-test="preview-proxy-create"]').text()).toBe('排队中...');
+    expect(wrapper.get('[data-test="preview-proxy-create"]').attributes('disabled')).toBeDefined();
+    expect(wrapper.emitted('preview-session-stale')).toBeUndefined();
+    expect(wrapper.find('[data-test="preview-proxy-error"]').exists()).toBe(false);
+
+    handlers['playback-proxy-state']({ running: true, queued: 0, queued_video_ids: [], current_video_id: 1, results: [{ video_id: 9, code: 'created' }] });
+    await flushPromises();
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('生成中');
+    expect(wrapper.emitted('preview-session-stale')).toBeUndefined();
+
+    handlers['playback-proxy-state']({ running: false, completed: true, queued: 0, queued_video_ids: [], current_video_id: 0, results: [{ video_id: 9, code: 'created' }, { video_id: 1, code: 'created', strategy: 'remux' }] });
+    await flushPromises();
+    expect(wrapper.emitted('preview-session-stale')).toEqual([[1]]);
+    expect(wrapper.vm.proxyTracking).toBeNull();
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('已有播放代理');
+    wrapper.unmount();
+    expect(handlers['playback-proxy-state']).toBeUndefined();
+  });
+
+  it('PLAY-04 「进行中」显示为「生成中」，不再当失败文案', async () => {
+    installRuntime();
+    api.CreatePlaybackProxy.mockResolvedValueOnce({ running: true, queued: 0, queued_video_ids: [], current_video_id: 1, results: [{ video_id: 1, code: 'in_progress' }] });
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('生成中');
+    expect(wrapper.find('[data-test="preview-proxy-error"]').exists()).toBe(false);
+    expect(wrapper.emitted('preview-session-stale')).toBeUndefined();
+  });
+
+  it('PLAY-04 打开时这一项已被别处排进队列：读当前快照补上排位', async () => {
+    installRuntime();
+    api.GetPlaybackProxyStatus.mockResolvedValueOnce({ running: true, queued: 3, queued_video_ids: [4, 5, 1], current_video_id: 3, results: [] });
+    const wrapper = await mountDrawer();
+    expect(api.GetPlaybackProxyStatus).toHaveBeenCalled();
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('排队中（第 3 个）');
+  });
+
+  it('PLAY-04 本轮里别的时候的旧结果不触发切换，也不回读', async () => {
+    const handlers = installRuntime();
+    const wrapper = await mountDrawer();
+    const reads = api.GetPlaybackProxy.mock.calls.length;
+    handlers['playback-proxy-state']({ running: false, completed: true, queued: 0, queued_video_ids: [], current_video_id: 0, results: [{ video_id: 1, code: 'created' }] });
+    await flushPromises();
+    expect(wrapper.emitted('preview-session-stale')).toBeUndefined();
+    expect(api.GetPlaybackProxy.mock.calls.length).toBe(reads);
+  });
+
+  it('PLAY-04 入队请求还没返回时，事件里没有这一项不算完成', async () => {
+    const handlers = installRuntime();
+    const pending = deferred();
+    api.CreatePlaybackProxy.mockReturnValueOnce(pending.promise);
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    handlers['playback-proxy-state']({ running: false, completed: true, queued: 0, queued_video_ids: [], current_video_id: 0, results: [{ video_id: 1, code: 'created' }] });
+    await flushPromises();
+    expect(wrapper.vm.proxyTracking?.state.phase).toBe('submitting');
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('正在加入队列');
+    pending.resolve({ running: true, queued: 1, queued_video_ids: [1], current_video_id: 8, results: [] });
+    await flushPromises();
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('排队中（第 1 个）');
+    expect(wrapper.emitted('preview-session-stale')).toBeUndefined();
+  });
+
+  it('PLAY-04 入队回执里没有这一项（也不在跑）时当场收尾，不会一直停在「正在加入队列」', async () => {
+    installRuntime();
+    api.CreatePlaybackProxy.mockResolvedValueOnce(undefined);
+    const wrapper = await mountDrawer();
+    const reads = api.GetPlaybackProxy.mock.calls.length;
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.proxyTracking).toBeNull();
+    expect(api.GetPlaybackProxy.mock.calls.length).toBe(reads + 1);
+    expect(wrapper.get('[data-test="preview-proxy-create"]').text()).toBe('生成播放代理');
+  });
+
+  it('PLAY-04 本项失败时翻成人话并停止等待', async () => {
+    const handlers = installRuntime();
+    api.CreatePlaybackProxy.mockResolvedValueOnce({ running: true, queued: 1, queued_video_ids: [1], current_video_id: 3, results: [] });
+    const wrapper = await mountDrawer();
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    await flushPromises();
+    handlers['playback-proxy-state']({ running: false, completed: true, queued: 0, queued_video_ids: [], current_video_id: 0, results: [{ video_id: 1, code: 'disk_full' }] });
+    await flushPromises();
+    expect(wrapper.get('[data-test="preview-proxy-error"]').text()).toBe('生成播放代理失败：磁盘空间不足');
+    expect(wrapper.vm.proxyTracking).toBeNull();
+    expect(wrapper.emitted('preview-session-stale')).toBeUndefined();
+    expect(wrapper.get('[data-test="preview-proxy-create"]').attributes('disabled')).toBeUndefined();
+  });
+
+  it('PLAY-04 嵌套条目完成后抽屉自己重取预览会话，切到内嵌播放', async () => {
+    installRuntime();
+    api.GetVideoDetails.mockImplementation(id => Promise.resolve(videoDetails(id)));
+    api.ListCollections.mockResolvedValue([]);
+    api.GetPreviewSession
+      .mockResolvedValueOnce({ video_id: 2, mode: 'external-preview', reason_message: '当前格式不支持内嵌预览', external_action: { button_label: '用系统播放器预览' } })
+      .mockResolvedValueOnce(inlineSession(2, { proxy: { strategy: 'remux', size: 2048 } }));
+    api.CreatePlaybackProxy.mockResolvedValueOnce({ running: false, completed: true, queued: 0, queued_video_ids: [], current_video_id: 0, results: [{ video_id: 2, code: 'created', strategy: 'remux' }] });
+    api.GetPlaybackProxy.mockResolvedValue({ video_id: 2, strategy: 'remux', status: 'ready', output_size: 2048, last_error: '' });
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'video', id: 2 } } });
+    await flushPromises();
+    expect(wrapper.find('video').exists()).toBe(false);
+    await wrapper.get('[data-test="preview-proxy-create"]').trigger('click');
+    await flushPromises();
+    expect(api.GetPreviewSession).toHaveBeenCalledTimes(2);
+    expect(wrapper.get('.preview-drawer__video source').attributes('src')).toBe('/preview/video/2');
+    expect(wrapper.vm.playingThroughProxy).toBe(true);
+  });
+});
+
+describe('P-037 内嵌播放器报错的回退（D-PC26）', () => {
+  it('PLAY-05 解码失败时显示「无法内嵌播放此文件」，给系统播放器与生成代理两个出口；换会话后恢复播放器', async () => {
+    installRuntime();
+    const wrapper = await mountInline();
+    const video = wrapper.get('video');
+    Object.defineProperty(video.element, 'error', { configurable: true, get: () => ({ code: 3 }) });
+    await video.trigger('error');
+    expect(wrapper.find('video').exists()).toBe(false);
+    const fallback = wrapper.get('[data-test="preview-inline-error"]');
+    expect(fallback.text()).toContain('无法内嵌播放此文件');
+    await wrapper.get('[data-test="preview-inline-error-external"]').trigger('click');
+    expect(wrapper.emitted('preview-externally')[0][0]).toEqual(expect.objectContaining({ id: 1 }));
+
+    api.CreatePlaybackProxy.mockResolvedValueOnce({ running: true, queued: 1, queued_video_ids: [1], current_video_id: 7, results: [] });
+    await wrapper.get('[data-test="preview-inline-error-proxy"]').trigger('click');
+    await flushPromises();
+    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(1);
+    expect(wrapper.get('[data-test="preview-inline-error-progress"]').text()).toBe('排队中（第 1 个）');
+
+    await wrapper.setProps({ session: inlineSession(1, { proxy: { strategy: 'remux', size: 10 } }) });
+    expect(wrapper.find('video').exists()).toBe(true);
+    expect(wrapper.find('[data-test="preview-inline-error"]').exists()).toBe(false);
+  });
+
+  it('PLAY-05 <source> 报错只在它还带着地址时算数（换会话清地址再 load 的那一次不算）', async () => {
+    const wrapper = await mountInline();
+    const source = wrapper.get('video source');
+    source.element.removeAttribute('src');
+    await source.trigger('error');
+    expect(wrapper.find('[data-test="preview-inline-error"]').exists()).toBe(false);
+    source.element.setAttribute('src', '/preview/video/1');
+    await source.trigger('error');
+    expect(wrapper.find('[data-test="preview-inline-error"]').exists()).toBe(true);
+  });
+
+  it('PLAY-05 <video> 没有 MediaError 的 error 事件不算失败', async () => {
+    const wrapper = await mountInline();
+    await wrapper.get('video').trigger('error');
+    expect(wrapper.find('video').exists()).toBe(true);
+  });
+
+  it('PLAY-05 已经在经代理播放时报错，只给系统播放器', async () => {
+    const wrapper = await mountInline({ session: inlineSession(1, { proxy: { strategy: 'transcode', size: 10 } }) });
+    const video = wrapper.get('video');
+    Object.defineProperty(video.element, 'error', { configurable: true, get: () => ({ code: 4 }) });
+    await video.trigger('error');
+    expect(wrapper.find('[data-test="preview-inline-error-external"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="preview-inline-error-proxy"]').exists()).toBe(false);
+  });
+});
+
+describe('P-037 抽屉动作条（D-PC47）', () => {
+  it('PLAY-14 收藏、点赞、已看直接写库，拿回的整条视频写回详情并通知宿主', async () => {
+    const wrapper = await mountDrawer();
+    expect(wrapper.find('[data-test="drawer-action-bar"]').exists()).toBe(true);
+    const cases = [
+      { test: 'drawer-action-favorite', call: api.SetVideoFavorite, field: 'is_favorite' },
+      { test: 'drawer-action-like', call: api.SetVideoLiked, field: 'is_liked' },
+      { test: 'drawer-action-watched', call: api.SetVideoWatched, field: 'is_watched' }
+    ];
+    for (const { test, call, field } of cases) {
+      call.mockImplementationOnce((id, value) => Promise.resolve({ ...wrapper.vm.details.video, id, [field]: value }));
+      expect(wrapper.get(`[data-test="${test}"]`).attributes('aria-pressed')).toBe('false');
+      await wrapper.get(`[data-test="${test}"]`).trigger('click');
+      await flushPromises();
+      expect(call).toHaveBeenCalledWith(1, true);
+      expect(wrapper.get(`[data-test="${test}"]`).attributes('aria-pressed')).toBe('true');
+      expect(wrapper.emitted('details-updated').at(-1)[0].video[field]).toBe(true);
+    }
+  });
+
+  it('PLAY-14 根条目以宿主传入的行为准：快捷键在宿主改过的状态，动作条跟着变', async () => {
+    const details = videoDetails(1);
+    const wrapper = await mountDrawer(details);
+    await wrapper.setProps({ video: { ...details.video, is_favorite: true, is_watched: true } });
+    expect(wrapper.get('[data-test="drawer-action-favorite"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="drawer-action-watched"]').attributes('aria-pressed')).toBe('true');
+    api.SetVideoFavorite.mockResolvedValueOnce({ ...details.video, is_favorite: false });
+    await wrapper.get('[data-test="drawer-action-favorite"]').trigger('click');
+    await flushPromises();
+    expect(api.SetVideoFavorite).toHaveBeenCalledWith(1, false);
+  });
+
+  it('PLAY-14 状态写入失败时就地报错', async () => {
+    const wrapper = await mountDrawer();
+    api.SetVideoWatched.mockRejectedValueOnce(new Error('数据库维护中'));
+    await wrapper.get('[data-test="drawer-action-watched"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="drawer-action-error"]').text()).toBe('更新观看状态失败：Error: 数据库维护中');
+    expect(wrapper.get('[data-test="drawer-action-watched"]').attributes('aria-pressed')).toBe('false');
+  });
+
+  it('PLAY-14 播放走 PlayVideo：结果交给宿主，失败原因就地显示', async () => {
+    const wrapper = await mountDrawer();
+    api.PlayVideo.mockResolvedValueOnce({ dispatch_succeeded: false, user_message: '所在磁盘未连接', reason_code: 'offline_root' });
+    await wrapper.get('[data-test="drawer-action-play"]').trigger('click');
+    await flushPromises();
+    expect(api.PlayVideo).toHaveBeenCalledWith(1);
+    expect(wrapper.emitted('playback-attempted')[0][0]).toEqual(expect.objectContaining({ reason_code: 'offline_root' }));
+    expect(wrapper.get('[data-test="drawer-action-error"]').text()).toBe('所在磁盘未连接');
+
+    api.PlayVideo.mockResolvedValueOnce({ dispatch_succeeded: true });
+    await wrapper.get('[data-test="drawer-action-play"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="drawer-action-error"]').exists()).toBe(false);
+    expect(wrapper.emitted('playback-attempted')).toHaveLength(2);
+  });
+
+  it('PLAY-14 星级评分 0.5 步进，点一下即保存，可清除', async () => {
+    const wrapper = await mountDrawer();
+    expect(wrapper.get('[data-test="drawer-stars-value"]').text()).toBe('未评分');
+    expect(wrapper.findAll('.drawer-star__half')).toHaveLength(20);
+    api.UpdateVideoRating.mockResolvedValueOnce({ id: 1, personal_rating: 7.5 });
+    await wrapper.get('[data-test="drawer-star-7.5"]').trigger('click');
+    await flushPromises();
+    expect(api.UpdateVideoRating).toHaveBeenCalledWith(1, 7.5);
+    expect(api.UpdateVideoDetails).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="drawer-stars-value"]').text()).toBe('7.5 / 10');
+    expect(wrapper.findAll('.drawer-star--full')).toHaveLength(7);
+    expect(wrapper.findAll('.drawer-star--half')).toHaveLength(1);
+    expect(wrapper.get('[data-test="drawer-star-7.5"]').attributes('aria-pressed')).toBe('true');
+    expect(wrapper.get('[data-test="detail-rating-input"]').element.value).toBe('7.5');
+
+    api.UpdateVideoRating.mockResolvedValueOnce({ id: 1, personal_rating: null });
+    await wrapper.get('[data-test="drawer-stars-clear"]').trigger('click');
+    await flushPromises();
+    expect(api.UpdateVideoRating).toHaveBeenLastCalledWith(1, null);
+    expect(wrapper.get('[data-test="drawer-stars-value"]').text()).toBe('未评分');
+    expect(wrapper.find('[data-test="drawer-stars-clear"]').exists()).toBe(false);
+  });
+});
+
+describe('P-037 内嵌观看会话与 watch-progress 载荷（D-PC42、D-PC43）', () => {
+  it('PLAY-07 累计播放首次越过阈值时记一次 inline_view，同一会话不再记', async () => {
+    const clock = { now: 0 };
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const wrapper = await mountInline();
+    const video = wrapper.get('video');
+    const player = fakePlayer(video.element, { duration: 60 });
+    player.paused = false;
+    await video.trigger('play');
+    await playThrough(video, player, clock, 29.75);
+    expect(api.RecordViewEvent).not.toHaveBeenCalled();
+    await playThrough(video, player, clock, 0.5);
+    await flushPromises();
+    expect(api.RecordViewEvent).toHaveBeenCalledTimes(1);
+    const [videoID, source, sessionID] = api.RecordViewEvent.mock.calls[0];
+    expect(videoID).toBe(1);
+    expect(source).toBe('inline_view');
+    expect(sessionID).toMatch(/^[0-9a-f]{32}$/);
+    await playThrough(video, player, clock, 10);
+    await video.trigger('ended');
+    await flushPromises();
+    expect(api.RecordViewEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('PLAY-07 拖动与跳转不算播放时长', async () => {
+    const clock = { now: 0 };
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const wrapper = await mountInline();
+    const video = wrapper.get('video');
+    const player = fakePlayer(video.element, { duration: 600 });
+    player.paused = false;
+    await video.trigger('play');
+    await playThrough(video, player, clock, 10);
+    await video.trigger('seeking');
+    player.currentTime = 400;
+    clock.now += 250;
+    await video.trigger('timeupdate');
+    await playThrough(video, player, clock, 10);
+    await flushPromises();
+    expect(api.RecordViewEvent).not.toHaveBeenCalled();
+  });
+
+  it('PLAY-07 播到结尾即便没够阈值也记一次；换一次会话会生成新的会话标识', async () => {
+    const clock = { now: 0 };
+    vi.spyOn(Date, 'now').mockImplementation(() => clock.now);
+    const wrapper = await mountInline();
+    let video = wrapper.get('video');
+    let player = fakePlayer(video.element, { duration: 600 });
+    player.paused = false;
+    await video.trigger('play');
+    await playThrough(video, player, clock, 5, 590);
+    await video.trigger('ended');
+    await flushPromises();
+    expect(api.RecordViewEvent).toHaveBeenCalledTimes(1);
+    expect(wrapper.emitted('watch-progress').at(-1)[0]).toEqual(expect.objectContaining({ videoID: 1, completed: true }));
+
+    await wrapper.setProps({ session: inlineSession(1, { proxy: { strategy: 'remux', size: 10 } }) });
+    await flushPromises();
+    video = wrapper.get('video');
+    player = fakePlayer(video.element, { duration: 600 });
+    player.paused = false;
+    await video.trigger('play');
+    await video.trigger('ended');
+    await flushPromises();
+    expect(api.RecordViewEvent).toHaveBeenCalledTimes(2);
+    expect(api.RecordViewEvent.mock.calls[1][2]).not.toBe(api.RecordViewEvent.mock.calls[0][2]);
+  });
+
+  it('PLAY-07 暂停在片尾区间（判定看完）也记一次', async () => {
+    const wrapper = await mountInline();
+    const video = wrapper.get('video');
+    const player = fakePlayer(video.element, { duration: 7200 });
+    player.paused = false;
+    await video.trigger('play');
+    player.currentTime = 7050;
+    await video.trigger('pause');
+    await flushPromises();
+    expect(api.RecordViewEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it('PLAY-10 字幕命中打开为 jump，并带上播放器读到的时长', async () => {
+    const wrapper = await mountInline({ startTimeMs: 4200 });
+    const video = wrapper.get('video');
+    const player = fakePlayer(video.element, { duration: 120 });
+    player.paused = false;
+    await video.trigger('play');
+    player.currentTime = 12;
+    await video.trigger('pause');
+    expect(wrapper.emitted('watch-progress').at(-1)[0]).toEqual({ videoID: 1, positionSeconds: 12, completed: false, origin: 'jump', durationSeconds: 120 });
+  });
+
+  it('PLAY-10 从断点起播为 resume、从头为 start；时长未知传 0', async () => {
+    const resumed = await mountInline({ resumePositionSeconds: 30 });
+    let video = resumed.get('video');
+    let player = fakePlayer(video.element);
+    player.paused = false;
+    await video.trigger('play');
+    player.currentTime = 40;
+    await video.trigger('pause');
+    expect(resumed.emitted('watch-progress').at(-1)[0]).toEqual(expect.objectContaining({ origin: 'resume', durationSeconds: 0 }));
+    resumed.unmount();
+
+    const fresh = await mountInline();
+    video = fresh.get('video');
+    player = fakePlayer(video.element);
+    player.paused = false;
+    await video.trigger('play');
+    player.currentTime = 3;
+    await video.trigger('pause');
+    expect(fresh.emitted('watch-progress').at(-1)[0]).toEqual(expect.objectContaining({ origin: 'start', durationSeconds: 0 }));
+  });
+
+  it('PLAY-10 抽屉开着时又从字幕命中跳了一次：这一场之后按 jump 上报', async () => {
+    const wrapper = await mountInline({ resumePositionSeconds: 30 });
+    const video = wrapper.get('video');
+    const player = fakePlayer(video.element);
+    player.paused = false;
+    await video.trigger('play');
+    await wrapper.setProps({ startTimeMs: 9000 });
+    player.currentTime = 9;
+    await video.trigger('pause');
+    expect(wrapper.emitted('watch-progress').at(-1)[0].origin).toBe('jump');
+  });
+
+  it('PLAY-10 嵌套条目的续播用 watchState：标已看之前的旧断点从头播，重看中的断点续播', async () => {
+    const base = '2026-09-30T12:00:00+08:00';
+    const watchedBefore = videoDetails(2, { video: { id: 2, duration: 7200, watch_position_seconds: 600, is_watched: true, watched_at: base, watch_progress_updated_at: '2026-09-30T11:00:00+08:00' } });
+    api.GetVideoDetails.mockResolvedValue(watchedBefore);
+    api.ListCollections.mockResolvedValue([]);
+    api.GetPreviewSession.mockResolvedValue({ video_id: 2, mode: 'unavailable', reason_message: '不可预览' });
+    const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'video', id: 2 } } });
+    await flushPromises();
+    expect(wrapper.vm.playbackStartOptions().nestedResumePositionSeconds).toBe(0);
+
+    wrapper.vm.details = videoDetails(2, { video: { id: 2, duration: 7200, watch_position_seconds: 600, is_watched: true, watched_at: base, watch_progress_updated_at: '2026-09-30T13:00:00+08:00' } });
+    expect(wrapper.vm.playbackStartOptions().nestedResumePositionSeconds).toBe(600);
+  });
+});
+
+describe('P-037 人物媒体删除撤销后的刷新', () => {
+  it('LIB-12 撤销或从回收站恢复（restored）后重读人物详情，并通知宿主刷新它的列表', async () => {
+    api.GetPersonDetail.mockResolvedValue({
+      person: { person: { id: 7, display_name: '人物' }, active_video_count: 1, active_image_count: 0 },
+      videos: [{ id: 1, name: 'clip.mp4' }], images: []
+    });
+    const w = mount(PreviewDrawer, { props: { initialEntity: { type: 'person', id: 7 } }, global: { stubs: { teleport: true } } });
+    await flushPromises();
+    expect(api.GetPersonDetail).toHaveBeenCalledTimes(1);
+    w.vm.personMediaDeleteTarget = { kind: 'video', media: { id: 1, name: 'clip.mp4', size: 1 }, personID: 7 };
+    await flushPromises();
+    w.findComponent({ name: 'PersonMediaDeleteDialog' }).vm.$emit('restored', { kind: 'video', ids: [1] });
+    await flushPromises();
+    expect(api.GetPersonDetail).toHaveBeenCalledTimes(2);
+    expect(w.emitted('media-restored')).toEqual([[{ kind: 'video', ids: [1] }]]);
   });
 });
 

@@ -105,6 +105,20 @@ describe('点赞（D-PC40）', () => {
   });
 });
 
+describe('窄行的已看切换（D-PC47）', () => {
+  it('PLAY-14 抽屉打开时的窄行也有「已看」切换，点了发 toggle-watched', async () => {
+    const narrow = row({ is_watched: true }, { narrow: true });
+    const watched = narrow.get('[data-test="row-watched"]');
+    expect(watched.text()).toBe('已看');
+    expect(watched.attributes('aria-pressed')).toBe('true');
+    await watched.trigger('click');
+    expect(narrow.emitted('toggle-watched')[0][0]).toEqual(expect.objectContaining({ id: 1 }));
+    // 窄行里「预览」仍然让位（抽屉已经开着）。
+    expect(narrow.findAll('.row-btn').map(button => button.text())).not.toContain('预览');
+    narrow.unmount();
+  });
+});
+
 describe('自动标签的人工覆盖（D-PC36）', () => {
   it('META-13 被人工覆盖的自动标签带「手动」角标，其余标签不带', () => {
     const tags = [

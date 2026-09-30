@@ -29,7 +29,11 @@ const api = vi.hoisted(() => Object.fromEntries([
   // P-034 接入的绑定。
   'ListContinueWatchingWithFilter', 'GetAutomaticOverrideKinds', 'SetVideoLiked', 'FilterActiveTagIDs', 'FilterActivePersonIDs',
   'GetPersonDetail', 'CheckMoveTarget', 'ListStaleReasonCounts', 'RecheckVideos', 'ReaddRemovedRoot', 'ValidateScanDirectory',
-  'AddDirectory', 'RetryAITagging', 'GetEnhancementCapability'
+  'AddDirectory', 'RetryAITagging', 'GetEnhancementCapability',
+  // P-036 接入的绑定（随机「换一个」、重新定位、字幕备份与索引同步），以及撤销条真身用到的删除绑定。
+  'RerollRandom', 'SelectVideoFile', 'RelocateVideo', 'ListSubtitleBackups', 'RestoreSubtitleBackup',
+  'GetSubtitleIndexSyncStatus', 'SyncSubtitleIndexNow',
+  'DeleteVideosWithResult', 'DeleteImagesWithResult', 'PermanentlyDeleteVideos', 'PermanentlyDeleteImages', 'CancelBatchDelete', 'RestoreTrashBatch'
 ].map(name => [name, vi.fn()])));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -104,6 +108,7 @@ beforeEach(() => {
   api.GetEnhancementCapability.mockResolvedValue({ available: true });
   api.ListStaleReasonCounts.mockResolvedValue({});
   api.GetAutomaticOverrideKinds.mockResolvedValue({});
+  api.GetSubtitleIndexSyncStatus.mockResolvedValue({ running: false, checked: 0 });
 });
 
 describe('VideoListPage media-detail integration', () => {
@@ -367,7 +372,7 @@ describe('VideoListPage random pick of 10', () => {
     wrapper.vm.hasMore = true;
     api.PickRandomVideos.mockResolvedValueOnce({
       videos: pickedVideos,
-      selection_reason: '在当前筛选范围内优先选择未看视频'
+      selection_reason: '在当前筛选范围内仅选择未看视频'
     });
 
     await wrapper.vm.enterRandomPick();
@@ -387,7 +392,7 @@ describe('VideoListPage random pick of 10', () => {
     expect(wrapper.vm.hasMore).toBe(false);
     // 文案由 video-list/RandomPickBanner.vue 渲染（用例见同目录的 RandomPickBanner.test.js）；这里钉住传过去的批次。
     expect(wrapper.findComponent({ name: 'RandomPickBanner' }).props('randomPick').reason)
-      .toBe('在当前筛选范围内优先选择未看视频');
+      .toBe('在当前筛选范围内仅选择未看视频');
     wrapper.unmount();
   });
 
@@ -1700,3 +1705,339 @@ describe('P-034 审阅与标签管理的回调', () => {
     wrapper.unmount();
   });
 });
+
+describe('P-036 随机播放：换一个与本机记忆（PLAY-08）', () => {
+  const played = (id, token = 'tok-' + id) => ({
+    dispatch_succeeded: true,
+    video: { id, name: `v${id}.mp4`, tags: [] },
+    selection_reason: '在当前筛选范围内仅选择未看视频',
+    reroll_token: token
+  });
+
+  it('PLAY-08 随机播放后出结果条（30 秒内可换），并把这一部记进本机排除表', async () => {
+    const wrapper = await mountPage();
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5));
+    await wrapper.vm.playRandom();
+    await flushPromises();
+
+    const banner = wrapper.findComponent({ name: 'RandomPickBanner' }).props('randomPlay');
+    expect(banner).toEqual(expect.objectContaining({ active: true, videoName: 'v5.mp4', rerollable: true, reason: '在当前筛选范围内仅选择未看视频' }));
+    expect(window.localStorage.setItem).toHaveBeenCalledWith('library-random-recent', '[5]');
+    // 结果条取代了旧的「正在随机播放」提示。
+    expect(feedback.notify).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 30 秒内「换一个」走 RerollRandom，新结果接管结果条，不再另起一次普通随机', async () => {
+    const wrapper = await mountPage();
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5, 'tok-a'));
+    await wrapper.vm.playRandom();
+    api.RerollRandom.mockResolvedValueOnce(played(6, 'tok-b'));
+    wrapper.findComponent({ name: 'RandomPickBanner' }).vm.$emit('reroll');
+    await flushPromises();
+
+    expect(api.RerollRandom).toHaveBeenCalledWith('tok-a');
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.randomPlay).toEqual(expect.objectContaining({ token: 'tok-b', rerollable: true }));
+    expect(wrapper.vm.randomPlayBanner.videoName).toBe('v6.mp4');
+    expect(wrapper.vm.recentRandomVideoIDs).toEqual([5, 6]);
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 后端答 reroll_expired（已提交）时改为普通的再随机一次', async () => {
+    const wrapper = await mountPage();
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5, 'tok-a'));
+    await wrapper.vm.playRandom();
+    api.RerollRandom.mockResolvedValueOnce({ dispatch_succeeded: false, reason_code: 'reroll_expired', user_message: '「换一个」已失效' });
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(8, 'tok-c'));
+    await wrapper.vm.rerollRandomPlay();
+    await flushPromises();
+
+    expect(api.RerollRandom).toHaveBeenCalledWith('tok-a');
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledTimes(2);
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenLastCalledWith(expect.objectContaining({ exclude_ids: [5] }));
+    expect(feedback.notifyError).not.toHaveBeenCalled();
+    expect(wrapper.vm.randomPlay.token).toBe('tok-c');
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 过了 30 秒「换一个」直接普通随机，不再拿旧令牌', async () => {
+    const wrapper = await mountPage();
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(5, 'tok-a'));
+    await wrapper.vm.playRandom();
+    wrapper.vm.randomPlay = { ...wrapper.vm.randomPlay, startedAt: Date.now() - 31_000 };
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce(played(9));
+    await wrapper.vm.rerollRandomPlay();
+
+    expect(api.RerollRandom).not.toHaveBeenCalled();
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 随机模式与最近排除表从本机读回，改模式写回', async () => {
+    window.localStorage.getItem.mockImplementation(key => ({
+      'library-random-mode': 'unwatched',
+      'library-random-recent': '[3,4]'
+    })[key] ?? null);
+    const wrapper = await mountPage();
+    expect(wrapper.vm.randomMode).toBe('unwatched');
+    expect(wrapper.vm.recentRandomVideoIDs).toEqual([3, 4]);
+    api.PlayRandomVideoWithFilter.mockResolvedValueOnce({ dispatch_succeeded: false, reason_code: 'no_filtered_videos', user_message: '没有可播放的视频' });
+    await wrapper.vm.playRandom();
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledWith(expect.objectContaining({ mode: 'unwatched', exclude_ids: [3, 4] }));
+
+    wrapper.vm.onRandomSelect({ id: 'mode:favorites' });
+    await flushPromises();
+    expect(window.localStorage.setItem).toHaveBeenCalledWith('library-random-mode', 'favorites');
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 语义搜索模式下随机被挡住，命令面板的「随机播放」同样不可用', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.searchMode = 'semantic';
+    await wrapper.vm.playRandom();
+    expect(api.PlayRandomVideoWithFilter).not.toHaveBeenCalled();
+    expect(feedback.notify).toHaveBeenCalledWith('语义搜索结果不支持随机，请切回文件或字幕搜索。');
+    const command = commandList().find(item => item.id === 'action:random-play');
+    expect(command.enabled()).toBe(false);
+    wrapper.unmount();
+  });
+});
+
+describe('P-036 行菜单：重新定位与恢复字幕', () => {
+  const staleVideo = { id: 3, name: 'lost.mp4', path: '/old/lost.mp4', is_stale: true, stale_reason: 'missing_file', tags: [] };
+
+  it('LIB-10 失效行的菜单有「重新定位文件…」：选了文件就改路径、就地刷新该行；取消选择什么都不做', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ ...staleVideo }, { id: 4, name: 'other.mp4', tags: [] }];
+    wrapper.vm.rowMenu = { video: wrapper.vm.videos[0], anchor: null, position: null };
+    expect(wrapper.vm.rowMenuItems.map(item => item.id)).toContain('relocate');
+
+    api.SelectVideoFile.mockResolvedValueOnce('');
+    wrapper.vm.onRowMenuSelect({ id: 'relocate' });
+    await flushPromises();
+    expect(api.RelocateVideo).not.toHaveBeenCalled();
+
+    api.SelectVideoFile.mockResolvedValueOnce('/Volumes/新盘/lost.mp4');
+    api.RelocateVideo.mockResolvedValueOnce(undefined);
+    api.GetVideosByIDs.mockResolvedValueOnce([{ id: 3, name: 'lost.mp4', path: '/Volumes/新盘/lost.mp4', is_stale: false, stale_reason: '', tags: [] }]);
+    wrapper.vm.rowMenu = { video: wrapper.vm.videos[0], anchor: null, position: null };
+    wrapper.vm.onRowMenuSelect({ id: 'relocate' });
+    await flushPromises();
+
+    expect(api.RelocateVideo).toHaveBeenCalledWith(3, '/Volumes/新盘/lost.mp4');
+    expect(api.GetVideosByIDs).toHaveBeenCalledWith([3]);
+    expect(wrapper.vm.videos[0]).toEqual(expect.objectContaining({ id: 3, path: '/Volumes/新盘/lost.mp4', is_stale: false }));
+    expect(feedback.notify).toHaveBeenCalledWith('已重新定位「lost.mp4」，记录已恢复。');
+    wrapper.unmount();
+  });
+
+  it('LIB-10 在「路径失效」视图里重新定位成功后，这一行离开列表', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.smartView = 'stale';
+    await flushPromises();
+    wrapper.vm.videos = [{ ...staleVideo }];
+    wrapper.vm.selectedVideoIds = [3];
+    api.SelectVideoFile.mockResolvedValueOnce('/new/lost.mp4');
+    api.RelocateVideo.mockResolvedValueOnce(undefined);
+    api.GetVideosByIDs.mockResolvedValueOnce([{ id: 3, name: 'lost.mp4', path: '/new/lost.mp4', is_stale: false, tags: [] }]);
+    await wrapper.vm.relocateVideoFile(wrapper.vm.videos[0]);
+    expect(wrapper.vm.videos).toEqual([]);
+    expect(wrapper.vm.selectedVideoIds).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it('LIB-10 重新定位失败给不含路径的中文提示', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ ...staleVideo }];
+    api.SelectVideoFile.mockResolvedValue('/Volumes/盘/dup.mp4');
+    api.RelocateVideo.mockRejectedValueOnce('目标路径已被其他记录占用: /Volumes/盘/dup.mp4');
+    await wrapper.vm.relocateVideoFile(wrapper.vm.videos[0]);
+    expect(feedback.notifyError).toHaveBeenLastCalledWith('重新定位失败：所选文件已被片库中的另一条记录收录。');
+
+    api.RelocateVideo.mockRejectedValueOnce(new Error('目标文件不存在: stat /Volumes/盘/dup.mp4: no such file or directory'));
+    await wrapper.vm.relocateVideoFile(wrapper.vm.videos[0]);
+    expect(feedback.notifyError).toHaveBeenLastCalledWith('重新定位失败：所选文件不存在或无法读取。');
+
+    api.RelocateVideo.mockRejectedValueOnce(new Error('database is in maintenance mode'));
+    await wrapper.vm.relocateVideoFile(wrapper.vm.videos[0]);
+    expect(feedback.notifyError.mock.calls.at(-1)[0]).toContain('database is in maintenance mode');
+    expect(wrapper.vm.videos[0].is_stale).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('MEDIA-05 行菜单「恢复上一版字幕」：没有备份时说明；有备份时确认后恢复最近一份并刷新', async () => {
+    const wrapper = await mountPage();
+    const video = { id: 3, name: 'movie.mp4', tags: [] };
+    wrapper.vm.rowMenu = { video, anchor: null, position: null };
+    expect(wrapper.vm.rowMenuItems.map(item => item.id)).toContain('subtitle-restore');
+
+    api.ListSubtitleBackups.mockResolvedValueOnce([]);
+    await wrapper.vm.restoreLatestSubtitleBackup(video);
+    expect(feedback.notify.mock.calls.at(-1)[0]).toContain('还没有字幕备份');
+    expect(api.RestoreSubtitleBackup).not.toHaveBeenCalled();
+
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    api.ListSubtitleBackups.mockResolvedValueOnce([
+      { id: 'b2', created_at: '2026-09-30T10:20:00+08:00', size: 20 },
+      { id: 'b1', created_at: '2026-09-29T10:20:00+08:00', size: 10 }
+    ]);
+    api.RestoreSubtitleBackup.mockResolvedValueOnce({ backup_id: 'b3' });
+    await wrapper.vm.restoreLatestSubtitleBackup(video);
+    expect(feedback.confirmAction).toHaveBeenLastCalledWith(expect.objectContaining({ title: '恢复上一版字幕' }));
+    expect(feedback.confirmAction.mock.calls.at(-1)[0].message).toContain('共有 2 份备份');
+    expect(api.RestoreSubtitleBackup).toHaveBeenCalledWith(3, 'b2');
+    expect(reload).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('MEDIA-12 后台翻译的进度标在行菜单上', async () => {
+    const wrapper = await mountPage();
+    const video = { id: 3, name: 'movie.mp4', tags: [] };
+    const dialog = wrapper.findComponent({ name: 'SubtitleTranslateDialog' });
+    dialog.vm.$emit('translating-change', 3);
+    dialog.vm.$emit('translate-progress', { videoId: 3, percent: 45 });
+    await flushPromises();
+    wrapper.vm.rowMenu = { video, anchor: null, position: null };
+    expect(wrapper.vm.rowMenuItems.find(item => item.id === 'subtitle-translate').label).toBe('翻译字幕（进行中 45%）');
+    wrapper.unmount();
+  });
+});
+
+describe('P-036 批量生成字幕与字幕索引同步', () => {
+  it('MEDIA-14 批量栏的「批量生成字幕」把选中的视频交给字幕弹窗，未加载的按 ID 补上', async () => {
+    const generateBatch = vi.fn();
+    const wrapper = await mountPage({}, {
+      global: { stubs: { SubtitleGenerateDialog: { template: '<div />', methods: { generate() {}, generateBatch } } } }
+    });
+    wrapper.vm.videos = [{ id: 1, name: 'a.mp4', tags: [] }];
+    wrapper.vm.selectedVideoIds = [1, 9];
+    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-subtitle');
+    await flushPromises();
+    expect(generateBatch).toHaveBeenCalledWith([
+      expect.objectContaining({ id: 1, name: 'a.mp4' }),
+      { id: 9, name: '视频 #9' }
+    ]);
+    wrapper.unmount();
+  });
+
+  it('MEDIA-14 「无字幕」视图显示上次同步时间与「立即同步」；同步完成后刷新列表', async () => {
+    api.GetSubtitleIndexSyncStatus.mockResolvedValue({ running: false, last_synced_at: '2026-09-30T08:05:00+08:00', checked: 120 });
+    const wrapper = await mountPage();
+    expect(wrapper.find('[data-test="subtitle-index-sync-bar"]').exists()).toBe(false);
+
+    wrapper.vm.smartView = 'no_subtitle';
+    await flushPromises();
+    expect(api.GetSubtitleIndexSyncStatus).toHaveBeenCalled();
+    expect(wrapper.find('[data-test="subtitle-index-sync-text"]').text()).toContain('字幕索引上次同步：2026-09-30 08:05');
+
+    api.SyncSubtitleIndexNow.mockResolvedValueOnce({ running: true, checked: 120 });
+    await wrapper.find('[data-test="subtitle-index-sync-now"]').trigger('click');
+    await flushPromises();
+    expect(api.SyncSubtitleIndexNow).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="subtitle-index-sync-text"]').text()).toContain('正在后台同步字幕索引');
+    expect(wrapper.find('[data-test="subtitle-index-sync-now"]').attributes('disabled')).toBeDefined();
+
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    await wrapper.vm.handleSubtitleIndexSynced({ running: false, last_synced_at: '2026-09-30T08:20:00+08:00', checked: 121 });
+    await flushPromises();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="subtitle-index-sync-text"]').text()).toContain('08:20');
+    wrapper.unmount();
+  });
+
+  it('MEDIA-14 不在依赖字幕索引的视图时，同步完成不刷新列表', async () => {
+    const wrapper = await mountPage();
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    await wrapper.vm.handleSubtitleIndexSynced({ running: false, checked: 1 });
+    expect(reload).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});
+
+describe('P-032 评审 I-3 的父组件用例', () => {
+  it('D-PC02 清理候选不在当前已加载列表里：不支持废纸篓 → 永久删除的二次确认列出面板传来的文件名，而不是「视频（编号 N）」', async () => {
+    api.DeleteVideosWithResult.mockResolvedValue({ batch_id: 'b1', items: [{ id: 7, code: 'trash_unsupported' }] });
+    api.PermanentlyDeleteVideos.mockResolvedValue({ items: [{ id: 7, code: 'ok' }] });
+    const wrapper = await mountPage({}, {
+      attachTo: document.body,
+      global: { stubs: { TrashUndoBanner: false, TrashUnsupportedDialog: false, BaseModal: false } }
+    });
+    wrapper.vm.videos = [{ id: 1, name: 'keep.mp4', tags: [] }];
+
+    const pending = wrapper.vm.trashCleanupVideos([7], { names: { 7: 'far-away.mp4' } });
+    await flushPromises();
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([7], true, expect.any(String));
+    expect(wrapper.find('[data-test="trash-unsupported-names"]').text()).toContain('far-away.mp4');
+
+    await wrapper.find('[data-test="trash-unsupported-permanent"]').trigger('click');
+    const confirmNames = wrapper.find('[data-test="trash-unsupported-confirm-names"]').text();
+    expect(confirmNames).toContain('far-away.mp4');
+    expect(confirmNames).not.toContain('编号');
+
+    await wrapper.find('[data-test="trash-unsupported-permanent-confirm"]').trigger('click');
+    const outcome = await pending;
+    expect(api.PermanentlyDeleteVideos).toHaveBeenCalledWith([7]);
+    expect(outcome.succeededIDs).toEqual([7]);
+    expect([...outcome.failedIDs]).toEqual([]);
+    wrapper.unmount();
+  });
+});
+
+describe('P-036 抽屉事件接线（P-037 的动作条与人物详情）', () => {
+  async function mountWithDrawer() {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 4, name: 'd.mp4', tags: [] }, { id: 5, name: 'e.mp4', tags: [{ id: 1, name: '保留' }] }];
+    wrapper.vm.selectedPreviewVideoId = 5;
+    wrapper.vm.previewOpen = true;
+    await flushPromises();
+    return wrapper;
+  }
+
+  it('PLAY-12 抽屉动作条「播放」失败并已标失效：列表那一行就地标成失效，不整页重载', async () => {
+    const wrapper = await mountWithDrawer();
+    api.SearchLibraryVideoPage.mockClear();
+    const drawer = wrapper.findComponent({ name: 'PreviewDrawer' });
+    expect(drawer.exists()).toBe(true);
+
+    drawer.vm.$emit('playback-attempted', {
+      video: { id: 5, name: 'e.mp4', path: '/Volumes/Media/e.mp4' },
+      dispatch_succeeded: false,
+      reason: 'offline_root',
+      user_message: '播放失败: e.mp4 (/Volumes/Media/e.mp4)',
+      reconcile_result: {
+        video_id: 5, reason: 'offline_root', did_mark_stale: true, needs_reload: false,
+        updated_video: { id: 5, name: 'e.mp4', is_stale: true, stale_reason: 'offline_root', tags: null }
+      }
+    });
+    await flushPromises();
+
+    expect(wrapper.vm.videos[1]).toEqual(expect.objectContaining({ id: 5, is_stale: true, stale_reason: 'offline_root', tags: [{ id: 1, name: '保留' }] }));
+    expect(wrapper.get('[data-test="play-failure-notice"]').text()).toContain('「e.mp4」所在的磁盘未连接');
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('PLAY-12 抽屉里播放成功不打扰列表', async () => {
+    const wrapper = await mountWithDrawer();
+    api.SearchLibraryVideoPage.mockClear();
+    wrapper.findComponent({ name: 'PreviewDrawer' }).vm.$emit('playback-attempted', {
+      video: { id: 5, name: 'e.mp4' }, dispatch_succeeded: true
+    });
+    await flushPromises();
+    expect(wrapper.vm.videos[1].is_stale).toBeFalsy();
+    expect(feedback.notifyError).not.toHaveBeenCalled();
+    expect(api.SearchLibraryVideoPage).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('LIB-12 抽屉里人物详情撤销删除后（media-restored），片库页按当前条件刷新列表', async () => {
+    const wrapper = await mountWithDrawer();
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    wrapper.findComponent({ name: 'PreviewDrawer' }).vm.$emit('media-restored');
+    await flushPromises();
+    expect(reload).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+});
+

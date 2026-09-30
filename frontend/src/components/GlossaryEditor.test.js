@@ -67,7 +67,7 @@ describe('GlossaryEditor', () => {
     await flushPromises();
 
     expect(api.UpsertGlossaryEntry).toHaveBeenCalledWith({
-      id: 0, collection_id: null, source_term: 'Trinity', target_term: '崔妮蒂', note: '女主角'
+      id: 0, collection_id: null, target_language: '', source_term: 'Trinity', target_term: '崔妮蒂', note: '女主角'
     });
     expect(api.ListGlossaryEntries).toHaveBeenCalledWith(0);
     expect(wrapper.find('[data-test="glossary-source-input"]').element.value).toBe('');
@@ -81,7 +81,7 @@ describe('GlossaryEditor', () => {
     await flushPromises();
 
     expect(api.UpsertGlossaryEntry).toHaveBeenCalledWith({
-      id: 0, collection_id: 7, source_term: 'Morpheus', target_term: '墨菲斯', note: ''
+      id: 0, collection_id: 7, target_language: '', source_term: 'Morpheus', target_term: '墨菲斯', note: ''
     });
   });
 
@@ -111,7 +111,7 @@ describe('GlossaryEditor', () => {
     await wrapper.find('[data-test="glossary-save"]').trigger('click');
     await flushPromises();
     expect(api.UpsertGlossaryEntry).toHaveBeenCalledWith({
-      id: 1, collection_id: null, source_term: 'Neo', target_term: '尼欧', note: '主角'
+      id: 1, collection_id: null, target_language: '', source_term: 'Neo', target_term: '尼欧', note: '主角'
     });
 
     await wrapper.find('[data-test="glossary-edit-1"]').trigger('click');
@@ -144,5 +144,31 @@ describe('GlossaryEditor', () => {
     await wrapper.find('[data-test="glossary-save"]').trigger('click');
     await flushPromises();
     expect(wrapper.find('[data-test="glossary-error"]').text()).toContain('translation_glossary_term_conflict');
+  });
+
+  it('MEDIA-07 术语表有目标语言列：空显示「所有语言」，新增时可指定语言', async () => {
+    api.ListGlossaryEntries.mockResolvedValue([entry(), entry({ id: 2, source_term: 'Agent', target_term: '特工', target_language: 'zh' })]);
+    const wrapper = await mountEditor();
+    expect(wrapper.find('[data-test="glossary-language-1"]').text()).toBe('所有语言');
+    expect(wrapper.find('[data-test="glossary-language-2"]').text()).toBe('中文');
+
+    await wrapper.find('[data-test="glossary-source-input"]').setValue('Oracle');
+    await wrapper.find('[data-test="glossary-target-input"]').setValue('先知');
+    await wrapper.find('[data-test="glossary-language-select"]').setValue('ja');
+    await wrapper.find('[data-test="glossary-save"]').trigger('click');
+    await flushPromises();
+    expect(api.UpsertGlossaryEntry).toHaveBeenCalledWith(expect.objectContaining({ source_term: 'Oracle', target_language: 'ja' }));
+    // 存完回到新增态，语言也回到「所有语言」。
+    expect(wrapper.find('[data-test="glossary-language-select"]').element.value).toBe('');
+  });
+
+  it('MEDIA-07 编辑带语言的术语时保留原语言', async () => {
+    api.ListGlossaryEntries.mockResolvedValue([entry({ id: 3, target_language: 'en' })]);
+    const wrapper = await mountEditor();
+    await wrapper.find('[data-test="glossary-edit-3"]').trigger('click');
+    expect(wrapper.find('[data-test="glossary-language-select"]').element.value).toBe('en');
+    await wrapper.find('[data-test="glossary-save"]').trigger('click');
+    await flushPromises();
+    expect(api.UpsertGlossaryEntry).toHaveBeenCalledWith(expect.objectContaining({ id: 3, target_language: 'en' }));
   });
 });

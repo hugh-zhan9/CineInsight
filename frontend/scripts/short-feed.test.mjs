@@ -165,4 +165,61 @@ const shortHTML = readFileSync(new URL('../short.html', import.meta.url), 'utf8'
 assert.match(shortHTML, /apple-mobile-web-app-capable/, 'home-screen launch on iPhone needs the standalone meta tag');
 assert.match(shortHTML, /viewport-fit=cover/, 'standalone mode must keep drawing under the notch');
 
+// ---- 2026-09-30 产品完善度批次：PIN 页、有效观看阈值、失败提示（D-PC43 / D-PC45 / D-PC46）----
+{
+  const { feedErrorText, pinInputProblem, unplayableHintText, DAILY_LOCKED_TEXT, PIN_MIN_LENGTH } = await import('../src/short-feed/errors.js');
+  const { FeedRequestError } = await import('../src/short-feed/api.js');
+  const { viewThreshold } = await import('../src/utils/viewThreshold.js');
+  const pinGate = readFileSync(new URL('../src/short-feed/components/PinGate.vue', import.meta.url), 'utf8');
+  const favoritesView = readFileSync(new URL('../src/short-feed/components/FavoritesView.vue', import.meta.url), 'utf8');
+
+  // PLAY-01 PIN 页：6 位下限在本地先挡，不白白消耗失败次数；输入框不设 maxlength（超长会被静默截断）。
+  assert.equal(PIN_MIN_LENGTH, 6, 'PLAY-01 PIN minimum is 6, matching SetShortFeedPIN');
+  assert.equal(pinInputProblem(''), '请输入 PIN');
+  assert.equal(pinInputProblem('12345'), 'PIN 至少 6 位', 'PLAY-01 five characters are rejected locally');
+  assert.equal(pinInputProblem('123456'), '', 'PLAY-01 six characters are accepted');
+  assert.equal(pinInputProblem('密码密码密码'), '', 'PLAY-01 length counts characters, not bytes');
+  assert.doesNotMatch(pinGate, /\smaxlength=/i, 'PLAY-01 the PIN input must not silently truncate');
+  assert.match(pinGate, /type="password"/, 'PLAY-01 the PIN input is masked');
+  assert.match(source, /<PinGate v-if="authRequired"/, 'PLAY-01 a 401 pin_required switches the page to the PIN gate');
+  assert.match(api, /status === 401 && code === 'pin_required'/, 'PLAY-01 every request routes pin_required to the PIN gate');
+  assert.match(api, /'\/short-api\/auth', \{ pin \}/, 'PLAY-01 the gate posts the PIN to /short-api/auth');
+  assert.match(source, /\.pin-gate/, 'PLAY-01 swipe handling must leave the PIN page alone');
+
+  // PLAY-01 锁定：短锁给秒数；每日上限（daily_locked）提示去电脑上解除或 24 小时后再试。
+  const locked = (payload) => new FeedRequestError('x', { status: 429, code: 'pin_locked', payload });
+  assert.equal(feedErrorText(locked({ code: 'pin_locked', daily_locked: true, retry_after: 86000 })), '请在电脑上解除锁定，或 24 小时后再试');
+  assert.equal(DAILY_LOCKED_TEXT, '请在电脑上解除锁定，或 24 小时后再试');
+  assert.equal(feedErrorText(locked({ code: 'pin_locked', retry_after: 42 })), '尝试次数过多，请 42 秒后再试');
+  assert.equal(feedErrorText(locked({ code: 'pin_locked' })), '尝试次数过多，请稍后再试');
+  assert.equal(feedErrorText(new FeedRequestError('PIN 不正确', { status: 401, code: 'pin_invalid' })), 'PIN 不正确');
+
+  // PLAY-13 删除的两种 409 与网络异常。
+  assert.equal(feedErrorText(new FeedRequestError('m', { status: 409, code: 'volume_offline' })), '文件所在磁盘当前未连接，未做任何改动');
+  assert.equal(feedErrorText(new FeedRequestError('m', { status: 409, code: 'permission_denied' })), '没有权限把文件移到废纸篓，请在桌面端处理');
+  assert.equal(feedErrorText(new FeedRequestError('m', { status: 409, code: 'trash_unsupported' })), '该磁盘不支持废纸篓，请在桌面端处理');
+  assert.equal(feedErrorText(new FeedRequestError('网络异常', { network: true })), '网络异常');
+  assert.equal(feedErrorText(new FeedRequestError('没有可播放的内容', { status: 404, code: 'no_eligible_videos' })), '没有可播放的内容', 'unknown codes keep the server message');
+  assert.equal(feedErrorText(null), '');
+
+  // PLAY-13 不可播放提示：0 条不显示。
+  assert.equal(unplayableHintText(3), '3 条因格式暂不可播，可在电脑上生成播放代理');
+  assert.equal(unplayableHintText(0), '');
+  assert.equal(unplayableHintText(undefined), '');
+  assert.match(source, /unplayableHintText\(option\.unplayable_count\)/, 'PLAY-13 the scope sheet shows the unplayable count per scope');
+
+  // PLAY-13 网络错误保留历史：取下一条失败不再清空 items，给「重试」。
+  const loadBody = source.match(/async loadNextItem\(\) \{([\s\S]*?)\n    \},/)?.[1] || '';
+  assert.ok(loadBody.includes('catch (err)'), 'loadNextItem should be found');
+  assert.doesNotMatch(loadBody, /this\.items = \[\]/, 'PLAY-13 a failed load must not clear the browsing history');
+  assert.match(source, /retryLoad\(\) \{\s*return this\.loadNextItem\(\);/, 'PLAY-13 retry always fetches a new item, even after swiping back');
+  assert.match(source, /data-test="short-feed-retry"/, 'PLAY-13 a failed load offers a retry');
+  assert.match(favoritesView, /short-feed-favorites-error/, 'PLAY-13 favorites show an error state instead of looking empty');
+
+  // PLAY-07 手机端有效观看：playing 那一刻不再上报，累计播放越过 viewThreshold 才报（后端来源仍是 mobile_feed）。
+  assert.doesNotMatch(source, /@playing="onVideoPlaying"/, 'PLAY-07 playing alone must not record a view');
+  assert.match(source, /seconds >= viewThreshold\(duration\)/, 'PLAY-07 the mobile view is recorded once the shared threshold is crossed');
+  assert.equal(viewThreshold(30), 15, 'PLAY-07 mobile uses the same threshold as the desktop and Go');
+}
+
 console.log('short-feed tests passed');

@@ -1,88 +1,88 @@
 ---
 schema: loopx-plan/v1
 source: docs/loopx/design/2026-09-29-product-completeness/需求设计文档.md
-status: ready
+status: in_progress
 slices:
   - id: P-001
     status: done
     depends: []
   - id: P-010
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-011
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-012
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-013
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-015
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-017
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-019
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-021
-    status: in_progress
+    status: done
     depends: [P-001]
   - id: P-014
-    status: in_progress
+    status: done
     depends: [P-013]
   - id: P-016
-    status: in_progress
+    status: done
     depends: [P-010, P-013]
   - id: P-018
-    status: in_progress
+    status: done
     depends: [P-015]
   - id: P-020
-    status: in_progress
+    status: done
     depends: [P-010, P-012, P-015]
   - id: P-023
-    status: in_progress
+    status: done
     depends: [P-011, P-012]
   - id: P-025
-    status: in_progress
+    status: done
     depends: [P-013]
   - id: P-027
-    status: in_progress
+    status: done
     depends: [P-011]
   - id: P-022
-    status: in_progress
+    status: done
     depends: [P-012, P-020, P-023]
   - id: P-024
-    status: in_progress
+    status: done
     depends: [P-013, P-014, P-015, P-016, P-017, P-018, P-025, P-027]
   - id: P-029
-    status: in_progress
+    status: done
     depends: [P-010, P-011, P-012, P-013, P-014, P-015, P-016, P-017, P-018, P-019, P-020, P-021, P-022, P-023, P-024, P-025, P-027]
   - id: P-030
-    status: in_progress
+    status: done
     depends: [P-029]
   - id: P-031
-    status: in_progress
+    status: done
     depends: [P-029]
   - id: P-032
-    status: pending
+    status: done
     depends: [P-029]
   - id: P-033
-    status: in_progress
+    status: done
     depends: [P-029]
   - id: P-035
-    status: in_progress
+    status: done
     depends: [P-029]
   - id: P-034
-    status: pending
+    status: done
     depends: [P-030, P-031]
   - id: P-036
-    status: pending
+    status: done
     depends: [P-034]
   - id: P-037
-    status: pending
+    status: done
     depends: [P-034, P-035]
   - id: P-040
     status: pending
@@ -1436,3 +1436,26 @@ P-010/P-011 的独立评审结果是 1 个 Critical（旧版无条目的 `trash/
 - 子代理停下的一项由主代理补上：删除进行中，视频面板成员勾选框也要显示为禁用。同步改了 `video-list-ui.test.mjs` 的源码断言，以及面板测试的选择器。
 - 变异检查：子代理做了 6 组，都让对应测试变红。
 - 验证：已重新生成绑定。Go 全量（SQLite）通过；`npm test` 86 个文件、1234 条用例通过。
+
+**PG 全量**（2026-09-30）：`0d8aab9`（含空闲门修复与 P-034 之后的小修）和 `946cf4b`（修复 N）两次都通过，8 个包全部 ok。修复 O 只改了合并范围，没有新 SQL，PG 留到收尾一起跑。
+
+**修复 N 复审**（2026-09-30，opus-xhigh 只读）：**通过**。Critical 0，Important 0，Minor 5。数据安全、I-2、m1/m2、并发逐项核对无问题；22 个变异里，14 个被现有测试杀死，7 个存活，1 个被评审自己的探针杀死。
+- m-1（挂墓碑、被扫描器软删的视频没有出口）：主代理裁决采用评审的方案二。触发需要旧版恢复时是硬链接、删 trash 名失败、之后文件缺失三者同时成立，极罕见，所以不做回收站出口，只把扫描报错改成可操作的文案（把原路径上的文件改名后重新扫描），并写入交接。§1.2b 已注明这条只适用于视频（同时解决 m-5）。
+- m-2（原盘弃用后删除一直报「磁盘未连接」）：文案要点明是「旧版回收站文件夹所在的磁盘」。→ 修复 P。
+- m-3（测试缺口）、m-4（扫描器分支不检查影响行数）→ 修复 P。
+- 交接：`deleteMissingImageRecord` 与用户删除并发时，记录可能先被扫描器标记、随后又自动恢复。这是修复 N 之前就有的问题，不在本批次范围内。
+
+**P-037 交付与整合**（2026-09-30）：抽屉动作条（播放、收藏、点赞、已看、0.5 步进星级）、代理排位与进度、自动切换、`<video>` 出错回退、`watch-progress` 载荷带 `origin` / `durationSeconds`、嵌套续播改用 `watchState.js`、内嵌有效观看（`RecordViewEvent`，JS 阈值与 Go 用同一组样例）、洞察页「观看记录」按来源分列、手机端 PIN 页与各类失败提示、`restored` 接线全部完成。
+- 子代理自定、主代理确认接受的几项：热力图按来源切换着色；`desktop_random` 叫「随机启动播放」；暂停时位置已在片尾区间也算一次内嵌观看（D-PC43「或判定看完时」）；手机端解码失败仍 350 毫秒后自动跳下一条，只是多了提示。
+- 留给 P-039：`docs/short-feed-lan.md`（无登录 / 无 PIN、`playing` 计数、视频 trash 文件夹、失败与重试、图片计数时机），AI-CONTEXT §2.18 事件来源、洞察页标题、§2.5 与 §2.23 抽屉。
+
+**P-036 交付与整合**（2026-09-30）：字幕生成（覆盖提示与共用名单、校验未通过的三种处理、`subtitle_replace_failed` 单独文案、后台失败提示）、引擎准备取消（复用 P-033 的绑定）、中断任务提示条、批量生成、字幕索引同步状态、翻译后台继续与进度、编码转换、工作台（问题导航、一键修复、新建空白字幕、两种重译、历史版本）、术语表语言列、预览说明、随机结果条（`reroll_token` / `RerollRandom`、模式与排除表持久化）全部完成。主代理追加的五项也已完成：「重新定位文件…」（`SelectVideoFile` → `RelocateVideo`）、I-3 父组件用例、抽屉 `playback-attempted` / `media-restored` 接线、窄行「已看」切换。
+- 未做、主代理接受：列表行上的「翻译中 x%」徽标。进度已显示在行菜单标签和片库页进度条上。
+
+**主代理补齐 P-036 / P-037 的接线**（2026-09-30）：
+- `LibraryToolbar` 转发 `batch-subtitle`，测试「MEDIA-14 批量生成字幕…」已做变异验证；
+- 任务中心：`subtitle_replace_failed` 的字幕任务，「强制生成」改名为「重试写回」；
+- `PersonMediaDeleteDialog` 确认框不再显示绝对路径（G-3）；
+- 后端 `RelocateVideo` 的两条报错去掉路径（G-3）。
+
+验证：Go 全量（SQLite）通过；`npm test` 94 个文件、1372 条用例通过，脚本测试全部通过。

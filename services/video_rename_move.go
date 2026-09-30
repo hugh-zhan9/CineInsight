@@ -28,16 +28,16 @@ func (s *VideoService) RelocateVideo(id uint, newPath string) error {
 func (s *VideoService) relocateVideo(id uint, newPath string) error {
 	newPath = filepath.Clean(strings.TrimSpace(newPath))
 
-	// 验证新路径文件存在
+	// 验证新路径文件存在。错误文案会直接显示给用户，不带路径（G-3）。
 	info, err := os.Stat(newPath)
 	if err != nil {
-		return fmt.Errorf("目标文件不存在: %w", err)
+		return fmt.Errorf("目标文件不存在: %w", pathlessError(err))
 	}
 
 	// 检查新路径是否已被其他记录占用
 	var existing models.Video
 	if err := database.DB.Where("path = ? AND id != ?", newPath, id).First(&existing).Error; err == nil {
-		return fmt.Errorf("目标路径已被其他记录占用: %s", newPath)
+		return errors.New("目标路径已被其他记录占用")
 	}
 
 	if err := database.Transaction(func(tx *gorm.DB) error {
