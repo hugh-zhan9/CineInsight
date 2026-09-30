@@ -214,13 +214,72 @@ export function mergePlan(groups, selection, options = {}) {
   return plan;
 }
 
-// 按组合并中途失败时的提示（P-032 评审 Minor 4）：merged 是失败之前已经合并成功的组数。
-export function describeMergeFailure(error, merged, total, noun) {
-  const base = `合并元数据失败，没有删除任何${noun}：${error}。`;
-  if (merged > 0) {
-    return `${base}共 ${total} 组，前 ${merged} 组已经合并到各自的保留项（合并可以重复执行，不会回滚）；处理好之后再删除即可。`;
+// 确认框弹出前给用户看的删除名单（P-032 复审 I-1）：按锁定规则裁剪后的待删 ID，加上合并计划
+// （每组的保留项、来源与合并范围）。确认返回后按当前状态再算一次，与弹框前的不同就中止。
+export function deletionPlan(groups, selection, options = {}) {
+  const ids = pruneSelection(selection, groups, options);
+  return { ids, plan: mergePlan(groups, ids, options) };
+}
+
+function deletionSignature({ ids, plan }) {
+  const sorted = values => uniqueIDs(values).sort((a, b) => a - b);
+  const items = (plan || []).map(item => ({
+    key: String(item.key),
+    keeperId: toID(item.keeperId),
+    sourceIds: sorted(item.sourceIds),
+    skipPlaybackState: Boolean(item.options?.skip_playback_state),
+    skipSubtitle: Boolean(item.options?.skip_subtitle)
+  })).sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.keeperId - b.keeperId));
+  return JSON.stringify({ ids: sorted(ids), plan: items });
+}
+
+// 两份删除名单是否相同：待删 ID 集合一致，且每组的保留项、来源与合并范围一致（组的先后不计）。
+export function sameDeletionPlan(a, b) {
+  return Boolean(a && b) && deletionSignature(a) === deletionSignature(b);
+}
+
+// 按当前状态重算一次删除名单，与确认前的比较。重算失败（例如锁定项仍在勾选里）也算有变化。
+export function deletionPlanUnchanged(confirmed, groups, selection, options = {}) {
+  try {
+    return sameDeletionPlan(confirmed, deletionPlan(groups, selection, options));
+  } catch (err) {
+    return false;
   }
-  return `${base}合并可以重复执行，处理好之后再删除即可。`;
+}
+
+export const SELECTION_CHANGED_MESSAGE = '确认期间勾选或保留项有变化，请重新确认。这次没有合并，也没有删除任何项。';
+
+// 后端在数据库合并已提交、补已看状态失败时给错误加的前缀（与 services.MediaMergeCommittedErrorPrefix 一致）。
+export const MERGE_COMMITTED_PREFIX = 'merge_committed:';
+
+// Wails 把 Go 的 error 以字符串交给前端；测试里也可能是 Error 对象。
+function errorText(error) {
+  if (typeof error === 'string') return error;
+  if (error && typeof error.message === 'string') return error.message;
+  return String(error ?? '');
+}
+
+// 按组合并中途失败时的提示（P-032 评审 Minor 4）：merged 是失败之前已经完整合并的组数。
+// warnings 是这几组返回的提示（例如字幕复制失败），一并列出，不丢。
+// 错误带 merge_committed: 前缀时，第 merged+1 组的数据库合并已经提交，只是同步已看状态失败（P-032 复审 m3）。
+export function describeMergeFailure(error, merged, total, noun, warnings = []) {
+  const raw = errorText(error).trim();
+  const committed = raw.startsWith(MERGE_COMMITTED_PREFIX);
+  const reason = committed ? raw.slice(MERGE_COMMITTED_PREFIX.length).trim() : raw;
+  const parts = [];
+  if (committed) {
+    parts.push(`第 ${merged + 1} 组的整理成果已合并到保留项，但同步已看状态失败（${reason}），没有删除任何${noun}。`);
+  } else {
+    parts.push(`合并元数据失败，没有删除任何${noun}：${reason}。`);
+  }
+  if (merged > 0) {
+    parts.push(`共 ${total} 组，前 ${merged} 组已经合并到各自的保留项（合并可以重复执行，不会回滚）；处理好之后再删除即可。`);
+  } else {
+    parts.push('合并可以重复执行，处理好之后再删除即可。');
+  }
+  const notes = (warnings || []).map(item => String(item ?? '').trim()).filter(Boolean);
+  if (notes.length) parts.push(`已合并的组另有 ${notes.length} 条提示：${notes.join('；')}。`);
+  return parts.join('');
 }
 
 // 删除前汇总：条数、总大小、各类别条数。一条可能同时落在几个类别里，类别计数因此可以重叠，总条数不重；

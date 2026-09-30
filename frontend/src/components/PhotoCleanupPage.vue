@@ -30,14 +30,16 @@
       <button
         type="button"
         class="btn-secondary"
-        :disabled="running || processing"
+        :disabled="running || editLocked"
         data-test="cleanup-start"
         @click="startAnalysis"
       >{{ running ? '分析中…' : (analysis ? '重新分析' : '开始分析') }}</button>
+      <!-- 「移出本组」「不是重复」的请求还没返回时不能删除（P-032 复审 I-1）：它们落地时会改组和勾选。 -->
       <button
         type="button"
         class="btn-danger"
-        :disabled="selection.length === 0 || running || processing || showDismissed"
+        :disabled="selection.length === 0 || running || processing || showDismissed || dismissing"
+        :title="dismissing ? '正在更新分组，完成后再删除' : ''"
         data-test="cleanup-delete-selected"
         @click="deleteSelected"
       >{{ processing ? '处理中…' : `移到废纸篓 (${selection.length})` }}</button>
@@ -120,7 +122,7 @@
           {{ allCollapsed ? '全部展开' : '全部折叠' }}
         </button>
         <label class="cleanup-page__switch" data-test="cleanup-samedir-switch">
-          <input type="checkbox" :checked="sameDirOnly" :disabled="processing" @change="toggleSameDirOnly" />
+          <input type="checkbox" :checked="sameDirOnly" :disabled="editLocked" @change="toggleSameDirOnly" />
           只勾选与保留项同目录的副本
         </label>
         <span class="cleanup-page__hint">跨目录的副本可能是你的备份；不想让整个目录参与审阅，把它加进图片扫描黑名单。</span>
@@ -194,7 +196,7 @@
               <button
                 type="button"
                 class="btn-secondary btn-compact"
-                :disabled="processing || isSkipped(entry) || (!isGroupFullySuggested(entry) && suggestedIDsFor(entry).length === 0)"
+                :disabled="editLocked || isSkipped(entry) || (!isGroupFullySuggested(entry) && suggestedIDsFor(entry).length === 0)"
                 data-test="cleanup-suggest-group"
                 @click="toggleGroupSuggestion(entry)"
               >{{ isGroupFullySuggested(entry) ? '取消本组勾选' : '按建议勾选（保留推荐项）' }}</button>
@@ -202,7 +204,7 @@
                 type="button"
                 class="btn-secondary btn-compact"
                 :class="{ 'cleanup-group__skip--active': isSkipped(entry) }"
-                :disabled="processing"
+                :disabled="editLocked"
                 data-test="cleanup-skip-group"
                 @click="toggleSkipGroup(entry)"
               >{{ isSkipped(entry) ? '已跳过（点我恢复）' : '本组不删' }}</button>
@@ -210,7 +212,7 @@
                 v-if="entry.kind === 'near'"
                 type="button"
                 class="btn-secondary btn-compact"
-                :disabled="dismissing || processing"
+                :disabled="dismissing || editLocked"
                 data-test="cleanup-dismiss-group"
                 @click="dismissGroup(entry)"
               >不是重复</button>
@@ -245,7 +247,7 @@
                       type="radio"
                       :name="`keep-${entry.key}`"
                       :checked="isKept(entry, member)"
-                      :disabled="processing || isDeleted(member)"
+                      :disabled="editLocked || isDeleted(member)"
                       :aria-label="`保留 ${member.name}`"
                       data-test="cleanup-keep-toggle"
                       @change="setKeep(entry, member)"
@@ -256,7 +258,7 @@
                     <input
                       type="checkbox"
                       :checked="selection.includes(Number(member.id))"
-                      :disabled="processing || isKept(entry, member) || isSkipped(entry) || isDeleted(member) || isProtected(entry, member)"
+                      :disabled="editLocked || isKept(entry, member) || isSkipped(entry) || isDeleted(member) || isProtected(entry, member)"
                       :aria-label="`删除 ${member.name}`"
                       data-test="cleanup-candidate-toggle"
                       @change="toggleSelection(member.id)"
@@ -323,7 +325,7 @@
                     v-if="entry.kind === 'near' && entry.members.length > 2 && !isDeleted(member)"
                     type="button"
                     class="btn-secondary btn-compact"
-                    :disabled="dismissing || processing"
+                    :disabled="dismissing || editLocked"
                     data-test="cleanup-remove-member"
                     @click="removeMember(entry, member)"
                   >移出本组</button>
@@ -411,9 +413,9 @@ import {
 } from '../utils/photoCleanupStore.js';
 import { confirmAction } from '../utils/feedback.js';
 import {
-  applySuggestion, cleanupGroup, clearGroupSelection, defaultSelection, describeMergeFailure, describeSelectionKinds,
-  isGroupFullySuggested, keeperOf, lockedIDs, mergePlan, pruneSelection, selectionSummary, setKeeper, similarityCount,
-  suggestedIDs
+  applySuggestion, cleanupGroup, clearGroupSelection, defaultSelection, deletionPlan, deletionPlanUnchanged,
+  describeMergeFailure, describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, pruneSelection,
+  SELECTION_CHANGED_MESSAGE, selectionSummary, setKeeper, similarityCount, suggestedIDs
 } from '../utils/cleanupSelection.js';
 
 const STAGE_LABELS = {
@@ -448,6 +450,9 @@ export default {
       UNKNOWN_DIRECTORY,
       localError: '',
       processing: false,
+      // confirming：删除确认框打开着。这期间勾选、保留项与组成员和删除进行中一样锁住（P-032 复审 I-1）；
+      // 与 processing 分开，是因为图片库只在真正删除时拦住离开（确认框随清理页卸载而取消）。
+      confirming: false,
       dismissing: false,
       cancelling: false,
       showDismissed: false,
@@ -475,6 +480,8 @@ export default {
     analysis() { return (this.status?.completed && this.status.analysis) || null; },
     resultStale() { return Boolean(this.analysis && (this.status?.stale || this.deletedIDs.length)); },
     perceptualHashRunning() { return !!this.perceptualHashStatus?.running; },
+    // 改勾选、保留项、组成员的控件与方法共用的锁：删除确认框打开着或删除进行中。
+    editLocked() { return this.processing || this.confirming; },
     progress() { return this.status?.progress || {}; },
     stageLabel() { return STAGE_LABELS[this.progress.stage] || '准备中'; },
     displayError() { return this.localError || this.status?.error || ''; },
@@ -781,7 +788,7 @@ export default {
     // 「按建议勾选」只作用于这一组（D-PC49），再点一次取消本组勾选。
     toggleGroupSuggestion(entry) {
       const group = this.groupOf(entry);
-      if (!group || this.processing) return;
+      if (!group || this.editLocked) return;
       this.review.selection = this.isGroupFullySuggested(entry)
         ? clearGroupSelection(this.selection, group)
         : applySuggestion(this.selection, group, this.selectionOptions());
@@ -803,7 +810,7 @@ export default {
     // 按新保留项重算其余成员。删除进行中不能换（P-032 评审 I-1）。
     setKeep(entry, image) {
       const group = this.groupOf(entry);
-      if (!group || this.processing) return;
+      if (!group || this.editLocked) return;
       const next = setKeeper({
         groups: this.cleanupGroups,
         overrides: this.keepOverrides,
@@ -820,7 +827,7 @@ export default {
     },
     toggleSkipGroup(entry) {
       const group = this.groupOf(entry);
-      if (!group || this.processing) return;
+      if (!group || this.editLocked) return;
       if (this.isSkipped(entry)) {
         this.review.skippedGroups = { ...this.skippedGroups, [entry.key]: false };
         // 恢复本组：按默认规则重算（精确重复重新勾副本，近似重复仍然不勾）。
@@ -833,7 +840,7 @@ export default {
       }
     },
     toggleSameDirOnly() {
-      if (this.processing) return;
+      if (this.editLocked) return;
       this.review.sameDirOnly = !this.sameDirOnly;
       // 切换的是默认规则，直接按新规则重算勾选（手动微调会被覆盖，这是明示行为）。
       this.applyAutoSelection();
@@ -904,7 +911,7 @@ export default {
       else if (event.key === 'ArrowLeft') { event.preventDefault(); this.stepViewer(-1); }
     },
     async startAnalysis() {
-      if (this.running || this.processing) return;
+      if (this.running || this.editLocked) return;
       this.localError = '';
       this.showDismissed = false;
       try {
@@ -930,7 +937,7 @@ export default {
     },
     toggleSelection(imageID) {
       const id = Number(imageID);
-      if (this.processing) return;
+      if (this.editLocked) return;
       if (this.selection.includes(id)) {
         this.review.selection = this.selection.filter(item => item !== id);
         return;
@@ -966,34 +973,51 @@ export default {
       if (resolve) resolve(confirmed ? { merge } : null);
     },
     async deleteSelected() {
-      if (this.selection.length === 0 || this.processing || this.running || this.deleteConfirm.show || this.showDismissed) return;
+      // 「移出本组」「不是重复」的请求还没返回时不删除（P-032 复审 I-1）：它们落地时会改组和勾选。
+      if (this.selection.length === 0 || this.processing || this.running || this.deleteConfirm.show || this.showDismissed || this.dismissing) return;
       // 删除前按锁定规则裁剪勾选：保留项、「本组不删」的成员、已删除、不再出现在结果里的都不送进删除。
-      const requested = pruneSelection(this.selection, this.cleanupGroups, this.selectionOptions());
-      if (requested.length === 0) return;
-      let plan;
+      // 合并计划遇到锁定项时报错，不静默跳过。
+      let confirmed;
       try {
-        plan = mergePlan(this.cleanupGroups, requested, this.selectionOptions());
+        confirmed = deletionPlan(this.cleanupGroups, this.selection, this.selectionOptions());
       } catch (err) {
         this.localError = err?.message || String(err);
         return;
       }
+      const { ids: requested, plan } = confirmed;
+      if (requested.length === 0) return;
       const summary = selectionSummary(this.cleanupGroups, requested, id => this.memberBytesByID.get(id) || 0);
-      // 先汇总确认（D-PC49）；取消时不调用任何写入。
-      const choice = await this.askDeleteConfirm(summary, plan.length > 0);
+      // 先汇总确认（D-PC49）；取消时不调用任何写入。确认框打开期间锁住勾选、保留项与组成员。
+      this.confirming = true;
+      let choice;
+      try {
+        choice = await this.askDeleteConfirm(summary, plan.length > 0);
+      } finally {
+        this.confirming = false;
+      }
       if (!choice) return;
+      // 确认期间分析结果仍可能被轮询替换：按当前状态重算一次，与确认框里的名单不同就中止，
+      // 不合并、不删除，勾选保持现在的样子。
+      if (!deletionPlanUnchanged(confirmed, this.cleanupGroups, this.selection, this.selectionOptions())) {
+        this.localError = SELECTION_CHANGED_MESSAGE;
+        return;
+      }
 
       this.processing = true;
       this.localError = '';
       let outcome = null;
       let failureNotice = '';
       try {
-        // 删除之前按组把被删项的整理成果合并到各组保留项（D-PC48），任何一组失败都不进入删除。
+        // 删除之前按组把被删项的整理成果合并到各组保留项（D-PC48），任何一组失败都不进入删除；
+        // 前面几组返回的提示随失败提示一起给出。
         if (choice.merge) {
+          const warnings = [];
           for (const [index, item] of plan.entries()) {
             try {
-              await MergeMediaMetadata('image', item.keeperId, item.sourceIds, item.options);
+              const result = await MergeMediaMetadata('image', item.keeperId, item.sourceIds, item.options);
+              warnings.push(...(result?.warnings || []));
             } catch (err) {
-              this.localError = describeMergeFailure(err, index, plan.length, '图片');
+              this.localError = describeMergeFailure(err, index, plan.length, '图片', warnings);
               return;
             }
           }
@@ -1038,14 +1062,15 @@ export default {
       await refreshPhotoCleanupStatus();
     },
     async dismissGroup(entry) {
-      if (this.dismissing || this.processing) return;
+      if (this.dismissing || this.editLocked) return;
       const ids = entry.members.map(member => Number(member.id));
       const confirmed = await confirmAction({
         title: '不是重复',
         message: `确认这组 ${ids.length} 张图片不是重复？\n之后的分析不再把它们报为近似重复；任一文件变化后忽略自动失效，也可以在「已忽略」里撤销。`,
         confirmText: '不是重复'
       });
-      if (!confirmed) return;
+      // 等确认的这段时间里可能已经打开了删除确认框或开始删除：再查一次（P-032 复审 I-1）。
+      if (!confirmed || this.dismissing || this.editLocked) return;
       this.dismissing = true;
       this.localError = '';
       try {
@@ -1063,7 +1088,7 @@ export default {
     },
     // 「移出本组」（D-PC31）：只否决这张图与组内其他成员的配对，其余成员之间的关系不动。
     async removeMember(entry, member) {
-      if (this.dismissing || this.processing) return;
+      if (this.dismissing || this.editLocked) return;
       const ids = entry.members.map(item => Number(item.id));
       const memberID = Number(member?.id);
       if (ids.length < 3 || !ids.includes(memberID)) return;
@@ -1072,7 +1097,7 @@ export default {
         message: `把「${member.name || `图片 ${memberID}`}」移出本组？\n只记录它与组内其他 ${ids.length - 1} 张不是重复，其余成员之间的关系不变。可以在「已忽略」里撤销。`,
         confirmText: '移出本组'
       });
-      if (!confirmed) return;
+      if (!confirmed || this.dismissing || this.editLocked) return;
       this.dismissing = true;
       this.localError = '';
       try {

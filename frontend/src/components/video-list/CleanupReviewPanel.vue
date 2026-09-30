@@ -417,13 +417,16 @@
         <div class="cleanup-header__spacer"></div>
         <button v-if="cleanupDialog.loading" @click="cleanupDialog.show = false" class="btn-secondary">后台继续分析</button>
         <button @click="cleanupDialog.show = false" class="btn-secondary">取消</button>
+        <!-- 改分组的请求（移出本组、各类忽略）还没返回时不能删除（P-032 复审 I-1）。
+             确认框打开期间 processing 已经为真（删除流程从确认开始），按钮文字仍写「移到废纸篓」。 -->
         <button
           @click="trashSelectedCleanupCandidates"
           class="btn-danger"
           data-test="cleanup-trash-selected"
-          :disabled="cleanupSelection.length === 0 || cleanupDialog.loading || cleanupDialog.processing || cleanupCategory === 'dismissed'"
+          :disabled="cleanupSelection.length === 0 || cleanupDialog.loading || cleanupDialog.processing || cleanupCategory === 'dismissed' || cleanupGroupRequests > 0"
+          :title="cleanupGroupRequests > 0 ? '正在更新分组，完成后再删除' : ''"
         >
-          {{ cleanupDialog.processing ? '处理中...' : '移到废纸篓' }}
+          {{ cleanupDialog.processing && !deleteConfirm.show ? '处理中...' : '移到废纸篓' }}
         </button>
       </div>
 
@@ -477,9 +480,9 @@ import BaseModal from '../ui/BaseModal.vue';
 import CleanupThumbnail from '../CleanupThumbnail.vue';
 import { confirmAction, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
 import {
-  applySuggestion, cleanupGroup, clearGroupSelection, curationBadges, defaultSelection, describeMergeFailure,
-  describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, mergePlan, pruneSelection, selectionSummary,
-  setKeeper, similarityCount, suggestedIDs
+  applySuggestion, cleanupGroup, clearGroupSelection, curationBadges, defaultSelection, deletionPlan, deletionPlanUnchanged,
+  describeMergeFailure, describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, pruneSelection,
+  SELECTION_CHANGED_MESSAGE, selectionSummary, setKeeper, similarityCount, suggestedIDs
 } from '../../utils/cleanupSelection.js';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import { formatElapsedDuration } from './format.js';
@@ -541,6 +544,8 @@ export default {
       cleanupSelectionKey: null,
       // 「设为保留」的覆盖：{ 组 key: 视频 id }。
       cleanupKeepOverrides: {},
+      // 正在进行、会改分组的请求数（移出本组、不是重复、各类忽略、不是同源）：大于 0 时不能删除（P-032 复审 I-1）。
+      cleanupGroupRequests: 0,
       cleanupStatusRequestID: 0,
       cleanupCategory: 'all',
       activeCleanupDirectory: '',
@@ -1196,7 +1201,21 @@ export default {
       this.cleanupSelection = [...this.cleanupSelection, videoID];
     },
     clearCleanupSelection() {
+      if (this.cleanupDialog.processing) return;
       this.cleanupSelection = [];
+    },
+    // 改分组的请求（移出本组、不是重复、各类忽略、不是同源）统一走这里（P-032 复审 I-1）：
+    // 等用户确认的这段时间里可能已经开始删除流程，确认之后再查一次；请求进行中计数，删除入口据此拦截。
+    async runCleanupGroupRequest(confirmOptions, request) {
+      if (this.cleanupDialog.processing) return;
+      const confirmed = await confirmAction(confirmOptions);
+      if (!confirmed || this.cleanupDialog.processing) return;
+      this.cleanupGroupRequests++;
+      try {
+        await request();
+      } finally {
+        this.cleanupGroupRequests--;
+      }
     },
     // 审阅重复候选要的是"两个文件摆一起看"，交给系统播放器比在应用内抽屉里
     // 一个个开更顺手；走 PreviewExternally 而不是 PlayVideo，免得审阅把播放次数刷上去。
@@ -1212,140 +1231,156 @@ export default {
     // 近似重复「不是重复」：整组两两配对记为忽略（同时否决这些对上待审的同源关系），忽略前先确认（D-PC31）。
     async dismissNearDuplicateGroup(group) {
       const ids = [group.original?.id, ...(group.candidates || []).map(video => video.id)].filter(Boolean);
-      if (ids.length < 2 || this.cleanupDialog.processing) return;
-      const confirmed = await confirmAction({
+      if (ids.length < 2) return;
+      await this.runCleanupGroupRequest({
         title: '不是重复',
         message: `确认这组 ${ids.length} 个视频不是重复？\n之后的分析不再把它们报为近似重复，这些配对上待审的同源关系也一并判为「不是同源」。任一文件变化后忽略自动失效，也可以在「已忽略」里撤销。`,
         confirmText: '不是重复'
-      });
-      if (!confirmed) return;
-      try {
-        await DismissNearDuplicateGroup(ids);
-        this.cleanupStatusRequestID++;
-        const analysis = this.cleanupDialog.analysis;
-        if (analysis) {
-          analysis.near_duplicate_groups = (analysis.near_duplicate_groups || [])
-            .filter(item => ![item.original?.id, ...(item.candidates || []).map(video => video.id)].every(id => ids.includes(id)));
+      }, async () => {
+        try {
+          await DismissNearDuplicateGroup(ids);
+          this.cleanupStatusRequestID++;
+          const analysis = this.cleanupDialog.analysis;
+          if (analysis) {
+            analysis.near_duplicate_groups = (analysis.near_duplicate_groups || [])
+              .filter(item => ![item.original?.id, ...(item.candidates || []).map(video => video.id)].every(id => ids.includes(id)));
+          }
+          this.cleanupSelection = this.cleanupSelection.filter(id => !ids.includes(id));
+          notifySuccess('已记录“不是重复”，这组视频之间的配对不再作为近似重复候选。');
+          await this.refreshCleanupStatus();
+        } catch (err) {
+          notifyError('忽略近似重复组失败: ' + err);
         }
-        this.cleanupSelection = this.cleanupSelection.filter(id => !ids.includes(id));
-        notifySuccess('已记录“不是重复”，这组视频之间的配对不再作为近似重复候选。');
-        await this.refreshCleanupStatus();
-      } catch (err) {
-        notifyError('忽略近似重复组失败: ' + err);
-      }
+      });
     },
     // 「移出本组」：只否决这个成员与组内其他成员的配对，其余成员之间的关系不动（D-PC31）。
     async removeNearDuplicateMember(group, member) {
       const ids = [group.original?.id, ...(group.candidates || []).map(video => video.id)].filter(Boolean);
       const memberID = Number(member?.id);
-      if (ids.length < 3 || !ids.includes(memberID) || this.cleanupDialog.processing) return;
-      const confirmed = await confirmAction({
+      if (ids.length < 3 || !ids.includes(memberID)) return;
+      await this.runCleanupGroupRequest({
         title: '移出本组',
         message: `把「${member.name || `视频 ${memberID}`}」移出本组？\n只记录它与组内其他 ${ids.length - 1} 个视频不是重复，其余成员之间的关系不变。可以在「已忽略」里撤销。`,
         confirmText: '移出本组'
-      });
-      if (!confirmed) return;
-      try {
-        await DismissNearDuplicateMember(ids, memberID);
-        this.cleanupStatusRequestID++;
-        const analysis = this.cleanupDialog.analysis;
-        if (analysis) {
-          analysis.near_duplicate_groups = (analysis.near_duplicate_groups || []).flatMap(item => {
-            const members = [item.original, ...(item.candidates || [])].filter(Boolean);
-            const memberIDs = members.map(video => video.id);
-            if (memberIDs.length !== ids.length || !memberIDs.every(id => ids.includes(id))) return [item];
-            const rest = members.filter(video => video.id !== memberID);
-            return rest.length < 2 ? [] : [{ ...item, original: rest[0], candidates: rest.slice(1) }];
-          });
+      }, async () => {
+        try {
+          await DismissNearDuplicateMember(ids, memberID);
+          this.cleanupStatusRequestID++;
+          const analysis = this.cleanupDialog.analysis;
+          const oldKey = `near-${group.original?.id}`;
+          let newKey = oldKey;
+          if (analysis) {
+            analysis.near_duplicate_groups = (analysis.near_duplicate_groups || []).flatMap(item => {
+              const members = [item.original, ...(item.candidates || [])].filter(Boolean);
+              const memberIDs = members.map(video => video.id);
+              if (memberIDs.length !== ids.length || !memberIDs.every(id => ids.includes(id))) return [item];
+              const rest = members.filter(video => video.id !== memberID);
+              if (rest.length < 2) return [];
+              newKey = `near-${rest[0].id}`;
+              return [{ ...item, original: rest[0], candidates: rest.slice(1) }];
+            });
+          }
+          // 组 key 跟着原保留项走，移出原保留项后换成新原片的 key（P-032 复审 m1）。用户「设为保留」的那一份
+          // 还在组里时，把覆盖搬到新 key 下，锁定随之保留；与图片清理页一致。
+          this.cleanupKeepOverrides = this.migrateKeepOverride(oldKey, newKey, memberID);
+          // 移出的是原保留项时 rest[0] 升为保留项：按新的组重新裁剪，把它移出勾选（P-032 评审 I-1）。
+          this.cleanupSelection = pruneSelection(this.cleanupSelection.filter(id => id !== memberID), this.cleanupGroups, this.selectionOptions());
+          notifySuccess('已移出本组，其余成员仍在这一组里。');
+          await this.refreshCleanupStatus();
+        } catch (err) {
+          notifyError('移出本组失败: ' + err);
         }
-        // 移出的是原保留项时 rest[0] 升为保留项：按新的组重新裁剪，把它移出勾选（P-032 评审 I-1）。
-        this.cleanupSelection = pruneSelection(this.cleanupSelection.filter(id => id !== memberID), this.cleanupGroups, this.selectionOptions());
-        notifySuccess('已移出本组，其余成员仍在这一组里。');
-        await this.refreshCleanupStatus();
-      } catch (err) {
-        notifyError('移出本组失败: ' + err);
-      }
+      });
+    },
+    // 「移出本组」之后的保留项覆盖：指向被移出成员的覆盖作废；组 key 变了就搬到新 key 下。
+    migrateKeepOverride(oldKey, newKey, removedID) {
+      const overrides = { ...this.cleanupKeepOverrides };
+      if (!(oldKey in overrides)) return overrides;
+      const override = Number(overrides[oldKey]);
+      delete overrides[oldKey];
+      if (override !== removedID) overrides[newKey] = override;
+      return overrides;
     },
     // 截取片段的"忽略"：双方文件都不变时后续分析不再报出（D-028）。
     async dismissClipCandidate(group) {
       const fullID = group?.full?.id;
       const clipID = group?.clip?.id;
-      if (!fullID || !clipID || this.cleanupDialog.processing) return;
-      const confirmed = await confirmAction({
+      if (!fullID || !clipID) return;
+      await this.runCleanupGroupRequest({
         title: '忽略截取片段',
         message: '忽略这对截取片段候选？\n双方文件都不变时，之后的分析不再报出这一对。可以在「已忽略」里撤销。',
         confirmText: '忽略'
-      });
-      if (!confirmed) return;
-      try {
-        await DismissClipCandidate(fullID, clipID);
-        this.cleanupStatusRequestID++;
-        const analysis = this.cleanupDialog.analysis;
-        if (analysis) {
-          analysis.clip_groups = (analysis.clip_groups || [])
-            .filter(item => item.full?.id !== fullID || item.clip?.id !== clipID);
+      }, async () => {
+        try {
+          await DismissClipCandidate(fullID, clipID);
+          this.cleanupStatusRequestID++;
+          const analysis = this.cleanupDialog.analysis;
+          if (analysis) {
+            analysis.clip_groups = (analysis.clip_groups || [])
+              .filter(item => item.full?.id !== fullID || item.clip?.id !== clipID);
+          }
+          this.cleanupSelection = this.cleanupSelection.filter(id => id !== clipID);
+          notifySuccess('已记录忽略；双方文件未变时，这对截取候选不会再次出现。');
+          await this.refreshCleanupStatus();
+        } catch (err) {
+          notifyError('忽略截取片段失败: ' + err);
         }
-        this.cleanupSelection = this.cleanupSelection.filter(id => id !== clipID);
-        notifySuccess('已记录忽略；双方文件未变时，这对截取候选不会再次出现。');
-        await this.refreshCleanupStatus();
-      } catch (err) {
-        notifyError('忽略截取片段失败: ' + err);
-      }
+      });
     },
     // 极短片段 / 极低分辨率也可以忽略（D-PC31、APP-11）：文件不变就不再报出，管理菜单的徽标随之消退。
     async dismissCleanupVideo(entry) {
       const video = entry?.keeper;
       const category = entry?.kind === 'low-duration' ? 'short' : entry?.kind === 'low-resolution' ? 'low' : '';
-      if (!video?.id || !category || this.cleanupDialog.processing) return;
+      if (!video?.id || !category) return;
       const label = category === 'short' ? '极短片段' : '极低分辨率';
-      const confirmed = await confirmAction({
+      await this.runCleanupGroupRequest({
         title: `忽略${label}候选`,
         message: `忽略「${video.name || `视频 ${video.id}`}」这条${label}候选？\n文件不变时之后的分析不再报出它。可以在「已忽略」里撤销。`,
         confirmText: '忽略'
-      });
-      if (!confirmed) return;
-      try {
-        await DismissCleanupVideo(video.id, category);
-        this.cleanupStatusRequestID++;
-        const analysis = this.cleanupDialog.analysis;
-        if (analysis) {
-          const key = category === 'short' ? 'low_duration' : 'low_resolution';
-          analysis[key] = (analysis[key] || []).filter(item => item.id !== video.id);
+      }, async () => {
+        try {
+          await DismissCleanupVideo(video.id, category);
+          this.cleanupStatusRequestID++;
+          const analysis = this.cleanupDialog.analysis;
+          if (analysis) {
+            const key = category === 'short' ? 'low_duration' : 'low_resolution';
+            analysis[key] = (analysis[key] || []).filter(item => item.id !== video.id);
+          }
+          // 同一个视频可能还在别的类别里，只有它不再是任何候选时才放掉勾选。
+          const remaining = new Set(this.getAllCleanupCandidates().map(item => item.id));
+          this.cleanupSelection = this.cleanupSelection.filter(id => remaining.has(id));
+          notifySuccess(`已忽略这条${label}候选。`);
+          await this.refreshCleanupStatus();
+        } catch (err) {
+          notifyError(`忽略${label}候选失败: ` + err);
         }
-        // 同一个视频可能还在别的类别里，只有它不再是任何候选时才放掉勾选。
-        const remaining = new Set(this.getAllCleanupCandidates().map(item => item.id));
-        this.cleanupSelection = this.cleanupSelection.filter(id => remaining.has(id));
-        notifySuccess(`已忽略这条${label}候选。`);
-        await this.refreshCleanupStatus();
-      } catch (err) {
-        notifyError(`忽略${label}候选失败: ` + err);
-      }
+      });
     },
     async rejectCleanupSameSource(group) {
-      if (!group?.relation_id || this.cleanupDialog.processing) return;
-      const confirmed = await confirmAction({
+      if (!group?.relation_id) return;
+      await this.runCleanupGroupRequest({
         title: '不是同源',
         message: '确认这两个视频不是同源？\n双方内容未变时不再作为相似关系候选，AI 同源审阅也不再询问这一对。这个判断不会出现在「已忽略」列表里。',
         confirmText: '不是同源'
+      }, async () => {
+        try {
+          await RejectSameSourceRelation(group.relation_id);
+          this.cleanupStatusRequestID++;
+          const analysis = this.cleanupDialog.analysis;
+          if (analysis) {
+            analysis.same_source_groups = (analysis.same_source_groups || [])
+              .filter(item => item.relation_id !== group.relation_id);
+          }
+          if (group.alternative?.id) {
+            this.cleanupSelection = this.cleanupSelection.filter(id => id !== group.alternative.id);
+          }
+          this.$emit('same-source-rejected');
+          notifySuccess('已记录“不是同源”，双方内容未变时不再作为相似关系候选。');
+          await this.refreshCleanupStatus();
+        } catch (err) {
+          notifyError('更新同源判断失败: ' + err);
+        }
       });
-      if (!confirmed) return;
-      try {
-        await RejectSameSourceRelation(group.relation_id);
-        this.cleanupStatusRequestID++;
-        const analysis = this.cleanupDialog.analysis;
-        if (analysis) {
-          analysis.same_source_groups = (analysis.same_source_groups || [])
-            .filter(item => item.relation_id !== group.relation_id);
-        }
-        if (group.alternative?.id) {
-          this.cleanupSelection = this.cleanupSelection.filter(id => id !== group.alternative.id);
-        }
-        this.$emit('same-source-rejected');
-        notifySuccess('已记录“不是同源”，双方内容未变时不再作为相似关系候选。');
-        await this.refreshCleanupStatus();
-      } catch (err) {
-        notifyError('更新同源判断失败: ' + err);
-      }
     },
     // 「已忽略」页签（D-PC31）：按类别分页列出忽略记录，可以逐条撤销。
     switchDismissalKind(kind) {
@@ -1436,17 +1471,26 @@ export default {
           const result = await MergeMediaMetadata('video', item.keeperId, item.sourceIds, item.options);
           warnings.push(...(result?.warnings || []));
         } catch (err) {
-          notifyError(describeMergeFailure(err, index, plan.length, '视频'));
+          // 前面几组已经合并，它们的提示（例如字幕复制失败）随失败提示一起给出。
+          notifyError(describeMergeFailure(err, index, plan.length, '视频', warnings));
           return null;
         }
       }
       return warnings;
     },
     async trashSelectedCleanupCandidates() {
-      if (this.cleanupDialog.processing || this.deleteConfirm.show || this.cleanupCategory === 'dismissed') return;
+      // 「移出本组」、各类忽略等改分组的请求还没返回时不删除（P-032 复审 I-1）：它们落地时会改组和勾选。
+      if (this.cleanupDialog.processing || this.deleteConfirm.show || this.cleanupCategory === 'dismissed' || this.cleanupGroupRequests > 0) return;
       // 删除前按锁定规则裁剪勾选（与图片清理页同一做法，P-032 评审 I-1）：保留项、已移到废纸篓、
-      // 不再出现在结果里的都不送进删除。
-      const selectedIDs = pruneSelection(this.cleanupSelection, this.cleanupGroups, this.selectionOptions());
+      // 不再出现在结果里的都不送进删除。合并计划遇到锁定项时报错，不静默跳过。
+      let confirmed;
+      try {
+        confirmed = deletionPlan(this.cleanupGroups, this.cleanupSelection, this.selectionOptions());
+      } catch (err) {
+        notifyError(err?.message || String(err));
+        return;
+      }
+      const { ids: selectedIDs, plan } = confirmed;
       if (selectedIDs.length === 0) {
         return;
       }
@@ -1454,21 +1498,22 @@ export default {
       const names = Object.fromEntries(this.getAllCleanupCandidates()
         .filter(video => wanted.has(video.id))
         .map(video => [video.id, video.name]));
-      let plan;
-      try {
-        plan = mergePlan(this.cleanupGroups, selectedIDs, this.selectionOptions());
-      } catch (err) {
-        notifyError(err?.message || String(err));
-        return;
-      }
       const summary = selectionSummary(this.cleanupGroups, selectedIDs, id => this.cleanupMemberSizes.get(id) || 0);
-      // 先汇总确认（D-PC49）；取消时不调用任何写入。
-      const choice = await this.askCleanupDeleteConfirm(summary, plan);
-      if (!choice) return;
 
+      // 从确认框打开起就进入删除流程（P-032 复审 I-1）：勾选、「设为保留」「移出本组」与各类忽略
+      // 按删除进行中的同一组规则禁用和拦截，直到整个流程结束。
       this.cleanupDialog.processing = true;
       let trashAttempted = false;
       try {
+        // 先汇总确认（D-PC49）；取消时不调用任何写入。
+        const choice = await this.askCleanupDeleteConfirm(summary, plan);
+        if (!choice) return;
+        // 确认期间分析结果仍可能被回读替换、改分组的请求也可能刚落地：按当前状态重算一次，
+        // 与确认框里的名单不同就中止，不合并、不删除，勾选保持现在的样子。
+        if (!deletionPlanUnchanged(confirmed, this.cleanupGroups, this.cleanupSelection, this.selectionOptions())) {
+          notifyError(SELECTION_CHANGED_MESSAGE);
+          return;
+        }
         let mergeWarnings = [];
         if (choice.merge && plan.length > 0) {
           mergeWarnings = await this.mergeCleanupMetadata(plan);

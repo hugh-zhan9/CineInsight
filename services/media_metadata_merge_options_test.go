@@ -1,8 +1,10 @@
 package services
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 	"video-master/database"
@@ -126,6 +128,57 @@ func TestMergeMediaMetadataIMG03OptionsAreIndependent(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(root, "playback-only-clip.srt")); err != nil {
 		t.Fatalf("来源字幕应留在原处: %v", err)
+	}
+}
+
+// P-032 复审 m3：数据库合并已提交、补已看状态失败时，错误带 merge_committed: 前缀，数据库部分确实已生效；
+// 事务里的失败（这里用不存在的保留项）不带前缀。
+func TestMergeMediaMetadataIMG03WatchedSyncFailureIsMarkedCommitted(t *testing.T) {
+	setupCleanupServiceTestDB(t)
+	root := t.TempDir()
+	keeper, source, collection := p032ClipMergeFixture(t, root, "committed")
+
+	failing := &p016WatchedSetter{err: errors.New("setter down")}
+	result, err := MergeMediaMetadata(MediaMergeKindVideo, keeper.ID, []uint{source.ID}, MediaMetadataMergeDeps{
+		Watched: failing, Subtitles: NewSubtitleFileWriter(t.TempDir()),
+	})
+	if err == nil || result != nil {
+		t.Fatalf("已看翻转失败应返回错误: result=%+v err=%v", result, err)
+	}
+	if !strings.HasPrefix(err.Error(), MediaMergeCommittedErrorPrefix) {
+		t.Fatalf("错误应带 %q 前缀: %v", MediaMergeCommittedErrorPrefix, err)
+	}
+	if !errors.Is(err, failing.err) {
+		t.Fatalf("错误应保留 setter 的原因: %v", err)
+	}
+	if len(failing.calls) != 1 || failing.calls[0] != keeper.ID {
+		t.Fatalf("应尝试翻转保留项的已看: %v", failing.calls)
+	}
+
+	merged := p016ReloadVideo(t, keeper.ID)
+	if len(merged.Tags) != 1 || !merged.IsFavorite || !merged.IsLiked || merged.PersonalRating == nil || *merged.PersonalRating != 8 {
+		t.Fatalf("数据库合并应已提交: %+v", merged)
+	}
+	if merged.WatchPositionSeconds != 100 {
+		t.Fatalf("断点应已在事务里合并: %v", merged.WatchPositionSeconds)
+	}
+	if merged.IsWatched {
+		t.Fatal("setter 失败时已看不应被翻转")
+	}
+	var people int64
+	database.DB.Model(&models.VideoPerson{}).Where("video_id = ?", keeper.ID).Count(&people)
+	if people != 1 {
+		t.Fatalf("人物应已合并: %d", people)
+	}
+	var membership models.CollectionVideo
+	if err := database.DB.Where("collection_id = ? AND video_id = ?", collection.ID, keeper.ID).First(&membership).Error; err != nil {
+		t.Fatalf("作品集应已合并: %v", err)
+	}
+
+	missingKeeper := keeper.ID + source.ID + 100
+	if _, err := MergeMediaMetadata(MediaMergeKindVideo, missingKeeper, []uint{source.ID}, MediaMetadataMergeDeps{Watched: &p016WatchedSetter{}}); err == nil ||
+		strings.HasPrefix(err.Error(), MediaMergeCommittedErrorPrefix) {
+		t.Fatalf("事务里的失败不应带已提交前缀: %v", err)
 	}
 }
 

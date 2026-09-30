@@ -21,6 +21,10 @@ const (
 	MediaMergeKindImage = "image"
 )
 
+// MediaMergeCommittedErrorPrefix 标出「数据库合并已经提交、之后补已看状态失败」的错误（P-032 复审 m3）。
+// 前端据此说明这一组的整理成果已经合并、只是已看没同步；其余错误都不带它。
+const MediaMergeCommittedErrorPrefix = "merge_committed:"
+
 // MediaMergeWatchedSetter 是翻转已看状态的入口（*VideoService 满足）。合并提交之后，
 // keeper 的 is_watched 由 false 变 true 时经它翻转，已看同步观察者（D-PC52）由它负责通知。
 type MediaMergeWatchedSetter interface {
@@ -74,7 +78,7 @@ type MediaMetadataMergeResult struct {
 //     （deps.Options.SkipPlaybackState 时已看与断点都不动）。
 //
 // 事务提交之后：keeper 的已看由 false 变 true 时经 deps.Watched 翻转（观察者照常收到通知），
-// 失败返回错误（数据库合并已提交且可重复执行，调用方不要进入删除）；keeper 没有同名 .srt
+// 失败返回带 MediaMergeCommittedErrorPrefix 前缀的错误（数据库合并已提交且可重复执行，调用方不要进入删除）；keeper 没有同名 .srt
 // 而来源有时，经 deps.Subtitles 复制成 keeper 的同名 .srt 并刷新索引（deps.Options.SkipSubtitle
 // 时不复制），失败只记警告（来源的字幕留在原处）。
 func MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, deps MediaMetadataMergeDeps) (*MediaMetadataMergeResult, error) {
@@ -114,7 +118,8 @@ func MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, deps Media
 	}
 	if plan.markWatched {
 		if _, err := deps.Watched.SetVideoWatched(keeperID, true); err != nil {
-			return nil, fmt.Errorf("合并已看状态失败：%w", err)
+			// 事务已经提交：带上前缀，让调用方知道这一组其实已经合并了。
+			return nil, fmt.Errorf("%s 合并已看状态失败：%w", MediaMergeCommittedErrorPrefix, err)
 		}
 		result.WatchedChanged = true
 	}

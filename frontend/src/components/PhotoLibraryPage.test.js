@@ -1213,6 +1213,31 @@ describe('PhotoLibraryPage cleanup review', () => {
     wrapper.unmount();
   });
 
+  // P-032 复审 m2：打开回收站也是一条离开清理页的路径，删除进行中同样被拦下。
+  it('D-PC49 删除进行中从图片库打开回收站被拦下：清理页留在原地并提示，删完之后照常打开', async () => {
+    const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
+    let finishDelete;
+    api.DeleteImagesWithResult.mockImplementation(ids => new Promise(resolve => { finishDelete = () => resolve(okDeleteResult(ids)); }));
+    await confirmCleanupDelete(wrapper);
+    expect(api.DeleteImagesWithResult).toHaveBeenCalledTimes(1);
+
+    await wrapper.vm.openTrashDialog();
+    await flushPromises();
+    expect(wrapper.vm.showCleanup).toBe(true);
+    expect(wrapper.find('[data-test="photo-cleanup-page"]').exists()).toBe(true);
+    // 图片库那一侧的撤销条（回收站入口）没有挂载，回收站没被打开。
+    expect(wrapper.vm.$refs.trashUndo ?? null).toBeNull();
+    expect(feedback.notify.mock.calls.map(call => String(call[0])).join('\n')).toContain('完成后再离开清理审阅');
+
+    finishDelete();
+    await flushPromises();
+    await wrapper.vm.openTrashDialog();
+    await flushPromises();
+    expect(wrapper.vm.showCleanup).toBe(false);
+    expect(wrapper.vm.$refs.trashUndo.trashDialog).toEqual({ show: true, tab: 'image' });
+    wrapper.unmount();
+  });
+
   it('lets the user skip a whole group so nothing in it is deleted, then restore it', async () => {
     const wrapper = await openCleanup({ duplicate_groups: [exactGroup()], near_duplicate_groups: [] });
 

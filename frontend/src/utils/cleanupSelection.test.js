@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
-  applySuggestion, cleanupGroup, curationBadges, defaultSelection, describeMergeFailure, describeSelectionKinds,
-  isGroupFullySuggested, isLocked, keeperOf, LockedSelectionError, lockedIDs, mergeOptionsFor, mergePlan,
-  pruneSelection, selectionSummary, setKeeper, similarityCount, suggestedIDs, toggleSuggestion
+  applySuggestion, cleanupGroup, curationBadges, defaultSelection, deletionPlan, deletionPlanUnchanged, describeMergeFailure,
+  describeSelectionKinds, isGroupFullySuggested, isLocked, keeperOf, LockedSelectionError, lockedIDs, MERGE_COMMITTED_PREFIX,
+  mergeOptionsFor, mergePlan, pruneSelection, sameDeletionPlan, selectionSummary, setKeeper, similarityCount, suggestedIDs,
+  toggleSuggestion
 } from './cleanupSelection.js';
 
 const FULL_MERGE = { skip_playback_state: false, skip_subtitle: false };
@@ -137,6 +138,52 @@ describe('utils/cleanupSelection（D-PC49 统一勾选规则）', () => {
     const partial = describeMergeFailure('数据库繁忙', 2, 3, '图片');
     expect(partial).toContain('没有删除任何图片');
     expect(partial).toContain('共 3 组，前 2 组已经合并到各自的保留项');
+  });
+
+  // P-032 复审 m3：数据库合并已提交、同步已看失败时后端带 merge_committed: 前缀；前面几组的提示不丢。
+  it('IMG-03 合并已提交但同步已看失败：说明第 k 组已合并、前几组也已合并、没有删除任何媒体', () => {
+    const only = describeMergeFailure(`${MERGE_COMMITTED_PREFIX} 合并已看状态失败：数据库繁忙`, 0, 1, '视频');
+    expect(only).toBe('第 1 组的整理成果已合并到保留项，但同步已看状态失败（合并已看状态失败：数据库繁忙），没有删除任何视频。合并可以重复执行，处理好之后再删除即可。');
+    expect(only).not.toContain(MERGE_COMMITTED_PREFIX);
+    expect(only).not.toContain('合并元数据失败');
+
+    // Wails 给字符串；Error 对象（测试替身）同样识别，而且不带「Error:」。
+    const later = describeMergeFailure(new Error('merge_committed: 合并已看状态失败：setter down'), 2, 3, '视频', ['字幕迁移失败：目标文件已存在']);
+    expect(later).toContain('第 3 组的整理成果已合并到保留项，但同步已看状态失败');
+    expect(later).toContain('没有删除任何视频');
+    expect(later).toContain('共 3 组，前 2 组已经合并到各自的保留项');
+    expect(later).toContain('已合并的组另有 1 条提示：字幕迁移失败：目标文件已存在');
+    expect(later).not.toContain('Error:');
+
+    // 不带前缀的错误照旧说「合并元数据失败」；前面几组的提示同样列出。
+    const plain = describeMergeFailure('数据库繁忙', 1, 2, '视频', ['字幕已迁移，但搜索索引刷新失败', '']);
+    expect(plain).toContain('合并元数据失败，没有删除任何视频：数据库繁忙。');
+    expect(plain).toContain('已合并的组另有 1 条提示：字幕已迁移，但搜索索引刷新失败。');
+    expect(describeMergeFailure(new Error('数据库繁忙'), 0, 1, '图片')).toBe('合并元数据失败，没有删除任何图片：数据库繁忙。合并可以重复执行，处理好之后再删除即可。');
+  });
+
+  // P-032 复审 I-1：确认框返回后按当前状态重算删除名单，与弹框前的比较。
+  it('D-PC49 删除名单比较：待删 ID、每组保留项与来源、合并范围任一不同都算变化，组的先后不计', () => {
+    const all = [exact, near, clip];
+    const before = deletionPlan(all, [2, 3, 5, 10]);
+    expect(before.ids).toEqual([2, 3, 5, 10]);
+    expect(before.plan.map(item => item.key)).toEqual(['exact-1', 'near-4', 'clip-8-10']);
+    expect(sameDeletionPlan(before, deletionPlan([clip, near, exact], [10, 5, 3, 2]))).toBe(true);
+    expect(deletionPlanUnchanged(before, all, [3, 2, 10, 5])).toBe(true);
+
+    // 少删一项。
+    expect(deletionPlanUnchanged(before, all, [2, 3, 5])).toBe(false);
+    // 待删 ID 不变、保留项换了（「设为保留」换成了没勾的那一份）。
+    const keeperBefore = deletionPlan([exact], [3]);
+    expect(deletionPlanUnchanged(keeperBefore, [exact], [3], { overrides: { 'exact-1': 2 } })).toBe(false);
+    // 「本组不删」：成员被裁掉。
+    expect(deletionPlanUnchanged(before, all, [2, 3, 5, 10], { skipped: ['exact-1'] })).toBe(false);
+    // 合并范围不同（同一组 key 换成了截取片段的范围）。
+    const clipLike = cleanupGroup({ key: 'exact-1', kind: 'clip', keeperId: 1, memberIds: [1, 2, 3] });
+    expect(deletionPlanUnchanged(deletionPlan([exact], [2]), [clipLike], [2])).toBe(false);
+    // 分析结果换了、组都没了。
+    expect(deletionPlanUnchanged(before, [], [2, 3, 5, 10])).toBe(false);
+    expect(sameDeletionPlan(before, null)).toBe(false);
   });
 
   it('IMG-05 删除汇总：条数、体积与各类别条数，按相似度判断的单独计数', () => {
