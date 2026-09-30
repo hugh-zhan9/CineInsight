@@ -395,6 +395,26 @@ var errTrashRestoreResidueRemains = errors.New("上次恢复后，同目录旧�
 // 墓碑保留、删除被拒绝。文案不含路径。
 var errTrashTombstoneResidueUnconfirmed = errors.New("上次恢复后，同目录旧版回收站文件夹（trash）里还留着一个无法确认的文件（不是当前这个文件的另一个名字），为免误删未做任何改动；请在访达里检查该旧版回收站文件夹，处理掉那个文件后重试")
 
+// tombstoneTrashLocationError 把 settleRestoredTrashTombstone 里「只有墓碑登记的旧版 trash/ 位置不可用」时
+// mediaPathUnavailable 的错误包成点明位置的文案（修复 P m-2）：记录自己的文件在线，拒绝删除的原因是上次恢复留下的
+// 旧版回收站文件夹所在的磁盘没接上（或读不到）。用 %w 包住原错误，结果码照旧按 errors.Is 映射为 volume_offline /
+// permission_denied。文案不含路径（G-3），也不再拼接原错误的文字。
+func tombstoneTrashLocationError(err error) error {
+	if errors.Is(err, ErrTrashPermissionDenied) {
+		return &tombstoneLocationError{msg: "无权限读取上次恢复留下的旧版回收站文件夹（trash）所在的位置，暂时无法删除，检查该位置的访问权限后重试", err: err}
+	}
+	return &tombstoneLocationError{msg: "上次恢复留下的旧版回收站文件夹（trash）所在的磁盘未连接，暂时无法删除，接上该磁盘后重试", err: err}
+}
+
+// tombstoneLocationError 只显示点明位置的文案，Unwrap 保留原错误供 errors.Is 映射结果码。
+type tombstoneLocationError struct {
+	msg string
+	err error
+}
+
+func (e *tombstoneLocationError) Error() string { return e.msg }
+func (e *tombstoneLocationError) Unwrap() error { return e.err }
+
 // retireRestoredEntryAsTombstoneTx 是恢复事务里「条目从回收站拿掉」的另一种写法（修复 L m5）：旧版 trash/ 里还有要在
 // 提交之后清理的残留名字（legacyRestoreResidue）时，条目不硬删，而是用条件更新（WHERE state='restoring'）改为墓碑，
 // 保留 trash_path，让 loadLegacyTrashDirs 继续把那个目录算作「已登记」。提交之后清理成功才由
@@ -420,25 +440,32 @@ func retireRestoredEntryAsTombstoneTx(tx *gorm.DB, spec trashKindSpec, entryID u
 // （修复 N I-1：照常软删，墓碑保留）。
 //
 // 修复 N：
-//   - 在任何残留判定与 Lstat 之前，先确认 trash_path、记录当前路径与条目原路径所在的卷与扫描根都可用
+//   - 在任何残留判定与 Lstat 之前，先确认记录当前路径、条目原路径与 trash_path 所在的卷与扫描根都可用
 //     （mediaPathUnavailable）：卷离线或因权限读不到时 Lstat 同样报「不存在」，那不是残留已清掉。不可用时返回离线 /
-//     无权限错误，墓碑保留、删除被拒绝（I-2）；
+//     无权限错误，墓碑保留、删除被拒绝（I-2）。记录自己的两个位置先查、保持原文案；只有 trash_path 不可用时，
+//     文案点明是上次恢复留下的旧版回收站文件夹（tombstoneTrashLocationError，修复 P m-2）；
 //   - 硬链接判定用记录的**当前**路径 currentPath（video.Path / image.Path），而不是条目的原路径：MoveVideo、改名、
 //     扫描重定位之后，残留名字是当前文件的另一个名字（m1）。恢复刚提交时两者相同。
 func settleRestoredTrashTombstone(spec trashKindSpec, entryID uint, mode string, fileMoved bool, originalPath, currentPath, trashPath string) error {
 	checked := make(map[string]struct{}, 3)
-	for _, path := range []string{trashPath, currentPath, originalPath} {
+	unavailable := func(path string) error {
 		path = strings.TrimSpace(path)
 		if path == "" {
-			continue
+			return nil
 		}
 		if _, done := checked[path]; done {
-			continue
+			return nil
 		}
 		checked[path] = struct{}{}
-		if err := mediaPathUnavailable(path); err != nil {
+		return mediaPathUnavailable(path)
+	}
+	for _, path := range []string{currentPath, originalPath} {
+		if err := unavailable(path); err != nil {
 			return err
 		}
+	}
+	if err := unavailable(trashPath); err != nil {
+		return tombstoneTrashLocationError(err)
 	}
 	if err := removeLegacyTrashLinkAfterRestore(mode, fileMoved, currentPath, trashPath); err != nil {
 		return fmt.Errorf("%w: %w", errTrashRestoreResidueRemains, pathlessError(err))

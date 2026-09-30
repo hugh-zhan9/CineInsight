@@ -72,8 +72,10 @@ func (s *VideoService) addScannedVideo(path string) (*models.Video, bool, error)
 	return s.addVideoOrRestorePutBack(path)
 }
 
-// errScannerRestoreFileMismatch：原路径上的文件与扫描器软删的记录对不上（大小不同），不恢复。文案不含路径（G-3）。
-var errScannerRestoreFileMismatch = errors.New("原路径上的文件与缺失前的记录不一致，未恢复")
+// errScannerRestoreFileMismatch：原路径上的文件与扫描器软删的记录对不上（大小不同），不恢复。文案不含路径（G-3），
+// 并告诉用户怎么处理：这种行没有回收站条目（修复 N I-1），回收站里没有出口；是新文件时改名后重新扫描即按新文件收录
+// （修复 P m-1，主代理裁决：不做回收站出口，只改文案）。
+var errScannerRestoreFileMismatch = errors.New("原路径上的文件与缺失前的记录不一致，未自动恢复；如果这是一个新文件，请把它改名后重新扫描")
 
 // restoreScannerDeletedVideoWithoutEntry 恢复一条扫描器因文件缺失软删、却没有 missing 条目的视频（修复 N I-1）。
 // 这种行只来自「恢复后残留」的墓碑：墓碑挂在活跃记录上时扫描器照常软删、不建 missing 条目（video_id 唯一；墓碑保留，

@@ -652,9 +652,21 @@ func (s *VideoService) deleteVideoRecordBatch(id uint, deleteFile bool, deletedB
 				// 扫描器因文件缺失软删一条挂着「恢复后残留」墓碑的记录（修复 N I-1，主代理裁决）：不做残留收尾，照常软删
 				// （deleted_by='scanner'），墓碑保留、继续登记旧版 trash/ 目录。video_id 唯一，建不进 missing 条目；
 				// 文件回到原处时由 addScannedVideo 恢复原记录（restoreScannerDeletedVideoWithoutEntry）。
-				return TrashResultOK, database.Transaction(func(tx *gorm.DB) error {
-					return finalizeVideoDeletionTx(tx, &video, deletedBy)
-				})
+				// 软删实际写入 0 行（读取之后记录已被别处软删或硬删，修复 P m-4）：这次什么也没删，回滚并返回与
+				// 「记录已不在库」相同的结果，扫描不计入 Deleted。
+				if err := database.Transaction(func(tx *gorm.DB) error {
+					rows, err := finalizeVideoDeletionRowsTx(tx, &video, deletedBy)
+					if err != nil {
+						return err
+					}
+					if rows == 0 {
+						return gorm.ErrRecordNotFound
+					}
+					return nil
+				}); err != nil {
+					return "", err
+				}
+				return TrashResultOK, nil
 			}
 			// 上次恢复成功、旧版 trash/ 里的残留名字没清掉时留下的墓碑（修复 L m5）：先补做清理、删掉墓碑，再照常删除；
 			// 清不掉就不删（墓碑要继续登记那个目录，而 video_id 唯一，新条目建不进去）。残留判定用记录的当前路径（修复 N m1）。
@@ -866,16 +878,24 @@ func (s *VideoService) deleteVideoToSystemTrash(video *models.Video, entry *mode
 }
 
 func finalizeVideoDeletionTx(tx *gorm.DB, video *models.Video, deletedBy string) error {
+	_, err := finalizeVideoDeletionRowsTx(tx, video, deletedBy)
+	return err
+}
+
+// finalizeVideoDeletionRowsTx 是 finalizeVideoDeletionTx 的本体，另返回软删实际写入的行数（修复 P m-4）：软删带
+// deleted_at IS NULL 条件，记录在读取之后已被别处软删（或硬删）时为 0，调用方据此不把这次算作删除。
+func finalizeVideoDeletionRowsTx(tx *gorm.DB, video *models.Video, deletedBy string) (int64, error) {
 	if err := tx.Model(video).Update("deleted_by", deletedBy).Error; err != nil {
-		return err
+		return 0, err
 	}
 	if err := tx.Where("video_id = ?", video.ID).Delete(&models.SubtitleSegment{}).Error; err != nil {
-		return err
+		return 0, err
 	}
 	if err := tx.Where("video_id = ?", video.ID).Delete(&models.SubtitleIndexState{}).Error; err != nil {
-		return err
+		return 0, err
 	}
-	return tx.Delete(video).Error
+	result := tx.Delete(video)
+	return result.RowsAffected, result.Error
 }
 
 func movePendingTrashEntryFile(entry *models.VideoTrashEntry, trashService *TrashService) error {
