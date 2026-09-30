@@ -777,19 +777,34 @@ func loadActiveImageNearDuplicateDismissals(current map[uint]string) (map[[2]uin
 
 // DismissImageNearDuplicateGroup 把一组图片的全部两两配对持久化为忽略（低/高 ID 排序，
 // 幂等），后续清理分析不再把它们报为近似重复。每条忽略记下双方此刻的 size:mtimeNS，
-// 任一侧文件变了这条忽略随之失效（D-PC31）；重复忽略会刷新指纹。
+// 任一侧文件变了这条忽略随之失效（D-PC31）；重复忽略会刷新指纹。组里已软删的成员（例如已移到废纸篓）
+// 不让整组失败：只写至少一侧仍在库的配对，两侧都已软删的不写；记录已硬删的 ID 跳过。
 func DismissImageNearDuplicateGroup(imageIDs []uint) error {
 	ids := uniqueUintIDs(imageIDs)
+	if len(ids) < 2 {
+		return fmt.Errorf("忽略近似重复组至少需要两张不同的图片")
+	}
+	fingerprints, active, err := loadImageNearDuplicateFingerprints(ids, 0)
+	if err != nil {
+		return err
+	}
+	if len(active) == 0 {
+		return fmt.Errorf("这一组图片都已不在图片库中，无法忽略")
+	}
 	pairs := make([][2]uint, 0, len(ids)*(len(ids)-1)/2)
 	for i := 0; i < len(ids); i++ {
 		for j := i + 1; j < len(ids); j++ {
-			pairs = append(pairs, imageCleanupPairKey(ids[i], ids[j]))
+			_, leftExists := fingerprints[ids[i]]
+			_, rightExists := fingerprints[ids[j]]
+			if leftExists && rightExists && (active[ids[i]] || active[ids[j]]) {
+				pairs = append(pairs, imageCleanupPairKey(ids[i], ids[j]))
+			}
 		}
 	}
 	if len(pairs) == 0 {
-		return fmt.Errorf("忽略近似重复组至少需要两张不同的图片")
+		return fmt.Errorf("组里其他图片的记录都已不存在，无法记录忽略")
 	}
-	return dismissImageNearDuplicatePairs(ids, pairs)
+	return saveImageNearDuplicateDismissals(pairs, fingerprints)
 }
 
 // DismissImageNearDuplicateMember 把一张图移出近似重复组（D-PC31）：只否决它与组内其他成员的配对。
@@ -798,23 +813,58 @@ func DismissImageNearDuplicateMember(groupImageIDs []uint, memberID uint) error 
 	if memberID == 0 || !containsUintID(ids, memberID) {
 		return fmt.Errorf("要移出的图片不在这一组里")
 	}
+	if len(ids) < 2 {
+		return fmt.Errorf("移出成员时组内至少还要有另一张图片")
+	}
+	// 组里其他成员可能已移到废纸篓（软删）：照常记它与 memberID 这一对；记录已硬删的 ID 跳过。
+	fingerprints, _, err := loadImageNearDuplicateFingerprints(ids, memberID)
+	if err != nil {
+		return err
+	}
 	pairs := make([][2]uint, 0, len(ids)-1)
 	for _, other := range ids {
-		if other != memberID {
+		if _, exists := fingerprints[other]; exists && other != memberID {
 			pairs = append(pairs, imageCleanupPairKey(memberID, other))
 		}
 	}
 	if len(pairs) == 0 {
-		return fmt.Errorf("移出成员时组内至少还要有另一张图片")
+		return fmt.Errorf("组里其他图片的记录都已不存在，无法记录移出")
 	}
-	return dismissImageNearDuplicatePairs(ids, pairs)
+	return saveImageNearDuplicateDismissals(pairs, fingerprints)
 }
 
-func dismissImageNearDuplicatePairs(imageIDs []uint, pairs [][2]uint) error {
-	fingerprints, err := loadImageFileFingerprints(imageIDs)
-	if err != nil {
-		return err
+// loadImageNearDuplicateFingerprints 为「忽略整组 / 移出本组」读每张图此刻的 size:mtimeNS（D-PC31），
+// 按 Unscoped 读：在库成员文件读不到就报错（空指纹表示"永不失效"，不给在库成员）；已软删成员
+// （例如已移到废纸篓）文件还读得到就记真实指纹，读不到记空指纹。记录已硬删的 ID 不在结果里，由调用方跳过。
+// active 标出仍在库的成员；memberID 非 0 时它必须在库（移出本组）。
+func loadImageNearDuplicateFingerprints(imageIDs []uint, memberID uint) (map[uint]string, map[uint]bool, error) {
+	var images []models.Image
+	if err := database.DB.Unscoped().Select("images.id", "images.path", "images.deleted_at").
+		Where("images.id IN ?", imageIDs).Find(&images).Error; err != nil {
+		return nil, nil, err
 	}
+	active := make(map[uint]bool, len(images))
+	for _, image := range images {
+		if !image.DeletedAt.IsValid() {
+			active[image.ID] = true
+		}
+	}
+	if memberID != 0 && !active[memberID] {
+		return nil, nil, fmt.Errorf("要移出的这一份已不在图片库中，无法移出本组")
+	}
+	fingerprints := make(map[uint]string, len(images))
+	for _, image := range images {
+		fingerprint, err := statCleanupFileFingerprint(image.Path)
+		if err != nil && active[image.ID] {
+			return nil, nil, fmt.Errorf("图片 %d 的文件当前无法访问，无法记录忽略", image.ID)
+		}
+		fingerprints[image.ID] = fingerprint
+	}
+	return fingerprints, active, nil
+}
+
+// saveImageNearDuplicateDismissals 按给定指纹写入（或刷新）pairs 的忽略。
+func saveImageNearDuplicateDismissals(pairs [][2]uint, fingerprints map[uint]string) error {
 	dismissals := make([]models.ImageNearDuplicateDismissal, 0, len(pairs))
 	for _, pair := range pairs {
 		dismissals = append(dismissals, models.ImageNearDuplicateDismissal{
@@ -827,27 +877,6 @@ func dismissImageNearDuplicatePairs(imageIDs []uint, pairs [][2]uint) error {
 		Columns:   []clause.Column{{Name: "image_low_id"}, {Name: "image_high_id"}},
 		DoUpdates: clause.AssignmentColumns([]string{"fingerprint_a", "fingerprint_b"}),
 	}).Create(&dismissals).Error
-}
-
-// loadImageFileFingerprints 读出每张活跃图片此刻的 size:mtimeNS；图片不存在或文件读不到时报错：
-// 空指纹表示"永不失效"，只留给历史行。
-func loadImageFileFingerprints(imageIDs []uint) (map[uint]string, error) {
-	var images []models.Image
-	if err := database.DB.Select("id", "path").Where("id IN ?", imageIDs).Find(&images).Error; err != nil {
-		return nil, err
-	}
-	if len(images) != len(imageIDs) {
-		return nil, fmt.Errorf("部分图片不存在或已删除，无法记录忽略")
-	}
-	fingerprints := make(map[uint]string, len(images))
-	for _, image := range images {
-		fingerprint, err := statCleanupFileFingerprint(image.Path)
-		if err != nil {
-			return nil, fmt.Errorf("图片 %d 的文件当前无法访问，无法记录忽略", image.ID)
-		}
-		fingerprints[image.ID] = fingerprint
-	}
-	return fingerprints, nil
 }
 
 func imageCleanupPairKey(a, b uint) [2]uint {

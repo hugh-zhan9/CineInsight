@@ -218,19 +218,34 @@ func loadActiveNearDuplicateDismissals(current map[uint]string) (map[[2]uint]str
 
 // DismissNearDuplicateGroup 把一组视频的全部两两配对持久化为忽略，后续
 // 清理分析不再把它们报为近似重复。每条忽略记下双方此刻的 size:mtimeNS，
-// 任一侧文件变了这条忽略随之失效（D-PC31）。
+// 任一侧文件变了这条忽略随之失效（D-PC31）。组里已软删的成员（例如已移到废纸篓）不让整组失败：
+// 只写至少一侧仍在库的配对，两侧都已软删的不写；记录已硬删的 ID 跳过。
 func DismissNearDuplicateGroup(videoIDs []uint) error {
 	ids := uniqueUintIDs(videoIDs)
 	if len(ids) < 2 {
 		return fmt.Errorf("忽略近似重复组至少需要两个视频")
 	}
+	fingerprints, active, err := loadNearDuplicateFingerprints(ids, 0)
+	if err != nil {
+		return err
+	}
+	if len(active) == 0 {
+		return fmt.Errorf("这一组视频都已不在片库中，无法忽略")
+	}
 	pairs := make([][2]uint, 0, len(ids)*(len(ids)-1)/2)
 	for i := 0; i < len(ids); i++ {
 		for j := i + 1; j < len(ids); j++ {
-			pairs = append(pairs, cleanupVideoPairKey(ids[i], ids[j]))
+			_, leftExists := fingerprints[ids[i]]
+			_, rightExists := fingerprints[ids[j]]
+			if leftExists && rightExists && (active[ids[i]] || active[ids[j]]) {
+				pairs = append(pairs, cleanupVideoPairKey(ids[i], ids[j]))
+			}
 		}
 	}
-	return dismissNearDuplicatePairs(ids, pairs)
+	if len(pairs) == 0 {
+		return fmt.Errorf("组里其他视频的记录都已不存在，无法记录忽略")
+	}
+	return saveNearDuplicateDismissals(pairs, fingerprints)
 }
 
 // DismissNearDuplicateMember 把一个成员移出近似重复组（D-PC31）：只否决它与组内其他成员的配对，
@@ -240,24 +255,58 @@ func DismissNearDuplicateMember(groupVideoIDs []uint, memberID uint) error {
 	if memberID == 0 || !containsUintID(ids, memberID) {
 		return fmt.Errorf("要移出的视频不在这一组里")
 	}
+	if len(ids) < 2 {
+		return fmt.Errorf("移出成员时组内至少还要有另一个视频")
+	}
+	// 组里其他成员可能已移到废纸篓（软删）：照常记它与 memberID 这一对；记录已硬删的 ID 跳过。
+	fingerprints, _, err := loadNearDuplicateFingerprints(ids, memberID)
+	if err != nil {
+		return err
+	}
 	pairs := make([][2]uint, 0, len(ids)-1)
 	for _, other := range ids {
-		if other != memberID {
+		if _, exists := fingerprints[other]; exists && other != memberID {
 			pairs = append(pairs, cleanupVideoPairKey(memberID, other))
 		}
 	}
 	if len(pairs) == 0 {
-		return fmt.Errorf("移出成员时组内至少还要有另一个视频")
+		return fmt.Errorf("组里其他视频的记录都已不存在，无法记录移出")
 	}
-	return dismissNearDuplicatePairs(ids, pairs)
+	return saveNearDuplicateDismissals(pairs, fingerprints)
 }
 
-// dismissNearDuplicatePairs 写入（或刷新指纹）一批近似重复忽略，并否决这些对上待审的同源关系。
-func dismissNearDuplicatePairs(videoIDs []uint, pairs [][2]uint) error {
-	fingerprints, err := loadVideoFileFingerprints(videoIDs)
-	if err != nil {
-		return err
+// loadNearDuplicateFingerprints 为「忽略整组 / 移出本组」读指纹（D-PC31），按 Unscoped 读：
+// 在库成员与 loadVideoFileFingerprints 同规则（文件读不到就报错）；已软删成员（例如已移到废纸篓）
+// 文件还读得到就记真实指纹，读不到记空指纹。记录已硬删的 ID 不在结果里，由调用方跳过。
+// active 标出仍在库的成员；memberID 非 0 时它必须在库（移出本组）。
+func loadNearDuplicateFingerprints(videoIDs []uint, memberID uint) (map[uint]string, map[uint]bool, error) {
+	var videos []models.Video
+	if err := database.DB.Unscoped().Select("videos.id", "videos.path", "videos.deleted_at").
+		Where("videos.id IN ?", videoIDs).Find(&videos).Error; err != nil {
+		return nil, nil, err
 	}
+	active := make(map[uint]bool, len(videos))
+	for _, video := range videos {
+		if !video.DeletedAt.IsValid() {
+			active[video.ID] = true
+		}
+	}
+	if memberID != 0 && !active[memberID] {
+		return nil, nil, fmt.Errorf("要移出的这一份已不在片库中，无法移出本组")
+	}
+	fingerprints := make(map[uint]string, len(videos))
+	for _, video := range videos {
+		fingerprint, err := statCleanupFileFingerprint(video.Path)
+		if err != nil && active[video.ID] {
+			return nil, nil, fmt.Errorf("视频 %d 的文件当前无法访问，无法记录忽略", video.ID)
+		}
+		fingerprints[video.ID] = fingerprint
+	}
+	return fingerprints, active, nil
+}
+
+// saveNearDuplicateDismissals 按给定指纹写入（或刷新）pairs 的忽略，并在同一事务里否决这些对上待审的同源关系。
+func saveNearDuplicateDismissals(pairs [][2]uint, fingerprints map[uint]string) error {
 	dismissals := make([]models.NearDuplicateDismissal, 0, len(pairs))
 	for _, pair := range pairs {
 		dismissals = append(dismissals, models.NearDuplicateDismissal{
