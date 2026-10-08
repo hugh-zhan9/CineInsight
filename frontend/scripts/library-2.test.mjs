@@ -10,7 +10,8 @@ const saveViewDialog = readFileSync(new URL('../src/components/video-list/SaveVi
 
 assert.match(page, /SearchLibraryVideoPage/, 'main library should use the stable shared smart-view query');
 assert.match(page, /ListRecentlyPlayedWithFilter/, 'recently played should be filtered and paginated by the backend');
-assert.match(page, /this\.cursorLastPlayedAt,\s+this\.cursorRecentPlayedID,\s+this\.pageSize/, 'recently played should use a stable time-and-ID cursor');
+// 条数由调用方给：触底加载用 pageSize，同条件原地刷新按已加载深度分批取。
+assert.match(page, /this\.cursorLastPlayedAt,\s+this\.cursorRecentPlayedID,\s+limit/, 'recently played should use a stable time-and-ID cursor');
 assert.match(page, /GetLibrarySubtitleHits\(keyword, videos\.map\(video => video\.id\)\)/, 'subtitle snippets should enrich only the videos handed in, never the whole library');
 assert.match(page, /PickRandomVideos\(\{[\s\S]*?filter: this\.currentLibraryFilter\(\)/, 'random pick should reuse the same filter contract as random play');
 assert.match(page, /if \(this\.randomPick\.active\) return this\.refreshRandomPick\(\)/, 'reloads inside a random batch should refresh the fixed batch, not re-draw one');

@@ -298,6 +298,46 @@ export default {
       });
       this.syncWindow();
     },
+    // 父组件原地替换数据前调用：记下视口顶端压着的那一行，以及它的上沿离视口顶端多远。
+    captureScrollAnchor() {
+      if (!this.scrollOwnerEl || !this.$el) return null;
+      const ownerTop = this.scrollOwnerEl.getBoundingClientRect().top;
+      const rows = this.$el.querySelectorAll('[data-virtual-row-id]');
+      for (const row of rows) {
+        const rect = row.getBoundingClientRect();
+        if (rect.bottom > ownerTop) {
+          return { id: Number(row.getAttribute('data-virtual-row-id')), offset: rect.top - ownerTop };
+        }
+      }
+      return null;
+    },
+    // 替换数据并渲染后调用：把锚点行放回原来离视口顶端的距离。锚点行已经不在列表里
+    // （被删、移出当前视图）就不动，滚动位置维持浏览器保留下来的那个值。
+    restoreScrollAnchor(anchor) {
+      if (!anchor || !this.scrollOwnerEl || !this.$el) return;
+      if (this.virtualizationEnabled) {
+        // 虚拟化时 DOM 里的行还是按旧窗口摆的，位置不可信，按高度缓存算锚点行的新位置。
+        const index = this.items.findIndex(item => Number(item.id) === anchor.id);
+        if (index < 0) return;
+        this.scrollOwnerEl.scrollTop = this.rangeEngine.calculateAnchorScrollTop({
+          items: this.items,
+          listTop: this.getListTop(),
+          anchorIndex: index,
+          anchorOffsetWithin: -anchor.offset,
+          getItemHeight: (item) => this.getItemHeight(item)
+        });
+        this.syncWindow();
+        this.scheduleMeasure();
+        return;
+      }
+      const row = this.$el.querySelector(`[data-virtual-row-id="${anchor.id}"]`);
+      if (!row) return;
+      const ownerTop = this.scrollOwnerEl.getBoundingClientRect().top;
+      const drift = row.getBoundingClientRect().top - ownerTop - anchor.offset;
+      if (Math.abs(drift) > 1) {
+        this.scrollOwnerEl.scrollTop += drift;
+      }
+    },
     syncWindow(force = false) {
       if (!this.virtualizationEnabled || !this.scrollOwnerEl || this.scrollOwnerMissing) {
         this.startIndex = 0;

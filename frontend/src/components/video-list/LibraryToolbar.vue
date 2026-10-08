@@ -903,8 +903,9 @@ export default {
 .person-filter-label {
   display: flex;
   flex: 0 0 104px;
-  flex-direction: column;
-  gap: 2px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
   padding: 4px 0;
   color: var(--text-secondary);
   font-size: 12px;
@@ -942,11 +943,13 @@ export default {
 }
 .person-filter-option.active { background: var(--accent-soft); color: var(--accent-text); }
 .person-filter-options__empty { display: block; padding: 8px; color: var(--text-muted); font-size: 12px; }
+/* 名称与计数同一行，名称过长才折行：分类行在标签只有一行时不被计数撑高。 */
 .tag-category-label {
   display: flex;
   flex: 0 0 104px;
-  flex-direction: column;
-  gap: 2px;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
   padding: 4px 0;
   color: var(--text-secondary);
   font-size: 12px;

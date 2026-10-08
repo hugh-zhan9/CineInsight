@@ -197,7 +197,7 @@
         v-else-if="videos.length > 0"
         ref="virtualList"
         :items="videos"
-        :loading="loading"
+        :loading="loading || refreshingInPlace"
         :has-more="hasMore"
         :virtualization-enabled="homeListVirtualizationEnabled && viewMode === 'list'"
         :layout-mode="viewMode"
@@ -521,6 +521,19 @@ const LOCAL_METADATA_UPDATED_VIEW = 'local_metadata_updated';
 const WATCH_PROGRESS_ORIGINS = ['resume', 'start', 'jump'];
 // 自动对账会改变的行状态：这几个视图里改了这些状态就可能不再属于当前视图，要重载。
 const STATE_SENSITIVE_VIEWS = ['favorites', 'liked', 'continue_watching', 'unwatched', 'watched'];
+// 分页游标的全部字段及其初值：整表重载、原地刷新从头翻页、装入随机批次时都清成这一份。
+const EMPTY_PAGING_CURSOR = Object.freeze({
+  cursorScore: 0,
+  cursorSize: 0,
+  cursorID: 0,
+  cursorLastPlayedAt: '',
+  cursorRecentPlayedID: 0,
+  cursorProgressUpdatedAt: '',
+  cursorContinueID: 0,
+  libraryCursor: null
+});
+// 原地刷新每次请求的条数上限：后端分页接口超过 200 会退回默认值，语义检索封顶 100。
+const IN_PLACE_REFRESH_PAGE_LIMIT = 100;
 
 // 界面上只显示目录名，不显示绝对路径（G-3）。
 function pathBaseName(path) {
@@ -623,6 +636,11 @@ export default {
       pageSize: 20,
       loading: false,
       hasMore: true,
+      // 列表当前装的是哪一组查询条件（virtualListQueryKey）。重载时条件没变就原地刷新、停在原位，
+      // 条件变了才清空回顶；随机批次装进来时置空，退出批次一定回顶。
+      listQueryKey: '',
+      // 原地刷新期间列表照常显示，不出「加载中」；分页游标被刷新占用，触底加载要等它结束。
+      refreshingInPlace: false,
       rowMenu: { video: null, anchor: null, position: null },
       showScanDialog: false,
       // 增量扫描状态条自己持有真值；这里的镜像给「管理」菜单文案与 ⌘R 用。
@@ -680,6 +698,7 @@ export default {
   },
   mounted() {
     this.configureHomeListVirtualization();
+    this.listQueryKey = this.virtualListQueryKey;
     this.loadVideos();
     this.refreshLibraryCounts();
     this.loadSemanticStatus();
@@ -1810,12 +1829,10 @@ export default {
       });
     },
     async loadVideos() {
-      if (this.loading || !this.hasMore) return;
+      if (this.loading || this.refreshingInPlace || !this.hasMore) return;
       this.loading = true;
       try {
         const keyword = this.currentQueryKeyword();
-        let newVideos = [];
-        let semanticHasMore = null;
         this.debugLog('loadVideos begin', {
           keyword,
           searchMode: this.searchMode,
@@ -1827,54 +1844,8 @@ export default {
           existingVideos: this.videos.length
         });
 
-        if (this.searchMode === 'semantic') {
-          if (!keyword && !this.semanticSimilarVideoID) {
-            this.hasMore = false;
-            return;
-          }
-          this.semanticSearchError = '';
-          const request = {
-            filter: this.currentLibraryFilter(),
-            offset: this.videos.length,
-            limit: this.pageSize
-          };
-          const page = this.semanticSimilarVideoID
-            ? await FindSimilarVideos({ ...request, video_id: this.semanticSimilarVideoID })
-            : await SearchSemanticVideos({ ...request, query: keyword });
-          this.semanticCoverage = page?.coverage || null;
-          semanticHasMore = !!page?.has_more;
-          newVideos = (page?.hits || []).map(hit => ({ ...hit.video, _semanticScore: hit.score }));
-          this.libraryCursor = null;
-          await this.fillAutomaticOverrideKinds(newVideos);
-        } else if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
-          newVideos = await ListRecentlyPlayedWithFilter(
-            this.currentLibraryFilter(),
-            this.cursorLastPlayedAt,
-            this.cursorRecentPlayedID,
-            this.pageSize
-          );
-          await this.fillAutomaticOverrideKinds(newVideos);
-        } else if (this.isContinueWatchingKeyset()) {
-          // 「继续观看」按最近的观看进度倒序（D-PC42、PLAY-09）：键集游标原样回传上一页最后一行的
-          // watch_progress_updated_at 与 id；进度时间为空的老数据排在最后，游标时间传空串。
-          const page = await ListContinueWatchingWithFilter(
-            this.currentLibraryFilter(),
-            this.cursorProgressUpdatedAt,
-            this.cursorContinueID,
-            this.pageSize
-          );
-          newVideos = page?.videos || [];
-          this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
-        } else {
-          const request = { filter: this.currentLibraryFilter(), limit: this.pageSize };
-          if (this.libraryCursor) request.cursor = this.libraryCursor;
-          const page = await SearchLibraryVideoPage(request);
-          newVideos = page?.videos || [];
-          this.libraryCursor = page?.next_cursor || null;
-          this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
-        }
-
-        newVideos = await this.attachSubtitleHits(newVideos, keyword);
+        const page = await this.fetchNextVideoPage(this.pageSize, this.videos.length);
+        const newVideos = page.videos;
 
         this.debugLog('loadVideos query resolved', {
           count: newVideos.length,
@@ -1882,31 +1853,18 @@ export default {
           mode: this.smartView || keyword || this.hasStructuredFilters() ? 'filtered' : 'paginated'
         });
 
-        const recentKeyset = this.smartView === 'recently_played' && this.sortMode === 'balanced';
-        const arrayKeyset = recentKeyset || this.isContinueWatchingKeyset();
-        if (this.searchMode === 'semantic' ? !semanticHasMore : (arrayKeyset ? newVideos.length < this.pageSize : !this.libraryCursor)) {
+        if (!page.hasMore) {
           this.hasMore = false;
         }
         if (newVideos.length > 0) {
           this.videos.push(...newVideos);
-          const last = newVideos[newVideos.length - 1];
-          if (recentKeyset) {
-            this.cursorLastPlayedAt = last.last_played_at || '';
-            this.cursorRecentPlayedID = last.id;
-          } else if (this.isContinueWatchingKeyset()) {
-            this.cursorProgressUpdatedAt = last.watch_progress_updated_at || '';
-            this.cursorContinueID = last.id;
-          }
         }
         this.debugLog('loadVideos applied to state', {
           totalVideos: this.videos.length,
           hasMore: this.hasMore
         });
       } catch (err) {
-		if (this.searchMode === 'semantic') this.semanticSearchError = String(err);
-        this.debugLog('loadVideos failed', { err: String(err) }, true);
-        console.error('加载视频失败:', err);
-        notifyError('加载视频失败: ' + err);
+        this.reportVideoLoadFailure(err);
       } finally {
         this.loading = false;
         const idleResolvers = this.loadIdleResolvers.splice(0);
@@ -1917,6 +1875,129 @@ export default {
           loading: this.loading
         });
       }
+    },
+    // 从当前分页游标往后取一页并推进游标；取回的行要不要进列表、hasMore 怎么改由调用方决定。
+    // offset 只有语义检索用（按条数翻页），其余接口走键集游标。
+    async fetchNextVideoPage(limit, offset) {
+      const keyword = this.currentQueryKeyword();
+      let videos = [];
+      let semanticHasMore = null;
+
+      if (this.searchMode === 'semantic') {
+        if (!keyword && !this.semanticSimilarVideoID) {
+          return { videos, hasMore: false };
+        }
+        this.semanticSearchError = '';
+        const request = {
+          filter: this.currentLibraryFilter(),
+          offset,
+          limit
+        };
+        const page = this.semanticSimilarVideoID
+          ? await FindSimilarVideos({ ...request, video_id: this.semanticSimilarVideoID })
+          : await SearchSemanticVideos({ ...request, query: keyword });
+        this.semanticCoverage = page?.coverage || null;
+        semanticHasMore = !!page?.has_more;
+        videos = (page?.hits || []).map(hit => ({ ...hit.video, _semanticScore: hit.score }));
+        this.libraryCursor = null;
+        await this.fillAutomaticOverrideKinds(videos);
+      } else if (this.smartView === 'recently_played' && this.sortMode === 'balanced') {
+        videos = await ListRecentlyPlayedWithFilter(
+          this.currentLibraryFilter(),
+          this.cursorLastPlayedAt,
+          this.cursorRecentPlayedID,
+          limit
+        );
+        await this.fillAutomaticOverrideKinds(videos);
+      } else if (this.isContinueWatchingKeyset()) {
+        // 「继续观看」按最近的观看进度倒序（D-PC42、PLAY-09）：键集游标原样回传上一页最后一行的
+        // watch_progress_updated_at 与 id；进度时间为空的老数据排在最后，游标时间传空串。
+        const page = await ListContinueWatchingWithFilter(
+          this.currentLibraryFilter(),
+          this.cursorProgressUpdatedAt,
+          this.cursorContinueID,
+          limit
+        );
+        videos = page?.videos || [];
+        this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
+      } else {
+        const request = { filter: this.currentLibraryFilter(), limit };
+        if (this.libraryCursor) request.cursor = this.libraryCursor;
+        const page = await SearchLibraryVideoPage(request);
+        videos = page?.videos || [];
+        this.libraryCursor = page?.next_cursor || null;
+        this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
+      }
+
+      videos = await this.attachSubtitleHits(videos, keyword);
+
+      const recentKeyset = this.smartView === 'recently_played' && this.sortMode === 'balanced';
+      const arrayKeyset = recentKeyset || this.isContinueWatchingKeyset();
+      const hasMore = this.searchMode === 'semantic'
+        ? semanticHasMore
+        : (arrayKeyset ? videos.length >= limit : !!this.libraryCursor);
+      if (videos.length > 0) {
+        const last = videos[videos.length - 1];
+        if (recentKeyset) {
+          this.cursorLastPlayedAt = last.last_played_at || '';
+          this.cursorRecentPlayedID = last.id;
+        } else if (this.isContinueWatchingKeyset()) {
+          this.cursorProgressUpdatedAt = last.watch_progress_updated_at || '';
+          this.cursorContinueID = last.id;
+        }
+      }
+      return { videos, hasMore };
+    },
+    reportVideoLoadFailure(err) {
+      if (this.searchMode === 'semantic') this.semanticSearchError = String(err);
+      this.debugLog('loadVideos failed', { err: String(err) }, true);
+      console.error('加载视频失败:', err);
+      notifyError('加载视频失败: ' + err);
+    },
+    pagingCursor() {
+      return Object.fromEntries(Object.keys(EMPTY_PAGING_CURSOR).map(key => [key, this[key]]));
+    },
+    setPagingCursor(cursor) {
+      for (const key of Object.keys(EMPTY_PAGING_CURSOR)) this[key] = cursor[key];
+    },
+    // 同一组条件下的重载（后台对账、扫描汇总、行内操作之后）：列表不清空、不出「加载中」，
+    // 从头按当前已加载的条数重取一遍，取齐后整体替换，再把视口顶部那一行放回原位。
+    // 取的途中失败或条件变了，就留着旧列表、放回原游标，触底加载照旧往后翻。
+    async refreshVideosInPlace() {
+      const depth = this.videos.length;
+      const queryKey = this.virtualListQueryKey;
+      const previousCursor = this.pagingCursor();
+      const refreshed = [];
+      let hasMore = true;
+      this.refreshingInPlace = true;
+      this.setPagingCursor(EMPTY_PAGING_CURSOR);
+      try {
+        while (hasMore && refreshed.length < depth) {
+          const limit = Math.min(IN_PLACE_REFRESH_PAGE_LIMIT, depth - refreshed.length);
+          const page = await this.fetchNextVideoPage(limit, refreshed.length);
+          refreshed.push(...page.videos);
+          hasMore = page.hasMore;
+          if (page.videos.length === 0) break;
+        }
+      } catch (err) {
+        this.setPagingCursor(previousCursor);
+        this.reportVideoLoadFailure(err);
+        return;
+      } finally {
+        this.refreshingInPlace = false;
+      }
+      if (this.virtualListQueryKey !== queryKey) {
+        this.setPagingCursor(previousCursor);
+        return;
+      }
+      const anchor = this.$refs.virtualList?.captureScrollAnchor?.();
+      this.videos = refreshed;
+      this.hasMore = hasMore;
+      const keptIDs = new Set(refreshed.map(video => video.id));
+      this.selectedVideoIds = this.selectedVideoIds.filter(id => keptIDs.has(id));
+      this.debugLog('refreshVideosInPlace applied', { depth, totalVideos: refreshed.length, hasMore });
+      await this.$nextTick();
+      this.$refs.virtualList?.restoreScrollAnchor?.(anchor);
     },
     waitForLoadIdle() {
       if (!this.loading) return Promise.resolve();
@@ -1934,16 +2015,15 @@ export default {
         while (this.reloadRequested) {
           this.reloadRequested = false;
           await this.waitForLoadIdle();
+          const queryKey = this.virtualListQueryKey;
+          if (this.videos.length > 0 && queryKey === this.listQueryKey) {
+            await this.refreshVideosInPlace();
+            continue;
+          }
+          this.listQueryKey = queryKey;
           this.videos = [];
           this.selectedVideoIds = [];
-          this.cursorScore = 0;
-          this.cursorSize = 0;
-          this.cursorID = 0;
-          this.cursorLastPlayedAt = '';
-          this.cursorRecentPlayedID = 0;
-          this.cursorProgressUpdatedAt = '';
-          this.cursorContinueID = 0;
-          this.libraryCursor = null;
+          this.setPagingCursor(EMPTY_PAGING_CURSOR);
           this.automaticOverrideKinds = {};
           if (this.searchMode !== 'semantic') {
             this.semanticCoverage = null;
@@ -2439,16 +2519,10 @@ export default {
     },
     applyRandomPickVideos(videos) {
       this.videos = videos;
+      this.listQueryKey = '';
       this.selectedVideoIds = [];
       this.hasMore = false;
-      this.libraryCursor = null;
-      this.cursorScore = 0;
-      this.cursorSize = 0;
-      this.cursorID = 0;
-      this.cursorLastPlayedAt = '';
-      this.cursorRecentPlayedID = 0;
-      this.cursorProgressUpdatedAt = '';
-      this.cursorContinueID = 0;
+      this.setPagingCursor(EMPTY_PAGING_CURSOR);
     },
     // 随机批次是固定的一组 ID，刷新时按 ID 取最新记录，而不是重新抽一批。
     async refreshRandomPick() {

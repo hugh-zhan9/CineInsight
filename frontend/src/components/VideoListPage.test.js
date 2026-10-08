@@ -711,6 +711,129 @@ describe('IINA 进度同步不打乱列表', () => {
   });
 });
 
+// 回归：后台对账、扫描汇总、行内操作之后的重载曾经先清空列表再从第一页取，
+// 往下翻了几百条的用户会被弹回顶部，还看得到一闪的「加载中」。
+describe('同一条件下的重载原地刷新，不清空、不回顶', () => {
+  const rows = (from, count) => Array.from({ length: count }, (_, index) => ({ id: from + index, name: `v${from + index}.mp4`, tags: [] }));
+
+  async function mountWithTwoPages() {
+    api.SearchLibraryVideoPage
+      .mockResolvedValueOnce({ videos: rows(1, 20), next_cursor: 'c1' })
+      .mockResolvedValueOnce({ videos: rows(21, 20), next_cursor: 'c2' });
+    const wrapper = await mountPage();
+    await wrapper.vm.loadVideos();
+    expect(wrapper.vm.videos).toHaveLength(40);
+    expect(wrapper.vm.libraryCursor).toBe('c2');
+    api.SearchLibraryVideoPage.mockClear();
+    return wrapper;
+  }
+
+  it('取数期间旧列表原样留着，按已加载的条数从头重取，取齐后整体替换并留下仍在的选择', async () => {
+    const wrapper = await mountWithTwoPages();
+    wrapper.vm.selectedVideoIds = [5, 30];
+    let resolveRefresh;
+    api.SearchLibraryVideoPage.mockReturnValueOnce(new Promise(resolve => { resolveRefresh = resolve; }));
+
+    const pending = wrapper.vm.reloadCurrentView();
+    await flushPromises();
+    expect(wrapper.vm.videos).toHaveLength(40);
+    expect(wrapper.vm.loading).toBe(false);
+    expect(wrapper.vm.refreshingInPlace).toBe(true);
+    // 游标正被刷新占用，触底加载不能拿它往后翻
+    await wrapper.vm.loadVideos();
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(1);
+    const request = api.SearchLibraryVideoPage.mock.calls[0][0];
+    expect(request.limit).toBe(40);
+    expect(request).not.toHaveProperty('cursor');
+
+    // 第 30 条在后台被删掉了：第一批只回 39 条，再补 1 条把深度补齐
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: rows(41, 1), next_cursor: 'n2' });
+    resolveRefresh({ videos: [...rows(1, 29), ...rows(31, 10)], next_cursor: 'n1' });
+    await pending;
+
+    expect(api.SearchLibraryVideoPage.mock.calls[1][0]).toMatchObject({ limit: 1, cursor: 'n1' });
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([...rows(1, 29), ...rows(31, 11)].map(video => video.id));
+    expect(wrapper.vm.selectedVideoIds).toEqual([5]);
+    expect(wrapper.vm.libraryCursor).toBe('n2');
+    expect(wrapper.vm.hasMore).toBe(true);
+    expect(wrapper.vm.refreshingInPlace).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('已加载超过单次上限时分批重取，后一批接着前一批的游标', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = rows(1, 150);
+    wrapper.vm.libraryCursor = 'old';
+    api.SearchLibraryVideoPage.mockClear();
+    api.SearchLibraryVideoPage
+      .mockResolvedValueOnce({ videos: rows(1, 100), next_cursor: 'p1' })
+      .mockResolvedValueOnce({ videos: rows(101, 50), next_cursor: null });
+
+    await wrapper.vm.reloadCurrentView();
+
+    expect(api.SearchLibraryVideoPage.mock.calls.map(([request]) => [request.limit, request.cursor])).toEqual([[100, undefined], [50, 'p1']]);
+    expect(wrapper.vm.videos).toHaveLength(150);
+    expect(wrapper.vm.hasMore).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('重取失败：旧列表与游标原样保留并报错，触底加载照旧往后翻', async () => {
+    const wrapper = await mountWithTwoPages();
+    api.SearchLibraryVideoPage.mockRejectedValueOnce(new Error('数据库不可用'));
+
+    await wrapper.vm.reloadCurrentView();
+
+    expect(wrapper.vm.videos).toHaveLength(40);
+    expect(wrapper.vm.libraryCursor).toBe('c2');
+    expect(wrapper.vm.refreshingInPlace).toBe(false);
+    expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('加载视频失败'));
+    wrapper.unmount();
+  });
+
+  it('取数途中条件变了：这次结果作废，旧列表与游标留着等新条件的重载', async () => {
+    const wrapper = await mountWithTwoPages();
+    let resolveRefresh;
+    api.SearchLibraryVideoPage.mockReturnValueOnce(new Promise(resolve => { resolveRefresh = resolve; }));
+
+    const pending = wrapper.vm.reloadCurrentView();
+    await flushPromises();
+    wrapper.vm.searchKeyword = '雨夜';
+    resolveRefresh({ videos: rows(500, 40), next_cursor: 'stale' });
+    await pending;
+
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual(rows(1, 40).map(video => video.id));
+    expect(wrapper.vm.libraryCursor).toBe('c2');
+    wrapper.unmount();
+  });
+
+  it('筛选条件变了仍然清空重来，从第一页取', async () => {
+    const wrapper = await mountWithTwoPages();
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: rows(100, 3), next_cursor: null });
+
+    wrapper.vm.toggleTagFilter(7);
+    await flushPromises();
+
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(1);
+    expect(api.SearchLibraryVideoPage.mock.calls[0][0].limit).toBe(20);
+    expect(wrapper.vm.videos.map(video => video.id)).toEqual([100, 101, 102]);
+    wrapper.unmount();
+  });
+
+  it('退出随机批次回到普通列表时从第一页取，而不是按批次条数原地刷新', async () => {
+    const wrapper = await mountWithTwoPages();
+    api.PickRandomVideos.mockResolvedValueOnce({ videos: rows(900, 2), selection_reason: '' });
+    await wrapper.vm.enterRandomPick();
+    api.SearchLibraryVideoPage.mockResolvedValueOnce({ videos: rows(1, 20), next_cursor: 'c1' });
+
+    await wrapper.vm.exitRandomPick();
+
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(1);
+    expect(api.SearchLibraryVideoPage.mock.calls[0][0].limit).toBe(20);
+    expect(wrapper.vm.videos).toHaveLength(20);
+    wrapper.unmount();
+  });
+});
+
 describe('命令面板接线', () => {
   it('挂载注册本页动作，卸载即注销', async () => {
     const wrapper = await mountPage();
