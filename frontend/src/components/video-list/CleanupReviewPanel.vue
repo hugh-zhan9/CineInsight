@@ -314,7 +314,6 @@
                           @change="toggleCleanupSelection(member.id)"
                         />
                         <CleanupThumbnail :video="member" @preview="previewCleanupVideo" />
-                        <strong v-if="isEntryKeeper(entry, member)" class="cleanup-keeper-label" data-test="cleanup-keeper-label">{{ member.id === entryGroup(entry)?.keeperId ? '建议保留：' : '保留：' }}</strong>
                         <span class="cleanup-item-text">
                           <span class="cleanup-item-main">{{ cleanupItemSummary(member) }}</span>
                           <span v-if="member.path" class="cleanup-item-path" :title="member.path">{{ member.path }}</span>
@@ -326,6 +325,7 @@
                         </span>
                         <span class="cleanup-item-actions">
                           <button type="button" class="btn-secondary btn-compact" @click="previewCleanupVideo(member)">预览</button>
+                          <strong v-if="isEntryKeeper(entry, member)" class="cleanup-keeper-label" data-test="cleanup-keeper-label">{{ member.id === entryGroup(entry)?.keeperId ? '建议保留' : '保留' }}</strong>
                           <button
                             v-if="!isEntryKeeper(entry, member) && !isCleanupTrashed(member)"
                             type="button"
@@ -1646,6 +1646,7 @@ export default {
 
 .cleanup-filter-bar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   flex: none;
@@ -1655,8 +1656,12 @@ export default {
 }
 
 .cleanup-chip {
-  height: 26px;
-  padding: 0 10px;
+  min-height: 26px;
+  height: auto;
+  padding: 3px 10px;
+  flex: none;
+  white-space: nowrap;
+  line-height: 18px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1670,6 +1675,8 @@ export default {
 
 .cleanup-chip.active { border-color: var(--accent-border); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .cleanup-chip__count { font-family: var(--font-mono); }
+
+.cleanup-filter-bar > .btn-compact { flex: none; white-space: nowrap; }
 
 .cleanup-split { display: grid; grid-template-columns: 268px minmax(0, 1fr); min-height: 0; height: 100%; }
 
@@ -1937,7 +1944,7 @@ export default {
 .cleanup-card-reason { color: var(--review-text-secondary); font-size: 12.5px; }
 .cleanup-member-list { list-style: none; padding: 0; }
 .cleanup-select-row--keeper { border-top: 0; }
-.cleanup-keeper-label { flex: none; font-size: 12.5px; }
+.cleanup-keeper-label { display: inline-flex; align-items: center; justify-content: center; flex: none; min-width: 68px; padding: 0 10px; font-size: 12px; color: var(--accent-text); white-space: nowrap; }
 .cleanup-item-locked { color: var(--warning-text); font-size: 11px; }
 .cleanup-card-exhausted { margin: 0 0 4px; color: var(--warning-text); font-size: 12px; }
 /* 整理成果标记（D-PC48）：保留建议优先留整理成果多的那份。 */
@@ -1972,4 +1979,3 @@ export default {
   border: 1px solid currentColor;
 }
 </style>
-

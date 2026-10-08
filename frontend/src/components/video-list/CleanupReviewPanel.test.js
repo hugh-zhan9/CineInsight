@@ -633,7 +633,7 @@ describe('IMG-03 保留建议与合并元数据', () => {
     const { wrapper } = await openWith(exactAnalysis());
     const rows = wrapper.findAll('[data-test="cleanup-member-row"]');
     expect(rows).toHaveLength(2);
-    expect(rows[0].get('[data-test="cleanup-keeper-label"]').text()).toBe('建议保留：');
+    expect(rows[0].get('[data-test="cleanup-keeper-label"]').text()).toBe('建议保留');
     expect(rows[0].get('[data-test="cleanup-curation"]').text()).toContain('★ 收藏');
     expect(rows[0].get('[data-test="cleanup-curation"]').text()).toContain('人物');
     expect(rows[0].get('[data-test="cleanup-curation"]').text()).toContain('字幕');
@@ -845,7 +845,7 @@ describe('IMG-05 统一的勾选与锁定规则', () => {
     expect(checkbox(0).disabled).toBe(false);
     expect(checkbox(0).checked).toBe(false);
     expect(checkbox(1).disabled).toBe(true);
-    expect(wrapper.findAll('[data-test="cleanup-member-row"]')[1].get('[data-test="cleanup-keeper-label"]').text()).toBe('保留：');
+    expect(wrapper.findAll('[data-test="cleanup-member-row"]')[1].get('[data-test="cleanup-keeper-label"]').text()).toBe('保留');
     wrapper.unmount();
   });
 
@@ -1569,7 +1569,7 @@ describe('D-PC49「移出本组」后的接替保留项（P-032 复审 I-a）', 
     expect(wrapper.vm.isCleanupLocked(3)).toBe(true);
     expect(wrapper.find('[data-test="cleanup-group-exhausted"]').exists()).toBe(false);
     const labels = wrapper.findAll('[data-test="cleanup-keeper-label"]');
-    expect(labels.map(node => node.text())).toEqual(['建议保留：']);
+    expect(labels.map(node => node.text())).toEqual(['建议保留']);
     expect(labels[0].element.closest('[data-test="cleanup-member-row"]').textContent).toContain('v3.mp4');
 
     api.MergeMediaMetadata.mockClear();
