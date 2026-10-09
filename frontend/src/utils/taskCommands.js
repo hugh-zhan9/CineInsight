@@ -5,7 +5,7 @@
 // 放在这里而不是面板里：面板只渲染注册表，任务与绑定的对应关系是业务知识。
 
 import {
-  CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelFaceAnalysis, CancelImageAITagging,
+  CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelFaceAnalysis, CancelImageAITagging,
   CancelImageCleanupAnalysis, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
   CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelMovieChartRefresh,
   CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
@@ -49,6 +49,7 @@ const TASK_BINDINGS = {
   exif: { start: () => StartImageEXIFBackfill(), cancel: () => CancelImageEXIFBackfill() },
   image_phash: { start: () => StartImagePerceptualHashBackfill(), cancel: () => CancelImagePerceptualHashBackfill() },
   cleanup: { start: () => StartCleanupAnalysisFromSettings(), cancel: () => CancelCleanupAnalysis() },
+  cleanup_consolidation: { cancel: () => CancelCleanupConsolidation() },
   image_cleanup: { start: () => StartImageCleanupAnalysis(), cancel: () => CancelImageCleanupAnalysis() },
   collection_suggest: { start: () => StartCollectionSuggestionAnalysis(), cancel: () => CancelCollectionSuggestionAnalysis() },
   backup: { start: () => CreateDatabaseBackup() },

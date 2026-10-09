@@ -21,9 +21,9 @@ function backendTaskKeyOrder() {
 }
 
 describe('后台任务标签与后端登记表对齐（APP-03）', () => {
-  it('APP-03 登记表的 21 个 key 在前端都有中文标签，顺序与任务中心面板一致', () => {
+  it('APP-03 登记表的 22 个 key 在前端都有中文标签，顺序与任务中心面板一致', () => {
     const keys = backendTaskKeyOrder();
-    expect(keys).toHaveLength(21);
+    expect(keys).toHaveLength(22);
     expect(Object.keys(BACKGROUND_TASK_LABELS)).toEqual(keys);
     for (const key of keys) {
       const label = BACKGROUND_TASK_LABELS[key];

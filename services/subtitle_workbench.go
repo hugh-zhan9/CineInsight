@@ -154,6 +154,9 @@ func (s *SubtitleWorkbenchService) writer() *SubtitleFileWriter {
 		dataDir = s.subtitleService.BaseDir
 	}
 	writer := NewSubtitleFileWriter(dataDir)
+	if s.subtitleService != nil {
+		writer = NewLibrarySubtitleFileWriter(dataDir)
+	}
 	if s.replaceFile != nil {
 		writer.replaceFile = s.replaceFile
 	}

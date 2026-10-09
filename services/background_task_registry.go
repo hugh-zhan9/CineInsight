@@ -9,21 +9,22 @@ import (
 type BackgroundTaskKey string
 
 const (
-	BackgroundTaskSubtitle            BackgroundTaskKey = "subtitle"
-	BackgroundTaskEnhancement         BackgroundTaskKey = "enhancement"
-	BackgroundTaskProxy               BackgroundTaskKey = "proxy"
-	BackgroundTaskFace                BackgroundTaskKey = "face"
-	BackgroundTaskFrameHash           BackgroundTaskKey = "frame_hash"
-	BackgroundTaskPerceptualHash      BackgroundTaskKey = "phash"
-	BackgroundTaskTechnical           BackgroundTaskKey = "technical"
-	BackgroundTaskLocalMetadata       BackgroundTaskKey = "local_metadata"
-	BackgroundTaskSemantic            BackgroundTaskKey = "semantic"
-	BackgroundTaskImageSemantic       BackgroundTaskKey = "image_semantic"
-	BackgroundTaskAITagging           BackgroundTaskKey = "ai_tagging"
-	BackgroundTaskImageAITagging      BackgroundTaskKey = "image_ai_tagging"
-	BackgroundTaskEXIF                BackgroundTaskKey = "exif"
-	BackgroundTaskImagePerceptualHash BackgroundTaskKey = "image_phash"
-	BackgroundTaskCleanup             BackgroundTaskKey = "cleanup"
+	BackgroundTaskSubtitle             BackgroundTaskKey = "subtitle"
+	BackgroundTaskEnhancement          BackgroundTaskKey = "enhancement"
+	BackgroundTaskProxy                BackgroundTaskKey = "proxy"
+	BackgroundTaskFace                 BackgroundTaskKey = "face"
+	BackgroundTaskFrameHash            BackgroundTaskKey = "frame_hash"
+	BackgroundTaskPerceptualHash       BackgroundTaskKey = "phash"
+	BackgroundTaskTechnical            BackgroundTaskKey = "technical"
+	BackgroundTaskLocalMetadata        BackgroundTaskKey = "local_metadata"
+	BackgroundTaskSemantic             BackgroundTaskKey = "semantic"
+	BackgroundTaskImageSemantic        BackgroundTaskKey = "image_semantic"
+	BackgroundTaskAITagging            BackgroundTaskKey = "ai_tagging"
+	BackgroundTaskImageAITagging       BackgroundTaskKey = "image_ai_tagging"
+	BackgroundTaskEXIF                 BackgroundTaskKey = "exif"
+	BackgroundTaskImagePerceptualHash  BackgroundTaskKey = "image_phash"
+	BackgroundTaskCleanup              BackgroundTaskKey = "cleanup"
+	BackgroundTaskCleanupConsolidation BackgroundTaskKey = "cleanup_consolidation"
 	// BackgroundTaskImageCleanup 是图片清理分析（D-PC18）。排在 cleanup 之后，
 	// 与视频侧清理分析并列出现在任务中心。
 	BackgroundTaskImageCleanup      BackgroundTaskKey = "image_cleanup"
@@ -59,6 +60,7 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskImagePerceptualHash,
 	BackgroundTaskCleanup,
 	BackgroundTaskImageCleanup,
+	BackgroundTaskCleanupConsolidation,
 	BackgroundTaskCollectionSuggest,
 	BackgroundTaskBackup,
 	BackgroundTaskBrowserDownload,

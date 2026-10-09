@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -53,12 +55,12 @@ func taskCenterItemByKey(t *testing.T, snapshot TaskCenterSnapshot, key string) 
 	return TaskCenterItem{}
 }
 
-// APP-03：适配表必须恰好覆盖登记表的 21 个 key。登记表新增一个 key 而适配表没跟上、
+// APP-03：适配表必须恰好覆盖登记表的 22 个 key。登记表新增一个 key 而适配表没跟上、
 // 或适配表里留着登记表已删掉的 key，这个用例都会失败；快照的 Items 也按登记表顺序全部列出。
 func TestAPP03TaskCenterAdaptersCoverEveryRegistryKey(t *testing.T) {
 	keys := services.BackgroundTaskKeys()
-	if len(keys) != 21 {
-		t.Fatalf("登记表应有 21 个 key（详细设计 §1.2a），实际 %d: %v", len(keys), keys)
+	if len(keys) != 22 {
+		t.Fatalf("登记表应有 22 个 key（详细设计 §1.2a），实际 %d: %v", len(keys), keys)
 	}
 	registered := map[string]bool{}
 	for _, key := range keys {
@@ -359,5 +361,77 @@ func waitTaskCenterEvents(t *testing.T, events func() []recordedEvent, want int)
 			t.Fatalf("应收到 %d 次 task-center-changed，实际 %d", want, len(events()))
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestAppConsolidationTaskCenterUsesSummariesAndPersistentOpenActions(t *testing.T) {
+	setupAppTestDB(t)
+	a := newAppConsolidationFixture(t, t.TempDir())
+	finished := time.Now()
+	for i, status := range []string{"completed", "failed", "cancelled", "interrupted", "running"} {
+		row := models.CleanupConsolidationTask{PreviewID: status, OwnerScope: "foreign", Status: status, Total: 3, Completed: i % 3, Error: "detail", FinishedAt: &finished}
+		if status == "running" {
+			row.FinishedAt = nil
+		}
+		if err := database.DB.Create(&row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Header-only history must remain available when detail records are missing/corrupt.
+	callback := "test:no_consolidation_detail_poll"
+	if err := database.DB.Callback().Query().Before("gorm:query").Register(callback, func(tx *gorm.DB) {
+		if tx.Statement.Table == "cleanup_consolidation_task_plans" || tx.Statement.Table == "cleanup_consolidation_task_items" {
+			t.Error("task center decoded full consolidation details")
+		}
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.DB.Callback().Query().Remove(callback) })
+	snapshot := a.GetTaskCenterSnapshot()
+	if len(snapshot.Warnings) != 0 {
+		t.Fatal(snapshot.Warnings)
+	}
+	item := taskCenterItemByKey(t, snapshot, "cleanup_consolidation")
+	if item.State != TaskCenterStateRunning || len(item.Actions) != 0 || item.Progress == nil || item.Progress.Done != 1 || item.Progress.Total != 3 {
+		t.Fatalf("foreign running item: %+v", item)
+	}
+	if item.LastRun == nil || item.LastRun.Succeeded != 0 {
+		t.Fatalf("previous outcome: %+v", item.LastRun)
+	}
+	var jobs []TaskRecentJob
+	for _, job := range snapshot.Recent {
+		if job.Kind == TaskRecentKindCleanupConsolidation {
+			jobs = append(jobs, job)
+		}
+	}
+	if len(jobs) != 5 {
+		t.Fatalf("history: %+v", jobs)
+	}
+	for i, job := range jobs {
+		if job.ID != strconv.Itoa(5-i) || !reflect.DeepEqual(job.Actions, []string{"open_consolidation"}) {
+			t.Fatalf("persistent route/action: %+v", job)
+		}
+	}
+	a.backgroundTasks.Begin(services.BackgroundTaskCleanupConsolidation)
+	local := taskCenterItemByKey(t, a.GetTaskCenterSnapshot(), "cleanup_consolidation")
+	a.backgroundTasks.End(services.BackgroundTaskCleanupConsolidation)
+	if !reflect.DeepEqual(local.Actions, []string{TaskCenterActionCancel}) {
+		t.Fatalf("local cancellation: %+v", local)
+	}
+	if err := database.DB.Model(&models.CleanupConsolidationTask{}).Where("status = ?", "running").Update("status", "completed").Error; err != nil {
+		t.Fatal(err)
+	}
+	idle := taskCenterItemByKey(t, a.GetTaskCenterSnapshot(), "cleanup_consolidation")
+	if idle.State != TaskCenterStateIdle || len(idle.Actions) != 0 {
+		t.Fatalf("no preview bypass start: %+v", idle)
+	}
+}
+
+func TestAppConsolidationTaskCenterWarningsAreBounded(t *testing.T) {
+	a := &App{}
+	a.consolidationLifecycle.recoveryErr = errors.New(strings.Repeat("失", 1000))
+	warning := a.cleanupConsolidationWarning()
+	if warning == "" || len([]rune(warning)) > taskCenterFailureMaxRunes+1 {
+		t.Fatalf("unbounded warning: %d", len([]rune(warning)))
 	}
 }

@@ -373,3 +373,26 @@ func TestAPP02AppBundlePathRecognizesOnlyMacOSBundleLayout(t *testing.T) {
 		}
 	}
 }
+
+func TestAppConsolidationQuitGuardUsesLocalRegistryWithoutDatabase(t *testing.T) {
+	resetQuitGuardForTest(t)
+	previous := database.DB
+	database.DB = nil
+	t.Cleanup(func() { database.DB = previous })
+	a := &App{backgroundTasks: services.NewBackgroundTaskRegistry()}
+	if a.beforeClose(nil) {
+		t.Fatal("no local task must not block quit")
+	}
+	a.backgroundTasks.Begin(services.BackgroundTaskCleanupConsolidation)
+	if !a.beforeClose(nil) {
+		t.Fatal("migration or recovery must block unconfirmed quit")
+	}
+	tasks := a.quitBlockingTasks()
+	if len(tasks) != 1 || tasks[0].Key != "cleanup_consolidation" || tasks[0].Running != 1 {
+		t.Fatalf("quit tasks: %+v", tasks)
+	}
+	a.backgroundTasks.End(services.BackgroundTaskCleanupConsolidation)
+	if a.beforeClose(nil) {
+		t.Fatal("finished task still blocks quit")
+	}
+}

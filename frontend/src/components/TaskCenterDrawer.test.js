@@ -16,7 +16,7 @@ import { feedbackState, resetFeedback, resolveConfirm } from '../utils/feedback.
 
 const KEYS = Object.keys(BACKGROUND_TASK_LABELS);
 
-// 21 个 key 的快照：默认空闲，按用例覆盖其中几项。
+// 22 个 key 的快照：默认空闲，按用例覆盖其中几项。
 function snapshot({ overrides = {}, recent = [], warnings = [] } = {}) {
   return {
     items: KEYS.map(key => ({
@@ -51,7 +51,7 @@ afterEach(() => {
 });
 
 describe('任务中心快照展示（APP-03）', () => {
-  it('APP-03 21 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
+  it('APP-03 22 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
     api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({
       overrides: {
         phash: { state: 'running', progress: { done: 3, total: 10 }, actions: ['cancel'] },
@@ -61,10 +61,10 @@ describe('任务中心快照展示（APP-03）', () => {
     const wrapper = mountDrawer();
     await flushPromises();
 
-    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(21);
+    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(22);
     expect(wrapper.get('[data-test="task-center-section-running"]').text()).toContain('近重复指纹');
     expect(wrapper.get('[data-test="task-center-section-waiting_idle"]').text()).toContain('图片 EXIF');
-    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(19);
+    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(20);
     const names = wrapper.findAll('.task-item .task-item__name').map(name => name.text());
     expect(names).toEqual(expect.arrayContaining(Object.values(BACKGROUND_TASK_LABELS)));
     for (const key of ['image_cleanup', 'watchlist_enrich', 'movie_chart', 'browser_download']) {
@@ -309,5 +309,15 @@ describe('最近任务四类（APP-03）', () => {
     await flushPromises();
 
     expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(9);
+  });
+});
+
+describe('集中整理任务历史入口', () => {
+  it('当前、完成及失败任务都按持久ID打开，不触发启动或清理', async () => {
+    api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({ recent: ['running', 'completed', 'failed'].map((status, index) => ({ kind: 'cleanup_consolidation', id: String(index + 10), status, title: '集中整理', actions: ['open_consolidation'] })) }));
+    const wrapper = mountDrawer(); await flushPromises();
+    expect(wrapper.text()).toContain('集中整理');
+    await wrapper.get('[data-test="task-recent-action-cleanup_consolidation-11-open_consolidation"]').trigger('click');
+    expect(wrapper.emitted('open-consolidation')).toEqual([[11]]); expect(wrapper.emitted('close')).toHaveLength(1); wrapper.unmount();
   });
 });

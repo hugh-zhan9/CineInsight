@@ -393,6 +393,7 @@
       @start-perceptual-hash="startPerceptualHashBackfill"
       @start-frame-hash="startFrameHashBackfill"
       @trash-settled="handleCleanupTrashSettled"
+      @consolidation-moved="handleConsolidationMoved"
     />
 
     <SubtitlePreviewModal
@@ -562,12 +563,14 @@ export default {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
-    pageActive: { type: Boolean, default: true }
+    pageActive: { type: Boolean, default: true },
+    consolidationRoute: { type: Object, default: null }
   },
-  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted'],
+  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'consolidation-opened'],
   data() {
     return {
       videos: [],
+      consolidationRefreshVersions: new Map(),
       viewMode: window.localStorage?.getItem('cineinsight-library-layout') === 'grid' ? 'grid' : 'list',
       rowDensity: window.localStorage?.getItem('cineinsight-library-density') === 'comfortable' ? 'comfortable' : 'compact',
       searchKeyword: '',
@@ -784,6 +787,7 @@ export default {
       // 后台字幕索引同步完成（D-PC23）：更新「上次同步时间」，正停在依赖索引的视图上就刷新一次。
       this.registerRuntimeEvent('subtitle-index-synced', (status) => this.handleSubtitleIndexSynced(status));
       // 播放失败后的后台重定位找到了新位置（D-PC11）：就地恢复那一行。
+      this.registerRuntimeEvent('cleanup-consolidation-progress', summary => this.handleConsolidationMoved(summary));
       this.registerRuntimeEvent('video-relocated', (event) => this.handleVideoRelocated(event));
       this.registerRuntimeEvent('video-enhancement-capability', (capability) => {
         this.enhanceCapability = capability || null;
@@ -792,6 +796,16 @@ export default {
     }
   },
   watch: {
+    consolidationRoute: {
+      immediate: true,
+      async handler(route) {
+        if (!route?.taskID) return;
+        await this.$nextTick();
+        if (this.consolidationRoute !== route) return;
+        const opened = await this.$refs.cleanupPanel?.openConsolidation(route.taskID);
+        if (opened !== false && this.consolidationRoute === route) this.$emit('consolidation-opened');
+      }
+    },
     // .main-view 是各页共用的滚动容器：切走时别的页面会改掉 scrollTop，
     // 所以离开前记下位置，切回来再放回去。
     pageActive(active) {
@@ -1261,6 +1275,16 @@ export default {
     },
     openEnhanceDialog(video) {
       this.$refs.enhanceDialog?.open(video);
+    },
+    async handleConsolidationMoved(summary) {
+      if (!summary?.id || summary.status === 'running' || !summary.status || !(summary.completed > 0)) return;
+      if (Number(summary.version) <= (this.consolidationRefreshVersions.get(summary.id) || 0)) return;
+      this.consolidationRefreshVersions.set(summary.id, Number(summary.version));
+      // 有界去重；终态重复事件及当前弹窗回读只刷新一次。
+      if (this.consolidationRefreshVersions.size > 100) this.consolidationRefreshVersions.delete(this.consolidationRefreshVersions.keys().next().value);
+      this.$refs.cleanupPanel?.markConsolidationStale?.();
+      await this.reloadCurrentView();
+      this.$emit('reload-directories');
     },
     openCleanupDialog() {
       return this.$refs.cleanupPanel?.open();

@@ -36,12 +36,13 @@ const (
 	TaskCenterActionRunNow = "run_now"
 )
 
-// TaskRecentJob.Kind 的取值（D-PC18：字幕、超分、下载、播放代理另附最近的任务）。
+// TaskRecentJob.Kind 的取值（D-PC18：字幕、超分、下载、播放代理与集中整理另附最近的任务）。
 const (
-	TaskRecentKindSubtitle    = "subtitle"
-	TaskRecentKindEnhancement = "enhancement"
-	TaskRecentKindDownload    = "download"
-	TaskRecentKindProxy       = "proxy"
+	TaskRecentKindSubtitle             = "subtitle"
+	TaskRecentKindEnhancement          = "enhancement"
+	TaskRecentKindDownload             = "download"
+	TaskRecentKindProxy                = "proxy"
+	TaskRecentKindCleanupConsolidation = "cleanup_consolidation"
 )
 
 const (
@@ -81,7 +82,7 @@ type TaskCenterItem struct {
 	Actions    []string      `json:"actions"`
 }
 
-// TaskRecentJob 是字幕、超分、下载、播放代理四类任务的逐条记录（进行中与最近结束的）。
+// TaskRecentJob 是字幕、超分、下载、播放代理及集中整理任务的逐条记录（进行中与最近结束的）。
 //
 // ID 统一为字符串：下载任务是 task_uid，其余三类是十进制的数字 ID（播放代理是视频 ID），
 // 调用 CancelSubtitleTask 等数字参数的绑定前由前端转换。Status 是各类任务自己的状态码，
@@ -89,7 +90,8 @@ type TaskCenterItem struct {
 //   - subtitle：cancel / force / discard / retry（与 ListSubtitleJobs 同一份）；
 //   - enhancement：cancel、retry、reveal_output（OpenDirectory(output_video_id)）、open_output_in_library；
 //   - download：cancel、retry、reveal、add_directory_to_scan、reimport；
-//   - proxy：retry（CreatePlaybackProxy(video_id)）。
+//   - proxy：retry（CreatePlaybackProxy(video_id)）；
+//   - cleanup_consolidation：open_consolidation（按 ID 打开本次结果，不自动清理）。
 type TaskRecentJob struct {
 	Kind          string     `json:"kind"`
 	ID            string     `json:"id"`
@@ -120,11 +122,12 @@ type taskCenterSources struct {
 	running       map[string]bool
 	waiting       map[string]string
 
-	subtitleQueue services.SubtitleQueueSnapshot
-	subtitleJobs  []services.SubtitleJobItem
-	enhancement   []services.EnhancementTaskView
-	downloads     []services.BrowserDownloadTask
-	proxy         services.PlaybackProxyStatus
+	subtitleQueue  services.SubtitleQueueSnapshot
+	subtitleJobs   []services.SubtitleJobItem
+	enhancement    []services.EnhancementTaskView
+	downloads      []services.BrowserDownloadTask
+	proxy          services.PlaybackProxyStatus
+	consolidations []services.CleanupConsolidationSummary
 }
 
 func (src *taskCenterSources) warn(message string) {
@@ -160,6 +163,9 @@ func (a *App) loadTaskCenterSources() *taskCenterSources {
 		warnings:      []string{},
 		running:       map[string]bool{},
 		waiting:       map[string]string{},
+	}
+	if warning := a.cleanupConsolidationWarning(); warning != "" {
+		src.warn(warning)
 	}
 	for _, key := range a.backgroundTasks.Snapshot() {
 		src.running[key] = true
@@ -199,6 +205,17 @@ func (a *App) loadTaskCenterSources() *taskCenterSources {
 	}
 	if a.browserDownloads != nil {
 		src.downloads = a.browserDownloads.ListDownloadTasks()
+	}
+	if a.cleanupService != nil {
+		_, done, err := a.beginCleanupConsolidation()
+		if err == nil {
+			src.consolidations, err = a.cleanupService.ListConsolidations(taskCenterRecentPerKind)
+			done()
+		}
+		if err != nil {
+			log.Printf("API GetTaskCenterSnapshot list consolidation tasks err=%v", err)
+			src.warn("集中整理任务记录暂时无法读取")
+		}
 	}
 	return src
 }
@@ -282,6 +299,14 @@ func (a *App) taskCenterRecent(src *taskCenterSources) []TaskRecentJob {
 			continue
 		}
 		recent = append(recent, downloadRecentJob(task))
+	}
+	for _, task := range src.consolidations {
+		recent = append(recent, TaskRecentJob{
+			Kind:  TaskRecentKindCleanupConsolidation,
+			ID:    strconv.FormatUint(uint64(task.ID), 10),
+			Title: "视频集中整理", Status: task.Status, Message: task.Error,
+			FinishedAt: task.FinishedAt, Actions: []string{"open_consolidation"},
+		})
 	}
 	return append(recent, proxyRecentJobs(src.proxy)...)
 }

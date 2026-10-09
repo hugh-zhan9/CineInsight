@@ -83,5 +83,8 @@ func AllModels() []interface{} {
 		&JellyfinSession{},
 		&BrowserDownloadTask{},
 		&CleanupVideoDismissal{},
+		&CleanupConsolidationTask{},
+		&CleanupConsolidationTaskPlan{},
+		&CleanupConsolidationTaskItem{},
 	}
 }

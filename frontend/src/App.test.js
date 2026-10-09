@@ -681,3 +681,19 @@ describe('「待重启」遮罩与启动错误页', () => {
     expect(wrapper.find('[data-test="startup-error-sqlite-hint"]').exists()).toBe(false);
   });
 });
+
+it('集中整理任务从其他页路由到片库，以持久ID留待片库挂载后消费，保留壁纸组件', async () => {
+  const wrapper = await mountApp(); await wrapper.setData({ currentPage: 'photos' });
+  wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-consolidation', 42); await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('videos');
+  expect(wrapper.findComponent({ name: 'VideoListPage' }).props('consolidationRoute')).toMatchObject({ taskID: 42 });
+  expect(wrapper.findComponent({ name: 'WallpaperStatusBar' }).exists()).toBe(true);
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.$emit('consolidation-opened'); await flushPromises(); expect(wrapper.vm.consolidationRoute).toBeNull();
+});
+
+it('集中整理路由的旧导航确认迟到不会覆盖新任务', async () => {
+  const wrapper = await mountApp(); let resolveOld;
+  vi.spyOn(wrapper.vm, 'navigateTo').mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; })).mockResolvedValueOnce(true);
+  const old = wrapper.vm.openConsolidationTask(41); await wrapper.vm.openConsolidationTask(42); resolveOld(true); await old;
+  expect(wrapper.vm.consolidationRoute.taskID).toBe(42);
+});

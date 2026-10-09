@@ -226,27 +226,28 @@ type taskCenterKeyState struct {
 type taskCenterAdapter func(a *App, src *taskCenterSources) taskCenterKeyState
 
 var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
-	services.BackgroundTaskSubtitle:            (*App).taskCenterSubtitle,
-	services.BackgroundTaskEnhancement:         (*App).taskCenterEnhancement,
-	services.BackgroundTaskProxy:               (*App).taskCenterProxy,
-	services.BackgroundTaskFace:                (*App).taskCenterFace,
-	services.BackgroundTaskFrameHash:           (*App).taskCenterFrameHash,
-	services.BackgroundTaskPerceptualHash:      (*App).taskCenterPerceptualHash,
-	services.BackgroundTaskTechnical:           (*App).taskCenterTechnical,
-	services.BackgroundTaskLocalMetadata:       (*App).taskCenterLocalMetadata,
-	services.BackgroundTaskSemantic:            (*App).taskCenterSemantic,
-	services.BackgroundTaskImageSemantic:       (*App).taskCenterImageSemantic,
-	services.BackgroundTaskAITagging:           (*App).taskCenterAITagging,
-	services.BackgroundTaskImageAITagging:      (*App).taskCenterImageAITagging,
-	services.BackgroundTaskEXIF:                (*App).taskCenterEXIF,
-	services.BackgroundTaskImagePerceptualHash: (*App).taskCenterImagePerceptualHash,
-	services.BackgroundTaskCleanup:             (*App).taskCenterCleanup,
-	services.BackgroundTaskImageCleanup:        (*App).taskCenterImageCleanup,
-	services.BackgroundTaskCollectionSuggest:   (*App).taskCenterCollectionSuggest,
-	services.BackgroundTaskBackup:              (*App).taskCenterBackup,
-	services.BackgroundTaskBrowserDownload:     (*App).taskCenterBrowserDownload,
-	services.BackgroundTaskWatchlistEnrich:     (*App).taskCenterWatchlistEnrich,
-	services.BackgroundTaskMovieChart:          (*App).taskCenterMovieChart,
+	services.BackgroundTaskSubtitle:             (*App).taskCenterSubtitle,
+	services.BackgroundTaskEnhancement:          (*App).taskCenterEnhancement,
+	services.BackgroundTaskProxy:                (*App).taskCenterProxy,
+	services.BackgroundTaskFace:                 (*App).taskCenterFace,
+	services.BackgroundTaskFrameHash:            (*App).taskCenterFrameHash,
+	services.BackgroundTaskPerceptualHash:       (*App).taskCenterPerceptualHash,
+	services.BackgroundTaskTechnical:            (*App).taskCenterTechnical,
+	services.BackgroundTaskLocalMetadata:        (*App).taskCenterLocalMetadata,
+	services.BackgroundTaskSemantic:             (*App).taskCenterSemantic,
+	services.BackgroundTaskImageSemantic:        (*App).taskCenterImageSemantic,
+	services.BackgroundTaskAITagging:            (*App).taskCenterAITagging,
+	services.BackgroundTaskImageAITagging:       (*App).taskCenterImageAITagging,
+	services.BackgroundTaskEXIF:                 (*App).taskCenterEXIF,
+	services.BackgroundTaskImagePerceptualHash:  (*App).taskCenterImagePerceptualHash,
+	services.BackgroundTaskCleanup:              (*App).taskCenterCleanup,
+	services.BackgroundTaskImageCleanup:         (*App).taskCenterImageCleanup,
+	services.BackgroundTaskCleanupConsolidation: (*App).taskCenterCleanupConsolidation,
+	services.BackgroundTaskCollectionSuggest:    (*App).taskCenterCollectionSuggest,
+	services.BackgroundTaskBackup:               (*App).taskCenterBackup,
+	services.BackgroundTaskBrowserDownload:      (*App).taskCenterBrowserDownload,
+	services.BackgroundTaskWatchlistEnrich:      (*App).taskCenterWatchlistEnrich,
+	services.BackgroundTaskMovieChart:           (*App).taskCenterMovieChart,
 }
 
 // runningProgress 给运行中的批量任务报进度；总数还不知道（准备阶段）时为 nil。
@@ -745,4 +746,27 @@ func (a *App) taskCenterMovieChart(src *taskCenterSources) taskCenterKeyState {
 	}
 	_, running := svc.RefreshStatus()
 	return taskCenterKeyState{running: running, canCancel: running}
+}
+
+// Consolidation has no zero-argument start: a reviewed preview is always required.
+func (a *App) taskCenterCleanupConsolidation(src *taskCenterSources) taskCenterKeyState {
+	local := src.running[string(services.BackgroundTaskCleanupConsolidation)]
+	state := taskCenterKeyState{canCancel: local}
+	for _, task := range src.consolidations {
+		if task.Status == "running" {
+			state.running = true
+			state.progress = runningProgress(true, task.Completed, task.Total)
+		} else if state.lastRun == nil {
+			failed := 0
+			if task.Status == "failed" {
+				failed = 1
+			}
+			failures := []string{}
+			if task.Error != "" {
+				failures = append(failures, task.Error)
+			}
+			state.lastRun = finishedBatchRun(true, task.FinishedAt, task.Completed, failed, failures)
+		}
+	}
+	return state
 }

@@ -20,6 +20,7 @@ export const BACKGROUND_TASK_LABELS = {
   image_phash: '图片指纹',
   cleanup: '清理分析',
   image_cleanup: '图片清理分析',
+  cleanup_consolidation: '集中整理',
   collection_suggest: '建议作品集',
   backup: '数据库备份',
   browser_download: '插件下载',

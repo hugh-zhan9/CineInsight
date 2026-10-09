@@ -102,11 +102,14 @@ func TestBackgroundTaskRegistryRejectsUnknownKey(t *testing.T) {
 	if IsBackgroundTaskKey("not_a_task") {
 		t.Fatal("未知 key 不该被认作合法")
 	}
-	if len(BackgroundTaskKeys()) != 21 {
-		t.Fatalf("固定 key 集合应有 21 项，实际 %d", len(BackgroundTaskKeys()))
+	if len(BackgroundTaskKeys()) != 22 {
+		t.Fatalf("固定 key 集合应有 22 项，实际 %d", len(BackgroundTaskKeys()))
 	}
 	if !IsBackgroundTaskKey(string(BackgroundTaskImageCleanup)) || BackgroundTaskImageCleanup != "image_cleanup" {
 		t.Fatal("图片清理分析的 key image_cleanup 没有进合法集合")
+	}
+	if !IsBackgroundTaskKey(string(BackgroundTaskCleanupConsolidation)) || BackgroundTaskCleanupConsolidation != "cleanup_consolidation" {
+		t.Fatal("集中整理任务 key 不可用")
 	}
 	// 新 key 必须同时进 IsBackgroundTaskKey 与 BackgroundTaskKeys，
 	// 只加一处的话前端任务面板会认不出它。

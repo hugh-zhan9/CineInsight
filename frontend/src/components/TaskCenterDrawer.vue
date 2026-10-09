@@ -58,7 +58,7 @@
 
         <section class="task-center__section" data-test="task-center-recent">
           <h3>最近任务</h3>
-          <p v-if="!recentGroups.length" class="task-center__empty">还没有字幕、超分、下载或播放代理任务。</p>
+          <p v-if="!recentGroups.length" class="task-center__empty">还没有字幕、超分、下载、播放代理或集中整理任务。</p>
           <div v-for="group in recentGroups" :key="group.kind" class="task-recent-group" :data-test="`task-recent-${group.kind}`">
             <h4>{{ group.label }}</h4>
             <ul class="task-center__items">
@@ -104,6 +104,7 @@ import {
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
 import { backgroundTaskLabel, idleWaitReasonLabel } from '../utils/idleScheduling.js';
 import { taskActionRunner } from '../utils/taskCommands.js';
+import { CONSOLIDATION_STATUS } from '../utils/cleanupConsolidation.js';
 import { PLAYBACK_PROXY_CODE_LABELS } from '../utils/playbackProxy.js';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
 
@@ -118,16 +119,18 @@ const ITEM_SECTIONS = [
 
 const ITEM_ACTION_LABELS = { start: '启动', cancel: '取消', run_now: '立即运行' };
 
-// 最近任务四类（D-PC18）：字幕、超分、下载、播放代理，顺序固定。
+// 最近任务：字幕、超分、下载、播放代理与集中整理，顺序固定。
 const RECENT_KINDS = [
   { kind: 'subtitle', label: '字幕' },
   { kind: 'enhancement', label: '视频超分' },
   { kind: 'download', label: '插件下载' },
-  { kind: 'proxy', label: '播放代理' }
+  { kind: 'proxy', label: '播放代理' },
+  { kind: 'cleanup_consolidation', label: '集中整理' }
 ];
 
 // 各类任务自己的状态码 → 中文。超分的这份在 P-033 的 utils/enhancement.js 落地后应改为引用那里。
 const RECENT_STATUS_LABELS = {
+  cleanup_consolidation: CONSOLIDATION_STATUS,
   subtitle: {
     queued: '排队中', running: '生成中', succeeded: '已完成', failed: '失败',
     cancelled: '已取消', needs_confirmation: '待确认', interrupted: '已中断'
@@ -142,6 +145,7 @@ const RECENT_STATUS_LABELS = {
 };
 
 const RECENT_ACTION_LABELS = {
+  cleanup_consolidation: { open_consolidation: '查看整理结果' },
   subtitle: { cancel: '取消', force: '强制生成', discard: '放弃', retry: '重试' },
   enhancement: { cancel: '取消', retry: '重试', reveal_output: '在访达中显示', open_output_in_library: '在片库中打开' },
   download: { cancel: '取消', retry: '重试', reveal: '在访达中显示', add_directory_to_scan: '加入扫描目录', reimport: '重新入库' },
@@ -163,8 +167,8 @@ function numericID(value) {
   return id;
 }
 
-// 任务中心抽屉（D-PC18、APP-03）。只读聚合 GetTaskCenterSnapshot：21 个后台任务 key 的状态、
-// 进度、上一轮结果与可用动作，外加字幕 / 超分 / 下载 / 播放代理四类的最近任务。
+// 任务中心抽屉（D-PC18、APP-03）。只读聚合 GetTaskCenterSnapshot：22 个后台任务 key 的状态、
+// 进度、上一轮结果与可用动作，外加字幕 / 超分 / 下载 / 播放代理 / 集中整理的最近任务。
 // 常挂载（关着也在），这样顶栏角标能跟着 task-center-changed 走；打开时再主动拉一次。
 export default {
   name: 'TaskCenterDrawer',
@@ -172,7 +176,7 @@ export default {
   props: {
     open: { type: Boolean, default: false }
   },
-  emits: ['close', 'badge-change', 'open-video'],
+  emits: ['close', 'badge-change', 'open-video', 'open-consolidation'],
   data() {
     return {
       snapshot: { items: [], recent: [], warnings: [] },
@@ -345,6 +349,9 @@ export default {
       });
     },
     async performRecentAction(job, action) {
+      if (job.kind === 'cleanup_consolidation' && action === 'open_consolidation') {
+        this.$emit('open-consolidation', numericID(job.id)); this.$emit('close'); return;
+      }
       if (job.kind === 'subtitle') {
         const jobID = numericID(job.id);
         if (action === 'cancel') return CancelSubtitleTask(jobID);

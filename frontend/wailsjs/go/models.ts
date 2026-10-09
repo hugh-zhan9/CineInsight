@@ -2068,6 +2068,364 @@ export namespace services {
 		}
 	}
 	
+	export class CleanupConsolidationGroup {
+	    kind: string;
+	    member_ids: number[];
+	    keeper_id: number;
+	    keeper_pinned: boolean;
+	    selected_ids: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupConsolidationGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.member_ids = source["member_ids"];
+	        this.keeper_id = source["keeper_id"];
+	        this.keeper_pinned = source["keeper_pinned"];
+	        this.selected_ids = source["selected_ids"];
+	    }
+	}
+	export class CleanupConsolidationItemStatus {
+	    video_id: number;
+	    source: string;
+	    destination: string;
+	    phase: string;
+	    error: string;
+	    retained_paths: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupConsolidationItemStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source = source["source"];
+	        this.destination = source["destination"];
+	        this.phase = source["phase"];
+	        this.error = source["error"];
+	        this.retained_paths = source["retained_paths"];
+	    }
+	}
+	export class FileMigrationSource {
+	    path: string;
+	    real_path: string;
+	    identity: string;
+	    size: number;
+	    mod_time_ns: number;
+	    mode: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileMigrationSource(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.real_path = source["real_path"];
+	        this.identity = source["identity"];
+	        this.size = source["size"];
+	        this.mod_time_ns = source["mod_time_ns"];
+	        this.mode = source["mode"];
+	    }
+	}
+	export class FileMigrationFile {
+	    kind: string;
+	    source: FileMigrationSource;
+	    destination: string;
+	    copy_only: boolean;
+	    cross_volume: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileMigrationFile(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.source = this.convertValues(source["source"], FileMigrationSource);
+	        this.destination = source["destination"];
+	        this.copy_only = source["copy_only"];
+	        this.cross_volume = source["cross_volume"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FileMigrationItem {
+	    video_id: number;
+	    source_path: string;
+	    destination_path: string;
+	    stay: boolean;
+	    files: FileMigrationFile[];
+	    warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new FileMigrationItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.source_path = source["source_path"];
+	        this.destination_path = source["destination_path"];
+	        this.stay = source["stay"];
+	        this.files = this.convertValues(source["files"], FileMigrationFile);
+	        this.warnings = source["warnings"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class FileMigrationDirectory {
+	    path: string;
+	    real_path: string;
+	    identity: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new FileMigrationDirectory(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.path = source["path"];
+	        this.real_path = source["real_path"];
+	        this.identity = source["identity"];
+	    }
+	}
+	export class CleanupConsolidationPreview {
+	    preview_id: string;
+	    analysis_version: number;
+	    destination: string;
+	    destination_info: FileMigrationDirectory;
+	    in_scan_roots: boolean;
+	    groups: CleanupConsolidationGroup[];
+	    items: FileMigrationItem[];
+	    move_bytes: number;
+	    cross_volume_bytes: number;
+	    copy_bytes: number;
+	    available_bytes: number;
+	    warnings: string[];
+	    errors: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupConsolidationPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.preview_id = source["preview_id"];
+	        this.analysis_version = source["analysis_version"];
+	        this.destination = source["destination"];
+	        this.destination_info = this.convertValues(source["destination_info"], FileMigrationDirectory);
+	        this.in_scan_roots = source["in_scan_roots"];
+	        this.groups = this.convertValues(source["groups"], CleanupConsolidationGroup);
+	        this.items = this.convertValues(source["items"], FileMigrationItem);
+	        this.move_bytes = source["move_bytes"];
+	        this.cross_volume_bytes = source["cross_volume_bytes"];
+	        this.copy_bytes = source["copy_bytes"];
+	        this.available_bytes = source["available_bytes"];
+	        this.warnings = source["warnings"];
+	        this.errors = source["errors"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CleanupConsolidationProtection {
+	    kind: string;
+	    member_ids: number[];
+	    keeper_id: number;
+	    keeper_pinned: boolean;
+	    skipped: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupConsolidationProtection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.member_ids = source["member_ids"];
+	        this.keeper_id = source["keeper_id"];
+	        this.keeper_pinned = source["keeper_pinned"];
+	        this.skipped = source["skipped"];
+	    }
+	}
+	export class CleanupConsolidationRequest {
+	    destination: string;
+	    groups: CleanupConsolidationGroup[];
+	    protections: CleanupConsolidationProtection[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupConsolidationRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.destination = source["destination"];
+	        this.groups = this.convertValues(source["groups"], CleanupConsolidationGroup);
+	        this.protections = this.convertValues(source["protections"], CleanupConsolidationProtection);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CleanupConsolidationReview {
+	    task_id: number;
+	    groups: CleanupConsolidationGroup[];
+	    analysis?: CleanupAnalysis;
+	    locked_ids: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupConsolidationReview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.task_id = source["task_id"];
+	        this.groups = this.convertValues(source["groups"], CleanupConsolidationGroup);
+	        this.analysis = this.convertValues(source["analysis"], CleanupAnalysis);
+	        this.locked_ids = source["locked_ids"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class CleanupConsolidationStatus {
+	    id: number;
+	    preview_id: string;
+	    status: string;
+	    version: number;
+	    total: number;
+	    completed: number;
+	    bytes_done: number;
+	    bytes_total: number;
+	    error: string;
+	    created_at: string;
+	    updated_at: string;
+	    finished_at?: string;
+	    preview: CleanupConsolidationPreview;
+	    items: CleanupConsolidationItemStatus[];
+	
+	    static createFrom(source: any = {}) {
+	        return new CleanupConsolidationStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.preview_id = source["preview_id"];
+	        this.status = source["status"];
+	        this.version = source["version"];
+	        this.total = source["total"];
+	        this.completed = source["completed"];
+	        this.bytes_done = source["bytes_done"];
+	        this.bytes_total = source["bytes_total"];
+	        this.error = source["error"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.finished_at = source["finished_at"];
+	        this.preview = this.convertValues(source["preview"], CleanupConsolidationPreview);
+	        this.items = this.convertValues(source["items"], CleanupConsolidationItemStatus);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	
 	
 	
@@ -3176,6 +3534,9 @@ export namespace services {
 	        this.covered_by_other = source["covered_by_other"];
 	    }
 	}
+	
+	
+	
 	export class FileMigrationResult {
 	    video_id: number;
 	    source: string;
@@ -3194,6 +3555,7 @@ export namespace services {
 	        this.warning = source["warning"];
 	    }
 	}
+	
 	export class FolderMigrationResult {
 	    source: string;
 	    destination: string;

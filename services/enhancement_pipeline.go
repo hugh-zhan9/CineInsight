@@ -797,7 +797,7 @@ func (s *EnhancementService) publishOutput(ctx context.Context, task models.Vide
 		// 外挂字幕经字幕写入器复制（D-PC13）：它要拿字幕锁，所以先放掉路径锁，不在锁里嵌锁。
 		// 产物已经入库，复制失败只把一句不含路径的警告留在已完成任务的 error_summary 上。
 		releaseOnce()
-		if warning := copyEnhancementSidecarSubtitle(context.Background(), NewSubtitleFileWriter(s.dataDir), source, output); warning != "" {
+		if warning := copyEnhancementSidecarSubtitle(context.Background(), NewLibrarySubtitleFileWriter(s.dataDir), source, output); warning != "" {
 			if err := database.DB.Model(&models.VideoEnhancementTask{}).
 				Where("id = ? AND status = ?", task.ID, models.EnhancementStatusCompleted).
 				Update("error_summary", warning).Error; err != nil {

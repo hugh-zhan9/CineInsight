@@ -75,7 +75,7 @@ type CleanupAnalysis struct {
 	// done<total 时显示「已算 X / Y」，让"没有重复"与"还没算"分得开。
 	Coverage CleanupCoverage `json:"coverage"`
 	// Curation 按视频 ID 给出每个候选命中的整理项（D-PC48），覆盖本结果里出现的全部视频。
-	// 保留建议按它的计分排序；卡片据此显示收藏、评分、字幕等图标。
+	// 保留建议用其计分择优（精确重复先集中目录）；卡片据此显示收藏、评分、字幕等图标。
 	Curation map[uint]CleanupCuration `json:"curation"`
 	// Thresholds 是本轮「极短片段 / 极低分辨率」实际使用的阈值（D-PC36），类别标题按它显示；
 	// 为 0 表示本轮没有评估该类别。
@@ -172,6 +172,20 @@ type CleanupService struct {
 	registry *BackgroundTaskRegistry
 	// cancel 取消当前这一轮异步分析（D-PC51）；只在 Running 期间非空。
 	cancel context.CancelFunc
+	// 集中整理的预览由 mu 保护；序号防止较早请求覆盖较晚请求。
+	consolidationVideo           *VideoService
+	consolidationPreview         *cleanupConsolidationPlan
+	consolidationPreviewSequence uint64
+	// consolidationMu 串行化启动、恢复与维护接受围栏；不会与 s.mu 同时等待 worker。
+	consolidationMu        sync.Mutex
+	consolidationDirectory FileMigrationDirectory
+	consolidationDataDir   string
+	consolidationOwner     string
+	consolidationBlocked   bool
+	consolidationCancel    context.CancelFunc
+	consolidationDone      chan struct{}
+	consolidationOnChange  func(CleanupConsolidationSummary)
+	consolidationHooks     *consolidationExecutionHooks
 }
 
 // ErrCleanupAnalysisNotRunning 是取消时没有正在进行的分析。
@@ -622,7 +636,7 @@ func (s *CleanupService) analyzeCleanupCandidates(ctx context.Context, criteria 
 	result.Coverage = coverage
 	result.sourceFingerprints = fingerprints
 
-	// 保留建议按整理成果重排（D-PC48）：各类成组后一次取齐整理项，再统一排序。
+	// 各类成组后一次取齐整理项；精确重复先集中目录，其余类别仍按整理成果排序。
 	if err := rankCleanupCandidates(ctx, result); err != nil {
 		return nil, 0, err
 	}
@@ -785,8 +799,8 @@ func isPreferredCleanupVideo(a, b models.Video, curation map[uint]CleanupCuratio
 // cleanupRankChunkSize 是批量取整理项时单条 IN 语句的 id 上限，远低于两个后端的绑定参数上限。
 const cleanupRankChunkSize = 500
 
-// rankCleanupCandidates 在所有类别成组之后批量取齐整理项，并按 isPreferredCleanupVideo
-// 重排精确重复、近似重复的成员与同源的保留建议；同时给精确重复与极短/极低两类补上标签
+// rankCleanupCandidates 在所有类别成组之后批量取齐整理项，精确重复先集中目录，
+// 近似重复与同源仍按 isPreferredCleanupVideo 择优；同时给精确重复与极短/极低两类补上标签
 // （它们来自不预载标签的主查询）。截取片段的保留项由时长决定，不参与重排。
 //
 // 整理项读不到时整轮分析失败：保留建议就是"建议删哪一份"，不能在缺数据时静默退回旧规则。
@@ -804,8 +818,8 @@ func rankCleanupCandidates(ctx context.Context, result *CleanupAnalysis) error {
 		group.Original = members[0]
 		group.Candidates = append([]models.Video(nil), members[1:]...)
 	}
-	for i := range result.DuplicateGroups {
-		rankGroup(&result.DuplicateGroups[i])
+	if err := rankExactCleanupGroups(ctx, result.DuplicateGroups, curation); err != nil {
+		return err
 	}
 	for i := range result.NearDuplicateGroups {
 		rankGroup(&result.NearDuplicateGroups[i])

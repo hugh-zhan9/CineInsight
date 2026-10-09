@@ -99,7 +99,7 @@ func (a *App) UndoCleanupDismissals(kind string, ids []uint) (*services.CleanupD
 func (a *App) MergeMediaMetadata(kind string, keeperID uint, sourceIDs []uint, options services.MediaMetadataMergeOptions) (*services.MediaMetadataMergeResult, error) {
 	deps := services.MediaMetadataMergeDeps{Watched: a.videoService, Options: options}
 	if a.subtitleService != nil {
-		deps.Subtitles = services.NewSubtitleFileWriter(a.subtitleService.BaseDir)
+		deps.Subtitles = services.NewLibrarySubtitleFileWriter(a.subtitleService.BaseDir)
 	}
 	result, err := services.MergeMediaMetadata(kind, keeperID, sourceIDs, deps)
 	if err != nil {

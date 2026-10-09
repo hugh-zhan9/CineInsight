@@ -108,7 +108,7 @@ func NewSubtitleService(baseDir string) *SubtitleService {
 // subtitleWriter 返回以应用数据目录为根的字幕写入器。写入器无状态，每次现取，
 // BaseDir 为空（数据目录没解析出来）时，覆盖已有字幕会报错而不是写相对路径。
 func (s *SubtitleService) subtitleWriter() *SubtitleFileWriter {
-	return NewSubtitleFileWriter(s.BaseDir)
+	return NewLibrarySubtitleFileWriter(s.BaseDir)
 }
 
 func (s *SubtitleService) SetContext(ctx context.Context) {

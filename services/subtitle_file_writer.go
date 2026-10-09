@@ -64,6 +64,7 @@ type SubtitleBackup struct {
 
 type SubtitleFileWriter struct {
 	dataDir     string
+	libraryMode bool
 	replaceFile func(temporaryPath, targetPath string) error
 }
 
@@ -72,6 +73,39 @@ func NewSubtitleFileWriter(dataDir string) *SubtitleFileWriter {
 		dataDir:     strings.TrimSpace(dataDir),
 		replaceFile: replaceSubtitleFileAtomically,
 	}
+}
+
+// NewLibrarySubtitleFileWriter 要求 videoID 仍关联当前同名 SRT；真实查询失败不可降级为无库写入。
+// NewSubtitleFileWriter 是独立文件工具模式，生产库写入请使用本构造器。
+func NewLibrarySubtitleFileWriter(dataDir string) *SubtitleFileWriter {
+	writer := NewSubtitleFileWriter(dataDir)
+	writer.libraryMode = true
+	return writer
+}
+
+func (w *SubtitleFileWriter) validateLibraryTarget(ctx context.Context, videoID uint, target string) error {
+	if !w.libraryMode {
+		return nil
+	}
+	if database.DB == nil {
+		return errors.New("字幕库关联校验不可用")
+	}
+	var video models.Video
+	if err := database.DB.WithContext(ctx).Select("id", "path").First(&video, videoID).Error; err != nil {
+		return fmt.Errorf("核对字幕所属视频失败: %w", err)
+	}
+	expected, err := resolveMigrationPath(subtitleparser.SRTPathForVideo(video.Path))
+	if err != nil {
+		return err
+	}
+	actual, err := resolveMigrationPath(target)
+	if err != nil {
+		return err
+	}
+	if subtitleFileLockKey(expected) != subtitleFileLockKey(actual) {
+		return &SubtitleCodedError{Code: "subtitle_video_path_changed", Message: "视频位置已变化，请重新打开字幕"}
+	}
+	return nil
 }
 
 func (w *SubtitleFileWriter) backupDir(videoID uint) (string, error) {
@@ -111,6 +145,10 @@ func (w *SubtitleFileWriter) replaceWithMode(ctx context.Context, videoID uint, 
 		return SubtitleWriteResult{}, errors.New("字幕写入缺少目标路径")
 	}
 	if err := ctx.Err(); err != nil {
+		return SubtitleWriteResult{}, err
+	}
+
+	if err := w.validateLibraryTarget(ctx, videoID, target); err != nil {
 		return SubtitleWriteResult{}, err
 	}
 

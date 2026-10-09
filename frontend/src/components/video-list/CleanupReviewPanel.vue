@@ -2,7 +2,8 @@
   <!-- 确认框打开或删除进行中不能关闭（与图片清理页的离开保护同一口径）：✕、「取消」禁用，Esc 与关闭方法拦截。 -->
   <BaseModal v-if="cleanupDialog.show" class="cleanup-modal" @close="handleCleanupEscape">
       <div class="cleanup-modal-header">
-        <h3>清理候选审阅</h3>
+        <h3>{{ consolidationReviewTaskID ? "本次集中整理结果" : "清理候选审阅" }}</h3>
+        <button v-if="consolidationReviewTaskID" class="btn-secondary btn-compact" :disabled="cleanupCloseLocked" data-test="cleanup-global" @click="open()">返回全库分析</button>
         <span class="cleanup-header__meta">
           共 {{ cleanupCandidateCount }} 项候选
           <template v-if="cleanupReleasableText"> · 移到废纸篓后，在访达清空废纸篓即可释放约 <b>{{ cleanupReleasableText }}</b></template>
@@ -138,7 +139,7 @@
             <nav class="cleanup-dirs" aria-label="按目录分组">
               <div class="cleanup-dirs__heading">按目录分组</div>
               <button
-                v-for="section in cleanupFilteredSections"
+                v-for="section in cleanupVisibleDirectorySections"
                 :key="section.directory"
                 type="button"
                 :class="['cleanup-dirs__item', { active: section.directory === activeCleanupDirectory }]"
@@ -155,6 +156,7 @@
                 >已勾 {{ cleanupSelectedCountByDirectory.get(section.directory) }}</span>
                 <span class="cleanup-dirs__count">{{ section.entries.length }}</span>
               </button>
+              <nav v-if="cleanupFilteredSections.length > 80" aria-label="清理目录分页"><button class="btn-secondary" :disabled="cleanupDirectoryPage === 0" @click="cleanupDirectoryPage--">上一页</button><span>{{ cleanupDirectoryPage + 1 }} / {{ Math.ceil(cleanupFilteredSections.length / 80) }}</span><button class="btn-secondary" :disabled="(cleanupDirectoryPage + 1) * 80 >= cleanupFilteredSections.length" @click="cleanupDirectoryPage++">下一页</button></nav>
               <div class="cleanup-dirs__spacer"></div>
               <!-- 统一勾选规则（D-PC49）：与图片清理页同一套，规则本身在 utils/cleanupSelection.js。 -->
               <p class="cleanup-dirs__note">默认只勾选精确重复里保留项以外的副本；近似重复、同源、截取片段默认不勾选。保留项锁定，要先「设为保留」切换。勾选的视频移到废纸篓，可在回收站撤销。</p>
@@ -168,7 +170,8 @@
           >
             <div class="cleanup-section__head">
               <strong :title="section.directory">{{ section.directory }}</strong>
-              <span>{{ section.entries.length }} 项候选 · {{ section.videoCount }} 个视频</span>
+              <span>{{ section.entryCount }} 项候选 · {{ section.videoCount }} 个视频</span>
+              <nav v-if="section.entryCount > 40" aria-label="清理分组分页"><button class="btn-secondary" :disabled="cleanupGroupPage === 0" @click="cleanupGroupPage--">上一页</button><span>{{ cleanupGroupPage + 1 }} / {{ Math.ceil(section.entryCount / 40) }}</span><button class="btn-secondary" :disabled="(cleanupGroupPage + 1) * 40 >= section.entryCount" @click="cleanupGroupPage++">下一页</button></nav>
             </div>
 
             <template v-if="true">
@@ -181,6 +184,10 @@
                 :data-focused="isFocusedEntry(entry) ? 'true' : null"
               >
                 <div class="cleanup-card-kind">{{ cleanupKindLabel(entry.kind) }}</div>
+                <div class="cleanup-consolidation-scope">
+                  <label v-if="!consolidationReviewTaskID && consolidationEligible(entry)"><input type="checkbox" data-test="cleanup-consolidation-scope" :checked="consolidationScope.includes(entry.key)" :disabled="cleanupDialog.processing || cleanupSkippedGroups.includes(entry.key)" @change="toggleConsolidationScope(entry)" />纳入集中整理</label>
+                  <label><input type="checkbox" data-test="cleanup-skip-group" :checked="cleanupSkippedGroups.includes(entry.key)" :disabled="cleanupDialog.processing" @change="toggleSkippedGroup(entry)" />本组不删</label>
+                </div>
 
                 <!-- 疑似同源：保留项不给勾选框，只清理可替代版本。 -->
                 <template v-if="entry.kind === 'same-source'">
@@ -417,6 +424,7 @@
         </span>
         <span class="cleanup-footer__hint">移到废纸篓后可在回收站撤销；在访达清空废纸篓才会释放空间</span>
         <div class="cleanup-header__spacer"></div>
+        <button v-if="!consolidationReviewTaskID && cleanupDialog.analysis" class="btn-secondary" data-test="cleanup-consolidate" :disabled="!consolidationScope.length || cleanupDialog.processing || cleanupDialog.loading || cleanupGroupRequests > 0" @click="openConsolidation()">集中整理（{{ consolidationScope.length }} 组）</button>
         <button v-if="cleanupDialog.loading" @click="closeCleanupDialog" class="btn-secondary">后台继续分析</button>
         <button class="btn-secondary" data-test="cleanup-cancel" :disabled="cleanupCloseLocked" :title="cleanupCloseLocked ? CLOSE_LOCKED_MESSAGE : ''" @click="closeCleanupDialog">取消</button>
         <!-- 改分组的请求（移出本组、各类忽略）还没返回时不能删除（P-032 复审 I-1）。
@@ -470,15 +478,18 @@
         </div>
       </BaseModal>
   </BaseModal>
+  <CleanupConsolidationDialog ref="consolidationDialog" :request="consolidationRequestData" @review="openConsolidationReview" @moved="consolidationMoved" @started="consolidationStarted" />
 </template>
 
 <script>
 import {
   GetCleanupStatus, StartCleanupAnalysisFromSettings, CancelCleanupAnalysis,
   DismissNearDuplicateGroup, DismissNearDuplicateMember, DismissClipCandidate, DismissCleanupVideo, RejectSameSourceRelation,
-  ListCleanupDismissals, UndoCleanupDismissals, MergeMediaMetadata, PreviewExternally
+  ListCleanupDismissals, UndoCleanupDismissals, MergeMediaMetadata, PreviewExternally, GetCleanupConsolidationReview
 } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
+import CleanupConsolidationDialog from './CleanupConsolidationDialog.vue';
+import { consolidationRequest, consolidationGroupIdentity, consolidationReviewSignature, CONSOLIDATION_KINDS } from '../../utils/cleanupConsolidation.js';
 import CleanupThumbnail from '../CleanupThumbnail.vue';
 import { confirmAction, feedbackState, notify, notifyError, notifySuccess } from '../../utils/feedback.js';
 import {
@@ -515,7 +526,7 @@ function emptyDeleteConfirm() {
 // 这样原来的 await 顺序不用拆散。
 export default {
   name: 'CleanupReviewPanel',
-  components: { BaseModal, CleanupThumbnail },
+  components: { BaseModal, CleanupThumbnail, CleanupConsolidationDialog },
   mixins: [runtimeEventsMixin],
   props: {
     // 「重算感知哈希」按钮的运行态来自父组件的后台任务状态条。
@@ -527,7 +538,7 @@ export default {
     trashVideos: { type: Function, required: true },
     afterTrashVideos: { type: Function, required: true }
   },
-  emits: ['badge-change', 'analyzing-change', 'start-perceptual-hash', 'start-frame-hash', 'same-source-rejected', 'trash-settled'],
+  emits: ['badge-change', 'analyzing-change', 'start-perceptual-hash', 'start-frame-hash', 'same-source-rejected', 'trash-settled', 'consolidation-moved'],
   data() {
     return {
       CLOSE_LOCKED_MESSAGE,
@@ -546,6 +557,12 @@ export default {
         progress: { stage: '', message: '', current: 0, total: 0, path: '' }
       },
       cleanupSelection: [],
+      cleanupSkippedGroups: [],
+      consolidationScope: [],
+      consolidationReviewTaskID: 0,
+      consolidationExternalLocks: [],
+      consolidationReviewBaseline: '',
+      cleanupModeGeneration: 0,
       // 默认勾选只在换了一批分析结果时套一次（按 started_at 区分），回读同一批结果不能把用户取消的勾重新勾上。
       cleanupSelectionKey: null,
       // 「设为保留」的覆盖：{ 组 key: 视频 id }。
@@ -555,6 +572,8 @@ export default {
       cleanupStatusRequestID: 0,
       cleanupCategory: 'all',
       activeCleanupDirectory: '',
+      cleanupGroupPage: 0,
+      cleanupDirectoryPage: 0,
       cleanupCollapsedDirs: {},
       // 本次审阅中已移到废纸篓的视频 id：结果不重跑，用来提示结果已过期。
       cleanupTrashedIDs: [],
@@ -575,6 +594,7 @@ export default {
     // 面板关闭（后台继续分析）时也要处理：否则后台跑完没人记录结果，
     // 重新打开只能看到停在关闭那一刻的旧进度。
     this.registerRuntimeEvent('cleanup-progress', async (data) => {
+      if (this.consolidationReviewTaskID) return;
       this.startCleanupProgressTracking();
       this.cleanupDialog.loading = data?.stage !== 'done';
       this.cleanupDialog.progress = {
@@ -600,15 +620,25 @@ export default {
     });
   },
   beforeUnmount() {
+    this.cleanupModeGeneration++;
+    this.cleanupStatusRequestID++;
     this.resetCleanupProgressTracking();
     if (this._resolveDeleteConfirm) this._resolveDeleteConfirm(null);
   },
   // 管理菜单的徽标与「分析中」文案仍由父组件渲染，这里把两个值镜像出去。
   watch: {
+    activeCleanupDirectory() { this.cleanupGroupPage = 0; },
+    cleanupCategory() { this.cleanupGroupPage = 0; this.cleanupDirectoryPage = 0; },
+    cleanupDirectoryPageCount(count) { this.cleanupDirectoryPage = Math.min(this.cleanupDirectoryPage, count - 1); },
+    cleanupGroupPageCount(count) { this.cleanupGroupPage = Math.min(this.cleanupGroupPage, count - 1); },
     cleanupBadgeCount: { handler(count) { this.$emit('badge-change', count); }, immediate: true },
     'cleanupDialog.loading': { handler(loading) { this.$emit('analyzing-change', loading); }, immediate: true }
   },
   computed: {
+    consolidationRequestData() {
+      if (this.consolidationReviewTaskID || this.cleanupTrashedIDs.length || !this.cleanupDialog.analysis) return null;
+      return consolidationRequest(this.cleanupGroups, { scope: this.consolidationScope, overrides: this.cleanupKeepOverrides, skipped: this.cleanupSkippedGroups, selection: this.cleanupSelection });
+    },
     cleanupCandidateCount() {
       return this.getAllCleanupCandidates().length;
     },
@@ -700,7 +730,7 @@ export default {
       return new Map(this.cleanupGroups.map(group => [group.key, group]));
     },
     cleanupLockedIDs() {
-      return lockedIDs(this.cleanupGroups, this.cleanupKeepOverrides);
+      return new Set([...lockedIDs(this.cleanupGroups, this.cleanupKeepOverrides, this.cleanupSkippedGroups), ...this.consolidationExternalLocks]);
     },
     cleanupMemberSizes() {
       const sizes = new Map();
@@ -736,7 +766,7 @@ export default {
       const shortRule = shortSeconds > 0 ? `时长 < ${shortSeconds} 秒` : '时长低于设置的阈值';
       return [
         { key: 'all', label: '全部类别', count: this.cleanupCandidateCount, hint: '选中的视频会移到废纸篓并从库中移除，可在回收站撤销' },
-        { key: 'exact', label: '精确重复', count: count('exact'), hint: '大小 + 采样哈希完全一致；默认勾选保留项以外的副本' },
+        { key: 'exact', label: '精确重复', count: count('exact'), hint: '大小 + 采样哈希完全一致；建议跨组集中保留在同一目录，默认勾选其余副本' },
         { key: 'near', label: '近似重复', count: count('near'), hint: '多帧感知哈希接近；默认不勾选', coverage: this.coverageLabel('near') },
         { key: 'same-source', label: '同源视频', count: count('same-source'), hint: '同一片源的不同转码或裁剪版本，来自 AI 打标的「查找同源」；默认不勾选', coverage: this.coverageLabel('same-source') },
         { key: 'clip', label: '截取片段', count: count('clip'), hint: '完整片里截下来的一段：逐帧哈希对齐命中（不会默认选中）', coverage: this.coverageLabel('clip') },
@@ -769,11 +799,22 @@ export default {
       }
       return counts;
     },
-    activeCleanupSections() {
+    cleanupDirectoryPageCount() { return Math.max(1, Math.ceil(this.cleanupFilteredSections.length / 80)); },
+    cleanupActiveSection() {
       const sections = this.cleanupFilteredSections;
-      if (sections.length === 0) return [];
-      const active = sections.find(section => section.directory === this.activeCleanupDirectory);
-      return [active || sections[0]];
+      return sections.find(section => section.directory === this.activeCleanupDirectory) || sections[0];
+    },
+    cleanupGroupPageCount() { return Math.max(1, Math.ceil((this.cleanupActiveSection?.entries.length || 0) / 40)); },
+    cleanupVisibleDirectorySections() {
+      const sections = this.cleanupFilteredSections;
+      const page = Math.min(this.cleanupDirectoryPage, this.cleanupDirectoryPageCount - 1);
+      return sections.slice(page * 80, (page + 1) * 80);
+    },
+    activeCleanupSections() {
+      const section = this.cleanupActiveSection;
+      if (!section) return [];
+      const page = Math.min(this.cleanupGroupPage, this.cleanupGroupPageCount - 1);
+      return [{ ...section, entryCount: section.entries.length, entries: section.entries.slice(page * 40, (page + 1) * 40) }];
     },
     // 当前类别（或全部）为空时的空态：分清「没有」与「还没算 / 只算了一部分」（D-PC50）。
     cleanupEmptyState() {
@@ -865,8 +906,67 @@ export default {
     }
   },
   methods: {
+    consolidationEligible(entry) { return CONSOLIDATION_KINDS.includes(entry.kind); },
+    toggleConsolidationScope(entry) {
+      if (this.cleanupDialog.processing || this.cleanupSkippedGroups.includes(entry.key) || !this.consolidationEligible(entry)) return;
+      this.consolidationScope = this.consolidationScope.includes(entry.key) ? this.consolidationScope.filter(key => key !== entry.key) : [...this.consolidationScope, entry.key];
+    },
+    toggleSkippedGroup(entry) {
+      if (this.cleanupDialog.processing) return;
+      this.cleanupSkippedGroups = this.cleanupSkippedGroups.includes(entry.key) ? this.cleanupSkippedGroups.filter(key => key !== entry.key) : [...this.cleanupSkippedGroups, entry.key];
+      this.consolidationScope = this.consolidationScope.filter(key => key !== entry.key);
+      this.cleanupSelection = pruneSelection(this.cleanupSelection, this.cleanupGroups, this.selectionOptions());
+    },
+    resetConsolidationReview() {
+      this.cleanupModeGeneration++; this.cleanupStatusRequestID++;
+      if (this.consolidationReviewTaskID) { this.cleanupSelectionKey = null; this.cleanupKeepOverrides = {}; this.cleanupSelection = []; this.cleanupSkippedGroups = []; this.consolidationScope = []; }
+      this.consolidationReviewTaskID = 0; this.consolidationExternalLocks = []; this.consolidationReviewBaseline = '';
+    },
+    openConsolidation(taskID = 0) {
+      if (this.cleanupCloseLocked || this.cleanupGroupRequests > 0) { notify('当前清理操作完成后再打开集中整理任务。'); return false; }
+      if (!taskID && (this.cleanupTrashedIDs.length || this.cleanupDialog.stale)) { notifyError('分析结果可能已过期，请重新分析后再集中整理。'); return; }
+      if (!taskID && !this.consolidationRequestData?.groups.length) return;
+      if (taskID) this.resetConsolidationReview();
+      this.cleanupDialog.show = false;
+      return this.$refs.consolidationDialog?.open(Number(taskID));
+    },
+    markConsolidationStale() { this.cleanupDialog.stale = true; },
+    consolidationStarted() { this.cleanupDialog.stale = true; },
+    consolidationMoved(summary) { this.cleanupDialog.stale = true; this.$emit('consolidation-moved', summary); },
+    async openConsolidationReview(taskID) {
+      if (this.cleanupCloseLocked || this.cleanupGroupRequests > 0) return;
+      this.resetConsolidationReview();
+      this.cleanupSkippedGroups = []; this.consolidationScope = []; this.cleanupSelection = []; this.cleanupKeepOverrides = {};
+      this.consolidationReviewTaskID = Number(taskID);
+      const generation = this.cleanupModeGeneration;
+      this.resetCleanupProgressTracking(); this.cleanupDialog.show = true; this.cleanupDialog.loading = true; this.cleanupDialog.error = ''; this.cleanupDialog.analysis = null;
+      try {
+        const review = await GetCleanupConsolidationReview(Number(taskID));
+        if (generation !== this.cleanupModeGeneration) return;
+        if (!review || Number(review.task_id) !== Number(taskID)) throw new Error('集中整理结果不可用，请重新打开任务。');
+        this.cleanupDialog.analysis = review.analysis;
+        this.cleanupDialog.stale = false; this.cleanupDialog.cancelled = false; this.cleanupTrashedIDs = []; this.cleanupCategory = 'all'; this.activeCleanupDirectory = '';
+        this.consolidationExternalLocks = review.locked_ids || [];
+        const keepers = new Map((review.groups || []).map(group => [consolidationGroupIdentity(group), group.keeper_id]));
+        this.cleanupKeepOverrides = Object.fromEntries(this.cleanupGroups.filter(group => group.switchable).map(group => [group.key, keepers.get(consolidationGroupIdentity(group))]));
+        this.cleanupSelection = pruneSelection((review.groups || []).flatMap(group => group.selected_ids || []), this.cleanupGroups, this.selectionOptions());
+        this.consolidationReviewBaseline = consolidationReviewSignature(review);
+      } catch (err) { if (generation === this.cleanupModeGeneration) this.cleanupDialog.error = String(err?.message || err); }
+      finally { if (generation === this.cleanupModeGeneration) this.cleanupDialog.loading = false; }
+    },
+    async revalidateConsolidationReview() {
+      const taskID = this.consolidationReviewTaskID;
+      if (!taskID) return;
+      const generation = this.cleanupModeGeneration;
+      const review = await GetCleanupConsolidationReview(taskID);
+      if (generation !== this.cleanupModeGeneration || taskID !== this.consolidationReviewTaskID || consolidationReviewSignature(review) !== this.consolidationReviewBaseline) {
+        throw new Error('本次集中整理的文件、分组或保留保护已变化，请重新打开任务审阅。这次没有合并或删除。');
+      }
+    },
     // focus：{ relationId }，从 AI 同源审阅「去清理」过来时定位那一对同源候选。
     open(focus = null) {
+      if (this.cleanupCloseLocked || this.cleanupGroupRequests > 0) return;
+      this.resetConsolidationReview();
       const relationId = Number(focus?.relationId || 0);
       this.cleanupFocus = relationId > 0 ? { relationId } : null;
       this.cleanupFocusedRelationID = 0;
@@ -976,7 +1076,8 @@ export default {
       return curationBadges(this.cleanupDialog.analysis?.curation?.[video.id]);
     },
     selectionOptions(overrides = this.cleanupKeepOverrides) {
-      return { overrides, locked: lockedIDs(this.cleanupGroups, overrides), excluded: this.cleanupTrashedIDs };
+      const locked = overrides === this.cleanupKeepOverrides ? this.cleanupLockedIDs : new Set([...lockedIDs(this.cleanupGroups, overrides, this.cleanupSkippedGroups), ...this.consolidationExternalLocks]);
+      return { overrides, skipped: this.cleanupSkippedGroups, locked, excluded: this.cleanupTrashedIDs };
     },
     entryGroup(entry) {
       return this.cleanupGroupByKey.get(entry.key) || null;
@@ -1018,10 +1119,10 @@ export default {
         groups: this.cleanupGroups,
         overrides: this.cleanupKeepOverrides,
         selection: this.cleanupSelection,
-        excluded: this.cleanupTrashedIDs
+        excluded: this.cleanupTrashedIDs, skipped: this.cleanupSkippedGroups
       }, group, member.id);
       this.cleanupKeepOverrides = next.overrides;
-      this.cleanupSelection = next.selection;
+      this.cleanupSelection = pruneSelection(next.selection, this.cleanupGroups, this.selectionOptions());
     },
     selectedBytes(ids) {
       const sizes = this.cleanupMemberSizes;
@@ -1030,7 +1131,7 @@ export default {
       return bytes;
     },
     applyCleanupStatus(status) {
-      if (!status) return;
+      if (!status || this.consolidationReviewTaskID) return;
       this.cleanupDialog.loading = !!status.running;
       this.cleanupDialog.error = status.error || '';
       this.cleanupDialog.stale = !!status.stale;
@@ -1043,6 +1144,8 @@ export default {
           // 换了一批结果：套一次默认勾选（只勾精确重复的非保留项），保留项覆盖作废。
           this.cleanupSelectionKey = key;
           this.cleanupKeepOverrides = {};
+          this.cleanupSkippedGroups = [];
+          this.consolidationScope = [];
           this.cleanupSelection = defaultSelection(this.cleanupGroups, this.selectionOptions({}));
         } else {
           this.cleanupSelection = pruneSelection(this.cleanupSelection, this.cleanupGroups, this.selectionOptions());
@@ -1071,9 +1174,19 @@ export default {
         this.activeCleanupDirectory = section.directory;
         this.cleanupFocusedRelationID = focus.relationId;
         this.cleanupFocusNotice = '';
+        // 先让类别/目录切换的归零 watcher 落地，再定位两个分页。
         this.$nextTick(() => {
-          const node = document.querySelector('[data-test="cleanup-group-card"][data-focused="true"]');
-          if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center' });
+          if (this.cleanupFocusedRelationID !== focus.relationId || this.cleanupCategory !== 'same-source' || this.activeCleanupDirectory !== section.directory) return;
+          const directoryIndex = this.cleanupFilteredSections.findIndex(item => item.directory === section.directory);
+          const filtered = this.cleanupFilteredSections[directoryIndex];
+          const entryIndex = filtered?.entries.findIndex(item => item.key === entry.key) ?? -1;
+          if (directoryIndex < 0 || entryIndex < 0) return;
+          this.cleanupDirectoryPage = Math.floor(directoryIndex / 80);
+          this.cleanupGroupPage = Math.floor(entryIndex / 40);
+          this.$nextTick(() => {
+            const node = document.querySelector('[data-test="cleanup-group-card"][data-focused="true"]');
+            if (node && typeof node.scrollIntoView === 'function') node.scrollIntoView({ block: 'center' });
+          });
         });
         return;
       }
@@ -1096,6 +1209,7 @@ export default {
     },
     // 只读地同步一次后端状态，用于按钮徽标；不打开面板、不触发分析。
     async refreshCleanupStatus() {
+      if (this.consolidationReviewTaskID) return;
       try {
         const { status, current } = await this.readCleanupStatus();
         if (!current) return;
@@ -1124,6 +1238,7 @@ export default {
       }
     },
     async reanalyzeCleanupCandidates() {
+      this.resetConsolidationReview();
       this.cleanupDialog.show = true;
       if (this.cleanupCategory === 'dismissed') this.cleanupCategory = 'all';
       try {
@@ -1135,6 +1250,8 @@ export default {
       }
     },
     async startNewCleanupAnalysis() {
+      this.resetConsolidationReview();
+      this.cleanupSkippedGroups = []; this.consolidationScope = [];
       const requestID = ++this.cleanupStatusRequestID;
       this.cleanupSelection = [];
       this.cleanupSelectionKey = null;
@@ -1240,8 +1357,9 @@ export default {
     // 等用户确认的这段时间里可能已经开始删除流程，确认之后再查一次；请求进行中计数，删除入口据此拦截。
     async runCleanupGroupRequest(confirmOptions, request) {
       if (this.cleanupDialog.processing) return;
+      const generation = this.cleanupModeGeneration;
       const confirmed = await confirmAction(confirmOptions);
-      if (!confirmed || this.cleanupDialog.processing) return;
+      if (!confirmed || this.cleanupDialog.processing || generation !== this.cleanupModeGeneration) return;
       this.cleanupGroupRequests++;
       try {
         await request();
@@ -1518,15 +1636,19 @@ export default {
       if (this.cleanupDialog.processing || this.deleteConfirm.show || this.cleanupCategory === 'dismissed' || this.cleanupGroupRequests > 0) return;
       // 删除前按锁定规则裁剪勾选（与图片清理页同一做法，P-032 评审 I-1）：保留项、已移到废纸篓、
       // 不再出现在结果里的都不送进删除。合并计划遇到锁定项时报错，不静默跳过。
+      this.cleanupDialog.processing = true;
       let confirmed;
       try {
+        if (this.consolidationReviewTaskID) await this.revalidateConsolidationReview();
         confirmed = deletionPlan(this.cleanupGroups, this.cleanupSelection, this.selectionOptions());
       } catch (err) {
+        this.cleanupDialog.processing = false;
         notifyError(err?.message || String(err));
         return;
       }
       const { ids: selectedIDs, plan } = confirmed;
       if (selectedIDs.length === 0) {
+        this.cleanupDialog.processing = false;
         return;
       }
       const wanted = new Set(selectedIDs);
@@ -1543,6 +1665,7 @@ export default {
         // 先汇总确认（D-PC49）；取消时不调用任何写入。
         const choice = await this.askCleanupDeleteConfirm(summary, plan);
         if (!choice) return;
+        if (this.consolidationReviewTaskID) await this.revalidateConsolidationReview();
         // 确认期间分析结果仍可能被回读替换、改分组的请求也可能刚落地：按当前状态重算一次，
         // 与确认框里的名单不同就中止，不合并、不删除，勾选保持现在的样子。
         if (!deletionPlanUnchanged(confirmed, this.cleanupGroups, this.cleanupSelection, this.selectionOptions())) {
@@ -1738,7 +1861,11 @@ export default {
   font-size: 16px;
 }
 .cleanup-modal-footer {
-  height: 60px;
+  min-height: 60px;
+  height: auto;
+  flex-wrap: wrap;
+  padding-top: 10px;
+  padding-bottom: 10px;
   border-top: 1px solid var(--hairline);
   background: var(--panel-subtle-bg);
 }

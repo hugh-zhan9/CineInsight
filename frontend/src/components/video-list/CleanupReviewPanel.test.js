@@ -623,6 +623,45 @@ async function clickTrash(wrapper) {
   await flushPromises();
 }
 
+describe('精确重复跨组集中保留目录', () => {
+  const analysis = () => baseAnalysis({
+    duplicate_groups: [
+      { original: video(1), candidates: [video(2, { directory: '/lib/b' })] },
+      { original: video(4), candidates: [video(3, { directory: '/lib/b' })] }
+    ]
+  });
+
+  it('保留 A、C，默认只勾另一目录的 B、D，并逐组合并到正确的保留项', async () => {
+    api.MergeMediaMetadata.mockResolvedValue({ warnings: [] });
+    const { wrapper, trashVideos } = await openWith(analysis());
+    expect(wrapper.vm.cleanupDirectorySections.map(section => section.directory)).toEqual(['/lib/a']);
+    expect(wrapper.vm.cleanupSelection).toEqual([2, 3]);
+    expect(wrapper.vm.isCleanupLocked(1)).toBe(true);
+    expect(wrapper.vm.isCleanupLocked(4)).toBe(true);
+
+    await clickTrash(wrapper);
+    expect(trashVideos).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
+    await flushPromises();
+    expect(api.MergeMediaMetadata.mock.calls).toEqual([
+      ['video', 1, [2], FULL_MERGE], ['video', 4, [3], FULL_MERGE]
+    ]);
+    expect(trashVideos.mock.calls[0][0]).toEqual([2, 3]);
+    wrapper.unmount();
+  });
+
+  it('手动改保留项只影响该组，不把其他组重新分散或自动勾选原保留项', async () => {
+    const { wrapper } = await openWith(analysis());
+    const entry = wrapper.vm.cleanupDirectorySections[0].entries[0];
+    wrapper.vm.setCleanupKeeper(entry, entry.members.find(member => member.id === 2));
+    expect(wrapper.vm.cleanupSelection).toEqual([3]);
+    expect(wrapper.vm.isCleanupLocked(2)).toBe(true);
+    expect(wrapper.vm.isCleanupLocked(4)).toBe(true);
+    expect(wrapper.vm.isCleanupLocked(1)).toBe(false);
+    wrapper.unmount();
+  });
+});
+
 describe('IMG-03 保留建议与合并元数据', () => {
   const exactAnalysis = () => baseAnalysis({
     duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '文件大小和采样哈希一致' }],
@@ -1710,4 +1749,125 @@ describe('D-PC49 删除流程中的面板关闭保护（P-032 复审 Minor）', 
     expect(lockNotices()).toHaveLength(0);
     wrapper.unmount();
   });
+});
+
+describe('集中整理后的独立清理审阅', () => {
+  const review = (extra = {}) => ({ task_id: 81, groups: [{ kind: 'near', member_ids: [1, 2, 3], keeper_id: 1, selected_ids: [2, 3], keeper_pinned: false }], locked_ids: [3], analysis: { near_duplicate_groups: [{ original: { id: 1, name: 'A', path: '/target/A.mp4' }, candidates: [{ id: 2, name: 'B', path: '/old/B.mp4' }, { id: 3, name: 'C', path: '/old/C.mp4' }] }] }, ...extra });
+  it('只恢复本次意向并保护外部keeper，切换本地keeper释放旧项但不自动勾，全局状态不能覆盖', async () => {
+    api.GetCleanupConsolidationReview.mockResolvedValue(review());
+    const wrapper = mountPanel(); await flushPromises(); await wrapper.vm.openConsolidationReview(81);
+    expect(wrapper.vm.cleanupSelection).toEqual([2]); expect(wrapper.vm.cleanupLockedIDs.has(3)).toBe(true);
+    const entry = wrapper.vm.cleanupDirectorySections[0].entries[0];
+    wrapper.vm.setCleanupKeeper(entry, entry.members[1]);
+    expect(wrapper.vm.cleanupKeepOverrides[entry.key]).toBe(2); expect(wrapper.vm.cleanupLockedIDs.has(1)).toBe(false);
+    expect(wrapper.vm.cleanupLockedIDs.has(3)).toBe(true); expect(wrapper.vm.cleanupSelection).toEqual([]);
+    wrapper.vm.applyCleanupStatus({ completed: true, analysis: { duplicate_groups: [] } });
+    await wrapper.vm.refreshStatus(); expect(wrapper.vm.cleanupGroups).toHaveLength(1);
+    expect(wrapper.vm.cleanupDialog.analysis.near_duplicate_groups[0].original.path).toBe('/target/A.mp4');
+    expect(wrapper.props('trashVideos')).not.toHaveBeenCalled(); expect(api.MergeMediaMetadata).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+  it('本组不删保护全部成员，排除移动范围，同轮普通结果关闭重开保留', async () => {
+    const analysis = review().analysis;
+    api.GetCleanupStatus.mockResolvedValue({ completed: true, started_at: 'same', analysis });
+    const wrapper = mountPanel(); await flushPromises(); await wrapper.vm.open();
+    const entry = wrapper.vm.cleanupDirectorySections[0].entries[0];
+    wrapper.vm.cleanupSelection = [2]; wrapper.vm.toggleConsolidationScope(entry); expect(wrapper.vm.consolidationRequestData.groups).toHaveLength(1);
+    wrapper.vm.toggleSkippedGroup(entry);
+    expect(wrapper.vm.cleanupSelection).toEqual([]); expect(wrapper.vm.consolidationScope).toEqual([]);
+    expect(wrapper.vm.consolidationRequestData.protections[0].skipped).toBe(true);
+    wrapper.vm.closeCleanupDialog(); await wrapper.vm.open();
+    expect(wrapper.vm.cleanupSkippedGroups).toEqual([entry.key]); expect([...wrapper.vm.cleanupLockedIDs]).toEqual([1, 2, 3]); wrapper.unmount();
+  });
+  it('确认前及确认后都新鲜回读，保留手选意向，已有合并/废纸篓顺序不变', async () => {
+    api.GetCleanupConsolidationReview.mockResolvedValue(review()); api.MergeMediaMetadata.mockResolvedValue({ warnings: [] }); feedback.confirmAction.mockResolvedValue(false);
+    const wrapper = mountPanel(); await flushPromises(); await wrapper.vm.openConsolidationReview(81);
+    wrapper.vm.setCleanupKeeper(wrapper.vm.cleanupDirectorySections[0].entries[0], { id: 2 }); wrapper.vm.toggleCleanupSelection(1);
+    const deleting = wrapper.vm.trashSelectedCleanupCandidates(); await flushPromises();
+    expect(api.GetCleanupConsolidationReview).toHaveBeenCalledTimes(2); expect(wrapper.vm.deleteConfirm.show).toBe(true);
+    wrapper.vm.answerCleanupDelete(true); await deleting;
+    expect(api.GetCleanupConsolidationReview).toHaveBeenCalledTimes(3);
+    expect(api.MergeMediaMetadata).toHaveBeenCalledWith('video', 2, [1], FULL_MERGE);
+    expect(wrapper.props('trashVideos')).toHaveBeenCalledWith([1], expect.any(Object)); wrapper.unmount();
+  });
+  it.each(['lock', 'path', 'member'])('异步确认期间%s变化，禁止合并或删除', async change => {
+    api.GetCleanupConsolidationReview.mockResolvedValue(review());
+    const wrapper = mountPanel(); await flushPromises(); await wrapper.vm.openConsolidationReview(81);
+    const deleting = wrapper.vm.trashSelectedCleanupCandidates(); await flushPromises();
+    const changed = review();
+    if (change === 'lock') changed.locked_ids = [2, 3];
+    if (change === 'path') changed.analysis.near_duplicate_groups[0].original.path = '/elsewhere/A.mp4';
+    if (change === 'member') changed.groups[0].member_ids = [1, 2];
+    api.GetCleanupConsolidationReview.mockResolvedValue(changed); wrapper.vm.answerCleanupDelete(true); await deleting;
+    expect(api.MergeMediaMetadata).not.toHaveBeenCalled(); expect(wrapper.props('trashVideos')).not.toHaveBeenCalled();
+    expect(feedback.notifyError).toHaveBeenCalledWith(expect.stringContaining('已变化')); wrapper.unmount();
+  });
+  it('确认前回读失败不出现删除确认；返回全库清除task外部锁且迟到review不覆盖', async () => {
+    api.GetCleanupConsolidationReview.mockResolvedValue(review());
+    api.GetCleanupStatus.mockResolvedValue({ completed: true, started_at: 'global', analysis: { duplicate_groups: [{ original: { id: 8 }, candidates: [{ id: 3 }] }] } });
+    const wrapper = mountPanel(); await flushPromises(); await wrapper.vm.openConsolidationReview(81);
+    api.GetCleanupConsolidationReview.mockRejectedValue(new Error('源文件已变化')); await wrapper.vm.trashSelectedCleanupCandidates();
+    expect(wrapper.vm.deleteConfirm.show).toBe(false); expect(wrapper.props('trashVideos')).not.toHaveBeenCalled();
+    let resolve; api.GetCleanupConsolidationReview.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    const old = wrapper.vm.openConsolidationReview(81); await wrapper.vm.open(); resolve(review()); await old;
+    expect(wrapper.vm.consolidationReviewTaskID).toBe(0); expect(wrapper.vm.consolidationExternalLocks).toEqual([]); expect(wrapper.vm.cleanupSelection).toEqual([3]); wrapper.unmount();
+  });
+});
+
+it('10k相关组的审阅只渲染40组，完整保护不随分页裁剪；任务模式忽略全库进度事件', async () => {
+  const handlers = {}; const previousRuntime = window.runtime;
+  window.runtime = { EventsOn: (event, handler) => { handlers[event] = handler; return vi.fn(); } };
+  const wrapper = mountPanel({ deep: true }); await flushPromises();
+  wrapper.vm.cleanupDialog.show = true;
+  wrapper.vm.cleanupDialog.analysis = { near_duplicate_groups: Array.from({ length: 10000 }, (_, i) => ({ original: { id: i * 2 + 1, directory: '/same' }, candidates: [{ id: i * 2 + 2, directory: '/same' }] })) };
+  await flushPromises(); expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(40);
+  expect(wrapper.vm.consolidationRequestData.protections).toHaveLength(10000);
+  wrapper.vm.consolidationReviewTaskID = 81;
+  await handlers['cleanup-progress']({ stage: 'hash', current: 1, total: 5 });
+  expect(wrapper.vm.cleanupDialog.loading).toBe(false); expect(wrapper.vm.cleanupDialog.analysis.near_duplicate_groups).toHaveLength(10000);
+  wrapper.unmount(); window.runtime = previousRuntime;
+});
+
+it('定位首屏之外的同源目录时，目录分页与正文一起定位', async () => {
+  const wrapper = mountPanel(); await flushPromises();
+  const groups = Array.from({ length: 100 }, (_, i) => ({ relation_id: i + 1, preferred: { id: i * 2 + 1, directory: `/dir/${String(i).padStart(3, '0')}` }, alternative: { id: i * 2 + 2 } }));
+  wrapper.vm.cleanupDialog.analysis = { same_source_groups: groups }; await flushPromises();
+  wrapper.vm.cleanupFocus = { relationId: 95 }; wrapper.vm.applyCleanupFocus(); await flushPromises();
+  expect(wrapper.vm.activeCleanupSections[0].entries[0].group.relation_id).toBe(95);
+  expect(wrapper.vm.cleanupVisibleDirectorySections.map(s => s.directory)).toContain('/dir/094');
+  wrapper.unmount();
+});
+it('分组末页收缩后页码与正文一致，上一页立即生效', async () => {
+  const wrapper = mountPanel({ deep: true }); await flushPromises();
+  wrapper.vm.cleanupDialog.show = true;
+  const groups = Array.from({ length: 81 }, (_, i) => ({ original: { id: i * 2 + 1, directory: '/same' }, candidates: [{ id: i * 2 + 2 }] }));
+  wrapper.vm.cleanupDialog.analysis = { near_duplicate_groups: groups }; await flushPromises();
+  wrapper.vm.cleanupGroupPage = 2; await flushPromises();
+  wrapper.vm.cleanupDialog.analysis = { near_duplicate_groups: groups.slice(0,80) }; await flushPromises();
+  expect(wrapper.vm.activeCleanupSections[0].entries).toHaveLength(40);
+  expect(wrapper.vm.cleanupGroupPage).toBe(1);
+  const pagination = wrapper.get('nav[aria-label="清理分组分页"]');
+  expect(pagination.text()).toContain('2 / 2');
+  expect(wrapper.vm.activeCleanupSections[0].entries[0].keeper.id).toBe(81);
+  await pagination.findAll('button')[0].trigger('click');
+  expect(wrapper.vm.activeCleanupSections[0].entries[0].keeper.id).toBe(1);
+  wrapper.vm.cleanupDialog.analysis = {}; await flushPromises();
+  expect(wrapper.vm.cleanupGroupPage).toBe(0);
+  wrapper.unmount();
+});
+
+it('目录分页在结果收缩及清空后归位，不改变删除勾选或集中范围', async () => {
+  const wrapper = mountPanel(); await flushPromises();
+  const groups = Array.from({ length: 161 }, (_, i) => ({ original: { id: i * 2 + 1, directory: `/dir/${String(i).padStart(3, '0')}` }, candidates: [{ id: i * 2 + 2 }] }));
+  wrapper.vm.cleanupDialog.analysis = { near_duplicate_groups: groups }; await flushPromises();
+  wrapper.vm.cleanupSelection = [2]; wrapper.vm.consolidationScope = ['near-1']; wrapper.vm.cleanupDirectoryPage = 2;
+  wrapper.vm.cleanupDialog.analysis = { near_duplicate_groups: groups.slice(0, 160) }; await flushPromises();
+  expect(wrapper.vm.cleanupDirectoryPage).toBe(1);
+  expect(wrapper.vm.cleanupVisibleDirectorySections[0].directory).toBe('/dir/080');
+  wrapper.vm.cleanupDirectoryPage--; await flushPromises();
+  expect(wrapper.vm.cleanupVisibleDirectorySections[0].directory).toBe('/dir/000');
+  expect(wrapper.vm.cleanupSelection).toEqual([2]); expect(wrapper.vm.consolidationScope).toEqual(['near-1']);
+  wrapper.vm.cleanupDirectoryPage = 1;
+  wrapper.vm.cleanupDialog.analysis = {}; await flushPromises();
+  expect(wrapper.vm.cleanupDirectoryPage).toBe(0); expect(wrapper.vm.cleanupGroupPage).toBe(0); wrapper.unmount();
 });

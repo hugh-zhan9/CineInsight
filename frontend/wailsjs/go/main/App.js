@@ -102,6 +102,10 @@ export function CancelCleanupAnalysis() {
   return window['go']['main']['App']['CancelCleanupAnalysis']();
 }
 
+export function CancelCleanupConsolidation() {
+  return window['go']['main']['App']['CancelCleanupConsolidation']();
+}
+
 export function CancelCollectionSuggestionAnalysis() {
   return window['go']['main']['App']['CancelCollectionSuggestionAnalysis']();
 }
@@ -464,6 +468,14 @@ export function GetBackupStatus() {
 
 export function GetBrowserBridgeStatus() {
   return window['go']['main']['App']['GetBrowserBridgeStatus']();
+}
+
+export function GetCleanupConsolidationReview(arg1) {
+  return window['go']['main']['App']['GetCleanupConsolidationReview'](arg1);
+}
+
+export function GetCleanupConsolidationStatus(arg1) {
+  return window['go']['main']['App']['GetCleanupConsolidationStatus'](arg1);
 }
 
 export function GetCleanupStatus() {
@@ -934,6 +946,10 @@ export function PrepareSubtitleEngine(arg1) {
   return window['go']['main']['App']['PrepareSubtitleEngine'](arg1);
 }
 
+export function PreviewCleanupConsolidation(arg1) {
+  return window['go']['main']['App']['PreviewCleanupConsolidation'](arg1);
+}
+
 export function PreviewExternally(arg1) {
   return window['go']['main']['App']['PreviewExternally'](arg1);
 }
@@ -1248,6 +1264,10 @@ export function SetWindowForeground(arg1) {
 
 export function StartCleanupAnalysisFromSettings() {
   return window['go']['main']['App']['StartCleanupAnalysisFromSettings']();
+}
+
+export function StartCleanupConsolidation(arg1, arg2) {
+  return window['go']['main']['App']['StartCleanupConsolidation'](arg1, arg2);
 }
 
 export function StartCollectionSuggestionAnalysis() {

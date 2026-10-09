@@ -65,7 +65,7 @@ const quitConfirmRequiredEvent = "quit-confirm-required"
 const quitBlockingNameLimit = 5
 
 // QuitBlockingTask 是一类拦住退出的任务。Key 取后台任务 key：subtitle / enhancement / proxy /
-// browser_download。Running / Queued 是运行中与排队中的个数（超分只知道在不在跑，Running 为 1）；
+// browser_download / cleanup_consolidation。Running / Queued 是运行中与排队中的个数（超分只知道在不在跑，Running 为 1）；
 // Names 是能在内存里拿到的任务名（视频名或下载标题），最多 quitBlockingNameLimit 个。
 type QuitBlockingTask struct {
 	Key     string   `json:"key"`
@@ -114,7 +114,7 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 	return true
 }
 
-// quitBlockingTasks 收集拦住退出的任务，顺序固定：字幕、超分、播放代理、浏览器下载。
+// quitBlockingTasks 收集拦住退出的任务，顺序固定：字幕、超分、播放代理、浏览器下载、集中整理。
 // 运行与否与任务中心同一个来源（登记表），字幕另外算上队列里排队的任务。
 //
 // 进行中的字幕翻译（D-PC21 清单里的最后一项）不在其中：字幕服务目前没有只读的「哪些翻译在跑」
@@ -124,7 +124,7 @@ func (a *App) quitBlockingTasks() []QuitBlockingTask {
 	for _, key := range a.backgroundTasks.Snapshot() {
 		running[key] = true
 	}
-	tasks := make([]QuitBlockingTask, 0, 4)
+	tasks := make([]QuitBlockingTask, 0, 5)
 
 	if a.subtitleService != nil {
 		queue := a.subtitleService.GetSubtitleQueueState()
@@ -179,6 +179,9 @@ func (a *App) quitBlockingTasks() []QuitBlockingTask {
 	}
 	if download.Running+download.Queued > 0 {
 		tasks = append(tasks, download)
+	}
+	if running[string(services.BackgroundTaskCleanupConsolidation)] {
+		tasks = append(tasks, QuitBlockingTask{Key: string(services.BackgroundTaskCleanupConsolidation), Running: 1, Names: []string{}})
 	}
 	return tasks
 }

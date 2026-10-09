@@ -91,23 +91,25 @@ type App struct {
 	// 浏览器插件桥接（D-B03、D-B04）。与手机端 feed 服务是两条互不相干的通道：
 	// feed 绑 0.0.0.0、只读、无鉴权；桥接只绑 127.0.0.1、要令牌，因为它能让
 	// 桌面端按外部请求去取任意地址并往磁盘写文件。
-	browserDownloads   *services.BrowserDownloadService
-	browserBridge      *services.BrowserBridgeServer
-	startupError       string
-	logFile            *os.File // 保持日志文件句柄引用，防止泄漏
-	backupCancel       context.CancelFunc
-	backupWG           sync.WaitGroup
-	backupOpMu         sync.Mutex
-	backupOpsClosed    bool
-	semanticMu         sync.RWMutex
-	imageAITagMu       sync.RWMutex
-	imageAITagging     *services.ImageAITaggingService
-	imageAITagAutoMu   sync.Mutex // 串行化自动触发，防止启动与扫描后触发并发
-	imageSemanticMu    sync.RWMutex
-	imageSemanticIndex *services.ImageSemanticIndexService
-	restoreMu          sync.Mutex
-	restoreTerminal    bool
-	restoreRelease     func()
+	browserDownloads       *services.BrowserDownloadService
+	browserBridge          *services.BrowserBridgeServer
+	startupError           string
+	logFile                *os.File // 保持日志文件句柄引用，防止泄漏
+	backupCancel           context.CancelFunc
+	backupWG               sync.WaitGroup
+	backupOpMu             sync.Mutex
+	backupOpsClosed        bool
+	semanticMu             sync.RWMutex
+	imageAITagMu           sync.RWMutex
+	imageAITagging         *services.ImageAITaggingService
+	imageAITagAutoMu       sync.Mutex // 串行化自动触发，防止启动与扫描后触发并发
+	imageSemanticMu        sync.RWMutex
+	imageSemanticIndex     *services.ImageSemanticIndexService
+	consolidationLifecycle cleanupConsolidationLifecycle
+
+	restoreMu       sync.Mutex
+	restoreTerminal bool
+	restoreRelease  func()
 
 	// 年度电影榜单（D-MC01..D-MC13）。与上面几个握着 *gorm.DB 的服务同理，它在
 	// 数据库就绪后由 resetMovieChartService 构造、用锁换上，不在 NewApp 里建。
@@ -194,6 +196,7 @@ func NewApp() *App {
 	app.wireBrowserBridge()
 	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService, personService, collectionService)
 	app.wireBackgroundTaskRegistry()
+	app.configureCleanupConsolidation(dataDir)
 	app.wireDesktopNotifier()
 	app.wireServiceHooks()
 	if dataDirErr != nil {
@@ -404,6 +407,8 @@ func (a *App) startup(ctx context.Context) {
 		}
 	}()
 	a.cleanupService.SetContext(ctx)
+	a.enableCleanupConsolidationStart()
+	a.startCleanupConsolidationRecovery()
 	if result, err := a.tagService.SyncShortVideoTags(); err != nil {
 		log.Printf("App startup short-video tag sync failed err=%v", err)
 	} else {
@@ -463,6 +468,9 @@ func (a *App) wireStartupHooks(emit func(event string, data any)) {
 		emit(event, data)
 		a.notifyTaskCenterChanged()
 	}
+	a.consolidationLifecycle.mu.Lock()
+	a.consolidationLifecycle.emit = emitTaskState
+	a.consolidationLifecycle.mu.Unlock()
 	// 登记表变化驱动三件事：清掉已跑完任务的一次性 bypass、刷 Dock 角标（D-014），
 	// 再广播给前端。角标不看开关也不看前后台，它就是"现在几个任务在跑"。
 	a.backgroundTasks.SetOnChange(func(running []string) {
@@ -586,6 +594,9 @@ func (a *App) shutdown(ctx context.Context) {
 	a.restoreMu.Lock()
 	a.restoreTerminal = true
 	a.restoreMu.Unlock()
+	if err := a.stopCleanupConsolidationAndWait(); err != nil {
+		log.Printf("集中整理退出收尾失败 err=%v", err)
+	}
 	// 播放失败后的后台重定位会改路径写库：取消排队与进行中的，等它们退出。
 	services.StopPlaybackRelocation()
 	// 30 秒「换一个」窗口里还没提交的那次随机播放照样记账（D-PC43）。数据库由 main 在

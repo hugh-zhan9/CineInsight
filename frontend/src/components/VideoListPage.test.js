@@ -2168,3 +2168,26 @@ describe('P-036 抽屉事件接线（P-037 的动作条与人物详情）', () =
   });
 });
 
+
+it('集中整理路由在片库首次挂载后打开正确任务，旧回调不消费新任务', async () => {
+  const openConsolidation = vi.fn().mockResolvedValue();
+  const wrapper = await mountPage({ consolidationRoute: { taskID: 81, generation: 1 } }, {
+    global: { stubs: { CleanupReviewPanel: { name: 'CleanupReviewPanel', template: '<div />', methods: { openConsolidation } } } }
+  });
+  expect(openConsolidation).toHaveBeenCalledWith(81); expect(wrapper.emitted('consolidation-opened')).toHaveLength(1);
+  let finish; openConsolidation.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValueOnce();
+  await wrapper.setProps({ consolidationRoute: { taskID: 82, generation: 2 } }); await flushPromises();
+  await wrapper.setProps({ consolidationRoute: { taskID: 83, generation: 3 } }); await flushPromises();
+  finish(); await flushPromises(); expect(wrapper.emitted('consolidation-opened')).toHaveLength(2); wrapper.unmount();
+});
+
+it('任何后台集中整理终态都刷新片库一次，不依赖当前打开的历史任务；不触发清理', async () => {
+  const handlers = {}; window.runtime = { EventsOn: (name, handler) => { handlers[name] = handler; return vi.fn(); } };
+  const markConsolidationStale = vi.fn();
+  const wrapper = await mountPage({}, { global: { stubs: { CleanupReviewPanel: { name: 'CleanupReviewPanel', template: '<div />', methods: { markConsolidationStale } } } } });
+  const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+  await handlers['cleanup-consolidation-progress']({ id: 82, version: 2, status: 'running', completed: 1 }); expect(reload).not.toHaveBeenCalled();
+  await handlers['cleanup-consolidation-progress']({ id: 82, version: 3, status: 'cancelled', completed: 1 });
+  await wrapper.vm.handleConsolidationMoved({ id: 82, version: 3, status: 'cancelled', completed: 1 });
+  expect(reload).toHaveBeenCalledTimes(1); expect(markConsolidationStale).toHaveBeenCalledOnce(); expect(wrapper.emitted('reload-directories')).toHaveLength(1); wrapper.unmount();
+});

@@ -55,6 +55,8 @@ export function CancelBrowserDownloadTask(arg1:string):Promise<void>;
 
 export function CancelCleanupAnalysis():Promise<void>;
 
+export function CancelCleanupConsolidation():Promise<void>;
+
 export function CancelCollectionSuggestionAnalysis():Promise<void>;
 
 export function CancelEnhancementModelDownload():Promise<services.EnhancementModelStatus>;
@@ -236,6 +238,10 @@ export function GetBackgroundTasks():Promise<Array<string>>;
 export function GetBackupStatus():Promise<services.BackupStatus>;
 
 export function GetBrowserBridgeStatus():Promise<services.BrowserBridgeStatus>;
+
+export function GetCleanupConsolidationReview(arg1:number):Promise<services.CleanupConsolidationReview>;
+
+export function GetCleanupConsolidationStatus(arg1:number):Promise<services.CleanupConsolidationStatus>;
 
 export function GetCleanupStatus():Promise<services.CleanupStatus>;
 
@@ -471,6 +477,8 @@ export function PrepareFaceRuntime():Promise<services.FaceRuntimeStatus>;
 
 export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void>;
 
+export function PreviewCleanupConsolidation(arg1:services.CleanupConsolidationRequest):Promise<services.CleanupConsolidationPreview>;
+
 export function PreviewExternally(arg1:number):Promise<void>;
 
 export function PreviewFaceClusterUnlink(arg1:number):Promise<Array<services.FaceUnlinkMediaView>>;
@@ -628,6 +636,8 @@ export function SetWallpaper(arg1:string,arg2:number):Promise<services.Wallpaper
 export function SetWindowForeground(arg1:boolean):Promise<void>;
 
 export function StartCleanupAnalysisFromSettings():Promise<services.CleanupStatus>;
+
+export function StartCleanupConsolidation(arg1:string,arg2:boolean):Promise<services.CleanupConsolidationStatus>;
 
 export function StartCollectionSuggestionAnalysis():Promise<services.CollectionSuggestionStatus>;
 

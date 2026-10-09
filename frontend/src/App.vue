@@ -65,6 +65,8 @@
         ref="videoListPage"
         v-show="currentPage === 'videos'"
         :page-active="currentPage === 'videos'"
+        :consolidation-route="consolidationRoute"
+        @consolidation-opened="consolidationRoute = null"
         :tags="tags"
         :settings="settings"
         :directories="directories"
@@ -124,6 +126,7 @@
       @close="taskCenterOpen = false"
       @badge-change="taskCenterBadge = $event"
       @open-video="openVideoByID"
+      @open-consolidation="openConsolidationTask"
     />
     <PendingWorkHub
       v-if="!startupError"
@@ -218,6 +221,8 @@ export default {
       // 设置页有未保存修改（SettingsPage 的 update:dirty，D-PC57）：切走前要先确认。
       settingsDirty: false,
       taskCenterOpen: false,
+      consolidationRoute: null,
+      consolidationRouteGeneration: 0,
       pendingWorkOpen: false,
       // 两个顶栏角标的数据由常挂载的抽屉与工作台报上来。
       taskCenterBadge: { running: 0, failed: false },
@@ -383,6 +388,13 @@ export default {
       }
       this.currentPage = page;
       return true;
+    },
+    async openConsolidationTask(taskID) {
+      const generation = ++this.consolidationRouteGeneration;
+      const navigated = await this.navigateTo('videos');
+      if (navigated === false || generation !== this.consolidationRouteGeneration) return;
+      this.consolidationRoute = { taskID: Number(taskID), generation };
+      this.taskCenterOpen = false;
     },
     openTaskCenter() {
       this.pendingWorkOpen = false;
