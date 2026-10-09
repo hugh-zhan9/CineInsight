@@ -132,7 +132,7 @@ func fixSImages(t *testing.T) (*models.Image, *models.Image, *models.Image) {
 func TestImageCleanupIMG07DismissMemberAcceptsTrashedMemberFixS(t *testing.T) {
 	setupImageServiceTestDB(t)
 	a, b, c := fixSImages(t)
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil || len(analysis.NearDuplicateGroups) != 1 || len(imageCleanupGroupIDs(analysis.NearDuplicateGroups[0])) != 3 {
 		t.Fatalf("三张图应成一组: %+v err=%v", analysis, err)

@@ -276,7 +276,7 @@ func TestImageCleanupIMG03KeeperPrefersCuratedImage(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	analysis, err := NewImageCleanupService().AnalyzeImageCleanupCandidates()
+	analysis, err := newImageCleanupTestService().AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -874,7 +874,7 @@ func TestImageCleanupIMG07MemberDismissalAndFingerprintExpiry(t *testing.T) {
 	a := imageCleanupCreateImage(t, filepath.Join(dir, "a.jpg"), bytes.Repeat([]byte("a"), 300), "abcd000000000000", 100, 100)
 	b := imageCleanupCreateImage(t, filepath.Join(dir, "b.jpg"), bytes.Repeat([]byte("b"), 301), "abcd000000000000", 100, 100)
 	c := imageCleanupCreateImage(t, filepath.Join(dir, "c.jpg"), bytes.Repeat([]byte("c"), 302), "abcd000000000000", 100, 100)
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil || len(analysis.NearDuplicateGroups) != 1 || len(imageCleanupGroupIDs(analysis.NearDuplicateGroups[0])) != 3 {
 		t.Fatalf("三张图应成一组: %+v err=%v", analysis, err)
@@ -978,7 +978,7 @@ func TestImageCleanupIMG11CoverageCountsHashedImages(t *testing.T) {
 	os.Remove(offlineHashed.Path)
 	os.Remove(offlineBare.Path)
 
-	analysis, err := NewImageCleanupService().AnalyzeImageCleanupCandidates()
+	analysis, err := newImageCleanupTestService().AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1001,7 +1001,7 @@ func TestCleanupIMG12AnalysisStopsOnCancelledContext(t *testing.T) {
 	}
 	setupImageServiceTestDB(t)
 	imageCleanupCreateImage(t, filepath.Join(t.TempDir(), "a.jpg"), []byte("a"), "", 1, 1)
-	if _, _, err := NewImageCleanupService().analyzeImageCleanupCandidates(ctx); !errors.Is(err, context.Canceled) {
+	if _, _, err := newImageCleanupTestService().analyzeImageCleanupCandidates(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("已取消的上下文应让图片分析返回 context.Canceled: %v", err)
 	}
 }
@@ -1103,7 +1103,7 @@ func TestImageCleanupIMG12CancelAndRegistersImageCleanupTask(t *testing.T) {
 			finished <- struct{}{}
 		}
 	})
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	svc.SetBackgroundTaskRegistry(registry)
 	if err := svc.CancelImageCleanupAnalysis(); !errors.Is(err, ErrImageCleanupAnalysisNotRunning) {
 		t.Fatalf("没在跑时取消应报未运行: %v", err)

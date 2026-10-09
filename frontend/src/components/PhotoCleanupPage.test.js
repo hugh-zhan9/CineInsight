@@ -93,6 +93,56 @@ beforeEach(() => {
 });
 
 describe('图片清理审阅', () => {
+  it('数千组结果只挂载一页，翻页保留全量勾选与保留项', async () => {
+    const groups = Array.from({ length: 1000 }, (_, i) => ({
+      original: makeMember(i * 2 + 1, `keep-${i}.jpg`),
+      candidates: [makeMember(i * 2 + 2, `copy-${i}.jpg`)]
+    }));
+    const wrapper = await mountWith(statusWith({ duplicate_groups: groups }));
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(10);
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(20);
+    expect(wrapper.vm.selection).toHaveLength(1000);
+    expect(wrapper.get('.cleanup-dir__count').text()).toContain('1000 组');
+    await wrapper.get('[data-test="cleanup-page-next"]').trigger('click');
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(10);
+    expect(wrapper.text()).toContain('keep-10.jpg');
+    expect(wrapper.vm.selection).toHaveLength(1000);
+    await wrapper.findAll('[data-test="cleanup-keep-toggle"]')[1].setValue(true);
+    expect(wrapper.vm.review.keepOverrides['exact-21']).toBe(22);
+    expect(wrapper.vm.selection).not.toContain(22);
+    await wrapper.get('[data-test="cleanup-page-prev"]').trigger('click');
+    expect(wrapper.text()).toContain('keep-0.jpg');
+    await wrapper.get('[data-test="cleanup-page-next"]').trigger('click');
+    expect(wrapper.findAll('[data-test="cleanup-keep-toggle"]')[1].element.checked).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('大组换保留项并启用同目录策略时，不逐成员扫描整组', async () => {
+    const group = { original: makeMember(1, 'keep.jpg'), candidates: Array.from({ length: 19999 }, (_, i) => makeMember(i + 2, `copy-${i}.jpg`)) };
+    const wrapper = await mountWith(statusWith({ duplicate_groups: [group] }));
+    wrapper.vm.review.sameDirOnly = true;
+    wrapper.vm.review.keepOverrides = { 'exact-1': 20000 };
+    const members = wrapper.vm.cleanupGroups[0].memberIds;
+    const includes = vi.spyOn(members, 'includes');
+    expect(wrapper.vm.suggestedIDsFor(wrapper.vm.entries[0])).toHaveLength(19999);
+    // 查保留项至多按组执行；旧逻辑会为 19999 个候选分别 includes(20000)。
+    expect(includes.mock.calls.length).toBeLessThan(10);
+    includes.mockRestore();
+    wrapper.unmount();
+  });
+
+  it('单一大组也分页，指纹距离不声称内容相似度百分比', async () => {
+    const group = { original: makeMember(1, 'keep.jpg'), candidates: Array.from({ length: 999 }, (_, i) => makeMember(i + 2, `copy-${i}.jpg`)), max_hamming_distance: 0 };
+    const wrapper = await mountWith(statusWith({ near_duplicate_groups: [group] }));
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(20);
+    expect(wrapper.get('[data-test="cleanup-similarity"]').text()).not.toContain('%');
+    await wrapper.get('[data-test="cleanup-members-next"]').trigger('click');
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(20);
+    expect(wrapper.text()).toContain('copy-19.jpg');
+    expect(wrapper.vm.selection).toEqual([]);
+    wrapper.unmount();
+  });
+
   // 2026-09-30 P-032：旧用例（第 42 行）钉住的是「近似重复也默认预勾」，按 D-PC49 改为近似不勾。
   it('IMG-04 近似重复默认不勾选', async () => {
     const wrapper = mount(PhotoCleanupPage);

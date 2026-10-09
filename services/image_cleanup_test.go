@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"image"
+	"image/color"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +15,25 @@ import (
 	"video-master/database"
 	"video-master/models"
 )
+
+// 旧夹具只模拟 dHash 与分组合同；显式注入同一有纹理画面，画面读取另有真实图片回归。
+func newImageCleanupTestService() *ImageCleanupService {
+	svc := NewImageCleanupService(nil)
+	img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+	for y := 0; y < 32; y++ {
+		for x := 0; x < 32; x++ {
+			v := byte(40 + (x*17+y*31)%180)
+			img.Set(x, y, color.RGBA{v, v, v, 255})
+		}
+	}
+	visual := imageCleanupVisualFromImage(img)
+	svc.readVisual = func(context.Context, imageCleanupFileState) (*imageCleanupVisual, error) { return visual, nil }
+	return svc
+}
+
+func (s *ImageCleanupService) buildNearDuplicateGroups(ctx context.Context, states []imageCleanupFileState, excluded map[[2]uint]struct{}) ([]ImageCleanupDuplicateGroup, int64) {
+	return s.buildVerifiedNearDuplicateGroups(ctx, states, excluded, newImageCleanupVisualCache(s.readVisual))
+}
 
 // imageCleanupCreateImage 写入真实文件并按当前 stat 建库记录；hash 非空时把
 // hash_source_size/mod_time 设为与文件一致（即"非 stale"）。
@@ -67,13 +88,68 @@ func imageCleanupContainsID(ids []uint, id uint) bool {
 
 func TestImageCleanupEmptyLibraryProducesEmptyAnalysis(t *testing.T) {
 	setupImageServiceTestDB(t)
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("空库分析失败: %v", err)
 	}
 	if len(analysis.DuplicateGroups) != 0 || len(analysis.NearDuplicateGroups) != 0 || analysis.StaleHashCount != 0 {
 		t.Fatalf("空库应产出空分析结果，实际 %+v", analysis)
+	}
+}
+
+func TestImageCleanupRejectsSampleHashCollision(t *testing.T) {
+	setupImageServiceTestDB(t)
+	dir := t.TempDir()
+	left := bytes.Repeat([]byte("a"), 8*partialHashChunkSize)
+	right := append([]byte(nil), left...)
+	right[2*partialHashChunkSize] = 'b' // 首、中、尾三个采样区以外。
+	a := imageCleanupCreateImage(t, filepath.Join(dir, "a.jpg"), left, "", 100, 100)
+	b := imageCleanupCreateImage(t, filepath.Join(dir, "b.jpg"), right, "", 100, 100)
+	first, _ := getPartialHash(a.Path)
+	second, _ := getPartialHash(b.Path)
+	if first != second {
+		t.Fatal("夹具必须命中旧采样哈希")
+	}
+	analysis, err := newImageCleanupTestService().AnalyzeImageCleanupCandidates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(analysis.DuplicateGroups) != 0 {
+		t.Fatal("采样相同但完整内容不同，不得预选为精确重复")
+	}
+}
+
+func TestImageCleanupRejectsTransitiveNearMatches(t *testing.T) {
+	states := []imageCleanupFileState{
+		imageCleanupHashState(1, "a.jpg", "abcd000000000000"),
+		imageCleanupHashState(2, "b.jpg", "abcd0000000000ff"),
+		imageCleanupHashState(3, "c.jpg", "abcd00000000ffff"),
+	}
+	groups, _ := newImageCleanupTestService().buildNearDuplicateGroups(context.Background(), states, nil)
+	for _, group := range groups {
+		ids := imageCleanupGroupIDs(group)
+		if imageCleanupContainsID(ids, 1) && imageCleanupContainsID(ids, 3) {
+			t.Fatal("A-B、B-C 命中，不能把距离 16 的 A-C 也放进一组")
+		}
+	}
+	if len(groups) != 1 {
+		t.Fatalf("应保留有直接证据的一对，实际 %d", len(groups))
+	}
+}
+
+func TestImageCleanupDismissalCannotBeBridged(t *testing.T) {
+	states := []imageCleanupFileState{
+		imageCleanupHashState(1, "a.jpg", "abcd000000000000"),
+		imageCleanupHashState(2, "b.jpg", "abcd000000000000"),
+		imageCleanupHashState(3, "c.jpg", "abcd000000000000"),
+	}
+	groups, _ := newImageCleanupTestService().buildNearDuplicateGroups(context.Background(), states, map[[2]uint]struct{}{{1, 3}: {}})
+	for _, group := range groups {
+		ids := imageCleanupGroupIDs(group)
+		if imageCleanupContainsID(ids, 1) && imageCleanupContainsID(ids, 3) {
+			t.Fatal("已否决的 A-C 不得由 B 重新连在一起")
+		}
 	}
 }
 
@@ -96,7 +172,7 @@ func TestImageCleanupExcludesBlacklistedDirectories(t *testing.T) {
 		t.Fatalf("设置图片黑名单失败: %v", err)
 	}
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -126,7 +202,7 @@ func TestImageCleanupExactDuplicateGroupAndOriginalSelection(t *testing.T) {
 	sizeOnly := imageCleanupCreateImage(t, filepath.Join(dir, "same-size-other-bytes.jpg"), differentSameSize, "", 100, 100)
 	unrelated := imageCleanupCreateImage(t, filepath.Join(dir, "other.jpg"), bytes.Repeat([]byte("c"), 99), "", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -141,7 +217,7 @@ func TestImageCleanupExactDuplicateGroupAndOriginalSelection(t *testing.T) {
 	if len(group.Candidates) != 1 || group.Candidates[0].ID != small.ID {
 		t.Fatalf("候选应为 %d，实际 %+v", small.ID, group.Candidates)
 	}
-	if group.Reason != "文件大小和采样哈希一致" {
+	if group.Reason != "文件大小和完整 SHA-256 一致" {
 		t.Fatalf("精确重复 Reason 不符: %q", group.Reason)
 	}
 	ids := imageCleanupGroupIDs(group)
@@ -168,7 +244,7 @@ func TestImageCleanupMissingFileSkipped(t *testing.T) {
 		t.Fatalf("删除测试文件失败: %v", err)
 	}
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -190,7 +266,7 @@ func TestImageCleanupNearDuplicateGroupsByHammingDistance(t *testing.T) {
 	farSameBand := imageCleanupCreateImage(t, filepath.Join(dir, "far-same-band.jpg"), bytes.Repeat([]byte("c"), 302), "abcd0000ffffffff", 100, 100)
 	closeOtherBand := imageCleanupCreateImage(t, filepath.Join(dir, "close-other-band.jpg"), bytes.Repeat([]byte("d"), 303), "abce000000000000", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -240,7 +316,7 @@ func TestImageCleanupMembersCarryFactsAndTags(t *testing.T) {
 	if err := database.DB.Model(keep).Association("Tags").Append(&tag); err != nil {
 		t.Fatalf("关联标签失败: %v", err)
 	}
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -288,7 +364,7 @@ func TestImageCleanupNearDuplicateDistanceIsRelativeToKeeper(t *testing.T) {
 	imageCleanupCreateImage(t, filepath.Join(dir, "b.jpg"), bytes.Repeat([]byte("b"), 301), "abcd000000000007", 200, 200)
 	imageCleanupCreateImage(t, filepath.Join(dir, "c.jpg"), bytes.Repeat([]byte("c"), 302), "abcd000000000038", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -314,7 +390,7 @@ func TestImageCleanupNearDuplicateReportsMaxHammingDistance(t *testing.T) {
 	// 与上一张相差 3 个 bit（0x7 = 三位）。
 	imageCleanupCreateImage(t, filepath.Join(dir, "b.jpg"), bytes.Repeat([]byte("b"), 301), "abcd000000000007", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -333,7 +409,7 @@ func TestImageCleanupNearDuplicateOriginalFallsBackToFileSize(t *testing.T) {
 	smallFile := imageCleanupCreateImage(t, filepath.Join(dir, "same-pixels-small.jpg"), bytes.Repeat([]byte("a"), 400), "1234000000000000", 100, 100)
 	bigFile := imageCleanupCreateImage(t, filepath.Join(dir, "same-pixels-big.jpg"), bytes.Repeat([]byte("b"), 900), "1234000000000000", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -361,7 +437,7 @@ func TestImageCleanupStaleHashCountedAndSkipped(t *testing.T) {
 		t.Fatalf("制造 stale 指纹失败: %v", err)
 	}
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -383,7 +459,7 @@ func TestImageCleanupExactPairsExcludedFromNearDuplicates(t *testing.T) {
 	imageCleanupCreateImage(t, filepath.Join(dir, "exact-1.jpg"), same, "abcd000000000000", 100, 100)
 	imageCleanupCreateImage(t, filepath.Join(dir, "exact-2.jpg"), same, "abcd000000000000", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -402,7 +478,7 @@ func TestImageCleanupDismissalExcludesGroupAndIsIdempotent(t *testing.T) {
 	first := imageCleanupCreateImage(t, filepath.Join(dir, "pair-1.jpg"), bytes.Repeat([]byte("a"), 700), "beef000000000000", 100, 100)
 	second := imageCleanupCreateImage(t, filepath.Join(dir, "pair-2.jpg"), bytes.Repeat([]byte("b"), 701), "beef000000000003", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -466,7 +542,7 @@ func TestImageCleanupGiantBandBucketKeepsPairsFoundByOtherBands(t *testing.T) {
 	}
 	last := imageCleanupCreateImage(t, filepath.Join(dir, "victim-z.jpg"), bytes.Repeat([]byte("z"), 3000), "abcd000000000000", 100, 100)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -510,7 +586,7 @@ func TestImageCleanupSoftDeletedImagesExcluded(t *testing.T) {
 		t.Fatalf("软删图片失败: %v", err)
 	}
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	analysis, err := svc.AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
@@ -527,7 +603,7 @@ func TestImageCleanupStartStatusProgressAndInvalidate(t *testing.T) {
 	small := imageCleanupCreateImage(t, filepath.Join(dir, "dup-1.jpg"), same, "", 100, 100)
 	imageCleanupCreateImage(t, filepath.Join(dir, "dup-2.jpg"), same, "", 4000, 3000)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	var stagesMu sync.Mutex
 	stages := make([]string, 0)
 	svc.SetEventEmitter(func(progress ImageCleanupProgress) {
@@ -651,7 +727,7 @@ func TestImageCleanupCandidateCapStopsScanningLaterBands(t *testing.T) {
 	victim := imageCleanupHashState(id, "victim.jpg", "0000000000000000")
 	states = append(states, near, victim)
 
-	svc := NewImageCleanupService()
+	svc := newImageCleanupTestService()
 	groups, stale := svc.buildNearDuplicateGroups(context.Background(), states, nil)
 	if stale != 0 {
 		t.Fatalf("全部条目都有可用指纹，stale 应为 0，实际 %d", stale)

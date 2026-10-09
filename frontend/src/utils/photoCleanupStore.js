@@ -1,4 +1,4 @@
-import { reactive } from 'vue';
+import { reactive, shallowRef } from 'vue';
 import { GetImageCleanupStatus } from '../../wailsjs/go/main/App';
 
 // 图片清理审阅的共享状态：由图片库页持有，清理面板只读写它。
@@ -17,13 +17,16 @@ function emptyReview(key = '') {
     dismissedKeys: [],
     // 近似重复组里被「移出本组」的成员（组键 → 视频/图片 ID 列表），随每轮分析重置（D-PC31）。
     removedMembers: {},
+    page: 1,
+    memberPages: {},
     // sameDirOnly 是勾选策略偏好，不随每轮分析重置，由调用方跨批次带过来。
     sameDirOnly: false
   };
 }
 
 export const photoCleanupStore = reactive({
-  status: null,
+  // 后端快照整份替换；审阅改动另存 review，不给数万成员建立深层响应依赖。
+  status: shallowRef(null),
   polling: false,
   review: emptyReview()
 });

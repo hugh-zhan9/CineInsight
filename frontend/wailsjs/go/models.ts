@@ -3870,6 +3870,7 @@ export namespace services {
 	    near_duplicate_groups: ImageCleanupDuplicateGroup[];
 	    stale_hash_count: number;
 	    skipped_unavailable: number;
+	    skipped_verification: number;
 	    coverage: ImageCleanupCoverage;
 	
 	    static createFrom(source: any = {}) {
@@ -3882,6 +3883,7 @@ export namespace services {
 	        this.near_duplicate_groups = this.convertValues(source["near_duplicate_groups"], ImageCleanupDuplicateGroup);
 	        this.stale_hash_count = source["stale_hash_count"];
 	        this.skipped_unavailable = source["skipped_unavailable"];
+	        this.skipped_verification = source["skipped_verification"];
 	        this.coverage = this.convertValues(source["coverage"], ImageCleanupCoverage);
 	    }
 	

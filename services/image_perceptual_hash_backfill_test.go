@@ -291,7 +291,7 @@ func TestImagePerceptualHashFreshnessMatchesCleanupCount(t *testing.T) {
 	// "还有 N 张没有指纹"都不会变。
 	imageCleanupCreateImage(t, filepath.Join(dir, "c.jpg"), bytes.Repeat([]byte("c"), 102), "zzzzzzzzzzzzzzzz", 100, 100)
 
-	before, err := NewImageCleanupService().AnalyzeImageCleanupCandidates()
+	before, err := newImageCleanupTestService().AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("分析失败: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestImagePerceptualHashFreshnessMatchesCleanupCount(t *testing.T) {
 	}
 	waitImagePerceptualHashBackfill(t, svc)
 
-	after, err := NewImageCleanupService().AnalyzeImageCleanupCandidates()
+	after, err := newImageCleanupTestService().AnalyzeImageCleanupCandidates()
 	if err != nil {
 		t.Fatalf("二次分析失败: %v", err)
 	}

@@ -178,7 +178,7 @@ func NewApp() *App {
 		imageThumbnail:        imageThumbnail,
 		imageLibraryService:   services.NewImageLibraryService(),
 		imageStatsService:     services.NewImageStatsService(),
-		imageCleanupService:   services.NewImageCleanupService(),
+		imageCleanupService:   services.NewImageCleanupService(imageThumbnail),
 		backgroundTasks:       services.NewBackgroundTaskRegistry(),
 		idleGate:              services.NewIdleGate(),
 	}

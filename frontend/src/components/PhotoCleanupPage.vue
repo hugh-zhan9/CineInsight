@@ -65,6 +65,9 @@
     <p v-if="analysis && analysis.skipped_unavailable > 0" class="cleanup-page__notice" data-test="image-cleanup-skipped-hint">
       本轮跳过 {{ analysis.skipped_unavailable }} 张图片（文件不可访问，如外置盘未挂载）。
     </p>
+    <p v-if="analysis?.skipped_verification > 0" class="cleanup-page__notice" data-test="image-cleanup-verification-hint">
+      {{ analysis.skipped_verification }} 张图片的画面未能复核（读取失败或文件已变化），未据此判定近似重复。检查文件后可重新分析。
+    </p>
 
     <!-- 「已忽略」（D-PC31）：「不是重复」「移出本组」留下的记录，可以撤销。 -->
     <section v-if="showDismissed" class="cleanup-page__dismissed" data-test="cleanup-dismissed">
@@ -143,8 +146,13 @@
         </p>
       </div>
 
+      <nav v-if="pageCount > 1" class="cleanup-page__pagination" aria-label="重复组分页">
+        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-prev" :disabled="currentPage <= 1" @click="review.page = currentPage - 1">上一页</button>
+        <span>第 {{ currentPage }} / {{ pageCount }} 页 · 共 {{ entries.length }} 组（勾选跨页保留）</span>
+        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-next" :disabled="currentPage >= pageCount" @click="review.page = currentPage + 1">下一页</button>
+      </nav>
       <section
-        v-for="section in directorySections"
+        v-for="section in pagedDirectorySections"
         :key="section.directory"
         class="cleanup-dir"
         data-test="cleanup-dir-section"
@@ -160,7 +168,7 @@
           >
             <span class="cleanup-dir__chevron">{{ isDirCollapsed(section.directory) ? '▸' : '▾' }}</span>
             <span class="cleanup-dir__path">{{ section.directory }}</span>
-            <span class="cleanup-dir__count">{{ section.entries.length }} 组 · 共 {{ section.imageCount }} 张</span>
+            <span class="cleanup-dir__count">{{ section.groupCount }} 组 · 共 {{ section.imageCount }} 张</span>
           </button>
           <button
             v-if="section.directory !== UNKNOWN_DIRECTORY"
@@ -186,7 +194,7 @@
               </span>
               <span class="cleanup-group__reason">{{ entry.group.reason }}</span>
               <span v-if="entry.kind === 'near'" class="cleanup-group__similarity" data-test="cleanup-similarity">
-                相似度 {{ similarityLabel(entry) }}
+                {{ similarityLabel(entry) }}
               </span>
               <span v-if="entry.spansDirectories" class="cleanup-group__warn" data-test="cleanup-cross-dir">跨 {{ entry.directoryCount }} 个目录</span>
               <!-- "保留这份"只是对比基准，不会连带删除别的；真正决定生死的是"删除"复选框。
@@ -222,12 +230,12 @@
 
             <div class="cleanup-group__members">
               <div
-                v-for="member in entry.members"
+                v-for="member in visibleMembers(entry)"
                 :key="member.id"
                 class="cleanup-member"
                 :class="{
                   'cleanup-member--keep': isKept(entry, member),
-                  'cleanup-member--marked': selection.includes(Number(member.id)),
+                  'cleanup-member--marked': selectedIDs.has(Number(member.id)),
                   'cleanup-member--deleted': isDeleted(member)
                 }"
                 data-test="cleanup-member"
@@ -259,7 +267,7 @@
                   <label class="cleanup-member__check">
                     <input
                       type="checkbox"
-                      :checked="selection.includes(Number(member.id))"
+                      :checked="selectedIDs.has(Number(member.id))"
                       :disabled="editLocked || isKept(entry, member) || isSkipped(entry) || isDeleted(member) || isProtected(entry, member)"
                       :aria-label="`删除 ${member.name}`"
                       data-test="cleanup-candidate-toggle"
@@ -334,6 +342,11 @@
                 </div>
               </div>
             </div>
+            <nav v-if="entry.members.length > MEMBER_PAGE_SIZE" class="cleanup-page__pagination" aria-label="组内图片分页">
+              <button type="button" class="btn-secondary btn-compact" data-test="cleanup-members-prev" :disabled="memberPage(entry) <= 1" @click="review.memberPages[entry.key] = memberPage(entry) - 1">上一批图片</button>
+              <span>第 {{ memberPage(entry) }} / {{ memberPageCount(entry) }} 页 · 本组共 {{ entry.members.length }} 张</span>
+              <button type="button" class="btn-secondary btn-compact" data-test="cleanup-members-next" :disabled="memberPage(entry) >= memberPageCount(entry)" @click="review.memberPages[entry.key] = memberPage(entry) + 1">下一批图片</button>
+            </nav>
           </article>
         </template>
       </section>
@@ -415,8 +428,8 @@ import {
 } from '../utils/photoCleanupStore.js';
 import { confirmAction } from '../utils/feedback.js';
 import {
-  applySuggestion, cleanupGroup, clearGroupSelection, defaultSelection, deletionPlan, deletionPlanUnchanged,
-  describeMergeFailure, describeSelectionKinds, isGroupFullySuggested, keeperOf, lockedIDs, pruneSelection,
+  applySuggestion, cleanupGroup, clearGroupSelection, deletionPlan, deletionPlanUnchanged,
+  describeMergeFailure, describeSelectionKinds, keeperOf, lockedIDs, pruneSelection,
   SELECTION_CHANGED_MESSAGE, selectionSummary, setKeeper, similarityCount, suggestedIDs
 } from '../utils/cleanupSelection.js';
 
@@ -450,6 +463,7 @@ export default {
   data() {
     return {
       UNKNOWN_DIRECTORY,
+      MEMBER_PAGE_SIZE: 20,
       localError: '',
       processing: false,
       // confirming：删除确认框打开着。这期间勾选、保留项与组成员和删除进行中一样锁住（P-032 复审 I-1）；
@@ -470,6 +484,8 @@ export default {
     review() { return photoCleanupStore.review; },
     keepOverrides() { return this.review.keepOverrides; },
     selection() { return this.review.selection; },
+    selectedIDs() { return new Set(this.selection.map(Number)); },
+    deletedIDSet() { return new Set(this.deletedIDs.map(Number)); },
     skippedGroups() { return this.review.skippedGroups; },
     collapsedDirs() { return this.review.collapsedDirs; },
     deletedIDs() { return this.review.deletedIDs; },
@@ -533,7 +549,7 @@ export default {
         keeperId: entry.suggestedKeeperID,
         memberIds: entry.members.map(member => member.id),
         switchable: true,
-        unavailable: this.deletedIDs
+        unavailable: entry.members.filter(member => this.deletedIDSet.has(Number(member.id))).map(member => member.id)
       }));
     },
     groupByKey() {
@@ -554,8 +570,32 @@ export default {
         for (const member of entry.members) bucket.imageIDs.add(Number(member.id));
       }
       return [...buckets.values()]
-        .map(bucket => ({ ...bucket, imageCount: bucket.imageIDs.size }))
+        .map(bucket => ({ ...bucket, groupCount: bucket.entries.length, imageCount: bucket.imageIDs.size }))
         .sort((a, b) => a.directory.localeCompare(b.directory));
+    },
+    pageCount() { return Math.max(1, Math.ceil(this.entries.length / 10)); },
+    currentPage() { return Math.min(this.pageCount, Math.max(1, this.review.page || 1)); },
+    pagedDirectorySections() {
+      const start = (this.currentPage - 1) * 10;
+      let offset = 0;
+      return this.directorySections.flatMap(section => {
+        const entries = section.entries.slice(Math.max(0, start - offset), Math.max(0, start + 10 - offset));
+        offset += section.entries.length;
+        return entries.length ? [{ ...section, entries }] : [];
+      });
+    },
+    membersByID() {
+      const members = new Map();
+      for (const entry of this.entries) {
+        for (const member of entry.members) members.set(Number(member.id), member);
+      }
+      return members;
+    },
+    suggestionsByKey() {
+      const options = this.selectionOptions();
+      return new Map(this.cleanupGroups.map(group => [group.key, suggestedIDs(group, {
+        ...options, excluded: group.memberIds.filter(id => this.deletedIDSet.has(id))
+      })]));
     },
     hasGroups() { return this.entries.length > 0; },
     // 「本组不删」的组 key。
@@ -582,7 +622,8 @@ export default {
     // 默认勾选规则（D-PC49，恢复图片设计「近似重复一律不勾」）：只勾精确重复里保留项以外的副本；
     // 打开"只勾同目录"后，位于别处的副本不勾。
     autoSelectedIDs() {
-      return defaultSelection(this.cleanupGroups, this.selectionOptions());
+      return [...new Set(this.cleanupGroups.filter(group => group.kind === 'exact')
+        .flatMap(group => this.suggestionsByKey.get(group.key) || []))];
     },
     memberBytesByID() {
       const byID = new Map();
@@ -714,12 +755,17 @@ export default {
     },
     similarityLabel(entry) {
       const distance = Number(entry.group?.max_hamming_distance || 0);
-      // dHash 是 64 位，距离越小越像；换算成百分比更直观。
-      return `${Math.round((1 - distance / 64) * 100)}%（汉明距离 ${distance}/64）`;
+      return `指纹距离 ${distance}/64 · 已复核画面，仍需人工确认`;
+    },
+    memberPageCount(entry) { return Math.max(1, Math.ceil(entry.members.length / this.MEMBER_PAGE_SIZE)); },
+    memberPage(entry) { return Math.min(this.memberPageCount(entry), Math.max(1, this.review.memberPages?.[entry.key] || 1)); },
+    visibleMembers(entry) {
+      const start = (this.memberPage(entry) - 1) * this.MEMBER_PAGE_SIZE;
+      return entry.members.slice(start, start + this.MEMBER_PAGE_SIZE);
     },
     // 每一项都跟保留项比：不用自己在几个数字之间来回换算。
     diffFor(entry, member) {
-      const keeper = entry.members.find(item => Number(item.id) === this.keepFor(entry));
+      const keeper = this.membersByID.get(this.keepFor(entry));
       if (!keeper || Number(keeper.id) === Number(member.id)) return {};
       const diff = {};
       const keepPixels = (keeper.width || 0) * (keeper.height || 0);
@@ -747,27 +793,34 @@ export default {
       return diff;
     },
     isDeleted(image) {
-      return this.deletedIDs.includes(Number(image?.id));
+      return this.deletedIDSet.has(Number(image?.id));
     },
     // 勾选规则的参数：跨组锁定（保留项与「本组不删」的成员）、已删除的排除、「只勾同目录」由 filter 表达。
     selectionOptions(overrides = this.keepOverrides) {
       return {
         overrides,
         skipped: this.skippedKeys,
-        locked: lockedIDs(this.cleanupGroups, overrides, this.skippedKeys),
+        locked: overrides === this.keepOverrides ? this.protectedIDs : lockedIDs(this.cleanupGroups, overrides, this.skippedKeys),
         excluded: this.deletedIDs,
-        filter: this.suggestionAllows
+        filter: this.suggestionFilter()
       };
     },
-    suggestionAllows(id, group, overrides = this.keepOverrides) {
-      if (this.skippedGroups[group.key]) return false;
-      if (!this.sameDirOnly) return true;
-      const entry = this.entryByKey.get(group.key);
-      if (!entry) return false;
-      const keepID = keeperOf(group, overrides);
-      const keeper = entry.members.find(member => Number(member.id) === keepID) || entry.group.original;
-      const member = entry.members.find(item => Number(item.id) === Number(id));
-      return this.directoryOf(member) === this.directoryOf(keeper);
+    suggestionFilter() {
+      // 每次操作独立缓存，setKeeper 比较旧/新保留项时分别算一次；不能逐成员扫描整组找保留项。
+      const directories = new WeakMap();
+      return (id, group, overrides = this.keepOverrides) => {
+        if (this.skippedGroups[group.key]) return false;
+        if (!this.sameDirOnly) return true;
+        const entry = this.entryByKey.get(group.key);
+        if (!entry) return false;
+        if (!directories.has(overrides)) directories.set(overrides, new Map());
+        const byGroup = directories.get(overrides);
+        if (!byGroup.has(group.key)) {
+          const keeper = this.membersByID.get(keeperOf(group, overrides)) || entry.group.original;
+          byGroup.set(group.key, this.directoryOf(keeper));
+        }
+        return this.directoryOf(this.membersByID.get(Number(id))) === byGroup.get(group.key);
+      };
     },
     groupOf(entry) {
       return this.groupByKey.get(entry.key) || null;
@@ -786,10 +839,11 @@ export default {
     },
     // 本组是否已经是"保留推荐项、其余全勾"的状态。
     isGroupFullySuggested(entry) {
-      return isGroupFullySuggested(this.selection, this.groupOf(entry), this.selectionOptions());
+      const suggested = this.suggestedIDsFor(entry);
+      return suggested.length > 0 && suggested.every(id => this.selectedIDs.has(id));
     },
     suggestedIDsFor(entry) {
-      return suggestedIDs(this.groupOf(entry), this.selectionOptions());
+      return this.suggestionsByKey.get(entry.key) || [];
     },
     // 「按建议勾选」只作用于这一组（D-PC49），再点一次取消本组勾选。
     toggleGroupSuggestion(entry) {
@@ -802,7 +856,7 @@ export default {
     groupOutcomeLabel(entry) {
       if (this.isSkipped(entry)) return '本组不删';
       if (this.isExhausted(entry)) return '本组不参与删除';
-      const marked = entry.members.filter(member => this.selection.includes(Number(member.id))).length;
+      const marked = entry.members.filter(member => this.selectedIDs.has(Number(member.id))).length;
       return marked === 0 ? '本组暂不删除任何图片' : `本组将删除 ${marked} 张`;
     },
     keepFor(entry) {
@@ -830,7 +884,7 @@ export default {
         overrides: this.keepOverrides,
         selection: this.selection,
         excluded: this.deletedIDs,
-        filter: this.suggestionAllows,
+        filter: this.suggestionFilter(),
         skipped: this.skippedKeys
       }, group, image?.id);
       this.review.keepOverrides = next.overrides;
@@ -1184,6 +1238,7 @@ export default {
 </script>
 
 <style scoped>
+.cleanup-page__pagination { display: flex; align-items: center; justify-content: center; gap: 12px; padding: 12px; flex-wrap: wrap; }
 .cleanup-page { display: flex; flex-direction: column; gap: 12px; padding: 16px 20px 32px; }
 
 .cleanup-page__bar { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; gap: 14px; padding: 12px 16px; border-radius: 12px; }

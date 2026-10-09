@@ -18,7 +18,7 @@ import (
 )
 
 const (
-	// imageCleanupHammingThreshold 64 位 dHash 判定近似重复的最大汉明距离（设计 4.8.2 / D-012）。
+	// imageCleanupHammingThreshold 64 位 dHash 召回近似候选的最大距离，仍须复核画面。
 	imageCleanupHammingThreshold = 8
 	// imageCleanupBandCount 近似重复分桶的段数：64 位 dHash 切成 8 段、每段 8 位，
 	// 任一段完全相同即进入逐对比对（镜像视频侧 perceptualBandKeys 的分段方式）。
@@ -31,9 +31,8 @@ const (
 	// imageCleanupEnrichChunkSize 回填标签/描述时单条 IN 语句的 id 上限，
 	// 远低于 Postgres/SQLite 的绑定参数上限。
 	imageCleanupEnrichChunkSize = 500
-	// imageCleanupMaxDistanceSamples 计算组内最大汉明距离时的成员采样上限：
-	// 连通分量可以很大，两两比对是 O(n²)。
-	imageCleanupMaxDistanceSamples = 64
+	// 每个近似组逐对复核，限制大小使单张的复核成本有界。
+	imageCleanupMaxGroupMembers = 65
 )
 
 func chunkUintIDs(ids []uint, size int) [][]uint {
@@ -88,12 +87,12 @@ type ImageCleanupCoverage struct {
 }
 
 // ImageCleanupDuplicateGroup 一组重复/近似重复图片：Original 为建议保留项
-// （像素数优先、次按体积），Candidates 为其余成员。
+// （整理成果优先，再按像素数/体积），Candidates 为其余成员。
 type ImageCleanupDuplicateGroup struct {
 	Original   ImageCleanupMember   `json:"original"`
 	Candidates []ImageCleanupMember `json:"candidates"`
 	Reason     string               `json:"reason"`
-	// MaxHammingDistance 是组内两两感知哈希的最大距离，越小越像；精确重复组为 0。
+	// MaxHammingDistance 是相对推荐保留项的最大指纹距离，不代表内容相似概率。
 	MaxHammingDistance int `json:"max_hamming_distance"`
 }
 
@@ -106,6 +105,8 @@ type ImageCleanupAnalysis struct {
 	StaleHashCount int64 `json:"stale_hash_count"`
 	// SkippedUnavailable 是本轮 os.Stat 失败或不是普通文件的图片数。
 	SkippedUnavailable int `json:"skipped_unavailable"`
+	// SkippedVerification 是无法读取画面或复核时源文件变化的图片数。
+	SkippedVerification int `json:"skipped_verification"`
 	// Coverage 是感知哈希的覆盖率（D-PC50），让"没有重复"与"还没算"分得开。
 	Coverage ImageCleanupCoverage `json:"coverage"`
 }
@@ -137,6 +138,7 @@ type ImageCleanupStatus struct {
 
 // ImageCleanupService 图片清理审阅分析服务，异步任务形态镜像 CleanupService。
 type ImageCleanupService struct {
+	readVisual           imageCleanupVisualReader
 	mu                   sync.Mutex
 	status               ImageCleanupStatus
 	invalidatedDuringRun bool
@@ -152,8 +154,8 @@ type ImageCleanupService struct {
 // ErrImageCleanupAnalysisNotRunning 是取消时没有正在进行的图片清理分析。
 var ErrImageCleanupAnalysisNotRunning = errors.New("图片清理分析未在运行")
 
-func NewImageCleanupService() *ImageCleanupService {
-	return &ImageCleanupService{}
+func NewImageCleanupService(thumbnails imagePerceptualHashThumbnailResolver) *ImageCleanupService {
+	return &ImageCleanupService{readVisual: imageCleanupThumbnailReader(thumbnails)}
 }
 
 // SetBackgroundTaskRegistry 接入后台任务登记表：图片清理分析登记为 image_cleanup（D-PC51），
@@ -299,9 +301,10 @@ func (s *ImageCleanupService) statusSnapshotLocked() ImageCleanupStatus {
 
 // imageCleanupFileState 分析快照内一张活跃图片的实时文件状态（os.Stat 一次，精确/近似共用）。
 type imageCleanupFileState struct {
-	image     models.Image
-	size      int64
-	modTimeNS int64
+	image      models.Image
+	size       int64
+	modTimeNS  int64
+	exactGroup uint
 }
 
 // AnalyzeImageCleanupCandidates 同步执行一次完整分析并发出终止事件（测试与同步调用方使用）；
@@ -322,6 +325,9 @@ func imageCleanupDoneMessage(result *ImageCleanupAnalysis) string {
 	)
 	if result.SkippedUnavailable > 0 {
 		message += fmt.Sprintf("跳过 %d 张（文件不可访问）。", result.SkippedUnavailable)
+	}
+	if result.SkippedVerification > 0 {
+		message += fmt.Sprintf("跳过 %d 张（画面无法复核，请重新分析）。", result.SkippedVerification)
 	}
 	return message
 }
@@ -442,36 +448,70 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates(ctx context.Context)
 	}
 
 	result := &ImageCleanupAnalysis{SkippedUnavailable: skippedUnavailable}
+	fullHashTotal, fullHashDone := 0, 0
 	for _, bucket := range duplicateBuckets {
+		if len(bucket) >= 2 {
+			fullHashTotal += len(bucket)
+		}
+	}
+	s.emitProgress("hash", 0, fullHashTotal, "", "正在校验重复候选的完整文件内容…")
+	for _, bucket := range duplicateBuckets {
+		if err := ctx.Err(); err != nil {
+			return nil, 0, err
+		}
 		if len(bucket) < 2 {
 			continue
 		}
-		// 整理分在成组之后批量取齐，再由 rankImageCleanupCandidates 统一重排。
-		sort.Slice(bucket, func(i, j int) bool {
-			return isPreferredCleanupImage(bucket[i].image, bucket[j].image, nil)
-		})
-		members := make([]ImageCleanupMember, 0, len(bucket))
+		// 采样只负责粗筛：自动预勾的精确候选必须核对完整字节。
+		verified := make(map[string][]imageCleanupFileState)
 		for _, state := range bucket {
-			members = append(members, newImageCleanupMember(state))
+			hash, err := imageCleanupFullHash(ctx, state)
+			fullHashDone++
+			if shouldEmitCleanupProgress(fullHashDone, fullHashTotal, 50) {
+				s.emitProgress("hash", fullHashDone, fullHashTotal, state.image.Path, "正在校验重复候选的完整文件内容…")
+			}
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, 0, ctx.Err()
+				}
+				result.SkippedUnavailable++
+				log.Printf("[ImageCleanup] full hash unavailable image_id=%d", state.image.ID)
+				continue
+			}
+			verified[hash] = append(verified[hash], state)
 		}
-		result.DuplicateGroups = append(result.DuplicateGroups, ImageCleanupDuplicateGroup{
-			Original:   members[0],
-			Candidates: append([]ImageCleanupMember(nil), members[1:]...),
-			Reason:     "文件大小和采样哈希一致",
-		})
+		for _, bucket := range verified {
+			if len(bucket) < 2 {
+				continue
+			}
+			// 整理分在成组之后批量取齐，再由 rankImageCleanupCandidates 统一重排。
+			sort.Slice(bucket, func(i, j int) bool {
+				return isPreferredCleanupImage(bucket[i].image, bucket[j].image, nil)
+			})
+			members := make([]ImageCleanupMember, 0, len(bucket))
+			for _, state := range bucket {
+				members = append(members, newImageCleanupMember(state))
+			}
+			result.DuplicateGroups = append(result.DuplicateGroups, ImageCleanupDuplicateGroup{
+				Original:   members[0],
+				Candidates: append([]ImageCleanupMember(nil), members[1:]...),
+				Reason:     "文件大小和完整 SHA-256 一致",
+			})
+		}
 	}
 	sort.Slice(result.DuplicateGroups, func(i, j int) bool {
 		return result.DuplicateGroups[i].Original.ID < result.DuplicateGroups[j].Original.ID
 	})
 
-	exactPairs := make(map[[2]uint]struct{})
+	exactGroups := make(map[uint]uint)
 	for _, group := range result.DuplicateGroups {
-		members := append([]ImageCleanupMember{group.Original}, group.Candidates...)
-		for i := 0; i < len(members); i++ {
-			for j := i + 1; j < len(members); j++ {
-				exactPairs[imageCleanupPairKey(members[i].ID, members[j].ID)] = struct{}{}
-			}
+		exactGroups[group.Original.ID] = group.Original.ID
+		for _, member := range group.Candidates {
+			exactGroups[member.ID] = group.Original.ID
 		}
+	}
+	for i := range states {
+		states[i].exactGroup = exactGroups[states[i].image.ID]
 	}
 	// 忽略记录带双方指纹，任一侧文件变了就不再算数（D-PC31）。
 	current := make(map[uint]string, len(states))
@@ -482,20 +522,14 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates(ctx context.Context)
 	if err != nil {
 		return nil, 0, err
 	}
-	excludedPairs := make(map[[2]uint]struct{}, len(exactPairs)+len(dismissed))
-	for pair := range exactPairs {
-		excludedPairs[pair] = struct{}{}
-	}
-	for pair := range dismissed {
-		excludedPairs[pair] = struct{}{}
-	}
-
-	nearGroups, staleHashCount := s.buildNearDuplicateGroups(ctx, states, excludedPairs)
+	visuals := newImageCleanupVisualCache(s.readVisual)
+	nearGroups, staleHashCount := s.buildVerifiedNearDuplicateGroups(ctx, states, dismissed, visuals)
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
 	}
 	result.NearDuplicateGroups = nearGroups
 	result.StaleHashCount = staleHashCount
+	result.SkippedVerification = len(visuals.failed)
 	result.Coverage = ImageCleanupCoverage{PerceptualHash: CleanupCoverageCount{
 		Done:  int64(len(states)) - staleHashCount + unavailableHashed,
 		Total: int64(len(images)),
@@ -599,10 +633,9 @@ func imageCleanupBandKeys(hash string) []string {
 	return keys
 }
 
-// buildNearDuplicateGroups 库内 dHash 近似重复检测：无可用指纹的计数、
-// 8 段分桶 + 邻居/候选上限、汉明距离 ≤ 阈值成边、连通分量成组。
-// ctx 被取消时提前返回（结果不完整），调用方随后检查 ctx.Err()。
-func (s *ImageCleanupService) buildNearDuplicateGroups(ctx context.Context, states []imageCleanupFileState, excluded map[[2]uint]struct{}) ([]ImageCleanupDuplicateGroup, int64) {
+// buildVerifiedNearDuplicateGroups 以 dHash 召回，逐对复核后加入互相相容的有界组。
+// 不构造全库邻接图，也不通过连通分量推断未比过的成员是同一内容。
+func (s *ImageCleanupService) buildVerifiedNearDuplicateGroups(ctx context.Context, states []imageCleanupFileState, excluded map[[2]uint]struct{}, visuals *imageCleanupVisualCache) ([]ImageCleanupDuplicateGroup, int64) {
 	var staleCount int64
 	valid := make([]imageCleanupHashEntry, 0, len(states))
 	// 四种情况都算"没有可用指纹"（D-CD04）：未回填、源文件变过、哈希畸形。早先只
@@ -639,13 +672,14 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(ctx context.Context, stat
 	s.emitProgress("near", 0, len(valid), "", fmt.Sprintf("正在比对 %d 张图片的感知哈希…", len(valid)))
 
 	bands := make(map[string][]int)
-	adjacency := make(map[int]map[int]struct{})
+	memberGroup := make([]int, len(valid))
+	clusters := make([][]int, 0)
 	for index, entry := range valid {
 		if ctx.Err() != nil {
 			return nil, staleCount
 		}
 		candidates := make(map[int]struct{})
-		for _, key := range imageCleanupBandKeys(entry.state.image.PerceptualHash) {
+		for _, key := range imageCleanupBandKeys(fmt.Sprintf("%016x", entry.hash)) {
 			if len(candidates) < imageCleanupMaxCandidates {
 				for _, other := range bands[key] {
 					candidates[other] = struct{}{}
@@ -660,95 +694,80 @@ func (s *ImageCleanupService) buildNearDuplicateGroups(ctx context.Context, stat
 			}
 			bands[key] = bucket
 		}
-
+		// map 遍历不能决定成组，否则同样的输入每轮会分到不同组。
+		ordered := make([]int, 0, len(candidates))
 		for other := range candidates {
-			left := valid[other]
-			pair := imageCleanupPairKey(left.image().ID, entry.image().ID)
-			if _, skip := excluded[pair]; skip {
+			ordered = append(ordered, other)
+		}
+		sort.Ints(ordered)
+		checked := make(map[int]bool)
+		joined := false
+		for _, other := range ordered {
+			groupID := memberGroup[other]
+			if checked[groupID] {
 				continue
 			}
-			if bits.OnesCount64(left.hash^entry.hash) > imageCleanupHammingThreshold {
+			checked[groupID] = true
+			cluster := clusters[groupID]
+			if len(cluster) >= imageCleanupMaxGroupMembers {
 				continue
 			}
-			if adjacency[other] == nil {
-				adjacency[other] = make(map[int]struct{})
+			compatible := true
+			// 先做廉价排除，再读缩略图；大精确组不触发解码。
+			for _, member := range cluster {
+				left := valid[member]
+				_, dismissed := excluded[imageCleanupPairKey(left.image().ID, entry.image().ID)]
+				if dismissed || (entry.state.exactGroup != 0 && entry.state.exactGroup == left.state.exactGroup) || bits.OnesCount64(left.hash^entry.hash) > imageCleanupHammingThreshold {
+					compatible = false
+					break
+				}
 			}
-			if adjacency[index] == nil {
-				adjacency[index] = make(map[int]struct{})
+			if !compatible {
+				continue
 			}
-			adjacency[other][index] = struct{}{}
-			adjacency[index][other] = struct{}{}
+			for _, member := range cluster {
+				if ctx.Err() != nil {
+					return nil, staleCount
+				}
+				if !visuals.matches(ctx, valid[member].state, entry.state) {
+					compatible = false
+					break
+				}
+			}
+			if !compatible {
+				continue
+			}
+			clusters[groupID] = append(cluster, index)
+			memberGroup[index] = groupID
+			joined = true
+			break
+		}
+		if !joined {
+			memberGroup[index] = len(clusters)
+			clusters = append(clusters, []int{index})
 		}
 		if shouldEmitCleanupProgress(index+1, len(valid), 400) {
-			s.emitProgress("near", index+1, len(valid), entry.state.image.Path, "正在比对图片感知哈希…")
+			s.emitProgress("near", index+1, len(valid), entry.state.image.Path, "正在召回并复核图片画面…")
 		}
 	}
 
-	// 连通分量成组（设计 4.8.2）：按索引升序 DFS，保证结果确定。
-	visited := make(map[int]struct{})
 	groups := make([]ImageCleanupDuplicateGroup, 0)
-	for index := range valid {
+	for _, cluster := range clusters {
 		if ctx.Err() != nil {
 			return nil, staleCount
 		}
-		if _, seen := visited[index]; seen {
+		if len(cluster) < 2 {
 			continue
 		}
-		if len(adjacency[index]) == 0 {
-			continue
+		members := make([]ImageCleanupMember, 0, len(cluster))
+		for _, index := range cluster {
+			members = append(members, newImageCleanupMember(valid[index].state))
 		}
-		component := make([]int, 0)
-		stack := []int{index}
-		visited[index] = struct{}{}
-		for len(stack) > 0 {
-			current := stack[len(stack)-1]
-			stack = stack[:len(stack)-1]
-			component = append(component, current)
-			neighbors := make([]int, 0, len(adjacency[current]))
-			for neighbor := range adjacency[current] {
-				neighbors = append(neighbors, neighbor)
-			}
-			sort.Ints(neighbors)
-			for _, neighbor := range neighbors {
-				if _, seen := visited[neighbor]; seen {
-					continue
-				}
-				visited[neighbor] = struct{}{}
-				stack = append(stack, neighbor)
-			}
-		}
-		if len(component) < 2 {
-			continue
-		}
-		entries := make([]imageCleanupHashEntry, 0, len(component))
-		for _, memberIdx := range component {
-			entries = append(entries, valid[memberIdx])
-		}
-		sort.Slice(entries, func(i, j int) bool {
-			return isPreferredCleanupImage(entries[i].image(), entries[j].image(), nil)
-		})
-		// 与推荐保留项的最大汉明距离：界面用它给出"有多像"的量化说法。
-		// 不用组内两两最大值——连通分量是链式的，链两端可以毫不相似，
-		// 报出来会把一个刚判定为近似重复的组标成相似度 0%。
-		maxDistance := 0
-		sampled := entries
-		if len(sampled) > imageCleanupMaxDistanceSamples {
-			sampled = sampled[:imageCleanupMaxDistanceSamples]
-		}
-		for _, entry := range sampled[1:] {
-			if distance := bits.OnesCount64(sampled[0].hash ^ entry.hash); distance > maxDistance {
-				maxDistance = distance
-			}
-		}
-		members := make([]ImageCleanupMember, 0, len(entries))
-		for _, entry := range entries {
-			members = append(members, newImageCleanupMember(entry.state))
-		}
+		sort.Slice(members, func(i, j int) bool { return isPreferredCleanupImage(members[i].Image, members[j].Image, nil) })
 		groups = append(groups, ImageCleanupDuplicateGroup{
-			Original:           members[0],
-			Candidates:         append([]ImageCleanupMember(nil), members[1:]...),
-			Reason:             "感知哈希相近，可能是同图不同尺寸或压缩",
-			MaxHammingDistance: maxDistance,
+			Original: members[0], Candidates: members[1:],
+			Reason:             "感知哈希相近，且组内画面结构、颜色与比例复核通过",
+			MaxHammingDistance: imageKeeperMaxHammingDistance(members),
 		})
 	}
 	sort.Slice(groups, func(i, j int) bool {
@@ -969,12 +988,9 @@ func rankImageCleanupCandidates(ctx context.Context, result *ImageCleanupAnalysi
 	return nil
 }
 
-// imageKeeperMaxHammingDistance 是与推荐保留项（members[0]）的最大汉明距离，采样上限同成组时。
+// imageKeeperMaxHammingDistance 遍历有界近似组的所有成员，不截断距离证据。
 func imageKeeperMaxHammingDistance(members []ImageCleanupMember) int {
 	sampled := members
-	if len(sampled) > imageCleanupMaxDistanceSamples {
-		sampled = sampled[:imageCleanupMaxDistanceSamples]
-	}
 	if len(sampled) < 2 {
 		return 0
 	}
