@@ -12,6 +12,7 @@
       </div>
       <p class="image-source-dialog__path">{{ image.path }}</p>
       <p>{{ formatBytes(image.size) }}</p>
+      <WallpaperButton kind="image" :media-id="Number(image.id)" />
       <p v-if="error || actionError" role="alert">{{ error || actionError }}</p>
       <div class="image-source-dialog__actions">
         <button type="button" class="btn-secondary" data-test="image-source-directory" @click="reveal">打开所在目录</button>
@@ -24,11 +25,12 @@
 </template>
 <script>
 import BaseModal from './ui/BaseModal.vue';
+import WallpaperButton from './WallpaperButton.vue';
 import { RevealImage } from '../../wailsjs/go/main/App';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { feedbackState, resolveConfirm } from '../utils/feedback.js';
 export default {
-  name: 'ImageSourceDialog', components: { BaseModal },
+  name: 'ImageSourceDialog', components: { BaseModal, WallpaperButton },
   props: { image: { type: Object, required: true }, allowUnlink: Boolean, allowDelete: Boolean, busy: Boolean, actionError: { type: String, default: '' } },
   emits: ['close', 'unlink', 'delete'],
   data: () => ({ failed: false, error: '' }),

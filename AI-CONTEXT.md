@@ -404,6 +404,11 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - 补图取件判据是「有 `poster_url` 且 `poster_path` 为空，且（`release_scope <> 'excluded'` **或该豆瓣 ID 有标记**）」，**不看 `detail_status`**——这一条同时覆盖从未下载、下载失败、被 LRU 淘汰三种情形。`excluded` 里那个「或有标记」的分支是承重的：**已看页读标记表、不按 `release_scope` 过滤**，一刀切排除会让「标了已看之后才被判成 excluded」的卡片永远只有占位图。LRU 上限 1 GiB（一年约 150 MB，够六到七个年份），淘汰顺序是**先清库中的 `poster_path`、再删文件**（与下载的先盘后库正好相反：反过来会留下指向不存在文件的行，`has_poster` 恒真而请求永远 404）。往年靠 `OpenMovieChartYear` 起的「只补海报」轮次够得着（整轮刷新对往年永不自动触发）。海报下载失败是**安静的**：`poster_path` 留空，不动 `detail_status`，本轮不重试，不影响同轮其余条目。
 - **Postgres 独有的三个陷阱**：批内重复 `douban_id` 报 21000（SQLite 不报，去重守卫在 SQLite 上天然空转）、`ON CONFLICT` 的 SET 右侧未加表名限定报 42702、片名超 `varchar(200)` 报 22001（已按 rune 截断）。**任何改动 `upsertListPage` 或 `movieChartListDoUpdateColumns` 的人必须跑 `CINEINSIGHT_TEST_PG_DSN` 那条腿**，只跑默认后端看到全绿等于没测。
 
+### 2.31 桌面壁纸（2026-10-09）
+- **范围：** macOS 14+ 的图片静态壁纸和视频动态壁纸。视频详情、图片查看器及关联图片预览有「设为壁纸」；全局 `WallpaperStatusBar` 可停止或关闭失败提示。最低分辨率为长边 ≥1920、短边 ≥720；未知尺寸先补全，设置前通过 ImageIO / AVFoundation 再核对原文件，不把分辨率门槛说成锐度检测。
+- **原生与生命周期：** `services/wallpaper_service.go` + `wallpaper_native_darwin.*`，App 在退出时关闭服务。图片按内容摘要复制到 `~/.CineInsight/wallpapers/` 后调用 `NSWorkspace`，每张 ≤64 MiB，历史副本不自动删；作用于各显示器当前桌面。视频使用原文件，每个显示器独立 AppKit 桌面层窗口 + `AVQueuePlayer` / `AVPlayerLooper`，无声循环、加入所有 Space、不拦鼠标；休眠/会话失活暂停，恢复继续，显示器变化重建。停止或退出移除窗口，原系统图片露出；不装常驻登录项、不自动转码、不写播放账本或观看进度。原生主队列未开始的请求两秒后取消，防止退出互等与迟到启动；已开始的系统操作等待实际结果。
+- **验证边界：** 设计与测试记录见 [桌面壁纸设计](docs/loopx/design/2026-10-09-desktop-wallpaper/需求设计文档.md)。`bash scripts/test_wallpaper_native.sh` 使用隐藏窗口和合成视频验证真实解码/循环、暂停恢复、重建、释放、异步失败与排队取消，不改变系统图片。真实桌面多屏、Space、图标穿透与图片设置仍需实际图形会话验收。
+
 ## 3. 关键目录说明 (Directory Structure)
 
 - `/services`: **核心业务层**（Video, VideoDetail, MediaProbe, TechnicalBackfill, Person, Collection, Subtitle, SubtitleWorkbench, LibraryWatcher, LocalMetadata, AIQuality, Tag, Settings, Directory 服务）。

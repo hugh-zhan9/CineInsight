@@ -77,6 +77,7 @@ type App struct {
 	backgroundTasks     *services.BackgroundTaskRegistry
 	idleGate            *services.IdleGate
 	desktopNotify       *services.DesktopNotificationCenter
+	wallpaperService    *services.WallpaperService
 	// 人脸识别（D-016..D-020）：运行时管理与分析服务。运行时不可用时分析入口置灰，
 	// 自动路径静默跳过——两者都读同一个 FaceRuntime.Status()。
 	faceRuntime  *services.FaceRuntime
@@ -173,6 +174,7 @@ func NewApp() *App {
 		iinaProgress:          services.NewIINAProgressService(homeDirForIINA()),
 		libraryWatcher:        libraryWatcher,
 		imageService:          services.NewImageService(),
+		wallpaperService:      services.NewWallpaperService(dataDir),
 		imageEXIFBackfill:     services.NewImageEXIFBackfillService(),
 		imagePHashBackfill:    services.NewImagePerceptualHashBackfillService(imageThumbnail),
 		imageThumbnail:        imageThumbnail,
@@ -575,6 +577,9 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.wallpaperService != nil {
+		a.wallpaperService.Close()
+	}
 	// 先取消进行中的迁移，再拿 restoreMu：迁移 goroutine 全程持有这把锁，不先取消，退出就要
 	// 等整个迁移跑完。取消按失败处理（配置不改，目标库可清空重试）。
 	a.cancelDatabaseSwitchForShutdown()

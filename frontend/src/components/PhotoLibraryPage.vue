@@ -504,6 +504,7 @@
       <aside class="photo-viewer__sidebar glass-surface">
         <h3 :title="viewerImage.name">{{ viewerImage.name }}</h3>
         <button type="button" class="btn-secondary btn-compact" data-test="photo-viewer-directory" @click="revealViewerImage">打开所在目录</button>
+        <WallpaperButton kind="image" :media-id="Number(viewerImage.id)" />
         <p v-if="viewerDirectoryError" role="alert">{{ viewerDirectoryError }}</p>
         <dl class="photo-viewer__facts">
           <dt>路径</dt><dd :title="viewerImage.path">{{ viewerImage.path }}</dd>
@@ -734,6 +735,7 @@ import {
   SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import WallpaperButton from './WallpaperButton.vue';
 import BaseMenu from './ui/BaseMenu.vue';
 import BasePopover from './ui/BasePopover.vue';
 import PhotoCleanupPage from './PhotoCleanupPage.vue';
@@ -769,7 +771,7 @@ const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
-  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, TrashUndoBanner, ImageAITagReviewPanel },
+  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, TrashUndoBanner, ImageAITagReviewPanel, WallpaperButton },
   props: {
     settings: { type: Object, required: true },
     tags: { type: Array, default: () => [] },

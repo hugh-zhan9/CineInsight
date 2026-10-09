@@ -37,6 +37,7 @@
             <button v-if="ratingValue !== null" type="button" class="btn-secondary btn-compact" data-test="drawer-stars-clear" :disabled="ratingSaving" @click="rateFromStars(null)">清除</button>
           </div>
           <p v-if="actionError" class="detail-error-text" role="alert" data-test="drawer-action-error">{{ actionError }}</p>
+          <WallpaperButton kind="video" :media-id="Number(actionVideo.id)" />
         </section>
 
         <section class="detail-section detail-section--player">
@@ -431,6 +432,7 @@ import { isWatchCompleted, resumePosition } from '../utils/watchState.js';
 import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../utils/viewThreshold.js';
 import GlossaryEditor from './GlossaryEditor.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
+import WallpaperButton from './WallpaperButton.vue';
 import ImageLibraryPicker from './ImageLibraryPicker.vue';
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
@@ -454,7 +456,7 @@ const sameIDSet = (a, b) => {
 
 export default {
   name: 'PreviewDrawer',
-  components: { ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog },
+  components: { ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },

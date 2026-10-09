@@ -42,6 +42,8 @@
       <div v-if="libraryCountsText" class="header-counts">{{ libraryCountsText }}</div>
     </div>
 
+    <WallpaperStatusBar v-if="!startupError" />
+
     <div v-if="startupError" class="startup-error-view">
       <div class="startup-error-card">
         <h2>应用已启动，但数据库连接失败</h2>
@@ -168,6 +170,7 @@ import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
 import PendingWorkHub from './components/PendingWorkHub.vue';
 import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
+import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
 import { confirmAction, notifyError } from './utils/feedback.js';
@@ -189,7 +192,7 @@ export default {
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
-    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog
+    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, WallpaperStatusBar
   },
   data() {
     return {

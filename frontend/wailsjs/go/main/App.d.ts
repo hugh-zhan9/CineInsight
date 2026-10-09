@@ -359,6 +359,10 @@ export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
 
 export function GetVideosByIDs(arg1:Array<number>):Promise<Array<models.Video>>;
 
+export function GetWallpaperPreflight(arg1:string,arg2:number):Promise<services.WallpaperPreflight>;
+
+export function GetWallpaperStatus():Promise<services.WallpaperStatus>;
+
 export function IgnoreFaceCluster(arg1:number):Promise<void>;
 
 export function LinkFaceCluster(arg1:number,arg2:number):Promise<services.FaceClusterView>;
@@ -619,6 +623,8 @@ export function SetVideoLiked(arg1:number,arg2:boolean):Promise<models.Video>;
 
 export function SetVideoWatched(arg1:number,arg2:boolean):Promise<models.Video>;
 
+export function SetWallpaper(arg1:string,arg2:number):Promise<services.WallpaperStatus>;
+
 export function SetWindowForeground(arg1:boolean):Promise<void>;
 
 export function StartCleanupAnalysisFromSettings():Promise<services.CleanupStatus>;
@@ -652,6 +658,8 @@ export function StartPerceptualHashBackfill():Promise<services.PerceptualHashSta
 export function StartSemanticIndex(arg1:services.SemanticIndexBuildRequest):Promise<services.SemanticIndexStatus>;
 
 export function StartTechnicalBackfill():Promise<services.TechnicalBackfillStatus>;
+
+export function StopVideoWallpaper():Promise<services.WallpaperStatus>;
 
 export function SuggestLibraryMatchesBatch(arg1:Array<services.LibraryMatchQuery>):Promise<Record<string, Array<services.LibraryMatchSuggestion>>>;
 

@@ -710,6 +710,14 @@ export function GetVideosByIDs(arg1) {
   return window['go']['main']['App']['GetVideosByIDs'](arg1);
 }
 
+export function GetWallpaperPreflight(arg1, arg2) {
+  return window['go']['main']['App']['GetWallpaperPreflight'](arg1, arg2);
+}
+
+export function GetWallpaperStatus() {
+  return window['go']['main']['App']['GetWallpaperStatus']();
+}
+
 export function IgnoreFaceCluster(arg1) {
   return window['go']['main']['App']['IgnoreFaceCluster'](arg1);
 }
@@ -1230,6 +1238,10 @@ export function SetVideoWatched(arg1, arg2) {
   return window['go']['main']['App']['SetVideoWatched'](arg1, arg2);
 }
 
+export function SetWallpaper(arg1, arg2) {
+  return window['go']['main']['App']['SetWallpaper'](arg1, arg2);
+}
+
 export function SetWindowForeground(arg1) {
   return window['go']['main']['App']['SetWindowForeground'](arg1);
 }
@@ -1296,6 +1308,10 @@ export function StartSemanticIndex(arg1) {
 
 export function StartTechnicalBackfill() {
   return window['go']['main']['App']['StartTechnicalBackfill']();
+}
+
+export function StopVideoWallpaper() {
+  return window['go']['main']['App']['StopVideoWallpaper']();
 }
 
 export function SuggestLibraryMatchesBatch(arg1) {

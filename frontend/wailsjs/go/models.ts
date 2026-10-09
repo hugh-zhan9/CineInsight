@@ -8342,6 +8342,46 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class WallpaperPreflight {
+	    eligible: boolean;
+	    reason_code: string;
+	    message: string;
+	    width: number;
+	    height: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new WallpaperPreflight(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.eligible = source["eligible"];
+	        this.reason_code = source["reason_code"];
+	        this.message = source["message"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	    }
+	}
+	export class WallpaperStatus {
+	    supported: boolean;
+	    state: string;
+	    video_id: number;
+	    display_name: string;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new WallpaperStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.supported = source["supported"];
+	        this.state = source["state"];
+	        this.video_id = source["video_id"];
+	        this.display_name = source["display_name"];
+	        this.message = source["message"];
+	    }
+	}
 	export class WatchedMovieView {
 	    douban_id: string;
 	    title: string;
