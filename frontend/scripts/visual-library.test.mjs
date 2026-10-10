@@ -12,16 +12,16 @@ const appShell = fs.readFileSync(new URL('../src/App.vue', import.meta.url), 'ut
 const imageReview = fs.readFileSync(new URL('../src/components/ImageAITagReviewPanel.vue', import.meta.url), 'utf8');
 
 assert.match(page, /cineinsight-library-layout/, 'layout choice should persist');
-assert.match(page, /homeListVirtualizationEnabled && viewMode === 'list'/, 'default list virtualization must remain enabled');
+assert.doesNotMatch(page, /homeListVirtualizationEnabled|configureHomeListVirtualization/, 'native-verified list and grid windows must remain enabled');
+assert.match(virtualList, /virtualizationEnabled:.*default: true/, 'windowing is enabled by default');
 assert.match(row, /\/preview\/thumbnail\/\$\{this\.video\.id\}/, 'rows should use the thumbnail asset route');
 assert.match(row, /thumbnailFailed/, 'thumbnail failures need a local placeholder');
 assert.match(virtualList, /virtual-video-list--\$\{layoutMode\}/, 'virtual list shell should expose layout styling');
-assert.match(virtualList, /\.virtual-video-list\.virtual-video-list--grid\s*{[^}]*display:\s*grid;[^}]*gap:\s*12px;/s, 'the scoped list shell must switch from flex rows to a real grid');
-// 原型 A3 把列宽改成 minmax(200px, 1fr)，列数随窗口自增。仍必须是 auto-fill
-// 而不是 auto-fit：auto-fill 保留空轨道，最后一行没填满时卡片才不会被拉宽。
-assert.match(sharedCss, /\.virtual-video-list--grid\s*{[^}]*grid-template-columns:\s*repeat\(auto-fill,\s*minmax\(200px,\s*1fr\)\)/s, 'grid columns should grow with the window');
+assert.match(virtualList, /\.virtual-video-list--grid \.virtual-video-list__items\s*{[^}]*display:\s*grid;[^}]*gap:\s*12px;/s, 'only the inner items own the grid; spacers remain ordinary blocks');
+// 显式列数按容器宽度计算，空轨道保留，最后一行卡片不被拉宽。
+assert.match(virtualList, /gridTemplateColumns: `repeat\(\$\{this.columns\}, minmax\(0, 1fr\)\)`/, 'grid must retain its measured number of columns');
 assert.doesNotMatch(sharedCss, /repeat\(auto-fit,/, 'auto-fit would stretch a partially filled row');
-assert.match(sharedCss, /\.virtual-video-list--grid\s*{[^}]*justify-content:\s*start/s, 'a partially filled grid row should not stretch cards');
+assert.match(sharedCss, /\.virtual-video-list--grid \.virtual-video-list__items\s*{[^}]*justify-content:\s*start/s, 'a partially filled grid row should not stretch cards');
 assert.match(previewDrawer, /\.preview-drawer__body\s*{[^}]*display:\s*grid[^}]*grid-auto-rows:\s*max-content/s, 'drawer sections must not flex-shrink the player');
 assert.match(previewDrawer, /\.detail-section--player\s*{[^}]*min-height:\s*220px/s, 'player section needs a non-collapsing minimum height');
 assert.match(previewDrawer, /\.preview-drawer__player-shell\s*{[^}]*aspect-ratio:\s*16\s*\/\s*9[^}]*min-height:\s*220px/s, 'player shell should preserve its 16:9 viewport');
@@ -67,8 +67,9 @@ assert.match(
 );
 assert.match(imageReview, /image-ai-tag-review__thumb--failed/, 'image AI review thumbnails need a local failure placeholder');
 // 候选没有上限：面板必须走分页接口，并给出显式的"加载更多"入口。
-assert.match(imageReview, /ListImageAITagCandidatePage\(0, this\.confidence, '', 0, 0\)/, 'image AI review should load the first candidate page');
-assert.match(imageReview, /ListImageAITagCandidatePage\(0, confidence, '', cursor, 0\)/, 'image AI review load-more should continue from the page cursor');
+assert.match(imageReview, /this\.pageRequest\(query\)/, 'image AI review should load the first candidate page through its filtered helper');
+assert.match(imageReview, /ListImageAITagCandidatePage\(0, query\.confidence, '', cursor, 0\)/, 'image AI review load-more should continue from the page cursor');
+assert.match(imageReview, /SearchImageAITagCandidatePage\(\{ \.\.\.query, cursor_id: cursor, limit: 0 \}\)/, 'image keyword search must include the full range and retain its filters on every page');
 assert.match(imageReview, /data-test="image-ai-tag-load-more"/, 'image AI review needs an explicit load-more entry');
 assert.doesNotMatch(imageReview, /ListImageAITagCandidates\(/, 'image AI review should no longer pull the unbounded candidate list');
 

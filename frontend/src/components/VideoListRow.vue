@@ -45,6 +45,8 @@
           :title="staleReasonHint"
           data-test="row-stale-reason"
         >路径失效 · {{ staleReasonText }}</span>
+        <!-- 多版本聚合（D-MW-VERSIONS）：属于活跃成员 ≥2 的版本组时显示「N 个版本」与汇总，点击在卡片内展开。 -->
+        <VersionGroupBadge v-if="versionSummary" :summary="versionSummary" :expanded="versionsExpanded" @toggle="$emit('toggle-versions', video)" />
       </div>
 
       <p class="video-path" :title="video.path">{{ video.name }} <span class="video-path__sep">·</span> {{ getDirectoryLabel(video) }}</p>
@@ -140,6 +142,7 @@
 
 <script>
 import { resumePosition } from '../utils/watchState.js';
+import VersionGroupBadge from './video-list/VersionGroupBadge.vue';
 
 // 失效原因（videos.stale_reason，D-PC06）的中文名。片库页的「路径失效」分组复用同一份。
 // unknown 是后端 ListStaleReasonCounts 对空原因（历史失效行）的归类。
@@ -172,6 +175,7 @@ export function staleReasonLabel(reason) {
 
 export default {
   name: 'VideoListRow',
+  components: { VersionGroupBadge },
   props: {
     video: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
@@ -185,9 +189,12 @@ export default {
     // 行内按钮只会带来误点。
     actionsSuspended: { type: Boolean, default: false },
     // 该视频被人工覆盖、结果为「加上」的自动标签种类（automatic_override_kinds[String(id)]）。
-    overrideKinds: { type: Array, default: () => [] }
+    overrideKinds: { type: Array, default: () => [] },
+    // 本行代表的版本组汇总（LibraryVideoPage.version_groups[id]）；不属于组时为 null。
+    versionSummary: { type: Object, default: null },
+    versionsExpanded: { type: Boolean, default: false }
   },
-  emits: ['preview', 'play', 'toggle-favorite', 'toggle-liked', 'toggle-watched', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select', 'open-row-menu'],
+  emits: ['preview', 'play', 'toggle-favorite', 'toggle-liked', 'toggle-watched', 'open-add-tag', 'remove-tag', 'contextmenu', 'toggle-select', 'open-row-menu', 'toggle-versions'],
   data() {
     return {
       thumbnailFailed: false

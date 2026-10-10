@@ -31,31 +31,37 @@ var sensitiveLogPatterns = []*regexp.Regexp{
 
 // App struct
 type App struct {
-	ctx                   context.Context
-	videoService          *services.VideoService
-	thumbnailService      *services.ThumbnailService
-	tagService            *services.TagService
-	settingsService       *services.SettingsService
-	backupService         *services.BackupService
-	databaseSwitchService *services.DatabaseSwitchService
-	directoryService      *services.DirectoryService
-	subtitleService       *services.SubtitleService
-	subtitleWorkbench     *services.SubtitleWorkbenchService
-	cleanupService        *services.CleanupService
-	subtitleSearchService *services.SubtitleSearchService
-	aiTaggingService      *services.AITaggingService
-	aiQualityService      *services.AIQualityService
-	shortFeedService      *services.ShortFeedService
-	personService         *services.PersonService
-	collectionService     *services.CollectionService
-	watchlistService      *services.WatchlistService
-	collectionSuggestions *services.CollectionSuggestionService
-	videoDetailService    *services.VideoDetailService
-	libraryStatsService   *services.LibraryStatsService
-	localMetadata         *services.LocalMetadataService
-	mediaProbeService     *services.MediaProbeService
-	technicalBackfill     *services.TechnicalBackfillService
-	perceptualHash        *services.PerceptualHashService
+	playbackLifecycleMu        sync.Mutex
+	playbackMaintenanceRelease func()
+	playbackShuttingDown       bool
+	playbackQueueMu            sync.RWMutex
+	playbackQueue              *services.PlaybackQueueService
+	playbackQueueEmit          func(uint64)
+	ctx                        context.Context
+	videoService               *services.VideoService
+	thumbnailService           *services.ThumbnailService
+	tagService                 *services.TagService
+	settingsService            *services.SettingsService
+	backupService              *services.BackupService
+	databaseSwitchService      *services.DatabaseSwitchService
+	directoryService           *services.DirectoryService
+	subtitleService            *services.SubtitleService
+	subtitleWorkbench          *services.SubtitleWorkbenchService
+	cleanupService             *services.CleanupService
+	subtitleSearchService      *services.SubtitleSearchService
+	aiTaggingService           *services.AITaggingService
+	aiQualityService           *services.AIQualityService
+	shortFeedService           *services.ShortFeedService
+	personService              *services.PersonService
+	collectionService          *services.CollectionService
+	watchlistService           *services.WatchlistService
+	collectionSuggestions      *services.CollectionSuggestionService
+	videoDetailService         *services.VideoDetailService
+	libraryStatsService        *services.LibraryStatsService
+	localMetadata              *services.LocalMetadataService
+	mediaProbeService          *services.MediaProbeService
+	technicalBackfill          *services.TechnicalBackfillService
+	perceptualHash             *services.PerceptualHashService
 	// mediaWorkSlot 是转封装、帧哈希回填、人脸抽帧共享的重媒体处理槽（D-007）：
 	// 容量 1，三条流水线在处理每一项之前各自取一次。新增重 ffmpeg 任务请复用它，
 	// 不要各建一个——各建一个等于没有限制。
@@ -64,6 +70,7 @@ type App struct {
 	playbackProxies     *services.PlaybackProxyService
 	enhancement         *services.EnhancementService
 	enhancementModels   *services.EnhancementModelInstaller
+	videoEdit           *services.VideoEditService // 视频工作台导出（合并、去片头、高清替换），共享 mediaWorkSlot
 	iinaProgress        *services.IINAProgressService
 	semanticIndex       *services.SemanticIndexService
 	libraryWatcher      *services.LibraryWatcherService
@@ -115,6 +122,11 @@ type App struct {
 	// 数据库就绪后由 resetMovieChartService 构造、用锁换上，不在 NewApp 里建。
 	movieChartMu sync.RWMutex
 	movieChart   *services.MovieChartService
+
+	// 场景检索（D-MW-SCENES）：本地运行时、画面索引任务与检索查询；后两者共用一个常驻 worker。
+	sceneRuntime *services.SceneRuntime
+	sceneIndex   *services.SceneIndexService
+	sceneSearch  *services.SceneSearchService
 }
 
 // NewApp creates a new App application struct
@@ -173,6 +185,7 @@ func NewApp() *App {
 		playbackProxies:       playbackProxies,
 		enhancement:           services.NewEnhancementService(videoService, mediaProbeService, aiTaggingService.SameSourceService(), dataDir),
 		enhancementModels:     services.NewEnhancementModelInstaller(services.EnhancementModelDirFor(dataDir)),
+		videoEdit:             services.NewVideoEditService(mediaProbeService, mediaWorkSlot, dataDir),
 		iinaProgress:          services.NewIINAProgressService(homeDirForIINA()),
 		libraryWatcher:        libraryWatcher,
 		imageService:          services.NewImageService(),
@@ -193,6 +206,10 @@ func NewApp() *App {
 	app.faceAnalysis = services.NewFaceAnalysisService(dataDir, app.faceRuntime, imageThumbnail)
 	app.faceAnalysis.SetMediaWorkSlot(mediaWorkSlot)
 	app.faceReview = services.NewFaceReviewService(dataDir, app.faceAnalysis)
+	// 场景检索：画面索引每项前取同一个重媒体槽（D-007）。
+	app.sceneRuntime = services.NewSceneRuntime(dataDir, services.SceneModelMirrorURL)
+	app.sceneIndex = services.NewSceneIndexService(app.sceneRuntime, mediaWorkSlot)
+	app.sceneSearch = services.NewSceneSearchService(app.sceneIndex)
 	app.wireBrowserBridge()
 	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService, personService, collectionService)
 	app.wireBackgroundTaskRegistry()
@@ -248,11 +265,13 @@ func (a *App) wireBackgroundTaskRegistry() {
 	a.aiTaggingService.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.subtitleService.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.enhancement.SetBackgroundTaskRegistry(a.backgroundTasks)
+	a.videoEdit.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.backupService.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.collectionSuggestions.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.frameHash.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.playbackProxies.SetBackgroundTaskRegistry(a.backgroundTasks)
 	a.faceAnalysis.SetBackgroundTaskRegistry(a.backgroundTasks)
+	a.sceneIndex.SetBackgroundTaskRegistry(a.backgroundTasks)
 	// 想看片单的在线补全（D-WM13）。它有意不接空闲门：补全由用户添加条目或点
 	// 重试触发，属用户显式动作，与浏览器下载队列同口径。
 	a.watchlistService.SetBackgroundTaskRegistry(a.backgroundTasks)
@@ -288,9 +307,9 @@ func (a *App) wireServiceHooks() {
 // 观察者就指向一个已经收摊、握着旧连接的服务。
 type movieChartWatchObserver struct{ app *App }
 
-func (o movieChartWatchObserver) OnVideoWatchedChanged(videoID uint, watched bool) {
+func (o movieChartWatchObserver) OnVideoWatchedChangedContext(ctx context.Context, videoID uint, watched bool) {
 	if svc := o.app.movieChartService(); svc != nil {
-		svc.OnVideoWatchedChanged(videoID, watched)
+		svc.OnVideoWatchedChangedContext(ctx, videoID, watched)
 	}
 }
 
@@ -373,6 +392,10 @@ func (a *App) startup(ctx context.Context) {
 		runtime.EventsEmit(ctx, event, data)
 	}
 	a.wireStartupHooks(emit)
+	a.playbackQueueEmit = func(sequence uint64) { emit("playback-queue-state", sequence) }
+	if err := a.startPlaybackQueue(); err != nil {
+		log.Printf("Playback queue startup failed: %v", services.WithoutAbsolutePaths(err))
+	}
 	a.resetSemanticIndexService()
 	a.resetImageSemanticIndexService()
 	a.resetImageAITaggingService()
@@ -393,6 +416,9 @@ func (a *App) startup(ctx context.Context) {
 				result.Found, result.Removed, result.Kept, result.Errors)
 		}
 	}()
+	// 视频工作台的启动对账（running/queued 项改 interrupted，rename 后崩溃的项补做入库），
+	// 之后清扫孤儿工作目录；与超分对账一样异步，不挡窗口。
+	go a.recoverVideoEdit(ctx)
 	// 外部播放多半发生在应用没开着的时候，启动时先补一次 IINA 断点；
 	// 之后靠监听断点目录实时跟进，看完切回来就已经更新好了，不用重启应用。
 	go func() {
@@ -551,9 +577,20 @@ func (a *App) wireStartupHooks(emit func(event string, data any)) {
 	a.faceAnalysis.SetEventEmitter(func(status services.FaceAnalysisStatus) {
 		emitTaskState("face-analysis-state", status)
 	})
+	a.sceneRuntime.SetEventEmitter(func(status services.SceneRuntimeStatus) {
+		emit("scene-runtime-state", status)
+	})
+	a.sceneIndex.SetEventEmitter(func(status services.SceneIndexStatus) {
+		emitTaskState("scene-index-state", status)
+	})
 	a.enhancement.SetEventEmitter(func(view services.EnhancementTaskView) {
 		emitTaskState("video-enhancement-state", view)
 	})
+	if a.videoEdit != nil {
+		a.videoEdit.SetEventEmitter(func(event services.VideoEditStateEvent) {
+			emitTaskState(videoEditStateEvent, event)
+		})
+	}
 	a.enhancementModels.SetEventEmitter(func(status services.EnhancementModelStatus) {
 		emit("enhancement-model-state", status)
 	})
@@ -585,6 +622,9 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	// A cancelled migration runs recovery before releasing restoreMu. Close
+	// playback permanently first, so that recovery cannot admit another player.
+	a.quiescePlaybackForShutdown()
 	if a.wallpaperService != nil {
 		a.wallpaperService.Close()
 	}
@@ -594,11 +634,10 @@ func (a *App) shutdown(ctx context.Context) {
 	a.restoreMu.Lock()
 	a.restoreTerminal = true
 	a.restoreMu.Unlock()
+	a.stopAIReviewApprovals()
 	if err := a.stopCleanupConsolidationAndWait(); err != nil {
 		log.Printf("集中整理退出收尾失败 err=%v", err)
 	}
-	// 播放失败后的后台重定位会改路径写库：取消排队与进行中的，等它们退出。
-	services.StopPlaybackRelocation()
 	// 30 秒「换一个」窗口里还没提交的那次随机播放照样记账（D-PC43）。数据库由 main 在
 	// wails.Run 返回之后才关闭，这里一定早于关库。
 	services.FlushPendingRandomCommit()
@@ -627,6 +666,9 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.enhancement != nil {
 		a.enhancement.StopAndWait()
 	}
+	if a.videoEdit != nil {
+		a.videoEdit.StopAndWait()
+	}
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
 	}
@@ -641,6 +683,13 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 	if a.faceRuntime != nil {
 		a.faceRuntime.StopAndWait()
+	}
+	// 场景检索：取消建索引并关闭常驻 sidecar。不在退出拦截清单里（派生数据，已完成项已落库）。
+	if a.sceneIndex != nil {
+		a.sceneIndex.StopAndWait()
+	}
+	if a.sceneRuntime != nil {
+		a.sceneRuntime.StopAndWait()
 	}
 	if a.imageEXIFBackfill != nil {
 		a.imageEXIFBackfill.StopAndWait()

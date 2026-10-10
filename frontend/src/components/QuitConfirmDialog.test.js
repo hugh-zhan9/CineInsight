@@ -65,6 +65,17 @@ describe('退出确认（MEDIA-10）', () => {
     expect(wrapper.text()).not.toContain('重新推送');
   });
 
+  it('P-008 视频工作台的导出有中文名，并提示下次可继续未完成项', async () => {
+    const wrapper = mountDialog();
+    handlers['quit-confirm-required']({ tasks: [{ key: 'video_edit', running: 1, queued: 2, names: [] }] });
+    await flushPromises();
+
+    expect(wrapper.get('[data-test="quit-task-video_edit"]').text()).toContain('视频工作台');
+    expect(wrapper.get('[data-test="quit-task-video_edit"]').text()).toContain('进行中 1 · 排队 2');
+    expect(wrapper.text()).toContain('「继续」未完成项');
+    expect(wrapper.text()).not.toContain('重新推送');
+  });
+
   it('MEDIA-10 「仍然退出」调用 ConfirmQuit，退出过程中按钮置灰', async () => {
     let finish;
     api.ConfirmQuit.mockReturnValue(new Promise(resolve => { finish = resolve; }));

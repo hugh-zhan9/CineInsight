@@ -4,6 +4,7 @@ go 1.23
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
+	github.com/google/uuid v1.6.0
 	github.com/jinzhu/now v1.1.5
 	github.com/joho/godotenv v1.5.1
 	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd
@@ -20,7 +21,6 @@ require (
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.3 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect

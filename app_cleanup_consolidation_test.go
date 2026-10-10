@@ -326,6 +326,7 @@ func TestAppConsolidationShutdownWaitsForAcceptedRead(t *testing.T) {
 	go func() { _, err := a.GetCleanupConsolidationStatus(0); read <- err }()
 	<-entered
 	shutdown := make(chan struct{})
+	t.Cleanup(func() { releasePlaybackAfterShutdownTest(a) })
 	go func() { a.shutdown(context.Background()); close(shutdown) }()
 	waitAppConsolidation(t, func() bool {
 		a.consolidationLifecycle.mu.Lock()
@@ -491,6 +492,7 @@ func TestAppConsolidationMaintenanceWaitsForLocalFileExecutor(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.releaseDatabaseRestoreMode()
+	a.releasePlaybackMaintenance()
 	row := models.CleanupConsolidationTask{}
 	if err := database.DB.First(&row, started.ID).Error; err != nil || row.Status != "cancelled" || row.ActiveSlot != nil {
 		t.Fatalf("executor was not cancelled/finalized: %+v %v", row, err)

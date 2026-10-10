@@ -43,6 +43,9 @@
       :playback-proxy="playbackProxy"
       :tag-bg-color="tagBgColor"
       :library-filter-from="libraryFilterFrom"
+      :collapse-versions="collapseVersions"
+      @update:collapse-versions="setCollapseVersions"
+      @batch-version-group="mergeSelectedAsVersionGroup"
       @update:search-keyword="searchKeyword = $event"
       @update:smart-view="smartView = $event"
       @update:sort-mode="sortMode = $event"
@@ -51,6 +54,8 @@
       @search="handleSearch"
       @set-search-mode="setSearchMode"
       @play-random="playRandom"
+      @open-tonight="openTonightPicker"
+      @search-scenes="$emit('search-scenes', currentLibraryFilter())"
       @toggle-tag="toggleTagFilter"
       @clear-tags="clearTagFilter"
       @update:selected-people="updateSelectedPeople"
@@ -63,13 +68,17 @@
       @manage-select="onManageSelect"
       @view-select="onViewSelect"
       @random-select="onRandomSelect"
+      @batch-playback-queue="addVideosToPlaybackQueue(selectedVideoIds)"
       @batch-add-tag="openBatchAddTagDialog"
       @batch-move="moveSelectedVideos"
       @batch-local-metadata="openLocalMetadataDialog(selectedVideoIds)"
       @batch-playback-proxy="createProxiesForSelected"
       @batch-subtitle="generateSubtitlesForSelected"
       @batch-delete="confirmBatchDelete"
+      @batch-edit-merge="createEditProjectFromSelection('merge')"
+      @batch-edit-trim="createEditProjectFromSelection('trim_intro')"
     />
+    <TonightPickerDialog v-if="tonightOpen" :filter="tonightFilter" @close="tonightOpen = false" @preview="previewTonightSuggestion" @play="playTonightSuggestion" />
     <IncrementalScanBar
       ref="incrementalScanBar"
       :migration-running="migrationRunning"
@@ -197,9 +206,10 @@
         v-else-if="videos.length > 0"
         ref="virtualList"
         :items="videos"
+        :active="pageActive"
+        :layout-key="rowDensity"
         :loading="loading || refreshingInPlace"
         :has-more="hasMore"
-        :virtualization-enabled="homeListVirtualizationEnabled && viewMode === 'list'"
         :layout-mode="viewMode"
         :subtitle-mode="isSubtitleSearchActive()"
         :preview-open="previewOpen"
@@ -220,6 +230,9 @@
             :narrow="previewOpen && viewMode === 'list'"
             :actions-suspended="selectedVideoIds.length > 0"
             :override-kinds="overrideKindsFor(video)"
+            :version-summary="versionGroupFor(video)"
+            :versions-expanded="isVersionGroupExpanded(video)"
+            @toggle-versions="toggleVersionGroup"
             @preview="openPreview"
             @play="playVideo"
             @toggle-favorite="toggleVideoFavorite"
@@ -230,6 +243,17 @@
             @toggle-select="toggleVideoSelection"
             @open-row-menu="openRowMenu"
             @contextmenu="showContextMenu"
+          />
+          <VersionGroupMembers
+            v-if="isVersionGroupExpanded(video)"
+            :summary="versionGroupFor(video)"
+            :current-video-id="video.id"
+            :busy="versionGroupBusy"
+            @play="playVersionMember"
+            @preview="previewVersionMember(video, $event)"
+            @set-primary="setPrimaryVersion(video, $event)"
+            @remove="removeVersionFromGroup(video, $event)"
+            @manage="openVersionGroupDialogFor(video)"
           />
         </template>
       </VirtualVideoList>
@@ -250,6 +274,7 @@
       :video="selectedPreviewVideo"
       :session="previewSession"
       :start-time-ms="previewStartTimeMs"
+      :bookmark-position="previewBookmarkPosition"
       :resume-position-seconds="resumePositionFor(selectedPreviewVideo)"
       @close="closePreview"
       @preview-externally="previewExternally"
@@ -292,6 +317,23 @@
       @select="onRowMenuSelect"
       @close="closeRowMenu"
     />
+    <HDReplacePickerDialog
+      v-if="hdReplaceLongVideo"
+      :long-video="hdReplaceLongVideo"
+      :busy="creatingEditProject"
+      @close="hdReplaceLongVideo = null"
+      @pick="createHDReplace"
+    />
+
+    <VersionGroupDialog
+      v-if="versionGroupDialog.show"
+      :group-id="versionGroupDialog.groupId"
+      :video-id="versionGroupDialog.videoId"
+      :video-title="versionGroupDialog.videoTitle"
+      @close="closeVersionGroupDialog"
+      @changed="afterVersionGroupMutation"
+    />
+    <VersionGroupPanel v-if="versionPanelOpen" @close="versionPanelOpen = false" @changed="afterVersionGroupMutation" />
 
     <!-- 视频超分 -->
     <EnhanceDialog ref="enhanceDialog" />
@@ -483,6 +525,8 @@ import TagDeleteDialog from './TagDeleteDialog.vue';
 import PreviewDrawer from './PreviewDrawer.vue';
 import SubtitleWorkbench from './SubtitleWorkbench.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
+import TonightPickerDialog from './TonightPickerDialog.vue';
+import { addToPlaybackQueue, openPlaybackQueue } from '../utils/playbackQueue.js';
 import VideoListRow, { STALE_REASON_LABELS } from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
 import LocalMetadataDialog from './LocalMetadataDialog.vue';
@@ -500,8 +544,14 @@ import CleanupReviewPanel from './video-list/CleanupReviewPanel.vue';
 import SubtitleGenerateDialog from './video-list/SubtitleGenerateDialog.vue';
 import SubtitleTranslateDialog from './video-list/SubtitleTranslateDialog.vue';
 import EnhanceDialog from './video-list/EnhanceDialog.vue';
+import VersionGroupMembers from './video-list/VersionGroupMembers.vue';
+import VersionGroupDialog from './VersionGroupDialog.vue';
+import VersionGroupPanel from './VersionGroupPanel.vue';
+import { versionGroupsMixin } from './video-list/versionGroupsMixin.js';
+import { videoEditEntryMixin } from './video-list/videoEditEntryMixin.js';
+import HDReplacePickerDialog from './video-workbench/HDReplacePickerDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
-import { defaultRangeEngine, estimateVideoRowHeight } from '../utils/virtualList.js';
+import { defaultRangeEngine, estimateVideoRowHeight, estimateVideoGridHeight } from '../utils/virtualList.js';
 import BaseMenu from './ui/BaseMenu.vue';
 import BaseModal from './ui/BaseModal.vue';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
@@ -557,8 +607,8 @@ function relocateErrorText(err) {
 
 export default {
   name: 'VideoListPage',
-  mixins: [wheelForwardingMixin],
-  components: { ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, BaseMenu, BaseModal },
+  mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin],
+  components: { TonightPickerDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, BaseModal },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -566,7 +616,7 @@ export default {
     pageActive: { type: Boolean, default: true },
     consolidationRoute: { type: Object, default: null }
   },
-  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'consolidation-opened'],
+  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'consolidation-opened', 'search-scenes', 'open-video-edit'],
   data() {
     return {
       videos: [],
@@ -594,6 +644,8 @@ export default {
       libraryTotalCount: null,
       countToken: 0,
       // 随机模式与「最近 12 次」排除表存在本机（D-PC44），重启后仍然生效。
+      tonightOpen: false,
+      tonightFilter: {},
       randomMode: loadRandomMode(),
       recentRandomVideoIDs: loadRecentRandomIDs(),
       randomPick: { active: false, ids: [], reason: '', loading: false },
@@ -678,15 +730,15 @@ export default {
       playbackProxy: { running: false, cancelled: false, completed: false, total: 0, processed: 0, succeeded: 0, skipped: 0, failed: 0, results: [] },
       localMetadataDialog: { show: false, videoIds: [] },
       // 切走前记下共用滚动容器的位置，切回来照原样恢复（图片页也在用同一个容器）。
-      inactiveScrollTop: 0,
       subtitleWorkbench: { show: false, video: null },
       selectedPreviewVideoId: null,
       previewVideoSnapshot: null,
       previewOpen: false,
       previewSession: null,
       previewStartTimeMs: null,
+      previewBookmarkPosition: null,
+      bookmarkRequestGeneration: 0,
       rangeEngine: defaultRangeEngine,
-      homeListVirtualizationEnabled: true,
       // 行菜单要知道哪些视频正在生成字幕；值由字幕任务组件镜像过来。
       generatingSubtitleIds: [],
       // 翻译弹窗是单例，正在翻译哪个视频由它镜像过来，供行菜单禁用入口；进度也镜像过来标在菜单上（MEDIA-12）。
@@ -700,7 +752,6 @@ export default {
     };
   },
   mounted() {
-    this.configureHomeListVirtualization();
     this.listQueryKey = this.virtualListQueryKey;
     this.loadVideos();
     this.refreshLibraryCounts();
@@ -806,23 +857,6 @@ export default {
         if (opened !== false && this.consolidationRoute === route) this.$emit('consolidation-opened');
       }
     },
-    // .main-view 是各页共用的滚动容器：切走时别的页面会改掉 scrollTop，
-    // 所以离开前记下位置，切回来再放回去。
-    pageActive(active) {
-      const owner = this.$el?.closest?.('.main-view');
-      if (!owner) return;
-      if (!active) {
-        this.inactiveScrollTop = owner.scrollTop || 0;
-        return;
-      }
-      const target = this.inactiveScrollTop;
-      if (target <= 0) return;
-      this.$nextTick(() => {
-        const el = this.$el?.closest?.('.main-view');
-        if (!el) return;
-        el.scrollTop = target;
-      });
-    },
     randomMode(mode) {
       saveRandomMode(mode);
     },
@@ -926,6 +960,7 @@ export default {
       // 超分运行时明确不可用时标「未就绪」，点了去设置页的超分分区看原因（D-PC24、MEDIA-11）。
       const enhanceReady = this.enhanceCapability?.available !== false;
       return [
+        { id: 'playback-queue', label: '加入待播队列' },
         { heading: '文件' },
         { id: 'directory', label: '打开目录' },
         { id: 'rename', label: '重命名' },
@@ -935,6 +970,7 @@ export default {
         { heading: '整理' },
         { id: 'like', label: video.is_liked ? '取消点赞' : '点赞' },
         { id: 'ai-reanalyze', label: '重新分析 AI 标签' },
+        { id: 'version-group', label: '管理版本组…' },
         { heading: '字幕' },
         { id: 'subtitle', label: generating ? '生成字幕（进行中）' : '生成字幕', disabled: generating },
         { id: 'subtitle-translate', label: translatingThisVideo ? `翻译字幕（进行中 ${this.translatingSubtitlePercent}%）` : '翻译字幕…', disabled: generating || translating },
@@ -944,6 +980,7 @@ export default {
         { id: 'subtitle-restore', label: '恢复上一版字幕…', disabled: generating || translatingThisVideo },
         { heading: '增强' },
         { id: 'enhance', label: enhanceReady ? '视频超分…' : '视频超分（未就绪）' },
+        { id: 'hd-replace', label: '高清替换…' },
         { id: 'playback-proxy', label: '生成播放代理', disabled: this.playbackProxy.running },
         { divider: true },
         { id: 'delete', label: '删除', danger: true, disabled: this.deletingIds.includes(video.id) }
@@ -989,7 +1026,8 @@ export default {
         people: this.selectedPeople.map(person => Number(person.id)).sort((a, b) => a - b),
         size: this.selectedSizeRange === 'all' ? 'all' : `${this.selectedSizeRange.min}:${this.selectedSizeRange.max}`,
         res: this.selectedResRange === 'all' ? 'all' : `${this.selectedResRange.min}:${this.selectedResRange.max}`,
-        rating: `${this.minRating}:${this.maxRating}:${this.sortMode}`
+        rating: `${this.minRating}:${this.maxRating}:${this.sortMode}`,
+        collapseVersions: this.versionCollapseActive()
       });
     }
   },
@@ -1110,23 +1148,13 @@ export default {
         } catch (_err) {}
       }
     },
-    configureHomeListVirtualization() {
-      const userAgent = window.navigator?.userAgent || '';
-      const platform = window.navigator?.userAgentData?.platform || window.navigator?.platform || '';
-      const hasWailsRuntime = !!window.runtime;
-      const isMac = /mac/i.test(platform) || /Macintosh|Mac OS X/i.test(userAgent);
-      const isAppleWebKit = /AppleWebKit/i.test(userAgent);
-      const isChromium = /Chrome|Chromium|Edg\//i.test(userAgent);
-      const shouldDisable = hasWailsRuntime && isMac && isAppleWebKit && !isChromium;
-
-      this.homeListVirtualizationEnabled = !shouldDisable;
-      this.debugLog('configureHomeListVirtualization resolved', {
-        enabled: this.homeListVirtualizationEnabled,
-        hasWailsRuntime,
-        platform,
-        userAgent
-      });
+    openTonightPicker() {
+      if (this.searchMode === 'semantic' || this.migrationRunning || this.incrementalScan.running) return;
+      this.tonightFilter = this.currentLibraryFilter();
+      this.tonightOpen = true;
     },
+    previewTonightSuggestion(video) { this.tonightOpen = false; this.openPreview(video); },
+    playTonightSuggestion(video) { this.tonightOpen = false; return this.playVideo(video.id); },
     debugLog(message, payload = null, isError = false) {
       return logFrontend('VideoListPage', message, payload, isError);
     },
@@ -1146,10 +1174,14 @@ export default {
     // 代理增删之后根条目的预览会话要重取：mode 会在外部预览与内嵌之间切换。
     async refreshPreviewSession(videoID) {
       if (Number(videoID) !== Number(this.selectedPreviewVideoId)) return;
+      const requestToken = this._previewRequestToken;
+      const refreshToken = this._previewRefreshToken = Symbol('refresh-preview');
       try {
-        this.previewSession = await GetPreviewSession(videoID);
+        const session = await GetPreviewSession(videoID);
+        if (this._previewRequestToken !== requestToken || this._previewRefreshToken !== refreshToken || Number(videoID) !== Number(this.selectedPreviewVideoId)) return;
+        this.previewSession = session;
       } catch (err) {
-        notifyError('刷新预览会话失败: ' + err);
+        if (this._previewRequestToken === requestToken && this._previewRefreshToken === refreshToken) notifyError('刷新预览会话失败: ' + err);
       }
     },
     // ===== 播放代理入口（D-006）=====
@@ -1188,7 +1220,20 @@ export default {
     exportLocalMetadataNFO(video) {
       return this.$refs.taskBars?.exportLocalMetadataNFO(video);
     },
-    async openPreview(video) {
+    openBookmark(resolution) {
+      if (resolution?.status !== 'ready' || !resolution.video) return;
+      return this.openPreview(resolution.video, { id: resolution.bookmark.id, videoID: resolution.video.id, startMS: resolution.bookmark.start_ms, endMS: resolution.bookmark.end_ms, sourceToken: resolution.source_token, requestID: ++this.bookmarkRequestGeneration });
+    },
+    // 场景检索命中（D-MW-SCENES）：沿用字幕命中的跳转机制，打开抽屉并从指定时间内嵌播放。
+    // openPreview 在第一个 await 之前就写好了 previewStartTimeMs，这里随后覆盖成命中时间。
+    openPreviewAt(video, startMs) {
+      const pending = this.openPreview(video);
+      const start = Number(startMs);
+      this.previewStartTimeMs = Number.isFinite(start) && start >= 0 ? start : null;
+      return pending;
+    },
+    async openPreview(video, bookmark = null) {
+      this.previewBookmarkPosition = bookmark;
       const requestToken = Symbol('preview');
       this._previewRequestToken = requestToken;
       const requestedStartMs = Number(video?._subtitleMatchStartMs);
@@ -1223,6 +1268,7 @@ export default {
       this.previewOpen = false;
       this.previewSession = null;
       this.previewStartTimeMs = null;
+      this.previewBookmarkPosition = null;
       this.selectedPreviewVideoId = null;
       this.previewVideoSnapshot = null;
     },
@@ -1612,7 +1658,7 @@ export default {
     // 结果条与浮层预览共用一份筛选 DTO 构造：给定一份区间条件覆盖，
     // 其余维度沿用当前生效值。
     libraryFilterFrom(overrides) {
-      const base = this.currentLibraryFilter();
+      const base = this.libraryPageFilter();
       const bounds = source => {
         const range = source === 'all' ? null : source;
         return range ? { min: range.min, max: range.max } : { min: 0, max: 0 };
@@ -1641,14 +1687,18 @@ export default {
         return;
       }
       const token = ++this.countToken;
+      // 合并版本时两个数都按卡片计；口径（按卡片 / 按文件）变了，总数要重取。
+      const collapse = this.versionCollapseActive();
+      const totalStale = this.libraryTotalCount === null || this.libraryTotalCollapse !== collapse;
       try {
         const [filtered, total] = await Promise.all([
-          CountLibraryVideos(this.currentLibraryFilter()),
-          this.libraryTotalCount === null ? CountLibraryVideos(this.emptyLibraryFilter()) : Promise.resolve(this.libraryTotalCount)
+          CountLibraryVideos(this.libraryPageFilter()),
+          totalStale ? CountLibraryVideos(this.libraryTotalFilter()) : Promise.resolve(this.libraryTotalCount)
         ]);
         if (token !== this.countToken) return;
         this.filteredCount = filtered;
         this.libraryTotalCount = total;
+        this.libraryTotalCollapse = collapse;
       } catch (err) {
         if (token !== this.countToken) return;
         this.filteredCount = null;
@@ -1686,6 +1736,7 @@ export default {
         case 'tag-manager': this.showTagManagerDialog = true; break;
         case 'cleanup': this.openCleanupDialog(); break;
         case 'trash': this.openTrashDialog(); break;
+        case 'version-groups': this.versionPanelOpen = true; break;
         default: break;
       }
     },
@@ -1717,6 +1768,10 @@ export default {
     closeRowMenu() {
       this.rowMenu = { video: null, anchor: null, position: null };
     },
+    async addVideosToPlaybackQueue(ids) {
+      try { if (await addToPlaybackQueue({ videoIDs: [...ids] })) openPlaybackQueue(); }
+      catch (error) { notifyError(String(error)); }
+    },
     onRowMenuSelect(item) {
       const video = this.rowMenu.video;
       if (!video) return;
@@ -1730,6 +1785,7 @@ export default {
         case 'relocate': this.relocateVideoFile(video); break;
         case 'like': this.toggleVideoLiked(video); break;
         case 'ai-reanalyze': this.reanalyzeVideo(video); break;
+        case 'version-group': this.openVersionGroupDialogFor(video); break;
         case 'subtitle': this.generateSubtitle(video); break;
         case 'subtitle-translate': this.openSubtitleTranslate(video); break;
         case 'subtitle-edit': this.openSubtitleWorkbench(video); break;
@@ -1739,6 +1795,8 @@ export default {
           if (this.enhanceCapability?.available === false) this.openEnhanceSettings();
           else this.openEnhanceDialog(video);
           break;
+        case 'hd-replace': this.openHDReplacePicker(video); break;
+        case 'playback-queue': this.addVideosToPlaybackQueue([video.id]); break;
         case 'playback-proxy': this.createProxyForVideo(video); break;
         case 'delete': this.confirmDelete(video); break;
         default: break;
@@ -1763,17 +1821,20 @@ export default {
     },
     videoVisualVersion(video) {
       return JSON.stringify({
-        tagCount: Array.isArray(video?.tags) ? video.tags.length : 0,
+        tags: (video?.tags || []).map(tag => [tag.id, tag.name]),
         isStale: !!video?.is_stale,
         isFavorite: !!video?.is_favorite,
         isWatched: !!video?.is_watched,
         watchPosition: Math.floor(Number(video?.watch_position_seconds || 0)),
-        subtitleBucket: this.subtitleLengthBucket(video?._subtitleMatchText)
+        subtitleBucket: this.subtitleLengthBucket(video?._subtitleMatchText),
+        versions: this.versionVisualKey(video)
       });
     },
-    estimateVideoHeight(video, widthBucket, subtitleMode) {
+    estimateVideoHeight(video, widthBucket, subtitleMode, geometry) {
+      const versions = this.versionExtraHeight(video);
+      if (this.viewMode === 'grid') return estimateVideoGridHeight(video, geometry?.cardWidth) + versions;
       const density = this.previewOpen && this.viewMode === 'list' ? 'narrow' : this.rowDensity;
-      return estimateVideoRowHeight(video, widthBucket, subtitleMode, density);
+      return estimateVideoRowHeight(video, widthBucket, subtitleMode, density) + versions;
     },
     hasStructuredFilters() {
       return this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
@@ -1945,12 +2006,13 @@ export default {
         videos = page?.videos || [];
         this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
       } else {
-        const request = { filter: this.currentLibraryFilter(), limit };
+        const request = { filter: this.libraryPageFilter(), limit };
         if (this.libraryCursor) request.cursor = this.libraryCursor;
         const page = await SearchLibraryVideoPage(request);
         videos = page?.videos || [];
         this.libraryCursor = page?.next_cursor || null;
         this.mergeAutomaticOverrideKinds(page?.automatic_override_kinds);
+        this.mergeVersionGroups(page?.version_groups, videos);
       }
 
       videos = await this.attachSubtitleHits(videos, keyword);
@@ -2312,6 +2374,7 @@ export default {
     },
     async handleVideoDetailsUpdated(details) {
       const updatedVideoID = Number(details?.video?.id || 0);
+      this.refreshVersionGroupForVideo(updatedVideoID);
       if (this.selectedPreviewVideoId === updatedVideoID) {
         this.previewVideoSnapshot = patchVideoFromDetails(this.previewVideoSnapshot || details.video, details);
       }
@@ -2331,6 +2394,7 @@ export default {
     },
     async applyVideoStateChange(updatedVideo) {
       if (!updatedVideo) return;
+      this.refreshVersionGroupForVideo(updatedVideo.id);
       if (STATE_SENSITIVE_VIEWS.includes(this.smartView) && !this.matchesSmartView(updatedVideo)) {
         await this.reloadCurrentView();
         return;
@@ -2387,6 +2451,7 @@ export default {
     },
     async applyPlaybackAttemptResult(result) {
       if (!result) return;
+      this.refreshVersionGroupForVideo(result.reconcile_result?.video_id || result.video?.id);
 
       const reconcile = result.reconcile_result;
       if (!result.dispatch_succeeded) {
@@ -2703,6 +2768,17 @@ export default {
       }
       this.deleteDialog = { show: true, video: null, videoIds };
     },
+    // 视频工作台「清理原片…」（TC-23）：总是打开既有的删除确认框（导出成品不等于授权删除原片，
+    // 不受「不再提示」影响），之后与片库删除走同一条带结果码、可撤销的路径。videos 是完整记录，
+    // 原片可能不在当前列表里，名字随确认框带过去给结果提示用。
+    requestDeleteVideos(videos) {
+      const list = (videos || []).filter(video => video?.id);
+      if (!list.length) return;
+      const names = Object.fromEntries(list.map(video => [video.id, video.name]));
+      this.deleteDialog = list.length === 1
+        ? { show: true, video: list[0], videoIds: [], names }
+        : { show: true, video: null, videoIds: list.map(video => video.id), names };
+    },
     async executeDelete({ video, deleteFile, dontAskAgain }) {
       if (dontAskAgain) {
         await UpdateSettings({
@@ -2722,9 +2798,10 @@ export default {
       }
       // 先关确认框再删：批量删除的进度与「取消」、磁盘不支持废纸篓时的选择框都在它下面。
       const videoIds = [...this.deleteDialog.videoIds];
+      const names = this.deleteDialog.names || {};
       this.deleteDialog.show = false;
       if (videoIds.length > 0) {
-        await this.deleteVideos(videoIds, deleteFile);
+        await this.deleteVideos(videoIds, deleteFile, names);
       } else {
         await this.deleteVideo(video, deleteFile);
       }
@@ -2732,15 +2809,15 @@ export default {
     // 单个删除与批量删除走同一条路：带结果码的删除（D-PC01/02），成功项给整批撤销条。
     async deleteVideo(video, deleteFile) {
       if (!video) return;
-      return this.deleteVideos([video.id], deleteFile);
+      return this.deleteVideos([video.id], deleteFile, { [video.id]: video.name });
     },
-    async deleteVideos(videoIds, deleteFile) {
+    async deleteVideos(videoIds, deleteFile, names = {}) {
       const ids = [...new Set(videoIds)].filter(id => !!id);
       if (ids.length === 0) return;
       const banner = this.$refs.trashUndo;
       try {
         this.deletingIds = [...new Set([...this.deletingIds, ...ids])];
-        const outcome = await banner.runDelete({ ids, deleteFile, names: this.videoNames(ids) });
+        const outcome = await banner.runDelete({ ids, deleteFile, names: { ...names, ...this.videoNames(ids) } });
         const removedIDs = outcome.removedIDs;
 
         if (removedIDs.includes(this.selectedPreviewVideoId)) {

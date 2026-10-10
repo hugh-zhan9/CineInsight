@@ -247,7 +247,7 @@ describe('工具栏三层重排', () => {
       'scan-new', 'scan-incremental',
       'move-folder', 'rename-folder', 'export-nfo',
       'backfill-technical', 'backfill-phash', 'backfill-playback-proxy', 'backfill-local-metadata',
-      'tag-manager', 'collection-suggestions', 'trash'
+      'tag-manager', 'collection-suggestions', 'version-groups', 'trash'
     ]);
     const manage = wrapper.findAll('button').find(button => button.text().startsWith('管理'));
     expect(manage.find('.toolbar-btn__badge').exists()).toBe(false);
@@ -492,5 +492,13 @@ describe('待处理工作台的跳转目标（APP-11）', () => {
     wrapper.vm.onManageSelect({ id: 'trash', label: '回收站' });
     expect(wrapper.emitted('manage-select')[0]).toEqual([{ id: 'trash', label: '回收站' }]);
     wrapper.unmount();
+  });
+});
+
+describe('场景检索入口（P-007）', () => {
+  it('「在当前筛选中搜场景」只发事件，筛选由片库页带上', async () => {
+    const wrapper = mountToolbar();
+    await wrapper.get('[data-test="toolbar-search-scenes"]').trigger('click');
+    expect(wrapper.emitted('search-scenes')).toHaveLength(1);
   });
 });

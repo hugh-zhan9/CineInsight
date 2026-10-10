@@ -55,12 +55,12 @@ func taskCenterItemByKey(t *testing.T, snapshot TaskCenterSnapshot, key string) 
 	return TaskCenterItem{}
 }
 
-// APP-03：适配表必须恰好覆盖登记表的 22 个 key。登记表新增一个 key 而适配表没跟上、
+// APP-03：适配表必须恰好覆盖登记表的 26 个 key（P-007 加入 scene_index，P-008 加入 video_edit）。登记表新增一个 key 而适配表没跟上、
 // 或适配表里留着登记表已删掉的 key，这个用例都会失败；快照的 Items 也按登记表顺序全部列出。
 func TestAPP03TaskCenterAdaptersCoverEveryRegistryKey(t *testing.T) {
 	keys := services.BackgroundTaskKeys()
-	if len(keys) != 22 {
-		t.Fatalf("登记表应有 22 个 key（详细设计 §1.2a），实际 %d: %v", len(keys), keys)
+	if len(keys) != 26 {
+		t.Fatalf("登记表应有 26 个 key（详细设计 §1.2a + scene_index + video_edit），实际 %d: %v", len(keys), keys)
 	}
 	registered := map[string]bool{}
 	for _, key := range keys {
@@ -329,9 +329,8 @@ func TestAPP03TaskCenterBoundsLastRunFailures(t *testing.T) {
 // APP-03：task-center-changed 在合并窗口内只发一次，载荷是当时的快照；窗口过后的变化再发一次。
 func TestAPP03TaskCenterChangedEventsAreMergedWithinWindow(t *testing.T) {
 	events := stubRuntimeEvents(t)
-	previousDelay := taskCenterChangeDelay
-	taskCenterChangeDelay = 30 * time.Millisecond
-	t.Cleanup(func() { taskCenterChangeDelay = previousDelay })
+	const delay = 30 * time.Millisecond
+	setTaskCenterChangeDelayForTest(t, delay)
 
 	(&App{}).notifyTaskCenterChanged() // 运行时上下文还没有：不排事件
 	app := &App{ctx: context.Background(), backgroundTasks: services.NewBackgroundTaskRegistry()}
@@ -339,7 +338,7 @@ func TestAPP03TaskCenterChangedEventsAreMergedWithinWindow(t *testing.T) {
 		app.notifyTaskCenterChanged()
 	}
 	waitTaskCenterEvents(t, events, 1)
-	time.Sleep(3 * taskCenterChangeDelay)
+	time.Sleep(3 * delay)
 	got := events()
 	if len(got) != 1 || got[0].name != taskCenterChangedEvent {
 		t.Fatalf("合并窗口内的 5 次变化应只发 1 次 task-center-changed: %+v", got)
@@ -434,4 +433,19 @@ func TestAppConsolidationTaskCenterWarningsAreBounded(t *testing.T) {
 	if warning == "" || len([]rune(warning)) > taskCenterFailureMaxRunes+1 {
 		t.Fatalf("unbounded warning: %d", len([]rune(warning)))
 	}
+}
+
+// Production reads this test-overridden delay under the notifier mutex. A
+// background idle probe can still notify after a test cancels its App context.
+func setTaskCenterChangeDelayForTest(t *testing.T, delay time.Duration) {
+	t.Helper()
+	taskCenterChanges.mu.Lock()
+	previous := taskCenterChangeDelay
+	taskCenterChangeDelay = delay
+	taskCenterChanges.mu.Unlock()
+	t.Cleanup(func() {
+		taskCenterChanges.mu.Lock()
+		taskCenterChangeDelay = previous
+		taskCenterChanges.mu.Unlock()
+	})
 }

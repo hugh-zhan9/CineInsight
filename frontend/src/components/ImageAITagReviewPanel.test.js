@@ -1,14 +1,17 @@
-import { flushPromises, mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'ApproveImageAITagCandidate', 'ListImageAITagCandidatePage',
+  'GetAIReviewCandidates', 'PreviewAIReviewApproval', 'StartAIReviewApproval', 'GetAIReviewApproval', 'CancelAIReviewApproval',
+  'ApproveImageAITagCandidate', 'ListImageAITagCandidatePage', 'SearchImageAITagCandidatePage',
   'RejectImageAITagCandidate', 'RejectImageAITagCandidatesByImage',
 ].map(name => [name, vi.fn()])));
 vi.mock('../../wailsjs/go/main/App', () => api);
 vi.mock('./FaceClusterReviewPanel.vue', () => ({ default: { template: '<div data-test="face-panel-stub">face panel</div>' } }));
 
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
+
+enableAutoUnmount(afterEach);
 
 // 后端按 id 游标分页：next_id 只在这一页满员时出现。
 const page = (items, nextID = 0) => ({ items, next_id: nextID });
@@ -26,8 +29,83 @@ const candidate = (overrides = {}) => ({
 });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   api.ListImageAITagCandidatePage.mockResolvedValue(page([]));
+  api.SearchImageAITagCandidatePage.mockResolvedValue(page([]));
+  api.GetAIReviewApproval.mockResolvedValue({ state: 'idle', results: [] });
+  api.GetAIReviewCandidates.mockResolvedValue({ video_items: [], image_items: [] });
+});
+
+describe('ImageAITagReviewPanel server search', () => {
+  it('serializes a still-pending refresh before a later superseded outcome', async () => {
+    api.ListImageAITagCandidatePage.mockResolvedValueOnce(page([candidate({ id: 20, matched_tag_id: 20 })]));
+    let firstReply, secondReply;
+    api.GetAIReviewCandidates.mockImplementationOnce(() => new Promise(resolve => { firstReply = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { secondReply = resolve; }));
+    const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } }); await flushPromises();
+    const first = wrapper.vm.applyBatchOutcomes([{ id: 20, state: 'skipped', code: 'changed' }]); await flushPromises();
+    const second = wrapper.vm.applyBatchOutcomes([{ id: 10, media_id: 10, tag_id: 20, state: 'approved' }]);
+    firstReply({ video_items: [], image_items: [candidate({ id: 20, matched_tag_id: 20, reasoning: '新版本仍待审' })] });
+    await first; await flushPromises();
+    secondReply({ video_items: [], image_items: [] }); await second;
+    expect(wrapper.vm.candidates).toEqual([]);
+  });
+
+  it('previews loaded image IDs and applies a committed target without clearing unrelated candidates', async () => {
+    api.ListImageAITagCandidatePage.mockResolvedValueOnce(page([
+      candidate({ id: 1, matched_tag_id: 20 }), candidate({ id: 2, matched_tag_id: 20 }), candidate({ id: 3, matched_tag_id: 21 })
+    ]));
+    const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } }); await flushPromises();
+    const controls = wrapper.findComponent({ name: 'AIReviewBatchControls' });
+    const showPreview = vi.spyOn(controls.vm, 'previewLoaded').mockResolvedValue();
+    await wrapper.get('[data-test="image-review-approve-loaded"]').trigger('click');
+    expect(controls.props('kind')).toBe('image');
+    expect(showPreview).toHaveBeenCalledWith([1, 2, 3]);
+    api.GetAIReviewCandidates.mockResolvedValueOnce({ video_items: [], image_items: [candidate({ id: 3, matched_tag_id: 21 })] });
+    controls.vm.$emit('outcomes', [{ id: 1, media_id: 10, tag_id: 20, state: 'approved' }, { id: 3, state: 'failed', code: 'approval_failed' }]);
+    await flushPromises();
+    expect(wrapper.vm.candidates.map(item => item.id)).toEqual([3]);
+    expect(wrapper.get('[data-test="image-review-approve-loaded"]').text()).toContain('批准已加载结果');
+    expect(wrapper.get('[data-test="image-review-approve-filtered"]').text()).toContain('批准全部筛选结果');
+  });
+
+  it('retains old results and rejects a stale page when a new query fails', async () => {
+    let resolveOld;
+    api.ListImageAITagCandidatePage.mockResolvedValueOnce(page([candidate()], 1))
+      .mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+    const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } });
+    await flushPromises();
+    const oldPage = wrapper.vm.loadMore();
+    api.SearchImageAITagCandidatePage.mockRejectedValueOnce(new Error('search failed'));
+    await wrapper.get('[data-test="image-ai-tag-search"]').setValue('雪山');
+    await wrapper.vm.load();
+    resolveOld(page([candidate({ id: 2 })]));
+    await oldPage;
+    await flushPromises();
+    expect(wrapper.vm.candidates.map(item => item.id)).toEqual([1]);
+    expect(wrapper.get('[data-test="image-ai-tag-review-error"]').text()).toContain('保留上次已加载');
+    expect(wrapper.find('[data-test="image-ai-tag-review-empty"]').exists()).toBe(false);
+  });
+
+  it('searches unloaded candidates together with the confidence filter', async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(ImageAITagReviewPanel, { props: { visible: true } });
+    try {
+      await flushPromises();
+      api.SearchImageAITagCandidatePage.mockResolvedValueOnce(page([candidate({ id: 91 })], 91));
+      await wrapper.get('[data-test="image-ai-tag-search"]').setValue('海岸');
+      await vi.advanceTimersByTimeAsync(250);
+      await flushPromises();
+      expect(api.SearchImageAITagCandidatePage).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '海岸', cursor_id: 0 }));
+      expect(wrapper.vm.candidates.map(item => item.id)).toEqual([91]);
+      await wrapper.vm.loadMore();
+      expect(api.SearchImageAITagCandidatePage).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '海岸', cursor_id: 91 }));
+      await wrapper.get('[data-test="image-ai-tag-confidence-high"]').trigger('click');
+      await flushPromises();
+      expect(api.SearchImageAITagCandidatePage).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '海岸', confidence: 'high', cursor_id: 0 }));
+      expect(api.ListImageAITagCandidatePage).toHaveBeenCalledTimes(1);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
 });
 
 describe('ImageAITagReviewPanel', () => {
@@ -43,8 +121,8 @@ describe('ImageAITagReviewPanel', () => {
     const groups = wrapper.findAll('[data-test="image-ai-tag-group"]');
     expect(groups).toHaveLength(2);
     expect(groups[0].text()).toContain('beach.heic');
-    expect(groups[0].text()).toContain('海边');
-    expect(groups[0].text()).toContain('日落');
+    expect(wrapper.findAll('[data-virtual-row-id^="candidate:"]').filter(row => row.text().includes('beach.heic')).map(row => row.text()).join(' ')).toContain('海边');
+    expect(wrapper.findAll('[data-virtual-row-id^="candidate:"]').filter(row => row.text().includes('beach.heic')).map(row => row.text()).join(' ')).toContain('日落');
     expect(wrapper.find('[data-test="image-ai-tag-review-count"]').text()).toContain('待审 3 条');
   });
 
@@ -201,8 +279,8 @@ describe('ImageAITagReviewPanel pagination', () => {
     expect(api.ListImageAITagCandidatePage).toHaveBeenLastCalledWith(0, '', '', 9, 0);
     const groups = wrapper.findAll('[data-test="image-ai-tag-group"]');
     expect(groups).toHaveLength(2);
-    expect(groups[0].text()).toContain('海边');
-    expect(groups[0].text()).toContain('日落');
+    expect(wrapper.findAll('[data-virtual-row-id^="candidate:"]').filter(row => row.text().includes('beach.heic')).map(row => row.text()).join(' ')).toContain('海边');
+    expect(wrapper.findAll('[data-virtual-row-id^="candidate:"]').filter(row => row.text().includes('beach.heic')).map(row => row.text()).join(' ')).toContain('日落');
     // 末页没有游标，按钮随之消失。
     expect(wrapper.find('[data-test="image-ai-tag-load-more"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="image-ai-tag-review-count"]').text()).not.toContain('还有更多未加载');

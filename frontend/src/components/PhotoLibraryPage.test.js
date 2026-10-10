@@ -223,6 +223,86 @@ function semanticPage(hits, hasMore = false, coverage = { indexed: hits.length, 
   return { hits, coverage, has_more: hasMore };
 }
 
+describe('PhotoLibraryPage 图片主体选择', () => {
+  it('无选择时单击图片仍打开对应预览', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage();
+    await wrapper.findAll('.photo-card__media')[1].trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.viewerIndex).toBe(1);
+    expect(api.GetImageDetail).toHaveBeenCalledWith(2);
+    expect(wrapper.vm.selectedImageIDs).toEqual([]);
+    wrapper.unmount();
+  });
+
+  it.each(['照片流', '时间线', '文件夹内'])('%s：先勾选一张后，点击另一张主体切换选择而不打开预览', async mode => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage();
+    if (mode === '时间线') wrapper.vm.timelineMode = true;
+    if (mode === '文件夹内') {
+      wrapper.vm.displayMode = 'folders';
+      wrapper.vm.activeFolder = { directory: '/photos', name: '相册', count: 2 };
+    }
+    await flushPromises();
+    await wrapper.get('[data-test="photo-select-1"]').setValue(true);
+    await wrapper.findAll('.photo-card__media')[1].trigger('click');
+    expect(wrapper.vm.selectedImageIDs).toEqual([1, 2]);
+    expect(wrapper.get('[data-test="photo-select-2"]').element.checked).toBe(true);
+    expect(wrapper.vm.viewerIndex).toBe(-1);
+    expect(api.GetImageDetail).not.toHaveBeenCalled();
+    await wrapper.findAll('.photo-card__media')[1].trigger('click');
+    expect(wrapper.vm.selectedImageIDs).toEqual([1]);
+    expect(wrapper.get('[data-test="photo-select-2"]').element.checked).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('点击最后一张取消选择，下次点击恢复预览', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-select-1"]').setValue(true);
+    await wrapper.get('.photo-card__media').trigger('click');
+    expect(wrapper.vm.selectedImageIDs).toEqual([]);
+    expect(wrapper.vm.viewerIndex).toBe(-1);
+    await wrapper.get('.photo-card__media').trigger('click');
+    expect(wrapper.vm.viewerIndex).toBe(0);
+    wrapper.unmount();
+  });
+
+  it('清除选择后恢复预览，查看器前后切换不被选择逻辑拦截', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-select-1"]').setValue(true);
+    await wrapper.get('[data-test="photo-clear-selection"]').trigger('click');
+    await wrapper.findAll('.photo-card__media')[0].trigger('click');
+    expect(wrapper.vm.viewerIndex).toBe(0);
+    wrapper.vm.selectedImageIDs = [1];
+    await wrapper.get('.photo-viewer__nav--next').trigger('click');
+    expect(wrapper.vm.viewerIndex).toBe(1);
+    expect(wrapper.vm.selectedImageIDs).toEqual([1]);
+    wrapper.unmount();
+  });
+
+  it('收藏和删除按钮不改选择，缩略图失败后的占位仍可选择', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage({ settings: { confirm_before_delete: true, delete_original_file: false } });
+    await wrapper.get('[data-test="photo-select-1"]').setValue(true);
+    const second = wrapper.findAll('.photo-card')[1];
+    await second.get('[aria-label="收藏 photo-2.jpg"]').trigger('click');
+    await flushPromises();
+    expect(api.SetImageFavorite).toHaveBeenCalledWith(2, true);
+    expect(wrapper.vm.selectedImageIDs).toEqual([1]);
+    await second.get('[data-test="photo-card-delete"]').trigger('click');
+    expect(wrapper.vm.deleteTarget.id).toBe(2);
+    expect(wrapper.vm.selectedImageIDs).toEqual([1]);
+    wrapper.vm.deleteTarget = null;
+    await second.get('img').trigger('error');
+    await second.get('[data-test="photo-thumb-fallback"]').trigger('click');
+    expect(wrapper.vm.selectedImageIDs).toEqual([1, 2]);
+    expect(wrapper.vm.viewerIndex).toBe(-1);
+    wrapper.unmount();
+  });
+});
+
 describe('PhotoLibraryPage grid paging', () => {
   it('loads the first page and appends the next page with the returned cursor', async () => {
     const firstPage = Array.from({ length: 60 }, (_, index) => makeImage(index + 1));

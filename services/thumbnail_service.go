@@ -56,6 +56,9 @@ type ThumbnailService struct {
 	findFFmpeg              func() (string, error)
 	runFFmpeg               thumbnailRunner
 	runSeekSprite           seekSpriteRunner
+	runFrameAt              frameAtRunner
+	frameCache              *frameAtCache
+	frameSem                chan struct{}
 	maxSeekSpriteCacheBytes int64
 	locks                   sync.Map
 	spriteLocks             sync.Map
@@ -72,6 +75,9 @@ func NewThumbnailService(videoService *VideoService, dataDir string) *ThumbnailS
 		findFFmpeg:              findThumbnailFFmpeg,
 		runFFmpeg:               runThumbnailFFmpeg,
 		runSeekSprite:           runSeekSpriteFFmpeg,
+		runFrameAt:              runFrameAtFFmpeg,
+		frameCache:              newFrameAtCache(frameAtCacheEntries),
+		frameSem:                make(chan struct{}, frameAtConcurrency),
 		maxSeekSpriteCacheBytes: seekSpriteCacheLimit,
 		spriteSem:               make(chan struct{}, 1),
 	}

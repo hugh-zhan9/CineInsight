@@ -104,6 +104,10 @@ type FaceRuntime struct {
 	// 前后与 venv 刚建出来时另有显式失效。
 	interpreterMu    sync.Mutex
 	interpreterCache map[string]faceInterpreterProbe
+	// 最近一次既有状态检查的结果，供诊断只读；读取它不启动 Python 或读取镜像配置。
+	observedMu     sync.Mutex
+	observedStatus *FaceRuntimeStatus
+	observedAt     time.Time
 
 	// 测试接缝。archiveSHA256 与 modelFiles 默认取自 manifest；让它们可替换是为了
 	// 能在测试里用几十字节的假模型包走完"下载 → 校验 → 安装"这条路，
@@ -282,6 +286,16 @@ func (r *FaceRuntime) mirrorPrefix() string {
 
 // Status 返回当前状态（7.2 `GetFaceRuntimeStatus`）。
 func (r *FaceRuntime) Status() FaceRuntimeStatus {
+	status := r.probeStatus()
+	if r != nil {
+		r.observedMu.Lock()
+		r.observedStatus, r.observedAt = &status, time.Now()
+		r.observedMu.Unlock()
+	}
+	return status
+}
+
+func (r *FaceRuntime) probeStatus() FaceRuntimeStatus {
 	if r == nil {
 		return FaceRuntimeStatus{State: FaceRuntimeStateIncompatible, Reason: "人脸运行时未初始化"}
 	}

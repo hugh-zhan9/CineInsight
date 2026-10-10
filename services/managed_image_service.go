@@ -2,6 +2,7 @@ package services
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -11,7 +12,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -31,7 +31,7 @@ type managedImageImport struct {
 
 type ManagedImageService struct {
 	root string
-	mu   sync.Mutex
+	mu   contextMutex
 }
 
 func NewManagedImageService(dataDir string) *ManagedImageService {
@@ -209,7 +209,12 @@ func managedImageExtension(content []byte) (string, error) {
 }
 
 func (s *ManagedImageService) Remove(relativePath string) error {
-	s.mu.Lock()
+	return s.RemoveContext(context.Background(), relativePath)
+}
+func (s *ManagedImageService) RemoveContext(ctx context.Context, relativePath string) error {
+	if err := s.mu.LockContext(ctx); err != nil {
+		return err
+	}
 	defer s.mu.Unlock()
 	path, err := s.pathWithinRoot(relativePath, true)
 	if err != nil {

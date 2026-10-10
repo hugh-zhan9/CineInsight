@@ -2,8 +2,10 @@ package services
 
 import (
 	"container/list"
+	"context"
 	"errors"
 	"fmt"
+	"gorm.io/gorm"
 	"math"
 	"strings"
 	"sync"
@@ -36,8 +38,8 @@ func viewThreshold(duration float64) float64 {
 	return math.Min(viewThresholdCapSeconds, duration*0.5)
 }
 
-// viewEventDedup 是按会话去重的内存 LRU。它不持久化：应用重启后同一会话标识不会再出现，
-// 因为会话标识由前端在每次打开播放器时新生成。
+// viewEventDedup 是节省重复查询的内存 LRU。P-004 的日记 session key 才是
+// 持久去重依据，缓存淘汰或重启都不会重新追加已存在的观看事实。
 type viewEventDedup struct {
 	mu       sync.Mutex
 	capacity int
@@ -93,25 +95,67 @@ func (s *VideoService) RecordViewEvent(videoID uint, source string, sessionID st
 	return viewEvents.record(videoID, source, sessionID, time.Now())
 }
 
-// record 在去重锁内完成「查重 → 写事件 → 记入去重表」：同一会话的并发调用恰好写一条。
-// 锁只在进程内，不是数据库锁；每个会话只写一次，持锁写库不会形成排队热点。
+// record retains the existing entry point; context-aware callers use the same
+// durable unique-key claim. The LRU lock never spans a database wait.
 func (d *viewEventDedup) record(videoID uint, source, sessionID string, at time.Time) (bool, error) {
+	return d.recordContext(context.Background(), videoID, source, sessionID, at)
+}
+
+func (d *viewEventDedup) recordContext(ctx context.Context, videoID uint, source, sessionID string, at time.Time) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	key := fmt.Sprintf("%s|%d|%s", source, videoID, sessionID)
 	d.mu.Lock()
-	defer d.mu.Unlock()
-	if d.seenLocked(key) {
+	seen := d.seenLocked(key)
+	d.mu.Unlock()
+	if seen {
 		return false, nil
 	}
-	var active int64
-	if err := database.DB.Model(&models.Video{}).Where("id = ?", videoID).Count(&active).Error; err != nil {
+	persistedKey := diarySessionKey(source, videoID, sessionID)
+	recorded := false
+	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
+		exists, err := diarySessionRecorded(tx, persistedKey)
+		if err != nil || exists {
+			return err
+		}
+		var video models.Video
+		if err := tx.First(&video, videoID).Error; err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return errViewEventVideoMissing
+			}
+			return err
+		}
+		event := models.PlayEvent{VideoID: videoID, PlayedAt: at, Source: source}
+		if err := tx.Create(&event).Error; err != nil {
+			return err
+		}
+		if err := appendViewingDiaryTx(tx, video, event, persistedKey); err != nil {
+			return err
+		}
+		recorded = true
+		return nil
+	})
+	if errors.Is(err, errDiarySessionExists) {
+		recorded = false
+		err = database.WithOperationContext(ctx, func(db *gorm.DB) error {
+			exists, checkErr := diarySessionRecorded(db, persistedKey)
+			if checkErr != nil {
+				return checkErr
+			}
+			if !exists {
+				return errDiarySessionExists
+			}
+			return nil
+		})
+	}
+	if err != nil {
 		return false, err
 	}
-	if active == 0 {
-		return false, errViewEventVideoMissing
+	d.mu.Lock()
+	if !d.seenLocked(key) {
+		d.rememberLocked(key)
 	}
-	if err := database.DB.Create(&models.PlayEvent{VideoID: videoID, PlayedAt: at, Source: source}).Error; err != nil {
-		return false, err
-	}
-	d.rememberLocked(key)
-	return true, nil
+	d.mu.Unlock()
+	return recorded, nil
 }

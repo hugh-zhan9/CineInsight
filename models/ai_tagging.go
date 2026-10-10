@@ -35,7 +35,7 @@ const (
 
 // AITagCandidate stores unconfirmed AI suggestions outside the canonical tag tables.
 type AITagCandidate struct {
-	ID             uint          `gorm:"primarykey" json:"id"`
+	ID             uint          `gorm:"primarykey;index:idx_ai_tag_candidates_status_id,priority:2,sort:desc" json:"id"`
 	VideoID        uint          `gorm:"index:idx_ai_tag_candidates_video_status,priority:1" json:"video_id"`
 	Video          Video         `gorm:"constraint:OnDelete:CASCADE;" json:"video"`
 	SuggestedName  string        `gorm:"not null" json:"suggested_name"`
@@ -47,7 +47,7 @@ type AITagCandidate struct {
 	Confidence     string        `gorm:"index;not null" json:"confidence"`
 	Reasoning      string        `gorm:"type:text" json:"reasoning"`
 	SourceSummary  string        `gorm:"type:text" json:"source_summary"`
-	Status         string        `gorm:"index:idx_ai_tag_candidates_video_status,priority:2;index:idx_ai_tag_candidates_matched_status,priority:2;index:idx_ai_tag_candidates_status_approved,priority:1;index:idx_ai_tag_candidates_status_rejected,priority:1;not null;default:'pending'" json:"status"`
+	Status         string        `gorm:"index:idx_ai_tag_candidates_status_id,priority:1;index:idx_ai_tag_candidates_video_status,priority:2;index:idx_ai_tag_candidates_matched_status,priority:2;index:idx_ai_tag_candidates_status_approved,priority:1;index:idx_ai_tag_candidates_status_rejected,priority:1;not null;default:'pending'" json:"status"`
 	CreatedAt      time.Time     `json:"created_at" ts_type:"string"`
 	UpdatedAt      time.Time     `json:"updated_at" ts_type:"string"`
 	ApprovedAt     *time.Time    `gorm:"index:idx_ai_tag_candidates_status_approved,priority:2" json:"approved_at,omitempty" ts_type:"string"`

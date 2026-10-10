@@ -1,5 +1,118 @@
 export namespace main {
 	
+	export class HealthMetric {
+	    key: string;
+	    label: string;
+	    value: number;
+	    unit: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthMetric(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.value = source["value"];
+	        this.unit = source["unit"];
+	    }
+	}
+	export class HealthItem {
+	    key: string;
+	    label: string;
+	    state: string;
+	    reason_code: string;
+	    detail: string;
+	    observed_at?: string;
+	    local_detail?: string;
+	    action_id?: string;
+	    metrics: HealthMetric[];
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.state = source["state"];
+	        this.reason_code = source["reason_code"];
+	        this.detail = source["detail"];
+	        this.observed_at = source["observed_at"];
+	        this.local_detail = source["local_detail"];
+	        this.action_id = source["action_id"];
+	        this.metrics = this.convertValues(source["metrics"], HealthMetric);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class HealthReportExport {
+	    saved: boolean;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthReportExport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.saved = source["saved"];
+	        this.message = source["message"];
+	    }
+	}
+	export class HealthSection {
+	    key: string;
+	    checked_at: string;
+	    items: HealthItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new HealthSection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.checked_at = source["checked_at"];
+	        this.items = this.convertValues(source["items"], HealthItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class PendingWorkSummary {
 	    ai_video_candidates: number;
 	    ai_video_failed_runs: number;
@@ -33,6 +146,8 @@ export namespace main {
 	export class TaskLastRun {
 	    finished_at?: string;
 	    succeeded: number;
+	    skipped?: number;
+	    remaining?: number;
 	    failed: number;
 	    failures: string[];
 	
@@ -44,6 +159,8 @@ export namespace main {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.finished_at = source["finished_at"];
 	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.remaining = source["remaining"];
 	        this.failed = source["failed"];
 	        this.failures = source["failures"];
 	    }
@@ -643,6 +760,9 @@ export namespace models {
 	    cleanup_short_seconds: number;
 	    cleanup_low_width: number;
 	    cleanup_low_height: number;
+	    scene_visual_provider: string;
+	    scene_visual_interval_seconds: number;
+	    scene_model_mirror_url: string;
 	    updated_at: string;
 	
 	    static createFrom(source: any = {}) {
@@ -724,6 +844,9 @@ export namespace models {
 	        this.cleanup_short_seconds = source["cleanup_short_seconds"];
 	        this.cleanup_low_width = source["cleanup_low_width"];
 	        this.cleanup_low_height = source["cleanup_low_height"];
+	        this.scene_visual_provider = source["scene_visual_provider"];
+	        this.scene_visual_interval_seconds = source["scene_visual_interval_seconds"];
+	        this.scene_model_mirror_url = source["scene_model_mirror_url"];
 	        this.updated_at = source["updated_at"];
 	    }
 	}
@@ -1219,96 +1342,6 @@ export namespace services {
 		    return a;
 		}
 	}
-	export class AITagBatchItemResult {
-	    id: number;
-	    ok: boolean;
-	    superseded?: boolean;
-	    message?: string;
-	    item?: AITaggingReviewItem;
-	
-	    static createFrom(source: any = {}) {
-	        return new AITagBatchItemResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.ok = source["ok"];
-	        this.superseded = source["superseded"];
-	        this.message = source["message"];
-	        this.item = this.convertValues(source["item"], AITaggingReviewItem);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class AITagBatchResult {
-	    requested: number;
-	    succeeded: number;
-	    failed: number;
-	    superseded: number;
-	    results: AITagBatchItemResult[];
-	
-	    static createFrom(source: any = {}) {
-	        return new AITagBatchResult(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.requested = source["requested"];
-	        this.succeeded = source["succeeded"];
-	        this.failed = source["failed"];
-	        this.superseded = source["superseded"];
-	        this.results = this.convertValues(source["results"], AITagBatchItemResult);
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
-	}
-	export class AITagCandidateFilter {
-	    tag_id: number;
-	    confidence?: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new AITagCandidateFilter(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.tag_id = source["tag_id"];
-	        this.confidence = source["confidence"];
-	    }
-	}
 	export class AITagCandidatePage {
 	    items: AITaggingReviewItem[];
 	    next_id: number;
@@ -1688,6 +1721,158 @@ export namespace services {
 		}
 	}
 	
+	export class BookmarkDTO {
+	    id: number;
+	    video_id: number;
+	    video_title: string;
+	    start_ms: number;
+	    end_ms?: number;
+	    title: string;
+	    note: string;
+	    revision: number;
+	    created_at: string;
+	    updated_at: string;
+	    tags: string[];
+	    source_available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new BookmarkDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.video_title = source["video_title"];
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	        this.title = source["title"];
+	        this.note = source["note"];
+	        this.revision = source["revision"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.tags = source["tags"];
+	        this.source_available = source["source_available"];
+	    }
+	}
+	export class BookmarkInput {
+	    id: number;
+	    revision: number;
+	    video_id: number;
+	    start_ms: number;
+	    end_ms?: number;
+	    title: string;
+	    note: string;
+	    tags: string[];
+	    source_token: string;
+	    accept_source_token: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BookmarkInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.revision = source["revision"];
+	        this.video_id = source["video_id"];
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	        this.title = source["title"];
+	        this.note = source["note"];
+	        this.tags = source["tags"];
+	        this.source_token = source["source_token"];
+	        this.accept_source_token = source["accept_source_token"];
+	    }
+	}
+	export class BookmarkPage {
+	    items: BookmarkDTO[];
+	    has_more: boolean;
+	    cursor_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BookmarkPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], BookmarkDTO);
+	        this.has_more = source["has_more"];
+	        this.cursor_id = source["cursor_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class BookmarkQuery {
+	    video_id: number;
+	    keyword: string;
+	    cursor_id: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new BookmarkQuery(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.keyword = source["keyword"];
+	        this.cursor_id = source["cursor_id"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class BookmarkResolution {
+	    status: string;
+	    bookmark: BookmarkDTO;
+	    video?: models.Video;
+	    source_token: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BookmarkResolution(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.bookmark = this.convertValues(source["bookmark"], BookmarkDTO);
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.source_token = source["source_token"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class BrowserBridgeStatus {
 	    running: boolean;
 	    enabled: boolean;
@@ -2924,6 +3109,142 @@ export namespace services {
 	        this.message = source["message"];
 	    }
 	}
+	export class DiaryEntryDTO {
+	    id: number;
+	    video_id?: number;
+	    title: string;
+	    watched_on: string;
+	    recorded_at?: string;
+	    date_basis: string;
+	    utc_offset_seconds?: number;
+	    origin: string;
+	    source: string;
+	    rating?: number;
+	    note: string;
+	    revision: number;
+	    created_at: string;
+	    updated_at: string;
+	    source_available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiaryEntryDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.watched_on = source["watched_on"];
+	        this.recorded_at = source["recorded_at"];
+	        this.date_basis = source["date_basis"];
+	        this.utc_offset_seconds = source["utc_offset_seconds"];
+	        this.origin = source["origin"];
+	        this.source = source["source"];
+	        this.rating = source["rating"];
+	        this.note = source["note"];
+	        this.revision = source["revision"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.source_available = source["source_available"];
+	    }
+	}
+	export class DiaryInput {
+	    id: number;
+	    revision: number;
+	    video_id?: number;
+	    title: string;
+	    watched_on: string;
+	    rating?: number;
+	    note: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiaryInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.revision = source["revision"];
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.watched_on = source["watched_on"];
+	        this.rating = source["rating"];
+	        this.note = source["note"];
+	    }
+	}
+	export class DiaryPage {
+	    items: DiaryEntryDTO[];
+	    has_more: boolean;
+	    cursor_date: string;
+	    cursor_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiaryPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], DiaryEntryDTO);
+	        this.has_more = source["has_more"];
+	        this.cursor_date = source["cursor_date"];
+	        this.cursor_id = source["cursor_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DiaryQuery {
+	    year: number;
+	    keyword: string;
+	    cursor_date: string;
+	    cursor_id: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiaryQuery(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.year = source["year"];
+	        this.keyword = source["keyword"];
+	        this.cursor_date = source["cursor_date"];
+	        this.cursor_id = source["cursor_id"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class DiaryRepeat {
+	    video_id?: number;
+	    title: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DiaryRepeat(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.count = source["count"];
+	    }
+	}
 	export class PathRewriteCounts {
 	    videos: number;
 	    directories: number;
@@ -2994,6 +3315,1078 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class EditAlignedSegment {
+	    long_start_ms: number;
+	    long_end_ms: number;
+	    hd_start_ms: number;
+	    hd_end_ms: number;
+	    match_rate: number;
+	    status: string;
+	    applied: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditAlignedSegment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.long_start_ms = source["long_start_ms"];
+	        this.long_end_ms = source["long_end_ms"];
+	        this.hd_start_ms = source["hd_start_ms"];
+	        this.hd_end_ms = source["hd_end_ms"];
+	        this.match_rate = source["match_rate"];
+	        this.status = source["status"];
+	        this.applied = source["applied"];
+	    }
+	}
+	export class EditIntroResult {
+	    video_id: number;
+	    status: string;
+	    start_ms: number;
+	    end_ms: number;
+	    match_rate: number;
+	    matched_with: number;
+	    applied: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditIntroResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.status = source["status"];
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	        this.match_rate = source["match_rate"];
+	        this.matched_with = source["matched_with"];
+	        this.applied = source["applied"];
+	    }
+	}
+	export class EditAnalysisResult {
+	    kind: string;
+	    status: string;
+	    error: string;
+	    window_ms: number;
+	    started_at?: string;
+	    finished_at?: string;
+	    intros: EditIntroResult[];
+	    segments: EditAlignedSegment[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditAnalysisResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.status = source["status"];
+	        this.error = source["error"];
+	        this.window_ms = source["window_ms"];
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	        this.intros = this.convertValues(source["intros"], EditIntroResult);
+	        this.segments = this.convertValues(source["segments"], EditAlignedSegment);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditAnalyzeRequest {
+	    project_id: number;
+	    expected_revision: number;
+	    window_ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditAnalyzeRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.expected_revision = source["expected_revision"];
+	        this.window_ms = source["window_ms"];
+	    }
+	}
+	export class EditCutPoint {
+	    seq: number;
+	    segment: number;
+	    video_id: number;
+	    requested_ms: number;
+	    actual_ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditCutPoint(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.seq = source["seq"];
+	        this.segment = source["segment"];
+	        this.video_id = source["video_id"];
+	        this.requested_ms = source["requested_ms"];
+	        this.actual_ms = source["actual_ms"];
+	    }
+	}
+	export class EditFastInfo {
+	    available: boolean;
+	    reasons: string[];
+	    cut_points: EditCutPoint[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditFastInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.available = source["available"];
+	        this.reasons = source["reasons"];
+	        this.cut_points = this.convertValues(source["cut_points"], EditCutPoint);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditHDSegment {
+	    long_start_ms: number;
+	    long_end_ms: number;
+	    hd_start_ms: number;
+	    hd_end_ms: number;
+	    audio_source: string;
+	    origin: string;
+	    match_rate: number;
+	    status: string;
+	    confirmed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditHDSegment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.long_start_ms = source["long_start_ms"];
+	        this.long_end_ms = source["long_end_ms"];
+	        this.hd_start_ms = source["hd_start_ms"];
+	        this.hd_end_ms = source["hd_end_ms"];
+	        this.audio_source = source["audio_source"];
+	        this.origin = source["origin"];
+	        this.match_rate = source["match_rate"];
+	        this.status = source["status"];
+	        this.confirmed = source["confirmed"];
+	    }
+	}
+	export class EditHDRecipe {
+	    long_video_id: number;
+	    hd_video_id: number;
+	    segments: EditHDSegment[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditHDRecipe(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.long_video_id = source["long_video_id"];
+	        this.hd_video_id = source["hd_video_id"];
+	        this.segments = this.convertValues(source["segments"], EditHDSegment);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class EditIssue {
+	    code: string;
+	    key: string;
+	    message: string;
+	    video_id: number;
+	    seq: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditIssue(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.key = source["key"];
+	        this.message = source["message"];
+	        this.video_id = source["video_id"];
+	        this.seq = source["seq"];
+	    }
+	}
+	export class EditItemView {
+	    id: number;
+	    seq: number;
+	    status: string;
+	    phase: string;
+	    progress: number;
+	    output_name: string;
+	    output_video_id?: number;
+	    source_video_ids: number[];
+	    error_code: string;
+	    error_message: string;
+	    started_at?: string;
+	    finished_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditItemView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.seq = source["seq"];
+	        this.status = source["status"];
+	        this.phase = source["phase"];
+	        this.progress = source["progress"];
+	        this.output_name = source["output_name"];
+	        this.output_video_id = source["output_video_id"];
+	        this.source_video_ids = source["source_video_ids"];
+	        this.error_code = source["error_code"];
+	        this.error_message = source["error_message"];
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	    }
+	}
+	export class EditMergeSource {
+	    video_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditMergeSource(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	    }
+	}
+	export class EditMergeRecipe {
+	    sources: EditMergeSource[];
+	    spec_source_video_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditMergeRecipe(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.sources = this.convertValues(source["sources"], EditMergeSource);
+	        this.spec_source_video_id = source["spec_source_video_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class EditOutputSegment {
+	    video_id: number;
+	    in_ms: number;
+	    requested_in_ms: number;
+	    duration_ms: number;
+	    out_ms: number;
+	    replaced: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditOutputSegment(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.in_ms = source["in_ms"];
+	        this.requested_in_ms = source["requested_in_ms"];
+	        this.duration_ms = source["duration_ms"];
+	        this.out_ms = source["out_ms"];
+	        this.replaced = source["replaced"];
+	    }
+	}
+	export class EditTrackMapping {
+	    video_id: number;
+	    role: string;
+	    stream_index: number;
+	    fill: string;
+	    explicit: boolean;
+	    status: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditTrackMapping(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.role = source["role"];
+	        this.stream_index = source["stream_index"];
+	        this.fill = source["fill"];
+	        this.explicit = source["explicit"];
+	        this.status = source["status"];
+	    }
+	}
+	export class EditOutputTrack {
+	    output_index: number;
+	    language: string;
+	    title: string;
+	    codec: string;
+	    channels: number;
+	    image: boolean;
+	    dropped: boolean;
+	    mappings: EditTrackMapping[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditOutputTrack(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.output_index = source["output_index"];
+	        this.language = source["language"];
+	        this.title = source["title"];
+	        this.codec = source["codec"];
+	        this.channels = source["channels"];
+	        this.image = source["image"];
+	        this.dropped = source["dropped"];
+	        this.mappings = this.convertValues(source["mappings"], EditTrackMapping);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditTrackConflict {
+	    seq: number;
+	    kind: string;
+	    output_index: number;
+	    video_id: number;
+	    reason: string;
+	    candidates: EditStreamInfo[];
+	    allowed_fills: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditTrackConflict(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.seq = source["seq"];
+	        this.kind = source["kind"];
+	        this.output_index = source["output_index"];
+	        this.video_id = source["video_id"];
+	        this.reason = source["reason"];
+	        this.candidates = this.convertValues(source["candidates"], EditStreamInfo);
+	        this.allowed_fills = source["allowed_fills"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditPreflightOutput {
+	    seq: number;
+	    video_ids: number[];
+	    planned_name: string;
+	    container: string;
+	    video_codec: string;
+	    encoder: string;
+	    width: number;
+	    height: number;
+	    frame_rate: string;
+	    pix_fmt: string;
+	    color_primaries: string;
+	    color_transfer: string;
+	    color_space: string;
+	    hdr: boolean;
+	    bit_rate: number;
+	    audio_codec: string;
+	    audio_tracks: EditOutputTrack[];
+	    subtitle_tracks: EditOutputTrack[];
+	    attachments: number;
+	    sidecar: string;
+	    duration_ms: number;
+	    estimated_bytes: number;
+	    work_bytes: number;
+	    free_bytes: number;
+	    segments: EditOutputSegment[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditPreflightOutput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.seq = source["seq"];
+	        this.video_ids = source["video_ids"];
+	        this.planned_name = source["planned_name"];
+	        this.container = source["container"];
+	        this.video_codec = source["video_codec"];
+	        this.encoder = source["encoder"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.frame_rate = source["frame_rate"];
+	        this.pix_fmt = source["pix_fmt"];
+	        this.color_primaries = source["color_primaries"];
+	        this.color_transfer = source["color_transfer"];
+	        this.color_space = source["color_space"];
+	        this.hdr = source["hdr"];
+	        this.bit_rate = source["bit_rate"];
+	        this.audio_codec = source["audio_codec"];
+	        this.audio_tracks = this.convertValues(source["audio_tracks"], EditOutputTrack);
+	        this.subtitle_tracks = this.convertValues(source["subtitle_tracks"], EditOutputTrack);
+	        this.attachments = source["attachments"];
+	        this.sidecar = source["sidecar"];
+	        this.duration_ms = source["duration_ms"];
+	        this.estimated_bytes = source["estimated_bytes"];
+	        this.work_bytes = source["work_bytes"];
+	        this.free_bytes = source["free_bytes"];
+	        this.segments = this.convertValues(source["segments"], EditOutputSegment);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditSpecOption {
+	    video_id: number;
+	    width: number;
+	    height: number;
+	    frame_rate: string;
+	    hdr: boolean;
+	    selected: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditSpecOption(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.frame_rate = source["frame_rate"];
+	        this.hdr = source["hdr"];
+	        this.selected = source["selected"];
+	    }
+	}
+	export class EditStreamInfo {
+	    index: number;
+	    codec: string;
+	    profile: string;
+	    width: number;
+	    height: number;
+	    frame_rate: string;
+	    pix_fmt: string;
+	    color_primaries: string;
+	    color_transfer: string;
+	    color_space: string;
+	    bit_rate: number;
+	    language: string;
+	    title: string;
+	    channels: number;
+	    channel_layout: string;
+	    sample_rate: number;
+	    image: boolean;
+	    default: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditStreamInfo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.index = source["index"];
+	        this.codec = source["codec"];
+	        this.profile = source["profile"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.frame_rate = source["frame_rate"];
+	        this.pix_fmt = source["pix_fmt"];
+	        this.color_primaries = source["color_primaries"];
+	        this.color_transfer = source["color_transfer"];
+	        this.color_space = source["color_space"];
+	        this.bit_rate = source["bit_rate"];
+	        this.language = source["language"];
+	        this.title = source["title"];
+	        this.channels = source["channels"];
+	        this.channel_layout = source["channel_layout"];
+	        this.sample_rate = source["sample_rate"];
+	        this.image = source["image"];
+	        this.default = source["default"];
+	    }
+	}
+	export class EditPreflightSource {
+	    video_id: number;
+	    name: string;
+	    duration_ms: number;
+	    container: string;
+	    size: number;
+	    video?: EditStreamInfo;
+	    audio: EditStreamInfo[];
+	    subtitles: EditStreamInfo[];
+	    attachments: number;
+	    font_attachments: number;
+	    sidecar_srt: boolean;
+	    sidecar_other: string[];
+	    hdr: boolean;
+	    dolby_vision: boolean;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditPreflightSource(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.name = source["name"];
+	        this.duration_ms = source["duration_ms"];
+	        this.container = source["container"];
+	        this.size = source["size"];
+	        this.video = this.convertValues(source["video"], EditStreamInfo);
+	        this.audio = this.convertValues(source["audio"], EditStreamInfo);
+	        this.subtitles = this.convertValues(source["subtitles"], EditStreamInfo);
+	        this.attachments = source["attachments"];
+	        this.font_attachments = source["font_attachments"];
+	        this.sidecar_srt = source["sidecar_srt"];
+	        this.sidecar_other = source["sidecar_other"];
+	        this.hdr = source["hdr"];
+	        this.dolby_vision = source["dolby_vision"];
+	        this.error = source["error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditPreflight {
+	    project_id: number;
+	    revision: number;
+	    kind: string;
+	    mode: string;
+	    sources: EditPreflightSource[];
+	    spec_options: EditSpecOption[];
+	    outputs: EditPreflightOutput[];
+	    conflicts: EditTrackConflict[];
+	    fast: EditFastInfo;
+	    warnings: EditIssue[];
+	    errors: EditIssue[];
+	    ready: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditPreflight(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.revision = source["revision"];
+	        this.kind = source["kind"];
+	        this.mode = source["mode"];
+	        this.sources = this.convertValues(source["sources"], EditPreflightSource);
+	        this.spec_options = this.convertValues(source["spec_options"], EditSpecOption);
+	        this.outputs = this.convertValues(source["outputs"], EditPreflightOutput);
+	        this.conflicts = this.convertValues(source["conflicts"], EditTrackConflict);
+	        this.fast = this.convertValues(source["fast"], EditFastInfo);
+	        this.warnings = this.convertValues(source["warnings"], EditIssue);
+	        this.errors = this.convertValues(source["errors"], EditIssue);
+	        this.ready = source["ready"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class EditProjectCreateRequest {
+	    kind: string;
+	    title: string;
+	    video_ids: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditProjectCreateRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.video_ids = source["video_ids"];
+	    }
+	}
+	export class EditProjectSummary {
+	    id: number;
+	    kind: string;
+	    title: string;
+	    status: string;
+	    revision: number;
+	    mode: string;
+	    item_count: number;
+	    completed_count: number;
+	    progress: number;
+	    error_code: string;
+	    error_message: string;
+	    created_at: string;
+	    updated_at: string;
+	    finished_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditProjectSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.status = source["status"];
+	        this.revision = source["revision"];
+	        this.mode = source["mode"];
+	        this.item_count = source["item_count"];
+	        this.completed_count = source["completed_count"];
+	        this.progress = source["progress"];
+	        this.error_code = source["error_code"];
+	        this.error_message = source["error_message"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.finished_at = source["finished_at"];
+	    }
+	}
+	export class EditTrackChoice {
+	    output: number;
+	    video_id: number;
+	    choice: string;
+	    stream_index: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditTrackChoice(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.output = source["output"];
+	        this.video_id = source["video_id"];
+	        this.choice = source["choice"];
+	        this.stream_index = source["stream_index"];
+	    }
+	}
+	export class EditTrackChoices {
+	    audio: EditTrackChoice[];
+	    subtitle: EditTrackChoice[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditTrackChoices(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.audio = this.convertValues(source["audio"], EditTrackChoice);
+	        this.subtitle = this.convertValues(source["subtitle"], EditTrackChoice);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditTrimItem {
+	    video_id: number;
+	    remove_start_ms: number;
+	    remove_end_ms: number;
+	    origin: string;
+	    confidence: number;
+	    detect_status: string;
+	    confirmed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditTrimItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.remove_start_ms = source["remove_start_ms"];
+	        this.remove_end_ms = source["remove_end_ms"];
+	        this.origin = source["origin"];
+	        this.confidence = source["confidence"];
+	        this.detect_status = source["detect_status"];
+	        this.confirmed = source["confirmed"];
+	    }
+	}
+	export class EditTrimRecipe {
+	    items: EditTrimItem[];
+	    analysis_window_ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditTrimRecipe(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], EditTrimItem);
+	        this.analysis_window_ms = source["analysis_window_ms"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditRecipe {
+	    v: number;
+	    merge?: EditMergeRecipe;
+	    trim_intro?: EditTrimRecipe;
+	    hd_replace?: EditHDRecipe;
+	    tracks: EditTrackChoices;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditRecipe(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.v = source["v"];
+	        this.merge = this.convertValues(source["merge"], EditMergeRecipe);
+	        this.trim_intro = this.convertValues(source["trim_intro"], EditTrimRecipe);
+	        this.hd_replace = this.convertValues(source["hd_replace"], EditHDRecipe);
+	        this.tracks = this.convertValues(source["tracks"], EditTrackChoices);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditProjectView {
+	    id: number;
+	    kind: string;
+	    title: string;
+	    status: string;
+	    revision: number;
+	    mode: string;
+	    recipe: EditRecipe;
+	    analysis?: EditAnalysisResult;
+	    acknowledged_warnings: string[];
+	    error_code: string;
+	    error_message: string;
+	    progress: number;
+	    items: EditItemView[];
+	    created_at: string;
+	    updated_at: string;
+	    queued_at?: string;
+	    finished_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditProjectView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.title = source["title"];
+	        this.status = source["status"];
+	        this.revision = source["revision"];
+	        this.mode = source["mode"];
+	        this.recipe = this.convertValues(source["recipe"], EditRecipe);
+	        this.analysis = this.convertValues(source["analysis"], EditAnalysisResult);
+	        this.acknowledged_warnings = source["acknowledged_warnings"];
+	        this.error_code = source["error_code"];
+	        this.error_message = source["error_message"];
+	        this.progress = source["progress"];
+	        this.items = this.convertValues(source["items"], EditItemView);
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	        this.queued_at = source["queued_at"];
+	        this.finished_at = source["finished_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class EditQueueRequest {
+	    project_id: number;
+	    expected_revision: number;
+	    acknowledged_warnings: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditQueueRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.expected_revision = source["expected_revision"];
+	        this.acknowledged_warnings = source["acknowledged_warnings"];
+	    }
+	}
+	export class EditQueueResult {
+	    queued: boolean;
+	    project?: EditProjectView;
+	    preflight?: EditPreflight;
+	    unacknowledged: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new EditQueueResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.queued = source["queued"];
+	        this.project = this.convertValues(source["project"], EditProjectView);
+	        this.preflight = this.convertValues(source["preflight"], EditPreflight);
+	        this.unacknowledged = source["unacknowledged"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class EditRecipeUpdateRequest {
+	    project_id: number;
+	    expected_revision: number;
+	    recipe: EditRecipe;
+	    mode: string;
+	    title: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new EditRecipeUpdateRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.project_id = source["project_id"];
+	        this.expected_revision = source["expected_revision"];
+	        this.recipe = this.convertValues(source["recipe"], EditRecipe);
+	        this.mode = source["mode"];
+	        this.title = source["title"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
+	
+	
+	
+	
 	export class EnhancementCreateRequest {
 	    video_id: number;
 	    profile: string;
@@ -3709,6 +5102,22 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class HistoryQuery {
+	    keyword: string;
+	    cursor_id: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new HistoryQuery(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.keyword = source["keyword"];
+	        this.cursor_id = source["cursor_id"];
+	        this.limit = source["limit"];
+	    }
 	}
 	export class IINASyncStatus {
 	    enabled: boolean;
@@ -5089,6 +6498,34 @@ export namespace services {
 	        this.count = source["count"];
 	    }
 	}
+	export class InlineQueueEvent {
+	    token: string;
+	    video_id: number;
+	    source_version: string;
+	    seq: number;
+	    view_cycle: number;
+	    kind: string;
+	    position: number;
+	    duration: number;
+	    message: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new InlineQueueEvent(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.seq = source["seq"];
+	        this.view_cycle = source["view_cycle"];
+	        this.kind = source["kind"];
+	        this.position = source["position"];
+	        this.duration = source["duration"];
+	        this.message = source["message"];
+	    }
+	}
 	export class JellyfinConfigInput {
 	    enabled: boolean;
 	    port: number;
@@ -5215,6 +6652,7 @@ export namespace services {
 	    min_rating?: number;
 	    max_rating?: number;
 	    sort_mode: string;
+	    collapse_versions: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new LibraryFilter(source);
@@ -5236,6 +6674,7 @@ export namespace services {
 	        this.min_rating = source["min_rating"];
 	        this.max_rating = source["max_rating"];
 	        this.sort_mode = source["sort_mode"];
+	        this.collapse_versions = source["collapse_versions"];
 	    }
 	}
 	export class LibraryMatchQuery {
@@ -5500,10 +6939,95 @@ export namespace services {
 	        this.id = source["id"];
 	    }
 	}
+	export class VersionGroupMember {
+	    video_id: number;
+	    label: string;
+	    position: number;
+	    display_title: string;
+	    name: string;
+	    resolution: string;
+	    width: number;
+	    height: number;
+	    size: number;
+	    duration: number;
+	    is_watched: boolean;
+	    watch_position_seconds: number;
+	    personal_rating?: number;
+	    is_stale: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new VersionGroupMember(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.label = source["label"];
+	        this.position = source["position"];
+	        this.display_title = source["display_title"];
+	        this.name = source["name"];
+	        this.resolution = source["resolution"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.size = source["size"];
+	        this.duration = source["duration"];
+	        this.is_watched = source["is_watched"];
+	        this.watch_position_seconds = source["watch_position_seconds"];
+	        this.personal_rating = source["personal_rating"];
+	        this.is_stale = source["is_stale"];
+	    }
+	}
+	export class VersionGroupSummary {
+	    group_id: number;
+	    title: string;
+	    revision: number;
+	    member_count: number;
+	    watched_count: number;
+	    rated_count: number;
+	    min_rating?: number;
+	    max_rating?: number;
+	    members: VersionGroupMember[];
+	
+	    static createFrom(source: any = {}) {
+	        return new VersionGroupSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.group_id = source["group_id"];
+	        this.title = source["title"];
+	        this.revision = source["revision"];
+	        this.member_count = source["member_count"];
+	        this.watched_count = source["watched_count"];
+	        this.rated_count = source["rated_count"];
+	        this.min_rating = source["min_rating"];
+	        this.max_rating = source["max_rating"];
+	        this.members = this.convertValues(source["members"], VersionGroupMember);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class LibraryVideoPage {
 	    videos: models.Video[];
 	    next_cursor?: LibraryVideoCursor;
 	    automatic_override_kinds: Record<number, Array<string>>;
+	    version_groups: Record<number, VersionGroupSummary>;
 	
 	    static createFrom(source: any = {}) {
 	        return new LibraryVideoPage(source);
@@ -5514,6 +7038,7 @@ export namespace services {
 	        this.videos = this.convertValues(source["videos"], models.Video);
 	        this.next_cursor = this.convertValues(source["next_cursor"], LibraryVideoCursor);
 	        this.automatic_override_kinds = source["automatic_override_kinds"];
+	        this.version_groups = this.convertValues(source["version_groups"], VersionGroupSummary, true);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -6688,6 +8213,7 @@ export namespace services {
 	export class PlaybackAttemptResult {
 	    video?: models.Video;
 	    dispatch_succeeded: boolean;
+	    stats_warning?: string;
 	    user_message?: string;
 	    reason_code?: string;
 	    reason?: string;
@@ -6703,12 +8229,71 @@ export namespace services {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.video = this.convertValues(source["video"], models.Video);
 	        this.dispatch_succeeded = source["dispatch_succeeded"];
+	        this.stats_warning = source["stats_warning"];
 	        this.user_message = source["user_message"];
 	        this.reason_code = source["reason_code"];
 	        this.reason = source["reason"];
 	        this.selection_reason = source["selection_reason"];
 	        this.reconcile_result = this.convertValues(source["reconcile_result"], PlaybackReconcileResult);
 	        this.reroll_token = source["reroll_token"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class UnconfirmedPlayback {
+	    id: number;
+	    video_id: number;
+	    played_at: string;
+	    source: string;
+	    created_at: string;
+	    title: string;
+	    source_available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new UnconfirmedPlayback(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.played_at = source["played_at"];
+	        this.source = source["source"];
+	        this.created_at = source["created_at"];
+	        this.title = source["title"];
+	        this.source_available = source["source_available"];
+	    }
+	}
+	export class PlaybackHistoryPage {
+	    items: UnconfirmedPlayback[];
+	    has_more: boolean;
+	    cursor_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new PlaybackHistoryPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], UnconfirmedPlayback);
+	        this.has_more = source["has_more"];
+	        this.cursor_id = source["cursor_id"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -6928,6 +8513,7 @@ export namespace services {
 	    video_id: number;
 	    mode: string;
 	    display_name: string;
+	    source_version?: string;
 	    inline_source?: PreviewSourceDescriptor;
 	    seek_sprite?: SeekSpriteDescriptor;
 	    external_action?: PreviewExternalAction;
@@ -6944,6 +8530,7 @@ export namespace services {
 	        this.video_id = source["video_id"];
 	        this.mode = source["mode"];
 	        this.display_name = source["display_name"];
+	        this.source_version = source["source_version"];
 	        this.inline_source = this.convertValues(source["inline_source"], PreviewSourceDescriptor);
 	        this.seek_sprite = this.convertValues(source["seek_sprite"], SeekSpriteDescriptor);
 	        this.external_action = this.convertValues(source["external_action"], PreviewExternalAction);
@@ -6971,6 +8558,176 @@ export namespace services {
 		}
 	}
 	
+	export class QueueCapability {
+	    player: string;
+	    available: boolean;
+	    autoplay: boolean;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueCapability(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.player = source["player"];
+	        this.available = source["available"];
+	        this.autoplay = source["autoplay"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class QueueEdit {
+	    expected_revision: number;
+	    action: string;
+	    video_ids: number[];
+	    collection_id: number;
+	    start_video_id: number;
+	    start_after: boolean;
+	    entry_id: number;
+	    before_entry_id: number;
+	    player: string;
+	    autoplay?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueEdit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.expected_revision = source["expected_revision"];
+	        this.action = source["action"];
+	        this.video_ids = source["video_ids"];
+	        this.collection_id = source["collection_id"];
+	        this.start_video_id = source["start_video_id"];
+	        this.start_after = source["start_after"];
+	        this.entry_id = source["entry_id"];
+	        this.before_entry_id = source["before_entry_id"];
+	        this.player = source["player"];
+	        this.autoplay = source["autoplay"];
+	    }
+	}
+	export class QueueQuery {
+	    revision: number;
+	    cursor_position: number;
+	    cursor_id: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueQuery(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.revision = source["revision"];
+	        this.cursor_position = source["cursor_position"];
+	        this.cursor_id = source["cursor_id"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class QueueSession {
+	    token: string;
+	    video_id: number;
+	    source_version: string;
+	    locator: string;
+	    mime: string;
+	    start_seconds: number;
+	    duration: number;
+	    view_cycle: number;
+	    desired_paused: boolean;
+	    control_sequence: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueSession(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.video_id = source["video_id"];
+	        this.source_version = source["source_version"];
+	        this.locator = source["locator"];
+	        this.mime = source["mime"];
+	        this.start_seconds = source["start_seconds"];
+	        this.duration = source["duration"];
+	        this.view_cycle = source["view_cycle"];
+	        this.desired_paused = source["desired_paused"];
+	        this.control_sequence = source["control_sequence"];
+	    }
+	}
+	export class QueueEntryDTO {
+	    id: number;
+	    video_id: number;
+	    title: string;
+	    position: number;
+	    created_at: string;
+	    source_available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueEntryDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.position = source["position"];
+	        this.created_at = source["created_at"];
+	        this.source_available = source["source_available"];
+	    }
+	}
+	export class QueueSnapshot {
+	    // Go type: models
+	    state: any;
+	    items: QueueEntryDTO[];
+	    // Go type: QueueEntryDTO
+	    current?: any;
+	    total: number;
+	    has_more: boolean;
+	    cursor_position: number;
+	    cursor_id: number;
+	    sequence: number;
+	    session?: QueueSession;
+	    capabilities: QueueCapability[];
+	    warning: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueSnapshot(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = this.convertValues(source["state"], null);
+	        this.items = this.convertValues(source["items"], QueueEntryDTO);
+	        this.current = this.convertValues(source["current"], null);
+	        this.total = source["total"];
+	        this.has_more = source["has_more"];
+	        this.cursor_position = source["cursor_position"];
+	        this.cursor_id = source["cursor_id"];
+	        this.sequence = source["sequence"];
+	        this.session = this.convertValues(source["session"], QueueSession);
+	        this.capabilities = this.convertValues(source["capabilities"], QueueCapability);
+	        this.warning = source["warning"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class RandomPickResult {
 	    videos: models.Video[];
 	    selection_reason: string;
@@ -7055,6 +8812,199 @@ export namespace services {
 	        this.message = source["message"];
 	    }
 	}
+	export class ReviewApprovalOutcome {
+	    id: number;
+	    media_id: number;
+	    tag_id: number;
+	    state: string;
+	    code: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReviewApprovalOutcome(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.media_id = source["media_id"];
+	        this.tag_id = source["tag_id"];
+	        this.state = source["state"];
+	        this.code = source["code"];
+	    }
+	}
+	export class ReviewApprovalPreview {
+	    token: string;
+	    scope: string;
+	    matched: number;
+	    eligible: number;
+	    media_count: number;
+	    link_count: number;
+	    excluded: number;
+	    expires_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReviewApprovalPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.scope = source["scope"];
+	        this.matched = source["matched"];
+	        this.eligible = source["eligible"];
+	        this.media_count = source["media_count"];
+	        this.link_count = source["link_count"];
+	        this.excluded = source["excluded"];
+	        this.expires_at = source["expires_at"];
+	    }
+	}
+	export class ReviewSearchRequest {
+	    media_id: number;
+	    keyword: string;
+	    tag_id: number;
+	    confidence: string;
+	    status: string;
+	    cursor_id: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReviewSearchRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.media_id = source["media_id"];
+	        this.keyword = source["keyword"];
+	        this.tag_id = source["tag_id"];
+	        this.confidence = source["confidence"];
+	        this.status = source["status"];
+	        this.cursor_id = source["cursor_id"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class ReviewApprovalRequest {
+	    scope: string;
+	    ids: number[];
+	    filter: ReviewSearchRequest;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReviewApprovalRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scope = source["scope"];
+	        this.ids = source["ids"];
+	        this.filter = this.convertValues(source["filter"], ReviewSearchRequest);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ReviewApprovalState {
+	    token: string;
+	    state: string;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    remaining: number;
+	    started_at?: string;
+	    finished_at?: string;
+	    code: string;
+	    results: ReviewApprovalOutcome[];
+	    next_after: number;
+	    has_more: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new ReviewApprovalState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.token = source["token"];
+	        this.state = source["state"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.remaining = source["remaining"];
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	        this.code = source["code"];
+	        this.results = this.convertValues(source["results"], ReviewApprovalOutcome);
+	        this.next_after = source["next_after"];
+	        this.has_more = source["has_more"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ReviewCandidateRefresh {
+	    video_items: AITaggingReviewItem[];
+	    image_items: ImageAITaggingReviewItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ReviewCandidateRefresh(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_items = this.convertValues(source["video_items"], AITaggingReviewItem);
+	        this.image_items = this.convertValues(source["image_items"], ImageAITaggingReviewItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class SavedLibraryViewInput {
 	    name: string;
 	    search_mode: string;
@@ -7071,6 +9021,7 @@ export namespace services {
 	    min_rating?: number;
 	    max_rating?: number;
 	    sort_mode: string;
+	    collapse_versions: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new SavedLibraryViewInput(source);
@@ -7093,6 +9044,7 @@ export namespace services {
 	        this.min_rating = source["min_rating"];
 	        this.max_rating = source["max_rating"];
 	        this.sort_mode = source["sort_mode"];
+	        this.collapse_versions = source["collapse_versions"];
 	    }
 	}
 	export class ScanDirectoryValidation {
@@ -7163,6 +9115,292 @@ export namespace services {
 	        this.skip_breakdown = this.convertValues(source["skip_breakdown"], SkipBreakdown);
 	        this.errors = this.convertValues(source["errors"], ScanSyncError);
 	        this.added_video_ids = source["added_video_ids"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SceneCoverage {
+	    total_videos: number;
+	    subtitle_indexed: number;
+	    subtitle_unindexed: number;
+	    visual_indexed: number;
+	    visual_model_id: string;
+	    visual_provider: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneCoverage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total_videos = source["total_videos"];
+	        this.subtitle_indexed = source["subtitle_indexed"];
+	        this.subtitle_unindexed = source["subtitle_unindexed"];
+	        this.visual_indexed = source["visual_indexed"];
+	        this.visual_model_id = source["visual_model_id"];
+	        this.visual_provider = source["visual_provider"];
+	    }
+	}
+	export class SceneHit {
+	    video_id: number;
+	    title: string;
+	    start_ms: number;
+	    end_ms: number;
+	    source: string;
+	    score: number;
+	    text: string;
+	    context_before: string;
+	    context_after: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneHit(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.start_ms = source["start_ms"];
+	        this.end_ms = source["end_ms"];
+	        this.source = source["source"];
+	        this.score = source["score"];
+	        this.text = source["text"];
+	        this.context_before = source["context_before"];
+	        this.context_after = source["context_after"];
+	    }
+	}
+	export class SceneIndexCleanupResult {
+	    deleted_segments: number;
+	    deleted_states: number;
+	    model_id: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneIndexCleanupResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.deleted_segments = source["deleted_segments"];
+	        this.deleted_states = source["deleted_states"];
+	        this.model_id = source["model_id"];
+	    }
+	}
+	export class SceneIndexFailure {
+	    video_id: number;
+	    name: string;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneIndexFailure(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.name = source["name"];
+	        this.error = source["error"];
+	    }
+	}
+	export class SceneIndexRequest {
+	    video_ids: number[];
+	    filter?: LibraryFilter;
+	    provider: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneIndexRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_ids = source["video_ids"];
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.provider = source["provider"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SceneIndexStatus {
+	    running: boolean;
+	    preparing: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    provider: string;
+	    model_id: string;
+	    total: number;
+	    processed: number;
+	    succeeded: number;
+	    skipped: number;
+	    failed: number;
+	    current_video_id: number;
+	    current_video_name: string;
+	    started_at?: string;
+	    updated_at?: string;
+	    failures: SceneIndexFailure[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneIndexStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.preparing = source["preparing"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.provider = source["provider"];
+	        this.model_id = source["model_id"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.succeeded = source["succeeded"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.current_video_id = source["current_video_id"];
+	        this.current_video_name = source["current_video_name"];
+	        this.started_at = source["started_at"];
+	        this.updated_at = source["updated_at"];
+	        this.failures = this.convertValues(source["failures"], SceneIndexFailure);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SceneRuntimeStatus {
+	    state: string;
+	    reason: string;
+	    identity: string;
+	    model_id: string;
+	    runtime_dir: string;
+	    model_host: string;
+	    model_size: string;
+	    mirror_configured: boolean;
+	    preparing: boolean;
+	    stage: string;
+	    message: string;
+	    downloaded_bytes: number;
+	    total_bytes: number;
+	    cancelled: boolean;
+	    error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneRuntimeStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.state = source["state"];
+	        this.reason = source["reason"];
+	        this.identity = source["identity"];
+	        this.model_id = source["model_id"];
+	        this.runtime_dir = source["runtime_dir"];
+	        this.model_host = source["model_host"];
+	        this.model_size = source["model_size"];
+	        this.mirror_configured = source["mirror_configured"];
+	        this.preparing = source["preparing"];
+	        this.stage = source["stage"];
+	        this.message = source["message"];
+	        this.downloaded_bytes = source["downloaded_bytes"];
+	        this.total_bytes = source["total_bytes"];
+	        this.cancelled = source["cancelled"];
+	        this.error = source["error"];
+	    }
+	}
+	export class SceneSearchRequest {
+	    query: string;
+	    mode: string;
+	    filter?: LibraryFilter;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneSearchRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.query = source["query"];
+	        this.mode = source["mode"];
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.limit = source["limit"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class SceneSearchResult {
+	    hits: SceneHit[];
+	    coverage: SceneCoverage;
+	    notices: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new SceneSearchResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hits = this.convertValues(source["hits"], SceneHit);
+	        this.coverage = this.convertValues(source["coverage"], SceneCoverage);
+	        this.notices = source["notices"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -8396,6 +10634,76 @@ export namespace services {
 	        this.has_error = source["has_error"];
 	    }
 	}
+	export class TonightRequest {
+	    filter: LibraryFilter;
+	    max_duration_seconds: number;
+	    unwatched_only: boolean;
+	    favorites_only: boolean;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new TonightRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.max_duration_seconds = source["max_duration_seconds"];
+	        this.unwatched_only = source["unwatched_only"];
+	        this.favorites_only = source["favorites_only"];
+	        this.limit = source["limit"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class TonightSuggestion {
+	    video: models.Video;
+	    reasons: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new TonightSuggestion(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], models.Video);
+	        this.reasons = source["reasons"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class TrashEntryView {
 	    id: number;
 	    kind: string;
@@ -8566,6 +10874,129 @@ export namespace services {
 		    return a;
 		}
 	}
+	
+	export class VersionGroupDetail {
+	    group_id: number;
+	    title: string;
+	    revision: number;
+	    member_count: number;
+	    watched_count: number;
+	    rated_count: number;
+	    min_rating?: number;
+	    max_rating?: number;
+	    members: VersionGroupMember[];
+	    deleted_member_count: number;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new VersionGroupDetail(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.group_id = source["group_id"];
+	        this.title = source["title"];
+	        this.revision = source["revision"];
+	        this.member_count = source["member_count"];
+	        this.watched_count = source["watched_count"];
+	        this.rated_count = source["rated_count"];
+	        this.min_rating = source["min_rating"];
+	        this.max_rating = source["max_rating"];
+	        this.members = this.convertValues(source["members"], VersionGroupMember);
+	        this.deleted_member_count = source["deleted_member_count"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class VersionGroupPage {
+	    items: VersionGroupDetail[];
+	    has_more: boolean;
+	    next_cursor_id: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new VersionGroupPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], VersionGroupDetail);
+	        this.has_more = source["has_more"];
+	        this.next_cursor_id = source["next_cursor_id"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class VersionGroupSuggestion {
+	    video_ids: number[];
+	    members: VersionGroupMember[];
+	    latest_relation_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new VersionGroupSuggestion(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_ids = source["video_ids"];
+	        this.members = this.convertValues(source["members"], VersionGroupMember);
+	        this.latest_relation_at = source["latest_relation_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
 	export class VideoArtworkStatus {
 	    has_poster: boolean;
 	    has_fanart: boolean;
@@ -8650,6 +11081,30 @@ export namespace services {
 	        this.collection_ids = source["collection_ids"];
 	    }
 	}
+	export class VideoEditStatus {
+	    worker_running: boolean;
+	    current_project_id: number;
+	    current_item_id: number;
+	    analyzing_project_id: number;
+	    analysis_progress: number;
+	    queued_items: number;
+	    running_items: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new VideoEditStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.worker_running = source["worker_running"];
+	        this.current_project_id = source["current_project_id"];
+	        this.current_item_id = source["current_item_id"];
+	        this.analyzing_project_id = source["analyzing_project_id"];
+	        this.analysis_progress = source["analysis_progress"];
+	        this.queued_items = source["queued_items"];
+	        this.running_items = source["running_items"];
+	    }
+	}
 	export class VideoSameSourceReviewItem {
 	    id: number;
 	    video_a_id: number;
@@ -8684,6 +11139,54 @@ export namespace services {
 	        this.is_unread = source["is_unread"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class ViewingYearReview {
+	    year: number;
+	    total: number;
+	    automatic: number;
+	    historical: number;
+	    manual: number;
+	    days: number;
+	    months: number[];
+	    rated_count: number;
+	    average_rating?: number;
+	    most_watched: DiaryRepeat[];
+	
+	    static createFrom(source: any = {}) {
+	        return new ViewingYearReview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.year = source["year"];
+	        this.total = source["total"];
+	        this.automatic = source["automatic"];
+	        this.historical = source["historical"];
+	        this.manual = source["manual"];
+	        this.days = source["days"];
+	        this.months = source["months"];
+	        this.rated_count = source["rated_count"];
+	        this.average_rating = source["average_rating"];
+	        this.most_watched = this.convertValues(source["most_watched"], DiaryRepeat);
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

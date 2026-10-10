@@ -20,15 +20,15 @@ jobs:
           - os: macos-latest
             platform: darwin/universal
             artifact: video-master-macOS.zip
-            package_cmd: cd build/bin && zip -r ../../video-master-macOS.zip video-master.app
+            package_cmd: cd build/bin && zip -r ../../video-master-macOS.zip "析微影策.app"
           - os: windows-latest
             platform: windows/amd64
             artifact: video-master-Windows-amd64.zip
-            package_cmd: Compress-Archive -Path build/bin/video-master.exe -DestinationPath video-master-Windows-amd64.zip
+            package_cmd: Compress-Archive -Path "build/bin/析微影策.exe" -DestinationPath video-master-Windows-amd64.zip
           - os: ubuntu-22.04
             platform: linux/amd64
             artifact: video-master-Linux-amd64.tar.gz
-            package_cmd: cd build/bin && tar -czf ../../video-master-Linux-amd64.tar.gz video-master
+            package_cmd: cd build/bin && tar -czf ../../video-master-Linux-amd64.tar.gz "析微影策"
 
     runs-on: ${{ matrix.os }}
     steps:

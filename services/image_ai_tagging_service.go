@@ -81,6 +81,8 @@ type ImageAITaggingStatus struct {
 // 与视频侧共享 tags 表与闭合标签词表，但请求是单轮的：静图没有抽帧/字幕/同源可查，
 // 视频那套多轮 agent 在这里没有意义。
 type ImageAITaggingService struct {
+	reviewMu       sync.Mutex
+	reviewApproval *ReviewApprovalWorkflow
 	db             *gorm.DB
 	thumbnails     *ImageThumbnailService
 	configProvider AITaggingConfigProvider

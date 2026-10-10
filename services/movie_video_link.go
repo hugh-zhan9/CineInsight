@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -311,37 +312,46 @@ func libraryMatchScoreFields(query string, fields []string) int {
 // ClearMark 的回写。缓存里没有该豆瓣条目、标不成 watched 时只记日志——标记的快照
 // 只能从缓存行取（ErrMovieChartEntryNotFound），这里不编一个。
 func (s *MovieChartService) OnVideoWatchedChanged(videoID uint, watched bool) {
+	s.OnVideoWatchedChangedContext(context.Background(), videoID, watched)
+}
+func (s *MovieChartService) OnVideoWatchedChangedContext(ctx context.Context, videoID uint, watched bool) {
 	if s == nil {
 		return
 	}
 	var doubanIDs []string
-	err := s.db.Model(&models.MovieVideoLink{}).Where("video_id = ?", videoID).
+	err := s.db.WithContext(ctx).Model(&models.MovieVideoLink{}).Where("video_id = ?", videoID).
 		Order("douban_id ASC").Pluck("douban_id", &doubanIDs).Error
 	if err != nil {
 		log.Printf("[MovieChart] video watched sync video=%d 读取关联失败 err=%v", videoID, err)
 		return
 	}
 	for _, doubanID := range doubanIDs {
-		if err := s.applyVideoWatched(doubanID, videoID, watched); err != nil {
+		if err := s.applyVideoWatchedContext(ctx, doubanID, videoID, watched); err != nil {
 			log.Printf("[MovieChart] video watched sync video=%d douban=%s watched=%t err=%v", videoID, doubanID, watched, err)
 		}
 	}
 }
 
 func (s *MovieChartService) applyVideoWatched(doubanID string, videoID uint, watched bool) error {
-	s.markMu.Lock()
-	defer s.markMu.Unlock()
-	if watched {
-		_, err := s.markEntry(doubanID, models.MovieChartMarkWatched, true)
+	return s.applyVideoWatchedContext(context.Background(), doubanID, videoID, watched)
+}
+func (s *MovieChartService) applyVideoWatchedContext(ctx context.Context, doubanID string, videoID uint, watched bool) error {
+	if err := s.markMu.LockContext(ctx); err != nil {
 		return err
 	}
-	existing, err := s.loadChartMark(doubanID)
+	db := s.db.WithContext(ctx)
+	defer s.markMu.Unlock()
+	if watched {
+		_, err := s.markEntryFrom(db, doubanID, models.MovieChartMarkWatched, true)
+		return err
+	}
+	existing, err := s.loadChartMarkFrom(db, doubanID)
 	if err != nil || existing == nil || existing.Mark != models.MovieChartMarkWatched {
 		return err
 	}
 	// 同一部片可能关联了不止一个视频（不同版本）：还有别的已看视频就保留标记。
 	var others int64
-	err = s.db.Table("movie_video_links AS l").
+	err = db.Table("movie_video_links AS l").
 		Joins("JOIN videos v ON v.id = l.video_id AND v.deleted_at IS NULL").
 		Where("l.douban_id = ? AND l.video_id <> ? AND v.is_watched = ?", doubanID, videoID, true).
 		Count(&others).Error
@@ -351,7 +361,8 @@ func (s *MovieChartService) applyVideoWatched(doubanID string, videoID uint, wat
 	if others > 0 {
 		return nil
 	}
-	return s.clearMark(doubanID)
+	_, err = s.clearMarkWasWatchedFrom(db, doubanID)
+	return err
 }
 
 // syncLinkedVideosWatched 把榜单侧的已看变化回写到全部关联视频。回写方法的合同是

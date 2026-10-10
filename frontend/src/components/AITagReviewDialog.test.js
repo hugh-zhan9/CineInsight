@@ -1,11 +1,11 @@
-import { flushPromises, mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
-  'ApproveAITagCandidate', 'ApproveAITagCandidates', 'ApproveAITagCandidatesByFilter', 'CountAITagCandidatesByFilter',
+  'ApproveAITagCandidate', 'GetAIReviewCandidates', 'PreviewAIReviewApproval', 'StartAIReviewApproval', 'GetAIReviewApproval', 'CancelAIReviewApproval',
   'ConfirmSameSourceRelation', 'DeleteVideo', 'DeleteVideosWithResult', 'RestoreTrashBatch', 'GetAITaggingStatusSummary', 'ListAITagCandidatePage', 'ListSameSourceRelations',
   'MarkSameSourceRelationRead', 'PreviewExternally', 'RejectAITagCandidate', 'RejectAITagCandidatesByVideo',
-  'RejectSameSourceRelation', 'RenameVideo', 'RetryAITagging',
+  'RejectSameSourceRelation', 'RenameVideo', 'RetryAITagging', 'SearchAITagCandidatePage',
 ].map(name => [name, vi.fn()])));
 vi.mock('../../wailsjs/go/main/App', () => api);
 // 批量批准走应用内确认框：默认答「确定」，需要「取消」的用例单独设置。
@@ -17,7 +17,9 @@ vi.mock('./FaceClusterReviewPanel.vue', () => ({ default: { template: '<div data
 
 import AITagReviewDialog from './AITagReviewDialog.vue';
 
-// 后端按 id 游标分页：next_id 只在这一页满员时出现。
+enableAutoUnmount(afterEach);
+
+// 后端按 id 游标分页，游标非零时可以继续读取。
 const candidatePage = (items, nextID = 0) => ({ items, next_id: nextID });
 
 const tagCandidate = (overrides = {}) => ({
@@ -32,11 +34,122 @@ const tagCandidate = (overrides = {}) => ({
 });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  vi.resetAllMocks();
   api.GetAITaggingStatusSummary.mockResolvedValue({ config_available: true });
   api.ListAITagCandidatePage.mockResolvedValue(candidatePage([]));
+  api.SearchAITagCandidatePage.mockResolvedValue(candidatePage([]));
   api.ListSameSourceRelations.mockResolvedValue([]);
+  api.GetAIReviewApproval.mockResolvedValue({ state: 'idle', results: [] });
+  api.GetAIReviewCandidates.mockResolvedValue({ video_items: [], image_items: [] });
+  api.CancelAIReviewApproval.mockResolvedValue();
   feedback.confirmAction.mockResolvedValue(true);
+});
+
+describe('AITagReviewDialog server search', () => {
+  it('does not present a loading or failed same-source query as an empty list', async () => {
+    let failRelations;
+    api.ListSameSourceRelations.mockImplementationOnce(() => new Promise((resolve, reject) => { failRelations = reject; }));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    const initial = wrapper.vm.loadCandidates();
+    await flushPromises();
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+    expect(wrapper.text()).toContain('正在加载视频同源关系');
+    expect(wrapper.text()).not.toContain('暂无待处理');
+    failRelations(new Error('unavailable'));
+    await initial;
+    await flushPromises();
+    expect(wrapper.text()).toContain('同源列表未能加载');
+    expect(wrapper.text()).not.toContain('暂无待处理');
+  });
+
+  it('keeps late initial summary and same-source results while dropping the old candidate page', async () => {
+    let resolveSummary, resolveRelations, resolvePage;
+    api.GetAITaggingStatusSummary.mockImplementationOnce(() => new Promise(resolve => { resolveSummary = resolve; }));
+    api.ListSameSourceRelations.mockImplementationOnce(() => new Promise(resolve => { resolveRelations = resolve; }));
+    api.ListAITagCandidatePage.mockImplementationOnce(() => new Promise(resolve => { resolvePage = resolve; }));
+    api.SearchAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 3, suggested_name: '海边' })]));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    const initial = wrapper.vm.loadCandidates();
+    await wrapper.get('.ai-tag-review-search').setValue('海边');
+    await wrapper.vm.loadCandidates({ queryOnly: true });
+    resolveSummary({ pending: 100 });
+    resolveRelations([{ id: 10, confirmed: false }]);
+    resolvePage(candidatePage([tagCandidate({ id: 9 })], 9));
+    await initial;
+    await flushPromises();
+    expect(wrapper.vm.candidates.map(item => item.id)).toEqual([3]);
+    expect(wrapper.vm.pendingCandidateTotal).toBe(100);
+    expect(wrapper.vm.pendingSameSourceCount).toBe(1);
+    await wrapper.get('[data-test="same-source-review-tab"]').trigger('click');
+    expect(wrapper.findAll('.same-source-row')).toHaveLength(1);
+  });
+
+  it('keeps the last successful results on failure and exposes tags outside the loaded page', async () => {
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate()], 1));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true, tags: [{ id: 500, name: '未加载标签' }] } });
+    await wrapper.vm.loadCandidates();
+    expect(wrapper.get('[data-test="ai-review-filter-tag"]').text()).toContain('未加载标签');
+    api.SearchAITagCandidatePage.mockRejectedValueOnce(new Error('search failed'));
+    await wrapper.get('.ai-tag-review-search').setValue('海边');
+    await wrapper.vm.loadCandidates({ queryOnly: true });
+    await flushPromises();
+    expect(wrapper.find('.ai-video-group').text()).toContain('fight.mp4');
+    expect(wrapper.find('.ai-tag-review-error').text()).toContain('保留上次已加载');
+    expect(wrapper.get('[data-test="ai-approve-filtered"]').attributes('disabled')).toBeDefined();
+    await wrapper.vm.loadMoreCandidates();
+    expect(api.ListAITagCandidatePage).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not apply a late response after the panel closes', async () => {
+    let resolve;
+    api.ListAITagCandidatePage.mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    const request = wrapper.vm.loadCandidates();
+    await wrapper.setProps({ visible: false });
+    resolve(candidatePage([tagCandidate()]));
+    await request;
+    expect(wrapper.vm.candidates).toEqual([]);
+  });
+
+  it('debounces a full-range query and only fetches matching pages on demand', async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    try {
+      api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate()], 1));
+      await wrapper.vm.loadCandidates();
+      api.SearchAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 300, suggested_name: '海边' })], 300));
+      await wrapper.get('.ai-tag-review-search').setValue('海');
+      await vi.advanceTimersByTimeAsync(100);
+      await wrapper.get('.ai-tag-review-search').setValue('海边');
+      await vi.advanceTimersByTimeAsync(250);
+      await flushPromises();
+      expect(api.SearchAITagCandidatePage).toHaveBeenCalledTimes(1);
+      expect(api.SearchAITagCandidatePage).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '海边', status: 'pending', cursor_id: 0 }));
+      expect(api.ListAITagCandidatePage).toHaveBeenCalledTimes(1);
+      expect(api.GetAITaggingStatusSummary).toHaveBeenCalledTimes(1);
+      expect(wrapper.vm.candidates.map(item => item.id)).toEqual([300]);
+      await wrapper.vm.loadMoreCandidates();
+      expect(api.SearchAITagCandidatePage).toHaveBeenLastCalledWith(expect.objectContaining({ keyword: '海边', cursor_id: 300 }));
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
+
+  it('ignores an old query response even when its cursor matches the new query', async () => {
+    vi.useFakeTimers();
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
+    try {
+      let resolveOld;
+      api.SearchAITagCandidatePage.mockImplementationOnce(() => new Promise(resolve => { resolveOld = resolve; }));
+      await wrapper.get('.ai-tag-review-search').setValue('动作');
+      await vi.advanceTimersByTimeAsync(250);
+      api.SearchAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 30, suggested_name: '海边' })], 30));
+      await wrapper.get('.ai-tag-review-search').setValue('海边');
+      await vi.advanceTimersByTimeAsync(250);
+      resolveOld(candidatePage([tagCandidate({ id: 40 })], 40));
+      await flushPromises();
+      expect(wrapper.vm.candidates.map(item => item.id)).toEqual([30]);
+      expect(wrapper.vm.candidateCursor).toBe(30);
+    } finally { wrapper.unmount(); vi.useRealTimers(); }
+  });
 });
 
 // 2026-09-01 起两个顶层页签合并成主从布局：待审在左，质量评估作为右侧常驻
@@ -226,7 +339,7 @@ describe('AITagReviewDialog face cluster review section', () => {
 });
 
 // 待审候选没有上限，全量下发在大库上既压 IPC 又要一次渲染上千行。
-// 现在按 id 游标翻页；搜索的口径仍是"全部待审候选"，所以输入关键词会把剩下的页翻完。
+// 搜索覆盖全部待审候选，但每次只返回匹配的一页。
 describe('AITagReviewDialog pagination', () => {
   it('loads the first page and appends the next one on demand', async () => {
     api.ListAITagCandidatePage
@@ -251,55 +364,36 @@ describe('AITagReviewDialog pagination', () => {
     expect(wrapper.find('[data-test="ai-candidate-load-more"]').exists()).toBe(false);
   });
 
-  it('waits for an in-flight page instead of silently searching only what is loaded', async () => {
+  it('drops an old unfiltered page after a server search has replaced the list', async () => {
     let resolveInFlight;
     api.ListAITagCandidatePage
       .mockResolvedValueOnce(candidatePage([tagCandidate({ id: 9 })], 9))
-      .mockImplementationOnce(() => new Promise(resolve => { resolveInFlight = resolve; }))
-      .mockResolvedValueOnce(candidatePage([
-        tagCandidate({ id: 7, video_id: 12, video: { id: 12, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, suggested_name: '舞蹈' }),
-      ]));
+      .mockImplementationOnce(() => new Promise(resolve => { resolveInFlight = resolve; }));
+    api.SearchAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 300, suggested_name: '海边' })], 9));
     const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
     await wrapper.vm.loadCandidates();
-    await flushPromises();
-
     const inFlight = wrapper.vm.loadMoreCandidates();
-    wrapper.vm.reviewSearch = 'dance';
-    await flushPromises();
-
+    await wrapper.setData({ reviewSearch: '海边' });
+    await wrapper.vm.loadCandidates({ queryOnly: true });
     resolveInFlight(candidatePage([tagCandidate({ id: 8, suggested_name: '日落' })], 8));
     await inFlight;
     await flushPromises();
-
-    // 关键词命中的候选在最后一页：搜索必须等在途那一页翻完后继续翻，而不是就此收手。
-    expect(wrapper.vm.candidateCursor).toBe(0);
-    const groups = wrapper.findAll('.ai-video-group');
-    expect(groups).toHaveLength(1);
-    expect(groups[0].text()).toContain('dance.mp4');
+    expect(wrapper.vm.candidates.map(item => item.id)).toEqual([300]);
+    expect(wrapper.vm.candidateCursor).toBe(9);
+    expect(api.ListAITagCandidatePage).toHaveBeenCalledTimes(2);
   });
 
-  it('loads every remaining page before filtering by keyword', async () => {
-    api.ListAITagCandidatePage
-      .mockResolvedValueOnce(candidatePage([tagCandidate({ id: 9 })], 9))
-      .mockResolvedValueOnce(candidatePage([
-        tagCandidate({ id: 8, video_id: 11, video: { id: 11, name: 'dance.mp4', path: '/library/dance.mp4', tags: [] }, suggested_name: '舞蹈' }),
-      ], 8))
-      .mockResolvedValueOnce(candidatePage([]));
+  it('returns to the unfiltered first page when the query is cleared', async () => {
+    api.SearchAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 8, suggested_name: '海边' })], 8));
     const wrapper = mount(AITagReviewDialog, { props: { visible: true } });
-    await wrapper.vm.loadCandidates();
-    await flushPromises();
-    expect(wrapper.findAll('.ai-video-group')).toHaveLength(1);
-
-    wrapper.vm.reviewSearch = 'dance';
-    await flushPromises();
-
-    // 关键词命中的候选在第二页上：只筛已加载的页会把它漏掉。
-    expect(api.ListAITagCandidatePage).toHaveBeenCalledTimes(3);
-    // 搜索那一趟按服务端上限翻，少发几倍请求。
-    expect(api.ListAITagCandidatePage).toHaveBeenNthCalledWith(2, 0, '', 'pending', 9, 200);
-    const groups = wrapper.findAll('.ai-video-group');
-    expect(groups).toHaveLength(1);
-    expect(groups[0].text()).toContain('dance.mp4');
+    await wrapper.setData({ reviewSearch: '海边' });
+    await wrapper.vm.loadCandidates({ queryOnly: true });
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 10 })], 10));
+    await wrapper.setData({ reviewSearch: '' });
+    await wrapper.vm.loadCandidates({ queryOnly: true });
+    expect(api.ListAITagCandidatePage).toHaveBeenLastCalledWith(0, '', 'pending', 0, 0);
+    expect(wrapper.vm.candidates.map(item => item.id)).toEqual([10]);
+    expect(wrapper.vm.candidateCursor).toBe(10);
   });
 
   it('removes an approved candidate locally instead of reloading the pages', async () => {
@@ -487,6 +581,59 @@ describe('AITagReviewDialog META-08 同源已读时机与待审总数', () => {
 
 // META-11（D-PC29）：组头「批准本组全部」、筛选栏「批准筛选结果（N）」与按标签整批批准。
 describe('AITagReviewDialog META-11 批量批准', () => {
+  it('keeps a later manual-tag update when an older candidate recheck returns', async () => {
+    const original = tagCandidate({ id: 20, matched_tag_id: 20 });
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([original]));
+    let finish;
+    api.GetAIReviewCandidates.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } }); await wrapper.vm.loadCandidates();
+    const request = wrapper.vm.applyBatchOutcomes([{ id: 20, state: 'skipped', code: 'changed' }]); await flushPromises();
+    await wrapper.vm.handleManualTagAdded({ videoIds: [10], tagIds: [99], tags: [{ id: 99, name: '刚添加的标签' }] });
+    finish({ video_items: [original], image_items: [] }); await request;
+    expect(wrapper.vm.candidates[0].video.tags.map(tag => tag.name)).toContain('刚添加的标签');
+  });
+
+  it('applies a later non-pending recheck after an earlier changed candidate refresh', async () => {
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 20, matched_tag_id: 20 })]));
+    let firstReply, secondReply;
+    api.GetAIReviewCandidates.mockImplementationOnce(() => new Promise(resolve => { firstReply = resolve; }))
+      .mockImplementationOnce(() => new Promise(resolve => { secondReply = resolve; }));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } }); await wrapper.vm.loadCandidates(); await flushPromises();
+    const first = wrapper.vm.applyBatchOutcomes([{ id: 20, state: 'skipped', code: 'changed' }]);
+    await flushPromises();
+    const second = wrapper.vm.applyBatchOutcomes([{ id: 10, state: 'approved', media_id: 10, tag_id: 20 }]);
+    firstReply({ video_items: [tagCandidate({ id: 20, matched_tag_id: 20, reasoning: '新版本仍待审' })], image_items: [] });
+    await first; await flushPromises();
+    secondReply({ video_items: [], image_items: [] }); await second;
+    expect(wrapper.vm.candidates).toEqual([]);
+  });
+
+  it('does not apply a late candidate recheck to a freshly loaded page', async () => {
+    const initial = tagCandidate({ id: 20, matched_tag_id: 20 });
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([initial]));
+    let finishRecheck;
+    api.GetAIReviewCandidates.mockImplementationOnce(() => new Promise(resolve => { finishRecheck = resolve; }));
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } }); await wrapper.vm.loadCandidates();
+    const request = wrapper.vm.applyBatchOutcomes([{ id: 20, state: 'skipped', code: 'changed' }]);
+    await flushPromises();
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage([tagCandidate({ id: 20, reasoning: '重新加载的当前证据' })]));
+    await wrapper.vm.loadCandidates();
+    finishRecheck({ video_items: [], image_items: [] }); await request;
+    expect(wrapper.vm.candidates).toHaveLength(1);
+    expect(wrapper.vm.candidates[0].reasoning).toBe('重新加载的当前证据');
+  });
+
+  it('does not hide current pending versions or new same-target candidates when replaying an old batch', async () => {
+    const current = [tagCandidate({ id: 20, matched_tag_id: 21, reasoning: '已重新分析的新理由' }), tagCandidate({ id: 30, matched_tag_id: 20 })];
+    api.ListAITagCandidatePage.mockResolvedValueOnce(candidatePage(current));
+    api.GetAIReviewCandidates.mockResolvedValueOnce({ video_items: current, image_items: [] });
+    const wrapper = mount(AITagReviewDialog, { props: { visible: true } }); await wrapper.vm.loadCandidates(); await flushPromises();
+    await wrapper.vm.applyBatchOutcomes([{ id: 20, state: 'skipped', code: 'changed' }, { id: 10, media_id: 10, tag_id: 20, state: 'approved' }]);
+    await flushPromises();
+    expect(wrapper.vm.candidates.map(item => item.id)).toEqual([20, 30]);
+    expect(api.GetAIReviewCandidates).toHaveBeenCalledWith('video', [20, 30]);
+  });
+
   const pool = () => [
     tagCandidate({ id: 5, video_id: 10, matched_tag_id: 20, matched_tag: { id: 20, name: '动作' }, confidence: 'high' }),
     tagCandidate({ id: 4, video_id: 10, matched_tag_id: 21, matched_tag: { id: 21, name: '夜景' }, suggested_name: '夜景', confidence: 'medium' }),
@@ -502,90 +649,68 @@ describe('AITagReviewDialog META-11 批量批准', () => {
     return wrapper;
   }
 
-  it('META-11 approves the approvable candidates of one group after confirmation', async () => {
-    api.ApproveAITagCandidates.mockResolvedValue({
-      requested: 2, succeeded: 2, failed: 0, superseded: 0,
-      results: [{ id: 5, ok: true, item: { id: 5, video_id: 10, matched_tag_id: 20 } }, { id: 4, ok: true, item: { id: 4, video_id: 10, matched_tag_id: 21 } }],
+  function mockBatch(results, count = results.length) {
+    api.PreviewAIReviewApproval.mockResolvedValue({ token: 'frozen', matched: count, eligible: count, excluded: 0, media_count: count, link_count: count });
+    api.StartAIReviewApproval.mockImplementation(async () => {
+      const completed = { token: 'frozen', state: 'completed', total: count, processed: count, remaining: 0, succeeded: results.filter(item => item.state === 'approved').length, skipped: results.filter(item => item.state === 'skipped').length, failed: 0, results, next_after: results.length, has_more: false };
+      api.GetAIReviewApproval.mockResolvedValue(completed);
+      return { ...completed, state: 'running', results: [] };
     });
+  }
+
+  it('previews the loaded group, releases cancellation, then starts only its frozen token', async () => {
+    mockBatch([{ id: 5, state: 'approved', media_id: 10, tag_id: 20 }, { id: 4, state: 'approved', media_id: 10, tag_id: 21 }]);
     const wrapper = await mountWithPool();
-
     feedback.confirmAction.mockResolvedValueOnce(false);
-    await wrapper.get('[data-test="ai-approve-group-10"]').trigger('click');
-    await flushPromises();
-    expect(api.ApproveAITagCandidates).not.toHaveBeenCalled();
-
-    await wrapper.get('[data-test="ai-approve-group-10"]').trigger('click');
-    await flushPromises();
-    // 低置信的那条批不了，不交出去。
-    expect(api.ApproveAITagCandidates).toHaveBeenCalledWith([5, 4]);
+    await wrapper.get('[data-test="ai-approve-group-10"]').trigger('click'); await flushPromises();
+    expect(api.StartAIReviewApproval).not.toHaveBeenCalled();
+    expect(api.CancelAIReviewApproval).toHaveBeenCalledWith('video', 'frozen');
+    await wrapper.get('[data-test="ai-approve-group-10"]').trigger('click'); await flushPromises();
+    expect(api.PreviewAIReviewApproval).toHaveBeenLastCalledWith('video', expect.objectContaining({ scope: 'loaded', ids: [5, 4] }));
+    expect(api.StartAIReviewApproval).toHaveBeenCalledWith('video', 'frozen');
     expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([3, 2]);
-    expect(wrapper.get('[data-test="ai-review-notice"]').text()).toContain('成功 2 条');
+    expect(wrapper.get('[data-test="review-batch-summary"]').text()).toContain('成功 2');
     expect(wrapper.emitted('changed')).toHaveLength(1);
   });
 
-  it('META-11 approves only the loaded and filtered IDs, and needs a filter first', async () => {
-    api.ApproveAITagCandidates.mockResolvedValue({
-      requested: 2, succeeded: 1, failed: 0, superseded: 1,
-      results: [
-        { id: 5, ok: true, item: { id: 5, video_id: 10, matched_tag_id: 20 } },
-        { id: 2, superseded: true, message: '已手动添加该标签' },
-      ],
-    });
+  it('keeps a loaded-only entry and applies compact outcomes locally', async () => {
+    mockBatch([{ id: 5, state: 'approved', media_id: 10, tag_id: 20 }, { id: 2, state: 'skipped', code: 'not_pending' }]);
     const wrapper = await mountWithPool();
-    const button = wrapper.get('[data-test="ai-approve-filtered"]');
-    expect(button.attributes('disabled')).toBeDefined();
-    expect(button.text()).toContain('（0）');
-
-    await wrapper.get('[data-test="ai-review-filter-tag"]').setValue('20');
-    expect(wrapper.get('[data-test="ai-approve-filtered"]').text()).toContain('（2）');
-    await wrapper.get('[data-test="ai-approve-filtered"]').trigger('click');
-    await flushPromises();
-
-    expect(api.ApproveAITagCandidates).toHaveBeenCalledWith([5, 2]);
-    expect(api.ApproveAITagCandidatesByFilter).not.toHaveBeenCalled();
-    expect(wrapper.vm.candidates.map(candidate => candidate.id)).toEqual([4, 3]);
-    // superseded 不是失败，原因要写出来。
-    const notice = wrapper.get('[data-test="ai-review-notice"]').text();
-    expect(notice).toContain('1 条已失效（已手动添加该标签 1 条）');
-    expect(notice).not.toContain('失败');
+    expect(wrapper.get('[data-test="ai-approve-filtered"]').text()).toContain('批准已加载结果（3）');
+    api.SearchAITagCandidatePage.mockResolvedValueOnce(candidatePage(wrapper.vm.candidates.filter(item => item.matched_tag_id === 20)));
+    await wrapper.get('[data-test="ai-review-filter-tag"]').setValue('20'); await wrapper.vm.loadCandidates({ queryOnly: true }); await flushPromises();
+    await wrapper.get('[data-test="ai-approve-filtered"]').trigger('click'); await flushPromises();
+    expect(api.PreviewAIReviewApproval).toHaveBeenCalledWith('video', expect.objectContaining({ scope: 'loaded', ids: [5, 2], filter: expect.objectContaining({ tag_id: 20 }) }));
+    expect(wrapper.vm.candidates).toEqual([]);
+    expect(wrapper.get('[data-test="review-batch-summary"]').text()).toContain('跳过 1');
   });
 
-  it('META-11 previews the count before approving everything under a tag', async () => {
-    api.CountAITagCandidatesByFilter.mockResolvedValue(7);
-    api.ApproveAITagCandidatesByFilter.mockResolvedValue({
-      requested: 7, succeeded: 7, failed: 0, superseded: 0,
-      results: [{ id: 5, ok: true, item: { id: 5, video_id: 10, matched_tag_id: 20 } }],
-    });
+  it('previews the complete combined filter and confirms its count', async () => {
+    mockBatch([{ id: 5, state: 'approved', media_id: 10, tag_id: 20 }], 7);
     const wrapper = await mountWithPool();
-    expect(wrapper.get('[data-test="ai-approve-by-tag"]').attributes('disabled')).toBeDefined();
-
+    expect(wrapper.get('[data-test="ai-approve-by-tag"]').text()).toContain('批准全部筛选结果');
     await wrapper.get('[data-test="ai-review-filter-tag"]').setValue('20');
     await wrapper.get('[data-test="ai-review-filter-confidence"]').setValue('high');
-    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click');
-    await flushPromises();
-
-    expect(api.CountAITagCandidatesByFilter).toHaveBeenCalledWith({ tag_id: 20, confidence: 'high' });
-    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('为 7 个视频批准') }));
-    expect(api.ApproveAITagCandidatesByFilter).toHaveBeenCalledWith({ tag_id: 20, confidence: 'high' });
+    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click'); await flushPromises();
+    expect(api.PreviewAIReviewApproval).toHaveBeenCalledWith('video', expect.objectContaining({ scope: 'filtered', ids: [], filter: expect.objectContaining({ tag_id: 20, confidence: 'high' }) }));
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ message: expect.stringContaining('可批准 7 条') }));
+    expect(api.StartAIReviewApproval).toHaveBeenCalledWith('video', 'frozen');
     expect(wrapper.vm.candidates.map(candidate => candidate.id)).not.toContain(5);
   });
 
-  it('META-11 does not approve by tag when the preview finds nothing or is cancelled', async () => {
+  it('does not start an empty or cancelled full-filter preview', async () => {
     const wrapper = await mountWithPool();
-    await wrapper.get('[data-test="ai-review-filter-tag"]').setValue('21');
-
-    api.CountAITagCandidatesByFilter.mockResolvedValueOnce(0);
-    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click');
-    await flushPromises();
+    api.PreviewAIReviewApproval.mockResolvedValueOnce({ matched: 0, eligible: 0, token: '' });
+    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click'); await flushPromises();
     expect(feedback.confirmAction).not.toHaveBeenCalled();
-    expect(wrapper.get('[data-test="ai-review-notice"]').text()).toContain('没有可批准');
-
-    api.CountAITagCandidatesByFilter.mockResolvedValueOnce(3);
+    expect(wrapper.get('[data-test="review-batch-notice"]').text()).toContain('没有可批准');
+    api.PreviewAIReviewApproval.mockResolvedValueOnce({ matched: 3, eligible: 3, token: 'next', excluded: 0, media_count: 3, link_count: 3 });
     feedback.confirmAction.mockResolvedValueOnce(false);
-    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click');
-    await flushPromises();
-    expect(api.ApproveAITagCandidatesByFilter).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="ai-approve-by-tag"]').trigger('click'); await flushPromises();
+    expect(api.StartAIReviewApproval).not.toHaveBeenCalled();
+    expect(api.CancelAIReviewApproval).toHaveBeenCalledWith('video', 'next');
   });
+
 });
 
 // META-06：手动加标签后按 (video_id, tag_id) 局部移除候选，同视频其他标签的候选保留。

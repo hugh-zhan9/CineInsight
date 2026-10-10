@@ -125,7 +125,7 @@ type MovieChartService struct {
 	//
 	// P-004 把它写成包级变量，只是因为字段得声明在本文件而那个切片不该改这里；
 	// 应用只构造一个 MovieChartService，两种写法语义等价，P-005 原样搬成了字段。
-	markMu sync.Mutex
+	markMu contextMutex
 
 	// linkedWatch 是榜单侧改已看后回写关联视频的实现（P-020 的 VideoService），由 App
 	// 注入，见 SetLinkedVideoWatchSetter。受 mu 保护；nil 表示不回写。

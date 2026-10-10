@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -46,8 +47,13 @@ type ScanDirectoryValidation struct {
 
 // GetAllDirectories 获取所有扫描目录
 func (s *DirectoryService) GetAllDirectories() ([]models.ScanDirectory, error) {
+	return s.GetAllDirectoriesContext(context.Background())
+}
+
+// GetAllDirectoriesContext uses the same query with a caller-owned deadline.
+func (s *DirectoryService) GetAllDirectoriesContext(ctx context.Context) ([]models.ScanDirectory, error) {
 	var dirs []models.ScanDirectory
-	err := database.DB.Order("created_at desc").Find(&dirs).Error
+	err := database.DB.WithContext(ctx).Order("created_at desc").Find(&dirs).Error
 	return dirs, err
 }
 

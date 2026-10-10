@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"log"
@@ -12,10 +13,16 @@ import (
 	"time"
 
 	"video-master/services"
+
+	"gorm.io/gorm"
 )
 
 func newAssetHandler(app *App) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/preview/queue/") {
+			app.serveQueueMedia(w, r)
+			return
+		}
 		if strings.HasPrefix(r.URL.Path, "/preview/person-avatar/") {
 			if r.Method != http.MethodGet && r.Method != http.MethodHead {
 				w.Header().Set("Allow", "GET, HEAD")
@@ -90,6 +97,10 @@ func newAssetHandler(app *App) http.Handler {
 			}
 			if strings.HasPrefix(r.URL.Path, "/preview/seek-sprite/") {
 				app.serveSeekSprite(w, r)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/preview/frame/") {
+				app.serveFrameAt(w, r)
 				return
 			}
 		}
@@ -318,6 +329,45 @@ func (a *App) serveSeekSprite(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/jpeg")
 	w.Header().Set("Cache-Control", "private, max-age=300")
 	http.ServeContent(w, r, filepath.Base(media.Path), media.ModTime, file)
+}
+
+// serveFrameAt 返回某视频某毫秒的单帧 JPEG（/preview/frame/{id}?ms=&w=），
+// 供场景检索命中与视频工作台切点预览。只接受纯数字 id 与非负整数毫秒。
+func (a *App) serveFrameAt(w http.ResponseWriter, r *http.Request) {
+	videoID, err := assetVideoIDFromPath(r.URL.Path, "/preview/frame/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ms, err := strconv.ParseInt(r.URL.Query().Get("ms"), 10, 64)
+	if err != nil || ms < 0 {
+		http.Error(w, "invalid ms", http.StatusBadRequest)
+		return
+	}
+	width := 0
+	if raw := r.URL.Query().Get("w"); raw != "" {
+		parsed, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || parsed < 0 {
+			http.Error(w, "invalid width", http.StatusBadRequest)
+			return
+		}
+		width = parsed
+	}
+	data, modTime, err := a.thumbnailService.RenderFrameAt(r.Context(), videoID, ms, width)
+	if err != nil {
+		switch {
+		case errors.Is(err, services.ErrFrameAtOutOfRange):
+			http.Error(w, "frame out of range", http.StatusNotFound)
+		case errors.Is(err, os.ErrNotExist), errors.Is(err, gorm.ErrRecordNotFound):
+			http.Error(w, "frame not found", http.StatusNotFound)
+		default:
+			http.Error(w, "frame unavailable", http.StatusInternalServerError)
+		}
+		return
+	}
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, "frame.jpg", modTime, bytes.NewReader(data))
 }
 
 // serveFaceCrop 是人脸裁剪图的受控路由（D-020）。

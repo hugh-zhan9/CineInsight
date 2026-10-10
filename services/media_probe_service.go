@@ -364,51 +364,72 @@ func (s *MediaProbeService) Refresh(ctx context.Context, videoID uint) error {
 		return err
 	}
 	defer release()
+	return database.WithOperationContext(ctx, func(db *gorm.DB) error {
+		// Preserve the existing cancelled-at-start attempt record. Its bounded
+		// cleanup context is for this known cancellation fact, never a probe retry.
+		if cancelled := ctx.Err(); cancelled != nil {
+			finalCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+			defer cancel()
+			finalDB := db.WithContext(finalCtx)
+			var video models.Video
+			if err := finalDB.First(&video, videoID).Error; err != nil {
+				return errors.Join(cancelled, err)
+			}
+			if err := s.recordFailureFrom(finalDB, videoID, nil, s.now(), cancelled); err != nil {
+				return errors.Join(cancelled, fmt.Errorf("persist media probe failure state: %w", err))
+			}
+			return cancelled
+		}
+		return s.refreshFrom(ctx, db, videoID)
+	})
+}
+
+func (s *MediaProbeService) refreshFrom(ctx context.Context, db *gorm.DB, videoID uint) error {
 	var video models.Video
-	if err := database.DB.First(&video, videoID).Error; err != nil {
+	if err := db.First(&video, videoID).Error; err != nil {
 		return fmt.Errorf("load video %d: %w", videoID, err)
 	}
 	attemptedAt := s.now()
 	before, err := mediaProbeStat(video.Path)
 	if err != nil {
-		return s.recordFailureOrJoin(video.ID, nil, attemptedAt, err)
+		return s.recordFailureOrJoinFrom(db, video.ID, nil, attemptedAt, err)
 	}
 
 	output, stderr, err := s.runner(ctx, video.Path)
 	if err != nil {
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return s.recordFailureOrJoin(video.ID, &before, attemptedAt, ctxErr)
+			return s.recordFailureOrJoinFrom(db, video.ID, &before, attemptedAt, ctxErr)
 		}
 		probeErr := fmt.Errorf("ffprobe failed: %w", err)
 		if message := strings.TrimSpace(stderr); message != "" {
 			probeErr = fmt.Errorf("%w: %s", probeErr, truncateMediaProbeError(message))
 		}
-		return s.recordFailureOrJoin(video.ID, &before, attemptedAt, probeErr)
+		return s.recordFailureOrJoinFrom(db, video.ID, &before, attemptedAt, probeErr)
 	}
 	parsed, err := parseMediaProbeOutput(output)
 	if err != nil {
-		return s.recordFailureOrJoin(video.ID, &before, attemptedAt, err)
+		return s.recordFailureOrJoinFrom(db, video.ID, &before, attemptedAt, err)
 	}
 	after, err := mediaProbeStat(video.Path)
 	if err != nil {
-		return s.recordFailureOrJoin(video.ID, &before, attemptedAt, err)
+		return s.recordFailureOrJoinFrom(db, video.ID, &before, attemptedAt, err)
 	}
 	if !before.matches(after) {
-		return s.recordFailureOrJoin(video.ID, &after, attemptedAt, ErrMediaProbeSourceChanged)
+		return s.recordFailureOrJoinFrom(db, video.ID, &after, attemptedAt, ErrMediaProbeSourceChanged)
 	}
 
-	if err := s.persistSuccess(video, before, attemptedAt, parsed); err != nil {
+	if err := s.persistSuccessFrom(db, video, before, attemptedAt, parsed); err != nil {
 		resultErr := fmt.Errorf("persist media probe snapshot: %w", err)
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return resultErr
 		}
-		return s.recordFailureOrJoin(video.ID, &before, attemptedAt, resultErr)
+		return s.recordFailureOrJoinFrom(db, video.ID, &before, attemptedAt, resultErr)
 	}
 	return nil
 }
 
-func (s *MediaProbeService) persistSuccess(video models.Video, fingerprint mediaProbeFingerprint, attemptedAt time.Time, parsed parsedMediaProbe) error {
-	return database.Transaction(func(tx *gorm.DB) error {
+func (s *MediaProbeService) persistSuccessFrom(db *gorm.DB, video models.Video, fingerprint mediaProbeFingerprint, attemptedAt time.Time, parsed parsedMediaProbe) error {
+	return db.Transaction(func(tx *gorm.DB) error {
 		var current models.Video
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&current, video.ID).Error; err != nil {
 			return err
@@ -473,14 +494,30 @@ func (s *MediaProbeService) persistSuccess(video models.Video, fingerprint media
 	})
 }
 
+// Technical backfill can record a failed attempt before launching ffprobe.
+// Keep that caller on the same bounded failure-state writer.
 func (s *MediaProbeService) recordFailureOrJoin(videoID uint, fingerprint *mediaProbeFingerprint, attemptedAt time.Time, probeErr error) error {
-	if err := s.recordFailure(videoID, fingerprint, attemptedAt, probeErr); err != nil {
+	var result error
+	err := database.WithOperationContext(context.Background(), func(db *gorm.DB) error {
+		result = s.recordFailureOrJoinFrom(db, videoID, fingerprint, attemptedAt, probeErr)
+		return nil
+	})
+	if err != nil {
+		return errors.Join(probeErr, fmt.Errorf("persist media probe failure state: %w", err))
+	}
+	return result
+}
+
+func (s *MediaProbeService) recordFailureOrJoinFrom(db *gorm.DB, videoID uint, fingerprint *mediaProbeFingerprint, attemptedAt time.Time, probeErr error) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(db.Statement.Context), 5*time.Second)
+	defer cancel()
+	if err := s.recordFailureFrom(db.WithContext(ctx), videoID, fingerprint, attemptedAt, probeErr); err != nil {
 		return errors.Join(probeErr, fmt.Errorf("persist media probe failure state: %w", err))
 	}
 	return probeErr
 }
 
-func (s *MediaProbeService) recordFailure(videoID uint, fingerprint *mediaProbeFingerprint, attemptedAt time.Time, probeErr error) error {
+func (s *MediaProbeService) recordFailureFrom(db *gorm.DB, videoID uint, fingerprint *mediaProbeFingerprint, attemptedAt time.Time, probeErr error) error {
 	metadata := models.VideoTechnicalMetadata{
 		VideoID:       videoID,
 		LastAttemptAt: &attemptedAt,
@@ -493,7 +530,7 @@ func (s *MediaProbeService) recordFailure(videoID uint, fingerprint *mediaProbeF
 	updates := []string{
 		"last_attempt_source_size", "last_attempt_source_mod_time_ns", "last_attempt_at", "last_error", "updated_at",
 	}
-	return database.DB.Clauses(clause.OnConflict{
+	return db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "video_id"}},
 		DoUpdates: clause.AssignmentColumns(updates),
 	}).Create(&metadata).Error

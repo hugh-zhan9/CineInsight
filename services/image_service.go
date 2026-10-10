@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -66,8 +67,13 @@ func (r *ImageScanResult) recordError(operation, directory, path string, err err
 
 // GetAllImageDirectories 获取所有图片扫描目录
 func (s *ImageService) GetAllImageDirectories() ([]models.ImageDirectory, error) {
+	return s.GetAllImageDirectoriesContext(context.Background())
+}
+
+// GetAllImageDirectoriesContext uses the existing directory query with a deadline.
+func (s *ImageService) GetAllImageDirectoriesContext(ctx context.Context) ([]models.ImageDirectory, error) {
 	var dirs []models.ImageDirectory
-	err := database.DB.Order("created_at desc").Find(&dirs).Error
+	err := database.DB.WithContext(ctx).Order("created_at desc").Find(&dirs).Error
 	return dirs, err
 }
 

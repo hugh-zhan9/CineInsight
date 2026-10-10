@@ -21,9 +21,9 @@ function backendTaskKeyOrder() {
 }
 
 describe('后台任务标签与后端登记表对齐（APP-03）', () => {
-  it('APP-03 登记表的 22 个 key 在前端都有中文标签，顺序与任务中心面板一致', () => {
+  it('APP-03 登记表的 26 个 key 在前端都有中文标签，顺序与任务中心面板一致', () => {
     const keys = backendTaskKeyOrder();
-    expect(keys).toHaveLength(22);
+    expect(keys).toHaveLength(26);
     expect(Object.keys(BACKGROUND_TASK_LABELS)).toEqual(keys);
     for (const key of keys) {
       const label = BACKGROUND_TASK_LABELS[key];
@@ -36,6 +36,14 @@ describe('后台任务标签与后端登记表对齐（APP-03）', () => {
     expect(backgroundTaskLabel('image_cleanup')).toBe('图片清理分析');
     expect(backgroundTaskLabel('watchlist_enrich')).toBe('片单补全');
     expect(backgroundTaskLabel('movie_chart')).toBe('榜单抓取');
+  });
+
+  it('P-007 场景画面索引有中文标签', () => {
+    expect(backgroundTaskLabel('scene_index')).toBe('场景画面索引');
+  });
+
+  it('P-008 视频工作台有中文标签（退出确认与任务中心共用）', () => {
+    expect(backgroundTaskLabel('video_edit')).toBe('视频工作台');
   });
 
   it('APP-03 不认识的 key 显示中文兜底说法，不把原始 key 露给用户', () => {

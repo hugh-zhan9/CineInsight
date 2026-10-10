@@ -5,6 +5,7 @@ import "video-master/models"
 type PlaybackAttemptResult struct {
 	Video             *models.Video `json:"video,omitempty"`
 	DispatchSucceeded bool          `json:"dispatch_succeeded"`
+	StatsWarning      string        `json:"stats_warning,omitempty"`
 	UserMessage       string        `json:"user_message,omitempty"`
 	ReasonCode        string        `json:"reason_code,omitempty"`
 	// Reason 是失败原因的分类：offline_root / missing_file / error（D-PC11）。

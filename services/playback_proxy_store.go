@@ -155,8 +155,12 @@ func loadProxyRow(videoID uint) (*models.VideoPlaybackProxy, error) {
 	if database.DB == nil {
 		return nil, nil
 	}
+	return loadProxyRowFrom(database.DB, videoID)
+}
+
+func loadProxyRowFrom(db *gorm.DB, videoID uint) (*models.VideoPlaybackProxy, error) {
 	var row models.VideoPlaybackProxy
-	err := database.DB.Where("video_id = ?", videoID).First(&row).Error
+	err := db.Where("video_id = ?", videoID).First(&row).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
@@ -196,36 +200,56 @@ func playbackProxyViewOf(row models.VideoPlaybackProxy) PlaybackProxyView {
 //
 // touch 为 true 时顺带刷新 last_used_at（每视频 60 秒节流）。
 func (s *PlaybackProxyService) resolveValidProxy(videoID uint, source playbackProxyFingerprint, touch bool) *resolvedPlaybackProxy {
-	if !s.dirAvailable() {
+	if database.DB == nil {
 		return nil
 	}
-	row, err := loadProxyRow(videoID)
+	proxy, _ := s.resolveValidProxyFrom(database.DB, videoID, source, touch)
+	return proxy
+}
+
+// The strict consumer receives SQL errors, including failed touches. Legacy
+// callers retain their established best-effort behavior through the wrapper.
+func (s *PlaybackProxyService) resolveValidProxyFrom(db *gorm.DB, videoID uint, source playbackProxyFingerprint, touch bool) (*resolvedPlaybackProxy, error) {
+	if !s.dirAvailable() {
+		return nil, nil
+	}
+	if err := db.Statement.Context.Err(); err != nil {
+		return nil, err
+	}
+	row, err := loadProxyRowFrom(db, videoID)
 	if err != nil || row == nil {
-		return nil
+		return nil, err
 	}
 	if row.Status != models.PlaybackProxyStatusReady {
-		return nil
+		return nil, nil
 	}
 	stored := playbackProxyFingerprint{size: row.SourceSize, modTimeNS: row.SourceModTimeNS}
 	if !stored.matches(source) {
-		s.discardProxy(*row, "source_changed")
-		return nil
+		return nil, s.discardProxyFrom(db, *row, "source_changed")
 	}
 	path := s.proxyPathForRow(*row)
 	info, statErr := os.Stat(path)
 	if statErr != nil || info.IsDir() {
-		// 文件被外部删了（回滚旧版本、手工清理），表行是孤儿，一起收掉。
-		s.discardProxy(*row, "file_missing")
-		return nil
+		return nil, s.discardProxyFrom(db, *row, "file_missing")
 	}
+	proxy := &resolvedPlaybackProxy{Path: path, Strategy: row.Strategy, OutputSize: info.Size()}
 	if touch {
-		s.touchProxy(videoID, row.LastUsedAt)
+		return proxy, s.touchProxyFrom(db, videoID, row.LastUsedAt)
 	}
-	return &resolvedPlaybackProxy{Path: path, Strategy: row.Strategy, OutputSize: info.Size()}
+	return proxy, nil
 }
 
 // discardProxy 删掉一份失效代理的文件与表行。永不触碰源文件。
 func (s *PlaybackProxyService) discardProxy(row models.VideoPlaybackProxy, reason string) {
+	_ = s.discardProxyFrom(database.DB, row, reason)
+}
+
+func (s *PlaybackProxyService) discardProxyFrom(db *gorm.DB, row models.VideoPlaybackProxy, reason string) error {
+	if db != nil {
+		if err := db.Statement.Context.Err(); err != nil {
+			return err
+		}
+	}
 	path := s.proxyPathForRow(row)
 	if path == "" {
 		// 目录无效：只能收表行，不猜路径。
@@ -233,40 +257,53 @@ func (s *PlaybackProxyService) discardProxy(row models.VideoPlaybackProxy, reaso
 	} else if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		log.Printf("删除失效播放代理文件失败 video_id=%d reason=%s err=%v", row.VideoID, reason, err)
 	}
-	if database.DB != nil {
-		if err := database.DB.Where("video_id = ?", row.VideoID).Delete(&models.VideoPlaybackProxy{}).Error; err != nil {
+	if db != nil {
+		if err := db.Where("video_id = ?", row.VideoID).Delete(&models.VideoPlaybackProxy{}).Error; err != nil {
 			log.Printf("删除失效播放代理记录失败 video_id=%d reason=%s err=%v", row.VideoID, reason, err)
-			return
+			return err
 		}
 	}
 	s.forgetTouch(row.VideoID)
 	log.Printf("播放代理已失效并删除 video_id=%d reason=%s", row.VideoID, reason)
+	return nil
 }
 
 // touchProxy 刷新 last_used_at。storedLastUsedAt 是表里当前的值：
 // 它一旦老过保护窗口，就绕过节流强制刷一次——否则「持续在播但每次都被节流」的
 // 代理会在表里越来越旧，最后被 LRU 当成最久没用过的删掉。
 func (s *PlaybackProxyService) touchProxy(videoID uint, storedLastUsedAt time.Time) {
+	_ = s.touchProxyFrom(database.DB, videoID, storedLastUsedAt)
+}
+
+func (s *PlaybackProxyService) touchProxyFrom(db *gorm.DB, videoID uint, storedLastUsedAt time.Time) error {
+	if db != nil {
+		if err := db.Statement.Context.Err(); err != nil {
+			return err
+		}
+	}
 	now := s.now()
 	stale := now.Sub(storedLastUsedAt) >= playbackProxyEvictionGrace
 	s.touchMu.Lock()
 	if last, ok := s.touchedAt[videoID]; ok && !stale && now.Sub(last) < playbackProxyLastUsedThrottle {
 		s.touchMu.Unlock()
-		return
+		return nil
 	}
 	if s.touchedAt == nil {
 		s.touchedAt = make(map[uint]time.Time)
 	}
 	s.touchedAt[videoID] = now
 	s.touchMu.Unlock()
-	if database.DB == nil {
-		return
+	if db == nil {
+		return nil
 	}
-	if err := database.DB.Model(&models.VideoPlaybackProxy{}).
+	if err := db.Model(&models.VideoPlaybackProxy{}).
 		Where("video_id = ?", videoID).
 		Update("last_used_at", now).Error; err != nil {
 		log.Printf("刷新播放代理使用时间失败 video_id=%d err=%v", videoID, err)
+		s.forgetTouch(videoID)
+		return err
 	}
+	return nil
 }
 
 func (s *PlaybackProxyService) forgetTouch(videoID uint) {

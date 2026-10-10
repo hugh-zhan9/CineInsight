@@ -40,6 +40,8 @@
 
     <FaceSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
 
+    <SceneSection :form="settingsForm" :ensure-saved="ensureSavedFor" />
+
     <MobileSection :form="settingsForm" />
 
     <JellyfinSection />
@@ -104,6 +106,7 @@ export const SETTINGS_SECTIONS = [
   { key: 'playback-proxy', label: '播放兼容缓存', saveMode: 'save' },
   { key: 'enhance', label: '视频超分', saveMode: 'instant' },
   { key: 'face', label: '人脸识别', saveMode: 'save' },
+  { key: 'scenes', label: '场景检索', saveMode: 'save' },
   { key: 'mobile', label: '手机端浏览', saveMode: 'mixed' },
   { key: 'jellyfin', label: 'Jellyfin 客户端连接', saveMode: 'instant' },
   { key: 'browser-bridge', label: '浏览器插件', saveMode: 'save' },
@@ -137,6 +140,13 @@ function positiveIntOr(value, fallback) {
 }
 
 // 设置读回来之后先落成「界面上显示的就是会生效的值」。
+// 场景检索采样间隔（D-MW-SCENES）：2–30 秒，读不出数值或 <=0 时取默认 5，与后端归一化一致。
+function normalizeSceneIntervalSeconds(value) {
+  const seconds = Math.round(Number(value));
+  if (!Number.isFinite(seconds) || seconds <= 0) return 5;
+  return Math.min(30, Math.max(2, seconds));
+}
+
 export function normalizeSettingsForm(settings) {
   const form = { ...(settings || {}) };
   if (!form.video_extensions || String(form.video_extensions).trim() === '') {
@@ -175,6 +185,10 @@ export function normalizeSettingsForm(settings) {
   // 人脸识别（D-016、D-022）：两项默认都是零值，老库读回 undefined 也要落成确定值。
   form.auto_face_analysis = Boolean(form.auto_face_analysis);
   form.face_model_mirror_url = form.face_model_mirror_url || '';
+  // 场景检索（D-MW-SCENES）：提供方只认 external，其余按本地；间隔 2–30 秒，读不出时取默认 5。
+  form.scene_visual_provider = form.scene_visual_provider === 'external' ? 'external' : 'local';
+  form.scene_visual_interval_seconds = normalizeSceneIntervalSeconds(form.scene_visual_interval_seconds);
+  form.scene_model_mirror_url = form.scene_model_mirror_url || '';
   // 清理阈值（D-PC36）：<=0 视为默认值，界面显示生效值。
   form.cleanup_short_seconds = positiveIntOr(form.cleanup_short_seconds, DEFAULT_CLEANUP_SHORT_SECONDS);
   form.cleanup_low_width = positiveIntOr(form.cleanup_low_width, DEFAULT_CLEANUP_LOW_WIDTH);
@@ -215,6 +229,9 @@ export function buildSettingsPayload(form) {
     proxy_cache_limit_bytes: normalizeProxyCacheLimitBytes(form.proxy_cache_limit_bytes),
     auto_face_analysis: form.auto_face_analysis || false,
     face_model_mirror_url: form.face_model_mirror_url || '',
+    scene_visual_provider: form.scene_visual_provider === 'external' ? 'external' : 'local',
+    scene_visual_interval_seconds: normalizeSceneIntervalSeconds(form.scene_visual_interval_seconds),
+    scene_model_mirror_url: form.scene_model_mirror_url || '',
     // 清理中心阈值（D-PC36，P-001 评审 Minor 7）：后端对 <=0 取默认值。
     cleanup_short_seconds: positiveIntOr(form.cleanup_short_seconds, DEFAULT_CLEANUP_SHORT_SECONDS),
     cleanup_low_width: positiveIntOr(form.cleanup_low_width, DEFAULT_CLEANUP_LOW_WIDTH),
@@ -280,6 +297,7 @@ import BasicSection from './settings/BasicSection.vue';
 import DatabaseSection from './settings/DatabaseSection.vue';
 import EnhanceSection from './settings/EnhanceSection.vue';
 import FaceSection from './settings/FaceSection.vue';
+import SceneSection from './settings/SceneSection.vue';
 import IdleSchedulingSection from './settings/IdleSchedulingSection.vue';
 import IINASyncSection from './settings/IINASyncSection.vue';
 import BrowserBridgeSection from './settings/BrowserBridgeSection.vue';
@@ -293,7 +311,7 @@ import SubtitleSection from './settings/SubtitleSection.vue';
 
 export default {
   name: 'SettingsPage',
-  components: { AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
+  components: { AITagSection, AutomationSection, BasicSection, BrowserBridgeSection, DatabaseSection, EnhanceSection, FaceSection, IdleSchedulingSection, SceneSection, IINASyncSection, JellyfinSection, MobileSection, OnlineSourceSection, ProxySection, RandomAndFormatsSection, ScanDirectoriesSection, SubtitleSection },
   props: {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] }

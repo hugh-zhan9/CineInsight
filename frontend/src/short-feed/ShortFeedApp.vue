@@ -193,7 +193,7 @@
 <script>
 import { deleteItem, getFavorites, getFeedTags, createFeedTag, getNextItem, getScopes, itemKey, recordPlay, restoreItem, setAuthRequiredHandler, setFavorited, setItemTag, setLiked, setRating, setWatched } from './api.js';
 import { feedErrorText, unplayableHintText } from './errors.js';
-import { createPlaybackAccumulator, viewThreshold } from '../utils/viewThreshold.js';
+import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../utils/viewThreshold.js';
 
 // 资源类型筛选与播放范围正交，记在本机：手机上选过"仅图片"，下次打开还是。
 const MEDIA_KIND_STORAGE_KEY = 'short-feed-media-kind';
@@ -454,6 +454,7 @@ export default {
       this.statusText = unsupportedStatusText(video);
       // 每次划到一条都是一次新的观看：累计播放从零算起，越过阈值才记（D-PC43）。
       this.recordedVideoID = null;
+      this._viewSessionID = newViewSessionID();
       this._viewAccumulator = createPlaybackAccumulator();
       this.isPlaying = false;
       this.videoCurrentTime = 0;
@@ -691,7 +692,7 @@ export default {
       if (!this.currentVideo || this.recordedVideoID === key) return;
       this.recordedVideoID = key;
       try {
-        await recordPlay(this.currentVideo);
+        await recordPlay(this.currentVideo, this._viewSessionID);
       } catch (err) {}
     },
     onMediaLoaded() {

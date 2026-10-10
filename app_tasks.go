@@ -238,6 +238,8 @@ var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
 	services.BackgroundTaskImageSemantic:        (*App).taskCenterImageSemantic,
 	services.BackgroundTaskAITagging:            (*App).taskCenterAITagging,
 	services.BackgroundTaskImageAITagging:       (*App).taskCenterImageAITagging,
+	services.BackgroundTaskAIReview:             (*App).taskCenterAIReview,
+	services.BackgroundTaskImageAIReview:        (*App).taskCenterImageAIReview,
 	services.BackgroundTaskEXIF:                 (*App).taskCenterEXIF,
 	services.BackgroundTaskImagePerceptualHash:  (*App).taskCenterImagePerceptualHash,
 	services.BackgroundTaskCleanup:              (*App).taskCenterCleanup,
@@ -248,6 +250,8 @@ var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
 	services.BackgroundTaskBrowserDownload:      (*App).taskCenterBrowserDownload,
 	services.BackgroundTaskWatchlistEnrich:      (*App).taskCenterWatchlistEnrich,
 	services.BackgroundTaskMovieChart:           (*App).taskCenterMovieChart,
+	services.BackgroundTaskSceneIndex:           (*App).taskCenterSceneIndex,
+	services.BackgroundTaskVideoEdit:            (*App).taskCenterVideoEdit,
 }
 
 // runningProgress 给运行中的批量任务报进度；总数还不知道（准备阶段）时为 nil。
@@ -409,6 +413,26 @@ func (a *App) taskCenterFrameHash(src *taskCenterSources) taskCenterKeyState {
 	return taskCenterKeyState{
 		running:   running,
 		canStart:  true,
+		canCancel: running,
+		progress:  runningProgress(running, status.Processed, status.Total),
+		lastRun: finishedBatchRun(!running && (status.Completed || status.Cancelled),
+			status.UpdatedAt, status.Succeeded, status.Failed, failures),
+	}
+}
+
+// taskCenterSceneIndex：画面索引的启动要选范围（全部 / 当前筛选），不给零参启动；在跑时可取消。
+func (a *App) taskCenterSceneIndex(src *taskCenterSources) taskCenterKeyState {
+	if a.sceneIndex == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.sceneIndex.Status()
+	running := status.Running || status.Preparing
+	failures := make([]string, 0, len(status.Failures))
+	for _, failure := range status.Failures {
+		failures = append(failures, taskFailure(failure.Name, failure.Error))
+	}
+	return taskCenterKeyState{
+		running:   running,
 		canCancel: running,
 		progress:  runningProgress(running, status.Processed, status.Total),
 		lastRun: finishedBatchRun(!running && (status.Completed || status.Cancelled),
@@ -767,6 +791,67 @@ func (a *App) taskCenterCleanupConsolidation(src *taskCenterSources) taskCenterK
 			}
 			state.lastRun = finishedBatchRun(true, task.FinishedAt, task.Completed, failed, failures)
 		}
+	}
+	return state
+}
+
+func (a *App) taskCenterAIReview(_ *taskCenterSources) taskCenterKeyState {
+	return a.taskCenterReviewApproval("video")
+}
+func (a *App) taskCenterImageAIReview(_ *taskCenterSources) taskCenterKeyState {
+	return a.taskCenterReviewApproval("image")
+}
+func (a *App) taskCenterReviewApproval(kind string) taskCenterKeyState {
+	workflow, err := a.aiReviewWorkflow(kind)
+	if err != nil {
+		return taskCenterKeyState{}
+	}
+	state, err := workflow.State("", 0, 0)
+	if err != nil {
+		return taskCenterKeyState{}
+	}
+	running := state.State == "running"
+	result := taskCenterKeyState{running: running, canCancel: running, progress: runningProgress(running, state.Processed, state.Total)}
+	if state.FinishedAt != nil {
+		result.lastRun = &TaskLastRun{FinishedAt: state.FinishedAt, Succeeded: state.Succeeded, Skipped: state.Skipped, Failed: state.Failed, Remaining: state.Remaining, Failures: []string{}}
+		if state.State == "failed" {
+			result.lastRun.Failures = []string{"批量批准中止；请返回审阅面板查看结果，未处理项需要重新预览。"}
+		}
+	}
+	return result
+}
+
+// taskCenterVideoEdit：视频工作台按项目汇总（运行中项目的已完成/总项数为进度，最近结束的项目为上一轮）。
+// 取消与「继续」按项目给出（Recent 里的 video_edit 条目），key 这一层没有零参动作。
+func (a *App) taskCenterVideoEdit(src *taskCenterSources) taskCenterKeyState {
+	var state taskCenterKeyState
+	for _, project := range src.videoEdits {
+		switch project.Status {
+		case "queued", "running":
+			if project.Status == "running" {
+				state.running = true
+			}
+			if state.progress == nil && project.ItemCount > 0 {
+				state.progress = &TaskProgress{Done: project.CompletedCount, Total: project.ItemCount}
+			}
+			continue
+		case "completed", "partial", "failed", "cancelled", "interrupted":
+		default:
+			continue
+		}
+		if state.lastRun != nil {
+			continue
+		}
+		run := &TaskLastRun{FinishedAt: project.FinishedAt, Failures: []string{}, Succeeded: project.CompletedCount}
+		if failed := project.ItemCount - project.CompletedCount; failed > 0 && project.Status != "cancelled" {
+			run.Failed = failed
+			reason := project.ErrorMessage
+			if reason == "" {
+				reason = project.ErrorCode
+			}
+			run.Failures = boundTaskFailures([]string{taskFailure(project.Title, reason)})
+		}
+		state.lastRun = run
 	}
 	return state
 }

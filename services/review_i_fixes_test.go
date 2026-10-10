@@ -1180,7 +1180,7 @@ func TestAPP02NoDirectPathReadLockOutsideHelperFixIM1(t *testing.T) {
 				continue
 			}
 			// 修复 L m3：读锁经 acquireLibraryPath 以方法值（libraryPathMutationMu.RLock，不是调用）传入，
-			// 所以查所有选择子表达式，调用与方法值都算获取：只有 rLockLibraryPaths 可以引用 RLock / TryRLock。
+			// 所以查所有选择子表达式，调用与方法值都算获取：只有 rLockLibraryPathsContext 核心可以引用 RLock / TryRLock；旧无参数入口委托该核心。
 			ast.Inspect(fn.Body, func(node ast.Node) bool {
 				selector, ok := node.(*ast.SelectorExpr)
 				if !ok {
@@ -1192,8 +1192,8 @@ func TestAPP02NoDirectPathReadLockOutsideHelperFixIM1(t *testing.T) {
 				}
 				switch selector.Sel.Name {
 				case "RLock", "TryRLock":
-					if fn.Name.Name != "rLockLibraryPaths" {
-						t.Errorf("%s:%s 在 rLockLibraryPaths 之外获取路径读锁（libraryPathMutationMu.%s），应改用 rLockLibraryPaths（维护终态会永久阻塞）",
+					if fn.Name.Name != "rLockLibraryPathsContext" {
+						t.Errorf("%s:%s 在 rLockLibraryPathsContext 核心之外获取路径读锁（libraryPathMutationMu.%s），应改用 rLockLibraryPaths（维护终态会永久阻塞）",
 							name, fn.Name.Name, selector.Sel.Name)
 					}
 				}

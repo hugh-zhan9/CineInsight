@@ -217,11 +217,26 @@ func DropApplicationTables(db *gorm.DB) ([]string, error) {
 // GORM transaction. Statement callbacks alone cannot cover the gaps between
 // statements in a user-managed transaction.
 func Transaction(fn func(tx *gorm.DB) error) error {
+	return TransactionWithContext(context.Background(), fn)
+}
+
+// TransactionWithContext preserves the maintenance gate and passes cancellation
+// into BeginTx, including time spent waiting for a pooled connection.
+func TransactionWithContext(ctx context.Context, fn func(tx *gorm.DB) error) error {
+	return WithOperationContext(ctx, func(db *gorm.DB) error { return db.Transaction(fn) })
+}
+
+// WithOperationContext keeps one database handle valid across related reads or
+// a transaction. It does not open a SQL transaction or acquire a database lock.
+func WithOperationContext(ctx context.Context, fn func(db *gorm.DB) error) error {
 	if err := operationGate.enter(); err != nil {
 		return err
 	}
 	defer operationGate.leave()
-	return DB.Transaction(fn)
+	if DB == nil {
+		return gorm.ErrInvalidDB
+	}
+	return fn(DB.WithContext(ctx))
 }
 
 const maintenanceGateToken = "cineinsight:database-maintenance-gate"

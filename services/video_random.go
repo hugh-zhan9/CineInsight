@@ -1,9 +1,11 @@
 package services
 
 import (
+	"context"
 	cryptorand "crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"gorm.io/gorm"
 	"log"
 	"math"
 	"math/rand"
@@ -34,9 +36,9 @@ type videoScoreRow struct {
 	LastPlayedAt    *time.Time
 }
 
-func (s *VideoService) getRandomPlayConfig() (float64, int, error) {
+func (s *VideoService) getRandomPlayConfigFrom(db *gorm.DB) (float64, int, error) {
 	var settings models.Settings
-	if err := database.DB.First(&settings).Error; err != nil {
+	if err := db.First(&settings).Error; err != nil {
 		return 0, 0, fmt.Errorf("获取设置失败: %w", err)
 	}
 	playWeight := settings.PlayWeight
@@ -49,10 +51,16 @@ func (s *VideoService) getRandomPlayConfig() (float64, int, error) {
 // PlayRandomVideo 智能加权随机发起播放。全库随机没有「换一个」，启动成功即记账；
 // 开始前同样先提交上一条未决的筛选内随机，让它的计数进入这一轮的权重。
 func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
+	return withFormalPlayback(context.Background(), func(ctx context.Context, db *gorm.DB) (*PlaybackAttemptResult, error) {
+		return s.playRandomVideoFrom(db)
+	})
+}
+
+func (s *VideoService) playRandomVideoFrom(db *gorm.DB) (*PlaybackAttemptResult, error) {
 	randomCommits.flush()
 	// 获取播放权重配置
 	var settings models.Settings
-	if err := database.DB.First(&settings).Error; err != nil {
+	if err := db.First(&settings).Error; err != nil {
 		return nil, fmt.Errorf("获取设置失败: %w", err)
 	}
 	playWeight := settings.PlayWeight
@@ -63,7 +71,7 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 
 	// 仅查询计算权重所需的最少字段，避免全量加载
 	var rows []videoScoreRow
-	if err := database.DB.Model(&models.Video{}).
+	if err := db.Model(&models.Video{}).
 		Select("id, play_count, random_play_count, last_played_at").
 		Find(&rows).Error; err != nil {
 		return nil, err
@@ -77,7 +85,7 @@ func (s *VideoService) PlayRandomVideo() (*PlaybackAttemptResult, error) {
 		}, nil
 	}
 
-	return s.playRandomFromRows(rows, playWeight, halfLifeDays, time.Now(), "按全库均衡权重选择")
+	return s.playRandomFromRowsFrom(db, rows, playWeight, halfLifeDays, time.Now(), "按全库均衡权重选择")
 }
 
 // randomCandidatePool 是筛选内随机的候选集合，随机播放和随机取样共用同一份边界、模式和权重配置。
@@ -90,6 +98,10 @@ type randomCandidatePool struct {
 
 // collectRandomCandidates 按请求的筛选条件和随机模式组装候选行。
 func (s *VideoService) collectRandomCandidates(request RandomPlayRequest) (*randomCandidatePool, error) {
+	return s.collectRandomCandidatesFrom(database.DB, request)
+}
+
+func (s *VideoService) collectRandomCandidatesFrom(db *gorm.DB, request RandomPlayRequest) (*randomCandidatePool, error) {
 	mode := strings.TrimSpace(request.Mode)
 	if mode == "" {
 		mode = RandomPlayModeBalanced
@@ -102,11 +114,11 @@ func (s *VideoService) collectRandomCandidates(request RandomPlayRequest) (*rand
 			return nil, err
 		}
 	}
-	playWeight, halfLifeDays, err := s.getRandomPlayConfig()
+	playWeight, halfLifeDays, err := s.getRandomPlayConfigFrom(db)
 	if err != nil {
 		return nil, err
 	}
-	query := database.DB.Model(&models.Video{}).
+	query := db.Model(&models.Video{}).
 		Select("videos.id, videos.play_count, videos.random_play_count, videos.last_played_at").
 		Where("videos.is_stale = ?", false)
 	query, err = applyLibraryFilter(query, request.Filter, time.Now())
@@ -139,10 +151,16 @@ func (s *VideoService) collectRandomCandidates(request RandomPlayRequest) (*rand
 // 应用关闭时，才在同一个事务里写入 random_play_count、last_played_at 与 desktop_random 事件；
 // 30 秒内用返回的 reroll_token 调用 RerollRandom 则整次丢弃。启动失败不登记，统计仍只在成功后写。
 func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*PlaybackAttemptResult, error) {
+	return withFormalPlayback(context.Background(), func(ctx context.Context, db *gorm.DB) (*PlaybackAttemptResult, error) {
+		return s.playRandomVideoWithFilterFrom(db, request)
+	})
+}
+
+func (s *VideoService) playRandomVideoWithFilterFrom(db *gorm.DB, request RandomPlayRequest) (*PlaybackAttemptResult, error) {
 	// 用户没有「换一个」就又随机了一次，上一条就是真的播了。先提交再抽，
 	// 它的计数才会进入这一轮的权重，与启动即记账时的抽取分布一致。
 	randomCommits.flush()
-	pool, err := s.collectRandomCandidates(request)
+	pool, err := s.collectRandomCandidatesFrom(db, request)
 	if err != nil {
 		return nil, err
 	}
@@ -160,11 +178,11 @@ func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*Pl
 	if err != nil {
 		return nil, err
 	}
-	video, err := selectWeightedRandomVideo(pool.rows, pool.playWeight, pool.halfLifeDays, time.Now())
+	video, err := selectWeightedRandomVideoFrom(db, pool.rows, pool.playWeight, pool.halfLifeDays, time.Now())
 	if err != nil {
 		return nil, err
 	}
-	if failure := s.launchFormalPlayback(video); failure != nil {
+	if failure := s.launchFormalPlaybackFrom(db, video); failure != nil {
 		failure.SelectionReason = reason
 		return failure, nil
 	}
@@ -177,6 +195,12 @@ func (s *VideoService) PlayRandomVideoWithFilter(request RandomPlayRequest) (*Pl
 // 再用原来的筛选、模式与排除表（加上被换掉的这一部）抽下一条，新结果带新的令牌。
 // 令牌已提交、已被换掉或不认识时返回 reason_code=reroll_expired，不抽取、不写任何东西。
 func (s *VideoService) RerollRandom(token string) (*PlaybackAttemptResult, error) {
+	return withFormalPlayback(context.Background(), func(ctx context.Context, db *gorm.DB) (*PlaybackAttemptResult, error) {
+		return s.rerollRandomFrom(db, token)
+	})
+}
+
+func (s *VideoService) rerollRandomFrom(db *gorm.DB, token string) (*PlaybackAttemptResult, error) {
 	discarded, ok := randomCommits.discard(strings.TrimSpace(token))
 	if !ok {
 		return &PlaybackAttemptResult{
@@ -187,7 +211,7 @@ func (s *VideoService) RerollRandom(token string) (*PlaybackAttemptResult, error
 	}
 	request := discarded.request
 	request.ExcludeIDs = append(append([]uint(nil), discarded.request.ExcludeIDs...), discarded.videoID)
-	return s.PlayRandomVideoWithFilter(request)
+	return s.playRandomVideoWithFilterFrom(db, request)
 }
 
 // randomRerollWindow 是随机播放启动后允许「换一个」的时长，也是统计延迟提交的时长（R10）。
@@ -390,7 +414,7 @@ func randomModeReason(mode string) string {
 	}
 }
 
-func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time, selectionReason string) (*PlaybackAttemptResult, error) {
+func (s *VideoService) playRandomFromRowsFrom(db *gorm.DB, rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time, selectionReason string) (*PlaybackAttemptResult, error) {
 	if len(rows) == 0 {
 		return &PlaybackAttemptResult{
 			DispatchSucceeded: false,
@@ -398,13 +422,13 @@ func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float
 			UserMessage:       "随机播放失败：当前没有可播放的视频记录。",
 		}, nil
 	}
-	selectedVideo, err := selectWeightedRandomVideo(rows, playWeight, halfLifeDays, now)
+	selectedVideo, err := selectWeightedRandomVideoFrom(db, rows, playWeight, halfLifeDays, now)
 	if err != nil {
 		return nil, err
 	}
 
 	// 使用数据库原子操作更新随机播放次数和最后播放时间
-	result, err := s.dispatchFormalPlayback(selectedVideo, true)
+	result, err := s.dispatchFormalPlaybackFrom(db, selectedVideo, true)
 	if result != nil {
 		result.SelectionReason = selectionReason
 	}
@@ -412,7 +436,7 @@ func (s *VideoService) playRandomFromRows(rows []videoScoreRow, playWeight float
 }
 
 // selectWeightedRandomVideo 按权重抽出一条候选，并只对它查询完整记录（含 Tags）。rows 不能为空。
-func selectWeightedRandomVideo(rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time) (*models.Video, error) {
+func selectWeightedRandomVideoFrom(db *gorm.DB, rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time) (*models.Video, error) {
 	weights, totalWeight := randomSelectionWeights(rows, playWeight, halfLifeDays, now)
 
 	// 使用加权随机选择（Go 1.20+ 全局 rand 已自动 seed，无需手动调用）
@@ -428,7 +452,7 @@ func selectWeightedRandomVideo(rows []videoScoreRow, playWeight float64, halfLif
 	}
 
 	var selectedVideo models.Video
-	if err := database.DB.Preload("Tags").First(&selectedVideo, rows[selectedIdx].ID).Error; err != nil {
+	if err := db.Preload("Tags").First(&selectedVideo, rows[selectedIdx].ID).Error; err != nil {
 		return nil, fmt.Errorf("查询选中视频失败: %w", err)
 	}
 	return &selectedVideo, nil

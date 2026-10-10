@@ -1284,3 +1284,55 @@ describe('person avatar from library images', () => {
     expect(api.SetPersonAvatar).toHaveBeenLastCalledWith(7, '/portrait.png'); expect(api.GetPersonDetail).toHaveBeenCalledTimes(1); w.unmount();
   });
 });
+
+describe('片段书签定位与再次观看', () => {
+  const request = (overrides = {}) => ({ videoID: 1, startMS: 0, endMS: 2000, sourceToken: 'source-a', requestID: 1, ...overrides });
+  it('waits for metadata, seeks exactly zero, and repeats the same bookmark on a new request', async () => {
+    const wrapper = await mountInline({ session: inlineSession(1, { source_version: 'source-a' }), bookmarkPosition: request() });
+    const video = wrapper.get('video'); const player = fakePlayer(video.element, { duration: 600 }); player.currentTime = 40; player.readyState = 0;
+    await wrapper.setProps({ bookmarkPosition: request({ requestID: 2 }) }); expect(player.currentTime).toBe(40);
+    player.readyState = 4; await video.trigger('loadedmetadata'); expect(player.currentTime).toBe(0);
+    player.currentTime = 25; await wrapper.setProps({ bookmarkPosition: request({ requestID: 3 }) }); await flushPromises(); expect(player.currentTime).toBe(0);
+  });
+  it('pauses at the range boundary without an ended fact, then can continue the full file', async () => {
+    const wrapper = await mountInline({ session: inlineSession(1, { source_version: 'source-a' }), bookmarkPosition: request() });
+    const video = wrapper.get('video'); const player = fakePlayer(video.element, { duration: 600 }); player.paused = false;
+    const pause = vi.spyOn(video.element, 'pause').mockImplementation(() => { player.paused = true; });
+    vi.spyOn(video.element, 'play').mockResolvedValue();
+    await video.trigger('play'); const sessionID = wrapper.vm._viewSession.id;
+    player.currentTime = 2; await video.trigger('timeupdate'); await flushPromises();
+    expect(pause).toHaveBeenCalled(); expect(wrapper.find('[data-test="bookmark-range-finished"]').exists()).toBe(true);
+    expect(api.RecordViewEvent).not.toHaveBeenCalled(); expect(wrapper.vm._viewSession.ended).not.toBe(true);
+    await wrapper.get('[data-test="bookmark-range-finished"] button').trigger('click'); await video.trigger('play');
+    expect(wrapper.vm._viewSession.id).toBe(sessionID); expect(wrapper.vm.bookmarkRangeActive).toBe(false);
+  });
+  it('rejects a source change between resolve and preview, and clears the range when navigating away', async () => {
+    const wrapper = await mountInline({ session: inlineSession(1, { source_version: 'new-source' }), resumePositionSeconds: 30, bookmarkPosition: request({ startMS: 12000 }) });
+    const video = wrapper.get('video'); const player = fakePlayer(video.element, { duration: 600 }); player.currentTime = 1;
+    await video.trigger('loadedmetadata'); expect(player.currentTime).toBe(1); expect(wrapper.find('[data-test="bookmark-preview-changed"]').exists()).toBe(true);
+    await wrapper.setData({ currentEntry: { type: 'video', id: 2 } }); expect(wrapper.vm.bookmarkRequest).toBeNull(); expect(wrapper.vm.bookmarkRangeActive).toBe(false);
+  });
+  it('creates a second viewing only after natural end followed by a new play', async () => {
+    const wrapper = await mountInline(); const video = wrapper.get('video'); const player = fakePlayer(video.element, { duration: 60 }); player.paused = false;
+    await video.trigger('play'); await video.trigger('ended'); await video.trigger('ended'); await flushPromises();
+    expect(api.RecordViewEvent).toHaveBeenCalledTimes(1); const first = api.RecordViewEvent.mock.calls[0][2];
+    player.currentTime = 0; await video.trigger('play'); await video.trigger('pause'); await video.trigger('play'); await video.trigger('seeking'); await flushPromises(); expect(api.RecordViewEvent).toHaveBeenCalledTimes(1);
+    await video.trigger('ended'); await flushPromises(); expect(api.RecordViewEvent).toHaveBeenCalledTimes(2); expect(api.RecordViewEvent.mock.calls[1][2]).not.toBe(first);
+  });
+});
+
+it('inspecting a changed source refreshes the root preview session and clears its old range', async () => {
+  const wrapper = await mountInline({ session: inlineSession(1, { source_version: 'source-a' }), bookmarkPosition: { videoID: 1, startMS: 0, endMS: 2000, sourceToken: 'source-a', requestID: 1 } });
+  await wrapper.vm.previewCurrentBookmarkVideo(); expect(wrapper.vm.bookmarkRequest).toBeNull(); expect(wrapper.vm.bookmarkRangeActive).toBe(false);
+  expect(wrapper.emitted('preview-session-stale')?.at(-1)).toEqual([1]);
+});
+
+it('刷新同一视频源版本后保留实际source地址，并重新创建可加载的媒体元素', async () => {
+  const wrapper = await mountInline({ session: inlineSession(1, { source_version: 'source-a' }) });
+  const original = wrapper.get('video').element; expect(wrapper.get('source').attributes('src')).toBe('/preview/video/1');
+  await wrapper.setProps({ session: inlineSession(1, { source_version: 'source-b' }) }); await flushPromises();
+  expect(wrapper.get('source').attributes('src')).toBe('/preview/video/1');
+  expect(wrapper.get('video').element).not.toBe(original);
+  const second = wrapper.get('video').element; await wrapper.setProps({ session: inlineSession(1, { source_version: 'source-b' }) }); await flushPromises();
+  expect(wrapper.get('source').attributes('src')).toBe('/preview/video/1'); expect(wrapper.get('video').element).not.toBe(second);
+});

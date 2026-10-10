@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"strings"
+	"time"
 	"video-master/database"
 	"video-master/models"
 	"video-master/services"
@@ -485,6 +486,20 @@ func (a *App) DismissImageNearDuplicateGroup(imageIDs []uint) error {
 }
 
 // ===== Image AI Tagging Methods =====
+
+// SearchImageAITagCandidatePage searches image review evidence in bounded pages.
+func (a *App) SearchImageAITagCandidatePage(request services.ReviewSearchRequest) (*services.ImageAITagCandidatePage, error) {
+	if reason := a.databaseUnavailableReason(); reason != "" {
+		return nil, fmt.Errorf("%s", reason)
+	}
+	svc := a.imageAITaggingService()
+	if svc == nil {
+		return nil, fmt.Errorf("图片审阅服务未初始化")
+	}
+	ctx, cancel := context.WithTimeout(a.backgroundContext(), 30*time.Second)
+	defer cancel()
+	return svc.SearchCandidatePage(ctx, request)
+}
 
 // StartImageAITagging 启动图片 AI 打标批量任务
 func (a *App) StartImageAITagging() (services.ImageAITaggingStatus, error) {

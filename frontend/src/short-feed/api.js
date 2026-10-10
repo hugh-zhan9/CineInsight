@@ -69,8 +69,8 @@ export function getNextItem(excludeKeys = [], scope = 'all', media = 'all') {
   return requestJSON(`/short-api/feed/next${query ? `?${query}` : ''}`);
 }
 
-export function recordPlay(item) {
-  return postJSON(itemPath(item, 'play'), { source: 'short_feed' });
+export function recordPlay(item, viewSessionID = '') {
+  return postJSON(itemPath(item, 'play'), { source: 'short_feed', ...(viewSessionID ? { view_session_id: viewSessionID } : {}) });
 }
 
 export function setLiked(item, liked) {

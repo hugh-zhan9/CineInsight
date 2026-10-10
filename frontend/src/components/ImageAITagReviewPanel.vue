@@ -28,6 +28,7 @@
     </nav>
 
     <div v-if="section === 'tags'" class="image-ai-tag-review__toolbar">
+      <input v-model="keyword" class="image-ai-tag-review__search" data-test="image-ai-tag-search" aria-label="搜索全部图片待审候选" placeholder="搜索文件名、路径、标签或理由" />
       <div class="image-ai-tag-review__filters" role="group" aria-label="置信度筛选">
         <button
           v-for="option in confidenceOptions"
@@ -46,13 +47,19 @@
         @click="load"
       >刷新</button>
       <span class="image-ai-tag-review__count" data-test="image-ai-tag-review-count">
-        待审 {{ candidates.length }} 条 · 涉及 {{ groups.length }} 张图片<template v-if="cursor">（还有更多未加载）</template>
+        待审 {{ filteredCandidates.length }} 条 · 涉及 {{ groups.length }} 张图片<template v-if="cursor">（还有更多未加载）</template>
       </span>
     </div>
 
+    <div v-if="section === 'tags'" class="image-ai-tag-review__filters">
+      <button type="button" class="btn-primary btn-compact" data-test="image-review-approve-loaded" :disabled="reviewBatchBusy || reviewRefreshCount > 0 || loadedQueryKey !== queryKey || !filteredCandidates.length" @click="$refs.reviewBatch.previewLoaded(filteredCandidates.map(item => item.id))">批准已加载结果…</button>
+      <button type="button" class="btn-secondary btn-compact" data-test="image-review-approve-filtered" :disabled="reviewBatchBusy || reviewRefreshCount > 0" @click="$refs.reviewBatch.previewFiltered()">批准全部筛选结果…</button>
+    </div>
+    <AIReviewBatchControls ref="reviewBatch" kind="image" :visible="visible && section === 'tags'" :query="query" @busy="reviewBatchBusy = $event" @outcomes="applyBatchOutcomes" @settled="batchSettled" />
+
     <!-- 报错与说明留在滚动区之外：用户可能正停在列表深处，
          放进滚动区顶部等于看不见。 -->
-    <p v-if="error" class="image-ai-tag-review__error" role="alert" data-test="image-ai-tag-review-error">{{ error }}</p>
+    <p v-if="error" class="image-ai-tag-review__error" role="alert" data-test="image-ai-tag-review-error">{{ error }}<span v-if="candidates.length">；保留上次已加载的结果。</span></p>
     <p v-if="notice" class="image-ai-tag-review__notice" role="status" data-test="image-ai-tag-review-notice">{{ notice }}</p>
 
     <!-- 一页候选也可能几十条，加上翻页会越滚越长。滚动条必须在这一层、弹窗自身封高，
@@ -65,18 +72,15 @@
         <!-- 还有下一页时不能说"没有待审候选"：那只是当页被处理空了，
              自动补页失败时更要留着「加载更多」而不是给一句假的空态。 -->
         <p
-          v-else-if="!candidates.length && !cursor"
+          v-else-if="!error && !filteredCandidates.length && !cursor"
           class="image-ai-tag-review__status"
           role="status"
           data-test="image-ai-tag-review-empty"
         >没有待审候选。AI 打标跑完后，候选会出现在这里。</p>
 
-        <section
-          v-for="group in groups"
-          :key="group.imageID"
-          class="image-ai-tag-review__group glass-surface"
-          data-test="image-ai-tag-group"
-        >
+        <ReviewCandidateWindow :groups="groups" kind="image" :query-key="queryKey" :active="visible && section === 'tags'" scroll-owner-selector=".image-ai-tag-review__content">
+          <template #header="{ group }">
+          <section class="image-ai-tag-review__group glass-surface" data-test="image-ai-tag-group">
           <div class="image-ai-tag-review__group-head">
             <!-- 审阅图片标签只看文件名判断不了对错，缩略图才是证据。
                  走和图片流同一条 /preview/image-thumbnail 路由，失败就地占位。 -->
@@ -102,8 +106,10 @@
               @click="rejectAll(group)"
             >全部拒绝</button>
           </div>
-          <ul class="image-ai-tag-review__list">
-            <li v-for="candidate in group.items" :key="candidate.id" class="image-ai-tag-review__item">
+          </section>
+          </template>
+          <template #candidate="{ group, candidate }">
+            <div class="image-ai-tag-review__item">
               <span class="tag-chip" :style="{ '--tag-color': candidate.matched_tag?.color }">{{ candidate.suggested_name }}</span>
               <span :class="['image-ai-tag-review__confidence', `is-${candidate.confidence}`]">{{ confidenceLabel(candidate.confidence) }}</span>
               <span class="image-ai-tag-review__reason" :title="candidate.reasoning">{{ candidate.reasoning }}</span>
@@ -123,9 +129,9 @@
                   @click="reject(candidate)"
                 >拒绝</button>
               </span>
-            </li>
-          </ul>
-        </section>
+            </div>
+          </template>
+        </ReviewCandidateWindow>
 
         <div v-if="cursor" class="image-ai-tag-review__more">
           <button
@@ -144,16 +150,18 @@
 
 <script>
 import {
-  ApproveImageAITagCandidate, ListImageAITagCandidatePage,
+  GetAIReviewCandidates, ApproveImageAITagCandidate, ListImageAITagCandidatePage, SearchImageAITagCandidatePage,
   RejectImageAITagCandidate, RejectImageAITagCandidatesByImage
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import AIReviewBatchControls from './AIReviewBatchControls.vue';
+import ReviewCandidateWindow from './ReviewCandidateWindow.vue';
 import FaceClusterReviewPanel from './FaceClusterReviewPanel.vue';
-import { appendCandidates, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia } from '../utils/aiTagReview.js';
+import { applyReviewCandidateRefresh, reviewOutcomeCandidateIDs, filterCandidatesForReview, filterCandidatesByAttributes, appendCandidates, removeCandidateById, removeCandidatesAfterApproval, removeCandidatesByMedia } from '../utils/aiTagReview.js';
 
 export default {
   name: 'ImageAITagReviewPanel',
-  components: { BaseModal, FaceClusterReviewPanel },
+  components: { ReviewCandidateWindow, AIReviewBatchControls, BaseModal, FaceClusterReviewPanel },
   props: {
     visible: { type: Boolean, default: false }
   },
@@ -168,9 +176,17 @@ export default {
       loadToken: 0,
       section: 'tags',
       confidence: '',
+      keyword: '',
+      searchTimer: null,
+      loadedQueryKey: '',
+      loadedQuery: { keyword: '', confidence: '' },
+      pendingMore: null,
       loading: false,
       loadingMore: false,
       busy: false,
+      reviewBatchBusy: false,
+      reviewRefreshQueue: Promise.resolve(),
+      reviewRefreshCount: 0,
       error: '',
       // notice 与 error 分开：它是操作结果的说明，不是调用失败；而且 load() 会清空 error，
       // 混用会让这条说明在紧随其后的刷新里被冲掉。
@@ -186,10 +202,17 @@ export default {
     };
   },
   computed: {
+    query() {
+      return { media_id: 0, keyword: String(this.keyword || '').trim(), confidence: this.confidence, tag_id: 0, status: 'pending' };
+    },
+    queryKey() { return JSON.stringify({ ...this.query, keyword: this.query.keyword.toLowerCase() }); },
+    filteredCandidates() {
+      return filterCandidatesForReview(filterCandidatesByAttributes(this.candidates, { confidence: this.loadedQuery.confidence }), this.loadedQuery.keyword, 'image');
+    },
     // 按图片分组：审阅时用户是在看"这张图该打哪些标签"，逐条平铺会让同一张图的候选散开。
     groups() {
       const byImage = new Map();
-      for (const candidate of this.candidates) {
+      for (const candidate of this.filteredCandidates) {
         const imageID = candidate.image_id;
         if (!byImage.has(imageID)) {
           byImage.set(imageID, {
@@ -205,18 +228,66 @@ export default {
     }
   },
   watch: {
+    keyword() {
+      clearTimeout(this.searchTimer);
+      ++this.loadToken;
+      this.pendingMore = null;
+      this.loadingMore = false;
+      if (this.visible) this.searchTimer = setTimeout(() => this.load(), 200);
+    },
     visible(value) {
       if (value) {
         this.section = 'tags';
         this.failedThumbs = {};
         this.load();
+      } else {
+        this.stopRequests();
       }
     }
   },
   mounted() {
     if (this.visible) this.load();
   },
+  beforeUnmount() { this.stopRequests(); },
   methods: {
+    applyBatchOutcomes(outcomes) {
+      const token = this.loadToken;
+      this.reviewRefreshCount++;
+      this.reviewRefreshQueue = this.reviewRefreshQueue.then(async () => {
+        if (token !== this.loadToken) return;
+        await this.refreshBatchOutcomes(outcomes);
+      }).finally(() => { this.reviewRefreshCount--; });
+      return this.reviewRefreshQueue;
+    },
+    async refreshBatchOutcomes(outcomes) {
+      const ids = reviewOutcomeCandidateIDs(this.candidates, outcomes, 'image_id');
+      const token = this.loadToken;
+      const key = this.loadedQueryKey;
+      for (let offset = 0; offset < ids.length; offset += 200) {
+        const pageIDs = ids.slice(offset, offset + 200);
+        const selected = new Set(pageIDs);
+        const snapshot = this.candidates.filter(item => selected.has(Number(item.id)));
+        try {
+          const result = await GetAIReviewCandidates('image', pageIDs);
+          if (token !== this.loadToken || key !== this.loadedQueryKey) return;
+          if (!Array.isArray(result?.image_items)) throw new Error('候选核对结果无效');
+          this.candidates = applyReviewCandidateRefresh(this.candidates, snapshot, result.image_items);
+        } catch (err) { if (token === this.loadToken && key === this.loadedQueryKey) this.error = '核对候选当前状态失败，请刷新：' + err; return; }
+      }
+      await this.fillEmptyPage();
+    },
+    async batchSettled() { await this.reviewRefreshQueue; this.$emit('changed'); await this.fillEmptyPage(); },
+    stopRequests() {
+      clearTimeout(this.searchTimer);
+      ++this.loadToken;
+      this.pendingMore = null;
+      this.loadingMore = false;
+    },
+    pageRequest(query, cursor = 0) {
+      return query.keyword
+        ? SearchImageAITagCandidatePage({ ...query, cursor_id: cursor, limit: 0 })
+        : ListImageAITagCandidatePage(0, query.confidence, '', cursor, 0);
+    },
     confidenceLabel(value) {
       return { high: '高', medium: '中', low: '低' }[value] || value;
     },
@@ -236,19 +307,22 @@ export default {
     },
     // load() 是"回到第一页"：打开面板与切换置信度筛选走它，已翻出来的后续页会被丢掉。
     async load() {
+      clearTimeout(this.searchTimer);
       const token = ++this.loadToken;
+      const query = { ...this.query };
+      const key = this.queryKey;
       this.loading = true;
       this.error = '';
       try {
-        const page = await ListImageAITagCandidatePage(0, this.confidence, '', 0, 0);
-        if (token !== this.loadToken) return;
+        const page = await this.pageRequest(query);
+        if (token !== this.loadToken || key !== this.queryKey) return;
         this.candidates = Array.isArray(page?.items) ? page.items : [];
         this.cursor = Number(page?.next_id || 0);
+        this.loadedQueryKey = key;
+        this.loadedQuery = query;
       } catch (err) {
         if (token !== this.loadToken) return;
         this.error = `加载候选失败: ${err}`;
-        this.candidates = [];
-        this.cursor = 0;
       } finally {
         if (token === this.loadToken) this.loading = false;
       }
@@ -258,27 +332,29 @@ export default {
     // 当前结果追加进去——列表会跳过中间一整段候选，游标还越过了它们，那段再也翻不到。
     // 反过来，如果重新加载后列表末尾仍停在同一个游标、筛选也没变，这一页正好接得上，照常追加。
     async loadMore() {
-      if (!this.cursor || this.loadingMore || this.loading) return;
+      if (!this.cursor || this.loadingMore || this.loading || this.loadedQueryKey !== this.queryKey) return;
       const cursor = this.cursor;
-      const confidence = this.confidence;
+      const key = this.queryKey;
       this.loadingMore = true;
       this.error = '';
+      const request = this.pageRequest({ ...this.query }, cursor);
+      this.pendingMore = request;
       try {
-        const page = await ListImageAITagCandidatePage(0, confidence, '', cursor, 0);
-        if (this.cursor !== cursor || this.confidence !== confidence) return;
+        const page = await request;
+        if (this.cursor !== cursor || this.queryKey !== key || this.pendingMore !== request) return;
         this.candidates = appendCandidates(this.candidates, page?.items);
         this.cursor = Number(page?.next_id || 0);
       } catch (err) {
-        if (this.cursor !== cursor || this.confidence !== confidence) return;
+        if (this.cursor !== cursor || this.queryKey !== key || this.pendingMore !== request) return;
         this.error = `加载更多候选失败: ${err}`;
       } finally {
-        this.loadingMore = false;
+        if (this.pendingMore === request) { this.pendingMore = null; this.loadingMore = false; }
       }
     },
     // 局部移除后当页可能空了，但后端还有下一页：直接补一页，
     // 否则用户会看到"没有待审候选"这个假空态。
     async fillEmptyPage() {
-      if (this.candidates.length || !this.cursor) return;
+      if (this.filteredCandidates.length || !this.cursor) return;
       await this.loadMore();
     },
     async approve(candidate) {
@@ -393,11 +469,14 @@ export default {
 
 .image-ai-tag-review__toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
 }
+
+.image-ai-tag-review__search { flex: 1 1 240px; min-width: 160px; }
 
 .image-ai-tag-review__filters {
   display: flex;
@@ -450,7 +529,7 @@ export default {
 .image-ai-tag-review__group {
   padding: 12px;
   border-radius: 10px;
-  margin-bottom: 12px;
+  display: flow-root;
 }
 
 .image-ai-tag-review__group-head {
@@ -496,15 +575,6 @@ export default {
   color: var(--danger-color);
 }
 
-.image-ai-tag-review__list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
 .image-ai-tag-review__item {
   display: flex;
   align-items: center;
@@ -522,11 +592,11 @@ export default {
 
 .image-ai-tag-review__reason {
   flex: 1;
+  min-width: 0;
   font-size: 12px;
   color: var(--text-secondary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .image-ai-tag-review__actions {

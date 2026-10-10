@@ -20,6 +20,8 @@ const (
 	BackgroundTaskSemantic             BackgroundTaskKey = "semantic"
 	BackgroundTaskImageSemantic        BackgroundTaskKey = "image_semantic"
 	BackgroundTaskAITagging            BackgroundTaskKey = "ai_tagging"
+	BackgroundTaskAIReview             BackgroundTaskKey = "ai_review"
+	BackgroundTaskImageAIReview        BackgroundTaskKey = "image_ai_review"
 	BackgroundTaskImageAITagging       BackgroundTaskKey = "image_ai_tagging"
 	BackgroundTaskEXIF                 BackgroundTaskKey = "exif"
 	BackgroundTaskImagePerceptualHash  BackgroundTaskKey = "image_phash"
@@ -39,6 +41,12 @@ const (
 	// BackgroundTaskMovieChart 是年度电影榜单的抓取与详情补全（D-MC12）。
 	// 同样不进空闲门：刷新由用户打开榜单页或点刷新按钮触发，仍属用户显式动作。
 	BackgroundTaskMovieChart BackgroundTaskKey = "movie_chart"
+	// BackgroundTaskSceneIndex 是场景检索的画面索引（D-MW-SCENES）。只有显式启动，
+	// 不进空闲门；它也不阻止退出（派生数据，已完成项已落库）。
+	BackgroundTaskSceneIndex BackgroundTaskKey = "scene_index"
+	// BackgroundTaskVideoEdit 是视频工作台的导出队列（视频编辑合同）。用户显式排队，不进空闲门；
+	// 有排队或运行项时退出走既有退出确认。
+	BackgroundTaskVideoEdit BackgroundTaskKey = "video_edit"
 )
 
 // backgroundTaskKeyOrder 既是合法 key 的全集，也是 Snapshot 的稳定顺序。
@@ -56,6 +64,8 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskImageSemantic,
 	BackgroundTaskAITagging,
 	BackgroundTaskImageAITagging,
+	BackgroundTaskAIReview,
+	BackgroundTaskImageAIReview,
 	BackgroundTaskEXIF,
 	BackgroundTaskImagePerceptualHash,
 	BackgroundTaskCleanup,
@@ -66,6 +76,8 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskBrowserDownload,
 	BackgroundTaskWatchlistEnrich,
 	BackgroundTaskMovieChart,
+	BackgroundTaskSceneIndex,
+	BackgroundTaskVideoEdit,
 }
 
 // IsBackgroundTaskKey 报告字符串是否属于固定 key 集合，供前端传入的 key 校验。

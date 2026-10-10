@@ -24,6 +24,8 @@ const aiTaggingWorkerInterval = 5 * time.Minute
 const aiTaggingSkipReasonManualRetry = "manual_retry"
 
 type AITaggingService struct {
+	reviewMu       sync.Mutex
+	reviewApproval *ReviewApprovalWorkflow
 	configProvider AITaggingConfigProvider
 	clientFactory  func(AITaggingConfig) AITaggingAIClient
 	extractor      *AITaggingExtractor
@@ -633,7 +635,11 @@ func (s *AITaggingService) rejectedCandidateTagIDs(videoID uint) (map[uint]struc
 // 排序从 (created_at desc, id desc) 收成单键 id desc——键集分页需要单一稳定键，
 // 而 id 自增、与 created_at 同向增长，用户看到的顺序不变。
 func aiTagCandidateQuery(videoID uint, confidence string, status string) *gorm.DB {
-	query := database.DB.
+	return aiTagCandidateQueryDB(database.DB, videoID, confidence, status)
+}
+
+func aiTagCandidateQueryDB(db *gorm.DB, videoID uint, confidence string, status string) *gorm.DB {
+	query := db.
 		Model(&models.AITagCandidate{}).
 		Preload("Video", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
 		Preload("Video.Tags").
@@ -688,11 +694,27 @@ func activeVideoExistsInTx(tx *gorm.DB, videoID uint) error {
 }
 
 func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewItem, error) {
+	approved, err := s.approveCandidateCommitted(context.Background(), candidateID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := database.DB.Preload("Video").Preload("Video.Tags").Preload("MatchedTag").First(&approved, candidateID).Error; err != nil {
+		return nil, err
+	}
+	item := aiTagCandidateReviewItem(approved)
+	return &item, nil
+}
+
+// approveCandidateCommitted returns the committed row without a post-commit DTO read.
+func (s *AITaggingService) approveCandidateCommitted(ctx context.Context, candidateID uint, expected *[32]byte) (models.AITagCandidate, error) {
 	var approved models.AITagCandidate
-	err := database.Transaction(func(tx *gorm.DB) error {
+	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		var candidate models.AITagCandidate
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", candidateID).First(&candidate).Error; err != nil {
 			return err
+		}
+		if expected != nil && videoReviewRevision(candidate) != *expected {
+			return ErrReviewChanged
 		}
 		if err := activeVideoExistsInTx(tx, candidate.VideoID); err != nil {
 			return err
@@ -751,13 +773,9 @@ func (s *AITaggingService) ApproveCandidate(candidateID uint) (*AITaggingReviewI
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return models.AITagCandidate{}, err
 	}
-	if err := database.DB.Preload("Video").Preload("Video.Tags").Preload("MatchedTag").First(&approved, candidateID).Error; err != nil {
-		return nil, err
-	}
-	item := aiTagCandidateReviewItem(approved)
-	return &item, nil
+	return approved, nil
 }
 
 func (s *AITaggingService) resolveOfficialTagInTx(tx *gorm.DB, candidate models.AITagCandidate) (uint, error) {

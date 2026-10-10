@@ -368,7 +368,7 @@
                 @change="toggleImageSelection(image.id, $event.target.checked)"
               />
             </label>
-            <button type="button" class="photo-card__media" :title="image.name" @click="openViewer(row.startIndex + offset)">
+            <button type="button" class="photo-card__media" :title="image.name" @click="activateImage(row.startIndex + offset)">
               <img
                 v-if="!failedThumbs[image.id]"
                 :src="`/preview/image-thumbnail/${image.id}`"
@@ -1948,6 +1948,15 @@ export default {
     },
     markThumbFailed(imageID) {
       this.failedThumbs = { ...this.failedThumbs, [imageID]: true };
+    },
+    activateImage(index) {
+      const image = this.images[index];
+      if (!image) return;
+      if (this.selectedImageIDs.length) {
+        this.toggleImageSelection(image.id, !this.selectedImageIDs.includes(Number(image.id)));
+        return;
+      }
+      this.openViewer(index);
     },
     openViewer(index) {
       if (index < 0 || index >= this.images.length) return;

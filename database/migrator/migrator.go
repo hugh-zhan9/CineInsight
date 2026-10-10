@@ -52,7 +52,7 @@ type Progress struct {
 type Options struct {
 	Source *gorm.DB
 	Target *gorm.DB
-	// TargetBackend 决定要不要在收尾时重置序列。从调用方传入而不是从
+	// TargetBackend 决定目标序列的校准方式。从调用方传入而不是从
 	// Target.Dialector 推断，是为了让测试能显式覆盖。
 	TargetBackend database.Backend
 	OnProgress    func(Progress)
@@ -126,6 +126,11 @@ func Migrate(ctx context.Context, opts Options) (*Result, error) {
 	if err := Preflight(opts.Target); err != nil {
 		return nil, err
 	}
+	all := models.AllModels()
+	consumedIDs, err := readConsumedIDs(opts.Source, all)
+	if err != nil {
+		return nil, err
+	}
 	if err := opts.Target.AutoMigrate(models.AllModels()...); err != nil {
 		return nil, fmt.Errorf("目标库建表失败: %w", err)
 	}
@@ -141,7 +146,6 @@ func Migrate(ctx context.Context, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("写入迁移标记失败: %w", err)
 	}
 
-	all := models.AllModels()
 	total := len(all) + len(joinTables)
 	result := &Result{Tables: total, RowCounts: map[string]int64{}}
 
@@ -170,10 +174,8 @@ func Migrate(ctx context.Context, opts Options) (*Result, error) {
 		report(opts, Progress{Table: join.Name, TableIndex: len(all) + offset + 1, TableTotal: total, Rows: rows})
 	}
 
-	if opts.TargetBackend == database.BackendPostgres {
-		if err := resetPostgresSequences(opts.Target, all); err != nil {
-			return nil, err
-		}
+	if err := restoreConsumedIDs(opts.Target, opts.TargetBackend, all, consumedIDs); err != nil {
+		return nil, err
 	}
 
 	if err := opts.Target.Model(&migrationMarker{}).Where("1 = 1").
@@ -219,7 +221,11 @@ func copyModel(opts Options, model any) (int64, error) {
 
 // copyJoinTable 搬运没有模型的隐式关联表。
 func copyJoinTable(opts Options, join joinTable) (int64, error) {
-	if !opts.Source.Migrator().HasTable(join.Name) {
+	present, err := migrationTablePresent(opts.Source, join.Name)
+	if err != nil {
+		return 0, err
+	}
+	if !present {
 		return 0, nil
 	}
 	var rows []map[string]any
@@ -239,34 +245,6 @@ func copyJoinTable(opts Options, join joinTable) (int64, error) {
 		}
 	}
 	return int64(len(rows)), nil
-}
-
-// resetPostgresSequences 把每张表的自增序列推到当前最大 ID。
-//
-// 必须做：迁移是带着显式 ID 插入的，而显式 ID 不会推进 BIGSERIAL 序列。不重置的话，
-// 迁移之后用户新建的第一条记录就会撞上已存在的主键——而且报错发生在迁移结束很久
-// 之后，现场早就没了，非常难查。
-func resetPostgresSequences(target *gorm.DB, all []any) error {
-	for _, model := range all {
-		if !target.Migrator().HasTable(model) {
-			continue
-		}
-		table, autoIncrement := autoIncrementIDTable(target, model)
-		// 不是每张表都有自增 id：video_people、collection_videos 这类是复合主键。
-		// 对它们调 pg_get_serial_sequence('t','id') 不会返回 NULL，而是直接报
-		// "column id does not exist"，所以必须先按模型 schema 判掉。
-		if !autoIncrement {
-			continue
-		}
-		sql := fmt.Sprintf(
-			`SELECT setval(pg_get_serial_sequence('%s', 'id'), COALESCE((SELECT MAX(id) FROM %s), 1))
-			 WHERE pg_get_serial_sequence('%s', 'id') IS NOT NULL`,
-			table, table, table)
-		if err := target.Exec(sql).Error; err != nil {
-			return fmt.Errorf("重置表 %s 的序列失败: %w", table, err)
-		}
-	}
-	return nil
 }
 
 // autoIncrementIDTable 返回表名，以及这张表是否有一个自增的 id 主键。

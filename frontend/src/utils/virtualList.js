@@ -28,6 +28,12 @@ export function estimateVideoRowHeight(video, widthBucket, subtitleMode, density
   return base + ROW_GAP + extraLines * TAG_LINE_HEIGHT;
 }
 
+export function estimateVideoGridHeight(video, cardWidth = 200) {
+  const usable = Math.max(120, cardWidth - 18);
+  const tags = Array.isArray(video?.tags) ? video.tags.length : 0;
+  return 230 + Math.ceil((tags * TAG_BADGE_WIDTH + ADD_TAG_BUTTON_WIDTH) / usable) * TAG_LINE_HEIGHT;
+}
+
 export function getWidthBucket(width) {
   const safeWidth = Number(width) || 0;
   return Math.max(1, Math.round(safeWidth / 80));
@@ -41,75 +47,88 @@ export function sumHeights(items, endExclusive, getItemHeight) {
   return total;
 }
 
-export function calculateVirtualWindow({
-  items,
-  scrollTop,
-  viewportHeight,
-  listTop,
-  overscan,
-  getItemHeight
-}) {
-  const count = Array.isArray(items) ? items.length : 0;
-  if (count === 0) {
+// A Fenwick tree owns geometry only. Rebuild on data/layout changes; scrolling never
+// traverses item payloads. Grid rows include their following gap in the tree.
+export class VirtualHeightIndex {
+  constructor(items, getItemHeight, { columns = 1, gap = 0 } = {}) {
+    this.count = items.length;
+    this.columns = Math.max(1, Math.floor(columns));
+    this.gap = Math.max(0, gap);
+    this.ids = items.map(item => item.id);
+    this.positions = new Map(this.ids.map((id, i) => [String(id), i]));
+    this.heights = new Float64Array(Math.ceil(this.count / this.columns));
+    items.forEach((item, i) => {
+      const row = Math.floor(i / this.columns);
+      this.heights[row] = Math.max(this.heights[row], Number(getItemHeight(item, i)) || 1);
+    });
+    this.tree = new Float64Array(this.heights.length + 1);
+    for (let i = 1; i < this.tree.length; i++) {
+      this.tree[i] += this.heights[i - 1] + this.gap;
+      const parent = i + (i & -i);
+      if (parent < this.tree.length) this.tree[parent] += this.tree[i];
+    }
+  }
+
+  prefix(endRow) {
+    let total = 0;
+    for (let i = Math.min(endRow, this.heights.length); i > 0; i -= i & -i) total += this.tree[i];
+    return total;
+  }
+
+  get totalHeight() { return Math.max(0, this.prefix(this.heights.length) - this.gap); }
+  indexOf(id) { return this.positions.get(String(id)) ?? -1; }
+  itemTop(index) { return this.prefix(Math.floor(index / this.columns)); }
+
+  setRowHeight(row, height) {
+    if (row < 0 || row >= this.heights.length || !Number.isFinite(height) || height <= 0) return false;
+    const delta = height - this.heights[row];
+    if (Math.abs(delta) < 0.01) return false;
+    this.heights[row] = height;
+    for (let i = row + 1; i < this.tree.length; i += i & -i) this.tree[i] += delta;
+    return true;
+  }
+
+  rowAt(offset) {
+    if (offset >= this.totalHeight) return this.heights.length;
+    let index = 0;
+    let total = 0;
+    for (let bit = 2 ** Math.floor(Math.log2(Math.max(1, this.heights.length))); bit >= 1; bit /= 2) {
+      const next = index + bit;
+      if (next < this.tree.length && total + this.tree[next] <= offset) {
+        total += this.tree[next];
+        index = next;
+      }
+    }
+    return index;
+  }
+
+  window(top, bottom, overscan = 0) {
+    const rows = this.heights.length;
+    const first = this.rowAt(Math.max(0, top));
+    const last = Math.min(rows, Math.max(first + 1, this.rowAt(Math.max(0, bottom) - 0.000001) + 1));
+    const margin = Math.max(0, Math.floor(overscan));
+    const start = Math.max(0, first - margin);
+    const end = Math.min(rows, last + margin);
+    const totalHeight = this.totalHeight;
     return {
-      startIndex: 0,
-      endIndex: 0,
-      topSpacer: 0,
-      bottomSpacer: 0,
-      totalHeight: 0
+      startIndex: Math.min(this.count, start * this.columns),
+      endIndex: Math.min(this.count, end * this.columns),
+      topSpacer: Math.min(totalHeight, this.prefix(start)),
+      bottomSpacer: end < rows ? totalHeight - this.prefix(end) + this.gap : 0,
+      totalHeight
     };
   }
-
-  const normalizedOverscan = Math.max(0, overscan || 0);
-  const relativeTop = Math.max(0, scrollTop - listTop);
-  const relativeBottom = Math.max(relativeTop, scrollTop + viewportHeight - listTop);
-
-  let runningTop = 0;
-  let visibleStart = 0;
-  while (visibleStart < count) {
-    const height = getItemHeight(items[visibleStart], visibleStart);
-    if (runningTop + height > relativeTop) {
-      break;
-    }
-    runningTop += height;
-    visibleStart += 1;
-  }
-
-  let visibleEnd = visibleStart;
-  let runningBottom = runningTop;
-  while (visibleEnd < count) {
-    runningBottom += getItemHeight(items[visibleEnd], visibleEnd);
-    visibleEnd += 1;
-    if (runningBottom >= relativeBottom) {
-      break;
-    }
-  }
-
-  const startIndex = Math.max(0, visibleStart - normalizedOverscan);
-  const endIndex = Math.min(count, visibleEnd + normalizedOverscan);
-  const topSpacer = sumHeights(items, startIndex, getItemHeight);
-  const visibleHeight = sumHeights(items.slice(startIndex, endIndex), items.slice(startIndex, endIndex).length, (item, index) =>
-    getItemHeight(item, startIndex + index)
-  );
-  const totalHeight = sumHeights(items, count, getItemHeight);
-
-  return {
-    startIndex,
-    endIndex,
-    topSpacer,
-    bottomSpacer: Math.max(0, totalHeight - topSpacer - visibleHeight),
-    totalHeight
-  };
 }
 
-export function calculateAnchorScrollTop({
-  items,
-  listTop,
-  anchorIndex,
-  anchorOffsetWithin,
-  getItemHeight
-}) {
-  return listTop + sumHeights(items, anchorIndex, getItemHeight) + anchorOffsetWithin;
+export function calculateVirtualWindow({ items, scrollTop, viewportHeight, listTop, overscan, getItemHeight, layoutIndex }) {
+  const index = layoutIndex || new VirtualHeightIndex(items || [], getItemHeight);
+  const top = Math.max(0, scrollTop - listTop);
+  return index.window(top, Math.max(top, scrollTop + viewportHeight - listTop), overscan);
+}
+
+export function calculateAnchorScrollTop({ items, listTop, anchorIndex, anchorOffsetWithin, getItemHeight, layoutIndex }) {
+  const index = layoutIndex || new VirtualHeightIndex(items || [], getItemHeight);
+  return listTop + index.itemTop(anchorIndex) + anchorOffsetWithin;
 }
 
 export const defaultRangeEngine = {
@@ -118,8 +137,8 @@ export const defaultRangeEngine = {
   calculateAnchorScrollTop
 };
 
-export function resolveScrollOwnerDescriptor(rootElement, currentOwner) {
-  const nextOwner = rootElement?.closest?.('.main-view') || null;
+export function resolveScrollOwnerDescriptor(rootElement, currentOwner, selector = '.main-view') {
+  const nextOwner = rootElement?.closest?.(selector) || null;
   return {
     nextOwner,
     sameOwner: nextOwner === currentOwner,

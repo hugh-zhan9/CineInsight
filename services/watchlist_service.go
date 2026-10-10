@@ -251,12 +251,23 @@ func (s *WatchlistService) Delete(id uint) error {
 // 事务里去撤销榜单标记——调用方（MovieChartService）紧接着自己改写或删除那一行标记，
 // 让 Delete 先把它清成空会使调用方的条件删除守卫失配。
 func (s *WatchlistService) DeleteForChart(id uint) error {
-	return s.deleteEntry(id, false)
+	return s.DeleteForChartContext(context.Background(), id)
+}
+func (s *WatchlistService) DeleteForChartContext(ctx context.Context, id uint) error {
+	return s.deleteEntryContext(ctx, id, false)
 }
 
 func (s *WatchlistService) deleteEntry(id uint, revokeChartWant bool) error {
+	return s.deleteEntryContext(context.Background(), id, revokeChartWant)
+}
+func (s *WatchlistService) deleteEntryContext(ctx context.Context, id uint, revokeChartWant bool) error {
+	return database.WithOperationContext(ctx, func(db *gorm.DB) error {
+		return s.deleteEntryFrom(db, id, revokeChartWant)
+	})
+}
+func (s *WatchlistService) deleteEntryFrom(db *gorm.DB, id uint, revokeChartWant bool) error {
 	var entry models.WatchlistEntry
-	if err := database.DB.Select("id", "title", "kind", "poster_path", "source_name", "source_item_id").First(&entry, id).Error; err != nil {
+	if err := db.Select("id", "title", "kind", "poster_path", "source_name", "source_item_id").First(&entry, id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return ErrWatchlistEntryNotFound
 		}
@@ -264,7 +275,7 @@ func (s *WatchlistService) deleteEntry(id uint, revokeChartWant bool) error {
 	}
 	// 删条目与撤销榜单 want 在同一事务里（D-PC52）：只删条目会留下一个指向不存在
 	// 条目的 want 标记，榜单上仍显示「想看」而片单里没有。
-	err := database.Transaction(func(tx *gorm.DB) error {
+	err := db.Transaction(func(tx *gorm.DB) error {
 		result := tx.Where("id = ?", id).Delete(&models.WatchlistEntry{})
 		if result.Error != nil {
 			return fmt.Errorf("移除想看记录失败: %w", result.Error)
@@ -283,7 +294,7 @@ func (s *WatchlistService) deleteEntry(id uint, revokeChartWant bool) error {
 	if entry.PosterPath == "" {
 		return nil
 	}
-	if err := s.images.Remove(entry.PosterPath); err != nil {
+	if err := s.images.RemoveContext(db.Statement.Context, entry.PosterPath); err != nil {
 		return fmt.Errorf("想看记录已移除但海报清理失败: %w", err)
 	}
 	return nil

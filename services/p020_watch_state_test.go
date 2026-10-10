@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -26,7 +27,7 @@ type recordingWatchObserver struct {
 	panicOn uint
 }
 
-func (o *recordingWatchObserver) OnVideoWatchedChanged(videoID uint, watched bool) {
+func (o *recordingWatchObserver) OnVideoWatchedChangedContext(_ context.Context, videoID uint, watched bool) {
 	o.mu.Lock()
 	o.calls = append(o.calls, watchCallKey(videoID, watched))
 	o.mu.Unlock()

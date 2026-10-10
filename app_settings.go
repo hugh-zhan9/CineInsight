@@ -290,6 +290,8 @@ func (a *App) RestoreDatabaseBackup(request services.BackupRestoreRequest) error
 // 连接；切换后端只读源库，连接保持打开供迁移器读取。失败后离开维护模式统一走
 // resumeAfterDatabaseRestoreFailure；切换成功后不离开（「待重启」终态）。
 func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
+	a.quiescePlaybackForMaintenance()
+	a.stopAIReviewApprovals()
 	if err := a.stopCleanupConsolidationAndWait(); err != nil {
 		return err
 	}
@@ -315,6 +317,10 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 	}
 	if a.enhancement != nil {
 		a.enhancement.StopAndWait()
+	}
+	// 视频工作台：维护前停止 worker，运行项标 interrupted（合同「维护与退出」）。
+	if a.videoEdit != nil {
+		a.videoEdit.StopAndWait()
 	}
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
@@ -377,8 +383,18 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 // 停掉的服务恢复起来。恢复备份失败、切换后端失败（含被取消）共用；切换成功不走这里，
 // 围栏保持到重启。
 func (a *App) resumeAfterDatabaseRestoreFailure() {
+	defer a.releasePlaybackMaintenance()
 	a.releaseDatabaseRestoreMode()
 	a.resumeCleanupConsolidation()
+	if a.videoEdit != nil {
+		a.videoEdit.Resume()
+	}
+	if a.aiTaggingService != nil {
+		a.aiTaggingService.ResetReviewApproval()
+	}
+	if service := a.imageAITaggingService(); service != nil {
+		service.ResetReviewApproval()
+	}
 	if a.ctx == nil {
 		return
 	}
@@ -404,6 +420,9 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	if settings, err := a.settingsService.GetSettings(); err == nil {
 		_ = a.configureLibraryWatcher(settings.LibraryWatchEnabled)
 		a.configureLocalMetadata(settings.LocalMetadataEnabled)
+	}
+	if err := a.startPlaybackQueue(); err != nil {
+		log.Printf("Playback queue recovery failed: %v", services.WithoutAbsolutePaths(err))
 	}
 }
 

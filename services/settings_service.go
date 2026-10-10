@@ -1,6 +1,8 @@
 package services
 
 import (
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"video-master/database"
@@ -13,8 +15,16 @@ type SettingsService struct{}
 
 // GetSettings 获取设置
 func (s *SettingsService) GetSettings() (*models.Settings, error) {
+	return s.GetSettingsContext(context.Background())
+}
+
+// GetSettingsContext propagates the caller deadline through the existing settings read.
+func (s *SettingsService) GetSettingsContext(ctx context.Context) (*models.Settings, error) {
+	if database.DB == nil {
+		return nil, errors.New("数据库未初始化")
+	}
 	var settings models.Settings
-	err := database.DB.First(&settings).Error
+	err := database.DB.WithContext(ctx).First(&settings).Error
 	return &settings, err
 }
 
@@ -97,6 +107,11 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.CleanupLowWidth = positiveOrDefault(input.CleanupLowWidth, database.DefaultCleanupLowWidth)
 		settings.CleanupLowHeight = positiveOrDefault(input.CleanupLowHeight, database.DefaultCleanupLowHeight)
 		settings.FaceModelMirrorURL = strings.TrimSpace(input.FaceModelMirrorURL)
+		// 场景检索（D-MW-SCENES）：存进去的就是生效值。提供方只认 local / external，
+		// 切到 external 的披露确认在设置页完成后才会走到这里。
+		settings.SceneVisualProvider = NormalizeSceneVisualProvider(input.SceneVisualProvider)
+		settings.SceneVisualIntervalSeconds = NormalizeSceneVisualIntervalSeconds(input.SceneVisualIntervalSeconds)
+		settings.SceneModelMirrorURL = strings.TrimSpace(input.SceneModelMirrorURL)
 		// 帧哈希序列（D-026）：自动开关即时生效，扫描后自动化每次读一次这一列。
 		settings.AutoFrameHashSequence = input.AutoFrameHashSequence
 		// 浏览器插件桥接（D-B03、D-B05、D-B06）：目录与并发存进去的就是生效值。

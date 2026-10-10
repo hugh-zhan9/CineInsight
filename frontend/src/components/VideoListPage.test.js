@@ -42,7 +42,7 @@ vi.mock('./TagManagerDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./AddTagDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./DeleteConfirmDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./TagDeleteDialog.vue', () => ({ default: { template: '<div />' } }));
-vi.mock('./PreviewDrawer.vue', () => ({ default: { template: '<div />' } }));
+vi.mock('./PreviewDrawer.vue', () => ({ default: { props: ['bookmarkPosition'], template: '<div />' } }));
 vi.mock('./SubtitleWorkbench.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./LocalMetadataDialog.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./TrashCenterDialog.vue', async (importOriginal) => ({ ...(await importOriginal()), default: { template: '<div />' } }));
@@ -71,6 +71,22 @@ async function mountPage(extraProps = {}, extraOptions = {}) {
   await flushPromises();
   return wrapper;
 }
+
+it('今晚看什么的播放事件向现有绑定传视频ID，并关闭选片弹窗', async () => {
+  const wrapper = await mountPage();
+  const video = { id: 47, name: 'tonight.mp4', path: '/fixture/tonight.mp4' };
+  api.PlayVideo.mockResolvedValueOnce({ video, dispatch_succeeded: true });
+  wrapper.vm.selectedTags = [9];
+  wrapper.vm.openTonightPicker();
+  await flushPromises();
+  const picker = wrapper.findComponent({ name: 'TonightPickerDialog' });
+  expect(picker.props('filter').tag_ids).toEqual([9]);
+  picker.vm.$emit('play', video);
+  await flushPromises();
+  expect(api.PlayVideo).toHaveBeenLastCalledWith(47);
+  expect(wrapper.vm.tonightOpen).toBe(false);
+  wrapper.unmount();
+});
 
 it('标签转为人物后清掉旧标签筛选并重新加载片库', async () => {
   const wrapper = await mountPage();
@@ -2190,4 +2206,25 @@ it('任何后台集中整理终态都刷新片库一次，不依赖当前打开�
   await handlers['cleanup-consolidation-progress']({ id: 82, version: 3, status: 'cancelled', completed: 1 });
   await wrapper.vm.handleConsolidationMoved({ id: 82, version: 3, status: 'cancelled', completed: 1 });
   expect(reload).toHaveBeenCalledTimes(1); expect(markConsolidationStale).toHaveBeenCalledOnce(); expect(wrapper.emitted('reload-directories')).toHaveLength(1); wrapper.unmount();
+});
+
+it('书签定位保留0与区间，每次点击独立请求，普通预览清除区间', async () => {
+  const wrapper = await mountPage(); const video = { id: 1, name: '书签原片', tags: [] };
+  api.GetPreviewSession.mockResolvedValue({ video_id: 1, mode: 'inline', source_version: 'checked' });
+  const resolution = { status: 'ready', video, bookmark: { id: 12, start_ms: 0, end_ms: 3000 }, source_token: 'checked' };
+  await wrapper.vm.openBookmark(resolution); await flushPromises();
+  const first = wrapper.findComponent({ name: 'PreviewDrawer' }).props('bookmarkPosition');
+  expect(first).toEqual(expect.objectContaining({ videoID: 1, startMS: 0, endMS: 3000, sourceToken: 'checked' }));
+  await wrapper.vm.openBookmark(resolution); await flushPromises();
+  expect(wrapper.findComponent({ name: 'PreviewDrawer' }).props('bookmarkPosition').requestID).not.toBe(first.requestID);
+  await wrapper.vm.openPreview(video); await flushPromises(); expect(wrapper.findComponent({ name: 'PreviewDrawer' }).props('bookmarkPosition')).toBeNull(); wrapper.unmount();
+});
+
+it('刷新原片的迟到会话不能覆盖已经打开的另一个视频', async () => {
+  const wrapper = await mountPage(); api.GetPreviewSession.mockResolvedValueOnce({ video_id: 1 });
+  await wrapper.vm.openPreview({ id: 1, name: '一', tags: [] });
+  let finish; api.GetPreviewSession.mockImplementationOnce(() => new Promise(resolve => finish = resolve)); const old = wrapper.vm.refreshPreviewSession(1);
+  api.GetPreviewSession.mockResolvedValueOnce({ video_id: 2 }); await wrapper.vm.openPreview({ id: 2, name: '二', tags: [] });
+  finish({ video_id: 1, source_version: 'old' }); await old;
+  expect(wrapper.vm.previewSession.video_id).toBe(2); wrapper.unmount();
 });

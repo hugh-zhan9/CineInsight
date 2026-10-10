@@ -512,11 +512,17 @@ func ApplySchema(db *gorm.DB) error {
 	}
 	// 以下三个迁移排在全部「列刚建出来」迁移之后（P-001 评审 Minor 1）：它们的判据都看数据本身（mode = ''、值 <= 0 / NULL、唯一索引是否在位），
 	// 不依赖 AutoMigrate 之前的观测，可以重复执行。
+	if err := migrateViewingDiary(db); err != nil {
+		return fmt.Errorf("迁移观看日记失败: %w", err)
+	}
 	if err := migrateTrashEntryMode(db); err != nil {
 		return fmt.Errorf("回填回收站模式失败: %w", err)
 	}
 	if err := migrateCleanupThresholdSettings(db); err != nil {
 		return fmt.Errorf("迁移清理阈值失败: %w", err)
+	}
+	if err := migrateSceneSettings(db); err != nil {
+		return fmt.Errorf("迁移场景检索设置失败: %w", err)
 	}
 	if err := migrateGlossaryUniqueKey(db); err != nil {
 		return fmt.Errorf("迁移术语表唯一键失败: %w", err)
@@ -594,6 +600,9 @@ func ApplySchema(db *gorm.DB) error {
 			CleanupShortSeconds: DefaultCleanupShortSeconds,
 			CleanupLowWidth:     DefaultCleanupLowWidth,
 			CleanupLowHeight:    DefaultCleanupLowHeight,
+			// 场景检索采样间隔（D-MW-SCENES）：默认非零，同上显式写值；提供方显式写 local。
+			SceneVisualProvider:        "local",
+			SceneVisualIntervalSeconds: DefaultSceneVisualIntervalSeconds,
 			// 新库没有需要合并的旧互动数据，直接盖章，免得之后误跑一次合并。
 			FavoritesUnifiedAt: &favoritesUnifiedAt,
 		}

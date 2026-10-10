@@ -542,7 +542,7 @@ func TestPLAY07RecordViewEventFailureDoesNotConsumeSession(t *testing.T) {
 	}
 }
 
-// 去重表是 LRU：满了淘汰最久没出现的会话，最近出现过的保留。
+// LRU 可淘汰，但持久日记会话标识仍应防止旧上报重新计账（Q17）。
 func TestPLAY07ViewEventDedupEvictsLeastRecentlySeenSession(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	useFreshViewEventDedup(t, 2)
@@ -566,11 +566,11 @@ func TestPLAY07ViewEventDedupEvictsLeastRecentlySeenSession(t *testing.T) {
 	if record("s1") {
 		t.Fatalf("最近出现过的 s1 应保留")
 	}
-	if !record("s2") {
-		t.Fatalf("被淘汰的 s2 应可再次记录")
+	if record("s2") {
+		t.Fatalf("被淘汰的 s2 仍应被持久会话去重")
 	}
-	if got := len(p023Events(t, video.ID)); got != 4 {
-		t.Fatalf("应写入 s1 s2 s3 s2 共 4 条，实际 %d", got)
+	if got := len(p023Events(t, video.ID)); got != 3 {
+		t.Fatalf("应写入 s1 s2 s3 共 3 条，实际 %d", got)
 	}
 }
 

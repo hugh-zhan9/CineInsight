@@ -62,6 +62,8 @@ func seedSource(t *testing.T, db *gorm.DB) (videoIDs []uint, tagID uint) {
 
 	seedBlobHeavyRows(t, db, videoIDs)
 	seedProductCompletenessRows(t, db, videoIDs)
+	seedVersionGroupRows(t, db, videoIDs)
+	seedVideoEditRows(t, db, videoIDs)
 	// 手写夹具覆盖不到的表由反射补一行：往返比对是逐表比行数，空表永远 0 == 0，
 	// 一张表整张被漏掉也照样"通过"（N-1 就是这样藏住的）。
 	seedEveryTable(t, db)
@@ -254,6 +256,29 @@ func seedBlobHeavyRows(t *testing.T, db *gorm.DB, videoIDs []uint) {
 	}).Error; err != nil {
 		t.Fatalf("建簇人物候选失败: %v", err)
 	}
+
+	// 场景检索（P-007）：状态行带纳秒 mtime；段的 embedding 是 516 字节 int8 量化 BLOB，
+	// 外部描述段的 embedding 为空。
+	indexedAt := time.Unix(1_700_000_400, 0).UTC()
+	if err := db.Create(&models.SceneIndexState{
+		VideoID: videoIDs[0], ModelID: "cn-clip-vit-b16-q8@1", Provider: "local", SourceSize: 12345,
+		SourceMtimeNS: 1_700_000_000_123_000_000, IntervalMS: 5000, SegmentCount: 2, Status: "indexed", IndexedAt: &indexedAt,
+	}).Error; err != nil {
+		t.Fatalf("建场景索引状态失败: %v", err)
+	}
+	if err := db.Create(&[]models.SceneVisualSegment{
+		{VideoID: videoIDs[0], ModelID: "cn-clip-vit-b16-q8@1", StartMS: 0, EndMS: 5000, Embedding: sceneVectorSeedBytes()},
+		{VideoID: videoIDs[0], ModelID: "external-caption:vision@1", StartMS: 5000, EndMS: 10000, Caption: "海边日落"},
+	}).Error; err != nil {
+		t.Fatalf("建场景画面段失败: %v", err)
+	}
+}
+
+// sceneVectorSeedBytes 造 516 字节（float32 scale + 512 个 int8）的量化向量，带 0x00 与 0xff。
+func sceneVectorSeedBytes() []byte {
+	buffer := faceVectorSeedBytes(0x3c)[:516]
+	buffer[4], buffer[5] = 0x00, 0xff
+	return buffer
 }
 
 // frameHashSeedBytes 造一段可辨识的 uint64 序列字节（8 帧 × 8 字节）。
@@ -586,6 +611,33 @@ func TestMigrateRoundTripPreservesBinaryColumns(t *testing.T) {
 	if candidate.Similarity != 0.6125 {
 		t.Fatalf("相似度往返后不一致: %+v", candidate)
 	}
+
+	var sceneSegments []models.SceneVisualSegment
+	if err := back.Order("start_ms ASC").Find(&sceneSegments).Error; err != nil {
+		t.Fatalf("往返后读不到场景画面段: %v", err)
+	}
+	var vectorSegment, captionSegment *models.SceneVisualSegment
+	for index := range sceneSegments {
+		switch sceneSegments[index].ModelID {
+		case "cn-clip-vit-b16-q8@1":
+			vectorSegment = &sceneSegments[index]
+		case "external-caption:vision@1":
+			captionSegment = &sceneSegments[index]
+		}
+	}
+	if vectorSegment == nil || !bytes.Equal(vectorSegment.Embedding, sceneVectorSeedBytes()) {
+		t.Fatalf("场景向量 BLOB 往返后不一致: %+v", vectorSegment)
+	}
+	if captionSegment == nil || captionSegment.Embedding != nil || captionSegment.Caption != "海边日落" {
+		t.Fatalf("外部描述段往返后应保持空向量与原描述: %+v", captionSegment)
+	}
+	var sceneState models.SceneIndexState
+	if err := back.First(&sceneState, "model_id = ?", "cn-clip-vit-b16-q8@1").Error; err != nil {
+		t.Fatalf("往返后读不到场景索引状态: %v", err)
+	}
+	if sceneState.SourceMtimeNS != 1_700_000_000_123_000_000 || sceneState.IntervalMS != 5000 || sceneState.IndexedAt == nil {
+		t.Fatalf("场景索引状态往返后不一致: %+v", sceneState)
+	}
 }
 
 // productCompletenessTables 是 2026-09-29 批次新增的表（七张 + 人脸写入记录 face_relation_writes）。
@@ -751,5 +803,64 @@ func TestMigrateCarriesProductCompletenessTablesAndColumns(t *testing.T) {
 	}
 	if write.PersonID != 1 || write.ClusterID != 1 || !write.CreatedAt.Equal(stamp) {
 		t.Fatalf("人脸写入记录往返后应原样保留（META04）: %+v", write)
+	}
+}
+
+// seedVideoEditRows 给视频工作台的两张表各造一行贴近真实的数据（视频编辑合同「状态模型」）：
+// revision/staged_size 等非零数值与 output_video_id 指针必须原样往返；mode 没有 gorm default，靠显式写入。
+func seedVideoEditRows(t *testing.T, db *gorm.DB, videoIDs []uint) {
+	t.Helper()
+	stamp := time.Unix(1_700_000_400, 0).UTC()
+	project := models.VideoEditProject{
+		Kind: models.VideoEditKindTrimIntro, Title: "去片头：夹具", Status: models.VideoEditStatusPartial, Revision: 7,
+		Mode: models.VideoEditModePrecise, RecipeJSON: `{"v":1,"trim_intro":{"items":[]}}`, AnalysisJSON: `{"status":"completed"}`,
+		AcknowledgedJSON: `["upscale:1920x1080"]`, ErrorCode: "encode_failed", ErrorMessage: "第 2 项失败",
+		QueuedAt: &stamp, FinishedAt: &stamp,
+	}
+	if err := db.Create(&project).Error; err != nil {
+		t.Fatalf("建视频工作台项目夹具失败: %v", err)
+	}
+	output := videoIDs[0]
+	item := models.VideoEditItem{
+		ProjectID: project.ID, Seq: 1, Status: models.VideoEditStatusCompleted, Phase: models.VideoEditPhaseDone, Progress: 1,
+		PlanJSON: `{"v":1}`, OutputName: "va (去片头).mkv", PublishTarget: "/lib/va (去片头).mkv", StagedSize: 5_000_000_123,
+		OutputPath: "/lib/va (去片头).mkv", OutputVideoID: &output, WorkDir: "", StartedAt: &stamp, FinishedAt: &stamp,
+	}
+	if err := db.Create(&item).Error; err != nil {
+		t.Fatalf("建视频工作台导出项夹具失败: %v", err)
+	}
+}
+
+// 视频工作台的两张表随迁移原样往返：行数、revision、staged_size 与 output_video_id 都不变。
+func TestMigrateCarriesVideoEditTables(t *testing.T) {
+	source := dbtest.Open(t)
+	middle := dbtest.Open(t)
+	back := dbtest.Open(t)
+	seedSource(t, source)
+	for _, step := range []struct{ from, to *gorm.DB }{{source, middle}, {middle, back}} {
+		if _, err := Migrate(context.Background(), Options{
+			Source: step.from, Target: step.to, TargetBackend: backendOfTest(),
+		}); err != nil {
+			t.Fatalf("迁移失败: %v", err)
+		}
+	}
+	for _, model := range []any{&models.VideoEditProject{}, &models.VideoEditItem{}} {
+		if want, got := countUnscoped(t, source, model), countUnscoped(t, back, model); want == 0 || want != got {
+			t.Fatalf("往返后表 %T 行数不一致: source=%d back=%d", model, want, got)
+		}
+	}
+	var project models.VideoEditProject
+	if err := back.Where("title = ?", "去片头：夹具").First(&project).Error; err != nil {
+		t.Fatalf("往返后读不到项目: %v", err)
+	}
+	if project.Revision != 7 || project.Mode != models.VideoEditModePrecise || project.Status != models.VideoEditStatusPartial {
+		t.Fatalf("项目往返后不一致: %+v", project)
+	}
+	var item models.VideoEditItem
+	if err := back.Where("project_id = ? AND seq = ?", project.ID, 1).First(&item).Error; err != nil {
+		t.Fatalf("往返后读不到导出项: %v", err)
+	}
+	if item.StagedSize != 5_000_000_123 || item.OutputVideoID == nil || item.Progress != 1 {
+		t.Fatalf("导出项往返后不一致: %+v", item)
 	}
 }

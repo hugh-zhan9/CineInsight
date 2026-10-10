@@ -1,0 +1,49 @@
+/* 视频工作台各分区共用的样式（页面引入一次）。类名统一 edit- 前缀，避免和其他页面撞名。 */
+.edit-section { display: grid; gap: 8px; padding: 12px 14px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--control-bg); }
+.edit-section h3 { margin: 6px 0 0; font-size: 14px; }
+.edit-section h4 { margin: 4px 0; font-size: 13px; }
+.edit-inline { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.edit-inline--spread { justify-content: space-between; }
+.edit-inline__label { min-width: 84px; color: var(--text-secondary); }
+.edit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.edit-list__item { padding: 8px 10px; border: 1px solid var(--border-color); border-radius: var(--radius); background: var(--bg-color); }
+.edit-list__item--flagged { border-color: var(--warning-color); }
+.edit-list__row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.edit-list__index { min-width: 20px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.edit-list__name { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.edit-list__spacer { flex: 1; }
+.edit-badge { padding: 1px 6px; border-radius: 3px; font-size: 12px; background: var(--control-bg); color: var(--text-secondary); }
+.edit-flag { margin: 4px 0; font-size: 12px; color: var(--warning-color); }
+.edit-error { color: var(--danger-color); font-size: 13px; margin: 4px 0; }
+.edit-errors { margin: 4px 0; padding-left: 18px; color: var(--danger-color); font-size: 13px; }
+.edit-check { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.edit-check--missing { color: var(--danger-color); font-weight: 600; }
+.edit-radio { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
+.edit-time { width: 110px; font-variant-numeric: tabular-nums; }
+.edit-time[aria-invalid="true"] { border-color: var(--danger-color); }
+.edit-ms { width: 110px; font-variant-numeric: tabular-nums; }
+.edit-select { width: auto; }
+.edit-progress { display: inline-block; width: 120px; height: 6px; border-radius: 3px; background: var(--border-color); overflow: hidden; }
+.edit-progress i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
+.edit-sources { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
+.edit-sources dt { color: var(--text-secondary); }
+.edit-sources dd { margin: 0; overflow: hidden; text-overflow: ellipsis; }
+.edit-unmatched { margin: 0; padding-left: 18px; font-size: 13px; }
+.edit-output { border-top: 1px solid var(--border-color); padding-top: 6px; font-size: 13px; }
+.edit-output summary { cursor: pointer; font-weight: 600; }
+.edit-tracks { width: 100%; border-collapse: collapse; font-size: 12px; }
+.edit-tracks th, .edit-tracks td { text-align: left; padding: 3px 6px; border-bottom: 1px solid var(--border-color); vertical-align: top; }
+.edit-tracks__dropped { opacity: 0.6; text-decoration: line-through; }
+.edit-mapping { display: inline-block; margin-right: 10px; }
+.edit-mapping--conflict { color: var(--danger-color); }
+.edit-mapping--filled { color: var(--warning-color); }
+.edit-conflicts, .edit-warnings { display: grid; gap: 6px; }
+.edit-conflict { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.edit-projects { display: grid; gap: 8px; }
+.edit-projects h3 { margin: 0; font-size: 14px; }
+.edit-projects__list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.edit-projects__item { border: 1px solid var(--border-color); border-radius: var(--radius); padding: 6px 8px; display: grid; gap: 4px; }
+.edit-projects__item.active { border-color: var(--accent-color); background: var(--accent-soft); }
+.edit-projects__select { display: grid; gap: 3px; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
+.edit-projects__title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.edit-projects__actions { display: flex; gap: 6px; }

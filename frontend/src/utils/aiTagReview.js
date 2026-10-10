@@ -47,12 +47,12 @@ export function groupCandidatesByVideo(candidates) {
   }));
 }
 
-export function filterCandidatesForReview(candidates, searchTerm) {
+export function filterCandidatesForReview(candidates, searchTerm, mediaField = 'video') {
   const keyword = String(searchTerm || '').trim().toLowerCase();
   const list = Array.isArray(candidates) ? candidates : [];
   if (!keyword) return list;
   return list.filter(candidate => {
-    const video = candidate?.video || {};
+    const video = candidate?.[mediaField] || {};
     return [
       video.name,
       video.path,
@@ -228,4 +228,22 @@ export function batchApprovalSummaryText(summary) {
     parts.push(`${summary.failed} 条失败（${reasons}）`);
   }
   return `${parts.join('，')}。`;
+}
+
+// Outcomes only identify rows to recheck. Old batches cannot decide whether a
+// newly loaded or newly analysed candidate is still pending now.
+export function reviewOutcomeCandidateIDs(candidates, outcomes, mediaField = 'video_id') {
+  const ids = new Set((outcomes || []).map(item => Number(item.id)));
+  const targets = new Set((outcomes || []).filter(item => item.state === 'approved' && item.media_id && item.tag_id).map(item => `${Number(item.media_id)}:${Number(item.tag_id)}`));
+  return (candidates || []).filter(item => ids.has(Number(item.id)) || targets.has(`${Number(item[mediaField])}:${Number(item.matched_tag_id)}`)).map(item => Number(item.id));
+}
+
+export function applyReviewCandidateRefresh(candidates, snapshot, pending) {
+  const expected = new Map(snapshot.map(item => [Number(item.id), item]));
+  const current = new Map(pending.map(item => [Number(item.id), item]));
+  return candidates.flatMap(item => {
+    const id = Number(item.id);
+    if (expected.get(id) !== item) return [item];
+    return current.has(id) ? [current.get(id)] : [];
+  });
 }

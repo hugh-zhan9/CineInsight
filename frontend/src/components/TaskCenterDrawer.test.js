@@ -16,7 +16,7 @@ import { feedbackState, resetFeedback, resolveConfirm } from '../utils/feedback.
 
 const KEYS = Object.keys(BACKGROUND_TASK_LABELS);
 
-// 22 个 key 的快照：默认空闲，按用例覆盖其中几项。
+// 26 个 key 的快照：默认空闲，按用例覆盖其中几项。
 function snapshot({ overrides = {}, recent = [], warnings = [] } = {}) {
   return {
     items: KEYS.map(key => ({
@@ -51,7 +51,34 @@ afterEach(() => {
 });
 
 describe('任务中心快照展示（APP-03）', () => {
-  it('APP-03 22 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
+  it('keeps skipped and unprocessed review counts distinct from success', async () => {
+    api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({ overrides: { ai_review: { last_run: { succeeded: 3, failed: 1, skipped: 2, remaining: 4, failures: [] } } } }));
+    const wrapper = mountDrawer(); await flushPromises();
+    expect(wrapper.get('[data-test="task-item-last-ai_review"]').text()).toContain('成功 3 · 失败 1 · 跳过 2 · 未处理 4');
+  });
+
+  it('运行状态只在选中该页签后检查，关闭后不挂载诊断页面', async () => {
+    const wrapper = mountDrawer();
+    await flushPromises();
+    expect(api.GetSystemHealthSection).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="task-center-tab-health"]').trigger('click');
+    await flushPromises();
+    expect(api.GetSystemHealthSection).toHaveBeenCalledTimes(6);
+    expect(wrapper.find('[data-test="system-health"]').exists()).toBe(true);
+    await wrapper.setProps({ open: false });
+    expect(wrapper.find('[data-test="system-health"]').exists()).toBe(false);
+  });
+
+  it('诊断里的任务处理入口回到任务页签', async () => {
+    const wrapper = mountDrawer();
+    await wrapper.get('[data-test="task-center-tab-health"]').trigger('click');
+    await flushPromises();
+    await wrapper.vm.runHealthCommand('action:task-center');
+    expect(wrapper.vm.section).toBe('tasks');
+    expect(wrapper.find('[data-test="task-center-recent"]').exists()).toBe(true);
+  });
+
+  it('APP-03 26 个 key 全部列出，按运行中 / 等待空闲 / 空闲分组，名字一律是中文标签', async () => {
     api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({
       overrides: {
         phash: { state: 'running', progress: { done: 3, total: 10 }, actions: ['cancel'] },
@@ -61,10 +88,10 @@ describe('任务中心快照展示（APP-03）', () => {
     const wrapper = mountDrawer();
     await flushPromises();
 
-    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(22);
+    expect(wrapper.findAll('[data-test^="task-item-state-"]')).toHaveLength(26);
     expect(wrapper.get('[data-test="task-center-section-running"]').text()).toContain('近重复指纹');
     expect(wrapper.get('[data-test="task-center-section-waiting_idle"]').text()).toContain('图片 EXIF');
-    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(20);
+    expect(wrapper.get('[data-test="task-center-section-idle"]').findAll('li.task-item')).toHaveLength(24);
     const names = wrapper.findAll('.task-item .task-item__name').map(name => name.text());
     expect(names).toEqual(expect.arrayContaining(Object.values(BACKGROUND_TASK_LABELS)));
     for (const key of ['image_cleanup', 'watchlist_enrich', 'movie_chart', 'browser_download']) {
@@ -319,5 +346,26 @@ describe('集中整理任务历史入口', () => {
     expect(wrapper.text()).toContain('集中整理');
     await wrapper.get('[data-test="task-recent-action-cleanup_consolidation-11-open_consolidation"]').trigger('click');
     expect(wrapper.emitted('open-consolidation')).toEqual([[11]]); expect(wrapper.emitted('close')).toHaveLength(1); wrapper.unmount();
+  });
+});
+
+describe('视频工作台最近任务（P-008）', () => {
+  it('导出中的项目可取消，也可在工作台中打开（关闭抽屉）', async () => {
+    api.GetTaskCenterSnapshot.mockResolvedValue(snapshot({ recent: [
+      { kind: 'video_edit', id: '31', title: '合并 3 个视频', status: 'running', message: '', actions: ['cancel', 'open_video_edit'] },
+      { kind: 'video_edit', id: '32', title: '去片头', status: 'partial', message: '1 项失败', actions: ['open_video_edit'] }
+    ] }));
+    const wrapper = mountDrawer();
+    await flushPromises();
+    expect(wrapper.get('[data-test="task-recent-video_edit"]').text()).toContain('视频工作台');
+    expect(wrapper.get('[data-test="task-recent-video_edit-31"]').text()).toContain('导出中');
+    expect(wrapper.get('[data-test="task-recent-video_edit-32"]').text()).toContain('部分完成');
+    await wrapper.get('[data-test="task-recent-action-video_edit-31-cancel"]').trigger('click');
+    await flushPromises();
+    expect(api.CancelEditProject).toHaveBeenCalledWith(31);
+    await wrapper.get('[data-test="task-recent-action-video_edit-32-open_video_edit"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('open-video-edit')[0]).toEqual([32]);
+    expect(wrapper.emitted('close')).toBeTruthy();
   });
 });

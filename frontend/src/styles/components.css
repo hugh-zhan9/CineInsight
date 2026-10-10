@@ -538,9 +538,9 @@ input:checked + .slider::before {
 .row-btn.active { border-color: var(--accent-color); background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 
 /* 网格卡（原型 A3）：元信息压在缩略图上，标题两行，底部四个动作 */
-.virtual-video-list--grid {
+.virtual-video-list--grid .virtual-video-list__items {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  /* Column count comes from the measured container width. */
   justify-content: start;
   align-items: start;
   gap: 12px;

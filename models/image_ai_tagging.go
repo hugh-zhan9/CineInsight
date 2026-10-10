@@ -5,7 +5,7 @@ import "time"
 // ImageAITagCandidate 镜像 AITagCandidate 的字段与索引形态，承载图片侧未确认的 AI 标签建议。
 // 图片侧是单轮请求，没有 run 历史表，因此不带 RunID/Run。
 type ImageAITagCandidate struct {
-	ID            uint   `gorm:"primarykey" json:"id"`
+	ID            uint   `gorm:"primarykey;index:idx_image_ai_tag_candidates_status_id,priority:2,sort:desc" json:"id"`
 	ImageID       uint   `gorm:"index:idx_image_ai_tag_candidates_image_status,priority:1" json:"image_id"`
 	Image         Image  `gorm:"constraint:OnDelete:CASCADE;" json:"image"`
 	SuggestedName string `gorm:"not null" json:"suggested_name"`
@@ -17,7 +17,7 @@ type ImageAITagCandidate struct {
 	Confidence     string     `gorm:"index;not null" json:"confidence"`
 	Reasoning      string     `gorm:"type:text" json:"reasoning"`
 	SourceSummary  string     `gorm:"type:text" json:"source_summary"`
-	Status         string     `gorm:"index:idx_image_ai_tag_candidates_image_status,priority:2;index:idx_image_ai_tag_candidates_matched_status,priority:2;index:idx_image_ai_tag_candidates_status_approved,priority:1;index:idx_image_ai_tag_candidates_status_rejected,priority:1;not null;default:'pending'" json:"status"`
+	Status         string     `gorm:"index:idx_image_ai_tag_candidates_status_id,priority:1;index:idx_image_ai_tag_candidates_image_status,priority:2;index:idx_image_ai_tag_candidates_matched_status,priority:2;index:idx_image_ai_tag_candidates_status_approved,priority:1;index:idx_image_ai_tag_candidates_status_rejected,priority:1;not null;default:'pending'" json:"status"`
 	CreatedAt      time.Time  `json:"created_at" ts_type:"string"`
 	UpdatedAt      time.Time  `json:"updated_at" ts_type:"string"`
 	ApprovedAt     *time.Time `gorm:"index:idx_image_ai_tag_candidates_status_approved,priority:2" json:"approved_at,omitempty" ts_type:"string"`

@@ -1,6 +1,8 @@
 package services
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -21,7 +23,7 @@ func WithoutAbsolutePaths(err error) error {
 	if err == nil {
 		return nil
 	}
-	msg := scrubAbsolutePaths(err.Error())
+	msg := scrubAbsolutePaths(scrubTypedErrorPaths(err, err.Error()))
 	if msg == err.Error() {
 		return err
 	}
@@ -47,4 +49,32 @@ func scrubAbsolutePaths(text string) string {
 		}
 		return lead + "<path>" + suffix
 	})
+}
+
+// A filesystem path may contain spaces or punctuation. Replace the entire
+// typed path before the generic textual scrubber, retaining wrapping codes.
+func scrubTypedErrorPaths(err error, message string) string {
+	replace := func(path string) {
+		if filepath.IsAbs(path) {
+			message = strings.ReplaceAll(message, path, "<path>")
+		}
+	}
+	switch e := err.(type) {
+	case *os.PathError:
+		replace(e.Path)
+	case *os.LinkError:
+		replace(e.Old)
+		replace(e.New)
+	}
+	switch e := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, child := range e.Unwrap() {
+			message = scrubTypedErrorPaths(child, message)
+		}
+	case interface{ Unwrap() error }:
+		if child := e.Unwrap(); child != nil {
+			message = scrubTypedErrorPaths(child, message)
+		}
+	}
+	return message
 }

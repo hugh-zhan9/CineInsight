@@ -46,6 +46,7 @@
             <div class="preview-drawer__player-shell">
               <video
                 ref="videoElement"
+                :key="previewMediaGeneration"
                 class="preview-drawer__video"
                 controls
                 playsinline
@@ -56,7 +57,7 @@
                 @timeupdate="handleTimeUpdate"
                 @seeking="handleSeeking"
                 @pause="handlePause"
-                @ended="emitWatchProgress(true, true)"
+                @ended="handleEnded"
                 @error="handleVideoError"
               >
                 <source :src="currentSession.inline_source.locator_value" :type="currentSession.inline_source.mime" @error="handleSourceError" />
@@ -105,6 +106,14 @@
           </template>
           <div v-else class="preview-drawer__placeholder">{{ currentSession.reason_message || '当前视频暂不支持预览。' }}</div>
         </section>
+
+        <QueueActionButton :video-ids="[details.video.id]" />
+        <p v-if="bookmarkSourceMismatch" role="alert" data-test="bookmark-preview-changed">原片在打开预览前已改变，请重新核对书签，未套用旧位置。</p>
+        <div v-if="bookmarkRangeFinished" class="detail-action-row" data-test="bookmark-range-finished"><span>已到书签区间末尾</span><button type="button" @click="continueBookmarkPlayback">继续整片</button></div>
+        <details class="detail-section" @toggle="bookmarkPanelOpen = $event.target.open">
+          <summary>片段书签与笔记</summary>
+          <BookmarkPanel v-if="bookmarkPanelOpen" :key="details.video.id" :video="details.video" :session="currentSession" :current-position="bookmarkCurrentPosition" :page-active="pageActive" @open-bookmark="applyBookmarkResolution" @open-video="previewCurrentBookmarkVideo" />
+        </details>
 
         <section class="detail-section">
           <div class="detail-section__heading"><h4>作品信息</h4><span class="detail-readonly-hint">文件名不会被修改</span></div>
@@ -386,6 +395,7 @@
             <button v-if="relatedVideoHasMore" type="button" class="btn-secondary" :disabled="relatedVideoSearching" @click="searchRelatedVideos(false)">{{ relatedVideoSearching ? '加载中...' : '加载更多搜索结果' }}</button>
             <p v-if="relatedVideoSearchPerformed && !relatedVideoSearching && availableRelatedVideoCandidates.length === 0" class="detail-empty">没有可加入的视频。</p>
           </div>
+          <QueueActionButton :collection-id="Number(currentEntry.id)" label="整个作品集加入队尾" />
           <div class="related-video-list">
             <RelatedVideoItem
               v-for="(member, index) in collectionDetail.videos || []"
@@ -400,7 +410,12 @@
               @drop="dropCollectionMember(index)"
               @open="openVideo(member.video.id)"
               @action="removeRelatedVideo(member.video)"
-            />
+            >
+              <template #actions>
+                <QueueActionButton :collection-id="Number(currentEntry.id)" :start-video-id="Number(member.video.id)" replace label="从本集播放" @started="$refs.videoElement?.pause()" />
+                <QueueActionButton :collection-id="Number(currentEntry.id)" :start-video-id="Number(member.video.id)" start-after replace label="下一集" @started="$refs.videoElement?.pause()" />
+              </template>
+            </RelatedVideoItem>
           </div>
           <p v-if="!(collectionDetail.videos || []).length" class="detail-empty">作品集尚无视频。</p>
         </section>
@@ -435,6 +450,8 @@ import ImageSourceDialog from './ImageSourceDialog.vue';
 import WallpaperButton from './WallpaperButton.vue';
 import ImageLibraryPicker from './ImageLibraryPicker.vue';
 import PersonMediaDeleteDialog from './PersonMediaDeleteDialog.vue';
+import BookmarkPanel from './BookmarkPanel.vue';
+import QueueActionButton from './QueueActionButton.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
@@ -456,12 +473,13 @@ const sameIDSet = (a, b) => {
 
 export default {
   name: 'PreviewDrawer',
-  components: { ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton },
+  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
     session: { type: Object, default: null },
     startTimeMs: { type: Number, default: null },
+    bookmarkPosition: { type: Object, default: null },
     resumePositionSeconds: { type: Number, default: 0 },
     pageActive: { type: Boolean, default: true }
   },
@@ -485,6 +503,8 @@ export default {
       personImages: [], personImageCursor: 0, personImagesLoading: false, personImageUpdatingIDs: [], personImageError: '',
       collectionDetail: null, collectionEdit: { name: '', description: '' }, draggedMemberIndex: -1,
       relatedVideoKeyword: '', relatedVideoDirectory: '', relatedVideoDirectories: [], relatedVideoCandidates: [], relatedVideoSelection: [], relatedVideoCursor: null, relatedVideoHasMore: false, relatedVideoSearching: false, relatedVideoSearchPerformed: false, relatedVideoUpdatingIDs: [], relatedVideoError: '',
+      previewMediaGeneration: 0,
+      bookmarkPanelOpen: false, bookmarkRequest: null, bookmarkRangeActive: false, bookmarkRangeFinished: false,
       appliedSeekKey: '', lastProgressEmittedAt: 0, resettingVideo: false, hasPlaybackStarted: false,
       seekPreview: null, seekSpriteUnavailable: false, seekSpriteRetryCount: 0, seekSpriteRetryTimer: null,
       playbackProxy: null, proxyBusy: false, proxyError: '', proxyNotice: '',
@@ -496,6 +516,13 @@ export default {
     };
   },
   computed: {
+    bookmarkSourceMismatch() {
+      return !!(this.bookmarkRequest && this.currentSession && Number(this.currentEntry?.id) === Number(this.bookmarkRequest.videoID) && this.currentSession.source_version !== this.bookmarkRequest.sourceToken);
+    },
+    readyBookmark() {
+      const request = this.bookmarkRequest;
+      return request && this.currentEntry?.type === 'video' && Number(this.currentEntry.id) === Number(request.videoID) && Number(this.currentSession?.video_id) === Number(request.videoID) && this.currentSession?.source_version === request.sourceToken ? request : null;
+    },
     currentSession() {
       if (this.currentEntry?.type !== 'video') return null;
       return Number(this.currentEntry.id) === Number(this.video?.id) ? this.session : this.nestedSession;
@@ -617,12 +644,17 @@ export default {
     }
   },
   watch: {
+    bookmarkPosition: { immediate: true, handler(request) { this.setBookmarkRequest(request); } },
+    currentEntry(entry) {
+      if (this.bookmarkRequest && (entry?.type !== 'video' || Number(entry.id) !== Number(this.bookmarkRequest.videoID))) this.setBookmarkRequest(null);
+    },
     'video.id'() { if (!this.initialEntity) this.resetRootEntry(); },
     initialEntity: { deep: true, handler() { if (this.initialEntity) this.resetRootEntry(); } },
     currentSession: {
       immediate: true,
       handler(newSession, oldSession) {
         if (oldSession) { this.emitWatchProgress(true, false, oldSession?.video_id); this.resetVideoElement(); }
+        this.previewMediaGeneration++;
         this.appliedSeekKey = '';
         this.seekPreview = null; this.seekSpriteUnavailable = false; this.clearSeekSpriteRetry();
         // 换了会话就是换了一次播放：报错状态清掉，重新开一个观看会话（D-PC43）。
@@ -650,6 +682,29 @@ export default {
     this._proxyStateOff?.(); this._proxyStateOff = null;
   },
   methods: {
+    bookmarkCurrentPosition() { return Number(this.$refs.videoElement?.currentTime || 0); },
+    setBookmarkRequest(request) {
+      this.bookmarkRequest = request ? { ...request } : null; this.bookmarkRangeActive = request?.endMS != null; this.bookmarkRangeFinished = false;
+      this.appliedSeekKey = '';
+      if (request && this._viewSession) this._viewSession.origin = 'jump';
+      this.$nextTick(() => this.configureVideoElement());
+    },
+    applyBookmarkResolution(result) {
+      if (result?.status !== 'ready' || Number(result.video?.id) !== Number(this.currentEntry?.id)) return;
+      this._localBookmarkRequestID = (this._localBookmarkRequestID || 0) + 1;
+      this.setBookmarkRequest({ videoID: result.video.id, startMS: result.bookmark.start_ms, endMS: result.bookmark.end_ms, sourceToken: result.source_token, requestID: `local:${this._localBookmarkRequestID}` });
+    },
+    async previewCurrentBookmarkVideo() {
+      this.setBookmarkRequest(null);
+      const videoID = Number(this.currentEntry?.id);
+      if (this.currentEntry?.type !== 'video' || !videoID) return;
+      await this.reloadPreviewSessionForProxy(videoID, this._entryLoadToken);
+      this.$refs.videoElement?.scrollIntoView?.({ block: 'center' });
+    },
+    continueBookmarkPlayback() {
+      this.bookmarkRangeActive = false; this.bookmarkRangeFinished = false;
+      Promise.resolve(this.$refs.videoElement?.play()).catch(err => { this.actionError = `继续播放失败：${err}`; });
+    },
     requestPersonMediaDelete(kind, media) {
       if (this.currentEntry?.type !== 'person') return;
       this.imagePreview = null;
@@ -1309,16 +1364,21 @@ export default {
       return {
         entryID: this.currentEntry?.id,
         rootVideoID: this.video?.id,
-        explicitStartTimeMs: this.startTimeMs,
+        explicitStartTimeMs: this.readyBookmark ? this.readyBookmark.startMS : this.startTimeMs,
         rootResumePositionSeconds: this.resumePositionSeconds,
         nestedResumePositionSeconds: resumePosition(this.details?.video)
       };
     },
     applyStartTime(video) {
-      const startTimeMs = detailPlaybackStartMs(this.playbackStartOptions());
-      if (video.readyState < 1 || startTimeMs === 0) return;
-      let seekSeconds = startTimeMs / 1000; if (Number.isFinite(video.duration) && video.duration > 0) seekSeconds = Math.min(seekSeconds, Math.max(video.duration - 0.001, 0));
-      const seekKey = `${this.currentSession?.video_id || ''}:${seekSeconds}`; if (seekKey === this.appliedSeekKey) return; video.currentTime = seekSeconds; this.appliedSeekKey = seekKey;
+      const bookmark = this.readyBookmark;
+      if (this.bookmarkSourceMismatch) return;
+      const startTimeMs = bookmark ? bookmark.startMS : detailPlaybackStartMs(this.playbackStartOptions());
+      if (video.readyState < 1 || (startTimeMs === 0 && !bookmark)) return;
+      let seekSeconds = startTimeMs / 1000;
+      if (Number.isFinite(video.duration) && video.duration > 0) seekSeconds = Math.min(seekSeconds, Math.max(video.duration - 0.001, 0));
+      const seekKey = `${this.currentSession?.video_id || ''}:${seekSeconds}:${bookmark?.requestID || ''}`;
+      if (seekKey === this.appliedSeekKey) return;
+      video.currentTime = seekSeconds; this.appliedSeekKey = seekKey;
     },
     // ===== 观看会话（D-PC43、PLAY-07）=====
     // 每次打开内嵌播放器是一个会话：会话标识每次新生成，累计播放首次越过 viewThreshold、或判定看完时
@@ -1334,7 +1394,12 @@ export default {
       const duration = Number(video?.duration);
       return Number.isFinite(duration) && duration > 0 ? duration : 0;
     },
+    handleEnded() {
+      this.emitWatchProgress(true, true);
+      if (this._viewSession) this._viewSession.ended = true;
+    },
     handlePlay() {
+      if (this._viewSession?.ended) this.startViewSession(this.currentSession);
       this.hasPlaybackStarted = true;
       const session = this._viewSession;
       if (!session) return;
@@ -1350,6 +1415,10 @@ export default {
     handleTimeUpdate() {
       const video = this.$refs.videoElement;
       if (video && !video.paused && !video.seeking) this._viewSession?.accumulator.sample(video.currentTime, Date.now(), video.playbackRate);
+      if (video && this.readyBookmark && this.bookmarkRangeActive && Number(video.currentTime) * 1000 >= this.readyBookmark.endMS) {
+        this.bookmarkRangeActive = false; this.bookmarkRangeFinished = true;
+        video.pause();
+      }
       this.maybeRecordView(false);
       this.emitWatchProgress(false, false);
     },

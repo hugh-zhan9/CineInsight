@@ -163,10 +163,11 @@ assert.match(componentSource, /class="btn-secondary btn-compact" @click="preview
 assert.match(componentSource, /class="btn-secondary btn-compact" @click="openRenameDialog/, 'AI review rename action should use the shared compact button size');
 assert.match(componentSource, /class="btn-secondary btn-compact" @click="retryVideo/, 'AI review retry action should use the shared compact button size');
 // 候选没有上限：审阅工作台必须走分页接口，并把"还有下一页"做成显式入口。
-assert.match(componentSource, /ListAITagCandidatePage\(0, '', 'pending', 0, 0\)/, 'the workbench should load the first candidate page, not every candidate');
+assert.match(componentSource, /this\.candidatePageRequest\(query\)/, 'the workbench should load the first page through its filtered request helper');
 assert.match(componentSource, /ListAITagCandidatePage\(0, '', 'pending', cursor, limit\)/, 'load-more should continue from the page cursor');
 assert.match(componentSource, /data-test="ai-candidate-load-more"/, 'the workbench needs an explicit load-more entry');
-assert.match(componentSource, /loadAllCandidatesForSearch/, 'keyword search must still cover every pending candidate, not only loaded pages');
+assert.match(componentSource, /SearchAITagCandidatePage\(\{ \.\.\.query, cursor_id: cursor, limit \}\)/, 'keyword search must query the full range on the server with the current cursor');
+assert.doesNotMatch(componentSource, /loadAllCandidatesForSearch/, 'keyword search must not fetch every page into the frontend');
 assert.doesNotMatch(componentSource, /ListAITagCandidates\(/, 'the workbench should no longer pull the unbounded candidate list');
 assert.match(componentSource, /thumbnailURL\(group\.videoId\)/, 'AI tag candidate groups should show the video thumbnail');
 assert.match(componentSource, /ai-video-thumbnail--failed/, 'AI tag candidate thumbnails need a local failure placeholder');

@@ -213,7 +213,7 @@ func TestMEDIA10RelaunchPendingStateQuitsDirectlyAndSummariesStayReadable(t *tes
 		t.Fatal(err)
 	}
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 	if err := app.StartDatabaseSwitch("sqlite"); err != nil {
 		t.Fatalf("发起切换失败: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestMEDIA10RestoreTerminalStateQuitsDirectlyAndSummariesStayReadable(t *tes
 		return opened
 	})
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 	backup, err := app.CreateDatabaseBackup()
 	if err != nil {
 		t.Fatalf("备份失败: %v", err)

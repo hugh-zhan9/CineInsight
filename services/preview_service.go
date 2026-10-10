@@ -15,6 +15,7 @@ type PreviewSession struct {
 	VideoID        uint                     `json:"video_id"`
 	Mode           string                   `json:"mode"`
 	DisplayName    string                   `json:"display_name"`
+	SourceVersion  string                   `json:"source_version,omitempty"`
 	InlineSource   *PreviewSourceDescriptor `json:"inline_source,omitempty"`
 	SeekSprite     *SeekSpriteDescriptor    `json:"seek_sprite,omitempty"`
 	ExternalAction *PreviewExternalAction   `json:"external_action,omitempty"`
@@ -91,6 +92,7 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 			ReasonMessage: "当前路径不是可预览的视频文件。",
 		}, nil
 	}
+	sourceVersion := videoSourceVersion(video.ID, info.Size(), info.ModTime().UnixNano())
 
 	// 先看有没有有效代理，有就用（D-PC26、PLAY-05）——包括白名单命中的文件：扩展名是 mp4
 	// 不代表内嵌 <video> 解得了（HEVC 无 hvc1、高码率等），用户专门生成的代理不该永远用不上。
@@ -98,9 +100,10 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 	// inlinePreviewMIMEs 本身不改（TestInlinePreviewMIMEsUnchanged）；正式播放永远打开源文件。
 	if proxy := s.playbackProxies().resolveValidProxy(video.ID, playbackProxyFingerprintOf(info), true); proxy != nil {
 		return &PreviewSession{
-			VideoID:     video.ID,
-			Mode:        "inline",
-			DisplayName: video.Name,
+			VideoID:       video.ID,
+			Mode:          "inline",
+			DisplayName:   video.Name,
+			SourceVersion: sourceVersion,
 			InlineSource: &PreviewSourceDescriptor{
 				LocatorStrategy: "asset_route",
 				LocatorValue:    previewMediaPath(video.ID),
@@ -113,9 +116,10 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 
 	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
 		return &PreviewSession{
-			VideoID:     video.ID,
-			Mode:        "inline",
-			DisplayName: video.Name,
+			VideoID:       video.ID,
+			Mode:          "inline",
+			DisplayName:   video.Name,
+			SourceVersion: sourceVersion,
 			InlineSource: &PreviewSourceDescriptor{
 				LocatorStrategy: "asset_route",
 				LocatorValue:    previewMediaPath(video.ID),
@@ -126,9 +130,10 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 	}
 
 	return &PreviewSession{
-		VideoID:     video.ID,
-		Mode:        "external-preview",
-		DisplayName: video.Name,
+		VideoID:       video.ID,
+		Mode:          "external-preview",
+		DisplayName:   video.Name,
+		SourceVersion: sourceVersion,
 		ExternalAction: &PreviewExternalAction{
 			ActionID:    "preview_externally",
 			ButtonLabel: "使用系统播放器预览",

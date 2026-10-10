@@ -75,6 +75,9 @@
           >▾</button>
         </div>
 
+        <button type="button" class="toolbar-btn" data-test="tonight-open" :disabled="searchMode === 'semantic' || migrationRunning || incrementalScan.running" :title="searchMode === 'semantic' ? '选片暂不支持语义搜索范围，请切换文件或字幕搜索' : null" @click="$emit('open-tonight')">今晚看什么</button>
+        <button type="button" class="toolbar-btn" data-test="toolbar-search-scenes" title="带上当前筛选条件进入场景检索（语义搜索词不带入）" @click="$emit('search-scenes')">在当前筛选中搜场景</button>
+
         <button
           ref="viewTrigger"
           type="button"
@@ -208,6 +211,11 @@
       </template>
       <span v-else class="result-bar__conditions">未设置筛选条件</span>
       <div class="result-bar__spacer"></div>
+      <!-- 多版本聚合（D-MW-VERSIONS）：开时每个版本组只出一张代表卡片，关时与逐个文件的视图完全一致。 -->
+      <label class="result-bar__toggle" data-test="collapse-versions-toggle" title="把同一作品的多个版本合并成一张卡片">
+        <input type="checkbox" :checked="collapseVersions" @change="$emit('update:collapseVersions', $event.target.checked)" />
+        合并版本
+      </label>
       <span class="result-bar__label">行高</span>
       <div class="segmented segmented--mini" role="group" aria-label="行高">
         <button type="button" :class="['segmented__btn', { active: rowDensity === 'compact' }]" @click="setRowDensity('compact')">紧凑</button>
@@ -221,12 +229,16 @@
       :selected-total-size-text="selectedTotalSizeText"
       :migration-running="migrationRunning"
       :all-visible-selected="allVisibleSelected"
+      @batch-playback-queue="$emit('batch-playback-queue')"
       @batch-add-tag="$emit('batch-add-tag')"
       @batch-move="$emit('batch-move')"
       @batch-local-metadata="$emit('batch-local-metadata')"
       @batch-playback-proxy="$emit('batch-playback-proxy')"
       @batch-subtitle="$emit('batch-subtitle')"
+      @batch-version-group="$emit('batch-version-group')"
       @batch-delete="$emit('batch-delete')"
+      @batch-edit-merge="$emit('batch-edit-merge')"
+      @batch-edit-trim="$emit('batch-edit-trim')"
       @toggle-select-all="$emit('toggle-select-all')"
       @clear-selection="$emit('clear-selection')"
     />
@@ -378,15 +390,19 @@ export default {
     playbackProxy: { type: Object, default: () => ({ running: false, processed: 0, total: 0 }) },
     // 标签底色的换算与筛选 DTO 的构造都还在片库页，这里按需调用。
     tagBgColor: { type: Function, required: true },
-    libraryFilterFrom: { type: Function, required: true }
+    libraryFilterFrom: { type: Function, required: true },
+    // 「合并版本」开关（默认开，本机记住）；真值在片库页。
+    collapseVersions: { type: Boolean, default: true }
   },
   emits: [
+    'open-tonight', 'search-scenes',
     'update:searchKeyword', 'update:smartView', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
     'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'open-tag-manager',
     'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
     'manage-select', 'view-select', 'random-select',
-    'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete'
+    'batch-playback-queue', 'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete',
+    'update:collapseVersions', 'batch-version-group', 'batch-edit-merge', 'batch-edit-trim'
   ],
   data() {
     return {
@@ -613,6 +629,7 @@ export default {
         { heading: '维护' },
         { id: 'tag-manager', label: '标签管理' },
         { id: 'collection-suggestions', label: this.collectionSuggestionAnalyzing ? '建议作品集（分析中）' : '建议作品集' },
+        { id: 'version-groups', label: '版本组' },
         { id: 'trash', label: '回收站' }
       );
       return items;
@@ -1094,6 +1111,7 @@ export default {
 .result-bar__sep { color: var(--hairline); }
 .result-bar__spacer { flex: 1; }
 .result-bar__label { color: var(--text-muted); }
+.result-bar__toggle { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); cursor: pointer; white-space: nowrap; }
 
 .result-bar__conditions {
   min-width: 0;

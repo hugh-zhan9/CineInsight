@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/url"
@@ -103,27 +104,45 @@ func mpvStartArg(position float64) string {
 //
 // 成功启动后调用 onPlaybackLaunched 登记本次会话。
 func launchPlayback(video *models.Video, mode string) error {
+	return launchPlaybackContext(context.Background(), video, mode)
+}
+func launchPlaybackContext(ctx context.Context, video *models.Video, mode string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if video == nil || strings.TrimSpace(video.Path) == "" {
 		return fmt.Errorf("视频路径为空")
+	}
+	runIINA := func(binary string, args ...string) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return runIINACommand(binary, args...)
+	}
+	openDefault := func() error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return openWithDefaultFn(video.Path, false)
 	}
 	startPosition := 0.0
 	var err error
 	switch {
 	case shouldRestartPlayback(mode, video):
 		if binary, ok := iinaCLILookup(); ok {
-			err = runIINACommand(binary, "--mpv-resume-playback=no", video.Path)
+			err = runIINA(binary, "--mpv-resume-playback=no", video.Path)
 		} else {
-			err = openWithDefaultFn(video.Path, false)
+			err = openDefault()
 		}
 	case resumable(video):
 		startPosition = video.WatchPositionSeconds
 		if binary, ok := iinaCLILookup(); ok {
-			err = runIINACommand(binary, mpvStartArg(startPosition), video.Path)
+			err = runIINA(binary, mpvStartArg(startPosition), video.Path)
 		} else {
-			err = openWithDefaultFn(video.Path, false)
+			err = openDefault()
 		}
 	default:
-		err = openWithDefaultFn(video.Path, false)
+		err = openDefault()
 	}
 	if err != nil {
 		return err

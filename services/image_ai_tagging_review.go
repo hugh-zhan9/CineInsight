@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -170,11 +171,30 @@ func (s *ImageAITaggingService) resolveOfficialImageTagInTx(tx *gorm.DB, candida
 // ApproveImageAITagCandidate 接受候选：写 image_tags + 审批记录，并把同图同名的其他待审候选
 // 置 superseded。事务语义逐条对齐视频侧 ApproveCandidate。
 func (s *ImageAITaggingService) ApproveImageAITagCandidate(candidateID uint) (*ImageAITaggingReviewItem, error) {
+	approved, err := s.approveImageCandidateCommitted(context.Background(), candidateID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.db.
+		Preload("Image", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
+		Preload("Image.Tags").
+		Preload("MatchedTag").
+		First(&approved, candidateID).Error; err != nil {
+		return nil, err
+	}
+	item := imageAITagCandidateReviewItem(approved)
+	return &item, nil
+}
+
+func (s *ImageAITaggingService) approveImageCandidateCommitted(ctx context.Context, candidateID uint, expected *[32]byte) (models.ImageAITagCandidate, error) {
 	var approved models.ImageAITagCandidate
-	err := database.Transaction(func(tx *gorm.DB) error {
+	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		var candidate models.ImageAITagCandidate
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", candidateID).First(&candidate).Error; err != nil {
 			return err
+		}
+		if expected != nil && imageReviewRevision(candidate) != *expected {
+			return ErrReviewChanged
 		}
 		if err := activeImageExistsInTx(tx, candidate.ImageID); err != nil {
 			return err
@@ -224,17 +244,9 @@ func (s *ImageAITaggingService) ApproveImageAITagCandidate(candidateID uint) (*I
 		return nil
 	})
 	if err != nil {
-		return nil, err
+		return models.ImageAITagCandidate{}, err
 	}
-	if err := s.db.
-		Preload("Image", func(db *gorm.DB) *gorm.DB { return db.Unscoped() }).
-		Preload("Image.Tags").
-		Preload("MatchedTag").
-		First(&approved, candidateID).Error; err != nil {
-		return nil, err
-	}
-	item := imageAITagCandidateReviewItem(approved)
-	return &item, nil
+	return approved, nil
 }
 
 // RejectImageAITagCandidate 拒绝单个待审候选。

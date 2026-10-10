@@ -214,6 +214,20 @@ func (s *BackupService) GetStatus() BackupStatus {
 		status.Reason = "无法读取备份设置"
 		return status
 	}
+	return s.statusFromSettings(settings)
+}
+
+// HealthStatus reports read failures separately so diagnostic metrics do not become false zeros.
+func (s *BackupService) HealthStatus(ctx context.Context) (BackupStatus, error) {
+	settings, err := (&SettingsService{}).GetSettingsContext(ctx)
+	if err != nil {
+		return BackupStatus{}, err
+	}
+	return s.statusFromSettings(settings), nil
+}
+
+func (s *BackupService) statusFromSettings(settings *models.Settings) BackupStatus {
+	status := BackupStatus{Running: s.running.Load()}
 	status.BackupDirectory = s.resolveDirectory(settings.BackupDirectory)
 	status.RetentionCount = normalizedBackupRetention(settings.BackupRetentionCount)
 	status.IntervalHours = normalizedBackupInterval(settings.BackupIntervalHours)

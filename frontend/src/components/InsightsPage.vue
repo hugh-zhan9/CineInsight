@@ -126,6 +126,7 @@ const PLAY_SOURCE_LABELS = {
   desktop_play: '启动播放',
   desktop_random: '随机启动播放',
   inline_view: '内嵌观看',
+  queue_view: '队列观看',
   mobile_feed: '手机观看',
   jellyfin_view: 'Jellyfin 观看',
   legacy: '历史补记'

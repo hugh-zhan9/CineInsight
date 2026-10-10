@@ -78,7 +78,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **统一标签库（2026-09-23 用户裁定）:** 用户明确“统一管理，全部标签都可供 AI 选择”。视频/图片 AI 加载、提示词、匹配、审核都使用全部未删除的非自动标签（`automatic_kind` 为空或历史 NULL），不再按 `is_system` / `is_active` 筛选，包括旧停用标签；**例外（2026-09-29/30，R7 / D-PC28 规则 6，收窄 D-004「全部标签都可供 AI」）**：「人物」分类（`TRIM(COALESCE(namespace,'')) = '人物'`，常量 `personTagNamespace`）的标签不进 AI 词表，视频与图片两侧一致；旧列保留而不迁移 ID 或重建关系。不 seed 词表，空库暂停，出集结果始终丢弃。标签逐项新建/编辑/删除，取消独立 AI 库编辑器和整库保存。标签与分类写入在原 `TagService` 事务中同步任务重排和候选校验；改名同步视频候选名称、图片候选作废，删除使两侧候选失效。旧 AI 库绑定暂保留历史字段读写，但不再有界面调用，不能限制 AI 资格。设置页仅维护模型和任务配置。完整裁定见 `docs/loopx/design/2026-09-23-tag-category-management.md` D-001～D-004。
 - **统一候选身份（2026-09-23）:** 历史 `Action` / `action` 等原名不同、归一化相同的标签保留各自 ID。模型名称精确优先，只有唯一时才用归一化匹配；两侧候选去重/审批联动、图片拒绝及前端局部移除均按 `matched_tag_id`。图片 pending 唯一索引改为 `(image_id, matched_tag_id)`；启动事务迁移保留同图同 ID 的最新 pending，其余置 superseded，再切换索引；失败阻止启动并回滚。`normalized_name` 仍作为名称快照保留。详见设计 D-007。
 - **AI 打标与人工标签（2026-09-29/30，R7 / D-PC28，视频与图片规则一致）:** ① 自动路径仍只分析没有人工标签的媒体；② 人工标签**不再**让整媒体的待审候选作废——手动加一个标签只把同媒体、`matched_tag_id` 等于该标签的待审候选条件更新为 `superseded`（原因「已手动添加」），其余候选保留（推翻此前「已有人工标签 → 整媒体 superseded」的行为，META-06 / IMG-08）；③ 视频侧写候选前排除 `(video_id, matched_tag_id)` 已被拒绝过的候选，与图片侧对齐（记住拒绝，META-01）；④ 只有标签新建 / 删除 / 改名 / 合并 / 转人物 / 改分类（且涉及 AI 词表）才重排打标，只改颜色不重排；词表指纹改为按 id 排序的 `(id, name, trimmed namespace)` 序列哈希、不含 `UpdatedAt`；⑤ 手动「重新分析」对已有人工标签的媒体同样生效（视频 `RetryVideo`，图片新增 `RetryImageAITagging`，行菜单与单图详情都有入口）；⑥ 词表排除「人物」分类（见上一条）。已删除图片的候选允许「全部拒绝」，待审计数只算活跃图片（IMG-14）。AI 打标 worker 的自动轮次过空闲门，见 2.19。
-- **批量审阅（D-PC29，META-11）:** 组头「批准本组全部」与筛选栏「批准筛选结果（N）」（二次确认）调 `ApproveAITagCandidates(ids)`：前端把列表中已加载且已过滤的 ID 传入，逐项沿用单条批准的事务，结果中每项带 `superseded` 标记与原因。`ApproveAITagCandidatesByFilter` 只接受必填的 `tag_id` 与可选的精确 `confidence`（不支持关键字），批准前用 `CountAITagCandidatesByFilter` 按同一口径预览数量。
+- **批量审阅（2026-10-10 D-MW-PERF，取代D-PC29旧确认后重查路径）:** 视频与图片均提供“批准已加载结果”和“批准全部筛选结果”，组头用已加载范围。全部先由候选服务预览数量、eligible集合及候选版本，确认只消费令牌；确认后新增或恢复资格的excluded项不入批，候选改写被跳过。进程内预览10分钟有效、最多2份/合计100万成员，单次匹配超100万完整拒绝，不截断后假称全部。逐项复用事务核心，成功以提交为准；后台进度/取消接任务中心和退出保护，维护取消并等待预览构建与执行，重启不自动批准剩余项。结果最多200项/页，前端按ID及媒体标签对定位待核对项，串行读取当前pending状态后局部更新；只有当前进程最近批次留存。旧仅审阅组件使用的3个批量Wails入口已迁移为四个 `*AIReviewApproval` 入口；服务层旧方法保留。工作区实现已通过独立复审、双库定向、race与全量检查；仅本地构建，未发布。详见[批量审阅合同](docs/loopx/design/2026-10-10-media-workbench/批量审阅合同.md)。
 - **统一标签统计:** 洞察页“标签 Top”按全部标签的关联视频数量排序；`top_ai_tags` 返回字段保留以免变更既有绑定，但不再按旧 AI 身份过滤。
 - **AI 抽帧与分批:** 固定按每分钟 1 帧、至少 10 帧取样，均匀覆盖 5%–95% 时段；图片按 `AITaggingImagesPerRequest`（默认 10）分批发送，同一视频的批次结果按标签去重并保留最高置信度。
 - **受限 AI 打标 Agent:** 初始证据收集后，外部 OpenAI 兼容模型最多进行 4 轮单动作决策，可选择结束、按模型指定数量补帧、请求本地临时字幕或查找同源视频；额外帧由服务端按最大空档取样并受 `AITaggingMaxExtraFrames`（默认 20，范围 1–100）约束，最后仍复用闭集分批标签分析与人工审批。
@@ -97,7 +97,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **手机端资源类型筛选与手势修复（2026-09-07）:** `GET /short-api/feed/next?media=all|video|image`（`NextItemFiltered(exclude, scope, media)`；`NextItemInScope` 保留为 media=all 的委托），与播放范围正交，非法值 400 `invalid_media`（哨兵错误 `ErrShortFeedInvalidMediaFilter`）；仅图片时不再回落"格式不支持"的视频提示；`/short-api/feed/scopes?media=` 的范围计数同样按类型收窄（`ScopeCountsFiltered`）。前端在「播放范围」面板顶部放三段切换（全部资源 / 仅视频 / 仅图片），选择记在 `localStorage` 的 `short-feed-media-kind`，切换后与换范围一样重开时间线（`restartTimeline`），顶栏范围标签带上「· 仅图片」。两处手势根因：① 舞台根节点对非交互目标一律 `preventDefault` 三个 touch 事件，底部面板的遮罩点击（合成 click）与输入框聚焦都被吃掉——`isInteractiveControl` 现在把 `.sheet-layer`、`input/textarea/select` 都算交互目标，`FeedSheet` 头部另加显式关闭按钮；② 图片放大后整个舞台让给原生平移，touch 路径不再识别双击，pointer 路径又只认非 touch，放大就回不来、上下滑也切不了——`finishPointerPress` 在放大态对 touch 也走 `handleStageTap`，`FeedStage` 放大时给「恢复适屏」按钮（`zoom-reset`）。注意 pointerup 先于 touchend：放大态开始的那段触摸要用 `touchBeganZoomed` 记下来，touchend 到时整段忽略，否则退出放大的同一下会被拿陈旧起点再算一次手势（再放大或误翻页）；双击一旦消费就清掉 `lastStageTapAt`。`DismissNearDuplicateGroup` 的写忽略表与判同源关系在同一事务里。
 - **候选审阅游标分页（2026-09-04）:** 待审候选没有上限，两个审阅界面原来都是一次全量下发（压 IPC + 一次渲染上千行）。现在走 `ListAITagCandidatePage` / `ListImageAITagCandidatePage`（App 层同名方法）：单键游标 `id < cursor` + `ORDER BY id DESC` + `LIMIT`，`NextID` 只在这一页满员时给出（短页即末页），页大小复用 `normalizeEntityPageLimit`（默认 50、上限 200），前端传 `limit=0` 用服务端默认。排序从 `(created_at desc, id desc)` 收成单键 `id desc`——键集分页需要单一稳定键，而 id 自增与 created_at 同向增长，用户看到的顺序不变。全量方法两个都保留，但用途不同：图片侧 `ListImageAITagCandidates` 仍服务单图视图（`PhotoLibraryPage`，一张图的候选是个位数）；视频侧 `ListCandidates` 与 `App.ListAITagCandidates` 已经没有前端调用方，只剩测试在用，属待清理的死绑定。
 - **分页后的局部更新规则:** 批准、拒绝、整媒体拒绝、重新分析、手动加标签都按后端实际改动的行局部移除（同媒体同标签 ID 候选一并 `superseded`；~~该媒体已有手工标签时整媒体作废~~——这条已被 2026-09-29/30 产品完善度批次推翻，见上文「AI 打标与人工标签」②；手动加标签后按 `(video_id, tag_id)` 只移除对应候选；`RetryVideo` 把该视频待审候选全部 `superseded`），因为整表重拉会把已翻出来的页丢掉、把用户拉回列表顶部。仍需真正重取的动作（手动刷新、同源删除、候选过期报错）显式回到第一页。当页被移空但后端还有下一页时自动补一页，避免"没有待审候选"的假空态。
-- **视频侧搜索口径不变:** 搜索仍覆盖全部待审候选——输入关键词时把剩余页一次翻完（`loadAllCandidatesForSearch`），不把关键词下推到 SQL（它要同时匹配视频名、路径、已有标签名、候选名、匹配标签名和理由，下推等于把这套语义复制进多表 LIKE）。这条只在用户明确检索时才触发全量加载。已知限制：两侧都没有虚拟滚动，连续翻很多页后 DOM 仍会变大；图片侧没有搜索框。
+- **审阅大库查询与渲染（2026-10-10）：** 两侧关键词搜索已改为服务端完整范围分页，保持名称/路径/标签/理由的Unicode字面子串匹配；两侧审阅使用逐条候选窗口，单媒体大量候选也不整组渲染。批量已加载/全部筛选均先预览并冻结集合，后台新候选不纳入本批；详见2.10及[批量审阅合同](docs/loopx/design/2026-10-10-media-workbench/批量审阅合同.md)。
 - **AI 审阅局部更新:** 批准、拒绝、重试、手动加标签和同源确认/否认优先局部移除或静默同步候选，操作时不切换为整页加载态；主片库仅在关闭审阅弹窗后统一刷新一次。
 
 ### 2.4 稳定分页机制 (Cursor-based Pagination)
@@ -174,11 +174,36 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **安全:** 保留原扩展名，目标文件已存在时拒绝操作，数据库更新失败时回滚文件名。扩展名规则（2026-09-29/30，D-PC12，LIB-03）：新名的扩展名为空、或不是已配置的视频扩展名时补上原扩展名（`The.Matrix.1999.1080p` 不再被当成扩展名 `.1080p`），显式改成另一个视频扩展名则照改；规范化后与当前文件名相同时直接返回、不动文件。
 
 ### 2.10 首页主列表虚拟化
+
+- **审阅搜索分页（2026-10-10，D-MW-PERF 查询部分）：** 视频/图片AI标签审阅使用服务端完整范围的关键词分页，覆盖名称、路径、已有标签、建议/匹配标签和理由；保留Unicode小写与字面子串语义。服务内以256条批次读取证据，只水合命中的当前页，默认50/最大200；候选新增(status,id DESC)索引。前端200ms防抖，筛选/游标隔离旧请求，失败保留上次内容；汇总与同源列表独立于搜索代次，读取未知不能报零。原“输入关键词加载全部剩余页”已移除。批量批准已按预览令牌冻结候选ID与版本，逐项事务执行，支持取消剩余；结果回放只触发当前候选的有界核对，不直接删除页面上的新状态。设计与临时库基准见 [媒体工作台](docs/loopx/design/2026-10-10-media-workbench/需求设计文档.md)。
 - **目标:** 当前首页主列表已经引入可回收 DOM 的虚拟列表机制，优先解决长列表滚动性能。
-- **滚动宿主:** 首轮实现以 `.main-view` 作为真实滚动宿主。
-- **高度策略:** 采用预估高度、渲染后测量和高度缓存的最小闭环。
+- **滚动宿主:** 首页以 `.main-view` 为宿主，恢复位置由 `VirtualVideoList` 单独拥有；父页传入 `pageActive`，隐藏后停止监听/测量。两侧审阅显式传各自滚动容器。
+- **高度策略（2026-10-10）：** `VirtualHeightIndex` 按逻辑行维护前缀和树，初建/数据重排O(N)，滚动定位及实测修正O(log N)。列表一项一行，网格取同排最大高度；宽度、密度、数据追加及标签变更以可见ID/偏移恢复。Vue提交后合并测量，代次隔离旧查询、切页和迟到回调；push/splice及标签改名也会更新几何。
 - **范围:** 首页主列表与字幕搜索结果均复用虚拟列表壳；字幕模式使用独立高度缓存维度。
-- **视觉布局:** 首页支持列表/响应式网格切换并持久化布局偏好；列表继续使用虚拟化，网格关闭行虚拟化并使用按页加载的多列缩略图卡片，卡片固定在紧凑宽度范围且不拉伸未满行。
+- **视觉布局:** 首页列表/响应式网格均启用窗口，持久化布局偏好；内部grid按200px最小宽度/12px间隔保留列数，外部上下占位不参与网格，末行卡片不拉伸。Mac WebKit守卫在真实WKWebView夹具验证后移除。`bash scripts/test_virtual_window_webkit.sh` 使用实际组件与合成数据覆盖2万视频、2万媒体/单媒体10万候选、首尾/宽度/密度/标签/追加/删除/切页；不连接用户库、不启动Wails服务，仍不代表完整应用的人工交互验收。
+
+### 2.10.1 今晚看什么（2026-10-10）
+- 片库工具栏打开选片弹窗，继承打开时的完整LibraryFilter；输入整片观看预算、仅未看/仅收藏。预算为0不限，有上限时未知时长不进入候选；语义搜索入口禁用并说明，不能忽略条件转全库。
+- `VideoService.SuggestTonight`纯读媒体/观看事实，复用现有范围与字幕索引同步；SQL按收藏、未看、个人评分、最近入库/ID顺序，只水合默认6/最多12项并给事实理由。时长预算是TonightRequest参数，不改变保存视图或随机算法。选择后复用原预览/PlayVideo(ID)。前端代次隔离旧输入响应，错误与零命中分开。
+- 设计/验证见[选片助手合同](docs/loopx/design/2026-10-10-media-workbench/选片助手合同.md)。
+
+### 2.10.2 观看笔记（2026-10-10）
+- 主导航“观看笔记”包含观影日记、片段书签和无法确认观看的播放记录；原“观影记录”仍按上映年份组织榜单标记。书签在视频详情中添加时间点/区间、笔记和局部标签，区间末尾暂停，可继续整片。定位带独立请求代次，0毫秒、重复定位与延迟元数据均受保护；预览会话刷新重建媒体元素，避免同一地址的source被清空后不再加载。
+- `BookmarkService`与`ViewingDiaryService`拥有独立记录。逻辑VideoID/SourcePlayEventID不设级联外键；原片永久删除后仍保留标题、日期/位置与正文。书签创建捕获预览source_version（videoID+size+mtimeNS摘要，非内容哈希），保存/定位/明确接受新源只检查单文件；普通文本编辑不接受新源。更新/删除按Revision条件提交，列表仅数据库分页，不全库stat。
+- 已确认的inline_view/jellyfin_view及带可选view_session_id的mobile_feed，与播放事件在同一事务创建日记；持久会话摘要唯一键涵盖删除占位，LRU淘汰后仍不重复计账。自然结束后重新播放、手机重新进入是新会话，自动loop/暂停/seek不是；Jellyfin复用同一会话ID时不猜测重看，允许手动补记。旧移动请求和外部启动保留旧统计，单列播放记录。自动条目初始评分为空，手工日记不自动合并，不同步文件级评分或已看。
+- ApplySchema以500条分批回填历史inline_view/jellyfin_view，来源日期标imported_local；无效日期/旧mobile启动不冒充观看。自动日记删除只保留去重键等最小占位、清除用户内容，手工日记直接删除。迁库复制各自增序列已消耗高水位，防止已删除视频/事件ID复用；保留调用方维护权限与取消上下文。
+- 日记/书签界面50条一页，过期请求隔离；只在最新成功响应时同时提交内容、游标和历史。核对新原片时挂起编辑并保留草稿，保存中锁定字段；页面首次挂载后保留，返回刷新列表，隐藏页Escape不丢草稿。年度回顾按WatchedOn统计实际记录数，不推算观看小时。
+- 双库、迁移/删除/并发、全量检查及原生合成视频验证见[书签与日记合同](docs/loopx/design/2026-10-10-media-workbench/书签与日记合同.md)。`bash scripts/test_viewing_notes_webkit.sh`验证真实解码与回跳/区间暂停/重播/同地址重载；桥接使用夹具，不能替代完整应用在真实片库的人工验收。
+
+### 2.10.3 下一集与待播队列（2026-10-10）
+- 全局一条持久队列（`playback_queue_states` 固定ID=1 + `playback_queue_entries`），条目可重复、冻结加入时的作品集顺序；结构/选择/设置修改带`expected_revision`做CAS，读取按`(position,id)`游标并在Revision变化时返回`queue_changed`。容量1万项、单次显式加入≤1000个ID，超限整次拒绝。重启把运行态标interrupted并保持暂停，不自行起播。
+- 播放器：系统默认（只支持手动下一项）、应用内`QueueInlinePlayer`（`/preview/queue/{32位hex token}`，以租用的文件描述符按Range服务并逐次复核源size/mtime，不暴露路径）、专用IINA进程（私有mpv IPC，keep-open=yes的`eof-reached`为结束事实，观察者每个进程只注册一次，复用进程时先读当前playlist entry再loadfile）。自动连播默认关，只有当前token/entry的可靠自然结束推进一次；暂停、停止、关闭、崩溃、加载失败、重复结束都不推进。**拖动到末尾不算自然结束**（seek后必须观察到越过落点的实际播放），返回`queue_end_ignored`且不记有效观看；迟到/重挂载的旧序号返回`queue_stale_event`，播放器暂停并提示重新播放。IINA的time-pos事件按最新值合并，其他事件保序，超过128条积压才停止控制。
+- 正式统计、有效观看与日记复用VideoService/viewEvents的context核心；维护与退出先关闭队列准入再立围栏。合同见[播放队列合同](docs/loopx/design/2026-10-10-media-workbench/播放队列合同.md)。真实IINA集成测试需`CINEINSIGHT_TEST_IINA=1`。
+
+### 2.10.4 多版本聚合（2026-10-10）
+- 人工确认的版本组：`video_version_groups`（Revision CAS）、`video_version_members`（`video_id`主键→一个视频至多一组，组与视频均级联；label≤40、position>0，第1位为主版本）、`video_version_suggestion_dismissals`。每组2–20个活跃视频；成员数不足2的组在任何写操作中顺带清理，展示时按普通卡片处理。已看/进度/评分/收藏/标签/字幕/播放计数全部按文件独立，分组只汇总，任何组操作都不写成员字段。
+- 片库：`LibraryFilter.collapse_versions`只被`SearchLibraryVideoPage`（均衡/评分排序）与`CountLibraryVideos`读取，在原过滤上加`ROW_NUMBER() OVER (PARTITION BY COALESCE(vm.group_id, 0 - videos.id) ORDER BY COALESCE(vm.position,0), videos.id)`代表条件——每组取符合筛选的首位成员，原排序/游标不变，计数按卡片；页结果`version_groups`只为本页代表一次批量读出。随机、今晚看什么、语义、最近播放、继续观看、字幕命中、按筛选批量操作与保存视图一律忽略该字段。工具栏“合并版本”开关默认开（localStorage `library-collapse-versions`）。
+- 建议只来自`detected`同源配对：双方活跃非失效、未入组、时长比≥90%（排除截取片段）、未忽略，并查集成组≤20。错误码`version_group_conflict`、`version_member_conflict: … {"video_ids":[..],"group_ids":[..]}`、`version_group_invalid`、`version_group_not_found`。入口：行徽标展开各版本（播放/预览/设为主版本/移出）、行菜单“管理版本组…”、批量“合并为版本组”、管理菜单“版本组”面板。合同见[版本分组合同](docs/loopx/design/2026-10-10-media-workbench/版本分组合同.md)。
 
 ### 2.11 片库智能视图与统一清理
 - **内置视图:** 全部、继续观看、收藏、点赞、最近播放、未看、已看、最近添加、未打标签、无字幕、本地资料有更新（2026-09-29/30 新增，D-PC39）和路径失效。「未打标签」只看非自动标签（带 `automatic_kind` 的自动标签不算已打标签，D-PC33）；「无字幕」与 Jellyfin `HasSubtitles` 共用 `hasAnySubtitleSQL`：有同名 `.srt` 的索引片段、或同目录有 `名称.*.{srt,ass,ssa,vtt}` 旁挂字幕（`subtitle_index_states.has_sidecar`，只在全库同步时写入）、或有内嵌字幕流，都算有字幕（D-PC17，MEDIA-08）。
@@ -260,6 +285,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **软删除:** 软删除视频的历史样本仍进入聚合，但不返回可操作记录。
 
 ### 2.17 图片库批量管理与扫描恢复
+- **主体点击选择（2026-10-10）:** 照片页已有任意选中图片时，点击其他图片的缩略图或失败占位会切换该项选择，不打开预览；取消最后一张或清除选择后恢复单击预览。照片流、时间线、文件夹内共用此规则；收藏、删除、复选框和查看器前后切换保持原语义。`PhotoLibraryPage.activateImage` 只负责入口分流，复用现有选择与查看器方法，见图片库设计 `D-IMAGE-SELECTION`。
 - **图片多选:** 图片流卡片支持复选、全选当前已加载结果、批量添加标签和批量删除；批量接口逐项返回失败，失败项保留选中以便重试。
 - **图片标签搜索:** 单图详情和批量标签工具均使用可搜索组合输入框；输入时直接展示匹配标签，支持方向键选择并按回车添加，不使用独立下拉框或确认按钮。
 - **自动删除恢复:** 图片扫描对账因路径失踪而软删除记录时写入 `is_stale` 恢复标记；同一路径文件重新出现后复活原记录，保留原 ID、标签、收藏、评分等数据。用户主动“仅删除记录”不会写该标记，因此不会被后续扫描自动恢复。2026-09-29/30 起（D-PC03，IMG-02）图片「仅删除记录」同样建 `record_only` 回收站条目、按文件身份屏蔽、可在回收站恢复；「同时删除原文件」移到系统废纸篓。被扫描隐藏的图片（扫描删除或带 `is_stale` 恢复标记）在回收站中心「扫描隐藏」页签列出，附推算的原因（离线根 / 文件缺失 / 目录已移除），可「重新检查」（`RecheckImages`，触发全量图片对账）。图片页删除成功后同样出现撤销条，`confirm_before_delete` 开启时先确认；「删除文件夹」的确认文案按是否删除原文件显示对应的一种。
@@ -281,6 +307,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **立即运行:** `RunGatedTaskNow(taskKey)` 只对当前确实被门挡住的任务生效（否则返回 `ErrIdleGateTaskNotWaiting`，不留状态）；bypass 豁免的是这一轮，不是一项，也不是关开关——在登记表看到该任务 running→absent、或 `Run` 返回而任务从未进登记表时清除，另有 10 分钟兜底。门按 key 去重：同一任务同时只留一个自动唤醒等待者，后来者合并（`ErrIdleGateTaskAlreadyWaiting`，自动路径视为正常）。探测一律用独立 `context.Background()`，调用方取消不会污染共享缓存；`GetIdleSchedulerStatus` 只读缓存并在后台补探测，状态含 `probed` 与 `settings_error`；保存设置会 `InvalidateSettings` 让开关即时生效。`GetIdleSchedulerStatus()` 与 `idle-scheduler-state` 事件供设置页与状态条读；任务尚未开始（卡在 `Run`）时状态条从等待清单取原因，跑到一半被拦住则读任务自己的 `gate`。
 - **设置:** `settings` 新增 `idle_scheduling_enabled`（默认 true，`migrateIdleSchedulingSetting` 对老库显式刷 true）、`idle_threshold_minutes`（1–120，默认 5）、`idle_require_ac_power`、`idle_window_start/end`（`HH:MM`，非法归空）。`idle_scheduling_enabled` **有意不带 gorm default 标签**：默认 true 的布尔列会被 GORM `Create` 当零值跳过，双向迁移器逐行复制时会把用户关掉的开关翻回 true；默认开只由 `ApplySchema` 显式插入 + 迁移函数保证（后续所有默认 true 的布尔列同此规则；既有 `short_feed_feedback_sync_enabled` 带该标签属残留）。设置页新增「后台任务调度」分区；图片侧 `PhotoAITaskPanel` 与片库页状态条共用 `utils/idleScheduling.js` 的文案与归一化。同批修掉既有缺陷：`UpdateSettings` 此前从不保存四个 `auto_*` 开关，用户拨了也不生效。
 - **任务中心（2026-09-29/30，D-PC18，APP-03 / MEDIA-11）:** 顶栏「任务」按钮打开 `TaskCenterDrawer.vue`（角标为运行中数量，有上一轮失败时加红点）。数据来自 `GetTaskCenterSnapshot()`：21 个 key 各有一个适配函数（适配表与登记表集合必须一致，测试守住），每项给出 `running / waiting_idle / idle`、等待原因、进度、上一轮结果（失败明细 ≤50 条）与只含已有零参绑定的动作；`recent` 列出字幕、超分、下载、代理四类最近任务（`id` 一律为字符串）；另有 `warnings`。事件 `task-center-changed` 在 App 层合并 500ms 后发出。`BackgroundTaskStatusBars` 保留。
+- **运行状态与诊断（2026-10-10）:** 任务中心增加页签，`SystemHealthPanel.vue` 分项读取 `GetSystemHealthSection` 的数据库、扫描目录、依赖、索引、任务与缓存状态；启动失败页也能打开只读面板，此时不提供处理动作。默认读取不启动 Python 或系统空闲探测：字幕/人脸用所属服务缓存，保留原检查时间 `observed_at`；等待任务用 `IdleGate.WaitingSnapshot`，锁忙时未知、不报假零。必要 SQL 全程带5秒分区期限；索引描述已发布数据，不证明外部接口可达；缓存只聚合库内代理记录，孤儿文件仍到设置中检查。`ExportSystemHealthReport` 经原生保存对话框写本地白名单 JSON，不含媒体/目录名、绝对路径、凭证、接口地址或原始日志；取消不写，同名文件/符号链接拒绝覆盖。实现与独立审阅记录见 `docs/loopx/design/2026-10-10-media-workbench/需求设计文档.md`。原生保存对话框与故障磁盘尚未图形实测。
 - **待处理工作台（D-PC27，META-08 / APP-11）:** 顶栏「待处理」按钮带总数角标，打开 `PendingWorkHub.vue`；数据来自 `GetPendingWorkSummary()`（AI 视频 / 图片候选、未确认同源、未命名人脸、待确认追加、建议作品集、清理候选按视频对去重、本地资料有更新；`Total` 不含失败的 AI 打标）。工作台不重新挂载各审阅面板，只列事项与数量，「处理」经命令注册表执行固定命令 ID（`library.openCleanup`、`library.openAIReview`、`library.openLocalMetadataUpdates`、`library.openCollectionSuggestions`、`photos.openAIReview`、`people.openFaceReview`），先切到宿主页再打开既有面板。
 - **退出保护（D-PC21，MEDIA-10）:** `main.go` 注册 `OnBeforeClose: app.beforeClose`：字幕 / 超分 / 代理 / 下载有任务在跑，或字幕 / 下载有排队，或有「翻译已有字幕」在跑时拦下关闭并发 `quit-confirm-required {tasks}`，前端确认后调 `ConfirmQuit()`；应用内部发起的退出（恢复完成、`RelaunchApp`）与「待重启」终态直接放行。
 - **重媒体槽:** `services.MediaWorkSlot`（容量 1）已就位，由转封装、帧哈希、人脸抽帧三类 ffmpeg 重任务在处理每一项前获取（D-007）；字幕转写槽与超分队列不并入。
@@ -410,6 +437,20 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **范围：** macOS 14+ 的图片静态壁纸和视频动态壁纸。视频详情、图片查看器及关联图片预览有「设为壁纸」；全局 `WallpaperStatusBar` 可停止或关闭失败提示。最低分辨率为长边 ≥1920、短边 ≥720；未知尺寸先补全，设置前通过 ImageIO / AVFoundation 再核对原文件，不把分辨率门槛说成锐度检测。
 - **原生与生命周期：** `services/wallpaper_service.go` + `wallpaper_native_darwin.*`，App 在退出时关闭服务。图片按内容摘要复制到 `~/.CineInsight/wallpapers/` 后调用 `NSWorkspace`，每张 ≤64 MiB，历史副本不自动删；作用于各显示器当前桌面。视频使用原文件，每个显示器独立 AppKit 桌面层窗口 + `AVQueuePlayer` / `AVPlayerLooper`，无声循环、加入所有 Space、不拦鼠标；休眠/会话失活暂停，恢复继续，显示器变化重建。停止或退出移除窗口，原系统图片露出；不装常驻登录项、不自动转码、不写播放账本或观看进度。原生主队列未开始的请求两秒后取消，防止退出互等与迟到启动；已开始的系统操作等待实际结果。
 - **验证边界：** 设计与测试记录见 [桌面壁纸设计](docs/loopx/design/2026-10-09-desktop-wallpaper/需求设计文档.md)。`bash scripts/test_wallpaper_native.sh` 使用隐藏窗口和合成视频验证真实解码/循环、暂停恢复、重建、释放、异步失败与排队取消，不改变系统图片。真实桌面多屏、Space、图标穿透与图片设置仍需实际图形会话验收。
+
+### 2.32 字幕与画面场景检索（2026-10-10）
+- **对白:** 复用既有`subtitle_segments`（同名`.srt`逐条索引与10分钟节流同步），`LOWER(text) LIKE`字面子串（转义`%`/`_`/`\`），返回全部命中条目的起止时间与前后一条上下文；不另建第二份字幕事实。只有其他格式或内嵌字幕的视频计入覆盖率“未索引”，可先用既有字幕生成。
+- **画面（本地，默认）:** `SceneRuntime`（`~/.CineInsight/scene-runtime/{python,venv,models/cn-clip-vit-b16-q8,scene_worker.py}`，身份`scene-cn-clip-vit-b16-q8@1-onnxruntime-1.23.2`）仿人脸运行时：托管Python 3.10、pin `onnxruntime==1.23.2 numpy==2.2.6 pillow==12.3.0 tokenizers==0.23.3`，模型为Xenova Chinese-CLIP ViT-B/16量化ONNX（固定提交、三文件sha256校验，`scene_model_mirror_url`替换主机）。`PrepareSceneRuntime`显式触发、可取消，事件`scene-runtime-state`；健康面板只读缓存状态。本机冷准备约48秒，检索约40ms。
+- **索引:** `StartSceneIndex`（视频ID或LibraryFilter，服务端解析为活跃、非失效、在范围内），单worker、每项取共享`MediaWorkSlot`、登记表键`scene_index`、事件`scene-index-state`，不进空闲门也不阻止退出。ffmpeg按`scene_visual_interval_seconds`（默认5，2–30；无gorm default，新库显式行+迁移补默认）抽224×224帧，相邻帧余弦≥0.92合并成段，向量int8量化（4字节scale+512字节）存`scene_visual_segments`，状态在`scene_index_states`（模型、源size/mtime、间隔）；源变化中途丢弃。查询只用当前模型、`state.source_size = videos.size`且活跃非失效的段；“清理旧索引”删除非当前模型数据。
+- **外部（可选）:** `scene_visual_provider=external`须在设置页确认披露后保存，复用AI打标的OpenAI兼容视觉模型为每8帧生成中文短描述（`external-caption:<模型>@1`，无向量，字面检索）。本地不可用/失败只报告`scene_runtime_unavailable`等notice，绝不改用外部；外部失败也不回退本地。
+- **查询与入口:** `SearchScenes({query, mode: all|dialogue|visual, filter, limit≤200})`，`all`用倒数排名融合（k=60）并保留来源；返回`hits/coverage/notices`。顶栏工具组“场景检索”页、片库工具栏“在当前筛选中搜场景”、设置页“场景检索”分区；命中缩略图走`/preview/frame/{id}?ms=&w=`（`ThumbnailService.RenderFrameAt`，精确定位单帧JPEG、内存LRU 64帧、10秒期限、按源size/mtime失效，视频工作台共用），点击打开详情抽屉并定位到起点前2秒。合同见[场景检索合同](docs/loopx/design/2026-10-10-media-workbench/场景检索合同.md)。
+
+### 2.33 视频工作台：合并、去片头与高清替换（2026-10-10）
+- **所有权:** `VideoEditService`（`services/video_edit_*.go`）拥有配方、冻结计划、执行日志与工作目录；纯计算的片头识别/分段对齐在`services/editalign`（不访问数据库）。表`video_edit_projects`（kind/status/revision/mode/recipe_json/analysis_json/acknowledged_json）与`video_edit_items`（每个导出项一行：冻结`plan_json`、phase、progress、`publish_target`/`staged_size`/`work_dir`、`output_video_id`逻辑引用无外键）。配方只在draft可改，`expected_revision` CAS，冲突返回`edit_project_conflict`。
+- **三种任务:** merge（2–50个来源，规格不同须选规格来源）、trim_intro（1–200项，统一区间可逐项调整，≥2项可自动识别重复片头，全部确认才可导出）、hd_replace（长版为主时间线，自动对齐给出等长分段，逐段确认，音频默认长版可逐段切HD，字幕沿长版时间线；未覆盖区间保留长版画面并按比例缩放加黑边）。精确模式（默认）逐段重编码为统一规格mkv片段再concat；快速模式仅在所有映射流参数一致、无填充与缩放时可选，预检给出实际关键帧切点。HDR与SDR混合拒绝；macOS用VideoToolbox，其他平台libx264/libx265，缺失报`encoder_unavailable`，不静默替换。
+- **轨道/字幕:** 按语言+序号映射，无法对应列为冲突，须显式选`stream`/`silence`/`none`/`drop`；内嵌字幕随片段走、mkv字体附件去重附加；同名旁挂`.srt`按时间线重写为成品旁的新文件，其他旁挂格式只警告。预检的全部警告须在`acknowledged_warnings`里确认才可排队（快速模式警告键含切点哈希，切点变了须重新确认）。
+- **执行与发布:** 单worker、每项取共享`MediaWorkSlot`、登记表键`video_edit`（任务中心共26个key），有排队/运行项时退出先确认；维护前停止并标中断。来源size/mtime在编码前后各核一次（`source_changed`/`source_missing`），statfs空间不足报`disk_full`。工作目录`<输出目录>/.cineinsight-edit-<itemID>/`（点开头，扫描与监听忽略）。发布在`lockLibraryPaths`内选不冲突的名字（视频、同名.srt或库记录被占用时依次` (2)`…` (99)`，否则`output_conflict`），先写`publish_target`/`staged_size`再rename，单事务建`videos`行并同步短视频标签；事务失败把文件移回工作目录。启动时running/queued→interrupted，rename后崩溃的项按大小核对后补做入库。不建同源关系、不复制元数据。失败/中断/部分成功可“继续未完成项”（重新预检冻结）；任意项目可“复制为新草稿”（`DuplicateEditProject`）。
+- **入口与清理:** 顶栏工具组“视频工作台”页面与命令面板；片库批量栏“合并为新视频”“批量去片头”，行菜单“高清替换…”。切点与分段首尾帧走`/preview/frame/{id}?ms=&w=`。完成项“预览成品”打开详情抽屉；勾选“确认成品无误”后才出现“清理原片…”，回到片库走既有删除确认与废纸篓（总是弹确认，不受“删除前确认”设置影响）；编辑服务从不删除来源。去片头与高清替换成品可“与原片建立版本组”。事件`video-edit-state`只带ID/状态/进度。合同与验证见[视频编辑合同](docs/loopx/design/2026-10-10-media-workbench/视频编辑合同.md)。
 
 ## 3. 关键目录说明 (Directory Structure)
 

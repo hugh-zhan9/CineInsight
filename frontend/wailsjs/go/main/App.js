@@ -42,6 +42,14 @@ export function AddTagToVideo(arg1, arg2) {
   return window['go']['main']['App']['AddTagToVideo'](arg1, arg2);
 }
 
+export function AddVersionMembers(arg1, arg2, arg3) {
+  return window['go']['main']['App']['AddVersionMembers'](arg1, arg2, arg3);
+}
+
+export function AnalyzeEditProject(arg1) {
+  return window['go']['main']['App']['AnalyzeEditProject'](arg1);
+}
+
 export function ApplyLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['ApplyLocalMetadataBatch'](arg1);
 }
@@ -52,14 +60,6 @@ export function ApplyWatchlistCandidate(arg1, arg2) {
 
 export function ApproveAITagCandidate(arg1) {
   return window['go']['main']['App']['ApproveAITagCandidate'](arg1);
-}
-
-export function ApproveAITagCandidates(arg1) {
-  return window['go']['main']['App']['ApproveAITagCandidates'](arg1);
-}
-
-export function ApproveAITagCandidatesByFilter(arg1) {
-  return window['go']['main']['App']['ApproveAITagCandidatesByFilter'](arg1);
 }
 
 export function ApproveImageAITagCandidate(arg1) {
@@ -90,6 +90,10 @@ export function BatchRemoveTagFromVideos(arg1, arg2) {
   return window['go']['main']['App']['BatchRemoveTagFromVideos'](arg1, arg2);
 }
 
+export function CancelAIReviewApproval(arg1, arg2) {
+  return window['go']['main']['App']['CancelAIReviewApproval'](arg1, arg2);
+}
+
 export function CancelBatchDelete(arg1) {
   return window['go']['main']['App']['CancelBatchDelete'](arg1);
 }
@@ -108,6 +112,14 @@ export function CancelCleanupConsolidation() {
 
 export function CancelCollectionSuggestionAnalysis() {
   return window['go']['main']['App']['CancelCollectionSuggestionAnalysis']();
+}
+
+export function CancelEditAnalysis(arg1) {
+  return window['go']['main']['App']['CancelEditAnalysis'](arg1);
+}
+
+export function CancelEditProject(arg1) {
+  return window['go']['main']['App']['CancelEditProject'](arg1);
 }
 
 export function CancelEnhancementModelDownload() {
@@ -170,6 +182,14 @@ export function CancelPlaybackProxyTask() {
   return window['go']['main']['App']['CancelPlaybackProxyTask']();
 }
 
+export function CancelSceneIndex() {
+  return window['go']['main']['App']['CancelSceneIndex']();
+}
+
+export function CancelSceneRuntimePrepare() {
+  return window['go']['main']['App']['CancelSceneRuntimePrepare']();
+}
+
 export function CancelSemanticIndex() {
   return window['go']['main']['App']['CancelSemanticIndex']();
 }
@@ -218,6 +238,10 @@ export function ClearShortFeedPIN() {
   return window['go']['main']['App']['ClearShortFeedPIN']();
 }
 
+export function ClearStaleSceneIndex() {
+  return window['go']['main']['App']['ClearStaleSceneIndex']();
+}
+
 export function ClearVideoAutomaticTagOverride(arg1, arg2) {
   return window['go']['main']['App']['ClearVideoAutomaticTagOverride'](arg1, arg2);
 }
@@ -246,16 +270,16 @@ export function ConfirmSameSourceRelation(arg1) {
   return window['go']['main']['App']['ConfirmSameSourceRelation'](arg1);
 }
 
+export function ControlPlaybackQueue(arg1, arg2) {
+  return window['go']['main']['App']['ControlPlaybackQueue'](arg1, arg2);
+}
+
 export function ConvertSubtitleToUTF8(arg1, arg2) {
   return window['go']['main']['App']['ConvertSubtitleToUTF8'](arg1, arg2);
 }
 
 export function ConvertTagToPerson(arg1) {
   return window['go']['main']['App']['ConvertTagToPerson'](arg1);
-}
-
-export function CountAITagCandidatesByFilter(arg1) {
-  return window['go']['main']['App']['CountAITagCandidatesByFilter'](arg1);
 }
 
 export function CountLibraryVideos(arg1) {
@@ -272,6 +296,10 @@ export function CreateCollection(arg1, arg2) {
 
 export function CreateDatabaseBackup() {
   return window['go']['main']['App']['CreateDatabaseBackup']();
+}
+
+export function CreateEditProject(arg1) {
+  return window['go']['main']['App']['CreateEditProject'](arg1);
 }
 
 export function CreateEnhancementTask(arg1) {
@@ -298,6 +326,10 @@ export function CreateTagWithCategory(arg1, arg2, arg3) {
   return window['go']['main']['App']['CreateTagWithCategory'](arg1, arg2, arg3);
 }
 
+export function CreateVersionGroup(arg1, arg2) {
+  return window['go']['main']['App']['CreateVersionGroup'](arg1, arg2);
+}
+
 export function CreateWatchlistEntry(arg1, arg2) {
   return window['go']['main']['App']['CreateWatchlistEntry'](arg1, arg2);
 }
@@ -308,6 +340,10 @@ export function DeleteCollection(arg1) {
 
 export function DeleteDirectory(arg1) {
   return window['go']['main']['App']['DeleteDirectory'](arg1);
+}
+
+export function DeleteEditProject(arg1) {
+  return window['go']['main']['App']['DeleteEditProject'](arg1);
 }
 
 export function DeleteGlossaryEntry(arg1) {
@@ -350,8 +386,16 @@ export function DeleteTagCategory(arg1) {
   return window['go']['main']['App']['DeleteTagCategory'](arg1);
 }
 
+export function DeleteVideoBookmark(arg1, arg2) {
+  return window['go']['main']['App']['DeleteVideoBookmark'](arg1, arg2);
+}
+
 export function DeleteVideosWithResult(arg1, arg2, arg3) {
   return window['go']['main']['App']['DeleteVideosWithResult'](arg1, arg2, arg3);
+}
+
+export function DeleteViewingDiary(arg1, arg2) {
+  return window['go']['main']['App']['DeleteViewingDiary'](arg1, arg2);
 }
 
 export function DeleteWatchlistEntry(arg1) {
@@ -402,12 +446,32 @@ export function DismissNearDuplicateMember(arg1, arg2) {
   return window['go']['main']['App']['DismissNearDuplicateMember'](arg1, arg2);
 }
 
+export function DismissVersionGroupSuggestion(arg1) {
+  return window['go']['main']['App']['DismissVersionGroupSuggestion'](arg1);
+}
+
+export function DissolveVersionGroup(arg1, arg2) {
+  return window['go']['main']['App']['DissolveVersionGroup'](arg1, arg2);
+}
+
+export function DuplicateEditProject(arg1) {
+  return window['go']['main']['App']['DuplicateEditProject'](arg1);
+}
+
+export function EditPlaybackQueue(arg1) {
+  return window['go']['main']['App']['EditPlaybackQueue'](arg1);
+}
+
 export function EnforcePlaybackProxyLimit() {
   return window['go']['main']['App']['EnforcePlaybackProxyLimit']();
 }
 
 export function ExportLocalMetadataNFO(arg1) {
   return window['go']['main']['App']['ExportLocalMetadataNFO'](arg1);
+}
+
+export function ExportSystemHealthReport() {
+  return window['go']['main']['App']['ExportSystemHealthReport']();
 }
 
 export function FilterActivePersonIDs(arg1) {
@@ -436,6 +500,14 @@ export function GenerateSubtitle(arg1) {
 
 export function GetAIQualityReport(arg1) {
   return window['go']['main']['App']['GetAIQualityReport'](arg1);
+}
+
+export function GetAIReviewApproval(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['GetAIReviewApproval'](arg1, arg2, arg3, arg4);
+}
+
+export function GetAIReviewCandidates(arg1, arg2) {
+  return window['go']['main']['App']['GetAIReviewCandidates'](arg1, arg2);
 }
 
 export function GetAITaggingStatusSummary() {
@@ -496,6 +568,10 @@ export function GetDatabaseBackendStatus() {
 
 export function GetDatabaseSwitchStatus() {
   return window['go']['main']['App']['GetDatabaseSwitchStatus']();
+}
+
+export function GetEditProject(arg1) {
+  return window['go']['main']['App']['GetEditProject'](arg1);
 }
 
 export function GetEnhancementCapability() {
@@ -642,8 +718,24 @@ export function GetPlaybackProxyUsage() {
   return window['go']['main']['App']['GetPlaybackProxyUsage']();
 }
 
+export function GetPlaybackQueue(arg1) {
+  return window['go']['main']['App']['GetPlaybackQueue'](arg1);
+}
+
 export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
+}
+
+export function GetSceneCoverage(arg1) {
+  return window['go']['main']['App']['GetSceneCoverage'](arg1);
+}
+
+export function GetSceneIndexStatus() {
+  return window['go']['main']['App']['GetSceneIndexStatus']();
+}
+
+export function GetSceneRuntimeStatus() {
+  return window['go']['main']['App']['GetSceneRuntimeStatus']();
 }
 
 export function GetSemanticIndexStatus() {
@@ -694,6 +786,10 @@ export function GetSubtitleSegments(arg1) {
   return window['go']['main']['App']['GetSubtitleSegments'](arg1);
 }
 
+export function GetSystemHealthSection(arg1) {
+  return window['go']['main']['App']['GetSystemHealthSection'](arg1);
+}
+
 export function GetTagUsageCounts(arg1) {
   return window['go']['main']['App']['GetTagUsageCounts'](arg1);
 }
@@ -710,6 +806,10 @@ export function GetTrashUsage() {
   return window['go']['main']['App']['GetTrashUsage']();
 }
 
+export function GetVersionGroup(arg1) {
+  return window['go']['main']['App']['GetVersionGroup'](arg1);
+}
+
 export function GetVideoAutomaticTagOverrides(arg1) {
   return window['go']['main']['App']['GetVideoAutomaticTagOverrides'](arg1);
 }
@@ -718,8 +818,16 @@ export function GetVideoDetails(arg1) {
   return window['go']['main']['App']['GetVideoDetails'](arg1);
 }
 
+export function GetVideoEditStatus() {
+  return window['go']['main']['App']['GetVideoEditStatus']();
+}
+
 export function GetVideosByIDs(arg1) {
   return window['go']['main']['App']['GetVideosByIDs'](arg1);
+}
+
+export function GetViewingYearReview(arg1) {
+  return window['go']['main']['App']['GetViewingYearReview'](arg1);
 }
 
 export function GetWallpaperPreflight(arg1, arg2) {
@@ -768,6 +876,10 @@ export function ListDatabaseBackups() {
 
 export function ListDownloadTasks() {
   return window['go']['main']['App']['ListDownloadTasks']();
+}
+
+export function ListEditProjects(arg1) {
+  return window['go']['main']['App']['ListEditProjects'](arg1);
 }
 
 export function ListEnhancementTasks(arg1) {
@@ -854,6 +966,26 @@ export function ListTrashEntries(arg1) {
   return window['go']['main']['App']['ListTrashEntries'](arg1);
 }
 
+export function ListUnconfirmedPlaybackHistory(arg1) {
+  return window['go']['main']['App']['ListUnconfirmedPlaybackHistory'](arg1);
+}
+
+export function ListVersionGroupSuggestions(arg1) {
+  return window['go']['main']['App']['ListVersionGroupSuggestions'](arg1);
+}
+
+export function ListVersionGroups(arg1, arg2) {
+  return window['go']['main']['App']['ListVersionGroups'](arg1, arg2);
+}
+
+export function ListVideoBookmarks(arg1) {
+  return window['go']['main']['App']['ListVideoBookmarks'](arg1);
+}
+
+export function ListViewingDiary(arg1) {
+  return window['go']['main']['App']['ListViewingDiary'](arg1);
+}
+
 export function ListWatchedMovies() {
   return window['go']['main']['App']['ListWatchedMovies']();
 }
@@ -902,6 +1034,10 @@ export function NameFaceCluster(arg1, arg2, arg3) {
   return window['go']['main']['App']['NameFaceCluster'](arg1, arg2, arg3);
 }
 
+export function NextPlaybackQueue(arg1, arg2) {
+  return window['go']['main']['App']['NextPlaybackQueue'](arg1, arg2);
+}
+
 export function OpenDirectory(arg1) {
   return window['go']['main']['App']['OpenDirectory'](arg1);
 }
@@ -926,6 +1062,10 @@ export function PickRandomVideos(arg1, arg2) {
   return window['go']['main']['App']['PickRandomVideos'](arg1, arg2);
 }
 
+export function PlayPlaybackQueue(arg1, arg2) {
+  return window['go']['main']['App']['PlayPlaybackQueue'](arg1, arg2);
+}
+
 export function PlayRandomVideoWithFilter(arg1) {
   return window['go']['main']['App']['PlayRandomVideoWithFilter'](arg1);
 }
@@ -938,12 +1078,24 @@ export function PreflightDatabaseSwitch(arg1) {
   return window['go']['main']['App']['PreflightDatabaseSwitch'](arg1);
 }
 
+export function PreflightEditProject(arg1) {
+  return window['go']['main']['App']['PreflightEditProject'](arg1);
+}
+
 export function PrepareFaceRuntime() {
   return window['go']['main']['App']['PrepareFaceRuntime']();
 }
 
+export function PrepareSceneRuntime() {
+  return window['go']['main']['App']['PrepareSceneRuntime']();
+}
+
 export function PrepareSubtitleEngine(arg1) {
   return window['go']['main']['App']['PrepareSubtitleEngine'](arg1);
+}
+
+export function PreviewAIReviewApproval(arg1, arg2) {
+  return window['go']['main']['App']['PreviewAIReviewApproval'](arg1, arg2);
 }
 
 export function PreviewCleanupConsolidation(arg1) {
@@ -968,6 +1120,10 @@ export function PreviewTagPersonConversion(arg1) {
 
 export function PurgeTrashEntries(arg1, arg2) {
   return window['go']['main']['App']['PurgeTrashEntries'](arg1, arg2);
+}
+
+export function QueueEditProject(arg1) {
+  return window['go']['main']['App']['QueueEditProject'](arg1);
 }
 
 export function ReaddRemovedRoot(arg1) {
@@ -1070,6 +1226,10 @@ export function RemoveTagFromVideo(arg1, arg2) {
   return window['go']['main']['App']['RemoveTagFromVideo'](arg1, arg2);
 }
 
+export function RemoveVersionMember(arg1, arg2, arg3) {
+  return window['go']['main']['App']['RemoveVersionMember'](arg1, arg2, arg3);
+}
+
 export function RenameDirectory(arg1, arg2) {
   return window['go']['main']['App']['RenameDirectory'](arg1, arg2);
 }
@@ -1086,6 +1246,18 @@ export function ReorderCollectionVideos(arg1, arg2) {
   return window['go']['main']['App']['ReorderCollectionVideos'](arg1, arg2);
 }
 
+export function ReorderVersionMembers(arg1, arg2, arg3) {
+  return window['go']['main']['App']['ReorderVersionMembers'](arg1, arg2, arg3);
+}
+
+export function ReportInlineQueuePlayback(arg1) {
+  return window['go']['main']['App']['ReportInlineQueuePlayback'](arg1);
+}
+
+export function RequeueEditProject(arg1) {
+  return window['go']['main']['App']['RequeueEditProject'](arg1);
+}
+
 export function RequeueInterruptedSubtitleJobs() {
   return window['go']['main']['App']['RequeueInterruptedSubtitleJobs']();
 }
@@ -1096,6 +1268,10 @@ export function RerollRandom(arg1) {
 
 export function ResolveSubtitleJob(arg1, arg2) {
   return window['go']['main']['App']['ResolveSubtitleJob'](arg1, arg2);
+}
+
+export function ResolveVideoBookmark(arg1) {
+  return window['go']['main']['App']['ResolveVideoBookmark'](arg1);
 }
 
 export function RestoreDatabaseBackup(arg1) {
@@ -1170,6 +1346,22 @@ export function SaveSubtitleEditDocument(arg1) {
   return window['go']['main']['App']['SaveSubtitleEditDocument'](arg1);
 }
 
+export function SaveVideoBookmark(arg1) {
+  return window['go']['main']['App']['SaveVideoBookmark'](arg1);
+}
+
+export function SaveViewingDiary(arg1) {
+  return window['go']['main']['App']['SaveViewingDiary'](arg1);
+}
+
+export function SearchAITagCandidatePage(arg1) {
+  return window['go']['main']['App']['SearchAITagCandidatePage'](arg1);
+}
+
+export function SearchImageAITagCandidatePage(arg1) {
+  return window['go']['main']['App']['SearchImageAITagCandidatePage'](arg1);
+}
+
 export function SearchImagePage(arg1) {
   return window['go']['main']['App']['SearchImagePage'](arg1);
 }
@@ -1180,6 +1372,10 @@ export function SearchImagesSemantic(arg1) {
 
 export function SearchLibraryVideoPage(arg1) {
   return window['go']['main']['App']['SearchLibraryVideoPage'](arg1);
+}
+
+export function SearchScenes(arg1) {
+  return window['go']['main']['App']['SearchScenes'](arg1);
 }
 
 export function SearchSemanticVideos(arg1) {
@@ -1262,6 +1458,10 @@ export function SetWindowForeground(arg1) {
   return window['go']['main']['App']['SetWindowForeground'](arg1);
 }
 
+export function StartAIReviewApproval(arg1, arg2) {
+  return window['go']['main']['App']['StartAIReviewApproval'](arg1, arg2);
+}
+
 export function StartCleanupAnalysisFromSettings() {
   return window['go']['main']['App']['StartCleanupAnalysisFromSettings']();
 }
@@ -1322,6 +1522,10 @@ export function StartPerceptualHashBackfill() {
   return window['go']['main']['App']['StartPerceptualHashBackfill']();
 }
 
+export function StartSceneIndex(arg1) {
+  return window['go']['main']['App']['StartSceneIndex'](arg1);
+}
+
 export function StartSemanticIndex(arg1) {
   return window['go']['main']['App']['StartSemanticIndex'](arg1);
 }
@@ -1330,12 +1534,20 @@ export function StartTechnicalBackfill() {
   return window['go']['main']['App']['StartTechnicalBackfill']();
 }
 
+export function StopPlaybackQueue(arg1) {
+  return window['go']['main']['App']['StopPlaybackQueue'](arg1);
+}
+
 export function StopVideoWallpaper() {
   return window['go']['main']['App']['StopVideoWallpaper']();
 }
 
 export function SuggestLibraryMatchesBatch(arg1) {
   return window['go']['main']['App']['SuggestLibraryMatchesBatch'](arg1);
+}
+
+export function SuggestTonightVideos(arg1) {
+  return window['go']['main']['App']['SuggestTonightVideos'](arg1);
 }
 
 export function SwitchBackendConfigOnly(arg1) {
@@ -1406,6 +1618,10 @@ export function UpdateDirectoryWithMode(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UpdateDirectoryWithMode'](arg1, arg2, arg3, arg4);
 }
 
+export function UpdateEditRecipe(arg1) {
+  return window['go']['main']['App']['UpdateEditRecipe'](arg1);
+}
+
 export function UpdateImageDirectory(arg1, arg2, arg3) {
   return window['go']['main']['App']['UpdateImageDirectory'](arg1, arg2, arg3);
 }
@@ -1424,6 +1640,10 @@ export function UpdateSettings(arg1) {
 
 export function UpdateTagWithCategory(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['UpdateTagWithCategory'](arg1, arg2, arg3, arg4);
+}
+
+export function UpdateVersionGroup(arg1, arg2, arg3, arg4) {
+  return window['go']['main']['App']['UpdateVersionGroup'](arg1, arg2, arg3, arg4);
 }
 
 export function UpdateVideoDetails(arg1) {

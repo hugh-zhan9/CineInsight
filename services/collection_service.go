@@ -455,3 +455,33 @@ func (s *CollectionService) ResolveCollectionCover(collectionID uint) (ManagedIm
 	}
 	return s.images.Resolve(collection.CoverPath)
 }
+
+// orderedActiveVideosFrom reads membership and the chosen start in a single
+// statement snapshot, including concurrent reorder/deletion on PostgreSQL.
+func (s *CollectionService) orderedActiveVideosFrom(db *gorm.DB, collectionID, startVideoID uint, after bool, limit int) ([]models.Video, error) {
+	query := db.Model(&models.Video{}).Select("videos.id", "videos.name", "videos.display_title").
+		Joins("JOIN collection_videos ON collection_videos.video_id = videos.id").
+		Joins("JOIN media_collections ON media_collections.id = collection_videos.collection_id AND media_collections.deleted_at IS NULL").
+		Where("collection_videos.collection_id = ?", collectionID)
+	if startVideoID != 0 {
+		query = query.Joins("JOIN collection_videos AS queue_start ON queue_start.collection_id = collection_videos.collection_id AND queue_start.video_id = ?", startVideoID).
+			Joins("JOIN videos AS queue_start_video ON queue_start_video.id = queue_start.video_id AND queue_start_video.deleted_at IS NULL").
+			Where("collection_videos.position > queue_start.position OR (collection_videos.position = queue_start.position AND videos.id >= queue_start.video_id)")
+	}
+	var videos []models.Video
+	readLimit := limit
+	if after {
+		readLimit++
+	}
+	err := query.Order("collection_videos.position ASC").Order("videos.id ASC").Limit(readLimit).Find(&videos).Error
+	if err != nil {
+		return nil, err
+	}
+	if startVideoID != 0 && len(videos) == 0 {
+		return nil, gorm.ErrRecordNotFound
+	}
+	if after && len(videos) > 0 {
+		videos = videos[1:]
+	}
+	return videos, nil
+}

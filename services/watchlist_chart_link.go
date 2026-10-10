@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -129,6 +130,19 @@ func watchlistTitleKindTaken(title, kind string, exceptID uint) (bool, error) {
 // 复用（第 1、2 步）返回 created=false，榜单一侧据此以 reuse 来源认领该条目：删除条目时
 // 能按 ID 撤销那个 want，但榜单一侧的撤销永远不删它（APP-07）。
 func (s *WatchlistService) EnsureChartEntry(title, doubanID string) (uint, bool, error) {
+	return s.EnsureChartEntryContext(context.Background(), title, doubanID)
+}
+func (s *WatchlistService) EnsureChartEntryContext(ctx context.Context, title, doubanID string) (uint, bool, error) {
+	var id uint
+	var created bool
+	err := database.WithOperationContext(ctx, func(db *gorm.DB) error {
+		var err error
+		id, created, err = s.ensureChartEntryFrom(db, title, doubanID)
+		return err
+	})
+	return id, created, err
+}
+func (s *WatchlistService) ensureChartEntryFrom(db *gorm.DB, title, doubanID string) (uint, bool, error) {
 	title, err := validateWatchlistText(title, true)
 	if err != nil {
 		return 0, false, err
@@ -136,7 +150,6 @@ func (s *WatchlistService) EnsureChartEntry(title, doubanID string) (uint, bool,
 	if !doubanSubjectID.MatchString(doubanID) {
 		return 0, false, fmt.Errorf("豆瓣 ID 无效: %q", doubanID)
 	}
-	db := database.DB
 
 	var byID models.WatchlistEntry
 	found, err := firstWatchlistEntry(db.Select("id").

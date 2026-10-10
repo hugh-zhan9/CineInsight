@@ -298,6 +298,15 @@ type Settings struct {
 	CleanupLowWidth     int `json:"cleanup_low_width"`
 	CleanupLowHeight    int `json:"cleanup_low_height"`
 
+	// 场景检索（D-MW-SCENES）。SceneVisualProvider 取 local（默认，空串同义）或 external，
+	// 只有显式选 external 并在界面确认披露后才会外发采样帧。SceneVisualIntervalSeconds
+	// 是画面采样间隔（2–30，默认 5），默认非零，因此**不带 gorm default 标签**，由新库
+	// ApplySchema 显式行与 migrateSceneSettings 写入。SceneModelMirrorURL 为空时从官方
+	// 主机下载模型，非空时替换主机（例如 https://hf-mirror.com）。
+	SceneVisualProvider        string `gorm:"size:16;not null;default:''" json:"scene_visual_provider"`
+	SceneVisualIntervalSeconds int    `json:"scene_visual_interval_seconds"`
+	SceneModelMirrorURL        string `gorm:"type:text;not null;default:''" json:"scene_model_mirror_url"`
+
 	// FavoritesUnifiedAt 是收藏与点赞并集迁移的「只执行一次」标记（D-PC40）：
 	// NULL 表示尚未合并。不进 JSON。
 	FavoritesUnifiedAt *time.Time `json:"-"`

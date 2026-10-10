@@ -30,12 +30,16 @@ func (s *VideoService) OpenDirectory(videoID uint) error {
 
 // PlayVideo 使用系统默认播放器发起正式播放
 func (s *VideoService) PlayVideo(videoID uint) (*PlaybackAttemptResult, error) {
-	var video models.Video
-	if err := database.DB.First(&video, videoID).Error; err != nil {
-		return nil, err
-	}
-
-	return s.dispatchFormalPlayback(&video, false)
+	return s.PlayVideoContext(context.Background(), videoID)
+}
+func (s *VideoService) PlayVideoContext(ctx context.Context, videoID uint) (*PlaybackAttemptResult, error) {
+	return withFormalPlayback(ctx, func(ctx context.Context, db *gorm.DB) (*PlaybackAttemptResult, error) {
+		var video models.Video
+		if err := db.First(&video, videoID).Error; err != nil {
+			return nil, err
+		}
+		return s.dispatchFormalPlaybackFrom(db, &video, false)
+	})
 }
 
 var openWithDefaultFn = openPath
@@ -95,8 +99,8 @@ func runRevealCommand(cmd *exec.Cmd) error {
 	return cmd.Wait()
 }
 
-func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) (*PlaybackAttemptResult, error) {
-	if failure := s.launchFormalPlayback(video); failure != nil {
+func (s *VideoService) dispatchFormalPlaybackFrom(db *gorm.DB, video *models.Video, random bool) (*PlaybackAttemptResult, error) {
+	if failure := s.launchFormalPlaybackFrom(db, video); failure != nil {
 		return failure, nil
 	}
 
@@ -115,8 +119,12 @@ func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) 
 		updates["play_count"] = gorm.Expr("play_count + 1")
 		video.PlayCount++
 	}
-	if err := recordFormalPlaybackStats(video, updates, now, source); err != nil {
+	factCtx, cancel := playbackFactContext(db.Statement.Context)
+	defer cancel()
+	statsWarning := ""
+	if err := recordFormalPlaybackStatsContext(factCtx, video, updates, now, source); err != nil {
 		log.Printf("更新播放统计失败 id=%d err=%v", video.ID, err)
+		statsWarning = "播放器已启动，但播放统计未写入。"
 	}
 	video.LastPlayedAt = &now
 	video.IsStale = false
@@ -125,32 +133,43 @@ func (s *VideoService) dispatchFormalPlayback(video *models.Video, random bool) 
 	return &PlaybackAttemptResult{
 		Video:             video,
 		DispatchSucceeded: true,
+		StatsWarning:      statsWarning,
 	}, nil
 }
 
 // launchFormalPlayback 检查文件并启动播放器，不写任何统计。成功返回 nil；失败返回带纠偏结果的
 // 失败结果。正式播放在它成功后立刻记账，筛选内随机则登记为未决提交、30 秒后才记账（D-PC43）。
-func (s *VideoService) launchFormalPlayback(video *models.Video) *PlaybackAttemptResult {
+func (s *VideoService) launchFormalPlaybackFrom(db *gorm.DB, video *models.Video) *PlaybackAttemptResult {
+	ctx := db.Statement.Context
+	if err := ctx.Err(); err != nil {
+		return s.buildPlaybackFailureResultFrom(db, video, "playback_interrupted", err.Error(), false)
+	}
 	info, err := os.Stat(video.Path)
+	if err := ctx.Err(); err != nil {
+		return s.buildPlaybackFailureResultFrom(db, video, "playback_interrupted", err.Error(), false)
+	}
 	if err != nil {
 		if os.IsNotExist(err) {
-			return s.buildPlaybackFailureResult(video, "file_missing", "源文件不存在或已被移动。", true)
+			return s.buildPlaybackFailureResultFrom(db, video, "file_missing", "源文件不存在或已被移动。", true)
 		}
-		return s.buildPlaybackFailureResult(video, "path_unreadable", err.Error(), false)
+		return s.buildPlaybackFailureResultFrom(db, video, "path_unreadable", err.Error(), false)
 	}
 	if info.IsDir() {
-		return s.buildPlaybackFailureResult(video, "path_is_directory", "当前路径不是可播放文件。", true)
+		return s.buildPlaybackFailureResultFrom(db, video, "path_is_directory", "当前路径不是可播放文件。", true)
 	}
 
 	// 续播口径由设置决定：默认交给播放器自己（IINA 会接着上次播），
 	// 也可以要求从头播——那种情况下走 iina-cli 显式关掉续播。
 	resumeMode := PlaybackResumeModeResume
 	var settings models.Settings
-	if err := database.DB.Select("playback_resume_mode").First(&settings).Error; err == nil {
+	if err := db.Select("playback_resume_mode").First(&settings).Error; err == nil {
 		resumeMode = settings.PlaybackResumeMode
 	}
-	if err := launchPlayback(video, resumeMode); err != nil {
-		return s.buildPlaybackFailureResult(video, "dispatch_failed", err.Error(), false)
+	if err := ctx.Err(); err != nil {
+		return s.buildPlaybackFailureResultFrom(db, video, "playback_interrupted", err.Error(), false)
+	}
+	if err := launchPlaybackContext(ctx, video, resumeMode); err != nil {
+		return s.buildPlaybackFailureResultFrom(db, video, "dispatch_failed", err.Error(), false)
 	}
 	return nil
 }
@@ -161,7 +180,12 @@ func (s *VideoService) launchFormalPlayback(video *models.Video) *PlaybackAttemp
 // 洞察页和随机算法看到互相矛盾的两份历史。失败语义沿用改造前——调用方只记一行
 // 日志，播放本身已经成功了，不因为统计写不进去就报错给用户。
 func recordFormalPlaybackStats(video *models.Video, updates map[string]interface{}, playedAt time.Time, source string) error {
-	return database.Transaction(func(tx *gorm.DB) error {
+	ctx, cancel := playbackFactContext(context.Background())
+	defer cancel()
+	return recordFormalPlaybackStatsContext(ctx, video, updates, playedAt, source)
+}
+func recordFormalPlaybackStatsContext(ctx context.Context, video *models.Video, updates map[string]interface{}, playedAt time.Time, source string) error {
+	return database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		if err := tx.Model(video).Updates(updates).Error; err != nil {
 			return err
 		}
@@ -179,7 +203,12 @@ var errDeferredRandomVideoGone = errors.New("视频记录已不存在")
 // 正式播放过时，不能被这次较早的随机启动拉回去。窗口内被移进回收站的视频照样计数（Unscoped），
 // 与账本「软删除时事件保留」一致；恢复后计数仍在。
 func recordDeferredRandomPlaybackStats(videoID uint, playedAt time.Time) error {
-	return database.Transaction(func(tx *gorm.DB) error {
+	ctx, cancel := playbackFactContext(context.Background())
+	defer cancel()
+	return recordDeferredRandomPlaybackStatsContext(ctx, videoID, playedAt)
+}
+func recordDeferredRandomPlaybackStatsContext(ctx context.Context, videoID uint, playedAt time.Time) error {
+	return database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		counted := tx.Unscoped().Model(&models.Video{}).Where("id = ?", videoID).
 			Update("random_play_count", gorm.Expr("random_play_count + 1"))
 		if counted.Error != nil {
@@ -198,6 +227,9 @@ func recordDeferredRandomPlaybackStats(videoID uint, playedAt time.Time) error {
 }
 
 func (s *VideoService) buildPlaybackFailureResult(video *models.Video, reasonCode string, detail string, shouldReconcile bool) *PlaybackAttemptResult {
+	return s.buildPlaybackFailureResultFrom(database.DB, video, reasonCode, detail, shouldReconcile)
+}
+func (s *VideoService) buildPlaybackFailureResultFrom(db *gorm.DB, video *models.Video, reasonCode, detail string, shouldReconcile bool) *PlaybackAttemptResult {
 	result := &PlaybackAttemptResult{
 		Video:             video,
 		DispatchSucceeded: false,
@@ -207,7 +239,7 @@ func (s *VideoService) buildPlaybackFailureResult(video *models.Video, reasonCod
 	}
 	result.Reason = playbackFailureReason(reasonCode, false)
 	if shouldReconcile {
-		result.ReconcileResult = s.reconcileAfterPlaybackFailure(video, reasonCode)
+		result.ReconcileResult = s.reconcileAfterPlaybackFailureFrom(db, video, reasonCode)
 		result.Reason = result.ReconcileResult.Reason
 		if result.Reason == playbackReasonOfflineRoot {
 			result.UserMessage = fmt.Sprintf("播放失败: %s\n原因: 所在磁盘未连接，请连接后重试。", video.Name)
@@ -262,6 +294,12 @@ func beginPlaybackRelocation() (context.Context, bool) {
 // App.shutdown）。可安全重入与并发调用：先在锁内登记为停止者并取消上下文，之后不再有新的 Add，再 Wait；
 // 最后一个停止者返回时才重新允许登记，此后再次发生的播放失败仍会启动新的重定位。
 func StopPlaybackRelocation() {
+	wait, release := quiescePlaybackRelocation()
+	wait()
+	release()
+}
+
+func quiescePlaybackRelocation() (wait func(), release func()) {
 	playbackRelocateMu.Lock()
 	playbackRelocateStoppers++
 	if playbackRelocateCancel != nil {
@@ -269,10 +307,14 @@ func StopPlaybackRelocation() {
 	}
 	playbackRelocateCtx, playbackRelocateCancel = nil, nil
 	playbackRelocateMu.Unlock()
-	playbackRelocateWG.Wait()
-	playbackRelocateMu.Lock()
-	playbackRelocateStoppers--
-	playbackRelocateMu.Unlock()
+	var once sync.Once
+	return playbackRelocateWG.Wait, func() {
+		once.Do(func() {
+			playbackRelocateMu.Lock()
+			playbackRelocateStoppers--
+			playbackRelocateMu.Unlock()
+		})
+	}
 }
 
 var (
@@ -301,12 +343,12 @@ func notifyVideoRelocated(event VideoRelocatedEvent) {
 
 // playbackVideoRootOffline 判断视频所在的扫描根现在是否离线：卷未挂载，或包含该路径的
 // 扫描根都无法 Stat。找不到归属的根时按在线处理——那是「文件缺失」而不是「盘没插」。
-func playbackVideoRootOffline(path string) bool {
+func playbackVideoRootOfflineFrom(db *gorm.DB, path string) bool {
 	if mediaVolumeAvailable(path) != nil {
 		return true
 	}
 	var dirs []models.ScanDirectory
-	if err := database.DB.Find(&dirs).Error; err != nil {
+	if err := db.Find(&dirs).Error; err != nil {
 		return false
 	}
 	containing := 0
@@ -338,31 +380,35 @@ func playbackFailureReason(reasonCode string, offline bool) string {
 // 磁盘离线时到此为止且不做重定位；根在线时把「是否被移动到别处」的遍历放到后台，
 // 找到后由 relocateInBackground 改路径并发 video-relocated 事件。
 func (s *VideoService) reconcileAfterPlaybackFailure(video *models.Video, reasonCode string) *PlaybackReconcileResult {
+	return s.reconcileAfterPlaybackFailureFrom(database.DB, video, reasonCode)
+}
+func (s *VideoService) reconcileAfterPlaybackFailureFrom(db *gorm.DB, video *models.Video, reasonCode string) *PlaybackReconcileResult {
 	result := &PlaybackReconcileResult{
 		VideoID:    video.ID,
 		ReasonCode: reasonCode,
 	}
-	offline := playbackVideoRootOffline(video.Path)
+	offline := playbackVideoRootOfflineFrom(db, video.Path)
 	reason := playbackFailureReason(reasonCode, offline)
 	result.Reason = reason
 	staleReason := models.StaleReasonMissingFile
 	if offline {
 		staleReason = models.StaleReasonOfflineRoot
 	}
-	if err := markVideoStale(video.ID, staleReason).Error; err == nil {
+	if err := markVideoStaleFrom(db, video.ID, staleReason).Error; err == nil {
 		video.IsStale = true
 		video.StaleReason = staleReason
 		result.DidMarkStale = true
 	} else {
 		log.Printf("播放失败标记失效失败 id=%d err=%v", video.ID, err)
 	}
-	if updatedVideo, loadErr := s.GetVideo(video.ID); loadErr == nil {
-		result.UpdatedVideo = updatedVideo
+	var updatedVideo models.Video
+	if loadErr := db.First(&updatedVideo, video.ID).Error; loadErr == nil {
+		result.UpdatedVideo = &updatedVideo
 	} else {
 		result.NeedsReload = true
 	}
 	log.Printf("播放失败 id=%d code=%s reason=%s", video.ID, reasonCode, reason)
-	if !offline {
+	if !offline && db.Statement.Context.Err() == nil {
 		snapshot := *video
 		if _, running := playbackRelocating.LoadOrStore(video.ID, struct{}{}); !running {
 			// 上下文在派生 goroutine 之前取：StopPlaybackRelocation 取消的就是这一个，
@@ -401,7 +447,7 @@ func (s *VideoService) relocateInBackground(ctx context.Context, video models.Vi
 	if ambiguous || matchedPath == "" || matchedPath == video.Path {
 		return
 	}
-	if err := s.RelocateVideo(video.ID, matchedPath); err != nil {
+	if err := s.RelocateVideoContext(ctx, video.ID, matchedPath); err != nil {
 		log.Printf("自动纠偏失败 id=%d err=%v", video.ID, err)
 		return
 	}
@@ -410,7 +456,7 @@ func (s *VideoService) relocateInBackground(ctx context.Context, video models.Vi
 
 func (s *VideoService) findRelocatedVideoCandidate(ctx context.Context, video *models.Video) (string, bool, error) {
 	var directories []models.ScanDirectory
-	if err := database.DB.Order("path asc").Find(&directories).Error; err != nil {
+	if err := database.DB.WithContext(ctx).Order("path asc").Find(&directories).Error; err != nil {
 		return "", false, err
 	}
 

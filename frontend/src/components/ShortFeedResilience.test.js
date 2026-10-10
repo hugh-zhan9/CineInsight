@@ -317,10 +317,24 @@ describe('PLAY-07 手机端有效观看阈值', () => {
     await tick(1);
     await flushPromises();
     expect(plays()).toHaveLength(1);
-    expect(plays()[0]).toEqual(expect.objectContaining({ method: 'POST', url: '/short-api/items/video/1/play', body: { source: 'short_feed' } }));
+    expect(plays()[0]).toEqual(expect.objectContaining({ method: 'POST', url: '/short-api/items/video/1/play', body: { source: 'short_feed', view_session_id: expect.any(String) } }));
     for (let t = 1; t <= 4; t += 0.25) await tick(t);
     await flushPromises();
     expect(plays()).toHaveLength(1);
     wrapper.unmount();
+  });
+});
+
+describe('手机观看会话', () => {
+  it('includes one stable identity per visit; automatic loops do not split it and reentry does', async () => {
+    const feed = feedRoute([item(1), item(2)]); route = call => feed(call) || jsonResponse(200, {});
+    const wrapper = await mountApp();
+    await wrapper.vm.recordCurrentItemView(); await flushPromises();
+    const first = calls.filter(call => call.url.endsWith('/play'))[0]; expect(first.body.source).toBe('short_feed'); expect(first.body.view_session_id).toBeTruthy();
+    await wrapper.get('video').trigger('ended'); await wrapper.vm.recordCurrentItemView(); await flushPromises();
+    expect(calls.filter(call => call.url.endsWith('/play'))).toHaveLength(1);
+    await wrapper.vm.nextVideo(1); await wrapper.vm.nextVideo(-1); await flushPromises(); await wrapper.vm.recordCurrentItemView(); await flushPromises();
+    const second = calls.filter(call => call.url.endsWith('/play')).at(-1);
+    expect(second.url).toBe(first.url); expect(second.body.view_session_id).not.toBe(first.body.view_session_id); wrapper.unmount();
   });
 });

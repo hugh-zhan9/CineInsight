@@ -188,7 +188,10 @@ func (s *VideoService) scanDirectoryCollect(dir string, skipRecentlyActive bool,
 // 播放失败后的后台重定位要能在遍历中途被取消（Minor 5），取消时返回 ctx.Err()。
 func (s *VideoService) scanDirectoryCollectContext(ctx context.Context, dir string, skipRecentlyActive bool, progress func(DirectoryScanProgress), filtered *SkipBreakdown) ([]ScannedFile, error) {
 	// 每一轮遍历开始时刷新旧版回收站目录集合，随后 isTrashPath 只读缓存。
-	refreshLegacyTrashDirs()
+	refreshLegacyTrashDirsContext(ctx)
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var videoFiles []ScannedFile
 	reporter := directoryScanReporter{callback: progress}
 	dir = filepath.Clean(strings.TrimSpace(dir))
@@ -207,7 +210,7 @@ func (s *VideoService) scanDirectoryCollectContext(ctx context.Context, dir stri
 	// 从设置中获取支持的视频格式
 	reporter.update("settings", dir, true)
 	var settings models.Settings
-	if err := database.DB.First(&settings).Error; err != nil {
+	if err := database.DB.WithContext(ctx).First(&settings).Error; err != nil {
 		return nil, fmt.Errorf("获取设置失败: %w", err)
 	}
 	excludedPaths := parseScanExcludePaths(settings.ScanExcludePaths)
@@ -1278,11 +1281,14 @@ func (ix *legacyTrashIndex) heuristicDir(dir string) bool {
 // refreshLegacyTrashDirs 从两张回收站表与软删行重建索引。读取失败时保留旧缓存（换库除外），
 // 因为「多跳过一个目录」比「把回收站里的文件当新视频收录」安全得多。
 func refreshLegacyTrashDirs() {
+	refreshLegacyTrashDirsContext(context.Background())
+}
+func refreshLegacyTrashDirsContext(ctx context.Context) {
 	db := database.DB
 	if db == nil {
 		return
 	}
-	index, err := loadLegacyTrashDirs(db)
+	index, err := loadLegacyTrashDirs(db.WithContext(ctx))
 	legacyTrashDirs.mu.Lock()
 	defer legacyTrashDirs.mu.Unlock()
 	if err != nil {
@@ -1637,7 +1643,10 @@ func isRecentlyActiveFile(info os.FileInfo) bool {
 // markVideoStale 把一条活跃视频标为失效并写入原因。条件更新：已失效的行不受影响，
 // RowsAffected 只统计这次新标的。所有写 is_stale=true 的地方都走这里或 markVideosStale。
 func markVideoStale(id uint, reason string) *gorm.DB {
-	return database.DB.Model(&models.Video{}).
+	return markVideoStaleFrom(database.DB, id, reason)
+}
+func markVideoStaleFrom(db *gorm.DB, id uint, reason string) *gorm.DB {
+	return db.Model(&models.Video{}).
 		Where("id = ? AND is_stale = ?", id, false).
 		Updates(map[string]interface{}{"is_stale": true, "stale_reason": reason})
 }

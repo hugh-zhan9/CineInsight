@@ -43,6 +43,8 @@ const (
 	TaskRecentKindDownload             = "download"
 	TaskRecentKindProxy                = "proxy"
 	TaskRecentKindCleanupConsolidation = "cleanup_consolidation"
+	// TaskRecentKindVideoEdit 是视频工作台的导出项目（id 为项目 ID）；动作 cancel / open_video_edit。
+	TaskRecentKindVideoEdit = "video_edit"
 )
 
 const (
@@ -68,6 +70,8 @@ type TaskProgress struct {
 type TaskLastRun struct {
 	FinishedAt *time.Time `json:"finished_at" ts_type:"string"`
 	Succeeded  int        `json:"succeeded"`
+	Skipped    int        `json:"skipped,omitempty"`
+	Remaining  int        `json:"remaining,omitempty"`
 	Failed     int        `json:"failed"`
 	Failures   []string   `json:"failures"`
 }
@@ -128,6 +132,7 @@ type taskCenterSources struct {
 	downloads      []services.BrowserDownloadTask
 	proxy          services.PlaybackProxyStatus
 	consolidations []services.CleanupConsolidationSummary
+	videoEdits     []services.EditProjectSummary
 }
 
 func (src *taskCenterSources) warn(message string) {
@@ -206,6 +211,7 @@ func (a *App) loadTaskCenterSources() *taskCenterSources {
 	if a.browserDownloads != nil {
 		src.downloads = a.browserDownloads.ListDownloadTasks()
 	}
+	src.videoEdits = a.taskCenterVideoEditProjects(src)
 	if a.cleanupService != nil {
 		_, done, err := a.beginCleanupConsolidation()
 		if err == nil {
@@ -307,6 +313,9 @@ func (a *App) taskCenterRecent(src *taskCenterSources) []TaskRecentJob {
 			Title: "视频集中整理", Status: task.Status, Message: task.Error,
 			FinishedAt: task.FinishedAt, Actions: []string{"open_consolidation"},
 		})
+	}
+	for _, project := range src.videoEdits {
+		recent = append(recent, videoEditRecentJob(project))
 	}
 	return append(recent, proxyRecentJobs(src.proxy)...)
 }

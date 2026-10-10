@@ -72,7 +72,7 @@ func TestAPP01RestoreDatabaseBackupOnSQLiteRestoresAndQuitsInternally(t *testing
 		t.Fatal(err)
 	}
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 
 	backup, err := app.CreateDatabaseBackup()
 	if err != nil {
@@ -151,7 +151,7 @@ func TestAPP02StartDatabaseSwitchUsesRestoreMaintenanceWithoutClosingConnection(
 		t.Fatal(err)
 	}
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 
 	if err := app.StartDatabaseSwitch("sqlite"); err != nil {
 		t.Fatalf("发起切换失败: %v", err)
@@ -201,7 +201,7 @@ func TestAPP02StartDatabaseSwitchCancelledDuringPreflightDoesNotStartAndReleases
 	t.Setenv("SQLITE_PATH", "")
 	openAppLiveDatabase(t, func() *gorm.DB { return dbtest.OpenRaw(t) })
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 	var statusMu sync.Mutex
 	var statuses []services.DatabaseSwitchStatus
 	app.databaseSwitchService.SetProgressSink(func(status services.DatabaseSwitchStatus) {
@@ -267,7 +267,7 @@ func prepareConfigOnlySwitchBack(t *testing.T) (string, string) {
 func TestAPP02SwitchBackendConfigOnlyWiresMaintenanceAndRejectsWhileBusy(t *testing.T) {
 	dataDir, configPath := prepareConfigOnlySwitchBack(t)
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 
 	// 恢复或迁移正持有 restoreMu：立即拒绝。
 	app.restoreMu.Lock()
@@ -324,7 +324,7 @@ func TestAPP02SwitchBackendConfigOnlyWiresMaintenanceAndRejectsWhileBusy(t *test
 func TestAPP02ConfigureJellyfinDoesNotWaitForMaintenanceAndReportsRelaunchPending(t *testing.T) {
 	dataDir, _ := prepareConfigOnlySwitchBack(t)
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 	input := services.JellyfinConfigInput{Enabled: false}
 
 	app.restoreMu.Lock()
@@ -370,7 +370,7 @@ func TestAPP02RestoreDuringSwitchIsRejectedAndCancelledSwitchResumesWrites(t *te
 		t.Fatal(err)
 	}
 	app := newMaintenanceTestApp(dataDir)
-	t.Cleanup(app.releaseDatabaseRestoreMode)
+	t.Cleanup(func() { app.releaseDatabaseRestoreMode(); app.releasePlaybackMaintenance() })
 
 	restoreErrs := make(chan error, 1)
 	var once sync.Once

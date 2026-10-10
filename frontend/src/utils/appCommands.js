@@ -39,6 +39,7 @@ export const APP_NAV_GROUPS = [
     key: 'lists',
     label: '片单',
     pages: [
+      { key: 'viewing-notes', label: '观看笔记', keywords: ['diary', 'bookmarks', '日记', '片段书签', '年度回顾'] },
       { key: 'watchlist', label: '想看', keywords: ['watchlist', 'xiangkan', '片单', '待下载'] },
       { key: 'movie-chart', label: '榜单', keywords: ['chart', 'movie chart', 'bangdan', '年度', '豆瓣'] },
       // 顶栏「已看」改名「观影记录」（D-PC52），与片库的「已看」智能视图区分开；旧说法留作关键词。
@@ -50,6 +51,8 @@ export const APP_NAV_GROUPS = [
     label: '工具',
     pages: [
       { key: 'insights', label: '洞察', keywords: ['insights', 'stats', 'dongcha'] },
+      { key: 'scenes', label: '场景检索', keywords: ['scene', 'search', 'changjing', '对白', '画面', '台词'] },
+      { key: 'video-workbench', label: '视频工作台', keywords: ['workbench', 'edit', 'merge', 'trim', 'gongzuotai', '合并', '去片头', '高清替换', '剪辑'] },
       { key: 'downloads', label: '下载', keywords: ['download', 'xiazai', '插件', '浏览器'], requiresBrowserBridge: true }
     ]
   }
@@ -285,6 +288,7 @@ export const appCommandsMixin = {
       }
       // 全局动作（D-PC60）：任何页面都能执行，需要宿主页的先切过去。
       commands.push(
+        { id: 'action:playback-queue', group: 'action', label: '打开待播队列', keywords: ['queue', '下一集', '连播'], run: () => { this.playbackQueueOpen = true; } },
         {
           id: 'action:task-center',
           group: 'action',

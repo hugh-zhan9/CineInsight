@@ -5,10 +5,10 @@
 // 放在这里而不是面板里：面板只渲染注册表，任务与绑定的对应关系是业务知识。
 
 import {
-  CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelFaceAnalysis, CancelImageAITagging,
+  CancelAIReviewApproval, CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelFaceAnalysis, CancelImageAITagging,
   CancelImageCleanupAnalysis, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
   CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelMovieChartRefresh,
-  CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
+  CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSceneIndex, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
   CreateDatabaseBackup, RunGatedTaskNow, StartCleanupAnalysisFromSettings, StartCollectionSuggestionAnalysis,
   StartImageAITagging, StartImageCleanupAnalysis, StartImageEXIFBackfill,
   StartImagePerceptualHashBackfill, StartImageSemanticIndex,
@@ -45,6 +45,8 @@ const TASK_BINDINGS = {
   proxy: { cancel: () => CancelPlaybackProxyTask() },
   image_semantic: { start: () => StartImageSemanticIndex(), cancel: () => CancelImageSemanticIndex() },
   ai_tagging: { start: () => TriggerAITagging() },
+  ai_review: { cancel: () => CancelAIReviewApproval('video', '') },
+  image_ai_review: { cancel: () => CancelAIReviewApproval('image', '') },
   image_ai_tagging: { start: () => StartImageAITagging(), cancel: () => CancelImageAITagging() },
   exif: { start: () => StartImageEXIFBackfill(), cancel: () => CancelImageEXIFBackfill() },
   image_phash: { start: () => StartImagePerceptualHashBackfill(), cancel: () => CancelImagePerceptualHashBackfill() },
@@ -53,7 +55,9 @@ const TASK_BINDINGS = {
   image_cleanup: { start: () => StartImageCleanupAnalysis(), cancel: () => CancelImageCleanupAnalysis() },
   collection_suggest: { start: () => StartCollectionSuggestionAnalysis(), cancel: () => CancelCollectionSuggestionAnalysis() },
   backup: { start: () => CreateDatabaseBackup() },
-  movie_chart: { cancel: () => CancelMovieChartRefresh() }
+  movie_chart: { cancel: () => CancelMovieChartRefresh() },
+  // 场景画面索引的启动要选范围（全部 / 当前筛选），只在场景检索页发起；在跑时可取消。
+  scene_index: { cancel: () => CancelSceneIndex() }
 };
 
 // 「立即运行」恰好落在任务刚被放行之后会收到 idle_gate_task_not_waiting，

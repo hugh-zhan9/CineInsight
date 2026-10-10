@@ -1,0 +1,45 @@
+import { createApp, h, nextTick } from 'vue';
+import QueueInlinePlayer from '../../src/components/QueueInlinePlayer.vue';
+import PlaybackQueuePanel from '../../src/components/PlaybackQueuePanel.vue';
+import '../../src/styles/tokens.css';
+import '../../src/styles/components.css';
+const reports = [];
+let controls = 0;
+let maintenance = false;
+const session = (token = 'a', paused = true) => ({ token, video_id: 1, source_version: token, locator: './clip.mp4', mime: 'video/mp4', start_seconds: 0, duration: 3, view_cycle: 1, control_sequence: ++controls, desired_paused: paused });
+window.go = { main: { App: new Proxy({}, { get: (_, method) => async (...args) => {
+  if (method === 'ReportInlineQueuePlayback') { reports.push(args[0]); return; }
+  if (method === 'GetPlaybackQueue' && maintenance) throw new Error('queue_unavailable: 数据库正在恢复或切换，暂时无法读取');
+  if (method === 'GetPlaybackQueue') return { state: { revision: 1, player: 'inline', autoplay: false, status: 'paused', active_token: 'panel' }, items: Array.from({ length: 50 }, (_, i) => ({ id: i+1, title: `待播影片 ${i+1}`, video_id: i+1, source_available: true })), current: { id: 1, video_id: 1, title: '原生队列播放' }, total: 10000, has_more: true, cursor_id: 50, cursor_position: 50, sequence: 1, capabilities: [{ player: 'inline', available: true, autoplay: true }], session: session('panel') };
+  return [];
+} }) } };
+const root = createApp({ data: () => ({ mode: 'player', session: session(), open: true }), render() { return this.mode === 'player' ? h(QueueInlinePlayer, { session: this.session, key: this.session.token }) : h(PlaybackQueuePanel, { ref: 'panel', open: this.open, onClose: () => { this.open = false; } }); } }).mount('#app');
+const assert = (value, message) => { if (!value) throw new Error(message); };
+const until = async (test, label) => { window.progress = label; const end = Date.now()+8000; while (!test() && Date.now()<end) { await new Promise(resolve => setTimeout(resolve, 20)); await nextTick(); } assert(test(), label); };
+window.fixture = { async run() {
+  await until(() => document.querySelector('video')?.readyState >= 1, 'queue metadata');
+  let video = document.querySelector('video'); assert(video.paused && video.currentTime < .05, 'initial zero/paused');
+  root.session = session('a', false); await until(() => video.currentTime > .4, 'actual playback');
+  video.pause(); await until(() => video.paused && reports.some(e => e.kind === 'paused'), 'native pause');
+  root.session = session('a', false); await until(() => !video.paused && video.currentTime > .6, 'resume after native pause with same desired flag');
+  root.session = session('a', true); await until(() => video.paused && reports.some(e => e.kind === 'paused'), 'explicit pause');
+  assert(!reports.some(e => e.kind === 'ended'), 'pause fabricated EOF');
+  video.currentTime = 1; await until(() => !video.seeking, 'seek settled');
+  assert(!reports.some(e => e.kind === 'ended'), 'seek fabricated EOF');
+  root.session = session('a', false); await until(() => video.ended && reports.filter(e => e.kind === 'ended').length === 1, 'first natural end');
+  await video.play(); await until(() => video.ended && reports.filter(e => e.kind === 'ended').length === 2, 'native rewatch');
+  assert(reports.filter(e => e.kind === 'ended').map(e => e.view_cycle).join(',') === '1,2', 'rewatch cycle');
+  assert(reports.every((e,i) => e.seq === i+1 && e.token === 'a' && e.source_version === 'a'), 'ordered stable identity');
+  const old = video; const count = reports.length; root.session = session('b');
+  await until(() => document.querySelector('video') !== old && document.querySelector('video')?.readyState >= 1, 'new token new element');
+  old.dispatchEvent(new Event('ended')); await nextTick(); await new Promise(resolve => setTimeout(resolve, 50));
+  assert(reports.slice(count).every(e => e.token === 'b'), 'retired source emitted into new session');
+  root.mode = 'panel'; await until(() => document.querySelectorAll('[data-test^="queue-item-"]').length === 50 && document.querySelector('video')?.readyState >= 1, 'bounded queue panel');
+  const width = document.querySelector('[data-test="queue-panel"]').getBoundingClientRect().width; assert(width > 700 && width < innerWidth, 'queue panel width');
+  video = document.querySelector('video'); root.open = false; await nextTick();
+  assert(document.querySelector('video') === video && !document.querySelector('[data-test="queue-panel"]'), 'closing list destroyed playback');
+  await video.play(); await until(() => video.currentTime > .25, 'player survives list close');
+  maintenance = true; await root.$refs.panel.load(); await until(() => !document.querySelector('video'), 'maintenance unmounts buffered player'); assert(video.paused, 'maintenance did not pause detached video');
+  window.results = { passed: true, engine: navigator.userAgent, realDecodedMedia: true, naturalEnds: 2, queueRows: 50, queueTotal: 10000, panelWidth: width, cases: ['zero-start', 'pause-not-end', 'native-external-control-interleave', 'seek-not-end', 'natural-end', 'native-rewatch', 'fixed-token-identity', 'retired-element', 'bounded-page', 'close-list-keeps-player', 'maintenance-stops-buffered-player'] };
+} };
+window.ready = true;

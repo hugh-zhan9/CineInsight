@@ -53,6 +53,7 @@ export default {
       const hints = [];
       if (keys.has('subtitle')) hints.push('字幕任务下次启动时会提示「上次中断」，可以一键重新排队。');
       if (keys.has('browser_download')) hints.push('浏览器下载会显示为「已中断」，需要回到浏览器重新推送。');
+      if (keys.has('video_edit')) hints.push('视频工作台的导出会标为「已中断」，未发布的半成品会清掉；下次可在工作台「继续」未完成项。');
       return hints;
     }
   },

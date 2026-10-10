@@ -1,0 +1,19 @@
+{
+  "passed": true,
+  "engine": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko)",
+  "realDecodedMedia": true,
+  "effectiveViewings": 2,
+  "sameLocatorReloads": 2,
+  "diaryRows": 50,
+  "editorWidth": 620,
+  "cases": [
+    "repeat-zero",
+    "range-pause",
+    "continue-full",
+    "natural-rewatch",
+    "changed-source-reload",
+    "same-version-reload",
+    "diary-page",
+    "manual-date"
+  ]
+}

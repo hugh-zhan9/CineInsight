@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,6 +77,9 @@ type LibraryFilter struct {
 	MinRating   *float64 `json:"min_rating"`
 	MaxRating   *float64 `json:"max_rating"`
 	SortMode    string   `json:"sort_mode"`
+	// CollapseVersions 让每个版本组只出一张代表卡片（D-MW-VERSIONS）。只有 SearchLibraryVideoPage
+	// 与 CountLibraryVideos 读取它，其余入口一律忽略；保存视图不持久化。
+	CollapseVersions bool `json:"collapse_versions"`
 }
 
 // LibraryVideoCursor is an opaque stable cursor for SearchLibraryVideoPage.
@@ -94,6 +98,8 @@ type LibraryVideoPage struct {
 	// AutomaticOverrideKinds：本页视频中被人工「加上」的自动标签 kind（D-PC36 行标签上的
 	// 「手动」角标），按视频 ID 索引，只含有覆盖的视频。整页一次批量查询，不逐行查。
 	AutomaticOverrideKinds map[uint][]string `json:"automatic_override_kinds"`
+	// VersionGroups：聚合开关打开时，本页代表视频 ID → 所属版本组汇总（只含活跃成员 ≥2 的组），整页一次批量查询。
+	VersionGroups map[uint]VersionGroupSummary `json:"version_groups"`
 }
 
 // loadAutomaticOverrideKinds 一次查出这些视频上 present=true 的自动标签覆盖（D-PC36），
@@ -139,7 +145,7 @@ func newLibraryVideoPage(videos []models.Video, next *LibraryVideoCursor) (*Libr
 	if err != nil {
 		return nil, err
 	}
-	return &LibraryVideoPage{Videos: videos, NextCursor: next, AutomaticOverrideKinds: kinds}, nil
+	return &LibraryVideoPage{Videos: videos, NextCursor: next, AutomaticOverrideKinds: kinds, VersionGroups: map[uint]VersionGroupSummary{}}, nil
 }
 
 // LibraryVideoPageRequest keeps the optional cursor inside a generated DTO so
@@ -243,8 +249,12 @@ func libraryFilterNeedsSubtitleSync(filter LibraryFilter) bool {
 // loadScanRootScope 读出当前配置的扫描根。空集合表示"没有范围"，调用方一律
 // 理解成不裁剪——此时把整库藏起来比留着更糟。
 func loadScanRootScope() ([]string, error) {
+	return loadScanRootScopeFrom(database.DB)
+}
+
+func loadScanRootScopeFrom(db *gorm.DB) ([]string, error) {
 	var dirs []models.ScanDirectory
-	if err := database.DB.Find(&dirs).Error; err != nil {
+	if err := db.Find(&dirs).Error; err != nil {
 		return nil, fmt.Errorf("加载扫描目录失败: %w", err)
 	}
 	return cleanScanRoots(dirs), nil
@@ -272,12 +282,16 @@ type cleanupPathScope struct {
 }
 
 func loadCleanupPathScope() (cleanupPathScope, error) {
-	roots, err := loadScanRootScope()
+	return loadCleanupPathScopeFrom(database.DB)
+}
+
+func loadCleanupPathScopeFrom(db *gorm.DB) (cleanupPathScope, error) {
+	roots, err := loadScanRootScopeFrom(db)
 	if err != nil {
 		return cleanupPathScope{}, err
 	}
 	var settings models.Settings
-	err = database.DB.Select("scan_exclude_paths").First(&settings).Error
+	err = db.Select("scan_exclude_paths").First(&settings).Error
 	if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return cleanupPathScope{}, fmt.Errorf("加载扫描黑名单失败: %w", err)
 	}
@@ -295,7 +309,8 @@ func applyScanRootScope(query *gorm.DB) (*gorm.DB, error) {
 // applyScanScope 是 applyScanRootScope 的实现。includeRoots=false 时只保留黑名单排除、
 // 跳过扫描根裁剪：「路径失效」视图要显示根被移除后落到范围外的记录（D-PC06）。
 func applyScanScope(query *gorm.DB, includeRoots bool) (*gorm.DB, error) {
-	scope, err := loadCleanupPathScope()
+	// Keep the caller's connection and deadline for scope reads as well.
+	scope, err := loadCleanupPathScopeFrom(query.Session(&gorm.Session{NewDB: true}))
 	if err != nil {
 		return nil, err
 	}
@@ -472,8 +487,11 @@ func (s *VideoService) SetVideoLiked(videoID uint, liked bool) (*models.Video, e
 // getVideoWithTags 给状态切换接口回传完整行。前端拿返回值整行覆盖列表项，
 // 不带 tags 的话一次收藏就会把行上的标签"清空"——库里其实还在，只是被 null 盖掉了。
 func (s *VideoService) getVideoWithTags(videoID uint) (*models.Video, error) {
+	return s.getVideoWithTagsFrom(database.DB, videoID)
+}
+func (s *VideoService) getVideoWithTagsFrom(db *gorm.DB, videoID uint) (*models.Video, error) {
 	var video models.Video
-	if err := database.DB.Preload("Tags").First(&video, videoID).Error; err != nil {
+	if err := db.Preload("Tags").First(&video, videoID).Error; err != nil {
 		return nil, err
 	}
 	return &video, nil
@@ -498,6 +516,9 @@ func (s *VideoService) SetWatchStateObserver(observer WatchStateObserver) {
 // 保证观察者只有 VideoService 这一个持有者。观察者的失败只记日志，不影响调用方：
 // 已看状态已经落库，关联记录没跟上是次要问题。
 func (s *VideoService) NotifyWatchStateChanged(videoID uint, watched bool) {
+	s.NotifyWatchStateChangedContext(context.Background(), videoID, watched)
+}
+func (s *VideoService) NotifyWatchStateChangedContext(ctx context.Context, videoID uint, watched bool) {
 	if s == nil || videoID == 0 {
 		return
 	}
@@ -512,7 +533,7 @@ func (s *VideoService) NotifyWatchStateChanged(videoID uint, watched bool) {
 			log.Printf("已看状态观察者失败 video_id=%d watched=%v err=%v", videoID, watched, recovered)
 		}
 	}()
-	observer.OnVideoWatchedChanged(videoID, watched)
+	observer.OnVideoWatchedChangedContext(ctx, videoID, watched)
 }
 
 // 编译期断言：VideoService 是榜单一侧回写关联视频的入口（D-PC52）。
@@ -682,6 +703,18 @@ func markWatchedFromCompletion(db *gorm.DB, videoID uint, extra map[string]inter
 // origin 取 WatchProgressOrigin*：jump 会话只允许把断点往前推，位置小于库里的有效断点就不写；
 // 看完判定成立时照常写（看完与断点方向无关）。
 func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds float64, durationSeconds float64, completed bool, origin string) (*models.Video, error) {
+	return s.UpdateVideoWatchProgressContext(context.Background(), videoID, positionSeconds, durationSeconds, completed, origin)
+}
+func (s *VideoService) UpdateVideoWatchProgressContext(ctx context.Context, videoID uint, positionSeconds, durationSeconds float64, completed bool, origin string) (*models.Video, error) {
+	var video *models.Video
+	err := database.WithOperationContext(ctx, func(db *gorm.DB) error {
+		var err error
+		video, err = s.updateVideoWatchProgressFrom(db, videoID, positionSeconds, durationSeconds, completed, origin)
+		return err
+	})
+	return video, err
+}
+func (s *VideoService) updateVideoWatchProgressFrom(db *gorm.DB, videoID uint, positionSeconds, durationSeconds float64, completed bool, origin string) (*models.Video, error) {
 	if videoID == 0 {
 		return nil, fmt.Errorf("视频 ID 不能为空")
 	}
@@ -696,7 +729,7 @@ func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds fl
 		return nil, fmt.Errorf("不支持的起播来源: %s", origin)
 	}
 	var video models.Video
-	if err := database.DB.First(&video, videoID).Error; err != nil {
+	if err := db.First(&video, videoID).Error; err != nil {
 		return nil, err
 	}
 	duration := video.Duration
@@ -713,20 +746,20 @@ func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds fl
 	}
 	now := time.Now()
 	if completed {
-		flipped, applied, err := markWatchedFromCompletion(database.DB, videoID, map[string]interface{}{"watch_progress_updated_at": &now}, now)
+		flipped, applied, err := markWatchedFromCompletion(db, videoID, map[string]interface{}{"watch_progress_updated_at": &now}, now)
 		if err != nil {
 			return nil, err
 		}
 		if !applied {
 			// 行已不在（getVideoWithTags 报未找到），或并发的「取消已看」先落了库：按实际状态返回。
-			return s.getVideoWithTags(videoID)
+			return s.getVideoWithTagsFrom(db, videoID)
 		}
 		if flipped {
-			s.NotifyWatchStateChanged(videoID, true)
+			s.NotifyWatchStateChangedContext(db.Statement.Context, videoID, true)
 		}
-		return s.getVideoWithTags(videoID)
+		return s.getVideoWithTagsFrom(db, videoID)
 	}
-	query := database.DB.Model(&models.Video{}).Where("videos.id = ?", videoID)
+	query := db.Model(&models.Video{}).Where("videos.id = ?", videoID)
 	if origin == WatchProgressOriginJump {
 		// 只和有效断点比：已看之前留下的旧断点（resumable 为 false）不算「已存位置」，
 		// 否则重看时从字幕命中起播的进度永远写不进去。条件更新而不是先读后写，
@@ -743,7 +776,7 @@ func (s *VideoService) UpdateVideoWatchProgress(videoID uint, positionSeconds fl
 	if result.RowsAffected != 1 && origin != WatchProgressOriginJump {
 		return nil, gorm.ErrRecordNotFound
 	}
-	return s.getVideoWithTags(videoID)
+	return s.getVideoWithTagsFrom(db, videoID)
 }
 
 // ListSavedLibraryViews 返回所有活跃保存视图。
@@ -970,9 +1003,13 @@ func (s *VideoService) CountLibraryVideos(filter LibraryFilter) (int64, error) {
 			return 0, err
 		}
 	}
+	now := time.Now()
 	query := database.DB.Model(&models.Video{})
-	query, err = applyLibraryFilter(query, normalized, time.Now())
+	query, err = applyLibraryFilter(query, normalized, now)
 	if err != nil {
+		return 0, err
+	}
+	if query, err = applyVersionCollapse(query, normalized, now); err != nil {
 		return 0, err
 	}
 	var count int64
@@ -1025,12 +1062,20 @@ func (s *VideoService) SearchLibraryVideoPage(filter LibraryFilter, cursor *Libr
 				ID:       last.ID,
 			}
 		}
-		return newLibraryVideoPage(videos, next)
+		page, err := newLibraryVideoPage(videos, next)
+		if err != nil {
+			return nil, err
+		}
+		return attachPageVersionGroups(page, normalized)
 	}
 
+	now := time.Now()
 	query := database.DB.Model(&models.Video{}).Preload("Tags")
-	query, err = applyLibraryFilter(query, normalized, time.Now())
+	query, err = applyLibraryFilter(query, normalized, now)
 	if err != nil {
+		return nil, err
+	}
+	if query, err = applyVersionCollapse(query, normalized, now); err != nil {
 		return nil, err
 	}
 	if cursor != nil {
@@ -1062,7 +1107,11 @@ func (s *VideoService) SearchLibraryVideoPage(filter LibraryFilter, cursor *Libr
 			next.Rating = &rating
 		}
 	}
-	return newLibraryVideoPage(videos, next)
+	page, err := newLibraryVideoPage(videos, next)
+	if err != nil {
+		return nil, err
+	}
+	return attachPageVersionGroups(page, normalized)
 }
 
 func validateLibraryVideoCursor(sortMode string, cursor *LibraryVideoCursor) error {
@@ -1118,6 +1167,7 @@ func (s *VideoService) SearchLibraryVideos(filter LibraryFilter, cursorScore flo
 			return nil, err
 		}
 	}
+	filter.CollapseVersions = false // 旧数组接口是文件级入口，不做版本聚合。
 	return s.searchLibraryVideos(filter, cursorScore, cursorSize, cursorID, limit)
 }
 
@@ -1309,9 +1359,13 @@ func (s *VideoService) searchLibraryVideos(filter LibraryFilter, cursorScore flo
 		limit = 20
 	}
 	scoreSQL := scoreExprForTable("videos.", playWeight)
+	now := time.Now()
 	query := database.DB.Model(&models.Video{}).Preload("Tags")
-	query, err = applyLibraryFilter(query, filter, time.Now())
+	query, err = applyLibraryFilter(query, filter, now)
 	if err != nil {
+		return nil, err
+	}
+	if query, err = applyVersionCollapse(query, filter, now); err != nil {
 		return nil, err
 	}
 	query = query.Order(scoreSQL + " ASC").Order("videos.size DESC").Order("videos.id DESC")

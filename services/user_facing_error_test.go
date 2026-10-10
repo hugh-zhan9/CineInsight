@@ -44,3 +44,17 @@ func TestWithoutAbsolutePathsKeepsErrorChainAPP01(t *testing.T) {
 		t.Fatalf("errors.As 应拿到原错误")
 	}
 }
+
+func TestWithoutAbsolutePathsCoversSpacedTypedPathsAndJoinedErrors(t *testing.T) {
+	first := &os.PathError{Op: "stat", Path: "/Volumes/private folder/secret movie.mp4", Err: os.ErrNotExist}
+	second := &os.LinkError{Op: "rename", Old: "/Volumes/another folder/private old.mp4", New: "/Volumes/another folder/private new.mp4", Err: os.ErrPermission}
+	got := WithoutAbsolutePaths(fmt.Errorf("queue_control_failed: %w", errors.Join(first, second)))
+	for _, secret := range []string{"/Volumes/", "secret movie", "private old", "private new"} {
+		if strings.Contains(got.Error(), secret) {
+			t.Fatal("path fragment exposed", got)
+		}
+	}
+	if !strings.HasPrefix(got.Error(), "queue_control_failed:") || !errors.Is(got, os.ErrPermission) || !errors.Is(got, os.ErrNotExist) {
+		t.Fatal("code/causes lost", got)
+	}
+}

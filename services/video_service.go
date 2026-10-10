@@ -105,7 +105,7 @@ func lockLibraryPaths() (func(), error) {
 	return acquireLibraryPath(libraryPathMutationMu.TryLock, libraryPathMutationMu.Lock, libraryPathMutationMu.Unlock)
 }
 
-// rLockLibraryPaths 是全局路径锁 libraryPathMutationMu 读锁的唯一获取入口（修复 F 复审 m1，修复 I，修复 L m3）。返回释放函数。
+// rLockLibraryPaths 是路径读锁的默认入口；与可取消版本共用 rLockLibraryPathsContext 核心。返回释放函数。
 //
 // 恢复备份与切换后端时，enterDatabaseRestoreMode 先拿路径写锁（BeginLibraryMaintenance）、再立维护围栏；切换成功与
 // 「只改配置」之后进入「待重启」终态，写锁与围栏一直保持到进程退出。监听触发的窄对账、Jellyfin 与手机端的删除、
@@ -114,7 +114,7 @@ func lockLibraryPaths() (func(), error) {
 // 读锁用阻塞的 RLock 等（不轮询）：写者放锁时，排着的读者先于下一个写者拿到锁，批量写者逐项取写锁期间读者不会被饿死；
 // 有写者在等时新读者照常让位（写者优先）。
 func rLockLibraryPaths() (func(), error) {
-	return acquireLibraryPath(libraryPathMutationMu.TryRLock, libraryPathMutationMu.RLock, libraryPathMutationMu.RUnlock)
+	return rLockLibraryPathsContext(context.Background())
 }
 
 // libraryMaintenanceStartedFn 是「维护开始」通知的替身入口，只在单测里设置（让通知不到达，以便钉住拿锁之后的围栏复查）；
@@ -139,6 +139,15 @@ func libraryMaintenanceStarted() <-chan struct{} {
 // 围栏生效期间绝不无限等待。围栏只是判断那一刻的快照，真正的写入拒绝仍由数据库回调里的 enter 负责。
 // 恢复 / 切换在立围栏之前先拿路径写锁（BeginLibraryMaintenance），所以等在它后面的读者与写者都会收到这次通知。
 func acquireLibraryPath(tryLock func() bool, lock, unlock func()) (func(), error) {
+	return acquireLibraryPathContext(context.Background(), tryLock, lock, unlock)
+}
+func rLockLibraryPathsContext(ctx context.Context) (func(), error) {
+	return acquireLibraryPathContext(ctx, libraryPathMutationMu.TryRLock, libraryPathMutationMu.RLock, libraryPathMutationMu.RUnlock)
+}
+func acquireLibraryPathContext(ctx context.Context, tryLock func() bool, lock, unlock func()) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if database.MaintenanceActive() {
 		return nil, database.ErrMaintenance
 	}
@@ -157,10 +166,17 @@ func acquireLibraryPath(tryLock func() bool, lock, unlock func()) (func(), error
 		}()
 		select {
 		case <-acquired:
+		case <-ctx.Done():
+			close(abandoned)
+			return nil, ctx.Err()
 		case <-started:
 			close(abandoned)
 			return nil, database.ErrMaintenance
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		unlock()
+		return nil, err
 	}
 	if database.MaintenanceActive() {
 		unlock()

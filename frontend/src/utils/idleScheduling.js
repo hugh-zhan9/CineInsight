@@ -16,6 +16,8 @@ export const BACKGROUND_TASK_LABELS = {
   image_semantic: '图片语义索引',
   ai_tagging: 'AI 打标',
   image_ai_tagging: '图片 AI 打标',
+  ai_review: '视频标签批量审阅',
+  image_ai_review: '图片标签批量审阅',
   exif: '图片 EXIF',
   image_phash: '图片指纹',
   cleanup: '清理分析',
@@ -25,7 +27,9 @@ export const BACKGROUND_TASK_LABELS = {
   backup: '数据库备份',
   browser_download: '插件下载',
   watchlist_enrich: '片单补全',
-  movie_chart: '榜单抓取'
+  movie_chart: '榜单抓取',
+  scene_index: '场景画面索引',
+  video_edit: '视频工作台'
 };
 
 // 后端新加了 key 而前端还没同步文案时的兜底说法。守卫测试保证正常情况下用不到它；

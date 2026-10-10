@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 	"video-master/database"
@@ -704,6 +705,15 @@ func (s *ShortFeedService) loadEligibleVideo(videoID uint) (models.Video, error)
 
 // RecordPlayback 记录一次播放/浏览。
 func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInteractionDTO, error) {
+	return s.RecordPlaybackSession(ref, "")
+}
+
+// RecordPlaybackSession adds an optional persistent effective-view identity.
+func (s *ShortFeedService) RecordPlaybackSession(ref ShortFeedMediaRef, sessionID string) (*ShortFeedInteractionDTO, error) {
+	if len(sessionID) > viewEventSessionIDMaxLength || sessionID != "" && strings.TrimSpace(sessionID) == "" {
+		return nil, ErrViewingNoteInvalid
+	}
+	sessionID = strings.TrimSpace(sessionID)
 	if ref.Kind == ShortFeedMediaImage {
 		return s.recordImageView(ref)
 	}
@@ -717,6 +727,10 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 	if _, err := s.loadVisibleVideo(videoID); err != nil {
 		return nil, err
 	}
+	key := ""
+	if sessionID != "" {
+		key = diarySessionKey(models.PlayEventSourceMobileFeed, videoID, sessionID)
+	}
 	var interaction models.ShortFeedInteraction
 	err := database.Transaction(func(tx *gorm.DB) error {
 		var video models.Video
@@ -725,6 +739,15 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 		}
 		if !shortFeedEligible(video, maxDurationSeconds) {
 			return ErrShortFeedNoEligibleVideos
+		}
+		if key != "" {
+			exists, err := diarySessionRecorded(tx, key)
+			if err != nil {
+				return err
+			}
+			if exists {
+				return tx.Where("video_id = ?", videoID).First(&interaction).Error
+			}
 		}
 		if err := tx.Model(&models.Video{}).Where("id = ?", videoID).Updates(map[string]interface{}{
 			"random_play_count": gorm.Expr("random_play_count + 1"),
@@ -735,12 +758,14 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 			return err
 		}
 		// 播放事件与计数递增同事务：手机端与桌面端在账本里必须是同一种一致性。
-		if err := tx.Create(&models.PlayEvent{
-			VideoID:  videoID,
-			PlayedAt: now,
-			Source:   models.PlayEventSourceMobileFeed,
-		}).Error; err != nil {
+		event := models.PlayEvent{VideoID: videoID, PlayedAt: now, Source: models.PlayEventSourceMobileFeed}
+		if err := tx.Create(&event).Error; err != nil {
 			return err
+		}
+		if key != "" {
+			if err := appendViewingDiaryTx(tx, video, event, key); err != nil {
+				return err
+			}
 		}
 
 		return upsertShortFeedInteraction(tx, videoID, func(row *models.ShortFeedInteraction) {
@@ -749,6 +774,18 @@ func (s *ShortFeedService) RecordPlayback(ref ShortFeedMediaRef) (*ShortFeedInte
 			interaction = *row
 		})
 	})
+	if errors.Is(err, errDiarySessionExists) {
+		err = database.WithOperationContext(context.Background(), func(db *gorm.DB) error {
+			exists, checkErr := diarySessionRecorded(db, key)
+			if checkErr != nil {
+				return checkErr
+			}
+			if !exists {
+				return errDiarySessionExists
+			}
+			return db.Where("video_id = ?", videoID).First(&interaction).Error
+		})
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -86,5 +86,23 @@ func AllModels() []interface{} {
 		&CleanupConsolidationTask{},
 		&CleanupConsolidationTaskPlan{},
 		&CleanupConsolidationTaskItem{},
+		// User-owned notes survive media deletion. Their logical references have
+		// no cascade FK; migrator preserves consumed IDs to prevent reassignment.
+		&VideoBookmark{},
+		&ViewingDiaryEntry{},
+		&PlaybackQueueState{},
+		&PlaybackQueueEntry{},
+		// 多版本聚合（D-MW-VERSIONS）：成员表外键指向 videos 与版本组表，版本组表排在成员表之前。
+		&VideoVersionGroup{},
+		&VideoVersionMember{},
+		&VideoVersionSuggestionDismissal{},
+		// 场景检索的画面索引（D-MW-SCENES）：两张表只有指向 videos 的外键，videos 是清单
+		// 第一项，追加在末尾满足拓扑序。
+		&SceneIndexState{},
+		&SceneVisualSegment{},
+		// 视频工作台（视频编辑合同）：items.project_id 级联指向 projects，projects 必须在前；
+		// 两张表对 videos 都只有逻辑引用（来源在配方/计划 JSON 里，成品 output_video_id 无外键）。
+		&VideoEditProject{},
+		&VideoEditItem{},
 	}
 }

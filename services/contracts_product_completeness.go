@@ -1,6 +1,9 @@
 package services
 
-import "errors"
+import (
+	"context"
+	"errors"
+)
 
 // 产品完善度批次（2026-09-29）的共享契约：下游切片直接引用，不各自再定义一份。
 // 失效原因与回收站模式常量在 models（models.StaleReason*、models.TrashMode*、
@@ -29,7 +32,7 @@ var (
 // WatchStateObserver 由 VideoService 在 is_watched 实际翻转、事务提交之后回调（D-PC52）。
 // 依赖方向是 App → 两个服务，由 App 注入 MovieChartService，服务之间不互相引用。
 type WatchStateObserver interface {
-	OnVideoWatchedChanged(videoID uint, watched bool)
+	OnVideoWatchedChangedContext(ctx context.Context, videoID uint, watched bool)
 }
 
 // LinkedVideoWatchSetter 是榜单一侧「取消已看 / 标已看」回写关联视频的入口。

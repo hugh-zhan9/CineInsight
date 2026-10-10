@@ -25,15 +25,15 @@ export function AddTagToImage(arg1:number,arg2:number):Promise<void>;
 
 export function AddTagToVideo(arg1:number,arg2:number):Promise<void>;
 
+export function AddVersionMembers(arg1:number,arg2:number,arg3:Array<number>):Promise<services.VersionGroupDetail>;
+
+export function AnalyzeEditProject(arg1:services.EditAnalyzeRequest):Promise<services.EditProjectView>;
+
 export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyRequest):Promise<services.LocalMetadataBatchResult>;
 
 export function ApplyWatchlistCandidate(arg1:number,arg2:string):Promise<void>;
 
 export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
-
-export function ApproveAITagCandidates(arg1:Array<number>):Promise<services.AITagBatchResult>;
-
-export function ApproveAITagCandidatesByFilter(arg1:services.AITagCandidateFilter):Promise<services.AITagBatchResult>;
 
 export function ApproveImageAITagCandidate(arg1:number):Promise<services.ImageAITaggingReviewItem>;
 
@@ -49,6 +49,8 @@ export function BatchMoveVideos(arg1:Array<number>,arg2:string):Promise<services
 
 export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise<services.BatchVideoOperationResult>;
 
+export function CancelAIReviewApproval(arg1:string,arg2:string):Promise<void>;
+
 export function CancelBatchDelete(arg1:string):Promise<boolean>;
 
 export function CancelBrowserDownloadTask(arg1:string):Promise<void>;
@@ -58,6 +60,10 @@ export function CancelCleanupAnalysis():Promise<void>;
 export function CancelCleanupConsolidation():Promise<void>;
 
 export function CancelCollectionSuggestionAnalysis():Promise<void>;
+
+export function CancelEditAnalysis(arg1:number):Promise<void>;
+
+export function CancelEditProject(arg1:number):Promise<void>;
 
 export function CancelEnhancementModelDownload():Promise<services.EnhancementModelStatus>;
 
@@ -89,6 +95,10 @@ export function CancelPerceptualHashBackfill():Promise<void>;
 
 export function CancelPlaybackProxyTask():Promise<void>;
 
+export function CancelSceneIndex():Promise<void>;
+
+export function CancelSceneRuntimePrepare():Promise<void>;
+
 export function CancelSemanticIndex():Promise<void>;
 
 export function CancelSubtitle():Promise<void>;
@@ -113,6 +123,8 @@ export function ClearPlaybackProxies():Promise<services.PlaybackProxyUsage>;
 
 export function ClearShortFeedPIN():Promise<void>;
 
+export function ClearStaleSceneIndex():Promise<services.SceneIndexCleanupResult>;
+
 export function ClearVideoAutomaticTagOverride(arg1:number,arg2:string):Promise<void>;
 
 export function ConfigureJellyfin(arg1:services.JellyfinConfigInput):Promise<services.JellyfinStatus>;
@@ -127,11 +139,11 @@ export function ConfirmQuit():Promise<void>;
 
 export function ConfirmSameSourceRelation(arg1:number):Promise<void>;
 
+export function ControlPlaybackQueue(arg1:string,arg2:string):Promise<void>;
+
 export function ConvertSubtitleToUTF8(arg1:number,arg2:string):Promise<services.SubtitleConvertResult>;
 
 export function ConvertTagToPerson(arg1:services.TagPersonConversionRequest):Promise<services.TagPersonConversionResult>;
-
-export function CountAITagCandidatesByFilter(arg1:services.AITagCandidateFilter):Promise<number>;
 
 export function CountLibraryVideos(arg1:services.LibraryFilter):Promise<number>;
 
@@ -140,6 +152,8 @@ export function CreateBlankSubtitleDocument(arg1:number):Promise<services.Subtit
 export function CreateCollection(arg1:string,arg2:string):Promise<models.MediaCollection>;
 
 export function CreateDatabaseBackup():Promise<services.BackupFile>;
+
+export function CreateEditProject(arg1:services.EditProjectCreateRequest):Promise<services.EditProjectView>;
 
 export function CreateEnhancementTask(arg1:services.EnhancementCreateRequest):Promise<services.EnhancementTaskView>;
 
@@ -153,11 +167,15 @@ export function CreateTagCategory(arg1:string,arg2:Array<number>):Promise<void>;
 
 export function CreateTagWithCategory(arg1:string,arg2:string,arg3:string):Promise<models.Tag>;
 
+export function CreateVersionGroup(arg1:Array<number>,arg2:string):Promise<services.VersionGroupDetail>;
+
 export function CreateWatchlistEntry(arg1:string,arg2:string):Promise<models.WatchlistEntry>;
 
 export function DeleteCollection(arg1:number):Promise<void>;
 
 export function DeleteDirectory(arg1:number):Promise<void>;
+
+export function DeleteEditProject(arg1:number):Promise<void>;
 
 export function DeleteGlossaryEntry(arg1:number):Promise<void>;
 
@@ -179,7 +197,11 @@ export function DeleteTag(arg1:number):Promise<void>;
 
 export function DeleteTagCategory(arg1:string):Promise<void>;
 
+export function DeleteVideoBookmark(arg1:number,arg2:number):Promise<void>;
+
 export function DeleteVideosWithResult(arg1:Array<number>,arg2:boolean,arg3:string):Promise<services.BatchResult>;
+
+export function DeleteViewingDiary(arg1:number,arg2:number):Promise<void>;
 
 export function DeleteWatchlistEntry(arg1:number):Promise<void>;
 
@@ -205,9 +227,19 @@ export function DismissNearDuplicateGroup(arg1:Array<number>):Promise<void>;
 
 export function DismissNearDuplicateMember(arg1:Array<number>,arg2:number):Promise<void>;
 
+export function DismissVersionGroupSuggestion(arg1:Array<number>):Promise<void>;
+
+export function DissolveVersionGroup(arg1:number,arg2:number):Promise<void>;
+
+export function DuplicateEditProject(arg1:number):Promise<services.EditProjectView>;
+
+export function EditPlaybackQueue(arg1:services.QueueEdit):Promise<void>;
+
 export function EnforcePlaybackProxyLimit():Promise<services.PlaybackProxyUsage>;
 
 export function ExportLocalMetadataNFO(arg1:number):Promise<services.LocalMetadataNFOExportResult>;
+
+export function ExportSystemHealthReport():Promise<main.HealthReportExport>;
 
 export function FilterActivePersonIDs(arg1:Array<number>):Promise<services.ActivePersonIDsResult>;
 
@@ -222,6 +254,10 @@ export function ForceRemoveTrashRecords(arg1:string,arg2:Array<number>,arg3:stri
 export function GenerateSubtitle(arg1:services.SubtitleGenerateRequest):Promise<services.SubtitleGenerateResult>;
 
 export function GetAIQualityReport(arg1:services.AIQualityFilter):Promise<services.AIQualityReport>;
+
+export function GetAIReviewApproval(arg1:string,arg2:string,arg3:number,arg4:number):Promise<services.ReviewApprovalState>;
+
+export function GetAIReviewCandidates(arg1:string,arg2:Array<number>):Promise<services.ReviewCandidateRefresh>;
 
 export function GetAITaggingStatusSummary():Promise<services.AITaggingStatusSummary>;
 
@@ -252,6 +288,8 @@ export function GetCollectionSuggestionStatus():Promise<services.CollectionSugge
 export function GetDatabaseBackendStatus():Promise<services.DatabaseBackendStatus>;
 
 export function GetDatabaseSwitchStatus():Promise<services.DatabaseSwitchStatus>;
+
+export function GetEditProject(arg1:number):Promise<services.EditProjectView>;
 
 export function GetEnhancementCapability():Promise<services.EnhancementRuntimeCapability>;
 
@@ -325,7 +363,15 @@ export function GetPlaybackProxyStatus():Promise<services.PlaybackProxyStatus>;
 
 export function GetPlaybackProxyUsage():Promise<services.PlaybackProxyUsage>;
 
+export function GetPlaybackQueue(arg1:services.QueueQuery):Promise<services.QueueSnapshot>;
+
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
+
+export function GetSceneCoverage(arg1:services.LibraryFilter):Promise<services.SceneCoverage>;
+
+export function GetSceneIndexStatus():Promise<services.SceneIndexStatus>;
+
+export function GetSceneRuntimeStatus():Promise<services.SceneRuntimeStatus>;
 
 export function GetSemanticIndexStatus():Promise<services.SemanticIndexStatus>;
 
@@ -351,6 +397,8 @@ export function GetSubtitleQueueState():Promise<services.SubtitleQueueSnapshot>;
 
 export function GetSubtitleSegments(arg1:number):Promise<Array<subtitleparser.Segment>>;
 
+export function GetSystemHealthSection(arg1:string):Promise<main.HealthSection>;
+
 export function GetTagUsageCounts(arg1:Array<number>):Promise<Record<number, services.TagUsageCount>>;
 
 export function GetTaskCenterSnapshot():Promise<main.TaskCenterSnapshot>;
@@ -359,11 +407,17 @@ export function GetTechnicalBackfillStatus():Promise<services.TechnicalBackfillS
 
 export function GetTrashUsage():Promise<services.TrashUsage>;
 
+export function GetVersionGroup(arg1:number):Promise<services.VersionGroupDetail>;
+
 export function GetVideoAutomaticTagOverrides(arg1:number):Promise<Array<models.VideoAutomaticTagOverride>>;
 
 export function GetVideoDetails(arg1:number):Promise<services.VideoDetails>;
 
+export function GetVideoEditStatus():Promise<services.VideoEditStatus>;
+
 export function GetVideosByIDs(arg1:Array<number>):Promise<Array<models.Video>>;
+
+export function GetViewingYearReview(arg1:number):Promise<services.ViewingYearReview>;
 
 export function GetWallpaperPreflight(arg1:string,arg2:number):Promise<services.WallpaperPreflight>;
 
@@ -388,6 +442,8 @@ export function ListContinueWatchingWithFilter(arg1:services.LibraryFilter,arg2:
 export function ListDatabaseBackups():Promise<Array<services.BackupFile>>;
 
 export function ListDownloadTasks():Promise<Array<services.BrowserDownloadTask>>;
+
+export function ListEditProjects(arg1:number):Promise<Array<services.EditProjectSummary>>;
 
 export function ListEnhancementTasks(arg1:number):Promise<Array<services.EnhancementTaskView>>;
 
@@ -431,6 +487,16 @@ export function ListTagPersonConversions(arg1:number):Promise<Array<services.Tag
 
 export function ListTrashEntries(arg1:services.TrashFilter):Promise<services.TrashPage>;
 
+export function ListUnconfirmedPlaybackHistory(arg1:services.HistoryQuery):Promise<services.PlaybackHistoryPage>;
+
+export function ListVersionGroupSuggestions(arg1:number):Promise<Array<services.VersionGroupSuggestion>>;
+
+export function ListVersionGroups(arg1:number,arg2:number):Promise<services.VersionGroupPage>;
+
+export function ListVideoBookmarks(arg1:services.BookmarkQuery):Promise<services.BookmarkPage>;
+
+export function ListViewingDiary(arg1:services.DiaryQuery):Promise<services.DiaryPage>;
+
 export function ListWatchedMovies():Promise<Array<services.WatchedMovieYearGroup>>;
 
 export function ListWatchlist(arg1:string,arg2:number,arg3:number):Promise<services.WatchlistPage>;
@@ -455,6 +521,8 @@ export function MoveVideo(arg1:number,arg2:string):Promise<services.FileMigratio
 
 export function NameFaceCluster(arg1:number,arg2:string,arg3:string):Promise<services.FaceClusterView>;
 
+export function NextPlaybackQueue(arg1:string,arg2:number):Promise<void>;
+
 export function OpenDirectory(arg1:number):Promise<void>;
 
 export function OpenImageDirectory(arg1:string):Promise<void>;
@@ -467,15 +535,23 @@ export function PermanentlyDeleteVideos(arg1:Array<number>):Promise<services.Bat
 
 export function PickRandomVideos(arg1:services.RandomPlayRequest,arg2:number):Promise<services.RandomPickResult>;
 
+export function PlayPlaybackQueue(arg1:number,arg2:number):Promise<void>;
+
 export function PlayRandomVideoWithFilter(arg1:services.RandomPlayRequest):Promise<services.PlaybackAttemptResult>;
 
 export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
 
 export function PreflightDatabaseSwitch(arg1:string):Promise<services.DatabaseSwitchPreflight>;
 
+export function PreflightEditProject(arg1:number):Promise<services.EditPreflight>;
+
 export function PrepareFaceRuntime():Promise<services.FaceRuntimeStatus>;
 
+export function PrepareSceneRuntime():Promise<services.SceneRuntimeStatus>;
+
 export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void>;
+
+export function PreviewAIReviewApproval(arg1:string,arg2:services.ReviewApprovalRequest):Promise<services.ReviewApprovalPreview>;
 
 export function PreviewCleanupConsolidation(arg1:services.CleanupConsolidationRequest):Promise<services.CleanupConsolidationPreview>;
 
@@ -488,6 +564,8 @@ export function PreviewLocalMetadataBatch(arg1:Array<number>):Promise<services.L
 export function PreviewTagPersonConversion(arg1:number):Promise<services.TagPersonConversionPreview>;
 
 export function PurgeTrashEntries(arg1:string,arg2:Array<number>):Promise<services.BatchResult>;
+
+export function QueueEditProject(arg1:services.EditQueueRequest):Promise<services.EditQueueResult>;
 
 export function ReaddRemovedRoot(arg1:number):Promise<string>;
 
@@ -539,6 +617,8 @@ export function RemoveTagFromImage(arg1:number,arg2:number):Promise<void>;
 
 export function RemoveTagFromVideo(arg1:number,arg2:number):Promise<void>;
 
+export function RemoveVersionMember(arg1:number,arg2:number,arg3:number):Promise<services.VersionGroupDetail>;
+
 export function RenameDirectory(arg1:string,arg2:string):Promise<services.FolderMigrationResult>;
 
 export function RenameTagCategory(arg1:string,arg2:string):Promise<void>;
@@ -547,11 +627,19 @@ export function RenameVideo(arg1:number,arg2:string):Promise<void>;
 
 export function ReorderCollectionVideos(arg1:number,arg2:Array<number>):Promise<void>;
 
+export function ReorderVersionMembers(arg1:number,arg2:number,arg3:Array<number>):Promise<services.VersionGroupDetail>;
+
+export function ReportInlineQueuePlayback(arg1:services.InlineQueueEvent):Promise<void>;
+
+export function RequeueEditProject(arg1:services.EditQueueRequest):Promise<services.EditQueueResult>;
+
 export function RequeueInterruptedSubtitleJobs():Promise<number>;
 
 export function RerollRandom(arg1:string):Promise<services.PlaybackAttemptResult>;
 
 export function ResolveSubtitleJob(arg1:number,arg2:string):Promise<services.SubtitleJobResolveResult>;
+
+export function ResolveVideoBookmark(arg1:number):Promise<services.BookmarkResolution>;
 
 export function RestoreDatabaseBackup(arg1:services.BackupRestoreRequest):Promise<void>;
 
@@ -589,11 +677,21 @@ export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<mod
 
 export function SaveSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleSaveResult>;
 
+export function SaveVideoBookmark(arg1:services.BookmarkInput):Promise<services.BookmarkDTO>;
+
+export function SaveViewingDiary(arg1:services.DiaryInput):Promise<services.DiaryEntryDTO>;
+
+export function SearchAITagCandidatePage(arg1:services.ReviewSearchRequest):Promise<services.AITagCandidatePage>;
+
+export function SearchImageAITagCandidatePage(arg1:services.ReviewSearchRequest):Promise<services.ImageAITagCandidatePage>;
+
 export function SearchImagePage(arg1:services.ImagePageRequest):Promise<services.ImagePage>;
 
 export function SearchImagesSemantic(arg1:services.ImageSemanticSearchRequest):Promise<services.ImageSemanticSearchPage>;
 
 export function SearchLibraryVideoPage(arg1:services.LibraryVideoPageRequest):Promise<services.LibraryVideoPage>;
+
+export function SearchScenes(arg1:services.SceneSearchRequest):Promise<services.SceneSearchResult>;
 
 export function SearchSemanticVideos(arg1:services.SemanticSearchRequest):Promise<services.SemanticSearchPage>;
 
@@ -635,6 +733,8 @@ export function SetWallpaper(arg1:string,arg2:number):Promise<services.Wallpaper
 
 export function SetWindowForeground(arg1:boolean):Promise<void>;
 
+export function StartAIReviewApproval(arg1:string,arg2:string):Promise<services.ReviewApprovalState>;
+
 export function StartCleanupAnalysisFromSettings():Promise<services.CleanupStatus>;
 
 export function StartCleanupConsolidation(arg1:string,arg2:boolean):Promise<services.CleanupConsolidationStatus>;
@@ -665,13 +765,19 @@ export function StartLocalMetadataExport(arg1:services.LocalMetadataExportReques
 
 export function StartPerceptualHashBackfill():Promise<services.PerceptualHashStatus>;
 
+export function StartSceneIndex(arg1:services.SceneIndexRequest):Promise<services.SceneIndexStatus>;
+
 export function StartSemanticIndex(arg1:services.SemanticIndexBuildRequest):Promise<services.SemanticIndexStatus>;
 
 export function StartTechnicalBackfill():Promise<services.TechnicalBackfillStatus>;
 
+export function StopPlaybackQueue(arg1:string):Promise<void>;
+
 export function StopVideoWallpaper():Promise<services.WallpaperStatus>;
 
 export function SuggestLibraryMatchesBatch(arg1:Array<services.LibraryMatchQuery>):Promise<Record<string, Array<services.LibraryMatchSuggestion>>>;
+
+export function SuggestTonightVideos(arg1:services.TonightRequest):Promise<Array<services.TonightSuggestion>>;
 
 export function SwitchBackendConfigOnly(arg1:string):Promise<services.DatabaseSwitchConfigResult>;
 
@@ -707,6 +813,8 @@ export function UpdateCollection(arg1:number,arg2:string,arg3:string):Promise<mo
 
 export function UpdateDirectoryWithMode(arg1:number,arg2:string,arg3:string,arg4:string):Promise<services.DirectoryUpdateResult>;
 
+export function UpdateEditRecipe(arg1:services.EditRecipeUpdateRequest):Promise<services.EditProjectView>;
+
 export function UpdateImageDirectory(arg1:number,arg2:string,arg3:string):Promise<void>;
 
 export function UpdatePerson(arg1:number,arg2:string,arg3:string):Promise<models.Person>;
@@ -716,6 +824,8 @@ export function UpdateSavedLibraryView(arg1:number,arg2:string,arg3:services.Lib
 export function UpdateSettings(arg1:models.Settings):Promise<void>;
 
 export function UpdateTagWithCategory(arg1:number,arg2:string,arg3:string,arg4:string):Promise<void>;
+
+export function UpdateVersionGroup(arg1:number,arg2:number,arg3:string,arg4:Record<number, string>):Promise<services.VersionGroupDetail>;
 
 export function UpdateVideoDetails(arg1:services.VideoDetailsUpdate):Promise<services.VideoDetails>;
 

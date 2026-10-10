@@ -1300,9 +1300,7 @@ func TestWireStartupHooksEmitsRelocationAndTaskCenterChangesPLAY12APP03(t *testi
 	}
 
 	runtimeEvents := stubRuntimeEvents(t)
-	previousDelay := taskCenterChangeDelay
-	taskCenterChangeDelay = 10 * time.Millisecond
-	t.Cleanup(func() { taskCenterChangeDelay = previousDelay })
+	setTaskCenterChangeDelayForTest(t, 10*time.Millisecond)
 
 	var mu sync.Mutex
 	emitted := []recordedEvent{}
@@ -1526,6 +1524,7 @@ func TestShutdownCompletesAndEntersTerminalStatePLAY07(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer releasePlaybackAfterShutdownTest(app)
 		app.shutdown(context.Background())
 	}()
 	select {
@@ -1577,12 +1576,16 @@ func TestStartupShutdownWiringContractMEDIA10APP09PLAY03(t *testing.T) {
 	}
 
 	cancelAt := strings.Index(shutdown, "a.cancelDatabaseSwitchForShutdown()")
+	quiesceAt := strings.Index(shutdown, "a.quiescePlaybackForShutdown()")
+	if quiesceAt < 0 || quiesceAt > cancelAt {
+		t.Error("shutdown must close playback permanently before cancelling a migration")
+	}
 	lockAt := strings.Index(shutdown, "a.restoreMu.Lock()")
 	if cancelAt < 0 || lockAt < 0 || cancelAt > lockAt {
 		t.Error("shutdown 必须在 restoreMu.Lock() 之前调用 cancelDatabaseSwitchForShutdown()")
 	}
 	for _, want := range []string{
-		"services.StopPlaybackRelocation()",
+		"a.quiescePlaybackForShutdown()",
 		"services.FlushPendingRandomCommit()",
 		"a.withShortFeedLifecycle(a.stopShortFeedForSetting)",
 	} {

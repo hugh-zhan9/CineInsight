@@ -29,6 +29,7 @@
         >设置</button>
       </nav>
       <div v-if="!startupError" class="header-tools">
+        <button type="button" class="header-tool-btn" data-test="open-playback-queue" @click="playbackQueueOpen = true">待播队列</button>
         <button type="button" class="header-tool-btn" data-test="open-pending-work" @click="openPendingWork">
           待处理
           <span v-if="pendingWorkTotal > 0" class="header-badge" data-test="pending-work-badge">{{ badgeText(pendingWorkTotal) }}</span>
@@ -43,6 +44,7 @@
     </div>
 
     <WallpaperStatusBar v-if="!startupError" />
+    <PlaybackQueuePanel v-if="!startupError" :open="playbackQueueOpen" @open="playbackQueueOpen = true" @close="playbackQueueOpen = false" @open-video="openVideoByID" />
 
     <div v-if="startupError" class="startup-error-view">
       <div class="startup-error-card">
@@ -57,6 +59,7 @@
         <p v-else class="startup-error-hint" data-test="startup-error-postgres-hint">
           当前使用 Postgres 数据库：如果你是双击启动应用，请优先检查 macOS 是否已允许“析微影策”访问本地网络，并确认 Postgres 地址和端口可达。
         </p>
+        <button type="button" class="btn-secondary" data-test="startup-open-diagnostics" @click="startupDiagnosticsOpen = true">运行状态与诊断</button>
       </div>
     </div>
 
@@ -74,8 +77,11 @@
         @reload-directories="loadDirectories"
         @person-converted="handleTagPersonConverted"
         @update-settings="handleSettingsUpdate"
+        @search-scenes="openScenesWithFilter"
+        @open-video-edit="openVideoEditProject"
       />
 
+      <ViewingNotesPage v-if="notesMounted" v-show="currentPage === 'viewing-notes'" :page-active="currentPage === 'viewing-notes'" @open-bookmark="openBookmark" @open-video="openVideoFromCommand" @open-video-id="openVideoByID" />
       <DownloadsPage v-if="currentPage === 'downloads'" />
       <WatchlistPage v-if="currentPage === 'watchlist'" />
       <!-- 按需挂载：榜单页一挂载就会报一次 OpenMovieChartYear（可能起后台抓取），
@@ -98,6 +104,17 @@
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" />
       <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" :focus-entity="entityFocus.collection" />
 	  <InsightsPage v-if="currentPage === 'insights'" :directories="directories" />
+	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
+	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" @open-video-at="openVideoAt" />
+	  <!-- 视频工作台：首次进入才挂载，之后只隐藏，事件与编辑中的项目都还在。 -->
+	  <VideoWorkbenchPage
+	    v-if="workbenchMounted"
+	    v-show="currentPage === 'video-workbench'"
+	    :page-active="currentPage === 'video-workbench'"
+	    :open-request="workbenchRequest"
+	    @open-video="openVideoByID"
+	    @cleanup-sources="cleanupEditSources"
+	  />
 	  <!-- 首次进入才挂载，之后只隐藏不卸载：切走再切回不会丢已加载的图片和滚动位置。 -->
 	  <PhotoLibraryPage
 	    ref="photoLibrary"
@@ -127,6 +144,7 @@
       @badge-change="taskCenterBadge = $event"
       @open-video="openVideoByID"
       @open-consolidation="openConsolidationTask"
+      @open-video-edit="openVideoEditProject"
     />
     <PendingWorkHub
       v-if="!startupError"
@@ -152,6 +170,11 @@
       </div>
     </div>
 
+    <BaseModal v-if="startupError && startupDiagnosticsOpen" class="startup-diagnostics" close-on-overlay @close="startupDiagnosticsOpen = false">
+      <header class="startup-diagnostics__head"><h2>运行状态与诊断</h2><button type="button" class="btn-secondary btn-compact" data-test="startup-close-diagnostics" @click="startupDiagnosticsOpen = false">关闭</button></header>
+      <SystemHealthPanel :actions-enabled="false" />
+    </BaseModal>
+
     <!-- 全局提示宿主：webview 的 alert/confirm 是哑的，所有错误提示和危险操作确认都走这里 -->
     <AppFeedback />
   </div>
@@ -168,15 +191,21 @@ import DownloadsPage from './components/DownloadsPage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
 import MovieChartPage from './components/MovieChartPage.vue';
 import WatchedMoviesPage from './components/WatchedMoviesPage.vue';
+import ViewingNotesPage from './components/ViewingNotesPage.vue';
+import ScenesPage from './components/ScenesPage.vue';
+import VideoWorkbenchPage from './components/VideoWorkbenchPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
 import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
 import PendingWorkHub from './components/PendingWorkHub.vue';
 import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
 import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
+import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
+import BaseModal from './components/ui/BaseModal.vue';
+import SystemHealthPanel from './components/SystemHealthPanel.vue';
 import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
-import { confirmAction, notifyError } from './utils/feedback.js';
+import { confirmAction, notify, notifyError } from './utils/feedback.js';
 import { APP_NAV_GROUPS, appCommandsMixin, isNavPageVisible } from './utils/appCommands.js';
 
 // 扫描根的身份只由路径集合决定：别名、时间戳变了不影响"扫描范围"。
@@ -195,16 +224,26 @@ export default {
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
-    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, WallpaperStatusBar
+    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, WallpaperStatusBar,
+    BaseModal, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage
   },
   data() {
     return {
       currentPage: 'videos',
+      playbackQueueOpen: false,
       // 图片页首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"。
       photosMounted: false,
+      notesMounted: false,
+      scenesMounted: false,
+      // 片库带过来的场景检索范围：{ filter, token }；为空表示全部视频。
+      scenesScope: null,
+      workbenchMounted: false,
+      // 要视频工作台打开的项目：{ projectID, token }（片库新建、任务中心「在工作台中打开」）。
+      workbenchRequest: null,
       tags: [],
       directories: [],
       startupError: '',
+      startupDiagnosticsOpen: false,
       // 启动错误页按当前后端给提示（D-PC58）：sqlite / postgres，读不到时为空串（按 Postgres 口径提示）。
       startupBackend: '',
       // 「待重启」遮罩（D-PC55）。
@@ -308,6 +347,9 @@ export default {
       immediate: true,
       handler(page) {
         if (page === 'photos') this.photosMounted = true;
+        if (page === 'viewing-notes') this.notesMounted = true;
+        if (page === 'scenes') this.scenesMounted = true;
+        if (page === 'video-workbench') this.workbenchMounted = true;
       }
     }
   },
@@ -410,6 +452,60 @@ export default {
         .catch(err => notifyError(`打开「${label || '待处理事项'}」失败：${err}`));
     },
     // 任务中心里超分产物的「在片库中打开」：按 ID 取回视频再走片库页既有的详情入口。
+    async openBookmark(resolution) {
+      const generation = this._bookmarkNavigation = Symbol();
+      const navigated = await this.navigateTo('videos');
+      if (navigated === false || this._bookmarkNavigation !== generation) return;
+      await this.$nextTick();
+      return this.$refs.videoListPage?.openBookmark(resolution);
+    },
+    // 片库工具栏「在当前筛选中搜场景」：带上当前 LibraryFilter 进入场景检索页（D-MW-SCENES）。
+    openScenesWithFilter(filter) {
+      this.scenesScope = { filter: filter ? { ...filter } : null, token: Date.now() };
+      return this.navigateTo('scenes');
+    },
+    // 视频工作台：片库新建项目、任务中心「在工作台中打开」后切过去并选中该项目。
+    openVideoEditProject(projectID) {
+      const id = Number(projectID);
+      if (!Number.isInteger(id) || id <= 0) return false;
+      this.workbenchRequest = { projectID: id, token: Date.now() };
+      this.taskCenterOpen = false;
+      return this.navigateTo('video-workbench');
+    },
+    // 工作台的「清理原片…」：回片库走既有的删除确认与废纸篓流程（视频编辑合同 TC-23），工作台自己从不删除。
+    async cleanupEditSources(videoIDs) {
+      const ids = [...new Set((videoIDs || []).map(Number).filter(id => id > 0))];
+      if (!ids.length) return;
+      try {
+        const videos = await GetVideosByIDs(ids) || [];
+        if (!videos.length) {
+          notify('原片已不在片库中，可能已经删除。');
+          return;
+        }
+        const navigated = await this.navigateTo('videos');
+        if (navigated === false) return;
+        await this.$nextTick();
+        this.$refs.videoListPage?.requestDeleteVideos(videos);
+      } catch (err) {
+        notifyError(`打开删除确认失败：${err}`);
+      }
+    },
+    // 场景命中：回到片库打开详情抽屉，从区间起点（已提前 2 秒）内嵌播放，沿用字幕命中的跳转机制。
+    async openVideoAt({ videoID, startMs } = {}) {
+      try {
+        const [video] = await GetVideosByIDs([Number(videoID)]) || [];
+        if (!video) {
+          notifyError('这个视频已不在片库中，可能不在扫描目录内或已被删除。');
+          return;
+        }
+        const navigated = await this.navigateTo('videos');
+        if (navigated === false) return;
+        await this.$nextTick();
+        await this.$refs.videoListPage?.openPreviewAt(video, startMs);
+      } catch (err) {
+        notifyError(`打开视频失败：${err}`);
+      }
+    },
     async openVideoByID(videoID) {
       try {
         const [video] = await GetVideosByIDs([Number(videoID)]) || [];
@@ -554,7 +650,13 @@ export default {
 };
 </script>
 
+<style scoped>
+:deep(.startup-diagnostics) { width: min(760px, calc(100vw - 48px)); max-height: calc(100vh - 64px); overflow-y: auto; }
+</style>
+
 <style>
+.startup-diagnostics__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.startup-diagnostics__head h2 { margin: 0; }
 /* --- Header ---
    原型 A1：52px 通栏、不透明面板、底部一条发丝线；导航是 32px 胶囊，
    选中态直接填主色，不再靠投影和浅底区分。 */

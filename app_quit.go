@@ -114,7 +114,7 @@ func (a *App) beforeClose(ctx context.Context) (prevent bool) {
 	return true
 }
 
-// quitBlockingTasks 收集拦住退出的任务，顺序固定：字幕、超分、播放代理、浏览器下载、集中整理。
+// quitBlockingTasks 收集拦住退出的任务，顺序固定：字幕、超分、视频工作台、播放代理、浏览器下载、集中整理。
 // 运行与否与任务中心同一个来源（登记表），字幕另外算上队列里排队的任务。
 //
 // 进行中的字幕翻译（D-PC21 清单里的最后一项）不在其中：字幕服务目前没有只读的「哪些翻译在跑」
@@ -150,6 +150,9 @@ func (a *App) quitBlockingTasks() []QuitBlockingTask {
 	if running[string(services.BackgroundTaskEnhancement)] {
 		tasks = append(tasks, QuitBlockingTask{Key: string(services.BackgroundTaskEnhancement), Running: 1, Names: []string{}})
 	}
+	if task, blocking := a.videoEditQuitTask(running); blocking {
+		tasks = append(tasks, task)
+	}
 
 	proxy := a.playbackProxies.Status()
 	if proxy.Running || running[string(services.BackgroundTaskProxy)] {
@@ -182,6 +185,11 @@ func (a *App) quitBlockingTasks() []QuitBlockingTask {
 	}
 	if running[string(services.BackgroundTaskCleanupConsolidation)] {
 		tasks = append(tasks, QuitBlockingTask{Key: string(services.BackgroundTaskCleanupConsolidation), Running: 1, Names: []string{}})
+	}
+	for _, key := range []services.BackgroundTaskKey{services.BackgroundTaskAIReview, services.BackgroundTaskImageAIReview} {
+		if running[string(key)] {
+			tasks = append(tasks, QuitBlockingTask{Key: string(key), Running: 1, Names: []string{}})
+		}
 	}
 	return tasks
 }

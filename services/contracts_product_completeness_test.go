@@ -1,6 +1,7 @@
 package services
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -17,7 +18,7 @@ import (
 
 type fakeWatchObserver struct{ calls []bool }
 
-func (f *fakeWatchObserver) OnVideoWatchedChanged(videoID uint, watched bool) {
+func (f *fakeWatchObserver) OnVideoWatchedChangedContext(_ context.Context, videoID uint, watched bool) {
 	f.calls = append(f.calls, watched)
 }
 

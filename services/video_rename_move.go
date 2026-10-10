@@ -17,15 +17,21 @@ import (
 
 // RelocateVideo 更新视频路径（文件迁移场景，保留标签等元数据）
 func (s *VideoService) RelocateVideo(id uint, newPath string) error {
-	unlock, err := rLockLibraryPaths()
+	return s.RelocateVideoContext(context.Background(), id, newPath)
+}
+func (s *VideoService) RelocateVideoContext(ctx context.Context, id uint, newPath string) error {
+	unlock, err := rLockLibraryPathsContext(ctx)
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	return s.relocateVideo(id, newPath)
+	return database.WithOperationContext(ctx, func(db *gorm.DB) error { return s.relocateVideoFrom(db, id, newPath) })
 }
 
 func (s *VideoService) relocateVideo(id uint, newPath string) error {
+	return s.relocateVideoFrom(database.DB, id, newPath)
+}
+func (s *VideoService) relocateVideoFrom(db *gorm.DB, id uint, newPath string) error {
 	newPath = filepath.Clean(strings.TrimSpace(newPath))
 
 	// 验证新路径文件存在。错误文案会直接显示给用户，不带路径（G-3）。
@@ -36,11 +42,13 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 
 	// 检查新路径是否已被其他记录占用
 	var existing models.Video
-	if err := database.DB.Where("path = ? AND id != ?", newPath, id).First(&existing).Error; err == nil {
+	if err := db.Where("path = ? AND id != ?", newPath, id).First(&existing).Error; err == nil {
 		return errors.New("目标路径已被其他记录占用")
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return err
 	}
 
-	if err := database.Transaction(func(tx *gorm.DB) error {
+	if err := db.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"path":         newPath,
 			"directory":    filepath.Dir(newPath),
@@ -56,9 +64,9 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 	}); err != nil {
 		return err
 	}
-	if probeErr := s.technicalProbe().Refresh(context.Background(), id); probeErr != nil {
+	if probeErr := s.technicalProbe().Refresh(db.Statement.Context, id); probeErr != nil {
 		log.Printf("视频迁移完成但技术信息读取失败 id=%d newPath=%s err=%v", id, newPath, probeErr)
-	} else if syncErr := database.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, id) }); syncErr != nil {
+	} else if syncErr := db.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, id) }); syncErr != nil {
 		log.Printf("视频迁移技术信息读取成功但短视频标签同步失败 id=%d newPath=%s err=%v", id, newPath, syncErr)
 	}
 	log.Printf("视频迁移并更新元数据 id=%d newPath=%s", id, newPath)

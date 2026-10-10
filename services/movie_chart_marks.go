@@ -105,17 +105,21 @@ func (s *MovieChartService) markEntryLocked(doubanID, mark string) (*MovieChartM
 // auto 为 true 表示由视频已看观察者触发的自动路径：want → watched 时 origin 为
 // enrichment 的片单条目（用户手动条目）保留，只清认领；手动路径语义不变（R8 双向同步）。
 func (s *MovieChartService) markEntry(doubanID, mark string, auto bool) (*MovieChartMarkResult, error) {
+	return s.markEntryFrom(s.db, doubanID, mark, auto)
+}
+
+func (s *MovieChartService) markEntryFrom(db *gorm.DB, doubanID, mark string, auto bool) (*MovieChartMarkResult, error) {
 	if s.watchlist == nil {
 		return nil, errors.New("想看片单服务不可用")
 	}
 	if !movieChartMarkSupported(mark) {
 		return nil, fmt.Errorf("%w：%q", ErrMovieChartMarkUnsupported, mark)
 	}
-	entry, err := s.loadChartEntry(doubanID)
+	entry, err := s.loadChartEntryFrom(db, doubanID)
 	if err != nil {
 		return nil, err
 	}
-	existing, err := s.loadChartMark(doubanID)
+	existing, err := s.loadChartMarkFrom(db, doubanID)
 	if err != nil {
 		return nil, err
 	}
@@ -123,7 +127,7 @@ func (s *MovieChartService) markEntry(doubanID, mark string, auto bool) (*MovieC
 	if existing != nil && existing.Mark == mark {
 		// 幂等分支只动 marked_at：快照三列保持第一次标记时的值（需求设计文档 §7
 		// 「对同一条目重复点同一个标记 → 幂等，只刷新 marked_at」）。
-		if err := s.touchChartMark(existing.ID); err != nil {
+		if err := s.touchChartMarkFrom(db, existing.ID); err != nil {
 			return nil, err
 		}
 		return &MovieChartMarkResult{Mark: mark}, nil
@@ -133,7 +137,7 @@ func (s *MovieChartService) markEntry(doubanID, mark string, auto bool) (*MovieC
 	// 改标记时**先**跑上一个标记的撤销副作用。失败就整个动作放弃：此刻标记还是
 	// 原样、片单条目还挂在它名下，用户重试一次即可。反过来（先落新标记再删片单）
 	// 一旦删失败，那条片单记录就没有任何标记再指向它，谁也清不掉了。
-	if err := s.undoWantWatchlistEntry(existing, auto); err != nil {
+	if err := s.undoWantWatchlistEntryFrom(db, existing, auto); err != nil {
 		return nil, err
 	}
 
@@ -151,13 +155,13 @@ func (s *MovieChartService) markEntry(doubanID, mark string, auto bool) (*MovieC
 	// 超长片名会变成「标记记上了、片单没建成」——MarkEntry 直接返回校验错误。
 	title := movieChartTruncateTitle(entry.Title)
 	if mark == models.MovieChartMarkWant {
-		watchlistEntryID, origin, result.WatchlistConflict, err = s.markEntryWatchlistLink(title, doubanID)
+		watchlistEntryID, origin, result.WatchlistConflict, err = s.markEntryWatchlistLinkFrom(db, title, doubanID)
 		if err != nil {
 			return nil, err
 		}
 		result.WatchlistCreated = origin == models.MovieChartOriginChart
 	}
-	if err := s.upsertChartMark(entry, title, mark, watchlistEntryID, origin); err != nil {
+	if err := s.upsertChartMarkFrom(db, entry, title, mark, watchlistEntryID, origin); err != nil {
 		return nil, err
 	}
 	switch {
@@ -205,10 +209,14 @@ func (s *MovieChartService) clearMark(doubanID string) error {
 // clearMarkWasWatched 是 clearMark 的内核，另返回被撤销的标记是否是「已看」，
 // 供 ClearMark 决定要不要回写关联视频。调用方必须持有 s.markMu。
 func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
+	return s.clearMarkWasWatchedFrom(s.db, doubanID)
+}
+
+func (s *MovieChartService) clearMarkWasWatchedFrom(db *gorm.DB, doubanID string) (bool, error) {
 	if s.watchlist == nil {
 		return false, errors.New("想看片单服务不可用")
 	}
-	existing, err := s.loadChartMark(doubanID)
+	existing, err := s.loadChartMarkFrom(db, doubanID)
 	if err != nil {
 		return false, err
 	}
@@ -217,7 +225,7 @@ func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
 	}
 	// 顺序同改标记：先删片单条目，再删标记行。删片单失败时标记原样留着，重试一次
 	// 就能接着往下走；倒过来则会留下一条再也没人认领的片单记录。
-	if err := s.undoWantWatchlistEntry(existing, false); err != nil {
+	if err := s.undoWantWatchlistEntryFrom(db, existing, false); err != nil {
 		return false, err
 	}
 	// 删除带**条件更新守卫**：只删「我刚才读到的那个标记」。需求设计文档 §5 通篇
@@ -235,7 +243,7 @@ func (s *MovieChartService) clearMarkWasWatched(doubanID string) (bool, error) {
 	// s.markMu 已经把进程内的交错排除掉了，所以这条守卫如今是第二道防线：
 	// 锁保证「读到的就是最新的」，守卫保证「即便不是，也不会误删」。两道都留着，
 	// 将来谁把锁挪走或绕开入口，库里仍然不会出现无主的片单记录。
-	result := s.db.Where("id = ? AND mark = ? AND watchlist_entry_id = ?",
+	result := db.Where("id = ? AND mark = ? AND watchlist_entry_id = ?",
 		existing.ID, existing.Mark, existing.WatchlistEntryID).
 		Delete(&models.MovieChartMark{})
 	if result.Error != nil {
@@ -279,7 +287,11 @@ const movieChartOriginUnclaimed = "unclaimed"
 //
 // 同名但豆瓣 ID 不同的两部电影不算复用，各建各的（D-PC52）。
 func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint, string, bool, error) {
-	entryID, created, err := s.watchlist.EnsureChartEntry(title, doubanID)
+	return s.markEntryWatchlistLinkFrom(s.db, title, doubanID)
+}
+
+func (s *MovieChartService) markEntryWatchlistLinkFrom(db *gorm.DB, title, doubanID string) (uint, string, bool, error) {
+	entryID, created, err := s.watchlist.EnsureChartEntryContext(db.Statement.Context, title, doubanID)
 	if err != nil {
 		if errors.Is(err, ErrWatchlistTitleExists) {
 			return 0, movieChartOriginUnclaimed, true, nil
@@ -309,6 +321,10 @@ func (s *MovieChartService) markEntryWatchlistLink(title, doubanID string) (uint
 // keepEnrichment 为 true（视频看完的自动路径）时，origin 为 enrichment 的条目也不删：
 // 那是用户手动加的条目，只是补全后被标记认领；调用方随后的 upsert 会清掉认领。
 func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMark, keepEnrichment bool) error {
+	return s.undoWantWatchlistEntryFrom(s.db, existing, keepEnrichment)
+}
+
+func (s *MovieChartService) undoWantWatchlistEntryFrom(db *gorm.DB, existing *models.MovieChartMark, keepEnrichment bool) error {
 	if existing == nil || existing.Mark != models.MovieChartMarkWant || existing.WatchlistEntryID == 0 {
 		return nil
 	}
@@ -321,7 +337,7 @@ func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMa
 	}
 	// 走 WatchlistService.DeleteForChart 而不是自己拼一条 DELETE：那条路径连带清理补全下来
 	// 的海报（与 Delete 的区别只是不去撤销标记：标记由本服务自己改写或删除），绕过它会在 media-details/watchlist/<id>/ 下留孤儿文件。
-	if err := s.watchlist.DeleteForChart(existing.WatchlistEntryID); err != nil {
+	if err := s.watchlist.DeleteForChartContext(db.Statement.Context, existing.WatchlistEntryID); err != nil {
 		if errors.Is(err, ErrWatchlistEntryNotFound) {
 			log.Printf("[MovieChart] undo want douban=%s watchlist_entry=%d 已不存在，按撤销成功处理",
 				existing.DoubanID, existing.WatchlistEntryID)
@@ -338,6 +354,10 @@ func (s *MovieChartService) undoWantWatchlistEntry(existing *models.MovieChartMa
 // 缓存行的样子，让已看页在缓存被整年重建、或条目从豆瓣下架之后仍然完整可用
 // （D-MC05）。它们不是对缓存表的引用，因此后续列表刷新改了片名也不会回写这里。
 func (s *MovieChartService) upsertChartMark(entry models.MovieChartEntry, title, mark string, watchlistEntryID uint, origin string) error {
+	return s.upsertChartMarkFrom(s.db, entry, title, mark, watchlistEntryID, origin)
+}
+
+func (s *MovieChartService) upsertChartMarkFrom(db *gorm.DB, entry models.MovieChartEntry, title, mark string, watchlistEntryID uint, origin string) error {
 	now := s.now()
 	row := models.MovieChartMark{
 		DoubanID:             entry.DoubanID,
@@ -352,7 +372,7 @@ func (s *MovieChartService) upsertChartMark(entry models.MovieChartEntry, title,
 	// updated_at 必须显式列进来：GORM 在 DoUpdates 这条路径上不维护它
 	// （services/image_ai_tagging_service.go:773 与 writeYearState 同此写法）。
 	// SET 右侧全是字面量，没有一处引用目标表的列，因此不会踩 Postgres 的 42702。
-	err := s.db.Clauses(clause.OnConflict{
+	err := db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "douban_id"}},
 		DoUpdates: clause.Assignments(map[string]any{
 			"mark":                   row.Mark,
@@ -373,8 +393,12 @@ func (s *MovieChartService) upsertChartMark(entry models.MovieChartEntry, title,
 
 // touchChartMark 只刷新 marked_at（与 updated_at），供重复点同一标记的幂等分支用。
 func (s *MovieChartService) touchChartMark(id uint) error {
+	return s.touchChartMarkFrom(s.db, id)
+}
+
+func (s *MovieChartService) touchChartMarkFrom(db *gorm.DB, id uint) error {
 	now := s.now()
-	err := s.db.Model(&models.MovieChartMark{}).Where("id = ?", id).
+	err := db.Model(&models.MovieChartMark{}).Where("id = ?", id).
 		Updates(map[string]any{"marked_at": now, "updated_at": now}).Error
 	if err != nil {
 		return fmt.Errorf("刷新标记时间失败: %w", err)
@@ -384,8 +408,12 @@ func (s *MovieChartService) touchChartMark(id uint) error {
 
 // loadChartEntry 读一条缓存条目，没有时返回 ErrMovieChartEntryNotFound。
 func (s *MovieChartService) loadChartEntry(doubanID string) (models.MovieChartEntry, error) {
+	return s.loadChartEntryFrom(s.db, doubanID)
+}
+
+func (s *MovieChartService) loadChartEntryFrom(db *gorm.DB, doubanID string) (models.MovieChartEntry, error) {
 	var entry models.MovieChartEntry
-	if err := s.db.Where("douban_id = ?", doubanID).First(&entry).Error; err != nil {
+	if err := db.Where("douban_id = ?", doubanID).First(&entry).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return models.MovieChartEntry{}, fmt.Errorf("%w（豆瓣 ID %s）", ErrMovieChartEntryNotFound, doubanID)
 		}
@@ -396,8 +424,12 @@ func (s *MovieChartService) loadChartEntry(doubanID string) (models.MovieChartEn
 
 // loadChartMark 读一个条目当前的标记，没有标记时返回 (nil, nil)。
 func (s *MovieChartService) loadChartMark(doubanID string) (*models.MovieChartMark, error) {
+	return s.loadChartMarkFrom(s.db, doubanID)
+}
+
+func (s *MovieChartService) loadChartMarkFrom(db *gorm.DB, doubanID string) (*models.MovieChartMark, error) {
 	var mark models.MovieChartMark
-	if err := s.db.Where("douban_id = ?", doubanID).First(&mark).Error; err != nil {
+	if err := db.Where("douban_id = ?", doubanID).First(&mark).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		}

@@ -12,7 +12,14 @@
         <button type="button" class="task-center__close" aria-label="关闭任务中心" data-test="task-center-close" @click="$emit('close')">×</button>
       </header>
 
-      <div class="task-center__body">
+      <nav class="task-center__tabs" aria-label="任务与运行状态">
+        <button type="button" class="btn-secondary btn-compact" :aria-pressed="section === 'tasks'" data-test="task-center-tab-tasks" @click="section = 'tasks'">任务</button>
+        <button type="button" class="btn-secondary btn-compact" :aria-pressed="section === 'health'" data-test="task-center-tab-health" @click="section = 'health'">运行状态与诊断</button>
+      </nav>
+      <div v-if="section === 'health'" class="task-center__body">
+        <SystemHealthPanel @run-command="runHealthCommand" />
+      </div>
+      <div v-else class="task-center__body">
         <p v-if="loadError" class="task-center__error" role="alert" data-test="task-center-error">{{ loadError }}</p>
         <ul v-if="warnings.length" class="task-center__warnings" role="status" data-test="task-center-warnings">
           <li v-for="(warning, index) in warnings" :key="`warning-${index}`">{{ warning }}</li>
@@ -58,7 +65,7 @@
 
         <section class="task-center__section" data-test="task-center-recent">
           <h3>最近任务</h3>
-          <p v-if="!recentGroups.length" class="task-center__empty">还没有字幕、超分、下载、播放代理或集中整理任务。</p>
+          <p v-if="!recentGroups.length" class="task-center__empty">还没有字幕、超分、下载、播放代理、集中整理或视频工作台任务。</p>
           <div v-for="group in recentGroups" :key="group.kind" class="task-recent-group" :data-test="`task-recent-${group.kind}`">
             <h4>{{ group.label }}</h4>
             <ul class="task-center__items">
@@ -98,7 +105,7 @@
 
 <script>
 import {
-  CancelBrowserDownloadTask, CancelEnhancementTask, CancelSubtitleTask, CreatePlaybackProxy, AddDownloadDirectoryToScan,
+  CancelBrowserDownloadTask, CancelEditProject, CancelEnhancementTask, CancelSubtitleTask, CreatePlaybackProxy, AddDownloadDirectoryToScan,
   GetTaskCenterSnapshot, OpenDirectory, ReimportDownload, ResolveSubtitleJob, RetryDownload, RetryEnhancementTask, RevealDownload
 } from '../../wailsjs/go/main/App';
 import { runtimeEventsMixin } from './video-list/runtimeEvents.js';
@@ -106,7 +113,10 @@ import { backgroundTaskLabel, idleWaitReasonLabel } from '../utils/idleSchedulin
 import { taskActionRunner } from '../utils/taskCommands.js';
 import { CONSOLIDATION_STATUS } from '../utils/cleanupConsolidation.js';
 import { PLAYBACK_PROXY_CODE_LABELS } from '../utils/playbackProxy.js';
+import { EDIT_STATUS_LABELS } from '../utils/videoEdit.js';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
+import { findCommand, isCommandEnabled } from '../utils/commandRegistry.js';
+import SystemHealthPanel from './SystemHealthPanel.vue';
 
 // 事件驱动的重拉合并窗口：清理分析与字幕队列的进度事件可能一秒好几条，只取最后一次。
 const REFRESH_DEBOUNCE_MS = 300;
@@ -125,7 +135,8 @@ const RECENT_KINDS = [
   { kind: 'enhancement', label: '视频超分' },
   { kind: 'download', label: '插件下载' },
   { kind: 'proxy', label: '播放代理' },
-  { kind: 'cleanup_consolidation', label: '集中整理' }
+  { kind: 'cleanup_consolidation', label: '集中整理' },
+  { kind: 'video_edit', label: '视频工作台' }
 ];
 
 // 各类任务自己的状态码 → 中文。超分的这份在 P-033 的 utils/enhancement.js 落地后应改为引用那里。
@@ -141,7 +152,8 @@ const RECENT_STATUS_LABELS = {
   download: {
     queued: '排队中', running: '下载中', importing: '入库中', done: '已完成', failed: '失败', canceled: '已取消', interrupted: '已中断'
   },
-  proxy: { running: '生成中', cancelled: '已取消', ...PLAYBACK_PROXY_CODE_LABELS }
+  proxy: { running: '生成中', cancelled: '已取消', ...PLAYBACK_PROXY_CODE_LABELS },
+  video_edit: EDIT_STATUS_LABELS
 };
 
 const RECENT_ACTION_LABELS = {
@@ -149,7 +161,8 @@ const RECENT_ACTION_LABELS = {
   subtitle: { cancel: '取消', force: '强制生成', discard: '放弃', retry: '重试' },
   enhancement: { cancel: '取消', retry: '重试', reveal_output: '在访达中显示', open_output_in_library: '在片库中打开' },
   download: { cancel: '取消', retry: '重试', reveal: '在访达中显示', add_directory_to_scan: '加入扫描目录', reimport: '重新入库' },
-  proxy: { retry: '重新生成' }
+  proxy: { retry: '重新生成' },
+  video_edit: { cancel: '取消', open_video_edit: '在工作台中打开' }
 };
 
 function asArray(value) {
@@ -172,15 +185,17 @@ function numericID(value) {
 // 常挂载（关着也在），这样顶栏角标能跟着 task-center-changed 走；打开时再主动拉一次。
 export default {
   name: 'TaskCenterDrawer',
+  components: { SystemHealthPanel },
   mixins: [runtimeEventsMixin],
   props: {
     open: { type: Boolean, default: false }
   },
-  emits: ['close', 'badge-change', 'open-video', 'open-consolidation'],
+  emits: ['close', 'badge-change', 'open-video', 'open-consolidation', 'open-video-edit'],
   data() {
     return {
       snapshot: { items: [], recent: [], warnings: [] },
       loadError: '',
+      section: 'tasks',
       busy: {}
     };
   },
@@ -239,6 +254,19 @@ export default {
     clearTimeout(this._refreshTimer);
   },
   methods: {
+    async runHealthCommand(id) {
+      if (id === 'action:task-center') {
+        this.section = 'tasks';
+        return;
+      }
+      const command = findCommand(id);
+      if (!command || !isCommandEnabled(command)) {
+        notifyError('该处理入口当前不可用');
+        return;
+      }
+      this.$emit('close');
+      try { await command.run(); } catch (_) { notifyError('打开处理入口失败，请从设置页进入'); }
+    },
     // 与 BaseModal 同口径：Esc 关闭。已被别的处理器接手（preventDefault）的按键不再处理。
     handleDocumentKeydown(event) {
       if (!this.open || event.key !== 'Escape' || event.defaultPrevented) return;
@@ -297,14 +325,16 @@ export default {
       return Math.min(100, Math.max(0, Math.round((Number(item.progress?.done || 0) / total) * 100)));
     },
     lastRunFailed(item) {
-      return Number(item?.last_run?.failed || 0) > 0;
+      return Number(item?.last_run?.failed || 0) > 0 || asArray(item?.last_run?.failures).length > 0;
     },
     lastRunText(item) {
       const run = item.last_run;
       if (!run) return '';
       const time = this.formatTime(run.finished_at);
-      const counts = `成功 ${Number(run.succeeded || 0)} · 失败 ${Number(run.failed || 0)}`;
-      return time ? `上一轮（${time}）：${counts}` : `上一轮：${counts}`;
+      const counts = [`成功 ${Number(run.succeeded || 0)}`, `失败 ${Number(run.failed || 0)}`];
+      if (Number(run.skipped) > 0) counts.push(`跳过 ${Number(run.skipped)}`);
+      if (Number(run.remaining) > 0) counts.push(`未处理 ${Number(run.remaining)}`);
+      return time ? `上一轮（${time}）：${counts.join(' · ')}` : `上一轮：${counts.join(' · ')}`;
     },
     failures(item) {
       return asArray(item.last_run?.failures);
@@ -392,6 +422,15 @@ export default {
         else if (action === 'add_directory_to_scan' || action === 'reimport') notify('已提交入库，完成后片库会自动刷新');
         return result;
       }
+      if (job.kind === 'video_edit') {
+        const projectID = numericID(job.id);
+        if (action === 'cancel') return CancelEditProject(projectID);
+        if (action === 'open_video_edit') {
+          this.$emit('open-video-edit', projectID);
+          this.$emit('close');
+        }
+        return undefined;
+      }
       if (job.kind === 'proxy' && action === 'retry') {
         return CreatePlaybackProxy(numericID(job.video_id || job.id));
       }
@@ -408,6 +447,8 @@ export default {
 </script>
 
 <style scoped>
+.task-center__tabs { display: flex; flex-wrap: wrap; gap: 8px; padding: 8px 18px; border-bottom: 1px solid var(--border-color); }
+.task-center__tabs button[aria-pressed="true"] { background: var(--accent-soft); color: var(--accent-text); border-color: var(--accent-border); }
 .task-center-overlay {
   position: fixed;
   inset: 0;

@@ -127,7 +127,8 @@ type ShortFeedServerStatus struct {
 }
 
 type ShortFeedPlayRequest struct {
-	Source string `json:"source"`
+	ViewSessionID string `json:"view_session_id,omitempty"`
+	Source        string `json:"source"`
 }
 
 type ShortFeedLikeRequest struct {

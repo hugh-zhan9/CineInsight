@@ -483,7 +483,7 @@ func (s *ShortFeedHTTPServer) handleItemMutation(w http.ResponseWriter, r *http.
 			writeShortFeedError(w, http.StatusBadRequest, "invalid_source", "play source must be short_feed")
 			return
 		}
-		result, err := s.feed.RecordPlayback(ref)
+		result, err := s.feed.RecordPlaybackSession(ref, req.ViewSessionID)
 		writeShortFeedMutationResult(w, result, err)
 	case "like":
 		var req ShortFeedLikeRequest
@@ -728,6 +728,10 @@ func decodeShortFeedMutationLimit(w http.ResponseWriter, r *http.Request, target
 }
 
 func writeShortFeedMutationResult(w http.ResponseWriter, result *ShortFeedInteractionDTO, err error) {
+	if errors.Is(err, ErrViewingNoteInvalid) {
+		writeShortFeedError(w, http.StatusBadRequest, "invalid_view_session", "观看会话标识无效")
+		return
+	}
 	if err == nil {
 		writeShortFeedJSON(w, http.StatusOK, result)
 		return

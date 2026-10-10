@@ -92,6 +92,19 @@ func (a *App) TestAITaggingConnection(input services.AITaggingConnectionTestInpu
 
 // ===== AI Tagging Methods =====
 
+// SearchAITagCandidatePage searches the complete review range without returning every candidate.
+func (a *App) SearchAITagCandidatePage(request services.ReviewSearchRequest) (*services.AITagCandidatePage, error) {
+	if reason := a.databaseUnavailableReason(); reason != "" {
+		return nil, fmt.Errorf("%s", reason)
+	}
+	if a.aiTaggingService == nil {
+		return nil, fmt.Errorf("AI 审阅服务未初始化")
+	}
+	ctx, cancel := context.WithTimeout(a.backgroundContext(), 30*time.Second)
+	defer cancel()
+	return a.aiTaggingService.SearchCandidatePage(ctx, request)
+}
+
 // ListAITagCandidatePage 是审阅工作台的取数入口：候选没有上限，一次全量下发
 // 在大库上既压 IPC 又要前端渲染上千行。cursorID 为 0 取第一页，limit<=0 用服务端默认。
 func (a *App) ListAITagCandidatePage(videoID uint, confidence string, status string, cursorID uint, limit int) (*services.AITagCandidatePage, error) {
@@ -108,29 +121,6 @@ func (a *App) ApproveAITagCandidate(candidateID uint) (*services.AITaggingReview
 	item, err := a.aiTaggingService.ApproveCandidate(candidateID)
 	log.Printf("API ApproveAITagCandidate candidateID=%d err=%v", candidateID, err)
 	return item, err
-}
-
-// ApproveAITagCandidates 批量批准（D-PC29）：逐项沿用单条批准的事务，返回逐项结果。
-func (a *App) ApproveAITagCandidates(ids []uint) services.AITagBatchResult {
-	result := a.aiTaggingService.ApproveCandidates(ids)
-	log.Printf("API ApproveAITagCandidates requested=%d succeeded=%d failed=%d superseded=%d", result.Requested, result.Succeeded, result.Failed, result.Superseded)
-	return result
-}
-
-// ApproveAITagCandidatesByFilter 按筛选条件批准：只支持 tag_id（必填）与可选的 confidence
-// 精确匹配，与列表查询一致。前端的「批准筛选结果」应改为把已加载且已过滤的 ID 交给
-// ApproveAITagCandidates；本接口留给「按标签整批批准」，批准前用 CountAITagCandidatesByFilter 预览。
-func (a *App) ApproveAITagCandidatesByFilter(filter services.AITagCandidateFilter) (services.AITagBatchResult, error) {
-	result, err := a.aiTaggingService.ApproveCandidatesByFilter(filter)
-	log.Printf("API ApproveAITagCandidatesByFilter tag=%d confidence=%q requested=%d succeeded=%d failed=%d superseded=%d err=%v",
-		filter.TagID, filter.Confidence, result.Requested, result.Succeeded, result.Failed, result.Superseded, err)
-	return result, err
-}
-
-// CountAITagCandidatesByFilter 返回按同一筛选口径将被批准的条数（同视频同标签去重后，
-// 与实际批准成功数一致），供批准前的计数预览。
-func (a *App) CountAITagCandidatesByFilter(filter services.AITagCandidateFilter) (int, error) {
-	return a.aiTaggingService.CountCandidatesByFilter(filter)
 }
 
 // RetryImageAITagging 显式重新分析单张图片：绕过证据指纹，对已有手工标签的图片同样生效（规则 5）。
