@@ -614,7 +614,7 @@ func forEachImageCleanupMember(result *ImageCleanupAnalysis, visit func(*ImageCl
 	}
 }
 
-// imageCleanupBandKeys 把 16 位 hex 的 dHash 切成 8 段、每段 8 位，任一段相同即
+// imageCleanupBandKeys 把 64 位 dHash 切成 8 段、每段 8 位，任一段相同即
 // 成为候选对。与视频侧的 perceptualBandKeys 同一套分段，只是图片没有帧维度。
 //
 // 早先这里只用哈希的前 4 个 hex 当唯一一段，等于要求两张图的高 16 位完全一致才肯
@@ -622,13 +622,11 @@ func forEachImageCleanupMember(result *ImageCleanupAnalysis, visit func(*ImageCl
 // 一对距离恰好为 8 的图只有约 8.5% 的命中率。改成 8 段后同一批数据的覆盖是 100%。
 // 顺带一提，前 4 个 hex 对应的是 8×8 网格最下面两行——裁剪或改比例时最不稳定的
 // 那块，作为唯一的一段尤其不合适。
-func imageCleanupBandKeys(hash string) []string {
-	if len(hash) != imageCleanupBandCount*2 {
-		return nil
-	}
-	keys := make([]string, 0, imageCleanupBandCount)
+func imageCleanupBandKeys(hash uint64) [imageCleanupBandCount]uint16 {
+	var keys [imageCleanupBandCount]uint16
 	for band := 0; band < imageCleanupBandCount; band++ {
-		keys = append(keys, fmt.Sprintf("%d:%s", band, hash[band*2:band*2+2]))
+		// 高位编码段号、低 8 位为该段内容，顺序仍从哈希最高字节开始。
+		keys[band] = uint16(band)<<8 | uint16((hash>>((imageCleanupBandCount-1-band)*8))&0xff)
 	}
 	return keys
 }
@@ -671,15 +669,20 @@ func (s *ImageCleanupService) buildVerifiedNearDuplicateGroups(ctx context.Conte
 
 	s.emitProgress("near", 0, len(valid), "", fmt.Sprintf("正在比对 %d 张图片的感知哈希…", len(valid)))
 
-	bands := make(map[string][]int)
+	bands := make(map[uint16][]int)
 	memberGroup := make([]int, len(valid))
 	clusters := make([][]int, 0)
+	// 每张图的召回预算相同，复用临时表和排序缓冲区；十万张时逐张新建会
+	// 累计分配数 GB。每轮清空，候选顺序、预算和组内逐对复核规则保持不变。
+	candidates := make(map[int]struct{}, imageCleanupMaxCandidates)
+	ordered := make([]int, 0, imageCleanupMaxCandidates)
+	checked := make(map[int]bool, imageCleanupMaxCandidates)
 	for index, entry := range valid {
 		if ctx.Err() != nil {
 			return nil, staleCount
 		}
-		candidates := make(map[int]struct{})
-		for _, key := range imageCleanupBandKeys(fmt.Sprintf("%016x", entry.hash)) {
+		clear(candidates)
+		for _, key := range imageCleanupBandKeys(entry.hash) {
 			if len(candidates) < imageCleanupMaxCandidates {
 				for _, other := range bands[key] {
 					candidates[other] = struct{}{}
@@ -695,12 +698,12 @@ func (s *ImageCleanupService) buildVerifiedNearDuplicateGroups(ctx context.Conte
 			bands[key] = bucket
 		}
 		// map 遍历不能决定成组，否则同样的输入每轮会分到不同组。
-		ordered := make([]int, 0, len(candidates))
+		ordered = ordered[:0]
 		for other := range candidates {
 			ordered = append(ordered, other)
 		}
 		sort.Ints(ordered)
-		checked := make(map[int]bool)
+		clear(checked)
 		joined := false
 		for _, other := range ordered {
 			groupID := memberGroup[other]

@@ -93,6 +93,26 @@ beforeEach(() => {
 });
 
 describe('图片清理审阅', () => {
+  it.each(['many-groups', 'one-group'])('十万张图片从扫描切到结果，%s 只渲染一页', async shape => {
+    const wrapper = await mountWith(statusWith({}, {
+      running: true, completed: false, analysis: null,
+      progress: { stage: 'near', current: 99800, total: 100000 }
+    }));
+    expect(wrapper.find('[data-test="cleanup-cancel-analysis"]').exists()).toBe(true);
+    const groups = shape === 'many-groups'
+      ? Array.from({ length: 50000 }, (_, i) => ({
+        original: makeMember(i * 2 + 1, `keep-${i}.jpg`),
+        candidates: [makeMember(i * 2 + 2, `copy-${i}.jpg`)]
+      }))
+      : [{ original: makeMember(1, 'keep.jpg'), candidates: Array.from({ length: 99999 }, (_, i) => makeMember(i + 2, `copy-${i}.jpg`)) }];
+    photoCleanupStore.status = statusWith({ duplicate_groups: groups });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(shape === 'many-groups' ? 10 : 1);
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(20);
+    expect(wrapper.vm.selection).toHaveLength(shape === 'many-groups' ? 50000 : 99999);
+    wrapper.unmount();
+  });
+
   it('数千组结果只挂载一页，翻页保留全量勾选与保留项', async () => {
     const groups = Array.from({ length: 1000 }, (_, i) => ({
       original: makeMember(i * 2 + 1, `keep-${i}.jpg`),
