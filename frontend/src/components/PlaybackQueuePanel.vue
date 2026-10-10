@@ -2,27 +2,27 @@
   <section v-if="snapshot?.current || error || open" class="queue-dock" data-test="queue-dock">
     <div v-if="snapshot?.current" class="queue-current">
       <strong>{{ snapshot.current.title }}</strong><span>{{ unavailable ? '队列暂不可用' : statusLabel(snapshot.state.status) }} · {{ playerLabel(snapshot.state.player) }}</span>
-      <button v-if="snapshot.state.player !== 'system' && snapshot.state.active_token" type="button" :disabled="busy || unavailable" @click="control">{{ snapshot.state.status === 'paused' ? '继续' : '暂停' }}</button>
-      <button type="button" :disabled="busy || unavailable || !snapshot.state.active_token" data-test="queue-next" @click="next">下一项</button>
-      <button type="button" :disabled="busy || unavailable || !snapshot.state.active_token" data-test="queue-stop" @click="stop">停止队列</button>
-      <button type="button" @click="$emit('open')">查看队列</button>
-      <button type="button" @click="$emit('open-video', snapshot.current.video_id)">原片详情</button>
+      <button v-if="snapshot.state.player !== 'system' && snapshot.state.active_token" type="button" class="row-btn" :disabled="busy || unavailable" @click="control">{{ snapshot.state.status === 'paused' ? '继续' : '暂停' }}</button>
+      <button type="button" class="row-btn row-btn--primary" :disabled="busy || unavailable || !snapshot.state.active_token" data-test="queue-next" @click="next">下一项</button>
+      <button type="button" class="row-btn" :disabled="busy || unavailable || !snapshot.state.active_token" data-test="queue-stop" @click="stop">停止队列</button>
+      <button type="button" class="row-btn" @click="$emit('open')">查看队列</button>
+      <button type="button" class="row-btn" @click="$emit('open-video', snapshot.current.video_id)">原片详情</button>
     </div>
-    <p v-if="error" role="alert" data-test="queue-error">{{ error }} <button type="button" @click="load(cursor, history)">重新读取</button></p>
+    <p v-if="error" role="alert" data-test="queue-error">{{ error }} <button type="button" class="btn-secondary btn-compact" @click="load(cursor, history)">重新读取</button></p>
     <p v-if="snapshot?.warning" role="alert">{{ snapshot.warning }}</p>
     <p v-if="snapshot?.state.last_error_message" role="alert">{{ snapshot.state.last_error_message }}</p>
     <QueueInlinePlayer v-if="snapshot?.session" :key="snapshot.session.token" :session="snapshot.session" @error="error = $event" />
   </section>
   <BaseModal v-if="open" class="queue-panel-shell" @close="$emit('close')">
     <section class="queue-panel" data-test="queue-panel">
-      <header><h2>待播队列 <small>{{ snapshot?.total ?? '—' }} 项</small></h2><button type="button" @click="$emit('close')">关闭</button></header>
+      <header><h2>待播队列 <small>{{ snapshot?.total ?? '—' }} 项</small></h2><button type="button" class="btn-secondary btn-compact" @click="$emit('close')">关闭</button></header>
       <p v-if="loading" role="status">正在读取…</p>
       <p v-if="error" role="alert">{{ error }}</p>
       <template v-if="snapshot">
         <div class="queue-settings">
-          <label>播放器 <select :value="snapshot.state.player" :disabled="busy || unavailable || loading" data-test="queue-player" @change="configure($event.target.value, snapshot.state.autoplay)"><option v-for="cap in snapshot.capabilities" :key="cap.player" :value="cap.player" :disabled="!cap.available">{{ playerLabel(cap.player) }}{{ !cap.available ? ' · 不可用' : '' }}</option></select></label>
-          <label><input type="checkbox" :checked="snapshot.state.player !== 'system' && snapshot.state.autoplay" :disabled="busy || unavailable || loading || snapshot.state.player === 'system'" data-test="queue-autoplay" @change="configure(snapshot.state.player, $event.target.checked)" /> 自动连播</label>
-          <button type="button" :disabled="busy || unavailable || loading || !snapshot.total" data-test="queue-clear" @click="clear">清空队列…</button>
+          <label class="queue-field">播放器 <select class="select-input queue-player" :value="snapshot.state.player" :disabled="busy || unavailable || loading" data-test="queue-player" @change="configure($event.target.value, snapshot.state.autoplay)"><option v-for="cap in snapshot.capabilities" :key="cap.player" :value="cap.player" :disabled="!cap.available">{{ playerLabel(cap.player) }}{{ !cap.available ? ' · 不可用' : '' }}</option></select></label>
+          <label class="queue-field"><input type="checkbox" :checked="snapshot.state.player !== 'system' && snapshot.state.autoplay" :disabled="busy || unavailable || loading || snapshot.state.player === 'system'" data-test="queue-autoplay" @change="configure(snapshot.state.player, $event.target.checked)" /> 自动连播</label>
+          <button type="button" class="btn-danger-outline btn-compact" :disabled="busy || unavailable || loading || !snapshot.total" data-test="queue-clear" @click="clear">清空队列…</button>
         </div>
         <p v-if="snapshot.state.player === 'system'">系统默认播放器仅支持手动下一项。停止队列后，请在系统播放器中停止当前视频。</p>
         <p v-else-if="snapshot.state.player === 'iina'">使用本次专用 IINA 窗口，停止队列会关闭它。请在此队列调整观看顺序。</p>
@@ -31,15 +31,15 @@
         <ol class="queue-items">
           <li v-for="(item, index) in snapshot.items" :key="item.id" :class="{ current: item.id === snapshot.current?.id }" :data-test="`queue-item-${item.id}`">
             <span>{{ item.title }}<small v-if="!item.source_available"> · 原片不可用</small></span>
-            <button type="button" :disabled="busy || unavailable || loading" @click="play(item)">播放</button>
-            <button type="button" :disabled="busy || unavailable || loading || (index === 0 && !history.length)" @click="moveAdjacent(item, index, -1)">上移</button>
-            <button type="button" :disabled="busy || unavailable || loading || (index === snapshot.items.length - 1 && !snapshot.has_more)" @click="moveAdjacent(item, index, 1)">下移</button>
-            <button type="button" :disabled="busy || unavailable || loading" @click="move(item, 0)">移至末尾</button>
-            <button type="button" :disabled="busy || unavailable || loading" @click="remove(item)">移除</button>
+            <button type="button" class="row-btn row-btn--primary" :disabled="busy || unavailable || loading" @click="play(item)">播放</button>
+            <button type="button" class="row-btn" :disabled="busy || unavailable || loading || (index === 0 && !history.length)" @click="moveAdjacent(item, index, -1)">上移</button>
+            <button type="button" class="row-btn" :disabled="busy || unavailable || loading || (index === snapshot.items.length - 1 && !snapshot.has_more)" @click="moveAdjacent(item, index, 1)">下移</button>
+            <button type="button" class="row-btn" :disabled="busy || unavailable || loading" @click="move(item, 0)">移至末尾</button>
+            <button type="button" class="row-btn" :disabled="busy || unavailable || loading" @click="remove(item)">移除</button>
           </li>
         </ol>
         <p v-if="!loading && !snapshot.total">从视频行、已选操作或作品集加入想看的视频。</p>
-        <footer><button type="button" :disabled="loading || !history.length" data-test="queue-previous-page" @click="previousPage">上一页</button><button type="button" :disabled="loading || !snapshot.has_more" data-test="queue-next-page" @click="nextPage">下一页</button></footer>
+        <footer><button type="button" class="btn-secondary btn-compact" :disabled="loading || !history.length" data-test="queue-previous-page" @click="previousPage">上一页</button><button type="button" class="btn-secondary btn-compact" :disabled="loading || !snapshot.has_more" data-test="queue-next-page" @click="nextPage">下一页</button></footer>
       </template>
     </section>
   </BaseModal>
@@ -124,7 +124,7 @@ export default {
 </script>
 <style scoped>
 .queue-dock { flex: 0 0 auto; margin: 6px 20px; max-height: 45vh; overflow: auto; }
-.queue-current { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px; background: var(--panel-muted-bg); border-radius: 10px; font-size: 12px; }
+.queue-current { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 8px 10px; border: 1px solid var(--hairline); background: var(--panel-bg); border-radius: var(--radius-md); font-size: 12px; }
 .queue-current strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 30vw; }
 .queue-dock p { margin: 6px; font-size: 12px; }
 :deep(.queue-panel-shell) { width: min(940px, 94vw); max-width: 94vw; padding: 0; }
@@ -134,8 +134,16 @@ export default {
 .queue-panel h2 { margin: 0 0 14px; font-size: 18px; }
 .queue-panel p, .queue-panel small { font-size: 12px; color: var(--text-secondary); }
 .queue-panel [role="alert"], .queue-dock [role="alert"] { color: var(--danger-color, #c44); }
-.queue-items { list-style: none; padding: 0; }
-.queue-items li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 10px 6px; border-bottom: 1px solid var(--border-color); }
+.queue-items { list-style: none; margin: 12px 0 0; padding: 0; border-top: 1px solid var(--hairline); }
+.queue-items li { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; padding: 8px 6px; border-bottom: 1px solid var(--hairline); }
 .queue-items li.current { background: var(--panel-muted-bg); }
-.queue-items li > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; }
+.queue-items li > span { flex: 1 1 180px; min-width: 0; overflow-wrap: anywhere; font-size: 13px; }
+.queue-items li.current > span { color: var(--accent-text); font-weight: 600; }
+.queue-current span { color: var(--text-secondary); }
+.queue-current strong { font-size: 13px; }
+.queue-field { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-secondary); white-space: nowrap; }
+.queue-field input[type="checkbox"] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
+.queue-player { width: auto; min-width: 160px; }
+.queue-panel footer { justify-content: center; margin-top: 12px; }
+.queue-settings { margin-bottom: 4px; }
 </style>

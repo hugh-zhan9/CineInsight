@@ -12,7 +12,7 @@
     <h3>自动识别片头</h3>
     <div class="edit-inline">
       <label>分析每部开头
-        <select v-model.number="windowMinutes" class="text-input edit-select" :disabled="!editable || analyzing" data-test="trim-window">
+        <select v-model.number="windowMinutes" class="select-input edit-select" :disabled="!editable || analyzing" data-test="trim-window">
           <option v-for="minutes in windowOptions" :key="minutes" :value="minutes">{{ minutes }} 分钟</option>
         </select>
       </label>

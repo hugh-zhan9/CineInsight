@@ -19,10 +19,12 @@
 .edit-check { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
 .edit-check--missing { color: var(--danger-color); font-weight: 600; }
 .edit-radio { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; }
-.edit-time { width: 110px; font-variant-numeric: tabular-nums; }
-.edit-time[aria-invalid="true"] { border-color: var(--danger-color); }
-.edit-ms { width: 110px; font-variant-numeric: tabular-nums; }
-.edit-select { width: auto; }
+/* 这些类与全局 .text-input / .number-input / .select-input（width: 100%）叠用。本文件由组件引入，
+   打包后排在 components.css 之前，同优先级会被全局宽度覆盖，所以用复合选择器提高优先级。 */
+.edit-time.edit-time { width: 116px; font-variant-numeric: tabular-nums; }
+.edit-time.edit-time[aria-invalid="true"] { border-color: var(--danger-color); }
+.edit-ms.edit-ms { width: 110px; font-variant-numeric: tabular-nums; }
+.edit-select.edit-select { width: auto; min-width: 120px; }
 .edit-progress { display: inline-block; width: 120px; height: 6px; border-radius: 3px; background: var(--border-color); overflow: hidden; }
 .edit-progress i { display: block; height: 100%; background: var(--accent-color); transition: width var(--transition); }
 .edit-sources { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 0; font-size: 13px; }
@@ -47,3 +49,4 @@
 .edit-projects__select { display: grid; gap: 3px; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .edit-projects__title { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .edit-projects__actions { display: flex; gap: 6px; }
+.edit-section > button, .edit-section > .edit-inline > button { justify-self: start; }

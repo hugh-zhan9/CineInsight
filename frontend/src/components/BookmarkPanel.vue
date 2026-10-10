@@ -3,37 +3,37 @@
     <header class="notes-toolbar">
       <h3>片段书签</h3>
       <button v-if="video" type="button" class="btn-primary" :disabled="!session?.source_version" data-test="bookmark-add" @click="create">记下当前位置</button>
-      <input v-model="keyword" aria-label="搜索片段书签" placeholder="搜索片名、笔记或标签" data-test="bookmark-search" />
+      <input v-model="keyword" class="search-input notes-search" aria-label="搜索片段书签" placeholder="搜索片名、笔记或标签" data-test="bookmark-search" />
     </header>
-    <p v-if="error" role="alert">{{ error }}</p>
-    <p v-if="loading">正在读取书签…</p>
-    <p v-else-if="!error && !items.length">还没有片段书签。在视频详情中可以记下当前位置。</p>
+    <p v-if="error" class="notes-alert" role="alert">{{ error }}</p>
+    <p v-if="loading" class="empty-hint">正在读取书签…</p>
+    <p v-else-if="!error && !items.length" class="empty-hint">还没有片段书签。在视频详情中可以记下当前位置。</p>
     <article v-for="item in items" :key="item.id" class="notes-entry" data-test="bookmark-row">
       <h4>{{ item.title }}</h4><p>{{ item.video_title }} · {{ position(item.start_ms) }}<template v-if="item.end_ms != null"> — {{ position(item.end_ms) }}</template></p>
       <p class="notes-body">{{ item.note }}</p><p>{{ (item.tags || []).join(' · ') }}</p>
-      <small v-if="!item.source_available">原片不可用；笔记仍保留</small>
+      <small v-if="!item.source_available" class="notes-unavailable">原片不可用；笔记仍保留</small>
       <div class="notes-toolbar">
-        <button type="button" class="btn-secondary" @click="resolve(item)">定位 / 核对原片</button>
-        <button type="button" class="btn-secondary" @click="edit(item)">编辑笔记</button>
-        <button type="button" class="btn-secondary" @click="remove(item)">删除书签</button>
+        <button type="button" class="row-btn" @click="resolve(item)">定位 / 核对原片</button>
+        <button type="button" class="row-btn" @click="edit(item)">编辑笔记</button>
+        <button type="button" class="row-btn" @click="remove(item)">删除书签</button>
       </div>
     </article>
-    <nav class="notes-toolbar" aria-label="书签分页"><button type="button" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
-    <div v-if="draft && editorSuspended" class="notes-toolbar" data-test="bookmark-checking"><span>核对原片后可继续编辑，草稿已保留。</span><button type="button" @click="editorSuspended = false">返回书签编辑</button></div>
-    <BaseModal v-if="draft && !editorSuspended" :close-on-overlay="false" @close="closeEditor">
+    <nav class="notes-toolbar notes-pager" aria-label="书签分页"><button type="button" class="btn-secondary btn-compact" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn-secondary btn-compact" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
+    <div v-if="draft && editorSuspended" class="notes-toolbar" data-test="bookmark-checking"><span>核对原片后可继续编辑，草稿已保留。</span><button type="button" class="btn-secondary btn-compact" @click="editorSuspended = false">返回书签编辑</button></div>
+    <BaseModal v-if="draft && !editorSuspended" class="notes-modal" :close-on-overlay="false" @close="closeEditor">
       <form class="notes-editor" @submit.prevent="save">
         <fieldset :disabled="saving" class="notes-editor-fields">
         <h3>{{ draft.id ? '编辑片段书签' : '新建片段书签' }}</h3>
-        <p v-if="sourceChanged" role="alert">原片内容已改变。请打开当前原片，核对起止位置后再确认；只保存文字不会接受新原片。</p>
-        <button v-if="sourceChanged && currentVideo" type="button" @click="previewCurrent">打开当前原片核对</button>
-        <label>标题<input v-model="draft.title" required  data-test="bookmark-title" /></label>
-        <label>开始（秒）<input v-model="draft.startSeconds" type="number" min="0" step="0.001" required data-test="bookmark-start" /></label>
-        <label>结束（秒，留空为时间点）<input v-model="draft.endSeconds" type="number" min="0" step="0.001" data-test="bookmark-end" /></label>
-        <label>笔记<textarea v-model="draft.note"  rows="5" /></label>
-        <label>标签（每行一个，最多20个）<textarea v-model="draft.tagText" rows="3" /></label>
-        <label v-if="sourceChanged"><input v-model="acceptSource" type="checkbox" data-test="bookmark-accept-source" />我已核对当前原片与以上位置</label>
-        <p v-if="formError" role="alert">{{ formError }}</p>
-        <footer class="notes-toolbar"><button type="submit" class="btn-primary" :disabled="saving" data-test="bookmark-save">{{ saving ? '保存中…' : '保存' }}</button><button type="button" :disabled="saving" @click="closeEditor">取消</button></footer>
+        <p v-if="sourceChanged" class="notes-alert" role="alert">原片内容已改变。请打开当前原片，核对起止位置后再确认；只保存文字不会接受新原片。</p>
+        <button v-if="sourceChanged && currentVideo" type="button" class="btn-secondary btn-compact" @click="previewCurrent">打开当前原片核对</button>
+        <label>标题<input v-model="draft.title" class="text-input" required data-test="bookmark-title" /></label>
+        <label>开始（秒）<input v-model="draft.startSeconds" class="number-input" type="number" min="0" step="0.001" required data-test="bookmark-start" /></label>
+        <label>结束（秒，留空为时间点）<input v-model="draft.endSeconds" class="number-input" type="number" min="0" step="0.001" data-test="bookmark-end" /></label>
+        <label>笔记<textarea v-model="draft.note" class="text-input settings-textarea" rows="5" /></label>
+        <label>标签（每行一个，最多20个）<textarea v-model="draft.tagText" class="text-input settings-textarea" rows="3" /></label>
+        <label v-if="sourceChanged" class="notes-check"><input v-model="acceptSource" type="checkbox" data-test="bookmark-accept-source" />我已核对当前原片与以上位置</label>
+        <p v-if="formError" class="notes-alert" role="alert">{{ formError }}</p>
+        <footer class="notes-toolbar"><button type="submit" class="btn-primary" :disabled="saving" data-test="bookmark-save">{{ saving ? '保存中…' : '保存' }}</button><button type="button" class="btn-secondary" :disabled="saving" @click="closeEditor">取消</button></footer>
         </fieldset>
       </form>
     </BaseModal>
@@ -108,13 +108,3 @@ export default {
   }
 };
 </script>
-<style>
-.viewing-notes-panel { min-width: 0; }
-.notes-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 12px; }
-.notes-toolbar h3 { margin-right: auto; }
-.notes-entry { padding: 16px 0; border-bottom: 1px solid var(--border-color, #8884); overflow-wrap: anywhere; }
-.notes-entry h4 { margin: 0 0 6px; }.notes-entry p { margin: 6px 0; }.notes-body { white-space: pre-wrap; }
-.notes-editor { width: min(620px, 88vw); padding: 24px; display: grid; gap: 14px; max-height: 85vh; overflow: auto; }
-.notes-editor-fields { border: 0; padding: 0; margin: 0; min-width: 0; display: grid; gap: 14px; }
-.notes-editor label { display: grid; gap: 6px; }.notes-editor input:not([type=checkbox]),.notes-editor textarea { width: 100%; box-sizing: border-box; }
-</style>

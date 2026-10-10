@@ -1,38 +1,38 @@
 <template>
-  <main class="viewing-notes-page" data-test="viewing-notes-page">
-    <header class="notes-toolbar"><h2>观看笔记</h2><button type="button" class="btn-primary" data-test="diary-add" @click="editor = {}">手动补记</button></header>
-    <nav class="notes-toolbar" aria-label="观看笔记分类"><button v-for="item in tabs" :key="item.key" type="button" :aria-pressed="tab === item.key" :data-test="`notes-tab-${item.key}`" @click="tab = item.key">{{ item.label }}</button></nav>
+  <main class="page-content viewing-notes-page" data-test="viewing-notes-page">
+    <header class="notes-header"><h2>观看笔记</h2><button type="button" class="btn-primary" data-test="diary-add" @click="editor = {}">手动补记</button></header>
+    <nav class="notes-tabs" aria-label="观看笔记分类"><button v-for="item in tabs" :key="item.key" type="button" :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': tab === item.key }]" :aria-pressed="tab === item.key" :data-test="`notes-tab-${item.key}`" @click="tab = item.key">{{ item.label }}</button></nav>
     <BookmarkPanel v-if="tab === 'bookmarks'" :page-active="pageActive" @open-bookmark="$emit('open-bookmark', $event)" @open-video="$emit('open-video', $event)" />
     <template v-else>
-      <div class="notes-toolbar"><label v-if="tab === 'diary'">年份 <input v-model.number="year" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" :disabled="loading" @click="reset">刷新</button></div>
+      <div class="notes-toolbar notes-filters"><label v-if="tab === 'diary'" class="notes-year">年份 <input v-model.number="year" class="number-input" type="number" min="1" max="9999" aria-label="日记年份" /></label><input v-model="keyword" class="search-input notes-search" aria-label="搜索观看记录" placeholder="搜索片名或短评" /><button type="button" class="btn-secondary btn-compact" :disabled="loading" @click="reset">刷新</button></div>
       <template v-if="tab === 'diary'">
-        <p>每次有效观看独立记录，按观看日期汇总；记录数不代表完整看完的电影数。手动补记与自动记录各自保留。</p>
-        <p>第三方播放器只有提供独立、可靠的观看会话才能自动记入；无法确认的重看可手动补记。</p>
-        <p v-if="reviewError" role="alert">{{ reviewError }}</p>
+        <p class="help-text">每次有效观看独立记录，按观看日期汇总；记录数不代表完整看完的电影数。手动补记与自动记录各自保留。</p>
+        <p class="help-text">第三方播放器只有提供独立、可靠的观看会话才能自动记入；无法确认的重看可手动补记。</p>
+        <p v-if="reviewError" class="notes-alert" role="alert">{{ reviewError }}</p>
         <section v-if="review" class="diary-recap" aria-label="年度回顾" data-test="diary-recap">
-          <p>{{ review.year }}年 · {{ review.total }}条观看记录 · {{ review.days }}个观看日 · 自动{{ review.automatic }} / 历史{{ review.historical }} / 手动{{ review.manual }}</p>
-          <p>{{ review.rated_count }}条已评分 · 平均分{{ review.average_rating == null ? '暂无' : Number(review.average_rating).toFixed(1) }}</p>
+          <p class="diary-recap__summary">{{ review.year }}年 · {{ review.total }}条观看记录 · {{ review.days }}个观看日 · 自动{{ review.automatic }} / 历史{{ review.historical }} / 手动{{ review.manual }}</p>
+          <p class="help-text">{{ review.rated_count }}条已评分 · 平均分{{ review.average_rating == null ? '暂无' : Number(review.average_rating).toFixed(1) }}</p>
           <div class="diary-months"><div v-for="(count, index) in review.months" :key="index"><span :style="{ height: `${Math.max(2, 64 * count / Math.max(1, ...review.months))}px` }"></span><small>{{ index + 1 }}月 {{ count }}</small></div></div>
           <details v-if="review.most_watched?.length"><summary>记录最多的影片</summary><ol><li v-for="(item, index) in review.most_watched" :key="index">{{ item.title }} · {{ item.count }}次</li></ol></details>
         </section>
       </template>
-      <p v-else>这里仅能确认曾启动播放，无法据此推算观看时长。补记时请确认观看日期；原始播放记录仍保留。</p>
-      <p v-if="error" role="alert">{{ error }}</p><p v-if="loading">正在读取…</p><p v-else-if="!error && !items.length">当前条件没有记录</p>
+      <p v-else class="help-text">这里仅能确认曾启动播放，无法据此推算观看时长。补记时请确认观看日期；原始播放记录仍保留。</p>
+      <p v-if="error" class="notes-alert" role="alert">{{ error }}</p><p v-if="loading" class="empty-hint">正在读取…</p><p v-else-if="!error && !items.length" class="empty-hint">当前条件没有记录</p>
       <template v-for="(item, index) in items" :key="item.id">
-        <h3 v-if="tab === 'diary' && (index === 0 || item.watched_on !== items[index - 1].watched_on)">{{ item.watched_on }}</h3>
+        <h3 v-if="tab === 'diary' && (index === 0 || item.watched_on !== items[index - 1].watched_on)" class="notes-date">{{ item.watched_on }}</h3>
         <article class="notes-entry" :data-test="tab === 'diary' ? 'diary-row' : 'playback-history-row'">
           <h4>{{ item.title }}</h4>
           <template v-if="tab === 'diary'"><p>{{ origins[item.origin] || item.origin }} · {{ item.rating == null ? '未评分' : `${item.rating}分` }}<span v-if="item.date_basis === 'imported_local'"> · 历史日期按导入时本地时区解释</span></p><p class="notes-body">{{ item.note }}</p></template>
           <p v-else>{{ formatDate(item.played_at) }} · {{ sourceName(item.source) }}</p>
-          <p v-if="item.video_id && !item.source_available">原片不可用，记录仍保留</p>
+          <p v-if="item.video_id && !item.source_available" class="notes-unavailable">原片不可用，记录仍保留</p>
           <div class="notes-toolbar">
-            <button v-if="item.video_id && item.source_available" type="button" @click="$emit('open-video-id', item.video_id)">打开原片</button>
-            <button type="button" @click="editor = tab === 'diary' ? item : { title: item.title }">{{ tab === 'diary' ? '修订日记' : '手动补记' }}</button>
-            <button v-if="tab === 'diary'" type="button" @click="remove(item)">删除日记</button>
+            <button v-if="item.video_id && item.source_available" type="button" class="row-btn" @click="$emit('open-video-id', item.video_id)">打开原片</button>
+            <button type="button" class="row-btn" @click="editor = tab === 'diary' ? item : { title: item.title }">{{ tab === 'diary' ? '修订日记' : '手动补记' }}</button>
+            <button v-if="tab === 'diary'" type="button" class="row-btn" @click="remove(item)">删除日记</button>
           </div>
         </article>
       </template>
-      <nav class="notes-toolbar" aria-label="记录分页"><button type="button" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
+      <nav class="notes-toolbar notes-pager" aria-label="记录分页"><button type="button" class="btn-secondary btn-compact" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn-secondary btn-compact" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
     </template>
     <DiaryEditor v-if="editor" :key="editor.id || 'new'" :entry="editor" :active="pageActive" @close="editor = null" @saved="saved" />
   </main>
@@ -80,5 +80,21 @@ export default {
 };
 </script>
 <style scoped>
-.viewing-notes-page { padding: 24px; overflow: auto; width: 100%; box-sizing: border-box; }.diary-recap { padding: 16px; background: var(--surface-hover, #8881); border-radius: 12px; margin-bottom: 16px; }.diary-months { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }.diary-months > div { display: grid; gap: 5px; text-align: center; min-width: 38px; }.diary-months span { background: var(--accent-color, #468c7d); border-radius: 4px 4px 0 0; }
+.viewing-notes-page { display: grid; gap: 12px; align-content: start; overflow: auto; box-sizing: border-box; }
+.notes-header { display: flex; align-items: center; gap: 12px; }
+.notes-header h2 { margin: 0; font-size: 20px; }
+.notes-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.notes-filters { margin-bottom: 0; }
+.notes-year { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+.notes-year .number-input { width: 96px; }
+.viewing-notes-page > .help-text { margin: 0; }
+.diary-recap { display: grid; gap: 8px; padding: 14px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-lg); background: var(--panel-bg); }
+.diary-recap p { margin: 0; }
+.diary-recap__summary { font-weight: 600; }
+.diary-recap details { font-size: 13px; color: var(--text-secondary); }
+.diary-months { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; padding-top: 4px; }
+.diary-months > div { display: grid; gap: 5px; text-align: center; min-width: 38px; }
+.diary-months span { background: var(--accent-color); border-radius: 4px 4px 0 0; }
+.diary-months small { color: var(--text-muted); font-size: 11px; }
+.notes-date { margin: 8px 0 0; font-size: 13px; color: var(--text-secondary); font-weight: 600; }
 </style>

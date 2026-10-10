@@ -97,21 +97,24 @@ export default {
 </script>
 
 <style scoped>
-.system-health { display: flex; flex-direction: column; gap: 16px; }
+.system-health { display: flex; flex-direction: column; gap: 12px; font-size: 13px; }
 .system-health__toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.system-health__toolbar p { flex: 1 1 100%; margin: 0; }
-.system-health__privacy, .system-health__local { color: var(--text-secondary); font-size: 12px; overflow-wrap: anywhere; margin: 0; }
-.system-health__section { border-top: 1px solid var(--border-color); padding-top: 12px; }
+.system-health__toolbar p { flex: 1 1 100%; margin: 0; color: var(--text-secondary); font-size: 13px; }
+.system-health__privacy, .system-health__local { color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; margin: 0; }
+.system-health__section { display: grid; gap: 6px; padding-top: 10px; border-top: 1px solid var(--hairline); }
 .system-health__section header, .system-health__item-head { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.system-health__section h3 { margin: 0; flex: 1; }
-.system-health__section header > span { font-size: 12px; color: var(--text-secondary); }
-.system-health__item { padding: 12px 0; }
-.system-health__item-head strong { flex: 1; }
-.system-health__item p { margin: 6px 0 0; }
-.system-health__state { font-size: 12px; color: var(--text-secondary); }
-.system-health__state--warning, .system-health__state--unavailable { color: var(--danger-color, #b34232); }
-.system-health__metrics { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 8px 0 0; font-size: 12px; }
+.system-health__section h3 { flex: 1; margin: 0; font-size: 14px; font-weight: 600; }
+.system-health__section header > span { font-size: 12px; color: var(--text-muted); }
+.system-health__section > p { margin: 0; font-size: 12px; color: var(--text-secondary); }
+.system-health__item { padding: 10px 12px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.system-health__item-head strong { flex: 1; font-size: 13px; }
+.system-health__item p { margin: 6px 0 0; color: var(--text-secondary); font-size: 12.5px; }
+.system-health__state { padding: 1px 8px; border-radius: 999px; background: var(--neutral-soft); color: var(--text-secondary); font-size: 11.5px; }
+.system-health__state--ok { background: var(--accent-soft); color: var(--accent-text); }
+.system-health__state--warning { background: var(--warning-soft); color: var(--warning-text); }
+.system-health__state--unavailable { background: var(--danger-soft); color: var(--danger-text); }
+.system-health__metrics { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 8px 0 0; font-size: 12px; }
 .system-health__metrics > div { display: flex; gap: 6px; }
-.system-health__metrics dt { color: var(--text-secondary); }
-.system-health__metrics dd { margin: 0; }
+.system-health__metrics dt { color: var(--text-muted); }
+.system-health__metrics dd { margin: 0; font-variant-numeric: tabular-nums; }
 </style>

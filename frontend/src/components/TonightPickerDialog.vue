@@ -4,14 +4,14 @@
     <p class="help-text">沿用打开弹窗时的片库筛选，包括关键词、标签、人物、评分和智能视图。需要改变这些条件时，可关闭后调整。</p>
     <p v-if="filter.keyword" class="help-text">当前关键词：{{ filter.keyword }}</p>
     <form class="tonight-picker__form" @submit.prevent="load">
-      <label>可用时间（分钟）<input v-model.number="minutes" type="number" min="0" max="1440" step="1" data-test="tonight-minutes" /></label>
+      <label>可用时间（分钟）<input v-model.number="minutes" class="number-input" type="number" min="0" max="1440" step="1" data-test="tonight-minutes" /></label>
       <label><input v-model="unwatchedOnly" type="checkbox" data-test="tonight-unwatched" />仅未看</label>
       <label><input v-model="favoritesOnly" type="checkbox" data-test="tonight-favorites" />仅收藏</label>
       <button type="submit" class="btn-primary" :disabled="loading" data-test="tonight-search">{{ loading ? '正在挑选…' : '给我推荐' }}</button>
     </form>
     <p class="help-text">按整片时长筛选，0 表示不限；有时间上限时排除时长未知的视频。依次优先收藏、未看、个人评分，再按最近入库排序。</p>
     <p v-if="error" role="alert" class="tonight-picker__error" data-test="tonight-error">{{ error }}</p>
-    <p v-else-if="queried && !loading && !items.length" role="status" data-test="tonight-empty">没有符合全部条件的视频，可调整时间或片库筛选。</p>
+    <p v-else-if="queried && !loading && !items.length" class="empty-hint" role="status" data-test="tonight-empty">没有符合全部条件的视频，可调整时间或片库筛选。</p>
     <div class="tonight-picker__results">
       <article v-for="item in items" :key="item.video.id" data-test="tonight-result">
         <RelatedVideoItem :video="item.video" action-label="播放" @open="$emit('preview', item.video)" @action="$emit('play', item.video)" />
@@ -60,9 +60,11 @@ export default {
 :deep(.tonight-picker) { width: min(700px, calc(100vw - 40px)); max-width: min(700px, calc(100vw - 40px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; }
 .tonight-picker__header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .tonight-picker__form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
-.tonight-picker__form label { display: flex; align-items: center; gap: 6px; }
-.tonight-picker__form input[type=number] { width: 90px; }
+.tonight-picker__form label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
+.tonight-picker__form .number-input { width: 96px; }
+.tonight-picker__form input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
+.tonight-picker__header h3 { margin: 0; font-size: 17px; }
 .tonight-picker__results { overflow-y: auto; min-height: 0; }
 .tonight-picker__results article { margin: 10px 0; }
-.tonight-picker__error { color: var(--danger-color); }
+.tonight-picker__error { color: var(--danger-text); font-size: 13px; }
 </style>

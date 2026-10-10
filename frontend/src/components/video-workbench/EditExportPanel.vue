@@ -44,7 +44,7 @@
         <h4>需要你选择的轨道对应</h4>
         <label v-for="conflict in conflicts" :key="conflictKey(conflict)" class="edit-conflict" :data-test="`edit-conflict-${conflictKey(conflict)}`">
           <span>{{ conflict.kind === 'audio' ? '音轨' : '字幕轨' }} {{ conflict.output_index + 1 }} 在《{{ videoName(conflict.video_id) }}》上：{{ conflict.reason }}</span>
-          <select class="text-input edit-select" :disabled="!editable" @change="chooseTrack(conflict, $event.target.value)">
+          <select class="select-input edit-select" :disabled="!editable" @change="chooseTrack(conflict, $event.target.value)">
             <option value="" selected disabled>请选择</option>
             <option v-for="stream in conflict.candidates" :key="stream.index" :value="`stream:${stream.index}`">{{ streamLabel(stream) }}</option>
             <option v-for="fill in fillsOf(conflict)" :key="fill" :value="fill">{{ fillLabel(fill) }}</option>

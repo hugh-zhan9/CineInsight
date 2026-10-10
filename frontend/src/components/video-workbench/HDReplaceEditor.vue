@@ -52,7 +52,7 @@
         <EditFrameStrip title="段终点：高清接回长版" :frames="endFrames(segment)" :actual-ms="fastActual(hd.long_video_id, segment.long_end_ms)" />
         <div class="edit-inline">
           <label>音频来源
-            <select class="text-input edit-select" :value="segment.audio_source || 'long'" :disabled="!editable" :data-test="`hd-audio-${index}`" @change="$emit('change', setAudio(index, $event.target.value))">
+            <select class="select-input edit-select" :value="segment.audio_source || 'long'" :disabled="!editable" :data-test="`hd-audio-${index}`" @change="$emit('change', setAudio(index, $event.target.value))">
               <option value="long">长版音轨</option>
               <option value="hd">高清版音轨</option>
             </select>
