@@ -464,12 +464,25 @@ func (s *CleanupService) analyzeCleanupCandidates(ctx context.Context, criteria 
 	presentVideoIDs := make(map[uint]struct{}, len(videos))
 	// fingerprints 是同一批视频本轮的 size:mtimeNS，忽略记录据此判断是否失效（D-PC31）。
 	fingerprints := make(map[uint]string, len(videos))
+	// files 是本轮首轮 stat 的快照，近似重复与截取两步复用（见 cleanupFileSnapshots.regularFile）。
+	files := make(cleanupFileSnapshots, len(videos))
+	paths := make([]string, len(videos))
+	for index, video := range videos {
+		paths[index] = video.Path
+	}
+	// stat 按批有界并行，结果仍按原顺序逐条处理。
+	stats := newCleanupStatBatcher(ctx, paths)
 
 	for idx, video := range videos {
 		if err := ctx.Err(); err != nil {
 			return nil, 0, err
 		}
-		info, err := os.Stat(video.Path)
+		info, err := stats.stat(idx)
+		// 批内 stat 途中被取消时，未读到的条目是零值：先判取消再用结果。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, 0, ctxErr
+		}
+		files.record(video.ID, video.Path, info, err)
 		if err != nil {
 			if os.IsNotExist(err) {
 				log.Printf("[Cleanup] skip missing video id=%d path=%s", video.ID, video.Path)
@@ -600,7 +613,7 @@ func (s *CleanupService) analyzeCleanupCandidates(ctx context.Context, criteria 
 	for pair := range dismissed {
 		excludedPairs[pair] = struct{}{}
 	}
-	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(ctx, excludedPairs, presentVideoIDs)
+	nearDuplicateGroups, nearPairs, staleHashCount, err := loadCleanupNearDuplicateGroups(ctx, excludedPairs, presentVideoIDs, files)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -620,7 +633,7 @@ func (s *CleanupService) analyzeCleanupCandidates(ctx context.Context, criteria 
 	for pair := range dismissed {
 		clipExcluded[pair] = struct{}{}
 	}
-	clipGroups, staleFrameHashCount, skippedClipVerification, err := s.loadCleanupClipGroups(ctx, clipExcluded, presentVideoIDs)
+	clipGroups, staleFrameHashCount, skippedClipVerification, err := s.loadCleanupClipGroups(ctx, clipExcluded, presentVideoIDs, files)
 	if err != nil {
 		return nil, 0, err
 	}

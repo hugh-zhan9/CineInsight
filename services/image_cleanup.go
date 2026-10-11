@@ -305,6 +305,9 @@ type imageCleanupFileState struct {
 	size       int64
 	modTimeNS  int64
 	exactGroup uint
+	// device 是首轮 stat 得到的卷设备号，复核预取据此按卷限制并发；deviceKnown 为假表示未知。
+	device      uint64
+	deviceKnown bool
 }
 
 // AnalyzeImageCleanupCandidates 同步执行一次完整分析并发出终止事件（测试与同步调用方使用）；
@@ -385,11 +388,21 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates(ctx context.Context)
 	// unavailableHashed 是本轮读不到、但库里有格式完好指纹的图片：无从核对，覆盖率里照样算已算过，
 	// 否则拔掉一块盘，界面就会把早已补全的指纹报成「尚未计算」。
 	var unavailableHashed int64
+	paths := make([]string, len(images))
+	for index, img := range images {
+		paths[index] = img.Path
+	}
+	// stat 按批有界并行，结果仍按原顺序逐条处理。
+	stats := newCleanupStatBatcher(ctx, paths)
 	for idx, img := range images {
 		if err := ctx.Err(); err != nil {
 			return nil, 0, err
 		}
-		info, err := os.Stat(img.Path)
+		info, err := stats.stat(idx)
+		// 批内 stat 途中被取消时，未读到的条目是零值：先判取消再用结果。
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, 0, ctxErr
+		}
 		if err != nil {
 			if os.IsNotExist(err) {
 				log.Printf("[ImageCleanup] skip missing image id=%d path=%s", img.ID, img.Path)
@@ -411,7 +424,8 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates(ctx context.Context)
 			continue
 		}
 		sizeBuckets[info.Size()] = append(sizeBuckets[info.Size()], len(states))
-		states = append(states, imageCleanupFileState{image: img, size: info.Size(), modTimeNS: info.ModTime().UnixNano()})
+		device, deviceKnown := cleanupFileDevice(info)
+		states = append(states, imageCleanupFileState{image: img, size: info.Size(), modTimeNS: info.ModTime().UnixNano(), device: device, deviceKnown: deviceKnown})
 
 		if shouldEmitCleanupProgress(idx+1, len(images), 400) {
 			s.emitProgress("group", idx+1, len(images), img.Path, "正在按文件大小聚合候选…")
@@ -523,6 +537,8 @@ func (s *ImageCleanupService) analyzeImageCleanupCandidates(ctx context.Context)
 		return nil, 0, err
 	}
 	visuals := newImageCleanupVisualCache(s.readVisual)
+	// 复核读取画面证据（缩略图生成 + 采样）按卷有界并行预取；判定与跳过计数不受影响。
+	visuals.prefetchReads = true
 	nearGroups, staleHashCount := s.buildVerifiedNearDuplicateGroups(ctx, states, dismissed, visuals)
 	if err := ctx.Err(); err != nil {
 		return nil, 0, err
@@ -631,6 +647,60 @@ func imageCleanupBandKeys(hash uint64) [imageCleanupBandCount]uint16 {
 	return keys
 }
 
+// imageCleanupRecall 维护 dHash 段桶，逐张给出召回候选（升序）。复核与复核预取的
+// 计划共用它，两边的候选集合、预算与顺序因此不可能各自漂移。
+type imageCleanupRecall struct {
+	bands map[uint16][]int
+	// 每张图的召回预算相同，复用临时表和排序缓冲区；十万张时逐张新建会
+	// 累计分配数 GB。每轮清空，候选顺序、预算和组内逐对复核规则保持不变。
+	candidates map[int]struct{}
+	ordered    []int
+}
+
+func newImageCleanupRecall() *imageCleanupRecall {
+	return &imageCleanupRecall{
+		bands:      make(map[uint16][]int),
+		candidates: make(map[int]struct{}, imageCleanupMaxCandidates),
+		ordered:    make([]int, 0, imageCleanupMaxCandidates),
+	}
+}
+
+// next 返回第 index 张（指纹 hash）的召回候选并把它登记进段桶。返回的切片在下一次
+// 调用时被复用。index 必须从 0 起逐张递增。
+func (r *imageCleanupRecall) next(index int, hash uint64) []int {
+	clear(r.candidates)
+	for _, key := range imageCleanupBandKeys(hash) {
+		if len(r.candidates) < imageCleanupMaxCandidates {
+			for _, other := range r.bands[key] {
+				r.candidates[other] = struct{}{}
+				if len(r.candidates) >= imageCleanupMaxCandidates {
+					break
+				}
+			}
+		}
+		bucket := append(r.bands[key], index)
+		if len(bucket) > imageCleanupMaxBandNeighbors {
+			bucket = bucket[len(bucket)-imageCleanupMaxBandNeighbors:]
+		}
+		r.bands[key] = bucket
+	}
+	// map 遍历不能决定成组，否则同样的输入每轮会分到不同组。
+	r.ordered = r.ordered[:0]
+	for other := range r.candidates {
+		r.ordered = append(r.ordered, other)
+	}
+	sort.Ints(r.ordered)
+	return r.ordered
+}
+
+// imageCleanupPairCheaplyCompatible 是读画面之前的廉价排除：未被忽略、不在同一精确组、
+// 指纹距离在阈值内。复核与复核预取的计划共用。
+func imageCleanupPairCheaplyCompatible(left, entry imageCleanupHashEntry, excluded map[[2]uint]struct{}) bool {
+	_, dismissed := excluded[imageCleanupPairKey(left.image().ID, entry.image().ID)]
+	return !dismissed && (entry.state.exactGroup == 0 || entry.state.exactGroup != left.state.exactGroup) &&
+		bits.OnesCount64(left.hash^entry.hash) <= imageCleanupHammingThreshold
+}
+
 // buildVerifiedNearDuplicateGroups 以 dHash 召回，逐对复核后加入互相相容的有界组。
 // 不构造全库邻接图，也不通过连通分量推断未比过的成员是同一内容。
 func (s *ImageCleanupService) buildVerifiedNearDuplicateGroups(ctx context.Context, states []imageCleanupFileState, excluded map[[2]uint]struct{}, visuals *imageCleanupVisualCache) ([]ImageCleanupDuplicateGroup, int64) {
@@ -669,40 +739,23 @@ func (s *ImageCleanupService) buildVerifiedNearDuplicateGroups(ctx context.Conte
 
 	s.emitProgress("near", 0, len(valid), "", fmt.Sprintf("正在比对 %d 张图片的感知哈希…", len(valid)))
 
-	bands := make(map[uint16][]int)
+	recall := newImageCleanupRecall()
 	memberGroup := make([]int, len(valid))
 	clusters := make([][]int, 0)
-	// 每张图的召回预算相同，复用临时表和排序缓冲区；十万张时逐张新建会
-	// 累计分配数 GB。每轮清空，候选顺序、预算和组内逐对复核规则保持不变。
-	candidates := make(map[int]struct{}, imageCleanupMaxCandidates)
-	ordered := make([]int, 0, imageCleanupMaxCandidates)
 	checked := make(map[int]bool, imageCleanupMaxCandidates)
+	if visuals.prefetchReads {
+		visuals.prefetch = startImageCleanupVisualPrefetch(ctx, visuals.read, valid, excluded)
+		defer func() {
+			visuals.prefetch.stop()
+			visuals.prefetch = nil
+		}()
+	}
 	for index, entry := range valid {
 		if ctx.Err() != nil {
 			return nil, staleCount
 		}
-		clear(candidates)
-		for _, key := range imageCleanupBandKeys(entry.hash) {
-			if len(candidates) < imageCleanupMaxCandidates {
-				for _, other := range bands[key] {
-					candidates[other] = struct{}{}
-					if len(candidates) >= imageCleanupMaxCandidates {
-						break
-					}
-				}
-			}
-			bucket := append(bands[key], index)
-			if len(bucket) > imageCleanupMaxBandNeighbors {
-				bucket = bucket[len(bucket)-imageCleanupMaxBandNeighbors:]
-			}
-			bands[key] = bucket
-		}
-		// map 遍历不能决定成组，否则同样的输入每轮会分到不同组。
-		ordered = ordered[:0]
-		for other := range candidates {
-			ordered = append(ordered, other)
-		}
-		sort.Ints(ordered)
+		visuals.prefetch.advance(index)
+		ordered := recall.next(index, entry.hash)
 		clear(checked)
 		joined := false
 		for _, other := range ordered {
@@ -718,9 +771,7 @@ func (s *ImageCleanupService) buildVerifiedNearDuplicateGroups(ctx context.Conte
 			compatible := true
 			// 先做廉价排除，再读缩略图；大精确组不触发解码。
 			for _, member := range cluster {
-				left := valid[member]
-				_, dismissed := excluded[imageCleanupPairKey(left.image().ID, entry.image().ID)]
-				if dismissed || (entry.state.exactGroup != 0 && entry.state.exactGroup == left.state.exactGroup) || bits.OnesCount64(left.hash^entry.hash) > imageCleanupHammingThreshold {
+				if !imageCleanupPairCheaplyCompatible(valid[member], entry, excluded) {
 					compatible = false
 					break
 				}

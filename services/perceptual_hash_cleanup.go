@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math"
-	"os"
 	"sort"
 	"time"
 	"video-master/database"
@@ -22,9 +21,13 @@ const (
 // presentVideoIDs 是调用方本轮已确认在扫描范围内、文件也读得到的视频集合。
 // 它只用来数出"连感知哈希行都没有"的视频——那部分早先完全不进任何计数。
 // ctx 被取消时在下一行 / 下一个比较之前停下。
-func loadCleanupNearDuplicateGroups(ctx context.Context, excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupDuplicateGroup, map[[2]uint]struct{}, int64, error) {
+// files 是首轮 stat 快照（可为 nil，此时逐个现场 stat），见 cleanupFileSnapshots.regularFile。
+//
+// 不为整库预载标签：只有最终成组的视频才需要标签，成组后按成员分批读取（与原先
+// Preload 同口径：没有标签的成员是空切片而不是 nil）。
+func loadCleanupNearDuplicateGroups(ctx context.Context, excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}, files cleanupFileSnapshots) ([]CleanupDuplicateGroup, map[[2]uint]struct{}, int64, error) {
 	var rows []models.VideoPerceptualHash
-	if err := database.DB.WithContext(ctx).Preload("Video.Tags").Order("video_id ASC").Find(&rows).Error; err != nil {
+	if err := database.DB.WithContext(ctx).Preload("Video").Order("video_id ASC").Find(&rows).Error; err != nil {
 		return nil, nil, 0, err
 	}
 	scope, err := loadCleanupPathScope()
@@ -42,8 +45,8 @@ func loadCleanupNearDuplicateGroups(ctx context.Context, excluded map[[2]uint]st
 			continue
 		}
 		hashedVideoIDs[row.VideoID] = struct{}{}
-		info, err := os.Stat(row.Video.Path)
-		if err != nil || !info.Mode().IsRegular() {
+		size, modTimeNS, regular := files.regularFile(row.Video.ID, row.Video.Path)
+		if !regular {
 			// 文件读不到是另一回事，由 SkippedUnavailable 负责报，不算指纹问题。
 			continue
 		}
@@ -51,7 +54,7 @@ func loadCleanupNearDuplicateGroups(ctx context.Context, excluded map[[2]uint]st
 			staleCount++
 			continue
 		}
-		if info.Size() != row.SourceSize || info.ModTime().UnixNano() != row.SourceModTimeNS {
+		if size != row.SourceSize || modTimeNS != row.SourceModTimeNS {
 			staleCount++
 			continue
 		}
@@ -190,7 +193,40 @@ func loadCleanupNearDuplicateGroups(ctx context.Context, excluded map[[2]uint]st
 		})
 	}
 	sort.Slice(groups, func(i, j int) bool { return groups[i].Original.ID < groups[j].Original.ID })
+	if err := attachCleanupGroupTags(ctx, groups); err != nil {
+		return nil, nil, 0, err
+	}
 	return groups, matchedPairs, staleCount, nil
+}
+
+// attachCleanupGroupTags 只为成组的成员读取标签。没有标签的成员是空切片而不是 nil，
+// 与原先 Preload("Video.Tags") 的结果一致（前端收到的是 [] 而不是 null）。
+func attachCleanupGroupTags(ctx context.Context, groups []CleanupDuplicateGroup) error {
+	ids := make([]uint, 0)
+	for _, group := range groups {
+		ids = append(ids, group.Original.ID)
+		ids = append(ids, videoIDsOf(group.Candidates)...)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	tags, err := loadCleanupVideoTags(ctx, uniqueUintIDs(ids))
+	if err != nil {
+		return err
+	}
+	withTags := func(video *models.Video) {
+		video.Tags = tags[video.ID]
+		if video.Tags == nil {
+			video.Tags = []models.Tag{}
+		}
+	}
+	for i := range groups {
+		withTags(&groups[i].Original)
+		for j := range groups[i].Candidates {
+			withTags(&groups[i].Candidates[j])
+		}
+	}
+	return nil
 }
 
 // perceptualHashRowComplete 报告三帧哈希是否都已算出（回填失败的行三项为空）。

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"os"
+	"runtime"
 	"sort"
+	"sync"
+	"sync/atomic"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -38,6 +40,9 @@ type clipSequence struct {
 	intervalMS int
 	sourceSize int64
 	sourceMod  int64
+	// probe 是这条序列作为片段时的粗筛探针，进入两两比较前一次算好；
+	// 为空时（测试里直接构造的序列）evaluateClipPair 现算。
+	probe *clipProbe
 }
 
 // loadCleanupClipGroups 用有效的帧哈希序列找出截取片段候选（D-027、D-028）。
@@ -49,7 +54,9 @@ type clipSequence struct {
 // 它们不再作为截取候选出现。
 //
 // ctx 是这一轮分析的上下文：用户取消（D-PC51）或应用退出时在逐对比较之间停下。
-func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}) ([]CleanupClipGroup, int64, int, error) {
+//
+// files 是首轮 stat 快照（可为 nil，此时逐个现场 stat），见 cleanupFileSnapshots.regularFile。
+func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map[[2]uint]struct{}, presentVideoIDs map[uint]struct{}, files cleanupFileSnapshots) ([]CleanupClipGroup, int64, int, error) {
 	startedAt := time.Now()
 	if ctx == nil {
 		ctx = context.Background()
@@ -90,11 +97,11 @@ func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map
 		if !frameHashRowCurrent(row) {
 			continue
 		}
-		info, statErr := os.Stat(row.Video.Path)
-		if statErr != nil || !info.Mode().IsRegular() {
+		size, modTimeNS, regular := files.regularFile(row.Video.ID, row.Video.Path)
+		if !regular {
 			continue
 		}
-		if info.Size() != row.SourceSize || info.ModTime().UnixNano() != row.SourceModTimeNS {
+		if size != row.SourceSize || modTimeNS != row.SourceModTimeNS {
 			continue
 		}
 		hashes := decodeFrameHashes(row.Hashes)
@@ -124,7 +131,18 @@ func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	groups, comparedPairs, skippedVerification, err := s.matchClipSequences(ctx, sequences, excluded, dismissed)
+	if err != nil {
+		return nil, 0, 0, err
+	}
+	log.Printf("[Cleanup] clip matching sequences=%d pairs_compared=%d groups=%d skipped_verification=%d pending_frame_hash=%d elapsed=%s",
+		len(sequences), comparedPairs, len(groups), skippedVerification, staleCount, time.Since(startedAt).Round(time.Millisecond))
+	return groups, staleCount, skippedVerification, nil
+}
 
+// matchClipSequences 对有效序列两两匹配、择优并复核，返回按（完整片, 片段）ID 排序的
+// 候选、比较过的配对数与复核跳过数。sequences 会被就地排序并挂上探针。
+func (s *CleanupService) matchClipSequences(ctx context.Context, sequences []clipSequence, excluded map[[2]uint]struct{}, dismissed map[[2]uint]models.ClipDismissal) ([]CleanupClipGroup, int, int, error) {
 	// 按帧数从多到少排序：候选对只可能是"前面的当完整片、后面的当截取片段"，
 	// 万级视频下这一步把 O(N²) 的比较压到实际需要比的那部分（见下面的二分）。
 	sort.Slice(sequences, func(i, j int) bool {
@@ -137,6 +155,18 @@ func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map
 	// 一个截取片段只报一条候选：同一段素材可能同时对上好几个完整片（同一部片的
 	// 多个版本），全都报出来会让"可释放空间"把同一个文件算好几遍。留命中率最高的
 	// 那一条，命中率相同留更长的完整片（ID 小者优先，结果稳定）。
+	//
+	// 逐帧匹配是纯计算，按完整片分给有界工作池并行算；择优与画面复核（读盘、有期限）
+	// 仍严格按原先的（完整片, 片段）顺序在这里逐对回放，候选、顺序与跳过计数都与
+	// 串行时一致。
+	for index := range sequences {
+		probe := newClipProbe(sequences[index].hashes)
+		sequences[index].probe = &probe
+	}
+	matchCtx, stopMatching := context.WithCancel(ctx)
+	matches := startClipMatching(matchCtx, sequences, excluded, dismissed)
+	defer matches.stop(stopMatching)
+
 	best := make(map[uint]CleanupClipGroup)
 	comparedPairs := 0
 	skippedVerification := 0
@@ -144,23 +174,16 @@ func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map
 		if ctx.Err() != nil {
 			return nil, 0, 0, ctx.Err()
 		}
-		maxClipFrames := int(clipMaxDurationRatio * float64(len(sequences[full].hashes)))
-		// 序列按帧数降序，第一个满足 len ≤ 0.9·len(A) 的位置之后才可能是候选片段。
-		start := sort.Search(len(sequences), func(index int) bool {
-			return len(sequences[index].hashes) <= maxClipFrames
-		})
-		if start <= full {
-			start = full + 1
+		hits, err := matches.await(ctx, full)
+		if err != nil {
+			return nil, 0, 0, err
 		}
-		for clip := start; clip < len(sequences); clip++ {
+		comparedPairs += len(sequences) - clipCandidateStart(sequences, full)
+		for _, hit := range hits {
 			if ctx.Err() != nil {
 				return nil, 0, 0, ctx.Err()
 			}
-			comparedPairs++
-			candidate, ok := evaluateClipPair(sequences[full], sequences[clip], excluded, dismissed)
-			if !ok {
-				continue
-			}
+			clip, candidate := hit.clip, hit.candidate
 			existing, exists := best[sequences[clip].video.ID]
 			if !exists || candidate.MatchRate > existing.MatchRate {
 				verified, err := s.verifyClipPair(ctx, sequences[full], sequences[clip], candidate)
@@ -191,9 +214,96 @@ func (s *CleanupService) loadCleanupClipGroups(ctx context.Context, excluded map
 		}
 		return groups[i].Clip.ID < groups[j].Clip.ID
 	})
-	log.Printf("[Cleanup] clip matching sequences=%d pairs_compared=%d groups=%d skipped_verification=%d pending_frame_hash=%d elapsed=%s",
-		len(sequences), comparedPairs, len(groups), skippedVerification, staleCount, time.Since(startedAt).Round(time.Millisecond))
-	return groups, staleCount, skippedVerification, nil
+	return groups, comparedPairs, skippedVerification, nil
+}
+
+// clipPairHit 是一对通过逐帧匹配的配对；clip 是片段在排序后序列中的下标。
+type clipPairHit struct {
+	clip      int
+	candidate CleanupClipGroup
+}
+
+// clipMatchWorkers 是截取匹配的并行度：给界面与数据库留两个核，最多 8 个。
+func clipMatchWorkers() int {
+	return min(8, max(1, runtime.NumCPU()-2))
+}
+
+// clipCandidateStart 返回第 full 个完整片要比较的第一个片段下标。序列按帧数降序，
+// 第一个满足 len ≤ 0.9·len(A) 的位置之后才可能是候选片段。
+func clipCandidateStart(sequences []clipSequence, full int) int {
+	maxClipFrames := int(clipMaxDurationRatio * float64(len(sequences[full].hashes)))
+	start := sort.Search(len(sequences), func(index int) bool {
+		return len(sequences[index].hashes) <= maxClipFrames
+	})
+	if start <= full {
+		start = full + 1
+	}
+	return start
+}
+
+// clipMatchPool 按完整片并行计算 evaluateClipPair；第 i 个完整片的命中按片段下标
+// 升序写进 results[i]，写完关闭 done[i]。工作者只读序列、排除集与忽略表，不碰数据库与磁盘。
+type clipMatchPool struct {
+	results [][]clipPairHit
+	done    []chan struct{}
+	wg      sync.WaitGroup
+}
+
+func startClipMatching(ctx context.Context, sequences []clipSequence, excluded map[[2]uint]struct{}, dismissed map[[2]uint]models.ClipDismissal) *clipMatchPool {
+	pool := &clipMatchPool{results: make([][]clipPairHit, len(sequences)), done: make([]chan struct{}, len(sequences))}
+	for index := range pool.done {
+		pool.done[index] = make(chan struct{})
+	}
+	var next atomic.Int64
+	for range clipMatchWorkers() {
+		pool.wg.Add(1)
+		go func() {
+			defer pool.wg.Done()
+			for {
+				full := int(next.Add(1) - 1)
+				if full >= len(sequences) || ctx.Err() != nil {
+					return
+				}
+				hits, ok := matchClipsForFull(ctx, sequences, full, excluded, dismissed)
+				if !ok {
+					return
+				}
+				pool.results[full] = hits
+				close(pool.done[full])
+			}
+		}()
+	}
+	return pool
+}
+
+// matchClipsForFull 依次比较一个完整片与它之后的全部候选片段；取消时返回 false。
+func matchClipsForFull(ctx context.Context, sequences []clipSequence, full int, excluded map[[2]uint]struct{}, dismissed map[[2]uint]models.ClipDismissal) ([]clipPairHit, bool) {
+	var hits []clipPairHit
+	for clip := clipCandidateStart(sequences, full); clip < len(sequences); clip++ {
+		if clip%256 == 0 && ctx.Err() != nil {
+			return nil, false
+		}
+		if candidate, ok := evaluateClipPair(sequences[full], sequences[clip], excluded, dismissed); ok {
+			hits = append(hits, clipPairHit{clip: clip, candidate: candidate})
+		}
+	}
+	return hits, true
+}
+
+// await 等第 full 个完整片算完；本轮被取消时返回 ctx.Err()。
+func (p *clipMatchPool) await(ctx context.Context, full int) ([]clipPairHit, error) {
+	select {
+	case <-p.done[full]:
+		return p.results[full], nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// stop 取消尚未算完的完整片并等全部工作者退出，函数返回后不留 goroutine。
+func (p *clipMatchPool) stop(cancel context.CancelFunc) {
+	cancel()
+	p.wg.Wait()
 }
 
 // evaluateClipPair 判一对是否成候选：排除、间隔一致、逐帧对齐。
@@ -212,7 +322,12 @@ func evaluateClipPair(full, clip clipSequence, excluded map[[2]uint]struct{}, di
 	if clipDismissalStillApplies(dismissed, full, clip) {
 		return CleanupClipGroup{}, false
 	}
-	offset, rate, ok := MatchClip(full.hashes, clip.hashes, full.intervalMS)
+	probe := clip.probe
+	if probe == nil {
+		built := newClipProbe(clip.hashes)
+		probe = &built
+	}
+	offset, rate, ok := matchClipWithProbe(full.hashes, clip.hashes, probe, full.intervalMS)
 	if !ok {
 		return CleanupClipGroup{}, false
 	}

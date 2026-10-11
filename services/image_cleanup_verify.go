@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"image"
+	"image/color"
 	"io"
 	"math"
 	"os"
@@ -129,6 +130,19 @@ func imageCleanupVisualFromImage(img image.Image) *imageCleanupVisual {
 		return nil
 	}
 	visual := &imageCleanupVisual{aspect: float64(bounds.Dx()) / float64(bounds.Dy())}
+	// JPEG 缩略图解码出来几乎都是 *image.YCbCr：直接按平面取样，换算仍走
+	// color.YCbCr.RGBA()，与经 img.At 的通用路径逐字节相同，只省掉接口调用与装箱。
+	pixel := func(px, py int) (uint32, uint32, uint32) {
+		r, g, b, _ := img.At(px, py).RGBA()
+		return r, g, b
+	}
+	if planes, ok := img.(*image.YCbCr); ok {
+		pixel = func(px, py int) (uint32, uint32, uint32) {
+			yi, ci := planes.YOffset(px, py), planes.COffset(px, py)
+			r, g, b, _ := color.YCbCr{Y: planes.Y[yi], Cb: planes.Cb[ci], Cr: planes.Cr[ci]}.RGBA()
+			return r, g, b
+		}
+	}
 	for y := 0; y < clipVerifySide; y++ {
 		for x := 0; x < clipVerifySide; x++ {
 			x0, y0 := bounds.Min.X+x*bounds.Dx()/clipVerifySide, bounds.Min.Y+y*bounds.Dy()/clipVerifySide
@@ -137,7 +151,7 @@ func imageCleanupVisualFromImage(img image.Image) *imageCleanupVisual {
 			var red, green, blue, count uint64
 			for py := y0; py < y1; py++ {
 				for px := x0; px < x1; px++ {
-					r, g, b, _ := img.At(px, py).RGBA()
+					r, g, b := pixel(px, py)
 					red += uint64(r)
 					green += uint64(g)
 					blue += uint64(b)
@@ -220,12 +234,21 @@ func imageCleanupAnimated(ctx context.Context, path string) (bool, error) {
 	return false, nil
 }
 
-// 每轮最多缓存 256 张 32×32 RGB 证据；错误只记 ID，避免坏文件被重复解码。
+// imageCleanupVisualCacheCapacity 是每轮在内存里保留的画面证据上限（32×32 RGB 约 3 KB 一张，
+// 4096 张约 13 MB）。容量只决定被挤出后要不要重读，不影响判定。
+const imageCleanupVisualCacheCapacity = 4096
+
+// 每轮最多缓存 capacity 张 32×32 RGB 证据（LRU）；错误只记 ID，避免坏文件被重复解码。
 type imageCleanupVisualCache struct {
-	read   imageCleanupVisualReader
-	items  map[uint]*list.Element
-	order  *list.List
-	failed map[uint]struct{}
+	read     imageCleanupVisualReader
+	capacity int
+	items    map[uint]*list.Element
+	order    *list.List
+	failed   map[uint]struct{}
+	// prefetchReads 为真时，复核期间按卷有界并行预取（见 imageCleanupVisualPrefetch）；
+	// prefetch 是复核进行中的预取器，未命中时先取它已成功读到的结果。
+	prefetchReads bool
+	prefetch      *imageCleanupVisualPrefetch
 }
 
 type imageCleanupCachedVisual struct {
@@ -234,7 +257,7 @@ type imageCleanupCachedVisual struct {
 }
 
 func newImageCleanupVisualCache(read imageCleanupVisualReader) *imageCleanupVisualCache {
-	return &imageCleanupVisualCache{read: read, items: make(map[uint]*list.Element), order: list.New(), failed: make(map[uint]struct{})}
+	return &imageCleanupVisualCache{read: read, capacity: imageCleanupVisualCacheCapacity, items: make(map[uint]*list.Element), order: list.New(), failed: make(map[uint]struct{})}
 }
 
 func (c *imageCleanupVisualCache) get(ctx context.Context, state imageCleanupFileState) *imageCleanupVisual {
@@ -246,7 +269,11 @@ func (c *imageCleanupVisualCache) get(ctx context.Context, state imageCleanupFil
 		c.order.MoveToFront(cached)
 		return cached.Value.(imageCleanupCachedVisual).visual
 	}
-	visual, err := c.read(ctx, state)
+	visual, prefetched := c.prefetch.take(ctx, id)
+	var err error
+	if !prefetched {
+		visual, err = c.read(ctx, state)
+	}
 	if err != nil || visual == nil {
 		if ctx.Err() == nil {
 			c.failed[id] = struct{}{}
@@ -254,7 +281,7 @@ func (c *imageCleanupVisualCache) get(ctx context.Context, state imageCleanupFil
 		return nil
 	}
 	c.items[id] = c.order.PushFront(imageCleanupCachedVisual{id, visual})
-	if c.order.Len() > 256 {
+	if c.order.Len() > c.capacity {
 		oldest := c.order.Back()
 		delete(c.items, oldest.Value.(imageCleanupCachedVisual).id)
 		c.order.Remove(oldest)
@@ -264,14 +291,17 @@ func (c *imageCleanupVisualCache) get(ctx context.Context, state imageCleanupFil
 
 func (c *imageCleanupVisualCache) matches(ctx context.Context, a, b imageCleanupFileState) bool {
 	// 缩略图只含首帧，不能据此判整个 GIF 的内容重复。
-	for _, state := range []imageCleanupFileState{a, b} {
-		if strings.EqualFold(state.image.Format, "gif") || strings.EqualFold(filepath.Ext(state.image.Path), ".gif") {
-			return false
-		}
+	if imageCleanupFirstFrameOnly(a) || imageCleanupFirstFrameOnly(b) {
+		return false
 	}
 	left := c.get(ctx, a)
 	if left == nil {
 		return false
 	}
 	return imageCleanupVisualsMatch(left, c.get(ctx, b))
+}
+
+// imageCleanupFirstFrameOnly 报告这张图的缩略图是否只代表首帧（GIF），不能拿来判近似重复。
+func imageCleanupFirstFrameOnly(state imageCleanupFileState) bool {
+	return strings.EqualFold(state.image.Format, "gif") || strings.EqualFold(filepath.Ext(state.image.Path), ".gif")
 }

@@ -109,6 +109,11 @@ type ImageThumbnailService struct {
 	probeSips     func(ctx context.Context, sourcePath string) (width, height int, err error)
 	locks         sync.Map
 	cacheMu       sync.Mutex
+	// cacheSizes / cacheBytes 是缓存目录里各 <id>.jpg、<id>.view.jpg 的大小与总量账（cacheMu 保护）。
+	// nil 表示尚未建账：第一次淘汰检查整目录扫描一次建账，之后生成时增量记账，
+	// 账面超过上限才再整目录扫描（同时以磁盘实况重建账面）并按原规则淘汰。
+	cacheSizes map[string]int64
+	cacheBytes int64
 }
 
 // NewImageThumbnailService 创建图片缩略图服务，缓存根为 <dataDir>/image-thumbnails/。
@@ -353,15 +358,38 @@ func (s *ImageThumbnailService) generateJPEGCache(ctx context.Context, img *mode
 		_ = os.Chtimes(cachePath, sourceInfo.ModTime(), sourceInfo.ModTime())
 	}
 	s.cacheMu.Lock()
+	s.recordImageCacheFileLocked(cachePath, generatedInfo.Size())
 	s.pruneImageCacheLocked(cachePath)
 	s.cacheMu.Unlock()
 	return nil
 }
 
-// pruneImageCacheLocked 对缓存目录内全部 <id>.jpg 与 <id>.view.jpg 执行统一 LRU
-// （按 mtime 淘汰，镜像 pruneSeekSpriteCacheLocked）。点开头的临时文件不参与，
-// 避免误删并发生成中的产物。调用方须持有 cacheMu。
+// recordImageCacheFileLocked 把刚发布（新增或覆盖）的缓存文件记进账面。尚未建账时不记，
+// 下一次整目录扫描会算上它。调用方须持有 cacheMu。
+func (s *ImageThumbnailService) recordImageCacheFileLocked(path string, size int64) {
+	if s.cacheSizes == nil {
+		return
+	}
+	s.cacheBytes += size - s.cacheSizes[path]
+	s.cacheSizes[path] = size
+}
+
+// pruneImageCacheLocked 在账面总量超过上限（或尚未建账）时整目录扫描并淘汰；账面未超限时
+// 不碰磁盘。早先每生成一张都整目录 stat 一遍，缓存里几千张时这是生成路径上的主要开销。
+//
+// 账面只记本服务自己的增删；目录被外部删减时账面偏大，只会让扫描提前、扫描后按实况
+// 重建；外部塞进文件时要等账面自己涨过上限的那次扫描才会一并淘汰。调用方须持有 cacheMu。
 func (s *ImageThumbnailService) pruneImageCacheLocked(keepPath string) {
+	if s.cacheSizes != nil && s.cacheBytes <= s.maxCacheBytes {
+		return
+	}
+	s.scanAndPruneImageCacheLocked(keepPath)
+}
+
+// scanAndPruneImageCacheLocked 对缓存目录内全部 <id>.jpg 与 <id>.view.jpg 执行统一 LRU
+// （按 mtime 淘汰，镜像 pruneSeekSpriteCacheLocked）。点开头的临时文件不参与，
+// 避免误删并发生成中的产物。扫描结果（减去本次删掉的）即新的账面。调用方须持有 cacheMu。
+func (s *ImageThumbnailService) scanAndPruneImageCacheLocked(keepPath string) {
 	entries, err := filepath.Glob(filepath.Join(s.cacheDir, "*.jpg"))
 	if err != nil {
 		return
@@ -384,12 +412,22 @@ func (s *ImageThumbnailService) pruneImageCacheLocked(keepPath string) {
 		files = append(files, cacheEntry{path: path, size: info.Size(), modTime: info.ModTime()})
 		total += info.Size()
 	}
+	sizes := make(map[string]int64, len(files))
+	for _, file := range files {
+		sizes[file.path] = file.size
+	}
+	defer func() {
+		s.cacheSizes, s.cacheBytes = sizes, total
+	}()
 	if total <= s.maxCacheBytes {
 		return
 	}
+	// 超限后淘汰到上限的 90%：留出余量，避免缓存满载后每生成一张都整目录扫描一遍。
+	// 仍是同一个上限与同一个 LRU 次序，只是一次多淘汰几张最旧的。
+	target := s.maxCacheBytes - s.maxCacheBytes/10
 	sort.Slice(files, func(i, j int) bool { return files[i].modTime.Before(files[j].modTime) })
 	for _, file := range files {
-		if total <= s.maxCacheBytes {
+		if total <= target {
 			return
 		}
 		if file.path == keepPath {
@@ -397,6 +435,7 @@ func (s *ImageThumbnailService) pruneImageCacheLocked(keepPath string) {
 		}
 		if err := os.Remove(file.path); err == nil || os.IsNotExist(err) {
 			total -= file.size
+			delete(sizes, file.path)
 		}
 	}
 }

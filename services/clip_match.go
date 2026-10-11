@@ -61,11 +61,18 @@ func clipFrameIntervalSeconds(intervalMS int) float64 {
 // 不识别倍速、镜像、裁剪画面的截取——那些会让逐帧 dHash 整体错位，本方法的
 // 前提（同一帧缩放后 dHash 接近）不成立。
 func MatchClip(full, clip []uint64, intervalMS int) (int, float64, bool) {
+	probe := newClipProbe(clip)
+	return matchClipWithProbe(full, clip, &probe, intervalMS)
+}
+
+// matchClipWithProbe 与 MatchClip 判定完全相同，只是复用调用方预先算好的片段探针：
+// 清理分析里同一个片段要和成百上千个完整片比较，探针只依赖片段本身。
+func matchClipWithProbe(full, clip []uint64, probe *clipProbe, intervalMS int) (int, float64, bool) {
 	if !clipLengthsComparable(len(full), len(clip), intervalMS) {
 		return 0, 0, false
 	}
 	bestOffset, bestRate := 0, 0.0
-	for _, offset := range clipCoarseOffsets(full, clip) {
+	for _, offset := range clipCoarseOffsets(full, clip, probe) {
 		rate := clipMatchRateAt(full, clip, offset)
 		if rate > bestRate {
 			bestOffset, bestRate = offset, rate
@@ -106,20 +113,65 @@ func clipFrameMatches(left, right uint64) bool {
 		bits.OnesCount64(left^right) <= clipHammingThreshold
 }
 
+// clipProbe 是片段的粗筛探针：在片段上均匀取最多 16 帧，偏移处命中 ≥ required
+// 帧才进入全序列验证。位置与所需命中数只依赖片段自身，预先算好可省掉每个偏移
+// 上的整数除法，同一片段与多个完整片比较时也能复用。
+//
+// 低信息探针帧（clipHashInformative 为假）在任何偏移上都不命中，因此不进逐偏移
+// 循环，直接计作必然失配 lowInfo；只有信息帧留在 positions/hashes 里。
+type clipProbe struct {
+	positions [clipCoarseProbeFrames]int
+	hashes    [clipCoarseProbeFrames]uint64
+	// informative 是 positions/hashes 中有效的前缀长度。
+	informative int
+	// lowInfo 是低信息探针帧数；allowMiss 是允许的最多失配数（探针数 − required）。
+	lowInfo   int
+	allowMiss int
+}
+
+func newClipProbe(clip []uint64) clipProbe {
+	var probe clipProbe
+	count := min(clipCoarseProbeFrames, len(clip))
+	required := int(math.Ceil(float64(count) * float64(clipCoarseProbeHits) / float64(clipCoarseProbeFrames)))
+	probe.allowMiss = count - required
+	for index := 0; index < count; index++ {
+		position := index * (len(clip) - 1) / max(1, count-1)
+		if !clipHashInformative(clip[position]) {
+			probe.lowInfo++
+			continue
+		}
+		probe.positions[probe.informative] = position
+		probe.hashes[probe.informative] = clip[position]
+		probe.informative++
+	}
+	return probe
+}
+
 // clipCoarseOffsets 均匀检查整段，避免只凭共用片头进入全量比较。
-func clipCoarseOffsets(full, clip []uint64) []int {
-	probe := min(clipCoarseProbeFrames, len(clip))
-	required := int(math.Ceil(float64(probe) * float64(clipCoarseProbeHits) / float64(clipCoarseProbeFrames)))
+//
+// 命中 ≥ required 等价于失配 ≤ allowMiss：失配一旦超过 allowMiss，这个偏移再怎么
+// 也凑不够命中，立即换下一个偏移。低信息探针帧已多于 allowMiss 时任何偏移都不可能
+// 通过，整对直接没有候选偏移（MatchClip 随之给出否定结论）。
+func clipCoarseOffsets(full, clip []uint64, probe *clipProbe) []int {
 	offsets := make([]int, 0, 8)
+	if probe.lowInfo > probe.allowMiss {
+		return offsets
+	}
+	positions := probe.positions[:probe.informative]
+	hashes := probe.hashes[:probe.informative]
 	for offset := 0; offset <= len(full)-len(clip); offset++ {
-		hits := 0
-		for index := 0; index < probe; index++ {
-			position := index * (len(clip) - 1) / max(1, probe-1)
-			if clipFrameMatches(full[offset+position], clip[position]) {
-				hits++
+		window := full[offset:]
+		misses := probe.lowInfo
+		for index, position := range positions {
+			candidate := window[position]
+			if bits.OnesCount64(candidate^hashes[index]) > clipHammingThreshold || !clipHashInformative(candidate) {
+				misses++
+				if misses > probe.allowMiss {
+					break
+				}
 			}
 		}
-		if hits >= required {
+		if misses <= probe.allowMiss {
 			offsets = append(offsets, offset)
 		}
 	}

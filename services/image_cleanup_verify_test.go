@@ -156,19 +156,25 @@ func TestImageCleanupVisualCacheBoundAndGIF(t *testing.T) {
 	calls := 0
 	visual := imageCleanupVisualFromImage(cleanupPattern(128, false))
 	cache := newImageCleanupVisualCache(func(context.Context, imageCleanupFileState) (*imageCleanupVisual, error) { calls++; return visual, nil })
-	for id := uint(1); id <= 1000; id++ {
+	total := uint(imageCleanupVisualCacheCapacity + 744)
+	for id := uint(1); id <= total; id++ {
 		cache.get(context.Background(), imageCleanupFileState{image: models.Image{ID: id}})
 	}
-	if len(cache.items) != 256 {
+	if imageCleanupVisualCacheCapacity != 4096 || len(cache.items) != imageCleanupVisualCacheCapacity {
 		t.Fatalf("画面缓存没有上限: %d", len(cache.items))
 	}
-	cache.get(context.Background(), imageCleanupFileState{image: models.Image{ID: 1000}})
-	if calls != 1000 {
+	cache.get(context.Background(), imageCleanupFileState{image: models.Image{ID: total}})
+	if calls != int(total) {
 		t.Fatal("最近的画面应复用")
 	}
-	a := imageCleanupFileState{image: models.Image{ID: 1001, Format: "gif"}}
-	b := imageCleanupFileState{image: models.Image{ID: 1002, Format: "gif"}}
-	if cache.matches(context.Background(), a, b) || calls != 1000 {
+	// 最早的画面已被挤出，再取要重读。
+	cache.get(context.Background(), imageCleanupFileState{image: models.Image{ID: 1}})
+	if calls != int(total)+1 {
+		t.Fatal("超出容量的旧画面应被淘汰")
+	}
+	a := imageCleanupFileState{image: models.Image{ID: total + 1, Format: "gif"}}
+	b := imageCleanupFileState{image: models.Image{ID: total + 2, Format: "gif"}}
+	if cache.matches(context.Background(), a, b) || calls != int(total)+1 {
 		t.Fatal("GIF 不能凭首帧给出近似重复")
 	}
 }
