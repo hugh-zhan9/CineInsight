@@ -2193,6 +2193,23 @@ export default {
       this.selectedSavedViewID = Number(viewID);
       return this.applySelectedSavedView();
     },
+    // 观看回顾里点标签：清掉其余条件，只按这一个标签筛选片库（与工具栏点标签同一条加载路径）。
+    applyTagFilterCommand(tagID) {
+      const id = Number(tagID);
+      if (!Number.isInteger(id) || id <= 0) return false;
+      this.deactivateRandomPick();
+      this.leaveSavedView();
+      this.smartView = '';
+      this.staleReasonFilter = '';
+      this.selectedPeople = [];
+      this.selectedSizeRange = 'all';
+      this.selectedResRange = 'all';
+      this.minRating = '';
+      this.maxRating = '';
+      this.searchKeyword = '';
+      this.selectedTags = [id];
+      return this.handleSearch(true, true);
+    },
     // mode：create 另存为新视图；update 用当前条件覆盖；rename 只改名（D-PC35、LIB-15）。
     openSaveViewDialog(mode = 'create') {
       this.$refs.saveViewDialog?.open(mode);

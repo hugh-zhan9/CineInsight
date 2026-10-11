@@ -229,6 +229,7 @@
             <dt>容器</dt><dd>{{ details.technical_metadata?.format_long_name || details.technical_metadata?.format_name || '未知' }}</dd>
             <dt>大小</dt><dd>{{ formatBytes(details.video.size) }}</dd>
             <dt>时长</dt><dd>{{ formatDuration(details.video.duration) || '未知' }}</dd>
+            <dt>播放</dt><dd data-test="drawer-play-count" title="外部播放器正式播放次数；随机播放与应用内观看见「回顾」">{{ Number(details.video.play_count || 0) }} 次</dd>
             <dt>总码率</dt><dd>{{ formatBitRate(details.technical_metadata?.total_bit_rate) }}</dd>
             <dt>快照时间</dt><dd>{{ formatDateTime(details.technical_metadata?.probed_at) }}</dd>
             <dt>修改时间</dt><dd>{{ formatNanosecondTime(details.technical_metadata?.successful_source_mod_time_ns) }}</dd>

@@ -82,6 +82,17 @@
       />
 
       <ViewingNotesPage v-if="notesMounted" v-show="currentPage === 'viewing-notes'" :page-active="currentPage === 'viewing-notes'" @open-bookmark="openBookmark" @open-video="openVideoFromCommand" @open-video-id="openVideoByID" />
+      <!-- 观看回顾：首次进入才挂载，之后只隐藏；不可见时停掉实时刷新。 -->
+      <RecapPage
+        v-if="recapMounted"
+        v-show="currentPage === 'recap'"
+        :page-active="currentPage === 'recap'"
+        @open-video-id="openVideoByID"
+        @open-tag="openLibraryTag"
+        @open-image="openPhotoImage"
+        @open-entity="openRecapEntity"
+        @navigate="navigateTo"
+      />
       <DownloadsPage v-if="currentPage === 'downloads'" />
       <WatchlistPage v-if="currentPage === 'watchlist'" />
       <!-- 按需挂载：榜单页一挂载就会报一次 OpenMovieChartYear（可能起后台抓取），
@@ -192,6 +203,7 @@ import WatchlistPage from './components/WatchlistPage.vue';
 import MovieChartPage from './components/MovieChartPage.vue';
 import WatchedMoviesPage from './components/WatchedMoviesPage.vue';
 import ViewingNotesPage from './components/ViewingNotesPage.vue';
+import RecapPage from './components/RecapPage.vue';
 import ScenesPage from './components/ScenesPage.vue';
 import VideoWorkbenchPage from './components/VideoWorkbenchPage.vue';
 import AppFeedback from './components/AppFeedback.vue';
@@ -225,7 +237,7 @@ export default {
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
     MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, WallpaperStatusBar,
-    BaseModal, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage
+    BaseModal, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage
   },
   data() {
     return {
@@ -234,6 +246,7 @@ export default {
       // 图片页首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"。
       photosMounted: false,
       notesMounted: false,
+      recapMounted: false,
       scenesMounted: false,
       // 片库带过来的场景检索范围：{ filter, token }；为空表示全部视频。
       scenesScope: null,
@@ -348,6 +361,7 @@ export default {
       handler(page) {
         if (page === 'photos') this.photosMounted = true;
         if (page === 'viewing-notes') this.notesMounted = true;
+        if (page === 'recap') this.recapMounted = true;
         if (page === 'scenes') this.scenesMounted = true;
         if (page === 'video-workbench') this.workbenchMounted = true;
       }
@@ -505,6 +519,28 @@ export default {
       } catch (err) {
         notifyError(`打开视频失败：${err}`);
       }
+    },
+    // 观看回顾里点标签：回片库，只按这一个标签筛选（VideoListPage.applyTagFilterCommand）。
+    async openLibraryTag(tag) {
+      const id = Number(tag?.id || tag);
+      if (!Number.isInteger(id) || id <= 0) return;
+      const navigated = await this.navigateTo('videos');
+      if (navigated === false) return;
+      await this.$nextTick();
+      await this.$refs.videoListPage?.applyTagFilterCommand(id);
+    },
+    // 观看回顾里点图片：切到图片页并定位到这一张，打开查看器（PhotoLibraryPage.locateImage）。
+    async openPhotoImage(image) {
+      if (!Number(image?.id)) return;
+      const navigated = await this.navigateTo('photos');
+      if (navigated === false) return;
+      await this.$nextTick();
+      await this.$refs.photoLibrary?.locateImage(image);
+    },
+    // 观看回顾里点人物 / 作品集：沿用命令面板打开实体的入口。
+    openRecapEntity({ type, id, name } = {}) {
+      if (!Number(id) || (type !== 'person' && type !== 'collection')) return;
+      return this.openEntityFromCommand(type, Number(id), name || '');
     },
     async openVideoByID(videoID) {
       try {

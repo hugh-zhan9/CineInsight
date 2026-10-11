@@ -21,6 +21,10 @@ type Image struct {
 	PerceptualHash      string     `gorm:"size:16;not null;default:''" json:"perceptual_hash"` // 64 位 dHash hex，''=未回填
 	HashSourceSize      int64      `gorm:"not null;default:0" json:"hash_source_size"`         // 哈希时源文件大小，stale 判定
 	HashSourceModTimeNS int64      `gorm:"not null;default:0" json:"hash_source_mod_time_ns"`  // 哈希时源文件 mtime（纳秒），stale 判定
+	// 查看次数与最近查看时间（观看回顾 D-RECAP-SOURCES）：只随 image_view_events 在同一事务里递增，
+	// 去重规则与事件一致；迁移不回填，老库从 0 开始。
+	ViewCount    int        `gorm:"not null;default:0" json:"view_count"`
+	LastViewedAt *time.Time `json:"last_viewed_at" ts_type:"string"`
 	// EXIF 元数据（P-012）。ExifParsedAt 区分"未解析"（NULL）与"已解析但无 EXIF"（有值+其余留空），
 	// 是 EXIF 补全任务的目标集判据；其余列为零值即表示该项 EXIF 缺失。
 	// TakenAt 注意：EXIF 的 DateTimeOriginal 不带时区，按解析时机器所在时区当墙钟时间读入，

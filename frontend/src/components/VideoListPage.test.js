@@ -892,6 +892,30 @@ describe('命令面板接线', () => {
     wrapper.unmount();
   });
 
+  it('回顾页点标签：清掉其余条件，只按这个标签重载片库', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], next_cursor: null });
+    const wrapper = await mountPage();
+    wrapper.vm.smartView = 'favorites';
+    wrapper.vm.searchKeyword = 'sea';
+    wrapper.vm.selectedTags = [1, 2];
+    wrapper.vm.minRating = '7';
+    api.SearchLibraryVideoPage.mockClear();
+
+    await wrapper.vm.applyTagFilterCommand(9);
+    await flushPromises();
+
+    expect(wrapper.vm.selectedTags).toEqual([9]);
+    expect(wrapper.vm.smartView).toBe('');
+    expect(wrapper.vm.searchKeyword).toBe('');
+    const filter = api.SearchLibraryVideoPage.mock.calls.at(-1)[0].filter;
+    expect(filter.tag_ids).toEqual([9]);
+    expect(filter.smart_view).toBe('');
+    expect(filter.min_rating).toBeNull();
+    expect(wrapper.vm.applyTagFilterCommand(0)).toBe(false);
+
+    wrapper.unmount();
+  });
+
   it('命令面板应用保存视图会套用该视图的全部条件', async () => {
     api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], next_cursor: null });
     const wrapper = await mountPage();

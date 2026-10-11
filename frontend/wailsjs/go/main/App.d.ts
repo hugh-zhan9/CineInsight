@@ -367,6 +367,8 @@ export function GetPlaybackQueue(arg1:services.QueueQuery):Promise<services.Queu
 
 export function GetPreviewSession(arg1:number):Promise<services.PreviewSession>;
 
+export function GetRecap(arg1:services.RecapRequest):Promise<services.RecapResult>;
+
 export function GetSceneCoverage(arg1:services.LibraryFilter):Promise<services.SceneCoverage>;
 
 export function GetSceneIndexStatus():Promise<services.SceneIndexStatus>;
@@ -574,6 +576,8 @@ export function ReassignFaceCluster(arg1:number,arg2:number,arg3:boolean):Promis
 export function RecheckImages(arg1:Array<number>):Promise<services.ImageScanResult>;
 
 export function RecheckVideos(arg1:Array<number>):Promise<services.LibraryReconcileSummary>;
+
+export function RecordImageView(arg1:number):Promise<services.ImageViewResult>;
 
 export function RecordViewEvent(arg1:number,arg2:string,arg3:string):Promise<boolean>;
 

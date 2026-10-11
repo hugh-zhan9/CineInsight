@@ -185,12 +185,16 @@ func recordFormalPlaybackStats(video *models.Video, updates map[string]interface
 	return recordFormalPlaybackStatsContext(ctx, video, updates, playedAt, source)
 }
 func recordFormalPlaybackStatsContext(ctx context.Context, video *models.Video, updates map[string]interface{}, playedAt time.Time, source string) error {
-	return database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
+	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		if err := tx.Model(video).Updates(updates).Error; err != nil {
 			return err
 		}
 		return tx.Create(&models.PlayEvent{VideoID: video.ID, PlayedAt: playedAt, Source: source}).Error
 	})
+	if err == nil {
+		notifyRecapActivity(RecapActivityVideo, source, playedAt)
+	}
+	return err
 }
 
 // errDeferredRandomVideoGone 表示未决随机提交到期时视频记录已被永久删除：没有计数可加，事件也不写。
@@ -208,7 +212,7 @@ func recordDeferredRandomPlaybackStats(videoID uint, playedAt time.Time) error {
 	return recordDeferredRandomPlaybackStatsContext(ctx, videoID, playedAt)
 }
 func recordDeferredRandomPlaybackStatsContext(ctx context.Context, videoID uint, playedAt time.Time) error {
-	return database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
+	err := database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		counted := tx.Unscoped().Model(&models.Video{}).Where("id = ?", videoID).
 			Update("random_play_count", gorm.Expr("random_play_count + 1"))
 		if counted.Error != nil {
@@ -224,6 +228,10 @@ func recordDeferredRandomPlaybackStatsContext(ctx context.Context, videoID uint,
 		}
 		return tx.Create(&models.PlayEvent{VideoID: videoID, PlayedAt: playedAt, Source: models.PlayEventSourceDesktopRandom}).Error
 	})
+	if err == nil {
+		notifyRecapActivity(RecapActivityVideo, models.PlayEventSourceDesktopRandom, playedAt)
+	}
+	return err
 }
 
 func (s *VideoService) buildPlaybackFailureResult(video *models.Video, reasonCode string, detail string, shouldReconcile bool) *PlaybackAttemptResult {

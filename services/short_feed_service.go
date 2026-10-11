@@ -732,7 +732,9 @@ func (s *ShortFeedService) RecordPlaybackSession(ref ShortFeedMediaRef, sessionI
 		key = diarySessionKey(models.PlayEventSourceMobileFeed, videoID, sessionID)
 	}
 	var interaction models.ShortFeedInteraction
+	playRecorded := false
 	err := database.Transaction(func(tx *gorm.DB) error {
+		playRecorded = false
 		var video models.Video
 		if err := tx.First(&video, videoID).Error; err != nil {
 			return err
@@ -762,6 +764,7 @@ func (s *ShortFeedService) RecordPlaybackSession(ref ShortFeedMediaRef, sessionI
 		if err := tx.Create(&event).Error; err != nil {
 			return err
 		}
+		playRecorded = true
 		if key != "" {
 			if err := appendViewingDiaryTx(tx, video, event, key); err != nil {
 				return err
@@ -775,6 +778,8 @@ func (s *ShortFeedService) RecordPlaybackSession(ref ShortFeedMediaRef, sessionI
 		})
 	})
 	if errors.Is(err, errDiarySessionExists) {
+		// 事务已回滚，刚才写的事件没有提交。
+		playRecorded = false
 		err = database.WithOperationContext(context.Background(), func(db *gorm.DB) error {
 			exists, checkErr := diarySessionRecorded(db, key)
 			if checkErr != nil {
@@ -788,6 +793,9 @@ func (s *ShortFeedService) RecordPlaybackSession(ref ShortFeedMediaRef, sessionI
 	}
 	if err != nil {
 		return nil, err
+	}
+	if playRecorded {
+		notifyRecapActivity(RecapActivityVideo, models.PlayEventSourceMobileFeed, now)
 	}
 	return s.videoInteractionDTO(&interaction, nil), nil
 }
@@ -931,6 +939,7 @@ func (s *ShortFeedService) recordImageView(ref ShortFeedMediaRef) (*ShortFeedInt
 	now := s.now()
 	var state shortFeedInteractionState
 	var viewed *models.Image
+	viewRecorded := false
 	err := database.Transaction(func(tx *gorm.DB) error {
 		img, err := s.loadEligibleImage(tx, ref.ID)
 		if err != nil {
@@ -944,10 +953,19 @@ func (s *ShortFeedService) recordImageView(ref ShortFeedMediaRef) (*ShortFeedInt
 			row.ViewCount++
 			row.LastViewedAt = &now
 		})
+		if err != nil {
+			return err
+		}
+		// 观看回顾的查看事件（D-RECAP-SOURCES）与互动表计数同事务；30 分钟去重只作用于事件与
+		// images.view_count，互动表的浏览次数保持原口径每次递增。
+		viewRecorded, err = recordImageViewTx(tx, img.ID, models.ImageViewSourceMobileFeed, now)
 		return err
 	})
 	if err != nil {
 		return nil, err
+	}
+	if viewRecorded {
+		notifyRecapActivity(RecapActivityImage, models.ImageViewSourceMobileFeed, now)
 	}
 	// liked/favorited 取自 images 行（唯一数据），互动表只提供浏览次数。
 	dto := stateInteractionDTO(ref, state)

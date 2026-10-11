@@ -61,6 +61,11 @@
           <span class="meta-divider">|</span>
           <span>{{ watchProgressLabel }}</span>
         </template>
+        <!-- 正式播放次数（videos.play_count，口径不变）；随机与应用内观看的流水见「回顾」页。 -->
+        <template v-if="Number(video.play_count) > 0">
+          <span class="meta-divider">|</span>
+          <span data-test="row-play-count" title="外部播放器正式播放次数；随机播放与应用内观看见「回顾」">播放 {{ video.play_count }} 次</span>
+        </template>
         <template v-if="video._semanticScore !== null && video._semanticScore !== undefined">
           <span class="meta-divider">|</span>
           <span class="video-semantic-score">相似度 {{ formatSemanticScore(video._semanticScore) }}</span>

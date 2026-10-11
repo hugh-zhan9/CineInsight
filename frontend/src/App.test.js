@@ -377,7 +377,7 @@ describe('顶栏信息架构（APP-14）', () => {
 
     expect(groupLabels(wrapper)).toEqual([
       { key: 'library', label: '片库', pages: ['视频', '人物', '作品集', '图片'] },
-      { key: 'lists', label: '片单', pages: ['观看笔记', '想看', '榜单', '观影记录'] },
+      { key: 'lists', label: '片单', pages: ['观看笔记', '回顾', '想看', '榜单', '观影记录'] },
       { key: 'tools', label: '工具', pages: ['洞察', '场景检索', '视频工作台'] }
     ]);
     expect(wrapper.findAll('.header-nav__divider')).toHaveLength(3);
@@ -775,4 +775,32 @@ it('P-008 任务中心「在工作台中打开」切到视频工作台并关闭�
   expect(wrapper.vm.currentPage).toBe('video-workbench');
   expect(wrapper.vm.taskCenterOpen).toBe(false);
   expect(wrapper.findComponent({ name: 'VideoWorkbenchPage' }).props('openRequest').projectID).toBe(31);
+});
+
+it('回顾页首次进入才挂载；点标签回片库按该标签筛选，点图片去图片页定位，点人物打开人物页', async () => {
+  const wrapper = await mountApp();
+  expect(wrapper.findComponent({ name: 'RecapPage' }).exists()).toBe(false);
+  await wrapper.get('[data-test="nav-recap"]').trigger('click');
+  const recap = wrapper.findComponent({ name: 'RecapPage' });
+  expect(recap.exists()).toBe(true);
+  expect(recap.props('pageActive')).toBe(true);
+  const applyTag = vi.fn();
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.applyTagFilterCommand = applyTag;
+  recap.vm.$emit('open-tag', { id: 5, name: '科幻' });
+  await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('videos');
+  expect(applyTag).toHaveBeenCalledWith(5);
+  expect(wrapper.findComponent({ name: 'RecapPage' }).props('pageActive')).toBe(false);
+
+  await wrapper.setData({ photosMounted: true });
+  const locate = vi.fn();
+  wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.locateImage = locate;
+  wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-image', { id: 11, name: 'p.jpg' });
+  await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('photos');
+  expect(locate).toHaveBeenCalledWith({ id: 11, name: 'p.jpg' });
+
+  wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-entity', { type: 'person', id: 8, name: '甲' });
+  await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('people');
 });

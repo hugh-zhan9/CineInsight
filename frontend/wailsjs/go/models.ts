@@ -340,6 +340,8 @@ export namespace models {
 	    perceptual_hash: string;
 	    hash_source_size: number;
 	    hash_source_mod_time_ns: number;
+	    view_count: number;
+	    last_viewed_at?: string;
 	    taken_at?: string;
 	    camera_make: string;
 	    camera_model: string;
@@ -379,6 +381,8 @@ export namespace models {
 	        this.perceptual_hash = source["perceptual_hash"];
 	        this.hash_source_size = source["hash_source_size"];
 	        this.hash_source_mod_time_ns = source["hash_source_mod_time_ns"];
+	        this.view_count = source["view_count"];
+	        this.last_viewed_at = source["last_viewed_at"];
 	        this.taken_at = source["taken_at"];
 	        this.camera_make = source["camera_make"];
 	        this.camera_model = source["camera_model"];
@@ -5550,6 +5554,8 @@ export namespace services {
 	    perceptual_hash: string;
 	    hash_source_size: number;
 	    hash_source_mod_time_ns: number;
+	    view_count: number;
+	    last_viewed_at?: string;
 	    taken_at?: string;
 	    camera_make: string;
 	    camera_model: string;
@@ -5592,6 +5598,8 @@ export namespace services {
 	        this.perceptual_hash = source["perceptual_hash"];
 	        this.hash_source_size = source["hash_source_size"];
 	        this.hash_source_mod_time_ns = source["hash_source_mod_time_ns"];
+	        this.view_count = source["view_count"];
+	        this.last_viewed_at = source["last_viewed_at"];
 	        this.taken_at = source["taken_at"];
 	        this.camera_make = source["camera_make"];
 	        this.camera_model = source["camera_model"];
@@ -6526,6 +6534,24 @@ export namespace services {
 	        this.year = source["year"];
 	        this.month = source["month"];
 	        this.count = source["count"];
+	    }
+	}
+	export class ImageViewResult {
+	    image_id: number;
+	    recorded: boolean;
+	    view_count: number;
+	    last_viewed_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new ImageViewResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_id = source["image_id"];
+	        this.recorded = source["recorded"];
+	        this.view_count = source["view_count"];
+	        this.last_viewed_at = source["last_viewed_at"];
 	    }
 	}
 	export class InlineQueueEvent {
@@ -8826,6 +8852,834 @@ export namespace services {
 		    return a;
 		}
 	}
+	export class RecapComparison {
+	    label: string;
+	    start: string;
+	    end: string;
+	    plays: number;
+	    videos: number;
+	    image_views: number;
+	    plays_change?: number;
+	    videos_change?: number;
+	    image_views_change?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapComparison(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.label = source["label"];
+	        this.start = source["start"];
+	        this.end = source["end"];
+	        this.plays = source["plays"];
+	        this.videos = source["videos"];
+	        this.image_views = source["image_views"];
+	        this.plays_change = source["plays_change"];
+	        this.videos_change = source["videos_change"];
+	        this.image_views_change = source["image_views_change"];
+	    }
+	}
+	export class RecapDayBucket {
+	    date: string;
+	    plays: number;
+	    views: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapDayBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.date = source["date"];
+	        this.plays = source["plays"];
+	        this.views = source["views"];
+	    }
+	}
+	export class RecapEntity {
+	    id: number;
+	    name: string;
+	    image_url: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapEntity(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.image_url = source["image_url"];
+	    }
+	}
+	export class RecapEntityRank {
+	    entity: RecapEntity;
+	    weight: number;
+	    videos: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapEntityRank(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.entity = this.convertValues(source["entity"], RecapEntity);
+	        this.weight = source["weight"];
+	        this.videos = source["videos"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapRelatedImage {
+	    image: RecapImage;
+	    shared: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapRelatedImage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image = this.convertValues(source["image"], RecapImage);
+	        this.shared = source["shared"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapTag {
+	    id: number;
+	    name: string;
+	    color: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapTag(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.color = source["color"];
+	    }
+	}
+	export class RecapImage {
+	    id: number;
+	    name: string;
+	    width: number;
+	    height: number;
+	    directory: string;
+	    available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapImage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.directory = source["directory"];
+	        this.available = source["available"];
+	    }
+	}
+	export class RecapFavoriteImage {
+	    image: RecapImage;
+	    count: number;
+	    last_at: string;
+	    tags: RecapTag[];
+	    people: RecapEntity[];
+	    related: RecapRelatedImage[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapFavoriteImage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image = this.convertValues(source["image"], RecapImage);
+	        this.count = source["count"];
+	        this.last_at = source["last_at"];
+	        this.tags = this.convertValues(source["tags"], RecapTag);
+	        this.people = this.convertValues(source["people"], RecapEntity);
+	        this.related = this.convertValues(source["related"], RecapRelatedImage);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapRelatedVideo {
+	    video: RecapVideo;
+	    shared: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapRelatedVideo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], RecapVideo);
+	        this.shared = source["shared"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapVideo {
+	    id: number;
+	    title: string;
+	    name: string;
+	    duration: number;
+	    personal_rating?: number;
+	    available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapVideo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.name = source["name"];
+	        this.duration = source["duration"];
+	        this.personal_rating = source["personal_rating"];
+	        this.available = source["available"];
+	    }
+	}
+	export class RecapFavoriteVideo {
+	    video: RecapVideo;
+	    count: number;
+	    last_at: string;
+	    tags: RecapTag[];
+	    people: RecapEntity[];
+	    collections: RecapEntity[];
+	    related: RecapRelatedVideo[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapFavoriteVideo(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], RecapVideo);
+	        this.count = source["count"];
+	        this.last_at = source["last_at"];
+	        this.tags = this.convertValues(source["tags"], RecapTag);
+	        this.people = this.convertValues(source["people"], RecapEntity);
+	        this.collections = this.convertValues(source["collections"], RecapEntity);
+	        this.related = this.convertValues(source["related"], RecapRelatedVideo);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapFeedItem {
+	    kind: string;
+	    id: number;
+	    title: string;
+	    source: string;
+	    at: string;
+	    available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapFeedItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.source = source["source"];
+	        this.at = source["at"];
+	        this.available = source["available"];
+	    }
+	}
+	export class RecapFreshness {
+	    new_videos: number;
+	    rewatched_videos: number;
+	    new_samples: RecapVideo[];
+	    new_favorite_videos: number;
+	    new_favorite_images: number;
+	    diary_rated: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapFreshness(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.new_videos = source["new_videos"];
+	        this.rewatched_videos = source["rewatched_videos"];
+	        this.new_samples = this.convertValues(source["new_samples"], RecapVideo);
+	        this.new_favorite_videos = source["new_favorite_videos"];
+	        this.new_favorite_images = source["new_favorite_images"];
+	        this.diary_rated = source["diary_rated"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapSourceShare {
+	    kind: string;
+	    source: string;
+	    count: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapSourceShare(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.source = source["source"];
+	        this.count = source["count"];
+	    }
+	}
+	export class RecapHourBucket {
+	    hour: number;
+	    plays: number;
+	    views: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapHourBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.hour = source["hour"];
+	        this.plays = source["plays"];
+	        this.views = source["views"];
+	    }
+	}
+	export class RecapHabits {
+	    total: number;
+	    hours: RecapHourBucket[];
+	    days: RecapDayBucket[];
+	    busiest_day?: RecapDayBucket;
+	    peak_hour: number;
+	    peak_slot: string;
+	    weekend_count: number;
+	    weekend_share: number;
+	    late_night_count: number;
+	    late_night_share: number;
+	    sources: RecapSourceShare[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapHabits(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.total = source["total"];
+	        this.hours = this.convertValues(source["hours"], RecapHourBucket);
+	        this.days = this.convertValues(source["days"], RecapDayBucket);
+	        this.busiest_day = this.convertValues(source["busiest_day"], RecapDayBucket);
+	        this.peak_hour = source["peak_hour"];
+	        this.peak_slot = source["peak_slot"];
+	        this.weekend_count = source["weekend_count"];
+	        this.weekend_share = source["weekend_share"];
+	        this.late_night_count = source["late_night_count"];
+	        this.late_night_share = source["late_night_share"];
+	        this.sources = this.convertValues(source["sources"], RecapSourceShare);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class RecapImageRank {
+	    image: RecapImage;
+	    count: number;
+	    last_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapImageRank(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image = this.convertValues(source["image"], RecapImage);
+	        this.count = source["count"];
+	        this.last_at = source["last_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapVideoRank {
+	    video: RecapVideo;
+	    count: number;
+	    last_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapVideoRank(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], RecapVideo);
+	        this.count = source["count"];
+	        this.last_at = source["last_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapMonthBest {
+	    month: number;
+	    best?: RecapVideoRank;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapMonthBest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.month = source["month"];
+	        this.best = this.convertValues(source["best"], RecapVideoRank);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapMonthBucket {
+	    month: number;
+	    plays: number;
+	    views: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapMonthBucket(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.month = source["month"];
+	        this.plays = source["plays"];
+	        this.views = source["views"];
+	    }
+	}
+	export class RecapNowPlaying {
+	    video: RecapVideo;
+	    basis: string;
+	    source: string;
+	    at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapNowPlaying(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video = this.convertValues(source["video"], RecapVideo);
+	        this.basis = source["basis"];
+	        this.source = source["source"];
+	        this.at = source["at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapOverview {
+	    plays: number;
+	    legacy_plays: number;
+	    videos: number;
+	    image_views: number;
+	    images: number;
+	    active_days: number;
+	    longest_streak: number;
+	    previous: RecapComparison;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapOverview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.plays = source["plays"];
+	        this.legacy_plays = source["legacy_plays"];
+	        this.videos = source["videos"];
+	        this.image_views = source["image_views"];
+	        this.images = source["images"];
+	        this.active_days = source["active_days"];
+	        this.longest_streak = source["longest_streak"];
+	        this.previous = this.convertValues(source["previous"], RecapComparison);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapTagRank {
+	    tag: RecapTag;
+	    weight: number;
+	    videos: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapTagRank(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.tag = this.convertValues(source["tag"], RecapTag);
+	        this.weight = source["weight"];
+	        this.videos = source["videos"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class RecapQuarterTags {
+	    quarter: number;
+	    tags: RecapTagRank[];
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapQuarterTags(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.quarter = source["quarter"];
+	        this.tags = this.convertValues(source["tags"], RecapTagRank);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class RecapRequest {
+	    period: string;
+	    year: number;
+	    month: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.period = source["period"];
+	        this.year = source["year"];
+	        this.month = source["month"];
+	    }
+	}
+	export class RecapTitle {
+	    key: string;
+	    name: string;
+	    detail: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapTitle(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.name = source["name"];
+	        this.detail = source["detail"];
+	    }
+	}
+	export class RecapResult {
+	    period: string;
+	    year: number;
+	    month: number;
+	    label: string;
+	    start: string;
+	    end: string;
+	    in_progress: boolean;
+	    generated_at: string;
+	    empty: boolean;
+	    overview: RecapOverview;
+	    favorite?: RecapFavoriteVideo;
+	    favorite_image?: RecapFavoriteImage;
+	    top_videos: RecapVideoRank[];
+	    top_tags: RecapTagRank[];
+	    top_people: RecapEntityRank[];
+	    top_collections: RecapEntityRank[];
+	    top_images: RecapImageRank[];
+	    habits: RecapHabits;
+	    freshness: RecapFreshness;
+	    titles: RecapTitle[];
+	    months: RecapMonthBucket[];
+	    month_best: RecapMonthBest[];
+	    quarter_tags: RecapQuarterTags[];
+	    feed: RecapFeedItem[];
+	    week: RecapDayBucket[];
+	    now_playing?: RecapNowPlaying;
+	
+	    static createFrom(source: any = {}) {
+	        return new RecapResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.period = source["period"];
+	        this.year = source["year"];
+	        this.month = source["month"];
+	        this.label = source["label"];
+	        this.start = source["start"];
+	        this.end = source["end"];
+	        this.in_progress = source["in_progress"];
+	        this.generated_at = source["generated_at"];
+	        this.empty = source["empty"];
+	        this.overview = this.convertValues(source["overview"], RecapOverview);
+	        this.favorite = this.convertValues(source["favorite"], RecapFavoriteVideo);
+	        this.favorite_image = this.convertValues(source["favorite_image"], RecapFavoriteImage);
+	        this.top_videos = this.convertValues(source["top_videos"], RecapVideoRank);
+	        this.top_tags = this.convertValues(source["top_tags"], RecapTagRank);
+	        this.top_people = this.convertValues(source["top_people"], RecapEntityRank);
+	        this.top_collections = this.convertValues(source["top_collections"], RecapEntityRank);
+	        this.top_images = this.convertValues(source["top_images"], RecapImageRank);
+	        this.habits = this.convertValues(source["habits"], RecapHabits);
+	        this.freshness = this.convertValues(source["freshness"], RecapFreshness);
+	        this.titles = this.convertValues(source["titles"], RecapTitle);
+	        this.months = this.convertValues(source["months"], RecapMonthBucket);
+	        this.month_best = this.convertValues(source["month_best"], RecapMonthBest);
+	        this.quarter_tags = this.convertValues(source["quarter_tags"], RecapQuarterTags);
+	        this.feed = this.convertValues(source["feed"], RecapFeedItem);
+	        this.week = this.convertValues(source["week"], RecapDayBucket);
+	        this.now_playing = this.convertValues(source["now_playing"], RecapNowPlaying);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
+	
+	
 	export class RelaunchResult {
 	    relaunched: boolean;
 	    message: string;

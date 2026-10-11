@@ -726,6 +726,10 @@ export function GetPreviewSession(arg1) {
   return window['go']['main']['App']['GetPreviewSession'](arg1);
 }
 
+export function GetRecap(arg1) {
+  return window['go']['main']['App']['GetRecap'](arg1);
+}
+
 export function GetSceneCoverage(arg1) {
   return window['go']['main']['App']['GetSceneCoverage'](arg1);
 }
@@ -1140,6 +1144,10 @@ export function RecheckImages(arg1) {
 
 export function RecheckVideos(arg1) {
   return window['go']['main']['App']['RecheckVideos'](arg1);
+}
+
+export function RecordImageView(arg1) {
+  return window['go']['main']['App']['RecordImageView'](arg1);
 }
 
 export function RecordViewEvent(arg1, arg2, arg3) {

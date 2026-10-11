@@ -40,6 +40,7 @@ export const APP_NAV_GROUPS = [
     label: '片单',
     pages: [
       { key: 'viewing-notes', label: '观看笔记', keywords: ['diary', 'bookmarks', '日记', '片段书签', '年度回顾'] },
+      { key: 'recap', label: '回顾', keywords: ['recap', 'huigu', '月度回顾', '年度回顾', '实时', '最爱', '播放次数', '称号'] },
       { key: 'watchlist', label: '想看', keywords: ['watchlist', 'xiangkan', '片单', '待下载'] },
       { key: 'movie-chart', label: '榜单', keywords: ['chart', 'movie chart', 'bangdan', '年度', '豆瓣'] },
       // 顶栏「已看」改名「观影记录」（D-PC52），与片库的「已看」智能视图区分开；旧说法留作关键词。

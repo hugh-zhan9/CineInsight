@@ -515,6 +515,7 @@
           <dt>尺寸</dt><dd>{{ viewerImage.width && viewerImage.height ? `${viewerImage.width}×${viewerImage.height}` : '未探测' }}</dd>
           <dt>大小</dt><dd>{{ formatBytes(viewerImage.size) }}</dd>
           <dt>格式</dt><dd>{{ formatBadge(viewerImage) }}</dd>
+          <dt>查看</dt><dd data-test="photo-viewer-view-count">{{ Number(viewerImage.view_count || 0) }} 次</dd>
         </dl>
 
         <div v-if="exifFacts.length" class="photo-viewer__block" data-test="photo-viewer-exif">
@@ -736,7 +737,7 @@ import {
   ApproveImageAITagCandidate, GetImageAITaggingSummary, ListImageAITagCandidates, RejectImageAITagCandidate, RetryImageAITagging,
   DeleteImagesInDirectoryWithResult,
   ListImageFolderGroups, ListImageTimelineBuckets, RemoveTagFromImage, SearchImagePage,
-  SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories
+  SearchImagesSemantic, SetImageFavorite, SetImageRating, SyncImageDirectories, RecordImageView
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import WallpaperButton from './WallpaperButton.vue';
@@ -748,6 +749,7 @@ import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialo
 import { summarizeTrashFailures } from './TrashCenterDialog.vue';
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
+import { logFrontend } from '../utils/frontendLog.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { confirmAction, notify } from '../utils/feedback.js';
@@ -760,6 +762,8 @@ import {
 import { resolveScrollOwnerDescriptor } from '../utils/virtualList.js';
 
 const PAGE_SIZE = 60;
+// 查看器里同一张图连续显示满这么久才记一次查看（观看回顾 D-RECAP-SOURCES）；切图、关闭或离开本页即取消。
+export const VIEW_RECORD_DELAY_MS = 1500;
 // 网格几何常量。卡片高度固定 = 方形缩略图 + 定高信息条，布局计算才能不依赖实测回写：
 // 缩略图区高度由列宽算出（aspect-ratio 1 的等价物），信息条用 CSS 钉死成 CARD_META_HEIGHT。
 const GRID_GAP = 12;
@@ -1077,7 +1081,10 @@ export default {
     }
   },
   watch: {
-    'viewerImage.id'() { this.viewerDirectoryError = ''; },
+    'viewerImage.id'(id) {
+      this.viewerDirectoryError = '';
+      this.scheduleViewRecord(id);
+    },
     'filters.keyword'() {
       clearTimeout(this._keywordTimer);
       this._keywordTimer = setTimeout(() => this.reload(), 300);
@@ -1098,6 +1105,8 @@ export default {
     // 滚动容器（.main-view）是各页共用的：切走时别的页面会把 scrollTop 改掉，
     // 所以离开前记下位置，切回来再放回去，不用从头往下滑。
     pageActive(active) {
+      // 离开本页时查看器虽然还开着，但图已经不在眼前：取消未到点的查看计时，回来再重新计。
+      this.scheduleViewRecord(active ? this.viewerImage?.id : null);
       // 清理审阅页整页接管了主区域，这时保存/恢复的是它的滚动位置，与网格无关。
       if (this.showCleanup) return;
       if (!active) {
@@ -1139,6 +1148,7 @@ export default {
     });
   },
   beforeUnmount() {
+    clearTimeout(this._viewRecordTimer);
     unregisterCommands('photo-library');
     clearTimeout(this._keywordTimer);
     window.removeEventListener('keydown', this.handleKeydown);
@@ -2043,6 +2053,36 @@ export default {
       this.ratingDraft = image.personal_rating == null ? '' : image.personal_rating;
       this.loadViewerDetail(image.id);
     },
+    // 从别的页面（观看回顾）跳来定位一张图：已在当前结果里就直接打开查看器；否则回到照片流、
+    // 清掉其余筛选、按文件名搜这一张，载入后打开。找不到（已删除、被隐藏）返回 false 并提示。
+    async locateImage(target) {
+      const id = Number(target?.id || 0);
+      if (!id) return false;
+      const loaded = this.images.findIndex(item => Number(item.id) === id);
+      if (loaded >= 0 && !this.folderModeRoot) {
+        this.openViewer(loaded);
+        return true;
+      }
+      this.searchMode = 'name';
+      if (this.displayMode !== 'stream') {
+        this.displayMode = 'stream';
+        this.activeFolder = null;
+      }
+      this.personFilterSelections = [];
+      this.filters = { ...this.filters, keyword: String(target?.name || ''), tagIDs: [], personIDs: [], favoriteOnly: false,
+        minRating: '', maxRating: '', takenAfter: '', takenBefore: '', aiTagState: '' };
+      // 条件侦听器会各自排一次重载（关键词那条带 300ms 防抖）：等它们排上后撤掉防抖，再以一次新查询为准。
+      await this.$nextTick();
+      clearTimeout(this._keywordTimer);
+      await this.reload();
+      const found = this.images.findIndex(item => Number(item.id) === id);
+      if (found < 0) {
+        notify('这张图片已不在图片库中，可能已删除或被隐藏。');
+        return false;
+      }
+      this.openViewer(found);
+      return true;
+    },
     closeViewer() {
       this.viewerIndex = -1;
       this.viewerImageError = false;
@@ -2066,6 +2106,27 @@ export default {
     },
     viewerNext() {
       if (this.viewerIndex < this.images.length - 1) this.openViewer(this.viewerIndex + 1);
+    },
+    // 同一张图连续显示满 VIEW_RECORD_DELAY_MS 才上报一次；切到别的图、关闭查看器或离开本页都会取消。
+    // 原图加载失败时不算看过。后端另按 30 分钟去重，这里只负责「真的停留过」。
+    scheduleViewRecord(id) {
+      clearTimeout(this._viewRecordTimer);
+      this._viewRecordTimer = null;
+      const imageID = Number(id || 0);
+      if (!imageID || !this.pageActive) return;
+      this._viewRecordTimer = setTimeout(() => {
+        this._viewRecordTimer = null;
+        if (Number(this.viewerImage?.id) !== imageID || this.viewerImageError || !this.pageActive) return;
+        this.recordImageView(imageID);
+      }, VIEW_RECORD_DELAY_MS);
+    },
+    async recordImageView(imageID) {
+      try {
+        const result = await RecordImageView(imageID);
+        if (result?.recorded) this.patchImage({ id: imageID, view_count: result.view_count, last_viewed_at: result.last_viewed_at });
+      } catch (err) {
+        logFrontend('PhotoLibraryPage', 'RecordImageView failed', { imageID, err: String(err) }, true);
+      }
     },
     viewerPrev() {
       if (this.viewerIndex > 0) this.openViewer(this.viewerIndex - 1);

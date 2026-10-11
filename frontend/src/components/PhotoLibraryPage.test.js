@@ -27,7 +27,9 @@ const api = vi.hoisted(() => Object.fromEntries([
   'CancelBatchDelete', 'RetryImageAITagging', 'ListTrashEntries', 'GetTrashUsage', 'ListHiddenImages', 'RecheckImages',
   'ListStagedSources',
   // P-032：清理审阅的合并元数据、取消分析、移出本组与「已忽略」。
-  'MergeMediaMetadata', 'CancelImageCleanupAnalysis', 'DismissImageNearDuplicateMember', 'ListCleanupDismissals', 'UndoCleanupDismissals'
+  'MergeMediaMetadata', 'CancelImageCleanupAnalysis', 'DismissImageNearDuplicateMember', 'ListCleanupDismissals', 'UndoCleanupDismissals',
+  // 观看回顾：查看器停留 1.5 秒记一次查看。
+  'RecordImageView'
 ].map(name => [name, vi.fn()])));
 
 // 带结果码的删除默认全部成功：每项 ok，同一个批次。
@@ -2140,5 +2142,84 @@ describe('PhotoLibraryPage folder view windowing', () => {
       wrapper.unmount();
       host.remove();
     }
+  });
+});
+
+describe('PhotoLibraryPage view recording (D-RECAP-SOURCES)', () => {
+  it('records one view only after the same image stays displayed for 1.5 s; switching or closing cancels', async () => {
+    vi.useFakeTimers();
+    try {
+      api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
+      api.RecordImageView.mockResolvedValue({ image_id: 2, recorded: true, view_count: 4, last_viewed_at: '2026-10-11T10:00:00Z' });
+      const wrapper = await mountPage();
+      await wrapper.findAll('.photo-card__media')[0].trigger('click');
+      await flushPromises();
+      vi.advanceTimersByTime(1000);
+      await wrapper.get('.photo-viewer__nav--next').trigger('click');
+      await flushPromises();
+      vi.advanceTimersByTime(1499);
+      expect(api.RecordImageView).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      await flushPromises();
+      expect(api.RecordImageView).toHaveBeenCalledTimes(1);
+      expect(api.RecordImageView).toHaveBeenCalledWith(2);
+      expect(wrapper.get('[data-test="photo-viewer-view-count"]').text()).toBe('4 次');
+      vi.advanceTimersByTime(10000);
+      expect(api.RecordImageView).toHaveBeenCalledTimes(1);
+
+      await wrapper.get('.photo-viewer__nav--prev').trigger('click');
+      await flushPromises();
+      vi.advanceTimersByTime(700);
+      await wrapper.get('[data-test="photo-viewer-close"]').trigger('click');
+      await flushPromises();
+      vi.advanceTimersByTime(5000);
+      await flushPromises();
+      expect(api.RecordImageView).toHaveBeenCalledTimes(1);
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not count an image whose original failed to load, nor while the page is hidden', async () => {
+    vi.useFakeTimers();
+    try {
+      api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
+      const wrapper = await mountPage();
+      await wrapper.findAll('.photo-card__media')[0].trigger('click');
+      await flushPromises();
+      wrapper.vm.viewerImageError = true;
+      vi.advanceTimersByTime(2000);
+      await wrapper.setProps({ pageActive: false });
+      await wrapper.get('.photo-viewer__nav--next').trigger('click');
+      vi.advanceTimersByTime(3000);
+      await flushPromises();
+      expect(api.RecordImageView).not.toHaveBeenCalled();
+      wrapper.unmount();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe('PhotoLibraryPage locateImage (回顾页跳转)', () => {
+  it('opens a loaded image directly, otherwise searches it by name in the stream and opens it', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage();
+    expect(await wrapper.vm.locateImage({ id: 2, name: 'photo-2.jpg' })).toBe(true);
+    expect(wrapper.get('.photo-viewer__sidebar h3').text()).toBe('photo-2.jpg');
+    wrapper.vm.closeViewer();
+    wrapper.vm.filters.favoriteOnly = true;
+    await flushPromises();
+    api.SearchImagePage.mockClear();
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(7)]));
+    expect(await wrapper.vm.locateImage({ id: 7, name: 'photo-7.jpg' })).toBe(true);
+    const lastFilter = api.SearchImagePage.mock.calls.at(-1)[0].filter;
+    expect(lastFilter).toMatchObject({ keyword: 'photo-7.jpg', favorite_only: false, tag_ids: [], person_ids: [] });
+    expect(wrapper.get('.photo-viewer__sidebar h3').text()).toBe('photo-7.jpg');
+    api.SearchImagePage.mockResolvedValue(makePage([]));
+    expect(await wrapper.vm.locateImage({ id: 9, name: 'gone.jpg' })).toBe(false);
+    expect(feedback.notify).toHaveBeenCalled();
+    wrapper.unmount();
   });
 });

@@ -393,6 +393,7 @@ func (a *App) startup(ctx context.Context) {
 	}
 	a.wireStartupHooks(emit)
 	a.playbackQueueEmit = func(sequence uint64) { emit("playback-queue-state", sequence) }
+	services.SetRecapActivityListener(func(activity services.RecapActivity) { emit(recapActivityEvent, activity) })
 	if err := a.startPlaybackQueue(); err != nil {
 		log.Printf("Playback queue startup failed: %v", services.WithoutAbsolutePaths(err))
 	}

@@ -157,5 +157,8 @@ func (d *viewEventDedup) recordContext(ctx context.Context, videoID uint, source
 		d.rememberLocked(key)
 	}
 	d.mu.Unlock()
+	if recorded {
+		notifyRecapActivity(RecapActivityVideo, source, at)
+	}
 	return recorded, nil
 }

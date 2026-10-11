@@ -104,5 +104,8 @@ func AllModels() []interface{} {
 		// 两张表对 videos 都只有逻辑引用（来源在配方/计划 JSON 里，成品 output_video_id 无外键）。
 		&VideoEditProject{},
 		&VideoEditItem{},
+		// 观看回顾（D-RECAP-SOURCES）：图片查看流水只有指向 images 的级联外键，images 排在
+		// 清单第二位，追加在末尾满足拓扑序。
+		&ImageViewEvent{},
 	}
 }

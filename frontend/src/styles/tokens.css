@@ -96,6 +96,13 @@
   --confidence-unknown-text: #5c6b70;
   --confidence-unknown-bg: #eef1f1;
   --confidence-unknown-border: #dde3e3;
+  /* 观看回顾的电影感大幅背景：画面上的文字两主题都是白字，压暗层随主题微调。 */
+  --recap-scrim: rgba(6, 14, 15, 0.86);
+  --recap-scrim-mid: rgba(6, 14, 15, 0.42);
+  --recap-hero-fg: #ffffff;
+  --recap-hero-muted: rgba(255, 255, 255, 0.76);
+  --recap-hero-chip: rgba(255, 255, 255, 0.14);
+  --recap-hero-chip-border: rgba(255, 255, 255, 0.3);
 }
 
 /* 暗色不是浅色反相：面板比画布更亮而不是更暗，主色提亮到 #23a99b 以在深底
@@ -184,6 +191,12 @@
   --confidence-unknown-text: #a3b1b3;
   --confidence-unknown-bg: #232b2c;
   --confidence-unknown-border: #2a3234;
+  --recap-scrim: rgba(3, 7, 8, 0.9);
+  --recap-scrim-mid: rgba(3, 7, 8, 0.5);
+  --recap-hero-fg: #ffffff;
+  --recap-hero-muted: rgba(255, 255, 255, 0.72);
+  --recap-hero-chip: rgba(255, 255, 255, 0.12);
+  --recap-hero-chip-border: rgba(255, 255, 255, 0.24);
 }
 
 * {
