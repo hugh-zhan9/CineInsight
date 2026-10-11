@@ -1554,8 +1554,8 @@ export function SuggestLibraryMatchesBatch(arg1) {
   return window['go']['main']['App']['SuggestLibraryMatchesBatch'](arg1);
 }
 
-export function SuggestTonightVideos(arg1) {
-  return window['go']['main']['App']['SuggestTonightVideos'](arg1);
+export function SuggestTonightVideos(arg1, arg2) {
+  return window['go']['main']['App']['SuggestTonightVideos'](arg1, arg2);
 }
 
 export function SwitchBackendConfigOnly(arg1) {

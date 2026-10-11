@@ -306,29 +306,45 @@ describe('工具栏三层重排', () => {
     wrapper.unmount();
   });
 
-  it('随机菜单承载三种模式与随机 10 部，主键仍是按当前条件随机', async () => {
+  it('随机与今晚看什么合并：▾ 菜单里有今晚看什么、随机 10 部与条件开关，主键立即随机播放', async () => {
     const wrapper = mount(LibraryToolbar, { props: baseProps({ randomPickSize: 10 }) });
     const ids = wrapper.vm.randomMenuItems.filter(item => item.id).map(item => item.id);
-    expect(ids).toEqual(['mode:balanced', 'mode:unwatched', 'mode:favorites', 'pick-ten']);
-    expect(wrapper.vm.randomMenuItems[0].checked).toBe(true);
+    expect(ids).toEqual(['tonight', 'pick-ten', 'watch:unwatched', 'watch:any', 'watch:watched', 'favorites']);
+    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'watch:any').checked).toBe(true);
     expect(wrapper.vm.randomMenuItems.find(item => item.id === 'pick-ten').label).toBe('随机 10 部');
+    // 独立的「今晚看什么」按钮已并进随机菜单。
+    expect(wrapper.find('[data-test="tonight-open"]').exists()).toBe(false);
 
     const main = wrapper.get('[data-test="random-play-main"]');
-    expect(main.text()).toBe('按当前条件随机 · 均衡');
+    expect(main.text()).toBe('随机播放');
     await main.trigger('click');
     expect(wrapper.emitted('play-random')).toHaveLength(1);
     wrapper.unmount();
   });
 
-  it('PLAY-08 随机按钮显示当前模式，「优先未看」改叫「仅未看」', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ randomMode: 'unwatched' }) });
-    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('按当前条件随机 · 仅未看');
-    expect(wrapper.vm.randomMenuItems.filter(item => item.id?.startsWith('mode:')).map(item => item.label))
-      .toEqual(['均衡', '仅未看', '仅收藏']);
-    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'mode:unwatched').checked).toBe(true);
+  it('PLAY-08 随机按钮列出生效的硬条件（探索/重温、收藏、时长上限），菜单勾选与之对应', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ randomConditions: { watchState: 'unwatched', favoritesOnly: false, maxMinutes: 0 } }) });
+    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('随机播放 · 探索');
+    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'watch:unwatched').checked).toBe(true);
+    expect(wrapper.vm.randomMenuItems.some(item => item.id === 'duration:clear')).toBe(false);
 
-    await wrapper.setProps({ randomMode: 'favorites' });
-    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('按当前条件随机 · 仅收藏');
+    await wrapper.setProps({ randomConditions: { watchState: 'watched', favoritesOnly: true, maxMinutes: 90 } });
+    expect(wrapper.get('[data-test="random-play-main"]').text()).toBe('随机播放 · 重温 · 收藏 · ≤90分钟');
+    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'favorites').checked).toBe(true);
+    expect(wrapper.vm.randomMenuItems.find(item => item.id === 'duration:clear').label).toBe('取消时长上限（≤90 分钟）');
+    wrapper.unmount();
+  });
+
+  it('今晚看什么沿用原入口的禁用条件：语义搜索、迁移或增量扫描期间不可选', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ migrationRunning: true }) });
+    const tonight = () => wrapper.vm.randomMenuItems.find(item => item.id === 'tonight');
+    expect(tonight().disabled).toBe(true);
+    await wrapper.setProps({ migrationRunning: false, incrementalScan: { running: true } });
+    expect(tonight().disabled).toBe(true);
+    await wrapper.setProps({ incrementalScan: { running: false } });
+    expect(tonight().disabled).toBe(false);
+    await wrapper.setProps({ searchMode: 'semantic' });
+    expect(tonight().disabled).toBe(true);
     wrapper.unmount();
   });
 

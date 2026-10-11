@@ -72,6 +72,36 @@ async function mountPage(extraProps = {}, extraOptions = {}) {
   return wrapper;
 }
 
+it('今晚看什么从随机菜单打开，带上共用的随机条件与最近排除；改条件回写片库页', async () => {
+  const wrapper = await mountPage();
+  wrapper.vm.recentRandomVideoIDs = [5, 6];
+  wrapper.vm.randomConditions = { watchState: 'watched', favoritesOnly: false, maxMinutes: 0 };
+  wrapper.vm.onRandomSelect({ id: 'tonight' });
+  await flushPromises();
+  const picker = wrapper.findComponent({ name: 'TonightPickerDialog' });
+  expect(picker.props('conditions')).toEqual({ watchState: 'watched', favoritesOnly: false, maxMinutes: 0 });
+  expect(picker.props('excludeIds')).toEqual([5, 6]);
+  picker.vm.$emit('update:conditions', { watchState: 'unwatched', favoritesOnly: true, maxMinutes: 45 });
+  await flushPromises();
+  expect(wrapper.vm.randomConditions).toEqual({ watchState: 'unwatched', favoritesOnly: true, maxMinutes: 45 });
+  expect(commandList().find(item => item.id === 'action:tonight').enabled()).toBe(true);
+  wrapper.unmount();
+});
+
+it('今晚看什么里的「随机播放一部」关掉弹窗，走与工具栏主键相同的随机播放', async () => {
+  const wrapper = await mountPage();
+  wrapper.vm.randomConditions = { watchState: 'unwatched', favoritesOnly: false, maxMinutes: 30 };
+  wrapper.vm.openTonightPicker();
+  await flushPromises();
+  api.PlayRandomVideoWithFilter.mockResolvedValueOnce({ dispatch_succeeded: true, video: { id: 8, name: 'v8.mp4', tags: [] }, reroll_token: 'tok-8' });
+  wrapper.findComponent({ name: 'TonightPickerDialog' }).vm.$emit('play-random');
+  await flushPromises();
+  expect(wrapper.vm.tonightOpen).toBe(false);
+  expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledWith(expect.objectContaining({ watch_state: 'unwatched', max_duration_seconds: 1800 }));
+  expect(wrapper.vm.randomPlay).toEqual(expect.objectContaining({ active: true, token: 'tok-8' }));
+  wrapper.unmount();
+});
+
 it('今晚看什么的播放事件向现有绑定传视频ID，并关闭选片弹窗', async () => {
   const wrapper = await mountPage();
   const video = { id: 47, name: 'tonight.mp4', path: '/fixture/tonight.mp4' };
@@ -384,9 +414,9 @@ describe('VideoListPage random pick of 10', () => {
     { id: 12, name: 'b.mp4', tags: [] }
   ];
 
-  it('抽取后接管主列表，沿用随机播放的筛选、模式和最近排除', async () => {
+  it('抽取后接管主列表，沿用随机播放的筛选、条件和最近排除', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.randomMode = 'unwatched';
+    wrapper.vm.randomConditions = { watchState: 'unwatched', favoritesOnly: false, maxMinutes: 0 };
     wrapper.vm.selectedTags = [3];
     wrapper.vm.recentRandomVideoIDs = [99];
     wrapper.vm.hasMore = true;
@@ -399,7 +429,9 @@ describe('VideoListPage random pick of 10', () => {
 
     expect(api.PickRandomVideos).toHaveBeenCalledWith(
       expect.objectContaining({
-        mode: 'unwatched',
+        watch_state: 'unwatched',
+        favorites_only: false,
+        max_duration_seconds: 0,
         exclude_ids: [99],
         filter: expect.objectContaining({ tag_ids: [3] })
       }),
@@ -626,10 +658,10 @@ describe('VideoListPage 工具栏接线', () => {
     wrapper.unmount();
   });
 
-  it('随机菜单选中模式后仍由片库页记住模式', async () => {
+  it('随机菜单改条件后仍由片库页记住条件', async () => {
     const wrapper = await mountPage();
-    wrapper.vm.onRandomSelect({ id: 'mode:favorites' });
-    expect(wrapper.vm.randomMode).toBe('favorites');
+    wrapper.vm.onRandomSelect({ id: 'watch:watched' });
+    expect(wrapper.vm.randomConditions.watchState).toBe('watched');
     wrapper.unmount();
   });
 });
@@ -1941,21 +1973,34 @@ describe('P-036 随机播放：换一个与本机记忆（PLAY-08）', () => {
     wrapper.unmount();
   });
 
-  it('PLAY-08 随机模式与最近排除表从本机读回，改模式写回', async () => {
+  it('PLAY-08 随机条件与最近排除表从本机读回，菜单改条件写回', async () => {
     window.localStorage.getItem.mockImplementation(key => ({
-      'library-random-mode': 'unwatched',
+      'library-random-conditions': '{"watchState":"unwatched","favoritesOnly":false,"maxMinutes":90}',
       'library-random-recent': '[3,4]'
     })[key] ?? null);
     const wrapper = await mountPage();
-    expect(wrapper.vm.randomMode).toBe('unwatched');
+    expect(wrapper.vm.randomConditions).toEqual({ watchState: 'unwatched', favoritesOnly: false, maxMinutes: 90 });
     expect(wrapper.vm.recentRandomVideoIDs).toEqual([3, 4]);
     api.PlayRandomVideoWithFilter.mockResolvedValueOnce({ dispatch_succeeded: false, reason_code: 'no_filtered_videos', user_message: '没有可播放的视频' });
     await wrapper.vm.playRandom();
-    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledWith(expect.objectContaining({ mode: 'unwatched', exclude_ids: [3, 4] }));
+    expect(api.PlayRandomVideoWithFilter).toHaveBeenCalledWith(expect.objectContaining({
+      watch_state: 'unwatched', favorites_only: false, max_duration_seconds: 5400, exclude_ids: [3, 4]
+    }));
 
-    wrapper.vm.onRandomSelect({ id: 'mode:favorites' });
+    wrapper.vm.onRandomSelect({ id: 'favorites' });
     await flushPromises();
-    expect(window.localStorage.setItem).toHaveBeenCalledWith('library-random-mode', 'favorites');
+    expect(window.localStorage.setItem).toHaveBeenLastCalledWith('library-random-conditions', '{"watchState":"unwatched","favoritesOnly":true,"maxMinutes":90}');
+    wrapper.vm.onRandomSelect({ id: 'watch:watched' });
+    wrapper.vm.onRandomSelect({ id: 'duration:clear' });
+    await flushPromises();
+    expect(wrapper.vm.randomConditions).toEqual({ watchState: 'watched', favoritesOnly: true, maxMinutes: 0 });
+    wrapper.unmount();
+  });
+
+  it('PLAY-08 旧版只存了随机模式时迁移成对应条件', async () => {
+    window.localStorage.getItem.mockImplementation(key => ({ 'library-random-mode': 'favorites' })[key] ?? null);
+    const wrapper = await mountPage();
+    expect(wrapper.vm.randomConditions).toEqual({ watchState: 'any', favoritesOnly: true, maxMinutes: 0 });
     wrapper.unmount();
   });
 

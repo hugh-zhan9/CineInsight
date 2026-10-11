@@ -53,8 +53,8 @@ func TestTonightBudgetScopeAndReadOnly(t *testing.T) {
 			eligible = video
 		}
 	}
-	request := TonightRequest{Filter: LibraryFilter{TagIDs: []uint{tag.ID}, PersonIDs: []uint{person.ID}}, MaxDurationSeconds: 5400, UnwatchedOnly: true, FavoritesOnly: true}
-	got, err := (&VideoService{}).SuggestTonight(context.Background(), request)
+	request := RandomPlayRequest{Filter: LibraryFilter{TagIDs: []uint{tag.ID}, PersonIDs: []uint{person.ID}}, MaxDurationSeconds: 5400, WatchState: RandomWatchUnwatched, FavoritesOnly: true}
+	got, err := (&VideoService{}).SuggestTonight(context.Background(), request, 0)
 	if err != nil || len(got) != 1 || got[0].Video.ID != eligible.ID {
 		t.Fatalf("unexpected suggestions: %+v, %v", got, err)
 	}
@@ -72,19 +72,25 @@ func TestTonightBudgetScopeAndReadOnly(t *testing.T) {
 	if current.PlayCount != 4 || current.RandomPlayCount != 2 || events != 0 {
 		t.Fatalf("recommendation wrote playback history: %+v events=%d", current, events)
 	}
+	request.ExcludeIDs = []uint{eligible.ID}
+	got, err = (&VideoService{}).SuggestTonight(context.Background(), request, 0)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("recent random exclusion relaxed: %+v %v", got, err)
+	}
+	request.ExcludeIDs = nil
 	request.Filter.TagIDs = []uint{999999}
-	got, err = (&VideoService{}).SuggestTonight(context.Background(), request)
+	got, err = (&VideoService{}).SuggestTonight(context.Background(), request, 0)
 	if err != nil || len(got) != 0 {
 		t.Fatalf("empty filter relaxed: %+v %v", got, err)
 	}
 }
 
-func TestTonightRankingUnknownDurationAndLimit(t *testing.T) {
+func TestTonightDrawsWithoutRepeatsAndKeepsUnknownDurationHonest(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	rating := 8.5
 	rows := []models.Video{
 		{Name: "unrated", Path: "/fixture/a", Directory: "/fixture", Duration: 10},
-		{Name: "rated", Path: "/fixture/b", Directory: "/fixture", Duration: 10, PersonalRating: &rating},
+		{Name: "rated", Path: "/fixture/b", Directory: "/fixture", Duration: 10, PersonalRating: &rating, PlayCount: 2, RandomPlayCount: 1},
 		{Name: "favorite-watched", Path: "/fixture/c", Directory: "/fixture", Duration: 10, IsFavorite: true, IsWatched: true},
 		{Name: "favorite-unwatched-unknown", Path: "/fixture/d", Directory: "/fixture", IsFavorite: true},
 	}
@@ -93,34 +99,79 @@ func TestTonightRankingUnknownDurationAndLimit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{})
+	got, err := (&VideoService{}).SuggestTonight(context.Background(), RandomPlayRequest{}, 0)
 	if err != nil || len(got) != 4 {
 		t.Fatalf("suggestions: %+v %v", got, err)
 	}
-	for i, want := range []uint{rows[3].ID, rows[2].ID, rows[1].ID, rows[0].ID} {
-		if got[i].Video.ID != want {
-			t.Fatalf("wrong rank %d: %+v", i, got)
+	seen := map[uint]bool{}
+	for _, item := range got {
+		if seen[item.Video.ID] {
+			t.Fatalf("duplicate candidate %d", item.Video.ID)
+		}
+		seen[item.Video.ID] = true
+		reasons := strings.Join(item.Reasons, " ")
+		switch item.Video.ID {
+		case rows[3].ID:
+			if !strings.Contains(reasons, "时长未记录") {
+				t.Fatalf("unknown duration disguised: %v", item.Reasons)
+			}
+		case rows[1].ID:
+			if !strings.Contains(reasons, "个人评分 8.5") || !strings.Contains(reasons, "播放过 3 次") {
+				t.Fatalf("rating/play facts: %v", item.Reasons)
+			}
+		case rows[0].ID:
+			if strings.Contains(reasons, "评分") || !strings.Contains(reasons, "还没播放过") {
+				t.Fatalf("unrated must not report a rating: %v", item.Reasons)
+			}
 		}
 	}
-	if !strings.Contains(strings.Join(got[0].Reasons, " "), "时长未记录") {
-		t.Fatal("unknown duration disguised")
-	}
-	got, err = (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{MaxDurationSeconds: 10, Limit: 1})
-	if err != nil || len(got) != 1 || got[0].Video.ID != rows[2].ID {
+	got, err = (&VideoService{}).SuggestTonight(context.Background(), RandomPlayRequest{MaxDurationSeconds: 10}, 1)
+	if err != nil || len(got) != 1 || got[0].Video.ID == rows[3].ID {
 		t.Fatalf("budget/limit: %+v %v", got, err)
+	}
+}
+
+// 「今晚看什么」与随机播放共用均衡加权：播放越少越容易被抽到，而不是固定排序或等概率。
+func TestTonightFavorsLessPlayedVideos(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	fresh := models.Video{Name: "fresh", Path: "/fixture/fresh", Directory: "/fixture", Duration: 10}
+	worn := models.Video{Name: "worn", Path: "/fixture/worn", Directory: "/fixture", Duration: 10, PlayCount: 50, IsFavorite: true}
+	for _, video := range []*models.Video{&fresh, &worn} {
+		if err := database.DB.Create(video).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	freshFirst := 0
+	for range 200 {
+		got, err := (&VideoService{}).SuggestTonight(context.Background(), RandomPlayRequest{}, 1)
+		if err != nil || len(got) != 1 {
+			t.Fatalf("draw: %+v %v", got, err)
+		}
+		if got[0].Video.ID == fresh.ID {
+			freshFirst++
+		}
+	}
+	// 权重约 101:1，期望约 198 次；等概率或「收藏优先」排序都会远低于下限。
+	if freshFirst < 170 {
+		t.Fatalf("less-played video drawn only %d/200 times", freshFirst)
 	}
 }
 
 func TestTonightRejectsInvalidAndCancelledRequests(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	for _, request := range []TonightRequest{{MaxDurationSeconds: -1}, {MaxDurationSeconds: 86401}, {Limit: -1}, {Limit: 13}, {Filter: LibraryFilter{SearchMode: "semantic"}}} {
-		if _, err := (&VideoService{}).SuggestTonight(context.Background(), request); err == nil {
+	for _, request := range []RandomPlayRequest{{MaxDurationSeconds: -1}, {MaxDurationSeconds: 86401}, {WatchState: "later"}, {Filter: LibraryFilter{SearchMode: "semantic"}}} {
+		if _, err := (&VideoService{}).SuggestTonight(context.Background(), request, 0); err == nil {
 			t.Fatalf("accepted invalid %+v", request)
+		}
+	}
+	for _, limit := range []int{-1, 13} {
+		if _, err := (&VideoService{}).SuggestTonight(context.Background(), RandomPlayRequest{}, limit); err == nil {
+			t.Fatalf("accepted invalid limit %d", limit)
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := (&VideoService{}).SuggestTonight(ctx, TonightRequest{}); !errors.Is(err, context.Canceled) {
+	if _, err := (&VideoService{}).SuggestTonight(ctx, RandomPlayRequest{}, 0); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled read: %v", err)
 	}
 }
@@ -140,7 +191,7 @@ func TestTonightScopeReadUsesCallerDeadline(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { _, err := (&VideoService{}).SuggestTonight(ctx, TonightRequest{}); done <- err }()
+	go func() { _, err := (&VideoService{}).SuggestTonight(ctx, RandomPlayRequest{}, 0); done <- err }()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.DeadlineExceeded) {
@@ -164,18 +215,15 @@ func TestTonightWatchedOnlyForRewatching(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	got, err := (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{WatchedOnly: true})
+	got, err := (&VideoService{}).SuggestTonight(context.Background(), RandomPlayRequest{WatchState: RandomWatchWatched}, 0)
 	if err != nil || len(got) != 1 || got[0].Video.ID != rows[0].ID {
-		t.Fatalf("watched_only should keep only watched videos: %+v %v", got, err)
+		t.Fatalf("watched state should keep only watched videos: %+v %v", got, err)
 	}
 	if !strings.Contains(strings.Join(got[0].Reasons, " "), "看过，适合重温") {
 		t.Fatalf("missing rewatch reason: %+v", got[0].Reasons)
 	}
-	got, err = (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{UnwatchedOnly: true})
+	got, err = (&VideoService{}).SuggestTonight(context.Background(), RandomPlayRequest{WatchState: RandomWatchUnwatched}, 0)
 	if err != nil || len(got) != 1 || got[0].Video.ID != rows[1].ID {
-		t.Fatalf("unwatched_only should filter out watched videos: %+v %v", got, err)
-	}
-	if _, err := (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{UnwatchedOnly: true, WatchedOnly: true}); err == nil {
-		t.Fatal("unwatched_only and watched_only together must be rejected")
+		t.Fatalf("unwatched state should filter out watched videos: %+v %v", got, err)
 	}
 }

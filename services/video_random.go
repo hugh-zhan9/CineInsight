@@ -16,17 +16,40 @@ import (
 	"video-master/models"
 )
 
+// 随机条件的观看状态：不限（空串同义）、探索（只抽没看过的）、重温（只抽看过的）。
 const (
-	RandomPlayModeBalanced  = "balanced"
-	RandomPlayModeUnwatched = "unwatched"
-	RandomPlayModeFavorites = "favorites"
+	RandomWatchAny       = "any"
+	RandomWatchUnwatched = "unwatched"
+	RandomWatchWatched   = "watched"
 )
 
-// RandomPlayRequest 描述筛选内随机播放的边界和模式。
+// randomMaxDurationSeconds 是整片时长上限的最大值（1440 分钟）。
+const randomMaxDurationSeconds = 86400
+
+// RandomPlayRequest 是随机播放、随机 N 部与「今晚看什么」共用的抽取条件：在片库筛选之内，
+// 再叠加观看状态、仅收藏与整片时长上限，并排除最近随机过的视频。
 type RandomPlayRequest struct {
-	Filter     LibraryFilter `json:"filter"`
-	Mode       string        `json:"mode"`
-	ExcludeIDs []uint        `json:"exclude_ids"`
+	Filter        LibraryFilter `json:"filter"`
+	WatchState    string        `json:"watch_state"`
+	FavoritesOnly bool          `json:"favorites_only"`
+	// MaxDurationSeconds 为 0 不限；有上限时排除时长未知的视频，不让它冒充符合上限。
+	MaxDurationSeconds int64  `json:"max_duration_seconds"`
+	ExcludeIDs         []uint `json:"exclude_ids"`
+}
+
+// normalizeRandomPlayRequest 校验随机条件；越界或未知取值明确报错，不静默放宽。
+func normalizeRandomPlayRequest(request RandomPlayRequest) (RandomPlayRequest, error) {
+	request.WatchState = strings.TrimSpace(request.WatchState)
+	if request.WatchState == "" {
+		request.WatchState = RandomWatchAny
+	}
+	if request.WatchState != RandomWatchAny && request.WatchState != RandomWatchUnwatched && request.WatchState != RandomWatchWatched {
+		return RandomPlayRequest{}, fmt.Errorf("不支持的观看状态: %s", request.WatchState)
+	}
+	if request.MaxDurationSeconds < 0 || request.MaxDurationSeconds > randomMaxDurationSeconds {
+		return RandomPlayRequest{}, fmt.Errorf("可用时间必须在 0–1440 分钟之间")
+	}
+	return request, nil
 }
 
 type videoScoreRow struct {
@@ -88,26 +111,19 @@ func (s *VideoService) playRandomVideoFrom(db *gorm.DB) (*PlaybackAttemptResult,
 	return s.playRandomFromRowsFrom(db, rows, playWeight, halfLifeDays, time.Now(), "按全库均衡权重选择")
 }
 
-// randomCandidatePool 是筛选内随机的候选集合，随机播放和随机取样共用同一份边界、模式和权重配置。
+// randomCandidatePool 是筛选内随机的候选集合，随机播放、随机取样与今晚看什么共用同一份边界、条件和权重配置。
 type randomCandidatePool struct {
-	mode         string
+	request      RandomPlayRequest
 	rows         []videoScoreRow
 	playWeight   float64
 	halfLifeDays int
 }
 
-// collectRandomCandidates 按请求的筛选条件和随机模式组装候选行。
-func (s *VideoService) collectRandomCandidates(request RandomPlayRequest) (*randomCandidatePool, error) {
-	return s.collectRandomCandidatesFrom(database.DB, request)
-}
-
+// collectRandomCandidatesFrom 按请求的筛选与随机条件组装候选行。
 func (s *VideoService) collectRandomCandidatesFrom(db *gorm.DB, request RandomPlayRequest) (*randomCandidatePool, error) {
-	mode := strings.TrimSpace(request.Mode)
-	if mode == "" {
-		mode = RandomPlayModeBalanced
-	}
-	if mode != RandomPlayModeBalanced && mode != RandomPlayModeUnwatched && mode != RandomPlayModeFavorites {
-		return nil, fmt.Errorf("不支持的随机播放模式: %s", mode)
+	request, err := normalizeRandomPlayRequest(request)
+	if err != nil {
+		return nil, err
 	}
 	if libraryFilterNeedsSubtitleSync(request.Filter) {
 		if err := syncSubtitleIndexesFromFilesystem(); err != nil {
@@ -125,11 +141,17 @@ func (s *VideoService) collectRandomCandidatesFrom(db *gorm.DB, request RandomPl
 	if err != nil {
 		return nil, err
 	}
-	switch mode {
-	case RandomPlayModeUnwatched:
+	switch request.WatchState {
+	case RandomWatchUnwatched:
 		query = query.Where("videos.is_watched = ?", false)
-	case RandomPlayModeFavorites:
+	case RandomWatchWatched:
+		query = query.Where("videos.is_watched = ?", true)
+	}
+	if request.FavoritesOnly {
 		query = query.Where("videos.is_favorite = ?", true)
+	}
+	if request.MaxDurationSeconds > 0 {
+		query = query.Where("videos.duration > 0 AND videos.duration <= ?", request.MaxDurationSeconds)
 	}
 	excludeIDs := uniqueUintIDs(request.ExcludeIDs)
 	if len(excludeIDs) > 100 {
@@ -142,7 +164,7 @@ func (s *VideoService) collectRandomCandidatesFrom(db *gorm.DB, request RandomPl
 	if err := query.Find(&rows).Error; err != nil {
 		return nil, err
 	}
-	return &randomCandidatePool{mode: mode, rows: rows, playWeight: playWeight, halfLifeDays: halfLifeDays}, nil
+	return &randomCandidatePool{request: request, rows: rows, playWeight: playWeight, halfLifeDays: halfLifeDays}, nil
 }
 
 // PlayRandomVideoWithFilter 在当前筛选范围内执行加权随机播放（D-PC43、R10）。
@@ -164,7 +186,7 @@ func (s *VideoService) playRandomVideoWithFilterFrom(db *gorm.DB, request Random
 	if err != nil {
 		return nil, err
 	}
-	reason := randomModeReason(pool.mode)
+	reason := randomSelectionReason(pool.request)
 	if len(pool.rows) == 0 {
 		return &PlaybackAttemptResult{
 			DispatchSucceeded: false,
@@ -336,12 +358,12 @@ func (s *VideoService) PickRandomVideos(request RandomPlayRequest, count int) (*
 	if count > RandomPickMaxCount {
 		return nil, fmt.Errorf("随机取样条数不能超过 %d", RandomPickMaxCount)
 	}
-	pool, err := s.collectRandomCandidates(request)
+	pool, videos, err := s.sampleRandomVideosFrom(database.DB, request, count)
 	if err != nil {
 		return nil, err
 	}
-	reason := randomModeReason(pool.mode)
-	if len(pool.rows) == 0 {
+	reason := randomSelectionReason(pool.request)
+	if len(videos) == 0 {
 		return &RandomPickResult{
 			Videos:          []models.Video{},
 			SelectionReason: reason,
@@ -349,16 +371,29 @@ func (s *VideoService) PickRandomVideos(request RandomPlayRequest, count int) (*
 			UserMessage:     "随机取样失败：当前筛选范围没有可用的视频。",
 		}, nil
 	}
+	return &RandomPickResult{Videos: videos, SelectionReason: reason}, nil
+}
+
+// sampleRandomVideosFrom 按随机播放的候选边界与权重不放回地抽 count 条，按抽中顺序返回带标签的完整记录。
+// 随机 N 部与「今晚看什么」共用它；只读，不写任何播放统计。没有候选时返回空切片。
+func (s *VideoService) sampleRandomVideosFrom(db *gorm.DB, request RandomPlayRequest, count int) (*randomCandidatePool, []models.Video, error) {
+	pool, err := s.collectRandomCandidatesFrom(db, request)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(pool.rows) == 0 {
+		return pool, []models.Video{}, nil
+	}
 	weights, totalWeight := randomSelectionWeights(pool.rows, pool.playWeight, pool.halfLifeDays, time.Now())
 	ids := make([]uint, 0, count)
 	for _, index := range weightedSampleWithoutReplacement(weights, totalWeight, count) {
 		ids = append(ids, pool.rows[index].ID)
 	}
-	videos, err := s.GetVideosByIDs(ids)
+	videos, err := getVideosByIDsFrom(db, ids)
 	if err != nil {
-		return nil, fmt.Errorf("查询随机取样结果失败: %w", err)
+		return nil, nil, fmt.Errorf("查询随机取样结果失败: %w", err)
 	}
-	return &RandomPickResult{Videos: videos, SelectionReason: reason}, nil
+	return pool, videos, nil
 }
 
 // weightedSampleWithoutReplacement 连续做加权抽取：每轮只在尚未抽中的候选里按权重选一个，
@@ -403,15 +438,33 @@ func weightedSampleWithoutReplacement(weights []float64, totalWeight float64, co
 	return picked
 }
 
-func randomModeReason(mode string) string {
-	switch mode {
-	case RandomPlayModeUnwatched:
-		return "在当前筛选范围内仅选择未看视频"
-	case RandomPlayModeFavorites:
-		return "在当前筛选范围内选择收藏视频"
-	default:
-		return "在当前筛选范围内按播放次数均衡选择"
+// randomSelectionReason 用一句话说明这次随机的条件；request 须已经过 normalizeRandomPlayRequest。
+func randomSelectionReason(request RandomPlayRequest) string {
+	var conditions []string
+	switch request.WatchState {
+	case RandomWatchUnwatched:
+		conditions = append(conditions, "只抽没看过的")
+	case RandomWatchWatched:
+		conditions = append(conditions, "只抽看过的")
 	}
+	if request.FavoritesOnly {
+		conditions = append(conditions, "仅收藏")
+	}
+	if request.MaxDurationSeconds > 0 {
+		conditions = append(conditions, "整片不超过"+formatRandomDuration(request.MaxDurationSeconds))
+	}
+	reason := "在当前筛选范围内按播放次数均衡选择"
+	if len(conditions) > 0 {
+		reason += "：" + strings.Join(conditions, "、")
+	}
+	return reason
+}
+
+func formatRandomDuration(seconds int64) string {
+	if seconds%60 == 0 {
+		return fmt.Sprintf(" %d 分钟", seconds/60)
+	}
+	return fmt.Sprintf(" %d 秒", seconds)
 }
 
 func (s *VideoService) playRandomFromRowsFrom(db *gorm.DB, rows []videoScoreRow, playWeight float64, halfLifeDays int, now time.Time, selectionReason string) (*PlaybackAttemptResult, error) {

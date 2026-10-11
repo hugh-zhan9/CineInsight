@@ -250,7 +250,7 @@ func TestPLAY08RerollKeepsFilterModeAndExcludesDiscarded(t *testing.T) {
 	clock := useManualRandomCommitClock(t)
 	svc := &VideoService{}
 
-	started, err := svc.PlayRandomVideoWithFilter(RandomPlayRequest{Mode: RandomPlayModeFavorites})
+	started, err := svc.PlayRandomVideoWithFilter(RandomPlayRequest{FavoritesOnly: true})
 	if err != nil || !started.DispatchSucceeded {
 		t.Fatalf("收藏随机应成功: %+v err=%v", started, err)
 	}
@@ -261,8 +261,8 @@ func TestPLAY08RerollKeepsFilterModeAndExcludesDiscarded(t *testing.T) {
 	if want := p023OtherVideo(t, favoriteA, favoriteB, started.Video.ID); next.Video.ID != want.ID {
 		t.Fatalf("换一个应留在收藏范围内且排除被换掉的: got=%d want=%d", next.Video.ID, want.ID)
 	}
-	if next.SelectionReason != randomModeReason(RandomPlayModeFavorites) {
-		t.Fatalf("换一个应沿用原模式: %q", next.SelectionReason)
+	if next.SelectionReason != started.SelectionReason || !strings.Contains(next.SelectionReason, "仅收藏") {
+		t.Fatalf("换一个应沿用原条件: %q", next.SelectionReason)
 	}
 	empty, err := svc.RerollRandom(next.RerollToken)
 	if err != nil || empty.DispatchSucceeded || empty.ReasonCode != "no_filtered_videos" || empty.RerollToken != "" {
@@ -425,11 +425,22 @@ func TestPLAY08RandomCommitSlotResolvesEachPendingExactlyOnce(t *testing.T) {
 	}
 }
 
-// 文案：该模式是硬过滤，「优先」改为「仅」（§8.5）。
-func TestPLAY08UnwatchedModeReasonSaysOnlyUnwatched(t *testing.T) {
-	reason := randomModeReason(RandomPlayModeUnwatched)
-	if !strings.Contains(reason, "仅") || strings.Contains(reason, "优先") {
-		t.Fatalf("未看模式的文案应为「仅未看」: %q", reason)
+// 文案：观看状态是硬过滤，不能说「优先」（§8.5）；各条件都要写进理由，没有条件时保持原句。
+func TestPLAY08RandomReasonNamesEveryHardCondition(t *testing.T) {
+	if got := randomSelectionReason(RandomPlayRequest{WatchState: RandomWatchAny}); got != "在当前筛选范围内按播放次数均衡选择" {
+		t.Fatalf("不带条件的理由应保持原句: %q", got)
+	}
+	reason := randomSelectionReason(RandomPlayRequest{WatchState: RandomWatchUnwatched, FavoritesOnly: true, MaxDurationSeconds: 5400})
+	for _, want := range []string{"只抽没看过的", "仅收藏", "整片不超过 90 分钟"} {
+		if !strings.Contains(reason, want) {
+			t.Fatalf("理由缺少 %q: %q", want, reason)
+		}
+	}
+	if strings.Contains(reason, "优先") {
+		t.Fatalf("硬过滤不能写成优先: %q", reason)
+	}
+	if got := randomSelectionReason(RandomPlayRequest{WatchState: RandomWatchWatched, MaxDurationSeconds: 90}); !strings.Contains(got, "只抽看过的") || !strings.Contains(got, "整片不超过 90 秒") {
+		t.Fatalf("重温与秒级上限的理由: %q", got)
 	}
 }
 

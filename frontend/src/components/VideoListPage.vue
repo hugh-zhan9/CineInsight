@@ -24,7 +24,7 @@
       :res-options="resOptions"
       :saved-views="savedViews"
       :selected-saved-view-i-d="selectedSavedViewID"
-      :random-mode="randomMode"
+      :random-conditions="randomConditions"
       :random-pick-loading="randomPick.loading"
       :random-pick-size="randomPickSize"
       :semantic-available="semanticAvailable"
@@ -54,7 +54,6 @@
       @search="handleSearch"
       @set-search-mode="setSearchMode"
       @play-random="playRandom"
-      @open-tonight="openTonightPicker"
       @search-scenes="$emit('search-scenes', currentLibraryFilter())"
       @toggle-tag="toggleTagFilter"
       @clear-tags="clearTagFilter"
@@ -78,7 +77,17 @@
       @batch-edit-merge="createEditProjectFromSelection('merge')"
       @batch-edit-trim="createEditProjectFromSelection('trim_intro')"
     />
-    <TonightPickerDialog v-if="tonightOpen" :filter="tonightFilter" @close="tonightOpen = false" @preview="previewTonightSuggestion" @play="playTonightSuggestion" />
+    <TonightPickerDialog
+      v-if="tonightOpen"
+      :filter="tonightFilter"
+      :conditions="randomConditions"
+      :exclude-ids="recentRandomVideoIDs"
+      @update:conditions="randomConditions = $event"
+      @close="tonightOpen = false"
+      @preview="previewTonightSuggestion"
+      @play="playTonightSuggestion"
+      @play-random="playRandomFromTonight"
+    />
     <IncrementalScanBar
       ref="incrementalScanBar"
       :migration-running="migrationRunning"
@@ -562,7 +571,7 @@ import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyBatchSummary } from '../utils/
 import { resumable, resumePosition } from '../utils/watchState.js';
 import { scrubAbsolutePaths } from '../utils/pathText.js';
 import { formatLocalTime, subtitleExceptionText } from '../utils/subtitleTools.js';
-import { loadRandomMode, loadRecentRandomIDs, normalizeRecentRandomIDs, RANDOM_REROLL_WINDOW_MS, rerollWindowOpen, saveRandomMode, saveRecentRandomIDs } from '../utils/randomPlayback.js';
+import { loadRandomConditions, loadRecentRandomIDs, normalizeRecentRandomIDs, randomConditionFields, RANDOM_REROLL_WINDOW_MS, rerollWindowOpen, saveRandomConditions, saveRecentRandomIDs } from '../utils/randomPlayback.js';
 
 // 「随机 N 部」一次抽取的条数。
 const RANDOM_PICK_SIZE = 10;
@@ -646,7 +655,7 @@ export default {
       // 随机模式与「最近 12 次」排除表存在本机（D-PC44），重启后仍然生效。
       tonightOpen: false,
       tonightFilter: {},
-      randomMode: loadRandomMode(),
+      randomConditions: loadRandomConditions(),
       recentRandomVideoIDs: loadRecentRandomIDs(),
       randomPick: { active: false, ids: [], reason: '', loading: false },
       // 最近一次随机播放（D-PC43、D-PC44）：token 是 30 秒内「换一个」用的令牌，startedAt 为本机时刻。
@@ -781,6 +790,14 @@ export default {
         enabled: () => !this.randomPick.loading && this.searchMode !== 'semantic',
         run: () => this.playRandom()
       },
+      {
+        id: 'action:tonight',
+        group: 'action',
+        label: '今晚看什么',
+        keywords: ['tonight', '今晚', '选片', '随机'],
+        enabled: () => this.searchMode !== 'semantic' && !this.migrationRunning && !this.incrementalScan.running,
+        run: () => this.openTonightPicker()
+      },
       // 待处理工作台按固定 ID 跳到本页的既有面板（详细设计 §6.1）。run() 只负责打开面板，
       // 切到片库页由调用方先做（本页常挂载、以 v-show 切换）。
       {
@@ -857,8 +874,8 @@ export default {
         if (opened !== false && this.consolidationRoute === route) this.$emit('consolidation-opened');
       }
     },
-    randomMode(mode) {
-      saveRandomMode(mode);
+    randomConditions(conditions) {
+      saveRandomConditions(conditions);
     },
     subtitleIndexNoticeVisible: {
       immediate: true,
@@ -1155,6 +1172,8 @@ export default {
     },
     previewTonightSuggestion(video) { this.tonightOpen = false; this.openPreview(video); },
     playTonightSuggestion(video) { this.tonightOpen = false; return this.playVideo(video.id); },
+    // 弹窗里的「随机播放一部」就是工具栏主键：同样的条件、排除表、结果条与 30 秒「换一个」。
+    playRandomFromTonight() { this.tonightOpen = false; return this.playRandom(); },
     debugLog(message, payload = null, isError = false) {
       return logFrontend('VideoListPage', message, payload, isError);
     },
@@ -1803,11 +1822,17 @@ export default {
       }
     },
     onRandomSelect(item) {
+      if (item.id === 'tonight') {
+        this.openTonightPicker();
+        return;
+      }
       if (item.id === 'pick-ten') {
         this.enterRandomPick();
         return;
       }
-      if (item.id.startsWith('mode:')) this.randomMode = item.id.slice(5);
+      if (item.id.startsWith('watch:')) this.randomConditions = { ...this.randomConditions, watchState: item.id.slice(6) };
+      else if (item.id === 'favorites') this.randomConditions = { ...this.randomConditions, favoritesOnly: !this.randomConditions.favoritesOnly };
+      else if (item.id === 'duration:clear') this.randomConditions = { ...this.randomConditions, maxMinutes: 0 };
     },
     currentQueryKeyword() {
       return this.searchKeyword.trim();
@@ -2597,7 +2622,7 @@ export default {
         ])];
         const result = await PickRandomVideos({
           filter: this.currentLibraryFilter(),
-          mode: this.randomMode,
+          ...randomConditionFields(this.randomConditions),
           exclude_ids: excludeIDs
         }, RANDOM_PICK_SIZE);
         const picked = result?.videos || [];
@@ -2674,7 +2699,7 @@ export default {
       try {
         const result = await PlayRandomVideoWithFilter({
           filter: this.currentLibraryFilter(),
-          mode: this.randomMode,
+          ...randomConditionFields(this.randomConditions),
           exclude_ids: this.recentRandomVideoIDs.slice(-12)
         });
         await this.handleRandomPlayResult(result);

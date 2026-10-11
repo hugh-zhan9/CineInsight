@@ -21,12 +21,16 @@ func (s *VideoService) GetAllVideos() ([]models.Video, error) {
 // GetVideosByIDs 按传入顺序返回这些视频（含标签）。已删除或查不到的 ID 直接跳过，
 // 调用方据此知道哪些条目已经不在库里。
 func (s *VideoService) GetVideosByIDs(ids []uint) ([]models.Video, error) {
+	return getVideosByIDsFrom(database.DB, ids)
+}
+
+func getVideosByIDsFrom(db *gorm.DB, ids []uint) ([]models.Video, error) {
 	orderedIDs := uniqueUintIDs(ids)
 	if len(orderedIDs) == 0 {
 		return []models.Video{}, nil
 	}
 	var found []models.Video
-	if err := database.DB.Preload("Tags").Where("id IN ?", orderedIDs).Find(&found).Error; err != nil {
+	if err := db.Preload("Tags").Where("id IN ?", orderedIDs).Find(&found).Error; err != nil {
 		return nil, err
 	}
 	byID := make(map[uint]models.Video, len(found))

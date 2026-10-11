@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -184,20 +185,25 @@ func (a *App) PlayVideo(videoID uint) (*services.PlaybackAttemptResult, error) {
 func (a *App) PlayRandomVideoWithFilter(request services.RandomPlayRequest) (*services.PlaybackAttemptResult, error) {
 	result, err := a.videoService.PlayRandomVideoWithFilter(request)
 	if result != nil {
-		log.Printf("API PlayRandomVideoWithFilter mode=%s dispatch=%v reason=%s err=%v", request.Mode, result.DispatchSucceeded, result.ReasonCode, err)
+		log.Printf("API PlayRandomVideoWithFilter %s dispatch=%v reason=%s err=%v", randomConditionsLog(request), result.DispatchSucceeded, result.ReasonCode, err)
 	} else {
-		log.Printf("API PlayRandomVideoWithFilter mode=%s result=nil err=%v", request.Mode, err)
+		log.Printf("API PlayRandomVideoWithFilter %s result=nil err=%v", randomConditionsLog(request), err)
 	}
 	return result, err
+}
+
+// randomConditionsLog 只记随机条件本身，不记关键词等筛选内容。
+func randomConditionsLog(request services.RandomPlayRequest) string {
+	return fmt.Sprintf("watch=%s favorites=%v max_duration=%d exclude=%d", request.WatchState, request.FavoritesOnly, request.MaxDurationSeconds, len(request.ExcludeIDs))
 }
 
 // PickRandomVideos 在当前片库筛选范围内随机抽取若干视频，只返回列表不发起播放。
 func (a *App) PickRandomVideos(request services.RandomPlayRequest, count int) (*services.RandomPickResult, error) {
 	result, err := a.videoService.PickRandomVideos(request, count)
 	if result != nil {
-		log.Printf("API PickRandomVideos mode=%s count=%d picked=%d reason=%s err=%v", request.Mode, count, len(result.Videos), result.ReasonCode, err)
+		log.Printf("API PickRandomVideos %s count=%d picked=%d reason=%s err=%v", randomConditionsLog(request), count, len(result.Videos), result.ReasonCode, err)
 	} else {
-		log.Printf("API PickRandomVideos mode=%s count=%d result=nil err=%v", request.Mode, count, err)
+		log.Printf("API PickRandomVideos %s count=%d result=nil err=%v", randomConditionsLog(request), count, err)
 	}
 	return result, err
 }

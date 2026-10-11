@@ -55,16 +55,17 @@
           <option value="rating_asc">评分从低到高</option>
         </select>
 
-        <!-- 主键带上当前随机模式（PLAY-08）；语义模式下随机会忽略搜索词、从全库抽，所以禁用并说明原因。 -->
+        <!-- 随机与「今晚看什么」合并（2026-10-11）：主键按当前随机条件立即播放一部，▾ 里打开今晚看什么、
+             随机 N 部和条件开关；主键带上生效的条件（PLAY-08）。语义模式下随机会忽略搜索词、从全库抽，所以禁用并说明原因。 -->
         <div class="split-btn">
           <button
             type="button"
             class="split-btn__main"
             data-test="random-play-main"
             :disabled="randomDisabled"
-            :title="randomDisabled ? randomDisabledReason : null"
+            :title="randomDisabled ? randomDisabledReason : '在当前片库筛选内按随机条件立即播放一部，播放越少越容易被抽到'"
             @click="$emit('play-random')"
-          >按当前条件随机 · {{ randomModeLabel }}</button>
+          >{{ randomButtonLabel }}</button>
           <span class="split-btn__divider" aria-hidden="true"></span>
           <button
             ref="randomTrigger"
@@ -75,7 +76,6 @@
           >▾</button>
         </div>
 
-        <button type="button" class="toolbar-btn" data-test="tonight-open" :disabled="searchMode === 'semantic' || migrationRunning || incrementalScan.running" :title="searchMode === 'semantic' ? '选片暂不支持语义搜索范围，请切换文件或字幕搜索' : null" @click="$emit('open-tonight')">今晚看什么</button>
         <button type="button" class="toolbar-btn" data-test="toolbar-search-scenes" title="带上当前筛选条件进入场景检索（语义搜索词不带入）" @click="$emit('search-scenes')">在当前筛选中搜场景</button>
 
         <button
@@ -336,8 +336,7 @@ import { runtimeEventsMixin } from './runtimeEvents.js';
 import { logFrontend } from '../../utils/frontendLog.js';
 import { registerCommands, unregisterCommands } from '../../utils/commandRegistry.js';
 
-// 随机模式在按钮与菜单上的说法（D-PC44：「优先未看」实为只抽未看，改叫「仅未看」）。
-const RANDOM_MODE_LABELS = { balanced: '均衡', unwatched: '仅未看', favorites: '仅收藏' };
+import { normalizeRandomConditions, randomConditionTags } from '../../utils/randomPlayback.js';
 
 // 人物组合框一次最多列出的候选数。
 const PERSON_OPTION_LIMIT = 20;
@@ -370,7 +369,8 @@ export default {
     resOptions: { type: Array, default: () => [] },
     savedViews: { type: Array, default: () => [] },
     selectedSavedViewID: { type: [Number, String], default: 0 },
-    randomMode: { type: String, default: 'balanced' },
+    // 随机播放、随机 N 部与今晚看什么共用的条件：{ watchState, favoritesOnly, maxMinutes }。
+    randomConditions: { type: Object, default: () => ({}) },
     randomPickLoading: { type: Boolean, default: false },
     randomPickSize: { type: Number, default: 10 },
     semanticAvailable: { type: Boolean, default: true },
@@ -395,7 +395,7 @@ export default {
     collapseVersions: { type: Boolean, default: true }
   },
   emits: [
-    'open-tonight', 'search-scenes',
+    'search-scenes',
     'update:searchKeyword', 'update:smartView', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
     'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'open-tag-manager',
@@ -649,17 +649,31 @@ export default {
       items.push({ id: 'delete-current', label: '删除该视图', danger: true, disabled: !this.selectedSavedViewID });
       return items;
     },
+    // 观看状态与「仅收藏」是硬过滤（不是「优先」，PLAY-08）；时长上限在今晚看什么里设，这里只能取消。
     randomMenuItems() {
-      return [
-        { id: 'mode:balanced', label: RANDOM_MODE_LABELS.balanced, checked: this.randomMode === 'balanced' },
-        { id: 'mode:unwatched', label: RANDOM_MODE_LABELS.unwatched, checked: this.randomMode === 'unwatched' },
-        { id: 'mode:favorites', label: RANDOM_MODE_LABELS.favorites, checked: this.randomMode === 'favorites' },
+      const conditions = normalizeRandomConditions(this.randomConditions);
+      const items = [
+        { id: 'tonight', label: '今晚看什么…', disabled: this.tonightDisabled },
+        { id: 'pick-ten', label: `随机 ${this.randomPickSize} 部`, disabled: this.randomPickLoading || this.randomDisabled },
         { divider: true },
-        { id: 'pick-ten', label: `随机 ${this.randomPickSize} 部`, disabled: this.randomPickLoading || this.randomDisabled }
+        { heading: '观看状态' },
+        { id: 'watch:unwatched', label: '探索 · 只抽没看过的', checked: conditions.watchState === 'unwatched' },
+        { id: 'watch:any', label: '不限', checked: conditions.watchState === 'any' },
+        { id: 'watch:watched', label: '重温 · 只抽看过的', checked: conditions.watchState === 'watched' },
+        { divider: true },
+        { id: 'favorites', label: '仅收藏', checked: conditions.favoritesOnly }
       ];
+      if (conditions.maxMinutes > 0) {
+        items.push({ id: 'duration:clear', label: `取消时长上限（≤${conditions.maxMinutes} 分钟）` });
+      }
+      return items;
     },
-    randomModeLabel() {
-      return RANDOM_MODE_LABELS[this.randomMode] || RANDOM_MODE_LABELS.balanced;
+    randomButtonLabel() {
+      return ['随机播放', ...randomConditionTags(this.randomConditions)].join(' · ');
+    },
+    // 今晚看什么沿用原入口的禁用条件：语义搜索没有可复用的筛选边界，迁移与增量扫描期间不选片。
+    tonightDisabled() {
+      return this.searchMode === 'semantic' || this.migrationRunning || Boolean(this.incrementalScan?.running);
     },
     randomDisabled() {
       return this.searchMode === 'semantic';

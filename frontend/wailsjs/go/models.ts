@@ -8820,7 +8820,9 @@ export namespace services {
 	}
 	export class RandomPlayRequest {
 	    filter: LibraryFilter;
-	    mode: string;
+	    watch_state: string;
+	    favorites_only: boolean;
+	    max_duration_seconds: number;
 	    exclude_ids: number[];
 	
 	    static createFrom(source: any = {}) {
@@ -8830,7 +8832,9 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.filter = this.convertValues(source["filter"], LibraryFilter);
-	        this.mode = source["mode"];
+	        this.watch_state = source["watch_state"];
+	        this.favorites_only = source["favorites_only"];
+	        this.max_duration_seconds = source["max_duration_seconds"];
 	        this.exclude_ids = source["exclude_ids"];
 	    }
 	
@@ -11515,46 +11519,6 @@ export namespace services {
 	        this.is_stale = source["is_stale"];
 	        this.has_error = source["has_error"];
 	    }
-	}
-	export class TonightRequest {
-	    filter: LibraryFilter;
-	    max_duration_seconds: number;
-	    unwatched_only: boolean;
-	    watched_only: boolean;
-	    favorites_only: boolean;
-	    limit: number;
-	
-	    static createFrom(source: any = {}) {
-	        return new TonightRequest(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.filter = this.convertValues(source["filter"], LibraryFilter);
-	        this.max_duration_seconds = source["max_duration_seconds"];
-	        this.unwatched_only = source["unwatched_only"];
-	        this.watched_only = source["watched_only"];
-	        this.favorites_only = source["favorites_only"];
-	        this.limit = source["limit"];
-	    }
-	
-		convertValues(a: any, classs: any, asMap: boolean = false): any {
-		    if (!a) {
-		        return a;
-		    }
-		    if (a.slice && a.map) {
-		        return (a as any[]).map(elem => this.convertValues(elem, classs));
-		    } else if ("object" === typeof a) {
-		        if (asMap) {
-		            for (const key of Object.keys(a)) {
-		                a[key] = new classs(a[key]);
-		            }
-		            return a;
-		        }
-		        return new classs(a);
-		    }
-		    return a;
-		}
 	}
 	export class TonightSuggestion {
 	    video: models.Video;

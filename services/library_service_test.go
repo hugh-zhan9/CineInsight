@@ -277,12 +277,12 @@ func TestFilteredRandomPlayHonorsViewModeStaleAndRecentExclusions(t *testing.T) 
 	if err != nil || !result.DispatchSucceeded || result.Video == nil || result.Video.ID != eligible.ID {
 		t.Fatalf("字幕筛选随机选择错误 result=%+v err=%v", result, err)
 	}
-	result, err = svc.PlayRandomVideoWithFilter(RandomPlayRequest{Mode: RandomPlayModeFavorites})
+	result, err = svc.PlayRandomVideoWithFilter(RandomPlayRequest{FavoritesOnly: true})
 	if err != nil || !result.DispatchSucceeded || result.Video == nil || result.Video.ID != eligible.ID {
 		t.Fatalf("筛选随机选择错误 result=%+v err=%v", result, err)
 	}
 	result, err = svc.PlayRandomVideoWithFilter(RandomPlayRequest{
-		Mode: RandomPlayModeFavorites, ExcludeIDs: []uint{eligible.ID, eligible.ID},
+		FavoritesOnly: true, ExcludeIDs: []uint{eligible.ID, eligible.ID},
 	})
 	if err != nil || result.DispatchSucceeded || result.ReasonCode != "no_filtered_videos" {
 		t.Fatalf("排除后应明确空集 result=%+v err=%v", result, err)
@@ -351,7 +351,7 @@ func TestPickRandomVideosSharesRandomPlayBoundariesAndLeavesStatsUntouched(t *te
 		t.Fatalf("创建失效候选失败: %v", err)
 	}
 
-	result, err := svc.PickRandomVideos(RandomPlayRequest{Mode: RandomPlayModeFavorites}, 10)
+	result, err := svc.PickRandomVideos(RandomPlayRequest{FavoritesOnly: true}, 10)
 	if err != nil {
 		t.Fatalf("随机取样失败: %v", err)
 	}
@@ -371,7 +371,7 @@ func TestPickRandomVideosSharesRandomPlayBoundariesAndLeavesStatsUntouched(t *te
 			t.Fatalf("收藏模式取样命中了非收藏视频: id=%d", video.ID)
 		}
 	}
-	if result.SelectionReason != randomModeReason(RandomPlayModeFavorites) {
+	if result.SelectionReason != randomSelectionReason(RandomPlayRequest{WatchState: RandomWatchAny, FavoritesOnly: true}) {
 		t.Fatalf("取样理由应与随机播放一致: %s", result.SelectionReason)
 	}
 
@@ -384,8 +384,8 @@ func TestPickRandomVideosSharesRandomPlayBoundariesAndLeavesStatsUntouched(t *te
 	}
 
 	excluded, err := svc.PickRandomVideos(RandomPlayRequest{
-		Mode:       RandomPlayModeFavorites,
-		ExcludeIDs: []uint{created[0].ID, created[2].ID, created[4].ID},
+		FavoritesOnly: true,
+		ExcludeIDs:    []uint{created[0].ID, created[2].ID, created[4].ID},
 	}, 10)
 	if err != nil {
 		t.Fatalf("排除取样失败: %v", err)
@@ -423,8 +423,10 @@ func TestPickRandomVideosCapsCountAndRejectsInvalidCount(t *testing.T) {
 	if _, err := svc.PickRandomVideos(RandomPlayRequest{}, RandomPickMaxCount+1); err == nil {
 		t.Fatalf("超过上限的条数应被拒绝")
 	}
-	if _, err := svc.PickRandomVideos(RandomPlayRequest{Mode: "nope"}, 10); err == nil {
-		t.Fatalf("非法随机模式应被拒绝")
+	for _, request := range []RandomPlayRequest{{WatchState: "nope"}, {MaxDurationSeconds: -1}, {MaxDurationSeconds: 86401}} {
+		if _, err := svc.PickRandomVideos(request, 10); err == nil {
+			t.Fatalf("非法随机条件应被拒绝: %+v", request)
+		}
 	}
 }
 

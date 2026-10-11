@@ -781,7 +781,7 @@ export function StopVideoWallpaper():Promise<services.WallpaperStatus>;
 
 export function SuggestLibraryMatchesBatch(arg1:Array<services.LibraryMatchQuery>):Promise<Record<string, Array<services.LibraryMatchSuggestion>>>;
 
-export function SuggestTonightVideos(arg1:services.TonightRequest):Promise<Array<services.TonightSuggestion>>;
+export function SuggestTonightVideos(arg1:services.RandomPlayRequest,arg2:number):Promise<Array<services.TonightSuggestion>>;
 
 export function SwitchBackendConfigOnly(arg1:string):Promise<services.DatabaseSwitchConfigResult>;
 
