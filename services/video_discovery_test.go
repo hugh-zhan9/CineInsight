@@ -152,3 +152,30 @@ func TestTonightScopeReadUsesCallerDeadline(t *testing.T) {
 		t.Fatal("scope lookup waited without the caller deadline")
 	}
 }
+
+func TestTonightWatchedOnlyForRewatching(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	rows := []models.Video{
+		{Name: "watched", Path: "/fixture/w", Directory: "/fixture", Duration: 10, IsWatched: true},
+		{Name: "unwatched", Path: "/fixture/u", Directory: "/fixture", Duration: 10},
+	}
+	for i := range rows {
+		if err := database.DB.Create(&rows[i]).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{WatchedOnly: true})
+	if err != nil || len(got) != 1 || got[0].Video.ID != rows[0].ID {
+		t.Fatalf("watched_only should keep only watched videos: %+v %v", got, err)
+	}
+	if !strings.Contains(strings.Join(got[0].Reasons, " "), "看过，适合重温") {
+		t.Fatalf("missing rewatch reason: %+v", got[0].Reasons)
+	}
+	got, err = (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{UnwatchedOnly: true})
+	if err != nil || len(got) != 1 || got[0].Video.ID != rows[1].ID {
+		t.Fatalf("unwatched_only should filter out watched videos: %+v %v", got, err)
+	}
+	if _, err := (&VideoService{}).SuggestTonight(context.Background(), TonightRequest{UnwatchedOnly: true, WatchedOnly: true}); err == nil {
+		t.Fatal("unwatched_only and watched_only together must be rejected")
+	}
+}

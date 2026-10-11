@@ -13,7 +13,7 @@ describe('TonightPickerDialog', () => {
     const filter = { keyword: '海边', tag_ids: [3, 5], person_ids: [7], smart_view: 'watched', min_rating: 7 };
     const wrapper = mount(TonightPickerDialog, { props: { filter } });
     await flushPromises();
-    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith({ filter, max_duration_seconds: 5400, unwatched_only: false, favorites_only: false, limit: 6 });
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith({ filter, max_duration_seconds: 5400, unwatched_only: false, watched_only: false, favorites_only: false, limit: 6 });
     expect(wrapper.text()).toContain('没有符合全部条件');
     await wrapper.get('[data-test="tonight-minutes"]').setValue(30);
     await wrapper.get('[data-test="tonight-favorites"]').setValue(true);
@@ -31,7 +31,7 @@ describe('TonightPickerDialog', () => {
     await flushPromises();
     first([suggestion(1)]); await flushPromises();
     expect(wrapper.text()).toContain('video 2'); expect(wrapper.text()).not.toContain('video 1');
-    await wrapper.get('[data-test="tonight-unwatched"]').setValue(false);
+    await wrapper.get('[data-test="tonight-watch-state"]').setValue('any');
     expect(wrapper.findAll('[data-test="tonight-result"]')).toHaveLength(0);
     expect(wrapper.find('[data-test="tonight-empty"]').exists()).toBe(false);
   });
@@ -74,5 +74,19 @@ describe('TonightPickerDialog tags', () => {
     const badges = groups[0].findAll('.tag-badge');
     expect(badges.map(badge => badge.text())).toEqual(['科幻', '收藏夹']);
     expect(badges[0].attributes('style')).toContain('rgba(51, 102, 255, 0.35)');
+  });
+});
+
+describe('TonightPickerDialog watch state', () => {
+  it('filters out watched videos by default and can switch to any or rewatch', async () => {
+    const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+    await flushPromises();
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ unwatched_only: true, watched_only: false }));
+    await wrapper.get('[data-test="tonight-watch-state"]').setValue('watched');
+    await wrapper.get('form').trigger('submit');
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ unwatched_only: false, watched_only: true }));
+    await wrapper.get('[data-test="tonight-watch-state"]').setValue('any');
+    await wrapper.get('form').trigger('submit');
+    expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ unwatched_only: false, watched_only: false }));
   });
 });

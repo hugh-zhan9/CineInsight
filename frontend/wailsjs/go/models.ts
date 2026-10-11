@@ -10666,6 +10666,7 @@ export namespace services {
 	    filter: LibraryFilter;
 	    max_duration_seconds: number;
 	    unwatched_only: boolean;
+	    watched_only: boolean;
 	    favorites_only: boolean;
 	    limit: number;
 	
@@ -10678,6 +10679,7 @@ export namespace services {
 	        this.filter = this.convertValues(source["filter"], LibraryFilter);
 	        this.max_duration_seconds = source["max_duration_seconds"];
 	        this.unwatched_only = source["unwatched_only"];
+	        this.watched_only = source["watched_only"];
 	        this.favorites_only = source["favorites_only"];
 	        this.limit = source["limit"];
 	    }

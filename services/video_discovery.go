@@ -14,8 +14,10 @@ type TonightRequest struct {
 	Filter             LibraryFilter `json:"filter"`
 	MaxDurationSeconds int64         `json:"max_duration_seconds"`
 	UnwatchedOnly      bool          `json:"unwatched_only"`
-	FavoritesOnly      bool          `json:"favorites_only"`
-	Limit              int           `json:"limit"`
+	// WatchedOnly 只推荐已看过的（重温）；与 UnwatchedOnly 互斥。
+	WatchedOnly   bool `json:"watched_only"`
+	FavoritesOnly bool `json:"favorites_only"`
+	Limit         int  `json:"limit"`
 }
 
 type TonightSuggestion struct {
@@ -34,6 +36,9 @@ func (s *VideoService) SuggestTonight(ctx context.Context, request TonightReques
 	}
 	if request.Limit == 0 {
 		request.Limit = 6
+	}
+	if request.UnwatchedOnly && request.WatchedOnly {
+		return nil, fmt.Errorf("过滤已看与只推荐看过的不能同时选择")
 	}
 	filter, err := normalizeLibraryFilter(request.Filter)
 	if err != nil {
@@ -60,6 +65,9 @@ func (s *VideoService) SuggestTonight(ctx context.Context, request TonightReques
 		if request.UnwatchedOnly {
 			query = query.Where("videos.is_watched = ?", false)
 		}
+		if request.WatchedOnly {
+			query = query.Where("videos.is_watched = ?", true)
+		}
 		if request.FavoritesOnly {
 			query = query.Where("videos.is_favorite = ?", true)
 		}
@@ -81,6 +89,8 @@ func (s *VideoService) SuggestTonight(ctx context.Context, request TonightReques
 			}
 			if !video.IsWatched {
 				reasons = append(reasons, "尚未标记已看")
+			} else if request.WatchedOnly {
+				reasons = append(reasons, "看过，适合重温")
 			}
 			if video.PersonalRating != nil {
 				reasons = append(reasons, fmt.Sprintf("个人评分 %.1f", *video.PersonalRating))

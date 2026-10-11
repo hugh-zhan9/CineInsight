@@ -5,7 +5,13 @@
     <p v-if="filter.keyword" class="help-text">当前关键词：{{ filter.keyword }}</p>
     <form class="tonight-picker__form" @submit.prevent="load">
       <label>可用时间（分钟）<input v-model.number="minutes" class="number-input" type="number" min="0" max="1440" step="1" data-test="tonight-minutes" /></label>
-      <label><input v-model="unwatchedOnly" type="checkbox" data-test="tonight-unwatched" />仅未看</label>
+      <label>观看状态
+        <select v-model="watchState" class="select-input tonight-picker__watch" data-test="tonight-watch-state">
+          <option value="unwatched">过滤已看（只推荐没看过的）</option>
+          <option value="any">不限</option>
+          <option value="watched">只推荐看过的（重温）</option>
+        </select>
+      </label>
       <label><input v-model="favoritesOnly" type="checkbox" data-test="tonight-favorites" />仅收藏</label>
       <button type="submit" class="btn-primary" :disabled="loading" data-test="tonight-search">{{ loading ? '正在挑选…' : '给我推荐' }}</button>
     </form>
@@ -37,8 +43,8 @@ export default {
   components: { BaseModal, RelatedVideoItem },
   props: { filter: { type: Object, required: true } },
   emits: ['close', 'preview', 'play'],
-  data() { return { minutes: 90, unwatchedOnly: this.filter.smart_view !== 'watched', favoritesOnly: false, items: [], loading: false, queried: false, error: '', generation: 0 }; },
-  computed: { queryKey() { return JSON.stringify([this.filter, this.minutes, this.unwatchedOnly, this.favoritesOnly]); } },
+  data() { return { minutes: 90, watchState: this.filter.smart_view === 'watched' ? 'any' : 'unwatched', favoritesOnly: false, items: [], loading: false, queried: false, error: '', generation: 0 }; },
+  computed: { queryKey() { return JSON.stringify([this.filter, this.minutes, this.watchState, this.favoritesOnly]); } },
   watch: { queryKey() { this.generation++; this.items = []; this.error = ''; this.queried = false; this.loading = false; } },
   mounted() { this.load(); },
   beforeUnmount() { this.generation++; },
@@ -52,7 +58,7 @@ export default {
       }
       this.loading = true;
       try {
-        const result = await SuggestTonightVideos({ filter: this.filter, max_duration_seconds: this.minutes * 60, unwatched_only: this.unwatchedOnly, favorites_only: this.favoritesOnly, limit: 6 });
+        const result = await SuggestTonightVideos({ filter: this.filter, max_duration_seconds: this.minutes * 60, unwatched_only: this.watchState === 'unwatched', watched_only: this.watchState === 'watched', favorites_only: this.favoritesOnly, limit: 6 });
         if (generation !== this.generation) return;
         this.items = result || []; this.queried = true;
       } catch (err) {
@@ -69,6 +75,7 @@ export default {
 .tonight-picker__form { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
 .tonight-picker__form label { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }
 .tonight-picker__form .number-input { width: 96px; }
+.tonight-picker__watch { width: auto; min-width: 200px; }
 .tonight-picker__form input[type=checkbox] { width: 16px; height: 16px; margin: 0; accent-color: var(--accent-color); }
 .tonight-picker__header h3 { margin: 0; font-size: 17px; }
 .tonight-picker__results { overflow-y: auto; min-height: 0; }
