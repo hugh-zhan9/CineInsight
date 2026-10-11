@@ -15,6 +15,11 @@
     <div class="tonight-picker__results">
       <article v-for="item in items" :key="item.video.id" data-test="tonight-result">
         <RelatedVideoItem :video="item.video" action-label="播放" @open="$emit('preview', item.video)" @action="$emit('play', item.video)" />
+        <div v-if="item.video.tags?.length" class="tonight-picker__tags" data-test="tonight-tags">
+          <span v-for="tag in item.video.tags" :key="tag.id" class="tag-badge" :style="{ backgroundColor: tagColor(tag.color) }" :title="tag.name">
+            <span class="tag-badge__name">{{ tag.name }}</span>
+          </span>
+        </div>
         <p class="help-text">{{ item.reasons.join(' · ') }}</p>
       </article>
     </div>
@@ -25,6 +30,7 @@
 import { SuggestTonightVideos } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
+import { tagBackgroundColor } from '../utils/tagColor.js';
 
 export default {
   name: 'TonightPickerDialog',
@@ -37,6 +43,7 @@ export default {
   mounted() { this.load(); },
   beforeUnmount() { this.generation++; },
   methods: {
+    tagColor(hex) { return tagBackgroundColor(hex); },
     async load() {
       const generation = ++this.generation;
       this.items = []; this.error = ''; this.queried = false;
@@ -66,5 +73,6 @@ export default {
 .tonight-picker__header h3 { margin: 0; font-size: 17px; }
 .tonight-picker__results { overflow-y: auto; min-height: 0; }
 .tonight-picker__results article { margin: 10px 0; }
+.tonight-picker__tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0 0; }
 .tonight-picker__error { color: var(--danger-text); font-size: 13px; }
 </style>

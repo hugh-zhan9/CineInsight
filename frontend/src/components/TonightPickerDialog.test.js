@@ -59,3 +59,20 @@ describe('TonightPickerDialog', () => {
     expect(wrapper.emitted('play')[0]).toEqual([suggestion(3).video]);
   });
 });
+
+describe('TonightPickerDialog tags', () => {
+  it('shows each candidate tags with the tag colour', async () => {
+    api.SuggestTonightVideos.mockResolvedValue([{
+      video: { id: 7, name: 'tagged.mp4', tags: [{ id: 1, name: '科幻', color: '#3366ff' }, { id: 2, name: '收藏夹', color: '' }] },
+      reasons: ['未看']
+    }, { video: { id: 8, name: 'plain.mp4', tags: [] }, reasons: ['未看'] }]);
+    const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+    await wrapper.get('form').trigger('submit');
+    await flushPromises();
+    const groups = wrapper.findAll('[data-test="tonight-tags"]');
+    expect(groups).toHaveLength(1);
+    const badges = groups[0].findAll('.tag-badge');
+    expect(badges.map(badge => badge.text())).toEqual(['科幻', '收藏夹']);
+    expect(badges[0].attributes('style')).toContain('rgba(51, 102, 255, 0.35)');
+  });
+});

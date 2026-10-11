@@ -294,8 +294,10 @@
       </div>
     </div>
 
-    <section v-if="folderModeRoot && folderGroups.length" class="photo-folder-grid" data-test="photo-folder-grid">
-      <article v-for="folder in folderGroups" :key="folder.directory" class="photo-folder-card glass-surface">
+    <div v-if="folderModeRoot && folderGroups.length" ref="folderShell" class="photo-folder-window" data-test="photo-folder-window">
+    <div v-if="folderWindowed && folderWindow.topSpacer > 0" :style="{ height: `${folderWindow.topSpacer}px` }" aria-hidden="true"></div>
+    <section class="photo-folder-grid" data-test="photo-folder-grid">
+      <article v-for="folder in renderedFolders" :key="folder.directory" class="photo-folder-card glass-surface">
         <button
           type="button"
           class="photo-folder-card__open"
@@ -333,6 +335,8 @@
         >删除文件夹</button>
       </article>
     </section>
+    <div v-if="folderWindowed && folderWindow.bottomSpacer > 0" :style="{ height: `${folderWindow.bottomSpacer}px` }" aria-hidden="true"></div>
+    </div>
 
     <section
       v-else-if="images.length"
@@ -766,6 +770,11 @@ const CARD_META_HEIGHT = 86;
 const CARD_BORDER = 2;
 const TIMELINE_HEADER_HEIGHT = 40;
 const OVERSCAN_ROWS = 3;
+// 文件夹卡片网格：最小列宽与 .photo-folder-grid 的 minmax(220px, 1fr) 一致；卡片等高（封面定比例 +
+// 单行信息条），首帧按估计高度渲染前几行，挂载后实测一张卡片的高度再按行窗口化。
+const FOLDER_MIN_COLUMN_WIDTH = 220;
+const FOLDER_CARD_ESTIMATE = 260;
+const FOLDER_INITIAL_ROWS = 6;
 // 视口底边距列表底部小于该值时预取下一页；虚拟化后哨兵元素不再稳定出现在 DOM 里。
 const LOAD_MORE_THRESHOLD = 400;
 
@@ -873,7 +882,10 @@ export default {
       // 切回本页时探到列表首页与已加载的不一致，就提示可刷新（不自动刷，免得丢滚动位置）。
       libraryChanged: false,
       loadMoreQueued: false,
-      windowState: { startRow: 0, endRow: 0, topSpacer: 0, bottomSpacer: 0, totalHeight: 0 }
+      windowState: { startRow: 0, endRow: 0, topSpacer: 0, bottomSpacer: 0, totalHeight: 0 },
+      folderColumns: 1,
+      folderCardHeight: 0,
+      folderWindow: { startRow: 0, endRow: 0, topSpacer: 0, bottomSpacer: 0, totalHeight: 0 }
     };
   },
   computed: {
@@ -917,6 +929,26 @@ export default {
       return '';
     },
     virtualized() { return Boolean(this.scrollOwnerEl) && !this.scrollOwnerMissing; },
+    // 文件夹视图按行窗口化：几千个文件夹各带 4 张封面时整页渲染会让滚动和切页明显卡顿。
+    folderWindowed() { return this.virtualized && this.folderModeRoot; },
+    folderLayout() {
+      return buildPhotoLayout({
+        items: this.folderGroups,
+        columns: this.folderColumns,
+        cellHeight: this.folderCardHeight || FOLDER_CARD_ESTIMATE,
+        gap: GRID_GAP
+      });
+    },
+    renderedFolders() {
+      if (!this.folderWindowed) return this.folderGroups;
+      const rows = this.folderLayout.rows;
+      if (this.folderWindow.endRow <= this.folderWindow.startRow) {
+        return this.folderGroups.slice(0, this.folderColumns * FOLDER_INITIAL_ROWS);
+      }
+      const first = rows[this.folderWindow.startRow];
+      const last = rows[this.folderWindow.endRow - 1];
+      return first && last ? this.folderGroups.slice(first.startIndex, last.endIndex) : [];
+    },
     // 网格是否真的在视野里：切走标签页或清理审阅整页接管时都不是。
     gridActive() { return this.pageActive && !this.showCleanup; },
     layout() {
@@ -1294,6 +1326,7 @@ export default {
     handleGridResize() {
       // 隐藏时 ResizeObserver 会报 0 宽，按它重算会把布局清空。
       if (!this.gridActive) return;
+      if (this.folderModeRoot) this.$nextTick(() => this.syncFolderWindow());
       const anchorIndex = this.virtualized
         ? firstVisiblePhotoItemIndex(this.layout, this.windowState.startRow)
         : -1;
@@ -1316,7 +1349,44 @@ export default {
     },
     handleOwnerScroll() {
       if (!this.gridActive) return;
+      if (this.folderModeRoot) this.syncFolderWindow();
       this.syncWindow();
+    },
+    getFolderListTop() {
+      const shell = this.$refs.folderShell;
+      if (!this.scrollOwnerEl || !shell) return 0;
+      const ownerRect = this.scrollOwnerEl.getBoundingClientRect();
+      const shellRect = shell.getBoundingClientRect();
+      return this.scrollOwnerEl.scrollTop + (shellRect.top - ownerRect.top);
+    },
+    // syncFolderWindow 按容器宽度定列数、实测一张卡片定行高，再按滚动位置算出要渲染的行。
+    // 实测高度与上次不同（首帧用的是估计值）时下一帧再算一次，让占位高度对齐真实布局。
+    syncFolderWindow() {
+      if (!this.gridActive || !this.folderModeRoot || !this.folderGroups.length) return;
+      this.resolveScrollOwner();
+      const shell = this.$refs.folderShell;
+      if (!this.folderWindowed || !shell) return;
+      const width = shell.getBoundingClientRect().width || 0;
+      if (width <= 0) return;
+      const columns = resolvePhotoColumns(width, { minColumnWidth: FOLDER_MIN_COLUMN_WIDTH, gap: GRID_GAP });
+      const card = shell.querySelector('.photo-folder-card');
+      const cardHeight = Math.round(card?.getBoundingClientRect().height || 0);
+      const remeasured = columns !== this.folderColumns || (cardHeight > 0 && cardHeight !== this.folderCardHeight);
+      this.folderColumns = columns;
+      if (cardHeight > 0) this.folderCardHeight = cardHeight;
+      const next = calculatePhotoWindow({
+        layout: this.folderLayout,
+        scrollTop: this.scrollOwnerEl.scrollTop,
+        viewportHeight: this.scrollOwnerEl.clientHeight,
+        listTop: this.getFolderListTop(),
+        overscan: OVERSCAN_ROWS
+      });
+      const current = this.folderWindow;
+      if (next.startRow !== current.startRow || next.endRow !== current.endRow
+        || next.topSpacer !== current.topSpacer || next.bottomSpacer !== current.bottomSpacer) {
+        this.folderWindow = next;
+      }
+      if (remeasured) this.$nextTick(() => this.syncFolderWindow());
     },
     // 切回本页：先按记下的位置回写，再让虚拟化窗口跟上。占位块高度要等窗口重算后才
     // 回到原尺寸，浏览器可能先把 scrollTop 夹小，所以下一帧再校正一次。
@@ -1530,6 +1600,9 @@ export default {
         if (this._queryToken !== token) return;
         this.folderGroups = groups || [];
         this.folderLoadedOnce = true;
+        // 新的一组文件夹从第一行开始窗口化；等首帧卡片渲染出来再实测行高。
+        this.folderWindow = { startRow: 0, endRow: 0, topSpacer: 0, bottomSpacer: 0, totalHeight: 0 };
+        this.$nextTick(() => this.syncFolderWindow());
       } catch (err) {
         if (this._queryToken !== token) return;
         this.folderGroups = [];

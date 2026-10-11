@@ -141,6 +141,7 @@
 </template>
 
 <script>
+import { tagBackgroundColor } from '../utils/tagColor.js';
 import { resumePosition } from '../utils/watchState.js';
 import VersionGroupBadge from './video-list/VersionGroupBadge.vue';
 
@@ -244,11 +245,7 @@ export default {
       return `${Math.round(Math.max(-1, Math.min(1, Number(value) || 0)) * 100)}%`;
     },
     tagBgColor(hex) {
-      if (!hex || !hex.startsWith('#')) return hex;
-      const r = parseInt(hex.slice(1, 3), 16);
-      const g = parseInt(hex.slice(3, 5), 16);
-      const b = parseInt(hex.slice(5, 7), 16);
-      return `rgba(${r},${g},${b},0.35)`;
+      return tagBackgroundColor(hex);
     },
     getDirectoryLabel(video) {
       if (!this.directories || this.directories.length === 0) return video.directory;

@@ -8,6 +8,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -532,7 +533,11 @@ func (s *EnhancementService) runChunk(ctx context.Context, ffmpeg string, spec E
 	}); err != nil {
 		return fmt.Errorf("decode_failed: 抽帧失败: %v: %s", err, tail)
 	}
-	extracted, err := countFilesWithSuffix(inDir, ".png")
+	// 先清掉 AppleDouble 伴生文件再计数与交给 sidecar（exFAT 等卷上每张 PNG 都会多一个 `._` 文件）。
+	if err := removeAppleDoubleFrames(inDir); err != nil {
+		return fmt.Errorf("decode_failed: 清理抽帧目录失败: %v", err)
+	}
+	extracted, err := countEnhancementFrames(inDir)
 	if err != nil || extracted != frames {
 		return fmt.Errorf("decode_failed: 抽帧数量不完整（%d/%d）", extracted, frames)
 	}
@@ -542,7 +547,10 @@ func (s *EnhancementService) runChunk(ctx context.Context, ffmpeg string, spec E
 	if tail, err := s.runCommand(ctx, s.capability.BinaryPath, sidecarArgs); err != nil {
 		return fmt.Errorf("inference_failed: 超分推理失败: %v: %s", err, tail)
 	}
-	enhanced, err := countFilesWithSuffix(outDir, ".png")
+	if err := removeAppleDoubleFrames(outDir); err != nil {
+		return fmt.Errorf("inference_failed: 清理输出帧目录失败: %v", err)
+	}
+	enhanced, err := countEnhancementFrames(outDir)
 	if err != nil || enhanced != extracted {
 		return fmt.Errorf("inference_failed: 输出帧数不完整（%d/%d）", enhanced, extracted)
 	}
@@ -926,18 +934,41 @@ func manifestCommittedFrames(workdir string, manifest *enhancementSegmentManifes
 	return committed, nil
 }
 
-func countFilesWithSuffix(dir, suffix string) (int64, error) {
+// enhancementFrameName 是抽帧与 sidecar 输出的帧文件名（ffmpeg 模板 %06d.png）。
+var enhancementFrameName = regexp.MustCompile(`^\d{6}\.png$`)
+
+// countEnhancementFrames 只数 6 位序号的帧文件。exFAT / FAT / SMB 卷上 macOS 会给带扩展属性
+// （如 com.apple.provenance）的文件生成 AppleDouble 伴生文件 `._000001.png`，按 .png 后缀计数会翻倍。
+func countEnhancementFrames(dir string) (int64, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return 0, err
 	}
 	var count int64
 	for _, entry := range entries {
-		if !entry.IsDir() && strings.HasSuffix(entry.Name(), suffix) {
+		if entry.Type().IsRegular() && enhancementFrameName.MatchString(entry.Name()) {
 			count++
 		}
 	}
 	return count, nil
+}
+
+// removeAppleDoubleFrames 删除本任务帧目录里帧文件的 AppleDouble 伴生文件（`._<6 位序号>.png`）：
+// sidecar 按目录读取输入，会把它们当成坏 PNG。只动这一种名字，目录由本任务创建。
+func removeAppleDoubleFrames(dir string) error {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "._") && entry.Type().IsRegular() && enhancementFrameName.MatchString(name[2:]) {
+			if err := os.Remove(filepath.Join(dir, name)); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // enhancementErrorCode 从错误消息前缀提取固定错误码。

@@ -2088,3 +2088,57 @@ describe('PhotoLibraryPage 删除与回收站（P-030）', () => {
     expect(commandList().some(item => item.id === 'photos.openAIReview')).toBe(false);
   });
 });
+
+describe('PhotoLibraryPage folder view windowing', () => {
+  it('renders only the visible folder rows and follows scrolling', async () => {
+    const folders = Array.from({ length: 600 }, (_, index) => ({
+      directory: `/photos/album-${index}`, name: `album-${index}`, count: 10, total_size: 1024,
+      covers: [{ id: index * 10 + 1, name: 'a.jpg', format: 'jpeg' }]
+    }));
+    api.ListImageFolderGroups.mockResolvedValue(folders);
+    const host = document.createElement('div');
+    host.className = 'main-view';
+    document.body.appendChild(host);
+    let scrollTop = 0;
+    const width = 1200;
+    const viewport = 800;
+    const rect = (top, w, h) => ({ top, left: 0, width: w, height: h, bottom: top + h, right: w, x: 0, y: top, toJSON() {} });
+    Object.defineProperty(host, 'clientHeight', { configurable: true, get: () => viewport });
+    Object.defineProperty(host, 'scrollTop', { configurable: true, get: () => scrollTop, set: value => { scrollTop = Number(value) || 0; } });
+    host.getBoundingClientRect = () => rect(0, width, viewport);
+    const originalGetRect = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function patchedGetRect() {
+      if (this === host) return rect(0, width, viewport);
+      if (this.classList?.contains('photo-folder-window')) return rect(-scrollTop, width, 100000);
+      if (this.classList?.contains('photo-folder-card')) return rect(0, 220, 250);
+      return originalGetRect.call(this);
+    };
+    const wrapper = mount(PhotoLibraryPage, { props: { settings: baseSettings(), tags: [] }, attachTo: host });
+    try {
+      await flushPromises();
+      await wrapper.get('[data-test="photo-display-folders"]').trigger('click');
+      await flushPromises();
+      await wrapper.vm.$nextTick();
+      await wrapper.vm.$nextTick();
+      // 1200px 宽、220px 最小列宽 → 5 列；800px 视口 + 上下各 3 行预留，远少于 600 张卡片。
+      const cards = () => wrapper.findAll('.photo-folder-card');
+      const firstVisible = () => cards()[0].get('.photo-folder-card__meta strong').text();
+      expect(cards().length).toBeGreaterThan(0);
+      expect(cards().length).toBeLessThanOrEqual(5 * 10);
+      expect(firstVisible()).toBe('album-0');
+
+      scrollTop = 262 * 40; // 第 40 行左右
+      host.dispatchEvent(new Event('scroll'));
+      await wrapper.vm.$nextTick();
+      expect(cards().length).toBeLessThanOrEqual(5 * 10);
+      expect(firstVisible()).not.toBe('album-0');
+      expect(Number(firstVisible().replace('album-', ''))).toBeGreaterThan(150);
+      const spacer = wrapper.get('[data-test="photo-folder-window"]').element.firstElementChild;
+      expect(parseFloat(spacer.style.height)).toBeGreaterThan(0);
+    } finally {
+      Element.prototype.getBoundingClientRect = originalGetRect;
+      wrapper.unmount();
+      host.remove();
+    }
+  });
+});
