@@ -624,6 +624,36 @@ export namespace models {
 	        this.updated_at = source["updated_at"];
 	    }
 	}
+	export class PlaybackQueueState {
+	    id: number;
+	    revision: number;
+	    autoplay: boolean;
+	    player: string;
+	    current_entry_id?: number;
+	    status: string;
+	    active_token: string;
+	    last_error_code: string;
+	    last_error_message: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new PlaybackQueueState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.revision = source["revision"];
+	        this.autoplay = source["autoplay"];
+	        this.player = source["player"];
+	        this.current_entry_id = source["current_entry_id"];
+	        this.status = source["status"];
+	        this.active_token = source["active_token"];
+	        this.last_error_code = source["last_error_code"];
+	        this.last_error_message = source["last_error_message"];
+	        this.updated_at = source["updated_at"];
+	    }
+	}
 	export class SavedLibraryView {
 	    id: number;
 	    name: string;
@@ -8606,6 +8636,28 @@ export namespace services {
 	        this.autoplay = source["autoplay"];
 	    }
 	}
+	export class QueueEntryDTO {
+	    id: number;
+	    video_id: number;
+	    title: string;
+	    position: number;
+	    created_at: string;
+	    source_available: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new QueueEntryDTO(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.video_id = source["video_id"];
+	        this.title = source["title"];
+	        this.position = source["position"];
+	        this.created_at = source["created_at"];
+	        this.source_available = source["source_available"];
+	    }
+	}
 	export class QueueQuery {
 	    revision: number;
 	    cursor_position: number;
@@ -8654,34 +8706,10 @@ export namespace services {
 	        this.control_sequence = source["control_sequence"];
 	    }
 	}
-	export class QueueEntryDTO {
-	    id: number;
-	    video_id: number;
-	    title: string;
-	    position: number;
-	    created_at: string;
-	    source_available: boolean;
-	
-	    static createFrom(source: any = {}) {
-	        return new QueueEntryDTO(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.video_id = source["video_id"];
-	        this.title = source["title"];
-	        this.position = source["position"];
-	        this.created_at = source["created_at"];
-	        this.source_available = source["source_available"];
-	    }
-	}
 	export class QueueSnapshot {
-	    // Go type: models
-	    state: any;
+	    state: models.PlaybackQueueState;
 	    items: QueueEntryDTO[];
-	    // Go type: QueueEntryDTO
-	    current?: any;
+	    current?: QueueEntryDTO;
 	    total: number;
 	    has_more: boolean;
 	    cursor_position: number;
@@ -8697,9 +8725,9 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.state = this.convertValues(source["state"], null);
+	        this.state = this.convertValues(source["state"], models.PlaybackQueueState);
 	        this.items = this.convertValues(source["items"], QueueEntryDTO);
-	        this.current = this.convertValues(source["current"], null);
+	        this.current = this.convertValues(source["current"], QueueEntryDTO);
 	        this.total = source["total"];
 	        this.has_more = source["has_more"];
 	        this.cursor_position = source["cursor_position"];

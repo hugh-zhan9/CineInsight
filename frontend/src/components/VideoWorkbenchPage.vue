@@ -518,17 +518,18 @@ export default {
 </script>
 
 <style scoped>
-.workbench-page { padding: 20px 24px 40px; }
-.workbench-heading { margin-bottom: 14px; }
-.workbench-heading h2 { margin: 0 0 4px; }
-.workbench-heading p { margin: 0; color: var(--text-secondary); font-size: 13px; }
-.workbench-layout { display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); gap: 18px; align-items: start; }
-.workbench-main { min-width: 0; display: grid; gap: 14px; }
-.workbench-placeholder { color: var(--text-secondary); margin-top: 24px; text-align: center; }
-.workbench-project { display: flex; align-items: center; gap: 10px; }
+.workbench-page { display: grid; gap: 14px; align-content: start; padding: 14px 18px 32px; }
+/* 标题、项目列表、项目头与空态都放进与人物/作品集页同款的面板，避免内容直接漂在灰底上。 */
+.workbench-heading { padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.workbench-heading h2 { margin: 0 0 3px; font-size: 18px; }
+.workbench-heading p { margin: 0; color: var(--text-muted); font-size: 12px; }
+.workbench-layout { display: grid; grid-template-columns: minmax(240px, 300px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.workbench-main { min-width: 0; display: grid; gap: 12px; }
+.workbench-placeholder { margin: 0; padding: 56px 24px; border: 1px dashed var(--border-color); border-radius: var(--radius-md); background: var(--panel-bg); color: var(--text-muted); font-size: 13px; text-align: center; }
+.workbench-project { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
 .workbench-project h3 { margin: 0 0 2px; font-size: 16px; }
 @media (max-width: 760px) {
-  .workbench-page { padding: 16px; }
+  .workbench-page { padding: 12px; }
   .workbench-layout { grid-template-columns: minmax(0, 1fr); }
 }
 </style>

@@ -8,7 +8,9 @@
     <p v-if="error" class="notes-alert" role="alert">{{ error }}</p>
     <p v-if="loading" class="empty-hint">正在读取书签…</p>
     <p v-else-if="!error && !items.length" class="empty-hint">还没有片段书签。在视频详情中可以记下当前位置。</p>
-    <article v-for="item in items" :key="item.id" class="notes-entry" data-test="bookmark-row">
+    <article v-for="item in items" :key="item.id" class="notes-entry notes-entry--media" data-test="bookmark-row">
+      <NotesThumb :src="frameFor(item)" fallback="原片不可用" :clickable="item.source_available" :title="item.title" @open="resolve(item)" />
+      <div class="notes-entry__body">
       <h4>{{ item.title }}</h4><p>{{ item.video_title }} · {{ position(item.start_ms) }}<template v-if="item.end_ms != null"> — {{ position(item.end_ms) }}</template></p>
       <p class="notes-body">{{ item.note }}</p><p>{{ (item.tags || []).join(' · ') }}</p>
       <small v-if="!item.source_available" class="notes-unavailable">原片不可用；笔记仍保留</small>
@@ -16,6 +18,7 @@
         <button type="button" class="row-btn" @click="resolve(item)">定位 / 核对原片</button>
         <button type="button" class="row-btn" @click="edit(item)">编辑笔记</button>
         <button type="button" class="row-btn" @click="remove(item)">删除书签</button>
+      </div>
       </div>
     </article>
     <nav class="notes-toolbar notes-pager" aria-label="书签分页"><button type="button" class="btn-secondary btn-compact" :disabled="loading || !cursors.length" @click="previous">上一页</button><button type="button" class="btn-secondary btn-compact" :disabled="loading || !hasMore" @click="next">下一页</button></nav>
@@ -42,15 +45,19 @@
 <script>
 import { ListVideoBookmarks, SaveVideoBookmark, DeleteVideoBookmark, ResolveVideoBookmark } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import NotesThumb from './NotesThumb.vue';
 import { confirmAction } from '../utils/feedback.js';
 export default {
-  name: 'BookmarkPanel', components: { BaseModal },
+  name: 'BookmarkPanel', components: { BaseModal, NotesThumb },
   props: { pageActive: { type: Boolean, default: true }, video: { type: Object, default: null }, session: { type: Object, default: null }, currentPosition: { type: Function, default: () => 0 } },
   emits: ['open-bookmark', 'open-video'],
   data: () => ({ items: [], keyword: '', cursor: 0, cursors: [], hasMore: false, loading: false, error: '', draft: null, saving: false, formError: '', sourceChanged: false, editorSuspended: false, currentVideo: null, currentToken: '', acceptSource: false, generation: 0, resolveGeneration: 0 }),
   watch: { pageActive(active) { if (active) this.load(); }, keyword() { this.reset(); }, 'video.id'() { this.draft = null; this.resolveGeneration++; this.reset(); } },
   mounted() { this.load(); }, beforeUnmount() { this.generation++; this.resolveGeneration++; this._disposed = true; },
   methods: {
+    frameFor(item) {
+      return item.source_available && item.video_id ? `/preview/frame/${item.video_id}?ms=${Math.max(0, Number(item.start_ms) || 0)}&w=320` : '';
+    },
     position(ms) { return `${(Number(ms) / 1000).toFixed(3)} 秒`; },
     reset() { this.cursor = 0; this.cursors = []; this.items = []; this.load(); },
     async load(cursor = this.cursor, history = this.cursors) {

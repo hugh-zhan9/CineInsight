@@ -769,6 +769,9 @@ input:checked + .slider::before {
 .notes-entry .notes-body { color: var(--text-primary); font-size: 13px; white-space: pre-wrap; }
 .notes-entry .notes-body:empty { display: none; }
 .notes-entry .notes-toolbar { margin: 6px 0 0; }
+.notes-entry--media { grid-template-columns: 160px minmax(0, 1fr); column-gap: 14px; align-items: start; }
+.notes-entry__body { display: grid; gap: 4px; min-width: 0; }
+@media (max-width: 640px) { .notes-entry--media { grid-template-columns: minmax(0, 1fr); } }
 .notes-unavailable { color: var(--warning-text); font-size: 12px; }
 .notes-alert { margin: 0; color: var(--danger-text); font-size: 13px; }
 .modal.notes-modal { max-width: min(620px, 92vw); }

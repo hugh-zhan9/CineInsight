@@ -20,7 +20,9 @@
       <p v-if="error" class="notes-alert" role="alert">{{ error }}</p><p v-if="loading" class="empty-hint">正在读取…</p><p v-else-if="!error && !items.length" class="empty-hint">当前条件没有记录</p>
       <template v-for="(item, index) in items" :key="item.id">
         <h3 v-if="tab === 'diary' && (index === 0 || item.watched_on !== items[index - 1].watched_on)" class="notes-date">{{ item.watched_on }}</h3>
-        <article class="notes-entry" :data-test="tab === 'diary' ? 'diary-row' : 'playback-history-row'">
+        <article class="notes-entry notes-entry--media" :data-test="tab === 'diary' ? 'diary-row' : 'playback-history-row'">
+          <NotesThumb :src="thumbnailFor(item)" :fallback="item.video_id ? '原片不可用' : '片库外'" :clickable="Boolean(item.video_id && item.source_available)" :title="item.title" @open="$emit('open-video-id', item.video_id)" />
+          <div class="notes-entry__body">
           <h4>{{ item.title }}</h4>
           <template v-if="tab === 'diary'"><p>{{ origins[item.origin] || item.origin }} · {{ item.rating == null ? '未评分' : `${item.rating}分` }}<span v-if="item.date_basis === 'imported_local'"> · 历史日期按导入时本地时区解释</span></p><p class="notes-body">{{ item.note }}</p></template>
           <p v-else>{{ formatDate(item.played_at) }} · {{ sourceName(item.source) }}</p>
@@ -29,6 +31,7 @@
             <button v-if="item.video_id && item.source_available" type="button" class="row-btn" @click="$emit('open-video-id', item.video_id)">打开原片</button>
             <button type="button" class="row-btn" @click="editor = tab === 'diary' ? item : { title: item.title }">{{ tab === 'diary' ? '修订日记' : '手动补记' }}</button>
             <button v-if="tab === 'diary'" type="button" class="row-btn" @click="remove(item)">删除日记</button>
+          </div>
           </div>
         </article>
       </template>
@@ -41,13 +44,17 @@
 import { ListViewingDiary, DeleteViewingDiary, GetViewingYearReview, ListUnconfirmedPlaybackHistory } from '../../wailsjs/go/main/App';
 import BookmarkPanel from './BookmarkPanel.vue';
 import DiaryEditor from './DiaryEditor.vue';
+import NotesThumb from './NotesThumb.vue';
 import { confirmAction } from '../utils/feedback.js';
 export default {
-  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true } }, components: { BookmarkPanel, DiaryEditor }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
+  name: 'ViewingNotesPage', props: { pageActive: { type: Boolean, default: true } }, components: { BookmarkPanel, DiaryEditor, NotesThumb }, emits: ['open-bookmark', 'open-video', 'open-video-id'],
   data: () => ({ tabs: [{ key: 'diary', label: '观影日记' }, { key: 'bookmarks', label: '片段书签' }, { key: 'history', label: '播放记录' }], origins: { automatic: '自动记录', historical: '历史观看', manual: '手动补记' }, tab: 'diary', year: new Date().getFullYear(), keyword: '', items: [], cursor: null, cursors: [], hasMore: false, loading: false, error: '', review: null, reviewError: '', editor: null, generation: 0, reviewGeneration: 0 }),
   watch: { pageActive(active) { if (active) { this.load(); this.loadReview(); } }, tab() { this.reset(); }, year() { this.reset(); }, keyword() { this.reset(); } },
   mounted() { this.reset(); }, beforeUnmount() { this.generation++; this.reviewGeneration++; this._disposed = true; },
   methods: {
+    thumbnailFor(item) {
+      return item.video_id && item.source_available ? `/preview/thumbnail/${item.video_id}` : '';
+    },
     formatDate(value) { if (!value || String(value).startsWith('0001-01-01')) return '日期未知'; const date = new Date(value); return Number.isFinite(date.getTime()) ? date.toLocaleString() : '日期未知'; },
     sourceName(value) { return ({ desktop_play: '外部播放启动', desktop_random: '随机播放启动', mobile_feed: '手机端历史播放', legacy: '旧版播放记录', queue_view: '队列观看', inline_view: '应用内记录', jellyfin_view: 'Jellyfin记录' })[value] || '播放记录'; },
     reset() { this.cursor = null; this.cursors = []; this.items = []; this.hasMore = false; this.load(); this.loadReview(); },
@@ -81,8 +88,8 @@ export default {
 </script>
 <style scoped>
 .viewing-notes-page { display: grid; gap: 12px; align-content: start; overflow: auto; box-sizing: border-box; }
-.notes-header { display: flex; align-items: center; gap: 12px; }
-.notes-header h2 { margin: 0; font-size: 20px; }
+.notes-header { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.notes-header h2 { margin: 0; font-size: 18px; }
 .notes-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
 .notes-filters { margin-bottom: 0; }
 .notes-year { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 13px; white-space: nowrap; }

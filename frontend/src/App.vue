@@ -674,18 +674,27 @@ export default {
   z-index: 100;
   --wails-draggable: drag;
 }
-.header-left { pointer-events: none; }
-.header h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-primary); }
+.header-left { flex: none; pointer-events: none; }
+.header h1 { font-size: 15px; font-weight: 700; letter-spacing: 0.02em; color: var(--text-primary); white-space: nowrap; }
+/* 顶栏项一律不折行：窗口变窄时先收紧间距与字号、再隐藏库规模计数，仍放不下时导航横向滚动，
+   不能把「视频」挤成「视/频」两行。 */
 .header-nav {
   display: flex;
+  flex: 0 1 auto;
+  min-width: 0;
   gap: 2px;
   align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none;
   --wails-draggable: none;
 }
+.header-nav::-webkit-scrollbar { display: none; }
 
 .nav-btn {
+  flex: none;
   height: 32px;
   padding: 0 12px;
+  white-space: nowrap;
   background: transparent;
   border: none;
   border-radius: var(--radius);
@@ -709,6 +718,7 @@ export default {
 
 /* 右侧常驻入口：待处理、任务中心。角标 = 数量，红点 = 有任务上一轮失败（D-PC18、D-PC27）。 */
 .header-tools {
+  flex: none;
   margin-left: auto;
   display: flex;
   gap: 4px;
@@ -717,6 +727,8 @@ export default {
 }
 .header-tool-btn {
   position: relative;
+  flex: none;
+  white-space: nowrap;
   height: 30px;
   padding: 0 10px;
   display: inline-flex;
@@ -760,6 +772,18 @@ export default {
   --wails-draggable: none;
 }
 .header-tools + .header-counts { margin-left: 0; }
+@media (max-width: 1520px) {
+  .header-counts { display: none; }
+}
+@media (max-width: 1360px) {
+  .header { gap: 12px; }
+  .nav-btn { padding: 0 8px; }
+  .header-nav__divider { margin: 0 4px; }
+}
+@media (max-width: 1140px) {
+  .nav-btn { padding: 0 6px; font-size: 12.5px; }
+  .header-tool-btn { padding: 0 8px; }
+}
 
 .main-view { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; display: flex; flex-direction: column; }
 .relaunch-overlay {

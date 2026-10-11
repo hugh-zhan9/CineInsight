@@ -413,9 +413,9 @@ export default {
 
 <style scoped>
 .scenes-page { padding: 20px 24px 40px; max-width: 1040px; margin: 0 auto; }
-.scenes-heading { margin-bottom: 14px; }
-.scenes-heading h2 { margin: 0 0 4px; }
-.scenes-heading p { margin: 0; color: var(--text-secondary); font-size: 13px; }
+.scenes-heading { margin-bottom: 14px; padding: 12px 16px; border: 1px solid var(--hairline); border-radius: var(--radius-md); background: var(--panel-bg); }
+.scenes-heading h2 { margin: 0 0 3px; font-size: 18px; }
+.scenes-heading p { margin: 0; color: var(--text-muted); font-size: 12px; }
 .scenes-search { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .scenes-search__input { flex: 1 1 320px; min-width: 0; }
 .scenes-modes { display: inline-flex; border: 1px solid var(--border-color); border-radius: var(--radius); overflow: hidden; }

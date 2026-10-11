@@ -49,12 +49,21 @@ type QueueSession struct {
 	DesiredPaused   bool    `json:"desired_paused"`
 	ControlSequence uint64  `json:"control_sequence"`
 }
+
+// QueueSnapshot 显式列出 QueuePage 的字段而不是匿名嵌入：Wails 绑定生成器解析不了匿名嵌入结构体里
+// 引用的类型（models.PlaybackQueueState、*QueueEntryDTO），会报 "Not found" 并生成 any。JSON 形状不变。
 type QueueSnapshot struct {
-	QueuePage
-	Sequence     uint64            `json:"sequence"`
-	Session      *QueueSession     `json:"session"`
-	Capabilities []QueueCapability `json:"capabilities"`
-	Warning      string            `json:"warning"`
+	State          models.PlaybackQueueState `json:"state"`
+	Items          []QueueEntryDTO           `json:"items"`
+	Current        *QueueEntryDTO            `json:"current"`
+	Total          int64                     `json:"total"`
+	HasMore        bool                      `json:"has_more"`
+	CursorPosition int64                     `json:"cursor_position"`
+	CursorID       uint                      `json:"cursor_id"`
+	Sequence       uint64                    `json:"sequence"`
+	Session        *QueueSession             `json:"session"`
+	Capabilities   []QueueCapability         `json:"capabilities"`
+	Warning        string                    `json:"warning"`
 }
 type InlineQueueEvent struct {
 	Token         string  `json:"token"`
@@ -152,7 +161,8 @@ func (s *PlaybackQueueService) Snapshot(ctx context.Context, query QueueQuery) (
 		if err != nil {
 			return err
 		}
-		result = &QueueSnapshot{QueuePage: *page, Sequence: s.sequence, Capabilities: s.capabilities(), Warning: s.warning}
+		result = &QueueSnapshot{State: page.State, Items: page.Items, Current: page.Current, Total: page.Total, HasMore: page.HasMore,
+			CursorPosition: page.CursorPosition, CursorID: page.CursorID, Sequence: s.sequence, Capabilities: s.capabilities(), Warning: s.warning}
 		if r := s.run; r != nil && r.failed && r.token == page.State.ActiveToken {
 			result.State.Status = "failed"
 		}
