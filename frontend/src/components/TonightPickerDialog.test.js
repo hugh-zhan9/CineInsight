@@ -90,3 +90,31 @@ describe('TonightPickerDialog watch state', () => {
     expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ unwatched_only: false, watched_only: false }));
   });
 });
+
+describe('TonightPickerDialog live filters', () => {
+  it('re-queries automatically when the watch state or favourites change, labelled 探索/不限/重温', async () => {
+    vi.useFakeTimers();
+    try {
+      const wrapper = mount(TonightPickerDialog, { props: { filter: {} } });
+      await flushPromises();
+      const options = wrapper.findAll('[data-test="tonight-watch-state"] option').map(option => option.text());
+      expect(options).toEqual(['探索', '不限', '重温']);
+      const calls = api.SuggestTonightVideos.mock.calls.length;
+      await wrapper.get('[data-test="tonight-watch-state"]').setValue('watched');
+      await vi.advanceTimersByTimeAsync(350);
+      expect(api.SuggestTonightVideos.mock.calls.length).toBe(calls + 1);
+      expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ unwatched_only: false, watched_only: true }));
+      await wrapper.get('[data-test="tonight-favorites"]').setValue(true);
+      await vi.advanceTimersByTimeAsync(350);
+      expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ favorites_only: true }));
+      await wrapper.get('[data-test="tonight-minutes"]').setValue(3);
+      await wrapper.get('[data-test="tonight-minutes"]').setValue(30);
+      await vi.advanceTimersByTimeAsync(350);
+      expect(api.SuggestTonightVideos).toHaveBeenLastCalledWith(expect.objectContaining({ max_duration_seconds: 1800 }));
+      expect(api.SuggestTonightVideos.mock.calls.length).toBe(calls + 3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+

@@ -75,7 +75,10 @@ func (b *recapBuilder) assemble(videos map[uint]RecapVideo, images map[uint]Reca
 	if b.nowPlaying != nil {
 		now := *b.nowPlaying
 		now.Video = recapVideoOf(videos, now.Video.ID)
-		r.NowPlaying = &now
+		// 已删除或已移除的视频没有预览图，不作为「正在播放」展示。
+		if now.Video.Available {
+			r.NowPlaying = &now
+		}
 	}
 }
 

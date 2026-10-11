@@ -7,9 +7,9 @@
       <label>可用时间（分钟）<input v-model.number="minutes" class="number-input" type="number" min="0" max="1440" step="1" data-test="tonight-minutes" /></label>
       <label>观看状态
         <select v-model="watchState" class="select-input tonight-picker__watch" data-test="tonight-watch-state">
-          <option value="unwatched">过滤已看（只推荐没看过的）</option>
+          <option value="unwatched" title="只推荐还没看过的">探索</option>
           <option value="any">不限</option>
-          <option value="watched">只推荐看过的（重温）</option>
+          <option value="watched" title="只推荐看过的">重温</option>
         </select>
       </label>
       <label><input v-model="favoritesOnly" type="checkbox" data-test="tonight-favorites" />仅收藏</label>
@@ -45,12 +45,20 @@ export default {
   emits: ['close', 'preview', 'play'],
   data() { return { minutes: 90, watchState: this.filter.smart_view === 'watched' ? 'any' : 'unwatched', favoritesOnly: false, items: [], loading: false, queried: false, error: '', generation: 0 }; },
   computed: { queryKey() { return JSON.stringify([this.filter, this.minutes, this.watchState, this.favoritesOnly]); } },
-  watch: { queryKey() { this.generation++; this.items = []; this.error = ''; this.queried = false; this.loading = false; } },
+  // 条件一变就重新挑选（实时生效）：旧结果立即作废，分钟数输入期间按 300ms 合并一次请求。
+  watch: {
+    queryKey() {
+      this.generation++; this.items = []; this.error = ''; this.queried = false; this.loading = false;
+      clearTimeout(this.reloadTimer);
+      this.reloadTimer = setTimeout(() => this.load(), 300);
+    }
+  },
   mounted() { this.load(); },
-  beforeUnmount() { this.generation++; },
+  beforeUnmount() { this.generation++; clearTimeout(this.reloadTimer); },
   methods: {
     tagColor(hex) { return tagBackgroundColor(hex); },
     async load() {
+      clearTimeout(this.reloadTimer);
       const generation = ++this.generation;
       this.items = []; this.error = ''; this.queried = false;
       if (!Number.isInteger(this.minutes) || this.minutes < 0 || this.minutes > 1440) {

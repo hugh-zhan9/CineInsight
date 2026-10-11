@@ -475,8 +475,8 @@ func TestRecapCountsSoftDeletedVideosAndDropsHardDeleted(t *testing.T) {
 	}
 	now := recapAt(2026, time.October, 11, 12, 0)
 	soft := f.recap(now, RecapRequest{Period: RecapPeriodMonth, Year: 2026, Month: 10})
-	if soft.Overview.Plays != 1 || soft.Favorite == nil || soft.Favorite.Video.Available || soft.Favorite.Video.Title != "回收站.mp4" {
-		t.Fatalf("软删视频应照样计入且标不可用: %+v", soft.Favorite)
+	if soft.Overview.Plays != 1 || soft.Favorite != nil || len(soft.TopVideos) != 0 {
+		t.Fatalf("软删视频应计入总数，但没有预览图，不再作为最爱或排行展示: %+v %+v", soft.Overview, soft.Favorite)
 	}
 	if err := database.DB.Unscoped().Delete(&models.Video{}, video.ID).Error; err != nil {
 		t.Fatal(err)
@@ -547,5 +547,69 @@ func TestRecapActivityNotifiedAfterPlaybackCommit(t *testing.T) {
 	}
 	if len(got) != 3 || got[0].Source != models.PlayEventSourceDesktopPlay || got[1].Source != models.PlayEventSourceDesktopRandom || got[2].Source != PlayEventSourceInlineView {
 		t.Fatalf("应按提交顺序通知三次: %+v", got)
+	}
+}
+
+// 已删除（进回收站）或已移除（路径失效）的视频与图片没有预览图：回顾的总数、习惯与新发现/重温
+// 计数照常统计它们，但最爱、排行、新发现样本、每月之最与实时流水只展示仍可用的媒体。
+func TestRecapHidesDeletedAndRemovedMedia(t *testing.T) {
+	f := newRecapFixture(t)
+	day := func(hour int) time.Time { return recapAt(2026, time.October, 11, hour, 0) }
+	available := f.video("在库.mp4")
+	deleted := f.video("已删除.mp4")
+	removed := f.video("已移除.mp4")
+	f.play(available.ID, day(8), models.PlayEventSourceDesktopPlay)
+	for hour := 9; hour < 12; hour++ {
+		f.play(deleted.ID, day(hour), models.PlayEventSourceDesktopPlay)
+	}
+	f.play(removed.ID, day(12), models.PlayEventSourceDesktopPlay)
+	f.play(removed.ID, day(13), models.PlayEventSourceDesktopPlay)
+	goneImage := f.image("已删除.jpg")
+	keptImage := f.image("在库.jpg")
+	for hour := 8; hour < 11; hour++ {
+		f.view(goneImage.ID, day(hour), models.ImageViewSourceDesktopViewer)
+	}
+	f.view(keptImage.ID, day(14), models.ImageViewSourceDesktopViewer)
+	if err := database.DB.Delete(&models.Video{}, deleted.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", removed.ID).Update("is_stale", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Delete(&models.Image{}, goneImage.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	now := day(20)
+
+	month := f.recap(now, RecapRequest{Period: RecapPeriodMonth, Year: 2026, Month: 10})
+	if month.Overview.Plays != 6 || month.Overview.Videos != 3 || month.Overview.ImageViews != 4 {
+		t.Fatalf("总数应包含已删除/已移除的记录: %+v", month.Overview)
+	}
+	if month.Favorite == nil || month.Favorite.Video.ID != available.ID {
+		t.Fatalf("本期最爱应是仍在库的视频: %+v", month.Favorite)
+	}
+	if len(month.TopVideos) != 1 || month.TopVideos[0].Video.ID != available.ID {
+		t.Fatalf("排行只应展示仍在库的视频: %+v", month.TopVideos)
+	}
+	if month.FavoriteImage == nil || month.FavoriteImage.Image.ID != keptImage.ID || len(month.TopImages) != 1 {
+		t.Fatalf("图片最爱与排行只应展示仍在库的图片: %+v %+v", month.FavoriteImage, month.TopImages)
+	}
+	if month.Freshness.NewVideos != 3 || len(month.Freshness.NewSamples) != 1 || month.Freshness.NewSamples[0].ID != available.ID {
+		t.Fatalf("新发现计数照常、样本只展示在库视频: %+v", month.Freshness)
+	}
+
+	year := f.recap(now, RecapRequest{Period: RecapPeriodYear, Year: 2026})
+	if best := year.MonthBest[9].Best; best == nil || best.Video.ID != available.ID {
+		t.Fatalf("每月之最应跳过已删除/已移除的视频: %+v", year.MonthBest[9])
+	}
+
+	live := f.recap(now, RecapRequest{Period: RecapPeriodLive})
+	for _, item := range live.Feed {
+		if !item.Available || item.ID == deleted.ID && item.Kind == RecapActivityVideo || item.ID == goneImage.ID && item.Kind == RecapActivityImage {
+			t.Fatalf("实时流水不应包含已删除/已移除的媒体: %+v", live.Feed)
+		}
+	}
+	if len(live.Feed) != 2 {
+		t.Fatalf("实时流水应只剩在库的一部视频和一张图片: %+v", live.Feed)
 	}
 }

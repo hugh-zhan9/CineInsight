@@ -13,7 +13,7 @@ func (b *recapBuilder) yearExtras() error {
 	r := b.result
 	r.Months = append([]RecapMonthBucket{}, b.tally.months[:]...)
 	for month := range b.tally.monthVideos {
-		if ranked := rankRecapMedia(b.tally.monthVideos[month]); len(ranked) > 0 {
+		if ranked := recapOnlyAvailable(rankRecapMedia(b.tally.monthVideos[month]), b.availableVideos); len(ranked) > 0 {
 			b.monthBest[month] = ranked[0]
 			b.videoIDs[ranked[0].id] = true
 		}
@@ -55,6 +55,9 @@ func (b *recapBuilder) live(weekStart time.Time) error {
 		if event.PlayedAt.Before(b.w.start) {
 			break
 		}
+		if !b.availableVideos[event.VideoID] {
+			continue
+		}
 		b.feed = append(b.feed, RecapFeedItem{Kind: RecapActivityVideo, ID: event.VideoID, Source: event.Source, At: event.PlayedAt.In(b.loc)})
 	}
 	videoItems := len(b.feed)
@@ -62,6 +65,9 @@ func (b *recapBuilder) live(weekStart time.Time) error {
 		event := b.views[i]
 		if event.ViewedAt.Before(b.w.start) {
 			break
+		}
+		if !b.availableImages[event.ImageID] {
+			continue
 		}
 		b.feed = append(b.feed, RecapFeedItem{Kind: RecapActivityImage, ID: event.ImageID, Source: event.Source, At: event.ViewedAt.In(b.loc)})
 	}

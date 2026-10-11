@@ -24,8 +24,9 @@ func (b *recapBuilder) overview() error {
 
 // rankings 排出视频与图片 Top（Go 侧，已有全部期内计数）与标签 / 人物 / 作品集 Top（SQL 分组）。
 func (b *recapBuilder) rankings() error {
-	b.rankedVideos = rankRecapMedia(b.tally.videos)
-	b.rankedImages = rankRecapMedia(b.tally.images)
+	b.allRankedVideos = rankRecapMedia(b.tally.videos)
+	b.rankedVideos = recapOnlyAvailable(b.allRankedVideos, b.availableVideos)
+	b.rankedImages = recapOnlyAvailable(rankRecapMedia(b.tally.images), b.availableImages)
 	for index, item := range b.rankedVideos {
 		if index == recapTopVideos {
 			break
@@ -61,7 +62,7 @@ func (b *recapBuilder) freshness() error {
 		return err
 	}
 	f := &b.result.Freshness
-	for _, item := range b.rankedVideos {
+	for _, item := range b.allRankedVideos {
 		if !item.nonLegacy {
 			continue
 		}
@@ -71,7 +72,7 @@ func (b *recapBuilder) freshness() error {
 		case item.firstSource == models.PlayEventSourceLegacy:
 		default:
 			f.NewVideos++
-			if len(b.newSamples) < recapNewSamples {
+			if len(b.newSamples) < recapNewSamples && b.availableVideos[item.id] {
 				b.newSamples = append(b.newSamples, item)
 				b.videoIDs[item.id] = true
 			}

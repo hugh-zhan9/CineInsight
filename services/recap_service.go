@@ -81,14 +81,19 @@ type recapBuilder struct {
 	videoIDs map[uint]bool
 	imageIDs map[uint]bool
 
-	rankedVideos []*recapMediaTally
-	rankedImages []*recapMediaTally
-	newSamples   []*recapMediaTally
-	monthBest    [12]*recapMediaTally
-	feed         []RecapFeedItem
-	nowPlaying   *RecapNowPlaying
-	topTagWeight int64
-	topTagName   string
+	// rankedVideos / rankedImages 只含仍可展示的媒体（未删除、未失效）；allRankedVideos 含期内全部，
+	// 供新发现/重温计数使用。
+	rankedVideos    []*recapMediaTally
+	rankedImages    []*recapMediaTally
+	allRankedVideos []*recapMediaTally
+	availableVideos map[uint]bool
+	availableImages map[uint]bool
+	newSamples      []*recapMediaTally
+	monthBest       [12]*recapMediaTally
+	feed            []RecapFeedItem
+	nowPlaying      *RecapNowPlaying
+	topTagWeight    int64
+	topTagName      string
 }
 
 func (b *recapBuilder) build() error {
@@ -115,6 +120,9 @@ func (b *recapBuilder) build() error {
 		}
 	}
 	b.videoIDs, b.imageIDs = map[uint]bool{}, map[uint]bool{}
+	if err := b.loadAvailability(); err != nil {
+		return err
+	}
 	if err := b.overview(); err != nil {
 		return err
 	}
