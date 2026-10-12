@@ -108,7 +108,7 @@
     <div class="backup-status" :class="{ 'backup-status--error': backupStatus && !backupStatus.available }">
       <strong>{{ backupStatusText }}</strong>
       <span v-if="backupStatus?.last_success_at">最近成功：{{ formatBackupTime(backupStatus.last_success_at) }}</span>
-      <span v-if="backupStatus?.last_error">最近失败：{{ backupStatus.last_error }}</span>
+      <span v-if="backupStatus?.last_error">最近失败：{{ backupReasonText(backupStatus.last_error) }}</span>
       <span v-else-if="backupStatus?.reason">{{ backupStatus.reason }}</span>
     </div>
     <div class="setting-item">
@@ -150,14 +150,33 @@
   <BaseModal v-if="showBackupDialog" stop-modal-clicks @close="closeBackupDialog">
     <template v-if="!selectedBackup">
       <h2>选择数据库备份</h2>
-      <p class="help-text">恢复会替换当前数据库。执行前系统会先自动创建一份当前数据库的安全备份。</p>
+      <p class="help-text">恢复会替换当前数据库与整理过的文件。执行前系统会先自动创建一份安全备份（同样包含整理过的文件）。</p>
       <div v-if="backupFiles.length" class="backup-file-list">
-        <div v-for="backup in backupFiles" :key="backup.name" class="backup-file-item">
+        <div v-for="backup in backupFiles" :key="backup.name" class="backup-file-item" data-test="backup-file-item">
           <div>
             <strong>{{ formatBackupTime(backup.created_at) }}</strong>
-            <span>{{ backup.name }} · {{ formatBackupSize(backup.size) }}</span>
+            <span>{{ backup.name }} · {{ formatBackupSize(backup.size) }}<template v-if="!backup.legacy && !backup.manifest_error"> · 整理过的文件 {{ backup.file_count || 0 }} 个（{{ formatBackupSize(backup.files_size) }}）</template></span>
+            <!-- 没有清单的旧格式备份（D-DH-02）：仍可恢复，但只有数据库、没校验过。 -->
+            <small v-if="backup.legacy" class="backup-file-note" data-test="backup-legacy">旧格式：仅数据库、未校验</small>
+            <small v-else-if="backup.manifest_error" class="backup-danger-text" data-test="backup-manifest-error">清单有问题：{{ backup.manifest_error }}，不能恢复</small>
+            <template v-if="verificationOf(backup)">
+              <span
+                :class="['backup-verify-badge', verificationOf(backup).ok ? 'backup-verify-badge--ok' : 'backup-verify-badge--fail']"
+                data-test="backup-verify-badge"
+              >{{ verificationText(verificationOf(backup)) }}</span>
+              <small v-for="problem in (verificationOf(backup).ok ? [] : verificationOf(backup).problems || [])" :key="problem" class="backup-danger-text" data-test="backup-verify-problem">{{ problem }}</small>
+            </template>
           </div>
-          <button type="button" class="btn-secondary btn-danger-outline" @click="selectedBackup = backup">恢复</button>
+          <div class="backup-file-actions">
+            <button
+              type="button"
+              class="btn-secondary"
+              :disabled="backupBusy || Boolean(verifyingBackup)"
+              data-test="backup-verify"
+              @click="verifyBackup(backup)"
+            >{{ verifyingBackup === backup.name ? '校验中...' : '校验' }}</button>
+            <button type="button" class="btn-secondary btn-danger-outline" :disabled="Boolean(verifyingBackup) || Boolean(backup.manifest_error)" @click="selectedBackup = backup">恢复</button>
+          </div>
         </div>
       </div>
       <p v-else class="empty-hint">当前目录没有可用备份。</p>
@@ -166,7 +185,10 @@
     <template v-else>
       <h2>确认恢复数据库</h2>
       <p>将恢复到 <strong>{{ formatBackupTime(selectedBackup.created_at) }}</strong> 的数据状态。</p>
-      <p class="backup-danger-text">这是破坏性操作。当前数据库会先自动备份；恢复完成后应用会自动退出，重新打开即可使用恢复的数据。恢复期间请勿关闭应用。</p>
+      <!-- D-DH-03：带清单的备份连同整理过的文件一起还原；旧格式备份只恢复数据库。 -->
+      <p v-if="selectedBackup.legacy" class="help-text" data-test="backup-restore-files-note">这是旧格式备份，只恢复数据库；人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份保持现状。</p>
+      <p v-else class="help-text" data-test="backup-restore-files-note">整理过的文件（人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份）也会一并还原到备份时的状态。</p>
+      <p class="backup-danger-text">这是破坏性操作。当前数据库与整理过的文件会先自动备份；恢复完成后应用会自动退出，重新打开即可使用恢复的数据。恢复期间请勿关闭应用。</p>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" :disabled="backupBusy" @click="selectedBackup = null">返回</button>
         <button type="button" class="btn-primary btn-danger" :disabled="backupBusy" @click="confirmRestoreBackup">
@@ -220,7 +242,7 @@
 import {
   ClearMigrationTarget, CreateDatabaseBackup, GetBackupStatus, GetDatabaseBackendStatus, GetDatabaseSwitchStatus,
   ListDatabaseBackups, ListDownloadTasks, PreflightDatabaseSwitch, RelaunchApp, RestoreDatabaseBackup, RevealBackupDirectory,
-  SelectDirectory, StartDatabaseSwitch, SwitchBackendConfigOnly
+  SelectDirectory, StartDatabaseSwitch, SwitchBackendConfigOnly, VerifyDatabaseBackup
 } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import { confirmAction } from '../../utils/feedback.js';
@@ -243,6 +265,21 @@ export function databaseErrorReason(err) {
   const match = /^(relaunch_pending|backend_env_locked)\s*:\s*/.exec(text);
   if (!match) return { code: '', text };
   return { code: match[1], text: text.slice(match[0].length) };
+}
+
+// 备份与恢复失败的两个原因码（D-DH-01 空间不足、D-DH-03 来自更新版本）只给程序分类，界面上去掉。
+const BACKUP_REASON_PREFIX = /^(backup_insufficient_space|backup_from_newer_version)\s*:\s*/;
+export function backupReasonText(text) {
+  return String(text || '').trim().replace(BACKUP_REASON_PREFIX, '');
+}
+
+// 校验结果标记（D-DH-03）：三档各自说清楚校验到了哪一步。
+export function backupVerificationText(result) {
+  if (!result) return '';
+  if (!result.ok) return '校验未通过';
+  if (result.level === 'legacy') return '已校验：能打开（旧格式）';
+  if (result.level === 'archive') return '已校验：哈希一致、归档可读';
+  return '已校验：完整';
 }
 
 // 恢复失败的分类按后端给的原因码前缀（m2，与 relaunch_pending: 同口径），不再靠中文子串：
@@ -300,7 +337,10 @@ export default {
       selectedBackup: null,
       backupBusy: false,
       backupMessage: '',
-      backupMessageIsError: false
+      backupMessageIsError: false,
+      // 本次打开对话框后点过「校验」的结果（按备份名），覆盖列表里带回的上一次结果。
+      backupVerifications: {},
+      verifyingBackup: ''
     };
   },
   mounted() {
@@ -624,7 +664,7 @@ export default {
       } catch (err) {
         this.backupMessageIsError = true;
         // 维护期间（迁移或恢复进行中）备份会被拒绝，后端给的就是一句中文原因。
-        this.backupMessage = '备份失败：' + databaseErrorReason(err).text;
+        this.backupMessage = '备份失败：' + backupReasonText(databaseErrorReason(err).text);
       } finally {
         this.backupBusy = false;
         await this.loadBackupStatus();
@@ -637,6 +677,7 @@ export default {
       this.backupMessageIsError = false;
       try {
         this.backupFiles = await ListDatabaseBackups();
+        this.backupVerifications = {};
         this.selectedBackup = null;
         this.showBackupDialog = true;
       } catch (err) {
@@ -644,8 +685,33 @@ export default {
         this.backupMessage = '读取备份列表失败：' + err;
       }
     },
+    verificationOf(backup) {
+      return this.backupVerifications[backup.name] || backup.verification || null;
+    },
+    verificationText(result) {
+      return backupVerificationText(result);
+    },
+    backupReasonText(text) {
+      return backupReasonText(text);
+    },
+    // 「校验」：重算哈希、逐条读文件包、SQLite 再做完整性检查与行数核对（D-DH-03）。一次只校验一份。
+    async verifyBackup(backup) {
+      if (this.backupBusy || this.verifyingBackup) return;
+      this.verifyingBackup = backup.name;
+      try {
+        const result = await VerifyDatabaseBackup(backup.name);
+        this.backupVerifications = { ...this.backupVerifications, [backup.name]: result };
+      } catch (err) {
+        this.backupVerifications = {
+          ...this.backupVerifications,
+          [backup.name]: { ok: false, level: '', problems: [String(err?.message || err)] }
+        };
+      } finally {
+        this.verifyingBackup = '';
+      }
+    },
     closeBackupDialog() {
-      if (this.backupBusy) return;
+      if (this.backupBusy || this.verifyingBackup) return;
       this.showBackupDialog = false;
       this.selectedBackup = null;
     },
@@ -683,7 +749,7 @@ export default {
           this.backupMessage = `数据库恢复已中止，应用即将退出：${kind.text}。重新打开应用后可以再次恢复。`;
         } else {
           this.backupMessageIsError = true;
-          this.backupMessage = '数据库恢复失败，当前数据库没有被改动：' + kind.text;
+          this.backupMessage = '数据库恢复失败，当前数据库没有被改动：' + backupReasonText(kind.text);
         }
       } finally {
         this.backupBusy = false;
@@ -809,5 +875,12 @@ export default {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* 校验（D-DH-03）：按钮与恢复并排；标记只占自身宽度。 */
+.backup-file-item .backup-file-actions { display: flex; flex-shrink: 0; gap: 8px; }
+.backup-file-note { color: var(--warning-text); font-size: 12px; }
+.backup-verify-badge { justify-self: start; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; }
+.backup-verify-badge--ok { background: var(--accent-soft); color: var(--accent-text); }
+.backup-verify-badge--fail { background: var(--danger-soft); color: var(--danger-text); }
 
 </style>

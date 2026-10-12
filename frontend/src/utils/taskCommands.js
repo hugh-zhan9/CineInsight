@@ -5,7 +5,7 @@
 // 放在这里而不是面板里：面板只渲染注册表，任务与绑定的对应关系是业务知识。
 
 import {
-  CancelAIReviewApproval, CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelFaceAnalysis, CancelImageAITagging,
+  CancelAIReviewApproval, CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelDataHealthCheck, CancelFaceAnalysis, CancelImageAITagging,
   CancelImageCleanupAnalysis, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
   CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelMovieChartRefresh,
   CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSceneIndex, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
@@ -57,7 +57,9 @@ const TASK_BINDINGS = {
   backup: { start: () => CreateDatabaseBackup() },
   movie_chart: { cancel: () => CancelMovieChartRefresh() },
   // 场景画面索引的启动要选范围（全部 / 当前筛选），只在场景检索页发起；在跑时可取消。
-  scene_index: { cancel: () => CancelSceneIndex() }
+  scene_index: { cancel: () => CancelSceneIndex() },
+  // 数据体检只在数据维护页「体检」页签发起；在跑时（体检或修复）可取消。
+  data_health: { cancel: () => CancelDataHealthCheck() }
 };
 
 // 「立即运行」恰好落在任务刚被放行之后会收到 idle_gate_task_not_waiting，

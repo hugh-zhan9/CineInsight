@@ -114,6 +114,10 @@ export function CancelCollectionSuggestionAnalysis() {
   return window['go']['main']['App']['CancelCollectionSuggestionAnalysis']();
 }
 
+export function CancelDataHealthCheck() {
+  return window['go']['main']['App']['CancelDataHealthCheck']();
+}
+
 export function CancelEditAnalysis(arg1) {
   return window['go']['main']['App']['CancelEditAnalysis'](arg1);
 }
@@ -668,6 +672,10 @@ export function GetJellyfinDiagnostics() {
 
 export function GetJellyfinStatus() {
   return window['go']['main']['App']['GetJellyfinStatus']();
+}
+
+export function GetLatestDataHealthReport() {
+  return window['go']['main']['App']['GetLatestDataHealthReport']();
 }
 
 export function GetLibraryCounts() {
@@ -1270,6 +1278,10 @@ export function ReorderVersionMembers(arg1, arg2, arg3) {
   return window['go']['main']['App']['ReorderVersionMembers'](arg1, arg2, arg3);
 }
 
+export function RepairDataHealth(arg1) {
+  return window['go']['main']['App']['RepairDataHealth'](arg1);
+}
+
 export function ReportInlineQueuePlayback(arg1) {
   return window['go']['main']['App']['ReportInlineQueuePlayback'](arg1);
 }
@@ -1352,6 +1364,10 @@ export function RevealDownload(arg1) {
 
 export function RevealImage(arg1) {
   return window['go']['main']['App']['RevealImage'](arg1);
+}
+
+export function RunDataHealthCheck() {
+  return window['go']['main']['App']['RunDataHealthCheck']();
 }
 
 export function RunGatedTaskNow(arg1) {
@@ -1696,4 +1712,8 @@ export function UpsertGlossaryEntry(arg1) {
 
 export function ValidateScanDirectory(arg1) {
   return window['go']['main']['App']['ValidateScanDirectory'](arg1);
+}
+
+export function VerifyDatabaseBackup(arg1) {
+  return window['go']['main']['App']['VerifyDatabaseBackup'](arg1);
 }

@@ -672,6 +672,7 @@ export namespace models {
 	    max_height: number;
 	    min_rating?: number;
 	    max_rating?: number;
+	    missing: string;
 	    sort_mode: string;
 	    created_at: string;
 	    updated_at: string;
@@ -695,6 +696,7 @@ export namespace models {
 	        this.max_height = source["max_height"];
 	        this.min_rating = source["min_rating"];
 	        this.max_rating = source["max_rating"];
+	        this.missing = source["missing"];
 	        this.sort_mode = source["sort_mode"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -923,6 +925,7 @@ export namespace models {
 	    original_title: string;
 	    description: string;
 	    personal_rating?: number;
+	    year?: number;
 	    path: string;
 	    directory: string;
 	    size: number;
@@ -959,6 +962,7 @@ export namespace models {
 	        this.original_title = source["original_title"];
 	        this.description = source["description"];
 	        this.personal_rating = source["personal_rating"];
+	        this.year = source["year"];
 	        this.path = source["path"];
 	        this.directory = source["directory"];
 	        this.size = source["size"];
@@ -1499,11 +1503,46 @@ export namespace services {
 	        this.dropped = source["dropped"];
 	    }
 	}
+	export class BackupVerification {
+	    name: string;
+	    level: string;
+	    ok: boolean;
+	    hash_ok: boolean;
+	    files_ok: boolean;
+	    quick_check: string;
+	    rows_ok: boolean;
+	    schema_compatible: boolean;
+	    problems: string[];
+	    verified_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new BackupVerification(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.name = source["name"];
+	        this.level = source["level"];
+	        this.ok = source["ok"];
+	        this.hash_ok = source["hash_ok"];
+	        this.files_ok = source["files_ok"];
+	        this.quick_check = source["quick_check"];
+	        this.rows_ok = source["rows_ok"];
+	        this.schema_compatible = source["schema_compatible"];
+	        this.problems = source["problems"];
+	        this.verified_at = source["verified_at"];
+	    }
+	}
 	export class BackupFile {
 	    name: string;
 	    size: number;
 	    created_at: string;
 	    fingerprint: string;
+	    legacy: boolean;
+	    manifest_error: string;
+	    files_size: number;
+	    file_count: number;
+	    verification?: BackupVerification;
 	
 	    static createFrom(source: any = {}) {
 	        return new BackupFile(source);
@@ -1515,7 +1554,30 @@ export namespace services {
 	        this.size = source["size"];
 	        this.created_at = source["created_at"];
 	        this.fingerprint = source["fingerprint"];
+	        this.legacy = source["legacy"];
+	        this.manifest_error = source["manifest_error"];
+	        this.files_size = source["files_size"];
+	        this.file_count = source["file_count"];
+	        this.verification = this.convertValues(source["verification"], BackupVerification);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class BackupRestoreRequest {
 	    name: string;
@@ -1565,6 +1627,7 @@ export namespace services {
 	        this.last_error = source["last_error"];
 	    }
 	}
+	
 	export class BatchImageOperationError {
 	    image_id: number;
 	    error: string;
@@ -3109,6 +3172,203 @@ export namespace services {
 		}
 	}
 	
+	export class DataHealthGroup {
+	    key: string;
+	    label: string;
+	    count: number;
+	    detail: string;
+	    examples: string[];
+	    repairable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new DataHealthGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.count = source["count"];
+	        this.detail = source["detail"];
+	        this.examples = source["examples"];
+	        this.repairable = source["repairable"];
+	    }
+	}
+	export class DataHealthCheckResult {
+	    check: string;
+	    status: string;
+	    count: number;
+	    bytes: number;
+	    summary: string;
+	    examples: string[];
+	    groups: DataHealthGroup[];
+	    repairable: boolean;
+	    link: string;
+	    duration_ms: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DataHealthCheckResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.check = source["check"];
+	        this.status = source["status"];
+	        this.count = source["count"];
+	        this.bytes = source["bytes"];
+	        this.summary = source["summary"];
+	        this.examples = source["examples"];
+	        this.groups = this.convertValues(source["groups"], DataHealthGroup);
+	        this.repairable = source["repairable"];
+	        this.link = source["link"];
+	        this.duration_ms = source["duration_ms"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class DataHealthProgress {
+	    phase: string;
+	    check: string;
+	    done: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DataHealthProgress(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.phase = source["phase"];
+	        this.check = source["check"];
+	        this.done = source["done"];
+	        this.total = source["total"];
+	    }
+	}
+	export class DataHealthRepairResult {
+	    check: string;
+	    repaired: number;
+	    cancelled: boolean;
+	    result: DataHealthCheckResult;
+	
+	    static createFrom(source: any = {}) {
+	        return new DataHealthRepairResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.check = source["check"];
+	        this.repaired = source["repaired"];
+	        this.cancelled = source["cancelled"];
+	        this.result = this.convertValues(source["result"], DataHealthCheckResult);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DataHealthReportView {
+	    id: number;
+	    backend: string;
+	    started_at: string;
+	    finished_at: string;
+	    checks: DataHealthCheckResult[];
+	
+	    static createFrom(source: any = {}) {
+	        return new DataHealthReportView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.backend = source["backend"];
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	        this.checks = this.convertValues(source["checks"], DataHealthCheckResult);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class DataHealthState {
+	    running: boolean;
+	    progress: DataHealthProgress;
+	    report?: DataHealthReportView;
+	
+	    static createFrom(source: any = {}) {
+	        return new DataHealthState(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.progress = this.convertValues(source["progress"], DataHealthProgress);
+	        this.report = this.convertValues(source["report"], DataHealthReportView);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class DatabaseBackendStatus {
 	    backend: string;
 	    location: string;
