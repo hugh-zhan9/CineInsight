@@ -1,7 +1,10 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({ GetMetadataCompleteness: vi.fn(), GetMetadataCompletenessByDirectory: vi.fn(), LogFrontend: vi.fn() }));
+const api = vi.hoisted(() => ({
+  GetMetadataCompleteness: vi.fn(), GetMetadataCompletenessByDirectory: vi.fn(), LogFrontend: vi.fn(),
+  ListMetadataBatchEdits: vi.fn(), UndoMetadataBatchEdit: vi.fn()
+}));
 vi.mock('../../../wailsjs/go/main/App', () => api);
 
 import CompletenessPanel from './CompletenessPanel.vue';
@@ -38,6 +41,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   api.GetMetadataCompleteness.mockResolvedValue(report());
   api.LogFrontend.mockResolvedValue(undefined);
+  api.ListMetadataBatchEdits.mockResolvedValue([]);
 });
 afterEach(() => {
   while (wrappers.length) wrappers.pop().unmount();
@@ -114,5 +118,62 @@ describe('完整度页签（D-MC-02）', () => {
     await flushPromises();
     expect(wrapper.find('[data-test="completeness-error"]').exists()).toBe(false);
     expect(wrapper.find('[data-test="completeness-item-video-year"]').exists()).toBe(true);
+  });
+});
+
+const batches = () => ([
+  {
+    id: 9, kind: 'image', created_at: '2026-10-12T08:00:00Z', undone_at: null, item_count: 4, undoable: true,
+    summary: { scope: 'filter', target_count: 4, changed_count: 4, cancelled: false, ops: [
+      { field: 'tag', action: 'add', names: ['风景'], changes: 4 },
+      { field: 'rating', action: 'clear', names: [], changes: 0 }
+    ] }
+  },
+  {
+    id: 8, kind: 'video', created_at: '2026-10-11T08:00:00Z', undone_at: '2026-10-11T09:00:00Z', item_count: 2, undoable: false,
+    summary: { scope: 'ids', target_count: 2, changed_count: 2, cancelled: true, ops: [{ field: 'year', action: 'set', value: 2001, names: [], changes: 2 }] }
+  }
+]);
+
+describe('最近的批量编辑（D-MC-05）', () => {
+  it('列出最近的批量编辑：摘要只写真正有改动的操作，可撤销的有按钮，撤销过的标明', async () => {
+    api.ListMetadataBatchEdits.mockResolvedValue(batches());
+    const wrapper = await mountPanel();
+    const first = wrapper.get('[data-test="batch-edit-history-9"]');
+    expect(first.text()).toContain('图片 · 标签加上 风景（当前筛选的全部结果）');
+    expect(first.text()).not.toContain('个人评分');
+    expect(first.text()).toContain('4 处改动');
+    expect(first.find('[data-test="batch-edit-history-undo"]').exists()).toBe(true);
+    const second = wrapper.get('[data-test="batch-edit-history-8"]');
+    expect(second.text()).toContain('视频 · 年份设为 2001（中途停止）');
+    expect(second.get('[data-test="batch-edit-history-undone"]').text()).toBe('已撤销');
+  });
+
+  it('没有记录时给一句说明', async () => {
+    const wrapper = await mountPanel();
+    expect(wrapper.get('[data-test="batch-edit-history-empty"]').text()).toContain('还没有批量编辑');
+  });
+
+  it('撤销：调用接口、说明恢复与跳过的条数、通知片库重取并重新统计', async () => {
+    api.ListMetadataBatchEdits.mockResolvedValue(batches());
+    api.UndoMetadataBatchEdit.mockResolvedValue({ batch_id: 9, restored: 3, changed_since: 1, cancelled: false });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="batch-edit-history-9"] [data-test="batch-edit-history-undo"]').trigger('click');
+    await flushPromises();
+    expect(api.UndoMetadataBatchEdit).toHaveBeenCalledWith(9);
+    expect(wrapper.get('[data-test="batch-edit-history-notice"]').text()).toBe('已撤销：恢复 3 处；1 处在这之后又被改过，已跳过。');
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [], kind: 'image' }]]);
+    expect(api.GetMetadataCompleteness).toHaveBeenCalledTimes(2);
+    expect(api.ListMetadataBatchEdits).toHaveBeenCalledTimes(2);
+  });
+
+  it('已经撤销过时给出可读的提示', async () => {
+    api.ListMetadataBatchEdits.mockResolvedValue(batches());
+    api.UndoMetadataBatchEdit.mockRejectedValue(new Error('batch_already_undone'));
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="batch-edit-history-9"] [data-test="batch-edit-history-undo"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="batch-edit-history-notice"]').text()).toBe('这次批量编辑已经撤销过了。');
+    expect(wrapper.emitted('videos-changed')).toBeUndefined();
   });
 });

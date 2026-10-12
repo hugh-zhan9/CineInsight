@@ -54,6 +54,10 @@ export function ApplyLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['ApplyLocalMetadataBatch'](arg1);
 }
 
+export function ApplyMetadataBatchEdit(arg1) {
+  return window['go']['main']['App']['ApplyMetadataBatchEdit'](arg1);
+}
+
 export function ApplyWatchlistCandidate(arg1, arg2) {
   return window['go']['main']['App']['ApplyWatchlistCandidate'](arg1, arg2);
 }
@@ -942,6 +946,10 @@ export function ListImageTimelineBuckets(arg1) {
   return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
 }
 
+export function ListMetadataBatchEdits() {
+  return window['go']['main']['App']['ListMetadataBatchEdits']();
+}
+
 export function ListMovieChart(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListMovieChart'](arg1, arg2, arg3, arg4);
 }
@@ -1136,6 +1144,10 @@ export function PreviewFaceClusterUnlink(arg1) {
 
 export function PreviewLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['PreviewLocalMetadataBatch'](arg1);
+}
+
+export function PreviewMetadataBatchEdit(arg1) {
+  return window['go']['main']['App']['PreviewMetadataBatchEdit'](arg1);
 }
 
 export function PreviewTagPersonConversion(arg1) {
@@ -1628,6 +1640,10 @@ export function TriggerAITagging() {
 
 export function UndoCleanupDismissals(arg1, arg2) {
   return window['go']['main']['App']['UndoCleanupDismissals'](arg1, arg2);
+}
+
+export function UndoMetadataBatchEdit(arg1) {
+  return window['go']['main']['App']['UndoMetadataBatchEdit'](arg1);
 }
 
 export function UndoTagPersonConversion(arg1) {

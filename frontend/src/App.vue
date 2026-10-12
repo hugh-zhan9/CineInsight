@@ -524,7 +524,9 @@ export default {
       return target?.applyMissingFilter?.(field);
     },
     // 洞察页「存储体检」删掉或撤销删除了视频：顶栏计数与片库按当前条件重取。
-    handleVideosChangedElsewhere({ removedIDs = [] } = {}) {
+    // kind 为 image 时是数据维护里撤销了图片的批量编辑：只通知图片库。
+    handleVideosChangedElsewhere({ removedIDs = [], kind = 'video' } = {}) {
+      if (kind === 'image') return this.$refs.photoLibrary?.markImagesChanged();
       this.loadLibraryCounts();
       return this.$refs.videoListPage?.handleVideosChangedElsewhere(removedIDs);
     },

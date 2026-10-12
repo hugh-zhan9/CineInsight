@@ -92,6 +92,30 @@ it('别的页面删掉了视频：从列表拿掉、关掉对应预览、总数�
   wrapper.unmount();
 });
 
+it('D-MC-04 批量栏「批量编辑…」带上所选与当前筛选打开对话框；语义检索时只给所选；改完按当前条件重载', async () => {
+  const wrapper = await mountPage();
+  wrapper.vm.selectedVideoIds = [3, 4];
+  wrapper.vm.searchKeyword = '海';
+  wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-metadata-edit');
+  await flushPromises();
+  const dialog = wrapper.findComponent({ name: 'MetadataBatchEditDialog' });
+  expect(dialog.props('selectedIds')).toEqual([3, 4]);
+  expect(dialog.props('filter')).toMatchObject({ keyword: '海', smart_view: '' });
+  wrapper.vm.libraryTotalCount = 9;
+  const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+  await dialog.vm.$emit('applied', { batch_id: 1 });
+  expect(reload).toHaveBeenCalledTimes(1);
+  expect(wrapper.vm.libraryTotalCount).toBeNull();
+  await dialog.vm.$emit('close');
+  expect(wrapper.findComponent({ name: 'MetadataBatchEditDialog' }).exists()).toBe(false);
+
+  wrapper.vm.searchMode = 'semantic';
+  wrapper.vm.openMetadataBatchEdit();
+  await flushPromises();
+  expect(wrapper.findComponent({ name: 'MetadataBatchEditDialog' }).props('filter')).toBeNull();
+  wrapper.unmount();
+});
+
 it('今晚看什么从随机菜单打开，带上共用的随机条件与最近排除；改条件回写片库页', async () => {
   const wrapper = await mountPage();
   wrapper.vm.recentRandomVideoIDs = [5, 6];

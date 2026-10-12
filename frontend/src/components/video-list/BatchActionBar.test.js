@@ -13,6 +13,15 @@ describe('批量操作栏', () => {
     wrapper.unmount();
   });
 
+  it('D-MC-04 有「批量编辑…」，点了交给片库页打开批量编辑', async () => {
+    const wrapper = mount(BatchActionBar, { props: { selectedCount: 1 } });
+    const button = wrapper.get('[data-test="batch-metadata-edit"]');
+    expect(button.text()).toBe('批量编辑…');
+    await button.trigger('click');
+    expect(wrapper.emitted('batch-metadata-edit')).toHaveLength(1);
+    wrapper.unmount();
+  });
+
   it('正好选中两个时才有「对比播放」，点了交给片库页', async () => {
     for (const count of [1, 3]) {
       const other = mount(BatchActionBar, { props: { selectedCount: count } });

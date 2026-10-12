@@ -1023,6 +1023,28 @@ describe('PhotoLibraryPage delete', () => {
     expect(api.RevealImage).toHaveBeenCalledWith(1); wrapper.unmount();
   });
 
+  it('D-MC-04 选中后有「批量编辑…」：带上所选与当前筛选打开对话框，改完亮出刷新提示', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage({ tags: [{ id: 7, name: '旅行' }] });
+    expect(wrapper.find('[data-test="photo-batch-metadata-edit"]').exists()).toBe(false);
+    await wrapper.get('[data-test="photo-select-all"]').trigger('click');
+    await wrapper.get('[data-test="photo-batch-metadata-edit"]').trigger('click');
+    const dialog = wrapper.findComponent({ name: 'MetadataBatchEditDialog' });
+    expect(dialog.props('kind')).toBe('image');
+    expect(dialog.props('selectedIds')).toEqual([1, 2]);
+    expect(dialog.props('filter')).toMatchObject({ keyword: '', tag_ids: [] });
+    expect(dialog.props('tags')).toEqual([{ id: 7, name: '旅行' }]);
+    const loadTags = vi.spyOn(wrapper.vm, 'loadImageTags').mockResolvedValue();
+    dialog.vm.$emit('applied', { batch_id: 3 });
+    await flushPromises();
+    expect(wrapper.find('[data-test="photo-library-refresh"]').exists()).toBe(true);
+    expect(loadTags).toHaveBeenCalledOnce();
+    dialog.vm.$emit('close');
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'MetadataBatchEditDialog' }).exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('multi-selects images and applies a tag in one batch', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
     api.BatchAddTagToImages.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });

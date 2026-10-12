@@ -146,6 +146,7 @@
               <span v-if="filteredBatchTags.length === 0" class="photo-tag-options__empty">没有匹配标签</span>
             </div>
           </div>
+          <button v-if="selectedImageIDs.length" type="button" class="btn-secondary btn-compact" :disabled="batchBusy" data-test="photo-batch-metadata-edit" @click="openMetadataBatchEdit">批量编辑…</button>
           <button v-if="selectedImageIDs.length" type="button" class="btn-danger btn-compact" :disabled="batchBusy" data-test="photo-batch-delete" @click="requestBatchDelete">删除所选</button>
         </div>
       </div>
@@ -726,6 +727,17 @@
       </div>
     </BaseModal>
 
+    <MetadataBatchEditDialog
+      v-if="metadataBatchEdit"
+      kind="image"
+      :selected-ids="metadataBatchEdit.ids"
+      :filter="metadataBatchEdit.filter"
+      :tags="tags"
+      @close="metadataBatchEdit = null"
+      @applied="markImagesChanged"
+      @undone="markImagesChanged"
+    />
+
     <BaseModal v-if="batchDeletePending" close-on-overlay stop-modal-clicks @close="batchDeletePending = false">
       <h2>确认删除所选图片</h2>
       <p>确定要删除已选的 {{ selectedImageIDs.length }} 张图片吗？</p>
@@ -768,6 +780,7 @@ import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { DELETE_RECORD_ONLY_HINT, DELETE_TRASH_HINT } from './DeleteConfirmDialog.vue';
 import { summarizeTrashFailures } from './TrashCenterDialog.vue';
 import ImageAITagReviewPanel from './ImageAITagReviewPanel.vue';
+import MetadataBatchEditDialog from './MetadataBatchEditDialog.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { logFrontend } from '../utils/frontendLog.js';
 import { photoCleanupStore, startPhotoCleanupPolling, stopPhotoCleanupPolling, refreshPhotoCleanupStatus } from '../utils/photoCleanupStore.js';
@@ -814,7 +827,7 @@ const LOAD_MORE_THRESHOLD = 400;
 
 export default {
   name: 'PhotoLibraryPage',
-  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, TrashUndoBanner, ImageAITagReviewPanel, WallpaperButton },
+  components: { BaseModal, BaseMenu, BasePopover, PhotoCleanupPage, TrashUndoBanner, ImageAITagReviewPanel, WallpaperButton, MetadataBatchEditDialog },
   props: {
     settings: { type: Object, required: true },
     tags: { type: Array, default: () => [] },
@@ -900,6 +913,8 @@ export default {
       batchDeletePending: false,
       batchDeleteFileChoice: false,
       batchBusy: false,
+      // 元数据批量编辑（D-MC-04）：打开时记下所选与当前筛选；null 表示没开。
+      metadataBatchEdit: null,
       deleteTrashHint: DELETE_TRASH_HINT,
       deleteRecordOnlyHint: DELETE_RECORD_ONLY_HINT,
       showAITagReview: false,
@@ -2047,6 +2062,18 @@ export default {
       } finally {
         this.batchBusy = false;
       }
+    },
+    // 「批量编辑…」：所选图片，或当前筛选的全部结果。语义搜索列出的不是筛选结果，这时只提供「所选」。
+    openMetadataBatchEdit() {
+      if (!this.selectedImageIDs.length) return;
+      const filter = this.searchMode === 'semantic' ? null : this.buildFilter();
+      this.metadataBatchEdit = { ids: [...this.selectedImageIDs], filter };
+    },
+    // 图片元数据被批量改过（这里的批量编辑与撤销，或数据维护 · 完整度里的撤销）：亮出「图片库有更新」
+    // 提示条，由用户决定何时重载（自动重载会冲掉滚动位置）；标签筛选栏随之重取。
+    markImagesChanged() {
+      this.libraryChanged = true;
+      this.loadImageTags();
     },
     requestBatchDelete() {
       if (!this.selectedImageIDs.length || this.batchBusy) return;

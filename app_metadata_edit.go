@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 
 	"video-master/services"
 )
@@ -32,7 +33,49 @@ func (a *App) GetMetadataCompletenessByDirectory(kind, field string, limit int) 
 	return a.dataCare.completeness.GetMetadataCompletenessByDirectory(kind, field, limit)
 }
 
+// PreviewMetadataBatchEdit 是批量编辑的预览（D-MC-04）：目标条目数与每个操作实际会改变的条目数。
+func (a *App) PreviewMetadataBatchEdit(req services.MetadataBatchEditRequest) (*services.MetadataBatchEditPreview, error) {
+	preview, err := a.dataCare.batchEdit.PreviewMetadataBatchEdit(req)
+	if err != nil {
+		log.Printf("API PreviewMetadataBatchEdit kind=%s err=%v", req.Kind, services.WithoutAbsolutePaths(err))
+	}
+	return preview, err
+}
+
+// ApplyMetadataBatchEdit 执行批量编辑（D-MC-04）。在 metadata_batch_edit 任务键下运行，同一时刻只允许一个；
+// 完成后前端按既有的 videos-changed 路径重取列表。
+func (a *App) ApplyMetadataBatchEdit(req services.MetadataBatchEditRequest) (*services.MetadataBatchEditResult, error) {
+	result, err := a.dataCare.batchEdit.ApplyMetadataBatchEdit(a.backgroundContext(), req)
+	if err != nil {
+		log.Printf("API ApplyMetadataBatchEdit kind=%s err=%v", req.Kind, services.WithoutAbsolutePaths(err))
+	}
+	return result, err
+}
+
+// ListMetadataBatchEdits 是「最近的批量编辑」（D-MC-05）。
+func (a *App) ListMetadataBatchEdits() ([]services.MetadataBatchEditListItem, error) {
+	return a.dataCare.batchEdit.ListMetadataBatchEdits()
+}
+
+// UndoMetadataBatchEdit 撤销一次批量编辑（D-MC-05）；与执行共用任务键和运行位。
+func (a *App) UndoMetadataBatchEdit(batchID uint) (*services.MetadataBatchUndoResult, error) {
+	result, err := a.dataCare.batchEdit.UndoMetadataBatchEdit(a.backgroundContext(), batchID)
+	if err != nil {
+		log.Printf("API UndoMetadataBatchEdit batch=%d err=%v", batchID, services.WithoutAbsolutePaths(err))
+	}
+	return result, err
+}
+
 // taskCenterMetadataEdit 是任务中心适配（BackgroundTaskMetadataBatchEdit）；运行与否以登记表为准。
+// 没有零参的启动与取消：批量编辑总要选范围与操作，取消只在进入恢复维护与退出时发生。
 func (a *App) taskCenterMetadataEdit(src *taskCenterSources) taskCenterKeyState {
-	return taskCenterKeyState{}
+	if a.dataCare.batchEdit == nil {
+		return taskCenterKeyState{}
+	}
+	status := a.dataCare.batchEdit.Status()
+	state := taskCenterKeyState{running: status.Running, progress: runningProgress(status.Running, status.Done, status.Total)}
+	if !status.Running && status.FinishedAt != nil {
+		state.lastRun = singleOutcomeRun(status.FinishedAt, status.LastError)
+	}
+	return state
 }

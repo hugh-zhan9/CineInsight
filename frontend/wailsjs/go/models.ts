@@ -8018,6 +8018,294 @@ export namespace services {
 	        this.image_links_moved = source["image_links_moved"];
 	    }
 	}
+	export class MetadataBatchOpCount {
+	    field: string;
+	    action: string;
+	    value?: number;
+	    ids: number[];
+	    names: string[];
+	    changes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchOpCount(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.field = source["field"];
+	        this.action = source["action"];
+	        this.value = source["value"];
+	        this.ids = source["ids"];
+	        this.names = source["names"];
+	        this.changes = source["changes"];
+	    }
+	}
+	export class MetadataBatchEditSummary {
+	    scope: string;
+	    target_count: number;
+	    changed_count: number;
+	    ops: MetadataBatchOpCount[];
+	    cancelled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchEditSummary(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.scope = source["scope"];
+	        this.target_count = source["target_count"];
+	        this.changed_count = source["changed_count"];
+	        this.ops = this.convertValues(source["ops"], MetadataBatchOpCount);
+	        this.cancelled = source["cancelled"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MetadataBatchEditListItem {
+	    id: number;
+	    kind: string;
+	    created_at: string;
+	    undone_at?: string;
+	    item_count: number;
+	    summary: MetadataBatchEditSummary;
+	    undoable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchEditListItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.kind = source["kind"];
+	        this.created_at = source["created_at"];
+	        this.undone_at = source["undone_at"];
+	        this.item_count = source["item_count"];
+	        this.summary = this.convertValues(source["summary"], MetadataBatchEditSummary);
+	        this.undoable = source["undoable"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MetadataBatchEditPreview {
+	    kind: string;
+	    target_count: number;
+	    changed_count: number;
+	    ops: MetadataBatchOpCount[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchEditPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.target_count = source["target_count"];
+	        this.changed_count = source["changed_count"];
+	        this.ops = this.convertValues(source["ops"], MetadataBatchOpCount);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MetadataBatchOp {
+	    field: string;
+	    action: string;
+	    value?: number;
+	    ids: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchOp(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.field = source["field"];
+	        this.action = source["action"];
+	        this.value = source["value"];
+	        this.ids = source["ids"];
+	    }
+	}
+	export class MetadataBatchEditTarget {
+	    ids: number[];
+	    filter?: LibraryFilter;
+	    image_filter?: ImageFilter;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchEditTarget(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.ids = source["ids"];
+	        this.filter = this.convertValues(source["filter"], LibraryFilter);
+	        this.image_filter = this.convertValues(source["image_filter"], ImageFilter);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MetadataBatchEditRequest {
+	    kind: string;
+	    target: MetadataBatchEditTarget;
+	    ops: MetadataBatchOp[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchEditRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.target = this.convertValues(source["target"], MetadataBatchEditTarget);
+	        this.ops = this.convertValues(source["ops"], MetadataBatchOp);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MetadataBatchEditResult {
+	    batch_id: number;
+	    kind: string;
+	    target_count: number;
+	    processed: number;
+	    changed_count: number;
+	    ops: MetadataBatchOpCount[];
+	    cancelled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchEditResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.batch_id = source["batch_id"];
+	        this.kind = source["kind"];
+	        this.target_count = source["target_count"];
+	        this.processed = source["processed"];
+	        this.changed_count = source["changed_count"];
+	        this.ops = this.convertValues(source["ops"], MetadataBatchOpCount);
+	        this.cancelled = source["cancelled"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	
+	
+	export class MetadataBatchUndoResult {
+	    batch_id: number;
+	    restored: number;
+	    changed_since: number;
+	    cancelled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataBatchUndoResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.batch_id = source["batch_id"];
+	        this.restored = source["restored"];
+	        this.changed_since = source["changed_since"];
+	        this.cancelled = source["cancelled"];
+	    }
+	}
 	export class MetadataCompletenessItem {
 	    field: string;
 	    missing: number;

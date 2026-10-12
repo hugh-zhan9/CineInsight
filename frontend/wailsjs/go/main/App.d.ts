@@ -31,6 +31,8 @@ export function AnalyzeEditProject(arg1:services.EditAnalyzeRequest):Promise<ser
 
 export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyRequest):Promise<services.LocalMetadataBatchResult>;
 
+export function ApplyMetadataBatchEdit(arg1:services.MetadataBatchEditRequest):Promise<services.MetadataBatchEditResult>;
+
 export function ApplyWatchlistCandidate(arg1:number,arg2:string):Promise<void>;
 
 export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
@@ -475,6 +477,8 @@ export function ListImageFolderGroups(arg1:services.ImageFilter):Promise<Array<s
 
 export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
 
+export function ListMetadataBatchEdits():Promise<Array<services.MetadataBatchEditListItem>>;
+
 export function ListMovieChart(arg1:number,arg2:string,arg3:number,arg4:boolean):Promise<services.MovieChartPage>;
 
 export function ListMovieChartYears():Promise<Array<number>>;
@@ -572,6 +576,8 @@ export function PreviewExternally(arg1:number):Promise<void>;
 export function PreviewFaceClusterUnlink(arg1:number):Promise<Array<services.FaceUnlinkMediaView>>;
 
 export function PreviewLocalMetadataBatch(arg1:Array<number>):Promise<services.LocalMetadataBatchPreview>;
+
+export function PreviewMetadataBatchEdit(arg1:services.MetadataBatchEditRequest):Promise<services.MetadataBatchEditPreview>;
 
 export function PreviewTagPersonConversion(arg1:number):Promise<services.TagPersonConversionPreview>;
 
@@ -818,6 +824,8 @@ export function TrashStagedSources(arg1:Array<number>):Promise<services.BatchRes
 export function TriggerAITagging():Promise<boolean>;
 
 export function UndoCleanupDismissals(arg1:string,arg2:Array<number>):Promise<services.CleanupDismissalUndoResult>;
+
+export function UndoMetadataBatchEdit(arg1:number):Promise<services.MetadataBatchUndoResult>;
 
 export function UndoTagPersonConversion(arg1:number):Promise<services.TagPersonConversionUndoResult>;
 
