@@ -312,22 +312,9 @@ func (s *LocalMetadataService) ObserveVideo(videoID uint, isNew bool) error {
 }
 
 func (s *LocalMetadataService) ResolveVideoArtwork(videoID uint, kind string) (*VideoArtworkData, error) {
-	var video models.Video
-	if err := database.DB.Select("id", "poster_path", "fanart_path").First(&video, videoID).Error; err != nil {
-		return nil, err
-	}
-	relative := ""
-	switch kind {
-	case "poster":
-		relative = video.PosterPath
-	case "fanart":
-		relative = video.FanartPath
-	default:
-		return nil, errors.New("artwork kind must be poster or fanart")
-	}
-	asset, err := s.images.Resolve(relative)
+	asset, err := s.ResolveVideoArtworkAsset(videoID, kind)
 	if err != nil {
-		return nil, os.ErrNotExist
+		return nil, err
 	}
 	content, err := readBoundedLocalMetadataFile(asset.Path, managedImageMaxBytes)
 	if err != nil {
@@ -337,6 +324,30 @@ func (s *LocalMetadataService) ResolveVideoArtwork(videoID uint, kind string) (*
 		VideoID: videoID, Kind: kind, MIME: asset.MIME,
 		DataURL: fmt.Sprintf("data:%s;base64,%s", asset.MIME, base64.StdEncoding.EncodeToString(content)),
 	}, nil
+}
+
+// ResolveVideoArtworkAsset 定位 NFO 导入时存下的海报或背景图（D-UI-12 的图片路由用它）。
+// 视频不存在时原样返回 gorm.ErrRecordNotFound；没导入过、文件已不在或不是受支持的图片时
+// 返回 os.ErrNotExist，由调用方决定回落还是 404。
+func (s *LocalMetadataService) ResolveVideoArtworkAsset(videoID uint, kind string) (ManagedImageAsset, error) {
+	var video models.Video
+	if err := database.DB.Select("id", "poster_path", "fanart_path").First(&video, videoID).Error; err != nil {
+		return ManagedImageAsset{}, err
+	}
+	relative := ""
+	switch kind {
+	case "poster":
+		relative = video.PosterPath
+	case "fanart":
+		relative = video.FanartPath
+	default:
+		return ManagedImageAsset{}, errors.New("artwork kind must be poster or fanart")
+	}
+	asset, err := s.images.Resolve(relative)
+	if err != nil {
+		return ManagedImageAsset{}, os.ErrNotExist
+	}
+	return asset, nil
 }
 
 func validateLocalMetadataSelection(diff *LocalMetadataDiff, selectedFields, overwriteFields []string) (map[string]struct{}, map[string]struct{}, error) {

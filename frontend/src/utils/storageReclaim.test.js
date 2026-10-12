@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cleanupAnalysisState, reclaimSummary } from './storageReclaim.js';
+import { cleanupAnalysisState, reclaimHeadline, reclaimSummary } from './storageReclaim.js';
 
 const video = (id, size) => ({ id, name: `v${id}.mp4`, size });
 const image = (id, size, fileSize) => ({ id, name: `i${id}.jpg`, size, file_size: fileSize });
@@ -92,5 +92,17 @@ describe('存储体检的可回收空间', () => {
     const summary = reclaimSummary(status, null, { excludedVideoIDs: [1] });
     expect(summary.video.rows.map(row => [row.label, row.count, row.bytes])).toEqual([['精确重复', 1, 70]]);
     expect(summary.certainBytes).toBe(70);
+  });
+});
+
+describe('reclaimHeadline', () => {
+  it('shows a placeholder until something has been analyzed', () => {
+    expect(reclaimHeadline(reclaimSummary(null, null))).toEqual({ value: '—', note: '清理中心还没分析过' });
+    expect(reclaimHeadline(null)).toEqual({ value: '—', note: '清理中心还没分析过' });
+  });
+
+  it('formats total, certain and review bytes', () => {
+    expect(reclaimHeadline({ analyzed: true, totalBytes: 3 * 1024 ** 3, certainBytes: 1024 ** 3, reviewBytes: 2 * 1024 ** 3 }))
+      .toEqual({ value: '3.0 GB', note: '确定 1.0 GB · 待确认 2.0 GB' });
   });
 });

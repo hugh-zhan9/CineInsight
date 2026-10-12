@@ -8,14 +8,17 @@
 
     <template v-else-if="report">
       <div class="storage-tiles" data-test="storage-tiles">
-        <article v-for="tile in tiles" :key="tile.key" class="storage-tile" :data-test="`storage-tile-${tile.key}`">
-          <span :class="['storage-tile__icon', `storage-tile__icon--${tile.tone}`]">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="(d, index) in tile.icon" :key="index" :d="d" /></svg>
-          </span>
-          <span class="storage-tile__value">{{ tile.value }}</span>
-          <span class="storage-tile__label">{{ tile.label }}</span>
-          <small class="storage-tile__note">{{ tile.note }}</small>
-        </article>
+        <StatTile
+          v-for="tile in tiles"
+          :key="tile.key"
+          size="sm"
+          :tone="tile.tone"
+          :icon="tile.icon"
+          :value="tile.value"
+          :label="tile.label"
+          :note="tile.note"
+          :data-test="`storage-tile-${tile.key}`"
+        />
       </div>
 
       <section class="storage-section" data-test="storage-reclaim">
@@ -210,10 +213,11 @@ import { markRaw } from 'vue';
 import { GetCleanupStatus, GetImageCleanupStatus, GetStorageReport, OpenDirectory, StartTechnicalBackfill } from '../../../wailsjs/go/main/App';
 import BucketChart from './BucketChart.vue';
 import BaseModal from '../ui/BaseModal.vue';
+import StatTile from '../ui/StatTile.vue';
 import TrashUndoBanner from '../video-list/TrashUndoBanner.vue';
 import { summarizeTrashFailures } from '../TrashCenterDialog.vue';
 import { formatBytes } from '../../utils/mediaDetails.js';
-import { reclaimSummary } from '../../utils/storageReclaim.js';
+import { reclaimHeadline, reclaimSummary } from '../../utils/storageReclaim.js';
 
 const GIB = 1024 ** 3;
 const PAGE = 50;
@@ -237,7 +241,7 @@ const STATE_TEXT = {
 
 export default {
   name: 'StorageHealthPanel',
-  components: { BucketChart, BaseModal, TrashUndoBanner },
+  components: { BucketChart, BaseModal, StatTile, TrashUndoBanner },
   // open-video-id：打开片库详情；run-command：按固定命令 ID 打开清理中心；
   // videos-changed：这里删除或撤销删除了视频，片库与顶栏计数据此刷新；
   // status-change：{ loading, processing }，宿主据此显示刷新状态、删除进行中不让离开。
@@ -302,11 +306,7 @@ export default {
           value: formatBytes(Number(report.videos.bytes || 0) + Number(report.images.bytes || 0)),
           note: `视频 ${report.videos.count} 部 · 图片 ${report.images.count} 张`
         },
-        {
-          key: 'reclaim', tone: 'danger', icon: ICONS.reclaim, label: '可回收',
-          value: reclaim.analyzed ? formatBytes(reclaim.totalBytes) : '—',
-          note: reclaim.analyzed ? `确定 ${formatBytes(reclaim.certainBytes)} · 待确认 ${formatBytes(reclaim.reviewBytes)}` : '清理中心还没分析过'
-        },
+        { key: 'reclaim', tone: 'danger', icon: ICONS.reclaim, label: '可回收', ...reclaimHeadline(reclaim) },
         {
           key: 'unwatched', tone: 'warning', icon: ICONS.unwatched, label: '久未观看',
           value: formatBytes(report.unwatched.bytes),
@@ -514,38 +514,8 @@ export default {
 .storage-spacer { flex: 1; }
 .storage-note { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 0; padding: 9px 14px; border: 1px solid var(--border-color); border-radius: 10px; background: var(--control-bg); color: var(--text-secondary); font-size: 12px; }
 
-/* 统计卡：与观看回顾、图片清理审阅同一套样子。 */
+/* 统计卡本身是共用的 StatTile（D-UI-08），这里只排网格。 */
 .storage-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; }
-.storage-tile {
-  position: relative;
-  display: grid;
-  align-content: start;
-  gap: 4px;
-  overflow: hidden;
-  padding: 16px 18px 14px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg);
-  background: var(--panel-bg);
-}
-.storage-tile::after {
-  content: '';
-  position: absolute;
-  right: -30px;
-  top: -30px;
-  width: 110px;
-  height: 110px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent-color) 14%, transparent), transparent 70%);
-  pointer-events: none;
-}
-.storage-tile__icon { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; }
-.storage-tile__icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.storage-tile__icon--accent { background: var(--accent-soft); color: var(--accent-text); }
-.storage-tile__icon--danger { background: var(--danger-soft); color: var(--danger-color); }
-.storage-tile__icon--warning { background: var(--warning-soft); color: var(--warning-text); }
-.storage-tile__value { margin-top: 6px; font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
-.storage-tile__label { color: var(--text-primary); font-size: 13px; font-weight: 600; }
-.storage-tile__note { color: var(--text-secondary); font-size: 12px; }
 
 .storage-section { display: grid; gap: 12px; }
 .storage-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
