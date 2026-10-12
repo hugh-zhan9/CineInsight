@@ -213,6 +213,21 @@ func (a *App) ListDatabaseBackups() ([]services.BackupFile, error) {
 	return a.backupService.ListBackups()
 }
 
+// VerifyDatabaseBackup 校验一份备份（D-DH-03）：哈希、文件包条目、SQLite 完整性与行数、表结构兼容性。
+func (a *App) VerifyDatabaseBackup(name string) (services.BackupVerification, error) {
+	if err := a.beginBackupOperation(); err != nil {
+		return services.BackupVerification{}, err
+	}
+	defer a.backupWG.Done()
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result, err := a.backupService.VerifyDatabaseBackup(ctx, name)
+	log.Printf("API VerifyDatabaseBackup ok=%v level=%s err=%v", result.OK, result.Level, err)
+	return result, services.WithoutAbsolutePaths(err)
+}
+
 // RevealBackupDirectory 在访达中打开实际的备份目录（与 GetBackupStatus 的 backup_directory 一致）。
 func (a *App) RevealBackupDirectory() error {
 	err := a.backupService.RevealBackupDirectory()

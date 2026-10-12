@@ -63,6 +63,8 @@ export function CancelCleanupConsolidation():Promise<void>;
 
 export function CancelCollectionSuggestionAnalysis():Promise<void>;
 
+export function CancelDataHealthCheck():Promise<void>;
+
 export function CancelEditAnalysis(arg1:number):Promise<void>;
 
 export function CancelEditProject(arg1:number):Promise<void>;
@@ -344,6 +346,8 @@ export function GetInterruptedSubtitleJobs():Promise<services.SubtitleInterrupte
 export function GetJellyfinDiagnostics():Promise<services.JellyfinDiagnostics>;
 
 export function GetJellyfinStatus():Promise<services.JellyfinStatus>;
+
+export function GetLatestDataHealthReport():Promise<services.DataHealthState>;
 
 export function GetLibraryCounts():Promise<services.LibraryCounts>;
 
@@ -655,6 +659,8 @@ export function ReorderCollectionVideos(arg1:number,arg2:Array<number>):Promise<
 
 export function ReorderVersionMembers(arg1:number,arg2:number,arg3:Array<number>):Promise<services.VersionGroupDetail>;
 
+export function RepairDataHealth(arg1:string):Promise<services.DataHealthRepairResult>;
+
 export function ReportInlineQueuePlayback(arg1:services.InlineQueueEvent):Promise<void>;
 
 export function RequeueEditProject(arg1:services.EditQueueRequest):Promise<services.EditQueueResult>;
@@ -698,6 +704,8 @@ export function RevealDownload(arg1:string):Promise<services.BrowserDownloadActi
 export function RevealImage(arg1:number):Promise<void>;
 
 export function RunAutomationRules(arg1:Array<number>):Promise<services.AutomationRuleRunStatus>;
+
+export function RunDataHealthCheck():Promise<services.DataHealthReportView>;
 
 export function RunGatedTaskNow(arg1:string):Promise<void>;
 
@@ -874,3 +882,5 @@ export function UpdateWatchlistEntry(arg1:number,arg2:string):Promise<void>;
 export function UpsertGlossaryEntry(arg1:models.TranslationGlossaryEntry):Promise<models.TranslationGlossaryEntry>;
 
 export function ValidateScanDirectory(arg1:string):Promise<services.ScanDirectoryValidation>;
+
+export function VerifyDatabaseBackup(arg1:string):Promise<services.BackupVerification>;

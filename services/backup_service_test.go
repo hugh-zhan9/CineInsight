@@ -29,6 +29,8 @@ type fakeBackupRunner struct {
 	calls    []backupRunnerCall
 	errFor   map[string]error
 	failList bool
+	// listing 是 pg_restore --list --file 写出的归档目录（清单的表名取自它）。
+	listing string
 }
 
 func (runner *fakeBackupRunner) LookPath(name string) (string, error) {
@@ -45,6 +47,13 @@ func (runner *fakeBackupRunner) Run(_ context.Context, name string, args []strin
 	}
 	if err := runner.errFor[name]; err != nil {
 		return err
+	}
+	if name == "pg_restore" && containsString(args, "--list") {
+		for index := range args {
+			if args[index] == "--file" && index+1 < len(args) {
+				return os.WriteFile(args[index+1], []byte(runner.listing), 0600)
+			}
+		}
 	}
 	if name == "pg_dump" {
 		for index := range args {
@@ -627,7 +636,7 @@ func TestSQLiteBackupWritesUsableSnapshotAndRotates(t *testing.T) {
 
 	directory := t.TempDir()
 	svc := &BackupService{dataDir: t.TempDir(), runner: execPostgresToolRunner{}, now: time.Now}
-	file, err := svc.performBackup(context.Background(), directory)
+	file, err := svc.performBackup(context.Background(), directory, true)
 	if err != nil {
 		t.Fatalf("SQLite 备份失败: %v", err)
 	}
@@ -1187,6 +1196,10 @@ func TestAPP01SQLiteRestoreInsufficientSpaceFailsBeforeMaintenanceAndSweepsLefto
 
 	var checkedDir string
 	service.diskFree = func(path string) (uint64, error) {
+		// 恢复前的安全备份也查空间（D-DH-01），查的是备份目录：那里放得下。
+		if path != filepath.Dir(livePath) {
+			return 1 << 50, nil
+		}
 		checkedDir = path
 		if _, err := os.Stat(leftover); !os.IsNotExist(err) {
 			t.Error("算空间之前应已清掉遗留的临时库")

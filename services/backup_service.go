@@ -39,6 +39,15 @@ type BackupFile struct {
 	Size        int64     `json:"size"`
 	CreatedAt   time.Time `json:"created_at" ts_type:"string"`
 	Fingerprint string    `json:"fingerprint"`
+	// Legacy：没有清单的旧格式备份（仅数据库、未校验，D-DH-02），仍可恢复。
+	Legacy bool `json:"legacy"`
+	// ManifestError：清单存在却读不出或对不上；这份备份校验不通过、恢复会被拒绝。
+	ManifestError string `json:"manifest_error"`
+	// FilesSize / FileCount 是文件包的大小与条目数（取自清单）。
+	FilesSize int64 `json:"files_size"`
+	FileCount int   `json:"file_count"`
+	// Verification 是这份备份最近一次「校验」的结果；从没校验过为空。
+	Verification *BackupVerification `json:"verification"`
 }
 
 type BackupRestoreRequest struct {
@@ -148,6 +157,9 @@ type BackupService struct {
 	// diskFree 返回目录所在卷对非特权用户可用的字节数，SQLite 恢复复制临时库之前用它检查空间；
 	// 测试用它模拟空间不足。为空时用 enhancementDiskFree（同一个 statfs 实现）。
 	diskFree func(path string) (uint64, error)
+	// inspectSnapshot 是新快照发布前的只读检查（quick_check、行数、表结构），测试用它在检查前
+	// 弄坏快照；为空时用 inspectSQLiteSnapshot。
+	inspectSnapshot func(ctx context.Context, path string) (sqliteSnapshotFacts, error)
 }
 
 // ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。
@@ -400,13 +412,18 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 			"备份文件与当前数据库后端不匹配，数据库未被修改：当前是 %s，而 %s 是另一种后端的快照",
 			backend, request.Name))
 	}
+	// 有清单的先查表结构（D-DH-03）：来自更新版本的备份在进入维护之前就拒绝。
+	manifest, err := s.restorableManifest(ctx, directory, request.Name, backend)
+	if err != nil {
+		return s.recordedRestoreFailure(err)
+	}
 	backupPath, err := s.copyVerifiedBackup(directory, request)
 	if err != nil {
 		return err
 	}
 	defer os.Remove(backupPath)
 	if backend == database.BackendSQLite {
-		return s.restoreSQLite(ctx, directory, backupPath, request, settings, beforeRestore)
+		return s.restoreSQLite(ctx, directory, backupPath, request, settings, manifest, beforeRestore)
 	}
 	config, env, err := postgresCommandEnvironment()
 	if err != nil {
@@ -455,6 +472,11 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 	if restoreErr != nil {
 		return s.recordedRestoreFailure(fmt.Errorf("恢复失败: %w", restoreErr))
 	}
+	// 数据库已经灌回；围栏仍在（App 随后退出），在这里还原文件包（4.2）。
+	if err := s.restoreBackupFiles(directory, manifest); err != nil {
+		_ = s.recordRestoreAttempt(false, errBackupFilesNotRestored)
+		return &DatabaseRestoreError{Committed: true, Fatal: true, Err: errBackupFilesNotRestored}
+	}
 	if err := s.recordRestoreAttempt(true, nil); err != nil {
 		return &DatabaseRestoreError{
 			Committed: true,
@@ -486,6 +508,7 @@ func (s *BackupService) restoreSQLite(
 	backupPath string,
 	request BackupRestoreRequest,
 	settings *models.Settings,
+	manifest *BackupManifest,
 	beforeRestore func() error,
 ) error {
 	livePath := database.SQLitePath(s.dataDir)
@@ -539,6 +562,10 @@ func (s *BackupService) restoreSQLite(
 		}
 	}
 	swapped = true
+	// 库文件已经换好、旧句柄已关，围栏仍在：还原文件包（4.2）。失败时不回滚数据库，应用照样退出。
+	if err := s.restoreBackupFiles(directory, manifest); err != nil {
+		return &DatabaseRestoreError{Committed: true, Fatal: true, Err: errBackupFilesNotRestored}
+	}
 	// 恢复成功就是成功：返回 nil，App 与 Postgres 成功时一样提示「恢复成功，应用将自动
 	// 退出」并走内部退出。此前这里返回 Committed+Fatal 的错误，前端会把一次成功的恢复
 	// 显示成「数据库恢复失败：……必须重启」。旧句柄已关，本次尝试的状态不写库——
@@ -665,7 +692,7 @@ func (s *BackupService) createBackupLocked(ctx context.Context) (*BackupFile, er
 		return nil, fmt.Errorf("读取备份设置失败: %w", err)
 	}
 	directory := s.resolveDirectory(settings.BackupDirectory)
-	backup, err := s.performBackup(ctx, directory)
+	backup, err := s.performBackup(ctx, directory, true)
 	if err != nil {
 		// 失败原因不进通知文案：pg_dump 的报错里带备份目录的绝对路径。
 		notifyDesktop(s.desktopNotifier(), "数据库备份失败", "备份未完成，可在设置页的数据库备份分区查看原因")
@@ -687,18 +714,21 @@ func (s *BackupService) createBackupLocked(ctx context.Context) (*BackupFile, er
 
 // performSafetyBackup 供恢复流程在写入围栏生效后调用，只走文件系统与 pg 工具，
 // 不访问应用数据库（此时连接可能已关闭）。轮转时保护待恢复的备份文件。
+// 安全备份同样带文件包与清单（D-DH-03），被覆盖的整理文件也能从里面找回；它不要求快照通过
+// 完整性检查——库坏了正是要恢复的时候，那份快照照样留下，问题记在清单的 quick_check 里。
 func (s *BackupService) performSafetyBackup(ctx context.Context, directory string, retain int, protectedBackup string) error {
-	if _, err := s.performBackup(ctx, directory); err != nil {
+	if _, err := s.performBackup(ctx, directory, false); err != nil {
 		return err
 	}
 	return s.rotateBackups(directory, retain, protectedBackup)
 }
 
-// performBackup 生成并校验一份新的转储文件。它不读写应用数据库，因此在数据库
-// 维护围栏生效期间也可以安全执行；状态记录由调用方负责。
-func (s *BackupService) performBackup(ctx context.Context, directory string) (*BackupFile, error) {
+// performBackup 生成并校验一份新备份（快照 + 文件包 + 清单）。它不读写应用数据库，因此在数据库
+// 维护围栏生效期间也可以安全执行；状态记录由调用方负责。requireIntact 为真时，SQLite 快照的
+// quick_check 不是 ok 就不发布（4.1 第 2 步）。
+func (s *BackupService) performBackup(ctx context.Context, directory string, requireIntact bool) (*BackupFile, error) {
 	if database.ActiveBackend() == database.BackendSQLite {
-		return s.performSQLiteBackup(directory)
+		return s.performSQLiteBackup(ctx, directory, requireIntact)
 	}
 	return s.performPostgresBackup(ctx, directory)
 }
@@ -708,7 +738,7 @@ func (s *BackupService) performBackup(ctx context.Context, directory string) (*B
 // 选它而不是复制库文件：VACUUM INTO 在事务边界上产出一致快照，不需要停写，
 // 也不受 WAL 的 -wal / -shm 边车文件影响——直接拷贝库文件会漏掉尚未 checkpoint
 // 的 WAL 内容，拷出来的东西可能根本打不开。
-func (s *BackupService) performSQLiteBackup(directory string) (*BackupFile, error) {
+func (s *BackupService) performSQLiteBackup(ctx context.Context, directory string, requireIntact bool) (*BackupFile, error) {
 	if database.DB == nil {
 		return nil, errors.New("数据库未初始化")
 	}
@@ -726,7 +756,25 @@ func (s *BackupService) performSQLiteBackup(directory string) (*BackupFile, erro
 	if err := database.DB.Exec("VACUUM INTO ?", tempPath).Error; err != nil {
 		return nil, fmt.Errorf("写出 SQLite 快照失败: %w", err)
 	}
-	return s.publishBackupArtifact(directory, tempPath, name, now)
+	// 发布前只读打开快照做快速完整性检查，并读出清单要记的行数与表结构（4.1 第 2 步）。
+	inspect := s.inspectSnapshot
+	if inspect == nil {
+		inspect = inspectSQLiteSnapshot
+	}
+	facts, err := inspect(ctx, tempPath)
+	if err != nil {
+		return nil, fmt.Errorf("检查 SQLite 快照失败: %w", err)
+	}
+	if requireIntact && facts.QuickCheck != "ok" {
+		return nil, fmt.Errorf("SQLite 快照未通过完整性检查，本次备份未发布：%s", facts.QuickCheck)
+	}
+	manifest := BackupManifest{
+		Backend:    string(database.BackendSQLite),
+		Schema:     BackupManifestSchema{Tables: facts.Tables},
+		Rows:       facts.Rows,
+		QuickCheck: facts.QuickCheck,
+	}
+	return s.publishBackup(ctx, directory, tempPath, name, now, manifest)
 }
 
 func (s *BackupService) performPostgresBackup(ctx context.Context, directory string) (*BackupFile, error) {
@@ -746,58 +794,53 @@ func (s *BackupService) performPostgresBackup(ctx context.Context, directory str
 	}
 	now := s.now()
 	name := backupFilePrefix + now.Format("20060102-150405.000000000") + backupFileSuffix
-	tempFile, err := os.CreateTemp(directory, ".cineinsight-backup-*.tmp")
+	tempPath, err := createBackupTempFile(directory)
 	if err != nil {
-		return nil, fmt.Errorf("创建备份临时文件失败: %w", err)
-	}
-	tempPath := tempFile.Name()
-	if closeErr := tempFile.Close(); closeErr != nil {
-		_ = os.Remove(tempPath)
-		return nil, closeErr
+		return nil, err
 	}
 	defer os.Remove(tempPath)
 	args := []string{"--format=custom", "--no-owner", "--no-privileges", "--file", tempPath, "--dbname", config.Database}
 	if err := s.runner.Run(ctx, "pg_dump", args, env); err != nil {
 		return nil, err
 	}
-	if err := s.runner.Run(ctx, "pg_restore", []string{"--list", tempPath}, env); err != nil {
+	tables, err := s.listPostgresArchiveTables(ctx, directory, tempPath, env)
+	if err != nil {
 		return nil, fmt.Errorf("备份产物校验失败: %w", err)
 	}
-	return s.publishBackupArtifact(directory, tempPath, name, now)
+	manifest := BackupManifest{Backend: string(database.BackendPostgres), Schema: BackupManifestSchema{Tables: tables}}
+	return s.publishBackup(ctx, directory, tempPath, name, now, manifest)
 }
 
-// publishBackupArtifact 把临时产物原子地发布成正式备份文件。两个后端共用：
-// 校验非空、收紧权限、先算指纹再发布（发布之后不再有可失败的读取步骤），
-// 用"独占创建占位 + rename"保证不覆盖同名文件，同时不依赖用户所选磁盘的硬链接支持。
-func (s *BackupService) publishBackupArtifact(directory, tempPath, name string, now time.Time) (*BackupFile, error) {
-	finalPath := filepath.Join(directory, name)
-	info, err := os.Stat(tempPath)
-	if err != nil || info.Size() == 0 {
-		if err == nil {
-			err = errors.New("备份产物为空")
-		}
+// listPostgresArchiveTables 用 pg_restore --list 校验归档可读，并从目录里取出表名（清单的表结构指纹）。
+// 目录写进备份目录里的临时文件（--file），不经由子进程的标准输出。
+func (s *BackupService) listPostgresArchiveTables(ctx context.Context, directory, archivePath string, env []string) (map[string][]string, error) {
+	listPath, err := createBackupTempFile(directory)
+	if err != nil {
 		return nil, err
 	}
-	if err := os.Chmod(tempPath, 0600); err != nil {
+	defer os.Remove(listPath)
+	if err := s.runner.Run(ctx, "pg_restore", []string{"--list", "--file", listPath, archivePath}, env); err != nil {
 		return nil, err
 	}
-	fingerprint, err := hashFile(tempPath)
+	listing, err := os.ReadFile(listPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取备份产物失败: %w", err)
+		return nil, fmt.Errorf("读取归档目录失败: %w", err)
 	}
-	placeholder, err := os.OpenFile(finalPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	return parsePostgresListTables(string(listing)), nil
+}
+
+// createBackupTempFile 在备份目录里建一个空的临时文件（名字能被 sweepStaleTempFiles 认出）。
+func createBackupTempFile(directory string) (string, error) {
+	file, err := os.CreateTemp(directory, ".cineinsight-backup-*.tmp")
 	if err != nil {
-		return nil, fmt.Errorf("发布备份文件失败: %w", err)
+		return "", fmt.Errorf("创建备份临时文件失败: %w", err)
 	}
-	if err := placeholder.Close(); err != nil {
-		_ = os.Remove(finalPath)
-		return nil, fmt.Errorf("发布备份文件失败: %w", err)
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
+		return "", err
 	}
-	if err := os.Rename(tempPath, finalPath); err != nil {
-		_ = os.Remove(finalPath)
-		return nil, fmt.Errorf("发布备份文件失败: %w", err)
-	}
-	return &BackupFile{Name: name, Size: info.Size(), CreatedAt: now, Fingerprint: fingerprint}, nil
+	return path, nil
 }
 
 // staleBackupTempFileMaxAge 之前遗留的临时文件视为崩溃残留。
@@ -837,20 +880,39 @@ func (s *BackupService) resolveDirectory(configured string) string {
 	return filepath.Clean(configured)
 }
 
-// listBackupsIn 附带指纹供前端恢复确认流程使用；只需要文件名与时间的路径
-// （如轮转）应使用 scanBackupEntries，避免对每个转储做整文件哈希。
+// listBackupsIn 附带指纹供前端恢复确认流程使用。有清单的备份直接取清单里的大小与哈希（4.1），
+// 不再每次逐份全量计算；没有清单的旧格式备份仍按文件现算指纹（恢复确认要用）。
+// 只需要文件名与时间的路径（如轮转）应使用 scanBackupEntries。
 func (s *BackupService) listBackupsIn(directory string) ([]BackupFile, error) {
 	entries, err := s.scanBackupEntries(directory)
 	if err != nil {
 		return nil, err
 	}
+	verifications := s.loadVerifications()
 	backups := make([]BackupFile, 0, len(entries))
 	for _, entry := range entries {
-		fingerprint, err := hashFile(filepath.Join(directory, entry.name))
-		if err != nil {
-			continue
+		backup := BackupFile{Name: entry.name, Size: entry.size, CreatedAt: entry.createdAt}
+		manifest, err := loadBackupManifest(directory, entry.name)
+		if err == nil {
+			backup.Size = manifest.Snapshot.Size
+			backup.Fingerprint = manifest.Snapshot.SHA256
+			backup.FilesSize = manifest.Files.Size
+			backup.FileCount = len(manifest.Files.Entries)
+		} else {
+			backup.Legacy = errors.Is(err, errBackupManifestMissing)
+			if !backup.Legacy {
+				backup.ManifestError = err.Error()
+			}
+			fingerprint, hashErr := hashFile(filepath.Join(directory, entry.name))
+			if hashErr != nil {
+				continue
+			}
+			backup.Fingerprint = fingerprint
 		}
-		backups = append(backups, BackupFile{Name: entry.name, Size: entry.size, CreatedAt: entry.createdAt, Fingerprint: fingerprint})
+		if verification, ok := verifications[entry.name]; ok {
+			backup.Verification = &verification
+		}
+		backups = append(backups, backup)
 	}
 	return backups, nil
 }
@@ -889,7 +951,12 @@ func (s *BackupService) scanBackupEntries(directory string) ([]backupDirEntry, e
 	return backups, nil
 }
 
+// rotateBackups 以快照为单位轮转，连同它的文件包与清单一起删除（4.1）；先清掉半成品与
+// 失去快照的文件包、清单，它们不占保留份数。
 func (s *BackupService) rotateBackups(directory string, retain int, protectedBackup string) error {
+	if err := removeIncompleteBackups(directory, protectedBackup); err != nil {
+		return err
+	}
 	backups, err := s.scanBackupEntries(directory)
 	if err != nil {
 		return err
@@ -900,7 +967,18 @@ func (s *BackupService) rotateBackups(directory string, retain int, protectedBac
 			kept++
 			continue
 		}
-		if err := os.Remove(filepath.Join(directory, backup.name)); err != nil {
+		if err := removeBackupGroup(directory, backup.name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// removeBackupGroup 删除一份备份的三件套：先清单、再文件包、最后快照。中途失败时剩下的成员
+// 会被下一次轮转当作半成品或孤儿清掉。
+func removeBackupGroup(directory, snapshotName string) error {
+	for _, name := range []string{backupManifestName(snapshotName), backupFilesName(snapshotName), snapshotName} {
+		if err := os.Remove(filepath.Join(directory, name)); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}

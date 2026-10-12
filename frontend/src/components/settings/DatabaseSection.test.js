@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => Object.fromEntries([
   'ClearMigrationTarget', 'CreateDatabaseBackup', 'GetBackupStatus', 'GetDatabaseBackendStatus', 'GetDatabaseSwitchStatus',
   'ListDatabaseBackups', 'ListDownloadTasks', 'PreflightDatabaseSwitch', 'RelaunchApp', 'RestoreDatabaseBackup', 'RevealBackupDirectory',
-  'SelectDirectory', 'StartDatabaseSwitch', 'SwitchBackendConfigOnly'
+  'SelectDirectory', 'StartDatabaseSwitch', 'SwitchBackendConfigOnly', 'VerifyDatabaseBackup'
 ].map(name => [name, vi.fn()])));
 const feedback = vi.hoisted(() => ({ confirmAction: vi.fn() }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
@@ -549,5 +549,76 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
     expect(exists(wrapper, 'db-clear-dialog')).toBe(false);
     expect(find(wrapper, 'db-relaunch-panel').text()).toContain('不能清空');
     expect(wrapper.emitted('relaunch-required')).toHaveLength(1);
+  });
+
+  describe('D-DH-02 / D-DH-03 备份清单、校验与恢复文案', () => {
+    const fullBackup = { name: 'cineinsight-20261012-090000.000000000.sqlite', size: 2048, created_at: '2026-10-12T09:00:00Z', fingerprint: 'f2', legacy: false, file_count: 3, files_size: 4096, verification: null };
+    const legacyBackup = { name: 'cineinsight-20261001-090000.000000000.sqlite', size: 1024, created_at: '2026-10-01T09:00:00Z', fingerprint: 'f3', legacy: true, file_count: 0, files_size: 0, verification: null };
+
+    async function openList(wrapper) {
+      await find(wrapper, 'backup-restore-open').trigger('click');
+      await flushPromises();
+      return wrapper.findAll('[data-test="backup-file-item"]');
+    }
+
+    it('列表标出旧格式备份，带清单的写出整理过的文件数量', async () => {
+      api.ListDatabaseBackups.mockResolvedValue([fullBackup, legacyBackup]);
+      const wrapper = await mountSection();
+      const rows = await openList(wrapper);
+      expect(rows).toHaveLength(2);
+      expect(rows[0].text()).toContain('整理过的文件 3 个');
+      expect(rows[0].find('[data-test="backup-legacy"]').exists()).toBe(false);
+      expect(rows[1].get('[data-test="backup-legacy"]').text()).toBe('旧格式：仅数据库、未校验');
+      expect(rows[1].text()).not.toContain('整理过的文件');
+    });
+
+    it('「校验」按备份名调用后端并显示结果标记；未通过时列出问题', async () => {
+      api.ListDatabaseBackups.mockResolvedValue([fullBackup, legacyBackup]);
+      api.VerifyDatabaseBackup
+        .mockResolvedValueOnce({ name: fullBackup.name, level: 'full', ok: true, problems: [] })
+        .mockResolvedValueOnce({ name: legacyBackup.name, level: 'legacy', ok: false, problems: ['快照无法作为本应用的 SQLite 库打开'] });
+      const wrapper = await mountSection();
+      const rows = await openList(wrapper);
+      await rows[0].get('[data-test="backup-verify"]').trigger('click');
+      await flushPromises();
+      await rows[1].get('[data-test="backup-verify"]').trigger('click');
+      await flushPromises();
+      expect(api.VerifyDatabaseBackup.mock.calls).toEqual([[fullBackup.name], [legacyBackup.name]]);
+      expect(rows[0].get('[data-test="backup-verify-badge"]').text()).toBe('已校验：完整');
+      expect(rows[1].get('[data-test="backup-verify-badge"]').text()).toBe('校验未通过');
+      expect(rows[1].get('[data-test="backup-verify-problem"]').text()).toContain('无法作为本应用的 SQLite 库打开');
+    });
+
+    it('列表带回上一次的校验结果', async () => {
+      api.ListDatabaseBackups.mockResolvedValue([{ ...fullBackup, verification: { level: 'archive', ok: true, problems: [] } }]);
+      const wrapper = await mountSection();
+      const rows = await openList(wrapper);
+      expect(rows[0].get('[data-test="backup-verify-badge"]').text()).toBe('已校验：哈希一致、归档可读');
+    });
+
+    it('恢复确认说明整理过的文件会一并还原；旧格式备份说明只恢复数据库', async () => {
+      api.ListDatabaseBackups.mockResolvedValue([fullBackup, legacyBackup]);
+      const wrapper = await mountSection();
+      let rows = await openList(wrapper);
+      await rows[0].findAll('button').find(button => button.text() === '恢复').trigger('click');
+      expect(find(wrapper, 'backup-restore-files-note').text()).toContain('也会一并还原');
+      await wrapper.findAll('button').find(button => button.text() === '返回').trigger('click');
+      rows = wrapper.findAll('[data-test="backup-file-item"]');
+      await rows[1].findAll('button').find(button => button.text() === '恢复').trigger('click');
+      expect(find(wrapper, 'backup-restore-files-note').text()).toContain('只恢复数据库');
+    });
+
+    it('来自更新版本、空间不足的原因码不显示给用户', async () => {
+      api.GetBackupStatus.mockResolvedValue({ available: true, backup_available: true, restore_available: true, last_error: 'backup_insufficient_space: 备份目录所在磁盘剩余空间不足（需要约 2 GB，可用 1 GB）' });
+      const wrapper = await mountSection();
+      expect(wrapper.text()).toContain('最近失败：备份目录所在磁盘剩余空间不足');
+      expect(wrapper.text()).not.toContain('backup_insufficient_space');
+      const message = await restoreWith(wrapper, 'backup_from_newer_version: 这份备份来自更新版本的应用（当前版本不认识：future_things），数据库未被修改');
+      expect(message).toBe('数据库恢复失败，当前数据库没有被改动：这份备份来自更新版本的应用（当前版本不认识：future_things），数据库未被修改');
+      api.CreateDatabaseBackup.mockRejectedValue('backup_insufficient_space: 备份目录所在磁盘剩余空间不足');
+      await find(wrapper, 'backup-now').trigger('click');
+      await flushPromises();
+      expect(find(wrapper, 'backup-message').text()).toBe('备份失败：备份目录所在磁盘剩余空间不足');
+    });
   });
 });
