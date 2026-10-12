@@ -1685,7 +1685,14 @@ func (s *VideoService) RemoveTagFromVideo(videoID uint, tagID uint) error {
 		return setManualAutomaticVideoTag(videoID, tag, false)
 	}
 
-	return database.DB.Model(&video).Association("Tags").Delete(&tag)
+	// 用户手动去掉的标签：规则账本行留着（挡住规则再加回），但不再记作规则插入（D-RA-03/04）；
+	// 否则之后经 AI 批准、撤销转人物等别的路径加回来时仍会被当成规则标签。
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&video).Association("Tags").Delete(&tag); err != nil {
+			return err
+		}
+		return claimRuleInsertedTagsTx(tx, AutomationMediaVideo, []uint{videoID}, tagID)
+	})
 }
 
 func setManualAutomaticVideoTag(videoID uint, tag models.Tag, present bool) error {

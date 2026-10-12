@@ -697,7 +697,13 @@ func (s *ImageLibraryService) RemoveTagFromImage(imageID uint, tagID uint) error
 		return fmt.Errorf("自动标签由应用维护，不能手动移除")
 	}
 
-	return database.DB.Model(&image).Association("Tags").Delete(&tag)
+	// 与视频侧同口径：账本行留着挡住规则加回，但不再记作规则插入（D-RA-03/04）。
+	return database.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&image).Association("Tags").Delete(&tag); err != nil {
+			return err
+		}
+		return claimRuleInsertedTagsTx(tx, AutomationMediaImage, []uint{imageID}, tagID)
+	})
 }
 
 // BatchAddTagToImages 批量打标，逐项记录失败原因。
