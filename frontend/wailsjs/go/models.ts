@@ -672,6 +672,7 @@ export namespace models {
 	    max_height: number;
 	    min_rating?: number;
 	    max_rating?: number;
+	    missing: string;
 	    sort_mode: string;
 	    created_at: string;
 	    updated_at: string;
@@ -695,6 +696,7 @@ export namespace models {
 	        this.max_height = source["max_height"];
 	        this.min_rating = source["min_rating"];
 	        this.max_rating = source["max_rating"];
+	        this.missing = source["missing"];
 	        this.sort_mode = source["sort_mode"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -923,6 +925,7 @@ export namespace models {
 	    original_title: string;
 	    description: string;
 	    personal_rating?: number;
+	    year?: number;
 	    path: string;
 	    directory: string;
 	    size: number;
@@ -959,6 +962,7 @@ export namespace models {
 	        this.original_title = source["original_title"];
 	        this.description = source["description"];
 	        this.personal_rating = source["personal_rating"];
+	        this.year = source["year"];
 	        this.path = source["path"];
 	        this.directory = source["directory"];
 	        this.size = source["size"];
@@ -1498,6 +1502,243 @@ export namespace services {
 	        this.tag_ids = source["tag_ids"];
 	        this.dropped = source["dropped"];
 	    }
+	}
+	export class AutomationRuleAction {
+	    type: string;
+	    tag_id?: number;
+	    collection_id?: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRuleAction(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.tag_id = source["tag_id"];
+	        this.collection_id = source["collection_id"];
+	    }
+	}
+	export class AutomationRuleActionView {
+	    type: string;
+	    tag_id?: number;
+	    collection_id?: number;
+	    target_name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRuleActionView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.tag_id = source["tag_id"];
+	        this.collection_id = source["collection_id"];
+	        this.target_name = source["target_name"];
+	    }
+	}
+	export class AutomationRuleCondition {
+	    type: string;
+	    path?: string;
+	    text?: string;
+	    pattern?: string;
+	    exts?: string[];
+	    codecs?: string[];
+	    min?: number;
+	    max?: number;
+	    value?: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRuleCondition(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.type = source["type"];
+	        this.path = source["path"];
+	        this.text = source["text"];
+	        this.pattern = source["pattern"];
+	        this.exts = source["exts"];
+	        this.codecs = source["codecs"];
+	        this.min = source["min"];
+	        this.max = source["max"];
+	        this.value = source["value"];
+	    }
+	}
+	export class AutomationRuleInput {
+	    id: number;
+	    name: string;
+	    media_kind: string;
+	    enabled: boolean;
+	    conditions: AutomationRuleCondition[];
+	    actions: AutomationRuleAction[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRuleInput(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.media_kind = source["media_kind"];
+	        this.enabled = source["enabled"];
+	        this.conditions = this.convertValues(source["conditions"], AutomationRuleCondition);
+	        this.actions = this.convertValues(source["actions"], AutomationRuleAction);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AutomationRuleSample {
+	    media_kind: string;
+	    id: number;
+	    name: string;
+	    directory: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRuleSample(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.media_kind = source["media_kind"];
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.directory = source["directory"];
+	    }
+	}
+	export class AutomationRulePreview {
+	    rule_id: number;
+	    count: number;
+	    samples: AutomationRuleSample[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRulePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.rule_id = source["rule_id"];
+	        this.count = source["count"];
+	        this.samples = this.convertValues(source["samples"], AutomationRuleSample);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class AutomationRuleRunStatus {
+	    running: boolean;
+	    cancelled: boolean;
+	    completed: boolean;
+	    rule_ids: number[];
+	    total: number;
+	    processed: number;
+	    matched: number;
+	    added: number;
+	    error: string;
+	    started_at?: string;
+	    finished_at?: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRuleRunStatus(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.running = source["running"];
+	        this.cancelled = source["cancelled"];
+	        this.completed = source["completed"];
+	        this.rule_ids = source["rule_ids"];
+	        this.total = source["total"];
+	        this.processed = source["processed"];
+	        this.matched = source["matched"];
+	        this.added = source["added"];
+	        this.error = source["error"];
+	        this.started_at = source["started_at"];
+	        this.finished_at = source["finished_at"];
+	    }
+	}
+	
+	export class AutomationRuleView {
+	    id: number;
+	    name: string;
+	    media_kind: string;
+	    enabled: boolean;
+	    position: number;
+	    conditions: AutomationRuleCondition[];
+	    actions: AutomationRuleActionView[];
+	    disabled_reason: string;
+	    last_run_at?: string;
+	    created_at: string;
+	    updated_at: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new AutomationRuleView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.media_kind = source["media_kind"];
+	        this.enabled = source["enabled"];
+	        this.position = source["position"];
+	        this.conditions = this.convertValues(source["conditions"], AutomationRuleCondition);
+	        this.actions = this.convertValues(source["actions"], AutomationRuleActionView);
+	        this.disabled_reason = source["disabled_reason"];
+	        this.last_run_at = source["last_run_at"];
+	        this.created_at = source["created_at"];
+	        this.updated_at = source["updated_at"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class BackupFile {
 	    name: string;

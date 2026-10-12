@@ -57,6 +57,15 @@ type TechnicalBackfillService struct {
 	worker         sync.WaitGroup
 	registry       *BackgroundTaskRegistry
 	pauseHook      TaskPauseHook
+	// probedObserver 在某条视频补探测成功后收到 id，供规则队列再评估一次（D-RA-05）。
+	probedObserver func(uint)
+}
+
+// SetProbedObserver 注入「补探测成功」的观察者（规则队列入队）。观察者只能记 id。
+func (s *TechnicalBackfillService) SetProbedObserver(observer func(uint)) {
+	s.mu.Lock()
+	s.probedObserver = observer
+	s.mu.Unlock()
 }
 
 func NewTechnicalBackfillService(probe *MediaProbeService) *TechnicalBackfillService {
@@ -304,6 +313,12 @@ func (s *TechnicalBackfillService) run(ctx context.Context, candidates []technic
 			continue
 		}
 		s.recordSuccess()
+		s.mu.Lock()
+		observer := s.probedObserver
+		s.mu.Unlock()
+		if observer != nil {
+			observer(candidate.ID)
+		}
 	}
 	s.finish(ctx.Err() != nil)
 }

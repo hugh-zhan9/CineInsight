@@ -583,6 +583,10 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 		if err := rewriteSavedViewTagIDsTx(tx, uniqueSources, targetTagID); err != nil {
 			return err
 		}
+		// 规则动作与规则账本里的来源标签一并改成目标标签（D-RA-05）。
+		if err := rewriteAutomationRuleTagTargetsTx(tx, uniqueSources, targetTagID); err != nil {
+			return err
+		}
 		if err := tx.Where("id IN ?", uniqueSources).Delete(&models.Tag{}).Error; err != nil {
 			return err
 		}
@@ -1007,6 +1011,10 @@ func deleteTagTx(tx *gorm.DB, tag *models.Tag) error {
 		return err
 	}
 	if err := tx.Exec("DELETE FROM image_tags WHERE tag_id = ?", tag.ID).Error; err != nil {
+		return err
+	}
+	// 引用它的规则动作失效：删账本行、去掉动作，没剩动作的规则停用（D-RA-05）。
+	if err := dropAutomationRuleTargetTx(tx, automationWriteTag, tag.ID); err != nil {
 		return err
 	}
 	if err := tx.Delete(tag).Error; err != nil {

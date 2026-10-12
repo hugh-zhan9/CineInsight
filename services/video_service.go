@@ -34,6 +34,9 @@ type VideoService struct {
 	playbackProxy   *PlaybackProxyService
 	// watchState 保存已看状态观察者（D-PC52），见 library_service.go 的 SetWatchStateObserver。
 	watchState watchStateNotifier
+	// newVideoObserver 在新建视频记录（探测与本地元数据观察之后）时收到 id，供规则队列入队（D-RA-05）。
+	newVideoObserverMu sync.RWMutex
+	newVideoObserver   func(uint)
 }
 
 func NewVideoService(mediaProbe *MediaProbeService) *VideoService {
@@ -56,6 +59,23 @@ func (s *VideoService) observeLocalMetadata(videoID uint, isNew bool) {
 	}
 	if err := observer(videoID, isNew); err != nil {
 		log.Printf("本地元数据观察失败 video_id=%d new=%v err=%v", videoID, isNew, err)
+	}
+}
+
+// SetNewVideoObserver 注入「新建了一条视频记录」的观察者（规则队列入队，D-RA-05）。只对新建的行触发：
+// 放回原处恢复的旧记录、回收站恢复、搬家纠偏都不触发。观察者只能记 id，调用方此时可能持有扫描的路径读锁。
+func (s *VideoService) SetNewVideoObserver(observer func(uint)) {
+	s.newVideoObserverMu.Lock()
+	s.newVideoObserver = observer
+	s.newVideoObserverMu.Unlock()
+}
+
+func (s *VideoService) notifyNewVideo(videoID uint) {
+	s.newVideoObserverMu.RLock()
+	observer := s.newVideoObserver
+	s.newVideoObserverMu.RUnlock()
+	if observer != nil {
+		observer(videoID)
 	}
 }
 
@@ -390,6 +410,7 @@ func (s *VideoService) addVideoOrRestorePutBack(path string) (*models.Video, boo
 		}
 	}
 	s.observeLocalMetadata(video.ID, true)
+	s.notifyNewVideo(video.ID)
 	if refreshed, refreshErr := s.GetVideo(video.ID); refreshErr == nil {
 		video = refreshed
 	}
