@@ -13,6 +13,8 @@ export default {
     videoId: { type: Number, default: 0 },
     startAtMs: { type: Number, default: null }
   },
+  // App.vue 接这些事件（D-UI-07、D-UI-10）：back 弹返回栈回到来源页并恢复滚动；open-video(videoID) 是相关推荐，
+  // 在返回栈上再压一层；navigate(pageKey) 切页；edit-in-manage(videoID) 切到片库管理并在详情抽屉里打开这部片。
   emits: ['back', 'open-video', 'navigate', 'edit-in-manage']
 };
 </script>
