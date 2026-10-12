@@ -6,7 +6,7 @@
         <div>
           <h2>{{ selectedEntity ? selectedEntityName : (isPeople ? '人物' : '作品集') }}</h2>
           <p v-if="selectedEntity && isPeople">已加载：视频 {{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部 · 图片 {{ entityImages.length }} / {{ selectedEntityImageCount }} 张。</p>
-          <p v-else-if="selectedEntity">{{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部已加载，可直接预览、播放或打开目录。</p>
+          <p v-else-if="selectedEntity">{{ entityVideos.length }} / {{ selectedEntityVideoCount }} 部已加载，可直接查看详情、播放或打开目录。</p>
           <p v-else>{{ isPeople ? '本地维护的演员实体；同名人物会保持独立。' : '手工编排的视频集合；一个视频可以属于多个作品集。' }}</p>
         </div>
       </div>
@@ -95,7 +95,7 @@
             <small>{{ formatBytes(video.size) }} · {{ formatDuration(video.duration) }}</small>
           </div>
           <div class="entity-video-card__actions">
-            <button type="button" class="btn-secondary btn-compact" @click="openVideoDetails(video)">预览</button>
+            <button type="button" class="btn-secondary btn-compact" :data-test="`entity-video-detail-${video.id}`" @click="openVideoDetails(video)">详情</button>
             <button type="button" class="btn-primary btn-compact" :disabled="playingVideoIDs.includes(Number(video.id))" @click="playEntityVideo(video)">{{ playingVideoIDs.includes(Number(video.id)) ? '启动中...' : '播放' }}</button>
             <button type="button" class="btn-secondary btn-compact" @click="openVideoDirectory(video)">目录</button>
             <button v-if="isPeople" type="button" class="btn-danger btn-compact" :data-test="`person-video-delete-${video.id}`" @click="requestPersonMediaDelete('video', video)">删除</button>
@@ -193,6 +193,8 @@ const emptyMergeForm = () => ({ open: false, keyword: '', results: [], selectedI
 export default {
   name: 'EntityLibraryPage',
   components: { FaceClusterReviewPanel, PreviewDrawer, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog },
+  // open-video(video)：点了某部相关视频，App 按观看区分流进整页详情。
+  emits: ['open-video'],
   props: {
     entityType: { type: String, required: true },
     // 命令面板「作品集 · X」/「人物 · X」的落点（D-029）：{ id, name }，置一次即消费。
@@ -599,7 +601,9 @@ export default {
       const index = this.items.findIndex(item => this.entityID(item) === id);
       if (index >= 0) this.items.splice(index, 1, { ...this.items[index], ...this.selectedItem });
     },
-    openVideoDetails(video) { this.drawerEntity = { type: 'video', id: Number(video.id) }; },
+    // 人物与作品集属观看区（D-UI-07）：点视频交给 App 的分流进整页详情，不在本页抽屉里开；
+    // 改资料从详情页的「编辑资料」进片库管理。人物 / 作品集本身的编辑仍是本页的「编辑与批量关联」抽屉。
+    openVideoDetails(video) { this.$emit('open-video', video); },
     async playEntityVideo(video) {
       const id = Number(video.id); if (!id || this.playingVideoIDs.includes(id)) return;
       this.playingVideoIDs = [...this.playingVideoIDs, id]; this.error = '';

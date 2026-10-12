@@ -644,6 +644,9 @@ export default {
     settings: { type: Object, required: true },
     directories: { type: Array, default: () => [] },
     pageActive: { type: Boolean, default: true },
+    // ⌘K 由本页直接开清理中心。观看侧「视频」与管理侧「片库管理」共用本页：在「视频」上 App 传 false，
+    // 让 App 的全局 ⌘K 先切到片库管理再开，与其他页面一致（D-UI-03）。
+    cleanupHotkey: { type: Boolean, default: true },
     consolidationRoute: { type: Object, default: null }
   },
   emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'consolidation-opened', 'search-scenes', 'find-similar-scenes', 'open-video-edit'],
@@ -1099,7 +1102,7 @@ export default {
 	  } else if (key === 't' && !event.shiftKey) {
 	    event.preventDefault();
 	    this.openAITagReviewDialog();
-	  } else if (key === 'k' && !event.shiftKey) {
+	  } else if (key === 'k' && !event.shiftKey && this.cleanupHotkey) {
 	    event.preventDefault();
 	    this.openCleanupDialog();
 	  }
@@ -2506,6 +2509,16 @@ export default {
         return;
       }
       this.mergeVideoState(updatedVideo);
+    },
+    // 别处（观看侧整页详情）改了某部片的状态：{ id, changes } 只带改动的字段（收藏、已看、评分、进度、失效）。
+    // 列表里有这一行就并上去，走同一条状态更新路径（看状态的视图里不再符合会按当前条件重载）；
+    // 没加载到这一行就不管，下次加载自然是新的。
+    async applyExternalVideoStateChange({ id, changes } = {}) {
+      const videoID = Number(id);
+      if (!videoID || !changes) return;
+      const current = this.videos.find(video => Number(video.id) === videoID);
+      if (!current) return;
+      await this.applyVideoStateChange({ ...current, ...changes, id: current.id });
     },
     async toggleVideoFavorite(video) {
       try {

@@ -1,8 +1,10 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../wailsjs/go/main/App', () => ({}));
 
-import { DETAIL_RETURN_LIMIT, opensVideoDetail, popDetailReturn, pushDetailReturn } from './viewerNavigation.js';
+import {
+  DETAIL_RETURN_LIMIT, opensVideoDetail, popDetailReturn, pushDetailReturn, restoreScrollWhenReachable, SCROLL_RESTORE_TIMEOUT_MS
+} from './viewerNavigation.js';
 
 const detail = (videoId, scrollTop = 0) => ({ page: 'video-detail', params: { videoId }, scrollTop });
 const page = (key, scrollTop = 0) => ({ page: key, params: null, scrollTop });
@@ -92,5 +94,56 @@ describe('整页详情的返回栈（D-UI-10）', () => {
   it('管理区的来源不压栈（没有可回的观看页）', () => {
     expect(pushDetailReturn([], page('settings'), 1)).toEqual([]);
     expect(pushDetailReturn([], page('library-manage'), 1)).toEqual([]);
+  });
+});
+
+describe('restoreScrollWhenReachable（I-2）', () => {
+  beforeEach(() => vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'Date'] }));
+  afterEach(() => vi.useRealTimers());
+
+  const container = height => ({ scrollHeight: height, clientHeight: 600, scrollTop: 0 });
+
+  it('内容已经够高时立刻放回', () => {
+    const el = container(3000);
+    restoreScrollWhenReachable(el, 2400);
+    expect(el.scrollTop).toBe(2400);
+  });
+
+  it('目标为 0 时直接放回 0', () => {
+    const el = container(0);
+    el.scrollTop = 50;
+    restoreScrollWhenReachable(el, 0);
+    expect(el.scrollTop).toBe(0);
+  });
+
+  it('等内容长到 scrollHeight - clientHeight ≥ 目标才放回，正好够也算', () => {
+    const el = container(600);
+    restoreScrollWhenReachable(el, 2400);
+    vi.advanceTimersByTime(100);
+    el.scrollHeight = 2999;
+    vi.advanceTimersByTime(32);
+    expect(el.scrollTop).toBe(0);
+    el.scrollHeight = 3000;
+    vi.advanceTimersByTime(32);
+    expect(el.scrollTop).toBe(2400);
+  });
+
+  it(`超过 ${SCROLL_RESTORE_TIMEOUT_MS} 毫秒就放弃`, () => {
+    const el = container(600);
+    restoreScrollWhenReachable(el, 2400);
+    vi.advanceTimersByTime(SCROLL_RESTORE_TIMEOUT_MS + 100);
+    el.scrollHeight = 9000;
+    vi.advanceTimersByTime(200);
+    expect(el.scrollTop).toBe(0);
+  });
+
+  it('取消后不再放回', () => {
+    const el = container(600);
+    const cancel = restoreScrollWhenReachable(el, 2400);
+    vi.advanceTimersByTime(50);
+    cancel();
+    el.scrollHeight = 9000;
+    vi.advanceTimersByTime(200);
+    expect(el.scrollTop).toBe(0);
   });
 });
