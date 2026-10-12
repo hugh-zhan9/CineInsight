@@ -175,8 +175,10 @@ type BackupService struct {
 	volumeOf func(path string) (string, error)
 	// blockSizeOf 返回路径所在卷的分配块大小；测试用它模拟大块文件系统。为空时用 backupBlockSize。
 	blockSizeOf func(path string) int64
-	// beforeUnpack 在还原文件包、开始往暂存目录解包之前调用，测试用它观察（或模拟在此处崩溃）。
-	beforeUnpack func()
+	// beforeUnpack 在还原文件包、开始往暂存目录解包之前调用；afterMarkerWritten 在写下 staging 标记之后、建暂存目录
+	// 之前调用。测试用它们观察顺序（或模拟在此处出错）。
+	beforeUnpack       func()
+	afterMarkerWritten func()
 }
 
 // ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。

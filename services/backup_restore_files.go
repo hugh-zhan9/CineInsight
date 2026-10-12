@@ -71,7 +71,7 @@ func (s *BackupService) restorableManifest(ctx context.Context, directory, name 
 
 // checkFilesPackBeforeRestore 在动任何东西之前确认文件包可用：存在、大小与哈希与清单一致、每个条目都能读出且
 // 都在清单里（与「校验」同一套读法）；并且文件包要还原的每个收录目录现在都不是「不可用」——失效的链接或没挂载
-// 的盘上还原，等于用备份内容顶掉用户的链接（审阅 R2）。空间由 checkRestoreSpace 按卷合计。
+// 的盘上还原，等于用备份内容顶掉用户的链接（审阅 R2）；链接过去的目录还要写得进去。空间由 checkRestoreSpace 按卷合计。
 func (s *BackupService) checkFilesPackBeforeRestore(directory string, manifest *BackupManifest) error {
 	packPath := filepath.Join(directory, manifest.Files.Name)
 	info, err := os.Lstat(packPath)
@@ -83,7 +83,12 @@ func (s *BackupService) checkFilesPackBeforeRestore(directory string, manifest *
 		return errBackupFilesInvalid
 	}
 	for _, dir := range restoredBackupDirectories(manifest) {
-		if state, _ := curatedRootState(s.dataDir, dir); state == curatedRootUnavailable {
+		placement, state, err := s.placeCuratedRoot(dir, false)
+		if err != nil || state == curatedRootUnavailable {
+			return errBackupFilesTargetUnavailable
+		}
+		// 链接到数据目录之外的目录按合并还原：先试着在里面建、删一个临时文件，写不进去就现在拒绝（第四轮 D1）。
+		if placement.Linked && !s.probeLinkedTarget(dir) {
 			return errBackupFilesTargetUnavailable
 		}
 	}
@@ -134,19 +139,25 @@ func (s *BackupService) restoreBackupFiles(directory string, manifest *BackupMan
 	return err
 }
 
-// swapInBackupFiles 还原文件包（4.2）。每个要还原的收录目录（备份时不可用的不在其中）先解析到真实位置（链接
-// 指向的目录，链接本身保留，审阅 I-1）；写下 staging 标记后在真实目录的同级建暂存目录，文件包完整解进去并逐条校验；
-// 标记改成 swapping 后逐个目录「真实目录改名为 <名字>.pre-restore-<时间>，暂存目录改名就位」。改名前再查一次该目录
-// 仍可用、仍在原来的位置，变了就不动它、这次还原记为不完整（审阅 M6）；就位失败时把刚改走的原目录改回来。全部处理完
-// 删掉改名留下的旧目录（安全备份里已经有它们）与标记。改回也失败时标记留着，下次启动按标记改回。
+// swapInBackupFiles 还原文件包（4.2）。每个要还原的收录目录（备份时不可用的不在其中）先解析到真实位置：
+//   - 在数据目录里的：同级建暂存目录，整目录换入（真实目录改名为 <名字>.pre-restore-<时间>，暂存目录就位）；
+//   - 链接到数据目录之外的：暂存目录建在数据目录里，解好后逐个文件合并进链接指向的目录（backup_restore_merge.go）。
+//
+// 顺序：先写 staging 标记，再建暂存目录、把文件包完整解进去并逐条校验；标记改成 swapping 后逐个目录处理，每做完一个
+// 更新它在标记里的状态。处理前再查一次该目录仍可用、仍在原来的位置，变了就不动它、这次还原记为不完整（审阅 M6）；
+// 换入失败时把刚改走的原目录改回来。全部换好才删掉 .pre-restore-*；有目录没还原（不完整或失败）时已换好目录的
+// .pre-restore-* 一律保留（审阅第四轮 D5）。改回也失败时标记留着，下次启动按标记改回。
 func (s *BackupService) swapInBackupFiles(directory string, manifest *BackupManifest) error {
 	if s.filesRestoreMarkerExists() {
 		return errFilesRestoreRecoveryPending // 不覆盖上次没收拾完的现场
 	}
+	dataRoot, err := s.resolvedDataDir()
+	if err != nil {
+		return err
+	}
 	stamp := s.now().Format("20060102-150405.000000000")
 	partial := false
 	marker := filesRestoreMarker{State: filesRestoreStaging, Stamp: stamp}
-	byDir := map[string]filesRestoreTarget{}
 	for _, dir := range restoredBackupDirectories(manifest) {
 		placement, state, err := s.placeCuratedRoot(dir, true)
 		if err != nil {
@@ -156,15 +167,21 @@ func (s *BackupService) swapInBackupFiles(directory string, manifest *BackupMani
 			partial = true
 			continue
 		}
-		target := filesRestoreTarget{Dir: dir, Parent: placement.Parent, Base: placement.Base, Staging: placement.stagingName(stamp)}
-		if placement.Exists {
+		target := filesRestoreTarget{Dir: dir, Mode: filesRestoreModeSwap, Parent: placement.Parent, Base: placement.Base,
+			Staging: placement.stagingName(stamp), State: filesTargetPending}
+		if placement.Linked {
+			target.Mode, target.Parent, target.Base = filesRestoreModeMerge, dataRoot, filepath.Base(filepath.FromSlash(dir))
+			target.Staging = backupFilesMergeStagingPrefix + target.Base + "-" + stamp
+		} else if placement.Exists {
 			target.Aside = placement.asideName(stamp)
 		}
 		marker.Targets = append(marker.Targets, target)
-		byDir[dir] = target
 	}
 	if err := s.writeFilesRestoreMarker(marker); err != nil {
 		return err
+	}
+	if s.afterMarkerWritten != nil {
+		s.afterMarkerWritten()
 	}
 	keepMarker := false
 	defer func() {
@@ -175,21 +192,104 @@ func (s *BackupService) swapInBackupFiles(directory string, manifest *BackupMani
 			s.removeFilesRestoreMarker()
 		}
 	}()
+	staged := map[string]string{}
 	for _, target := range marker.Targets {
-		if err := os.MkdirAll(filepath.Join(target.Parent, target.Staging), 0755); err != nil {
+		staged[target.Dir] = filepath.Join(target.Parent, target.Staging)
+		if err := os.MkdirAll(staged[target.Dir], 0755); err != nil {
 			return pathlessError(err)
 		}
 	}
-	extractTo := func(name string) string {
-		dir := backupPackDirectoryOf(name)
-		target, ok := byDir[dir]
-		if !ok {
-			return "" // 这个目录这次不还原：只校验，不写出
-		}
-		return filepath.Join(target.Parent, target.Staging, filepath.FromSlash(strings.TrimPrefix(name, dir+"/")))
+	if err := s.unpackFilesPack(directory, manifest, staged); err != nil {
+		return err
 	}
+	marker.State = filesRestoreSwapping
+	if err := s.writeFilesRestoreMarker(marker); err != nil {
+		return err
+	}
+	for index := range marker.Targets {
+		done, err := s.restoreOneCuratedRoot(&marker, index, staged[marker.Targets[index].Dir])
+		if err != nil {
+			keepMarker = errors.Is(err, errFilesRenameBackFailed)
+			return err
+		}
+		partial = partial || !done
+	}
+	if partial {
+		return errors.New("有收录目录在还原时不可用、位置变了或没能全部写进去，没有完整还原")
+	}
+	for index, target := range marker.Targets {
+		if target.Mode == filesRestoreModeSwap && target.Aside != "" {
+			if err := os.RemoveAll(filepath.Join(target.Parent, target.Aside)); err != nil {
+				log.Printf("删除恢复前的旧目录失败 err=%v", err)
+				continue
+			}
+			marker.Targets[index].State = filesTargetAsideDeleted
+			s.updateFilesRestoreMarker(marker)
+		}
+	}
+	return nil
+}
+
+// restoreOneCuratedRoot 处理一个目录（换入或合并），返回它是否完整还原。处理前再查一次：目录不可用、位置变了、
+// 是否链接变了，就不动它（返回未完成）。换入失败返回错误；改回也失败时错误带 errFilesRenameBackFailed，标记要留着。
+func (s *BackupService) restoreOneCuratedRoot(marker *filesRestoreMarker, index int, staged string) (bool, error) {
+	target := &marker.Targets[index]
+	current, state, err := s.placeCuratedRoot(target.Dir, false)
+	if err != nil || state == curatedRootUnavailable || current.Linked != (target.Mode == filesRestoreModeMerge) {
+		return false, nil
+	}
+	if target.Mode == filesRestoreModeMerge {
+		complete := s.mergeLinkedRoot(target.Dir, staged)
+		target.State = filesTargetMerged
+		s.updateFilesRestoreMarker(*marker)
+		return complete, nil
+	}
+	original := filepath.Join(target.Parent, target.Base)
+	if current.target() != original || current.Exists != (target.Aside != "") {
+		return false, nil
+	}
+	aside := ""
+	if target.Aside != "" {
+		aside = filepath.Join(target.Parent, target.Aside)
+		if err := s.renamePath(original, aside); err != nil {
+			return false, err
+		}
+	}
+	if err := s.renamePath(staged, original); err != nil {
+		if aside != "" {
+			if backErr := s.renamePath(aside, original); backErr != nil {
+				log.Printf("文件包就位失败后改回原目录也失败，留待下次启动按标记改回 dir=%s err=%v", target.Dir, backErr)
+				return false, fmt.Errorf("%w: %v", errFilesRenameBackFailed, err)
+			}
+		}
+		return false, err
+	}
+	target.State = filesTargetSwapped
+	s.updateFilesRestoreMarker(*marker)
+	return true, nil
+}
+
+// updateFilesRestoreMarker 记下某个目录的新状态；写不进去只记日志（恢复时按更保守的旧状态处理）。
+func (s *BackupService) updateFilesRestoreMarker(marker filesRestoreMarker) {
+	if err := s.writeFilesRestoreMarker(marker); err != nil {
+		log.Printf("更新整理文件还原标记失败 err=%v", err)
+	}
+}
+
+var errFilesRenameBackFailed = errors.New("文件包就位失败后改回原目录也失败")
+
+// unpackFilesPack 把文件包完整解进各目录的暂存目录并逐条校验；不还原的目录的条目只校验、不写出。
+func (s *BackupService) unpackFilesPack(directory string, manifest *BackupManifest, staged map[string]string) error {
 	if s.beforeUnpack != nil {
 		s.beforeUnpack()
+	}
+	extractTo := func(name string) string {
+		dir := backupPackDirectoryOf(name)
+		root, ok := staged[dir]
+		if !ok {
+			return ""
+		}
+		return filepath.Join(root, filepath.FromSlash(strings.TrimPrefix(name, dir+"/")))
 	}
 	packHash, entryErr, ioErr := readBackupFilesPack(filepath.Join(directory, manifest.Files.Name), manifest.Files, extractTo)
 	switch {
@@ -199,46 +299,6 @@ func (s *BackupService) swapInBackupFiles(directory string, manifest *BackupMani
 		return entryErr
 	case packHash != manifest.Files.SHA256:
 		return errors.New("文件包的哈希与清单不一致")
-	}
-	marker.State = filesRestoreSwapping
-	if err := s.writeFilesRestoreMarker(marker); err != nil {
-		return err
-	}
-	asides := []string{}
-	for _, target := range marker.Targets {
-		original := filepath.Join(target.Parent, target.Base)
-		current, state, err := s.placeCuratedRoot(target.Dir, false)
-		if err != nil || state == curatedRootUnavailable || current.target() != original || current.Exists != (target.Aside != "") {
-			partial = true
-			continue
-		}
-		aside := ""
-		if target.Aside != "" {
-			aside = filepath.Join(target.Parent, target.Aside)
-			if err := s.renamePath(original, aside); err != nil {
-				return err
-			}
-		}
-		if err := s.renamePath(filepath.Join(target.Parent, target.Staging), original); err != nil {
-			if aside != "" {
-				if backErr := s.renamePath(aside, original); backErr != nil {
-					log.Printf("文件包就位失败后改回原目录也失败，留待下次启动按标记改回 dir=%s err=%v", target.Dir, backErr)
-					keepMarker = true
-				}
-			}
-			return err
-		}
-		if aside != "" {
-			asides = append(asides, aside)
-		}
-	}
-	for _, aside := range asides {
-		if err := os.RemoveAll(aside); err != nil {
-			log.Printf("删除恢复前的旧目录失败 err=%v", err)
-		}
-	}
-	if partial {
-		return errors.New("有收录目录在还原时不可用或位置变了，没有还原")
 	}
 	return nil
 }

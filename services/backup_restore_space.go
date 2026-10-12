@@ -158,7 +158,7 @@ func (s *BackupService) estimateSafetyBackup(directory string, request BackupRes
 }
 
 // planUnpackedFiles 把文件包解出来要占的空间记到各收录目录真实位置的那块盘上（审阅 I-1 / M4）：每个文件按块取整，
-// 暂存目录本身与其下每个子目录各占一块。
+// 暂存目录本身与其下每个子目录各占一块。合并还原的目录另在数据目录那块盘上记一份暂存。
 func (s *BackupService) planUnpackedFiles(plan *restoreSpacePlan, manifest *BackupManifest) error {
 	sizes := map[string][]int64{}
 	directories := map[string]map[string]bool{}
@@ -189,6 +189,12 @@ func (s *BackupService) planUnpackedFiles(plan *restoreSpacePlan, manifest *Back
 		}
 		if err := plan.add(placement.Parent, all...); err != nil {
 			return err
+		}
+		// 合并还原：文件先解到数据目录里的暂存目录，再逐个写进链接指向的目录——两块盘上都要放得下。
+		if placement.Linked {
+			if err := plan.add(s.dataDir, all...); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
