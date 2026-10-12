@@ -25,8 +25,9 @@ const (
 	curatedRootUnavailable                          // 存在却进不去：失效的符号链接、没挂载的盘、读不到、不是目录
 )
 
-// curatedRootState 判定一个收录目录此刻的状态（审阅 R2）。逐级检查数据目录以下的每一段：某一级是失效链接或
-// 不是目录时整个收录目录算「不可用」——不能当成空目录打包，否则恢复时会用空目录顶掉用户的数据。
+// curatedRootState 判定一个收录目录此刻的状态（审阅 R2 / M7）。逐级检查数据目录以下的每一段：某一级是失效链接或
+// 不是目录、或收录目录本身列不出来时，整个收录目录算「不可用」——不能当成空目录打包，否则恢复时会用空目录顶掉
+// 用户的数据。
 // 可用时返回解析过符号链接的实际路径（收录目录本身被用户换成指向别处的链接时照样遍历它）。
 func curatedRootState(dataDir, dir string) (curatedRootStatus, string) {
 	current := dataDir
@@ -46,10 +47,21 @@ func curatedRootState(dataDir, dir string) (curatedRootStatus, string) {
 		}
 	}
 	resolved, err := filepath.EvalSymlinks(current)
-	if err != nil {
+	if err != nil || !directoryListable(resolved) {
 		return curatedRootUnavailable, ""
 	}
 	return curatedRootPresent, resolved
+}
+
+// directoryListable：目录能打开并列出（空目录也算）。存在却列不出（没有权限）的收录目录按「不可用」处理（审阅 M7）。
+func directoryListable(path string) bool {
+	dir, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer dir.Close()
+	_, err = dir.Readdirnames(1)
+	return err == nil || errors.Is(err, io.EOF)
 }
 
 // walkBackupFiles 按固定顺序遍历收录目录里的普通文件，返回此刻不可用的收录目录。目录不存在不算错误
@@ -229,8 +241,11 @@ func readBackupPackEntry(reader io.Reader, header *tar.Header, expected map[stri
 	hash := sha256.New()
 	sink := io.Writer(hash)
 	var out *os.File
+	target := ""
 	if extractTo != nil {
-		target := extractTo(header.Name)
+		target = extractTo(header.Name) // 空串：这个条目只校验、不写出
+	}
+	if target != "" {
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
 			return fmt.Errorf("创建暂存目录失败: %w", pathlessError(err))
 		}

@@ -282,9 +282,9 @@ export function databaseErrorReason(err) {
   return { code: match[1], text: text.slice(match[0].length) };
 }
 
-// 备份与恢复失败的原因码（D-DH-01 空间不足、D-DH-03 来自更新版本、文件包缺失或损坏、还原目标目录不可用）
-// 只给程序分类，界面上去掉。
-const BACKUP_REASON_PREFIX = /^(backup_insufficient_space|backup_from_newer_version|backup_files_invalid|backup_files_target_unavailable)\s*:\s*/;
+// 备份与恢复失败的原因码（D-DH-01 空间不足、D-DH-03 来自更新版本、文件包缺失或损坏、还原目标目录不可用、
+// 上次还原整理文件的现场没收拾完）只给程序分类，界面上去掉。
+const BACKUP_REASON_PREFIX = /^(backup_insufficient_space|backup_from_newer_version|backup_files_invalid|backup_files_target_unavailable|backup_restore_recovery_pending)\s*:\s*/;
 export function backupReasonText(text) {
   return String(text || '').trim().replace(BACKUP_REASON_PREFIX, '');
 }

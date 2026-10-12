@@ -173,6 +173,10 @@ type BackupService struct {
 	rename func(from, to string) error
 	// volumeOf 返回路径所在卷的标识，恢复前按卷合计空间需求；测试用它模拟多块盘。为空时用 backupVolumeID。
 	volumeOf func(path string) (string, error)
+	// blockSizeOf 返回路径所在卷的分配块大小；测试用它模拟大块文件系统。为空时用 backupBlockSize。
+	blockSizeOf func(path string) int64
+	// beforeUnpack 在还原文件包、开始往暂存目录解包之前调用，测试用它观察（或模拟在此处崩溃）。
+	beforeUnpack func()
 }
 
 // ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。
@@ -427,6 +431,10 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 		return s.recordedRestoreFailure(fmt.Errorf(
 			"备份文件与当前数据库后端不匹配，数据库未被修改：当前是 %s，而 %s 是另一种后端的快照",
 			backend, request.Name))
+	}
+	// 上次还原整理文件若中途中断，先按标记收拾；收拾不完就不开始这次恢复（审阅 M2）。
+	if err := s.ensureNoPendingFilesRestore(); err != nil {
+		return s.recordedRestoreFailure(err)
 	}
 	// 有清单的先查表结构（D-DH-03）：来自更新版本的备份在进入维护之前就拒绝。
 	manifest, err := s.restorableManifest(ctx, directory, request.Name, backend)
@@ -1081,7 +1089,8 @@ func (s *BackupService) writeAttempt(maintenanceAccess, success bool, operationE
 		updates["backup_last_success_at"] = &now
 		updates["backup_last_error"] = ""
 	} else if operationErr != nil {
-		message := operationErr.Error()
+		// 设置页把它显示成「最近失败」：落库前擦掉绝对路径（G-3）。
+		message := WithoutAbsolutePaths(operationErr).Error()
 		if len(message) > 1000 {
 			message = message[:1000]
 		}

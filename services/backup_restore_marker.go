@@ -6,30 +6,74 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
-// 文件包还原的进行中标记（4.2，审阅 R3）：开始改名之前写下每个收录目录的旧目录名与暂存目录名，全部就位（或失败后已
-// 改回）才删除。应用中途崩溃时标记留着，下次启动按它把缺失的收录目录改回原名——只动标记里记的名字，不按时间猜。
+// 文件包还原的进行中标记（4.2，审阅 R3 / I-2）：在建暂存目录、解包之前就写下（state=staging），开始改名前改成
+// state=swapping；全部就位（或失败后已改回）才删除。记下每个收录目录的真实位置（已解析符号链接的上级 + 名字）、
+// 暂存目录名与改名后的旧目录名。应用中途崩溃时标记留着，下次启动按它收拾：
+//   - staging：只删记下的暂存目录，原目录没动过，保持原样；
+//   - swapping：缺失的收录目录由记下的旧目录改回原名。
+// 只动标记里记的、前缀对得上的名字，不按时间猜，也不碰别的东西。
 
-const backupFilesRestoreMarker = ".cineinsight-restore-in-progress.json"
+const (
+	backupFilesRestoreMarker = ".cineinsight-restore-in-progress.json"
+	filesRestoreStaging      = "staging"
+	filesRestoreSwapping     = "swapping"
+)
+
+// BackupReasonRestoreRecoveryPending：上次还原整理文件的现场没能收拾完（标记还在），这次恢复不开始。
+const BackupReasonRestoreRecoveryPending = "backup_restore_recovery_pending"
+
+var errFilesRestoreRecoveryPending = fmt.Errorf("%s: 上次还原整理过的文件没有收拾完（有目录没能改回原名），为免覆盖现场，这次恢复没有开始，数据库未被修改；请重启应用后再试，或检查数据目录的权限",
+	BackupReasonRestoreRecoveryPending)
 
 type filesRestoreMarker struct {
+	State   string               `json:"state"`
 	Stamp   string               `json:"stamp"`
 	Targets []filesRestoreTarget `json:"targets"`
 }
 
-// filesRestoreTarget：Dir 是收录目录（相对数据目录）；Aside 与 Staging 是与它同级的旧目录名与暂存目录名
-// （只是名字，不含路径）。原目录不存在时 Aside 为空。
+// filesRestoreTarget：Dir 是收录目录（相对数据目录）；Parent + Base 是它的真实位置；Staging 与 Aside 是与真实目录
+// 同级的暂存目录名与旧目录名（只是名字）。原目录不存在时 Aside 为空。
 type filesRestoreTarget struct {
 	Dir     string `json:"dir"`
+	Parent  string `json:"parent"`
+	Base    string `json:"base"`
 	Aside   string `json:"aside"`
 	Staging string `json:"staging"`
+}
+
+// valid 是防篡改的名字检查（审阅 M1）：收录目录要认识，上级是规整的绝对路径，名字是不含路径的单段，
+// 暂存目录名以 .cineinsight-restore-<名字>- 开头，旧目录名以 <名字>.pre-restore- 开头。对不上的条目一律不动。
+func (t filesRestoreTarget) valid() bool {
+	plain := func(name string) bool {
+		return name != "" && filepath.Base(name) == name && name != "." && name != ".."
+	}
+	return validBackupDirectory(t.Dir) && filepath.IsAbs(t.Parent) && filepath.Clean(t.Parent) == t.Parent && plain(t.Base) &&
+		plain(t.Staging) && strings.HasPrefix(t.Staging, backupFilesStagingPrefix+t.Base+"-") &&
+		(t.Aside == "" || (plain(t.Aside) && strings.HasPrefix(t.Aside, t.Base+backupFilesAsideMarker)))
+}
+
+func validBackupDirectory(dir string) bool {
+	for _, known := range backupFilesDirectories {
+		if dir == known {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *BackupService) filesRestoreMarkerPath() string {
 	return filepath.Join(s.dataDir, backupFilesRestoreMarker)
 }
 
+func (s *BackupService) filesRestoreMarkerExists() bool {
+	_, err := os.Lstat(s.filesRestoreMarkerPath())
+	return err == nil
+}
+
+// writeFilesRestoreMarker 原子写入标记（临时文件 → fsync → 改名）。
 func (s *BackupService) writeFilesRestoreMarker(marker filesRestoreMarker) error {
 	data, err := json.Marshal(marker)
 	if err != nil {
@@ -61,70 +105,12 @@ func (s *BackupService) removeFilesRestoreMarker() {
 	}
 }
 
-// RecoverInterruptedFilesRestore 收拾上一次文件还原中途崩溃留下的现场（启动时与每次还原文件包之前调用）。
-// 只在进行中标记存在时动手：标记里的收录目录不见了、而记下的旧目录还在，就把旧目录改回原名；记下的暂存目录删掉。
-// 全部处理完才删标记（改回失败时留着，下次再试）。改回过目录时给一次桌面通知，设置页的备份状态也显示说明。
-func (s *BackupService) RecoverInterruptedFilesRestore() {
-	data, err := os.ReadFile(s.filesRestoreMarkerPath())
-	if os.IsNotExist(err) {
-		return
+// ensureNoPendingFilesRestore 在恢复开始前（进入维护之前）先收拾上次的现场；收拾不完（标记还在）就拒绝这次恢复，
+// 不覆盖标记（审阅 M2）。
+func (s *BackupService) ensureNoPendingFilesRestore() error {
+	s.RecoverInterruptedFilesRestore()
+	if s.filesRestoreMarkerExists() {
+		return errFilesRestoreRecoveryPending
 	}
-	var marker filesRestoreMarker
-	if err != nil || json.Unmarshal(data, &marker) != nil {
-		log.Printf("整理文件还原标记读不出，未做任何改动 err=%v", err)
-		return
-	}
-	recovered, failed := 0, false
-	for _, entry := range marker.Targets {
-		if !validBackupDirectory(entry.Dir) || !validSiblingName(entry.Aside) || !validSiblingName(entry.Staging) {
-			log.Printf("整理文件还原标记里有不认识的条目，跳过 dir=%q", entry.Dir)
-			continue
-		}
-		target := filepath.Join(s.dataDir, filepath.FromSlash(entry.Dir))
-		parent := filepath.Dir(target)
-		if entry.Staging != "" {
-			_ = os.RemoveAll(filepath.Join(parent, entry.Staging))
-		}
-		if entry.Aside == "" {
-			continue
-		}
-		aside := filepath.Join(parent, entry.Aside)
-		if _, err := os.Lstat(target); !os.IsNotExist(err) {
-			continue
-		}
-		if _, err := os.Lstat(aside); err != nil {
-			continue
-		}
-		if err := s.renamePath(aside, target); err != nil {
-			log.Printf("恢复中断后的目录改回失败 dir=%s err=%v", entry.Dir, err)
-			failed = true
-			continue
-		}
-		recovered++
-		log.Printf("上次还原整理文件中途中断：已把 %s 改回恢复前的内容", entry.Dir)
-	}
-	if !failed {
-		s.removeFilesRestoreMarker()
-	}
-	if recovered > 0 {
-		notice := fmt.Sprintf("上次从备份还原整理过的文件时中途中断，已把 %d 个目录改回恢复前的内容；数据库可能已是备份里的状态，必要时请重新恢复", recovered)
-		s.registryMu.Lock()
-		s.notice = notice
-		s.registryMu.Unlock()
-		notifyDesktop(s.desktopNotifier(), "整理过的文件已复原", notice)
-	}
-}
-
-// validBackupDirectory / validSiblingName 防止被改过的标记把改名指到收录目录之外。
-func validBackupDirectory(dir string) bool {
-	for _, known := range backupFilesDirectories {
-		if dir == known {
-			return true
-		}
-	}
-	return false
-}
-
-func validSiblingName(name string) bool {
-	return name == "" || (filepath.Base(name) == name && name != "." && name != "..")
+	return nil
 }
