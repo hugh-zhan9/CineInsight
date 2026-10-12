@@ -24,6 +24,8 @@ func (a *App) initDataCare(dataDir string) {
 	a.initMetadataEdit(dataDir)
 	a.initAutomationRules(dataDir)
 	a.initDataHealth(dataDir)
+	// 体检的「孤儿文件」项只汇总，判定与回收归失联页签（D-DH-04 / D-LD-05）。
+	a.dataCare.health.SetOrphanFileSummary(a.dataCare.lost.OrphanFileTotals)
 }
 
 // startDataCare 在 startup 里接上依赖运行时上下文的部分（事件推送、常驻队列）。

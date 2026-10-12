@@ -7,7 +7,7 @@
 import {
   CancelAIReviewApproval, CancelAutomationRuleRun, CancelCleanupConsolidation, CancelCleanupAnalysis, CancelCollectionSuggestionAnalysis, CancelDataHealthCheck, CancelFaceAnalysis, CancelImageAITagging,
   CancelImageCleanupAnalysis, CancelImageEXIFBackfill, CancelImagePerceptualHashBackfill,
-  CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelMovieChartRefresh,
+  CancelImageSemanticIndex, CancelLocalMetadataBackfill, CancelLostMediaTask, CancelMovieChartRefresh,
   CancelFrameHashBackfill, CancelPerceptualHashBackfill, CancelPlaybackProxyTask, CancelSceneIndex, CancelSemanticIndex, CancelSubtitle, CancelTechnicalBackfill,
   CreateDatabaseBackup, RunGatedTaskNow, StartCleanupAnalysisFromSettings, StartCollectionSuggestionAnalysis,
   StartImageAITagging, StartImageCleanupAnalysis, StartImageEXIFBackfill,
@@ -61,7 +61,9 @@ const TASK_BINDINGS = {
   // 规则「对现有内容运行」要选规则，只在数据维护页发起；在跑时可取消。
   automation_rules: { cancel: () => CancelAutomationRuleRun() },
   // 数据体检只在数据维护页「体检」页签发起；在跑时（体检或修复）可取消。
-  data_health: { cancel: () => CancelDataHealthCheck() }
+  data_health: { cancel: () => CancelDataHealthCheck() },
+  // 失联的找回 / 清除 / 孤儿回收只在数据维护页「失联」页签发起；在跑时可取消（已提交的条目保留）。
+  lost_media: { cancel: () => CancelLostMediaTask() }
 };
 
 // 「立即运行」恰好落在任务刚被放行之后会收到 idle_gate_task_not_waiting，

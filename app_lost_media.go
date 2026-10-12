@@ -30,7 +30,7 @@ func (a *App) taskCenterLostMedia(src *taskCenterSources) taskCenterKeyState {
 		return taskCenterKeyState{}
 	}
 	status := a.dataCare.lost.Status()
-	return taskCenterKeyState{running: status.Running, progress: runningProgress(status.Running, status.Processed, status.Total)}
+	return taskCenterKeyState{running: status.Running, canCancel: status.Running, progress: runningProgress(status.Running, status.Processed, status.Total)}
 }
 
 // GetLostMediaReport 返回失联报告（kind 为 video / image）。
