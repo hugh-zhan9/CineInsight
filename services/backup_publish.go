@@ -44,6 +44,9 @@ func (s *BackupService) publishBackup(ctx context.Context, directory, snapshotTe
 		return nil, err
 	}
 	files.Name = backupFilesName(name)
+	if manifest.Models, err = currentModelSchema(); err != nil {
+		return nil, err
+	}
 	manifest.Format = backupManifestFormat
 	manifest.CreatedAt = now
 	manifest.Snapshot = BackupManifestFile{Name: name, Size: info.Size(), SHA256: snapshotHash}
@@ -88,7 +91,7 @@ func (s *BackupService) ensureBackupSpace(directory string, snapshotSize int64) 
 	}
 	free, err := diskFree(directory)
 	if err != nil {
-		return fmt.Errorf("无法检查备份目录所在磁盘的剩余空间: %w", err)
+		return fmt.Errorf("无法检查备份目录所在磁盘的剩余空间: %w", pathlessError(err))
 	}
 	if need := uint64(estimate + snapshotSize); free < need {
 		return fmt.Errorf("%s: 备份目录所在磁盘剩余空间不足（需要约 %s，可用 %s）",
@@ -101,7 +104,7 @@ func (s *BackupService) ensureBackupSpace(directory string, snapshotSize int64) 
 func (s *BackupService) writeFilesPackTo(ctx context.Context, path string) (BackupManifestFiles, error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return BackupManifestFiles{}, fmt.Errorf("创建文件包失败: %w", err)
+		return BackupManifestFiles{}, fmt.Errorf("创建文件包失败: %w", pathlessError(err))
 	}
 	hash := sha256.New()
 	counter := &countingWriter{}
@@ -111,7 +114,7 @@ func (s *BackupService) writeFilesPackTo(ctx context.Context, path string) (Back
 		return BackupManifestFiles{}, fmt.Errorf("写出文件包失败: %w", err)
 	}
 	if closeErr != nil {
-		return BackupManifestFiles{}, fmt.Errorf("写出文件包失败: %w", closeErr)
+		return BackupManifestFiles{}, fmt.Errorf("写出文件包失败: %w", pathlessError(closeErr))
 	}
 	return BackupManifestFiles{Size: counter.n, SHA256: fmt.Sprintf("%x", hash.Sum(nil)), Entries: entries}, nil
 }
@@ -134,7 +137,7 @@ func writeBackupManifestTemp(directory string, manifest BackupManifest) (string,
 	}
 	if err := os.WriteFile(path, data, 0600); err != nil {
 		_ = os.Remove(path)
-		return "", fmt.Errorf("写出备份清单失败: %w", err)
+		return "", fmt.Errorf("写出备份清单失败: %w", pathlessError(err))
 	}
 	return path, nil
 }
@@ -144,19 +147,29 @@ func writeBackupManifestTemp(directory string, manifest BackupManifest) (string,
 func publishBackupFile(directory, tempPath, name string) error {
 	finalPath := filepath.Join(directory, name)
 	if err := os.Chmod(tempPath, 0600); err != nil {
-		return fmt.Errorf("发布备份文件失败: %w", err)
+		return fmt.Errorf("发布备份文件失败: %w", pathlessError(err))
 	}
 	placeholder, err := os.OpenFile(finalPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
-		return fmt.Errorf("发布备份文件失败: %w", err)
+		return fmt.Errorf("发布备份文件失败: %w", pathlessError(err))
 	}
 	if err := placeholder.Close(); err != nil {
 		_ = os.Remove(finalPath)
-		return fmt.Errorf("发布备份文件失败: %w", err)
+		return fmt.Errorf("发布备份文件失败: %w", pathlessError(err))
 	}
 	if err := os.Rename(tempPath, finalPath); err != nil {
 		_ = os.Remove(finalPath)
-		return fmt.Errorf("发布备份文件失败: %w", err)
+		return fmt.Errorf("发布备份文件失败: %w", pathlessFileError(err))
 	}
 	return nil
+}
+
+// pathlessFileError 在 pathlessError 之外再去掉改名错误（*os.LinkError）里的两个路径（G-3）：
+// 这些错误会进 backup_last_error 与界面文案。
+func pathlessFileError(err error) error {
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return linkErr.Err
+	}
+	return pathlessError(err)
 }

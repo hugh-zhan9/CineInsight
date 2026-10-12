@@ -109,7 +109,8 @@ describe('数据体检面板（D-DH-04 / D-DH-05）', () => {
     await find(wrapper, 'data-health-repair-dangling_refs').trigger('click');
     await flushPromises();
     expect(api.RepairDataHealth).toHaveBeenCalledWith('dangling_refs');
-    expect(find(wrapper, 'data-health-notice').text()).toContain('已处理 2 条');
+    expect(find(wrapper, 'data-health-notice').text()).toBe('已删除 2 行悬挂引用，已重新检查这一项');
+    expect(feedback.confirmAction.mock.calls[1][0].danger).toBe(true);
     expect(exists(wrapper, 'data-health-repair-dangling_refs')).toBe(false);
     expect(find(wrapper, 'data-health-check-dangling_refs').get('[data-test="data-health-summary"]').text()).toContain('0 行可以清理');
   });
@@ -133,5 +134,26 @@ describe('数据体检面板（D-DH-04 / D-DH-05）', () => {
     expect(api.GetLatestDataHealthReport).toHaveBeenCalledTimes(2);
     expect(exists(wrapper, 'data-health-check-backups')).toBe(true);
     expect(exists(wrapper, 'data-health-progress')).toBe(false);
+  });
+
+  it('清空失效路径：确认框是危险样式，完成提示用后端实际清空的条数', async () => {
+    const managed = {
+      check: 'managed_paths', status: 'problem', count: 4, bytes: 0, summary: '4 条记录指向已不存在的托管图片', examples: [], repairable: true, link: '',
+      groups: [
+        { key: 'videos.poster_path', label: '视频海报副本', count: 4, detail: '', examples: ['media-details/videos/1/a.jpg'], repairable: true },
+        { key: 'unavailable:people', label: 'media-details/people（目录不可用）', count: 9, detail: '目录不存在或链接失效，其下 9 条未检查', examples: [], repairable: false }
+      ]
+    };
+    api.GetLatestDataHealthReport.mockResolvedValue({ running: false, progress: { phase: 'idle' }, report: { ...report, checks: [managed] } });
+    api.RepairDataHealth.mockResolvedValue({ check: 'managed_paths', repaired: 3, cancelled: false, result: { ...managed, count: 0, repairable: false, status: 'warning', groups: [managed.groups[1]] } });
+    const wrapper = await mountPanel();
+    expect(find(wrapper, 'data-health-group-unavailable:people').text()).toContain('其下 9 条未检查');
+    await find(wrapper, 'data-health-repair-managed_paths').trigger('click');
+    await flushPromises();
+    const options = feedback.confirmAction.mock.calls[0][0];
+    expect(options.danger).toBe(true);
+    expect(options.message).toContain('清空 4 条');
+    expect(api.RepairDataHealth).toHaveBeenCalledWith('managed_paths');
+    expect(find(wrapper, 'data-health-notice').text()).toBe('已清空 3 条失效路径，已重新检查这一项');
   });
 });

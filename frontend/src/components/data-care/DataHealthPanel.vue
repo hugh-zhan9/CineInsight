@@ -74,20 +74,25 @@ export const DATA_HEALTH_CHECKS = {
     label: '引用悬挂',
     explain: '没有外键的引用（各类忽略记录、人脸观测与关系记账、待播队列、规则账本、批量编辑明细）所指的记录已彻底不存在，回收站里的不算。修复删除这些引用行；工作台成品与迁移暂存来源是历史记录，只报告。观看笔记本就比视频保留得久，不算悬挂。',
     repair: '清理悬挂引用',
-    confirm: count => `将删除 ${count} 行可清理的悬挂引用（历史记录不动）。删除后不能撤销，确定继续吗？`
+    danger: true,
+    confirm: count => `将删除 ${count} 行可清理的悬挂引用（历史记录不动）。删除后不能撤销，确定继续吗？`,
+    done: count => `已删除 ${count} 行悬挂引用，已重新检查这一项`
   },
   missing_unique_indexes: { label: '唯一索引', explain: '启动时应建好的唯一索引。缺失时同一路径或同一组合可能重复；去重要人来判断，这里只报告。' },
   derived_counts: {
     label: '派生计数',
     explain: '字幕与场景索引段数、人脸簇观测数、帧哈希帧数应与明细一致，可按明细重算。播放次数、最近播放时间与图片查看次数不由明细推出，不在检查内。',
     repair: '按明细重算',
-    confirm: count => `将按明细重算 ${count} 行计数，确定继续吗？`
+    confirm: count => `将按明细重算 ${count} 行计数（观测已全部移除的人脸簇会一并删除），确定继续吗？`,
+    done: count => `已按明细重算 ${count} 行，已重新检查这一项`
   },
   managed_paths: {
     label: '托管图片路径',
-    explain: '海报副本、人物头像、作品集封面、想看封面等记录指向数据目录里已经不存在的文件。修复会清空这些路径，之后可以重新补全或导入。',
+    explain: '海报副本、人物头像、作品集封面、想看封面等记录指向数据目录里已经不存在的文件。修复会清空这些路径，之后可以重新补全或导入。整个目录不可用（不存在或链接失效）时其下的记录不检查、也不会被清空。',
     repair: '清空失效路径',
-    confirm: count => `将清空 ${count} 条指向不存在文件的图片路径，确定继续吗？`
+    danger: true,
+    confirm: count => `将清空 ${count} 条指向不存在文件的图片路径，清空后要重新补全或导入才有图。确定继续吗？`,
+    done: count => `已清空 ${count} 条失效路径，已重新检查这一项`
   },
   backups: { label: '备份状态', explain: '最近一次成功备份、最近一次校验结果与旧格式备份数。备份、校验与恢复都在设置页的「数据库备份」分区。' },
   orphan_files: { label: '孤儿文件', explain: '缩略图、海报副本、字幕备份等所属记录已不存在的文件。回收在「失联」页签。' }
@@ -194,7 +199,7 @@ export default {
       const meta = DATA_HEALTH_CHECKS[check.check];
       if (!meta?.repair || this.running) return;
       const confirmed = await confirmAction({
-        title: meta.repair, message: meta.confirm(this.repairableCount(check)), confirmText: meta.repair, danger: check.check === 'dangling_refs'
+        title: meta.repair, message: meta.confirm(this.repairableCount(check)), confirmText: meta.repair, danger: Boolean(meta.danger)
       });
       if (!confirmed) return;
       this.error = '';
@@ -207,7 +212,8 @@ export default {
         if (result?.cancelled) {
           this.notice = `已取消，已处理 ${result.repaired} 条`;
         } else {
-          this.notice = `${meta.repair}：已处理 ${result?.repaired || 0} 条，已重新检查这一项`;
+          // 数字取后端实际改动的行数，不是确认框里预估的数。
+          this.notice = meta.done(Number(result?.repaired || 0));
           if (result?.result && this.report) {
             this.report = { ...this.report, checks: this.report.checks.map(item => (item.check === check.check ? result.result : item)) };
           }

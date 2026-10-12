@@ -27,7 +27,7 @@ func walkBackupFiles(dataDir string, visit func(rel, abs string) error) error {
 			continue
 		}
 		if err != nil {
-			return fmt.Errorf("读取 %s 失败: %w", dir, err)
+			return fmt.Errorf("读取 %s 失败: %w", dir, pathlessError(err))
 		}
 		if !info.IsDir() {
 			continue
@@ -50,12 +50,12 @@ func walkBackupFiles(dataDir string, visit func(rel, abs string) error) error {
 			}
 			rel, err := filepath.Rel(dataDir, current)
 			if err != nil {
-				return err
+				return pathlessError(err)
 			}
 			return visit(filepath.ToSlash(rel), current)
 		})
 		if err != nil {
-			return fmt.Errorf("遍历 %s 失败: %w", dir, err)
+			return fmt.Errorf("遍历 %s 失败: %w", dir, pathlessError(err))
 		}
 	}
 	return nil
@@ -70,7 +70,7 @@ func estimateBackupFilesPack(dataDir string) (int64, error) {
 			return nil
 		}
 		if err != nil {
-			return err
+			return pathlessError(err)
 		}
 		total += 512 + (info.Size()+511)/512*512
 		return nil
@@ -92,12 +92,12 @@ func writeBackupFilesPack(ctx context.Context, dataDir string, out io.Writer) ([
 			return nil
 		}
 		if err != nil {
-			return err
+			return fmt.Errorf("读取 %s 失败: %w", rel, pathlessError(err))
 		}
 		defer file.Close()
 		info, err := file.Stat()
 		if err != nil {
-			return err
+			return fmt.Errorf("读取 %s 失败: %w", rel, pathlessError(err))
 		}
 		if !info.Mode().IsRegular() {
 			return nil
@@ -115,7 +115,7 @@ func writeBackupFilesPack(ctx context.Context, dataDir string, out io.Writer) ([
 		hash := sha256.New()
 		copied, err := io.Copy(writer, io.TeeReader(io.LimitReader(file, info.Size()), hash))
 		if err != nil {
-			return err
+			return fmt.Errorf("打包 %s 失败: %w", rel, pathlessError(err))
 		}
 		if copied != info.Size() {
 			return fmt.Errorf("%s 在打包时被改动", rel)
@@ -146,10 +146,11 @@ func validBackupPackPath(name string) bool {
 }
 
 // readBackupFilesPack 逐条读出文件包，核对条目路径、大小与哈希都与清单一致，返回整个文件的哈希
-// 与第一个条目问题。extractRoot 非空时同时把内容写到它下面（恢复用的暂存目录）。
+// 与第一个条目问题。extractTo 非空时同时把每个条目写到它给出的位置（恢复用的暂存目录）；只有通过
+// validBackupPackPath 且列在清单里的条目才会被写出。
 // 条目有问题时仍读完整个文件，好让调用方分别报告「哈希」与「条目」两项结论；
 // 读文件本身失败（ioErr）时哈希不可用。
-func readBackupFilesPack(packPath string, files BackupManifestFiles, extractRoot string) (fileHash string, entryErr error, ioErr error) {
+func readBackupFilesPack(packPath string, files BackupManifestFiles, extractTo func(name string) string) (fileHash string, entryErr error, ioErr error) {
 	file, err := os.Open(packPath)
 	if err != nil {
 		return "", nil, errors.New("文件包不存在或无法读取")
@@ -172,7 +173,7 @@ func readBackupFilesPack(packPath string, files BackupManifestFiles, extractRoot
 			entryErr = errors.New("文件包格式损坏")
 			break
 		}
-		entryErr = readBackupPackEntry(reader, header, expected, seen, extractRoot)
+		entryErr = readBackupPackEntry(reader, header, expected, seen, extractTo)
 	}
 	if entryErr == nil && len(seen) != len(expected) {
 		entryErr = errors.New("文件包缺少清单里的条目")
@@ -183,7 +184,7 @@ func readBackupFilesPack(packPath string, files BackupManifestFiles, extractRoot
 	return fmt.Sprintf("%x", hash.Sum(nil)), entryErr, nil
 }
 
-func readBackupPackEntry(reader io.Reader, header *tar.Header, expected map[string]BackupManifestEntry, seen map[string]bool, extractRoot string) error {
+func readBackupPackEntry(reader io.Reader, header *tar.Header, expected map[string]BackupManifestEntry, seen map[string]bool, extractTo func(name string) string) error {
 	want, listed := expected[header.Name]
 	if header.Typeflag != tar.TypeReg || !validBackupPackPath(header.Name) || !listed || seen[header.Name] {
 		return errors.New("文件包里有清单之外的条目")
@@ -195,14 +196,14 @@ func readBackupPackEntry(reader io.Reader, header *tar.Header, expected map[stri
 	hash := sha256.New()
 	sink := io.Writer(hash)
 	var out *os.File
-	if extractRoot != "" {
-		target := filepath.Join(extractRoot, filepath.FromSlash(header.Name))
+	if extractTo != nil {
+		target := extractTo(header.Name)
 		if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
-			return fmt.Errorf("创建暂存目录失败: %w", err)
+			return fmt.Errorf("创建暂存目录失败: %w", pathlessError(err))
 		}
 		file, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, os.FileMode(header.Mode).Perm()&0755|0600)
 		if err != nil {
-			return fmt.Errorf("写入暂存文件失败: %w", err)
+			return fmt.Errorf("写入暂存文件失败: %w", pathlessError(err))
 		}
 		out = file
 		sink = io.MultiWriter(out, hash)

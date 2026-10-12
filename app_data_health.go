@@ -22,6 +22,10 @@ func (a *App) startDataHealth(ctx context.Context, emit func(event string, data 
 	a.dataCare.health.SetProgressEmitter(func(progress services.DataHealthProgress) {
 		emit(dataHealthProgressEvent, progress)
 	})
+	// 上次从备份还原整理文件时若中途崩溃，某个收录目录可能还停在 <目录>.pre-restore-* 名下：启动时改回来（4.2）。
+	if a.backupService != nil {
+		a.backupService.RecoverInterruptedFilesRestore()
+	}
 }
 
 func (a *App) stopDataHealth() {

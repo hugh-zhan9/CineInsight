@@ -13,7 +13,7 @@ import (
 //   - scene_index_states.segment_count：replaceVideoSegments / recordStateFailure 同一事务里删光该视频
 //     全部画面段再写 len(rows)（或 0），按模型清理时段与状态一起删，等于该视频 scene_visual_segments 的行数；
 //   - face_clusters.observation_count：建簇记 1、归入 +1，删观测或移出后 recomputeFaceClustersTx 按
-//     cluster_id 的实际观测行重算——定义就是 face_observations 里指向该簇的行数；
+//     cluster_id 的实际观测行重算——定义就是 face_observations 里指向该簇的行数；修复也走 recomputeFaceClustersTx；
 //   - video_frame_hash_sequences.frame_count：写入时等于 len(hashes)，编码为每帧 8 字节（encodeFrameHashes）；
 //     长度不是 8 的倍数的序列是截断的坏行（decodeFrameHashes 当作没有序列），不算计数漂移，不进检查。
 // 明确不检查：videos.play_count、videos.last_played_at、images.view_count——不是由明细派生的，
@@ -28,6 +28,8 @@ type derivedCountSpec struct {
 	label    string
 	expected func(t string) string // t 是被检查表的表名或别名
 	guard    func(t string) string // 可选：只在满足它的行上比较
+	// repairBatch 可选：这一批漂移行的专用修法（在调用方的短事务里）；为空时按 expected 直接 UPDATE。
+	repairBatch func(ctx context.Context, tx *gorm.DB, keys []uint) (int64, error)
 }
 
 var derivedCountSpecs = []derivedCountSpec{
@@ -42,6 +44,14 @@ var derivedCountSpecs = []derivedCountSpec{
 	{key: "face_clusters.observation_count", table: "face_clusters", keyCol: "id", noun: "簇", column: "observation_count",
 		label: "人脸簇观测数", expected: func(t string) string {
 			return "(SELECT COUNT(*) FROM face_observations detail WHERE detail.cluster_id = " + t + ".id)"
+		},
+		// 走既有的 recomputeFaceClustersTx：一条观测都不剩的簇连同人物候选与关系记账一起删掉，代表观测也跟着修，
+		// 与删观测、移出观测的既有路径同一口径（只改计数会留下空簇）。
+		repairBatch: func(ctx context.Context, tx *gorm.DB, keys []uint) (int64, error) {
+			if _, err := recomputeFaceClustersTx(ctx, tx, keys); err != nil {
+				return 0, err
+			}
+			return int64(len(keys)), nil
 		}},
 	{key: "video_frame_hash_sequences.frame_count", table: "video_frame_hash_sequences", keyCol: "video_id", noun: "视频", column: "frame_count",
 		label: "帧哈希帧数", expected: func(t string) string {
@@ -122,6 +132,11 @@ func repairDerivedCounts(ctx context.Context, db *gorm.DB) (int64, error) {
 			lastKey = keys[len(keys)-1]
 			var affected int64
 			err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+				if spec.repairBatch != nil {
+					var err error
+					affected, err = spec.repairBatch(ctx, tx, keys)
+					return err
+				}
 				result := tx.Exec(fmt.Sprintf("UPDATE %s SET %s = %s WHERE %s.%s IN ? AND %s",
 					spec.table, spec.column, spec.expected(spec.table), spec.table, spec.keyCol, spec.predicate(spec.table)), keys)
 				affected = result.RowsAffected

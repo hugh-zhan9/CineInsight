@@ -608,13 +608,38 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
       expect(find(wrapper, 'backup-restore-files-note').text()).toContain('只恢复数据库');
     });
 
-    it('来自更新版本、空间不足的原因码不显示给用户', async () => {
+    it('恢复确认带上次校验的结论：没通过时警告，通过时说明，没校验过时提示先校验', async () => {
+      const failed = { ...fullBackup, verification: { level: 'full', ok: false, problems: ['文件包条目内容与清单不一致'], verified_at: '2026-10-12T10:00:00Z' } };
+      const passed = { ...legacyBackup, verification: { level: 'legacy', ok: true, problems: [], verified_at: '2026-10-12T10:00:00Z' } };
+      const unverified = { ...fullBackup, name: 'cineinsight-20261005-090000.000000000.sqlite', verification: null };
+      api.ListDatabaseBackups.mockResolvedValue([failed, passed, unverified]);
+      const wrapper = await mountSection();
+      const pick = async index => {
+        const rows = wrapper.findAll('[data-test="backup-file-item"]');
+        await rows[index].findAll('button').find(button => button.text() === '恢复').trigger('click');
+      };
+      const back = () => wrapper.findAll('button').find(button => button.text() === '返回').trigger('click');
+      await openList(wrapper);
+      await pick(0);
+      expect(find(wrapper, 'backup-restore-verify-warning').text()).toContain('上次校验没有通过（文件包条目内容与清单不一致）');
+      await back();
+      await pick(1);
+      expect(exists(wrapper, 'backup-restore-verify-warning')).toBe(false);
+      expect(find(wrapper, 'backup-restore-verify-note').text()).toContain('上次校验通过');
+      await back();
+      await pick(2);
+      expect(find(wrapper, 'backup-restore-verify-note').text()).toContain('还没有校验过');
+    });
+
+    it('来自更新版本、空间不足、文件包损坏的原因码不显示给用户', async () => {
       api.GetBackupStatus.mockResolvedValue({ available: true, backup_available: true, restore_available: true, last_error: 'backup_insufficient_space: 备份目录所在磁盘剩余空间不足（需要约 2 GB，可用 1 GB）' });
       const wrapper = await mountSection();
       expect(wrapper.text()).toContain('最近失败：备份目录所在磁盘剩余空间不足');
       expect(wrapper.text()).not.toContain('backup_insufficient_space');
       const message = await restoreWith(wrapper, 'backup_from_newer_version: 这份备份来自更新版本的应用（当前版本不认识：future_things），数据库未被修改');
       expect(message).toBe('数据库恢复失败，当前数据库没有被改动：这份备份来自更新版本的应用（当前版本不认识：future_things），数据库未被修改');
+      expect(await restoreWith(wrapper, 'backup_files_invalid: 这份备份的文件包缺失或已损坏，数据库未被修改'))
+        .toBe('数据库恢复失败，当前数据库没有被改动：这份备份的文件包缺失或已损坏，数据库未被修改');
       api.CreateDatabaseBackup.mockRejectedValue('backup_insufficient_space: 备份目录所在磁盘剩余空间不足');
       await find(wrapper, 'backup-now').trigger('click');
       await flushPromises();

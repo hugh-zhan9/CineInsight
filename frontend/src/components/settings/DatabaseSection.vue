@@ -188,6 +188,14 @@
       <!-- D-DH-03：带清单的备份连同整理过的文件一起还原；旧格式备份只恢复数据库。 -->
       <p v-if="selectedBackup.legacy" class="help-text" data-test="backup-restore-files-note">这是旧格式备份，只恢复数据库；人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份保持现状。</p>
       <p v-else class="help-text" data-test="backup-restore-files-note">整理过的文件（人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份）也会一并还原到备份时的状态。</p>
+      <!-- 上一次「校验」的结论（D-DH-03）：没通过时先提醒，恢复前后端还会再查一次文件包与表结构。 -->
+      <p v-if="verificationOf(selectedBackup) && !verificationOf(selectedBackup).ok" class="backup-danger-text" data-test="backup-restore-verify-warning">
+        这份备份上次校验没有通过（{{ (verificationOf(selectedBackup).problems || []).join('；') || '原因未知' }}），恢复很可能被拒绝或不完整，建议换一份备份。
+      </p>
+      <p v-else-if="verificationOf(selectedBackup)" class="help-text" data-test="backup-restore-verify-note">
+        上次校验通过（{{ formatBackupTime(verificationOf(selectedBackup).verified_at) }}）。
+      </p>
+      <p v-else class="help-text" data-test="backup-restore-verify-note">这份备份还没有校验过，可以先返回点「校验」。</p>
       <p class="backup-danger-text">这是破坏性操作。当前数据库与整理过的文件会先自动备份；恢复完成后应用会自动退出，重新打开即可使用恢复的数据。恢复期间请勿关闭应用。</p>
       <div class="modal-actions">
         <button type="button" class="btn-secondary" :disabled="backupBusy" @click="selectedBackup = null">返回</button>
@@ -267,8 +275,8 @@ export function databaseErrorReason(err) {
   return { code: match[1], text: text.slice(match[0].length) };
 }
 
-// 备份与恢复失败的两个原因码（D-DH-01 空间不足、D-DH-03 来自更新版本）只给程序分类，界面上去掉。
-const BACKUP_REASON_PREFIX = /^(backup_insufficient_space|backup_from_newer_version)\s*:\s*/;
+// 备份与恢复失败的原因码（D-DH-01 空间不足、D-DH-03 来自更新版本、文件包缺失或损坏）只给程序分类，界面上去掉。
+const BACKUP_REASON_PREFIX = /^(backup_insufficient_space|backup_from_newer_version|backup_files_invalid)\s*:\s*/;
 export function backupReasonText(text) {
   return String(text || '').trim().replace(BACKUP_REASON_PREFIX, '');
 }
