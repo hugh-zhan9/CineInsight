@@ -184,7 +184,8 @@ export function homeProgressText(video) {
 export default {
   name: 'HomePage',
   components: { RecapBackdrop, RecapCountUp, RecapIcon, RecapMediaCard, StatTile },
-  // pageActive：宿主把首页切回来时为 true，这里重取一遍（期间可能看过片），取回之前保留现有内容。
+  // pageActive：宿主把首页切回来时为 true，这里重取会变的区块（继续观看、最近添加、本月回顾；期间可能看过片），
+  // 取回之前保留现有内容。今晚看什么只在「换一批」时重抽，大图定下后不再换。
   props: { pageActive: { type: Boolean, default: true } },
   // open-video(id)：进整页详情；open-person({ id, name })：进人物页；navigate(pageKey)：回顾页、片库、设置。
   emits: ['open-video', 'navigate', 'open-person'],
@@ -194,11 +195,20 @@ export default {
       tonightBlock: { loading: true, error: '', items: [], first: null, notice: '' },
       recentBlock: { loading: true, error: '', items: [] },
       recapBlock: { loading: true, error: '', result: null },
-      heroArtwork: { id: 0, hasFanart: null }
+      heroArtwork: { id: 0, hasFanart: null },
+      // 第一次挑出来的大图（ready 的那一份）：之后回到首页、换一批都不换它。
+      heroLock: null
     };
   },
   computed: {
-    heroPick() { return pickHomeHero(this.continueBlock, this.tonightBlock); },
+    livePick() { return pickHomeHero(this.continueBlock, this.tonightBlock); },
+    // 大图定下后固定是那一部；它来自继续观看且还在新读到的列表里时，用新的那条（进度是新的）。
+    heroPick() {
+      const lock = this.heroLock;
+      if (!lock) return this.livePick;
+      const fresh = lock.from === 'continue' ? this.continueBlock.items.find(item => Number(item.id) === Number(lock.video.id)) : null;
+      return fresh ? { ...lock, video: fresh } : lock;
+    },
     heroVideoID() { return this.heroPick.state === 'ready' ? Number(this.heroPick.video?.id || 0) : 0; },
     hero() {
       const pick = this.heroPick;
@@ -237,8 +247,9 @@ export default {
     }
   },
   watch: {
+    livePick(pick) { if (!this.heroLock && pick.state === 'ready') this.heroLock = pick; },
     heroVideoID(id) { this.loadHeroArtwork(id); },
-    pageActive(active) { if (active) this.load(); }
+    pageActive(active) { if (active) this.refresh(); }
   },
   created() {
     this._tokens = {};
@@ -256,18 +267,26 @@ export default {
     blockVisible(block, items = block.items) {
       return Boolean(block.loading || block.error || items?.length);
     },
-    // 四个请求同时发出，互不等待。
+    // 挂载时四个请求同时发出，互不等待。
     load() {
-      return Promise.all([
-        this.runBlock('continueBlock', '继续观看', async () => ({
-          items: (await ListContinueWatchingWithFilter({}, '', 0, HOME_CONTINUE_LIMIT))?.videos || []
-        })),
-        this.loadTonight(),
-        this.runBlock('recentBlock', '最近添加', async () => ({
-          items: (await SearchLibraryVideoPage({ filter: { smart_view: 'recently_added' }, limit: HOME_RECENT_LIMIT }))?.videos || []
-        })),
-        this.runBlock('recapBlock', '本月回顾', async () => ({ result: await GetRecap(recapRequest('month', currentCursor())) }))
-      ]);
+      return Promise.all([this.loadContinue(), this.loadTonight(), this.loadRecent(), this.loadRecap()]);
+    },
+    // 回到首页：只重取会变的三块，今晚看什么这一批留着（换一批才重抽）。
+    refresh() {
+      return Promise.all([this.loadContinue(), this.loadRecent(), this.loadRecap()]);
+    },
+    loadContinue() {
+      return this.runBlock('continueBlock', '继续观看', async () => ({
+        items: (await ListContinueWatchingWithFilter({}, '', 0, HOME_CONTINUE_LIMIT))?.videos || []
+      }));
+    },
+    loadRecent() {
+      return this.runBlock('recentBlock', '最近添加', async () => ({
+        items: (await SearchLibraryVideoPage({ filter: { smart_view: 'recently_added' }, limit: HOME_RECENT_LIMIT }))?.videos || []
+      }));
+    },
+    loadRecap() {
+      return this.runBlock('recapBlock', '本月回顾', async () => ({ result: await GetRecap(recapRequest('month', currentCursor())) }));
     },
     // 一块的取数：只接受这块最新一次请求的结果；失败只写这一块的错误，已有内容留着。
     async runBlock(name, label, fetch) {

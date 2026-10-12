@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  RELATED_LIMIT, collectionProgress, detailBackdrop, detailFacts, detailTitle, mergeRelatedVideos, ratingOf, viewingRecord
+  RELATED_LIMIT, collectionProgress, detailBackdrop, detailFacts, detailTitle, mergeRelatedVideos, playbackStaleChanges, ratingOf, stateChanges,
+  viewingRecord
 } from './videoDetail.js';
 
 const video = (id, extra = {}) => ({ id, name: `v${id}.mp4`, display_title: '', duration: 1000, ...extra });
@@ -82,5 +83,27 @@ describe('viewingRecord', () => {
     expect(tiles.map(tile => [tile.key, tile.value])).toEqual([
       ['plays', 4], ['last-played', '2026年10月1日'], ['watched', '2026年10月2日'], ['progress', '01:15 / 10:00']
     ]);
+  });
+});
+
+describe('state changes for the host', () => {
+  it('picks only the fields each action changes, and only those present', () => {
+    const video = { id: 1, is_favorite: true, favorited_at: 't1', is_watched: true, watched_at: 't2', watch_position_seconds: 30, watch_progress_updated_at: 't3', personal_rating: 6, tags: null };
+    expect(stateChanges('favorite', video)).toEqual({ is_favorite: true, favorited_at: 't1' });
+    expect(stateChanges('progress', video)).toEqual({ watch_position_seconds: 30, watch_progress_updated_at: 't3', is_watched: true, watched_at: 't2' });
+    expect(stateChanges('watched', { is_watched: false })).toEqual({ is_watched: false });
+    expect(stateChanges('rating', null)).toEqual({});
+  });
+
+  it('marks the row stale only when playback failed and the backend marked it, with the library reason rules', () => {
+    expect(playbackStaleChanges({ dispatch_succeeded: true, reconcile_result: { did_mark_stale: true } })).toBeNull();
+    expect(playbackStaleChanges({ dispatch_succeeded: false, reconcile_result: { did_mark_stale: false } })).toBeNull();
+    expect(playbackStaleChanges({ dispatch_succeeded: false })).toBeNull();
+    expect(playbackStaleChanges({ dispatch_succeeded: false, reconcile_result: { did_mark_stale: true, reason: 'offline_root' } }))
+      .toEqual({ is_stale: true, stale_reason: 'offline_root' });
+    expect(playbackStaleChanges({ dispatch_succeeded: false, reason: 'error', reconcile_result: { did_mark_stale: true } }))
+      .toEqual({ is_stale: true, stale_reason: 'missing_file' });
+    expect(playbackStaleChanges({ dispatch_succeeded: false, reconcile_result: { did_mark_stale: true, reason: 'offline_root', updated_video: { stale_reason: 'moved' } } }))
+      .toEqual({ is_stale: true, stale_reason: 'moved' });
   });
 });

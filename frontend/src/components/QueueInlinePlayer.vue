@@ -1,13 +1,14 @@
 <template>
   <div class="queue-inline-player">
     <video ref="video" :src="identity.locator" controls playsinline preload="metadata" data-test="queue-inline-video"
-      @loadedmetadata="loaded" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
+      @loadedmetadata="loaded" @play="claimActive" @playing="playing" @pause="paused" @seeking="seeking" @seeked="seeked"
       @timeupdate="progress" @ended="ended" @error="failed" />
     <p v-if="error" role="alert" data-test="queue-inline-error">{{ error }}</p>
   </div>
 </template>
 <script>
 import { GetPlaybackQueue, ReportInlineQueuePlayback } from '../../wailsjs/go/main/App';
+import { claimActivePlayer, releaseActivePlayer } from '../utils/activePlayer.js';
 const DESYNC_MESSAGE = '播放状态与待播队列不同步，已暂停。请停止队列后重新播放此项。';
 const STALE_MESSAGE = '播放器已重新载入，已暂停。请在队列中重新播放此项。';
 export default {
@@ -17,7 +18,9 @@ export default {
   data() {
     return { identity: { ...this.session }, seq: 0, cycle: Number(this.session.view_cycle || 1), wasEnded: false, endConsumed: false, initialized: false, seekingNow: false, lastProgressAt: 0, error: '', retired: false, desynced: false };
   },
-  created() { this._reports = Promise.resolve(); },
+  // 同一时间只有一个内嵌播放器在播（D-UI-11，utils/activePlayer.js）：这里开始播放会暂停详情 / 抽屉里的播放器，
+  // 反过来那边开始播放时暂停这里；被暂停照常按 paused 上报队列。
+  created() { this._reports = Promise.resolve(); this._activeHandle = { pause: () => this.$refs.video?.pause() }; },
   watch: {
     'session.control_sequence'() {
       const video = this.$refs.video;
@@ -27,6 +30,7 @@ export default {
   },
   beforeUnmount() {
     this.retired = true;
+    releaseActivePlayer(this._activeHandle);
     const video = this.$refs.video;
     if (video) { video.pause(); video.removeAttribute('src'); video.load(); }
   },
@@ -90,7 +94,8 @@ export default {
       });
     },
     playing() { if (!this.initialized || this.retired) return; this.wasEnded = false; this.seekingNow = false; this.report('playing'); },
-    paused() { if (this.initialized && !this.wasEnded) this.report('paused'); },
+    claimActive() { if (!this.retired) claimActivePlayer(this._activeHandle); },
+    paused() { releaseActivePlayer(this._activeHandle); if (this.initialized && !this.wasEnded) this.report('paused'); },
     seeking() { if (!this.initialized) return; this.seekingNow = true; this.report('seeking'); },
     seeked() { this.seekingNow = false; if (!this.initialized) return; this.report('seeked'); if (!this.$refs.video.paused) this.playing(); },
     progress() { if (!this.initialized || this.seekingNow || this.$refs.video?.paused || performance.now() - this.lastProgressAt < 1000) return; this.lastProgressAt = performance.now(); this.report('progress'); },

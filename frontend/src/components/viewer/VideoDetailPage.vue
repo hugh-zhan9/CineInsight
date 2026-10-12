@@ -29,7 +29,7 @@
               :start-time-ms="playerStart.startTimeMs"
               :resume-position-seconds="playerStart.resumePositionSeconds"
               :bookmark-range="bookmarkRange"
-              :autoplay="true"
+              :autoplay="!bookmarkSourceMismatch"
               :duration-seconds="Number(video.duration) || 0"
               @watch-progress="saveWatchProgress"
               @preview-externally="previewExternally"
@@ -37,6 +37,8 @@
               @bookmark-range-end="bookmarkRangeFinished = true"
             />
             <!-- 播放代理的提示与失败（抽屉放在技术信息区块，这里跟在播放器下面）；外部预览模式下可以直接生成代理。 -->
+            <!-- 书签解析之后原片变了：播放器不套用任何起播位置，也不自动开始；与抽屉同一句提示。 -->
+            <p v-if="bookmarkSourceMismatch" class="viewer-detail__error" role="alert" data-test="detail-bookmark-changed">原片在打开预览前已改变，请重新核对书签，未套用旧位置。</p>
             <div v-if="proxyNotice || proxyError || canCreateProxy || bookmarkRangeFinished" class="viewer-detail__player-notes">
               <p v-if="proxyNotice" data-test="detail-proxy-notice">{{ proxyNotice }}</p>
               <p v-if="proxyError" class="viewer-detail__error" role="alert" data-test="detail-proxy-error">{{ proxyError }}</p>
@@ -209,7 +211,7 @@ import { versionMemberFacts, versionMemberTitle } from '../../utils/versionGroup
 import { resumePosition } from '../../utils/watchState.js';
 import {
   COLLECTION_DETAIL_LIMIT, RELATED_PEOPLE_LIMIT, RELATED_PER_PERSON, collectionProgress, detailBackdrop, detailFacts, detailTitle,
-  mergeRelatedVideos, ratingOf, viewingRecord
+  mergeRelatedVideos, playbackStaleChanges, ratingOf, stateChanges, viewingRecord
 } from './videoDetail.js';
 
 const STATE_TOGGLES = {
@@ -227,15 +229,21 @@ export default {
   name: 'VideoDetailPage',
   components: { BookmarkPanel, InlineVideoPlayer, QueueActionButton, QuoteCardDialog, RatingStars, RecapBackdrop, RecapIcon, RecapMediaCard, StatTile },
   props: {
-    // 要展示的视频 ID 与可选的起播位置（毫秒，场景检索 / 书签定位进来时有）。
+    // 要展示的视频 ID 与可选的起播位置（毫秒，场景检索进来时有）。
     videoId: { type: Number, default: 0 },
-    startAtMs: { type: Number, default: null }
+    startAtMs: { type: Number, default: null },
+    // 从书签定位进来（观看笔记）：{ start_ms, end_ms, source_token }。在应用内从书签起点播、播到区间末尾暂停；
+    // source_token 与当前预览会话的源版本不一致时不套用位置（与抽屉的书签入口同一套）。优先于 startAtMs。
+    bookmark: { type: Object, default: null }
   },
   // back：返回来源页；open-video(id)：相关推荐、下一部、其他版本，宿主压栈后换成那一部；
   // navigate(pageKey)：去别的页面；edit-in-manage(id)：去片库管理并在抽屉里打开这部片；
   // open-tag(tagId)：去视频页按这个标签筛选；open-entity({ type: person|collection, id, name })：去人物 / 作品集页
-  // （与回顾页同一载荷）；find-similar({ videoID, atMS, title })：去场景检索找相似画面（与抽屉的 find-similar-scenes 同一载荷）。
-  emits: ['back', 'open-video', 'navigate', 'edit-in-manage', 'open-tag', 'open-entity', 'find-similar'],
+  // （与回顾页同一载荷）；find-similar({ videoID, atMS, title })：去场景检索找相似画面（与抽屉的 find-similar-scenes 同一载荷）；
+  // ready：每次挂载只发一次——主详情读到并渲染之后（读取失败、没有视频 ID 也发），宿主据此还原滚动等；
+  // video-state-changed({ id, changes })：收藏、已看、评分、进度保存成功，或「播放」失败并标了失效之后，
+  // changes 是变了的字段（videoDetail.js 的 STATE_CHANGE_FIELDS / playbackStaleChanges），宿主拿去更新片库行。
+  emits: ['back', 'open-video', 'navigate', 'edit-in-manage', 'open-tag', 'open-entity', 'find-similar', 'ready', 'video-state-changed'],
   data() {
     return {
       loading: false, error: '', details: null, posterFailed: false,
@@ -283,13 +291,21 @@ export default {
     proxyNotice() { return this.player?.proxyNotice || ''; },
     proxyCreateLabel() { return this.player?.proxyCreateLabel ?? '生成播放代理'; },
     // 外部预览模式（容器内嵌不了）下给出「生成播放代理」；内嵌报错时播放器自己的报错框里已经有这个按钮。
-    canCreateProxy() { return Boolean(this.player) && this.session?.mode === 'external-preview'; }
+    canCreateProxy() { return Boolean(this.player) && this.session?.mode === 'external-preview'; },
+    // 与抽屉的 bookmarkSourceMismatch 同一判断：书签带的源版本与本片当前会话的不一致。
+    bookmarkSourceMismatch() {
+      const range = this.bookmarkRange;
+      return Boolean(range && this.session && Number(this.session.video_id) === Number(range.videoID) && this.session.source_version !== range.sourceToken);
+    }
   },
   watch: {
     videoId() { this.scrollToTop(); this.load(); },
     // 同一部片又带着新的起播位置进来（再次从场景检索命中）：在应用内从新位置起播。
     startAtMs(value) {
       if (value !== null && value !== undefined && this.details && Number(this.video?.id) === Number(this.videoId)) this.openPlayer({ startTimeMs: value });
+    },
+    bookmark(value) {
+      if (value && this.details && Number(this.video?.id) === Number(this.videoId)) this.playBookmark(value);
     }
   },
   mounted() {
@@ -326,13 +342,13 @@ export default {
         details: null, error: '', posterFailed: false, actionBusy: '', actionError: '', ratingSaving: false, quoteCard: null,
         relatedBlock: emptyBlock(), versionBlock: { loading: false, error: '', group: null }, collectionStates: {}
       });
-      if (!id) { this.loading = false; return; }
+      if (!id) { this.loading = false; this.emitReady(token); return; }
       this.loading = true;
       let details = null;
       try {
         details = await GetVideoDetails(id);
       } catch (err) {
-        if (this.isCurrentLoad(token)) { this.loading = false; this.error = `读取视频详情失败：${errorText(err)}`; }
+        if (this.isCurrentLoad(token)) { this.loading = false; this.error = `读取视频详情失败：${errorText(err)}`; this.emitReady(token); }
         return;
       }
       if (!this.isCurrentLoad(token)) return;
@@ -341,8 +357,19 @@ export default {
       this.loadRelated(details, token);
       this.loadVersions(details, token);
       this.loadCollections(details, token);
-      // 场景检索、书签定位带着时刻进来：直接在应用内从那一刻起播。
-      if (this.startAtMs !== null && this.startAtMs !== undefined) this.openPlayer({ startTimeMs: this.startAtMs });
+      // 书签定位、场景检索带着时刻进来：直接在应用内从那一刻起播（书签还要播到区间末尾暂停）。
+      if (this.bookmark) this.playBookmark(this.bookmark);
+      else if (this.startAtMs !== null && this.startAtMs !== undefined) this.openPlayer({ startTimeMs: this.startAtMs });
+      this.emitReady(token);
+    },
+    // ready 每次挂载只发一次，等这一轮渲染完（宿主拿到的是已经有内容的页面）；被更新的读取取代时不发。
+    emitReady(token) {
+      if (this._readyEmitted) return;
+      this.$nextTick(() => {
+        if (this._readyEmitted || !this.isCurrentLoad(token)) return;
+        this._readyEmitted = true;
+        this.$emit('ready');
+      });
     },
     async loadRelated(details, token) {
       const people = (details.people || []).slice(0, RELATED_PEOPLE_LIMIT);
@@ -437,6 +464,7 @@ export default {
       const save = async () => {
         const updated = await UpdateVideoWatchProgress(videoID, Number(progress?.positionSeconds || 0), duration, !!progress?.completed, origin);
         this.mergeVideo(videoID, updated);
+        if (updated) this.emitStateChange(videoID, stateChanges('progress', updated));
       };
       this._progressChain = (this._progressChain || Promise.resolve()).then(save)
         .catch(err => { this.actionError = `保存观看进度失败：${errorText(err)}`; });
@@ -450,8 +478,15 @@ export default {
     // 书签「定位 / 核对原片」：在应用内从书签起点播，播到区间末尾暂停（D-UI-11 的书签区间）。
     openBookmark(result) {
       if (result?.status !== 'ready' || Number(result.video?.id) !== Number(this.video?.id)) return;
+      this.playBookmark({ ...result.bookmark, source_token: result.source_token });
+    },
+    // bookmark：{ start_ms, end_ms, source_token }。区间与抽屉的书签入口同一形状（VideoListPage.openBookmark），
+    // 每次都是新的 requestID，同一条书签再点一次也会重新定位。
+    playBookmark(bookmark) {
+      const videoID = Number(this.video?.id || 0);
+      if (!videoID || !bookmark) return;
       this._bookmarkSeq = (this._bookmarkSeq || 0) + 1;
-      const range = { videoID: Number(result.video.id), startMS: result.bookmark.start_ms, endMS: result.bookmark.end_ms, sourceToken: result.source_token, requestID: `detail:${this._bookmarkSeq}` };
+      const range = { videoID, startMS: Number(bookmark.start_ms) || 0, endMS: bookmark.end_ms ?? null, sourceToken: bookmark.source_token, requestID: `detail:${this._bookmarkSeq}` };
       this.openPlayer({ startTimeMs: range.startMS, bookmarkRange: range });
     },
     // 书签编辑里「打开当前原片核对」：是这一部就重开内嵌播放（重取会话），别的片交给宿主。
@@ -472,6 +507,10 @@ export default {
       if (this.startAtMs !== null && this.startAtMs !== undefined) return Number(this.startAtMs) / 1000;
       return resumePosition(this.video);
     },
+    // 已经写进库里的变化，不论页面是否已换到别的片都告诉宿主（片库行要跟着变）。
+    emitStateChange(videoID, changes) {
+      if (Number(videoID) && changes && Object.keys(changes).length) this.$emit('video-state-changed', { id: Number(videoID), changes });
+    },
     // 动作接口回来的整条视频写回详情；状态接口不带标签时沿用已有的，别用 null 盖掉。
     mergeVideo(videoID, updated) {
       if (!updated || !this.details || Number(this.video?.id) !== Number(videoID)) return;
@@ -488,7 +527,11 @@ export default {
       this.actionBusy = 'play'; this.actionError = '';
       try {
         const result = await PlayVideo(videoID);
+        // 播放失败并已标失效：片库行改成失效态（与片库页 markPlaybackFailureStale 同一口径）。
+        const stale = playbackStaleChanges(result);
+        if (stale) this.emitStateChange(videoID, stale);
         if (!this.isCurrentLoad(token)) return;
+        if (stale) this.mergeVideo(videoID, stale);
         if (result && result.dispatch_succeeded === false) this.actionError = result.user_message || '播放失败';
         else this.mergeVideo(videoID, result?.video);
       } catch (err) {
@@ -505,8 +548,9 @@ export default {
       const next = !this.video[toggle.field];
       this.actionBusy = kind; this.actionError = '';
       try {
-        const updated = await toggle.call(videoID, next);
-        if (this.isCurrentLoad(token)) this.mergeVideo(videoID, updated || { [toggle.field]: next });
+        const updated = (await toggle.call(videoID, next)) || { [toggle.field]: next };
+        if (this.isCurrentLoad(token)) this.mergeVideo(videoID, updated);
+        this.emitStateChange(videoID, stateChanges(kind, updated));
       } catch (err) {
         if (this.isCurrentLoad(token)) this.actionError = `${toggle.failure}：${errorText(err)}`;
       } finally {
@@ -521,7 +565,9 @@ export default {
       this.ratingSaving = true; this.actionError = '';
       try {
         const updated = await UpdateVideoRating(videoID, value);
-        if (this.isCurrentLoad(token)) this.mergeVideo(videoID, { personal_rating: updated?.personal_rating ?? null });
+        const changes = { personal_rating: updated?.personal_rating ?? null };
+        if (this.isCurrentLoad(token)) this.mergeVideo(videoID, changes);
+        this.emitStateChange(videoID, changes);
       } catch (err) {
         if (this.isCurrentLoad(token)) this.actionError = `保存评分失败：${errorText(err)}`;
       } finally {

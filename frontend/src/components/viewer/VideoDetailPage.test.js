@@ -476,3 +476,130 @@ describe('VideoDetailPage navigation', () => {
     expect(wrapper.get('[data-test="detail-title"]').text()).toBe('影片7');
   });
 });
+
+describe('VideoDetailPage host contract', () => {
+  it('emits ready once, after the loaded details are rendered', async () => {
+    const seen = [];
+    const wrapper = mount(VideoDetailPage, {
+      // ready 到达时标题已经渲染出来了。
+      props: { videoId: 5, onReady: () => seen.push(wrapper.find('[data-test="detail-title"]').exists()) },
+      global: { stubs: { InlineVideoPlayer: PlayerStub, QuoteCardDialog: QuoteStub } }
+    });
+    expect(wrapper.emitted('ready')).toBeUndefined();
+    await flushPromises();
+    expect(wrapper.emitted('ready')).toEqual([[]]);
+    expect(seen).toEqual([true]);
+    await wrapper.setProps({ videoId: 7 });
+    await flushPromises();
+    expect(wrapper.get('[data-test="detail-title"]').text()).toBe('影片7');
+    expect(wrapper.emitted('ready')).toHaveLength(1);
+  });
+
+  it('emits ready when the details fail, and not again on retry', async () => {
+    api.GetVideoDetails.mockRejectedValueOnce('坏了');
+    const wrapper = await mountPage();
+    expect(wrapper.find('[data-test="detail-error"]').exists()).toBe(true);
+    expect(wrapper.emitted('ready')).toHaveLength(1);
+    await wrapper.get('[data-test="detail-retry"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('ready')).toHaveLength(1);
+  });
+
+  it('emits ready without a video id, and only for the latest load', async () => {
+    let wrapper = await mountPage({ videoId: 0 });
+    expect(wrapper.emitted('ready')).toHaveLength(1);
+    expect(api.GetVideoDetails).not.toHaveBeenCalled();
+    wrapper.unmount();
+
+    let resolveFirst;
+    api.GetVideoDetails.mockImplementationOnce(() => new Promise(resolve => { resolveFirst = resolve; }));
+    wrapper = await mountPage();
+    expect(wrapper.emitted('ready')).toBeUndefined();
+    await wrapper.setProps({ videoId: 7 });
+    await flushPromises();
+    resolveFirst(detailsFor(5));
+    await flushPromises();
+    expect(wrapper.emitted('ready')).toHaveLength(1);
+    expect(wrapper.get('[data-test="detail-title"]').text()).toBe('影片7');
+  });
+
+  it('plays a bookmark from the props as a range, ahead of startAtMs', async () => {
+    const wrapper = await mountPage({ startAtMs: 1000, bookmark: { start_ms: 5000, end_ms: 9000, source_token: 'sv1' } });
+    expect(player(wrapper).props()).toMatchObject({ startTimeMs: 5000, autoplay: true, session: inlineSession(5) });
+    expect(player(wrapper).props('bookmarkRange')).toMatchObject({ videoID: 5, startMS: 5000, endMS: 9000, sourceToken: 'sv1' });
+    expect(wrapper.find('[data-test="detail-bookmark-changed"]').exists()).toBe(false);
+    const first = player(wrapper).props('bookmarkRange').requestID;
+    await wrapper.setProps({ bookmark: { start_ms: 5000, end_ms: null, source_token: 'sv1' } });
+    expect(player(wrapper).props('bookmarkRange')).toMatchObject({ startMS: 5000, endMS: null });
+    expect(player(wrapper).props('bookmarkRange').requestID).not.toBe(first);
+  });
+
+  it('warns and does not autoplay when the source changed after the bookmark was resolved', async () => {
+    const wrapper = await mountPage({ bookmark: { start_ms: 5000, end_ms: 9000, source_token: 'old' } });
+    expect(wrapper.get('[data-test="detail-bookmark-changed"]').text()).toBe('原片在打开预览前已改变，请重新核对书签，未套用旧位置。');
+    expect(player(wrapper).props('autoplay')).toBe(false);
+    expect(player(wrapper).props('bookmarkRange').sourceToken).toBe('old');
+  });
+
+  it('lets the real player keep the bookmark range (no start position when the source changed)', async () => {
+    const wrapper = await mountPage({ bookmark: { start_ms: 5000, end_ms: 9000, source_token: 'old' } }, { realPlayer: true });
+    expect(player(wrapper).vm.bookmarkRangeActive).toBe(true);
+    expect(player(wrapper).props('bookmarkRange')).toMatchObject({ startMS: 5000, endMS: 9000, sourceToken: 'old' });
+    expect(wrapper.find('[data-test="detail-player"] video').exists()).toBe(true);
+  });
+});
+
+describe('VideoDetailPage video-state-changed', () => {
+  const stateEvents = wrapper => (wrapper.emitted('video-state-changed') || []).map(([event]) => event);
+
+  it('reports favorite, watched and rating changes with the changed fields', async () => {
+    api.SetVideoFavorite.mockResolvedValue(baseVideo(5, { is_favorite: true, favorited_at: '2026-10-13T08:00:00Z' }));
+    api.SetVideoWatched.mockResolvedValue(baseVideo(5, { is_favorite: true, is_watched: true, watched_at: '2026-10-13T09:00:00Z', watch_position_seconds: 0, watch_progress_updated_at: null }));
+    api.UpdateVideoRating.mockResolvedValue(baseVideo(5, { personal_rating: 9 }));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="detail-favorite"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="detail-watched"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="detail-star-9"]').trigger('click');
+    await flushPromises();
+    expect(stateEvents(wrapper)).toEqual([
+      { id: 5, changes: { is_favorite: true, favorited_at: '2026-10-13T08:00:00Z' } },
+      { id: 5, changes: { is_watched: true, watched_at: '2026-10-13T09:00:00Z', watch_position_seconds: 0, watch_progress_updated_at: null } },
+      { id: 5, changes: { personal_rating: 9 } }
+    ]);
+  });
+
+  it('reports nothing when an action fails', async () => {
+    api.SetVideoFavorite.mockRejectedValue('坏了');
+    api.UpdateVideoRating.mockRejectedValue('坏了');
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="detail-favorite"]').trigger('click');
+    await wrapper.get('[data-test="detail-star-9"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.emitted('video-state-changed')).toBeUndefined();
+  });
+
+  it('reports saved watch progress with the progress fields the library rows use', async () => {
+    api.UpdateVideoWatchProgress.mockResolvedValue(baseVideo(5, { watch_position_seconds: 30, watch_progress_updated_at: '2026-10-13T10:00:00Z', is_watched: false, watched_at: null }));
+    const wrapper = await mountPage({ startAtMs: 1000 });
+    player(wrapper).vm.$emit('watch-progress', { videoID: 5, positionSeconds: 30, completed: false, origin: 'jump', durationSeconds: 600 });
+    await flushPromises();
+    expect(stateEvents(wrapper)).toEqual([
+      { id: 5, changes: { watch_position_seconds: 30, watch_progress_updated_at: '2026-10-13T10:00:00Z', is_watched: false, watched_at: null } }
+    ]);
+  });
+
+  it('marks the row stale after 播放 only when the backend marked it stale', async () => {
+    api.PlayVideo.mockResolvedValueOnce({ dispatch_succeeded: true, video: baseVideo(5) });
+    api.PlayVideo.mockResolvedValueOnce({ dispatch_succeeded: false, user_message: '文件暂时打不开' });
+    api.PlayVideo.mockResolvedValueOnce({ dispatch_succeeded: false, user_message: '硬盘没有连接', reason: 'offline_root', reconcile_result: { video_id: 5, did_mark_stale: true, reason: 'offline_root' } });
+    const wrapper = await mountPage();
+    for (let i = 0; i < 3; i += 1) {
+      await wrapper.get('[data-test="detail-play"]').trigger('click');
+      await flushPromises();
+    }
+    expect(stateEvents(wrapper)).toEqual([{ id: 5, changes: { is_stale: true, stale_reason: 'offline_root' } }]);
+    expect(wrapper.get('[data-test="detail-action-error"]').text()).toBe('硬盘没有连接');
+  });
+});

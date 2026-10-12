@@ -213,14 +213,41 @@ describe('HomePage actions', () => {
     expect(wrapper.emitted('navigate')).toEqual([['recap']]);
   });
 
-  it('reloads every block when the page becomes active again, keeping content meanwhile', async () => {
+  it('refreshes continue watching, recent and recap when the page becomes active again, keeping tonight and the hero', async () => {
     const wrapper = await mountPage();
-    api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: [video(3)] });
+    api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: [video(3), video(1, { watch_position_seconds: 300 })] });
+    api.SearchLibraryVideoPage.mockResolvedValue({ videos: [video(23)] });
+    api.SuggestTonightVideos.mockResolvedValue([suggestion(14), suggestion(15), suggestion(16)]);
     await wrapper.setProps({ pageActive: false });
     await wrapper.setProps({ pageActive: true });
     expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片1');
     await flushPromises();
+    expect(api.ListContinueWatchingWithFilter).toHaveBeenCalledTimes(2);
+    expect(api.SearchLibraryVideoPage).toHaveBeenCalledTimes(2);
     expect(api.GetRecap).toHaveBeenCalledTimes(2);
-    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片3');
+    expect(api.SuggestTonightVideos).toHaveBeenCalledTimes(1);
+    expect(wrapper.findAll('[data-test="home-tonight-item"]').map(item => item.text())).toEqual([
+      expect.stringContaining('影片11'), expect.stringContaining('影片12'), expect.stringContaining('影片13')
+    ]);
+    expect(wrapper.findAll('[data-test="home-recent-item"]')).toHaveLength(1);
+    expect(wrapper.findAll('[data-test="home-continue"] [data-test="recap-card-video"]').map(item => item.text())).toEqual([
+      expect.stringContaining('影片3'), expect.stringContaining('影片1')
+    ]);
+    // 大图还是那一部，进度用新读到的。
+    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片1');
+    expect(wrapper.get('[data-test="home-hero-meta"]').text()).toBe('看到 05:00 / 10:00');
+  });
+
+  it('keeps a hero picked from tonight when continue watching appears later', async () => {
+    api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: [] });
+    const wrapper = await mountPage();
+    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片11');
+    api.ListContinueWatchingWithFilter.mockResolvedValue({ videos: [video(3)] });
+    await wrapper.setProps({ pageActive: false });
+    await wrapper.setProps({ pageActive: true });
+    await flushPromises();
+    expect(wrapper.get('[data-test="home-hero-title"]').text()).toBe('影片11');
+    expect(wrapper.get('[data-test="home-hero-meta"]').text()).toBe('没看过 · 收藏');
+    expect(api.GetVideoDetails).toHaveBeenCalledTimes(1);
   });
 });
