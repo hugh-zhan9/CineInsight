@@ -1141,6 +1141,14 @@ export default {
       label: '打开图片 AI 标签审阅',
       keywords: ['ai', 'tag', 'review', '图片', '审阅'],
       run: () => this.openAITagReviewFromCommand()
+    }, {
+      // 洞察页「存储体检」按固定 ID 打开图片清理审阅。切到图片页由调用方先做。
+      id: 'photos.openCleanup',
+      group: 'action',
+      label: '打开图片清理审阅',
+      keywords: ['cleanup', 'duplicate', '图片', '清理', '重复'],
+      // 已经在清理审阅里时不再调 openCleanup：它会拿审阅页的滚动位置盖掉网格的。
+      run: () => { if (!this.showCleanup) this.openCleanup(); }
     }]);
     this.$nextTick(() => {
       this.attachResizeObserver();

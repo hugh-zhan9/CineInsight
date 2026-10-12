@@ -114,7 +114,14 @@
 
       <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" />
       <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" :focus-entity="entityFocus.collection" />
-	  <InsightsPage v-if="currentPage === 'insights'" :directories="directories" />
+	  <InsightsPage
+	    v-if="currentPage === 'insights'"
+	    :directories="directories"
+	    @open-video-id="openVideoByID"
+	    @run-command="runPendingCommand"
+	    @videos-changed="handleVideosChangedElsewhere"
+	    @busy-change="insightsBusy = $event"
+	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
 	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" @open-video-at="openVideoAt" />
 	  <!-- 视频工作台：首次进入才挂载，之后只隐藏，事件与编辑中的项目都还在。 -->
@@ -267,6 +274,8 @@ export default {
       relaunchDownloadsActive: false,
       systemTheme: 'light',
       libraryCounts: null,
+      // 洞察页「存储体检」正在删除视频（InsightsPage 的 busy-change）。
+      insightsBusy: false,
       // 已上报给后端的前后台标记；null = 还没报过。相同值不重复上报。
       windowForeground: null,
       foregroundListeners: null,
@@ -428,6 +437,12 @@ export default {
     // 能直接切时同步返回 true；要确认时返回 Promise，用户选继续编辑则 resolve 为 false。
     navigateTo(page) {
       if (!page || page === this.currentPage) return true;
+      // 存储体检正在移到废纸篓：撤销条与「不支持废纸篓」二选一都挂在洞察页上，切走会丢掉它们，
+      // 删除结果也就传不回片库（与图片清理页删除进行中不能离开同一做法）。
+      if (this.currentPage === 'insights' && this.insightsBusy) {
+        notify('正在移到废纸篓，完成后再离开洞察页。');
+        return false;
+      }
       if (this.currentPage === 'settings' && this.settingsDirty) {
         return confirmAction({
           title: '离开设置页',
@@ -459,6 +474,11 @@ export default {
     openPendingWork() {
       this.taskCenterOpen = false;
       this.pendingWorkOpen = true;
+    },
+    // 洞察页「存储体检」删掉或撤销删除了视频：顶栏计数与片库按当前条件重取。
+    handleVideosChangedElsewhere({ removedIDs = [] } = {}) {
+      this.loadLibraryCounts();
+      return this.$refs.videoListPage?.handleVideosChangedElsewhere(removedIDs);
     },
     // 工作台的「处理」：按固定命令 ID 跳到宿主页并打开既有面板（详细设计 §6.1）。
     runPendingCommand(commandID, label) {

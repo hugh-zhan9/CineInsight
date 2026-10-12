@@ -95,6 +95,7 @@ export const COMMAND_HOST_PAGES = {
   'library.openTrash': 'videos',
   'library.openTagManager': 'videos',
   'photos.openAIReview': 'photos',
+  'photos.openCleanup': 'photos',
   'people.openFaceReview': 'people'
 };
 

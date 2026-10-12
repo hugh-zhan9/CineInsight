@@ -387,6 +387,8 @@ export function GetShortFeedServerStatus():Promise<services.ShortFeedServerStatu
 
 export function GetStartupError():Promise<string>;
 
+export function GetStorageReport(arg1:services.StorageReportRequest):Promise<services.StorageReport>;
+
 export function GetSubtitleEditDocument(arg1:number):Promise<services.SubtitleEditDocument>;
 
 export function GetSubtitleEngineStatuses():Promise<Array<services.SubtitleEngineStatus>>;

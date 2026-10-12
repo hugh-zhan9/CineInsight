@@ -71,6 +71,29 @@ it('片库的转换事件同步给已挂载的图片页', async () => {
   expect(refresh).toHaveBeenCalledWith(result);
 });
 
+it('洞察页存储体检删除或撤销删除了视频：顶栏计数重取，片库按当前条件重载', async () => {
+  const wrapper = await mountApp();
+  const reload = vi.fn();
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.handleVideosChangedElsewhere = reload;
+  await wrapper.setData({ currentPage: 'insights' });
+  const callsBefore = api.GetLibraryCounts.mock.calls.length;
+  wrapper.findComponent({ name: 'InsightsPage' }).vm.$emit('videos-changed', { removedIDs: [7, 8] });
+  await flushPromises();
+  expect(api.GetLibraryCounts.mock.calls.length).toBe(callsBefore + 1);
+  expect(reload).toHaveBeenCalledWith([7, 8]);
+});
+
+it('存储体检正在移到废纸篓时不能离开洞察页，结束后可以', async () => {
+  const wrapper = await mountApp();
+  await wrapper.setData({ currentPage: 'insights' });
+  wrapper.findComponent({ name: 'InsightsPage' }).vm.$emit('busy-change', true);
+  expect(wrapper.vm.navigateTo('videos')).toBe(false);
+  expect(wrapper.vm.currentPage).toBe('insights');
+  wrapper.findComponent({ name: 'InsightsPage' }).vm.$emit('busy-change', false);
+  expect(wrapper.vm.navigateTo('videos')).toBe(true);
+  expect(wrapper.vm.currentPage).toBe('videos');
+});
+
 it('启动失败时仍可打开只读诊断，不挂载片库或任务中心', async () => {
   api.GetStartupError.mockResolvedValue('数据库未初始化');
   const wrapper = shallowMount(App, { global: { renderStubDefaultSlot: true } });

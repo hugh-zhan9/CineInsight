@@ -10650,6 +10650,200 @@ export namespace services {
 		}
 	}
 	
+	export class StorageProbeCoverage {
+	    probed: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageProbeCoverage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.probed = source["probed"];
+	        this.total = source["total"];
+	    }
+	}
+	export class StorageVideoItem {
+	    id: number;
+	    title: string;
+	    path: string;
+	    directory: string;
+	    size: number;
+	    duration: number;
+	    width: number;
+	    height: number;
+	    codec: string;
+	    bit_rate: number;
+	    last_watched_at?: string;
+	    added_at: string;
+	    is_favorite: boolean;
+	    personal_rating?: number;
+	    estimated_size: number;
+	    estimated_savings: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageVideoItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.title = source["title"];
+	        this.path = source["path"];
+	        this.directory = source["directory"];
+	        this.size = source["size"];
+	        this.duration = source["duration"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.codec = source["codec"];
+	        this.bit_rate = source["bit_rate"];
+	        this.last_watched_at = source["last_watched_at"];
+	        this.added_at = source["added_at"];
+	        this.is_favorite = source["is_favorite"];
+	        this.personal_rating = source["personal_rating"];
+	        this.estimated_size = source["estimated_size"];
+	        this.estimated_savings = source["estimated_savings"];
+	    }
+	}
+	export class StorageVideoList {
+	    count: number;
+	    bytes: number;
+	    savings: number;
+	    items: StorageVideoItem[];
+	    has_more: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageVideoList(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.count = source["count"];
+	        this.bytes = source["bytes"];
+	        this.savings = source["savings"];
+	        this.items = this.convertValues(source["items"], StorageVideoItem);
+	        this.has_more = source["has_more"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StorageUnwatchedCriteria {
+	    min_bytes: number;
+	    months: number;
+	    cutoff: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageUnwatchedCriteria(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.min_bytes = source["min_bytes"];
+	        this.months = source["months"];
+	        this.cutoff = source["cutoff"];
+	    }
+	}
+	export class StorageTotals {
+	    count: number;
+	    bytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageTotals(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.count = source["count"];
+	        this.bytes = source["bytes"];
+	    }
+	}
+	export class StorageReport {
+	    generated_at: string;
+	    videos: StorageTotals;
+	    images: StorageTotals;
+	    probe: StorageProbeCoverage;
+	    by_codec: LibraryStatsBucket[];
+	    by_resolution: LibraryStatsBucket[];
+	    by_directory: LibraryStatsBucket[];
+	    unwatched_criteria: StorageUnwatchedCriteria;
+	    unwatched: StorageVideoList;
+	    transcode: StorageVideoList;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.generated_at = source["generated_at"];
+	        this.videos = this.convertValues(source["videos"], StorageTotals);
+	        this.images = this.convertValues(source["images"], StorageTotals);
+	        this.probe = this.convertValues(source["probe"], StorageProbeCoverage);
+	        this.by_codec = this.convertValues(source["by_codec"], LibraryStatsBucket);
+	        this.by_resolution = this.convertValues(source["by_resolution"], LibraryStatsBucket);
+	        this.by_directory = this.convertValues(source["by_directory"], LibraryStatsBucket);
+	        this.unwatched_criteria = this.convertValues(source["unwatched_criteria"], StorageUnwatchedCriteria);
+	        this.unwatched = this.convertValues(source["unwatched"], StorageVideoList);
+	        this.transcode = this.convertValues(source["transcode"], StorageVideoList);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class StorageReportRequest {
+	    unwatched_min_bytes: number;
+	    unwatched_months: number;
+	    unwatched_limit: number;
+	    transcode_limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new StorageReportRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.unwatched_min_bytes = source["unwatched_min_bytes"];
+	        this.unwatched_months = source["unwatched_months"];
+	        this.unwatched_limit = source["unwatched_limit"];
+	        this.transcode_limit = source["transcode_limit"];
+	    }
+	}
+	
+	
+	
+	
 	export class SubtitleBackup {
 	    id: string;
 	    created_at: string;

@@ -2409,6 +2409,16 @@ export default {
       if (Number(this.selectedPreviewVideoId) === id) this.closePreview();
       await this.reloadCurrentView();
     },
+    // 别的页面（洞察页存储体检）删除或恢复了视频：拿掉已删的、关掉对应的预览，按当前条件重载。
+    async handleVideosChangedElsewhere(removedIDs = []) {
+      const removed = new Set((removedIDs || []).map(Number));
+      if (removed.size) {
+        this.videos = this.videos.filter(video => !removed.has(Number(video.id)));
+        if (removed.has(Number(this.selectedPreviewVideoId))) this.closePreview();
+      }
+      this.invalidateLibraryTotal();
+      await this.reloadCurrentView();
+    },
     // 抽屉里人物详情删掉的媒体被撤销恢复（LIB-12）：恢复的记录要回到列表，按当前条件重载一次。
     async handlePersonMediaRestored() {
       this.invalidateLibraryTotal();

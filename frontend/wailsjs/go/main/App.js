@@ -766,6 +766,10 @@ export function GetStartupError() {
   return window['go']['main']['App']['GetStartupError']();
 }
 
+export function GetStorageReport(arg1) {
+  return window['go']['main']['App']['GetStorageReport'](arg1);
+}
+
 export function GetSubtitleEditDocument(arg1) {
   return window['go']['main']['App']['GetSubtitleEditDocument'](arg1);
 }

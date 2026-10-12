@@ -58,6 +58,7 @@ type App struct {
 	collectionSuggestions      *services.CollectionSuggestionService
 	videoDetailService         *services.VideoDetailService
 	libraryStatsService        *services.LibraryStatsService
+	storageReportService       *services.StorageReportService
 	localMetadata              *services.LocalMetadataService
 	mediaProbeService          *services.MediaProbeService
 	technicalBackfill          *services.TechnicalBackfillService
@@ -176,6 +177,7 @@ func NewApp() *App {
 		collectionSuggestions: services.NewCollectionSuggestionService(collectionService),
 		videoDetailService:    services.NewVideoDetailService(personService, collectionService),
 		libraryStatsService:   services.NewLibraryStatsService(),
+		storageReportService:  services.NewStorageReportService(),
 		localMetadata:         localMetadata,
 		mediaProbeService:     mediaProbeService,
 		technicalBackfill:     services.NewTechnicalBackfillService(mediaProbeService),

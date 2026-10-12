@@ -205,3 +205,58 @@ describe('InsightsPage 观看记录（P-037，D-PC43）', () => {
     wrapper.unmount();
   });
 });
+
+describe('InsightsPage 存储体检页签（2026-10-12）', () => {
+  it('切到「存储体检」只挂体检面板，事件原样转给宿主；切回概览面板卸掉', async () => {
+    GetLibraryInsights.mockResolvedValue(baseStats);
+    const wrapper = mountWith(baseStats);
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'StorageHealthPanel' }).exists()).toBe(false);
+    expect(wrapper.get('[data-test="insights-tab-overview"]').attributes('aria-selected')).toBe('true');
+
+    await wrapper.get('[data-test="insights-tab-storage"]').trigger('click');
+    const panel = wrapper.findComponent({ name: 'StorageHealthPanel' });
+    expect(panel.exists()).toBe(true);
+    expect(wrapper.find('[data-test="insights-viewed-coverage"]').exists()).toBe(false);
+    const insightsCalls = GetLibraryInsights.mock.calls.length;
+    panel.vm.$emit('open-video-id', 7);
+    panel.vm.$emit('run-command', 'library.openCleanup', '打开视频清理中心');
+    panel.vm.$emit('videos-changed', { removedIDs: [7] });
+    expect(wrapper.emitted('open-video-id')).toEqual([[7]]);
+    expect(wrapper.emitted('run-command')).toEqual([['library.openCleanup', '打开视频清理中心']]);
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [7] }]]);
+    // 删除后概览的总数也重取。
+    expect(GetLibraryInsights.mock.calls.length).toBe(insightsCalls + 1);
+
+    // 删除进行中：页签锁住、刷新禁用，并告诉 App 不要切走；结束后放开。
+    panel.vm.$emit('status-change', { loading: false, processing: true });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="insights-tab-overview"]').element.disabled).toBe(true);
+    expect(wrapper.get('[data-test="storage-refresh"]').element.disabled).toBe(true);
+    panel.vm.$emit('status-change', { loading: false, processing: false });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.emitted('busy-change')).toEqual([[true], [false]]);
+    expect(wrapper.get('[data-test="insights-tab-overview"]').element.disabled).toBe(false);
+
+    await wrapper.get('[data-test="insights-tab-overview"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'StorageHealthPanel' }).exists()).toBe(false);
+    expect(wrapper.find('[data-test="insights-viewed-coverage"]').exists()).toBe(true);
+    wrapper.unmount();
+    GetLibraryInsights.mockResolvedValue(null);
+  });
+});
+
+describe('InsightsPage 概览重取（2026-10-12 复审）', () => {
+  it('正在取时又要求重取：这一轮结束后再取一次，不留删除前的数', async () => {
+    let finishFirst;
+    GetLibraryInsights.mockImplementationOnce(() => new Promise(resolve => { finishFirst = () => resolve(baseStats); }));
+    const wrapper = shallowMount(InsightsPage, { props: { directories: [] } });
+    const before = GetLibraryInsights.mock.calls.length;
+    wrapper.vm.loadStats();
+    expect(GetLibraryInsights.mock.calls.length).toBe(before);
+    finishFirst();
+    await flushPromises();
+    expect(GetLibraryInsights.mock.calls.length).toBe(before + 1);
+    wrapper.unmount();
+  });
+});

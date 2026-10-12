@@ -2,8 +2,45 @@
   <section class="page-content insights-page">
     <div class="insights-heading">
       <div><h2>片库洞察</h2><p>基于本地片库与观看状态的只读统计</p></div>
-      <button type="button" class="btn-secondary" :disabled="loading || imageLoading" @click="refresh">{{ loading || imageLoading ? '统计中...' : '刷新' }}</button>
+      <!-- 「存储体检」（2026-10-12）：空间都去哪了、哪些能回收，列出的久未观看大文件可以直接移到废纸篓。 -->
+      <nav class="insights-tabs" role="tablist" aria-label="洞察内容">
+        <button
+          v-for="item in tabs"
+          :key="item.key"
+          type="button"
+          role="tab"
+          :class="['toolbar-btn', 'toolbar-btn--compact', { 'toolbar-btn--on': tab === item.key }]"
+          :aria-selected="tab === item.key"
+          :disabled="storageStatus.processing"
+          :data-test="`insights-tab-${item.key}`"
+          @click="tab = item.key"
+        >{{ item.label }}</button>
+      </nav>
+      <button
+        v-if="tab === 'overview'"
+        type="button"
+        class="btn-secondary"
+        :disabled="loading || imageLoading"
+        @click="refresh"
+      >{{ loading || imageLoading ? '统计中...' : '刷新' }}</button>
+      <button
+        v-else
+        type="button"
+        class="btn-secondary"
+        :disabled="storageStatus.loading || storageStatus.processing"
+        data-test="storage-refresh"
+        @click="refreshStorage"
+      >{{ storageStatus.loading ? '体检中...' : '刷新' }}</button>
     </div>
+    <StorageHealthPanel
+      v-if="tab === 'storage'"
+      ref="storagePanel"
+      @open-video-id="$emit('open-video-id', $event)"
+      @run-command="(id, label) => $emit('run-command', id, label)"
+      @videos-changed="handleVideosChanged"
+      @status-change="setStorageStatus"
+    />
+    <template v-else>
     <p v-if="error" class="insights-error" role="alert">{{ error }}</p>
     <div v-else-if="loading && !stats" class="insights-empty">正在汇总片库...</div>
     <div v-else-if="!stats?.summary?.video_count" class="insights-empty">
@@ -111,12 +148,14 @@
         <BucketChart title="图片格式存储" :items="imageStats.storage_by_format" value-key="total_size" :format-value="formatBytes" />
       </div>
     </template>
+    </template>
   </section>
 </template>
 
 <script>
 import { GetImageInsights, GetLibraryInsights } from '../../wailsjs/go/main/App';
 import BucketChart from './insights/BucketChart.vue';
+import StorageHealthPanel from './insights/StorageHealthPanel.vue';
 import { registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 
 // 播放账本各来源的叫法（D-PC43）。桌面两种来源在启动外部播放器时即记，叫「启动播放」；
@@ -144,12 +183,22 @@ function playSourceLabel(source) {
 
 export default {
   name: 'InsightsPage',
-  components: { BucketChart },
+  components: { BucketChart, StorageHealthPanel },
+  // busy-change：存储体检正在删除视频，App 据此不让切走（撤销条挂在本页上）。
+  emits: ['open-video-id', 'run-command', 'videos-changed', 'busy-change'],
   props: {
     // 卷可用性由扫描目录与监听状态推出，不再单开一条后端统计。
     directories: { type: Array, default: () => [] }
   },
-  data() { return { loading: false, error: '', stats: null, imageLoading: false, imageError: '', imageStats: null, heatmapSource: 'all' }; },
+  data() {
+    return {
+      tab: 'overview',
+      storageStatus: { loading: false, processing: false },
+      statsReloadPending: false,
+      tabs: [{ key: 'overview', label: '概览' }, { key: 'storage', label: '存储体检' }],
+      loading: false, error: '', stats: null, imageLoading: false, imageError: '', imageStats: null, heatmapSource: 'all'
+    };
+  },
   computed: {
     averageDurationText() {
       const count = Number(this.stats?.summary?.video_count || 0);
@@ -287,11 +336,17 @@ export default {
       group: 'action',
       label: '刷新洞察数据',
       keywords: ['refresh insights', '刷新洞察'],
-      enabled: () => !this.loading && !this.imageLoading,
-      run: () => this.refresh()
+      enabled: () => (this.tab === 'storage'
+        ? !this.storageStatus.loading && !this.storageStatus.processing
+        : !this.loading && !this.imageLoading),
+      run: () => (this.tab === 'storage' ? this.refreshStorage() : this.refresh())
     }]);
   },
-  beforeUnmount() { unregisterCommands('insights-page'); },
+  beforeUnmount() {
+    unregisterCommands('insights-page');
+    // 页面整个被卸掉时（正常切页在删除中会被 App 拦下）别把「删除进行中」留在 App 里。
+    if (this.storageStatus.processing) this.$emit('busy-change', false);
+  },
   methods: {
     formatPercent(value) {
       const percent = Number(value || 0);
@@ -300,12 +355,27 @@ export default {
     },
     // 视频与图片分区各自独立加载：任一侧失败只影响自己的分区。
     refresh() { this.loadStats(); this.loadImageStats(); },
+    refreshStorage() { return this.$refs.storagePanel?.refresh(); },
+    setStorageStatus(status) {
+      const busy = Boolean(status?.processing);
+      if (busy !== this.storageStatus.processing) this.$emit('busy-change', busy);
+      this.storageStatus = { loading: Boolean(status?.loading), processing: busy };
+    },
+    // 存储体检删除或撤销了视频：概览的总数也跟着重取，再交给 App 刷新片库与顶栏。
+    handleVideosChanged(payload) {
+      this.refresh();
+      this.$emit('videos-changed', payload);
+    },
+    // 正在取时又要求重取（例如存储体检刚删了视频）：记下来，这一轮结束后再取一次，免得留着删除前的数。
     async loadStats() {
-      if (this.loading) return;
+      if (this.loading) { this.statsReloadPending = true; return; }
       this.loading = true; this.error = '';
       try { this.stats = await GetLibraryInsights(); }
       catch (err) { this.error = '读取片库洞察失败：' + err; }
-      finally { this.loading = false; }
+      finally {
+        this.loading = false;
+        if (this.statsReloadPending) { this.statsReloadPending = false; this.loadStats(); }
+      }
     },
     async loadImageStats() {
       if (this.imageLoading) return;
@@ -336,6 +406,10 @@ export default {
 .insights-play-events-note { color: var(--text-muted); font-size: 12px; margin: 6px 0 12px; }
 .insights-page { display: grid; gap: 18px; }
 .insights-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.insights-heading > div:first-child { flex: 1 1 auto; }
+.insights-tabs { display: inline-flex; gap: 6px; padding: 4px; border: 1px solid var(--hairline); border-radius: 999px; background: var(--panel-bg); }
+.insights-tabs .toolbar-btn { border-radius: 999px; border-color: transparent; }
+.insights-tabs .toolbar-btn--on { border-color: var(--accent-color); }
 .insights-heading p, .insights-panel__heading span, .panel-empty { color: var(--text-secondary); }
 .insights-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
 .insights-summary--images { grid-template-columns: repeat(3, minmax(0, 1fr)); }

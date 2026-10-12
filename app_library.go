@@ -47,6 +47,11 @@ func (a *App) GetLibraryInsights() (*services.LibraryStats, error) {
 	return a.libraryStatsService.GetStats()
 }
 
+// GetStorageReport 是洞察页「存储体检」页签的数据：总占用、编码分布、久未观看的大文件与转码可省估算。
+func (a *App) GetStorageReport(request services.StorageReportRequest) (*services.StorageReport, error) {
+	return a.storageReportService.GetStorageReport(request)
+}
+
 // RerollRandom 是随机结果条上的「换一个」：丢弃上一次随机的统计并在同一范围内抽下一条；
 // 令牌已失效时返回 reason_code=reroll_expired。
 func (a *App) RerollRandom(token string) (*services.PlaybackAttemptResult, error) {

@@ -72,6 +72,26 @@ async function mountPage(extraProps = {}, extraOptions = {}) {
   return wrapper;
 }
 
+it('别的页面删掉了视频：从列表拿掉、关掉对应预览、总数重取并按当前条件重载', async () => {
+  const wrapper = await mountPage();
+  wrapper.vm.videos = [{ id: 5, name: 'a.mp4', tags: [] }, { id: 6, name: 'b.mp4', tags: [] }];
+  wrapper.vm.selectedPreviewVideoId = 5;
+  wrapper.vm.libraryTotalCount = 2;
+  const closePreview = vi.spyOn(wrapper.vm, 'closePreview').mockImplementation(() => {});
+  const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+  await wrapper.vm.handleVideosChangedElsewhere([5]);
+  expect(wrapper.vm.videos.map(video => video.id)).toEqual([6]);
+  expect(closePreview).toHaveBeenCalledTimes(1);
+  expect(wrapper.vm.libraryTotalCount).toBeNull();
+  expect(reload).toHaveBeenCalledTimes(1);
+
+  // 撤销删除（没有要拿掉的）只重载。
+  await wrapper.vm.handleVideosChangedElsewhere([]);
+  expect(closePreview).toHaveBeenCalledTimes(1);
+  expect(reload).toHaveBeenCalledTimes(2);
+  wrapper.unmount();
+});
+
 it('今晚看什么从随机菜单打开，带上共用的随机条件与最近排除；改条件回写片库页', async () => {
   const wrapper = await mountPage();
   wrapper.vm.recentRandomVideoIDs = [5, 6];
