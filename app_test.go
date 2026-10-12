@@ -95,7 +95,7 @@ func TestGetSubtitleSegmentsReturnsErrorWhenSubtitleMissing(t *testing.T) {
 	}
 }
 
-func TestSubtitleGenerateOptionsUseIndependentTranslationConfig(t *testing.T) {
+func TestSubtitleGenerateOptionsUseSystemTranslationAndIgnoreLegacyCredentials(t *testing.T) {
 	settings := &models.Settings{
 		BilingualEnabled:            true,
 		BilingualLang:               "ja",
@@ -112,11 +112,8 @@ func TestSubtitleGenerateOptionsUseIndependentTranslationConfig(t *testing.T) {
 	if !options.BilingualEnabled || options.BilingualLang != "ja" {
 		t.Fatalf("双语字幕设置映射错误: %+v", options)
 	}
-	if options.TranslationConfig.Provider != "llm" ||
-		options.TranslationConfig.BaseURL != "http://127.0.0.1:1234/v1" ||
-		options.TranslationConfig.APIKey != "subtitle-key" ||
-		options.TranslationConfig.Model != "subtitle-model" {
-		t.Fatalf("字幕翻译未使用独立配置: %+v", options.TranslationConfig)
+	if options.TranslationConfig.Provider != "apple" || options.TranslationConfig.BaseURL != "" || options.TranslationConfig.APIKey != "" || options.TranslationConfig.Model != "" || options.TranslationConfig.DeepLAPIKey != "" {
+		t.Fatalf("系统字幕不应读取外部配置: %+v", options.TranslationConfig)
 	}
 	if options.TranslationConfig.BaseURL == settings.AITaggingBaseURL ||
 		options.TranslationConfig.APIKey == settings.AITaggingAPIKey ||

@@ -5,6 +5,8 @@
 build/bin/
 # 超分运行时是按需下载的二进制（约 6 MB），不入库
 build/enhance-runtime/
+# 原生系统字幕组件由构建脚本生成
+build/apple-ai/
 
 # Frontend dependencies
 node_modules/

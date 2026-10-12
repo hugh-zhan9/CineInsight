@@ -46,3 +46,9 @@ type SceneVisualSegment struct {
 	Embedding []byte `json:"-"`
 	Caption   string `gorm:"type:text;not null;default:''" json:"caption"`
 }
+
+// SceneImageIndexState is the independently rebuildable Apple image index state.
+// Its owner and lifecycle are the same SceneIndexService; text states remain separate.
+type SceneImageIndexState SceneIndexState
+
+func (SceneImageIndexState) TableName() string { return "scene_image_index_states" }

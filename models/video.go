@@ -178,16 +178,16 @@ type Settings struct {
 	LogEnabled                   bool       `json:"log_enabled"`                        // 是否启用日志
 	BilingualEnabled             bool       `json:"bilingual_enabled"`                  // 是否开启双语字幕
 	BilingualLang                string     `gorm:"default:'zh'" json:"bilingual_lang"` // 双语目标语言代码 (zh/ja/ko/fr/de/es)
-	DeepLApiKey                  string     `json:"deepl_api_key"`                      // DeepL API Key
-	SubtitleTranslationProvider  string     `gorm:"default:'deepl'" json:"subtitle_translation_provider"`
-	SubtitleTranslationBaseURL   string     `json:"subtitle_translation_base_url"`
-	SubtitleTranslationAPIKey    string     `json:"subtitle_translation_api_key"`
-	SubtitleTranslationModel     string     `json:"subtitle_translation_model"`
-	SubtitleWhisperXModel        string     `gorm:"default:'medium'" json:"subtitle_whisperx_model"`
-	SubtitleWhisperXBatchSize    int        `gorm:"default:8" json:"subtitle_whisperx_batch_size"`
-	AITaggingBaseURL             string     `json:"ai_tagging_base_url"` // OpenAI 兼容接口地址
-	AITaggingAPIKey              string     `json:"ai_tagging_api_key"`  // AI 标签 API Key
-	AITaggingModel               string     `json:"ai_tagging_model"`    // AI 标签模型
+	DeepLApiKey                  string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationProvider  string     `gorm:"default:'deepl'" json:"-"`           // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationBaseURL   string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationAPIKey    string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
+	SubtitleTranslationModel     string     `json:"-"`                                  // Retired subtitle setting retained for historical database compatibility.
+	SubtitleWhisperXModel        string     `gorm:"default:'medium'" json:"-"`          // Retired subtitle setting retained for historical database compatibility.
+	SubtitleWhisperXBatchSize    int        `gorm:"default:8" json:"-"`                 // Retired subtitle setting retained for historical database compatibility.
+	AITaggingBaseURL             string     `json:"ai_tagging_base_url"`                // OpenAI 兼容接口地址
+	AITaggingAPIKey              string     `json:"ai_tagging_api_key"`                 // AI 标签 API Key
+	AITaggingModel               string     `json:"ai_tagging_model"`                   // AI 标签模型
 	SemanticEmbeddingModel       string     `gorm:"type:text;not null;default:''" json:"semantic_embedding_model"`
 	AITaggingFrameCount          int        `gorm:"default:0" json:"ai_tagging_frame_count"` // 兼容旧设置；抽帧现按视频时长自动规划
 	AITaggingImagesPerRequest    int        `gorm:"default:10" json:"ai_tagging_images_per_request"`
@@ -234,10 +234,11 @@ type Settings struct {
 	// 也不用（更不能用）gorm default 标签。
 	//
 	// AutoFaceAnalysis 默认关：人脸分析是重任务，且它产出的是人物候选，
-	// 装完就替用户跑一遍并不合适。FaceModelMirrorURL 为空时用 manifest 里的
+	// 不替用户自动分析。FaceModelMirrorURL 仅保留历史存储，不再用于执行或前端 JSON。
+	// 历史行为：为空时用 manifest 里的
 	// 官方地址，非空时替换其 URL 前缀（本机直连 GitHub 未必通）。
 	AutoFaceAnalysis   bool   `json:"auto_face_analysis"`
-	FaceModelMirrorURL string `gorm:"type:text;not null;default:''" json:"face_model_mirror_url"`
+	FaceModelMirrorURL string `gorm:"type:text;not null;default:''" json:"-"`
 
 	// 帧哈希序列（D-026）。默认关，零值即默认，不需要显式迁移，也不用（更不能用）
 	// gorm default 标签。回填要逐帧抽整部片，是本应用里最吃 CPU 的一类任务，

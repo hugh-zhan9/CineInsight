@@ -17,7 +17,7 @@ import (
 )
 
 // 对已经生成好的外挂 SRT 单独发起翻译：目标语言按次指定，产物覆盖同名 .srt。
-// 复用生成流程那一套翻译器、术语表与滑动窗口上文，区别只在于不碰 ASR，
+// 复用生成流程的系统翻译器与安全写回，区别只在于不碰 ASR，
 // 也就不必排进转写队列。
 
 type SubtitleTranslateMode string
@@ -177,15 +177,6 @@ func (s *SubtitleService) TranslateSubtitleFile(ctx context.Context, videoPath s
 	if err != nil {
 		return nil, err
 	}
-	// 术语表只对吃得下它的翻译器解析，DeepL 用不上就不该多出一条读库失败路径（D-034）。
-	var glossary []GlossaryTerm
-	if _, injectable := translator.(ContextualTranslator); injectable {
-		resolved, resolveErr := s.glossaryResolver(request.VideoID, targetLang)
-		if resolveErr != nil {
-			return nil, fmt.Errorf("读取术语表失败: %w", resolveErr)
-		}
-		glossary = resolved
-	}
 
 	log.Printf("[Subtitle] translate existing subtitle video_id=%d entries=%d source=%q target=%s mode=%s provider=%s",
 		request.VideoID, len(entries), sourceLang, targetLang, mode, provider)
@@ -202,7 +193,7 @@ func (s *SubtitleService) TranslateSubtitleFile(ctx context.Context, videoPath s
 		percent := done * 90 / total
 		s.emitTranslateProgress(request.VideoID, percent, fmt.Sprintf("已翻译 %d/%d 条字幕...", done, total))
 	}
-	fallbackCount, err := s.translateSRTWithProgress(ctx, srtPath, translatedPath, sourceLang, targetLang, translator, glossary, onBatch)
+	fallbackCount, err := s.translateSRTWithProgress(ctx, srtPath, translatedPath, sourceLang, targetLang, translator, onBatch)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, errSubtitleTranslationCancelled

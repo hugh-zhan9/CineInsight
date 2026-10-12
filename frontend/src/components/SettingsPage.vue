@@ -164,9 +164,6 @@ export function normalizeSettingsForm(settings) {
   form.scan_exclude_paths = form.scan_exclude_paths || '';
   form.image_scan_exclude_paths = form.image_scan_exclude_paths || '';
   form.image_extensions = form.image_extensions || '';
-  form.subtitle_translation_provider = form.subtitle_translation_provider || 'deepl';
-  form.subtitle_whisperx_model = form.subtitle_whisperx_model || 'medium';
-  form.subtitle_whisperx_batch_size = form.subtitle_whisperx_batch_size || 8;
   form.backup_directory = form.backup_directory || '';
   form.backup_retention_count = form.backup_retention_count || 7;
   form.backup_interval_hours = Number.isFinite(form.backup_interval_hours) ? form.backup_interval_hours : 24;
@@ -184,7 +181,6 @@ export function normalizeSettingsForm(settings) {
   form.proxy_cache_limit_bytes = normalizeProxyCacheLimitBytes(form.proxy_cache_limit_bytes);
   // 人脸识别（D-016、D-022）：两项默认都是零值，老库读回 undefined 也要落成确定值。
   form.auto_face_analysis = Boolean(form.auto_face_analysis);
-  form.face_model_mirror_url = form.face_model_mirror_url || '';
   // 场景检索（D-MW-SCENES）：提供方只认 external，其余按本地；间隔 2–30 秒，读不出时取默认 5。
   form.scene_visual_provider = form.scene_visual_provider === 'external' ? 'external' : 'local';
   form.scene_visual_interval_seconds = normalizeSceneIntervalSeconds(form.scene_visual_interval_seconds);
@@ -228,7 +224,6 @@ export function buildSettingsPayload(form) {
     auto_compatibility_proxy: form.auto_compatibility_proxy || false,
     proxy_cache_limit_bytes: normalizeProxyCacheLimitBytes(form.proxy_cache_limit_bytes),
     auto_face_analysis: form.auto_face_analysis || false,
-    face_model_mirror_url: form.face_model_mirror_url || '',
     scene_visual_provider: form.scene_visual_provider === 'external' ? 'external' : 'local',
     scene_visual_interval_seconds: normalizeSceneIntervalSeconds(form.scene_visual_interval_seconds),
     scene_model_mirror_url: form.scene_model_mirror_url || '',
@@ -250,13 +245,6 @@ export function buildSettingsPayload(form) {
     log_enabled: form.log_enabled,
     bilingual_enabled: form.bilingual_enabled || false,
     bilingual_lang: form.bilingual_lang || 'zh',
-    deepl_api_key: form.deepl_api_key || '',
-    subtitle_translation_provider: form.subtitle_translation_provider || 'deepl',
-    subtitle_translation_base_url: form.subtitle_translation_base_url || '',
-    subtitle_translation_api_key: form.subtitle_translation_api_key || '',
-    subtitle_translation_model: form.subtitle_translation_model || '',
-    subtitle_whisperx_model: form.subtitle_whisperx_model || 'medium',
-    subtitle_whisperx_batch_size: form.subtitle_whisperx_batch_size || 8,
     ai_tagging_base_url: form.ai_tagging_base_url || '',
     ai_tagging_api_key: form.ai_tagging_api_key || '',
     ai_tagging_model: form.ai_tagging_model || '',

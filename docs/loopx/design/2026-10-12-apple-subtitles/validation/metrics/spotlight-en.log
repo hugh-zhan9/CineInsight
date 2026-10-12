@@ -1,0 +1,7 @@
+bundle=com.cineinsight.validation.spotlight20261012
+indexed_metadata=101
+2026-10-12 16:12:36.555 spotlight-probe[68104:15332270] [UserQueryParser] Loading keywords and predicates for locale "en_US"
+2026-10-12 16:12:36.555 spotlight-probe[68104:15332270] [UserQueryParser] Loading keywords and predicates for locale "en"
+{"round":0,"user_literal_control":[],"semantic_control":[],"hydrant":[],"literal_control":["control"],"user_word_control":["control"],"zh_hydrant":[],"skateboard":[]}
+{"round":1,"user_literal_control":[],"semantic_control":[],"hydrant":[],"literal_control":["control"],"user_word_control":["control"],"zh_hydrant":[],"skateboard":[]}
+cleanup=ok

@@ -54,10 +54,14 @@
 
         <template v-if="subtitleSourceLangVisible">
           <label class="dialog-field-label dialog-field-label--spaced">识别源语言</label>
-          <select v-model="sourceLang" class="search-input dialog-select">
+          <select v-model="sourceLang" class="search-input dialog-select" data-test="apple-source-language" :disabled="detectingLanguage || preparingLanguage" @change="rememberSourceLanguage">
             <option v-for="opt in languageOptions" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
           </select>
-          <p class="dialog-field-hint">如果自动检测不准，请手动指定视频中的语言。</p>
+          <p class="dialog-field-hint">自动检测范围：{{ installedLanguageNames || '尚无已安装语种，请先准备语言资源' }}。结果可以手动修改。</p>
+          <button v-if="!batchConfirm" type="button" class="btn-secondary" data-test="apple-detect-language" :disabled="detectingLanguage || preparingLanguage || !selectedSubtitleEngineStatus?.available" @click="detectLanguage">{{ detectingLanguage ? '正在检测…' : '检测语言' }}</button>
+          <button v-if="sourceLang !== 'auto'" type="button" class="btn-secondary" data-test="apple-prepare-language" :disabled="detectingLanguage || preparingLanguage" @click="prepareSelectedLanguage">{{ preparingLanguage ? '正在准备…' : '准备所选语言' }}</button>
+          <button v-if="detectingLanguage || preparingLanguage" type="button" class="btn-secondary" data-test="apple-language-cancel" @click="cancelPrepare">取消</button>
+          <p v-if="languageMessage" class="dialog-field-hint" role="status" data-test="apple-language-message">{{ languageMessage }}</p>
         </template>
       </div>
 
@@ -114,7 +118,7 @@
 import {
   CancelSubtitle, CancelSubtitleEnginePreparation, CancelSubtitleTask, DiscardPendingSubtitle, DismissInterruptedSubtitleJobs,
   ForceGenerateSubtitle, GenerateSubtitle, GetInterruptedSubtitleJobs, GetSubtitleEngineStatuses, GetSubtitleOverwriteInfo,
-  GetSubtitleQueueState, PrepareSubtitleEngine, RequeueInterruptedSubtitleJobs
+  GetSubtitleQueueState, PrepareSubtitleEngine, RequeueInterruptedSubtitleJobs, DetectSubtitleLanguage, PrepareAppleSubtitleLanguage
 } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import { notify, notifyError } from '../../utils/feedback.js';
@@ -126,6 +130,7 @@ import { runtimeEventsMixin } from './runtimeEvents.js';
 import { formatElapsedDuration } from './format.js';
 
 // 写回同名 .srt 失败（D-PC13、D-PC20）：字幕已生成并通过校验，临时结果保留，「强制生成」即重试写回。
+function rememberedSourceLanguage() { try { return localStorage.getItem('subtitle-source-language') || 'auto'; } catch { return 'auto'; } }
 const REPLACE_FAILED = 'subtitle_replace_failed';
 // PrepareSubtitleEngine 被取消时返回的就是这句（services.ErrSubtitleEnginePreparationCancelled）：不是失败。
 const PREPARE_CANCELLED_TEXT = '已取消字幕引擎准备';
@@ -148,7 +153,7 @@ export default {
       generatingSubtitleIds: [],
       subtitleDialog: { show: false, mode: 'confirm', title: '', msg: '', percent: 0, progressAction: '', phase: '', requiresPrepare: false },
       subtitleEngineStatuses: [],
-      selectedSubtitleEngine: 'whisperx',
+      selectedSubtitleEngine: 'apple',
       pendingSubtitleVideo: null,
       pendingForceRequest: null,
       discardingPending: false,
@@ -171,17 +176,9 @@ export default {
       minimizedSubtitleTaskIds: [],
       subtitleQueue: { active_task: null, queued_tasks: [], total: 0 },
       cancellingSubtitleTaskIds: [],
-      sourceLang: 'auto',
-      languageOptions: [
-        { label: '自动检测', value: 'auto' },
-        { label: '中文 (Chinese)', value: 'chinese' },
-        { label: '英语 (English)', value: 'english' },
-        { label: '日语 (Japanese)', value: 'japanese' },
-        { label: '韩语 (Korean)', value: 'korean' },
-        { label: '德语 (German)', value: 'german' },
-        { label: '法语 (French)', value: 'french' },
-        { label: '西班牙语 (Spanish)', value: 'spanish' }
-      ],
+      sourceLang: rememberedSourceLanguage(),
+      detectingLanguage: false, preparingLanguage: false, languageMessage: '', languageRequest: 0,
+
     };
   },
   mounted() {
@@ -250,6 +247,8 @@ export default {
       });
   },
   beforeUnmount() {
+    if (this.detectingLanguage || this.preparingLanguage) CancelSubtitleEnginePreparation().catch(() => {});
+    this.languageRequest++;
     this.resetSubtitleProgressTracking();
   },
   watch: {
@@ -260,6 +259,8 @@ export default {
     }
   },
   computed: {
+    languageOptions() { return [{ label: '自动检测', value: 'auto' }, ...(this.selectedSubtitleEngineStatus?.languages || []).map(language => ({ label: `${language.name}${language.installed ? '（已准备）' : ''}`, value: language.code }))]; },
+    installedLanguageNames() { return [...new Set((this.selectedSubtitleEngineStatus?.languages || []).filter(language => language.installed).map(language => language.name))].join('、'); },
     selectedSubtitleEngineStatus() {
       return this.subtitleEngineStatuses.find(status => status.engine === this.selectedSubtitleEngine) || null;
     },
@@ -273,6 +274,7 @@ export default {
       return '开始生成';
     },
     subtitleConfirmDisabled() {
+      if (this.detectingLanguage || this.preparingLanguage) return true;
       const status = this.selectedSubtitleEngineStatus;
       if (!status) return true;
       if (!status.supported) return true;
@@ -343,6 +345,34 @@ export default {
     }
   },
   methods: {
+    rememberSourceLanguage() { this.languageMessage = ''; try { localStorage.setItem('subtitle-source-language', this.sourceLang); } catch {} },
+    async detectLanguage() {
+      const video = this.pendingSubtitleVideo;
+      if (!video || this.detectingLanguage || this.preparingLanguage) return;
+      const sequence = ++this.languageRequest;
+      this.detectingLanguage = true; this.languageMessage = ''; this.prepareState.cancelling = false;
+      try {
+        const result = await DetectSubtitleLanguage(video.id);
+        if (sequence !== this.languageRequest || this.pendingSubtitleVideo?.id !== video.id) return;
+        this.sourceLang = result.language;
+        this.rememberSourceLanguage();
+        this.languageMessage = `检测结果：${this.languageOptions.find(item => item.value === result.language)?.label || result.language}，可以修改后再生成。`;
+      } catch (err) { if (sequence === this.languageRequest) this.languageMessage = subtitleExceptionText(err); }
+      finally { if (sequence === this.languageRequest) { this.detectingLanguage = false; this.prepareState.cancelling = false; } }
+    },
+    async prepareSelectedLanguage() {
+      if (this.sourceLang === 'auto' || this.preparingLanguage || this.detectingLanguage) return;
+      const sequence = ++this.languageRequest;
+      const source = this.sourceLang;
+      this.preparingLanguage = true; this.languageMessage = ''; this.prepareState.cancelling = false;
+      try {
+        await PrepareAppleSubtitleLanguage(source, '', false);
+        if (sequence !== this.languageRequest) return;
+        this.languageMessage = '所选语言已准备好。';
+        await this.loadSubtitleEngineStatuses();
+      } catch (err) { if (sequence === this.languageRequest) this.languageMessage = subtitleExceptionText(err); }
+      finally { if (sequence === this.languageRequest) { this.preparingLanguage = false; this.prepareState.cancelling = false; } }
+    },
     generate(video) {
       return this.generateSubtitle(video);
     },
@@ -506,11 +536,12 @@ export default {
       const statuses = await GetSubtitleEngineStatuses();
       this.subtitleEngineStatuses = Array.isArray(statuses) ? statuses : [];
       const current = this.subtitleEngineStatuses.find(status => status.engine === this.selectedSubtitleEngine && status.supported);
+      if (!this.languageOptions.some(item => item.value === this.sourceLang)) this.sourceLang = 'auto';
       if (current) return;
-      const preferred = this.subtitleEngineStatuses.find(status => status.engine === 'whisperx' && status.supported)
+      const preferred = this.subtitleEngineStatuses.find(status => status.engine === 'apple' && status.supported)
         || this.subtitleEngineStatuses.find(status => status.supported)
         || this.subtitleEngineStatuses[0];
-      this.selectedSubtitleEngine = preferred?.engine || 'whisperx';
+      this.selectedSubtitleEngine = preferred?.engine || 'apple';
     },
     refreshSubtitleConfirmCopy() {
       const status = this.selectedSubtitleEngineStatus;
@@ -667,6 +698,8 @@ export default {
       this.subtitleDialog.show = false;
     },
     cancelConfirm() {
+      if (this.detectingLanguage || this.preparingLanguage) CancelSubtitleEnginePreparation().catch(() => {});
+      this.languageRequest++; this.detectingLanguage = false; this.preparingLanguage = false; this.languageMessage = ''; this.prepareState.cancelling = false;
       this.subtitleDialog.show = false;
       this.pendingForceRequest = null;
       this.pendingSubtitleVideo = null;

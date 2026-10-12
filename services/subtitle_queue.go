@@ -581,8 +581,6 @@ type subtitleJobPayload struct {
 	BilingualEnabled    bool   `json:"bilingual_enabled,omitempty"`
 	BilingualLang       string `json:"bilingual_lang,omitempty"`
 	TranslationProvider string `json:"translation_provider,omitempty"`
-	WhisperXModel       string `json:"whisperx_model,omitempty"`
-	WhisperXBatchSize   int    `json:"whisperx_batch_size,omitempty"`
 	// 以下只在 needs_confirmation 时写入：重启之后「强制生成」复用临时文件所需的登记信息。
 	ErrorCode          string `json:"error_code,omitempty"`
 	ValidationCode     string `json:"validation_code,omitempty"`
@@ -596,8 +594,6 @@ func subtitleJobPayloadFromOptions(options SubtitleGenerateOptions) subtitleJobP
 		BilingualEnabled:    options.BilingualEnabled,
 		BilingualLang:       options.BilingualLang,
 		TranslationProvider: options.TranslationConfig.Provider,
-		WhisperXModel:       options.RecognitionConfig.WhisperXModel,
-		WhisperXBatchSize:   options.RecognitionConfig.WhisperXBatchSize,
 	}
 }
 
@@ -739,6 +735,8 @@ func (st *subtitleJobDBStore) recordQueued(task *subtitleQueueTask) error {
 			Where("id = ? AND status IN ?", claim.jobID, subtitleStatusStrings(claim.from)).
 			Updates(map[string]any{
 				"status":                string(SubtitleQueueTaskStatusQueued),
+				"engine":                string(task.Request.Engine),
+				"source_lang":           task.Request.SourceLang,
 				"message":               "",
 				"pending_artifact_path": "",
 				"options_json":          payload,
@@ -1181,7 +1179,7 @@ func (s *SubtitleService) retrySubtitleJob(job *models.SubtitleJob, input Subtit
 	options := normalizeSubtitleGenerateOptions(input.Options)
 	options.ForceGenerate = false
 	task := &subtitleQueueTask{
-		Request:   SubtitleGenerateRequest{VideoID: job.VideoID, VideoName: strings.TrimSpace(input.VideoName), Engine: SubtitleEngine(job.Engine), SourceLang: job.SourceLang},
+		Request:   SubtitleGenerateRequest{VideoID: job.VideoID, VideoName: strings.TrimSpace(input.VideoName), Engine: SubtitleEngineApple, SourceLang: job.SourceLang},
 		VideoPath: input.VideoPath,
 		VideoName: strings.TrimSpace(input.VideoName),
 		Options:   options,

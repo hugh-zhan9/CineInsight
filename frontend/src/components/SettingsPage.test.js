@@ -33,7 +33,7 @@ const api = vi.hoisted(() => Object.fromEntries([
   'GetDatabaseSwitchStatus', 'SwitchBackendConfigOnly', 'ClearMigrationTarget', 'RelaunchApp', 'RevealBackupDirectory',
   'GetShortFeedAccessStatus', 'GetShortFeedQRCode', 'SetShortFeedEnabled', 'SetShortFeedPIN', 'ClearShortFeedPIN',
   'UnlockShortFeedLogin', 'GetJellyfinStatus', 'GetJellyfinDiagnostics', 'ConfigureJellyfin', 'GetIINASyncStatus',
-  'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine', 'CancelSubtitleEnginePreparation', 'ValidateScanDirectory',
+  'GetSubtitleEngineStatuses', 'PrepareSubtitleEngine', 'PrepareAppleSubtitleLanguage', 'CancelSubtitleEnginePreparation', 'ValidateScanDirectory',
   'GetIdleSchedulerStatus', 'RunGatedTaskNow', 'GetPlaybackProxyUsage', 'GetPlaybackProxyStatus'
 ].map(name => [name, vi.fn()])));
 
@@ -879,24 +879,13 @@ describe('后台任务空闲调度（P-003）', () => {
   });
 });
 
-describe('字幕翻译术语表（P-010）', () => {
-  it('挂在字幕翻译分区里，按全局作用域加载', async () => {
+describe('系统字幕翻译', () => {
+  it('移除外部配置和术语入口，不读取旧术语数据', async () => {
     const wrapper = await mountPage();
-    expect(api.ListGlossaryEntries).toHaveBeenCalledWith(0);
-    expect(wrapper.findComponent({ name: 'GlossaryEditor' }).props('collectionId')).toBe(0);
-  });
-
-  it('provider 是 DeepL 时说明术语表不适用', async () => {
-    const wrapper = await mountPage();
-    const notice = wrapper.get('[data-test="glossary-deepl-notice"]');
-    expect(notice.text()).toContain('术语表不适用于 DeepL');
-  });
-
-  it('切到 OpenAI 兼容接口后不再显示这条说明', async () => {
-    const wrapper = await mountPage();
-    sectionVm(wrapper, 'SubtitleSection').form.subtitle_translation_provider = 'llm';
-    await flushPromises();
-    expect(wrapper.find('[data-test="glossary-deepl-notice"]').exists()).toBe(false);
+    expect(api.ListGlossaryEntries).not.toHaveBeenCalled();
+    expect(wrapper.findComponent({ name: 'GlossaryEditor' }).exists()).toBe(false);
+    expect(wrapper.get('#settings-subtitle-translate').text()).toContain('苹果系统翻译');
+    expect(wrapper.get('#settings-subtitle-translate').find('input[type="password"]').exists()).toBe(false);
   });
 });
 

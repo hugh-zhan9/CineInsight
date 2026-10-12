@@ -776,23 +776,12 @@ describe('PreviewDrawer', () => {
 });
 
 describe('PreviewDrawer 作品集术语表（P-010）', () => {
-  it('作品集详情按该作品集的作用域加载术语表', async () => {
-    api.GetCollectionDetail.mockResolvedValueOnce({
-      collection: { collection: { id: 3, name: 'Collection', description: '' }, cover_url: '', active_video_count: 0 },
-      videos: []
-    });
-    api.ListGlossaryEntries.mockResolvedValue([
-      { id: 9, collection_id: 3, scope_key: 3, source_term: 'Neo', source_term_lower: 'neo', target_term: '尼奥', note: '' }
-    ]);
-
+  it('作品集详情不再加载或展示术语表', async () => {
+    api.GetCollectionDetail.mockResolvedValueOnce({ collection: { collection: { id: 3, name: 'Collection' }, active_video_count: 0 }, videos: [] });
     const wrapper = mount(PreviewDrawer, { props: { initialEntity: { type: 'collection', id: 3 } } });
     await flushPromises();
-
-    const editor = wrapper.findComponent({ name: 'GlossaryEditor' });
-    expect(editor.exists()).toBe(true);
-    expect(editor.props('collectionId')).toBe(3);
-    expect(api.ListGlossaryEntries).toHaveBeenCalledWith(3);
-    expect(wrapper.findAll('[data-test="glossary-entry"]')).toHaveLength(1);
+    expect(wrapper.findComponent({ name: 'GlossaryEditor' }).exists()).toBe(false);
+    expect(api.ListGlossaryEntries).not.toHaveBeenCalled();
   });
 
   it('视频详情里没有术语表区块', async () => {

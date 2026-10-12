@@ -1,6 +1,7 @@
 package services
 
 import (
+	"bytes"
 	"encoding/binary"
 	"fmt"
 	"math"
@@ -12,17 +13,16 @@ import (
 // Serialise source exclusions with assignment of newly detected faces.
 var faceClusterAssignmentMu sync.Mutex
 
-// 相似度与聚类阈值（D-017）。都是常量：fixture 钉住，允许在 ±20% 内校准，
-// 超出这个范围就不是调参而是换设计，要回 spec。
+// 苹果人脸阈值来自独立身份验证集，见苹果视觉替换合同 D-AV2。
 const (
-	// faceEmbeddingDims 是 ArcFace w600k_r50 的输出维度。
-	faceEmbeddingDims = 512
-	// faceEmbeddingBytes 是一条向量在库里的字节数（float32 × 512）。
+	// faceEmbeddingDims 是 Apple Faceprint revision 3737841669 的输出维度。
+	faceEmbeddingDims = 128
+	// faceEmbeddingBytes 是一条向量在库里的字节数（float32 × 128）。
 	faceEmbeddingBytes = faceEmbeddingDims * 4
 	// faceClusterMergeThreshold 是"归入现有簇"的点积下限。
-	faceClusterMergeThreshold = 0.55
+	faceClusterMergeThreshold = 0.8307785119309815
 	// facePersonSeedThreshold 是"这个簇可能是这个人"的点积下限（人物头像种子）。
-	facePersonSeedThreshold = 0.60
+	facePersonSeedThreshold = faceClusterMergeThreshold
 	// faceCandidateMinObservations 是簇进入人物候选的最少观测数：
 	// 一两张脸的簇噪声太大，建议出来只会浪费用户的确认动作。
 	faceCandidateMinObservations = 3
@@ -30,9 +30,11 @@ const (
 
 // encodeFaceEmbedding 把归一化向量编码成库里的 BLOB（float32 小端序）。
 func encodeFaceEmbedding(vector []float32) []byte {
-	blob := make([]byte, len(vector)*4)
+	blob := make([]byte, len(faceRuntimeIdentity)+1+len(vector)*4)
+	copy(blob, faceRuntimeIdentity)
+	payload := blob[len(faceRuntimeIdentity)+1:]
 	for i, value := range vector {
-		binary.LittleEndian.PutUint32(blob[i*4:], math.Float32bits(value))
+		binary.LittleEndian.PutUint32(payload[i*4:], math.Float32bits(value))
 	}
 	return blob
 }
@@ -40,6 +42,11 @@ func encodeFaceEmbedding(vector []float32) []byte {
 // decodeFaceEmbedding 把库里的 BLOB 解回向量。长度不对就报错——
 // 一条长度不对的向量参与点积只会得出无意义的相似度。
 func decodeFaceEmbedding(blob []byte) ([]float32, error) {
+	prefix := append([]byte(faceRuntimeIdentity), 0)
+	if !bytes.HasPrefix(blob, prefix) {
+		return nil, fmt.Errorf("人脸特征需要迁移为苹果版本")
+	}
+	blob = blob[len(prefix):]
 	if len(blob) != faceEmbeddingBytes {
 		return nil, fmt.Errorf("人脸向量长度异常: %d 字节（应为 %d）", len(blob), faceEmbeddingBytes)
 	}
@@ -62,7 +69,7 @@ func normalizeFaceEmbedding(vector []float32) ([]float32, bool) {
 	for _, value := range vector {
 		sum += float64(value) * float64(value)
 	}
-	if sum <= 0 {
+	if sum <= 0 || math.IsNaN(sum) || math.IsInf(sum, 0) {
 		return nil, false
 	}
 	norm := math.Sqrt(sum)

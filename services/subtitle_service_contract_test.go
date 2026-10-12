@@ -5,38 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
-
-func TestGetEngineStatusesIncludesWhisperXAndQwen(t *testing.T) {
-	svc := NewSubtitleService(t.TempDir())
-	statuses, err := svc.GetEngineStatuses()
-	if err != nil {
-		t.Fatalf("获取字幕引擎状态失败: %v", err)
-	}
-	if len(statuses) < 2 {
-		t.Fatalf("期望至少返回 2 个引擎状态，实际 %d", len(statuses))
-	}
-	engines := map[SubtitleEngine]SubtitleEngineStatus{}
-	for _, status := range statuses {
-		engines[status.Engine] = status
-	}
-	if _, ok := engines[SubtitleEngineWhisperX]; !ok {
-		t.Fatalf("缺少 WhisperX 引擎状态")
-	}
-	qwen, ok := engines[SubtitleEngineQwen]
-	if !ok {
-		t.Fatalf("缺少 Qwen 引擎状态")
-	}
-	if runtime.GOOS != "darwin" && qwen.Supported {
-		t.Fatalf("非 macOS 环境下 Qwen 不应标记为 supported")
-	}
-	if runtime.GOOS == "darwin" && runtime.GOARCH != "arm64" && qwen.Supported {
-		t.Fatalf("macOS 非 arm64 在当前实现下不应默认启用 Qwen")
-	}
-}
 
 func TestValidateSRTReturnsTypedValidationError(t *testing.T) {
 	svc := NewSubtitleService(t.TempDir())
@@ -153,15 +124,5 @@ func TestValidateSRTRejectsTokenizedZeroDurationSubtitles(t *testing.T) {
 	}
 	if validationErr.Code != SubtitleValidationCodeHallucinationDetected {
 		t.Fatalf("校验码错误: got=%s", validationErr.Code)
-	}
-}
-
-func TestIsQwenMPSOutOfMemory(t *testing.T) {
-	detail := "RuntimeError: MPS backend out of memory (MPS allocated: 13.51 GiB)"
-	if !isQwenMPSOutOfMemory(detail) {
-		t.Fatalf("期望识别为 MPS OOM")
-	}
-	if isQwenMPSOutOfMemory("RuntimeError: something else failed") {
-		t.Fatalf("非 MPS OOM 不应误判")
 	}
 }

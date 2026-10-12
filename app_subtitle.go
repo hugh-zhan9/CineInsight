@@ -26,7 +26,7 @@ func (a *App) PrepareSubtitleEngine(engine services.SubtitleEngine) error {
 	return err
 }
 
-// CancelSubtitleEnginePreparation 取消正在进行的字幕引擎准备（杀掉 pip 等子进程，D-PC22）。
+// CancelSubtitleEnginePreparation 取消正在进行的字幕引擎准备（取消系统辅助程序，D-PC22）。
 func (a *App) CancelSubtitleEnginePreparation() {
 	cancelled := a.subtitleService.CancelEnginePreparation()
 	log.Printf("API CancelSubtitleEnginePreparation cancelled=%v", cancelled)
@@ -183,34 +183,14 @@ func (a *App) SyncSubtitleIndexNow() (services.SubtitleIndexSyncStatus, error) {
 }
 
 func subtitleGenerateOptionsFromSettings(settings *models.Settings, force bool) services.SubtitleGenerateOptions {
-	options := services.SubtitleGenerateOptions{
-		BilingualLang: "zh",
-		ForceGenerate: force,
-		RecognitionConfig: services.SubtitleRecognitionConfig{
-			WhisperXModel:       "medium",
-			WhisperXBatchSize:   8,
-			WhisperXComputeType: "int8",
-		},
-		TranslationConfig: services.SubtitleTranslationConfig{Provider: "deepl"},
+	options := services.SubtitleGenerateOptions{BilingualLang: "zh", ForceGenerate: force, TranslationConfig: services.SubtitleTranslationConfig{Provider: "apple"}}
+	if settings != nil {
+		options.BilingualEnabled = settings.BilingualEnabled
+		options.BilingualLang = settings.BilingualLang
 	}
-	if settings == nil {
-		return options
-	}
-	options.BilingualEnabled = settings.BilingualEnabled
-	options.BilingualLang = settings.BilingualLang
-	options.TranslationConfig = services.SubtitleTranslationConfig{
-		Provider:    settings.SubtitleTranslationProvider,
-		DeepLAPIKey: settings.DeepLApiKey,
-		BaseURL:     settings.SubtitleTranslationBaseURL,
-		APIKey:      settings.SubtitleTranslationAPIKey,
-		Model:       settings.SubtitleTranslationModel,
-	}
-	options.RecognitionConfig.WhisperXModel = settings.SubtitleWhisperXModel
-	options.RecognitionConfig.WhisperXBatchSize = settings.SubtitleWhisperXBatchSize
 	return options
 }
 
-// TranslateSubtitle 翻译视频已有的外挂字幕，按请求的形态覆盖回同一个 .srt。
 func (a *App) TranslateSubtitle(req services.SubtitleTranslateRequest) (*services.SubtitleTranslateResult, error) {
 	video, err := a.videoService.GetVideo(req.VideoID)
 	if err != nil {
@@ -388,35 +368,20 @@ func (a *App) SaveSubtitleEditDocument(request services.SubtitleSaveRequest) (*s
 	return result, err
 }
 
-// ===== Translation Glossary Methods =====
-//
-// 术语表是无状态服务（只读写库），所以不进 App 结构体，每次现取一个。
-
-// ListGlossaryEntries 列出一个作用域的术语条目；collectionID 传 0 表示全局表。
-func (a *App) ListGlossaryEntries(collectionID uint) ([]models.TranslationGlossaryEntry, error) {
-	entries, err := services.NewTranslationGlossaryService().List(glossaryScopeArgument(collectionID))
-	log.Printf("API ListGlossaryEntries collection_id=%d entries=%d err=%v", collectionID, len(entries), err)
-	return entries, err
+// PrepareAppleSubtitleLanguage prepares only Apple-managed speech or translation resources.
+func (a *App) PrepareAppleSubtitleLanguage(source, target string, translation bool) error {
+	return a.subtitleService.PrepareAppleLanguage(source, target, translation)
 }
 
-// UpsertGlossaryEntry 新增或改写一条术语；entry.collection_id 为空表示全局条目。
-func (a *App) UpsertGlossaryEntry(entry models.TranslationGlossaryEntry) (*models.TranslationGlossaryEntry, error) {
-	saved, err := services.NewTranslationGlossaryService().Upsert(entry)
-	log.Printf("API UpsertGlossaryEntry id=%d scope_key=%d err=%v", entry.ID, entry.ScopeKey, err)
-	return saved, err
-}
-
-// DeleteGlossaryEntry 删除一条术语。
-func (a *App) DeleteGlossaryEntry(id uint) error {
-	err := services.NewTranslationGlossaryService().Delete(id)
-	log.Printf("API DeleteGlossaryEntry id=%d err=%v", id, err)
-	return err
-}
-
-// glossaryScopeArgument 把前端惯用的 0 表示全局翻译成服务层的 nil 作用域。
-func glossaryScopeArgument(collectionID uint) *uint {
-	if collectionID == 0 {
-		return nil
+// DetectSubtitleLanguage offers an editable language suggestion before generation.
+func (a *App) DetectSubtitleLanguage(videoID uint) (services.AppleLanguageDetection, error) {
+	video, err := a.videoService.GetVideo(videoID)
+	if err != nil {
+		return services.AppleLanguageDetection{}, err
 	}
-	return &collectionID
+	ctx := a.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return a.subtitleService.DetectSubtitleLanguage(ctx, video.Path)
 }

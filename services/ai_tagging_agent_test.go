@@ -26,7 +26,7 @@ func (c *scriptedAgentClient) DecideNextAction(context.Context, AITagAgentDecisi
 
 type fakeTemporaryTranscriptProvider struct{}
 
-func (fakeTemporaryTranscriptProvider) GenerateTemporaryTranscript(context.Context, models.Video, int, SubtitleRecognitionConfig) (TemporaryTranscriptEvidence, error) {
+func (fakeTemporaryTranscriptProvider) GenerateTemporaryTranscript(context.Context, models.Video, int) (TemporaryTranscriptEvidence, error) {
 	return TemporaryTranscriptEvidence{Text: "private temporary transcript", DetectedLang: "zh", Engine: "whisperx"}, nil
 }
 
@@ -240,9 +240,6 @@ func TestTemporaryTranscriptSlotWaitIsContextAware(t *testing.T) {
 		t.Fatal("cancelled waiter must not block on the shared transcription slot")
 	}
 	service.releaseTranscriptionSlot()
-	if !isSubtitleLocalOnlyASR(withSubtitleLocalOnlyASR(context.Background())) {
-		t.Fatal("temporary ASR context must force offline model lookup")
-	}
 }
 
 func TestSameSourceRelationReviewLifecycleIsNormalizedAndIdempotent(t *testing.T) {

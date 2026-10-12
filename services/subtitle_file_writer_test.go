@@ -231,7 +231,7 @@ func TestSubtitleGenerationHallucinationKeepsOriginalAndPendingIsForceReplaceabl
 	setupVideoServiceTestDB(t)
 	original := []byte("1\n00:00:00,000 --> 00:00:01,000\nhand-made subtitle\n")
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", original)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX, SourceLang: "en"}
 
 	result, err := service.commitTranscription(context.Background(), 1, req, video.Path, "en", hallucinatedSegments(), SubtitleGenerateOptions{})
@@ -278,7 +278,7 @@ func TestSubtitleGenerationDiscardPendingDeletesTemporaryFileMEDIA01(t *testing.
 	setupVideoServiceTestDB(t)
 	original := []byte(writerTestSRT)
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", original)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX}
 	if _, err := service.commitTranscription(context.Background(), 1, req, video.Path, "en", hallucinatedSegments(), SubtitleGenerateOptions{}); err != nil {
 		t.Fatal(err)
@@ -309,7 +309,7 @@ func TestSubtitleGenerationEmptyResultKeepsOriginalMEDIA01(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	original := []byte(writerTestSRT)
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", original)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX}
 
 	for name, options := range map[string]SubtitleGenerateOptions{"普通": {}, "强制": {ForceGenerate: true}} {
@@ -336,7 +336,7 @@ func TestSubtitleGenerationCancelKeepsOriginalMEDIA01(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	original := []byte(writerTestSRT)
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", original)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -372,7 +372,7 @@ func TestSubtitleGenerationCancelKeepsOriginalMEDIA01(t *testing.T) {
 func TestSubtitleGenerationSuccessReplacesOriginalWithBackupMEDIA01(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", []byte(writerTestSRT))
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX}
 
 	result, err := service.commitTranscription(context.Background(), 1, req, video.Path, "en", realSegments(), SubtitleGenerateOptions{})
@@ -394,7 +394,7 @@ func TestSubtitleGenerationSuccessReplacesOriginalWithBackupMEDIA01(t *testing.T
 
 func TestGetSubtitleOverwriteInfoListsVideosSharingTheSubtitleMEDIA01(t *testing.T) {
 	setupVideoServiceTestDB(t)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	video, _ := mustCreateSubtitleVideo(t, "movie.mp4", nil)
 
 	info, err := service.GetSubtitleOverwriteInfo(video)
@@ -509,7 +509,7 @@ func TestTranslateSubtitleFileRefusesGBKWithoutCallingTranslatorMEDIA02(t *testi
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", gbkSubtitle(t))
 	before := mustReadBytes(t, srtPath)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	_, err := service.TranslateSubtitleFile(context.Background(), video.Path,
 		SubtitleTranslateRequest{VideoID: video.ID, TargetLang: "en", Mode: SubtitleTranslateModeTranslatedOnly},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"})
@@ -533,7 +533,7 @@ func TestTranslateSubtitleFileBacksUpAndCanRestorePreviousVersionMEDIA05(t *test
 		return `{"choices":[{"message":{"content":"{\"translations\":[\"尼奥来了\",\"第二句\"]}"}}]}`
 	})
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", []byte(translatableSubtitle))
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 
 	result, err := service.TranslateSubtitleFile(context.Background(), video.Path,
 		SubtitleTranslateRequest{VideoID: video.ID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeTranslatedOnly},
@@ -685,7 +685,7 @@ func TestSubtitleEditAndTranslateReportNotSidecarSRTWhenOnlyOtherSubtitlesExistM
 		t.Fatalf("不应再提示先生成字幕: %v", err)
 	}
 
-	_, err = NewSubtitleService(t.TempDir()).TranslateSubtitleFile(context.Background(), video.Path,
+	_, err = newSubtitleFixtureService(t).TranslateSubtitleFile(context.Background(), video.Path,
 		SubtitleTranslateRequest{VideoID: video.ID, TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: "http://127.0.0.1:1", Model: "local-qwen"})
 	if !errors.As(err, &coded) || coded.Code != SubtitleErrorNotSidecarSRT {
@@ -712,13 +712,8 @@ func TestSubtitleEditAndTranslateReportNotSidecarSRTWhenOnlyOtherSubtitlesExistM
 
 func TestSubtitleWorkbenchRetranslateTranslationLineOnlyReplacesSecondLineMEDIA07(t *testing.T) {
 	service := newTestSubtitleWorkbench(t)
-	translator := &recordingContextualTranslator{reply: echoTranslationReply("译:")}
+	translator := &recordingSubtitleTranslator{reply: echoTranslationReply("译:")}
 	service.translatorFactory = func(SubtitleTranslationConfig) (SubtitleTranslator, error) { return translator, nil }
-	var resolvedTargets []string
-	service.glossaryResolver = func(_ uint, target string) ([]GlossaryTerm, error) {
-		resolvedTargets = append(resolvedTargets, target)
-		return nil, nil
-	}
 	request := SubtitleRetranslateRequest{
 		VideoID: 1, SourceLang: "en", TargetLang: "zh", Mode: SubtitleRetranslateModeTranslationLine,
 		Entries: []SubtitleRetranslateEntry{
@@ -741,9 +736,6 @@ func TestSubtitleWorkbenchRetranslateTranslationLineOnlyReplacesSecondLineMEDIA0
 			t.Fatalf("第 %d 条应只替换第二行: got %q want %q", index+1, entry.Text, want[index])
 		}
 	}
-	if len(resolvedTargets) != 1 || resolvedTargets[0] != "zh" {
-		t.Fatalf("术语表应按目标语言解析: %#v", resolvedTargets)
-	}
 
 	// 默认（空 mode）仍是整条替换。
 	request.Mode = ""
@@ -759,11 +751,10 @@ func TestSubtitleWorkbenchRetranslateTranslationLineOnlyReplacesSecondLineMEDIA0
 
 func TestSubtitleWorkbenchRetranslateKeepsEntryAndWarnsOnEmptyTranslationMEDIA07(t *testing.T) {
 	service := newTestSubtitleWorkbench(t)
-	translator := &recordingContextualTranslator{reply: func(request TranslationRequest) ([]string, error) {
+	translator := &recordingSubtitleTranslator{reply: func(request recordedTranslation) ([]string, error) {
 		return []string{"", "译:" + request.Texts[1]}, nil
 	}}
 	service.translatorFactory = func(SubtitleTranslationConfig) (SubtitleTranslator, error) { return translator, nil }
-	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) { return nil, nil }
 
 	for _, mode := range []SubtitleRetranslateMode{SubtitleRetranslateModeWholeEntry, SubtitleRetranslateModeTranslationLine} {
 		result, err := service.Retranslate(context.Background(), SubtitleRetranslateRequest{

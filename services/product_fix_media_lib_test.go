@@ -475,7 +475,7 @@ func TestMEDIA01GenerateAndTranslateRejectNonRegularTargetEarly(t *testing.T) {
 	if err := database.DB.Create(&video).Error; err != nil {
 		t.Fatal(err)
 	}
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 
 	// 生成：在查引擎状态、跑识别之前就报错。
 	_, err := service.executeSubtitleTask(context.Background(), 1,
@@ -542,7 +542,7 @@ func TestMEDIA01ForceGenerateBranchEndToEnd(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	original := []byte(writerTestSRT)
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", original)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX, SourceLang: "en"}
 
 	result, err := service.commitTranscription(context.Background(), 1, req, video.Path, "en", hallucinatedSegments(), SubtitleGenerateOptions{})
@@ -553,8 +553,8 @@ func TestMEDIA01ForceGenerateBranchEndToEnd(t *testing.T) {
 		t.Fatal("pending 应已登记")
 	}
 
-	// 强制生成的收尾期间字幕文件锁必须被持有：收尾中途（双语翻译前读术语表那一刻）另起
-	// 协程抢同一 .srt 的锁，必须等到收尾结束才拿得到。探针挂在 glossaryResolver 上，
+	// 强制生成的收尾期间字幕文件锁必须被持有：收尾中途（构造翻译器那一刻）另起
+	// 协程抢同一 .srt 的锁，必须等到收尾结束才拿得到。探针挂在 translatorFactory 上，
 	// 它只在 finalizeSubtitleArtifact 内部、Replace 之前被调用。
 	translations := make([]string, 10)
 	for i := range translations {
@@ -567,7 +567,7 @@ func TestMEDIA01ForceGenerateBranchEndToEnd(t *testing.T) {
 	})
 	probe := make(chan bool, 1) // true：收尾期间抢锁被挡住
 	probeAcquired := make(chan func(), 1)
-	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) {
+	service.translatorFactory = func(config SubtitleTranslationConfig) (SubtitleTranslator, error) {
 		go func() { probeAcquired <- lockSubtitleFile(srtPath) }()
 		select {
 		case release := <-probeAcquired:
@@ -576,7 +576,7 @@ func TestMEDIA01ForceGenerateBranchEndToEnd(t *testing.T) {
 		case <-time.After(200 * time.Millisecond):
 			probe <- true
 		}
-		return nil, nil
+		return subtitleFixtureTranslator{endpoint: config.BaseURL}, nil
 	}
 	forceOptions := SubtitleGenerateOptions{
 		ForceGenerate: true, BilingualEnabled: true, BilingualLang: "zh",

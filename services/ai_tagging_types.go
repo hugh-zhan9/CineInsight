@@ -89,7 +89,7 @@ type TemporaryTranscriptEvidence struct {
 }
 
 type TemporaryTranscriptProvider interface {
-	GenerateTemporaryTranscript(ctx context.Context, video models.Video, charLimit int, recognitionConfig SubtitleRecognitionConfig) (TemporaryTranscriptEvidence, error)
+	GenerateTemporaryTranscript(ctx context.Context, video models.Video, charLimit int) (TemporaryTranscriptEvidence, error)
 }
 
 type AISameSourceCandidate struct {

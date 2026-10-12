@@ -154,10 +154,6 @@ export function CancelFaceAnalysis() {
   return window['go']['main']['App']['CancelFaceAnalysis']();
 }
 
-export function CancelFaceRuntimePrepare() {
-  return window['go']['main']['App']['CancelFaceRuntimePrepare']();
-}
-
 export function CancelFrameHashBackfill() {
   return window['go']['main']['App']['CancelFrameHashBackfill']();
 }
@@ -378,10 +374,6 @@ export function DeleteEditProject(arg1) {
   return window['go']['main']['App']['DeleteEditProject'](arg1);
 }
 
-export function DeleteGlossaryEntry(arg1) {
-  return window['go']['main']['App']['DeleteGlossaryEntry'](arg1);
-}
-
 export function DeleteImageDirectory(arg1) {
   return window['go']['main']['App']['DeleteImageDirectory'](arg1);
 }
@@ -432,6 +424,10 @@ export function DeleteViewingDiary(arg1, arg2) {
 
 export function DeleteWatchlistEntry(arg1) {
   return window['go']['main']['App']['DeleteWatchlistEntry'](arg1);
+}
+
+export function DetectSubtitleLanguage(arg1) {
+  return window['go']['main']['App']['DetectSubtitleLanguage'](arg1);
 }
 
 export function DiscardEnhancementProgress(arg1) {
@@ -962,10 +958,6 @@ export function ListFaceClusterPage(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListFaceClusterPage'](arg1, arg2, arg3);
 }
 
-export function ListGlossaryEntries(arg1) {
-  return window['go']['main']['App']['ListGlossaryEntries'](arg1);
-}
-
 export function ListHiddenImages(arg1, arg2) {
   return window['go']['main']['App']['ListHiddenImages'](arg1, arg2);
 }
@@ -1160,6 +1152,10 @@ export function PreflightDatabaseSwitch(arg1) {
 
 export function PreflightEditProject(arg1) {
   return window['go']['main']['App']['PreflightEditProject'](arg1);
+}
+
+export function PrepareAppleSubtitleLanguage(arg1, arg2, arg3) {
+  return window['go']['main']['App']['PrepareAppleSubtitleLanguage'](arg1, arg2, arg3);
 }
 
 export function PrepareFaceRuntime() {
@@ -1804,10 +1800,6 @@ export function UpdateVideoWatchProgress(arg1, arg2, arg3, arg4, arg5) {
 
 export function UpdateWatchlistEntry(arg1, arg2) {
   return window['go']['main']['App']['UpdateWatchlistEntry'](arg1, arg2);
-}
-
-export function UpsertGlossaryEntry(arg1) {
-  return window['go']['main']['App']['UpsertGlossaryEntry'](arg1);
 }
 
 export function ValidateScanDirectory(arg1) {

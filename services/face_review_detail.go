@@ -67,6 +67,10 @@ func (s *FaceReviewService) RemoveFaceClusterObservation(ctx context.Context, cl
 		if removed {
 			return nil
 		}
+		// 未迁移的旧簇不会参与新匹配；保留人工移除，下一轮按剩余裁剪迁移。
+		if _, err := decodeFaceEmbedding(cluster.Centroid); err != nil {
+			return nil
+		}
 		// The excluded face must no longer influence future similarity matching.
 		var remaining []models.FaceObservation
 		if err := tx.WithContext(ctx).Select("embedding").Where("cluster_id = ?", clusterID).Find(&remaining).Error; err != nil {

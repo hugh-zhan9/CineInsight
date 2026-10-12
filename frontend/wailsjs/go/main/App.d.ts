@@ -81,8 +81,6 @@ export function CancelEnhancementTask(arg1:number):Promise<void>;
 
 export function CancelFaceAnalysis():Promise<void>;
 
-export function CancelFaceRuntimePrepare():Promise<void>;
-
 export function CancelFrameHashBackfill():Promise<void>;
 
 export function CancelImageAITagging():Promise<void>;
@@ -193,8 +191,6 @@ export function DeleteDirectory(arg1:number):Promise<void>;
 
 export function DeleteEditProject(arg1:number):Promise<void>;
 
-export function DeleteGlossaryEntry(arg1:number):Promise<void>;
-
 export function DeleteImageDirectory(arg1:number):Promise<void>;
 
 export function DeleteImagesInDirectoryWithResult(arg1:string,arg2:boolean,arg3:string):Promise<services.BatchResult>;
@@ -220,6 +216,8 @@ export function DeleteVideosWithResult(arg1:Array<number>,arg2:boolean,arg3:stri
 export function DeleteViewingDiary(arg1:number,arg2:number):Promise<void>;
 
 export function DeleteWatchlistEntry(arg1:number):Promise<void>;
+
+export function DetectSubtitleLanguage(arg1:number):Promise<services.AppleLanguageDetection>;
 
 export function DiscardEnhancementProgress(arg1:number):Promise<services.EnhancementTaskView>;
 
@@ -485,8 +483,6 @@ export function ListEnhancementTasks(arg1:number):Promise<Array<services.Enhance
 
 export function ListFaceClusterPage(arg1:services.FaceClusterFilter,arg2:services.FaceClusterCursorKey,arg3:number):Promise<services.FaceClusterPage>;
 
-export function ListGlossaryEntries(arg1:number):Promise<Array<models.TranslationGlossaryEntry>>;
-
 export function ListHiddenImages(arg1:number,arg2:number):Promise<services.HiddenImagePage>;
 
 export function ListIgnoredFaceClusters(arg1:number,arg2:number):Promise<services.IgnoredFaceClusterPage>;
@@ -584,6 +580,8 @@ export function PlayVideo(arg1:number):Promise<services.PlaybackAttemptResult>;
 export function PreflightDatabaseSwitch(arg1:string):Promise<services.DatabaseSwitchPreflight>;
 
 export function PreflightEditProject(arg1:number):Promise<services.EditPreflight>;
+
+export function PrepareAppleSubtitleLanguage(arg1:string,arg2:string,arg3:boolean):Promise<void>;
 
 export function PrepareFaceRuntime():Promise<services.FaceRuntimeStatus>;
 
@@ -906,8 +904,6 @@ export function UpdateVideoRating(arg1:number,arg2:any):Promise<models.Video>;
 export function UpdateVideoWatchProgress(arg1:number,arg2:number,arg3:number,arg4:boolean,arg5:string):Promise<models.Video>;
 
 export function UpdateWatchlistEntry(arg1:number,arg2:string):Promise<void>;
-
-export function UpsertGlossaryEntry(arg1:models.TranslationGlossaryEntry):Promise<models.TranslationGlossaryEntry>;
 
 export function ValidateScanDirectory(arg1:string):Promise<services.ScanDirectoryValidation>;
 

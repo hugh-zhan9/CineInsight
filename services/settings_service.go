@@ -66,13 +66,8 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.LogEnabled = input.LogEnabled
 		settings.BilingualEnabled = input.BilingualEnabled
 		settings.BilingualLang = input.BilingualLang
-		settings.DeepLApiKey = input.DeepLApiKey
-		settings.SubtitleTranslationProvider = string(normalizeSubtitleTranslationProvider(input.SubtitleTranslationProvider))
-		settings.SubtitleTranslationBaseURL = strings.TrimSpace(input.SubtitleTranslationBaseURL)
-		settings.SubtitleTranslationAPIKey = strings.TrimSpace(input.SubtitleTranslationAPIKey)
-		settings.SubtitleTranslationModel = strings.TrimSpace(input.SubtitleTranslationModel)
-		settings.SubtitleWhisperXModel = normalizeSubtitleWhisperXModel(input.SubtitleWhisperXModel)
-		settings.SubtitleWhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(input.SubtitleWhisperXBatchSize)
+		// Retired subtitle provider fields remain in historical storage, never drive execution.
+		settings.SubtitleTranslationProvider = "apple"
 		settings.AITaggingBaseURL = input.AITaggingBaseURL
 		settings.AITaggingAPIKey = input.AITaggingAPIKey
 		settings.AITaggingModel = input.AITaggingModel
@@ -106,7 +101,6 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.CleanupShortSeconds = positiveOrDefault(input.CleanupShortSeconds, database.DefaultCleanupShortSeconds)
 		settings.CleanupLowWidth = positiveOrDefault(input.CleanupLowWidth, database.DefaultCleanupLowWidth)
 		settings.CleanupLowHeight = positiveOrDefault(input.CleanupLowHeight, database.DefaultCleanupLowHeight)
-		settings.FaceModelMirrorURL = strings.TrimSpace(input.FaceModelMirrorURL)
 		// 场景检索（D-MW-SCENES）：存进去的就是生效值。提供方只认 local / external，
 		// 切到 external 的披露确认在设置页完成后才会走到这里。
 		settings.SceneVisualProvider = NormalizeSceneVisualProvider(input.SceneVisualProvider)

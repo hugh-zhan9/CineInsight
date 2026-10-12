@@ -258,6 +258,10 @@ func seedBlobHeavyRows(t *testing.T, db *gorm.DB, videoIDs []uint) {
 		t.Fatalf("建簇人物候选失败: %v", err)
 	}
 
+	if err := db.Create(&models.SceneImageIndexState{VideoID: videoIDs[0], ModelID: "apple-image-featureprint-r2-768-v1", Provider: "apple", IntervalMS: 5000, SourceSize: 12345, Status: "indexed"}).Error; err != nil {
+		t.Fatal(err)
+	}
+
 	// 场景检索（P-007）：状态行带纳秒 mtime；段的 embedding 是 516 字节 int8 量化 BLOB，
 	// 外部描述段的 embedding 为空。
 	indexedAt := time.Unix(1_700_000_400, 0).UTC()

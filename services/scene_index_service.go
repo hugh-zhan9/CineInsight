@@ -106,6 +106,9 @@ type sceneVectorSource interface {
 
 // SceneIndexService 构建与维护 scene_visual_segments / scene_index_states。
 type SceneIndexService struct {
+	imageVectors     sceneImageVectorSource
+	imageAvailable   func() bool
+	extractImages    sceneFrameExtractor
 	runtime          *SceneRuntime
 	host             *sceneWorkerHost
 	vectors          sceneVectorSource
@@ -120,7 +123,7 @@ type SceneIndexService struct {
 	stopMu   sync.Mutex
 	status   SceneIndexStatus
 	pending  []sceneIndexJob
-	queued   map[uint]struct{}
+	queued   map[sceneIndexKey]struct{}
 	cancel   context.CancelFunc
 	worker   sync.WaitGroup
 	emitter  func(SceneIndexStatus)
@@ -131,8 +134,10 @@ type SceneIndexService struct {
 // NewSceneIndexService 构造建索引服务；runtime 提供可用性、worker 与临时目录。
 func NewSceneIndexService(runtime *SceneRuntime, slot *MediaWorkSlot) *SceneIndexService {
 	host := newSceneRuntimeWorkerHost(runtime)
+	apple := appleImageVectors{run: runAppleAI}
 	return &SceneIndexService{
-		runtime:          runtime,
+		runtime:      runtime,
+		imageVectors: apple, imageAvailable: apple.Available, extractImages: ffmpegAppleSceneFrames,
 		host:             host,
 		vectors:          host,
 		captions:         defaultSceneCaptionClientFactory,
@@ -167,6 +172,12 @@ func (s *SceneIndexService) Status() SceneIndexStatus {
 // resolveProvider 决定这一轮用哪个提供方，并确认它此刻可用。外部提供方只有在设置里
 // 显式选了 external 时才允许；本地不可用时只报错，绝不改用外部（TC-18）。
 func (s *SceneIndexService) resolveProvider(requested string, settings sceneSettings) (string, string, SceneCaptionClient, error) {
+	if requested == SceneProviderApple {
+		if s.imageAvailable == nil || !s.imageAvailable() {
+			return "", "", nil, errors.New("apple_image_unavailable")
+		}
+		return SceneProviderApple, SceneAppleModelID, nil, nil
+	}
 	provider := settings.Provider
 	if requested != "" {
 		provider = NormalizeSceneVisualProvider(requested)
@@ -189,6 +200,11 @@ func (s *SceneIndexService) resolveProvider(requested string, settings sceneSett
 
 // sceneIndexJob 是一次 StartSceneIndex：入队时定下提供方、模型与间隔，由 worker 按 FIFO
 // 逐个解析成候选视频并处理。
+type sceneIndexKey struct {
+	VideoID uint
+	ModelID string
+}
+
 type sceneIndexJob struct {
 	request    SceneIndexRequest
 	provider   string
@@ -240,7 +256,7 @@ func (s *SceneIndexService) Start(parent context.Context, request SceneIndexRequ
 	now := s.now()
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
-	s.queued = map[uint]struct{}{}
+	s.queued = map[sceneIndexKey]struct{}{}
 	s.status = SceneIndexStatus{
 		Running: true, Preparing: true, Provider: provider, ModelID: modelID,
 		StartedAt: &now, UpdatedAt: &now, Failures: []SceneIndexFailure{},
@@ -449,7 +465,7 @@ func (s *SceneIndexService) resolveItems(ctx context.Context, job sceneIndexJob)
 		Order("videos.id ASC").Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("读取视频范围失败: %w", err)
 	}
-	states, err := loadSceneIndexStates(ctx, rows)
+	states, err := loadSceneIndexStates(ctx, rows, job.modelID)
 	if err != nil {
 		return nil, err
 	}
@@ -468,10 +484,10 @@ func (s *SceneIndexService) resolveItems(ctx context.Context, job sceneIndexJob)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, row := range stale {
-		if _, seen := s.queued[row.ID]; seen {
+		if _, seen := s.queued[sceneIndexKey{VideoID: row.ID, ModelID: job.modelID}]; seen {
 			continue
 		}
-		s.queued[row.ID] = struct{}{}
+		s.queued[sceneIndexKey{VideoID: row.ID, ModelID: job.modelID}] = struct{}{}
 		items = append(items, sceneIndexItem{
 			VideoID: row.ID, Name: row.Name, Provider: job.provider, ModelID: job.modelID,
 			IntervalMS: job.intervalMS, captioner: job.captioner, externalFingerprint: job.externalFingerprint,
@@ -480,7 +496,7 @@ func (s *SceneIndexService) resolveItems(ctx context.Context, job sceneIndexJob)
 	return items, nil
 }
 
-func loadSceneIndexStates(ctx context.Context, rows []sceneVideoRow) (map[uint]models.SceneIndexState, error) {
+func loadSceneIndexStates(ctx context.Context, rows []sceneVideoRow, modelID string) (map[uint]models.SceneIndexState, error) {
 	states := make(map[uint]models.SceneIndexState, len(rows))
 	ids := make([]uint, 0, len(rows))
 	for _, row := range rows {
@@ -489,7 +505,7 @@ func loadSceneIndexStates(ctx context.Context, rows []sceneVideoRow) (map[uint]m
 	for start := 0; start < len(ids); start += 1000 {
 		end := min(start+1000, len(ids))
 		var batch []models.SceneIndexState
-		if err := database.DB.WithContext(ctx).Where("video_id IN ?", ids[start:end]).Find(&batch).Error; err != nil {
+		if err := database.DB.WithContext(ctx).Table(sceneStateTable(modelID)).Where("video_id IN ?", ids[start:end]).Find(&batch).Error; err != nil {
 			return nil, fmt.Errorf("读取画面索引状态失败: %w", err)
 		}
 		for _, state := range batch {
@@ -546,7 +562,7 @@ func (s *SceneIndexService) processItem(ctx context.Context, item sceneIndexItem
 		return errSceneSourceUnreadable
 	}
 	var state models.SceneIndexState
-	if err := database.DB.WithContext(ctx).Where("video_id = ?", item.VideoID).Take(&state).Error; err == nil &&
+	if err := database.DB.WithContext(ctx).Table(sceneStateTable(item.ModelID)).Where("video_id = ?", item.VideoID).Take(&state).Error; err == nil &&
 		sceneStateIsFresh(state, item.ModelID, item.IntervalMS, video.Path) {
 		return errSceneSkipped
 	}
@@ -606,7 +622,11 @@ func (s *SceneIndexService) buildDrafts(ctx context.Context, item sceneIndexItem
 		return nil, err
 	}
 	defer os.RemoveAll(dir)
-	frames, err := s.extract(ctx, video.Path, dir, item.IntervalMS)
+	extract := s.extract
+	if item.Provider == SceneProviderApple {
+		extract = s.extractImages
+	}
+	frames, err := extract(ctx, video.Path, dir, item.IntervalMS)
 	if err != nil {
 		return nil, err
 	}
@@ -621,16 +641,28 @@ func (s *SceneIndexService) buildDrafts(ctx context.Context, item sceneIndexItem
 		}
 		return buildSceneCaptionSegments(captions, item.IntervalMS, durationMS), nil
 	}
-	vectors, err := s.embedFrames(ctx, frames)
+	source := sceneImageVectorSource(s.vectors)
+	if item.Provider == SceneProviderApple {
+		source = s.imageVectors
+	}
+	vectors, err := embedSceneFrames(ctx, source, frames)
 	if err != nil {
 		return nil, err
+	}
+	if item.Provider == SceneProviderApple {
+		drafts := make([]sceneSegmentDraft, len(vectors))
+		for i, v := range vectors {
+			at := int64(i) * item.IntervalMS
+			drafts[i] = sceneSegmentDraft{StartMS: at, EndMS: sceneSegmentEnd(at, at+item.IntervalMS, durationMS), Vector: v}
+		}
+		return drafts, nil
 	}
 	return buildSceneSegments(vectors, item.IntervalMS, durationMS), nil
 }
 
 // embedFrames 按每批至多 32 张请求本地向量；批间检查取消。
-func (s *SceneIndexService) embedFrames(ctx context.Context, frames []string) ([][]float32, error) {
-	if s.vectors == nil {
+func embedSceneFrames(ctx context.Context, source sceneImageVectorSource, frames []string) ([][]float32, error) {
+	if source == nil {
 		return nil, ErrSceneRuntimeUnavailable
 	}
 	vectors := make([][]float32, 0, len(frames))
@@ -639,7 +671,7 @@ func (s *SceneIndexService) embedFrames(ctx context.Context, frames []string) ([
 			return nil, ctx.Err()
 		}
 		end := min(start+sceneWorkerMaxImages, len(frames))
-		batch, err := s.vectors.EmbedImages(ctx, frames[start:end])
+		batch, err := source.EmbedImages(ctx, frames[start:end])
 		if err != nil {
 			return nil, err
 		}
@@ -686,13 +718,17 @@ func (s *SceneIndexService) captionFrames(ctx context.Context, item sceneIndexIt
 	return captions, nil
 }
 
-// replaceVideoSegments 在一个事务里删掉该视频的全部旧段（任何模型），插入新段并 upsert 状态。
+// replaceVideoSegments 只替换所属表示的旧段与状态：苹果以图与文字提供方互不影响。
 func (s *SceneIndexService) replaceVideoSegments(ctx context.Context, item sceneIndexItem, source os.FileInfo, drafts []sceneSegmentDraft) error {
 	rows := make([]models.SceneVisualSegment, 0, len(drafts))
 	for _, draft := range drafts {
 		row := models.SceneVisualSegment{VideoID: item.VideoID, ModelID: item.ModelID, StartMS: draft.StartMS, EndMS: draft.EndMS, Caption: draft.Caption}
 		if item.Provider != SceneProviderExternal {
-			blob, err := quantizeSceneVector(draft.Vector)
+			encode := quantizeSceneVector
+			if item.Provider == SceneProviderApple {
+				encode = encodeAppleImageVector
+			}
+			blob, err := encode(draft.Vector)
 			if err != nil {
 				return err
 			}
@@ -707,7 +743,7 @@ func (s *SceneIndexService) replaceVideoSegments(ctx context.Context, item scene
 		SegmentCount: len(rows), Status: models.SceneIndexStatusIndexed, LastError: "", IndexedAt: &now, UpdatedAt: now,
 	}
 	return database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
-		if err := tx.Where("video_id = ?", item.VideoID).Delete(&models.SceneVisualSegment{}).Error; err != nil {
+		if err := sceneSegmentsForProvider(tx, item).Delete(&models.SceneVisualSegment{}).Error; err != nil {
 			return err
 		}
 		if len(rows) > 0 {
@@ -715,11 +751,11 @@ func (s *SceneIndexService) replaceVideoSegments(ctx context.Context, item scene
 				return err
 			}
 		}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "video_id"}}, UpdateAll: true}).Create(&state).Error
+		return tx.Table(sceneStateTable(item.ModelID)).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "video_id"}}, UpdateAll: true}).Create(&state).Error
 	})
 }
 
-// recordStateFailure 写 failed 状态并删掉该视频的旧段（它们对应的已不是当前文件或模型）。
+// recordStateFailure 写所属表示的 failed 状态并删掉其旧段（它们对应的已不是当前文件或模型）。
 // 任务被取消时父 ctx 已失效，失败原因仍要落库，因此单独给一个短窗口。
 func (s *SceneIndexService) recordStateFailure(parent context.Context, item sceneIndexItem, size, mtimeNS int64, cause error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), sceneIndexFailureWriteTimeout)
@@ -730,10 +766,10 @@ func (s *SceneIndexService) recordStateFailure(parent context.Context, item scen
 		LastError: redactFrameHashErrorPaths(boundedError(cause, 500)), UpdatedAt: s.now(),
 	}
 	_ = database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
-		if err := tx.Where("video_id = ?", item.VideoID).Delete(&models.SceneVisualSegment{}).Error; err != nil {
+		if err := sceneSegmentsForProvider(tx, item).Delete(&models.SceneVisualSegment{}).Error; err != nil {
 			return err
 		}
-		return tx.Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "video_id"}}, UpdateAll: true}).Create(&state).Error
+		return tx.Table(sceneStateTable(item.ModelID)).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "video_id"}}, UpdateAll: true}).Create(&state).Error
 	})
 }
 
@@ -795,7 +831,7 @@ func (s *SceneIndexService) ClearStaleIndex(ctx context.Context) (SceneIndexClea
 	}
 	result := SceneIndexCleanupResult{ModelID: modelID}
 	err = database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
-		segments := tx.Where("model_id <> ?", modelID).Delete(&models.SceneVisualSegment{})
+		segments := tx.Where("model_id NOT IN ?", []string{modelID, SceneAppleModelID}).Delete(&models.SceneVisualSegment{})
 		if segments.Error != nil {
 			return segments.Error
 		}
@@ -803,7 +839,11 @@ func (s *SceneIndexService) ClearStaleIndex(ctx context.Context) (SceneIndexClea
 		if states.Error != nil {
 			return states.Error
 		}
-		result.DeletedSegments, result.DeletedStates = segments.RowsAffected, states.RowsAffected
+		imageStates := tx.Where("model_id <> ?", SceneAppleModelID).Delete(&models.SceneImageIndexState{})
+		if imageStates.Error != nil {
+			return imageStates.Error
+		}
+		result.DeletedSegments, result.DeletedStates = segments.RowsAffected, states.RowsAffected+imageStates.RowsAffected
 		return nil
 	})
 	return result, err
@@ -812,6 +852,12 @@ func (s *SceneIndexService) ClearStaleIndex(ctx context.Context) (SceneIndexClea
 // ffmpegSceneFrames 单趟按间隔抽 224×224 帧（场景检索合同「画面索引」的命令）；
 // 第 n 帧（从 0 起）代表 n×间隔毫秒。-map 0:V:0 跳过封面这类附带图片流。
 func ffmpegSceneFrames(ctx context.Context, sourcePath, dir string, intervalMS int64) ([]string, error) {
+	return ffmpegSceneFramesScaled(ctx, sourcePath, dir, intervalMS, "scale=224:224:flags=bicubic")
+}
+func ffmpegAppleSceneFrames(ctx context.Context, sourcePath, dir string, intervalMS int64) ([]string, error) {
+	return ffmpegSceneFramesScaled(ctx, sourcePath, dir, intervalMS, "scale=640:640:force_original_aspect_ratio=decrease:flags=bicubic")
+}
+func ffmpegSceneFramesScaled(ctx context.Context, sourcePath, dir string, intervalMS int64, scale string) ([]string, error) {
 	binary, err := findThumbnailFFmpeg()
 	if err != nil {
 		return nil, errors.New("ffmpeg_unavailable")
@@ -821,7 +867,7 @@ func ffmpegSceneFrames(ctx context.Context, sourcePath, dir string, intervalMS i
 		"-v", "error", "-nostdin",
 		"-i", sourcePath,
 		"-map", "0:V:0",
-		"-vf", fmt.Sprintf("fps=1/%d,scale=224:224:flags=bicubic", seconds),
+		"-vf", fmt.Sprintf("fps=1/%d,%s", seconds, scale),
 		"-q:v", "3",
 		filepath.Join(dir, "f_%06d.jpg"),
 	)
@@ -843,6 +889,12 @@ func ffmpegSceneFrames(ctx context.Context, sourcePath, dir string, intervalMS i
 // checkProvider 在每项开始前确认提供方仍可用：本地看运行时是否就绪；外部重读设置，
 // 只有仍是 external 且接口/模型/Key 与入队时一致才放行。读不到设置一律按撤销处理（宁可不发）。
 func (s *SceneIndexService) checkProvider(ctx context.Context, item sceneIndexItem) error {
+	if item.Provider == SceneProviderApple {
+		if s.imageAvailable == nil || !s.imageAvailable() {
+			return ErrSceneRuntimeUnavailable
+		}
+		return nil
+	}
 	if item.Provider == SceneProviderExternal {
 		return checkSceneExternalAllowed(ctx, item.externalFingerprint)
 	}
@@ -866,7 +918,7 @@ func (s *SceneIndexService) recordUnreadableSource(parent context.Context, item 
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), sceneIndexFailureWriteTimeout)
 	defer cancel()
 	var existing models.SceneIndexState
-	err := database.DB.WithContext(ctx).Where("video_id = ?", item.VideoID).Limit(1).Find(&existing).Error
+	err := database.DB.WithContext(ctx).Table(sceneStateTable(item.ModelID)).Where("video_id = ?", item.VideoID).Limit(1).Find(&existing).Error
 	if err != nil || (existing.VideoID != 0 && existing.Status == models.SceneIndexStatusIndexed) {
 		return
 	}
@@ -874,5 +926,13 @@ func (s *SceneIndexService) recordUnreadableSource(parent context.Context, item 
 		VideoID: item.VideoID, ModelID: item.ModelID, Provider: item.Provider, IntervalMS: int(item.IntervalMS),
 		Status: models.SceneIndexStatusFailed, LastError: errSceneSourceUnreadable.Error(), UpdatedAt: s.now(),
 	}
-	_ = database.DB.WithContext(ctx).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "video_id"}}, UpdateAll: true}).Create(&state).Error
+	_ = database.DB.WithContext(ctx).Table(sceneStateTable(item.ModelID)).Clauses(clause.OnConflict{Columns: []clause.Column{{Name: "video_id"}}, UpdateAll: true}).Create(&state).Error
+}
+
+func sceneSegmentsForProvider(tx *gorm.DB, item sceneIndexItem) *gorm.DB {
+	q := tx.Where("video_id = ?", item.VideoID)
+	if item.Provider == SceneProviderApple {
+		return q.Where("model_id = ?", SceneAppleModelID)
+	}
+	return q.Where("model_id <> ?", SceneAppleModelID)
 }

@@ -1,0 +1,15 @@
+{
+  "face_video": {
+    "frames": 160,
+    "extracted": 160,
+    "rank1_all": 1.0,
+    "correct_accepted": 156,
+    "wrong_accepted": 0,
+    "rejected": 4
+  },
+  "scene_video": {
+    "frames": 100,
+    "recall_at_1": 1.0,
+    "recall_at_5": 1.0
+  }
+}

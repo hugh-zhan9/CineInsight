@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -790,95 +789,6 @@ func writeFakePython(t *testing.T, path, pipScript string) {
 
 // newFakeWhisperXService 建一个「缺 WhisperX 运行时」的字幕服务：ffmpeg、托管解释器与 venv 解释器都是假的，
 // 准备流程只会跑到 pip。
-func newFakeWhisperXService(t *testing.T, pipScript string) *SubtitleService {
-	t.Helper()
-	if _, err := os.Stat("/bin/sh"); err != nil {
-		t.Skip("需要 /bin/sh")
-	}
-	service := NewSubtitleService(t.TempDir())
-	if err := os.MkdirAll(service.BinDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(service.BinDir, "ffmpeg"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeFakePython(t, service.whisperXManagedPython(), pipScript)
-	writeFakePython(t, service.whisperXVenvPython(), pipScript)
-	return service
-}
-
-func TestMEDIA13CancelEnginePreparationKillsPipSubprocess(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "pip-started")
-	service := newFakeWhisperXService(t, fmt.Sprintf("      : > %q\n      exec sleep 30", marker))
-	notifier := &stubDesktopNotifier{}
-	service.SetDesktopNotifier(notifier)
-	if status, _ := service.GetEngineStatuses(); !status[0].NeedsPrepare {
-		t.Fatalf("夹具应是需要准备的状态: %+v", status[0])
-	}
-
-	started := time.Now()
-	done := make(chan error, 1)
-	go func() { done <- service.PrepareEngine(SubtitleEngineWhisperX) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(marker); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("pip 子进程没有启动")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	if err := service.PrepareEngine(SubtitleEngineWhisperX); !errors.Is(err, ErrSubtitleEnginePreparing) {
-		t.Fatalf("同一时间只允许一轮准备: %v", err)
-	}
-	if !service.CancelEnginePreparation() {
-		t.Fatal("应有进行中的准备可取消")
-	}
-	select {
-	case err := <-done:
-		if !errors.Is(err, ErrSubtitleEnginePreparationCancelled) {
-			t.Fatalf("取消后应返回已取消: %v", err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("取消没有终止 pip 子进程")
-	}
-	if elapsed := time.Since(started); elapsed > 20*time.Second {
-		t.Fatalf("取消应立即生效，实际 %s", elapsed)
-	}
-	if service.CancelEnginePreparation() {
-		t.Fatal("准备结束后不应还有可取消的准备")
-	}
-	time.Sleep(50 * time.Millisecond)
-	if got := notifier.Notifications(); len(got) != 0 {
-		t.Fatalf("用户取消不发通知: %+v", got)
-	}
-}
-
-func TestMEDIA13EnginePreparationNotifiesResultWithoutReason(t *testing.T) {
-	failing := newFakeWhisperXService(t, "      echo \"ERROR: could not install into /Users/p014-secret/venv\"; exit 1")
-	failNotifier := &stubDesktopNotifier{}
-	failing.SetDesktopNotifier(failNotifier)
-	if err := failing.PrepareEngine(SubtitleEngineWhisperX); err == nil {
-		t.Fatal("pip 失败时准备应报错")
-	}
-	notes := waitForNotifications(t, failNotifier, 1)
-	if notes[0].Title != "字幕引擎准备失败" || !strings.Contains(notes[0].Body, "WhisperX") {
-		t.Fatalf("失败通知不符: %+v", notes[0])
-	}
-	assertNoPath(t, "准备失败通知", notes[0].Body, "p014-secret", "could not install")
-
-	succeeding := newFakeWhisperXService(t, "      exit 0")
-	okNotifier := &stubDesktopNotifier{}
-	succeeding.SetDesktopNotifier(okNotifier)
-	if err := succeeding.PrepareEngine(SubtitleEngineWhisperX); err != nil {
-		t.Fatalf("pip 成功时准备应成功: %v", err)
-	}
-	if notes := waitForNotifications(t, okNotifier, 1); notes[0].Title != "字幕引擎已就绪" {
-		t.Fatalf("成功通知不符: %+v", notes[0])
-	}
-}
-
 func TestMEDIA13EngineStatusCachedSixtySecondsAndInvalidatedAroundPreparation(t *testing.T) {
 	service := NewSubtitleService(t.TempDir())
 	var probes atomic.Int32
@@ -1571,154 +1481,6 @@ func processAlive(pid int) bool {
 
 // MEDIA13 / M-5：取消引擎准备杀掉整个进程组——pip 拉起的子进程（这里是后台的 sleep）一并终止，
 // 不会成为孤儿继续往虚拟环境里写。
-func TestMEDIA13CancelKillsWholePipProcessGroup(t *testing.T) {
-	dir := t.TempDir()
-	marker := filepath.Join(dir, "pip-started")
-	pidFile := filepath.Join(dir, "child.pid")
-	service := newFakeWhisperXService(t, fmt.Sprintf("      sleep 30 &\n      echo $! > %q\n      : > %q\n      wait", pidFile, marker))
-
-	done := make(chan error, 1)
-	go func() { done <- service.PrepareEngine(SubtitleEngineWhisperX) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(marker); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("pip 子进程没有启动")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	raw, err := os.ReadFile(pidFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	child, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || child <= 0 {
-		t.Fatalf("读不到 pip 的子进程号: %q err=%v", raw, err)
-	}
-	t.Cleanup(func() {
-		if processAlive(child) {
-			if process, err := os.FindProcess(child); err == nil {
-				_ = process.Kill()
-			}
-		}
-	})
-	if !service.CancelEnginePreparation() {
-		t.Fatal("应有进行中的准备可取消")
-	}
-	select {
-	case err := <-done:
-		if !errors.Is(err, ErrSubtitleEnginePreparationCancelled) {
-			t.Fatalf("取消后应返回已取消: %v", err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("取消没有终止 pip 子进程")
-	}
-	deadline = time.Now().Add(3 * time.Second)
-	for processAlive(child) {
-		if time.Now().After(deadline) {
-			t.Fatal("pip 拉起的子进程在取消后仍在运行：应按进程组终止")
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-}
-
-// writeRebuildingBasePython 写一个假的基础解释器：`-m venv <目录>` 把 goodVenvPython 拷成新 venv 的解释器
-// 并留下 rebuilt 标记。
-func writeRebuildingBasePython(t *testing.T, path, goodVenvPython, rebuilt string) {
-	t.Helper()
-	script := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\n  -c)\n    case \"$2\" in\n      *version_info*) echo \"3.10\"; exit 0 ;;\n    esac\n    exit 1 ;;\n"+
-		"  -m)\n    if [ \"$2\" = \"venv\" ]; then\n      mkdir -p \"$3/bin\" && cp %q \"$3/bin/python3\" && chmod 755 \"$3/bin/python3\" && : > %q\n      exit $?\n    fi\n    exit 0 ;;\nesac\nexit 1\n",
-		goodVenvPython, rebuilt)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// newBrokenVenvWhisperXService 建一个已有 venv、但 venv 的 pip 行为由 venvPipScript 决定的字幕服务。
-func newBrokenVenvWhisperXService(t *testing.T, venvPipScript string) (service *SubtitleService, rebuilt string) {
-	t.Helper()
-	if _, err := os.Stat("/bin/sh"); err != nil {
-		t.Skip("需要 /bin/sh")
-	}
-	service = NewSubtitleService(t.TempDir())
-	if err := os.MkdirAll(service.BinDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(service.BinDir, "ffmpeg"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	good := filepath.Join(dir, "good-venv-python3")
-	writeFakePython(t, good, "      exit 0")
-	rebuilt = filepath.Join(dir, "venv-rebuilt")
-	writeRebuildingBasePython(t, service.whisperXManagedPython(), good, rebuilt)
-	venv := "#!/bin/sh\ncase \"$1\" in\n  -c)\n    case \"$2\" in\n      *version_info*) echo \"3.10\"; exit 0 ;;\n    esac\n    exit 1 ;;\n  -m)\n" +
-		venvPipScript + "\n    ;;\nesac\nexit 1\n"
-	if err := os.MkdirAll(filepath.Dir(service.whisperXVenvPython()), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(service.whisperXVenvPython(), []byte(venv), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	return service, rebuilt
-}
-
-// MEDIA13 / M-5：建 venv 时被取消会留下一个有解释器、没有 pip 的目录。复用前先确认 pip 可用，
-// 不可用就当作损坏重建，而不是每次准备都在同一个坏 venv 上失败。
-func TestMEDIA13BrokenVenvWithoutPipIsRebuilt(t *testing.T) {
-	service, rebuilt := newBrokenVenvWhisperXService(t, "    echo \"No module named pip\" >&2\n    exit 1")
-	if err := service.PrepareEngine(SubtitleEngineWhisperX); err != nil {
-		t.Fatalf("pip 不可用的 venv 应被重建后准备成功: %v", err)
-	}
-	if _, err := os.Stat(rebuilt); err != nil {
-		t.Fatalf("venv 应被重建: %v", err)
-	}
-	data, err := os.ReadFile(service.whisperXVenvPython())
-	if err != nil || !strings.Contains(string(data), "pip 24.0") {
-		t.Fatalf("重建后的 venv 应是可用的那一个: err=%v", err)
-	}
-}
-
-// MEDIA13 / M-5：pip 可用性检查进行中被取消时直接收手，不把已有的 venv 当成损坏删掉重建。
-func TestMEDIA13CancelDuringVenvCheckKeepsExistingVenv(t *testing.T) {
-	marker := filepath.Join(t.TempDir(), "pip-check-started")
-	service, rebuilt := newBrokenVenvWhisperXService(t, fmt.Sprintf("    : > %q\n    exec sleep 30", marker))
-	done := make(chan error, 1)
-	go func() { done <- service.PrepareEngine(SubtitleEngineWhisperX) }()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if _, err := os.Stat(marker); err == nil {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("pip 可用性检查没有启动")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	service.CancelEnginePreparation()
-	select {
-	case err := <-done:
-		if !errors.Is(err, ErrSubtitleEnginePreparationCancelled) {
-			t.Fatalf("取消后应返回已取消: %v", err)
-		}
-	case <-time.After(15 * time.Second):
-		t.Fatal("取消没有终止 pip 可用性检查")
-	}
-	if _, err := os.Stat(service.whisperXVenvPython()); err != nil {
-		t.Fatalf("取消不应删掉已有的 venv: %v", err)
-	}
-	if _, err := os.Stat(rebuilt); !os.IsNotExist(err) {
-		t.Fatalf("取消后不应重建 venv: %v", err)
-	}
-}
-
-// MEDIA14 / M-6：一轮全库同步里同一个目录只读一次（此前每条视频都把整个目录读一遍）；
-// 旁挂字幕的判定结果不变（大小写不敏感、基本名带点、同前缀的其他视频名、目录都按原规则）。
 func TestMEDIA14IndexSyncReadsEachDirectoryOnce(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	useSubtitleIndexSyncClock(t)
@@ -1834,5 +1596,62 @@ func TestMEDIA14FailedIndexSyncDoesNotRefreshLastSyncedAt(t *testing.T) {
 	}
 	if !strings.Contains(status.Error, database.ErrMaintenance.Error()) || status.Checked != first.Checked {
 		t.Fatalf("失败原因应记下、检查条数保持上一次: %+v", status)
+	}
+}
+
+func TestAppleRetryLegacyJobCanForcePendingInSameSession(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	h := newP014Harness(t, t.TempDir())
+	video, srtPath := mustCreateSubtitleVideo(t, "legacy.mp4", []byte(writerTestSRT))
+	job := models.SubtitleJob{VideoID: video.ID, Engine: "whisperx", SourceLang: "en", Status: string(SubtitleQueueTaskStatusFailed)}
+	if err := database.DB.Create(&job).Error; err != nil {
+		t.Fatal(err)
+	}
+	h.setASR(func(task *subtitleQueueTask) ([]subtitleparser.Segment, error) {
+		if task.Request.Engine != SubtitleEngineApple {
+			t.Errorf("legacy engine executed: %s", task.Request.Engine)
+		}
+		return hallucinatedSegments(), nil
+	})
+	input := SubtitleJobResolveInput{VideoPath: video.Path, VideoName: video.Name}
+	if _, err := h.service.ResolveSubtitleJob(job.ID, SubtitleJobActionRetry, input); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if err := database.DB.First(&job, job.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == string(SubtitleQueueTaskStatusNeedsConfirmation) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not pending: %+v", job)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if job.Engine != "apple" {
+		t.Fatalf("persisted stale engine: %s", job.Engine)
+	}
+	if _, err := h.service.ResolveSubtitleJob(job.ID, SubtitleJobActionForce, input); err != nil {
+		t.Fatal(err)
+	}
+	for {
+		if err := database.DB.First(&job, job.ID).Error; err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == string(SubtitleQueueTaskStatusSucceeded) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("force failed: %+v", job)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !strings.Contains(string(mustReadBytes(t, srtPath)), "Thank you.") {
+		t.Fatal("pending was not written")
+	}
+	if h.asrCalls.Load() != 1 {
+		t.Fatal("force ran ASR again")
 	}
 }

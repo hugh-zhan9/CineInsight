@@ -88,6 +88,8 @@ build_app() {
     build_toolchain="go1.24.9"
   fi
 
+  bash "${SCRIPT_DIR}/build_apple_ai.sh"
+
   log "开始执行 Wails 构建（${build_toolchain}）"
   (
     cd "${PROJECT_ROOT}"
@@ -103,6 +105,14 @@ build_app() {
 
 # 超分 sidecar 不由 wails build 产出，构建完要手动放进 Resources。
 # 只带二进制和许可证，模型由用户在设置里按需下载（P-012 后续裁决）。
+bundle_apple_ai() {
+  local source_dir="${PROJECT_ROOT}/build/apple-ai"
+  local target_dir="${BUILD_APP_PATH}/Contents/Resources/apple-ai"
+  [[ -x "${source_dir}/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai" ]] || fail "缺少苹果系统字幕组件，请先执行 scripts/build_apple_ai.sh"
+  mkdir -p "${target_dir}"
+  ditto "${source_dir}" "${target_dir}"
+}
+
 bundle_enhance_runtime() {
   local source_dir="${PROJECT_ROOT}/build/enhance-runtime"
   local target_dir="${BUILD_APP_PATH}/Contents/Resources/enhance-runtime"
@@ -209,6 +219,7 @@ main() {
   [[ -d "${BUILD_APP_PATH}" ]] || fail "未找到构建产物: ${BUILD_APP_PATH}"
 
   bundle_enhance_runtime
+  bundle_apple_ai
 
   if (( BUILD_ONLY == 1 )); then
     log "构建完成：${BUILD_APP_PATH}"

@@ -312,12 +312,12 @@ describe('以图搜片与相似画面', () => {
     expect(wrapper.find('[data-test="scenes-idle"]').exists()).toBe(true);
   });
 
-  it('详情抽屉带来的「找相似画面」进来就检索；外部描述时说明以图搜片需要本地模型', async () => {
-    api.SearchScenesByImage.mockResolvedValue({ hits: [], notices: ['scene_image_search_unsupported'], coverage: COVERAGE });
+  it('详情抽屉带来的「找相似画面」进来就检索；苹果系统能力缺失时给出准确提示', async () => {
+    api.SearchScenesByImage.mockResolvedValue({ hits: [], notices: ['apple_image_unavailable'], coverage: COVERAGE });
     const wrapper = mountPage({ scopeRequest: { filter: null, similar: { videoID: 9, atMS: 61000.4, title: '另一部' }, token: 1 } });
     await flushPromises();
     expect(api.SearchScenesByImage).toHaveBeenCalledWith({ image_base64: '', video_id: 9, at_ms: 61000, filter: null, limit: 50 });
-    expect(wrapper.get('[data-test="scenes-notice-scene_image_search_unsupported"]').text()).toContain('以图搜片需要本地画面模型');
+    expect(wrapper.get('[data-test="scenes-notice-apple_image_unavailable"]').text()).toContain('苹果系统图像能力不可用');
     expect(wrapper.get('[data-test="scenes-empty"]').text()).toContain('画面检索没有执行');
   });
 });
@@ -370,4 +370,16 @@ describe('台词卡入口', () => {
     expect(paste.defaultPrevented).toBe(false);
     expect(api.SearchScenesByImage).not.toHaveBeenCalled();
   });
+});
+
+it('以图模式独立建立苹果索引，不要求准备中文模型', async () => {
+  api.GetSceneRuntimeStatus.mockResolvedValue({ state: 'missing_model' });
+  api.SearchScenesByImage.mockResolvedValue({ hits: [], notices: [], coverage: { ...COVERAGE, image_indexed: 0, image_available: true, visual_provider: 'apple' } });
+  const wrapper = mountPage({ scopeRequest: { filter: null, similar: { videoID: 9, atMS: 0 }, token: 1 } });
+  await flushPromises();
+  expect(wrapper.find('[data-test="scenes-prepare"]').exists()).toBe(false);
+  expect(wrapper.get('[data-test="scenes-start-index"]').attributes('disabled')).toBeUndefined();
+  await wrapper.get('[data-test="scenes-start-index"]').trigger('click');
+  await flushPromises();
+  expect(api.StartSceneIndex).toHaveBeenCalledWith({ video_ids: [], filter: null, provider: 'apple' });
 });

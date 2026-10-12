@@ -51,6 +51,7 @@
   "playback_queue_states": ["active_token","autoplay","current_entry_id","id","last_error_code","last_error_message","player","revision","status","updated_at"],
   "saved_library_views": ["created_at","deleted_at","id","keyword","max_height","max_rating","max_size","min_height","min_rating","min_size","missing","name","person_ids_json","search_mode","smart_view","sort_mode","tag_ids_json","updated_at"],
   "scan_directories": ["alias","created_at","deleted_at","id","path","updated_at"],
+  "scene_image_index_states": ["indexed_at","interval_ms","last_error","model_id","provider","segment_count","source_mtime_ns","source_size","status","updated_at","video_id"],
   "scene_index_states": ["indexed_at","interval_ms","last_error","model_id","provider","segment_count","source_mtime_ns","source_size","status","updated_at","video_id"],
   "scene_visual_segments": ["caption","embedding","end_ms","id","model_id","start_ms","video_id"],
   "semantic_index_attempts": ["attempt_count","completed_at","content_fingerprint","created_at","dimension","error_code","generation","id","last_attempted_at","last_error","model_identifier","status","updated_at","video_id"],

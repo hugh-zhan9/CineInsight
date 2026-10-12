@@ -426,13 +426,7 @@
           </div>
           <p v-if="!(collectionDetail.videos || []).length" class="detail-empty">作品集尚无视频。</p>
         </section>
-        <section class="detail-section">
-          <div class="detail-section__heading"><h4>术语表</h4><span>字幕翻译</span></div>
-          <GlossaryEditor
-            :collection-id="Number(currentEntry.id)"
-            hint="这些术语只在本作品集的视频里生效，并覆盖同名的全局条目。"
-          />
-        </section>
+
       </template>
     </div>
     <ImageLibraryPicker v-if="avatarPickerOpen" :busy="avatarSaving" :action-error="avatarError" @close="avatarPickerOpen = false" @select="setAvatarFromImage" />
@@ -453,7 +447,6 @@ import {
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackOrigin, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft, validateYearDraft } from '../utils/mediaDetails.js';
 import { isWatchCompleted, resumePosition } from '../utils/watchState.js';
 import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../utils/viewThreshold.js';
-import GlossaryEditor from './GlossaryEditor.vue';
 import ImageSourceDialog from './ImageSourceDialog.vue';
 import WallpaperButton from './WallpaperButton.vue';
 import ImageLibraryPicker from './ImageLibraryPicker.vue';
@@ -483,7 +476,7 @@ const sameIDSet = (a, b) => {
 
 export default {
   name: 'PreviewDrawer',
-  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog },
+  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },

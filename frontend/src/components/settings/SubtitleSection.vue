@@ -2,40 +2,14 @@
   <!-- 字幕设置 -->
   <div :id="`settings-subtitle-translate`" class="settings-section">
     <h3>字幕翻译</h3>
+    <p class="help-text">使用苹果系统翻译，无需 API Key。缺少语言资源时，由 macOS 提示下载；已安装资源由系统共享。</p>
     <div class="setting-item">
-      <label>翻译服务</label>
-      <select v-model="form.subtitle_translation_provider" class="select-input">
-        <option value="deepl">DeepL</option>
-        <option value="llm">OpenAI 兼容接口（本地 / 远程）</option>
-      </select>
-      <p class="help-text">生成字幕时的自动双语翻译，和片库里手动发起的「翻译字幕」，共用这一份翻译服务配置。</p>
+      <label>准备翻译语言</label>
+      <select v-model="prepareSource" class="select-input" data-test="apple-translation-source"><option v-for="language in translationLanguages" :key="language.code" :value="language.code">{{ language.name }}</option></select>
+      <span> → </span>
+      <select v-model="prepareTarget" class="select-input" data-test="apple-translation-target"><option v-for="language in translationLanguages" :key="language.code" :value="language.code">{{ language.name }}</option></select>
+      <button type="button" class="btn-secondary btn-compact" data-test="apple-translation-prepare" :disabled="preparing || !prepareSource || !prepareTarget || prepareSource === prepareTarget" @click="prepareLanguage(true)">准备系统翻译语言</button>
     </div>
-    <div v-if="!isLLMProvider" class="setting-item">
-      <label>DeepL API Key</label>
-      <input 
-        type="password" 
-        v-model="form.deepl_api_key" 
-        placeholder="填入 DeepL API Key" 
-        class="text-input"
-        autocomplete="off"
-      />
-      <p class="help-text">免费版 Key 通常以 :fx 结尾。额度 50 万字符/月。</p>
-    </div>
-    <template v-else>
-      <div class="setting-item">
-        <label>字幕翻译接口地址</label>
-        <input type="url" v-model.trim="form.subtitle_translation_base_url" class="text-input" placeholder="https://api.example.com/v1 或 http://127.0.0.1:1234/v1" />
-      </div>
-      <div class="setting-item">
-        <label>字幕翻译 API Key</label>
-        <input type="password" v-model="form.subtitle_translation_api_key" class="text-input" autocomplete="off" />
-        <p class="help-text">本地服务可留空；远程服务按提供商要求填写。此配置不会复用 AI 标签接口。</p>
-      </div>
-      <div class="setting-item">
-        <label>字幕翻译模型</label>
-        <input type="text" v-model.trim="form.subtitle_translation_model" class="text-input" placeholder="gpt-4o-mini 或本地兼容模型" />
-      </div>
-    </template>
     <div class="setting-item">
       <label class="switch">
         <input type="checkbox" v-model="form.bilingual_enabled" />
@@ -59,11 +33,7 @@
         <option value="it">意大利语</option>
       </select>
     </div>
-    <div class="setting-item">
-      <label>术语表（全局）</label>
-      <p v-if="!isLLMProvider" class="help-text" data-test="glossary-deepl-notice">术语表不适用于 DeepL：DeepL 走它自己的翻译接口，术语只注入 OpenAI 兼容接口的提示词。</p>
-      <GlossaryEditor :collection-id="0" hint="全局术语对所有视频生效；作品集详情里维护的术语会覆盖同名的全局条目。" />
-    </div>
+
   </div>
 
   <div :id="`settings-subtitle-quality`" class="settings-section">
@@ -103,30 +73,20 @@
       <button type="button" class="btn-secondary btn-compact" data-test="subtitle-engine-refresh" :disabled="preparing" @click="loadEngineStatuses">刷新状态</button>
     </div>
     <div class="setting-item">
-      <label>WhisperX 模型</label>
-      <select v-model="form.subtitle_whisperx_model" class="select-input">
-        <option value="tiny">tiny（最快）</option>
-        <option value="base">base</option>
-        <option value="small">small</option>
-        <option value="medium">medium（推荐）</option>
-        <option value="large-v2">large-v2</option>
-        <option value="large-v3">large-v3（最准确）</option>
-      </select>
-    </div>
-    <div class="setting-item">
-      <label>WhisperX 批量大小</label>
-      <input type="number" min="1" max="16" v-model.number="form.subtitle_whisperx_batch_size" class="number-input" />
-      <p class="help-text">CPU 运行时建议使用 4-8；数值越大占用内存越多。</p>
+      <label>系统识别语言</label>
+      <select v-model="speechLanguage" class="select-input" data-test="apple-speech-language"><option v-for="language in speechLanguages" :key="language.code" :value="language.code">{{ language.name }}{{ language.installed ? '（已准备）' : '' }}</option></select>
+      <button type="button" class="btn-secondary btn-compact" data-test="apple-speech-prepare" :disabled="preparing || !speechLanguage" @click="prepareLanguage(false)">准备系统识别语言</button>
+      <p class="help-text">需要 macOS 26 或更新版本。自动检测只覆盖已安装的系统识别语种，结果可手动修改。首次准备可能需要下载苹果语言资源。</p>
     </div>
   </div>
 </template>
 
 <script>
-import { CancelSubtitleEnginePreparation, GetSubtitleEngineStatuses, PrepareSubtitleEngine } from '../../../wailsjs/go/main/App';
-import GlossaryEditor from '../GlossaryEditor.vue';
+import { CancelSubtitleEnginePreparation, GetSubtitleEngineStatuses, PrepareSubtitleEngine, PrepareAppleSubtitleLanguage } from '../../../wailsjs/go/main/App';
 
 // 准备进度的阶段说法（subtitle-progress 事件 action=prepare 的 phase）。后端个别阶段的
 // message 仍是英文（模型下载），界面统一按阶段说中文。
+const subtitlePrepareError = err => `准备系统语言失败：${String(err?.message || err || "未知错误")}`;
 const PREPARE_PHASE_LABELS = {
   checking: '正在检查运行环境',
   'preparing-runtime': '正在准备运行时',
@@ -137,17 +97,18 @@ const PREPARE_PHASE_LABELS = {
 // 取消返回的是这句（services.ErrSubtitleEnginePreparationCancelled）：它不是失败。
 const PREPARE_CANCELLED_TEXT = '已取消字幕引擎准备';
 
-// 字幕翻译与字幕识别质量两个分区：除术语表与识别引擎外都是纯表单字段。
-// 术语表自己读写库（D-033），引擎准备走自己的绑定，都不进 form，与设置页的保存流程无关。
+// 双语偏好沿用设置保存；系统语言资源准备独立执行。
 export default {
   name: 'SubtitleSection',
-  components: { GlossaryEditor },
   props: {
     form: { type: Object, required: true }
   },
   data() {
     return {
       engineStatuses: null,
+      speechLanguage: 'zh_CN',
+      prepareSource: 'en',
+      prepareTarget: 'zh',
       engineError: '',
       preparing: false,
       prepareProgress: null,
@@ -157,9 +118,8 @@ export default {
     };
   },
   computed: {
-    isLLMProvider() {
-      return this.form.subtitle_translation_provider === 'llm';
-    },
+    speechLanguages() { return this.engineStatuses?.[0]?.languages || []; },
+    translationLanguages() { return this.engineStatuses?.[0]?.translation_languages || []; },
     prepareProgressText() {
       const progress = this.prepareProgress;
       if (!progress) return '正在准备字幕引擎…';
@@ -181,6 +141,16 @@ export default {
     this.eventOffs = [];
   },
   methods: {
+    async prepareLanguage(translation) {
+      if (this.preparing) return;
+      this.preparing = true; this.prepareMessage = ''; this.prepareMessageIsError = false;
+      try {
+        await PrepareAppleSubtitleLanguage(translation ? this.prepareSource : this.speechLanguage, translation ? this.prepareTarget : '', translation);
+        this.prepareMessage = '系统语言资源已准备好。';
+      } catch (err) {
+        this.prepareMessage = subtitlePrepareError(err); this.prepareMessageIsError = true;
+      } finally { this.preparing = false; await this.loadEngineStatuses(); }
+    },
     async loadEngineStatuses() {
       try {
         this.engineStatuses = (await GetSubtitleEngineStatuses()) || [];

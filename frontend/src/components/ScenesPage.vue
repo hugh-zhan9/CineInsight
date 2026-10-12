@@ -59,9 +59,9 @@
     </div>
 
     <div class="scenes-actions" data-test="scenes-actions">
-      <span v-if="!isExternal" class="scenes-runtime" data-test="scenes-runtime-state">{{ runtimeText }}</span>
-      <button v-if="!isExternal && runtimePreparing" type="button" class="btn-secondary" data-test="scenes-cancel-prepare" @click="cancelPrepare">取消准备</button>
-      <button v-else-if="!isExternal && runtimeCanPrepare" type="button" class="btn-primary" data-test="scenes-prepare" @click="prepareRuntime">准备模型</button>
+      <span v-if="!imageSearch && !isExternal" class="scenes-runtime" data-test="scenes-runtime-state">{{ runtimeText }}</span>
+      <button v-if="!imageSearch && !isExternal && runtimePreparing" type="button" class="btn-secondary" data-test="scenes-cancel-prepare" @click="cancelPrepare">取消准备</button>
+      <button v-else-if="!imageSearch && !isExternal && runtimeCanPrepare" type="button" class="btn-primary" data-test="scenes-prepare" @click="prepareRuntime">准备模型</button>
       <button v-if="indexRunning" type="button" class="btn-secondary" data-test="scenes-cancel-index" @click="cancelIndex">取消建立索引</button>
       <button
         v-else
@@ -73,6 +73,7 @@
       >{{ scopeFilter ? '为当前范围建立画面索引' : '为全部建立画面索引' }}</button>
       <button type="button" class="btn-secondary" data-test="scenes-clear-stale" :disabled="indexRunning" @click="clearStale">清理旧索引</button>
     </div>
+    <p v-if="imageSearch" class="help-text" data-test="scenes-apple-note">以图检索使用苹果系统能力，无需准备中文文字模型；第一次使用需要建立苹果画面索引。</p>
     <p v-if="indexText" class="scenes-index-status" data-test="scenes-index-status">{{ indexText }}</p>
 
     <p v-if="errorMessage" class="scenes-error" role="alert" data-test="scenes-error">{{ errorMessage }}</p>
@@ -228,13 +229,17 @@ export default {
       return this.coverage?.visual_provider === 'external';
     },
     providerText() {
-      return this.isExternal ? '外部描述（AI 标签接口）' : '本地模型';
+      return this.imageSearch ? '苹果系统图像特征' : this.isExternal ? '外部描述（AI 标签接口）' : '本地中文文字模型';
+    },
+    activeCoverage() {
+      if (!this.coverage) return null;
+      return this.imageSearch ? { ...this.coverage, visual_indexed: this.coverage.image_indexed || 0 } : this.coverage;
     },
     coverageText() {
-      return this.coverage ? sceneCoverageParts(this.coverage).join(' · ') : '正在读取覆盖率…';
+      return this.activeCoverage ? sceneCoverageParts(this.activeCoverage).join(' · ') : '正在读取覆盖率…';
     },
     visualPercent() {
-      return sceneVisualCoveragePercent(this.coverage);
+      return sceneVisualCoveragePercent(this.activeCoverage);
     },
     runtimePreparing() {
       return Boolean(this.runtimeStatus?.preparing);
@@ -256,7 +261,7 @@ export default {
       return Boolean(this.indexStatus?.running);
     },
     canStartIndex() {
-      return this.isExternal || this.runtimeStatus?.state === 'available';
+      return this.imageSearch ? Boolean(this.coverage?.image_available) : this.isExternal || this.runtimeStatus?.state === 'available';
     },
     indexText() {
       const status = this.indexStatus;
@@ -288,7 +293,7 @@ export default {
     },
     emptyHint() {
       if (this.visualSkipped) return '原因见上方提示；处理之后再检索一次。';
-      const coverage = this.coverage || {};
+      const coverage = this.activeCoverage || {};
       const missing = Number(coverage.total_videos || 0) - Number(coverage.visual_indexed || 0);
       const hints = [];
       if (this.mode !== 'dialogue' && missing > 0) hints.push(`还有 ${missing} 部视频没有画面索引`);
@@ -390,6 +395,7 @@ export default {
       this.imageQuery = null;
       this.similarSource = null;
       this.resetResults();
+      this.loadCoverage();
     },
     async useImageFile(file) {
       try {
@@ -496,7 +502,7 @@ export default {
     },
     async startIndex() {
       try {
-        this.applyIndexStatus(await StartSceneIndex({ video_ids: [], filter: this.scopeFilter, provider: '' }));
+        this.applyIndexStatus(await StartSceneIndex({ video_ids: [], filter: this.scopeFilter, provider: this.imageSearch ? 'apple' : '' }));
       } catch (err) {
         notifyError(`建立画面索引失败：${sceneErrorText(err)}`);
       }

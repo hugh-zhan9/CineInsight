@@ -1,0 +1,30 @@
+{
+  "en_system_labels": {
+    "queries": 100,
+    "recall_at_1": 0.25,
+    "recall_at_5": 0.52,
+    "recall_at_10": 0.67,
+    "median_rank": 5.0
+  },
+  "en_human_caption_control": {
+    "queries": 100,
+    "recall_at_1": 0.47,
+    "recall_at_5": 0.76,
+    "recall_at_10": 0.83,
+    "median_rank": 2.0
+  },
+  "zh-Hans_system_labels": {
+    "queries": 100,
+    "recall_at_1": 0.01,
+    "recall_at_5": 0.06,
+    "recall_at_10": 0.11,
+    "median_rank": 44.5
+  },
+  "zh-Hans_human_caption_control": {
+    "queries": 100,
+    "recall_at_1": 0.1,
+    "recall_at_5": 0.21,
+    "recall_at_10": 0.27,
+    "median_rank": 37.0
+  }
+}
