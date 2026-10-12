@@ -15,6 +15,7 @@ import App from './App.vue';
 import { registerCommands, unregisterCommands } from './utils/commandRegistry.js';
 import { feedbackState, resetFeedback, resolveConfirm } from './utils/feedback.js';
 import { closeVersionCompare, openVersionCompare, versionCompareState } from './utils/versionCompare.js';
+import { resetSessionChanges, sessionChanges } from './utils/sessionChanges.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -585,6 +586,17 @@ describe('启动扫描与扫描摘要', () => {
     const texts = feedbackState.toasts.map(toast => toast.message).join('\n');
     expect(texts).toContain('下载的《新片》片库里已有完全相同的文件，可以到「下载」页处理。');
     expect(texts).toContain('下载的《另一部》片库里已有同一部的其他版本');
+  });
+
+  it('管理首页「最近的变化」：扫描摘要、下载查重与备份结束都记进本次会话（D-UI-03）', async () => {
+    resetSessionChanges();
+    await mountApp();
+    handlers['download-duplicate-found']({ task_id: 't1', title: '新片', kind: 'exact' });
+    handlers['library-scan-summary']({ trigger: 'manual', result: { added: 2, deleted: 0, restored: 0, stale: 0 } });
+    handlers['background-tasks'](['backup']);
+    handlers['background-tasks']([]);
+    const kinds = sessionChanges().map(item => item.kind);
+    expect(kinds).toEqual(expect.arrayContaining(['download-duplicate', 'scan', 'backup']));
   });
 
   it('LIB-08 启动时的全量扫描带 startup 触发来源', async () => {

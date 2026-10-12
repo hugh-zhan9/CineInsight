@@ -305,6 +305,7 @@ import {
 } from './utils/appCommands.js';
 import { findCommand } from './utils/commandRegistry.js';
 import { opensVideoDetail, popDetailReturn, pushDetailReturn } from './utils/viewerNavigation.js';
+import { recordDownloadDuplicate, recordScanSummary } from './utils/sessionChanges.js';
 import { closeVersionCompare, versionCompareState } from './utils/versionCompare.js';
 
 // 扫描根的身份只由路径集合决定：别名、时间戳变了不影响"扫描范围"。
@@ -433,6 +434,8 @@ export default {
     });
     // 下载完自动查重（D-DD-04）：窗口在前台时桌面通知不弹，这里给一条应用内提示。
     this.registerRuntimeEvent('download-duplicate-found', payload => {
+      // 管理首页「最近的变化」只记本次会话收到的事件（D-UI-03），不持久化。
+      recordDownloadDuplicate(payload);
       const what = payload?.kind === 'exact' ? '完全相同的文件' : '同一部的其他版本';
       notify(`下载的《${payload?.title || '视频'}》片库里已有${what}，可以到「下载」页处理。`);
     });
@@ -795,6 +798,7 @@ export default {
       return value > 99 ? '99+' : String(value);
     },
     handleLibraryScanSummary(event) {
+      recordScanSummary(event);
       const result = event?.result;
       if (!result) return;
       const changed = Number(result.added || 0) + Number(result.deleted || 0) + Number(result.restored || 0) + Number(result.stale || 0);

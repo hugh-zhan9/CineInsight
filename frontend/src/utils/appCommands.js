@@ -21,6 +21,7 @@ import { SETTINGS_SECTIONS } from '../components/SettingsPage.vue';
 import { findCommand, isCommandEnabled, registerCommands, unregisterCommands } from './commandRegistry.js';
 import { notifyError } from '../utils/feedback.js';
 import { buildTaskCommands } from './taskCommands.js';
+import { recordBackgroundTasks } from './sessionChanges.js';
 
 // 观看与管理两套导航（D-UI-02、D-UI-09）：key 与 App.vue 的 currentPage 一致，每个页面 key 只属于一个区域；
 // 顶栏只显示当前区域那一套，命令面板列出两边全部页面（APP-12、APP-14：两边读同一份清单，不会各自漏页）。
@@ -212,6 +213,8 @@ export const appCommandsMixin = {
     this.registerTaskCommands();
     if (window.runtime?.EventsOn) {
       const tasksOff = window.runtime.EventsOn('background-tasks', running => {
+        // 管理首页「最近的变化」：备份从在跑变成不在跑记一条（后端没有单独的备份事件）。
+        recordBackgroundTasks(running);
         this.commandTaskState = { ...this.commandTaskState, running: running || [] };
         this.registerTaskCommands();
       });
