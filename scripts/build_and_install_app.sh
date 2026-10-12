@@ -108,7 +108,16 @@ build_app() {
 bundle_apple_ai() {
   local source_dir="${PROJECT_ROOT}/build/apple-ai"
   local target_dir="${BUILD_APP_PATH}/Contents/Resources/apple-ai"
-  [[ -x "${source_dir}/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai" ]] || fail "缺少苹果系统字幕组件，请先执行 scripts/build_apple_ai.sh"
+  if [[ ! -x "${source_dir}/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai" ]]; then
+    # SDK 低于 26 时 build_apple_ai.sh 不构建组件（见该脚本）：不打包，应用在 macOS 26 以下本来就用不了这些功能。
+    local sdk_major
+    sdk_major="$(xcrun --show-sdk-version 2>/dev/null | cut -d. -f1)"
+    if [[ -z "${sdk_major}" || "${sdk_major}" -lt 26 ]]; then
+      log "跳过苹果系统字幕与视觉组件（当前 SDK ${sdk_major:-未知}，需要 macOS 26 SDK）"
+      return
+    fi
+    fail "缺少苹果系统字幕组件，请先执行 scripts/build_apple_ai.sh"
+  fi
   mkdir -p "${target_dir}"
   ditto "${source_dir}" "${target_dir}"
 }
