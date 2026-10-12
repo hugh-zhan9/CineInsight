@@ -30,7 +30,7 @@
 
 <script>
 import { markRaw } from 'vue';
-import { VirtualHeightIndex, defaultRangeEngine, resolveScrollOwnerDescriptor } from '../utils/virtualList.js';
+import { VirtualHeightIndex, defaultRangeEngine, isColumnLayout, resolveLibraryColumns, resolveScrollOwnerDescriptor } from '../utils/virtualList.js';
 
 export default {
   name: 'VirtualVideoList',
@@ -72,7 +72,7 @@ export default {
     geometryItems() { return this.items.map(item => [item.id, this.itemVersion(item)]); },
     windowed() { return this.virtualizationEnabled && !this.scrollOwnerMissing; },
     renderedItems() { return this.windowed ? this.items.slice(this.startIndex, this.endIndex) : this.items; },
-    gridStyle() { return this.layoutMode === 'grid' ? { gridTemplateColumns: `repeat(${this.columns}, minmax(0, 1fr))` } : null; },
+    gridStyle() { return isColumnLayout(this.layoutMode) ? { gridTemplateColumns: `repeat(${this.columns}, minmax(0, 1fr))` } : null; },
     showLoadMoreSentinel() { return !this.windowed && this.hasMore; }
   },
   watch: {
@@ -200,10 +200,12 @@ export default {
       this.resolveScrollOwner();
       this.layoutWidth = this.$el?.getBoundingClientRect().width || 0;
       this.widthBucket = this.rangeEngine.getWidthBucket(this.layoutWidth);
-      this.columns = this.layoutMode === 'grid' ? Math.max(1, Math.floor((this.layoutWidth + 12) / 212)) : 1;
+      // 网格卡与缩略图墙共用同一套列式几何，只是最小列宽和间隙不同；列表恒为一列、无间隙。
+      const { columns, gap } = resolveLibraryColumns(this.layoutMode, this.layoutWidth);
+      this.columns = columns;
       if (clear) this.heightCache.clear();
       const retained = new Map();
-      const cardWidth = (this.layoutWidth - (this.columns - 1) * 12) / this.columns;
+      const cardWidth = (this.layoutWidth - (this.columns - 1) * gap) / this.columns;
       this.layoutIndex = markRaw(new VirtualHeightIndex(this.items, item => {
         const cached = this.heightCache.get(item.id);
         if (cached && cached.version === this.itemVersion(item)) {
@@ -211,7 +213,7 @@ export default {
           return cached.height;
         }
         return this.estimateHeight(item, this.widthBucket, this.subtitleMode, { columns: this.columns, cardWidth });
-      }, { columns: this.columns, gap: this.layoutMode === 'grid' ? 12 : 0 }));
+      }, { columns: this.columns, gap }));
       this.heightCache = markRaw(retained);
       this.indexQuery = this.queryKey;
       this.listTop = this.getListTop();
@@ -360,6 +362,8 @@ export default {
 .virtual-video-list { display: block; overflow-anchor: none; }
 .virtual-video-list__items { display: block; }
 .virtual-video-list--grid .virtual-video-list__items { display: grid; gap: 12px; align-items: stretch; }
+/* 缩略图墙的格子等高（16:9）；gap 必须与 virtualList.js 里 wall 的列间隙一致，行高索引按它算行距。 */
+.virtual-video-list--wall .virtual-video-list__items { display: grid; gap: 6px; align-items: start; }
 .virtual-video-list__row { display: block; min-width: 0; }
 .virtual-video-list__sentinel { width: 100%; height: 1px; }
 </style>

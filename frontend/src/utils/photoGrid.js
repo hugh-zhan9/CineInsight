@@ -38,6 +38,20 @@ export function resolvePhotoColumns(containerWidth, { minColumnWidth = 180, gap 
 }
 
 /**
+ * resolvePhotoCellSize 由容器宽度和格子几何定出列数与方形缩略图边长。
+ * 几何：minColumnWidth / gap 定列数；border 是 border-box 卡片的上下边框之和，缩略图边长要让出它；
+ * meta 是缩略图下方定高的信息条（缩略图墙没有，取 0）。cellHeight 即 buildPhotoLayout 的格子高度。
+ */
+export function resolvePhotoCellSize(containerWidth, { minColumnWidth, gap = 0, meta = 0, border = 0 } = {}) {
+  const width = Math.max(0, Number(containerWidth) || 0);
+  const spacing = Math.max(0, Number(gap) || 0);
+  const columns = resolvePhotoColumns(width, { minColumnWidth, gap: spacing });
+  const cellWidth = (width - spacing * (columns - 1)) / columns;
+  const mediaHeight = Math.max(0, Math.round(cellWidth) - border);
+  return { columns, mediaHeight, cellHeight: mediaHeight + meta + border };
+}
+
+/**
  * photoTimelineKey 取条目的时间线分组键，口径与后端 ListImageTimelineBuckets 一致：
  * 优先 EXIF 拍摄时间，缺失时回退入库时间，按本机时区取年月（后端也按 time.Local 归并，
  * 桌面端前后端同机同时区）。无法解析时返回 null。

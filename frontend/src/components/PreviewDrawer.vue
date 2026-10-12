@@ -138,6 +138,8 @@
 			<button type="button" class="btn-secondary" @click="$emit('find-similar', details.video)">找相似</button>
 			<!-- 以图搜片（2026-10-12）：用当前播放位置的画面到场景检索里找相似的段。 -->
 			<button type="button" class="btn-secondary" data-test="drawer-find-similar-scenes" @click="findSimilarScenes">找相似画面</button>
+			<!-- 台词卡（2026-10-12）：当前播放位置的画面 + 这一刻的字幕（同名 .srt 里正在显示的那条，没有就留空让人自己填）。 -->
+			<button type="button" class="btn-secondary" data-test="drawer-quote-card" :disabled="quoteCardLoading" @click="openQuoteCard">台词卡</button>
           </div>
         </section>
 
@@ -434,6 +436,7 @@
     <ImageLibraryPicker v-if="avatarPickerOpen" :busy="avatarSaving" :action-error="avatarError" @close="avatarPickerOpen = false" @select="setAvatarFromImage" />
     <ImageSourceDialog v-if="imagePreview" :image="imagePreview" allow-unlink allow-delete :busy="isPersonImageUpdating(imagePreview.id)" :action-error="personImageError" @close="imagePreview = null" @unlink="removePersonImageRelation" @delete="requestPersonMediaDelete('image', $event)" />
     <PersonMediaDeleteDialog v-if="personMediaDeleteTarget" :target="personMediaDeleteTarget" @close="personMediaDeleteTarget = null" @deleted="handlePersonMediaDeleted" @restored="handlePersonMediaRestored" />
+    <QuoteCardDialog v-if="quoteCard" v-bind="quoteCard" @close="quoteCard = null" />
   </aside>
 </template>
 
@@ -443,7 +446,7 @@ import {
   GetPersonImages, RefreshVideoTechnicalMetadata, RemoveCollectionCover, RemoveCollectionVideo, RemovePersonAvatar, RemovePersonImage, RemovePersonVideo, ReorderCollectionVideos, SearchLibraryVideoPage,
   SelectCollectionCover, SelectDirectory, SelectPersonAvatar, SetCollectionCover, SetPersonAvatar, UpdateCollection, UpdatePerson, UpdateVideoDetails,
   UpdateVideoRating, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus,
-  PlayVideo, SetVideoFavorite, SetVideoLiked, SetVideoWatched, RecordViewEvent
+  PlayVideo, SetVideoFavorite, SetVideoLiked, SetVideoWatched, RecordViewEvent, GetSubtitleSegments
 } from '../../wailsjs/go/main/App';
 import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackOrigin, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
 import { isWatchCompleted, resumePosition } from '../utils/watchState.js';
@@ -457,6 +460,8 @@ import BookmarkPanel from './BookmarkPanel.vue';
 import QueueActionButton from './QueueActionButton.vue';
 import ImageBatchTagControls from './ImageBatchTagControls.vue';
 import RelatedVideoItem from './RelatedVideoItem.vue';
+import QuoteCardDialog from './QuoteCardDialog.vue';
+import { subtitleCueAt } from '../utils/quoteCard.js';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 import { confirmAction } from '../utils/feedback.js';
 import { PLAYBACK_PROXY_CODE_LABELS, playbackProxyItemState, playbackProxyItemStateText, playbackProxyStrategyLabel } from '../utils/playbackProxy.js';
@@ -476,7 +481,7 @@ const sameIDSet = (a, b) => {
 
 export default {
   name: 'PreviewDrawer',
-  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton },
+  components: { QueueActionButton, BookmarkPanel, ImageLibraryPicker, GlossaryEditor, RelatedVideoItem, ImageSourceDialog, ImageBatchTagControls, PersonMediaDeleteDialog, WallpaperButton, QuoteCardDialog },
   props: {
     video: { type: Object, default: null },
     initialEntity: { type: Object, default: null },
@@ -494,6 +499,8 @@ export default {
     return {
       selectedPersonImageIDs: [], imagePreview: null, avatarPickerOpen: false, avatarSaving: false, avatarError: '',
       personMediaDeleteTarget: null,
+      // 台词卡：{ videoID, atMS, quote, title }，为空表示弹窗关着；quoteCardLoading 是读当前字幕条目的那一下。
+      quoteCard: null, quoteCardLoading: false,
       navigator: null, currentEntry: null, canGoBack: false,
       loading: false, error: '', saving: false, refreshingTechnical: false,
       details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', personalRating: '', personIDs: [], collectionIDs: [] },
@@ -686,11 +693,29 @@ export default {
   },
   methods: {
     bookmarkCurrentPosition() { return Number(this.$refs.videoElement?.currentTime || 0); },
+    videoCardTitle(video) { return String(video.display_title || '').trim() || video.name || ''; },
     findSimilarScenes() {
       const video = this.details?.video;
       if (!video?.id) return;
-      const title = String(video.display_title || '').trim() || video.name || '';
-      this.$emit('find-similar-scenes', { videoID: video.id, atMS: Math.round(this.bookmarkCurrentPosition() * 1000), title });
+      this.$emit('find-similar-scenes', { videoID: video.id, atMS: Math.round(this.bookmarkCurrentPosition() * 1000), title: this.videoCardTitle(video) });
+    },
+    // 台词卡：先记下当前播放位置，再到同名 .srt 里找这一刻正在显示的那条字幕。
+    // 没有字幕文件、读不出来或这一刻没有字幕都照样打开，台词留空让人自己填；等字幕期间换了条目就不打开。
+    async openQuoteCard() {
+      const video = this.details?.video;
+      if (!video?.id || this.quoteCardLoading) return;
+      const atMS = Math.round(this.bookmarkCurrentPosition() * 1000);
+      let quote = '';
+      this.quoteCardLoading = true;
+      try {
+        quote = subtitleCueAt(await GetSubtitleSegments(video.id), atMS);
+      } catch (_err) {
+        quote = '';
+      } finally {
+        this.quoteCardLoading = false;
+      }
+      if (this.details?.video?.id !== video.id) return;
+      this.quoteCard = { videoID: Number(video.id), atMS, quote, title: this.videoCardTitle(video) };
     },
     setBookmarkRequest(request) {
       this.bookmarkRequest = request ? { ...request } : null; this.bookmarkRangeActive = request?.endMS != null; this.bookmarkRangeFinished = false;

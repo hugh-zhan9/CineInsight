@@ -18,7 +18,7 @@ int main(int argc,char **argv) {@autoreleasepool {
  while(!ready && limit.timeIntervalSinceNow>0) {[[NSRunLoop mainRunLoop]runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];ready=[evaluate(view,@"Boolean(window.ready)") boolValue];}
  if(!ready){fprintf(stderr,"fixture not ready\n");return 1;}
  evaluate(view,@"fixture.run().catch(e=>window.resultJSON=JSON.stringify({error:String(e)})); void 0");
- NSString *result=nil;limit=[NSDate dateWithTimeIntervalSinceNow:55];
+ NSString *result=nil;limit=[NSDate dateWithTimeIntervalSinceNow:90];
  while(!result && limit.timeIntervalSinceNow>0){[[NSRunLoop mainRunLoop]runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.1]];id v=evaluate(view,@"window.results ? JSON.stringify(window.results) : (window.resultJSON || null)");if([v isKindOfClass:NSString.class])result=v;}
  [window orderOut:nil];if(!result){fprintf(stderr,"fixture did not finish: %s\n", [[evaluate(view,@"window.progress") description] UTF8String]);return 1;} puts(result.UTF8String);id report=[NSJSONSerialization JSONObjectWithData:[result dataUsingEncoding:NSUTF8StringEncoding] options:0 error:nil]; return [report isKindOfClass:NSDictionary.class] && [report[@"passed"] boolValue] ? 0 : 1;
 }}

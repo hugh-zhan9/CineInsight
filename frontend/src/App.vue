@@ -174,6 +174,14 @@
       @open-task-center="openTaskCenter"
     />
     <QuitConfirmDialog />
+    <!-- 版本对比播放器：任何地方调 openVersionCompare(左, 右) 就在这里打开；每次打开是一次新会话（key）。 -->
+    <VersionCompareDialog
+      v-if="!startupError && versionCompare.open"
+      :key="versionCompare.session"
+      :left-video-id="versionCompare.leftVideoID"
+      :right-video-id="versionCompare.rightVideoID"
+      @close="handleVersionCompareClose"
+    />
 
     <!-- 「待重启」终态（D-PC55 / APP-02）：切换后端或切回之前的后端成功后，维护围栏一直保持到重启，
          任何数据库读写都会被拒绝。这层遮罩不可关闭，唯一出口是「立即重启」。 -->
@@ -219,6 +227,7 @@ import CommandPalette from './components/CommandPalette.vue';
 import TaskCenterDrawer from './components/TaskCenterDrawer.vue';
 import PendingWorkHub from './components/PendingWorkHub.vue';
 import QuitConfirmDialog from './components/QuitConfirmDialog.vue';
+import VersionCompareDialog from './components/VersionCompareDialog.vue';
 import WallpaperStatusBar from './components/WallpaperStatusBar.vue';
 import PlaybackQueuePanel from './components/PlaybackQueuePanel.vue';
 import BaseModal from './components/ui/BaseModal.vue';
@@ -227,6 +236,7 @@ import { runtimeEventsMixin } from './components/video-list/runtimeEvents.js';
 import { logFrontend } from './utils/frontendLog.js';
 import { confirmAction, notify, notifyError } from './utils/feedback.js';
 import { APP_NAV_GROUPS, appCommandsMixin, isNavPageVisible } from './utils/appCommands.js';
+import { closeVersionCompare, versionCompareState } from './utils/versionCompare.js';
 
 // 扫描根的身份只由路径集合决定：别名、时间戳变了不影响"扫描范围"。
 function scanRootKey(dirs) {
@@ -244,13 +254,15 @@ export default {
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
     VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
-    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, WallpaperStatusBar,
+    MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     BaseModal, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage
   },
   data() {
     return {
       currentPage: 'videos',
       playbackQueueOpen: false,
+      // 版本对比播放器的全局开关（utils/versionCompare.js），同一个响应式对象。
+      versionCompare: versionCompareState,
       // 图片页首次访问后就一直留在 DOM 里（v-show），这个开关只负责"第一次才挂载"。
       photosMounted: false,
       notesMounted: false,
@@ -398,6 +410,9 @@ export default {
     }
   },
   methods: {
+    handleVersionCompareClose() {
+      closeVersionCompare();
+    },
     // 「待重启」终态只进不出：之后再收到事件或 emit 也只更新说明文字。
     showRelaunchRequired(message) {
       const first = !this.relaunchRequired;

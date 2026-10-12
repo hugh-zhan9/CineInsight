@@ -1362,6 +1362,10 @@ export function SaveLibraryView(arg1) {
   return window['go']['main']['App']['SaveLibraryView'](arg1);
 }
 
+export function SaveQuoteCard(arg1, arg2) {
+  return window['go']['main']['App']['SaveQuoteCard'](arg1, arg2);
+}
+
 export function SaveSubtitleEditDocument(arg1) {
   return window['go']['main']['App']['SaveSubtitleEditDocument'](arg1);
 }

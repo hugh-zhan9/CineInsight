@@ -571,6 +571,37 @@ input:checked + .slider::before {
 .video-item--grid .row-btn { flex: 1; height: 26px; padding: 0; font-size: 11.5px; }
 .video-item--grid .row-btn--icon { flex: 0 0 28px; }
 
+/* 缩略图墙（2026-10-12 用户裁决「只要一个紧凑的缩略图墙」）：一格就是一张带 1px 边框的 16:9 缩略图，
+   高度由列宽按比例定出，与 virtualList.js 的 estimateVideoWallHeight 同一算法。
+   勾选框只在悬停、键盘聚焦或已选时显形，与图片库缩略图同一取舍：常驻会在密集格子上形成一片噪点。 */
+.video-item--wall {
+  position: relative;
+  display: block;
+  min-height: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--radius);
+}
+.video-item--wall .video-thumbnail {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  cursor: pointer;
+}
+.video-wall-tile:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+.video-item--wall .video-select {
+  position: absolute; z-index: 2; top: 4px; left: 4px;
+  padding: 2px; border-radius: 4px; background: var(--overlay-strong);
+  opacity: 0; transition: opacity var(--transition);
+}
+.video-item--wall:hover .video-select,
+.video-item--wall .video-select:focus-within,
+.video-item--wall.video-item--selected .video-select { opacity: 1; }
+.video-wall-tile__stale { position: absolute; left: 4px; bottom: 4px; }
+
 .setting-item { margin-bottom: 24px; }
 .setting-item label { display: block; margin-bottom: 10px; font-size: 14px; font-weight: 600; }
 .setting-item label.switch { display: inline-flex; margin-bottom: 0; font-weight: 400; }

@@ -12,6 +12,8 @@ const api = vi.hoisted(() => new Proxy({}, {
 vi.mock('../../wailsjs/go/main/App', () => api);
 const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(() => Promise.resolve(true)), notify: vi.fn(), notifyError: vi.fn(), notifySuccess: vi.fn() }));
 vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
+const compare = vi.hoisted(() => ({ openVersionCompare: vi.fn(() => true) }));
+vi.mock('../utils/versionCompare.js', async (importOriginal) => ({ ...(await importOriginal()), ...compare }));
 
 import DownloadsPage from './DownloadsPage.vue';
 
@@ -296,6 +298,15 @@ describe('下载查重提示', () => {
     expect(api.ClearDownloadDuplicate).toHaveBeenCalledWith('t1', 8);
     expect(api.DismissDownloadDuplicate).not.toHaveBeenCalled();
     expect(wrapper.find('[data-test="download-duplicate"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('其他版本可以对比播放：片库那一份在左、这次下载在右；相同文件不给对比', async () => {
+    const wrapper = await mountPage([done({ status: 'found', matches: [exact, version], unhashed_videos: 0 })]);
+    const matches = wrapper.findAll('[data-test="download-duplicate-match"]');
+    expect(matches[0].find('[data-test="download-dup-compare"]').exists()).toBe(false);
+    await matches[1].get('[data-test="download-dup-compare"]').trigger('click');
+    expect(compare.openVersionCompare).toHaveBeenCalledWith(8, 50);
     wrapper.unmount();
   });
 

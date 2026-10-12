@@ -24,6 +24,8 @@
         <div class="version-member__actions">
           <button type="button" class="row-btn row-btn--primary" :disabled="busy" data-test="version-member-play" @click="$emit('play', member.video_id)">播放</button>
           <button type="button" class="row-btn" :disabled="busy" data-test="version-member-preview" @click="$emit('preview', member.video_id)">预览</button>
+          <!-- 与主版本并排同步播放比画质；主版本自己那一行没有。 -->
+          <button v-if="index > 0" type="button" class="row-btn" :disabled="busy" data-test="version-member-compare" @click="$emit('compare', member.video_id)">对比画质</button>
           <button v-if="index > 0" type="button" class="row-btn" :disabled="busy" data-test="version-member-primary" @click="$emit('set-primary', member.video_id)">设为主版本</button>
           <button type="button" class="row-btn" :disabled="busy" data-test="version-member-remove" @click="$emit('remove', member.video_id)">移出组</button>
         </div>
@@ -44,7 +46,7 @@ export default {
     currentVideoId: { type: [Number, String], default: 0 },
     busy: { type: Boolean, default: false }
   },
-  emits: ['play', 'preview', 'set-primary', 'remove', 'manage'],
+  emits: ['play', 'preview', 'compare', 'set-primary', 'remove', 'manage'],
   computed: {
     groupTitle() {
       return versionGroupTitle(this.summary);

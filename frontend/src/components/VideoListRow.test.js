@@ -134,3 +134,71 @@ describe('自动标签的人工覆盖（D-PC36）', () => {
     wrapper.unmount();
   });
 });
+
+// 2026-10-12 用户裁决「不要颜色，只要一个紧凑的缩略图墙」。
+describe('缩略图墙', () => {
+  const wall = (overrides = {}, props = {}) => row({ display_title: '某部电影', tags: [{ id: 3, name: '动作' }], ...overrides }, { layoutMode: 'wall', ...props });
+
+  it('格子只有缩略图：标题进悬停提示与读屏名，不渲染信息区、标签和行内动作', () => {
+    const wrapper = wall({ duration: 7200, watch_position_seconds: 600 });
+    const tile = wrapper.get('[data-test="library-wall-tile"]');
+    expect(tile.element.tagName).toBe('BUTTON');
+    expect(tile.attributes('title')).toBe('某部电影');
+    expect(tile.attributes('aria-label')).toBe('某部电影');
+    expect(tile.get('img').attributes('src')).toBe('/preview/thumbnail/1');
+    expect(wrapper.classes()).toContain('video-item--wall');
+    for (const selector of ['.video-info', '.video-actions', '.video-tags', '.video-thumbnail__duration', '.video-thumbnail__progress']) {
+      expect(wrapper.find(selector).exists()).toBe(false);
+    }
+    expect(wrapper.text()).toBe('');
+    wrapper.unmount();
+  });
+
+  it('点格子与点网格卡上的「预览」发出同一个 preview 事件、同一条视频', async () => {
+    const tileRow = wall();
+    await tileRow.get('[data-test="library-wall-tile"]').trigger('click');
+    const fromWall = tileRow.emitted('preview');
+    tileRow.unmount();
+
+    const gridRow = row({ display_title: '某部电影', tags: [{ id: 3, name: '动作' }] }, { layoutMode: 'grid' });
+    await gridRow.findAll('.row-btn').find(button => button.text() === '预览').trigger('click');
+    const fromGrid = gridRow.emitted('preview');
+    gridRow.unmount();
+
+    expect(fromWall).toHaveLength(1);
+    expect(fromWall).toEqual(fromGrid);
+  });
+
+  it('勾选框、右键菜单与网格一致；缩略图失败显示占位', async () => {
+    const wrapper = wall({}, { selected: true, keyboardFocused: true });
+    expect(wrapper.classes()).toEqual(expect.arrayContaining(['video-item--selected', 'video-item--focused']));
+    const checkbox = wrapper.get('input[type="checkbox"]');
+    expect(checkbox.element.checked).toBe(true);
+    await checkbox.setValue(false);
+    expect(wrapper.emitted('toggle-select')[0]).toEqual([expect.objectContaining({ id: 1 }), false]);
+    await wrapper.trigger('contextmenu');
+    expect(wrapper.emitted('contextmenu')[0][1]).toEqual(expect.objectContaining({ id: 1 }));
+    await wrapper.get('[data-test="library-wall-tile"] img').trigger('error');
+    expect(wrapper.find('[data-test="library-wall-tile"] img').exists()).toBe(false);
+    expect(wrapper.get('[data-test="library-wall-tile"]').classes()).toContain('video-thumbnail--failed');
+    wrapper.unmount();
+  });
+
+  it('失效视频只留一个「失效」角标，原因写进悬停提示', () => {
+    const wrapper = wall({ is_stale: true, stale_reason: 'offline_root' });
+    expect(wrapper.get('[data-test="wall-stale-reason"]').text()).toBe('失效');
+    expect(wrapper.get('[data-test="library-wall-tile"]').attributes('title')).toBe('某部电影（路径失效 · 磁盘未连接）');
+    expect(wrapper.find('[data-test="row-stale-reason"]').exists()).toBe(false);
+    wrapper.unmount();
+
+    const fresh = wall();
+    expect(fresh.find('[data-test="wall-stale-reason"]').exists()).toBe(false);
+    fresh.unmount();
+  });
+
+  it('没有展示标题时用文件名', () => {
+    const wrapper = row({ display_title: '' }, { layoutMode: 'wall' });
+    expect(wrapper.get('[data-test="library-wall-tile"]').attributes('title')).toBe('clip.mp4');
+    wrapper.unmount();
+  });
+});

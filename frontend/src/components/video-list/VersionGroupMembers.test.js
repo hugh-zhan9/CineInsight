@@ -62,6 +62,15 @@ describe('VersionGroupMembers', () => {
     expect(wrapper.emitted('manage')).toHaveLength(1);
   });
 
+  it('「对比画质」只出现在非主版本行，带所选版本的视频 ID', async () => {
+    const wrapper = mount(VersionGroupMembers, { props: { summary: summary(), currentVideoId: 11 } });
+    expect(wrapper.find('[data-test="version-member-11"] [data-test="version-member-compare"]').exists()).toBe(false);
+    const compare = wrapper.get('[data-test="version-member-13"] [data-test="version-member-compare"]');
+    expect(compare.text()).toBe('对比画质');
+    await compare.trigger('click');
+    expect(wrapper.emitted('compare')).toEqual([[13]]);
+  });
+
   it('写操作进行中禁用按钮', () => {
     const wrapper = mount(VersionGroupMembers, { props: { summary: summary(), busy: true } });
     expect(wrapper.get('[data-test="version-member-11"] [data-test="version-member-play"]').attributes('disabled')).toBeDefined();

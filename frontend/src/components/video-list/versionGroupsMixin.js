@@ -4,9 +4,11 @@ import {
   VERSION_GROUP_MAX_MEMBERS, isVersionGroupConflict, isVersionGroupNotFound, loadCollapseVersions, parseVersionMemberConflict,
   primaryFirstOrder, saveCollapseVersions, versionGroupErrorText, versionMemberTitle
 } from '../../utils/versionGroups.js';
+import { openVersionCompare } from '../../utils/versionCompare.js';
 
 // 片库页的多版本聚合接线（D-MW-VERSIONS）。查询条件、列表与原地刷新仍归 VideoListPage；
-// 这里只持有「合并版本」开关、本页代表 → 组汇总的映射、展开状态与两个弹窗的开关。
+// 这里只持有「合并版本」开关、本页代表 → 组汇总的映射、展开状态与两个弹窗的开关；
+// 「对比画质」「对比播放」只把一对视频 ID 交给全局的版本对比播放器（utils/versionCompare.js）。
 // 宿主需提供：currentLibraryFilter、isContinueWatchingKeyset、resetAndLoadVideos、playVideo、
 // openPreview、selectedVideoIds、searchMode、smartView、sortMode。
 export const versionGroupsMixin = {
@@ -167,6 +169,12 @@ export const versionGroupsMixin = {
       }
       return undefined;
     },
+    // 「对比画质」：主版本在左、所选版本在右，打开全局的版本对比播放器。
+    compareVersionMember(video, videoID) {
+      const primaryID = Number(this.versionGroupFor(video)?.members?.[0]?.video_id || 0);
+      if (!primaryID) return false;
+      return openVersionCompare(primaryID, Number(videoID));
+    },
     setPrimaryVersion(video, videoID) {
       const summary = this.versionGroupFor(video);
       if (!summary) return Promise.resolve(false);
@@ -201,6 +209,12 @@ export const versionGroupsMixin = {
     },
     closeVersionGroupDialog() {
       this.versionGroupDialog = { show: false, groupId: 0, videoId: 0, videoTitle: '' };
+    },
+    // 批量栏「对比播放」：正好选中两个时，先选的在左、后选的在右；不改选择。
+    compareSelectedVideos() {
+      const ids = [...new Set(this.selectedVideoIds.map(Number).filter(Boolean))];
+      if (ids.length !== 2) return false;
+      return openVersionCompare(ids[0], ids[1]);
     },
     // 批量栏「合并为版本组」：按选择顺序成为 1..N。选中项已有组时，仅当冲突项都属于同一组，
     // 才提供「加入该组」把其余视频追加进去；冲突跨多个组时只报错。

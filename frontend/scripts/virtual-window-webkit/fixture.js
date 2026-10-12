@@ -3,7 +3,7 @@ import VirtualVideoList from '../../src/components/VirtualVideoList.vue';
 import VideoListRow from '../../src/components/VideoListRow.vue';
 import AITagReviewDialog from '../../src/components/AITagReviewDialog.vue';
 import ImageAITagReviewPanel from '../../src/components/ImageAITagReviewPanel.vue';
-import { estimateVideoRowHeight, estimateVideoGridHeight } from '../../src/utils/virtualList.js';
+import { estimateVideoRowHeight, estimateVideoGridHeight, estimateVideoWallHeight } from '../../src/utils/virtualList.js';
 import '../../src/styles/tokens.css';
 import '../../src/styles/components.css';
 const makeItems = count => Array.from({ length: count }, (_, i) => ({ id: i+1, name: `Synthetic ${i}.mp4`, path: `/synthetic/${i}.mp4`, tags: Array.from({ length: (i%4)*8 }, (_, j) => ({ id:j+1, name:`标签文字 ${j}`, color:'#9988ee' })) }));
@@ -18,7 +18,7 @@ const root=createApp({data:()=>({items:makeItems(20000),layout:'list',active:tru
   if(this.mode==='video-review')return h(AITagReviewDialog,{ref:'panel',visible:true,qualityEnabled:false});
   if(this.mode==='image-review')return h(ImageAITagReviewPanel,{ref:'panel',visible:true});
   return h('div',{class:'main-view',style:{height:'680px',overflow:'auto',width:`${this.width}px`}},[
-    h('div',{style:{display:this.active?'':'none'}},[h(VirtualVideoList,{ref:'list',items:this.items,active:this.active,layoutMode:this.layout,layoutKey:this.density,estimateHeight:(item,b,s,g)=>this.layout==='grid'?estimateVideoGridHeight(item,g.cardWidth):estimateVideoRowHeight(item,b,s,this.density),itemVersion:item=>JSON.stringify(item.tags)}, {default:({item})=>h(VideoListRow,{video:item,layoutMode:this.layout,density:this.density})})]),
+    h('div',{style:{display:this.active?'':'none'}},[h(VirtualVideoList,{ref:'list',items:this.items,active:this.active,layoutMode:this.layout,layoutKey:this.density,estimateHeight:(item,b,s,g)=>this.layout==='wall'?estimateVideoWallHeight(g.cardWidth):this.layout==='grid'?estimateVideoGridHeight(item,g.cardWidth):estimateVideoRowHeight(item,b,s,this.density),itemVersion:item=>JSON.stringify(item.tags)}, {default:({item})=>h(VideoListRow,{video:item,layoutMode:this.layout,density:this.density})})]),
     !this.active?h('div',{style:{height:'5000px'}},'other page'):null
   ]);
 }}).mount('#app');
@@ -41,19 +41,21 @@ const compare=(before,after,{grid=false}={})=>{
 };
 window.fixture={async run(){
   const results=[];
-  for(const layout of ['list','grid']){
+  for(const layout of ['list','grid','wall']){
     root.layout=layout;await settle();host().scrollTop=300000;host().dispatchEvent(new Event('scroll'));await settle();
     let before=snapshot(`${layout}-deep`);results.push(before);
-    for(const width of [660,1100]){root.width=width;await settle();const after=snapshot(`${layout}-width-${width}`);compare(before,after,{grid:layout==='grid'});results.push(after);before=after;}
+    // 缩略图墙的格子高度由 CSS 的 16:9 比例定出，必须与 estimateVideoWallHeight 的预估一致，否则滚动条与锚点会跳。
+    if(layout==='wall'){const tile=host().querySelector('[data-virtual-row-id]').getBoundingClientRect();assert(Math.abs(tile.height-estimateVideoWallHeight(tile.width))<1,`wall: tile ${tile.width}x${tile.height} != estimate ${estimateVideoWallHeight(tile.width)}`);results.push({label:'wall-tile',width:tile.width,height:tile.height});}
+    for(const width of [660,1100]){root.width=width;await settle();const after=snapshot(`${layout}-width-${width}`);compare(before,after,{grid:layout!=='list'});results.push(after);before=after;}
     if(layout==='list'){root.density='comfortable';await settle();let changed=snapshot('list-density');compare(before,changed);results.push(changed);before=changed;const id=Number(before.anchor.id);for(const item of root.items.filter(item=>item.id>=id-5 && item.id<=id)){item.tags=item.tags.map(tag=>({...tag,name:tag.name+' 一段较长的标签文字'}));}await settle();changed=snapshot('list-tag-names');compare(before,changed);results.push(changed);before=changed;}
     root.items.push(...makeItems(100).map((item,i)=>({...item,id:30000+i})));await settle();let after=snapshot(`${layout}-append`);compare(before,after);results.push(after);before=after;
-    root.items=root.items.filter(item=>item.id>3);await settle();after=snapshot(`${layout}-delete-before`);compare(before,after,{grid:layout==='grid'});results.push(after);before=after;
+    root.items=root.items.filter(item=>item.id>3);await settle();after=snapshot(`${layout}-delete-before`);compare(before,after,{grid:layout!=='list'});results.push(after);before=after;
     root.active=false;await settle();host().scrollTop=800;host().dispatchEvent(new Event('scroll'));root.width=880;await settle();assert(host().scrollTop===800,`${layout}: hidden changed other page`);
-    root.active=true;await settle();after=snapshot(`${layout}-return`);compare(before,after,{grid:layout==='grid'});results.push(after);
+    root.active=true;await settle();after=snapshot(`${layout}-return`);compare(before,after,{grid:layout!=='list'});results.push(after);
     root.items=makeItems(20000);root.width=1100;await settle();
     host().scrollTop=host().scrollHeight;host().dispatchEvent(new Event('scroll'));await settle();after=snapshot(`${layout}-end`);assert(after.last==='20000',`${layout}: final row missing ${after.last}`);results.push(after);
-    if(layout==='grid'){
-      root.items=makeItems(6);await settle();const nodes=host().querySelectorAll('[data-virtual-row-id]');const width=nodes[0].getBoundingClientRect().width;assert(Math.abs(nodes[5].getBoundingClientRect().width-width)<1,'grid: final card stretches');results.push(snapshot('grid-six-cards'));root.items=makeItems(20000);await settle();
+    if(layout!=='list'){
+      root.items=makeItems(6);await settle();const nodes=host().querySelectorAll('[data-virtual-row-id]');const width=nodes[0].getBoundingClientRect().width;assert(Math.abs(nodes[5].getBoundingClientRect().width-width)<1,`${layout}: final card stretches`);results.push(snapshot(`${layout}-six-cards`));root.items=makeItems(20000);await settle();
     }
   }
   for(const kind of ['video','image'])for(const single of [false,true]){

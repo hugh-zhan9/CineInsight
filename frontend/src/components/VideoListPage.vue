@@ -46,6 +46,7 @@
       :collapse-versions="collapseVersions"
       @update:collapse-versions="setCollapseVersions"
       @batch-version-group="mergeSelectedAsVersionGroup"
+      @batch-compare="compareSelectedVideos"
       @update:search-keyword="searchKeyword = $event"
       @update:smart-view="smartView = $event"
       @update:sort-mode="sortMode = $event"
@@ -253,13 +254,15 @@
             @open-row-menu="openRowMenu"
             @contextmenu="showContextMenu"
           />
+          <!-- 缩略图墙的格子只放缩略图，展开的版本列表塞不进去；切回列表或网格时展开状态照旧。 -->
           <VersionGroupMembers
-            v-if="isVersionGroupExpanded(video)"
+            v-if="viewMode !== 'wall' && isVersionGroupExpanded(video)"
             :summary="versionGroupFor(video)"
             :current-video-id="video.id"
             :busy="versionGroupBusy"
             @play="playVersionMember"
             @preview="previewVersionMember(video, $event)"
+            @compare="compareVersionMember(video, $event)"
             @set-primary="setPrimaryVersion(video, $event)"
             @remove="removeVersionFromGroup(video, $event)"
             @manage="openVersionGroupDialogFor(video)"
@@ -561,7 +564,7 @@ import { versionGroupsMixin } from './video-list/versionGroupsMixin.js';
 import { videoEditEntryMixin } from './video-list/videoEditEntryMixin.js';
 import HDReplacePickerDialog from './video-workbench/HDReplacePickerDialog.vue';
 import { logFrontend } from '../utils/frontendLog.js';
-import { defaultRangeEngine, estimateVideoRowHeight, estimateVideoGridHeight } from '../utils/virtualList.js';
+import { defaultRangeEngine, estimateVideoRowHeight, estimateVideoGridHeight, estimateVideoWallHeight, normalizeLibraryLayout } from '../utils/virtualList.js';
 import BaseMenu from './ui/BaseMenu.vue';
 import BaseModal from './ui/BaseModal.vue';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
@@ -631,7 +634,7 @@ export default {
     return {
       videos: [],
       consolidationRefreshVersions: new Map(),
-      viewMode: window.localStorage?.getItem('cineinsight-library-layout') === 'grid' ? 'grid' : 'list',
+      viewMode: normalizeLibraryLayout(window.localStorage?.getItem('cineinsight-library-layout')),
       rowDensity: window.localStorage?.getItem('cineinsight-library-density') === 'comfortable' ? 'comfortable' : 'compact',
       searchKeyword: '',
       searchMode: 'file',
@@ -1857,6 +1860,8 @@ export default {
       });
     },
     estimateVideoHeight(video, widthBucket, subtitleMode, geometry) {
+      // 缩略图墙不展开版本组（见模板），格子高度只由列宽决定。
+      if (this.viewMode === 'wall') return estimateVideoWallHeight(geometry?.cardWidth);
       const versions = this.versionExtraHeight(video);
       if (this.viewMode === 'grid') return estimateVideoGridHeight(video, geometry?.cardWidth) + versions;
       const density = this.previewOpen && this.viewMode === 'list' ? 'narrow' : this.rowDensity;

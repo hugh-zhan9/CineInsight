@@ -48,4 +48,12 @@ describe('LibraryToolbar 版本聚合入口', () => {
     expect(wrapper.emitted('batch-version-group')).toHaveLength(1);
     wrapper.unmount();
   });
+
+  it('批量栏「对比播放」正好选 2 个时出现，点击向上转发', async () => {
+    const videos = [{ id: 1, name: 'a', size: 1, tags: [] }, { id: 2, name: 'b', size: 1, tags: [] }];
+    const wrapper = mount(LibraryToolbar, { props: props({ videos, selectedVideoIds: [2, 1] }) });
+    await wrapper.get('[data-test="batch-compare-play"]').trigger('click');
+    expect(wrapper.emitted('batch-compare')).toHaveLength(1);
+    wrapper.unmount();
+  });
 });

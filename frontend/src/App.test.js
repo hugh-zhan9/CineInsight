@@ -14,6 +14,7 @@ vi.mock('../wailsjs/go/main/App', () => api);
 import App from './App.vue';
 import { registerCommands, unregisterCommands } from './utils/commandRegistry.js';
 import { feedbackState, resetFeedback, resolveConfirm } from './utils/feedback.js';
+import { closeVersionCompare, openVersionCompare, versionCompareState } from './utils/versionCompare.js';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -843,4 +844,25 @@ it('回顾页首次进入才挂载；点标签回片库按该标签筛选，点�
   wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-entity', { type: 'person', id: 8, name: '甲' });
   await flushPromises();
   expect(wrapper.vm.currentPage).toBe('people');
+});
+
+it('版本对比播放器按全局状态挂载：openVersionCompare 打开，换一对是新会话，关闭事件收起', async () => {
+  closeVersionCompare();
+  const wrapper = await mountApp();
+  expect(wrapper.findComponent({ name: 'VersionCompareDialog' }).exists()).toBe(false);
+  openVersionCompare(3, 8);
+  await flushPromises();
+  const dialog = wrapper.findComponent({ name: 'VersionCompareDialog' });
+  expect(dialog.exists()).toBe(true);
+  expect(dialog.props()).toMatchObject({ leftVideoId: 3, rightVideoId: 8 });
+  const firstKey = dialog.vm.$.vnode.key;
+  openVersionCompare(8, 3);
+  await flushPromises();
+  const reopened = wrapper.findComponent({ name: 'VersionCompareDialog' });
+  expect(reopened.props()).toMatchObject({ leftVideoId: 8, rightVideoId: 3 });
+  expect(reopened.vm.$.vnode.key).not.toBe(firstKey);
+  reopened.vm.$emit('close');
+  await flushPromises();
+  expect(versionCompareState.open).toBe(false);
+  expect(wrapper.findComponent({ name: 'VersionCompareDialog' }).exists()).toBe(false);
 });

@@ -321,3 +321,53 @@ describe('以图搜片与相似画面', () => {
     expect(wrapper.get('[data-test="scenes-empty"]').text()).toContain('画面检索没有执行');
   });
 });
+
+// ===== 台词卡（2026-10-12）=====
+describe('台词卡入口', () => {
+  const DIALOGUE = { video_id: 7, title: '长片', start_ms: 7_080_000, end_ms: 7_083_500, source: 'dialogue', score: 1 / 61, text: '雨夜里的告白' };
+  // 外部描述的画面命中也带文字（画面描述），但那不是台词。
+  const VISUAL = { video_id: 7, title: '长片', start_ms: 30_000, end_ms: 35_000, source: 'visual', score: 1 / 62, text: '海边的日落' };
+  const EMPTY_DIALOGUE = { video_id: 9, title: '', start_ms: 1000, end_ms: 2000, source: 'dialogue', score: 1 / 63, text: '' };
+
+  function mountWithStubbedDialog() {
+    const stub = { name: 'QuoteCardDialog', props: ['videoID', 'atMS', 'quote', 'title'], emits: ['close'], template: '<div data-test="quote-card-stub"></div>' };
+    const wrapper = mount(ScenesPage, { global: { stubs: { QuoteCardDialog: stub } } });
+    wrappers.push(wrapper);
+    return wrapper;
+  }
+
+  it('只有带台词的对白命中有「台词卡」；点开带上这句台词、片名与字幕区间正中那一刻', async () => {
+    api.SearchScenes.mockResolvedValue({ hits: [DIALOGUE, VISUAL, EMPTY_DIALOGUE], notices: [], coverage: COVERAGE });
+    const wrapper = mountWithStubbedDialog();
+    await flushPromises();
+    await typeAndSearch(wrapper, '告白');
+    expect(wrapper.find('[data-test="scenes-quote-7-0"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="scenes-quote-7-1"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="scenes-quote-9-0"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="scenes-similar-7-1"]').exists()).toBe(true);
+    expect(wrapper.find('[data-test="quote-card-stub"]').exists()).toBe(false);
+
+    await wrapper.get('[data-test="scenes-quote-7-0"]').trigger('click');
+    const dialog = wrapper.getComponent({ name: 'QuoteCardDialog' });
+    expect(dialog.props()).toEqual({ videoID: 7, atMS: 7_081_750, quote: '雨夜里的告白', title: '长片' });
+    expect(wrapper.emitted('open-video-at')).toBeUndefined();
+
+    dialog.vm.$emit('close');
+    await wrapper.vm.$nextTick();
+    expect(wrapper.find('[data-test="quote-card-stub"]').exists()).toBe(false);
+  });
+
+  it('台词卡开着时粘贴图片不触发以图搜片', async () => {
+    api.SearchScenes.mockResolvedValue({ hits: [DIALOGUE], notices: [], coverage: COVERAGE });
+    const wrapper = mountWithStubbedDialog();
+    await flushPromises();
+    await typeAndSearch(wrapper, '告白');
+    await wrapper.get('[data-test="scenes-quote-7-0"]').trigger('click');
+    const paste = new Event('paste', { cancelable: true });
+    paste.clipboardData = { files: [new File([new Uint8Array(4)], 'shot.png', { type: 'image/png' })] };
+    window.dispatchEvent(paste);
+    await flushPromises();
+    expect(paste.defaultPrevented).toBe(false);
+    expect(api.SearchScenesByImage).not.toHaveBeenCalled();
+  });
+});

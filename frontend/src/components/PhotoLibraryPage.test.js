@@ -11,7 +11,7 @@ vi.mock('../utils/feedback.js', async (importOriginal) => ({
   ...(await importOriginal()),
   ...feedback
 }));
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => Object.fromEntries([
   'SearchImagePage', 'GetImageDetail', 'SetImageFavorite', 'SetImageRating',
@@ -39,7 +39,7 @@ function okDeleteResult(ids, batchID = 'batch-1') {
 
 vi.mock('../../wailsjs/go/main/App', () => api);
 
-import PhotoLibraryPage from './PhotoLibraryPage.vue';
+import PhotoLibraryPage, { PHOTO_DISPLAY_MODES, normalizePhotoDisplayMode } from './PhotoLibraryPage.vue';
 import { photoCleanupStore, resetPhotoCleanupReview, stopPhotoCleanupPolling } from '../utils/photoCleanupStore.js';
 import { commandList } from '../utils/commandRegistry.js';
 
@@ -2235,5 +2235,176 @@ describe('PhotoLibraryPage locateImage (回顾页跳转)', () => {
     expect(await wrapper.vm.locateImage({ id: 9, name: 'gone.jpg' })).toBe(false);
     expect(feedback.notify).toHaveBeenCalled();
     wrapper.unmount();
+  });
+});
+
+// 2026-10-12 用户裁决「不要颜色，只要一个紧凑的缩略图墙」：同一份图片流结果换成只有缩略图的小格子。
+describe('PhotoLibraryPage 缩略图墙', () => {
+  let store;
+  let original;
+  beforeEach(() => {
+    store = {};
+    original = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: { getItem: key => store[key] ?? null, setItem: (key, value) => { store[key] = String(value); }, removeItem: key => { delete store[key]; } }
+    });
+  });
+  afterEach(() => {
+    if (original) Object.defineProperty(window, 'localStorage', original);
+    else delete window.localStorage;
+  });
+
+  it('展示模式只认三种值，其余回到图片流', () => {
+    expect(PHOTO_DISPLAY_MODES).toEqual(['stream', 'wall', 'folders']);
+    for (const mode of PHOTO_DISPLAY_MODES) expect(normalizePhotoDisplayMode(mode)).toBe(mode);
+    for (const value of [null, undefined, '', 'Wall', 'grid', 'toString']) expect(normalizePhotoDisplayMode(value)).toBe('stream');
+  });
+
+  it.each([
+    ['wall', 'wall'],
+    ['folders', 'folders'],
+    [null, 'stream'],
+    ['mosaic', 'stream']
+  ])('记住的展示模式为 %s 时以 %s 打开', async (stored, expected) => {
+    if (stored !== null) store['cineinsight-photo-display-mode'] = stored;
+    const wrapper = await mountPage();
+    expect(wrapper.vm.displayMode).toBe(expected);
+    expect(wrapper.get(`[data-test="photo-display-${expected}"]`).classes()).toContain('active');
+    wrapper.unmount();
+  });
+
+  it('切到缩略图墙不重新查询：格子只剩缩略图与勾选框，点图仍打开同一张；切回图片流信息条回来', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2), makeImage(3)]));
+    const wrapper = await mountPage();
+    expect(wrapper.findAll('.photo-card__meta')).toHaveLength(3);
+
+    await wrapper.get('[data-test="photo-display-wall"]').trigger('click');
+    await flushPromises();
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+    expect(store['cineinsight-photo-display-mode']).toBe('wall');
+    expect(wrapper.get('[data-test="photo-display-wall"]').classes()).toContain('active');
+    expect(wrapper.get('[data-test="photo-grid"]').classes()).toContain('photo-grid--wall');
+    expect(wrapper.findAll('.photo-card')).toHaveLength(3);
+    expect(wrapper.find('.photo-card__meta').exists()).toBe(false);
+    expect(wrapper.find('.photo-card__overlay').exists()).toBe(false);
+    expect(wrapper.find('[data-test="photo-card-delete"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="photo-select-2"]').exists()).toBe(true);
+    expect(wrapper.findAll('.photo-card__media')[1].attributes('title')).toBe('photo-2.jpg');
+
+    await wrapper.findAll('.photo-card__media')[1].trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.viewerIndex).toBe(1);
+    expect(api.GetImageDetail).toHaveBeenCalledWith(2);
+    wrapper.vm.closeViewer();
+
+    await wrapper.get('[data-test="photo-display-stream"]').trigger('click');
+    await flushPromises();
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+    expect(store['cineinsight-photo-display-mode']).toBe('stream');
+    expect(wrapper.findAll('.photo-card__meta')).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  it('已有选择时点格子切换选择，与图片流同一规则', async () => {
+    store['cineinsight-photo-display-mode'] = 'wall';
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-select-1"]').setValue(true);
+    await wrapper.findAll('.photo-card__media')[1].trigger('click');
+    expect(wrapper.vm.selectedImageIDs).toEqual([1, 2]);
+    expect(wrapper.vm.viewerIndex).toBe(-1);
+    wrapper.unmount();
+  });
+
+  it('时间线分组在缩略图墙里照样插年月分组头', async () => {
+    store['cineinsight-photo-display-mode'] = 'wall';
+    const images = [
+      makeImage(1, { taken_at: '2026-08-21T10:00:00' }),
+      makeImage(2, { taken_at: '2026-08-03T10:00:00' }),
+      makeImage(3, { taken_at: '2026-07-09T10:00:00' })
+    ];
+    api.SearchImagePage.mockResolvedValue(makePage(images));
+    api.ListImageTimelineBuckets.mockResolvedValue([{ year: 2026, month: 8, count: 2 }, { year: 2026, month: 7, count: 1 }]);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-timeline-toggle"]').setValue(true);
+    await flushPromises();
+    expect(wrapper.findAll('[data-test="photo-timeline-header"]').map(header => header.text())).toEqual(['2026 年 8 月 · 2 张', '2026 年 7 月 · 1 张']);
+    expect(wrapper.findAll('.photo-card')).toHaveLength(3);
+    expect(wrapper.find('.photo-card__meta').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('文件夹视图不受影响：从缩略图墙切过去照常按文件夹重新加载，文件夹内仍是带信息条的卡片', async () => {
+    store['cineinsight-photo-display-mode'] = 'wall';
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1), makeImage(2)]));
+    api.ListImageFolderGroups.mockResolvedValue([{ directory: '/photos', name: 'photos', count: 2, covers: [] }]);
+    const wrapper = await mountPage();
+    await wrapper.get('[data-test="photo-display-folders"]').trigger('click');
+    await flushPromises();
+    expect(store['cineinsight-photo-display-mode']).toBe('folders');
+    expect(api.ListImageFolderGroups).toHaveBeenCalledTimes(1);
+    await wrapper.findAll('.photo-folder-card__open')[0].trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="photo-grid"]').classes()).not.toContain('photo-grid--wall');
+    expect(wrapper.findAll('.photo-card__meta')).toHaveLength(2);
+
+    // 文件夹内点缩略图墙：离开文件夹、回到不限目录的图片流结果。
+    await wrapper.get('[data-test="photo-display-wall"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.activeFolder).toBeNull();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.directory).toBe('');
+    expect(wrapper.find('.photo-card__meta').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('回顾页跳转定位一张图时留在缩略图墙', async () => {
+    store['cineinsight-photo-display-mode'] = 'wall';
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(7)]));
+    expect(await wrapper.vm.locateImage({ id: 7, name: 'photo-7.jpg' })).toBe(true);
+    expect(wrapper.vm.displayMode).toBe('wall');
+    wrapper.unmount();
+  });
+
+  it('虚拟化几何：1200px 排 9 列、130px 方格、4px 间隙，万张图只渲染视口附近', async () => {
+    store['cineinsight-photo-display-mode'] = 'wall';
+    api.SearchImagePage.mockResolvedValue(makePage(Array.from({ length: 10000 }, (_, index) => makeImage(index + 1)), null));
+    const { wrapper, scrollTo, cleanup } = await mountInScrollOwner();
+    expect(wrapper.vm.columns).toBe(9);
+    expect(wrapper.vm.mediaHeight).toBe(130);
+    expect(wrapper.vm.layout.rows[0].height).toBe(130);
+    expect(wrapper.vm.layout.rows[0].outerHeight).toBe(134);
+    expect(wrapper.vm.layout.rows).toHaveLength(Math.ceil(10000 / 9));
+    const style = wrapper.get('[data-test="photo-grid"]').attributes('style');
+    expect(style).toContain('--photo-grid-gap: 4px');
+    expect(style).toContain('--photo-card-meta: 0px');
+    expect(style).toContain('--photo-cell-media: 130px');
+    expect(wrapper.findAll('.photo-card').length).toBeLessThan(150);
+    await scrollTo(Math.floor(wrapper.vm.layout.totalHeight / 2));
+    expect(wrapper.findAll('.photo-card').length).toBeLessThan(150);
+    expect(wrapper.vm.windowState.topSpacer).toBeGreaterThan(0);
+    cleanup();
+  });
+
+  it('滚到中间再切换：不重新查询，切换前视口顶部那张照片所在的行回到视口顶', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage(Array.from({ length: 600 }, (_, index) => makeImage(index + 1)), null));
+    const { wrapper, host, scrollTo, cleanup } = await mountInScrollOwner();
+    expect(wrapper.vm.columns).toBe(6);
+    await scrollTo(Math.floor(wrapper.vm.layout.totalHeight / 2));
+    const anchorIndex = wrapper.vm.layout.rows[wrapper.vm.windowState.startRow].startIndex;
+    expect(anchorIndex).toBeGreaterThan(0);
+
+    await wrapper.get('[data-test="photo-display-wall"]').trigger('click');
+    await wrapper.vm.$nextTick();
+    await wrapper.vm.$nextTick();
+
+    expect(api.SearchImagePage).toHaveBeenCalledTimes(1);
+    expect(wrapper.vm.columns).toBe(9);
+    const anchorRow = wrapper.vm.layout.rows.find(row => row.startIndex <= anchorIndex && anchorIndex < row.endIndex);
+    expect(host.scrollTop).toBe(anchorRow.top);
+    expect(wrapper.vm.windowState.startRow).toBe(Math.max(0, wrapper.vm.layout.rows.indexOf(anchorRow) - 3));
+    cleanup();
   });
 });

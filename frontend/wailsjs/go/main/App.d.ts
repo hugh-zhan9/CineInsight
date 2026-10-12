@@ -685,6 +685,8 @@ export function RunGatedTaskNow(arg1:string):Promise<void>;
 
 export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<models.SavedLibraryView>;
 
+export function SaveQuoteCard(arg1:string,arg2:string):Promise<string>;
+
 export function SaveSubtitleEditDocument(arg1:services.SubtitleSaveRequest):Promise<services.SubtitleSaveResult>;
 
 export function SaveVideoBookmark(arg1:services.BookmarkInput):Promise<services.BookmarkDTO>;

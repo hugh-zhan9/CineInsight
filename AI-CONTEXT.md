@@ -183,6 +183,8 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **范围:** 首页主列表与字幕搜索结果均复用虚拟列表壳；字幕模式使用独立高度缓存维度。
 - **视觉布局:** 首页列表/响应式网格均启用窗口，持久化布局偏好；内部grid按200px最小宽度/12px间隔保留列数，外部上下占位不参与网格，末行卡片不拉伸。Mac WebKit守卫在真实WKWebView夹具验证后移除。`bash scripts/test_virtual_window_webkit.sh` 使用实际组件与合成数据覆盖2万视频、2万媒体/单媒体10万候选、首尾/宽度/密度/标签/追加/删除/切页；不连接用户库、不启动Wails服务，仍不代表完整应用的人工交互验收。
 
+- **缩略图墙（2026-10-12，用户裁决「不要颜色，只要紧凑的缩略图墙」，取代撤回的色彩墙）:** 片库布局在「列表 / 网格」外加「缩略图墙」（`cineinsight-library-layout` 新值，未知值回到列表）：每格只有 16:9 缩略图（列宽 140、间距 6，列数与网格共用 `utils/virtualList.js` 的列式几何），标题与失效原因在悬停提示与读屏名里，点格子与网格卡「预览」同一事件，选中、键盘焦点、右键菜单沿用网格；虚拟化照常开启，有独立行高预估；不显示版本组展开列表。图片库显示方式加「缩略图墙」（`cineinsight-photo-display-mode` 新值）：方形格最小 120、间距 4，不显示文件名等信息与悬停收藏/删除，时间线年月分组照常；在图片流与缩略图墙之间切换不重查、保持视口顶部那张图的位置；文件夹视图不变。WebKit 虚拟窗口夹具已覆盖缩略图墙（等待上限 55→90 s）。
+
 ### 2.10.1 今晚看什么（2026-10-10，2026-10-11 与随机播放合并）
 - 入口在随机拆分按钮的 ▾ 菜单与命令面板（原独立按钮已移除），继承打开时的完整LibraryFilter；语义搜索、迁移、增量扫描期间不可打开。弹窗编辑的就是随机播放共用的随机条件（整片时长、探索/不限/重温、仅收藏），条件一变即重抽（分钟数300ms合并）并回写片库页；非法分钟数报错且不回写。「换一批」再排除当前这一批，抽不出新的则保留当前批并提示；「随机播放一部」关闭弹窗走工具栏主键的随机播放（结果条、换一个、延迟记账）。
 - `VideoService.SuggestTonight(ctx, RandomPlayRequest, limit)`在维护闸门内用随机播放的同一套候选与均衡加权不放回抽取（与`PickRandomVideos`共用`sampleRandomVideosFrom`），排除最近12次随机结果；纯读，不写计数/事件。理由只引用真实字段（预算/未知时长、收藏、观看状态、已有评分、播放次数）。播放候选仍是普通PlayVideo(ID)。前端代次隔离旧输入响应，错误与零命中分开。
@@ -205,6 +207,8 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - 人工确认的版本组：`video_version_groups`（Revision CAS）、`video_version_members`（`video_id`主键→一个视频至多一组，组与视频均级联；label≤40、position>0，第1位为主版本）、`video_version_suggestion_dismissals`。每组2–20个活跃视频；成员数不足2的组在任何写操作中顺带清理，展示时按普通卡片处理。已看/进度/评分/收藏/标签/字幕/播放计数全部按文件独立，分组只汇总，任何组操作都不写成员字段。
 - 片库：`LibraryFilter.collapse_versions`只被`SearchLibraryVideoPage`（均衡/评分排序）与`CountLibraryVideos`读取，在原过滤上加`ROW_NUMBER() OVER (PARTITION BY COALESCE(vm.group_id, 0 - videos.id) ORDER BY COALESCE(vm.position,0), videos.id)`代表条件——每组取符合筛选的首位成员，原排序/游标不变，计数按卡片；页结果`version_groups`只为本页代表一次批量读出。随机、今晚看什么、语义、最近播放、继续观看、字幕命中、按筛选批量操作与保存视图一律忽略该字段。工具栏“合并版本”开关默认开（localStorage `library-collapse-versions`）。
 - 建议只来自`detected`同源配对：双方活跃非失效、未入组、时长比≥90%（排除截取片段）、未忽略，并查集成组≤20。错误码`version_group_conflict`、`version_member_conflict: … {"video_ids":[..],"group_ids":[..]}`、`version_group_invalid`、`version_group_not_found`。入口：行徽标展开各版本（播放/预览/设为主版本/移出）、行菜单“管理版本组…”、批量“合并为版本组”、管理菜单“版本组”面板。合同见[版本分组合同](docs/loopx/design/2026-10-10-media-workbench/版本分组合同.md)。
+
+- **版本对比播放器（2026-10-12）:** `VersionCompareDialog.vue`（App.vue 常驻一份）+ `utils/versionCompare.js`（`versionCompareState` / `openVersionCompare(左ID, 右ID)` / `closeVersionCompare()`，两个 ID 相同或非法时不打开）。播放源与详情抽屉的内嵌播放器同一条路（每侧 `GetPreviewSession`，有播放代理时走代理并注明「画面不代表原片画质」）。「并排」与「滑动对比」（左侧叠上层按分界线裁切，可拖动或方向键）切换不重新加载；一条进度条同时控制两侧，左主右从，每 300 ms 偏差超过 0.15 s 拖回右侧，任一侧跳转或缓冲时不纠偏、一侧缓冲先停另一侧；右侧偏移 ±0.1 / ±1 s（上限 ±600 s）立即对齐；同一时间只有一侧出声，出声侧放不了时改由能播的一侧出声；Esc 只关播放器，关闭或卸载时两侧暂停并清空 `src`。入口：片库卡片展开的版本列表非主版本「对比画质」（主版本在左）、批量栏正好选中两部时「对比播放」（先选的在左）、下载查重提示的其他版本「对比播放」（片库那份在左）。
 
 ### 2.11 片库智能视图与统一清理
 - **内置视图:** 全部、继续观看、收藏、点赞、最近播放、未看、已看、最近添加、未打标签、无字幕、本地资料有更新（2026-09-29/30 新增，D-PC39）和路径失效。「未打标签」只看非自动标签（带 `automatic_kind` 的自动标签不算已打标签，D-PC33）；「无字幕」与 Jellyfin `HasSubtitles` 共用 `hasAnySubtitleSQL`：有同名 `.srt` 的索引片段、或同目录有 `名称.*.{srt,ass,ssa,vtt}` 旁挂字幕（`subtitle_index_states.has_sidecar`，只在全库同步时写入）、或有内嵌字幕流，都算有字幕（D-PC17，MEDIA-08）。
@@ -451,6 +455,8 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **查询与入口:** `SearchScenes({query, mode: all|dialogue|visual, filter, limit≤200})`，`all`用倒数排名融合（k=60）并保留来源；返回`hits/coverage/notices`。顶栏工具组“场景检索”页、片库工具栏“在当前筛选中搜场景”、设置页“场景检索”分区；命中缩略图走`/preview/frame/{id}?ms=&w=`（`ThumbnailService.RenderFrameAt`，精确定位单帧JPEG、内存LRU 64帧、10秒期限、按源size/mtime失效，视频工作台共用），点击打开详情抽屉并定位到起点前2秒。合同见[场景检索合同](docs/loopx/design/2026-10-10-media-workbench/场景检索合同.md)。
 
 - **以图搜片（2026-10-12）:** `SearchScenesByImage({image_base64 | video_id+at_ms, filter, limit})`（`services/scene_image_search.go`，App 同名）。查询图二选一：上传的图（JPEG/PNG/WebP/GIF/BMP，解码后≤20 MB，可带 `data:` 前缀，`http.DetectContentType` 判型，否则 `scene_image_invalid`），或某部片某一刻的画面（App 把 `ThumbnailService.RenderFrameAt` 480px 接成取帧函数，与命中缩略图同一实现与缓存）。图片写进临时文件交给同一 Chinese-CLIP worker 的 `EmbedImages`，用完即删、不写日志；之后与文字画面检索共用范围、有效段与 top-K 打分（`scanSceneVisualSegments`）和相邻段合并，结果来源都是 visual。用视频画面找相似时排除来源片子里该时刻前后 10 秒的段（多取 16 个候选再截到 limit），同一部片别处的相似镜头保留。外部描述（无向量）返回提示 `scene_image_search_unsupported` 不执行；运行时未就绪、没有画面索引、推理出错与文字检索同样只给提示。入口：场景检索页「以图搜片」选文件、把图拖进本页、本页可见且有图片时接管粘贴；每条命中旁「相似画面」；详情抽屉「找相似画面」取当前播放位置，经片库页 `find-similar-scenes` → App `openSimilarScenes` 带 `scopeRequest.similar` 进场景检索页直接检索。
+
+- **台词卡（2026-10-12）:** `QuoteCardDialog.vue` + `utils/quoteCard.js`：取 `/preview/frame/{id}?ms=&w=960` 单帧，在 canvas 上合成「字幕条」或「海报」两种版式（长边放大到 1920，台词最多 120 字，字幕条 4 行、海报 6 行，超出以「…」截断；中文逐字、英文按词折行，行首不放逗号句号），画面读取失败时只报错并禁用导出。「复制图片」走 `ClipboardItem`（交给它生成 PNG 的 Promise，保证在点击里同步发起），失败显示原因、不悄悄改走保存；「保存为 PNG」调 `SaveQuoteCard(pngBase64, suggestedName)`（`app_quote_card.go`：先校验再弹原生保存框，≤30 MB 且 PNG 头有效，同目录临时文件再改名，取消返回空串，日志不记台词与路径）。入口：场景检索页对白命中「台词卡」（取字幕区间正中那一刻）、详情抽屉「台词卡」（当前播放位置 + `GetSubtitleSegments` 找当前字幕，没有则台词留空）。
 
 ### 2.33 视频工作台：合并、去片头与高清替换（2026-10-10）
 - **所有权:** `VideoEditService`（`services/video_edit_*.go`）拥有配方、冻结计划、执行日志与工作目录；纯计算的片头识别/分段对齐在`services/editalign`（不访问数据库）。表`video_edit_projects`（kind/status/revision/mode/recipe_json/analysis_json/acknowledged_json）与`video_edit_items`（每个导出项一行：冻结`plan_json`、phase、progress、`publish_target`/`staged_size`/`work_dir`、`output_video_id`逻辑引用无外键）。配方只在draft可改，`expected_revision` CAS，冲突返回`edit_project_conflict`。

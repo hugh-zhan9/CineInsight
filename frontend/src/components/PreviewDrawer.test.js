@@ -63,7 +63,9 @@ const api = vi.hoisted(() => ({
   SetVideoFavorite: vi.fn(),
   SetVideoLiked: vi.fn(),
   SetVideoWatched: vi.fn(),
-  RecordViewEvent: vi.fn()
+  RecordViewEvent: vi.fn(),
+  // 台词卡：读同名 .srt 找当前时刻的字幕条目。
+  GetSubtitleSegments: vi.fn()
 }));
 
 vi.mock('../../wailsjs/go/main/App', () => api);
@@ -181,6 +183,63 @@ describe('PreviewDrawer', () => {
 	vi.spyOn(wrapper.vm, 'bookmarkCurrentPosition').mockReturnValue(83.4567);
 	await wrapper.get('[data-test="drawer-find-similar-scenes"]').trigger('click');
 	expect(wrapper.emitted('find-similar-scenes')?.[0]?.[0]).toEqual({ videoID: 1, atMS: 83457, title: expect.any(String) });
+  });
+
+  describe('台词卡', () => {
+    const quoteStub = { name: 'QuoteCardDialog', props: ['videoID', 'atMS', 'quote', 'title'], emits: ['close'], template: '<div data-test="quote-card-stub"></div>' };
+    async function mountWithStub() {
+      const details = videoDetails(1);
+      details.video.display_title = '长片';
+      api.GetVideoDetails.mockResolvedValue(details);
+      api.GetPreviewSession.mockResolvedValue({ video_id: 1, mode: 'unavailable', reason_message: '不可预览' });
+      api.ListCollections.mockResolvedValue([]);
+      const wrapper = mount(PreviewDrawer, { props: { video: details.video, session: null }, global: { stubs: { QuoteCardDialog: quoteStub } } });
+      await flushPromises();
+      vi.spyOn(wrapper.vm, 'bookmarkCurrentPosition').mockReturnValue(83.4567);
+      return wrapper;
+    }
+
+    it('取当前播放位置与这一刻正在显示的字幕，打开台词卡', async () => {
+      api.GetSubtitleSegments.mockResolvedValue([
+        { start_time_ms: 80_000, end_time_ms: 83_000, text: '上一句' },
+        { start_time_ms: 83_000, end_time_ms: 85_000, text: '<i>我们走吧</i>' }
+      ]);
+      const wrapper = await mountWithStub();
+      await wrapper.get('[data-test="drawer-quote-card"]').trigger('click');
+      await flushPromises();
+      expect(api.GetSubtitleSegments).toHaveBeenCalledWith(1);
+      expect(wrapper.getComponent({ name: 'QuoteCardDialog' }).props()).toEqual({ videoID: 1, atMS: 83457, quote: '我们走吧', title: '长片' });
+      wrapper.getComponent({ name: 'QuoteCardDialog' }).vm.$emit('close');
+      await wrapper.vm.$nextTick();
+      expect(wrapper.find('[data-test="quote-card-stub"]').exists()).toBe(false);
+    });
+
+    it('没有字幕文件或这一刻没有字幕：照样打开，台词留空', async () => {
+      api.GetSubtitleSegments.mockRejectedValueOnce(new Error('open /Movies/a.srt: no such file or directory'));
+      const wrapper = await mountWithStub();
+      await wrapper.get('[data-test="drawer-quote-card"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.getComponent({ name: 'QuoteCardDialog' }).props()).toEqual({ videoID: 1, atMS: 83457, quote: '', title: '长片' });
+      wrapper.getComponent({ name: 'QuoteCardDialog' }).vm.$emit('close');
+      await wrapper.vm.$nextTick();
+
+      api.GetSubtitleSegments.mockResolvedValueOnce([{ start_time_ms: 1000, end_time_ms: 2000, text: '很早的一句' }]);
+      await wrapper.get('[data-test="drawer-quote-card"]').trigger('click');
+      await flushPromises();
+      expect(wrapper.getComponent({ name: 'QuoteCardDialog' }).props('quote')).toBe('');
+    });
+
+    it('读字幕期间换了条目就不再打开', async () => {
+      const pending = deferred();
+      api.GetSubtitleSegments.mockReturnValueOnce(pending.promise);
+      const wrapper = await mountWithStub();
+      await wrapper.get('[data-test="drawer-quote-card"]').trigger('click');
+      expect(wrapper.get('[data-test="drawer-quote-card"]').attributes('disabled')).toBeDefined();
+      wrapper.vm.details = videoDetails(2);
+      pending.resolve([{ start_time_ms: 83_000, end_time_ms: 85_000, text: '我们走吧' }]);
+      await flushPromises();
+      expect(wrapper.findComponent({ name: 'QuoteCardDialog' }).exists()).toBe(false);
+    });
   });
 
   it('renders an inline preview inside the dedicated non-collapsing player section', async () => {

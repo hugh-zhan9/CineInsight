@@ -92,6 +92,7 @@ import {
 import DownloadRow from './downloads/DownloadRow.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { confirmAction } from '../utils/feedback.js';
+import { openVersionCompare } from '../utils/versionCompare.js';
 
 // 后端从不发出 remuxing（MEDIA-15），状态集合以 browser_download_service.go 为准。
 const ACTIVE_STATES = ['running', 'importing'];
@@ -238,6 +239,8 @@ export default {
     async runDuplicateAction({ action, task, match }) {
       if (!task?.id || !match?.video_id || this.busyIds.includes(task.id)) return;
       if (action === 'trash') return this.trashDownload(task, match);
+      // 对比播放：片库里那一份在左、这次下载在右（全局对比播放器，见 utils/versionCompare.js）。
+      if (action === 'compare') return openVersionCompare(match.video_id, task.video_id);
       this.busyIds = [...this.busyIds, task.id];
       this.setNotice(task.id, null);
       try {

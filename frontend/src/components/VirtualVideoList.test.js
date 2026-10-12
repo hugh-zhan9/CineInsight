@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import VirtualVideoList from './VirtualVideoList.vue';
 import { reactive } from 'vue';
 
@@ -182,5 +182,30 @@ describe('window lifecycle', () => {
     await flushPromises();
     list.wrapper.vm.restoreScrollAnchor(old);
     expect(list.host.scrollTop).toBe(0);
+  });
+});
+
+// 缩略图墙（2026-10-12 用户裁决「只要一个紧凑的缩略图墙」）走网格同一条列式路径，只是几何不同。
+describe('缩略图墙布局', () => {
+  it('800px 宽排 5 列，行高预估拿到格子宽度，行高索引用 6px 行距；切回网格仍是 3 列、12px', async () => {
+    const list = await mountInScrollOwner({ items: rows(range(1, 40)), virtualizationEnabled: true });
+    const estimate = vi.fn(() => 90);
+    await list.wrapper.setProps({ layoutMode: 'wall', estimateHeight: estimate });
+    await flushPromises();
+
+    expect(list.wrapper.classes()).toContain('virtual-video-list--wall');
+    expect(list.wrapper.vm.columns).toBe(5);
+    expect(list.wrapper.vm.layoutIndex.columns).toBe(5);
+    expect(list.wrapper.vm.layoutIndex.gap).toBe(6);
+    expect(list.wrapper.get('.virtual-video-list__items').attributes('style')).toContain('grid-template-columns: repeat(5, minmax(0, 1fr))');
+    expect(estimate).toHaveBeenCalledWith(expect.objectContaining({ id: 1 }), 10, false, { columns: 5, cardWidth: (800 - 4 * 6) / 5 });
+    // 窗口按行（5 个一行）切片：渲染条数是列数的整数倍或到列表末尾。
+    const rendered = list.wrapper.findAll('[data-virtual-row-id]').length;
+    expect(rendered === 40 || rendered % 5 === 0).toBe(true);
+
+    await list.wrapper.setProps({ layoutMode: 'grid' });
+    await flushPromises();
+    expect(list.wrapper.vm.columns).toBe(3);
+    expect(list.wrapper.vm.layoutIndex.gap).toBe(12);
   });
 });

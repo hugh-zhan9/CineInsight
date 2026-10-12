@@ -55,6 +55,14 @@
             type="button"
             class="btn-secondary btn-compact"
             :disabled="busy"
+            data-test="download-dup-compare"
+            @click="$emit('duplicate-action', { action: 'compare', task, match })"
+          >对比播放</button>
+          <button
+            v-if="match.kind === 'version' && task.video_id"
+            type="button"
+            class="btn-secondary btn-compact"
+            :disabled="busy"
             data-test="download-dup-version-group"
             @click="$emit('duplicate-action', { action: 'version-group', task, match })"
           >建立版本组</button>

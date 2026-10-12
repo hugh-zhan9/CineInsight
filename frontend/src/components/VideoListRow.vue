@@ -17,7 +17,23 @@
       />
     </label>
 
-    <div class="video-thumbnail" :class="{ 'video-thumbnail--failed': thumbnailFailed }">
+    <!-- 缩略图墙（2026-10-12 用户裁决「只要一个紧凑的缩略图墙」）：整块缩略图就是网格卡上的「预览」，
+         标题只进悬停提示和读屏名，其余动作走右键菜单；失效只留一个角标。 -->
+    <button
+      v-if="layoutMode === 'wall'"
+      type="button"
+      class="video-thumbnail video-wall-tile"
+      :class="{ 'video-thumbnail--failed': thumbnailFailed }"
+      :title="wallLabel"
+      :aria-label="wallLabel"
+      data-test="library-wall-tile"
+      @click="$emit('preview', video)"
+    >
+      <img v-if="!thumbnailFailed" :src="thumbnailURL" alt="" loading="lazy" @error="thumbnailFailed = true" />
+      <span v-else aria-hidden="true">▶</span>
+      <span v-if="video.is_stale" class="video-badge video-badge--danger video-wall-tile__stale" aria-hidden="true" data-test="wall-stale-reason">失效</span>
+    </button>
+    <div v-else class="video-thumbnail" :class="{ 'video-thumbnail--failed': thumbnailFailed }">
       <img
         v-if="!thumbnailFailed"
         :src="thumbnailURL"
@@ -35,7 +51,7 @@
       </span>
     </div>
 
-    <div class="video-info">
+    <div v-if="layoutMode !== 'wall'" class="video-info">
       <div class="video-title-row">
         <h3 :title="video.display_title || video.name">{{ video.display_title || video.name }}</h3>
         <span v-if="video.is_watched" class="video-badge video-badge--accent">已看</span>
@@ -106,7 +122,7 @@
     <!-- 常驻四个高频动作，其余七个进 ⋯。不做"悬停才出现"：
          鼠标扫过时整列按钮闪烁反而更难扫读。
          多选态下整排隐去（不留占位文案，批量操作条已经说明了当前处境）。 -->
-    <div v-if="!actionsSuspended" class="video-actions">
+    <div v-if="!actionsSuspended && layoutMode !== 'wall'" class="video-actions">
       <button v-if="!narrow" type="button" class="row-btn" @click="$emit('preview', video)">预览</button>
       <button type="button" class="row-btn row-btn--primary" @click="$emit('play', video.id)">播放</button>
       <button
@@ -232,6 +248,11 @@ export default {
     },
     staleReasonHint() {
       return STALE_REASON_HINTS[String(this.video.stale_reason || '') || 'unknown'] || STALE_REASON_HINTS.unknown;
+    },
+    // 缩略图墙不显示文字：标题和失效原因都只进悬停提示与读屏名。
+    wallLabel() {
+      const title = this.video.display_title || this.video.name;
+      return this.video.is_stale ? `${title}（路径失效 · ${this.staleReasonText}）` : title;
     }
   },
   watch: {

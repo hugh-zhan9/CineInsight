@@ -38,6 +38,13 @@
           >图片流</button>
           <button
             type="button"
+            :class="['photo-view-mode__btn', { active: displayMode === 'wall' }]"
+            title="同一份图片流，只显示缩略图的紧凑平铺；点图查看、勾选照旧"
+            data-test="photo-display-wall"
+            @click="setDisplayMode('wall')"
+          >缩略图墙</button>
+          <button
+            type="button"
             :class="['photo-view-mode__btn', { active: displayMode === 'folders' }]"
             :disabled="searchMode === 'semantic'"
             :title="searchMode === 'semantic' ? '语义搜索结果按相关度展示，暂不按文件夹汇总' : '每个直属文件夹作为一个独立图集，不递归包含子文件夹'"
@@ -341,7 +348,7 @@
     <section
       v-else-if="images.length"
       ref="gridShell"
-      class="photo-grid"
+      :class="['photo-grid', { 'photo-grid--wall': wallMode }]"
       :style="gridStyle"
       :data-scroll-owner-fallback="virtualized ? null : 'true'"
       data-test="photo-grid"
@@ -385,7 +392,8 @@
                 <em class="photo-format-badge">{{ formatBadge(image) }}</em>
               </span>
             </button>
-            <div class="photo-card__overlay">
+            <!-- 缩略图墙不叠任何按钮和文字：收藏、删除在查看器里，批量操作靠勾选。 -->
+            <div v-if="!wallMode" class="photo-card__overlay">
               <button
                 type="button"
                 :class="['photo-card__action', { 'photo-card__action--active': image.is_favorite }]"
@@ -402,7 +410,7 @@
                 @click.stop="requestDelete(image)"
               >×</button>
             </div>
-            <div class="photo-card__meta">
+            <div v-if="!wallMode" class="photo-card__meta">
               <span :title="image.name">{{ image.name }}</span>
               <small>
                 {{ formatBytes(image.size) }}<template v-if="image.personal_rating != null"> · {{ image.personal_rating }} 分</template><template v-if="scoreLabel(image)"> · 相关度 {{ scoreLabel(image) }}</template>
@@ -756,7 +764,7 @@ import { confirmAction, notify } from '../utils/feedback.js';
 import {
   PHOTO_GROUP_MONTH, PHOTO_GROUP_NONE, PHOTO_ROW_HEADER,
   buildPhotoLayout, calculatePhotoAnchorScrollTop, calculatePhotoWindow,
-  firstVisiblePhotoItemIndex, formatPhotoTimelineLabel, photoTimelineKey, resolvePhotoColumns
+  firstVisiblePhotoItemIndex, formatPhotoTimelineLabel, photoTimelineKey, resolvePhotoCellSize, resolvePhotoColumns
 } from '../utils/photoGrid.js';
 // 只读复用视频列表的滚动宿主解析（.main-view），不修改 virtualList.js。
 import { resolveScrollOwnerDescriptor } from '../utils/virtualList.js';
@@ -772,6 +780,15 @@ const CARD_META_HEIGHT = 86;
 // glass-surface 给卡片加了 1px 边框，卡片是 border-box：上下各 1px 要算进行高，
 // 缩略图的正方形边长也要相应减去，否则内容比卡片内容盒高 2px 被裁掉。
 const CARD_BORDER = 2;
+const STREAM_CELL = { minColumnWidth: MIN_COLUMN_WIDTH, gap: GRID_GAP, meta: CARD_META_HEIGHT, border: CARD_BORDER };
+// 缩略图墙（2026-10-12 用户裁决「不要颜色，只要一个紧凑的缩略图墙」）：同一份图片流结果，
+// 格子只剩方形缩略图——更小的列宽、更窄的间隙，没有信息条和边框。
+const WALL_CELL = { minColumnWidth: 120, gap: 4, meta: 0, border: 0 };
+// 展示模式存在 localStorage「cineinsight-photo-display-mode」；读到未知值回到图片流。
+export const PHOTO_DISPLAY_MODES = ['stream', 'wall', 'folders'];
+export function normalizePhotoDisplayMode(value) {
+  return PHOTO_DISPLAY_MODES.includes(value) ? value : 'stream';
+}
 const TIMELINE_HEADER_HEIGHT = 40;
 const OVERSCAN_ROWS = 3;
 // 文件夹卡片网格：最小列宽与 .photo-folder-grid 的 minmax(220px, 1fr) 一致；卡片等高（封面定比例 +
@@ -805,7 +822,7 @@ export default {
       loadedOnce: false,
       error: '',
       searchMode: 'name',
-      displayMode: window.localStorage?.getItem?.('cineinsight-photo-display-mode') === 'folders' ? 'folders' : 'stream',
+      displayMode: normalizePhotoDisplayMode(window.localStorage?.getItem?.('cineinsight-photo-display-mode')),
       semanticStatus: null,
       semanticNoticeOverride: '',
       semanticOffset: 0,
@@ -923,6 +940,9 @@ export default {
     hasMore() { return !this.folderModeRoot && !this.exhausted && this.loadedOnce; },
     folderModeRoot() { return this.displayMode === 'folders' && !this.activeFolder; },
     folderModeActive() { return this.displayMode === 'folders' && Boolean(this.activeFolder); },
+    // 缩略图墙只是图片流换了格子；文件夹内的图片仍用带信息条的卡片。
+    wallMode() { return this.displayMode === 'wall'; },
+    cellGeometry() { return this.wallMode ? WALL_CELL : STREAM_CELL; },
     // 时间线分组只在文件名模式下生效：语义结果按相关度排序，插年月分组头没有意义。
     timelineActive() { return this.timelineMode && this.searchMode !== 'semantic'; },
     // 时间线开启时强制按拍摄时间排序，但不改写用户在下拉里的选择，关掉即恢复。
@@ -960,9 +980,9 @@ export default {
         items: this.images,
         columns: this.columns,
         groupBy: this.timelineActive ? PHOTO_GROUP_MONTH : PHOTO_GROUP_NONE,
-        cellHeight: this.mediaHeight + CARD_META_HEIGHT + CARD_BORDER,
+        cellHeight: this.mediaHeight + this.cellGeometry.meta + this.cellGeometry.border,
         headerHeight: TIMELINE_HEADER_HEIGHT,
-        gap: GRID_GAP
+        gap: this.cellGeometry.gap
       });
     },
     renderedRows() {
@@ -981,8 +1001,8 @@ export default {
       const style = {
         '--photo-columns': String(this.columns),
         // 行间隙与信息条高度由 JS 常量下发，保证 CSS 与 photoGrid 的布局计算同一份来源。
-        '--photo-grid-gap': `${GRID_GAP}px`,
-        '--photo-card-meta': `${CARD_META_HEIGHT}px`
+        '--photo-grid-gap': `${this.cellGeometry.gap}px`,
+        '--photo-card-meta': `${this.cellGeometry.meta}px`
       };
       // 尚未测量出宽度时不下发高度变量，让卡片退回 aspect-ratio: 1，避免首帧塌成 0 高。
       if (this.mediaHeight > 0) style['--photo-cell-media'] = `${this.mediaHeight}px`;
@@ -1331,9 +1351,7 @@ export default {
     measureGrid() {
       const width = this.$refs.gridShell?.getBoundingClientRect().width || 0;
       if (width <= 0) return false;
-      const columns = resolvePhotoColumns(width, { minColumnWidth: MIN_COLUMN_WIDTH, gap: GRID_GAP });
-      const cellWidth = (width - GRID_GAP * (columns - 1)) / columns;
-      const mediaHeight = Math.max(0, Math.round(cellWidth) - CARD_BORDER);
+      const { columns, mediaHeight } = resolvePhotoCellSize(width, this.cellGeometry);
       const changed = columns !== this.columns || mediaHeight !== this.mediaHeight;
       this.columns = columns;
       this.mediaHeight = mediaHeight;
@@ -1345,11 +1363,20 @@ export default {
       // 隐藏时 ResizeObserver 会报 0 宽，按它重算会把布局清空。
       if (!this.gridActive) return;
       if (this.folderModeRoot) this.$nextTick(() => this.syncFolderWindow());
-      const anchorIndex = this.virtualized
-        ? firstVisiblePhotoItemIndex(this.layout, this.windowState.startRow)
-        : -1;
-      const changed = this.measureGrid();
-      const willRestoreAnchor = changed && anchorIndex >= 0 && Boolean(this.scrollOwnerEl);
+      const anchorIndex = this.currentAnchorIndex();
+      if (!this.measureGrid()) {
+        this.syncWindow();
+        return;
+      }
+      this.restoreAnchorAfterRelayout(anchorIndex);
+    },
+    // 当前渲染窗口（含 overscan 行）里第一张照片的下标；必须在格子几何变化之前取，之后的布局已经不是这一份。
+    currentAnchorIndex() {
+      return this.virtualized ? firstVisiblePhotoItemIndex(this.layout, this.windowState.startRow) : -1;
+    },
+    // 布局已按新几何重算（列宽变化，或图片流 ↔ 缩略图墙）：把 anchorIndex 那张照片所在的行放回视口顶。
+    restoreAnchorAfterRelayout(anchorIndex) {
+      const willRestoreAnchor = anchorIndex >= 0 && Boolean(this.scrollOwnerEl);
       // 锚点回写前 scrollTop 还停在旧布局的位置，拿它去跟新的（加宽后会变短的）总高比，会误判
       // 成"已经滚到底"而多预取一页；预取判断交给回写之后的那次同步。
       this.syncWindow(false, !willRestoreAnchor);
@@ -1494,9 +1521,18 @@ export default {
       this.reload();
     },
     setDisplayMode(mode) {
-      if (mode !== 'stream' && mode !== 'folders') return;
+      if (!PHOTO_DISPLAY_MODES.includes(mode)) return;
       if (mode === 'folders' && this.searchMode === 'semantic') return;
       if (mode === this.displayMode && !this.activeFolder) return;
+      // 图片流与缩略图墙是同一份结果的两种格子：不重新查询、不回顶，只换几何，视口顶部那张照片留在原处。
+      if (mode !== 'folders' && this.displayMode !== 'folders') {
+        const anchorIndex = this.currentAnchorIndex();
+        this.displayMode = mode;
+        window.localStorage?.setItem?.('cineinsight-photo-display-mode', mode);
+        this.measureGrid();
+        this.restoreAnchorAfterRelayout(anchorIndex);
+        return;
+      }
       this.displayMode = mode;
       window.localStorage?.setItem?.('cineinsight-photo-display-mode', mode);
       this.activeFolder = null;
@@ -2072,7 +2108,8 @@ export default {
         return true;
       }
       this.searchMode = 'name';
-      if (this.displayMode !== 'stream') {
+      // 缩略图墙本身就是图片流，留在原布局；只有文件夹视图要切回来。
+      if (this.displayMode === 'folders') {
         this.displayMode = 'stream';
         this.activeFolder = null;
       }
@@ -2658,6 +2695,12 @@ export default {
 .photo-card__meta { display: grid; align-content: start; gap: 2px; height: var(--photo-card-meta, 86px); box-sizing: border-box; overflow: hidden; padding: 9px 11px 10px; }
 .photo-card__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; color: var(--text-primary); }
 .photo-card__meta small { color: var(--text-muted); font-size: 11px; }
+/* 缩略图墙：格子只剩方形缩略图，无边框（WALL_CELL.border 为 0，缩略图边长不让出边框）；
+   勾选框沿用上面「悬停或已选才显形」的规则。失败占位只留格式徽标，文件名在悬停提示里。 */
+.photo-grid--wall .photo-card { border: 0; border-radius: 6px; }
+.photo-grid--wall .photo-card__media:focus-visible { outline: 2px solid var(--accent-color); outline-offset: -2px; }
+.photo-grid--wall .photo-card__fallback { padding: 6px; }
+.photo-grid--wall .photo-card__fallback strong { display: none; }
 .photo-card__tags {
   margin: 2px 0 0;
   color: var(--text-secondary);

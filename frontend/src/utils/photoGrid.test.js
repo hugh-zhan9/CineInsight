@@ -12,6 +12,7 @@ import {
   firstVisiblePhotoItemIndex,
   formatPhotoTimelineLabel,
   photoTimelineKey,
+  resolvePhotoCellSize,
   resolvePhotoColumns
 } from './photoGrid.js';
 
@@ -47,6 +48,37 @@ describe('resolvePhotoColumns', () => {
     expect(resolvePhotoColumns(372, { minColumnWidth: 180, gap: 12 })).toBe(2);
     expect(resolvePhotoColumns(1200, { minColumnWidth: 180, gap: 12 })).toBe(6);
     expect(resolvePhotoColumns(1200)).toBe(6);
+  });
+});
+
+// 照片流卡片与缩略图墙（2026-10-12 用户裁决「只要一个紧凑的缩略图墙」）的格子几何，数值与 PhotoLibraryPage 的常量一致。
+describe('resolvePhotoCellSize', () => {
+  const STREAM = { minColumnWidth: 180, gap: 12, meta: 86, border: 2 };
+  const WALL = { minColumnWidth: 120, gap: 4, meta: 0, border: 0 };
+
+  it('照片流：方形缩略图让出 2px 边框，格子高度再加 86px 信息条', () => {
+    // 1200px：6 列，列宽 (1200 - 5 × 12) / 6 = 190。
+    expect(resolvePhotoCellSize(1200, STREAM)).toEqual({ columns: 6, mediaHeight: 188, cellHeight: 276 });
+  });
+
+  it('缩略图墙：更小的列宽与间隙，格子就是方形缩略图本身', () => {
+    // 1200px：floor(1204 / 124) = 9 列，列宽 (1200 - 8 × 4) / 9 ≈ 129.8，取整 130。
+    expect(resolvePhotoCellSize(1200, WALL)).toEqual({ columns: 9, mediaHeight: 130, cellHeight: 130 });
+    // 刚好放下 n 列时是 n 列，少 1px 退一列。
+    expect(resolvePhotoCellSize(120 * 4 + 4 * 3, WALL)).toEqual({ columns: 4, mediaHeight: 120, cellHeight: 120 });
+    expect(resolvePhotoCellSize(120 * 4 + 4 * 3 - 1, WALL).columns).toBe(3);
+    // 比一列还窄时仍是一列，格子跟着容器缩。
+    expect(resolvePhotoCellSize(90, WALL)).toEqual({ columns: 1, mediaHeight: 90, cellHeight: 90 });
+    expect(resolvePhotoCellSize(0, WALL)).toEqual({ columns: 1, mediaHeight: 0, cellHeight: 0 });
+  });
+
+  it('缩略图墙的格子仍可按年月分组：分组头独占一行，行距是 4px 间隙', () => {
+    const items = [makeItem(1, '2026-08-21T10:00:00'), makeItem(2, '2026-08-03T10:00:00'), makeItem(3, '2026-07-09T10:00:00')];
+    const { columns, cellHeight } = resolvePhotoCellSize(1200, WALL);
+    const layout = buildPhotoLayout({ items, columns, groupBy: PHOTO_GROUP_MONTH, cellHeight, headerHeight: HEADER, gap: WALL.gap });
+    expect(rowSpans(layout)).toEqual(['2026-08', [0, 2], '2026-07', [2, 3]]);
+    expect(layout.rows.map(row => row.height)).toEqual([HEADER, 130, HEADER, 130]);
+    expect(layout.totalHeight).toBe(2 * HEADER + 2 * 130 + 3 * WALL.gap);
   });
 });
 

@@ -2,7 +2,7 @@
 // 两节，以及「语义检索降级」里两条查 DOM 的用例：工具栏抽成独立组件后原样搬来，
 // 只把「改片库页状态」的准备动作换成传 prop、把「改片库页状态」的断言换成查 emit。
 import { flushPromises, mount, shallowMount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => new Proxy({}, {
   get(target, prop) {
@@ -516,5 +516,49 @@ describe('场景检索入口（P-007）', () => {
     const wrapper = mountToolbar();
     await wrapper.get('[data-test="toolbar-search-scenes"]').trigger('click');
     expect(wrapper.emitted('search-scenes')).toHaveLength(1);
+  });
+});
+
+// 2026-10-12 用户裁决「只要一个紧凑的缩略图墙」：布局分段器加第三段，偏好仍记在同一个键里。
+describe('片库布局切换', () => {
+  let store;
+  let original;
+  beforeEach(() => {
+    store = {};
+    original = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: { getItem: key => store[key] ?? null, setItem: (key, value) => { store[key] = String(value); }, removeItem: key => { delete store[key]; } }
+    });
+  });
+  afterEach(() => {
+    if (original) Object.defineProperty(window, 'localStorage', original);
+    else delete window.localStorage;
+  });
+
+  it('列表 / 网格 / 缩略图墙三段，点缩略图墙记住选择并通知片库页', async () => {
+    const wrapper = mountToolbar({ viewMode: 'grid' });
+    const buttons = ['list', 'grid', 'wall'].map(mode => wrapper.get(`[data-test="library-layout-${mode}"]`));
+    expect(buttons.map(button => button.text())).toEqual(['列表', '网格', '缩略图墙']);
+    expect(buttons.map(button => button.classes().includes('active'))).toEqual([false, true, false]);
+
+    await buttons[2].trigger('click');
+    expect(store['cineinsight-library-layout']).toBe('wall');
+    expect(wrapper.emitted('update:viewMode')).toEqual([['wall']]);
+
+    await wrapper.setProps({ viewMode: 'wall' });
+    expect(wrapper.get('[data-test="library-layout-wall"]').classes()).toContain('active');
+    await wrapper.get('[data-test="library-layout-list"]').trigger('click');
+    expect(store['cineinsight-library-layout']).toBe('list');
+    expect(wrapper.emitted('update:viewMode')[1]).toEqual(['list']);
+    wrapper.unmount();
+  });
+
+  it('未知布局按列表处理，偏好里也只记列表', () => {
+    const wrapper = mountToolbar();
+    wrapper.vm.setViewMode('mosaic');
+    expect(store['cineinsight-library-layout']).toBe('list');
+    expect(wrapper.emitted('update:viewMode')).toEqual([['list']]);
+    wrapper.unmount();
   });
 });

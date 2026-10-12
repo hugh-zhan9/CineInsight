@@ -34,6 +34,46 @@ export function estimateVideoGridHeight(video, cardWidth = 200) {
   return 230 + Math.ceil((tags * TAG_BADGE_WIDTH + ADD_TAG_BUTTON_WIDTH) / usable) * TAG_LINE_HEIGHT;
 }
 
+// 片库的三种布局，localStorage「cineinsight-library-layout」存的就是这里的值；
+// 读到别的值（旧版本、手改、损坏）一律回到默认的列表，不让未知布局进到虚拟列表里。
+export const LIBRARY_LAYOUTS = ['list', 'grid', 'wall'];
+
+export function normalizeLibraryLayout(value) {
+  return LIBRARY_LAYOUTS.includes(value) ? value : 'list';
+}
+
+// 按列排布的两种布局：列数 = floor((宽 + 间隙) / (最小列宽 + 间隙))，与 CSS minmax(最小列宽, 1fr)
+// 自动排出的列数一致；间隙同时是虚拟列表行高索引里的行间隙，必须与 VirtualVideoList 样式里
+// 对应布局的 gap 相同。缩略图墙（2026-10-12 用户裁决「不要颜色，只要一个紧凑的缩略图墙」）
+// 只放 16:9 缩略图，格子约 140–160px 宽，同样宽度下列数比网格卡多一半以上。
+const COLUMN_LAYOUTS = {
+  grid: { minColumnWidth: 200, gap: 12 },
+  wall: { minColumnWidth: 140, gap: 6 }
+};
+
+export function isColumnLayout(layoutMode) {
+  return Object.prototype.hasOwnProperty.call(COLUMN_LAYOUTS, layoutMode);
+}
+
+export function resolveLibraryColumns(layoutMode, width) {
+  if (!isColumnLayout(layoutMode)) return { columns: 1, gap: 0 };
+  const geometry = COLUMN_LAYOUTS[layoutMode];
+  const safeWidth = Math.max(0, Number(width) || 0);
+  return {
+    columns: Math.max(1, Math.floor((safeWidth + geometry.gap) / (geometry.minColumnWidth + geometry.gap))),
+    gap: geometry.gap
+  };
+}
+
+// 缩略图墙的格子是带 1px 边框的 16:9 缩略图：边框之内按比例定高，所以预估就是实际高度，
+// 不像网格卡那样要等实测回写。
+const WALL_TILE_BORDER = 1;
+
+export function estimateVideoWallHeight(cardWidth = 140) {
+  const inner = Math.max(0, (Number(cardWidth) || 0) - 2 * WALL_TILE_BORDER);
+  return inner * 9 / 16 + 2 * WALL_TILE_BORDER;
+}
+
 export function getWidthBucket(width) {
   const safeWidth = Number(width) || 0;
   return Math.max(1, Math.round(safeWidth / 80));

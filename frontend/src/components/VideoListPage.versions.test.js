@@ -25,6 +25,7 @@ vi.mock('./PreviewDrawer.vue', () => ({ default: { template: '<div />' } }));
 vi.mock('./VideoListRow.vue', async (importOriginal) => ({ ...(await importOriginal()), default: { template: '<div />' } }));
 
 import VideoListPage from './VideoListPage.vue';
+import { closeVersionCompare, versionCompareState } from '../utils/versionCompare.js';
 
 function member(id, overrides = {}) {
   return { video_id: id, label: '', position: 1, display_title: '', name: `v${id}.mp4`, resolution: '', size: 1, duration: 60, is_watched: false, watch_position_seconds: 0, personal_rating: null, is_stale: false, ...overrides };
@@ -223,6 +224,35 @@ describe('批量合并与入口', () => {
     expect(wrapper.vm.versionGroupDialog).toMatchObject({ show: true, groupId: 0, videoId: 4 });
     wrapper.vm.onManageSelect({ id: 'version-groups' });
     expect(wrapper.vm.versionPanelOpen).toBe(true);
+    wrapper.unmount();
+  });
+});
+
+describe('版本对比入口', () => {
+  beforeEach(() => closeVersionCompare());
+
+  it('展开列表里的「对比画质」：主版本在左、所选版本在右；不在组里的卡片不打开', async () => {
+    const wrapper = await mountPage();
+    expect(wrapper.vm.compareVersionMember(rows[0], 3)).toBe(true);
+    expect(versionCompareState).toMatchObject({ open: true, leftVideoID: 1, rightVideoID: 3 });
+    closeVersionCompare();
+    expect(wrapper.vm.compareVersionMember(rows[1], 3)).toBe(false);
+    expect(versionCompareState.open).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('批量栏「对比播放」：正好两个时按选中顺序打开，不清空选择；其他数量不打开', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.selectedVideoIds = [4, 1];
+    wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('batch-compare');
+    expect(versionCompareState).toMatchObject({ open: true, leftVideoID: 4, rightVideoID: 1 });
+    expect(wrapper.vm.selectedVideoIds).toEqual([4, 1]);
+    closeVersionCompare();
+    for (const ids of [[4], [4, 1, 2]]) {
+      wrapper.vm.selectedVideoIds = ids;
+      expect(wrapper.vm.compareSelectedVideos()).toBe(false);
+    }
+    expect(versionCompareState.open).toBe(false);
     wrapper.unmount();
   });
 });

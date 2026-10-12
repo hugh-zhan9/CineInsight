@@ -110,16 +110,28 @@
             <span v-if="hit.context_after" class="scenes-hit__context">{{ hit.context_after }}</span>
           </span>
         </button>
-        <button
-          type="button"
-          class="btn-secondary btn-compact scenes-hit__similar"
-          title="用这一刻的画面在全部视频里找相似的段"
-          :data-test="`scenes-similar-${group.videoID}-${index}`"
-          @click="searchSimilar({ videoID: hit.video_id, atMS: hit.start_ms, title: group.title })"
-        >相似画面</button>
+        <div class="scenes-hit__actions">
+          <button
+            type="button"
+            class="btn-secondary btn-compact"
+            title="用这一刻的画面在全部视频里找相似的段"
+            :data-test="`scenes-similar-${group.videoID}-${index}`"
+            @click="searchSimilar({ videoID: hit.video_id, atMS: hit.start_ms, title: group.title })"
+          >相似画面</button>
+          <!-- 台词卡（2026-10-12）：只有带台词文字的对白命中才有。 -->
+          <button
+            v-if="hit.source === 'dialogue' && hit.text"
+            type="button"
+            class="btn-secondary btn-compact"
+            title="把这句台词和这一刻的画面做成一张图"
+            :data-test="`scenes-quote-${group.videoID}-${index}`"
+            @click="openQuoteCard(hit, group.title)"
+          >台词卡</button>
+        </div>
         </div>
       </section>
     </div>
+    <QuoteCardDialog v-if="quoteCard" v-bind="quoteCard" @close="quoteCard = null" />
   </section>
 </template>
 
@@ -154,6 +166,8 @@ import {
   sceneVisualSkipped,
   sceneVisualCoveragePercent
 } from '../utils/sceneSearch.js';
+import { quoteCardMomentMS } from '../utils/quoteCard.js';
+import QuoteCardDialog from './QuoteCardDialog.vue';
 
 const PREPARABLE_STATES = ['missing_python', 'missing_venv', 'missing_model', 'download_failed'];
 const RUNTIME_STATE_TEXT = {
@@ -169,6 +183,7 @@ const RUNTIME_STATE_TEXT = {
 // 每次检索取一个请求代次，晚到的旧结果直接丢弃；点击命中交给宿主打开详情抽屉并内嵌播放。
 export default {
   name: 'ScenesPage',
+  components: { QuoteCardDialog },
   props: {
     pageActive: { type: Boolean, default: true },
     // 片库工具栏「在当前筛选中搜场景」带来的范围：{ filter, token }；为空表示全部视频。
@@ -193,7 +208,9 @@ export default {
       // 以图搜片：上传的图 { dataURL, name }；相似画面：{ videoID, atMS, title }。两者互斥，检索结果都是画面命中。
       imageQuery: null,
       similarSource: null,
-      dropping: false
+      dropping: false,
+      // 正在做的台词卡：{ videoID, atMS, quote, title }；为空表示弹窗关着。
+      quoteCard: null
     };
   },
   computed: {
@@ -400,7 +417,8 @@ export default {
     },
     // 只在本页可见、且焦点不在输入框里时接管粘贴：输入框里粘贴文字照常。
     onPaste(event) {
-      if (!this.pageActive) return;
+      // 台词卡弹窗开着时粘贴归弹窗里的输入框，不当成以图搜片。
+      if (!this.pageActive || this.quoteCard) return;
       const file = [...(event.clipboardData?.files || [])].find(item => item.type.startsWith('image/'));
       if (!file) return;
       event.preventDefault();
@@ -428,6 +446,9 @@ export default {
     },
     openHit(hit) {
       this.$emit('open-video-at', { videoID: hit.video_id, startMs: scenePlaybackStartMs(hit.start_ms) });
+    },
+    openQuoteCard(hit, title) {
+      this.quoteCard = { videoID: Number(hit.video_id), atMS: quoteCardMomentMS(hit.start_ms, hit.end_ms), quote: hit.text || '', title: title || '' };
     },
     async loadCoverage() {
       const generation = this.coverageGeneration.next();
@@ -540,7 +561,7 @@ export default {
 .scenes-image-query__text { flex: 1; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
 .scenes-hit-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
 .scenes-hit-row .scenes-hit { margin-bottom: 0; }
-.scenes-hit__similar { flex: none; margin-top: 8px; }
+.scenes-hit__actions { display: flex; flex: none; flex-direction: column; gap: 6px; margin-top: 8px; }
 .scenes-hit { display: flex; gap: 12px; width: 100%; padding: 8px; margin-bottom: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .scenes-hit:hover { border-color: var(--accent-color); }
 .scenes-hit__frame { width: 160px; height: 90px; flex: 0 0 160px; object-fit: cover; border-radius: 4px; background: var(--control-bg); }

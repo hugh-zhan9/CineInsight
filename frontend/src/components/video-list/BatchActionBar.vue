@@ -13,6 +13,8 @@
       <button type="button" class="btn-secondary btn-compact" data-test="batch-subtitle" @click="$emit('batch-subtitle')">批量生成字幕</button>
       <!-- 多版本聚合（D-MW-VERSIONS）：选中 2–20 个视频合并为一个版本组。 -->
       <button type="button" class="btn-secondary btn-compact" data-test="batch-version-group" :disabled="selectedCount < 2" @click="$emit('batch-version-group')">合并为版本组</button>
+      <!-- 版本对比播放：正好选中两个时出现，按选中顺序左右同步播放比画质。 -->
+      <button v-if="selectedCount === 2" type="button" class="btn-secondary btn-compact" data-test="batch-compare-play" @click="$emit('batch-compare')">对比播放</button>
       <!-- 视频工作台（视频编辑合同「入口」）：按选中顺序合并为新视频（2 个以上）、批量去片头。 -->
       <button type="button" class="btn-secondary btn-compact" data-test="batch-edit-merge" :disabled="selectedCount < 2" @click="$emit('batch-edit-merge')">合并为新视频</button>
       <button type="button" class="btn-secondary btn-compact" data-test="batch-edit-trim" :disabled="selectedCount < 1" @click="$emit('batch-edit-trim')">批量去片头</button>
@@ -33,7 +35,7 @@ export default {
     migrationRunning: { type: Boolean, default: false },
     allVisibleSelected: { type: Boolean, default: false }
   },
-  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-edit-merge', 'batch-edit-trim', 'batch-delete', 'toggle-select-all', 'clear-selection']
+  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim', 'batch-delete', 'toggle-select-all', 'clear-selection']
 };
 </script>
 

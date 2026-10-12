@@ -86,8 +86,15 @@
         >{{ selectedSavedViewName || '视图' }}<span class="toolbar-btn__caret">▾</span></button>
 
         <div class="segmented" role="group" aria-label="片库布局">
-          <button type="button" :class="['segmented__btn', { active: viewMode === 'list' }]" @click="setViewMode('list')">列表</button>
-          <button type="button" :class="['segmented__btn', { active: viewMode === 'grid' }]" @click="setViewMode('grid')">网格</button>
+          <button type="button" :class="['segmented__btn', { active: viewMode === 'list' }]" data-test="library-layout-list" @click="setViewMode('list')">列表</button>
+          <button type="button" :class="['segmented__btn', { active: viewMode === 'grid' }]" data-test="library-layout-grid" @click="setViewMode('grid')">网格</button>
+          <button
+            type="button"
+            :class="['segmented__btn', { active: viewMode === 'wall' }]"
+            title="只显示缩略图的紧凑平铺，标题悬停可见，点一下打开预览"
+            data-test="library-layout-wall"
+            @click="setViewMode('wall')"
+          >缩略图墙</button>
         </div>
 
         <button
@@ -236,6 +243,7 @@
       @batch-playback-proxy="$emit('batch-playback-proxy')"
       @batch-subtitle="$emit('batch-subtitle')"
       @batch-version-group="$emit('batch-version-group')"
+      @batch-compare="$emit('batch-compare')"
       @batch-delete="$emit('batch-delete')"
       @batch-edit-merge="$emit('batch-edit-merge')"
       @batch-edit-trim="$emit('batch-edit-trim')"
@@ -337,6 +345,7 @@ import { logFrontend } from '../../utils/frontendLog.js';
 import { registerCommands, unregisterCommands } from '../../utils/commandRegistry.js';
 
 import { normalizeRandomConditions, randomConditionTags } from '../../utils/randomPlayback.js';
+import { normalizeLibraryLayout } from '../../utils/virtualList.js';
 
 // 人物组合框一次最多列出的候选数。
 const PERSON_OPTION_LIMIT = 20;
@@ -402,7 +411,7 @@ export default {
     'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
     'manage-select', 'view-select', 'random-select',
     'batch-playback-queue', 'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete',
-    'update:collapseVersions', 'batch-version-group', 'batch-edit-merge', 'batch-edit-trim'
+    'update:collapseVersions', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim'
   ],
   data() {
     return {
@@ -845,7 +854,7 @@ export default {
       return Number(value || 0).toLocaleString('zh-CN');
     },
     setViewMode(mode) {
-      const next = mode === 'grid' ? 'grid' : 'list';
+      const next = normalizeLibraryLayout(mode);
       window.localStorage?.setItem('cineinsight-library-layout', next);
       this.$emit('update:viewMode', next);
     },
@@ -991,7 +1000,7 @@ export default {
 .tag-category-label__count { color: var(--text-muted); font-size: 11px; }
 .tag-browser__empty { color: var(--text-muted); font-size: 11px; }
 
-/* 三段器：搜索模式、列表/网格、行高共用 */
+/* 分段器：搜索模式、列表/网格/缩略图墙、行高共用 */
 .segmented {
   display: inline-flex;
   flex: none;
