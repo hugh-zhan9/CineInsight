@@ -129,7 +129,9 @@ func TestSceneImageSearchNotices(t *testing.T) {
 		}
 		return result, vectors
 	}
-	ok := func() *fakeSceneVectors { return &fakeSceneVectors{image: func(string) []float32 { return []float32{1} }} }
+	ok := func() *fakeSceneVectors {
+		return &fakeSceneVectors{image: func(string) []float32 { return []float32{1} }}
+	}
 
 	result, vectors := run(SceneProviderExternal, true, ok(), false)
 	if strings.Join(result.Notices, ",") != SceneNoticeImageSearchUnsupported || vectors.imageCalls != 0 {

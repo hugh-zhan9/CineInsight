@@ -98,16 +98,18 @@ type JellyfinSession struct {
 // DisplayURL 只含 scheme+host+path，写入前必须去掉 query 与 fragment；请求头与 Cookie
 // 一律不存。
 type BrowserDownloadTask struct {
-	ID         uint       `gorm:"primarykey" json:"id"`
-	TaskUID    string     `gorm:"size:32;not null;uniqueIndex:idx_browser_download_tasks_task_uid" json:"task_uid"`
-	DisplayURL string     `gorm:"type:text;not null;default:''" json:"display_url"`
-	FileName   string     `gorm:"type:text;not null;default:''" json:"file_name"`
-	Directory  string     `gorm:"type:text;not null;default:''" json:"directory"`
-	Status     string     `gorm:"size:24;not null;default:'';index" json:"status"`
-	Error      string     `gorm:"type:text;not null;default:''" json:"error"`
-	FinishedAt *time.Time `json:"finished_at" ts_type:"string"`
-	CreatedAt  time.Time  `json:"created_at" ts_type:"string"`
-	UpdatedAt  time.Time  `json:"updated_at" ts_type:"string"`
+	ID         uint   `gorm:"primarykey" json:"id"`
+	TaskUID    string `gorm:"size:32;not null;uniqueIndex:idx_browser_download_tasks_task_uid" json:"task_uid"`
+	DisplayURL string `gorm:"type:text;not null;default:''" json:"display_url"`
+	FileName   string `gorm:"type:text;not null;default:''" json:"file_name"`
+	Directory  string `gorm:"type:text;not null;default:''" json:"directory"`
+	Status     string `gorm:"size:24;not null;default:'';index" json:"status"`
+	Error      string `gorm:"type:text;not null;default:''" json:"error"`
+	// DuplicateResult 是下载完成后的查重结论（JSON，2026-10-12 D-DD-03）；空串表示还没查。
+	DuplicateResult string     `gorm:"type:text;not null;default:''" json:"duplicate_result"`
+	FinishedAt      *time.Time `json:"finished_at" ts_type:"string"`
+	CreatedAt       time.Time  `json:"created_at" ts_type:"string"`
+	UpdatedAt       time.Time  `json:"updated_at" ts_type:"string"`
 }
 
 // 清理忽略的类别（cleanup_video_dismissals.category，D-PC31）。

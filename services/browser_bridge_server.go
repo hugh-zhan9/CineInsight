@@ -400,7 +400,14 @@ func (s *BrowserBridgeServer) handleDownloads(w http.ResponseWriter, r *http.Req
 	}
 	switch r.Method {
 	case http.MethodGet:
-		writeBridgeJSON(w, http.StatusOK, map[string]any{"tasks": s.downloads.ListTasks()})
+		// 查重结果带着片库里的片名、分辨率与大小，不给浏览器插件（审查 Minor 5）。
+		listed := s.downloads.ListTasks()
+		tasks := make([]BrowserDownloadTask, len(listed))
+		for index, task := range listed {
+			task.Duplicate = nil
+			tasks[index] = task
+		}
+		writeBridgeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
 	case http.MethodPost:
 		var request BrowserDownloadRequest
 		if !decodeBridgeBody(w, r, &request) {

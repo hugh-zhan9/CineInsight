@@ -1929,6 +1929,68 @@ export namespace services {
 	        this.allowed_access = source["allowed_access"];
 	    }
 	}
+	export class DownloadDuplicateMatchView {
+	    video_id: number;
+	    kind: string;
+	    relation: string;
+	    title: string;
+	    width: number;
+	    height: number;
+	    size: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new DownloadDuplicateMatchView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_id = source["video_id"];
+	        this.kind = source["kind"];
+	        this.relation = source["relation"];
+	        this.title = source["title"];
+	        this.width = source["width"];
+	        this.height = source["height"];
+	        this.size = source["size"];
+	    }
+	}
+	export class DownloadDuplicateView {
+	    status: string;
+	    matches: DownloadDuplicateMatchView[];
+	    unhashed_videos: number;
+	    error: string;
+	    version_error: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new DownloadDuplicateView(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.status = source["status"];
+	        this.matches = this.convertValues(source["matches"], DownloadDuplicateMatchView);
+	        this.unhashed_videos = source["unhashed_videos"];
+	        this.error = source["error"];
+	        this.version_error = source["version_error"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
 	export class BrowserDownloadTask {
 	    id: string;
 	    url: string;
@@ -1946,6 +2008,7 @@ export namespace services {
 	    import_error: string;
 	    import_status: string;
 	    retryable: boolean;
+	    duplicate?: DownloadDuplicateView;
 	    created_at: number;
 	    updated_at: number;
 	    finished_at: number;
@@ -1972,10 +2035,29 @@ export namespace services {
 	        this.import_error = source["import_error"];
 	        this.import_status = source["import_status"];
 	        this.retryable = source["retryable"];
+	        this.duplicate = this.convertValues(source["duplicate"], DownloadDuplicateView);
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
 	        this.finished_at = source["finished_at"];
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class BrowserDownloadActionResult {
 	    code: string;
@@ -3349,6 +3431,8 @@ export namespace services {
 		    return a;
 		}
 	}
+	
+	
 	export class EditAlignedSegment {
 	    long_start_ms: number;
 	    long_end_ms: number;

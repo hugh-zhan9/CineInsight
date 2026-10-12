@@ -1,15 +1,17 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const api = vi.hoisted(() => ({
-  ListDownloadTasks: vi.fn(),
-  CancelBrowserDownloadTask: vi.fn(),
-  RetryDownload: vi.fn(),
-  AddDownloadDirectoryToScan: vi.fn(),
-  ReimportDownload: vi.fn(),
-  RevealDownload: vi.fn()
+// 按需生成的绑定替身：查重提示用到的删除宿主（TrashUndoBanner）还会引入其他绑定。
+const api = vi.hoisted(() => new Proxy({}, {
+  get(target, prop) {
+    if (typeof prop === 'symbol' || prop === 'then') return undefined;
+    if (!target[prop]) target[prop] = vi.fn(() => Promise.resolve(null));
+    return target[prop];
+  }
 }));
 vi.mock('../../wailsjs/go/main/App', () => api);
+const feedback = vi.hoisted(() => ({ confirmAction: vi.fn(() => Promise.resolve(true)), notify: vi.fn(), notifyError: vi.fn(), notifySuccess: vi.fn() }));
+vi.mock('../utils/feedback.js', async (importOriginal) => ({ ...(await importOriginal()), ...feedback }));
 
 import DownloadsPage from './DownloadsPage.vue';
 
@@ -200,6 +202,108 @@ describe('下载完成后的入库出口与重试（D-PC25 / D-PC21）', () => {
     expect(row.find('[data-test="download-action-retry"]').exists()).toBe(false);
     // 中断是已结束的一种，归到「已结束」组，也能被「清掉已结束」收起。
     expect(wrapper.text()).toContain('已结束');
+    wrapper.unmount();
+  });
+});
+
+// ===== 下载完自动查重（2026-10-12 D-DD-04）=====
+describe('下载查重提示', () => {
+  const done = (duplicate, extra = {}) => ({ id: 't1', filename: '新.mp4', state: 'done', video_id: 50, import_status: 'imported', duplicate, ...extra });
+  const exact = { video_id: 7, kind: 'exact', relation: 'same', title: '老片', width: 1920, height: 1080, size: 2 * 1024 ** 3 };
+  const version = { video_id: 8, kind: 'version', relation: 'higher', title: '高清版', width: 3840, height: 2160, size: 9 * 1024 ** 3 };
+
+  it('相同文件与其他版本分别说清楚，并给对应的动作', async () => {
+    const wrapper = await mountPage([done({ status: 'found', matches: [exact, version], unhashed_videos: 0 })]);
+    const matches = wrapper.findAll('[data-test="download-duplicate-match"]');
+    expect(matches).toHaveLength(2);
+    expect(matches[0].text()).toContain('片库里已有完全相同的文件：《老片》（1920×1080，2.0 GB）');
+    expect(matches[0].find('[data-test="download-dup-version-group"]').exists()).toBe(false);
+    expect(matches[0].get('[data-test="download-dup-dismiss"]').text()).toBe('保留两份');
+    expect(matches[1].text()).toContain('片库里有同一部的其他版本：《高清版》（3840×2160，9.0 GB，比这次的更清楚）');
+    expect(matches[1].get('[data-test="download-dup-dismiss"]').text()).toBe('不是同一部');
+    expect(matches[1].find('[data-test="download-dup-version-group"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('没入库的下载不给移到废纸篓和版本组；查重失败与指纹覆盖不全时说明原因', async () => {
+    const wrapper = await mountPage([
+      done({ status: 'found', matches: [exact], unhashed_videos: 0 }, { id: 'a', video_id: 0, import_status: 'not_in_scan_roots' }),
+      done({ status: 'failed', matches: [], error: '读取失败' }, { id: 'b' }),
+      done({ status: 'none', matches: [], unhashed_videos: 12 }, { id: 'c' })
+    ]);
+    // 没入库的那条照样提示相同文件，但只能「保留两份」：没有片库记录可删、可建版本组。
+    const match = wrapper.get('[data-test="download-duplicate-match"]');
+    expect(match.text()).toContain('片库里已有完全相同的文件：《老片》');
+    expect(match.find('[data-test="download-dup-trash"]').exists()).toBe(false);
+    expect(match.find('[data-test="download-dup-version-group"]').exists()).toBe(false);
+    expect(match.get('[data-test="download-dup-dismiss"]').text()).toBe('保留两份');
+    const notes = wrapper.findAll('[data-test="download-duplicate-note"]').map(node => node.text());
+    expect(notes).toEqual([
+      '这次下载还没进片库，不能从这里删除；可以打开所在目录手动处理。',
+      '查重没有完成：读取失败',
+      '片库里还有 12 部视频没算视频指纹，没参与「其他版本」的比对。'
+    ]);
+    wrapper.unmount();
+  });
+
+  it('「不是同一部」调用后端并就地换上新结果；建立版本组带上两部视频', async () => {
+    api.DismissDownloadDuplicate.mockResolvedValue({ code: 'ok', task: done({ status: 'none', matches: [], unhashed_videos: 0 }) });
+    api.CreateVersionGroup.mockResolvedValue({ id: 3 });
+    const wrapper = await mountPage([done({ status: 'found', matches: [version], unhashed_videos: 0 })]);
+    await wrapper.get('[data-test="download-dup-version-group"]').trigger('click');
+    await flushPromises();
+    expect(api.CreateVersionGroup).toHaveBeenCalledWith([50, 8], '');
+    expect(wrapper.get('[data-test="download-action-notice"]').text()).toContain('已和《高清版》建立版本组');
+    await wrapper.get('[data-test="download-dup-dismiss"]').trigger('click');
+    await flushPromises();
+    expect(api.DismissDownloadDuplicate).toHaveBeenCalledWith('t1', 8);
+    expect(wrapper.find('[data-test="download-duplicate"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('把这次下载移到废纸篓：先确认，再走删除宿主删这次下载的那条记录；取消时不删', async () => {
+    api.DeleteVideosWithResult.mockImplementation(ids => Promise.resolve({ batch_id: 'b1', requested: 1, succeeded: 1, failed: 0, cancelled: 0, items: ids.map(id => ({ id, code: 'ok' })) }));
+    const wrapper = await mountPage([done({ status: 'found', matches: [exact], unhashed_videos: 0 })]);
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    await wrapper.get('[data-test="download-dup-trash"]').trigger('click');
+    await flushPromises();
+    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
+    await wrapper.get('[data-test="download-dup-trash"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls.at(-1)[0].message).toContain('片库里保留《老片》');
+    expect(api.DeleteVideosWithResult).toHaveBeenCalledWith([50], true, expect.any(String));
+    // 挂载一次、两次点击前各按当前片库重取一次、删完再取一次。
+    expect(api.ListDownloadTasks).toHaveBeenCalledTimes(4);
+    wrapper.unmount();
+  });
+
+  it('删除前重取发现提示已过期（对方已不在）：不删，说明已刷新', async () => {
+    const wrapper = await mountPage([done({ status: 'found', matches: [exact], unhashed_videos: 0 })]);
+    api.ListDownloadTasks.mockResolvedValue([done({ status: 'none', matches: [], unhashed_videos: 0 })]);
+    await wrapper.get('[data-test="download-dup-trash"]').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction).not.toHaveBeenCalled();
+    expect(api.DeleteVideosWithResult).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('建立版本组之后把这一项从提示里拿掉（不写「不是同一部」）', async () => {
+    api.CreateVersionGroup.mockResolvedValue({ id: 3 });
+    api.ClearDownloadDuplicate.mockResolvedValue({ code: 'ok', task: done({ status: 'none', matches: [], unhashed_videos: 0 }) });
+    const wrapper = await mountPage([done({ status: 'found', matches: [version], unhashed_videos: 0 })]);
+    await wrapper.get('[data-test="download-dup-version-group"]').trigger('click');
+    await flushPromises();
+    expect(api.ClearDownloadDuplicate).toHaveBeenCalledWith('t1', 8);
+    expect(api.DismissDownloadDuplicate).not.toHaveBeenCalled();
+    expect(wrapper.find('[data-test="download-duplicate"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('「其他版本」没比完时说明原因，相同文件照样提示；关系文案不冒称分辨率相同', async () => {
+    const similar = { ...version, video_id: 9, relation: 'larger', width: 0, height: 0, size: 3 * 1024 ** 3 };
+    const wrapper = await mountPage([done({ status: 'found', matches: [exact, similar], unhashed_videos: 4, version_error: '计算视频指纹失败' })]);
+    expect(wrapper.get('[data-test="download-duplicate-note"]').text()).toBe('「其他版本」的比对没有完成：计算视频指纹失败。');
+    expect(wrapper.findAll('[data-test="download-duplicate-match"]')[1].text()).toContain('（3.0 GB，文件比这次的大）');
     wrapper.unmount();
   });
 });

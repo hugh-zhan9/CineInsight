@@ -437,3 +437,22 @@ func TestLaunchStreamInIINAUsesURLScheme(t *testing.T) {
 		t.Fatalf("地址没有正确转义：%q", opened)
 	}
 }
+
+// 下载查重结果带着片库里的片名、分辨率与大小：桥接接口列任务时不交给浏览器插件（2026-10-12 审查 Minor 5）。
+func TestBrowserBridgeDownloadListOmitsDuplicateInfo(t *testing.T) {
+	enqueuer := &fakeEnqueuer{tasks: []BrowserDownloadTask{{ID: "bd1", Filename: "x.mp4", State: "done",
+		Duplicate: &DownloadDuplicateView{Status: DownloadDuplicateFound, Matches: []DownloadDuplicateMatchView{{VideoID: 7, Title: "片库里的片名"}}}}}}
+	handler := newBridgeTestServer(&fakeBridgeAuth{token: "t", enabled: true}, enqueuer)
+	recorder := bridgeRequest(t, handler, http.MethodGet, "/bridge/v1/downloads", nil, func(r *http.Request) {
+		r.Header.Set(BrowserBridgeTokenHeader, "t")
+	})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("期望 200，实际 %d %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "片库里的片名") {
+		t.Fatalf("桥接列表不应带出片库信息: %s", recorder.Body.String())
+	}
+	if enqueuer.tasks[0].Duplicate == nil {
+		t.Fatal("不应改动下载服务里的任务本身")
+	}
+}

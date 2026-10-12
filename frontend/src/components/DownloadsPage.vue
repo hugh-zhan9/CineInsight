@@ -16,6 +16,8 @@
     </div>
 
     <p v-if="errorMessage" class="downloads-error" role="alert" data-test="downloads-error">{{ errorMessage }}</p>
+    <!-- 查重提示里「把这次下载移到废纸篓」走片库同一个删除宿主：进度、磁盘不支持废纸篓时的二选一、整批撤销。 -->
+    <TrashUndoBanner ref="trashUndo" kind="video" :after-restore="afterTrashRestore" />
 
     <div class="downloads-summary" data-test="downloads-summary">
       <article>
@@ -58,6 +60,7 @@
             :busy="busyIds.includes(task.id)"
             @cancel="cancelTask"
             @action="runAction"
+            @duplicate-action="runDuplicateAction"
           />
         </div>
       </div>
@@ -73,6 +76,7 @@
             :busy="busyIds.includes(task.id)"
             @cancel="cancelTask"
             @action="runAction"
+            @duplicate-action="runDuplicateAction"
           />
         </div>
       </div>
@@ -82,9 +86,12 @@
 
 <script>
 import {
-  AddDownloadDirectoryToScan, CancelBrowserDownloadTask, ListDownloadTasks, ReimportDownload, RetryDownload, RevealDownload
+  AddDownloadDirectoryToScan, CancelBrowserDownloadTask, ClearDownloadDuplicate, CreateVersionGroup, DismissDownloadDuplicate, ListDownloadTasks,
+  ReimportDownload, RetryDownload, RevealDownload
 } from '../../wailsjs/go/main/App';
 import DownloadRow from './downloads/DownloadRow.vue';
+import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
+import { confirmAction } from '../utils/feedback.js';
 
 // 后端从不发出 remuxing（MEDIA-15），状态集合以 browser_download_service.go 为准。
 const ACTIVE_STATES = ['running', 'importing'];
@@ -106,14 +113,16 @@ const ACTION_CODE_TEXTS = {
   file_missing: { level: 'error', text: '下载的文件已经不在了。' },
   reveal_failed: { level: 'error', text: '无法打开所在目录。' },
   service_unavailable: { level: 'error', text: '下载服务未启用。' },
-  task_not_found: { level: 'error', text: '没有这个下载任务。' }
+  task_not_found: { level: 'error', text: '没有这个下载任务。' },
+  duplicate_not_found: { level: 'warn', text: '这条提示已经处理过了。' }
 };
 
 const ACTION_SUCCESS_TEXTS = {
   retry: '已重新排队下载',
   'add-directory': '已把下载目录加入扫描目录并入库',
   reimport: '已重新入库',
-  reveal: ''
+  reveal: '',
+  dismiss: '已从提示里拿掉'
 };
 
 // 插件推过来的下载任务的独立页面。
@@ -122,7 +131,7 @@ const ACTION_SUCCESS_TEXTS = {
 // 既看不到又要手动刷新。这里由后端推 browser-download-tasks 事件驱动，不轮询。
 export default {
   name: 'DownloadsPage',
-  components: { DownloadRow },
+  components: { DownloadRow, TrashUndoBanner },
   data() {
     return { tasks: [], errorMessage: '', unsubscribe: null, hiddenIds: [], notices: {}, busyIds: [] };
   },
@@ -224,6 +233,60 @@ export default {
       }
       const text = String(result?.message || '').trim() || known?.text || `操作没有完成（${code}）`;
       this.setNotice(task.id, { level: known?.level || 'error', text });
+    },
+    // 查重提示的处理（D-DD-04）：把这次下载移到废纸篓、和对方建立版本组、不是同一部 / 保留两份。
+    async runDuplicateAction({ action, task, match }) {
+      if (!task?.id || !match?.video_id || this.busyIds.includes(task.id)) return;
+      if (action === 'trash') return this.trashDownload(task, match);
+      this.busyIds = [...this.busyIds, task.id];
+      this.setNotice(task.id, null);
+      try {
+        if (action === 'version-group') {
+          await CreateVersionGroup([task.video_id, match.video_id], '');
+          // 建好版本组就算处理过了：从提示里拿掉（不写「不是同一部」的忽略）。
+          const cleared = await ClearDownloadDuplicate(task.id, match.video_id);
+          if (cleared?.task?.id) this.mergeTask(cleared.task);
+          this.setNotice(task.id, { level: 'success', text: `已和《${match.title}》建立版本组` });
+        } else if (action === 'dismiss') {
+          this.applyActionResult('dismiss', task, await DismissDownloadDuplicate(task.id, match.video_id));
+        }
+      } catch (err) {
+        this.setNotice(task.id, { level: 'error', text: `操作失败：${err}` });
+      } finally {
+        this.busyIds = this.busyIds.filter(id => id !== task.id);
+      }
+    },
+    // 删之前按此刻的片库重取一次：提示可能已经过期（对方或这次下载已被删、文件换过），过期就不删。
+    async trashDownload(staleTask, staleMatch) {
+      await this.loadTasks();
+      const task = this.tasks.find(item => item.id === staleTask.id);
+      const match = (task?.duplicate?.status === 'found' ? task.duplicate.matches || [] : []).find(item => item.video_id === staleMatch.video_id);
+      if (!task?.video_id || task.video_id !== staleTask.video_id || !match) {
+        this.setNotice(staleTask.id, { level: 'warn', text: '这条提示已经过期，已按当前片库刷新。' });
+        return;
+      }
+      const name = task.filename || task.title || '这次下载';
+      const confirmed = await confirmAction({
+        title: '把这次下载移到废纸篓',
+        message: `把「${name}」移到废纸篓？片库里保留《${match.title}》。之后可在回收站撤销。`,
+        confirmText: '移到废纸篓',
+        danger: true
+      });
+      if (!confirmed || this.busyIds.includes(task.id)) return;
+      this.busyIds = [...this.busyIds, task.id];
+      try {
+        const banner = this.$refs.trashUndo;
+        const outcome = await banner.runDelete({ ids: [task.video_id], deleteFile: true, names: { [task.video_id]: name } });
+        banner.showDeleteNotice(outcome);
+        if (outcome.removedIDs.length) await this.loadTasks();
+      } catch (err) {
+        this.setNotice(task.id, { level: 'error', text: `移到废纸篓失败：${err}` });
+      } finally {
+        this.busyIds = this.busyIds.filter(id => id !== task.id);
+      }
+    },
+    async afterTrashRestore() {
+      await this.loadTasks();
     },
     // 动作结果里带回的任务快照先就地换上；随后的推送仍是唯一的整体刷新来源。
     mergeTask(fresh) {

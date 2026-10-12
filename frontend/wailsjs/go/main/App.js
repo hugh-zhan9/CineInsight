@@ -218,6 +218,10 @@ export function CheckMoveTarget(arg1) {
   return window['go']['main']['App']['CheckMoveTarget'](arg1);
 }
 
+export function ClearDownloadDuplicate(arg1, arg2) {
+  return window['go']['main']['App']['ClearDownloadDuplicate'](arg1, arg2);
+}
+
 export function ClearFaceData() {
   return window['go']['main']['App']['ClearFaceData']();
 }
@@ -420,6 +424,10 @@ export function DismissClipCandidate(arg1, arg2) {
 
 export function DismissCollectionSuggestion(arg1) {
   return window['go']['main']['App']['DismissCollectionSuggestion'](arg1);
+}
+
+export function DismissDownloadDuplicate(arg1, arg2) {
+  return window['go']['main']['App']['DismissDownloadDuplicate'](arg1, arg2);
 }
 
 export function DismissFaceClusterAppend(arg1) {

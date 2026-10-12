@@ -113,6 +113,8 @@ export function CancelTechnicalBackfill():Promise<void>;
 
 export function CheckMoveTarget(arg1:string):Promise<services.MoveTargetCheck>;
 
+export function ClearDownloadDuplicate(arg1:string,arg2:number):Promise<services.BrowserDownloadActionResult>;
+
 export function ClearFaceData():Promise<services.FaceDataUsage>;
 
 export function ClearMigrationTarget(arg1:string,arg2:string):Promise<services.DatabaseTargetClearResult>;
@@ -214,6 +216,8 @@ export function DismissCleanupVideo(arg1:number,arg2:string):Promise<void>;
 export function DismissClipCandidate(arg1:number,arg2:number):Promise<void>;
 
 export function DismissCollectionSuggestion(arg1:number):Promise<void>;
+
+export function DismissDownloadDuplicate(arg1:string,arg2:number):Promise<services.BrowserDownloadActionResult>;
 
 export function DismissFaceClusterAppend(arg1:number):Promise<void>;
 

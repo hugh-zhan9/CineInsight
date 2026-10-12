@@ -339,6 +339,11 @@ export default {
     this.registerRuntimeEvent('browser-download-tasks', tasks => {
       if (this.relaunchRequired) this.relaunchDownloadsActive = hasActiveDownloads(tasks);
     });
+    // 下载完自动查重（D-DD-04）：窗口在前台时桌面通知不弹，这里给一条应用内提示。
+    this.registerRuntimeEvent('download-duplicate-found', payload => {
+      const what = payload?.kind === 'exact' ? '完全相同的文件' : '同一部的其他版本';
+      notify(`下载的《${payload?.title || '视频'}》片库里已有${what}，可以到「下载」页处理。`);
+    });
     
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     this.systemTheme = mediaQuery.matches ? 'dark' : 'light';

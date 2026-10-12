@@ -495,6 +495,15 @@ describe('启动扫描与扫描摘要', () => {
     delete window.runtime;
   });
 
+  it('下载查出重复时给一条应用内提示，说清是相同文件还是其他版本', async () => {
+    await mountApp();
+    handlers['download-duplicate-found']({ task_id: 't1', title: '新片', kind: 'exact' });
+    handlers['download-duplicate-found']({ task_id: 't2', title: '另一部', kind: 'version' });
+    const texts = feedbackState.toasts.map(toast => toast.message).join('\n');
+    expect(texts).toContain('下载的《新片》片库里已有完全相同的文件，可以到「下载」页处理。');
+    expect(texts).toContain('下载的《另一部》片库里已有同一部的其他版本');
+  });
+
   it('LIB-08 启动时的全量扫描带 startup 触发来源', async () => {
     api.GetSettings.mockResolvedValue({ auto_scan_on_startup: true, theme: 'system' });
     api.GetAllDirectories.mockResolvedValue([{ id: 1, path: '/Volumes/media', alias: '' }]);

@@ -37,6 +37,39 @@
       应用重启后下载请求已失效，请回到浏览器插件里重新推送这个视频。
     </p>
 
+    <!-- 下载完自动查重（D-DD-04）：片库里已有相同文件或同一部的其他版本时给出处理入口。 -->
+    <div v-if="duplicateMatches.length" class="download-dup" data-test="download-duplicate">
+      <div v-for="match in duplicateMatches" :key="match.video_id" class="download-dup__item" data-test="download-duplicate-match">
+        <p class="download-dup__text">{{ duplicateText(match) }}</p>
+        <div class="download-dup__actions">
+          <button
+            v-if="task.video_id"
+            type="button"
+            class="btn-secondary btn-compact"
+            :disabled="busy"
+            data-test="download-dup-trash"
+            @click="$emit('duplicate-action', { action: 'trash', task, match })"
+          >把这次下载移到废纸篓</button>
+          <button
+            v-if="match.kind === 'version' && task.video_id"
+            type="button"
+            class="btn-secondary btn-compact"
+            :disabled="busy"
+            data-test="download-dup-version-group"
+            @click="$emit('duplicate-action', { action: 'version-group', task, match })"
+          >建立版本组</button>
+          <button
+            type="button"
+            class="btn-secondary btn-compact"
+            :disabled="busy"
+            data-test="download-dup-dismiss"
+            @click="$emit('duplicate-action', { action: 'dismiss', task, match })"
+          >{{ match.kind === 'exact' ? '保留两份' : '不是同一部' }}</button>
+        </div>
+      </div>
+    </div>
+    <p v-if="duplicateNote" class="download-row__hint" data-test="download-duplicate-note">{{ duplicateNote }}</p>
+
     <p
       v-if="notice"
       class="download-row__notice"
@@ -71,6 +104,15 @@
 <script>
 import { formatBytes } from '../../utils/mediaDetails.js';
 
+// 「对方」相对这次下载（后端 DownloadRelation*）。
+const DUPLICATE_RELATION_TEXT = {
+  higher: '比这次的更清楚',
+  lower: '比这次的更模糊',
+  larger: '文件比这次的大',
+  smaller: '文件比这次的小',
+  similar: '大小与这次的相近'
+};
+
 const STATE_LABELS = {
   queued: '排队中',
   running: '下载中',
@@ -97,7 +139,7 @@ export default {
     notice: { type: Object, default: null },
     busy: { type: Boolean, default: false }
   },
-  emits: ['cancel', 'action'],
+  emits: ['cancel', 'action', 'duplicate-action'],
   computed: {
     stateLabel() {
       return STATE_LABELS[this.task.state] || this.task.state;
@@ -115,6 +157,26 @@ export default {
       const status = this.task.import_status;
       if (status && status !== IMPORT_NOT_IN_SCAN_ROOTS && status !== IMPORT_FAILED) return '';
       return this.task.import_error || (status ? '入库没有成功' : '');
+    },
+    duplicateMatches() {
+      const duplicate = this.task.duplicate;
+      return duplicate?.status === 'found' ? duplicate.matches || [] : [];
+    },
+    // 查重本身的说明：失败原因；「其他版本」没比完或片库还有没算指纹的视频时说清楚，不说成「没有重复」；
+    // 没入库的下载只能保留两份，说清为什么没有删除按钮。
+    duplicateNote() {
+      const duplicate = this.task.duplicate;
+      if (!duplicate) return '';
+      if (duplicate.status === 'failed') return `查重没有完成：${duplicate.error || '原因未知'}`;
+      const notes = [];
+      if (duplicate.version_error) notes.push(`「其他版本」的比对没有完成：${duplicate.version_error}。`);
+      else if (this.task.video_id && Number(duplicate.unhashed_videos) > 0) {
+        notes.push(`片库里还有 ${duplicate.unhashed_videos} 部视频没算视频指纹，没参与「其他版本」的比对。`);
+      }
+      if (!this.task.video_id && this.duplicateMatches.length) {
+        notes.push('这次下载还没进片库，不能从这里删除；可以打开所在目录手动处理。');
+      }
+      return notes.join('');
     },
     needsBrowserResend() {
       if (this.task.retryable) return false;
@@ -150,6 +212,17 @@ export default {
     }
   },
   methods: {
+    duplicateText(match) {
+      const facts = [];
+      if (match.width && match.height) facts.push(`${match.width}×${match.height}`);
+      if (match.size > 0) facts.push(this.formatBytes(match.size));
+      const relation = DUPLICATE_RELATION_TEXT[match.relation];
+      if (match.kind !== 'exact' && relation) facts.push(relation);
+      const suffix = facts.length ? `（${facts.join('，')}）` : '';
+      return match.kind === 'exact'
+        ? `片库里已有完全相同的文件：《${match.title}》${suffix}`
+        : `片库里有同一部的其他版本：《${match.title}》${suffix}`;
+    },
     formatDuration(seconds) {
       const total = Math.round(Number(seconds) || 0);
       const hours = Math.floor(total / 3600);
@@ -295,6 +368,10 @@ export default {
 .download-row__notice--warn { color: var(--warning-color, #b26a00); }
 .download-row__notice--error { color: var(--danger-color, #c0392b); }
 
+.download-dup { display: grid; gap: 8px; margin-top: 8px; padding: 10px 12px; border: 1px solid var(--warning-color); border-radius: 10px; background: var(--warning-soft); }
+.download-dup__item { display: grid; gap: 6px; }
+.download-dup__text { margin: 0; color: var(--text-primary); font-size: 13px; }
+.download-dup__actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .download-row__actions {
   display: flex;
   flex-wrap: wrap;

@@ -248,6 +248,12 @@ func (a *App) wireBrowserBridge() {
 		},
 		ImportDirectory: services.BrowserDownloadImporterFromScan(a.videoService, a.directoryService.GetAllDirectories),
 		Tasks:           a.backgroundTasks,
+		// 下载完自动查重（D-DD-01..05）：判据沿用清理中心，新片指纹顺带写进同一张表。
+		CheckDuplicates: (&services.DownloadDuplicateChecker{PerceptualHash: a.perceptualHash}).Check,
+		DismissDuplicatePair: func(videoID, otherID uint) error {
+			return services.DismissNearDuplicateGroup([]uint{videoID, otherID})
+		},
+		DuplicateFound: a.notifyDownloadDuplicate,
 	})
 	a.browserBridge = services.NewBrowserBridgeServer(a.browserDownloads, settingsBridgeAuth{settings: a.settingsService})
 	// 「用 IINA 播放」：把流直接交给本机播放器，不下载。请求头一起带过去——
@@ -742,6 +748,8 @@ func (a *App) shutdown(ctx context.Context) {
 		a.jellyfinServer.Stop()
 	}
 	if a.browserDownloads != nil {
+		// 查重不值得让退出等：先取消（Wails 的启动上下文退出时不会被取消）。
+		a.browserDownloads.StopDuplicateChecks()
 		// 等在跑的 ffmpeg 收完摊。不等的话，任务的清理（删掉没下完的 .part）
 		// 会和进程退出赛跑，输给它就在下载目录里留下垃圾。
 		a.browserDownloads.Wait()

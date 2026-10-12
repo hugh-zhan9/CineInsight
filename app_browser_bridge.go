@@ -179,6 +179,48 @@ func (a *App) RevealDownload(taskUID string) (services.BrowserDownloadActionResu
 	return result, err
 }
 
+// DismissDownloadDuplicate 是下载查重提示里的「不是同一部」（D-DD-04）：其他版本写进近似重复忽略，
+// 相同文件只从这条提示里拿掉。
+func (a *App) DismissDownloadDuplicate(taskUID string, videoID uint) (services.BrowserDownloadActionResult, error) {
+	if a.browserDownloads == nil {
+		return browserDownloadUnavailable(), nil
+	}
+	result, err := a.browserDownloads.DismissDownloadDuplicate(taskUID, videoID)
+	log.Printf("API DismissDownloadDuplicate task=%s video=%d code=%s err=%v", taskUID, videoID, result.Code, err)
+	return result, err
+}
+
+// ClearDownloadDuplicate 只把一项从下载查重提示里拿掉、不写忽略（例如已经和它建立了版本组）。
+func (a *App) ClearDownloadDuplicate(taskUID string, videoID uint) (services.BrowserDownloadActionResult, error) {
+	if a.browserDownloads == nil {
+		return browserDownloadUnavailable(), nil
+	}
+	result, err := a.browserDownloads.ClearDownloadDuplicate(taskUID, videoID)
+	log.Printf("API ClearDownloadDuplicate task=%s video=%d code=%s err=%v", taskUID, videoID, result.Code, err)
+	return result, err
+}
+
+// notifyDownloadDuplicate 在下载查出重复时提醒：窗口在后台发桌面通知（只带片名，不带路径与原因），
+// 在前台由界面弹应用内提示（download-duplicate-found 事件）。
+func (a *App) notifyDownloadDuplicate(task services.BrowserDownloadTask) {
+	if task.Duplicate == nil || len(task.Duplicate.Matches) == 0 {
+		return
+	}
+	name := task.Title
+	if name == "" {
+		name = task.Filename
+	}
+	kind := task.Duplicate.Matches[0].Kind
+	what := "同一部的其他版本"
+	if kind == services.DownloadDuplicateExact {
+		what = "完全相同的文件"
+	}
+	a.desktopNotify.Notify("下载的视频片库里已有", fmt.Sprintf("《%s》：片库里已有%s", name, what))
+	if a.ctx != nil {
+		emitRuntimeEvent(a.ctx, "download-duplicate-found", map[string]any{"task_id": task.ID, "title": name, "kind": kind})
+	}
+}
+
 func browserDownloadUnavailable() services.BrowserDownloadActionResult {
 	return services.BrowserDownloadActionResult{Code: services.BrowserDownloadCodeServiceUnavailable, Message: "下载服务未启用"}
 }

@@ -92,6 +92,8 @@ const (
 	BrowserDownloadCodeDirectoryExcluded = "directory_excluded"
 	BrowserDownloadCodeDirectoryNested   = "directory_nested"
 	BrowserDownloadCodeDirectoryMissing  = "directory_missing"
+	// 「不是同一部」时这条下载没有查重结果，或结果里没有这部视频（已被处理过）。
+	BrowserDownloadCodeDuplicateNotFound = "duplicate_not_found"
 )
 
 // BrowserDownloadTask 是对外（桥接与设置页）暴露的任务快照。
@@ -120,10 +122,14 @@ type BrowserDownloadTask struct {
 	// 重新入库 / 打开所在目录」三个动作。
 	ImportStatus string `json:"import_status"`
 	// Retryable 为 true 表示内存里仍有这次请求的规格（含请求头），同一会话内可以直接重试。
-	Retryable  bool  `json:"retryable"`
-	CreatedAt  int64 `json:"created_at"`
-	UpdatedAt  int64 `json:"updated_at"`
-	FinishedAt int64 `json:"finished_at"`
+	Retryable bool `json:"retryable"`
+	// Duplicate 是下载完成后的查重结果（D-DD-04），还没查时为空；对方视频的标题等按 ID 现查。
+	Duplicate *DownloadDuplicateView `json:"duplicate"`
+	// duplicateResult 是落库的查重结论原文（D-DD-03），不直接给界面。
+	duplicateResult string
+	CreatedAt       int64 `json:"created_at"`
+	UpdatedAt       int64 `json:"updated_at"`
+	FinishedAt      int64 `json:"finished_at"`
 }
 
 // BrowserDownloadActionResult 是下载任务动作的结果。业务上的「做不了」走 Code，不走 error。
@@ -154,6 +160,12 @@ type BrowserDownloadDeps struct {
 	Now func() time.Time
 	// Reveal 在系统文件管理器里定位文件，默认 revealPath；测试注入替身，免得真去开 Finder。
 	Reveal func(path string) error
+	// CheckDuplicates 是下载完成后的查重（D-DD-01，App 接上 DownloadDuplicateChecker）；为空不查。
+	CheckDuplicates func(ctx context.Context, outputPath string, videoID uint) (DownloadDuplicateResult, error)
+	// DismissDuplicatePair 写「不是同一部」的忽略（App 接上清理中心的近似重复忽略）。
+	DismissDuplicatePair func(videoID, otherID uint) error
+	// DuplicateFound 在查出重复后调用（桌面通知与应用内提示）；可为 nil。
+	DuplicateFound func(task BrowserDownloadTask)
 }
 
 type browserDownloadEntry struct {
@@ -198,6 +210,14 @@ type BrowserDownloadService struct {
 	history          []BrowserDownloadTask
 	historyLoaded    bool
 	historyRefreshMu sync.Mutex
+
+	// 查重队列（browser_download_duplicate.go），在 mu 下读写；dupCtx 是它自己的生命周期，
+	// 退出时 StopDuplicateChecks 取消。
+	dupQueue   []string
+	dupRunning bool
+	dupStopped bool
+	dupCtx     context.Context
+	dupCancel  context.CancelFunc
 }
 
 // SetEventEmitter 注入任务变化的推送口。进度是逐行解析出来的，变化非常频繁，
@@ -522,6 +542,8 @@ func (s *BrowserDownloadService) run(ctx context.Context, id string, settings Br
 		task.ImportStatus = importStatus
 		task.ImportError = importMessage
 	})
+	// 查重在「完成」之后异步进行，不拖慢、也不改变这次下载的结果（D-DD-01）。
+	s.enqueueDuplicateCheck(id)
 }
 
 // browserDownloadImportOutcome 把入库结果归成 ImportStatus 与一句原因（不带路径）。
@@ -667,7 +689,8 @@ func (s *BrowserDownloadService) update(id string, mutate func(task *BrowserDown
 	persistNeeded := stateChanged ||
 		entry.task.Filename != before.Filename ||
 		entry.task.Directory != before.Directory ||
-		entry.task.Error != before.Error
+		entry.task.Error != before.Error ||
+		entry.task.duplicateResult != before.duplicateResult
 	s.mu.Unlock()
 
 	if persistNeeded {
@@ -739,7 +762,7 @@ func (s *BrowserDownloadService) trimLocked() {
 // 请求头、Cookie、完整地址一律只留在内存（browserDownloadEntry.request），进程一退就没了——
 // 这也是重启后的任务只能「在浏览器重新推送」、不能「重试」的原因。
 
-var browserDownloadPersistedColumns = []string{"display_url", "file_name", "directory", "status", "error", "finished_at", "updated_at"}
+var browserDownloadPersistedColumns = []string{"display_url", "file_name", "directory", "status", "error", "duplicate_result", "finished_at", "updated_at"}
 
 // persist 把一个任务的当前状态写进表（按 task_uid upsert）。写失败只记日志：落库是为了
 // 重启后还能看到历史，不能因为它让一次下载失败。
@@ -809,9 +832,10 @@ func browserDownloadRowOf(task BrowserDownloadTask) models.BrowserDownloadTask {
 		Status:     task.State,
 		// task.Error 只经 fail() 写入，已经清洗过；这里再过一遍是落盘前的最后一道闸，
 		// 以后谁绕开 fail() 直接改 Error 也漏不出去。
-		Error:     sanitizeBrowserDownloadError(task.Error, nil),
-		CreatedAt: time.UnixMilli(task.CreatedAt),
-		UpdatedAt: time.UnixMilli(task.UpdatedAt),
+		Error:           sanitizeBrowserDownloadError(task.Error, nil),
+		DuplicateResult: task.duplicateResult,
+		CreatedAt:       time.UnixMilli(task.CreatedAt),
+		UpdatedAt:       time.UnixMilli(task.UpdatedAt),
 	}
 	if task.FinishedAt > 0 {
 		finished := time.UnixMilli(task.FinishedAt)
@@ -863,7 +887,13 @@ func (s *BrowserDownloadService) ListDownloadTasks() []BrowserDownloadTask {
 		return nil
 	}
 	s.refreshHistory()
-	return mergeBrowserDownloadTasks(s.ListTasks(), s.cachedHistory())
+	tasks := mergeBrowserDownloadTasks(s.ListTasks(), s.cachedHistory())
+	// 查重提示按此刻的片库现算（内存里的任务也一样）：对方或这次下载自己已经被删、文件换过的
+	// 不再显示，免得据过期的提示去删文件（2026-10-12 审查 I-1）。
+	if db := s.db(); db != nil {
+		resolveDownloadDuplicateViews(db, tasks)
+	}
+	return tasks
 }
 
 // mergeBrowserDownloadTasks 把表里的历史并到内存任务后面，同一个 task_uid 以内存为准，
@@ -922,6 +952,7 @@ func (s *BrowserDownloadService) refreshHistory() {
 		// 内存里也有的那几行会在合并时被内存版本替换；这里照样现算，免得它们之后被裁出内存
 		// （trimLocked）时，推送里的历史版本缺了入库状态。
 		annotateBrowserDownloadHistoryImport(db, history)
+		resolveDownloadDuplicateViews(db, history)
 	}
 	s.historyMu.Lock()
 	s.history, s.historyLoaded = history, true
@@ -938,6 +969,8 @@ func browserDownloadTaskOfRow(row models.BrowserDownloadTask) BrowserDownloadTas
 		Error:     row.Error,
 		CreatedAt: row.CreatedAt.UnixMilli(),
 		UpdatedAt: row.UpdatedAt.UnixMilli(),
+
+		duplicateResult: row.DuplicateResult,
 	}
 	if path, ok := browserDownloadRowOutputPath(row.Directory, row.FileName); ok {
 		task.OutputPath = path
@@ -1086,6 +1119,10 @@ func (s *BrowserDownloadService) ReimportDownload(taskUID string) (BrowserDownlo
 	// 历史任务的入库状态是按片库与扫描目录现算的：这次入库（以及可能刚加进来的扫描目录）会改变
 	// 同一目录下其他历史任务的状态，先刷新快照，之后的推送才带得上。
 	s.refreshHistory()
+	// 入库之后重新查一次重：以前没入库时只做了精确比对（审查 Minor 1）。
+	if status == BrowserDownloadImportImported {
+		defer s.enqueueDuplicateCheck(taskUID)
+	}
 	if inMemory {
 		s.update(taskUID, func(current *BrowserDownloadTask) {
 			current.VideoID = videoID
