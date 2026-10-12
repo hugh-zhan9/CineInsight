@@ -636,6 +636,9 @@ func (a *App) beginBackupOperation() error {
 }
 
 func (a *App) shutdown(ctx context.Context) {
+	if a.subtitleService != nil {
+		a.subtitleService.StopApplePreparation()
+	}
 	// A cancelled migration runs recovery before releasing restoreMu. Close
 	// playback permanently first, so that recovery cannot admit another player.
 	a.quiescePlaybackForShutdown()

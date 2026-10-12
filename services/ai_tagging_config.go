@@ -27,15 +27,13 @@ const (
 )
 
 type AITaggingConfig struct {
-	BaseURL                   string
-	APIKey                    string
-	Model                     string
-	ImagesPerRequest          int
-	SubtitleCharLimit         int
-	StartupBatchSize          int
-	MaxExtraFrames            int
-	SubtitleWhisperXModel     string
-	SubtitleWhisperXBatchSize int
+	BaseURL           string
+	APIKey            string
+	Model             string
+	ImagesPerRequest  int
+	SubtitleCharLimit int
+	StartupBatchSize  int
+	MaxExtraFrames    int
 }
 
 type AITaggingConfigProvider interface {
@@ -46,15 +44,13 @@ type EnvAITaggingConfigProvider struct{}
 
 func (EnvAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 	config := AITaggingConfig{
-		BaseURL:                   strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
-		APIKey:                    strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
-		Model:                     strings.TrimSpace(os.Getenv(envAITaggingModel)),
-		ImagesPerRequest:          envInt(envAITaggingImagesPerRequest, defaultAITaggingImagesPerRequest),
-		SubtitleCharLimit:         envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
-		StartupBatchSize:          envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
-		MaxExtraFrames:            normalizeAITaggingMaxExtraFrames(envInt(envAITaggingMaxExtraFrames, defaultAITaggingMaxExtraFrames)),
-		SubtitleWhisperXModel:     defaultSubtitleWhisperXModel,
-		SubtitleWhisperXBatchSize: defaultSubtitleWhisperXBatchSize,
+		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
+		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
+		Model:             strings.TrimSpace(os.Getenv(envAITaggingModel)),
+		ImagesPerRequest:  envInt(envAITaggingImagesPerRequest, defaultAITaggingImagesPerRequest),
+		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
+		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
+		MaxExtraFrames:    normalizeAITaggingMaxExtraFrames(envInt(envAITaggingMaxExtraFrames, defaultAITaggingMaxExtraFrames)),
 	}
 	if config.BaseURL == "" || config.Model == "" {
 		return config, fmt.Errorf("AI tagging config unavailable")
@@ -66,15 +62,13 @@ type SettingsAITaggingConfigProvider struct{}
 
 func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 	envConfig := AITaggingConfig{
-		BaseURL:                   strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
-		APIKey:                    strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
-		Model:                     strings.TrimSpace(os.Getenv(envAITaggingModel)),
-		ImagesPerRequest:          envInt(envAITaggingImagesPerRequest, defaultAITaggingImagesPerRequest),
-		SubtitleCharLimit:         envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
-		StartupBatchSize:          envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
-		MaxExtraFrames:            normalizeAITaggingMaxExtraFrames(envInt(envAITaggingMaxExtraFrames, defaultAITaggingMaxExtraFrames)),
-		SubtitleWhisperXModel:     defaultSubtitleWhisperXModel,
-		SubtitleWhisperXBatchSize: defaultSubtitleWhisperXBatchSize,
+		BaseURL:           strings.TrimSpace(os.Getenv(envAITaggingBaseURL)),
+		APIKey:            strings.TrimSpace(os.Getenv(envAITaggingAPIKey)),
+		Model:             strings.TrimSpace(os.Getenv(envAITaggingModel)),
+		ImagesPerRequest:  envInt(envAITaggingImagesPerRequest, defaultAITaggingImagesPerRequest),
+		SubtitleCharLimit: envInt(envAITaggingSubtitleCharLimit, defaultAITaggingSubtitleCharLimit),
+		StartupBatchSize:  envInt(envAITaggingStartupBatchSize, defaultAITaggingStartupBatchSize),
+		MaxExtraFrames:    normalizeAITaggingMaxExtraFrames(envInt(envAITaggingMaxExtraFrames, defaultAITaggingMaxExtraFrames)),
 	}
 
 	config := envConfig
@@ -100,8 +94,6 @@ func (SettingsAITaggingConfigProvider) Load() (AITaggingConfig, error) {
 				config.StartupBatchSize = settings.AITaggingStartupBatchSize
 			}
 			config.MaxExtraFrames = normalizeAITaggingMaxExtraFrames(settings.AITaggingMaxExtraFrames)
-			config.SubtitleWhisperXModel = normalizeSubtitleWhisperXModel(settings.SubtitleWhisperXModel)
-			config.SubtitleWhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(settings.SubtitleWhisperXBatchSize)
 		}
 	}
 

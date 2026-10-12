@@ -39,7 +39,7 @@ func TestTranslateSubtitleFileBilingualKeepsOriginalAboveTranslation(t *testing.
 	})
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0644)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	result, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"})
@@ -68,7 +68,7 @@ func TestTranslateSubtitleFileTranslatedOnlyReplacesOriginalAndKeepsPermissions(
 	})
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0600)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	if _, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeTranslatedOnly},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"}); err != nil {
@@ -99,7 +99,7 @@ func TestTranslateSubtitleFileKeepsOriginalWhenTranslationFails(t *testing.T) {
 	})
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0644)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	if _, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeTranslatedOnly},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"}); err == nil {
@@ -116,7 +116,7 @@ func TestTranslateSubtitleFileKeepsOriginalWhenTranslationFails(t *testing.T) {
 func TestTranslateSubtitleFileRejectsInvalidRequests(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	videoID, videoPath, _ := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0644)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	config := SubtitleTranslationConfig{Provider: "llm", BaseURL: "http://127.0.0.1:1", Model: "local-qwen"}
 
 	cases := []struct {
@@ -148,7 +148,7 @@ func TestTranslateSubtitleFileRequiresExistingSubtitle(t *testing.T) {
 	videoPath := filepath.Join(t.TempDir(), "matrix.mp4")
 	video := mustCreateGlossaryVideo(t, videoPath)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	_, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: video.ID, TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: "http://127.0.0.1:1", Model: "local-qwen"})
@@ -161,43 +161,12 @@ func TestTranslateSubtitleFileRejectsEmptySubtitle(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	videoID, videoPath, _ := mustPrepareTranslatableSubtitle(t, "", 0644)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	_, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: "http://127.0.0.1:1", Model: "local-qwen"})
 	if err == nil || !strings.Contains(err.Error(), "字幕文件为空") {
 		t.Fatalf("空字幕应当被拒绝，实际: %v", err)
-	}
-}
-
-func TestTranslateSubtitleFileSkipsGlossaryLookupForDeepL(t *testing.T) {
-	setupVideoServiceTestDB(t)
-	recorder := &recordingRoundTripper{
-		label:     "deepl translate existing subtitle",
-		responses: func() (string, error) { return `{"translations":[{"text":"尼奥来了"},{"text":"第二句"}]}`, nil },
-	}
-	original := deeplHTTPClient
-	deeplHTTPClient = &http.Client{Transport: recorder}
-	t.Cleanup(func() { deeplHTTPClient = original })
-
-	videoID, videoPath, _ := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0644)
-
-	service := NewSubtitleService(t.TempDir())
-	resolved := 0
-	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) {
-		resolved++
-		return nil, nil
-	}
-	if _, err := service.TranslateSubtitleFile(context.Background(), videoPath,
-		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
-		SubtitleTranslationConfig{Provider: "deepl", DeepLAPIKey: "test-free-key:fx"}); err != nil {
-		t.Fatalf("DeepL 翻译已有字幕失败: %v", err)
-	}
-	if resolved != 0 {
-		t.Fatalf("DeepL 用不上术语表，不该因此多读一次库（%d 次）", resolved)
-	}
-	if len(recorder.captured) != 1 {
-		t.Fatalf("两条字幕应当只发一次 DeepL 请求: %d", len(recorder.captured))
 	}
 }
 
@@ -231,7 +200,7 @@ func TestTranslateSubtitleFileKeepsEntryWhenTranslationComesBackEmpty(t *testing
 	})
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, subtitleWithUntranslatableLine, 0644)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	result, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeTranslatedOnly},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"})
@@ -264,7 +233,7 @@ func TestTranslateSubtitleFileBilingualStaysAlignedWhenTranslationComesBackEmpty
 	})
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, subtitleWithUntranslatableLine, 0644)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	if _, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"}); err != nil {
@@ -287,7 +256,7 @@ func TestTranslateSubtitleFileBilingualKeepsSubtitlePermissions(t *testing.T) {
 	})
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0600)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	if _, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"}); err != nil {
@@ -312,7 +281,7 @@ func TestTranslateSubtitleFileRebuildsSubtitleIndex(t *testing.T) {
 		t.Fatalf("建立字幕索引失败: %v", err)
 	}
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	result, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeTranslatedOnly},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"})
@@ -349,7 +318,7 @@ func TestTranslateSubtitleFileCancelKeepsOriginalSubtitle(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	original := buildLongSubtitle(60)
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, original, 0644)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 
 	// 第一批一到就叫停：取消要么打断这一批，要么打断下一批，两种都必须保住原字幕。
 	var requests int32
@@ -399,7 +368,7 @@ func TestTranslateSubtitleFileWarnsAboutUntranslatedEntries(t *testing.T) {
 	})
 	videoID, videoPath, _ := mustPrepareTranslatableSubtitle(t, subtitleWithUntranslatableLine, 0644)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	result, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeTranslatedOnly},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"})
@@ -419,7 +388,7 @@ func TestTranslateSubtitleFileBilingualDoesNotDuplicateFallbackLine(t *testing.T
 	})
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, subtitleWithUntranslatableLine, 0644)
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	if _, err := service.TranslateSubtitleFile(context.Background(), videoPath,
 		SubtitleTranslateRequest{VideoID: videoID, SourceLang: "en", TargetLang: "zh", Mode: SubtitleTranslateModeBilingual},
 		SubtitleTranslationConfig{Provider: "llm", BaseURL: server.URL, Model: "local-qwen"}); err != nil {
@@ -435,7 +404,7 @@ func TestTranslateSubtitleFileBilingualDoesNotDuplicateFallbackLine(t *testing.T
 func TestTranslateSubtitleFileCancelWhileWaitingForSubtitleLock(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	videoID, videoPath, srtPath := mustPrepareTranslatableSubtitle(t, translatableSubtitle, 0644)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 
 	// 翻译服务一次都不该被调用：取消发生在等锁期间，拿到锁就应当立刻退出。
 	var requests int32
@@ -495,8 +464,8 @@ func waitForTranslationRegistration(service *SubtitleService, videoID uint) bool
 	return false
 }
 
-func TestTranslateSRTKeepsEmptyTranslationOutOfContextWindow(t *testing.T) {
-	service := NewSubtitleService(t.TempDir())
+func TestTranslateSRTKeepsEmptyTranslationAcrossPartialBatch(t *testing.T) {
+	service := newSubtitleFixtureService(t)
 	dir := t.TempDir()
 	inputPath := filepath.Join(dir, "long.srt")
 	outputPath := filepath.Join(dir, "long_out.srt")
@@ -547,10 +516,8 @@ func TestTranslateSRTKeepsEmptyTranslationOutOfContextWindow(t *testing.T) {
 	}))
 	defer server.Close()
 
-	translator := NewOpenAICompatibleSubtitleTranslator(SubtitleTranslationConfig{
-		Provider: "llm", BaseURL: server.URL, Model: "local-qwen",
-	})
-	fallbacks, err := service.translateSRTWithProgress(context.Background(), inputPath, outputPath, "en", "zh", translator, nil, nil)
+	translator := subtitleFixtureTranslator{endpoint: server.URL}
+	fallbacks, err := service.translateSRTWithProgress(context.Background(), inputPath, outputPath, "en", "zh", translator, nil)
 	if err != nil {
 		t.Fatalf("翻译失败: %v", err)
 	}
@@ -563,12 +530,8 @@ func TestTranslateSRTKeepsEmptyTranslationOutOfContextWindow(t *testing.T) {
 	if len(prompts) != 2 {
 		t.Fatalf("60 条字幕应当分两批: %d", len(prompts))
 	}
-	// 空译文若原样进入上文，等于在提示词里示范「返回空是可以的」。
-	if strings.Contains(prompts[1], `"target":""`) {
-		t.Fatalf("上文窗口不应带上空译文:\n%s", prompts[1])
-	}
-	if !strings.Contains(prompts[1], `"target":"Line 50"`) {
-		t.Fatalf("上文窗口应当带上回退后的原文:\n%s", prompts[1])
+	if got := mustReadSubtitle(t, outputPath); !strings.Contains(got, "Line 50") || !strings.Contains(got, "60\n") {
+		t.Fatalf("空译文及末批条目必须保留: %s", got)
 	}
 }
 
@@ -584,7 +547,7 @@ func TestFinalizeSubtitleArtifactWarnsAboutUntranslatedEntries(t *testing.T) {
 		t.Fatalf("写入测试字幕失败: %v", err)
 	}
 
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	result, err := service.finalizeSubtitleArtifact(context.Background(), 1,
 		SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX},
 		srtPath, "en", SubtitleGenerateOptions{

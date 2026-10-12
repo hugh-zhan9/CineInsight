@@ -164,9 +164,6 @@ export function normalizeSettingsForm(settings) {
   form.scan_exclude_paths = form.scan_exclude_paths || '';
   form.image_scan_exclude_paths = form.image_scan_exclude_paths || '';
   form.image_extensions = form.image_extensions || '';
-  form.subtitle_translation_provider = form.subtitle_translation_provider || 'deepl';
-  form.subtitle_whisperx_model = form.subtitle_whisperx_model || 'medium';
-  form.subtitle_whisperx_batch_size = form.subtitle_whisperx_batch_size || 8;
   form.backup_directory = form.backup_directory || '';
   form.backup_retention_count = form.backup_retention_count || 7;
   form.backup_interval_hours = Number.isFinite(form.backup_interval_hours) ? form.backup_interval_hours : 24;
@@ -250,13 +247,6 @@ export function buildSettingsPayload(form) {
     log_enabled: form.log_enabled,
     bilingual_enabled: form.bilingual_enabled || false,
     bilingual_lang: form.bilingual_lang || 'zh',
-    deepl_api_key: form.deepl_api_key || '',
-    subtitle_translation_provider: form.subtitle_translation_provider || 'deepl',
-    subtitle_translation_base_url: form.subtitle_translation_base_url || '',
-    subtitle_translation_api_key: form.subtitle_translation_api_key || '',
-    subtitle_translation_model: form.subtitle_translation_model || '',
-    subtitle_whisperx_model: form.subtitle_whisperx_model || 'medium',
-    subtitle_whisperx_batch_size: form.subtitle_whisperx_batch_size || 8,
     ai_tagging_base_url: form.ai_tagging_base_url || '',
     ai_tagging_api_key: form.ai_tagging_api_key || '',
     ai_tagging_model: form.ai_tagging_model || '',

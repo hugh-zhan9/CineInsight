@@ -3,15 +3,10 @@ package services
 type SubtitleEngine string
 
 const (
+	SubtitleEngineApple SubtitleEngine = "apple"
+	// Legacy IDs are retained only for historical task artifacts; they cannot execute.
 	SubtitleEngineWhisperX SubtitleEngine = "whisperx"
 	SubtitleEngineQwen     SubtitleEngine = "qwen"
-)
-
-const (
-	defaultSubtitleWhisperXModel       = "medium"
-	defaultSubtitleWhisperXBatchSize   = 8
-	defaultSubtitleWhisperXComputeType = "int8"
-	maxSubtitleWhisperXBatchSize       = 16
 )
 
 type SubtitlePrepareMode string
@@ -43,16 +38,18 @@ const (
 )
 
 type SubtitleEngineStatus struct {
-	Engine         SubtitleEngine           `json:"engine"`
-	DisplayName    string                   `json:"display_name"`
-	Supported      bool                     `json:"supported"`
-	Available      bool                     `json:"available"`
-	NeedsPrepare   bool                     `json:"needs_prepare"`
-	PrepareMode    SubtitlePrepareMode      `json:"prepare_mode"`
-	ReasonCode     SubtitleStatusReasonCode `json:"reason_code"`
-	SourceLangMode SubtitleSourceLangMode   `json:"source_lang_mode"`
-	ReasonMessage  string                   `json:"reason_message"`
-	PrepareHint    string                   `json:"prepare_hint"`
+	Engine               SubtitleEngine           `json:"engine"`
+	DisplayName          string                   `json:"display_name"`
+	Supported            bool                     `json:"supported"`
+	Available            bool                     `json:"available"`
+	NeedsPrepare         bool                     `json:"needs_prepare"`
+	PrepareMode          SubtitlePrepareMode      `json:"prepare_mode"`
+	ReasonCode           SubtitleStatusReasonCode `json:"reason_code"`
+	SourceLangMode       SubtitleSourceLangMode   `json:"source_lang_mode"`
+	ReasonMessage        string                   `json:"reason_message"`
+	PrepareHint          string                   `json:"prepare_hint"`
+	Languages            []AppleLanguage          `json:"languages"`
+	TranslationLanguages []AppleLanguage          `json:"translation_languages"`
 }
 
 type SubtitleGenerateRequest struct {
@@ -62,17 +59,10 @@ type SubtitleGenerateRequest struct {
 	SourceLang string         `json:"source_lang"`
 }
 
-type SubtitleRecognitionConfig struct {
-	WhisperXModel       string
-	WhisperXBatchSize   int
-	WhisperXComputeType string
-}
-
 type SubtitleGenerateOptions struct {
 	BilingualEnabled  bool
 	BilingualLang     string
 	TranslationConfig SubtitleTranslationConfig
-	RecognitionConfig SubtitleRecognitionConfig
 	ForceGenerate     bool
 }
 

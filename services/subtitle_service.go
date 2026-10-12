@@ -3,14 +3,11 @@ package services
 import (
 	"archive/zip"
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -28,32 +25,30 @@ import (
 
 // 预编译正则表达式（避免每次调用重复编译）
 var (
-	srtBlockSplitter     = regexp.MustCompile(`\r?\n\r?\n`)
-	langDetectRe         = regexp.MustCompile(`auto-detected language:\s*(\w+)`)
-	langDetectReFallback = regexp.MustCompile(`language:\s*(\w+)`)
+	srtBlockSplitter = regexp.MustCompile(`\r?\n\r?\n`)
 )
 
-// DeepL HTTP 客户端（带超时控制）
-var deeplHTTPClient = &http.Client{
-	Timeout: 30 * time.Second,
-}
+var (
+	ErrSubtitleEnginePreparing            = errors.New("系统语言任务正在进行，请等当前任务完成或先取消")
+	ErrSubtitleEnginePreparationCancelled = errors.New("已取消字幕引擎准备")
+)
 
 type SubtitleService struct {
+	translatorFactory func(SubtitleTranslationConfig) (SubtitleTranslator, error)
+	appleRunner       appleAIRunner
+
 	ctx               context.Context
 	mu                sync.Mutex
 	transcriptionSlot chan struct{}
 	pending           map[uint]*pendingSubtitleArtifact
 	taskQueue         *subtitleTaskQueue
-	// glossaryResolver 解析视频的术语生效集（D-033）。可替换是为了让翻译流程的
-	// 测试不必先造出作品集与库表。
-	glossaryResolver func(videoID uint, targetLanguage string) ([]GlossaryTerm, error)
 	// translationCancels 按视频登记正在跑的「翻译已有字幕」任务，让前端能中途叫停。
 	// 字幕生成走队列自带取消，这条路径不进队列，所以自己记一份。
 	translationCancels map[uint][]*translationCancelEntry
 	// eventSink 让测试截获本服务新增的事件（subtitle-failed 等）；为空时经 Wails runtime 发往前端。
 	eventSink func(name string, payload any)
 
-	// 引擎状态缓存（D-PC22）：每次探测都要起两个 Python 进程 import 运行时，60 秒内复用上一次的结果，
+	// 引擎状态缓存（D-PC22）：探测苹果系统能力，60 秒内复用上一次的结果，
 	// 准备前后失效。engineStatusProbe / now 是测试接缝。
 	engineStatusMu    sync.Mutex
 	engineStatusCache []SubtitleEngineStatus
@@ -61,24 +56,14 @@ type SubtitleService struct {
 	engineStatusProbe func() []SubtitleEngineStatus
 	now               func() time.Time
 
-	// prepareCancel 非空表示有一轮引擎准备正在进行，CancelEnginePreparation 调它杀掉 pip 等子进程。
+	// prepareCancel 非空表示有一轮引擎准备正在进行，CancelEnginePreparation 调它取消系统辅助程序。
 	prepareMu     sync.Mutex
 	prepareCancel context.CancelFunc
+	prepareDone   chan struct{}
+	prepareClosed bool
 
-	BaseDir  string
-	BinDir   string
-	ModelDir string
-}
-
-type subtitleLocalOnlyASRContextKey struct{}
-
-func withSubtitleLocalOnlyASR(ctx context.Context) context.Context {
-	return context.WithValue(ctx, subtitleLocalOnlyASRContextKey{}, true)
-}
-
-func isSubtitleLocalOnlyASR(ctx context.Context) bool {
-	value, _ := ctx.Value(subtitleLocalOnlyASRContextKey{}).(bool)
-	return value
+	BaseDir string
+	BinDir  string
 }
 
 type pendingSubtitleArtifact struct {
@@ -97,9 +82,7 @@ func NewSubtitleService(baseDir string) *SubtitleService {
 	service := &SubtitleService{
 		BaseDir:           baseDir,
 		BinDir:            filepath.Join(baseDir, "bin"),
-		ModelDir:          filepath.Join(baseDir, "models"),
 		transcriptionSlot: make(chan struct{}, 1),
-		glossaryResolver:  NewTranslationGlossaryService().ResolveForVideo,
 	}
 	service.taskQueue = service.newSubtitleTaskQueue()
 	return service
@@ -240,8 +223,7 @@ func (s *SubtitleService) GetEngineStatuses() ([]SubtitleEngineStatus, error) {
 
 func (s *SubtitleService) probeEngineStatuses() []SubtitleEngineStatus {
 	return []SubtitleEngineStatus{
-		s.getWhisperXStatus(),
-		s.getQwenStatus(),
+		s.getAppleStatus(),
 	}
 }
 
@@ -258,121 +240,6 @@ func (s *SubtitleService) clock() time.Time {
 	return time.Now()
 }
 
-func (s *SubtitleService) getWhisperXStatus() SubtitleEngineStatus {
-	ffmpegReady := s.findBinary("ffmpeg") != ""
-	installed := s.isWhisperXInstalled()
-	status := SubtitleEngineStatus{
-		Engine:         SubtitleEngineWhisperX,
-		DisplayName:    "WhisperX",
-		Supported:      true,
-		Available:      ffmpegReady && installed,
-		NeedsPrepare:   false,
-		PrepareMode:    SubtitlePrepareModeNone,
-		ReasonCode:     SubtitleReasonReady,
-		SourceLangMode: SubtitleSourceLangModeShared,
-		ReasonMessage:  "WhisperX 已就绪",
-		PrepareHint:    "",
-	}
-
-	if runtime.GOOS == "darwin" {
-		status.PrepareMode = SubtitlePrepareModeManaged
-		if !ffmpegReady {
-			status.Available = false
-			status.NeedsPrepare = true
-			status.ReasonCode = SubtitleReasonMissingFFmpeg
-			status.ReasonMessage = "缺少 FFmpeg，可通过应用自动准备。"
-			status.PrepareHint = "准备 WhisperX 时会同时检查并安装 FFmpeg。"
-			return status
-		}
-		if !installed {
-			status.Available = false
-			status.NeedsPrepare = true
-			status.ReasonCode = SubtitleReasonMissingRuntime
-			status.ReasonMessage = "缺少 WhisperX 运行时，可通过应用自动准备。"
-			status.PrepareHint = "应用会创建私有 WhisperX sidecar 与模型缓存。"
-			return status
-		}
-		return status
-	}
-
-	if !ffmpegReady {
-		status.Available = false
-		status.PrepareMode = SubtitlePrepareModeManualPrereq
-		status.ReasonCode = SubtitleReasonManualPrereq
-		status.ReasonMessage = "当前平台需要先手动安装 FFmpeg。"
-		status.PrepareHint = "安装 FFmpeg 后，应用仍可继续准备 WhisperX 私有运行时。"
-		return status
-	}
-	if !installed {
-		status.Available = false
-		status.NeedsPrepare = true
-		status.PrepareMode = SubtitlePrepareModeManaged
-		status.ReasonCode = SubtitleReasonMissingRuntime
-		status.ReasonMessage = "共享前置条件已满足，可继续准备 WhisperX 运行时。"
-		status.PrepareHint = "当前平台不会自动安装系统依赖，只会准备应用私有运行时。"
-		return status
-	}
-	return status
-}
-
-func (s *SubtitleService) getQwenStatus() SubtitleEngineStatus {
-	status := SubtitleEngineStatus{
-		Engine:         SubtitleEngineQwen,
-		DisplayName:    "Qwen3-ASR-1.7B",
-		Supported:      false,
-		Available:      false,
-		NeedsPrepare:   false,
-		PrepareMode:    SubtitlePrepareModeUnsupported,
-		ReasonCode:     SubtitleReasonUnsupportedPlatform,
-		SourceLangMode: SubtitleSourceLangModeIgnored,
-		ReasonMessage:  "Qwen v1 当前仅在 macOS 上提供。",
-		PrepareHint:    "",
-	}
-
-	if runtime.GOOS != "darwin" {
-		return status
-	}
-	if runtime.GOARCH != "arm64" {
-		status.ReasonMessage = "Qwen v1 当前仅默认启用 macOS arm64；amd64 需后续探测通过后再启用。"
-		return status
-	}
-
-	ffmpegReady := s.findBinary("ffmpeg") != ""
-	installed := s.isQwenInstalled()
-	status.Supported = true
-	status.PrepareMode = SubtitlePrepareModeManaged
-	status.ReasonCode = SubtitleReasonReady
-	status.ReasonMessage = "Qwen 已就绪"
-	status.PrepareHint = ""
-	status.Available = ffmpegReady && installed
-	if !ffmpegReady {
-		status.Available = false
-		status.NeedsPrepare = true
-		status.ReasonCode = SubtitleReasonMissingFFmpeg
-		status.ReasonMessage = "缺少 FFmpeg，可通过应用自动准备。"
-		status.PrepareHint = "准备 Qwen 时会同时检查并安装 FFmpeg。"
-		return status
-	}
-	if !installed {
-		status.Available = false
-		status.NeedsPrepare = true
-		status.ReasonCode = SubtitleReasonMissingRuntime
-		status.ReasonMessage = "缺少 Qwen 运行时，可通过应用自动准备。"
-		status.PrepareHint = "应用会创建独立的 Qwen ASR sidecar。"
-		return status
-	}
-	return status
-}
-
-var (
-	// ErrSubtitleEnginePreparing：已有一轮引擎准备在进行（pip 装在同一个虚拟环境里，不能两路并发）。
-	ErrSubtitleEnginePreparing = errors.New("字幕引擎正在准备中，请等当前准备完成或先取消")
-	// ErrSubtitleEnginePreparationCancelled：用户取消了引擎准备（CancelEnginePreparation）。
-	ErrSubtitleEnginePreparationCancelled = errors.New("已取消字幕引擎准备")
-)
-
-// PrepareEngine 准备字幕引擎的运行时（D-PC22）：下载解释器、建虚拟环境、pip 安装全部经可取消的
-// 子进程执行，CancelEnginePreparation 会杀掉它们；准备结果经桌面通知告知（文案不含失败原因）。
 func (s *SubtitleService) PrepareEngine(engine SubtitleEngine) error {
 	ctx, finish, err := s.beginEnginePreparation()
 	if err != nil {
@@ -420,25 +287,13 @@ func (s *SubtitleService) PrepareEngine(engine SubtitleEngine) error {
 }
 
 func (s *SubtitleService) runEnginePreparation(ctx context.Context, engine SubtitleEngine, status SubtitleEngineStatus) error {
-	if !status.Available && status.ReasonCode == SubtitleReasonMissingFFmpeg && runtime.GOOS == "darwin" {
-		if err := s.downloadFFmpeg(ctx); err != nil {
-			return err
-		}
-	}
-
-	s.emitProgress("prepare", engine, "checking", 0, "准备运行时...")
-
-	switch engine {
-	case SubtitleEngineWhisperX:
-		if runtime.GOOS != "darwin" && s.findBinary("ffmpeg") == "" {
-			return ErrSubtitleDependencyUnsupportedPlatform
-		}
-		return s.installWhisperXRuntime(ctx)
-	case SubtitleEngineQwen:
-		return s.installQwenRuntime(ctx)
-	default:
+	if engine != SubtitleEngineApple {
 		return fmt.Errorf("不支持的字幕引擎: %s", engine)
 	}
+	if s.findBinary("ffmpeg") == "" {
+		return s.downloadFFmpeg(ctx)
+	}
+	return nil
 }
 
 func (s *SubtitleService) emitPrepareComplete(engine SubtitleEngine) {
@@ -453,21 +308,32 @@ func (s *SubtitleService) emitPrepareComplete(engine SubtitleEngine) {
 func (s *SubtitleService) beginEnginePreparation() (context.Context, func(), error) {
 	s.prepareMu.Lock()
 	defer s.prepareMu.Unlock()
+	if s.prepareClosed {
+		return nil, nil, context.Canceled
+	}
 	if s.prepareCancel != nil {
 		return nil, nil, ErrSubtitleEnginePreparing
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	parent := s.ctx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
 	s.prepareCancel = cancel
+	s.prepareDone = done
 	finish := func() {
 		s.prepareMu.Lock()
 		s.prepareCancel = nil
+		s.prepareDone = nil
+		close(done)
 		s.prepareMu.Unlock()
 		cancel()
 	}
 	return ctx, finish, nil
 }
 
-// CancelEnginePreparation 取消正在进行的字幕引擎准备（杀掉 pip 等子进程）。没有进行中的准备时返回 false。
+// CancelEnginePreparation 取消正在进行的字幕引擎准备（取消系统辅助程序）。没有进行中的准备时返回 false。
 func (s *SubtitleService) CancelEnginePreparation() bool {
 	s.prepareMu.Lock()
 	cancel := s.prepareCancel
@@ -479,8 +345,7 @@ func (s *SubtitleService) CancelEnginePreparation() bool {
 	return true
 }
 
-// notifyEnginePreparation 把准备结果发成系统通知（D-PC22）。失败原因不进文案：pip 与解释器的输出里
-// 常带本机路径（AI-CONTEXT 2.20），原因在设置页与弹窗里看。
+// notifyEnginePreparation 只通知准备结果，具体原因由设置页与弹窗显示。
 func (s *SubtitleService) notifyEnginePreparation(displayName string, err error) {
 	notifier := s.subtitleTaskQueue().desktopNotifier()
 	if notifier == nil {
@@ -505,8 +370,8 @@ func (s *SubtitleService) CheckDependencies() (map[string]bool, error) {
 	result := make(map[string]bool)
 	result["ffmpeg"] = s.findBinary("ffmpeg") != ""
 	for _, status := range statuses {
-		if status.Engine == SubtitleEngineWhisperX {
-			result["whisper"] = status.Available
+		if status.Engine == SubtitleEngineApple {
+			result["apple"] = status.Available
 			result["model"] = status.Available
 		}
 	}
@@ -547,7 +412,7 @@ func (s *SubtitleService) findBinary(name string) string {
 }
 
 func (s *SubtitleService) DownloadDependencies() error {
-	return s.PrepareEngine(SubtitleEngineWhisperX)
+	return s.PrepareEngine(SubtitleEngineApple)
 }
 
 // GenerateSubtitle 把一次字幕生成排进 FIFO 队列并等它结束。任务落 subtitle_jobs（D-PC20）；
@@ -629,7 +494,7 @@ func (s *SubtitleService) executeSubtitleTask(ctx context.Context, taskID uint, 
 	// Extract audio and transcribe with the shared local-ASR execution slot.
 	s.emitGenerateProgress(taskID, req, "extracting-audio", 10, "提取音频...")
 	s.emitGenerateProgress(taskID, req, "transcribing", 20, fmt.Sprintf("使用 %s 转写音频...", engineStatus.DisplayName))
-	detectedLang, segments, err := s.transcribeVideoLocally(ctx, videoPath, req.Engine, req.SourceLang, options.RecognitionConfig)
+	detectedLang, segments, err := s.transcribeVideoLocally(ctx, videoPath, req.Engine, req.SourceLang)
 	if err != nil {
 		if ctx.Err() != nil {
 			s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
@@ -764,41 +629,19 @@ func (s *SubtitleService) discardRegisteredPendingSubtitle(videoID uint) error {
 }
 
 // GenerateTemporaryTranscript performs local ASR without writing an SRT or sending raw audio externally.
-func (s *SubtitleService) GenerateTemporaryTranscript(ctx context.Context, video models.Video, charLimit int, recognitionConfig SubtitleRecognitionConfig) (TemporaryTranscriptEvidence, error) {
-	statuses, err := s.GetEngineStatuses()
+func (s *SubtitleService) GenerateTemporaryTranscript(ctx context.Context, video models.Video, charLimit int) (TemporaryTranscriptEvidence, error) {
+	language, segments, err := s.transcribeVideoLocally(ctx, video.Path, SubtitleEngineApple, "auto")
 	if err != nil {
 		return TemporaryTranscriptEvidence{}, err
 	}
-	available := make(map[SubtitleEngine]bool, len(statuses))
-	for _, status := range statuses {
-		available[status.Engine] = status.Available
+	text := plainTranscriptText(segments, charLimit)
+	if text == "" {
+		return TemporaryTranscriptEvidence{}, fmt.Errorf("未识别到有效语音")
 	}
-	engines := []SubtitleEngine{SubtitleEngineWhisperX, SubtitleEngineQwen}
-	var failures []string
-	localOnlyCtx := withSubtitleLocalOnlyASR(ctx)
-	for _, engine := range engines {
-		if !available[engine] {
-			continue
-		}
-		detectedLang, segments, transcribeErr := s.transcribeVideoLocally(localOnlyCtx, video.Path, engine, "auto", recognitionConfig)
-		if transcribeErr != nil {
-			failures = append(failures, fmt.Sprintf("%s: %v", engine, transcribeErr))
-			continue
-		}
-		text := plainTranscriptText(segments, charLimit)
-		if text == "" {
-			failures = append(failures, fmt.Sprintf("%s: empty transcript", engine))
-			continue
-		}
-		return TemporaryTranscriptEvidence{Text: text, DetectedLang: detectedLang, Engine: string(engine)}, nil
-	}
-	if len(failures) > 0 {
-		return TemporaryTranscriptEvidence{}, fmt.Errorf("temporary transcript failed: %s", strings.Join(failures, "; "))
-	}
-	return TemporaryTranscriptEvidence{}, fmt.Errorf("no prepared local subtitle engine is available")
+	return TemporaryTranscriptEvidence{Text: text, DetectedLang: language, Engine: string(SubtitleEngineApple)}, nil
 }
 
-func (s *SubtitleService) transcribeVideoLocally(ctx context.Context, videoPath string, engine SubtitleEngine, sourceLang string, config SubtitleRecognitionConfig) (string, []subtitleparser.Segment, error) {
+func (s *SubtitleService) transcribeVideoLocally(ctx context.Context, videoPath string, engine SubtitleEngine, sourceLang string) (string, []subtitleparser.Segment, error) {
 	if err := s.acquireTranscriptionSlot(ctx); err != nil {
 		return "", nil, err
 	}
@@ -816,14 +659,10 @@ func (s *SubtitleService) transcribeVideoLocally(ctx context.Context, videoPath 
 	if err := s.extractAudio(ctx, videoPath, tempWav); err != nil {
 		return "", nil, err
 	}
-	switch engine {
-	case SubtitleEngineWhisperX:
-		return s.transcribeWhisperXWithLang(ctx, tempWav, sourceLang, config)
-	case SubtitleEngineQwen:
-		return s.transcribeQwenWithLang(ctx, tempWav, sourceLang)
-	default:
-		return "", nil, fmt.Errorf("不支持的字幕引擎: %s", engine)
+	if engine != SubtitleEngineApple {
+		return "", nil, fmt.Errorf("字幕引擎已退役，请使用苹果系统识别")
 	}
+	return s.transcribeApple(ctx, tempWav, sourceLang)
 }
 
 func (s *SubtitleService) acquireTranscriptionSlot(ctx context.Context) error {
@@ -937,20 +776,6 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 				log.Printf("[Subtitle] translation config unavailable provider=%s err=%v, keeping original SRT", provider, err)
 				goto done
 			}
-			// 术语生效集按视频所属作品集与目标语言解析一次，整轮翻译共用（D-033、D-PC16）。
-			// 只有能吃下术语表的翻译器才去查：DeepL 用不上，也就不该因为一次库读失败
-			// 而多出一条它原本没有的失败路径（D-034）。
-			var glossary []GlossaryTerm
-			if _, injectable := translator.(ContextualTranslator); injectable {
-				resolved, resolveErr := s.glossaryResolver(req.VideoID, targetLang)
-				if resolveErr != nil {
-					translationStatus = "failed"
-					warnings = append(warnings, fmt.Sprintf("双语翻译失败，已保留原文字幕：读取术语表失败：%v", resolveErr))
-					log.Printf("[Subtitle] resolve translation glossary failed video_id=%d err=%v", req.VideoID, resolveErr)
-					goto done
-				}
-				glossary = resolved
-			}
 			s.emitGenerateProgress(taskID, req, "translating", 60, subtitleTranslationProgressMessage(provider))
 
 			translatedSrtPath := outputPrefix + "_translated_temp.srt"
@@ -960,7 +785,7 @@ func (s *SubtitleService) finalizeSubtitleArtifact(ctx context.Context, taskID u
 			if sourceLang == "auto" || sourceLang == "unknown" {
 				sourceLang = ""
 			}
-			fallbackCount, translateErr := s.translateSRTWithProgress(ctx, pendingPath, translatedSrtPath, sourceLang, targetLang, translator, glossary, nil)
+			fallbackCount, translateErr := s.translateSRTWithProgress(ctx, pendingPath, translatedSrtPath, sourceLang, targetLang, translator, nil)
 			if translateErr != nil {
 				if ctx.Err() != nil {
 					s.emitCancelled(taskID, req.VideoID, req.Engine, "字幕生成已取消")
@@ -1072,70 +897,6 @@ func (s *SubtitleService) extractAudio(ctx context.Context, videoPath, outputPat
 }
 
 // findWhisperBin 查找 whisper 可执行文件
-func (s *SubtitleService) findWhisperBin() string {
-	whisperBin := s.findBinary("whisper-cli")
-	if whisperBin == "" {
-		whisperBin = s.findBinary("whisper-cpp")
-	}
-	if whisperBin == "" {
-		whisperBin = s.findBinary("main")
-	}
-	return whisperBin
-}
-
-// transcribeCLIWithLang 转录音频并返回检测到的语言代码
-func (s *SubtitleService) transcribeCLIWithLang(ctx context.Context, wavPath, outputPrefix, sourceLang string) (string, error) {
-	whisperBin := s.findWhisperBin()
-	if whisperBin == "" {
-		return "", fmt.Errorf("未找到 Whisper，请重新安装依赖")
-	}
-
-	modelPath := filepath.Join(s.ModelDir, "ggml-medium.bin")
-
-	log.Printf("[Subtitle] transcribeCLIWithLang: whisper=%s model=%s input=%s output=%s lang=%s\n", whisperBin, modelPath, wavPath, outputPrefix, sourceLang)
-
-	cmd := exec.CommandContext(ctx, whisperBin,
-		"-m", modelPath,
-		"-f", wavPath,
-		"-osrt",
-		"-of", outputPrefix,
-		"-l", sourceLang,
-		"--no-fallback",
-		"-et", "2.4",
-		"-lpt", "-1.0",
-		"-bo", "5",
-		"-bs", "5",
-	)
-
-	output, err := cmd.CombinedOutput()
-	outputStr := string(output)
-
-	// 从输出中提取检测到的语言（支持多种 whisper 输出格式）
-	detectedLang := "en" // 默认英文
-	if matches := langDetectRe.FindStringSubmatch(outputStr); len(matches) > 1 {
-		detectedLang = strings.ToLower(matches[1])
-		log.Printf("[Subtitle] detected language: %s", detectedLang)
-	} else if matches := langDetectReFallback.FindStringSubmatch(outputStr); len(matches) > 1 {
-		detectedLang = strings.ToLower(matches[1])
-		log.Printf("[Subtitle] detected language (fallback): %s", detectedLang)
-	} else {
-		log.Printf("[Subtitle] WARNING: could not detect language from whisper output, defaulting to 'en'")
-	}
-
-	if err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("字幕生成已取消")
-		}
-		log.Printf("[Subtitle] whisper error: %s\n%s\n", err, outputStr)
-		if strings.Contains(outputStr, "failed to open") || strings.Contains(outputStr, "no such file") {
-			return "", fmt.Errorf("模型文件缺失，请重新安装依赖")
-		}
-		return "", fmt.Errorf("语音识别失败，请确保视频包含有效音频")
-	}
-	return detectedLang, nil
-}
-
-// validateSRT 检测 SRT 文件是否存在幻觉输出（大量重复文本）
 func (s *SubtitleService) validateSRT(srtPath string) error {
 	f, err := os.Open(srtPath)
 	if err != nil {
@@ -1234,17 +995,18 @@ func hasTokenizedTimingFailure(segments []subtitleparser.Segment) bool {
 	return shortRatio > 0.85 && (zeroRatio > 0.50 || uniqueStartRatio < 0.20)
 }
 
-// isSameLanguage 判断 whisper 检测到的语言与用户目标语言是否相同
+// isSameLanguage 比较系统地区语种与字幕目标语言。
 func (s *SubtitleService) isSameLanguage(detected, target string) bool {
-	return normalizeSubtitleLanguageCode(detected) == normalizeSubtitleLanguageCode(target)
+	return subtitleLanguageFamily(detected) == subtitleLanguageFamily(target)
+}
+
+func subtitleLanguageFamily(value string) string {
+	return strings.Split(strings.ReplaceAll(normalizeSubtitleLanguageCode(value), "_", "-"), "-")[0]
 }
 
 func normalizeSubtitleGenerateOptions(options SubtitleGenerateOptions) SubtitleGenerateOptions {
 	options.BilingualLang = strings.TrimSpace(options.BilingualLang)
 	options.TranslationConfig.Provider = string(normalizeSubtitleTranslationProvider(options.TranslationConfig.Provider))
-	options.RecognitionConfig.WhisperXModel = normalizeSubtitleWhisperXModel(options.RecognitionConfig.WhisperXModel)
-	options.RecognitionConfig.WhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(options.RecognitionConfig.WhisperXBatchSize)
-	options.RecognitionConfig.WhisperXComputeType = normalizeSubtitleWhisperXComputeType(options.RecognitionConfig.WhisperXComputeType)
 	return options
 }
 
@@ -1294,88 +1056,7 @@ func parseSRTEntries(srtPath string) ([]SRTEntry, error) {
 	return entries, nil
 }
 
-// translateDeepL 调用 DeepL API 翻译文本
-func (s *SubtitleService) translateDeepL(ctx context.Context, texts []string, sourceLang, targetLang, apiKey string) ([]string, error) {
-	// DeepL 目标语言代码需要大写
-	targetUpper := strings.ToUpper(targetLang)
-	// 中文需要特殊处理：DeepL 使用 ZH-HANS
-	if targetUpper == "ZH" {
-		targetUpper = "ZH-HANS"
-	}
-
-	// 构建请求体
-	type DeepLRequest struct {
-		Text       []string `json:"text"`
-		TargetLang string   `json:"target_lang"`
-		SourceLang string   `json:"source_lang,omitempty"`
-	}
-
-	reqBody := DeepLRequest{
-		Text:       texts,
-		TargetLang: targetUpper,
-	}
-	if sourceLang != "" {
-		reqBody.SourceLang = strings.ToUpper(sourceLang)
-	}
-
-	bodyBytes, err := json.Marshal(reqBody)
-	if err != nil {
-		return nil, fmt.Errorf("构建翻译请求失败: %v", err)
-	}
-
-	// 判断是免费版还是付费版 API
-	apiURL := "https://api-free.deepl.com/v2/translate"
-	if !strings.HasSuffix(apiKey, ":fx") {
-		apiURL = "https://api.deepl.com/v2/translate"
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "DeepL-Auth-Key "+apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := deeplHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("翻译请求失败: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode == 403 {
-			return nil, fmt.Errorf("DeepL API Key 无效或已过期")
-		}
-		if resp.StatusCode == 456 {
-			return nil, fmt.Errorf("DeepL 翻译额度已用完")
-		}
-		return nil, fmt.Errorf("DeepL API 返回 %d: %s", resp.StatusCode, string(respBody))
-	}
-
-	type DeepLTranslation struct {
-		Text string `json:"text"`
-	}
-	type DeepLResponse struct {
-		Translations []DeepLTranslation `json:"translations"`
-	}
-
-	var deeplResp DeepLResponse
-	if err := json.NewDecoder(resp.Body).Decode(&deeplResp); err != nil {
-		return nil, fmt.Errorf("解析翻译响应失败: %v", err)
-	}
-
-	results := make([]string, len(deeplResp.Translations))
-	for i, t := range deeplResp.Translations {
-		results[i] = t.Text
-	}
-	return results, nil
-}
-
-// translateSRTWithProgress 翻译 SRT 文件中的所有文本行，每翻完一批回报一次进度，
-// 并返回有多少条字幕因为译文为空而回退成了原文。onBatch 可以为 nil；空译文回退是
-// 手动翻译与字幕生成自动双语共同的行为，两条路径都走这里。
-func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPath, outputPath, sourceLang, targetLang string, translator SubtitleTranslator, glossary []GlossaryTerm, onBatch func(done, total int)) (int, error) {
+func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPath, outputPath, sourceLang, targetLang string, translator SubtitleTranslator, onBatch func(done, total int)) (int, error) {
 	if translator == nil {
 		return 0, fmt.Errorf("subtitle translator is nil")
 	}
@@ -1387,12 +1068,9 @@ func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPat
 		return 0, fmt.Errorf("字幕文件为空")
 	}
 
-	// 收集文本行（DeepL 一次最多翻译 50 条）
+	// 分批调用系统翻译，每批保留原字幕条目顺序。
 	batchSize := 50
 	var translatedEntries []SRTEntry
-	// 滑动窗口：上一批尾部若干条 (原文, 译文) 作为只读上文，首批为空（D-035）。
-	contextual, _ := translator.(ContextualTranslator)
-	var preceding []ContextPair
 	fallbackCount := 0
 
 	for i := 0; i < len(entries); i += batchSize {
@@ -1407,13 +1085,7 @@ func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPat
 			texts[j] = e.Text
 		}
 
-		translated, err := translateSubtitleBatch(ctx, translator, contextual, TranslationRequest{
-			Texts:            texts,
-			SourceLang:       sourceLang,
-			TargetLang:       targetLang,
-			Glossary:         glossary,
-			PrecedingContext: preceding,
-		})
+		translated, err := translator.Translate(ctx, texts, sourceLang, targetLang)
 		if err != nil {
 			return fallbackCount, err
 		}
@@ -1426,7 +1098,6 @@ func (s *SubtitleService) translateSRTWithProgress(ctx context.Context, inputPat
 		translated, batchFallbacks = applyTranslationFallback(texts, translated)
 		fallbackCount += batchFallbacks
 
-		preceding = trailingContextPairs(texts, translated, subtitleTranslationContextWindow)
 		if onBatch != nil {
 			onBatch(end, len(entries))
 		}
@@ -1571,7 +1242,7 @@ func writeFileAtomically(path string, data []byte, mode os.FileMode) error {
 
 // ErrSubtitleDependencyUnsupportedPlatform 表示当前平台没有自动下载字幕依赖的实现。
 // 这不是临时失败，重试不会改变结果，只能由用户手工安装依赖后再用。
-var ErrSubtitleDependencyUnsupportedPlatform = errors.New("当前平台不支持自动下载字幕依赖，请手工安装 Whisper 运行时与 FFmpeg 后重试")
+var ErrSubtitleDependencyUnsupportedPlatform = errors.New("当前平台不支持自动下载 FFmpeg，请手工安装后重试")
 
 // Download helpers
 func (s *SubtitleService) downloadFFmpeg(ctx context.Context) error {
@@ -1581,12 +1252,6 @@ func (s *SubtitleService) downloadFFmpeg(ctx context.Context) error {
 	return ErrSubtitleDependencyUnsupportedPlatform
 }
 
-func (s *SubtitleService) installWhisperMac() error {
-	return s.installBrewPackage(context.Background(), "whisper-cpp", "Whisper")
-}
-
-// installBrewPackage installs a package via Homebrew with progress feedback.
-// ctx 取消（引擎准备被取消）时杀掉 brew 子进程。
 func (s *SubtitleService) installBrewPackage(ctx context.Context, pkg, displayName string) error {
 	brewPath, err := exec.LookPath("brew")
 	if err != nil {
@@ -1602,7 +1267,7 @@ func (s *SubtitleService) installBrewPackage(ctx context.Context, pkg, displayNa
 		}
 	}
 
-	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 0, fmt.Sprintf("正在通过 Homebrew 安装 %s...", displayName))
+	s.emitProgress("prepare", SubtitleEngineApple, "preparing-runtime", 0, fmt.Sprintf("正在通过 Homebrew 安装 %s...", displayName))
 
 	cmd := preparationCommand(ctx, brewPath, "install", pkg)
 	cmd.Env = append(os.Environ(), "HOMEBREW_NO_AUTO_UPDATE=1")
@@ -1612,46 +1277,8 @@ func (s *SubtitleService) installBrewPackage(ctx context.Context, pkg, displayNa
 		return fmt.Errorf("brew install %s 失败: %s\n%s", pkg, err, string(output))
 	}
 
-	s.emitProgress("prepare", SubtitleEngineWhisperX, "preparing-runtime", 100, fmt.Sprintf("%s 安装完成", displayName))
+	s.emitProgress("prepare", SubtitleEngineApple, "preparing-runtime", 100, fmt.Sprintf("%s 安装完成", displayName))
 	return nil
-}
-
-func (s *SubtitleService) downloadModel() error {
-	if err := os.MkdirAll(s.ModelDir, 0755); err != nil {
-		return err
-	}
-	// 多语言 medium 模型（~1.5GB），支持自动语言检测
-	url := "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
-	dest := filepath.Join(s.ModelDir, "ggml-medium.bin")
-	s.emitProgress("prepare", SubtitleEngineWhisperX, "downloading-model", 0, "Downloading Model (~1.5GB)...")
-	return s.downloadFile(url, dest, "model")
-}
-
-func (s *SubtitleService) downloadFile(url, dest, component string) error {
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	size := resp.ContentLength
-	tracker := &ProgressTracker{
-		Reader: resp.Body, Total: size,
-		OnProgress: func(c int64) {
-			if size > 0 {
-				p := int(float64(c) / float64(size) * 100)
-				s.emitProgress("prepare", SubtitleEngineWhisperX, "downloading-model", p, fmt.Sprintf("Downloading %d%%", p))
-			}
-		},
-	}
-	_, err = io.Copy(out, tracker)
-	return err
 }
 
 func (s *SubtitleService) emitProgress(action string, engine SubtitleEngine, phase string, pct int, msg string) {

@@ -380,7 +380,7 @@ func safeDiagnosticSection(section HealthSection) diagnosticSection {
 		item := diagnosticItem{Ordinal: index + 1, State: "unknown", ReasonCode: "check_failed", Metrics: map[string]int64{}}
 		item.ObservedAt = source.ObservedAt
 		switch source.Key {
-		case "backend", "backup", "roots", "image_roots", "ffmpeg", "ffprobe", "subtitle", "whisperx", "qwen", "face", "enhancement", "indexes", "subtitles", "video_semantic", "image_semantic", "background", "proxies":
+		case "backend", "backup", "roots", "image_roots", "ffmpeg", "ffprobe", "subtitle", "apple", "face", "enhancement", "indexes", "subtitles", "video_semantic", "image_semantic", "background", "proxies":
 			item.Key = source.Key
 		default:
 			item.Key = "item_" + strconv.Itoa(index+1)

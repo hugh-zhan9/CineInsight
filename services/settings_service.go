@@ -66,13 +66,8 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.LogEnabled = input.LogEnabled
 		settings.BilingualEnabled = input.BilingualEnabled
 		settings.BilingualLang = input.BilingualLang
-		settings.DeepLApiKey = input.DeepLApiKey
-		settings.SubtitleTranslationProvider = string(normalizeSubtitleTranslationProvider(input.SubtitleTranslationProvider))
-		settings.SubtitleTranslationBaseURL = strings.TrimSpace(input.SubtitleTranslationBaseURL)
-		settings.SubtitleTranslationAPIKey = strings.TrimSpace(input.SubtitleTranslationAPIKey)
-		settings.SubtitleTranslationModel = strings.TrimSpace(input.SubtitleTranslationModel)
-		settings.SubtitleWhisperXModel = normalizeSubtitleWhisperXModel(input.SubtitleWhisperXModel)
-		settings.SubtitleWhisperXBatchSize = normalizeSubtitleWhisperXBatchSize(input.SubtitleWhisperXBatchSize)
+		// Retired subtitle provider fields remain in historical storage, never drive execution.
+		settings.SubtitleTranslationProvider = "apple"
 		settings.AITaggingBaseURL = input.AITaggingBaseURL
 		settings.AITaggingAPIKey = input.AITaggingAPIKey
 		settings.AITaggingModel = input.AITaggingModel

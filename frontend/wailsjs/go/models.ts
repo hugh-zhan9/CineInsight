@@ -750,13 +750,6 @@ export namespace models {
 	    log_enabled: boolean;
 	    bilingual_enabled: boolean;
 	    bilingual_lang: string;
-	    deepl_api_key: string;
-	    subtitle_translation_provider: string;
-	    subtitle_translation_base_url: string;
-	    subtitle_translation_api_key: string;
-	    subtitle_translation_model: string;
-	    subtitle_whisperx_model: string;
-	    subtitle_whisperx_batch_size: number;
 	    ai_tagging_base_url: string;
 	    ai_tagging_api_key: string;
 	    ai_tagging_model: string;
@@ -834,13 +827,6 @@ export namespace models {
 	        this.log_enabled = source["log_enabled"];
 	        this.bilingual_enabled = source["bilingual_enabled"];
 	        this.bilingual_lang = source["bilingual_lang"];
-	        this.deepl_api_key = source["deepl_api_key"];
-	        this.subtitle_translation_provider = source["subtitle_translation_provider"];
-	        this.subtitle_translation_base_url = source["subtitle_translation_base_url"];
-	        this.subtitle_translation_api_key = source["subtitle_translation_api_key"];
-	        this.subtitle_translation_model = source["subtitle_translation_model"];
-	        this.subtitle_whisperx_model = source["subtitle_whisperx_model"];
-	        this.subtitle_whisperx_batch_size = source["subtitle_whisperx_batch_size"];
 	        this.ai_tagging_base_url = source["ai_tagging_base_url"];
 	        this.ai_tagging_api_key = source["ai_tagging_api_key"];
 	        this.ai_tagging_model = source["ai_tagging_model"];
@@ -885,36 +871,6 @@ export namespace models {
 	    }
 	}
 	
-	export class TranslationGlossaryEntry {
-	    id: number;
-	    collection_id?: number;
-	    scope_key: number;
-	    target_language: string;
-	    source_term: string;
-	    source_term_lower: string;
-	    target_term: string;
-	    note: string;
-	    created_at: string;
-	    updated_at: string;
-	
-	    static createFrom(source: any = {}) {
-	        return new TranslationGlossaryEntry(source);
-	    }
-	
-	    constructor(source: any = {}) {
-	        if ('string' === typeof source) source = JSON.parse(source);
-	        this.id = source["id"];
-	        this.collection_id = source["collection_id"];
-	        this.scope_key = source["scope_key"];
-	        this.target_language = source["target_language"];
-	        this.source_term = source["source_term"];
-	        this.source_term_lower = source["source_term_lower"];
-	        this.target_term = source["target_term"];
-	        this.note = source["note"];
-	        this.created_at = source["created_at"];
-	        this.updated_at = source["updated_at"];
-	    }
-	}
 	export class Video {
 	    deleted_by: string;
 	    id: number;
@@ -1498,6 +1454,68 @@ export namespace services {
 	        this.tag_ids = source["tag_ids"];
 	        this.dropped = source["dropped"];
 	    }
+	}
+	export class AppleLanguage {
+	    code: string;
+	    name: string;
+	    installed: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppleLanguage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.code = source["code"];
+	        this.name = source["name"];
+	        this.installed = source["installed"];
+	    }
+	}
+	export class AppleLanguageCandidate {
+	    language: string;
+	    confidence: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new AppleLanguageCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.language = source["language"];
+	        this.confidence = source["confidence"];
+	    }
+	}
+	export class AppleLanguageDetection {
+	    language: string;
+	    candidates: AppleLanguageCandidate[];
+	
+	    static createFrom(source: any = {}) {
+	        return new AppleLanguageDetection(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.language = source["language"];
+	        this.candidates = this.convertValues(source["candidates"], AppleLanguageCandidate);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	export class BackupFile {
 	    name: string;
@@ -11097,6 +11115,8 @@ export namespace services {
 	    source_lang_mode: string;
 	    reason_message: string;
 	    prepare_hint: string;
+	    languages: AppleLanguage[];
+	    translation_languages: AppleLanguage[];
 	
 	    static createFrom(source: any = {}) {
 	        return new SubtitleEngineStatus(source);
@@ -11114,7 +11134,27 @@ export namespace services {
 	        this.source_lang_mode = source["source_lang_mode"];
 	        this.reason_message = source["reason_message"];
 	        this.prepare_hint = source["prepare_hint"];
+	        this.languages = this.convertValues(source["languages"], AppleLanguage);
+	        this.translation_languages = this.convertValues(source["translation_languages"], AppleLanguage);
 	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
 	}
 	
 	export class SubtitleGenerateRequest {

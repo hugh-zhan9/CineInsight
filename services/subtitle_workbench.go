@@ -126,7 +126,6 @@ type SubtitleWorkbenchService struct {
 	subtitleService   *SubtitleService
 	replaceFile       func(string, string) error
 	translatorFactory func(SubtitleTranslationConfig) (SubtitleTranslator, error)
-	glossaryResolver  func(videoID uint, targetLanguage string) ([]GlossaryTerm, error)
 	// dataDir 是没有 subtitleService 时写入器使用的应用数据目录（备份根）；
 	// 有 subtitleService 时以它的 BaseDir 为准。
 	dataDir string
@@ -134,9 +133,8 @@ type SubtitleWorkbenchService struct {
 
 func NewSubtitleWorkbenchService(subtitleService *SubtitleService) *SubtitleWorkbenchService {
 	service := &SubtitleWorkbenchService{
-		subtitleService:  subtitleService,
-		replaceFile:      replaceSubtitleFileAtomically,
-		glossaryResolver: NewTranslationGlossaryService().ResolveForVideo,
+		subtitleService: subtitleService,
+		replaceFile:     replaceSubtitleFileAtomically,
 	}
 	service.translatorFactory = func(config SubtitleTranslationConfig) (SubtitleTranslator, error) {
 		if service.subtitleService == nil {
@@ -436,17 +434,6 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 	if translator == nil {
 		return nil, errors.New("字幕翻译器不可用")
 	}
-	// 术语生效集按视频与目标语言解析一次，整次选区重译共用（D-033、D-PC16）。只有能吃下术语表的
-	// 翻译器才去查：DeepL 用不上，也就不该因为一次库读失败而多出一条失败路径（D-034）。
-	contextual, injectable := translator.(ContextualTranslator)
-	var glossary []GlossaryTerm
-	if injectable {
-		resolved, err := s.glossaryResolver(request.VideoID, normalizeSubtitleLanguageCode(request.TargetLang))
-		if err != nil {
-			return nil, fmt.Errorf("读取术语表失败: %w", err)
-		}
-		glossary = resolved
-	}
 
 	sources := make([]string, len(request.Entries))
 	for index, entry := range request.Entries {
@@ -459,8 +446,6 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 
 	translatedEntries := make([]SubtitleRetranslateEntry, 0, len(request.Entries))
 	fallbackCount := 0
-	// 滑动窗口：上一批尾部若干条 (原文, 译文) 作为只读上文，首批为空（D-035）。
-	var preceding []ContextPair
 	const batchSize = 50
 	for start := 0; start < len(request.Entries); start += batchSize {
 		end := start + batchSize
@@ -468,23 +453,16 @@ func (s *SubtitleWorkbenchService) Retranslate(ctx context.Context, request Subt
 			end = len(request.Entries)
 		}
 		texts := sources[start:end]
-		translations, err := translateSubtitleBatch(ctx, translator, contextual, TranslationRequest{
-			Texts:            texts,
-			SourceLang:       request.SourceLang,
-			TargetLang:       request.TargetLang,
-			Glossary:         glossary,
-			PrecedingContext: preceding,
-		})
+		translations, err := translator.Translate(ctx, texts, request.SourceLang, request.TargetLang)
 		if err != nil {
 			return nil, err
 		}
 		if len(translations) != len(texts) {
 			return nil, fmt.Errorf("字幕翻译返回 %d 条，期望 %d 条", len(translations), len(texts))
 		}
-		// 空译文回退（与生成、文件翻译共用），且必须先于上文窗口，免得「原文 → 空」进入下一批提示词。
+		// 空译文回退与生成、文件翻译共用。
 		fallbackTexts, batchFallbacks := applyTranslationFallback(texts, translations)
 		fallbackCount += batchFallbacks
-		preceding = trailingContextPairs(texts, fallbackTexts, subtitleTranslationContextWindow)
 		for index := range translations {
 			entry := request.Entries[start+index]
 			text := fallbackTexts[index]

@@ -173,9 +173,6 @@ func TestSettingsAITaggingConfigProviderLoadsDatabaseSettings(t *testing.T) {
 	if config.ImagesPerRequest != 3 || config.SubtitleCharLimit != 1200 || config.StartupBatchSize != 5 || config.MaxExtraFrames != 37 {
 		t.Fatalf("期望读取数据库数值配置，实际: %+v", config)
 	}
-	if config.SubtitleWhisperXModel != "large-v3" || config.SubtitleWhisperXBatchSize != 4 {
-		t.Fatalf("临时字幕应复用用户 WhisperX 配置，实际: %+v", config)
-	}
 }
 
 func TestSettingsAITaggingConfigProviderAllowsLocalEndpointWithoutAPIKey(t *testing.T) {

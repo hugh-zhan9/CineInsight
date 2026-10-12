@@ -29,8 +29,8 @@ func TestMEDIA01ReplaceFailingTwiceKeepsTranslationAppliedAndTranslatesOnce(t *t
 		return `{"choices":[{"message":{"content":"{\"translations\":[\"你好\",\"克诺比将军\"]}"}}]}`
 	})
 	// BaseDir 为空时已有字幕无法备份，Replace 必然失败：正是「收尾替换失败」的场景。
-	service := NewSubtitleService("")
-	service.glossaryResolver = func(uint, string) ([]GlossaryTerm, error) { return nil, nil }
+	service := newSubtitleFixtureService(t)
+	service.BaseDir = ""
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX, SourceLang: "en"}
 	options := SubtitleGenerateOptions{
 		BilingualEnabled: true, BilingualLang: "zh",
@@ -83,7 +83,7 @@ func TestMEDIA01PendingSubtitleIsHiddenInSameDirectoryAndNotASidecar(t *testing.
 	setupVideoServiceTestDB(t)
 	video, srtPath := mustCreateSubtitleVideo(t, "movie.mp4", []byte(writerTestSRT))
 	dir := filepath.Dir(srtPath)
-	service := NewSubtitleService(t.TempDir())
+	service := newSubtitleFixtureService(t)
 	req := SubtitleGenerateRequest{VideoID: video.ID, Engine: SubtitleEngineWhisperX, SourceLang: "en"}
 
 	result, err := service.commitTranscription(context.Background(), 1, req, video.Path, "en", hallucinatedSegments(), SubtitleGenerateOptions{})

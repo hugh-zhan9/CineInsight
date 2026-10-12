@@ -26,8 +26,8 @@ vi.mock('../../../wailsjs/go/main/App', () => api);
 import SubtitleGenerateDialog from './SubtitleGenerateDialog.vue';
 import { registerCommands, unregisterCommands } from '../../utils/commandRegistry.js';
 
-const READY_ENGINE = { engine: 'whisperx', display_name: 'WhisperX', supported: true, available: true, needs_prepare: false, source_lang_mode: 'shared' };
-const PREPARE_ENGINE = { ...READY_ENGINE, available: false, needs_prepare: true, prepare_hint: '需要先准备 WhisperX 运行时' };
+const READY_ENGINE = { engine: 'apple', display_name: 'Apple 系统', supported: true, available: true, needs_prepare: false, source_lang_mode: 'shared' };
+const PREPARE_ENGINE = { ...READY_ENGINE, available: false, needs_prepare: true, prepare_hint: '需要先准备 Apple 系统 运行时' };
 const video = { id: 7, name: '黑客帝国.mkv' };
 
 let handlers;
@@ -84,7 +84,7 @@ describe('字幕生成：覆盖与待确认', () => {
   });
 
   it('MEDIA-01 校验未通过时说清原字幕没动；「放弃这次结果」删除临时结果', async () => {
-    api.GenerateSubtitle.mockResolvedValue({ status: 'validation_failed', force_eligible: true, message: '检测到疑似幻觉', engine: 'whisperx', video_id: 7 });
+    api.GenerateSubtitle.mockResolvedValue({ status: 'validation_failed', force_eligible: true, message: '检测到疑似幻觉', engine: 'apple', video_id: 7 });
     const wrapper = await mountDialog();
     await wrapper.vm.generate(video);
     await flushPromises();
@@ -105,7 +105,7 @@ describe('字幕生成：覆盖与待确认', () => {
   it('MEDIA-04 写回失败（subtitle_replace_failed）单独说明，按钮是「重试写回」，重试走强制生成复用临时结果', async () => {
     api.GenerateSubtitle.mockResolvedValue({
       status: 'validation_failed', force_eligible: true, error_code: 'subtitle_replace_failed', pending_retained: true,
-      message: '写入字幕文件失败：没有权限', engine: 'whisperx', source_lang: 'auto', video_id: 7
+      message: '写入字幕文件失败：没有权限', engine: 'apple', source_lang: 'auto', video_id: 7
     });
     api.ForceGenerateSubtitle.mockResolvedValue({ status: 'success', path: '/Volumes/片库/黑客帝国.srt', video_id: 7 });
     const wrapper = await mountDialog();
@@ -120,7 +120,7 @@ describe('字幕生成：覆盖与待确认', () => {
     await wrapper.find('[data-test="subtitle-confirm"]').trigger('click');
     await flushPromises();
 
-    expect(api.ForceGenerateSubtitle).toHaveBeenCalledWith({ video_id: 7, engine: 'whisperx', source_lang: 'auto' });
+    expect(api.ForceGenerateSubtitle).toHaveBeenCalledWith({ video_id: 7, engine: 'apple', source_lang: 'auto' });
     // 成功文案只说文件名，不带绝对路径（G-3）。
     const message = wrapper.find('[data-test="subtitle-dialog-msg"]').text();
     expect(message).toContain('黑客帝国.srt');
@@ -129,7 +129,7 @@ describe('字幕生成：覆盖与待确认', () => {
   });
 
   it('MEDIA-04 pending_retained=false 时不提「放弃」与「稍后处理」，说明强制生成会重新识别', async () => {
-    api.GenerateSubtitle.mockResolvedValue({ status: 'validation_failed', force_eligible: true, pending_retained: false, message: '疑似幻觉', engine: 'whisperx', video_id: 7 });
+    api.GenerateSubtitle.mockResolvedValue({ status: 'validation_failed', force_eligible: true, pending_retained: false, message: '疑似幻觉', engine: 'apple', video_id: 7 });
     const wrapper = await mountDialog();
     await wrapper.vm.generate(video);
     await flushPromises();
@@ -146,7 +146,7 @@ describe('字幕生成：覆盖与待确认', () => {
   });
 
   it('MEDIA-01 「稍后处理」只关窗，临时结果留给任务中心', async () => {
-    api.GenerateSubtitle.mockResolvedValue({ status: 'validation_failed', force_eligible: true, message: '疑似幻觉', engine: 'whisperx', video_id: 7 });
+    api.GenerateSubtitle.mockResolvedValue({ status: 'validation_failed', force_eligible: true, message: '疑似幻觉', engine: 'apple', video_id: 7 });
     const wrapper = await mountDialog();
     await wrapper.vm.generate(video);
     await flushPromises();
@@ -207,7 +207,7 @@ describe('字幕生成：后台任务的结果（MEDIA-04）', () => {
     wrapper.vm.minimizeSubtitleProgress();
     await flushPromises();
 
-    resolveGenerate({ status: 'validation_failed', force_eligible: true, message: '疑似幻觉', engine: 'whisperx', video_id: 7 });
+    resolveGenerate({ status: 'validation_failed', force_eligible: true, message: '疑似幻觉', engine: 'apple', video_id: 7 });
     await flushPromises();
     expect(wrapper.find('[data-test="subtitle-generate-dialog"]').exists()).toBe(false);
     expect(feedback.notify.mock.calls.at(-1)[0]).toContain('「黑客帝国.mkv」的字幕没有通过质量校验');
@@ -321,7 +321,7 @@ describe('批量生成字幕（MEDIA-14）', () => {
     await flushPromises();
 
     expect(api.GenerateSubtitle).toHaveBeenCalledTimes(2);
-    expect(api.GenerateSubtitle).toHaveBeenCalledWith({ video_id: 1, engine: 'whisperx', source_lang: 'auto' });
+    expect(api.GenerateSubtitle).toHaveBeenCalledWith({ video_id: 1, engine: 'apple', source_lang: 'auto' });
     expect(wrapper.emitted('generating-change').at(-1)[0]).toEqual(expect.arrayContaining([1, 2]));
     expect(wrapper.find('[data-test="subtitle-generate-dialog"]').exists()).toBe(false);
 
@@ -346,6 +346,54 @@ describe('批量生成字幕（MEDIA-14）', () => {
     await flushPromises();
     expect(feedback.notify).toHaveBeenCalledWith('选中的视频都已在字幕队列里。');
     expect(api.GenerateSubtitle).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+});
+
+describe('苹果系统语言选择', () => {
+  const ready = { ...READY_ENGINE, languages: [{ code: 'en_US', name: '英语', installed: true }, { code: 'zh_CN', name: '中文', installed: true }] };
+  it('检测结果回填后仍可手选修改', async () => {
+    api.GetSubtitleEngineStatuses.mockResolvedValue([ready]);
+    api.DetectSubtitleLanguage.mockResolvedValue({ language: 'en_US', candidates: [] });
+    const wrapper = await mountDialog();
+    await wrapper.vm.generate(video);
+    await wrapper.get('[data-test="apple-detect-language"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="apple-source-language"]').element.value).toBe('en_US');
+    expect(wrapper.get('[data-test="apple-language-message"]').text()).toContain('可以修改');
+    await wrapper.get('[data-test="apple-source-language"]').setValue('zh_CN');
+    expect(wrapper.vm.buildSubtitleRequest(video).source_lang).toBe('zh_CN');
+    wrapper.unmount();
+  });
+  it('连续两次语言检测均可取消', async () => {
+    api.GetSubtitleEngineStatuses.mockResolvedValue([ready]);
+    const wrapper = await mountDialog();
+    await wrapper.vm.generate(video);
+    for (let index = 0; index < 2; index++) {
+      let reject;
+      api.DetectSubtitleLanguage.mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+      await wrapper.get('[data-test="apple-detect-language"]').trigger('click');
+      await wrapper.get('[data-test="apple-language-cancel"]').trigger('click');
+      reject('已取消');
+      await flushPromises();
+      expect(api.CancelSubtitleEnginePreparation).toHaveBeenCalledTimes(index + 1);
+    }
+    wrapper.unmount();
+  });
+  it('关闭后的语言准备结果不会覆盖重新打开的弹窗', async () => {
+    api.GetSubtitleEngineStatuses.mockResolvedValue([ready]);
+    let resolve;
+    api.PrepareAppleSubtitleLanguage.mockReturnValue(new Promise(done => { resolve = done; }));
+    const wrapper = await mountDialog();
+    await wrapper.vm.generate(video);
+    await wrapper.get('[data-test="apple-source-language"]').setValue('en_US');
+    await wrapper.get('[data-test="apple-prepare-language"]').trigger('click');
+    await wrapper.vm.cancelConfirm();
+    await wrapper.vm.generate({ id: 8, name: 'other.mp4' });
+    wrapper.vm.languageMessage = '新的状态';
+    resolve(); await flushPromises();
+    expect(wrapper.vm.languageMessage).toBe('新的状态');
+    expect(wrapper.vm.pendingSubtitleVideo.id).toBe(8);
     wrapper.unmount();
   });
 });

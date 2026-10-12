@@ -16,8 +16,8 @@
   - **绑定守卫（2026-09-30，P-040）:** `frontend/scripts/bindings-usage.test.mjs`（`npm test` 最后一环）双向检查：前端从 `wailsjs/go/main/App` 导入的每个名字都在 `App.d.ts` 里，`App.d.ts` 的每个导出都至少被前端非测试代码引用一次。新增 App 方法必须同时接上前端调用方；只给 Go 测试用的能力放在服务层，不要做成 App 方法。绑定用 `GOTOOLCHAIN=go1.24.9 wails generate module` 生成，不手改 `frontend/wailsjs/**`。
 - **外部依赖 (Sidecars):**
   - **FFmpeg:** 用于提取视频音频流（16kHz, mono, WAV）。
-  - **WhisperX Runtime:** 用于本地离线语音识别生成字幕，并与当前管理的 Python 运行时集成。
-  - **DeepL API 或 OpenAI 兼容接口 (可选):** 用于字幕翻译（用户在设置页配置 provider 与 API Key）。
+  - **Apple 系统字幕（2026-10-12）:** Swift 辅助程序调用 macOS 26+ 的 Speech/Translation/NaturalLanguage；资源由苹果系统管理，不安装字幕 Python/第三方模型。
+  - **字幕翻译:** 仅用 Apple Translation；DeepL/OpenAI 兼容字幕翻译已退役（AI 打标自身的外部配置不变）。
 
 ## 2. 核心功能与实现原理 (Core Features)
 
@@ -33,25 +33,24 @@
 
 ### 2.2 离线字幕生成 (Offline Subtitle Generation)
 集成 AI 能力实现全本地化字幕制作：
-- **运行时:** `services/whisperx_runtime.go` 管理 WhisperX sidecar、Python 环境、模型缓存与执行流程。
-- **流程:** 视频 -> FFmpeg (提取音频) -> WhisperX Runtime (推理识别) -> 写同目录隐藏临时文件（pending）-> 后处理校验 -> 经字幕写入器替换同名 .srt。校验通过前原 `.srt` 一个字节都不动；空结果与取消都删掉临时文件（D-PC13，2026-09-29/30）。
+- **运行时（2026-10-12 用户裁决）:** 字幕仅使用苹果系统能力。`native/apple-ai/main.swift` 通过随包的 `CineInsightAppleAI.app` 提供系统识别、自动语言建议、翻译和资源准备；`services/apple_ai.go` 管理有界 JSON 子进程调用、取消与时间片段转换。macOS 26 以下或组件缺失明确不可用，不回退第三方 AI。设计见 [系统字幕概要](docs/loopx/design/2026-10-12-apple-subtitles/概要设计.md)。
+- **流程:** 视频 -> FFmpeg (提取音频) -> Apple Speech（系统语音识别） -> 写同目录隐藏临时文件（pending）-> 后处理校验 -> 经字幕写入器替换同名 .srt。校验通过前原 `.srt` 一个字节都不动；空结果与取消都删掉临时文件（D-PC13，2026-09-29/30）。
 - **字幕写入器（D-PC13）:** 所有覆盖用户 `.srt` 的路径（生成、强制生成、翻译、工作台保存、编码转换、清理合并与超分产物的字幕复制）都走 `services/subtitle_file_writer.go` 的 `SubtitleFileWriter.Replace`：同目录临时文件 → fsync → 目标已存在时先备份到 `~/.CineInsight/subtitle-backups/<videoID>/<unixNano>.srt`（每个视频只留最新 5 份）→ 原子替换 → 恢复原文件权限。行菜单「恢复上一版字幕…」调 `ListSubtitleBackups` / `RestoreSubtitleBackup`，恢复前同样先备份当前文件。生成前 `GetSubtitleOverwriteInfo` 告诉前端是否会覆盖、以及同目录同基本名的其他视频是否共用这份 `.srt`，确认文案写明「将覆盖现有字幕（会先备份，可恢复）」。替换失败时保留 pending 并返回 `subtitle_replace_failed`。
 - **抗幻觉:** 当前仍保留基于后处理的质量校验与强制生成分支。
 - **幻觉确认（2026-09-29/30 改为可追溯，D-PC20）:** 校验未通过的任务进入 `needs_confirmation`，临时文件登记在任务行上；前台弹窗与任务中心都能处理：强制生成（`ForceGenerateSubtitle` 直接复用临时文件）、放弃（删临时文件）或重试。此前只靠当场弹窗询问，弹窗关掉结果就找不回（MEDIA-04）。
 - **任务取消:** 字幕生成过程中可随时取消 (`CancelSubtitle`)，通过 `exec.CommandContext` 终止子进程。
-- **双语字幕 (可选):** 开启后可调用 DeepL 或用户配置的 OpenAI 兼容外部 AI API 翻译原文，再合并为双语 SRT（原文上行、翻译下行）；翻译失败会保留原文并返回警告。
-- **手动翻译已有字幕（2026-09-13 裁决）:** 片库行菜单「翻译字幕…」对视频同目录已有的 `.srt` 单独发起翻译，目标语言与输出形态（仅译文 / 双语对照）每次指定；不碰 ASR，也不排字幕生成队列。产物**覆盖同名 `.srt`**——用户裁决不新建 `名称.zh.srt` 这类多语言文件，以免动到字幕索引、重命名跟随、文件迁移与 Jellyfin 暴露这一串既有消费者。2026-09-29/30 起覆盖经字幕写入器进行，原文件先进备份、可从行菜单恢复（D-PC13，MEDIA-05）；翻译弹窗可「后台继续」，进度显示在行菜单标签、片库页进度条与任务中心，翻译期间不再锁住整个应用（D-PC22，MEDIA-12）。非 UTF-8 的字幕（GB18030 / Big5 等）在翻译与工作台入口返回 `subtitle_encoding_not_utf8`、不解析不写入，用户可先「转换为 UTF-8」（`ConvertSubtitleToUTF8`，按所选编码解码后经写入器写回；GB18030 与 Big5 都能干净解码时返回 `subtitle_encoding_ambiguous` 并附预览让用户选，D-PC14）；只有内嵌或其他格式字幕、没有同名 `.srt` 时返回 `subtitle_not_sidecar_srt`（D-PC17）。翻译先落临时文件，翻译或写回任一步失败都保留原字幕；双语合并后会把文件权限恢复成翻译前的值（`mergeBilingualSRT` 固定写 0644 是给新生成字幕用的，不该放宽用户已有文件的权限）。翻译期间可取消（`CancelSubtitleTranslation` 按 videoID 登记 cancel func），取消后原字幕不动。**空译文保留原文**：LLM 常对拟声词、音乐符号、纯标点行返回空串，写出的空块会被 `parseSRTEntries` 与编辑器解析器整条丢弃——仅译文模式下等于永久删除该条字幕，双语模式下会让其后所有译文错位；该修复在 `translateSRTWithProgress` 内，生成流程的自动双语同样受益。回退发生在喂上文滑窗之前（否则「原文 → 空」会作为示范样本进入下一批提示词），回退后的条目在双语合并时只写一行（`mergeBilingualSRT` 遇到译文与原文相同就不再重复），回退条数会作为 warning 回报给用户——否则「一条都没翻成」和「全部翻成了」是同一个成功提示；这条 warning 两条路径共用 `subtitleFallbackWarning`，生成流程的自动双语同样回报。空译文回退已抽成 `applyTranslationFallback`，生成、文件翻译与工作台重译三处共用（D-PC16）。取消只能在两批之间或请求飞行中生效；`lockSubtitleFile` 是裸互斥锁不认 ctx，所以「排队等锁」期间点取消会记账、但要等拿到锁才返回（拿到锁先复查 ctx，不会再发翻译请求，也不会改文件）。设置页的翻译服务配置（provider / Key / 模型）已移出「双语」开关，因为两个入口共用同一份配置。前端对「多数条目已是多行」的字幕给出叠加警告（覆盖语义下重复翻译会在译文上继续叠加）。
-- **识别质量设置:** 设置页可维护 WhisperX 模型（tiny/base/small/medium/large-v2/large-v3）和 CPU 批量大小（1-16），计算类型保持内部固定为 CPU 可靠的 `int8`。
+- **双语字幕 (可选):** Apple Translation 翻译原文，再合并为双语 SRT（原文上行、翻译下行）；翻译失败仍保留原文并返回警告。资源缺失可在字幕设置选择源/目标语言，由系统界面请求下载；正常翻译在后台复用已安装资源。
+- **手动翻译已有字幕（2026-09-13 裁决）:** 片库行菜单「翻译字幕…」对视频同目录已有的 `.srt` 单独发起翻译，目标语言与输出形态（仅译文 / 双语对照）每次指定；不碰 ASR，也不排字幕生成队列。产物**覆盖同名 `.srt`**——用户裁决不新建 `名称.zh.srt` 这类多语言文件，以免动到字幕索引、重命名跟随、文件迁移与 Jellyfin 暴露这一串既有消费者。2026-09-29/30 起覆盖经字幕写入器进行，原文件先进备份、可从行菜单恢复（D-PC13，MEDIA-05）；翻译弹窗可「后台继续」，进度显示在行菜单标签、片库页进度条与任务中心，翻译期间不再锁住整个应用（D-PC22，MEDIA-12）。非 UTF-8 的字幕（GB18030 / Big5 等）在翻译与工作台入口返回 `subtitle_encoding_not_utf8`、不解析不写入，用户可先「转换为 UTF-8」（`ConvertSubtitleToUTF8`，按所选编码解码后经写入器写回；GB18030 与 Big5 都能干净解码时返回 `subtitle_encoding_ambiguous` 并附预览让用户选，D-PC14）；只有内嵌或其他格式字幕、没有同名 `.srt` 时返回 `subtitle_not_sidecar_srt`（D-PC17）。翻译先落临时文件，翻译或写回任一步失败都保留原字幕；双语合并后会把文件权限恢复成翻译前的值（`mergeBilingualSRT` 固定写 0644 是给新生成字幕用的，不该放宽用户已有文件的权限）。翻译期间可取消（`CancelSubtitleTranslation` 按 videoID 登记 cancel func），取消后原字幕不动。**空译文保留原文**：翻译器可能对拟声词、音乐符号、纯标点行返回空串，写出的空块会被 `parseSRTEntries` 与编辑器解析器整条丢弃——仅译文模式下等于永久删除该条字幕，双语模式下会让其后所有译文错位；该修复在 `translateSRTWithProgress` 内，生成流程的自动双语同样受益。回退发生在喂上文滑窗之前（否则「原文 → 空」会作为示范样本进入下一批提示词），回退后的条目在双语合并时只写一行（`mergeBilingualSRT` 遇到译文与原文相同就不再重复），回退条数会作为 warning 回报给用户——否则「一条都没翻成」和「全部翻成了」是同一个成功提示；这条 warning 两条路径共用 `subtitleFallbackWarning`，生成流程的自动双语同样回报。空译文回退已抽成 `applyTranslationFallback`，生成、文件翻译与工作台重译三处共用（D-PC16）。取消只能在两批之间或请求飞行中生效；`lockSubtitleFile` 是裸互斥锁不认 ctx，所以「排队等锁」期间点取消会记账、但要等拿到锁才返回（拿到锁先复查 ctx，不会再发翻译请求，也不会改文件）。字幕设置只保留系统语言资源准备与自动双语开关，两个入口共用系统翻译。前端对「多数条目已是多行」的字幕给出叠加警告（覆盖语义下重复翻译会在译文上继续叠加）。
+- **语言选择（2026-10-12）:** 手选系统支持的语种，或用视频开头至多 30 秒音频在已安装语言中进行候选转写，结合转写置信度和 NaturalLanguage 的文字语种一致性推测。界面展示检测范围与可修改的结果，记住上次选择；静音、短到无法判断、置信度不足或接近时明确要求手选。不是苹果原生的全语种音频语言检测。语言资源由用户显式准备，不为了检测自动安装未准备语种。
 - **任务队列:** 字幕生成通过 FIFO 队列串行执行，前端显示当前任务和排队任务，支持逐任务取消、后台继续和队列状态事件。
 - **队列持久化（2026-09-29/30，D-PC20）:** 每个任务对应一行 `subtitle_jobs`（队列任务 ID 就是行 ID，进度事件与 `CancelSubtitleTask` 都用它）：入队写 `queued`，开始时条件更新为 `running`，结束写终态；终态行只保留最近 100 条，`interrupted` 与 `needs_confirmation` 不参与裁剪。启动时把残留的 `running` / `queued` 改为 `interrupted`，片库页提示「上次中断 N 个字幕任务」，可「全部重新排队」（`RequeueInterruptedSubtitleJobs`）或「忽略」（`DismissInterruptedSubtitleJobs`，改为 `cancelled`）。`ResolveSubtitleJob(jobID, force|discard|retry)` 只负责入队、立即返回；并发操作输的一方返回 `subtitle_job_conflict`。失败时发 `subtitle-failed`（可带 `error_code`），系统通知文案指向「任务中心」。退出应用前有排队或在跑的字幕任务会先弹退出确认（见 2.19）。
-- **强制生成复用:** 质量校验失败的 SRT 以隐藏临时文件暂存，路径记在任务行的 `pending_artifact_path`；用户选择强制生成时直接复用该文件，不重复执行 WhisperX，重启后同样可用。
-- **引擎准备与无字幕同步（D-PC22/23）:** 引擎准备（pip 子进程）同一时间只允许一轮，可取消（`CancelSubtitleEnginePreparation`）；设置页「字幕识别质量」分区显示引擎状态。「无字幕」视图、字幕搜索、按筛选随机与代理入队等依赖字幕索引的调用，距上次全库同步不足 10 分钟时直接用缓存，否则在后台同步一轮并发 `subtitle-index-synced`；视图上显示「上次同步时间 · 立即同步」（`GetSubtitleIndexSyncStatus` / `SyncSubtitleIndexNow`）。批量操作栏可「批量生成字幕」。
+- **强制生成复用:** 质量校验失败的 SRT 以隐藏临时文件暂存，路径记在任务行的 `pending_artifact_path`；用户选择强制生成时直接复用该文件，不重复执行识别，重启后同样可用。 历史旧引擎 pending 仍能强制完成；旧任务重试时持久化改为 Apple 引擎，避免后续强制完成错用旧身份。
+- **引擎准备与无字幕同步（D-PC22/23）:** 系统语言准备/交互式语言检测同一时间只允许一轮，可取消（`CancelSubtitleEnginePreparation`）；设置页「字幕识别质量」分区显示系统引擎与语言资源状态。「无字幕」视图、字幕搜索、按筛选随机与代理入队等依赖字幕索引的调用，距上次全库同步不足 10 分钟时直接用缓存，否则在后台同步一轮并发 `subtitle-index-synced`；视图上显示「上次同步时间 · 立即同步」（`GetSubtitleIndexSyncStatus` / `SyncSubtitleIndexNow`）。批量操作栏可「批量生成字幕」。 应用退出会取消并等待原生准备子进程，退出后拒绝新准备。
 - **字幕搜索筛选:** 字幕关键词搜索会把标签、文件大小和视频高度筛选下推到数据库查询，避免先取回全量结果再由前端过滤。
 - **字幕命中跳转:** 字幕搜索结果保留首个命中片段的起止时间并复用主列表虚拟壳；点击命中或预览时，支持内嵌预览的格式会在媒体元数据就绪后跳到命中时间，普通预览不会复用旧跳转位置。
 - **重命名联动:** 重命名视频会同步重命名同目录 `.srt` 文件，并刷新字幕索引。
-- **依赖管理:** `SubtitleService` 负责自动检测系统路径及 Homebrew 路径下的依赖。自动安装/下载依赖只在 macOS 实现，其他平台 `PrepareEngine` 与 `downloadFFmpeg` 统一返回 `ErrSubtitleDependencyUnsupportedPlatform`（明确「不支持自动下载，请手工安装」）。
-- **翻译术语表与滑动窗口上下文（D-033/D-034/D-035）:** `translation_glossary_entries` 存「源词→目标词」绑定，`collection_id` 为空表示全局条目；唯一键用物化列 `(scope_key, target_language, source_term_lower)`（索引 `idx_translation_glossary_entries_scope_lang_term`；`scope_key = COALESCE(collection_id, 0)`，源词写入时转小写；`target_language` 为空表示对所有目标语言生效，2026-09-29/30 由 D-PC16 加入，此前唯一键不含语言列），避免两后端表达式索引的方言差异；源词/目标词 ≤200 字符、备注 ≤500 字符。`TranslationGlossaryService.ResolveForVideo(videoID, targetLanguage)` 取视频所属全部**活跃**作品集的条目 + 全局条目，只保留目标语言为空或等于本次目标语言的条目，同源词按「作品集+语言 > 作品集+空语言 > 全局+语言 > 全局+空语言」取一条，同级多作品集冲突取 `updated_at` 最新并只记冲突条数、不记词本身；`GlossaryEditor.vue` 有语言列（空显示为「所有语言」）；作品集是软删除，其条目不级联删除而是留在库里不生效（有意选择）。术语只注入 OpenAI 兼容翻译器：`SubtitleTranslator` 接口不变，新增可选 `ContextualTranslator.TranslateWithContext(ctx, TranslationRequest)`，调用方类型断言，且只有翻译器可注入时才去读术语表；DeepL 只实现旧接口，请求体与失败路径零改动（基线快照 `.loopx/workspace/2026-09-02-capability-batch/baseline/deepl-request-before-P-010.txt` 逐字节钉住）。提示词新增「术语表（必须遵循）」（只列大小写不敏感命中本批原文的条目，筛选在提示词构造处统一完成）与「上文（只读，勿翻译，勿计入返回）」（前一批尾部 5 条原文/译文）两段 JSON Lines；返回条数校验仍只按本批，批大小 50 与「翻译失败保留原文」语义不变；术语表读取失败在生成路径按翻译失败处理（保留原文 + 警告），在工作台重译直接报错。字幕生成的双语翻译与工作台选区重译共用同一套解析与滑动窗口。
-- **术语表入口:** 设置页「字幕翻译」分区维护全局表（provider 为 DeepL 时提示「术语表不适用于 DeepL」，且不受「启用双语字幕翻译」开关控制，因为工作台重译也用它），预览抽屉内的作品集详情维护该作品集的表；两处复用 `frontend/src/components/GlossaryEditor.vue`。`UpsertGlossaryEntry` 带 ID 时按 ID 改写（允许改源词，撞唯一键返回 `ErrGlossaryTermConflict`），不带 ID 时按唯一键 upsert。
+- **依赖管理:** FFmpeg 保留现有本地/Homebrew 查找与 macOS 安装路径；字幕 WhisperX/Qwen 执行、安装、预下载脚本和设置入口移除。已下载的旧模型缓存不自动删除。原来放在 WhisperX 文件中的 Python 公共工具移到 `services/python_runtime.go`，继续服务人脸与场景检索。
+- **术语表退役（2026-10-12 用户裁决）:** 全局和作品集术语表入口、Wails 管理绑定及翻译注入移除；`translation_glossary_entries` 和历史数据保留。系统翻译不承诺指定术语译法或旧 LLM 滑动窗口上下文。旧字幕提供方/API Key/WhisperX 设置字段保留在历史数据库中但不再通过 JSON 返回、不用于执行。
 
 ### 2.3 标签管理 (Tag Management)
 - **分类行高度与标签转人物（2026-09-28）：** `LibraryToolbar` 的「标签 / 全部 / 标签管理 / 选择本页」放在独立顶行，分类使用整行宽度，不再为右侧按钮保留贯穿标签区的空白列。分类行使用横向 flex，左侧分类名固定列宽、右侧标签自然换行；不使用 grid 包裹换行 flex。WebKit 18.2 实测 grid 在窗口宽度变化后沿用旧行高，会留下大块空白或让标签越过分隔线。标签管理仅对**“人物”分类的非自动标签**提供「转为人物」（分类名去首尾空白后精确匹配；未分类或其他分类不可转换，后端预览与事务提交都会复查），先预览关联的视频/图片数量，再明确新建人物或选择同名人物（允许同名，不自动合并）。`PreviewTagPersonConversion` / `ConvertTagToPerson` 以标签 ID 和预览名称校验来源，一笔事务合并 `video_people` / `image_people`（包含软删除媒体、已有关系去重），成功后按用户裁决软删除原标签、清除两侧打标关系，并复用标签删除的待审候选失效逻辑；不改磁盘文件。失败回滚全部改动，重复转换已删除标签被拒绝。转换成功刷新片库、已挂载图片页和预览详情，移除当前已失效的标签筛选。验证见 `docs/loopx/design/2026-09-28-tag-person-conversion.md`。**2026-09-29/30 起可撤销（D-PC34，META-02）**：转换在同一事务里写一行 `tag_person_conversions`（原打标关系、实际新增的人物关系、是否新建了人物）；标签管理的「最近转换」可「撤销」（`UndoTagPersonConversion`）：恢复标签与原打标关系、删除本次新增的人物关系，本次新建且已无任何关系的人物连同头像删除，再重排 AI 打标；期间已有同名活跃标签返回 `tag_name_taken` 并整体回滚，原标签行已被硬删返回 `conversion_not_undoable`。转成人物后片库仍可按人物筛选（见 2.12「视频人物筛选」），不再丢失筛选能力。
@@ -83,7 +82,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **统一标签统计:** 洞察页“标签 Top”按全部标签的关联视频数量排序；`top_ai_tags` 返回字段保留以免变更既有绑定，但不再按旧 AI 身份过滤。
 - **AI 抽帧与分批:** 固定按每分钟 1 帧、至少 10 帧取样，均匀覆盖 5%–95% 时段；图片按 `AITaggingImagesPerRequest`（默认 10）分批发送，同一视频的批次结果按标签去重并保留最高置信度。
 - **受限 AI 打标 Agent:** 初始证据收集后，外部 OpenAI 兼容模型最多进行 4 轮单动作决策，可选择结束、按模型指定数量补帧、请求本地临时字幕或查找同源视频；额外帧由服务端按最大空档取样并受 `AITaggingMaxExtraFrames`（默认 20，范围 1–100）约束，最后仍复用闭集分批标签分析与人工审批。
-- **临时字幕证据:** Agent 只调用已准备好的本地 WhisperX（优先）或 Qwen（回退），自动检测语言并与正式字幕共享串行转写槽；结果只驻留当前分析内存，不写 `.srt`、不翻译、不进入候选摘要/数据库，也不会自动安装运行时。原始音频仅存在于本地临时文件且会清理。
+- **临时字幕证据:** Agent 只使用已准备的 Apple 系统识别资源，自动推测语言并与正式字幕共享串行转写槽；结果只驻留当前分析内存，不写 `.srt`、不翻译、不进入候选摘要/数据库，也不自动安装资源。原始音频只在本地临时文件中，使用后清理。
 - **同源内容识别:** 针对清晰度变化、重编码和空间裁剪，先按时长有界召回，使用五点多裁剪 dHash 视觉指纹筛出本地候选，再把最多 5 组候选 JPEG 交给当前外部多模态模型确认；只有 `high` 结论持久化为同源关系。同源视频的已有非自动标签仅作为 Agent 证据，绝不直接复制为正式标签。
 - **同源审阅与否认:** `video_same_source_relations` 保存规范化视频对、双方内容指纹、置信度、理由、未读状态和处理时间；待审工作台用独立子页签区分 AI 标签与视频同源，内容区独立滚动。同源页并排展示 A/B 缩略图和原始路径，缩略图失败时显示本地占位；单个“预览”操作会同时打开两个视频，并提供删除 A/B 片库记录（保留原文件）、“确认同源 / 不是同源”处理。确认后关系仍保留给清理中心使用，但退出待处理列表；涉及软删除视频的关系不会展示。用户否认后，只要双方内容指纹未变就禁止再次确认；任一文件内容变化后允许重判。2026-09-29/30 起（D-PC27，APP-11）：「全部标已读」从打开弹窗时改到切到同源页签时；确认同源后卡片出现「去清理」，跳到清理中心并定位该对，清理中心的同源卡片标出「已确认同源」。
 - **AI 数据外发边界:** 设置页明确披露抽帧图片、临时字幕文本和同源候选帧可能发送到配置的外部 API；原始音频不外发。Agent step 只保存动作、计数、状态和耗时，日志不记录请求 payload、图片、字幕正文或模型响应正文。
@@ -501,9 +500,9 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 
 ## 4. 开发与构建指南 (Development & Build)
 
-- **开发模式:** `GOTOOLCHAIN=go1.24.9 wails dev`（Wails 2.11.0 的 `go/packages` 与本机 Go 1.27.1 不兼容；开发模式尚未实测）
+- **开发模式:** `GOTOOLCHAIN=go1.24.9 wails dev`（Wails 2.11.0 的 `go/packages` 与本机 Go 1.27.1 不兼容；开发模式尚未实测） 使用系统字幕前先执行 `bash scripts/build_apple_ai.sh`，开发二进制读取该原生产物。
 - **构建应用:** `GOTOOLCHAIN=go1.24.9 wails build`（2026-09-23 darwin/arm64 已完整出包；默认 Go 1.27.1 在 Wails 扫描嵌入资源阶段报 `package "fmt" without types`，`go test ./...` 不受影响）
-- **构建并安装脚本:** `scripts/build_and_install_app.sh` 在 `GOTOOLCHAIN` 未设置或为 `auto` 时只为 Wails 构建使用 Go 1.24.9；`--build-only` 可安全验证构建和 sidecar 打包而不替换 `/Applications` 中的应用。
+- **构建并安装脚本:** `scripts/build_and_install_app.sh` 在 `GOTOOLCHAIN` 未设置或为 `auto` 时只为 Wails 构建使用 Go 1.24.9；`--build-only` 可安全验证构建和 sidecar 打包而不替换 `/Applications` 中的应用。 脚本会先编译并打包苹果系统字幕辅助程序；只执行原始 `wails build` 不会自动打包它。
 - **数据库:** 默认 SQLite（`~/.CineInsight/library.db`），不需要任何配置；要用 PostgreSQL 时在 `.env` 写 `DB_BACKEND=postgres` 与 `PG_*` 连接项（有 `PG_HOST` 而没有 `DB_BACKEND` 的老安装自动沿用 PostgreSQL），或在设置页「数据库」分区迁移并切换，见 §1。备份在设置页「数据库备份」：SQLite 用 `VACUUM INTO` 写 `.sqlite` 快照，PostgreSQL 用 `pg_dump` 写 `.dump`，默认目录 `~/.CineInsight/backups`（可改、可在访达中显示），默认每 24 小时一份、保留 7 份，运行期间每小时检查一次是否到期（D-PC54 / D-PC56）；恢复前先给当前库做安全备份（SQLite 在进入维护模式之前做），恢复完成后应用自动退出，重新打开即用恢复的数据。
 - **测试:** 默认 `go test ./...` 走 SQLite；PG 腿用 `CINEINSIGHT_TEST_PG_DSN` 指向一次性库，`./services` 在 PG 上耗时较长，必须加 `-timeout`（如 `-timeout 1500s`）。
 

@@ -135,11 +135,7 @@ func (s *AITaggingService) runAgentEvidenceLoop(
 					observation.Status = models.AITagToolStatusFailed
 					observation.Code = "temporary_transcript_unavailable"
 				} else {
-					transcript, transcriptErr := s.transcript.GenerateTemporaryTranscript(ctx, video, config.SubtitleCharLimit, SubtitleRecognitionConfig{
-						WhisperXModel:       config.SubtitleWhisperXModel,
-						WhisperXBatchSize:   config.SubtitleWhisperXBatchSize,
-						WhisperXComputeType: defaultSubtitleWhisperXComputeType,
-					})
+					transcript, transcriptErr := s.transcript.GenerateTemporaryTranscript(ctx, video, config.SubtitleCharLimit)
 					if transcriptErr != nil {
 						observation.Status = models.AITagToolStatusFailed
 						observation.Code = "temporary_transcript_failed"
