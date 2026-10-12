@@ -43,7 +43,8 @@ describe('sessionChanges', () => {
     expect(recordBackgroundTasks(['backup', 'phash'])).toBeNull();
     expect(recordBackgroundTasks(['backup'])).toBeNull();
     const entry = recordBackgroundTasks(['phash']);
-    expect(entry).toMatchObject({ kind: 'backup', title: '数据库备份', page: 'settings' });
+    // 备份校验也登记在 backup 这个 key 下：文案不能只说「备份」。
+    expect(entry).toMatchObject({ kind: 'backup', title: '数据库备份或校验已结束', detail: '结果在设置的数据库一节查看', page: 'settings' });
     expect(recordBackgroundTasks(null)).toBeNull();
     expect(sessionChanges()).toHaveLength(1);
   });

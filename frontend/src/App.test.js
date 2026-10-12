@@ -900,6 +900,34 @@ it('观看笔记的书签进整页详情并从书签起点起播，不在页面�
   expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['viewing-notes']);
 });
 
+// I-1：书签的整段区间（起点、终点、原片版本）交给详情页的 bookmark，起播位置仍是书签起点。
+it('观看笔记的书签把整段区间交给整页详情；返回到上一层详情时不再带书签', async () => {
+  const wrapper = await mountApp();
+  api.GetVideosByIDs.mockResolvedValue([{ id: 9, name: '9.mp4' }]);
+  await openListsMenuPage(wrapper, 'viewing-notes');
+  const resolution = { status: 'ready', video: { id: 7 }, bookmark: { id: 2, start_ms: 61_000, end_ms: 75_500 }, source_token: 'v3' };
+  wrapper.findComponent({ name: 'ViewingNotesPage' }).vm.$emit('open-bookmark', resolution); await flushPromises();
+  const detail = () => wrapper.findComponent({ name: 'VideoDetailPage' });
+  const passed = () => detail().vm.$.vnode.props;
+  expect(passed()['start-at-ms']).toBe(61_000);
+  expect(passed().bookmark).toEqual({ start_ms: 61_000, end_ms: 75_500, source_token: 'v3' });
+
+  detail().vm.$emit('open-video', 9); await flushPromises();
+  expect(passed().bookmark).toBeNull();
+  detail().vm.$emit('back'); await flushPromises();
+  expect(detail().props('videoId')).toBe(7);
+  expect(passed().bookmark).toBeNull();
+  expect(passed()['start-at-ms']).toBeNull();
+});
+
+it('没有终点的书签区间 end_ms 为 null', async () => {
+  const wrapper = await mountApp();
+  await openListsMenuPage(wrapper, 'viewing-notes');
+  wrapper.findComponent({ name: 'ViewingNotesPage' }).vm.$emit('open-bookmark', { status: 'ready', video: { id: 7 }, bookmark: { id: 2, start_ms: 5000 }, source_token: '' });
+  await flushPromises();
+  expect(wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$.vnode.props.bookmark).toEqual({ start_ms: 5000, end_ms: null, source_token: '' });
+});
+
 it('观看笔记首次进入才挂载，去原片核对再返回保留同一编辑宿主', async () => {
   const wrapper = await mountApp(); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).exists()).toBe(false);
   await openListsMenuPage(wrapper, 'viewing-notes'); const notes = wrapper.findComponent({ name: 'ViewingNotesPage' }).vm;
@@ -1142,6 +1170,9 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
     ['ViewingNotesPage', 'viewing-notes', 'open-video-id', 7],
     ['ViewingNotesPage', 'viewing-notes', 'open-video', { id: 7, name: 'a.mp4' }],
     ['WatchedMoviesPage', 'watched-movies', 'open-video', { id: 7, name: 'a.mp4' }],
+    // I-3：人物与作品集页点视频不再开本页抽屉，交给 App 分流。
+    ['EntityLibraryPage', 'people', 'open-video', { id: 7, name: 'a.mp4' }],
+    ['EntityLibraryPage', 'collections', 'open-video', { id: 7, name: 'a.mp4' }],
     ['PlaybackQueuePanel', 'recap', 'open-video', 7]
   ];
   const manageCallers = [
@@ -1260,9 +1291,18 @@ describe('整页详情的返回栈（D-UI-10）', () => {
   }
   const mainView = wrapper => wrapper.get('.main-view').element;
   const detail = wrapper => wrapper.findComponent({ name: 'VideoDetailPage' });
+  // jsdom 不排版：滚动容器的内容高度由用例指定，模拟回到的页面内容随数据加载长高（I-2）。
+  function stubContentHeight(wrapper, height) {
+    const el = mainView(wrapper);
+    const box = { height, viewport: 600 };
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => box.height });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => box.viewport });
+    return box;
+  }
 
   it('从回顾打开详情：详情从顶部看起；「返回」回到回顾并恢复滚动位置', async () => {
     const wrapper = await viewerApp();
+    stubContentHeight(wrapper, 5000);
     await wrapper.get('[data-test="nav-recap"]').trigger('click');
     mainView(wrapper).scrollTop = 1200;
     wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-video-id', 7);
@@ -1280,6 +1320,7 @@ describe('整页详情的返回栈（D-UI-10）', () => {
 
   it('相关推荐多层压栈，返回逐层回到上一部片（恢复各自的滚动）再回来源页', async () => {
     const wrapper = await viewerApp();
+    stubContentHeight(wrapper, 5000);
     mainView(wrapper).scrollTop = 300;
     wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
     await flushPromises();
@@ -1293,13 +1334,18 @@ describe('整页详情的返回栈（D-UI-10）', () => {
     await flushPromises();
     expect(wrapper.vm.detailReturnStack.map(entry => entry.params?.videoId || entry.page)).toEqual(['home', 1, 2]);
 
+    // 回到上一层详情：它重新挂载、重新取数，报 ready 之前不动滚动位置。
+    mainView(wrapper).scrollTop = 999;
     detail(wrapper).vm.$emit('back');
     await flushPromises();
     expect(detail(wrapper).props()).toMatchObject({ videoId: 2, startAtMs: null });
+    expect(mainView(wrapper).scrollTop).toBe(999);
+    detail(wrapper).vm.$emit('ready');
     expect(mainView(wrapper).scrollTop).toBe(50);
     detail(wrapper).vm.$emit('back');
     await flushPromises();
     expect(detail(wrapper).props('videoId')).toBe(1);
+    detail(wrapper).vm.$emit('ready');
     expect(mainView(wrapper).scrollTop).toBe(800);
     detail(wrapper).vm.$emit('back');
     await flushPromises();
@@ -1374,5 +1420,199 @@ describe('整页详情的返回栈（D-UI-10）', () => {
     await flushPromises();
     expect(detail(wrapper).vm).not.toBe(first);
     expect(detail(wrapper).props('videoId')).toBe(2);
+  });
+});
+
+describe('返回到重新挂载的页面时等内容长够再恢复滚动（I-2）', () => {
+  // 只假 rAF 与 Date：flushPromises 仍走真的 setTimeout。
+  beforeEach(() => vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame', 'Date'] }));
+  afterEach(() => vi.useRealTimers());
+
+  async function fromPage(page) {
+    const wrapper = await mountApp();
+    api.GetVideosByIDs.mockImplementation(ids => Promise.resolve(ids.map(id => ({ id, name: `${id}.mp4` }))));
+    const el = wrapper.get('.main-view').element;
+    const box = { height: 4000, viewport: 600 };
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => box.height });
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => box.viewport });
+    await wrapper.setData({ currentPage: page });
+    el.scrollTop = 2500;
+    return { wrapper, el, box };
+  }
+
+  async function openAndComeBack(wrapper, box, emitter) {
+    emitter();
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    // 回到的页面重新挂载，数据还没回来：内容只有一屏高。
+    box.height = 600;
+    wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('back');
+    await flushPromises();
+  }
+
+  it.each([
+    ['watched-movies', 'WatchedMoviesPage', 'open-video', { id: 7 }],
+    ['people', 'EntityLibraryPage', 'open-video', { id: 7 }],
+    ['collections', 'EntityLibraryPage', 'open-video', { id: 7 }]
+  ])('%s：内容长到够高才放回滚动位置', async (page, name, event, payload) => {
+    const { wrapper, el, box } = await fromPage(page);
+    await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name }).vm.$emit(event, payload));
+    expect(wrapper.vm.currentPage).toBe(page);
+    expect(el.scrollTop).toBe(0);
+
+    vi.advanceTimersByTime(200);
+    expect(el.scrollTop).toBe(0);
+    box.height = 2600;
+    vi.advanceTimersByTime(32);
+    expect(el.scrollTop).toBe(0);
+    box.height = 3200;
+    vi.advanceTimersByTime(32);
+    expect(el.scrollTop).toBe(2500);
+  });
+
+  it('最多等 3 秒，到点内容还不够就作罢，之后长高也不再滚', async () => {
+    const { wrapper, el, box } = await fromPage('watched-movies');
+    await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name: 'WatchedMoviesPage' }).vm.$emit('open-video', { id: 7 }));
+    vi.advanceTimersByTime(3100);
+    box.height = 5000;
+    vi.advanceTimersByTime(500);
+    expect(el.scrollTop).toBe(0);
+  });
+
+  it('等待中切到别的页面就取消，不把滚动位置放到新页面上', async () => {
+    const { wrapper, el, box } = await fromPage('watched-movies');
+    await openAndComeBack(wrapper, box, () => wrapper.findComponent({ name: 'WatchedMoviesPage' }).vm.$emit('open-video', { id: 7 }));
+    await wrapper.get('[data-test="nav-recap"]').trigger('click');
+    box.height = 5000;
+    vi.advanceTimersByTime(500);
+    expect(el.scrollTop).toBe(0);
+  });
+});
+
+describe('「打开一部片」只让最新的一次生效（M-1）', () => {
+  function deferredVideos() {
+    const pending = [];
+    api.GetVideosByIDs.mockImplementation(ids => new Promise(resolve => pending.push({ ids, resolve })));
+    return pending;
+  }
+
+  it('取视频期间用户进了管理区：取回来后不再把人拽回整页详情', async () => {
+    const wrapper = await mountApp();
+    const pending = deferredVideos();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 7);
+    await flushPromises();
+    await wrapper.get('[data-test="open-manage"]').trigger('click');
+    pending[0].resolve([{ id: 7, name: '7.mp4' }]);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('manage-home');
+    expect(wrapper.findComponent({ name: 'VideoDetailPage' }).exists()).toBe(false);
+  });
+
+  it('管理侧的打开被切页取代时同样作废：不切回片库管理、不开抽屉', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'insights' });
+    const openPreview = vi.fn();
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.openPreview = openPreview;
+    const pending = deferredVideos();
+    wrapper.findComponent({ name: 'InsightsPage' }).vm.$emit('open-video-id', 7);
+    await flushPromises();
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    pending[0].resolve([{ id: 7, name: '7.mp4' }]);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(openPreview).not.toHaveBeenCalled();
+  });
+
+  it('先后两次打开：后一次先回来就是它，前一次迟到也不覆盖', async () => {
+    const wrapper = await mountApp();
+    const pending = deferredVideos();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 2);
+    await flushPromises();
+    pending[1].resolve([{ id: 2, name: '2.mp4' }]);
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props('videoId')).toBe(2);
+    pending[0].resolve([{ id: 1, name: '1.mp4' }]);
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props('videoId')).toBe(2);
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['home']);
+  });
+
+  it('先后两次打开：前一次先回来也作废，等后一次回来才打开它', async () => {
+    const wrapper = await mountApp();
+    const pending = deferredVideos();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 2);
+    await flushPromises();
+    pending[0].resolve([{ id: 1, name: '1.mp4' }]);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('home');
+    pending[1].resolve([{ id: 2, name: '2.mp4' }]);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props('videoId')).toBe(2);
+  });
+
+  it('被取代的那次取视频失败也不报错；没被取代时照常说明', async () => {
+    const wrapper = await mountApp();
+    let reject;
+    api.GetVideosByIDs.mockImplementationOnce(() => new Promise((_, fail) => { reject = fail; }));
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    await wrapper.get('[data-test="nav-recap"]').trigger('click');
+    reject(new Error('bridge down'));
+    await flushPromises();
+    expect(feedbackState.toasts).toEqual([]);
+
+    api.GetVideosByIDs.mockRejectedValueOnce(new Error('bridge down'));
+    wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-video-id', 1);
+    await flushPromises();
+    expect(feedbackState.toasts.map(toast => toast.message)).toEqual(['打开视频失败：Error: bridge down']);
+  });
+
+  it('被取代的那次即使视频已不在片库也不报错', async () => {
+    const wrapper = await mountApp();
+    const pending = deferredVideos();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    await wrapper.get('[data-test="nav-recap"]').trigger('click');
+    pending[0].resolve([]);
+    await flushPromises();
+    expect(feedbackState.toasts).toEqual([]);
+    expect(wrapper.vm.currentPage).toBe('recap');
+  });
+});
+
+describe('整页详情改了状态，片库页跟上（M-5）', () => {
+  it('video-state-changed 原样交给片库页的状态更新入口', async () => {
+    const wrapper = await mountApp();
+    const apply = vi.fn();
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.applyExternalVideoStateChange = apply;
+    api.GetVideosByIDs.mockResolvedValue([{ id: 7, name: '7.mp4' }]);
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 7);
+    await flushPromises();
+    const payload = { id: 7, changes: { is_favorite: true } };
+    wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('video-state-changed', payload);
+    expect(apply).toHaveBeenCalledWith(payload);
+  });
+});
+
+describe('「视频」上按 ⌘K 与其他页面一致（M-6）', () => {
+  it('片库页只在「片库管理」上自己接 ⌘K；在「视频」上交给 App 先切到片库管理再开清理中心', async () => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'videos' });
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).props('cleanupHotkey')).toBe(false);
+
+    const run = vi.fn();
+    registerCommands('test-cleanup-videos', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
+    const event = new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, bubbles: true, cancelable: true });
+    window.dispatchEvent(event);
+    await flushPromises();
+    unregisterCommands('test-cleanup-videos');
+
+    expect(event.defaultPrevented).toBe(true);
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).props('cleanupHotkey')).toBe(true);
   });
 });

@@ -248,6 +248,30 @@ describe('EntityLibraryPage', () => {
     await wrapper.find('.entity-video-card__actions .btn-primary').trigger('click');
     expect(api.PlayVideo).toHaveBeenCalledWith(2);
   });
+
+  // I-3 / D-UI-07：人物与作品集属观看区，点相关视频交给 App 进整页详情，不在本页抽屉里开；
+  // 人物本身的编辑抽屉（编辑与批量关联）照旧。
+  it('clicking a related video hands it to App instead of opening the embedded drawer', async () => {
+    api.ListPeople.mockResolvedValueOnce([{ person: { id: 7, display_name: 'Actor Seven' }, active_video_count: 1 }]);
+    api.GetPersonDetail.mockResolvedValueOnce({
+      person: { person: { id: 7, display_name: 'Actor Seven' }, active_video_count: 1 },
+      videos: [{ id: 2, name: 'two.mp4', size: 1024, duration: 60 }], next_video_id: 0
+    });
+    const wrapper = mount(EntityLibraryPage, { props: { entityType: 'person' } });
+    await flushPromises();
+    await wrapper.get('.entity-card').trigger('click');
+    await flushPromises();
+    const drawers = () => wrapper.findAll('.preview-drawer-stub').map(drawer => drawer.text());
+
+    await wrapper.get('[data-test="entity-video-detail-2"]').trigger('click');
+    await wrapper.get('.entity-video-card__preview').trigger('click');
+    expect(wrapper.emitted('open-video')).toEqual([[expect.objectContaining({ id: 2 })], [expect.objectContaining({ id: 2 })]]);
+    expect(drawers().filter(text => text.startsWith('video:'))).toEqual([]);
+
+    await wrapper.findAll('button').find(button => button.text() === '编辑与批量关联').trigger('click');
+    expect(drawers()).toEqual(['person:7']);
+    wrapper.unmount();
+  });
 });
 
 describe('EntityLibraryPage 命令面板落点', () => {

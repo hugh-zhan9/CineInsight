@@ -42,3 +42,27 @@ export function popDetailReturn(stack) {
   if (!stack.length) return { entry: null, stack };
   return { entry: stack[stack.length - 1], stack: stack.slice(0, -1) };
 }
+
+export const SCROLL_RESTORE_TIMEOUT_MS = 3000;
+
+// 返回到重新挂载的页面时，内容是异步取回来的：每帧看一次滚动容器，等它长到能滚到目标位置再放回去；
+// 最多等 SCROLL_RESTORE_TIMEOUT_MS，到点还不够就作罢（不滚到半截）。返回取消函数（切页时调用）。
+export function restoreScrollWhenReachable(el, top, timeoutMs = SCROLL_RESTORE_TIMEOUT_MS) {
+  const target = Math.max(0, Number(top) || 0);
+  const deadline = Date.now() + timeoutMs;
+  let frame = 0;
+  const attempt = () => {
+    frame = 0;
+    if (Math.max(0, el.scrollHeight - el.clientHeight) >= target) {
+      el.scrollTop = target;
+      return;
+    }
+    if (Date.now() >= deadline) return;
+    frame = requestAnimationFrame(attempt);
+  };
+  attempt();
+  return () => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0;
+  };
+}

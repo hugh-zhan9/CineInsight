@@ -99,6 +99,9 @@
         :key="detailRoute.token"
         :video-id="detailRoute.videoId"
         :start-at-ms="detailRoute.startAtMs"
+        :bookmark="detailRoute.bookmark"
+        @ready="handleDetailReady"
+        @video-state-changed="handleDetailVideoStateChange"
         @back="goBackFromDetail"
         @open-video="openVideoByID($event, { from: 'video-detail' })"
         @navigate="navigateTo"
@@ -120,6 +123,7 @@
         ref="videoListPage"
         v-show="libraryPageVisible"
         :page-active="libraryPageVisible"
+        :cleanup-hotkey="currentPage === 'library-manage'"
         :consolidation-route="consolidationRoute"
         @consolidation-opened="consolidationRoute = null"
         :tags="tags"
@@ -165,8 +169,9 @@
         @relaunch-required="showRelaunchRequired($event && $event.message)"
       />
 
-      <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" />
-      <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" :focus-entity="entityFocus.collection" />
+      <!-- 人物与作品集属观看区：点视频进整页详情（D-UI-07），编辑资料从详情页的「编辑资料」进片库管理。 -->
+      <EntityLibraryPage v-if="currentPage === 'people'" entity-type="person" :focus-entity="entityFocus.person" @open-video="openVideo($event, { from: 'people' })" />
+      <EntityLibraryPage v-if="currentPage === 'collections'" entity-type="collection" :focus-entity="entityFocus.collection" @open-video="openVideo($event, { from: 'collections' })" />
 	  <InsightsPage
 	    v-if="currentPage === 'insights'"
 	    :directories="directories"
@@ -307,7 +312,7 @@ import {
   appCommandsMixin, isNavPageVisible, MANAGE_NAV_GROUPS, pageArea, VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS, whenNavigated
 } from './utils/appCommands.js';
 import { findCommand } from './utils/commandRegistry.js';
-import { opensVideoDetail, popDetailReturn, pushDetailReturn } from './utils/viewerNavigation.js';
+import { opensVideoDetail, popDetailReturn, pushDetailReturn, restoreScrollWhenReachable } from './utils/viewerNavigation.js';
 import { recordDownloadDuplicate, recordScanSummary } from './utils/sessionChanges.js';
 import { closeVersionCompare, versionCompareState } from './utils/versionCompare.js';
 
@@ -340,7 +345,7 @@ export default {
       navMenu: null,
       homeMounted: false,
       // 整页详情的参数（D-UI-05）：token 每次打开或返回都换，让详情页重新挂载。
-      detailRoute: { videoId: 0, startAtMs: null, token: 0 },
+      detailRoute: { videoId: 0, startAtMs: null, bookmark: null, token: 0 },
       // 整页详情的返回栈（D-UI-10）：[{ page, params, scrollTop }]，规则见 utils/viewerNavigation.js。
       detailReturnStack: [],
       // 版本对比播放器的全局开关（utils/versionCompare.js），同一个响应式对象。
@@ -580,12 +585,26 @@ export default {
         }).then(ok => {
           if (!ok) return false;
           this.settingsDirty = false;
-          this.currentPage = page;
+          this.commitPage(page);
           return true;
         });
       }
-      this.currentPage = page;
+      this.commitPage(page);
       return true;
+    },
+    // 真正切页的唯一出口：顺带作废还在取视频的「打开一部片」（M-1），用户已经去了别处，取回来也不再把人拽回去。
+    commitPage(page) {
+      this.supersedeVideoOpen();
+      // 上一页还没放回去的滚动位置不能落到新页面上。
+      this._cancelScrollRestore?.();
+      this._cancelScrollRestore = null;
+      this._pendingDetailScrollTop = null;
+      this.currentPage = page;
+    },
+    // 「打开一部片」的代次：每次新的打开、每次切页都换代，取完视频还是这一代才继续。
+    supersedeVideoOpen() {
+      this._videoOpenGeneration = (this._videoOpenGeneration || 0) + 1;
+      return this._videoOpenGeneration;
     },
     async openConsolidationTask(taskID) {
       const generation = ++this.consolidationRouteGeneration;
@@ -632,7 +651,11 @@ export default {
     async openBookmark(resolution, { from } = {}) {
       if (opensVideoDetail(from, this.currentPage)) {
         if (resolution?.status !== 'ready' || !resolution.video) return false;
-        return this.openVideoDetail(resolution.video.id, { startAtMs: resolution.bookmark?.start_ms });
+        const mark = resolution.bookmark || {};
+        return this.openVideoDetail(resolution.video.id, {
+          startAtMs: mark.start_ms,
+          bookmark: { start_ms: mark.start_ms, end_ms: mark.end_ms ?? null, source_token: resolution.source_token || '' }
+        });
       }
       const generation = this._bookmarkNavigation = Symbol();
       const navigated = await this.navigateTo('library-manage');
@@ -679,17 +702,8 @@ export default {
     },
     // 场景命中（从区间起点，已提前 2 秒）：观看区进整页详情并从该时刻起播；其他来源回片库管理开抽屉内嵌播放，
     // 沿用字幕命中的跳转机制（D-UI-07）。
-    async openVideoAt({ videoID, startMs } = {}, { from } = {}) {
-      try {
-        const [video] = await GetVideosByIDs([Number(videoID)]) || [];
-        if (!video) {
-          notifyError('这个视频已不在片库中，可能不在扫描目录内或已被删除。');
-          return;
-        }
-        await this.openVideo(video, { from, startAtMs: startMs });
-      } catch (err) {
-        notifyError(`打开视频失败：${err}`);
-      }
+    openVideoAt({ videoID, startMs } = {}, { from } = {}) {
+      return this.openVideoResolved(videoID, '这个视频已不在片库中，可能不在扫描目录内或已被删除。', { from, startAtMs: startMs });
     },
     // 观看回顾里点标签：回片库，只按这一个标签筛选（VideoListPage.applyTagFilterCommand）。
     async openLibraryTag(tag) {
@@ -714,16 +728,30 @@ export default {
       return this.openEntityFromCommand(type, Number(id), name || '');
     },
     // 按 ID 打开一部片（任务中心产物、回顾、待播队列…）：取回视频后按调用方区域分流。
-    async openVideoByID(videoID, { from, startAtMs = null } = {}) {
+    openVideoByID(videoID, { from, startAtMs = null } = {}) {
+      return this.openVideoResolved(videoID, '产物视频不在片库中，可能不在扫描目录内或已被删除。', { from, startAtMs });
+    },
+    // 取回视频再打开（M-1）：取的这段时间里又有新的打开或切了页，这一次就作废——只有最新的那次生效，
+    // 也不会把已经去了别处（比如进了管理区）的用户拽回来。
+    async openVideoResolved(videoID, missingMessage, options) {
+      const generation = this.supersedeVideoOpen();
+      let video;
       try {
-        const [video] = await GetVideosByIDs([Number(videoID)]) || [];
-        if (!video) {
-          notifyError('产物视频不在片库中，可能不在扫描目录内或已被删除。');
-          return;
-        }
-        await this.openVideo(video, { from, startAtMs });
+        [video] = await GetVideosByIDs([Number(videoID)]) || [];
+      } catch (err) {
+        if (generation === this._videoOpenGeneration) notifyError(`打开视频失败：${err}`);
+        return false;
+      }
+      if (generation !== this._videoOpenGeneration) return false;
+      if (!video) {
+        notifyError(missingMessage);
+        return false;
+      }
+      try {
+        return await this.openVideo(video, options);
       } catch (err) {
         notifyError(`打开视频失败：${err}`);
+        return false;
       }
     },
     // 「打开一部片」的分流（D-UI-07）：from 是调用方的页面 key 或面板名（规则见 utils/viewerNavigation.js）。
@@ -734,6 +762,7 @@ export default {
       return this.openVideoInLibraryManage(video, startAtMs);
     },
     async openVideoInLibraryManage(video, startAtMs = null) {
+      this.supersedeVideoOpen();
       const navigated = await this.navigateTo('library-manage');
       if (navigated === false) return false;
       await this.$nextTick();
@@ -742,9 +771,11 @@ export default {
     },
     // 进整页详情：先记下来源（页面 key、参数、共用滚动容器的位置）再切页，切成了才压栈（D-UI-10）。
     // 详情本身是来源时（相关推荐）参数就是它展示的那部片。新打开的详情从顶部看起。
-    openVideoDetail(videoID, { startAtMs = null } = {}) {
+    // bookmark：观看笔记的书签定位带上整段区间 { start_ms, end_ms, source_token }，详情页据此只播这一段。
+    openVideoDetail(videoID, { startAtMs = null, bookmark = null } = {}) {
       const id = Number(videoID);
       if (!Number.isInteger(id) || id <= 0) return false;
+      this.supersedeVideoOpen();
       const start = Number(startAtMs);
       const source = {
         page: this.currentPage,
@@ -753,26 +784,46 @@ export default {
       };
       return whenNavigated(this.navigateTo(VIDEO_DETAIL_PAGE), () => {
         this.detailReturnStack = pushDetailReturn(this.detailReturnStack, source, id);
-        this.showVideoDetail(id, startAtMs != null && Number.isFinite(start) && start >= 0 ? start : null, 0);
+        this.showVideoDetail(id, {
+          startAtMs: startAtMs != null && Number.isFinite(start) && start >= 0 ? start : null,
+          bookmark
+        });
         return true;
       });
     },
-    showVideoDetail(videoId, startAtMs, scrollTop) {
-      this.detailRoute = { videoId, startAtMs, token: this.detailRoute.token + 1 };
+    // 换一层详情（详情页按 token 重新挂载）。scrollTop > 0 是「返回」到之前那一层：详情要重新取数，
+    // 先记下来、等它报 ready 再放回去（I-2）；新打开的从顶部看起。
+    showVideoDetail(videoId, { startAtMs = null, bookmark = null, scrollTop = 0 } = {}) {
+      this.detailRoute = { videoId, startAtMs, bookmark, token: this.detailRoute.token + 1 };
+      this._pendingDetailScrollTop = scrollTop > 0 ? scrollTop : null;
+      if (this._pendingDetailScrollTop !== null) return Promise.resolve();
       return this.$nextTick(() => {
-        if (this.$refs.mainView) this.$refs.mainView.scrollTop = scrollTop;
+        if (this.$refs.mainView) this.$refs.mainView.scrollTop = 0;
       });
     },
+    // 详情页主体取完并渲染好了（VideoDetailPage 的 ready）：有待放回的滚动位置就放回去。
+    handleDetailReady() {
+      const top = this._pendingDetailScrollTop;
+      this._pendingDetailScrollTop = null;
+      if (top !== null && top !== undefined && this.$refs.mainView) this.$refs.mainView.scrollTop = top;
+    },
     // 整页详情的「返回」：弹回来源页并恢复它的滚动位置；栈空（从管理区或面板直接进来）时回观看首页。
+    // 回到的页面可能是重新挂载、还在取数的（观影记录、想看、榜单、人物、作品集），等内容长够了再放回去。
     async goBackFromDetail() {
+      this.supersedeVideoOpen();
       const { entry, stack } = popDetailReturn(this.detailReturnStack);
       this.detailReturnStack = stack;
       if (!entry) return this.navigateTo('home');
-      if (entry.page === VIDEO_DETAIL_PAGE) return this.showVideoDetail(entry.params.videoId, null, entry.scrollTop);
+      if (entry.page === VIDEO_DETAIL_PAGE) return this.showVideoDetail(entry.params.videoId, { scrollTop: entry.scrollTop });
       if (this.navigateTo(entry.page) === false) return false;
       await this.$nextTick();
-      if (this.$refs.mainView) this.$refs.mainView.scrollTop = entry.scrollTop;
+      if (this.$refs.mainView) this._cancelScrollRestore = restoreScrollWhenReachable(this.$refs.mainView, entry.scrollTop);
       return true;
+    },
+    // 整页详情里收藏、标记已看、评分、播放进度或失效标记变了（{ id, changes }）：交给常挂载的片库页，
+    // 「视频」「片库管理」里那一行不用重载就跟上（M-5）。
+    handleDetailVideoStateChange(payload) {
+      return this.$refs.videoListPage?.applyExternalVideoStateChange(payload);
     },
     // 整页详情「编辑资料」：切到片库管理，在抽屉里打开这部片（详细设计「整页详情」）。
     editVideoInManage(videoID) {

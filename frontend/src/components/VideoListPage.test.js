@@ -92,6 +92,80 @@ it('别的页面删掉了视频：从列表拿掉、关掉对应预览、总数�
   wrapper.unmount();
 });
 
+// M-6：本页同时是观看侧「视频」与管理侧「片库管理」。在「视频」上（cleanupHotkey=false）不接 ⌘K，
+// 让 App 的全局 ⌘K 先切到片库管理再开清理中心；其余工具栏快捷键照旧。
+it('cleanupHotkey 为 false 时本页不接 ⌘K（不 preventDefault、不开清理中心），为 true 时照旧', async () => {
+  const wrapper = await mountPage({ pageActive: true, cleanupHotkey: false });
+  const openCleanup = vi.spyOn(wrapper.vm, 'openCleanupDialog').mockImplementation(() => {});
+  const press = () => {
+    const event = new KeyboardEvent('keydown', { key: 'k', code: 'KeyK', metaKey: true, cancelable: true });
+    window.dispatchEvent(event);
+    return event;
+  };
+  expect(press().defaultPrevented).toBe(false);
+  expect(openCleanup).not.toHaveBeenCalled();
+
+  await wrapper.setProps({ cleanupHotkey: true });
+  expect(press().defaultPrevented).toBe(true);
+  expect(openCleanup).toHaveBeenCalledTimes(1);
+  wrapper.unmount();
+});
+
+// M-5：整页详情只报改了哪些字段（{ id, changes }）；并到列表里那一行，走同一条状态更新路径。
+describe('applyExternalVideoStateChange', () => {
+  it('列表里有这一行：并上改动的字段，标签等其余字段不丢', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 5, name: 'a.mp4', is_favorite: false, personal_rating: 0, tags: [{ id: 1, name: '科幻' }] }];
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    await wrapper.vm.applyExternalVideoStateChange({ id: 5, changes: { is_favorite: true, personal_rating: 4 } });
+    expect(wrapper.vm.videos[0]).toEqual({ id: 5, name: 'a.mp4', is_favorite: true, personal_rating: 4, tags: [{ id: 1, name: '科幻' }] });
+    expect(reload).not.toHaveBeenCalled();
+    wrapper.unmount();
+  });
+
+  it('看状态的视图按并好的整行判断：收藏视图里只改评分，这一行仍是收藏，不重载', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.smartView = 'favorites';
+    wrapper.vm.videos = [{ id: 5, name: 'a.mp4', is_favorite: true, personal_rating: 0, tags: [] }];
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    await wrapper.vm.applyExternalVideoStateChange({ id: 5, changes: { personal_rating: 4 } });
+    expect(reload).not.toHaveBeenCalled();
+    expect(wrapper.vm.videos[0]).toMatchObject({ is_favorite: true, personal_rating: 4 });
+    wrapper.unmount();
+  });
+
+  it('看状态的视图里这一行不再符合（取消收藏）就按当前条件重载', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.smartView = 'favorites';
+    wrapper.vm.videos = [{ id: 5, name: 'a.mp4', is_favorite: true, tags: [] }];
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    await wrapper.vm.applyExternalVideoStateChange({ id: 5, changes: { is_favorite: false } });
+    expect(reload).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('列表里没加载到这一行就不管（下次加载自然是新的），载荷不全也不动', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.smartView = 'favorites';
+    wrapper.vm.videos = [{ id: 6, name: 'b.mp4', is_favorite: true, tags: [] }];
+    const reload = vi.spyOn(wrapper.vm, 'reloadCurrentView').mockResolvedValue();
+    await wrapper.vm.applyExternalVideoStateChange({ id: 5, changes: { is_favorite: true } });
+    await wrapper.vm.applyExternalVideoStateChange({ id: 0, changes: { is_favorite: true } });
+    await wrapper.vm.applyExternalVideoStateChange({ id: 6 });
+    expect(reload).not.toHaveBeenCalled();
+    expect(wrapper.vm.videos).toEqual([{ id: 6, name: 'b.mp4', is_favorite: true, tags: [] }]);
+    wrapper.unmount();
+  });
+
+  it('失效标记（is_stale、stale_reason）同样并到那一行', async () => {
+    const wrapper = await mountPage();
+    wrapper.vm.videos = [{ id: 5, name: 'a.mp4', is_stale: false, stale_reason: '', tags: [] }];
+    await wrapper.vm.applyExternalVideoStateChange({ id: 5, changes: { is_stale: true, stale_reason: 'missing' } });
+    expect(wrapper.vm.videos[0]).toMatchObject({ is_stale: true, stale_reason: 'missing' });
+    wrapper.unmount();
+  });
+});
+
 it('D-MC-04 批量栏「批量编辑…」带上所选与当前筛选打开对话框；语义检索时只给所选；改完按当前条件重载', async () => {
   const wrapper = await mountPage();
   wrapper.vm.selectedVideoIds = [3, 4];

@@ -58,12 +58,13 @@ export function recordDownloadDuplicate(payload) {
 }
 
 // 运行中的任务 key 列表；backup 从「在跑」变成「不在」时记一条。只认得结束，不猜成败。
+// 备份校验也登记在 backup 这个 key 下，分不出是哪一种，所以文案两种都说。
 export function recordBackgroundTasks(running) {
   const now = Array.isArray(running) && running.includes('backup');
   const ended = backupRunning && !now;
   backupRunning = now;
   if (!ended) return null;
-  return recordSessionChange({ kind: 'backup', title: '数据库备份', detail: '一轮备份已结束，结果在设置的数据库一节查看', page: 'settings' });
+  return recordSessionChange({ kind: 'backup', title: '数据库备份或校验已结束', detail: '结果在设置的数据库一节查看', page: 'settings' });
 }
 
 // 只给测试用：清空本次会话的记录。
