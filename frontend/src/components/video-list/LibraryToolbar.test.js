@@ -562,3 +562,24 @@ describe('片库布局切换', () => {
     wrapper.unmount();
   });
 });
+
+describe('缺失某项筛选（D-MC-03）', () => {
+  it('「缺少…」下拉列出视频项，选中后发 update:missing 并立即搜索', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps() });
+    const select = wrapper.get('[data-test="library-missing-filter"]');
+    const values = select.findAll('option').map(option => option.element.value);
+    expect(values).toEqual(['', 'title', 'year', 'description', 'poster', 'fanart', 'people', 'tags', 'subtitles', 'technical']);
+    await select.setValue('poster');
+    expect(wrapper.emitted('update:missing')).toEqual([['poster']]);
+    expect(wrapper.emitted('search')).toEqual([[true]]);
+    wrapper.unmount();
+  });
+
+  it('生效的缺失条件写进结果条回显', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ missing: 'year', smartView: 'favorites' }) });
+    expect(wrapper.get('[data-test="library-missing-filter"]').element.value).toBe('year');
+    expect(wrapper.vm.activeConditionLabels).toEqual(['收藏', '缺少年份']);
+    expect(wrapper.get('.result-bar__conditions').text()).toContain('缺少年份');
+    wrapper.unmount();
+  });
+});

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -84,6 +85,7 @@ type LocalMetadataDiff struct {
 	Title          LocalMetadataScalarDiff   `json:"title"`
 	OriginalTitle  LocalMetadataScalarDiff   `json:"original_title"`
 	Description    LocalMetadataScalarDiff   `json:"description"`
+	Year           LocalMetadataScalarDiff   `json:"year"` // D-MC-01：当前值与来源值是十进制字符串，空串表示没有
 	People         LocalMetadataRelationDiff `json:"people"`
 	Collection     LocalMetadataRelationDiff `json:"collection"`
 	Poster         LocalMetadataArtworkDiff  `json:"poster"`
@@ -278,6 +280,7 @@ func (s *LocalMetadataService) buildDiff(video models.Video, source LocalMetadat
 		Title:         scalarLocalMetadataDiff("title", video.DisplayTitle, source.Title),
 		OriginalTitle: scalarLocalMetadataDiff("original_title", video.OriginalTitle, source.OriginalTitle),
 		Description:   scalarLocalMetadataDiff("description", video.Description, source.Description),
+		Year:          scalarLocalMetadataDiff("year", formatLocalMetadataYear(video.Year), formatLocalMetadataYear(source.Year)),
 		People:        relationLocalMetadataDiff("people", people, peopleSource),
 		Collection:    relationLocalMetadataDiff("collection", collections, collectionSource),
 		Poster:        artworkLocalMetadataDiff("poster", video.PosterPath != "", files.poster),
@@ -299,10 +302,18 @@ func localMetadataCurrentFingerprint(video models.Video, people, collections []L
 	sort.Strings(collectionIDs)
 	payload := strings.Join([]string{
 		video.DisplayTitle, video.OriginalTitle, video.Description, video.PosterPath, video.FanartPath,
-		strings.Join(personIDs, ","), strings.Join(collectionIDs, ","),
+		strings.Join(personIDs, ","), strings.Join(collectionIDs, ","), formatLocalMetadataYear(video.Year),
 	}, "\x00")
 	digest := sha256.Sum256([]byte(payload))
 	return hex.EncodeToString(digest[:])
+}
+
+// formatLocalMetadataYear 把年份写成差异里用的字符串；nil 为空串。
+func formatLocalMetadataYear(year *int) string {
+	if year == nil {
+		return ""
+	}
+	return strconv.Itoa(*year)
 }
 
 func scalarLocalMetadataDiff(field, current, source string) LocalMetadataScalarDiff {

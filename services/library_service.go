@@ -76,7 +76,10 @@ type LibraryFilter struct {
 	MaxHeight   int      `json:"max_height"`
 	MinRating   *float64 `json:"min_rating"`
 	MaxRating   *float64 `json:"max_rating"`
-	SortMode    string   `json:"sort_mode"`
+	// Missing 是「缺失某项」筛选（D-MC-03），取值见 videoMissingSQL，空串不筛；与 SmartView 正交、AND 叠加。
+	// Jellyfin 的手工筛选与随机播放不带这一项。
+	Missing  string `json:"missing"`
+	SortMode string `json:"sort_mode"`
 	// CollapseVersions 让每个版本组只出一张代表卡片（D-MW-VERSIONS）。只有 SearchLibraryVideoPage
 	// 与 CountLibraryVideos 读取它，其余入口一律忽略；保存视图不持久化。
 	CollapseVersions bool `json:"collapse_versions"`
@@ -219,6 +222,11 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 	if filter.MaxHeight > 0 && filter.MinHeight > filter.MaxHeight {
 		return LibraryFilter{}, fmt.Errorf("分辨率筛选上限不能小于下限")
 	}
+	missing, err := normalizeMissingFilter(filter.Missing, videoMissingSQL)
+	if err != nil {
+		return LibraryFilter{}, err
+	}
+	filter.Missing = missing
 	filter.SortMode = strings.TrimSpace(filter.SortMode)
 	if filter.SortMode == "" {
 		filter.SortMode = LibrarySortBalanced
@@ -239,7 +247,7 @@ func normalizeLibraryFilter(filter LibraryFilter) (LibraryFilter, error) {
 }
 
 func libraryFilterNeedsSubtitleSync(filter LibraryFilter) bool {
-	return strings.TrimSpace(filter.SmartView) == LibraryViewNoSubtitle ||
+	return strings.TrimSpace(filter.SmartView) == LibraryViewNoSubtitle || strings.TrimSpace(filter.Missing) == MetadataFieldSubtitles ||
 		(strings.TrimSpace(filter.SearchMode) == LibrarySearchModeSubtitle && strings.TrimSpace(filter.Keyword) != "")
 }
 
@@ -395,6 +403,9 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	for _, personID := range filter.PersonIDs {
 		query = query.Where("EXISTS (SELECT 1 FROM video_people vp WHERE vp.video_id = videos.id AND vp.person_id = ?)", personID)
 	}
+	if filter.Missing != "" {
+		query = query.Where(videoMissingSQL[filter.Missing])
+	}
 
 	switch filter.SmartView {
 	case LibraryViewFavorites:
@@ -415,7 +426,7 @@ func applyLibraryFilter(query *gorm.DB, filter LibraryFilter, now time.Time) (*g
 	case LibraryViewUntagged:
 		// 带 automatic_kind 的自动分类标签不算「已打标签」（D-PC33）；人物已是独立实体（people 表），
 		// 本来就不在 video_tags 里，与这条判定无关。
-		query = query.Where("NOT EXISTS (SELECT 1 FROM video_tags vt JOIN tags t ON t.id = vt.tag_id WHERE vt.video_id = videos.id AND COALESCE(t.automatic_kind, '') = '')")
+		query = query.Where(untaggedVideoSQL)
 	case LibraryViewNoSubtitle:
 		query = query.Where("NOT " + hasAnySubtitleSQL)
 	case LibraryViewLocalMetadataUpdated:
@@ -829,7 +840,7 @@ func buildSavedLibraryView(name string, input LibraryFilter) (models.SavedLibrar
 		Name: name, SearchMode: filter.SearchMode, Keyword: filter.Keyword, SmartView: filter.SmartView,
 		TagIDsJSON: string(tagJSON), PersonIDsJSON: string(personJSON), MinSize: filter.MinSize, MaxSize: filter.MaxSize,
 		MinHeight: filter.MinHeight, MaxHeight: filter.MaxHeight,
-		MinRating: filter.MinRating, MaxRating: filter.MaxRating, SortMode: filter.SortMode,
+		MinRating: filter.MinRating, MaxRating: filter.MaxRating, Missing: filter.Missing, SortMode: filter.SortMode,
 	}, nil
 }
 
@@ -873,7 +884,7 @@ func (s *VideoService) UpdateSavedLibraryView(id uint, name string, filter Libra
 		"name": next.Name, "search_mode": next.SearchMode, "keyword": next.Keyword, "smart_view": next.SmartView,
 		"tag_ids_json": next.TagIDsJSON, "person_ids_json": next.PersonIDsJSON,
 		"min_size": next.MinSize, "max_size": next.MaxSize, "min_height": next.MinHeight, "max_height": next.MaxHeight,
-		"min_rating": next.MinRating, "max_rating": next.MaxRating, "sort_mode": next.SortMode,
+		"min_rating": next.MinRating, "max_rating": next.MaxRating, "missing": next.Missing, "sort_mode": next.SortMode,
 	}
 	result := database.DB.Model(&models.SavedLibraryView{}).Where("id = ?", id).Updates(updates)
 	if result.Error != nil {

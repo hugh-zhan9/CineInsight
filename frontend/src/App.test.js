@@ -866,3 +866,28 @@ it('版本对比播放器按全局状态挂载：openVersionCompare 打开，换
   expect(versionCompareState.open).toBe(false);
   expect(wrapper.findComponent({ name: 'VersionCompareDialog' }).exists()).toBe(false);
 });
+
+it('D-MC-03 完整度「去处理」：视频去片库套用缺失筛选；图片页首次挂载后再套用', async () => {
+  const applyPhotoMissing = vi.fn(() => true);
+  const wrapper = shallowMount(App, {
+    global: { stubs: { PhotoLibraryPage: { name: 'PhotoLibraryPage', template: '<div />', methods: { applyMissingFilter: applyPhotoMissing } } } }
+  });
+  mountedWrappers.push(wrapper);
+  await flushPromises();
+  await wrapper.vm.navigateTo('data-care');
+  await flushPromises();
+  const applyVideoMissing = vi.fn();
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.applyMissingFilter = applyVideoMissing;
+  wrapper.findComponent({ name: 'DataCarePage' }).vm.$emit('open-library-missing', { kind: 'video', field: 'year' });
+  await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('videos');
+  expect(applyVideoMissing).toHaveBeenCalledWith('year');
+
+  expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).exists()).toBe(false);
+  await wrapper.vm.navigateTo('data-care');
+  await flushPromises();
+  wrapper.findComponent({ name: 'DataCarePage' }).vm.$emit('open-library-missing', { kind: 'image', field: 'gps' });
+  await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('photos');
+  expect(applyPhotoMissing).toHaveBeenCalledWith('gps');
+});

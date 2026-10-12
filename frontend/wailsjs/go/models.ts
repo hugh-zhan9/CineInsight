@@ -672,6 +672,7 @@ export namespace models {
 	    max_height: number;
 	    min_rating?: number;
 	    max_rating?: number;
+	    missing: string;
 	    sort_mode: string;
 	    created_at: string;
 	    updated_at: string;
@@ -695,6 +696,7 @@ export namespace models {
 	        this.max_height = source["max_height"];
 	        this.min_rating = source["min_rating"];
 	        this.max_rating = source["max_rating"];
+	        this.missing = source["missing"];
 	        this.sort_mode = source["sort_mode"];
 	        this.created_at = source["created_at"];
 	        this.updated_at = source["updated_at"];
@@ -923,6 +925,7 @@ export namespace models {
 	    original_title: string;
 	    description: string;
 	    personal_rating?: number;
+	    year?: number;
 	    path: string;
 	    directory: string;
 	    size: number;
@@ -959,6 +962,7 @@ export namespace models {
 	        this.original_title = source["original_title"];
 	        this.description = source["description"];
 	        this.personal_rating = source["personal_rating"];
+	        this.year = source["year"];
 	        this.path = source["path"];
 	        this.directory = source["directory"];
 	        this.size = source["size"];
@@ -6046,6 +6050,7 @@ export namespace services {
 	    taken_before?: string;
 	    sort_mode: string;
 	    ai_tag_state: string;
+	    missing: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new ImageFilter(source);
@@ -6066,6 +6071,7 @@ export namespace services {
 	        this.taken_before = source["taken_before"];
 	        this.sort_mode = source["sort_mode"];
 	        this.ai_tag_state = source["ai_tag_state"];
+	        this.missing = source["missing"];
 	    }
 	}
 	export class ImageFolderCover {
@@ -6791,6 +6797,7 @@ export namespace services {
 	    max_height: number;
 	    min_rating?: number;
 	    max_rating?: number;
+	    missing: string;
 	    sort_mode: string;
 	    collapse_versions: boolean;
 	
@@ -6813,6 +6820,7 @@ export namespace services {
 	        this.max_height = source["max_height"];
 	        this.min_rating = source["min_rating"];
 	        this.max_rating = source["max_rating"];
+	        this.missing = source["missing"];
 	        this.sort_mode = source["sort_mode"];
 	        this.collapse_versions = source["collapse_versions"];
 	    }
@@ -7675,6 +7683,7 @@ export namespace services {
 	    title: LocalMetadataScalarDiff;
 	    original_title: LocalMetadataScalarDiff;
 	    description: LocalMetadataScalarDiff;
+	    year: LocalMetadataScalarDiff;
 	    people: LocalMetadataRelationDiff;
 	    collection: LocalMetadataRelationDiff;
 	    poster: LocalMetadataArtworkDiff;
@@ -7696,6 +7705,7 @@ export namespace services {
 	        this.title = this.convertValues(source["title"], LocalMetadataScalarDiff);
 	        this.original_title = this.convertValues(source["original_title"], LocalMetadataScalarDiff);
 	        this.description = this.convertValues(source["description"], LocalMetadataScalarDiff);
+	        this.year = this.convertValues(source["year"], LocalMetadataScalarDiff);
 	        this.people = this.convertValues(source["people"], LocalMetadataRelationDiff);
 	        this.collection = this.convertValues(source["collection"], LocalMetadataRelationDiff);
 	        this.poster = this.convertValues(source["poster"], LocalMetadataArtworkDiff);
@@ -8008,6 +8018,79 @@ export namespace services {
 	        this.image_links_moved = source["image_links_moved"];
 	    }
 	}
+	export class MetadataCompletenessItem {
+	    field: string;
+	    missing: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataCompletenessItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.field = source["field"];
+	        this.missing = source["missing"];
+	        this.total = source["total"];
+	    }
+	}
+	export class MetadataCompleteness {
+	    video_total: number;
+	    videos: MetadataCompletenessItem[];
+	    video_pending: MetadataCompletenessItem[];
+	    image_total: number;
+	    image_exif_unparsed: number;
+	    images: MetadataCompletenessItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataCompleteness(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.video_total = source["video_total"];
+	        this.videos = this.convertValues(source["videos"], MetadataCompletenessItem);
+	        this.video_pending = this.convertValues(source["video_pending"], MetadataCompletenessItem);
+	        this.image_total = source["image_total"];
+	        this.image_exif_unparsed = source["image_exif_unparsed"];
+	        this.images = this.convertValues(source["images"], MetadataCompletenessItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class MetadataCompletenessDirectory {
+	    directory: string;
+	    missing: number;
+	    total: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new MetadataCompletenessDirectory(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directory = source["directory"];
+	        this.missing = source["missing"];
+	        this.total = source["total"];
+	    }
+	}
+	
 	export class MoveTargetCheck {
 	    in_scan_roots: boolean;
 	
@@ -9990,6 +10073,7 @@ export namespace services {
 	    max_height: number;
 	    min_rating?: number;
 	    max_rating?: number;
+	    missing: string;
 	    sort_mode: string;
 	    collapse_versions: boolean;
 	
@@ -10013,6 +10097,7 @@ export namespace services {
 	        this.max_height = source["max_height"];
 	        this.min_rating = source["min_rating"];
 	        this.max_rating = source["max_rating"];
+	        this.missing = source["missing"];
 	        this.sort_mode = source["sort_mode"];
 	        this.collapse_versions = source["collapse_versions"];
 	    }
@@ -12227,6 +12312,7 @@ export namespace services {
 	    original_title: string;
 	    description: string;
 	    personal_rating?: number;
+	    year?: number;
 	    person_ids: number[];
 	    collection_ids: number[];
 	
@@ -12241,6 +12327,7 @@ export namespace services {
 	        this.original_title = source["original_title"];
 	        this.description = source["description"];
 	        this.personal_rating = source["personal_rating"];
+	        this.year = source["year"];
 	        this.person_ids = source["person_ids"];
 	        this.collection_ids = source["collection_ids"];
 	    }

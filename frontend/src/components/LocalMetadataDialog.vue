@@ -150,7 +150,8 @@ export default {
     scalarFields(form) { return [
       { name: 'title', label: '显示标题', diff: form.diff.title },
       { name: 'original_title', label: '原始标题', diff: form.diff.original_title },
-      { name: 'description', label: '简介', diff: form.diff.description }
+      { name: 'description', label: '简介', diff: form.diff.description },
+      { name: 'year', label: '年份', diff: form.diff.year }
     ]; },
     relationFields(form) { return [
       { name: 'people', label: '人物', diff: form.diff.people },

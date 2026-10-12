@@ -965,6 +965,10 @@ func (s *JellyfinServer) videoDTO(r *http.Request, video models.Video, indexedSu
 	if video.PersonalRating != nil {
 		item["CommunityRating"] = *video.PersonalRating
 	}
+	// 年份（D-MC-01）：有值才输出；按 ProductionYear 排序仍按 D-02 忽略。
+	if video.Year != nil {
+		item["ProductionYear"] = *video.Year
+	}
 	sources, summary, err := s.mediaSources(r, video)
 	if err != nil {
 		return nil, err

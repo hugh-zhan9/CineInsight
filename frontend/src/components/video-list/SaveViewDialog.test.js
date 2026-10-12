@@ -7,7 +7,7 @@ vi.mock('../../../wailsjs/go/main/App', () => api);
 import SaveViewDialog, { parseSavedViewIDs, savedViewFilter } from './SaveViewDialog.vue';
 
 const views = [
-  { id: 4, name: '收藏大文件', search_mode: 'file', keyword: 'sea', smart_view: 'favorites', tag_ids_json: '[3, 99]', person_ids_json: '[9]', min_size: 1, max_size: 0, min_height: 0, max_height: 0, min_rating: null, max_rating: 8, sort_mode: 'balanced' },
+  { id: 4, name: '收藏大文件', search_mode: 'file', keyword: 'sea', smart_view: 'favorites', tag_ids_json: '[3, 99]', person_ids_json: '[9]', min_size: 1, max_size: 0, min_height: 0, max_height: 0, min_rating: null, max_rating: 8, missing: 'poster', sort_mode: 'balanced' },
   { id: 5, name: '张三', search_mode: 'file', keyword: '', smart_view: '', tag_ids_json: '[]', person_ids_json: '[]', min_size: 0, max_size: 0, min_height: 0, max_height: 0, sort_mode: 'balanced' }
 ];
 const currentFilter = { search_mode: 'file', keyword: '', smart_view: 'liked', tag_ids: [1], person_ids: [9], min_size: 0, max_size: 0, min_height: 0, max_height: 0, min_rating: null, max_rating: null, sort_mode: 'balanced' };
@@ -59,7 +59,8 @@ describe('保存视图弹窗（D-PC35）', () => {
     await wrapper.get('[data-test="save-view-submit"]').trigger('click');
     await flushPromises();
     expect(api.UpdateSavedLibraryView).toHaveBeenCalledWith(4, '海边', expect.objectContaining({
-      keyword: 'sea', smart_view: 'favorites', tag_ids: [3, 99], person_ids: [9], min_size: 1, max_rating: 8, min_rating: null
+      keyword: 'sea', smart_view: 'favorites', tag_ids: [3, 99], person_ids: [9], min_size: 1, max_rating: 8, min_rating: null,
+      missing: 'poster'
     }));
     wrapper.unmount();
   });
@@ -91,5 +92,6 @@ describe('保存视图弹窗（D-PC35）', () => {
     expect(parseSavedViewIDs('not json')).toEqual([]);
     expect(parseSavedViewIDs(null)).toEqual([]);
     expect(savedViewFilter(views[1]).person_ids).toEqual([]);
+    expect(savedViewFilter(views[1]).missing).toBe('');
   });
 });

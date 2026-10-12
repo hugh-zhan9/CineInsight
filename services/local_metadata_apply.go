@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"video-master/database"
@@ -167,6 +168,14 @@ func (s *LocalMetadataService) apply(request LocalMetadataApplyRequest, batch *l
 			updates["description"] = diff.Description.SourceValue
 			appliedFields = append(appliedFields, "description")
 		}
+		if _, ok := selected["year"]; ok {
+			year, parseErr := strconv.Atoi(diff.Year.SourceValue)
+			if parseErr != nil {
+				return fmt.Errorf("invalid source year: %w", parseErr)
+			}
+			updates["year"] = year
+			appliedFields = append(appliedFields, "year")
+		}
 		if imported, ok := imports["poster"]; ok {
 			if video.PosterPath != "" && video.PosterPath != imported.RelativePath {
 				oldArtwork = append(oldArtwork, video.PosterPath)
@@ -239,7 +248,7 @@ func (s *LocalMetadataService) ApplyDefaults(videoID uint) (*LocalMetadataApplyR
 	}
 	request := LocalMetadataApplyRequest{VideoID: videoID, ManifestSHA256: diff.ManifestSHA256, CurrentSHA256: diff.CurrentSHA256}
 	unresolvedDefault := false
-	for _, field := range []LocalMetadataScalarDiff{diff.Title, diff.OriginalTitle, diff.Description} {
+	for _, field := range []LocalMetadataScalarDiff{diff.Title, diff.OriginalTitle, diff.Description, diff.Year} {
 		if field.DefaultSelected {
 			request.SelectedFields = append(request.SelectedFields, field.Field)
 		}
@@ -332,7 +341,7 @@ func (s *LocalMetadataService) ResolveVideoArtwork(videoID uint, kind string) (*
 
 func validateLocalMetadataSelection(diff *LocalMetadataDiff, selectedFields, overwriteFields []string) (map[string]struct{}, map[string]struct{}, error) {
 	allowed := map[string]any{
-		"title": diff.Title, "original_title": diff.OriginalTitle, "description": diff.Description,
+		"title": diff.Title, "original_title": diff.OriginalTitle, "description": diff.Description, "year": diff.Year,
 		"people": diff.People, "collection": diff.Collection, "poster": diff.Poster, "fanart": diff.Fanart,
 	}
 	selected := make(map[string]struct{}, len(selectedFields))

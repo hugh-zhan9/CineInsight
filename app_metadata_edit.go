@@ -22,6 +22,16 @@ func (a *App) stopMetadataEdit() {
 	}
 }
 
+// GetMetadataCompleteness 是数据维护「完整度」页签的统计（D-MC-02）。
+func (a *App) GetMetadataCompleteness() (*services.MetadataCompleteness, error) {
+	return a.dataCare.completeness.GetMetadataCompleteness()
+}
+
+// GetMetadataCompletenessByDirectory 是某一项「缺得最多的目录」（kind 为 video / image，limit ≤0 时取 10）。
+func (a *App) GetMetadataCompletenessByDirectory(kind, field string, limit int) ([]services.MetadataCompletenessDirectory, error) {
+	return a.dataCare.completeness.GetMetadataCompletenessByDirectory(kind, field, limit)
+}
+
 // taskCenterMetadataEdit 是任务中心适配（BackgroundTaskMetadataBatchEdit）；运行与否以登记表为准。
 func (a *App) taskCenterMetadataEdit(src *taskCenterSources) taskCenterKeyState {
 	return taskCenterKeyState{}

@@ -20,6 +20,7 @@ const fixture = () => ({
     title: scalar('title', 'Manual', 'Imported', 'overwrite', false, true),
     original_title: scalar('original_title', '', 'Original', 'fill', true, false),
     description: scalar('description', '', '', 'none'),
+    year: scalar('year', '1990', '2001', 'overwrite', false, true),
     people: {
       field: 'people', current: [], change_type: 'fill', default_selected: true, requires_overwrite: false,
       added: ['Alex'], removed: [], kept: [],
@@ -48,6 +49,10 @@ describe('LocalMetadataDialog', () => {
 
     expect(form.selected.original_title).toBe(true);
     expect(form.selected.title).toBe(false);
+    // D-MC-01：年份已有值时只标有更新，默认不勾，勾上要确认覆盖。
+    expect(form.selected.year).toBe(false);
+    expect(wrapper.get('[data-test="metadata-field-7-year"]').text()).toContain('当前：1990');
+    expect(wrapper.get('[data-test="metadata-field-7-year"]').text()).toContain('来源：2001');
     // 人物映射改为批次级决策（META-03），逐视频不再各存一份。
     expect(wrapper.vm.batchResolutions.alex).toBe('');
     expect(form.resolutions.people).toBeUndefined();
