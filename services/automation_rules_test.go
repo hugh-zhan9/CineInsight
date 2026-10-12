@@ -206,13 +206,18 @@ func mustAutomationJSON(t *testing.T, value any) string {
 	return payload
 }
 
-// 列表、排序、启停、删除：删除规则只删它的账本，不撤它加过的标签（D-RA-03）。
+// 列表、排序、启停、删除：删除规则不撤它加过的标签（D-RA-03）；账本里没真插入的行删掉，
+// 真插入标签的行改成无主留下（AI 自动打标仍排除这些规则标签，D-RA-04）。
 func TestAutomationRuleListReorderEnableDelete(t *testing.T) {
 	setupVideoServiceTestDB(t)
 	svc := NewAutomationRuleService("")
 	tag := autoTag(t, "待整理")
 	root := t.TempDir()
 	video := autoVideo(t, filepath.Join(root, "a.mp4"), nil)
+	already := autoVideo(t, filepath.Join(root, "b.mp4"), nil)
+	if err := database.DB.Exec("INSERT INTO video_tags(video_id, tag_id) VALUES (?, ?)", already.ID, tag.ID).Error; err != nil {
+		t.Fatal(err)
+	}
 	cond := []AutomationRuleCondition{{Type: automationCondUnderDirectory, Path: root + "/"}}
 	actions := []AutomationRuleAction{{Type: automationActionAddTag, TagID: tag.ID}, {Type: automationActionAddTag, TagID: tag.ID}}
 	first := saveAutoRule(t, svc, AutomationRuleInput{Name: " 第一 ", Enabled: true, Conditions: cond, Actions: actions})
@@ -246,15 +251,23 @@ func TestAutomationRuleListReorderEnableDelete(t *testing.T) {
 	if _, err := svc.SaveAutomationRule(AutomationRuleInput{ID: first.ID, Name: "改名", MediaKind: AutomationMediaImage, Conditions: cond, Actions: actions}); invalidField(t, err) != "media_kind" {
 		t.Fatalf("已保存的规则不能换媒体类型: %v", err)
 	}
-	evaluateVideos(t, svc, video.ID)
-	if !videoHasTag(t, video.ID, tag.ID) || len(ruleWrites(t, second.ID)) != 1 {
-		t.Fatal("启用的规则应生效")
+	evaluateVideos(t, svc, video.ID, already.ID)
+	if !videoHasTag(t, video.ID, tag.ID) || len(ruleWrites(t, second.ID)) != 2 {
+		t.Fatal("启用的规则应生效（关系已在的也记一行）")
 	}
 	if err := svc.DeleteAutomationRule(second.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(ruleWrites(t, second.ID)) != 0 || !videoHasTag(t, video.ID, tag.ID) {
-		t.Fatal("删除规则只删账本，不撤标签")
+	if !videoHasTag(t, video.ID, tag.ID) || !videoHasTag(t, already.ID, tag.ID) {
+		t.Fatal("删除规则不撤标签")
+	}
+	// 不按 rule_id 过滤地查：没真插入的行删掉，真插入的那行无主留下。
+	var left []models.AutomationRuleWrite
+	if err := database.DB.Where("media_kind = ? AND media_id IN ?", AutomationMediaVideo, []uint{video.ID, already.ID}).Find(&left).Error; err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 1 || left[0].MediaID != video.ID || left[0].RuleID != nil || !left[0].Inserted || left[0].TargetID != tag.ID {
+		t.Fatalf("删除规则后账本应只剩一条无主的规则插入行: %+v", left)
 	}
 	if err := svc.DeleteAutomationRule(second.ID); !errors.Is(err, ErrAutomationRuleNotFound) {
 		t.Fatalf("重复删除应报 rule_not_found: %v", err)

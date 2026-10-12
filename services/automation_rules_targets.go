@@ -48,6 +48,11 @@ func rewriteAutomationRuleTagTargetsTx(tx *gorm.DB, sourceIDs []uint, targetID u
 	}); err != nil {
 		return err
 	}
+	// 同一（规则，媒体）合并后只留一行：先把这一组的 inserted 取「或」写到每一行上，留哪一行都一样。
+	// 归属释放（releaseMergedRuleTagsTx）已经跑过，这时还为真的组说明这条媒体上合并的标签全是规则插入的。
+	if err := orMergedRuleWriteInsertedTx(tx, append([]uint{targetID}, sourceIDs...)); err != nil {
+		return err
+	}
 	const sameCombo = `keep.rule_id = automation_rule_writes.rule_id AND keep.media_kind = automation_rule_writes.media_kind
 		AND keep.media_id = automation_rule_writes.media_id AND keep.action = automation_rule_writes.action`
 	if err := tx.Exec(`DELETE FROM automation_rule_writes WHERE action = ? AND target_id IN ?
@@ -62,6 +67,26 @@ func rewriteAutomationRuleTagTargetsTx(tx *gorm.DB, sourceIDs []uint, targetID u
 	}
 	return tx.Model(&models.AutomationRuleWrite{}).Where("action = ? AND target_id IN ?", automationWriteTag, sourceIDs).
 		Update("target_id", targetID).Error
+}
+
+// orMergedRuleWriteInsertedTx：在世规则在同一媒体上、指向这些（将合并的）标签的账本行里只要有一行 inserted=true，
+// 就把这一组都标成 true。先查出行 id 再分批改，不在 UPDATE 里自引用账本表。无主行不去重，不参与。
+func orMergedRuleWriteInsertedTx(tx *gorm.DB, tagIDs []uint) error {
+	var ids []uint
+	if err := tx.Table("automation_rule_writes AS arw").
+		Where("arw.action = ? AND arw.target_id IN ? AND arw.inserted = ? AND arw.rule_id IS NOT NULL", automationWriteTag, tagIDs, false).
+		Where(`EXISTS (SELECT 1 FROM automation_rule_writes peer WHERE peer.rule_id = arw.rule_id AND peer.media_kind = arw.media_kind
+			AND peer.media_id = arw.media_id AND peer.action = arw.action AND peer.target_id IN ? AND peer.inserted = ?)`, tagIDs, true).
+		Pluck("arw.id", &ids).Error; err != nil {
+		return err
+	}
+	for start := 0; start < len(ids); start += automationBatchSize {
+		chunk := ids[start:min(start+automationBatchSize, len(ids))]
+		if err := tx.Model(&models.AutomationRuleWrite{}).Where("id IN ?", chunk).Update("inserted", true).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // rewriteAutomationRuleActionsTx 逐条改写引用某类目标的规则动作：mapID 返回新 id 与是否保留；改写后重复的动作去重。
@@ -154,9 +179,10 @@ func automationRuleInsertedTagIDs(db *gorm.DB, kind string, mediaID uint) (map[u
 	return excluded, nil
 }
 
-// claimRuleInsertedTagsTx 是「用户手动加了这个标签」：账本里这些媒体上由规则真正插入的同一标签改成 inserted=false，
-// 之后 AI 自动打标把它当人工标签（D-RA-04）。只接调用方的事务；手动加标签（单条、批量、批量编辑）都在
-// 写关系的同一事务里调用。媒体 id 按 500 一批，避开参数个数上限。
+// claimRuleInsertedTagsTx 是「用户手动动了这个标签」：账本里这些媒体上由规则真正插入的同一标签改成 inserted=false。
+// 手动加上：之后 AI 自动打标把它当人工标签（D-RA-04）；手动去掉：账本行留着挡住规则再加回，但不再记作规则插入，
+// 以后经别的路径加回时不会被当成规则标签。只接调用方的事务；手动加/去标签（单条、批量、批量编辑）都在
+// 改关系的同一事务里调用。媒体 id 按 500 一批，避开参数个数上限。
 func claimRuleInsertedTagsTx(tx *gorm.DB, mediaKind string, mediaIDs []uint, tagID uint) error {
 	mediaIDs = uniqueUintIDs(mediaIDs)
 	for start := 0; start < len(mediaIDs); start += automationBatchSize {
