@@ -83,6 +83,7 @@ export const DATA_HEALTH_CHECKS = {
     label: '派生计数',
     explain: '字幕与场景索引段数、人脸簇观测数、帧哈希帧数应与明细一致，可按明细重算。播放次数、最近播放时间与图片查看次数不由明细推出，不在检查内。',
     repair: '按明细重算',
+    danger: true,
     confirm: count => `将按明细重算 ${count} 行计数（观测已全部移除的人脸簇会一并删除），确定继续吗？`,
     done: count => `已按明细重算 ${count} 行，已重新检查这一项`
   },

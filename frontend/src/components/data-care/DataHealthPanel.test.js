@@ -156,4 +156,19 @@ describe('数据体检面板（D-DH-04 / D-DH-05）', () => {
     expect(api.RepairDataHealth).toHaveBeenCalledWith('managed_paths');
     expect(find(wrapper, 'data-health-notice').text()).toBe('已清空 3 条失效路径，已重新检查这一项');
   });
+
+  it('按明细重算会删空簇：确认框是危险样式', async () => {
+    const derived = {
+      check: 'derived_counts', status: 'problem', count: 2, bytes: 0, summary: '2 行计数与明细不一致', examples: [], repairable: true, link: '',
+      groups: [{ key: 'face_clusters.observation_count', label: '人脸簇观测数', count: 2, detail: '', examples: [], repairable: true }]
+    };
+    api.GetLatestDataHealthReport.mockResolvedValue({ running: false, progress: { phase: 'idle' }, report: { ...report, checks: [derived] } });
+    feedback.confirmAction.mockResolvedValueOnce(false);
+    const wrapper = await mountPanel();
+    await find(wrapper, 'data-health-repair-derived_counts').trigger('click');
+    await flushPromises();
+    expect(feedback.confirmAction.mock.calls[0][0].danger).toBe(true);
+    expect(feedback.confirmAction.mock.calls[0][0].message).toContain('一并删除');
+    expect(api.RepairDataHealth).not.toHaveBeenCalled();
+  });
 });

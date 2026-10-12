@@ -485,3 +485,32 @@ func TestDataHealthTimeoutCancelAndBusy(t *testing.T) {
 		t.Fatalf("busy=%v running=%v reports %d→%d", busyErr, sawRunning, before, after)
 	}
 }
+
+// 审阅 R6：media-details 本身不可用（失效的符号链接）时，所有托管路径都不判、不清，只报告目录不可用。
+func TestDataHealthManagedPathsWholeMediaDetailsUnavailable(t *testing.T) {
+	service, db, dataDir, keptID := setupDataHealthTest(t)
+	if err := os.Symlink(filepath.Join(dataDir, "unplugged-volume"), filepath.Join(dataDir, "media-details")); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, db, "UPDATE videos SET poster_path = 'videos/1/p.jpg' WHERE id = ?", keptID)
+	mustExec(t, db, "INSERT INTO people (id, display_name, avatar_path, created_at, updated_at) VALUES (1, 'a', 'people/1/a.jpg', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")
+	report, err := service.Run(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := healthCheckByKey(t, report, DataHealthCheckManagedPaths)
+	videos, videosOK := healthGroupByKey(check, "unavailable:videos")
+	people, peopleOK := healthGroupByKey(check, "unavailable:people")
+	if check.Status != DataHealthStatusWarning || check.Count != 0 || check.Repairable || !videosOK || videos.Count != 1 || !peopleOK || people.Count != 1 {
+		t.Fatalf("media-details 不可用时只报告目录不可用: %+v", check)
+	}
+	if _, err := service.Repair(context.Background(), DataHealthCheckManagedPaths); err != nil {
+		t.Fatal(err)
+	}
+	var poster, avatar string
+	db.Raw("SELECT poster_path FROM videos WHERE id = ?", keptID).Scan(&poster)
+	db.Raw("SELECT avatar_path FROM people WHERE id = 1").Scan(&avatar)
+	if poster != "videos/1/p.jpg" || avatar != "people/1/a.jpg" {
+		t.Fatalf("修复不应清空任何路径: %q %q", poster, avatar)
+	}
+}

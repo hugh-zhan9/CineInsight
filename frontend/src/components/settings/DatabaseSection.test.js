@@ -631,6 +631,22 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
       expect(find(wrapper, 'backup-restore-verify-note').text()).toContain('还没有校验过');
     });
 
+    it('备份时不可用的整理目录：状态、列表与恢复确认都说明；还原中断后的复原说明显示在状态里', async () => {
+      api.GetBackupStatus.mockResolvedValue({
+        available: true, backup_available: true, restore_available: true,
+        files_warning: '备份时 media-details/videos 不可用（链接失效或磁盘没挂载），这部分整理过的文件没有备份进去',
+        notice: '上次从备份还原整理过的文件时中途中断，已把 1 个目录改回恢复前的内容'
+      });
+      api.ListDatabaseBackups.mockResolvedValue([{ ...fullBackup, unavailable_roots: ['media-details/videos'] }]);
+      const wrapper = await mountSection();
+      expect(find(wrapper, 'backup-files-warning').text()).toContain('media-details/videos 不可用');
+      expect(find(wrapper, 'backup-notice').text()).toContain('中途中断');
+      const rows = await openList(wrapper);
+      expect(rows[0].get('[data-test="backup-unavailable-roots"]').text()).toContain('media-details/videos 不可用');
+      await rows[0].findAll('button').find(button => button.text() === '恢复').trigger('click');
+      expect(find(wrapper, 'backup-restore-unavailable-note').text()).toContain('恢复时保持现状');
+    });
+
     it('来自更新版本、空间不足、文件包损坏的原因码不显示给用户', async () => {
       api.GetBackupStatus.mockResolvedValue({ available: true, backup_available: true, restore_available: true, last_error: 'backup_insufficient_space: 备份目录所在磁盘剩余空间不足（需要约 2 GB，可用 1 GB）' });
       const wrapper = await mountSection();
@@ -640,6 +656,8 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
       expect(message).toBe('数据库恢复失败，当前数据库没有被改动：这份备份来自更新版本的应用（当前版本不认识：future_things），数据库未被修改');
       expect(await restoreWith(wrapper, 'backup_files_invalid: 这份备份的文件包缺失或已损坏，数据库未被修改'))
         .toBe('数据库恢复失败，当前数据库没有被改动：这份备份的文件包缺失或已损坏，数据库未被修改');
+      expect(await restoreWith(wrapper, 'backup_files_target_unavailable: 整理文件所在的某个目录现在不可用，数据库未被修改'))
+        .toBe('数据库恢复失败，当前数据库没有被改动：整理文件所在的某个目录现在不可用，数据库未被修改');
       api.CreateDatabaseBackup.mockRejectedValue('backup_insufficient_space: 备份目录所在磁盘剩余空间不足');
       await find(wrapper, 'backup-now').trigger('click');
       await flushPromises();

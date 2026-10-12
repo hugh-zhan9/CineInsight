@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -39,10 +40,11 @@ func (s *BackupService) publishBackup(ctx context.Context, directory, snapshotTe
 		return nil, err
 	}
 	defer os.Remove(filesTemp)
-	files, err := s.writeFilesPackTo(ctx, filesTemp)
+	files, unavailable, err := s.writeFilesPackTo(ctx, filesTemp)
 	if err != nil {
 		return nil, err
 	}
+	manifest.UnavailableRoots = unavailable
 	files.Name = backupFilesName(name)
 	if manifest.Models, err = currentModelSchema(); err != nil {
 		return nil, err
@@ -72,9 +74,10 @@ func (s *BackupService) publishBackup(ctx context.Context, directory, snapshotTe
 		}
 		published = append(published, member.name)
 	}
+	s.setFilesWarning(unavailable)
 	return &BackupFile{
 		Name: name, Size: info.Size(), CreatedAt: now, Fingerprint: snapshotHash,
-		FilesSize: files.Size, FileCount: len(files.Entries),
+		FilesSize: files.Size, FileCount: len(files.Entries), UnavailableRoots: unavailable,
 	}, nil
 }
 
@@ -101,22 +104,22 @@ func (s *BackupService) ensureBackupSpace(directory string, snapshotSize int64) 
 }
 
 // writeFilesPackTo 把文件包写进临时文件，边写边算整个文件的哈希与大小。
-func (s *BackupService) writeFilesPackTo(ctx context.Context, path string) (BackupManifestFiles, error) {
+func (s *BackupService) writeFilesPackTo(ctx context.Context, path string) (BackupManifestFiles, []string, error) {
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0600)
 	if err != nil {
-		return BackupManifestFiles{}, fmt.Errorf("创建文件包失败: %w", pathlessError(err))
+		return BackupManifestFiles{}, nil, fmt.Errorf("创建文件包失败: %w", pathlessError(err))
 	}
 	hash := sha256.New()
 	counter := &countingWriter{}
-	entries, err := writeBackupFilesPack(ctx, s.dataDir, io.MultiWriter(file, hash, counter))
+	entries, unavailable, err := writeBackupFilesPack(ctx, s.dataDir, io.MultiWriter(file, hash, counter))
 	closeErr := file.Close()
 	if err != nil {
-		return BackupManifestFiles{}, fmt.Errorf("写出文件包失败: %w", err)
+		return BackupManifestFiles{}, nil, fmt.Errorf("写出文件包失败: %w", err)
 	}
 	if closeErr != nil {
-		return BackupManifestFiles{}, fmt.Errorf("写出文件包失败: %w", pathlessError(closeErr))
+		return BackupManifestFiles{}, nil, fmt.Errorf("写出文件包失败: %w", pathlessError(closeErr))
 	}
-	return BackupManifestFiles{Size: counter.n, SHA256: fmt.Sprintf("%x", hash.Sum(nil)), Entries: entries}, nil
+	return BackupManifestFiles{Size: counter.n, SHA256: fmt.Sprintf("%x", hash.Sum(nil)), Entries: entries}, unavailable, nil
 }
 
 type countingWriter struct{ n int64 }
@@ -172,4 +175,19 @@ func pathlessFileError(err error) error {
 		return linkErr.Err
 	}
 	return pathlessError(err)
+}
+
+// unavailableRootsWarning 是「这份备份少了哪些整理文件」的提示文案（相对数据目录的路径，不含绝对路径）。
+func unavailableRootsWarning(roots []string) string {
+	if len(roots) == 0 {
+		return ""
+	}
+	return "备份时 " + strings.Join(roots, "、") + " 不可用（链接失效或磁盘没挂载），这部分整理过的文件没有备份进去"
+}
+
+// setFilesWarning 记下最近一次备份的整理文件提示，设置页的备份状态显示它（D-DH-01，审阅 R2）。
+func (s *BackupService) setFilesWarning(roots []string) {
+	s.registryMu.Lock()
+	s.filesWarning = unavailableRootsWarning(roots)
+	s.registryMu.Unlock()
 }
