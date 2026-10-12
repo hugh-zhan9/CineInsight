@@ -15,7 +15,8 @@ const api = vi.hoisted(() => Object.fromEntries([
 vi.mock('../../wailsjs/go/main/App', () => api);
 
 import {
-  APP_NAV_GROUPS, appCommandsMixin, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS
+  appCommandsMixin, COMMAND_HOST_PAGES, COMMAND_PALETTE_PAGES, COMMAND_PALETTE_SMART_VIEWS, MANAGE_NAV_GROUPS, pageArea,
+  VIDEO_DETAIL_PAGE, VIEWER_NAV_GROUPS
 } from './appCommands.js';
 import { commandList, findCommand, registerCommands, unregisterCommands } from './commandRegistry.js';
 import { feedbackState, resetFeedback } from './feedback.js';
@@ -35,6 +36,7 @@ const Host = {
       this.currentPage = page;
       return true;
     },
+    openVideo() {},
     openTaskCenter() { this.taskCenterOpen = true; },
     openPendingWork() { this.pendingWorkOpen = true; }
   },
@@ -107,18 +109,82 @@ describe('应用级命令注册', () => {
     expect(wrapper.vm.currentPage).toBe('watched-movies');
   });
 
-  // 顶栏有入口、命令面板没有，是榜单与已看两页当初漏掉的那种失配。现在顶栏直接渲染
-  // APP_NAV_GROUPS，这条钉住两件事：App.vue 真的按这份清单渲染；清单里每一页在命令面板都有条目。
-  it('APP-12 顶栏与命令面板读同一份页面清单，顶栏的每一页在导航组里都有条目', () => {
+  // 顶栏有入口、命令面板没有，是榜单与已看两页当初漏掉的那种失配。现在顶栏直接渲染两个区域的
+  // 导航组（D-UI-09），这条钉住两件事：App.vue 真的按这两份清单渲染；两边每一页在命令面板都有条目。
+  // 管理侧带 command 的三项是动作，不是页面：走既有的同 ID 命令，不另开导航命令。
+  it('APP-12 顶栏与命令面板读同一份页面清单，两个区域的每一页在导航组里都有条目', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/App.vue'), 'utf8');
-    expect(source).toMatch(/APP_NAV_GROUPS/);
+    expect(source).toMatch(/VIEWER_NAV_GROUPS/);
+    expect(source).toMatch(/MANAGE_NAV_GROUPS/);
     expect(source).toMatch(/v-for="page in group\.pages"/);
 
     const keys = COMMAND_PALETTE_PAGES.map(page => page.key);
-    for (const group of APP_NAV_GROUPS) {
-      for (const page of group.pages) expect(keys, page.key).toContain(page.key);
+    for (const group of [...VIEWER_NAV_GROUPS, ...MANAGE_NAV_GROUPS]) {
+      for (const page of group.pages) {
+        if (page.command) expect(keys, page.key).not.toContain(page.key);
+        else expect(keys, page.key).toContain(page.key);
+      }
     }
-    expect(APP_NAV_GROUPS.map(group => group.label)).toEqual(['片库', '片单', '工具']);
+    expect(keys).not.toContain(VIDEO_DETAIL_PAGE);
+    expect(VIEWER_NAV_GROUPS.map(group => group.label)).toEqual(['浏览', '片单', '回顾与检索']);
+    expect(MANAGE_NAV_GROUPS.map(group => group.label)).toEqual(['片库', '待处理与清理', '工具', '系统']);
+  });
+
+  it('D-UI-09 每个页面 key 只属于一个区域；视频与片库管理、图片与图片管理是两个 key', () => {
+    const viewer = VIEWER_NAV_GROUPS.flatMap(group => group.pages).map(page => page.key);
+    const manage = MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => !page.command).map(page => page.key);
+    expect(viewer).toEqual(['home', 'videos', 'people', 'collections', 'photos', 'watchlist', 'movie-chart', 'watched-movies', 'viewing-notes', 'recap', 'scenes']);
+    expect(manage).toEqual(['manage-home', 'library-manage', 'photos-manage', 'downloads', 'video-workbench', 'insights', 'data-care', 'settings']);
+    expect(viewer.filter(key => manage.includes(key))).toEqual([]);
+    for (const key of viewer) expect(pageArea(key), key).toBe('viewer');
+    for (const key of manage) expect(pageArea(key), key).toBe('manage');
+    expect(pageArea(VIDEO_DETAIL_PAGE)).toBe('viewer');
+    expect(pageArea('pending-work')).toBeNull();
+    expect(pageArea('no-such-page')).toBeNull();
+    // 管理侧的三个动作入口走既有命令。
+    expect(MANAGE_NAV_GROUPS.flatMap(group => group.pages).filter(page => page.command).map(page => [page.label, page.command])).toEqual([
+      ['待处理', 'action:pending-work'], ['清理中心', 'action:cleanup'], ['任务与诊断', 'action:task-center']
+    ]);
+  });
+
+  // D-UI-09：命令面板列出两个区域的全部页面；拆分前就有的导航命令 ID 一个不少、不改名。
+  it('D-UI-09 命令面板列出两侧全部页面，原有导航命令 ID 不变', () => {
+    const wrapper = host({ settings: { browser_bridge_enabled: true } });
+    const existing = ['videos', 'people', 'collections', 'photos', 'viewing-notes', 'recap', 'watchlist', 'movie-chart',
+      'watched-movies', 'insights', 'data-care', 'scenes', 'video-workbench', 'downloads', 'settings'];
+    for (const key of [...existing, 'home', 'manage-home', 'library-manage', 'photos-manage']) {
+      expect(commandByID(`nav:page:${key}`), key).not.toBeNull();
+    }
+    expect(commandByID('nav:page:video-detail')).toBeNull();
+    expect(commandByID('nav:page:pending-work')).toBeNull();
+
+    commandByID('nav:page:manage-home').run();
+    expect(wrapper.vm.currentPage).toBe('manage-home');
+    commandByID('nav:page:home').run();
+    expect(wrapper.vm.currentPage).toBe('home');
+  });
+
+  it('D-UI-09 智能视图与保存视图落在当前区域的片库页：观看侧「视频」，管理侧「片库管理」', async () => {
+    const wrapper = host();
+    wrapper.vm.currentPage = 'home';
+    await commandByID('nav:smart:favorites').run();
+    expect(wrapper.vm.currentPage).toBe('videos');
+
+    wrapper.vm.currentPage = 'insights';
+    await commandByID('nav:smart:favorites').run();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+
+    wrapper.vm.currentPage = 'settings';
+    await wrapper.vm.applySavedViewFromCommand(3);
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+  });
+
+  it('D-UI-07 命令面板打开一部片交给 App 的分流，来源标为命令面板', () => {
+    const wrapper = host();
+    const openVideo = vi.fn();
+    wrapper.vm.openVideo = openVideo;
+    wrapper.vm.openVideoFromCommand({ id: 5 });
+    expect(openVideo).toHaveBeenCalledWith({ id: 5 }, { from: 'command-palette' });
   });
 
   it('APP-14 「打开下载」只在开启浏览器插件桥接时注册', async () => {
@@ -183,11 +249,12 @@ describe('全局命令（D-PC60、APP-12）', () => {
     expect(wrapper.vm.pendingWorkOpen).toBe(true);
   });
 
+  // D-UI-03：这些是维护动作，宿主页记管理侧的「片库管理」（与「视频」同一个常挂载片库页）。
   it.each([
     ['action:cleanup', 'library.openCleanup'],
     ['action:trash', 'library.openTrash'],
     ['action:tag-manager', 'library.openTagManager']
-  ])('APP-12 %s 在任何页面都先切回片库页，再执行宿主命令 %s', async (commandID, hostID) => {
+  ])('APP-12 %s 在任何页面都先切到片库管理，再执行宿主命令 %s', async (commandID, hostID) => {
     const wrapper = host();
     const run = vi.fn();
     registerHost(hostID, run);
@@ -195,7 +262,7 @@ describe('全局命令（D-PC60、APP-12）', () => {
 
     await commandByID(commandID).run();
 
-    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(wrapper.vm.currentPage).toBe('library-manage');
     expect(run).toHaveBeenCalledTimes(1);
   });
 
@@ -231,20 +298,20 @@ describe('全局命令（D-PC60、APP-12）', () => {
 
   it('APP-11 固定命令 ID 都登记了宿主页，面板执行前据此先切页', async () => {
     expect(COMMAND_HOST_PAGES).toEqual(expect.objectContaining({
-      'library.openCleanup': 'videos',
-      'library.openAIReview': 'videos',
-      'library.openLocalMetadataUpdates': 'videos',
-      'library.openCollectionSuggestions': 'videos',
-      'photos.openAIReview': 'photos',
+      'library.openCleanup': 'library-manage',
+      'library.openAIReview': 'library-manage',
+      'library.openLocalMetadataUpdates': 'library-manage',
+      'library.openCollectionSuggestions': 'library-manage',
+      'photos.openAIReview': 'photos-manage',
       'people.openFaceReview': 'people'
     }));
     const wrapper = host();
     wrapper.vm.currentPage = 'settings';
 
     expect(await wrapper.vm.prepareCommandRun({ id: 'photos.openAIReview' })).toBe(true);
-    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(wrapper.vm.currentPage).toBe('photos-manage');
     expect(await wrapper.vm.prepareCommandRun({ id: 'action:backup-now' })).toBe(true);
-    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(wrapper.vm.currentPage).toBe('photos-manage');
   });
 
   it('宿主页注册的 hidden 跳转目标不出现在面板里，但 findCommand 找得到', () => {

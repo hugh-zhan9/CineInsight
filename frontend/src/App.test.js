@@ -62,6 +62,20 @@ async function mountApp() {
   return wrapper;
 }
 
+// 「片单」在观看导航里收成下拉（D-UI-02）：点开下拉，再选其中一页。
+async function openListsMenuPage(wrapper, key) {
+  await wrapper.get('[data-test="nav-menu-lists"]').trigger('click');
+  wrapper.findComponent({ name: 'BaseMenu' }).vm.$emit('select', { id: key });
+  wrapper.findComponent({ name: 'BaseMenu' }).vm.$emit('close');
+  await flushPromises();
+}
+
+// 从观看区经右上角「管理」进管理区（D-UI-01：管理收进一个入口）。
+async function enterManage(wrapper) {
+  await wrapper.get('[data-test="open-manage"]').trigger('click');
+  await flushPromises();
+}
+
 it('片库的转换事件同步给已挂载的图片页', async () => {
   const wrapper = await mountApp();
   await wrapper.setData({ photosMounted: true });
@@ -135,7 +149,7 @@ it('启动失败时仍可打开只读诊断，不挂载片库或任务中心', a
 it('顶栏想看入口按需挂载独立片单页', async () => {
   const wrapper = await mountApp();
   expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(false);
-  await wrapper.get('[data-test="nav-watchlist"]').trigger('click');
+  await openListsMenuPage(wrapper, 'watchlist');
   expect(wrapper.vm.currentPage).toBe('watchlist');
   expect(wrapper.findComponent({ name: 'WatchlistPage' }).exists()).toBe(true);
 });
@@ -146,11 +160,11 @@ it('顶栏榜单入口按需挂载年度榜单页，切走即卸载', async () =
   const wrapper = await mountApp();
   expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(false);
 
-  await wrapper.get('[data-test="nav-movie-chart"]').trigger('click');
+  await openListsMenuPage(wrapper, 'movie-chart');
   expect(wrapper.vm.currentPage).toBe('movie-chart');
   expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(true);
 
-  await wrapper.get('[data-test="nav-watchlist"]').trigger('click');
+  await openListsMenuPage(wrapper, 'watchlist');
   expect(wrapper.findComponent({ name: 'MovieChartPage' }).exists()).toBe(false);
 });
 
@@ -160,11 +174,11 @@ it('顶栏已看入口按需挂载已看页，切走即卸载', async () => {
   const wrapper = await mountApp();
   expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(false);
 
-  await wrapper.get('[data-test="nav-watched-movies"]').trigger('click');
+  await openListsMenuPage(wrapper, 'watched-movies');
   expect(wrapper.vm.currentPage).toBe('watched-movies');
   expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(true);
 
-  await wrapper.get('[data-test="nav-movie-chart"]').trigger('click');
+  await openListsMenuPage(wrapper, 'movie-chart');
   expect(wrapper.findComponent({ name: 'WatchedMoviesPage' }).exists()).toBe(false);
 });
 
@@ -332,7 +346,8 @@ describe('命令面板快捷键', () => {
 
   // D-PC59：「管理」菜单去掉清理审阅后，⌘K 改为走待处理工作台的清理入口（library.openCleanup），
   // 任何页面都能按；它仍然不是命令面板的快捷键。
-  it('APP-11 ⌘K 在其他页面先切回片库页，再执行 library.openCleanup', async () => {
+  // D-UI-03：清理中心属于管理侧，宿主页是「片库管理」（与「视频」同一个常挂载片库页）。
+  it('APP-11 ⌘K 在其他页面先切到片库管理，再执行 library.openCleanup', async () => {
     const wrapper = await mountApp();
     const run = vi.fn();
     registerCommands('test-cleanup-host', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
@@ -342,7 +357,7 @@ describe('命令面板快捷键', () => {
     await flushPromises();
 
     expect(event.defaultPrevented).toBe(true);
-    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(wrapper.vm.currentPage).toBe('library-manage');
     expect(run).toHaveBeenCalledTimes(1);
     expect(wrapper.vm.commandPaletteOpen).toBe(false);
     unregisterCommands('test-cleanup-host');
@@ -350,6 +365,7 @@ describe('命令面板快捷键', () => {
 
   it('APP-11 ⌘K 已被片库页先接手（preventDefault）时让位，不重复打开', async () => {
     const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: 'videos' });
     const run = vi.fn();
     registerCommands('test-cleanup-host', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
     const claim = event => event.preventDefault();
@@ -419,22 +435,61 @@ describe('顶栏信息架构（APP-14）', () => {
     }));
   }
 
-  it('APP-14 顶栏按片库、片单、工具三组渲染，组间有分隔，「已看」改名「观影记录」', async () => {
+  it('D-UI-02 观看区：首页 · 视频 · 人物 · 作品集 · 图片 · 片单（下拉）· 回顾 · 场景检索，右侧待播队列与「管理」', async () => {
     const wrapper = await mountApp();
 
+    expect(wrapper.find('[data-test="nav-area-viewer"]').exists()).toBe(true);
     expect(groupLabels(wrapper)).toEqual([
-      { key: 'library', label: '片库', pages: ['视频', '人物', '作品集', '图片'] },
-      { key: 'lists', label: '片单', pages: ['观看笔记', '回顾', '想看', '榜单', '观影记录'] },
-      { key: 'tools', label: '工具', pages: ['洞察', '数据维护', '场景检索', '视频工作台'] }
+      { key: 'browse', label: '浏览', pages: ['首页', '视频', '人物', '作品集', '图片'] },
+      { key: 'lists', label: '片单', pages: ['片单▾'] },
+      { key: 'review', label: '回顾与检索', pages: ['回顾', '场景检索'] }
     ]);
-    expect(wrapper.findAll('.header-nav__divider')).toHaveLength(3);
-    expect(wrapper.get('[data-test="nav-settings"]').text()).toBe('设置');
+    expect(wrapper.findAll('.header-nav__divider')).toHaveLength(2);
+    expect(wrapper.find('[data-test="nav-back-to-viewer"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="nav-settings"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="open-pending-work"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="open-task-center"]').exists()).toBe(false);
+    expect(wrapper.findAll('.header-tools .header-tool-btn').map(button => button.text())).toEqual(['待播队列', '管理']);
+
+    // 片单下拉：想看、榜单、观影记录、观看笔记；「已看」改名「观影记录」（D-PC52）。
+    const trigger = wrapper.get('[data-test="nav-menu-lists"]');
+    expect(trigger.attributes('aria-expanded')).toBe('false');
+    await trigger.trigger('click');
+    expect(trigger.attributes('aria-expanded')).toBe('true');
+    expect(wrapper.findComponent({ name: 'BaseMenu' }).props('items').map(item => item.label)).toEqual(['想看', '榜单', '观影记录', '观看笔记']);
     expect(wrapper.get('.header-nav').text()).not.toContain('已看');
+    await trigger.trigger('click');
+    expect(wrapper.findComponent({ name: 'BaseMenu' }).exists()).toBe(false);
   });
 
-  it('APP-14 「下载」只在开启浏览器插件桥接时出现，关掉后随即隐藏', async () => {
+  it('D-UI-02 管理区：返回观看 · 管理首页 · 片库管理 · 图片管理 · 待处理 · 清理中心 · 下载 · 视频工作台 · 洞察 · 数据维护 · 任务与诊断 · 设置', async () => {
     api.GetSettings.mockResolvedValue({ auto_scan_on_startup: false, theme: 'system', browser_bridge_enabled: true });
     const wrapper = await mountApp();
+    await enterManage(wrapper);
+
+    expect(wrapper.vm.currentPage).toBe('manage-home');
+    expect(wrapper.find('[data-test="nav-area-manage"]').exists()).toBe(true);
+    expect(wrapper.get('[data-test="nav-back-to-viewer"]').text()).toBe('返回观看');
+    expect(groupLabels(wrapper)).toEqual([
+      { key: 'manage-library', label: '片库', pages: ['管理首页', '片库管理', '图片管理'] },
+      { key: 'manage-review', label: '待处理与清理', pages: ['待处理', '清理中心'] },
+      { key: 'manage-tools', label: '工具', pages: ['下载', '视频工作台', '洞察', '数据维护'] },
+      { key: 'manage-system', label: '系统', pages: ['任务与诊断', '设置'] }
+    ]);
+    expect(wrapper.findAll('.header-nav__divider')).toHaveLength(4);
+    expect(wrapper.find('[data-test="nav-videos"]').exists()).toBe(false);
+    expect(wrapper.find('.header-tools').exists()).toBe(false);
+    expect(wrapper.get('[data-test="nav-manage-home"]').classes()).toContain('active');
+
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(wrapper.find('[data-test="nav-area-viewer"]').exists()).toBe(true);
+  });
+
+  it('APP-14 「下载」只在开启浏览器插件桥接时出现（管理区），关掉后随即隐藏', async () => {
+    api.GetSettings.mockResolvedValue({ auto_scan_on_startup: false, theme: 'system', browser_bridge_enabled: true });
+    const wrapper = await mountApp();
+    await enterManage(wrapper);
 
     expect(wrapper.find('[data-test="nav-downloads"]').exists()).toBe(true);
     await wrapper.get('[data-test="nav-downloads"]').trigger('click');
@@ -449,6 +504,7 @@ describe('顶栏信息架构（APP-14）', () => {
 describe('设置页离开确认（APP-08）', () => {
   async function onDirtySettings() {
     const wrapper = await mountApp();
+    await enterManage(wrapper);
     await wrapper.get('[data-test="nav-settings"]').trigger('click');
     wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', true);
     await flushPromises();
@@ -458,7 +514,7 @@ describe('设置页离开确认（APP-08）', () => {
   it('APP-08 有未保存修改时切页先确认，选「继续编辑」留在设置页', async () => {
     const wrapper = await onDirtySettings();
 
-    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    await wrapper.get('[data-test="nav-library-manage"]').trigger('click');
     expect(feedbackState.confirm?.message).toBe('放弃未保存的设置修改？');
     resolveConfirm(false);
     await flushPromises();
@@ -467,14 +523,24 @@ describe('设置页离开确认（APP-08）', () => {
     expect(wrapper.findComponent({ name: 'SettingsPage' }).exists()).toBe(true);
   });
 
+  it('APP-08 「返回观看」同样经过确认', async () => {
+    const wrapper = await onDirtySettings();
+
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    expect(feedbackState.confirm?.message).toBe('放弃未保存的设置修改？');
+    resolveConfirm(false);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('settings');
+  });
+
   it('APP-08 选「放弃修改」后切走，脏标记随之清掉', async () => {
     const wrapper = await onDirtySettings();
 
-    await wrapper.get('[data-test="nav-photos"]').trigger('click');
+    await wrapper.get('[data-test="nav-photos-manage"]').trigger('click');
     resolveConfirm(true);
     await flushPromises();
 
-    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(wrapper.vm.currentPage).toBe('photos-manage');
     expect(wrapper.vm.settingsDirty).toBe(false);
   });
 
@@ -490,12 +556,13 @@ describe('设置页离开确认（APP-08）', () => {
 
   it('APP-08 没有未保存修改时直接切页，不弹确认', async () => {
     const wrapper = await mountApp();
+    await enterManage(wrapper);
     await wrapper.get('[data-test="nav-settings"]').trigger('click');
     wrapper.findComponent({ name: 'SettingsPage' }).vm.$emit('update:dirty', false);
 
-    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    await wrapper.get('[data-test="nav-library-manage"]').trigger('click');
     expect(feedbackState.confirm).toBeNull();
-    expect(wrapper.vm.currentPage).toBe('videos');
+    expect(wrapper.vm.currentPage).toBe('library-manage');
   });
 });
 
@@ -544,8 +611,10 @@ describe('启动扫描与扫描摘要', () => {
 });
 
 describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => {
-  it('APP-03 顶栏「任务」打开任务中心抽屉，角标显示运行中数量，有失败时标红点', async () => {
+  // D-UI-02：任务入口在管理导航里，叫「任务与诊断」，走既有命令 action:task-center。
+  it('APP-03 管理导航「任务与诊断」打开任务中心抽屉，角标显示运行中数量，有失败时标红点', async () => {
     const wrapper = await mountApp();
+    await enterManage(wrapper);
     const drawer = wrapper.findComponent({ name: 'TaskCenterDrawer' });
     expect(drawer.props('open')).toBe(false);
     expect(wrapper.find('[data-test="task-center-badge"]').exists()).toBe(false);
@@ -556,19 +625,41 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(wrapper.find('[data-test="task-center-failed-dot"]').exists()).toBe(true);
 
     await wrapper.get('[data-test="open-task-center"]').trigger('click');
+    await flushPromises();
     expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(true);
+    expect(wrapper.vm.currentPage).toBe('manage-home');
     wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('close');
     await flushPromises();
     expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(false);
   });
 
-  it('META-08 顶栏「待处理」角标来自工作台的总数，超过 99 显示 99+', async () => {
+  // D-UI-02：观看区的待处理数量挂在「管理」按钮上，来源仍是工作台报上来的总数（GetPendingWorkSummary）。
+  it('META-08 观看区「管理」按钮的角标来自工作台的总数，超过 99 显示 99+，点了进管理首页', async () => {
     const wrapper = await mountApp();
     const hub = wrapper.findComponent({ name: 'PendingWorkHub' });
+    expect(wrapper.find('[data-test="manage-pending-badge"]').exists()).toBe(false);
 
     hub.vm.$emit('badge-change', 5);
     await flushPromises();
-    expect(wrapper.get('[data-test="pending-work-badge"]').text()).toBe('5');
+    expect(wrapper.get('[data-test="manage-pending-badge"]').text()).toBe('5');
+
+    hub.vm.$emit('badge-change', 120);
+    await flushPromises();
+    expect(wrapper.get('[data-test="manage-pending-badge"]').text()).toBe('99+');
+
+    hub.vm.$emit('badge-change', 0);
+    await flushPromises();
+    expect(wrapper.find('[data-test="manage-pending-badge"]').exists()).toBe(false);
+
+    await wrapper.get('[data-test="open-manage"]').trigger('click');
+    expect(wrapper.vm.currentPage).toBe('manage-home');
+    expect(wrapper.findComponent({ name: 'ManageHomePage' }).exists()).toBe(true);
+  });
+
+  it('META-08 管理导航「待处理」带同一个角标，点了打开待处理工作台（既有命令 action:pending-work）', async () => {
+    const wrapper = await mountApp();
+    await enterManage(wrapper);
+    const hub = wrapper.findComponent({ name: 'PendingWorkHub' });
 
     hub.vm.$emit('badge-change', 120);
     await flushPromises();
@@ -579,7 +670,23 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     expect(wrapper.find('[data-test="pending-work-badge"]').exists()).toBe(false);
 
     await wrapper.get('[data-test="open-pending-work"]').trigger('click');
+    await flushPromises();
     expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(true);
+    expect(wrapper.vm.currentPage).toBe('manage-home');
+  });
+
+  it('D-UI-03 管理导航「清理中心」走既有命令：切到片库管理再执行 library.openCleanup', async () => {
+    const wrapper = await mountApp();
+    await enterManage(wrapper);
+    const run = vi.fn();
+    registerCommands('test-cleanup-nav', [{ id: 'library.openCleanup', group: 'action', label: '清理中心', hidden: true, run }]);
+
+    await wrapper.get('[data-test="open-cleanup"]').trigger('click');
+    await flushPromises();
+
+    unregisterCommands('test-cleanup-nav');
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it('APP-11 工作台「处理」先切到宿主页（人物页按需挂载），再按固定命令 ID 执行', async () => {
@@ -601,21 +708,23 @@ describe('任务中心与待处理入口（APP-03、META-08、APP-11）', () => 
     wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'photos.openAIReview', '图片 AI 标签待审阅');
     await flushPromises();
 
-    expect(wrapper.vm.currentPage).toBe('photos');
+    expect(wrapper.vm.currentPage).toBe('photos-manage');
     expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('「图片 AI 标签待审阅」暂时打不开');
   });
 
-  it('APP-03 任务中心里超分产物「在片库中打开」按 ID 取回视频后打开详情', async () => {
+  // D-UI-07：任务中心属于管理侧，仍是「切到片库管理 + 详情抽屉」。
+  it('APP-03 任务中心里超分产物「在片库中打开」按 ID 取回视频后切到片库管理打开详情抽屉', async () => {
     const wrapper = await mountApp();
-    const open = vi.fn();
-    wrapper.vm.openVideoFromCommand = open;
+    const openPreview = vi.fn();
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.openPreview = openPreview;
     api.GetVideosByIDs.mockResolvedValue([{ id: 42, name: 'out.mp4' }]);
 
     wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-video', 42);
     await flushPromises();
 
     expect(api.GetVideosByIDs).toHaveBeenCalledWith([42]);
-    expect(open).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }));
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(openPreview).toHaveBeenCalledWith(expect.objectContaining({ id: 42 }));
   });
 
   it('APP-03 产物视频不在片库中时说明原因', async () => {
@@ -755,7 +864,7 @@ describe('「待重启」遮罩与启动错误页', () => {
 it('集中整理任务从其他页路由到片库，以持久ID留待片库挂载后消费，保留壁纸组件', async () => {
   const wrapper = await mountApp(); await wrapper.setData({ currentPage: 'photos' });
   wrapper.findComponent({ name: 'TaskCenterDrawer' }).vm.$emit('open-consolidation', 42); await flushPromises();
-  expect(wrapper.vm.currentPage).toBe('videos');
+  expect(wrapper.vm.currentPage).toBe('library-manage');
   expect(wrapper.findComponent({ name: 'VideoListPage' }).props('consolidationRoute')).toMatchObject({ taskID: 42 });
   expect(wrapper.findComponent({ name: 'WallpaperStatusBar' }).exists()).toBe(true);
   wrapper.findComponent({ name: 'VideoListPage' }).vm.$emit('consolidation-opened'); await flushPromises(); expect(wrapper.vm.consolidationRoute).toBeNull();
@@ -768,22 +877,26 @@ it('集中整理路由的旧导航确认迟到不会覆盖新任务', async () =
   expect(wrapper.vm.consolidationRoute.taskID).toBe(42);
 });
 
-it('观看笔记的书签沿现有片库预览打开，不在页面挂载时启动播放', async () => {
+// D-UI-07：观看笔记属于观看区，书签定位进整页详情并从书签起点起播；片库页的抽屉不再接手。
+it('观看笔记的书签进整页详情并从书签起点起播，不在页面挂载时启动播放', async () => {
   const wrapper = await mountApp(); const openBookmark = vi.fn(); wrapper.findComponent({ name: 'VideoListPage' }).vm.openBookmark = openBookmark;
-  await wrapper.get('[data-test="nav-viewing-notes"]').trigger('click'); expect(openBookmark).not.toHaveBeenCalled();
+  await openListsMenuPage(wrapper, 'viewing-notes'); expect(wrapper.findComponent({ name: 'VideoDetailPage' }).exists()).toBe(false);
   const resolution = { status: 'ready', video: { id: 7 }, bookmark: { id: 2, start_ms: 0, end_ms: null }, source_token: 'checked' };
   wrapper.findComponent({ name: 'ViewingNotesPage' }).vm.$emit('open-bookmark', resolution); await flushPromises();
-  expect(wrapper.vm.currentPage).toBe('videos'); expect(openBookmark).toHaveBeenCalledWith(resolution);
+  expect(wrapper.vm.currentPage).toBe('video-detail'); expect(openBookmark).not.toHaveBeenCalled();
+  expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props()).toMatchObject({ videoId: 7, startAtMs: 0 });
+  expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['viewing-notes']);
 });
 
 it('观看笔记首次进入才挂载，去原片核对再返回保留同一编辑宿主', async () => {
   const wrapper = await mountApp(); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).exists()).toBe(false);
-  await wrapper.get('[data-test="nav-viewing-notes"]').trigger('click'); const notes = wrapper.findComponent({ name: 'ViewingNotesPage' }).vm;
+  await openListsMenuPage(wrapper, 'viewing-notes'); const notes = wrapper.findComponent({ name: 'ViewingNotesPage' }).vm;
   await wrapper.get('[data-test="nav-videos"]').trigger('click'); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).vm).toBe(notes); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).props('pageActive')).toBe(false);
-  await wrapper.get('[data-test="nav-viewing-notes"]').trigger('click'); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).vm).toBe(notes);
+  await openListsMenuPage(wrapper, 'viewing-notes'); expect(wrapper.findComponent({ name: 'ViewingNotesPage' }).vm).toBe(notes);
 });
 
-it('P-007 片库「在当前筛选中搜场景」带着筛选进入场景检索；点开命中回片库从指定时间预览', async () => {
+// D-UI-07：场景检索属于观看区，命中进整页详情并从该时刻起播（openVideoAt）。
+it('P-007 片库「在当前筛选中搜场景」带着筛选进入场景检索；点开命中进整页详情从指定时间起播', async () => {
   const wrapper = await mountApp();
   expect(wrapper.findComponent({ name: 'ScenesPage' }).exists()).toBe(false);
   const filter = { smart_view: 'unwatched', tag_ids: [3] };
@@ -799,8 +912,9 @@ it('P-007 片库「在当前筛选中搜场景」带着筛选进入场景检索�
   scenes.vm.$emit('open-video-at', { videoID: 7, startMs: 7_078_000 });
   await flushPromises();
   expect(api.GetVideosByIDs).toHaveBeenCalledWith([7]);
-  expect(wrapper.vm.currentPage).toBe('videos');
-  expect(openPreviewAt).toHaveBeenCalledWith({ id: 7, name: 'a.mp4' }, 7_078_000);
+  expect(wrapper.vm.currentPage).toBe('video-detail');
+  expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props()).toMatchObject({ videoId: 7, startAtMs: 7_078_000 });
+  expect(openPreviewAt).not.toHaveBeenCalled();
   expect(wrapper.findComponent({ name: 'ScenesPage' }).exists()).toBe(true);
 });
 
@@ -819,7 +933,7 @@ it('P-008 片库新建编辑项目后进入视频工作台并选中；「清理�
   workbench.vm.$emit('cleanup-sources', [3, 3, 0]);
   await flushPromises();
   expect(api.GetVideosByIDs).toHaveBeenCalledWith([3]);
-  expect(wrapper.vm.currentPage).toBe('videos');
+  expect(wrapper.vm.currentPage).toBe('library-manage');
   expect(requestDeleteVideos).toHaveBeenCalledWith([{ id: 3, name: 'a.mp4' }]);
 });
 
@@ -895,7 +1009,7 @@ it('D-MC-03 完整度「去处理」：视频去片库套用缺失筛选；图�
   wrapper.findComponent({ name: 'VideoListPage' }).vm.applyMissingFilter = applyVideoMissing;
   wrapper.findComponent({ name: 'DataCarePage' }).vm.$emit('open-library-missing', { kind: 'video', field: 'year' });
   await flushPromises();
-  expect(wrapper.vm.currentPage).toBe('videos');
+  expect(wrapper.vm.currentPage).toBe('library-manage');
   expect(applyVideoMissing).toHaveBeenCalledWith('year');
 
   expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).exists()).toBe(false);
@@ -903,6 +1017,332 @@ it('D-MC-03 完整度「去处理」：视频去片库套用缺失筛选；图�
   await flushPromises();
   wrapper.findComponent({ name: 'DataCarePage' }).vm.$emit('open-library-missing', { kind: 'image', field: 'gps' });
   await flushPromises();
-  expect(wrapper.vm.currentPage).toBe('photos');
+  expect(wrapper.vm.currentPage).toBe('photos-manage');
   expect(applyPhotoMissing).toHaveBeenCalledWith('gps');
+});
+
+describe('观看与管理分区（D-UI-01、D-UI-02、D-UI-09）', () => {
+  it('启动进观看首页：片库页常挂载但不可见，首页按需挂载', async () => {
+    const wrapper = await mountApp();
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(wrapper.vm.area).toBe('viewer');
+    expect(wrapper.findComponent({ name: 'HomePage' }).exists()).toBe(true);
+    expect(wrapper.findComponent({ name: 'HomePage' }).vm.$.vnode.props['page-active']).toBe(true);
+    const library = wrapper.findComponent({ name: 'VideoListPage' });
+    expect(library.exists()).toBe(true);
+    expect(library.props('pageActive')).toBe(false);
+    expect(library.isVisible()).toBe(false);
+    expect(wrapper.get('[data-test="nav-home"]').classes()).toContain('active');
+  });
+
+  it.each([
+    ['home', 'viewer'], ['videos', 'viewer'], ['people', 'viewer'], ['collections', 'viewer'], ['photos', 'viewer'],
+    ['watchlist', 'viewer'], ['movie-chart', 'viewer'], ['watched-movies', 'viewer'], ['viewing-notes', 'viewer'],
+    ['recap', 'viewer'], ['scenes', 'viewer'], ['video-detail', 'viewer'],
+    ['manage-home', 'manage'], ['library-manage', 'manage'], ['photos-manage', 'manage'], ['downloads', 'manage'],
+    ['video-workbench', 'manage'], ['insights', 'manage'], ['data-care', 'manage'], ['settings', 'manage']
+  ])('区域由当前页面推出：%s 属于 %s', async (page, area) => {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: page });
+    expect(wrapper.vm.area).toBe(area);
+    expect(wrapper.find(`[data-test="nav-area-${area}"]`).exists()).toBe(true);
+  });
+
+  it('「视频」与「片库管理」共用同一个片库页实例，「图片」与「图片管理」同理', async () => {
+    const wrapper = await mountApp();
+    await wrapper.get('[data-test="nav-videos"]').trigger('click');
+    const library = wrapper.findComponent({ name: 'VideoListPage' }).vm;
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).props('pageActive')).toBe(true);
+
+    await enterManage(wrapper);
+    await wrapper.get('[data-test="nav-library-manage"]').trigger('click');
+    expect(wrapper.findAllComponents({ name: 'VideoListPage' })).toHaveLength(1);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).vm).toBe(library);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).props('pageActive')).toBe(true);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).isVisible()).toBe(true);
+
+    await wrapper.get('[data-test="nav-photos-manage"]').trigger('click');
+    const photos = wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm;
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).props('pageActive')).toBe(true);
+    expect(wrapper.findComponent({ name: 'VideoListPage' }).props('pageActive')).toBe(false);
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    await wrapper.get('[data-test="nav-photos"]').trigger('click');
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm).toBe(photos);
+    expect(wrapper.findComponent({ name: 'PhotoLibraryPage' }).props('pageActive')).toBe(true);
+  });
+
+  it('片库页不可见时启动扫描照常进行，命令面板与待处理跳转仍能打开片库宿主命令', async () => {
+    api.GetSettings.mockResolvedValue({ auto_scan_on_startup: true, theme: 'system' });
+    api.GetAllDirectories.mockResolvedValue([{ id: 1, path: '/Volumes/media', alias: '' }]);
+    const wrapper = await mountApp();
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(api.SyncScanDirectories).toHaveBeenCalledWith('startup');
+    expect(api.SyncImageDirectories).toHaveBeenCalledTimes(1);
+
+    const run = vi.fn();
+    registerCommands('test-hidden-library', [{ id: 'library.openAIReview', group: 'action', label: 'AI 审阅', hidden: true, run }]);
+    wrapper.findComponent({ name: 'PendingWorkHub' }).vm.$emit('run-command', 'library.openAIReview', 'AI 标签待审阅');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(run).toHaveBeenCalledTimes(1);
+
+    await wrapper.setData({ currentPage: 'home' });
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'P', code: 'KeyP', metaKey: true, shiftKey: true, cancelable: true }));
+    await flushPromises();
+    expect(wrapper.vm.commandPaletteOpen).toBe(true);
+    unregisterCommands('test-hidden-library');
+  });
+
+  it('管理首页的事件接到既有入口：切页、按命令 ID 处理、打开待处理与任务中心', async () => {
+    const wrapper = await mountApp();
+    await enterManage(wrapper);
+    const home = wrapper.findComponent({ name: 'ManageHomePage' });
+    // 占位组件还没声明 pageActive，首页工人的版本声明了：看 App 传下去的 vnode props，两种都成立。
+    expect(home.vm.$.vnode.props['page-active']).toBe(true);
+    home.vm.$emit('open-pending-work');
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(true);
+    home.vm.$emit('open-task-center');
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'TaskCenterDrawer' }).props('open')).toBe(true);
+    expect(wrapper.findComponent({ name: 'PendingWorkHub' }).props('open')).toBe(false);
+
+    const run = vi.fn();
+    registerCommands('test-manage-home', [{ id: 'photos.openCleanup', group: 'action', label: '图片清理', hidden: true, run }]);
+    home.vm.$emit('run-command', 'photos.openCleanup', '图片清理');
+    await flushPromises();
+    unregisterCommands('test-manage-home');
+    expect(wrapper.vm.currentPage).toBe('photos-manage');
+    expect(run).toHaveBeenCalledTimes(1);
+
+    await wrapper.setData({ currentPage: 'manage-home' });
+    wrapper.findComponent({ name: 'ManageHomePage' }).vm.$emit('navigate', 'insights');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('insights');
+  });
+});
+
+describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
+  // 观看区每个调用方：组件名、需要先切到的页面、发出的事件与载荷。
+  const viewerCallers = [
+    ['HomePage', 'home', 'open-video', 7],
+    ['RecapPage', 'recap', 'open-video-id', 7],
+    ['ViewingNotesPage', 'viewing-notes', 'open-video-id', 7],
+    ['ViewingNotesPage', 'viewing-notes', 'open-video', { id: 7, name: 'a.mp4' }],
+    ['WatchedMoviesPage', 'watched-movies', 'open-video', { id: 7, name: 'a.mp4' }],
+    ['PlaybackQueuePanel', 'recap', 'open-video', 7]
+  ];
+  const manageCallers = [
+    ['InsightsPage', 'insights', 'open-video-id', 7],
+    ['DataCarePage', 'data-care', 'open-video-id', 7],
+    ['VideoWorkbenchPage', 'video-workbench', 'open-video', 7],
+    ['TaskCenterDrawer', 'manage-home', 'open-video', 7]
+  ];
+
+  async function onPage(page) {
+    const wrapper = await mountApp();
+    await wrapper.setData({ currentPage: page });
+    await flushPromises();
+    const openPreview = vi.fn();
+    wrapper.findComponent({ name: 'VideoListPage' }).vm.openPreview = openPreview;
+    api.GetVideosByIDs.mockResolvedValue([{ id: 7, name: 'a.mp4' }]);
+    return { wrapper, openPreview };
+  }
+
+  it.each(viewerCallers)('观看区 %s（%s 页）的 %s 进整页详情', async (name, page, event, payload) => {
+    const { wrapper, openPreview } = await onPage(page);
+    wrapper.findComponent({ name }).vm.$emit(event, payload);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    expect(wrapper.findComponent({ name: 'VideoDetailPage' }).props()).toMatchObject({ videoId: 7, startAtMs: null });
+    expect(openPreview).not.toHaveBeenCalled();
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual([page]);
+  });
+
+  it.each(manageCallers)('管理区 %s（%s 页）的 %s 仍切到片库管理开抽屉', async (name, page, event, payload) => {
+    const { wrapper, openPreview } = await onPage(page);
+    wrapper.findComponent({ name }).vm.$emit(event, payload);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(openPreview).toHaveBeenCalledWith({ id: 7, name: 'a.mp4' });
+    expect(wrapper.findComponent({ name: 'VideoDetailPage' }).exists()).toBe(false);
+  });
+
+  it('待播队列不看当前页：在管理区打开也进整页详情，栈里没有可回的观看页，返回回首页', async () => {
+    const { wrapper, openPreview } = await onPage('insights');
+    wrapper.findComponent({ name: 'PlaybackQueuePanel' }).vm.$emit('open-video', 7);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    expect(openPreview).not.toHaveBeenCalled();
+    expect(wrapper.vm.detailReturnStack).toEqual([]);
+    wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('back');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('home');
+  });
+
+  it('命令面板按当前区域分流：观看区进整页详情，管理区开抽屉', async () => {
+    const { wrapper, openPreview } = await onPage('home');
+    await wrapper.vm.openVideoFromCommand({ id: 7, name: 'a.mp4' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+
+    await wrapper.setData({ currentPage: 'insights' });
+    await wrapper.vm.openVideoFromCommand({ id: 7, name: 'a.mp4' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(openPreview).toHaveBeenCalledWith({ id: 7, name: 'a.mp4' });
+  });
+
+  it('整页详情「编辑资料」切到片库管理并在抽屉里打开这部片，返回栈随之清空', async () => {
+    const { wrapper, openPreview } = await onPage('home');
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 7);
+    await flushPromises();
+    expect(wrapper.vm.detailReturnStack).toHaveLength(1);
+    wrapper.findComponent({ name: 'VideoDetailPage' }).vm.$emit('edit-in-manage', 7);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('library-manage');
+    expect(openPreview).toHaveBeenCalledWith({ id: 7, name: 'a.mp4' });
+    expect(wrapper.vm.detailReturnStack).toEqual([]);
+  });
+
+  it('视频不在片库里时说明原因，不切页', async () => {
+    const { wrapper } = await onPage('recap');
+    api.GetVideosByIDs.mockResolvedValue([]);
+    wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-video-id', 9);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('recap');
+    expect(feedbackState.toasts.map(toast => toast.message).join('\n')).toContain('不在片库中');
+  });
+
+  it('首页点人物打开人物页并定位到这个人', async () => {
+    const { wrapper } = await onPage('home');
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-person', { id: 8, name: '甲' });
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('people');
+  });
+});
+
+describe('整页详情的返回栈（D-UI-10）', () => {
+  async function viewerApp() {
+    const wrapper = await mountApp();
+    api.GetVideosByIDs.mockImplementation(ids => Promise.resolve(ids.map(id => ({ id, name: `${id}.mp4` }))));
+    return wrapper;
+  }
+  const mainView = wrapper => wrapper.get('.main-view').element;
+  const detail = wrapper => wrapper.findComponent({ name: 'VideoDetailPage' });
+
+  it('从回顾打开详情：详情从顶部看起；「返回」回到回顾并恢复滚动位置', async () => {
+    const wrapper = await viewerApp();
+    await wrapper.get('[data-test="nav-recap"]').trigger('click');
+    mainView(wrapper).scrollTop = 1200;
+    wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-video-id', 7);
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('video-detail');
+    expect(mainView(wrapper).scrollTop).toBe(0);
+    expect(wrapper.vm.detailReturnStack).toEqual([{ page: 'recap', params: null, scrollTop: 1200 }]);
+
+    detail(wrapper).vm.$emit('back');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('recap');
+    expect(mainView(wrapper).scrollTop).toBe(1200);
+    expect(wrapper.vm.detailReturnStack).toEqual([]);
+  });
+
+  it('相关推荐多层压栈，返回逐层回到上一部片（恢复各自的滚动）再回来源页', async () => {
+    const wrapper = await viewerApp();
+    mainView(wrapper).scrollTop = 300;
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    mainView(wrapper).scrollTop = 800;
+    detail(wrapper).vm.$emit('open-video', 2);
+    await flushPromises();
+    expect(detail(wrapper).props('videoId')).toBe(2);
+    expect(mainView(wrapper).scrollTop).toBe(0);
+    mainView(wrapper).scrollTop = 50;
+    detail(wrapper).vm.$emit('open-video', 3);
+    await flushPromises();
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.params?.videoId || entry.page)).toEqual(['home', 1, 2]);
+
+    detail(wrapper).vm.$emit('back');
+    await flushPromises();
+    expect(detail(wrapper).props()).toMatchObject({ videoId: 2, startAtMs: null });
+    expect(mainView(wrapper).scrollTop).toBe(50);
+    detail(wrapper).vm.$emit('back');
+    await flushPromises();
+    expect(detail(wrapper).props('videoId')).toBe(1);
+    expect(mainView(wrapper).scrollTop).toBe(800);
+    detail(wrapper).vm.$emit('back');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('home');
+    expect(mainView(wrapper).scrollTop).toBe(300);
+  });
+
+  it('同一部片不重复压栈：再点回栈里已有的片，返回回到当初打开它的地方', async () => {
+    const wrapper = await viewerApp();
+    await wrapper.get('[data-test="nav-scenes"]').trigger('click');
+    wrapper.findComponent({ name: 'ScenesPage' }).vm.$emit('open-video-at', { videoID: 1, startMs: 5000 });
+    await flushPromises();
+    expect(detail(wrapper).props()).toMatchObject({ videoId: 1, startAtMs: 5000 });
+    detail(wrapper).vm.$emit('open-video', 2);
+    await flushPromises();
+    detail(wrapper).vm.$emit('open-video', 1);
+    await flushPromises();
+    expect(detail(wrapper).props('videoId')).toBe(1);
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['scenes']);
+    detail(wrapper).vm.$emit('open-video', 1);
+    await flushPromises();
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['scenes']);
+
+    detail(wrapper).vm.$emit('back');
+    await flushPromises();
+    expect(wrapper.vm.currentPage).toBe('scenes');
+  });
+
+  it('栈最多 20 层，超出丢最早的', async () => {
+    const wrapper = await viewerApp();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    for (let id = 2; id <= 22; id++) {
+      detail(wrapper).vm.$emit('open-video', id);
+      await flushPromises();
+    }
+    const stack = wrapper.vm.detailReturnStack;
+    expect(stack).toHaveLength(20);
+    expect(stack[0].params.videoId).toBe(2);
+    expect(stack[19].params.videoId).toBe(21);
+  });
+
+  it('离开观看区（进管理）时清空；回到别的观看页同样清空，下次从那里重新压栈', async () => {
+    const wrapper = await viewerApp();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    detail(wrapper).vm.$emit('open-video', 2);
+    await flushPromises();
+    expect(wrapper.vm.detailReturnStack).toHaveLength(2);
+
+    await enterManage(wrapper);
+    expect(wrapper.vm.area).toBe('manage');
+    expect(wrapper.vm.detailReturnStack).toEqual([]);
+
+    await wrapper.get('[data-test="nav-back-to-viewer"]').trigger('click');
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    await wrapper.get('[data-test="nav-recap"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.vm.detailReturnStack).toEqual([]);
+    wrapper.findComponent({ name: 'RecapPage' }).vm.$emit('open-video-id', 3);
+    await flushPromises();
+    expect(wrapper.vm.detailReturnStack.map(entry => entry.page)).toEqual(['recap']);
+  });
+
+  it('每次打开或返回详情都是一次新挂载，参数跟着换', async () => {
+    const wrapper = await viewerApp();
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 1);
+    await flushPromises();
+    const first = detail(wrapper).vm;
+    detail(wrapper).vm.$emit('open-video', 2);
+    await flushPromises();
+    expect(detail(wrapper).vm).not.toBe(first);
+    expect(detail(wrapper).props('videoId')).toBe(2);
+  });
 });

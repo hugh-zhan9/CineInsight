@@ -10,6 +10,7 @@
 //   this.navigateTo(page)：切页。能直接切时同步返回 true；设置页有未保存修改时返回 Promise，
 //     用户放弃切页时 resolve 为 false（见下面的 whenNavigated）
 //   this.openTaskCenter() / this.openPendingWork()：打开任务中心抽屉与待处理工作台
+//   this.openVideo(video, { from })：打开一部片，按调用方区域分流到整页详情或片库管理的抽屉（D-UI-07）
 // 以及 App.vue 的 debugLog()。
 
 import {
@@ -21,14 +22,17 @@ import { findCommand, isCommandEnabled, registerCommands, unregisterCommands } f
 import { notifyError } from '../utils/feedback.js';
 import { buildTaskCommands } from './taskCommands.js';
 
-// 顶栏三组（D-PC59）：片库、片单、工具；「设置」单独放在组外。key 与 App.vue 的 currentPage 一致，
-// 顶栏按钮与命令面板的导航组都读这一份，两边不会再各自漏页（APP-12、APP-14）。
+// 观看与管理两套导航（D-UI-02、D-UI-09）：key 与 App.vue 的 currentPage 一致，每个页面 key 只属于一个区域；
+// 顶栏只显示当前区域那一套，命令面板列出两边全部页面（APP-12、APP-14：两边读同一份清单，不会各自漏页）。
+// 「视频」与「片库管理」是同一个常挂载片库页的两个 key，「图片」与「图片管理」同理，key 只决定顶栏归属。
 // requiresBrowserBridge：只在设置里开启了浏览器插件桥接时显示（「下载」页）。
-export const APP_NAV_GROUPS = [
+// menu：这一组在顶栏收成一个下拉按钮（「片单」）。
+export const VIEWER_NAV_GROUPS = [
   {
-    key: 'library',
-    label: '片库',
+    key: 'browse',
+    label: '浏览',
     pages: [
+      { key: 'home', label: '首页', keywords: ['home', 'shouye', '继续观看', '今晚看什么', '最近添加'] },
       { key: 'videos', label: '视频', keywords: ['video', 'library', 'shipin'] },
       { key: 'people', label: '人物', keywords: ['person', 'people', 'renwu'] },
       { key: 'collections', label: '作品集', keywords: ['collection', 'zuopinji'] },
@@ -38,28 +42,89 @@ export const APP_NAV_GROUPS = [
   {
     key: 'lists',
     label: '片单',
+    menu: true,
     pages: [
-      { key: 'viewing-notes', label: '观看笔记', keywords: ['diary', 'bookmarks', '日记', '片段书签', '年度回顾'] },
-      { key: 'recap', label: '回顾', keywords: ['recap', 'huigu', '月度回顾', '年度回顾', '实时', '最爱', '播放次数', '称号'] },
       { key: 'watchlist', label: '想看', keywords: ['watchlist', 'xiangkan', '片单', '待下载'] },
       { key: 'movie-chart', label: '榜单', keywords: ['chart', 'movie chart', 'bangdan', '年度', '豆瓣'] },
       // 顶栏「已看」改名「观影记录」（D-PC52），与片库的「已看」智能视图区分开；旧说法留作关键词。
-      { key: 'watched-movies', label: '观影记录', keywords: ['watched', 'guanying', 'yikan', 'kanguo', '看过', '已看', '榜单已看'] }
+      { key: 'watched-movies', label: '观影记录', keywords: ['watched', 'guanying', 'yikan', 'kanguo', '看过', '已看', '榜单已看'] },
+      { key: 'viewing-notes', label: '观看笔记', keywords: ['diary', 'bookmarks', '日记', '片段书签', '年度回顾'] }
     ]
   },
   {
-    key: 'tools',
-    label: '工具',
+    key: 'review',
+    label: '回顾与检索',
     pages: [
-      { key: 'insights', label: '洞察', keywords: ['insights', 'stats', 'dongcha'] },
-      // 数据维护（D-DC-01）：失联 · 完整度 · 规则 · 体检；观看/管理分区落地后归入管理侧。
-      { key: 'data-care', label: '数据维护', keywords: ['data care', 'shuju', 'weihu', '失联', '完整度', '规则', '体检', '批量编辑'] },
-      { key: 'scenes', label: '场景检索', keywords: ['scene', 'search', 'changjing', '对白', '画面', '台词'] },
-      { key: 'video-workbench', label: '视频工作台', keywords: ['workbench', 'edit', 'merge', 'trim', 'gongzuotai', '合并', '去片头', '高清替换', '剪辑'] },
-      { key: 'downloads', label: '下载', keywords: ['download', 'xiazai', '插件', '浏览器'], requiresBrowserBridge: true }
+      { key: 'recap', label: '回顾', keywords: ['recap', 'huigu', '月度回顾', '年度回顾', '实时', '最爱', '播放次数', '称号'] },
+      { key: 'scenes', label: '场景检索', keywords: ['scene', 'search', 'changjing', '对白', '画面', '台词'] }
     ]
   }
 ];
+
+export const SETTINGS_NAV_PAGE = { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] };
+
+// 管理侧（D-UI-02、D-UI-03）：一期沿用现有页面与面板。带 command 的三项（待处理、清理中心、任务与诊断）
+// 是动作不是页面：点了执行命令面板里同 ID 的既有命令，打开现有弹窗或面板。
+export const MANAGE_NAV_GROUPS = [
+  {
+    key: 'manage-library',
+    label: '片库',
+    pages: [
+      { key: 'manage-home', label: '管理首页', keywords: ['manage', 'guanli', '管理', '统计', '最近的变化'] },
+      { key: 'library-manage', label: '片库管理', keywords: ['library manage', 'pianku', '片库', '扫描', '批量'] },
+      { key: 'photos-manage', label: '图片管理', keywords: ['photo manage', 'tupian guanli', '图片库', '扫描图片'] }
+    ]
+  },
+  {
+    key: 'manage-review',
+    label: '待处理与清理',
+    pages: [
+      { key: 'pending-work', label: '待处理', command: 'action:pending-work' },
+      { key: 'cleanup', label: '清理中心', command: 'action:cleanup' }
+    ]
+  },
+  {
+    key: 'manage-tools',
+    label: '工具',
+    pages: [
+      { key: 'downloads', label: '下载', keywords: ['download', 'xiazai', '插件', '浏览器'], requiresBrowserBridge: true },
+      { key: 'video-workbench', label: '视频工作台', keywords: ['workbench', 'edit', 'merge', 'trim', 'gongzuotai', '合并', '去片头', '高清替换', '剪辑'] },
+      { key: 'insights', label: '洞察', keywords: ['insights', 'stats', 'dongcha'] },
+      // 数据维护（D-DC-01）：失联 · 完整度 · 规则 · 体检。
+      { key: 'data-care', label: '数据维护', keywords: ['data care', 'shuju', 'weihu', '失联', '完整度', '规则', '体检', '批量编辑'] }
+    ]
+  },
+  {
+    key: 'manage-system',
+    label: '系统',
+    pages: [
+      { key: 'task-center', label: '任务与诊断', command: 'action:task-center' },
+      SETTINGS_NAV_PAGE
+    ]
+  }
+];
+
+// 整页详情（D-UI-05）：观看区的页面，但要带视频 ID，不在顶栏与命令面板里。
+export const VIDEO_DETAIL_PAGE = 'video-detail';
+
+// 顶栏一组里真正的页面（去掉动作入口）。
+function navPages(groups) {
+  return groups.flatMap(group => group.pages).filter(page => !page.command);
+}
+
+const PAGE_AREAS = new Map([
+  ...navPages(VIEWER_NAV_GROUPS).map(page => [page.key, 'viewer']),
+  [VIDEO_DETAIL_PAGE, 'viewer'],
+  ...navPages(MANAGE_NAV_GROUPS).map(page => [page.key, 'manage'])
+]);
+
+// 「打开一部片」的调用方标记里代表命令面板的那一个（utils/viewerNavigation.js 据此分流）。
+export const COMMAND_PALETTE_SOURCE = 'command-palette';
+
+// 页面所在的区域：'viewer' | 'manage'；不认识的 key 返回 null。App.vue 的 area 由当前页面推出，不单独存。
+export function pageArea(page) {
+  return PAGE_AREAS.get(page) || null;
+}
 
 // 数据维护四个页签的直达命令（D-DC-01）。
 export const DATA_CARE_COMMANDS = [
@@ -69,10 +134,8 @@ export const DATA_CARE_COMMANDS = [
   { tab: 'health', label: '体检', keywords: ['health', 'check', '体检', '一致性'] }
 ];
 
-export const SETTINGS_NAV_PAGE = { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] };
-
-// 页面导航的全集（含设置）。
-const COMMAND_PAGES = [...APP_NAV_GROUPS.flatMap(group => group.pages), SETTINGS_NAV_PAGE];
+// 页面导航的全集：两个区域的全部页面（含设置），先观看后管理。
+const COMMAND_PAGES = [...navPages(VIEWER_NAV_GROUPS), ...navPages(MANAGE_NAV_GROUPS)];
 
 export function isNavPageVisible(page, settings) {
   return !page?.requiresBrowserBridge || Boolean(settings?.browser_bridge_enabled);
@@ -97,15 +160,16 @@ const COMMAND_SMART_VIEWS = [
 
 // 固定命令 ID → 宿主页（详细设计 §6.1）。命令由宿主页（或它的常挂载子组件）注册；宿主页可能
 // 还没挂载（人物页、图片页按需挂载），所以跳转前先切到宿主页、等它挂载完再按 ID 执行。
+// 片库与图片库的这些命令都是维护动作，宿主页记管理侧的 key（D-UI-03）：同一个常挂载实例，切过去即进管理区。
 export const COMMAND_HOST_PAGES = {
-  'library.openCleanup': 'videos',
-  'library.openAIReview': 'videos',
-  'library.openLocalMetadataUpdates': 'videos',
-  'library.openCollectionSuggestions': 'videos',
-  'library.openTrash': 'videos',
-  'library.openTagManager': 'videos',
-  'photos.openAIReview': 'photos',
-  'photos.openCleanup': 'photos',
+  'library.openCleanup': 'library-manage',
+  'library.openAIReview': 'library-manage',
+  'library.openLocalMetadataUpdates': 'library-manage',
+  'library.openCollectionSuggestions': 'library-manage',
+  'library.openTrash': 'library-manage',
+  'library.openTagManager': 'library-manage',
+  'photos.openAIReview': 'photos-manage',
+  'photos.openCleanup': 'photos-manage',
   'people.openFaceReview': 'people'
 };
 
@@ -115,7 +179,7 @@ const COMMAND_ENTITY_LIMIT = 50;
 // App.vue 的 navigateTo 可以直接切页（同步返回 true）、被拦下（false），或要先等用户确认
 // （返回 Promise<boolean>）。直接切页时 next 同步执行：命令面板里「打开作品集」之类的落点
 // 要在同一拍里交给实体页。
-function whenNavigated(result, next) {
+export function whenNavigated(result, next) {
   if (result === false) return false;
   if (result && typeof result.then === 'function') {
     return result.then(ok => (ok === false ? false : next()));
@@ -187,7 +251,7 @@ export const appCommandsMixin = {
       this.openCommandPalette();
     },
     // ⌘K：打开清理中心（D-PC59：「管理」菜单去掉清理审阅后，⌘K 改为走待处理工作台的清理入口，
-    // 也就是 library.openCleanup）。任何页面都能按：先切回片库页再打开。
+    // 也就是 library.openCleanup）。任何页面都能按：先切到片库管理（管理区）再打开。
     // 片库页自己也监听 ⌘K（它先挂载、先收到并 preventDefault），在片库页上这里让位；
     // 有弹窗开着时同片库页一样不响应，免得把清理中心叠在别的弹窗上。
     handleCleanupHotkey(event) {
@@ -407,23 +471,26 @@ export const appCommandsMixin = {
       };
       this.registerTaskCommands();
     },
+    // 智能视图与保存视图落在当前区域的片库页 key 上（观看侧「视频」、管理侧「片库管理」，同一个实例），
+    // 不为套一个筛选把用户换到另一侧。
+    libraryPageForCurrentArea() {
+      return pageArea(this.currentPage) === 'manage' ? 'library-manage' : 'videos';
+    },
     applySmartViewFromCommand(value) {
-      return whenNavigated(this.navigateTo('videos'), async () => {
+      return whenNavigated(this.navigateTo(this.libraryPageForCurrentArea()), async () => {
         await this.$nextTick();
         await this.$refs.videoListPage?.applySmartViewCommand(value);
       });
     },
     applySavedViewFromCommand(viewID) {
-      return whenNavigated(this.navigateTo('videos'), async () => {
+      return whenNavigated(this.navigateTo(this.libraryPageForCurrentArea()), async () => {
         await this.$nextTick();
         await this.$refs.videoListPage?.applySavedViewCommand(viewID);
       });
     },
+    // 命令面板不属于哪一侧，打开一部片按当前所在区域分流（D-UI-07，App.vue 的 openVideo）。
     openVideoFromCommand(video) {
-      return whenNavigated(this.navigateTo('videos'), async () => {
-        await this.$nextTick();
-        await this.$refs.videoListPage?.openPreview(video);
-      });
+      return this.openVideo(video, { from: COMMAND_PALETTE_SOURCE });
     },
     openSettingsSectionFromCommand(key) {
       return whenNavigated(this.navigateTo('settings'), async () => {
