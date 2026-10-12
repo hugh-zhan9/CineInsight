@@ -1217,6 +1217,24 @@ describe('「打开一部片」按调用方区域分流（D-UI-07）', () => {
     expect(wrapper.vm.detailReturnStack).toEqual([]);
   });
 
+  it('整页详情的标签、人物/作品集与「找相似画面」接到既有入口', async () => {
+    const { wrapper } = await onPage('home');
+    wrapper.findComponent({ name: 'HomePage' }).vm.$emit('open-video', 7);
+    await flushPromises();
+    const tag = vi.spyOn(wrapper.vm, 'openLibraryTag').mockResolvedValue();
+    const entity = vi.spyOn(wrapper.vm, 'openRecapEntity').mockResolvedValue();
+    const similar = vi.spyOn(wrapper.vm, 'openSimilarScenes').mockReturnValue(true);
+    await wrapper.vm.$forceUpdate();
+    const detail = wrapper.findComponent({ name: 'VideoDetailPage' });
+    detail.vm.$emit('open-tag', 3);
+    detail.vm.$emit('open-entity', { type: 'person', id: 9, name: '某人' });
+    detail.vm.$emit('find-similar', { videoID: 7, atMS: 1000, title: 'a' });
+    await flushPromises();
+    expect(tag).toHaveBeenCalledWith(3);
+    expect(entity).toHaveBeenCalledWith({ type: 'person', id: 9, name: '某人' });
+    expect(similar).toHaveBeenCalledWith({ videoID: 7, atMS: 1000, title: 'a' });
+  });
+
   it('视频不在片库里时说明原因，不切页', async () => {
     const { wrapper } = await onPage('recap');
     api.GetVideosByIDs.mockResolvedValue([]);

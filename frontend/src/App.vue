@@ -103,6 +103,9 @@
         @open-video="openVideoByID($event, { from: 'video-detail' })"
         @navigate="navigateTo"
         @edit-in-manage="editVideoInManage"
+        @open-tag="openLibraryTag"
+        @open-entity="openRecapEntity"
+        @find-similar="openSimilarScenes"
       />
       <ManageHomePage
         v-if="currentPage === 'manage-home'"

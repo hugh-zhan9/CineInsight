@@ -1,6 +1,6 @@
 <template>
-  <!-- 观看首页（D-UI-04）：各区块并行取数、各自加载与失败；没有数据的区块不显示。 -->
   <section class="page-content viewer-home" data-test="viewer-home">
+    <!-- 观看首页（D-UI-04）：各区块并行取数、各自加载与失败；没有数据的区块不显示。 -->
     <RecapBackdrop v-if="hero.state === 'ready'" :key="hero.key" :frames="hero.frames" :fallback="hero.fallback" data-test="home-hero">
       <div class="recap-hero__body">
         <p class="recap-hero__eyebrow"><RecapIcon :name="hero.icon" /> {{ hero.eyebrow }}</p>

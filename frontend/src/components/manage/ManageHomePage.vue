@@ -1,6 +1,6 @@
 <template>
-  <!-- 管理首页（D-UI-03）：四张统计卡点开对应动作；「最近的变化」只列本次会话收到的事件。 -->
   <section class="page-content manage-home" data-test="manage-home">
+    <!-- 管理首页（D-UI-03）：四张统计卡点开对应动作；「最近的变化」只列本次会话收到的事件。 -->
     <header class="manage-home__head">
       <h2>管理</h2>
       <p>维护片库：待处理的事、能回收的空间、在跑的任务和磁盘状态</p>
