@@ -51,6 +51,8 @@ export function BatchRemoveTagFromVideos(arg1:Array<number>,arg2:number):Promise
 
 export function CancelAIReviewApproval(arg1:string,arg2:string):Promise<void>;
 
+export function CancelAutomationRuleRun():Promise<services.AutomationRuleRunStatus>;
+
 export function CancelBatchDelete(arg1:string):Promise<boolean>;
 
 export function CancelBrowserDownloadTask(arg1:string):Promise<void>;
@@ -173,6 +175,8 @@ export function CreateVersionGroup(arg1:Array<number>,arg2:string):Promise<servi
 
 export function CreateWatchlistEntry(arg1:string,arg2:string):Promise<models.WatchlistEntry>;
 
+export function DeleteAutomationRule(arg1:number):Promise<void>;
+
 export function DeleteCollection(arg1:number):Promise<void>;
 
 export function DeleteDirectory(arg1:number):Promise<void>;
@@ -272,6 +276,8 @@ export function GetAllImageDirectories():Promise<Array<models.ImageDirectory>>;
 export function GetAllTags():Promise<Array<models.Tag>>;
 
 export function GetAutomaticOverrideKinds(arg1:Array<number>):Promise<Record<number, Array<string>>>;
+
+export function GetAutomationRuleRunStatus():Promise<services.AutomationRuleRunStatus>;
 
 export function GetBackgroundTasks():Promise<Array<string>>;
 
@@ -443,6 +449,8 @@ export function LinkMovieToVideo(arg1:string,arg2:number):Promise<void>;
 
 export function ListAITagCandidatePage(arg1:number,arg2:string,arg3:string,arg4:number,arg5:number):Promise<services.AITagCandidatePage>;
 
+export function ListAutomationRules():Promise<Array<services.AutomationRuleView>>;
+
 export function ListCleanupDismissals(arg1:string,arg2:number,arg3:number):Promise<services.CleanupDismissalPage>;
 
 export function ListCollectionSuggestions():Promise<Array<services.CollectionSuggestionView>>;
@@ -565,6 +573,8 @@ export function PrepareSubtitleEngine(arg1:services.SubtitleEngine):Promise<void
 
 export function PreviewAIReviewApproval(arg1:string,arg2:services.ReviewApprovalRequest):Promise<services.ReviewApprovalPreview>;
 
+export function PreviewAutomationRule(arg1:number):Promise<services.AutomationRulePreview>;
+
 export function PreviewCleanupConsolidation(arg1:services.CleanupConsolidationRequest):Promise<services.CleanupConsolidationPreview>;
 
 export function PreviewExternally(arg1:number):Promise<void>;
@@ -639,6 +649,8 @@ export function RenameTagCategory(arg1:string,arg2:string):Promise<void>;
 
 export function RenameVideo(arg1:number,arg2:string):Promise<void>;
 
+export function ReorderAutomationRules(arg1:Array<number>):Promise<void>;
+
 export function ReorderCollectionVideos(arg1:number,arg2:Array<number>):Promise<void>;
 
 export function ReorderVersionMembers(arg1:number,arg2:number,arg3:Array<number>):Promise<services.VersionGroupDetail>;
@@ -685,7 +697,11 @@ export function RevealDownload(arg1:string):Promise<services.BrowserDownloadActi
 
 export function RevealImage(arg1:number):Promise<void>;
 
+export function RunAutomationRules(arg1:Array<number>):Promise<services.AutomationRuleRunStatus>;
+
 export function RunGatedTaskNow(arg1:string):Promise<void>;
+
+export function SaveAutomationRule(arg1:services.AutomationRuleInput):Promise<services.AutomationRuleView>;
 
 export function SaveLibraryView(arg1:services.SavedLibraryViewInput):Promise<models.SavedLibraryView>;
 
@@ -728,6 +744,8 @@ export function SelectMigrationSourceDirectory():Promise<string>;
 export function SelectPersonAvatar():Promise<string>;
 
 export function SelectVideoFile():Promise<string>;
+
+export function SetAutomationRuleEnabled(arg1:number,arg2:boolean):Promise<services.AutomationRuleView>;
 
 export function SetCollectionCover(arg1:number,arg2:string):Promise<models.MediaCollection>;
 

@@ -283,7 +283,11 @@ func (s *AITaggingService) processVideoWithConfig(ctx context.Context, video mod
 	if err != nil {
 		return err
 	}
-	if hasNonAutomaticTags(video.Tags) {
+	ruleTags, err := automationRuleInsertedTagIDs(database.DB, AutomationMediaVideo, video.ID)
+	if err != nil {
+		return err
+	}
+	if hasNonAutomaticTags(video.Tags, ruleTags) {
 		if !explicit {
 			log.Printf("[AITagging] skip already tagged video_id=%d", video.ID)
 			return s.markState(video.ID, models.AITaggingStateStatusSkipped, "already_tagged", "", "")
@@ -394,9 +398,10 @@ func (s *AITaggingService) isExplicitRetry(videoID uint) (bool, error) {
 	return count > 0, nil
 }
 
-func hasNonAutomaticTags(tags []models.Tag) bool {
+// hasNonAutomaticTags 判断是否有人工标签：非自动标签里去掉规则真正插入的那些（ruleInserted，D-RA-04）。
+func hasNonAutomaticTags(tags []models.Tag, ruleInserted map[uint]bool) bool {
 	for _, tag := range tags {
-		if tag.AutomaticKind == "" {
+		if tag.AutomaticKind == "" && !ruleInserted[tag.ID] {
 			return true
 		}
 	}
@@ -405,6 +410,9 @@ func hasNonAutomaticTags(tags []models.Tag) bool {
 
 func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error) {
 	var videos []models.Video
+	// 规则真正插入的标签不算人工标签（D-RA-04）。
+	ruleInserted, ruleArgs := automationRuleInsertedTagExists(AutomationMediaVideo, "video_tags.video_id", "video_tags.tag_id")
+	manualArgs := append(ruleArgs, models.AITaggingStateStatusPending, aiTaggingSkipReasonManualRetry)
 	err := database.DB.Model(&models.Video{}).
 		Preload("Tags").
 		Where("is_stale = ?", false).
@@ -414,12 +422,13 @@ func (s *AITaggingService) findUntaggedVideos(limit int) ([]models.Video, error)
 			INNER JOIN tags ON tags.id = video_tags.tag_id
 			WHERE video_tags.video_id = videos.id
 				AND COALESCE(tags.automatic_kind, '') = ''
+				AND NOT `+ruleInserted+`
 		) OR EXISTS (
 			SELECT 1 FROM ai_tagging_states
 			WHERE ai_tagging_states.video_id = videos.id
 				AND ai_tagging_states.status = ?
 				AND ai_tagging_states.skip_reason = ?
-		))`, models.AITaggingStateStatusPending, aiTaggingSkipReasonManualRetry).
+		))`, manualArgs...).
 		Where("NOT EXISTS (SELECT 1 FROM ai_tag_candidates WHERE ai_tag_candidates.video_id = videos.id AND ai_tag_candidates.status = ?)", models.AITagCandidateStatusPending).
 		Where(`NOT EXISTS (
 			SELECT 1 FROM ai_tagging_states

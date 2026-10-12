@@ -133,10 +133,13 @@ func activeImageExistsInTx(tx *gorm.DB, imageID uint) error {
 // image_tags 里的非自动标签关联，减去审批记录里记着的（AI 接受产生的），剩下的就是手工的。
 // 这正是审批记录表存在的理由。
 func (s *ImageAITaggingService) hasManualOfficialImageTagsInTx(tx *gorm.DB, imageID uint) (bool, error) {
+	// 规则真正插入的标签不算手工标签（D-RA-04）：两边计数都不含它们。
+	ruleInserted, ruleArgs := automationRuleInsertedTagExists(AutomationMediaImage, "it.image_id", "it.tag_id")
 	var officialCount int64
 	if err := tx.Table("image_tags AS it").
 		Joins("INNER JOIN tags ON tags.id = it.tag_id").
 		Where("it.image_id = ? AND COALESCE(tags.automatic_kind, '') = ''", imageID).
+		Where("NOT "+ruleInserted, ruleArgs...).
 		Count(&officialCount).Error; err != nil {
 		return false, err
 	}
@@ -147,6 +150,7 @@ func (s *ImageAITaggingService) hasManualOfficialImageTagsInTx(tx *gorm.DB, imag
 	if err := tx.Table("image_tags AS it").
 		Joins("INNER JOIN image_ai_tag_approval_records AS ar ON ar.image_id = it.image_id AND ar.tag_id = it.tag_id").
 		Where("it.image_id = ?", imageID).
+		Where("NOT "+ruleInserted, ruleArgs...).
 		Count(&aiApprovedCount).Error; err != nil {
 		return false, err
 	}

@@ -94,6 +94,10 @@ export function CancelAIReviewApproval(arg1, arg2) {
   return window['go']['main']['App']['CancelAIReviewApproval'](arg1, arg2);
 }
 
+export function CancelAutomationRuleRun() {
+  return window['go']['main']['App']['CancelAutomationRuleRun']();
+}
+
 export function CancelBatchDelete(arg1) {
   return window['go']['main']['App']['CancelBatchDelete'](arg1);
 }
@@ -338,6 +342,10 @@ export function CreateWatchlistEntry(arg1, arg2) {
   return window['go']['main']['App']['CreateWatchlistEntry'](arg1, arg2);
 }
 
+export function DeleteAutomationRule(arg1) {
+  return window['go']['main']['App']['DeleteAutomationRule'](arg1);
+}
+
 export function DeleteCollection(arg1) {
   return window['go']['main']['App']['DeleteCollection'](arg1);
 }
@@ -536,6 +544,10 @@ export function GetAllTags() {
 
 export function GetAutomaticOverrideKinds(arg1) {
   return window['go']['main']['App']['GetAutomaticOverrideKinds'](arg1);
+}
+
+export function GetAutomationRuleRunStatus() {
+  return window['go']['main']['App']['GetAutomationRuleRunStatus']();
 }
 
 export function GetBackgroundTasks() {
@@ -878,6 +890,10 @@ export function ListAITagCandidatePage(arg1, arg2, arg3, arg4, arg5) {
   return window['go']['main']['App']['ListAITagCandidatePage'](arg1, arg2, arg3, arg4, arg5);
 }
 
+export function ListAutomationRules() {
+  return window['go']['main']['App']['ListAutomationRules']();
+}
+
 export function ListCleanupDismissals(arg1, arg2, arg3) {
   return window['go']['main']['App']['ListCleanupDismissals'](arg1, arg2, arg3);
 }
@@ -1122,6 +1138,10 @@ export function PreviewAIReviewApproval(arg1, arg2) {
   return window['go']['main']['App']['PreviewAIReviewApproval'](arg1, arg2);
 }
 
+export function PreviewAutomationRule(arg1) {
+  return window['go']['main']['App']['PreviewAutomationRule'](arg1);
+}
+
 export function PreviewCleanupConsolidation(arg1) {
   return window['go']['main']['App']['PreviewCleanupConsolidation'](arg1);
 }
@@ -1270,6 +1290,10 @@ export function RenameVideo(arg1, arg2) {
   return window['go']['main']['App']['RenameVideo'](arg1, arg2);
 }
 
+export function ReorderAutomationRules(arg1) {
+  return window['go']['main']['App']['ReorderAutomationRules'](arg1);
+}
+
 export function ReorderCollectionVideos(arg1, arg2) {
   return window['go']['main']['App']['ReorderCollectionVideos'](arg1, arg2);
 }
@@ -1362,8 +1386,16 @@ export function RevealImage(arg1) {
   return window['go']['main']['App']['RevealImage'](arg1);
 }
 
+export function RunAutomationRules(arg1) {
+  return window['go']['main']['App']['RunAutomationRules'](arg1);
+}
+
 export function RunGatedTaskNow(arg1) {
   return window['go']['main']['App']['RunGatedTaskNow'](arg1);
+}
+
+export function SaveAutomationRule(arg1) {
+  return window['go']['main']['App']['SaveAutomationRule'](arg1);
 }
 
 export function SaveLibraryView(arg1) {
@@ -1448,6 +1480,10 @@ export function SelectPersonAvatar() {
 
 export function SelectVideoFile() {
   return window['go']['main']['App']['SelectVideoFile']();
+}
+
+export function SetAutomationRuleEnabled(arg1, arg2) {
+  return window['go']['main']['App']['SetAutomationRuleEnabled'](arg1, arg2);
 }
 
 export function SetCollectionCover(arg1, arg2) {

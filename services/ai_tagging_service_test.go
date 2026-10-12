@@ -38,7 +38,7 @@ func TestAutomaticTagsDoNotMakeVideoIneligibleForAITagging(t *testing.T) {
 	if len(videos) != 1 || videos[0].ID != video.ID {
 		t.Fatalf("只有自动标签的视频仍应进入 AI 打标: %+v", videos)
 	}
-	if hasNonAutomaticTags(videos[0].Tags) {
+	if hasNonAutomaticTags(videos[0].Tags, nil) {
 		t.Fatalf("自动标签不应被识别为人工/正式标签: %+v", videos[0].Tags)
 	}
 }

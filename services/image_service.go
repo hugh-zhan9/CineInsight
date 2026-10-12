@@ -26,6 +26,26 @@ var imagePathMutationMu sync.RWMutex
 // ImageService 图片实体生命周期服务（设计 4.1：扫描对账与目录管理）。
 type ImageService struct {
 	scanSyncMu sync.Mutex
+	// newImageObserver 在新建图片记录（入库 EXIF 解析之后）时收到 id，供规则队列入队（D-RA-05）。
+	newImageObserverMu sync.RWMutex
+	newImageObserver   func(uint)
+}
+
+// SetNewImageObserver 注入「新建了一条图片记录」的观察者。只对新建的行触发（扫描器自动恢复、搬家纠偏不触发）；
+// 观察者只能记 id，调用方此时可能持有图片路径锁。
+func (s *ImageService) SetNewImageObserver(observer func(uint)) {
+	s.newImageObserverMu.Lock()
+	s.newImageObserver = observer
+	s.newImageObserverMu.Unlock()
+}
+
+func (s *ImageService) notifyNewImage(imageID uint) {
+	s.newImageObserverMu.RLock()
+	observer := s.newImageObserver
+	s.newImageObserverMu.RUnlock()
+	if observer != nil {
+		observer(imageID)
+	}
 }
 
 func NewImageService() *ImageService {
@@ -596,6 +616,7 @@ func (s *ImageService) addImage(path string) (*models.Image, error) {
 	if _, err := refreshImageEXIF(database.DB, image.ID, image.Path, time.Now); err != nil {
 		log.Printf("[ImageEXIF] 入库解析失败 image=%d path=%s err=%v", image.ID, image.Path, err)
 	}
+	s.notifyNewImage(image.ID)
 	log.Printf("新增图片 path=%s", path)
 	return image, nil
 }
