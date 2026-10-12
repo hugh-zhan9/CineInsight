@@ -245,13 +245,25 @@ describe('工具栏三层重排', () => {
     expect(items.filter(item => item.heading).map(item => item.heading)).toEqual(['扫描', '整理', '补全', '维护']);
     expect(items.filter(item => item.id).map(item => item.id)).toEqual([
       'scan-new', 'scan-incremental',
-      'move-folder', 'rename-folder', 'export-nfo',
+      'move-folder', 'rename-folder', 'export-nfo', 'batch-edit-filter',
       'backfill-technical', 'backfill-phash', 'backfill-playback-proxy', 'backfill-local-metadata',
       'tag-manager', 'collection-suggestions', 'version-groups', 'trash'
     ]);
     const manage = wrapper.findAll('button').find(button => button.text().startsWith('管理'));
     expect(manage.find('.toolbar-btn__badge').exists()).toBe(false);
     wrapper.unmount();
+  });
+
+  it('D-MC-04 管理菜单有「批量编辑当前筛选…」，不用先选中；列表不是筛选结果时不给', async () => {
+    const wrapper = mountToolbar();
+    const item = wrapper.vm.manageMenuItems.find(entry => entry.id === 'batch-edit-filter');
+    expect(item.label).toBe('批量编辑当前筛选…');
+    wrapper.vm.onManageSelect(item);
+    expect(wrapper.emitted('manage-select')[0]).toEqual([item]);
+    wrapper.unmount();
+    const hidden = mountToolbar({ filterBatchEditAvailable: false });
+    expect(hidden.vm.manageMenuItems.some(entry => entry.id === 'batch-edit-filter')).toBe(false);
+    hidden.unmount();
   });
 
   it('「为当前筛选生成代理」在任务运行时显示进度并置灰', async () => {

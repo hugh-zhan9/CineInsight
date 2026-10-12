@@ -963,12 +963,15 @@ export default {
       return [
         { heading: '扫描' },
         { id: 'scan', label: this.scanning ? '立即扫描（进行中）' : '立即扫描', disabled: this.scanning },
+        ...(this.metadataBatchFilterUsable ? [{ heading: '整理' }, { id: 'batch-edit-filter', label: '批量编辑当前筛选…' }] : []),
         { heading: '维护' },
         { id: 'cleanup', label: cleanup },
         { id: 'ai-tags', label: this.aiTagPending > 0 ? `AI 标签审阅（待审 ${this.aiTagPending}）` : 'AI 标签审阅' },
         { id: 'trash', label: '回收站' }
       ];
     },
+    // 列表是不是「当前筛选」的结果：语义搜索不是；文件夹总览列的是图集不是图片。这两种情况批量编辑不给筛选范围。
+    metadataBatchFilterUsable() { return this.searchMode !== 'semantic' && !this.folderModeRoot; },
     hasMore() { return !this.folderModeRoot && !this.exhausted && this.loadedOnce; },
     folderModeRoot() { return this.displayMode === 'folders' && !this.activeFolder; },
     folderModeActive() { return this.displayMode === 'folders' && Boolean(this.activeFolder); },
@@ -1246,6 +1249,7 @@ export default {
         case 'cleanup': this.openCleanup(); break;
         case 'ai-tags': this.openAITagReview(); break;
         case 'trash': this.openTrashDialog(); break;
+        case 'batch-edit-filter': this.openMetadataBatchEditForFilter(); break;
         default: break;
       }
     },
@@ -2066,8 +2070,13 @@ export default {
     // 「批量编辑…」：所选图片，或当前筛选的全部结果。语义搜索列出的不是筛选结果，这时只提供「所选」。
     openMetadataBatchEdit() {
       if (!this.selectedImageIDs.length) return;
-      const filter = this.searchMode === 'semantic' ? null : this.buildFilter();
+      const filter = this.metadataBatchFilterUsable ? this.buildFilter() : null;
       this.metadataBatchEdit = { ids: [...this.selectedImageIDs], filter };
+    },
+    // 管理菜单「批量编辑当前筛选…」：不需要先选中，范围就是当前筛选的全部结果。
+    openMetadataBatchEditForFilter() {
+      if (!this.metadataBatchFilterUsable) return;
+      this.metadataBatchEdit = { ids: [], filter: this.buildFilter() };
     },
     // 图片元数据被批量改过（这里的批量编辑与撤销，或数据维护 · 完整度里的撤销）：亮出「图片库有更新」
     // 提示条，由用户决定何时重载（自动重载会冲掉滚动位置）；标签筛选栏随之重取。

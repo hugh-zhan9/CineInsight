@@ -45,6 +45,7 @@
       :tag-bg-color="tagBgColor"
       :library-filter-from="libraryFilterFrom"
       :collapse-versions="collapseVersions"
+      :filter-batch-edit-available="metadataBatchFilterUsable"
       @update:collapse-versions="setCollapseVersions"
       @batch-version-group="mergeSelectedAsVersionGroup"
       @batch-compare="compareSelectedVideos"
@@ -87,6 +88,7 @@
       :selected-ids="metadataBatchEdit.ids"
       :filter="metadataBatchEdit.filter"
       :tags="tags"
+      :collapsed-versions="metadataBatchEdit.collapsed"
       @close="metadataBatchEdit = null"
       @applied="handleMetadataBatchEdited"
       @undone="handleMetadataBatchEdited"
@@ -937,6 +939,10 @@ export default {
     this.teardownRuntimeEvents();
   },
   computed: {
+    // 列表是不是「当前筛选」的结果：语义检索、随机批次与相似视频不是，这时批量编辑不提供筛选范围。
+    metadataBatchFilterUsable() {
+      return this.searchMode !== 'semantic' && !this.randomPick.active && !this.semanticSimilarVideoID;
+    },
     randomPickSize() {
       return RANDOM_PICK_SIZE;
     },
@@ -1773,6 +1779,7 @@ export default {
         case 'move-folder': this.moveFolder(); break;
         case 'rename-folder': this.renameFolder(); break;
         case 'export-nfo': this.startLocalMetadataExport(); break;
+        case 'batch-edit-filter': this.openMetadataBatchEditForFilter(); break;
         case 'backfill-technical': this.startTechnicalBackfill(); break;
         case 'backfill-phash': this.startPerceptualHashBackfill(); break;
         case 'backfill-playback-proxy': this.createProxiesForCurrentFilter(); break;
@@ -2958,11 +2965,16 @@ export default {
       }
     },
     // 「批量编辑…」：所选条目，或当前筛选的全部结果。语义检索、随机批次与相似视频列出的不是筛选结果，
-    // 这时只提供「所选」。
+    // 这时只提供「所选」。折叠版本时筛选范围仍是全部版本，对话框据 collapsed 说明总数里含折叠的版本。
     openMetadataBatchEdit() {
       if (this.selectedVideoIds.length === 0) return;
-      const filterUsable = this.searchMode !== 'semantic' && !this.randomPick.active && !this.semanticSimilarVideoID;
-      this.metadataBatchEdit = { ids: [...this.selectedVideoIds], filter: filterUsable ? this.currentLibraryFilter() : null };
+      const filter = this.metadataBatchFilterUsable ? this.currentLibraryFilter() : null;
+      this.metadataBatchEdit = { ids: [...this.selectedVideoIds], filter, collapsed: this.versionCollapseActive() };
+    },
+    // 管理菜单「批量编辑当前筛选…」：不需要先选中，范围就是当前筛选的全部结果。
+    openMetadataBatchEditForFilter() {
+      if (!this.metadataBatchFilterUsable) return;
+      this.metadataBatchEdit = { ids: [], filter: this.currentLibraryFilter(), collapsed: this.versionCollapseActive() };
     },
     // 批量编辑或撤销之后：按当前条件原地重取，结果条的计数一并重取。
     async handleMetadataBatchEdited() {
