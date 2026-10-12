@@ -107,8 +107,14 @@ const LINKS = {
 };
 const PROGRESS_EVENT = 'data-health-progress';
 
+// 只认后端的固定中文提示；其余错误（含数据库原始报错、路径）一律换成固定说法（G-3）。
+const KNOWN_ERRORS = ['数据体检或修复正在进行，请等它结束', '数据体检已取消'];
 function errorText(err) {
-  return String(err?.message || err || '').trim();
+  const text = String(err?.message || err || '').trim();
+  const known = KNOWN_ERRORS.find(message => text.includes(message));
+  if (known) return known;
+  if (/maintenance|维护/i.test(text)) return '数据库正在维护，请稍后再试';
+  return '操作没有完成，请稍后重试';
 }
 
 export default {
