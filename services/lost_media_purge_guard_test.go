@@ -106,8 +106,9 @@ func TestLostMediaPurgeCancelWhileWaitingForLock(t *testing.T) {
 	service.Cancel()
 	select {
 	case result := <-done:
-		if result == nil || !result.Cancelled || result.Failed != 0 || result.Done != 0 || len(result.Items) != 1 ||
-			result.Items[0].Outcome != LostOutcomeCancelled {
+		// 取消可能落在这一条开始等锁之前（这时没有条目结果）；不可取消的等锁会一直挂住，由下面的超时抓住。
+		if result == nil || !result.Cancelled || result.Failed != 0 || result.Done != 0 || len(result.Items) > 1 ||
+			(len(result.Items) == 1 && result.Items[0].Outcome != LostOutcomeCancelled) {
 			t.Fatalf("等锁时取消应报已取消、未处理: %+v", result)
 		}
 	case <-time.After(5 * time.Second):
@@ -138,7 +139,8 @@ func TestLostMediaImageRelinkCancelWhileWaitingForLock(t *testing.T) {
 	service.Cancel()
 	select {
 	case result := <-done:
-		if result == nil || !result.Cancelled || result.Failed != 0 || len(result.Items) != 1 || result.Items[0].Outcome != LostOutcomeCancelled {
+		if result == nil || !result.Cancelled || result.Failed != 0 || len(result.Items) > 1 ||
+			(len(result.Items) == 1 && result.Items[0].Outcome != LostOutcomeCancelled) {
 			t.Fatalf("等图片锁时取消应报已取消、未处理: %+v", result)
 		}
 	case <-time.After(5 * time.Second):

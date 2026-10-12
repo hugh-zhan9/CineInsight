@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"video-master/database"
 	"video-master/models"
 
@@ -174,6 +175,10 @@ func (s *LostMediaService) relinkLocked(ctx context.Context, kind string, pair L
 	}
 	if reason := classifier.reason(row); !lostReasonActionable(reason) {
 		return "", lostSkipForReason(reason)
+	}
+	// relocateVideoRecord 会去掉首尾空白再写库：首尾带空白的文件名在这里校验的和写进库的不是同一个文件，直接跳过。
+	if strings.TrimSpace(pair.NewPath) != pair.NewPath {
+		return "", lostSkip(LostSkipTargetMissing)
 	}
 	newPath := filepath.Clean(pair.NewPath)
 	info, statErr := os.Stat(newPath)
