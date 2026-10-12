@@ -106,6 +106,10 @@ type BackupStatus struct {
 	// 「上次还原整理文件中途中断、已改回」说明。两者都不落库。
 	FilesWarning string `json:"files_warning"`
 	Notice       string `json:"notice"`
+	// RecoveryPending：上次还原整理文件的现场没收拾完（标记还在），新的恢复会被拒绝；RecoveryLeftovers 是旁边还留着
+	// 恢复前副本或暂存文件的收录目录（叫法 + 相对位置）。设置页据此提供「放弃收拾，允许恢复」。
+	RecoveryPending   bool     `json:"recovery_pending"`
+	RecoveryLeftovers []string `json:"recovery_leftovers"`
 }
 
 type postgresToolRunner interface {
@@ -173,6 +177,12 @@ type BackupService struct {
 	rename func(from, to string) error
 	// volumeOf 返回路径所在卷的标识，恢复前按卷合计空间需求；测试用它模拟多块盘。为空时用 backupVolumeID。
 	volumeOf func(path string) (string, error)
+	// blockSizeOf 返回路径所在卷的分配块大小；测试用它模拟大块文件系统。为空时用 backupBlockSize。
+	blockSizeOf func(path string) int64
+	// beforeUnpack 在还原文件包、开始往暂存目录解包之前调用；afterMarkerWritten 在写下 staging 标记之后、建暂存目录
+	// 之前调用。测试用它们观察顺序（或模拟在此处出错）。
+	beforeUnpack       func()
+	afterMarkerWritten func()
 }
 
 // ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。
@@ -256,6 +266,7 @@ func (s *BackupService) statusFromSettings(settings *models.Settings) BackupStat
 	s.registryMu.Lock()
 	status.FilesWarning, status.Notice = s.filesWarning, s.notice
 	s.registryMu.Unlock()
+	status.RecoveryPending, status.RecoveryLeftovers = s.pendingFilesRestoreLeftovers()
 	status.BackupDirectory = s.resolveDirectory(settings.BackupDirectory)
 	status.RetentionCount = normalizedBackupRetention(settings.BackupRetentionCount)
 	status.IntervalHours = normalizedBackupInterval(settings.BackupIntervalHours)
@@ -427,6 +438,10 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 		return s.recordedRestoreFailure(fmt.Errorf(
 			"备份文件与当前数据库后端不匹配，数据库未被修改：当前是 %s，而 %s 是另一种后端的快照",
 			backend, request.Name))
+	}
+	// 上次还原整理文件若中途中断，先按标记收拾；收拾不完就不开始这次恢复（审阅 M2）。
+	if err := s.ensureNoPendingFilesRestore(); err != nil {
+		return s.recordedRestoreFailure(err)
 	}
 	// 有清单的先查表结构（D-DH-03）：来自更新版本的备份在进入维护之前就拒绝。
 	manifest, err := s.restorableManifest(ctx, directory, request.Name, backend)
@@ -1081,7 +1096,8 @@ func (s *BackupService) writeAttempt(maintenanceAccess, success bool, operationE
 		updates["backup_last_success_at"] = &now
 		updates["backup_last_error"] = ""
 	} else if operationErr != nil {
-		message := operationErr.Error()
+		// 设置页把它显示成「最近失败」：落库前擦掉绝对路径（G-3）。
+		message := WithoutAbsolutePaths(operationErr).Error()
 		if len(message) > 1000 {
 			message = message[:1000]
 		}
