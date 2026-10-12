@@ -7,7 +7,7 @@
         <p class="rules-muted">新入库的条目自动套用启用的规则：只加标签、加入作品集，只加不撤，你手动去掉的不会再加回来；规则不移动、不改名、不删除文件。新建或修改规则不会自动处理已有内容，要点「对现有内容运行」。</p>
       </div>
       <div class="rules-head__actions">
-        <button type="button" class="btn-secondary" :disabled="running || !enabledIDs.length" data-test="rules-run-all" @click="runRules(enabledIDs)">对现有内容运行</button>
+        <button type="button" class="btn-secondary" :disabled="running || !enabledIDs.length" data-test="rules-run-all" @click="openRunAll">对现有内容运行…</button>
         <button type="button" class="btn-primary" data-test="rules-new" @click="openEditor(null)">新建规则</button>
       </div>
     </header>
@@ -79,6 +79,27 @@
         </div>
       </div>
     </div>
+
+    <!-- D-RA-01「先预览再执行」：逐条规则先算会处理多少条，确认后才运行。 -->
+    <div v-if="runAll" class="modal-overlay" data-test="rules-run-all-dialog" @click.self="runAll = null">
+      <div class="modal rules-preview" role="dialog" aria-modal="true" aria-label="对现有内容运行">
+        <h2>对现有内容运行</h2>
+        <p class="rules-muted">只处理还没被这些规则处理过的条目；已完成的部分在取消后保留。</p>
+        <ul class="rules-samples">
+          <li v-for="item in runAll.items" :key="item.rule.id" class="rules-run-all__row" data-test="rules-run-all-item">
+            <span class="rules-sample__name">{{ item.rule.name }}</span>
+            <small v-if="item.loading" class="rules-muted">正在计算…</small>
+            <small v-else-if="item.error" class="rules-warning">{{ item.error }}</small>
+            <small v-else data-test="rules-run-all-count">{{ item.count }} 条</small>
+          </li>
+        </ul>
+        <p v-if="!runAllLoading" data-test="rules-run-all-total">合计 <strong>{{ runAllTotal }}</strong> 条<span v-if="runAll.items.length > 1" class="rules-muted">（同一条目符合几条规则时分别计数）</span></p>
+        <div class="modal-actions">
+          <button type="button" class="btn-secondary" data-test="rules-run-all-cancel" @click="runAll = null">取消</button>
+          <button type="button" class="btn-primary" :disabled="runAllLoading || !runAllTotal || running" data-test="rules-run-all-confirm" @click="confirmRunAll">执行</button>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
@@ -108,6 +129,8 @@ export default {
       collections: [],
       editor: null,
       previewState: null,
+      // 「对现有内容运行」的确认框：{ items: [{ rule, loading, count, error }] }。
+      runAll: null,
       runStatus: null,
       runEventOff: null
     };
@@ -118,6 +141,12 @@ export default {
     },
     running() {
       return Boolean(this.runStatus?.running);
+    },
+    runAllLoading() {
+      return Boolean(this.runAll?.items.some(item => item.loading));
+    },
+    runAllTotal() {
+      return (this.runAll?.items || []).reduce((sum, item) => sum + (item.count || 0), 0);
     },
     runText() {
       const status = this.runStatus;
@@ -270,6 +299,27 @@ export default {
         state.loading = false;
       }
     },
+    // openRunAll 先逐条预览启用的规则（D-RA-01 先预览再执行），确认后只跑有条目要处理的规则。
+    async openRunAll() {
+      const rules = this.rules.filter(rule => this.enabledIDs.includes(rule.id));
+      this.runAll = { items: rules.map(rule => ({ rule, loading: true, count: 0, error: '' })) };
+      const state = this.runAll;
+      await Promise.all(state.items.map(async item => {
+        try {
+          const preview = await PreviewAutomationRule(item.rule.id);
+          item.count = preview?.count || 0;
+        } catch (err) {
+          item.error = parseRuleError(err).message;
+        } finally {
+          item.loading = false;
+        }
+      }));
+    },
+    async confirmRunAll() {
+      const ids = (this.runAll?.items || []).filter(item => !item.error && item.count > 0).map(item => item.rule.id);
+      this.runAll = null;
+      await this.runRules(ids);
+    },
     async runFromPreview() {
       const rule = this.previewState?.rule;
       this.previewState = null;
@@ -323,4 +373,5 @@ export default {
 .rules-sample__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; font-size: 13px; color: var(--text-primary); background: none; border: 0; padding: 0; }
 button.rules-sample__name { cursor: pointer; color: var(--accent-color); }
 .rules-samples small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rules-run-all__row { grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; gap: 12px; }
 </style>

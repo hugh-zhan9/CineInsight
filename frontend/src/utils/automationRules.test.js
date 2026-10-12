@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  actionSummary, conditionSummary, conditionTypesFor, fieldRow, formToInput, parseRuleError, ruleSummary, ruleToForm
+  actionSummary, conditionSummary, conditionTypesFor, fieldRow, formToInput, parseRuleError, RULE_ERROR_FALLBACK, ruleSummary, ruleToForm
 } from './automationRules.js';
 
 const MB = 1024 * 1024;
@@ -64,6 +64,9 @@ describe('本地规则 · 前端纯函数', () => {
     });
     expect(parseRuleError(new Error('rule_not_found')).code).toBe('rule_not_found');
     expect(parseRuleError('automation_run_busy').message).toBe('已有一次规则运行在进行中');
+    // 其余错误不显示后端原文（可能带路径）；数据库维护中给中文说明。
+    expect(parseRuleError('open /Users/me/lib/x.db: permission denied')).toEqual({ code: '', field: '', message: RULE_ERROR_FALLBACK });
+    expect(parseRuleError('database is in maintenance mode').message).toContain('数据库正在恢复备份');
     expect(fieldRow('actions[2].tag_id')).toEqual({ list: 'actions', index: 2 });
     expect(fieldRow('name')).toBeNull();
   });

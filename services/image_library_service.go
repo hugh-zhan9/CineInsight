@@ -661,6 +661,10 @@ func (s *ImageLibraryService) AddTagToImage(imageID uint, tagID uint) error {
 		if err := tx.Model(&image).Association("Tags").Append(&tag); err != nil {
 			return err
 		}
+		// 用户手动加的标签归用户：规则插入的同一关系不再算规则标签（D-RA-04）。
+		if err := claimRuleInsertedTagsTx(tx, AutomationMediaImage, []uint{imageID}, tagID); err != nil {
+			return err
+		}
 		if _, err := SupersedeImageCandidatesForManualTag(tx, imageID, tagID); err != nil {
 			return fmt.Errorf("作废对应的 AI 候选失败: %w", err)
 		}

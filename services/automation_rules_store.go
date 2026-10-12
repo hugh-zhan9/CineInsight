@@ -207,11 +207,18 @@ func (s *AutomationRuleService) automationRuleView(id uint) (AutomationRuleView,
 	return AutomationRuleView{}, ErrAutomationRuleNotFound
 }
 
-// DeleteAutomationRule 删除规则与它的账本（D-RA-03）；它加过的标签与作品集关系不撤。
-// 账本外键带级联，这里仍在同一事务里显式删账本，不依赖连接上是否开着外键检查。
+// DeleteAutomationRule 删除规则；它加过的标签与作品集关系不撤（D-RA-03）。
+// 账本里它真正插入过标签的行改成无主（rule_id 置空）留下：AI 自动打标仍要把这些标签当规则标签排除
+// （D-RA-04），否则删一条规则就会让它加过的标签变成「人工标签」。其余账本行没有用处，删掉。
+// 新库的外键是 ON DELETE SET NULL；老库表 AutoMigrate 不改外键（SQLite 实测仍是 CASCADE），
+// 所以这里在删规则之前显式改写，不依赖外键动作。
 func (s *AutomationRuleService) DeleteAutomationRule(id uint) error {
 	return database.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("rule_id = ?", id).Delete(&models.AutomationRuleWrite{}).Error; err != nil {
+		if err := tx.Where("rule_id = ? AND NOT (action = ? AND inserted = ?)", id, automationWriteTag, true).
+			Delete(&models.AutomationRuleWrite{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&models.AutomationRuleWrite{}).Where("rule_id = ?", id).Update("rule_id", nil).Error; err != nil {
 			return err
 		}
 		result := tx.Where("id = ?", id).Delete(&models.AutomationRule{})
