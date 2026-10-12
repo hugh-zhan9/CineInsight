@@ -9,7 +9,7 @@
           将清除 {{ preview.count }} 条{{ kindNoun }}记录（原文件约 {{ formatBytes(preview.size) }}，已经找不到）。清除不可撤销，也不进废纸篓。
         </p>
         <p v-if="preview.not_purgeable" class="lost-purge__muted" data-test="lost-purge-not-purgeable">
-          另有 {{ preview.not_purgeable }} 条现在不能清除（卷未挂载、读取出错或已不再失联），不会处理。
+          另有 {{ preview.not_purgeable }} 条现在不能清除，不会处理：{{ notPurgeableText }}。
         </p>
         <ul class="lost-purge__impact" data-test="lost-purge-impact">
           <li v-for="row in impactRows" :key="row.key" :data-test="`lost-purge-impact-${row.key}`">
@@ -50,7 +50,7 @@
 <script>
 import { ApplyLostPurge, CancelLostMediaTask, PreviewLostPurge } from '../../../wailsjs/go/main/App';
 import { formatBytes } from '../../utils/mediaDetails.js';
-import { LOST_PURGE_CONFIRM_TEXT, lostMediaErrorText, skippedSummary } from '../../utils/lostMedia.js';
+import { LOST_PURGE_CONFIRM_TEXT, LOST_SKIP_LABELS, lostMediaErrorText, skippedSummary } from '../../utils/lostMedia.js';
 
 export default {
   name: 'LostPurgeDialog',
@@ -90,6 +90,10 @@ export default {
     },
     skipped() {
       return skippedSummary(this.result);
+    },
+    notPurgeableText() {
+      return Object.entries(this.preview?.skipped || {})
+        .map(([reason, count]) => `${LOST_SKIP_LABELS[reason] || '其他原因'} ${count} 条`).join('、');
     }
   },
   async mounted() {
@@ -107,9 +111,11 @@ export default {
       if (!this.canApply) return;
       this.applying = true;
       this.error = '';
+      // 只执行预览时通过复核、计入了上面这些数字的条目（执行时还会再复核一次）。
+      const ids = [...(this.preview.ids || [])];
       try {
-        this.result = await ApplyLostPurge({ kind: this.kind, ids: this.ids, confirm: this.typed });
-        this.$emit('done', this.result);
+        this.result = await ApplyLostPurge({ kind: this.kind, ids, confirm: this.typed });
+        this.$emit('done', this.result, ids);
       } catch (err) {
         this.error = lostMediaErrorText(err, '清除没有完成，请稍后重试。');
       } finally {

@@ -42,9 +42,16 @@ func removeFromVersionGroupTx(tx *gorm.DB, videoID uint, now time.Time) error {
 	return tx.Where("id = ?", group.ID).Delete(&models.VideoVersionGroup{}).Error
 }
 
-// deleteLostReferencesTx 删掉没有外键、硬删不会带走的引用行，返回被删掉的人脸观测（提交后删它们的裁剪图）。
-// 人脸观测删掉后在同一事务里按实际观测重算受影响的簇（recomputeFaceClustersTx）。
-func deleteLostReferencesTx(ctx context.Context, tx *gorm.DB, kind string, id uint) ([]models.FaceObservation, error) {
+// lostReferenceCleanup 是事务里删掉的、提交后还要收尾的东西：人脸观测（删裁剪图）与播放队列是否变了（通知队列面板）。
+type lostReferenceCleanup struct {
+	observations []models.FaceObservation
+	queueChanged bool
+}
+
+// deleteLostReferencesTx 删掉没有外键、硬删不会带走的引用行。人脸观测删掉后在同一事务里按实际观测重算受影响的簇
+// （recomputeFaceClustersTx）。
+func deleteLostReferencesTx(ctx context.Context, tx *gorm.DB, kind string, id uint) (lostReferenceCleanup, error) {
+	var cleanup lostReferenceCleanup
 	execs := [][]any{}
 	if kind == LostMediaKindVideo {
 		execs = append(execs,
@@ -62,62 +69,63 @@ func deleteLostReferencesTx(ctx context.Context, tx *gorm.DB, kind string, id ui
 	)
 	for _, statement := range execs {
 		if err := tx.Exec(statement[0].(string), statement[1:]...).Error; err != nil {
-			return nil, err
+			return cleanup, err
 		}
 	}
-	var observations []models.FaceObservation
 	if err := tx.Select("id", "crop_path", "cluster_id").Where("media_kind = ? AND media_id = ?", kind, id).
-		Find(&observations).Error; err != nil {
-		return nil, err
+		Find(&cleanup.observations).Error; err != nil {
+		return cleanup, err
 	}
-	if len(observations) > 0 {
+	if len(cleanup.observations) > 0 {
 		if err := tx.Where("media_kind = ? AND media_id = ?", kind, id).Delete(&models.FaceObservation{}).Error; err != nil {
-			return nil, err
+			return cleanup, err
 		}
-		if _, err := recomputeFaceClustersTx(ctx, tx, faceClusterIDsOf(observations)); err != nil {
-			return nil, err
+		if _, err := recomputeFaceClustersTx(ctx, tx, faceClusterIDsOf(cleanup.observations)); err != nil {
+			return cleanup, err
 		}
 	}
 	if kind == LostMediaKindVideo {
-		if err := deleteQueueEntriesForVideoTx(tx, id); err != nil {
-			return nil, err
+		changed, err := deleteQueueEntriesForVideoTx(tx, id)
+		if err != nil {
+			return cleanup, err
 		}
+		cleanup.queueChanged = changed
 		// 观影日记按设计比视频活得久，只把它对这条视频播放记录的引用置空（播放记录随外键级联删除）。
 		if err := tx.Exec("UPDATE viewing_diary_entries SET source_play_event_id = NULL WHERE source_play_event_id IN (SELECT id FROM play_events WHERE video_id = ?)", id).Error; err != nil {
-			return nil, err
+			return cleanup, err
 		}
 	}
-	return observations, nil
+	return cleanup, nil
 }
 
 // deleteQueueEntriesForVideoTx 删掉播放队列里这条视频的条目；当前条目被删时队列回到空闲（与「移出队列」同口径），
-// 有删除就让队列 revision +1，打开着的队列面板重读。
-func deleteQueueEntriesForVideoTx(tx *gorm.DB, videoID uint) error {
+// 有删除就让队列 revision +1，并报告队列变了（提交后发 playback-queue-state，打开着的队列面板重读）。
+func deleteQueueEntriesForVideoTx(tx *gorm.DB, videoID uint) (bool, error) {
 	var entryIDs []uint
 	if err := tx.Model(&models.PlaybackQueueEntry{}).Where("video_id = ?", videoID).Pluck("id", &entryIDs).Error; err != nil {
-		return err
+		return false, err
 	}
 	if len(entryIDs) == 0 {
-		return nil
+		return false, nil
 	}
 	if err := tx.Where("id IN ?", entryIDs).Delete(&models.PlaybackQueueEntry{}).Error; err != nil {
-		return err
+		return false, err
 	}
 	var state models.PlaybackQueueState
 	found := tx.Where("id = ?", 1).Limit(1).Find(&state)
 	if found.Error != nil || found.RowsAffected == 0 {
-		return found.Error
+		return found.Error == nil, found.Error
 	}
 	if state.CurrentEntryID != nil {
 		for _, entryID := range entryIDs {
 			if *state.CurrentEntryID == entryID {
 				if err := resetQueueCurrent(tx); err != nil {
-					return err
+					return false, err
 				}
 				break
 			}
 		}
 	}
-	return tx.Model(&models.PlaybackQueueState{}).Where("id = ?", 1).
+	return true, tx.Model(&models.PlaybackQueueState{}).Where("id = ?", 1).
 		Updates(map[string]any{"revision": gorm.Expr("revision + 1"), "updated_at": time.Now()}).Error
 }

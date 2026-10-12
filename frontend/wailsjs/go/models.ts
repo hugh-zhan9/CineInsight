@@ -8165,9 +8165,11 @@ export namespace services {
 	
 	export class LostPurgePreview {
 	    kind: string;
+	    ids: number[];
 	    count: number;
 	    size: number;
 	    not_purgeable: number;
+	    skipped: Record<string, number>;
 	    play_events: number;
 	    image_view_events: number;
 	    tag_links: number;
@@ -8186,9 +8188,11 @@ export namespace services {
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.kind = source["kind"];
+	        this.ids = source["ids"];
 	        this.count = source["count"];
 	        this.size = source["size"];
 	        this.not_purgeable = source["not_purgeable"];
+	        this.skipped = source["skipped"];
 	        this.play_events = source["play_events"];
 	        this.image_view_events = source["image_view_events"];
 	        this.tag_links = source["tag_links"];

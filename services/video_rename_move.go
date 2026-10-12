@@ -33,6 +33,18 @@ func (s *VideoService) relocateVideo(id uint, newPath string) error {
 }
 func (s *VideoService) relocateVideoFrom(db *gorm.DB, id uint, newPath string) error {
 	newPath = filepath.Clean(strings.TrimSpace(newPath))
+	if err := s.relocateVideoRecord(db, id, newPath); err != nil {
+		return err
+	}
+	s.refreshRelocatedVideo(db, id, newPath)
+	log.Printf("视频迁移并更新元数据 id=%d newPath=%s", id, newPath)
+	return nil
+}
+
+// relocateVideoRecord 是重新定位的数据库部分（校验新路径、改写路径与大小、清除失效、同步短视频标签），不含补探测。
+// 失联找回在路径写锁内只做这一步，放开锁之后再补探测（D-LD-03）。
+func (s *VideoService) relocateVideoRecord(db *gorm.DB, id uint, newPath string) error {
+	newPath = filepath.Clean(strings.TrimSpace(newPath))
 
 	// 验证新路径文件存在。错误文案会直接显示给用户，不带路径（G-3）。
 	info, err := os.Stat(newPath)
@@ -48,7 +60,7 @@ func (s *VideoService) relocateVideoFrom(db *gorm.DB, id uint, newPath string) e
 		return err
 	}
 
-	if err := db.Transaction(func(tx *gorm.DB) error {
+	return db.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&models.Video{}).Where("id = ?", id).Updates(map[string]interface{}{
 			"path":         newPath,
 			"directory":    filepath.Dir(newPath),
@@ -61,12 +73,7 @@ func (s *VideoService) relocateVideoFrom(db *gorm.DB, id uint, newPath string) e
 			return result.Error
 		}
 		return syncShortVideoTagForVideo(tx, id)
-	}); err != nil {
-		return err
-	}
-	s.refreshRelocatedVideo(db, id, newPath)
-	log.Printf("视频迁移并更新元数据 id=%d newPath=%s", id, newPath)
-	return nil
+	})
 }
 
 // refreshRelocatedVideo 是路径改写提交之后的补探测：重读技术信息，成功后再同步一次短视频标签。

@@ -3,6 +3,7 @@ package services
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"testing"
 	"time"
@@ -101,12 +102,14 @@ func TestLostMediaPurgeCleansReferencesAndDerivedFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := LostPurgePreview{Kind: LostMediaKindVideo, Count: 2, Size: 1300, PlayEvents: 2, TagLinks: 1, PersonLinks: 1,
-		CollectionLinks: 1, VersionGroupsDissolved: 1, Bookmarks: 1, DiaryEntries: 1, DerivedBytes: 500}
-	if *preview != want {
+	want := LostPurgePreview{Kind: LostMediaKindVideo, IDs: []uint{video.ID, trashed.ID}, Count: 2, Size: 1300, Skipped: map[string]int{},
+		PlayEvents: 2, TagLinks: 1, PersonLinks: 1, CollectionLinks: 1, VersionGroupsDissolved: 1, Bookmarks: 1, DiaryEntries: 1, DerivedBytes: 500}
+	if !reflect.DeepEqual(*preview, want) {
 		t.Fatalf("预览计数不对:\n got %+v\nwant %+v", *preview, want)
 	}
 
+	queueEvents := 0
+	service.SetPlaybackQueueEmitter(func(uint64) { queueEvents++ })
 	request.Confirm = LostPurgeConfirmText
 	result, err := service.ApplyLostPurge(lostTestContext(), request)
 	if err != nil || result.Done != 2 || result.Skipped != 0 || result.Failed != 0 {
@@ -147,8 +150,8 @@ func TestLostMediaPurgeCleansReferencesAndDerivedFiles(t *testing.T) {
 	}
 	var queue models.PlaybackQueueState
 	database.DB.First(&queue, 1)
-	if queue.CurrentEntryID != nil || queue.Revision != 6 {
-		t.Fatalf("当前队列条目被删时队列应回到空闲并 +1: %+v", queue)
+	if queue.CurrentEntryID != nil || queue.Revision != 6 || queueEvents != 1 {
+		t.Fatalf("当前队列条目被删时队列应回到空闲、+1 并通知一次队列面板（%d 次）: %+v", queueEvents, queue)
 	}
 	for _, path := range derived {
 		if _, err := os.Stat(path); !os.IsNotExist(err) {
@@ -239,5 +242,37 @@ func TestLostMediaPurgeImages(t *testing.T) {
 	}
 	if _, err := os.Stat(thumb); !os.IsNotExist(err) {
 		t.Fatalf("图片缩略图应被删除")
+	}
+}
+
+// M2：预览做与执行相同的逐条复核，只把通过的条目列进 IDs；确认时只执行这些。预览时不可清除的条目，
+// 即使确认前变成可清除，也不会被清除。
+func TestLostMediaPurgePreviewListsOnlyRecheckedIDs(t *testing.T) {
+	service, _ := setupLostMediaTest(t)
+	root := lostTestRoot(t, LostMediaKindVideo)
+	mount := filepath.Join(root, "mount")
+	lostTestOfflineVolume(t, mount)
+	purgeable := lostTestStaleVideo(t, filepath.Join(root, "a.mp4"), 1, models.StaleReasonMissingFile)
+	present := lostTestStaleVideo(t, filepath.Join(root, "b.mp4"), 2, models.StaleReasonMissingFile)
+	lostTestWriteFile(t, present.Path, 2)
+	offline, _ := lostTestScannerTrashVideo(t, filepath.Join(mount, "c.mp4"), 3)
+
+	preview, err := service.PreviewLostPurge(lostTestContext(), LostPurgeRequest{Kind: LostMediaKindVideo, IDs: []uint{purgeable.ID, present.ID, offline.ID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(preview.IDs, []uint{purgeable.ID}) || preview.Count != 1 || preview.Size != 1 || preview.NotPurgeable != 2 ||
+		!reflect.DeepEqual(preview.Skipped, map[string]int{LostSkipFilePresent: 1, LostSkipVolumeOffline: 1}) {
+		t.Fatalf("预览应只列出通过复核的条目并按原因计数跳过的: %+v", preview)
+	}
+	if err := os.Remove(present.Path); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ApplyLostPurge(lostTestContext(), LostPurgeRequest{Kind: LostMediaKindVideo, IDs: preview.IDs, Confirm: LostPurgeConfirmText})
+	if err != nil || result.Done != 1 {
+		t.Fatalf("应只清除预览列出的 1 条: %+v err=%v", result, err)
+	}
+	if lostCount(t, "videos", "id = ?", present.ID) != 1 || lostCount(t, "videos", "id = ?", offline.ID) != 1 {
+		t.Fatalf("预览时不可清除的条目不应被清除")
 	}
 }

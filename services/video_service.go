@@ -105,6 +105,12 @@ func lockLibraryPaths() (func(), error) {
 	return acquireLibraryPath(libraryPathMutationMu.TryLock, libraryPathMutationMu.Lock, libraryPathMutationMu.Unlock)
 }
 
+// lockLibraryPathsContext 是 lockLibraryPaths 的可取消版本（同一个 acquireLibraryPathContext，围栏语义不变）：
+// 等锁期间 ctx 取消立即返回 ctx.Err()。失联找回与清除逐条等锁时要能被取消（D-LD-03/04）。
+func lockLibraryPathsContext(ctx context.Context) (func(), error) {
+	return acquireLibraryPathContext(ctx, libraryPathMutationMu.TryLock, libraryPathMutationMu.Lock, libraryPathMutationMu.Unlock)
+}
+
 // rLockLibraryPaths 是路径读锁的默认入口；与可取消版本共用 rLockLibraryPathsContext 核心。返回释放函数。
 //
 // 恢复备份与切换后端时，enterDatabaseRestoreMode 先拿路径写锁（BeginLibraryMaintenance）、再立维护围栏；切换成功与
