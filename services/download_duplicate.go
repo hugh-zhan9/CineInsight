@@ -130,8 +130,12 @@ func (c *DownloadDuplicateChecker) Check(ctx context.Context, outputPath string,
 	if videoID != 0 && c.PerceptualHash != nil {
 		versions, unhashed, err := c.versionDuplicates(ctx, videoID, exact)
 		switch {
-		case err != nil && ctx.Err() != nil:
+		case err != nil && errors.Is(ctx.Err(), context.Canceled):
+			// 整个查重被取消（应用退出）：不留结论。
 			return result, err
+		case err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded):
+			// 超时只算「其他版本」没做完，已经找到的相同文件照样报告（审查复核 Minor 2）。
+			result.VersionError = "比对其他版本超时"
 		case err != nil:
 			// 「其他版本」没做完不连累已经找到的相同文件（2026-10-12 审查 I-4）。
 			result.VersionError = downloadDuplicateErrorText(err)

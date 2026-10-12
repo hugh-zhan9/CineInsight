@@ -227,3 +227,34 @@ func TestDownloadRelation(t *testing.T) {
 		}
 	}
 }
+
+// blockingDownloadHasher 一直等到上下文结束（模拟大文件算指纹超时或应用退出）。
+type blockingDownloadHasher struct{}
+
+func (blockingDownloadHasher) Refresh(ctx context.Context, _ models.Video) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// 「其他版本」超时不连累相同文件；整个查重被取消（退出）时不留结论。
+func TestDownloadDuplicateVersionTimeoutKeepsExactButCancelDoesNot(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	library, downloads := t.TempDir(), t.TempDir()
+	same := []byte("identical bytes again")
+	kept := downloadTestVideo(t, library, "kept.mp4", same, 1920, 1080, 60)
+	fresh := downloadTestVideo(t, downloads, "new.mp4", same, 1920, 1080, 60)
+	checker := &DownloadDuplicateChecker{PerceptualHash: blockingDownloadHasher{}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	result, err := checker.Check(ctx, fresh.Path, fresh.ID)
+	if err != nil || len(result.Matches) != 1 || result.Matches[0].VideoID != kept.ID || result.VersionError != "比对其他版本超时" {
+		t.Fatalf("超时应保留相同文件并说明: %+v err=%v", result, err)
+	}
+
+	cancelled, stop := context.WithCancel(context.Background())
+	go func() { time.Sleep(20 * time.Millisecond); stop() }()
+	if _, err := checker.Check(cancelled, fresh.Path, fresh.ID); !errors.Is(err, context.Canceled) {
+		t.Fatalf("取消时应返回取消错误: %v", err)
+	}
+}
