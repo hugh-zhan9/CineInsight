@@ -1611,6 +1611,8 @@ export namespace services {
 	    last_error: string;
 	    files_warning: string;
 	    notice: string;
+	    recovery_pending: boolean;
+	    recovery_leftovers: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new BackupStatus(source);
@@ -1631,6 +1633,8 @@ export namespace services {
 	        this.last_error = source["last_error"];
 	        this.files_warning = source["files_warning"];
 	        this.notice = source["notice"];
+	        this.recovery_pending = source["recovery_pending"];
+	        this.recovery_leftovers = source["recovery_leftovers"];
 	    }
 	}
 	

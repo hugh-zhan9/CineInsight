@@ -228,6 +228,17 @@ func (a *App) VerifyDatabaseBackup(name string) (services.BackupVerification, er
 	return result, services.WithoutAbsolutePaths(err)
 }
 
+// DiscardInterruptedFilesRestore 放弃收拾上次没收拾完的整理文件还原：只删进行中标记、不碰任何文件夹，之后可以重新恢复。
+func (a *App) DiscardInterruptedFilesRestore() error {
+	if err := a.beginBackupOperation(); err != nil {
+		return err
+	}
+	defer a.backupWG.Done()
+	err := a.backupService.DiscardInterruptedFilesRestore()
+	log.Printf("API DiscardInterruptedFilesRestore err=%v", err)
+	return services.WithoutAbsolutePaths(err)
+}
+
 // RevealBackupDirectory 在访达中打开实际的备份目录（与 GetBackupStatus 的 backup_directory 一致）。
 func (a *App) RevealBackupDirectory() error {
 	err := a.backupService.RevealBackupDirectory()

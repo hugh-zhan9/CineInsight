@@ -414,6 +414,10 @@ export function DiscardEnhancementProgress(arg1) {
   return window['go']['main']['App']['DiscardEnhancementProgress'](arg1);
 }
 
+export function DiscardInterruptedFilesRestore() {
+  return window['go']['main']['App']['DiscardInterruptedFilesRestore']();
+}
+
 export function DiscardPendingSubtitle(arg1) {
   return window['go']['main']['App']['DiscardPendingSubtitle'](arg1);
 }

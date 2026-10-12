@@ -114,6 +114,16 @@
       <span v-if="backupStatus?.files_warning" class="backup-file-note" data-test="backup-files-warning">{{ backupStatus.files_warning }}</span>
       <span v-if="backupStatus?.notice" class="backup-file-note" data-test="backup-notice">{{ backupStatus.notice }}</span>
     </div>
+    <!-- 上次还原整理文件的现场没收拾完（标记还在）：新的恢复会被拒绝。放弃收拾只删进行中标记，不碰任何文件夹。 -->
+    <div v-if="backupStatus?.recovery_pending" class="backup-recovery-pending" data-test="backup-recovery-pending" role="status">
+      <p class="backup-danger-text">上次还原整理过的文件没有收拾完，为免覆盖现场，暂时不能从备份恢复。</p>
+      <p v-if="backupStatus.recovery_leftovers && backupStatus.recovery_leftovers.length" class="help-text" data-test="backup-recovery-leftovers">
+        这些文件夹旁还留着恢复前的副本或暂存文件：{{ backupStatus.recovery_leftovers.join('、') }}。
+      </p>
+      <div>
+        <button type="button" class="btn-secondary btn-danger-outline" data-test="backup-discard-recovery" :disabled="backupBusy" @click="discardInterruptedFilesRestore">放弃收拾，允许恢复</button>
+      </div>
+    </div>
     <div class="setting-item">
       <label>备份目录</label>
       <div class="directory-dialog-row">
@@ -191,7 +201,10 @@
       <p>将恢复到 <strong>{{ formatBackupTime(selectedBackup.created_at) }}</strong> 的数据状态。</p>
       <!-- D-DH-03：带清单的备份连同整理过的文件一起还原；旧格式备份只恢复数据库。 -->
       <p v-if="selectedBackup.legacy" class="help-text" data-test="backup-restore-files-note">这是旧格式备份，只恢复数据库；人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份保持现状。</p>
-      <p v-else class="help-text" data-test="backup-restore-files-note">整理过的文件（人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份）也会一并还原到备份时的状态。</p>
+      <p v-else class="help-text" data-test="backup-restore-files-note">
+        整理过的文件（人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份）也会一并还原到备份时的状态：这些文件夹会整个换成备份里的内容，不在备份里的文件（包括系统或应用留下的隐藏文件）会被换掉；
+        链接到别处、或里面有符号链接的文件夹改为把备份里的文件写回去，已有的其他文件保持不动。
+      </p>
       <p v-if="!selectedBackup.legacy && selectedBackup.unavailable_roots && selectedBackup.unavailable_roots.length" class="help-text" data-test="backup-restore-unavailable-note">
         {{ selectedBackup.unavailable_roots.join('、') }} 在备份时不可用，没有备份进去，恢复时保持现状。
       </p>
@@ -257,7 +270,7 @@
 import {
   ClearMigrationTarget, CreateDatabaseBackup, GetBackupStatus, GetDatabaseBackendStatus, GetDatabaseSwitchStatus,
   ListDatabaseBackups, ListDownloadTasks, PreflightDatabaseSwitch, RelaunchApp, RestoreDatabaseBackup, RevealBackupDirectory,
-  SelectDirectory, StartDatabaseSwitch, SwitchBackendConfigOnly, VerifyDatabaseBackup
+  SelectDirectory, StartDatabaseSwitch, SwitchBackendConfigOnly, VerifyDatabaseBackup, DiscardInterruptedFilesRestore
 } from '../../../wailsjs/go/main/App';
 import BaseModal from '../ui/BaseModal.vue';
 import { confirmAction } from '../../utils/feedback.js';
@@ -701,6 +714,28 @@ export default {
         this.backupMessage = '读取备份列表失败：' + err;
       }
     },
+    // 放弃收拾上次没收拾完的整理文件还原：只删进行中标记，留下的副本由用户自己查看、处理（审阅第五轮 E2b）。
+    async discardInterruptedFilesRestore() {
+      const leftovers = this.backupStatus?.recovery_leftovers || [];
+      const where = leftovers.length ? `留下的副本在这些文件夹旁：${leftovers.join('、')}。` : '';
+      const confirmed = await confirmAction({
+        title: '放弃收拾上次的还原',
+        message: `不会动任何文件夹，只是不再自动收拾，之后可以重新从备份恢复。${where}` +
+          '它们在数据目录下的 media-details 等文件夹旁，名字以 .pre-restore- 或 .cineinsight-restore- 开头，可以在访达里查看后自行处理。',
+        confirmText: '放弃收拾，允许恢复',
+        danger: true
+      });
+      if (!confirmed) return;
+      try {
+        await DiscardInterruptedFilesRestore();
+        this.backupMessageIsError = false;
+        this.backupMessage = '已放弃收拾上次的还原，现在可以重新从备份恢复。';
+      } catch (err) {
+        this.backupMessageIsError = true;
+        this.backupMessage = '放弃收拾失败：' + backupReasonText(databaseErrorReason(err).text);
+      }
+      await this.loadBackupStatus();
+    },
     verificationOf(backup) {
       return this.backupVerifications[backup.name] || backup.verification || null;
     },
@@ -891,6 +926,8 @@ export default {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.backup-recovery-pending { display: grid; gap: 6px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--danger-border); border-radius: var(--radius-md); }
 
 /* 校验（D-DH-03）：按钮与恢复并排；标记只占自身宽度。 */
 .backup-file-item .backup-file-actions { display: flex; flex-shrink: 0; gap: 8px; }
