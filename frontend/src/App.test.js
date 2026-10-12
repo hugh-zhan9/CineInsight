@@ -84,6 +84,21 @@ it('洞察页存储体检删除或撤销删除了视频：顶栏计数重取，�
   expect(reload).toHaveBeenCalledWith([7, 8]);
 });
 
+it('数据维护撤销了图片的批量编辑：只通知图片库，片库与顶栏计数不动', async () => {
+  const wrapper = await mountApp();
+  await wrapper.setData({ photosMounted: true, currentPage: 'data-care' });
+  const markImages = vi.fn();
+  const reload = vi.fn();
+  wrapper.findComponent({ name: 'PhotoLibraryPage' }).vm.markImagesChanged = markImages;
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.handleVideosChangedElsewhere = reload;
+  const callsBefore = api.GetLibraryCounts.mock.calls.length;
+  wrapper.findComponent({ name: 'DataCarePage' }).vm.$emit('videos-changed', { removedIDs: [], kind: 'image' });
+  await flushPromises();
+  expect(markImages).toHaveBeenCalledOnce();
+  expect(reload).not.toHaveBeenCalled();
+  expect(api.GetLibraryCounts.mock.calls.length).toBe(callsBefore);
+});
+
 it('存储体检正在移到废纸篓时不能离开洞察页，结束后可以', async () => {
   const wrapper = await mountApp();
   await wrapper.setData({ currentPage: 'insights' });

@@ -59,13 +59,42 @@
         </ul>
       </section>
     </template>
+
+    <!-- 最近的批量编辑（D-MC-05）：保留最近 20 次，可撤销；撤销时之后又被改过的条目跳过并计数。 -->
+    <section class="completeness-group" data-test="batch-edit-history">
+      <header class="completeness-group__head">
+        <h4>最近的批量编辑</h4>
+        <small>保留最近 20 次；撤销时，之后又被改过的条目会跳过。</small>
+      </header>
+      <p v-if="historyError" class="completeness-alert" role="alert" data-test="batch-edit-history-error">{{ historyError }}</p>
+      <p v-else-if="historyLoaded && history.length === 0" class="completeness-muted" data-test="batch-edit-history-empty">还没有批量编辑。片库或图片库里选中条目后点「批量编辑…」。</p>
+      <ul v-else class="completeness-list">
+        <li v-for="batch in history" :key="batch.id" class="completeness-item" :data-test="`batch-edit-history-${batch.id}`">
+          <div class="completeness-batch">
+            <span class="completeness-batch__title" :title="batchTitle(batch)">{{ batchTitle(batch) }}</span>
+            <small class="completeness-muted">{{ formatTime(batch.created_at) }} · {{ formatCount(batch.item_count) }} 处改动</small>
+            <button
+              v-if="batch.undoable"
+              type="button"
+              class="btn-secondary btn-compact"
+              :disabled="undoingID !== 0"
+              data-test="batch-edit-history-undo"
+              @click="undoBatch(batch)"
+            >{{ undoingID === batch.id ? '撤销中…' : '撤销' }}</button>
+            <small v-else class="completeness-muted" data-test="batch-edit-history-undone">{{ batch.undone_at ? '已撤销' : '无可撤销' }}</small>
+          </div>
+        </li>
+      </ul>
+      <p v-if="historyNotice" class="completeness-muted" role="status" data-test="batch-edit-history-notice">{{ historyNotice }}</p>
+    </section>
   </section>
 </template>
 
 <script>
-import { GetMetadataCompleteness, GetMetadataCompletenessByDirectory } from '../../../wailsjs/go/main/App';
+import { GetMetadataCompleteness, GetMetadataCompletenessByDirectory, ListMetadataBatchEdits, UndoMetadataBatchEdit } from '../../../wailsjs/go/main/App';
 import { logFrontend } from '../../utils/frontendLog.js';
 import { isMissingFilterField, missingFieldLabel } from '../../utils/metadataCompleteness.js';
+import { batchEditErrorMessage, describeBatchOp, undoResultText } from '../../utils/metadataBatchEdit.js';
 
 // 「缺得最多的目录」一次取几个（后端默认 10）。
 const DIRECTORY_LIMIT = 10;
@@ -85,7 +114,10 @@ export default {
   props: { directories: { type: Array, default: () => [] } },
   emits: ['open-video-id', 'run-command', 'videos-changed', 'open-library-missing', 'navigate'],
   data() {
-    return { report: null, loading: false, error: '', directoryStates: {}, loadToken: 0 };
+    return {
+      report: null, loading: false, error: '', directoryStates: {}, loadToken: 0,
+      history: [], historyLoaded: false, historyError: '', historyNotice: '', undoingID: 0
+    };
   },
   computed: {
     groups() {
@@ -108,6 +140,7 @@ export default {
   },
   mounted() {
     this.load();
+    this.loadHistory();
   },
   methods: {
     toItems(kind, items, pending = false) {
@@ -186,6 +219,46 @@ export default {
       const command = PENDING_COMMANDS[item.field];
       if (command) this.$emit('run-command', command.id, command.label);
     },
+    async loadHistory() {
+      try {
+        this.history = (await ListMetadataBatchEdits()) || [];
+        this.historyError = '';
+      } catch (err) {
+        this.historyError = '读取最近的批量编辑失败，请稍后重试。';
+        logFrontend('completeness', 'ListMetadataBatchEdits failed', { err: String(err) }, true);
+      } finally {
+        this.historyLoaded = true;
+      }
+    },
+    batchTitle(batch) {
+      const summary = batch?.summary || {};
+      const ops = (summary.ops || []).filter(op => Number(op?.changes || 0) > 0).map(describeBatchOp).join('；');
+      const scope = summary.scope === 'filter' ? '（当前筛选的全部结果）' : '';
+      const stopped = summary.cancelled ? '（中途停止）' : '';
+      return `${batch?.kind === 'image' ? '图片' : '视频'} · ${ops || '批量编辑'}${scope}${stopped}`;
+    },
+    // 撤销后统计、列表都可能变：重新统计、重读列表，并通知片库 / 图片库重取（videos-changed）。
+    async undoBatch(batch) {
+      if (this.undoingID) return;
+      this.undoingID = batch.id;
+      this.historyNotice = '';
+      try {
+        const result = await UndoMetadataBatchEdit(batch.id);
+        this.historyNotice = undoResultText(result);
+        this.$emit('videos-changed', { removedIDs: [], kind: batch.kind });
+        this.load();
+      } catch (err) {
+        this.historyNotice = batchEditErrorMessage(err) || '撤销失败，请稍后重试。';
+        logFrontend('completeness', 'UndoMetadataBatchEdit failed', { id: batch.id, err: String(err) }, true);
+      } finally {
+        this.undoingID = 0;
+        await this.loadHistory();
+      }
+    },
+    formatTime(value) {
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? '' : date.toLocaleString('zh-CN', { hour12: false });
+    },
     formatCount(value) {
       return Number(value || 0).toLocaleString('zh-CN');
     }
@@ -219,6 +292,9 @@ export default {
 .completeness-bar__fill { position: absolute; inset: 0 auto 0 0; border-radius: inherit; }
 .completeness-bar__fill--accent { background: var(--accent-color); }
 .completeness-bar__fill--warning { background: var(--warning-text); }
+
+.completeness-batch { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 12px; font-size: 13px; }
+.completeness-batch__title { overflow: hidden; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 
 .completeness-dirs { padding: 2px 0 4px 108px; }
 .completeness-dirs__list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }

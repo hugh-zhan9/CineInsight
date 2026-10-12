@@ -244,6 +244,7 @@
       :all-visible-selected="allVisibleSelected"
       @batch-playback-queue="$emit('batch-playback-queue')"
       @batch-add-tag="$emit('batch-add-tag')"
+      @batch-metadata-edit="$emit('batch-metadata-edit')"
       @batch-move="$emit('batch-move')"
       @batch-local-metadata="$emit('batch-local-metadata')"
       @batch-playback-proxy="$emit('batch-playback-proxy')"
@@ -419,7 +420,7 @@ export default {
     'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'open-tag-manager',
     'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
     'manage-select', 'view-select', 'random-select',
-    'batch-playback-queue', 'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete',
+    'batch-playback-queue', 'batch-add-tag', 'batch-metadata-edit', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-delete',
     'update:collapseVersions', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim'
   ],
   data() {

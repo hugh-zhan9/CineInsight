@@ -6,6 +6,8 @@
       <span class="selection-toolbar__divider"></span>
       <button type="button" class="btn-secondary btn-compact" data-test="batch-playback-queue" @click="$emit('batch-playback-queue')">加入待播队列</button>
       <button @click="$emit('batch-add-tag')" class="btn-secondary btn-compact">批量标签编辑</button>
+      <!-- 元数据批量编辑（D-MC-04）：年份、评分、标签、人物、作品集，作用于所选或当前筛选的全部结果，可撤销。 -->
+      <button type="button" class="btn-secondary btn-compact" data-test="batch-metadata-edit" @click="$emit('batch-metadata-edit')">批量编辑…</button>
       <button @click="$emit('batch-move')" class="btn-secondary btn-compact" :disabled="migrationRunning">批量迁移</button>
       <button type="button" class="btn-secondary btn-compact" @click="$emit('batch-local-metadata')">导入本地资料</button>
       <button type="button" class="btn-secondary btn-compact" data-test="batch-playback-proxy" @click="$emit('batch-playback-proxy')">为选中生成代理</button>
@@ -35,7 +37,7 @@ export default {
     migrationRunning: { type: Boolean, default: false },
     allVisibleSelected: { type: Boolean, default: false }
   },
-  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim', 'batch-delete', 'toggle-select-all', 'clear-selection']
+  emits: ['batch-playback-queue', 'batch-add-tag', 'batch-metadata-edit', 'batch-move', 'batch-local-metadata', 'batch-playback-proxy', 'batch-subtitle', 'batch-version-group', 'batch-compare', 'batch-edit-merge', 'batch-edit-trim', 'batch-delete', 'toggle-select-all', 'clear-selection']
 };
 </script>
 

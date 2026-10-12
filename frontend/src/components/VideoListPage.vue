@@ -72,6 +72,7 @@
       @random-select="onRandomSelect"
       @batch-playback-queue="addVideosToPlaybackQueue(selectedVideoIds)"
       @batch-add-tag="openBatchAddTagDialog"
+      @batch-metadata-edit="openMetadataBatchEdit"
       @batch-move="moveSelectedVideos"
       @batch-local-metadata="openLocalMetadataDialog(selectedVideoIds)"
       @batch-playback-proxy="createProxiesForSelected"
@@ -79,6 +80,16 @@
       @batch-delete="confirmBatchDelete"
       @batch-edit-merge="createEditProjectFromSelection('merge')"
       @batch-edit-trim="createEditProjectFromSelection('trim_intro')"
+    />
+    <MetadataBatchEditDialog
+      v-if="metadataBatchEdit"
+      kind="video"
+      :selected-ids="metadataBatchEdit.ids"
+      :filter="metadataBatchEdit.filter"
+      :tags="tags"
+      @close="metadataBatchEdit = null"
+      @applied="handleMetadataBatchEdited"
+      @undone="handleMetadataBatchEdited"
     />
     <TonightPickerDialog
       v-if="tonightOpen"
@@ -541,6 +552,7 @@ import PreviewDrawer from './PreviewDrawer.vue';
 import SubtitleWorkbench from './SubtitleWorkbench.vue';
 import VirtualVideoList from './VirtualVideoList.vue';
 import TonightPickerDialog from './TonightPickerDialog.vue';
+import MetadataBatchEditDialog from './MetadataBatchEditDialog.vue';
 import { addToPlaybackQueue, openPlaybackQueue } from '../utils/playbackQueue.js';
 import VideoListRow, { STALE_REASON_LABELS } from './VideoListRow.vue';
 import AITagReviewDialog from './AITagReviewDialog.vue';
@@ -624,7 +636,7 @@ function relocateErrorText(err) {
 export default {
   name: 'VideoListPage',
   mixins: [wheelForwardingMixin, versionGroupsMixin, videoEditEntryMixin],
-  components: { TonightPickerDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, BaseModal },
+  components: { TonightPickerDialog, MetadataBatchEditDialog, ScanDialog, TagManagerDialog, AddTagDialog, DeleteConfirmDialog, TagDeleteDialog, PreviewDrawer, SubtitleWorkbench, LocalMetadataDialog, VirtualVideoList, VideoListRow, AITagReviewDialog, BackgroundTaskStatusBars, IncrementalScanBar, LibraryToolbar, RandomPickBanner, SemanticNoticeBar, TrashUndoBanner, CleanupReviewPanel, RenameDialogs, SaveViewDialog, SubtitleGenerateDialog, SubtitleTranslateDialog, SubtitlePreviewModal, EnhanceDialog, VersionGroupMembers, VersionGroupDialog, VersionGroupPanel, HDReplacePickerDialog, BaseMenu, BaseModal },
   props: {
     tags: { type: Array, default: () => [] },
     settings: { type: Object, required: true },
@@ -663,6 +675,8 @@ export default {
       countToken: 0,
       // 随机模式与「最近 12 次」排除表存在本机（D-PC44），重启后仍然生效。
       tonightOpen: false,
+      // 元数据批量编辑（D-MC-04）：打开时记下所选与当前筛选；null 表示没开。
+      metadataBatchEdit: null,
       tonightFilter: {},
       randomConditions: loadRandomConditions(),
       recentRandomVideoIDs: loadRecentRandomIDs(),
@@ -2942,6 +2956,18 @@ export default {
       } else {
         this.selectedVideoIds = [...new Set([...this.selectedVideoIds, ...visibleIds])];
       }
+    },
+    // 「批量编辑…」：所选条目，或当前筛选的全部结果。语义检索、随机批次与相似视频列出的不是筛选结果，
+    // 这时只提供「所选」。
+    openMetadataBatchEdit() {
+      if (this.selectedVideoIds.length === 0) return;
+      const filterUsable = this.searchMode !== 'semantic' && !this.randomPick.active && !this.semanticSimilarVideoID;
+      this.metadataBatchEdit = { ids: [...this.selectedVideoIds], filter: filterUsable ? this.currentLibraryFilter() : null };
+    },
+    // 批量编辑或撤销之后：按当前条件原地重取，结果条的计数一并重取。
+    async handleMetadataBatchEdited() {
+      this.invalidateLibraryTotal();
+      await this.reloadCurrentView();
     },
     openBatchAddTagDialog() {
       if (this.selectedVideoIds.length === 0) return;
