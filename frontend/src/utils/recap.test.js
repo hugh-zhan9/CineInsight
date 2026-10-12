@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   canShiftBack, canShiftForward, changeText, heatLevel, heroFrameURLs, monthCalendarCells, percentText, recapRequest,
-  requestKey, shiftCursor, yearCalendarWeeks
+  requestKey, shiftCursor, videoArtwork, yearCalendarWeeks
 } from './recap.js';
 
 describe('recap utils', () => {
@@ -53,5 +53,14 @@ describe('recap utils', () => {
     expect(heatLevel(0, 8)).toBe(0);
     expect(heatLevel(1, 8)).toBe(1);
     expect(heatLevel(8, 8)).toBe(4);
+  });
+});
+
+describe('videoArtwork', () => {
+  it('builds the poster / fanart route and nothing for a missing id or unknown kind', () => {
+    expect(videoArtwork(7, 'poster')).toBe('/preview/video-artwork/7?kind=poster');
+    expect(videoArtwork(7, 'fanart')).toBe('/preview/video-artwork/7?kind=fanart');
+    expect(videoArtwork(0, 'poster')).toBe('');
+    expect(videoArtwork(7, 'banner')).toBe('');
   });
 });

@@ -95,6 +95,10 @@ func newAssetHandler(app *App) http.Handler {
 				app.serveThumbnail(w, r)
 				return
 			}
+			if strings.HasPrefix(r.URL.Path, "/preview/video-artwork/") {
+				app.serveVideoArtwork(w, r)
+				return
+			}
 			if strings.HasPrefix(r.URL.Path, "/preview/seek-sprite/") {
 				app.serveSeekSprite(w, r)
 				return
@@ -285,6 +289,55 @@ func (a *App) serveThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	a.writeVideoThumbnail(w, r, videoID)
+}
+
+// serveVideoArtwork 发 NFO 导入时存下的海报或背景图（D-UI-06、D-UI-12）：
+// /preview/video-artwork/{videoID}?kind=poster|fanart。
+//
+// 海报找不到（没导入过、文件已不在）时直接发与 /preview/thumbnail/{id} 相同的缩略图，
+// 并带 X-Artwork-Fallback: thumbnail 便于诊断——卡片因此总能拿到一张图。背景图找不到是 404，
+// 前端先看详情里的 has_fanart 再请求。kind 缺省或非法是 400，视频不存在是 404。
+// 缓存头与缩略图一致，Last-Modified 取图片文件的修改时间。
+func (a *App) serveVideoArtwork(w http.ResponseWriter, r *http.Request) {
+	videoID, err := assetVideoIDFromPath(r.URL.Path, "/preview/video-artwork/")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	kind := r.URL.Query().Get("kind")
+	if kind != "poster" && kind != "fanart" {
+		http.Error(w, "invalid artwork kind", http.StatusBadRequest)
+		return
+	}
+	asset, err := a.localMetadata.ResolveVideoArtworkAsset(videoID, kind)
+	if err != nil {
+		switch {
+		case errors.Is(err, gorm.ErrRecordNotFound):
+			http.Error(w, "video not found", http.StatusNotFound)
+		case errors.Is(err, os.ErrNotExist) && kind == "poster":
+			w.Header().Set("X-Artwork-Fallback", "thumbnail")
+			a.writeVideoThumbnail(w, r, videoID)
+		case errors.Is(err, os.ErrNotExist):
+			http.Error(w, "artwork not found", http.StatusNotFound)
+		default:
+			http.Error(w, "artwork unavailable", http.StatusInternalServerError)
+		}
+		return
+	}
+	file, err := os.Open(asset.Path)
+	if err != nil {
+		http.Error(w, "artwork not found", http.StatusNotFound)
+		return
+	}
+	defer file.Close()
+	w.Header().Set("Content-Type", asset.MIME)
+	w.Header().Set("Cache-Control", "private, max-age=300")
+	http.ServeContent(w, r, asset.DisplayName, asset.ModTime, file)
+}
+
+// writeVideoThumbnail 是缩略图路由的发送部分，海报回落也走这里，两条路由发出的是同一张图。
+func (a *App) writeVideoThumbnail(w http.ResponseWriter, r *http.Request, videoID uint) {
 	media, err := a.thumbnailService.ResolveThumbnail(r.Context(), videoID)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

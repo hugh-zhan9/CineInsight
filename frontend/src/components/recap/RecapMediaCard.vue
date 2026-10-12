@@ -36,7 +36,10 @@ export default {
     badge: { type: String, default: '' },
     rank: { type: [Number, String], default: '' },
     available: { type: Boolean, default: true },
+    // card / tile（只有图）/ poster（2:3 海报，观看首页的海报墙）。
     variant: { type: String, default: 'card' },
+    // 指定图片地址时用它代替缩略图（海报走 /preview/video-artwork，找不到时服务端已回落缩略图）。
+    cover: { type: String, default: '' },
     // 图片按原始宽高比展示（马赛克墙），视频统一 16:9。
     width: { type: Number, default: 0 },
     height: { type: Number, default: 0 }
@@ -46,7 +49,7 @@ export default {
     return { failed: false };
   },
   computed: {
-    src() { return this.kind === 'image' ? imageThumbnail(this.id) : videoThumbnail(this.id); },
+    src() { return this.cover || (this.kind === 'image' ? imageThumbnail(this.id) : videoThumbnail(this.id)); },
     aspectStyle() {
       if (this.kind === 'image' && this.width > 0 && this.height > 0) {
         return { aspectRatio: `${this.width} / ${Math.min(this.height, this.width * 2.2)}` };
@@ -55,7 +58,7 @@ export default {
     }
   },
   watch: {
-    id() { this.failed = false; }
+    src() { this.failed = false; }
   }
 };
 </script>
@@ -87,6 +90,7 @@ export default {
   transition: transform 260ms ease, box-shadow 260ms ease;
 }
 .recap-card--image .recap-card__media { aspect-ratio: 4 / 3; }
+.recap-card--poster .recap-card__media { aspect-ratio: 2 / 3; }
 .recap-card__media img {
   display: block;
   width: 100%;

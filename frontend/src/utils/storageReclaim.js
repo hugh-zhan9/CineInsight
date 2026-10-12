@@ -3,6 +3,7 @@
 // 极短、极低分辨率是单条候选，整条算。同一个文件落在几类里时，各类各算一次，总数只算一次。
 // 精确重复是「确定可回收」，其余类别要在清理中心逐组确认，算「待确认」。
 import { CLEANUP_KIND_LABELS } from './cleanupSelection.js';
+import { formatBytes } from './mediaDetails.js';
 
 // pick 返回 [{ keeper, items }]：keeper 是这一组建议保留的那份（单条候选为 null），items 是可回收的成员。
 function groupsOf(groups) {
@@ -110,5 +111,14 @@ export function reclaimSummary(videoStatus, imageStatus, { excludedVideoIDs = []
     totalBytes,
     certainBytes,
     reviewBytes: totalBytes - certainBytes
+  };
+}
+
+// 统计卡上的「可回收」一行（存储体检与管理首页共用）：没分析过时只给占位，不猜数字。
+export function reclaimHeadline(summary) {
+  if (!summary?.analyzed) return { value: '—', note: '清理中心还没分析过' };
+  return {
+    value: formatBytes(summary.totalBytes),
+    note: `确定 ${formatBytes(summary.certainBytes)} · 待确认 ${formatBytes(summary.reviewBytes)}`
   };
 }

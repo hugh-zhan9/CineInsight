@@ -208,7 +208,7 @@ describe('存储体检的删除保护（审查 I-2 / I-3）', () => {
     let finishDelete;
     api.DeleteVideosWithResult.mockImplementation(ids => new Promise(resolve => { finishDelete = () => resolve(okResult(ids)); }));
     const wrapper = await mountPanel();
-    const reclaimValue = () => wrapper.get('[data-test="storage-tile-reclaim"] .storage-tile__value').text();
+    const reclaimValue = () => wrapper.get('[data-test="storage-tile-reclaim"] [data-test="stat-tile-value"]').text();
     expect(reclaimValue()).toBe('1.0 GB');
     await wrapper.get('[data-test="storage-select-all"]').setValue(true);
     await wrapper.get('[data-test="storage-delete-selected"]').trigger('click');

@@ -61,6 +61,11 @@ export function videoThumbnail(id) {
   return id ? `/preview/thumbnail/${id}` : '';
 }
 
+// 视频的海报 / 背景图（D-UI-12）：海报找不到时服务端回落缩略图；背景图找不到是 404，先看 has_fanart 再用。
+export function videoArtwork(id, kind) {
+  return id && (kind === 'poster' || kind === 'fanart') ? `/preview/video-artwork/${id}?kind=${kind}` : '';
+}
+
 export function imageThumbnail(id) {
   return id ? `/preview/image-thumbnail/${id}` : '';
 }

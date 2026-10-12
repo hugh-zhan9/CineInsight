@@ -55,13 +55,11 @@
       </RecapBackdrop>
 
       <section class="recap-stats" data-test="recap-stats">
-        <article v-for="(stat, index) in stats" :key="stat.key" v-reveal="index" class="recap-stat">
-          <span class="recap-stat__icon"><RecapIcon :name="stat.icon" /></span>
-          <span class="recap-stat__value"><RecapCountUp :value="stat.value" /><small>{{ stat.unit }}</small></span>
-          <span class="recap-stat__label">{{ stat.label }}</span>
+        <StatTile v-for="(stat, index) in stats" :key="stat.key" v-reveal="index" size="lg" :unit="stat.unit" :label="stat.label" :note="stat.change ? '' : stat.note">
+          <template #icon><RecapIcon :name="stat.icon" /></template>
+          <template #value><RecapCountUp :value="stat.value" /></template>
           <span v-if="stat.change" :class="['recap-stat__delta', `is-${stat.tone}`]">{{ stat.change }} <small>较{{ result.overview.previous.label }}</small></span>
-          <small v-else-if="stat.note" class="recap-stat__note">{{ stat.note }}</small>
-        </article>
+        </StatTile>
       </section>
 
       <div class="recap-split">
@@ -119,13 +117,11 @@
         </RecapBackdrop>
 
         <section class="recap-stats" data-test="recap-stats">
-          <article v-for="(stat, index) in stats" :key="stat.key" v-reveal="index" class="recap-stat">
-            <span class="recap-stat__icon"><RecapIcon :name="stat.icon" /></span>
-            <span class="recap-stat__value"><RecapCountUp :value="stat.value" /><small>{{ stat.unit }}</small></span>
-            <span class="recap-stat__label">{{ stat.label }}</span>
+          <StatTile v-for="(stat, index) in stats" :key="stat.key" v-reveal="index" size="lg" :unit="stat.unit" :label="stat.label" :note="stat.note">
+            <template #icon><RecapIcon :name="stat.icon" /></template>
+            <template #value><RecapCountUp :value="stat.value" /></template>
             <span v-if="stat.change" :class="['recap-stat__delta', `is-${stat.tone}`]">{{ stat.change }} <small>较{{ result.overview.previous.label }}</small></span>
-            <small v-if="stat.note" class="recap-stat__note">{{ stat.note }}</small>
-          </article>
+          </StatTile>
         </section>
 
         <section v-if="result.titles.length" v-reveal class="recap-section">
@@ -318,6 +314,7 @@ import RecapIcon from './recap/RecapIcon.vue';
 import RecapLiveFeed from './recap/RecapLiveFeed.vue';
 import RecapMediaCard from './recap/RecapMediaCard.vue';
 import RecapMonthStrip from './recap/RecapMonthStrip.vue';
+import StatTile from './ui/StatTile.vue';
 import { reveal } from './recap/reveal.js';
 import {
   RECAP_TABS, SLOT_LABELS, SLOT_RANGES, canShiftBack, canShiftForward, changeText, changeTone, currentCursor, formatClock, formatDateLabel,
@@ -332,7 +329,7 @@ export const RECAP_ACTIVITY_DEBOUNCE_MS = 600;
 export default {
   name: 'RecapPage',
   mixins: [runtimeEventsMixin],
-  components: { RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon, RecapLiveFeed, RecapMediaCard, RecapMonthStrip },
+  components: { RecapBackdrop, RecapCalendar, RecapClock, RecapCountUp, RecapIcon, RecapLiveFeed, RecapMediaCard, RecapMonthStrip, StatTile },
   directives: { reveal },
   props: { pageActive: { type: Boolean, default: true } },
   emits: ['open-video-id', 'open-tag', 'open-image', 'open-entity', 'navigate'],
@@ -570,7 +567,6 @@ export default {
 .recap-pill { padding: 2px 9px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-text); font-size: 11.5px; font-weight: 600; }
 .recap-live-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--danger-color); box-shadow: 0 0 0 0 color-mix(in srgb, var(--danger-color) 60%, transparent); animation: recap-pulse 1.8s ease-out infinite; }
 @keyframes recap-pulse { to { box-shadow: 0 0 0 10px transparent; } }
-.recap-muted { margin: 0; color: var(--text-muted); font-size: 12.5px; }
 
 .recap-skeleton { display: grid; gap: 16px; }
 .recap-skeleton__hero, .recap-skeleton__row span {
@@ -608,35 +604,8 @@ export default {
 
 /* 大幅背景里的文字：两主题都是白字压在暗化的画面上。 */
 .recap-hero__layout { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; padding: 36px 40px; }
-.recap-hero__body { display: grid; gap: 12px; max-width: 760px; min-width: 0; padding: 32px 40px; }
 .recap-hero__layout .recap-hero__body { padding: 0; }
-.recap-hero__eyebrow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0;
-  color: var(--recap-hero-muted);
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.06em;
-}
-.recap-hero__title {
-  margin: 0;
-  overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  font-size: clamp(28px, 3.6vw, 46px);
-  font-weight: 800;
-  line-height: 1.12;
-  letter-spacing: -0.02em;
-  text-shadow: 0 2px 24px var(--recap-scrim);
-}
-.recap-hero__title--quiet { font-size: clamp(22px, 2.6vw, 32px); }
-.recap-hero__meta { margin: 0; color: var(--recap-hero-muted); font-size: 14px; }
 .recap-hero__chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.recap-hero__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 4px; }
-.recap-hero__note { color: var(--recap-hero-muted); font-size: 12.5px; }
 .recap-hero__count {
   display: flex;
   align-items: baseline;
@@ -673,56 +642,12 @@ export default {
 .recap-chip--plain:hover { background: var(--control-hover-bg); }
 
 .recap-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
-.recap-stat {
-  position: relative;
-  display: grid;
-  align-content: start;
-  gap: 4px;
-  overflow: hidden;
-  padding: 18px 18px 16px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg);
-  background: var(--panel-bg);
-}
-.recap-stat::after {
-  content: '';
-  position: absolute;
-  right: -30px;
-  top: -30px;
-  width: 110px;
-  height: 110px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent-color) 16%, transparent), transparent 70%);
-  pointer-events: none;
-}
-.recap-stat__icon { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); font-size: 18px; }
-.recap-stat__value { display: flex; align-items: baseline; gap: 4px; margin-top: 6px; font-size: 38px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; }
-.recap-stat__value small { color: var(--text-secondary); font-size: 14px; font-weight: 600; letter-spacing: 0; }
-.recap-stat__label { color: var(--text-secondary); font-size: 13px; }
-.recap-stat__note { color: var(--text-muted); font-size: 12px; }
 .recap-stat__delta { justify-self: start; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
 .recap-stat__delta small { font-weight: 500; opacity: 0.8; }
 .recap-stat__delta.is-up { background: var(--accent-soft); color: var(--accent-text); }
 .recap-stat__delta.is-down { background: var(--warning-soft); color: var(--warning-text); }
 .recap-stat__delta.is-flat { background: var(--panel-muted-bg); color: var(--text-secondary); }
 
-.recap-section { display: grid; gap: 14px; }
-.recap-section__head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
-.recap-section__head h3 { display: inline-flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; font-weight: 750; }
-.recap-section__head h3 .recap-icon { color: var(--accent-text); }
-.recap-section__head small { color: var(--text-muted); font-size: 12px; }
-.recap-section__head--sub { margin-top: 6px; }
-.recap-section__head--sub h3 { font-size: 14px; }
-.recap-panel {
-  display: grid;
-  align-content: start;
-  gap: 14px;
-  min-width: 0;
-  padding: 18px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg);
-  background: var(--panel-bg);
-}
 .recap-split { display: grid; grid-template-columns: repeat(auto-fit, minmax(380px, 1fr)); gap: 16px; align-items: start; }
 .recap-split--wide { grid-template-columns: minmax(0, 1.75fr) minmax(300px, 1fr); }
 .recap-side { display: grid; gap: 16px; min-width: 0; }
@@ -760,20 +685,6 @@ export default {
 .recap-title__text strong { font-size: 18px; font-weight: 800; }
 .recap-title__text p { margin: 0; color: var(--text-secondary); font-size: 12.5px; line-height: 1.5; }
 
-.recap-strip {
-  display: grid;
-  grid-auto-flow: column;
-  grid-auto-columns: minmax(220px, 260px);
-  gap: 14px;
-  overflow-x: auto;
-  padding: 2px 2px 10px;
-  scroll-snap-type: x proximity;
-  scrollbar-width: thin;
-}
-.recap-strip--compact { grid-auto-columns: minmax(180px, 200px); }
-.recap-strip--images { grid-auto-columns: minmax(160px, 180px); }
-.recap-strip__item { scroll-snap-align: start; }
-
 .recap-posters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); grid-auto-flow: dense; gap: 14px; }
 .recap-posters__lead { grid-column: span 2; grid-row: span 2; }
 .recap-posters__lead :deep(.recap-card__rank) { font-size: 64px; }
@@ -797,26 +708,7 @@ export default {
 .recap-cloud__tag:hover { color: var(--chip-color); transform: translateY(-2px); }
 .recap-cloud__tag small { color: var(--text-muted); font-size: 11px; font-weight: 600; }
 
-.recap-people { display: grid; grid-template-columns: repeat(auto-fill, minmax(76px, 1fr)); gap: 12px; }
-.recap-person { display: grid; justify-items: center; gap: 4px; padding: 0; border: 0; background: transparent; color: var(--text-primary); cursor: pointer; }
-.recap-person__avatar {
-  display: grid;
-  place-items: center;
-  width: 60px;
-  height: 60px;
-  overflow: hidden;
-  border: 2px solid var(--panel-bg);
-  border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent-color), var(--warning-color));
-  color: var(--accent-on);
-  box-shadow: 0 0 0 2px var(--accent-border);
-  transition: transform var(--transition);
-}
-.recap-person:hover .recap-person__avatar { transform: scale(1.06); }
-.recap-person__avatar img { width: 100%; height: 100%; object-fit: cover; }
-.recap-person__avatar b { font-size: 22px; }
-.recap-person strong { max-width: 100%; overflow: hidden; font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
-.recap-person small, .recap-collection small { color: var(--text-muted); font-size: 11.5px; }
+.recap-collection small { color: var(--text-muted); font-size: 11.5px; }
 .recap-collections { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .recap-collection {
   display: grid;
@@ -895,12 +787,11 @@ export default {
   .recap-side { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); align-items: start; }
   .recap-posters { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .recap-hero__layout { padding: 28px; }
-  .recap-hero__body { padding: 28px; }
 }
 @media (prefers-reduced-motion: reduce) {
   .recap-reveal, .recap-bars__plays, .recap-bars__views { transition: none; }
   .recap-reveal { opacity: 1; transform: none; }
   .recap-live-dot, .recap-skeleton__hero, .recap-skeleton__row span { animation: none; }
-  .recap-chip, .recap-cloud__tag, .recap-person__avatar { transition: none; }
+  .recap-chip, .recap-cloud__tag { transition: none; }
 }
 </style>

@@ -120,30 +120,33 @@
     <template v-else-if="analysis">
       <!-- 精确重复与疑似重复分成两个区域：点统计卡切换，各自按目录分组、各自翻页。 -->
       <div v-if="hasGroups" class="cleanup-tiles" role="tablist" aria-label="清理候选类别" data-test="cleanup-tiles">
-        <button
+        <StatTile
           v-for="tile in kindTiles"
           :key="tile.kind"
-          type="button"
+          tag="button"
           role="tab"
-          class="cleanup-tile cleanup-tile--tab"
-          :class="{ 'cleanup-tile--on': activeKind === tile.kind }"
+          :selected="activeKind === tile.kind"
           :aria-selected="activeKind === tile.kind"
+          :icon="tile.icon"
+          :value="tile.groups"
+          unit="组"
+          :label="tile.label"
+          :note="`${tile.images} 张 · 已勾 ${tile.selected} 张`"
+          :hint="tile.hint"
           :data-test="`cleanup-kind-${tile.kind}`"
           @click="setKind(tile.kind)"
-        >
-          <span class="cleanup-tile__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="(d, index) in tile.icon" :key="index" :d="d" /></svg></span>
-          <span class="cleanup-tile__value">{{ tile.groups }}<small>组</small></span>
-          <span class="cleanup-tile__label">{{ tile.label }}</span>
-          <small class="cleanup-tile__note">{{ tile.images }} 张 · 已勾 {{ tile.selected }} 张</small>
-          <span class="cleanup-tile__hint">{{ tile.hint }}</span>
-        </button>
-        <div class="cleanup-tile" data-test="cleanup-tile-pending">
-          <span class="cleanup-tile__icon cleanup-tile__icon--danger"><svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="(d, index) in TILE_ICONS.pending" :key="index" :d="d" /></svg></span>
-          <span class="cleanup-tile__value">{{ selection.length }}<small>张</small></span>
-          <span class="cleanup-tile__label">待删</span>
-          <small class="cleanup-tile__note">合计 {{ formatBytes(reclaimableBytes) }}</small>
-          <span class="cleanup-tile__hint">两个区域的勾选合在一起删</span>
-        </div>
+        />
+        <StatTile
+          tag="div"
+          tone="danger"
+          :icon="TILE_ICONS.pending"
+          :value="selection.length"
+          unit="张"
+          label="待删"
+          :note="`合计 ${formatBytes(reclaimableBytes)}`"
+          hint="两个区域的勾选合在一起删"
+          data-test="cleanup-tile-pending"
+        />
       </div>
 
       <div class="cleanup-page__toolbar">
@@ -480,6 +483,7 @@ import {
   GetImagePerceptualHashBackfillStatus
 } from '../../wailsjs/go/main/App';
 import BaseModal from './ui/BaseModal.vue';
+import StatTile from './ui/StatTile.vue';
 import TrashUndoBanner from './video-list/TrashUndoBanner.vue';
 import { summarizeTrashFailures } from './TrashCenterDialog.vue';
 import { formatBytes } from '../utils/mediaDetails.js';
@@ -530,7 +534,7 @@ function emptyDeleteConfirm() {
 
 export default {
   name: 'PhotoCleanupPage',
-  components: { BaseModal, TrashUndoBanner },
+  components: { BaseModal, StatTile, TrashUndoBanner },
   // deleted：清理页改动了图片库（删除，或在撤销条 / 回收站里撤销了删除），图片库据此重载。
   emits: ['close', 'deleted'],
   data() {
@@ -1435,45 +1439,8 @@ export default {
 .cleanup-page__switch { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer; }
 .cleanup-page__hint { flex: 1; min-width: 200px; }
 
-/* 统计卡：与观看回顾的统计卡同一套样子；前两张兼作区域切换。 */
+/* 统计卡是共用的 StatTile（D-UI-08）；前两张兼作区域切换。 */
 .cleanup-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
-.cleanup-tile {
-  position: relative;
-  display: grid;
-  align-content: start;
-  justify-items: start;
-  gap: 4px;
-  overflow: hidden;
-  padding: 16px 18px 14px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-lg);
-  background: var(--panel-bg);
-  color: var(--text-primary);
-  font: inherit;
-  text-align: left;
-}
-.cleanup-tile::after {
-  content: '';
-  position: absolute;
-  right: -30px;
-  top: -30px;
-  width: 110px;
-  height: 110px;
-  border-radius: 50%;
-  background: radial-gradient(circle, color-mix(in srgb, var(--accent-color) 14%, transparent), transparent 70%);
-  pointer-events: none;
-}
-.cleanup-tile--tab { cursor: pointer; transition: border-color var(--transition), background var(--transition), transform var(--transition); }
-.cleanup-tile--tab:hover { border-color: var(--border-strong); transform: translateY(-1px); }
-.cleanup-tile--on, .cleanup-tile--on:hover { border-color: var(--accent-color); background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel-bg)); box-shadow: 0 0 0 1px var(--accent-color); }
-.cleanup-tile__icon { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); }
-.cleanup-tile__icon--danger { background: var(--danger-soft); color: var(--danger-color); }
-.cleanup-tile__icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.cleanup-tile__value { display: flex; align-items: baseline; gap: 4px; margin-top: 6px; font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
-.cleanup-tile__value small { color: var(--text-secondary); font-size: 14px; font-weight: 600; letter-spacing: 0; }
-.cleanup-tile__label { color: var(--text-primary); font-size: 13px; font-weight: 600; }
-.cleanup-tile__note { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
-.cleanup-tile__hint { color: var(--text-muted); font-size: 11.5px; }
 
 /* 当前区域的标题行：标题、计数、翻页与本页操作。 */
 .cleanup-area__bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 4px 2px 0; scroll-margin-top: 110px; }
