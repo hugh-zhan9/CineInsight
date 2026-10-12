@@ -110,6 +110,9 @@
       <span v-if="backupStatus?.last_success_at">最近成功：{{ formatBackupTime(backupStatus.last_success_at) }}</span>
       <span v-if="backupStatus?.last_error">最近失败：{{ backupReasonText(backupStatus.last_error) }}</span>
       <span v-else-if="backupStatus?.reason">{{ backupStatus.reason }}</span>
+      <!-- 整理文件的提示（D-DH-01）：最近一次备份有收录目录不可用；或上次还原整理文件中途中断、已改回。 -->
+      <span v-if="backupStatus?.files_warning" class="backup-file-note" data-test="backup-files-warning">{{ backupStatus.files_warning }}</span>
+      <span v-if="backupStatus?.notice" class="backup-file-note" data-test="backup-notice">{{ backupStatus.notice }}</span>
     </div>
     <div class="setting-item">
       <label>备份目录</label>
@@ -159,6 +162,7 @@
             <!-- 没有清单的旧格式备份（D-DH-02）：仍可恢复，但只有数据库、没校验过。 -->
             <small v-if="backup.legacy" class="backup-file-note" data-test="backup-legacy">旧格式：仅数据库、未校验</small>
             <small v-else-if="backup.manifest_error" class="backup-danger-text" data-test="backup-manifest-error">清单有问题：{{ backup.manifest_error }}，不能恢复</small>
+            <small v-if="backup.unavailable_roots && backup.unavailable_roots.length" class="backup-file-note" data-test="backup-unavailable-roots">备份时 {{ backup.unavailable_roots.join('、') }} 不可用，这部分整理文件不在这份备份里</small>
             <template v-if="verificationOf(backup)">
               <span
                 :class="['backup-verify-badge', verificationOf(backup).ok ? 'backup-verify-badge--ok' : 'backup-verify-badge--fail']"
@@ -188,6 +192,9 @@
       <!-- D-DH-03：带清单的备份连同整理过的文件一起还原；旧格式备份只恢复数据库。 -->
       <p v-if="selectedBackup.legacy" class="help-text" data-test="backup-restore-files-note">这是旧格式备份，只恢复数据库；人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份保持现状。</p>
       <p v-else class="help-text" data-test="backup-restore-files-note">整理过的文件（人物头像、作品集封面、海报副本、想看封面、壁纸与字幕备份）也会一并还原到备份时的状态。</p>
+      <p v-if="!selectedBackup.legacy && selectedBackup.unavailable_roots && selectedBackup.unavailable_roots.length" class="help-text" data-test="backup-restore-unavailable-note">
+        {{ selectedBackup.unavailable_roots.join('、') }} 在备份时不可用，没有备份进去，恢复时保持现状。
+      </p>
       <!-- 上一次「校验」的结论（D-DH-03）：没通过时先提醒，恢复前后端还会再查一次文件包与表结构。 -->
       <p v-if="verificationOf(selectedBackup) && !verificationOf(selectedBackup).ok" class="backup-danger-text" data-test="backup-restore-verify-warning">
         这份备份上次校验没有通过（{{ (verificationOf(selectedBackup).problems || []).join('；') || '原因未知' }}），恢复很可能被拒绝或不完整，建议换一份备份。
@@ -275,8 +282,9 @@ export function databaseErrorReason(err) {
   return { code: match[1], text: text.slice(match[0].length) };
 }
 
-// 备份与恢复失败的原因码（D-DH-01 空间不足、D-DH-03 来自更新版本、文件包缺失或损坏）只给程序分类，界面上去掉。
-const BACKUP_REASON_PREFIX = /^(backup_insufficient_space|backup_from_newer_version|backup_files_invalid)\s*:\s*/;
+// 备份与恢复失败的原因码（D-DH-01 空间不足、D-DH-03 来自更新版本、文件包缺失或损坏、还原目标目录不可用）
+// 只给程序分类，界面上去掉。
+const BACKUP_REASON_PREFIX = /^(backup_insufficient_space|backup_from_newer_version|backup_files_invalid|backup_files_target_unavailable)\s*:\s*/;
 export function backupReasonText(text) {
   return String(text || '').trim().replace(BACKUP_REASON_PREFIX, '');
 }

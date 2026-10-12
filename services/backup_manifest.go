@@ -43,15 +43,17 @@ var backupFilesDirectories = []string{
 // Models 是做这份备份的应用版本的模型结构（表 → 列，取自 AllModels 与连接表，不看库里的实际表），
 // 「来自更新的版本」按它判定；Schema 是快照里实际的表结构，只作参考（老库里会有模型已删的遗留列）。
 type BackupManifest struct {
-	Format     int                  `json:"format"`
-	Backend    string               `json:"backend"`
-	CreatedAt  time.Time            `json:"created_at"`
-	Snapshot   BackupManifestFile   `json:"snapshot"`
-	Files      BackupManifestFiles  `json:"files"`
-	Models     map[string][]string  `json:"models,omitempty"`
-	Schema     BackupManifestSchema `json:"schema"`
-	Rows       map[string]int64     `json:"rows,omitempty"`
-	QuickCheck string               `json:"quick_check,omitempty"`
+	Format    int                 `json:"format"`
+	Backend   string              `json:"backend"`
+	CreatedAt time.Time           `json:"created_at"`
+	Snapshot  BackupManifestFile  `json:"snapshot"`
+	Files     BackupManifestFiles `json:"files"`
+	// UnavailableRoots 是备份时不可用（失效链接、没挂载的盘）、因此没有打包的收录目录。恢复时不动它们。
+	UnavailableRoots []string             `json:"unavailable_roots,omitempty"`
+	Models           map[string][]string  `json:"models,omitempty"`
+	Schema           BackupManifestSchema `json:"schema"`
+	Rows             map[string]int64     `json:"rows,omitempty"`
+	QuickCheck       string               `json:"quick_check,omitempty"`
 }
 
 type BackupManifestFile struct {

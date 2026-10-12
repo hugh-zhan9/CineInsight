@@ -151,14 +151,28 @@ var (
 	modelSchemaErr  error
 )
 
-// currentModelSchema 是本版本的模型结构（表 → 列，按字典序）：AllModels 与它们的多对多连接表，
-// 用 GORM 的默认命名解析（与 database.Init 一致），不看任何库里的实际表——老库里 AutoMigrate 留下的
-// 遗留列不算当前结构。清单的 models 记的就是它；恢复与校验拿备份的 models 和它比（D-DH-03）。
+// semanticRawTables 是只在 Postgres 上用裸 DDL 建的语义向量表与它们的列（database/semantic_vector.go、
+// image_semantic_vector.go）。改 DDL 时同步这里；TestModelSchemaGolden 会提醒更新快照。
+var semanticRawTables = map[string][]string{
+	"video_semantic_vectors": {"dimension", "embedding", "generation", "model_identifier", "updated_at", "video_id"},
+	"image_semantic_vectors": {"dimension", "embedding", "generation", "image_id", "model_identifier", "updated_at"},
+}
+
+// currentModelSchema 是本版本的模型结构（表 → 列，按字典序）：AllModels 与它们的多对多连接表、Postgres 上的
+// 语义索引模型与裸 DDL 向量表，用 GORM 的默认命名解析（与 database.Init 一致），不看任何库里的实际表——老库里
+// AutoMigrate 留下的遗留列不算当前结构。清单的 models 记的就是它；恢复与校验拿备份的 models 和它比（D-DH-03）。
 func currentModelSchema() (map[string][]string, error) {
 	modelSchemaOnce.Do(func() {
 		cache := &sync.Map{}
 		tables := map[string][]string{}
-		for _, model := range models.AllModels() {
+		semanticModels := []any{
+			&models.SemanticIndexProfile{}, &models.VideoSemanticIndex{}, &models.SemanticIndexAttempt{},
+			&models.ImageSemanticIndex{}, &models.ImageSemanticIndexAttempt{},
+		}
+		for table, columns := range semanticRawTables {
+			tables[table] = sortedColumns(columns)
+		}
+		for _, model := range append(models.AllModels(), semanticModels...) {
 			parsed, err := schema.Parse(model, cache, schema.NamingStrategy{})
 			if err != nil {
 				modelSchemaErr = fmt.Errorf("解析模型 %T 失败: %w", model, err)

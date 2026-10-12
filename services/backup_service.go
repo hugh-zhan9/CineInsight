@@ -48,6 +48,8 @@ type BackupFile struct {
 	FileCount int   `json:"file_count"`
 	// Verification 是这份备份最近一次「校验」的结果；从没校验过为空。
 	Verification *BackupVerification `json:"verification"`
+	// UnavailableRoots 是备份时不可用、没有打包的收录目录（取自清单）。
+	UnavailableRoots []string `json:"unavailable_roots"`
 }
 
 type BackupRestoreRequest struct {
@@ -100,6 +102,10 @@ type BackupStatus struct {
 	LastAttemptAt    *time.Time `json:"last_attempt_at" ts_type:"string"`
 	LastSuccessAt    *time.Time `json:"last_success_at" ts_type:"string"`
 	LastError        string     `json:"last_error"`
+	// FilesWarning 是本次运行里最近一次备份的整理文件提示（有收录目录不可用时）；Notice 是一次性的
+	// 「上次还原整理文件中途中断、已改回」说明。两者都不落库。
+	FilesWarning string `json:"files_warning"`
+	Notice       string `json:"notice"`
 }
 
 type postgresToolRunner interface {
@@ -160,8 +166,13 @@ type BackupService struct {
 	// inspectSnapshot 是新快照发布前的只读检查（quick_check、行数、表结构），测试用它在检查前
 	// 弄坏快照；为空时用 inspectSQLiteSnapshot。
 	inspectSnapshot func(ctx context.Context, path string) (sqliteSnapshotFacts, error)
+	// filesWarning / notice 见 BackupStatus 同名字段，由 registryMu 保护。
+	filesWarning string
+	notice       string
 	// rename 是还原文件包时的目录改名，测试用它注入改名失败；为空时用 os.Rename。
 	rename func(from, to string) error
+	// volumeOf 返回路径所在卷的标识，恢复前按卷合计空间需求；测试用它模拟多块盘。为空时用 backupVolumeID。
+	volumeOf func(path string) (string, error)
 }
 
 // ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。
@@ -242,6 +253,9 @@ func (s *BackupService) HealthStatus(ctx context.Context) (BackupStatus, error) 
 
 func (s *BackupService) statusFromSettings(settings *models.Settings) BackupStatus {
 	status := BackupStatus{Running: s.running.Load()}
+	s.registryMu.Lock()
+	status.FilesWarning, status.Notice = s.filesWarning, s.notice
+	s.registryMu.Unlock()
 	status.BackupDirectory = s.resolveDirectory(settings.BackupDirectory)
 	status.RetentionCount = normalizedBackupRetention(settings.BackupRetentionCount)
 	status.IntervalHours = normalizedBackupInterval(settings.BackupIntervalHours)
@@ -419,6 +433,10 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 	if err != nil {
 		return s.recordedRestoreFailure(err)
 	}
+	// 恢复要新写的临时副本、安全备份、临时库与整理文件按卷合计，放不下就在这里拒绝（审阅 R1）。
+	if err := s.checkRestoreSpace(directory, request, manifest, backend); err != nil {
+		return s.recordedRestoreFailure(err)
+	}
 	backupPath, err := s.copyVerifiedBackup(directory, request)
 	if err != nil {
 		return err
@@ -472,7 +490,7 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 			return &DatabaseRestoreError{
 				Committed: restoreErr == nil,
 				Fatal:     true,
-				Err:       fmt.Errorf("%s: %w", message, err),
+				Err:       fmt.Errorf("%s: %w", message, WithoutAbsolutePaths(err)),
 			}
 		}
 	}
@@ -903,6 +921,7 @@ func (s *BackupService) listBackupsIn(directory string) ([]BackupFile, error) {
 		if err == nil {
 			backup.Size = manifest.Snapshot.Size
 			backup.Fingerprint = manifest.Snapshot.SHA256
+			backup.UnavailableRoots = manifest.UnavailableRoots
 			backup.FilesSize = manifest.Files.Size
 			backup.FileCount = len(manifest.Files.Entries)
 		} else {

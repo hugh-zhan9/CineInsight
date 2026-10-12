@@ -1780,6 +1780,7 @@ export namespace services {
 	    files_size: number;
 	    file_count: number;
 	    verification?: BackupVerification;
+	    unavailable_roots: string[];
 	
 	    static createFrom(source: any = {}) {
 	        return new BackupFile(source);
@@ -1796,6 +1797,7 @@ export namespace services {
 	        this.files_size = source["files_size"];
 	        this.file_count = source["file_count"];
 	        this.verification = this.convertValues(source["verification"], BackupVerification);
+	        this.unavailable_roots = source["unavailable_roots"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -1844,6 +1846,8 @@ export namespace services {
 	    last_attempt_at?: string;
 	    last_success_at?: string;
 	    last_error: string;
+	    files_warning: string;
+	    notice: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new BackupStatus(source);
@@ -1862,6 +1866,8 @@ export namespace services {
 	        this.last_attempt_at = source["last_attempt_at"];
 	        this.last_success_at = source["last_success_at"];
 	        this.last_error = source["last_error"];
+	        this.files_warning = source["files_warning"];
+	        this.notice = source["notice"];
 	    }
 	}
 	
