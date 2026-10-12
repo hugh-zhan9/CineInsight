@@ -1,0 +1,8 @@
+{
+  "threshold": 0.8307785119309815,
+  "target_calibration_false_identification": 0.005,
+  "calibration_gallery_people": 20,
+  "calibration_unknown_people": 20,
+  "calibration_unknown_queries": 200,
+  "calibration_false_identification": 0
+}

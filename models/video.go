@@ -233,10 +233,11 @@ type Settings struct {
 	// 也不用（更不能用）gorm default 标签。
 	//
 	// AutoFaceAnalysis 默认关：人脸分析是重任务，且它产出的是人物候选，
-	// 装完就替用户跑一遍并不合适。FaceModelMirrorURL 为空时用 manifest 里的
+	// 不替用户自动分析。FaceModelMirrorURL 仅保留历史存储，不再用于执行或前端 JSON。
+	// 历史行为：为空时用 manifest 里的
 	// 官方地址，非空时替换其 URL 前缀（本机直连 GitHub 未必通）。
 	AutoFaceAnalysis   bool   `json:"auto_face_analysis"`
-	FaceModelMirrorURL string `gorm:"type:text;not null;default:''" json:"face_model_mirror_url"`
+	FaceModelMirrorURL string `gorm:"type:text;not null;default:''" json:"-"`
 
 	// 帧哈希序列（D-026）。默认关，零值即默认，不需要显式迁移，也不用（更不能用）
 	// gorm default 标签。回填要逐帧抽整部片，是本应用里最吃 CPU 的一类任务，

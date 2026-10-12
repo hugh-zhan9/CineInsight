@@ -1,0 +1,47 @@
+{
+  "threshold": 0.8307785119309815,
+  "images": 400,
+  "detected": 400,
+  "test_known_people": 20,
+  "test_unknown_people": 20,
+  "gallery": 40,
+  "known_queries": 160,
+  "known_rank1": 1.0,
+  "known_correct_accepted": 155,
+  "known_wrong_accepted": 0,
+  "known_rejected": 5,
+  "unknown_queries": 200,
+  "unknown_wrong_accepted": 0,
+  "clusters": [
+    {
+      "clusters": 49,
+      "pair_precision": 1.0,
+      "pair_recall": 0.9538888888888889,
+      "wrong_pairs": 0
+    },
+    {
+      "clusters": 45,
+      "pair_precision": 1.0,
+      "pair_recall": 0.9655555555555555,
+      "wrong_pairs": 0
+    },
+    {
+      "clusters": 52,
+      "pair_precision": 1.0,
+      "pair_recall": 0.9144444444444444,
+      "wrong_pairs": 0
+    },
+    {
+      "clusters": 48,
+      "pair_precision": 1.0,
+      "pair_recall": 0.96,
+      "wrong_pairs": 0
+    },
+    {
+      "clusters": 49,
+      "pair_precision": 1.0,
+      "pair_recall": 0.9555555555555556,
+      "wrong_pairs": 0
+    }
+  ]
+}

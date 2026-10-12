@@ -9,13 +9,8 @@ import (
 	"strings"
 )
 
-// 以图搜片（2026-10-12）：拿一张图——拖进来、粘贴、选文件，或某部片某一时刻的画面——在画面索引里找相似的段。
-// 与文字查询共用范围、有效段与打分（scanSceneVisualSegments），只是查询向量换成同一 Chinese-CLIP 模型的
-// 图片向量。只走本地向量：外部描述没有向量，给提示不执行。上传的图片只落临时文件、用完即删，不写日志、不入库。
+// 以图检索仅用苹果图像特征，与文字 CLIP/外部描述索引独立；上传图片临时落盘、用完即删。
 const (
-	// SceneNoticeImageSearchUnsupported：画面来源是外部描述（只有文字描述、没有向量），以图搜片没有执行。
-	SceneNoticeImageSearchUnsupported = "scene_image_search_unsupported"
-
 	sceneImageMaxBytes = 20 << 20
 	// 用某部片的画面找相似时，排除来源片子里这一刻前后 10 秒的段：否则第一条命中总是它自己。
 	sceneSimilarExcludeMS = 10_000
@@ -88,21 +83,21 @@ func (s *SceneSearchService) SearchByImage(ctx context.Context, request SceneIma
 	case request.Limit > sceneMaxLimit:
 		request.Limit = sceneMaxLimit
 	}
-	provider, modelID, intervalMS, err := s.visualModel(ctx)
+	settings, err := loadSceneSettings(ctx)
 	if err != nil {
 		return SceneSearchResult{}, err
 	}
+	provider, modelID, intervalMS := SceneProviderApple, SceneAppleModelID, settings.IntervalMS
 	coverage, err := sceneCoverage(ctx, request.Filter, provider, modelID, intervalMS)
 	if err != nil {
 		return SceneSearchResult{}, err
 	}
+	coverage.ImageIndexed = coverage.VisualIndexed
+	coverage.ImageAvailable = s.imageAvailable != nil && s.imageAvailable()
 	result := SceneSearchResult{Hits: []SceneHit{}, Coverage: coverage, Notices: []string{}}
 	switch {
-	case provider == SceneProviderExternal:
-		result.Notices = append(result.Notices, SceneNoticeImageSearchUnsupported)
-		return result, nil
-	case s.vectors == nil || s.runtimeAvailable == nil || !s.runtimeAvailable():
-		result.Notices = append(result.Notices, SceneNoticeRuntimeUnavailable)
+	case s.imageVectors == nil || !coverage.ImageAvailable:
+		result.Notices = append(result.Notices, "apple_image_unavailable")
 		return result, nil
 	case coverage.VisualIndexed == 0:
 		result.Notices = append(result.Notices, SceneNoticeVisualIndexEmpty)
@@ -121,7 +116,7 @@ func (s *SceneSearchService) SearchByImage(ctx context.Context, request SceneIma
 		if ctx.Err() != nil {
 			return SceneSearchResult{}, ctx.Err()
 		}
-		result.Notices = append(result.Notices, SceneNoticeVisualFailed)
+		result.Notices = append(result.Notices, "apple_image_failed")
 		return result, nil
 	}
 	scanLimit := request.Limit
@@ -160,7 +155,7 @@ func (s *SceneSearchService) embedQueryImage(ctx context.Context, image []byte) 
 	if err := file.Close(); err != nil {
 		return nil, err
 	}
-	vectors, err := s.vectors.EmbedImages(ctx, []string{path})
+	vectors, err := s.imageVectors.EmbedImages(ctx, []string{path})
 	if err != nil {
 		return nil, err
 	}

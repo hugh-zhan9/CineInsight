@@ -1,6 +1,7 @@
 <template>
   <div id="settings-scenes" class="settings-section">
     <h3>场景检索</h3>
+    <p class="help-text">以图检索使用苹果系统能力，无需第三方模型。以下模型与提供方仅用于中文文字搜画面。</p>
 
     <p class="help-text scene-privacy" data-test="scene-privacy-note">
       「准备模型」会联网：从 PyPI 安装 Python 依赖、必要时下载一份托管 Python 运行时，并从

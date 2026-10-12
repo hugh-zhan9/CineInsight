@@ -134,10 +134,6 @@ export function CancelFaceAnalysis() {
   return window['go']['main']['App']['CancelFaceAnalysis']();
 }
 
-export function CancelFaceRuntimePrepare() {
-  return window['go']['main']['App']['CancelFaceRuntimePrepare']();
-}
-
 export function CancelFrameHashBackfill() {
   return window['go']['main']['App']['CancelFrameHashBackfill']();
 }

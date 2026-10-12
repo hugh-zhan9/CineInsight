@@ -1,0 +1,17 @@
+{
+  "compressed": {
+    "queries": 100,
+    "top1": 100,
+    "top5": 100
+  },
+  "crop": {
+    "queries": 100,
+    "top1": 100,
+    "top5": 100
+  },
+  "video": {
+    "queries": 100,
+    "top1": 100,
+    "top5": 100
+  }
+}

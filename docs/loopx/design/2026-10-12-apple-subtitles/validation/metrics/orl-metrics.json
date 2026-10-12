@@ -1,0 +1,57 @@
+{
+  "dataset": "orl",
+  "images": 400,
+  "identities": 40,
+  "detected": 170,
+  "detection_rate": 0.425,
+  "multi_face_images": 0,
+  "calibration_people": 20,
+  "test_people": 20,
+  "threshold": 0.7844086027302201,
+  "calibration_true_accept": 1.0,
+  "test_positive_pairs": 354,
+  "test_negative_pairs": 5106,
+  "test_true_accept": 0.9971751412429378,
+  "test_false_accept": 0.0,
+  "gallery_images": 20,
+  "query_images": 85,
+  "rank1_detected": 0.8823529411764706,
+  "rank1_all": 0.46875,
+  "rejected_queries": 10,
+  "wrong_accepted_queries": 0,
+  "test_detection": 0.525,
+  "clusters": [
+    {
+      "clusters": 16,
+      "mixed_clusters": 0,
+      "pair_precision": 1.0,
+      "pair_recall": 1.0
+    },
+    {
+      "clusters": 16,
+      "mixed_clusters": 0,
+      "pair_precision": 1.0,
+      "pair_recall": 1.0
+    },
+    {
+      "clusters": 16,
+      "mixed_clusters": 0,
+      "pair_precision": 1.0,
+      "pair_recall": 1.0
+    },
+    {
+      "clusters": 16,
+      "mixed_clusters": 0,
+      "pair_precision": 1.0,
+      "pair_recall": 1.0
+    },
+    {
+      "clusters": 16,
+      "mixed_clusters": 0,
+      "pair_precision": 1.0,
+      "pair_recall": 1.0
+    }
+  ],
+  "existing_055_true_accept": 1.0,
+  "existing_055_false_accept": 0.7493145319232276
+}

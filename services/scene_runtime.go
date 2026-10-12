@@ -83,7 +83,7 @@ type SceneRuntime struct {
 	worker          sync.WaitGroup
 
 	interpreterMu    sync.Mutex
-	interpreterCache map[string]faceInterpreterProbe
+	interpreterCache map[string]sceneInterpreterProbe
 	observedMu       sync.Mutex
 	observedStatus   *SceneRuntimeStatus
 	observedAt       time.Time
@@ -102,8 +102,8 @@ func NewSceneRuntime(dataDir string, mirror func() string) *SceneRuntime {
 		baseDir:    dataDir,
 		mirror:     mirror,
 		fetch:      fetchSceneModelFile,
-		runPython:  runFacePythonCommand,
-		supported:  faceRuntimePlatformSupported,
+		runPython:  runScenePythonCommand,
+		supported:  sceneRuntimePlatformSupported,
 		acceptPy:   scenePythonAcceptable,
 		modelFiles: sceneModelFiles,
 	}
@@ -189,7 +189,7 @@ func (r *SceneRuntime) accept(path string) bool {
 	}
 	now := time.Now()
 	r.interpreterMu.Lock()
-	if cached, ok := r.interpreterCache[path]; ok && now.Sub(cached.probedAt) < faceInterpreterCacheTTL {
+	if cached, ok := r.interpreterCache[path]; ok && now.Sub(cached.probedAt) < sceneInterpreterCacheTTL {
 		r.interpreterMu.Unlock()
 		return cached.usable
 	}
@@ -197,9 +197,9 @@ func (r *SceneRuntime) accept(path string) bool {
 	result := r.acceptPy(path)
 	r.interpreterMu.Lock()
 	if r.interpreterCache == nil {
-		r.interpreterCache = make(map[string]faceInterpreterProbe, 4)
+		r.interpreterCache = make(map[string]sceneInterpreterProbe, 4)
 	}
-	r.interpreterCache[path] = faceInterpreterProbe{usable: result, probedAt: now}
+	r.interpreterCache[path] = sceneInterpreterProbe{usable: result, probedAt: now}
 	r.interpreterMu.Unlock()
 	return result
 }
@@ -610,7 +610,7 @@ func (r *SceneRuntime) downloadModelFile(ctx context.Context, url, destination s
 		return 0, err
 	}
 	digest := sha256.New()
-	counter := &faceDownloadCounter{onProgress: progress}
+	counter := &sceneDownloadCounter{onProgress: progress}
 	written, copyErr := io.Copy(io.MultiWriter(out, digest, counter), io.LimitReader(body, sceneModelFileMaxSize+1))
 	closeErr := out.Close()
 	if copyErr != nil {
@@ -637,7 +637,7 @@ func fetchSceneModelFile(ctx context.Context, url string) (io.ReadCloser, int64,
 	if err != nil {
 		return nil, 0, err
 	}
-	response, err := faceModelHTTPClient.Do(request)
+	response, err := sceneModelHTTPClient.Do(request)
 	if err != nil {
 		return nil, 0, fmt.Errorf("下载失败: %w", err)
 	}

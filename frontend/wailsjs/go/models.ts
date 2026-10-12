@@ -774,7 +774,6 @@ export namespace models {
 	    auto_compatibility_proxy: boolean;
 	    proxy_cache_limit_bytes: number;
 	    auto_face_analysis: boolean;
-	    face_model_mirror_url: string;
 	    auto_frame_hash_sequence: boolean;
 	    browser_bridge_enabled: boolean;
 	    browser_bridge_token: string;
@@ -851,7 +850,6 @@ export namespace models {
 	        this.auto_compatibility_proxy = source["auto_compatibility_proxy"];
 	        this.proxy_cache_limit_bytes = source["proxy_cache_limit_bytes"];
 	        this.auto_face_analysis = source["auto_face_analysis"];
-	        this.face_model_mirror_url = source["face_model_mirror_url"];
 	        this.auto_frame_hash_sequence = source["auto_frame_hash_sequence"];
 	        this.browser_bridge_enabled = source["browser_bridge_enabled"];
 	        this.browser_bridge_token = source["browser_bridge_token"];
@@ -4712,6 +4710,10 @@ export namespace services {
 	    }
 	}
 	export class FaceAnalysisStatus {
+	    migration_pending: number;
+	    migrating: boolean;
+	    migration_total: number;
+	    migration_processed: number;
 	    running: boolean;
 	    preparing: boolean;
 	    cancelled: boolean;
@@ -4737,6 +4739,10 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.migration_pending = source["migration_pending"];
+	        this.migrating = source["migrating"];
+	        this.migration_total = source["migration_total"];
+	        this.migration_processed = source["migration_processed"];
 	        this.running = source["running"];
 	        this.preparing = source["preparing"];
 	        this.cancelled = source["cancelled"];
@@ -5006,17 +5012,7 @@ export namespace services {
 	    reason: string;
 	    identity: string;
 	    runtime_dir: string;
-	    model_source_url: string;
-	    model_sha256: string;
-	    model_archive_size: string;
-	    mirror_configured: boolean;
 	    preparing: boolean;
-	    stage: string;
-	    message: string;
-	    downloaded_bytes: number;
-	    total_bytes: number;
-	    cancelled: boolean;
-	    error: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new FaceRuntimeStatus(source);
@@ -5028,17 +5024,7 @@ export namespace services {
 	        this.reason = source["reason"];
 	        this.identity = source["identity"];
 	        this.runtime_dir = source["runtime_dir"];
-	        this.model_source_url = source["model_source_url"];
-	        this.model_sha256 = source["model_sha256"];
-	        this.model_archive_size = source["model_archive_size"];
-	        this.mirror_configured = source["mirror_configured"];
 	        this.preparing = source["preparing"];
-	        this.stage = source["stage"];
-	        this.message = source["message"];
-	        this.downloaded_bytes = source["downloaded_bytes"];
-	        this.total_bytes = source["total_bytes"];
-	        this.cancelled = source["cancelled"];
-	        this.error = source["error"];
 	    }
 	}
 	export class FaceUnlinkMediaView {
@@ -10124,6 +10110,8 @@ export namespace services {
 		}
 	}
 	export class SceneCoverage {
+	    image_indexed: number;
+	    image_available: boolean;
 	    total_videos: number;
 	    subtitle_indexed: number;
 	    subtitle_unindexed: number;
@@ -10137,6 +10125,8 @@ export namespace services {
 	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.image_indexed = source["image_indexed"];
+	        this.image_available = source["image_available"];
 	        this.total_videos = source["total_videos"];
 	        this.subtitle_indexed = source["subtitle_indexed"];
 	        this.subtitle_unindexed = source["subtitle_unindexed"];

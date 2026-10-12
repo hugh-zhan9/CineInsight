@@ -34,6 +34,7 @@ type AppleLanguageDetection struct {
 }
 type appleAIRequest struct {
 	Operation string   `json:"operation"`
+	Paths     []string `json:"paths,omitempty"`
 	Path      string   `json:"path,omitempty"`
 	Source    string   `json:"source,omitempty"`
 	Target    string   `json:"target,omitempty"`
@@ -45,6 +46,8 @@ type appleWord struct {
 	Text  string  `json:"text"`
 }
 type appleAIResponse struct {
+	ModelID              string                   `json:"model_id"`
+	Vectors              []string                 `json:"vectors"`
 	Error                string                   `json:"error"`
 	Supported            bool                     `json:"supported"`
 	Languages            []AppleLanguage          `json:"languages"`
@@ -58,8 +61,8 @@ type appleAIRunner func(context.Context, appleAIRequest) (appleAIResponse, error
 
 func appleAIError(code string) error {
 	messages := map[string]string{
-		"apple_platform_unsupported":         "系统字幕需要 macOS 26 或更新版本",
-		"apple_helper_missing":               "系统字幕组件未随应用打包，请重新构建或安装完整应用",
+		"apple_platform_unsupported":         "苹果系统能力需要 macOS 26 或更新版本",
+		"apple_helper_missing":               "苹果系统组件未随应用打包，请重新构建或安装完整应用",
 		"apple_speech_language_missing":      "该识别语言尚未准备，请先准备系统语音资源",
 		"apple_translation_language_missing": "翻译语言尚未准备，请在字幕设置中准备对应语言",
 		"apple_language_unsupported":         "苹果系统不支持所选语言或语言组合",
@@ -74,7 +77,7 @@ func appleAIError(code string) error {
 	}
 	message, ok := messages[code]
 	if !ok {
-		message = "苹果系统字幕处理失败"
+		message = "苹果系统处理失败"
 	}
 	return fmt.Errorf("%s: %s", code, message)
 }

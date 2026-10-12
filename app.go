@@ -204,7 +204,7 @@ func NewApp() *App {
 	app.desktopNotify = services.NewDesktopNotificationCenter(services.NewDesktopNotifier(), app.desktopNotificationsEnabled)
 	// 人脸识别（D-016、D-018）：运行时读设置里的镜像前缀，分析复用图片解码矩阵与
 	// 重媒体处理槽。构造在 wire* 之前，两个 wire 才接得到它。
-	app.faceRuntime = services.NewFaceRuntime(dataDir, app.faceModelMirrorURL)
+	app.faceRuntime = services.NewFaceRuntime(dataDir, nil)
 	app.faceAnalysis = services.NewFaceAnalysisService(dataDir, app.faceRuntime, imageThumbnail)
 	app.faceAnalysis.SetMediaWorkSlot(mediaWorkSlot)
 	app.faceReview = services.NewFaceReviewService(dataDir, app.faceAnalysis)
@@ -361,16 +361,6 @@ func (a *App) desktopNotificationsEnabled() bool {
 		return false
 	}
 	return settings.DesktopNotificationsEnabled
-}
-
-// faceModelMirrorURL 读人脸模型下载的镜像前缀（D-016），每次下载前读一次。
-// 读不到设置就当没配镜像：官方地址通不通是另一回事，不该因为读不到设置就不许下载。
-func (a *App) faceModelMirrorURL() string {
-	settings, err := a.settingsService.GetSettings()
-	if err != nil {
-		return ""
-	}
-	return settings.FaceModelMirrorURL
 }
 
 // SetWindowForeground 由前端在 focus / blur / visibilitychange 时上报窗口前后台（D-013）。

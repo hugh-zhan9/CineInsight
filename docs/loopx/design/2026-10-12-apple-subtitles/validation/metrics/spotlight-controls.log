@@ -1,0 +1,6 @@
+bundle=com.cineinsight.validation.spotlight20261012
+indexed_metadata=101
+2026-10-12 16:07:05.854 spotlight-probe[60444:15304885] [UserQueryParser] Loading keywords and predicates for locale "zh_CN"
+{"round":0,"user_literal_control":[],"semantic_control":[],"hydrant":[],"literal_control":["control"],"user_word_control":["control"],"zh_hydrant":[],"skateboard":[]}
+{"round":1,"user_literal_control":[],"semantic_control":[],"hydrant":[],"literal_control":["control"],"user_word_control":["control"],"zh_hydrant":[],"skateboard":[]}
+cleanup=ok

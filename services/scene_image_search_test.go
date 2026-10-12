@@ -27,14 +27,14 @@ func scenePNG(t *testing.T) []byte {
 // 以图搜片：上传的图片向量化后按画面段打分；临时文件用完即删，不走文字编码器。
 func TestSceneImageSearchRanksSegmentsAndRemovesTempFile(t *testing.T) {
 	setupSceneDB(t, SceneProviderLocal)
-	query, near, mid, far := sceneTestVectors(77)
+	query, near, mid, far := appleImageTestVectors(77)
 	a := seedSceneVideo(t, "a.mp4", []byte("aaaa"), 60)
 	b := seedSceneVideo(t, "b.mp4", []byte("bbbbb"), 60)
-	seedSceneIndex(t, a, SceneLocalModelID, 5000, []sceneSegmentFixture{
+	seedSceneIndex(t, a, SceneAppleModelID, 5000, []sceneSegmentFixture{
 		{StartMS: 0, EndMS: 5000, Vector: far},
 		{StartMS: 20000, EndMS: 25000, Vector: near},
 	})
-	seedSceneIndex(t, b, SceneLocalModelID, 5000, []sceneSegmentFixture{{StartMS: 30000, EndMS: 35000, Vector: mid}})
+	seedSceneIndex(t, b, SceneAppleModelID, 5000, []sceneSegmentFixture{{StartMS: 30000, EndMS: 35000, Vector: mid}})
 	var seenPath string
 	vectors := &fakeSceneVectors{image: func(path string) []float32 {
 		seenPath = path
@@ -44,7 +44,7 @@ func TestSceneImageSearchRanksSegmentsAndRemovesTempFile(t *testing.T) {
 		return query
 	}}
 	encoded := "data:image/png;base64," + base64.StdEncoding.EncodeToString(scenePNG(t))
-	result, err := newTestSceneSearch(vectors, true).SearchByImage(context.Background(), SceneImageSearchRequest{ImageBase64: encoded, Limit: 2})
+	result, err := newTestAppleImageSearch(vectors, true).SearchByImage(context.Background(), SceneImageSearchRequest{ImageBase64: encoded, Limit: 2})
 	if err != nil {
 		t.Fatalf("以图搜片失败: %v", err)
 	}
@@ -65,18 +65,18 @@ func TestSceneImageSearchRanksSegmentsAndRemovesTempFile(t *testing.T) {
 // 用某部片的画面找相似：排除来源片子里这一刻前后 10 秒的段，同一部片别处的相似镜头与别的片照常返回。
 func TestSceneImageSearchFromFrameExcludesSourceMoment(t *testing.T) {
 	setupSceneDB(t, SceneProviderLocal)
-	query, near, mid, _ := sceneTestVectors(78)
+	query, near, mid, _ := appleImageTestVectors(78)
 	a := seedSceneVideo(t, "a.mp4", []byte("aaaa"), 120)
 	b := seedSceneVideo(t, "b.mp4", []byte("bbbbb"), 60)
-	seedSceneIndex(t, a, SceneLocalModelID, 5000, []sceneSegmentFixture{
+	seedSceneIndex(t, a, SceneAppleModelID, 5000, []sceneSegmentFixture{
 		{StartMS: 40000, EndMS: 45000, Vector: query}, // 来源这一刻本身
 		{StartMS: 50000, EndMS: 55000, Vector: near},  // 来源后 10 秒内，也排除
 		{StartMS: 90000, EndMS: 95000, Vector: near},  // 同一部片别处的相似镜头，保留
 	})
-	seedSceneIndex(t, b, SceneLocalModelID, 5000, []sceneSegmentFixture{{StartMS: 0, EndMS: 5000, Vector: mid}})
+	seedSceneIndex(t, b, SceneAppleModelID, 5000, []sceneSegmentFixture{{StartMS: 0, EndMS: 5000, Vector: mid}})
 	frame := scenePNG(t)
 	var rendered []any
-	search := newTestSceneSearch(&fakeSceneVectors{image: func(string) []float32 { return query }}, true)
+	search := newTestAppleImageSearch(&fakeSceneVectors{image: func(string) []float32 { return query }}, true)
 	search.SetFrameRenderer(func(_ context.Context, videoID uint, ms int64, width int) ([]byte, error) {
 		rendered = append(rendered, videoID, ms, width)
 		return frame, nil
@@ -95,7 +95,7 @@ func TestSceneImageSearchFromFrameExcludesSourceMoment(t *testing.T) {
 
 func TestSceneImageSearchValidatesInput(t *testing.T) {
 	setupSceneDB(t, SceneProviderLocal)
-	search := newTestSceneSearch(&fakeSceneVectors{image: func(string) []float32 { return nil }}, true)
+	search := newTestAppleImageSearch(&fakeSceneVectors{image: func(string) []float32 { return nil }}, true)
 	png64 := base64.StdEncoding.EncodeToString(scenePNG(t))
 	huge := base64.StdEncoding.EncodeToString(append(scenePNG(t), make([]byte, sceneImageMaxBytes)...))
 	for name, request := range map[string]SceneImageSearchRequest{
@@ -119,11 +119,11 @@ func TestSceneImageSearchNotices(t *testing.T) {
 		t.Helper()
 		setupSceneDB(t, provider)
 		if seed {
-			query, _, _, _ := sceneTestVectors(5)
+			query, _, _, _ := appleImageTestVectors(5)
 			video := seedSceneVideo(t, "a.mp4", []byte("aaaa"), 60)
-			seedSceneIndex(t, video, SceneLocalModelID, 5000, []sceneSegmentFixture{{StartMS: 0, EndMS: 5000, Vector: query}})
+			seedSceneIndex(t, video, SceneAppleModelID, 5000, []sceneSegmentFixture{{StartMS: 0, EndMS: 5000, Vector: query}})
 		}
-		result, err := newTestSceneSearch(vectors, available).SearchByImage(context.Background(), SceneImageSearchRequest{ImageBase64: png64})
+		result, err := newTestAppleImageSearch(vectors, available).SearchByImage(context.Background(), SceneImageSearchRequest{ImageBase64: png64})
 		if err != nil {
 			t.Fatalf("不应报错: %v", err)
 		}
@@ -134,11 +134,11 @@ func TestSceneImageSearchNotices(t *testing.T) {
 	}
 
 	result, vectors := run(SceneProviderExternal, true, ok(), false)
-	if strings.Join(result.Notices, ",") != SceneNoticeImageSearchUnsupported || vectors.imageCalls != 0 {
+	if strings.Join(result.Notices, ",") != SceneNoticeVisualIndexEmpty || vectors.imageCalls != 0 {
 		t.Fatalf("外部描述：%v calls=%d", result.Notices, vectors.imageCalls)
 	}
 	result, vectors = run(SceneProviderLocal, false, ok(), true)
-	if strings.Join(result.Notices, ",") != SceneNoticeRuntimeUnavailable || vectors.imageCalls != 0 {
+	if strings.Join(result.Notices, ",") != "apple_image_unavailable" || vectors.imageCalls != 0 {
 		t.Fatalf("模型没就绪：%v calls=%d", result.Notices, vectors.imageCalls)
 	}
 	result, vectors = run(SceneProviderLocal, true, ok(), false)
@@ -147,7 +147,21 @@ func TestSceneImageSearchNotices(t *testing.T) {
 	}
 	failing := &fakeSceneVectors{imageErr: errors.New("scene_worker_error: inference_failed")}
 	result, _ = run(SceneProviderLocal, true, failing, true)
-	if strings.Join(result.Notices, ",") != SceneNoticeVisualFailed || len(result.Hits) != 0 {
+	if strings.Join(result.Notices, ",") != "apple_image_failed" || len(result.Hits) != 0 {
 		t.Fatalf("推理出错：%v %+v", result.Notices, result.Hits)
 	}
+}
+
+func newTestAppleImageSearch(vectors sceneImageVectorSource, available bool) *SceneSearchService {
+	return &SceneSearchService{imageVectors: vectors, imageAvailable: func() bool { return available }, runtimeAvailable: func() bool { return false }}
+}
+func appleImageTestVectors(_ int) ([]float32, []float32, []float32, []float32) {
+	a := make([]float32, appleImageDims)
+	b := make([]float32, appleImageDims)
+	c := make([]float32, appleImageDims)
+	d := make([]float32, appleImageDims)
+	b[0] = .1
+	c[0] = .5
+	d[0] = 2
+	return a, b, c, d
 }

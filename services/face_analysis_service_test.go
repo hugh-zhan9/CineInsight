@@ -260,8 +260,8 @@ func TestFaceAnalysisMergesSameFaceAndSplitsDifferentFace(t *testing.T) {
 
 	worker := newFakeFaceWorker()
 	worker.set(models.FaceMediaKindImage, first.ID, faceAt(0.1, 0.1, 0.9, faceUnitVector(0)))
-	// 与 e0 的相似度 0.8 ≥ 0.55：同一个人的另一个角度。
-	worker.set(models.FaceMediaKindImage, second.ID, faceAt(0.2, 0.2, 0.7, faceMixedVector(0, 1, 0.8, 0.6)))
+	// 与 e0 的相似度 0.96 ≥ 苹果阈值：同一个人的另一个角度。
+	worker.set(models.FaceMediaKindImage, second.ID, faceAt(0.2, 0.2, 0.7, faceMixedVector(0, 1, 0.96, 0.28)))
 	// 与 e0 正交：另一个人。
 	worker.set(models.FaceMediaKindImage, third.ID, faceAt(0.3, 0.3, 0.6, faceUnitVector(2)))
 
@@ -809,7 +809,9 @@ func TestFaceAnalysisRejectsUnknownScope(t *testing.T) {
 func TestFaceAnalysisRefusesToStartWhenRuntimeUnavailable(t *testing.T) {
 	setupFaceTestDB(t)
 	runtime := NewFaceRuntime(t.TempDir(), func() string { return "" })
-	runtime.supported = func() bool { return true }
+	runtime.probe = func(context.Context, appleAIRequest) (appleAIResponse, error) {
+		return appleAIResponse{}, errors.New("unavailable")
+	}
 	service := NewFaceAnalysisService(t.TempDir(), runtime, nil)
 	if _, err := service.Start(context.Background(), FaceAnalysisScopeAll); !errors.Is(err, ErrFaceRuntimeUnavailable) {
 		t.Fatalf("运行时未就绪时不该启动分析: %v", err)
@@ -1312,7 +1314,6 @@ func TestFaceServicesRefuseToTouchRelativePathsWhenDataDirMissing(t *testing.T) 
 	defer restore()
 
 	runtime := NewFaceRuntime("", func() string { return "" })
-	runtime.supported = func() bool { return true }
 	service := NewFaceAnalysisService("", runtime, nil)
 
 	if service.FacesDir() != "" {
@@ -1343,15 +1344,6 @@ func TestFaceServicesRefuseToTouchRelativePathsWhenDataDirMissing(t *testing.T) 
 	}
 	if _, err := runtime.Prepare(context.Background()); !errors.Is(err, ErrFaceDataDirUnavailable) {
 		t.Fatalf("PrepareFaceRuntime 应明确拒绝: %v", err)
-	}
-	if err := runtime.ensureVenv(context.Background()); !errors.Is(err, ErrFaceDataDirUnavailable) {
-		t.Fatalf("ensureVenv 应明确拒绝: %v", err)
-	}
-	if err := runtime.installModels(context.Background()); !errors.Is(err, ErrFaceDataDirUnavailable) {
-		t.Fatalf("installModels 应明确拒绝: %v", err)
-	}
-	if err := runtime.writeWorkerScript(); !errors.Is(err, ErrFaceDataDirUnavailable) {
-		t.Fatalf("writeWorkerScript 应明确拒绝: %v", err)
 	}
 	if _, _, _, err := runtime.WorkerEnvironment(); err == nil {
 		t.Fatal("WorkerEnvironment 不该在目录不可用时给出环境")

@@ -63,7 +63,7 @@ type FaceObservation struct {
 	BBox     string  `gorm:"column:bbox;size:64;not null;default:''" json:"bbox"`
 	BBoxHash string  `gorm:"column:bbox_hash;size:16;not null;default:'';uniqueIndex:idx_face_observations_identity,priority:5" json:"bbox_hash"`
 	Quality  float64 `gorm:"not null;default:0" json:"quality"`
-	// Embedding 是 512 维 float32（2048 字节）小端序，已 L2 归一化；no_face 标记行为 NULL。
+	// Embedding 是版本前缀 + 苹果 128 维 float32 小端序，已 L2 归一化；历史 2048 字节待裁剪迁移；no_face 标记行为 NULL。
 	Embedding []byte `json:"-"`
 	// CropPath 是裁剪图在 faces 目录下的文件名（不是绝对路径）；无裁剪图时为空串。
 	CropPath  string `gorm:"type:text;not null;default:''" json:"-"`

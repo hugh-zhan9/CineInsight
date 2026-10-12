@@ -19,11 +19,13 @@ const NOTICE_TEXT = {
   visual_index_empty: '当前范围还没有画面索引，画面部分没有可检索的内容；请先建立画面索引。',
   scene_visual_failed: '本地画面模型推理出错，画面部分没有结果；可稍后重试或重新准备模型。',
   scene_external_not_configured: '外部描述需要先在「AI 标签」设置里填写接口地址与模型，画面部分没有执行。',
-  scene_image_search_unsupported: '画面来源是外部描述（只有文字描述），以图搜片需要本地画面模型。',
+  apple_image_unavailable: '苹果系统图像能力不可用，请检查应用组件及 macOS 版本。',
+  apple_image_failed: '苹果系统未能提取图像特征，请检查图片后重试。',
   subtitle_index_empty: '当前范围没有可检索的 .srt 字幕索引，对白部分没有可检索的内容。'
 };
 
 const ERROR_TEXT = {
+  apple_image_unavailable: '苹果系统图像能力不可用，请检查应用组件及 macOS 版本。',
   scene_runtime_unavailable: '本地画面模型尚未就绪，请先在本页或设置里「准备模型」。',
   scene_runtime_unsupported: '本地画面模型仅支持 macOS Apple Silicon。',
   scene_external_not_enabled: '设置里没有启用外部描述，不会向外部接口发送任何内容。',
@@ -40,7 +42,7 @@ const ERROR_TEXT = {
 };
 
 // 这些提示表示画面部分根本没有执行：此时不能说"没有找到"（M-5）。
-export const SCENE_VISUAL_SKIPPED_NOTICES = ['scene_runtime_unavailable', 'scene_visual_failed', 'scene_external_not_configured', 'scene_image_search_unsupported'];
+export const SCENE_VISUAL_SKIPPED_NOTICES = ['apple_image_unavailable', 'apple_image_failed', 'scene_runtime_unavailable', 'scene_visual_failed', 'scene_external_not_configured'];
 
 // 以图搜片的上传图片：与后端 decodeSceneQueryImage 同一套格式与 20 MB 上限，先在本地挡掉，免得把大文件转码发过去。
 export const SCENE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'];

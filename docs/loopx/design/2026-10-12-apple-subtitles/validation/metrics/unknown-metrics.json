@@ -1,0 +1,7 @@
+{
+  "unknown_people": 20,
+  "queries": 200,
+  "extracted": 200,
+  "wrongly_accepted": 10,
+  "threshold": 0.7972099579451505
+}

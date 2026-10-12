@@ -157,10 +157,17 @@ func errorCode(_ error: Error) -> String {
 
 @main struct AppleAI {
     static func main() async {
+        if CommandLine.arguments.contains("--face-worker") { exit(Int32(CineFaceWorker())) }
         do {
             let data=FileHandle.standardInput.readDataToEndOfFile()
             guard data.count <= 8*1024*1024 else { try fail("apple_request_too_large") }
             let request=try JSONDecoder().decode(Request.self,from:data)
+            if ["face_status", "image_status", "image_features"].contains(request.operation) {
+                let result=String(decoding:data,as:UTF8.self).withCString { CineVisionRequest($0) }!
+                defer { free(result) }
+                FileHandle.standardOutput.write(Data(String(cString:result).utf8))
+                return
+            }
             switch request.operation {
             case "status":
                 let installed=await SpeechTranscriber.installedLocales

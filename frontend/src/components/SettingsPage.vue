@@ -181,7 +181,6 @@ export function normalizeSettingsForm(settings) {
   form.proxy_cache_limit_bytes = normalizeProxyCacheLimitBytes(form.proxy_cache_limit_bytes);
   // 人脸识别（D-016、D-022）：两项默认都是零值，老库读回 undefined 也要落成确定值。
   form.auto_face_analysis = Boolean(form.auto_face_analysis);
-  form.face_model_mirror_url = form.face_model_mirror_url || '';
   // 场景检索（D-MW-SCENES）：提供方只认 external，其余按本地；间隔 2–30 秒，读不出时取默认 5。
   form.scene_visual_provider = form.scene_visual_provider === 'external' ? 'external' : 'local';
   form.scene_visual_interval_seconds = normalizeSceneIntervalSeconds(form.scene_visual_interval_seconds);
@@ -225,7 +224,6 @@ export function buildSettingsPayload(form) {
     auto_compatibility_proxy: form.auto_compatibility_proxy || false,
     proxy_cache_limit_bytes: normalizeProxyCacheLimitBytes(form.proxy_cache_limit_bytes),
     auto_face_analysis: form.auto_face_analysis || false,
-    face_model_mirror_url: form.face_model_mirror_url || '',
     scene_visual_provider: form.scene_visual_provider === 'external' ? 'external' : 'local',
     scene_visual_interval_seconds: normalizeSceneIntervalSeconds(form.scene_visual_interval_seconds),
     scene_model_mirror_url: form.scene_model_mirror_url || '',

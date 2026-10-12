@@ -26,12 +26,12 @@ var errFaceWorkerGone = errors.New("人脸 sidecar 已退出")
 
 // faceFrameMaxWidth 是喂给 sidecar 的帧宽上限。
 // 比 AI 打标的 512 大：一个远景里的人脸在 512 宽上只有十几个像素，检测器根本看不见。
-// 再往上也没用——检测器自己会把图缩到 640。
+// 保留现有视频抽帧上限，系统检测器在此基础上处理。
 const faceFrameMaxWidth = 1280
 
 const faceFrameQuality = 3
 
-// faceWorkerProcess 是常驻的 Python sidecar 会话。
+// faceWorkerProcess 是常驻的苹果系统辅助进程 会话。
 //
 // 一问一答（写一行、读一行）而不是"先灌满再读"：管道缓冲区只有几十 KB，
 // 一张脸的响应就有 3 KB，批量灌进去会双向阻塞死锁。模型加载的开销靠进程常驻
@@ -54,10 +54,11 @@ type faceWorkerProcess struct {
 }
 
 type faceWorkerLine struct {
-	Ready bool             `json:"ready"`
-	ID    string           `json:"id"`
-	Error string           `json:"error"`
-	Faces []faceWorkerFace `json:"faces"`
+	ModelID string           `json:"model_id"`
+	Ready   bool             `json:"ready"`
+	ID      string           `json:"id"`
+	Error   string           `json:"error"`
+	Faces   []faceWorkerFace `json:"faces"`
 }
 
 type faceWorkerFace struct {
@@ -128,7 +129,7 @@ func startFaceWorkerProcess(ctx context.Context, runtime *FaceRuntime) (FaceWork
 	for {
 		select {
 		case line := <-session.lines:
-			if line.Ready {
+			if line.Ready && line.ModelID == faceRuntimeIdentity {
 				return session, nil
 			}
 			// 加载阶段不该有别的响应；出现了就是协议对不上。
@@ -148,16 +149,21 @@ func startFaceWorkerProcess(ctx context.Context, runtime *FaceRuntime) (FaceWork
 }
 
 func (p *faceWorkerProcess) readLoop(stdout io.ReadCloser) {
-	reader := bufio.NewReaderSize(stdout, 64*1024)
+	reader := bufio.NewScanner(stdout)
+	reader.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	defer stdout.Close()
 	for {
-		raw, err := reader.ReadString('\n')
+		ok := reader.Scan()
+		raw := reader.Text()
+		err := reader.Err()
+		if !ok && err == nil {
+			err = io.EOF
+		}
 		trimmed := strings.TrimSpace(raw)
 		if trimmed != "" {
 			var line faceWorkerLine
 			if decodeErr := json.Unmarshal([]byte(trimmed), &line); decodeErr != nil {
-				// 只丢这一行：Python 生态里随手往 stdout 打一行东西的库不少
-				// （警告、进度条残留），为此把整个会话判死会白白中断一整轮分析。
+				// 丢弃非协议输出；响应 ID 和模型版本仍必须严格匹配。
 				// 真正的错位由 Detect 的 id 比对兜住。
 				log.Printf("[Face] 忽略 sidecar 的非 JSON 输出 bytes=%d", len(trimmed))
 				continue
@@ -210,7 +216,7 @@ func (p *faceWorkerProcess) Detect(ctx context.Context, requestID, imagePath str
 	defer timeout.Stop()
 	select {
 	case line := <-p.lines:
-		if line.ID != requestID {
+		if line.ID != requestID || (line.Error == "" && line.ModelID != faceRuntimeIdentity) {
 			// 响应与请求对不上号，后面的每一条都会错位：只能判定会话已废。
 			p.markGone()
 			return nil, fmt.Errorf("%w: 应答与请求不匹配", errFaceWorkerGone)
@@ -297,6 +303,9 @@ func decodeFaceWorkerEmbedding(encoded string) ([]float32, error) {
 	vector := make([]float32, faceEmbeddingDims)
 	for i := range vector {
 		vector[i] = math.Float32frombits(binary.LittleEndian.Uint32(blob[i*4:]))
+		if math.IsNaN(float64(vector[i])) || math.IsInf(float64(vector[i]), 0) {
+			return nil, errors.New("apple_vision_shape")
+		}
 	}
 	return vector, nil
 }

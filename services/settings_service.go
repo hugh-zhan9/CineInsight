@@ -101,7 +101,6 @@ func (s *SettingsService) UpdateSettings(input models.Settings) error {
 		settings.CleanupShortSeconds = positiveOrDefault(input.CleanupShortSeconds, database.DefaultCleanupShortSeconds)
 		settings.CleanupLowWidth = positiveOrDefault(input.CleanupLowWidth, database.DefaultCleanupLowWidth)
 		settings.CleanupLowHeight = positiveOrDefault(input.CleanupLowHeight, database.DefaultCleanupLowHeight)
-		settings.FaceModelMirrorURL = strings.TrimSpace(input.FaceModelMirrorURL)
 		// 场景检索（D-MW-SCENES）：存进去的就是生效值。提供方只认 local / external，
 		// 切到 external 的披露确认在设置页完成后才会走到这里。
 		settings.SceneVisualProvider = NormalizeSceneVisualProvider(input.SceneVisualProvider)

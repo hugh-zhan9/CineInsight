@@ -1,0 +1,22 @@
+[
+  {
+    "name": "timestamp",
+    "exit": 1,
+    "killed": true
+  },
+  {
+    "name": "snapshot",
+    "exit": 1,
+    "killed": true
+  },
+  {
+    "name": "distance",
+    "exit": 1,
+    "killed": true
+  },
+  {
+    "name": "model_isolation",
+    "exit": 1,
+    "killed": true
+  }
+]

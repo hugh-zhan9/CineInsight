@@ -1,0 +1,12 @@
+{
+  "gallery_people": 120,
+  "gallery_images": 240,
+  "known_queries": 160,
+  "known_rank1": 0.99375,
+  "known_correct_accepted": 155,
+  "known_wrong_accepted": 0,
+  "known_rejected": 5,
+  "unknown_queries": 200,
+  "unknown_wrong_accepted": 0,
+  "threshold": 0.8307785119309815
+}

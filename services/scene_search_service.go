@@ -72,7 +72,9 @@ type SceneHit struct {
 
 // SceneCoverage 描述检索范围内的索引覆盖。
 type SceneCoverage struct {
-	TotalVideos int64 `json:"total_videos"`
+	ImageIndexed   int64 `json:"image_indexed"`
+	ImageAvailable bool  `json:"image_available"`
+	TotalVideos    int64 `json:"total_videos"`
 	// SubtitleIndexed：有 .srt 逐条索引的视频数。
 	SubtitleIndexed int64 `json:"subtitle_indexed"`
 	// SubtitleUnindexed：只有其他格式旁挂字幕或内嵌字幕、没有逐条索引的视频数。
@@ -93,6 +95,8 @@ type SceneSearchResult struct {
 // SceneSearchService 执行场景检索；与建索引共用运行时可用性判定与常驻 worker。
 // 它不持有外部描述客户端：检索只对已存的描述做字面匹配，从不调用外部接口。
 type SceneSearchService struct {
+	imageVectors     sceneImageVectorSource
+	imageAvailable   func() bool
 	vectors          sceneVectorSource
 	runtimeAvailable func() bool
 	syncSubtitles    func()
@@ -103,7 +107,8 @@ type SceneSearchService struct {
 // NewSceneSearchService 与建索引服务共用运行时、worker 与外部配置读取。
 func NewSceneSearchService(index *SceneIndexService) *SceneSearchService {
 	return &SceneSearchService{
-		vectors:          index.vectors,
+		vectors:      index.vectors,
+		imageVectors: index.imageVectors, imageAvailable: index.imageAvailable,
 		runtimeAvailable: index.runtimeAvailable,
 		syncSubtitles:    func() { _ = syncSubtitleIndexesFromFilesystem() },
 	}
@@ -212,11 +217,12 @@ func sceneCoverage(ctx context.Context, filter *LibraryFilter, provider, modelID
 		SubtitleUnindexed int64
 		VisualIndexed     int64
 	}
+	validSQL := strings.ReplaceAll(sceneVisualValidSQL, "scene_index_states", sceneStateTable(modelID))
 	selectSQL := `COUNT(*) AS total,
 		COALESCE(SUM(CASE WHEN ` + sceneSubtitleIndexedSQL + ` THEN 1 ELSE 0 END), 0) AS subtitle_indexed,
 		COALESCE(SUM(CASE WHEN NOT ` + sceneSubtitleIndexedSQL + ` AND (EXISTS (SELECT 1 FROM subtitle_index_states sis2
 			WHERE sis2.video_id = videos.id AND sis2.has_sidecar) OR ` + hasEmbeddedSubtitleSQL + `) THEN 1 ELSE 0 END), 0) AS subtitle_unindexed,
-		COALESCE(SUM(CASE WHEN ` + sceneVisualValidSQL + ` THEN 1 ELSE 0 END), 0) AS visual_indexed`
+		COALESCE(SUM(CASE WHEN ` + validSQL + ` THEN 1 ELSE 0 END), 0) AS visual_indexed`
 	if err := scope.Select(selectSQL, modelID, models.SceneIndexStatusIndexed, intervalMS).Scan(&row).Error; err != nil {
 		return SceneCoverage{}, err
 	}
@@ -232,7 +238,17 @@ func (s *SceneSearchService) GetCoverage(ctx context.Context, filter *LibraryFil
 	if err != nil {
 		return SceneCoverage{}, err
 	}
-	return sceneCoverage(ctx, filter, provider, modelID, intervalMS)
+	coverage, err := sceneCoverage(ctx, filter, provider, modelID, intervalMS)
+	if err != nil {
+		return coverage, err
+	}
+	image, err := sceneCoverage(ctx, filter, SceneProviderApple, SceneAppleModelID, intervalMS)
+	if err != nil {
+		return coverage, err
+	}
+	coverage.ImageIndexed = image.VisualIndexed
+	coverage.ImageAvailable = s.imageAvailable != nil && s.imageAvailable()
+	return coverage, nil
 }
 
 type sceneDialogueRow struct {
@@ -387,7 +403,7 @@ type sceneSegmentScanRow struct {
 func validSceneSegments(ctx context.Context, modelID string, intervalMS int64, columns string) *gorm.DB {
 	return database.DB.WithContext(ctx).Table("scene_visual_segments AS seg").
 		Select(columns).
-		Joins("JOIN scene_index_states st ON st.video_id = seg.video_id AND st.model_id = seg.model_id").
+		Joins("JOIN "+sceneStateTable(modelID)+" st ON st.video_id = seg.video_id AND st.model_id = seg.model_id").
 		Joins("JOIN videos ON videos.id = seg.video_id AND videos.deleted_at IS NULL").
 		Where("seg.model_id = ? AND st.status = ? AND st.source_size = videos.size AND st.interval_ms = ? AND videos.is_stale = ?",
 			modelID, models.SceneIndexStatusIndexed, intervalMS, false)
@@ -423,7 +439,11 @@ func scanSceneVisualSegments(ctx context.Context, filter *LibraryFilter, modelID
 			if _, ok := inScope[row.VideoID]; !ok {
 				continue
 			}
-			score, ok := sceneQuantizedDot(query, row.Embedding)
+			similarity := sceneQuantizedDot
+			if modelID == SceneAppleModelID {
+				similarity = appleImageSimilarity
+			}
+			score, ok := similarity(query, row.Embedding)
 			if !ok {
 				continue
 			}

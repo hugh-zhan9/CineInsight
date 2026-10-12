@@ -105,7 +105,7 @@ describe('人脸识别设置分区', () => {
   it('运行时就绪时显示已就绪并允许启动分析', async () => {
     const wrapper = await mountSection();
     expect(wrapper.get('[data-test="face-runtime-state"]').text()).toBe('已就绪');
-    expect(wrapper.find('[data-test="face-prepare-runtime"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="face-prepare-runtime"]').exists()).toBe(true);
     expect(wrapper.get('[data-test="face-analysis-start"]').attributes('disabled')).toBeUndefined();
 
     await wrapper.get('[data-test="face-analysis-start"]').trigger('click');
@@ -121,71 +121,26 @@ describe('人脸识别设置分区', () => {
     expect(api.StartFaceAnalysis).toHaveBeenCalledWith('images');
   });
 
-  it('运行时缺模型时置灰分析入口并说明原因，同时给出准备按钮', async () => {
-    api.GetFaceRuntimeStatus.mockResolvedValue(runtimeStatus({
-      state: 'missing_model',
-      reason: '人脸模型（buffalo_l，275 MB）尚未下载'
-    }));
+  it('系统不支持时说明原因，允许重新检查，不显示下载或镜像入口', async () => {
+    api.GetFaceRuntimeStatus.mockResolvedValue(runtimeStatus({ state: 'incompatible', reason: '系统接口不可用' }));
     const wrapper = await mountSection();
-
-    expect(wrapper.get('[data-test="face-runtime-state"]').text()).toBe('未就绪');
+    expect(wrapper.get('[data-test="face-runtime-state"]').text()).toBe('系统能力不可用');
     expect(wrapper.get('[data-test="face-analysis-start"]').attributes('disabled')).toBeDefined();
-    expect(wrapper.get('[data-test="face-analysis-disabled-reason"]').text()).toContain('尚未下载');
-
+    expect(wrapper.get('[data-test="face-runtime-reason"]').text()).toContain('系统接口不可用');
+    expect(wrapper.find('[data-test="face-mirror-url"]').exists()).toBe(false);
     await wrapper.get('[data-test="face-prepare-runtime"]').trigger('click');
     await flushPromises();
     expect(api.PrepareFaceRuntime).toHaveBeenCalled();
   });
-
-  it('平台不支持时不给准备入口', async () => {
-    api.GetFaceRuntimeStatus.mockResolvedValue(runtimeStatus({
-      state: 'incompatible',
-      reason: '人脸识别 sidecar 仅支持 macOS Apple Silicon（当前 windows/amd64）'
-    }));
+  it('迁移未完成时说明旧审阅记录保留', async () => {
+    api.GetFaceAnalysisStatus.mockResolvedValue(analysisStatus({ migration_pending: 3 }));
     const wrapper = await mountSection();
-    expect(wrapper.get('[data-test="face-runtime-state"]').text()).toBe('当前平台不支持');
-    expect(wrapper.find('[data-test="face-prepare-runtime"]').exists()).toBe(false);
-    expect(wrapper.get('[data-test="face-runtime-reason"]').text()).toContain('Apple Silicon');
+    expect(wrapper.get('[data-test="face-migration-pending"]').text()).toContain('3 条旧观测');
+    expect(wrapper.get('[data-test="face-migration-pending"]').text()).toContain('原审阅记录仍保留');
   });
-
-  it('下载失败时显示失败原因与来源地址，并允许重试', async () => {
-    api.GetFaceRuntimeStatus.mockResolvedValue(runtimeStatus({
-      state: 'download_failed',
-      reason: '模型下载或校验失败：模型包校验失败：sha256 与清单不符',
-      error: '模型包校验失败：sha256 与清单不符'
-    }));
-    const wrapper = await mountSection();
-    expect(wrapper.get('[data-test="face-runtime-state"]').text()).toBe('下载失败');
-    expect(wrapper.get('[data-test="face-runtime-error"]').text()).toContain('sha256');
-    expect(wrapper.get('[data-test="face-model-source"]').text()).toContain('buffalo_l.zip');
-    expect(wrapper.find('[data-test="face-prepare-runtime"]').exists()).toBe(true);
-  });
-
-  it('准备中显示进度并可取消', async () => {
-    api.GetFaceRuntimeStatus.mockResolvedValue(runtimeStatus({
-      state: 'missing_model',
-      preparing: true,
-      stage: 'model',
-      message: '正在下载人脸模型（275 MB）…',
-      downloaded_bytes: 50,
-      total_bytes: 200
-    }));
-    const wrapper = await mountSection();
-    expect(wrapper.get('[data-test="face-runtime-state"]').text()).toBe('正在准备');
-    expect(wrapper.get('[data-test="face-runtime-progress"]').text()).toContain('25%');
-
-    await wrapper.get('[data-test="face-cancel-prepare"]').trigger('click');
-    await flushPromises();
-    expect(api.CancelFaceRuntimePrepare).toHaveBeenCalled();
-  });
-
-  it('镜像前缀与自动开关绑定到设置表单', async () => {
+  it('自动开关绑定到设置表单', async () => {
     const form = settingsForm();
     const wrapper = await mountSection(form);
-
-    await wrapper.get('[data-test="face-mirror-url"]').setValue('https://mirror.example.com/');
-    expect(form.face_model_mirror_url).toBe('https://mirror.example.com/');
-
     await wrapper.get('[data-test="face-auto-toggle"]').setValue(true);
     expect(form.auto_face_analysis).toBe(true);
   });
@@ -267,17 +222,12 @@ describe('人脸识别设置分区', () => {
     expect(api.ClearFaceData).not.toHaveBeenCalled();
   });
 
-  it('隐私披露如实说明准备运行时要联网、之后全程离线', async () => {
+  it('说明使用系统能力、本地处理和内部接口限制', async () => {
     const wrapper = await mountSection();
     const text = wrapper.get('[data-test="face-privacy-note"]').text();
-    // 准备阶段的三条出口都要写出来，不能只说"模型下载"。
-    expect(text).toContain('PyPI');
-    expect(text).toContain('托管 Python');
-    expect(text).toContain('模型包');
-    expect(text).toContain('准备完成之后');
-    expect(text).toContain('全程离线');
-    expect(text).toContain('本机');
-    expect(text).toContain('绝不外发');
+    expect(text).toContain('无需下载第三方模型');
+    expect(text).toContain('不外发');
+    expect(text).toContain('内部接口');
   });
 
   it('face-analysis-state 事件到达时刷新状态', async () => {

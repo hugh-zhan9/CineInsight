@@ -254,18 +254,11 @@ func (a *App) GetFaceRuntimeStatus() services.FaceRuntimeStatus {
 	return a.faceRuntime.Status()
 }
 
-// PrepareFaceRuntime 显式准备运行时：托管 Python、venv、依赖、模型（7.2）。
+// PrepareFaceRuntime 重新检查苹果系统人脸能力（7.2）。
 func (a *App) PrepareFaceRuntime() (services.FaceRuntimeStatus, error) {
 	status, err := a.faceRuntime.Prepare(a.backgroundContext())
 	log.Printf("API PrepareFaceRuntime state=%s preparing=%v err=%v", status.State, status.Preparing, err)
 	return status, err
-}
-
-// CancelFaceRuntimePrepare 取消正在进行的准备（7.2）。
-func (a *App) CancelFaceRuntimePrepare() error {
-	err := a.faceRuntime.CancelPrepare()
-	log.Printf("API CancelFaceRuntimePrepare err=%v", err)
-	return err
 }
 
 // StartFaceAnalysis 显式启动人脸分析（7.2）。scope: all / videos / images。

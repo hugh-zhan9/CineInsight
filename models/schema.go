@@ -99,6 +99,7 @@ func AllModels() []interface{} {
 		// 场景检索的画面索引（D-MW-SCENES）：两张表只有指向 videos 的外键，videos 是清单
 		// 第一项，追加在末尾满足拓扑序。
 		&SceneIndexState{},
+		&SceneImageIndexState{},
 		&SceneVisualSegment{},
 		// 视频工作台（视频编辑合同）：items.project_id 级联指向 projects，projects 必须在前；
 		// 两张表对 videos 都只有逻辑引用（来源在配方/计划 JSON 里，成品 output_video_id 无外键）。

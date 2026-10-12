@@ -63,10 +63,12 @@ func TestHealthFaceCacheDoesNotReadConfigurationOrProbePython(t *testing.T) {
 	if _, _, checked := r.CachedStatus(); checked {
 		t.Fatal("new runtime is unexamined")
 	}
-	r.supported = func() bool { return false }
+	r.probe = func(context.Context, appleAIRequest) (appleAIResponse, error) { return appleAIResponse{}, nil }
 	actual := r.Status()
-	r.mirror = func() string { t.Fatal("cached read called mirror configuration"); return "" }
-	r.acceptPy = func(string) bool { t.Fatal("cached read probed an interpreter"); return false }
+	r.probe = func(context.Context, appleAIRequest) (appleAIResponse, error) {
+		t.Fatal("cache probed system")
+		return appleAIResponse{}, nil
+	}
 	stored, observed, checked := r.CachedStatus()
 	if !checked || observed.IsZero() || stored.State != actual.State {
 		t.Fatalf("%+v %v %v", stored, observed, checked)

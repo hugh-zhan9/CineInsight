@@ -2,64 +2,20 @@
   <div id="settings-face" class="settings-section">
     <h3>人脸识别</h3>
 
-    <!-- 隐私披露放在最前面：这是本地跑的人脸识别，用户在动手之前就该知道
-         哪一步要联网、向量与裁剪图存在哪、会不会外发。
-         「准备运行时」这一步确实联网（PyPI 装依赖、必要时下载 Python、下载模型包），
-         写成「模型下载之后不再联网」是不实的。 -->
     <p class="help-text face-privacy" data-test="face-privacy-note">
-      「准备运行时」这一步会联网：从 PyPI 安装 Python 依赖、必要时下载一份托管 Python 运行时、
-      并下载人脸模型包（校验 sha256）。准备完成之后，人脸检测与向量计算全程离线，
-      不再发起任何网络请求；人脸向量与裁剪小图只写入本机的
-      {{ runtimeStatus?.runtime_dir || '应用数据目录' }} 与 faces 目录，绝不外发到任何服务，
-      也不会随日志或通知带出去。识别结果只生成人物候选，任何人物关联都要你在待审工作台里确认。
+      使用 macOS 内置人脸能力，无需下载第三方模型。识别与特征计算均在本机运行，人脸向量与裁剪小图只保存在本机，不外发。
+      识别结果只生成人物候选，人物关联仍需你确认。
+      该能力使用苹果内部接口，系统升级后可能不可用；届时会明确提示。
     </p>
-
     <div class="short-feed-status">
       <div class="short-feed-status-main">
         <strong data-test="face-runtime-state">{{ runtimeStateText }}</strong>
         <span data-test="face-runtime-reason">{{ runtimeReasonText }}</span>
       </div>
-      <div class="short-feed-actions">
-        <button
-          v-if="runtimeStatus && runtimeStatus.preparing"
-          type="button"
-          class="btn-secondary"
-          data-test="face-cancel-prepare"
-          @click="cancelPrepare"
-        >取消准备</button>
-        <button
-          v-else-if="runtimeCanPrepare"
-          type="button"
-          class="btn-primary"
-          data-test="face-prepare-runtime"
-          @click="prepareRuntime"
-        >准备运行时（约 {{ runtimeStatus?.model_archive_size || '275 MB' }} 模型）</button>
-      </div>
+      <button type="button" class="btn-secondary" data-test="face-prepare-runtime" :disabled="checking" @click="prepareRuntime">{{ checking ? '正在检查…' : '重新检查系统能力' }}</button>
     </div>
-
-    <div v-if="runtimeStatus && runtimeStatus.preparing" class="face-progress" data-test="face-runtime-progress">
-      <div class="face-progress__bar"><i :style="{ width: `${preparePercent}%` }"></i></div>
-      <span>{{ runtimeStatus.message }} {{ prepareStageText }} {{ preparePercent }}%</span>
-    </div>
-    <p v-if="runtimeStatus && runtimeStatus.error" class="help-text face-error" data-test="face-runtime-error">
-      {{ runtimeStatus.error }}
-    </p>
-
-    <div class="setting-item">
-      <label>模型下载镜像前缀</label>
-      <input
-        data-test="face-mirror-url"
-        type="text"
-        class="text-input"
-        placeholder="https://镜像地址/"
-        v-model="form.face_model_mirror_url"
-      />
-      <p class="help-text">
-        留空时直接从官方地址下载。直连不通时填一个代理前缀，实际地址会拼成「前缀 + 官方地址」。
-        模型包的 sha256 固定校验，镜像给错东西会被拒绝。
-      </p>
-      <p class="help-text face-source" data-test="face-model-source">来源：{{ runtimeStatus?.model_source_url || '' }}</p>
-    </div>
+    <p class="help-text">首次分析会用已有裁剪图迁移旧特征，保留命名、忽略和人工关联；缺失或无法识别的裁剪会保留原记录并提示。</p>
+    <p v-if="analysisStatus?.migration_pending" class="help-text face-error" data-test="face-migration-pending">{{ analysisStatus.migration_pending }} 条旧观测未能迁移，原审阅记录仍保留，暂不参与新识别；重新分析会再尝试。</p>
 
     <div class="setting-item">
       <label>分析范围</label>
@@ -134,7 +90,6 @@
 import {
   GetFaceRuntimeStatus,
   PrepareFaceRuntime,
-  CancelFaceRuntimePrepare,
   StartFaceAnalysis,
   GetFaceAnalysisStatus,
   CancelFaceAnalysis,
@@ -146,32 +101,8 @@ import { confirmAction, notifyError, notifySuccess } from '../../utils/feedback.
 import { idleWaitReasonLabel, isIdleGateNotWaitingError } from '../../utils/idleScheduling.js';
 import TaskFailureList from '../video-list/TaskFailureList.vue';
 
-const RUNTIME_STATE_TEXT = {
-  available: '已就绪',
-  missing_python: '未就绪',
-  missing_venv: '未就绪',
-  missing_model: '未就绪',
-  download_failed: '下载失败',
-  incompatible: '当前平台不支持'
-};
+const RUNTIME_STATE_TEXT = { available: '已就绪', incompatible: '系统能力不可用' };
 
-const PREPARE_STAGE_TEXT = {
-  python: '准备 Python',
-  venv: '创建虚拟环境',
-  deps: '安装依赖',
-  model: '下载模型',
-  verify: '校验',
-  install: '安装',
-  done: '完成',
-  failed: '失败',
-  cancelled: '已取消'
-};
-
-// 人脸识别分区（D-016..D-022）：运行时状态与准备、镜像前缀、分析启动与进度、
-// 自动开关、数据占用与清除，外加隐私披露。
-//
-// 分析的启动/取消入口只在这里（设计 V1.0.1 把视频列表与照片页的独立入口去掉了），
-// 因此运行时不可用时这里必须把原因说清楚，而不是只把按钮置灰。
 export default {
   name: 'FaceSection',
   components: { TaskFailureList },
@@ -183,6 +114,7 @@ export default {
   data() {
     return {
       runtimeStatus: null,
+      checking: false,
       analysisStatus: null,
       usage: null,
       scope: 'all',
@@ -217,30 +149,16 @@ export default {
     runtimeAvailable() {
       return this.runtimeStatus?.state === 'available';
     },
-    runtimeCanPrepare() {
-      const state = this.runtimeStatus?.state;
-      return state === 'missing_python' || state === 'missing_venv' || state === 'missing_model' || state === 'download_failed';
-    },
     runtimeStateText() {
       if (!this.runtimeStatus) return '正在检查…';
-      if (this.runtimeStatus.preparing) return '正在准备';
       return RUNTIME_STATE_TEXT[this.runtimeStatus.state] || '未就绪';
     },
     runtimeReasonText() {
       if (!this.runtimeStatus) return '';
       if (this.runtimeStatus.state === 'available') {
-        return `运行时 ${this.runtimeStatus.identity}，模型已就绪。`;
+        return '苹果系统人脸特征已就绪。';
       }
       return this.runtimeStatus.reason || '';
-    },
-    prepareStageText() {
-      return PREPARE_STAGE_TEXT[this.runtimeStatus?.stage] || '';
-    },
-    preparePercent() {
-      const total = Number(this.runtimeStatus?.total_bytes || 0);
-      const done = Number(this.runtimeStatus?.downloaded_bytes || 0);
-      if (total <= 0) return 0;
-      return Math.min(100, Math.round((done / total) * 100));
     },
     analysisWaitingIdle() {
       return Boolean(this.analysisStatus?.running && this.analysisStatus?.gate?.waiting_idle);
@@ -255,6 +173,7 @@ export default {
         if (status.gate?.waiting_idle) {
           return `等待空闲：${idleWaitReasonLabel(status.gate.reason)}（已处理 ${status.processed}/${status.total}）`;
         }
+        if (status.migrating) return `正在迁移旧人脸特征 ${status.migration_processed || 0}/${status.migration_total || 0}，保留审阅记录`;
         if (status.preparing) return '正在整理候选媒体…';
         const current = status.current_media ? `，当前 ${status.current_media}` : '';
         return `正在分析 ${status.processed}/${status.total}${current}`;
@@ -296,21 +215,10 @@ export default {
       }
     },
     async prepareRuntime() {
-      // 准备运行时按已保存的镜像前缀下载模型（D-PC57）：改了没保存就先提示保存。
-      if (typeof this.ensureSaved === 'function' && !await this.ensureSaved(['face_model_mirror_url'], '准备运行时')) return;
-      try {
-        this.runtimeStatus = await PrepareFaceRuntime();
-      } catch (err) {
-        notifyError(`准备人脸运行时失败：${err}`);
-      }
-    },
-    async cancelPrepare() {
-      try {
-        await CancelFaceRuntimePrepare();
-      } catch (err) {
-        notifyError(`取消准备失败：${err}`);
-      }
-      await this.loadRuntimeStatus();
+      this.checking = true;
+      try { this.runtimeStatus = await PrepareFaceRuntime(); }
+      catch (err) { notifyError(`系统人脸能力检查失败：${err}`); await this.loadRuntimeStatus(); }
+      finally { this.checking = false; }
     },
     async startAnalysis() {
       try {

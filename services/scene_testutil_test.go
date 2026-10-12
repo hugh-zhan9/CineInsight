@@ -55,13 +55,17 @@ func seedSceneIndex(t *testing.T, video models.Video, modelID string, intervalMS
 		VideoID: video.ID, ModelID: modelID, Provider: SceneProviderLocal, SourceSize: video.Size, SourceMtimeNS: 1,
 		IntervalMS: intervalMS, SegmentCount: len(segments), Status: models.SceneIndexStatusIndexed, IndexedAt: &now,
 	}
-	if err := database.DB.Create(&state).Error; err != nil {
+	if err := database.DB.Table(sceneStateTable(modelID)).Create(&state).Error; err != nil {
 		t.Fatalf("写索引状态失败(%s): %v", dbtest.Backend(), err)
 	}
 	for _, fixture := range segments {
 		row := models.SceneVisualSegment{VideoID: video.ID, ModelID: modelID, StartMS: fixture.StartMS, EndMS: fixture.EndMS, Caption: fixture.Caption}
 		if fixture.Vector != nil {
-			blob, err := quantizeSceneVector(fixture.Vector)
+			encode := quantizeSceneVector
+			if modelID == SceneAppleModelID {
+				encode = encodeAppleImageVector
+			}
+			blob, err := encode(fixture.Vector)
 			if err != nil {
 				t.Fatal(err)
 			}

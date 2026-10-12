@@ -71,8 +71,6 @@ export function CancelEnhancementTask(arg1:number):Promise<void>;
 
 export function CancelFaceAnalysis():Promise<void>;
 
-export function CancelFaceRuntimePrepare():Promise<void>;
-
 export function CancelFrameHashBackfill():Promise<void>;
 
 export function CancelImageAITagging():Promise<void>;

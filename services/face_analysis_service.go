@@ -37,7 +37,7 @@ const (
 	// faceWorkerRequestTimeout 是单张图的上限：模型是 CPU 跑的，4K 图慢的时候
 	// 也就几秒，一分钟还没回来就是卡死了。
 	faceWorkerRequestTimeout = 60 * time.Second
-	// faceWorkerStartupTimeout 是等 worker 加载模型的上限：冷启动要读 190 MB 权重。
+	// faceWorkerStartupTimeout 保留既有启动期限；系统组件先检查内部接口版本。
 	faceWorkerStartupTimeout = 5 * time.Minute
 )
 
@@ -57,10 +57,14 @@ type FaceAnalysisFailure struct {
 
 // FaceAnalysisStatus 是分析任务的状态快照（7.2 `GetFaceAnalysisStatus`）。
 type FaceAnalysisStatus struct {
-	Running   bool `json:"running"`
-	Preparing bool `json:"preparing"`
-	Cancelled bool `json:"cancelled"`
-	Completed bool `json:"completed"`
+	MigrationPending   int  `json:"migration_pending"`
+	Migrating          bool `json:"migrating"`
+	MigrationTotal     int  `json:"migration_total"`
+	MigrationProcessed int  `json:"migration_processed"`
+	Running            bool `json:"running"`
+	Preparing          bool `json:"preparing"`
+	Cancelled          bool `json:"cancelled"`
+	Completed          bool `json:"completed"`
 	// Interrupted 表示 sidecar 中途没了：本轮停下，下次启动对账续跑（4.4.2）。
 	Interrupted     bool                  `json:"interrupted"`
 	Scope           string                `json:"scope"`
@@ -506,7 +510,12 @@ func (s *FaceAnalysisService) run(ctx context.Context, scope string) {
 		status.Preparing = false
 		status.Total = len(candidates)
 	})
-	if len(candidates) == 0 {
+	var legacyCount int64
+	if err := database.DB.WithContext(ctx).Model(&models.FaceObservation{}).Where("length(embedding) = ?", 2048).Count(&legacyCount).Error; err != nil {
+		s.finish(ctx.Err() != nil, false, err.Error())
+		return
+	}
+	if len(candidates) == 0 && legacyCount == 0 {
 		s.finish(ctx.Err() != nil, false, "")
 		return
 	}
@@ -526,6 +535,12 @@ func (s *FaceAnalysisService) run(ctx context.Context, scope string) {
 		}
 	}()
 
+	pending, err := s.migrateAppleFaces(ctx, session)
+	s.update(func(status *FaceAnalysisStatus) { status.MigrationPending = pending })
+	if err != nil {
+		s.finish(ctx.Err() != nil, false, err.Error())
+		return
+	}
 	clusters, err := loadFaceClusterCentroids(ctx)
 	if err != nil {
 		s.finish(ctx.Err() != nil, false, err.Error())

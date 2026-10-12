@@ -1,0 +1,14 @@
+{
+  "known_queries": 160,
+  "correct": 155,
+  "wrong": 0,
+  "rejected": 5,
+  "unknown_queries": 200,
+  "false_accept": 0,
+  "missing": 0,
+  "gallery_people": 120,
+  "gallery_images": 240,
+  "extracted": 1400,
+  "threshold": 0.8307785119309815,
+  "elapsed_seconds": 51.52
+}
