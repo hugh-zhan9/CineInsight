@@ -103,3 +103,29 @@ export function viewingRecord(video) {
   }
   return tiles;
 }
+
+// 告诉宿主（片库页的行）这部片哪些字段变了：只带各动作会改的字段，取自接口返回的整条视频，返回里没有的字段不带。
+// progress 与片库行判断「继续观看」「已看」用的是同一组字段（watchState.resumable）。
+export const STATE_CHANGE_FIELDS = {
+  favorite: ['is_favorite', 'favorited_at'],
+  watched: ['is_watched', 'watched_at', 'watch_position_seconds', 'watch_progress_updated_at'],
+  rating: ['personal_rating'],
+  progress: ['watch_position_seconds', 'watch_progress_updated_at', 'is_watched', 'watched_at']
+};
+
+export function stateChanges(kind, video) {
+  const changes = {};
+  for (const field of STATE_CHANGE_FIELDS[kind] || []) {
+    if (video && field in video) changes[field] = video[field];
+  }
+  return changes;
+}
+
+// 「播放」失败并已标失效（D-PC11）时片库行要改成失效态：失效原因与片库页 markPlaybackFailureStale 同一取法。
+// 其余结果（成功、失败但没标失效）返回 null。
+export function playbackStaleChanges(result) {
+  const reconcile = result?.reconcile_result;
+  if (!result || result.dispatch_succeeded !== false || !reconcile?.did_mark_stale) return null;
+  const reason = String(reconcile.reason || result.reason || '');
+  return { is_stale: true, stale_reason: reconcile.updated_video?.stale_reason || (reason === 'offline_root' ? 'offline_root' : 'missing_file') };
+}

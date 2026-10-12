@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => ({ ReportInlineQueuePlayback: vi.fn(), GetPlaybackQueue: vi.fn() }));
 vi.mock('../../wailsjs/go/main/App', () => api);
 import Player from './QueueInlinePlayer.vue';
+import { claimActivePlayer, currentActivePlayer, releaseActivePlayer } from '../utils/activePlayer.js';
 let wrapper;
 const session = () => ({ token: 'first', video_id: 1, source_version: 'v1', locator: '/preview/queue/first', start_seconds: 0, duration: 120, view_cycle: 1, control_sequence: 0, desired_paused: false });
 beforeEach(() => {
@@ -118,4 +119,25 @@ it('stops reporting and asks for a new play when a remount of the same token is 
   expect(HTMLMediaElement.prototype.pause).toHaveBeenCalled();
   const before = events().length; await video.trigger('pause'); await video.trigger('ended'); await flushPromises();
   expect(events()).toHaveLength(before);
+});
+it('joins the single-active-player rule with the detail and drawer players', async () => {
+  const inline = { pause: vi.fn() };
+  claimActivePlayer(inline);
+  const video = await player();
+  await video.trigger('play');
+  // 队列开始播放：暂停了别处正在播的内嵌播放器，自己成为当前播放者。
+  expect(inline.pause).toHaveBeenCalledTimes(1);
+  expect(currentActivePlayer()).not.toBe(inline);
+  const pausesBefore = HTMLMediaElement.prototype.pause.mock.calls.length;
+  // 反过来：别处开始播放时暂停队列播放器，暂停照常上报给队列。
+  claimActivePlayer(inline);
+  expect(HTMLMediaElement.prototype.pause.mock.calls.length).toBe(pausesBefore + 1);
+  await video.trigger('pause'); await flushPromises();
+  expect(events().at(-1).kind).toBe('paused');
+  releaseActivePlayer(inline);
+  await video.trigger('play');
+  const handle = currentActivePlayer();
+  expect(handle).not.toBeNull();
+  wrapper.unmount(); wrapper = null;
+  expect(currentActivePlayer()).toBeNull();
 });
