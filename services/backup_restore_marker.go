@@ -2,6 +2,7 @@ package services
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -32,7 +33,8 @@ const (
 // BackupReasonRestoreRecoveryPending：上次还原整理文件的现场没能收拾完（标记还在），这次恢复不开始。
 const BackupReasonRestoreRecoveryPending = "backup_restore_recovery_pending"
 
-var errFilesRestoreRecoveryPending = fmt.Errorf("%s: 上次还原整理过的文件没有收拾完（有目录没能改回原名或现场对不上），为免覆盖现场，这次恢复没有开始，数据库未被修改；请重启应用后再试，或检查数据目录的权限",
+var errFilesRestoreRecoveryPending = fmt.Errorf("%s: 上次还原整理过的文件没有收拾完（有目录没能改回原名或现场对不上），为免覆盖现场，这次恢复没有开始，数据库未被修改；"+
+	"可在设置页「数据库备份」里看留下了哪些副本，确认后点「放弃收拾，允许恢复」（不会动任何文件夹）再恢复",
 	BackupReasonRestoreRecoveryPending)
 
 type filesRestoreMarker struct {
@@ -131,5 +133,67 @@ func (s *BackupService) ensureNoPendingFilesRestore() error {
 	if s.filesRestoreMarkerExists() {
 		return errFilesRestoreRecoveryPending
 	}
+	return nil
+}
+
+// curatedFolderLabels 是给用户看的收录目录叫法（不含绝对路径）。
+var curatedFolderLabels = map[string]string{
+	"media-details/people":      "人物头像",
+	"media-details/collections": "作品集封面",
+	"media-details/videos":      "海报副本",
+	"media-details/watchlist":   "想看封面",
+	"wallpapers":                "壁纸",
+	"subtitle-backups":          "字幕备份",
+}
+
+// pendingFilesRestoreLeftovers 报告是否还留着进行中标记，以及哪些收录目录旁边还有恢复前的副本或暂存文件
+// （按「叫法（相对数据目录的位置）」列出，不含绝对路径）。设置页的备份状态读它。
+func (s *BackupService) pendingFilesRestoreLeftovers() (bool, []string) {
+	data, err := os.ReadFile(s.filesRestoreMarkerPath())
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	leftovers := []string{}
+	var marker filesRestoreMarker
+	if err != nil || json.Unmarshal(data, &marker) != nil {
+		return true, leftovers
+	}
+	dataRoot, err := s.resolvedDataDir()
+	if err != nil {
+		return true, leftovers
+	}
+	for _, target := range marker.Targets {
+		if !target.valid(dataRoot) {
+			continue
+		}
+		left := false
+		for _, name := range []string{target.Aside, target.Staging} {
+			if name == "" {
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(target.Parent, name)); err == nil {
+				left = true
+			}
+		}
+		if left {
+			leftovers = append(leftovers, curatedFolderLabels[target.Dir]+"（"+target.Dir+"）")
+		}
+	}
+	return true, leftovers
+}
+
+// DiscardInterruptedFilesRestore 放弃收拾上次没收拾完的整理文件还原（审阅第五轮 E2b）：只删进行中标记，不碰任何文件夹——
+// 留下的 .pre-restore-* 副本与暂存目录原样留着，用户可以自己查看、处理。之后恢复不再被 backup_restore_recovery_pending 挡住。
+func (s *BackupService) DiscardInterruptedFilesRestore() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.Remove(s.filesRestoreMarkerPath()); err != nil && !os.IsNotExist(err) {
+		log.Printf("删除整理文件还原标记失败 err=%v", err)
+		return errors.New("没能删掉进行中标记，请检查数据目录的权限")
+	}
+	s.registryMu.Lock()
+	s.notice = ""
+	s.registryMu.Unlock()
+	log.Printf("用户放弃收拾上次中断的整理文件还原，已删掉进行中标记")
 	return nil
 }

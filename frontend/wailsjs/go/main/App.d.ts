@@ -221,6 +221,8 @@ export function DetectSubtitleLanguage(arg1:number):Promise<services.AppleLangua
 
 export function DiscardEnhancementProgress(arg1:number):Promise<services.EnhancementTaskView>;
 
+export function DiscardInterruptedFilesRestore():Promise<void>;
+
 export function DiscardPendingSubtitle(arg1:number):Promise<void>;
 
 export function DismissCleanupVideo(arg1:number,arg2:string):Promise<void>;

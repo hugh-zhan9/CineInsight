@@ -87,8 +87,8 @@ func (s *BackupService) checkFilesPackBeforeRestore(directory string, manifest *
 		if err != nil || state == curatedRootUnavailable {
 			return errBackupFilesTargetUnavailable
 		}
-		// 链接到数据目录之外的目录按合并还原：先试着在里面建、删一个临时文件，写不进去就现在拒绝（第四轮 D1）。
-		if placement.Linked && !s.probeLinkedTarget(dir) {
+		// 按合并还原的目录（链接到别处，或目录里有符号链接）：先试着在里面建、删一个临时文件，写不进去就现在拒绝（第四轮 D1）。
+		if placement.Merge && !s.probeLinkedTarget(dir) {
 			return errBackupFilesTargetUnavailable
 		}
 	}
@@ -169,7 +169,7 @@ func (s *BackupService) swapInBackupFiles(directory string, manifest *BackupMani
 		}
 		target := filesRestoreTarget{Dir: dir, Mode: filesRestoreModeSwap, Parent: placement.Parent, Base: placement.Base,
 			Staging: placement.stagingName(stamp), State: filesTargetPending}
-		if placement.Linked {
+		if placement.Merge {
 			target.Mode, target.Parent, target.Base = filesRestoreModeMerge, dataRoot, filepath.Base(filepath.FromSlash(dir))
 			target.Staging = backupFilesMergeStagingPrefix + target.Base + "-" + stamp
 		} else if placement.Exists {
@@ -235,7 +235,7 @@ func (s *BackupService) swapInBackupFiles(directory string, manifest *BackupMani
 func (s *BackupService) restoreOneCuratedRoot(marker *filesRestoreMarker, index int, staged string) (bool, error) {
 	target := &marker.Targets[index]
 	current, state, err := s.placeCuratedRoot(target.Dir, false)
-	if err != nil || state == curatedRootUnavailable || current.Linked != (target.Mode == filesRestoreModeMerge) {
+	if err != nil || state == curatedRootUnavailable || current.Merge != (target.Mode == filesRestoreModeMerge) {
 		return false, nil
 	}
 	if target.Mode == filesRestoreModeMerge {

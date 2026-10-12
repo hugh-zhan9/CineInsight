@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const api = vi.hoisted(() => Object.fromEntries([
   'ClearMigrationTarget', 'CreateDatabaseBackup', 'GetBackupStatus', 'GetDatabaseBackendStatus', 'GetDatabaseSwitchStatus',
   'ListDatabaseBackups', 'ListDownloadTasks', 'PreflightDatabaseSwitch', 'RelaunchApp', 'RestoreDatabaseBackup', 'RevealBackupDirectory',
-  'SelectDirectory', 'StartDatabaseSwitch', 'SwitchBackendConfigOnly', 'VerifyDatabaseBackup'
+  'SelectDirectory', 'StartDatabaseSwitch', 'SwitchBackendConfigOnly', 'VerifyDatabaseBackup', 'DiscardInterruptedFilesRestore'
 ].map(name => [name, vi.fn()])));
 const feedback = vi.hoisted(() => ({ confirmAction: vi.fn() }));
 vi.mock('../../../wailsjs/go/main/App', () => api);
@@ -645,6 +645,39 @@ describe('迁移并切换与清空目标库（P-033 复审 m1 / m3 / m4 / m5）'
       expect(rows[0].get('[data-test="backup-unavailable-roots"]').text()).toContain('media-details/videos 不可用');
       await rows[0].findAll('button').find(button => button.text() === '恢复').trigger('click');
       expect(find(wrapper, 'backup-restore-unavailable-note').text()).toContain('恢复时保持现状');
+    });
+
+    it('上次的还原没收拾完：说明留下副本的文件夹，危险确认后放弃收拾（只删标记），再读状态', async () => {
+      api.GetBackupStatus
+        .mockResolvedValueOnce({ available: true, backup_available: true, restore_available: true, recovery_pending: true, recovery_leftovers: ['人物头像（media-details/people）'] })
+        .mockResolvedValue({ available: true, backup_available: true, restore_available: true, recovery_pending: false, recovery_leftovers: [] });
+      api.DiscardInterruptedFilesRestore.mockResolvedValue(undefined);
+      const wrapper = await mountSection();
+      expect(find(wrapper, 'backup-recovery-leftovers').text()).toContain('人物头像（media-details/people）');
+      feedback.confirmAction.mockResolvedValueOnce(false);
+      await find(wrapper, 'backup-discard-recovery').trigger('click');
+      await flushPromises();
+      expect(api.DiscardInterruptedFilesRestore).not.toHaveBeenCalled();
+      await find(wrapper, 'backup-discard-recovery').trigger('click');
+      await flushPromises();
+      const options = feedback.confirmAction.mock.calls[1][0];
+      expect(options.danger).toBe(true);
+      expect(options.message).toContain('不会动任何文件夹');
+      expect(options.message).toContain('人物头像（media-details/people）');
+      expect(options.message).not.toMatch(/\/Users\//);
+      expect(api.DiscardInterruptedFilesRestore).toHaveBeenCalledTimes(1);
+      expect(find(wrapper, 'backup-message').text()).toContain('现在可以重新从备份恢复');
+      expect(exists(wrapper, 'backup-recovery-pending')).toBe(false);
+    });
+
+    it('恢复确认说明整目录换入会换掉隐藏文件、含链接的文件夹改为写回', async () => {
+      api.ListDatabaseBackups.mockResolvedValue([fullBackup]);
+      const wrapper = await mountSection();
+      const rows = await openList(wrapper);
+      await rows[0].findAll('button').find(button => button.text() === '恢复').trigger('click');
+      const note = find(wrapper, 'backup-restore-files-note').text();
+      expect(note).toContain('隐藏文件');
+      expect(note).toContain('已有的其他文件保持不动');
     });
 
     it('来自更新版本、空间不足、文件包损坏的原因码不显示给用户', async () => {

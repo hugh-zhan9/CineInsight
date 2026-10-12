@@ -47,6 +47,7 @@ type filesRecoveryOutcome struct {
 	renamed          int
 	keptAsides       int
 	mergeInterrupted bool
+	mergeTempLeft    bool // 合并中断、而真实目录现在够不着，没能清掉里面的临时文件
 }
 
 // recoverFromFilesRestoreMarker 按标记收拾现场，返回是否全部处理完；并给出一次说明（桌面通知 + 备份状态）。
@@ -56,48 +57,70 @@ func (s *BackupService) recoverFromFilesRestoreMarker(marker filesRestoreMarker)
 	if err != nil {
 		outcome.done = false
 	} else {
-		swapFinished := true // 换入阶段是否已走完（所有整目录换入的目录都已换好）
-		for _, target := range marker.Targets {
-			if target.Mode == filesRestoreModeSwap && target.State != filesTargetSwapped && target.State != filesTargetAsideDeleted {
-				swapFinished = false
-			}
-		}
+		targets := make([]filesRestoreTarget, 0, len(marker.Targets))
 		for _, target := range marker.Targets {
 			if !target.valid(dataRoot) {
 				log.Printf("整理文件还原标记里有对不上的条目，未动 dir=%q", target.Dir)
 				continue
 			}
-			s.recoverFilesTarget(marker.State, target, swapFinished, &outcome)
+			// 先推断再动手（审阅第五轮 E2a）：还在 pending 的换入目录，暂存目录已经不在、原目录与旧目录都在，说明两次改名
+			// 都做完了（暂存目录被改名就位），只是没来得及记状态——按已换好处理。
+			if marker.State == filesRestoreSwapping && target.Mode != filesRestoreModeMerge && target.State == filesTargetPending &&
+				target.Aside != "" && filesSwapAppearsDone(target) {
+				target.State = filesTargetSwapped
+			}
+			targets = append(targets, target)
+		}
+		// 整个还原是否走完（换入的都换好、合并的都合并完，审阅第五轮 M3）：只有走完了，换好的目录留下的旧目录才删。
+		finished := true
+		for _, target := range targets {
+			switch {
+			case target.Mode == filesRestoreModeMerge && target.State != filesTargetMerged,
+				target.Mode != filesRestoreModeMerge && target.State != filesTargetSwapped && target.State != filesTargetAsideDeleted:
+				finished = false
+			}
+		}
+		for _, target := range targets {
+			s.recoverFilesTarget(marker.State, target, finished, &outcome)
 		}
 	}
 	s.setRestoreNotice(describeFilesRecovery(marker.State, outcome))
 	return outcome.done
 }
 
-func (s *BackupService) recoverFilesTarget(markerState string, target filesRestoreTarget, swapFinished bool, outcome *filesRecoveryOutcome) {
-	_ = os.RemoveAll(filepath.Join(target.Parent, target.Staging))
+func filesSwapAppearsDone(target filesRestoreTarget) bool {
+	_, stagingErr := os.Lstat(filepath.Join(target.Parent, target.Staging))
+	_, originalErr := os.Lstat(filepath.Join(target.Parent, target.Base))
+	_, asideErr := os.Lstat(filepath.Join(target.Parent, target.Aside))
+	return os.IsNotExist(stagingErr) && originalErr == nil && asideErr == nil
+}
+
+// recoverFilesTarget 处理一个目录。暂存目录只在做完判断之后才删；判断不了的情形连暂存目录一起留着。
+func (s *BackupService) recoverFilesTarget(markerState string, target filesRestoreTarget, finished bool, outcome *filesRecoveryOutcome) {
+	staging := filepath.Join(target.Parent, target.Staging)
 	if markerState == filesRestoreStaging {
-		return // 还没开始改名或合并：原目录没动过
+		_ = os.RemoveAll(staging) // 还没开始改名或合并：原目录没动过
+		return
 	}
 	if target.Mode == filesRestoreModeMerge {
+		_ = os.RemoveAll(staging) // 合并用的暂存目录在数据目录里
 		if target.State != filesTargetMerged {
 			outcome.mergeInterrupted = true
-			s.removeMergeTempFiles(target.Dir)
+			if !s.removeMergeTempFiles(target.Dir) {
+				outcome.mergeTempLeft = true // 真实目录够不着（盘没挂）：临时文件前缀固定、无害，不挡住标记删除（M4）
+			}
 		}
 		return
 	}
-	if _, err := os.Lstat(target.Parent); err != nil {
-		outcome.done = false // 上级目录不在或读不到：现场对不上，留着标记
+	// 没有要撤回的（原来就没有目录、旧目录已删）先处理，不看上级目录在不在，免得无谓地挡住（E2a）。
+	if target.Aside == "" || target.State == filesTargetAsideDeleted {
+		_ = os.RemoveAll(staging)
 		return
 	}
-	original := filepath.Join(target.Parent, target.Base)
 	aside := filepath.Join(target.Parent, target.Aside)
-	switch {
-	case target.Aside == "" || target.State == filesTargetAsideDeleted:
-		return
-	case target.State == filesTargetSwapped:
-		// 只有整个换入阶段都走完了，换好的目录留下的旧目录才删；否则留着，并在说明里提到。
-		if !swapFinished {
+	if target.State == filesTargetSwapped {
+		_ = os.RemoveAll(staging)
+		if !finished {
 			outcome.keptAsides++
 			return
 		}
@@ -106,6 +129,11 @@ func (s *BackupService) recoverFilesTarget(markerState string, target filesResto
 		}
 		return
 	}
+	if _, err := os.Lstat(target.Parent); err != nil {
+		outcome.done = false // 上级目录不在或读不到：现场对不上，留着标记
+		return
+	}
+	original := filepath.Join(target.Parent, target.Base)
 	_, originalErr := os.Lstat(original)
 	_, asideErr := os.Lstat(aside)
 	switch {
@@ -117,13 +145,16 @@ func (s *BackupService) recoverFilesTarget(markerState string, target filesResto
 			outcome.done = false
 			return
 		}
+		_ = os.RemoveAll(staging)
 		outcome.renamed++
 		log.Printf("上次还原整理文件中途中断：已把 %s 改回恢复前的内容", target.Dir)
 	case originalErr == nil && asideErr == nil:
-		outcome.done = false // 原目录与旧目录都在：分不清哪份是恢复前的，留着让人看
+		outcome.done = false // 暂存目录还在、原目录与旧目录又都在：分不清，留着让人看
 		outcome.keptAsides++
 	case os.IsNotExist(originalErr) && os.IsNotExist(asideErr):
 		outcome.done = false
+	default:
+		_ = os.RemoveAll(staging) // 原目录在、旧目录不在：第一次改名还没发生，原目录没动过
 	}
 }
 
@@ -141,7 +172,10 @@ func describeFilesRecovery(markerState string, outcome filesRecoveryOutcome) str
 			parts = append(parts, fmt.Sprintf("%d 个目录的恢复前内容保留在同级、名字以 .pre-restore- 结尾的目录里", outcome.keptAsides))
 		}
 		if outcome.mergeInterrupted {
-			parts = append(parts, "链接到别处的目录可能只写进了一部分备份里的文件")
+			parts = append(parts, "按合并还原的目录可能只写进了一部分备份里的文件")
+		}
+		if outcome.mergeTempLeft {
+			parts = append(parts, "其中有目录现在够不着（磁盘没挂），里面可能留有名字以 .cineinsight-restore-tmp- 开头的临时文件，可以直接删掉")
 		}
 	}
 	if !outcome.done {
@@ -157,9 +191,13 @@ func (s *BackupService) setRestoreNotice(notice string) {
 	notifyDesktop(s.desktopNotifier(), "整理过的文件还原中断", notice)
 }
 
-// sweepOrphanStaging 清掉没有标记引用的暂存目录（此时已没有标记）：整目录换入用的（与收录目录真实位置、链接所在位置
-// 同级、名字以 .cineinsight-restore-<名字>- 开头），以及合并还原用的（数据目录里、以 .cineinsight-restore-merge- 开头）。
+// sweepOrphanStaging 清掉没有标记引用的暂存目录（此时已没有标记），只在数据目录里找：整目录换入用的（与收录目录
+// 真实位置、链接所在位置同级、名字以 .cineinsight-restore-<名字>- 开头），以及合并还原用的（以 .cineinsight-restore-merge- 开头）。
 func (s *BackupService) sweepOrphanStaging() {
+	dataRoot, err := s.resolvedDataDir()
+	if err != nil {
+		return
+	}
 	if entries, err := os.ReadDir(s.dataDir); err == nil {
 		for _, entry := range entries {
 			if entry.IsDir() && strings.HasPrefix(entry.Name(), backupFilesMergeStagingPrefix) {
@@ -177,6 +215,9 @@ func (s *BackupService) sweepOrphanStaging() {
 			locations[placement.Parent] = placement.Base
 		}
 		for parent, base := range locations {
+			if !insideDirectory(dataRoot, parent) {
+				continue // 只在数据目录里清扫，链接指向的地方一概不碰（审阅第五轮 M5）
+			}
 			entries, err := os.ReadDir(parent)
 			if err != nil {
 				continue

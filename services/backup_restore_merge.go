@@ -9,9 +9,9 @@ import (
 	"strings"
 )
 
-// 链接过去的收录目录按合并还原（4.2，集成方裁决 2026-10-12，见 backup_restore_placement.go）。
-// 链接指向的目录里只会出现两样东西：备份里的文件（同目录临时文件写好后改名覆盖同名文件），以及崩溃时可能残留的、
-// 名字以 .cineinsight-restore-tmp- 开头的临时文件。已有的其他文件、点文件、子目录里的符号链接一律不动。
+// 按合并还原的收录目录（链接到别处，或目录里有符号链接；4.2，集成方裁决 2026-10-12 / 10-13，见 backup_restore_placement.go）。
+// 真实目录里只会出现两样东西：备份里的文件（同目录临时文件写好后改名覆盖同名文件），以及崩溃时可能残留的、
+// 名字以 .cineinsight-restore-tmp- 开头的临时文件。已有的其他文件、点文件、符号链接一律不动。
 
 const (
 	backupFilesMergeTempPrefix    = ".cineinsight-restore-tmp-"
@@ -139,11 +139,11 @@ func copyFileOver(source, dest string) error {
 	return nil
 }
 
-// removeMergeTempFiles 清掉崩溃时残留在链接指向目录里的临时文件（只认固定前缀的普通文件）。
-func (s *BackupService) removeMergeTempFiles(dir string) {
+// removeMergeTempFiles 清掉崩溃时残留在真实目录里的临时文件（只认固定前缀的普通文件）；真实目录够不着时返回 false。
+func (s *BackupService) removeMergeTempFiles(dir string) bool {
 	root, err := filepath.EvalSymlinks(filepath.Join(s.dataDir, filepath.FromSlash(dir)))
 	if err != nil {
-		return
+		return os.IsNotExist(err) && s.curatedLinkAbsent(dir)
 	}
 	_ = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
@@ -154,4 +154,11 @@ func (s *BackupService) removeMergeTempFiles(dir string) {
 		}
 		return nil
 	})
+	return true
+}
+
+// curatedLinkAbsent：收录目录这条路径本身不存在（不是失效的链接）——那就没有临时文件可清。
+func (s *BackupService) curatedLinkAbsent(dir string) bool {
+	state, _ := curatedRootState(s.dataDir, dir)
+	return state == curatedRootAbsent
 }

@@ -106,6 +106,10 @@ type BackupStatus struct {
 	// 「上次还原整理文件中途中断、已改回」说明。两者都不落库。
 	FilesWarning string `json:"files_warning"`
 	Notice       string `json:"notice"`
+	// RecoveryPending：上次还原整理文件的现场没收拾完（标记还在），新的恢复会被拒绝；RecoveryLeftovers 是旁边还留着
+	// 恢复前副本或暂存文件的收录目录（叫法 + 相对位置）。设置页据此提供「放弃收拾，允许恢复」。
+	RecoveryPending   bool     `json:"recovery_pending"`
+	RecoveryLeftovers []string `json:"recovery_leftovers"`
 }
 
 type postgresToolRunner interface {
@@ -262,6 +266,7 @@ func (s *BackupService) statusFromSettings(settings *models.Settings) BackupStat
 	s.registryMu.Lock()
 	status.FilesWarning, status.Notice = s.filesWarning, s.notice
 	s.registryMu.Unlock()
+	status.RecoveryPending, status.RecoveryLeftovers = s.pendingFilesRestoreLeftovers()
 	status.BackupDirectory = s.resolveDirectory(settings.BackupDirectory)
 	status.RetentionCount = normalizedBackupRetention(settings.BackupRetentionCount)
 	status.IntervalHours = normalizedBackupInterval(settings.BackupIntervalHours)
