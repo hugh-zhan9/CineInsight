@@ -1,5 +1,16 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { mount } from '@vue/test-utils';
+
+// 页签面板挂载时会调后端：这里一律给空结果，只测页面骨架本身。
+const api = vi.hoisted(() => new Proxy({}, {
+  get(target, prop) {
+    if (typeof prop === 'symbol' || prop === 'then') return undefined;
+    if (!target[prop]) target[prop] = vi.fn(() => Promise.resolve(null));
+    return target[prop];
+  }
+}));
+vi.mock('../../wailsjs/go/main/App', () => api);
+
 import DataCarePage, { DATA_CARE_TABS } from './DataCarePage.vue';
 
 const wrappers = [];

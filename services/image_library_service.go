@@ -53,6 +53,8 @@ type ImageFilter struct {
 	SortMode     string     `json:"sort_mode"`
 	// AITagState 按 AI 打标状态筛选，取值见 ImageAITagState* 常量；空串表示不筛。
 	AITagState string `json:"ai_tag_state"`
+	// Missing 是「缺失某项」筛选（D-MC-03），取值见 imageMissingSQL，空串不筛。
+	Missing string `json:"missing"`
 }
 
 // ImageFolderCover 是文件夹图集卡片使用的最小封面信息。
@@ -192,6 +194,11 @@ func normalizeImageFilter(filter ImageFilter) (ImageFilter, error) {
 	default:
 		return ImageFilter{}, fmt.Errorf("不支持的 AI 打标筛选: %s", filter.AITagState)
 	}
+	missing, err := normalizeMissingFilter(filter.Missing, imageMissingSQL)
+	if err != nil {
+		return ImageFilter{}, err
+	}
+	filter.Missing = missing
 	filter.SortMode = strings.TrimSpace(filter.SortMode)
 	if filter.SortMode == "" {
 		filter.SortMode = ImageSortRecent
@@ -255,6 +262,9 @@ func applyImageFilter(query *gorm.DB, filter ImageFilter) *gorm.DB {
 			Group("image_id").
 			Having("COUNT(DISTINCT tag_id) = ?", len(filter.TagIDs))
 		query = query.Where("images.id IN (?)", subquery)
+	}
+	if filter.Missing != "" {
+		query = query.Where(imageMissingSQL[filter.Missing])
 	}
 	// 人物筛选与标签同法：分组计数保证 AND 语义，而不是任一命中。
 	if len(filter.PersonIDs) > 0 {

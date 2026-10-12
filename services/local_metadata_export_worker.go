@@ -104,7 +104,7 @@ func (s *LocalMetadataService) ExportVideoNFO(ctx context.Context, videoID uint)
 	}
 	defer unlock()
 	result, err := ExportLocalMetadataNFO(ctx, video.Path, LocalMetadataNFOExportInput{
-		DisplayTitle: video.DisplayTitle, PersonalRating: video.PersonalRating, Tags: tags,
+		DisplayTitle: video.DisplayTitle, PersonalRating: video.PersonalRating, Year: video.Year, Tags: tags,
 		People: personNames, Collection: collection,
 	})
 	if result != nil {

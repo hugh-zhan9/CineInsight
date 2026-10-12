@@ -1099,6 +1099,37 @@ describe('PhotoLibraryPage AI tag filter', () => {
   });
 });
 
+describe('PhotoLibraryPage missing filter (D-MC-03)', () => {
+  it('sends the selected missing field from the filter panel and reloads', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+    expect(api.SearchImagePage.mock.calls[0][0].filter.missing).toBe('');
+    await openPhotoFilter(wrapper);
+    const select = wrapper.get('[data-test="photo-missing-filter"]');
+    expect(select.findAll('option').map(option => option.element.value)).toEqual(['', 'taken_at', 'gps', 'tags', 'people']);
+    await select.setValue('gps');
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter.missing).toBe('gps');
+    expect(wrapper.vm.activePhotoFilterCount).toBe(1);
+    wrapper.unmount();
+  });
+
+  it('applyMissingFilter clears other conditions and lists only that field', async () => {
+    api.SearchImagePage.mockResolvedValue(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+    wrapper.vm.filters.favoriteOnly = true;
+    wrapper.vm.filters.tagIDs = [3];
+    await flushPromises();
+    api.SearchImagePage.mockClear();
+    expect(await wrapper.vm.applyMissingFilter('taken_at')).toBe(true);
+    await flushPromises();
+    expect(api.SearchImagePage.mock.calls.at(-1)[0].filter).toMatchObject({ missing: 'taken_at', favorite_only: false, tag_ids: [], keyword: '' });
+    expect(await wrapper.vm.applyMissingFilter('year')).toBe(false);
+    expect(wrapper.vm.filters.missing).toBe('taken_at');
+    wrapper.unmount();
+  });
+});
+
 describe('PhotoLibraryPage cleanup review', () => {
   const exactGroup = () => ({
     original: makeImage(1, { name: 'keep.jpg', width: 4000, height: 3000 }),

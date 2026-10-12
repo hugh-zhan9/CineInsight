@@ -988,6 +988,46 @@ describe('命令面板接线', () => {
 
     wrapper.unmount();
   });
+
+  it('D-MC-03 完整度「去处理」：清掉其余条件，只按缺失项重载；保存视图带上缺失条件', async () => {
+    api.SearchLibraryVideoPage.mockResolvedValue({ videos: [], next_cursor: null });
+    const wrapper = await mountPage();
+    wrapper.vm.smartView = 'favorites';
+    wrapper.vm.searchKeyword = 'sea';
+    wrapper.vm.selectedTags = [1];
+    api.SearchLibraryVideoPage.mockClear();
+
+    await wrapper.vm.applyMissingFilter('poster');
+    await flushPromises();
+
+    expect(wrapper.vm.missingFilter).toBe('poster');
+    expect(wrapper.vm.smartView).toBe('');
+    expect(wrapper.vm.selectedTags).toEqual([]);
+    const filter = api.SearchLibraryVideoPage.mock.calls.at(-1)[0].filter;
+    expect(filter.missing).toBe('poster');
+    expect(filter.smart_view).toBe('');
+    expect(filter.keyword).toBe('');
+    expect(wrapper.vm.hasActiveConditions()).toBe(true);
+    // 缩略图与待处理项不进列表筛选。
+    expect(wrapper.vm.applyMissingFilter('thumbnail')).toBe(false);
+    expect(wrapper.vm.missingFilter).toBe('poster');
+
+    // 保存视图里的缺失条件随视图套用；清除全部条件时一起清掉。
+    wrapper.vm.savedViews = [{
+      id: 7, name: '缺年份', search_mode: 'file', keyword: '', smart_view: 'unwatched', missing: 'year',
+      tag_ids_json: '[]', min_size: 0, max_size: 0, min_height: 0, max_height: 0, min_rating: null, max_rating: null, sort_mode: 'balanced'
+    }];
+    await wrapper.vm.applySavedViewCommand(7);
+    await flushPromises();
+    expect(wrapper.vm.missingFilter).toBe('year');
+    expect(api.SearchLibraryVideoPage.mock.calls.at(-1)[0].filter).toEqual(expect.objectContaining({ missing: 'year', smart_view: 'unwatched' }));
+    wrapper.vm.clearAllConditions();
+    await flushPromises();
+    expect(wrapper.vm.missingFilter).toBe('');
+    expect(api.SearchLibraryVideoPage.mock.calls.at(-1)[0].filter.missing).toBe('');
+
+    wrapper.unmount();
+  });
 });
 
 describe('续播位置', () => {

@@ -68,6 +68,7 @@ export function savedViewFilter(view) {
     max_height: Number(view.max_height || 0),
     min_rating: view.min_rating ?? null,
     max_rating: view.max_rating ?? null,
+    missing: view.missing || '',
     sort_mode: view.sort_mode || 'balanced'
   };
 }

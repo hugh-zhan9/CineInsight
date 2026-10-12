@@ -694,6 +694,14 @@ export function GetLocalMetadataExportStatus() {
   return window['go']['main']['App']['GetLocalMetadataExportStatus']();
 }
 
+export function GetMetadataCompleteness() {
+  return window['go']['main']['App']['GetMetadataCompleteness']();
+}
+
+export function GetMetadataCompletenessByDirectory(arg1, arg2, arg3) {
+  return window['go']['main']['App']['GetMetadataCompletenessByDirectory'](arg1, arg2, arg3);
+}
+
 export function GetPendingWorkSummary() {
   return window['go']['main']['App']['GetPendingWorkSummary']();
 }

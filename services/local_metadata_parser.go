@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -22,6 +23,9 @@ type localMovieNFO struct {
 	OriginalTitle string   `xml:"originaltitle"`
 	Plot          string   `xml:"plot"`
 	Outline       string   `xml:"outline"`
+	Year          string   `xml:"year"`
+	Premiered     string   `xml:"premiered"`
+	ReleaseDate   string   `xml:"releasedate"`
 	Actors        []struct {
 		Name string `xml:"name"`
 	} `xml:"actor"`
@@ -34,6 +38,7 @@ type LocalMetadataDocument struct {
 	Title         string   `json:"title"`
 	OriginalTitle string   `json:"original_title"`
 	Description   string   `json:"description"`
+	Year          *int     `json:"year"` // D-MC-01：nil 表示 NFO 里没有可用的年份
 	People        []string `json:"people"`
 	Collection    string   `json:"collection"`
 }
@@ -92,7 +97,7 @@ func parseLocalMovieNFO(content []byte) (LocalMetadataDocument, error) {
 	if len(source.Actors) > localMetadataActorMaxCount {
 		return LocalMetadataDocument{}, fmt.Errorf("nfo exceeds %d actor limit", localMetadataActorMaxCount)
 	}
-	fields := []string{source.Title, source.OriginalTitle, source.Plot, source.Outline, source.Set.Name}
+	fields := []string{source.Title, source.OriginalTitle, source.Plot, source.Outline, source.Year, source.Premiered, source.ReleaseDate, source.Set.Name}
 	for _, actor := range source.Actors {
 		fields = append(fields, actor.Name)
 	}
@@ -124,9 +129,33 @@ func parseLocalMovieNFO(content []byte) (LocalMetadataDocument, error) {
 		Title:         strings.TrimSpace(source.Title),
 		OriginalTitle: strings.TrimSpace(source.OriginalTitle),
 		Description:   description,
+		Year:          localMetadataNFOYear(source.Year, source.Premiered, source.ReleaseDate),
 		People:        people,
 		Collection:    strings.TrimSpace(source.Set.Name),
 	}, nil
+}
+
+// localMetadataNFOYear 按 <year>、<premiered>、<releasedate> 的顺序取第一个可用年份（D-MC-01）：
+// 取值开头须是 4 位数字（「1999」「1999-05-01」），且落在 1870–2100；不可用的那项当作没有，接着看下一项。
+func localMetadataNFOYear(candidates ...string) *int {
+	for _, raw := range candidates {
+		value := strings.TrimSpace(raw)
+		if len(value) < 4 {
+			continue
+		}
+		year, err := strconv.Atoi(value[:4])
+		if err != nil {
+			continue
+		}
+		if len(value) > 4 && value[4] >= '0' && value[4] <= '9' {
+			continue
+		}
+		if validateVideoYear(&year) != nil {
+			continue
+		}
+		return &year
+	}
+	return nil
 }
 
 func normalizeLocalMetadataName(value string) string {

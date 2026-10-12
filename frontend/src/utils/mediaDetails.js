@@ -26,10 +26,13 @@ export function createDetailNavigator(initialEntry) {
 
 export function createVideoDetailsDraft(details) {
   const rating = details?.video?.personal_rating;
+  const year = details?.video?.year;
   return {
     displayTitle: details?.video?.display_title || '',
     originalTitle: details?.video?.original_title || '',
     description: details?.video?.description || '',
+    // 年份（D-MC-01）：UpdateVideoDetails 整体替换，草稿必须带着它，否则保存会把年份清空。
+    year: year === null || year === undefined ? '' : String(year),
     personalRating: rating === null || rating === undefined ? '' : String(rating),
     personIDs: uniqueIDs((details?.people || []).map(item => item?.person?.id)),
     collectionIDs: uniqueIDs((details?.collections || []).map(item => item?.collection?.id))
@@ -43,6 +46,17 @@ export function validateRatingDraft(value) {
     throw new Error('评分必须是 0–10 之间的 0.5 倍数');
   }
   return rating;
+}
+
+// 年份草稿：留空为未知（null）；否则必须是 1870–2100 的整数（与后端 validateVideoYear 同范围）。
+export function validateYearDraft(value) {
+  const text = String(value ?? '').trim();
+  if (text === '') return null;
+  const year = Number(text);
+  if (!/^\d{4}$/.test(text) || year < 1870 || year > 2100) {
+    throw new Error('年份必须是 1870–2100 之间的整数');
+  }
+  return year;
 }
 
 export function toggleEntityID(ids, id, force) {

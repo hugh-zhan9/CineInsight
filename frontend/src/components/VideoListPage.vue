@@ -11,6 +11,7 @@
       :search-keyword="searchKeyword"
       :search-mode="searchMode"
       :smart-view="smartView"
+      :missing="missingFilter"
       :sort-mode="sortMode"
       :view-mode="viewMode"
       :row-density="rowDensity"
@@ -49,6 +50,7 @@
       @batch-compare="compareSelectedVideos"
       @update:search-keyword="searchKeyword = $event"
       @update:smart-view="smartView = $event"
+      @update:missing="missingFilter = $event"
       @update:sort-mode="sortMode = $event"
       @update:view-mode="viewMode = $event"
       @update:row-density="rowDensity = $event"
@@ -568,6 +570,7 @@ import { defaultRangeEngine, estimateVideoRowHeight, estimateVideoGridHeight, es
 import BaseMenu from './ui/BaseMenu.vue';
 import BaseModal from './ui/BaseModal.vue';
 import { patchVideoFromDetails } from '../utils/mediaDetails.js';
+import { VIDEO_MISSING_OPTIONS } from '../utils/metadataCompleteness.js';
 import { shortcutActionForEvent } from '../utils/keyboardShortcuts.js';
 import { findCommand, registerCommands, unregisterCommands } from '../utils/commandRegistry.js';
 import { confirmAction, notify, notifyError } from '../utils/feedback.js';
@@ -643,6 +646,8 @@ export default {
       semanticSearchError: '',
       semanticStatus: null,
       smartView: '',
+      // 「缺失某项」筛选（D-MC-03）：'' 不筛；与智能视图正交。
+      missingFilter: '',
       // 「路径失效」视图里按原因筛（D-PC06）：'' 为全部，unknown 为原因未记录。
       staleReasonFilter: '',
       staleReasonCounts: {},
@@ -1042,6 +1047,7 @@ export default {
         keyword: this.currentQueryKeyword(),
         similarVideoID: this.semanticSimilarVideoID,
         smartView: this.smartView,
+        missing: this.missingFilter,
         staleReason: this.staleReasonFilter,
         tags: [...this.selectedTags].sort((a, b) => a - b),
         people: this.selectedPeople.map(person => Number(person.id)).sort((a, b) => a - b),
@@ -1668,6 +1674,7 @@ export default {
     },
     clearAllConditions() {
       this.smartView = '';
+      this.missingFilter = '';
       this.staleReasonFilter = '';
       this.selectedTags = [];
       this.selectedPeople = [];
@@ -1733,6 +1740,7 @@ export default {
         search_mode: 'file',
         keyword: '',
         smart_view: '',
+        missing: '',
         tag_ids: [],
         person_ids: [],
         min_size: 0,
@@ -1868,11 +1876,11 @@ export default {
       return estimateVideoRowHeight(video, widthBucket, subtitleMode, density) + versions;
     },
     hasStructuredFilters() {
-      return this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
+      return !!this.missingFilter || this.selectedTags.length > 0 || this.selectedPeople.length > 0 || this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '' || this.sortMode !== 'balanced';
     },
     // 当前有没有会让结果变少的条件：决定空列表显示「筛选没命中」还是「目录里没有视频」。
     hasActiveConditions() {
-      return !!this.currentQueryKeyword() || !!this.smartView || !!this.semanticSimilarVideoID ||
+      return !!this.currentQueryKeyword() || !!this.smartView || !!this.missingFilter || !!this.semanticSimilarVideoID ||
         this.selectedTags.length > 0 || this.selectedPeople.length > 0 ||
         this.selectedSizeRange !== 'all' || this.selectedResRange !== 'all' || this.minRating !== '' || this.maxRating !== '';
     },
@@ -1886,6 +1894,7 @@ export default {
         search_mode: semantic ? 'file' : this.searchMode,
         keyword: semantic ? '' : this.currentQueryKeyword(),
         smart_view: this.smartView,
+        missing: this.missingFilter,
         tag_ids: [...this.selectedTags],
         person_ids: this.selectedPeople.map(person => Number(person.id)).filter(Boolean),
         stale_reason: this.smartView === 'stale' ? this.staleReasonFilter : '',
@@ -2230,16 +2239,33 @@ export default {
       if (!Number.isInteger(id) || id <= 0) return false;
       this.deactivateRandomPick();
       this.leaveSavedView();
+      this.resetConditionsForCommand();
+      this.selectedTags = [id];
+      return this.handleSearch(true, true);
+    },
+    // 完整度页签的「去处理」（D-MC-03）：清掉其余条件，只按「缺少这一项」列出，条数与完整度页同口径。
+    applyMissingFilter(field) {
+      const value = String(field || '');
+      if (!VIDEO_MISSING_OPTIONS.some(option => option.value === value)) return false;
+      this.deactivateRandomPick();
+      this.leaveSavedView();
+      this.resetConditionsForCommand();
+      if (this.searchMode === 'semantic') this.searchMode = 'file';
+      this.missingFilter = value;
+      return this.handleSearch(true, true);
+    },
+    // 跳转类命令（按标签、按缺失项）先清掉其余条件。
+    resetConditionsForCommand() {
       this.smartView = '';
+      this.missingFilter = '';
       this.staleReasonFilter = '';
+      this.selectedTags = [];
       this.selectedPeople = [];
       this.selectedSizeRange = 'all';
       this.selectedResRange = 'all';
       this.minRating = '';
       this.maxRating = '';
       this.searchKeyword = '';
-      this.selectedTags = [id];
-      return this.handleSearch(true, true);
     },
     // mode：create 另存为新视图；update 用当前条件覆盖；rename 只改名（D-PC35、LIB-15）。
     openSaveViewDialog(mode = 'create') {
@@ -2283,6 +2309,7 @@ export default {
       this.searchMode = view.search_mode || 'file';
       this.searchKeyword = view.keyword || '';
       this.smartView = view.smart_view || '';
+      this.missingFilter = view.missing || '';
       this.selectedTags = tagIDs;
       this.selectedPeople = people;
       this.lastAppliedSavedViewID = view.id;

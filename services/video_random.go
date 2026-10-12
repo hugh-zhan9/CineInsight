@@ -39,6 +39,8 @@ type RandomPlayRequest struct {
 
 // normalizeRandomPlayRequest 校验随机条件；越界或未知取值明确报错，不静默放宽。
 func normalizeRandomPlayRequest(request RandomPlayRequest) (RandomPlayRequest, error) {
+	// 「缺失某项」不是随机条件（D-MC-03）：片库带着它时随机照样在其余条件里抽。
+	request.Filter.Missing = ""
 	request.WatchState = strings.TrimSpace(request.WatchState)
 	if request.WatchState == "" {
 		request.WatchState = RandomWatchAny

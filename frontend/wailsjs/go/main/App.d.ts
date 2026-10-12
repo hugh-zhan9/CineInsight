@@ -351,6 +351,10 @@ export function GetLocalMetadataBackfillStatus():Promise<services.LocalMetadataB
 
 export function GetLocalMetadataExportStatus():Promise<services.LocalMetadataExportStatus>;
 
+export function GetMetadataCompleteness():Promise<services.MetadataCompleteness>;
+
+export function GetMetadataCompletenessByDirectory(arg1:string,arg2:string,arg3:number):Promise<Array<services.MetadataCompletenessDirectory>>;
+
 export function GetPendingWorkSummary():Promise<main.PendingWorkSummary>;
 
 export function GetPerceptualHashBackfillStatus():Promise<services.PerceptualHashStatus>;

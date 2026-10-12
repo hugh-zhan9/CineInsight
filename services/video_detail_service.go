@@ -28,6 +28,7 @@ type VideoDetailsUpdate struct {
 	OriginalTitle  string   `json:"original_title"`
 	Description    string   `json:"description"`
 	PersonalRating *float64 `json:"personal_rating"`
+	Year           *int     `json:"year"` // D-MC-01：整体替换的一部分，nil 会清空年份，调用方必须回传当前值
 	PersonIDs      []uint   `json:"person_ids"`
 	CollectionIDs  []uint   `json:"collection_ids"`
 }
@@ -209,6 +210,23 @@ func validateRatingValue(rating *float64) error {
 	return nil
 }
 
+// 视频年份的合法范围（D-MC-01）。只在服务层校验，不建 CHECK 约束：SQLite 老库的表补不了 CHECK。
+const (
+	videoYearMin = 1870
+	videoYearMax = 2100
+)
+
+// ErrInvalidVideoYear 表示年份不在 1870–2100。
+var ErrInvalidVideoYear = errors.New("invalid_video_year")
+
+// validateVideoYear 校验年份；nil 表示未知，合法。
+func validateVideoYear(year *int) error {
+	if year != nil && (*year < videoYearMin || *year > videoYearMax) {
+		return ErrInvalidVideoYear
+	}
+	return nil
+}
+
 func validateVideoDetailInput(input VideoDetailsUpdate) (VideoDetailsUpdate, error) {
 	if input.VideoID == 0 {
 		return VideoDetailsUpdate{}, errors.New("video ID is required")
@@ -223,6 +241,9 @@ func validateVideoDetailInput(input VideoDetailsUpdate) (VideoDetailsUpdate, err
 		return VideoDetailsUpdate{}, errors.New("video description exceeds 64 KiB")
 	}
 	if err := validateRatingValue(input.PersonalRating); err != nil {
+		return VideoDetailsUpdate{}, err
+	}
+	if err := validateVideoYear(input.Year); err != nil {
 		return VideoDetailsUpdate{}, err
 	}
 	input.PersonIDs = uniqueSortedIDs(input.PersonIDs)
@@ -254,6 +275,7 @@ func (s *VideoDetailService) UpdateVideoDetails(input VideoDetailsUpdate) (*Vide
 			"original_title":  input.OriginalTitle,
 			"description":     input.Description,
 			"personal_rating": input.PersonalRating,
+			"year":            input.Year,
 		}).Error; err != nil {
 			return err
 		}

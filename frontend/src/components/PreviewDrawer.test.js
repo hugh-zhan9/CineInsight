@@ -339,6 +339,32 @@ describe('PreviewDrawer', () => {
     expect(wrapper.vm.draft.personalRating).toBe('0');
   });
 
+  it('D-MC-01 保存作品信息总是回传年份：漏传等于清空', async () => {
+    const wrapper = await mountDrawer(videoDetails(1, { video: { id: 1, year: 1999 } }));
+    const yearInput = wrapper.get('[data-test="detail-year-input"]');
+    expect(yearInput.element.value).toBe('1999');
+    api.UpdateVideoDetails.mockResolvedValueOnce(videoDetails(1, { video: { id: 1, year: 1999 } }));
+    await wrapper.vm.saveVideoDetails();
+    expect(api.UpdateVideoDetails).toHaveBeenLastCalledWith(expect.objectContaining({ video_id: 1, year: 1999 }));
+
+    await yearInput.setValue('2004');
+    expect(wrapper.vm.hasUnsavedVideoDraft).toBe(true);
+    api.UpdateVideoDetails.mockResolvedValueOnce(videoDetails(1, { video: { id: 1, year: 2004 } }));
+    await wrapper.vm.saveVideoDetails();
+    expect(api.UpdateVideoDetails).toHaveBeenLastCalledWith(expect.objectContaining({ year: 2004 }));
+
+    await wrapper.get('[data-test="detail-year-input"]').setValue('');
+    api.UpdateVideoDetails.mockResolvedValueOnce(videoDetails(1, { video: { id: 1, year: null } }));
+    await wrapper.vm.saveVideoDetails();
+    expect(api.UpdateVideoDetails.mock.calls.at(-1)[0]).toHaveProperty('year', null);
+
+    api.UpdateVideoDetails.mockClear();
+    await wrapper.get('[data-test="detail-year-input"]').setValue('1800');
+    await wrapper.vm.saveVideoDetails();
+    expect(api.UpdateVideoDetails).not.toHaveBeenCalled();
+    expect(wrapper.vm.error).toContain('1870');
+  });
+
   it('navigates to a person detail inside the mounted drawer', async () => {
     const wrapper = await mountDrawer();
     api.GetPersonDetail.mockResolvedValueOnce({

@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -28,6 +29,7 @@ var (
 type LocalMetadataNFOExportInput struct {
 	DisplayTitle   string   `json:"display_title"`
 	PersonalRating *float64 `json:"personal_rating"`
+	Year           *int     `json:"year"` // D-MC-01：nil 时保留 NFO 里原有的 <year>
 	Tags           []string `json:"tags"`
 	People         []string `json:"people"`
 	Collection     string   `json:"collection"`
@@ -196,6 +198,9 @@ func validateLocalMetadataNFOExportInput(videoPath string, input LocalMetadataNF
 		if err := validateLocalMetadataXMLText(field.name, field.value); err != nil {
 			return LocalMetadataNFOExportInput{}, err
 		}
+	}
+	if err := validateVideoYear(input.Year); err != nil {
+		return LocalMetadataNFOExportInput{}, fmt.Errorf("%w: year must be between %d and %d", ErrLocalMetadataNFOInvalid, videoYearMin, videoYearMax)
 	}
 	if input.PersonalRating != nil {
 		rating := *input.PersonalRating
@@ -384,20 +389,21 @@ func parseLocalMetadataXMLTree(content []byte) (*localMetadataXMLDocument, error
 	return document, nil
 }
 
-// mergeLocalMetadataManagedFields 写出 title/userrating/tag/actor/set。
+// mergeLocalMetadataManagedFields 写出 title/year/userrating/tag/actor/set。
 // 注意不对称：导出的 <tag>/<userrating> 仅供第三方消费（Kodi/Jellyfin），
 // 应用自身的 NFO 解析器（parseLocalMovieNFO）按既定导入字段设计不读取
-// 这两个字段，应用内的往返只覆盖 title/actor/set。
+// 这两个字段，应用内的往返只覆盖 title/year/actor/set。
 func mergeLocalMetadataManagedFields(root *localMetadataXMLElement, input LocalMetadataNFOExportInput) {
 	// A managed field with no app-side value means "the app has nothing to
 	// say"; the existing NFO elements for that field are preserved verbatim
 	// instead of being deleted.
+	writeYear := input.Year != nil
 	writeRating := input.PersonalRating != nil
 	writeTags := len(input.Tags) > 0
 	writePeople := len(input.People) > 0
 	writeSet := input.Collection != ""
 
-	var titleTemplate, ratingTemplate, setTemplate *localMetadataXMLElement
+	var titleTemplate, yearTemplate, ratingTemplate, setTemplate *localMetadataXMLElement
 	actorTemplates := make(map[string]*localMetadataXMLElement)
 	tagTemplates := make(map[string]*localMetadataXMLElement)
 	retained := make([]localMetadataXMLPart, 0, len(root.children))
@@ -410,6 +416,14 @@ func mergeLocalMetadataManagedFields(root *localMetadataXMLElement, input LocalM
 		case "title":
 			if titleTemplate == nil {
 				titleTemplate = part.element
+			}
+		case "year":
+			if !writeYear {
+				retained = append(retained, part)
+				break
+			}
+			if yearTemplate == nil {
+				yearTemplate = part.element
 			}
 		case "userrating":
 			if !writeRating {
@@ -447,6 +461,10 @@ func mergeLocalMetadataManagedFields(root *localMetadataXMLElement, input LocalM
 
 	titleTemplate = localMetadataSetElementText(titleTemplate, "title", input.DisplayTitle)
 	root.children = append(root.children, localMetadataXMLPart{element: titleTemplate})
+	if input.Year != nil {
+		yearTemplate = localMetadataSetElementText(yearTemplate, "year", strconv.Itoa(*input.Year))
+		root.children = append(root.children, localMetadataXMLPart{element: yearTemplate})
+	}
 	if input.PersonalRating != nil {
 		ratingTemplate = localMetadataSetElementText(ratingTemplate, "userrating", formatLocalMetadataRating(*input.PersonalRating))
 		setLocalMetadataAttribute(ratingTemplate, "max", "10")

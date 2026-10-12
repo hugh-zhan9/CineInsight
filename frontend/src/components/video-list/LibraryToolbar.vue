@@ -38,6 +38,12 @@
           <option v-for="view in smartViewOptions" :key="view.value" :value="view.value">{{ view.label }}</option>
         </select>
 
+        <!-- 「缺失某项」（D-MC-03）：与智能视图正交，AND 叠加；完整度页的「去处理」也落在这里。 -->
+        <select v-model="missingModel" @change="$emit('search', true)" class="select-input toolbar-control" aria-label="缺少某项" data-test="library-missing-filter">
+          <option value="">缺少…</option>
+          <option v-for="option in missingOptions" :key="option.value" :value="option.value">缺少{{ option.label }}</option>
+        </select>
+
         <button
           ref="filterTrigger"
           type="button"
@@ -346,6 +352,7 @@ import { registerCommands, unregisterCommands } from '../../utils/commandRegistr
 
 import { normalizeRandomConditions, randomConditionTags } from '../../utils/randomPlayback.js';
 import { normalizeLibraryLayout } from '../../utils/virtualList.js';
+import { VIDEO_MISSING_OPTIONS } from '../../utils/metadataCompleteness.js';
 
 // 人物组合框一次最多列出的候选数。
 const PERSON_OPTION_LIMIT = 20;
@@ -364,6 +371,8 @@ export default {
     searchKeyword: { type: String, default: '' },
     searchMode: { type: String, default: 'file' },
     smartView: { type: String, default: '' },
+    // 「缺失某项」筛选（D-MC-03），取值见 VIDEO_MISSING_OPTIONS；空串不筛。
+    missing: { type: String, default: '' },
     sortMode: { type: String, default: 'balanced' },
     viewMode: { type: String, default: 'list' },
     rowDensity: { type: String, default: 'compact' },
@@ -405,7 +414,7 @@ export default {
   },
   emits: [
     'search-scenes',
-    'update:searchKeyword', 'update:smartView', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
+    'update:searchKeyword', 'update:smartView', 'update:missing', 'update:sortMode', 'update:viewMode', 'update:rowDensity',
     'update:selectedPeople',
     'search', 'set-search-mode', 'play-random', 'toggle-tag', 'clear-tags', 'open-tag-manager',
     'toggle-select-all', 'clear-selection', 'clear-conditions', 'apply-filter', 'open-save-view',
@@ -434,6 +443,7 @@ export default {
         { label: '本地资料有更新', value: 'local_metadata_updated' },
         { label: '路径失效', value: 'stale' }
       ],
+      missingOptions: VIDEO_MISSING_OPTIONS,
       toolbarMenu: null,
       toolbarMenuAnchor: null,
       filterDraft: { sizeRange: 'all', resRange: 'all', minRating: '', maxRating: '' },
@@ -513,6 +523,10 @@ export default {
       get() { return this.smartView; },
       set(value) { this.$emit('update:smartView', value); }
     },
+    missingModel: {
+      get() { return this.missing; },
+      set(value) { this.$emit('update:missing', value); }
+    },
     sortModeModel: {
       get() { return this.sortMode; },
       set(value) { this.$emit('update:sortMode', value); }
@@ -541,6 +555,10 @@ export default {
       if (this.smartView) {
         const view = this.smartViewOptions.find(option => option.value === this.smartView);
         if (view) labels.push(view.label);
+      }
+      if (this.missing) {
+        const option = this.missingOptions.find(item => item.value === this.missing);
+        if (option) labels.push(`缺少${option.label}`);
       }
       if (this.selectedTags.length > 0) {
         const names = this.selectedTags

@@ -170,6 +170,18 @@
           <option value="tagged">已打标</option>
           <option value="untagged">未打标</option>
         </select>
+        <!-- 「缺失某项」（D-MC-03）：拍摄时间与地理位置只看解析过 EXIF 的图片；完整度页的「去处理」也落在这里。 -->
+        <select
+          v-model="filters.missing"
+          class="select-input photo-toolbar__ai"
+          aria-label="缺少某项"
+          :disabled="searchMode === 'semantic'"
+          :title="searchMode === 'semantic' ? '语义模式不叠加此筛选' : '只看缺少某项的图片'"
+          data-test="photo-missing-filter"
+        >
+          <option value="">缺少…</option>
+          <option v-for="option in missingOptions" :key="option.value" :value="option.value">缺少{{ option.label }}</option>
+        </select>
         <label class="photo-toolbar__favorite">
           <input v-model="filters.favoriteOnly" type="checkbox" data-test="photo-favorite-only" />
           <span>仅收藏</span>
@@ -768,6 +780,7 @@ import {
 } from '../utils/photoGrid.js';
 // 只读复用视频列表的滚动宿主解析（.main-view），不修改 virtualList.js。
 import { resolveScrollOwnerDescriptor } from '../utils/virtualList.js';
+import { IMAGE_MISSING_OPTIONS } from '../utils/metadataCompleteness.js';
 
 const PAGE_SIZE = 60;
 // 查看器里同一张图连续显示满这么久才记一次查看（观看回顾 D-RECAP-SOURCES）；切图、关闭或离开本页即取消。
@@ -850,8 +863,11 @@ export default {
         takenBefore: '',
         sortMode: 'recent',
         // ''=不筛 / described=已生成 / undescribed=未生成 / failed=生成失败
-        aiTagState: ''
+        aiTagState: '',
+        // 「缺失某项」（D-MC-03），取值见 IMAGE_MISSING_OPTIONS；'' 不筛。
+        missing: ''
       },
+      missingOptions: IMAGE_MISSING_OPTIONS,
       viewerIndex: -1,
       viewerImageError: false,
       viewerDetail: null,
@@ -914,6 +930,7 @@ export default {
     activePhotoFilterCount() {
       let count = 0;
       if (this.filters.aiTagState) count += 1;
+      if (this.filters.missing) count += 1;
       if (this.filters.personIDs.length > 0) count += 1;
       if (this.timelineMode) count += 1;
       if (this.filters.favoriteOnly) count += 1;
@@ -1072,7 +1089,7 @@ export default {
         || this.filters.personIDs.length > 0 || this.filters.favoriteOnly
         || this.filters.minRating !== '' || this.filters.maxRating !== ''
         || this.filters.takenAfter !== '' || this.filters.takenBefore !== ''
-        || this.filters.aiTagState !== '';
+        || this.filters.aiTagState !== '' || this.filters.missing !== '';
     },
     // exifFacts 只列出真正有值的项；全空时整个「拍摄信息」区不渲染。
     exifFacts() {
@@ -1112,6 +1129,7 @@ export default {
     'filters.favoriteOnly'() { this.reload(); },
     'filters.sortMode'() { this.reload(); },
     'filters.aiTagState'() { this.reload(); },
+    'filters.missing'() { this.reload(); },
     'filters.minRating'() { this.reload(); },
     'filters.maxRating'() { this.reload(); },
     'filters.takenAfter'() { this.reload(); },
@@ -1566,7 +1584,8 @@ export default {
         taken_after: this.takenBoundary(this.filters.takenAfter, false),
         taken_before: this.takenBoundary(this.filters.takenBefore, true),
         sort_mode: this.effectiveSortMode,
-        ai_tag_state: this.filters.aiTagState
+        ai_tag_state: this.filters.aiTagState,
+        missing: this.filters.missing
       };
     },
     buildSemanticFilter() {
@@ -2115,7 +2134,7 @@ export default {
       }
       this.personFilterSelections = [];
       this.filters = { ...this.filters, keyword: String(target?.name || ''), tagIDs: [], personIDs: [], favoriteOnly: false,
-        minRating: '', maxRating: '', takenAfter: '', takenBefore: '', aiTagState: '' };
+        minRating: '', maxRating: '', takenAfter: '', takenBefore: '', aiTagState: '', missing: '' };
       // 条件侦听器会各自排一次重载（关键词那条带 300ms 防抖）：等它们排上后撤掉防抖，再以一次新查询为准。
       await this.$nextTick();
       clearTimeout(this._keywordTimer);
@@ -2126,6 +2145,24 @@ export default {
         return false;
       }
       this.openViewer(found);
+      return true;
+    },
+    // 完整度页签的「去处理」（D-MC-03）：回到照片流、清掉其余筛选，只按「缺少这一项」列出。
+    async applyMissingFilter(field) {
+      const value = String(field || '');
+      if (!IMAGE_MISSING_OPTIONS.some(option => option.value === value)) return false;
+      this.searchMode = 'name';
+      if (this.displayMode === 'folders') {
+        this.displayMode = 'stream';
+        this.activeFolder = null;
+      }
+      this.personFilterSelections = [];
+      this.filters = { ...this.filters, keyword: '', tagIDs: [], personIDs: [], favoriteOnly: false,
+        minRating: '', maxRating: '', takenAfter: '', takenBefore: '', aiTagState: '', missing: value };
+      // 条件侦听器会各自排一次重载（关键词那条带 300ms 防抖）：等它们排上后撤掉防抖，再以一次新查询为准。
+      await this.$nextTick();
+      clearTimeout(this._keywordTimer);
+      await this.reload();
       return true;
     },
     closeViewer() {

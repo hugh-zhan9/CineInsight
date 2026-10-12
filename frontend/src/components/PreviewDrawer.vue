@@ -119,6 +119,8 @@
           <div class="detail-section__heading"><h4>作品信息</h4><span class="detail-readonly-hint">文件名不会被修改</span></div>
           <label class="detail-field">显示标题<input v-model="draft.displayTitle" maxlength="255" /></label>
           <label class="detail-field">原始标题<input v-model="draft.originalTitle" maxlength="255" /></label>
+          <!-- D-MC-01：年份随「保存作品信息」整体保存，留空为未知。 -->
+          <label class="detail-field">年份<input v-model.trim="draft.year" type="text" inputmode="numeric" maxlength="4" placeholder="未知" data-test="detail-year-input" /></label>
           <label class="detail-field">简介<textarea v-model="draft.description" maxlength="65536" rows="5"></textarea></label>
           <label class="detail-field">个人评分
             <span class="detail-rating-input">
@@ -448,7 +450,7 @@ import {
   UpdateVideoRating, CreatePlaybackProxy, DeletePlaybackProxy, GetPlaybackProxy, GetPlaybackProxyStatus,
   PlayVideo, SetVideoFavorite, SetVideoLiked, SetVideoWatched, RecordViewEvent, GetSubtitleSegments
 } from '../../wailsjs/go/main/App';
-import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackOrigin, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft } from '../utils/mediaDetails.js';
+import { createDetailNavigator, createVideoDetailsDraft, detailPlaybackOrigin, detailPlaybackStartMs, formatBytes, formatFrameRate as formatFrameRateValue, mergeCollectionCandidates, mergePersonCandidates, moveCollectionMember, toggleEntityID, validateRatingDraft, validateYearDraft } from '../utils/mediaDetails.js';
 import { isWatchCompleted, resumePosition } from '../utils/watchState.js';
 import { createPlaybackAccumulator, newViewSessionID, viewThreshold } from '../utils/viewThreshold.js';
 import GlossaryEditor from './GlossaryEditor.vue';
@@ -503,7 +505,7 @@ export default {
       quoteCard: null, quoteCardLoading: false,
       navigator: null, currentEntry: null, canGoBack: false,
       loading: false, error: '', saving: false, refreshingTechnical: false,
-      details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', personalRating: '', personIDs: [], collectionIDs: [] },
+      details: null, nestedSession: null, technicalError: '', draft: { displayTitle: '', originalTitle: '', description: '', year: '', personalRating: '', personIDs: [], collectionIDs: [] },
       personKeyword: '', personCandidates: [], creatingPerson: false, collectionKeyword: '', collectionCandidates: [], collectionCursorName: '', collectionCursorID: 0, collectionHasMore: false, collectionSearching: false, newPerson: { displayName: '', originalName: '' },
       // 「新建并加入」暂存的人物（D-PC32）：保存作品信息时才 CreatePerson 并关联；换条目、不保存就丢弃。
       pendingPeople: [], ratingSaving: false, ratingError: '',
@@ -580,6 +582,7 @@ export default {
       return saved.displayTitle !== draft.displayTitle
         || saved.originalTitle !== draft.originalTitle
         || saved.description !== draft.description
+        || String(saved.year) !== String(draft.year ?? '')
         || String(saved.personalRating) !== String(draft.personalRating ?? '')
         || !sameIDSet(saved.personIDs, draft.personIDs)
         || !sameIDSet(saved.collectionIDs, draft.collectionIDs);
@@ -883,10 +886,11 @@ export default {
       const pending = [...this.pendingPeople];
       try {
         const personalRating = validateRatingDraft(draft.personalRating);
+        const year = validateYearDraft(draft.year);
         const createdIDs = await this.createPendingPeople(pending, videoID, entryToken);
         const updatedDetails = await UpdateVideoDetails({
           video_id: videoID, display_title: draft.displayTitle, original_title: draft.originalTitle,
-          description: draft.description,
+          description: draft.description, year,
           personal_rating: personalRating, person_ids: [...new Set([...draft.personIDs, ...createdIDs])], collection_ids: draft.collectionIDs
         });
         this.$emit('details-updated', updatedDetails);

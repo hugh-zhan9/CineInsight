@@ -364,7 +364,7 @@ func (s *LocalMetadataService) processLocalMetadataBackfillVideo(ctx context.Con
 }
 
 func localMetadataDiffHasDefaults(diff *LocalMetadataDiff) bool {
-	return diff.Title.DefaultSelected || diff.OriginalTitle.DefaultSelected || diff.Description.DefaultSelected ||
+	return diff.Title.DefaultSelected || diff.OriginalTitle.DefaultSelected || diff.Description.DefaultSelected || diff.Year.DefaultSelected ||
 		diff.People.DefaultSelected || diff.Collection.DefaultSelected || diff.Poster.DefaultSelected || diff.Fanart.DefaultSelected
 }
 

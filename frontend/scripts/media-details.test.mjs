@@ -11,7 +11,8 @@ import {
   moveCollectionMember,
   patchVideoFromDetails,
   toggleEntityID,
-  validateRatingDraft
+  validateRatingDraft,
+  validateYearDraft
 } from '../src/utils/mediaDetails.js';
 
 const navigator = createDetailNavigator({ type: 'video', id: 7 });
@@ -34,6 +35,14 @@ assert.equal(validateRatingDraft(''), null);
 assert.equal(validateRatingDraft('0'), 0);
 assert.equal(validateRatingDraft('9.5'), 9.5);
 assert.throws(() => validateRatingDraft('0.3'));
+assert.equal(zeroDraft.year, '', 'missing year drafts as empty');
+assert.equal(createVideoDetailsDraft({ video: { year: 1999 } }).year, '1999');
+assert.equal(validateYearDraft(''), null);
+assert.equal(validateYearDraft(' 2004 '), 2004);
+assert.throws(() => validateYearDraft('1869'));
+assert.throws(() => validateYearDraft('2101'));
+assert.throws(() => validateYearDraft('199'));
+assert.throws(() => validateYearDraft('2004.5'));
 
 assert.deepEqual(toggleEntityID([1, 2], 2), [1]);
 assert.deepEqual(toggleEntityID([1, 2], 3), [1, 2, 3]);
