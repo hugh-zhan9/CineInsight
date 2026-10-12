@@ -1,8 +1,12 @@
 package services
 
 import (
+	"archive/tar"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -129,7 +133,7 @@ func TestDataCareBackupWritesManifestTrio(t *testing.T) {
 	if _, ok := manifest.Rows["sqlite_sequence"]; ok {
 		t.Fatal("SQLite 内部表不进清单")
 	}
-	if hash, entryErr, ioErr := readBackupFilesPack(filesPath, manifest.Files, ""); ioErr != nil || entryErr != nil || hash != manifest.Files.SHA256 {
+	if hash, entryErr, ioErr := readBackupFilesPack(filesPath, manifest.Files, nil); ioErr != nil || entryErr != nil || hash != manifest.Files.SHA256 {
 		t.Fatalf("文件包应能逐条读出并与清单一致: %v %v", entryErr, ioErr)
 	}
 	listed, err := service.ListBackups()
@@ -264,6 +268,7 @@ func restoreDataCareBackup(t *testing.T, service *BackupService, backup BackupFi
 	return err, fenced
 }
 
+// dataCareFileBody 读出文件内容；读不到时返回 "<missing>"。
 func dataCareFileBody(t *testing.T, path string) string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -273,13 +278,10 @@ func dataCareFileBody(t *testing.T, path string) string {
 	return string(data)
 }
 
-// D-DH-03：恢复带清单的备份时，整理过的文件随数据库一起回到备份点；改名留下的旧目录与暂存目录都不留。
-// 老库里模型已删除的遗留列不让当前版本自己的备份被判成「来自更新版本」。
+// D-DH-03：恢复带清单的备份时，整理过的文件随数据库一起回到备份点；暂存目录建在各收录目录的同级
+// （同一父目录，改名不跨盘）；改名留下的旧目录与暂存目录都不留。
 func TestDataCareRestoreBringsBackCuratedFiles(t *testing.T) {
 	service, dataDir, _ := setupCuratedBackupTest(t)
-	if err := database.DB.Exec("ALTER TABLE videos ADD COLUMN retired_column TEXT").Error; err != nil {
-		t.Fatal(err)
-	}
 	backup, err := service.CreateBackup(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -293,6 +295,12 @@ func TestDataCareRestoreBringsBackCuratedFiles(t *testing.T) {
 	writeDataCareFile(t, wallpaper, "changed after backup")
 	writeDataCareFile(t, added, "added after backup")
 
+	service.rename = func(from, to string) error {
+		if strings.Contains(filepath.Base(from), backupFilesStagingPrefix) && filepath.Dir(from) != filepath.Dir(to) {
+			t.Errorf("暂存目录应与目标同级: %s → %s", from, to)
+		}
+		return os.Rename(from, to)
+	}
 	if err, _ := restoreDataCareBackup(t, service, *backup, nil); err != nil {
 		t.Fatalf("恢复应成功: %v", err)
 	}
@@ -305,7 +313,7 @@ func TestDataCareRestoreBringsBackCuratedFiles(t *testing.T) {
 	if dataCareFileBody(t, filepath.Join(dataDir, "thumbnails/1.jpg")) == "<missing>" {
 		t.Fatal("文件包之外的目录不应被动")
 	}
-	for _, pattern := range []string{"media-details/*.pre-restore-*", "*.pre-restore-*", ".cineinsight-restore-files-*"} {
+	for _, pattern := range []string{"media-details/*.pre-restore-*", "*.pre-restore-*", ".cineinsight-restore-*", "media-details/.cineinsight-restore-*"} {
 		if leftovers, _ := filepath.Glob(filepath.Join(dataDir, pattern)); len(leftovers) != 0 {
 			t.Fatalf("成功后不应留下旧目录或暂存目录: %v", leftovers)
 		}
@@ -341,15 +349,16 @@ func TestDataCareLegacyBackupListedAndRestorableWithoutTouchingFiles(t *testing.
 	}
 }
 
-// D-DH-03：清单里有当前版本不认识的表或列，说明备份来自更新的版本：拒绝恢复，不进入维护、不做安全备份。
+// D-DH-03：清单 models（做备份的版本的模型结构）里有当前版本不认识的表或列，说明备份来自更新的版本：
+// 拒绝恢复，不进入维护、不做安全备份。
 func TestDataCareRestoreRefusesBackupFromNewerVersion(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		alter func(*BackupManifest)
 	}{
-		{"unknown table", func(m *BackupManifest) { m.Schema.Tables["future_things"] = []string{"id"} }},
+		{"unknown table", func(m *BackupManifest) { m.Models["future_things"] = []string{"id"} }},
 		{"unknown column", func(m *BackupManifest) {
-			m.Schema.Tables["videos"] = append(m.Schema.Tables["videos"], "future_column")
+			m.Models["videos"] = append(m.Models["videos"], "future_column")
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -379,20 +388,22 @@ func TestDataCareRestoreRefusesBackupFromNewerVersion(t *testing.T) {
 	}
 }
 
-// 表结构判定：Postgres 只比表名；列为 nil 的已知表（裸 DDL 建的）不按列核对。
-func TestDataCareUnknownBackupSchema(t *testing.T) {
-	known := map[string]map[string]bool{"videos": {"id": true, "name": true}, "video_semantic_vectors": nil}
-	schema := BackupManifestSchema{Tables: map[string][]string{
-		"videos": {"id", "name", "future"}, "video_semantic_vectors": {"anything"}, "future_table": {},
-	}}
-	if got := unknownBackupSchema(schema, known, false); strings.Join(got, ",") != "future_table,videos.future" {
-		t.Fatalf("SQLite 应报出未知表与列: %v", got)
+// 表结构判定看清单 models：当前模型里有、或登记为退役（整表或单列）的都认识；清单没有 models 时按兼容处理。
+func TestDataCareUnknownModelSchema(t *testing.T) {
+	current := map[string][]string{"videos": {"id", "name"}}
+	retired := map[string][]string{"videos": {"old_column"}, "gone_table": {}}
+	recorded := map[string][]string{
+		"videos": {"id", "name", "old_column", "future"}, "gone_table": {"anything"}, "future_table": {},
 	}
-	if got := unknownBackupSchema(schema, known, true); strings.Join(got, ",") != "future_table" {
-		t.Fatalf("Postgres 只比表名: %v", got)
+	if got := unknownModelSchema(recorded, current, retired); strings.Join(got, ",") != "future_table,videos.future" {
+		t.Fatalf("应只报出未知表与未知列: %v", got)
 	}
-	if got := unknownBackupSchema(BackupManifestSchema{Tables: map[string][]string{"videos": {"id"}}}, known, false); len(got) != 0 {
-		t.Fatalf("已知的表与列应兼容: %v", got)
+	if got := unknownModelSchema(nil, current, retired); len(got) != 0 {
+		t.Fatalf("没有 models 的清单按兼容处理: %v", got)
+	}
+	models, err := currentModelSchema()
+	if err != nil || !containsString(models["videos"], "poster_path") || strings.Join(models["video_tags"], ",") != "tag_id,video_id" {
+		t.Fatalf("当前模型结构应含模型列与连接表: videos=%v video_tags=%v err=%v", models["videos"], models["video_tags"], err)
 	}
 }
 
@@ -488,8 +499,8 @@ func TestDataCareVerifyBackupLevels(t *testing.T) {
 	}
 }
 
-// D-DH-02 / D-DH-03：Postgres 备份的清单表名取自 pg_restore --list；校验按 archive 档（哈希 + 归档可读），
-// 有当前版本不认识的表时校验报不兼容、恢复以 backup_from_newer_version 拒绝且不跑 pg_restore 恢复。
+// D-DH-02 / D-DH-03：Postgres 备份清单的 schema.tables 取自 pg_restore --list（参考信息）；校验按 archive 档
+// （哈希 + 归档可读）；models 里有当前版本不认识的表时校验报不兼容、恢复以 backup_from_newer_version 拒绝且不跑 pg 工具。
 func TestDataCarePostgresBackupManifestAndNewerVersion(t *testing.T) {
 	service, runner, directory := setupBackupServiceTest(t, 7, 24)
 	runner.listing = ";\n; Archive created\n;\n215; 1259 16386 TABLE public videos cineinsight\n3456; 0 16386 TABLE DATA public videos cineinsight\n"
@@ -506,10 +517,20 @@ func TestDataCarePostgresBackupManifestAndNewerVersion(t *testing.T) {
 		t.Fatalf("archive 档应通过: %+v err=%v", result, err)
 	}
 
-	runner.listing += "216; 1259 16390 TABLE public future_things cineinsight\n"
+	// 库里多出的表只进参考用的 schema.tables，不影响兼容判定；判定看 models。
+	runner.listing += "216; 1259 16390 TABLE public leftover_things cineinsight\n"
 	service.now = func() time.Time { return time.Date(2026, 8, 5, 0, 0, 0, 0, time.UTC) }
 	newer, err := service.CreateBackup(context.Background())
 	if err != nil {
+		t.Fatal(err)
+	}
+	if result, _ := service.VerifyDatabaseBackup(context.Background(), newer.Name); !result.SchemaCompatible {
+		t.Fatalf("库里的遗留表不让备份不兼容: %+v", result)
+	}
+	newerManifest := readDataCareManifest(t, directory, newer.Name)
+	newerManifest.Models["future_things"] = []string{"id"}
+	data, _ := json.Marshal(newerManifest)
+	if err := os.WriteFile(filepath.Join(directory, backupManifestName(newer.Name)), data, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if result, _ := service.VerifyDatabaseBackup(context.Background(), newer.Name); result.OK || result.SchemaCompatible {
@@ -561,4 +582,266 @@ func TestDataCareVerifyDetectsChangedSnapshot(t *testing.T) {
 	if err != nil || result.OK || result.HashOK || !result.FilesOK {
 		t.Fatalf("快照被改动应只让哈希一项失败: %+v err=%v", result, err)
 	}
+}
+
+// 4.2（审阅 I1）：文件包在进入维护之前就核对——缺失、内容被改、大小不符都以 backup_files_invalid 拒绝，
+// 不立围栏、不做安全备份，库与整理文件原样。
+func TestDataCareRestoreRefusesInvalidFilesPackBeforeTouchingAnything(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		damage func(t *testing.T, packPath string)
+	}{
+		{"missing", func(t *testing.T, packPath string) { _ = os.Remove(packPath) }},
+		{"content changed", func(t *testing.T, packPath string) {
+			pack, _ := os.ReadFile(packPath)
+			pack[strings.LastIndex(string(pack), "wallpaper")] = 'W'
+			_ = os.WriteFile(packPath, pack, 0600)
+		}},
+		{"truncated", func(t *testing.T, packPath string) { _ = os.Truncate(packPath, 1024) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			service, dataDir, directory := setupCuratedBackupTest(t)
+			backup, err := service.CreateBackup(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			tc.damage(t, filepath.Join(directory, backupFilesName(backup.Name)))
+			added := filepath.Join(dataDir, "media-details/people/9/new.jpg")
+			writeDataCareFile(t, added, "added after backup")
+			err, fenced := restoreDataCareBackup(t, service, *backup, nil)
+			if err == nil || !strings.HasPrefix(err.Error(), BackupReasonFilesInvalid+":") || DatabaseRestoreRequiresRestart(err) || strings.Contains(err.Error(), dataDir) {
+				t.Fatalf("应以 backup_files_invalid 拒绝且不带路径: %v", err)
+			}
+			if fenced || countSQLiteSnapshots(t, directory) != 1 || dataCareFileBody(t, added) != "added after backup" {
+				t.Fatalf("拒绝时不应进入维护、做安全备份或动整理文件: fenced=%v", fenced)
+			}
+		})
+	}
+}
+
+// 4.2（审阅 I1）：解包落点放不下全部条目时，恢复在进入维护之前以 backup_insufficient_space 拒绝。
+func TestDataCareRestoreRefusesWhenFilesCannotBeUnpacked(t *testing.T) {
+	service, dataDir, directory := setupCuratedBackupTest(t)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.diskFree = func(path string) (uint64, error) { return 4, nil }
+	err, fenced := restoreDataCareBackup(t, service, *backup, nil)
+	if err == nil || !strings.HasPrefix(err.Error(), BackupReasonInsufficientSpace+":") || !strings.Contains(err.Error(), "整理过的文件") || strings.Contains(err.Error(), dataDir) {
+		t.Fatalf("应以 backup_insufficient_space 拒绝: %v", err)
+	}
+	if fenced || countSQLiteSnapshots(t, directory) != 1 {
+		t.Fatalf("拒绝时不应进入维护或做安全备份: fenced=%v", fenced)
+	}
+}
+
+// D-DH-03（审阅 I3）：兼容判定看清单 models（做备份的版本的模型结构），不看库里的实际列。从带遗留列的老库做的备份，
+// 拿到全新数据目录上校验与恢复都兼容；清单没有 models 时按兼容处理。
+func TestDataCareLeftoverColumnBackupCompatibleOnFreshDataDir(t *testing.T) {
+	oldService, _, oldDirectory := setupCuratedBackupTest(t)
+	if err := database.DB.Exec("ALTER TABLE videos ADD COLUMN fanza_leftover TEXT").Error; err != nil {
+		t.Fatal(err)
+	}
+	backup, err := oldService.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := readDataCareManifest(t, oldDirectory, backup.Name)
+	if !containsString(manifest.Schema.Tables["videos"], "fanza_leftover") || containsString(manifest.Models["videos"], "fanza_leftover") {
+		t.Fatal("遗留列只进 schema.tables，不进 models")
+	}
+	freshService, _, freshDirectory := setupCuratedBackupTest(t)
+	if err := os.MkdirAll(freshDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{backup.Name, backupFilesName(backup.Name), backupManifestName(backup.Name)} {
+		data, _ := os.ReadFile(filepath.Join(oldDirectory, name))
+		if err := os.WriteFile(filepath.Join(freshDirectory, name), data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if result, err := freshService.VerifyDatabaseBackup(context.Background(), backup.Name); err != nil || !result.OK || !result.SchemaCompatible {
+		t.Fatalf("全新数据目录上应兼容: %+v err=%v", result, err)
+	}
+	manifest.Models = nil
+	data, _ := json.Marshal(manifest)
+	if err := os.WriteFile(filepath.Join(freshDirectory, backupManifestName(backup.Name)), data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if result, _ := freshService.VerifyDatabaseBackup(context.Background(), backup.Name); !result.SchemaCompatible {
+		t.Fatalf("没有 models 的清单按兼容处理: %+v", result)
+	}
+	if err, _ := restoreDataCareBackup(t, freshService, *backup, nil); err != nil {
+		t.Fatalf("全新数据目录上应能恢复: %v", err)
+	}
+}
+
+// 4.2（审阅 I2b）：暂存目录改名就位失败时，刚改走的原目录要改回来，正在用的目录不能消失。
+func TestDataCareFilesSwapRenamesOriginalBackOnFailure(t *testing.T) {
+	service, dataDir, _ := setupCuratedBackupTest(t)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := filepath.Join(dataDir, "media-details/people/9/new.jpg")
+	writeDataCareFile(t, added, "added after backup")
+	service.rename = func(from, to string) error {
+		if strings.HasPrefix(filepath.Base(from), backupFilesStagingPrefix+"people-") {
+			return errors.New("injected rename failure")
+		}
+		return os.Rename(from, to)
+	}
+	err, _ = restoreDataCareBackup(t, service, *backup, nil)
+	if !DatabaseRestoreRequiresRestart(err) || !strings.Contains(err.Error(), "整理过的文件未能还原") {
+		t.Fatalf("应报文件未能还原: %v", err)
+	}
+	if dataCareFileBody(t, added) != "added after backup" || dataCareFileBody(t, filepath.Join(dataDir, "media-details/people/1/avatar.jpg")) != "avatar" {
+		t.Fatal("就位失败时原目录应改回原名、内容不变")
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dataDir, "media-details", "people.pre-restore-*")); len(leftovers) != 0 {
+		t.Fatalf("改回之后不应留下 people 的旧目录: %v", leftovers)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dataDir, "media-details", backupFilesStagingPrefix+"*")); len(leftovers) != 0 {
+		t.Fatalf("暂存目录应删除: %v", leftovers)
+	}
+}
+
+// 4.2（审阅 I2c）：上次还原中途崩溃、收录目录不见而同级有 .pre-restore-* 时，启动（或下次还原前）把最新的一个
+// 改回原名；目录在的不动；崩溃留下的暂存目录清掉。
+func TestDataCareRecoverInterruptedFilesRestore(t *testing.T) {
+	dataDir := t.TempDir()
+	service := NewBackupService(dataDir)
+	people := filepath.Join(dataDir, "media-details/people")
+	writeDataCareFile(t, people+".pre-restore-20261011-090000.000000000/1/a.jpg", "older")
+	writeDataCareFile(t, people+".pre-restore-20261012-090000.000000000/1/a.jpg", "newest")
+	writeDataCareFile(t, filepath.Join(dataDir, "media-details", backupFilesStagingPrefix+"people-20261012-090000.000000000", "x"), "staged")
+	wallpapers := filepath.Join(dataDir, "wallpapers")
+	writeDataCareFile(t, filepath.Join(wallpapers, "current.jpg"), "current")
+	writeDataCareFile(t, wallpapers+".pre-restore-20261012-090000.000000000/old.jpg", "old")
+
+	service.RecoverInterruptedFilesRestore()
+
+	if dataCareFileBody(t, filepath.Join(people, "1/a.jpg")) != "newest" {
+		t.Fatal("缺失的目录应由最新的恢复前目录改回")
+	}
+	if _, err := os.Stat(people + ".pre-restore-20261011-090000.000000000"); err != nil {
+		t.Fatalf("较旧的恢复前目录不动: %v", err)
+	}
+	if dataCareFileBody(t, filepath.Join(wallpapers, "current.jpg")) != "current" || dataCareFileBody(t, wallpapers+".pre-restore-20261012-090000.000000000/old.jpg") != "old" {
+		t.Fatal("目录还在的不应被改动")
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dataDir, "media-details", backupFilesStagingPrefix+"*")); len(leftovers) != 0 {
+		t.Fatalf("崩溃留下的暂存目录应清掉: %v", leftovers)
+	}
+}
+
+// 审阅 M6：新的出错来源（遍历收录目录、读文件）进 backup_last_error 与界面文案时不带绝对路径。
+func TestDataCareBackupErrorsCarryNoAbsolutePaths(t *testing.T) {
+	service, dataDir, _ := setupCuratedBackupTest(t)
+	locked := filepath.Join(dataDir, "media-details/people/1")
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0755) })
+	_, err := service.CreateBackup(context.Background())
+	if err == nil || strings.Contains(err.Error(), dataDir) {
+		t.Fatalf("读不了的收录目录应让备份失败，且错误不带路径: %v", err)
+	}
+	settings, _ := (&SettingsService{}).GetSettings()
+	if settings.BackupLastError == "" || strings.Contains(settings.BackupLastError, dataDir) {
+		t.Fatalf("backup_last_error 不应带路径: %q", settings.BackupLastError)
+	}
+}
+
+// 审阅 M8：Postgres 恢复后重连失败时文件包还原排在后面、这次没做——提示里要说整理过的文件未能还原。
+func TestDataCarePostgresReconnectFailureMentionsUnrestoredFiles(t *testing.T) {
+	service, _, _ := setupBackupServiceTest(t, 7, 24)
+	clock := time.Date(2026, 10, 12, 9, 0, 0, 0, time.UTC)
+	service.now = func() time.Time { clock = clock.Add(time.Second); return clock }
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = service.RestoreBackupWithLifecycle(context.Background(),
+		BackupRestoreRequest{Name: backup.Name, Size: backup.Size, Fingerprint: backup.Fingerprint},
+		nil, func() error { return errors.New("connection refused") })
+	if !DatabaseRestoreRequiresRestart(err) || !strings.HasPrefix(err.Error(), DatabaseRestoreReasonCommitted) || !strings.Contains(err.Error(), "整理过的文件未能还原") {
+		t.Fatalf("重连失败应说明整理文件未还原: %v", err)
+	}
+}
+
+// 文件包里的恶意条目（越界路径、绝对路径、符号链接、清单之外的条目、不在收录目录下的条目）一律拒绝，
+// 也不会写到暂存目录之外——哪怕清单本身也被改成列着它们。
+func TestDataCareFilesPackRejectsMaliciousEntries(t *testing.T) {
+	for _, name := range []string{"../escape.txt", "/abs/escape.txt", "media-details/people/../../escape.txt", "thumbnails/1.jpg",
+		"media-details/people", "media-details/people\\x.jpg", "media-details/people/./a.jpg", ""} {
+		if validBackupPackPath(name) {
+			t.Fatalf("不应接受包内路径 %q", name)
+		}
+	}
+	if !validBackupPackPath("media-details/people/1/a.jpg") || !validBackupPackPath("subtitle-backups/3/x.srt") {
+		t.Fatal("收录目录下的规整相对路径应接受")
+	}
+	for _, tc := range []struct {
+		name     string
+		typeflag byte
+		listed   bool
+	}{
+		{"../escape.txt", tar.TypeReg, true},
+		{"/tmp/cineinsight-escape.txt", tar.TypeReg, true},
+		{"media-details/people/../../escape.txt", tar.TypeReg, true},
+		{"media-details/people/link.jpg", tar.TypeSymlink, true},
+		{"media-details/people/1/extra.jpg", tar.TypeReg, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			packPath := filepath.Join(dir, "pack.tar")
+			files := writeCraftedPack(t, packPath, tc.name, tc.typeflag, tc.listed)
+			staging := filepath.Join(dir, "staging", "root")
+			_, entryErr, ioErr := readBackupFilesPack(packPath, files, func(name string) string {
+				return filepath.Join(staging, filepath.FromSlash(name))
+			})
+			if ioErr != nil || entryErr == nil {
+				t.Fatalf("应拒绝条目 %q: entryErr=%v ioErr=%v", tc.name, entryErr, ioErr)
+			}
+			for _, escaped := range []string{filepath.Join(dir, "escape.txt"), filepath.Join(dir, "staging", "escape.txt"), "/tmp/cineinsight-escape.txt"} {
+				if _, err := os.Lstat(escaped); err == nil {
+					t.Fatalf("不应写出 %s", escaped)
+				}
+			}
+		})
+	}
+}
+
+// writeCraftedPack 写一个只含一个条目的文件包；listed 时清单也列着它（大小与哈希都对）。
+func writeCraftedPack(t *testing.T, packPath, name string, typeflag byte, listed bool) BackupManifestFiles {
+	t.Helper()
+	file, err := os.Create(packPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := tar.NewWriter(file)
+	body := []byte("payload")
+	header := &tar.Header{Name: name, Typeflag: typeflag, Mode: 0644, Size: int64(len(body))}
+	if typeflag == tar.TypeSymlink {
+		header.Linkname, header.Size, body = "/etc/passwd", 0, nil
+	}
+	if err := writer.WriteHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	files := BackupManifestFiles{Name: "pack.tar", Entries: []BackupManifestEntry{}}
+	if listed {
+		files.Entries = append(files.Entries, BackupManifestEntry{Path: name, Size: int64(len(body)), SHA256: fmt.Sprintf("%x", sha256.Sum256(body))})
+	} else {
+		files.Entries = append(files.Entries, BackupManifestEntry{Path: "media-details/people/1/expected.jpg", Size: 1, SHA256: "x"})
+	}
+	return files
 }

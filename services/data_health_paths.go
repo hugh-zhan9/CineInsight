@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -35,17 +36,55 @@ type managedPathRow struct {
 	Value string
 }
 
-// managedPathMissing 判定一条托管路径是否「在数据目录内且文件不存在」。绝对路径、越界路径不归体检管；
-// 读不了（权限等）不算不存在。
-func managedPathMissing(root, value string) bool {
+// managedPathRoot 把列值规整成 media-details 之下的相对路径，并给出它所属的托管子目录（第一段，
+// 如 videos、people）。绝对路径、越界路径与空值不归体检管，ok=false。
+func managedPathRoot(value string) (clean, root string, ok bool) {
 	if strings.TrimSpace(value) == "" || filepath.IsAbs(value) {
-		return false
+		return "", "", false
 	}
-	clean := filepath.Clean(filepath.FromSlash(value))
+	clean = filepath.Clean(filepath.FromSlash(value))
 	if clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", "", false
+	}
+	if index := strings.IndexRune(clean, filepath.Separator); index >= 0 {
+		root = clean[:index]
+	}
+	return clean, root, true
+}
+
+// managedDirAvailable：跟随符号链接 stat 成功且是目录。不存在、链接失效、读不到都算不可用。
+func managedDirAvailable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
+// managedRoots 记下每个托管子目录此刻是否可用（审阅 I4）：外接盘没挂、链接失效或整个目录被删掉时，
+// 其下的路径一律不判、不清——那是「目录不可用」，不是「这些文件丢了」，只报告目录不可用。
+type managedRoots struct {
+	base  string
+	cache map[string]bool
+}
+
+func newManagedRoots(base string) *managedRoots {
+	return &managedRoots{base: base, cache: map[string]bool{}}
+}
+
+func (r *managedRoots) available(root string) bool {
+	if available, ok := r.cache[root]; ok {
+		return available
+	}
+	available := managedDirAvailable(r.base) && managedDirAvailable(filepath.Join(r.base, root))
+	r.cache[root] = available
+	return available
+}
+
+// managedFileMissing 是写入前的复核：所属子目录现在仍可用、文件仍不存在（不用缓存，现查）。
+func managedFileMissing(base, value string) bool {
+	clean, root, ok := managedPathRoot(value)
+	if !ok || !managedDirAvailable(base) || !managedDirAvailable(filepath.Join(base, root)) {
 		return false
 	}
-	_, err := os.Lstat(filepath.Join(root, clean))
+	_, err := os.Lstat(filepath.Join(base, clean))
 	return os.IsNotExist(err)
 }
 
@@ -53,9 +92,10 @@ func (s *DataHealthService) managedRoot() string {
 	return filepath.Join(s.dataDir, "media-details")
 }
 
-// scanManagedPaths 按 id 分页（每页 500）读出非空的路径列，把每页里指向不存在文件的行交给 visit。
-func (s *DataHealthService) scanManagedPaths(ctx context.Context, db *gorm.DB, spec managedPathSpec, visit func([]managedPathRow) error) error {
-	root := s.managedRoot()
+// scanManagedPaths 按 id 分页（每页 500）读出非空的路径列：所属子目录不可用的行记进 unavailable（按子目录计数），
+// 子目录可用而文件不存在的交给 visit。
+func (s *DataHealthService) scanManagedPaths(ctx context.Context, db *gorm.DB, spec managedPathSpec, roots *managedRoots,
+	unavailable map[string]int64, visit func([]managedPathRow) error) error {
 	var lastID uint
 	for {
 		if err := ctx.Err(); err != nil {
@@ -72,7 +112,15 @@ func (s *DataHealthService) scanManagedPaths(ctx context.Context, db *gorm.DB, s
 		lastID = rows[len(rows)-1].ID
 		missing := make([]managedPathRow, 0)
 		for _, row := range rows {
-			if managedPathMissing(root, row.Value) {
+			clean, root, ok := managedPathRoot(row.Value)
+			if !ok {
+				continue
+			}
+			if !roots.available(root) {
+				unavailable[root]++
+				continue
+			}
+			if _, err := os.Lstat(filepath.Join(roots.base, clean)); os.IsNotExist(err) {
 				missing = append(missing, row)
 			}
 		}
@@ -85,12 +133,15 @@ func (s *DataHealthService) scanManagedPaths(ctx context.Context, db *gorm.DB, s
 }
 
 // checkManagedPaths 按列统计指向不存在文件的托管路径，示例给相对数据目录的路径（不含绝对路径）。
+// 所属子目录不可用的行不判，单独列为「目录不可用」（只报告）。
 func (s *DataHealthService) checkManagedPaths(ctx context.Context, db *gorm.DB) (DataHealthCheckResult, error) {
+	roots := newManagedRoots(s.managedRoot())
+	unavailable := map[string]int64{}
 	groups := []DataHealthGroup{}
 	var total int64
 	for _, spec := range managedPathSpecs {
 		group := DataHealthGroup{Key: spec.key, Label: spec.label, Repairable: true, Examples: []string{}}
-		err := s.scanManagedPaths(ctx, db, spec, func(rows []managedPathRow) error {
+		err := s.scanManagedPaths(ctx, db, spec, roots, unavailable, func(rows []managedPathRow) error {
 			group.Count += int64(len(rows))
 			for _, row := range rows {
 				if len(group.Examples) < dataHealthExampleLimit {
@@ -107,30 +158,54 @@ func (s *DataHealthService) checkManagedPaths(ctx context.Context, db *gorm.DB) 
 			groups = append(groups, group)
 		}
 	}
-	if total == 0 {
-		return DataHealthCheckResult{Status: DataHealthStatusOK, Summary: "托管图片都在"}, nil
+	unavailableRows, unavailableGroups := managedUnavailableGroups(unavailable)
+	groups = append(groups, unavailableGroups...)
+	result := DataHealthCheckResult{Status: DataHealthStatusOK, Count: total, Groups: groups, Summary: "托管图片都在"}
+	switch {
+	case total > 0:
+		result.Status, result.Repairable = DataHealthStatusProblem, true
+		result.Summary = fmt.Sprintf("%d 条记录指向已不存在的托管图片，可以清空这些路径", total)
+	case unavailableRows > 0:
+		result.Status, result.Summary = DataHealthStatusWarning, "可检查的托管图片都在"
 	}
-	return DataHealthCheckResult{
-		Status:     DataHealthStatusProblem,
-		Count:      total,
-		Summary:    fmt.Sprintf("%d 条记录指向已不存在的托管图片，可以清空这些路径", total),
-		Groups:     groups,
-		Repairable: true,
-	}, nil
+	if unavailableRows > 0 {
+		result.Summary += fmt.Sprintf("；%d 个托管目录不可用（不存在或链接失效），其下 %d 条记录未检查、修复也不会动它们",
+			len(unavailableGroups), unavailableRows)
+	}
+	return result, nil
 }
 
-// repairManagedPaths 清空指向不存在文件的路径列：每页一个短事务，写入前再判一次文件仍不存在，
-// 且只在列值未变时置空。
+func managedUnavailableGroups(unavailable map[string]int64) (int64, []DataHealthGroup) {
+	roots := make([]string, 0, len(unavailable))
+	for root := range unavailable {
+		roots = append(roots, root)
+	}
+	sort.Strings(roots)
+	var rows int64
+	groups := make([]DataHealthGroup, 0, len(roots))
+	for _, root := range roots {
+		label := filepath.ToSlash(filepath.Join("media-details", root))
+		rows += unavailable[root]
+		groups = append(groups, DataHealthGroup{Key: "unavailable:" + root, Label: label + "（目录不可用）", Count: unavailable[root],
+			Detail: fmt.Sprintf("目录不存在或链接失效，其下 %d 条未检查", unavailable[root]), Examples: []string{}})
+	}
+	return rows, groups
+}
+
+// repairManagedPaths 清空指向不存在文件的路径列：与检查同一个目录可用性守卫；每页一个短事务，写入前再现查一次
+// 子目录仍可用、文件仍不存在，且只在列值未变时置空。
 func (s *DataHealthService) repairManagedPaths(ctx context.Context, db *gorm.DB) (int64, error) {
 	var cleared int64
-	root := s.managedRoot()
+	base := s.managedRoot()
+	roots := newManagedRoots(base)
+	unavailable := map[string]int64{}
 	for _, spec := range managedPathSpecs {
-		err := s.scanManagedPaths(ctx, db, spec, func(rows []managedPathRow) error {
+		err := s.scanManagedPaths(ctx, db, spec, roots, unavailable, func(rows []managedPathRow) error {
 			var batch int64
 			err := db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 				batch = 0
 				for _, row := range rows {
-					if !managedPathMissing(root, row.Value) {
+					if !managedFileMissing(base, row.Value) {
 						continue
 					}
 					result := tx.Exec(fmt.Sprintf("UPDATE %s SET %s = '' WHERE id = ? AND %s = ?", spec.table, spec.column, spec.column),

@@ -6,12 +6,13 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"video-master/database"
+	"sync"
 	"video-master/models"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
 
 // 备份清单的表结构指纹与「来自更新版本」判定（D-DH-02 / D-DH-03）。
@@ -124,7 +125,7 @@ func quoteSQLiteIdent(name string) string {
 }
 
 // parsePostgresListTables 从 pg_restore --list 的目录里取出表名（形如「215; 1259 16386 TABLE public videos owner」），
-// 列为空：Postgres 备份只比表名（4.2）。
+// 列为空。只作为清单里的参考信息（schema.tables），兼容性判定看 models。
 func parsePostgresListTables(listing string) map[string][]string {
 	tables := map[string][]string{}
 	for _, line := range strings.Split(listing, "\n") {
@@ -139,111 +140,84 @@ func parsePostgresListTables(listing string) map[string][]string {
 	return tables
 }
 
-// knownBackupSchema 是当前版本认得的表与列（表 → 列集合；列集合为 nil 表示不按列核对）：
-//   - AllModels 与它们的多对多连接表（4.2 的口径）；
-//   - 只在 Postgres 上建的语义索引表、向量表与迁移标记表（裸 DDL 建的表只认表名）；
-//   - 并上当前库里实际存在的表与列：AutoMigrate 不删列，老库里模型已经去掉的遗留列还在，
-//     不并上它们的话，当前版本自己做的备份也会被判成「来自更新的版本」。
-func knownBackupSchema(ctx context.Context, db *gorm.DB) (map[string]map[string]bool, error) {
-	if db == nil {
-		return nil, errors.New("数据库未初始化")
-	}
-	known := map[string]map[string]bool{}
-	addModel := func(model any) error {
-		stmt := &gorm.Statement{DB: db}
-		if err := stmt.Parse(model); err != nil {
-			return fmt.Errorf("解析模型 %T 失败: %w", model, err)
-		}
-		addKnownColumns(known, stmt.Schema.Table, stmt.Schema.DBNames)
-		for _, relation := range stmt.Schema.Relationships.Many2Many {
-			if relation.JoinTable != nil {
-				addKnownColumns(known, relation.JoinTable.Table, relation.JoinTable.DBNames)
+// retiredSchemaColumns 是有意从模型里删掉的表与列（表 → 列；列表为空表示整张表退役）。
+// **删除模型字段或整个模型时必须登记到这里**：老版本做的备份，清单 models 里还带着它们；不登记，
+// 当前版本会把自己更早的备份判成「来自更新的版本」而拒绝恢复。
+var retiredSchemaColumns = map[string][]string{}
+
+var (
+	modelSchemaOnce sync.Once
+	modelSchema     map[string][]string
+	modelSchemaErr  error
+)
+
+// currentModelSchema 是本版本的模型结构（表 → 列，按字典序）：AllModels 与它们的多对多连接表，
+// 用 GORM 的默认命名解析（与 database.Init 一致），不看任何库里的实际表——老库里 AutoMigrate 留下的
+// 遗留列不算当前结构。清单的 models 记的就是它；恢复与校验拿备份的 models 和它比（D-DH-03）。
+func currentModelSchema() (map[string][]string, error) {
+	modelSchemaOnce.Do(func() {
+		cache := &sync.Map{}
+		tables := map[string][]string{}
+		for _, model := range models.AllModels() {
+			parsed, err := schema.Parse(model, cache, schema.NamingStrategy{})
+			if err != nil {
+				modelSchemaErr = fmt.Errorf("解析模型 %T 失败: %w", model, err)
+				return
+			}
+			tables[parsed.Table] = sortedColumns(parsed.DBNames)
+			for _, relation := range parsed.Relationships.Many2Many {
+				if relation.JoinTable != nil {
+					tables[relation.JoinTable.Table] = sortedColumns(relation.JoinTable.DBNames)
+				}
 			}
 		}
-		return nil
-	}
-	semanticModels := []any{
-		&models.SemanticIndexProfile{}, &models.VideoSemanticIndex{}, &models.SemanticIndexAttempt{},
-		&models.ImageSemanticIndex{}, &models.ImageSemanticIndexAttempt{},
-	}
-	for _, model := range append(models.AllModels(), semanticModels...) {
-		if err := addModel(model); err != nil {
-			return nil, err
-		}
-	}
-	applicationTables, err := database.ApplicationTables(db)
-	if err != nil {
-		return nil, err
-	}
-	for _, table := range applicationTables {
-		if _, ok := known[table]; !ok {
-			known[table] = nil
-		}
-	}
-	live, err := liveSchemaTables(ctx, db)
-	if err != nil {
-		return nil, err
-	}
-	for table, columns := range live {
-		if existing, ok := known[table]; ok && existing == nil {
+		modelSchema = tables
+	})
+	return modelSchema, modelSchemaErr
+}
+
+func sortedColumns(columns []string) []string {
+	sorted := append([]string{}, columns...)
+	sort.Strings(sorted)
+	return sorted
+}
+
+// unknownModelSchema 列出备份清单 models 里当前版本不认识的表（「表」）与列（「表.列」），按字典序；
+// 空表示兼容。认识 = 在当前模型结构里，或登记在 retired 里（整表退役或该列退役）。
+// 清单没有 models（只有开发中的版本写过）时无从判断，按兼容处理。
+func unknownModelSchema(recorded, current, retired map[string][]string) []string {
+	unknown := []string{}
+	for table, columns := range recorded {
+		retiredColumns, tableRetired := retired[table]
+		if tableRetired && len(retiredColumns) == 0 {
 			continue
 		}
-		addKnownColumns(known, table, columns)
-	}
-	return known, nil
-}
-
-func addKnownColumns(known map[string]map[string]bool, table string, columns []string) {
-	set := known[table]
-	if set == nil {
-		set = map[string]bool{}
-		known[table] = set
-	}
-	for _, column := range columns {
-		set[column] = true
-	}
-}
-
-// liveSchemaTables 读出当前库的表与列。
-func liveSchemaTables(ctx context.Context, db *gorm.DB) (map[string][]string, error) {
-	db = db.WithContext(ctx)
-	if db.Dialector.Name() != string(database.BackendPostgres) {
-		return sqliteSchemaTables(db)
-	}
-	var rows []struct {
-		TableName  string
-		ColumnName string
-	}
-	if err := db.Raw(`SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = current_schema()`).
-		Scan(&rows).Error; err != nil {
-		return nil, fmt.Errorf("读取表结构失败: %w", err)
-	}
-	schema := map[string][]string{}
-	for _, row := range rows {
-		schema[row.TableName] = append(schema[row.TableName], row.ColumnName)
-	}
-	return schema, nil
-}
-
-// unknownBackupSchema 列出清单里当前版本不认识的表（「表」）与列（「表.列」），按字典序。
-// 空表示兼容。tablesOnly 时只比表名（Postgres 备份，4.2）。
-func unknownBackupSchema(schema BackupManifestSchema, known map[string]map[string]bool, tablesOnly bool) []string {
-	unknown := []string{}
-	for table, columns := range schema.Tables {
-		knownColumns, ok := known[table]
-		if !ok {
+		known := map[string]bool{}
+		for _, column := range current[table] {
+			known[column] = true
+		}
+		for _, column := range retiredColumns {
+			known[column] = true
+		}
+		if _, ok := current[table]; !ok && !tableRetired {
 			unknown = append(unknown, table)
 			continue
 		}
-		if tablesOnly || knownColumns == nil {
-			continue
-		}
 		for _, column := range columns {
-			if !knownColumns[column] {
+			if !known[column] {
 				unknown = append(unknown, table+"."+column)
 			}
 		}
 	}
 	sort.Strings(unknown)
 	return unknown
+}
+
+// backupSchemaUnknown 是恢复与校验共用的判定：返回清单 models 里当前版本不认识的表与列。
+func backupSchemaUnknown(manifest *BackupManifest) ([]string, error) {
+	current, err := currentModelSchema()
+	if err != nil {
+		return nil, err
+	}
+	return unknownModelSchema(manifest.Models, current, retiredSchemaColumns), nil
 }

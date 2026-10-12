@@ -96,7 +96,7 @@ func (s *BackupService) verifyBackup(ctx context.Context, directory, name string
 	}
 
 	snapshotHash, snapshotErr := hashFile(snapshotPath)
-	filesHash, entryErr, filesErr := readBackupFilesPack(filepath.Join(directory, manifest.Files.Name), manifest.Files, "")
+	filesHash, entryErr, filesErr := readBackupFilesPack(filepath.Join(directory, manifest.Files.Name), manifest.Files, nil)
 	result.HashOK = snapshotErr == nil && filesErr == nil &&
 		snapshotHash == manifest.Snapshot.SHA256 && filesHash == manifest.Files.SHA256
 	if !result.HashOK {
@@ -109,10 +109,9 @@ func (s *BackupService) verifyBackup(ctx context.Context, directory, name string
 		problem(entryErr.Error())
 	}
 
-	known, err := knownBackupSchema(ctx, database.DB)
-	if err != nil {
+	if unknown, err := backupSchemaUnknown(manifest); err != nil {
 		problem("读取当前表结构失败")
-	} else if unknown := unknownBackupSchema(manifest.Schema, known, !sqliteSnapshot); len(unknown) > 0 {
+	} else if len(unknown) > 0 {
 		problem("来自更新版本的应用（有当前版本不认识的表或列），当前版本不能恢复")
 	} else {
 		result.SchemaCompatible = true

@@ -40,12 +40,15 @@ var backupFilesDirectories = []string{
 }
 
 // BackupManifest 是一份备份的清单（4.1 的结构）。Rows 与 QuickCheck 只有 SQLite 快照有。
+// Models 是做这份备份的应用版本的模型结构（表 → 列，取自 AllModels 与连接表，不看库里的实际表），
+// 「来自更新的版本」按它判定；Schema 是快照里实际的表结构，只作参考（老库里会有模型已删的遗留列）。
 type BackupManifest struct {
 	Format     int                  `json:"format"`
 	Backend    string               `json:"backend"`
 	CreatedAt  time.Time            `json:"created_at"`
 	Snapshot   BackupManifestFile   `json:"snapshot"`
 	Files      BackupManifestFiles  `json:"files"`
+	Models     map[string][]string  `json:"models,omitempty"`
 	Schema     BackupManifestSchema `json:"schema"`
 	Rows       map[string]int64     `json:"rows,omitempty"`
 	QuickCheck string               `json:"quick_check,omitempty"`
@@ -70,7 +73,8 @@ type BackupManifestEntry struct {
 	SHA256 string `json:"sha256"`
 }
 
-// BackupManifestSchema：SQLite 取自快照（表 → 列）；Postgres 取 pg_restore --list 的表名，列为空。
+// BackupManifestSchema 是快照里实际的表结构（参考信息）：SQLite 取自快照（表 → 列）；Postgres 取
+// pg_restore --list 的表名，列为空。
 type BackupManifestSchema struct {
 	Tables map[string][]string `json:"tables"`
 }

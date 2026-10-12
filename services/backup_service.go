@@ -160,6 +160,8 @@ type BackupService struct {
 	// inspectSnapshot 是新快照发布前的只读检查（quick_check、行数、表结构），测试用它在检查前
 	// 弄坏快照；为空时用 inspectSQLiteSnapshot。
 	inspectSnapshot func(ctx context.Context, path string) (sqliteSnapshotFacts, error)
+	// rename 是还原文件包时的目录改名，测试用它注入改名失败；为空时用 os.Rename。
+	rename func(from, to string) error
 }
 
 // ErrBackupDuringMaintenance：维护围栏生效期间（恢复备份、切换后端、切换后的待重启）拒绝手动备份。
@@ -462,10 +464,15 @@ func (s *BackupService) RestoreBackupWithLifecycle(
 	restoreErr := s.runner.Run(ctx, "pg_restore", args, env)
 	if reconnect != nil {
 		if err := reconnect(); err != nil {
+			message := "恢复后重新连接数据库失败，应用必须重启"
+			if restoreErr == nil && manifest != nil {
+				// 库已灌回，但文件包还原排在重连之后、这次没有做（4.2）。
+				message += "；整理过的文件未能还原，可从恢复前的安全备份中取回"
+			}
 			return &DatabaseRestoreError{
 				Committed: restoreErr == nil,
 				Fatal:     true,
-				Err:       fmt.Errorf("恢复后重新连接数据库失败，应用必须重启: %w", err),
+				Err:       fmt.Errorf("%s: %w", message, err),
 			}
 		}
 	}
@@ -824,7 +831,7 @@ func (s *BackupService) listPostgresArchiveTables(ctx context.Context, directory
 	}
 	listing, err := os.ReadFile(listPath)
 	if err != nil {
-		return nil, fmt.Errorf("读取归档目录失败: %w", err)
+		return nil, fmt.Errorf("读取归档目录失败: %w", pathlessError(err))
 	}
 	return parsePostgresListTables(string(listing)), nil
 }
@@ -833,7 +840,7 @@ func (s *BackupService) listPostgresArchiveTables(ctx context.Context, directory
 func createBackupTempFile(directory string) (string, error) {
 	file, err := os.CreateTemp(directory, ".cineinsight-backup-*.tmp")
 	if err != nil {
-		return "", fmt.Errorf("创建备份临时文件失败: %w", err)
+		return "", fmt.Errorf("创建备份临时文件失败: %w", pathlessError(err))
 	}
 	path := file.Name()
 	if err := file.Close(); err != nil {
