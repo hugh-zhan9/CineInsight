@@ -64,13 +64,19 @@ func (s *VideoService) relocateVideoFrom(db *gorm.DB, id uint, newPath string) e
 	}); err != nil {
 		return err
 	}
+	s.refreshRelocatedVideo(db, id, newPath)
+	log.Printf("视频迁移并更新元数据 id=%d newPath=%s", id, newPath)
+	return nil
+}
+
+// refreshRelocatedVideo 是路径改写提交之后的补探测：重读技术信息，成功后再同步一次短视频标签。
+// 失败只记日志（路径已经改好）。失联找回把扫描器回收站行改回活跃后也走这里（D-LD-03）。
+func (s *VideoService) refreshRelocatedVideo(db *gorm.DB, id uint, newPath string) {
 	if probeErr := s.technicalProbe().Refresh(db.Statement.Context, id); probeErr != nil {
 		log.Printf("视频迁移完成但技术信息读取失败 id=%d newPath=%s err=%v", id, newPath, probeErr)
 	} else if syncErr := db.Transaction(func(tx *gorm.DB) error { return syncShortVideoTagForVideo(tx, id) }); syncErr != nil {
 		log.Printf("视频迁移技术信息读取成功但短视频标签同步失败 id=%d newPath=%s err=%v", id, newPath, syncErr)
 	}
-	log.Printf("视频迁移并更新元数据 id=%d newPath=%s", id, newPath)
-	return nil
 }
 
 // RenameVideo 重命名视频文件及数据库记录

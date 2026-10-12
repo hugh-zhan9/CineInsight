@@ -651,6 +651,7 @@ func (s *ImageService) relocateImage(id uint, newPath string) error {
 	result := database.DB.Model(&models.Image{}).Where("id = ?", id).Updates(map[string]interface{}{
 		"path":      newPath,
 		"directory": filepath.Dir(newPath),
+		"name":      filepath.Base(newPath),
 		"is_stale":  false,
 	})
 	if result.Error != nil {
