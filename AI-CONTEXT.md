@@ -16,7 +16,7 @@
   - **绑定守卫（2026-09-30，P-040）:** `frontend/scripts/bindings-usage.test.mjs`（`npm test` 最后一环）双向检查：前端从 `wailsjs/go/main/App` 导入的每个名字都在 `App.d.ts` 里，`App.d.ts` 的每个导出都至少被前端非测试代码引用一次。新增 App 方法必须同时接上前端调用方；只给 Go 测试用的能力放在服务层，不要做成 App 方法。绑定用 `GOTOOLCHAIN=go1.24.9 wails generate module` 生成，不手改 `frontend/wailsjs/**`。
 - **外部依赖 (Sidecars):**
   - **FFmpeg:** 用于提取视频音频流（16kHz, mono, WAV）。
-  - **Apple 系统字幕（2026-10-12）:** Swift 辅助程序调用 macOS 26+ 的 Speech/Translation/NaturalLanguage；资源由苹果系统管理，不安装字幕 Python/第三方模型。
+  - **Apple 系统字幕（2026-10-12；2026-10-13 支持 macOS 15）:** Swift 辅助程序调用 Speech/Translation/NaturalLanguage，macOS 15+ 可用（macOS 26+ 用新接口，macOS 15 用 SFSpeechRecognizer 本机识别与隐藏窗口 translationTask）；资源由苹果系统管理，不安装字幕 Python/第三方模型。
   - **字幕翻译:** 仅用 Apple Translation；DeepL/OpenAI 兼容字幕翻译已退役（AI 打标自身的外部配置不变）。
 
 ## 2. 核心功能与实现原理 (Core Features)
@@ -33,7 +33,7 @@
 
 ### 2.2 离线字幕生成 (Offline Subtitle Generation)
 集成 AI 能力实现全本地化字幕制作：
-- **运行时（2026-10-12 用户裁决）:** 字幕仅使用苹果系统能力。`native/apple-ai/main.swift` 通过随包的 `CineInsightAppleAI.app` 提供系统识别、自动语言建议、翻译和资源准备；`services/apple_ai.go` 管理有界 JSON 子进程调用、取消与时间片段转换。macOS 26 以下或组件缺失明确不可用，不回退第三方 AI。设计见 [系统字幕概要](docs/loopx/design/2026-10-12-apple-subtitles/概要设计.md)。
+- **运行时（2026-10-12 用户裁决）:** 字幕仅使用苹果系统能力。`native/apple-ai/`（`main.swift` 分发请求，`speech_modern.swift`/`speech_legacy.swift`/`translation.swift` 分别是 macOS 26+ 识别、macOS 15 识别与翻译）通过随包的 `CineInsightAppleAI.app` 提供系统识别、自动语言建议、翻译和资源准备；`services/apple_ai.go` 管理有界 JSON 子进程调用、取消与时间片段转换。macOS 15 以下或组件缺失明确不可用，不回退第三方 AI。2026-10-13 用户裁决「全部支持」（修订 D-004）：macOS 26+ 用 SpeechAnalyzer 与 `TranslationSession(installedSource:target:)`；macOS 15 用 SFSpeechRecognizer 仅本机识别（≤50 秒分段，需语音识别授权，识别语言由用户在「系统设置 › 键盘 › 听写」下载，缺失报 `apple_speech_dictation_missing`，拒绝/60 秒未答报 `apple_speech_permission_denied`）和不可见窗口里的 `translationTask`（先查语言对已安装）。该路径与准备翻译一样运行 NSApplication，必须在 Swift 主函数第一次挂起前进入，否则会话永不开始。`CINEINSIGHT_APPLE_AI_LEGACY=1` 在新系统上强制走 macOS 15 路径，仅供测试。设计见 [系统字幕概要](docs/loopx/design/2026-10-12-apple-subtitles/概要设计.md)。
 - **流程:** 视频 -> FFmpeg (提取音频) -> Apple Speech（系统语音识别） -> 写同目录隐藏临时文件（pending）-> 后处理校验 -> 经字幕写入器替换同名 .srt。校验通过前原 `.srt` 一个字节都不动；空结果与取消都删掉临时文件（D-PC13，2026-09-29/30）。
 - **字幕写入器（D-PC13）:** 所有覆盖用户 `.srt` 的路径（生成、强制生成、翻译、工作台保存、编码转换、清理合并与超分产物的字幕复制）都走 `services/subtitle_file_writer.go` 的 `SubtitleFileWriter.Replace`：同目录临时文件 → fsync → 目标已存在时先备份到 `~/.CineInsight/subtitle-backups/<videoID>/<unixNano>.srt`（每个视频只留最新 5 份）→ 原子替换 → 恢复原文件权限。行菜单「恢复上一版字幕…」调 `ListSubtitleBackups` / `RestoreSubtitleBackup`，恢复前同样先备份当前文件。生成前 `GetSubtitleOverwriteInfo` 告诉前端是否会覆盖、以及同目录同基本名的其他视频是否共用这份 `.srt`，确认文案写明「将覆盖现有字幕（会先备份，可恢复）」。替换失败时保留 pending 并返回 `subtitle_replace_failed`。
 - **抗幻觉:** 当前仍保留基于后处理的质量校验与强制生成分支。
@@ -350,7 +350,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 - **评审回写:** 回填失败原因落库前经 `redactFrameHashErrorPaths` 抹掉词首绝对路径（`<path>`），内存态失败清单仍是原文；`MatchClip(full, clip, intervalMS)` 的间隔由调用方传行上的 `interval_ms`，间隔 ≤0 直接不给结论；命令面板任务组含 `frame_hash`（零参启动 + 取消）；旧五类快照用例带扫描根（根内外各一整套素材），同时钉住「清理只看扫描根内视频」这一开工前的既有行为；`clip_dismissals` 两个 video id 无外键，永久删除后忽略行惰性滞留（无害）。
 
 ### 2.25 人脸运行时与分析
-- **运行时（2026-10-12 苹果替换）:** `services/face_runtime.go` 检查随包 `CineInsightAppleAI.app` 的系统能力；设置页提供重新检查，无 Python/第三方模型下载。内部 `VNCreateFaceprintRequest` 固定已验证 revision `3737841669`（CPU），不匹配或缺失明确不可用，不回退旧模型。旧磁盘模型缓存保留。合同与测量见[苹果视觉替换合同](docs/loopx/design/2026-10-12-apple-subtitles/苹果视觉替换合同.md)。
+- **运行时（2026-10-12 苹果替换）:** `services/face_runtime.go` 检查随包 `CineInsightAppleAI.app` 的系统能力；设置页提供重新检查，无 Python/第三方模型下载。内部 `VNCreateFaceprintRequest` 固定已验证 revision `3737841669`（CPU，即默认私有修订 ANFRv4_MD2），不匹配或缺失明确不可用，不回退旧模型；私有修订无法用公开 setter 指定，只认系统默认值。macOS 15 是否默认此修订未经验证（类在 15 SDK 中存在），不是则人脸不可用，支持须另立修订、迁移与阈值。旧磁盘模型缓存保留。合同与测量见[苹果视觉替换合同](docs/loopx/design/2026-10-12-apple-subtitles/苹果视觉替换合同.md)。
 - **worker:** `native/apple-ai/vision.m`，由同一 AppleAI 辅助程序的 `--face-worker` 提供常驻逐行协议；人脸特征128维 float32，Go 归一化并用版本前缀存储。图像按 EXIF 转正，加短边25%灰边，检测框反投影为原图左上角相对坐标；会话由 `face_worker_process.go` 管理（一问一答、版本与形状校验、有界读取、超时/kill）。
 - **旧数据迁移:** 每轮分析先按簇用已有裁剪图提取苹果特征，全部成功且成员快照未变才原子提交；无簇记录单条处理。保留观测/簇ID、命名、忽略、追加确认/拒绝、关系账本及原观测时间。缺图、无脸或多脸保留整簇旧数据并显示待迁移数量；旧向量不参与新匹配。迁移也经过空闲门与共享媒体槽，可取消续跑。
 - **分析:** `services/face_analysis_service.go`（+ `face_cluster.go` 向量与阈值、`face_crop.go` 纯标准库裁剪、`face_worker_process.go` 抽帧）。单 worker、可取消、可续跑、项间检查点、登记表 key `face`、每媒体前取共享 `MediaWorkSlot`。候选 = 非 stale 的活跃视频/图片 + 有头像的人物，指纹变化或无观测者；视频复用 `planAITaggingFramePositions`（宽 1280），图片走 `ResolveImageView`。
@@ -561,7 +561,7 @@ Feed 的推荐加权也毫无贡献（加权加的是视频自己的内容标签
 
 ## 4. 开发与构建指南 (Development & Build)
 
-- **开发模式:** `GOTOOLCHAIN=go1.24.9 wails dev`（Wails 2.11.0 的 `go/packages` 与本机 Go 1.27.1 不兼容；开发模式尚未实测） 使用系统字幕前先执行 `bash scripts/build_apple_ai.sh`，开发二进制读取该原生产物。
+- **开发模式:** `GOTOOLCHAIN=go1.24.9 wails dev`（Wails 2.11.0 的 `go/packages` 与本机 Go 1.27.1 不兼容；开发模式尚未实测） 使用系统字幕前先执行 `bash scripts/build_apple_ai.sh`，开发二进制读取该原生产物。该脚本部署目标 macOS 15.0；SDK ≥ 26 时以 `-D APPLE_AI_SDK26` 编入新接口，SDK 低于 15 跳过构建（打包同样跳过）。
 - **构建应用:** `GOTOOLCHAIN=go1.24.9 wails build`（2026-09-23 darwin/arm64 已完整出包；默认 Go 1.27.1 在 Wails 扫描嵌入资源阶段报 `package "fmt" without types`，`go test ./...` 不受影响）
 - **构建并安装脚本:** `scripts/build_and_install_app.sh` 在 `GOTOOLCHAIN` 未设置或为 `auto` 时只为 Wails 构建使用 Go 1.24.9；`--build-only` 可安全验证构建和 sidecar 打包而不替换 `/Applications` 中的应用。 脚本会先编译并打包苹果系统字幕辅助程序；只执行原始 `wails build` 不会自动打包它。
 - **数据库:** 默认 SQLite（`~/.CineInsight/library.db`），不需要任何配置；要用 PostgreSQL 时在 `.env` 写 `DB_BACKEND=postgres` 与 `PG_*` 连接项（有 `PG_HOST` 而没有 `DB_BACKEND` 的老安装自动沿用 PostgreSQL），或在设置页「数据库」分区迁移并切换，见 §1。备份在设置页「数据库备份」：SQLite 用 `VACUUM INTO` 写 `.sqlite` 快照，PostgreSQL 用 `pg_dump` 写 `.dump`，默认目录 `~/.CineInsight/backups`（可改、可在访达中显示），默认每 24 小时一份、保留 7 份，运行期间每小时检查一次是否到期（D-PC54 / D-PC56）；恢复前先给当前库做安全备份（SQLite 在进入维护模式之前做），恢复完成后应用自动退出，重新打开即用恢复的数据。

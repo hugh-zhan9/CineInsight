@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native smoke test using installed Apple resources; never installs language/model assets."""
 import json
+import os
 import pathlib
 import subprocess
 import tempfile
@@ -9,8 +10,8 @@ import wave
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HELPER = ROOT / 'build/apple-ai/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai'
 
-def request(**value):
-    result = subprocess.run([str(HELPER)], input=json.dumps(value), text=True, capture_output=True, timeout=90, check=True)
+def request(env=None, **value):
+    result = subprocess.run([str(HELPER)], input=json.dumps(value), text=True, capture_output=True, timeout=90, check=True, env=env)
     return json.loads(result.stdout)
 
 status = request(operation='status')
@@ -44,3 +45,12 @@ assert not result.get('error') and len(result['translations']) == 2 and all(resu
 assert request(operation='translate', source='en', target='zh', texts=[])['translations'] == []
 assert request(operation='not-a-command')['error'] == 'apple_invalid_request'
 print('translation batch, empty batch and invalid request passed')
+
+# The macOS 15 paths forced on a newer Mac. Speech there needs an interactive permission grant, so only
+# status and the hidden-window translation session are smoke-tested.
+legacy = dict(os.environ, CINEINSIGHT_APPLE_AI_LEGACY='1')
+status = request(env=legacy, operation='status')
+assert status.get('supported') and any(entry['installed'] for entry in status['languages']), status
+result = request(env=legacy, operation='translate', source='en', target='zh', texts=['We are watching a movie tonight.', 'Please wait for me here.'])
+assert not result.get('error') and len(result['translations']) == 2 and all(result['translations']), result
+print('legacy (macOS 15) status and translation passed')

@@ -109,11 +109,12 @@ bundle_apple_ai() {
   local source_dir="${PROJECT_ROOT}/build/apple-ai"
   local target_dir="${BUILD_APP_PATH}/Contents/Resources/apple-ai"
   if [[ ! -x "${source_dir}/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai" ]]; then
-    # SDK 低于 26 时 build_apple_ai.sh 不构建组件（见该脚本）：不打包，应用在 macOS 26 以下本来就用不了这些功能。
-    local sdk_major
-    sdk_major="$(xcrun --show-sdk-version 2>/dev/null | cut -d. -f1)"
-    if [[ -z "${sdk_major}" || "${sdk_major}" -lt 26 ]]; then
-      log "跳过苹果系统字幕与视觉组件（当前 SDK ${sdk_major:-未知}，需要 macOS 26 SDK）"
+    # SDK 低于 15 时 build_apple_ai.sh 不构建组件（见该脚本）：不打包，应用里相关功能显示不可用。
+    local sdk_version sdk_major
+    sdk_version="$(xcrun --show-sdk-version 2>/dev/null || true)"
+    sdk_major="${sdk_version%%.*}"
+    if [[ ! "${sdk_major}" =~ ^[0-9]+$ ]] || (( sdk_major < 15 )); then
+      log "跳过苹果系统字幕与视觉组件（当前 SDK ${sdk_version:-未知}，至少需要 macOS 15 SDK）"
       return
     fi
     fail "缺少苹果系统字幕组件，请先执行 scripts/build_apple_ai.sh"

@@ -76,7 +76,7 @@
       <label>系统识别语言</label>
       <select v-model="speechLanguage" class="select-input" data-test="apple-speech-language"><option v-for="language in speechLanguages" :key="language.code" :value="language.code">{{ language.name }}{{ language.installed ? '（已准备）' : '' }}</option></select>
       <button type="button" class="btn-secondary btn-compact" data-test="apple-speech-prepare" :disabled="preparing || !speechLanguage" @click="prepareLanguage(false)">准备系统识别语言</button>
-      <p class="help-text">需要 macOS 26 或更新版本。自动检测只覆盖已安装的系统识别语种，结果可手动修改。首次准备可能需要下载苹果语言资源。</p>
+      <p class="help-text">需要 macOS 15 或更新版本。macOS 15 使用较早的系统识别引擎，识别质量较低，识别语言需先在「系统设置 › 键盘 › 听写」中下载。自动检测只覆盖已安装的系统识别语种，结果可手动修改。首次准备可能需要下载苹果语言资源。</p>
     </div>
   </div>
 </template>

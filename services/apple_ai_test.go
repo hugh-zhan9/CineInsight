@@ -216,3 +216,25 @@ func TestApplePreparationShutdownCancelsJoinsAndRejectsNewWork(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// D-004 (2026-10-13): macOS 15 runs the helper's older system paths; anything older stays unavailable.
+func TestApplePlatformGateAcceptsMacOS15AndLater(t *testing.T) {
+	for version, want := range map[string]bool{"15.0": true, "15.7.1\n": true, "26.0": true, "27.0": true, "14.7.1": false, "13": false, "": false, "unknown": false} {
+		if got := appleAIPlatformSupported(version); got != want {
+			t.Fatalf("%q: got %v, want %v", version, got, want)
+		}
+	}
+}
+func TestAppleErrorMessagesForMacOS15Paths(t *testing.T) {
+	for code, want := range map[string]string{
+		"apple_platform_unsupported":     "需要 macOS 15 或更新版本",
+		"apple_speech_permission_denied": "「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策",
+		"apple_speech_dictation_missing": "「系统设置 › 键盘 › 听写」中添加该语言",
+		"apple_face_unsupported":         "人脸识别不可用",
+		"apple_face_version_changed":     "人脸识别不可用",
+	} {
+		if err := appleAIError(code); !strings.HasPrefix(err.Error(), code+": ") || !strings.Contains(err.Error(), want) {
+			t.Fatalf("%s: %v", code, err)
+		}
+	}
+}

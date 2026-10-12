@@ -5,7 +5,7 @@
     <p class="help-text face-privacy" data-test="face-privacy-note">
       使用 macOS 内置人脸能力，无需下载第三方模型。识别与特征计算均在本机运行，人脸向量与裁剪小图只保存在本机，不外发。
       识别结果只生成人物候选，人物关联仍需你确认。
-      该能力使用苹果内部接口，系统升级后可能不可用；届时会明确提示。
+      该能力使用苹果内部接口，系统升级后或在较早的 macOS（如 macOS 15）上可能不可用；届时会明确提示。
     </p>
     <div class="short-feed-status">
       <div class="short-feed-status-main">

@@ -61,9 +61,13 @@ type appleAIRunner func(context.Context, appleAIRequest) (appleAIResponse, error
 
 func appleAIError(code string) error {
 	messages := map[string]string{
-		"apple_platform_unsupported":         "苹果系统能力需要 macOS 26 或更新版本",
+		"apple_platform_unsupported":         "苹果系统能力需要 macOS 15 或更新版本",
 		"apple_helper_missing":               "苹果系统组件未随应用打包，请重新构建或安装完整应用",
 		"apple_speech_language_missing":      "该识别语言尚未准备，请先准备系统语音资源",
+		"apple_speech_permission_denied":     "请在「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策后重试",
+		"apple_speech_dictation_missing":     "该语言的离线识别尚未下载：请在「系统设置 › 键盘 › 听写」中添加该语言并等它下载完成后重试",
+		"apple_face_unsupported":             "当前 macOS 没有已验证的系统人脸特征接口，人脸识别不可用",
+		"apple_face_version_changed":         "当前 macOS 的系统人脸特征版本与已验证版本不同，人脸识别不可用",
 		"apple_translation_language_missing": "翻译语言尚未准备，请在字幕设置中准备对应语言",
 		"apple_language_unsupported":         "苹果系统不支持所选语言或语言组合",
 		"apple_language_uncertain":           "无法可靠判断语言，请手动选择源语言后重试",
@@ -98,6 +102,13 @@ func appleAIExecutable() string {
 	}
 	return filepath.Join(filepath.Dir(source), "..", "build", relative)
 }
+
+// appleAIPlatformSupported reports whether a macOS product version can run the helper: macOS 26+ uses the
+// new speech/translation interfaces, macOS 15 the on-device SFSpeechRecognizer and SwiftUI translation (D-004).
+func appleAIPlatformSupported(productVersion string) bool {
+	major, err := strconv.Atoi(strings.Split(strings.TrimSpace(productVersion), ".")[0])
+	return err == nil && major >= 15
+}
 func runAppleAI(ctx context.Context, request appleAIRequest) (appleAIResponse, error) {
 	var response appleAIResponse
 	if err := ctx.Err(); err != nil {
@@ -109,8 +120,7 @@ func runAppleAI(ctx context.Context, request appleAIRequest) (appleAIResponse, e
 	versionCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	version, err := exec.CommandContext(versionCtx, "/usr/bin/sw_vers", "-productVersion").Output()
 	cancel()
-	major, _ := strconv.Atoi(strings.Split(strings.TrimSpace(string(version)), ".")[0])
-	if err != nil || major < 26 {
+	if err != nil || !appleAIPlatformSupported(string(version)) {
 		return response, appleAIError("apple_platform_unsupported")
 	}
 	path := appleAIExecutable()

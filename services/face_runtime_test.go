@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -26,5 +27,19 @@ func TestFaceAppleRuntime(t *testing.T) {
 	}
 	if r.Available() {
 		t.Fatal("accepted different model")
+	}
+}
+
+// An older or newer macOS without the pinned faceprint revision is reported as clearly unavailable.
+func TestFaceAppleRuntimeReportsMissingSystemRevision(t *testing.T) {
+	r := newFaceRuntimeForTest(t)
+	for _, code := range []string{"apple_face_unsupported", "apple_face_version_changed"} {
+		r.probe = func(context.Context, appleAIRequest) (appleAIResponse, error) {
+			return appleAIResponse{}, appleAIError(code)
+		}
+		status := r.Status()
+		if status.State != FaceRuntimeStateIncompatible || !strings.Contains(status.Reason, "人脸识别不可用") {
+			t.Fatalf("%s: %+v", code, status)
+		}
 	}
 }

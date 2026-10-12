@@ -53,6 +53,14 @@ describe('字幕引擎状态与准备（D-PC22）', () => {
     expect(wrapper.findAll('.subtitle-engine-row')).toHaveLength(1);
   });
 
+  it('D-004 说明 macOS 15 起可用，以及 macOS 15 上的较早识别引擎与听写语言下载', async () => {
+    const wrapper = await mountSection();
+    const text = wrapper.text();
+    expect(text).toContain('需要 macOS 15 或更新版本');
+    expect(text).toContain('「系统设置 › 键盘 › 听写」');
+    expect(text).not.toContain('macOS 26');
+  });
+
   it('MEDIA-13 准备过程显示中文进度，可以取消；取消不当失败', async () => {
     const wrapper = await mountSection();
     const pending = deferred();
