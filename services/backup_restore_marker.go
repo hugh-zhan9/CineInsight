@@ -9,23 +9,30 @@ import (
 	"strings"
 )
 
-// 文件包还原的进行中标记（4.2，审阅 R3 / I-2）：在建暂存目录、解包之前就写下（state=staging），开始改名前改成
-// state=swapping；全部就位（或失败后已改回）才删除。记下每个收录目录的真实位置（已解析符号链接的上级 + 名字）、
-// 暂存目录名与改名后的旧目录名。应用中途崩溃时标记留着，下次启动按它收拾：
-//   - staging：只删记下的暂存目录，原目录没动过，保持原样；
-//   - swapping：缺失的收录目录由记下的旧目录改回原名。
-// 只动标记里记的、前缀对得上的名字，不按时间猜，也不碰别的东西。
+// 文件包还原的进行中标记（4.2，审阅 R3 / I-2 / 第四轮）：在建暂存目录、解包之前就写下（state=staging），开始改名或
+// 合并前改成 state=swapping；每个目录做完都更新它自己的状态（swap：pending → swapped → aside_deleted；
+// merge：pending → merged），全部完成（或失败后已改回）才删除。标记只记数据目录里的位置：整目录换入的目录记真实上级
+// （必须在数据目录下）、名字、暂存目录名与旧目录名；合并还原的目录只记它在数据目录里的暂存目录。应用中途崩溃时标记
+// 留着，下次启动按它收拾（backup_restore_recover.go）。只动标记里记的、前缀对得上、位置在数据目录里的名字。
 
 const (
 	backupFilesRestoreMarker = ".cineinsight-restore-in-progress.json"
 	filesRestoreStaging      = "staging"
 	filesRestoreSwapping     = "swapping"
+
+	filesRestoreModeSwap  = "swap"
+	filesRestoreModeMerge = "merge"
+
+	filesTargetPending      = "pending"
+	filesTargetSwapped      = "swapped"
+	filesTargetAsideDeleted = "aside_deleted"
+	filesTargetMerged       = "merged"
 )
 
 // BackupReasonRestoreRecoveryPending：上次还原整理文件的现场没能收拾完（标记还在），这次恢复不开始。
 const BackupReasonRestoreRecoveryPending = "backup_restore_recovery_pending"
 
-var errFilesRestoreRecoveryPending = fmt.Errorf("%s: 上次还原整理过的文件没有收拾完（有目录没能改回原名），为免覆盖现场，这次恢复没有开始，数据库未被修改；请重启应用后再试，或检查数据目录的权限",
+var errFilesRestoreRecoveryPending = fmt.Errorf("%s: 上次还原整理过的文件没有收拾完（有目录没能改回原名或现场对不上），为免覆盖现场，这次恢复没有开始，数据库未被修改；请重启应用后再试，或检查数据目录的权限",
 	BackupReasonRestoreRecoveryPending)
 
 type filesRestoreMarker struct {
@@ -34,24 +41,36 @@ type filesRestoreMarker struct {
 	Targets []filesRestoreTarget `json:"targets"`
 }
 
-// filesRestoreTarget：Dir 是收录目录（相对数据目录）；Parent + Base 是它的真实位置；Staging 与 Aside 是与真实目录
-// 同级的暂存目录名与旧目录名（只是名字）。原目录不存在时 Aside 为空。
+// filesRestoreTarget：Dir 是收录目录（相对数据目录）；Mode 是 swap 或 merge；Parent + Base 是 swap 目录的真实位置
+// （在数据目录下），merge 目录的 Parent 是数据目录本身；Staging 与 Aside 是与之同级的暂存目录名与旧目录名（只是名字）。
+// 原目录不存在、或按合并还原时 Aside 为空。State 是这个目录做到哪一步。
 type filesRestoreTarget struct {
 	Dir     string `json:"dir"`
+	Mode    string `json:"mode"`
 	Parent  string `json:"parent"`
 	Base    string `json:"base"`
 	Aside   string `json:"aside"`
 	Staging string `json:"staging"`
+	State   string `json:"state"`
 }
 
-// valid 是防篡改的名字检查（审阅 M1）：收录目录要认识，上级是规整的绝对路径，名字是不含路径的单段，
-// 暂存目录名以 .cineinsight-restore-<名字>- 开头，旧目录名以 <名字>.pre-restore- 开头。对不上的条目一律不动。
-func (t filesRestoreTarget) valid() bool {
+// valid 是防篡改的检查（审阅 M1 / 第四轮）：收录目录要认识；上级是规整的绝对路径、且在数据目录里（合并还原的就是
+// 数据目录本身）；名字是不含路径的单段；暂存目录名、旧目录名的前缀都对得上。对不上的条目一律不动。
+func (t filesRestoreTarget) valid(dataRoot string) bool {
 	plain := func(name string) bool {
 		return name != "" && filepath.Base(name) == name && name != "." && name != ".."
 	}
-	return validBackupDirectory(t.Dir) && filepath.IsAbs(t.Parent) && filepath.Clean(t.Parent) == t.Parent && plain(t.Base) &&
-		plain(t.Staging) && strings.HasPrefix(t.Staging, backupFilesStagingPrefix+t.Base+"-") &&
+	// 「在数据目录里」同时排除了相对路径（数据目录本身是解析过的绝对路径）。
+	if !validBackupDirectory(t.Dir) || filepath.Clean(t.Parent) != t.Parent ||
+		!insideDirectory(dataRoot, t.Parent) || !plain(t.Base) || !plain(t.Staging) {
+		return false
+	}
+	if t.Mode == filesRestoreModeMerge {
+		return t.Parent == dataRoot && t.Base == filepath.Base(filepath.FromSlash(t.Dir)) && t.Aside == "" &&
+			strings.HasPrefix(t.Staging, backupFilesMergeStagingPrefix+t.Base+"-")
+	}
+	// 没有 mode 的是更早的开发版写的标记，当作整目录换入。
+	return (t.Mode == filesRestoreModeSwap || t.Mode == "") && strings.HasPrefix(t.Staging, backupFilesStagingPrefix+t.Base+"-") &&
 		(t.Aside == "" || (plain(t.Aside) && strings.HasPrefix(t.Aside, t.Base+backupFilesAsideMarker)))
 }
 
@@ -108,7 +127,7 @@ func (s *BackupService) removeFilesRestoreMarker() {
 // ensureNoPendingFilesRestore 在恢复开始前（进入维护之前）先收拾上次的现场；收拾不完（标记还在）就拒绝这次恢复，
 // 不覆盖标记（审阅 M2）。
 func (s *BackupService) ensureNoPendingFilesRestore() error {
-	s.RecoverInterruptedFilesRestore()
+	s.recoverInterruptedFilesRestoreLocked() // 调用方（恢复）已持有 s.mu
 	if s.filesRestoreMarkerExists() {
 		return errFilesRestoreRecoveryPending
 	}
