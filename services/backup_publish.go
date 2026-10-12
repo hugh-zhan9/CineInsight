@@ -32,7 +32,7 @@ func (s *BackupService) publishBackup(ctx context.Context, directory, snapshotTe
 	if err != nil {
 		return nil, fmt.Errorf("读取备份产物失败: %w", err)
 	}
-	if err := s.ensureBackupSpace(directory, info.Size()); err != nil {
+	if err := s.ensureBackupSpace(directory); err != nil {
 		return nil, err
 	}
 	filesTemp, err := createBackupTempFile(directory)
@@ -81,9 +81,10 @@ func (s *BackupService) publishBackup(ctx context.Context, directory, snapshotTe
 	}, nil
 }
 
-// ensureBackupSpace 检查备份目录所在卷还放得下「文件包预计大小 + 快照大小」（4.1 第 3 步）。
+// ensureBackupSpace 检查备份目录所在卷还放得下接下来要写的文件包（4.1 第 3 步）。快照此刻已经写在备份目录里、
+// 占用已经体现在剩余空间里，不再重复算（审阅 M3）；这样恢复前的总检查与安全备份自己的这一步口径一致。
 // 海报副本多时文件包可能远大于数据库，不够就这次备份失败，原因码 backup_insufficient_space。
-func (s *BackupService) ensureBackupSpace(directory string, snapshotSize int64) error {
+func (s *BackupService) ensureBackupSpace(directory string) error {
 	estimate, err := estimateBackupFilesPack(s.dataDir)
 	if err != nil {
 		return fmt.Errorf("统计待备份文件失败: %w", err)
@@ -96,7 +97,7 @@ func (s *BackupService) ensureBackupSpace(directory string, snapshotSize int64) 
 	if err != nil {
 		return fmt.Errorf("无法检查备份目录所在磁盘的剩余空间: %w", pathlessError(err))
 	}
-	if need := uint64(estimate + snapshotSize); free < need {
+	if need := uint64(estimate); free < need {
 		return fmt.Errorf("%s: 备份目录所在磁盘剩余空间不足（需要约 %s，可用 %s）",
 			BackupReasonInsufficientSpace, formatEnhancementBytes(need), formatEnhancementBytes(free))
 	}

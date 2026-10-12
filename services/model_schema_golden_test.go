@@ -21,26 +21,36 @@ func TestModelSchemaGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if os.Getenv("UPDATE_MODEL_SCHEMA_GOLDEN") == "1" {
-		writeModelSchemaGolden(t, current)
-		return
-	}
-	data, err := os.ReadFile(modelSchemaGoldenPath)
-	if err != nil {
+	update := os.Getenv("UPDATE_MODEL_SCHEMA_GOLDEN") == "1"
+	golden, err := readModelSchemaGolden()
+	if err != nil && !(update && os.IsNotExist(err)) {
 		t.Fatalf("读取模型结构快照失败（UPDATE_MODEL_SCHEMA_GOLDEN=1 go test ./services -run TestModelSchemaGolden 生成）: %v", err)
 	}
-	var golden map[string][]string
-	if err := json.Unmarshal(data, &golden); err != nil {
-		t.Fatal(err)
+	// 先查删除（审阅 M8）：快照里有、当前模型却没有、又没登记退役的表或列——重新生成快照也不行，否则这条约束就被抹掉了。
+	if removed := unknownModelSchema(golden, current, retiredSchemaColumns); len(removed) > 0 {
+		t.Fatalf("快照里的表或列已不在当前模型里：%s\n删除模型字段或模型时必须把它们登记进 retiredSchemaColumns（services/backup_schema.go），"+
+			"否则老版本的备份会被判成「来自更新的版本」；登记之后才能更新快照。", strings.Join(removed, "、"))
+	}
+	if update {
+		writeModelSchemaGolden(t, current)
+		return
 	}
 	if added := unknownModelSchema(current, golden, nil); len(added) > 0 {
 		t.Fatalf("模型多了快照里没有的表或列：%s\n确认无误后更新快照：UPDATE_MODEL_SCHEMA_GOLDEN=1 go test ./services -run TestModelSchemaGolden",
 			strings.Join(added, "、"))
 	}
-	if removed := unknownModelSchema(golden, current, retiredSchemaColumns); len(removed) > 0 {
-		t.Fatalf("快照里的表或列已不在当前模型里：%s\n删除模型字段或模型时必须把它们登记进 retiredSchemaColumns（services/backup_schema.go），"+
-			"否则老版本的备份会被判成「来自更新的版本」；登记后再更新快照。", strings.Join(removed, "、"))
+}
+
+func readModelSchemaGolden() (map[string][]string, error) {
+	data, err := os.ReadFile(modelSchemaGoldenPath)
+	if err != nil {
+		return nil, err
 	}
+	var golden map[string][]string
+	if err := json.Unmarshal(data, &golden); err != nil {
+		return nil, err
+	}
+	return golden, nil
 }
 
 func writeModelSchemaGolden(t *testing.T, current map[string][]string) {

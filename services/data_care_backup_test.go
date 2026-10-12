@@ -707,32 +707,46 @@ func TestDataCareFilesSwapRenamesOriginalBackOnFailure(t *testing.T) {
 	}
 }
 
-// 4.2（审阅 I2c / R3）：只有进行中标记存在时才收拾现场，且只按标记里记的名字改回（不按时间猜最新的一个）；
-// 记下的暂存目录清掉、标记删掉；改回过目录时发一次桌面通知，备份状态带上说明。没有标记时什么也不动。
-func TestDataCareRecoverInterruptedFilesRestore(t *testing.T) {
+// newRecoveryFixture 建一个只有数据目录的备份服务，返回它与 media-details 的真实路径（已解析符号链接）。
+func newRecoveryFixture(t *testing.T) (*BackupService, *stubDesktopNotifier, string, string) {
+	t.Helper()
 	setupBackupServiceTest(t, 7, 24) // 只为 GetStatus 有设置可读
 	dataDir := t.TempDir()
 	service := NewBackupService(dataDir)
 	notifier := &stubDesktopNotifier{}
 	service.SetDesktopNotifier(notifier)
+	if err := os.MkdirAll(filepath.Join(dataDir, "media-details"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	mediaDetails, _ := filepath.EvalSymlinks(filepath.Join(dataDir, "media-details"))
+	return service, notifier, dataDir, mediaDetails
+}
+
+// 4.2（审阅 R3 / I-2 / M1）：swapping 状态的标记——只按标记里记的名字改回（不按时间猜），前缀对不上的条目一律不动；
+// 记下的暂存目录清掉、标记删掉；改回过目录时发一次桌面通知，备份状态带上说明。没有标记时什么也不动。
+func TestDataCareRecoverInterruptedFilesRestore(t *testing.T) {
+	service, notifier, dataDir, mediaDetails := newRecoveryFixture(t)
 	people := filepath.Join(dataDir, "media-details/people")
 	recorded, newer := "people.pre-restore-20261011-090000.000000000", "people.pre-restore-20261012-090000.000000000"
-	writeDataCareFile(t, filepath.Join(dataDir, "media-details", recorded, "1/a.jpg"), "recorded")
-	writeDataCareFile(t, filepath.Join(dataDir, "media-details", newer, "1/a.jpg"), "newer but not recorded")
+	writeDataCareFile(t, filepath.Join(mediaDetails, recorded, "1/a.jpg"), "recorded")
+	writeDataCareFile(t, filepath.Join(mediaDetails, newer, "1/a.jpg"), "newer but not recorded")
 	staging := backupFilesStagingPrefix + "people-20261011-090000.000000000"
-	writeDataCareFile(t, filepath.Join(dataDir, "media-details", staging, "x"), "staged")
-	wallpapers := filepath.Join(dataDir, "wallpapers")
-	writeDataCareFile(t, filepath.Join(wallpapers, "current.jpg"), "current")
+	writeDataCareFile(t, filepath.Join(mediaDetails, staging, "x"), "staged")
+	writeDataCareFile(t, filepath.Join(mediaDetails, "other.pre-restore-1", "x"), "not ours")
+	writeDataCareFile(t, filepath.Join(mediaDetails, "keepme", "x"), "not a staging directory")
+	resolvedData, _ := filepath.EvalSymlinks(dataDir)
+	writeDataCareFile(t, filepath.Join(resolvedData, "wallpapers/current.jpg"), "current")
 
 	service.RecoverInterruptedFilesRestore()
 	if _, err := os.Stat(people); !os.IsNotExist(err) || len(notifier.Notifications()) != 0 {
 		t.Fatalf("没有标记时不应动任何目录: err=%v", err)
 	}
-
-	if err := service.writeFilesRestoreMarker(filesRestoreMarker{Stamp: "20261011-090000.000000000", Targets: []filesRestoreTarget{
-		{Dir: "media-details/people", Aside: recorded, Staging: staging},
-		{Dir: "wallpapers", Aside: "wallpapers.pre-restore-20261011-090000.000000000"},
-		{Dir: "../escape", Aside: "x"},
+	if err := service.writeFilesRestoreMarker(filesRestoreMarker{State: filesRestoreSwapping, Stamp: "20261011-090000.000000000", Targets: []filesRestoreTarget{
+		{Dir: "media-details/people", Parent: mediaDetails, Base: "people", Aside: recorded, Staging: staging},
+		{Dir: "wallpapers", Parent: resolvedData, Base: "wallpapers", Aside: "wallpapers.pre-restore-20261011-090000.000000000", Staging: backupFilesStagingPrefix + "wallpapers-x"},
+		{Dir: "media-details/watchlist", Parent: mediaDetails, Base: "watchlist", Aside: "other.pre-restore-1", Staging: backupFilesStagingPrefix + "watchlist-x"},
+		{Dir: "media-details/collections", Parent: mediaDetails, Base: "collections", Aside: "collections.pre-restore-1", Staging: "keepme"},
+		{Dir: "../escape", Parent: mediaDetails, Base: "people", Aside: recorded, Staging: staging},
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -741,13 +755,17 @@ func TestDataCareRecoverInterruptedFilesRestore(t *testing.T) {
 	if dataCareFileBody(t, filepath.Join(people, "1/a.jpg")) != "recorded" {
 		t.Fatal("缺失的目录应由标记里记下的旧目录改回")
 	}
-	if dataCareFileBody(t, filepath.Join(dataDir, "media-details", newer, "1/a.jpg")) != "newer but not recorded" {
+	if dataCareFileBody(t, filepath.Join(mediaDetails, newer, "1/a.jpg")) != "newer but not recorded" {
 		t.Fatal("标记里没记的旧目录不动")
 	}
-	if dataCareFileBody(t, filepath.Join(wallpapers, "current.jpg")) != "current" {
+	if dataCareFileBody(t, filepath.Join(mediaDetails, "other.pre-restore-1", "x")) != "not ours" ||
+		dataCareFileBody(t, filepath.Join(mediaDetails, "keepme", "x")) != "not a staging directory" {
+		t.Fatal("前缀对不上的旧目录名、暂存目录名一律不动")
+	}
+	if dataCareFileBody(t, filepath.Join(resolvedData, "wallpapers/current.jpg")) != "current" {
 		t.Fatal("目录还在的不应被改动")
 	}
-	if _, err := os.Stat(filepath.Join(dataDir, "media-details", staging)); !os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(mediaDetails, staging)); !os.IsNotExist(err) {
 		t.Fatalf("记下的暂存目录应清掉: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, backupFilesRestoreMarker)); !os.IsNotExist(err) {
@@ -758,6 +776,94 @@ func TestDataCareRecoverInterruptedFilesRestore(t *testing.T) {
 	}
 	if status := service.GetStatus(); !strings.Contains(status.Notice, "中途中断") {
 		t.Fatalf("备份状态应带上说明: %+v", status)
+	}
+}
+
+// 4.2（审阅 I-2）：解包阶段（staging）崩溃——只删记下的暂存目录，原目录保持原样，删掉标记并说明一次；
+// 没有任何标记引用的暂存目录（前缀对得上的）也会被清掉。
+func TestDataCareRecoverFromStagingStateKeepsOriginals(t *testing.T) {
+	service, notifier, _, mediaDetails := newRecoveryFixture(t)
+	writeDataCareFile(t, filepath.Join(mediaDetails, "people/1/a.jpg"), "original")
+	staging := backupFilesStagingPrefix + "people-20261012-090000.000000000"
+	writeDataCareFile(t, filepath.Join(mediaDetails, staging, "1/a.jpg"), "half unpacked")
+	orphan := backupFilesStagingPrefix + "collections-20261001-000000.000000000"
+	writeDataCareFile(t, filepath.Join(mediaDetails, orphan, "x"), "orphan staging")
+	// 解包阶段还没开始改名：即使 collections 不见了、旁边又恰好有同名旧目录，也不该去改名。
+	collectionsAside := "collections.pre-restore-20261012-090000.000000000"
+	writeDataCareFile(t, filepath.Join(mediaDetails, collectionsAside, "x"), "not to be renamed")
+	if err := service.writeFilesRestoreMarker(filesRestoreMarker{State: filesRestoreStaging, Stamp: "20261012-090000.000000000", Targets: []filesRestoreTarget{
+		{Dir: "media-details/people", Parent: mediaDetails, Base: "people", Aside: "people.pre-restore-20261012-090000.000000000", Staging: staging},
+		{Dir: "media-details/collections", Parent: mediaDetails, Base: "collections", Aside: collectionsAside, Staging: backupFilesStagingPrefix + "collections-20261012-090000.000000000"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	service.RecoverInterruptedFilesRestore()
+	if dataCareFileBody(t, filepath.Join(mediaDetails, "people/1/a.jpg")) != "original" {
+		t.Fatal("解包阶段中断时原目录保持原样")
+	}
+	if _, err := os.Stat(filepath.Join(mediaDetails, "collections")); !os.IsNotExist(err) || dataCareFileBody(t, filepath.Join(mediaDetails, collectionsAside, "x")) != "not to be renamed" {
+		t.Fatal("staging 状态下不改名")
+	}
+	for _, name := range []string{staging, orphan} {
+		if _, err := os.Stat(filepath.Join(mediaDetails, name)); !os.IsNotExist(err) {
+			t.Fatalf("暂存目录 %s 应清掉: %v", name, err)
+		}
+	}
+	if service.filesRestoreMarkerExists() {
+		t.Fatal("处理完应删掉标记")
+	}
+	if notes := notifier.Notifications(); len(notes) != 1 || !strings.Contains(notes[0].Body, "保持原样") {
+		t.Fatalf("应说明一次整理文件保持原样: %+v", notes)
+	}
+}
+
+// 审阅 M2：标记里有目录改不回（标记留着）时，新的恢复在进入维护之前以 backup_restore_recovery_pending 拒绝，
+// 不覆盖标记；被引用的暂存目录不被清扫。
+func TestDataCareRestoreRefusedWhileRecoveryPending(t *testing.T) {
+	service, dataDir, directory := setupCuratedBackupTest(t)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaDetails, _ := filepath.EvalSymlinks(filepath.Join(dataDir, "media-details"))
+	_ = os.RemoveAll(filepath.Join(mediaDetails, "people"))
+	aside := "people.pre-restore-20261012-090000.000000000"
+	staging := backupFilesStagingPrefix + "people-20261012-090000.000000000"
+	writeDataCareFile(t, filepath.Join(mediaDetails, aside, "1/a.jpg"), "before")
+	writeDataCareFile(t, filepath.Join(mediaDetails, staging, "x"), "staged")
+	orphan := filepath.Join(mediaDetails, backupFilesStagingPrefix+"collections-20261001-000000.000000000")
+	writeDataCareFile(t, filepath.Join(orphan, "x"), "orphan staging")
+	marker := filesRestoreMarker{State: filesRestoreSwapping, Stamp: "20261012-090000.000000000", Targets: []filesRestoreTarget{
+		{Dir: "media-details/people", Parent: mediaDetails, Base: "people", Aside: aside, Staging: staging},
+	}}
+	if err := service.writeFilesRestoreMarker(marker); err != nil {
+		t.Fatal(err)
+	}
+	service.rename = func(from, to string) error { return errors.New("still locked") }
+	before, _ := os.ReadFile(filepath.Join(dataDir, backupFilesRestoreMarker))
+	err, fenced := restoreDataCareBackup(t, service, *backup, nil)
+	if err == nil || !strings.HasPrefix(err.Error(), BackupReasonRestoreRecoveryPending+":") || fenced || countSQLiteSnapshots(t, directory) != 1 {
+		t.Fatalf("应以 backup_restore_recovery_pending 拒绝: err=%v fenced=%v", err, fenced)
+	}
+	if after, _ := os.ReadFile(filepath.Join(dataDir, backupFilesRestoreMarker)); string(after) != string(before) {
+		t.Fatal("拒绝时不应覆盖标记")
+	}
+	if _, err := os.Stat(filepath.Join(mediaDetails, aside)); err != nil {
+		t.Fatalf("改不回的旧目录应原样留着: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(mediaDetails, staging)); err == nil {
+		t.Fatal("swapping 状态下记下的暂存目录照常清掉（它不是恢复所需的）")
+	}
+	if _, err := os.Stat(orphan); err != nil {
+		t.Fatal("标记还在时现场一概不清扫")
+	}
+	service.rename = nil
+	service.RecoverInterruptedFilesRestore()
+	if dataCareFileBody(t, filepath.Join(mediaDetails, "people/1/a.jpg")) != "before" || service.filesRestoreMarkerExists() {
+		t.Fatal("能改名之后应改回并删掉标记")
+	}
+	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
+		t.Fatal("收拾完之后散落的暂存目录清掉")
 	}
 }
 
@@ -923,11 +1029,16 @@ func setupTwoVolumeRestore(t *testing.T, removeCurated bool) (*BackupService, *B
 	resolvedOther, _ := filepath.EvalSymlinks(other)
 	volumes := &fakeVolumes{prefixes: map[string]string{resolvedData: "A", resolvedOther: "B"}, free: map[string]uint64{"A": 1 << 40, "B": 1 << 40}}
 	service.volumeOf, service.diskFree = volumes.volumeOf, volumes.diskFree
+	service.blockSizeOf = func(string) int64 { return restoreSpaceBlock }
 	return service, backup, volumes
 }
 
-// 4.2（审阅 R1）：恢复前按卷合计空间——B 盘（链接过去的 media-details）要放下解出的条目（每个按 4 KiB 取整），
-// A 盘要放下临时库 + 临时副本 + 安全备份 + 其余条目之和；任何一块不够就在进入维护之前拒绝。
+// twoVolumeUnpackBlocks：B 盘上四个 media-details 收录目录各一个暂存目录，people/1 与 collections/2 两个子目录，
+// 头像与封面两个文件——共 8 块。
+const twoVolumeUnpackBlocks = 8
+
+// 4.2（审阅 R1 / M4）：恢复前按卷合计空间——B 盘（链接过去的 media-details）要放下解出的文件与目录（各按那块盘的
+// 分配块取整），A 盘要放下临时库 + 临时副本 + 安全备份 + 其余条目之和；任何一块不够就在进入维护之前拒绝。
 func TestDataCareRestoreSpaceIsCheckedPerVolume(t *testing.T) {
 	refused := func(t *testing.T, err error, fenced bool) {
 		t.Helper()
@@ -937,20 +1048,32 @@ func TestDataCareRestoreSpaceIsCheckedPerVolume(t *testing.T) {
 	}
 	t.Run("other volume one byte short", func(t *testing.T) {
 		service, backup, volumes := setupTwoVolumeRestore(t, false)
-		volumes.free["B"] = 2*restoreSpaceBlock - 1 // 头像与封面各占一块
+		volumes.free["B"] = twoVolumeUnpackBlocks*restoreSpaceBlock - 1
 		err, fenced := restoreDataCareBackup(t, service, *backup, nil)
 		refused(t, err, fenced)
 	})
 	t.Run("other volume exactly enough", func(t *testing.T) {
 		service, backup, volumes := setupTwoVolumeRestore(t, false)
-		volumes.free["B"] = 2 * restoreSpaceBlock
+		volumes.free["B"] = twoVolumeUnpackBlocks * restoreSpaceBlock
 		if err, _ := restoreDataCareBackup(t, service, *backup, nil); err != nil {
 			t.Fatalf("B 盘刚好够时应能恢复: %v", err)
 		}
 	})
+	t.Run("rounding follows the volume's allocation block", func(t *testing.T) {
+		service, backup, volumes := setupTwoVolumeRestore(t, false)
+		volumes.free["B"] = twoVolumeUnpackBlocks * restoreSpaceBlock // 按 4 KiB 够，按 64 KiB 不够
+		service.blockSizeOf = func(path string) int64 {
+			if volume, _ := volumes.volumeOf(path); volume == "B" {
+				return 64 << 10
+			}
+			return restoreSpaceBlock
+		}
+		err, fenced := restoreDataCareBackup(t, service, *backup, nil)
+		refused(t, err, fenced)
+	})
 	t.Run("same volume needs are summed", func(t *testing.T) {
 		service, backup, volumes := setupTwoVolumeRestore(t, false)
-		snapshot := uint64(roundUpRestoreBlock(backup.Size))
+		snapshot := uint64(roundUpToBlock(backup.Size, restoreSpaceBlock))
 		// 临时库、临时副本、壁纸与字幕备份各自都放得下，加上安全备份就放不下。
 		volumes.free["A"] = 2*snapshot + 2*restoreSpaceBlock
 		err, fenced := restoreDataCareBackup(t, service, *backup, nil)
@@ -1102,5 +1225,174 @@ func TestDataCareFilesSwapLaterFolderFailureKeepsEarlierPreRestore(t *testing.T)
 	}
 	if _, err := os.Stat(filepath.Join(dataDir, backupFilesRestoreMarker)); !os.IsNotExist(err) {
 		t.Fatalf("失败改回之后应删掉标记: %v", err)
+	}
+}
+
+// 4.2（审阅 I-1）：收录目录是指向别处（另一块盘、名字也不同）的有效符号链接时，还原动的是链接指向的真实目录：
+// 链接原样保留、文件落进它指向的目录；改名期间旧内容在真实目录同级的 .pre-restore-* 里，暂存目录也在那里。
+func TestDataCareRestoreKeepsSymlinkedCuratedRoot(t *testing.T) {
+	service, dataDir, _ := setupCuratedBackupTest(t)
+	external := t.TempDir()
+	store := filepath.Join(external, "videos-store")
+	writeDataCareFile(t, filepath.Join(store, "5/poster.jpg"), "backed up poster")
+	link := filepath.Join(dataDir, "media-details/videos")
+	if err := os.Symlink(store, link); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDataCareFile(t, filepath.Join(store, "5/poster.jpg"), "changed after backup")
+	resolvedExternal, _ := filepath.EvalSymlinks(external)
+	resolvedData, _ := filepath.EvalSymlinks(dataDir)
+	// 空间记在链接指向的那块盘（C）上：C 放不下时在进入维护之前拒绝。
+	volumes := &fakeVolumes{prefixes: map[string]string{resolvedData: "A", resolvedExternal: "C"}, free: map[string]uint64{"A": 1 << 40, "C": 0}}
+	service.volumeOf, service.diskFree = volumes.volumeOf, volumes.diskFree
+	if err, fenced := restoreDataCareBackup(t, service, *backup, nil); err == nil || !strings.HasPrefix(err.Error(), BackupReasonInsufficientSpace+":") || fenced {
+		t.Fatalf("链接指向的盘放不下时应拒绝: err=%v fenced=%v", err, fenced)
+	}
+	volumes.free["C"] = 1 << 40
+	sawAside := false
+	service.rename = func(from, to string) error {
+		if strings.HasPrefix(filepath.Base(from), backupFilesStagingPrefix+"videos-store-") {
+			if filepath.Dir(from) != resolvedExternal {
+				t.Errorf("暂存目录应建在真实目录的同级: %s", from)
+			}
+			asides, _ := filepath.Glob(filepath.Join(resolvedExternal, "videos-store.pre-restore-*", "5/poster.jpg"))
+			sawAside = len(asides) == 1 && dataCareFileBody(t, asides[0]) == "changed after backup"
+		}
+		return os.Rename(from, to)
+	}
+	if err, _ := restoreDataCareBackup(t, service, *backup, nil); err != nil {
+		t.Fatalf("恢复应成功: %v", err)
+	}
+	info, err := os.Lstat(link)
+	if err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("符号链接应原样保留: %v", err)
+	}
+	if target, _ := os.Readlink(link); target != store {
+		t.Fatalf("链接仍指向原来的目录: %s", target)
+	}
+	if dataCareFileBody(t, filepath.Join(store, "5/poster.jpg")) != "backed up poster" {
+		t.Fatal("文件应还原进链接指向的目录")
+	}
+	if !sawAside {
+		t.Fatal("改名期间旧内容应在真实目录同级的 .pre-restore-* 里")
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(resolvedExternal, "videos-store.pre-restore-*")); len(leftovers) != 0 {
+		t.Fatalf("成功后旧目录应删除: %v", leftovers)
+	}
+}
+
+// 审阅 M6：改名前再查一次——某个收录目录在还原过程中变得不可用时，不动它，这次还原记为不完整，其余目录照常换好。
+func TestDataCareFilesSwapSkipsRootThatBecameUnavailable(t *testing.T) {
+	service, dataDir, _ := setupCuratedBackupTest(t)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	wallpapers := filepath.Join(dataDir, "wallpapers")
+	swapped := false
+	service.rename = func(from, to string) error {
+		if !swapped {
+			swapped = true // 第一次改名时把 wallpapers 换成一条失效的链接（盘被拔了）
+			_ = os.RemoveAll(wallpapers)
+			_ = os.Symlink(filepath.Join(dataDir, "unplugged"), wallpapers)
+		}
+		return os.Rename(from, to)
+	}
+	_ = os.Remove(filepath.Join(dataDir, "media-details/people/1/avatar.jpg"))
+	err, _ = restoreDataCareBackup(t, service, *backup, nil)
+	if !DatabaseRestoreRequiresRestart(err) || !strings.Contains(err.Error(), "整理过的文件未能还原") {
+		t.Fatalf("应报整理文件未能（完整）还原: %v", err)
+	}
+	if info, err := os.Lstat(wallpapers); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal("变得不可用的目录不应被动")
+	}
+	if dataCareFileBody(t, filepath.Join(dataDir, "media-details/people/1/avatar.jpg")) != "avatar" {
+		t.Fatal("其余目录照常还原")
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, backupFilesRestoreMarker)); !os.IsNotExist(err) {
+		t.Fatalf("处理完应删掉标记: %v", err)
+	}
+}
+
+// 审阅 M7：收录目录存在却列不出（没有权限）时记进 unavailable_roots，备份照常完成。
+func TestDataCareBackupTreatsUnlistableRootAsUnavailable(t *testing.T) {
+	service, dataDir, _ := setupCuratedBackupTest(t)
+	people := filepath.Join(dataDir, "media-details/people")
+	if err := os.Chmod(people, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(people, 0755) })
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatalf("列不出的收录目录不应让整份备份失败: %v", err)
+	}
+	if strings.Join(backup.UnavailableRoots, ",") != "media-details/people" {
+		t.Fatalf("列不出的收录目录应记为不可用: %v", backup.UnavailableRoots)
+	}
+}
+
+// 审阅 M3：备份时的空间检查只算还没写的文件包（快照已经在盘上），剩余空间刚好放得下文件包时备份照常完成。
+func TestDataCareBackupSpaceCountsOnlyWhatRemains(t *testing.T) {
+	service, dataDir, _ := setupCuratedBackupTest(t)
+	estimate, err := estimateBackupFilesPack(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.diskFree = func(string) (uint64, error) { return uint64(estimate), nil }
+	if _, err := service.CreateBackup(context.Background()); err != nil {
+		t.Fatalf("剩余空间刚好放得下文件包时应能备份: %v", err)
+	}
+}
+
+// G-3：设置页显示的「最近失败」落库前擦掉绝对路径。
+func TestDataCareBackupLastErrorStoredWithoutPaths(t *testing.T) {
+	service, _, _ := setupBackupServiceTest(t, 7, 24)
+	if err := service.recordAttempt(false, errors.New("创建备份临时文件失败: open /Users/someone/backups/.tmp: permission denied")); err != nil {
+		t.Fatal(err)
+	}
+	settings, _ := (&SettingsService{}).GetSettings()
+	if strings.Contains(settings.BackupLastError, "/Users/someone") || !strings.Contains(settings.BackupLastError, "permission denied") {
+		t.Fatalf("backup_last_error 不应带绝对路径: %q", settings.BackupLastError)
+	}
+}
+
+// 4.2（审阅 I-2）：标记在建暂存目录、解包之前就写下（state=staging）；解包失败时暂存目录与标记都清掉，原目录不动。
+func TestDataCareFilesRestoreMarkerWrittenBeforeUnpacking(t *testing.T) {
+	service, dataDir, directory := setupCuratedBackupTest(t)
+	backup, err := service.CreateBackup(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeDataCareFile(t, filepath.Join(dataDir, "wallpapers/w.jpg"), "current wallpaper")
+	var seen filesRestoreMarker
+	service.beforeUnpack = func() {
+		data, err := os.ReadFile(filepath.Join(dataDir, backupFilesRestoreMarker))
+		if err != nil || json.Unmarshal(data, &seen) != nil {
+			t.Errorf("解包之前应已写下标记: %v", err)
+		}
+		// 在解包这一步出错（文件包在维护期间被截断）。
+		_ = os.Truncate(filepath.Join(directory, backupFilesName(backup.Name)), 1024)
+	}
+	err, _ = restoreDataCareBackup(t, service, *backup, nil)
+	if !DatabaseRestoreRequiresRestart(err) || !strings.Contains(err.Error(), "整理过的文件未能还原") {
+		t.Fatalf("应报整理文件未能还原: %v", err)
+	}
+	if seen.State != filesRestoreStaging || len(seen.Targets) != 6 || seen.Targets[0].Staging == "" {
+		t.Fatalf("标记应处于 staging 状态并记下暂存目录: %+v", seen)
+	}
+	if dataCareFileBody(t, filepath.Join(dataDir, "wallpapers/w.jpg")) != "current wallpaper" {
+		t.Fatal("解包失败时原目录不动")
+	}
+	for _, target := range seen.Targets {
+		if _, err := os.Stat(filepath.Join(target.Parent, target.Staging)); !os.IsNotExist(err) {
+			t.Fatalf("暂存目录应清掉: %s", target.Staging)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, backupFilesRestoreMarker)); !os.IsNotExist(err) {
+		t.Fatalf("原目录没动过，标记应删掉: %v", err)
 	}
 }

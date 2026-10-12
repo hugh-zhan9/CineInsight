@@ -152,7 +152,8 @@ var (
 )
 
 // semanticRawTables 是只在 Postgres 上用裸 DDL 建的语义向量表与它们的列（database/semantic_vector.go、
-// image_semantic_vector.go）。改 DDL 时同步这里；TestModelSchemaGolden 会提醒更新快照。
+// image_semantic_vector.go）。这份列表是手工维护的：改 DDL 时必须同步这里——TestModelSchemaGolden 只比这份列表与
+// 快照，抓不到 DDL 本身的漂移。
 var semanticRawTables = map[string][]string{
 	"video_semantic_vectors": {"dimension", "embedding", "generation", "model_identifier", "updated_at", "video_id"},
 	"image_semantic_vectors": {"dimension", "embedding", "generation", "image_id", "model_identifier", "updated_at"},

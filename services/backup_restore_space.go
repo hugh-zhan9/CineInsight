@@ -3,26 +3,44 @@ package services
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"video-master/database"
 )
 
-// 恢复前的空间检查（4.2，审阅 R1）：恢复过程中要新写的东西都在进入维护之前算进去，按卷合计——
+// 恢复前的空间检查（4.2，审阅 R1 / M4）：恢复过程中要新写的东西都在进入维护之前算进去，按卷合计——
 // 同一块盘上的需求相加，不同的盘各算各的：
 //   - 恢复用的临时副本（copyVerifiedBackup，写在备份目录）：快照大小；
 //   - 恢复前的安全备份（写在备份目录）：当前库的快照 + 当前整理文件的文件包；
 //   - SQLite 的临时库（写在库文件所在目录）：快照大小；
-//   - 文件包解出来的整理文件（写在各收录目录的同级）：每个条目按 4 KiB 向上取整。
+//   - 文件包解出来的整理文件（写在各收录目录真实位置的同级）：每个文件、每个目录都按那块盘的分配块向上取整。
 // 有一块盘放不下就以 backup_insufficient_space 拒绝，什么都还没动。
+//
+// 已知局限（审阅 M5，只记录）：卷按设备号分组。APFS 同一容器里的多个卷、btrfs 的子卷设备号不同却共用空间，
+// 会被当成互不相干的盘；Windows 上挂在文件夹里的卷按盘符归到所在的盘上。这些情况下检查可能偏松。
 
 const restoreSpaceBlock = 4096
 
-func roundUpRestoreBlock(size int64) int64 {
+func roundUpToBlock(size, block int64) int64 {
 	if size <= 0 {
 		return 0
 	}
-	return (size + restoreSpaceBlock - 1) / restoreSpaceBlock * restoreSpaceBlock
+	return (size + block - 1) / block * block
+}
+
+// blockSize 是 path 所在卷的分配块大小；取不到（或在 Windows 上）时按 4 KiB 算。
+func (s *BackupService) blockSize(path string) int64 {
+	size := int64(0)
+	if s.blockSizeOf != nil {
+		size = s.blockSizeOf(path)
+	} else {
+		size = backupBlockSize(path)
+	}
+	if size <= 0 {
+		return restoreSpaceBlock
+	}
+	return size
 }
 
 type restoreVolumeNeed struct {
@@ -36,23 +54,23 @@ type restoreSpacePlan struct {
 	volumes map[string]*restoreVolumeNeed
 }
 
-// add 把 bytes 记到 path（或它最近一个存在的上级目录）所在的卷上。
-func (p *restoreSpacePlan) add(path string, bytes int64) error {
-	if bytes <= 0 {
-		return nil
-	}
-	path = p.service.existingAncestor(path)
-	volume, err := p.service.volumeKey(path)
+// add 把要写的几样东西记到 location（或它最近一个存在的上级目录）所在的卷上，每样按那块盘的分配块向上取整。
+func (p *restoreSpacePlan) add(location string, sizes ...int64) error {
+	location = p.service.existingAncestor(location)
+	volume, err := p.service.volumeKey(location)
 	if err != nil {
 		return err
 	}
 	need := p.volumes[volume]
 	if need == nil {
-		need = &restoreVolumeNeed{path: path}
+		need = &restoreVolumeNeed{path: location}
 		p.volumes[volume] = need
 		p.order = append(p.order, volume)
 	}
-	need.bytes += bytes
+	block := p.service.blockSize(location)
+	for _, size := range sizes {
+		need.bytes += roundUpToBlock(size, block)
+	}
 	return nil
 }
 
@@ -69,27 +87,23 @@ var errRestoreSpaceUnknown = fmt.Errorf("无法检查恢复所需的磁盘空间
 // 再算空间——那份临时库本身就占着一整个库文件的大小。
 func (s *BackupService) checkRestoreSpace(directory string, request BackupRestoreRequest, manifest *BackupManifest, backend database.Backend) error {
 	plan := &restoreSpacePlan{service: s, volumes: map[string]*restoreVolumeNeed{}}
-	snapshot := roundUpRestoreBlock(request.Size)
 	livePath := database.SQLitePath(s.dataDir)
 	if backend == database.BackendSQLite {
 		database.SweepSQLiteRestoreTemps(livePath)
-		if err := plan.add(filepath.Dir(livePath), snapshot); err != nil {
+		if err := plan.add(filepath.Dir(livePath), request.Size); err != nil {
 			return errRestoreSpaceUnknown
 		}
 	}
-	safety, err := s.estimateSafetyBackup(directory, request, backend, livePath)
+	safetySnapshot, safetyFiles, err := s.estimateSafetyBackup(directory, request, backend, livePath)
 	if err != nil {
 		return errRestoreSpaceUnknown
 	}
-	if err := plan.add(directory, snapshot+safety); err != nil {
+	if err := plan.add(directory, request.Size, safetySnapshot, safetyFiles); err != nil {
 		return errRestoreSpaceUnknown
 	}
 	if manifest != nil {
-		for _, entry := range manifest.Files.Entries {
-			target := filepath.Join(s.dataDir, filepath.FromSlash(backupPackDirectoryOf(entry.Path)))
-			if err := plan.add(filepath.Dir(target), roundUpRestoreBlock(entry.Size)); err != nil {
-				return errRestoreSpaceUnknown
-			}
+		if err := s.planUnpackedFiles(plan, manifest); err != nil {
+			return errRestoreSpaceUnknown
 		}
 	}
 	diskFree := s.diskFree
@@ -110,24 +124,24 @@ func (s *BackupService) checkRestoreSpace(directory string, request BackupRestor
 	return nil
 }
 
-// estimateSafetyBackup 估算恢复前那份安全备份的大小：快照 + 当前整理文件的文件包，都按块取整。
-// SQLite 的快照按库文件（含 WAL）算；Postgres 的转储大小无从预知，取「待恢复的转储」与备份目录里最近一份
-// 转储中较大的那个——两者都是同一份库的转储，量级一致。
-func (s *BackupService) estimateSafetyBackup(directory string, request BackupRestoreRequest, backend database.Backend, livePath string) (int64, error) {
+// estimateSafetyBackup 估算恢复前那份安全备份的两个文件：快照与当前整理文件的文件包。SQLite 的快照按库文件
+// （含 WAL）算；Postgres 的转储大小无从预知，取「待恢复的转储」与备份目录里最近一份转储中较大的那个——两者都是
+// 同一份库的转储，量级一致。
+func (s *BackupService) estimateSafetyBackup(directory string, request BackupRestoreRequest, backend database.Backend, livePath string) (int64, int64, error) {
 	var snapshot int64
 	if backend == database.BackendSQLite {
-		for _, path := range []string{livePath, livePath + "-wal"} {
-			if info, err := os.Stat(path); err == nil {
+		for _, file := range []string{livePath, livePath + "-wal"} {
+			if info, err := os.Stat(file); err == nil {
 				snapshot += info.Size()
 			} else if !os.IsNotExist(err) {
-				return 0, err
+				return 0, 0, err
 			}
 		}
 	} else {
 		snapshot = request.Size
 		entries, err := s.scanBackupEntries(directory)
 		if err != nil {
-			return 0, err
+			return 0, 0, err
 		}
 		for _, entry := range entries {
 			if strings.HasSuffix(entry.name, backupFileSuffix) {
@@ -138,7 +152,44 @@ func (s *BackupService) estimateSafetyBackup(directory string, request BackupRes
 	}
 	files, err := estimateBackupFilesPack(s.dataDir)
 	if err != nil {
-		return 0, err
+		return 0, 0, err
 	}
-	return roundUpRestoreBlock(snapshot) + roundUpRestoreBlock(files), nil
+	return snapshot, files, nil
+}
+
+// planUnpackedFiles 把文件包解出来要占的空间记到各收录目录真实位置的那块盘上（审阅 I-1 / M4）：每个文件按块取整，
+// 暂存目录本身与其下每个子目录各占一块。
+func (s *BackupService) planUnpackedFiles(plan *restoreSpacePlan, manifest *BackupManifest) error {
+	sizes := map[string][]int64{}
+	directories := map[string]map[string]bool{}
+	for _, dir := range restoredBackupDirectories(manifest) {
+		directories[dir] = map[string]bool{".": true}
+	}
+	for _, entry := range manifest.Files.Entries {
+		dir := backupPackDirectoryOf(entry.Path)
+		if directories[dir] == nil {
+			continue
+		}
+		sizes[dir] = append(sizes[dir], entry.Size)
+		for parent := path.Dir(strings.TrimPrefix(entry.Path, dir+"/")); parent != "."; parent = path.Dir(parent) {
+			directories[dir][parent] = true
+		}
+	}
+	for dir, subdirs := range directories {
+		placement, state, err := s.placeCuratedRoot(dir, false)
+		if err != nil {
+			return err
+		}
+		if state == curatedRootUnavailable {
+			continue // checkFilesPackBeforeRestore 已经拒绝
+		}
+		all := append([]int64{}, sizes[dir]...)
+		for range subdirs {
+			all = append(all, 1) // 一个目录占一块
+		}
+		if err := plan.add(placement.Parent, all...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
