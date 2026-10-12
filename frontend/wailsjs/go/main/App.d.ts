@@ -31,6 +31,10 @@ export function AnalyzeEditProject(arg1:services.EditAnalyzeRequest):Promise<ser
 
 export function ApplyLocalMetadataBatch(arg1:services.LocalMetadataBatchApplyRequest):Promise<services.LocalMetadataBatchResult>;
 
+export function ApplyLostPurge(arg1:services.LostPurgeRequest):Promise<services.LostMediaBatchResult>;
+
+export function ApplyLostRelink(arg1:services.LostRelinkApplyRequest):Promise<services.LostMediaBatchResult>;
+
 export function ApplyWatchlistCandidate(arg1:number,arg2:string):Promise<void>;
 
 export function ApproveAITagCandidate(arg1:number):Promise<services.AITaggingReviewItem>;
@@ -92,6 +96,8 @@ export function CancelImageSemanticIndex():Promise<void>;
 export function CancelLocalMetadataBackfill():Promise<void>;
 
 export function CancelLocalMetadataExport():Promise<void>;
+
+export function CancelLostMediaTask():Promise<void>;
 
 export function CancelMovieChartRefresh():Promise<void>;
 
@@ -361,9 +367,13 @@ export function GetLocalMetadataBackfillStatus():Promise<services.LocalMetadataB
 
 export function GetLocalMetadataExportStatus():Promise<services.LocalMetadataExportStatus>;
 
+export function GetLostMediaReport(arg1:string):Promise<services.LostMediaReport>;
+
 export function GetMetadataCompleteness():Promise<services.MetadataCompleteness>;
 
 export function GetMetadataCompletenessByDirectory(arg1:string,arg2:string,arg3:number):Promise<Array<services.MetadataCompletenessDirectory>>;
+
+export function GetOrphanFileReport():Promise<services.OrphanFileReport>;
 
 export function GetPendingWorkSummary():Promise<main.PendingWorkSummary>;
 
@@ -487,6 +497,8 @@ export function ListImageFolderGroups(arg1:services.ImageFilter):Promise<Array<s
 
 export function ListImageTimelineBuckets(arg1:services.ImageFilter):Promise<Array<services.ImageTimelineBucket>>;
 
+export function ListLostMediaItems(arg1:services.LostMediaItemQuery):Promise<services.LostMediaItemPage>;
+
 export function ListMovieChart(arg1:number,arg2:string,arg3:number,arg4:boolean):Promise<services.MovieChartPage>;
 
 export function ListMovieChartYears():Promise<Array<number>>;
@@ -587,6 +599,12 @@ export function PreviewFaceClusterUnlink(arg1:number):Promise<Array<services.Fac
 
 export function PreviewLocalMetadataBatch(arg1:Array<number>):Promise<services.LocalMetadataBatchPreview>;
 
+export function PreviewLostPurge(arg1:services.LostPurgeRequest):Promise<services.LostPurgePreview>;
+
+export function PreviewLostRelinkMove(arg1:services.LostRelinkMoveRequest):Promise<services.LostRelinkPreview>;
+
+export function PreviewLostRelinkSearch(arg1:services.LostRelinkSearchRequest):Promise<services.LostRelinkPreview>;
+
 export function PreviewTagPersonConversion(arg1:number):Promise<services.TagPersonConversionPreview>;
 
 export function PurgeTrashEntries(arg1:string,arg2:Array<number>):Promise<services.BatchResult>;
@@ -600,6 +618,8 @@ export function ReassignFaceCluster(arg1:number,arg2:number,arg3:boolean):Promis
 export function RecheckImages(arg1:Array<number>):Promise<services.ImageScanResult>;
 
 export function RecheckVideos(arg1:Array<number>):Promise<services.LibraryReconcileSummary>;
+
+export function ReclaimOrphanFiles(arg1:Array<string>):Promise<services.OrphanReclaimResult>;
 
 export function RecordImageView(arg1:number):Promise<services.ImageViewResult>;
 

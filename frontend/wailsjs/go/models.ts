@@ -8405,6 +8405,464 @@ export namespace services {
 	
 	
 	
+	export class LostMediaItemOutcome {
+	    id: number;
+	    outcome: string;
+	    reason: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaItemOutcome(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.outcome = source["outcome"];
+	        this.reason = source["reason"];
+	    }
+	}
+	export class LostMediaBatchResult {
+	    done: number;
+	    skipped: number;
+	    failed: number;
+	    cancelled: boolean;
+	    items: LostMediaItemOutcome[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaBatchResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.done = source["done"];
+	        this.skipped = source["skipped"];
+	        this.failed = source["failed"];
+	        this.cancelled = source["cancelled"];
+	        this.items = this.convertValues(source["items"], LostMediaItemOutcome);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LostMediaItem {
+	    id: number;
+	    name: string;
+	    path: string;
+	    directory: string;
+	    size: number;
+	    source: string;
+	    reason: string;
+	    purgeable: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaItem(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.path = source["path"];
+	        this.directory = source["directory"];
+	        this.size = source["size"];
+	        this.source = source["source"];
+	        this.reason = source["reason"];
+	        this.purgeable = source["purgeable"];
+	    }
+	}
+	export class LostMediaDirectoryGroup {
+	    directory: string;
+	    count: number;
+	    size: number;
+	    purgeable: number;
+	    reasons: Record<string, number>;
+	    samples: LostMediaItem[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaDirectoryGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.directory = source["directory"];
+	        this.count = source["count"];
+	        this.size = source["size"];
+	        this.purgeable = source["purgeable"];
+	        this.reasons = source["reasons"];
+	        this.samples = this.convertValues(source["samples"], LostMediaItem);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	
+	export class LostMediaItemPage {
+	    items: LostMediaItem[];
+	    has_more: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaItemPage(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.items = this.convertValues(source["items"], LostMediaItem);
+	        this.has_more = source["has_more"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LostMediaItemQuery {
+	    kind: string;
+	    directory: string;
+	    after_id: number;
+	    limit: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaItemQuery(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.directory = source["directory"];
+	        this.after_id = source["after_id"];
+	        this.limit = source["limit"];
+	    }
+	}
+	export class LostMediaRootGroup {
+	    root: string;
+	    label: string;
+	    state: string;
+	    count: number;
+	    size: number;
+	    purgeable: number;
+	    reasons: Record<string, number>;
+	    directories: LostMediaDirectoryGroup[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaRootGroup(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.root = source["root"];
+	        this.label = source["label"];
+	        this.state = source["state"];
+	        this.count = source["count"];
+	        this.size = source["size"];
+	        this.purgeable = source["purgeable"];
+	        this.reasons = source["reasons"];
+	        this.directories = this.convertValues(source["directories"], LostMediaDirectoryGroup);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LostMediaReport {
+	    kind: string;
+	    total: number;
+	    total_size: number;
+	    purgeable: number;
+	    reasons: Record<string, number>;
+	    roots: LostMediaRootGroup[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LostMediaReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.total = source["total"];
+	        this.total_size = source["total_size"];
+	        this.purgeable = source["purgeable"];
+	        this.reasons = source["reasons"];
+	        this.roots = this.convertValues(source["roots"], LostMediaRootGroup);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	
+	export class LostPurgePreview {
+	    kind: string;
+	    count: number;
+	    size: number;
+	    not_purgeable: number;
+	    play_events: number;
+	    image_view_events: number;
+	    tag_links: number;
+	    person_links: number;
+	    collection_links: number;
+	    version_groups_dissolved: number;
+	    version_groups_shrunk: number;
+	    bookmarks: number;
+	    diary_entries: number;
+	    derived_bytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostPurgePreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.count = source["count"];
+	        this.size = source["size"];
+	        this.not_purgeable = source["not_purgeable"];
+	        this.play_events = source["play_events"];
+	        this.image_view_events = source["image_view_events"];
+	        this.tag_links = source["tag_links"];
+	        this.person_links = source["person_links"];
+	        this.collection_links = source["collection_links"];
+	        this.version_groups_dissolved = source["version_groups_dissolved"];
+	        this.version_groups_shrunk = source["version_groups_shrunk"];
+	        this.bookmarks = source["bookmarks"];
+	        this.diary_entries = source["diary_entries"];
+	        this.derived_bytes = source["derived_bytes"];
+	    }
+	}
+	export class LostPurgeRequest {
+	    kind: string;
+	    ids: number[];
+	    confirm: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostPurgeRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.ids = source["ids"];
+	        this.confirm = source["confirm"];
+	    }
+	}
+	export class LostRelinkPair {
+	    id: number;
+	    new_path: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostRelinkPair(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.new_path = source["new_path"];
+	    }
+	}
+	export class LostRelinkApplyRequest {
+	    kind: string;
+	    pairs: LostRelinkPair[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LostRelinkApplyRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.pairs = this.convertValues(source["pairs"], LostRelinkPair);
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LostRelinkCandidate {
+	    id: number;
+	    name: string;
+	    old_path: string;
+	    size: number;
+	    new_path: string;
+	    new_size: number;
+	    match: string;
+	    outside_roots: boolean;
+	    occupied: boolean;
+	    selectable: boolean;
+	    selected: boolean;
+	    candidates: string[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LostRelinkCandidate(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.id = source["id"];
+	        this.name = source["name"];
+	        this.old_path = source["old_path"];
+	        this.size = source["size"];
+	        this.new_path = source["new_path"];
+	        this.new_size = source["new_size"];
+	        this.match = source["match"];
+	        this.outside_roots = source["outside_roots"];
+	        this.occupied = source["occupied"];
+	        this.selectable = source["selectable"];
+	        this.selected = source["selected"];
+	        this.candidates = source["candidates"];
+	    }
+	}
+	export class LostRelinkMoveRequest {
+	    kind: string;
+	    old_directory: string;
+	    new_directory: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostRelinkMoveRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.old_directory = source["old_directory"];
+	        this.new_directory = source["new_directory"];
+	    }
+	}
+	
+	export class LostRelinkPreview {
+	    kind: string;
+	    items: LostRelinkCandidate[];
+	    unmatched: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new LostRelinkPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.items = this.convertValues(source["items"], LostRelinkCandidate);
+	        this.unmatched = source["unmatched"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class LostRelinkSearchRequest {
+	    kind: string;
+	    directory: string;
+	    item_ids: number[];
+	
+	    static createFrom(source: any = {}) {
+	        return new LostRelinkSearchRequest(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.kind = source["kind"];
+	        this.directory = source["directory"];
+	        this.item_ids = source["item_ids"];
+	    }
+	}
 	export class MediaMetadataMergeOptions {
 	    skip_playback_state: boolean;
 	    skip_subtitle: boolean;
@@ -8719,6 +9177,76 @@ export namespace services {
 		    }
 		    return a;
 		}
+	}
+	export class OrphanFileLocation {
+	    key: string;
+	    label: string;
+	    files: number;
+	    bytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrphanFileLocation(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.key = source["key"];
+	        this.label = source["label"];
+	        this.files = source["files"];
+	        this.bytes = source["bytes"];
+	    }
+	}
+	export class OrphanFileReport {
+	    locations: OrphanFileLocation[];
+	    total_files: number;
+	    total_bytes: number;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrphanFileReport(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.locations = this.convertValues(source["locations"], OrphanFileLocation);
+	        this.total_files = source["total_files"];
+	        this.total_bytes = source["total_bytes"];
+	    }
+	
+		convertValues(a: any, classs: any, asMap: boolean = false): any {
+		    if (!a) {
+		        return a;
+		    }
+		    if (a.slice && a.map) {
+		        return (a as any[]).map(elem => this.convertValues(elem, classs));
+		    } else if ("object" === typeof a) {
+		        if (asMap) {
+		            for (const key of Object.keys(a)) {
+		                a[key] = new classs(a[key]);
+		            }
+		            return a;
+		        }
+		        return new classs(a);
+		    }
+		    return a;
+		}
+	}
+	export class OrphanReclaimResult {
+	    files: number;
+	    bytes: number;
+	    failed: number;
+	    cancelled: boolean;
+	
+	    static createFrom(source: any = {}) {
+	        return new OrphanReclaimResult(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.files = source["files"];
+	        this.bytes = source["bytes"];
+	        this.failed = source["failed"];
+	        this.cancelled = source["cancelled"];
+	    }
 	}
 	
 	export class PerceptualHashFailure {

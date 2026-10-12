@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -423,19 +424,36 @@ func (s *PlaybackProxyService) GetPlaybackProxyUsage() (PlaybackProxyUsage, erro
 	if !s.dirAvailable() {
 		return usage, nil
 	}
+	orphans, foreign, err := s.orphanProxyFiles(known)
+	if err != nil {
+		return usage, err
+	}
+	usage.ForeignFiles = foreign
+	for _, orphan := range orphans {
+		usage.OrphanCount++
+		usage.OrphanBytes += orphan.Size()
+	}
+	return usage, nil
+}
+
+// orphanProxyFiles 列出代理目录里符合命名规则、却不在 known（ready 行对应的文件名）里的文件，以及不符合命名规则的
+// 文件数。孤儿统计（GetPlaybackProxyUsage）与孤儿回收（RemoveOrphanPlaybackProxies）共用这一个判定。
+func (s *PlaybackProxyService) orphanProxyFiles(known map[string]struct{}) ([]os.FileInfo, int, error) {
 	entries, err := os.ReadDir(s.Dir())
 	if err != nil {
 		if os.IsNotExist(err) {
-			return usage, nil
+			return nil, 0, nil
 		}
-		return usage, fmt.Errorf("读取播放代理目录失败: %w", err)
+		return nil, 0, fmt.Errorf("读取播放代理目录失败: %w", err)
 	}
+	var orphans []os.FileInfo
+	foreign := 0
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
 		}
 		if !playbackProxyFileNamePattern.MatchString(entry.Name()) {
-			usage.ForeignFiles++
+			foreign++
 			continue
 		}
 		if _, ok := known[entry.Name()]; ok {
@@ -445,10 +463,55 @@ func (s *PlaybackProxyService) GetPlaybackProxyUsage() (PlaybackProxyUsage, erro
 		if err != nil {
 			continue
 		}
-		usage.OrphanCount++
-		usage.OrphanBytes += info.Size()
+		orphans = append(orphans, info)
 	}
-	return usage, nil
+	return orphans, foreign, nil
+}
+
+// RemoveOrphanPlaybackProxies 只删孤儿代理文件（失联页「回收孤儿文件」，D-LD-05），判定与 GetPlaybackProxyUsage 的
+// 孤儿统计相同：删除前现读一遍 ready 行；正在排队或转封装的视频的文件跳过（它们的行在发布之后才写入）。
+// 删除失败只计数。
+func (s *PlaybackProxyService) RemoveOrphanPlaybackProxies() (removed int, bytes int64, failed int, err error) {
+	if s == nil || !s.dirAvailable() {
+		return 0, 0, 0, ErrPlaybackProxyDirUnavailable
+	}
+	if database.DB == nil {
+		return 0, 0, 0, errors.New("数据库未初始化")
+	}
+	var rows []models.VideoPlaybackProxy
+	if err := database.DB.Where("status = ?", models.PlaybackProxyStatusReady).Find(&rows).Error; err != nil {
+		return 0, 0, 0, fmt.Errorf("读取播放代理记录失败: %w", err)
+	}
+	known := make(map[string]struct{}, len(rows))
+	for _, row := range rows {
+		known[playbackProxyFileName(row.VideoID, playbackProxyFingerprint{size: row.SourceSize, modTimeNS: row.SourceModTimeNS})] = struct{}{}
+	}
+	s.mu.Lock()
+	busy := make(map[string]struct{}, len(s.inFlight))
+	for videoID := range s.inFlight {
+		busy[strconv.FormatUint(uint64(videoID), 10)] = struct{}{}
+	}
+	s.mu.Unlock()
+	orphans, _, err := s.orphanProxyFiles(known)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	for _, orphan := range orphans {
+		if _, inFlight := busy[strings.SplitN(orphan.Name(), "-", 2)[0]]; inFlight {
+			continue
+		}
+		if err := os.Remove(filepath.Join(s.Dir(), orphan.Name())); err != nil && !os.IsNotExist(err) {
+			failed++
+			continue
+		}
+		removed++
+		bytes += orphan.Size()
+	}
+	if removed > 0 {
+		log.Printf("播放代理孤儿文件已回收 removed=%d failed=%d", removed, failed)
+		s.emitStatus()
+	}
+	return removed, bytes, failed, nil
 }
 
 // cacheLimitBytes 读设置里的上限；读不到就按默认 50 GiB。

@@ -1,0 +1,151 @@
+import { flushPromises, mount } from '@vue/test-utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const api = vi.hoisted(() => new Proxy({}, {
+  get(target, prop) {
+    if (typeof prop === 'symbol' || prop === 'then') return undefined;
+    if (!target[prop]) target[prop] = vi.fn(() => Promise.resolve(null));
+    return target[prop];
+  }
+}));
+vi.mock('../../../wailsjs/go/main/App', () => api);
+
+import LostMediaPanel from './LostMediaPanel.vue';
+
+const item = (id, extra = {}) => ({ id, name: `${id}.mp4`, path: `/old/a/${id}.mp4`, directory: '/old/a', size: 10, source: 'stale', reason: 'missing', purgeable: true, ...extra });
+
+function report(kind = 'video') {
+  return {
+    kind, total: 3, total_size: 30, purgeable: 2, reasons: { missing: 2, offline: 1 },
+    roots: [
+      { root: '/old', label: '旧盘', state: 'active', count: 2, size: 20, purgeable: 2, reasons: { missing: 2 },
+        directories: [{ directory: '/old/a', count: 2, size: 20, purgeable: 2, reasons: { missing: 2 }, samples: [item(1), item(2)] }] },
+      { root: '/Volumes/X', label: '外接盘', state: 'active', count: 1, size: 10, purgeable: 0, reasons: { offline: 1 },
+        directories: [{ directory: '/Volumes/X/m', count: 1, size: 10, purgeable: 0, reasons: { offline: 1 }, samples: [] }] }
+    ]
+  };
+}
+
+async function mountPanel() {
+  const wrapper = mount(LostMediaPanel, { attachTo: document.body });
+  await flushPromises();
+  return wrapper;
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  document.body.innerHTML = '';
+  api.GetLostMediaReport.mockImplementation(kind => Promise.resolve(report(kind)));
+  api.ListLostMediaItems.mockResolvedValue({ items: [item(1), item(2)], has_more: false });
+  api.GetOrphanFileReport.mockResolvedValue({ locations: [{ key: 'thumbnails', label: '视频缩略图与拖动预览帧', files: 2, bytes: 2048 }], total_files: 2, total_bytes: 2048 });
+  api.SelectDirectory.mockResolvedValue('/new');
+});
+
+describe('失联数据面板（D-LD-*）', () => {
+  it('按根 → 目录分组，带原因与可清除标记；卷未挂载的目录只展示、不给操作', async () => {
+    const wrapper = await mountPanel();
+    expect(api.GetLostMediaReport).toHaveBeenCalledWith('video');
+    expect(wrapper.get('[data-test="lost-summary"]').text()).toContain('可找回或清除 2');
+    const dirs = wrapper.findAll('[data-test="lost-directory"]');
+    expect(dirs).toHaveLength(2);
+    expect(dirs[0].text()).toContain('可清除 2');
+    expect(dirs[1].text()).toContain('卷未挂载 1');
+    expect(dirs[1].find('[data-test="lost-dir-wait"]').exists()).toBe(true);
+    expect(dirs[1].get('[data-test="lost-dir-purge"]').attributes('disabled')).toBeDefined();
+    expect(dirs[1].get('[data-test="lost-dir-move"]').attributes('disabled')).toBeDefined();
+    await wrapper.get('[data-test="lost-kind-image"]').trigger('click');
+    await flushPromises();
+    expect(api.GetLostMediaReport).toHaveBeenLastCalledWith('image');
+    wrapper.unmount();
+  });
+
+  it('目录搬家：选新位置 → 预览默认勾选可靠配对，不可执行的不能勾；执行后通知宿主并重读报告', async () => {
+    api.PreviewLostRelinkMove.mockResolvedValue({ kind: 'video', unmatched: 1, items: [
+      { id: 1, name: '1.mp4', old_path: '/old/a/1.mp4', new_path: '/new/1.mp4', match: 'exact', selectable: true, selected: true, candidates: [] },
+      { id: 2, name: '2.mp4', old_path: '/old/a/2.mp4', new_path: '/new/2.mp4', match: 'size_mismatch', selectable: false, selected: false, candidates: [] },
+      { id: 3, name: '3.mp4', old_path: '/old/a/3.mp4', new_path: '/elsewhere/3.mp4', match: 'exact', outside_roots: true, selectable: false, selected: false, candidates: [] }
+    ] });
+    api.ApplyLostRelink.mockResolvedValue({ done: 1, skipped: 0, failed: 0, cancelled: false, items: [] });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="lost-dir-move"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewLostRelinkMove).toHaveBeenCalledWith({ kind: 'video', old_directory: '/old/a', new_directory: '/new' });
+    const toggles = wrapper.findAll('[data-test="lost-relink-toggle"]');
+    expect(toggles.map(t => t.element.checked)).toEqual([true, false, false]);
+    expect(toggles[1].attributes('disabled')).toBeDefined();
+    expect(wrapper.get('[data-test="lost-relink-outside-hint"]').text()).toContain('先把这个文件夹加为扫描目录');
+    await wrapper.get('[data-test="lost-relink-apply"]').trigger('click');
+    await flushPromises();
+    expect(api.ApplyLostRelink).toHaveBeenCalledWith({ kind: 'video', pairs: [{ id: 1, new_path: '/new/1.mp4' }] });
+    expect(wrapper.get('[data-test="lost-relink-result"]').text()).toContain('已找回 1 条');
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [] }]]);
+    expect(api.GetLostMediaReport).toHaveBeenCalledTimes(2);
+    wrapper.unmount();
+  });
+
+  it('在文件夹里找：展开后勾选的条目才参与；取消选文件夹什么都不做', async () => {
+    api.PreviewLostRelinkSearch.mockResolvedValue({ kind: 'video', unmatched: 0, items: [] });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="lost-dir-expand"]').trigger('click');
+    await flushPromises();
+    await wrapper.findAll('[data-test="lost-item-toggle"]')[1].setValue(true);
+    await wrapper.get('[data-test="lost-dir-search"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewLostRelinkSearch).toHaveBeenCalledWith({ kind: 'video', directory: '/new', item_ids: [2] });
+    api.SelectDirectory.mockResolvedValueOnce('');
+    await wrapper.get('[data-test="lost-search-all"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewLostRelinkSearch).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('清除：列出连带影响，先备份交给宿主，输入「清除记录」才可执行；结果按原因列出跳过', async () => {
+    api.PreviewLostPurge.mockResolvedValue({ kind: 'video', count: 2, size: 20, not_purgeable: 0, play_events: 7, tag_links: 3, person_links: 1,
+      collection_links: 0, version_groups_dissolved: 1, version_groups_shrunk: 0, bookmarks: 2, diary_entries: 1, derived_bytes: 4096 });
+    api.ApplyLostPurge.mockResolvedValue({ done: 1, skipped: 1, failed: 0, cancelled: false, items: [{ id: 2, outcome: 'skipped', reason: 'volume_offline' }] });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="lost-dir-purge"]').trigger('click');
+    await flushPromises();
+    expect(api.ListLostMediaItems).toHaveBeenCalledWith({ kind: 'video', directory: '/old/a', after_id: 0, limit: 500 });
+    expect(api.PreviewLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2], confirm: '' });
+    expect(wrapper.get('[data-test="lost-purge-impact-plays"]').text()).toContain('7 条');
+    expect(wrapper.get('[data-test="lost-purge-impact-versions"]').text()).toContain('解散 1 个');
+    expect(wrapper.get('[data-test="lost-purge-impact-notes"]').text()).toContain('3 条');
+    await wrapper.get('[data-test="lost-purge-backup"]').trigger('click');
+    expect(wrapper.emitted('run-command')).toEqual([['action:backup-now', '立即备份数据库']]);
+    const apply = wrapper.get('[data-test="lost-purge-apply"]');
+    expect(apply.attributes('disabled')).toBeDefined();
+    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除');
+    expect(apply.attributes('disabled')).toBeDefined();
+    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除记录');
+    expect(apply.attributes('disabled')).toBeUndefined();
+    await apply.trigger('click');
+    await flushPromises();
+    expect(api.ApplyLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2], confirm: '清除记录' });
+    expect(wrapper.get('[data-test="lost-purge-result"]').text()).toContain('已清除 1 条，跳过 1 条');
+    expect(wrapper.get('[data-test="lost-purge-skip-reason"]').text()).toContain('所在的卷没挂载：1 条');
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [1] }]]);
+    wrapper.unmount();
+  });
+
+  it('孤儿文件：按位置列出，勾选后回收并重新统计', async () => {
+    api.ReclaimOrphanFiles.mockResolvedValue({ files: 2, bytes: 2048, failed: 0, cancelled: false });
+    const wrapper = await mountPanel();
+    expect(wrapper.get('[data-test="lost-orphan-row"]').text()).toContain('2 个');
+    await wrapper.get('[data-test="lost-orphan-toggle-thumbnails"]').setValue(true);
+    api.GetOrphanFileReport.mockResolvedValue({ locations: [{ key: 'thumbnails', label: '视频缩略图与拖动预览帧', files: 0, bytes: 0 }], total_files: 0, total_bytes: 0 });
+    await wrapper.get('[data-test="lost-orphans-reclaim"]').trigger('click');
+    await flushPromises();
+    expect(api.ReclaimOrphanFiles).toHaveBeenCalledWith(['thumbnails']);
+    expect(wrapper.get('[data-test="lost-orphans-result"]').text()).toContain('已回收 2 个文件');
+    expect(wrapper.find('[data-test="lost-orphans-empty"]').exists()).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('后端忙或带路径的错误：只显示固定说明，不显示原文', async () => {
+    api.GetLostMediaReport.mockRejectedValueOnce(new Error('open /Volumes/A/secret: permission denied'));
+    const wrapper = await mountPanel();
+    expect(wrapper.get('[data-test="lost-error"]').text()).toBe('读取失联条目失败，请稍后重试。');
+    wrapper.unmount();
+  });
+});

@@ -54,6 +54,14 @@ export function ApplyLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['ApplyLocalMetadataBatch'](arg1);
 }
 
+export function ApplyLostPurge(arg1) {
+  return window['go']['main']['App']['ApplyLostPurge'](arg1);
+}
+
+export function ApplyLostRelink(arg1) {
+  return window['go']['main']['App']['ApplyLostRelink'](arg1);
+}
+
 export function ApplyWatchlistCandidate(arg1, arg2) {
   return window['go']['main']['App']['ApplyWatchlistCandidate'](arg1, arg2);
 }
@@ -176,6 +184,10 @@ export function CancelLocalMetadataBackfill() {
 
 export function CancelLocalMetadataExport() {
   return window['go']['main']['App']['CancelLocalMetadataExport']();
+}
+
+export function CancelLostMediaTask() {
+  return window['go']['main']['App']['CancelLostMediaTask']();
 }
 
 export function CancelMovieChartRefresh() {
@@ -714,12 +726,20 @@ export function GetLocalMetadataExportStatus() {
   return window['go']['main']['App']['GetLocalMetadataExportStatus']();
 }
 
+export function GetLostMediaReport(arg1) {
+  return window['go']['main']['App']['GetLostMediaReport'](arg1);
+}
+
 export function GetMetadataCompleteness() {
   return window['go']['main']['App']['GetMetadataCompleteness']();
 }
 
 export function GetMetadataCompletenessByDirectory(arg1, arg2, arg3) {
   return window['go']['main']['App']['GetMetadataCompletenessByDirectory'](arg1, arg2, arg3);
+}
+
+export function GetOrphanFileReport() {
+  return window['go']['main']['App']['GetOrphanFileReport']();
 }
 
 export function GetPendingWorkSummary() {
@@ -966,6 +986,10 @@ export function ListImageTimelineBuckets(arg1) {
   return window['go']['main']['App']['ListImageTimelineBuckets'](arg1);
 }
 
+export function ListLostMediaItems(arg1) {
+  return window['go']['main']['App']['ListLostMediaItems'](arg1);
+}
+
 export function ListMovieChart(arg1, arg2, arg3, arg4) {
   return window['go']['main']['App']['ListMovieChart'](arg1, arg2, arg3, arg4);
 }
@@ -1166,6 +1190,18 @@ export function PreviewLocalMetadataBatch(arg1) {
   return window['go']['main']['App']['PreviewLocalMetadataBatch'](arg1);
 }
 
+export function PreviewLostPurge(arg1) {
+  return window['go']['main']['App']['PreviewLostPurge'](arg1);
+}
+
+export function PreviewLostRelinkMove(arg1) {
+  return window['go']['main']['App']['PreviewLostRelinkMove'](arg1);
+}
+
+export function PreviewLostRelinkSearch(arg1) {
+  return window['go']['main']['App']['PreviewLostRelinkSearch'](arg1);
+}
+
 export function PreviewTagPersonConversion(arg1) {
   return window['go']['main']['App']['PreviewTagPersonConversion'](arg1);
 }
@@ -1192,6 +1228,10 @@ export function RecheckImages(arg1) {
 
 export function RecheckVideos(arg1) {
   return window['go']['main']['App']['RecheckVideos'](arg1);
+}
+
+export function ReclaimOrphanFiles(arg1) {
+  return window['go']['main']['App']['ReclaimOrphanFiles'](arg1);
 }
 
 export function RecordImageView(arg1) {
