@@ -328,10 +328,11 @@ func TestAPP02MaintenanceEntryStillAcquiresPathWriteLockFixK(t *testing.T) {
 	fenceRelease = nil
 }
 
-// 守卫：libraryPathMutationMu 的写锁只经 lockLibraryPaths 与维护入口 BeginLibraryMaintenance 获取；
+// 守卫：libraryPathMutationMu 的写锁只经 lockLibraryPaths（及其可取消版本 lockLibraryPathsContext，同一个
+// acquireLibraryPathContext、围栏语义相同）与维护入口 BeginLibraryMaintenance 获取；
 // 维护入口在服务层只允许下面列出的调用点（其余一律改用 lockLibraryPaths）。
 func TestAPP02NoDirectPathWriteLockOutsideHelperFixK(t *testing.T) {
-	writeLockOwners := map[string]bool{"lockLibraryPaths": true, "BeginLibraryMaintenance": true}
+	writeLockOwners := map[string]bool{"lockLibraryPaths": true, "lockLibraryPathsContext": true, "BeginLibraryMaintenance": true}
 	// 服务层没有任何调用点可以把维护入口当普通写锁用（超分发布已改用 lockLibraryPaths）。
 	maintenanceCallers := map[string]bool{}
 

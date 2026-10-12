@@ -89,3 +89,23 @@ func TestLostMediaOrphanFilesReportAndReclaim(t *testing.T) {
 		t.Fatalf("未知位置应报错: %v", err)
 	}
 }
+
+// M5：正在排队或转封装的视频的代理文件不当孤儿删（它的行在发布之后才写入）。
+func TestRemoveOrphanPlaybackProxiesSkipsInFlightVideos(t *testing.T) {
+	_, dataDir := setupLostMediaTest(t)
+	proxies := NewPlaybackProxyService(dataDir, nil)
+	busy := filepath.Join(dataDir, "proxies", "41-0123456789abcdef.mp4")
+	idle := filepath.Join(dataDir, "proxies", "42-0123456789abcdef.mp4")
+	lostTestWriteFile(t, busy, 3)
+	lostTestWriteFile(t, idle, 4)
+	proxies.mu.Lock()
+	proxies.inFlight[41] = struct{}{}
+	proxies.mu.Unlock()
+	removed, bytes, failed, err := proxies.RemoveOrphanPlaybackProxies()
+	if err != nil || removed != 1 || bytes != 4 || failed != 0 {
+		t.Fatalf("应只回收空闲视频的孤儿: removed=%d bytes=%d failed=%d err=%v", removed, bytes, failed, err)
+	}
+	if _, err := os.Stat(busy); err != nil {
+		t.Fatalf("在处理中的视频的代理文件不应被删: %v", err)
+	}
+}

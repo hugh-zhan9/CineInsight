@@ -1,6 +1,9 @@
 package services
 
 import (
+	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 	"video-master/database"
@@ -221,5 +224,58 @@ func TestLostMediaRelinkApplyRechecksEachPair(t *testing.T) {
 	database.DB.First(&unchanged, resized.ID)
 	if !unchanged.IsStale || unchanged.Path != resized.Path {
 		t.Fatalf("跳过的条目不应被改: %+v", unchanged)
+	}
+}
+
+// I1：扫描器回收站行找回后按新路径重建字幕索引（扫描器软删时字幕索引已被清掉，与两条既有恢复路径同口径）。
+func TestLostMediaRelinkScannerTrashRebuildsSubtitleIndex(t *testing.T) {
+	service, _ := setupLostMediaTest(t)
+	root := lostTestRoot(t, LostMediaKindVideo)
+	trashed, _ := lostTestScannerTrashVideo(t, filepath.Join(root, "old", "film.mp4"), 6)
+	newPath := filepath.Join(root, "new", "film.mp4")
+	lostTestWriteFile(t, newPath, 6)
+	srt := "1\n00:00:01,000 --> 00:00:02,000\n你好\n\n2\n00:00:03,000 --> 00:00:04,000\n再见\n"
+	if err := os.WriteFile(filepath.Join(root, "new", "film.srt"), []byte(srt), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ApplyLostRelink(lostTestContext(), LostRelinkApplyRequest{Kind: LostMediaKindVideo,
+		Pairs: []LostRelinkPair{{ID: trashed.ID, NewPath: newPath}}})
+	if err != nil || result.Done != 1 {
+		t.Fatalf("应找回 1 条: %+v err=%v", result, err)
+	}
+	if n := lostCount(t, "subtitle_segments", "video_id = ?", trashed.ID); n != 2 {
+		t.Fatalf("字幕索引应按新路径重建出 2 段，实际 %d", n)
+	}
+	var state models.SubtitleIndexState
+	if err := database.DB.Where("video_id = ?", trashed.ID).First(&state).Error; err != nil || state.SubtitlePath != filepath.Join(root, "new", "film.srt") {
+		t.Fatalf("字幕索引状态应指向新路径的字幕: %+v err=%v", state, err)
+	}
+}
+
+// M3：补探测在放开全局路径写锁之后做；探测失败不算这一条失败。
+func TestLostMediaRelinkProbesAfterReleasingPathLock(t *testing.T) {
+	service, _ := setupLostMediaTest(t)
+	lockFree, probes := 0, 0
+	runner := func(ctx context.Context, path string) ([]byte, string, error) {
+		probes++
+		if libraryPathMutationMu.TryLock() {
+			lockFree++
+			libraryPathMutationMu.Unlock()
+		}
+		return nil, "", errors.New("probe failed")
+	}
+	service.SetDependencies(&VideoService{mediaProbe: newMediaProbeServiceWithRunner(runner)}, NewImageService(), nil)
+	root := lostTestRoot(t, LostMediaKindVideo)
+	stale := lostTestStaleVideo(t, filepath.Join(root, "old", "a.mp4"), 3, models.StaleReasonMissingFile)
+	trashed, _ := lostTestScannerTrashVideo(t, filepath.Join(root, "old", "b.mp4"), 4)
+	lostTestWriteFile(t, filepath.Join(root, "new", "a.mp4"), 3)
+	lostTestWriteFile(t, filepath.Join(root, "new", "b.mp4"), 4)
+	result, err := service.ApplyLostRelink(lostTestContext(), LostRelinkApplyRequest{Kind: LostMediaKindVideo, Pairs: []LostRelinkPair{
+		{ID: stale.ID, NewPath: filepath.Join(root, "new", "a.mp4")}, {ID: trashed.ID, NewPath: filepath.Join(root, "new", "b.mp4")}}})
+	if err != nil || result.Done != 2 || result.Failed != 0 {
+		t.Fatalf("探测失败不应让找回算失败: %+v err=%v", result, err)
+	}
+	if probes != 2 || lockFree != 2 {
+		t.Fatalf("两条都应补探测，且探测时路径写锁已放开: probes=%d lockFree=%d", probes, lockFree)
 	}
 }

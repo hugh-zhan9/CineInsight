@@ -15,7 +15,12 @@ func (a *App) initLostMedia(dataDir string) {
 	a.dataCare.lost.SetDependencies(a.videoService, a.imageService, a.playbackProxies)
 }
 
-func (a *App) startLostMedia(ctx context.Context, emit func(event string, data any)) {}
+// startLostMedia 接上播放队列变更通知：清除删掉了待播队列里的条目时，队列面板按同一个事件重读。
+func (a *App) startLostMedia(ctx context.Context, emit func(event string, data any)) {
+	if a.dataCare.lost != nil {
+		a.dataCare.lost.SetPlaybackQueueEmitter(func(sequence uint64) { emit("playback-queue-state", sequence) })
+	}
+}
 
 func (a *App) stopLostMedia() {
 	if a.dataCare.lost != nil {

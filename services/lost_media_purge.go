@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 	"video-master/database"
 	"video-master/models"
@@ -23,43 +24,55 @@ type LostPurgeRequest struct {
 	Confirm string `json:"confirm"`
 }
 
-// LostPurgePreview 是清除的连带影响（详细设计 1.3），只统计可清除的条目。观看笔记保留，只告知。
+// LostPurgePreview 是清除的连带影响（详细设计 1.3），只统计通过逐条复核（与执行同一套，只读）的条目。
+// IDs 是统计到的那些条目：确认后只执行它们（执行时还会再复核一次）；Skipped 是其余条目按跳过原因的计数。
+// 观看笔记保留，只告知。
 type LostPurgePreview struct {
-	Kind                   string `json:"kind"`
-	Count                  int    `json:"count"`
-	Size                   int64  `json:"size"`
-	NotPurgeable           int    `json:"not_purgeable"`
-	PlayEvents             int64  `json:"play_events"`
-	ImageViewEvents        int64  `json:"image_view_events"`
-	TagLinks               int64  `json:"tag_links"`
-	PersonLinks            int64  `json:"person_links"`
-	CollectionLinks        int64  `json:"collection_links"`
-	VersionGroupsDissolved int    `json:"version_groups_dissolved"`
-	VersionGroupsShrunk    int    `json:"version_groups_shrunk"`
-	Bookmarks              int64  `json:"bookmarks"`
-	DiaryEntries           int64  `json:"diary_entries"`
-	DerivedBytes           int64  `json:"derived_bytes"`
+	Kind                   string         `json:"kind"`
+	IDs                    []uint         `json:"ids"`
+	Count                  int            `json:"count"`
+	Size                   int64          `json:"size"`
+	NotPurgeable           int            `json:"not_purgeable"`
+	Skipped                map[string]int `json:"skipped"`
+	PlayEvents             int64          `json:"play_events"`
+	ImageViewEvents        int64          `json:"image_view_events"`
+	TagLinks               int64          `json:"tag_links"`
+	PersonLinks            int64          `json:"person_links"`
+	CollectionLinks        int64          `json:"collection_links"`
+	VersionGroupsDissolved int            `json:"version_groups_dissolved"`
+	VersionGroupsShrunk    int            `json:"version_groups_shrunk"`
+	Bookmarks              int64          `json:"bookmarks"`
+	DiaryEntries           int64          `json:"diary_entries"`
+	DerivedBytes           int64          `json:"derived_bytes"`
 }
 
-// purgeableLostRows 取给定 id 里仍处于可清除归类的失联记录（按 id 升序）与不可清除的条数。
-func purgeableLostRows(ctx context.Context, kind string, ids []uint) ([]lostRow, int, error) {
+// purgeableLostRows 对给定 id 逐条做与执行相同的复核（purgeCheckRow，只读），返回通过的记录（按请求顺序）与
+// 其余条目按跳过原因的计数。
+func purgeableLostRows(ctx context.Context, kind string, ids []uint) ([]lostRow, map[string]int, error) {
 	ids = uniqueUintIDs(ids)
 	found, err := loadLostRowsByID(ctx, kind, ids)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	classifier, err := newLostClassifier(kind)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	rows := make([]lostRow, 0, len(found))
+	skipped := map[string]int{}
 	for _, id := range ids {
 		row, ok := found[id]
-		if ok && lostReasonActionable(classifier.reason(row)) {
+		var skip errLostSkip
+		switch err := purgeCheckRow(ctx, kind, classifier, row, ok); {
+		case err == nil:
 			rows = append(rows, row)
+		case errors.As(err, &skip):
+			skipped[skip.reason]++
+		default:
+			return nil, nil, err
 		}
 	}
-	return rows, len(ids) - len(rows), nil
+	return rows, skipped, nil
 }
 
 // countIn 分批数 table 里 column 落在 ids 中的行。
@@ -81,17 +94,21 @@ func (s *LostMediaService) PreviewLostPurge(ctx context.Context, request LostPur
 	if err := validLostMediaKind(request.Kind); err != nil {
 		return nil, err
 	}
-	rows, notPurgeable, err := purgeableLostRows(ctx, request.Kind, request.IDs)
+	rows, skipped, err := purgeableLostRows(ctx, request.Kind, request.IDs)
 	if err != nil {
 		return nil, fmt.Errorf("读取失联条目失败: %w", err)
 	}
-	preview := &LostPurgePreview{Kind: request.Kind, NotPurgeable: notPurgeable}
+	preview := &LostPurgePreview{Kind: request.Kind, Skipped: skipped}
+	for _, count := range skipped {
+		preview.NotPurgeable += count
+	}
 	ids := make([]uint, 0, len(rows))
 	for _, row := range rows {
 		ids = append(ids, row.ID)
 		preview.Count++
 		preview.Size += row.Size
 	}
+	preview.IDs = ids
 	type relatedCount struct {
 		target        *int64
 		table, column string
@@ -163,9 +180,15 @@ func (s *LostMediaService) derivedPaths(kind string, id uint, cropNames []string
 	name := strconv.FormatUint(uint64(id), 10)
 	var paths []string
 	if kind == LostMediaKindVideo {
-		paths = append(paths, filepath.Join(s.dataDir, "thumbnails", name+".jpg"))
-		if seeks, err := filepath.Glob(filepath.Join(s.dataDir, "thumbnails", name+".seek.*")); err == nil {
-			paths = append(paths, seeks...)
+		thumbnails := filepath.Join(s.dataDir, "thumbnails")
+		paths = append(paths, filepath.Join(thumbnails, name+".jpg"))
+		// 拖动预览帧按 <id>.seek.<描述>.jpg 命名：列目录按精确前缀找（数据目录路径里可能有 Glob 元字符）。
+		if entries, err := os.ReadDir(thumbnails); err == nil {
+			for _, entry := range entries {
+				if !entry.IsDir() && strings.HasPrefix(entry.Name(), name+".seek.") {
+					paths = append(paths, filepath.Join(thumbnails, entry.Name()))
+				}
+			}
 		}
 		paths = append(paths,
 			filepath.Join(s.dataDir, "media-details", "videos", name),
@@ -270,47 +293,58 @@ func (s *LostMediaService) ApplyLostPurge(parent context.Context, request LostPu
 			result.Cancelled = true
 			break
 		}
-		recordLostOutcome(result, "清除", id, s.purgeOne(ctx, request.Kind, id))
+		stop := recordLostOutcome(ctx, result, "清除", id, s.purgeOne(ctx, request.Kind, id))
 		s.advance()
+		if stop {
+			break
+		}
 	}
 	log.Printf("失联清除 kind=%s requested=%d purged=%d skipped=%d failed=%d cancelled=%t",
 		request.Kind, len(ids), result.Done, result.Skipped, result.Failed, result.Cancelled)
 	return result, nil
 }
 
-// purgeRecheck 是清除前的逐条复核（详细设计 1.3 第 1 步）：仍属可清除归类、卷已挂载、文件确实不存在、
-// 没有进行中的超分任务。返回复核通过的记录或跳过原因。
+// purgeRecheck 在路径写锁内重读一条并复核（执行用）。
 func purgeRecheck(ctx context.Context, kind string, id uint) (lostRow, error) {
 	found, err := loadLostRowsByID(ctx, kind, []uint{id})
 	if err != nil {
 		return lostRow{}, err
 	}
-	row, ok := found[id]
-	if !ok {
-		return row, lostSkip(LostSkipNoLongerLost)
-	}
 	classifier, err := newLostClassifier(kind)
 	if err != nil {
-		return row, err
+		return lostRow{}, err
+	}
+	row, ok := found[id]
+	return row, purgeCheckRow(ctx, kind, classifier, row, ok)
+}
+
+// purgeCheckRow 是清除的逐条复核（详细设计 1.3 第 1 步，预览与执行共用、只读）：仍属可清除归类、卷已挂载、
+// 文件确实不存在、没有进行中的超分任务。found=false 表示这条已不是失联记录。不满足时返回 errLostSkip。
+func purgeCheckRow(ctx context.Context, kind string, classifier *lostClassifier, row lostRow, found bool) error {
+	if !found {
+		return lostSkip(LostSkipNoLongerLost)
 	}
 	if reason := classifier.reason(row); !lostReasonActionable(reason) {
-		return row, lostSkipForReason(reason)
+		return lostSkipForReason(reason)
 	}
 	if mediaPathUnavailable(row.Path) != nil {
-		return row, lostSkip(LostSkipVolumeOffline)
+		return lostSkip(LostSkipVolumeOffline)
 	}
 	if _, statErr := os.Stat(row.Path); !errors.Is(statErr, fs.ErrNotExist) {
-		return row, lostSkip(LostSkipFilePresent)
+		return lostSkip(LostSkipFilePresent)
 	}
 	if kind == LostMediaKindVideo {
-		if err := ensureNoActiveEnhancement(database.DB.WithContext(ctx), id); errors.Is(err, ErrVideoHasActiveEnhancement) {
-			return row, lostSkip(LostSkipEnhancementActive)
+		if err := ensureNoActiveEnhancement(database.DB.WithContext(ctx), row.ID); errors.Is(err, ErrVideoHasActiveEnhancement) {
+			return lostSkip(LostSkipEnhancementActive)
 		} else if err != nil {
-			return row, err
+			return err
 		}
 	}
-	return row, nil
+	return nil
 }
+
+// lostPurgeBeforeTxHook 是单测替身：在逐条复核通过之后、开清除事务之前调用，用来模拟两者之间别的入口改了状态。
+var lostPurgeBeforeTxHook func(id uint)
 
 // scannerMissingEntry 读出扫描器回收站行的 missing 条目（与 lostVideoCondition 同口径）；没有时返回 nil。
 func scannerMissingEntry(ctx context.Context, videoID uint) (*trashRow, error) {
@@ -326,7 +360,7 @@ func scannerMissingEntry(ctx context.Context, videoID uint) (*trashRow, error) {
 
 // purgeOne 在路径写锁内复核并清除一条（详细设计 1.3 第 1–3 步）。
 func (s *LostMediaService) purgeOne(ctx context.Context, kind string, id uint) error {
-	unlock, err := lockLostKind(kind)
+	unlock, err := lockLostKind(ctx, kind)
 	if err != nil {
 		return err
 	}
@@ -334,6 +368,9 @@ func (s *LostMediaService) purgeOne(ctx context.Context, kind string, id uint) e
 	row, err := purgeRecheck(ctx, kind, id)
 	if err != nil {
 		return err
+	}
+	if hook := lostPurgeBeforeTxHook; hook != nil {
+		hook(id)
 	}
 	var proxy *models.VideoPlaybackProxy
 	var entry *trashRow
@@ -347,7 +384,7 @@ func (s *LostMediaService) purgeOne(ctx context.Context, kind string, id uint) e
 			}
 		}
 	}
-	var observations []models.FaceObservation
+	var cleanup lostReferenceCleanup
 	err = database.TransactionWithContext(ctx, func(tx *gorm.DB) error {
 		// 复核与事务之间别的入口（播放成功、扫描）可能已经清掉失效：事务里再确认一次仍是失联。
 		var still int64
@@ -362,7 +399,7 @@ func (s *LostMediaService) purgeOne(ctx context.Context, kind string, id uint) e
 				return err
 			}
 		}
-		if observations, err = deleteLostReferencesTx(ctx, tx, kind, id); err != nil {
+		if cleanup, err = deleteLostReferencesTx(ctx, tx, kind, id); err != nil {
 			return err
 		}
 		if entry != nil {
@@ -383,13 +420,16 @@ func (s *LostMediaService) purgeOne(ctx context.Context, kind string, id uint) e
 	case err != nil:
 		return err
 	}
-	crops := make([]string, 0, len(observations))
-	for _, observation := range observations {
+	crops := make([]string, 0, len(cleanup.observations))
+	for _, observation := range cleanup.observations {
 		crops = append(crops, observation.CropPath)
 	}
 	removeDerivedFiles(s.derivedPaths(kind, id, crops))
 	if proxy != nil && s.proxies != nil {
 		s.proxies.discardProxy(*proxy, "lost_purged")
+	}
+	if cleanup.queueChanged {
+		s.notifyQueueChanged()
 	}
 	log.Printf("失联清除 kind=%s id=%d source=%s", kind, id, row.source())
 	return nil

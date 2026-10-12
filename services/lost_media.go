@@ -82,6 +82,9 @@ type LostMediaService struct {
 	images   *ImageService
 	proxies  *PlaybackProxyService
 
+	// queueEmit 是播放队列变更通知（与 PlaybackQueueService 的 emit 同一个 playback-queue-state 事件）。
+	queueEmit func(sequence uint64)
+
 	mu      sync.Mutex
 	running bool
 	cancel  context.CancelFunc
@@ -113,6 +116,25 @@ func (s *LostMediaService) SetDependencies(videos *VideoService, images *ImageSe
 		return
 	}
 	s.videos, s.images, s.proxies = videos, images, proxies
+}
+
+// SetPlaybackQueueEmitter 注入播放队列变更通知：清除删掉了待播队列里的条目时发一次，队列面板据此重读。
+func (s *LostMediaService) SetPlaybackQueueEmitter(emit func(sequence uint64)) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	s.queueEmit = emit
+	s.mu.Unlock()
+}
+
+func (s *LostMediaService) notifyQueueChanged() {
+	s.mu.Lock()
+	emit := s.queueEmit
+	s.mu.Unlock()
+	if emit != nil {
+		emit(queueEventSequence.Add(1))
+	}
 }
 
 // Status 返回进行中的操作进度（没有在跑时 Running=false）。

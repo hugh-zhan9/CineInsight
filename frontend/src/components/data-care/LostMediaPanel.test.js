@@ -78,7 +78,7 @@ describe('失联数据面板（D-LD-*）', () => {
     await flushPromises();
     expect(api.ApplyLostRelink).toHaveBeenCalledWith({ kind: 'video', pairs: [{ id: 1, new_path: '/new/1.mp4' }] });
     expect(wrapper.get('[data-test="lost-relink-result"]').text()).toContain('已找回 1 条');
-    expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [] }]]);
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ kind: 'video', removedIDs: [] }]]);
     expect(api.GetLostMediaReport).toHaveBeenCalledTimes(2);
     wrapper.unmount();
   });
@@ -100,14 +100,17 @@ describe('失联数据面板（D-LD-*）', () => {
   });
 
   it('清除：列出连带影响，先备份交给宿主，输入「清除记录」才可执行；结果按原因列出跳过', async () => {
-    api.PreviewLostPurge.mockResolvedValue({ kind: 'video', count: 2, size: 20, not_purgeable: 0, play_events: 7, tag_links: 3, person_links: 1,
-      collection_links: 0, version_groups_dissolved: 1, version_groups_shrunk: 0, bookmarks: 2, diary_entries: 1, derived_bytes: 4096 });
+    api.ListLostMediaItems.mockResolvedValue({ items: [item(1), item(2), item(3)], has_more: false });
+    api.PreviewLostPurge.mockResolvedValue({ kind: 'video', ids: [1, 2], count: 2, size: 20, not_purgeable: 1, skipped: { file_present: 1 },
+      play_events: 7, tag_links: 3, person_links: 1, collection_links: 0, version_groups_dissolved: 1, version_groups_shrunk: 0,
+      bookmarks: 2, diary_entries: 1, derived_bytes: 4096 });
     api.ApplyLostPurge.mockResolvedValue({ done: 1, skipped: 1, failed: 0, cancelled: false, items: [{ id: 2, outcome: 'skipped', reason: 'volume_offline' }] });
     const wrapper = await mountPanel();
     await wrapper.get('[data-test="lost-dir-purge"]').trigger('click');
     await flushPromises();
     expect(api.ListLostMediaItems).toHaveBeenCalledWith({ kind: 'video', directory: '/old/a', after_id: 0, limit: 500 });
-    expect(api.PreviewLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2], confirm: '' });
+    expect(api.PreviewLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2, 3], confirm: '' });
+    expect(wrapper.get('[data-test="lost-purge-not-purgeable"]').text()).toContain('文件还在原处 1 条');
     expect(wrapper.get('[data-test="lost-purge-impact-plays"]').text()).toContain('7 条');
     expect(wrapper.get('[data-test="lost-purge-impact-versions"]').text()).toContain('解散 1 个');
     expect(wrapper.get('[data-test="lost-purge-impact-notes"]').text()).toContain('3 条');
@@ -121,10 +124,11 @@ describe('失联数据面板（D-LD-*）', () => {
     expect(apply.attributes('disabled')).toBeUndefined();
     await apply.trigger('click');
     await flushPromises();
+    // 只执行预览时通过复核的条目：3 号预览时文件还在，确认前即使变得可清除也不处理。
     expect(api.ApplyLostPurge).toHaveBeenCalledWith({ kind: 'video', ids: [1, 2], confirm: '清除记录' });
     expect(wrapper.get('[data-test="lost-purge-result"]').text()).toContain('已清除 1 条，跳过 1 条');
     expect(wrapper.get('[data-test="lost-purge-skip-reason"]').text()).toContain('所在的卷没挂载：1 条');
-    expect(wrapper.emitted('videos-changed')).toEqual([[{ removedIDs: [1] }]]);
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ kind: 'video', removedIDs: [1] }]]);
     wrapper.unmount();
   });
 
@@ -146,6 +150,41 @@ describe('失联数据面板（D-LD-*）', () => {
     api.GetLostMediaReport.mockRejectedValueOnce(new Error('open /Volumes/A/secret: permission denied'));
     const wrapper = await mountPanel();
     expect(wrapper.get('[data-test="lost-error"]').text()).toBe('读取失联条目失败，请稍后重试。');
+    wrapper.unmount();
+  });
+
+  it('图片清除后按 kind: image 通知宿主（宿主提示图片库刷新）', async () => {
+    api.ListLostMediaItems.mockResolvedValue({ items: [item(1, { name: '1.jpg' })], has_more: false });
+    api.PreviewLostPurge.mockResolvedValue({ kind: 'image', ids: [1], count: 1, size: 10, not_purgeable: 0, skipped: {}, image_view_events: 2, derived_bytes: 0 });
+    api.ApplyLostPurge.mockResolvedValue({ done: 1, skipped: 0, failed: 0, cancelled: false, items: [] });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="lost-kind-image"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="lost-dir-purge"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="lost-purge-impact-views"]').text()).toContain('2 条');
+    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除记录');
+    await wrapper.get('[data-test="lost-purge-apply"]').trigger('click');
+    await flushPromises();
+    expect(api.ApplyLostPurge).toHaveBeenCalledWith({ kind: 'image', ids: [1], confirm: '清除记录' });
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ kind: 'image' }]]);
+    wrapper.unmount();
+  });
+
+  it('取消执行时正在处理的那条按「已取消，未处理」列出，不算失败', async () => {
+    api.PreviewLostPurge.mockResolvedValue({ kind: 'video', ids: [1, 2], count: 2, size: 20, not_purgeable: 0, skipped: {} });
+    api.ApplyLostPurge.mockResolvedValue({ done: 1, skipped: 0, failed: 0, cancelled: true, items: [{ id: 2, outcome: 'cancelled', reason: 'cancelled' }] });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="lost-dir-purge"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="lost-purge-confirm-input"]').setValue('清除记录');
+    await wrapper.get('[data-test="lost-purge-apply"]').trigger('click');
+    await flushPromises();
+    const text = wrapper.get('[data-test="lost-purge-result"]').text();
+    expect(text).toContain('已取消，其余未处理');
+    expect(text).toContain('已取消，未处理：1 条');
+    expect(text).not.toContain('失败');
+    expect(wrapper.emitted('videos-changed')).toEqual([[{ kind: 'video', removedIDs: [] }]]);
     wrapper.unmount();
   });
 });

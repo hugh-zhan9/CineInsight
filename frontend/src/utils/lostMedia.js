@@ -32,6 +32,7 @@ export const LOST_SKIP_LABELS = {
   size_mismatch: '大小与记录不一致',
   outside_roots: '新位置不在扫描目录内',
   occupied: '新位置已被另一条记录占用',
+  cancelled: '已取消，未处理',
   error: '处理失败'
 };
 

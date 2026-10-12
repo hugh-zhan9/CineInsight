@@ -478,6 +478,14 @@ func (s *PlaybackProxyService) RemoveOrphanPlaybackProxies() (removed int, bytes
 	if database.DB == nil {
 		return 0, 0, 0, errors.New("数据库未初始化")
 	}
+	// 先取 inFlight 再读 ready 行：一项在两次读取之间发布完成（先写行、后出 inFlight）时，要么已在 inFlight 快照里，
+	// 要么它的行已经读到；反过来读会两头都错过，把刚发布的代理当成孤儿删掉。
+	s.mu.Lock()
+	busy := make(map[string]struct{}, len(s.inFlight))
+	for videoID := range s.inFlight {
+		busy[strconv.FormatUint(uint64(videoID), 10)] = struct{}{}
+	}
+	s.mu.Unlock()
 	var rows []models.VideoPlaybackProxy
 	if err := database.DB.Where("status = ?", models.PlaybackProxyStatusReady).Find(&rows).Error; err != nil {
 		return 0, 0, 0, fmt.Errorf("读取播放代理记录失败: %w", err)
@@ -486,18 +494,15 @@ func (s *PlaybackProxyService) RemoveOrphanPlaybackProxies() (removed int, bytes
 	for _, row := range rows {
 		known[playbackProxyFileName(row.VideoID, playbackProxyFingerprint{size: row.SourceSize, modTimeNS: row.SourceModTimeNS})] = struct{}{}
 	}
-	s.mu.Lock()
-	busy := make(map[string]struct{}, len(s.inFlight))
-	for videoID := range s.inFlight {
-		busy[strconv.FormatUint(uint64(videoID), 10)] = struct{}{}
-	}
-	s.mu.Unlock()
 	orphans, _, err := s.orphanProxyFiles(known)
 	if err != nil {
 		return 0, 0, 0, err
 	}
 	for _, orphan := range orphans {
 		if _, inFlight := busy[strings.SplitN(orphan.Name(), "-", 2)[0]]; inFlight {
+			continue
+		}
+		if inUse, err := s.proxyFileInUse(orphan.Name()); err != nil || inUse {
 			continue
 		}
 		if err := os.Remove(filepath.Join(s.Dir(), orphan.Name())); err != nil && !os.IsNotExist(err) {
@@ -512,6 +517,26 @@ func (s *PlaybackProxyService) RemoveOrphanPlaybackProxies() (removed int, bytes
 		s.emitStatus()
 	}
 	return removed, bytes, failed, nil
+}
+
+// proxyFileInUse 是删除孤儿前对单个文件的复核：这个视频此刻在排队或转封装，或它现在的 ready 行正指向这个文件名。
+// 同样先看 inFlight 再读行（发布是先写行、后出 inFlight），目录列出之后才开始的那一项也不会被误删。
+func (s *PlaybackProxyService) proxyFileInUse(name string) (bool, error) {
+	id, err := strconv.ParseUint(strings.SplitN(name, "-", 2)[0], 10, 64)
+	if err != nil {
+		return true, err
+	}
+	s.mu.Lock()
+	_, inFlight := s.inFlight[uint(id)]
+	s.mu.Unlock()
+	if inFlight {
+		return true, nil
+	}
+	row, err := loadProxyRow(uint(id))
+	if err != nil || row == nil {
+		return false, err
+	}
+	return row.Status == models.PlaybackProxyStatusReady && filepath.Base(s.proxyPathForRow(*row)) == name, nil
 }
 
 // cacheLimitBytes 读设置里的上限；读不到就按默认 50 GiB。

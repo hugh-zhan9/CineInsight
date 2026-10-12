@@ -103,7 +103,7 @@
       :kind="kind"
       :ids="purgeDialog.ids"
       @backup="$emit('run-command', 'action:backup-now', '立即备份数据库')"
-      @done="afterChange($event, purgeDialog.ids)"
+      @done="(result, ids) => afterChange(result, ids)"
       @close="purgeDialog = null"
     />
   </section>
@@ -250,12 +250,17 @@ export default {
         if (ids.length) this.purgeDialog = { ids };
       }, '读取失联条目失败，请稍后重试。');
     },
-    // afterChange：找回或清除有条目生效后通知宿主重载计数，并重读报告与孤儿统计。
+    // afterChange：找回或清除有条目生效后通知宿主（带 kind：视频按 removedIDs 重取片库，图片由宿主提示图片库刷新），
+    // 并重读报告与孤儿统计。取消时不知道哪些条目处理过，removedIDs 留空让片库整体重取。
     afterChange(result, ids) {
       if (!result?.done) return;
-      const notDone = new Set((result.items || []).map(item => item.id));
-      const removedIDs = this.kind === 'video' && !result.cancelled ? ids.filter(id => !notDone.has(id)) : [];
-      this.$emit('videos-changed', { removedIDs });
+      if (this.kind === 'image') {
+        this.$emit('videos-changed', { kind: 'image' });
+      } else {
+        const notDone = new Set((result.items || []).map(item => item.id));
+        const removedIDs = result.cancelled ? [] : ids.filter(id => !notDone.has(id));
+        this.$emit('videos-changed', { kind: 'video', removedIDs });
+      }
       this.loadReport();
       this.$refs.orphans?.reload();
     }
