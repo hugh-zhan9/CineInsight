@@ -119,6 +119,12 @@ bundle_apple_ai() {
     fi
     fail "缺少苹果系统字幕组件，请先执行 scripts/build_apple_ai.sh"
   fi
+  # 按组件实际编译所用的 SDK 提示：低于 26 的 SDK 构建出的组件只含 macOS 15 接口。
+  local helper_sdk
+  helper_sdk="$(otool -l "${source_dir}/CineInsightAppleAI.app/Contents/MacOS/cineinsight-apple-ai" 2>/dev/null | awk '/LC_BUILD_VERSION/ { found = 1 } found && $1 == "sdk" { print $2; exit }' || true)"
+  if [[ "${helper_sdk%%.*}" =~ ^[0-9]+$ ]] && (( ${helper_sdk%%.*} < 26 )); then
+    log "提示：苹果系统组件用 macOS ${helper_sdk} SDK 构建，只含 macOS 15 接口；macOS 26+ 用户也会使用较早的系统识别引擎与隐藏窗口翻译"
+  fi
   mkdir -p "${target_dir}"
   ditto "${source_dir}" "${target_dir}"
 }

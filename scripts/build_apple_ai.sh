@@ -17,6 +17,8 @@ fi
 swift_defines=()
 if (( sdk_major >= 26 )); then
   swift_defines+=(-D APPLE_AI_SDK26)
+else
+  echo "提示：当前 macOS SDK 为 ${sdk_version}，本次构建只含 macOS 15 接口；macOS 26+ 用户也会使用较早的系统识别引擎与隐藏窗口翻译。需要新接口请用 macOS 26 SDK 构建。" >&2
 fi
 mkdir -p "${OUTPUT}/MacOS"
 xcrun clang -fobjc-arc -O2 -Wno-deprecated-declarations -mmacosx-version-min=15.0 -c "${SOURCES}/vision.m" -o "${OUTPUT}/vision.o"
@@ -34,6 +36,7 @@ cat > "${OUTPUT}/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>LSMinimumSystemVersion</key><string>15.0</string>
+<key>LSUIElement</key><true/>
 <key>NSSpeechRecognitionUsageDescription</key><string>析微影策使用系统语音识别在本机为视频生成字幕，音频不会上传。</string>
 </dict></plist>
 PLIST

@@ -22,7 +22,8 @@ struct Response: Encodable {
     var candidates: [Candidate]?
 }
 struct Failure: Error { let code: String }
-struct Transcript { var segments: [Segment]; var confidence: Double }
+/// `confidence` is nil when the recognizer reported none (the macOS 15 recognizer may not).
+struct Transcript { var segments: [Segment]; var confidence: Double? }
 
 /// Test hook: CINEINSIGHT_APPLE_AI_LEGACY=1 runs the macOS 15 paths (on-device SFSpeechRecognizer and the
 /// hidden-window translation session) on macOS 26+, so they can be exercised on a newer Mac.
@@ -38,7 +39,7 @@ func emit(_ response: Response) {
 /// System speech recognition: SpeechAnalyzer on macOS 26+, on-device SFSpeechRecognizer on macOS 15.
 protocol SpeechEngine {
     /// Fills `supported` and `languages`; the caller adds translation languages.
-    func status() async -> Response
+    func status() async throws -> Response
     func prepare(_ code: String) async throws
     func locale(for code: String) async throws -> Locale
     /// Installed recognition locales, one per language: the candidates for language detection.
@@ -63,12 +64,18 @@ func detect(_ path: String, engine: any SpeechEngine) async throws -> [Candidate
         let hypotheses=recognizer.languageHypotheses(withMaximum:3)
         let key=languageKey(locale)
         let consistency=hypotheses.filter { languageKey(Locale(identifier:$0.key.rawValue))==key }.map(\.value).max() ?? 0
-        // Confidence alone is not calibrated across languages. Reject text inconsistent with its recognizer.
-        if transcript.confidence >= 0.65 && consistency >= 0.6 {
-            candidates.append(Candidate(language:locale.identifier,confidence:transcript.confidence*consistency))
+        if let score=candidateScore(confidence:transcript.confidence,consistency:consistency) {
+            candidates.append(Candidate(language:locale.identifier,confidence:score))
         }
     }
     return candidates.sorted { $0.confidence > $1.confidence }
+}
+/// Confidence alone is not calibrated across languages, so text inconsistent with its recognizer is rejected.
+/// Without a transcription confidence the language consistency decides alone; the selection gap rules still apply.
+func candidateScore(confidence: Double?, consistency: Double) -> Double? {
+    guard consistency >= 0.6 else { return nil }
+    guard let confidence else { return consistency }
+    return confidence >= 0.65 ? confidence*consistency : nil
 }
 
 @main struct AppleAI {
@@ -87,7 +94,7 @@ func detect(_ path: String, engine: any SpeechEngine) async throws -> [Candidate
             let speech=speechEngine()
             switch request.operation {
             case "status":
-                var response=await speech.status()
+                var response=try await speech.status()
                 response.translationLanguages=await translationLanguages()
                 emit(response)
             case "prepare_speech":

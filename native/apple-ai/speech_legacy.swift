@@ -21,11 +21,13 @@ struct LegacySpeech: SpeechEngine {
     /// Languages written without spaces between words: no space is inserted where chunks join.
     static let unspaced: Set<String>=["zh", "ja", "yue", "wuu", "th", "lo", "km", "my"]
 
-    func status() async -> Response {
+    /// A denied or restricted permission is an error, not an unsupported device: the app then shows where to allow it.
+    func status() async throws -> Response {
         let authorization=SFSpeechRecognizer.authorizationStatus()
+        if authorization == .denied || authorization == .restricted { try fail("apple_speech_permission_denied") }
         let locales=SFSpeechRecognizer.supportedLocales().sorted { $0.identifier < $1.identifier }
         let langs=locales.map { Language(code:$0.identifier,name:displayLanguage($0.identifier),installed:SFSpeechRecognizer(locale:$0)?.supportsOnDeviceRecognition ?? false) }
-        return Response(supported:!locales.isEmpty && authorization != .denied && authorization != .restricted,languages:langs)
+        return Response(supported:!locales.isEmpty,languages:langs)
     }
     func locale(for code: String) async throws -> Locale {
         let wanted=Locale(identifier:code)
@@ -76,16 +78,15 @@ extension LegacySpeech {
         guard let recognizer=SFSpeechRecognizer(locale:locale) else { try fail("apple_language_unsupported") }
         guard recognizer.supportsOnDeviceRecognition else { try fail("apple_speech_dictation_missing") }
         try await Self.authorize()
-        recognizer.queue=OperationQueue()
+        let callbacks=OperationQueue(); callbacks.maxConcurrentOperationCount=1
+        recognizer.queue=callbacks
         let file=try AVAudioFile(forReading:URL(fileURLWithPath:path))
-        let rate=file.processingFormat.sampleRate
         var collector=WordCollector(spaced:!Self.unspaced.contains(languageKey(locale)))
         var position: AVAudioFramePosition=0
         while position < file.length {
             try Task.checkCancellation()
             let count=try Self.chunkLength(file,from:position)
-            let transcription=try await Self.recognize(file,from:position,count:count,recognizer:recognizer)
-            collector.add(chunk:Self.pieces(transcription,offset:Double(position)/rate))
+            for utterance in try await Self.recognize(file,from:position,count:count,recognizer:recognizer) { collector.add(utterance) }
             position += AVAudioFramePosition(count)
         }
         return collector.transcript
@@ -110,14 +111,15 @@ extension LegacySpeech {
         return best
     }
 
-    /// Recognizes one chunk on device. Returns nil when the chunk holds no speech.
-    static func recognize(_ file: AVAudioFile, from position: AVAudioFramePosition, count: AVAudioFrameCount, recognizer: SFSpeechRecognizer) async throws -> SFTranscription? {
+    /// Recognizes one chunk on device and returns its utterances (see SnapshotAccumulator), in file time.
+    static func recognize(_ file: AVAudioFile, from position: AVAudioFramePosition, count: AVAudioFrameCount, recognizer: SFSpeechRecognizer) async throws -> [[Piece]] {
         let request=SFSpeechAudioBufferRecognitionRequest()
         request.requiresOnDeviceRecognition=true
         request.addsPunctuation=true
-        request.shouldReportPartialResults=false
+        request.shouldReportPartialResults=true
         request.taskHint = .dictation
-        let step=max(AVAudioFrameCount(file.processingFormat.sampleRate),1)
+        let rate=file.processingFormat.sampleRate, step=max(AVAudioFrameCount(rate),1)
+        let offset=Double(position)/rate, chunkEnd=offset+Double(count)/rate
         var remaining=count
         file.framePosition=position
         while remaining > 0 {
@@ -128,13 +130,19 @@ extension LegacySpeech {
             remaining -= buffer.frameLength
         }
         request.endAudio()
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<SFTranscription?, Error>) in
-            let once=Once()
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<[[Piece]], Error>) in
+            let once=Once(), state=SnapshotState()
+            let utterances={ state.accumulator.snapshots.map { filledDurations($0,chunkEnd:chunkEnd) } }
+            // Callbacks arrive on the recognizer's serial queue.
             let task=recognizer.recognitionTask(with:request) { result, error in
-                if let result, result.isFinal {
-                    if once.claim() { continuation.resume(returning:result.bestTranscription) }
+                if let result { state.accumulator.add(pieces(result.bestTranscription,offset:offset)) }
+                if result?.isFinal == true {
+                    if once.claim() { continuation.resume(returning:utterances()) }
                 } else if let error, once.claim() {
-                    if isNoSpeech(error) { continuation.resume(returning:nil) } else { continuation.resume(throwing:Failure(code:"apple_system_failed")) }
+                    // Silence or music ends the chunk with an assistant-domain error; keep what was heard.
+                    let authorized=SFSpeechRecognizer.authorizationStatus() == .authorized
+                    if let code=chunkFailure(domain:(error as NSError).domain,authorized:authorized) { continuation.resume(throwing:Failure(code:code)) }
+                    else { continuation.resume(returning:utterances()) }
                 }
             }
             DispatchQueue.global().asyncAfter(deadline:.now()+chunkTimeout) {
@@ -142,15 +150,9 @@ extension LegacySpeech {
             }
         }
     }
-    /// The recognizer reports a silent chunk as an error rather than an empty result.
-    static func isNoSpeech(_ error: Error) -> Bool {
-        let error=error as NSError
-        return error.domain == "kAFAssistantErrorDomain" && error.code == 1110
-    }
     /// Word timings shifted to file time. Each word's text runs to the next word's start, so punctuation and
     /// spacing from formattedString stay with the preceding word, matching the line breaking of the new path.
-    static func pieces(_ transcription: SFTranscription?, offset: Double) -> [(Segment, Double)] {
-        guard let transcription else { return [] }
+    static func pieces(_ transcription: SFTranscription, offset: Double) -> [Piece] {
         let text=transcription.formattedString as NSString, segments=transcription.segments
         return segments.indices.map { i in
             let lower=i == 0 ? 0 : segments[i].substringRange.location
@@ -161,25 +163,5 @@ extension LegacySpeech {
         }
     }
 }
-
-/// Word timings across chunks for the Go side, which groups them into subtitle lines. Words stay ordered and
-/// non-overlapping with a usable duration; text with unusable timing joins a neighbouring word.
-struct WordCollector {
-    let spaced: Bool
-    var words=[Segment](), weighted=0.0, weight=0.0, carried=""
-    mutating func add(chunk pieces: [(Segment, Double)]) {
-        for (index,(piece,confidence)) in pieces.enumerated() {
-            var word=piece
-            if index == 0, spaced, let last=words.last?.text.last, !last.isWhitespace { word.text=" "+word.text }
-            if word.start.isFinite, word.end.isFinite { word.start=max(word.start,words.last?.end ?? 0) }
-            guard word.start.isFinite, word.end.isFinite, word.end-word.start >= 0.01 else {
-                if words.isEmpty { carried += word.text } else { words[words.count-1].text += word.text }
-                continue
-            }
-            word.text=carried+word.text; carried=""
-            words.append(word)
-            weighted += confidence*(word.end-word.start); weight += word.end-word.start
-        }
-    }
-    var transcript: Transcript { Transcript(segments:words,confidence:weight > 0 ? weighted/weight : 0) }
-}
+/// Snapshots of one recognition request, touched only from the recognizer's serial callback queue.
+final class SnapshotState: @unchecked Sendable { var accumulator=SnapshotAccumulator() }

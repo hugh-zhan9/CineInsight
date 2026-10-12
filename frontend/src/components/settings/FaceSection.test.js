@@ -132,6 +132,14 @@ describe('人脸识别设置分区', () => {
     await flushPromises();
     expect(api.PrepareFaceRuntime).toHaveBeenCalled();
   });
+  it('系统原因只显示中文说明，不带组件错误码前缀', async () => {
+    const message = '当前 macOS 的系统人脸特征版本与已验证版本不同，人脸识别不可用';
+    api.GetFaceRuntimeStatus.mockResolvedValue(runtimeStatus({ state: 'incompatible', reason: `apple_face_version_changed: ${message}` }));
+    const wrapper = await mountSection();
+    expect(wrapper.get('[data-test="face-runtime-reason"]').text()).toBe(message);
+    expect(wrapper.get('[data-test="face-analysis-disabled-reason"]').text()).toContain(message);
+    expect(wrapper.text()).not.toContain('apple_face_version_changed');
+  });
   it('迁移未完成时说明旧审阅记录保留', async () => {
     api.GetFaceAnalysisStatus.mockResolvedValue(analysisStatus({ migration_pending: 3 }));
     const wrapper = await mountSection();

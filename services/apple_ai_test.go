@@ -238,3 +238,29 @@ func TestAppleErrorMessagesForMacOS15Paths(t *testing.T) {
 		}
 	}
 }
+
+// A denied speech permission on macOS 15 is reported as an error by the helper's status, so settings, engine
+// preparation and generation all show where to allow it instead of calling the device unsupported.
+func TestAppleSpeechPermissionDeniedShowsSystemSettingsGuidance(t *testing.T) {
+	const guidance = "「系统设置 › 隐私与安全性 › 语音识别」中允许析微影策"
+	s := NewSubtitleService(t.TempDir())
+	s.appleRunner = func(_ context.Context, request appleAIRequest) (appleAIResponse, error) {
+		if request.Operation != "status" {
+			t.Errorf("unexpected helper call %q", request.Operation)
+		}
+		return appleAIResponse{}, appleAIError("apple_speech_permission_denied")
+	}
+	statuses, err := s.GetEngineStatuses()
+	if err != nil || len(statuses) != 1 || statuses[0].Supported || statuses[0].Available ||
+		!strings.Contains(statuses[0].ReasonMessage, guidance) || strings.Contains(statuses[0].ReasonMessage, "不支持") {
+		t.Fatalf("status: %+v %v", statuses, err)
+	}
+	if err := s.PrepareEngine(SubtitleEngineApple); err == nil || !strings.Contains(err.Error(), guidance) {
+		t.Fatalf("prepare: %v", err)
+	}
+	video := filepath.Join(t.TempDir(), "movie.mp4")
+	request := SubtitleGenerateRequest{VideoID: 1, Engine: SubtitleEngineApple, SourceLang: "en"}
+	if _, err := s.executeSubtitleTask(context.Background(), 1, request, video, SubtitleGenerateOptions{}); err == nil || !strings.Contains(err.Error(), guidance) {
+		t.Fatalf("generate: %v", err)
+	}
+}
