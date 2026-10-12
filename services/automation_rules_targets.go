@@ -27,9 +27,14 @@ func dropAutomationRuleTargetTx(tx *gorm.DB, action string, targetID uint) error
 // rewriteAutomationRuleTagTargetsTx：标签合并时把规则动作与账本里的来源标签改成目标标签。
 // 改写后与账本唯一键冲突的（同一规则、同一媒体已有目标标签的行，或几个来源各有一行）只保留一行：
 // 目标标签原有的那行优先，否则留 id 最小的来源行。
+//
+// 必须在合并改写 video_tags / image_tags 之前调用：要按合并前的关系判断合并后的标签归谁。
 func rewriteAutomationRuleTagTargetsTx(tx *gorm.DB, sourceIDs []uint, targetID uint) error {
 	if len(sourceIDs) == 0 {
 		return nil
+	}
+	if err := releaseMergedRuleTagsTx(tx, append([]uint{targetID}, sourceIDs...)); err != nil {
+		return err
 	}
 	sources := make(map[uint]bool, len(sourceIDs))
 	for _, id := range sourceIDs {
@@ -147,4 +152,48 @@ func automationRuleInsertedTagIDs(db *gorm.DB, kind string, mediaID uint) (map[u
 		excluded[id] = true
 	}
 	return excluded, nil
+}
+
+// claimRuleInsertedTagsTx 是「用户手动加了这个标签」：账本里这些媒体上由规则真正插入的同一标签改成 inserted=false，
+// 之后 AI 自动打标把它当人工标签（D-RA-04）。只接调用方的事务；手动加标签（单条、批量、批量编辑）都在
+// 写关系的同一事务里调用。媒体 id 按 500 一批，避开参数个数上限。
+func claimRuleInsertedTagsTx(tx *gorm.DB, mediaKind string, mediaIDs []uint, tagID uint) error {
+	mediaIDs = uniqueUintIDs(mediaIDs)
+	for start := 0; start < len(mediaIDs); start += automationBatchSize {
+		chunk := mediaIDs[start:min(start+automationBatchSize, len(mediaIDs))]
+		if err := tx.Model(&models.AutomationRuleWrite{}).
+			Where("media_kind = ? AND action = ? AND target_id = ? AND inserted = ? AND media_id IN ?", mediaKind, automationWriteTag, tagID, true, chunk).
+			Update("inserted", false).Error; err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// releaseMergedRuleTagsTx 在标签合并改写关系之前调用：合并后来源与目标在一条媒体上并成一个标签，
+// 只要这条媒体合并前挂着的来源或目标标签里有一个不是规则插入的（人工的），合并后的标签就归用户，
+// 这条媒体上这些标签的规则账本行一律改成 inserted=false（D-RA-04）。先查出行 id 再分批改，不在
+// UPDATE 里自引用账本表。
+func releaseMergedRuleTagsTx(tx *gorm.DB, tagIDs []uint) error {
+	for _, side := range []struct{ kind, table, column string }{
+		{AutomationMediaVideo, "video_tags", "video_id"},
+		{AutomationMediaImage, "image_tags", "image_id"},
+	} {
+		ruleInserted, ruleArgs := automationRuleInsertedTagExists(side.kind, "rel."+side.column, "rel.tag_id")
+		args := append([]any{tagIDs}, ruleArgs...)
+		var ids []uint
+		if err := tx.Table("automation_rule_writes AS arw").
+			Where("arw.media_kind = ? AND arw.action = ? AND arw.inserted = ? AND arw.target_id IN ?", side.kind, automationWriteTag, true, tagIDs).
+			Where(`EXISTS (SELECT 1 FROM `+side.table+` rel WHERE rel.`+side.column+` = arw.media_id AND rel.tag_id IN ? AND NOT `+ruleInserted+`)`, args...).
+			Pluck("arw.id", &ids).Error; err != nil {
+			return err
+		}
+		for start := 0; start < len(ids); start += automationBatchSize {
+			chunk := ids[start:min(start+automationBatchSize, len(ids))]
+			if err := tx.Model(&models.AutomationRuleWrite{}).Where("id IN ?", chunk).Update("inserted", false).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

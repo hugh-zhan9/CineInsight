@@ -163,14 +163,19 @@ export function formToInput(form) {
   return { id: form.id || 0, name: form.name, media_kind: form.media_kind, enabled: Boolean(form.enabled), conditions, actions };
 }
 
+const MAINTENANCE_ERROR = 'database is in maintenance mode';
+export const RULE_ERROR_FALLBACK = '操作没有完成，请稍后重试';
+
 // parseRuleError 解析后端错误：「invalid_rule: 字段: 说明」、rule_not_found、automation_run_busy。
+// 其余错误一律给固定文案，不把后端原文（可能带路径或底层错误）摆到界面上（G-3）；数据库维护中单独说明。
 export function parseRuleError(err) {
   const text = String(err?.message ?? err ?? '').trim();
   const match = /^invalid_rule: ([^:]+): (.*)$/s.exec(text);
   if (match) return { code: 'invalid_rule', field: match[1], message: match[2] };
   if (text.includes('rule_not_found')) return { code: 'rule_not_found', field: '', message: '这条规则已不存在，请刷新' };
   if (text.includes('automation_run_busy')) return { code: 'automation_run_busy', field: '', message: '已有一次规则运行在进行中' };
-  return { code: '', field: '', message: translateBackendError(text) || '操作失败' };
+  if (text.includes(MAINTENANCE_ERROR)) return { code: '', field: '', message: translateBackendError(MAINTENANCE_ERROR) };
+  return { code: '', field: '', message: RULE_ERROR_FALLBACK };
 }
 
 // fieldRow 从字段说明里取行号：conditions[2].pattern → { list: 'conditions', index: 2 }。

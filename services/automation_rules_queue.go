@@ -90,8 +90,39 @@ func (s *AutomationRuleService) evaluateNewMedia(ctx context.Context, kind strin
 	if err != nil || len(rules) == 0 {
 		return err
 	}
+	if kind == AutomationMediaVideo {
+		if ids, err = withoutDerivedVideoOutputs(ctx, ids); err != nil || len(ids) == 0 {
+			return err
+		}
+	}
 	_, _, err = evaluateAutomationBatch(ctx, kind, rules, ids)
 	return err
+}
+
+// withoutDerivedVideoOutputs 去掉视频工作台与超分的产出（D-RA-05：它们从源视频复制标签，不评估）。
+// 产出直接建行、不经创建入口，只会在入库探测失败、之后技术信息补探测成功时进到队列；
+// 对整批视频统一过滤与只过滤补探测来源等价。
+func withoutDerivedVideoOutputs(ctx context.Context, ids []uint) ([]uint, error) {
+	if len(ids) == 0 {
+		return ids, nil
+	}
+	db := database.DB.WithContext(ctx)
+	var outputs []uint
+	if err := db.Model(&models.VideoEditItem{}).Where("output_video_id IN ?", ids).Pluck("output_video_id", &outputs).Error; err != nil {
+		return nil, err
+	}
+	var enhanced []uint
+	if err := db.Model(&models.VideoEnhancementTask{}).Where("output_video_id IN ?", ids).Pluck("output_video_id", &enhanced).Error; err != nil {
+		return nil, err
+	}
+	skip := idSet(append(outputs, enhanced...))
+	kept := make([]uint, 0, len(ids))
+	for _, id := range ids {
+		if _, derived := skip[id]; !derived {
+			kept = append(kept, id)
+		}
+	}
+	return kept, nil
 }
 
 // evaluateAutomationBatch 是新入库与手动运行共用的一步：取属性 → 求值 → 查账本 → 写入。

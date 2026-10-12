@@ -44,7 +44,10 @@ func loadAutomationLedger(ctx context.Context, kind string, ruleIDs, mediaIDs []
 		return nil, err
 	}
 	for _, row := range rows {
-		ledger[automationLedgerKey{RuleID: row.RuleID, MediaID: row.MediaID, Action: row.Action, TargetID: row.TargetID}] = true
+		if row.RuleID == nil {
+			continue // 查询只取在世规则的行；无主行不参与「处理过」判定。
+		}
+		ledger[automationLedgerKey{RuleID: *row.RuleID, MediaID: row.MediaID, Action: row.Action, TargetID: row.TargetID}] = true
 	}
 	return ledger, nil
 }

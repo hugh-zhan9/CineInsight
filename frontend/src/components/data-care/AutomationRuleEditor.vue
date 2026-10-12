@@ -83,7 +83,7 @@
 
 <script>
 import { SelectDirectory } from '../../../wailsjs/go/main/App';
-import { blankAction, blankCondition, CONDITION_TYPES, conditionTypesFor, fieldRow, formToInput, ruleToForm } from '../../utils/automationRules.js';
+import { blankAction, blankCondition, CONDITION_TYPES, conditionTypesFor, fieldRow, formToInput, parseRuleError, ruleToForm } from '../../utils/automationRules.js';
 import { notifyError } from '../../utils/feedback.js';
 
 export default {
@@ -151,7 +151,7 @@ export default {
         const dir = await SelectDirectory();
         if (dir) row.path = dir;
       } catch (err) {
-        notifyError(`选择文件夹失败：${err}`);
+        notifyError(`选择文件夹失败：${parseRuleError(err).message}`);
       }
     },
     toInput() {

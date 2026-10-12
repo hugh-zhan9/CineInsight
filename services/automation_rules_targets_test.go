@@ -6,6 +6,8 @@ import (
 	"testing"
 	"video-master/database"
 	"video-master/models"
+
+	"gorm.io/gorm"
 )
 
 func ruleRow(t *testing.T, id uint) models.AutomationRule {
@@ -249,5 +251,156 @@ func TestAutomationRuleCollectionActionAndCollectionDelete(t *testing.T) {
 	}
 	if len(ruleWrites(t, rule.ID)) != 0 {
 		t.Fatal("作品集的账本行应清掉")
+	}
+}
+
+// I2：删除规则后，它真正插入的标签行改成无主留下，AI 自动打标仍不把这些标签当人工标签；标签不撤。
+// 无主行不算「处理过」：之后的新规则照常对这条媒体记自己的账本。
+func TestAutomationRuleDeleteKeepsRuleTagsOutOfAIManualCheck(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewAutomationRuleService("")
+	tag := autoTag(t, "待整理")
+	root := t.TempDir()
+	ruled := autoVideo(t, filepath.Join(root, "ruled.mp4"), nil)
+	manual := autoVideo(t, filepath.Join(root, "manual.mp4"), nil)
+	if err := (&VideoService{}).AddTagToVideo(manual.ID, tag.ID); err != nil {
+		t.Fatal(err)
+	}
+	input := AutomationRuleInput{Enabled: true,
+		Conditions: []AutomationRuleCondition{{Type: automationCondUnderDirectory, Path: root}},
+		Actions:    []AutomationRuleAction{{Type: automationActionAddTag, TagID: tag.ID}}}
+	rule := saveAutoRule(t, svc, input)
+	evaluateVideos(t, svc, ruled.ID, manual.ID)
+	if err := svc.DeleteAutomationRule(rule.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !videoHasTag(t, ruled.ID, tag.ID) || !videoHasTag(t, manual.ID, tag.ID) {
+		t.Fatal("删除规则不撤标签")
+	}
+	var orphans []models.AutomationRuleWrite
+	database.DB.Where("rule_id IS NULL").Find(&orphans)
+	if len(orphans) != 1 || orphans[0].MediaID != ruled.ID || !orphans[0].Inserted {
+		t.Fatalf("只应留下规则真正插入的那行、且无主: %+v", orphans)
+	}
+	if ids := untaggedVideoIDs(t); !ids[ruled.ID] || ids[manual.ID] {
+		t.Fatalf("删除规则后规则标签仍不算人工标签: %v", ids)
+	}
+	next := saveAutoRule(t, svc, input)
+	evaluateVideos(t, svc, ruled.ID)
+	if writes := ruleWrites(t, next.ID); len(writes) != 1 || writes[0].Inserted {
+		t.Fatalf("新规则应照常记自己的账本（关系已在，inserted=false）: %+v", writes)
+	}
+	if ids := untaggedVideoIDs(t); !ids[ruled.ID] {
+		t.Fatal("无主行仍让这条标签排除在人工标签之外")
+	}
+}
+
+// M6(b)：用户手动加上规则加过的标签（去掉后又加回）就归用户；批量入口同一口径。
+func TestAutomationRuleManualAddClaimsRuleInsertedTag(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewAutomationRuleService("")
+	tag := autoTag(t, "待整理")
+	root := t.TempDir()
+	first := autoVideo(t, filepath.Join(root, "a.mp4"), nil)
+	second := autoVideo(t, filepath.Join(root, "b.mp4"), nil)
+	rule := saveAutoRule(t, svc, AutomationRuleInput{Enabled: true,
+		Conditions: []AutomationRuleCondition{{Type: automationCondUnderDirectory, Path: root}},
+		Actions:    []AutomationRuleAction{{Type: automationActionAddTag, TagID: tag.ID}}})
+	evaluateVideos(t, svc, first.ID, second.ID)
+	videos := &VideoService{}
+	if err := videos.RemoveTagFromVideo(first.ID, tag.ID); err != nil {
+		t.Fatal(err)
+	}
+	if result := videos.BatchAddTagToVideos([]uint{first.ID}, tag.ID); result.Failed != 0 {
+		t.Fatalf("批量加标签失败: %+v", result)
+	}
+	writes := ruleWrites(t, rule.ID)
+	if len(writes) != 2 || writes[0].MediaID != first.ID || writes[0].Inserted || !writes[1].Inserted {
+		t.Fatalf("手动加回的那条应改成 inserted=false，另一条不动: %+v", writes)
+	}
+	if ids := untaggedVideoIDs(t); ids[first.ID] || !ids[second.ID] {
+		t.Fatalf("手动加回的标签算人工标签: %v", ids)
+	}
+	if err := database.Transaction(func(tx *gorm.DB) error {
+		return claimRuleInsertedTagsTx(tx, AutomationMediaVideo, []uint{second.ID, second.ID}, tag.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if writes := ruleWrites(t, rule.ID); writes[1].Inserted {
+		t.Fatal("claimRuleInsertedTagsTx 应把这些媒体上的规则标签交给用户")
+	}
+}
+
+// M6(a)：标签合并时，合并前这条媒体上只要有一个来源或目标标签是人工的，合并后的标签就归用户。
+func TestAutomationRuleTagMergeReleasesManuallyOwnedTags(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewAutomationRuleService("")
+	source := autoTag(t, "来源")
+	target := autoTag(t, "目标")
+	root, other := t.TempDir(), t.TempDir()
+	hadTarget := autoVideo(t, filepath.Join(root, "a.mp4"), nil)
+	ruleOnly := autoVideo(t, filepath.Join(root, "b.mp4"), nil)
+	hadSource := autoVideo(t, filepath.Join(other, "c.mp4"), nil)
+	videos := &VideoService{}
+	if err := videos.AddTagToVideo(hadTarget.ID, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := videos.AddTagToVideo(hadSource.ID, source.ID); err != nil {
+		t.Fatal(err)
+	}
+	sourceRule := saveAutoRule(t, svc, AutomationRuleInput{Name: "加来源", Enabled: true,
+		Conditions: []AutomationRuleCondition{{Type: automationCondUnderDirectory, Path: root}},
+		Actions:    []AutomationRuleAction{{Type: automationActionAddTag, TagID: source.ID}}})
+	targetRule := saveAutoRule(t, svc, AutomationRuleInput{Name: "加目标", Enabled: true,
+		Conditions: []AutomationRuleCondition{{Type: automationCondUnderDirectory, Path: other}},
+		Actions:    []AutomationRuleAction{{Type: automationActionAddTag, TagID: target.ID}}})
+	evaluateVideos(t, svc, hadTarget.ID, ruleOnly.ID, hadSource.ID)
+	if _, err := (&TagService{}).MergeTags([]uint{source.ID}, target.ID); err != nil {
+		t.Fatal(err)
+	}
+	inserted := map[uint]bool{}
+	for _, rule := range []AutomationRuleView{sourceRule, targetRule} {
+		for _, write := range ruleWrites(t, rule.ID) {
+			if write.TargetID != target.ID {
+				t.Fatalf("账本应改写到目标标签: %+v", write)
+			}
+			inserted[write.MediaID] = write.Inserted
+		}
+	}
+	if inserted[hadTarget.ID] || !inserted[ruleOnly.ID] || inserted[hadSource.ID] {
+		t.Fatalf("合并前有人工标签的媒体应归用户: %v", inserted)
+	}
+	if ids := untaggedVideoIDs(t); ids[hadTarget.ID] || ids[hadSource.ID] || !ids[ruleOnly.ID] {
+		t.Fatalf("AI 判定应随之改变: %v", ids)
+	}
+}
+
+// M6(b) 图片侧：手动给图片加上规则加过的标签，同样归用户。
+func TestAutomationRuleManualImageAddClaimsRuleTag(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewAutomationRuleService("")
+	tag := autoTag(t, "截图")
+	root := t.TempDir()
+	image := models.Image{Name: "a.png", Path: filepath.Join(root, "a.png"), Directory: root, Size: 10}
+	database.DB.Create(&image)
+	saveAutoRule(t, svc, AutomationRuleInput{MediaKind: AutomationMediaImage, Enabled: true,
+		Conditions: []AutomationRuleCondition{{Type: automationCondUnderDirectory, Path: root}},
+		Actions:    []AutomationRuleAction{{Type: automationActionAddTag, TagID: tag.ID}}})
+	if err := svc.evaluateNewMedia(context.Background(), AutomationMediaImage, []uint{image.ID}); err != nil {
+		t.Fatal(err)
+	}
+	library := NewImageLibraryService()
+	images := &ImageAITaggingService{db: database.DB}
+	if got, _ := images.hasManualOfficialImageTags(context.Background(), image.ID); got {
+		t.Fatal("规则标签不算手工标签")
+	}
+	if err := library.RemoveTagFromImage(image.ID, tag.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := library.AddTagToImage(image.ID, tag.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := images.hasManualOfficialImageTags(context.Background(), image.ID); !got {
+		t.Fatal("手动加回的图片标签算手工标签")
 	}
 }

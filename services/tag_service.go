@@ -487,6 +487,11 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 			}
 		}
 
+		// 规则动作与规则账本里的来源标签一并改成目标标签（D-RA-05）；要按合并前的关系判断账本的
+		// inserted，所以排在改写关系之前。
+		if err := rewriteAutomationRuleTagTargetsTx(tx, uniqueSources, targetTagID); err != nil {
+			return err
+		}
 		insertResult := tx.Exec(`
 			INSERT INTO video_tags(video_id, tag_id)
 			SELECT video_id, ? FROM video_tags WHERE tag_id IN ?
@@ -581,10 +586,6 @@ func (s *TagService) MergeTags(sourceTagIDs []uint, targetTagID uint) (*MergeTag
 			return err
 		}
 		if err := rewriteSavedViewTagIDsTx(tx, uniqueSources, targetTagID); err != nil {
-			return err
-		}
-		// 规则动作与规则账本里的来源标签一并改成目标标签（D-RA-05）。
-		if err := rewriteAutomationRuleTagTargetsTx(tx, uniqueSources, targetTagID); err != nil {
 			return err
 		}
 		if err := tx.Where("id IN ?", uniqueSources).Delete(&models.Tag{}).Error; err != nil {

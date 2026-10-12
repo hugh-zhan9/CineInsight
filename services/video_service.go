@@ -1655,6 +1655,10 @@ func (s *VideoService) AddTagToVideo(videoID uint, tagID uint) error {
 		if err := tx.Model(&video).Association("Tags").Append(&tag); err != nil {
 			return err
 		}
+		// 用户手动加的标签归用户：规则插入的同一关系不再算规则标签（D-RA-04）。
+		if err := claimRuleInsertedTagsTx(tx, AutomationMediaVideo, []uint{videoID}, tagID); err != nil {
+			return err
+		}
 		superseded, err := SupersedeCandidatesForManualTag(tx, videoID, tagID)
 		if err != nil {
 			return fmt.Errorf("作废对应的 AI 候选失败: %w", err)

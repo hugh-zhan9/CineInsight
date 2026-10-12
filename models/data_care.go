@@ -24,16 +24,18 @@ type AutomationRule struct {
 // AutomationRuleWrite 是规则账本（D-RA-03）：某条规则对某条媒体的某个目标处理过，每个组合至多一行。
 // Inserted 表示这次是否真的插入了关系（关系本来就存在时也记一行，标 false）。
 // MediaID 不挂外键：与人脸记账一样是多态媒体引用；媒体硬删时由失联清除与体检清理。
+// RuleID 为空是「无主」行：规则被删后保留它真正插入过的行，只供 AI 自动打标排除规则标签（D-RA-04），
+// 不再参与「处理过」判定；唯一索引对空 rule_id 不去重（两个后端都是）。
 type AutomationRuleWrite struct {
-	ID        uint           `gorm:"primarykey" json:"id"`
-	RuleID    uint           `gorm:"not null;uniqueIndex:idx_automation_rule_writes_identity,priority:1" json:"rule_id"`
-	Rule      AutomationRule `gorm:"constraint:OnUpdate:CASCADE,OnDelete:CASCADE;" json:"-"`
-	MediaKind string         `gorm:"size:8;not null;uniqueIndex:idx_automation_rule_writes_identity,priority:2;index:idx_automation_rule_writes_media,priority:1" json:"media_kind"`
-	MediaID   uint           `gorm:"not null;uniqueIndex:idx_automation_rule_writes_identity,priority:3;index:idx_automation_rule_writes_media,priority:2" json:"media_id"`
-	Action    string         `gorm:"size:16;not null;uniqueIndex:idx_automation_rule_writes_identity,priority:4;index:idx_automation_rule_writes_target,priority:1" json:"action"`
-	TargetID  uint           `gorm:"not null;uniqueIndex:idx_automation_rule_writes_identity,priority:5;index:idx_automation_rule_writes_target,priority:2" json:"target_id"`
-	Inserted  bool           `gorm:"not null" json:"inserted"`
-	CreatedAt time.Time      `json:"created_at" ts_type:"string"`
+	ID        uint            `gorm:"primarykey" json:"id"`
+	RuleID    *uint           `gorm:"uniqueIndex:idx_automation_rule_writes_identity,priority:1" json:"rule_id"`
+	Rule      *AutomationRule `gorm:"constraint:OnUpdate:CASCADE,OnDelete:SET NULL;" json:"-"`
+	MediaKind string          `gorm:"size:8;not null;uniqueIndex:idx_automation_rule_writes_identity,priority:2;index:idx_automation_rule_writes_media,priority:1" json:"media_kind"`
+	MediaID   uint            `gorm:"not null;uniqueIndex:idx_automation_rule_writes_identity,priority:3;index:idx_automation_rule_writes_media,priority:2" json:"media_id"`
+	Action    string          `gorm:"size:16;not null;uniqueIndex:idx_automation_rule_writes_identity,priority:4;index:idx_automation_rule_writes_target,priority:1" json:"action"`
+	TargetID  uint            `gorm:"not null;uniqueIndex:idx_automation_rule_writes_identity,priority:5;index:idx_automation_rule_writes_target,priority:2" json:"target_id"`
+	Inserted  bool            `gorm:"not null" json:"inserted"`
+	CreatedAt time.Time       `json:"created_at" ts_type:"string"`
 }
 
 // MetadataBatchEdit 是一次批量编辑（D-MC-05），只保留最近 20 次，供撤销。

@@ -138,10 +138,45 @@ describe('本地规则面板', () => {
     wrapper.unmount();
   });
 
-  it('对现有内容运行：只带启用且有动作的规则；跟进度事件，可取消；结束后刷新并通知片库', async () => {
+  it('对现有内容运行先逐条预览（D-RA-01）：显示每条与合计，取消不跑；确认后只跑有条目要处理的启用规则', async () => {
+    api.ListAutomationRules.mockResolvedValue([rule(1), rule(3, { name: '没活干' }), rule(2, { enabled: false })]);
+    api.PreviewAutomationRule.mockImplementation(id => Promise.resolve({ rule_id: id, count: id === 1 ? 7 : 0, samples: [] }));
     api.RunAutomationRules.mockResolvedValue({ ...IDLE, running: true, rule_ids: [1] });
     const wrapper = await mountPanel();
     await wrapper.get('[data-test="rules-run-all"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewAutomationRule.mock.calls.map(call => call[0]).sort()).toEqual([1, 3]);
+    expect(api.RunAutomationRules).not.toHaveBeenCalled();
+    expect(wrapper.findAll('[data-test="rules-run-all-count"]').map(node => node.text())).toEqual(['7 条', '0 条']);
+    expect(wrapper.get('[data-test="rules-run-all-total"]').text()).toContain('合计 7 条');
+    await wrapper.get('[data-test="rules-run-all-cancel"]').trigger('click');
+    expect(wrapper.find('[data-test="rules-run-all-dialog"]').exists()).toBe(false);
+    expect(api.RunAutomationRules).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-test="rules-run-all"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="rules-run-all-confirm"]').trigger('click');
+    await flushPromises();
+    expect(api.RunAutomationRules).toHaveBeenCalledWith([1]);
+    wrapper.unmount();
+  });
+
+  it('全部预览为 0 时不能执行', async () => {
+    api.PreviewAutomationRule.mockResolvedValue({ rule_id: 1, count: 0, samples: [] });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="rules-run-all"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.get('[data-test="rules-run-all-confirm"]').element.disabled).toBe(true);
+    wrapper.unmount();
+  });
+
+  it('运行中跟进度事件，可取消；结束后刷新并通知片库', async () => {
+    api.PreviewAutomationRule.mockResolvedValue({ rule_id: 1, count: 600, samples: [] });
+    api.RunAutomationRules.mockResolvedValue({ ...IDLE, running: true, rule_ids: [1] });
+    const wrapper = await mountPanel();
+    await wrapper.get('[data-test="rules-run-all"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="rules-run-all-confirm"]').trigger('click');
     await flushPromises();
     expect(api.RunAutomationRules).toHaveBeenCalledWith([1]);
     handlers[AUTOMATION_RULES_RUN_EVENT]({ ...IDLE, running: true, total: 600, processed: 500, added: 12 });
@@ -159,9 +194,12 @@ describe('本地规则面板', () => {
   });
 
   it('已有运行时报忙；没有规则时给出说明', async () => {
+    api.PreviewAutomationRule.mockResolvedValue({ rule_id: 1, count: 3, samples: [] });
     api.RunAutomationRules.mockRejectedValue('automation_run_busy');
     const wrapper = await mountPanel();
     await wrapper.get('[data-test="rules-run-all"]').trigger('click');
+    await flushPromises();
+    await wrapper.get('[data-test="rules-run-all-confirm"]').trigger('click');
     await flushPromises();
     expect(wrapper.get('[data-test="rules-error"]').text()).toBe('已有一次规则运行在进行中');
     wrapper.unmount();

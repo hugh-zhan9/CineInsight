@@ -486,6 +486,15 @@ type ImageEXIFBackfillService struct {
 	stopping  bool
 	registry  *BackgroundTaskRegistry
 	pauseHook TaskPauseHook
+	// parsedObserver 在某张图片补解析成功（含「解析过、没有 EXIF」）后收到 id，供规则队列再评估一次（D-RA-05）。
+	parsedObserver func(uint)
+}
+
+// SetParsedObserver 注入「EXIF 补解析成功」的观察者（规则队列入队）。观察者只能记 id。
+func (s *ImageEXIFBackfillService) SetParsedObserver(observer func(uint)) {
+	s.mu.Lock()
+	s.parsedObserver = observer
+	s.mu.Unlock()
 }
 
 // NewImageEXIFBackfillService 创建 EXIF 补全服务（单 worker、显式启动）。
@@ -679,6 +688,13 @@ func (s *ImageEXIFBackfillService) run(ctx context.Context, registry *Background
 				}
 				status.Skipped++
 			})
+			// 解析过之后「有无地理位置」才算已知：入库时解析失败的图片在这里补一次规则评估。
+			s.mu.Lock()
+			observer := s.parsedObserver
+			s.mu.Unlock()
+			if observer != nil {
+				observer(image.ID)
+			}
 		}
 	}
 	s.finish(ctx.Err() != nil, !aborted)
