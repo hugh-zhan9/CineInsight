@@ -721,7 +721,8 @@ export default {
       const confirmed = await confirmAction({
         title: '放弃收拾上次的还原',
         message: `不会动任何文件夹，只是不再自动收拾，之后可以重新从备份恢复。${where}` +
-          '它们在数据目录下的 media-details 等文件夹旁，名字以 .pre-restore- 或 .cineinsight-restore- 开头，可以在访达里查看后自行处理。',
+          '恢复前的旧目录在数据目录下的 media-details 等文件夹旁，名字以 .pre-restore- 开头，会一直保留，可以在访达里查看后自行处理；' +
+          '名字以 .cineinsight-restore- 开头的是还原用的临时副本（内容就是备份里的文件），下次启动时会自动清掉。',
         confirmText: '放弃收拾，允许恢复',
         danger: true
       });

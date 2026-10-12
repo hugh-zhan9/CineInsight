@@ -211,8 +211,9 @@ func (s *BackupService) sweepOrphanStaging() {
 		if parent, err := filepath.EvalSymlinks(filepath.Dir(link)); err == nil {
 			locations[parent] = filepath.Base(link)
 		}
-		if placement, state, err := s.placeCuratedRoot(dir, false); err == nil && state == curatedRootPresent {
-			locations[placement.Parent] = placement.Base
+		// 只要真实位置，不用 placeCuratedRoot：它会为判定换入/合并把整棵目录走一遍，启动时没必要。
+		if state, resolved := curatedRootState(s.dataDir, dir); state == curatedRootPresent {
+			locations[filepath.Dir(resolved)] = filepath.Base(resolved)
 		}
 		for parent, base := range locations {
 			if !insideDirectory(dataRoot, parent) {
