@@ -97,6 +97,11 @@ func addBatchRelation(tx *gorm.DB, kind, field string, relID uint, mediaIDs, tar
 				return fmt.Errorf("作废对应的 AI 候选失败: %w", err)
 			}
 		}
+		// 用户明确加了这个标签：本批目标上由规则插入的同一关系交还用户（D-RA-04，含本来就有、这次没改变的条目），
+		// 之后 AI 自动打标把它当人工标签。
+		if err := claimRuleInsertedTagsTx(tx, kind, targetIDs, relID); err != nil {
+			return fmt.Errorf("交还规则标签失败: %w", err)
+		}
 	case BatchEditFieldPerson:
 		return releaseFaceRelationWrites(tx, relID, batchFaceMediaKind(kind), targetIDs)
 	}

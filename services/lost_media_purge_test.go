@@ -65,7 +65,7 @@ func lostRichVideoFixture(t *testing.T, dataDir string, video, partner models.Vi
 	lostMustCreate(t, &models.PlaybackQueueState{ID: 1, Revision: 5, Player: "app", CurrentEntryID: &entry.ID, Status: "playing"})
 	rule := models.AutomationRule{Name: "r", MediaKind: "video", Enabled: true, ConditionsJSON: "[]", ActionsJSON: "[]"}
 	lostMustCreate(t, &rule)
-	lostMustCreate(t, &models.AutomationRuleWrite{RuleID: rule.ID, MediaKind: "video", MediaID: video.ID, Action: "add_tag", TargetID: tag.ID})
+	lostMustCreate(t, &models.AutomationRuleWrite{RuleID: &rule.ID, MediaKind: "video", MediaID: video.ID, Action: "add_tag", TargetID: tag.ID})
 	videoBatch := models.MetadataBatchEdit{Kind: "video", SummaryJSON: "{}"}
 	imageBatch := models.MetadataBatchEdit{Kind: "image", SummaryJSON: "{}"}
 	lostMustCreate(t, &videoBatch, &imageBatch)

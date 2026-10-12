@@ -185,3 +185,22 @@ func TestMetadataBatchEditUndoRetryAfterCancelSkipsRestoredRows(t *testing.T) {
 		t.Fatalf("batch after retry = %+v", batch)
 	}
 }
+
+// 批量加标签同样把规则插入的同一关系交还用户（D-RA-04）：本来就有这个标签、这次没改变的条目也算。
+func TestMetadataBatchEditTagAddClaimsRuleInsertedTag(t *testing.T) {
+	service := setupBatchEditTestDB(t)
+	tag := beTag(t, "待整理")
+	video := beVideo(t, "rule.mp4", nil)
+	rule := models.AutomationRule{Name: "下载目录", MediaKind: "video", Enabled: true, ConditionsJSON: "[]", ActionsJSON: "[]"}
+	beMust(t, database.DB.Create(&rule).Error)
+	beMust(t, database.DB.Exec("INSERT INTO video_tags (video_id, tag_id) VALUES (?, ?)", video.ID, tag.ID).Error)
+	beMust(t, database.DB.Exec("INSERT INTO automation_rule_writes (rule_id, media_kind, media_id, action, target_id, inserted, created_at) VALUES (?, 'video', ?, 'tag', ?, true, CURRENT_TIMESTAMP)", rule.ID, video.ID, tag.ID).Error)
+
+	beApply(t, service, beVideoReq([]uint{video.ID}, MetadataBatchOp{Field: "tag", Action: "add", IDs: []uint{tag.ID}}))
+
+	var write models.AutomationRuleWrite
+	beMust(t, database.DB.Where("media_kind = ? AND media_id = ? AND target_id = ?", "video", video.ID, tag.ID).First(&write).Error)
+	if write.Inserted {
+		t.Fatalf("用户批量加了同一标签后，规则账本应交还用户: %+v", write)
+	}
+}
