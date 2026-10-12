@@ -212,6 +212,11 @@ func NewApp() *App {
 	app.sceneRuntime = services.NewSceneRuntime(dataDir, services.SceneModelMirrorURL)
 	app.sceneIndex = services.NewSceneIndexService(app.sceneRuntime, mediaWorkSlot)
 	app.sceneSearch = services.NewSceneSearchService(app.sceneIndex)
+	// 以图搜片用某部片的画面找相似时，取帧走缩略图服务的单帧渲染（与命中缩略图同一实现与缓存）。
+	app.sceneSearch.SetFrameRenderer(func(ctx context.Context, videoID uint, ms int64, width int) ([]byte, error) {
+		data, _, err := app.thumbnailService.RenderFrameAt(ctx, videoID, ms, width)
+		return data, err
+	})
 	app.wireBrowserBridge()
 	app.jellyfinServer = services.NewJellyfinServer(videoService, app.thumbnailService, mediaProbeService, personService, collectionService)
 	app.wireBackgroundTaskRegistry()

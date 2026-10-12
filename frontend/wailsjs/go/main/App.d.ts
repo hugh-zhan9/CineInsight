@@ -699,6 +699,8 @@ export function SearchLibraryVideoPage(arg1:services.LibraryVideoPageRequest):Pr
 
 export function SearchScenes(arg1:services.SceneSearchRequest):Promise<services.SceneSearchResult>;
 
+export function SearchScenesByImage(arg1:services.SceneImageSearchRequest):Promise<services.SceneSearchResult>;
+
 export function SearchSemanticVideos(arg1:services.SemanticSearchRequest):Promise<services.SemanticSearchPage>;
 
 export function SelectBrowserDownloadDirectory():Promise<string>;

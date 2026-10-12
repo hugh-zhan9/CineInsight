@@ -19,6 +19,7 @@ const NOTICE_TEXT = {
   visual_index_empty: '当前范围还没有画面索引，画面部分没有可检索的内容；请先建立画面索引。',
   scene_visual_failed: '本地画面模型推理出错，画面部分没有结果；可稍后重试或重新准备模型。',
   scene_external_not_configured: '外部描述需要先在「AI 标签」设置里填写接口地址与模型，画面部分没有执行。',
+  scene_image_search_unsupported: '画面来源是外部描述（只有文字描述），以图搜片需要本地画面模型。',
   subtitle_index_empty: '当前范围没有可检索的 .srt 字幕索引，对白部分没有可检索的内容。'
 };
 
@@ -28,6 +29,7 @@ const ERROR_TEXT = {
   scene_external_not_enabled: '设置里没有启用外部描述，不会向外部接口发送任何内容。',
   scene_external_not_configured: '外部描述需要先在「AI 标签」设置里填写接口地址与模型。',
   scene_query_invalid: '请输入 1–200 个字的检索内容。',
+  scene_image_invalid: '图片无法识别：支持 JPEG、PNG、WebP、GIF、BMP，大小不超过 20 MB。',
   scene_mode_invalid: '不支持的检索模式。',
   scene_index_running: '画面索引正在建立，完成或取消后再清理旧索引。',
   scene_index_not_running: '当前没有正在建立的画面索引。',
@@ -38,7 +40,24 @@ const ERROR_TEXT = {
 };
 
 // 这些提示表示画面部分根本没有执行：此时不能说"没有找到"（M-5）。
-export const SCENE_VISUAL_SKIPPED_NOTICES = ['scene_runtime_unavailable', 'scene_visual_failed', 'scene_external_not_configured'];
+export const SCENE_VISUAL_SKIPPED_NOTICES = ['scene_runtime_unavailable', 'scene_visual_failed', 'scene_external_not_configured', 'scene_image_search_unsupported'];
+
+// 以图搜片的上传图片：与后端 decodeSceneQueryImage 同一套格式与 20 MB 上限，先在本地挡掉，免得把大文件转码发过去。
+export const SCENE_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/bmp'];
+export const SCENE_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+
+// 读成 data URL：{ dataURL, name }。格式不对或太大时抛 scene_image_invalid（sceneErrorText 认得）。
+export function readSceneQueryImage(file) {
+  if (!file || !SCENE_IMAGE_TYPES.includes(file.type) || file.size <= 0 || file.size > SCENE_IMAGE_MAX_BYTES) {
+    return Promise.reject(new Error('scene_image_invalid'));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve({ dataURL: String(reader.result || ''), name: file.name || '' });
+    reader.onerror = () => reject(new Error('scene_image_invalid'));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function sceneVisualSkipped(notices) {
   return (notices || []).some(code => SCENE_VISUAL_SKIPPED_NOTICES.includes(code));

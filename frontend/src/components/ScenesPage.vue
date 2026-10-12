@@ -1,9 +1,15 @@
 <template>
-  <section class="page-content scenes-page">
+  <section
+    :class="['page-content', 'scenes-page', { 'scenes-page--dropping': dropping }]"
+    data-test="scenes-page"
+    @dragover.prevent="onDragOver"
+    @dragleave="onDragLeave"
+    @drop.prevent="onDrop"
+  >
     <div class="scenes-heading">
       <div>
         <h2>场景检索</h2>
-        <p>在字幕对白与画面内容里找具体的时间区间。没建索引的内容不会被当成"没有命中"。</p>
+        <p>在字幕对白与画面内容里找具体的时间区间。没建索引的内容不会被当成"没有命中"。也可以拖进、粘贴一张截图或剧照，找出它是哪部片的哪一段。</p>
       </div>
     </div>
 
@@ -29,7 +35,17 @@
         >{{ option.label }}</button>
       </div>
       <button type="submit" class="btn-primary" data-test="scenes-submit" :disabled="!canSearch">检索</button>
+      <button type="button" class="btn-secondary" data-test="scenes-pick-image" title="选一张图片，也可以直接拖进本页或粘贴" @click="$refs.imageInput.click()">以图搜片</button>
+      <input ref="imageInput" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp" hidden data-test="scenes-image-input" @change="onImagePicked" />
     </form>
+
+    <!-- 以图搜片 / 相似画面的查询来源：一张上传的图，或某部片的某一刻。 -->
+    <div v-if="imageQuery || similarSource" class="scenes-image-query" data-test="scenes-image-query">
+      <img v-if="imageQuery" :src="imageQuery.dataURL" alt="查询图片" class="scenes-image-query__thumb" />
+      <img v-else :src="frameURL({ video_id: similarSource.videoID, start_ms: similarSource.atMS })" alt="" class="scenes-image-query__thumb" />
+      <span class="scenes-image-query__text">{{ imageQueryText }}</span>
+      <button type="button" class="btn-secondary btn-compact" data-test="scenes-clear-image" @click="clearImageQuery">清除</button>
+    </div>
 
     <div class="scenes-scope" data-test="scenes-scope">
       <span>范围：{{ scopeFilter ? '片库当前筛选' : '全部视频' }}</span>
@@ -70,15 +86,14 @@
       <p>{{ emptyHint }}</p>
     </div>
     <div v-else-if="!searched" class="scenes-empty" data-test="scenes-idle">
-      <p>输入一句描述或台词，选择在对白、画面或两者里检索。</p>
+      <p>输入一句描述或台词，选择在对白、画面或两者里检索；或者把一张截图拖进来、粘贴进来。</p>
     </div>
 
     <div v-else class="scenes-results" data-test="scenes-results">
       <section v-for="group in groups" :key="group.videoID" class="scenes-group" :data-test="`scenes-group-${group.videoID}`">
         <h3 class="scenes-group__title">{{ group.title }} <small>{{ group.hits.length }} 处</small></h3>
+        <div v-for="(hit, index) in group.hits" :key="`${hit.source}-${hit.start_ms}-${index}`" class="scenes-hit-row">
         <button
-          v-for="(hit, index) in group.hits"
-          :key="`${hit.source}-${hit.start_ms}-${index}`"
           type="button"
           class="scenes-hit"
           :data-test="`scenes-hit-${group.videoID}-${index}`"
@@ -95,6 +110,14 @@
             <span v-if="hit.context_after" class="scenes-hit__context">{{ hit.context_after }}</span>
           </span>
         </button>
+        <button
+          type="button"
+          class="btn-secondary btn-compact scenes-hit__similar"
+          title="用这一刻的画面在全部视频里找相似的段"
+          :data-test="`scenes-similar-${group.videoID}-${index}`"
+          @click="searchSimilar({ videoID: hit.video_id, atMS: hit.start_ms, title: group.title })"
+        >相似画面</button>
+        </div>
       </section>
     </div>
   </section>
@@ -110,6 +133,7 @@ import {
   GetSceneRuntimeStatus,
   PrepareSceneRuntime,
   SearchScenes,
+  SearchScenesByImage,
   StartSceneIndex
 } from '../../wailsjs/go/main/App';
 import { confirmAction, notifyError, notifySuccess } from '../utils/feedback.js';
@@ -119,6 +143,8 @@ import {
   SCENE_SOURCE_LABELS,
   createRequestGeneration,
   formatSceneRange,
+  formatSceneTime,
+  readSceneQueryImage,
   groupSceneHits,
   sceneCoverageParts,
   sceneErrorText,
@@ -146,6 +172,7 @@ export default {
   props: {
     pageActive: { type: Boolean, default: true },
     // 片库工具栏「在当前筛选中搜场景」带来的范围：{ filter, token }；为空表示全部视频。
+    // 详情抽屉「找相似画面」另带 similar：{ videoID, atMS, title }，进来直接按这一刻的画面检索。
     scopeRequest: { type: Object, default: null }
   },
   emits: ['open-video-at'],
@@ -162,7 +189,11 @@ export default {
       result: null,
       searching: false,
       searched: false,
-      errorMessage: ''
+      errorMessage: '',
+      // 以图搜片：上传的图 { dataURL, name }；相似画面：{ videoID, atMS, title }。两者互斥，检索结果都是画面命中。
+      imageQuery: null,
+      similarSource: null,
+      dropping: false
     };
   },
   computed: {
@@ -222,13 +253,21 @@ export default {
       if (status.completed) return `上一轮：成功 ${status.succeeded} 部，跳过 ${status.skipped} 部，失败 ${status.failed} 部`;
       return '';
     },
+    imageSearch() {
+      return Boolean(this.imageQuery || this.similarSource);
+    },
+    imageQueryText() {
+      if (this.imageQuery) return `按这张图找画面${this.imageQuery.name ? `：${this.imageQuery.name}` : ''}`;
+      if (!this.similarSource) return '';
+      return `与《${this.similarSource.title || '这部片'}》${formatSceneTime(this.similarSource.atMS)} 相似的画面（不含这一刻前后 10 秒）`;
+    },
     // 画面部分没有执行时不能说"没有找到"：只有真正检索过的部分才谈得上没有命中（M-5）。
     visualSkipped() {
-      return this.mode !== 'dialogue' && sceneVisualSkipped(this.notices);
+      return (this.imageSearch || this.mode !== 'dialogue') && sceneVisualSkipped(this.notices);
     },
     emptyTitle() {
       if (!this.visualSkipped) return '在已索引的内容里没有找到';
-      return this.mode === 'visual' ? '画面检索没有执行' : '对白里没有找到，画面检索没有执行';
+      return this.imageSearch || this.mode === 'visual' ? '画面检索没有执行' : '对白里没有找到，画面检索没有执行';
     },
     emptyHint() {
       if (this.visualSkipped) return '原因见上方提示；处理之后再检索一次。';
@@ -249,6 +288,7 @@ export default {
         this.scopeFilter = request?.filter ? { ...request.filter } : null;
         this.resetResults();
         this.loadCoverage();
+        if (request?.similar?.videoID) this.searchSimilar(request.similar);
       }
     },
     pageActive(active) {
@@ -263,6 +303,7 @@ export default {
     this.coverageGeneration = createRequestGeneration();
   },
   mounted() {
+    window.addEventListener('paste', this.onPaste);
     this.loadRuntime();
     this.loadIndexStatus();
     if (window.runtime?.EventsOn) {
@@ -274,6 +315,7 @@ export default {
     }
   },
   beforeUnmount() {
+    window.removeEventListener('paste', this.onPaste);
     (this.eventOffs || []).forEach(off => off());
   },
   methods: {
@@ -308,13 +350,68 @@ export default {
       this.mode = mode;
       if (this.searched && this.canSearch) this.search();
     },
-    async search() {
+    // 文字检索：清掉以图搜片的查询来源。
+    search() {
       if (!this.canSearch) return;
+      this.imageQuery = null;
+      this.similarSource = null;
+      return this.runSearch(() => SearchScenes({ query: this.query.trim(), mode: this.mode, filter: this.scopeFilter, limit: 50 }));
+    },
+    searchImage(image) {
+      this.imageQuery = image;
+      this.similarSource = null;
+      const encoded = image.dataURL.slice(image.dataURL.indexOf(',') + 1);
+      return this.runSearch(() => SearchScenesByImage({ image_base64: encoded, video_id: 0, at_ms: 0, filter: this.scopeFilter, limit: 50 }));
+    },
+    searchSimilar(source) {
+      this.imageQuery = null;
+      this.similarSource = { videoID: Number(source.videoID), atMS: Math.max(0, Math.round(Number(source.atMS) || 0)), title: source.title || '' };
+      const { videoID, atMS } = this.similarSource;
+      return this.runSearch(() => SearchScenesByImage({ image_base64: '', video_id: videoID, at_ms: atMS, filter: this.scopeFilter, limit: 50 }));
+    },
+    clearImageQuery() {
+      this.imageQuery = null;
+      this.similarSource = null;
+      this.resetResults();
+    },
+    async useImageFile(file) {
+      try {
+        const image = await readSceneQueryImage(file);
+        await this.searchImage(image);
+      } catch (err) {
+        this.errorMessage = sceneErrorText(err);
+      }
+    },
+    onImagePicked(event) {
+      const file = event.target.files?.[0];
+      event.target.value = '';
+      if (file) this.useImageFile(file);
+    },
+    onDragOver(event) {
+      if ([...(event.dataTransfer?.types || [])].includes('Files')) this.dropping = true;
+    },
+    onDragLeave(event) {
+      if (!event.currentTarget.contains(event.relatedTarget)) this.dropping = false;
+    },
+    onDrop(event) {
+      this.dropping = false;
+      const file = [...(event.dataTransfer?.files || [])].find(item => item.type.startsWith('image/'));
+      return file ? this.useImageFile(file) : undefined;
+    },
+    // 只在本页可见、且焦点不在输入框里时接管粘贴：输入框里粘贴文字照常。
+    onPaste(event) {
+      if (!this.pageActive) return;
+      const file = [...(event.clipboardData?.files || [])].find(item => item.type.startsWith('image/'));
+      if (!file) return;
+      event.preventDefault();
+      return this.useImageFile(file);
+    },
+    async runSearch(request) {
       const generation = this.searchGeneration.next();
       this.searching = true;
       this.errorMessage = '';
       try {
-        const result = await SearchScenes({ query: this.query.trim(), mode: this.mode, filter: this.scopeFilter, limit: 50 });
+        const result = await request();
         if (!this.searchGeneration.isCurrent(generation)) return;
         this.result = result || { hits: [], notices: [] };
         if (result?.coverage) this.coverage = result.coverage;
@@ -437,6 +534,13 @@ export default {
 .scenes-results { display: grid; gap: 18px; margin-top: 18px; }
 .scenes-group__title { margin: 0 0 8px; font-size: 15px; }
 .scenes-group__title small { color: var(--text-secondary); font-weight: normal; margin-left: 6px; }
+.scenes-page--dropping { outline: 2px dashed var(--accent-color); outline-offset: -6px; }
+.scenes-image-query { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 8px 10px; border: 1px solid var(--accent-color); border-radius: var(--radius); background: var(--accent-soft); font-size: 13px; }
+.scenes-image-query__thumb { width: 96px; height: 54px; border-radius: 4px; object-fit: cover; background: var(--control-bg); }
+.scenes-image-query__text { flex: 1; min-width: 0; color: var(--text-primary); overflow-wrap: anywhere; }
+.scenes-hit-row { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 6px; }
+.scenes-hit-row .scenes-hit { margin-bottom: 0; }
+.scenes-hit__similar { flex: none; margin-top: 8px; }
 .scenes-hit { display: flex; gap: 12px; width: 100%; padding: 8px; margin-bottom: 6px; border: 1px solid var(--border-color); border-radius: var(--radius); background: transparent; color: inherit; text-align: left; cursor: pointer; }
 .scenes-hit:hover { border-color: var(--accent-color); }
 .scenes-hit__frame { width: 160px; height: 90px; flex: 0 0 160px; object-fit: cover; border-radius: 4px; background: var(--control-bg); }

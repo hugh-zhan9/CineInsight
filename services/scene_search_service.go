@@ -96,6 +96,8 @@ type SceneSearchService struct {
 	vectors          sceneVectorSource
 	runtimeAvailable func() bool
 	syncSubtitles    func()
+	// renderFrame 取某部片某一时刻的画面，以图搜片用视频画面找相似时用（SetFrameRenderer）。
+	renderFrame SceneFrameRenderer
 }
 
 // NewSceneSearchService 与建索引服务共用运行时、worker 与外部配置读取。
@@ -368,15 +370,7 @@ func (s *SceneSearchService) searchVisual(ctx context.Context, request SceneSear
 	if err != nil {
 		return nil, "", err
 	}
-	merged := mergeAdjacentSceneCandidates(candidates)
-	hits := make([]SceneHit, 0, len(merged))
-	for _, candidate := range merged {
-		hits = append(hits, SceneHit{
-			VideoID: candidate.VideoID, StartMS: candidate.StartMS, EndMS: candidate.EndMS,
-			Source: SceneSourceVisual, Score: float64(candidate.Score),
-		})
-	}
-	return hits, "", nil
+	return sceneVisualHits(mergeAdjacentSceneCandidates(candidates)), "", nil
 }
 
 type sceneSegmentScanRow struct {

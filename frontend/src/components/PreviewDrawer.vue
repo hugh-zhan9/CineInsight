@@ -136,6 +136,8 @@
 			<button type="button" class="btn-secondary" @click="$emit('export-local-metadata', details.video)">写出 NFO</button>
 			<button type="button" class="btn-secondary" @click="$emit('enhance', details.video)">视频超分</button>
 			<button type="button" class="btn-secondary" @click="$emit('find-similar', details.video)">找相似</button>
+			<!-- 以图搜片（2026-10-12）：用当前播放位置的画面到场景检索里找相似的段。 -->
+			<button type="button" class="btn-secondary" data-test="drawer-find-similar-scenes" @click="findSimilarScenes">找相似画面</button>
           </div>
         </section>
 
@@ -487,7 +489,7 @@ export default {
   // watch-progress 载荷：{ videoID, positionSeconds, completed, origin: resume|start|jump, durationSeconds（未知为 0）}（D-PC42）。
   // media-restored：人物媒体删除后被撤销或从回收站恢复，载荷 { kind, ids }，宿主据此重读列表。
   // playback-attempted：动作条「播放」的 PlaybackAttemptResult，宿主可按自己的列表口径处理失效与重定位。
-  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'media-restored', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'shortcut', 'preview-session-stale', 'playback-attempted'],
+  emits: ['close', 'preview-externally', 'watch-progress', 'details-updated', 'collection-deleted', 'person-deleted', 'relations-updated', 'media-deleted', 'media-restored', 'open-local-metadata', 'export-local-metadata', 'enhance', 'find-similar', 'find-similar-scenes', 'shortcut', 'preview-session-stale', 'playback-attempted'],
   data() {
     return {
       selectedPersonImageIDs: [], imagePreview: null, avatarPickerOpen: false, avatarSaving: false, avatarError: '',
@@ -684,6 +686,12 @@ export default {
   },
   methods: {
     bookmarkCurrentPosition() { return Number(this.$refs.videoElement?.currentTime || 0); },
+    findSimilarScenes() {
+      const video = this.details?.video;
+      if (!video?.id) return;
+      const title = String(video.display_title || '').trim() || video.name || '';
+      this.$emit('find-similar-scenes', { videoID: video.id, atMS: Math.round(this.bookmarkCurrentPosition() * 1000), title });
+    },
     setBookmarkRequest(request) {
       this.bookmarkRequest = request ? { ...request } : null; this.bookmarkRangeActive = request?.endMS != null; this.bookmarkRangeFinished = false;
       this.appliedSeekKey = '';

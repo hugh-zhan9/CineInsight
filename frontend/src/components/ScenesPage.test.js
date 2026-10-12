@@ -224,3 +224,100 @@ describe('场景检索页（D-MW-SCENES）', () => {
     expect(wrapper.get('[data-test="scenes-error"]').text()).toContain('1–200');
   });
 });
+
+// ===== 以图搜片（2026-10-12）=====
+describe('以图搜片与相似画面', () => {
+  const HIT = { video_id: 7, title: '片子', start_ms: 125000, end_ms: 130000, source: 'visual', score: 0.9, text: '' };
+  const pngFile = (name = 'shot.png', type = 'image/png', size = 12) => new File([new Uint8Array(size).fill(1)], name, { type });
+
+  beforeEach(() => {
+    api.SearchScenesByImage.mockResolvedValue({ hits: [HIT], notices: [], coverage: COVERAGE });
+  });
+
+  it('选一张图片：按图检索全库画面，显示查询图与命中；文字检索会清掉它', async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.vm.useImageFile(pngFile());
+    await flushPromises();
+    const request = api.SearchScenesByImage.mock.calls[0][0];
+    expect(request).toEqual({ image_base64: expect.any(String), video_id: 0, at_ms: 0, filter: null, limit: 50 });
+    expect(request.image_base64).toBe(btoa(String.fromCharCode(...new Uint8Array(12).fill(1))));
+    expect(wrapper.get('[data-test="scenes-image-query"]').text()).toContain('按这张图找画面：shot.png');
+    expect(wrapper.find('[data-test="scenes-hit-7-0"]').exists()).toBe(true);
+
+    await typeAndSearch(wrapper, '雨夜');
+    expect(api.SearchScenes).toHaveBeenCalledTimes(1);
+    expect(wrapper.find('[data-test="scenes-image-query"]').exists()).toBe(false);
+  });
+
+  it('格式不对或超过 20 MB 的图片在本地就挡掉，说清支持什么', async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    await wrapper.vm.useImageFile(pngFile('a.heic', 'image/heic'));
+    await flushPromises();
+    expect(api.SearchScenesByImage).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="scenes-error"]').text()).toContain('支持 JPEG、PNG、WebP、GIF、BMP');
+    const big = pngFile();
+    Object.defineProperty(big, 'size', { value: 20 * 1024 * 1024 + 1 });
+    await wrapper.vm.useImageFile(big);
+    await flushPromises();
+    expect(api.SearchScenesByImage).not.toHaveBeenCalled();
+  });
+
+  it('拖进图片或在本页粘贴图片都会按图检索；页面不可见时不接管粘贴', async () => {
+    const wrapper = mountPage();
+    await flushPromises();
+    // jsdom 的拖放事件带不进 dataTransfer：直接交给页面上绑定的处理函数。
+    wrapper.vm.onDragOver({ dataTransfer: { types: ['Files'] } });
+    await wrapper.vm.$nextTick();
+    expect(wrapper.get('[data-test="scenes-page"]').classes()).toContain('scenes-page--dropping');
+    await wrapper.vm.onDrop({ dataTransfer: { files: [new File(['x'], 'note.txt', { type: 'text/plain' }), pngFile('drop.png')] } });
+    await flushPromises();
+    expect(wrapper.get('[data-test="scenes-page"]').classes()).not.toContain('scenes-page--dropping');
+    expect(api.SearchScenesByImage).toHaveBeenCalledTimes(1);
+
+    const paste = new Event('paste', { cancelable: true });
+    paste.clipboardData = { files: [pngFile('paste.png')] };
+    window.dispatchEvent(paste);
+    await vi.waitFor(() => expect(api.SearchScenesByImage).toHaveBeenCalledTimes(2));
+    expect(paste.defaultPrevented).toBe(true);
+
+    await wrapper.setProps({ pageActive: false });
+    const hidden = new Event('paste', { cancelable: true });
+    hidden.clipboardData = { files: [pngFile('hidden.png')] };
+    window.dispatchEvent(hidden);
+    await new Promise(resolve => setTimeout(resolve, 20));
+    await flushPromises();
+    expect(api.SearchScenesByImage).toHaveBeenCalledTimes(2);
+    expect(hidden.defaultPrevented).toBe(false);
+    // 粘贴的是文字（没有图片）时不拦。
+    await wrapper.setProps({ pageActive: true });
+    const text = new Event('paste', { cancelable: true });
+    text.clipboardData = { files: [] };
+    window.dispatchEvent(text);
+    expect(text.defaultPrevented).toBe(false);
+  });
+
+  it('命中卡片「相似画面」用那一刻的画面检索，并说明不含这一刻前后 10 秒', async () => {
+    api.SearchScenes.mockResolvedValue({ hits: [HIT], notices: [], coverage: COVERAGE });
+    const wrapper = mountPage();
+    await flushPromises();
+    await typeAndSearch(wrapper, '海边');
+    await wrapper.get('[data-test="scenes-similar-7-0"]').trigger('click');
+    await flushPromises();
+    expect(api.SearchScenesByImage).toHaveBeenCalledWith({ image_base64: '', video_id: 7, at_ms: 125000, filter: null, limit: 50 });
+    expect(wrapper.get('[data-test="scenes-image-query"]').text()).toContain('与《片子》2:05 相似的画面（不含这一刻前后 10 秒）');
+    await wrapper.get('[data-test="scenes-clear-image"]').trigger('click');
+    expect(wrapper.find('[data-test="scenes-image-query"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="scenes-idle"]').exists()).toBe(true);
+  });
+
+  it('详情抽屉带来的「找相似画面」进来就检索；外部描述时说明以图搜片需要本地模型', async () => {
+    api.SearchScenesByImage.mockResolvedValue({ hits: [], notices: ['scene_image_search_unsupported'], coverage: COVERAGE });
+    const wrapper = mountPage({ scopeRequest: { filter: null, similar: { videoID: 9, atMS: 61000.4, title: '另一部' }, token: 1 } });
+    await flushPromises();
+    expect(api.SearchScenesByImage).toHaveBeenCalledWith({ image_base64: '', video_id: 9, at_ms: 61000, filter: null, limit: 50 });
+    expect(wrapper.get('[data-test="scenes-notice-scene_image_search_unsupported"]').text()).toContain('以图搜片需要本地画面模型');
+    expect(wrapper.get('[data-test="scenes-empty"]').text()).toContain('画面检索没有执行');
+  });
+});

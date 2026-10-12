@@ -78,6 +78,7 @@
         @person-converted="handleTagPersonConverted"
         @update-settings="handleSettingsUpdate"
         @search-scenes="openScenesWithFilter"
+        @find-similar-scenes="openSimilarScenes"
         @open-video-edit="openVideoEditProject"
       />
 
@@ -496,6 +497,12 @@ export default {
     // 片库工具栏「在当前筛选中搜场景」：带上当前 LibraryFilter 进入场景检索页（D-MW-SCENES）。
     openScenesWithFilter(filter) {
       this.scenesScope = { filter: filter ? { ...filter } : null, token: Date.now() };
+      return this.navigateTo('scenes');
+    },
+    // 详情抽屉「找相似画面」：带上这一刻进入场景检索页，全库范围按画面检索（以图搜片）。
+    openSimilarScenes(similar) {
+      if (!similar?.videoID) return false;
+      this.scenesScope = { filter: null, similar: { ...similar }, token: Date.now() };
       return this.navigateTo('scenes');
     },
     // 视频工作台：片库新建项目、任务中心「在工作台中打开」后切过去并选中该项目。

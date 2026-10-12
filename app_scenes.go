@@ -97,6 +97,27 @@ func (a *App) SearchScenes(request services.SceneSearchRequest) (services.SceneS
 	return result, err
 }
 
+// SearchScenesByImage 以图搜片：用上传的图片，或某部片某一时刻的画面，在画面索引里找相似的段。
+// 图片内容不写日志。
+func (a *App) SearchScenesByImage(request services.SceneImageSearchRequest) (services.SceneSearchResult, error) {
+	if a.sceneSearch == nil {
+		return services.SceneSearchResult{}, errSceneServicesUnavailable
+	}
+	if reason := a.databaseUnavailableReason(); reason != "" {
+		return services.SceneSearchResult{}, errors.New(reason)
+	}
+	ctx, cancel := context.WithTimeout(a.backgroundContext(), sceneSearchTimeout)
+	defer cancel()
+	result, err := a.sceneSearch.SearchByImage(ctx, request)
+	source := "upload"
+	if request.VideoID > 0 {
+		source = "frame"
+	}
+	log.Printf("API SearchScenesByImage source=%s limit=%d filter=%v hits=%d notices=%v err=%v",
+		source, request.Limit, request.Filter != nil, len(result.Hits), result.Notices, err)
+	return result, err
+}
+
 // GetSceneCoverage 返回筛选范围内的字幕与画面索引覆盖（不执行检索）。
 func (a *App) GetSceneCoverage(filter services.LibraryFilter) (services.SceneCoverage, error) {
 	if a.sceneSearch == nil {

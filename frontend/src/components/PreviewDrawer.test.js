@@ -176,6 +176,13 @@ describe('PreviewDrawer', () => {
 	expect(wrapper.emitted('find-similar')?.[0]?.[0]).toEqual(expect.objectContaining({ id: 1 }));
   });
 
+  it('「找相似画面」带上当前播放位置（毫秒）与显示标题', async () => {
+	const wrapper = await mountDrawer();
+	vi.spyOn(wrapper.vm, 'bookmarkCurrentPosition').mockReturnValue(83.4567);
+	await wrapper.get('[data-test="drawer-find-similar-scenes"]').trigger('click');
+	expect(wrapper.emitted('find-similar-scenes')?.[0]?.[0]).toEqual({ videoID: 1, atMS: 83457, title: expect.any(String) });
+  });
+
   it('renders an inline preview inside the dedicated non-collapsing player section', async () => {
     const details = videoDetails(1);
     api.GetVideoDetails.mockResolvedValue(details);

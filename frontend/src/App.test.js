@@ -94,6 +94,14 @@ it('存储体检正在移到废纸篓时不能离开洞察页，结束后可以'
   expect(wrapper.vm.currentPage).toBe('videos');
 });
 
+it('片库详情「找相似画面」：切到场景检索页并带上这一刻', async () => {
+  const wrapper = await mountApp();
+  wrapper.findComponent({ name: 'VideoListPage' }).vm.$emit('find-similar-scenes', { videoID: 3, atMS: 4000, title: '片' });
+  await flushPromises();
+  expect(wrapper.vm.currentPage).toBe('scenes');
+  expect(wrapper.vm.scenesScope).toEqual({ filter: null, similar: { videoID: 3, atMS: 4000, title: '片' }, token: expect.any(Number) });
+});
+
 it('启动失败时仍可打开只读诊断，不挂载片库或任务中心', async () => {
   api.GetStartupError.mockResolvedValue('数据库未初始化');
   const wrapper = shallowMount(App, { global: { renderStubDefaultSlot: true } });

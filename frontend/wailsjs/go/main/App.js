@@ -1390,6 +1390,10 @@ export function SearchScenes(arg1) {
   return window['go']['main']['App']['SearchScenes'](arg1);
 }
 
+export function SearchScenesByImage(arg1) {
+  return window['go']['main']['App']['SearchScenesByImage'](arg1);
+}
+
 export function SearchSemanticVideos(arg1) {
   return window['go']['main']['App']['SearchSemanticVideos'](arg1);
 }

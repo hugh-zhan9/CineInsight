@@ -296,6 +296,7 @@
 	  @export-local-metadata="exportLocalMetadataNFO"
 	  @enhance="openEnhanceDialog"
 	  @find-similar="findSimilarVideos"
+	  @find-similar-scenes="$emit('find-similar-scenes', $event)"
 	  @shortcut="handlePreviewShortcut"
 	  @preview-session-stale="refreshPreviewSession"
     />
@@ -625,7 +626,7 @@ export default {
     pageActive: { type: Boolean, default: true },
     consolidationRoute: { type: Object, default: null }
   },
-  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'consolidation-opened', 'search-scenes', 'open-video-edit'],
+  emits: ['reload-tags', 'update-settings', 'reload-directories', 'person-converted', 'consolidation-opened', 'search-scenes', 'find-similar-scenes', 'open-video-edit'],
   data() {
     return {
       videos: [],
