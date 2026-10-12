@@ -6,6 +6,8 @@ const row = fs.readFileSync(new URL('../src/components/VideoListRow.vue', import
 const virtualList = fs.readFileSync(new URL('../src/components/VirtualVideoList.vue', import.meta.url), 'utf8');
 const sharedCss = fs.readFileSync(new URL('../src/styles/components.css', import.meta.url), 'utf8');
 const previewDrawer = fs.readFileSync(new URL('../src/components/PreviewDrawer.vue', import.meta.url), 'utf8');
+// D-UI-11：播放器外壳与 <video> 的样式随内嵌播放器搬进了 InlineVideoPlayer。
+const inlinePlayer = fs.readFileSync(new URL('../src/components/player/InlineVideoPlayer.vue', import.meta.url), 'utf8');
 const handler = fs.readFileSync(new URL('../../preview_asset_handler.go', import.meta.url), 'utf8');
 const photoPage = fs.readFileSync(new URL('../src/components/PhotoLibraryPage.vue', import.meta.url), 'utf8');
 const appShell = fs.readFileSync(new URL('../src/App.vue', import.meta.url), 'utf8');
@@ -24,8 +26,9 @@ assert.doesNotMatch(sharedCss, /repeat\(auto-fit,/, 'auto-fit would stretch a pa
 assert.match(sharedCss, /\.virtual-video-list--grid \.virtual-video-list__items\s*{[^}]*justify-content:\s*start/s, 'a partially filled grid row should not stretch cards');
 assert.match(previewDrawer, /\.preview-drawer__body\s*{[^}]*display:\s*grid[^}]*grid-auto-rows:\s*max-content/s, 'drawer sections must not flex-shrink the player');
 assert.match(previewDrawer, /\.detail-section--player\s*{[^}]*min-height:\s*220px/s, 'player section needs a non-collapsing minimum height');
-assert.match(previewDrawer, /\.preview-drawer__player-shell\s*{[^}]*aspect-ratio:\s*16\s*\/\s*9[^}]*min-height:\s*220px/s, 'player shell should preserve its 16:9 viewport');
-assert.match(previewDrawer, /\.preview-drawer__video\s*{[^}]*position:\s*absolute[^}]*inset:\s*0/s, 'video should fill the preserved player shell');
+assert.match(inlinePlayer, /\.preview-drawer__player-shell\s*{[^}]*aspect-ratio:\s*16\s*\/\s*9[^}]*min-height:\s*220px/s, 'player shell should preserve its 16:9 viewport');
+assert.match(inlinePlayer, /\.preview-drawer__video\s*{[^}]*position:\s*absolute[^}]*inset:\s*0/s, 'video should fill the preserved player shell');
+assert.match(previewDrawer, /<section class="detail-section detail-section--player">\s*<InlineVideoPlayer/, 'the drawer player section hosts the shared inline player');
 // 原型 A4：抽屉固定 520px 停靠，列表让出的宽度必须与它一致，
 // 窄于 1100 改为覆盖式且列表不再收窄。
 assert.match(previewDrawer, /\.preview-drawer\s*{[^}]*width:\s*520px/s, 'the drawer docks at a fixed 520px');
