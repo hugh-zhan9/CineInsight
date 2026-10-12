@@ -998,3 +998,27 @@ func TestJellyfinUserDataReportsRewatchResumePoint(t *testing.T) {
 		t.Fatalf("重看写下的断点可续播，应当如实报告: %v", ticks)
 	}
 }
+
+// 拔掉移动硬盘后图片只标失效（is_stale），图片库网格不再显示它们；顶栏图片数要跟着变，
+// 黑名单目录里的同理（2026-10-12）。
+func TestGetLibraryCountsSkipsStaleAndExcludedImages(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	images := []models.Image{
+		{Name: "live.jpg", Path: "/pics/live.jpg", Directory: "/pics"},
+		{Name: "offline.jpg", Path: "/pics/offline.jpg", Directory: "/pics", IsStale: true},
+		{Name: "hidden.jpg", Path: "/excluded/hidden.jpg", Directory: "/excluded"},
+	}
+	if err := database.DB.Create(&images).Error; err != nil {
+		t.Fatalf("创建图片失败: %v", err)
+	}
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("image_scan_exclude_paths", "/excluded").Error; err != nil {
+		t.Fatalf("设置图片黑名单失败: %v", err)
+	}
+	counts, err := (&VideoService{}).GetLibraryCounts()
+	if err != nil {
+		t.Fatalf("计数失败: %v", err)
+	}
+	if counts.ImageCount != 1 {
+		t.Fatalf("顶栏图片数应只算可见的 1 张，实际 %d", counts.ImageCount)
+	}
+}

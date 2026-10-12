@@ -655,3 +655,72 @@ func TestManagedImageRejectsUnsupportedOrOversizedSources(t *testing.T) {
 		t.Fatal("超过 20 MiB 的头像应被拒绝")
 	}
 }
+
+// 人物名下的视频与图片，计数和列表都与片库、图片库同一口径：失效（如移动硬盘拔掉）与黑名单里的不计也不列，
+// 失效标记清掉后自动回来（2026-10-12 用户裁决：列表与计数一起隐藏）。
+func TestPersonCountsAndListsSkipStaleAndExcludedMedia(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	svc := NewPersonService(t.TempDir())
+	person, err := svc.CreatePerson("可见口径", "")
+	if err != nil {
+		t.Fatalf("创建人物失败: %v", err)
+	}
+	liveVideo := createProbeTestVideo(t)
+	staleVideo := createProbeTestVideo(t)
+	if err := database.DB.Model(&models.Video{}).Where("id = ?", staleVideo.ID).
+		Updates(map[string]interface{}{"is_stale": true, "stale_reason": models.StaleReasonOfflineRoot}).Error; err != nil {
+		t.Fatalf("标记视频失效失败: %v", err)
+	}
+	if err := svc.AddPersonVideos(person.ID, []uint{liveVideo.ID, staleVideo.ID}); err != nil {
+		t.Fatalf("关联视频失败: %v", err)
+	}
+	liveImage := mustCreateTestImage(t, "live.jpg", 10)
+	staleImage := mustCreateTestImage(t, "offline.jpg", 10)
+	excludedImage := &models.Image{Name: "hidden.jpg", Path: "/excluded/hidden.jpg", Directory: "/excluded", Format: "jpg"}
+	if err := database.DB.Create(excludedImage).Error; err != nil {
+		t.Fatalf("创建图片失败: %v", err)
+	}
+	if err := svc.AddPersonImages(person.ID, []uint{liveImage.ID, staleImage.ID, excludedImage.ID}); err != nil {
+		t.Fatalf("关联图片失败: %v", err)
+	}
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", staleImage.ID).Update("is_stale", true).Error; err != nil {
+		t.Fatalf("标记图片失效失败: %v", err)
+	}
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("image_scan_exclude_paths", "/excluded").Error; err != nil {
+		t.Fatalf("设置图片黑名单失败: %v", err)
+	}
+
+	items, err := svc.ListPeople("可见口径", "", 0, 20)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("列出人物失败: %v %#v", err, items)
+	}
+	if items[0].ActiveVideoCount != 1 || items[0].ActiveImageCount != 1 {
+		t.Fatalf("人物列表计数应只算可见项，实际视频 %d 图片 %d", items[0].ActiveVideoCount, items[0].ActiveImageCount)
+	}
+	detail, err := svc.GetPersonDetail(person.ID, 0, 20)
+	if err != nil {
+		t.Fatalf("读取人物详情失败: %v", err)
+	}
+	if detail.Person.ActiveVideoCount != 1 || detail.Person.ActiveImageCount != 1 {
+		t.Fatalf("详情计数应只算可见项: %#v", detail.Person)
+	}
+	if len(detail.Videos) != 1 || detail.Videos[0].ID != liveVideo.ID {
+		t.Fatalf("详情视频列表应只有可见的那部: %#v", detail.Videos)
+	}
+	if len(detail.Images) != 1 || detail.Images[0].ID != liveImage.ID {
+		t.Fatalf("详情图片列表应只有可见的那张: %#v", detail.Images)
+	}
+	page, err := svc.GetPersonImages(person.ID, 0, 20)
+	if err != nil || len(page.Images) != 1 || page.Images[0].ID != liveImage.ID {
+		t.Fatalf("图片翻页应只有可见的那张: %v %#v", err, page)
+	}
+
+	// 盘插回来、扫描清掉失效标记后自动回来；关系行一直都在。
+	if err := database.DB.Model(&models.Image{}).Where("id = ?", staleImage.ID).Update("is_stale", false).Error; err != nil {
+		t.Fatalf("清除图片失效失败: %v", err)
+	}
+	detail, err = svc.GetPersonDetail(person.ID, 0, 20)
+	if err != nil || len(detail.Images) != 2 || detail.Person.ActiveImageCount != 2 {
+		t.Fatalf("失效清除后图片应回来: %v %#v", err, detail)
+	}
+}

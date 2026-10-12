@@ -1406,7 +1406,7 @@ func (s *VideoService) SetVideoRating(videoID uint, rating *float64) (*models.Vi
 	return &video, nil
 }
 
-// GetLibraryCounts 返回活跃视频与活跃图片的总数（软删除的不计）。
+// GetLibraryCounts 返回可见视频与可见图片的总数（软删除、失效与黑名单里的不计）。
 func (s *VideoService) GetLibraryCounts() (*LibraryCounts, error) {
 	counts := &LibraryCounts{}
 	// 顶栏这个数必须和片库列表用同一套扫描根裁剪，否则"库 N 视频"会比列表结果条多出
@@ -1418,7 +1418,8 @@ func (s *VideoService) GetLibraryCounts() (*LibraryCounts, error) {
 	if err := videoQuery.Count(&counts.VideoCount).Error; err != nil {
 		return nil, err
 	}
-	if err := database.DB.Model(&models.Image{}).Count(&counts.ImageCount).Error; err != nil {
+	// 图片同理：与图片库默认视图同一口径（黑名单之外、非失效），拔掉移动硬盘后不再计入。
+	if err := applyImageVisibility(database.DB.Model(&models.Image{}), database.DB).Count(&counts.ImageCount).Error; err != nil {
 		return nil, err
 	}
 	return counts, nil

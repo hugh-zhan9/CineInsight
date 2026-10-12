@@ -121,3 +121,32 @@ func TestImageStatsLibraryInsightsUnchanged(t *testing.T) {
 		t.Fatalf("tag buckets=%#v", after.StorageByTag)
 	}
 }
+
+// 洞察页图片摘要与存储分布与图片库同一口径：失效与黑名单目录里的图片都不计（2026-10-12）。
+func TestImageStatsSkipsStaleAndExcludedImages(t *testing.T) {
+	setupVideoServiceTestDB(t)
+	images := []models.Image{
+		{Name: "a.jpg", Path: "/pics/a.jpg", Directory: "/pics", Size: 100, Format: "jpg", IsFavorite: true},
+		{Name: "b.jpg", Path: "/pics/b.jpg", Directory: "/pics", Size: 200, Format: "jpg", IsFavorite: true, IsStale: true},
+		{Name: "c.png", Path: "/excluded/c.png", Directory: "/excluded", Size: 400, Format: "png"},
+	}
+	if err := database.DB.Create(&images).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.DB.Model(&models.Settings{}).Where("1 = 1").Update("image_scan_exclude_paths", "/excluded").Error; err != nil {
+		t.Fatal(err)
+	}
+	stats, err := NewImageStatsService().GetImageInsights()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Summary.ImageCount != 1 || stats.Summary.TotalSize != 100 || stats.Summary.FavoriteCount != 1 {
+		t.Fatalf("summary=%#v", stats.Summary)
+	}
+	if want := []ImageStatsBucket{{Label: "/pics", TotalSize: 100}}; !reflect.DeepEqual(stats.StorageByDirectory, want) {
+		t.Fatalf("directory buckets=%#v", stats.StorageByDirectory)
+	}
+	if want := []ImageStatsBucket{{Label: "jpg", TotalSize: 100}}; !reflect.DeepEqual(stats.StorageByFormat, want) {
+		t.Fatalf("format buckets=%#v", stats.StorageByFormat)
+	}
+}

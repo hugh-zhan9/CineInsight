@@ -37,13 +37,14 @@ func NewImageStatsService() *ImageStatsService {
 	return &ImageStatsService{now: time.Now}
 }
 
-// GetImageInsights 汇总图片库摘要与目录/格式两个存储分布，只查活跃行。
+// GetImageInsights 汇总图片库摘要与目录/格式两个存储分布，只查可见行：与图片库默认视图
+// 同一口径（软删除、失效与黑名单里的不计），拔掉移动硬盘后洞察页不再把它们算进去。
 func (s *ImageStatsService) GetImageInsights() (*ImageStats, error) {
 	if database.DB == nil {
 		return nil, fmt.Errorf("database is not initialized")
 	}
 	stats := &ImageStats{GeneratedAt: s.now()}
-	if err := database.DB.Model(&models.Image{}).Select(`
+	if err := applyImageVisibility(database.DB.Model(&models.Image{}), database.DB).Select(`
 		COUNT(*) AS image_count,
 		COALESCE(SUM(size), 0) AS total_size,
 		COALESCE(SUM(CASE WHEN is_favorite THEN 1 ELSE 0 END), 0) AS favorite_count
@@ -65,7 +66,7 @@ func (s *ImageStatsService) GetImageInsights() (*ImageStats, error) {
 // 白名单列名（directory/format），不接收外部输入。
 func imageStorageByColumn(column string) ([]ImageStatsBucket, error) {
 	var buckets []ImageStatsBucket
-	err := database.DB.Model(&models.Image{}).
+	err := applyImageVisibility(database.DB.Model(&models.Image{}), database.DB).
 		Select(column + " AS label, COALESCE(SUM(size), 0) AS total_size").
 		Group(column).Order("total_size DESC, label ASC").Limit(50).Scan(&buckets).Error
 	return buckets, err

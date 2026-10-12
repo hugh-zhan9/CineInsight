@@ -145,18 +145,29 @@ func (s *PersonService) ListPeople(keyword, cursorName string, cursorID uint, li
 	return items, nil
 }
 
+// 人物名下的视频与图片（计数和列表）与片库、图片库默认视图同一口径：扫描根与黑名单之内、
+// 非失效。移动硬盘拔掉后这些项不再计入也不再列出，盘插回来扫描清掉失效标记后自动回来。
+func visiblePersonVideos() (*gorm.DB, error) {
+	return visibleVideoQuery(database.DB.Model(&models.Video{}).
+		Joins("JOIN video_people ON video_people.video_id = videos.id"))
+}
+
+func visiblePersonImages() *gorm.DB {
+	return applyImageVisibility(database.DB.Model(&models.Image{}).
+		Joins("JOIN image_people ON image_people.image_id = images.id"), database.DB)
+}
+
 func (s *PersonService) personListItem(person models.Person) (PersonListItem, error) {
 	var activeVideoCount int64
-	err := database.DB.Model(&models.Video{}).
-		Joins("JOIN video_people ON video_people.video_id = videos.id").
-		Where("video_people.person_id = ?", person.ID).
-		Count(&activeVideoCount).Error
+	videos, err := visiblePersonVideos()
 	if err != nil {
 		return PersonListItem{}, fmt.Errorf("count active person videos: %w", err)
 	}
+	if err := videos.Where("video_people.person_id = ?", person.ID).Count(&activeVideoCount).Error; err != nil {
+		return PersonListItem{}, fmt.Errorf("count active person videos: %w", err)
+	}
 	var activeImageCount int64
-	err = database.DB.Model(&models.Image{}).
-		Joins("JOIN image_people ON image_people.image_id = images.id").
+	err = visiblePersonImages().
 		Where("image_people.person_id = ?", person.ID).
 		Count(&activeImageCount).Error
 	if err != nil {
@@ -182,9 +193,12 @@ func activeVideoCountsByPerson(personIDs []uint) (map[uint]int64, error) {
 		EntityID uint  `gorm:"column:entity_id"`
 		Count    int64 `gorm:"column:count"`
 	}
-	if err := database.DB.Model(&models.Video{}).
+	videos, err := visiblePersonVideos()
+	if err != nil {
+		return nil, fmt.Errorf("count active person videos: %w", err)
+	}
+	if err := videos.
 		Select("video_people.person_id AS entity_id, COUNT(*) AS count").
-		Joins("JOIN video_people ON video_people.video_id = videos.id").
 		Where("video_people.person_id IN ?", personIDs).
 		Group("video_people.person_id").Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("count active person videos: %w", err)
@@ -195,8 +209,8 @@ func activeVideoCountsByPerson(personIDs []uint) (map[uint]int64, error) {
 	return counts, nil
 }
 
-// activeImageCountsByPerson 与 activeVideoCountsByPerson 同形：只数活跃图片，
-// 软删除图片的关系仍在 image_people 里但不计入。
+// activeImageCountsByPerson 与 activeVideoCountsByPerson 同形：只数可见图片，
+// 软删除或失效图片的关系仍在 image_people 里但不计入。
 func activeImageCountsByPerson(personIDs []uint) (map[uint]int64, error) {
 	counts := make(map[uint]int64, len(personIDs))
 	if len(personIDs) == 0 {
@@ -206,9 +220,8 @@ func activeImageCountsByPerson(personIDs []uint) (map[uint]int64, error) {
 		EntityID uint  `gorm:"column:entity_id"`
 		Count    int64 `gorm:"column:count"`
 	}
-	if err := database.DB.Model(&models.Image{}).
+	if err := visiblePersonImages().
 		Select("image_people.person_id AS entity_id, COUNT(*) AS count").
-		Joins("JOIN image_people ON image_people.image_id = images.id").
 		Where("image_people.person_id IN ?", personIDs).
 		Group("image_people.person_id").Scan(&rows).Error; err != nil {
 		return nil, fmt.Errorf("count active person images: %w", err)
@@ -229,9 +242,11 @@ func (s *PersonService) GetPersonDetail(id, cursorVideoID uint, limit int) (*Per
 		return nil, err
 	}
 	limit = normalizeEntityPageLimit(limit)
-	query := database.DB.Model(&models.Video{}).
-		Joins("JOIN video_people ON video_people.video_id = videos.id").
-		Where("video_people.person_id = ?", id)
+	query, err := visiblePersonVideos()
+	if err != nil {
+		return nil, fmt.Errorf("list person videos: %w", err)
+	}
+	query = query.Where("video_people.person_id = ?", id)
 	if cursorVideoID != 0 {
 		query = query.Where("videos.id < ?", cursorVideoID)
 	}
@@ -272,8 +287,7 @@ func (s *PersonService) GetPersonImages(personID, cursorImageID uint, limit int)
 // First 之后调用，不需要为同一个人物再查一遍。
 func (s *PersonService) listPersonImages(personID, cursorImageID uint, limit int) (*PersonImagePage, error) {
 	limit = normalizeEntityPageLimit(limit)
-	query := database.DB.Model(&models.Image{}).
-		Joins("JOIN image_people ON image_people.image_id = images.id").
+	query := visiblePersonImages().
 		Where("image_people.person_id = ?", personID)
 	if cursorImageID != 0 {
 		query = query.Where("images.id < ?", cursorImageID)
