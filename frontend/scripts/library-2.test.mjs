@@ -4,6 +4,8 @@ import { readFileSync } from 'node:fs';
 const page = readFileSync(new URL('../src/components/VideoListPage.vue', import.meta.url), 'utf8');
 const row = readFileSync(new URL('../src/components/VideoListRow.vue', import.meta.url), 'utf8');
 const preview = readFileSync(new URL('../src/components/PreviewDrawer.vue', import.meta.url), 'utf8');
+// D-UI-11 把抽屉里的内嵌播放器抽成了 InlineVideoPlayer，起播与进度上报的断言跟着搬到新文件上。
+const inlinePlayer = readFileSync(new URL('../src/components/player/InlineVideoPlayer.vue', import.meta.url), 'utf8');
 // P-002 把清理审阅面板抽成了独立组件，下面属于面板的断言跟着搬到新文件上。
 const cleanupPanel = readFileSync(new URL('../src/components/video-list/CleanupReviewPanel.vue', import.meta.url), 'utf8');
 const saveViewDialog = readFileSync(new URL('../src/components/video-list/SaveViewDialog.vue', import.meta.url), 'utf8');
@@ -33,10 +35,11 @@ assert.match(row, /resumePosition\(this\.video\)/, 'row progress should use the 
 assert.match(row, /toggle-favorite/, 'library rows should expose favorite state');
 assert.match(row, /toggle-watched/, 'library rows should expose watched state');
 assert.match(row, /watch_position_seconds/, 'library rows should show resume progress');
-assert.match(preview, /detailPlaybackStartMs\(/, 'preview should resolve subtitle and resume start times through the tested behavior helper');
+assert.match(inlinePlayer, /detailPlaybackStartMs\(/, 'preview should resolve subtitle and resume start times through the tested behavior helper');
 assert.doesNotMatch(preview, /^\s+resumePositionSeconds\(\)/m, 'progress persistence must not seek the active player backwards');
-assert.match(preview, /@ended="handleEnded"/, 'natural end has a dedicated playback handler');
-assert.match(preview, /handleEnded\(\)\s*\{\s*this\.emitWatchProgress\(true, true\)/, 'natural end still reports watch completion');
+assert.doesNotMatch(inlinePlayer, /^\s+resumePositionSeconds\(\)/m, 'progress persistence must not seek the active player backwards');
+assert.match(inlinePlayer, /@ended="handleEnded"/, 'natural end has a dedicated playback handler');
+assert.match(inlinePlayer, /handleEnded\(\)\s*\{\s*this\.emitWatchProgress\(true, true\)/, 'natural end still reports watch completion');
 assert.match(cleanupPanel, /same_source_groups/, 'cleanup review should include same-source candidates');
 assert.match(cleanupPanel, /RejectSameSourceRelation/, 'cleanup review should reuse the existing rejection path');
 assert.match(cleanupPanel, /byID\.set\(group\.alternative\.id, group\.alternative\)/, 'only the alternative same-source version should be selectable for cleanup');
