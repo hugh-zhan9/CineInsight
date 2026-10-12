@@ -47,6 +47,14 @@ const (
 	// BackgroundTaskVideoEdit 是视频工作台的导出队列（视频编辑合同）。用户显式排队，不进空闲门；
 	// 有排队或运行项时退出走既有退出确认。
 	BackgroundTaskVideoEdit BackgroundTaskKey = "video_edit"
+	// 数据维护四项（docs/loopx/design/2026-10-12-data-care）：都由用户显式触发，不进空闲门。
+	// lost_media 是失联找回、清除与孤儿文件回收；metadata_batch_edit 是批量编辑与撤销；
+	// automation_rules 是规则的手动运行（新入库的规则队列是轻量写，不登记）；
+	// data_health 是数据体检（只读，不阻止退出）。
+	BackgroundTaskLostMedia         BackgroundTaskKey = "lost_media"
+	BackgroundTaskMetadataBatchEdit BackgroundTaskKey = "metadata_batch_edit"
+	BackgroundTaskAutomationRules   BackgroundTaskKey = "automation_rules"
+	BackgroundTaskDataHealth        BackgroundTaskKey = "data_health"
 )
 
 // backgroundTaskKeyOrder 既是合法 key 的全集，也是 Snapshot 的稳定顺序。
@@ -78,6 +86,10 @@ var backgroundTaskKeyOrder = []BackgroundTaskKey{
 	BackgroundTaskMovieChart,
 	BackgroundTaskSceneIndex,
 	BackgroundTaskVideoEdit,
+	BackgroundTaskLostMedia,
+	BackgroundTaskMetadataBatchEdit,
+	BackgroundTaskAutomationRules,
+	BackgroundTaskDataHealth,
 }
 
 // IsBackgroundTaskKey 报告字符串是否属于固定 key 集合，供前端传入的 key 校验。

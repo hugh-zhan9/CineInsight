@@ -123,6 +123,16 @@
 	    @videos-changed="handleVideosChangedElsewhere"
 	    @busy-change="insightsBusy = $event"
 	  />
+	  <DataCarePage
+	    v-if="currentPage === 'data-care'"
+	    :tab-request="dataCareTab"
+	    :directories="directories"
+	    @open-video-id="openVideoByID"
+	    @run-command="runPendingCommand"
+	    @videos-changed="handleVideosChangedElsewhere"
+	    @open-library-missing="openMissingFilter"
+	    @navigate="navigateTo"
+	  />
 	  <!-- 场景检索：首次进入才挂载，之后只隐藏，点开命中再回来时结果还在。 -->
 	  <ScenesPage v-if="scenesMounted" v-show="currentPage === 'scenes'" :page-active="currentPage === 'scenes'" :scope-request="scenesScope" @open-video-at="openVideoAt" />
 	  <!-- 视频工作台：首次进入才挂载，之后只隐藏，事件与编辑中的项目都还在。 -->
@@ -213,6 +223,7 @@ import VideoListPage from './components/VideoListPage.vue';
 import SettingsPage from './components/SettingsPage.vue';
 import EntityLibraryPage from './components/EntityLibraryPage.vue';
 import InsightsPage from './components/InsightsPage.vue';
+import DataCarePage from './components/DataCarePage.vue';
 import PhotoLibraryPage from './components/PhotoLibraryPage.vue';
 import DownloadsPage from './components/DownloadsPage.vue';
 import WatchlistPage from './components/WatchlistPage.vue';
@@ -253,7 +264,7 @@ export default {
   // 命令面板的全局快捷键与命令注册都在 appCommandsMixin 里（D-029）。
   mixins: [appCommandsMixin, runtimeEventsMixin],
   components: {
-    VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
+    VideoListPage, SettingsPage, EntityLibraryPage, InsightsPage, DataCarePage, PhotoLibraryPage, DownloadsPage, WatchlistPage,
     MovieChartPage, WatchedMoviesPage, AppFeedback, CommandPalette, TaskCenterDrawer, PendingWorkHub, QuitConfirmDialog, VersionCompareDialog, WallpaperStatusBar,
     BaseModal, SystemHealthPanel, ViewingNotesPage, PlaybackQueuePanel, ScenesPage, VideoWorkbenchPage, RecapPage
   },
@@ -289,6 +300,8 @@ export default {
       libraryCounts: null,
       // 洞察页「存储体检」正在删除视频（InsightsPage 的 busy-change）。
       insightsBusy: false,
+      // 命令面板「数据维护 · 某页签」带进数据维护页的请求（D-DC-01）。
+      dataCareTab: null,
       // 已上报给后端的前后台标记；null = 还没报过。相同值不重复上报。
       windowForeground: null,
       foregroundListeners: null,
@@ -495,6 +508,20 @@ export default {
     openPendingWork() {
       this.taskCenterOpen = false;
       this.pendingWorkOpen = true;
+    },
+    // 命令面板「数据维护 · 某页签」：带上页签切过去；已在该页时由 token 变化触发切签。
+    openDataCare(tab) {
+      this.dataCareTab = { tab, token: Date.now() };
+      return this.navigateTo('data-care');
+    },
+    // 完整度页签的「去处理」：切到片库或图片库并带上「缺失某项」筛选（D-MC-03）。
+    async openMissingFilter({ kind, field } = {}) {
+      const page = kind === 'image' ? 'photos' : 'videos';
+      const navigated = await this.navigateTo(page);
+      if (navigated === false) return false;
+      await this.$nextTick();
+      const target = kind === 'image' ? this.$refs.photoLibrary : this.$refs.videoListPage;
+      return target?.applyMissingFilter?.(field);
     },
     // 洞察页「存储体检」删掉或撤销删除了视频：顶栏计数与片库按当前条件重取。
     handleVideosChangedElsewhere({ removedIDs = [] } = {}) {

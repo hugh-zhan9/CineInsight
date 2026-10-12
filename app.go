@@ -128,6 +128,9 @@ type App struct {
 	sceneRuntime *services.SceneRuntime
 	sceneIndex   *services.SceneIndexService
 	sceneSearch  *services.SceneSearchService
+
+	// 数据维护四项（docs/loopx/design/2026-10-12-data-care），接线见 app_data_care.go。
+	dataCare dataCareServices
 }
 
 // NewApp creates a new App application struct
@@ -223,6 +226,7 @@ func NewApp() *App {
 	app.configureCleanupConsolidation(dataDir)
 	app.wireDesktopNotifier()
 	app.wireServiceHooks()
+	app.initDataCare(dataDir)
 	if dataDirErr != nil {
 		app.setStartupError(dataDirErr)
 	}
@@ -405,6 +409,7 @@ func (a *App) startup(ctx context.Context) {
 		runtime.EventsEmit(ctx, event, data)
 	}
 	a.wireStartupHooks(emit)
+	a.startDataCare(ctx, emit)
 	a.playbackQueueEmit = func(sequence uint64) { emit("playback-queue-state", sequence) }
 	services.SetRecapActivityListener(func(activity services.RecapActivity) { emit(recapActivityEvent, activity) })
 	if err := a.startPlaybackQueue(); err != nil {
@@ -683,6 +688,7 @@ func (a *App) shutdown(ctx context.Context) {
 	if a.videoEdit != nil {
 		a.videoEdit.StopAndWait()
 	}
+	a.stopDataCare()
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
 	}

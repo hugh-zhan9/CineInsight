@@ -153,6 +153,7 @@ func (a *App) quitBlockingTasks() []QuitBlockingTask {
 	if task, blocking := a.videoEditQuitTask(running); blocking {
 		tasks = append(tasks, task)
 	}
+	tasks = append(tasks, a.dataCareQuitTasks(running)...)
 
 	proxy := a.playbackProxies.Status()
 	if proxy.Running || running[string(services.BackgroundTaskProxy)] {

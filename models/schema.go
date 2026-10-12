@@ -107,5 +107,12 @@ func AllModels() []interface{} {
 		// 观看回顾（D-RECAP-SOURCES）：图片查看流水只有指向 images 的级联外键，images 排在
 		// 清单第二位，追加在末尾满足拓扑序。
 		&ImageViewEvent{},
+		// 数据维护（docs/loopx/design/2026-10-12-data-care）：规则账本级联指向规则表、批量编辑明细
+		// 级联指向批次表，被引用的表都排在前面；对媒体只有逻辑引用，追加在末尾满足拓扑序。
+		&AutomationRule{},
+		&AutomationRuleWrite{},
+		&MetadataBatchEdit{},
+		&MetadataBatchEditItem{},
+		&DataHealthReport{},
 	}
 }

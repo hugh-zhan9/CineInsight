@@ -252,6 +252,10 @@ var taskCenterAdapters = map[services.BackgroundTaskKey]taskCenterAdapter{
 	services.BackgroundTaskMovieChart:           (*App).taskCenterMovieChart,
 	services.BackgroundTaskSceneIndex:           (*App).taskCenterSceneIndex,
 	services.BackgroundTaskVideoEdit:            (*App).taskCenterVideoEdit,
+	services.BackgroundTaskLostMedia:            (*App).taskCenterLostMedia,
+	services.BackgroundTaskMetadataBatchEdit:    (*App).taskCenterMetadataEdit,
+	services.BackgroundTaskAutomationRules:      (*App).taskCenterAutomationRules,
+	services.BackgroundTaskDataHealth:           (*App).taskCenterDataHealth,
 }
 
 // runningProgress 给运行中的批量任务报进度；总数还不知道（准备阶段）时为 nil。

@@ -322,6 +322,8 @@ func (a *App) enterDatabaseRestoreMode(closeConnection bool) error {
 	if a.videoEdit != nil {
 		a.videoEdit.StopAndWait()
 	}
+	// 数据维护四项（找回/清除、批量编辑、规则、体检）都写库或读库，维护前停下并等待收尾。
+	a.stopDataCare()
 	if a.perceptualHash != nil {
 		a.perceptualHash.StopAndWait()
 	}
@@ -389,6 +391,7 @@ func (a *App) resumeAfterDatabaseRestoreFailure() {
 	if a.videoEdit != nil {
 		a.videoEdit.Resume()
 	}
+	a.resumeDataCare()
 	if a.aiTaggingService != nil {
 		a.aiTaggingService.ResetReviewApproval()
 	}

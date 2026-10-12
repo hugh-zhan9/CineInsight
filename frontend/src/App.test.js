@@ -410,7 +410,7 @@ describe('顶栏信息架构（APP-14）', () => {
     expect(groupLabels(wrapper)).toEqual([
       { key: 'library', label: '片库', pages: ['视频', '人物', '作品集', '图片'] },
       { key: 'lists', label: '片单', pages: ['观看笔记', '回顾', '想看', '榜单', '观影记录'] },
-      { key: 'tools', label: '工具', pages: ['洞察', '场景检索', '视频工作台'] }
+      { key: 'tools', label: '工具', pages: ['洞察', '数据维护', '场景检索', '视频工作台'] }
     ]);
     expect(wrapper.findAll('.header-nav__divider')).toHaveLength(3);
     expect(wrapper.get('[data-test="nav-settings"]').text()).toBe('设置');

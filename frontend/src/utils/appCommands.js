@@ -52,11 +52,21 @@ export const APP_NAV_GROUPS = [
     label: '工具',
     pages: [
       { key: 'insights', label: '洞察', keywords: ['insights', 'stats', 'dongcha'] },
+      // 数据维护（D-DC-01）：失联 · 完整度 · 规则 · 体检；观看/管理分区落地后归入管理侧。
+      { key: 'data-care', label: '数据维护', keywords: ['data care', 'shuju', 'weihu', '失联', '完整度', '规则', '体检', '批量编辑'] },
       { key: 'scenes', label: '场景检索', keywords: ['scene', 'search', 'changjing', '对白', '画面', '台词'] },
       { key: 'video-workbench', label: '视频工作台', keywords: ['workbench', 'edit', 'merge', 'trim', 'gongzuotai', '合并', '去片头', '高清替换', '剪辑'] },
       { key: 'downloads', label: '下载', keywords: ['download', 'xiazai', '插件', '浏览器'], requiresBrowserBridge: true }
     ]
   }
+];
+
+// 数据维护四个页签的直达命令（D-DC-01）。
+export const DATA_CARE_COMMANDS = [
+  { tab: 'lost', label: '失联', keywords: ['lost', 'missing', '失联', '找回', '清除', '孤儿文件'] },
+  { tab: 'completeness', label: '完整度', keywords: ['completeness', 'metadata', '完整度', '缺失', '元数据'] },
+  { tab: 'rules', label: '规则', keywords: ['rules', 'automation', '规则', '自动'] },
+  { tab: 'health', label: '体检', keywords: ['health', 'check', '体检', '一致性'] }
 ];
 
 export const SETTINGS_NAV_PAGE = { key: 'settings', label: '设置', keywords: ['settings', 'shezhi'] };
@@ -333,6 +343,13 @@ export const appCommandsMixin = {
           keywords: ['scan', 'image', 'photo', '扫描', '图片'],
           run: () => SyncImageDirectories()
         },
+        ...DATA_CARE_COMMANDS.map(item => ({
+          id: `action:data-care:${item.tab}`,
+          group: 'action',
+          label: `数据维护 · ${item.label}`,
+          keywords: ['data care', '数据维护', ...item.keywords],
+          run: () => this.openDataCare(item.tab)
+        })),
         {
           id: 'action:backup-now',
           group: 'action',

@@ -15,6 +15,7 @@ type Video struct {
 	PosterPath             string         `gorm:"type:text;not null;default:''" json:"-"`
 	FanartPath             string         `gorm:"type:text;not null;default:''" json:"-"`
 	PersonalRating         *float64       `gorm:"type:numeric(3,1);check:chk_videos_personal_rating,personal_rating IS NULL OR (personal_rating >= 0 AND personal_rating <= 10 AND personal_rating * 2 = CAST(personal_rating * 2 AS INTEGER))" json:"personal_rating"`
+	Year                   *int           `json:"year"`                                                                    // 影片年份（D-MC-01）：空为未知；1870–2100 由服务层校验（SQLite 老库补不了 CHECK）
 	Path                   string         `gorm:"uniqueIndex:idx_videos_path_active,where:deleted_at IS NULL" json:"path"` // 完整路径
 	Directory              string         `json:"directory"`                                                               // 所在目录
 	Size                   int64          `json:"size"`                                                                    // 文件大小（字节）
@@ -340,6 +341,7 @@ type SavedLibraryView struct {
 	MaxHeight     int            `json:"max_height"`
 	MinRating     *float64       `gorm:"type:numeric(3,1)" json:"min_rating"`
 	MaxRating     *float64       `gorm:"type:numeric(3,1)" json:"max_rating"`
+	Missing       string         `gorm:"size:16;not null;default:''" json:"missing"` // 「缺失某项」筛选（D-MC-03），空串不筛
 	SortMode      string         `gorm:"not null;default:'balanced'" json:"sort_mode"`
 	CreatedAt     time.Time      `json:"created_at" ts_type:"string"`
 	UpdatedAt     time.Time      `json:"updated_at" ts_type:"string"`

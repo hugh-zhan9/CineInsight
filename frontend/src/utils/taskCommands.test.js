@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,12 +24,18 @@ function backendAdapterCapabilities() {
   const tasks = readFileSync(resolve(process.cwd(), '../app_tasks.go'), 'utf8');
   const table = /var taskCenterAdapters = map\[services\.BackgroundTaskKey\]taskCenterAdapter\{([\s\S]*?)\n\}/.exec(tasks);
   if (!table) throw new Error('app_tasks.go 里找不到 taskCenterAdapters');
+  const root = resolve(process.cwd(), '..');
+  const appSources = readdirSync(root)
+    .filter(name => /^app.*\.go$/.test(name) && !name.endsWith('_test.go'))
+    .map(name => readFileSync(resolve(root, name), 'utf8'));
   return [...table[1].matchAll(/services\.(BackgroundTask\w+):\s*\(\*App\)\.(\w+),/g)].map(([, constName, fn]) => {
-    const start = tasks.indexOf(`func (a *App) ${fn}(`);
-    if (start < 0) throw new Error(`app_tasks.go 里找不到适配函数 ${fn}`);
-    const end = tasks.indexOf('\nfunc ', start + 1);
+    // 适配函数多数在 app_tasks.go，数据维护四项的在各自的 app_*.go 里：在所有 App 层源码里找。
+    const source = appSources.find(text => text.includes(`func (a *App) ${fn}(`));
+    if (!source) throw new Error(`App 层源码里找不到适配函数 ${fn}`);
+    const start = source.indexOf(`func (a *App) ${fn}(`);
+    const end = source.indexOf('\nfunc ', start + 1);
     // 只看代码，不看注释：注释里提到字段名不代表会给出动作。
-    const body = tasks.slice(start, end < 0 ? undefined : end)
+    const body = source.slice(start, end < 0 ? undefined : end)
       .split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
     return { key: keyOf[constName], canStart: /\bcanStart:/.test(body), canCancel: /\bcanCancel:/.test(body) };
   });
@@ -48,9 +54,9 @@ describe('任务中心动作与绑定对齐（APP-03）', () => {
     expect(api.CancelAIReviewApproval).toHaveBeenLastCalledWith('image', '');
   });
 
-  it('APP-03 后端适配表覆盖 26 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
+  it('APP-03 后端适配表覆盖 30 个 key；给出 start / cancel 的 key，前端都有对应的零参绑定', () => {
     const capabilities = backendAdapterCapabilities();
-    expect(capabilities).toHaveLength(26);
+    expect(capabilities).toHaveLength(30);
     const missing = [];
     for (const { key, canStart, canCancel } of capabilities) {
       expect(key, '适配表里的常量应当能在登记表里找到取值').toBeTruthy();
