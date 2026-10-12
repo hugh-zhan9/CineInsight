@@ -17,9 +17,12 @@ function emptyReview(key = '') {
     dismissedKeys: [],
     // 近似重复组里被「移出本组」的成员（组键 → 视频/图片 ID 列表），随每轮分析重置（D-PC31）。
     removedMembers: {},
-    page: 1,
+    // 精确重复与疑似重复两个区域各自翻页。
+    pages: { exact: 1, near: 1 },
     memberPages: {},
-    // sameDirOnly 是勾选策略偏好，不随每轮分析重置，由调用方跨批次带过来。
+    // kind（当前查看的区域）与 sameDirOnly（勾选策略）是用户的偏好，不随每轮分析重置，由调用方跨批次带过来。
+    // kind 为空表示还没选过，页面按哪一类有结果挑默认区域。
+    kind: '',
     sameDirOnly: false
   };
 }

@@ -73,6 +73,11 @@ async function mountWith(status) {
   return wrapper;
 }
 
+// 精确重复与疑似重复分在两个区域，点统计卡切换。
+async function showKind(wrapper, kind) {
+  await wrapper.get(`[data-test="cleanup-kind-${kind}"]`).trigger('click');
+}
+
 async function clickDelete(wrapper) {
   await wrapper.vm.$nextTick();
   await wrapper.get('[data-test="cleanup-delete-selected"]').trigger('click');
@@ -107,8 +112,8 @@ describe('图片清理审阅', () => {
       : [{ original: makeMember(1, 'keep.jpg'), candidates: Array.from({ length: 99999 }, (_, i) => makeMember(i + 2, `copy-${i}.jpg`)) }];
     photoCleanupStore.status = statusWith({ duplicate_groups: groups });
     await wrapper.vm.$nextTick();
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(shape === 'many-groups' ? 10 : 1);
-    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(20);
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(shape === 'many-groups' ? 20 : 1);
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(shape === 'many-groups' ? 40 : 20);
     expect(wrapper.vm.selection).toHaveLength(shape === 'many-groups' ? 50000 : 99999);
     wrapper.unmount();
   });
@@ -119,17 +124,17 @@ describe('图片清理审阅', () => {
       candidates: [makeMember(i * 2 + 2, `copy-${i}.jpg`)]
     }));
     const wrapper = await mountWith(statusWith({ duplicate_groups: groups }));
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(10);
-    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(20);
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(20);
+    expect(wrapper.findAll('[data-test="cleanup-member"]')).toHaveLength(40);
     expect(wrapper.vm.selection).toHaveLength(1000);
     expect(wrapper.get('.cleanup-dir__count').text()).toContain('1000 组');
     await wrapper.get('[data-test="cleanup-page-next"]').trigger('click');
-    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(10);
-    expect(wrapper.text()).toContain('keep-10.jpg');
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(20);
+    expect(wrapper.text()).toContain('keep-20.jpg');
     expect(wrapper.vm.selection).toHaveLength(1000);
     await wrapper.findAll('[data-test="cleanup-keep-toggle"]')[1].setValue(true);
-    expect(wrapper.vm.review.keepOverrides['exact-21']).toBe(22);
-    expect(wrapper.vm.selection).not.toContain(22);
+    expect(wrapper.vm.review.keepOverrides['exact-41']).toBe(42);
+    expect(wrapper.vm.selection).not.toContain(42);
     await wrapper.get('[data-test="cleanup-page-prev"]').trigger('click');
     expect(wrapper.text()).toContain('keep-0.jpg');
     await wrapper.get('[data-test="cleanup-page-next"]').trigger('click');
@@ -176,13 +181,16 @@ describe('图片清理审阅', () => {
   it('IMG-04 精确重复默认勾选保留项以外的副本', async () => {
     const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] }));
     expect(wrapper.vm.selection).toEqual([12]);
-    const outcomes = wrapper.findAll('[data-test="cleanup-group-outcome"]').map(node => node.text());
-    expect(outcomes).toEqual(['本组将删除 1 张', '本组暂不删除任何图片']);
+    const outcomes = () => wrapper.findAll('[data-test="cleanup-group-outcome"]').map(node => node.text());
+    expect(outcomes()).toEqual(['本组将删除 1 张']);
+    await showKind(wrapper, 'near');
+    expect(outcomes()).toEqual(['本组暂不删除任何图片']);
     wrapper.unmount();
   });
 
   it('IMG-05「按建议勾选 / 取消」只翻转本组', async () => {
     const wrapper = await mountWith(statusWith({ duplicate_groups: [exactGroup()], near_duplicate_groups: [nearGroup()] }));
+    await showKind(wrapper, 'near');
 
     const nearCard = () => wrapper.findAll('[data-test="cleanup-group-card"]').find(card => card.attributes('data-kind') === 'near');
     const toggle = () => nearCard().get('[data-test="cleanup-suggest-group"]');
@@ -456,6 +464,7 @@ describe('D-PC49 锁定与删除进行中（P-032 评审 I-1、Minor 5 / 7 / 8�
     await card(wrapper, 'exact').get('[data-test="cleanup-skip-group"]').trigger('click');
     await flushPromises();
     expect(wrapper.vm.selection).toEqual([]);
+    await showKind(wrapper, 'near');
     const nearCard = card(wrapper, 'near');
     expect(toggleOf(nearCard, 'b.jpg').element.disabled).toBe(true);
     expect(nearCard.get('[data-test="cleanup-member-locked"]').text()).toBe('（另一组设了「本组不删」）');
@@ -486,9 +495,13 @@ describe('D-PC49 锁定与删除进行中（P-032 评审 I-1、Minor 5 / 7 / 8�
     const controls = () => wrapper.findAll([
       '[data-test="cleanup-candidate-toggle"]', '[data-test="cleanup-keep-toggle"]', '[data-test="cleanup-skip-group"]',
       '[data-test="cleanup-suggest-group"]', '[data-test="cleanup-remove-member"]', '[data-test="cleanup-dismiss-group"]',
-      '[data-test="cleanup-samedir-switch"] input', '[data-test="cleanup-back"]'
+      '[data-test="cleanup-suggest-page"]', '[data-test="cleanup-samedir-switch"] input', '[data-test="cleanup-back"]'
     ].join(', '));
-    expect(controls().length).toBeGreaterThanOrEqual(14);
+    // 两个区域分开渲染，切换区域不改勾选，删除进行中也能切过去看。
+    expect(controls().length).toBeGreaterThanOrEqual(9);
+    expect(controls().every(node => node.element.disabled)).toBe(true);
+    await showKind(wrapper, 'near');
+    expect(controls().length).toBeGreaterThanOrEqual(15);
     expect(controls().every(node => node.element.disabled)).toBe(true);
 
     // 界面之外直接调用也不生效。
@@ -760,10 +773,14 @@ describe('D-PC49 确认框打开期间与改分组请求进行中（P-032 复审
     const controls = () => wrapper.findAll([
       '[data-test="cleanup-candidate-toggle"]', '[data-test="cleanup-keep-toggle"]', '[data-test="cleanup-skip-group"]',
       '[data-test="cleanup-suggest-group"]', '[data-test="cleanup-remove-member"]', '[data-test="cleanup-dismiss-group"]',
-      '[data-test="cleanup-samedir-switch"] input', '[data-test="cleanup-start"]'
+      '[data-test="cleanup-suggest-page"]', '[data-test="cleanup-samedir-switch"] input', '[data-test="cleanup-start"]'
     ].join(', '));
-    expect(controls().length).toBeGreaterThanOrEqual(16);
+    expect(controls().length).toBeGreaterThanOrEqual(9);
     expect(controls().every(node => node.element.disabled)).toBe(true);
+    await showKind(wrapper, 'near');
+    expect(controls().length).toBeGreaterThanOrEqual(18);
+    expect(controls().every(node => node.element.disabled)).toBe(true);
+    wrapper.vm.togglePageSuggestion();
 
     // 界面之外直接调用同样被拦下。
     const nearEntry = wrapper.vm.entries.find(entry => entry.kind === 'near');
@@ -992,6 +1009,7 @@ describe('D-PC49「移出本组」后的接替保留项（P-032 复审 I-a）', 
     expect(entry.members.map(member => member.id)).toEqual([2, 3]);
     expect(wrapper.vm.isExhausted(entry)).toBe(true);
     expect(wrapper.vm.keepFor(entry)).toBeNull();
+    await showKind(wrapper, 'near');
     const card = wrapper.findAll('[data-test="cleanup-group-card"]').find(node => node.attributes('data-kind') === 'near');
     expect(card.get('[data-test="cleanup-group-exhausted"]').text()).toContain('本组剩下的都已移到废纸篓');
     expect(card.get('[data-test="cleanup-group-outcome"]').text()).toBe('本组不参与删除');
@@ -1006,6 +1024,141 @@ describe('D-PC49「移出本组」后的接替保留项（P-032 复审 I-a）', 
     await deleteSelection(wrapper, [2, 3, 12]);
     expect(api.MergeMediaMetadata.mock.calls).toEqual([['image', 11, [12], FULL_MERGE]]);
     expect(api.DeleteImagesWithResult).toHaveBeenCalledWith([12], true, expect.any(String));
+    wrapper.unmount();
+  });
+});
+
+// ===== 2026-10-12：精确重复 / 疑似重复分区、每页 20 组、「本页按建议勾选」 =====
+describe('精确重复与疑似重复分区', () => {
+  // 第 i 组：精确组 id 1000+2i / 1000+2i+1，近似组 id 2i+1 / 2i+2；目录按组号分开，便于测折叠。
+  const exactGroups = n => Array.from({ length: n }, (_, i) => ({
+    original: makeMember(1000 + i * 2, `keep-${i}.jpg`), candidates: [makeMember(1001 + i * 2, `copy-${i}.jpg`)], reason: '一致'
+  }));
+  const nearGroups = (n, dirOf = () => '/p') => Array.from({ length: n }, (_, i) => ({
+    original: makeMember(i * 2 + 1, `near-a-${i}.jpg`, { directory: dirOf(i) }),
+    candidates: [makeMember(i * 2 + 2, `near-b-${i}.jpg`, { directory: dirOf(i) })],
+    reason: '接近'
+  }));
+  const kinds = wrapper => wrapper.findAll('[data-test="cleanup-group-card"]').map(card => card.attributes('data-kind'));
+  const pageButton = wrapper => wrapper.get('[data-test="cleanup-suggest-page"]');
+
+  it('统计卡给出两类的组数、张数与已勾数，默认先看精确重复，切换不改勾选', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: exactGroups(3), near_duplicate_groups: nearGroups(2) }));
+    const exactTile = wrapper.get('[data-test="cleanup-kind-exact"]');
+    expect(exactTile.attributes('aria-selected')).toBe('true');
+    expect(exactTile.text()).toContain('3组');
+    expect(exactTile.text()).toContain('6 张 · 已勾 3 张');
+    expect(wrapper.get('[data-test="cleanup-kind-near"]').text()).toContain('4 张 · 已勾 0 张');
+    expect(wrapper.get('[data-test="cleanup-tile-pending"]').text()).toContain('3张');
+    expect(new Set(kinds(wrapper))).toEqual(new Set(['exact']));
+
+    await showKind(wrapper, 'near');
+    expect(wrapper.get('[data-test="cleanup-kind-near"]').attributes('aria-selected')).toBe('true');
+    expect(new Set(kinds(wrapper))).toEqual(new Set(['near']));
+    expect(wrapper.get('[data-test="cleanup-area-bar"]').text()).toContain('疑似重复');
+    expect(wrapper.vm.selection).toHaveLength(3);
+    wrapper.unmount();
+  });
+
+  it('只有疑似重复时默认打开疑似重复；另一类为空时说明空态', async () => {
+    const wrapper = await mountWith(statusWith({ near_duplicate_groups: nearGroups(1) }));
+    expect(wrapper.vm.activeKind).toBe('near');
+    expect(kinds(wrapper)).toEqual(['near']);
+    await showKind(wrapper, 'exact');
+    expect(wrapper.get('[data-test="cleanup-area-empty"]').text()).toContain('没有发现精确重复。');
+    expect(wrapper.find('[data-test="cleanup-group-card"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('精确重复有结果、指纹一张都没算时，疑似重复区说「尚未计算」并给出补全入口', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: exactGroups(1), coverage: { perceptual_hash: { done: 0, total: 40 } } }));
+    await showKind(wrapper, 'near');
+    expect(wrapper.get('[data-test="cleanup-area-empty"]').text()).toContain('疑似重复尚未计算。');
+    await wrapper.get('[data-test="cleanup-area-start-phash"]').trigger('click');
+    await flushPromises();
+    expect(api.StartImagePerceptualHashBackfill).toHaveBeenCalledTimes(1);
+    wrapper.unmount();
+  });
+
+  it('两个区域各自翻页，每页 20 组，底部也能翻页', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: exactGroups(45), near_duplicate_groups: nearGroups(25) }));
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(20);
+    await wrapper.get('[data-test="cleanup-page-next-bottom"]').trigger('click');
+    await wrapper.get('[data-test="cleanup-page-next-bottom"]').trigger('click');
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(5);
+    expect(wrapper.get('[data-test="cleanup-area-bar"]').text()).toContain('第 3 / 3 页');
+
+    await showKind(wrapper, 'near');
+    expect(wrapper.get('[data-test="cleanup-area-bar"]').text()).toContain('第 1 / 2 页');
+    expect(wrapper.findAll('[data-test="cleanup-group-card"]')).toHaveLength(20);
+    await showKind(wrapper, 'exact');
+    expect(wrapper.get('[data-test="cleanup-area-bar"]').text()).toContain('第 3 / 3 页');
+    wrapper.unmount();
+  });
+
+  it('「本页按建议勾选」只勾本页展开着的组，再点取消这些组，不动别的页与另一区', async () => {
+    // 25 组疑似重复：第 0 组单独一个目录（/a），其余在 /b；按目录排序后 /a 在第一页最前。
+    const wrapper = await mountWith(statusWith({
+      duplicate_groups: exactGroups(1),
+      near_duplicate_groups: nearGroups(25, i => (i === 0 ? '/a' : '/b'))
+    }));
+    await showKind(wrapper, 'near');
+    expect(wrapper.vm.selection).toEqual([1001]);
+    expect(pageButton(wrapper).text()).toBe('本页按建议勾选');
+
+    // 折叠 /a：它那一组看不到，不替用户勾。
+    await wrapper.findAll('[data-test="cleanup-dir-toggle"]')[0].trigger('click');
+    await pageButton(wrapper).trigger('click');
+    // 本页 = /a 的 1 组 + /b 的前 19 组（第 1..19 组）；勾的是各组的非保留项（偶数 id）。
+    const page1 = Array.from({ length: 19 }, (_, k) => (k + 1) * 2 + 2);
+    expect(wrapper.vm.selection.slice().sort((a, b) => a - b)).toEqual([...page1, 1001].sort((a, b) => a - b));
+    expect(wrapper.vm.selection).not.toContain(2);
+    expect(pageButton(wrapper).text()).toBe('取消本页勾选');
+
+    // 翻到第二页：那一页的组没被勾。
+    await wrapper.get('[data-test="cleanup-page-next"]').trigger('click');
+    expect(pageButton(wrapper).text()).toBe('本页按建议勾选');
+    await wrapper.get('[data-test="cleanup-page-prev"]').trigger('click');
+
+    await pageButton(wrapper).trigger('click');
+    expect(wrapper.vm.selection).toEqual([1001]);
+    wrapper.unmount();
+  });
+
+  it('「本页按建议勾选」跳过「本组不删」的组；精确重复默认已是建议状态，按钮直接是「取消本页勾选」', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: exactGroups(2), near_duplicate_groups: nearGroups(2) }));
+    expect(pageButton(wrapper).text()).toBe('取消本页勾选');
+    await pageButton(wrapper).trigger('click');
+    expect(wrapper.vm.selection).toEqual([]);
+    await pageButton(wrapper).trigger('click');
+    expect(wrapper.vm.selection.slice().sort((a, b) => a - b)).toEqual([1001, 1003]);
+
+    await showKind(wrapper, 'near');
+    const cards = wrapper.findAll('[data-test="cleanup-group-card"]');
+    await cards[0].get('[data-test="cleanup-skip-group"]').trigger('click');
+    await pageButton(wrapper).trigger('click');
+    expect(wrapper.vm.selection.slice().sort((a, b) => a - b)).toEqual([4, 1001, 1003]);
+    wrapper.unmount();
+  });
+
+  it('同一个目录在两个区域里各自折叠', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: exactGroups(1), near_duplicate_groups: nearGroups(1) }));
+    await wrapper.get('[data-test="cleanup-dir-toggle"]').trigger('click');
+    expect(wrapper.find('[data-test="cleanup-group-card"]').exists()).toBe(false);
+    await showKind(wrapper, 'near');
+    expect(kinds(wrapper)).toEqual(['near']);
+    await showKind(wrapper, 'exact');
+    expect(wrapper.find('[data-test="cleanup-group-card"]').exists()).toBe(false);
+    wrapper.unmount();
+  });
+
+  it('正在看的区域跨分析批次保留', async () => {
+    const wrapper = await mountWith(statusWith({ duplicate_groups: exactGroups(1), near_duplicate_groups: nearGroups(1) }));
+    await showKind(wrapper, 'near');
+    photoCleanupStore.status = statusWith({ duplicate_groups: exactGroups(1), near_duplicate_groups: nearGroups(1) }, { started_at: '2026-10-12T00:00:00Z' });
+    await flushPromises();
+    expect(wrapper.vm.review.key).toBe('2026-10-12T00:00:00Z');
+    expect(wrapper.vm.activeKind).toBe('near');
     wrapper.unmount();
   });
 });

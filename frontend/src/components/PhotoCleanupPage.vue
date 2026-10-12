@@ -14,7 +14,7 @@
         <h2>清理审阅</h2>
         <!-- 勾选规则与视频清理面板同一套（D-PC49，utils/cleanupSelection.js）。 -->
         <p class="cleanup-page__subtitle">
-          精确重复默认勾选保留项以外的副本；近似重复是哈希判定，默认不勾，请逐组看过再「按建议勾选」。
+          精确重复默认勾选保留项以外的副本；疑似重复是画面近似，默认不勾，看过之后按组或按页「按建议勾选」。
           保留项锁定，要换就点另一张的「保留这份」。勾选的图片移到废纸篓，可在回收站撤销；不勾任何一张的组不会有任何改动。
         </p>
       </div>
@@ -118,12 +118,36 @@
     </div>
 
     <template v-else-if="analysis">
-      <div class="cleanup-page__toolbar">
-        <span class="cleanup-page__stat">{{ entries.length }} 组 · {{ directorySections.length }} 个目录</span>
-        <span v-if="coverageText" class="cleanup-page__coverage" data-test="cleanup-coverage">{{ coverageText }}</span>
-        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-toggle-all" @click="toggleAllDirectories">
-          {{ allCollapsed ? '全部展开' : '全部折叠' }}
+      <!-- 精确重复与疑似重复分成两个区域：点统计卡切换，各自按目录分组、各自翻页。 -->
+      <div v-if="hasGroups" class="cleanup-tiles" role="tablist" aria-label="清理候选类别" data-test="cleanup-tiles">
+        <button
+          v-for="tile in kindTiles"
+          :key="tile.kind"
+          type="button"
+          role="tab"
+          class="cleanup-tile cleanup-tile--tab"
+          :class="{ 'cleanup-tile--on': activeKind === tile.kind }"
+          :aria-selected="activeKind === tile.kind"
+          :data-test="`cleanup-kind-${tile.kind}`"
+          @click="setKind(tile.kind)"
+        >
+          <span class="cleanup-tile__icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="(d, index) in tile.icon" :key="index" :d="d" /></svg></span>
+          <span class="cleanup-tile__value">{{ tile.groups }}<small>组</small></span>
+          <span class="cleanup-tile__label">{{ tile.label }}</span>
+          <small class="cleanup-tile__note">{{ tile.images }} 张 · 已勾 {{ tile.selected }} 张</small>
+          <span class="cleanup-tile__hint">{{ tile.hint }}</span>
         </button>
+        <div class="cleanup-tile" data-test="cleanup-tile-pending">
+          <span class="cleanup-tile__icon cleanup-tile__icon--danger"><svg viewBox="0 0 24 24" aria-hidden="true"><path v-for="(d, index) in TILE_ICONS.pending" :key="index" :d="d" /></svg></span>
+          <span class="cleanup-tile__value">{{ selection.length }}<small>张</small></span>
+          <span class="cleanup-tile__label">待删</span>
+          <small class="cleanup-tile__note">合计 {{ formatBytes(reclaimableBytes) }}</small>
+          <span class="cleanup-tile__hint">两个区域的勾选合在一起删</span>
+        </div>
+      </div>
+
+      <div class="cleanup-page__toolbar">
+        <span v-if="coverageText" class="cleanup-page__coverage" data-test="cleanup-coverage">{{ coverageText }}</span>
         <label class="cleanup-page__switch" data-test="cleanup-samedir-switch">
           <input type="checkbox" :checked="sameDirOnly" :disabled="editLocked" @change="toggleSameDirOnly" />
           只勾选与保留项同目录的副本
@@ -146,11 +170,44 @@
         </p>
       </div>
 
-      <nav v-if="pageCount > 1" class="cleanup-page__pagination" aria-label="重复组分页">
-        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-prev" :disabled="currentPage <= 1" @click="review.page = currentPage - 1">上一页</button>
-        <span>第 {{ currentPage }} / {{ pageCount }} 页 · 共 {{ entries.length }} 组（勾选跨页保留）</span>
-        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-next" :disabled="currentPage >= pageCount" @click="review.page = currentPage + 1">下一页</button>
-      </nav>
+      <div v-if="hasGroups" ref="areaTop" class="cleanup-area__bar" data-test="cleanup-area-bar">
+        <h3 class="cleanup-area__title">{{ KIND_LABELS[activeKind] }}</h3>
+        <span class="cleanup-area__stat">{{ activeEntries.length }} 组 · {{ directorySections.length }} 个目录</span>
+        <nav v-if="pageCount > 1" class="cleanup-area__pager" aria-label="重复组分页">
+          <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-prev" :disabled="currentPage <= 1" @click="setPage(currentPage - 1)">上一页</button>
+          <span>第 {{ currentPage }} / {{ pageCount }} 页（勾选跨页保留）</span>
+          <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-next" :disabled="currentPage >= pageCount" @click="setPage(currentPage + 1)">下一页</button>
+        </nav>
+        <span class="cleanup-group__spacer"></span>
+        <!-- 只作用于本页展开着的组：看得到的才勾，疑似重复默认仍然不勾（D-PC49）。 -->
+        <button
+          v-if="activeEntries.length"
+          type="button"
+          class="btn-secondary btn-compact"
+          :disabled="editLocked || (!pageFullySuggested && pageSuggestableEntries.length === 0)"
+          title="只作用于本页展开着的组；「本组不删」的组和被别的组锁定的图片不会勾上"
+          data-test="cleanup-suggest-page"
+          @click="togglePageSuggestion"
+        >{{ pageFullySuggested ? '取消本页勾选' : '本页按建议勾选' }}</button>
+        <button v-if="activeEntries.length" type="button" class="btn-secondary btn-compact" data-test="cleanup-toggle-all" @click="toggleAllDirectories">
+          {{ allCollapsed ? '全部展开' : '全部折叠' }}
+        </button>
+      </div>
+
+      <div v-if="hasGroups && !activeEntries.length" class="cleanup-page__state" data-test="cleanup-area-empty">
+        <p class="cleanup-page__state-title">{{ areaEmptyState.title }}</p>
+        <p v-if="areaEmptyState.detail" class="cleanup-page__muted">{{ areaEmptyState.detail }}</p>
+        <p v-if="areaEmptyState.action">
+          <button
+            type="button"
+            class="btn-secondary btn-compact"
+            data-test="cleanup-area-start-phash"
+            :disabled="perceptualHashRunning"
+            @click="startPerceptualHashBackfill"
+          >{{ perceptualHashRunning ? '补全中…' : '补全指纹' }}</button>
+        </p>
+      </div>
+
       <section
         v-for="section in pagedDirectorySections"
         :key="section.directory"
@@ -350,6 +407,13 @@
           </article>
         </template>
       </section>
+
+      <!-- 一页 20 组，翻到底不用再滚回顶上翻页；翻页后回到本区顶部。 -->
+      <nav v-if="hasGroups && pageCount > 1" class="cleanup-page__pagination" aria-label="重复组分页（底部）" data-test="cleanup-pagination-bottom">
+        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-prev-bottom" :disabled="currentPage <= 1" @click="setPage(currentPage - 1, true)">上一页</button>
+        <span>第 {{ currentPage }} / {{ pageCount }} 页 · {{ KIND_LABELS[activeKind] }}共 {{ activeEntries.length }} 组</span>
+        <button type="button" class="btn-secondary btn-compact" data-test="cleanup-page-next-bottom" :disabled="currentPage >= pageCount" @click="setPage(currentPage + 1, true)">下一页</button>
+      </nav>
     </template>
 
     <div v-else class="cleanup-page__state" data-test="cleanup-idle">
@@ -444,6 +508,15 @@ const STAGE_LABELS = {
 const DAY_MS = 24 * 60 * 60 * 1000;
 // 库里目录为空时的占位串。它不是真实路径，不能拿去调打开目录。
 const UNKNOWN_DIRECTORY = '未知目录';
+const GROUP_PAGE_SIZE = 20;
+const KIND_LABELS = { exact: '精确重复', near: '疑似重复' };
+// 统计卡的线性图标，颜色跟随 currentColor。
+const TILE_ICONS = {
+  exact: ['M8 8h11v11H8z', 'M5 16V5h11'],
+  near: ['M4 6h16v12H4z', 'M4 15l4-4 3 3 3-3 6 6', 'M15 9.5h.01'],
+  pending: ['M4 7h16', 'M9.5 7V4.5h5V7', 'M6.5 7l1 13h9l1-13', 'M10.5 11v5.5', 'M13.5 11v5.5']
+};
+const TILE_HINTS = { exact: '内容逐字节一致，默认已勾副本', near: '画面近似，默认不勾，需逐组确认' };
 const DISMISSAL_KIND = 'image_near_duplicate';
 const DISMISSAL_PAGE_SIZE = 50;
 
@@ -463,6 +536,8 @@ export default {
   data() {
     return {
       UNKNOWN_DIRECTORY,
+      KIND_LABELS,
+      TILE_ICONS,
       MEMBER_PAGE_SIZE: 20,
       localError: '',
       processing: false,
@@ -558,11 +633,60 @@ export default {
     entryByKey() {
       return new Map(this.entries.map(entry => [entry.key, entry]));
     },
+    entriesByKind() {
+      const byKind = { exact: [], near: [] };
+      for (const entry of this.entries) byKind[entry.kind].push(entry);
+      return byKind;
+    },
+    // 当前区域：用户选过就用它（哪怕那一类已经清空，统计卡上看得到 0 组）；没选过时有精确重复先看精确重复。
+    activeKind() {
+      const chosen = this.review.kind;
+      if (chosen === 'exact' || chosen === 'near') return chosen;
+      return this.entriesByKind.exact.length === 0 && this.entriesByKind.near.length > 0 ? 'near' : 'exact';
+    },
+    activeEntries() { return this.entriesByKind[this.activeKind]; },
+    // 每张图出现在哪几类里，统计卡按勾选数各类计数时只扫勾选，不扫全部成员。
+    kindsByMemberID() {
+      const kinds = new Map();
+      for (const entry of this.entries) {
+        for (const member of entry.members) {
+          const id = Number(member.id);
+          if (!kinds.has(id)) kinds.set(id, new Set());
+          kinds.get(id).add(entry.kind);
+        }
+      }
+      return kinds;
+    },
+    imageCountByKind() {
+      const counts = { exact: 0, near: 0 };
+      for (const kinds of this.kindsByMemberID.values()) {
+        for (const kind of kinds) counts[kind] += 1;
+      }
+      return counts;
+    },
+    selectedCountByKind() {
+      const counts = { exact: 0, near: 0 };
+      for (const id of this.selectedIDs) {
+        for (const kind of this.kindsByMemberID.get(id) || []) counts[kind] += 1;
+      }
+      return counts;
+    },
+    kindTiles() {
+      return ['exact', 'near'].map(kind => ({
+        kind,
+        label: KIND_LABELS[kind],
+        hint: TILE_HINTS[kind],
+        icon: TILE_ICONS[kind],
+        groups: this.entriesByKind[kind].length,
+        images: this.imageCountByKind[kind],
+        selected: this.selectedCountByKind[kind]
+      }));
+    },
     // 顶层按目录分组：整组归到"推荐保留项"（后端 original）所在目录，
-    // 手动切换保留项时组不会跳走；组员仍可位于其他目录，卡片上会标出来。
+    // 手动切换保留项时组不会跳走；组员仍可位于其他目录，卡片上会标出来。只分当前区域的组。
     directorySections() {
       const buckets = new Map();
-      for (const entry of this.entries) {
+      for (const entry of this.activeEntries) {
         const directory = this.directoryOf(entry.group.original);
         if (!buckets.has(directory)) buckets.set(directory, { directory, entries: [], imageIDs: new Set() });
         const bucket = buckets.get(directory);
@@ -573,16 +697,39 @@ export default {
         .map(bucket => ({ ...bucket, groupCount: bucket.entries.length, imageCount: bucket.imageIDs.size }))
         .sort((a, b) => a.directory.localeCompare(b.directory));
     },
-    pageCount() { return Math.max(1, Math.ceil(this.entries.length / 10)); },
-    currentPage() { return Math.min(this.pageCount, Math.max(1, this.review.page || 1)); },
+    pageCount() { return Math.max(1, Math.ceil(this.activeEntries.length / GROUP_PAGE_SIZE)); },
+    currentPage() { return Math.min(this.pageCount, Math.max(1, this.review.pages?.[this.activeKind] || 1)); },
     pagedDirectorySections() {
-      const start = (this.currentPage - 1) * 10;
+      const start = (this.currentPage - 1) * GROUP_PAGE_SIZE;
       let offset = 0;
       return this.directorySections.flatMap(section => {
-        const entries = section.entries.slice(Math.max(0, start - offset), Math.max(0, start + 10 - offset));
+        const entries = section.entries.slice(Math.max(0, start - offset), Math.max(0, start + GROUP_PAGE_SIZE - offset));
         offset += section.entries.length;
         return entries.length ? [{ ...section, entries }] : [];
       });
+    },
+    // 「本页按建议勾选」的范围：本页展开着的组（折叠起来的看不到，不替用户勾）。
+    pageSuggestableEntries() {
+      return this.pagedDirectorySections
+        .filter(section => !this.isDirCollapsed(section.directory))
+        .flatMap(section => section.entries)
+        .filter(entry => this.suggestedIDsFor(entry).length > 0);
+    },
+    pageFullySuggested() {
+      const entries = this.pageSuggestableEntries;
+      return entries.length > 0 && entries.every(entry => this.isGroupFullySuggested(entry));
+    },
+    // 两类里只有一类有结果时，另一类的空态（全部为空走下面的 emptyState）。
+    areaEmptyState() {
+      if (this.activeKind === 'exact') return { title: '没有发现精确重复。', detail: '', action: false };
+      const coverage = this.coverage;
+      if (coverage && coverage.total > 0 && coverage.done === 0) {
+        return { title: '疑似重复尚未计算。', detail: '还没有图片算过指纹，近似重复检测还没开始。', action: true };
+      }
+      if (coverage && coverage.total > 0 && coverage.done < coverage.total) {
+        return { title: '没有发现疑似重复。', detail: `指纹只算了 ${coverage.done} / ${coverage.total} 张，其余图片还没参与近似重复检测。`, action: true };
+      }
+      return { title: '没有发现疑似重复。', detail: '', action: false };
     },
     membersByID() {
       const members = new Map();
@@ -913,26 +1060,51 @@ export default {
       // 切换的是默认规则，直接按新规则重算勾选（手动微调会被覆盖，这是明示行为）。
       this.applyAutoSelection();
     },
+    // 折叠状态按区域分开记：同一个目录在精确重复里折起来，不影响疑似重复。
+    dirKey(directory) {
+      return `${this.activeKind}:${directory}`;
+    },
     isDirCollapsed(directory) {
-      return !!this.collapsedDirs[directory];
+      return !!this.collapsedDirs[this.dirKey(directory)];
     },
     toggleDir(directory) {
-      this.review.collapsedDirs = { ...this.collapsedDirs, [directory]: !this.collapsedDirs[directory] };
+      const key = this.dirKey(directory);
+      this.review.collapsedDirs = { ...this.collapsedDirs, [key]: !this.collapsedDirs[key] };
     },
     toggleAllDirectories() {
       const collapse = !this.allCollapsed;
-      const next = {};
-      for (const section of this.directorySections) next[section.directory] = collapse;
+      const next = { ...this.collapsedDirs };
+      for (const section of this.directorySections) next[this.dirKey(section.directory)] = collapse;
       this.review.collapsedDirs = next;
+    },
+    setKind(kind) {
+      this.review.kind = kind;
+    },
+    // 底部翻页后回到本区顶部，否则停在新一页的末尾。
+    setPage(page, scroll = false) {
+      this.review.pages = { ...this.review.pages, [this.activeKind]: page };
+      if (scroll) this.$nextTick(() => this.$refs.areaTop?.scrollIntoView?.({ block: 'start' }));
+    },
+    // 「本页按建议勾选」：本页展开着的组都按建议勾上；已经全是建议状态时再点取消这些组的勾选。
+    togglePageSuggestion() {
+      if (this.editLocked) return;
+      const groups = this.pageSuggestableEntries.map(entry => this.groupOf(entry)).filter(Boolean);
+      if (this.pageFullySuggested) {
+        this.review.selection = groups.reduce((selection, group) => clearGroupSelection(selection, group), this.selection);
+        return;
+      }
+      const options = this.selectionOptions();
+      this.review.selection = groups.reduce((selection, group) => applySuggestion(selection, group, options), this.selection);
     },
     applyAutoSelection() {
       this.review.selection = this.autoSelectedIDs;
     },
     resetGroupState(key) {
-      const sameDirOnly = this.sameDirOnly;
+      const { sameDirOnly, kind } = this.review;
       resetPhotoCleanupReview(key);
-      // 勾选策略是用户的偏好，不该跟着每轮分析被重置。
-      this.review.sameDirOnly = sameDirOnly;
+      // 勾选策略与正在看的区域是用户的偏好，不该跟着每轮分析被重置。
+      this.review.sameDirOnly = !!sameDirOnly;
+      this.review.kind = kind || '';
       this.applyAutoSelection();
     },
     async openDirectory(directory) {
@@ -1262,6 +1434,52 @@ export default {
 .cleanup-page__stat { color: var(--text-secondary); }
 .cleanup-page__switch { display: inline-flex; align-items: center; gap: 6px; color: var(--text-secondary); cursor: pointer; }
 .cleanup-page__hint { flex: 1; min-width: 200px; }
+
+/* 统计卡：与观看回顾的统计卡同一套样子；前两张兼作区域切换。 */
+.cleanup-tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 14px; }
+.cleanup-tile {
+  position: relative;
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 4px;
+  overflow: hidden;
+  padding: 16px 18px 14px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-lg);
+  background: var(--panel-bg);
+  color: var(--text-primary);
+  font: inherit;
+  text-align: left;
+}
+.cleanup-tile::after {
+  content: '';
+  position: absolute;
+  right: -30px;
+  top: -30px;
+  width: 110px;
+  height: 110px;
+  border-radius: 50%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--accent-color) 14%, transparent), transparent 70%);
+  pointer-events: none;
+}
+.cleanup-tile--tab { cursor: pointer; transition: border-color var(--transition), background var(--transition), transform var(--transition); }
+.cleanup-tile--tab:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.cleanup-tile--on, .cleanup-tile--on:hover { border-color: var(--accent-color); background: color-mix(in srgb, var(--accent-soft) 55%, var(--panel-bg)); box-shadow: 0 0 0 1px var(--accent-color); }
+.cleanup-tile__icon { display: inline-grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--accent-soft); color: var(--accent-text); }
+.cleanup-tile__icon--danger { background: var(--danger-soft); color: var(--danger-color); }
+.cleanup-tile__icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.cleanup-tile__value { display: flex; align-items: baseline; gap: 4px; margin-top: 6px; font-size: 34px; font-weight: 800; line-height: 1; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.cleanup-tile__value small { color: var(--text-secondary); font-size: 14px; font-weight: 600; letter-spacing: 0; }
+.cleanup-tile__label { color: var(--text-primary); font-size: 13px; font-weight: 600; }
+.cleanup-tile__note { color: var(--text-secondary); font-size: 12px; font-variant-numeric: tabular-nums; }
+.cleanup-tile__hint { color: var(--text-muted); font-size: 11.5px; }
+
+/* 当前区域的标题行：标题、计数、翻页与本页操作。 */
+.cleanup-area__bar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; padding: 4px 2px 0; scroll-margin-top: 110px; }
+.cleanup-area__title { margin: 0; font-size: 17px; font-weight: 750; }
+.cleanup-area__stat { color: var(--text-muted); font-size: 12px; }
+.cleanup-area__pager { display: inline-flex; align-items: center; gap: 10px; color: var(--text-secondary); font-size: 12px; }
 
 .cleanup-dir { display: grid; gap: 10px; }
 .cleanup-dir__head { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; background: var(--control-bg); }
