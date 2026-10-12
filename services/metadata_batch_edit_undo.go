@@ -40,7 +40,8 @@ func (s *MetadataBatchEditService) ListMetadataBatchEdits() ([]MetadataBatchEdit
 
 // UndoMetadataBatchEdit 撤销一次批量编辑（D-MC-05）：逐行比较当前值与 after_json，一致才恢复 before_json，
 // 否则计入 changed_since；关联类只撤销本批次加上或去掉的那几个 ID。每 500 行一个事务，批与批之间检查取消；
-// 被取消时不写 undone_at（已恢复的行保留）。
+// 恢复了的明细行在同一事务里删掉（批次的 item_count 与摘要不变），被取消后再撤销只处理剩下的行，
+// 不会把已恢复的算成 changed_since；跑完（没被取消）才写 undone_at。
 func (s *MetadataBatchEditService) UndoMetadataBatchEdit(parent context.Context, batchID uint) (result *MetadataBatchUndoResult, err error) {
 	if database.DB == nil {
 		return nil, gorm.ErrInvalidDB
@@ -57,7 +58,12 @@ func (s *MetadataBatchEditService) UndoMetadataBatchEdit(parent context.Context,
 	if batch.UndoneAt != nil {
 		return nil, ErrBatchAlreadyUndone
 	}
-	ctx, end, err := s.begin(parent, batch.ItemCount)
+	// 进度总数是还剩的明细行：取消后再撤销时，已恢复的行已经删掉了。
+	var remaining int64
+	if err := database.DB.Model(&models.MetadataBatchEditItem{}).Where("batch_id = ?", batchID).Count(&remaining).Error; err != nil {
+		return nil, err
+	}
+	ctx, end, err := s.begin(parent, int(remaining))
 	if err != nil {
 		return nil, err
 	}
@@ -102,9 +108,10 @@ func (s *MetadataBatchEditService) UndoMetadataBatchEdit(parent context.Context,
 	return result, nil
 }
 
-// undoBatchItems 在一个事务里撤销一批明细，返回恢复了的行数。移出过视频的作品集最后压紧一次位置。
+// undoBatchItems 在一个事务里撤销一批明细，返回恢复了的行数。恢复了的明细行随即删掉；
+// 移出过视频的作品集最后压紧一次位置。
 func undoBatchItems(tx *gorm.DB, kind string, items []models.MetadataBatchEditItem) (int, error) {
-	restored := 0
+	restored := []uint{}
 	compact := map[uint]struct{}{}
 	for _, item := range items {
 		var ok bool
@@ -118,7 +125,7 @@ func undoBatchItems(tx *gorm.DB, kind string, items []models.MetadataBatchEditIt
 			return 0, err
 		}
 		if ok {
-			restored++
+			restored = append(restored, item.ID)
 		}
 	}
 	for collectionID := range compact {
@@ -126,7 +133,12 @@ func undoBatchItems(tx *gorm.DB, kind string, items []models.MetadataBatchEditIt
 			return 0, err
 		}
 	}
-	return restored, nil
+	if len(restored) > 0 {
+		if err := tx.Where("id IN ?", restored).Delete(&models.MetadataBatchEditItem{}).Error; err != nil {
+			return 0, err
+		}
+	}
+	return len(restored), nil
 }
 
 // undoBatchScalar 只在当前值仍等于 after 时改回 before（条件更新，影响 1 行才算恢复）。
@@ -215,6 +227,7 @@ func undoBatchRelation(tx *gorm.DB, kind string, item models.MetadataBatchEditIt
 			}
 		}
 	}
+	// 加回去掉的关系。作品集不记原来的位置：撤销「移出作品集」会把视频接在作品集末尾（对话框里有说明）。
 	for _, relID := range removed {
 		if err := insertBatchRelations(tx, kind, item.Field, relID, []uint{item.MediaID}); err != nil {
 			return false, err

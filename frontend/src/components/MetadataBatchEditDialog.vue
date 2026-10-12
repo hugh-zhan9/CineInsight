@@ -5,8 +5,8 @@
 
     <template v-if="!result">
       <div class="batch-edit-scope" role="radiogroup" aria-label="作用范围">
-        <label class="batch-edit-scope__option">
-          <input v-model="scope" type="radio" value="selected" :disabled="applying || selectedIds.length === 0" data-test="batch-edit-scope-selected" />
+        <label v-if="selectedIds.length" class="batch-edit-scope__option">
+          <input v-model="scope" type="radio" value="selected" :disabled="applying" data-test="batch-edit-scope-selected" />
           所选 {{ selectedIds.length }} 项
         </label>
         <label v-if="filter" class="batch-edit-scope__option">
@@ -14,7 +14,9 @@
           当前筛选的全部结果
         </label>
       </div>
-      <p v-if="scope === 'filter'" class="batch-edit-muted">执行时按当前筛选重新取一遍，不只是已加载的这些。先预览确认总数再执行。</p>
+      <p v-if="scope === 'filter'" class="batch-edit-muted">
+        执行时按当前筛选重新取一遍，不只是已加载的这些。先预览确认总数再执行。<template v-if="collapsedVersions">列表折叠了版本，折叠起来的其他版本也会一起改。</template>
+      </p>
 
       <ul class="batch-edit-ops">
         <li v-for="(row, index) in rows" :key="row.key" class="batch-edit-op" :data-test="`batch-edit-op-${index}`">
@@ -81,8 +83,11 @@
       <p v-if="kind === 'video'" class="batch-edit-muted" data-test="batch-edit-nfo-note">
         已知限制：清空的年份等字段，如果片子旁有 NFO，「补全本地资料」会按「空就补」重新填上。
       </p>
+      <p v-if="hasCollectionRemoval" class="batch-edit-muted" data-test="batch-edit-collection-note">
+        撤销「移出作品集」时，视频会加回作品集末尾，不回到原来的位置。
+      </p>
       <p v-if="preview" class="batch-edit-preview" data-test="batch-edit-preview">
-        共 {{ preview.target_count }} 项，其中 {{ preview.changed_count }} 项会改变；已经是目标值的不会改动。
+        共 {{ preview.target_count }} 项{{ previewIncludesCollapsed ? '（含折叠起来的其他版本）' : '' }}，其中 {{ preview.changed_count }} 项会改变；已经是目标值的不会改动。
       </p>
       <p v-if="error" class="batch-edit-error" role="alert" data-test="batch-edit-error">{{ error }}</p>
       <div class="modal-actions">
@@ -136,7 +141,9 @@ export default {
     // 打开时的当前筛选（视频 LibraryFilter / 图片 ImageFilter）；为空时不提供「当前筛选的全部结果」。
     filter: { type: Object, default: null },
     // 全部标签（标签候选在本地过滤，自动标签不出现）。
-    tags: { type: Array, default: () => [] }
+    tags: { type: Array, default: () => [] },
+    // 片库列表折叠了版本：「当前筛选的全部结果」仍按全部版本取，总数会比列表上的多，要说清楚。
+    collapsedVersions: { type: Boolean, default: false }
   },
   // applied / undone：数据变了，宿主按当前条件重取列表；applied 的参数为 null 表示中途失败、已提交的部分保留。
   emits: ['close', 'applied', 'undone'],
@@ -167,6 +174,12 @@ export default {
     },
     signature() {
       return JSON.stringify(this.buildRequest());
+    },
+    previewIncludesCollapsed() {
+      return this.collapsedVersions && this.scope === 'filter';
+    },
+    hasCollectionRemoval() {
+      return this.rows.some(row => row.field === 'collection' && row.action === 'remove');
     },
     // 预览必须对应当前的范围与操作，且确有条目会改变，才能执行。
     canApply() {

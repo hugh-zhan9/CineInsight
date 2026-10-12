@@ -142,6 +142,32 @@ describe('批量编辑对话框（D-MC-04 / D-MC-05）', () => {
     expect(wrapper.find('[data-test="batch-edit-undo"]').exists()).toBe(false);
   });
 
+  it('没有选中时只有「当前筛选的全部结果」；列表折叠了版本时说明总数含折叠起来的其他版本', async () => {
+    const wrapper = mountDialog({ selectedIds: [], collapsedVersions: true });
+    expect(wrapper.find('[data-test="batch-edit-scope-selected"]').exists()).toBe(false);
+    expect(wrapper.get('[data-test="batch-edit-scope-filter"]').element.checked).toBe(true);
+    await setYear(wrapper, 2001);
+    await wrapper.get('[data-test="batch-edit-preview-btn"]').trigger('click');
+    await flushPromises();
+    expect(api.PreviewMetadataBatchEdit.mock.calls[0][0].target).toEqual({ ids: [], filter: libraryFilter });
+    expect(wrapper.get('[data-test="batch-edit-preview"]').text()).toContain('共 2 项（含折叠起来的其他版本），其中 1 项会改变');
+
+    // 按所选执行时不涉及折叠的版本，不加这句。
+    const selected = mountDialog({ collapsedVersions: true });
+    await setYear(selected, 2001);
+    await selected.get('[data-test="batch-edit-preview-btn"]').trigger('click');
+    await flushPromises();
+    expect(selected.get('[data-test="batch-edit-preview"]').text()).not.toContain('折叠');
+  });
+
+  it('有「移出作品集」时说明撤销会把视频加回作品集末尾', async () => {
+    const wrapper = mountDialog();
+    expect(wrapper.find('[data-test="batch-edit-collection-note"]').exists()).toBe(false);
+    await wrapper.get('[data-test="batch-edit-field"]').setValue('collection');
+    await wrapper.get('[data-test="batch-edit-action"]').setValue('remove');
+    expect(wrapper.get('[data-test="batch-edit-collection-note"]').text()).toContain('加回作品集末尾');
+  });
+
   it('视频提示 NFO 会填回清空的字段；图片不提示', () => {
     expect(mountDialog().get('[data-test="batch-edit-nfo-note"]').text()).toContain('NFO');
     expect(mountDialog({ kind: 'image' }).find('[data-test="batch-edit-nfo-note"]').exists()).toBe(false);

@@ -1045,6 +1045,26 @@ describe('PhotoLibraryPage delete', () => {
     wrapper.unmount();
   });
 
+  it('D-MC-04 管理菜单「批量编辑当前筛选…」不用选中，带当前筛选打开；语义搜索时不给', async () => {
+    api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1)]));
+    const wrapper = await mountPage();
+    const item = wrapper.vm.photoManageItems.find(entry => entry.id === 'batch-edit-filter');
+    expect(item.label).toBe('批量编辑当前筛选…');
+    wrapper.vm.onPhotoManageSelect(item);
+    await flushPromises();
+    const dialog = wrapper.findComponent({ name: 'MetadataBatchEditDialog' });
+    expect(dialog.props('selectedIds')).toEqual([]);
+    expect(dialog.props('filter')).toMatchObject({ keyword: '', tag_ids: [] });
+    dialog.vm.$emit('close');
+    await flushPromises();
+    wrapper.vm.searchMode = 'semantic';
+    expect(wrapper.vm.photoManageItems.some(entry => entry.id === 'batch-edit-filter')).toBe(false);
+    wrapper.vm.onPhotoManageSelect({ id: 'batch-edit-filter' });
+    await flushPromises();
+    expect(wrapper.findComponent({ name: 'MetadataBatchEditDialog' }).exists()).toBe(false);
+    wrapper.unmount();
+  });
+
   it('multi-selects images and applies a tag in one batch', async () => {
     api.SearchImagePage.mockResolvedValueOnce(makePage([makeImage(1), makeImage(2)]));
     api.BatchAddTagToImages.mockResolvedValue({ requested: 2, succeeded: 2, failed: 0, errors: [] });
@@ -1965,10 +1985,10 @@ describe('PhotoLibraryPage grid virtualization', () => {
 });
 
 describe('PhotoLibraryPage 工具栏收纳', () => {
-  it('四个库维护动作收进「管理」菜单，一个都不少', async () => {
+  it('四个库维护动作收进「管理」菜单，一个都不少（另有「批量编辑当前筛选…」）', async () => {
     const wrapper = await mountPage();
     const ids = wrapper.vm.photoManageItems.filter(item => item.id).map(item => item.id);
-    expect(ids).toEqual(['scan', 'cleanup', 'ai-tags', 'trash']);
+    expect(ids).toEqual(['scan', 'batch-edit-filter', 'cleanup', 'ai-tags', 'trash']);
     wrapper.unmount();
   });
 

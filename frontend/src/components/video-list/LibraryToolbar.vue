@@ -410,6 +410,8 @@ export default {
     // 标签底色的换算与筛选 DTO 的构造都还在片库页，这里按需调用。
     tagBgColor: { type: Function, required: true },
     libraryFilterFrom: { type: Function, required: true },
+    // 管理菜单「批量编辑当前筛选…」（D-MC-04）：列表不是筛选结果（语义检索、随机批次、相似视频）时不给。
+    filterBatchEditAvailable: { type: Boolean, default: true },
     // 「合并版本」开关（默认开，本机记住）；真值在片库页。
     collapseVersions: { type: Boolean, default: true }
   },
@@ -627,6 +629,7 @@ export default {
           label: this.localMetadataExport.running ? `当前筛选写出 NFO（${this.localMetadataExport.processed}/${this.localMetadataExport.total}）` : '当前筛选写出 NFO',
           disabled: this.localMetadataExport.running
         },
+        ...(this.filterBatchEditAvailable ? [{ id: 'batch-edit-filter', label: '批量编辑当前筛选…' }] : []),
         { heading: '补全' },
         {
           id: 'backfill-technical',

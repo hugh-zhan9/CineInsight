@@ -141,3 +141,47 @@ func TestMetadataBatchEditRejectsConcurrentRun(t *testing.T) {
 		t.Fatalf("apply after release err = %v", err)
 	}
 }
+
+// 撤销被取消后再撤销：已恢复的明细行已随恢复删掉，重试只处理剩下的，不会把它们算成 changed_since；
+// 跑完才写 undone_at，批次的 item_count 不变。
+func TestMetadataBatchEditUndoRetryAfterCancelSkipsRestoredRows(t *testing.T) {
+	service := setupBatchEditTestDB(t)
+	ids := beManyVideos(t, 1100)
+	result := beApply(t, service, beVideoReq(ids, MetadataBatchOp{Field: "year", Action: "set", Value: beFloat(2020)}))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	service.afterChunk = func(processed int) {
+		if processed == 500 {
+			cancel()
+		}
+	}
+	first, err := service.UndoMetadataBatchEdit(ctx, result.BatchID)
+	beMust(t, err)
+	if !first.Cancelled || first.Restored != 500 || first.ChangedSince != 0 {
+		t.Fatalf("first undo = %+v", first)
+	}
+	if count := beCount(t, &models.MetadataBatchEditItem{}, "batch_id = ?", result.BatchID); count != 600 {
+		t.Fatalf("items left after cancelled undo = %d, want 600", count)
+	}
+	list, err := service.ListMetadataBatchEdits()
+	beMust(t, err)
+	if len(list) != 1 || list[0].UndoneAt != nil || !list[0].Undoable || list[0].ItemCount != 1100 {
+		t.Fatalf("list after cancelled undo = %+v", list)
+	}
+	service.afterChunk = nil
+	retry := beUndo(t, service, result.BatchID)
+	if retry.Cancelled || retry.Restored != 600 || retry.ChangedSince != 0 {
+		t.Fatalf("retry undo = %+v, want restored 600 changed_since 0", retry)
+	}
+	if status := service.Status(); status.Done != 600 || status.Total != 600 {
+		t.Fatalf("retry progress = %d/%d, want 600/600", status.Done, status.Total)
+	}
+	if count := beCount(t, &models.Video{}, "year IS NOT NULL"); count != 0 {
+		t.Fatalf("videos with year after retry = %d", count)
+	}
+	var batch models.MetadataBatchEdit
+	beMust(t, database.DB.First(&batch, result.BatchID).Error)
+	if batch.UndoneAt == nil || batch.ItemCount != 1100 {
+		t.Fatalf("batch after retry = %+v", batch)
+	}
+}

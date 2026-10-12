@@ -116,6 +116,28 @@ it('D-MC-04 批量栏「批量编辑…」带上所选与当前筛选打开对�
   wrapper.unmount();
 });
 
+it('D-MC-04 管理菜单「批量编辑当前筛选…」不用选中，带当前筛选与折叠状态打开；语义检索时不给', async () => {
+  const wrapper = await mountPage();
+  wrapper.vm.searchKeyword = '雨';
+  wrapper.vm.collapseVersions = true;
+  expect(wrapper.findComponent({ name: 'LibraryToolbar' }).props('filterBatchEditAvailable')).toBe(true);
+  wrapper.findComponent({ name: 'LibraryToolbar' }).vm.$emit('manage-select', { id: 'batch-edit-filter' });
+  await flushPromises();
+  const dialog = wrapper.findComponent({ name: 'MetadataBatchEditDialog' });
+  expect(dialog.props('selectedIds')).toEqual([]);
+  expect(dialog.props('filter')).toMatchObject({ keyword: '雨' });
+  expect(dialog.props('collapsedVersions')).toBe(true);
+  await dialog.vm.$emit('close');
+
+  wrapper.vm.searchMode = 'semantic';
+  await flushPromises();
+  expect(wrapper.findComponent({ name: 'LibraryToolbar' }).props('filterBatchEditAvailable')).toBe(false);
+  wrapper.vm.onManageSelect({ id: 'batch-edit-filter' });
+  await flushPromises();
+  expect(wrapper.findComponent({ name: 'MetadataBatchEditDialog' }).exists()).toBe(false);
+  wrapper.unmount();
+});
+
 it('今晚看什么从随机菜单打开，带上共用的随机条件与最近排除；改条件回写片库页', async () => {
   const wrapper = await mountPage();
   wrapper.vm.recentRandomVideoIDs = [5, 6];
