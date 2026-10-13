@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"video-master/models"
 )
 
 const previewMediaRoutePrefix = "/preview/media/"
@@ -114,34 +115,62 @@ func (s *VideoService) GetPreviewSession(videoID uint) (*PreviewSession, error) 
 		}, nil
 	}
 
-	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
+	// 没有代理时按实际编码判定（2026-10-13「直接播 + 自动代理」，preview_direct_play.go）：能直放的
+	// 直接内嵌源文件；不能的返回 proxy-preparing，由内嵌播放器自动排一项代理（RequestPreviewProxy），
+	// 就绪后重取会话切到内嵌。编码判不出来、或没有代理服务时按扩展名沿用旧行为。
+	decision := s.desktopPreviewPlan(*video)
+	if decision.Route == desktopPreviewDirect {
+		return inlineSourceSession(video, sourceVersion, decision.MIME), nil
+	}
+	if decision.Route == desktopPreviewProxy && s.playbackProxies() != nil {
 		return &PreviewSession{
-			VideoID:       video.ID,
-			Mode:          "inline",
-			DisplayName:   video.Name,
-			SourceVersion: sourceVersion,
-			InlineSource: &PreviewSourceDescriptor{
-				LocatorStrategy: "asset_route",
-				LocatorValue:    previewMediaPath(video.ID),
-				MIME:            mimeType,
-			},
-			SeekSprite: SeekSpriteIndex(video.ID, video.Duration),
+			VideoID:        video.ID,
+			Mode:           "proxy-preparing",
+			DisplayName:    video.Name,
+			SourceVersion:  sourceVersion,
+			ExternalAction: previewExternalAction(),
+			ReasonCode:     "proxy_required",
+			ReasonMessage:  "这个文件的格式或编码不能在应用内直接播放，需要先生成播放代理。",
 		}, nil
 	}
 
+	if mimeType, ok := inlinePreviewMIME(video.Path); ok {
+		return inlineSourceSession(video, sourceVersion, mimeType), nil
+	}
+
+	return &PreviewSession{
+		VideoID:        video.ID,
+		Mode:           "external-preview",
+		DisplayName:    video.Name,
+		SourceVersion:  sourceVersion,
+		ExternalAction: previewExternalAction(),
+		ReasonCode:     "inline_not_supported",
+		ReasonMessage:  "当前文件格式不适合在应用内稳定预览，可改用系统播放器预览。",
+	}, nil
+}
+
+// inlineSourceSession 是直接内嵌源文件的会话：locator 是 previewMediaPath(id)，字节由 ResolvePreviewMedia 给。
+func inlineSourceSession(video *models.Video, sourceVersion, mimeType string) *PreviewSession {
 	return &PreviewSession{
 		VideoID:       video.ID,
-		Mode:          "external-preview",
+		Mode:          "inline",
 		DisplayName:   video.Name,
 		SourceVersion: sourceVersion,
-		ExternalAction: &PreviewExternalAction{
-			ActionID:    "preview_externally",
-			ButtonLabel: "使用系统播放器预览",
-			Hint:        "将使用系统播放器进行预览，不计正式播放统计，这不是正式播放。",
+		InlineSource: &PreviewSourceDescriptor{
+			LocatorStrategy: "asset_route",
+			LocatorValue:    previewMediaPath(video.ID),
+			MIME:            mimeType,
 		},
-		ReasonCode:    "inline_not_supported",
-		ReasonMessage: "当前文件格式不适合在应用内稳定预览，可改用系统播放器预览。",
-	}, nil
+		SeekSprite: SeekSpriteIndex(video.ID, video.Duration),
+	}
+}
+
+func previewExternalAction() *PreviewExternalAction {
+	return &PreviewExternalAction{
+		ActionID:    "preview_externally",
+		ButtonLabel: "使用系统播放器预览",
+		Hint:        "将使用系统播放器进行预览，不计正式播放统计，这不是正式播放。",
+	}
 }
 
 func (s *VideoService) ResolvePreviewMedia(videoID uint) (*PreviewMedia, error) {
@@ -172,6 +201,10 @@ func (s *VideoService) ResolvePreviewMedia(videoID uint) (*PreviewMedia, error) 
 		}
 	}
 	mimeType, ok := inlinePreviewMIME(video.Path)
+	if !ok {
+		// .mov 按编码直放时要报 video/quicktime（GetPreviewSession 给的是同一个值），不依赖系统 mime 表。
+		mimeType, ok = desktopDirectPlayContainerMIMEs[strings.ToLower(filepath.Ext(video.Path))]
+	}
 	if !ok {
 		mimeType = fallbackVideoMIME(video.Path)
 	}

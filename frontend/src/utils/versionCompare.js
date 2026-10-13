@@ -97,14 +97,15 @@ export function formatCompareTime(seconds) {
 
 // ===== 播放源与标注 =====
 // 播放源与详情抽屉的内嵌播放器同一条路：GetPreviewSession。有可用播放代理时会话已经指向代理
-// （mode=inline，带 proxy 标注），否则只有容器白名单内的文件能内嵌；其余返回一句可读的原因。
+// （mode=inline，带 proxy 标注），否则按编码判定能直放的文件内嵌；其余返回一句可读的原因。
+// proxy-preparing（2026-10-13）在这里不自动排代理：自动代理只跟着详情抽屉 / 整页详情里的播放器走。
 export function compareSourceFromSession(session) {
   const source = session?.mode === 'inline' ? session.inline_source : null;
   if (source?.locator_value) {
     return { src: source.locator_value, proxy: session.proxy || null, error: '' };
   }
   const reason = String(session?.reason_message || '').trim() || '当前视频暂不支持在应用内预览。';
-  const hint = session?.mode === 'external-preview' ? '可在详情抽屉里「生成播放代理」后再对比。' : '';
+  const hint = session?.mode === 'external-preview' || session?.mode === 'proxy-preparing' ? '可在详情抽屉里「生成播放代理」后再对比。' : '';
   return { src: '', proxy: null, error: `${reason}${hint}` };
 }
 

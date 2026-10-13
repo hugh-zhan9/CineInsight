@@ -56,13 +56,13 @@ func TestPreviewMediaRouteServesPlaybackProxy(t *testing.T) {
 	handler := newAssetHandler(app)
 	target := fmt.Sprintf("/preview/media/%d", video.ID)
 
-	// 没有代理时：mkv 不在内嵌白名单里，会话给外部预览，路由下发源字节。
+	// 没有代理时：mkv 不能直放，会话是 proxy-preparing（2026-10-13 起由播放器自动排代理）。
 	session, err := app.videoService.GetPreviewSession(video.ID)
 	if err != nil {
 		t.Fatalf("读取预览会话失败: %v", err)
 	}
-	if session.Mode != "external-preview" || session.Proxy != nil {
-		t.Fatalf("无代理时 mkv 应当只能外部预览: %#v", session)
+	if session.Mode != "proxy-preparing" || session.Proxy != nil {
+		t.Fatalf("无代理时 mkv 应当等待代理: %#v", session)
 	}
 
 	if _, err := app.CreatePlaybackProxy(video.ID); err != nil {
@@ -128,8 +128,8 @@ func TestPreviewMediaRouteServesPlaybackProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("读取预览会话失败: %v", err)
 	}
-	if session.Mode != "external-preview" || session.Proxy != nil {
-		t.Fatalf("删除代理后应退回外部预览: %#v", session)
+	if session.Mode != "proxy-preparing" || session.Proxy != nil {
+		t.Fatalf("删除代理后应退回无代理行为: %#v", session)
 	}
 }
 

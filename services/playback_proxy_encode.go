@@ -52,6 +52,9 @@ type playbackProxySnapshot struct {
 	AudioStreamIndex int
 	VideoBitRate     int64
 	TotalBitRate     int64
+	// FormatName 是 ffprobe 的 format_name（如 "mov,mp4,m4a,3gp,3g2,mj2"）。代理策略不用它，
+	// 桌面预览的直放判定用它确认容器确实是 ISO-BMFF（decideDesktopPreview）。
+	FormatName string
 }
 
 // playbackProxyStreamMaps 给出这次编码要保留的流映射。
@@ -158,7 +161,7 @@ func loadPlaybackProxySnapshot(video models.Video) (playbackProxySnapshot, bool,
 		Find(&streams).Error; err != nil {
 		return playbackProxySnapshot{}, false, err
 	}
-	snapshot := playbackProxySnapshot{}
+	snapshot := playbackProxySnapshot{FormatName: metadata.FormatName}
 	if metadata.TotalBitRate != nil {
 		snapshot.TotalBitRate = *metadata.TotalBitRate
 	}

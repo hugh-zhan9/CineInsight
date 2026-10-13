@@ -39,9 +39,9 @@
             <!-- 播放代理的提示与失败（抽屉放在技术信息区块，这里跟在播放器下面）；外部预览模式下可以直接生成代理。 -->
             <!-- 书签解析之后原片变了：播放器不套用任何起播位置，也不自动开始；与抽屉同一句提示。 -->
             <p v-if="bookmarkSourceMismatch" class="viewer-detail__error" role="alert" data-test="detail-bookmark-changed">原片在打开预览前已改变，请重新核对书签，未套用旧位置。</p>
-            <div v-if="proxyNotice || proxyError || canCreateProxy || bookmarkRangeFinished" class="viewer-detail__player-notes">
-              <p v-if="proxyNotice" data-test="detail-proxy-notice">{{ proxyNotice }}</p>
-              <p v-if="proxyError" class="viewer-detail__error" role="alert" data-test="detail-proxy-error">{{ proxyError }}</p>
+            <div v-if="notesProxyNotice || notesProxyError || canCreateProxy || bookmarkRangeFinished" class="viewer-detail__player-notes">
+              <p v-if="notesProxyNotice" data-test="detail-proxy-notice">{{ notesProxyNotice }}</p>
+              <p v-if="notesProxyError" class="viewer-detail__error" role="alert" data-test="detail-proxy-error">{{ notesProxyError }}</p>
               <button v-if="canCreateProxy" type="button" class="btn-secondary btn-compact" data-test="detail-proxy-create" :disabled="proxyBusy || proxyPending" @click="player.createPlaybackProxy()">{{ proxyCreateLabel }}</button>
               <span v-if="bookmarkRangeFinished" class="viewer-detail__range-end" data-test="detail-bookmark-range-end">
                 已到书签区间末尾
@@ -290,6 +290,9 @@ export default {
     proxyError() { return this.player?.proxyError || ''; },
     proxyNotice() { return this.player?.proxyNotice || ''; },
     proxyCreateLabel() { return this.player?.proxyCreateLabel ?? '生成播放代理'; },
+    // 播放器框里已经在显示代理状态（等自动代理、内嵌报错，2026-10-13）时，框下不再重复同一句。
+    notesProxyNotice() { return this.player?.showsProxyState ? '' : this.proxyNotice; },
+    notesProxyError() { return this.player?.showsProxyState ? '' : this.proxyError; },
     // 外部预览模式（容器内嵌不了）下给出「生成播放代理」；内嵌报错时播放器自己的报错框里已经有这个按钮。
     canCreateProxy() { return Boolean(this.player) && this.session?.mode === 'external-preview'; },
     // 与抽屉的 bookmarkSourceMismatch 同一判断：书签带的源版本与本片当前会话的不一致。

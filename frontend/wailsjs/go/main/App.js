@@ -202,6 +202,10 @@ export function CancelPlaybackProxyTask() {
   return window['go']['main']['App']['CancelPlaybackProxyTask']();
 }
 
+export function CancelPreviewProxy(arg1) {
+  return window['go']['main']['App']['CancelPreviewProxy'](arg1);
+}
+
 export function CancelSceneIndex() {
   return window['go']['main']['App']['CancelSceneIndex']();
 }
@@ -1368,6 +1372,10 @@ export function RepairDataHealth(arg1) {
 
 export function ReportInlineQueuePlayback(arg1) {
   return window['go']['main']['App']['ReportInlineQueuePlayback'](arg1);
+}
+
+export function RequestPreviewProxy(arg1) {
+  return window['go']['main']['App']['RequestPreviewProxy'](arg1);
 }
 
 export function RequeueEditProject(arg1) {

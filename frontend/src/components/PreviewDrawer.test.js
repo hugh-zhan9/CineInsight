@@ -57,6 +57,9 @@ const api = vi.hoisted(() => ({
   CreatePlaybackProxy: vi.fn(),
   DeletePlaybackProxy: vi.fn(),
   GetPlaybackProxy: vi.fn(),
+  // 2026-10-13「直接播 + 自动代理」：播放器自动排代理、跟着预览取消。
+  RequestPreviewProxy: vi.fn(),
+  CancelPreviewProxy: vi.fn(),
   // P-037：代理排位快照、动作条与有效观看。
   GetPlaybackProxyStatus: vi.fn(),
   PlayVideo: vi.fn(),
@@ -129,6 +132,8 @@ beforeEach(() => {
   api.DeletePlaybackProxy.mockResolvedValue(null);
   api.GetPlaybackProxyStatus.mockResolvedValue({ running: false, queued: 0, queued_video_ids: [], current_video_id: 0, results: [] });
   api.RecordViewEvent.mockResolvedValue(true);
+  api.RequestPreviewProxy.mockImplementation(id => Promise.resolve({ running: true, queued: 1, queued_video_ids: [id], current_video_id: 99, results: [] }));
+  api.CancelPreviewProxy.mockResolvedValue(true);
 });
 
 describe('PreviewDrawer', () => {
@@ -1057,23 +1062,25 @@ describe('P-037 抽屉代理排位、进度与自动切换（D-PC26）', () => {
 });
 
 describe('P-037 内嵌播放器报错的回退（D-PC26）', () => {
-  it('PLAY-05 解码失败时显示「无法内嵌播放此文件」，给系统播放器与生成代理两个出口；换会话后恢复播放器', async () => {
+  it('PLAY-05 解码失败时显示「无法内嵌播放此文件」，给系统播放器与生成代理两个出口并自动排代理；换会话后恢复播放器', async () => {
     installRuntime();
     const wrapper = await mountInline();
     const video = wrapper.get('video');
     Object.defineProperty(video.element, 'error', { configurable: true, get: () => ({ code: 3 }) });
     await video.trigger('error');
+    await flushPromises();
     expect(wrapper.find('video').exists()).toBe(false);
     const fallback = wrapper.get('[data-test="preview-inline-error"]');
     expect(fallback.text()).toContain('无法内嵌播放此文件');
     await wrapper.get('[data-test="preview-inline-error-external"]').trigger('click');
     expect(wrapper.emitted('preview-externally')[0][0]).toEqual(expect.objectContaining({ id: 1 }));
 
-    api.CreatePlaybackProxy.mockResolvedValueOnce({ running: true, queued: 1, queued_video_ids: [1], current_video_id: 7, results: [] });
-    await wrapper.get('[data-test="preview-inline-error-proxy"]').trigger('click');
-    await flushPromises();
-    expect(api.CreatePlaybackProxy).toHaveBeenCalledWith(1);
+    // 2026-10-13：直放的源解码失败时自动排代理，生成代理按钮照留（等待中不可再点）。
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1);
+    expect(api.CreatePlaybackProxy).not.toHaveBeenCalled();
+    expect(wrapper.get('[data-test="preview-inline-error-proxy"]').attributes('disabled')).toBeDefined();
     expect(wrapper.get('[data-test="preview-inline-error-progress"]').text()).toBe('排队中（第 1 个）');
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('完成后会自动切到内嵌播放');
 
     await wrapper.setProps({ session: inlineSession(1, { proxy: { strategy: 'remux', size: 10 } }) });
     expect(wrapper.find('video').exists()).toBe(true);
@@ -1416,4 +1423,23 @@ it('刷新同一视频源版本后保留实际source地址，并重新创建可�
   expect(wrapper.get('video').element).not.toBe(original);
   const second = wrapper.get('video').element; await wrapper.setProps({ session: inlineSession(1, { source_version: 'source-b' }) }); await flushPromises();
   expect(wrapper.get('source').attributes('src')).toBe('/preview/video/1'); expect(wrapper.get('video').element).not.toBe(second);
+});
+
+describe('2026-10-13 直接播 + 自动代理（抽屉经共用播放器）', () => {
+  it('不能直放的会话：打开即自动排代理、显示进度与系统播放器入口；关闭抽屉时取消', async () => {
+    const handlers = installRuntime();
+    const wrapper = await mountInline({ session: { video_id: 1, mode: 'proxy-preparing', reason_message: '需要先生成播放代理。', external_action: { button_label: '使用系统播放器预览' } } });
+    expect(api.RequestPreviewProxy).toHaveBeenCalledWith(1);
+    expect(wrapper.find('video').exists()).toBe(false);
+    expect(wrapper.get('[data-test="preview-proxy-preparing-state"]').text()).toBe('排队中（第 1 个）');
+    expect(wrapper.get('[data-test="preview-proxy-status"]').text()).toContain('完成后会自动切到内嵌播放');
+    await wrapper.get('[data-test="preview-proxy-preparing-external"]').trigger('click');
+    expect(wrapper.emitted('preview-externally')[0][0]).toEqual(expect.objectContaining({ id: 1 }));
+    handlers['playback-proxy-state']({ running: true, queued: 0, queued_video_ids: [], current_video_id: 1, results: [] });
+    await flushPromises();
+    expect(wrapper.get('[data-test="preview-proxy-preparing-state"]').text()).toBe('生成中');
+    wrapper.unmount();
+    await flushPromises();
+    expect(api.CancelPreviewProxy).toHaveBeenCalledWith(1);
+  });
 });

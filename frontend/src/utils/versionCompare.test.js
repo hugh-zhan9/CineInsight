@@ -126,6 +126,9 @@ describe('播放源与标注', () => {
     expect(external.src).toBe('');
     expect(external.error).toContain('当前文件格式不适合在应用内稳定预览。');
     expect(external.error).toContain('生成播放代理');
+    const preparing = compareSourceFromSession({ mode: 'proxy-preparing', reason_code: 'proxy_required', reason_message: '需要先生成播放代理。' });
+    expect(preparing.src).toBe('');
+    expect(preparing.error).toBe('需要先生成播放代理。可在详情抽屉里「生成播放代理」后再对比。');
     const missing = compareSourceFromSession({ mode: 'unsupported', reason_code: 'file_missing', reason_message: '源文件不存在，当前无法预览。' });
     expect(missing.error).toBe('源文件不存在，当前无法预览。');
     expect(compareSourceFromSession(null).error).toBe('当前视频暂不支持在应用内预览。');
