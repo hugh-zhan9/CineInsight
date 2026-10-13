@@ -31,6 +31,15 @@ export function selectAllMatchingLabel(total, selecting = false) {
 // actions 插槽放批量动作按钮（主操作放最后）。宿主负责把它放在滚动内容的末尾，吸底靠 position: sticky。
 // 两个内置链接的 data-test 默认是 selection-bar-select-all-matching / selection-bar-clear；宿主要保留自己原有的
 // 测试钩子时用 select-all-data-test / clear-data-test 换掉（例如图片库的 photo-select-all / photo-clear-selection）。
+// 元素真的显示着：沿祖先查 display:none（v-show 写的就是它）。藏起来的页面里还挂着的抽屉、对话框不算「开着」，
+// 否则切到别的页面后，那边的 Esc 会被一个看不见的抽屉挡住。
+function isRendered(element) {
+  for (let node = element; node; node = node.parentElement) {
+    if (getComputedStyle(node).display === 'none') return false;
+  }
+  return true;
+}
+
 export default {
   name: 'SelectionBar',
   props: {
@@ -64,7 +73,7 @@ export default {
   methods: {
     handleKeydown(event) {
       if (event.key !== 'Escape' || !this.clearOnEscape || !this.visible || event.defaultPrevented) return;
-      if (document.querySelector('[role="dialog"]') || !this.isShown()) return;
+      if (!this.isShown() || [...document.querySelectorAll('[role="dialog"]')].some(dialog => isRendered(dialog))) return;
       const target = event.target;
       if (target && (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName || ''))) return;
       event.preventDefault();
@@ -73,10 +82,7 @@ export default {
     // 操作条真的显示在页面上：宿主页面被 v-show 藏起来（切到别的页面）时，它和它的勾选都还在，
     // 但 Esc 不能替一个看不见的页面清空选择。沿祖先查 display:none（v-show 写的就是它）。
     isShown() {
-      for (let node = this.$el; node; node = node.parentElement) {
-        if (getComputedStyle(node).display === 'none') return false;
-      }
-      return true;
+      return isRendered(this.$el);
     }
   }
 };

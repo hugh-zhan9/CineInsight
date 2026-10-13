@@ -62,6 +62,18 @@ describe('SelectionBar', () => {
     expect(wrapper.find('[data-test="selection-bar-select-all-matching"]').exists()).toBe(false);
   });
 
+  it('a dialog left mounted inside a hidden page (v-show) does not block Esc here', () => {
+    const wrapper = mountBar({ count: 2 });
+    const hiddenPage = document.createElement('section');
+    hiddenPage.style.display = 'none';
+    const drawer = document.createElement('aside');
+    drawer.setAttribute('role', 'dialog');
+    hiddenPage.appendChild(drawer);
+    document.body.appendChild(hiddenPage);
+    expect(pressEscape().defaultPrevented).toBe(true);
+    expect(wrapper.emitted('clear')).toHaveLength(1);
+  });
+
   it('Esc clears, except inside inputs, under an open dialog, or when already handled', () => {
     const wrapper = mountBar({ count: 2 });
     expect(pressEscape().defaultPrevented).toBe(true);

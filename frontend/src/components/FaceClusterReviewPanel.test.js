@@ -357,6 +357,22 @@ describe('FaceClusterReviewPanel META-04 可逆操作', () => {
     { media_kind: 'video', media_id: 14, name: 'd.mp4', has_relation: false, source: 'unknown', covered_by_other: false },
   ];
 
+  it('已忽略列表第一次加载失败：不说「没有已忽略的人脸组」，给「重试」，点了重新加载', async () => {
+    api.ListIgnoredFaceClusters.mockRejectedValueOnce(new Error('数据库繁忙'));
+    const wrapper = mount(FaceClusterReviewPanel);
+    await flushPromises();
+    await wrapper.get('[data-test="face-cluster-view-ignored"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.find('[data-test="face-cluster-ignored-empty"]').exists()).toBe(false);
+    expect(wrapper.find('[data-test="face-cluster-ignored-unloaded"]').exists()).toBe(true);
+
+    api.ListIgnoredFaceClusters.mockResolvedValueOnce({ clusters: [], next_cursor: 0 });
+    await wrapper.get('[data-test="face-cluster-ignored-retry"]').trigger('click');
+    await flushPromises();
+    expect(api.ListIgnoredFaceClusters).toHaveBeenCalledTimes(2);
+    expect(wrapper.find('[data-test="face-cluster-ignored-empty"]').exists()).toBe(true);
+  });
+
   it('META-04 lists ignored clusters with absorbed counts and restores one to pending', async () => {
     api.ListIgnoredFaceClusters.mockResolvedValue({
       clusters: [{ cluster: cluster({ id: 8, status: 'ignored' }), ignored_at: '2026-09-01T00:00:00Z', absorbed_since_ignored: 3 }],

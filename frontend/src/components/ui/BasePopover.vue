@@ -19,6 +19,8 @@
 </template>
 
 <script>
+import { MODAL_OPEN_EVENT } from './modalSignals.js';
+
 const VIEWPORT_MARGIN = 8;
 const ANCHOR_GAP = 6;
 
@@ -56,6 +58,7 @@ export default {
   mounted() {
     this.restoreFocusTo = document.activeElement;
     document.addEventListener('mousedown', this.onDocumentMouseDown, true);
+    window.addEventListener(MODAL_OPEN_EVENT, this.onModalOpen);
     window.addEventListener('resize', this.reposition);
     // 滚动用捕获监听，才能收到列表容器自己的滚动。
     window.addEventListener('scroll', this.reposition, true);
@@ -66,6 +69,7 @@ export default {
   },
   beforeUnmount() {
     document.removeEventListener('mousedown', this.onDocumentMouseDown, true);
+    window.removeEventListener(MODAL_OPEN_EVENT, this.onModalOpen);
     window.removeEventListener('resize', this.reposition);
     window.removeEventListener('scroll', this.reposition, true);
     if (this.restoreFocusTo?.isConnected) {
@@ -79,6 +83,12 @@ export default {
         event.preventDefault();
         this.$emit('close');
       }
+    },
+    // 有对话框打开（菜单项打开对话框、⌘K、异步弹出的确认框、退出确认）：浮层收起，焦点不还给它的触发器——
+    // 触发器在对话框后面，还给它会让随后的 Enter 落到页面上。
+    onModalOpen() {
+      this.restoreFocusTo = null;
+      this.$emit('close');
     },
     onDocumentMouseDown(event) {
       const panel = this.$refs.panel;

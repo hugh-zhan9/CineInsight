@@ -318,6 +318,7 @@
     <template v-else>
       <p class="help-text">忽略过的人脸组仍会吸收同一个人的新人脸，只是不再提示。恢复后回到「待处理」等你命名。</p>
       <p v-if="ignored.loading && !ignored.items.length" class="face-review__status" role="status">正在加载已忽略的人脸组…</p>
+      <p v-else-if="!ignored.loaded" class="face-review__status" role="status" data-test="face-cluster-ignored-unloaded">已忽略的人脸组还没加载出来。<button type="button" class="btn-link" data-test="face-cluster-ignored-retry" @click="loadIgnored({ reset: true })">重试</button></p>
       <p v-else-if="!ignored.items.length" class="face-review__status" role="status" data-test="face-cluster-ignored-empty">没有已忽略的人脸组。</p>
       <article
         v-for="row in ignored.items"

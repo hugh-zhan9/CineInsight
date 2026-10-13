@@ -548,8 +548,6 @@ input:checked + .slider::before {
 /* 信息区下内边距是 0，动作行上内边距也是 0，两行会直接贴在一起（标签行尤其明显）。
    动作行自己补上间距，标签多到换行时也不会糊成一片。 */
 .video-item--grid .video-actions { padding: 9px 9px; margin-top: auto; }
-.video-item--grid .row-btn { flex: 1; height: 26px; padding: 0; font-size: var(--fs-caption); }
-.video-item--grid .row-btn--icon { flex: 0 0 28px; }
 
 /* 缩略图墙（2026-10-12 用户裁决「只要一个紧凑的缩略图墙」）：一格就是一张带 1px 边框的 16:9 缩略图，
    高度由列宽按比例定出，与 virtualList.js 的 estimateVideoWallHeight 同一算法。
