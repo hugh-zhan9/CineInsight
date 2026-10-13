@@ -1,16 +1,12 @@
 <template>
-  <BaseModal v-if="visible" close-on-overlay class="trash-center-modal" aria-labelledby="trash-center-title" @close="requestClose">
-    <div class="trash-center-header">
-      <div>
-        <h3 id="trash-center-title">回收站</h3>
-        <p class="trash-center-hint">删除时勾选「同时把原文件移到废纸篓」，文件会进系统废纸篓；在访达中清空废纸篓才会释放空间。</p>
-      </div>
-      <button type="button" class="btn-secondary btn-compact" @click="requestClose">关闭</button>
-    </div>
+  <DialogShell v-if="visible" title="回收站" size="xl" class="trash-center-modal" data-test="trash-center-dialog" @close="requestClose">
+    <!-- 「回收站」只指应用内可恢复的删除记录，「废纸篓」只指系统废纸篓（D-UD-04）。 -->
+    <p class="trash-center-hint">删除时勾选「同时把原文件移到废纸篓」，文件会进系统废纸篓；在访达中清空废纸篓才会释放空间。</p>
 
     <p v-if="usageError" class="trash-center-usage trash-center-error" role="alert">{{ usageError }}</p>
     <p v-else-if="usageText" class="trash-center-usage" data-test="trash-usage">{{ usageText }}</p>
 
+    <!-- 页签每项带 data-test（trash-tab-*），统一的 AppTabs 还不能逐项带，先保留这一份、样式与 AppTabs 一致（缺口已报）。 -->
     <div class="trash-center-tabs" role="tablist" aria-label="回收站分类">
       <button
         v-for="tab in tabs"
@@ -41,25 +37,25 @@
           data-test="trash-search"
           @keydown.enter.prevent="reloadEntries(activeTab)"
         />
-        <button type="button" class="btn-secondary btn-compact" data-test="trash-search-submit" @click="reloadEntries(activeTab)">搜索</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="trash-search-submit" @click="reloadEntries(activeTab)">搜索</button>
       </div>
 
       <div class="trash-center-bulk">
         <label class="trash-center-select-all">
-          <input type="checkbox" :checked="allLoadedSelected" :disabled="currentList.items.length === 0" data-test="trash-select-all" @change="toggleSelectAll" />
-          全选已加载
+          <input type="checkbox" :checked="allEntriesSelected" :disabled="currentList.items.length === 0 || currentList.loading" data-test="trash-select-all" @change="toggleSelectAll" />
+          全选当前结果
         </label>
         <span class="trash-center-muted">已选 {{ currentList.selected.length }} 项</span>
-        <button type="button" class="btn-primary btn-compact" :disabled="currentList.busy || selectedWith('restore').length === 0" data-test="trash-bulk-restore" @click="restoreRows(selectedWith('restore'))">恢复所选（{{ selectedWith('restore').length }}）</button>
-        <button type="button" class="btn-danger btn-compact" :disabled="currentList.busy || selectedWith('purge').length === 0" data-test="trash-bulk-purge" @click="purgeRows(selectedWith('purge'))">永久删除所选（{{ selectedWith('purge').length }}）</button>
-        <button type="button" class="btn-secondary btn-compact" :disabled="currentList.busy || selectedWith('remove_record').length === 0" data-test="trash-bulk-remove" @click="removeRecordRows(selectedWith('remove_record'))">移除已清除记录（{{ selectedWith('remove_record').length }}）</button>
-        <button v-if="selectedForceable.length > 0" type="button" class="btn-danger-outline btn-compact" :disabled="currentList.busy" data-test="trash-bulk-force" @click="openForceConfirm(selectedForceable)">仍然移除记录（不动文件）（{{ selectedForceable.length }}）</button>
+        <button type="button" class="btn btn--primary btn--sm" :disabled="currentList.busy || selectedWith('restore').length === 0" data-test="trash-bulk-restore" @click="restoreRows(selectedWith('restore'))">恢复所选（{{ selectedWith('restore').length }}）</button>
+        <button type="button" class="btn btn--danger btn--sm" :disabled="currentList.busy || selectedWith('purge').length === 0" data-test="trash-bulk-purge" @click="purgeRows(selectedWith('purge'))">永久删除（{{ selectedWith('purge').length }}）</button>
+        <button type="button" class="btn btn--secondary btn--sm" :disabled="currentList.busy || selectedWith('remove_record').length === 0" data-test="trash-bulk-remove" @click="removeRecordRows(selectedWith('remove_record'))">{{ removeRecordLabel }}（{{ selectedWith('remove_record').length }}）</button>
+        <button v-if="selectedForceable.length > 0" type="button" class="btn btn--danger btn--sm" :disabled="currentList.busy" data-test="trash-bulk-force" @click="openForceConfirm(selectedForceable)">{{ forceLabel }}（{{ selectedForceable.length }}）</button>
       </div>
       <p v-if="currentList.notice" class="trash-center-notice" role="status" data-test="trash-notice">{{ currentList.notice }}</p>
 
-      <div v-if="currentList.loading && currentList.items.length === 0" class="trash-center-state">正在读取回收站...</div>
-      <div v-else-if="currentList.error" class="trash-center-state trash-center-error" role="alert">{{ currentList.error }}</div>
-      <div v-else-if="currentList.items.length === 0" class="trash-center-state">{{ hasActiveFilter ? '没有符合条件的条目。' : '回收站为空。' }}</div>
+      <div v-if="currentList.loading && currentList.items.length === 0" class="trash-center-state"><AppSpinner :size="16" />正在读取回收站…</div>
+      <AppBanner v-else-if="currentList.error" class="trash-center-error-banner" tone="danger" role="alert" :title="currentList.error" />
+      <EmptyState v-else-if="currentList.items.length === 0" icon="trash" :title="hasActiveFilter ? '没有符合条件的条目。' : '回收站为空。'" />
       <div v-else class="trash-center-list">
         <div v-for="entry in currentList.items" :key="entry.id" class="trash-center-entry" :data-test="`trash-entry-${entry.id}`">
           <input
@@ -81,7 +77,7 @@
             <button
               v-if="entry.actions?.includes('restore')"
               type="button"
-              class="btn-primary btn-compact"
+              class="btn btn--primary btn--sm"
               :disabled="currentList.busy"
               data-test="trash-entry-restore"
               @click="restoreRows([entry])"
@@ -89,7 +85,7 @@
             <button
               v-if="entry.actions?.includes('purge')"
               type="button"
-              class="btn-danger btn-compact"
+              class="btn btn--danger btn--sm"
               :disabled="currentList.busy"
               data-test="trash-entry-purge"
               @click="purgeRows([entry])"
@@ -97,29 +93,29 @@
             <button
               v-if="entry.actions?.includes('remove_record')"
               type="button"
-              class="btn-secondary btn-compact"
+              class="btn btn--secondary btn--sm"
               :disabled="currentList.busy"
               data-test="trash-entry-remove"
               @click="removeRecordRows([entry])"
-            >移除记录</button>
+            >{{ removeRecordLabel }}</button>
             <button
               v-if="isForceEligible(entry)"
               type="button"
-              class="btn-danger-outline btn-compact"
+              class="btn btn--danger btn--sm"
               :disabled="currentList.busy"
               data-test="trash-entry-force"
               @click="openForceConfirm([entry])"
-            >仍然移除记录（不动文件）</button>
+            >{{ forceLabel }}</button>
           </div>
         </div>
         <button
           v-if="currentList.hasMore"
           type="button"
-          class="btn-secondary trash-center-more"
+          class="btn btn--secondary trash-center-more"
           :disabled="currentList.loading"
           data-test="trash-load-more"
           @click="loadEntries(activeTab, { append: true })"
-        >{{ currentList.loading ? '正在加载...' : '加载更多' }}</button>
+        >{{ currentList.loading ? '正在加载…' : '加载更多' }}</button>
       </div>
     </section>
 
@@ -127,16 +123,16 @@
       <p class="trash-center-muted">扫描时文件不在原处、所在磁盘未连接或目录已移出扫描范围的图片会被隐藏，这里列出它们和原因。图片暂不支持单独检查，「重新检查」会重新扫描全部图片目录，文件回来的图片自动恢复。</p>
       <div class="trash-center-bulk">
         <label class="trash-center-select-all">
-          <input type="checkbox" :checked="hiddenAllSelected" :disabled="hidden.items.length === 0" data-test="hidden-select-all" @change="toggleHiddenSelectAll" />
-          全选已加载
+          <input type="checkbox" :checked="hiddenAllSelected" :disabled="hidden.items.length === 0 || hidden.loading" data-test="hidden-select-all" @change="toggleHiddenSelectAll" />
+          全选当前结果
         </label>
         <span class="trash-center-muted">已选 {{ hidden.selected.length }} 张</span>
-        <button type="button" class="btn-primary btn-compact" :disabled="hidden.busy || hidden.selected.length === 0" data-test="hidden-recheck" @click="recheckHidden">{{ hidden.busy ? '正在检查...' : `重新检查所选（${hidden.selected.length}）` }}</button>
+        <button type="button" class="btn btn--primary btn--sm" :disabled="hidden.busy || hidden.selected.length === 0" data-test="hidden-recheck" @click="recheckHidden">{{ hidden.busy ? '正在检查…' : `重新检查所选（${hidden.selected.length}）` }}</button>
       </div>
       <p v-if="hidden.notice" class="trash-center-notice" role="status" data-test="hidden-notice">{{ hidden.notice }}</p>
-      <div v-if="hidden.loading && hidden.items.length === 0" class="trash-center-state">正在读取...</div>
-      <div v-else-if="hidden.error" class="trash-center-state trash-center-error" role="alert">{{ hidden.error }}</div>
-      <div v-else-if="hidden.items.length === 0" class="trash-center-state">没有被扫描隐藏的图片。</div>
+      <div v-if="hidden.loading && hidden.items.length === 0" class="trash-center-state"><AppSpinner :size="16" />正在读取…</div>
+      <AppBanner v-else-if="hidden.error" class="trash-center-error-banner" tone="danger" role="alert" :title="hidden.error" />
+      <EmptyState v-else-if="hidden.items.length === 0" icon="image" title="没有被扫描隐藏的图片。" />
       <div v-else class="trash-center-list">
         <div v-for="image in hidden.items" :key="image.id" class="trash-center-entry" :data-test="`hidden-entry-${image.id}`">
           <input
@@ -155,11 +151,11 @@
         <button
           v-if="hidden.hasMore"
           type="button"
-          class="btn-secondary trash-center-more"
+          class="btn btn--secondary trash-center-more"
           :disabled="hidden.loading"
           data-test="hidden-load-more"
           @click="loadHidden({ append: true })"
-        >{{ hidden.loading ? '正在加载...' : '加载更多' }}</button>
+        >{{ hidden.loading ? '正在加载…' : '加载更多' }}</button>
       </div>
     </section>
 
@@ -171,13 +167,13 @@
           全选
         </label>
         <span class="trash-center-muted">已选 {{ staged.selected.length }} 项</span>
-        <button type="button" class="btn-primary btn-compact" :disabled="staged.busy || staged.selected.length === 0" data-test="staged-trash" @click="trashStaged">移到废纸篓（{{ staged.selected.length }}）</button>
-        <button type="button" class="btn-danger btn-compact" :disabled="staged.busy || staged.selected.length === 0" data-test="staged-delete" @click="deleteStaged">永久删除（{{ staged.selected.length }}）</button>
+        <button type="button" class="btn btn--primary btn--sm" :disabled="staged.busy || staged.selected.length === 0" data-test="staged-trash" @click="trashStaged">移到废纸篓（{{ staged.selected.length }}）</button>
+        <button type="button" class="btn btn--danger btn--sm" :disabled="staged.busy || staged.selected.length === 0" data-test="staged-delete" @click="deleteStaged">永久删除（{{ staged.selected.length }}）</button>
       </div>
       <p v-if="staged.notice" class="trash-center-notice" role="status" data-test="staged-notice">{{ staged.notice }}</p>
-      <div v-if="staged.loading && staged.items.length === 0" class="trash-center-state">正在读取...</div>
-      <div v-else-if="staged.error" class="trash-center-state trash-center-error" role="alert">{{ staged.error }}</div>
-      <div v-else-if="staged.items.length === 0" class="trash-center-state">没有迁移残留。</div>
+      <div v-if="staged.loading && staged.items.length === 0" class="trash-center-state"><AppSpinner :size="16" />正在读取…</div>
+      <AppBanner v-else-if="staged.error" class="trash-center-error-banner" tone="danger" role="alert" :title="staged.error" />
+      <EmptyState v-else-if="staged.items.length === 0" icon="folder" title="没有迁移残留。" />
       <div v-else class="trash-center-list">
         <div v-for="item in staged.items" :key="item.id" class="trash-center-entry" :data-test="`staged-entry-${item.id}`">
           <input
@@ -196,31 +192,31 @@
       </div>
     </section>
 
-    <div class="modal-actions">
-      <button type="button" class="btn-secondary" @click="requestClose">完成</button>
-    </div>
-  </BaseModal>
+    <template #footer>
+      <button type="button" class="btn btn--secondary" data-test="trash-center-close" @click="requestClose">关闭</button>
+    </template>
+  </DialogShell>
 
-  <BaseModal v-if="forceConfirm" class="trash-force-modal" aria-labelledby="trash-force-title" @close="closeForceConfirm">
-    <h2 id="trash-force-title">仍然移除记录（不动文件）</h2>
-    <p>将移除 {{ forceConfirm.rows.length }} 条回收站记录，不做任何文件操作：文件如果还在废纸篓或原处，会原样留在那里，需要你自己处理。移除后这些条目无法在应用里恢复。</p>
+  <!-- 不可逆（D-UD-07 第 3 级）：输入的就是按钮上的文字。后端要的确认词是协议常量 FORCE_REMOVE_CONFIRM_TEXT，另传。 -->
+  <DialogShell v-if="forceConfirm" :title="forceLabel" size="sm" class="trash-force-modal" @close="closeForceConfirm">
+    <p>将把 {{ forceConfirm.rows.length }} 条记录从回收站移除，不做任何文件操作：文件如果还在废纸篓或原处，会原样留在那里，需要你自己处理。移除后这些条目无法在应用里恢复。</p>
     <ul class="trash-force-names">
       <li v-for="row in forceConfirm.rows.slice(0, 8)" :key="row.id">{{ row.name }}</li>
       <li v-if="forceConfirm.rows.length > 8">等 {{ forceConfirm.rows.length }} 项</li>
     </ul>
-    <label class="trash-force-label" for="trash-force-input">请输入「{{ forceConfirmText }}」确认</label>
+    <label class="trash-force-label" for="trash-force-input">输入「{{ forceConfirmText }}」以确认，此操作无法撤销</label>
     <input id="trash-force-input" v-model="forceConfirm.text" type="text" class="text-input" autocomplete="off" data-test="trash-force-input" />
-    <div class="modal-actions">
-      <button type="button" class="btn-secondary" data-test="trash-force-cancel" @click="closeForceConfirm">取消</button>
+    <template #footer>
+      <button type="button" class="btn btn--secondary" data-test="trash-force-cancel" @click="closeForceConfirm">取消</button>
       <button
         type="button"
-        class="btn-danger"
-        :disabled="forceConfirm.text !== forceConfirmText || currentList.busy"
+        class="btn btn--danger"
+        :disabled="!forceTypedMatches || currentList.busy"
         data-test="trash-force-confirm"
         @click="confirmForceRemove"
-      >移除记录</button>
-    </div>
-  </BaseModal>
+      >{{ forceConfirmText }}</button>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
@@ -230,12 +226,19 @@ import {
 } from '../../wailsjs/go/main/App';
 import { formatBytes } from '../utils/mediaDetails.js';
 import { deletionActor } from '../utils/deletionActor.js';
-import { confirmAction, feedbackState } from '../utils/feedback.js';
-import BaseModal from './ui/BaseModal.vue';
+import { confirmAction, confirmTextMatches, feedbackState } from '../utils/feedback.js';
+import AppBanner from './ui/AppBanner.vue';
+import AppSpinner from './ui/AppSpinner.vue';
+import DialogShell from './ui/DialogShell.vue';
+import EmptyState from './ui/EmptyState.vue';
 
 export const TRASH_PAGE_SIZE = 50;
-// 与后端 TrashForceRemoveConfirmText 一致：「仍然移除记录」必须原样传回这四个字。
+// 与后端 TrashForceRemoveConfirmText 一致：「仍然移除记录」接口必须原样传回这四个字（协议常量，不是界面文字）。
 export const FORCE_REMOVE_CONFIRM_TEXT = '移除记录';
+// 界面上的动作名（D-UD-04/08）：回收站只指应用内的删除记录，把记录从回收站拿掉叫「从回收站移除」；
+// 不可逆，确认时输入的就是按钮上的这几个字（D-UD-07 第 3 级）。
+export const REMOVE_RECORD_LABEL = '从回收站移除';
+const FORCE_LABEL = '仍然从回收站移除（不动文件）';
 
 // 删除与回收站接口的单项结果码（services/trash_service.go TrashResult*）。
 const RESULT_TEXT = {
@@ -248,7 +251,7 @@ const RESULT_TEXT = {
   path_occupied: '原位置已收录了新文件',
   identity_mismatch: '文件与删除时记录的不一致（可能已被替换），未做任何改动',
   not_purgeable: '该条目不能执行这个操作',
-  file_gone: '废纸篓里的文件已被清除，只能移除记录',
+  file_gone: '废纸篓里的文件已被清除，只能从回收站移除',
   error: '操作失败'
 };
 // 这几类同一个结果码背后有不同原因（放回原处、只删记录的屏蔽、原位置是符号链接……），
@@ -302,7 +305,7 @@ const TAB_KEYS = ['video', 'image', 'hidden', 'staged'];
 
 export default {
   name: 'TrashCenterDialog',
-  components: { BaseModal },
+  components: { AppBanner, AppSpinner, DialogShell, EmptyState },
   props: {
     visible: { type: Boolean, default: false },
     // 打开时停在哪个页签：video / image / hidden / staged。
@@ -323,12 +326,14 @@ export default {
       // 本次打开期间各条目最近一次操作的失败（键为 kind:id）：显示原因，并决定是否提供「仍然移除记录」。
       rowFailures: {},
       forceConfirm: null,
-      forceConfirmText: FORCE_REMOVE_CONFIRM_TEXT,
+      forceConfirmText: REMOVE_RECORD_LABEL,
+      removeRecordLabel: REMOVE_RECORD_LABEL,
+      forceLabel: FORCE_LABEL,
       modeOptions: [
         { value: '', label: '全部删除方式' },
         { value: 'trash', label: '移到废纸篓' },
         { value: 'legacy_trash', label: '旧版回收站目录' },
-        { value: 'record_only', label: '只删记录' },
+        { value: 'record_only', label: '从片库移除' },
         { value: 'missing', label: '扫描时文件已不在' }
       ],
       deletedByOptions: [
@@ -372,8 +377,15 @@ export default {
       const items = this.currentList.items;
       return items.length > 0 && items.every(entry => this.currentList.selected.includes(entry.id));
     },
+    // 「全选当前结果」（D-UD-10）：结果全部加载完、且每一条都选中了才算全选。
+    allEntriesSelected() {
+      return this.allLoadedSelected && !this.currentList.hasMore;
+    },
     hiddenAllSelected() {
-      return this.hidden.items.length > 0 && this.hidden.items.every(item => this.hidden.selected.includes(item.id));
+      return !this.hidden.hasMore && this.hidden.items.length > 0 && this.hidden.items.every(item => this.hidden.selected.includes(item.id));
+    },
+    forceTypedMatches() {
+      return confirmTextMatches({ requiredText: this.forceConfirmText }, this.forceConfirm?.text);
     },
     stagedAllSelected() {
       return this.staged.items.length > 0 && this.staged.items.every(item => this.staged.selected.includes(item.id));
@@ -510,9 +522,23 @@ export default {
         ? state.selected.filter(item => item !== id)
         : [...state.selected, id];
     },
-    toggleSelectAll() {
-      const state = this.currentList;
-      state.selected = this.allLoadedSelected ? [] : state.items.map(entry => entry.id);
+    // 「全选当前结果」作用于整个筛选结果：还有没加载的页时先按当前筛选取完，再全部选中；
+    // 取的途中失败、换了页签或筛选（请求令牌变了）就不选，免得只选中一部分却显示成全选。
+    async toggleSelectAll() {
+      const kind = this.activeTab;
+      const state = this.lists[kind];
+      if (this.allEntriesSelected) {
+        state.selected = [];
+        return;
+      }
+      while (state.hasMore && !state.error && this.visible && this.activeTab === kind) {
+        const before = state.items.length;
+        const token = state.token;
+        await this.loadEntries(kind, { append: true });
+        if (state.token !== token + 1 || state.items.length === before) break;
+      }
+      if (state.hasMore || state.error || !this.visible) return;
+      state.selected = state.items.map(entry => entry.id);
     },
     selectedWith(action) {
       return this.selectedRows.filter(entry => entry.actions?.includes(action));
@@ -551,7 +577,7 @@ export default {
       switch (entry.mode) {
         case 'trash': return '在废纸篓中';
         case 'legacy_trash': return '在旧版回收站目录中';
-        case 'record_only': return '只删了记录，文件保留在原处';
+        case 'record_only': return '已从片库移除，文件保留在原处';
         case 'missing': return '删除时文件已不在原处';
         default: return entry.file_moved ? '在旧版回收站目录中' : '文件未由应用移动，仅恢复数据库记录';
       }
@@ -562,7 +588,7 @@ export default {
         notes.push('已放回原处：文件已经回到原位置，恢复即可把记录还原。');
       }
       if (entry.claimed_by_active) {
-        notes.push('原位置已由片库中的另一条记录收录，只能移除这条旧记录（不动文件）');
+        notes.push('原位置已由片库中的另一条记录收录，只能把这条旧记录从回收站移除（不动文件）');
       }
       if (entry.original_symlink) {
         const purgeBlocked = (entry.mode === 'trash' || entry.mode === 'legacy_trash') && !entry.actions?.includes('purge');
@@ -574,7 +600,7 @@ export default {
         notes.push('扫描到同一个文件不会再收录；「允许重新收录」会还原原记录（含标签与人物）。');
       }
       if (entry.state === 'file_gone' && !entry.claimed_by_active) {
-        notes.push('废纸篓里已没有这个文件，只能移除这条记录。');
+        notes.push('废纸篓里已没有这个文件，只能把这条记录从回收站移除。');
       }
       return notes;
     },
@@ -601,8 +627,10 @@ export default {
       if (!rows.length) return;
       const confirmed = await confirmAction({
         title: '永久删除',
-        message: `将永久删除 ${rows.length} 个文件（废纸篓或旧版回收站里的那一份），并移除这些记录。删除后无法恢复。`,
+        message: `将永久删除 ${rows.length} 个文件（废纸篓或旧版回收站目录里的那一份），并把这些记录从回收站移除。`,
+        impact: '删除后无法恢复。',
         confirmText: '永久删除',
+        level: 'irreversible',
         danger: true
       });
       if (!confirmed) return;
@@ -611,9 +639,11 @@ export default {
     async removeRecordRows(rows) {
       if (!rows.length) return;
       const confirmed = await confirmAction({
-        title: '移除记录',
-        message: `将移除 ${rows.length} 条记录。这些条目的文件已从废纸篓清除，或原位置已由另一条记录收录；不会改动任何文件。`,
-        confirmText: '移除记录',
+        title: REMOVE_RECORD_LABEL,
+        message: `将把 ${rows.length} 条记录从回收站移除。这些条目的文件已从废纸篓清除，或原位置已由另一条记录收录；不会改动任何文件。`,
+        impact: '移除后这些条目无法在应用里恢复。',
+        confirmText: REMOVE_RECORD_LABEL,
+        level: 'irreversible',
         danger: true
       });
       if (!confirmed) return;
@@ -629,9 +659,9 @@ export default {
     },
     async confirmForceRemove() {
       const pending = this.forceConfirm;
-      if (!pending || pending.text !== FORCE_REMOVE_CONFIRM_TEXT) return;
+      if (!pending || !this.forceTypedMatches) return;
       this.forceConfirm = null;
-      return this.runEntryAction('force', pending.rows, pending.text);
+      return this.runEntryAction('force', pending.rows, FORCE_REMOVE_CONFIRM_TEXT);
     },
     async runEntryAction(action, rows, confirmText = '') {
       const kind = this.activeTab;
@@ -641,7 +671,7 @@ export default {
       const ids = rows.map(entry => entry.id);
       state.busy = true;
       state.notice = '';
-      const label = { restore: '恢复', purge: '永久删除', remove_record: '移除记录', force: '仍然移除记录' }[action];
+      const label = { restore: '恢复', purge: '永久删除', remove_record: REMOVE_RECORD_LABEL, force: '仍然从回收站移除' }[action];
       try {
         let result;
         if (action === 'restore') result = await RestoreTrashEntries(kind, ids);
@@ -725,8 +755,20 @@ export default {
       const state = this.hidden;
       state.selected = state.selected.includes(id) ? state.selected.filter(item => item !== id) : [...state.selected, id];
     },
-    toggleHiddenSelectAll() {
-      this.hidden.selected = this.hiddenAllSelected ? [] : this.hidden.items.map(item => item.id);
+    async toggleHiddenSelectAll() {
+      const state = this.hidden;
+      if (this.hiddenAllSelected) {
+        state.selected = [];
+        return;
+      }
+      while (state.hasMore && !state.error && this.visible) {
+        const before = state.items.length;
+        const token = state.token;
+        await this.loadHidden({ append: true });
+        if (state.token !== token + 1 || state.items.length === before) break;
+      }
+      if (state.hasMore || state.error || !this.visible) return;
+      state.selected = state.items.map(item => item.id);
     },
     async recheckHidden() {
       const state = this.hidden;
@@ -807,8 +849,10 @@ export default {
       if (!ids.length || state.busy) return;
       const confirmed = await confirmAction({
         title: '永久删除迁移残留',
-        message: `将永久删除 ${ids.length} 份迁移时保留的源文件，不经过废纸篓，删除后无法恢复。请先确认新位置的文件正常。`,
+        message: `将永久删除 ${ids.length} 份迁移时保留的源文件，不经过废纸篓。请先确认新位置的文件正常。`,
+        impact: '删除后无法恢复。',
         confirmText: '永久删除',
+        level: 'irreversible',
         danger: true
       });
       if (!confirmed) return;
@@ -836,30 +880,6 @@ export default {
 </script>
 
 <style scoped>
-:deep(.trash-center-modal) {
-  width: min(820px, calc(100vw - 32px));
-  max-width: none;
-  max-height: min(760px, calc(100vh - 48px));
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-:deep(.trash-force-modal) {
-  max-width: 480px;
-}
-
-.trash-center-header {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.trash-center-header h3 {
-  margin: 0;
-}
-
 .trash-center-hint,
 .trash-center-usage,
 .trash-center-muted,
@@ -874,33 +894,45 @@ export default {
 .trash-center-muted,
 .trash-center-notice {
   margin: 0;
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
-.trash-center-hint {
-  margin-top: 6px;
-}
+.trash-center-hint,
+.trash-center-usage { margin-bottom: var(--space-3); }
 
+/* 页签：与 AppTabs 同一外观（下划线式）。 */
 .trash-center-tabs {
   display: flex;
-  gap: 6px;
-  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-5);
+  margin-bottom: var(--space-3);
+  border-bottom: 1px solid var(--hairline);
 }
 
 .trash-center-tab {
-  padding: 6px 12px;
+  display: inline-flex;
+  align-items: center;
+  height: var(--h-unit);
+  margin-bottom: -1px;
+  padding: 0 2px;
   border: 0;
   border-bottom: 2px solid transparent;
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  font-size: 13px;
+  font: inherit;
+  font-size: var(--fs-body);
+  font-weight: var(--fw-medium);
+  white-space: nowrap;
 }
+
+.trash-center-tab:hover { color: var(--text-primary); }
+.trash-center-tab:focus-visible { outline: 2px solid var(--accent-color); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 .trash-center-tab--active {
   border-bottom-color: var(--accent-color);
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .trash-center-panel {
@@ -915,7 +947,7 @@ export default {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .trash-center-filters .search-input {
@@ -923,11 +955,18 @@ export default {
   min-width: 0;
 }
 
+/* 两个筛选下拉按内容宽度排在一行，搜索框占剩下的宽度。 */
+.trash-center-filters .select-input {
+  flex: 0 0 auto;
+  width: auto;
+  min-width: 150px;
+}
+
 .trash-center-select-all {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--fs-caption);
 }
 
 .trash-center-notice {
@@ -939,16 +978,16 @@ export default {
   max-height: 420px;
   overflow-y: auto;
   display: grid;
-  gap: 8px;
+  gap: var(--space-2);
 }
 
 .trash-center-entry {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 12px;
+  gap: var(--space-3);
+  padding: 10px var(--space-3);
   border: 1px solid var(--border-color);
-  border-radius: 8px;
+  border-radius: var(--radius);
 }
 
 .trash-center-entry__check {
@@ -981,19 +1020,22 @@ export default {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
-  max-width: 260px;
+  max-width: 280px;
 }
 
 .trash-center-entry__body .trash-center-entry__error,
 .trash-center-error {
-  color: var(--danger-color) !important;
+  color: var(--danger-text) !important;
   white-space: normal;
 }
 
 .trash-center-state {
-  padding: 28px 12px;
-  text-align: center;
-  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 28px var(--space-3);
+  font-size: var(--fs-secondary);
 }
 
 .trash-center-more {
@@ -1001,15 +1043,16 @@ export default {
 }
 
 .trash-force-names {
-  margin: 8px 0 12px;
+  margin: var(--space-2) 0 var(--space-3);
   padding-left: 18px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .trash-force-label {
   display: block;
   margin-bottom: 6px;
-  font-size: 13px;
+  color: var(--text-secondary);
+  font-size: var(--fs-secondary);
 }
 </style>

@@ -1,4 +1,4 @@
-// 工具栏上的多版本聚合入口（D-MW-VERSIONS）：结果条「合并版本」开关、批量栏「合并为版本组」。
+// 工具栏上的多版本聚合入口（D-MW-VERSIONS）：结果条「合并版本」开关。批量条的「合并为版本组」「对比播放」在 BatchActionBar.test.js。
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -38,22 +38,4 @@ describe('LibraryToolbar 版本聚合入口', () => {
     wrapper.unmount();
   });
 
-  it('批量栏「合并为版本组」至少选 2 个才可用，点击向上转发', async () => {
-    const videos = [{ id: 1, name: 'a', size: 1, tags: [] }, { id: 2, name: 'b', size: 1, tags: [] }];
-    const single = mount(LibraryToolbar, { props: props({ videos, selectedVideoIds: [1] }) });
-    expect(single.get('[data-test="batch-version-group"]').attributes('disabled')).toBeDefined();
-    single.unmount();
-    const wrapper = mount(LibraryToolbar, { props: props({ videos, selectedVideoIds: [1, 2] }) });
-    await wrapper.get('[data-test="batch-version-group"]').trigger('click');
-    expect(wrapper.emitted('batch-version-group')).toHaveLength(1);
-    wrapper.unmount();
-  });
-
-  it('批量栏「对比播放」正好选 2 个时出现，点击向上转发', async () => {
-    const videos = [{ id: 1, name: 'a', size: 1, tags: [] }, { id: 2, name: 'b', size: 1, tags: [] }];
-    const wrapper = mount(LibraryToolbar, { props: props({ videos, selectedVideoIds: [2, 1] }) });
-    await wrapper.get('[data-test="batch-compare-play"]').trigger('click');
-    expect(wrapper.emitted('batch-compare')).toHaveLength(1);
-    wrapper.unmount();
-  });
 });

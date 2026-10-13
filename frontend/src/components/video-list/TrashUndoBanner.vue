@@ -1,26 +1,15 @@
 <template>
   <!-- 进度浮在最上层：删除常从确认框或清理审阅里发起，嵌在页面里的条会被弹窗遮住，「取消」就点不到了。 -->
   <div v-if="progress" class="delete-progress-float" role="status" data-test="delete-progress">
-    <span>正在删除 {{ progress.done }}/{{ progress.total }} {{ unit }}…</span>
-    <span class="delete-progress-float__bar" aria-hidden="true"><i :style="{ width: progressPercent + '%' }"></i></span>
-    <button type="button" class="btn-secondary btn-compact" :disabled="progress.cancelling" data-test="delete-progress-cancel" @click="cancelDelete">
-      {{ progress.cancelling ? '正在取消...' : '取消' }}
+    <ProgressBar
+      class="delete-progress-float__bar"
+      :value="progressRatio"
+      :label="`${progressVerb} ${progress.done}/${progress.total} ${unit}…`"
+    />
+    <button type="button" class="btn btn--secondary btn--sm" :disabled="progress.cancelling" data-test="delete-progress-cancel" @click="cancelDelete">
+      {{ progress.cancelling ? '正在取消…' : '取消' }}
     </button>
   </div>
-  <div v-if="undoNotice" class="undo-delete-banner" role="status" data-test="delete-undo-banner">
-    <span>{{ undoNotice.text }}</span>
-    <button
-      v-if="undoNotice.undoCount > 0"
-      type="button"
-      class="btn-primary btn-compact"
-      :disabled="undoing"
-      data-test="delete-undo"
-      @click="undoLastDelete"
-    >{{ undoing ? '撤销中...' : `撤销本次删除（${undoNotice.undoCount} 项）` }}</button>
-    <button type="button" class="btn-secondary btn-compact" data-test="delete-open-trash" @click="openTrashDialog()">查看回收站</button>
-    <button type="button" class="undo-delete-banner__close" aria-label="关闭提示" @click="dismissNotice">×</button>
-  </div>
-
   <TrashUnsupportedDialog
     :visible="unsupported.show"
     :kind="kind"
@@ -45,9 +34,8 @@ import {
 } from '../../../wailsjs/go/main/App';
 import TrashCenterDialog, { isTrashItemSuccess, summarizeTrashFailures, trashErrorText, trashResultText } from '../TrashCenterDialog.vue';
 import TrashUnsupportedDialog from '../TrashUnsupportedDialog.vue';
-import { notifyError } from '../../utils/feedback.js';
-
-const NOTICE_TIMEOUT_MS = 12000;
+import ProgressBar from '../ui/ProgressBar.vue';
+import { notifyError, notifySuccess, notifyUndoable } from '../../utils/feedback.js';
 
 // 批量删除的请求标识：32 位十六进制（与后端随机标识同一格式）。
 function newRequestID() {
@@ -78,12 +66,15 @@ function emptyOutcome(kind, deleteFile) {
 }
 
 // 删除流程的宿主（片库页与图片页共用）：批量删除的进度与取消（D-PC51）、卷不支持废纸篓时的
-// 二选一（D-PC02）、删除后的撤销提示条（按 delete_batch_id 整批撤销，D-PC04）与回收站对话框。
+// 二选一（D-PC02）、删除后的撤销（按 delete_batch_id 整批撤销，D-PC04）与回收站对话框。
+// 撤销的出口（统一设计 D-UD-07/09）：删除成功后出带「撤销」的全局提示（8 秒），同时记进任务中心「最近操作」
+// （notifyUndoable，两处是同一条记录，哪边先撤都只执行一次）；原来的页内撤销条已去掉。宿主的调用方式不变：
+// runDelete → showDeleteNotice，openTrashDialog 打开回收站。
 // 恢复之后要做的事（清理面板的已删标记、列表重载、清理状态刷新）仍归宿主页，
 // 用 afterRestore(entityIDs, fromTrashDialog) 回调。
 export default {
   name: 'TrashUndoBanner',
-  components: { TrashCenterDialog, TrashUnsupportedDialog },
+  components: { ProgressBar, TrashCenterDialog, TrashUnsupportedDialog },
   props: {
     kind: { type: String, default: 'video' },
     afterRestore: { type: Function, required: true }
@@ -91,8 +82,7 @@ export default {
   data() {
     return {
       trashDialog: { show: false, tab: 'video' },
-      undoNotice: null,
-      undoNoticeTimer: null,
+      // 提示或「最近操作」里的撤销正在恢复：洞察页据此锁住切页（恢复结果要传回宿主）。
       undoing: false,
       progress: null,
       unsupported: { show: false, items: [], busy: false, outcome: null, resolve: null }
@@ -105,14 +95,17 @@ export default {
     libraryName() {
       return this.kind === 'image' ? '图片库' : '片库';
     },
-    progressPercent() {
+    progressRatio() {
       const total = Number(this.progress?.total || 0);
-      if (total <= 0) return 0;
-      return Math.min(100, Math.round((Number(this.progress.done || 0) / total) * 100));
+      if (total <= 0) return null;
+      return Math.min(1, Number(this.progress.done || 0) / total);
+    },
+    // 进度条上的动作用删除的三个词（D-UD-08）：移文件的是「移到废纸篓」，只删记录的是「从片库移除」。
+    progressVerb() {
+      return this.progress?.deleteFile === false ? `正在从${this.libraryName}移除` : '正在移到废纸篓';
     }
   },
   beforeUnmount() {
-    this.clearNoticeTimer();
     this.stopProgress();
     if (this.unsupported.resolve) this.unsupported.resolve();
   },
@@ -129,7 +122,7 @@ export default {
       if (!invoke && unique.length === 0) return outcome;
       const requestID = newRequestID();
       const expected = Number(total ?? unique.length) || 0;
-      if (expected > 1) this.startProgress(requestID, expected);
+      if (expected > 1) this.startProgress(requestID, expected, deleteFile);
       let result;
       try {
         result = invoke
@@ -212,9 +205,9 @@ export default {
       this.unsupported = { show: false, items: [], busy: false, outcome: null, resolve: null };
       resolve?.();
     },
-    startProgress(requestID, total) {
+    startProgress(requestID, total, deleteFile = true) {
       this.stopProgress();
-      this.progress = { requestID, done: 0, total, cancelling: false };
+      this.progress = { requestID, done: 0, total, cancelling: false, deleteFile: deleteFile !== false };
       if (!window.runtime?.EventsOn) return;
       const off = window.runtime.EventsOn('batch-delete-progress', payload => {
         if (!this.progress || payload?.request_id !== this.progress.requestID) return;
@@ -255,7 +248,7 @@ export default {
       if (outcome.kept.length) parts.push(`${outcome.kept.length} ${unit}未删除（所在磁盘不支持废纸篓）`);
       return parts.length ? `${parts.join('；')}。` : '';
     },
-    // 删除完成后的提示：成功的部分给撤销条（整批撤销），失败的部分按原因报错。
+    // 删除完成后的提示：成功的部分给整批撤销，失败的部分按原因报错。
     // reportFailures=false 时由调用方自己报告失败（清理面板有自己的失败提示）。
     showDeleteNotice(outcome, { reportFailures = true } = {}) {
       if (!outcome) return;
@@ -266,57 +259,53 @@ export default {
       if (!text) return;
       // 只删记录与移到废纸篓的项可以整批撤销；文件本就不在的项恢复不了，永久删除的项没有条目。
       const restorable = [...outcome.trashed, ...outcome.recordOnly];
-      this.undoNotice = {
+      const notice = {
         kind: outcome.kind || this.kind,
         text,
         batchIDs: [...outcome.batchIDs],
         restorableIDs: restorable,
         undoCount: outcome.batchIDs.length ? restorable.length : 0
       };
-      this.clearNoticeTimer();
-      this.undoNoticeTimer = window.setTimeout(() => {
-        this.undoNotice = null;
-        this.undoNoticeTimer = null;
-      }, NOTICE_TIMEOUT_MS);
+      // 可撤销的给「撤销」（并进任务中心「最近操作」）；没有可撤销的项（只剩文件本就不在、永久删除）只报结果。
+      if (notice.undoCount > 0) notifyUndoable(text, () => this.undoFromToast(notice));
+      else notifySuccess(text);
     },
-    clearNoticeTimer() {
-      if (this.undoNoticeTimer) clearTimeout(this.undoNoticeTimer);
-      this.undoNoticeTimer = null;
-    },
-    dismissNotice() {
-      this.clearNoticeTimer();
-      this.undoNotice = null;
-    },
-    // 「撤销本次删除（N 项）」：按批次恢复这一次删除留下的全部条目。
-    async undoLastDelete() {
-      const notice = this.undoNotice;
-      if (!notice || this.undoing) return;
-      if (!notice.undoCount) {
-        this.openTrashDialog();
-        return;
+    // 撤销提示是全局的，本组件没有页内条可收；保留给宿主调用（人物页删除在换一种媒体时会先收起另一个）。
+    dismissNotice() {},
+    // 按批次恢复一次删除留下的全部条目（RestoreTrashBatch），返回恢复数与没恢复的项；调用本身失败时抛出。
+    async restoreNoticeBatches(notice) {
+      let restored = 0;
+      const failures = [];
+      for (const batchID of notice.batchIDs) {
+        const result = await RestoreTrashBatch(notice.kind, batchID);
+        for (const item of result?.items || []) {
+          if (isTrashItemSuccess(item.code)) restored += 1;
+          else failures.push({ id: item.id, code: item.code, text: trashResultText(item.code, item.message) });
+        }
       }
+      return { restored, failures };
+    },
+    async finishRestore(notice, { restored, failures }) {
+      if (failures.length) {
+        notifyError(`撤销完成：恢复 ${restored} 项，${failures.length} 项未恢复：${summarizeTrashFailures(failures)}`);
+        // 哪几项没回来只有回收站知道：不逐个放掉清理面板的标记，交给宿主重新读取状态。
+        await this.afterRestore([], true);
+      } else {
+        await this.afterRestore(notice.restorableIDs, false);
+      }
+    },
+    // 全局提示或任务中心「最近操作」里的「撤销」：失败时抛出（提示「撤销失败：原因」，记录留着可再试）。
+    async undoFromToast(notice) {
       this.undoing = true;
       try {
-        let restored = 0;
-        const failures = [];
-        for (const batchID of notice.batchIDs) {
-          const result = await RestoreTrashBatch(notice.kind, batchID);
-          for (const item of result?.items || []) {
-            if (isTrashItemSuccess(item.code)) restored += 1;
-            else failures.push({ id: item.id, code: item.code, text: trashResultText(item.code, item.message) });
-          }
+        let outcome;
+        try {
+          outcome = await this.restoreNoticeBatches(notice);
+        } catch (err) {
+          console.error('撤销删除失败:', err);
+          throw new Error(trashErrorText(err));
         }
-        this.dismissNotice();
-        if (failures.length) {
-          notifyError(`撤销完成：恢复 ${restored} 项，${failures.length} 项未恢复：${summarizeTrashFailures(failures)}`);
-          // 哪几项没回来只有回收站知道：不逐个放掉清理面板的标记，交给宿主重新读取状态。
-          await this.afterRestore([], true);
-        } else {
-          await this.afterRestore(notice.restorableIDs, false);
-        }
-      } catch (err) {
-        console.error('撤销删除失败:', err);
-        notifyError(`撤销删除失败：${trashErrorText(err)}`);
+        await this.finishRestore(notice, outcome);
       } finally {
         this.undoing = false;
       }
@@ -324,7 +313,6 @@ export default {
     // 回收站对话框恢复了本页这一类媒体：{ kind, entityIDs }。
     async handleTrashRestored(payload) {
       if (payload?.kind && payload.kind !== this.kind) return;
-      this.dismissNotice();
       await this.afterRestore(payload?.entityIDs || [], true);
     }
   }
@@ -332,63 +320,24 @@ export default {
 </script>
 
 <style scoped>
-.undo-delete-banner {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--accent-border);
-  border-radius: var(--radius);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: 13px;
-}
-
+/* 压在弹窗之上：弹窗遮罩现在还是 components.css 的 1000（第 0 步 C 组改成 --z-modal 之后这里换 var(--z-toast)）。 */
 .delete-progress-float {
   position: fixed;
-  bottom: 24px;
+  bottom: var(--space-5);
   left: 50%;
   z-index: 1100;
   transform: translateX(-50%);
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 8px 12px;
+  align-items: flex-end;
+  gap: var(--space-3);
+  width: min(420px, calc(100vw - 32px));
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-4);
   border: 1px solid var(--accent-border);
   border-radius: var(--radius);
   background: var(--panel-bg);
   box-shadow: var(--shadow-modal);
   color: var(--text-secondary);
-  font-size: 13px;
 }
 
-.delete-progress-float__bar {
-  width: 160px;
-  height: 6px;
-  overflow: hidden;
-  border-radius: 3px;
-  background: var(--border-color);
-}
-
-.delete-progress-float__bar i {
-  display: block;
-  height: 100%;
-  background: var(--accent-color);
-  transition: width var(--transition);
-}
-
-.undo-delete-banner__close {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 18px;
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
-}
+.delete-progress-float__bar { flex: 1; }
 </style>

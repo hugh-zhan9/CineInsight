@@ -96,6 +96,39 @@ describe('LIB-05 回收站中心：列表、分页与用量', () => {
     wrapper.unmount();
   });
 
+  it('D-UD-10「全选当前结果」先按当前筛选取完剩余的页再全选，再点一次清空', async () => {
+    api.ListTrashEntries
+      .mockResolvedValueOnce(page([entry(9), entry(8)], { hasMore: true, nextCursor: 8 }))
+      .mockResolvedValueOnce(page([entry(7)], { hasMore: true, nextCursor: 7 }))
+      .mockResolvedValueOnce(page([entry(6)]));
+    const wrapper = await mountDialog();
+    expect(wrapper.text()).toContain('全选当前结果');
+    expect(wrapper.text()).not.toContain('全选已加载');
+
+    await wrapper.get('[data-test="trash-select-all"]').setValue(true);
+    await flushPromises();
+    expect(api.ListTrashEntries).toHaveBeenCalledTimes(3);
+    expect(api.ListTrashEntries).toHaveBeenNthCalledWith(2, expect.objectContaining({ cursor_id: 8 }));
+    expect(api.ListTrashEntries).toHaveBeenNthCalledWith(3, expect.objectContaining({ cursor_id: 7 }));
+    expect(wrapper.get('[data-test="trash-bulk-restore"]').text()).toBe('恢复所选（4）');
+    expect(wrapper.get('[data-test="trash-select-all"]').element.checked).toBe(true);
+
+    await wrapper.get('[data-test="trash-select-all"]').setValue(false);
+    expect(wrapper.get('[data-test="trash-bulk-restore"]').text()).toBe('恢复所选（0）');
+    wrapper.unmount();
+  });
+
+  it('补取剩余的页失败时不全选（不把一部分说成全部）', async () => {
+    api.ListTrashEntries
+      .mockResolvedValueOnce(page([entry(9)], { hasMore: true, nextCursor: 9 }))
+      .mockRejectedValueOnce(new Error('磁盘不可用'));
+    const wrapper = await mountDialog();
+    await wrapper.get('[data-test="trash-select-all"]').setValue(true);
+    await flushPromises();
+    expect(wrapper.get('[data-test="trash-bulk-restore"]').text()).toBe('恢复所选（0）');
+    wrapper.unmount();
+  });
+
   it('按删除方式、删除人筛选与搜索都会从第一页重读', async () => {
     const wrapper = await mountDialog();
     await wrapper.get('[data-test="trash-filter-mode"]').setValue('record_only');
@@ -158,7 +191,7 @@ describe('LIB-12 多选与批量操作', () => {
 
     await wrapper.get('[data-test="trash-select-all"]').setValue(true);
     expect(wrapper.get('[data-test="trash-bulk-restore"]').text()).toBe('恢复所选（2）');
-    expect(wrapper.get('[data-test="trash-bulk-remove"]').text()).toBe('移除已清除记录（1）');
+    expect(wrapper.get('[data-test="trash-bulk-remove"]').text()).toBe('从回收站移除（1）');
     await wrapper.get('[data-test="trash-bulk-restore"]').trigger('click');
     await flushPromises();
 
@@ -174,12 +207,13 @@ describe('LIB-12 多选与批量操作', () => {
     api.ListTrashEntries.mockResolvedValueOnce(page([entry(1), entry(2, { mode: 'record_only', file_moved: false, actions: ['restore'] })]));
     const wrapper = await mountDialog();
     await wrapper.get('[data-test="trash-select-all"]').setValue(true);
-    expect(wrapper.get('[data-test="trash-bulk-purge"]').text()).toBe('永久删除所选（1）');
+    expect(wrapper.get('[data-test="trash-bulk-purge"]').text()).toBe('永久删除（1）');
 
     feedback.confirmAction.mockResolvedValueOnce(false);
     await wrapper.get('[data-test="trash-bulk-purge"]').trigger('click');
     await flushPromises();
-    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ danger: true, confirmText: '永久删除' }));
+    // 不可逆（D-UD-07 第 3 级）：确认框要输入按钮上的文字。
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ danger: true, confirmText: '永久删除', level: 'irreversible' }));
     expect(api.PurgeTrashEntries).not.toHaveBeenCalled();
 
     api.PurgeTrashEntries.mockResolvedValueOnce(batch([{ id: 1, code: 'ok' }]));
@@ -201,14 +235,16 @@ describe('LIB-12 多选与批量操作', () => {
     wrapper.unmount();
   });
 
-  it('移除已清除记录要确认；取消时不调用 RemoveGoneTrashEntries', async () => {
+  it('从回收站移除是不可逆确认（输入按钮上的文字）；取消时不调用 RemoveGoneTrashEntries', async () => {
     api.ListTrashEntries.mockResolvedValueOnce(page([entry(3, { state: 'file_gone', actions: ['remove_record'] })]));
     const wrapper = await mountDialog();
     expect(wrapper.text()).toContain('文件已从废纸篓清除');
+    expect(wrapper.get('[data-test="trash-entry-remove"]').text()).toBe('从回收站移除');
 
     feedback.confirmAction.mockResolvedValueOnce(false);
     await wrapper.get('[data-test="trash-entry-remove"]').trigger('click');
     await flushPromises();
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ level: 'irreversible', confirmText: '从回收站移除', danger: true }));
     expect(api.RemoveGoneTrashEntries).not.toHaveBeenCalled();
 
     api.RemoveGoneTrashEntries.mockResolvedValueOnce(batch([{ id: 3, code: 'ok' }]));
@@ -244,12 +280,12 @@ describe('LIB-05 特殊条目的出口与说明', () => {
     wrapper.unmount();
   });
 
-  it('claimed_by_active 的行只提供「移除记录」并说明不动文件', async () => {
+  it('claimed_by_active 的行只提供「从回收站移除」并说明不动文件', async () => {
     api.ListTrashEntries.mockResolvedValueOnce(page([entry(2, { claimed_by_active: true, actions: ['remove_record'] })]));
     const wrapper = await mountDialog();
     const row = wrapper.get('[data-test="trash-entry-2"]');
-    expect(row.text()).toContain('原位置已由片库中的另一条记录收录，只能移除这条旧记录（不动文件）');
-    expect(row.findAll('.trash-center-entry__actions button').map(button => button.text())).toEqual(['移除记录']);
+    expect(row.text()).toContain('原位置已由片库中的另一条记录收录，只能把这条旧记录从回收站移除（不动文件）');
+    expect(row.findAll('.trash-center-entry__actions button').map(button => button.text())).toEqual(['从回收站移除']);
     wrapper.unmount();
   });
 
@@ -281,7 +317,7 @@ describe('LIB-05 特殊条目的出口与说明', () => {
   });
 });
 
-describe('LIB-05 仍然移除记录（不动文件）', () => {
+describe('LIB-05 仍然从回收站移除（不动文件）', () => {
   async function offlineRow(overrides = {}) {
     api.ListTrashEntries.mockResolvedValueOnce(page([entry(6, overrides)]));
     api.PurgeTrashEntries.mockResolvedValueOnce(batch([{ id: 6, code: 'volume_offline', message: '文件所在磁盘当前不可访问，未做任何改动' }]));
@@ -292,11 +328,11 @@ describe('LIB-05 仍然移除记录（不动文件）', () => {
     return wrapper;
   }
 
-  it('清除因磁盘离线被拒后才出现；必须输入「移除记录」才调用，取消时不调用', async () => {
+  it('清除因磁盘离线被拒后才出现；必须输入按钮上的「从回收站移除」才调用，取消时不调用', async () => {
     const wrapper = await offlineRow();
     expect(wrapper.get('[data-test="trash-entry-6"]').text()).toContain('所在磁盘未连接或不可访问');
     const force = wrapper.get('[data-test="trash-entry-force"]');
-    expect(force.text()).toBe('仍然移除记录（不动文件）');
+    expect(force.text()).toBe('仍然从回收站移除（不动文件）');
 
     await force.trigger('click');
     expect(wrapper.text()).toContain('不做任何文件操作');
@@ -306,8 +342,12 @@ describe('LIB-05 仍然移除记录（不动文件）', () => {
 
     await wrapper.get('[data-test="trash-entry-force"]').trigger('click');
     const confirm = wrapper.get('[data-test="trash-force-confirm"]');
+    expect(confirm.text()).toBe('从回收站移除');
     expect(confirm.attributes('disabled')).toBeDefined();
-    await wrapper.get('[data-test="trash-force-input"]').setValue('移除');
+    // 旧的确认词不再算数：输入的必须是按钮上的文字（D-UD-07）。
+    await wrapper.get('[data-test="trash-force-input"]').setValue('移除记录');
+    expect(wrapper.get('[data-test="trash-force-confirm"]').attributes('disabled')).toBeDefined();
+    await wrapper.get('[data-test="trash-force-input"]').setValue('从回收站');
     expect(wrapper.get('[data-test="trash-force-confirm"]').attributes('disabled')).toBeDefined();
     await wrapper.get('[data-test="trash-force-confirm"]').trigger('click');
     // 按钮置灰之外，确认函数本身也核对文案：输错时不调用。
@@ -316,7 +356,7 @@ describe('LIB-05 仍然移除记录（不动文件）', () => {
     expect(api.ForceRemoveTrashRecords).not.toHaveBeenCalled();
 
     api.ForceRemoveTrashRecords.mockResolvedValueOnce(batch([{ id: 6, code: 'ok' }]));
-    await wrapper.get('[data-test="trash-force-input"]').setValue('移除记录');
+    await wrapper.get('[data-test="trash-force-input"]').setValue('从回收站移除');
     await wrapper.get('[data-test="trash-force-confirm"]').trigger('click');
     await flushPromises();
     expect(api.ForceRemoveTrashRecords).toHaveBeenCalledWith('video', [6], '移除记录');
@@ -334,7 +374,7 @@ describe('LIB-05 仍然移除记录（不动文件）', () => {
     wrapper.unmount();
   });
 
-  it('record_only 的条目恢复失败也不提供「仍然移除记录」', async () => {
+  it('record_only 的条目恢复失败也不提供「仍然从回收站移除」', async () => {
     api.ListTrashEntries.mockResolvedValueOnce(page([entry(7, { mode: 'record_only', file_moved: false, actions: ['restore'] })]));
     api.RestoreTrashEntries.mockResolvedValueOnce(batch([{ id: 7, code: 'volume_offline' }]));
     const wrapper = await mountDialog();
@@ -442,7 +482,7 @@ describe('LIB-11 迁移残留页签', () => {
     feedback.confirmAction.mockResolvedValueOnce(false);
     await wrapper.get('[data-test="staged-delete"]').trigger('click');
     await flushPromises();
-    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ danger: true }));
+    expect(feedback.confirmAction).toHaveBeenCalledWith(expect.objectContaining({ danger: true, level: 'irreversible', confirmText: '永久删除' }));
     expect(api.DeleteStagedSources).not.toHaveBeenCalled();
 
     api.DeleteStagedSources.mockResolvedValueOnce({ cleaned: 1, failed: [{ id: 2, error: '暂存文件的大小与登记时不一致，已拒绝删除' }] });

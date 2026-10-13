@@ -23,7 +23,8 @@ describe('语义检索提示条', () => {
   it('能力可用时不出提示条；不在语义模式时整条都不渲染', () => {
     const wrapper = mountBar({ semanticAvailable: true, searchMode: 'file' });
     expect(wrapper.find('[data-test="semantic-unavailable"]').exists()).toBe(false);
-    expect(wrapper.find('.scan-sync-status').exists()).toBe(false);
+    expect(wrapper.find('.ui-banner').exists()).toBe(false);
+    expect(wrapper.text()).toBe('');
     wrapper.unmount();
   });
 
@@ -39,6 +40,8 @@ describe('语义检索提示条', () => {
     const failed = mountBar({ searchMode: 'semantic', semanticSearchError: 'pgvector missing' });
     expect(failed.text()).toContain('语义搜索失败');
     expect(failed.attributes('role')).toBe('alert');
+    // 页级横幅（D-UD-12）：失败用危险色调，不可用用警示色调。
+    expect(failed.classes()).toContain('ui-banner--danger');
     failed.unmount();
   });
 

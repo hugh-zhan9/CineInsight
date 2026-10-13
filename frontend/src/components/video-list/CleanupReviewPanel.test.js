@@ -1101,8 +1101,13 @@ describe('IMG-07 忽略可控：确认、移出单个成员、「已忽略」与
     expect(items()).toHaveLength(1);
     expect(feedback.notifySuccess.mock.calls.map(call => String(call[0])).join('\n')).toContain('已撤销忽略');
 
-    const shortKind = wrapper.findAll('[data-test="cleanup-dismissed-kind"]').find(node => node.text() === '极短片段');
+    // 记录种类是单选的分段（SegmentedControl，role=radio）。
+    const kinds = wrapper.get('[data-test="cleanup-dismissed-kinds"]');
+    expect(kinds.attributes('role')).toBe('radiogroup');
+    expect(kinds.findAll('[role="radio"]').map(node => node.text())).toEqual(['近似重复', '截取片段', '极短片段', '极低分辨率']);
+    const shortKind = kinds.findAll('[role="radio"]').find(node => node.text() === '极短片段');
     await shortKind.trigger('click');
+    expect(shortKind.attributes('aria-checked')).toBe('true');
     await flushPromises();
     expect(api.ListCleanupDismissals).toHaveBeenLastCalledWith('short', 0, 50);
     expect(items()[0].text()).toContain('「short.mov」');
@@ -1688,12 +1693,13 @@ describe('D-PC49 删除流程中的面板关闭保护（P-032 复审 Minor）', 
   };
   const lockNotices = () => feedback.notify.mock.calls.filter(call => String(call[0]).includes(LOCKED));
 
-  it('D-PC49 确认框打开或删除进行中：✕ 与「取消」禁用，关闭方法与 Esc 被拦下并提示；结束后恢复', async () => {
+  it('D-PC49 确认框打开或删除进行中：× 与「取消」禁用，Esc 关不掉面板，关闭方法被拦下并提示；结束后恢复', async () => {
     feedback.confirmAction.mockResolvedValue(false);
     const { wrapper } = await openWith(baseAnalysis({
       duplicate_groups: [{ original: video(1), candidates: [video(2)], reason: '一致' }]
     }));
-    const close = () => wrapper.get('[data-test="cleanup-close"]');
+    // 面板的 × 是 DialogShell 的（第一个，确认框开着时它下面还有确认框自己的 ×）。
+    const close = () => wrapper.findAll('[data-test="dialog-shell-close"]')[0];
     const cancel = () => wrapper.get('[data-test="cleanup-cancel"]');
     expect(close().element.disabled).toBe(false);
 
@@ -1701,7 +1707,9 @@ describe('D-PC49 删除流程中的面板关闭保护（P-032 复审 Minor）', 
     await clickTrash(wrapper);
     expect(close().element.disabled).toBe(true);
     expect(cancel().element.disabled).toBe(true);
-    expect(close().attributes('title')).toBe(LOCKED);
+    expect(cancel().attributes('title')).toBe(LOCKED);
+    // busy 的对话框在标题旁转圈（D-UD-13）。
+    expect(wrapper.find('.ui-dialog__busy').exists()).toBe(true);
     expect(wrapper.vm.closeCleanupDialog()).toBe(false);
     expect(wrapper.vm.cleanupDialog.show).toBe(true);
     expect(lockNotices()).toHaveLength(1);
@@ -1721,9 +1729,9 @@ describe('D-PC49 删除流程中的面板关闭保护（P-032 复审 Minor）', 
     await wrapper.get('[data-test="cleanup-delete-confirm"]').trigger('click');
     await flushPromises();
     expect(wrapper.vm.cleanupDialog.processing).toBe(true);
+    // busy 时 Esc 不响应（DialogShell 统一行为）：面板留着。
     await pressEscape();
     expect(wrapper.vm.cleanupDialog.show).toBe(true);
-    expect(lockNotices()).toHaveLength(1);
     expect(close().element.disabled).toBe(true);
     expect(cancel().element.disabled).toBe(true);
 

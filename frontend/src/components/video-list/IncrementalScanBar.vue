@@ -1,27 +1,45 @@
 <template>
+  <!-- 本页正在做的那一件（D-UD-11）：扫描进行中只出统一的进度条；结束后的汇总、跳过明细与失败明细
+       任务中心里没有（扫描不是登记的后台任务），所以结果留在页内，可关闭。 -->
+  <ProgressBar
+    v-if="incrementalScan.running"
+    class="scan-progress"
+    :label="incrementalScan.message"
+    data-test="scan-progress"
+  />
   <div
-    v-if="incrementalScan.message"
-    class="scan-sync-status"
-    :class="`scan-sync-status--${incrementalScan.state}`"
-    :role="incrementalScan.state === 'error' ? 'alert' : 'status'"
+    v-else-if="incrementalScan.message"
+    :class="['scan-result', `scan-sync-status--${incrementalScan.state}`]"
+    data-test="scan-result"
   >
-    <span>{{ incrementalScan.message }}</span>
-    <span v-if="skipDetail" class="scan-sync-status__skips" data-test="scan-skip-breakdown">{{ skipDetail }}</span>
-    <TaskFailureList :failures="scanFailures" fallback-label="扫描" data-test="scan-failures" />
-    <span v-if="scanErrors.length > 50">仅展示前 50 条失败明细</span>
-    <button
-      v-if="!incrementalScan.running"
-      type="button"
-      class="scan-sync-status__close"
-      aria-label="关闭扫描结果"
-      data-test="scan-summary-close"
-      @click="dismiss"
-    >×</button>
+    <AppBanner
+      :tone="bannerTone"
+      :role="incrementalScan.state === 'error' ? 'alert' : 'status'"
+      :title="incrementalScan.message"
+    >
+      <template #actions>
+        <button
+          type="button"
+          class="btn-icon btn--sm"
+          aria-label="关闭扫描结果"
+          data-test="scan-summary-close"
+          @click="dismiss"
+        ><AppIcon name="close" :size="16" /></button>
+      </template>
+    </AppBanner>
+    <div v-if="skipDetail || scanFailures.length" class="scan-result__details">
+      <span v-if="skipDetail" class="scan-result__skips" data-test="scan-skip-breakdown">{{ skipDetail }}</span>
+      <TaskFailureList :failures="scanFailures" fallback-label="扫描" data-test="scan-failures" />
+      <span v-if="scanErrors.length > 50" class="scan-result__skips">仅展示前 50 条失败明细</span>
+    </div>
   </div>
 </template>
 
 <script>
 import { SyncScanDirectories } from '../../../wailsjs/go/main/App';
+import AppBanner from '../ui/AppBanner.vue';
+import AppIcon from '../ui/AppIcon.vue';
+import ProgressBar from '../ui/ProgressBar.vue';
 import TaskFailureList from './TaskFailureList.vue';
 
 // 跳过数的拆分（D-PC09、LIB-14）：后端 skip_breakdown 的七个键。手动目录扫描弹窗共用这份文案。
@@ -57,7 +75,7 @@ const TRIGGER_TITLES = {
 // 启动扫描、改目录触发的扫描不是这里发起的，片库页收到 library-scan-summary 后调 showSummary 交给这里显示。
 export default {
   name: 'IncrementalScanBar',
-  components: { TaskFailureList },
+  components: { AppBanner, AppIcon, ProgressBar, TaskFailureList },
   props: {
     migrationRunning: { type: Boolean, default: false },
     directories: { type: Array, default: () => [] },
@@ -72,6 +90,9 @@ export default {
     };
   },
   computed: {
+    bannerTone() {
+      return { success: 'success', warning: 'warning', error: 'danger' }[this.incrementalScan.state] || 'neutral';
+    },
     scanFailures() {
       return this.scanErrors.slice(0, 50).map(item => ({
         name: item.path || item.directory || item.operation || '扫描',
@@ -89,7 +110,7 @@ export default {
         return;
       }
 
-      this.incrementalScan = { running: true, state: 'running', message: '正在扫描已配置目录...' };
+      this.incrementalScan = { running: true, state: 'running', message: '正在扫描已配置目录…' };
       this.scanErrors = [];
       this.skipDetail = '';
       try {
@@ -121,7 +142,7 @@ export default {
         `新增 ${Number(result?.added || 0)}`,
         `恢复显示 ${Number(result?.restored || 0)}`,
         `迁移 ${Number(result?.relocated || 0)}`,
-        `移除记录 ${Number(result?.deleted || 0)}`,
+        `从片库移除 ${Number(result?.deleted || 0)}`,
         `暂不可用 ${Number(result?.stale || 0)}`,
         `补全元数据 ${Number(result?.metadata_refreshed || 0)}`,
         `跳过 ${Number(result?.skipped || 0)}`
@@ -146,50 +167,18 @@ export default {
 </script>
 
 <style scoped>
-.scan-sync-status {
-  margin: 10px 0 0;
+.scan-progress,
+.scan-result { margin-top: var(--space-3); }
+/* 跳过明细与失败明细接在横幅下面，左边与横幅文字对齐（图标 20 + 间距 12 + 内边距 16）。 */
+.scan-result__details {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
-  padding: 8px 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius);
-  background: var(--control-bg);
-  color: var(--text-secondary);
-  font-size: 13px;
+  gap: var(--space-1) var(--space-3);
+  padding: var(--space-2) var(--space-4) 0 48px;
 }
-
-.scan-sync-status__skips {
+.scan-result__skips {
   color: var(--text-muted);
-  font-size: 12px;
-}
-
-.scan-sync-status__close {
-  margin-left: auto;
-  border: 0;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  font-size: 18px;
-}
-
-.scan-sync-status--running {
-  border-color: var(--border-strong);
-}
-
-.scan-sync-status--success {
-  border-color: var(--accent-border);
-  color: var(--accent-color);
-}
-
-.scan-sync-status--warning {
-  border-color: var(--warning-border);
-  color: var(--warning-color);
-}
-
-.scan-sync-status--error {
-  border-color: var(--danger-border);
-  color: var(--danger-color);
+  font-size: var(--fs-caption);
 }
 </style>

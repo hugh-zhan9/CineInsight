@@ -10,10 +10,10 @@
       </span>
     </div>
     <div class="random-pick-banner__actions">
-      <button type="button" class="btn-secondary btn-compact" :disabled="randomPlay.loading" data-test="random-play-reroll" @click="$emit('reroll')">
-        {{ randomPlay.loading ? '换一个中...' : '换一个' }}
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="randomPlay.loading" data-test="random-play-reroll" @click="$emit('reroll')">
+        {{ randomPlay.loading ? '换一个中…' : '换一个' }}
       </button>
-      <button type="button" class="btn-secondary btn-compact" :disabled="randomPlay.loading" data-test="random-play-dismiss" @click="$emit('dismiss-play')">关闭</button>
+      <button type="button" class="btn btn--ghost btn--sm" :disabled="randomPlay.loading" data-test="random-play-dismiss" @click="$emit('dismiss-play')">关闭</button>
     </div>
   </div>
 
@@ -24,10 +24,10 @@
       <span class="random-pick-banner__count">当前 {{ videoCount }} 条</span>
     </div>
     <div class="random-pick-banner__actions">
-      <button type="button" class="btn-secondary btn-compact" :disabled="randomPick.loading" @click="$emit('reshuffle')">
-        {{ randomPick.loading ? '抽取中...' : '换一批' }}
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="randomPick.loading" @click="$emit('reshuffle')">
+        {{ randomPick.loading ? '抽取中…' : '换一批' }}
       </button>
-      <button type="button" class="btn-secondary btn-compact" :disabled="randomPick.loading" @click="$emit('exit')">退出随机</button>
+      <button type="button" class="btn btn--secondary btn--sm" :disabled="randomPick.loading" @click="$emit('exit')">退出随机</button>
     </div>
   </div>
 </template>
@@ -52,21 +52,21 @@ export default {
 .random-pick-banner {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: var(--space-3);
   flex-wrap: wrap;
-  margin: 0 0 10px;
-  padding: 8px 12px;
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
   border: 1px solid var(--accent-border);
   border-radius: var(--radius);
   background: var(--control-bg);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--fs-secondary);
 }
 
 .random-pick-banner__text {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: var(--space-2) var(--space-3);
   flex-wrap: wrap;
   min-width: 0;
 }
@@ -87,12 +87,7 @@ export default {
 .random-pick-banner__actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: var(--space-2);
   margin-left: auto;
-}
-.btn-compact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: 12px;
 }
 </style>

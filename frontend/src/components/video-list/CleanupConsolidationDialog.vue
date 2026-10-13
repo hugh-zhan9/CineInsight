@@ -1,27 +1,33 @@
 <template>
-  <BaseModal v-if="visible" class="consolidation-modal" @close="close">
-    <header><h3>集中整理保留视频</h3><button class="btn-secondary" :disabled="starting" @click="close">{{ summary?.status === 'running' ? '后台继续' : '关闭' }}</button></header>
+  <DialogShell v-if="visible" title="集中整理保留视频" size="xl" :busy="starting" class="consolidation-modal" @close="close">
     <p>移动本次纳入整理的保留版本及可归属附件，不会删除重复副本。完成后可以单独审阅清理。</p>
-    <p v-if="error" role="alert" data-test="consolidation-error">{{ error }}</p>
+    <p v-if="error" class="consolidation-alert" role="alert" data-test="consolidation-error">{{ error }}</p>
     <template v-if="!taskID">
       <div class="destination"><span data-test="consolidation-destination">{{ destination || '尚未选择目标目录' }}</span>
-        <button class="btn-secondary" data-test="consolidation-recommend" :disabled="starting" @click="previewDestination('')">使用推荐目录</button>
-        <button class="btn-secondary" data-test="consolidation-choose" :disabled="starting" @click="chooseDestination">选择目录</button>
-        <button v-if="destination && !preview" class="btn-secondary" :disabled="starting || loading" @click="previewDestination(destination)">重新预览</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="consolidation-recommend" :disabled="starting" @click="previewDestination('')">使用推荐目录</button>
+        <button type="button" class="btn btn--secondary btn--sm" data-test="consolidation-choose" :disabled="starting" @click="chooseDestination">选择目录</button>
+        <button v-if="destination && !preview" type="button" class="btn btn--secondary btn--sm" :disabled="starting || loading" @click="previewDestination(destination)">重新预览</button>
       </div>
-      <p v-if="loading">正在核对保留视频、附件与目标目录…</p>
+      <p v-if="loading" class="consolidation-loading"><AppSpinner :size="16" />正在核对保留视频、附件与目标目录…</p>
     </template>
     <template v-if="summary">
+      <ProgressBar
+        v-if="summary.status === 'running'"
+        class="consolidation-progress-bar"
+        :value="summary.total ? (summary.completed || 0) / summary.total : null"
+      />
       <p data-test="consolidation-progress">{{ statusLabel }} · 已完成 {{ summary.completed || 0 }} / {{ summary.total || 0 }} 个 · {{ bytes(summary.bytes_done) }} / {{ bytes(summary.bytes_total) }}</p>
-      <p v-if="summary.error" role="alert">{{ summary.error }}</p>
+      <p v-if="summary.error" class="consolidation-alert" role="alert">{{ summary.error }}</p>
       <p v-if="summary.status !== 'running' && summary.status !== 'completed'">已成功的项目保留在目标位置，其余项目请查看下方结果。本次不会继续移动或自动清理。</p>
-      <button v-if="canCancel && summary.status === 'running'" class="btn-secondary" data-test="consolidation-cancel" :disabled="cancelling" @click="cancel">{{ cancelling ? '正在请求取消…' : '取消整理' }}</button>
-      <button v-if="!detail && !loading" class="btn-secondary" @click="loadTask(taskID)">重新读取任务</button>
+      <div class="consolidation-task-actions">
+        <button v-if="canCancel && summary.status === 'running'" type="button" class="btn btn--secondary btn--sm" data-test="consolidation-cancel" :disabled="cancelling" @click="cancel">{{ cancelling ? '正在请求取消…' : '取消整理' }}</button>
+        <button v-if="!detail && !loading" type="button" class="btn btn--secondary btn--sm" @click="loadTask(taskID)">刷新任务</button>
+      </div>
     </template>
     <template v-if="displayPreview">
       <p data-test="consolidation-totals">目标：{{ displayPreview.destination }} · 保留 {{ previewCounts.kept }} 个视频，实际移动 {{ previewCounts.moved }} 个 · 后续待清理意向 {{ previewCounts.selected }} 个（本步不执行） · 移动 {{ bytes(displayPreview.move_bytes) }} · 跨磁盘复制 {{ bytes(displayPreview.cross_volume_bytes) }} · 预计复制 {{ bytes(displayPreview.copy_bytes) }} · 可用 {{ bytes(displayPreview.available_bytes) }}</p>
-      <p v-for="(message, index) in displayPreview.errors || []" :key="`error-${index}`" role="alert">{{ message }}</p>
-      <details v-if="displayPreview.warnings?.length"><summary>{{ displayPreview.warnings.length }} 条提示 / 未处理附件</summary><p v-for="(message, index) in pagedWarnings" :key="index">{{ message }}</p><button v-if="warningLimit < displayPreview.warnings.length" class="btn-secondary" @click="warningLimit += 40">显示更多提示</button></details>
+      <p v-for="(message, index) in displayPreview.errors || []" :key="`error-${index}`" class="consolidation-alert" role="alert">{{ message }}</p>
+      <details v-if="displayPreview.warnings?.length"><summary>{{ displayPreview.warnings.length }} 条提示 / 未处理附件</summary><p v-for="(message, index) in pagedWarnings" :key="index">{{ message }}</p><button v-if="warningLimit < displayPreview.warnings.length" type="button" class="btn btn--secondary btn--sm" @click="warningLimit += 40">显示更多提示</button></details>
       <p>以下是最终确认的保留视频与落点；精确重复可能改为保留目标中已有的等价副本。同名改名以此处路径为准。</p>
       <ol class="consolidation-items" :start="page * pageSize + 1">
         <li v-for="item in pagedItems" :key="item.video_id" data-test="consolidation-item">
@@ -32,23 +38,33 @@
           <template v-if="resultByID.get(item.video_id)"><p>{{ phaseLabel(resultByID.get(item.video_id).phase) }} {{ resultByID.get(item.video_id).error }}</p><p v-for="path in resultByID.get(item.video_id).retained_paths || []" :key="path">保留文件：{{ path }}</p></template>
         </li>
       </ol>
-      <nav v-if="pageCount > 1" aria-label="集中整理清单分页"><button class="btn-secondary" :disabled="page === 0" @click="page--">上一页</button><span>{{ page + 1 }} / {{ pageCount }}</span><button class="btn-secondary" :disabled="page + 1 >= pageCount" @click="page++">下一页</button></nav>
-      <label v-if="!taskID && !displayPreview.in_scan_roots"><input v-model="addToScanRoots" type="checkbox" data-test="consolidation-add-root" :disabled="starting" />将目标加入扫描目录</label>
-      <footer v-if="!taskID"><button class="btn-primary" data-test="consolidation-start" :disabled="!canStart" @click="start">{{ starting ? '正在提交…' : '确认移动保留视频' }}</button></footer>
+      <nav v-if="pageCount > 1" aria-label="集中整理清单分页"><button type="button" class="btn btn--secondary btn--sm" :disabled="page === 0" @click="page--">上一页</button><span>{{ page + 1 }} / {{ pageCount }}</span><button type="button" class="btn btn--secondary btn--sm" :disabled="page + 1 >= pageCount" @click="page++">下一页</button></nav>
+      <label v-if="!taskID && !displayPreview.in_scan_roots" class="consolidation-add-root"><input v-model="addToScanRoots" type="checkbox" data-test="consolidation-add-root" :disabled="starting" />将目标加入扫描目录</label>
     </template>
-    <footer v-if="summary?.status === 'completed'"><button class="btn-secondary" @click="close">只集中</button><button class="btn-primary" data-test="consolidation-review" :disabled="loading || !detail" @click="review">继续审阅清理</button></footer>
-  </BaseModal>
+    <template #footer>
+      <template v-if="summary?.status === 'completed'">
+        <button type="button" class="btn btn--secondary" @click="close">只集中</button>
+        <button type="button" class="btn btn--primary" data-test="consolidation-review" :disabled="loading || !detail" @click="review">继续审阅清理</button>
+      </template>
+      <template v-else>
+        <button type="button" class="btn btn--secondary" :disabled="starting" data-test="consolidation-close" @click="close">{{ summary?.status === 'running' ? '后台继续' : '关闭' }}</button>
+        <button v-if="displayPreview && !taskID" type="button" class="btn btn--primary" data-test="consolidation-start" :disabled="!canStart" @click="start">{{ starting ? '正在提交…' : '确认移动保留视频' }}</button>
+      </template>
+    </template>
+  </DialogShell>
 </template>
 
 <script>
 import { markRaw } from 'vue';
 import { PreviewCleanupConsolidation, StartCleanupConsolidation, GetCleanupConsolidationStatus, CancelCleanupConsolidation, SelectMigrationDestinationDirectory, GetBackgroundTasks } from '../../../wailsjs/go/main/App';
-import BaseModal from '../ui/BaseModal.vue';
+import AppSpinner from '../ui/AppSpinner.vue';
+import DialogShell from '../ui/DialogShell.vue';
+import ProgressBar from '../ui/ProgressBar.vue';
 import { runtimeEventsMixin } from './runtimeEvents.js';
 import { CONSOLIDATION_PAGE_SIZE, CONSOLIDATION_STATUS, isConsolidationTerminal } from '../../utils/cleanupConsolidation.js';
 
 export default {
-  name: 'CleanupConsolidationDialog', components: { BaseModal }, mixins: [runtimeEventsMixin],
+  name: 'CleanupConsolidationDialog', components: { AppSpinner, DialogShell, ProgressBar }, mixins: [runtimeEventsMixin],
   props: { request: { type: Object, default: null } }, emits: ['review', 'moved', 'started'],
   data: () => ({ visible: false, generation: 0, taskID: 0, destination: '', preview: null, detail: null, summary: null, loading: false, starting: false, cancelling: false, error: '', addToScanRoots: false, localRunning: false, page: 0, pageSize: CONSOLIDATION_PAGE_SIZE, warningLimit: 40, terminalVersion: 0 }),
   computed: {
@@ -162,8 +178,16 @@ export default {
 </script>
 
 <style scoped>
-:deep(.consolidation-modal) { width: min(960px, calc(100vw - 40px)); max-height: calc(100vh - 48px); overflow-y: auto; }
-header, footer, nav, .destination { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-header { justify-content: space-between; } footer { margin-top: 16px; } p, li, .destination { overflow-wrap: anywhere; }
-.consolidation-items { padding-left: 24px; }.consolidation-items > li { padding: 12px; border-bottom: 1px solid var(--hairline); } [role=alert] { color: var(--warning-text); }
+nav, .destination, .consolidation-task-actions { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+p, li, .destination { overflow-wrap: anywhere; }
+p { margin: 0 0 var(--space-2); }
+.destination { margin-bottom: var(--space-2); }
+.consolidation-loading { display: flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); }
+.consolidation-progress-bar { margin-bottom: var(--space-2); }
+.consolidation-task-actions:empty { display: none; }
+.consolidation-task-actions { margin-bottom: var(--space-2); }
+.consolidation-add-root { display: inline-flex; align-items: center; gap: var(--space-2); margin-top: var(--space-3); }
+.consolidation-items { padding-left: var(--space-5); }
+.consolidation-items > li { padding: var(--space-3); border-bottom: 1px solid var(--hairline); }
+.consolidation-alert { color: var(--warning-text); }
 </style>

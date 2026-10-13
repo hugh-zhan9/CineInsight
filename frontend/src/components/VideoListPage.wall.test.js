@@ -109,7 +109,7 @@ describe('点格子打开预览', () => {
     store['cineinsight-library-layout'] = 'grid';
     const wrapper = await mountPage();
     const gridCard = wrapper.get('[data-row="4"]');
-    await gridCard.findAll('.row-btn').find(button => button.text() === '预览').trigger('click');
+    await gridCard.findAll('.video-row-btn').find(button => button.text() === '预览').trigger('click');
     await flushPromises();
     const fromGrid = previewState(wrapper);
     expect(fromGrid).toEqual({ open: true, id: 4, snapshot: 4, sessionRequest: [4] });

@@ -10,7 +10,7 @@
     <button
       v-if="items.length > limit"
       type="button"
-      class="task-failure-list__toggle"
+      class="btn-link task-failure-list__toggle"
       data-test="task-failure-toggle"
       @click="expanded = !expanded"
     >{{ expanded ? '收起' : `展开全部 ${items.length} 条` }}</button>
@@ -66,7 +66,7 @@ export default {
   display: grid;
   gap: 6px;
   margin-top: 6px;
-  font-size: 12px;
+  font-size: var(--fs-caption);
   color: var(--text-secondary);
 }
 
@@ -90,15 +90,6 @@ export default {
 
 .task-failure-list__toggle {
   justify-self: start;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  color: var(--accent-text);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.task-failure-list__toggle:hover {
-  text-decoration: underline;
+  font-size: var(--fs-caption);
 }
 </style>

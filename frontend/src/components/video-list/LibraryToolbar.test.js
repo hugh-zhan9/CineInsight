@@ -50,46 +50,37 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
-describe('多选批量栏', () => {
+// 选择（D-UD-10）：批量操作条移到片库页的内容区底部（BatchActionBar / SelectionBar），工具栏不再顶替结果条；
+// 标签行那个选择按钮是「全选当前结果」，全选之后同一个位置是「取消选择」。批量条本身的用例在 BatchActionBar.test.js。
+describe('工具栏的选择入口', () => {
   const rows = [
     { id: 1, name: 'a.mp4', size: 2 * 1024 ** 3, tags: [] },
     { id: 2, name: 'b.mp4', size: 1024 ** 3, tags: [] }
   ];
 
-  it('批量栏顶替结果条，显示已选数与合计体积', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ videos: [...rows], selectedVideoIds: [1, 2] }) });
-    await wrapper.vm.$nextTick();
-
-    expect(wrapper.find('.result-bar').exists()).toBe(false);
-    expect(wrapper.find('.selection-toolbar').exists()).toBe(true);
-    expect(wrapper.text()).toContain('已选 2 个');
-    expect(wrapper.vm.selectedTotalSizeText).toBe('3.0 GB');
+  it('结果条常驻（有选中也不被顶替），工具栏里没有批量动作', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ videos: [...rows] }) });
+    expect(wrapper.find('.result-bar').exists()).toBe(true);
+    expect(wrapper.find('.selection-toolbar').exists()).toBe(false);
+    expect(wrapper.find('[data-test="batch-delete"]').exists()).toBe(false);
     wrapper.unmount();
   });
 
-  it('跨页选中时不猜合计体积', async () => {
-    // 第 2 条不在已加载页里，拿不到 size —— 宁可不显示也不显示一个偏小的数。
-    const wrapper = mountToolbar({ videos: [rows[0]], selectedVideoIds: [1, 2] });
-    await wrapper.vm.$nextTick();
-    expect(wrapper.vm.selectedTotalSizeText).toBe('');
-    wrapper.unmount();
-  });
+  it('「全选当前结果」与「取消选择」随全选状态切换，都发 toggle-select-all 交给片库页', async () => {
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ videos: [...rows] }) });
+    const button = () => wrapper.get('[data-test="toolbar-select-all-matching"]');
+    expect(button().text()).toBe('全选当前结果');
+    expect(wrapper.text()).not.toContain('选择本页');
+    await button().trigger('click');
+    expect(wrapper.emitted('toggle-select-all')).toHaveLength(1);
 
-  it('批量栏的四个动作与两个选择动作都发回片库页', async () => {
-    const wrapper = mount(LibraryToolbar, { props: baseProps({ videos: [...rows], selectedVideoIds: [1, 2] }) });
-    await wrapper.vm.$nextTick();
-    const buttons = wrapper.findAll('.selection-toolbar button');
-    const byText = text => buttons.find(button => button.text().includes(text));
-    await byText('批量标签编辑').trigger('click');
-    await byText('批量迁移').trigger('click');
-    await byText('导入本地资料').trigger('click');
-    await byText('批量删除').trigger('click');
-    await byText('清除选择').trigger('click');
-    // MEDIA-14：批量生成字幕由批量栏发出，工具栏原样转发给片库页。
-    await byText('批量生成字幕').trigger('click');
-    for (const name of ['batch-add-tag', 'batch-move', 'batch-local-metadata', 'batch-delete', 'clear-selection', 'batch-subtitle']) {
-      expect(wrapper.emitted(name)).toHaveLength(1);
-    }
+    await wrapper.setProps({ allMatchingSelected: true });
+    expect(button().text()).toBe('取消选择');
+    await button().trigger('click');
+    expect(wrapper.emitted('toggle-select-all')).toHaveLength(2);
+
+    await wrapper.setProps({ videos: [], allMatchingSelected: false });
+    expect(button().element.disabled).toBe(true);
     wrapper.unmount();
   });
 });
@@ -102,7 +93,8 @@ describe('工具栏三层重排', () => {
       { id: 3, name: '旅行', namespace: '场景', color: '#333333' },
       { id: 4, name: '自定义', namespace: '', color: '#444444' }
     ];
-    const wrapper = mountToolbar({ tags, selectedTags: [3] });
+    // 「全部」是筛选芯片（FilterChip），浅渲染下也要真渲染它才能点。
+    const wrapper = mountToolbar({ tags, selectedTags: [3] }, { global: { stubs: { FilterChip: false } } });
     const groups = wrapper.findAll('.tag-category-row');
     expect(groups.map(group => group.get('.tag-category-label__name').text())).toEqual(['场景', '题材', '未分类']);
     expect(groups.map(group => group.findAll('.tag-chip-name').map(chip => chip.text()))).toEqual([
@@ -118,11 +110,11 @@ describe('工具栏三层重排', () => {
     expect(wrapper.emitted('toggle-tag')[1]).toEqual([3]);
     await wrapper.setProps({ selectedTags: [1] });
     expect(wrapper.findAll('.tag-chip-wrap.active .tag-chip-name').map(chip => chip.text())).toEqual(['科幻']);
-    await wrapper.get('.tag-browser > .tags-wrap > .tag-chip').trigger('click');
+    await wrapper.get('[data-test="tag-filter-all"] .ui-filter-chip__toggle').trigger('click');
     expect(wrapper.emitted('clear-tags')).toHaveLength(1);
     await wrapper.setProps({ selectedTags: [] });
     expect(wrapper.findAll('.tag-chip-wrap.active')).toHaveLength(0);
-    expect(wrapper.get('.tag-browser > .tags-wrap > .tag-chip').classes()).toContain('active');
+    expect(wrapper.get('[data-test="tag-filter-all"] .ui-filter-chip__toggle').attributes('aria-pressed')).toBe('true');
     wrapper.unmount();
   });
 
@@ -163,12 +155,12 @@ describe('工具栏三层重排', () => {
     const wrapper = mountToolbar({
       tags: [{ id: 81, name: '短视频', namespace: '自动', automatic_kind: 'short_video' }],
       selectedTags: [81]
-    });
+    }, { global: { stubs: { FilterChip: false } } });
     expect(wrapper.findAll('.tag-category-row')).toHaveLength(0);
     expect(wrapper.findAll('.tag-chip-name')).toHaveLength(0);
     expect(wrapper.get('.tag-browser__empty').text()).toBe('暂无可选标签');
     expect(wrapper.get('.result-bar__conditions').text()).toContain('标签 短视频');
-    await wrapper.get('.tag-browser > .tags-wrap > .tag-chip').trigger('click');
+    await wrapper.get('[data-test="tag-filter-all"] .ui-filter-chip__toggle').trigger('click');
     expect(wrapper.emitted('clear-tags')).toHaveLength(1);
     wrapper.unmount();
   });
@@ -250,7 +242,8 @@ describe('工具栏三层重排', () => {
       'tag-manager', 'collection-suggestions', 'version-groups', 'trash'
     ]);
     const manage = wrapper.findAll('button').find(button => button.text().startsWith('管理'));
-    expect(manage.find('.toolbar-btn__badge').exists()).toBe(false);
+    expect(manage.exists()).toBe(true);
+    expect(manage.find('.ui-badge').exists()).toBe(false);
     wrapper.unmount();
   });
 
@@ -288,16 +281,6 @@ describe('工具栏三层重排', () => {
     expect(autoOnlyItem.label).toBe('为当前筛选生成代理');
     expect(autoOnlyItem.disabled).toBe(false);
     autoOnly.unmount();
-  });
-
-  it('批量栏「为选中生成代理」把事件转发回片库页', async () => {
-    const wrapper = mount(LibraryToolbar, {
-      props: baseProps({ videos: [{ id: 1, name: 'a.mkv', size: 1024, tags: [] }], selectedVideoIds: [1] })
-    });
-    await wrapper.vm.$nextTick();
-    await wrapper.get('[data-test="batch-playback-proxy"]').trigger('click');
-    expect(wrapper.emitted('batch-playback-proxy')).toHaveLength(1);
-    wrapper.unmount();
   });
 
   it('建议作品集入口与其他维护动作同级，面板由工具栏自己持有', async () => {
@@ -475,7 +458,7 @@ describe('人物筛选组合框（META-02）', () => {
     await flushPromises();
     expect(wrapper.findAll('[data-test^="person-filter-option-"]').map(option => option.text())).toEqual(['李四']);
 
-    await wrapper.get('[data-test="person-filter-chip-7"]').trigger('click');
+    await wrapper.get('[data-test="person-filter-chip-7"] .ui-filter-chip__toggle').trigger('click');
     expect(wrapper.emitted('update:selectedPeople')[0]).toEqual([[]]);
     wrapper.unmount();
   });
@@ -556,18 +539,23 @@ describe('片库布局切换', () => {
   });
 
   it('列表 / 网格 / 缩略图墙三段，点缩略图墙记住选择并通知片库页', async () => {
-    const wrapper = mountToolbar({ viewMode: 'grid' });
-    const buttons = ['list', 'grid', 'wall'].map(mode => wrapper.get(`[data-test="library-layout-${mode}"]`));
-    expect(buttons.map(button => button.text())).toEqual(['列表', '网格', '缩略图墙']);
-    expect(buttons.map(button => button.classes().includes('active'))).toEqual([false, true, false]);
+    // 布局是同一内容的不同看法，用统一的 SegmentedControl（role=radiogroup，选中项 aria-checked）。
+    const wrapper = mount(LibraryToolbar, { props: baseProps({ viewMode: 'grid' }) });
+    const group = wrapper.get('[data-test="library-layout"]');
+    expect(group.attributes('role')).toBe('radiogroup');
+    expect(group.attributes('aria-label')).toBe('片库布局');
+    const buttons = () => group.findAll('[role="radio"]');
+    expect(buttons().map(button => button.text())).toEqual(['列表', '网格', '缩略图墙']);
+    expect(buttons().map(button => button.attributes('aria-checked'))).toEqual(['false', 'true', 'false']);
+    expect(buttons()[2].attributes('title')).toContain('只显示缩略图的紧凑平铺');
 
-    await buttons[2].trigger('click');
+    await buttons()[2].trigger('click');
     expect(store['cineinsight-library-layout']).toBe('wall');
     expect(wrapper.emitted('update:viewMode')).toEqual([['wall']]);
 
     await wrapper.setProps({ viewMode: 'wall' });
-    expect(wrapper.get('[data-test="library-layout-wall"]').classes()).toContain('active');
-    await wrapper.get('[data-test="library-layout-list"]').trigger('click');
+    expect(buttons()[2].attributes('aria-checked')).toBe('true');
+    await buttons()[0].trigger('click');
     expect(store['cineinsight-library-layout']).toBe('list');
     expect(wrapper.emitted('update:viewMode')[1]).toEqual(['list']);
     wrapper.unmount();
